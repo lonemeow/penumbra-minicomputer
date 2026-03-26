@@ -286,6 +286,104 @@ micro-op 4: Load vector → MAR = vector_table_base + (vector_num × 4), mem_rea
 micro-op 5: Jump       → PC = MDR (vector address)
 ```
 
+## Condition Flags
+
+### Overview
+
+The ALU produces four condition flags: Z (zero), N (negative), C (carry), V (overflow). These are latched into the SR when `flag_w_en` is asserted in the micro-word. The carry convention is **ARM-style** (C = NOT borrow on subtraction), which matches the ISA's condition code table directly.
+
+### Carry Convention
+
+Subtraction is implemented as `A + ~B + 1` using the adder with B inverted and carry-in set to 1. The carry flag is the carry-out of this addition:
+
+- `5 - 3`: `5 + ~3 + 1` = `5 + 0xFFFFFFFC + 1` → Cout = 1 → **C=1** (no borrow, A ≥ B)
+- `3 - 5`: `3 + ~5 + 1` = `3 + 0xFFFFFFFA + 1` → Cout = 0 → **C=0** (borrow, A < B)
+
+This means: C=1 after SUB/CMP ↔ unsigned A ≥ B. No inversion needed — Cout of the adder is used directly as C for both ADD and SUB.
+
+### Hardware Implementation
+
+```
+sub_mode = 1 for SUB/CMP/DEC/CMPI, 0 for ADD/INC
+
+B_eff = B XOR {32{sub_mode}}     (invert B for subtraction)
+Cin   = sub_mode                   (add 1 for two's complement)
+
+{Cout, result} = A + B_eff + Cin
+
+Z = (result == 0)                  (32-input NOR)
+N = result[31]                     (wire)
+C = Cout                           (carry out of bit 31, direct from adder)
+V = Cout[31] XOR Cout[30]         (carry into bit 31 differs from carry out)
+```
+
+V can equivalently be computed as:
+```
+ADD: V = (A[31] == B[31])     && (result[31] != A[31])
+SUB: V = (A[31] != B[31])     && (result[31] != A[31])
+```
+
+Both forms use the same gates when computed on the adder's actual inputs (A and B_eff).
+
+### Flag Generation Per Operation
+
+| Operation | Z | N | C | V |
+|-----------|---|---|---|---|
+| ADD, INC | result==0 | result[31] | Cout | signed overflow |
+| SUB, CMP, DEC, CMPI | result==0 | result[31] | Cout (= NOT borrow) | signed overflow |
+| AND, TEST | result==0 | result[31] | 0 | 0 |
+| OR | result==0 | result[31] | 0 | 0 |
+| XOR | result==0 | result[31] | 0 | 0 |
+| NOT | result==0 | result[31] | 0 | 0 |
+| SHL | result==0 | result[31] | last bit shifted out (msb) | 0 |
+| SHR | result==0 | result[31] | last bit shifted out (lsb) | 0 |
+| SAR | result==0 | result[31] | last bit shifted out (lsb) | 0 |
+| MUL, MULU, DIV, DIVU, MOD, MODU | result==0 | result[31] | 0 | 0 |
+
+### Which Instructions Update Flags
+
+The `flag_w_en` micro-word bit controls whether ALU flag outputs are latched into SR. The microcode sets this per instruction:
+
+| Instruction | Flags updated | Notes |
+|-------------|--------------|-------|
+| ADD, SUB, AND, OR, XOR, NOT | Yes | Standard ALU operations |
+| SHL, SHR, SAR | Yes | C = last bit shifted out; shift by 0 clears C |
+| CMP (SUB with F=1) | Yes | Flags only, no register write |
+| TEST (AND with F=1) | Yes | Flags only, no register write |
+| MUL, MULU, DIV, DIVU, MOD, MODU | Yes | Z and N meaningful; C=0, V=0 |
+| INC, DEC | Yes | Arithmetic flags |
+| CMPI | Yes | Compare to immediate, flags only |
+| **MOV** | **No** | Data movement, must not clobber flags |
+| LLI, LLIS, LUI | No | Constant loading |
+| Loads, stores | No | Memory access |
+| Branches | No | Control flow |
+| System (MTSYS, MFSYS, GETSR, SETSR, JMP, RTI, etc.) | No | System operations |
+
+### Condition Code Evaluation
+
+The branch condition field (4 bits from Format B instructions) is evaluated against SR flags. The ARM-style carry convention ensures these mappings are correct:
+
+| cond | Mnemonic | Test | Unsigned meaning | Signed meaning |
+|------|----------|------|-----------------|----------------|
+| 0000 | AL | true | always | always |
+| 0001 | EQ | Z=1 | equal | equal |
+| 0010 | NE | Z=0 | not equal | not equal |
+| 0011 | CS/HS | C=1 | ≥ (higher or same) | — |
+| 0100 | CC/LO | C=0 | < (lower) | — |
+| 0101 | MI | N=1 | — | negative |
+| 0110 | PL | N=0 | — | positive or zero |
+| 0111 | VS | V=1 | — | overflow |
+| 1000 | VC | V=0 | — | no overflow |
+| 1001 | HI | C=1 & Z=0 | > (higher) | — |
+| 1010 | LS | C=0 \| Z=1 | ≤ (lower or same) | — |
+| 1011 | GE | N=V | — | ≥ |
+| 1100 | LT | N≠V | — | < |
+| 1101 | GT | Z=0 & N=V | — | > |
+| 1110 | LE | Z=1 \| N≠V | — | ≤ |
+| 1111 | BL | true (link) | always + save LR | always + save LR |
+
+Condition evaluation hardware: each condition is a simple combinational function of at most 3 flag bits. A 4-to-1 mux tree selects the result based on the cond field. In discrete, this is ~3-4 chips (a few gates plus a 74x150 16:1 mux or equivalent).
+
 ## Micro-Word Format
 
 ### Fields

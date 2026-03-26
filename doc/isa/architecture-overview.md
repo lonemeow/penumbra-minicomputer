@@ -37,11 +37,13 @@ R0 always reads as zero. Any instruction that writes to R0 completes normally (i
 
 The status register is **not** part of the 16-register GPR file. It is a separate hardware register internal to the CPU, accessed via dedicated privileged instructions (`GETSR`, `SETSR`).
 
-SR contains at minimum:
+SR contains:
 - **Condition flags:** Z (zero), N (negative), C (carry), V (overflow)
 - **S (supervisor):** Current privilege level (0 = user, 1 = supervisor)
 - **I (interrupt enable):** Global interrupt mask
 - **Previous mode bits:** Saved privilege state for return-from-interrupt
+
+Carry convention is **ARM-style** (C = NOT borrow on subtraction). Flags are updated by arithmetic/logic ALU operations, INC, DEC, CMPI, and MUL/DIV/MOD. MOV, load immediates (LLI, LLIS, LUI), loads, stores, branches, and system instructions do **not** affect flags. See the datapath specification for full flag generation details.
 
 The SR contains only CPU-internal state. Registers belonging to other system devices (MMU, interrupt controller, etc.) are accessed via the system register bus — see [System Register Access](#system-register-access) below.
 
