@@ -21,7 +21,7 @@ Penumbra has 16 registers addressed by a 4-bit field.
 | R0       | ZERO | Hardwired to zero; writes are discarded |
 | R1-R13   | GPR  | General-purpose (13 registers) |
 | R14      | SP   | Stack pointer, hardware-banked (see below) |
-| R15      | PC   | Program counter |
+| R15      | PC   | Program counter (read-only via register file; see below) |
 
 ### Zero Register (R0)
 
@@ -55,9 +55,17 @@ On privilege transitions (interrupt, trap, RTI), the hardware swaps which physic
 
 This is the only banked register (B1 model). All other registers are shared across modes.
 
+### Program Counter (R15)
+
+The PC is a **separate hardware register** with its own dedicated adder for branches and increment. It is not part of the main register file or ALU datapath.
+
+**Reads:** When any instruction reads R15 (e.g., as a base register in a load/store), the register file returns the current PC value. This enables PC-relative addressing for loading constants from literal pools.
+
+**Writes:** R15 cannot be written through the ALU or register file write port. PC is modified only by dedicated control flow instructions: branches (B/Bcc/BL), indirect jumps (JMP), return from interrupt (RTI), and exception entry. This eliminates accidental PC writes and simplifies the datapath.
+
 ### Link Register
 
-There is no hardware link register. The branch-and-link instruction (`BL`) writes the return address to a designated GPR by software convention (e.g., R13). This avoids requiring a dual-write-port register file.
+There is no hardware link register. The branch-and-link instruction (`BL`) writes the return address (PC+4) to a designated GPR by software convention (R13). Function return uses `JMP R13`.
 
 ## Instruction Encoding
 
@@ -125,7 +133,8 @@ System operations use the Format R encoding with the following opcodes. The `Rd`
 | 10101 | `BREAK` | Debug breakpoint (vector 8) | |
 | 10110 | `RTI` | Return from interrupt (privileged) | |
 | 10111 | `ICACHE_INV` | Invalidate entire I-cache (privileged) | |
-| 11000-11111 | (reserved) | Future expansion (8 slots) | |
+| 11000 | `JMP Rs` | PC = Rs (indirect jump) | Rs field; assembler alias: `RET` = `JMP R13` |
+| 11001-11111 | (reserved) | Future expansion (7 slots) | |
 
 ### Format L — Immediate (prefix `01`)
 
@@ -249,7 +258,7 @@ Range: ±8 MB from the branch instruction. Sufficient to reach anywhere in the 3
 
 Conditions 0001-1110 are paired: each condition and its inverse differ only in bit 0, allowing simple inversion in the condition evaluation logic.
 
-`BL` (cond=1111) is always taken. The microcode saves PC+4 (return address) to the conventional link register (R13) before branching. Function return is `MOV PC, R13` (or via whatever register holds the return address).
+`BL` (cond=1111) is always taken. The microcode saves PC+4 (return address) to the conventional link register (R13) before branching. Function return is `JMP R13` (assembler alias: `RET`).
 
 ## Addressing Modes
 
