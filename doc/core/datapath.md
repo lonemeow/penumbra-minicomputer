@@ -257,6 +257,42 @@ pc_src = A-bus       → PC loaded from A-bus
 
 Assembler alias: `RET` = `JMP R13`
 
+### EI (Enable Interrupts)
+
+Single micro-op:
+```
+SR.I = 1
+ei_shadow = 1              → flip-flop: suppress IRQ check for next instruction
+→ return to fetch
+```
+
+The `ei_shadow` flip-flop is checked at fetch-0. When set, the pending-interrupt check is skipped for one instruction cycle, then the flip-flop clears. This provides the one-instruction delay guarantee.
+
+### DI (Disable Interrupts)
+
+Single micro-op:
+```
+SR.I = 0                   → immediate effect
+→ return to fetch
+```
+
+### GETUSP Rd
+
+Single micro-op:
+```
+USP register → W-mux path → register file writes Rd
+```
+
+Requires a path from the banked-away USP register to the register file write port. This can share the W-mux MDR input with a small mux, since GETUSP and memory loads never occur in the same micro-op.
+
+### SETUSP Rs
+
+Single micro-op:
+```
+reg_a_sel = Rs       → A-bus = Rs value
+A-bus → USP register (banked-away SP)
+```
+
 ### MTSYS Rd, #dev, #reg
 
 Single micro-op:

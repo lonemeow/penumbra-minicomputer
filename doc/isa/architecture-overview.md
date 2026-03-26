@@ -136,7 +136,11 @@ System operations use the Format R encoding with the following opcodes. The `Rd`
 | 10110 | `RTI` | Return from interrupt (privileged) | |
 | 10111 | `ICACHE_INV` | Invalidate entire I-cache (privileged) | |
 | 11000 | `JMP Rs` | PC = Rs (indirect jump) | Rs field; assembler alias: `RET` = `JMP R13` |
-| 11001-11111 | (reserved) | Future expansion (7 slots) | |
+| 11001 | `EI` | Enable interrupts: SR.I = 1 (delayed — see below) | |
+| 11010 | `DI` | Disable interrupts: SR.I = 0 (immediate, privileged) | |
+| 11011 | `GETUSP Rd` | Read banked-away USP to Rd (privileged) | |
+| 11100 | `SETUSP Rs` | Write Rs to banked-away USP (privileged) | |
+| 11101-11111 | (reserved) | Future expansion (3 slots) | |
 
 ### Format L — Immediate (prefix `01`)
 
@@ -280,7 +284,86 @@ Controlled transitions:
 - **User to supervisor:** Via SYSCALL instruction or hardware interrupt/exception
 - **Supervisor to user:** Via return-from-interrupt (RTI) instruction
 
-Privileged instructions: SETSR, MTSYS, MFSYS, RTI, ICACHE_INV. Executing a privileged instruction in user mode raises a privilege violation exception (vector 3).
+Privileged instructions: SETSR, DI, MTSYS, MFSYS, RTI, ICACHE_INV, GETUSP, SETUSP. Executing a privileged instruction in user mode raises a privilege violation exception (vector 3).
+
+Note: EI (enable interrupts) and GETSR (read SR) are **unprivileged** — user code can enable interrupts (they may have been temporarily disabled by the kernel before returning) and can read its own flags.
+
+## Interrupt Control
+
+### EI — Enable Interrupts
+
+`EI` sets SR.I = 1. It has a **one-instruction delay**: pending interrupts are not recognized until after the instruction following EI completes. This allows atomic enable-and-return patterns:
+
+```asm
+EI          ; SR.I = 1, but interrupts not yet recognized
+RTI         ; executes in the "shadow" — completes before any pending interrupt fires
+            ; NOW pending interrupts are checked
+```
+
+The delay is implemented in the microcode sequencer: a flip-flop is set when EI executes, causing the next instruction fetch to skip the pending-interrupt check. The flip-flop clears after one instruction cycle.
+
+EI is **unprivileged** — user code may execute it (the kernel may have disabled interrupts before returning to user mode via an unusual path).
+
+### DI — Disable Interrupts
+
+`DI` sets SR.I = 0 with **immediate effect**. The very next interrupt check (after DI's micro-routine completes) sees I=0 and ignores pending interrupts.
+
+DI is **privileged** — only the kernel may disable interrupts.
+
+### Why Dedicated Instructions
+
+Interrupt enable/disable must be atomic single instructions to avoid race conditions:
+
+- **Read-modify-write race:** A GETSR/OR/SETSR sequence to set I=1 can be interrupted by NMI between GETSR and SETSR. The NMI handler's SR modifications would be overwritten by the stale value in SETSR.
+- **Pending interrupt timing:** The one-instruction delay on EI cannot be implemented with a general SETSR — the delay is specific to the I bit.
+
+GETSR/SETSR still exist for reading flags and kernel-level SR manipulation, but **must not be used for interrupt control**. Always use EI/DI.
+
+### Typical Interrupt Handler Pattern
+
+```asm
+; ---- Handler entry (hardware has set S=1, I=0, pushed SR+PC) ----
+
+; Save user registers
+DEC   SP, #56
+STW   R1,  [SP + #0]
+STW   R2,  [SP + #4]
+; ... save R3-R13 ...
+STW   R13, [SP + #48]
+GETUSP R1                   ; read banked-away user SP
+STW   R1,  [SP + #52]       ; save it too
+
+; Safe to re-enable interrupts (all critical state saved)
+EI                           ; delayed: next instruction runs in shadow
+BL    handle_interrupt       ; C handler — interrupts enabled during call
+
+; Prepare to return (may switch to a different process)
+DI                           ; disable before restoring context
+BL    schedule               ; pick next process, returns proc pointer in R1
+
+; Restore context for chosen process
+LDW   R2,  [R1 + #PROC_USP]
+SETUSP R2                    ; restore user SP
+LDW   R2,  [R1 + #PROC_R1]
+; ... restore R3-R13 from process table ...
+LDW   R13, [R1 + #PROC_R13]
+LDW   R1,  [R1 + #PROC_R1]  ; restore R1 last (was used as pointer)
+
+; Atomic return: enable interrupts, then RTI in the shadow
+EI
+RTI                          ; pops PC + SR, restores user mode + I=1
+```
+
+## Stack Pointer Access
+
+### GETUSP / SETUSP
+
+When in supervisor mode (S=1), the user stack pointer (USP) is banked away and not accessible through R14 (which is KSP). Two privileged instructions provide access:
+
+- **`GETUSP Rd`** — Read the banked-away USP into Rd
+- **`SETUSP Rs`** — Write Rs to the banked-away USP
+
+These are essential for saving/restoring the full user context on interrupt entry and process switches. In user mode (S=0), these instructions raise a privilege violation — user code accesses SP (USP) normally through R14.
 
 ## Exception and Interrupt Model
 
@@ -297,11 +380,11 @@ On any interrupt, exception, or trap, the hardware performs:
 
 For **exceptions** (page fault, illegal instruction, etc.), the saved PC is the address of the faulting instruction (so the handler can retry after fixing the cause). For **external interrupts**, the saved PC is the next instruction (since the current instruction completed). For **software traps**, the saved PC is the next instruction (the trap was intentional).
 
-The kernel interrupt handler then saves remaining registers (R1-R13) in software. (R0 need not be saved — it is always zero.)
+The kernel interrupt handler then saves remaining registers (R1-R13) and USP in software. (R0 need not be saved — it is always zero.)
 
 ### Exit Sequence
 
-Return-from-interrupt (RTI) reverses the entry sequence: pop PC and SR from kernel stack, restoring previous privilege level, interrupt enable state, and SP banking.
+Return-from-interrupt (RTI) reverses the entry sequence: pop PC and SR from kernel stack, restoring previous privilege level, interrupt enable state, and SP banking. RTI executes as an atomic microcode sequence with interrupts disabled throughout — the restored I bit takes effect only after RTI completes.
 
 ### Vector Table
 
