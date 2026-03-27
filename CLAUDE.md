@@ -64,10 +64,18 @@ RTL implementation is in progress, bottom-up from leaf modules. Microcode valida
 | PC register | `rtl/core/pc_reg.sv` | 31/31 | PC reg, PC+4 adder, PC+offset adder, shadow PC |
 | MAR | `rtl/core/mar.sv` | 6/6 | Memory address register, loads from R-bus |
 | MDR | `rtl/core/mdr.sv` | 7/7 | Memory data register, loads from memory or A-bus |
+| Datapath top | `rtl/core/datapath.sv` | 15/15 | Structural wiring of all modules, IR reg, reg addr routing, F-bit gating |
 | Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_* constants |
 
+### Register Address Routing
+The micro-word's `reg_a_sel`, `reg_b_sel`, `reg_w_sel` fields use a 4-bit encoding:
+- `4'b0000` (IR_RD): format-dependent destination register (R→IR[24:21], L→IR[26:23], M→IR[25:22])
+- `4'b0001` (IR_RS): format-dependent source/base register (R→IR[20:17], M→IR[21:18])
+- `4'b0010–4'b1111`: literal register R2–R15
+
+F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal addresses).
+
 ### Next Steps (in priority order)
-4. **Datapath top module** — wire all modules together, integrate field extractor → register file address routing (mux between IR fields and micro-word literal addresses).
-5. **Microcode ROM** — 256×48-bit ROM with dispatch logic.
-6. **Micro-sequencer** — micro-PC counter with branch_cond control.
-7. **Fetch unit** — hardwired instruction fetch, exception dispatch.
+1. **Microcode ROM** — 256×48-bit ROM with dispatch logic.
+2. **Micro-sequencer** — micro-PC counter with branch_cond control.
+3. **Fetch unit** — hardwired instruction fetch, exception dispatch.
