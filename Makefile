@@ -35,7 +35,10 @@ $(BUILD_DIR)/Vsmoke_adder: rtl/core/smoke_adder.sv sim/tb_smoke_adder.cpp
 
 # ── Generic module simulation ──────────────────────────────────
 # Usage: make sim MOD=alu  (expects rtl/**/alu.sv and sim/tb_alu.cpp)
-MOD ?=
+#        make sim MOD=cpu_top PROG=test_mem TB=tb_cpu_mem
+MOD  ?=
+PROG ?= test_add
+TB   ?= tb_$(MOD)
 
 # Shared package — always included. --top-module tells Verilator which
 # module is the DUT (otherwise it picks the first file = the package).
@@ -51,9 +54,9 @@ endif
 		--top-module $(MOD) \
 		--Mdir $(BUILD_DIR)/$(MOD).verilator \
 		-o ../V$(MOD) \
-		$(PKG_SV) $$(find rtl -name '$(MOD).sv') sim/tb_$(MOD).cpp
+		$(PKG_SV) $$(find rtl -name '$(MOD).sv') sim/$(TB).cpp
 	@# Copy hex files needed by $readmemh (cpu_top uses program.hex + microcode.hex)
-	@test -f sim/programs/test_add.hex && cp sim/programs/test_add.hex program.hex 2>/dev/null || true
+	@test -f sim/programs/$(PROG).hex && cp sim/programs/$(PROG).hex program.hex 2>/dev/null || true
 	@test -f sw/microcode/microcode.hex && cp sw/microcode/microcode.hex microcode.hex 2>/dev/null || true
 	@echo "── Running $(MOD) testbench ──"
 	@$(DOCKER_RUN) --entrypoint ./$(BUILD_DIR)/V$(MOD) $(DOCKER_IMAGE)

@@ -1,19 +1,20 @@
 # Penumbra Microcode Source
 #
 # Dispatch addresses (computed by fetch unit from IR bits):
-#   Format R: {00, op[4:0]}         → entries 0x00–0x1F
-#   Format L: {01, op[2:0], 00}     → entries 0x20–0x3F (×4 spacing)
-#   Format M: {10, L, sz[1:0], SE, 0} → entries 0x40–0x5F (×2 spacing)
-#   Format B: {11, 0000000}         → entry 0x60
-#   Interrupt entry:                → entry 0x70 (hardwired)
+#   Format R: {00, op[4:0]}           → entries 0x00–0x1F
+#   Format L: {01, op[2:0], 00}       → entries 0x20–0x3F (×4 spacing)
+#   Format M: {10, L, sz[1:0], SE, 00}→ entries 0x80–0xBF (×4 spacing)
+#   Format B: {11, 0000000}           → entry 0x60
+#   Interrupt entry:                  → entry 0x70 (hardwired)
 #
 # Register address encoding:
 #   IR_RD = format-dependent Rd, IR_RS = format-dependent Rs/Rb
 #   R2–R15 = literal register number
 #
-# Unspecified fields default to 0:
-#   a_src=REG, alu=ADD, bmux=REG, wmux=RBUS, pc=HOLD, branch=SEQ
-#   All enables off, no memory access.
+# Assembler defaults (uasm.py applies these when not specified):
+#   pc=NEXT, branch=FETCH
+# All other fields default to 0 (hardware zero):
+#   a_src=REG, alu=ADD, bmux=REG, wmux=RBUS, all enables off.
 
 # ═══════════════════════════════════════════════════════════════
 # Format R — Register-register ALU and system ops (0x00–0x1F)
@@ -113,3 +114,35 @@ branch:
 .org 0x70
 int_entry:
   a_src=VECTOR pc=ABUS
+
+# ═══════════════════════════════════════════════════════════════
+# Format M — Memory load/store (0x80–0xBF)
+# Dispatch: {10, L, sz[1:0], SE, 00} — ×4 spacing
+#
+# Memory access pattern (latency-agnostic via STALL):
+#   Micro-op 0: MAR ← Rb + sext(offset)              [address compute]
+#   Load:  STALL with mem_read + mdr_load_mem → Rd ← MDR     (3 micro-ops)
+#   Store: MDR ← Rd → STALL mem_write → advance PC          (4 micro-ops)
+# ═══════════════════════════════════════════════════════════════
+
+# ── STW Rd, [Rb + #offset] (L=0, sz=10, SE=0, dispatch=0x90) ─
+# Step 0: compute address, load MAR
+# Step 1: load store data (Rd) into MDR via A-bus
+# Step 2: initiate write, stall until accepted (MMU/bus may add latency)
+# Step 3: advance PC
+.org 0x90
+stw:
+  reg_a=IR_RS bmux=IMM imm_mode=SIGN_EXT alu=ADD mar_load=1 pc=HOLD branch=SEQ
+  reg_a=IR_RD mdr_load_a=1 pc=HOLD branch=SEQ
+  mem_write=1 mem_size=WORD pc=HOLD branch=STALL
+  pc=NEXT
+
+# ── LDW Rd, [Rb + #offset] (L=1, sz=10, SE=0, dispatch=0xB0) ─
+# Step 0: compute address, load MAR
+# Step 1: initiate read, stall until data ready, capture into MDR
+# Step 2: write MDR to Rd, advance PC
+.org 0xB0
+ldw:
+  reg_a=IR_RS bmux=IMM imm_mode=SIGN_EXT alu=ADD mar_load=1 pc=HOLD branch=SEQ
+  mem_read=1 mem_size=WORD mdr_load_mem=1 pc=HOLD branch=STALL
+  reg_w=IR_RD w_en=1 wmux=MDR

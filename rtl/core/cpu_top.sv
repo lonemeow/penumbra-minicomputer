@@ -64,6 +64,36 @@ module cpu_top
     end
     assign mem_rdata = mem_rdata_reg;
 
+    // ── Memory busy signal for STALL ───────────────────────────
+    // Models memory access latency for the STALL micro-op.
+    //
+    // Reads: synchronous 1-cycle latency — busy for 1 cycle while
+    //   mem_rdata_reg captures from the new MAR address.
+    // Writes: immediate in the simple model (0 cycles busy), but
+    //   STALL is still used so the microcode works unchanged when
+    //   the real bus/MMU adds write latency.
+    //
+    // Future: replaced by cache/bus controller's actual busy signal.
+    // The STALL path will also need to check mem_fault for MMU traps
+    // (page not present, protection) — mid-instruction exceptions.
+    logic mem_access_pending;
+    logic mem_busy_sig;
+
+    logic mem_access_start;
+    assign mem_access_start = (ctl_mem_read || ctl_mem_write) && !fetch_active;
+
+    always_ff @(posedge i_clk) begin
+        if (i_rst)
+            mem_access_pending <= 1'b0;
+        else if (mem_access_start && !mem_access_pending)
+            mem_access_pending <= 1'b1;   // Access initiated, not yet complete
+        else
+            mem_access_pending <= 1'b0;   // Complete (or no access active)
+    end
+
+    // Busy on the first cycle of any memory access
+    assign mem_busy_sig = mem_access_start && !mem_access_pending;
+
     // ══════════════════════════════════════════════════════════
     // Microcode ROM
     // ══════════════════════════════════════════════════════════
@@ -110,7 +140,7 @@ module cpu_top
         .i_dispatch_addr (effective_dispatch),
         .o_fetch_go      (fetch_go),
         .i_alu_busy      (alu_busy),
-        .i_mem_busy      (1'b0),          // Simple memory never stalls
+        .i_mem_busy      (mem_busy_sig),   // 1-cycle busy for sync memory read
         .i_cond_result   (cond_result),
         .i_sr_s          (sr_s),
         .o_upc           (upc),
@@ -187,16 +217,16 @@ module cpu_top
     logic [1:0]  fetch_format;
     assign fetch_format = mem_rdata[31:30];
 
-    // Dispatch: 7-bit address, zero-extended to 8
-    // Format R: {00, op[4:0]}           → 0x00–0x1F
-    // Format L: {01, op[2:0], 00}       → 0x20–0x3C (×4 spacing)
-    // Format M: {10, L, sz[1:0], SE, 0} → 0x40–0x5E (×2 spacing)
-    // Format B: {11, 00000}             → 0x60
+    // Dispatch: 8-bit address
+    // Format R: {00, op[4:0]}            → 0x00–0x1F
+    // Format L: {01, op[2:0], 00}        → 0x20–0x3C (×4 spacing)
+    // Format M: {10, L, sz[1:0], SE, 00} → 0x80–0xBC (×4 spacing)
+    // Format B: {11, 00000}              → 0x60
     always_comb begin
         case (fetch_format)
             2'b00:   dispatch_addr = {1'b0, 2'b00, mem_rdata[29:25]};
             2'b01:   dispatch_addr = {1'b0, 2'b01, mem_rdata[29:27], 2'b00};
-            2'b10:   dispatch_addr = {1'b0, 2'b10, mem_rdata[29:26], 1'b0};
+            2'b10:   dispatch_addr = {2'b10, mem_rdata[29:26], 2'b00};
             2'b11:   dispatch_addr = 8'h60;
             default: dispatch_addr = 8'h00;
         endcase
