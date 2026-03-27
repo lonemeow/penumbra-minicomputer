@@ -149,7 +149,7 @@ pc_src = PC+4        → advance to next instruction
 
 ### ALU Flag-Only (e.g., CMP Rd, Rs)
 
-Same as above, but `reg_w_en = 0`. Flags are updated, Rd is not modified.
+Same micro-routine as ADD. The micro-word sets `reg_w_en = 1`, but hardware gates it: `actual_w_en = reg_w_en & ~(format_R & IR[16])`. The F bit (IR[16]) suppresses the register write for all Format R flag-only variants (CMP, TEST). Flags are updated, Rd is not modified.
 
 ### Immediate (e.g., INC Rd, #imm16)
 
@@ -187,7 +187,7 @@ Micro-op 0 — compute address:
 reg_a_sel = Rb       → A-bus = Rb value
 b_mux_sel = immediate, imm_mode = sign_extend (offset from IR)
 alu_op = ADD
-R-bus = Rb + offset  → MAR loaded (mar_src = R-bus)
+R-bus = Rb + offset  → MAR loaded from R-bus
 ```
 
 Micro-op 1 — memory read:
@@ -230,7 +230,7 @@ If taken:  pc_src = PC + offset (branch adder, offset from IR)
 If not taken: pc_src = PC + 4
 ```
 
-Single micro-op — the branch adder computes PC + offset in parallel with the condition check. The pc_src mux selects based on the condition result.
+Single micro-op — the branch adder computes PC + offset in parallel with the condition check. The `branch_cond` field (BRT or BRF) gates `pc_src`: if the ISA condition is met, `pc_src = PC + offset` takes effect; otherwise hardware forces `pc_src = PC + 4`. The micro-sequencer hands off to the fetch unit regardless of the condition outcome. See `microcode-validation.md` §3 for the detailed micro-word.
 
 ### Branch-and-Link (BL offset)
 
@@ -266,7 +266,7 @@ ei_shadow = 1              → flip-flop: suppress IRQ check for next instructio
 → return to fetch
 ```
 
-The `ei_shadow` flip-flop is checked at fetch-0. When set, the pending-interrupt check is skipped for one instruction cycle, then the flip-flop clears. This provides the one-instruction delay guarantee.
+The `ei_shadow` flip-flop is checked by the fetch unit during the interrupt check. When set, the pending-interrupt check is skipped for one instruction cycle, then the flip-flop clears. This provides the one-instruction delay guarantee.
 
 ### DI (Disable Interrupts)
 
@@ -312,15 +312,26 @@ W-mux selects MDR → register file writes Rd
 
 ### Exception / Interrupt Entry
 
-Multi-step microcode sequence:
+Exception entry has two phases: hardware pre-actions (atomic, before microcode) and a microcode sequence.
+
+**Hardware pre-actions** (triggered atomically by the fetch unit when an interrupt/exception is recognized):
+1. Latch shadow registers: `shadow_SR ← SR`, `shadow_PC ← PC` (return address; faulting PC for exceptions)
+2. Mode switch: `SR.S ← 1`, `SR.I ← 0`
+3. SP bank swap: R14 now reads/writes KSP
+4. Latch vector number from source (priority encoder for IRQs, hardwired per exception type)
+
+**Microcode sequence** (7 micro-ops + stall loops; uses `a_src` for shadow registers, `b_mux_sel` for constants 4/8):
 ```
-micro-op 0: Save SR   → MDR = SR, MAR = KSP - 4, mem_write
-micro-op 1: Save PC   → MDR = PC, MAR = KSP - 8, mem_write
-micro-op 2: Update SP  → KSP = KSP - 8
-micro-op 3: Set mode   → SR.S = 1, SR.I = 0, swap to KSP
-micro-op 4: Load vector → MAR = vector_table_base + (vector_num × 4), mem_read
-micro-op 5: Jump       → PC = MDR (vector address)
+int-0: reg_a=R14(KSP), b_mux=const_4, SUB → MAR = KSP - 4
+int-1: a_src=shadow_SR → MDR, mem_write     (stall loop)
+int-2: reg_a=R14(KSP), b_mux=const_8, SUB → MAR = KSP - 8, also write R14 = KSP - 8
+int-3: a_src=shadow_PC → MDR, mem_write     (stall loop)
+int-4: a_src=vector_addr, PASS_A → MAR      (vec_num × 4, pre-shifted)
+int-5: mem_read                              (stall loop)
+int-6: pc_src=MDR → PC = handler address, hand off to fetch unit
 ```
+
+See `microcode-validation.md` §4 for the full bit-level micro-word table and signal trace.
 
 ## Condition Flags
 
@@ -424,73 +435,120 @@ Condition evaluation hardware: each condition is a simple combinational function
 
 ### Fields
 
-| Field | Bits | Description |
-|-------|------|-------------|
-| `reg_a_sel[3:0]` | 4 | Register file read port A address |
-| `reg_b_sel[3:0]` | 4 | Register file read port B address |
-| `reg_w_sel[3:0]` | 4 | Register file write port address |
-| `reg_w_en` | 1 | Register file write enable |
-| `alu_op[3:0]` | 4 | ALU operation (ADD, SUB, AND, OR, XOR, SHL, SHR, SAR, PASS_A, PASS_B, NOT) |
-| `b_mux_sel` | 1 | B-bus source: 0=register port B, 1=immediate |
-| `w_mux_sel` | 1 | Write-back source: 0=R-bus, 1=MDR |
-| `imm_mode[1:0]` | 2 | Immediate handling: 00=zero-extend, 01=sign-extend, 10=shift-left-16 |
-| `flag_w_en` | 1 | Update SR condition flags from ALU |
-| `mar_load` | 1 | Load MAR from R-bus |
-| `mar_src` | 1 | MAR input: 0=R-bus, 1=PC (for instruction fetch) |
-| `mdr_load_mem` | 1 | Load MDR from memory/cache (read) |
-| `mdr_load_a` | 1 | Load MDR from A-bus (for stores) |
-| `mem_read` | 1 | Initiate memory/cache read |
-| `mem_write` | 1 | Initiate memory/cache write |
-| `mem_size[1:0]` | 2 | Access size: 00=byte, 01=half, 10=word |
-| `sign_ext` | 1 | Sign-extend sub-word load result |
-| `pc_src[1:0]` | 2 | PC source: 00=hold, 01=PC+4, 10=PC+offset, 11=A-bus |
-| `pc_mdr_load` | 1 | Load PC from MDR (exception vector) |
-| `stall_sel[1:0]` | 2 | Stall source: 00=none, 01=MUL, 10=DIV, 11=FPU |
-| `sys_cycle` | 1 | System register bus cycle |
-| `sys_we` | 1 | System register write enable |
-| `lu_start` | 1 | Start long-latency unit operation |
-| `lu_sel[1:0]` | 2 | Long-latency unit select: 00=MUL, 01=DIV, 10=FPU |
-| `lu_to_rbus` | 1 | Drive long-latency unit result onto R-bus |
-| `next_addr[9:0]` | 10 | Micro-branch target address |
-| `branch_cond[2:0]` | 3 | Micro-branch condition |
+| Bits | Field | Width | Description |
+|------|-------|-------|-------------|
+| 48:47 | `a_src[1:0]` | 2 | A-bus source: 00=register file, 01=shadow_SR, 10=shadow_PC, 11=vector_addr |
+| 46:43 | `reg_a_sel[3:0]` | 4 | Register file read port A address (used when a_src=00) |
+| 42:39 | `reg_b_sel[3:0]` | 4 | Register file read port B address |
+| 38:35 | `reg_w_sel[3:0]` | 4 | Register file write port address |
+| 34 | `reg_w_en` | 1 | Register file write enable (hardware-gated by Format R F bit: `actual = reg_w_en & ~(format_R & IR[16])`) |
+| 33:30 | `alu_op[3:0]` | 4 | ALU operation (ADD, SUB, AND, OR, XOR, SHL, SHR, SAR, PASS_A, PASS_B, NOT) |
+| 29:28 | `b_mux_sel[1:0]` | 2 | B-bus source: 00=register port B, 01=IR immediate, 10=constant 4, 11=constant 8 |
+| 27 | `w_mux_sel` | 1 | Write-back source: 0=R-bus, 1=MDR |
+| 26:25 | `imm_mode[1:0]` | 2 | IR immediate handling: 00=zero-extend, 01=sign-extend, 10=shift-left-16 |
+| 24 | `flag_w_en` | 1 | Update SR condition flags (NZCV) from ALU |
+| 23 | `sr_load` | 1 | Load full SR from W-mux output (for RTI) |
+| 22 | `mar_load` | 1 | Load MAR from R-bus (D-cache/bus address only; I-cache is permanently wired to PC) |
+| 21 | `mdr_load_mem` | 1 | Load MDR from D-cache/memory (read data) |
+| 20 | `mdr_load_a` | 1 | Load MDR from A-bus (for stores) |
+| 19 | `mem_read` | 1 | Initiate D-cache/memory read |
+| 18 | `mem_write` | 1 | Initiate D-cache/memory write |
+| 17:16 | `mem_size[1:0]` | 2 | Access size: 00=byte, 01=half, 10=word |
+| 15 | `sign_ext` | 1 | Sign-extend sub-word load result |
+| 14:12 | `pc_src[2:0]` | 3 | PC source: 000=hold, 001=PC+4, 010=PC+offset, 011=A-bus, 100=MDR |
+| 11 | `sys_cycle` | 1 | System register bus cycle |
+| 10 | `sys_we` | 1 | System register write enable |
+| 9:8 | `lu_op[1:0]` | 2 | Long-latency unit control: 00=none, 01=start, 10=read result to R-bus, 11=(reserved) |
+| 7:5 | `branch_cond[2:0]` | 3 | Micro-sequencer control (see below) |
+| 4:2 | `fwd_offset[2:0]` | 3 | Forward skip offset, 0-7 (used only when branch_cond=SKIP) |
+| 1:0 | (spare) | 2 | Reserved for future use |
 
-**Total: 52 bits**
+**Total: 48 bits**
 
-### Micro-Branch Conditions
+The long-latency unit (combined MUL/DIV integer unit, and future FPU) is selected by **hardware IR decode**, not by the micro-word. The opcode determines which unit receives `lu_start` and which result is driven onto R-bus. A 1-bit flip-flop tracks the most recently started unit. STALL checks a unified busy signal: `cache_busy | lu_busy` (the active unit's busy line). Since the integer unit and FPU are never active simultaneously, a single busy line suffices.
 
-| `branch_cond` | Meaning |
-|---------------|---------|
-| 000 | Never (sequential, micro-PC increments) |
-| 001 | Always (unconditional micro-jump) |
-| 010 | If stalled (selected unit busy) |
-| 011 | If ISA condition true (for conditional branches, checks IR cond field against SR flags) |
-| 100 | If ISA condition false |
-| 101-111 | (reserved) |
+Future FPU note: floating-point operands live in GPRs (no separate FP register file). The FPU reads from A-bus/B-bus and writes to R-bus, using the same `lu_op` interface as the integer unit. FP compare updates NZCV via `flag_w_en`, so normal Bcc works for FP branches. When the FPU hardware is absent, its opcodes are filled with illegal-instruction exception micro-ops in the ROM image — zero runtime overhead.
+
+Design history: the original draft specified 52 bits (actually 55 when counted correctly). Microcode validation (`microcode-validation.md`) identified missing signals for exception entry and unnecessary sequencer complexity, leading to this revised 49-bit format.
+
+### Micro-Sequencer
+
+The micro-sequencer uses a micro-PC register to index into the microcode ROM. Sequencing is controlled by `branch_cond` — no absolute jump addresses are needed. All micro-routines are linear sequences with stall holds and fetch-unit handoff.
+
+| `branch_cond` | Mnemonic | micro-PC action | `pc_src` behavior |
+|---------------|----------|-----------------|-------------------|
+| 000 | SEQ | micro-PC++ | unconditional |
+| 001 | FETCH | hand off to fetch unit | unconditional |
+| 010 | STALL | busy ? hold : (fault ? exception via fetch unit : micro-PC++) | unconditional |
+| 011 | BRT | hand off to fetch unit | applied if ISA cond true, else forced to PC+4 |
+| 100 | BRF | hand off to fetch unit | applied if ISA cond false, else forced to PC+4 |
+| 101 | PRIV | SR.S=0 ? exception (vector 3) via fetch unit : micro-PC++ | unconditional |
+| 110 | SKIP | micro-PC += 1 + fwd_offset | unconditional |
+| 111 | (reserved) | — | — |
+
+FETCH, BRT, and BRF all signal "instruction complete" to the fetch unit. The difference is `pc_src` handling: FETCH applies `pc_src` unconditionally; BRT/BRF conditionally gate `pc_src` based on the ISA condition evaluator, enabling single-micro-op conditional branches.
+
+PRIV checks the supervisor bit in SR. If SR.S=1 (supervisor mode), micro-PC increments normally — the privileged instruction executes with 1 micro-op overhead. If SR.S=0 (user mode), the fetch unit is signaled to trigger a privilege violation exception (vector 3) using the same hardware pre-actions as interrupt entry. Every privileged instruction's micro-routine begins with `branch_cond=PRIV` as its first micro-op.
+
+STALL checks a unified busy signal: `cache_busy | lu_busy`. When the operation completes (`busy` deasserts), the sequencer also checks a `fault` signal from the D-cache/MMU. Three-way resolution:
+
+- **busy=1:** Hold micro-PC (keep waiting).
+- **busy=0, fault=0:** micro-PC++ (normal completion).
+- **busy=0, fault=1:** Trigger exception via fetch unit. The D-cache/MMU provides the fault vector (4=TLB miss/page fault, 6=alignment fault, 9=bus error). Hardware pre-actions fire with `shadow_PC ← PC` (still pointing at the faulting instruction, since `pc_src=001` hasn't executed). The instruction is effectively aborted mid-execution.
+
+Since memory operations and long-latency unit operations never overlap in the same micro-op, a single busy line is sufficient. The fault signal is only meaningful for memory operations (LU operations cannot fault).
 
 ### Microcode ROM Organization
 
-The microcode ROM uses **direct mapping** from instruction bits to micro-PC start address. The top bits of the instruction (format prefix + opcode) form the entry point address:
+The microcode ROM uses **direct mapping** from instruction bits to micro-PC start address. The fetch unit computes the dispatch address from IR bits:
 
 ```
-Format R: micro-PC = {00, op[4:0]}       → entries 0-31
-Format L: micro-PC = {01, op[2:0], 00}   → entries 32-39 (×4 spacing for multi-op routines)
-Format M: micro-PC = {10, L, sz[1:0], SE} → entries 40-55 (×4 spacing)
-Format B: micro-PC = {11, 0000000}        → entry 56 (single routine, condition checked internally)
+Format R: dispatch = {00, op[4:0]}         → entries 0-31
+Format L: dispatch = {01, op[2:0], 00}     → entries 32-63 (×4 spacing for multi-op routines)
+Format M: dispatch = {10, L, sz[1:0], SE, 0} → entries 64-95 (×2 spacing)
+Format B: dispatch = {11, 0000000}         → entry 96 (single routine, condition in hardware)
 ```
 
-Exact mapping TBD during microcode development. Entry points are spaced to allow multi-micro-op routines to occupy consecutive addresses without colliding.
+Multi-micro-op instructions (loads, stores, MUL/DIV) occupy consecutive ROM addresses following their entry point. Entry points are spaced to prevent collisions. Interrupt entry occupies a dedicated ROM region, reached by hardware dispatch (not micro-branch).
 
-Microcode ROM size: 1024 entries × 52 bits = 52 Kbit (3 EBRs on ECP5, or 7 byte-wide ROM chips in discrete).
+Microcode ROM size: 256 entries × 49 bits ≈ 12.5 Kbit (1 EBR on ECP5, or 7 byte-wide ROM chips in discrete with 7 spare bits for future expansion).
 
-## Instruction Fetch Cycle
+## Instruction Fetch
 
-Before each instruction executes, the fetch micro-routine runs:
+Instruction fetch is handled by a **hardware fetch unit**, not by microcode. This eliminates fetch overhead from the micro-routine and provides a clean upgrade path to prefetched execution.
 
-```
-fetch-0: mar_src=PC, mar_load=1           → MAR = PC (drive fetch address)
-fetch-1: mem_read=1, stall until ready     → read instruction from I-cache/memory
-fetch-2: MDR → IR load, pc_src=PC+4        → latch instruction, advance PC
-fetch-3: micro-PC = direct map from IR     → jump to instruction's micro-routine
-```
+### Fetch Unit Interface
 
-After the instruction's micro-routine completes, control returns to fetch-0.
+| Signal | Direction | Purpose |
+|--------|-----------|---------|
+| `fetch_go` | sequencer → fetch | Triggered when branch_cond ∈ {FETCH, BRT, BRF, PRIV (on fail), STALL (on fault)} |
+| `ir_valid` | fetch → sequencer | Instruction latched in IR, ready for dispatch |
+| `dispatch_addr` | fetch → sequencer | Micro-PC start address for the new instruction |
+| `fetch_invalidate` | datapath → fetch | Discard prefetch on branch taken (phase 2) |
+| `mem_fault` | D-cache/MMU → sequencer | Fault detected during memory access (checked on STALL resolution) |
+| `fault_vector[3:0]` | D-cache/MMU → fetch unit | Exception vector for the fault (4=page fault, 6=alignment, 9=bus error) |
+
+### Fetch Unit Behavior
+
+The fetch unit serves as the **unified exception dispatch point** for all exception sources:
+
+When `fetch_go` is asserted (instruction complete, privilege check failed, or memory fault detected):
+
+1. **Exception check** (in priority order):
+   - **Memory fault:** If triggered by STALL-with-fault → hardware pre-actions with vector from `fault_vector`, dispatch to exception entry. `shadow_PC` = faulting instruction (PC not yet advanced).
+   - **Privilege violation:** If triggered by PRIV branch_cond → hardware pre-actions with vector 3, dispatch to exception entry.
+   - **Pending interrupt:** If IRQ pending, SR.I=1, and ei_shadow not set → hardware pre-actions with vector from priority encoder, dispatch to exception entry.
+2. **Instruction fetch:** Read I-cache at current PC (I-cache address is permanently wired to PC — split I/D cache). On hit: latch IR, compute dispatch address, assert `ir_valid`. On miss: stall until ready.
+
+Illegal instruction exceptions (vector 2) are handled by ROM content: undefined opcode entries contain exception-triggering micro-ops. FPU-absent traps use the same mechanism — the ROM image for systems without an FPU fills FP opcode entries with illegal instruction exception code.
+
+PC advancement is controlled by `pc_src` in the micro-word, not the fetch unit. Non-branch instructions set `pc_src=001` (PC+4) in their last micro-op; branch instructions set `pc_src=010` (PC+offset) or `011` (A-bus). The fetch unit reads I-cache at whatever address PC holds.
+
+### Prefetch Upgrade Path (phase 2)
+
+The fetch unit interface supports transparent upgrade to prefetched execution:
+
+- **Phase 1 (initial):** Fetch starts on `fetch_go`. Cost: I-cache latency per instruction.
+- **Phase 2 (future):** Fetch starts autonomously when PC changes. On `fetch_go`, `ir_valid` may already be asserted → 0-cycle fetch on I-cache hit. Taken branches assert `fetch_invalidate` to restart the prefetch at the new PC.
+
+No microcode changes are needed for the upgrade — the sequencer sees the same `ir_valid`/`dispatch_addr` interface in both phases.

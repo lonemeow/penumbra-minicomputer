@@ -498,7 +498,7 @@ System register access is for CPU-adjacent devices only. External peripherals (U
 
 The CPU is microcoded for flexibility and iterability.
 
-- **Horizontal microcode:** ~48-bit wide micro-words with direct control signal fields
+- **Horizontal microcode:** 49-bit wide micro-words with direct control signal fields
 - **Micro-PC sequencing:** Default increment; explicit branch via `next_addr` + `branch_cond` fields
 - **Single micro-op ALU instructions:** Simple ALU operations (ADD, SUB, AND, etc.) execute in a single micro-op thanks to horizontal encoding
 - **Flag-only variants:** The `reg_write_en` bit allows CMP (SUB without writeback) and TEST (AND without writeback) to share the same micro-word as their destructive counterparts, controlled by the F bit in Format R instructions
