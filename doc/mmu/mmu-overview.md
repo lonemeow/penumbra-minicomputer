@@ -1,205 +1,302 @@
-# Penumbra MMU - Overview
+# Penumbra MMU
 
-## Goals
+## Overview
 
-- Page-based virtual-to-physical address translation
-- Per-page protection (read, write, execute) with user/supervisor distinction
-- Software-managed TLB for fast translation — hardware does lookups only, software handles all management (loading, replacement, invalidation)
-- Support for precise exceptions on page faults to enable demand paging
-- Per-page cacheability control for memory-mapped I/O
-- Design must be feasible in discrete 74xx logic
+The Penumbra MMU provides page-based virtual-to-physical address translation with per-page protection and cacheability control. It is designed around a **fully software-managed TLB**: the hardware performs fast parallel lookups and permission checks, but all management — loading entries, choosing replacement victims, invalidation, dirty tracking — is done by the OS via privileged `MTSYS`/`MFSYS` instructions.
 
-## Cache Architecture
+This means:
+- The hardware has **no page table walker**, no replacement policy, no dirty-bit logic
+- The OS has **complete control** over what's in the TLB and when entries change
+- The in-memory page table format is an OS convention, not a hardware requirement
 
-Penumbra uses a **split I/D cache** design with both caches being **direct-mapped** and **PIPT** (physically indexed, physically tagged).
+### Quick Reference
 
-### I-Cache
+| Property | Value |
+|----------|-------|
+| Page size | 4 KB (12-bit offset) |
+| TLB entries | 64 (32 sets × 2 ways) |
+| TLB entry width | 64 bits (accessed as two 32-bit sysreg halves) |
+| Exception vector | 4 (shared: TLB miss + protection fault, distinguished by FAULT_STATUS) |
+| Sysreg device ID | 0 |
+| Flat/bypass mode | M=0 (reset default): identity map, uncached, no checks |
 
-- Read-only from the cache's perspective
-- No write policy complexity (no dirty bits, no writeback)
-- Supports a full invalidation instruction (privileged) to maintain coherence after loading executable code via the D-cache path (e.g., `exec()` in Minix 2)
-- Targeted per-line invalidation may be added later if ISA encoding space permits
-
-### D-Cache
-
-- **Initial implementation:** Write-through (every store writes to both cache and main memory)
-- **Upgrade path:** Write-back with dirty bits per cache line (add 1 bit per tag entry)
-- **Future enhancements:** Single-entry write buffer, then write-combining/writeback buffer
-
-Design guidelines for a clean upgrade path:
-1. Cache-to-bus interface is a well-defined boundary (`addr`, `wdata`, `rdata`, `we`, `re`, `burst_len`, `valid`, `ready`)
-2. Tag storage is a separate submodule (today: `{valid, tag}`; write-back adds: `{valid, dirty, tag}`)
-3. Cache controller FSM is separated from the datapath — changing write policy is an FSM change, not a datapath change
-4. Stores always write the cache data array (not bypassed to bus), so removing the simultaneous bus write for write-back is a clean FSM transition removal
-
-### Cache Parameters (Initial)
-
-- Line size: TBD (likely 16 bytes / 4 words for spatial locality without large fill penalties)
-- Cache size: TBD (likely 2-4 KB each, affordable on ECP5 with 208 EBR blocks)
-
-### Cache Miss Stall
-
-Cache misses use the same `busy`/`done` stall mechanism as long-latency ALU operations. The microcode holds on a "wait for memory ready" micro-op until the cache fill completes.
-
-## Uncached Access
-
-Memory-mapped I/O regions must bypass the cache. Cacheability is controlled by a **C (cacheable) bit in each TLB entry**:
-
-- **C=1:** Normal cached access through the L1 cache
-- **C=0:** Cache is bypassed; access goes directly to the system bus
-
-Since Penumbra is PIPT, the TLB lookup (which produces the physical address) also produces the C bit before the cache is consulted. The cache checks C and bypasses itself when C=0. This comes essentially for free in the PIPT design.
+---
 
 ## MMU Control Registers
 
-The MMU has its own set of privileged control registers, separate from the CPU's status register. This maintains a clean interface: the CPU sends virtual addresses to the MMU and receives physical addresses and status; MMU configuration is not a CPU concern.
+Accessed via `MTSYS`/`MFSYS` with device ID 0.
 
-MMU registers are accessed via the system register bus using `MTSYS`/`MFSYS` instructions with device ID 0. See the ISA architecture overview for the system register access mechanism.
+| Reg | Name | R/W | Description |
+|-----|------|-----|-------------|
+| 0 | MMUCR | R/W | Control: M (enable), ASID (current address space) |
+| 1 | FAULT_ADDR | R | Faulting virtual address (latched by hardware on fault) |
+| 2 | FAULT_STATUS | R | Fault reason and access info (latched by hardware on fault) |
+| 3 | TLB_VPN | R/W | TLB entry upper word: VPN + ASID |
+| 4 | TLB_PTE | R/W | TLB entry lower word: PPN + flags. **Write commits entry to TLB.** |
+| 5 | TLB_INDEX | R/W | Target TLB slot for reads/writes |
+| 6–15 | — | — | Reserved |
 
-| sys_reg | Name         | Description |
-|---------|--------------|-------------|
-| 0       | MMUCR        | MMU control register (see below) |
-| 1       | FAULT_ADDR   | Faulting virtual address (hardware-latched, read-only to software) |
-| 2       | FAULT_STATUS | Fault reason (hardware-latched, read-only to software; see encoding below) |
-| 3       | TLB_VPN      | TLB entry upper word: VPN + ASID (read/write) |
-| 4       | TLB_PTE      | TLB entry lower word: PPN + flags (read/write; write commits entry) |
-| 5       | TLB_INDEX    | Target TLB slot: `{ 26'b0, way[0], set[4:0] }` |
-| 6-15    | (reserved)   | Future expansion |
-
-### MMUCR Register Layout
-
-| Bit | Name | Description |
-|-----|------|-------------|
-| 0   | M    | Enable translation (0=bypass/flat, 1=TLB active) |
-| 7:1 | —    | Reserved |
-| 15:8| ASID | Current address space ID (8-bit, for TLB matching) |
-| 31:16| —   | Reserved |
-
-### FAULT_STATUS Register Layout
-
-| Bits | Field | Description |
-|------|-------|-------------|
-| 3:0  | TYPE  | Fault type: `0001`=TLB miss, `0010`=protection violation |
-| 7:4  | —     | Reserved (gap for future fault types) |
-| 8    | R     | Faulting access was a read |
-| 9    | W     | Faulting access was a write |
-| 10   | X     | Faulting access was an execute (fetch) |
-| 11   | USR   | Faulting access was in user mode |
-| 31:12| —     | Reserved |
-
-On a fault, the MMU latches the faulting virtual address into FAULT_ADDR and the reason into FAULT_STATUS before the CPU enters the exception handler. The handler reads these via `MFSYS`. Both registers are read-only to software — the MMU hardware writes them.
-
-### MMU Flat Mode (M=0)
-
-When the M bit in MMUCR is 0 (the reset default), the TLB is bypassed entirely:
-- Virtual address = physical address (identity mapping)
-- All accesses are uncached (C is forced to 0)
-- No permission checks are performed
-
-This allows the boot ROM and early bootloader to execute without any TLB setup. The OS sets M=1 after initializing page tables and loading the TLB.
-
-Hardware cost: one mux on the physical address bus (bypass vs. TLB output), one AND gate forcing C=0.
-
-Use cases for uncached pages:
-- Memory-mapped I/O registers (e.g., UART, SPI, Wiznet Ethernet)
-- Kernel-owned DMA bounce buffers
-
-## DMA Coherence Strategy
-
-Penumbra does **not** implement hardware cache snooping. DMA coherence is managed in software:
-
-- All DMA buffers are allocated in kernel memory mapped with C=0 (uncached)
-- No direct userspace DMA; the kernel uses bounce buffers to copy between user buffers and DMA-safe uncached memory
-- This eliminates the need for D-cache invalidation around DMA transfers
-- Future optimization: D-cache invalidate instruction or fast block copy instructions could reduce the bounce buffer overhead
-
-This approach is sufficient for the target workload (Minix 2 with Wiznet Ethernet at 10/100 Mbit).
-
-## Page Size
-
-**4 KB** (12-bit page offset, 20-bit virtual page number).
-
-This gives a symmetric two-level page table split: 10 bits (page directory index) + 10 bits (page table index) + 12 bits (page offset) = 32 bits.
-
-- 64-entry TLB covers 256 KB of active memory — sufficient for Minix 2 working sets
-- Average fragmentation waste of ~2 KB per mapping — acceptable with 32 MB SDRAM
-- Each page table page holds exactly 1024 PTEs at 4 bytes each — fills one 4 KB page perfectly
-
-## Page Table Structure
-
-Since the TLB is software-managed, the page table structure is an OS convention, not a hardware requirement. However, the natural structure for 4 KB pages with 32-bit addresses is a **two-level page table**:
+### MMUCR Layout
 
 ```
-Virtual address:  [PD index (10 bits)][PT index (10 bits)][Page offset (12 bits)]
-                   bits 31:22          bits 21:12          bits 11:0
+ 31              16 15        8 7         1 0
+┌──────────────────┬──────────┬───────────┬─┐
+│    (reserved)    │ ASID (8) │(reserved) │M│
+└──────────────────┴──────────┴───────────┴─┘
 ```
 
-- **Page directory (PD):** 1024 entries × 4 bytes = 4 KB (one page). Each entry points to a page table.
-- **Page table (PT):** 1024 entries × 4 bytes = 4 KB (one page). Each entry is a PTE mapping one virtual page to a physical page.
-- **Total pages mapped per PT:** 1024 × 4 KB = 4 MB
-- **Full address space:** 1024 PTs × 4 MB = 4 GB
+- **M** (bit 0): 0 = flat/bypass mode (identity map, uncached, no checks). 1 = TLB active.
+- **ASID** (bits 15:8): Current address space ID. TLB entries match against this unless G=1.
 
-For Minix 2 with small processes, most page directory entries will be empty (not present), so only a few page table pages are allocated per process. A typical process with 64 KB of text+data+stack needs only 1 page directory + 1 page table page = 8 KB of overhead.
+### FAULT_STATUS Layout
 
-## TLB
+```
+ 31    12 11 10  9  8 7    4 3       0
+┌────────┬───┬──┬──┬──┬─────┬─────────┐
+│(rsvd)  │USR│ X│ W│ R│(gap)│  TYPE   │
+└────────┴───┴──┴──┴──┴─────┴─────────┘
+```
 
-### Overview
+- **TYPE** (bits 3:0): `0001` = TLB miss (no matching entry), `0010` = protection violation (entry found, access denied). Gap at bits 7:4 reserved for future fault types.
+- **R/W/X** (bits 8/9/10): Which access type faulted (one-hot, same encoding as `ACC_READ`/`ACC_WRITE`/`ACC_EXEC`).
+- **USR** (bit 11): 1 = fault occurred in user mode.
 
-The TLB is **fully software-managed**: the hardware performs parallel lookups and permission checks, but all management — loading entries, choosing replacement victims, invalidation — is done by software via sysreg instructions. The hardware has no replacement logic, no LRU state, and no knowledge of the page table format.
+---
 
-- **Organization:** 2-way set-associative
-- **Size:** 64 entries (32 sets × 2 ways)
-- **Lookup:** VPN (bits 31:12) indexes the set; both ways are compared in parallel
-- **Miss:** Raises a TLB miss exception; software handler decides which slot to replace, loads the entry via sysreg writes
-- **Entry width:** 64 bits (wider than the 32-bit native word; accessed as two 32-bit sysreg halves)
+## TLB Entry Format
 
-### TLB Entry Format (64 bits)
+Each TLB entry is 64 bits, accessed as two 32-bit halves:
 
 ```
  63        44 43        24 23    16 15     8 7 6 5 4 3 2 1 0
 ┌────────────┬────────────┬────────┬────────┬─┬─┬─┬─┬─┬─┬─┬─┐
 │  VPN (20)  │  PPN (20)  │ASID(8) │ SW (8) │G│U│X│W│R│C│—│V│
 └────────────┴────────────┴────────┴────────┴─┴─┴─┴─┴─┴─┴─┴─┘
+ ╰──────── TLB_VPN ────────╯        ╰──────── TLB_PTE ────────╯
 ```
 
-| Field | Bits | Width | Description |
-|-------|------|-------|-------------|
-| VPN   | 63:44 | 20 | Virtual page number (vaddr bits 31:12) |
-| PPN   | 43:24 | 20 | Physical page number |
-| ASID  | 23:16 | 8  | Address space ID (reserved until ASID support enabled) |
-| SW    | 15:8  | 8  | Software-defined — hardware stores but never interprets. OS may use for pinning, LRU/age tracking, dirty status, or any other purpose |
-| G     | 7     | 1  | Global — hardware skips ASID comparison when set (for kernel pages shared across all address spaces) |
-| U     | 6     | 1  | User-accessible (0 = supervisor only) |
-| X     | 5     | 1  | Execute permission |
-| W     | 4     | 1  | Write permission |
-| R     | 3     | 1  | Read permission |
-| C     | 2     | 1  | Cacheable (0 = bypass cache, go direct to bus) |
-| _rsvd_| 1     | 1  | Reserved for future hardware flag |
-| V     | 0     | 1  | Valid (entry is in use) |
+### Fields
 
-**Design notes:**
-- **64 bits per entry = 8 bytes.** Clean byte alignment for discrete 74xx SRAM (e.g., two 64×32-bit SRAMs or eight 64×8-bit SRAMs).
-- **Total TLB storage:** 64 entries × 64 bits = 4096 bits = 512 bytes. Fits in one ECP5 EBR (or one 74HC189 bank in discrete).
-- **Hardware flags (bits 7:0):** These are the only bits the hardware reads during lookup and permission checking. The rest (SW, ASID, VPN, PPN) are used for matching or are software-managed.
-- **No hardware-managed dirty bit.** Dirty tracking is fully software-managed: the OS loads writable pages with W=0, traps the first write (protection fault), sets W=1 and updates its own dirty bookkeeping. This keeps the TLB as pure lookup hardware with no read-modify-write path.
-- **No hardware replacement.** The "pinned/wired" concept is a software convention using the SW bits. The OS decides replacement policy entirely.
-- **ASID:** Reserved in the entry format but not matched in the initial implementation (all entries effectively global). When ASID matching is enabled, the hardware adds one 8-bit comparator per way.
+| Field | Bits | For OS | Description |
+|-------|------|--------|-------------|
+| V | 0 | **Set/clear** | Valid. Entry participates in lookup only when V=1. Clear to invalidate. |
+| C | 2 | **Set** | Cacheable. 0 = bypass cache (use for MMIO, DMA buffers). 1 = normal cached access. |
+| R | 3 | **Set** | Read permission. Checked on data loads. |
+| W | 4 | **Set** | Write permission. Checked on data stores. Set W=0 initially for dirty tracking (see below). |
+| X | 5 | **Set** | Execute permission. Checked on instruction fetches. |
+| U | 6 | **Set** | User-accessible. 0 = supervisor only. Supervisor always passes U check. |
+| G | 7 | **Set** | Global. Skips ASID comparison — use for kernel pages shared across all address spaces. |
+| SW | 15:8 | **Free use** | Software-defined. Hardware stores these bits but never reads them. Use for pinning, dirty tracking, LRU/age, or any per-page bookkeeping. |
+| ASID | 23:16 | **Set** | Address space ID. Matched against MMUCR.ASID on lookup (unless G=1). |
+| PPN | 43:24 | **Set** | Physical page number. Combined with page offset to form physical address. |
+| VPN | 63:44 | **Set** | Virtual page number. Matched against incoming virtual address bits 31:12. |
 
-### Sysreg Access Protocol
+### Permission Check Rules
 
-TLB entries are accessed as two 32-bit halves via the sysreg interface, with TLB_INDEX selecting the target slot:
+On a TLB hit, the hardware checks (one-hot AND between access type and {X,W,R}):
+- **Read** → requires R=1
+- **Write** → requires W=1
+- **Execute** → requires X=1
+- **User mode** → additionally requires U=1
+- **Supervisor mode** → bypasses U check (can access U=0 pages)
 
-**TLB_INDEX** (sysreg 5): `{ 26'b0, way[0], set[4:0] }`
+If any check fails: protection fault (vector 4, FAULT_STATUS.TYPE = `0010`).
 
-**TLB_VPN** (sysreg 3) — upper 32 bits of entry:
+---
+
+## TLB Operations
+
+### TLB_INDEX
+
+Selects which TLB slot to read or write:
 ```
- 31      28 27            8 7          0
-┌──────────┬───────────────┬────────────┐
-│  0000    │   VPN (20)    │  ASID (8)  │
-└──────────┴───────────────┴────────────┘
+TLB_INDEX = { 26'b0, way[0], set[4:0] }
+```
+- **set** (bits 4:0): Set index, 0–31
+- **way** (bit 5): Way within the set, 0 or 1
+
+The set for a given virtual address is: **`set = vaddr[16:12]`** (the lowest 5 bits of the VPN).
+
+### Loading an Entry
+
+Three `MTSYS` instructions, executed in order:
+
+```asm
+; Load TLB entry: map vpage → ppage with given flags
+; r1 = TLB_INDEX value ({way, set})
+; r2 = TLB_VPN value  ({4'b0, VPN[19:0], ASID[7:0]})
+; r3 = TLB_PTE value  ({PPN[19:0], SW[7:0], flags[7:0]})
+
+MTSYS  R1, #0, #5       ; select target slot
+MTSYS  R2, #0, #3       ; stage VPN + ASID
+MTSYS  R3, #0, #4       ; write PPN + flags → entry committed
 ```
 
-**TLB_PTE** (sysreg 4) — lower 32 bits of entry:
+**Important:** The TLB_VPN write stages data in a holding register. The entry is committed to the TLB array only when TLB_PTE is written. Always write TLB_INDEX before TLB_VPN/TLB_PTE.
+
+### Reading an Entry
+
+For replacement decisions, read both ways of a set:
+
+```asm
+; Read way 0 of set S
+LLI   R1, S             ; set index (bits 4:0), way=0 (bit 5 clear)
+MTSYS R1, #0, #5        ; select slot
+MFSYS R2, #0, #3        ; R2 = TLB_VPN (VPN + ASID)
+MFSYS R3, #0, #4        ; R3 = TLB_PTE (PPN + SW + flags)
+
+; Read way 1 of set S
+LLI   R1, (S | 0x20)    ; same set, way=1 (bit 5 set)
+MTSYS R1, #0, #5
+MFSYS R4, #0, #3        ; R4 = way1 VPN
+MFSYS R5, #0, #4        ; R5 = way1 PTE
+```
+
+Check V bit (bit 0 of TLB_PTE) to determine which slots are occupied. Use SW bits for replacement policy decisions.
+
+### Invalidating Entries
+
+**Single entry:**
+```asm
+MTSYS  R_idx, #0, #5    ; select slot
+MTSYS  R0,    #0, #3    ; clear VPN (optional but clean)
+MTSYS  R0,    #0, #4    ; write PTE with V=0 → entry invalidated
+```
+
+**All entries (full flush):**
+```asm
+; Iterate over all 64 slots (set 0-31, way 0-1)
+LLI   R1, #0            ; index = 0
+LLI   R2, #64           ; count
+.flush_loop:
+MTSYS R1, #0, #5        ; select slot
+MTSYS R0, #0, #4        ; V=0 (R0 is always 0)
+INC   R1, #1
+CMP   R1, R2
+BNE   .flush_loop
+```
+
+**By virtual address** (e.g., on `munmap`):
+```asm
+; Compute set from faulting VPN, check both ways, invalidate matches
+; set = VPN[4:0] = vaddr[16:12]
+; Check way 0 and way 1, compare VPN field, invalidate if match
+```
+
+---
+
+## Exception Handling
+
+### TLB Miss Handler
+
+The TLB miss handler is entered via **exception vector 4** when the hardware finds no matching entry. The CPU has already saved shadow PC/SR and entered supervisor mode with interrupts disabled.
+
+**Recommended stackless handler** using a fixed save area in the pinned vector page (0x00000000):
+
+```asm
+; ── Vector 4 entry point ──────────────────────────
+; Hardware state: shadow_PC/shadow_SR saved, S=1, I=0
+; Save scratch registers to fixed area at 0x40-0x5F
+
+STW   R1, [R0 + 0x40]          ; save scratch (R0=0, Format M offset)
+STW   R2, [R0 + 0x44]
+STW   R3, [R0 + 0x48]
+STW   R4, [R0 + 0x4C]
+
+MFSYS R1, #0, #1               ; R1 = FAULT_ADDR
+MFSYS R2, #0, #2               ; R2 = FAULT_STATUS
+
+; Check fault type (bits 3:0)
+AND   R3, R2, #0x0F            ; isolate TYPE field
+CMPI  R3, #1                   ; TLB miss?
+BNE   .protection_fault        ; if not, it's a protection fault
+
+; ── Page table walk ───────────────────────────────
+; R1 = faulting virtual address
+; Compute PD index = R1[31:22], PT index = R1[21:12]
+; PD base stored at fixed location 0x50
+
+LDW   R3, [R0 + 0x50]          ; R3 = page directory base (physical)
+; ... shift R1 to get PD index, load PD entry ...
+; ... from PD entry, get PT base, load PT entry ...
+; ... build TLB_VPN and TLB_PTE from the PTE ...
+
+; ── Replacement decision ──────────────────────────
+; Compute target set from faulting address
+; Read both ways, pick victim (check V bits, SW bits)
+; ... (see "Reading an Entry" above) ...
+
+; ── Load TLB entry ────────────────────────────────
+MTSYS R_idx, #0, #5            ; select victim slot
+MTSYS R_vpn, #0, #3            ; stage VPN + ASID
+MTSYS R_pte, #0, #4            ; commit PPN + flags
+
+; ── Restore and return ────────────────────────────
+LDW   R1, [R0 + 0x40]
+LDW   R2, [R0 + 0x44]
+LDW   R3, [R0 + 0x48]
+LDW   R4, [R0 + 0x4C]
+RTI
+
+.protection_fault:
+; ... handle permission violation or page-not-present ...
+; ... may involve demand paging, signal delivery, etc. ...
+```
+
+### Handler Safety — Pinning
+
+The TLB miss handler must not cause recursive TLB misses. Pin these pages using SW bits and never replace them:
+
+| Pinned page | Purpose | Entries |
+|-------------|---------|---------|
+| Vector page (0x00000000) | Handler code, scratch save area, PD base pointer | 1 |
+| Page directory | First-level page table walk | 1 |
+| Kernel page table pages | Second-level walk for kernel space | 2–3 |
+| **Total** | | **4–5 of 64** |
+
+Since replacement is fully software-controlled, "pinning" is just a convention: the handler checks SW bits and never evicts entries where the pin bit is set.
+
+---
+
+## Software-Managed Dirty Tracking
+
+There is no hardware dirty bit. The OS tracks dirty pages using the **write-fault mechanism**:
+
+1. **Initial load:** Map the page with W=0 (read-only) even if the page is logically writable
+2. **First write:** Hardware raises protection fault (W=0, write access)
+3. **Fault handler:** Recognize this as a dirty-tracking fault (FAULT_STATUS shows TYPE=protection, W=1). Mark the page dirty in kernel bookkeeping. Reload the TLB entry with W=1.
+4. **Subsequent writes:** Succeed normally (W=1)
+
+The one-time fault cost per page is amortized over the page's lifetime. When the pageout daemon needs to write a page to disk, it checks its dirty bookkeeping to decide which pages need writing.
+
+---
+
+## Context Switch
+
+When switching between processes:
+
+### Without ASID (initial implementation)
+1. Save outgoing process state (registers, PC, SR)
+2. Flush all TLB entries (software loop, ~320 instructions)
+3. Load new process's page directory base pointer to the fixed location (0x50)
+4. Re-pin handler/kernel entries for the new address space
+5. Restore incoming process state
+6. `RTI` — first few instructions will TLB miss and be loaded on demand
+
+### With ASID (future)
+1. Save outgoing process state
+2. Set MMUCR.ASID to the incoming process's ASID
+3. Load new PD base pointer
+4. Restore incoming process state, `RTI`
+
+No TLB flush needed — entries from different ASIDs coexist. Kernel pages with G=1 are shared. ASID recycling: when all 256 ASIDs are used, flush the TLB and restart allocation.
+
+---
+
+## Page Table Format (OS Convention)
+
+The hardware has no knowledge of in-memory page tables. The OS is free to use any format. A natural 32-bit PTE format that maps directly to TLB_PTE (avoiding bit-shuffling in the miss handler) is:
+
 ```
  31          12 11       4 3 2 1 0
 ┌──────────────┬─────────┬─┬─┬─┬─┬─┬─┬─┬─┐
@@ -207,118 +304,42 @@ TLB entries are accessed as two 32-bit halves via the sysreg interface, with TLB
 └──────────────┴─────────┴─┴─┴─┴─┴─┴─┴─┴─┘
 ```
 
-**Write (load an entry):**
-```asm
-MTSYS  r_idx, #0, #5    ; select slot {way, set}
-MTSYS  r_vpn, #0, #3    ; write VPN + ASID
-MTSYS  r_pte, #0, #4    ; write PPN + SW + flags → commits entry to TLB
+If the in-memory PTE uses this layout, the miss handler can load it directly into TLB_PTE with no translation — a single `LDW` + `MTSYS` pair. The SW bits in the in-memory PTE can carry OS metadata (dirty flag, reference count, page type) that gets copied into the TLB entry.
+
+### Two-Level Page Table (Recommended)
+
+```
+Virtual address:  [PD index (10 bits)][PT index (10 bits)][Page offset (12 bits)]
+                   bits 31:22          bits 21:12          bits 11:0
 ```
 
-**Read (inspect an entry — for replacement decisions):**
-```asm
-MTSYS  r_idx, #0, #5    ; select slot {way, set}
-MFSYS  r_vpn, #0, #3    ; read VPN + ASID
-MFSYS  r_pte, #0, #4    ; read PPN + SW + flags
-```
+- **Page directory (PD):** 1024 entries × 4 bytes = 4 KB. Each entry points to a page table page.
+- **Page table (PT):** 1024 entries × 4 bytes = 4 KB. Each entry is a PTE.
+- **Coverage:** One PD entry covers 4 MB. Full address space = 1024 PD entries = 4 GB.
 
-Note: the 64-bit entry width exceeds the 32-bit native word size. Loading or reading an entry requires two sysreg operations. A future optimization could provide a "read set" operation that returns both ways, reducing replacement-decision overhead from 4 to 2 sysreg reads.
+For Minix 2 with small processes: ~1 PD + 1–2 PT pages per process = 8–12 KB overhead.
 
-### TLB Lookup (Hardware)
-
-On every memory access (when M=1):
-1. Compute set index from VPN: `set = vaddr[16:12]` (lower 5 bits of VPN)
-2. Compare VPN field of both ways against `vaddr[31:12]`
-3. Compare ASID field against MMUCR.ASID (skip if entry's G=1)
-4. Check V=1
-5. If match: extract PPN, C, permission flags → permission check
-6. If no match in either way: TLB miss exception
-
-**Permission check** (on hit):
-- Execute access: require X=1 (else protection fault)
-- Read access: require R=1 (else protection fault)
-- Write access: require W=1 (else protection fault)
-- User mode access: require U=1 (else protection fault)
-- Supervisor can access U=0 pages (supervisor bypasses U check)
-
-On protection fault: latch FAULT_ADDR and FAULT_STATUS, raise exception.
-
-### TLB Miss Handling
-
-On a TLB miss, the MMU:
-1. Latches the faulting virtual address into FAULT_ADDR
-2. Sets FAULT_STATUS with TYPE=0001 (TLB miss) and the access type/mode bits
-3. Raises the TLB miss exception (vector 4, shared with page fault)
-
-The exception handler:
-1. Reads FAULT_ADDR and FAULT_STATUS via `MFSYS`
-2. Checks FAULT_STATUS.TYPE to distinguish TLB miss from protection fault
-3. Walks the page table in software to find the PTE
-4. If the page is present:
-   a. Reads both ways of the target set via TLB_INDEX + MFSYS to decide which slot to replace
-   b. Loads the new entry via TLB_INDEX + TLB_VPN + TLB_PTE
-   c. Returns via RTI
-5. If the page is not present: invokes the page fault handler (demand paging)
-
-**Handler safety:** The TLB miss handler itself must not cause recursive TLB misses. The OS ensures this by using SW bits to "pin" the handler's code page(s) and the kernel page table page(s). Since replacement is software-controlled, pinned entries are never overwritten.
-
-### Software-Managed Dirty Tracking
-
-There is no hardware dirty bit. The OS tracks dirty pages using a write-fault mechanism:
-
-1. On initial page mapping or TLB load: set W=0 in the TLB entry (read-only)
-2. First write to the page → protection fault (W=0 violation)
-3. Fault handler: mark the page dirty in kernel data structures, set W=1 in TLB entry, return
-4. Subsequent writes succeed (W=1)
-
-This keeps the TLB hardware purely as a lookup table with no write-back path. The one-time fault cost per page is amortized over the page's lifetime.
-
-### TLB Invalidation
-
-All invalidation is done in software via sysreg writes — there is no hardware flush command, consistent with the fully software-managed TLB philosophy:
-
-- **Invalidate one entry:** Write TLB_INDEX to select the slot, then write TLB_PTE with V=0.
-- **Invalidate all:** Software loop over all 64 entries, writing V=0 to each via TLB_INDEX + TLB_PTE (~320 instructions). Used on context switch (when ASID is not implemented) or `exec()`. Once ASID is enabled, full flushes become rare.
-- **Invalidate by VPN search:** Compute the target set from VPN[16:12], read both ways, clear matching entries. Two reads + one write — fast enough.
-
-### TLB and I-Cache Coherence
-
-After loading new executable code (e.g., `exec()` in Minix 2), the kernel must:
-1. Load the new TLB entries for the code pages
-2. Issue a full I-cache invalidate instruction
-
-This ensures the I-cache doesn't serve stale instructions from a previous mapping.
-
-## Page Table Entry Format (Software)
-
-Since the TLB is software-managed, the in-memory page table format is defined by the OS, not the hardware. However, a natural 32-bit format that maps directly to TLB_PTE is:
-
-| Bits | Field | Description |
-|------|-------|-------------|
-| 31:12 | PPN | Physical page number |
-| 11:4  | SW  | Software-defined (pinned, dirty, age, etc.) |
-| 3     | R   | Read |
-| 2     | W   | Write |
-| 1     | X   | Execute |
-| 0     | V   | Valid / present |
-
-This is a suggested format only — the hardware does not interpret in-memory page tables. The OS is free to use any format, as long as the TLB miss handler translates it into the TLB_VPN/TLB_PTE register format. The in-memory PTE does not need to match the TLB entry layout.
+---
 
 ## Boot Sequence
 
-After reset, the CPU starts in the following state:
+After reset:
 - SR = `{ S=1, I=0, flags=0 }` — supervisor mode, interrupts disabled
-- MMUCR = `{ M=0, ASID=0 }` — MMU in flat mode (identity mapped, uncached)
-- PC = `0xFFFF_E000` (base of boot ROM)
+- MMUCR = `{ M=0, ASID=0 }` — flat/bypass mode
+- PC = `0xFFFF_E000` (boot ROM)
 
-Typical boot sequence:
-1. Boot ROM executes in flat uncached mode (M=0) starting at `0xFFFF_E000`
+Recommended boot procedure:
+1. Execute boot ROM in flat mode (M=0) — all addresses are physical, uncached
 2. Initialize SDRAM controller
-3. Load bootloader/kernel from SPI flash or SD card into SDRAM (starting at `0x0000_0000`)
-4. Set up interrupt vector table at `0x0000_0000`
-5. Set up initial page tables in SDRAM
-6. Load TLB with initial entries (kernel pages with G=1, handler code pinned via SW bits)
-7. Set M=1 via `MTSYS` (enable MMU translation)
-8. Jump to kernel entry point
+3. Load kernel from storage into SDRAM at `0x0000_0000`
+4. Set up interrupt vector table at `0x0000_0000` (including TLB miss handler)
+5. Set up scratch save area at `0x0000_0040` and PD base at `0x0000_0050`
+6. Build initial page tables in SDRAM
+7. Load initial TLB entries: pin vector page, PD, kernel PT pages (G=1, pin bit in SW)
+8. Set M=1 via `MTSYS` to enable TLB translation
+9. Jump to kernel entry point — now running with virtual addressing
+
+---
 
 ## Address Space Layout
 
@@ -326,3 +347,50 @@ _To be defined._ Typical split:
 - User space in lower portion of address space
 - Kernel space in upper portion (mapped in all address spaces, G=1)
 - I/O region mapped at fixed physical addresses with C=0
+
+---
+
+## Cache Considerations
+
+### Uncached Access
+
+MMIO and DMA regions must bypass the cache. Set C=0 in the TLB entry for these pages. Since Penumbra uses PIPT caches, the C bit is available from the TLB lookup before the cache is consulted — the cache checks C and bypasses itself when C=0.
+
+### I-Cache Coherence
+
+After loading new executable code (e.g., `exec()` in Minix 2), the kernel must invalidate the I-cache to prevent stale instruction fetches. Sequence: load new TLB entries for code pages, then issue I-cache invalidate.
+
+### DMA Coherence
+
+No hardware cache snooping. All DMA buffers must be mapped with C=0 (uncached). Use kernel bounce buffers for user↔DMA transfers. Sufficient for the target workload (Minix 2 with 10/100 Mbit Ethernet).
+
+---
+
+## Hardware Implementation Notes
+
+_This section is for hardware designers, not OS implementers._
+
+### Cache Architecture
+
+Split I/D cache, both direct-mapped PIPT:
+- **I-Cache:** Read-only, full invalidation instruction (privileged)
+- **D-Cache:** Write-through initially, upgradeable to write-back
+- **Line size:** TBD (likely 4 words / 16 bytes)
+- **Cache size:** TBD (likely 2–4 KB each, fits ECP5 EBR budget)
+- Cache misses stall via the same `busy` mechanism as long-latency ALU ops
+
+### TLB Hardware
+
+The TLB is a pure lookup table — no state machines, no replacement FSM:
+1. **Storage:** 64 × 64-bit register file, addressed by {way, set}
+2. **Lookup:** Parallel 20-bit VPN + 8-bit ASID comparators on both ways, gated by V and G
+3. **Permission check:** One-hot access type AND with {X,W,R}, plus U check for user mode — single gate level
+4. **Sysreg access:** Indexed read/write via TLB_INDEX addressing
+
+### Discrete 74xx Feasibility
+
+- TLB storage: eight 64×8-bit SRAMs (byte-aligned 64-bit entries)
+- VPN comparison: three 74HC688 (8-bit comparator) per way × 2 ways = 6 ICs
+- ASID comparison: one 74HC688 per way = 2 ICs
+- Permission check: one 74HC08 (AND) + one 74HC32 (OR)
+- Total: ~20 ICs for the complete TLB
