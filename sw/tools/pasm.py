@@ -114,6 +114,8 @@ BRANCH_OPS = {
     "BCC": 4,  "BLO": 4,  "BMI": 5,  "BPL": 6,  "BVS": 7,
     "BVC": 8,  "BHI": 9,  "BLS": 10, "BGE": 11, "BLT": 12,
     "BGT": 13, "BLE": 14, "BL":  15,
+    # Semantic aliases (same condition, clearer intent in context)
+    "BZ":  1,  "BNZ": 2,   # Zero/not-zero (after DEC, INC, etc.)
 }
 
 # Pseudo-instructions
@@ -201,7 +203,12 @@ def assemble_line(mnemonic, operands, addr, labels, line_num):
         rd = parse_reg(operands[0])
         if rd is None:
             raise ValueError(f"bad register '{operands[0]}'")
-        imm = parse_imm(operands[1])
+        # Try label first (strip # prefix if present), then numeric immediate
+        label_name = operands[1].strip().lstrip('#')
+        if label_name in labels:
+            imm = labels[label_name]
+        else:
+            imm = parse_imm(operands[1])
         return encode_format_l(op, rd, imm)
 
     # ── Format M ──

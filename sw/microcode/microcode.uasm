@@ -45,6 +45,33 @@ or:
 xor:
   reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=XOR bmux=REG wmux=RBUS w_flags=1
 
+# ── SHL (op=00101, dispatch=0x05) ─────────────────────────────
+.org 0x05
+shl:
+  reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=SHL bmux=REG wmux=RBUS w_flags=1
+
+# ── SHR (op=00110, dispatch=0x06) ─────────────────────────────
+.org 0x06
+shr:
+  reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=SHR bmux=REG wmux=RBUS w_flags=1
+
+# ── SAR (op=00111, dispatch=0x07) ─────────────────────────────
+.org 0x07
+sar:
+  reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=SAR bmux=REG wmux=RBUS w_flags=1
+
+# ── MOV (op=01000, dispatch=0x08) ─────────────────────────────
+# Rd = Rs (pass A-bus through ALU)
+.org 0x08
+mov:
+  reg_a=IR_RS reg_w=IR_RD w_en=1 alu=PASS_A wmux=RBUS
+
+# ── NOT (op=01001, dispatch=0x09) ─────────────────────────────
+# Rd = ~Rs
+.org 0x09
+not:
+  reg_a=IR_RS reg_w=IR_RD w_en=1 alu=NOT wmux=RBUS w_flags=1
+
 # ═══════════════════════════════════════════════════════════════
 # Format L — Immediate operations (0x20–0x3F)
 # Dispatch: {01, op[2:0], 00} — ×4 spacing
@@ -80,9 +107,21 @@ inc:
 dec:
   reg_a=IR_RD reg_w=IR_RD w_en=1 alu=SUB bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
 
+# ── CMPI Rd, #imm16 (op=101, dispatch=0x34) ─────────────────
+# Flags = Rd - zero_extend(imm16), Rd not written
+.org 0x34
+cmpi:
+  reg_a=IR_RD alu=SUB bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
+
 # ═══════════════════════════════════════════════════════════════
 # Format R — System operations (0x10–0x1F)
 # ═══════════════════════════════════════════════════════════════
+
+# ── JMP Rs (op=11000, dispatch=0x18) ─────────────────────────
+# PC = Rs (register indirect jump; RET = JMP R13)
+.org 0x18
+jmp:
+  reg_a=IR_RS pc=ABUS
 
 # ── EI (op=11001, dispatch=0x19) ────────────────────────────
 # Enable interrupts: SR.I = 1, delayed by one instruction (ei_shadow)

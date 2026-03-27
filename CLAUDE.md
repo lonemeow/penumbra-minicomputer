@@ -39,6 +39,7 @@ The architecture is fully specified in `doc/`. Key specs:
 ## Build System
 - `make smoke` — toolchain smoke test (trivial adder)
 - `make sim MOD=<name>` — build & run a module's Verilator testbench (auto-includes penumbra_pkg.sv, sets --top-module)
+- `make sim MOD=cpu_top TB=<tb> PROG=<prog>` — run a specific testbench with a specific program (e.g., `TB=tb_cpu_prog PROG=test_fib`)
 - `make wave MOD=<name>` — open VCD waveform in GTKWave
 - `make clean` — remove build artifacts
 - All simulation runs via Docker (`verilator/verilator:latest`) — no host install needed
@@ -46,7 +47,7 @@ The architecture is fully specified in `doc/`. Key specs:
 - **Important:** Always `rm -rf build/<mod>.verilator build/V<mod>` before rebuilding if you suspect stale binaries (WSL2 /mnt/c filesystem can have stale mtimes)
 
 ## Current Status
-The CPU executes instructions in simulation. RTL is built bottom-up from leaf modules. The 49-bit micro-word format is finalized (bits [1:0] = ei_set/di_set). Integration tests verify ALU operations and interrupt entry.
+The CPU runs real programs in simulation. A tail-recursive Fibonacci routine (fib(10)=55) executes correctly in 254 cycles. RTL is built bottom-up from leaf modules. The 49-bit micro-word format is finalized (bits [1:0] = ei_set/di_set).
 
 ### Implemented RTL Modules (all tested)
 | Module | File | Tests | Description |
@@ -67,7 +68,7 @@ The CPU executes instructions in simulation. RTL is built bottom-up from leaf mo
 | Datapath top | `rtl/core/datapath.sv` | 15/15 | Structural wiring of all modules, IR reg, reg addr routing, F-bit gating |
 | Microcode ROM | `rtl/core/ucode_rom.sv` | — | 256×49-bit ROM, $readmemh from microcode.hex |
 | Sequencer | `rtl/core/sequencer.sv` | — | Micro-PC, branch_cond decode, EI/DI tracking, ei_shadow_clr |
-| CPU top | `rtl/core/cpu_top.sv` | 15/15 | Full integration: datapath + sequencer + ROM + memory + fetch + IRQ |
+| CPU top | `rtl/core/cpu_top.sv` | 25/25 | Full integration: datapath + sequencer + ROM + memory + fetch + IRQ + LDW/STW |
 | Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_* constants |
 
 ### Interrupt Handling
@@ -86,13 +87,34 @@ The micro-word's `reg_a_sel`, `reg_b_sel`, `reg_w_sel` fields use a 4-bit encodi
 
 F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal addresses).
 
+### Memory Access
+- **STALL-based:** Load/store micro-routines use `branch=STALL` to wait for memory. The same microcode works regardless of memory latency (1-cycle sync, cache miss, MMU walk).
+- **mem_busy signal:** Simple memory model provides 1-cycle busy for reads, 0-cycle for writes. Future: replaced by cache/bus controller busy signal.
+- **MMU traps (future):** STALL path will check `mem_fault` alongside `mem_busy` for mid-instruction exceptions (page not present, protection). PC is still in HOLD during STALL, so the CPU state is clean for abort+restart.
+- **Dispatch spacing:** Format M uses ×4 spacing (0x80–0xBF) to fit multi-step micro-routines (loads: 3 micro-ops, stores: 4 micro-ops).
+
 ### Software Tools
 - **Microcode assembler** (`sw/tools/uasm.py`): Symbolic microcode → $readmemh hex. Defaults: `pc=NEXT branch=FETCH`. Run: `python3 sw/tools/uasm.py input.uasm -o microcode.hex`
-- **ISA assembler** (`sw/tools/pasm.py`): Two-pass assembler for Penumbra ISA → $readmemh hex. All 4 formats (R/L/M/B), labels, pseudo-ops (NOP, RET). Run: `python3 sw/tools/pasm.py input.s -o program.hex`
+- **ISA assembler** (`sw/tools/pasm.py`): Two-pass assembler for Penumbra ISA → $readmemh hex. All 4 formats (R/L/M/B), labels, label references in Format L immediates, pseudo-ops (NOP, RET), branch aliases (BZ/BNZ). Run: `python3 sw/tools/pasm.py input.s -o program.hex`
 - Makefile auto-copies `program.hex` and `microcode.hex` to project root for `$readmemh`
 
+### Test Convention
+- **Program runner** (`sim/tb_cpu_prog.cpp`): Generic testbench that runs a program to halt, checks R1. No cycle-by-cycle internal inspection.
+- **Calling convention:** Result in R1, return via RET (JMP R13). Program preamble sets LR and calls the test subroutine. Compatible with future boot ROM.
+- **Halt detection:** Testbench watches for PC stability (infinite `B .` loop).
+
+### Implemented Microcode (28 micro-ops)
+| Category | Instructions | Notes |
+|----------|-------------|-------|
+| ALU (Format R) | ADD, SUB, AND, OR, XOR, SHL, SHR, SAR, MOV, NOT | CMP/TEST via F-bit gating on SUB/AND |
+| Immediate (Format L) | LLI, LLIS, LUI, INC, DEC, CMPI | |
+| Memory (Format M) | LDW (3 micro-ops), STW (4 micro-ops) | STALL-based, latency-agnostic |
+| Branch (Format B) | All 16 conditions via single BRT entry | BZ/BNZ aliases in assembler |
+| System (Format R) | JMP, EI, DI | RET = JMP R13 (pseudo-op) |
+| Exception | int_entry | Dispatch-time IRQ check |
+
 ### Next Steps (in priority order)
-1. **Load/store micro-routines** — Multi-step microcode for LDW/STW using MAR, MDR, STALL.
-2. **Branch micro-routine** — Wire up condition evaluator, test BEQ/BNE.
-3. **More system ops** — RTI, SYSCALL, JMP, MOV, shifts.
-4. **Memory subsystem** — Cache, bus interface for real hardware.
+1. **Sub-word loads** — LDH/LDB/LDHS/LDBS (byte/half-word extraction in writeback path).
+2. **More system ops** — RTI, SYSCALL, GETSR/SETSR, GETUSP/SETUSP.
+3. **BL (branch-and-link)** — Needs special handling to save PC+4 to LR; all branches currently share one dispatch entry.
+4. **Memory subsystem** — Cache, bus interface, MMU for real hardware.
