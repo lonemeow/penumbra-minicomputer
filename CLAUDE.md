@@ -46,13 +46,13 @@ The architecture is fully specified in `doc/`. Key specs:
 - **Important:** Always `rm -rf build/<mod>.verilator build/V<mod>` before rebuilding if you suspect stale binaries (WSL2 /mnt/c filesystem can have stale mtimes)
 
 ## Current Status
-RTL implementation is in progress, bottom-up from leaf modules. Microcode validation is complete. The 48-bit micro-word format is finalized. The separate long-latency unit has been folded into a unified ALU (alu_op expanded to 5 bits, lu_op replaced with alu_start).
+The CPU executes instructions in simulation. RTL is built bottom-up from leaf modules. The 49-bit micro-word format is finalized (bits [1:0] = ei_set/di_set). Integration tests verify ALU operations and interrupt entry.
 
 ### Implemented RTL Modules (all tested)
 | Module | File | Tests | Description |
 |--------|------|-------|-------------|
 | ALU | `rtl/core/alu.sv` | 39/39 | Unified compute unit, 11 single-cycle ops, multi-cycle stubs |
-| Register file | `rtl/core/regfile.sv` | 41/41 | 2R/1W, R0=zero, R14 banked USP/KSP, R15→PC |
+| Register file | `rtl/core/regfile.sv` | 41/41 | 2R/1W, R0=zero, R14 banked USP/KSP, R15→PC, debug port |
 | Condition evaluator | `rtl/core/cond_eval.sv` | 256/256 | 16 ARM-style conditions, exhaustively tested |
 | Immediate extractor | `rtl/core/imm_ext.sv` | 14/14 | Zero/sign-extend, shift-left-16 |
 | Field extractor | `rtl/core/field_ext.sv` | 34/34 | IR → all format fields (R/L/M/B) |
@@ -65,7 +65,18 @@ RTL implementation is in progress, bottom-up from leaf modules. Microcode valida
 | MAR | `rtl/core/mar.sv` | 6/6 | Memory address register, loads from R-bus |
 | MDR | `rtl/core/mdr.sv` | 7/7 | Memory data register, loads from memory or A-bus |
 | Datapath top | `rtl/core/datapath.sv` | 15/15 | Structural wiring of all modules, IR reg, reg addr routing, F-bit gating |
+| Microcode ROM | `rtl/core/ucode_rom.sv` | — | 256×49-bit ROM, $readmemh from microcode.hex |
+| Sequencer | `rtl/core/sequencer.sv` | — | Micro-PC, branch_cond decode, EI/DI tracking, ei_shadow_clr |
+| CPU top | `rtl/core/cpu_top.sv` | 15/15 | Full integration: datapath + sequencer + ROM + memory + fetch + IRQ |
 | Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_* constants |
+
+### Interrupt Handling
+- **Check point:** Dispatch-time (when `ir_valid` fires, before entering S_EXEC)
+- **Check logic:** `irq_taken = i_irq & sr_i & !ei_shadow` (combinational, safe because sr_i is registered)
+- **Action:** Override dispatch to 0x70 (int_entry), pulse `except_entry` (saves shadow PC/SR, sets S=1/I=0)
+- **EI:** Sets sr_i=1 and ei_shadow=1; ei_shadow cleared after next instruction completes (ei_pending tracking in sequencer)
+- **DI:** Sets sr_i=0 immediately; privileged (uses branch=PRIV in microcode)
+- **Key bug found:** `ei_pending` clear condition must include `executing` — during S_FETCH, `go_fetch` can be stale from the previous micro-word's ROM output
 
 ### Register Address Routing
 The micro-word's `reg_a_sel`, `reg_b_sel`, `reg_w_sel` fields use a 4-bit encoding:
@@ -75,7 +86,13 @@ The micro-word's `reg_a_sel`, `reg_b_sel`, `reg_w_sel` fields use a 4-bit encodi
 
 F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal addresses).
 
+### Software Tools
+- **Microcode assembler** (`sw/tools/uasm.py`): Symbolic microcode → $readmemh hex. Defaults: `pc=NEXT branch=FETCH`. Run: `python3 sw/tools/uasm.py input.uasm -o microcode.hex`
+- **ISA assembler** (`sw/tools/pasm.py`): Two-pass assembler for Penumbra ISA → $readmemh hex. All 4 formats (R/L/M/B), labels, pseudo-ops (NOP, RET). Run: `python3 sw/tools/pasm.py input.s -o program.hex`
+- Makefile auto-copies `program.hex` and `microcode.hex` to project root for `$readmemh`
+
 ### Next Steps (in priority order)
-1. **Microcode ROM** — 256×48-bit ROM with dispatch logic.
-2. **Micro-sequencer** — micro-PC counter with branch_cond control.
-3. **Fetch unit** — hardwired instruction fetch, exception dispatch.
+1. **Load/store micro-routines** — Multi-step microcode for LDW/STW using MAR, MDR, STALL.
+2. **Branch micro-routine** — Wire up condition evaluator, test BEQ/BNE.
+3. **More system ops** — RTI, SYSCALL, JMP, MOV, shifts.
+4. **Memory subsystem** — Cache, bus interface for real hardware.
