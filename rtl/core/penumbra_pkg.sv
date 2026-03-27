@@ -35,5 +35,23 @@ package penumbra_pkg;
     localparam logic [4:0] ALU_MOD    = 5'b01111;
     localparam logic [4:0] ALU_MODU   = 5'b10000;
 
+    // ── Condition codes (from Format B branch instructions) ─────
+    localparam logic [3:0] COND_AL = 4'b0000;  // Always
+    localparam logic [3:0] COND_EQ = 4'b0001;  // Equal            (Z=1)
+    localparam logic [3:0] COND_NE = 4'b0010;  // Not equal        (Z=0)
+    localparam logic [3:0] COND_CS = 4'b0011;  // Carry set / HS   (C=1)
+    localparam logic [3:0] COND_CC = 4'b0100;  // Carry clear / LO (C=0)
+    localparam logic [3:0] COND_MI = 4'b0101;  // Minus / negative  (N=1)
+    localparam logic [3:0] COND_PL = 4'b0110;  // Plus / positive   (N=0)
+    localparam logic [3:0] COND_VS = 4'b0111;  // Overflow set      (V=1)
+    localparam logic [3:0] COND_VC = 4'b1000;  // Overflow clear    (V=0)
+    localparam logic [3:0] COND_HI = 4'b1001;  // Unsigned higher   (C=1 & Z=0)
+    localparam logic [3:0] COND_LS = 4'b1010;  // Unsigned lower/same (C=0 | Z=1)
+    localparam logic [3:0] COND_GE = 4'b1011;  // Signed >=         (N=V)
+    localparam logic [3:0] COND_LT = 4'b1100;  // Signed <          (N!=V)
+    localparam logic [3:0] COND_GT = 4'b1101;  // Signed >          (Z=0 & N=V)
+    localparam logic [3:0] COND_LE = 4'b1110;  // Signed <=         (Z=1 | N!=V)
+    localparam logic [3:0] COND_BL = 4'b1111;  // Branch-and-link   (always, + save LR)
+
 endpackage
 /* verilator lint_on UNUSEDPARAM */
