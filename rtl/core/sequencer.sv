@@ -59,9 +59,10 @@ module sequencer
     output logic        o_alu_start,
     output logic        o_pc_load,
 
-    // ── EI/DI outputs (from micro-word decode, future) ───────
+    // ── EI/DI outputs ─────────────────────────────────────────
     output logic        o_ei_set,
-    output logic        o_di_set
+    output logic        o_di_set,
+    output logic        o_ei_shadow_clr  // Clears ei_shadow after one instruction
 );
 
     // ── State machine ────────────────────────────────────────
@@ -91,6 +92,8 @@ module sequencer
     logic        uw_sys_cycle, uw_sys_we, uw_alu_start;
     logic [2:0]  uw_branch;
     logic [2:0]  uw_fwd_offset;
+    logic        uw_ei_set;
+    logic        uw_di_set;
 
     assign uw_a_src        = i_uword[48:47];
     assign uw_reg_a        = i_uword[46:43];
@@ -116,6 +119,8 @@ module sequencer
     assign uw_alu_start    = i_uword[8];
     assign uw_branch       = i_uword[7:5];
     assign uw_fwd_offset   = i_uword[4:2];
+    assign uw_ei_set       = i_uword[1];
+    assign uw_di_set       = i_uword[0];
 
     // ── Branch condition encoding ────────────────────────────
     localparam logic [2:0] BR_SEQ   = 3'd0;
@@ -241,8 +246,24 @@ module sequencer
     assign o_pc_load     = executing;  // PC loads from mux every exec cycle
                                        // (pc_src=HOLD is a safe no-op)
 
-    // EI/DI: not yet implemented — stub
-    assign o_ei_set = 1'b0;
-    assign o_di_set = 1'b0;
+    // ── EI/DI decode and ei_shadow_clr tracking ───────────────
+    assign o_ei_set = executing ? uw_ei_set : 1'b0;
+    assign o_di_set = executing ? uw_di_set : 1'b0;
+
+    // ei_pending tracks that EI executed; the NEXT go_fetch clears ei_shadow
+    logic ei_pending;
+
+    always_ff @(posedge i_clk) begin
+        if (i_rst) begin
+            ei_pending <= 1'b0;
+        end else begin
+            if (executing && uw_ei_set)
+                ei_pending <= 1'b1;
+            else if (ei_pending && go_fetch && executing)
+                ei_pending <= 1'b0;
+        end
+    end
+
+    assign o_ei_shadow_clr = ei_pending & go_fetch & executing;
 
 endmodule

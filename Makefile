@@ -52,6 +52,9 @@ endif
 		--Mdir $(BUILD_DIR)/$(MOD).verilator \
 		-o ../V$(MOD) \
 		$(PKG_SV) $$(find rtl -name '$(MOD).sv') sim/tb_$(MOD).cpp
+	@# Copy hex files needed by $readmemh (cpu_top uses program.hex + microcode.hex)
+	@test -f sim/programs/test_add.hex && cp sim/programs/test_add.hex program.hex 2>/dev/null || true
+	@test -f sw/microcode/microcode.hex && cp sw/microcode/microcode.hex microcode.hex 2>/dev/null || true
 	@echo "── Running $(MOD) testbench ──"
 	@$(DOCKER_RUN) --entrypoint ./$(BUILD_DIR)/V$(MOD) $(DOCKER_IMAGE)
 

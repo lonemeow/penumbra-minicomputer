@@ -94,7 +94,8 @@ FIELDS = [
         "PRIV": 5, "SKIP": 6,
     }),
     ("fwd_offset", 4, 2, {}),
-    ("spare", 1, 0, {}),
+    ("ei_set", 1, 1, {}),
+    ("di_set", 0, 0, {}),
 ]
 
 # Build lookup tables

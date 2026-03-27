@@ -80,6 +80,22 @@ dec:
   reg_a=IR_RD reg_w=IR_RD w_en=1 alu=SUB bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
 
 # ═══════════════════════════════════════════════════════════════
+# Format R — System operations (0x10–0x1F)
+# ═══════════════════════════════════════════════════════════════
+
+# ── EI (op=11001, dispatch=0x19) ────────────────────────────
+# Enable interrupts: SR.I = 1, delayed by one instruction (ei_shadow)
+.org 0x19
+ei:
+  ei_set=1
+
+# ── DI (op=11010, dispatch=0x1A) ────────────────────────────
+# Disable interrupts: SR.I = 0, immediate effect (privileged)
+.org 0x1A
+di:
+  di_set=1 branch=PRIV
+
+# ═══════════════════════════════════════════════════════════════
 # Format B — Branches (0x60)
 # ═══════════════════════════════════════════════════════════════
 
@@ -89,7 +105,11 @@ branch:
 
 # ═══════════════════════════════════════════════════════════════
 # Interrupt entry (0x70)
+# Hardware has already saved shadow_PC, shadow_SR, set S=1, I=0
+# via except_entry pulse. This micro-routine loads the vector
+# address into PC to jump to the handler.
 # ═══════════════════════════════════════════════════════════════
 
 .org 0x70
 int_entry:
+  a_src=VECTOR pc=ABUS

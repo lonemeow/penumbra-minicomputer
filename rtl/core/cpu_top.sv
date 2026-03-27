@@ -12,11 +12,17 @@
 // A real SoC build would replace the simple memory with cache/bus
 // and factor out the fetch unit into a proper state machine.
 
+// verilator lint_off UNUSEDSIGNAL
+// verilator lint_off UNSIGNED
+
 module cpu_top
     import penumbra_pkg::*;
 (
     input  logic        i_clk,
     input  logic        i_rst,
+
+    // ── External interrupt ──────────────────────────────────
+    input  logic        i_irq,          // Active-high interrupt request
 
     // ── Debug / observation ports ────────────────────────────
     output logic [31:0] o_pc,           // Current PC
@@ -29,9 +35,6 @@ module cpu_top
     // Simple synchronous memory (unified I/D, 4K words = 16KB)
     // ══════════════════════════════════════════════════════════
     localparam MEM_WORDS = 4096;
-
-    // verilator lint_off UNUSEDSIGNAL
-    // verilator lint_off UNSIGNED
 
     logic [31:0] mem [0:MEM_WORDS-1];
     logic [31:0] mem_addr;
@@ -98,13 +101,13 @@ module cpu_top
     logic [2:0]  ctl_pc_src;
     logic        ctl_sys_cycle, ctl_sys_we, ctl_alu_start;
     logic        ctl_pc_load;
-    logic        ctl_ei_set, ctl_di_set;
+    logic        ctl_ei_set, ctl_di_set, ctl_ei_shadow_clr;
 
     sequencer u_sequencer (
         .i_clk           (i_clk),
         .i_rst           (i_rst),
         .i_ir_valid      (ir_valid),
-        .i_dispatch_addr (dispatch_addr),
+        .i_dispatch_addr (effective_dispatch),
         .o_fetch_go      (fetch_go),
         .i_alu_busy      (alu_busy),
         .i_mem_busy      (1'b0),          // Simple memory never stalls
@@ -136,7 +139,8 @@ module cpu_top
         .o_alu_start     (ctl_alu_start),
         .o_pc_load       (ctl_pc_load),
         .o_ei_set        (ctl_ei_set),
-        .o_di_set        (ctl_di_set)
+        .o_di_set        (ctl_di_set),
+        .o_ei_shadow_clr (ctl_ei_shadow_clr)
     );
 
     // ══════════════════════════════════════════════════════════
@@ -198,6 +202,39 @@ module cpu_top
         endcase
     end
 
+    // ══════════════════════════════════════════════════════════
+    // Interrupt check at dispatch
+    // ══════════════════════════════════════════════════════════
+    //
+    // When ir_valid fires, we have a fetched instruction and its
+    // dispatch_addr ready. Before entering S_EXEC, check whether
+    // an external interrupt should preempt the fetched instruction.
+    //
+    // Available signals for the check:
+    //   i_irq       — external interrupt request (active high)
+    //   sr_i        — SR.I bit (1 = interrupts enabled, 0 = disabled)
+    //   ei_shadow   — 1 = EI just executed, suppress this check for one instruction
+    //
+    // When an interrupt is taken:
+    //   irq_taken        — override dispatch_addr with 0x70 (int_entry)
+    //   except_entry     — pulse to save shadow_PC/SR, set S=1, I=0
+    //   irq_vector_num   — vector number for handler address
+
+    logic        irq_taken;
+    logic        except_entry;
+    logic [3:0]  irq_vector_num;
+
+    // Interrupt check: combinational — sr_i is registered so no race
+    // with except_entry modifying it on the same clock edge.
+    // ir_valid gates except_entry to a single-cycle pulse at dispatch.
+    assign irq_taken      = i_irq & sr_i & !ei_shadow;
+    assign except_entry   = irq_taken & ir_valid;
+    assign irq_vector_num = 4'd1;  // IRQ = vector 1 -> handler at 0x04
+
+    // Override dispatch address when interrupt taken
+    logic [7:0] effective_dispatch;
+    assign effective_dispatch = irq_taken ? 8'h70 : dispatch_addr;
+
     // ── Memory address mux ───────────────────────────────────
     // During fetch: address = PC (for instruction read)
     // During execute: address = MAR (for data read/write)
@@ -246,14 +283,14 @@ module cpu_top
         .i_alu_start    (ctl_alu_start),
         .i_pc_load      (ctl_pc_load),
 
-        // Exception (stub — not triggered in minimal sim)
-        .i_except_entry (1'b0),
-        .i_vector_num   (4'b0),
+        // Exception / interrupt entry
+        .i_except_entry (except_entry),
+        .i_vector_num   (irq_vector_num),
 
         // EI/DI
         .i_ei_set       (ctl_ei_set),
         .i_di_set       (ctl_di_set),
-        .i_ei_shadow_clr(1'b0),
+        .i_ei_shadow_clr(ctl_ei_shadow_clr),
 
         // IR load from fetch
         .i_ir_load      (ir_load),
@@ -292,7 +329,7 @@ module cpu_top
     assign o_pc      = pc;
     assign o_halted  = 1'b0;  // Stub
 
-    // verilator lint_on UNUSEDSIGNAL
-    // verilator lint_on UNSIGNED
-
 endmodule
+
+// verilator lint_on UNUSEDSIGNAL
+// verilator lint_on UNSIGNED

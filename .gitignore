@@ -12,6 +12,9 @@ build/
 
 # Simulation
 waves/
+# Root-level hex files copied for $readmemh (build artifacts)
+/program.hex
+/microcode.hex
 *.vcd
 *.fst
 *.ghw
