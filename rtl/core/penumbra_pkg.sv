@@ -69,12 +69,34 @@ package penumbra_pkg;
     localparam logic [1:0] ACC_EXEC  = 2'b10;
 
     // ── MMU sysreg addresses (dev_id = 0) ─────────────────────
-    localparam logic [3:0] SYSREG_MMU_CR       = 4'd0;  // [0]=M (enable translation)
-    localparam logic [3:0] SYSREG_MMU_FADDR    = 4'd1;  // Faulting virtual address
-    localparam logic [3:0] SYSREG_MMU_FSTAT    = 4'd2;  // Fault reason code
-    localparam logic [3:0] SYSREG_MMU_TLB_VPN  = 4'd3;  // TLB entry VPN (write)
-    localparam logic [3:0] SYSREG_MMU_TLB_PTE  = 4'd4;  // TLB entry PTE (write, triggers insert)
-    localparam logic [3:0] SYSREG_MMU_TLB_IDX  = 4'd5;  // TLB index (read/invalidate)
+    localparam logic [3:0] SYSREG_MMU_CR       = 4'd0;  // MMUCR: [0]=M, [1]=F(flush), [15:8]=ASID
+    localparam logic [3:0] SYSREG_MMU_FADDR    = 4'd1;  // Faulting virtual address (read-only)
+    localparam logic [3:0] SYSREG_MMU_FSTAT    = 4'd2;  // Fault status (read-only)
+    localparam logic [3:0] SYSREG_MMU_TLB_VPN  = 4'd3;  // TLB upper: {4'b0, VPN[19:0], ASID[7:0]}
+    localparam logic [3:0] SYSREG_MMU_TLB_PTE  = 4'd4;  // TLB lower: {PPN[19:0], SW[7:0], flags[7:0]}
+    localparam logic [3:0] SYSREG_MMU_TLB_IDX  = 4'd5;  // TLB slot: {26'b0, way[0], set[4:0]}
+
+    // ── MMU fault status encoding ─────────────────────────────
+    // FAULT_STATUS[3:0] = fault type
+    localparam logic [3:0] FAULT_TLB_MISS = 4'b0001;
+    localparam logic [3:0] FAULT_PROT     = 4'b0010;
+    // FAULT_STATUS[7:4] = reserved (gap for future fault types)
+    // FAULT_STATUS[11:8] = faulting access info
+    localparam int FSTAT_R   = 8;   // Faulting access was read
+    localparam int FSTAT_W   = 9;   // Faulting access was write
+    localparam int FSTAT_X   = 10;  // Faulting access was execute
+    localparam int FSTAT_USR = 11;  // Faulting access was user mode
+
+    // ── TLB entry bit positions (64-bit entry) ────────────────
+    // Upper word (TLB_VPN sysreg): {4'b0, VPN[19:0], ASID[7:0]}
+    // Lower word (TLB_PTE sysreg): {PPN[19:0], SW[7:0], G, U, X, W, R, C, rsvd, V}
+    localparam int TLB_V   = 0;   // Valid
+    localparam int TLB_C   = 2;   // Cacheable
+    localparam int TLB_R   = 3;   // Read permission
+    localparam int TLB_W   = 4;   // Write permission
+    localparam int TLB_X   = 5;   // Execute permission
+    localparam int TLB_U   = 6;   // User-accessible
+    localparam int TLB_G   = 7;   // Global (skip ASID match)
 
 endpackage
 /* verilator lint_on UNUSEDPARAM */

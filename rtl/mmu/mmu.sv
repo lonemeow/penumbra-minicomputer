@@ -4,7 +4,9 @@
 // forces uncacheable, no permission checks, no faults.
 //
 // Future: TLB-based translation when M=1 (64-entry 2-way SA TLB,
-// software-managed, per-page R/W/X/U/C/D protection).
+// fully software-managed — lookup/permission in hardware, all
+// management in software. 64-bit entries, no hardware dirty bit
+// or replacement logic).
 //
 // Sysreg interface (dev_id=0) provides control registers accessible
 // via MTSYS/MFSYS instructions.
