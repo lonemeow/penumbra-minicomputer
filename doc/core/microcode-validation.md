@@ -258,7 +258,7 @@ Option (b) works if the microcode never issues a memory op and an LU op simultan
 
 Format B: `[11 | cond=0001 | offset22(22)]`
 
-Branch target: `PC + 4 + sign_extend(offset22 << 2)`
+Branch target: `PC + sign_extend(offset22 << 2)`
 
 | Step  | reg_a    | reg_b | reg_w    | rWE | alu_op | bMux | wMux | imm  | fWE | marLd | marSrc | mdrMem | mdrA | mRd | mWr | mSz | sExt | pcSrc | sysCyc | sysWE | luSt | luSel | luRB | next_addr | bCond |
 |-------|----------|-------|----------|-----|--------|------|------|------|-----|-------|--------|--------|------|-----|-----|-----|------|-------|--------|-------|------|-------|------|-----------|-------|

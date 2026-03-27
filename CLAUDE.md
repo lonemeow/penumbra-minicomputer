@@ -60,12 +60,12 @@ RTL implementation is in progress, bottom-up from leaf modules. Microcode valida
 | W-mux | `rtl/core/wmux.sv` | 2/2 | Write-back: R-bus or MDR |
 | A-bus source mux | `rtl/core/amux.sv` | 4/4 | A-bus: reg/shadow_SR/shadow_PC/vector |
 | PC source mux | `rtl/core/pc_mux.sv` | 6/6 | Next PC: hold/+4/+offset/A-bus/MDR |
-| Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_* constants |
+| Status register | `rtl/core/status_reg.sv` | 64/64 | NZCV flags, S/I mode bits, shadow SR, ei_shadow |
+| PC register | `rtl/core/pc_reg.sv` | 31/31 | PC reg, PC+4 adder, PC+offset adder, shadow PC |
+| Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_* constants |
 
 ### Next Steps (in priority order)
-1. **Status Register (SR)** — latches ALU flags (NZCV), holds mode bits (S=supervisor, I=interrupt enable). Connects ALU → condition evaluator. Key for exception model.
-2. **PC Register + PC Adder** — sequential PC with adder for PC+4 and PC+offset. Feeds PC mux, I-cache address.
-3. **MAR / MDR registers** — simple latches bridging datapath to memory subsystem.
+1. **MAR / MDR registers** — simple latches bridging datapath to memory subsystem.
 4. **Datapath top module** — wire all modules together, integrate field extractor → register file address routing (mux between IR fields and micro-word literal addresses).
 5. **Microcode ROM** — 256×48-bit ROM with dispatch logic.
 6. **Micro-sequencer** — micro-PC counter with branch_cond control.

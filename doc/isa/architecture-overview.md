@@ -41,9 +41,31 @@ SR contains:
 - **Condition flags:** Z (zero), N (negative), C (carry), V (overflow)
 - **S (supervisor):** Current privilege level (0 = user, 1 = supervisor)
 - **I (interrupt enable):** Global interrupt mask
-- **Previous mode bits:** Saved privilege state for return-from-interrupt
+
+Previous mode is preserved via shadow registers at exception entry, not bits within SR. See the datapath specification for the exception model.
 
 Carry convention is **ARM-style** (C = NOT borrow on subtraction). Flags are updated by arithmetic/logic ALU operations, INC, DEC, CMPI, and MUL/DIV/MOD. MOV, load immediates (LLI, LLIS, LUI), loads, stores, branches, and system instructions do **not** affect flags. See the datapath specification for full flag generation details.
+
+#### SR Bit Layout (32-bit)
+
+```
+ 31  30  29                          4   3   2   1   0
+┌───┬───┬──────── reserved (0) ──────┬───┬───┬───┬───┐
+│ S │ I │         0 0 0 ... 0        │ V │ C │ Z │ N │
+└───┴───┴────────────────────────────┴───┴───┴───┴───┘
+```
+
+| Bit | Field | Description |
+|-----|-------|-------------|
+| 31 | S | Supervisor mode (1 = supervisor, 0 = user) |
+| 30 | I | Interrupt enable (1 = enabled, 0 = masked) |
+| 29:4 | — | Reserved, read as zero, ignored on write |
+| 3 | V | Overflow flag |
+| 2 | C | Carry flag (ARM-style: C = NOT borrow on SUB) |
+| 1 | Z | Zero flag |
+| 0 | N | Negative flag (= result[31]) |
+
+System bits are in the upper word, condition flags in the lower nibble. Bits [29:4] are reserved for future use and should be written as zero for forward compatibility. This layout is used by GETSR, SETSR, and the exception entry shadow save.
 
 The SR contains only CPU-internal state. Registers belonging to other system devices (MMU, interrupt controller, etc.) are accessed via the system register bus — see [System Register Access](#system-register-access) below.
 
@@ -237,7 +259,9 @@ Offset range: -32768 to +32767 bytes. Covers any struct field offset, stack fram
 | cond | 29:26 | Branch condition (4 bits, 16 conditions) |
 | offset22 | 25:4 | 22-bit signed offset in words (shifted left 2 for byte address) |
 
-Branch target: `PC + 4 + sign_extend(offset22 << 2)`
+Branch target: `PC + sign_extend(offset22 << 2)`
+
+The offset is relative to the branch instruction itself (not PC+4). The assembler encodes `offset22 = (target - PC) >> 2`. This avoids an extra adder stage in hardware — important for the discrete build.
 
 Range: ±8 MB from the branch instruction. Sufficient to reach anywhere in the 32 MB physical RAM.
 

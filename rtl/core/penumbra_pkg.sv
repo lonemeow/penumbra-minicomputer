@@ -35,6 +35,16 @@ package penumbra_pkg;
     localparam logic [4:0] ALU_MOD    = 5'b01111;
     localparam logic [4:0] ALU_MODU   = 5'b10000;
 
+    // ── Status register bit positions ───────────────────────────
+    // Condition flags in [3:0], system bits in [31:30].
+    // Bits [29:4] are reserved (read as zero, ignored on write).
+    localparam logic [4:0] SR_N = 5'd0;   // Negative flag
+    localparam logic [4:0] SR_Z = 5'd1;   // Zero flag
+    localparam logic [4:0] SR_C = 5'd2;   // Carry flag
+    localparam logic [4:0] SR_V = 5'd3;   // Overflow flag
+    localparam logic [4:0] SR_I = 5'd30;  // Interrupt enable (1=enabled)
+    localparam logic [4:0] SR_S = 5'd31;  // Supervisor mode (1=supervisor)
+
     // ── Condition codes (from Format B branch instructions) ─────
     localparam logic [3:0] COND_AL = 4'b0000;  // Always
     localparam logic [3:0] COND_EQ = 4'b0001;  // Equal            (Z=1)
