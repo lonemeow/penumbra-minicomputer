@@ -37,6 +37,10 @@ $(BUILD_DIR)/Vsmoke_adder: rtl/core/smoke_adder.sv sim/tb_smoke_adder.cpp
 # Usage: make sim MOD=alu  (expects rtl/**/alu.sv and sim/tb_alu.cpp)
 MOD ?=
 
+# Shared package — always included. --top-module tells Verilator which
+# module is the DUT (otherwise it picks the first file = the package).
+PKG_SV = rtl/core/penumbra_pkg.sv
+
 .PHONY: sim
 sim:
 ifndef MOD
@@ -44,9 +48,10 @@ ifndef MOD
 endif
 	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
 	$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) \
+		--top-module $(MOD) \
 		--Mdir $(BUILD_DIR)/$(MOD).verilator \
 		-o ../V$(MOD) \
-		$$(find rtl -name '$(MOD).sv') sim/tb_$(MOD).cpp
+		$(PKG_SV) $$(find rtl -name '$(MOD).sv') sim/tb_$(MOD).cpp
 	@echo "── Running $(MOD) testbench ──"
 	@$(DOCKER_RUN) --entrypoint ./$(BUILD_DIR)/V$(MOD) $(DOCKER_IMAGE)
 
