@@ -32,7 +32,7 @@ The architecture is fully specified in `doc/`. Key specs:
 - One module per file
 - Use `logic` rather than `reg`/`wire` where possible
 - Prefix module ports: `i_` for inputs, `o_` for outputs
-- Clock signal: `i_clk`, synchronous active-high reset: `i_rst`
+- Clock signal: `i_clk`, synchronous active-high reset: `i_rst` — sampled on rising edge of `i_clk`; while asserted, all state holds reset values (system suspended); testbench holds for 2 cycles then releases
 - Shared constants in `rtl/core/penumbra_pkg.sv` (register addresses, ALU opcodes, condition codes)
 - Modules that use the package: `import penumbra_pkg::*;` inside the module declaration (not at file scope — Verilator warns about `import *` at $unit scope)
 
@@ -68,8 +68,11 @@ The CPU runs real programs in simulation. A tail-recursive Fibonacci routine (fi
 | Datapath top | `rtl/core/datapath.sv` | 15/15 | Structural wiring of all modules, IR reg, reg addr routing, F-bit gating |
 | Microcode ROM | `rtl/core/ucode_rom.sv` | — | 256×49-bit ROM, $readmemh from microcode.hex |
 | Sequencer | `rtl/core/sequencer.sv` | — | Micro-PC, branch_cond decode, EI/DI tracking, ei_shadow_clr |
-| CPU top | `rtl/core/cpu_top.sv` | 25/25 | Full integration: datapath + sequencer + ROM + memory + fetch + IRQ + LDW/STW |
-| Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_* constants |
+| CPU top | `rtl/core/cpu_top.sv` | 25/25 | Full integration: datapath + sequencer + ROM + MMU + cache + memory + fetch + IRQ |
+| Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_*, ACC_*, SYSREG_MMU_* constants |
+| MMU | `rtl/mmu/mmu.sv` | — | Bypass mode (M=0): identity map, uncached. Sysreg interface for MMUCR/fault regs |
+| Cache stub | `rtl/soc/cache_stub.sv` | — | Combinational pass-through, placeholder for split I/D PIPT caches |
+| Simple memory | `rtl/soc/simple_mem.sv` | — | 4K×32 synchronous SRAM model, $readmemh, 1-cycle read busy |
 
 ### Interrupt Handling
 - **Check point:** Dispatch-time (when `ir_valid` fires, before entering S_EXEC)

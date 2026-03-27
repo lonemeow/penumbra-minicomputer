@@ -1,16 +1,12 @@
-// Penumbra CPU Top — minimal integration for simulation
+// Penumbra CPU Top — integration with MMU and cache stubs
 //
-// Wires together: datapath, micro-sequencer, microcode ROM, and a
-// simple synchronous memory. Includes inline fetch logic (phase 1:
-// 1-cycle memory read, no I-cache, no prefetch).
+// Wires together: datapath, micro-sequencer, microcode ROM, MMU,
+// cache stub, and simple memory. Includes inline fetch logic
+// (phase 1: 1-cycle memory read, no I-cache, no prefetch).
 //
-// Memory is unified (instruction and data share one port). Fetch and
-// data access never overlap because fetch happens in S_FETCH state
-// and data access happens in S_EXEC state.
-//
-// This module is sufficient to execute programs in simulation.
-// A real SoC build would replace the simple memory with cache/bus
-// and factor out the fetch unit into a proper state machine.
+// Memory path: CPU → MMU (bypass) → cache (stub) → simple_mem
+// Both fetch and data share the same port (never overlap: fetch
+// in S_FETCH, data in S_EXEC). Future: split I/D caches.
 
 // verilator lint_off UNUSEDSIGNAL
 // verilator lint_off UNSIGNED
@@ -32,67 +28,36 @@ module cpu_top
 );
 
     // ══════════════════════════════════════════════════════════
-    // Simple synchronous memory (unified I/D, 4K words = 16KB)
+    // MMU → Cache → Memory chain
     // ══════════════════════════════════════════════════════════
-    localparam MEM_WORDS = 4096;
 
-    logic [31:0] mem [0:MEM_WORDS-1];
-    logic [31:0] mem_addr;
+    // ── MMU signals ────────────────────────────────────────
+    logic [31:0] mmu_vaddr;
+    logic [1:0]  mmu_access_type;
+    logic        mmu_user_mode;
+    logic        mmu_req;
+    logic [31:0] mmu_paddr;
+    logic        mmu_cacheable;
+    logic        mmu_fault;
+    logic        mmu_hit;
+    logic [31:0] mmu_sys_rdata;
+
+    // ── Cache signals ──────────────────────────────────────
+    logic [31:0] cache_rdata;
+    logic        cache_busy;
+
+    // ── Memory backing signals ─────────────────────────────
+    logic [31:0] smem_addr, smem_wdata;
+    logic        smem_we, smem_re;
+    logic [31:0] smem_rdata;
+    logic        smem_busy;
+
+    // ── Data access enables (only during execute, not fetch) ──
+    logic data_re, data_we;
+
+    // ── Unified read data (used by both fetch and data path) ──
     logic [31:0] mem_rdata;
-    logic [31:0] mem_wdata;
-    logic        mem_we;
-
-    initial begin
-        for (int i = 0; i < MEM_WORDS; i++)
-            mem[i] = 32'b0;
-        $readmemh("program.hex", mem);
-    end
-
-    // Word-addressed (drop lower 2 bits)
-    logic [11:0] mem_word_addr;
-    assign mem_word_addr = mem_addr[13:2];
-
-    always_ff @(posedge i_clk) begin
-        if (mem_we)
-            mem[mem_word_addr] <= mem_wdata;
-    end
-
-    // Synchronous read (1-cycle latency)
-    logic [31:0] mem_rdata_reg;
-    always_ff @(posedge i_clk) begin
-        mem_rdata_reg <= mem[mem_word_addr];
-    end
-    assign mem_rdata = mem_rdata_reg;
-
-    // ── Memory busy signal for STALL ───────────────────────────
-    // Models memory access latency for the STALL micro-op.
-    //
-    // Reads: synchronous 1-cycle latency — busy for 1 cycle while
-    //   mem_rdata_reg captures from the new MAR address.
-    // Writes: immediate in the simple model (0 cycles busy), but
-    //   STALL is still used so the microcode works unchanged when
-    //   the real bus/MMU adds write latency.
-    //
-    // Future: replaced by cache/bus controller's actual busy signal.
-    // The STALL path will also need to check mem_fault for MMU traps
-    // (page not present, protection) — mid-instruction exceptions.
-    logic mem_access_pending;
-    logic mem_busy_sig;
-
-    logic mem_access_start;
-    assign mem_access_start = (ctl_mem_read || ctl_mem_write) && !fetch_active;
-
-    always_ff @(posedge i_clk) begin
-        if (i_rst)
-            mem_access_pending <= 1'b0;
-        else if (mem_access_start && !mem_access_pending)
-            mem_access_pending <= 1'b1;   // Access initiated, not yet complete
-        else
-            mem_access_pending <= 1'b0;   // Complete (or no access active)
-    end
-
-    // Busy on the first cycle of any memory access
-    assign mem_busy_sig = mem_access_start && !mem_access_pending;
+    assign mem_rdata = cache_rdata;
 
     // ══════════════════════════════════════════════════════════
     // Microcode ROM
@@ -140,7 +105,7 @@ module cpu_top
         .i_dispatch_addr (effective_dispatch),
         .o_fetch_go      (fetch_go),
         .i_alu_busy      (alu_busy),
-        .i_mem_busy      (mem_busy_sig),   // 1-cycle busy for sync memory read
+        .i_mem_busy      (cache_busy),
         .i_cond_result   (cond_result),
         .i_sr_s          (sr_s),
         .o_upc           (upc),
@@ -265,14 +230,75 @@ module cpu_top
     logic [7:0] effective_dispatch;
     assign effective_dispatch = irq_taken ? 8'h70 : dispatch_addr;
 
-    // ── Memory address mux ───────────────────────────────────
-    // During fetch: address = PC (for instruction read)
-    // During execute: address = MAR (for data read/write)
+    // ── Memory address and access mux ──────────────────────
+    // During fetch: address = PC (instruction read, no re/we)
+    // During execute: address = MAR (data read/write via re/we)
     logic [31:0] mar_addr;
 
-    assign mem_addr  = fetch_active ? pc : mar_addr;
-    assign mem_we    = ctl_mem_write && !fetch_active;
-    // mem_wdata comes from MDR (via datapath o_mem_wdata)
+    assign mmu_vaddr       = fetch_active ? pc : mar_addr;
+    assign mmu_access_type = fetch_active   ? ACC_EXEC  :
+                             ctl_mem_write  ? ACC_WRITE  : ACC_READ;
+    assign mmu_user_mode   = !sr_s;
+    assign mmu_req         = fetch_active || ctl_mem_read || ctl_mem_write;
+
+    assign data_re = ctl_mem_read  && !fetch_active;
+    assign data_we = ctl_mem_write && !fetch_active;
+
+    // ══════════════════════════════════════════════════════════
+    // MMU (bypass mode — identity maps, no faults)
+    // ══════════════════════════════════════════════════════════
+    mmu u_mmu (
+        .i_clk         (i_clk),
+        .i_rst         (i_rst),
+        .i_vaddr       (mmu_vaddr),
+        .i_access_type (mmu_access_type),
+        .i_user_mode   (mmu_user_mode),
+        .i_req         (mmu_req),
+        .o_paddr       (mmu_paddr),
+        .o_cacheable   (mmu_cacheable),
+        .o_fault       (mmu_fault),
+        .o_hit         (mmu_hit),
+        // Sysreg — stubbed until MTSYS/MFSYS wiring
+        .i_sys_reg     (dp_r_sys_reg),
+        .i_sys_wdata   (32'b0),
+        .i_sys_we      (1'b0),
+        .o_sys_rdata   (mmu_sys_rdata)
+    );
+
+    // ══════════════════════════════════════════════════════════
+    // Cache (stub — pass-through to memory)
+    // ══════════════════════════════════════════════════════════
+    cache_stub u_cache (
+        .i_clk       (i_clk),
+        .i_rst       (i_rst),
+        .i_paddr     (mmu_paddr),
+        .i_wdata     (dp_mem_wdata),
+        .i_we        (data_we),
+        .i_re        (data_re),
+        .i_cacheable (mmu_cacheable),
+        .o_rdata     (cache_rdata),
+        .o_busy      (cache_busy),
+        .o_mem_addr  (smem_addr),
+        .o_mem_wdata (smem_wdata),
+        .o_mem_we    (smem_we),
+        .o_mem_re    (smem_re),
+        .i_mem_rdata (smem_rdata),
+        .i_mem_busy  (smem_busy)
+    );
+
+    // ══════════════════════════════════════════════════════════
+    // Simple synchronous memory (simulation backing store)
+    // ══════════════════════════════════════════════════════════
+    simple_mem u_simple_mem (
+        .i_clk   (i_clk),
+        .i_rst   (i_rst),
+        .i_addr  (smem_addr),
+        .i_wdata (smem_wdata),
+        .i_we    (smem_we),
+        .i_re    (smem_re),
+        .o_rdata (smem_rdata),
+        .o_busy  (smem_busy)
+    );
 
     // ══════════════════════════════════════════════════════════
     // Datapath
@@ -355,7 +381,6 @@ module cpu_top
         .o_dbg_reg_data (o_dbg_reg_data)
     );
 
-    assign mem_wdata = dp_mem_wdata;
     assign o_pc      = pc;
     assign o_halted  = 1'b0;  // Stub
 

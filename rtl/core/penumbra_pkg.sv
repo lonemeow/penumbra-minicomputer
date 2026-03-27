@@ -63,5 +63,18 @@ package penumbra_pkg;
     localparam logic [3:0] COND_LE = 4'b1110;  // Signed <=         (Z=1 | N!=V)
     localparam logic [3:0] COND_BL = 4'b1111;  // Branch-and-link   (always, + save LR)
 
+    // ── MMU access types ──────────────────────────────────────
+    localparam logic [1:0] ACC_READ  = 2'b00;
+    localparam logic [1:0] ACC_WRITE = 2'b01;
+    localparam logic [1:0] ACC_EXEC  = 2'b10;
+
+    // ── MMU sysreg addresses (dev_id = 0) ─────────────────────
+    localparam logic [3:0] SYSREG_MMU_CR       = 4'd0;  // [0]=M (enable translation)
+    localparam logic [3:0] SYSREG_MMU_FADDR    = 4'd1;  // Faulting virtual address
+    localparam logic [3:0] SYSREG_MMU_FSTAT    = 4'd2;  // Fault reason code
+    localparam logic [3:0] SYSREG_MMU_TLB_VPN  = 4'd3;  // TLB entry VPN (write)
+    localparam logic [3:0] SYSREG_MMU_TLB_PTE  = 4'd4;  // TLB entry PTE (write, triggers insert)
+    localparam logic [3:0] SYSREG_MMU_TLB_IDX  = 4'd5;  // TLB index (read/invalidate)
+
 endpackage
 /* verilator lint_on UNUSEDPARAM */
