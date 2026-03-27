@@ -45,6 +45,41 @@ xor:
   reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=XOR bmux=REG wmux=RBUS w_flags=1
 
 # ═══════════════════════════════════════════════════════════════
+# Format L — Immediate operations (0x20–0x3F)
+# Dispatch: {01, op[2:0], 00} — ×4 spacing
+# ═══════════════════════════════════════════════════════════════
+
+# ── LLI Rd, #imm16 (op=000, dispatch=0x20) ───────────────────
+# Rd = zero_extend(imm16)
+.org 0x20
+lli:
+  reg_w=IR_RD w_en=1 alu=PASS_B bmux=IMM wmux=RBUS imm_mode=ZERO_EXT
+
+# ── LLIS Rd, #imm16 (op=001, dispatch=0x24) ──────────────────
+# Rd = sign_extend(imm16)
+.org 0x24
+llis:
+  reg_w=IR_RD w_en=1 alu=PASS_B bmux=IMM wmux=RBUS imm_mode=SIGN_EXT
+
+# ── LUI Rd, #imm16 (op=010, dispatch=0x28) ───────────────────
+# Rd = Rd | (imm16 << 16)
+.org 0x28
+lui:
+  reg_a=IR_RD reg_w=IR_RD w_en=1 alu=OR bmux=IMM wmux=RBUS imm_mode=SHIFT_L16
+
+# ── INC Rd, #imm16 (op=011, dispatch=0x2C) ───────────────────
+# Rd = Rd + zero_extend(imm16)
+.org 0x2C
+inc:
+  reg_a=IR_RD reg_w=IR_RD w_en=1 alu=ADD bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
+
+# ── DEC Rd, #imm16 (op=100, dispatch=0x30) ───────────────────
+# Rd = Rd - zero_extend(imm16)
+.org 0x30
+dec:
+  reg_a=IR_RD reg_w=IR_RD w_en=1 alu=SUB bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
+
+# ═══════════════════════════════════════════════════════════════
 # Format B — Branches (0x60)
 # ═══════════════════════════════════════════════════════════════
 

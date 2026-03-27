@@ -89,7 +89,11 @@ module datapath
     output logic        o_m_sign_ext,   // Format M sign-extend
     output logic [3:0]  o_b_cond,       // Format B condition code
     output logic [3:0]  o_r_sys_dev,    // MTSYS/MFSYS device field
-    output logic [3:0]  o_r_sys_reg     // MTSYS/MFSYS register field
+    output logic [3:0]  o_r_sys_reg,    // MTSYS/MFSYS register field
+
+    // ── Debug port ───────────────────────────────────────────
+    input  logic [3:0]  i_dbg_reg_addr,
+    output logic [31:0] o_dbg_reg_data
 );
 
     // ── Register address routing encoding ────────────────────
@@ -232,7 +236,9 @@ module datapath
         .i_wr_data    (w_bus),
         .i_wr_en      (actual_w_en),
         .i_pc         (pc_value),
-        .i_supervisor  (sr_s_wire)
+        .i_supervisor  (sr_s_wire),
+        .i_dbg_addr    (i_dbg_reg_addr),
+        .o_dbg_data    (o_dbg_reg_data)
     );
 
     // ── Status register ──────────────────────────────────────

@@ -39,7 +39,11 @@ module regfile
 
     // Special inputs
     input  logic [31:0] i_pc,          // PC value — returned when reading R15
-    input  logic        i_supervisor   // SR.S bit — selects KSP (1) vs USP (0) for R14
+    input  logic        i_supervisor,  // SR.S bit — selects KSP (1) vs USP (0) for R14
+
+    // Debug read port (active all the time, no side effects)
+    input  logic [3:0]  i_dbg_addr,    // Debug register address
+    output logic [31:0] o_dbg_data     // Debug register value
 );
 
     // ── Storage ─────────────────────────────────────────────────
@@ -83,6 +87,7 @@ module regfile
 
     assign o_rd_data_a = read_reg(i_rd_addr_a);
     assign o_rd_data_b = read_reg(i_rd_addr_b);
+    assign o_dbg_data  = read_reg(i_dbg_addr);
 
     // ── Write logic (synchronous) ───────────────────────────────
     // `always_ff @(posedge i_clk)` = "on every rising clock edge, do this"

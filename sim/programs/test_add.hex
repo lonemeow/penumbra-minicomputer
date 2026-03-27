@@ -1,0 +1,6 @@
+// Test: LLI R1,5 then LLI R2,3 then ADD R1,R2 then LLI R3,0
+// Expected: R1=8, R2=3
+40800005
+41000003
+00240000
+41800000
