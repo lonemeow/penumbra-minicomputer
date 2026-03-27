@@ -4,9 +4,10 @@
 // Software manages all entries via indexed read/write through the
 // sysreg interface.
 //
-// Entry format (64 bits):
-//   [63:44] VPN(20) [43:24] PPN(20) [23:16] ASID(8)
-//   [15:8]  SW(8)   [7] G  [6] U  [5] X  [4] W  [3] R  [2] C  [1] rsvd  [0] V
+// Entry format (64 bits, stored as two 32-bit halves):
+//   VPN word: {4'b0, VPN[19:0], ASID[7:0]}
+//   PTE word: {PPN[19:0], SW[3:0], flags[7:0]}
+//   flags: [7]G [6]U [5]X [4]W [3]R [2]C [1]rsvd [0]V
 //
 // Lookup: set = vaddr[16:12], compare VPN + ASID on both ways in parallel.
 // Permission check on hit. Miss/fault signalled to MMU.

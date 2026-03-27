@@ -68,11 +68,11 @@ Accessed via `MTSYS`/`MFSYS` with device ID 0.
 Each TLB entry is 64 bits, accessed as two 32-bit halves:
 
 ```
- 63        44 43        24 23    16 15     8 7 6 5 4 3 2 1 0
-┌────────────┬────────────┬────────┬────────┬─┬─┬─┬─┬─┬─┬─┬─┐
-│  VPN (20)  │  PPN (20)  │ASID(8) │ SW (8) │G│U│X│W│R│C│—│V│
-└────────────┴────────────┴────────┴────────┴─┴─┴─┴─┴─┴─┴─┴─┘
- ╰──────── TLB_VPN ────────╯        ╰──────── TLB_PTE ────────╯
+ 63        44 43        24 23    16 15  12 11   8 7 6 5 4 3 2 1 0
+┌────────────┬────────────┬────────┬──────┬──────┬─┬─┬─┬─┬─┬─┬─┬─┐
+│  VPN (20)  │  PPN (20)  │ASID(8) │SW(4) │(rsvd)│G│U│X│W│R│C│—│V│
+└────────────┴────────────┴────────┴──────┴──────┴─┴─┴─┴─┴─┴─┴─┴─┘
+ ╰──────── TLB_VPN ────────╯        ╰────────── TLB_PTE ──────────╯
 ```
 
 ### Fields
@@ -86,7 +86,8 @@ Each TLB entry is 64 bits, accessed as two 32-bit halves:
 | X | 5 | **Set** | Execute permission. Checked on instruction fetches. |
 | U | 6 | **Set** | User-accessible. 0 = supervisor only. Supervisor always passes U check. |
 | G | 7 | **Set** | Global. Skips ASID comparison — use for kernel pages shared across all address spaces. |
-| SW | 15:8 | **Free use** | Software-defined. Hardware stores these bits but never reads them. Use for pinning, dirty tracking, LRU/age, or any per-page bookkeeping. |
+| SW | 11:8 | **Free use** | Software-defined (4 bits). Hardware stores but never reads. Use for pinning, dirty tracking, LRU/age. |
+| _rsvd_ | 15:12 | — | Reserved (occupied by PPN in TLB_PTE sysreg packing). |
 | ASID | 23:16 | **Set** | Address space ID. Matched against MMUCR.ASID on lookup (unless G=1). |
 | PPN | 43:24 | **Set** | Physical page number. Combined with page offset to form physical address. |
 | VPN | 63:44 | **Set** | Virtual page number. Matched against incoming virtual address bits 31:12. |
@@ -125,7 +126,7 @@ Three `MTSYS` instructions, executed in order:
 ; Load TLB entry: map vpage → ppage with given flags
 ; r1 = TLB_INDEX value ({way, set})
 ; r2 = TLB_VPN value  ({4'b0, VPN[19:0], ASID[7:0]})
-; r3 = TLB_PTE value  ({PPN[19:0], SW[7:0], flags[7:0]})
+; r3 = TLB_PTE value  ({PPN[19:0], SW[3:0], flags[7:0]})
 
 MTSYS  R1, #0, #5       ; select target slot
 MTSYS  R2, #0, #3       ; stage VPN + ASID
@@ -298,13 +299,13 @@ No TLB flush needed — entries from different ASIDs coexist. Kernel pages with 
 The hardware has no knowledge of in-memory page tables. The OS is free to use any format. A natural 32-bit PTE format that maps directly to TLB_PTE (avoiding bit-shuffling in the miss handler) is:
 
 ```
- 31          12 11       4 3 2 1 0
-┌──────────────┬─────────┬─┬─┬─┬─┬─┬─┬─┬─┐
-│   PPN (20)   │ SW (8)  │G│U│X│W│R│C│—│V│
-└──────────────┴─────────┴─┴─┴─┴─┴─┴─┴─┴─┘
+ 31          12 11   8 7 6 5 4 3 2 1 0
+┌──────────────┬──────┬─┬─┬─┬─┬─┬─┬─┬─┐
+│   PPN (20)   │SW(4) │G│U│X│W│R│C│—│V│
+└──────────────┴──────┴─┴─┴─┴─┴─┴─┴─┴─┘
 ```
 
-If the in-memory PTE uses this layout, the miss handler can load it directly into TLB_PTE with no translation — a single `LDW` + `MTSYS` pair. The SW bits in the in-memory PTE can carry OS metadata (dirty flag, reference count, page type) that gets copied into the TLB entry.
+If the in-memory PTE uses this layout, the miss handler can load it directly into TLB_PTE with no translation — a single `LDW` + `MTSYS` pair. The SW bits can carry OS metadata (pinned, dirty, age) that gets copied into the TLB entry.
 
 ### Two-Level Page Table (Recommended)
 

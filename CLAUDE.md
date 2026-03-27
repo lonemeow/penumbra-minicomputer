@@ -70,7 +70,8 @@ The CPU runs real programs in simulation. A tail-recursive Fibonacci routine (fi
 | Sequencer | `rtl/core/sequencer.sv` | — | Micro-PC, branch_cond decode, EI/DI tracking, ei_shadow_clr |
 | CPU top | `rtl/core/cpu_top.sv` | 25/25 | Full integration: datapath + sequencer + ROM + MMU + cache + memory + fetch + IRQ |
 | Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_*, ACC_*, SYSREG_MMU_* constants |
-| MMU | `rtl/mmu/mmu.sv` | — | Bypass mode (M=0): identity map, uncached. Sysreg interface for MMUCR/fault regs |
+| TLB | `rtl/mmu/tlb.sv` | 111/111 | 64-entry 2-way SA, parallel lookup, one-hot permission check, indexed sysreg R/W |
+| MMU | `rtl/mmu/mmu.sv` | — | Bypass/translate mux, sysreg routing, fault latching, TLB instantiation |
 | Cache stub | `rtl/soc/cache_stub.sv` | — | Combinational pass-through, placeholder for split I/D PIPT caches |
 | Simple memory | `rtl/soc/simple_mem.sv` | — | 4K×32 synchronous SRAM model, $readmemh, 1-cycle read busy |
 
