@@ -63,13 +63,13 @@ package penumbra_pkg;
     localparam logic [3:0] COND_LE = 4'b1110;  // Signed <=         (Z=1 | N!=V)
     localparam logic [3:0] COND_BL = 4'b1111;  // Branch-and-link   (always, + save LR)
 
-    // ── MMU access types ──────────────────────────────────────
-    localparam logic [1:0] ACC_READ  = 2'b00;
-    localparam logic [1:0] ACC_WRITE = 2'b01;
-    localparam logic [1:0] ACC_EXEC  = 2'b10;
+    // ── MMU access types (one-hot, matches R/W/X flag positions) ──
+    localparam logic [2:0] ACC_READ  = 3'b001;  // bit 0 = R
+    localparam logic [2:0] ACC_WRITE = 3'b010;  // bit 1 = W
+    localparam logic [2:0] ACC_EXEC  = 3'b100;  // bit 2 = X
 
     // ── MMU sysreg addresses (dev_id = 0) ─────────────────────
-    localparam logic [3:0] SYSREG_MMU_CR       = 4'd0;  // MMUCR: [0]=M, [1]=F(flush), [15:8]=ASID
+    localparam logic [3:0] SYSREG_MMU_CR       = 4'd0;  // MMUCR: [0]=M (enable), [15:8]=ASID
     localparam logic [3:0] SYSREG_MMU_FADDR    = 4'd1;  // Faulting virtual address (read-only)
     localparam logic [3:0] SYSREG_MMU_FSTAT    = 4'd2;  // Fault status (read-only)
     localparam logic [3:0] SYSREG_MMU_TLB_VPN  = 4'd3;  // TLB upper: {4'b0, VPN[19:0], ASID[7:0]}

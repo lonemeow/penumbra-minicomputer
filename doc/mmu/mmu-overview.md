@@ -71,8 +71,7 @@ MMU registers are accessed via the system register bus using `MTSYS`/`MFSYS` ins
 | Bit | Name | Description |
 |-----|------|-------------|
 | 0   | M    | Enable translation (0=bypass/flat, 1=TLB active) |
-| 1   | F    | Flush all — self-clearing pulse, clears all V bits |
-| 7:2 | —    | Reserved |
+| 7:1 | —    | Reserved |
 | 15:8| ASID | Current address space ID (8-bit, for TLB matching) |
 | 31:16| —   | Reserved |
 
@@ -275,11 +274,11 @@ This keeps the TLB hardware purely as a lookup table with no write-back path. Th
 
 ### TLB Invalidation
 
-All invalidation is done via sysreg writes:
+All invalidation is done in software via sysreg writes — there is no hardware flush command, consistent with the fully software-managed TLB philosophy:
 
-- **Invalidate one entry:** Write TLB_INDEX to select the slot, then write TLB_PTE with V=0. The VPN/ASID fields don't matter when V=0.
-- **Invalidate all:** Set the F (flush) bit in MMUCR. Hardware clears all V bits in one cycle. The F bit is self-clearing (reads back as 0). Used on context switch (when ASID is not implemented) or `exec()`.
-- **Invalidate by VPN search:** Not supported in hardware. Software must iterate over the two ways of the target set and clear matching entries. For a 2-way TLB this is just two reads + one write — fast enough.
+- **Invalidate one entry:** Write TLB_INDEX to select the slot, then write TLB_PTE with V=0.
+- **Invalidate all:** Software loop over all 64 entries, writing V=0 to each via TLB_INDEX + TLB_PTE (~320 instructions). Used on context switch (when ASID is not implemented) or `exec()`. Once ASID is enabled, full flushes become rare.
+- **Invalidate by VPN search:** Compute the target set from VPN[16:12], read both ways, clear matching entries. Two reads + one write — fast enough.
 
 ### TLB and I-Cache Coherence
 
@@ -308,7 +307,7 @@ This is a suggested format only — the hardware does not interpret in-memory pa
 
 After reset, the CPU starts in the following state:
 - SR = `{ S=1, I=0, flags=0 }` — supervisor mode, interrupts disabled
-- MMUCR = `{ M=0, F=0, ASID=0 }` — MMU in flat mode (identity mapped, uncached)
+- MMUCR = `{ M=0, ASID=0 }` — MMU in flat mode (identity mapped, uncached)
 - PC = `0xFFFF_E000` (base of boot ROM)
 
 Typical boot sequence:

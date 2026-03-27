@@ -33,7 +33,7 @@ module cpu_top
 
     // ── MMU signals ────────────────────────────────────────
     logic [31:0] mmu_vaddr;
-    logic [1:0]  mmu_access_type;
+    logic [2:0]  mmu_access_type;
     logic        mmu_user_mode;
     logic        mmu_req;
     logic [31:0] mmu_paddr;
