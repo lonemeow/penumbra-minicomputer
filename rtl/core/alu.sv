@@ -1,0 +1,224 @@
+// Penumbra ALU — Unified 32-bit compute unit with ARM-style flag generation
+//
+// The ALU is the single compute unit in the Penumbra datapath. It handles:
+//   - Single-cycle ops: arithmetic, logic, shifts, pass-through (combinational)
+//   - Multi-cycle ops:  MUL, DIV, MOD, future FP (sequential, stall via o_busy)
+//
+// For C/C++ programmers:
+//   Think of this as a function: result = alu(a, b, op)
+//   Most ops complete instantly (combinational = no clock needed).
+//   Some ops (multiply, divide) take many cycles — like a function that
+//   sets a "busy" flag and you poll it until done.
+//
+//   `always_comb`  = a block that re-evaluates whenever inputs change
+//                    (like a pure function with no side effects)
+//   `always_ff`    = a block that updates only on clock edges
+//                    (like a callback that fires once per tick)
+
+module alu (
+    // Clock and reset — only used by multi-cycle ops (not yet implemented).
+    // verilator lint_off UNUSEDSIGNAL
+    input  logic        i_clk,
+    input  logic        i_rst,
+    // verilator lint_on UNUSEDSIGNAL
+
+    // Operands and operation select
+    input  logic [31:0] i_a,       // A-bus operand
+    input  logic [31:0] i_b,       // B-bus operand (from B-mux)
+    input  logic [4:0]  i_op,      // ALU operation select (5-bit, see encoding below)
+
+    // Multi-cycle control
+    // verilator lint_off UNUSEDSIGNAL
+    input  logic        i_start,   // Pulse high for 1 cycle to begin a multi-cycle op
+                                   // (ignored for single-cycle ops)
+    // verilator lint_on UNUSEDSIGNAL
+    output logic        o_busy,    // High while a multi-cycle op is in progress
+                                   // (always 0 for single-cycle ops)
+
+    // Result and flags
+    output logic [31:0] o_result,  // ALU result → R-bus
+    output logic        o_flag_z,  // Zero:     result == 0
+    output logic        o_flag_n,  // Negative: result[31]
+    output logic        o_flag_c,  // Carry:    carry-out (ARM-style: C = NOT borrow on SUB)
+    output logic        o_flag_v   // Overflow: signed overflow
+);
+
+    // ── Operation codes ─────────────────────────────────────────
+    // 5-bit encoding. Single-cycle ops are 00000–01010.
+    // Multi-cycle ops are 01011–10000 (initially trapped as illegal
+    // instructions via microcode ROM, hardware added later).
+    // 10001–11111 reserved for future FP ops.
+
+    // Single-cycle operations
+    localparam logic [4:0] OP_ADD    = 5'b00000;
+    localparam logic [4:0] OP_SUB    = 5'b00001;
+    localparam logic [4:0] OP_AND    = 5'b00010;
+    localparam logic [4:0] OP_OR     = 5'b00011;
+    localparam logic [4:0] OP_XOR    = 5'b00100;
+    localparam logic [4:0] OP_SHL    = 5'b00101;
+    localparam logic [4:0] OP_SHR    = 5'b00110;
+    localparam logic [4:0] OP_SAR    = 5'b00111;
+    localparam logic [4:0] OP_PASS_A = 5'b01000;
+    localparam logic [4:0] OP_PASS_B = 5'b01001;
+    localparam logic [4:0] OP_NOT    = 5'b01010;
+
+    // Multi-cycle operations (stubs — not yet implemented in hardware)
+    // verilator lint_off UNUSEDPARAM
+    localparam logic [4:0] OP_MUL    = 5'b01011;  // signed multiply
+    localparam logic [4:0] OP_MULU   = 5'b01100;  // unsigned multiply
+    localparam logic [4:0] OP_DIV    = 5'b01101;  // signed divide
+    localparam logic [4:0] OP_DIVU   = 5'b01110;  // unsigned divide
+    localparam logic [4:0] OP_MOD    = 5'b01111;  // signed modulo
+    localparam logic [4:0] OP_MODU   = 5'b10000;  // unsigned modulo
+    // verilator lint_on UNUSEDPARAM
+    // 5'b10001–5'b11111: reserved for future FP ops
+
+    // ── Adder with subtract support ─────────────────────────────
+    // SUB is implemented as: A + ~B + 1  (two's complement subtraction)
+    //
+    // In C terms:  sub_mode ? (a + (~b) + 1) : (a + b + 0)
+    //              which equals: sub_mode ? (a - b) : (a + b)
+    //
+    // The XOR trick: b ^ 0xFFFFFFFF == ~b (flip all bits)
+    // Adding carry-in of 1 completes the two's complement: ~b + 1 == -b
+
+    logic        sub_mode;
+    logic [31:0] b_eff;       // B after conditional inversion
+    logic        cin;         // Carry-in: 1 for subtract, 0 for add
+    logic [32:0] adder_full;  // 33-bit result to capture carry-out
+    logic [31:0] adder_result;
+    logic        adder_cout;
+
+    assign sub_mode     = (i_op == OP_SUB);
+    assign b_eff        = i_b ^ {32{sub_mode}};  // XOR with all-1s = bitwise NOT
+    assign cin          = sub_mode;
+    assign adder_full   = {1'b0, i_a} + {1'b0, b_eff} + {32'b0, cin};
+    assign adder_result = adder_full[31:0];
+    assign adder_cout   = adder_full[32];
+
+    // ── Shift results ───────────────────────────────────────────
+    // B[4:0] is the shift amount (0-31), same as C: x << (n & 0x1F)
+    logic [4:0]  shamt;
+    logic [31:0] shl_result;
+    logic [31:0] shr_result;
+    logic [31:0] sar_result;
+    logic        shl_carry;   // Last bit shifted out (MSB side)
+    logic        shr_carry;   // Last bit shifted out (LSB side)
+
+    assign shamt      = i_b[4:0];
+    assign shl_result = i_a << shamt;
+    assign shr_result = i_a >> shamt;
+    // SAR: arithmetic right shift — in C, >> on signed is implementation-defined,
+    // but in SystemVerilog, $signed() with >>> explicitly fills with the sign bit.
+    assign sar_result = $signed(i_a) >>> shamt;
+
+    // Carry for shifts: the last bit that "fell off" the edge.
+    // If shift amount is 0, carry = 0 (nothing shifted out).
+    assign shl_carry = (shamt == 0) ? 1'b0 : i_a[32 - shamt];
+    assign shr_carry = (shamt == 0) ? 1'b0 : i_a[shamt - 1];
+
+    // ── Core operation select (single-cycle) ────────────────────
+    // `always_comb` = "re-evaluate this block whenever any input changes"
+    // It's like a C switch statement that the hardware evaluates continuously.
+    // `case (i_op)` = multiplexer: select one of N results based on i_op.
+
+    logic [31:0] result_mux;  // Pre-flag result
+    logic        carry_mux;   // Carry output (operation-dependent)
+
+    always_comb begin
+        case (i_op)
+            OP_ADD: begin
+                result_mux = adder_result;
+                carry_mux = adder_cout;
+            end
+            OP_SUB: begin
+                result_mux = adder_result;
+                carry_mux = adder_cout;
+            end
+            OP_AND: begin
+                result_mux = i_a & i_b;
+                carry_mux = 1'b0;
+            end
+            OP_OR: begin
+                result_mux = i_a | i_b;
+                carry_mux = 1'b0;
+            end
+            OP_XOR: begin
+                result_mux = i_a ^ i_b;
+                carry_mux = 1'b0;
+            end
+            OP_SHL: begin
+                result_mux = shl_result;
+                carry_mux = shl_carry;
+            end
+            OP_SHR: begin
+                result_mux = shr_result;
+                carry_mux = shr_carry;
+            end
+            OP_SAR: begin
+                result_mux = sar_result;
+                carry_mux = shr_carry;
+            end
+            OP_PASS_A: begin
+                result_mux = i_a;
+                carry_mux = 1'b0;
+            end
+            OP_PASS_B: begin
+                result_mux = i_b;
+                carry_mux = 1'b0;
+            end
+            OP_NOT: begin
+                result_mux = ~i_b;
+                carry_mux = 1'b0;
+            end
+            default: begin
+                result_mux = 32'b0;
+                carry_mux = 1'b0;
+            end
+        endcase
+    end
+
+    // ── Multi-cycle operation state machine ─────────────────────
+    // Skeleton for future MUL/DIV/MOD/FP hardware.
+    //
+    // `always_ff @(posedge i_clk)` = "execute this block on every rising
+    // clock edge" — like a callback that fires once per tick. This is how
+    // you build sequential logic (state machines, counters, registers).
+    //
+    // For now: multi-cycle ops are not implemented in ALU hardware.
+    // The microcode ROM traps them as illegal instructions before the ALU
+    // is ever asked to execute them. o_busy is always 0.
+    //
+    // When MUL/DIV hardware is added, this section will:
+    //   1. On i_start: latch i_a/i_b, begin iterating
+    //   2. Assert o_busy while computing
+    //   3. Drive result onto o_result when done, deassert o_busy
+    //   4. The micro-sequencer's STALL watches o_busy
+
+    logic        multicycle_busy;
+    logic [31:0] multicycle_result;
+
+    assign multicycle_busy   = 1'b0;  // Stub: never busy (no multi-cycle HW yet)
+    assign multicycle_result = 32'b0; // Stub: no result
+
+    // ── Output mux and flags ────────────────────────────────────
+    // Select between single-cycle (combinational) and multi-cycle results.
+    logic is_multicycle_op;
+    assign is_multicycle_op = (i_op >= OP_MUL);  // MUL and above are multi-cycle
+
+    assign o_result = is_multicycle_op ? multicycle_result : result_mux;
+    assign o_busy   = multicycle_busy;
+
+    assign o_flag_z = (o_result == 32'b0);
+    assign o_flag_n = o_result[31];
+    assign o_flag_c = is_multicycle_op ? 1'b0 : carry_mux;
+
+    // V: signed overflow — only meaningful for ADD/SUB.
+    // Both operands same sign, but result differs → overflow.
+    // Uses b_eff (B after conditional inversion) so the same logic
+    // works for both ADD (b_eff = B) and SUB (b_eff = ~B).
+    assign o_flag_v = (i_op == OP_ADD || i_op == OP_SUB)
+                    ? (i_a[31] == b_eff[31]) && (o_result[31] != i_a[31])
+                    : 1'b0;
+
+endmodule

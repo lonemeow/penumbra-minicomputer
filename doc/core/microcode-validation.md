@@ -44,21 +44,30 @@ Through iterative validation (writing micro-programs, analyzing the sequencer, a
 
 ---
 
-## ALU Op Encoding (from ISA)
+## ALU Op Encoding (5-bit, unified compute unit)
 
-| Code | Mnemonic | Description              |
-|------|----------|--------------------------|
-| 0000 | ADD      | A + B                    |
-| 0001 | SUB      | A - B                    |
-| 0010 | AND      | A & B                    |
-| 0011 | OR       | A \| B                   |
-| 0100 | XOR      | A ^ B                    |
-| 0101 | SHL      | A << B[4:0]              |
-| 0110 | SHR      | A >> B[4:0] (logical)    |
-| 0111 | SAR      | A >> B[4:0] (arithmetic) |
-| 1000 | PASS_A   | A (pass-through)         |
-| 1001 | PASS_B   | B (pass-through)         |
-| 1010 | NOT      | ~B                       |
+The ALU is the single compute unit. Single-cycle ops produce results combinationally. Multi-cycle ops (marked with `*`) require `alu_start=1` and assert `alu_busy` until complete. Initially, multi-cycle ops are implemented as illegal-instruction traps via microcode ROM, with hardware added incrementally.
+
+| Code  | Mnemonic | Description              | Cycles |
+|-------|----------|--------------------------|--------|
+| 00000 | ADD      | A + B                    | 1      |
+| 00001 | SUB      | A - B                    | 1      |
+| 00010 | AND      | A & B                    | 1      |
+| 00011 | OR       | A \| B                   | 1      |
+| 00100 | XOR      | A ^ B                    | 1      |
+| 00101 | SHL      | A << B[4:0]              | 1      |
+| 00110 | SHR      | A >> B[4:0] (logical)    | 1      |
+| 00111 | SAR      | A >> B[4:0] (arithmetic) | 1      |
+| 01000 | PASS_A   | A (pass-through)         | 1      |
+| 01001 | PASS_B   | B (pass-through)         | 1      |
+| 01010 | NOT      | ~B                       | 1      |
+| 01011 | MUL *    | A × B (signed)           | N      |
+| 01100 | MULU *   | A × B (unsigned)         | N      |
+| 01101 | DIV *    | A / B (signed)           | N      |
+| 01110 | DIVU *   | A / B (unsigned)         | N      |
+| 01111 | MOD *    | A % B (signed)           | N      |
+| 10000 | MODU *   | A % B (unsigned)         | N      |
+| 10001–11111 | (reserved) | Future FP ops   | —      |
 
 ---
 
@@ -530,23 +539,23 @@ All issues resolved. Fields listed from MSB to LSB with exact bit positions.
 | 42:39 | `reg_b_sel[3:0]` | 4 | Register file read port B address |
 | 38:35 | `reg_w_sel[3:0]` | 4 | Register file write port address |
 | 34 | `reg_w_en` | 1 | Register file write enable (hardware-gated by Format R F bit) |
-| 33:30 | `alu_op[3:0]` | 4 | ALU operation |
-| 29:28 | `b_mux_sel[1:0]` | 2 | B-bus source: 00=register port B, 01=IR immediate, 10=const 4, 11=const 8 |
-| 27 | `w_mux_sel` | 1 | Write-back source: 0=R-bus, 1=MDR |
-| 26:25 | `imm_mode[1:0]` | 2 | IR immediate handling: 00=zero-extend, 01=sign-extend, 10=shift-left-16 |
-| 24 | `flag_w_en` | 1 | Update SR condition flags (NZCV) from ALU |
-| 23 | `sr_load` | 1 | Load full SR from W-mux output (for RTI) |
-| 22 | `mar_load` | 1 | Load MAR from R-bus (D-cache/bus address) |
-| 21 | `mdr_load_mem` | 1 | Load MDR from D-cache/memory (read data) |
-| 20 | `mdr_load_a` | 1 | Load MDR from A-bus (for stores) |
-| 19 | `mem_read` | 1 | Initiate D-cache/memory read |
-| 18 | `mem_write` | 1 | Initiate D-cache/memory write |
-| 17:16 | `mem_size[1:0]` | 2 | Access size: 00=byte, 01=half, 10=word |
-| 15 | `sign_ext` | 1 | Sign-extend sub-word load result |
-| 14:12 | `pc_src[2:0]` | 3 | PC source: 000=hold, 001=PC+4, 010=PC+offset, 011=A-bus, 100=MDR |
-| 11 | `sys_cycle` | 1 | System register bus cycle |
-| 10 | `sys_we` | 1 | System register write enable |
-| 9:8 | `lu_op[1:0]` | 2 | Long-latency unit: 00=none, 01=start, 10=read result to R-bus, 11=(reserved). Unit selected by IR decode. |
+| 33:29 | `alu_op[4:0]` | 5 | ALU operation (see ALU Op Encoding table) |
+| 28:27 | `b_mux_sel[1:0]` | 2 | B-bus source: 00=register port B, 01=IR immediate, 10=const 4, 11=const 8 |
+| 26 | `w_mux_sel` | 1 | Write-back source: 0=R-bus, 1=MDR |
+| 25:24 | `imm_mode[1:0]` | 2 | IR immediate handling: 00=zero-extend, 01=sign-extend, 10=shift-left-16 |
+| 23 | `flag_w_en` | 1 | Update SR condition flags (NZCV) from ALU |
+| 22 | `sr_load` | 1 | Load full SR from W-mux output (for RTI) |
+| 21 | `mar_load` | 1 | Load MAR from R-bus (D-cache/bus address) |
+| 20 | `mdr_load_mem` | 1 | Load MDR from D-cache/memory (read data) |
+| 19 | `mdr_load_a` | 1 | Load MDR from A-bus (for stores) |
+| 18 | `mem_read` | 1 | Initiate D-cache/memory read |
+| 17 | `mem_write` | 1 | Initiate D-cache/memory write |
+| 16:15 | `mem_size[1:0]` | 2 | Access size: 00=byte, 01=half, 10=word |
+| 14 | `sign_ext` | 1 | Sign-extend sub-word load result |
+| 13:11 | `pc_src[2:0]` | 3 | PC source: 000=hold, 001=PC+4, 010=PC+offset, 011=A-bus, 100=MDR |
+| 10 | `sys_cycle` | 1 | System register bus cycle |
+| 9 | `sys_we` | 1 | System register write enable |
+| 8 | `alu_start` | 1 | Start multi-cycle ALU operation (ignored for single-cycle ops) |
 | 7:5 | `branch_cond[2:0]` | 3 | Micro-sequencer control (see sequencer section) |
 | 4:2 | `fwd_offset[2:0]` | 3 | Forward skip offset (used only when branch_cond=SKIP) |
 | 1:0 | (spare) | 2 | Reserved for future use |
@@ -565,7 +574,8 @@ All issues resolved. Fields listed from MSB to LSB with exact bit positions.
 | Expand `b_mux_sel` 1→2 bits | — | 1 | Micro-constants (4, 8) for stack adjustment without IR |
 | Add `a_src[1:0]` | — | 2 | A-bus source mux for shadow_SR, shadow_PC, vector_addr in exception entry |
 | Add `sr_load` | — | 1 | Load full SR from datapath for RTI |
-| Replace `lu_start`+`lu_sel`+`lu_to_rbus` (5 bits) with `lu_op[1:0]` (2 bits) | 3 | — | Combined MUL/DIV unit; unit selection by IR decode, not micro-word |
+| Replace `lu_start`+`lu_sel`+`lu_to_rbus` (5 bits) with `alu_start` (1 bit) | 4 | — | Unified ALU: MUL/DIV/MOD/FP are `alu_op` codes; ALU asserts `alu_busy` for multi-cycle ops |
+| Expand `alu_op` 4→5 bits | — | 1 | Room for MUL/DIV/MOD (6 ops) + future FP ops (15 slots) |
 | Add PRIV branch_cond | — | 0 | Uses previously available slot 101; no new bits |
 | **Net** | **-14** | **+5** | **55 → 48 bits (+ 2 spare)** |
 
@@ -584,7 +594,7 @@ On ECP5: 256 entries × 48 bits = 12 Kbit (1 EBR, well within a single 18 Kbit b
 | 1 | Micro-word fields sum to 55, not 52 | **Resolved** | Revised format is 48 bits (+ 2 spare) after merges, sequencer redesign, and LU consolidation |
 | 2 | No `ir_load` signal for instruction latch | **Resolved** | Hardwired fetch unit controls IR directly; no micro-word signal needed |
 | 3 | `reg_w_en` must be gated by Format R `F` bit | **Accepted** | Hardware AND: `actual_w_en = reg_w_en & ~(format_R & IR[16])` |
-| 4 | Memory stalls vs LU stalls share STALL condition | **Accepted** | Unified `busy` line: `cache_busy \| lu_busy[lu_sel]`; never overlap |
+| 4 | Memory stalls vs ALU stalls share STALL condition | **Accepted** | Unified `busy` line: `cache_busy \| alu_busy`; never overlap |
 | 5 | `branch_cond` 011/100 redefined for conditional pc_src | **Accepted** | BRT/BRF gate pc_src and hand off to fetch unit; single-micro-op Bcc |
 | 6 | No A-bus source for shadow_SR, shadow_PC, vector_addr | **Resolved** | Added `a_src[1:0]` field |
 | 7 | No microcode-accessible constants | **Resolved** | Expanded `b_mux_sel` to 2 bits with hardwired 4 and 8 |
@@ -593,7 +603,7 @@ On ECP5: 256 entries × 48 bits = 12 Kbit (1 EBR, well within a single 18 Kbit b
 | 10 | Memory write stalls not accounted for | **Resolved** | Stall loops added (same STALL mechanism as reads) |
 | 11 | Fetch cycle was 4 micro-ops in ROM | **Resolved** | Hardwired fetch unit; 0 micro-ops in ROM; upgradeable to prefetch |
 | 12 | `mar_src` unnecessary with split I/D cache | **Resolved** | Removed; MAR serves D-cache only, always loads from R-bus |
-| 13 | Separate MUL/DIV/FPU units waste micro-word bits | **Resolved** | Combined MUL/DIV into single integer unit; `lu_op[1:0]` replaces 5 bits of LU control; unit selection by IR decode |
+| 13 | Separate MUL/DIV/FPU units waste micro-word bits | **Resolved** | Unified into ALU: `alu_op` expanded to 5 bits for MUL/DIV/MOD + future FP; `alu_start` (1 bit) replaces 5 bits of LU control; ALU asserts `alu_busy` for multi-cycle ops |
 | 14 | Privilege check mechanism undefined | **Resolved** | `branch_cond=PRIV` (101): checks SR.S, triggers exception via fetch unit on violation |
 | 15 | FPU-absent trap mechanism | **Resolved** | Different ROM image fills FP opcode entries with illegal instruction exception code; zero runtime overhead |
 | 16 | FP condition branches and GPR↔FPR moves | **Resolved** | FP-in-GPRs: FPU uses A/B/R buses like integer LU; FP compare sets NZCV via `flag_w_en`; normal Bcc works; no separate FP register file or move instructions |

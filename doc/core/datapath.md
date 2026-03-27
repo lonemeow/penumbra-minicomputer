@@ -117,20 +117,15 @@ The Penumbra CPU uses a three-bus datapath controlled by horizontal microcode. T
           └─────────────────────────────────────────────────┘
 
 
-Long-latency units (directly connected to A-bus, B-bus, R-bus):
+The ALU is the **unified compute unit** — all operations (arithmetic, logic, shifts,
+and future MUL/DIV/FP) flow through it. Single-cycle ops (ADD, SUB, AND, etc.) complete
+combinationally. Multi-cycle ops (shifts on discrete, MUL/DIV when implemented) use an
+internal state machine and assert `busy` to stall the micro-sequencer via STALL.
 
-          A-bus ──► operand_a ──┐
-          B-bus ──► operand_b ──┤  ┌──────────┐
-                                ├──│ MUL unit │──► R-bus (via mux)
-                  start ────────┤  └──────────┘
-                                │  ┌──────────┐
-                                ├──│ DIV unit │──► R-bus (via mux)
-                                │  └──────────┘
-                                │  ┌──────────┐
-                                └──│ FPU      │──► R-bus (via mux)
-                                   │ (future) │
-                                   └──────────┘
-                  busy/done ◄───── selected unit
+There is no separate long-latency unit. MUL/DIV/MOD opcodes are initially handled as
+illegal instructions via microcode ROM (trapped to software emulation), and replaced
+with hardware implementations inside the ALU as the design matures. FPU operations
+follow the same pattern — future `alu_op` encodings, absent until hardware exists.
 ```
 
 ## Data Flow by Instruction Type
@@ -442,34 +437,34 @@ Condition evaluation hardware: each condition is a simple combinational function
 | 42:39 | `reg_b_sel[3:0]` | 4 | Register file read port B address |
 | 38:35 | `reg_w_sel[3:0]` | 4 | Register file write port address |
 | 34 | `reg_w_en` | 1 | Register file write enable (hardware-gated by Format R F bit: `actual = reg_w_en & ~(format_R & IR[16])`) |
-| 33:30 | `alu_op[3:0]` | 4 | ALU operation (ADD, SUB, AND, OR, XOR, SHL, SHR, SAR, PASS_A, PASS_B, NOT) |
-| 29:28 | `b_mux_sel[1:0]` | 2 | B-bus source: 00=register port B, 01=IR immediate, 10=constant 4, 11=constant 8 |
-| 27 | `w_mux_sel` | 1 | Write-back source: 0=R-bus, 1=MDR |
-| 26:25 | `imm_mode[1:0]` | 2 | IR immediate handling: 00=zero-extend, 01=sign-extend, 10=shift-left-16 |
-| 24 | `flag_w_en` | 1 | Update SR condition flags (NZCV) from ALU |
-| 23 | `sr_load` | 1 | Load full SR from W-mux output (for RTI) |
-| 22 | `mar_load` | 1 | Load MAR from R-bus (D-cache/bus address only; I-cache is permanently wired to PC) |
-| 21 | `mdr_load_mem` | 1 | Load MDR from D-cache/memory (read data) |
-| 20 | `mdr_load_a` | 1 | Load MDR from A-bus (for stores) |
-| 19 | `mem_read` | 1 | Initiate D-cache/memory read |
-| 18 | `mem_write` | 1 | Initiate D-cache/memory write |
-| 17:16 | `mem_size[1:0]` | 2 | Access size: 00=byte, 01=half, 10=word |
-| 15 | `sign_ext` | 1 | Sign-extend sub-word load result |
-| 14:12 | `pc_src[2:0]` | 3 | PC source: 000=hold, 001=PC+4, 010=PC+offset, 011=A-bus, 100=MDR |
-| 11 | `sys_cycle` | 1 | System register bus cycle |
-| 10 | `sys_we` | 1 | System register write enable |
-| 9:8 | `lu_op[1:0]` | 2 | Long-latency unit control: 00=none, 01=start, 10=read result to R-bus, 11=(reserved) |
+| 33:29 | `alu_op[4:0]` | 5 | ALU operation (see ALU Op Encoding table) |
+| 28:27 | `b_mux_sel[1:0]` | 2 | B-bus source: 00=register port B, 01=IR immediate, 10=constant 4, 11=constant 8 |
+| 26 | `w_mux_sel` | 1 | Write-back source: 0=R-bus, 1=MDR |
+| 25:24 | `imm_mode[1:0]` | 2 | IR immediate handling: 00=zero-extend, 01=sign-extend, 10=shift-left-16 |
+| 23 | `flag_w_en` | 1 | Update SR condition flags (NZCV) from ALU |
+| 22 | `sr_load` | 1 | Load full SR from W-mux output (for RTI) |
+| 21 | `mar_load` | 1 | Load MAR from R-bus (D-cache/bus address only; I-cache is permanently wired to PC) |
+| 20 | `mdr_load_mem` | 1 | Load MDR from D-cache/memory (read data) |
+| 19 | `mdr_load_a` | 1 | Load MDR from A-bus (for stores) |
+| 18 | `mem_read` | 1 | Initiate D-cache/memory read |
+| 17 | `mem_write` | 1 | Initiate D-cache/memory write |
+| 16:15 | `mem_size[1:0]` | 2 | Access size: 00=byte, 01=half, 10=word |
+| 14 | `sign_ext` | 1 | Sign-extend sub-word load result |
+| 13:11 | `pc_src[2:0]` | 3 | PC source: 000=hold, 001=PC+4, 010=PC+offset, 011=A-bus, 100=MDR |
+| 10 | `sys_cycle` | 1 | System register bus cycle |
+| 9 | `sys_we` | 1 | System register write enable |
+| 8 | `alu_start` | 1 | Start multi-cycle ALU operation (MUL/DIV/MOD; ignored for single-cycle ops) |
 | 7:5 | `branch_cond[2:0]` | 3 | Micro-sequencer control (see below) |
 | 4:2 | `fwd_offset[2:0]` | 3 | Forward skip offset, 0-7 (used only when branch_cond=SKIP) |
 | 1:0 | (spare) | 2 | Reserved for future use |
 
 **Total: 48 bits**
 
-The long-latency unit (combined MUL/DIV integer unit, and future FPU) is selected by **hardware IR decode**, not by the micro-word. The opcode determines which unit receives `lu_start` and which result is driven onto R-bus. A 1-bit flip-flop tracks the most recently started unit. STALL checks a unified busy signal: `cache_busy | lu_busy` (the active unit's busy line). Since the integer unit and FPU are never active simultaneously, a single busy line suffices.
+The ALU is the unified compute unit. Single-cycle operations (ADD, SUB, AND, OR, XOR, SHL, SHR, SAR, PASS_A, PASS_B, NOT) produce results combinationally — `alu_start` is ignored and `alu_busy` is never asserted. Multi-cycle operations (MUL, DIV, MOD, future FP) require `alu_start=1` in the micro-word to begin; the ALU latches operands, asserts `alu_busy`, and iterates internally. STALL checks a unified busy signal: `cache_busy | alu_busy`.
 
-Future FPU note: floating-point operands live in GPRs (no separate FP register file). The FPU reads from A-bus/B-bus and writes to R-bus, using the same `lu_op` interface as the integer unit. FP compare updates NZCV via `flag_w_en`, so normal Bcc works for FP branches. When the FPU hardware is absent, its opcodes are filled with illegal-instruction exception micro-ops in the ROM image — zero runtime overhead.
+Future FPU note: floating-point operands live in GPRs (no separate FP register file). FP operations are additional `alu_op` encodings using the same start/busy/result interface. FP compare updates NZCV via `flag_w_en`, so normal Bcc works for FP branches. When FPU hardware is absent, the microcode ROM fills FP opcode entries with illegal-instruction exception micro-ops — zero runtime overhead. MUL/DIV/MOD follow the same pattern: initially trapped to software emulation via the ROM, replaced with ALU hardware as the design matures.
 
-Design history: the original draft specified 52 bits (actually 55 when counted correctly). Microcode validation (`microcode-validation.md`) identified missing signals for exception entry and unnecessary sequencer complexity, leading to this revised 49-bit format.
+Design history: the original draft specified 52 bits (actually 55 when counted correctly). Microcode validation (`microcode-validation.md`) identified missing signals for exception entry and unnecessary sequencer complexity. The separate long-latency unit (`lu_op[1:0]`) was later folded into the ALU as a unified compute unit, with `alu_op` expanded to 5 bits. Net result: 48-bit micro-word.
 
 ### Micro-Sequencer
 
@@ -490,13 +485,13 @@ FETCH, BRT, and BRF all signal "instruction complete" to the fetch unit. The dif
 
 PRIV checks the supervisor bit in SR. If SR.S=1 (supervisor mode), micro-PC increments normally — the privileged instruction executes with 1 micro-op overhead. If SR.S=0 (user mode), the fetch unit is signaled to trigger a privilege violation exception (vector 3) using the same hardware pre-actions as interrupt entry. Every privileged instruction's micro-routine begins with `branch_cond=PRIV` as its first micro-op.
 
-STALL checks a unified busy signal: `cache_busy | lu_busy`. When the operation completes (`busy` deasserts), the sequencer also checks a `fault` signal from the D-cache/MMU. Three-way resolution:
+STALL checks a unified busy signal: `cache_busy | alu_busy`. When the operation completes (`busy` deasserts), the sequencer also checks a `fault` signal from the D-cache/MMU. Three-way resolution:
 
 - **busy=1:** Hold micro-PC (keep waiting).
 - **busy=0, fault=0:** micro-PC++ (normal completion).
 - **busy=0, fault=1:** Trigger exception via fetch unit. The D-cache/MMU provides the fault vector (4=TLB miss/page fault, 6=alignment fault, 9=bus error). Hardware pre-actions fire with `shadow_PC ← PC` (still pointing at the faulting instruction, since `pc_src=001` hasn't executed). The instruction is effectively aborted mid-execution.
 
-Since memory operations and long-latency unit operations never overlap in the same micro-op, a single busy line is sufficient. The fault signal is only meaningful for memory operations (LU operations cannot fault).
+Since memory operations and multi-cycle ALU operations never overlap in the same micro-op, a single busy line is sufficient. The fault signal is only meaningful for memory operations (ALU operations cannot fault).
 
 ### Microcode ROM Organization
 
