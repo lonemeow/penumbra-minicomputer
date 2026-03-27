@@ -62,10 +62,11 @@ RTL implementation is in progress, bottom-up from leaf modules. Microcode valida
 | PC source mux | `rtl/core/pc_mux.sv` | 6/6 | Next PC: hold/+4/+offset/A-bus/MDR |
 | Status register | `rtl/core/status_reg.sv` | 64/64 | NZCV flags, S/I mode bits, shadow SR, ei_shadow |
 | PC register | `rtl/core/pc_reg.sv` | 31/31 | PC reg, PC+4 adder, PC+offset adder, shadow PC |
+| MAR | `rtl/core/mar.sv` | 6/6 | Memory address register, loads from R-bus |
+| MDR | `rtl/core/mdr.sv` | 7/7 | Memory data register, loads from memory or A-bus |
 | Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_* constants |
 
 ### Next Steps (in priority order)
-1. **MAR / MDR registers** — simple latches bridging datapath to memory subsystem.
 4. **Datapath top module** — wire all modules together, integrate field extractor → register file address routing (mux between IR fields and micro-word literal addresses).
 5. **Microcode ROM** — 256×48-bit ROM with dispatch logic.
 6. **Micro-sequencer** — micro-PC counter with branch_cond control.
