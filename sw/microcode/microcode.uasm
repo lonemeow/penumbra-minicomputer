@@ -1,0 +1,60 @@
+# Penumbra Microcode Source
+#
+# Dispatch addresses (computed by fetch unit from IR bits):
+#   Format R: {00, op[4:0]}         → entries 0x00–0x1F
+#   Format L: {01, op[2:0], 00}     → entries 0x20–0x3F (×4 spacing)
+#   Format M: {10, L, sz[1:0], SE, 0} → entries 0x40–0x5F (×2 spacing)
+#   Format B: {11, 0000000}         → entry 0x60
+#   Interrupt entry:                → entry 0x70 (hardwired)
+#
+# Register address encoding:
+#   IR_RD = format-dependent Rd, IR_RS = format-dependent Rs/Rb
+#   R2–R15 = literal register number
+#
+# Unspecified fields default to 0:
+#   a_src=REG, alu=ADD, bmux=REG, wmux=RBUS, pc=HOLD, branch=SEQ
+#   All enables off, no memory access.
+
+# ═══════════════════════════════════════════════════════════════
+# Format R — Register-register ALU and system ops (0x00–0x1F)
+# Dispatch: {00, op[4:0]}
+# ═══════════════════════════════════════════════════════════════
+
+.org 0x00
+add:
+  reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=ADD bmux=REG wmux=RBUS w_flags=1
+
+# ── SUB (op=00001, dispatch=0x01) ─────────────────────────────
+.org 0x01
+sub:
+  reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=SUB bmux=REG wmux=RBUS w_flags=1
+
+# ── AND (op=00010, dispatch=0x02) ─────────────────────────────
+.org 0x02
+and:
+  reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=AND bmux=REG wmux=RBUS w_flags=1
+
+# ── OR (op=00011, dispatch=0x03) ──────────────────────────────
+.org 0x03
+or:
+  reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=OR bmux=REG wmux=RBUS w_flags=1
+
+# ── XOR (op=00100, dispatch=0x04) ─────────────────────────────
+.org 0x04
+xor:
+  reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=XOR bmux=REG wmux=RBUS w_flags=1
+
+# ═══════════════════════════════════════════════════════════════
+# Format B — Branches (0x60)
+# ═══════════════════════════════════════════════════════════════
+
+.org 0x60
+branch:
+  pc=OFFSET branch=BRT
+
+# ═══════════════════════════════════════════════════════════════
+# Interrupt entry (0x70)
+# ═══════════════════════════════════════════════════════════════
+
+.org 0x70
+int_entry:
