@@ -1,11 +1,13 @@
 # Penumbra Microcode Source
 #
 # Dispatch addresses (computed by fetch unit from IR bits):
-#   Format R: {00, op[4:0]}           → entries 0x00–0x1F
-#   Format L: {01, op[2:0], 00}       → entries 0x20–0x3F (×4 spacing)
-#   Format M: {10, L, sz[1:0], SE, 00}→ entries 0x80–0xBF (×4 spacing)
-#   Format B: {11, 0000000}           → entry 0x60
-#   Interrupt entry:                  → entry 0x70 (hardwired)
+#   Format R: {00, op[4], op[3:0], 0}    → ×2 spacing
+#     ALU (op[4]=0): 0x00–0x1E            16 instructions, 2 entries each
+#     SYS (op[4]=1): 0x40–0x5E            16 instructions, 2 entries each
+#   Format L: {01, op[2:0], 00}           → entries 0x20–0x3F (×4 spacing)
+#   Format M: {10, L, sz[1:0], SE, 00}    → entries 0x80–0xBF (×4 spacing)
+#   Format B: {11, 0000000}               → entry 0x60
+#   Interrupt/fault entry:                → entry 0x70 (hardwired)
 #
 # Register address encoding:
 #   IR_RD = format-dependent Rd, IR_RS = format-dependent Rs/Rb
@@ -17,64 +19,65 @@
 #   a_src=REG, alu=ADD, bmux=REG, wmux=RBUS, all enables off.
 
 # ═══════════════════════════════════════════════════════════════
-# Format R — Register-register ALU and system ops (0x00–0x1F)
-# Dispatch: {00, op[4:0]}
+# Format R — ALU operations (0x00–0x1E, ×2 spacing)
+# Dispatch: {00, 0, op[3:0], 0}
 # ═══════════════════════════════════════════════════════════════
 
+# ── ADD (op=0, dispatch=0x00) ─────────────────────────────────
 .org 0x00
 add:
   reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=ADD bmux=REG wmux=RBUS w_flags=1
 
-# ── SUB (op=00001, dispatch=0x01) ─────────────────────────────
-.org 0x01
+# ── SUB (op=1, dispatch=0x02) ─────────────────────────────────
+.org 0x02
 sub:
   reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=SUB bmux=REG wmux=RBUS w_flags=1
 
-# ── AND (op=00010, dispatch=0x02) ─────────────────────────────
-.org 0x02
+# ── AND (op=2, dispatch=0x04) ─────────────────────────────────
+.org 0x04
 and:
   reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=AND bmux=REG wmux=RBUS w_flags=1
 
-# ── OR (op=00011, dispatch=0x03) ──────────────────────────────
-.org 0x03
+# ── OR (op=3, dispatch=0x06) ──────────────────────────────────
+.org 0x06
 or:
   reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=OR bmux=REG wmux=RBUS w_flags=1
 
-# ── XOR (op=00100, dispatch=0x04) ─────────────────────────────
-.org 0x04
+# ── XOR (op=4, dispatch=0x08) ─────────────────────────────────
+.org 0x08
 xor:
   reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=XOR bmux=REG wmux=RBUS w_flags=1
 
-# ── SHL (op=00101, dispatch=0x05) ─────────────────────────────
-.org 0x05
+# ── SHL (op=5, dispatch=0x0A) ─────────────────────────────────
+.org 0x0A
 shl:
   reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=SHL bmux=REG wmux=RBUS w_flags=1
 
-# ── SHR (op=00110, dispatch=0x06) ─────────────────────────────
-.org 0x06
+# ── SHR (op=6, dispatch=0x0C) ─────────────────────────────────
+.org 0x0C
 shr:
   reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=SHR bmux=REG wmux=RBUS w_flags=1
 
-# ── SAR (op=00111, dispatch=0x07) ─────────────────────────────
-.org 0x07
+# ── SAR (op=7, dispatch=0x0E) ─────────────────────────────────
+.org 0x0E
 sar:
   reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=SAR bmux=REG wmux=RBUS w_flags=1
 
-# ── MOV (op=01000, dispatch=0x08) ─────────────────────────────
+# ── MOV (op=8, dispatch=0x10) ─────────────────────────────────
 # Rd = Rs (pass A-bus through ALU)
-.org 0x08
+.org 0x10
 mov:
   reg_a=IR_RS reg_w=IR_RD w_en=1 alu=PASS_A wmux=RBUS
 
-# ── NOT (op=01001, dispatch=0x09) ─────────────────────────────
+# ── NOT (op=9, dispatch=0x12) ─────────────────────────────────
 # Rd = ~Rs
-.org 0x09
+.org 0x12
 not:
   reg_a=IR_RS reg_w=IR_RD w_en=1 alu=NOT wmux=RBUS w_flags=1
 
 # ═══════════════════════════════════════════════════════════════
-# Format L — Immediate operations (0x20–0x3F)
-# Dispatch: {01, op[2:0], 00} — ×4 spacing
+# Format L — Immediate operations (0x20–0x3F, ×4 spacing)
+# Dispatch: {01, op[2:0], 00}
 # ═══════════════════════════════════════════════════════════════
 
 # ── LLI Rd, #imm16 (op=000, dispatch=0x20) ───────────────────
@@ -114,45 +117,81 @@ cmpi:
   reg_a=IR_RD alu=SUB bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
 
 # ═══════════════════════════════════════════════════════════════
-# Format R — System operations (0x10–0x1F)
+# Format R — System operations (0x40–0x5E, ×2 spacing)
+# Dispatch: {00, 1, op[3:0], 0}  (op[4]=1 → system zone)
 # ═══════════════════════════════════════════════════════════════
 
-# ── WRSYS Rd, #dev, #reg (op=10000, dispatch=0x10) ───────────
+# ── WRSYS Rd, #dev, #reg (op=16, dispatch=0x40) ──────────────
 # Write register Rd to system register. A-bus carries Rd value,
 # sys_cycle + sys_we tell the target device to latch it.
 # Privileged — branch=PRIV faults in user mode.
-.org 0x10
+.org 0x40
 wrsys:
   reg_a=IR_RD sys_cycle=1 sys_we=1 branch=PRIV
 
-# ── RDSYS Rd, #dev, #reg (op=10001, dispatch=0x11) ───────────
+# ── RDSYS Rd, #dev, #reg (op=17, dispatch=0x42) ──────────────
 # Read system register into Rd. Two micro-ops:
 #   Step 0: sys_cycle=1 puts device data on sysreg bus → cpu_top
 #           muxes it onto mem_rdata → MDR captures it.
 #   Step 1: writeback MDR to Rd.
 # Privileged.
-.org 0x11
+.org 0x42
 rdsys:
   sys_cycle=1 mdr_load_mem=1 pc=HOLD branch=SEQ
-  reg_w=IR_RD w_en=1 wmux=MDR
+  reg_w=IR_RD w_en=1 wmux=MDR branch=PRIV
 
-# ── JMP Rs (op=11000, dispatch=0x18) ─────────────────────────
+# ── RTI (op=22, dispatch=0x4C) ────────────────────────────────
+# Return from interrupt/exception: restore shadow_SR then shadow_PC.
+# Privileged — must be in supervisor mode.
+# Step 0: shadow_SR → ALU PASS_A → R-bus → w_bus → sr_load
+#         (restores NZCV flags, S and I mode bits)
+# Step 1: shadow_PC → A-bus → PC (jumps back to interrupted instruction)
+.org 0x4C
+rti:
+  a_src=SHADOW_SR alu=PASS_A sr_load=1 pc=HOLD branch=SEQ
+  a_src=SHADOW_PC pc=ABUS branch=PRIV
+
+# ── JMP Rs (op=24, dispatch=0x50) ────────────────────────────
 # PC = Rs (register indirect jump; RET = JMP R13)
-.org 0x18
+.org 0x50
 jmp:
   reg_a=IR_RS pc=ABUS
 
-# ── EI (op=11001, dispatch=0x19) ────────────────────────────
+# ── EI (op=25, dispatch=0x52) ────────────────────────────────
 # Enable interrupts: SR.I = 1, delayed by one instruction (ei_shadow)
-.org 0x19
+.org 0x52
 ei:
   ei_set=1
 
-# ── DI (op=11010, dispatch=0x1A) ────────────────────────────
+# ── DI (op=26, dispatch=0x54) ────────────────────────────────
 # Disable interrupts: SR.I = 0, immediate effect (privileged)
-.org 0x1A
+.org 0x54
 di:
   di_set=1 branch=PRIV
+
+# ── IRET Rd, Rs (op=27, dispatch=0x56) ───────────────────────
+# Atomic return to a different context: SR ← Rd, PC ← Rs.
+# Step 0: Rd → A-bus → ALU PASS_A → R-bus → w_bus → sr_load
+# Step 1: Rs → A-bus → PC (jump to new context)
+# Privileged.
+.org 0x56
+iret:
+  reg_a=IR_RD alu=PASS_A sr_load=1 pc=HOLD branch=SEQ
+  reg_a=IR_RS pc=ABUS branch=PRIV
+
+# ── RDSPC Rd, SSR (op=29, dispatch=0x5A) ─────────────────────
+# Read shadow SR into Rd. Privileged.
+# shadow_SR → A-bus → ALU PASS_A → R-bus → Rd
+.org 0x5A
+rdspc_ssr:
+  a_src=SHADOW_SR alu=PASS_A reg_w=IR_RD w_en=1 wmux=RBUS branch=PRIV
+
+# ── RDSPC Rd, SPC (op=30, dispatch=0x5C) ─────────────────────
+# Read shadow PC into Rd. Privileged.
+# shadow_PC → A-bus → ALU PASS_A → R-bus → Rd
+.org 0x5C
+rdspc_spc:
+  a_src=SHADOW_PC alu=PASS_A reg_w=IR_RD w_en=1 wmux=RBUS branch=PRIV
 
 # ═══════════════════════════════════════════════════════════════
 # Format B — Branches (0x60)
@@ -163,7 +202,7 @@ branch:
   pc=OFFSET branch=BRT
 
 # ═══════════════════════════════════════════════════════════════
-# Interrupt entry (0x70)
+# Exception/interrupt entry (0x70)
 # Hardware has already saved shadow_PC, shadow_SR, set S=1, I=0
 # via except_entry pulse. This micro-routine loads the vector
 # address into PC to jump to the handler.
@@ -174,8 +213,8 @@ int_entry:
   a_src=VECTOR pc=ABUS
 
 # ═══════════════════════════════════════════════════════════════
-# Format M — Memory load/store (0x80–0xBF)
-# Dispatch: {10, L, sz[1:0], SE, 00} — ×4 spacing
+# Format M — Memory load/store (0x80–0xBF, ×4 spacing)
+# Dispatch: {10, L, sz[1:0], SE, 00}
 #
 # Memory access pattern (latency-agnostic via STALL):
 #   Micro-op 0: MAR ← Rb + sext(offset)              [address compute]

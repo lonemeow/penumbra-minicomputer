@@ -106,6 +106,43 @@ for name, hi, lo, syms in FIELDS:
 ROM_SIZE = 256
 WORD_BITS = 49  # bits 48:0
 
+# ── Dispatch slot layout ─────────────────────────────────────
+# Each zone defines a contiguous range of ROM addresses with a fixed
+# slot size. Multi-step micro-routines must not cross slot boundaries.
+# Entries: (start, end_exclusive, slot_size, zone_name)
+SLOT_ZONES = [
+    (0x00, 0x20, 2, "R-ALU"),         # 16 ×2 slots (ALU ops, op[4]=0)
+    (0x20, 0x40, 4, "Format L"),      # 8 ×4 slots
+    (0x40, 0x60, 2, "R-SYS"),         # 16 ×2 slots (system ops, op[4]=1)
+    (0x60, 0x61, 1, "Format B"),      # 1 single-entry slot
+    (0x70, 0x71, 1, "Exception"),     # 1 single-entry slot (int_entry)
+    (0x80, 0xC0, 4, "Format M"),      # 16 ×4 slots
+]
+
+
+def slot_boundary(addr):
+    """Return (slot_start, slot_end_exclusive, zone_name) for a ROM address,
+    or None if the address is in an unassigned region.
+
+    For zones with slot_size == 1 (Format R, B, Exception), the "slot" is
+    the entire zone — multi-step routines intentionally consume consecutive
+    entries. The real constraint is not crossing into the next zone.
+
+    For zones with slot_size > 1 (Format L, M with ×4 spacing), the slot
+    boundary is enforced per-slot since the dispatch hardware uses fixed
+    spacing."""
+    for zone_start, zone_end, slot_size, zone_name in SLOT_ZONES:
+        if zone_start <= addr < zone_end:
+            if slot_size == 1:
+                # Single-entry zones: only enforce zone boundary
+                return (addr, zone_end, zone_name)
+            else:
+                # Multi-entry zones: enforce per-slot boundary
+                slot_index = (addr - zone_start) // slot_size
+                slot_start = zone_start + slot_index * slot_size
+                return (slot_start, slot_start + slot_size, zone_name)
+    return None
+
 # Default field values — applied when not explicitly specified.
 # Most micro-ops end with "advance PC, return to fetch," so we default
 # to that. Multi-step routines override with pc=HOLD branch=SEQ or
@@ -175,6 +212,11 @@ def assemble(source_lines):
     labels = {}
     errors = 0
 
+    # Slot overflow tracking: when a .org or label starts a routine,
+    # record the slot boundary. Subsequent micro-ops must stay within it.
+    current_slot = None   # (slot_start, slot_end, zone_name) or None
+    current_label = None  # label that started this routine
+
     for line_num, raw_line in enumerate(source_lines, 1):
         # Strip comments and whitespace
         line = raw_line.split("#")[0].strip()
@@ -189,6 +231,8 @@ def assemble(source_lines):
                 print(f"  Error line {line_num}: .org address 0x{addr:02X} "
                       f"exceeds ROM size ({ROM_SIZE})", file=sys.stderr)
                 errors += 1
+            current_slot = slot_boundary(addr)
+            current_label = None
             continue
 
         # Label (ends with colon)
@@ -196,6 +240,8 @@ def assemble(source_lines):
         if m:
             label = m.group(1)
             labels[label] = addr
+            current_slot = slot_boundary(addr)
+            current_label = label
             # Rest of line may contain field assignments
             line = m.group(2).strip()
             if not line:
@@ -221,6 +267,16 @@ def assemble(source_lines):
                   f"out of range", file=sys.stderr)
             errors += 1
         elif field_values:
+            # Slot boundary check
+            if current_slot is not None:
+                slot_start, slot_end, zone_name = current_slot
+                if addr >= slot_end:
+                    routine = current_label or f"0x{slot_start:02X}"
+                    print(f"  Error line {line_num}: micro-op at 0x{addr:02X} overflows "
+                          f"{zone_name} slot 0x{slot_start:02X}–0x{slot_end-1:02X} "
+                          f"(routine '{routine}')", file=sys.stderr)
+                    errors += 1
+
             rom[addr] = pack_word(field_values, line_num)
             addr += 1
 

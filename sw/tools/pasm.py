@@ -135,8 +135,11 @@ FORMAT_R_OPS = {
     "JMP":       (24, True,  0),  # Rs field is the target register
     "EI":        (25, False, 0),
     "DI":        (26, False, 0),
-    "GETUSP":    (27, False, 0),
-    "SETUSP":    (28, False, 0),
+    "IRET":      (27, True,  0),   # IRET Rd, Rs — SR ← Rd, PC ← Rs (2 micro-ops: 0x1B-0x1C)
+    "_RDSPC_SSR": (29, False, 0),  # RDSPC Rd, SSR (internal: assembler maps RDSPC)
+    "_RDSPC_SPC": (30, False, 0),  # RDSPC Rd, SPC (internal: assembler maps RDSPC)
+    "GETUSP":    (31, False, 0),   # (not yet implemented, moved for IRET)
+    # SETUSP: deferred — needs opcode assignment when implemented
 }
 
 # ── Format L — Immediate ops ─────────────────────────────────
@@ -210,6 +213,33 @@ def assemble_line(mnemonic, operands, addr, labels, line_num, constants=None):
 
         if mn in ("SYSCALL", "BREAK", "RTI", "ICACHE_INV", "EI", "DI"):
             return encode_format_r(op, 0, 0, 0)
+
+        # RDSPC Rd, SSR / RDSPC Rd, SPC — read shadow registers
+        if mn == "RDSPC":
+            if len(operands) != 2:
+                raise ValueError("RDSPC expects Rd, SSR or Rd, SPC")
+            rd = parse_reg(operands[0])
+            if rd is None:
+                raise ValueError(f"bad register '{operands[0]}'")
+            spec = operands[1].upper()
+            if spec == "SSR":
+                return encode_format_r(29, rd, 0, 0)
+            elif spec == "SPC":
+                return encode_format_r(30, rd, 0, 0)
+            else:
+                raise ValueError(f"RDSPC: unknown special register '{operands[1]}', expected SSR or SPC")
+
+        # IRET Rd, Rs — SR ← Rd, PC ← Rs (atomic return to different context)
+        if mn == "IRET":
+            if len(operands) != 2:
+                raise ValueError("IRET expects Rd (SR source), Rs (PC source)")
+            rd = parse_reg(operands[0])
+            rs = parse_reg(operands[1])
+            if rd is None:
+                raise ValueError(f"bad register '{operands[0]}'")
+            if rs is None:
+                raise ValueError(f"bad register '{operands[1]}'")
+            return encode_format_r(31, rd, rs, 0)
 
         # WRSYS Rd, #dev, #reg  /  RDSYS Rd, #dev, #reg
         # Encoding: Format R with dev in spare[15:12], reg in spare[11:8]

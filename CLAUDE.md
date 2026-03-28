@@ -70,7 +70,7 @@ The CPU runs real programs in simulation with the full CPU → MMU → cache →
 | Datapath top | `rtl/core/datapath.sv` | 15/15 | Structural wiring of all modules, IR reg, reg addr routing, F-bit gating |
 | Microcode ROM | `rtl/core/ucode_rom.sv` | — | 256×49-bit ROM, $readmemh from microcode.hex |
 | Sequencer | `rtl/core/sequencer.sv` | — | Micro-PC, branch_cond decode, EI/DI tracking, ei_shadow_clr |
-| CPU top | `rtl/core/cpu_top.sv` | 8 progs | Full integration: datapath + sequencer + ROM + MMU + sysid + cache + memory + fetch + IRQ + MMU traps + WRSYS/RDSYS |
+| CPU top | `rtl/core/cpu_top.sv` | 10 progs | Full integration: datapath + sequencer + ROM + MMU + sysid + cache + memory + fetch + IRQ + MMU traps + WRSYS/RDSYS |
 | Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_*, ACC_*, VEC_*, SYSDEV_*, SYSREG_* constants |
 | System ID | `rtl/soc/sysid.sv` | via cpu_top | Read-only MACHINE_ID register (Penumbra/1), sysreg device 1 |
 | TLB | `rtl/mmu/tlb.sv` | 111/111 | 64-entry 2-way SA, parallel lookup, one-hot permission check, indexed sysreg R/W |
@@ -115,10 +115,10 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 - **STALL-based:** Load/store micro-routines use `branch=STALL` to wait for memory. The same microcode works regardless of memory latency (1-cycle sync, cache miss, MMU walk).
 - **mem_busy signal:** Simple memory model provides 1-cycle busy for reads, 0-cycle for writes. Future: replaced by cache/bus controller busy signal.
 - **MMU traps:** STALL path checks `i_mem_fault` alongside `i_mem_busy`. On fault, sequencer aborts to S_FETCH; `cpu_top` generates `except_entry` and sets `fault_pending` for vector dispatch. PC is in HOLD during STALL, so faulting instruction can be restarted after TLB refill.
-- **Dispatch spacing:** Format M uses ×4 spacing (0x80–0xBF) to fit multi-step micro-routines (loads: 3 micro-ops, stores: 4 micro-ops).
+- **Dispatch spacing:** Format R uses ×2 spacing split by op[4]: ALU (0x00–0x1E) and SYS (0x40–0x5E). Formula: `{0, op[4], 0, op[3:0], 0}` — pure wiring, zero gates. Format M uses ×4 spacing (0x80–0xBF). Multi-step system ops (RTI, RDSYS, IRET) fit in their ×2 slots without overflowing into adjacent instruction entries.
 
 ### Software Tools
-- **Microcode assembler** (`sw/tools/uasm.py`): Symbolic microcode → $readmemh hex. Defaults: `pc=NEXT branch=FETCH`. Run: `python3 sw/tools/uasm.py input.uasm -o microcode.hex`
+- **Microcode assembler** (`sw/tools/uasm.py`): Symbolic microcode → $readmemh hex. Defaults: `pc=NEXT branch=FETCH`. Validates slot boundaries (detects multi-step routines that overflow their dispatch slot). Run: `python3 sw/tools/uasm.py input.uasm -o microcode.hex`
 - **ISA assembler** (`sw/tools/pasm.py`): Two-pass assembler for Penumbra ISA → $readmemh hex. All 4 formats (R/L/M/B), labels, label references in Format L immediates, pseudo-ops (NOP, RET), branch aliases (BZ/BNZ), `.equ` named constants, built-in sysreg constants (`#MMU`, `#TLB_INDEX`, `#TLB_V`, etc.). Run: `python3 sw/tools/pasm.py input.s -o program.hex`
 - Makefile auto-assembles `.s`/`.uasm` sources into root-level `program.hex`/`microcode.hex` for `$readmemh`; hex files are build artifacts (gitignored)
 
@@ -128,14 +128,14 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 - **Halt detection:** Testbench watches for PC stability (infinite `B .` loop). Future: replace with SYSCALL trap once implemented.
 - **Calling convention:** Return via RET (JMP R13). Program preamble sets LR and calls the test subroutine.
 
-### Implemented Microcode (31 micro-ops)
+### Implemented Microcode (37 micro-ops)
 | Category | Instructions | Notes |
 |----------|-------------|-------|
-| ALU (Format R) | ADD, SUB, AND, OR, XOR, SHL, SHR, SAR, MOV, NOT | CMP/TEST via F-bit gating on SUB/AND |
+| ALU (R-ALU, 0x00–0x1E) | ADD, SUB, AND, OR, XOR, SHL, SHR, SAR, MOV, NOT | CMP/TEST via F-bit gating on SUB/AND |
 | Immediate (Format L) | LLI, LLIS, LUI, INC, DEC, CMPI | |
 | Memory (Format M) | LDW (3 micro-ops), STW (4 micro-ops) | STALL-based, latency-agnostic |
 | Branch (Format B) | All 16 conditions via single BRT entry | BZ/BNZ aliases in assembler |
-| System (Format R) | JMP, EI, DI, WRSYS, RDSYS | RET = JMP R13 (pseudo-op); WRSYS/RDSYS access sysreg bus |
+| System (R-SYS, 0x40–0x5E) | JMP, EI, DI, WRSYS, RDSYS, RTI, IRET, RDSPC | RET = JMP R13 (pseudo); RTI/IRET/RDSYS are 2-micro-op |
 | Exception | int_entry | Shared by IRQ and MMU fault dispatch |
 
 ### Known Bugs Fixed (Notable)
@@ -145,9 +145,8 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 - **fault_pending cleared too early:** Clearing at `ir_valid` (dispatch) meant `vector_num` was wrong one cycle later when `int_entry` read it. Fix: clear at `ctl_pc_load` (int_entry execution).
 
 ### Next Steps (in priority order)
-1. **RTI** — Return from interrupt/exception: restore shadow_PC/SR. Needed to test resume-from-fault (TLB refill then restart).
-2. **Sub-word loads** — LDH/LDB/LDHS/LDBS (byte/half-word extraction in writeback path).
-3. **More system ops** — SYSCALL, GETSR/SETSR, GETUSP/SETUSP.
-4. **BL (branch-and-link)** — Needs special handling to save PC+4 to LR; all branches currently share one dispatch entry.
-5. **Instruction fetch faults** — Detect TLB miss during fetch phase (separate from STALL-based data fault path).
-6. **Memory subsystem** — Cache, bus interface, real memory for hardware.
+1. **Sub-word loads** — LDH/LDB/LDHS/LDBS (byte/half-word extraction in writeback path).
+2. **More system ops** — SYSCALL, GETSR/SETSR, GETUSP/SETUSP.
+3. **BL (branch-and-link)** — Needs special handling to save PC+4 to LR; all branches currently share one dispatch entry.
+4. **Instruction fetch faults** — Detect TLB miss during fetch phase (separate from STALL-based data fault path).
+5. **Memory subsystem** — Cache, bus interface, real memory for hardware.

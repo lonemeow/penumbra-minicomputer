@@ -203,13 +203,15 @@ module cpu_top
     assign fetch_format = mem_rdata[31:30];
 
     // Dispatch: 8-bit address
-    // Format R: {00, op[4:0]}            → 0x00–0x1F
-    // Format L: {01, op[2:0], 00}        → 0x20–0x3C (×4 spacing)
-    // Format M: {10, L, sz[1:0], SE, 00} → 0x80–0xBC (×4 spacing)
-    // Format B: {11, 00000}              → 0x60
+    // Format R: {0, op[4], 0, op[3:0], 0} → ×2 spacing
+    //   ALU (op[4]=0): 0x00–0x1E           16 instructions, 2 entries each
+    //   SYS (op[4]=1): 0x40–0x5E           16 instructions, 2 entries each
+    // Format L: {01, op[2:0], 00}         → 0x20–0x3C (×4 spacing)
+    // Format M: {10, L, sz[1:0], SE, 00}  → 0x80–0xBC (×4 spacing)
+    // Format B: {11, 00000}               → 0x60
     always_comb begin
         case (fetch_format)
-            2'b00:   dispatch_addr = {1'b0, 2'b00, mem_rdata[29:25]};
+            2'b00:   dispatch_addr = {1'b0, mem_rdata[29], 1'b0, mem_rdata[28:25], 1'b0};
             2'b01:   dispatch_addr = {1'b0, 2'b01, mem_rdata[29:27], 2'b00};
             2'b10:   dispatch_addr = {2'b10, mem_rdata[29:26], 2'b00};
             2'b11:   dispatch_addr = 8'h60;
