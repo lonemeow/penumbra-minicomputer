@@ -1,0 +1,140 @@
+; test_tlb_user.s — User/kernel access control via TLB U bit
+;
+; Tests:
+;   1. Map page 0 with U (user+kernel), page 1 without U (kernel-only)
+;   2. IRET to user mode on page 0 — instruction fetch works (has U)
+;   3. User-mode read from page 1 → prot fault (no U for user access)
+;   4. Handler verifies fault info (user-mode bit set in FAULT_STATUS),
+;      remaps page 1 with U, RTIs to retry
+;   5. Retried user-mode read succeeds
+;   6. User-mode code does BREAK → trap back to supervisor → testbench stops
+;
+; This tests the fundamental user/kernel memory isolation mechanism:
+; pages without the U bit are invisible to user-mode processes.
+;
+; Result: R1=1 PASS, R1=0 FAIL
+
+.equ USER_RWX,  0xF9       ; V|R|W|X|U|G — full access, user-accessible
+.equ KERN_RWX,  0xB9       ; V|R|W|X|G   — full access, kernel-only (no U)
+.equ FAULT_PROT, 2         ; FAULT_STATUS[3:0]
+.equ FSTAT_R,    0x100     ; bit [8] = read access
+.equ FSTAT_USR,  0x800     ; bit [11] = user-mode access
+
+; ═══════════════════════════════════════════════════════════════
+; Vector table
+; ═══════════════════════════════════════════════════════════════
+.org 0x00
+    B    start              ; 0x00: reset
+    B    fail               ; 0x04: IRQ
+    B    fail               ; 0x08: TLB miss
+    B    prot_handler       ; 0x0C: protection fault
+
+; ═══════════════════════════════════════════════════════════════
+; Protection fault handler (runs in supervisor mode)
+;
+; Uses R8, R9, R13 as scratch (safe — user code uses R2-R5)
+; R10 = expected FAULT_ADDR (set by supervisor before IRET)
+; ═══════════════════════════════════════════════════════════════
+prot_handler:
+    ; Verify FAULT_ADDR = 0x1000
+    RDSYS R8, #MMU, #FAULT_ADDR
+    CMP   R8, R10
+    BNE   fail
+
+    ; Verify fault type = FAULT_PROT
+    RDSYS R8, #MMU, #FAULT_STATUS
+    LLI   R9, #0x0F
+    MOV   R13, R8
+    AND   R13, R9
+    CMPI  R13, #FAULT_PROT
+    BNE   fail
+
+    ; Verify user-mode bit is set (bit 11)
+    LLI   R9, #FSTAT_USR
+    MOV   R13, R8
+    AND   R13, R9
+    CMP   R13, R9
+    BNE   fail
+
+    ; Verify read access bit (bit 8)
+    LLI   R9, #FSTAT_R
+    MOV   R13, R8
+    AND   R13, R9
+    CMP   R13, R9
+    BNE   fail
+
+    ; Remap page 1 with U bit so user retry succeeds
+    LLI   R8, #1
+    WRSYS R8, #MMU, #TLB_INDEX
+    LLI   R9, #0x0100           ; VPN=1, ASID=0
+    WRSYS R9, #MMU, #TLB_VPN
+    LLI   R9, #0x10F9           ; PTE: PPN=1, V|R|W|X|U|G (add U)
+    WRSYS R9, #MMU, #TLB_PTE
+
+    ; Return to user mode — retries the faulting LDW
+    RTI
+
+; ═══════════════════════════════════════════════════════════════
+; User-mode code (executes on page 0 which has U bit)
+; Uses R2-R5 only (handler uses R8,R9,R13)
+; ═══════════════════════════════════════════════════════════════
+user_code:
+    ; Read from page 1 (kernel-only) — should fault first time,
+    ; succeed after handler remaps with U
+    LLI  R3, #0x1000
+    LDW  R4, [R3]
+
+    ; If we get here, the retry succeeded — verify value
+    LLI  R5, #0xFACE
+    CMP  R4, R5
+    BNE  fail
+
+    ; PASS — user code successfully accessed remapped page
+    LLI  R1, #1
+    BREAK
+
+; ═══════════════════════════════════════════════════════════════
+; Main setup (supervisor mode)
+; ═══════════════════════════════════════════════════════════════
+start:
+    LLI  R1, #0               ; assume fail
+
+    ; ── Plant sentinel at physical 0x1000 (MMU off) ───────────
+    LLI  R2, #0xFACE
+    LLI  R3, #0x1000
+    STW  R2, [R3]
+
+    ; ── Map VPN 0 → PPN 0 (user-accessible code page) ────────
+    LLI  R2, #0
+    WRSYS R2, #MMU, #TLB_INDEX
+    WRSYS R2, #MMU, #TLB_VPN
+    LLI  R3, #USER_RWX         ; V|R|W|X|U|G
+    WRSYS R3, #MMU, #TLB_PTE
+
+    ; ── Map VPN 1 → PPN 1 (kernel-only, no U) ────────────────
+    LLI  R2, #1
+    WRSYS R2, #MMU, #TLB_INDEX
+    LLI  R3, #0x0100           ; VPN=1, ASID=0
+    WRSYS R3, #MMU, #TLB_VPN
+    LLI  R3, #0x10B9           ; PTE: PPN=1, V|R|W|X|G (no U!)
+    WRSYS R3, #MMU, #TLB_PTE
+
+    ; ── Enable MMU ────────────────────────────────────────────
+    LLI  R6, #1
+    WRSYS R6, #MMU, #MMUCR
+
+    ; ── Set up handler expectations ───────────────────────────
+    LLI  R10, #0x1000          ; expected FAULT_ADDR
+
+    ; ── Switch to user mode via IRET ──────────────────────────
+    ; SR: S=0 (user mode), I=0
+    ; PC: user_code label
+    LLI  R2, #0                ; user-mode SR
+    LLI  R3, user_code
+    IRET R2, R3
+
+    ; Should never reach here
+    B    fail
+
+fail:
+    BREAK

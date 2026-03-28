@@ -223,11 +223,12 @@ def assemble_line(mnemonic, operands, addr, labels, line_num, constants=None):
                 raise ValueError(f"bad register '{operands[0]}'")
             spec = operands[1].upper()
             if spec == "SSR":
-                return encode_format_r(29, rd, 0, 0)
+                rdspc_op = FORMAT_R_OPS["_RDSPC_SSR"][0]
             elif spec == "SPC":
-                return encode_format_r(30, rd, 0, 0)
+                rdspc_op = FORMAT_R_OPS["_RDSPC_SPC"][0]
             else:
                 raise ValueError(f"RDSPC: unknown special register '{operands[1]}', expected SSR or SPC")
+            return encode_format_r(rdspc_op, rd, 0, 0)
 
         # IRET Rd, Rs — SR ← Rd, PC ← Rs (atomic return to different context)
         if mn == "IRET":
@@ -239,7 +240,7 @@ def assemble_line(mnemonic, operands, addr, labels, line_num, constants=None):
                 raise ValueError(f"bad register '{operands[0]}'")
             if rs is None:
                 raise ValueError(f"bad register '{operands[1]}'")
-            return encode_format_r(31, rd, rs, 0)
+            return encode_format_r(op, rd, rs, 0)
 
         # WRSYS Rd, #dev, #reg  /  RDSYS Rd, #dev, #reg
         # Encoding: Format R with dev in spare[15:12], reg in spare[11:8]
