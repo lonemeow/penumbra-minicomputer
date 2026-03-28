@@ -60,8 +60,8 @@ endif
 		-o ../V$(MOD) \
 		$(PKG_SV) $$(find rtl -name '$(MOD).sv') sim/$(TB).cpp
 	@# Assemble program and microcode for $readmemh
-	@test -f sim/programs/$(PROG).s && $(PASM) sim/programs/$(PROG).s -o program.hex || true
-	@test -f sw/microcode/microcode.uasm && $(UASM) sw/microcode/microcode.uasm -o microcode.hex || true
+	@if test -f sim/programs/$(PROG).s; then $(PASM) sim/programs/$(PROG).s -o program.hex; fi
+	@if test -f sw/microcode/microcode.uasm; then $(UASM) sw/microcode/microcode.uasm -o microcode.hex; fi
 	@echo "── Running $(MOD) testbench ──"
 	@$(DOCKER_RUN) --entrypoint ./$(BUILD_DIR)/V$(MOD) $(DOCKER_IMAGE)
 
@@ -90,7 +90,12 @@ test:
 	@$(UASM) sw/microcode/microcode.uasm -o microcode.hex
 	@pass=0; fail=0; failed=""; \
 	for prog in $(TEST_PROGS); do \
-		$(PASM) sim/programs/$$prog.s -o program.hex 2>/dev/null; \
+		if ! $(PASM) sim/programs/$$prog.s -o program.hex; then \
+			printf "  \033[31mFAIL\033[0m  %s (assembler error)\n" "$$prog"; \
+			fail=$$((fail + 1)); \
+			failed="$$failed $$prog"; \
+			continue; \
+		fi; \
 		if $(DOCKER_RUN) --entrypoint ./$(BUILD_DIR)/Vcpu_top $(DOCKER_IMAGE) \
 			> /dev/null 2>&1; then \
 			printf "  \033[32mPASS\033[0m  %s\n" "$$prog"; \
