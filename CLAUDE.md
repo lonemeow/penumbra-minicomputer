@@ -47,7 +47,7 @@ The architecture is fully specified in `doc/`. Key specs:
 - **Important:** Always `rm -rf build/<mod>.verilator build/V<mod>` before rebuilding if you suspect stale binaries (WSL2 /mnt/c filesystem can have stale mtimes)
 
 ## Current Status
-The CPU runs real programs in simulation. A tail-recursive Fibonacci routine (fib(10)=55) executes correctly in 254 cycles. RTL is built bottom-up from leaf modules. The 49-bit micro-word format is finalized (bits [1:0] = ei_set/di_set).
+The CPU runs real programs in simulation with the full CPU → MMU → cache → memory path wired. The TLB is implemented (64-entry 2-way SA, fully software-managed) and WRSYS/RDSYS instructions can read/write MMU system registers. RTL is built bottom-up from leaf modules. The 49-bit micro-word format is finalized (bits [1:0] = ei_set/di_set).
 
 ### Implemented RTL Modules (all tested)
 | Module | File | Tests | Description |
@@ -68,7 +68,7 @@ The CPU runs real programs in simulation. A tail-recursive Fibonacci routine (fi
 | Datapath top | `rtl/core/datapath.sv` | 15/15 | Structural wiring of all modules, IR reg, reg addr routing, F-bit gating |
 | Microcode ROM | `rtl/core/ucode_rom.sv` | — | 256×49-bit ROM, $readmemh from microcode.hex |
 | Sequencer | `rtl/core/sequencer.sv` | — | Micro-PC, branch_cond decode, EI/DI tracking, ei_shadow_clr |
-| CPU top | `rtl/core/cpu_top.sv` | 25/25 | Full integration: datapath + sequencer + ROM + MMU + cache + memory + fetch + IRQ |
+| CPU top | `rtl/core/cpu_top.sv` | 2 progs | Full integration: datapath + sequencer + ROM + MMU + cache + memory + fetch + IRQ + WRSYS/RDSYS |
 | Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_*, ACC_*, SYSREG_MMU_* constants |
 | TLB | `rtl/mmu/tlb.sv` | 111/111 | 64-entry 2-way SA, parallel lookup, one-hot permission check, indexed sysreg R/W |
 | MMU | `rtl/mmu/mmu.sv` | — | Bypass/translate mux, sysreg routing, fault latching, TLB instantiation |
@@ -103,22 +103,29 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 - Makefile auto-copies `program.hex` and `microcode.hex` to project root for `$readmemh`
 
 ### Test Convention
-- **Program runner** (`sim/tb_cpu_prog.cpp`): Generic testbench that runs a program to halt, checks R1. No cycle-by-cycle internal inspection.
-- **Calling convention:** Result in R1, return via RET (JMP R13). Program preamble sets LR and calls the test subroutine. Compatible with future boot ROM.
-- **Halt detection:** Testbench watches for PC stability (infinite `B .` loop).
+- **Program runner** (`sim/tb_cpu_prog.cpp`): Generic testbench that runs a program to halt, checks R1 for pass/fail. No cycle-by-cycle internal inspection.
+- **Pass/fail convention:** R1 = 1 means PASS, R1 = 0 means FAIL. Tests self-check internally and set R1 accordingly.
+- **Halt detection:** Testbench watches for PC stability (infinite `B .` loop). Future: replace with SYSCALL trap once implemented.
+- **Calling convention:** Return via RET (JMP R13). Program preamble sets LR and calls the test subroutine.
 
-### Implemented Microcode (28 micro-ops)
+### Implemented Microcode (31 micro-ops)
 | Category | Instructions | Notes |
 |----------|-------------|-------|
 | ALU (Format R) | ADD, SUB, AND, OR, XOR, SHL, SHR, SAR, MOV, NOT | CMP/TEST via F-bit gating on SUB/AND |
 | Immediate (Format L) | LLI, LLIS, LUI, INC, DEC, CMPI | |
 | Memory (Format M) | LDW (3 micro-ops), STW (4 micro-ops) | STALL-based, latency-agnostic |
 | Branch (Format B) | All 16 conditions via single BRT entry | BZ/BNZ aliases in assembler |
-| System (Format R) | JMP, EI, DI | RET = JMP R13 (pseudo-op) |
+| System (Format R) | JMP, EI, DI, WRSYS, RDSYS | RET = JMP R13 (pseudo-op); WRSYS/RDSYS access sysreg bus |
 | Exception | int_entry | Dispatch-time IRQ check |
 
+### Known Bugs Fixed (Notable)
+- **IR corruption from shared mem_rdata bus:** ir_valid lingered one cycle into S_EXEC, causing IR to reload when mem_rdata was muxed to sysreg data. Fix: `ir_load = ir_valid && fetch_active`.
+- **BR_PRIV used advance instead of go_fetch:** Caused sequencer to fall through into adjacent microcode entries instead of returning to S_FETCH.
+- **reg_w_sel gated by executing:** Could change at same posedge as register write. Ungated to keep address stable.
+
 ### Next Steps (in priority order)
-1. **Sub-word loads** — LDH/LDB/LDHS/LDBS (byte/half-word extraction in writeback path).
-2. **More system ops** — RTI, SYSCALL, GETSR/SETSR, GETUSP/SETUSP.
-3. **BL (branch-and-link)** — Needs special handling to save PC+4 to LR; all branches currently share one dispatch entry.
-4. **Memory subsystem** — Cache, bus interface, MMU for real hardware.
+1. **TLB integration test** — Write a program that loads TLB entries via WRSYS and runs with M=1 (translated addresses).
+2. **Sub-word loads** — LDH/LDB/LDHS/LDBS (byte/half-word extraction in writeback path).
+3. **More system ops** — RTI, SYSCALL, GETSR/SETSR, GETUSP/SETUSP.
+4. **BL (branch-and-link)** — Needs special handling to save PC+4 to LR; all branches currently share one dispatch entry.
+5. **Memory subsystem** — Cache, bus interface, real memory for hardware.

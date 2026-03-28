@@ -1,17 +1,22 @@
 ; test_fib.s — Fibonacci test (tail-recursive / iterative)
 ;
-; Calling convention:
-;   Result returned in R1
-;   Returns via RET (JMP R13)
-;
-; Preamble simulates boot ROM: sets LR, calls test, halts on return.
+; Convention: R1 = 1 on pass, R1 = 0 on fail.
+; Computes fib(10), checks result = 55.
 
 ; ── Boot preamble ────────────────────────────────────────────
-        LLI  LR, #halt         ; R13 = return address
+        LLI  LR, #check        ; R13 = return address
         B    fib               ; call test
 
+check:
+        ; R1 = fib(10) result, expect 55
+        CMPI R1, #55
+        BNE  fail
+        LLI  R1, #1            ; PASS
+        B    halt
+fail:
+        LLI  R1, #0            ; FAIL
 halt:
-        B    halt              ; infinite loop — testbench detects this
+        B    halt              ; testbench detects stable PC
 
 ; ── fib: compute fib(N) iteratively ──────────────────────────
 ; Algorithm: a=0, b=1, iterate N times: (a, b) = (b, a+b)
