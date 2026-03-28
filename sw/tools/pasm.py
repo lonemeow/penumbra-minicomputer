@@ -207,28 +207,29 @@ def assemble_line(mnemonic, operands, addr, labels, line_num, constants=None):
     if mn == "RET":
         return encode_format_r(24, 0, 13, 0)  # JMP R13
 
+    # ── RDSPC Rd, SSR / RDSPC Rd, SPC — read shadow registers ──
+    # (handled before FORMAT_R_OPS lookup since internal keys are _RDSPC_*)
+    if mn == "RDSPC":
+        if len(operands) != 2:
+            raise ValueError("RDSPC expects Rd, SSR or Rd, SPC")
+        rd = parse_reg(operands[0])
+        if rd is None:
+            raise ValueError(f"bad register '{operands[0]}'")
+        spec = operands[1].upper()
+        if spec == "SSR":
+            rdspc_op = FORMAT_R_OPS["_RDSPC_SSR"][0]
+        elif spec == "SPC":
+            rdspc_op = FORMAT_R_OPS["_RDSPC_SPC"][0]
+        else:
+            raise ValueError(f"RDSPC: unknown special register '{operands[1]}', expected SSR or SPC")
+        return encode_format_r(rdspc_op, rd, 0, 0)
+
     # ── Format R ──
     if mn in FORMAT_R_OPS:
         op, needs_rs, f_bit = FORMAT_R_OPS[mn]
 
         if mn in ("SYSCALL", "BREAK", "RTI", "ICACHE_INV", "EI", "DI"):
             return encode_format_r(op, 0, 0, 0)
-
-        # RDSPC Rd, SSR / RDSPC Rd, SPC — read shadow registers
-        if mn == "RDSPC":
-            if len(operands) != 2:
-                raise ValueError("RDSPC expects Rd, SSR or Rd, SPC")
-            rd = parse_reg(operands[0])
-            if rd is None:
-                raise ValueError(f"bad register '{operands[0]}'")
-            spec = operands[1].upper()
-            if spec == "SSR":
-                rdspc_op = FORMAT_R_OPS["_RDSPC_SSR"][0]
-            elif spec == "SPC":
-                rdspc_op = FORMAT_R_OPS["_RDSPC_SPC"][0]
-            else:
-                raise ValueError(f"RDSPC: unknown special register '{operands[1]}', expected SSR or SPC")
-            return encode_format_r(rdspc_op, rd, 0, 0)
 
         # IRET Rd, Rs — SR ← Rd, PC ← Rs (atomic return to different context)
         if mn == "IRET":

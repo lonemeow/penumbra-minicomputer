@@ -70,7 +70,7 @@ The CPU runs real programs in simulation with the full CPU → MMU → cache →
 | Datapath top | `rtl/core/datapath.sv` | 15/15 | Structural wiring of all modules, IR reg, reg addr routing, F-bit gating |
 | Microcode ROM | `rtl/core/ucode_rom.sv` | — | 256×49-bit ROM, $readmemh from microcode.hex |
 | Sequencer | `rtl/core/sequencer.sv` | — | Micro-PC, branch_cond decode, EI/DI tracking, ei_shadow_clr |
-| CPU top | `rtl/core/cpu_top.sv` | 13 progs | Full integration: datapath + sequencer + ROM + MMU + sysid + cache + memory + fetch + IRQ + MMU traps + BREAK + WRSYS/RDSYS |
+| CPU top | `rtl/core/cpu_top.sv` | 14 progs | Full integration: datapath + sequencer + ROM + MMU + sysid + cache + memory + fetch + IRQ + MMU traps + BREAK + privilege traps + WRSYS/RDSYS |
 | Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_*, ACC_*, VEC_*, SYSDEV_*, SYSREG_* constants |
 | System ID | `rtl/soc/sysid.sv` | via cpu_top | Read-only MACHINE_ID register (Penumbra/1), sysreg device 1 |
 | TLB | `rtl/mmu/tlb.sv` | 111/111 | 64-entry 2-way SA, parallel lookup, one-hot permission check, indexed sysreg R/W |
@@ -79,14 +79,14 @@ The CPU runs real programs in simulation with the full CPU → MMU → cache →
 | Simple memory | `rtl/soc/simple_mem.sv` | — | 4K×32 synchronous SRAM model, $readmemh, 1-cycle read busy |
 
 ### Exception and Interrupt Handling
-Three sources share the same `except_entry` → `int_entry` → vector dispatch path:
+Four sources share the same `except_entry` → `int_entry` → vector dispatch path:
 
 **External IRQ (asynchronous):**
 - **Check point:** Dispatch-time (when `ir_valid` fires, before entering S_EXEC)
 - **Check logic:** `irq_taken = i_irq & sr_i & !ei_shadow` (combinational, safe because sr_i is registered)
 - **Action:** Override dispatch to 0x70 (int_entry), pulse `except_entry` (saves shadow PC/SR, sets S=1/I=0)
 - **EI:** Sets sr_i=1 and ei_shadow=1; ei_shadow cleared after next instruction completes (ei_pending tracking in sequencer)
-- **DI:** Sets sr_i=0 immediately; privileged (uses branch=PRIV in microcode)
+- **DI:** Sets sr_i=0 immediately; privileged (checked at dispatch, never executes in user mode)
 
 **MMU data fault (synchronous):**
 - **Check point:** During STALL on load/store micro-ops (sequencer checks `i_mem_fault`)
@@ -94,7 +94,7 @@ Three sources share the same `except_entry` → `int_entry` → vector dispatch 
 - **Action:** `fault_except` pulse (once per fault via `!fault_pending` guard) → `except_entry` saves shadow PC/SR, sets S=1/I=0. Sequencer aborts STALL (`go_fetch`), returns to S_FETCH.
 - **Dispatch:** `fault_pending` flag overrides next dispatch to 0x70 with `fault_vector` (VEC_TLB_MISS=2 or VEC_TLB_PROT=3). Cleared when int_entry executes (`ctl_pc_load`), one cycle after dispatch — so `vector_num` reads the correct fault vector during int_entry.
 - **PC preservation:** PC is in HOLD during STALL, so shadow_PC = faulting instruction. Handler can fill TLB and RTI to restart.
-- **Priority:** fault_pending > BREAK > IRQ (fault sets SR.I=0, so irq_taken is false at next dispatch)
+- **Priority:** fault_pending > BREAK > priv_taken > IRQ (fault sets SR.I=0, so irq_taken is false at next dispatch)
 - **Instruction fetch faults:** Not yet handled — kernel code assumed identity-mapped.
 
 **BREAK instruction (synchronous):**
@@ -103,11 +103,20 @@ Three sources share the same `except_entry` → `int_entry` → vector dispatch 
 - **Testbench:** `o_halted` pulses for one cycle at BREAK dispatch — testbench stops immediately. CPU continues with the exception normally (no special halt state).
 - **Unprivileged code:** BREAK just traps to the kernel, same as any exception. OS can install a BREAK handler for debugging.
 
+**Privilege violation (synchronous):**
+- **Check point:** Dispatch-time. Privileged instructions are in the SYS zone (Format R, `op[4]=1`, dispatch 0x40–0x5E) except JMP (0x50) and EI (0x52). Detected by `is_sys_zone && !is_priv_exempt && !sr_s`.
+- **Action:** Triggers `except_entry` like IRQ, vectors to VEC_PRIV (4). The instruction never executes — no state corruption. Shadow PC points at the faulting instruction.
+- **Design:** Privilege was originally checked as the last micro-op (`branch=PRIV`), but this allowed the instruction to execute before trapping. Moved to dispatch time so the instruction is blocked before any micro-ops run.
+
 **Vector table:** Fixed **physical** addresses, MMU bypassed for the vector fetch. `vector_addr = {26'b0, vector_num, 2'b00}` — word-aligned entries at physical 0x00. VEC_RESET=0, VEC_IRQ=1, VEC_TLB_MISS=2, VEC_TLB_PROT=3, VEC_PRIV=4, VEC_SYSCALL=5, VEC_BREAK=6. After int_entry completes, `vector_fetch` flag forces MMU bypass for one fetch cycle, cleared on ir_valid. No TLB mapping needed for the vector page — eliminates nested TLB miss on exception entry.
+
+**Dispatch-time vector latching:** Dispatch-time exceptions (BREAK, priv, IRQ) use `dispatch_pending`/`dispatch_vector` to register the vector number when `ir_valid` fires. This is necessary because `vector_num` is consumed one cycle later by int_entry's `a_src=VECTOR`, but the combinational inputs (`mem_rdata`, `sr_s`) have changed by then — `mem_rdata` reads from MAR (not PC) during S_EXEC, and `sr_s` flips to 1 from `except_entry`. MMU faults already had this pattern via `fault_pending`/`fault_vector`.
 
 **Key bugs found:**
 - `ei_pending` clear condition must include `executing` — during S_FETCH, `go_fetch` can be stale from the previous micro-word's ROM output
 - `fault_pending` must NOT clear at `ir_valid` (dispatch time) — `vector_num` is read one cycle later during int_entry execution. Clear at `ctl_pc_load` instead.
+- **Dispatch-time vector_num was combinational:** `break_taken`/`priv_taken`/`irq_taken` depend on `mem_rdata` and `sr_s`, which change between dispatch and int_entry. Fixed by registering vector at dispatch time (`dispatch_pending`/`dispatch_vector`).
+- **RDSPC unreachable in assembler:** The `RDSPC` handler in pasm.py was nested inside `if mn in FORMAT_R_OPS`, but `"RDSPC"` is not a key (internal keys are `_RDSPC_SSR`/`_RDSPC_SPC`). Code was dead — any test using RDSPC silently ran stale hex. Fixed by moving handler before the guard.
 
 ### Register Address Routing
 The micro-word's `reg_a_sel`, `reg_b_sel`, `reg_w_sel` fields use a 4-bit encoding:
@@ -143,11 +152,11 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 | Memory (Format M) | LDW (3 micro-ops), STW (4 micro-ops) | STALL-based, latency-agnostic |
 | Branch (Format B) | All 16 conditions via single BRT entry | BZ/BNZ aliases in assembler |
 | System (R-SYS, 0x40–0x5E) | JMP, EI, DI, WRSYS, RDSYS, RTI, IRET, RDSPC, BREAK | RET = JMP R13 (pseudo); RTI/IRET/RDSYS are 2-micro-op; BREAK intercepted at dispatch |
-| Exception | int_entry | Shared by IRQ and MMU fault dispatch |
+| Exception | int_entry | Shared by IRQ, MMU fault, BREAK, and privilege violation dispatch |
 
 ### Known Bugs Fixed (Notable)
 - **IR corruption from shared mem_rdata bus:** ir_valid lingered one cycle into S_EXEC, causing IR to reload when mem_rdata was muxed to sysreg data. Fix: `ir_load = ir_valid && fetch_active`.
-- **BR_PRIV used advance instead of go_fetch:** Caused sequencer to fall through into adjacent microcode entries instead of returning to S_FETCH.
+- **BR_PRIV used advance instead of go_fetch:** (Historical — BR_PRIV removed; privilege now checked at dispatch time in cpu_top.)
 - **reg_w_sel gated by executing:** Could change at same posedge as register write. Ungated to keep address stable.
 - **fault_pending cleared too early:** Clearing at `ir_valid` (dispatch) meant `vector_num` was wrong one cycle later when `int_entry` read it. Fix: clear at `ctl_pc_load` (int_entry execution).
 - **Vector fetch corrupted fault registers:** MMU bypass for vector fetch only gated the output mux, not the TLB lookup or fault latching. The TLB still reported a miss for the unmapped vector page, overwriting `FAULT_ADDR` with the vector address. Fix: gate `i_lookup_en` and fault latching with `!i_force_bypass`.

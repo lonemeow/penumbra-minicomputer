@@ -91,7 +91,7 @@ FIELDS = [
     ("alu_start", 8, 8, {}),
     ("branch", 7, 5, {
         "SEQ": 0, "FETCH": 1, "STALL": 2, "BRT": 3, "BRF": 4,
-        "PRIV": 5, "SKIP": 6,
+        "SKIP": 6,
     }),
     ("fwd_offset", 4, 2, {}),
     ("ei_set", 1, 1, {}),

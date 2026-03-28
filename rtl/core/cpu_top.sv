@@ -123,7 +123,7 @@ module cpu_top
         .i_mem_busy      (cache_busy),
         .i_mem_fault     (data_fault),
         .i_cond_result   (cond_result),
-        .i_sr_s          (sr_s),
+        // .i_sr_s removed — privilege check is now at dispatch time
         .o_upc           (upc),
         .i_uword         (uword),
         .o_a_src         (ctl_a_src),
@@ -223,7 +223,7 @@ module cpu_top
     // Exception and interrupt handling
     // ══════════════════════════════════════════════════════════
     //
-    // Three sources of exceptions:
+    // Four sources of exceptions:
     //
     // 1. External IRQ (asynchronous) — checked at dispatch time
     //    (when ir_valid fires, before entering S_EXEC).
@@ -238,7 +238,12 @@ module cpu_top
     //    to VEC_BREAK. Works from any privilege level (software
     //    breakpoint). Pulses o_break for testbench/debug observation.
     //
-    // Priority: fault_pending > BREAK > IRQ
+    // 4. Privilege violation — detected at dispatch time. Privileged
+    //    instructions (SYS zone except JMP/EI) attempted in user mode
+    //    trap to VEC_PRIV. The instruction never executes, so no
+    //    state is corrupted.
+    //
+    // Priority: fault_pending > BREAK > priv_taken > IRQ
 
     logic        irq_taken;
     logic        except_entry;
@@ -273,15 +278,55 @@ module cpu_top
     logic break_taken;
     assign break_taken = (dispatch_addr == 8'h4A);
 
+    // ── Privilege violation detection at dispatch ─────────────
+    // Privileged instructions are in the SYS zone (Format R, op[4]=1,
+    // dispatch 0x40–0x5E) EXCEPT JMP (0x50) and EI (0x52).
+    // BREAK (0x4A) is also unprivileged but is caught by break_taken
+    // with higher priority, so it never reaches priv_taken.
+    logic is_sys_zone;
+    logic is_priv_exempt;
+    logic priv_taken;
+
+    assign is_sys_zone   = (fetch_format == 2'b00) && mem_rdata[29];  // Format R, op[4]=1
+    assign is_priv_exempt = (dispatch_addr == 8'h50) ||               // JMP
+                            (dispatch_addr == 8'h52);                 // EI
+    assign priv_taken     = is_sys_zone && !is_priv_exempt && !sr_s;
+
     assign irq_taken    = i_irq & sr_i & !ei_shadow;
-    assign except_entry = fault_except | (break_taken & ir_valid) | (irq_taken & ir_valid);
-    assign vector_num   = fault_pending ? fault_vector :
-                          break_taken   ? VEC_BREAK :
-                                          VEC_IRQ;
+
+    // ── Dispatch-time exception: register the vector ─────────
+    // break_taken, priv_taken, and irq_taken are combinational from
+    // mem_rdata which is only valid during the dispatch cycle (ir_valid).
+    // By the time int_entry executes (next cycle), mem_rdata has changed
+    // (fetch_active=0 → reads from MAR not PC) and sr_s has flipped to 1.
+    // We must latch the vector at dispatch time, like fault_vector.
+    logic        dispatch_pending;
+    logic [3:0]  dispatch_vector;
+
+    always_ff @(posedge i_clk) begin
+        if (i_rst) begin
+            dispatch_pending <= 1'b0;
+            dispatch_vector  <= 4'b0;
+        end else if (ir_valid && (break_taken || priv_taken || irq_taken)) begin
+            dispatch_pending <= 1'b1;
+            dispatch_vector  <= break_taken ? VEC_BREAK :
+                                priv_taken  ? VEC_PRIV :
+                                              VEC_IRQ;
+        end else if (dispatch_pending && ctl_pc_load) begin
+            // Clear after int_entry executes (same timing as fault_pending)
+            dispatch_pending <= 1'b0;
+        end
+    end
+
+    assign except_entry = fault_except | (break_taken & ir_valid) |
+                          (priv_taken & ir_valid) | (irq_taken & ir_valid);
+    assign vector_num   = fault_pending   ? fault_vector :
+                          dispatch_pending ? dispatch_vector :
+                                             VEC_IRQ;
 
     // Override dispatch address when any exception taken
     logic [7:0] effective_dispatch;
-    assign effective_dispatch = (fault_pending | break_taken | irq_taken) ? 8'h70 : dispatch_addr;
+    assign effective_dispatch = (fault_pending | dispatch_pending | break_taken | priv_taken | irq_taken) ? 8'h70 : dispatch_addr;
 
     // Debug observation: pulses when BREAK dispatches (testbench stop trigger)
     assign o_halted = break_taken & ir_valid;

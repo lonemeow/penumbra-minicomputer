@@ -28,7 +28,7 @@ module sequencer
     input  logic        i_mem_busy,       // Memory/cache busy
     input  logic        i_mem_fault,      // MMU fault (TLB miss / protection)
     input  logic        i_cond_result,    // Condition evaluator output
-    input  logic        i_sr_s,           // Supervisor bit (for PRIV check)
+    // i_sr_s removed — privilege check moved to dispatch time in cpu_top
 
     // ── Microcode ROM interface ──────────────────────────────
     output logic [7:0]  o_upc,            // Micro-PC → ROM address
@@ -130,7 +130,7 @@ module sequencer
     localparam logic [2:0] BR_STALL = 3'd2;
     localparam logic [2:0] BR_BRT   = 3'd3;
     localparam logic [2:0] BR_BRF   = 3'd4;
-    localparam logic [2:0] BR_PRIV  = 3'd5;
+    // BR_PRIV removed — privilege check moved to dispatch time in cpu_top
     localparam logic [2:0] BR_SKIP  = 3'd6;
 
     // ── Unified busy signal ──────────────────────────────────
@@ -158,13 +158,7 @@ module sequencer
             end
             BR_BRT:   go_fetch = 1'b1;
             BR_BRF:   go_fetch = 1'b1;
-            BR_PRIV: begin
-                // Privileged instruction: always go to fetch.
-                // In supervisor mode: normal fetch of next instruction.
-                // In user mode: fetch unit detects the violation.
-                // PRIV must only be used on the LAST micro-op of an instruction.
-                go_fetch = 1'b1;
-            end
+            // BR_PRIV (3'd5) removed — privilege now checked at dispatch in cpu_top
             BR_SKIP: advance = 1'b1;    // fwd_offset handled in next_upc calc
             default: ;
         endcase

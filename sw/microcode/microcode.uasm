@@ -124,10 +124,10 @@ cmpi:
 # ── WRSYS Rd, #dev, #reg (op=16, dispatch=0x40) ──────────────
 # Write register Rd to system register. A-bus carries Rd value,
 # sys_cycle + sys_we tell the target device to latch it.
-# Privileged — branch=PRIV faults in user mode.
+# Privileged — cpu_top blocks dispatch in user mode (VEC_PRIV trap).
 .org 0x40
 wrsys:
-  reg_a=IR_RD sys_cycle=1 sys_we=1 branch=PRIV
+  reg_a=IR_RD sys_cycle=1 sys_we=1
 
 # ── RDSYS Rd, #dev, #reg (op=17, dispatch=0x42) ──────────────
 # Read system register into Rd. Two micro-ops:
@@ -138,7 +138,7 @@ wrsys:
 .org 0x42
 rdsys:
   sys_cycle=1 mdr_load_mem=1 pc=HOLD branch=SEQ
-  reg_w=IR_RD w_en=1 wmux=MDR branch=PRIV
+  reg_w=IR_RD w_en=1 wmux=MDR
 
 # ── BREAK (op=21, dispatch=0x4A) ──────────────────────────────
 # Software breakpoint: intercepted at dispatch time by cpu_top.
@@ -155,7 +155,7 @@ rdsys:
 .org 0x4C
 rti:
   a_src=SHADOW_SR alu=PASS_A sr_load=1 pc=HOLD branch=SEQ
-  a_src=SHADOW_PC pc=ABUS branch=PRIV
+  a_src=SHADOW_PC pc=ABUS
 
 # ── JMP Rs (op=24, dispatch=0x50) ────────────────────────────
 # PC = Rs (register indirect jump; RET = JMP R13)
@@ -173,7 +173,7 @@ ei:
 # Disable interrupts: SR.I = 0, immediate effect (privileged)
 .org 0x54
 di:
-  di_set=1 branch=PRIV
+  di_set=1
 
 # ── IRET Rd, Rs (op=27, dispatch=0x56) ───────────────────────
 # Atomic return to a different context: SR ← Rd, PC ← Rs.
@@ -183,21 +183,21 @@ di:
 .org 0x56
 iret:
   reg_a=IR_RD alu=PASS_A sr_load=1 pc=HOLD branch=SEQ
-  reg_a=IR_RS pc=ABUS branch=PRIV
+  reg_a=IR_RS pc=ABUS
 
 # ── RDSPC Rd, SSR (op=29, dispatch=0x5A) ─────────────────────
 # Read shadow SR into Rd. Privileged.
 # shadow_SR → A-bus → ALU PASS_A → R-bus → Rd
 .org 0x5A
 rdspc_ssr:
-  a_src=SHADOW_SR alu=PASS_A reg_w=IR_RD w_en=1 wmux=RBUS branch=PRIV
+  a_src=SHADOW_SR alu=PASS_A reg_w=IR_RD w_en=1 wmux=RBUS
 
 # ── RDSPC Rd, SPC (op=30, dispatch=0x5C) ─────────────────────
 # Read shadow PC into Rd. Privileged.
 # shadow_PC → A-bus → ALU PASS_A → R-bus → Rd
 .org 0x5C
 rdspc_spc:
-  a_src=SHADOW_PC alu=PASS_A reg_w=IR_RD w_en=1 wmux=RBUS branch=PRIV
+  a_src=SHADOW_PC alu=PASS_A reg_w=IR_RD w_en=1 wmux=RBUS
 
 # ═══════════════════════════════════════════════════════════════
 # Format B — Branches (0x60)
