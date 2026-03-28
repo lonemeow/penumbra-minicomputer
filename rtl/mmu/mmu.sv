@@ -80,10 +80,12 @@ module mmu
             tlb_vpn_reg   <= 32'b0;
         end else begin
             // Latch fault info on TLB miss or protection fault
-            if (mmu_enabled && i_req && tlb_fault) begin
+            // Gated by !i_force_bypass so vector fetches don't overwrite
+            // fault info from the original exception.
+            if (mmu_enabled && i_req && !i_force_bypass && tlb_fault) begin
                 fault_addr   <= i_vaddr;
                 fault_status <= tlb_fault_status;
-            end else if (mmu_enabled && i_req && !tlb_hit) begin
+            end else if (mmu_enabled && i_req && !i_force_bypass && !tlb_hit) begin
                 // TLB miss (no matching entry)
                 fault_addr   <= i_vaddr;
                 fault_status <= {20'b0, i_user_mode, i_access_type, 4'b0, FAULT_TLB_MISS};
@@ -137,7 +139,7 @@ module mmu
         .i_access_type  (i_access_type),
         .i_user_mode    (i_user_mode),
         .i_asid         (current_asid),
-        .i_lookup_en    (mmu_enabled && i_req),
+        .i_lookup_en    (mmu_enabled && i_req && !i_force_bypass),
         .o_paddr        (tlb_paddr),
         .o_cacheable    (tlb_cacheable),
         .o_hit          (tlb_hit),

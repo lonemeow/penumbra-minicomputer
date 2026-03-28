@@ -1,90 +1,114 @@
 ; test_vector_phys.s — Verify exception vectors are at physical addresses
 ;
-; Proves the vector table fetch bypasses the MMU by:
-;   1. Mapping page 0 for code execution (needed for fetching instructions)
-;   2. Mapping page 2 for data (sentinel storage)
-;   3. NOT mapping page 1 — access will cause TLB miss
-;   4. Accessing page 1 → TLB miss exception
-;   5. Removing page 0's TLB mapping from within the handler
-;   6. Handler sets R1=1 and BREAKs
-;   7. BREAK triggers another exception — the vector fetch at 0x18
-;      (VEC_BREAK) MUST work even though page 0 is now unmapped
-;   8. If the vector fetch required a TLB hit on page 0, we'd get
-;      a nested fault and the test would hang
+; Proves the vector table fetch bypasses the MMU by unmapping page 0
+; (where the vector table lives) and then triggering a TLB miss.
+; If the vector fetch at 0x08 goes through the MMU, it would fail
+; (page 0 unmapped). If it bypasses the MMU, the physical vector
+; entry is fetched correctly and branches to the handler on page 2.
 ;
-; The key insight: after step 5, page 0 has no TLB entry. The handler
-; code (on page 0) continues executing from the I-cache / pipeline,
-; but the BREAK exception's vector fetch at address 0x18 must bypass
-; the MMU to reach the physical vector table. If it goes through the
-; MMU, it would TLB miss and we'd never halt.
+; Memory layout:
+;   Page 0 (0x0000): vector table only — branches to page 2 handlers
+;   Page 1 (0x1000): main test code — unmaps page 0, triggers fault
+;   Page 2 (0x2000): handlers — verify fault, BREAK
+;   Page 3 (0x3000): unmapped — access here triggers TLB miss
 ;
 ; Result: R1=1 PASS, R1=0 FAIL
 
-.equ KERN_RWX,  0xB9       ; V|R|W|X|G
+.equ KERN_RWX, 0xB9
 
 ; ═══════════════════════════════════════════════════════════════
-; Vector table (physical addresses 0x00–0x1C)
+; Page 0 — Vector table (physical 0x0000)
+; These are fetched via physical bypass after an exception.
 ; ═══════════════════════════════════════════════════════════════
 .org 0x00
-    B    start              ; 0x00: reset
-    B    fail               ; 0x04: IRQ
-    B    tlb_miss_handler   ; 0x08: TLB miss
-    B    fail               ; 0x0C: protection fault
-    NOP                     ; 0x10: privilege (unused)
-    NOP                     ; 0x14: SYSCALL (unused)
-    B    break_handler      ; 0x18: BREAK — this is the vector we're testing
+    B    setup              ; 0x00: reset → setup (on page 0, before remap)
+    B    fail_p2            ; 0x04: IRQ → fail
+    B    miss_handler_p2    ; 0x08: TLB miss → handler on page 2
+    B    fail_p2            ; 0x0C: protection fault → fail
 
-; ═══════════════════════════════════════════════════════════════
-; BREAK handler — if we reach here, the physical vector fetch worked
-; This handler runs after page 0's TLB entry was removed, so reaching
-; it proves the vector fetch at 0x18 bypassed the MMU.
-; ═══════════════════════════════════════════════════════════════
-break_handler:
-    ; Nothing to do — the testbench already caught o_halted on
-    ; the BREAK dispatch. But in case execution continues here,
-    ; just loop. The testbench will have already stopped.
-    B    break_handler
-
-; ═══════════════════════════════════════════════════════════════
-; TLB miss handler — unmap page 0, then BREAK
-; ═══════════════════════════════════════════════════════════════
-tlb_miss_handler:
-    ; Invalidate page 0's TLB entry by writing V=0
-    LLI  R8, #0
-    WRSYS R8, #MMU, #TLB_INDEX   ; slot 0
-    WRSYS R8, #MMU, #TLB_VPN     ; VPN=0
-    WRSYS R8, #MMU, #TLB_PTE     ; PTE=0 (V=0 → invalid)
-
-    ; Page 0 is now unmapped. We're still executing from page 0
-    ; because the current instruction stream is already fetched.
-    ; The BREAK below will trigger a vector fetch at physical 0x18.
-    ; If the MMU were consulted, it would TLB miss (page 0 unmapped).
-    LLI  R1, #1               ; PASS
-    BREAK
-
-; ═══════════════════════════════════════════════════════════════
-; Main test
-; ═══════════════════════════════════════════════════════════════
-start:
+; Setup runs on page 0 (identity mapped initially)
+setup:
     LLI  R1, #0
 
-    ; ── Map page 0 (code + vector table) ──────────────────────
+    ; ── Map VPN 0 → PPN 0 (page 0, identity, for setup code) ─
     LLI  R2, #0
-    WRSYS R2, #MMU, #TLB_INDEX
+    WRSYS R2, #MMU, #TLB_INDEX  ; slot 0
     WRSYS R2, #MMU, #TLB_VPN
     LLI  R3, #KERN_RWX
+    WRSYS R3, #MMU, #TLB_PTE
+
+    ; ── Map VPN 1 → PPN 1 (page 1, main test code) ───────────
+    LLI  R2, #1
+    WRSYS R2, #MMU, #TLB_INDEX  ; slot 1
+    LLI  R3, #0x0100            ; VPN=1
+    WRSYS R3, #MMU, #TLB_VPN
+    LLI  R3, #0x10B9            ; PPN=1, KERN_RWX
+    WRSYS R3, #MMU, #TLB_PTE
+
+    ; ── Map VPN 2 → PPN 2 (page 2, handler code) ─────────────
+    LLI  R2, #2
+    WRSYS R2, #MMU, #TLB_INDEX  ; slot 2
+    LLI  R3, #0x0200            ; VPN=2
+    WRSYS R3, #MMU, #TLB_VPN
+    LLI  R3, #0x20B9            ; PPN=2, KERN_RWX
     WRSYS R3, #MMU, #TLB_PTE
 
     ; ── Enable MMU ────────────────────────────────────────────
     LLI  R4, #1
     WRSYS R4, #MMU, #MMUCR
 
-    ; ── Access unmapped page 1 → TLB miss ─────────────────────
-    LLI  R5, #0x1000
-    LDW  R6, [R5]             ; FAULTS — handler unmaps page 0, BREAKs
+    ; ── Jump to main test code on page 1 ──────────────────────
+    LLI  R2, #main_test
+    JMP  R2
+
+; ═══════════════════════════════════════════════════════════════
+; Page 1 — Main test code (physical 0x1000)
+; Executing here after MMU is on, VPN 1 → PPN 1 is mapped.
+; ═══════════════════════════════════════════════════════════════
+.org 0x1000
+main_test:
+    ; ── Invalidate page 0's TLB entry ─────────────────────────
+    ; After this, the vector table at virtual 0x00 is unmapped.
+    ; But the PHYSICAL vector table at 0x00 is still there in memory.
+    LLI  R2, #0
+    WRSYS R2, #MMU, #TLB_INDEX  ; slot 0
+    WRSYS R2, #MMU, #TLB_VPN
+    WRSYS R2, #MMU, #TLB_PTE    ; PTE=0 → V=0 → invalid
+
+    ; ── Trigger TLB miss (page 3, unmapped) ───────────────────
+    ; This will vector to 0x08 (TLB miss). If the vector fetch
+    ; bypasses the MMU, it gets the correct B miss_handler_p2.
+    ; If it goes through the MMU, page 0 is unmapped → garbage.
+    LLI  R5, #0x3000
+    LDW  R6, [R5]              ; FAULTS → handler on page 2
 
     ; Should never reach here
-    B    fail
+    B    fail_p1
+fail_p1:
+    ; Can't BREAK here easily (page 0 unmapped for the BREAK vector).
+    ; Just loop — testbench timeout detects failure.
+    B    fail_p1
 
-fail:
+; ═══════════════════════════════════════════════════════════════
+; Page 2 — Handler code (physical 0x2000)
+; ═══════════════════════════════════════════════════════════════
+.org 0x2000
+miss_handler_p2:
+    ; If we're here, the vector fetch at physical 0x08 worked!
+    ; Verify it was a real TLB miss at the expected address.
+    RDSYS R8, #MMU, #FAULT_ADDR
+    LLI   R9, #0x3000
+    CMP   R8, R9
+    BNE   fail_p2
+
+    ; Verify fault type = TLB miss (bits [3:0] = 1)
+    RDSYS R8, #MMU, #FAULT_STATUS
+    LLI   R9, #0x0F
+    AND   R8, R9
+    CMPI  R8, #1
+    BNE   fail_p2
+
+    ; PASS — physical vector bypass confirmed
+    LLI  R1, #1
+fail_p2:
     BREAK
