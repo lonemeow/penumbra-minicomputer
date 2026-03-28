@@ -41,6 +41,7 @@ The architecture is fully specified in `doc/`. Key specs:
 - `make smoke` — toolchain smoke test (trivial adder)
 - `make sim MOD=<name>` — build & run a module's Verilator testbench (auto-includes penumbra_pkg.sv, sets --top-module)
 - `make sim MOD=cpu_top TB=<tb> PROG=<prog>` — run a specific testbench with a specific program (e.g., `TB=tb_cpu_prog PROG=test_fib`). Auto-assembles `sim/programs/<PROG>.s` and `sw/microcode/microcode.uasm` into hex before running; `.hex` files are build artifacts (gitignored), only `.s`/`.uasm` sources are committed.
+- `make test` — run all `sim/programs/test_*.s` programs through cpu_top; builds once, runs each, reports pass/fail summary
 - `make wave MOD=<name>` — open VCD waveform in GTKWave
 - `make clean` — remove build artifacts
 - All simulation runs via Docker (`verilator/verilator:latest`) — no host install needed
@@ -48,7 +49,7 @@ The architecture is fully specified in `doc/`. Key specs:
 - **Important:** Always `rm -rf build/<mod>.verilator build/V<mod>` before rebuilding if you suspect stale binaries (WSL2 /mnt/c filesystem can have stale mtimes)
 
 ## Current Status
-The CPU runs real programs in simulation with the full CPU → MMU → cache → memory path wired. The TLB is implemented (64-entry 2-way SA, fully software-managed) and tested with MMU enabled (identity + non-identity mappings). WRSYS/RDSYS access a multi-device sysreg bus (device 0 = MMU, device 1 = SYS). RTL is built bottom-up from leaf modules. The 49-bit micro-word format is finalized (bits [1:0] = ei_set/di_set).
+The CPU runs real programs in simulation with the full CPU → MMU → cache → memory path wired. The TLB is implemented (64-entry 2-way SA, fully software-managed) and tested with MMU enabled (identity + non-identity mappings). MMU data faults (TLB miss, protection violation) are wired as synchronous exceptions — detected during STALL, abort the instruction, save shadow PC/SR, and vector to the fault handler. WRSYS/RDSYS access a multi-device sysreg bus (device 0 = MMU, device 1 = SYS). RTL is built bottom-up from leaf modules. The 49-bit micro-word format is finalized (bits [1:0] = ei_set/di_set).
 
 ### Implemented RTL Modules (all tested)
 | Module | File | Tests | Description |
@@ -69,21 +70,38 @@ The CPU runs real programs in simulation with the full CPU → MMU → cache →
 | Datapath top | `rtl/core/datapath.sv` | 15/15 | Structural wiring of all modules, IR reg, reg addr routing, F-bit gating |
 | Microcode ROM | `rtl/core/ucode_rom.sv` | — | 256×49-bit ROM, $readmemh from microcode.hex |
 | Sequencer | `rtl/core/sequencer.sv` | — | Micro-PC, branch_cond decode, EI/DI tracking, ei_shadow_clr |
-| CPU top | `rtl/core/cpu_top.sv` | 5 progs | Full integration: datapath + sequencer + ROM + MMU + sysid + cache + memory + fetch + IRQ + WRSYS/RDSYS |
-| Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_*, ACC_*, SYSDEV_*, SYSREG_* constants |
+| CPU top | `rtl/core/cpu_top.sv` | 8 progs | Full integration: datapath + sequencer + ROM + MMU + sysid + cache + memory + fetch + IRQ + MMU traps + WRSYS/RDSYS |
+| Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_*, ACC_*, VEC_*, SYSDEV_*, SYSREG_* constants |
 | System ID | `rtl/soc/sysid.sv` | via cpu_top | Read-only MACHINE_ID register (Penumbra/1), sysreg device 1 |
 | TLB | `rtl/mmu/tlb.sv` | 111/111 | 64-entry 2-way SA, parallel lookup, one-hot permission check, indexed sysreg R/W |
 | MMU | `rtl/mmu/mmu.sv` | — | Bypass/translate mux, sysreg routing, fault latching, TLB instantiation |
 | Cache stub | `rtl/soc/cache_stub.sv` | — | Combinational pass-through, placeholder for split I/D PIPT caches |
 | Simple memory | `rtl/soc/simple_mem.sv` | — | 4K×32 synchronous SRAM model, $readmemh, 1-cycle read busy |
 
-### Interrupt Handling
+### Exception and Interrupt Handling
+Two sources share the same `except_entry` → `int_entry` → vector dispatch path:
+
+**External IRQ (asynchronous):**
 - **Check point:** Dispatch-time (when `ir_valid` fires, before entering S_EXEC)
 - **Check logic:** `irq_taken = i_irq & sr_i & !ei_shadow` (combinational, safe because sr_i is registered)
 - **Action:** Override dispatch to 0x70 (int_entry), pulse `except_entry` (saves shadow PC/SR, sets S=1/I=0)
 - **EI:** Sets sr_i=1 and ei_shadow=1; ei_shadow cleared after next instruction completes (ei_pending tracking in sequencer)
 - **DI:** Sets sr_i=0 immediately; privileged (uses branch=PRIV in microcode)
-- **Key bug found:** `ei_pending` clear condition must include `executing` — during S_FETCH, `go_fetch` can be stale from the previous micro-word's ROM output
+
+**MMU data fault (synchronous):**
+- **Check point:** During STALL on load/store micro-ops (sequencer checks `i_mem_fault`)
+- **Detection:** `data_fault = mmu_fault && !fetch_active` — only data accesses, not instruction fetches
+- **Action:** `fault_except` pulse (once per fault via `!fault_pending` guard) → `except_entry` saves shadow PC/SR, sets S=1/I=0. Sequencer aborts STALL (`go_fetch`), returns to S_FETCH.
+- **Dispatch:** `fault_pending` flag overrides next dispatch to 0x70 with `fault_vector` (VEC_TLB_MISS=2 or VEC_TLB_PROT=3). Cleared when int_entry executes (`ctl_pc_load`), one cycle after dispatch — so `vector_num` reads the correct fault vector during int_entry.
+- **PC preservation:** PC is in HOLD during STALL, so shadow_PC = faulting instruction. Handler can fill TLB and RTI to restart.
+- **Priority:** fault_pending > IRQ (fault sets SR.I=0, so irq_taken is false at next dispatch)
+- **Instruction fetch faults:** Not yet handled — kernel code assumed identity-mapped.
+
+**Vector table:** `vector_addr = {26'b0, vector_num, 2'b00}` — word-aligned entries at 0x00. VEC_RESET=0, VEC_IRQ=1, VEC_TLB_MISS=2, VEC_TLB_PROT=3, VEC_PRIV=4, VEC_SYSCALL=5.
+
+**Key bugs found:**
+- `ei_pending` clear condition must include `executing` — during S_FETCH, `go_fetch` can be stale from the previous micro-word's ROM output
+- `fault_pending` must NOT clear at `ir_valid` (dispatch time) — `vector_num` is read one cycle later during int_entry execution. Clear at `ctl_pc_load` instead.
 
 ### Register Address Routing
 The micro-word's `reg_a_sel`, `reg_b_sel`, `reg_w_sel` fields use a 4-bit encoding:
@@ -96,7 +114,7 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 ### Memory Access
 - **STALL-based:** Load/store micro-routines use `branch=STALL` to wait for memory. The same microcode works regardless of memory latency (1-cycle sync, cache miss, MMU walk).
 - **mem_busy signal:** Simple memory model provides 1-cycle busy for reads, 0-cycle for writes. Future: replaced by cache/bus controller busy signal.
-- **MMU traps (future):** STALL path will check `mem_fault` alongside `mem_busy` for mid-instruction exceptions (page not present, protection). PC is still in HOLD during STALL, so the CPU state is clean for abort+restart.
+- **MMU traps:** STALL path checks `i_mem_fault` alongside `i_mem_busy`. On fault, sequencer aborts to S_FETCH; `cpu_top` generates `except_entry` and sets `fault_pending` for vector dispatch. PC is in HOLD during STALL, so faulting instruction can be restarted after TLB refill.
 - **Dispatch spacing:** Format M uses ×4 spacing (0x80–0xBF) to fit multi-step micro-routines (loads: 3 micro-ops, stores: 4 micro-ops).
 
 ### Software Tools
@@ -118,16 +136,18 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 | Memory (Format M) | LDW (3 micro-ops), STW (4 micro-ops) | STALL-based, latency-agnostic |
 | Branch (Format B) | All 16 conditions via single BRT entry | BZ/BNZ aliases in assembler |
 | System (Format R) | JMP, EI, DI, WRSYS, RDSYS | RET = JMP R13 (pseudo-op); WRSYS/RDSYS access sysreg bus |
-| Exception | int_entry | Dispatch-time IRQ check |
+| Exception | int_entry | Shared by IRQ and MMU fault dispatch |
 
 ### Known Bugs Fixed (Notable)
 - **IR corruption from shared mem_rdata bus:** ir_valid lingered one cycle into S_EXEC, causing IR to reload when mem_rdata was muxed to sysreg data. Fix: `ir_load = ir_valid && fetch_active`.
 - **BR_PRIV used advance instead of go_fetch:** Caused sequencer to fall through into adjacent microcode entries instead of returning to S_FETCH.
 - **reg_w_sel gated by executing:** Could change at same posedge as register write. Ungated to keep address stable.
+- **fault_pending cleared too early:** Clearing at `ir_valid` (dispatch) meant `vector_num` was wrong one cycle later when `int_entry` read it. Fix: clear at `ctl_pc_load` (int_entry execution).
 
 ### Next Steps (in priority order)
-1. **Sub-word loads** — LDH/LDB/LDHS/LDBS (byte/half-word extraction in writeback path).
-2. **More system ops** — RTI, SYSCALL, GETSR/SETSR, GETUSP/SETUSP.
-3. **BL (branch-and-link)** — Needs special handling to save PC+4 to LR; all branches currently share one dispatch entry.
-4. **MMU fault handling** — Wire `mmu_fault` to trap/stall in cpu_top so TLB misses and protection faults generate exceptions instead of silent garbage.
-5. **Memory subsystem** — Cache, bus interface, real memory for hardware.
+1. **RTI** — Return from interrupt/exception: restore shadow_PC/SR. Needed to test resume-from-fault (TLB refill then restart).
+2. **Sub-word loads** — LDH/LDB/LDHS/LDBS (byte/half-word extraction in writeback path).
+3. **More system ops** — SYSCALL, GETSR/SETSR, GETUSP/SETUSP.
+4. **BL (branch-and-link)** — Needs special handling to save PC+4 to LR; all branches currently share one dispatch entry.
+5. **Instruction fetch faults** — Detect TLB miss during fetch phase (separate from STALL-based data fault path).
+6. **Memory subsystem** — Cache, bus interface, real memory for hardware.

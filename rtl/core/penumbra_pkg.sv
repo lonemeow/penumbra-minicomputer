@@ -83,6 +83,15 @@ package penumbra_pkg;
     localparam logic [3:0] SYSREG_MMU_TLB_PTE  = 4'd4;  // TLB lower: {PPN[19:0], SW[3:0], flags[7:0]}
     localparam logic [3:0] SYSREG_MMU_TLB_IDX  = 4'd5;  // TLB slot: {26'b0, way[0], set[4:0]}
 
+    // ── Exception vector numbers ────────────────────────────────
+    // Vector address = {26'b0, vector_num, 2'b00} (word-aligned table at 0x00)
+    localparam logic [3:0] VEC_RESET     = 4'd0;   // 0x00 — Reset
+    localparam logic [3:0] VEC_IRQ       = 4'd1;   // 0x04 — External interrupt
+    localparam logic [3:0] VEC_TLB_MISS  = 4'd2;   // 0x08 — TLB miss (no matching entry)
+    localparam logic [3:0] VEC_TLB_PROT  = 4'd3;   // 0x0C — TLB protection fault
+    localparam logic [3:0] VEC_PRIV      = 4'd4;   // 0x10 — Privilege violation (future)
+    localparam logic [3:0] VEC_SYSCALL   = 4'd5;   // 0x14 — SYSCALL (future)
+
     // ── MMU fault status encoding ─────────────────────────────
     // FAULT_STATUS[3:0] = fault type
     localparam logic [3:0] FAULT_TLB_MISS = 4'b0001;

@@ -72,6 +72,43 @@ ifndef MOD
 endif
 	gtkwave $(WAVE_DIR)/$(MOD).vcd &
 
+# ── Run all cpu_top program tests ──────────────────────────────
+# Discovers all sim/programs/test_*.s files, runs each through
+# tb_cpu_prog, reports pass/fail summary.
+TEST_PROGS := $(sort $(basename $(notdir $(wildcard sim/programs/test_*.s))))
+
+.PHONY: test
+test:
+	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
+	@# Build cpu_top + tb_cpu_prog once (reuse for all programs)
+	@$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) \
+		--top-module cpu_top \
+		--Mdir $(BUILD_DIR)/cpu_top.verilator \
+		-o ../Vcpu_top \
+		$(PKG_SV) $$(find rtl -name 'cpu_top.sv') sim/tb_cpu_prog.cpp
+	@# Assemble microcode once (shared by all programs)
+	@$(UASM) sw/microcode/microcode.uasm -o microcode.hex
+	@pass=0; fail=0; failed=""; \
+	for prog in $(TEST_PROGS); do \
+		$(PASM) sim/programs/$$prog.s -o program.hex 2>/dev/null; \
+		if $(DOCKER_RUN) --entrypoint ./$(BUILD_DIR)/Vcpu_top $(DOCKER_IMAGE) \
+			> /dev/null 2>&1; then \
+			printf "  \033[32mPASS\033[0m  %s\n" "$$prog"; \
+			pass=$$((pass + 1)); \
+		else \
+			printf "  \033[31mFAIL\033[0m  %s\n" "$$prog"; \
+			fail=$$((fail + 1)); \
+			failed="$$failed $$prog"; \
+		fi; \
+	done; \
+	echo ""; \
+	total=$$((pass + fail)); \
+	echo "$$pass/$$total tests passed"; \
+	if [ $$fail -gt 0 ]; then \
+		echo "  *** $$fail FAILED:$$failed ***"; \
+		exit 1; \
+	fi
+
 # ── Cleanup ────────────────────────────────────────────────────
 .PHONY: clean
 clean:

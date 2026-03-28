@@ -26,6 +26,7 @@ module sequencer
     // ── Datapath status inputs ───────────────────────────────
     input  logic        i_alu_busy,       // ALU multi-cycle in progress
     input  logic        i_mem_busy,       // Memory/cache busy
+    input  logic        i_mem_fault,      // MMU fault (TLB miss / protection)
     input  logic        i_cond_result,    // Condition evaluator output
     input  logic        i_sr_s,           // Supervisor bit (for PRIV check)
 
@@ -149,7 +150,9 @@ module sequencer
             BR_SEQ:   advance = 1'b1;
             BR_FETCH: go_fetch = 1'b1;
             BR_STALL: begin
-                if (!busy)
+                if (i_mem_fault)
+                    go_fetch = 1'b1;  // Abort instruction on MMU fault
+                else if (!busy)
                     advance = 1'b1;
                 // busy → hold (neither advance nor fetch)
             end

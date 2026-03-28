@@ -121,6 +121,7 @@ module cpu_top
         .o_fetch_go      (fetch_go),
         .i_alu_busy      (alu_busy),
         .i_mem_busy      (cache_busy),
+        .i_mem_fault     (data_fault),
         .i_cond_result   (cond_result),
         .i_sr_s          (sr_s),
         .o_upc           (upc),
@@ -217,37 +218,67 @@ module cpu_top
     end
 
     // ══════════════════════════════════════════════════════════
-    // Interrupt check at dispatch
+    // Exception and interrupt handling
     // ══════════════════════════════════════════════════════════
     //
-    // When ir_valid fires, we have a fetched instruction and its
-    // dispatch_addr ready. Before entering S_EXEC, check whether
-    // an external interrupt should preempt the fetched instruction.
+    // Two sources of exceptions:
     //
-    // Available signals for the check:
-    //   i_irq       — external interrupt request (active high)
-    //   sr_i        — SR.I bit (1 = interrupts enabled, 0 = disabled)
-    //   ei_shadow   — 1 = EI just executed, suppress this check for one instruction
+    // 1. External IRQ (asynchronous) — checked at dispatch time
+    //    (when ir_valid fires, before entering S_EXEC).
     //
-    // When an interrupt is taken:
-    //   irq_taken        — override dispatch_addr with 0x70 (int_entry)
-    //   except_entry     — pulse to save shadow_PC/SR, set S=1, I=0
-    //   irq_vector_num   — vector number for handler address
+    // 2. MMU fault (synchronous) — detected mid-instruction during
+    //    a load/store STALL. The sequencer aborts the instruction
+    //    (mem_fault → go_fetch), then on the next dispatch we
+    //    redirect to int_entry with the fault vector.
+    //
+    // Flow for MMU fault:
+    //   - mmu_fault fires during execute (STALL on load/store)
+    //   - except_entry pulse saves shadow_PC/SR, sets S=1, I=0
+    //   - PC is still in HOLD → points at faulting instruction
+    //   - fault_pending latches; sequencer aborts to S_FETCH
+    //   - Fetch re-reads the faulting instruction (from kernel-mapped PC)
+    //   - At dispatch, fault_pending overrides to 0x70 (int_entry)
+    //   - int_entry loads PC from vector table → handler runs
+    //   - Handler reads FAULT_ADDR/FAULT_STATUS via RDSYS, fills TLB, RTIs
+    //
+    // Priority: fault_pending > IRQ (faults are precise, must be handled first)
 
     logic        irq_taken;
     logic        except_entry;
-    logic [3:0]  irq_vector_num;
+    logic [3:0]  vector_num;
 
-    // Interrupt check: combinational — sr_i is registered so no race
-    // with except_entry modifying it on the same clock edge.
-    // ir_valid gates except_entry to a single-cycle pulse at dispatch.
-    assign irq_taken      = i_irq & sr_i & !ei_shadow;
-    assign except_entry   = irq_taken & ir_valid;
-    assign irq_vector_num = 4'd1;  // IRQ = vector 1 -> handler at 0x04
+    logic        data_fault;
+    logic        fault_except;
+    logic        fault_pending;
+    logic [3:0]  fault_vector;
 
-    // Override dispatch address when interrupt taken
+    always_comb begin
+        data_fault   = mmu_fault && !fetch_active;
+        fault_except = data_fault && !fault_pending;
+    end
+
+    always_ff @(posedge i_clk) begin
+        if (i_rst) begin
+            fault_pending <= 1'b0;
+            fault_vector  <= 4'b0;
+        end else if (fault_except) begin
+            fault_pending <= 1'b1;
+            fault_vector  <= mmu_hit ? VEC_TLB_PROT : VEC_TLB_MISS;
+        end else if (fault_pending && ctl_pc_load) begin
+            // Clear after int_entry executes — ctl_pc_load = executing,
+            // so vector_num reads fault_vector correctly on this cycle
+            // (combinationally, fault_pending is still 1), then clears at posedge.
+            fault_pending <= 1'b0;
+        end
+    end
+
+    assign irq_taken    = i_irq & sr_i & !ei_shadow;
+    assign except_entry = (irq_taken & ir_valid) | fault_except;
+    assign vector_num   = fault_pending ? fault_vector : VEC_IRQ;
+
+    // Override dispatch address when exception taken
     logic [7:0] effective_dispatch;
-    assign effective_dispatch = irq_taken ? 8'h70 : dispatch_addr;
+    assign effective_dispatch = (fault_pending | irq_taken) ? 8'h70 : dispatch_addr;
 
     // ── Memory address and access mux ──────────────────────
     // During fetch: address = PC (instruction read, no re/we)
@@ -264,7 +295,7 @@ module cpu_top
     assign data_we = ctl_mem_write && !fetch_active;
 
     // ══════════════════════════════════════════════════════════
-    // MMU (bypass mode — identity maps, no faults)
+    // MMU — translates virtual→physical, signals faults
     // ══════════════════════════════════════════════════════════
     mmu u_mmu (
         .i_clk         (i_clk),
@@ -369,7 +400,7 @@ module cpu_top
 
         // Exception / interrupt entry
         .i_except_entry (except_entry),
-        .i_vector_num   (irq_vector_num),
+        .i_vector_num   (vector_num),
 
         // EI/DI
         .i_ei_set       (ctl_ei_set),
