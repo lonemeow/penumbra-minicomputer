@@ -19,6 +19,7 @@ The architecture is fully specified in `doc/`. Key specs:
 - **Microcode validation:** `doc/core/microcode-validation.md` — bit-level micro-programs for ADD, LDW, BEQ, interrupt entry, RTI; 17 issues found and resolved
 - **Bus:** `doc/bus/bus-overview.md` — custom async Penumbra Bus (4-phase handshake), sync internal bus, sysreg sideband
 - **MMU/Cache:** `doc/mmu/mmu-overview.md` — software-managed 64-entry 2-way SA TLB, split I/D PIPT cache, write-through D-cache
+- **Sysregs:** `doc/isa/sysregs-reference.md` — programmer's reference for WRSYS/RDSYS: device map, register layouts, TLB packing, assembly recipes
 
 ## Repository Layout
 - `rtl/` - Synthesizable SystemVerilog, organized by subsystem
@@ -47,7 +48,7 @@ The architecture is fully specified in `doc/`. Key specs:
 - **Important:** Always `rm -rf build/<mod>.verilator build/V<mod>` before rebuilding if you suspect stale binaries (WSL2 /mnt/c filesystem can have stale mtimes)
 
 ## Current Status
-The CPU runs real programs in simulation with the full CPU → MMU → cache → memory path wired. The TLB is implemented (64-entry 2-way SA, fully software-managed) and WRSYS/RDSYS instructions can read/write MMU system registers. RTL is built bottom-up from leaf modules. The 49-bit micro-word format is finalized (bits [1:0] = ei_set/di_set).
+The CPU runs real programs in simulation with the full CPU → MMU → cache → memory path wired. The TLB is implemented (64-entry 2-way SA, fully software-managed) and tested with MMU enabled (identity + non-identity mappings). WRSYS/RDSYS access a multi-device sysreg bus (device 0 = MMU, device 1 = SYS). RTL is built bottom-up from leaf modules. The 49-bit micro-word format is finalized (bits [1:0] = ei_set/di_set).
 
 ### Implemented RTL Modules (all tested)
 | Module | File | Tests | Description |
@@ -68,8 +69,9 @@ The CPU runs real programs in simulation with the full CPU → MMU → cache →
 | Datapath top | `rtl/core/datapath.sv` | 15/15 | Structural wiring of all modules, IR reg, reg addr routing, F-bit gating |
 | Microcode ROM | `rtl/core/ucode_rom.sv` | — | 256×49-bit ROM, $readmemh from microcode.hex |
 | Sequencer | `rtl/core/sequencer.sv` | — | Micro-PC, branch_cond decode, EI/DI tracking, ei_shadow_clr |
-| CPU top | `rtl/core/cpu_top.sv` | 2 progs | Full integration: datapath + sequencer + ROM + MMU + cache + memory + fetch + IRQ + WRSYS/RDSYS |
-| Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_*, ACC_*, SYSREG_MMU_* constants |
+| CPU top | `rtl/core/cpu_top.sv` | 5 progs | Full integration: datapath + sequencer + ROM + MMU + sysid + cache + memory + fetch + IRQ + WRSYS/RDSYS |
+| Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_*, ACC_*, SYSDEV_*, SYSREG_* constants |
+| System ID | `rtl/soc/sysid.sv` | via cpu_top | Read-only MACHINE_ID register (Penumbra/1), sysreg device 1 |
 | TLB | `rtl/mmu/tlb.sv` | 111/111 | 64-entry 2-way SA, parallel lookup, one-hot permission check, indexed sysreg R/W |
 | MMU | `rtl/mmu/mmu.sv` | — | Bypass/translate mux, sysreg routing, fault latching, TLB instantiation |
 | Cache stub | `rtl/soc/cache_stub.sv` | — | Combinational pass-through, placeholder for split I/D PIPT caches |
@@ -99,11 +101,11 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 
 ### Software Tools
 - **Microcode assembler** (`sw/tools/uasm.py`): Symbolic microcode → $readmemh hex. Defaults: `pc=NEXT branch=FETCH`. Run: `python3 sw/tools/uasm.py input.uasm -o microcode.hex`
-- **ISA assembler** (`sw/tools/pasm.py`): Two-pass assembler for Penumbra ISA → $readmemh hex. All 4 formats (R/L/M/B), labels, label references in Format L immediates, pseudo-ops (NOP, RET), branch aliases (BZ/BNZ). Run: `python3 sw/tools/pasm.py input.s -o program.hex`
+- **ISA assembler** (`sw/tools/pasm.py`): Two-pass assembler for Penumbra ISA → $readmemh hex. All 4 formats (R/L/M/B), labels, label references in Format L immediates, pseudo-ops (NOP, RET), branch aliases (BZ/BNZ), `.equ` named constants, built-in sysreg constants (`#MMU`, `#TLB_INDEX`, `#TLB_V`, etc.). Run: `python3 sw/tools/pasm.py input.s -o program.hex`
 - Makefile auto-assembles `.s`/`.uasm` sources into root-level `program.hex`/`microcode.hex` for `$readmemh`; hex files are build artifacts (gitignored)
 
 ### Test Convention
-- **Program runner** (`sim/tb_cpu_prog.cpp`): Generic testbench that runs a program to halt, checks R1 for pass/fail. No cycle-by-cycle internal inspection.
+- **Program runner** (`sim/tb_cpu_prog.cpp`): Generic testbench that runs a program to halt, checks R1 for pass/fail. VCD trace output to `waves/cpu_top.vcd`, register dump (R0–R15) on failure.
 - **Pass/fail convention:** R1 = 1 means PASS, R1 = 0 means FAIL. Tests self-check internally and set R1 accordingly.
 - **Halt detection:** Testbench watches for PC stability (infinite `B .` loop). Future: replace with SYSCALL trap once implemented.
 - **Calling convention:** Return via RET (JMP R13). Program preamble sets LR and calls the test subroutine.
@@ -124,8 +126,8 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 - **reg_w_sel gated by executing:** Could change at same posedge as register write. Ungated to keep address stable.
 
 ### Next Steps (in priority order)
-1. **TLB integration test** — Write a program that loads TLB entries via WRSYS and runs with M=1 (translated addresses).
-2. **Sub-word loads** — LDH/LDB/LDHS/LDBS (byte/half-word extraction in writeback path).
-3. **More system ops** — RTI, SYSCALL, GETSR/SETSR, GETUSP/SETUSP.
-4. **BL (branch-and-link)** — Needs special handling to save PC+4 to LR; all branches currently share one dispatch entry.
+1. **Sub-word loads** — LDH/LDB/LDHS/LDBS (byte/half-word extraction in writeback path).
+2. **More system ops** — RTI, SYSCALL, GETSR/SETSR, GETUSP/SETUSP.
+3. **BL (branch-and-link)** — Needs special handling to save PC+4 to LR; all branches currently share one dispatch entry.
+4. **MMU fault handling** — Wire `mmu_fault` to trap/stall in cpu_top so TLB misses and protection faults generate exceptions instead of silent garbage.
 5. **Memory subsystem** — Cache, bus interface, real memory for hardware.
