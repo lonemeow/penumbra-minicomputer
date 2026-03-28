@@ -97,7 +97,7 @@ Two sources share the same `except_entry` → `int_entry` → vector dispatch pa
 - **Priority:** fault_pending > IRQ (fault sets SR.I=0, so irq_taken is false at next dispatch)
 - **Instruction fetch faults:** Not yet handled — kernel code assumed identity-mapped.
 
-**Vector table:** `vector_addr = {26'b0, vector_num, 2'b00}` — word-aligned entries at 0x00. VEC_RESET=0, VEC_IRQ=1, VEC_TLB_MISS=2, VEC_TLB_PROT=3, VEC_PRIV=4, VEC_SYSCALL=5.
+**Vector table:** Fixed **physical** addresses, MMU bypassed for the vector fetch. `vector_addr = {26'b0, vector_num, 2'b00}` — word-aligned entries at physical 0x00. VEC_RESET=0, VEC_IRQ=1, VEC_TLB_MISS=2, VEC_TLB_PROT=3, VEC_PRIV=4, VEC_SYSCALL=5, VEC_BREAK=6. After int_entry completes, `vector_fetch` flag forces MMU bypass for one fetch cycle, cleared on ir_valid. No TLB mapping needed for the vector page — eliminates nested TLB miss on exception entry.
 
 **Key bugs found:**
 - `ei_pending` clear condition must include `executing` — during S_FETCH, `go_fetch` can be stale from the previous micro-word's ROM output

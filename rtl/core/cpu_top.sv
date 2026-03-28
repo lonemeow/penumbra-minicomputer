@@ -300,6 +300,22 @@ module cpu_top
     assign data_re = ctl_mem_read  && !fetch_active;
     assign data_we = ctl_mem_write && !fetch_active;
 
+    // ── Vector fetch bypass ──────────────────────────────────
+    // Exception vectors are at fixed PHYSICAL addresses. After
+    // int_entry (upc=0x70) loads PC from the vector table, the
+    // next fetch bypasses the MMU so the vector entry is always
+    // reachable — no TLB mapping required for the vector page.
+    logic vector_fetch;
+
+    always_ff @(posedge i_clk) begin
+        if (i_rst)
+            vector_fetch <= 1'b0;
+        else if (fetch_go && (upc == 8'h70))  // int_entry completed
+            vector_fetch <= 1'b1;
+        else if (ir_valid)
+            vector_fetch <= 1'b0;
+    end
+
     // ══════════════════════════════════════════════════════════
     // MMU — translates virtual→physical, signals faults
     // ══════════════════════════════════════════════════════════
@@ -310,6 +326,7 @@ module cpu_top
         .i_access_type (mmu_access_type),
         .i_user_mode   (mmu_user_mode),
         .i_req         (mmu_req),
+        .i_force_bypass(fetch_active && vector_fetch),
         .o_paddr       (mmu_paddr),
         .o_cacheable   (mmu_cacheable),
         .o_fault       (mmu_fault),

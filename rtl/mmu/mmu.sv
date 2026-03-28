@@ -23,6 +23,7 @@ module mmu
     input  logic [2:0]  i_access_type,  // ACC_READ / ACC_WRITE / ACC_EXEC (one-hot)
     input  logic        i_user_mode,    // 1 = user mode (from !SR.S)
     input  logic        i_req,          // Translation request
+    input  logic        i_force_bypass, // Override: identity map this request (vector fetch)
 
     // ── Translation output ─────────────────────────────────
     output logic [31:0] o_paddr,        // Physical address
@@ -157,7 +158,7 @@ module mmu
     // ══════════════════════════════════════════════════════════
 
     always_comb begin
-        if (mmu_enabled) begin
+        if (mmu_enabled && !i_force_bypass) begin
             o_paddr     = tlb_paddr;
             o_cacheable = tlb_cacheable;
             o_hit       = tlb_hit;
