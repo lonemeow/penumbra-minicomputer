@@ -140,6 +140,12 @@ rdsys:
   sys_cycle=1 mdr_load_mem=1 pc=HOLD branch=SEQ
   reg_w=IR_RD w_en=1 wmux=MDR branch=PRIV
 
+# ── BREAK (op=21, dispatch=0x4A) ──────────────────────────────
+# Software breakpoint: intercepted at dispatch time by cpu_top.
+# Triggers except_entry → VEC_BREAK exception (like IRQ/fault).
+# This microcode entry is never reached — dispatch redirects to
+# int_entry (0x70). Slot left empty intentionally.
+
 # ── RTI (op=22, dispatch=0x4C) ────────────────────────────────
 # Return from interrupt/exception: restore shadow_SR then shadow_PC.
 # Privileged — must be in supervisor mode.

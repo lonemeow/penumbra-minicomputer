@@ -75,5 +75,4 @@ start:
     ; PASS
     LLI  R1, #1
 fail:
-halt:
-    B    halt
+    BREAK

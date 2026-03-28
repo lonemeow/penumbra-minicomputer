@@ -223,7 +223,7 @@ module cpu_top
     // Exception and interrupt handling
     // ══════════════════════════════════════════════════════════
     //
-    // Two sources of exceptions:
+    // Three sources of exceptions:
     //
     // 1. External IRQ (asynchronous) — checked at dispatch time
     //    (when ir_valid fires, before entering S_EXEC).
@@ -233,17 +233,12 @@ module cpu_top
     //    (mem_fault → go_fetch), then on the next dispatch we
     //    redirect to int_entry with the fault vector.
     //
-    // Flow for MMU fault:
-    //   - mmu_fault fires during execute (STALL on load/store)
-    //   - except_entry pulse saves shadow_PC/SR, sets S=1, I=0
-    //   - PC is still in HOLD → points at faulting instruction
-    //   - fault_pending latches; sequencer aborts to S_FETCH
-    //   - Fetch re-reads the faulting instruction (from kernel-mapped PC)
-    //   - At dispatch, fault_pending overrides to 0x70 (int_entry)
-    //   - int_entry loads PC from vector table → handler runs
-    //   - Handler reads FAULT_ADDR/FAULT_STATUS via RDSYS, fills TLB, RTIs
+    // 3. BREAK instruction — detected at dispatch time by checking
+    //    the dispatch address. Triggers except_entry like IRQ, vectors
+    //    to VEC_BREAK. Works from any privilege level (software
+    //    breakpoint). Pulses o_break for testbench/debug observation.
     //
-    // Priority: fault_pending > IRQ (faults are precise, must be handled first)
+    // Priority: fault_pending > BREAK > IRQ
 
     logic        irq_taken;
     logic        except_entry;
@@ -274,13 +269,22 @@ module cpu_top
         end
     end
 
-    assign irq_taken    = i_irq & sr_i & !ei_shadow;
-    assign except_entry = (irq_taken & ir_valid) | fault_except;
-    assign vector_num   = fault_pending ? fault_vector : VEC_IRQ;
+    // BREAK detection at dispatch (dispatch_addr == 0x4A for op=21)
+    logic break_taken;
+    assign break_taken = (dispatch_addr == 8'h4A);
 
-    // Override dispatch address when exception taken
+    assign irq_taken    = i_irq & sr_i & !ei_shadow;
+    assign except_entry = fault_except | (break_taken & ir_valid) | (irq_taken & ir_valid);
+    assign vector_num   = fault_pending ? fault_vector :
+                          break_taken   ? VEC_BREAK :
+                                          VEC_IRQ;
+
+    // Override dispatch address when any exception taken
     logic [7:0] effective_dispatch;
-    assign effective_dispatch = (fault_pending | irq_taken) ? 8'h70 : dispatch_addr;
+    assign effective_dispatch = (fault_pending | break_taken | irq_taken) ? 8'h70 : dispatch_addr;
+
+    // Debug observation: pulses when BREAK dispatches (testbench stop trigger)
+    assign o_halted = break_taken & ir_valid;
 
     // ── Memory address and access mux ──────────────────────
     // During fetch: address = PC (instruction read, no re/we)
@@ -446,7 +450,6 @@ module cpu_top
     );
 
     assign o_pc      = pc;
-    assign o_halted  = 1'b0;  // Stub
 
 endmodule
 

@@ -22,5 +22,4 @@ _start:
     ; ── All passed ──────────────────────────────────────────
     LLI  R1, #1               ; PASS
 fail:
-halt:
-    B    halt
+    BREAK

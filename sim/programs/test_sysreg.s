@@ -12,7 +12,7 @@
 ;   3 = TLB_VPN, 4 = TLB_PTE, 5 = TLB_INDEX
 
 _start:
-    LLI  LR, #done           ; set return address
+    LLI  LR, #fail           ; set return address
     LLI  R1, #0              ; R1 = result accumulator (0 = fail)
 
     ; ── Test 1: Write/read MMUCR ─────────────────────────────
@@ -21,7 +21,7 @@ _start:
     WRSYS R2, #0, #0          ; MMUCR = 0x0500
     RDSYS R3, #0, #0          ; R3 = MMUCR
     CMP  R3, R2
-    BNE  done                 ; fail: MMUCR round-trip mismatch
+    BNE  fail                 ; fail: MMUCR round-trip mismatch
 
     ; ── Test 2: Write/read TLB entry ─────────────────────────
     ; Set TLB_INDEX = 0 (set 0, way 0)
@@ -51,20 +51,19 @@ _start:
 
     ; Check VPN round-trip
     CMP  R7, R5
-    BNE  done                 ; fail: TLB_VPN mismatch
+    BNE  fail                 ; fail: TLB_VPN mismatch
 
     ; Check PTE round-trip
     CMP  R8, R6
-    BNE  done                 ; fail: TLB_PTE mismatch
+    BNE  fail                 ; fail: TLB_PTE mismatch
 
     ; ── Test 3: FAULT_ADDR reads as 0 after reset ────────────
     RDSYS R9, #0, #1          ; R9 = FAULT_ADDR
     LLI  R10, #0
     CMP  R9, R10
-    BNE  done                 ; fail: FAULT_ADDR not zero
+    BNE  fail                 ; fail: FAULT_ADDR not zero
 
     ; ── All passed ────────────────────────────────────────────
     LLI  R1, #1               ; R1 = 1 (success)
-
-done:
-    B    done                  ; halt loop
+fail:
+    BREAK

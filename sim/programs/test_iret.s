@@ -55,7 +55,7 @@ tlb_miss_handler:
 ; ═══════════════════════════════════════════════════════════════
 alternate_entry:
     LLI  R1, #1               ; PASS — we got here via IRET
-    B    halt
+    BREAK
 
 ; ═══════════════════════════════════════════════════════════════
 ; Main test
@@ -86,6 +86,4 @@ fault_ldw:
     B    fail
 
 fail:
-    LLI  R1, #0
-halt:
-    B    halt
+    BREAK

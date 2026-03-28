@@ -1,16 +1,13 @@
 // Verilator testbench for Penumbra CPU — program runner
 //
-// Runs a program to completion (halt loop detected), then checks
+// Runs a program until BREAK fires (o_halted pulses), then checks
 // the result register R1 for pass/fail.
 //
 // Convention:
 //   - R1 = 1 means PASS, R1 = 0 means FAIL
-//   - Program ends with a halt loop (B .)
-//   - Testbench detects halt when PC is stable for several cycles
-//
-// Future: replace halt-loop detection with SYSCALL trap once
-// the instruction is implemented. The current approach wastes
-// cycles spinning on PC stability detection.
+//   - Program ends with BREAK instruction (triggers exception, pulses o_halted)
+//   - Testbench detects the pulse immediately — no PC stability polling
+//   - On failure: dumps all registers and PC
 //
 // Usage: make sim MOD=cpu_top TB=tb_cpu_prog PROG=test_fib
 
@@ -35,24 +32,16 @@ static uint32_t read_reg(Vcpu_top* cpu, int reg) {
     return cpu->o_dbg_reg_data;
 }
 
-// Run until PC is stable for `stable_needed` cycles, or until limit.
+// Run until o_halted goes high, or until cycle limit.
 // Returns total cycles, or -1 if limit exceeded.
-static int run_until_halt(Vcpu_top* cpu, int limit, int stable_needed = 10) {
+static int run_until_halt(Vcpu_top* cpu, int limit) {
     int cycles = 0;
-    int stable = 0;
-    uint32_t prev_pc = 0xFFFFFFFF;
 
     while (cycles < limit) {
         tick(cpu);
         cycles++;
-        if (cpu->o_pc == prev_pc) {
-            stable++;
-            if (stable >= stable_needed)
-                return cycles;
-        } else {
-            stable = 0;
-            prev_pc = cpu->o_pc;
-        }
+        if (cpu->o_halted)
+            return cycles;
     }
     return -1;  // Did not halt
 }
@@ -80,7 +69,8 @@ int main() {
     if (tfp) { tfp->close(); delete tfp; tfp = nullptr; }
 
     if (cycles < 0) {
-        printf("  FAIL: program did not halt within cycle limit\n\n");
+        printf("  FAIL: no BREAK within cycle limit\n");
+        printf("  (missing BREAK instruction? infinite loop?)\n\n");
         printf("prog: 0/1 tests passed\n");
         printf("  *** 1 FAILED ***\n");
         delete cpu;

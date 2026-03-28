@@ -12,11 +12,9 @@ check:
         CMPI R1, #55
         BNE  fail
         LLI  R1, #1            ; PASS
-        B    halt
+        BREAK
 fail:
-        LLI  R1, #0            ; FAIL
-halt:
-        B    halt              ; testbench detects stable PC
+        BREAK
 
 ; ── fib: compute fib(N) iteratively ──────────────────────────
 ; Algorithm: a=0, b=1, iterate N times: (a, b) = (b, a+b)

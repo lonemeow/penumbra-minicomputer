@@ -6,7 +6,7 @@
 ;   3. Load from address 0x3000 (VPN 3) — NOT mapped in TLB
 ;   4. CPU should trap: shadow PC/SR saved, dispatch to vector 2 (0x08)
 ;   5. Fault handler verifies FAULT_ADDR = 0x3000, FAULT_STATUS shows TLB miss
-;   6. Handler sets R1=1 (PASS) and halts
+;   6. Handler sets R1=1 (PASS) and breaks
 ;
 ; The faulting instruction's PC is saved in shadow_PC so the OS could
 ; refill the TLB and restart. This test just verifies the trap fires.
@@ -49,7 +49,7 @@ tlb_miss_handler:
 
     ; PASS — fault handler ran with correct fault address
     LLI   R1, #1
-    B     halt
+    BREAK
 
 ; ═══════════════════════════════════════════════════════════════
 ; Main test code
@@ -80,6 +80,4 @@ start:
     B    fail
 
 fail:
-    LLI  R1, #0
-halt:
-    B    halt
+    BREAK

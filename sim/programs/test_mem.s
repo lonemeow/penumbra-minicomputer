@@ -38,5 +38,4 @@ _start:
     ; ── All checks passed ───────────────────────────────────
     LLI  R1, #1               ; PASS
 fail:
-halt:
-    B    halt
+    BREAK

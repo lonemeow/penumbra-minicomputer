@@ -159,5 +159,4 @@ start:
     WRSYS R6, #MMU, #MMUCR     ; MMU off
     LLI  R1, #1
 fail:
-halt:
-    B    halt
+    BREAK

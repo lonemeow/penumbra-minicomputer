@@ -206,6 +206,7 @@ module sequencer
                 end
                 // else: hold (STALL with busy=1)
             end
+
         endcase
     end
 
