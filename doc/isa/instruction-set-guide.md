@@ -318,13 +318,13 @@ entry is a 32-bit instruction word (typically a branch to the handler).
 | 7--15 | 0x1C--0x3C | Reserved (NMI, alignment, bus error, etc.) | — |
 
 On exception entry, the hardware:
-1. Saves PC and SR to shadow registers
+1. Saves PC and SR to exception registers (EPC, ESR)
 2. Sets S = 1 (supervisor), I = 0 (interrupts disabled)
 3. Loads PC from the vector table entry (physical fetch, MMU bypassed)
 
-RTI restores shadow_SR then shadow_PC (returns to interrupted/faulting instruction).
+RTI restores ESR then EPC (returns to interrupted/faulting instruction).
 IRET Rd, Rs atomically loads SR from Rd and PC from Rs (context switch to a different process).
-RDSPC Rd, SSR/SPC reads the shadow registers so the kernel can save them.
+RDSPR Rd, ESR/EPC reads the exception registers so the kernel can save them.
 
 ---
 

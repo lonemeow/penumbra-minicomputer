@@ -3,8 +3,8 @@
 ; Simulates a simplified context switch:
 ;   1. Enable MMU with page 0 identity-mapped
 ;   2. Access unmapped page → TLB miss trap
-;   3. Handler reads shadow_PC and shadow_SR via RDSPC
-;   4. Verifies shadow_PC points at the faulting instruction
+;   3. Handler reads EPC and ESR via RDSPR
+;   4. Verifies EPC points at the faulting instruction
 ;   5. Uses IRET to jump to a DIFFERENT address (not the faulting one)
 ;      with a constructed SR value
 ;
@@ -25,16 +25,16 @@
     B    fail               ; 0x0C: protection fault
 
 ; ═══════════════════════════════════════════════════════════════
-; TLB miss handler — reads shadow regs, IRETs to alternate_entry
+; TLB miss handler — reads exception regs, IRETs to alternate_entry
 ; ═══════════════════════════════════════════════════════════════
 tlb_miss_handler:
-    ; Read and verify shadow_PC = address of the faulting LDW
-    RDSPC R8, SPC
+    ; Read and verify EPC = address of the faulting LDW
+    RDSPR R8, EPC
     CMP   R8, R12             ; R12 was set to faulting instruction address
     BNE   fail
 
-    ; Read shadow_SR — should have S=1 (we were in supervisor mode)
-    RDSPC R9, SSR
+    ; Read ESR — should have S=1 (we were in supervisor mode)
+    RDSPR R9, ESR
 
     ; Construct target SR: supervisor mode, interrupts disabled
     ; (same as current state — we just want to prove IRET works)

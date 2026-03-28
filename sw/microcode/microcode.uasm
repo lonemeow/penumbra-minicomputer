@@ -147,15 +147,15 @@ rdsys:
 # int_entry (0x70). Slot left empty intentionally.
 
 # ── RTI (op=22, dispatch=0x4C) ────────────────────────────────
-# Return from interrupt/exception: restore shadow_SR then shadow_PC.
+# Return from interrupt/exception: restore ESR then EPC.
 # Privileged — must be in supervisor mode.
-# Step 0: shadow_SR → ALU PASS_A → R-bus → w_bus → sr_load
+# Step 0: ESR → ALU PASS_A → R-bus → w_bus → sr_load
 #         (restores NZCV flags, S and I mode bits)
-# Step 1: shadow_PC → A-bus → PC (jumps back to interrupted instruction)
+# Step 1: EPC → A-bus → PC (jumps back to interrupted instruction)
 .org 0x4C
 rti:
-  a_src=SHADOW_SR alu=PASS_A sr_load=1 pc=HOLD branch=SEQ
-  a_src=SHADOW_PC pc=ABUS
+  a_src=ESR alu=PASS_A sr_load=1 pc=HOLD branch=SEQ
+  a_src=EPC pc=ABUS
 
 # ── JMP Rs (op=24, dispatch=0x50) ────────────────────────────
 # PC = Rs (register indirect jump; RET = JMP R13)
@@ -185,19 +185,19 @@ iret:
   reg_a=IR_RD alu=PASS_A sr_load=1 pc=HOLD branch=SEQ
   reg_a=IR_RS pc=ABUS
 
-# ── RDSPC Rd, SSR (op=29, dispatch=0x5A) ─────────────────────
-# Read shadow SR into Rd. Privileged.
-# shadow_SR → A-bus → ALU PASS_A → R-bus → Rd
+# ── RDSPR Rd, ESR (op=29, dispatch=0x5A) ──────────────────────
+# Read ESR into Rd. Privileged.
+# ESR → A-bus → ALU PASS_A → R-bus → Rd
 .org 0x5A
-rdspc_ssr:
-  a_src=SHADOW_SR alu=PASS_A reg_w=IR_RD w_en=1 wmux=RBUS
+rdspr_esr:
+  a_src=ESR alu=PASS_A reg_w=IR_RD w_en=1 wmux=RBUS
 
-# ── RDSPC Rd, SPC (op=30, dispatch=0x5C) ─────────────────────
-# Read shadow PC into Rd. Privileged.
-# shadow_PC → A-bus → ALU PASS_A → R-bus → Rd
+# ── RDSPR Rd, EPC (op=30, dispatch=0x5C) ──────────────────────
+# Read EPC into Rd. Privileged.
+# EPC → A-bus → ALU PASS_A → R-bus → Rd
 .org 0x5C
-rdspc_spc:
-  a_src=SHADOW_PC alu=PASS_A reg_w=IR_RD w_en=1 wmux=RBUS
+rdspr_epc:
+  a_src=EPC alu=PASS_A reg_w=IR_RD w_en=1 wmux=RBUS
 
 # ═══════════════════════════════════════════════════════════════
 # Format B — Branches (0x60)
@@ -209,7 +209,7 @@ branch:
 
 # ═══════════════════════════════════════════════════════════════
 # Exception/interrupt entry (0x70)
-# Hardware has already saved shadow_PC, shadow_SR, set S=1, I=0
+# Hardware has already saved EPC, ESR, set S=1, I=0
 # via except_entry pulse. This micro-routine loads the vector
 # address into PC to jump to the handler.
 # ═══════════════════════════════════════════════════════════════

@@ -1,4 +1,4 @@
-// Penumbra Status Register (SR) — flags, mode bits, shadow latch
+// Penumbra Status Register (SR) — flags, mode bits, ESR latch
 //
 // The SR holds the CPU's non-architectural state that affects execution:
 //   - Condition flags (N, Z, C, V) updated by ALU operations
@@ -7,14 +7,14 @@
 //
 // Three write sources, in priority order (highest first):
 //   1. Exception entry (i_except_entry): atomically sets S=1, I=0,
-//      and snapshots SR into shadow_SR *before* the modification.
+//      and snapshots SR into ESR *before* the modification.
 //   2. Bulk load (i_sr_load): overwrites entire SR from i_wdata
 //      (used by RTI and SETSR to restore saved state).
 //   3. Flag update (i_flag_w_en): updates only NZCV from ALU outputs,
 //      leaving S and I untouched.
 //
-// The shadow_SR register captures the pre-exception SR value so the
-// interrupt micro-routine can push it onto the kernel stack. It is
+// The exception SR (ESR) register captures the pre-exception SR value so
+// the interrupt micro-routine can push it onto the kernel stack. It is
 // readable on the A-bus via a_src=01.
 //
 // The ei_shadow flip-flop provides a one-instruction delay after EI:
@@ -54,7 +54,7 @@ module status_reg
     output logic        o_sr_s,         // Supervisor bit (1=supervisor)
     output logic        o_sr_i,         // Interrupt enable (1=enabled)
     output logic [31:0] o_sr_read,      // Full SR as 32-bit word (for GETSR)
-    output logic [31:0] o_shadow_sr,    // Snapshot from last exception entry
+    output logic [31:0] o_esr,    // Exception SR (ESR) — saved at exception entry
     output logic        o_ei_shadow     // EI delay: suppress next IRQ check
 );
 
@@ -67,7 +67,7 @@ module status_reg
     // ── Internal state ───────────────────────────────────────
     logic flag_n, flag_z, flag_c, flag_v;
     logic sr_s, sr_i;
-    logic [31:0] shadow_sr;
+    logic [31:0] esr;
     logic ei_shadow;
 
     // ── Pack SR into 32-bit word ─────────────────────────────
@@ -92,7 +92,7 @@ module status_reg
     assign o_sr_s      = sr_s;
     assign o_sr_i      = sr_i;
     assign o_sr_read   = pack_sr(flag_n, flag_z, flag_c, flag_v, sr_s, sr_i);
-    assign o_shadow_sr = shadow_sr;
+    assign o_esr = esr;
     assign o_ei_shadow = ei_shadow;
 
     // ── Main register update logic ───────────────────────────
@@ -105,13 +105,13 @@ module status_reg
             flag_v    <= 1'b0;
             sr_s      <= 1'b1;  // Boot in supervisor mode
             sr_i      <= 1'b0;  // Interrupts disabled at reset
-            shadow_sr <= 32'b0;
+            esr <= 32'b0;
             ei_shadow <= 1'b0;
         end else begin
             // Priority 1: Exception entry (hardware pre-action)
             if (i_except_entry) begin
                 // Snapshot BEFORE modification
-                shadow_sr <= pack_sr(flag_n, flag_z, flag_c, flag_v, sr_s, sr_i);
+                esr <= pack_sr(flag_n, flag_z, flag_c, flag_v, sr_s, sr_i);
                 // Mode switch
                 sr_s <= 1'b1;
                 sr_i <= 1'b0;

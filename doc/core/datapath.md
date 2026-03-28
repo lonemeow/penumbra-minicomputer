@@ -310,17 +310,17 @@ W-mux selects MDR → register file writes Rd
 Exception entry has two phases: hardware pre-actions (atomic, before microcode) and a microcode sequence.
 
 **Hardware pre-actions** (triggered atomically by the fetch unit when an interrupt/exception is recognized):
-1. Latch shadow registers: `shadow_SR ← SR`, `shadow_PC ← PC` (return address; faulting PC for exceptions)
+1. Latch exception registers: `ESR ← SR`, `EPC ← PC` (return address; faulting PC for exceptions)
 2. Mode switch: `SR.S ← 1`, `SR.I ← 0`
 3. SP bank swap: R14 now reads/writes KSP
 4. Latch vector number from source (priority encoder for IRQs, hardwired per exception type)
 
-**Microcode sequence** (7 micro-ops + stall loops; uses `a_src` for shadow registers, `b_mux_sel` for constants 4/8):
+**Microcode sequence** (7 micro-ops + stall loops; uses `a_src` for exception registers, `b_mux_sel` for constants 4/8):
 ```
 int-0: reg_a=R14(KSP), b_mux=const_4, SUB → MAR = KSP - 4
-int-1: a_src=shadow_SR → MDR, mem_write     (stall loop)
+int-1: a_src=ESR → MDR, mem_write     (stall loop)
 int-2: reg_a=R14(KSP), b_mux=const_8, SUB → MAR = KSP - 8, also write R14 = KSP - 8
-int-3: a_src=shadow_PC → MDR, mem_write     (stall loop)
+int-3: a_src=EPC → MDR, mem_write     (stall loop)
 int-4: a_src=vector_addr, PASS_A → MAR      (vec_num × 4, pre-shifted)
 int-5: mem_read                              (stall loop)
 int-6: pc_src=MDR → PC = handler address, hand off to fetch unit
@@ -432,7 +432,7 @@ Condition evaluation hardware: each condition is a simple combinational function
 
 | Bits | Field | Width | Description |
 |------|-------|-------|-------------|
-| 48:47 | `a_src[1:0]` | 2 | A-bus source: 00=register file, 01=shadow_SR, 10=shadow_PC, 11=vector_addr |
+| 48:47 | `a_src[1:0]` | 2 | A-bus source: 00=register file, 01=ESR, 10=EPC, 11=vector_addr |
 | 46:43 | `reg_a_sel[3:0]` | 4 | Register file read port A address (used when a_src=00) |
 | 42:39 | `reg_b_sel[3:0]` | 4 | Register file read port B address |
 | 38:35 | `reg_w_sel[3:0]` | 4 | Register file write port address |
@@ -489,7 +489,7 @@ STALL checks a unified busy signal: `cache_busy | alu_busy`. When the operation 
 
 - **busy=1:** Hold micro-PC (keep waiting).
 - **busy=0, fault=0:** micro-PC++ (normal completion).
-- **busy=0, fault=1:** Trigger exception via fetch unit. The D-cache/MMU provides the fault vector (4=TLB miss/page fault, 6=alignment fault, 9=bus error). Hardware pre-actions fire with `shadow_PC ← PC` (still pointing at the faulting instruction, since `pc_src=001` hasn't executed). The instruction is effectively aborted mid-execution.
+- **busy=0, fault=1:** Trigger exception via fetch unit. The D-cache/MMU provides the fault vector (4=TLB miss/page fault, 6=alignment fault, 9=bus error). Hardware pre-actions fire with `EPC ← PC` (still pointing at the faulting instruction, since `pc_src=001` hasn't executed). The instruction is effectively aborted mid-execution.
 
 Since memory operations and multi-cycle ALU operations never overlap in the same micro-op, a single busy line is sufficient. The fault signal is only meaningful for memory operations (ALU operations cannot fault).
 
@@ -530,7 +530,7 @@ The fetch unit serves as the **unified exception dispatch point** for all except
 When `fetch_go` is asserted (instruction complete, privilege check failed, or memory fault detected):
 
 1. **Exception check** (in priority order):
-   - **Memory fault:** If triggered by STALL-with-fault → hardware pre-actions with vector from `fault_vector`, dispatch to exception entry. `shadow_PC` = faulting instruction (PC not yet advanced).
+   - **Memory fault:** If triggered by STALL-with-fault → hardware pre-actions with vector from `fault_vector`, dispatch to exception entry. `EPC` = faulting instruction (PC not yet advanced).
    - **Privilege violation:** If triggered by PRIV branch_cond → hardware pre-actions with vector 3, dispatch to exception entry.
    - **Pending interrupt:** If IRQ pending, SR.I=1, and ei_shadow not set → hardware pre-actions with vector from priority encoder, dispatch to exception entry.
 2. **Instruction fetch:** Read I-cache at current PC (I-cache address is permanently wired to PC — split I/D cache). On hit: latch IR, compute dispatch address, assert `ir_valid`. On miss: stall until ready.

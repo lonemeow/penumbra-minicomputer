@@ -42,7 +42,7 @@ SR contains:
 - **S (supervisor):** Current privilege level (0 = user, 1 = supervisor)
 - **I (interrupt enable):** Global interrupt mask
 
-Previous mode is preserved via shadow registers at exception entry, not bits within SR. See the datapath specification for the exception model.
+Previous mode is preserved via exception registers (EPC, ESR) at exception entry, not bits within SR. See the datapath specification for the exception model.
 
 Carry convention is **ARM-style** (C = NOT borrow on subtraction). Flags are updated by arithmetic/logic ALU operations, INC, DEC, CMPI, and MUL/DIV/MOD. MOV, load immediates (LLI, LLIS, LUI), loads, stores, branches, and system instructions do **not** affect flags. See the datapath specification for full flag generation details.
 
@@ -65,7 +65,7 @@ Carry convention is **ARM-style** (C = NOT borrow on subtraction). Flags are upd
 | 1 | Z | Zero flag |
 | 0 | N | Negative flag (= result[31]) |
 
-System bits are in the upper word, condition flags in the lower nibble. Bits [29:4] are reserved for future use and should be written as zero for forward compatibility. This layout is used by GETSR, SETSR, and the exception entry shadow save.
+System bits are in the upper word, condition flags in the lower nibble. Bits [29:4] are reserved for future use and should be written as zero for forward compatibility. This layout is used by GETSR, SETSR, and the exception entry save (EPC/ESR).
 
 The SR contains only CPU-internal state. Registers belonging to other system devices (MMU, interrupt controller, etc.) are accessed via the system register bus — see [System Register Access](#system-register-access) below.
 
@@ -408,7 +408,7 @@ The kernel interrupt handler then saves remaining registers (R1-R13) and USP in 
 
 ### Exit Sequence
 
-Return-from-interrupt (RTI) restores shadow_SR then shadow_PC, reversing the entry sequence. For context switches (return to a *different* process), IRET Rd, Rs atomically loads SR from Rd and PC from Rs. Both are privileged. RDSPC Rd, SSR/SPC lets the kernel read the shadow registers to save them to the process table.
+Return-from-interrupt (RTI) restores ESR then EPC, reversing the entry sequence. For context switches (return to a *different* process), IRET Rd, Rs atomically loads SR from Rd and PC from Rs. Both are privileged. RDSPR Rd, ESR/EPC lets the kernel read the exception registers to save them to the process table.
 
 ### Vector Table
 

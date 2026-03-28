@@ -6,14 +6,14 @@
 //   - flag_w_en=0 does not modify flags
 //   - Bulk load via sr_load (RTI/SETSR path)
 //   - sr_load ignores reserved bits
-//   - Exception entry: snapshot then S=1, I=0
+//   - Exception entry: snapshot to ESR then S=1, I=0
 //   - Exception entry preserves flags, only changes S and I
 //   - EI sets I=1 and arms ei_shadow
 //   - DI sets I=0
 //   - ei_shadow auto-clears on i_ei_shadow_clr
 //   - Priority: except_entry > sr_load > flag_w_en
 //   - o_sr_read packing matches bit layout
-//   - Full RTI round-trip: save SR via exception, restore via sr_load
+//   - Full RTI round-trip: save SR to ESR via exception, restore via sr_load
 
 #include <cstdio>
 #include <cstdlib>
@@ -90,7 +90,7 @@ int main(int argc, char** argv) {
     check1("reset_ei_shadow", dut->o_ei_shadow, 0);
     // SR read: S=1 → bit 31 set, everything else 0
     check("reset_sr_read", dut->o_sr_read, (1u << SR_S));
-    check("reset_shadow_sr", dut->o_shadow_sr, 0x00000000);
+    check("reset_esr", dut->o_esr, 0x00000000);
 
     // ── Flag latch from ALU ────────────────────────────────────
     clear_inputs(dut);
@@ -178,8 +178,8 @@ int main(int argc, char** argv) {
     dut->i_except_entry = 1;
     tick(dut);
     clear_inputs(dut);
-    // shadow_sr should capture the pre-exception state
-    check("except_shadow", dut->o_shadow_sr, pre_except);
+    // ESR should capture the pre-exception state
+    check("except_esr", dut->o_esr, pre_except);
     // SR should now be: S=1, I=0, flags unchanged
     check1("except_s_set",     dut->o_sr_s,   1);
     check1("except_i_cleared", dut->o_sr_i,   0);
@@ -260,8 +260,8 @@ int main(int argc, char** argv) {
     dut->i_except_entry = 1;
     tick(dut);
     clear_inputs(dut);
-    uint32_t saved_sr = dut->o_shadow_sr;
-    check("rti_shadow_captured", saved_sr, user_sr);
+    uint32_t saved_sr = dut->o_esr;
+    check("rti_esr_captured", saved_sr, user_sr);
     // Now in supervisor mode, interrupts off
     check1("rti_except_s", dut->o_sr_s, 1);
     check1("rti_except_i", dut->o_sr_i, 0);

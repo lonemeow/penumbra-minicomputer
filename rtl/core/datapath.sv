@@ -254,7 +254,7 @@ module datapath
     // verilator lint_off UNUSEDSIGNAL
     logic [31:0] sr_read;   // Full SR word — used by GETSR (future micro-op path)
     // verilator lint_on UNUSEDSIGNAL
-    logic [31:0] shadow_sr;
+    logic [31:0] esr;
     logic        ei_shadow_wire;
 
     status_reg u_status_reg (
@@ -278,7 +278,7 @@ module datapath
         .o_sr_s         (sr_s_wire),
         .o_sr_i         (sr_i_wire),
         .o_sr_read      (sr_read),
-        .o_shadow_sr    (shadow_sr),
+        .o_esr    (esr),
         .o_ei_shadow    (ei_shadow_wire)
     );
 
@@ -291,12 +291,12 @@ module datapath
     logic [31:0] vector_addr;
     assign vector_addr = {26'b0, i_vector_num, 2'b00};
 
-    logic [31:0] shadow_pc;
+    logic [31:0] epc;
 
     amux u_amux (
         .i_reg_a       (reg_a_data),
-        .i_shadow_sr   (shadow_sr),
-        .i_shadow_pc   (shadow_pc),
+        .i_esr   (esr),
+        .i_epc   (epc),
         .i_vector_addr (vector_addr),
         .i_sel         (i_a_src),
         .o_a_bus       (a_bus)
@@ -388,7 +388,7 @@ module datapath
         .o_pc           (pc_value),
         .o_pc_plus4     (pc_plus4),
         .o_pc_offset    (pc_offset),
-        .o_shadow_pc    (shadow_pc)
+        .o_epc    (epc)
     );
 
     assign o_pc = pc_value;

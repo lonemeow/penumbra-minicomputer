@@ -4,11 +4,11 @@
 ;   1. Identity-map page 0 (code + low data) — VPN 0 → PPN 0
 ;   2. Enable MMU
 ;   3. Load from address 0x3000 (VPN 3) — NOT mapped in TLB
-;   4. CPU should trap: shadow PC/SR saved, dispatch to vector 2 (0x08)
+;   4. CPU should trap: EPC/ESR saved, dispatch to vector 2 (0x08)
 ;   5. Fault handler verifies FAULT_ADDR = 0x3000, FAULT_STATUS shows TLB miss
 ;   6. Handler sets R1=1 (PASS) and breaks
 ;
-; The faulting instruction's PC is saved in shadow_PC so the OS could
+; The faulting instruction's PC is saved in EPC so the OS could
 ; refill the TLB and restart. This test just verifies the trap fires.
 ;
 ; Result: R1=1 PASS, R1=0 FAIL

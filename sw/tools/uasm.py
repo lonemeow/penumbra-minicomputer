@@ -36,7 +36,7 @@ import re
 
 FIELDS = [
     ("a_src", 48, 47, {
-        "REG": 0, "SHADOW_SR": 1, "SHADOW_PC": 2, "VECTOR": 3,
+        "REG": 0, "ESR": 1, "EPC": 2, "VECTOR": 3,
     }),
     ("reg_a", 46, 43, {
         "IR_RD": 0, "IR_RS": 1,

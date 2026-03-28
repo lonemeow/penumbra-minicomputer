@@ -10,11 +10,11 @@
 //   - Branch offset: zero offset (branch to next instruction)
 //   - Branch offset: maximum positive offset
 //   - Branch offset: maximum negative offset
-//   - Shadow PC: latched on exception entry
-//   - Shadow PC: preserved across normal PC loads
-//   - Shadow PC: reset to zero
+//   - EPC: latched on exception entry
+//   - EPC: preserved across normal PC loads
+//   - EPC: reset to zero
 //   - Full branch sequence: load PC, compute target, take branch
-//   - Full exception sequence: snapshot then handler loads new PC
+//   - Full exception sequence: snapshot EPC then handler loads new PC
 
 #include <cstdio>
 #include <cstdlib>
@@ -77,7 +77,7 @@ int main(int argc, char** argv) {
     reset(dut);
     check("reset_pc",        dut->o_pc,        0x00000000);
     check("reset_pc_plus4",  dut->o_pc_plus4,  0x00000004);
-    check("reset_shadow_pc", dut->o_shadow_pc, 0x00000000);
+    check("reset_epc", dut->o_epc, 0x00000000);
 
     // ── PC holds when load=0 ───────────────────────────────────
     dut->i_pc_next = 0xDEADBEEF;
@@ -140,31 +140,31 @@ int main(int argc, char** argv) {
     check("branch_max_neg", dut->o_pc_offset, expected_branch_target(0x00800000, 0x200000));
     check("branch_max_neg_val", dut->o_pc_offset, 0x00000000);  // 0x800000 + (-0x800000) = 0
 
-    // ── Shadow PC: latched on exception entry ───────────────────
+    // ── EPC: latched on exception entry ──────────────────────────
     load_pc(dut, 0x00002000);
     clear_inputs(dut);
     dut->i_except_entry = 1;
     tick(dut);
     clear_inputs(dut);
-    check("shadow_latched", dut->o_shadow_pc, 0x00002000);
+    check("epc_latched", dut->o_epc, 0x00002000);
     // PC itself unchanged (no pc_load)
-    check("shadow_pc_unchanged", dut->o_pc, 0x00002000);
+    check("epc_pc_unchanged", dut->o_pc, 0x00002000);
 
-    // ── Shadow PC: preserved across normal PC loads ─────────────
+    // ── EPC: preserved across normal PC loads ───────────────────
     load_pc(dut, 0x00003000);
-    check("shadow_preserved", dut->o_shadow_pc, 0x00002000);
+    check("epc_preserved", dut->o_epc, 0x00002000);
     check("pc_moved", dut->o_pc, 0x00003000);
 
-    // ── Shadow PC: updated only on new exception ────────────────
+    // ── EPC: updated only on new exception ──────────────────────
     load_pc(dut, 0x00004000);
     dut->i_except_entry = 1;
     tick(dut);
     clear_inputs(dut);
-    check("shadow_updated", dut->o_shadow_pc, 0x00004000);
+    check("epc_updated", dut->o_epc, 0x00004000);
 
-    // ── Shadow PC: reset clears it ──────────────────────────────
+    // ── EPC: reset clears it ────────────────────────────────────
     reset(dut);
-    check("shadow_reset", dut->o_shadow_pc, 0x00000000);
+    check("epc_reset", dut->o_epc, 0x00000000);
 
     // ── Full branch sequence ────────────────────────────────────
     // Simulate: fetch at 0x1000, branch forward by 10 words
@@ -189,13 +189,13 @@ int main(int argc, char** argv) {
     dut->i_except_entry = 1;
     tick(dut);
     clear_inputs(dut);
-    check("except_shadow_pc", dut->o_shadow_pc, 0x00002000);
+    check("except_epc", dut->o_epc, 0x00002000);
 
     // Handler loads via MDR → pc_mux → PC (simulated as direct load)
     load_pc(dut, 0xFFFF0000);
     check("except_handler_pc", dut->o_pc, 0xFFFF0000);
-    // Shadow still holds user PC
-    check("except_shadow_kept", dut->o_shadow_pc, 0x00002000);
+    // EPC still holds user PC
+    check("except_epc_kept", dut->o_epc, 0x00002000);
 
     // RTI: restore PC from stack (simulated as direct load)
     load_pc(dut, 0x00002000);

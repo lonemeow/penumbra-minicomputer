@@ -102,7 +102,7 @@ The micro-sequencer receives its next micro-PC from the fetch unit when a new in
 - **IR-mapped:** computed from instruction bits by the fetch unit's decode logic.
 - **Interrupt entry:** hardwired start address of the interrupt micro-routine, selected by the fetch unit when a pending IRQ is detected (instead of normal dispatch).
 
-SYSCALL/BREAK entry points trigger hardware pre-actions (shadow latch, mode switch) and then sequence (micro-PC++) into the interrupt entry micro-routine placed consecutively in ROM.
+SYSCALL/BREAK entry points trigger hardware pre-actions (EPC/ESR latch, mode switch) and then sequence (micro-PC++) into the interrupt entry micro-routine placed consecutively in ROM.
 
 ---
 
@@ -128,7 +128,7 @@ When `fetch_go` is asserted (instruction complete):
 ```
 1. Check pending interrupts:
    - If (IRQ pending AND SR.I=1 AND NOT ei_shadow):
-       → trigger hardware pre-actions (shadow latch, mode switch)
+       → trigger hardware pre-actions (EPC/ESR latch, mode switch)
        → dispatch_addr ← interrupt_entry_start (hardwired)
        → ir_valid ← 1
        → done (micro-sequencer loads dispatch_addr)
@@ -290,7 +290,7 @@ Attempting to implement this against the actual micro-word reveals **five missin
 
 The following must happen in hardware before the micro-routine runs:
 
-1. **Latch shadow registers:** `shadow_SR ← SR`, `shadow_PC ← PC` (return address; faulting PC for exceptions)
+1. **Latch exception registers:** `ESR ← SR`, `EPC ← PC` (return address; faulting PC for exceptions)
 2. **Mode switch:** `SR.S ← 1`, `SR.I ← 0`
 3. **SP bank swap:** R14 now reads/writes KSP (user SP banked away)
 4. **Latch vector number:** `vec_num ← source` (from priority encoder for IRQs, hardwired per exception type)
@@ -301,7 +301,7 @@ The following must happen in hardware before the micro-routine runs:
 
 Writing the micro-ops reveals that the current micro-word cannot express this sequence. The following are needed:
 
-**Issue 6 — No A-bus source mux for internal registers.** The micro-word's `reg_a_sel` reads from the register file, but interrupt entry needs `shadow_SR`, `shadow_PC`, and `vec_num` on the A-bus. **Proposed fix:** Add `a_src[1:0]` (2 bits): `00`=register file, `01`=shadow_SR, `10`=shadow_PC, `11`=vector_addr (vec_num << 2, pre-shifted by hardware). This replaces the implicit "A-bus always comes from register file" assumption.
+**Issue 6 — No A-bus source mux for internal registers.** The micro-word's `reg_a_sel` reads from the register file, but interrupt entry needs `ESR`, `EPC`, and `vec_num` on the A-bus. **Proposed fix:** Add `a_src[1:0]` (2 bits): `00`=register file, `01`=ESR, `10`=EPC, `11`=vector_addr (vec_num << 2, pre-shifted by hardware). This replaces the implicit "A-bus always comes from register file" assumption.
 
 **Issue 7 — No microcode-accessible constants.** The immediate extractor reads from IR, but during interrupt entry IR holds the interrupted instruction (or is stale). The microcode needs the constants 4 and 8 for stack pointer adjustment. **Proposed fix:** Add `const_sel[1:0]` (2 bits) as an alternative B-bus source: `00`=normal (reg/imm from IR), `01`=4, `10`=8, `11`=reserved. Gated by a new `b_mux_sel` encoding: expand to 2 bits (`00`=register, `01`=IR immediate, `10`=micro-constant).
 
@@ -333,8 +333,8 @@ Using the proposed new signals: `a_src[1:0]`, `b_mux_sel` expanded to 2 bits, `s
 3. `mar_load = 1`, `mar_src = 0` (R-bus) → MAR ← KSP - 4
 4. Sequential → int-1
 
-*int-1 — drive shadow_SR to MDR, write to memory (stall loop):*
-1. `a_src = 01` (shadow_SR) → A-bus = old SR value
+*int-1 — drive ESR to MDR, write to memory (stall loop):*
+1. `a_src = 01` (ESR) → A-bus = old SR value
 2. `mdr_load_a = 1` → MDR ← old SR
 3. `mem_write = 1`, `mem_size = 10` (word) → write MDR to [MAR] = [KSP - 4]
 4. `branch_cond = 010` (if stalled), `next_addr = int-1` → loop until write completes
@@ -347,8 +347,8 @@ Using the proposed new signals: `a_src[1:0]`, `b_mux_sel` expanded to 2 bits, `s
 4. `reg_w_sel = R14`, `reg_w_en = 1`, `w_mux_sel = 0` (R-bus) → KSP ← KSP - 8
 5. Sequential → int-3
 
-*int-3 — drive shadow_PC to MDR, write to memory (stall loop):*
-1. `a_src = 10` (shadow_PC) → A-bus = old PC (return address)
+*int-3 — drive EPC to MDR, write to memory (stall loop):*
+1. `a_src = 10` (EPC) → A-bus = old PC (return address)
 2. `mdr_load_a = 1` → MDR ← old PC
 3. `mem_write = 1`, `mem_size = 10` (word) → write MDR to [MAR] = [KSP - 8]
 4. `branch_cond = 010` (if stalled) → loop until write completes
@@ -473,7 +473,7 @@ Walkthrough of a complete FPU emulation cycle:
 ```
 1. User code: FADD R1, R2              (PC = 0x1000)
 2. No FPU hardware → illegal instruction exception (vector 2)
-3. Hardware pre-actions: shadow_SR ← SR (S=0,I=1,...), shadow_PC ← 0x1000
+3. Hardware pre-actions: ESR ← SR (S=0,I=1,...), EPC ← 0x1000
    SR.S ← 1, SR.I ← 0, swap to KSP
 4. Exception entry microcode: push SR at [KSP-4], push PC(0x1000) at [KSP-8], KSP -= 8
 5. Fetch vector[2], PC ← handler address
@@ -507,7 +507,7 @@ Walkthrough of a complete FPU emulation cycle:
 2. LDW micro-routine: ldw-0 computes EA, ldw-1 issues mem_read
 3. D-cache/MMU: TLB miss → fault=1, fault_vector=4
 4. STALL resolves with fault → exception via fetch unit
-5. Hardware pre-actions: shadow_PC ← 0x2000 (PC not yet advanced)
+5. Hardware pre-actions: EPC ← 0x2000 (PC not yet advanced)
 6. Exception entry: push SR, push PC(0x2000), load vector[4], jump to page fault handler
 
 --- Page fault handler (software) ---
@@ -534,7 +534,7 @@ All issues resolved. Fields listed from MSB to LSB with exact bit positions.
 
 | Bits | Field | Width | Description |
 |------|-------|-------|-------------|
-| 48:47 | `a_src[1:0]` | 2 | A-bus source: 00=register file, 01=shadow_SR, 10=shadow_PC, 11=vector_addr |
+| 48:47 | `a_src[1:0]` | 2 | A-bus source: 00=register file, 01=ESR, 10=EPC, 11=vector_addr |
 | 46:43 | `reg_a_sel[3:0]` | 4 | Register file read port A address (used when a_src=00) |
 | 42:39 | `reg_b_sel[3:0]` | 4 | Register file read port B address |
 | 38:35 | `reg_w_sel[3:0]` | 4 | Register file write port address |
@@ -572,7 +572,7 @@ All issues resolved. Fields listed from MSB to LSB with exact bit positions.
 | Replace `next_addr[9:0]` with `fwd_offset[2:0]` | 7 | — | No absolute/backward jumps needed; linear micro-routines with stall-hold and fetch-handoff |
 | Expand `pc_src` 2→3 bits | — | 1 | Absorbs `pc_mdr_load`, adds MDR source for exception vector jump |
 | Expand `b_mux_sel` 1→2 bits | — | 1 | Micro-constants (4, 8) for stack adjustment without IR |
-| Add `a_src[1:0]` | — | 2 | A-bus source mux for shadow_SR, shadow_PC, vector_addr in exception entry |
+| Add `a_src[1:0]` | — | 2 | A-bus source mux for ESR, EPC, vector_addr in exception entry |
 | Add `sr_load` | — | 1 | Load full SR from datapath for RTI |
 | Replace `lu_start`+`lu_sel`+`lu_to_rbus` (5 bits) with `alu_start` (1 bit) | 4 | — | Unified ALU: MUL/DIV/MOD/FP are `alu_op` codes; ALU asserts `alu_busy` for multi-cycle ops |
 | Expand `alu_op` 4→5 bits | — | 1 | Room for MUL/DIV/MOD (6 ops) + future FP ops (15 slots) |
@@ -596,7 +596,7 @@ On ECP5: 256 entries × 48 bits = 12 Kbit (1 EBR, well within a single 18 Kbit b
 | 3 | `reg_w_en` must be gated by Format R `F` bit | **Accepted** | Hardware AND: `actual_w_en = reg_w_en & ~(format_R & IR[16])` |
 | 4 | Memory stalls vs ALU stalls share STALL condition | **Accepted** | Unified `busy` line: `cache_busy \| alu_busy`; never overlap |
 | 5 | `branch_cond` 011/100 redefined for conditional pc_src | **Accepted** | BRT/BRF gate pc_src and hand off to fetch unit; single-micro-op Bcc |
-| 6 | No A-bus source for shadow_SR, shadow_PC, vector_addr | **Resolved** | Added `a_src[1:0]` field |
+| 6 | No A-bus source for ESR, EPC, vector_addr | **Resolved** | Added `a_src[1:0]` field |
 | 7 | No microcode-accessible constants | **Resolved** | Expanded `b_mux_sel` to 2 bits with hardwired 4 and 8 |
 | 8 | No SR load-from-datapath for RTI | **Resolved** | Added `sr_load` field |
 | 9 | Original 6-step interrupt sequence infeasible | **Resolved** | Corrected to 7 micro-ops + stall loops; hardware pre-actions for mode switch |
@@ -607,4 +607,4 @@ On ECP5: 256 entries × 48 bits = 12 Kbit (1 EBR, well within a single 18 Kbit b
 | 14 | Privilege check mechanism undefined | **Resolved** | `branch_cond=PRIV` (101): checks SR.S, triggers exception via fetch unit on violation |
 | 15 | FPU-absent trap mechanism | **Resolved** | Different ROM image fills FP opcode entries with illegal instruction exception code; zero runtime overhead |
 | 16 | FP condition branches and GPR↔FPR moves | **Resolved** | FP-in-GPRs: FPU uses A/B/R buses like integer LU; FP compare sets NZCV via `flag_w_en`; normal Bcc works; no separate FP register file or move instructions |
-| 17 | Page faults during instruction execution have no trigger path | **Resolved** | Extended STALL: 3-way resolution (busy/done/fault). D-cache/MMU asserts `mem_fault` + `fault_vector[3:0]` on TLB miss, protection violation, alignment fault, or bus error. Sequencer triggers exception via fetch unit, same as PRIV. `shadow_PC` = faulting instruction (PC not yet advanced). No new micro-word bits needed. |
+| 17 | Page faults during instruction execution have no trigger path | **Resolved** | Extended STALL: 3-way resolution (busy/done/fault). D-cache/MMU asserts `mem_fault` + `fault_vector[3:0]` on TLB miss, protection violation, alignment fault, or bus error. Sequencer triggers exception via fetch unit, same as PRIV. `EPC` = faulting instruction (PC not yet advanced). No new micro-word bits needed. |

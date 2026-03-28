@@ -218,13 +218,13 @@ BNE   .flush_loop
 
 ### TLB Miss Handler
 
-The TLB miss handler is entered via **exception vector 2** (VEC_TLB_MISS, physical address 0x08) when the hardware finds no matching entry. Protection faults use **vector 3** (VEC_TLB_PROT, 0x0C). The CPU has already saved shadow PC/SR and entered supervisor mode with interrupts disabled. Vector table entries are fetched from physical addresses (MMU bypassed) so no TLB mapping is needed for the vector page.
+The TLB miss handler is entered via **exception vector 2** (VEC_TLB_MISS, physical address 0x08) when the hardware finds no matching entry. Protection faults use **vector 3** (VEC_TLB_PROT, 0x0C). The CPU has already saved EPC/ESR and entered supervisor mode with interrupts disabled. Vector table entries are fetched from physical addresses (MMU bypassed) so no TLB mapping is needed for the vector page.
 
 **Recommended stackless handler** using a fixed save area in the pinned vector page (0x00000000):
 
 ```asm
 ; ── Vector 4 entry point ──────────────────────────
-; Hardware state: shadow_PC/shadow_SR saved, S=1, I=0
+; Hardware state: EPC/ESR saved, S=1, I=0
 ; Save scratch registers to fixed area at 0x40-0x5F
 
 STW   R1, [R0 + 0x40]          ; save scratch (R0=0, Format M offset)

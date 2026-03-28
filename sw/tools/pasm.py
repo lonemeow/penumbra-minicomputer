@@ -136,8 +136,8 @@ FORMAT_R_OPS = {
     "EI":        (25, False, 0),
     "DI":        (26, False, 0),
     "IRET":      (27, True,  0),   # IRET Rd, Rs — SR ← Rd, PC ← Rs (2 micro-ops: 0x1B-0x1C)
-    "_RDSPC_SSR": (29, False, 0),  # RDSPC Rd, SSR (internal: assembler maps RDSPC)
-    "_RDSPC_SPC": (30, False, 0),  # RDSPC Rd, SPC (internal: assembler maps RDSPC)
+    "_RDSPR_ESR": (29, False, 0),  # RDSPR Rd, ESR (internal: assembler maps RDSPR)
+    "_RDSPR_EPC": (30, False, 0),  # RDSPR Rd, EPC (internal: assembler maps RDSPR)
     "GETUSP":    (31, False, 0),   # (not yet implemented, moved for IRET)
     # SETUSP: deferred — needs opcode assignment when implemented
 }
@@ -207,22 +207,22 @@ def assemble_line(mnemonic, operands, addr, labels, line_num, constants=None):
     if mn == "RET":
         return encode_format_r(24, 0, 13, 0)  # JMP R13
 
-    # ── RDSPC Rd, SSR / RDSPC Rd, SPC — read shadow registers ──
-    # (handled before FORMAT_R_OPS lookup since internal keys are _RDSPC_*)
-    if mn == "RDSPC":
+    # ── RDSPR Rd, ESR / RDSPR Rd, EPC — read exception registers ──
+    # (handled before FORMAT_R_OPS lookup since internal keys are _RDSPR_*)
+    if mn == "RDSPR":
         if len(operands) != 2:
-            raise ValueError("RDSPC expects Rd, SSR or Rd, SPC")
+            raise ValueError("RDSPR expects Rd, ESR or Rd, EPC")
         rd = parse_reg(operands[0])
         if rd is None:
             raise ValueError(f"bad register '{operands[0]}'")
         spec = operands[1].upper()
-        if spec == "SSR":
-            rdspc_op = FORMAT_R_OPS["_RDSPC_SSR"][0]
-        elif spec == "SPC":
-            rdspc_op = FORMAT_R_OPS["_RDSPC_SPC"][0]
+        if spec == "ESR":
+            rdspr_op = FORMAT_R_OPS["_RDSPR_ESR"][0]
+        elif spec == "EPC":
+            rdspr_op = FORMAT_R_OPS["_RDSPR_EPC"][0]
         else:
-            raise ValueError(f"RDSPC: unknown special register '{operands[1]}', expected SSR or SPC")
-        return encode_format_r(rdspc_op, rd, 0, 0)
+            raise ValueError(f"RDSPR: unknown special register '{operands[1]}', expected ESR or EPC")
+        return encode_format_r(rdspr_op, rd, 0, 0)
 
     # ── Format R ──
     if mn in FORMAT_R_OPS:

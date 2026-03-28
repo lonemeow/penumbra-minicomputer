@@ -1,14 +1,14 @@
-// Penumbra PC Unit — program counter register, adder, and shadow latch
+// Penumbra PC Unit — program counter register, adder, and EPC latch
 //
 // The PC is a separate hardware register with its own adder, independent
 // of the main ALU. It provides:
 //   - PC register: 32-bit, updated on clock edge when i_pc_load is asserted
 //   - PC+4 output: for sequential fetch and BL return address (→ regfile)
 //   - PC+offset output: for branch targets (PC + sign_extend(offset22 << 2))
-//   - Shadow PC: latched at exception entry, readable on A-bus via a_src=10
+//   - Exception PC (EPC): latched at exception entry, readable on A-bus via a_src=10
 //
 // The pc_mux (separate module) selects which value loads into the PC register.
-// This module just provides the register, adder outputs, and shadow latch.
+// This module just provides the register, adder outputs, and EPC latch.
 //
 // On FPGA, the two additions (PC+4 and PC+4+offset) are independent adders —
 // cheap in LUTs. A discrete build would share one adder with a B-input mux
@@ -29,13 +29,13 @@ module pc_reg
                                         // Branch target = PC + 4 + sign_extend(offset22 << 2)
 
     // ── Exception entry ──────────────────────────────────────
-    input  logic        i_except_entry, // Pulse: snapshot PC into shadow_PC
+    input  logic        i_except_entry, // Pulse: snapshot PC into EPC
 
     // ── Outputs ──────────────────────────────────────────────
     output logic [31:0] o_pc,           // Current PC value (→ I-cache, R15 read mux)
     output logic [31:0] o_pc_plus4,     // PC + 4 (→ pc_mux input, BL return addr)
     output logic [31:0] o_pc_offset,    // PC + 4 + sign_extend(offset22 << 2) (→ pc_mux)
-    output logic [31:0] o_shadow_pc     // Snapshot from last exception entry (→ A-bus)
+    output logic [31:0] o_epc           // Exception PC (EPC) — saved at exception entry (→ A-bus)
 );
 
     // ── PC register ──────────────────────────────────────────
@@ -62,16 +62,16 @@ module pc_reg
     assign offset_extended = {{8{i_offset22[21]}}, i_offset22, 2'b00};
     assign o_pc_offset = pc + offset_extended;
 
-    // ── Shadow PC (exception snapshot) ───────────────────────
-    logic [31:0] shadow_pc;
+    // ── Exception PC (EPC) — saved at exception entry ────────
+    logic [31:0] epc;
 
     always_ff @(posedge i_clk) begin
         if (i_rst)
-            shadow_pc <= 32'b0;
+            epc <= 32'b0;
         else if (i_except_entry)
-            shadow_pc <= pc;
+            epc <= pc;
     end
 
-    assign o_shadow_pc = shadow_pc;
+    assign o_epc = epc;
 
 endmodule

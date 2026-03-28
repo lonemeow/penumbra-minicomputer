@@ -4,7 +4,7 @@
 ;   1. Set up identity-mapped TLB (page 0 with U bit for user code)
 ;   2. Enable MMU, IRET to user mode
 ;   3. User-mode code attempts DI (privileged) → should trap to VEC_PRIV
-;   4. Privilege handler verifies shadow PC points at the faulting DI,
+;   4. Privilege handler verifies EPC points at the faulting DI,
 ;      sets R1=1 (pass), then does BREAK
 ;   5. If DI actually executes (no trap), user code falls through to fail
 ;
@@ -27,10 +27,10 @@
 
 ; ═══════════════════════════════════════════════════════════════
 ; Privilege violation handler (runs in supervisor mode)
-; Verifies shadow PC matches the faulting DI, then passes.
+; Verifies EPC matches the faulting DI, then passes.
 ; ═══════════════════════════════════════════════════════════════
 priv_handler:
-    RDSPC R11, SPC
+    RDSPR R11, EPC
     CMP   R11, R10
     BNE   fail
     LLI   R1, #1
@@ -64,7 +64,7 @@ start:
     WRSYS R6, #MMU, #MMUCR
 
     ; ── Remember where user_code's DI is for handler to check ─
-    LLI  R10, user_code        ; R10 = expected shadow PC (DI addr)
+    LLI  R10, user_code        ; R10 = expected EPC (DI addr)
 
     ; ── Switch to user mode via IRET ──────────────────────────
     LLI  R2, #0                ; user-mode SR (S=0, I=0)
