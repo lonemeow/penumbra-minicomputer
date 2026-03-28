@@ -3,8 +3,8 @@
 // Controlled by b_mux_sel[1:0] from the micro-word:
 //   00 = register port B output (normal register operand)
 //   01 = immediate from IR (via immediate extractor)
-//   10 = constant 4 (used for stack adjust: KSP - 4)
-//   11 = constant 8 (used for stack adjust: KSP - 8)
+//   10 = constant 4 (used for stack adjust: SSP - 4)
+//   11 = constant 8 (used for stack adjust: SSP - 8)
 //
 // Purely combinational — a 4:1 multiplexer.
 // In discrete: eight 74x153 chips (dual 4:1 mux × 32 bits = 16 muxes).

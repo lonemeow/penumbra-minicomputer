@@ -30,7 +30,7 @@ The async external bus eliminates clock distribution problems and works identica
 │  │  │ File      │  │ Sequencer+ROM  │  │                                  │
 │  │  │ R0-R13    │  │ (~48-bit wide) │  │                                  │
 │  │  │ SP (USP/  │  └────────────────┘  │                                  │
-│  │  │   KSP)    │          │           │   busy/done    ┌──────────┐     │
+│  │  │   SSP)    │          │           │   busy/done    ┌──────────┐     │
 │  │  │ PC        │          v           │<─────────────> │ MUL unit │     │
 │  │  │ SR        │  ┌────────────┐      │   busy/done    ├──────────┤     │
 │  │  └──────────┘  │    ALU     │      │<─────────────> │ DIV unit │     │

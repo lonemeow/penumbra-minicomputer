@@ -25,7 +25,7 @@ The Penumbra CPU uses a three-bus datapath controlled by horizontal microcode. T
           │     Register File       │     │         │
           │  15 entries: R0-R14     │     │         │
           │  R0: reads as 0         │     │         │
-          │  R14: USP/KSP banked    │     │         │
+          │  R14: USP/SSP banked    │     │         │
           │  R15 addr: returns PC ──┼─────┼─────────┼── (from PC register)
           │                         │     │         │
           │  Read Port A ──► A-bus  │     │         │
@@ -312,14 +312,14 @@ Exception entry has two phases: hardware pre-actions (atomic, before microcode) 
 **Hardware pre-actions** (triggered atomically by the fetch unit when an interrupt/exception is recognized):
 1. Latch exception registers: `ESR ← SR`, `EPC ← PC` (return address; faulting PC for exceptions)
 2. Mode switch: `SR.S ← 1`, `SR.I ← 0`
-3. SP bank swap: R14 now reads/writes KSP
+3. SP bank swap: R14 now reads/writes SSP
 4. Latch vector number from source (priority encoder for IRQs, hardwired per exception type)
 
 **Microcode sequence** (7 micro-ops + stall loops; uses `a_src` for exception registers, `b_mux_sel` for constants 4/8):
 ```
-int-0: reg_a=R14(KSP), b_mux=const_4, SUB → MAR = KSP - 4
+int-0: reg_a=R14(SSP), b_mux=const_4, SUB → MAR = SSP - 4
 int-1: a_src=ESR → MDR, mem_write     (stall loop)
-int-2: reg_a=R14(KSP), b_mux=const_8, SUB → MAR = KSP - 8, also write R14 = KSP - 8
+int-2: reg_a=R14(SSP), b_mux=const_8, SUB → MAR = SSP - 8, also write R14 = SSP - 8
 int-3: a_src=EPC → MDR, mem_write     (stall loop)
 int-4: a_src=vector_addr, PASS_A → MAR      (vec_num × 4, pre-shifted)
 int-5: mem_read                              (stall loop)

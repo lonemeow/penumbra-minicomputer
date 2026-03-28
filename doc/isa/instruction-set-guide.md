@@ -14,7 +14,7 @@ Penumbra has 16 general-purpose 32-bit registers.
 | R0 | Hardwired zero. Reads always return 0. Writes are discarded. |
 | R1 -- R12 | General purpose. |
 | R13 (LR) | Link register. BL saves the return address here. |
-| R14 (SP) | Stack pointer. Hardware-banked: user code sees USP, supervisor code sees KSP. Swapped automatically on privilege transitions. |
+| R14 (SP) | Stack pointer. Hardware-banked: user code sees USP, supervisor code sees SSP. Swapped automatically on privilege transitions. |
 | R15 (PC) | Program counter. Readable (useful for PC-relative addressing), but not writable through normal instructions. |
 
 The assembler accepts `LR`, `SP`, and `PC` as aliases for R13, R14, and R15.

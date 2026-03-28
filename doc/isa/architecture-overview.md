@@ -73,7 +73,7 @@ The SR contains only CPU-internal state. Registers belonging to other system dev
 
 R14 (SP) is hardware-banked between user and supervisor modes. The hardware maintains two physical registers:
 - **USP:** User stack pointer, active when S=0
-- **KSP:** Kernel stack pointer, active when S=1
+- **SSP:** Supervisor stack pointer, active when S=1
 
 On privilege transitions (interrupt, trap, RTI), the hardware swaps which physical register is visible as R14. The inactive SP is accessible via privileged instructions for context save/restore.
 
@@ -382,7 +382,7 @@ RTI                          ; pops PC + SR, restores user mode + I=1
 
 ### GETUSP / SETUSP
 
-When in supervisor mode (S=1), the user stack pointer (USP) is banked away and not accessible through R14 (which is KSP). Two privileged instructions provide access:
+When in supervisor mode (S=1), the user stack pointer (USP) is banked away and not accessible through R14 (which is SSP). Two privileged instructions provide access:
 
 - **`GETUSP Rd`** — Read the banked-away USP into Rd
 - **`SETUSP Rs`** — Write Rs to the banked-away USP
@@ -397,9 +397,9 @@ Penumbra uses a **unified vector table** for all exceptions, traps, and external
 
 On any interrupt, exception, or trap, the hardware performs:
 1. Set S=1 in SR (enter supervisor mode), set I=0 (disable interrupts)
-2. Swap SP to kernel stack pointer (KSP)
-3. Push old SR onto kernel stack
-4. Push old PC onto kernel stack
+2. Swap SP to supervisor stack pointer (SSP)
+3. Push old SR onto supervisor stack
+4. Push old PC onto supervisor stack
 5. Load PC from `vector_table[vector_number]`
 
 For **exceptions** (page fault, illegal instruction, etc.), the saved PC is the address of the faulting instruction (so the handler can retry after fixing the cause). For **external interrupts**, the saved PC is the next instruction (since the current instruction completed). For **software traps**, the saved PC is the next instruction (the trap was intentional).

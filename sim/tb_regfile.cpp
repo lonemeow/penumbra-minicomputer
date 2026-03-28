@@ -3,7 +3,7 @@
 // Tests:
 //   - R0 always reads as zero, writes are discarded
 //   - R1–R13 read/write
-//   - R14 banking (USP vs KSP based on supervisor mode)
+//   - R14 banking (USP vs SSP based on supervisor mode)
 //   - R15 reads return PC input
 //   - Write enable gating
 //   - Both read ports are independent
@@ -112,17 +112,17 @@ int main(int argc, char** argv) {
     dut->i_pc = 0x00002000;
     check(dut, "r15_write_discarded", read_a(dut, 15), 0x00002000);
 
-    // ── R14 banking (USP/KSP) ────────────────────────────────────
+    // ── R14 banking (USP/SSP) ────────────────────────────────────
     // Write USP in user mode
     write_reg(dut, 14, 0xAAAA0000, /*supervisor=*/false);
     check(dut, "r14_usp_readback", read_a(dut, 14, /*supervisor=*/false), 0xAAAA0000);
 
-    // Switch to supervisor — R14 should now read KSP (which is 0 from reset)
-    check(dut, "r14_ksp_after_switch", read_a(dut, 14, /*supervisor=*/true), 0x00000000);
+    // Switch to supervisor — R14 should now read SSP (which is 0 from reset)
+    check(dut, "r14_ssp_after_switch", read_a(dut, 14, /*supervisor=*/true), 0x00000000);
 
-    // Write KSP in supervisor mode
+    // Write SSP in supervisor mode
     write_reg(dut, 14, 0xBBBB0000, /*supervisor=*/true);
-    check(dut, "r14_ksp_readback", read_a(dut, 14, /*supervisor=*/true), 0xBBBB0000);
+    check(dut, "r14_ssp_readback", read_a(dut, 14, /*supervisor=*/true), 0xBBBB0000);
 
     // USP should still be intact
     check(dut, "r14_usp_preserved", read_a(dut, 14, /*supervisor=*/false), 0xAAAA0000);
@@ -147,7 +147,7 @@ int main(int argc, char** argv) {
         check(dut, name, read_a(dut, r), 0x00000000);
     }
     check(dut, "reset_usp", read_a(dut, 14, /*supervisor=*/false), 0x00000000);
-    check(dut, "reset_ksp", read_a(dut, 14, /*supervisor=*/true), 0x00000000);
+    check(dut, "reset_ssp", read_a(dut, 14, /*supervisor=*/true), 0x00000000);
 
     // ── Summary ──────────────────────────────────────────────────
     printf("regfile: %d/%d tests passed\n", tests - errors, tests);

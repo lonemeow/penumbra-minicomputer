@@ -243,7 +243,7 @@ int main() {
     check1("except_i", d->o_sr_i, 0);
 
     // ── Literal register addressing: R14 (SP) ──────────────────
-    // Write a value to R14 (KSP) using literal addressing
+    // Write a value to R14 (SSP) using literal addressing
     d->i_mem_rdata = 0xFFFF0000;
     d->i_mdr_load_mem = 1;
     tick(d);

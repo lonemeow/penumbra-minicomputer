@@ -276,10 +276,10 @@ Branch target: `PC + sign_extend(offset22 << 2)`
 
 The datapath spec defines this 6-step sequence:
 ```
-micro-op 0: Save SR   → MDR = SR, MAR = KSP - 4, mem_write
-micro-op 1: Save PC   → MDR = PC, MAR = KSP - 8, mem_write
-micro-op 2: Update SP  → KSP = KSP - 8
-micro-op 3: Set mode   → SR.S = 1, SR.I = 0, swap to KSP
+micro-op 0: Save SR   → MDR = SR, MAR = SSP - 4, mem_write
+micro-op 1: Save PC   → MDR = PC, MAR = SSP - 8, mem_write
+micro-op 2: Update SP  → SSP = SSP - 8
+micro-op 3: Set mode   → SR.S = 1, SR.I = 0, swap to SSP
 micro-op 4: Load vector → MAR = vector_table_base + (vector_num × 4), mem_read
 micro-op 5: Jump       → PC = MDR (vector address)
 ```
@@ -292,10 +292,10 @@ The following must happen in hardware before the micro-routine runs:
 
 1. **Latch exception registers:** `ESR ← SR`, `EPC ← PC` (return address; faulting PC for exceptions)
 2. **Mode switch:** `SR.S ← 1`, `SR.I ← 0`
-3. **SP bank swap:** R14 now reads/writes KSP (user SP banked away)
+3. **SP bank swap:** R14 now reads/writes SSP (user SP banked away)
 4. **Latch vector number:** `vec_num ← source` (from priority encoder for IRQs, hardwired per exception type)
 
-**Why hardware, not microcode:** The original spec's micro-op 3 sets S=1/I=0, but micro-ops 0-1 already need KSP. If the mode switch happens in microcode, we'd need a separate path to access KSP while still in user mode. Doing it atomically in hardware (like the 68000 and PDP-11) eliminates this ordering problem and is simpler for discrete — it's just a few flip-flops clocked by the "enter exception" signal.
+**Why hardware, not microcode:** The original spec's micro-op 3 sets S=1/I=0, but micro-ops 0-1 already need SSP. If the mode switch happens in microcode, we'd need a separate path to access SSP while still in user mode. Doing it atomically in hardware (like the 68000 and PDP-11) eliminates this ordering problem and is simpler for discrete — it's just a few flip-flops clocked by the "enter exception" signal.
 
 ### Missing Datapath Capabilities
 
@@ -307,7 +307,7 @@ Writing the micro-ops reveals that the current micro-word cannot express this se
 
 **Issue 8 — No SR modification signals.** The micro-word has `flag_w_en` (update NZCV from ALU) but no way to set individual SR bits (S, I). The hardware pre-action handles this for interrupt entry, but RTI (return from interrupt) will need to restore SR from the stack — which means loading a full SR value from MDR. **Proposed fix:** Add `sr_load` (1 bit): load SR from the W-mux output (same path as register writeback). RTI pops SR from the stack into MDR, then `w_mux_sel=1` (MDR) with `sr_load=1` writes it to SR.
 
-**Issue 9 — Original 6-micro-op count assumes parallel MDR+MAR load.** The spec's micro-op 0 says "MDR = SR, MAR = KSP - 4" in a single step. But MDR loads from A-bus (`mdr_load_a`), and computing KSP-4 also needs A-bus (for `reg_a_sel=R14`). Only one value can be on A-bus per cycle. The sequence must be split into separate address-compute and data-drive micro-ops.
+**Issue 9 — Original 6-micro-op count assumes parallel MDR+MAR load.** The spec's micro-op 0 says "MDR = SR, MAR = SSP - 4" in a single step. But MDR loads from A-bus (`mdr_load_a`), and computing SSP-4 also needs A-bus (for `reg_a_sel=R14`). Only one value can be on A-bus per cycle. The sequence must be split into separate address-compute and data-drive micro-ops.
 
 **Issue 10 — Stall loop placement.** Each memory write may stall if the cache/bus isn't ready. The original spec shows `mem_write` as instantaneous, but we need stall loops (like in LDW) after each write.
 
@@ -327,30 +327,30 @@ Using the proposed new signals: `a_src[1:0]`, `b_mux_sel` expanded to 2 bits, `s
 
 **Signal trace:**
 
-*int-0 — compute KSP - 4 → MAR:*
-1. `a_src = 00` (register file), `reg_a_sel = R14` (KSP, post-bank-swap) → A-bus = KSP
-2. `b_mux_sel = 10` (micro-constant = 4), `alu_op = 0001` (SUB) → R-bus = KSP - 4
-3. `mar_load = 1`, `mar_src = 0` (R-bus) → MAR ← KSP - 4
+*int-0 — compute SSP - 4 → MAR:*
+1. `a_src = 00` (register file), `reg_a_sel = R14` (SSP, post-bank-swap) → A-bus = SSP
+2. `b_mux_sel = 10` (micro-constant = 4), `alu_op = 0001` (SUB) → R-bus = SSP - 4
+3. `mar_load = 1`, `mar_src = 0` (R-bus) → MAR ← SSP - 4
 4. Sequential → int-1
 
 *int-1 — drive ESR to MDR, write to memory (stall loop):*
 1. `a_src = 01` (ESR) → A-bus = old SR value
 2. `mdr_load_a = 1` → MDR ← old SR
-3. `mem_write = 1`, `mem_size = 10` (word) → write MDR to [MAR] = [KSP - 4]
+3. `mem_write = 1`, `mem_size = 10` (word) → write MDR to [MAR] = [SSP - 4]
 4. `branch_cond = 010` (if stalled), `next_addr = int-1` → loop until write completes
 5. When done → int-2
 
-*int-2 — compute KSP - 8 → MAR, also update KSP:*
-1. `a_src = 00`, `reg_a_sel = R14` (KSP) → A-bus = KSP (still original value)
-2. `b_mux_sel = 10` (micro-constant = 8), `alu_op = 0001` (SUB) → R-bus = KSP - 8
-3. `mar_load = 1` → MAR ← KSP - 8
-4. `reg_w_sel = R14`, `reg_w_en = 1`, `w_mux_sel = 0` (R-bus) → KSP ← KSP - 8
+*int-2 — compute SSP - 8 → MAR, also update SSP:*
+1. `a_src = 00`, `reg_a_sel = R14` (SSP) → A-bus = SSP (still original value)
+2. `b_mux_sel = 10` (micro-constant = 8), `alu_op = 0001` (SUB) → R-bus = SSP - 8
+3. `mar_load = 1` → MAR ← SSP - 8
+4. `reg_w_sel = R14`, `reg_w_en = 1`, `w_mux_sel = 0` (R-bus) → SSP ← SSP - 8
 5. Sequential → int-3
 
 *int-3 — drive EPC to MDR, write to memory (stall loop):*
 1. `a_src = 10` (EPC) → A-bus = old PC (return address)
 2. `mdr_load_a = 1` → MDR ← old PC
-3. `mem_write = 1`, `mem_size = 10` (word) → write MDR to [MAR] = [KSP - 8]
+3. `mem_write = 1`, `mem_size = 10` (word) → write MDR to [MAR] = [SSP - 8]
 4. `branch_cond = 010` (if stalled) → loop until write completes
 5. When done → int-4
 
@@ -370,11 +370,11 @@ Using the proposed new signals: `a_src[1:0]`, `b_mux_sel` expanded to 2 bits, `s
 1. `pc_src = 100` (MDR) → PC ← handler address from vector table
 2. `branch_cond = 001` (always), `next_addr = fetch-0` → begin executing handler
 
-### Note on int-2: KSP update timing
+### Note on int-2: SSP update timing
 
-In int-2, we read KSP (R14) on the A-bus and write the decremented value back to R14 in the same micro-op. This is safe because register file reads happen at the start of the cycle (combinational) and writes happen at the end (clocked). This is standard register-file timing and works in both FPGA and discrete (the read port is async, the write port is edge-triggered).
+In int-2, we read SSP (R14) on the A-bus and write the decremented value back to R14 in the same micro-op. This is safe because register file reads happen at the start of the cycle (combinational) and writes happen at the end (clocked). This is standard register-file timing and works in both FPGA and discrete (the read port is async, the write port is edge-triggered).
 
-However, this means int-0 must execute before int-2 — both read the *original* KSP value, and int-2 overwrites it. The ordering is correct as written.
+However, this means int-0 must execute before int-2 — both read the *original* SSP value, and int-2 overwrites it. The ordering is correct as written.
 
 ### Note on micro-constant encoding
 
@@ -384,23 +384,23 @@ The `b_mux_sel = 10` (micro-constant) approach proposed above uses a 2-bit `b_mu
 
 ## 5. RTI — Return from Interrupt
 
-RTI is privileged (R-format, op=10110). It reverses the interrupt entry sequence: pops saved_PC and saved_SR from the kernel stack, restores full SR (privilege level, interrupt enable, condition flags), and resumes execution. If the restored SR.S=0, SP banking swaps R14 from KSP back to USP.
+RTI is privileged (R-format, op=10110). It reverses the interrupt entry sequence: pops saved_PC and saved_SR from the supervisor stack, restores full SR (privilege level, interrupt enable, condition flags), and resumes execution. If the restored SR.S=0, SP banking swaps R14 from SSP back to USP.
 
 ### Stack Frame Layout
 
-Interrupt entry pushed in this order (KSP decrements):
+Interrupt entry pushed in this order (SSP decrements):
 ```
-[KSP + 0] → saved_PC    (pushed second, lower address)
-[KSP + 4] → saved_SR    (pushed first, higher address)
+[SSP + 0] → saved_PC    (pushed second, lower address)
+[SSP + 4] → saved_SR    (pushed first, higher address)
 ```
 
 ### Ordering Constraint
 
-`sr_load` (step 6) may change SR.S from 1→0, triggering SP bank swap (R14 switches from KSP to USP). All reads from KSP must complete **before** `sr_load`. Additionally, KSP must be adjusted (+=8) before the swap, so the kernel stack is clean.
+`sr_load` (step 6) may change SR.S from 1→0, triggering SP bank swap (R14 switches from SSP to USP). All reads from SSP must complete **before** `sr_load`. Additionally, SSP must be adjusted (+=8) before the swap, so the supervisor stack is clean.
 
 ### Key Trick: Parallel PC Load + MAR Compute (rti-3)
 
-`pc_src=100` (load PC from MDR) uses the PC unit's MDR input path. Simultaneously, the ALU can compute `KSP + 4` on the A/B/R-bus path for MAR. These are independent datapath resources — no conflict. This saves one micro-op.
+`pc_src=100` (load PC from MDR) uses the PC unit's MDR input path. Simultaneously, the ALU can compute `SSP + 4` on the A/B/R-bus path for MAR. These are independent datapath resources — no conflict. This saves one micro-op.
 
 ### Micro-Routine (8 micro-ops including PRIV check)
 
@@ -422,42 +422,42 @@ Interrupt entry pushed in this order (KSP decrements):
 2. All other signals inactive (don't-care / zero for enables)
 
 *rti-1 — compute address of saved_PC → MAR:*
-1. `a_src = 00`, `reg_a_sel = R14` (KSP) → A-bus = KSP
-2. `alu_op = 1000` (PASS_A) → R-bus = KSP
-3. `mar_load = 1` → MAR ← KSP (address of saved_PC)
+1. `a_src = 00`, `reg_a_sel = R14` (SSP) → A-bus = SSP
+2. `alu_op = 1000` (PASS_A) → R-bus = SSP
+3. `mar_load = 1` → MAR ← SSP (address of saved_PC)
 4. `branch_cond = SEQ` → micro-PC++
 
 *rti-2 — read saved_PC from memory (stall loop):*
-1. `mem_read = 1`, `mem_size = 10` (word) → read from [KSP]
+1. `mem_read = 1`, `mem_size = 10` (word) → read from [SSP]
 2. `mdr_load_mem = 1` → MDR will latch saved_PC when ready
 3. `branch_cond = STALL` → loop while busy (or fault → exception)
 4. When done → MDR = saved_PC
 
 *rti-3 — load PC from MDR, compute address of saved_SR → MAR (parallel):*
 1. `pc_src = 100` (MDR) → PC ← saved_PC (loaded from MDR via PC unit)
-2. `a_src = 00`, `reg_a_sel = R14` (KSP) → A-bus = KSP
-3. `b_mux_sel = 10` (const 4), `alu_op = 0000` (ADD) → R-bus = KSP + 4
-4. `mar_load = 1` → MAR ← KSP + 4 (address of saved_SR)
+2. `a_src = 00`, `reg_a_sel = R14` (SSP) → A-bus = SSP
+3. `b_mux_sel = 10` (const 4), `alu_op = 0000` (ADD) → R-bus = SSP + 4
+4. `mar_load = 1` → MAR ← SSP + 4 (address of saved_SR)
 5. Both operations use independent datapath resources — no conflict
 6. `branch_cond = SEQ` → micro-PC++
 
 *rti-4 — read saved_SR from memory (stall loop):*
-1. `mem_read = 1`, `mem_size = 10` (word) → read from [KSP + 4]
+1. `mem_read = 1`, `mem_size = 10` (word) → read from [SSP + 4]
 2. `mdr_load_mem = 1` → MDR will latch saved_SR when ready
 3. `branch_cond = STALL` → loop while busy (or fault → exception)
 4. When done → MDR = saved_SR
 
-*rti-5 — pop stack frame (KSP += 8):*
-1. `a_src = 00`, `reg_a_sel = R14` (KSP) → A-bus = KSP
-2. `b_mux_sel = 11` (const 8), `alu_op = 0000` (ADD) → R-bus = KSP + 8
-3. `reg_w_sel = R14`, `reg_w_en = 1`, `w_mux_sel = 0` (R-bus) → KSP ← KSP + 8
+*rti-5 — pop stack frame (SSP += 8):*
+1. `a_src = 00`, `reg_a_sel = R14` (SSP) → A-bus = SSP
+2. `b_mux_sel = 11` (const 8), `alu_op = 0000` (ADD) → R-bus = SSP + 8
+3. `reg_w_sel = R14`, `reg_w_en = 1`, `w_mux_sel = 0` (R-bus) → SSP ← SSP + 8
 4. **Must happen before rti-6:** if sr_load changes S=1→0, R14 becomes USP
 5. `branch_cond = SEQ` → micro-PC++
 
 *rti-6 — restore SR from saved value:*
 1. `w_mux_sel = 1` (MDR) → W-mux output = saved_SR from MDR
 2. `sr_load = 1` → SR ← saved_SR (restores S, I, NZCV flags)
-3. If restored SR.S=0: hardware swaps SP banking (R14 → USP). KSP is already adjusted (rti-5), so the kernel stack is clean.
+3. If restored SR.S=0: hardware swaps SP banking (R14 → USP). SSP is already adjusted (rti-5), so the supervisor stack is clean.
 4. `branch_cond = SEQ` → micro-PC++
 
 *rti-7 — resume execution:*
@@ -474,25 +474,25 @@ Walkthrough of a complete FPU emulation cycle:
 1. User code: FADD R1, R2              (PC = 0x1000)
 2. No FPU hardware → illegal instruction exception (vector 2)
 3. Hardware pre-actions: ESR ← SR (S=0,I=1,...), EPC ← 0x1000
-   SR.S ← 1, SR.I ← 0, swap to KSP
-4. Exception entry microcode: push SR at [KSP-4], push PC(0x1000) at [KSP-8], KSP -= 8
+   SR.S ← 1, SR.I ← 0, swap to SSP
+4. Exception entry microcode: push SR at [SSP-4], push PC(0x1000) at [SSP-8], SSP -= 8
 5. Fetch vector[2], PC ← handler address
 
 --- Emulation handler (software) ---
-6. Save registers, read instruction at [saved_PC] = [KSP+0] → decodes FADD R1, R2
+6. Save registers, read instruction at [saved_PC] = [SSP+0] → decodes FADD R1, R2
 7. Read R1, R2 from saved context on stack
 8. Software FP add, write result to saved R1 on stack
-9. Advance saved_PC: LDW R3, [KSP+0]; INC R3, #4; STW R3, [KSP+0]
+9. Advance saved_PC: LDW R3, [SSP+0]; INC R3, #4; STW R3, [SSP+0]
    (saved_PC now = 0x1004, the instruction AFTER FADD)
 10. Restore registers, execute RTI
 
 --- RTI microcode ---
 11. rti-0: PRIV check (we're in supervisor mode) → pass
-12. rti-1: MAR = KSP
-13. rti-2: mem_read [KSP+0] → MDR = 0x1004 (advanced saved_PC)
-14. rti-3: PC ← 0x1004, MAR = KSP + 4
-15. rti-4: mem_read [KSP+4] → MDR = saved_SR (S=0, I=1, user flags)
-16. rti-5: KSP += 8 (pop frame)
+12. rti-1: MAR = SSP
+13. rti-2: mem_read [SSP+0] → MDR = 0x1004 (advanced saved_PC)
+14. rti-3: PC ← 0x1004, MAR = SSP + 4
+15. rti-4: mem_read [SSP+4] → MDR = saved_SR (S=0, I=1, user flags)
+16. rti-5: SSP += 8 (pop frame)
 17. rti-6: sr_load → SR restored (S=0, I=1), SP swaps to USP
 18. rti-7: FETCH → fetch unit reads I-cache at PC=0x1004
     → executes the instruction after FADD ✓

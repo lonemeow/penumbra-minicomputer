@@ -3,8 +3,8 @@
 // Architecture:
 //   R0:      Hardwired to zero (reads always return 0, writes are ignored)
 //   R1–R13:  General-purpose registers
-//   R14:     Stack pointer, banked: USP (user) or KSP (supervisor)
-//            Selected by i_supervisor — when SR.S=1, R14 reads/writes KSP
+//   R14:     Stack pointer, banked: USP (user) or SSP (supervisor)
+//            Selected by i_supervisor — when SR.S=1, R14 reads/writes SSP
 //   R15:     Reads return i_pc (from the separate PC register)
 //            R15 is not stored here — it's a read-only alias
 //
@@ -39,7 +39,7 @@ module regfile
 
     // Special inputs
     input  logic [31:0] i_pc,          // PC value — returned when reading R15
-    input  logic        i_supervisor,  // SR.S bit — selects KSP (1) vs USP (0) for R14
+    input  logic        i_supervisor,  // SR.S bit — selects SSP (1) vs USP (0) for R14
 
     // Debug read port (active all the time, no side effects)
     input  logic [3:0]  i_dbg_addr,    // Debug register address
@@ -49,7 +49,7 @@ module regfile
     // ── Storage ─────────────────────────────────────────────────
     // R0 is not stored (always reads as 0).
     // R1–R13: 13 general-purpose registers.
-    // R14 is two physical registers: USP and KSP.
+    // R14 is two physical registers: USP and SSP.
     // R15 is not stored (reads return i_pc).
     //
     // In SystemVerilog, `logic [31:0] regs [1:13]` declares an array
@@ -58,7 +58,7 @@ module regfile
 
     logic [31:0] regs [1:13];
     logic [31:0] usp;          // User stack pointer (R14 when SR.S=0)
-    logic [31:0] ksp;          // Kernel stack pointer (R14 when SR.S=1)
+    logic [31:0] ssp;          // Supervisor stack pointer (R14 when SR.S=1)
 
     // ── Read logic (combinational) ──────────────────────────────
     // Both read ports work identically — they're just two independent
@@ -71,14 +71,14 @@ module regfile
     // The read priority is:
     //   addr == 0  → return 0           (R0 hardwired zero)
     //   addr == 15 → return i_pc        (R15 is the PC)
-    //   addr == 14 → return ksp or usp  (banked by supervisor mode)
+    //   addr == 14 → return ssp or usp  (banked by supervisor mode)
     //   else       → return regs[addr]  (general-purpose R1-R13)
 
     function automatic logic [31:0] read_reg(input logic [3:0] addr);
         if (addr == REG_ZERO)
             read_reg = 32'd0;
         else if (addr == REG_SP)
-            read_reg = i_supervisor ? ksp : usp;
+            read_reg = i_supervisor ? ssp : usp;
         else if (addr == REG_PC)
             read_reg = i_pc;
         else
@@ -93,7 +93,7 @@ module regfile
     // `always_ff @(posedge i_clk)` = "on every rising clock edge, do this"
     //
     // Writes to R0 and R15 are silently ignored (R0 is always 0, R15 is PC).
-    // Writes to R14 go to either USP or KSP depending on i_supervisor.
+    // Writes to R14 go to either USP or SSP depending on i_supervisor.
     // All other writes go to regs[addr].
 
     always_ff @(posedge i_clk) begin
@@ -105,7 +105,7 @@ module regfile
                 regs[i] <= 32'd0;
             end
             usp <= 32'd0;
-            ksp <= 32'd0;
+            ssp <= 32'd0;
         end else if (i_wr_en) begin
             // Normal write — handle special addresses
             if (i_wr_addr == REG_ZERO || i_wr_addr == REG_PC) begin
@@ -113,7 +113,7 @@ module regfile
             end else if (i_wr_addr == REG_SP) begin
                 // R14 writes go to the active bank
                 if (i_supervisor)
-                    ksp <= i_wr_data;
+                    ssp <= i_wr_data;
                 else
                     usp <= i_wr_data;
             end else begin

@@ -13,7 +13,7 @@ package penumbra_pkg;
     // ── Register addresses ──────────────────────────────────────
     localparam logic [3:0] REG_ZERO = 4'd0;   // R0:  hardwired zero
     localparam logic [3:0] REG_LR   = 4'd13;  // R13: link register (by convention)
-    localparam logic [3:0] REG_SP   = 4'd14;  // R14: stack pointer (USP/KSP banked)
+    localparam logic [3:0] REG_SP   = 4'd14;  // R14: stack pointer (USP/SSP banked)
     localparam logic [3:0] REG_PC   = 4'd15;  // R15: program counter (read-only alias)
 
     // ── ALU operations ──────────────────────────────────────────
