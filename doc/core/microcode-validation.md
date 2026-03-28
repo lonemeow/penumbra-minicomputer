@@ -511,7 +511,7 @@ Walkthrough of a complete FPU emulation cycle:
 6. Exception entry: push SR, push PC(0x2000), load vector[4], jump to page fault handler
 
 --- Page fault handler (software) ---
-7. Read faulting address from MMU fault register (via MFSYS)
+7. Read faulting address from MMU fault register (via RDSYS)
 8. Page in from disk, update page table, load TLB entry
 9. RTI (saved_PC = 0x2000, unchanged — we want to retry)
 

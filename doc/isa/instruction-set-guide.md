@@ -385,14 +385,14 @@ All instructions are 32 bits. Bits [31:30] select one of four formats.
 - **Rs:** second source register
 - **F:** flag-only bit. When F=1, flags update but Rd is not written.
   Used for CMP (SUB with F=1) and TEST (AND with F=1).
-- **spare:** reserved. For MTSYS/MFSYS: bits [15:12] = device, [11:8] = register.
+- **spare:** reserved. For WRSYS/RDSYS: bits [15:12] = device, [11:8] = register.
 
 **Format R opcode table:**
 
 | op | Mnemonic | op | Mnemonic | op | Mnemonic | op | Mnemonic |
 |----|----------|----|----------|----|----------|----|----------|
-| 0 | ADD | 8 | MOV | 16 | MTSYS | 24 | JMP |
-| 1 | SUB | 9 | NOT | 17 | MFSYS | 25 | EI |
+| 0 | ADD | 8 | MOV | 16 | WRSYS | 24 | JMP |
+| 1 | SUB | 9 | NOT | 17 | RDSYS | 25 | EI |
 | 2 | AND | 10 | MUL | 18 | GETSR | 26 | DI |
 | 3 | OR | 11 | MULU | 19 | SETSR | 27 | GETUSP |
 | 4 | XOR | 12 | DIV | 20 | SYSCALL | 28 | SETUSP |
@@ -482,6 +482,6 @@ yet have microcode -- executing them will dispatch to an empty ROM entry.
 | RTI | No | |
 | GETUSP, SETUSP | No | |
 | ICACHE_INV | No | |
-| MTSYS, MFSYS | No | |
+| WRSYS, RDSYS | No | |
 | NOP (pseudo) | Yes | ADD R0, R0 |
 | RET (pseudo) | Yes | JMP R13 |

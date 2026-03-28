@@ -56,8 +56,10 @@ module cpu_top
     logic data_re, data_we;
 
     // ── Unified read data (used by both fetch and data path) ──
+    // During sysreg read (sys_cycle && !sys_we), mux in sysreg data
+    // instead of cache data so MDR can capture it via mdr_load_mem.
     logic [31:0] mem_rdata;
-    assign mem_rdata = cache_rdata;
+    assign mem_rdata = (ctl_sys_cycle && !ctl_sys_we) ? mmu_sys_rdata : cache_rdata;
 
     // ══════════════════════════════════════════════════════════
     // Microcode ROM
@@ -174,7 +176,11 @@ module cpu_top
         end
     end
 
-    assign ir_load = ir_valid;
+    // Gate IR load by fetch_active — ir_valid lingers for 1 cycle into
+    // S_EXEC, but the IR must not reload once we've left S_FETCH.
+    // Without this, multi-micro-op instructions that mux mem_rdata
+    // (like RDSYS with sysreg data) would corrupt the IR.
+    assign ir_load = ir_valid && fetch_active;
 
     // ── Dispatch address computation ─────────────────────────
     // Computed from memory read data (same data that loads IR).
@@ -258,10 +264,10 @@ module cpu_top
         .o_cacheable   (mmu_cacheable),
         .o_fault       (mmu_fault),
         .o_hit         (mmu_hit),
-        // Sysreg — stubbed until MTSYS/MFSYS wiring
+        // Sysreg interface (active during WRSYS/RDSYS with dev_id=0)
         .i_sys_reg     (dp_r_sys_reg),
-        .i_sys_wdata   (32'b0),
-        .i_sys_we      (1'b0),
+        .i_sys_wdata   (dp_a_bus),
+        .i_sys_we      (ctl_sys_cycle && ctl_sys_we && (dp_r_sys_dev == 4'd0)),
         .o_sys_rdata   (mmu_sys_rdata)
     );
 
@@ -304,6 +310,7 @@ module cpu_top
     // Datapath
     // ══════════════════════════════════════════════════════════
     logic [31:0] dp_mem_wdata;
+    logic [31:0] dp_a_bus;       // A-bus value (for sysreg write data)
 
     // Field extractor outputs (from datapath, for dispatch — not used
     // here since we compute dispatch from raw memory data)
@@ -376,6 +383,9 @@ module cpu_top
         .o_b_cond       (dp_b_cond),
         .o_r_sys_dev    (dp_r_sys_dev),
         .o_r_sys_reg    (dp_r_sys_reg),
+
+        // A-bus output (for sysreg write data)
+        .o_a_bus        (dp_a_bus),
 
         .i_dbg_reg_addr (i_dbg_reg_addr),
         .o_dbg_reg_data (o_dbg_reg_data)

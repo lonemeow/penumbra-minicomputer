@@ -30,7 +30,7 @@ module mmu
     output logic        o_fault,        // Access violation / TLB miss
     output logic        o_hit,          // TLB hit (always 1 in bypass)
 
-    // ── Sysreg interface (MTSYS/MFSYS, dev_id = 0) ────────
+    // ── Sysreg interface (WRSYS/RDSYS, dev_id = 0) ────────
     input  logic [3:0]  i_sys_reg,      // Register address within MMU
     input  logic [31:0] i_sys_wdata,    // Write data
     input  logic        i_sys_we,       // Write enable
@@ -96,6 +96,7 @@ module mmu
                     SYSREG_MMU_TLB_VPN: tlb_vpn_reg   <= i_sys_wdata;
                     // TLB_PTE: data goes directly to TLB via tlb_write_en
                     // FAULT_ADDR, FAULT_STATUS: read-only (hardware-latched)
+                    default: ;  // ignore writes to read-only or unimplemented regs
                 endcase
             end
         end

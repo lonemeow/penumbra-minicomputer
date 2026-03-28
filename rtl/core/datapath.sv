@@ -88,8 +88,13 @@ module datapath
     output logic [1:0]  o_m_size,       // Format M access size
     output logic        o_m_sign_ext,   // Format M sign-extend
     output logic [3:0]  o_b_cond,       // Format B condition code
-    output logic [3:0]  o_r_sys_dev,    // MTSYS/MFSYS device field
-    output logic [3:0]  o_r_sys_reg,    // MTSYS/MFSYS register field
+    output logic [3:0]  o_r_sys_dev,    // WRSYS/RDSYS device field
+    output logic [3:0]  o_r_sys_reg,    // WRSYS/RDSYS register field
+
+    // ══════════════════════════════════════════════════════════════
+    // A-bus output (for sysreg write data path)
+    // ══════════════════════════════════════════════════════════════
+    output logic [31:0] o_a_bus,        // A-bus value → sysreg write data
 
     // ── Debug port ───────────────────────────────────────────
     input  logic [3:0]  i_dbg_reg_addr,
@@ -108,6 +113,8 @@ module datapath
     logic [31:0] a_bus;         // A-bus (from A-mux)
     logic [31:0] b_bus;         // B-bus (from B-mux)
     logic [31:0] r_bus;         // R-bus (ALU result)
+
+    assign o_a_bus = a_bus;     // Expose for sysreg write data
     logic [31:0] w_bus;         // W-bus (from W-mux → regfile write, SR load)
 
     // ── IR register ──────────────────────────────────────────

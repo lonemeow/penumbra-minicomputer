@@ -288,7 +288,7 @@ reg_a_sel = Rs       → A-bus = Rs value
 A-bus → USP register (banked-away SP)
 ```
 
-### MTSYS Rd, #dev, #reg
+### WRSYS Rd, #dev, #reg
 
 Single micro-op:
 ```
@@ -296,7 +296,7 @@ reg_a_sel = Rd       → A-bus = Rd value → data bus
 sys_cycle = 1, sys_dev = IR[15:12], sys_reg = IR[11:8], sys_we = 1
 ```
 
-### MFSYS Rd, #dev, #reg
+### RDSYS Rd, #dev, #reg
 
 Single micro-op:
 ```
@@ -399,7 +399,7 @@ The `flag_w_en` micro-word bit controls whether ALU flag outputs are latched int
 | LLI, LLIS, LUI | No | Constant loading |
 | Loads, stores | No | Memory access |
 | Branches | No | Control flow |
-| System (MTSYS, MFSYS, GETSR, SETSR, JMP, RTI, etc.) | No | System operations |
+| System (WRSYS, RDSYS, GETSR, SETSR, JMP, RTI, etc.) | No | System operations |
 
 ### Condition Code Evaluation
 

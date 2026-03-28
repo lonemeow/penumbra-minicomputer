@@ -75,6 +75,8 @@ FORMAT_R_OPS = {
     # F=1 aliases
     "CMP":  (1,  True,  1), "TEST": (2,  True,  1),
     # System ops (no Rs for most)
+    "WRSYS":     (16, True,  0),  # WRSYS Rd, #dev, #reg (special 3-operand)
+    "RDSYS":     (17, True,  0),  # RDSYS Rd, #dev, #reg (special 3-operand)
     "GETSR":     (18, False, 0),
     "SETSR":     (19, False, 0),
     "SYSCALL":   (20, False, 0),
@@ -159,6 +161,23 @@ def assemble_line(mnemonic, operands, addr, labels, line_num):
 
         if mn in ("SYSCALL", "BREAK", "RTI", "ICACHE_INV", "EI", "DI"):
             return encode_format_r(op, 0, 0, 0)
+
+        # WRSYS Rd, #dev, #reg  /  RDSYS Rd, #dev, #reg
+        # Encoding: Format R with dev in spare[15:12], reg in spare[11:8]
+        if mn in ("WRSYS", "RDSYS"):
+            if len(operands) != 3:
+                raise ValueError(f"{mn} expects Rd, #dev, #reg")
+            rd = parse_reg(operands[0])
+            if rd is None:
+                raise ValueError(f"bad register '{operands[0]}'")
+            dev = parse_imm(operands[1])
+            reg = parse_imm(operands[2])
+            if not (0 <= dev <= 15):
+                raise ValueError(f"device ID must be 0-15, got {dev}")
+            if not (0 <= reg <= 15):
+                raise ValueError(f"register index must be 0-15, got {reg}")
+            spare = (dev << 12) | (reg << 8)
+            return encode_format_r(op, rd, 0, 0, spare)
 
         if mn == "JMP":
             if len(operands) != 1:

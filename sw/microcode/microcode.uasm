@@ -117,6 +117,25 @@ cmpi:
 # Format R — System operations (0x10–0x1F)
 # ═══════════════════════════════════════════════════════════════
 
+# ── WRSYS Rd, #dev, #reg (op=10000, dispatch=0x10) ───────────
+# Write register Rd to system register. A-bus carries Rd value,
+# sys_cycle + sys_we tell the target device to latch it.
+# Privileged — branch=PRIV faults in user mode.
+.org 0x10
+wrsys:
+  reg_a=IR_RD sys_cycle=1 sys_we=1 branch=PRIV
+
+# ── RDSYS Rd, #dev, #reg (op=10001, dispatch=0x11) ───────────
+# Read system register into Rd. Two micro-ops:
+#   Step 0: sys_cycle=1 puts device data on sysreg bus → cpu_top
+#           muxes it onto mem_rdata → MDR captures it.
+#   Step 1: writeback MDR to Rd.
+# Privileged.
+.org 0x11
+rdsys:
+  sys_cycle=1 mdr_load_mem=1 pc=HOLD branch=SEQ
+  reg_w=IR_RD w_en=1 wmux=MDR
+
 # ── JMP Rs (op=11000, dispatch=0x18) ─────────────────────────
 # PC = Rs (register indirect jump; RET = JMP R13)
 .org 0x18

@@ -13,7 +13,7 @@ Penumbra uses a custom bus protocol (the **Penumbra Bus**) designed for simplici
 
 1. **Internal synchronous bus** — inside the FPGA (or on the CPU board in discrete), connects the CPU core, caches, and MMU. Runs at the CPU clock rate.
 2. **Penumbra Bus (external, asynchronous)** — connects the CPU complex to memory and I/O peripherals. Uses an asynchronous request/acknowledge handshake, no shared clock. Separate address and data buses (demultiplexed).
-3. **System register bus (sideband)** — lightweight bus for `MTSYS`/`MFSYS` to CPU-adjacent devices. Shares the internal data bus.
+3. **System register bus (sideband)** — lightweight bus for `WRSYS`/`RDSYS` to CPU-adjacent devices. Shares the internal data bus.
 
 The async external bus eliminates clock distribution problems and works identically in both the FPGA prototype and the future discrete build.
 
@@ -243,7 +243,7 @@ On the FPGA, the bridge connects to GPIO pins driving the external bus. In discr
 
 ## System Register Bus (Sideband)
 
-Lightweight control bus for `MTSYS`/`MFSYS` privileged instructions to CPU-adjacent system devices.
+Lightweight control bus for `WRSYS`/`RDSYS` privileged instructions to CPU-adjacent system devices.
 
 | Signal | Width | Direction | Description |
 |--------|-------|-----------|-------------|
@@ -251,7 +251,7 @@ Lightweight control bus for `MTSYS`/`MFSYS` privileged instructions to CPU-adjac
 | `sys_cycle` | 1 | CPU → Devices | System register access in progress |
 | `sys_dev[3:0]` | 4 | CPU → Devices | Target device select |
 | `sys_reg[3:0]` | 4 | CPU → Devices | Register index within device |
-| `sys_we` | 1 | CPU → Devices | Write enable (1 = MTSYS, 0 = MFSYS) |
+| `sys_we` | 1 | CPU → Devices | Write enable (1 = WRSYS, 0 = RDSYS) |
 
 New signals: **10 lines**. No arbitration needed — microcode guarantees these cycles never overlap with memory bus cycles. Each device has a 4-bit comparator on `sys_dev` (one 74x85 in discrete).
 

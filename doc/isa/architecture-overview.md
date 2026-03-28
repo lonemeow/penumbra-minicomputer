@@ -118,7 +118,7 @@ Format B  [11]: Branch (conditional, unconditional, branch-and-link)
 | Rd | 24:21 | Destination / first source register |
 | Rs | 20:17 | Second source register |
 | F | 16 | Flag control: 0 = write result + update flags, 1 = update flags only (no register write) |
-| spare | 15:0 | Reserved. Used by MTSYS/MFSYS for device/register fields. |
+| spare | 15:0 | Reserved. Used by WRSYS/RDSYS for device/register fields. |
 
 #### ALU Operations
 
@@ -149,8 +149,8 @@ System operations use the Format R encoding with the following opcodes. The `Rd`
 
 | op | Mnemonic | Description | Field usage |
 |----|----------|-------------|-------------|
-| 10000 | `MTSYS Rd, #dev, #reg` | Write Rd to system device register | spare[15:12]=dev, spare[11:8]=reg |
-| 10001 | `MFSYS Rd, #dev, #reg` | Read system device register to Rd | spare[15:12]=dev, spare[11:8]=reg |
+| 10000 | `WRSYS Rd, #dev, #reg` | Write Rd to system device register | spare[15:12]=dev, spare[11:8]=reg |
+| 10001 | `RDSYS Rd, #dev, #reg` | Read system device register to Rd | spare[15:12]=dev, spare[11:8]=reg |
 | 10010 | `GETSR Rd` | Read SR to Rd | |
 | 10011 | `SETSR Rd` | Write Rd to SR (privileged) | |
 | 10100 | `SYSCALL` | System call trap (vector 7) | |
@@ -308,7 +308,7 @@ Controlled transitions:
 - **User to supervisor:** Via SYSCALL instruction or hardware interrupt/exception
 - **Supervisor to user:** Via return-from-interrupt (RTI) instruction
 
-Privileged instructions: SETSR, DI, MTSYS, MFSYS, RTI, ICACHE_INV, GETUSP, SETUSP. Executing a privileged instruction in user mode raises a privilege violation exception (vector 3).
+Privileged instructions: SETSR, DI, WRSYS, RDSYS, RTI, ICACHE_INV, GETUSP, SETUSP. Executing a privileged instruction in user mode raises a privilege violation exception (vector 3).
 
 Note: EI (enable interrupts) and GETSR (read SR) are **unprivileged** — user code can enable interrupts (they may have been temporarily disabled by the kernel before returning) and can read its own flags.
 
@@ -470,15 +470,15 @@ Two trap instructions with fixed vector assignments:
 Penumbra uses a unified mechanism to access control registers on CPU-adjacent system devices (MMU, interrupt controller, timer, DMA controller). Two privileged instructions address a flat device:register space:
 
 ```
-MTSYS Rsrc, #dev, #reg    ; Move To System register: Rsrc → device[dev].register[reg]
-MFSYS Rdst, #dev, #reg    ; Move From System register: device[dev].register[reg] → Rdst
+WRSYS Rsrc, #dev, #reg    ; Move To System register: Rsrc → device[dev].register[reg]
+RDSYS Rdst, #dev, #reg    ; Move From System register: device[dev].register[reg] → Rdst
 ```
 
 These are encoded as Format R instructions. The `spare[15:12]` field holds the 4-bit device ID, and `spare[11:8]` holds the 4-bit register index. This gives access to up to 16 devices × 16 registers = 256 system registers.
 
 ### System Register Bus
 
-MTSYS/MFSYS do **not** use the main memory bus. Instead, they drive a lightweight sideband called the **system register bus**, which shares the existing data bus but uses dedicated control signals:
+WRSYS/RDSYS do **not** use the main memory bus. Instead, they drive a lightweight sideband called the **system register bus**, which shares the existing data bus but uses dedicated control signals:
 
 ```
 Shared with memory bus:
@@ -488,7 +488,7 @@ Sideband control signals (new, accent bus):
   sys_cycle            — 1 = this is a system register access, not a memory access
   sys_dev[3:0]         — target device select
   sys_reg[3:0]         — register index within device
-  sys_we               — write enable (1 = MTSYS, 0 = MFSYS)
+  sys_we               — write enable (1 = WRSYS, 0 = RDSYS)
 ```
 
 Total new signals: **10 lines**. No additional data bus. The microcode ensures system register cycles and memory cycles never overlap.
@@ -562,7 +562,7 @@ The instruction decoder extracts the 2-bit format prefix and routes to the appro
 
 | Prefix | Format | Key fields to extract |
 |--------|--------|-----------------------|
-| `00` | R | op, Rd, Rs, F, spare (for MTSYS/MFSYS: dev, reg) |
+| `00` | R | op, Rd, Rs, F, spare (for WRSYS/RDSYS: dev, reg) |
 | `01` | L | op, Rd, imm16 |
 | `10` | M | L/S, sz, SE, Rd, Rb, offset16 |
 | `11` | B | cond, offset22 |

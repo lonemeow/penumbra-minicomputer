@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Penumbra MMU provides page-based virtual-to-physical address translation with per-page protection and cacheability control. It is designed around a **fully software-managed TLB**: the hardware performs fast parallel lookups and permission checks, but all management — loading entries, choosing replacement victims, invalidation, dirty tracking — is done by the OS via privileged `MTSYS`/`MFSYS` instructions.
+The Penumbra MMU provides page-based virtual-to-physical address translation with per-page protection and cacheability control. It is designed around a **fully software-managed TLB**: the hardware performs fast parallel lookups and permission checks, but all management — loading entries, choosing replacement victims, invalidation, dirty tracking — is done by the OS via privileged `WRSYS`/`RDSYS` instructions.
 
 This means:
 - The hardware has **no page table walker**, no replacement policy, no dirty-bit logic
@@ -24,7 +24,7 @@ This means:
 
 ## MMU Control Registers
 
-Accessed via `MTSYS`/`MFSYS` with device ID 0.
+Accessed via `WRSYS`/`RDSYS` with device ID 0.
 
 | Reg | Name | R/W | Description |
 |-----|------|-----|-------------|
@@ -120,7 +120,7 @@ The set for a given virtual address is: **`set = vaddr[16:12]`** (the lowest 5 b
 
 ### Loading an Entry
 
-Three `MTSYS` instructions, executed in order:
+Three `WRSYS` instructions, executed in order:
 
 ```asm
 ; Load TLB entry: map vpage → ppage with given flags
@@ -128,9 +128,9 @@ Three `MTSYS` instructions, executed in order:
 ; r2 = TLB_VPN value  ({4'b0, VPN[19:0], ASID[7:0]})
 ; r3 = TLB_PTE value  ({PPN[19:0], SW[3:0], flags[7:0]})
 
-MTSYS  R1, #0, #5       ; select target slot
-MTSYS  R2, #0, #3       ; stage VPN + ASID
-MTSYS  R3, #0, #4       ; write PPN + flags → entry committed
+WRSYS  R1, #0, #5       ; select target slot
+WRSYS  R2, #0, #3       ; stage VPN + ASID
+WRSYS  R3, #0, #4       ; write PPN + flags → entry committed
 ```
 
 **Important:** The TLB_VPN write stages data in a holding register. The entry is committed to the TLB array only when TLB_PTE is written. Always write TLB_INDEX before TLB_VPN/TLB_PTE.
@@ -142,15 +142,15 @@ For replacement decisions, read both ways of a set:
 ```asm
 ; Read way 0 of set S
 LLI   R1, S             ; set index (bits 4:0), way=0 (bit 5 clear)
-MTSYS R1, #0, #5        ; select slot
-MFSYS R2, #0, #3        ; R2 = TLB_VPN (VPN + ASID)
-MFSYS R3, #0, #4        ; R3 = TLB_PTE (PPN + SW + flags)
+WRSYS R1, #0, #5        ; select slot
+RDSYS R2, #0, #3        ; R2 = TLB_VPN (VPN + ASID)
+RDSYS R3, #0, #4        ; R3 = TLB_PTE (PPN + SW + flags)
 
 ; Read way 1 of set S
 LLI   R1, (S | 0x20)    ; same set, way=1 (bit 5 set)
-MTSYS R1, #0, #5
-MFSYS R4, #0, #3        ; R4 = way1 VPN
-MFSYS R5, #0, #4        ; R5 = way1 PTE
+WRSYS R1, #0, #5
+RDSYS R4, #0, #3        ; R4 = way1 VPN
+RDSYS R5, #0, #4        ; R5 = way1 PTE
 ```
 
 Check V bit (bit 0 of TLB_PTE) to determine which slots are occupied. Use SW bits for replacement policy decisions.
@@ -159,9 +159,9 @@ Check V bit (bit 0 of TLB_PTE) to determine which slots are occupied. Use SW bit
 
 **Single entry:**
 ```asm
-MTSYS  R_idx, #0, #5    ; select slot
-MTSYS  R0,    #0, #3    ; clear VPN (optional but clean)
-MTSYS  R0,    #0, #4    ; write PTE with V=0 → entry invalidated
+WRSYS  R_idx, #0, #5    ; select slot
+WRSYS  R0,    #0, #3    ; clear VPN (optional but clean)
+WRSYS  R0,    #0, #4    ; write PTE with V=0 → entry invalidated
 ```
 
 **All entries (full flush):**
@@ -170,8 +170,8 @@ MTSYS  R0,    #0, #4    ; write PTE with V=0 → entry invalidated
 LLI   R1, #0            ; index = 0
 LLI   R2, #64           ; count
 .flush_loop:
-MTSYS R1, #0, #5        ; select slot
-MTSYS R0, #0, #4        ; V=0 (R0 is always 0)
+WRSYS R1, #0, #5        ; select slot
+WRSYS R0, #0, #4        ; V=0 (R0 is always 0)
 INC   R1, #1
 CMP   R1, R2
 BNE   .flush_loop
@@ -204,8 +204,8 @@ STW   R2, [R0 + 0x44]
 STW   R3, [R0 + 0x48]
 STW   R4, [R0 + 0x4C]
 
-MFSYS R1, #0, #1               ; R1 = FAULT_ADDR
-MFSYS R2, #0, #2               ; R2 = FAULT_STATUS
+RDSYS R1, #0, #1               ; R1 = FAULT_ADDR
+RDSYS R2, #0, #2               ; R2 = FAULT_STATUS
 
 ; Check fault type (bits 3:0)
 AND   R3, R2, #0x0F            ; isolate TYPE field
@@ -228,9 +228,9 @@ LDW   R3, [R0 + 0x50]          ; R3 = page directory base (physical)
 ; ... (see "Reading an Entry" above) ...
 
 ; ── Load TLB entry ────────────────────────────────
-MTSYS R_idx, #0, #5            ; select victim slot
-MTSYS R_vpn, #0, #3            ; stage VPN + ASID
-MTSYS R_pte, #0, #4            ; commit PPN + flags
+WRSYS R_idx, #0, #5            ; select victim slot
+WRSYS R_vpn, #0, #3            ; stage VPN + ASID
+WRSYS R_pte, #0, #4            ; commit PPN + flags
 
 ; ── Restore and return ────────────────────────────
 LDW   R1, [R0 + 0x40]
@@ -305,7 +305,7 @@ The hardware has no knowledge of in-memory page tables. The OS is free to use an
 └──────────────┴──────┴─┴─┴─┴─┴─┴─┴─┴─┘
 ```
 
-If the in-memory PTE uses this layout, the miss handler can load it directly into TLB_PTE with no translation — a single `LDW` + `MTSYS` pair. The SW bits can carry OS metadata (pinned, dirty, age) that gets copied into the TLB entry.
+If the in-memory PTE uses this layout, the miss handler can load it directly into TLB_PTE with no translation — a single `LDW` + `WRSYS` pair. The SW bits can carry OS metadata (pinned, dirty, age) that gets copied into the TLB entry.
 
 ### Two-Level Page Table (Recommended)
 
@@ -337,8 +337,63 @@ Recommended boot procedure:
 5. Set up scratch save area at `0x0000_0040` and PD base at `0x0000_0050`
 6. Build initial page tables in SDRAM
 7. Load initial TLB entries: pin vector page, PD, kernel PT pages (G=1, pin bit in SW)
-8. Set M=1 via `MTSYS` to enable TLB translation
-9. Jump to kernel entry point — now running with virtual addressing
+8. **Identity-map the boot code page** (see below)
+9. Set M=1 via `WRSYS` to enable TLB translation
+10. Jump to kernel entry point — now running with virtual addressing
+
+### Enabling the MMU safely
+
+**This is critical. Getting it wrong causes the CPU to take a TLB miss on the very first instruction fetch after M=1, before any fault handler can run.**
+
+When `WRSYS` sets MMUCR.M=1, the next instruction fetch goes through the TLB. If that fetch address has no TLB entry, the CPU takes a TLB miss exception — but the exception handler itself needs TLB entries to run, creating an unrecoverable fault.
+
+The safe pattern is **identity-map before enable**: ensure the page containing the code that enables the MMU has a TLB entry where virtual address = physical address. When M transitions from 0 to 1, the first translated fetch returns the same physical address that bypass mode would have, so execution continues seamlessly.
+
+```asm
+; Boot code running at physical address 0x0000_0xxx (M=0)
+
+; Step 1: Identity-map the page containing this code
+;         VPN = 0x00000 (page 0), PPN = 0x00000, V=1, R=1, X=1, G=1
+LLI   R1, #0
+WRSYS R1, #0, #5           ; TLB_INDEX = {way=0, set=0}
+LLI   R2, #0               ; TLB_VPN = {VPN=0, ASID=0}
+WRSYS R2, #0, #3
+LLI   R3, #0xA9            ; TLB_PTE = {PPN=0, flags: V=1, X=1, R=1, G=1}
+WRSYS R3, #0, #4           ; entry committed
+
+; Step 2: Also identity-map the vector/handler page (if different),
+;         kernel page directory, kernel PT pages — all pinned
+
+; Step 3: Enable MMU
+LLI   R10, #0x0501         ; MMUCR: M=1, ASID=5
+WRSYS R10, #0, #0          ; ← M goes high on the next clock edge
+
+; Next instruction fetch is now TLB-translated, but identity map
+; ensures the physical address is the same. Execution continues.
+
+; Step 4: Jump to kernel virtual address
+LLI   R11, kernel_entry
+JMP   R11
+```
+
+**Rules for MMU enable:**
+1. The page containing the `WRSYS` that sets M=1 **must** be identity-mapped in the TLB before the write
+2. The vector page (0x00000000) and TLB miss handler code **must** have valid, pinned TLB entries before M=1
+3. The instruction immediately after the `WRSYS` must be on the same identity-mapped page (don't let the enable instruction be the last word of a page)
+
+### WRSYS as a serializing instruction
+
+`WRSYS` to any sysreg is defined as **serializing**: it guarantees that all effects of the write are visible before the next instruction fetch begins. In the current non-pipelined design this is automatic (execute completes → fetch starts). For future pipelined implementations:
+
+- Any `WRSYS` must drain the pipeline: discard any prefetched instructions, ensure the write has taken effect, then resume fetching
+- This is the conservative but safe choice — `WRSYS` is only used by kernel code and is never performance-critical
+- This avoids the class of bugs where a prefetched instruction executes under the old MMU/interrupt/privilege state (these bugs are notoriously difficult to reproduce and diagnose)
+
+### Disabling the MMU
+
+The reverse transition (M=1 → M=0) has the same concern: the code that disables the MMU must be at a virtual address that equals its physical address (identity-mapped), so that when the next fetch bypasses the TLB and uses the virtual address as a physical address, it still reaches the same instruction stream.
+
+In practice, MMU disable is rare (warm reboot, crash dump). The same identity-map rule applies.
 
 ---
 

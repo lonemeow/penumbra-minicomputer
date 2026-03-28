@@ -1,3 +1,4 @@
+// verilator lint_off UNUSEDSIGNAL
 // Penumbra Micro-Sequencer — micro-PC management and micro-word decode
 //
 // Manages the micro-PC that indexes into the microcode ROM, decodes
@@ -155,10 +156,11 @@ module sequencer
             BR_BRT:   go_fetch = 1'b1;
             BR_BRF:   go_fetch = 1'b1;
             BR_PRIV: begin
-                if (i_sr_s)
-                    advance = 1'b1;     // Supervisor: proceed
-                else
-                    go_fetch = 1'b1;    // User: exception (fetch unit handles)
+                // Privileged instruction: always go to fetch.
+                // In supervisor mode: normal fetch of next instruction.
+                // In user mode: fetch unit detects the violation.
+                // PRIV must only be used on the LAST micro-op of an instruction.
+                go_fetch = 1'b1;
             end
             BR_SKIP: advance = 1'b1;    // fwd_offset handled in next_upc calc
             default: ;
@@ -224,11 +226,14 @@ module sequencer
     assign o_a_src       = executing ? uw_a_src        : 2'b0;
     assign o_reg_a_sel   = executing ? uw_reg_a        : 4'b0;
     assign o_reg_b_sel   = executing ? uw_reg_b        : 4'b0;
-    assign o_reg_w_sel   = executing ? uw_reg_w        : 4'b0;
+    // reg_w_sel is NOT gated by executing — it must remain stable through
+    // the posedge where the last micro-op's write completes. The write
+    // enable (w_en) is gated, so a stale address during S_FETCH is harmless.
+    assign o_reg_w_sel   = uw_reg_w;
     assign o_reg_w_en    = executing ? uw_w_en         : 1'b0;
     assign o_alu_op      = executing ? uw_alu_op       : 5'b0;
     assign o_b_mux_sel   = executing ? uw_bmux         : 2'b0;
-    assign o_w_mux_sel   = executing ? uw_wmux         : 1'b0;
+    assign o_w_mux_sel   = uw_wmux;  // Not gated — must be stable at write posedge
     assign o_imm_mode    = executing ? uw_imm_mode     : 2'b0;
     assign o_flag_w_en   = executing ? uw_flag_w_en    : 1'b0;
     assign o_sr_load     = executing ? uw_sr_load      : 1'b0;

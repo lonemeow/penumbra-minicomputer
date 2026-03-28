@@ -26,8 +26,8 @@ module field_ext (
     output logic [3:0]  o_r_rd,        // IR[24:21] — destination register
     output logic [3:0]  o_r_rs,        // IR[20:17] — source register
     output logic        o_r_f,         // IR[16]    — flag-only bit (suppresses write)
-    output logic [3:0]  o_r_sys_dev,   // IR[15:12] — MTSYS/MFSYS device field
-    output logic [3:0]  o_r_sys_reg,   // IR[11:8]  — MTSYS/MFSYS register field
+    output logic [3:0]  o_r_sys_dev,   // IR[15:12] — WRSYS/RDSYS device field
+    output logic [3:0]  o_r_sys_reg,   // IR[11:8]  — WRSYS/RDSYS register field
 
     // ── Format L fields ─────────────────────────────────────────
     output logic [2:0]  o_l_op,        // IR[29:27] — Format L opcode (3-bit)
