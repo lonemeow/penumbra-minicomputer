@@ -14,8 +14,8 @@ This means:
 | Property | Value |
 |----------|-------|
 | Page size | 4 KB (12-bit offset) |
-| TLB entries | 64 (32 sets × 2 ways) |
-| TLB entry width | 64 bits (accessed as two 32-bit sysreg halves) |
+| TLB slots | 64 (0–63); each virtual page maps to exactly 2 candidate slots |
+| TLB entry width | Two 32-bit sysreg words: TLB_VPN and TLB_PTE |
 | Exception vector | 4 (shared: TLB miss + protection fault, distinguished by FAULT_STATUS) |
 | Sysreg device ID | 0 |
 | Flat/bypass mode | M=0 (reset default): identity map, uncached, no checks |
@@ -65,32 +65,43 @@ Accessed via `WRSYS`/`RDSYS` with device ID 0.
 
 ## TLB Entry Format
 
-Each TLB entry is 64 bits, accessed as two 32-bit halves:
+Each TLB entry is stored as two 32-bit words, read and written through the
+TLB_VPN (reg 3) and TLB_PTE (reg 4) system registers. These are the values
+the programmer constructs and the layouts that matter for OS code.
+
+**TLB_VPN** (reg 3) — `(VPN << 8) | ASID`:
 
 ```
- 63        44 43        24 23    16 15  12 11   8 7 6 5 4 3 2 1 0
-┌────────────┬────────────┬────────┬──────┬──────┬─┬─┬─┬─┬─┬─┬─┬─┐
-│  VPN (20)  │  PPN (20)  │ASID(8) │SW(4) │(rsvd)│G│U│X│W│R│C│—│V│
-└────────────┴────────────┴────────┴──────┴──────┴─┴─┴─┴─┴─┴─┴─┴─┘
- ╰──────── TLB_VPN ────────╯        ╰────────── TLB_PTE ──────────╯
+ 31  28 27                8 7        0
+┌──────┬──────────────────┬──────────┐
+│ 0000 │    VPN (20)      │ ASID (8) │
+└──────┴──────────────────┴──────────┘
+```
+
+**TLB_PTE** (reg 4) — `(PPN << 12) | (SW << 8) | flags`:
+
+```
+ 31              12 11    8 7 6 5 4 3 2 1 0
+┌─────────────────┬───────┬─┬─┬─┬─┬─┬─┬─┬─┐
+│    PPN (20)     │ SW(4) │G│U│X│W│R│C│—│V│
+└─────────────────┴───────┴─┴─┴─┴─┴─┴─┴─┴─┘
 ```
 
 ### Fields
 
-| Field | Bits | For OS | Description |
-|-------|------|--------|-------------|
-| V | 0 | **Set/clear** | Valid. Entry participates in lookup only when V=1. Clear to invalidate. |
-| C | 2 | **Set** | Cacheable. 0 = bypass cache (use for MMIO, DMA buffers). 1 = normal cached access. |
-| R | 3 | **Set** | Read permission. Checked on data loads. |
-| W | 4 | **Set** | Write permission. Checked on data stores. Set W=0 initially for dirty tracking (see below). |
-| X | 5 | **Set** | Execute permission. Checked on instruction fetches. |
-| U | 6 | **Set** | User-accessible. 0 = supervisor only. Supervisor always passes U check. |
-| G | 7 | **Set** | Global. Skips ASID comparison — use for kernel pages shared across all address spaces. |
-| SW | 11:8 | **Free use** | Software-defined (4 bits). Hardware stores but never reads. Use for pinning, dirty tracking, LRU/age. |
-| _rsvd_ | 15:12 | — | Reserved (occupied by PPN in TLB_PTE sysreg packing). |
-| ASID | 23:16 | **Set** | Address space ID. Matched against MMUCR.ASID on lookup (unless G=1). |
-| PPN | 43:24 | **Set** | Physical page number. Combined with page offset to form physical address. |
-| VPN | 63:44 | **Set** | Virtual page number. Matched against incoming virtual address bits 31:12. |
+| Field | Register | Bits | Hex | Description |
+|-------|----------|------|-----|-------------|
+| VPN | TLB_VPN | 27:8 | — | Virtual page number. Matched against `vaddr[31:12]`. |
+| ASID | TLB_VPN | 7:0 | — | Address space ID. Matched against MMUCR.ASID (unless G=1). |
+| PPN | TLB_PTE | 31:12 | — | Physical page number. Combined with page offset for physical address. |
+| SW | TLB_PTE | 11:8 | — | Software-defined (4 bits). Hardware stores but never reads. Use for dirty tracking, LRU, pinning. |
+| G | TLB_PTE | 7 | 0x80 | Global — skip ASID match. Use for kernel pages shared across all address spaces. |
+| U | TLB_PTE | 6 | 0x40 | User-accessible. 0 = supervisor only. Supervisor always bypasses this check. |
+| X | TLB_PTE | 5 | 0x20 | Execute permission. Checked on instruction fetches. |
+| W | TLB_PTE | 4 | 0x10 | Write permission. Checked on data stores. Set W=0 initially for dirty tracking (see below). |
+| R | TLB_PTE | 3 | 0x08 | Read permission. Checked on data loads. |
+| C | TLB_PTE | 2 | 0x04 | Cacheable. 0 = bypass cache (use for MMIO, DMA buffers). |
+| V | TLB_PTE | 0 | 0x01 | Valid. Entry participates in lookup only when V=1. Clear to invalidate. |
 
 ### Permission Check Rules
 
@@ -109,14 +120,31 @@ If any check fails: protection fault (vector 4, FAULT_STATUS.TYPE = `0010`).
 
 ### TLB_INDEX
 
-Selects which TLB slot to read or write:
-```
-TLB_INDEX = { 26'b0, way[0], set[4:0] }
-```
-- **set** (bits 4:0): Set index, 0–31
-- **way** (bit 5): Way within the set, 0 or 1
+The TLB has 64 slots, numbered 0–63. TLB_INDEX selects which slot to
+read or write:
 
-The set for a given virtual address is: **`set = vaddr[16:12]`** (the lowest 5 bits of the VPN).
+```
+ 31                       6   5    4       0
+┌─────────────────────────┬─────┬──────────┐
+│        (zero)           │ way │   set    │
+└─────────────────────────┴─────┴──────────┘
+```
+
+Slots 0–31 are way 0, slots 32–63 are way 1 (same sets, second copy).
+
+**Constraint:** The hardware lookup is wired so that a virtual address can
+only match entries in one specific set: **`set = vaddr[16:12]`** (the low
+5 bits of the VPN). Each set has two slots (way 0 and way 1), so any given
+virtual page can live in exactly two possible slots:
+
+```
+slot_a = VPN & 0x1F            (way 0)
+slot_b = (VPN & 0x1F) | 0x20  (way 1)
+```
+
+The OS chooses which of the two to use for replacement. The set/way
+structure is invisible for sequential operations like a full flush
+(just iterate 0–63).
 
 ### Loading an Entry
 
