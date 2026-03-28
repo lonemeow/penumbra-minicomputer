@@ -37,6 +37,12 @@ The architecture is fully specified in `doc/`. Key specs:
 - Shared constants in `rtl/core/penumbra_pkg.sv` (register addresses, ALU opcodes, condition codes)
 - Modules that use the package: `import penumbra_pkg::*;` inside the module declaration (not at file scope — Verilator warns about `import *` at $unit scope)
 
+### Naming: Hardware vs Software Terminology
+- **Supervisor** = hardware privilege level (SR.S bit, CPU mode). Use for anything the CPU implements: supervisor mode, supervisor stack pointer (SSP), "privileged / supervisor-only".
+- **Kernel** = OS software running in supervisor mode. Use when referring to the OS: kernel code, kernel handler, kernel pages, kernel-only (TLB access control from the programmer's perspective).
+- **Special-purpose registers (SPRs)** = CPU-internal registers accessed via `RDSPR`/`WRSPR` (EPC, ESR, USP). Not device-mapped sysregs. Named from the programmer's perspective, not microarchitecture — e.g. EPC/ESR ("exception PC/SR"), not "shadow PC/SR" (implementation detail).
+- **System registers (sysregs)** = device-mapped registers on the sysreg bus, accessed via `WRSYS`/`RDSYS` (MMU control, TLB entries, system ID). These belong to peripheral devices, not the CPU core.
+
 ## Build System
 - `make smoke` — toolchain smoke test (trivial adder)
 - `make sim MOD=<name>` — build & run a module's Verilator testbench (auto-includes penumbra_pkg.sv, sets --top-module)
