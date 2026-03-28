@@ -15,14 +15,48 @@ Source format:
         LDW  R3, [R4 + #8] ; Format M: memory load
         BEQ  label          ; Format B: branch to label
         .word 0xDEADBEEF   ; Raw 32-bit data
+        .equ NAME, 0xFF    ; Named constant
 
 Registers: R0-R15 (R0 is always zero, R13=LR, R14=SP, R15=PC)
-Immediates: #decimal, #0xHEX, #0bBIN, or #-decimal
+Immediates: #decimal, #0xHEX, #0bBIN, #-decimal, or #NAME
+
+Built-in constants for sysreg access:
+    WRSYS R4, #MMU, #TLB_INDEX   ; device and register by name
+    LLI   R1, #TLB_V             ; flag constants (0x01, 0x08, etc.)
 """
 
 import sys
 import argparse
 import re
+
+# ── Built-in constants (mirrors penumbra_pkg.sv) ─────────────
+# These are always available; user .equ definitions can override them.
+
+BUILTIN_CONSTANTS = {
+    # Sysreg device IDs
+    "MMU":          0,
+    "SYS":          1,
+
+    # MMU registers (device 0)
+    "MMUCR":        0,
+    "FAULT_ADDR":   1,
+    "FAULT_STATUS": 2,
+    "TLB_VPN":      3,
+    "TLB_PTE":      4,
+    "TLB_INDEX":    5,
+
+    # SYS registers (device 1)
+    "MACHINE_ID":   0,
+
+    # TLB PTE flag bits
+    "TLB_V":        0x01,
+    "TLB_C":        0x04,
+    "TLB_R":        0x08,
+    "TLB_W":        0x10,
+    "TLB_X":        0x20,
+    "TLB_U":        0x40,
+    "TLB_G":        0x80,
+}
 
 # ── Register parsing ─────────────────────────────────────────
 REG_ALIASES = {
@@ -41,8 +75,13 @@ def parse_reg(s):
             return n
     return None
 
-def parse_imm(s):
-    """Parse immediate value (with or without # prefix)."""
+def parse_imm(s, constants=None):
+    """Parse immediate value (with or without # prefix).
+
+    Accepts numeric literals (#42, #0xFF, #0b101, #-3) or named
+    constants (#TLB_V, #MMU). The constants dict is checked when
+    numeric parsing fails.
+    """
     s = s.strip()
     if s.startswith("#"):
         s = s[1:]
@@ -51,13 +90,23 @@ def parse_imm(s):
     if s.startswith("-"):
         neg = True
         s = s[1:]
-    if s.startswith("0x") or s.startswith("0X"):
-        val = int(s, 16)
-    elif s.startswith("0b") or s.startswith("0B"):
-        val = int(s, 2)
-    else:
-        val = int(s)
-    return -val if neg else val
+    # Try numeric literal
+    try:
+        if s.startswith("0x") or s.startswith("0X"):
+            val = int(s, 16)
+        elif s.startswith("0b") or s.startswith("0B"):
+            val = int(s, 2)
+        else:
+            val = int(s)
+        return -val if neg else val
+    except ValueError:
+        pass
+    # Try named constant
+    name = s.upper()
+    if constants and name in constants:
+        val = constants[name]
+        return -val if neg else val
+    raise ValueError(f"unknown immediate or constant '{s}'")
 
 # ── Format R — Register-register ALU & system ops ────────────
 # Encoding: [00][op:5][Rd:4][Rs:4][F:1][spare:16]
@@ -145,7 +194,7 @@ def encode_format_b(cond, offset22):
     return (0b11 << 30) | (cond << 26) | (offset22 << 4)
 
 
-def assemble_line(mnemonic, operands, addr, labels, line_num):
+def assemble_line(mnemonic, operands, addr, labels, line_num, constants=None):
     """Assemble one instruction, return 32-bit word or raise ValueError."""
     mn = mnemonic.upper()
 
@@ -170,8 +219,8 @@ def assemble_line(mnemonic, operands, addr, labels, line_num):
             rd = parse_reg(operands[0])
             if rd is None:
                 raise ValueError(f"bad register '{operands[0]}'")
-            dev = parse_imm(operands[1])
-            reg = parse_imm(operands[2])
+            dev = parse_imm(operands[1], constants)
+            reg = parse_imm(operands[2], constants)
             if not (0 <= dev <= 15):
                 raise ValueError(f"device ID must be 0-15, got {dev}")
             if not (0 <= reg <= 15):
@@ -227,7 +276,7 @@ def assemble_line(mnemonic, operands, addr, labels, line_num):
         if label_name in labels:
             imm = labels[label_name]
         else:
-            imm = parse_imm(operands[1])
+            imm = parse_imm(operands[1], constants)
         return encode_format_l(op, rd, imm)
 
     # ── Format M ──
@@ -248,7 +297,7 @@ def assemble_line(mnemonic, operands, addr, labels, line_num):
         if not imm_str:
             offset16 = 0
         else:
-            offset16 = parse_imm(imm_str)
+            offset16 = parse_imm(imm_str, constants)
             if m.group(2) == '-':
                 offset16 = -offset16
         return encode_format_m(l_bit, sz, se, rd, rb, offset16)
@@ -273,7 +322,7 @@ def assemble_line(mnemonic, operands, addr, labels, line_num):
             return encode_format_b(cond, word_offset)
 
         # Try as numeric offset
-        offset = parse_imm(target_str)
+        offset = parse_imm(target_str, constants)
         return encode_format_b(cond, offset)
 
     raise ValueError(f"unknown mnemonic '{mnemonic}'")
@@ -314,14 +363,27 @@ def tokenize_operands(operand_str):
 
 def assemble(source_lines):
     """Two-pass assembler. Returns list of (addr, word) pairs."""
-    # Pass 1: collect labels and compute addresses
+    # Pass 1: collect labels, constants, and compute addresses
     labels = {}
+    constants = dict(BUILTIN_CONSTANTS)  # user .equ can override builtins
     addr = 0
     instructions = []  # (line_num, addr, mnemonic, operands_str)
 
     for line_num, raw_line in enumerate(source_lines, 1):
         line = raw_line.split(";")[0].strip()
         if not line:
+            continue
+
+        # Directive: .equ NAME, VALUE
+        m = re.match(r"\.equ\s+(\w+)\s*,\s*(.+)", line, re.IGNORECASE)
+        if m:
+            name = m.group(1).upper()
+            try:
+                val = parse_imm(m.group(2).strip(), constants)
+            except ValueError as e:
+                print(f"  Error line {line_num}: .equ: {e}", file=sys.stderr)
+                sys.exit(1)
+            constants[name] = val
             continue
 
         # Directive: .org
@@ -362,11 +424,11 @@ def assemble(source_lines):
     for line_num, addr, mnemonic, operand_str in instructions:
         try:
             if mnemonic == ".word":
-                word = parse_imm(operand_str)
+                word = parse_imm(operand_str, constants)
                 output.append((addr, word & 0xFFFFFFFF))
             else:
                 operands = tokenize_operands(operand_str)
-                word = assemble_line(mnemonic, operands, addr, labels, line_num)
+                word = assemble_line(mnemonic, operands, addr, labels, line_num, constants)
                 output.append((addr, word))
         except (ValueError, KeyError) as e:
             print(f"  Error line {line_num}: {e}", file=sys.stderr)
