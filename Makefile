@@ -44,6 +44,10 @@ TB   ?= tb_$(MOD)
 # module is the DUT (otherwise it picks the first file = the package).
 PKG_SV = rtl/core/penumbra_pkg.sv
 
+# ── Assembler tools ──────────────────────────────────────────
+PASM  = python3 sw/tools/pasm.py
+UASM  = python3 sw/tools/uasm.py
+
 .PHONY: sim
 sim:
 ifndef MOD
@@ -55,9 +59,9 @@ endif
 		--Mdir $(BUILD_DIR)/$(MOD).verilator \
 		-o ../V$(MOD) \
 		$(PKG_SV) $$(find rtl -name '$(MOD).sv') sim/$(TB).cpp
-	@# Copy hex files needed by $readmemh (cpu_top uses program.hex + microcode.hex)
-	@test -f sim/programs/$(PROG).hex && cp sim/programs/$(PROG).hex program.hex 2>/dev/null || true
-	@test -f sw/microcode/microcode.hex && cp sw/microcode/microcode.hex microcode.hex 2>/dev/null || true
+	@# Assemble program and microcode for $readmemh
+	@test -f sim/programs/$(PROG).s && $(PASM) sim/programs/$(PROG).s -o program.hex || true
+	@test -f sw/microcode/microcode.uasm && $(UASM) sw/microcode/microcode.uasm -o microcode.hex || true
 	@echo "── Running $(MOD) testbench ──"
 	@$(DOCKER_RUN) --entrypoint ./$(BUILD_DIR)/V$(MOD) $(DOCKER_IMAGE)
 

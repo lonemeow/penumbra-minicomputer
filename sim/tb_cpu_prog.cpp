@@ -17,10 +17,16 @@
 #include <cstdio>
 #include <cstdint>
 #include "Vcpu_top.h"
+#include "verilated_vcd_c.h"
+
+static VerilatedVcdC* tfp = nullptr;
+static uint64_t sim_time = 0;
 
 static void tick(Vcpu_top* d) {
     d->i_clk = 0; d->eval();
+    if (tfp) { tfp->dump(sim_time); sim_time++; }
     d->i_clk = 1; d->eval();
+    if (tfp) { tfp->dump(sim_time); sim_time++; }
 }
 
 static uint32_t read_reg(Vcpu_top* cpu, int reg) {
@@ -61,12 +67,18 @@ static void reset(Vcpu_top* cpu) {
 }
 
 int main() {
+    Verilated::traceEverOn(true);
     Vcpu_top* cpu = new Vcpu_top;
+    tfp = new VerilatedVcdC;
+    cpu->trace(tfp, 99);
+    tfp->open("waves/cpu_top.vcd");
 
     printf("── Program Runner ──\n\n");
     reset(cpu);
 
     int cycles = run_until_halt(cpu, 5000);
+    if (tfp) { tfp->close(); delete tfp; tfp = nullptr; }
+
     if (cycles < 0) {
         printf("  FAIL: program did not halt within cycle limit\n\n");
         printf("prog: 0/1 tests passed\n");
@@ -84,7 +96,12 @@ int main() {
         printf("  PASS (R1 = 1)\n\n");
         printf("prog: 1/1 tests passed\n");
     } else {
-        printf("  FAIL (R1 = %u / 0x%08X, expected 1)\n\n", r1, r1);
+        printf("  FAIL (R1 = %u / 0x%08X, expected 1)\n", r1, r1);
+        printf("  Register dump:\n");
+        for (int i = 0; i < 16; i++) {
+            printf("    R%-2d = 0x%08X\n", i, read_reg(cpu, i));
+        }
+        printf("\n");
         printf("prog: 0/1 tests passed\n");
         printf("  *** 1 FAILED ***\n");
         delete cpu;

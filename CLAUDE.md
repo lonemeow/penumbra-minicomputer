@@ -39,7 +39,7 @@ The architecture is fully specified in `doc/`. Key specs:
 ## Build System
 - `make smoke` — toolchain smoke test (trivial adder)
 - `make sim MOD=<name>` — build & run a module's Verilator testbench (auto-includes penumbra_pkg.sv, sets --top-module)
-- `make sim MOD=cpu_top TB=<tb> PROG=<prog>` — run a specific testbench with a specific program (e.g., `TB=tb_cpu_prog PROG=test_fib`)
+- `make sim MOD=cpu_top TB=<tb> PROG=<prog>` — run a specific testbench with a specific program (e.g., `TB=tb_cpu_prog PROG=test_fib`). Auto-assembles `sim/programs/<PROG>.s` and `sw/microcode/microcode.uasm` into hex before running; `.hex` files are build artifacts (gitignored), only `.s`/`.uasm` sources are committed.
 - `make wave MOD=<name>` — open VCD waveform in GTKWave
 - `make clean` — remove build artifacts
 - All simulation runs via Docker (`verilator/verilator:latest`) — no host install needed
@@ -100,7 +100,7 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 ### Software Tools
 - **Microcode assembler** (`sw/tools/uasm.py`): Symbolic microcode → $readmemh hex. Defaults: `pc=NEXT branch=FETCH`. Run: `python3 sw/tools/uasm.py input.uasm -o microcode.hex`
 - **ISA assembler** (`sw/tools/pasm.py`): Two-pass assembler for Penumbra ISA → $readmemh hex. All 4 formats (R/L/M/B), labels, label references in Format L immediates, pseudo-ops (NOP, RET), branch aliases (BZ/BNZ). Run: `python3 sw/tools/pasm.py input.s -o program.hex`
-- Makefile auto-copies `program.hex` and `microcode.hex` to project root for `$readmemh`
+- Makefile auto-assembles `.s`/`.uasm` sources into root-level `program.hex`/`microcode.hex` for `$readmemh`; hex files are build artifacts (gitignored)
 
 ### Test Convention
 - **Program runner** (`sim/tb_cpu_prog.cpp`): Generic testbench that runs a program to halt, checks R1 for pass/fail. No cycle-by-cycle internal inspection.
