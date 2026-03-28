@@ -68,6 +68,13 @@ package penumbra_pkg;
     localparam logic [2:0] ACC_WRITE = 3'b010;  // bit 1 = W
     localparam logic [2:0] ACC_EXEC  = 3'b100;  // bit 2 = X
 
+    // ── Sysreg device IDs ──────────────────────────────────────
+    localparam logic [3:0] SYSDEV_MMU = 4'd0;   // MMU (TLB, fault regs)
+    localparam logic [3:0] SYSDEV_SYS = 4'd1;   // System ID (read-only)
+
+    // ── SYS sysreg addresses (dev_id = 1) ───────────────────
+    localparam logic [3:0] SYSREG_SYS_MACHID = 4'd0;  // Machine ID (read-only)
+
     // ── MMU sysreg addresses (dev_id = 0) ─────────────────────
     localparam logic [3:0] SYSREG_MMU_CR       = 4'd0;  // MMUCR: [0]=M (enable), [15:8]=ASID
     localparam logic [3:0] SYSREG_MMU_FADDR    = 4'd1;  // Faulting virtual address (read-only)

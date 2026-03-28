@@ -42,6 +42,9 @@ module cpu_top
     logic        mmu_hit;
     logic [31:0] mmu_sys_rdata;
 
+    // ── System ID signals ────────────────────────────────────
+    logic [31:0] sysid_rdata;
+
     // ── Cache signals ──────────────────────────────────────
     logic [31:0] cache_rdata;
     logic        cache_busy;
@@ -55,11 +58,21 @@ module cpu_top
     // ── Data access enables (only during execute, not fetch) ──
     logic data_re, data_we;
 
+    // ── Sysreg read mux (selects device by dp_r_sys_dev) ───────
+    logic [31:0] sys_rdata;
+    always_comb begin
+        case (dp_r_sys_dev)
+            SYSDEV_MMU: sys_rdata = mmu_sys_rdata;
+            SYSDEV_SYS: sys_rdata = sysid_rdata;
+            default:    sys_rdata = 32'b0;
+        endcase
+    end
+
     // ── Unified read data (used by both fetch and data path) ──
     // During sysreg read (sys_cycle && !sys_we), mux in sysreg data
     // instead of cache data so MDR can capture it via mdr_load_mem.
     logic [31:0] mem_rdata;
-    assign mem_rdata = (ctl_sys_cycle && !ctl_sys_we) ? mmu_sys_rdata : cache_rdata;
+    assign mem_rdata = (ctl_sys_cycle && !ctl_sys_we) ? sys_rdata : cache_rdata;
 
     // ══════════════════════════════════════════════════════════
     // Microcode ROM
@@ -267,8 +280,16 @@ module cpu_top
         // Sysreg interface (active during WRSYS/RDSYS with dev_id=0)
         .i_sys_reg     (dp_r_sys_reg),
         .i_sys_wdata   (dp_a_bus),
-        .i_sys_we      (ctl_sys_cycle && ctl_sys_we && (dp_r_sys_dev == 4'd0)),
+        .i_sys_we      (ctl_sys_cycle && ctl_sys_we && (dp_r_sys_dev == SYSDEV_MMU)),
         .o_sys_rdata   (mmu_sys_rdata)
+    );
+
+    // ══════════════════════════════════════════════════════════
+    // System ID (read-only machine identification)
+    // ══════════════════════════════════════════════════════════
+    sysid u_sysid (
+        .i_sys_reg  (dp_r_sys_reg),
+        .o_sys_rdata(sysid_rdata)
     );
 
     // ══════════════════════════════════════════════════════════
