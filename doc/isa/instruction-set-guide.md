@@ -482,6 +482,6 @@ yet have microcode -- executing them will dispatch to an empty ROM entry.
 | RTI | No | |
 | GETUSP, SETUSP | No | |
 | ICACHE_INV | No | |
-| WRSYS, RDSYS | No | |
+| WRSYS, RDSYS | Yes | Privileged; see `doc/isa/sysregs-reference.md` |
 | NOP (pseudo) | Yes | ADD R0, R0 |
 | RET (pseudo) | Yes | JMP R13 |
