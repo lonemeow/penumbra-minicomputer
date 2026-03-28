@@ -520,8 +520,8 @@ Instruction fetch is handled by a **hardware fetch unit**, not by microcode. Thi
 | `ir_valid` | fetch → sequencer | Instruction latched in IR, ready for dispatch |
 | `dispatch_addr` | fetch → sequencer | Micro-PC start address for the new instruction |
 | `fetch_invalidate` | datapath → fetch | Discard prefetch on branch taken (phase 2) |
-| `mem_fault` | D-cache/MMU → sequencer | Fault detected during memory access (checked on STALL resolution) |
-| `fault_vector[3:0]` | D-cache/MMU → fetch unit | Exception vector for the fault (4=page fault, 6=alignment, 9=bus error) |
+| `mem_fault` | MMU → sequencer | Fault detected during memory access (checked on STALL resolution) |
+| `fault_vector[3:0]` | cpu_top | Exception vector: VEC_TLB_MISS=2 (`!mmu_hit`), VEC_TLB_PROT=3 (`mmu_hit`) |
 
 ### Fetch Unit Behavior
 

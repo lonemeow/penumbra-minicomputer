@@ -391,7 +391,7 @@ The physical address space uses a fixed layout decoded from the top address bits
 ```
 
 - **Reset vector:** `0xFFFF_E000` (base of boot ROM). CPU starts here with MMU in flat mode (M=0).
-- **Interrupt vector table:** Set up by the kernel at `0x0000_0000` in RAM after boot.
+- **Exception vector table:** Fixed physical addresses at `0x0000_0000` in RAM. Vector fetches bypass the MMU.
 - **Unmapped regions:** Accessing unmapped addresses produces a bus fault exception.
 
 ### I/O Peripheral Map

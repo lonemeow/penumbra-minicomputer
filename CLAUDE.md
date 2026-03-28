@@ -15,7 +15,7 @@ Penumbra is a 32-bit RISC-like minicomputer designed from scratch and implemente
 ## Architecture Summary
 The architecture is fully specified in `doc/`. Key specs:
 - **ISA:** `doc/isa/architecture-overview.md` — 4-format 32-bit encoding (R/L/M/B), 2-operand, R0=zero, 16 registers, ARM-style condition flags
-- **Datapath:** `doc/core/datapath.md` — three-bus (A/B/R), separate PC unit, 48-bit horizontal microcode, hardwired fetch unit, direct-mapped dispatch
+- **Datapath:** `doc/core/datapath.md` — three-bus (A/B/R), separate PC unit, 49-bit horizontal microcode, hardwired fetch unit, direct-mapped dispatch
 - **Microcode validation:** `doc/core/microcode-validation.md` — bit-level micro-programs for ADD, LDW, BEQ, interrupt entry, RTI; 17 issues found and resolved
 - **Bus:** `doc/bus/bus-overview.md` — custom async Penumbra Bus (4-phase handshake), sync internal bus, sysreg sideband
 - **MMU/Cache:** `doc/mmu/mmu-overview.md` — software-managed 64-entry 2-way SA TLB, split I/D PIPT cache, write-through D-cache
@@ -70,16 +70,16 @@ The CPU runs real programs in simulation with the full CPU → MMU → cache →
 | Datapath top | `rtl/core/datapath.sv` | 15/15 | Structural wiring of all modules, IR reg, reg addr routing, F-bit gating |
 | Microcode ROM | `rtl/core/ucode_rom.sv` | — | 256×49-bit ROM, $readmemh from microcode.hex |
 | Sequencer | `rtl/core/sequencer.sv` | — | Micro-PC, branch_cond decode, EI/DI tracking, ei_shadow_clr |
-| CPU top | `rtl/core/cpu_top.sv` | 10 progs | Full integration: datapath + sequencer + ROM + MMU + sysid + cache + memory + fetch + IRQ + MMU traps + WRSYS/RDSYS |
+| CPU top | `rtl/core/cpu_top.sv` | 13 progs | Full integration: datapath + sequencer + ROM + MMU + sysid + cache + memory + fetch + IRQ + MMU traps + BREAK + WRSYS/RDSYS |
 | Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_*, ACC_*, VEC_*, SYSDEV_*, SYSREG_* constants |
 | System ID | `rtl/soc/sysid.sv` | via cpu_top | Read-only MACHINE_ID register (Penumbra/1), sysreg device 1 |
 | TLB | `rtl/mmu/tlb.sv` | 111/111 | 64-entry 2-way SA, parallel lookup, one-hot permission check, indexed sysreg R/W |
-| MMU | `rtl/mmu/mmu.sv` | — | Bypass/translate mux, sysreg routing, fault latching, TLB instantiation |
+| MMU | `rtl/mmu/mmu.sv` | — | Bypass/translate mux, force_bypass for vector fetch, sysreg routing, fault latching, TLB instantiation |
 | Cache stub | `rtl/soc/cache_stub.sv` | — | Combinational pass-through, placeholder for split I/D PIPT caches |
 | Simple memory | `rtl/soc/simple_mem.sv` | — | 4K×32 synchronous SRAM model, $readmemh, 1-cycle read busy |
 
 ### Exception and Interrupt Handling
-Two sources share the same `except_entry` → `int_entry` → vector dispatch path:
+Three sources share the same `except_entry` → `int_entry` → vector dispatch path:
 
 **External IRQ (asynchronous):**
 - **Check point:** Dispatch-time (when `ir_valid` fires, before entering S_EXEC)
@@ -94,8 +94,14 @@ Two sources share the same `except_entry` → `int_entry` → vector dispatch pa
 - **Action:** `fault_except` pulse (once per fault via `!fault_pending` guard) → `except_entry` saves shadow PC/SR, sets S=1/I=0. Sequencer aborts STALL (`go_fetch`), returns to S_FETCH.
 - **Dispatch:** `fault_pending` flag overrides next dispatch to 0x70 with `fault_vector` (VEC_TLB_MISS=2 or VEC_TLB_PROT=3). Cleared when int_entry executes (`ctl_pc_load`), one cycle after dispatch — so `vector_num` reads the correct fault vector during int_entry.
 - **PC preservation:** PC is in HOLD during STALL, so shadow_PC = faulting instruction. Handler can fill TLB and RTI to restart.
-- **Priority:** fault_pending > IRQ (fault sets SR.I=0, so irq_taken is false at next dispatch)
+- **Priority:** fault_pending > BREAK > IRQ (fault sets SR.I=0, so irq_taken is false at next dispatch)
 - **Instruction fetch faults:** Not yet handled — kernel code assumed identity-mapped.
+
+**BREAK instruction (synchronous):**
+- **Check point:** Dispatch-time, detected by `dispatch_addr == 0x4A`
+- **Action:** Triggers `except_entry` like IRQ, vectors to VEC_BREAK (6). Works from any privilege level.
+- **Testbench:** `o_halted` pulses for one cycle at BREAK dispatch — testbench stops immediately. CPU continues with the exception normally (no special halt state).
+- **Unprivileged code:** BREAK just traps to the kernel, same as any exception. OS can install a BREAK handler for debugging.
 
 **Vector table:** Fixed **physical** addresses, MMU bypassed for the vector fetch. `vector_addr = {26'b0, vector_num, 2'b00}` — word-aligned entries at physical 0x00. VEC_RESET=0, VEC_IRQ=1, VEC_TLB_MISS=2, VEC_TLB_PROT=3, VEC_PRIV=4, VEC_SYSCALL=5, VEC_BREAK=6. After int_entry completes, `vector_fetch` flag forces MMU bypass for one fetch cycle, cleared on ir_valid. No TLB mapping needed for the vector page — eliminates nested TLB miss on exception entry.
 
@@ -123,9 +129,10 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 - Makefile auto-assembles `.s`/`.uasm` sources into root-level `program.hex`/`microcode.hex` for `$readmemh`; hex files are build artifacts (gitignored)
 
 ### Test Convention
-- **Program runner** (`sim/tb_cpu_prog.cpp`): Generic testbench that runs a program to halt, checks R1 for pass/fail. VCD trace output to `waves/cpu_top.vcd`, register dump (R0–R15) on failure.
+- **Program runner** (`sim/tb_cpu_prog.cpp`): Generic testbench that runs a program until BREAK, checks R1 for pass/fail. VCD trace output to `waves/cpu_top.vcd`, register dump (R0–R15) on failure.
 - **Pass/fail convention:** R1 = 1 means PASS, R1 = 0 means FAIL. Tests self-check internally and set R1 accordingly.
-- **Halt detection:** Testbench watches for PC stability (infinite `B .` loop). Future: replace with SYSCALL trap once implemented.
+- **Halt detection:** Testbench watches for `o_halted` pulse (BREAK instruction dispatch). Instant detection, no polling.
+- **Test termination:** Programs end with `BREAK` instruction. Pass path: `LLI R1, #1` then fall through to `fail: BREAK`. Fail path: assertion `BNE fail` branches to `fail: BREAK`.
 - **Calling convention:** Return via RET (JMP R13). Program preamble sets LR and calls the test subroutine.
 
 ### Implemented Microcode (37 micro-ops)
@@ -135,7 +142,7 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 | Immediate (Format L) | LLI, LLIS, LUI, INC, DEC, CMPI | |
 | Memory (Format M) | LDW (3 micro-ops), STW (4 micro-ops) | STALL-based, latency-agnostic |
 | Branch (Format B) | All 16 conditions via single BRT entry | BZ/BNZ aliases in assembler |
-| System (R-SYS, 0x40–0x5E) | JMP, EI, DI, WRSYS, RDSYS, RTI, IRET, RDSPC | RET = JMP R13 (pseudo); RTI/IRET/RDSYS are 2-micro-op |
+| System (R-SYS, 0x40–0x5E) | JMP, EI, DI, WRSYS, RDSYS, RTI, IRET, RDSPC, BREAK | RET = JMP R13 (pseudo); RTI/IRET/RDSYS are 2-micro-op; BREAK intercepted at dispatch |
 | Exception | int_entry | Shared by IRQ and MMU fault dispatch |
 
 ### Known Bugs Fixed (Notable)
@@ -143,6 +150,8 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 - **BR_PRIV used advance instead of go_fetch:** Caused sequencer to fall through into adjacent microcode entries instead of returning to S_FETCH.
 - **reg_w_sel gated by executing:** Could change at same posedge as register write. Ungated to keep address stable.
 - **fault_pending cleared too early:** Clearing at `ir_valid` (dispatch) meant `vector_num` was wrong one cycle later when `int_entry` read it. Fix: clear at `ctl_pc_load` (int_entry execution).
+- **Vector fetch corrupted fault registers:** MMU bypass for vector fetch only gated the output mux, not the TLB lookup or fault latching. The TLB still reported a miss for the unmapped vector page, overwriting `FAULT_ADDR` with the vector address. Fix: gate `i_lookup_en` and fault latching with `!i_force_bypass`.
+- **IRET assembled with wrong opcode:** Hardcoded `encode_format_r(31, ...)` instead of using table value (27). IRET dispatched to wrong ROM entry. Fix: use `op` from FORMAT_R_OPS lookup.
 
 ### Next Steps (in priority order)
 1. **Sub-word loads** — LDH/LDB/LDHS/LDBS (byte/half-word extraction in writeback path).

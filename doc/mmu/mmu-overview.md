@@ -16,7 +16,7 @@ This means:
 | Page size | 4 KB (12-bit offset) |
 | TLB slots | 64 (0–63); each virtual page maps to exactly 2 candidate slots |
 | TLB entry width | Two 32-bit sysreg words: TLB_VPN and TLB_PTE |
-| Exception vector | 4 (shared: TLB miss + protection fault, distinguished by FAULT_STATUS) |
+| Exception vectors | VEC_TLB_MISS=2 (0x08), VEC_TLB_PROT=3 (0x0C) — separate vectors, also distinguished by FAULT_STATUS |
 | Sysreg device ID | 0 |
 | Flat/bypass mode | M=0 (reset default): identity map, uncached, no checks |
 
@@ -218,7 +218,7 @@ BNE   .flush_loop
 
 ### TLB Miss Handler
 
-The TLB miss handler is entered via **exception vector 4** when the hardware finds no matching entry. The CPU has already saved shadow PC/SR and entered supervisor mode with interrupts disabled.
+The TLB miss handler is entered via **exception vector 2** (VEC_TLB_MISS, physical address 0x08) when the hardware finds no matching entry. Protection faults use **vector 3** (VEC_TLB_PROT, 0x0C). The CPU has already saved shadow PC/SR and entered supervisor mode with interrupts disabled. Vector table entries are fetched from physical addresses (MMU bypassed) so no TLB mapping is needed for the vector page.
 
 **Recommended stackless handler** using a fixed save area in the pinned vector page (0x00000000):
 

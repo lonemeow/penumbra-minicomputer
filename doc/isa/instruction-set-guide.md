@@ -300,37 +300,31 @@ Privileged instructions executed in user mode (SR.S = 0) trap to vector 3
 
 ## Exception and Interrupt Vectors
 
-The vector table occupies the lowest addresses in memory. Each vector is a
-4-byte entry; the CPU loads the handler address from `vector_number * 4`.
+The vector table is at **fixed physical addresses** starting at 0x00. The vector
+fetch bypasses the MMU (no TLB mapping needed for the vector page). Each
+entry is a 32-bit instruction word (typically a branch to the handler).
 
-| Vector | Address | Source |
-|--------|---------|--------|
-| 0 | 0x00 | Reset |
-| 1 | 0x04 | NMI (non-maskable interrupt) |
-| 2 | 0x08 | Illegal instruction |
-| 3 | 0x0C | Privilege violation |
-| 4 | 0x10 | MMU fault / TLB miss |
-| 5 | 0x14 | Divide by zero |
-| 6 | 0x18 | Alignment fault |
-| 7 | 0x1C | SYSCALL |
-| 8 | 0x20 | BREAK |
-| 9 | 0x24 | Bus error |
-| 10--15 | 0x28--0x3C | Reserved |
-| 16 | 0x40 | Timer IRQ |
-| 17 | 0x44 | UART IRQ |
-| 18 | 0x48 | Ethernet IRQ |
-| 19 | 0x4C | DMA complete IRQ |
-| 20 | 0x50 | SPI/SD IRQ |
-| 21--23 | 0x54--0x5C | Reserved IRQs |
+`vector_addr = vector_number × 4`
+
+| Vector | Address | Source | Status |
+|--------|---------|--------|--------|
+| 0 | 0x00 | Reset | Implemented |
+| 1 | 0x04 | External IRQ | Implemented |
+| 2 | 0x08 | TLB miss | Implemented |
+| 3 | 0x0C | TLB protection fault | Implemented |
+| 4 | 0x10 | Privilege violation | Reserved |
+| 5 | 0x14 | SYSCALL | Reserved |
+| 6 | 0x18 | BREAK (debug) | Implemented |
+| 7--15 | 0x1C--0x3C | Reserved (NMI, alignment, bus error, etc.) | — |
 
 On exception entry, the hardware:
-1. Saves PC and SR to shadow registers (or stack, depending on exception type)
+1. Saves PC and SR to shadow registers
 2. Sets S = 1 (supervisor), I = 0 (interrupts disabled)
-3. Swaps SP to KSP if coming from user mode
-4. Loads PC from the vector table entry
+3. Loads PC from the vector table entry (physical fetch, MMU bypassed)
 
-RTI reverses this: restores PC and SR, swaps SP back if returning to user
-mode.
+RTI restores shadow_SR then shadow_PC (returns to interrupted/faulting instruction).
+IRET Rd, Rs atomically loads SR from Rd and PC from Rs (context switch to a different process).
+RDSPC Rd, SSR/SPC reads the shadow registers so the kernel can save them.
 
 ---
 

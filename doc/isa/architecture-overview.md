@@ -408,41 +408,34 @@ The kernel interrupt handler then saves remaining registers (R1-R13) and USP in 
 
 ### Exit Sequence
 
-Return-from-interrupt (RTI) reverses the entry sequence: pop PC and SR from kernel stack, restoring previous privilege level, interrupt enable state, and SP banking. RTI executes as an atomic microcode sequence with interrupts disabled throughout — the restored I bit takes effect only after RTI completes.
+Return-from-interrupt (RTI) restores shadow_SR then shadow_PC, reversing the entry sequence. For context switches (return to a *different* process), IRET Rd, Rs atomically loads SR from Rd and PC from Rs. Both are privileged. RDSPC Rd, SSR/SPC lets the kernel read the shadow registers to save them to the process table.
 
 ### Vector Table
 
-The vector table is located at physical address `0x0000_0000` (base of RAM), set up by the kernel during boot. Each entry is one 32-bit handler address.
+The vector table is at **fixed physical addresses** starting at `0x0000_0000`. The vector fetch after an exception bypasses the MMU (identity-mapped, no TLB entry needed), eliminating nested TLB miss problems. Each entry is a 32-bit instruction word (typically a branch to the handler).
 
-| Vector | Source                | Type           | Vector number source |
-|--------|-----------------------|----------------|----------------------|
-| 0      | Reset                 | —              | Hardwired            |
-| 1      | NMI                   | External       | Hardwired            |
-| 2      | Illegal instruction   | Exception      | Microcode            |
-| 3      | Privilege violation   | Exception      | Microcode            |
-| 4      | MMU fault (TLB miss / page fault) | Exception | Microcode     |
-| 5      | Divide by zero        | Exception      | Microcode            |
-| 6      | Alignment fault       | Exception      | Microcode            |
-| 7      | SYSCALL               | Software trap  | Instruction          |
-| 8      | BREAK (debug)         | Software trap  | Instruction          |
-| 9      | Bus error             | Exception      | Microcode            |
-| 10-15  | (reserved)            | —              | —                    |
-| 16     | IRQ: Timer            | External       | Priority encoder + 16 |
-| 17     | IRQ: UART             | External       | Priority encoder + 16 |
-| 18     | IRQ: Wiznet Ethernet  | External       | Priority encoder + 16 |
-| 19     | IRQ: DMA complete     | External       | Priority encoder + 16 |
-| 20     | IRQ: SPI/SD           | External       | Priority encoder + 16 |
-| 21-23  | IRQ: (reserved)       | External       | Priority encoder + 16 |
+`vector_addr = vector_number × 4`
+
+| Vector | Address | Source                | Status |
+|--------|---------|-----------------------|--------|
+| 0      | 0x00    | Reset                 | Implemented (hardwired) |
+| 1      | 0x04    | External IRQ          | Implemented |
+| 2      | 0x08    | TLB miss              | Implemented |
+| 3      | 0x0C    | TLB protection fault  | Implemented |
+| 4      | 0x10    | Privilege violation   | Reserved (VEC_PRIV) |
+| 5      | 0x14    | SYSCALL               | Reserved (VEC_SYSCALL) |
+| 6      | 0x18    | BREAK (debug)         | Implemented |
+| 7-15   | 0x1C–0x3C | (reserved for future: alignment, bus error, NMI, etc.) | — |
 
 ### How the CPU Gets the Vector Number
 
 | Source | Mechanism |
 |--------|-----------|
-| Exceptions | Hardwired in microcode — each exception type branches to a micro-routine that loads the corresponding fixed vector number |
-| SYSCALL | Fixed vector 7 |
-| BREAK | Fixed vector 8 |
-| NMI | Fixed vector 1, directly wired to CPU, non-maskable |
-| External IRQ | Priority encoder outputs a 3-bit device number; microcode adds offset (16) to produce the vector table index |
+| External IRQ | `irq_taken = i_irq & sr_i & !ei_shadow`, hardwired VEC_IRQ=1 |
+| TLB miss | `data_fault` during STALL with `!mmu_hit`, VEC_TLB_MISS=2 |
+| TLB protection | `data_fault` during STALL with `mmu_hit`, VEC_TLB_PROT=3 |
+| BREAK | Detected at dispatch (`dispatch_addr == 0x4A`), VEC_BREAK=6 |
+| Priority | fault_pending > BREAK > IRQ |
 
 ### External Interrupt Hardware
 
