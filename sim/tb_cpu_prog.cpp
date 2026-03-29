@@ -77,7 +77,7 @@ int main() {
     printf("── Program Runner ──\n\n");
     reset(cpu);
 
-    int cycles = run_until_halt(cpu, 50000);
+    int cycles = run_until_halt(cpu, 500000);
     if (tfp) { tfp->close(); delete tfp; tfp = nullptr; }
 
     if (cycles < 0) {

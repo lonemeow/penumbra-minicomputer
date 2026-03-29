@@ -1,8 +1,8 @@
 // Penumbra CPU Core — complete processor with MMU and cache
 //
 // Wires together: datapath, micro-sequencer, microcode ROM, MMU,
-// and cache. Includes inline fetch logic (phase 1: 1-cycle memory
-// read, no I-cache, no prefetch).
+// and cache. Includes inline fetch logic that waits for the memory
+// busy signal (latency-agnostic, works with any backing store).
 //
 // External interfaces:
 //   - Memory bus (post-cache): address, data, byte enables, busy
@@ -104,7 +104,8 @@ module cpu_core
     // ══════════════════════════════════════════════════════════
     // Sequencer
     // ══════════════════════════════════════════════════════════
-    logic        fetch_go, ir_valid;
+    logic        fetch_go;
+    logic        ir_valid;
     logic [7:0]  dispatch_addr;
 
     // Datapath status
@@ -177,26 +178,43 @@ module cpu_core
     );
 
     // ══════════════════════════════════════════════════════════
-    // Fetch logic (phase 1: inline, 1-cycle memory read)
+    // Fetch logic — busy-aware instruction fetch
+    //
+    // During S_FETCH, the address bus carries PC (via fetch_active)
+    // and we assert a read enable through the same cache/memory
+    // path as data accesses. The fetch waits for busy to deassert
+    // before capturing the instruction into IR. This makes fetch
+    // latency-agnostic, just like the STALL-based data path.
+    //
+    // fetch_active and data_re/data_we are mutually exclusive
+    // (S_FETCH vs S_EXEC), so they safely share one memory port.
+    // When we add a split I/D cache, fetch gets its own port.
     // ══════════════════════════════════════════════════════════
 
     logic fetch_active;
     assign fetch_active = !ctl_pc_load;  // In S_FETCH state
 
-    logic fetch_prev;   // fetch_active delayed by 1 cycle
     logic ir_load;
 
+    // Track that the memory has accepted our fetch request
+    // (we've seen busy go high at least once this fetch cycle)
+    logic fetch_pending;
     always_ff @(posedge i_clk) begin
-        if (i_rst) begin
-            fetch_prev <= 1'b0;
-            ir_valid   <= 1'b0;
-        end else begin
-            fetch_prev <= fetch_active;
-            ir_valid   <= fetch_active & fetch_prev;
-        end
+        if (i_rst || !fetch_active)
+            fetch_pending <= 1'b0;
+        else if (cache_busy)
+            fetch_pending <= 1'b1;
     end
 
-    assign ir_load = ir_valid && fetch_active;
+    // Fetch completes when pending and memory is no longer busy.
+    // This is a combinational pulse — lasts exactly one cycle
+    // because the sequencer transitions to S_EXEC at the next
+    // posedge, which clears fetch_active.
+    logic fetch_complete;
+    assign fetch_complete = fetch_active && fetch_pending && !cache_busy;
+
+    assign ir_valid = fetch_complete;
+    assign ir_load  = fetch_complete;
 
     // ── Dispatch address computation ─────────────────────────
     logic [1:0]  fetch_format;
@@ -325,8 +343,17 @@ module cpu_core
     assign mmu_user_mode   = !sr_s;
     assign mmu_req         = fetch_active || ctl_mem_read || ctl_mem_write;
 
-    assign data_re = ctl_mem_read  && !fetch_active;
-    assign data_we = ctl_mem_write && !fetch_active;
+    // Gate data access enables with !mmu_fault — a faulting access
+    // must never reach the cache/memory. The sequencer detects the
+    // fault via i_mem_fault and aborts. Without this gate, a multi-
+    // cycle memory would start counting and later commit with stale
+    // bus values (wrong address/data) after the CPU has moved on.
+    assign data_re = ctl_mem_read  && !fetch_active && !mmu_fault;
+    assign data_we = ctl_mem_write && !fetch_active && !mmu_fault;
+
+    // Unified read enable: fetch OR data read (mutually exclusive)
+    logic mem_re;
+    assign mem_re = data_re || fetch_active;
 
     // ── Byte enable generation ───────────────────────────────
     logic [3:0] byte_en;
@@ -395,7 +422,7 @@ module cpu_core
         .i_wdata      (dp_mem_wdata),
         .i_byte_en    (byte_en),
         .i_we         (data_we),
-        .i_re         (data_re),
+        .i_re         (mem_re),
         .i_cacheable  (mmu_cacheable),
         .o_rdata      (cache_rdata),
         .o_busy       (cache_busy),
