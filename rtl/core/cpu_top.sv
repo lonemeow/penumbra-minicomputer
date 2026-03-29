@@ -316,8 +316,7 @@ module cpu_top
     logic priv_taken;
 
     assign is_sys_zone   = (fetch_format == 2'b00) && mem_rdata[29];  // Format R, op[4]=1
-    assign is_priv_exempt = (dispatch_addr == 8'h50) ||               // JMP
-                            (dispatch_addr == 8'h52);                 // EI
+    assign is_priv_exempt = (dispatch_addr == 8'h50);                  // JMP
     assign priv_taken     = is_sys_zone && !is_priv_exempt && !sr_s;
 
     assign irq_taken    = i_irq & sr_i & !ei_shadow;
