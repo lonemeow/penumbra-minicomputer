@@ -90,10 +90,10 @@ The CPU runs real programs in simulation with the full CPU → MMU → cache →
 | TLB | `rtl/mmu/tlb.sv` | 111/111 | 64-entry 2-way SA, parallel lookup, one-hot permission check, indexed sysreg R/W |
 | MMU | `rtl/mmu/mmu.sv` | — | Bypass/translate mux, force_bypass for vector table read, sysreg routing, fault latching, TLB instantiation |
 | Cache stub | `rtl/soc/cache_stub.sv` | — | Combinational pass-through with byte_en, placeholder for split I/D PIPT caches |
-| Simple memory | `rtl/soc/simple_mem.sv` | — | Parameterizable synchronous SRAM model (default 16 MB), $readmemh, 1-cycle read busy, per-byte write enables, address wrapping |
+| Simple memory | `rtl/soc/simple_mem.sv` | — | Parameterizable synchronous SRAM model (default 16 MB), zeroed at init (no preload — matches real HW), 1-cycle read busy, per-byte write enables, address wrapping |
 
 ### Boot ROM and Interactive Simulation
-- **Boot ROM** (`sw/rom/boot_rom.s`): Penumbra/1 boot monitor. Prints banner, enters UART echo loop. Identical binary on sim and real hardware. Uses polling I/O routines (`putchar`, `getchar`, `puts`) with dedicated registers (R12=UART base, R11=THRE mask, R10=DR mask). Assembled with `--org 0xFFFFE000`.
+- **Boot ROM** (`sw/rom/boot_rom.s`): Penumbra/1 boot monitor with command parser. Identical binary on sim and real hardware. Commands: `d ADDR` (dump 64 bytes), `w ADDR VAL` (write word), `g ADDR` (jump), `?` (help). Stack-based calling convention: SP (R14) at `0x01000000` (top of 16 MB RAM), non-leaf functions push/pop LR. I/O globals pinned in R10-R12 (UART base, THRE mask, DR mask). Routines: `putchar`/`getchar` (leaf, polling), `puts` (null-terminated string), `readline` (line editing with echo and backspace), `parse_hex` (hex string→value), `print_hex32`/`print_hex8`/`print_nibble` (value→hex output, table-driven). Line buffer at RAM `0x1000`, 79-char max. Assembled with `--org 0xFFFFE000`.
 - **Interactive testbench** (`sim/tb_interactive.cpp`): Bridges host stdin/stdout to UART RX/TX. Raw terminal mode (no echo, no line buffering — boot ROM handles character processing). Polls stdin every 1024 cycles for sub-character-time latency. UART RX handshake: checks `o_uart_rx_ack` on negedge (combinational, pre-posedge) to reliably detect acceptance. No VCD tracing (interactive sessions are long). Exits on BREAK or SIGINT (Ctrl-C). Status messages go to stderr.
 
 ### Exception and Interrupt Handling
@@ -222,7 +222,7 @@ The simulation UART (`sim_uart.sv`) is an NS16450-compatible device at `0xFF00_0
 - **Real hardware:** Replace `sim_uart` with a baud-rate UART (add shift register + baud generator from DLL/DLM). Same register interface. Add 16-byte FIFOs by flipping IIR[7:6] to `11`.
 
 ### Next Steps (in priority order)
-1. **Boot ROM monitor** — Banner and echo loop working (`make simulate`). Next: command parser (memory read/write, go), S-record upload, stack setup for proper calling convention.
+1. **Boot ROM monitor** — Command parser working (`make simulate`): dump, write, go, help. Next: S-record upload for loading programs over UART.
 2. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick.
 3. **Interrupt controller** — Multiple devices with priority encoding.
 4. **Instruction fetch faults** — Detect TLB miss during fetch phase (separate from STALL-based data fault path).
