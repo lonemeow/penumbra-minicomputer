@@ -19,6 +19,7 @@ module cache_stub
     // ── CPU side (post-MMU physical address) ───────────────
     input  logic [31:0] i_paddr,        // Physical address from MMU
     input  logic [31:0] i_wdata,        // Write data (from MDR)
+    input  logic [3:0]  i_byte_en,      // Per-byte write enables
     input  logic        i_we,           // Data write enable
     input  logic        i_re,           // Data read enable
     input  logic        i_cacheable,    // MMU C bit (ignored in stub)
@@ -28,6 +29,7 @@ module cache_stub
     // ── Memory / bus side ──────────────────────────────────
     output logic [31:0] o_mem_addr,     // Address to memory
     output logic [31:0] o_mem_wdata,    // Write data to memory
+    output logic [3:0]  o_mem_byte_en,  // Per-byte write enables to memory
     output logic        o_mem_we,       // Write enable to memory
     output logic        o_mem_re,       // Read enable to memory
     input  logic [31:0] i_mem_rdata,    // Read data from memory
@@ -35,12 +37,13 @@ module cache_stub
 );
 
     // Pass-through — no caching, no buffering
-    assign o_mem_addr  = i_paddr;
-    assign o_mem_wdata = i_wdata;
-    assign o_mem_we    = i_we;
-    assign o_mem_re    = i_re;
-    assign o_rdata     = i_mem_rdata;
-    assign o_busy      = i_mem_busy;
+    assign o_mem_addr    = i_paddr;
+    assign o_mem_wdata   = i_wdata;
+    assign o_mem_byte_en = i_byte_en;
+    assign o_mem_we      = i_we;
+    assign o_mem_re      = i_re;
+    assign o_rdata       = i_mem_rdata;
+    assign o_busy        = i_mem_busy;
 
 endmodule
 

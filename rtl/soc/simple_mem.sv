@@ -4,6 +4,10 @@
 // Synchronous read with 1-cycle latency, synchronous write.
 // Provides busy signal for the STALL mechanism.
 //
+// Byte enables gate per-byte writes for sub-word stores.
+// Reads always return the full 32-bit word — byte extraction
+// is done by the CPU datapath.
+//
 // In the real SoC this gets replaced by the cache ↔ bus path.
 
 // verilator lint_off UNUSEDSIGNAL
@@ -15,6 +19,7 @@ module simple_mem
     input  logic        i_rst,
     input  logic [31:0] i_addr,     // Byte address (bits [13:2] used)
     input  logic [31:0] i_wdata,    // Write data
+    input  logic [3:0]  i_byte_en,  // Per-byte write enables (active high)
     input  logic        i_we,       // Write enable (data access)
     input  logic        i_re,       // Read enable (data access)
     output logic [31:0] o_rdata,    // Read data (always valid, 1-cycle latency)
@@ -35,10 +40,14 @@ module simple_mem
     logic [11:0] word_addr;
     assign word_addr = i_addr[13:2];
 
-    // ── Synchronous write ──────────────────────────────────
+    // ── Synchronous write (per-byte enables) ────────────────
     always_ff @(posedge i_clk) begin
-        if (i_we)
-            mem[word_addr] <= i_wdata;
+        if (i_we) begin
+            if (i_byte_en[0]) mem[word_addr][ 7: 0] <= i_wdata[ 7: 0];
+            if (i_byte_en[1]) mem[word_addr][15: 8] <= i_wdata[15: 8];
+            if (i_byte_en[2]) mem[word_addr][23:16] <= i_wdata[23:16];
+            if (i_byte_en[3]) mem[word_addr][31:24] <= i_wdata[31:24];
+        end
     end
 
     // ── Synchronous read (1-cycle latency) ─────────────────

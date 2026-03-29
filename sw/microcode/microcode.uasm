@@ -258,6 +258,22 @@ int_entry:
 #   Store: MDR ← Rd → STALL mem_write → advance PC          (4 micro-ops)
 # ═══════════════════════════════════════════════════════════════
 
+# ── STB Rd, [Rb + #offset] (L=0, sz=00, SE=0, dispatch=0x80) ─
+.org 0x80
+stb:
+  reg_a=IR_RS bmux=IMM imm_mode=SIGN_EXT alu=ADD mar_load=1 pc=HOLD branch=SEQ
+  reg_a=IR_RD mdr_load_a=1 pc=HOLD branch=SEQ
+  mem_write=1 mem_size=BYTE pc=HOLD branch=STALL
+  pc=NEXT
+
+# ── STH Rd, [Rb + #offset] (L=0, sz=01, SE=0, dispatch=0x88) ─
+.org 0x88
+sth:
+  reg_a=IR_RS bmux=IMM imm_mode=SIGN_EXT alu=ADD mar_load=1 pc=HOLD branch=SEQ
+  reg_a=IR_RD mdr_load_a=1 pc=HOLD branch=SEQ
+  mem_write=1 mem_size=HALF pc=HOLD branch=STALL
+  pc=NEXT
+
 # ── STW Rd, [Rb + #offset] (L=0, sz=10, SE=0, dispatch=0x90) ─
 # Step 0: compute address, load MAR
 # Step 1: load store data (Rd) into MDR via A-bus
@@ -270,10 +286,40 @@ stw:
   mem_write=1 mem_size=WORD pc=HOLD branch=STALL
   pc=NEXT
 
+# ── LDB Rd, [Rb + #offset] (L=1, sz=00, SE=0, dispatch=0xA0) ─
+# Byte load, zero-extended. byte_ext in datapath handles extraction.
+.org 0xA0
+ldb:
+  reg_a=IR_RS bmux=IMM imm_mode=SIGN_EXT alu=ADD mar_load=1 pc=HOLD branch=SEQ
+  mem_read=1 mem_size=BYTE mdr_load_mem=1 pc=HOLD branch=STALL
+  reg_w=IR_RD w_en=1 wmux=MDR mem_size=BYTE
+
+# ── LDBS Rd, [Rb + #offset] (L=1, sz=00, SE=1, dispatch=0xA4) ─
+# Byte load, sign-extended. byte_ext in datapath handles extraction.
+.org 0xA4
+ldbs:
+  reg_a=IR_RS bmux=IMM imm_mode=SIGN_EXT alu=ADD mar_load=1 pc=HOLD branch=SEQ
+  mem_read=1 mem_size=BYTE mdr_load_mem=1 pc=HOLD branch=STALL
+  reg_w=IR_RD w_en=1 wmux=MDR mem_size=BYTE sign_ext=1
+
+# ── LDH Rd, [Rb + #offset] (L=1, sz=01, SE=0, dispatch=0xA8) ─
+# Halfword load, zero-extended. byte_ext in datapath handles extraction.
+.org 0xA8
+ldh:
+  reg_a=IR_RS bmux=IMM imm_mode=SIGN_EXT alu=ADD mar_load=1 pc=HOLD branch=SEQ
+  mem_read=1 mem_size=HALF mdr_load_mem=1 pc=HOLD branch=STALL
+  reg_w=IR_RD w_en=1 wmux=MDR mem_size=HALF
+
+# ── LDHS Rd, [Rb + #offset] (L=1, sz=01, SE=1, dispatch=0xAC) ─
+# Halfword load, sign-extended. byte_ext in datapath handles extraction.
+.org 0xAC
+ldhs:
+  reg_a=IR_RS bmux=IMM imm_mode=SIGN_EXT alu=ADD mar_load=1 pc=HOLD branch=SEQ
+  mem_read=1 mem_size=HALF mdr_load_mem=1 pc=HOLD branch=STALL
+  reg_w=IR_RD w_en=1 wmux=MDR mem_size=HALF sign_ext=1
+
 # ── LDW Rd, [Rb + #offset] (L=1, sz=10, SE=0, dispatch=0xB0) ─
-# Step 0: compute address, load MAR
-# Step 1: initiate read, stall until data ready, capture into MDR
-# Step 2: write MDR to Rd, advance PC
+# Word load. byte_ext passes through unchanged (size=WORD).
 .org 0xB0
 ldw:
   reg_a=IR_RS bmux=IMM imm_mode=SIGN_EXT alu=ADD mar_load=1 pc=HOLD branch=SEQ

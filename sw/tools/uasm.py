@@ -156,6 +156,7 @@ def slot_boundary(addr):
 DEFAULTS = {
     "pc": "NEXT",
     "branch": "FETCH",
+    "mem_size": "WORD",
 }
 
 

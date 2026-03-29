@@ -51,6 +51,7 @@ module cpu_top
 
     // ── Memory backing signals ─────────────────────────────
     logic [31:0] smem_addr, smem_wdata;
+    logic [3:0]  smem_byte_en;
     logic        smem_we, smem_re;
     logic [31:0] smem_rdata;
     logic        smem_busy;
@@ -381,6 +382,26 @@ module cpu_top
     assign data_re = ctl_mem_read  && !fetch_active;
     assign data_we = ctl_mem_write && !fetch_active;
 
+    // ── Byte enable generation ───────────────────────────────
+    // Derived from mem_size (from microcode) and address bits [1:0].
+    // Word: 4'b1111, Halfword: 2-bit lane, Byte: 1-bit lane.
+    logic [3:0] byte_en;
+    always_comb begin
+        case (ctl_mem_size)
+            2'b10:   byte_en = 4'b1111;                          // WORD
+            2'b01:   byte_en = mmu_paddr[1] ? 4'b1100 : 4'b0011; // HALF
+            2'b00:   begin                                         // BYTE
+                case (mmu_paddr[1:0])
+                    2'b00: byte_en = 4'b0001;
+                    2'b01: byte_en = 4'b0010;
+                    2'b10: byte_en = 4'b0100;
+                    2'b11: byte_en = 4'b1000;
+                endcase
+            end
+            default: byte_en = 4'b1111;
+        endcase
+    end
+
     // ── Vector fetch bypass ──────────────────────────────────
     // Exception vectors are at fixed PHYSICAL addresses. After
     // int_entry (upc=0x70) loads PC from the vector table, the
@@ -431,35 +452,38 @@ module cpu_top
     // Cache (stub — pass-through to memory)
     // ══════════════════════════════════════════════════════════
     cache_stub u_cache (
-        .i_clk       (i_clk),
-        .i_rst       (i_rst),
-        .i_paddr     (mmu_paddr),
-        .i_wdata     (dp_mem_wdata),
-        .i_we        (data_we),
-        .i_re        (data_re),
-        .i_cacheable (mmu_cacheable),
-        .o_rdata     (cache_rdata),
-        .o_busy      (cache_busy),
-        .o_mem_addr  (smem_addr),
-        .o_mem_wdata (smem_wdata),
-        .o_mem_we    (smem_we),
-        .o_mem_re    (smem_re),
-        .i_mem_rdata (smem_rdata),
-        .i_mem_busy  (smem_busy)
+        .i_clk        (i_clk),
+        .i_rst        (i_rst),
+        .i_paddr      (mmu_paddr),
+        .i_wdata      (dp_mem_wdata),
+        .i_byte_en    (byte_en),
+        .i_we         (data_we),
+        .i_re         (data_re),
+        .i_cacheable  (mmu_cacheable),
+        .o_rdata      (cache_rdata),
+        .o_busy       (cache_busy),
+        .o_mem_addr   (smem_addr),
+        .o_mem_wdata  (smem_wdata),
+        .o_mem_byte_en(smem_byte_en),
+        .o_mem_we     (smem_we),
+        .o_mem_re     (smem_re),
+        .i_mem_rdata  (smem_rdata),
+        .i_mem_busy   (smem_busy)
     );
 
     // ══════════════════════════════════════════════════════════
     // Simple synchronous memory (simulation backing store)
     // ══════════════════════════════════════════════════════════
     simple_mem u_simple_mem (
-        .i_clk   (i_clk),
-        .i_rst   (i_rst),
-        .i_addr  (smem_addr),
-        .i_wdata (smem_wdata),
-        .i_we    (smem_we),
-        .i_re    (smem_re),
-        .o_rdata (smem_rdata),
-        .o_busy  (smem_busy)
+        .i_clk     (i_clk),
+        .i_rst     (i_rst),
+        .i_addr    (smem_addr),
+        .i_wdata   (smem_wdata),
+        .i_byte_en (smem_byte_en),
+        .i_we      (smem_we),
+        .i_re      (smem_re),
+        .o_rdata   (smem_rdata),
+        .o_busy    (smem_busy)
     );
 
     // ══════════════════════════════════════════════════════════
@@ -498,6 +522,8 @@ module cpu_top
         .i_mar_load     (ctl_mar_load),
         .i_mdr_load_mem (ctl_mdr_load_mem),
         .i_mdr_load_a   (ctl_mdr_load_a),
+        .i_mem_size     (ctl_mem_size),
+        .i_sign_ext     (ctl_sign_ext),
         .i_pc_src       (ctl_pc_src),
         .i_alu_start    (ctl_alu_start),
         .i_pc_load      (ctl_pc_load),

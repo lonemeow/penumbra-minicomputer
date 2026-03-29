@@ -35,6 +35,8 @@ module datapath
     input  logic        i_mar_load,     // Load MAR from R-bus
     input  logic        i_mdr_load_mem, // Load MDR from memory
     input  logic        i_mdr_load_a,   // Load MDR from A-bus
+    input  logic [1:0]  i_mem_size,     // Memory access size (from microcode)
+    input  logic        i_sign_ext,     // Sign-extend sub-word load (from microcode)
     input  logic [2:0]  i_pc_src,       // PC source mux
     input  logic        i_alu_start,    // Start multi-cycle ALU op
     input  logic        i_pc_load,      // Load PC from pc_mux output
@@ -360,22 +362,41 @@ module datapath
 
     assign o_mem_wdata = mdr_data;
 
+    // ── Byte extractor (sub-word load support) ───────────────
+    // Extracts and sign/zero-extends byte or halfword from the
+    // full 32-bit MDR value, based on the MAR address offset and
+    // mem_size/sign_ext from the microcode. For word-size accesses
+    // (including RDSYS), passes through unchanged.
+    logic [31:0] mdr_extracted;
+
+    byte_ext u_byte_ext (
+        .i_data     (mdr_data),
+        .i_addr_lo  (mar_out[1:0]),
+        .i_size     (i_mem_size),
+        .i_sign_ext (i_sign_ext),
+        .o_data     (mdr_extracted)
+    );
+
     // ── W-bus source mux ─────────────────────────────────────
     wmux u_wmux (
         .i_r_bus  (r_bus),
-        .i_mdr    (mdr_data),
+        .i_mdr    (mdr_extracted),
         .i_sel    (i_w_mux_sel),
         .o_wr_data(w_bus)
     );
 
     // ── MAR ──────────────────────────────────────────────────
+    logic [31:0] mar_out;
+
     mar u_mar (
         .i_clk  (i_clk),
         .i_rst  (i_rst),
         .i_load (i_mar_load),
         .i_rbus (r_bus),
-        .o_addr (o_mem_addr)
+        .o_addr (mar_out)
     );
+
+    assign o_mem_addr = mar_out;
 
     // ── PC unit ──────────────────────────────────────────────
     logic [31:0] pc_plus4, pc_offset, pc_next;
