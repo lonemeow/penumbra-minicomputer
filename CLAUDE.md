@@ -47,8 +47,8 @@ The architecture is fully specified in `doc/`. Key specs:
 ## Build System
 - `make smoke` — toolchain smoke test (trivial adder)
 - `make sim MOD=<name>` — build & run a module's Verilator testbench (auto-includes penumbra_pkg.sv, sets --top-module)
-- `make sim MOD=cpu_top TB=<tb> PROG=<prog>` — run a specific testbench with a specific program (e.g., `TB=tb_cpu_prog PROG=test_fib`). Auto-assembles `sim/programs/<PROG>.s` and `sw/microcode/microcode.uasm` into hex before running; `.hex` files are build artifacts (gitignored), only `.s`/`.uasm` sources are committed.
-- `make test` — run all `sim/programs/test_*.s` programs through cpu_top; builds once, runs each, reports pass/fail summary
+- `make sim MOD=machine_sim TB=<tb> PROG=<prog>` — run a specific testbench with a specific program (e.g., `TB=tb_cpu_prog PROG=test_fib`). Auto-assembles `sim/programs/<PROG>.s` and `sw/microcode/microcode.uasm` into hex before running; `.hex` files are build artifacts (gitignored), only `.s`/`.uasm` sources are committed.
+- `make test` — run all `sim/programs/test_*.s` programs through machine_sim; builds once, runs each, reports pass/fail summary
 - `make wave MOD=<name>` — open VCD waveform in GTKWave
 - `make clean` — remove build artifacts
 - All simulation runs via Docker (`verilator/verilator:latest`) — no host install needed
@@ -79,9 +79,10 @@ The CPU runs real programs in simulation with the full CPU → MMU → cache →
 | Sequencer | `rtl/core/sequencer.sv` | — | Micro-PC, branch_cond decode, EI/DI tracking, ei_shadow_clr |
 | Byte extractor | `rtl/core/byte_ext.sv` | 19/19 | Sub-word load extraction: byte/half from 32-bit word, sign/zero extend |
 | Byte replicator | `rtl/core/byte_rep.sv` | 10/10 | Sub-word store lane positioning: replicate byte/half across all lanes |
-| CPU top | `rtl/core/cpu_top.sv` | 20 progs | Full integration: datapath + sequencer + ROM + MMU + sysid + cache + memory + fetch + IRQ + MMU traps + BREAK + SYSCALL + privilege traps + illegal instruction trap + WRSYS/RDSYS + RDSPR/WRSPR + BL + sub-word loads/stores |
+| CPU core | `rtl/core/cpu_core.sv` | 20 progs | Full CPU: datapath + sequencer + ROM + MMU + cache + fetch + IRQ + MMU traps + BREAK + SYSCALL + privilege traps + illegal instruction trap + WRSYS/RDSYS + RDSPR/WRSPR + BL + sub-word loads/stores |
+| Sim machine | `rtl/soc/machine_sim.sv` | (top) | Simulation integration: cpu_core + simple_mem + sysid. Verilator top module for `make test` |
 | Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_*, ACC_*, VEC_*, SYSDEV_*, SYSREG_* constants |
-| System ID | `rtl/soc/sysid.sv` | via cpu_top | Read-only MACHINE_ID register (Penumbra/1), sysreg device 1 |
+| System ID | `rtl/soc/sysid.sv` | via machine_sim | Read-only MACHINE_ID register (Penumbra/1), sysreg device 1 |
 | TLB | `rtl/mmu/tlb.sv` | 111/111 | 64-entry 2-way SA, parallel lookup, one-hot permission check, indexed sysreg R/W |
 | MMU | `rtl/mmu/mmu.sv` | — | Bypass/translate mux, force_bypass for vector fetch, sysreg routing, fault latching, TLB instantiation |
 | Cache stub | `rtl/soc/cache_stub.sv` | — | Combinational pass-through with byte_en, placeholder for split I/D PIPT caches |
@@ -126,7 +127,7 @@ Six sources share the same `except_entry` → `int_entry` → vector dispatch pa
 
 **Illegal instruction (synchronous):**
 - **Check point:** First micro-op of S_EXEC. Unused ROM entries are filled with a sentinel (`branch=7`, all other fields zero) by the microcode assembler.
-- **Detection:** Sequencer detects `branch == BR_ILLEGAL (3'd7)`, asserts `o_illegal`, and aborts to S_FETCH. cpu_top sets `illegal_pending`.
+- **Detection:** Sequencer detects `branch == BR_ILLEGAL (3'd7)`, asserts `o_illegal`, and aborts to S_FETCH. cpu_core sets `illegal_pending`.
 - **Action:** `illegal_except` pulse → `except_entry` saves EPC/ESR, sets S=1/I=0. `illegal_pending` overrides next dispatch to 0x70 with VEC_ILLEGAL (7). Cleared at `ctl_pc_load` (same timing as fault_pending).
 - **PC preservation:** Sentinel has `pc=HOLD` (field=0), so EPC = the illegal instruction. Handler can emulate and ERET with EPC+4, or abort the process.
 - **Covers:** All undefined opcodes, reserved Format L/M/B encodings, unimplemented instructions (MUL/DIV/MOD dispatch to sentinel ROM entries).
@@ -152,7 +153,7 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 ### Memory Access
 - **STALL-based:** Load/store micro-routines use `branch=STALL` to wait for memory. The same microcode works regardless of memory latency (1-cycle sync, cache miss, MMU walk).
 - **mem_busy signal:** Simple memory model provides 1-cycle busy for reads, 0-cycle for writes. Future: replaced by cache/bus controller busy signal.
-- **MMU traps:** STALL path checks `i_mem_fault` alongside `i_mem_busy`. On fault, sequencer aborts to S_FETCH; `cpu_top` generates `except_entry` and sets `fault_pending` for vector dispatch. PC is in HOLD during STALL, so faulting instruction can be restarted after TLB refill.
+- **MMU traps:** STALL path checks `i_mem_fault` alongside `i_mem_busy`. On fault, sequencer aborts to S_FETCH; `cpu_core` generates `except_entry` and sets `fault_pending` for vector dispatch. PC is in HOLD during STALL, so faulting instruction can be restarted after TLB refill.
 - **Dispatch spacing:** Format R uses ×2 spacing split by op[4]: ALU (0x00–0x1E) and SYS (0x40–0x5E). Formula: `{0, op[4], 0, op[3:0], 0}` — pure wiring, zero gates. Format M uses ×4 spacing (0x80–0xBF). Multi-step system ops (ERET, RDSYS) fit in their ×2 slots without overflowing into adjacent instruction entries.
 
 ### Software Tools
@@ -161,7 +162,7 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 - Makefile auto-assembles `.s`/`.uasm` sources into root-level `program.hex`/`microcode.hex` for `$readmemh`; hex files are build artifacts (gitignored)
 
 ### Test Convention
-- **Program runner** (`sim/tb_cpu_prog.cpp`): Generic testbench that runs a program until BREAK, checks R1 for pass/fail. VCD trace output to `waves/cpu_top.vcd`, register dump (R0–R15) on failure.
+- **Program runner** (`sim/tb_cpu_prog.cpp`): Generic testbench that runs a program until BREAK, checks R1 for pass/fail. VCD trace output to `waves/machine_sim.vcd`, register dump (R0–R15) on failure.
 - **Pass/fail convention:** R1 = 1 means PASS, R1 = 0 means FAIL. Tests self-check internally and set R1 accordingly.
 - **Halt detection:** Testbench watches for `o_halted` pulse (BREAK instruction dispatch). Instant detection, no polling.
 - **Test termination:** Programs end with `BREAK` instruction. Pass path: `LLI R1, #1` then fall through to `fail: BREAK`. Fail path: assertion `BNE fail` branches to `fail: BREAK`.
@@ -179,7 +180,7 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 
 ### Known Bugs Fixed (Notable)
 - **IR corruption from shared mem_rdata bus:** ir_valid lingered one cycle into S_EXEC, causing IR to reload when mem_rdata was muxed to sysreg data. Fix: `ir_load = ir_valid && fetch_active`.
-- **BR_PRIV used advance instead of go_fetch:** (Historical — BR_PRIV removed; privilege now checked at dispatch time in cpu_top.)
+- **BR_PRIV used advance instead of go_fetch:** (Historical — BR_PRIV removed; privilege now checked via microcode priv bit in sequencer.)
 - **reg_w_sel gated by executing:** Could change at same posedge as register write. Ungated to keep address stable.
 - **fault_pending cleared too early:** Clearing at `ir_valid` (dispatch) meant `vector_num` was wrong one cycle later when `int_entry` read it. Fix: clear at `ctl_pc_load` (int_entry execution).
 - **Vector fetch corrupted fault registers:** MMU bypass for vector fetch only gated the output mux, not the TLB lookup or fault latching. The TLB still reported a miss for the unmapped vector page, overwriting `FAULT_ADDR` with the vector address. Fix: gate `i_lookup_en` and fault latching with `!i_force_bypass`.

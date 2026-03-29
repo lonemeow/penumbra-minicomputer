@@ -1,30 +1,52 @@
-// Penumbra CPU Top — integration with MMU and cache stubs
+// Penumbra CPU Core — complete processor with MMU and cache
 //
 // Wires together: datapath, micro-sequencer, microcode ROM, MMU,
-// cache stub, and simple memory. Includes inline fetch logic
-// (phase 1: 1-cycle memory read, no I-cache, no prefetch).
+// and cache. Includes inline fetch logic (phase 1: 1-cycle memory
+// read, no I-cache, no prefetch).
 //
-// Memory path: CPU → MMU (bypass) → cache (stub) → simple_mem
-// Both fetch and data share the same port (never overlap: fetch
-// in S_FETCH, data in S_EXEC). Future: split I/D caches.
+// External interfaces:
+//   - Memory bus (post-cache): address, data, byte enables, busy
+//   - Sysreg bus (device 1+): device ID, register, data, cycle/we
+//   - IRQ, debug/observation ports
+//
+// The MMU's sysreg interface (device 0) is handled internally.
+// External sysreg devices (sysid, timer, UART, etc.) are wired
+// by the machine-level integration module.
 
 // verilator lint_off UNUSEDSIGNAL
 // verilator lint_off UNSIGNED
 
-module cpu_top
+module cpu_core
     import penumbra_pkg::*;
 (
     input  logic        i_clk,
     input  logic        i_rst,
 
+    // ── Memory bus (post-cache) ─────────────────────────────
+    output logic [31:0] o_mem_addr,
+    output logic [31:0] o_mem_wdata,
+    output logic [3:0]  o_mem_byte_en,
+    output logic        o_mem_we,
+    output logic        o_mem_re,
+    input  logic [31:0] i_mem_rdata,
+    input  logic        i_mem_busy,
+
+    // ── Sysreg bus (external devices, dev_id >= 1) ──────────
+    output logic [3:0]  o_sys_dev,
+    output logic [3:0]  o_sys_reg,
+    output logic [31:0] o_sys_wdata,
+    output logic        o_sys_cycle,
+    output logic        o_sys_we,
+    input  logic [31:0] i_sys_rdata,
+
     // ── External interrupt ──────────────────────────────────
-    input  logic        i_irq,          // Active-high interrupt request
+    input  logic        i_irq,
 
     // ── Debug / observation ports ────────────────────────────
-    output logic [31:0] o_pc,           // Current PC
-    output logic        o_halted,       // No forward progress (future)
-    input  logic [3:0]  i_dbg_reg_addr, // Debug: register address to read
-    output logic [31:0] o_dbg_reg_data  // Debug: register value
+    output logic [31:0] o_pc,
+    output logic        o_halted,
+    input  logic [3:0]  i_dbg_reg_addr,
+    output logic [31:0] o_dbg_reg_data
 );
 
     // ══════════════════════════════════════════════════════════
@@ -42,31 +64,21 @@ module cpu_top
     logic        mmu_hit;
     logic [31:0] mmu_sys_rdata;
 
-    // ── System ID signals ────────────────────────────────────
-    logic [31:0] sysid_rdata;
-
     // ── Cache signals ──────────────────────────────────────
     logic [31:0] cache_rdata;
     logic        cache_busy;
 
-    // ── Memory backing signals ─────────────────────────────
-    logic [31:0] smem_addr, smem_wdata;
-    logic [3:0]  smem_byte_en;
-    logic        smem_we, smem_re;
-    logic [31:0] smem_rdata;
-    logic        smem_busy;
-
     // ── Data access enables (only during execute, not fetch) ──
     logic data_re, data_we;
 
-    // ── Sysreg read mux (selects device by dp_r_sys_dev) ───────
+    // ── Sysreg read mux ────────────────────────────────────
+    // Device 0 (MMU) handled internally; device 1+ from external bus.
     logic [31:0] sys_rdata;
     always_comb begin
-        case (dp_r_sys_dev)
-            SYSDEV_MMU: sys_rdata = mmu_sys_rdata;
-            SYSDEV_SYS: sys_rdata = sysid_rdata;
-            default:    sys_rdata = 32'b0;
-        endcase
+        if (dp_r_sys_dev == SYSDEV_MMU)
+            sys_rdata = mmu_sys_rdata;
+        else
+            sys_rdata = i_sys_rdata;
     end
 
     // ── Unified read data (used by both fetch and data path) ──
@@ -164,21 +176,6 @@ module cpu_top
     // ══════════════════════════════════════════════════════════
     // Fetch logic (phase 1: inline, 1-cycle memory read)
     // ══════════════════════════════════════════════════════════
-    //
-    // When the sequencer is in S_FETCH, memory address = PC.
-    // The synchronous memory delivers data one cycle later.
-    // We use a simple state to track when data is ready.
-
-    // Fetch uses the sequencer's executing signal (ctl_pc_load = 1 during
-    // S_EXEC, 0 during S_FETCH). When NOT executing, memory address = PC.
-    // After 1 cycle of memory read, data is valid → assert ir_valid.
-    //
-    // Timing per instruction (single micro-op):
-    //   Cycle N:   execute, PC advances on clock edge, → S_FETCH
-    //   Cycle N+1: S_FETCH, memory reads at new PC
-    //   Cycle N+2: memory data valid, ir_valid fires
-    //   Cycle N+3: S_EXEC, micro-word active, IR latched
-    //   Cycle N+4: execute, results latch, → S_FETCH
 
     logic fetch_active;
     assign fetch_active = !ctl_pc_load;  // In S_FETCH state
@@ -192,30 +189,16 @@ module cpu_top
             ir_valid   <= 1'b0;
         end else begin
             fetch_prev <= fetch_active;
-            // Memory data is valid after 1 cycle in fetch state
             ir_valid   <= fetch_active & fetch_prev;
         end
     end
 
-    // Gate IR load by fetch_active — ir_valid lingers for 1 cycle into
-    // S_EXEC, but the IR must not reload once we've left S_FETCH.
-    // Without this, multi-micro-op instructions that mux mem_rdata
-    // (like RDSYS with sysreg data) would corrupt the IR.
     assign ir_load = ir_valid && fetch_active;
 
     // ── Dispatch address computation ─────────────────────────
-    // Computed from memory read data (same data that loads IR).
-    // This is combinational — dispatch_addr is valid when ir_valid=1.
     logic [1:0]  fetch_format;
     assign fetch_format = mem_rdata[31:30];
 
-    // Dispatch: 8-bit address
-    // Format R: {0, op[4], 0, op[3:0], 0} → ×2 spacing
-    //   ALU (op[4]=0): 0x00–0x1E           16 instructions, 2 entries each
-    //   SYS (op[4]=1): 0x40–0x5E           16 instructions, 2 entries each
-    // Format L: {01, op[2:0], 00}         → 0x20–0x3C (×4 spacing)
-    // Format M: {10, L, sz[1:0], SE, 00}  → 0x80–0xBC (×4 spacing)
-    // Format B: {11, 00000}               → 0x60
     always_comb begin
         case (fetch_format)
             2'b00:   dispatch_addr = {1'b0, mem_rdata[29], 1'b0, mem_rdata[28:25], 1'b0};
@@ -229,28 +212,6 @@ module cpu_top
     // ══════════════════════════════════════════════════════════
     // Exception and interrupt handling
     // ══════════════════════════════════════════════════════════
-    //
-    // Four sources of exceptions:
-    //
-    // 1. External IRQ (asynchronous) — checked at dispatch time
-    //    (when ir_valid fires, before entering S_EXEC).
-    //
-    // 2. MMU fault (synchronous) — detected mid-instruction during
-    //    a load/store STALL. The sequencer aborts the instruction
-    //    (mem_fault → go_fetch), then on the next dispatch we
-    //    redirect to int_entry with the fault vector.
-    //
-    // 3. BREAK instruction — detected at dispatch time by checking
-    //    the dispatch address. Triggers except_entry like IRQ, vectors
-    //    to VEC_BREAK. Works from any privilege level (software
-    //    breakpoint). Pulses o_break for testbench/debug observation.
-    //
-    // 4. Privilege violation — detected at dispatch time. Privileged
-    //    instructions (SYS zone except JMP/EI) attempted in user mode
-    //    trap to VEC_PRIV. The instruction never executes, so no
-    //    state is corrupted.
-    //
-    // Priority: fault_pending > illegal_pending > BREAK > priv_taken > IRQ
 
     logic        irq_taken;
     logic        except_entry;
@@ -274,17 +235,11 @@ module cpu_top
             fault_pending <= 1'b1;
             fault_vector  <= mmu_hit ? VEC_TLB_PROT : VEC_TLB_MISS;
         end else if (fault_pending && ctl_pc_load) begin
-            // Clear after int_entry executes — ctl_pc_load = executing,
-            // so vector_num reads fault_vector correctly on this cycle
-            // (combinationally, fault_pending is still 1), then clears at posedge.
             fault_pending <= 1'b0;
         end
     end
 
     // ── Illegal instruction detection (from sequencer) ───────
-    // Detected during S_EXEC when the first micro-word has branch=7
-    // (sentinel value filled by uasm.py in unused ROM entries).
-    // Follows the same pending pattern as MMU faults.
     logic        illegal_except;
     logic        illegal_pending;
 
@@ -304,14 +259,10 @@ module cpu_top
     assign break_taken = (dispatch_addr == 8'h4A);
 
     // SYSCALL detection at dispatch (dispatch_addr == 0x48 for op=20)
-    // Unprivileged — works from user mode (higher priority than priv_taken)
     logic syscall_taken;
     assign syscall_taken = (dispatch_addr == 8'h48);
 
     // ── Privilege violation detection (from sequencer) ─────────
-    // Detected during S_EXEC when the first micro-word has priv=1
-    // and SR.S=0. Sequencer suppresses all enables on that cycle.
-    // Follows the same pending pattern as illegal instruction.
     logic        priv_except;
     logic        priv_pending;
 
@@ -329,11 +280,6 @@ module cpu_top
     assign irq_taken    = i_irq & sr_i & !ei_shadow;
 
     // ── Dispatch-time exception: register the vector ─────────
-    // break_taken, syscall_taken, and irq_taken are combinational from
-    // mem_rdata which is only valid during the dispatch cycle (ir_valid).
-    // By the time int_entry executes (next cycle), mem_rdata has changed
-    // (fetch_active=0 → reads from MAR not PC) and sr_s has flipped to 1.
-    // We must latch the vector at dispatch time, like fault_vector.
     logic        dispatch_pending;
     logic [3:0]  dispatch_vector;
 
@@ -347,7 +293,6 @@ module cpu_top
                                 syscall_taken ? VEC_SYSCALL :
                                                 VEC_IRQ;
         end else if (dispatch_pending && ctl_pc_load) begin
-            // Clear after int_entry executes (same timing as fault_pending)
             dispatch_pending <= 1'b0;
         end
     end
@@ -369,8 +314,6 @@ module cpu_top
     assign o_halted = break_taken & ir_valid;
 
     // ── Memory address and access mux ──────────────────────
-    // During fetch: address = PC (instruction read, no re/we)
-    // During execute: address = MAR (data read/write via re/we)
     logic [31:0] mar_addr;
 
     assign mmu_vaddr       = fetch_active ? pc : mar_addr;
@@ -383,8 +326,6 @@ module cpu_top
     assign data_we = ctl_mem_write && !fetch_active;
 
     // ── Byte enable generation ───────────────────────────────
-    // Derived from mem_size (from microcode) and address bits [1:0].
-    // Word: 4'b1111, Halfword: 2-bit lane, Byte: 1-bit lane.
     logic [3:0] byte_en;
     always_comb begin
         case (ctl_mem_size)
@@ -403,16 +344,12 @@ module cpu_top
     end
 
     // ── Vector fetch bypass ──────────────────────────────────
-    // Exception vectors are at fixed PHYSICAL addresses. After
-    // int_entry (upc=0x70) loads PC from the vector table, the
-    // next fetch bypasses the MMU so the vector entry is always
-    // reachable — no TLB mapping required for the vector page.
     logic vector_fetch;
 
     always_ff @(posedge i_clk) begin
         if (i_rst)
             vector_fetch <= 1'b0;
-        else if (fetch_go && (upc == 8'h70))  // int_entry completed
+        else if (fetch_go && (upc == 8'h70))
             vector_fetch <= 1'b1;
         else if (ir_valid)
             vector_fetch <= 1'b0;
@@ -433,7 +370,7 @@ module cpu_top
         .o_cacheable   (mmu_cacheable),
         .o_fault       (mmu_fault),
         .o_hit         (mmu_hit),
-        // Sysreg interface (active during WRSYS/RDSYS with dev_id=0)
+        // Sysreg interface (device 0 only — handled internally)
         .i_sys_reg     (dp_r_sys_reg),
         .i_sys_wdata   (dp_a_bus),
         .i_sys_we      (ctl_sys_cycle && ctl_sys_we && (dp_r_sys_dev == SYSDEV_MMU)),
@@ -441,15 +378,7 @@ module cpu_top
     );
 
     // ══════════════════════════════════════════════════════════
-    // System ID (read-only machine identification)
-    // ══════════════════════════════════════════════════════════
-    sysid u_sysid (
-        .i_sys_reg  (dp_r_sys_reg),
-        .o_sys_rdata(sysid_rdata)
-    );
-
-    // ══════════════════════════════════════════════════════════
-    // Cache (stub — pass-through to memory)
+    // Cache (stub — pass-through to backing memory)
     // ══════════════════════════════════════════════════════════
     cache_stub u_cache (
         .i_clk        (i_clk),
@@ -462,38 +391,32 @@ module cpu_top
         .i_cacheable  (mmu_cacheable),
         .o_rdata      (cache_rdata),
         .o_busy       (cache_busy),
-        .o_mem_addr   (smem_addr),
-        .o_mem_wdata  (smem_wdata),
-        .o_mem_byte_en(smem_byte_en),
-        .o_mem_we     (smem_we),
-        .o_mem_re     (smem_re),
-        .i_mem_rdata  (smem_rdata),
-        .i_mem_busy   (smem_busy)
+        .o_mem_addr   (o_mem_addr),
+        .o_mem_wdata  (o_mem_wdata),
+        .o_mem_byte_en(o_mem_byte_en),
+        .o_mem_we     (o_mem_we),
+        .o_mem_re     (o_mem_re),
+        .i_mem_rdata  (i_mem_rdata),
+        .i_mem_busy   (i_mem_busy)
     );
 
     // ══════════════════════════════════════════════════════════
-    // Simple synchronous memory (simulation backing store)
+    // Sysreg bus — expose to external devices
     // ══════════════════════════════════════════════════════════
-    simple_mem u_simple_mem (
-        .i_clk     (i_clk),
-        .i_rst     (i_rst),
-        .i_addr    (smem_addr),
-        .i_wdata   (smem_wdata),
-        .i_byte_en (smem_byte_en),
-        .i_we      (smem_we),
-        .i_re      (smem_re),
-        .o_rdata   (smem_rdata),
-        .o_busy    (smem_busy)
-    );
+    assign o_sys_dev   = dp_r_sys_dev;
+    assign o_sys_reg   = dp_r_sys_reg;
+    assign o_sys_wdata = dp_a_bus;
+    assign o_sys_cycle = ctl_sys_cycle;
+    assign o_sys_we    = ctl_sys_we;
 
     // ══════════════════════════════════════════════════════════
     // Datapath
     // ══════════════════════════════════════════════════════════
     logic [31:0] dp_mem_wdata;
-    logic [31:0] dp_a_bus;       // A-bus value (for sysreg write data)
+    logic [31:0] dp_a_bus;
 
-    // Field extractor outputs (from datapath, for dispatch — not used
-    // here since we compute dispatch from raw memory data)
+    // Field extractor outputs
+    // verilator lint_off UNUSEDSIGNAL
     logic [1:0]  dp_format;
     logic [4:0]  dp_r_op;
     logic [2:0]  dp_l_op;
@@ -501,6 +424,7 @@ module cpu_top
     logic [1:0]  dp_m_size;
     logic        dp_m_sign_ext;
     logic [3:0]  dp_b_cond;
+    // verilator lint_on UNUSEDSIGNAL
     logic [3:0]  dp_r_sys_dev, dp_r_sys_reg;
 
     datapath u_datapath (
@@ -574,7 +498,7 @@ module cpu_top
         .o_dbg_reg_data (o_dbg_reg_data)
     );
 
-    assign o_pc      = pc;
+    assign o_pc = pc;
 
 endmodule
 

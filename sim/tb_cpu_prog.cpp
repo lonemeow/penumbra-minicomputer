@@ -9,24 +9,24 @@
 //   - Testbench detects the pulse immediately — no PC stability polling
 //   - On failure: dumps all registers and PC
 //
-// Usage: make sim MOD=cpu_top TB=tb_cpu_prog PROG=test_fib
+// Usage: make sim MOD=machine_sim TB=tb_cpu_prog PROG=test_fib
 
 #include <cstdio>
 #include <cstdint>
-#include "Vcpu_top.h"
+#include "Vmachine_sim.h"
 #include "verilated_vcd_c.h"
 
 static VerilatedVcdC* tfp = nullptr;
 static uint64_t sim_time = 0;
 
-static void tick(Vcpu_top* d) {
+static void tick(Vmachine_sim* d) {
     d->i_clk = 0; d->eval();
     if (tfp) { tfp->dump(sim_time); sim_time++; }
     d->i_clk = 1; d->eval();
     if (tfp) { tfp->dump(sim_time); sim_time++; }
 }
 
-static uint32_t read_reg(Vcpu_top* cpu, int reg) {
+static uint32_t read_reg(Vmachine_sim* cpu, int reg) {
     cpu->i_dbg_reg_addr = reg;
     cpu->eval();
     return cpu->o_dbg_reg_data;
@@ -34,7 +34,7 @@ static uint32_t read_reg(Vcpu_top* cpu, int reg) {
 
 // Run until o_halted goes high, or until cycle limit.
 // Returns total cycles, or -1 if limit exceeded.
-static int run_until_halt(Vcpu_top* cpu, int limit) {
+static int run_until_halt(Vmachine_sim* cpu, int limit) {
     int cycles = 0;
 
     while (cycles < limit) {
@@ -46,7 +46,7 @@ static int run_until_halt(Vcpu_top* cpu, int limit) {
     return -1;  // Did not halt
 }
 
-static void reset(Vcpu_top* cpu) {
+static void reset(Vmachine_sim* cpu) {
     cpu->i_rst = 1;
     cpu->i_irq = 0;
     cpu->i_dbg_reg_addr = 0;
@@ -57,10 +57,10 @@ static void reset(Vcpu_top* cpu) {
 
 int main() {
     Verilated::traceEverOn(true);
-    Vcpu_top* cpu = new Vcpu_top;
+    Vmachine_sim* cpu = new Vmachine_sim;
     tfp = new VerilatedVcdC;
     cpu->trace(tfp, 99);
-    tfp->open("waves/cpu_top.vcd");
+    tfp->open("waves/machine_sim.vcd");
 
     printf("── Program Runner ──\n\n");
     reset(cpu);

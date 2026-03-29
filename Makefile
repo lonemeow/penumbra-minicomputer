@@ -35,7 +35,7 @@ $(BUILD_DIR)/Vsmoke_adder: rtl/core/smoke_adder.sv sim/tb_smoke_adder.cpp
 
 # ── Generic module simulation ──────────────────────────────────
 # Usage: make sim MOD=alu  (expects rtl/**/alu.sv and sim/tb_alu.cpp)
-#        make sim MOD=cpu_top PROG=test_mem TB=tb_cpu_mem
+#        make sim MOD=machine_sim PROG=test_mem TB=tb_cpu_mem
 MOD  ?=
 PROG ?= test_add
 TB   ?= tb_$(MOD)
@@ -72,20 +72,20 @@ ifndef MOD
 endif
 	gtkwave $(WAVE_DIR)/$(MOD).vcd &
 
-# ── Run all cpu_top program tests ──────────────────────────────
+# ── Run all program tests ──────────────────────────────────────
 # Discovers all sim/programs/test_*.s files, runs each through
-# tb_cpu_prog, reports pass/fail summary.
+# tb_cpu_prog on machine_sim, reports pass/fail summary.
 TEST_PROGS := $(sort $(basename $(notdir $(wildcard sim/programs/test_*.s))))
 
 .PHONY: test
 test:
 	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
-	@# Build cpu_top + tb_cpu_prog once (reuse for all programs)
+	@# Build machine_sim + tb_cpu_prog once (reuse for all programs)
 	@$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) \
-		--top-module cpu_top \
-		--Mdir $(BUILD_DIR)/cpu_top.verilator \
-		-o ../Vcpu_top \
-		$(PKG_SV) $$(find rtl -name 'cpu_top.sv') sim/tb_cpu_prog.cpp
+		--top-module machine_sim \
+		--Mdir $(BUILD_DIR)/machine_sim.verilator \
+		-o ../Vmachine_sim \
+		$(PKG_SV) $$(find rtl -name 'machine_sim.sv') sim/tb_cpu_prog.cpp
 	@# Assemble microcode once (shared by all programs)
 	@$(UASM) sw/microcode/microcode.uasm -o microcode.hex
 	@pass=0; fail=0; failed=""; \
@@ -96,7 +96,7 @@ test:
 			failed="$$failed $$prog"; \
 			continue; \
 		fi; \
-		if $(DOCKER_RUN) --entrypoint ./$(BUILD_DIR)/Vcpu_top $(DOCKER_IMAGE) \
+		if $(DOCKER_RUN) --entrypoint ./$(BUILD_DIR)/Vmachine_sim $(DOCKER_IMAGE) \
 			> /dev/null 2>&1; then \
 			printf "  \033[32mPASS\033[0m  %s\n" "$$prog"; \
 			pass=$$((pass + 1)); \
