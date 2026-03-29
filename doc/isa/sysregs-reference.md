@@ -21,7 +21,11 @@ one of 16 registers within that device, for 256 total system registers.
 |-----|------|-------------|
 | 0 | MMU | TLB management, fault registers, address translation control |
 | 1 | SYS | Machine identification (read-only) |
-| 2–15 | — | Reserved for future devices (interrupt controller, timer, DMA) |
+| 2–15 | — | Reserved for future devices (timer, interrupt controller, DMA) |
+
+> **Note:** I/O peripherals (UART, SPI, GPIO, Ethernet) are **not** on the sysreg bus.
+> They are memory-mapped at `0xFF00_0000`+ and accessed via `LDW`/`STW`.
+> See `doc/bus/bus-overview.md` for the I/O peripheral map.
 
 ---
 

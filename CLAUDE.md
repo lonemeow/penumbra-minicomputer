@@ -56,7 +56,7 @@ The architecture is fully specified in `doc/`. Key specs:
 - **Important:** Always `rm -rf build/<mod>.verilator build/V<mod>` before rebuilding if you suspect stale binaries (WSL2 /mnt/c filesystem can have stale mtimes)
 
 ## Current Status
-The CPU runs real programs in simulation with the full CPU → MMU → cache → memory path wired, booting from ROM at `0xFFFF_E000` (matching the physical memory map). The simulator (machine_sim) has address decode routing accesses to boot ROM (8 KB, 0xFFFF_E000+) or RAM (16 MB, parameterizable, address-wrapping). The vector table uses MIPS/68k-style address-based dispatch: `int_entry` reads a handler address from physical RAM, bypassing the MMU. The TLB is implemented (64-entry 2-way SA, fully software-managed) and tested with MMU enabled (identity + non-identity mappings). MMU data faults (TLB miss, protection violation) are wired as synchronous exceptions — detected during STALL, abort the instruction, save EPC/ESR, and vector to the fault handler. WRSYS/RDSYS access a multi-device sysreg bus (device 0 = MMU, device 1 = SYS). RTL is built bottom-up from leaf modules. The 51-bit micro-word format is finalized (bit [50] = priv, [49] = cross_bank, [1:0] = ei_set/di_set).
+The CPU runs real programs in simulation with the full CPU → MMU → cache → memory path wired, booting from ROM at `0xFFFF_E000` (matching the physical memory map). The simulator (machine_sim) has address decode routing accesses to boot ROM (8 KB, 0xFFFF_E000+), UART (4 KB, 0xFF00_0000), or RAM (16 MB, parameterizable, address-wrapping). A 16450-compatible simulation UART provides console I/O — TX bytes appear on stdout, RX accepts bytes from the testbench. The UART is memory-mapped (MMIO at `0xFF00_0000`, not on the sysreg bus), accessed via LDW/STW, with realistic TX busy timing (~2170 cycles at 115200 baud/25 MHz). The vector table uses MIPS/68k-style address-based dispatch: `int_entry` reads a handler address from physical RAM, bypassing the MMU. The TLB is implemented (64-entry 2-way SA, fully software-managed) and tested with MMU enabled (identity + non-identity mappings). MMU data faults (TLB miss, protection violation) are wired as synchronous exceptions — detected during STALL, abort the instruction, save EPC/ESR, and vector to the fault handler. WRSYS/RDSYS access a multi-device sysreg bus (device 0 = MMU, device 1 = SYS). RTL is built bottom-up from leaf modules. The 51-bit micro-word format is finalized (bit [50] = priv, [49] = cross_bank, [1:0] = ei_set/di_set).
 
 ### Implemented RTL Modules (all tested)
 | Module | File | Tests | Description |
@@ -79,10 +79,11 @@ The CPU runs real programs in simulation with the full CPU → MMU → cache →
 | Sequencer | `rtl/core/sequencer.sv` | — | Micro-PC, branch_cond decode, EI/DI tracking, ei_shadow_clr |
 | Byte extractor | `rtl/core/byte_ext.sv` | 19/19 | Sub-word load extraction: byte/half from 32-bit word, sign/zero extend |
 | Byte replicator | `rtl/core/byte_rep.sv` | 10/10 | Sub-word store lane positioning: replicate byte/half across all lanes |
-| CPU core | `rtl/core/cpu_core.sv` | 21 progs | Full CPU: datapath + sequencer + ROM + MMU + cache + fetch + IRQ + MMU traps + BREAK + SYSCALL + privilege traps + illegal instruction trap + WRSYS/RDSYS + RDSPR/WRSPR + BL + sub-word loads/stores. Parameterizable RESET_PC (default 0xFFFF_E000). |
-| Sim machine | `rtl/soc/machine_sim.sv` | (top) | Simulation integration: cpu_core + boot_rom + simple_mem + sysid. Address decode: addr[31:24]==0xFF → ROM, else → RAM. Verilator top module for `make test` |
+| CPU core | `rtl/core/cpu_core.sv` | 22 progs | Full CPU: datapath + sequencer + ROM + MMU + cache + fetch + IRQ + MMU traps + BREAK + SYSCALL + privilege traps + illegal instruction trap + WRSYS/RDSYS + RDSPR/WRSPR + BL + sub-word loads/stores. Parameterizable RESET_PC (default 0xFFFF_E000). |
+| Sim machine | `rtl/soc/machine_sim.sv` | (top) | Simulation integration: cpu_core + boot_rom + simple_mem + sim_uart + sysid. Address decode: 0xFFFF_E000+ → ROM, 0xFF00_0xxx → UART, else → RAM. UART IRQ wired to CPU. Verilator top module for `make test` |
+| Sim UART | `rtl/soc/sim_uart.sv` | via machine_sim | 16450-compatible UART (MMIO at 0xFF00_0000). 8 registers at word stride, DLAB mux, TX busy counter (parameterizable, default ~115200 baud at 25 MHz). NetBSD com(4) compatible via reg-shift=2, reg-io-width=4 |
 | Boot ROM | `rtl/soc/boot_rom.sv` | via machine_sim | Read-only memory (8 KB default), loads program.hex, same 1-cycle busy protocol as simple_mem |
-| Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_*, ACC_*, VEC_*, SYSDEV_*, SYSREG_* constants |
+| Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_*, ACC_*, VEC_*, SYSDEV_*, SYSREG_*, UART_* constants |
 | System ID | `rtl/soc/sysid.sv` | via machine_sim | Read-only MACHINE_ID register (Penumbra/1), sysreg device 1 |
 | TLB | `rtl/mmu/tlb.sv` | 111/111 | 64-entry 2-way SA, parallel lookup, one-hot permission check, indexed sysreg R/W |
 | MMU | `rtl/mmu/mmu.sv` | — | Bypass/translate mux, force_bypass for vector table read, sysreg routing, fault latching, TLB instantiation |
@@ -161,11 +162,11 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 
 ### Software Tools
 - **Microcode assembler** (`sw/tools/uasm.py`): Symbolic microcode → $readmemh hex. Defaults: `pc=NEXT branch=FETCH`. Validates slot boundaries (detects multi-step routines that overflow their dispatch slot). Run: `python3 sw/tools/uasm.py input.uasm -o microcode.hex`
-- **ISA assembler** (`sw/tools/pasm.py`): Two-pass assembler for Penumbra ISA → $readmemh hex. All 4 formats (R/L/M/B), labels, label references in Format L immediates, pseudo-ops (NOP, RET, LA, LI), branch aliases (BZ/BNZ), `.equ` named constants, built-in sysreg constants (`#MMU`, `#TLB_INDEX`, `#TLB_V`, etc.). Smart mnemonic routing: ADD/SUB/CMP auto-select Format R (reg) or Format L (imm); ERET unifies exception return (0 args = EPC/ESR, 2 args = explicit); RDSPR/WRSPR route to per-SPR opcodes (ESR, EPC, USP). `LA Rd, #label` loads a full 32-bit label address (LLI+LUI). `LI Rd, #value` loads an arbitrary 32-bit immediate (LLI+LUI). `--org ADDR` sets code base address (default 0). GETUSP/SETUSP accepted as legacy aliases. Run: `python3 sw/tools/pasm.py --org 0xFFFFE000 input.s -o program.hex`
+- **ISA assembler** (`sw/tools/pasm.py`): Two-pass assembler for Penumbra ISA → $readmemh hex. All 4 formats (R/L/M/B), labels, label references in Format L immediates, pseudo-ops (NOP, RET, LA, LI), branch aliases (BZ/BNZ), `.equ` named constants, built-in constants (`#MMU`, `#TLB_INDEX`, `#TLB_V`, `#UART_BASE`, `#UART_LSR`, `#LSR_THRE`, etc.). Smart mnemonic routing: ADD/SUB/CMP auto-select Format R (reg) or Format L (imm); ERET unifies exception return (0 args = EPC/ESR, 2 args = explicit); RDSPR/WRSPR route to per-SPR opcodes (ESR, EPC, USP). `LA Rd, #label` loads a full 32-bit label address (LLI+LUI). `LI Rd, #value` loads an arbitrary 32-bit immediate (LLI+LUI). `--org ADDR` sets code base address (default 0). GETUSP/SETUSP accepted as legacy aliases. Run: `python3 sw/tools/pasm.py --org 0xFFFFE000 input.s -o program.hex`
 - Makefile auto-assembles `.s`/`.uasm` sources into root-level `program.hex`/`microcode.hex` for `$readmemh`; hex files are build artifacts (gitignored). Programs assembled with `--org 0xFFFFE000` (boot ROM address).
 
 ### Test Convention
-- **Program runner** (`sim/tb_cpu_prog.cpp`): Generic testbench that runs a program until BREAK, checks R1 for pass/fail. VCD trace output to `waves/machine_sim.vcd`, register dump (R0–R15) on failure.
+- **Program runner** (`sim/tb_cpu_prog.cpp`): Generic testbench that runs a program until BREAK (50000 cycle limit), checks R1 for pass/fail. VCD trace output to `waves/machine_sim.vcd`, register dump (R0–R15) on failure. UART TX bytes printed to stdout in real time.
 - **Pass/fail convention:** R1 = 1 means PASS, R1 = 0 means FAIL. Tests self-check internally and set R1 accordingly.
 - **Halt detection:** Testbench watches for `o_halted` pulse (BREAK instruction dispatch). Instant detection, no polling.
 - **Test termination:** Programs end with `BREAK` instruction. Pass path: `LLI R1, #1` then fall through to `fail: BREAK`. Fail path: assertion `BNE fail` branches to `fail: BREAK`.
@@ -191,9 +192,32 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 - **Vector fetch corrupted fault registers:** MMU bypass for vector fetch only gated the output mux, not the TLB lookup or fault latching. The TLB still reported a miss for the unmapped vector page, overwriting `FAULT_ADDR` with the vector address. Fix: gate `i_lookup_en` and fault latching with `!i_force_bypass`.
 - **ERET (was IRET) assembled with wrong opcode:** Hardcoded `encode_format_r(31, ...)` instead of using table value (27). Dispatched to wrong ROM entry. Fix: use `op` from FORMAT_R_OPS lookup.
 
+### UART (Memory-Mapped I/O)
+The simulation UART (`sim_uart.sv`) is an NS16450-compatible device at `0xFF00_0000`, accessed via LDW/STW (not WRSYS/RDSYS — it's on the memory bus, not the sysreg bus). This matches how real FPGA SoCs work: peripherals are memory-mapped, accessed through the MMU with C=0 (uncached) TLB entries.
+
+**Register map** (word-strided, data in bits [7:0] of each 32-bit word):
+
+| Offset | DLAB=0 R / W | DLAB=1 | Description |
+|--------|-------------|--------|-------------|
+| 0x000 | RBR / THR | DLL | Receive buffer / Transmit holding / Divisor low |
+| 0x004 | IER | DLM | Interrupt enable / Divisor high |
+| 0x008 | IIR / FCR | — | Interrupt ID (R) / FIFO control (W, ignored) |
+| 0x00C | LCR | — | Line control (DLAB = bit 7) |
+| 0x010 | MCR | — | Modem control (OUT2 = bit 3 = master IRQ enable) |
+| 0x014 | LSR | — | Line status (bit 0=DR, bit 5=THRE, bit 6=TEMT) |
+| 0x018 | MSR | — | Modem status (CTS+DSR hardwired asserted) |
+| 0x01C | SCR | — | Scratch register (probe detection) |
+
+- **NetBSD compatible:** Works with NetBSD `com(4)` driver using `reg-shift=2`, `reg-io-width=4`. Platform attachment calls `com_init_regs_stride_width(&regs, bst, bsh, addr, 2, 4)`.
+- **TX busy simulation:** After THR write, THRE goes low for `TX_BUSY_CYCLES` (default 2170, matching ~115200 baud at 25 MHz). Ensures polling code exercises the THRE check.
+- **Testbench interface:** `o_uart_tx_valid`/`o_uart_tx_data` pulse on TX completion (testbench does `putchar`). `i_uart_rx_valid`/`i_uart_rx_data` + `o_uart_rx_ack` handshake for RX injection.
+- **IRQ:** `o_irq` asserted when any enabled interrupt + MCR OUT2. Wired to CPU's `i_irq` (OR'd with external testbench IRQ).
+- **Polling pattern:** `LDW LSR, TEST THRE, BZ poll, STW THR` — same as every 16450 driver since 1981.
+- **Real hardware:** Replace `sim_uart` with a baud-rate UART (add shift register + baud generator from DLL/DLM). Same register interface. Add 16-byte FIFOs by flipping IIR[7:6] to `11`.
+
 ### Next Steps (in priority order)
-1. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick.
-2. **UART** — Console I/O for first sign of life on real hardware.
+1. **Boot ROM monitor** — Trivial ROM program that prints a banner and accepts commands over UART.
+2. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick.
 3. **Interrupt controller** — Multiple devices with priority encoding.
 4. **Instruction fetch faults** — Detect TLB miss during fetch phase (separate from STALL-based data fault path).
 5. **Memory subsystem** — Cache (replace cache_stub), SDRAM controller, bus interface.

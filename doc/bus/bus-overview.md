@@ -281,7 +281,7 @@ On `fault`, the MMU latches the faulting address and reason into its FAULT_ADDR 
 | `irq_lines[7:0]` | 8 | Peripherals → Priority Encoder | Individual device interrupt requests |
 
 Priority is fixed by wiring order to the encoder. Suggested priority (highest first):
-1. Timer (drives Minix 2 scheduler)
+1. Timer (drives NetBSD hardclock scheduler)
 2. UART
 3. Wiznet Ethernet
 4. DMA complete
@@ -400,7 +400,7 @@ Within the 16 MB I/O region at `0xFF00_0000`:
 
 | Base Address | Size | Peripheral | Notes |
 |-------------|------|------------|-------|
-| `0xFF00_0000` | 4 KB | UART | Serial console |
+| `0xFF00_0000` | 4 KB | UART | Serial console (NS16450-compatible, word-strided) — **implemented in sim** |
 | `0xFF00_1000` | 4 KB | SPI controller | SD card, flash |
 | `0xFF00_2000` | 4 KB | GPIO | General-purpose I/O |
 | `0xFF00_3000` - `0xFF00_FFFF` | 52 KB | (reserved) | Future simple peripherals |
