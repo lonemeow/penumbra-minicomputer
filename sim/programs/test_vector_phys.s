@@ -105,7 +105,7 @@ miss_handler_p2:
     RDSYS R8, #MMU, #FAULT_STATUS
     LLI   R9, #0x0F
     AND   R8, R9
-    CMPI  R8, #1
+    CMP  R8, #1
     BNE   fail_p2
 
     ; PASS — physical vector bypass confirmed

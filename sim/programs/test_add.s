@@ -14,35 +14,35 @@ _start:
 
     ; ── Test 1: LLI ─────────────────────────────────────────
     LLI  R2, #5
-    CMPI R2, #5
+    CMP R2, #5
     BNE  fail
 
     ; ── Test 2: ADD ─────────────────────────────────────────
     LLI  R3, #3
     ADD  R2, R3               ; R2 = 5 + 3 = 8
-    CMPI R2, #8
+    CMP R2, #8
     BNE  fail
-    CMPI R3, #3               ; R3 unchanged
+    CMP R3, #3               ; R3 unchanged
     BNE  fail
 
     ; ── Test 3: SUB ─────────────────────────────────────────
     LLI  R4, #10
     LLI  R5, #4
     SUB  R4, R5               ; R4 = 10 - 4 = 6
-    CMPI R4, #6
+    CMP R4, #6
     BNE  fail
 
     ; ── Test 4: CMP (flags only, no write) ──────────────────
     LLI  R6, #7
-    CMPI R6, #7               ; sets Z=1
+    CMP R6, #7               ; sets Z=1
     BNE  fail                 ; should not branch (Z=1 → EQ)
-    CMPI R6, #7               ; verify R6 still 7 (CMP didn't write)
+    CMP R6, #7               ; verify R6 still 7 (CMP didn't write)
     BNE  fail
 
     ; ── Test 5: NOT ─────────────────────────────────────────
     LLI  R7, #0
     NOT  R7, R7               ; R7 = ~0 = 0xFFFFFFFF
-    CMPI R7, #0               ; NOT of zero is non-zero
+    CMP R7, #0               ; NOT of zero is non-zero
     BEQ  fail
 
     ; ── All checks passed ───────────────────────────────────

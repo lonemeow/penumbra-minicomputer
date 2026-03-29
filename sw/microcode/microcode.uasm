@@ -98,20 +98,20 @@ llis:
 lui:
   reg_a=IR_RD reg_w=IR_RD w_en=1 alu=OR bmux=IMM wmux=RBUS imm_mode=SHIFT_L16
 
-# ── INC Rd, #imm16 (op=011, dispatch=0x2C) ───────────────────
-# Rd = Rd + zero_extend(imm16)
+# ── ADD Rd, #imm16 (op=011, dispatch=0x2C) ───────────────────
+# Rd = Rd + zero_extend(imm16)   [assembler: ADD Rd, #imm → Format L]
 .org 0x2C
 inc:
   reg_a=IR_RD reg_w=IR_RD w_en=1 alu=ADD bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
 
-# ── DEC Rd, #imm16 (op=100, dispatch=0x30) ───────────────────
-# Rd = Rd - zero_extend(imm16)
+# ── SUB Rd, #imm16 (op=100, dispatch=0x30) ───────────────────
+# Rd = Rd - zero_extend(imm16)   [assembler: SUB Rd, #imm → Format L]
 .org 0x30
 dec:
   reg_a=IR_RD reg_w=IR_RD w_en=1 alu=SUB bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
 
-# ── CMPI Rd, #imm16 (op=101, dispatch=0x34) ─────────────────
-# Flags = Rd - zero_extend(imm16), Rd not written
+# ── CMP Rd, #imm16 (op=101, dispatch=0x34) ──────────────────
+# Flags = Rd - zero_extend(imm16), Rd not written   [assembler: CMP Rd, #imm → Format L]
 .org 0x34
 cmpi:
   reg_a=IR_RD alu=SUB bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
@@ -146,8 +146,8 @@ rdsys:
 # This microcode entry is never reached — dispatch redirects to
 # int_entry (0x70). Slot left empty intentionally.
 
-# ── RTI (op=22, dispatch=0x4C) ────────────────────────────────
-# Return from interrupt/exception: restore ESR then EPC.
+# ── ERET (op=22, dispatch=0x4C) ───────────────────────────────
+# Exception return via EPC/ESR: restore ESR then EPC.
 # Privileged — must be in supervisor mode.
 # Step 0: ESR → ALU PASS_A → R-bus → w_bus → sr_load
 #         (restores NZCV flags, S and I mode bits)
@@ -175,8 +175,8 @@ ei:
 di:
   di_set=1
 
-# ── IRET Rd, Rs (op=27, dispatch=0x56) ───────────────────────
-# Atomic return to a different context: SR ← Rd, PC ← Rs.
+# ── ERET Rd, Rs (op=27, dispatch=0x56) ───────────────────────
+# Exception return to explicit context: SR ← Rd, PC ← Rs.
 # Step 0: Rd → A-bus → ALU PASS_A → R-bus → w_bus → sr_load
 # Step 1: Rs → A-bus → PC (jump to new context)
 # Privileged.

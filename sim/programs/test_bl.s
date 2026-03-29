@@ -15,15 +15,15 @@ start:
     LLI R2, #0
     BL sub1
     ; sub1 sets R2 = 42 and returns here
-    CMPI R2, #42
+    CMP R2, #42
     BNE fail
 
     ; ── Test 2: Nested calls ──
     ; outer saves LR, calls inner (sets R3=99), sets R4=7, restores LR
     BL outer
-    CMPI R3, #99
+    CMP R3, #99
     BNE fail
-    CMPI R4, #7
+    CMP R4, #7
     BNE fail
 
     ; ── Test 3: BL to next instruction (offset=0 edge case) ──

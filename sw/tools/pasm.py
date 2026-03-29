@@ -12,8 +12,12 @@ Source format:
     label:                  ; Labels end with colon
         LLI  R1, #42       ; Format L: immediate
         ADD  R1, R2         ; Format R: register-register
+        ADD  R1, #5         ; Smart: assembler picks Format L
+        CMP  R1, #10        ; Smart: assembler picks Format L
         LDW  R3, [R4 + #8] ; Format M: memory load
         BEQ  label          ; Format B: branch to label
+        ERET                ; Exception return via EPC/ESR
+        ERET R2, R3         ; Exception return via explicit regs
         .word 0xDEADBEEF   ; Raw 32-bit data
         .equ NAME, 0xFF    ; Named constant
 
@@ -121,7 +125,7 @@ FORMAT_R_OPS = {
     "MUL":  (10, True,  0), "MULU": (11, True,  0),
     "DIV":  (12, True,  0), "DIVU": (13, True,  0),
     "MOD":  (14, True,  0), "MODU": (15, True,  0),
-    # F=1 aliases
+    # F=1 aliases (CMP Rd, Rs — register form; CMP Rd, #imm routed to Format L)
     "CMP":  (1,  True,  1), "TEST": (2,  True,  1),
     # System ops (no Rs for most)
     "WRSYS":     (16, True,  0),  # WRSYS Rd, #dev, #reg (special 3-operand)
@@ -130,12 +134,12 @@ FORMAT_R_OPS = {
     "SETSR":     (19, False, 0),
     "SYSCALL":   (20, False, 0),
     "BREAK":     (21, False, 0),
-    "RTI":       (22, False, 0),
+    "RTI":       (22, False, 0),  # Legacy alias for ERET (no args)
     "ICACHE_INV":(23, False, 0),
     "JMP":       (24, True,  0),  # Rs field is the target register
     "EI":        (25, False, 0),
     "DI":        (26, False, 0),
-    "IRET":      (27, True,  0),   # IRET Rd, Rs — SR ← Rd, PC ← Rs (2 micro-ops: 0x1B-0x1C)
+    "IRET":      (27, True,  0),   # Legacy alias for ERET Rd, Rs
     "_RDSPR_ESR": (29, False, 0),  # RDSPR Rd, ESR (internal: assembler maps RDSPR)
     "_RDSPR_EPC": (30, False, 0),  # RDSPR Rd, EPC (internal: assembler maps RDSPR)
     "GETUSP":    (31, False, 0),   # (not yet implemented, moved for IRET)
@@ -206,6 +210,69 @@ def assemble_line(mnemonic, operands, addr, labels, line_num, constants=None):
         return encode_format_r(0, 0, 0, 0)  # ADD R0, R0
     if mn == "RET":
         return encode_format_r(24, 0, 13, 0)  # JMP R13
+
+    # ── ERET — unified exception return ──────────────────────────
+    # ERET        → RTI (return via EPC/ESR, op=22)
+    # ERET Rd, Rs → IRET (return via explicit regs, op=27)
+    if mn == "ERET":
+        if len(operands) == 0:
+            # No-arg form: use EPC/ESR (same as RTI)
+            op = FORMAT_R_OPS["RTI"][0]
+            return encode_format_r(op, 0, 0, 0)
+        elif len(operands) == 2:
+            # Two-arg form: SR ← Rd, PC ← Rs (same as IRET)
+            rd = parse_reg(operands[0])
+            rs = parse_reg(operands[1])
+            if rd is None:
+                raise ValueError(f"bad register '{operands[0]}'")
+            if rs is None:
+                raise ValueError(f"bad register '{operands[1]}'")
+            op = FORMAT_R_OPS["IRET"][0]
+            return encode_format_r(op, rd, rs, 0)
+        else:
+            raise ValueError("ERET expects 0 operands (EPC/ESR) or 2 operands (Rd, Rs)")
+
+    # ── Smart mnemonic routing ───────────────────────────────────
+    # TODO(human): implement smart_route_to_format_l()
+    # ADD/SUB/CMP with an immediate operand → Format L (INC/DEC/CMPI)
+    # This function is called for mnemonics that exist in both Format R
+    # (register-register) and have a Format L counterpart (register-immediate).
+    SMART_MNEMONICS = {"ADD": "INC", "SUB": "DEC", "CMP": "CMPI"}
+
+    def smart_route_to_format_l(mn, operands, constants, labels):
+        """Check if a smart mnemonic should be routed to Format L.
+
+        Args:
+            mn: uppercase mnemonic (ADD, SUB, or CMP)
+            operands: list of operand strings (e.g. ["R1", "#5"])
+            constants: dict of named constants
+            labels: dict of labels
+
+        Returns:
+            Encoded 32-bit instruction word if this is a reg-imm form,
+            or None if it's a reg-reg form (caller should fall through
+            to normal Format R handling).
+        """
+        if len(operands) != 2:
+            return None  # Fall through — Format R handler will give proper error
+        rd = parse_reg(operands[0])
+        if rd is None:
+            raise ValueError(f"bad register '{operands[0]}'")
+        if parse_reg(operands[1]) is not None:
+            return None  # reg-reg form → Format R
+        label_name = operands[1].strip().lstrip('#')
+        if label_name in labels:
+            imm = labels[label_name]
+        else:
+            imm = parse_imm(operands[1], constants)
+        op = FORMAT_L_OPS[SMART_MNEMONICS[mn]]
+        return encode_format_l(op, rd, imm)
+
+    if mn in SMART_MNEMONICS:
+        result = smart_route_to_format_l(mn, operands, constants, labels)
+        if result is not None:
+            return result
+        # Fall through to Format R handling for reg-reg form
 
     # ── RDSPR Rd, ESR / RDSPR Rd, EPC — read exception registers ──
     # (handled before FORMAT_R_OPS lookup since internal keys are _RDSPR_*)

@@ -1,11 +1,11 @@
-; test_iret.s — IRET: return to a different context than the one that faulted
+; test_iret.s — ERET: return to a different context than the one that faulted
 ;
 ; Simulates a simplified context switch:
 ;   1. Enable MMU with page 0 identity-mapped
 ;   2. Access unmapped page → TLB miss trap
 ;   3. Handler reads EPC and ESR via RDSPR
 ;   4. Verifies EPC points at the faulting instruction
-;   5. Uses IRET to jump to a DIFFERENT address (not the faulting one)
+;   5. Uses ERET to jump to a DIFFERENT address (not the faulting one)
 ;      with a constructed SR value
 ;
 ; This proves the kernel can redirect execution after a fault —
@@ -25,7 +25,7 @@
     B    fail               ; 0x0C: protection fault
 
 ; ═══════════════════════════════════════════════════════════════
-; TLB miss handler — reads exception regs, IRETs to alternate_entry
+; TLB miss handler — reads exception regs, ERETs to alternate_entry
 ; ═══════════════════════════════════════════════════════════════
 tlb_miss_handler:
     ; Read and verify EPC = address of the faulting LDW
@@ -37,24 +37,24 @@ tlb_miss_handler:
     RDSPR R9, ESR
 
     ; Construct target SR: supervisor mode, interrupts disabled
-    ; (same as current state — we just want to prove IRET works)
+    ; (same as current state — we just want to prove ERET works)
     LLI   R10, #0
     LUI   R10, #0x8000        ; SR.S=1 (bit 31), SR.I=0
 
     ; Load alternate_entry address
     LLI   R11, alternate_entry
 
-    ; IRET to alternate_entry with constructed SR
-    IRET  R10, R11
+    ; ERET to alternate_entry with constructed SR
+    ERET  R10, R11
 
     ; Should never reach here
     B     fail
 
 ; ═══════════════════════════════════════════════════════════════
-; Alternate entry — IRET target (proves we redirected execution)
+; Alternate entry — ERET target (proves we redirected execution)
 ; ═══════════════════════════════════════════════════════════════
 alternate_entry:
-    LLI  R1, #1               ; PASS — we got here via IRET
+    LLI  R1, #1               ; PASS — we got here via ERET
     BREAK
 
 ; ═══════════════════════════════════════════════════════════════
@@ -80,9 +80,9 @@ start:
     ; ── Access unmapped page → fault ──────────────────────────
     LLI  R5, #0x3000
 fault_ldw:
-    LDW  R6, [R5]             ; THIS FAULTS — handler runs, IRETs elsewhere
+    LDW  R6, [R5]             ; THIS FAULTS — handler runs, ERETs elsewhere
 
-    ; If we reach here, IRET didn't redirect
+    ; If we reach here, ERET didn't redirect
     B    fail
 
 fail:

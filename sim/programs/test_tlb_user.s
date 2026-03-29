@@ -2,10 +2,10 @@
 ;
 ; Tests:
 ;   1. Map page 0 with U (user+kernel), page 1 without U (kernel-only)
-;   2. IRET to user mode on page 0 — instruction fetch works (has U)
+;   2. ERET to user mode on page 0 — instruction fetch works (has U)
 ;   3. User-mode read from page 1 → prot fault (no U for user access)
 ;   4. Handler verifies fault info (user-mode bit set in FAULT_STATUS),
-;      remaps page 1 with U, RTIs to retry
+;      remaps page 1 with U, ERETs to retry
 ;   5. Retried user-mode read succeeds
 ;   6. User-mode code does BREAK → trap back to supervisor → testbench stops
 ;
@@ -33,7 +33,7 @@
 ; Protection fault handler (runs in supervisor mode)
 ;
 ; Uses R8, R9, R13 as scratch (safe — user code uses R2-R5)
-; R10 = expected FAULT_ADDR (set by supervisor before IRET)
+; R10 = expected FAULT_ADDR (set by supervisor before ERET)
 ; ═══════════════════════════════════════════════════════════════
 prot_handler:
     ; Verify FAULT_ADDR = 0x1000
@@ -46,7 +46,7 @@ prot_handler:
     LLI   R9, #0x0F
     MOV   R13, R8
     AND   R13, R9
-    CMPI  R13, #FAULT_PROT
+    CMP  R13, #FAULT_PROT
     BNE   fail
 
     ; Verify user-mode bit is set (bit 11)
@@ -72,7 +72,7 @@ prot_handler:
     WRSYS R9, #MMU, #TLB_PTE
 
     ; Return to user mode — retries the faulting LDW
-    RTI
+    ERET
 
 ; ═══════════════════════════════════════════════════════════════
 ; User-mode code (executes on page 0 which has U bit)
@@ -126,12 +126,12 @@ start:
     ; ── Set up handler expectations ───────────────────────────
     LLI  R10, #0x1000          ; expected FAULT_ADDR
 
-    ; ── Switch to user mode via IRET ──────────────────────────
+    ; ── Switch to user mode via ERET ──────────────────────────
     ; SR: S=0 (user mode), I=0
     ; PC: user_code label
     LLI  R2, #0                ; user-mode SR
     LLI  R3, user_code
-    IRET R2, R3
+    ERET R2, R3
 
     ; Should never reach here
     B    fail

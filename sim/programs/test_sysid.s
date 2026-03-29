@@ -11,12 +11,12 @@ _start:
 
     ; ── Test 1: Read MACHINE_ID ─────────────────────────────
     RDSYS R2, #SYS, #MACHINE_ID  ; R2 = MACHINE_ID
-    CMPI R2, #1                   ; should be 1 (Penumbra/1)
+    CMP R2, #1                   ; should be 1 (Penumbra/1)
     BNE  fail
 
     ; ── Test 2: Unimplemented register reads as zero ────────
     RDSYS R3, #SYS, #1           ; R3 = device 1, reg 1 (unused)
-    CMPI R3, #0
+    CMP R3, #0
     BNE  fail
 
     ; ── All passed ──────────────────────────────────────────

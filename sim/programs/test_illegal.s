@@ -19,16 +19,16 @@
 ; ── Illegal instruction handler ──────────────────────────
 ;
 ; Must skip the faulting instruction and resume execution.
-; Note: RTI would return to EPC (the faulting instruction),
-; causing an infinite trap loop. Use IRET instead, which lets
+; Note: ERET (no args) would return to EPC (the faulting instruction),
+; causing an infinite trap loop. Use ERET Rd, Rs instead, which lets
 ; you specify an arbitrary return address.
 ;
 illegal_handler:
-    INC   R2, #1                  ; count handler invocations
+    ADD   R2, #1                  ; count handler invocations
     RDSPR R9, EPC
-    INC   R9, #4
+    ADD   R9, #4
     RDSPR R10, ESR
-    IRET  R10, R9
+    ERET  R10, R9
 
 ; ── Main test ────────────────────────────────────────────
 .org 0x80
@@ -40,14 +40,14 @@ start:
     .word 0x7C000000
 
     ; Handler should have incremented R2 to 1
-    CMPI R2, #1
+    CMP  R2, #1
     BNE fail
 
     ; Test 2: MUL R3, R4 — defined in ISA but no microcode (sentinel)
     MUL R3, R4
 
     ; Handler should have incremented R2 to 2
-    CMPI R2, #2
+    CMP  R2, #2
     BNE fail
 
     ; Pass

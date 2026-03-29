@@ -9,7 +9,7 @@
 
 check:
         ; R1 = fib(10) result, expect 55
-        CMPI R1, #55
+        CMP R1, #55
         BNE  fail
         LLI  R1, #1            ; PASS
         BREAK
@@ -39,7 +39,7 @@ loop:
         MOV  R9, R4
         ADD  R4, R3
         MOV  R3, R9
-        DEC  R1, #1
+        SUB  R1, #1
 start_loop:
         BNZ  loop
 

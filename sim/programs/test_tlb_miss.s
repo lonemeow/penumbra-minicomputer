@@ -44,7 +44,7 @@ tlb_miss_handler:
     RDSYS R8, #MMU, #FAULT_STATUS
     LLI   R9, #0x0F           ; mask for fault type field
     AND   R8, R9              ; R8 = fault_type = FAULT_STATUS & 0x0F
-    CMPI  R8, #1              ; 1 = FAULT_TLB_MISS
+    CMP  R8, #1              ; 1 = FAULT_TLB_MISS
     BNE   fail
 
     ; PASS — fault handler ran with correct fault address

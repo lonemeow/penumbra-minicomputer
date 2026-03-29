@@ -2,7 +2,7 @@
 ;
 ; Tests:
 ;   1. Set up identity-mapped TLB (page 0 with U bit for user code)
-;   2. Enable MMU, IRET to user mode
+;   2. Enable MMU, ERET to user mode
 ;   3. User-mode code attempts DI (privileged) → should trap to VEC_PRIV
 ;   4. Privilege handler verifies EPC points at the faulting DI,
 ;      sets R1=1 (pass), then does BREAK
@@ -66,10 +66,10 @@ start:
     ; ── Remember where user_code's DI is for handler to check ─
     LLI  R10, user_code        ; R10 = expected EPC (DI addr)
 
-    ; ── Switch to user mode via IRET ──────────────────────────
+    ; ── Switch to user mode via ERET ──────────────────────────
     LLI  R2, #0                ; user-mode SR (S=0, I=0)
     LLI  R3, user_code
-    IRET R2, R3
+    ERET R2, R3
 
     ; Should never reach here
     B    fail

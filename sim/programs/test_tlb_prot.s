@@ -1,11 +1,11 @@
 ; test_tlb_prot.s — TLB protection fault: multiple permission scenarios
 ;
 ; Tests (all in supervisor mode, MMU enabled):
-;   1. Write to read-only page → prot fault, handler remaps with W, RTI retries
-;   2. Read from write-only page → prot fault, handler remaps with R, RTI retries
+;   1. Write to read-only page → prot fault, handler remaps with W, ERET retries
+;   2. Read from write-only page → prot fault, handler remaps with R, ERET retries
 ;
 ; Each fault handler invocation verifies FAULT_ADDR and FAULT_STATUS,
-; remaps the page with correct permissions, and RTIs to retry.
+; remaps the page with correct permissions, and ERETs to retry.
 ;
 ; Register convention:
 ;   R1        = pass/fail result
@@ -52,7 +52,7 @@ prot_handler:
     LLI   R9, #0x0F
     MOV   R13, R8
     AND   R13, R9
-    CMPI  R13, #FAULT_PROT
+    CMP  R13, #FAULT_PROT
     BNE   fail
 
     ; Verify expected access type bit is set
@@ -69,7 +69,7 @@ prot_handler:
     WRSYS R12, #MMU, #TLB_PTE
 
     ; Return to retry the faulting instruction
-    RTI
+    ERET
 
 ; ═══════════════════════════════════════════════════════════════
 ; Main test
@@ -115,7 +115,7 @@ start:
     LLI  R11, #FSTAT_W         ; expected access = write
     LLI  R12, #0x10B9          ; new PTE: PPN=1, V|R|W|X|G
 
-    ; Write should fault → handler remaps → RTI → retry succeeds
+    ; Write should fault → handler remaps → ERET → retry succeeds
     LLI  R7, #0xBEEF
     STW  R7, [R5]              ; FAULTS then retries
 
@@ -123,7 +123,7 @@ start:
     LLI  R6, #0
     WRSYS R6, #MMU, #MMUCR
     LDW  R7, [R5]
-    CMPI R7, #0xBEEF
+    CMP R7, #0xBEEF
     BNE  fail
 
     ; ══════════════════════════════════════════════════════════
@@ -147,11 +147,11 @@ start:
     LLI  R11, #FSTAT_R         ; expected access = read
     LLI  R12, #0x10B9          ; new PTE: PPN=1, V|R|W|X|G
 
-    ; Read should fault → handler remaps → RTI → retry succeeds
+    ; Read should fault → handler remaps → ERET → retry succeeds
     LDW  R7, [R5]              ; FAULTS then retries
 
     ; Verify read got the right value
-    CMPI R7, #0xBEEF
+    CMP R7, #0xBEEF
     BNE  fail
 
     ; ── All checks passed ────────────────────────────────────

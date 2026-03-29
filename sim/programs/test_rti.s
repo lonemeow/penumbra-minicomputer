@@ -1,14 +1,14 @@
-; test_rti.s — TLB miss → handler fills TLB → RTI → faulting load completes
+; test_rti.s — TLB miss → handler fills TLB → ERET → faulting load completes
 ;
 ; This is the core demand-paging loop: an unmapped access faults, the
-; handler installs the mapping, and RTI restarts the faulting instruction
+; handler installs the mapping, and ERET restarts the faulting instruction
 ; which now succeeds through the TLB.
 ;
 ; Setup:
 ;   - Identity-map page 0 (code + low data)
 ;   - Store sentinel 0xFACE at physical 0x1000 (page 1) while MMU is off
 ;   - Enable MMU — page 1 is NOT mapped
-;   - Load from 0x1000 → TLB miss → handler maps VPN 1 → PPN 1 → RTI
+;   - Load from 0x1000 → TLB miss → handler maps VPN 1 → PPN 1 → ERET
 ;   - Restarted load succeeds, gets 0xFACE
 ;
 ; Result: R1=1 PASS, R1=0 FAIL
@@ -37,7 +37,7 @@ tlb_miss_handler:
     WRSYS R11, #MMU, #TLB_PTE     ; commits entry
 
     ; Return to faulting instruction (LDW at 0x1000 will now hit)
-    RTI
+    ERET
 
 ; ═══════════════════════════════════════════════════════════════
 ; Main test
@@ -61,8 +61,8 @@ start:
     LLI  R6, #1
     WRSYS R6, #MMU, #MMUCR
 
-    ; ── Load from unmapped page 1 → TLB miss → handler → RTI ─
-    LDW  R7, [R3]             ; faults, handler maps VPN 1, RTI restarts
+    ; ── Load from unmapped page 1 → TLB miss → handler → ERET ─
+    LDW  R7, [R3]             ; faults, handler maps VPN 1, ERET restarts
 
     ; ── If we reach here, the restart succeeded ───────────────
     CMP  R7, R2               ; R7 should be 0xFACE
