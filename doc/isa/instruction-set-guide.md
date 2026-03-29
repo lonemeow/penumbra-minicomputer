@@ -22,7 +22,7 @@ The assembler accepts `LR`, `SP`, and `PC` as aliases for R13, R14, and R15.
 ## Status Register
 
 The status register (SR) is separate from the register file. It is modified
-implicitly by flag-setting instructions and explicitly by SETSR, RTI, and
+implicitly by flag-setting instructions and explicitly by SETSR, ERET, and
 exception entry.
 
 ```
@@ -110,9 +110,9 @@ LLI also accepts labels as immediates:
 | Instruction | Syntax | Operation | Flags |
 |-------------|--------|-----------|-------|
 | ADD | `ADD Rd, Rs` | Rd = Rd + Rs | NZCV |
+| ADD | `ADD Rd, #imm16` | Rd = Rd + zero_extend(imm16) | NZCV |
 | SUB | `SUB Rd, Rs` | Rd = Rd - Rs | NZCV |
-| INC | `INC Rd, #imm16` | Rd = Rd + zero_extend(imm16) | NZCV |
-| DEC | `DEC Rd, #imm16` | Rd = Rd - zero_extend(imm16) | NZCV |
+| SUB | `SUB Rd, #imm16` | Rd = Rd - zero_extend(imm16) | NZCV |
 | MUL | `MUL Rd, Rs` | Rd = Rd * Rs (signed) | NZCV |
 | MULU | `MULU Rd, Rs` | Rd = Rd * Rs (unsigned) | NZCV |
 | DIV | `DIV Rd, Rs` | Rd = Rd / Rs (signed) | NZCV |
@@ -123,6 +123,9 @@ LLI also accepts labels as immediates:
 All arithmetic is 2-operand destructive: the first operand is both a source
 and the destination. Plan register usage accordingly -- save values you still
 need before overwriting them.
+
+The assembler automatically selects the correct encoding (Format R for
+register-register, Format L for register-immediate) based on the operand type.
 
 MUL/DIV/MOD are multi-cycle and stall the pipeline. They are initially
 trapped as illegal instructions for software emulation; hardware support will
@@ -149,19 +152,22 @@ NOT is the only unary ALU operation. The source is Rs, not Rd.
 
 Shift amount is taken from the low 5 bits of Rs (0--31). There are no
 immediate shift instructions; load the shift count into a register first,
-or use INC/DEC for multiply/divide by powers of two.
+or use ADD/SUB with an immediate for multiply/divide by powers of two.
 
 ### Comparison
 
 | Instruction | Syntax | Operation | Flags |
 |-------------|--------|-----------|-------|
 | CMP | `CMP Rd, Rs` | flags = Rd - Rs (Rd unchanged) | NZCV |
+| CMP | `CMP Rd, #imm16` | flags = Rd - zero_extend(imm16) (Rd unchanged) | NZCV |
 | TEST | `TEST Rd, Rs` | flags = Rd & Rs (Rd unchanged) | NZCV |
-| CMPI | `CMPI Rd, #imm16` | flags = Rd - zero_extend(imm16) (Rd unchanged) | NZCV |
 
 CMP and TEST are encoded as SUB and AND with the F-bit set, which suppresses
 the register write. The ALU computes the result and updates flags normally,
 but the destination register is not modified.
+
+The assembler automatically selects the correct encoding for CMP based on
+whether the second operand is a register or immediate.
 
 `CMP Rd, R0` is the idiomatic way to test whether Rd is zero, since R0 is
 always 0.
@@ -192,12 +198,12 @@ halfword to 2-byte boundary). Misaligned accesses trap to vector 6.
 
 ```asm
     ; Push R1
-    DEC  SP, #4
+    SUB  SP, #4
     STW  R1, [SP]
 
     ; Pop into R1
     LDW  R1, [SP]
-    INC  SP, #4
+    ADD  SP, #4
 ```
 
 ### Branches
@@ -216,19 +222,10 @@ See the condition code table above for the full set.
 **BL (branch and link)** is the subroutine call instruction. It saves the
 return address (PC+4) into R13 (LR) before branching. Return with `RET`.
 
-**Note:** BL is not yet implemented in microcode. For now, set LR manually:
-
-```asm
-    LLI  LR, #return_addr
-    B    subroutine
-return_addr:
-    ; ... continues here after RET
-```
-
 ### Subroutine Call and Return
 
 ```asm
-    BL   my_function        ; call (once BL is implemented)
+    BL   my_function        ; call
     ; ...
 my_function:
     ; ... function body ...
@@ -242,13 +239,13 @@ further subroutines:
 
 ```asm
 my_function:
-    DEC  SP, #4
+    SUB  SP, #4
     STW  LR, [SP]           ; save return address
 
     BL   helper              ; nested call (clobbers LR)
 
     LDW  LR, [SP]           ; restore return address
-    INC  SP, #4
+    ADD  SP, #4
     RET
 ```
 
@@ -259,24 +256,39 @@ my_function:
 | JMP | `JMP Rs` | PC = Rs | No |
 | EI | `EI` | Enable interrupts (SR.I = 1, delayed one instruction) | No |
 | DI | `DI` | Disable interrupts (SR.I = 0, immediate) | Yes |
+| WRSYS | `WRSYS Rd, #dev, #reg` | Write Rd to system register | Yes |
+| RDSYS | `RDSYS Rd, #dev, #reg` | Read system register into Rd | Yes |
+| RDSPR | `RDSPR Rd, ESR` | Read exception status register into Rd | Yes |
+| RDSPR | `RDSPR Rd, EPC` | Read exception PC into Rd | Yes |
+| ERET | `ERET` | Exception return via EPC/ESR (restore PC + SR) | Yes |
+| ERET | `ERET Rd, Rs` | Exception return: SR = Rd, PC = Rs | Yes |
 | GETSR | `GETSR Rd` | Rd = SR | No |
 | SETSR | `SETSR Rs` | SR = Rs | Yes |
 | GETUSP | `GETUSP Rd` | Rd = user stack pointer (banked-away) | Yes |
 | SETUSP | `SETUSP Rs` | User stack pointer = Rs | Yes |
-| SYSCALL | `SYSCALL` | Trap to vector 7 (system call) | No |
-| BREAK | `BREAK` | Trap to vector 8 (debug breakpoint) | No |
-| RTI | `RTI` | Return from interrupt (restore PC + SR) | Yes |
+| SYSCALL | `SYSCALL` | Trap to vector 5 (system call) | No |
+| BREAK | `BREAK` | Trap to vector 6 (debug breakpoint) | No |
 | ICACHE_INV | `ICACHE_INV` | Invalidate instruction cache | Yes |
 
 **EI timing guarantee:** The instruction immediately after EI always executes
-before any pending interrupt is recognized. This enables the `EI` / `RTI`
+before any pending interrupt is recognized. This enables the `EI` / `ERET`
 pattern in interrupt handlers without a race.
 
 **DI timing guarantee:** Takes effect immediately. The next instruction
 executes with interrupts disabled.
 
-Privileged instructions executed in user mode (SR.S = 0) trap to vector 3
+Privileged instructions executed in user mode (SR.S = 0) trap to vector 4
 (privilege violation).
+
+**ERET forms:** The no-argument form restores SR and PC from the exception
+registers (ESR/EPC) -- this is the normal return path for interrupt and fault
+handlers. The two-argument form loads SR from Rd and PC from Rs atomically --
+this is used for context switches (returning to a different process than the
+one that was interrupted).
+
+**WRSYS/RDSYS:** Access device-mapped system registers (MMU control, TLB
+entries, system ID, etc.). See `doc/isa/sysregs-reference.md` for the
+device/register map and assembly recipes.
 
 ### Pseudo-Instructions
 
@@ -290,9 +302,9 @@ Privileged instructions executed in user mode (SR.S = 0) trap to vector 3
 | Pattern | Code | Notes |
 |---------|------|-------|
 | Clear register | `MOV Rd, R0` | |
-| Negate | `NOT Rd, Rs` then `INC Rd, #1` | Two's complement: -x = ~x + 1 |
+| Negate | `NOT Rd, Rs` then `ADD Rd, #1` | Two's complement: -x = ~x + 1 |
 | Test for zero | `CMP Rd, R0` then `BZ target` | |
-| Countdown loop | `DEC Rd, #1` then `BNZ loop` | DEC sets Z flag |
+| Countdown loop | `SUB Rd, #1` then `BNZ loop` | SUB sets Z flag |
 | 32-bit constant | `LLI Rd, #lo` then `LUI Rd, #hi` | |
 | Absolute jump | `LLI Rd, #addr` then `JMP Rd` | For addresses > branch range |
 
@@ -312,19 +324,20 @@ entry is a 32-bit instruction word (typically a branch to the handler).
 | 1 | 0x04 | External IRQ | Implemented |
 | 2 | 0x08 | TLB miss | Implemented |
 | 3 | 0x0C | TLB protection fault | Implemented |
-| 4 | 0x10 | Privilege violation | Reserved |
+| 4 | 0x10 | Privilege violation | Implemented |
 | 5 | 0x14 | SYSCALL | Reserved |
 | 6 | 0x18 | BREAK (debug) | Implemented |
-| 7--15 | 0x1C--0x3C | Reserved (NMI, alignment, bus error, etc.) | — |
+| 7 | 0x1C | Illegal instruction | Implemented |
+| 8--15 | 0x20--0x3C | Reserved (NMI, alignment, bus error, etc.) | -- |
 
 On exception entry, the hardware:
 1. Saves PC and SR to exception registers (EPC, ESR)
 2. Sets S = 1 (supervisor), I = 0 (interrupts disabled)
 3. Loads PC from the vector table entry (physical fetch, MMU bypassed)
 
-RTI restores ESR then EPC (returns to interrupted/faulting instruction).
-IRET Rd, Rs atomically loads SR from Rd and PC from Rs (context switch to a different process).
-RDSPR Rd, ESR/EPC reads the exception registers so the kernel can save them.
+`ERET` restores ESR then EPC (returns to interrupted/faulting instruction).
+`ERET Rd, Rs` atomically loads SR from Rd and PC from Rs (context switch to a different process).
+`RDSPR Rd, ESR`/`RDSPR Rd, EPC` reads the exception registers so the kernel can save them.
 
 ---
 
@@ -335,11 +348,16 @@ RDSPR Rd, ESR/EPC reads the exception registers so the kernel can save them.
 ```asm
 ; Comments start with semicolon
 label:                      ; Labels end with colon
-    ADD  R1, R2             ; Instructions are indented (convention, not required)
+    ADD  R1, R2             ; Register-register (assembler picks Format R)
+    ADD  R1, #5             ; Register-immediate (assembler picks Format L)
+    CMP  R1, #10            ; Same: assembler picks encoding automatically
     LDW  R3, [R4 + #8]     ; Memory: [base + #offset] or [base - #offset]
     BEQ  label              ; Branches take labels or numeric offsets
+    ERET                    ; Exception return via EPC/ESR
+    ERET R2, R3             ; Exception return via explicit registers
     .word 0xDEADBEEF        ; Raw data directive
     .org 0x1000             ; Set assembly address
+    .equ NAME, 0xFF         ; Named constant
 ```
 
 ### Immediate Values
@@ -352,6 +370,7 @@ Immediates are prefixed with `#`:
     LLI  R1, #0b1010        ; binary
     LLI  R1, #-1            ; negative decimal
     LLI  R1, #my_label      ; label address (resolved by assembler)
+    LLI  R1, #TLB_V         ; named constant (built-in or .equ)
 ```
 
 ### Directives
@@ -360,6 +379,7 @@ Immediates are prefixed with `#`:
 |-----------|---------|--------|
 | `.org` | `.org 0x1000` | Set current address |
 | `.word` | `.word 0xDEADBEEF` | Emit a raw 32-bit word |
+| `.equ` | `.equ NAME, 0xFF` | Define a named constant |
 
 ---
 
@@ -388,11 +408,11 @@ All instructions are 32 bits. Bits [31:30] select one of four formats.
 | 0 | ADD | 8 | MOV | 16 | WRSYS | 24 | JMP |
 | 1 | SUB | 9 | NOT | 17 | RDSYS | 25 | EI |
 | 2 | AND | 10 | MUL | 18 | GETSR | 26 | DI |
-| 3 | OR | 11 | MULU | 19 | SETSR | 27 | GETUSP |
-| 4 | XOR | 12 | DIV | 20 | SYSCALL | 28 | SETUSP |
-| 5 | SHL | 13 | DIVU | 21 | BREAK | 29--31 | (reserved) |
-| 6 | SHR | 14 | MOD | 22 | RTI | | |
-| 7 | SAR | 15 | MODU | 23 | ICACHE_INV | | |
+| 3 | OR | 11 | MULU | 19 | SETSR | 27 | ERET Rd,Rs |
+| 4 | XOR | 12 | DIV | 20 | SYSCALL | 28 | (reserved) |
+| 5 | SHL | 13 | DIVU | 21 | BREAK | 29 | RDSPR ESR |
+| 6 | SHR | 14 | MOD | 22 | ERET | 30 | RDSPR EPC |
+| 7 | SAR | 15 | MODU | 23 | ICACHE_INV | 31 | GETUSP |
 
 ### Format L -- Immediate Operations (bits [31:30] = 01)
 
@@ -410,10 +430,14 @@ All instructions are 32 bits. Bits [31:30] select one of four formats.
 | 0 | LLI | zero-extend |
 | 1 | LLIS | sign-extend |
 | 2 | LUI | shift left 16, OR into Rd |
-| 3 | INC | zero-extend, add to Rd |
-| 4 | DEC | zero-extend, subtract from Rd |
-| 5 | CMPI | zero-extend, subtract from Rd (flags only) |
+| 3 | ADD #imm | zero-extend, add to Rd |
+| 4 | SUB #imm | zero-extend, subtract from Rd |
+| 5 | CMP #imm | zero-extend, subtract from Rd (flags only) |
 | 6--7 | (reserved) | |
+
+The assembler automatically routes `ADD Rd, #imm`, `SUB Rd, #imm`, and
+`CMP Rd, #imm` to these Format L encodings. The internal encoding names
+INC/DEC/CMPI are accepted as aliases for backward compatibility.
 
 ### Format M -- Memory Operations (bits [31:30] = 10)
 
@@ -453,8 +477,9 @@ Branch range: +/- 2^23 bytes = +/- 8 MB.
 ## Appendix B: Implementation Status
 
 Instructions marked **Yes** have working microcode and pass simulation tests.
-Instructions marked **No** are defined in the ISA and assembler but do not
-yet have microcode -- executing them will dispatch to an empty ROM entry.
+Instructions marked **Trap** dispatch to the illegal instruction handler for
+software emulation. Instructions marked **No** are defined in the ISA and
+assembler but do not yet have microcode.
 
 | Instruction | Implemented | Notes |
 |-------------|-------------|-------|
@@ -463,19 +488,22 @@ yet have microcode -- executing them will dispatch to an empty ROM entry.
 | MOV | Yes | No flag update |
 | NOT | Yes | Updates flags |
 | CMP, TEST | Yes | Via SUB/AND with F-bit |
-| MUL, MULU, DIV, DIVU, MOD, MODU | No | Multi-cycle, planned |
-| LLI, LLIS, LUI, INC, DEC, CMPI | Yes | |
+| MUL, MULU, DIV, DIVU, MOD, MODU | Trap | Illegal instruction trap → SW emulation |
+| LLI, LLIS, LUI | Yes | |
+| ADD/SUB/CMP #imm | Yes | Format L encoding (formerly INC/DEC/CMPI) |
 | LDW, STW | Yes | STALL-based, latency-agnostic |
 | LDH, LDHS, LDB, LDBS, STH, STB | No | Sub-word access planned |
 | B, BEQ/BZ, BNE/BNZ, and all Bcc | Yes | All 16 conditions |
-| BL | No | Needs LR save in microcode |
+| BL | Yes | Saves PC+4 to R13 |
 | JMP (RET) | Yes | |
 | EI, DI | Yes | ei_shadow, privilege check |
-| GETSR, SETSR | No | |
-| SYSCALL, BREAK | No | |
-| RTI | No | |
-| GETUSP, SETUSP | No | |
-| ICACHE_INV | No | |
 | WRSYS, RDSYS | Yes | Privileged; see `doc/isa/sysregs-reference.md` |
+| RDSPR | Yes | Reads EPC or ESR |
+| ERET | Yes | Both forms (EPC/ESR and Rd/Rs) |
+| BREAK | Yes | Trap to vector 6 |
+| GETSR, SETSR | No | |
+| GETUSP, SETUSP | No | |
+| SYSCALL | No | |
+| ICACHE_INV | No | |
 | NOP (pseudo) | Yes | ADD R0, R0 |
 | RET (pseudo) | Yes | JMP R13 |
