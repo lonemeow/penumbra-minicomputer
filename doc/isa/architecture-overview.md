@@ -508,11 +508,39 @@ System register access is for CPU-adjacent devices only. External peripherals (U
 ## Memory Model
 
 - 32-bit virtual address space (4 GB)
+- **Little-endian** byte order
 - Page-based virtual memory managed by the MMU (4 KB pages)
 - Memory protection (read/write/execute per page, user/supervisor)
 - Per-page cacheability control (C bit in page table entry) for memory-mapped I/O
 - Software-managed TLB (64-entry, 2-way set-associative)
 - See the MMU overview for full details
+
+### Byte Ordering
+
+Penumbra is **little-endian**: the least-significant byte of a word occupies the
+lowest address. This is defined by the `byte_ext` and `byte_rep` modules in
+hardware, and matches the convention used by x86, RISC-V, and ARM in LE mode.
+
+```
+Word at address A:
+  addr A+0  →  bits [ 7: 0]   (least significant byte)
+  addr A+1  →  bits [15: 8]
+  addr A+2  →  bits [23:16]
+  addr A+3  →  bits [31:24]   (most significant byte)
+```
+
+For example, the 32-bit value `0x44434241` stored at address 0x1000:
+
+| Address | Byte | ASCII |
+|---------|------|-------|
+| 0x1000 | 0x41 | 'A' |
+| 0x1001 | 0x42 | 'B' |
+| 0x1002 | 0x43 | 'C' |
+| 0x1003 | 0x44 | 'D' |
+
+`LDB R1, [R0 + #0x1000]` reads 0x41 ('A'); `LDW R1, [R0 + #0x1000]` reads
+0x44434241. The assembler's `.asciz` and `.byte` directives pack data in this
+order so that sequential byte loads read characters in string order.
 
 ## Microarchitecture Summary
 
