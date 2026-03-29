@@ -23,6 +23,9 @@ Source format:
         RDSPR R1, USP       ; Read user stack pointer
         WRSPR USP, R1       ; Write user stack pointer
         .word 0xDEADBEEF   ; Raw 32-bit data
+        .word 0x1234, 0x5678 ; Multiple words
+        .byte 0x41, 0x42   ; Raw bytes (packed little-endian into words)
+        .asciz "Hello\\n"   ; Null-terminated ASCII string
         .equ NAME, 0xFF    ; Named constant
 
 Registers: R0-R15 (R0 is always zero, R13=LR, R14=SP, R15=PC)
@@ -133,6 +136,40 @@ def parse_imm(s, constants=None):
         val = constants[name]
         return -val if neg else val
     raise ValueError(f"unknown immediate or constant '{s}'")
+
+# ── Data directive helpers ───────────────────────────────────
+
+def parse_escape_string(s):
+    """Parse C-style escape sequences, return list of byte values."""
+    result = []
+    i = 0
+    while i < len(s):
+        if s[i] == '\\' and i + 1 < len(s):
+            c = s[i + 1]
+            if   c == 'n':  result.append(0x0A); i += 2
+            elif c == 'r':  result.append(0x0D); i += 2
+            elif c == 't':  result.append(0x09); i += 2
+            elif c == '\\': result.append(0x5C); i += 2
+            elif c == '"':  result.append(0x22); i += 2
+            elif c == '0':  result.append(0x00); i += 2
+            elif c == 'x' and i + 3 < len(s):
+                result.append(int(s[i+2:i+4], 16)); i += 4
+            else:
+                result.append(ord(s[i])); i += 1
+        else:
+            result.append(ord(s[i])); i += 1
+    return result
+
+def pack_bytes_to_words(byte_list):
+    """Pack byte values into 32-bit words, little-endian, zero-padded."""
+    padded = list(byte_list)
+    while len(padded) % 4 != 0:
+        padded.append(0)
+    words = []
+    for i in range(0, len(padded), 4):
+        word = padded[i] | (padded[i+1] << 8) | (padded[i+2] << 16) | (padded[i+3] << 24)
+        words.append(word)
+    return words
 
 # ── Format R — Register-register ALU & system ops ────────────
 # Encoding: [00][op:5][Rd:4][Rs:4][F:1][spare:16]
@@ -541,11 +578,31 @@ def assemble(source_lines, org=0):
             addr = int(m.group(1), 0)
             continue
 
-        # Directive: .word
+        # Directive: .word (one or more comma-separated values)
         m = re.match(r"\.word\s+(.+)", line, re.IGNORECASE)
         if m:
+            vals = [v.strip() for v in m.group(1).split(",")]
             instructions.append((line_num, addr, ".word", m.group(1).strip()))
-            addr += 4
+            addr += len(vals) * 4
+            continue
+
+        # Directive: .byte (one or more comma-separated byte values)
+        m = re.match(r"\.byte\s+(.+)", line, re.IGNORECASE)
+        if m:
+            vals = [v.strip() for v in m.group(1).split(",")]
+            nwords = (len(vals) + 3) // 4
+            instructions.append((line_num, addr, ".byte", m.group(1).strip()))
+            addr += nwords * 4
+            continue
+
+        # Directive: .asciz "string" (null-terminated ASCII)
+        m = re.match(r'\.asciz\s+"((?:[^"\\]|\\.)*)"', line, re.IGNORECASE)
+        if m:
+            byte_list = parse_escape_string(m.group(1))
+            nbytes = len(byte_list) + 1  # +1 for null terminator
+            nwords = (nbytes + 3) // 4
+            instructions.append((line_num, addr, ".asciz", m.group(1)))
+            addr += nwords * 4
             continue
 
         # Label
@@ -577,8 +634,18 @@ def assemble(source_lines, org=0):
     for line_num, addr, mnemonic, operand_str in instructions:
         try:
             if mnemonic == ".word":
-                word = parse_imm(operand_str, constants)
-                output.append((addr, word & 0xFFFFFFFF))
+                vals = [v.strip() for v in operand_str.split(",")]
+                for i, v in enumerate(vals):
+                    word = parse_imm(v, constants)
+                    output.append((addr + i * 4, word & 0xFFFFFFFF))
+            elif mnemonic == ".byte":
+                vals = [parse_imm(v.strip(), constants) & 0xFF for v in operand_str.split(",")]
+                for i, word in enumerate(pack_bytes_to_words(vals)):
+                    output.append((addr + i * 4, word))
+            elif mnemonic == ".asciz":
+                byte_list = parse_escape_string(operand_str) + [0]
+                for i, word in enumerate(pack_bytes_to_words(byte_list)):
+                    output.append((addr + i * 4, word))
             elif mnemonic.upper() in ("LA", "LI"):
                 operands = tokenize_operands(operand_str)
                 if len(operands) != 2:
