@@ -1,14 +1,15 @@
 # Penumbra Minicomputer - Claude Code Context
 
 ## Project Overview
-Penumbra is a 32-bit RISC-like minicomputer designed from scratch and implemented on a Radiona ULX3S (Lattice ECP5) FPGA. The project covers the full system: CPU, MMU, DMA, I/O, and system bus. The eventual goal is to port Minix 2, and later build the design from discrete 74xx chips.
+Penumbra is a 32-bit RISC-like minicomputer designed from scratch and implemented on a Radiona ULX3S (Lattice ECP5) FPGA. The project covers the full system: CPU, MMU, DMA, I/O, and system bus. The eventual goal is to port NetBSD, and later build the design from discrete 74xx chips.
 
 ## Key Decisions
 - **HDL:** SystemVerilog for RTL
 - **Toolchain:** Open-source FPGA tools (Yosys, nextpnr-ecp5, Project Trellis)
 - **Simulation:** Verilator 5.046 via Docker (`verilator/verilator:latest`), driven by Makefile
 - **Target board:** ULX3S with ECP5-85F (32 MB SDRAM, USB, HDMI, GPIO, etc.)
-- **OS target:** Minix 2 (drives privilege, interrupt, MMU design)
+- **OS target:** NetBSD (drives privilege, interrupt, MMU design). See `doc/toolchain/toolchain-strategy.md`
+- **Compiler:** LLVM backend (planned). Calling convention and codegen strategy in toolchain doc
 - **Discrete build:** All design decisions must be feasible in 74xx discrete logic
 - **MUL/DIV/FP strategy:** Unified ALU (no separate long-latency unit). Multi-cycle ops use alu_start/alu_busy. MUL/DIV initially trapped as illegal instructions, SW emulated, hardware added incrementally. FPU follows same pattern with reserved alu_op slots.
 
@@ -16,7 +17,7 @@ Penumbra is a 32-bit RISC-like minicomputer designed from scratch and implemente
 The architecture is fully specified in `doc/`. Key specs:
 - **ISA:** `doc/isa/architecture-overview.md` — 4-format 32-bit encoding (R/L/M/B), 2-operand, R0=zero, 16 registers, ARM-style condition flags
 - **Datapath:** `doc/core/datapath.md` — three-bus (A/B/R), separate PC unit, 49-bit horizontal microcode, hardwired fetch unit, direct-mapped dispatch
-- **Microcode validation:** `doc/core/microcode-validation.md` — bit-level micro-programs for ADD, LDW, BEQ, interrupt entry, RTI; 17 issues found and resolved
+- **Microcode reference:** `doc/core/microcode-reference.md` — complete micro-word format, field reference, ROM layout, sequencer behavior, all implemented micro-routines, how to add new instructions
 - **Bus:** `doc/bus/bus-overview.md` — custom async Penumbra Bus (4-phase handshake), sync internal bus, sysreg sideband
 - **MMU/Cache:** `doc/mmu/mmu-overview.md` — software-managed 64-entry 2-way SA TLB, split I/D PIPT cache, write-through D-cache
 - **Sysregs:** `doc/isa/sysregs-reference.md` — programmer's reference for WRSYS/RDSYS: device map, register layouts, TLB packing, assembly recipes
@@ -76,7 +77,7 @@ The CPU runs real programs in simulation with the full CPU → MMU → cache →
 | Datapath top | `rtl/core/datapath.sv` | 15/15 | Structural wiring of all modules, IR reg, reg addr routing, F-bit gating |
 | Microcode ROM | `rtl/core/ucode_rom.sv` | — | 256×49-bit ROM, $readmemh from microcode.hex |
 | Sequencer | `rtl/core/sequencer.sv` | — | Micro-PC, branch_cond decode, EI/DI tracking, ei_shadow_clr |
-| CPU top | `rtl/core/cpu_top.sv` | 14 progs | Full integration: datapath + sequencer + ROM + MMU + sysid + cache + memory + fetch + IRQ + MMU traps + BREAK + privilege traps + WRSYS/RDSYS |
+| CPU top | `rtl/core/cpu_top.sv` | 16 progs | Full integration: datapath + sequencer + ROM + MMU + sysid + cache + memory + fetch + IRQ + MMU traps + BREAK + privilege traps + illegal instruction trap + WRSYS/RDSYS + BL |
 | Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_*, ACC_*, VEC_*, SYSDEV_*, SYSREG_* constants |
 | System ID | `rtl/soc/sysid.sv` | via cpu_top | Read-only MACHINE_ID register (Penumbra/1), sysreg device 1 |
 | TLB | `rtl/mmu/tlb.sv` | 111/111 | 64-entry 2-way SA, parallel lookup, one-hot permission check, indexed sysreg R/W |
@@ -85,7 +86,7 @@ The CPU runs real programs in simulation with the full CPU → MMU → cache →
 | Simple memory | `rtl/soc/simple_mem.sv` | — | 4K×32 synchronous SRAM model, $readmemh, 1-cycle read busy |
 
 ### Exception and Interrupt Handling
-Four sources share the same `except_entry` → `int_entry` → vector dispatch path:
+Five sources share the same `except_entry` → `int_entry` → vector dispatch path:
 
 **External IRQ (asynchronous):**
 - **Check point:** Dispatch-time (when `ir_valid` fires, before entering S_EXEC)
@@ -100,7 +101,7 @@ Four sources share the same `except_entry` → `int_entry` → vector dispatch p
 - **Action:** `fault_except` pulse (once per fault via `!fault_pending` guard) → `except_entry` saves EPC/ESR, sets S=1/I=0. Sequencer aborts STALL (`go_fetch`), returns to S_FETCH.
 - **Dispatch:** `fault_pending` flag overrides next dispatch to 0x70 with `fault_vector` (VEC_TLB_MISS=2 or VEC_TLB_PROT=3). Cleared when int_entry executes (`ctl_pc_load`), one cycle after dispatch — so `vector_num` reads the correct fault vector during int_entry.
 - **PC preservation:** PC is in HOLD during STALL, so EPC = faulting instruction. Handler can fill TLB and RTI to restart.
-- **Priority:** fault_pending > BREAK > priv_taken > IRQ (fault sets SR.I=0, so irq_taken is false at next dispatch)
+- **Priority:** fault_pending > illegal_pending > BREAK > priv_taken > IRQ (fault/illegal set SR.I=0, so irq_taken is false at next dispatch)
 - **Instruction fetch faults:** Not yet handled — kernel code assumed identity-mapped.
 
 **BREAK instruction (synchronous):**
@@ -114,7 +115,14 @@ Four sources share the same `except_entry` → `int_entry` → vector dispatch p
 - **Action:** Triggers `except_entry` like IRQ, vectors to VEC_PRIV (4). The instruction never executes — no state corruption. EPC points at the faulting instruction.
 - **Design:** Privilege was originally checked as the last micro-op (`branch=PRIV`), but this allowed the instruction to execute before trapping. Moved to dispatch time so the instruction is blocked before any micro-ops run.
 
-**Vector table:** Fixed **physical** addresses, MMU bypassed for the vector fetch. `vector_addr = {26'b0, vector_num, 2'b00}` — word-aligned entries at physical 0x00. VEC_RESET=0, VEC_IRQ=1, VEC_TLB_MISS=2, VEC_TLB_PROT=3, VEC_PRIV=4, VEC_SYSCALL=5, VEC_BREAK=6. After int_entry completes, `vector_fetch` flag forces MMU bypass for one fetch cycle, cleared on ir_valid. No TLB mapping needed for the vector page — eliminates nested TLB miss on exception entry.
+**Illegal instruction (synchronous):**
+- **Check point:** First micro-op of S_EXEC. Unused ROM entries are filled with a sentinel (`branch=7`, all other fields zero) by the microcode assembler.
+- **Detection:** Sequencer detects `branch == BR_ILLEGAL (3'd7)`, asserts `o_illegal`, and aborts to S_FETCH. cpu_top sets `illegal_pending`.
+- **Action:** `illegal_except` pulse → `except_entry` saves EPC/ESR, sets S=1/I=0. `illegal_pending` overrides next dispatch to 0x70 with VEC_ILLEGAL (7). Cleared at `ctl_pc_load` (same timing as fault_pending).
+- **PC preservation:** Sentinel has `pc=HOLD` (field=0), so EPC = the illegal instruction. Handler can emulate and IRET with EPC+4, or abort the process.
+- **Covers:** All undefined opcodes, reserved Format L/M/B encodings, unimplemented instructions (MUL/DIV/MOD dispatch to sentinel ROM entries).
+
+**Vector table:** Fixed **physical** addresses, MMU bypassed for the vector fetch. `vector_addr = {26'b0, vector_num, 2'b00}` — word-aligned entries at physical 0x00. VEC_RESET=0, VEC_IRQ=1, VEC_TLB_MISS=2, VEC_TLB_PROT=3, VEC_PRIV=4, VEC_SYSCALL=5, VEC_BREAK=6, VEC_ILLEGAL=7. After int_entry completes, `vector_fetch` flag forces MMU bypass for one fetch cycle, cleared on ir_valid. No TLB mapping needed for the vector page — eliminates nested TLB miss on exception entry.
 
 **Dispatch-time vector latching:** Dispatch-time exceptions (BREAK, priv, IRQ) use `dispatch_pending`/`dispatch_vector` to register the vector number when `ir_valid` fires. This is necessary because `vector_num` is consumed one cycle later by int_entry's `a_src=VECTOR`, but the combinational inputs (`mem_rdata`, `sr_s`) have changed by then — `mem_rdata` reads from MAR (not PC) during S_EXEC, and `sr_s` flips to 1 from `except_entry`. MMU faults already had this pattern via `fault_pending`/`fault_vector`.
 
@@ -150,15 +158,15 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 - **Test termination:** Programs end with `BREAK` instruction. Pass path: `LLI R1, #1` then fall through to `fail: BREAK`. Fail path: assertion `BNE fail` branches to `fail: BREAK`.
 - **Calling convention:** Return via RET (JMP R13). Program preamble sets LR and calls the test subroutine.
 
-### Implemented Microcode (37 micro-ops)
+### Implemented Microcode (39 micro-ops)
 | Category | Instructions | Notes |
 |----------|-------------|-------|
 | ALU (R-ALU, 0x00–0x1E) | ADD, SUB, AND, OR, XOR, SHL, SHR, SAR, MOV, NOT | CMP/TEST via F-bit gating on SUB/AND |
 | Immediate (Format L) | LLI, LLIS, LUI, INC, DEC, CMPI | |
 | Memory (Format M) | LDW (3 micro-ops), STW (4 micro-ops) | STALL-based, latency-agnostic |
-| Branch (Format B) | All 16 conditions via single BRT entry | BZ/BNZ aliases in assembler |
+| Branch (Format B) | Bcc (all 15 conditions via single BRT entry), BL (2 micro-ops) | BL saves PC+4 to R13, dispatches to 0x62; BZ/BNZ aliases in assembler |
 | System (R-SYS, 0x40–0x5E) | JMP, EI, DI, WRSYS, RDSYS, RTI, IRET, RDSPR, BREAK | RET = JMP R13 (pseudo); RTI/IRET/RDSYS are 2-micro-op; BREAK intercepted at dispatch |
-| Exception | int_entry | Shared by IRQ, MMU fault, BREAK, and privilege violation dispatch |
+| Exception | int_entry | Shared by IRQ, MMU fault, BREAK, privilege violation, and illegal instruction dispatch |
 
 ### Known Bugs Fixed (Notable)
 - **IR corruption from shared mem_rdata bus:** ir_valid lingered one cycle into S_EXEC, causing IR to reload when mem_rdata was muxed to sysreg data. Fix: `ir_load = ir_valid && fetch_active`.
@@ -169,8 +177,11 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 - **IRET assembled with wrong opcode:** Hardcoded `encode_format_r(31, ...)` instead of using table value (27). IRET dispatched to wrong ROM entry. Fix: use `op` from FORMAT_R_OPS lookup.
 
 ### Next Steps (in priority order)
-1. **Sub-word loads** — LDH/LDB/LDHS/LDBS (byte/half-word extraction in writeback path).
+1. **Sub-word loads/stores** — LDH/LDB/LDHS/LDBS/STH/STB (byte-lane extraction in writeback path, byte-enable generation).
 2. **More system ops** — SYSCALL, GETSR/SETSR, GETUSP/SETUSP.
-3. **BL (branch-and-link)** — Needs special handling to save PC+4 to LR; all branches currently share one dispatch entry.
-4. **Instruction fetch faults** — Detect TLB miss during fetch phase (separate from STALL-based data fault path).
-5. **Memory subsystem** — Cache, bus interface, real memory for hardware.
+3. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick.
+4. **UART** — Console I/O for first sign of life on real hardware.
+5. **Interrupt controller** — Multiple devices with priority encoding.
+6. **Instruction fetch faults** — Detect TLB miss during fetch phase (separate from STALL-based data fault path).
+7. **Memory subsystem** — Cache (replace cache_stub), SDRAM controller, bus interface.
+8. **LLVM backend** — Compiler toolchain for NetBSD port. See `doc/toolchain/toolchain-strategy.md`.

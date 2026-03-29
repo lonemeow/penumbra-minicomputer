@@ -114,7 +114,7 @@ SLOT_ZONES = [
     (0x00, 0x20, 2, "R-ALU"),         # 16 ×2 slots (ALU ops, op[4]=0)
     (0x20, 0x40, 4, "Format L"),      # 8 ×4 slots
     (0x40, 0x60, 2, "R-SYS"),         # 16 ×2 slots (system ops, op[4]=1)
-    (0x60, 0x61, 1, "Format B"),      # 1 single-entry slot
+    (0x60, 0x64, 2, "Format B"),      # 2 ×2 slots: Bcc (0x60), BL (0x62)
     (0x70, 0x71, 1, "Exception"),     # 1 single-entry slot (int_entry)
     (0x80, 0xC0, 4, "Format M"),      # 16 ×4 slots
 ]
@@ -205,9 +205,16 @@ def pack_word(field_values, line_num):
     return word
 
 
+# ── Illegal instruction sentinel ────────────────────────────
+# Unused ROM entries are filled with this value. The sequencer
+# detects branch=7 (BR_ILLEGAL) on the first micro-op and traps
+# to VEC_ILLEGAL. All other fields are zero (pc=HOLD, no side effects).
+ILLEGAL_SENTINEL = 7 << 5  # branch[7:5] = 111, everything else 0
+
+
 def assemble(source_lines):
     """Assemble source lines into ROM contents."""
-    rom = [0] * ROM_SIZE
+    rom = [ILLEGAL_SENTINEL] * ROM_SIZE
     addr = 0
     labels = {}
     errors = 0

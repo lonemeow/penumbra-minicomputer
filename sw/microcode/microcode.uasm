@@ -207,6 +207,15 @@ rdspr_epc:
 branch:
   pc=OFFSET branch=BRT
 
+# ── BL — Branch and Link (cond=1111, dispatch=0x62) ──────
+# Two micro-ops:
+#   Step 0: Save return address (PC+4) to R13 (link register)
+#   Step 1: Branch to PC+offset (unconditionally)
+.org 0x62
+bl:
+  reg_a=R15 bmux=CONST4 alu=ADD reg_w=R13 w_en=1 wmux=RBUS pc=HOLD branch=SEQ
+  pc=OFFSET
+
 # ═══════════════════════════════════════════════════════════════
 # Exception/interrupt entry (0x70)
 # Hardware has already saved EPC, ESR, set S=1, I=0

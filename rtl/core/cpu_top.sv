@@ -112,6 +112,7 @@ module cpu_top
     logic        ctl_sys_cycle, ctl_sys_we, ctl_alu_start;
     logic        ctl_pc_load;
     logic        ctl_ei_set, ctl_di_set, ctl_ei_shadow_clr;
+    logic        seq_illegal;
 
     sequencer u_sequencer (
         .i_clk           (i_clk),
@@ -149,6 +150,7 @@ module cpu_top
         .o_sys_we        (ctl_sys_we),
         .o_alu_start     (ctl_alu_start),
         .o_pc_load       (ctl_pc_load),
+        .o_illegal       (seq_illegal),
         .o_ei_set        (ctl_ei_set),
         .o_di_set        (ctl_di_set),
         .o_ei_shadow_clr (ctl_ei_shadow_clr)
@@ -214,7 +216,7 @@ module cpu_top
             2'b00:   dispatch_addr = {1'b0, mem_rdata[29], 1'b0, mem_rdata[28:25], 1'b0};
             2'b01:   dispatch_addr = {1'b0, 2'b01, mem_rdata[29:27], 2'b00};
             2'b10:   dispatch_addr = {2'b10, mem_rdata[29:26], 2'b00};
-            2'b11:   dispatch_addr = 8'h60;
+            2'b11:   dispatch_addr = (mem_rdata[29:26] == 4'b1111) ? 8'h62 : 8'h60;
             default: dispatch_addr = 8'h00;
         endcase
     end
@@ -243,7 +245,7 @@ module cpu_top
     //    trap to VEC_PRIV. The instruction never executes, so no
     //    state is corrupted.
     //
-    // Priority: fault_pending > BREAK > priv_taken > IRQ
+    // Priority: fault_pending > illegal_pending > BREAK > priv_taken > IRQ
 
     logic        irq_taken;
     logic        except_entry;
@@ -272,6 +274,24 @@ module cpu_top
             // (combinationally, fault_pending is still 1), then clears at posedge.
             fault_pending <= 1'b0;
         end
+    end
+
+    // ── Illegal instruction detection (from sequencer) ───────
+    // Detected during S_EXEC when the first micro-word has branch=7
+    // (sentinel value filled by uasm.py in unused ROM entries).
+    // Follows the same pending pattern as MMU faults.
+    logic        illegal_except;
+    logic        illegal_pending;
+
+    assign illegal_except = seq_illegal && !illegal_pending;
+
+    always_ff @(posedge i_clk) begin
+        if (i_rst)
+            illegal_pending <= 1'b0;
+        else if (illegal_except)
+            illegal_pending <= 1'b1;
+        else if (illegal_pending && ctl_pc_load)
+            illegal_pending <= 1'b0;
     end
 
     // BREAK detection at dispatch (dispatch_addr == 0x4A for op=21)
@@ -318,15 +338,17 @@ module cpu_top
         end
     end
 
-    assign except_entry = fault_except | (break_taken & ir_valid) |
+    assign except_entry = fault_except | illegal_except |
+                          (break_taken & ir_valid) |
                           (priv_taken & ir_valid) | (irq_taken & ir_valid);
     assign vector_num   = fault_pending   ? fault_vector :
+                          illegal_pending ? VEC_ILLEGAL :
                           dispatch_pending ? dispatch_vector :
                                              VEC_IRQ;
 
     // Override dispatch address when any exception taken
     logic [7:0] effective_dispatch;
-    assign effective_dispatch = (fault_pending | dispatch_pending | break_taken | priv_taken | irq_taken) ? 8'h70 : dispatch_addr;
+    assign effective_dispatch = (fault_pending | illegal_pending | dispatch_pending | break_taken | priv_taken | irq_taken) ? 8'h70 : dispatch_addr;
 
     // Debug observation: pulses when BREAK dispatches (testbench stop trigger)
     assign o_halted = break_taken & ir_valid;

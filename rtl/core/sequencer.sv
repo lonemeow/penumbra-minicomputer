@@ -61,6 +61,9 @@ module sequencer
     output logic        o_alu_start,
     output logic        o_pc_load,
 
+    // ── Illegal instruction detection ─────────────────────────
+    output logic        o_illegal,        // First micro-op is sentinel (branch=7)
+
     // ── EI/DI outputs ─────────────────────────────────────────
     output logic        o_ei_set,
     output logic        o_di_set,
@@ -131,7 +134,8 @@ module sequencer
     localparam logic [2:0] BR_BRT   = 3'd3;
     localparam logic [2:0] BR_BRF   = 3'd4;
     // BR_PRIV removed — privilege check moved to dispatch time in cpu_top
-    localparam logic [2:0] BR_SKIP  = 3'd6;
+    localparam logic [2:0] BR_SKIP    = 3'd6;
+    localparam logic [2:0] BR_ILLEGAL = 3'd7;
 
     // ── Unified busy signal ──────────────────────────────────
     logic busy;
@@ -158,9 +162,9 @@ module sequencer
             end
             BR_BRT:   go_fetch = 1'b1;
             BR_BRF:   go_fetch = 1'b1;
-            // BR_PRIV (3'd5) removed — privilege now checked at dispatch in cpu_top
-            BR_SKIP: advance = 1'b1;    // fwd_offset handled in next_upc calc
-            default: ;
+            BR_SKIP:    advance  = 1'b1;  // fwd_offset handled in next_upc calc
+            BR_ILLEGAL: go_fetch = 1'b1;  // Abort: unused ROM entry (sentinel)
+            default: ;  // 3'd5 unused (was BR_PRIV, now dispatch-time)
         endcase
     end
 
@@ -268,5 +272,8 @@ module sequencer
     end
 
     assign o_ei_shadow_clr = ei_pending & go_fetch & executing;
+
+    // ── Illegal instruction: sentinel detected on first micro-op ─
+    assign o_illegal = executing & (uw_branch == BR_ILLEGAL);
 
 endmodule
