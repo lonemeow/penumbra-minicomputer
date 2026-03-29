@@ -40,6 +40,7 @@ module regfile
     // Special inputs
     input  logic [31:0] i_pc,          // PC value — returned when reading R15
     input  logic        i_supervisor,  // SR.S bit — selects SSP (1) vs USP (0) for R14
+    input  logic        i_cross_bank,  // Access opposite R14 bank (GETUSP/SETUSP)
 
     // Debug read port (active all the time, no side effects)
     input  logic [3:0]  i_dbg_addr,    // Debug register address
@@ -71,23 +72,30 @@ module regfile
     // The read priority is:
     //   addr == 0  → return 0           (R0 hardwired zero)
     //   addr == 15 → return i_pc        (R15 is the PC)
-    //   addr == 14 → return ssp or usp  (banked by supervisor mode)
+    //   addr == 14 → return ssp or usp  (banked by supervisor mode, XOR cross_bank)
     //   else       → return regs[addr]  (general-purpose R1-R13)
+    //
+    // cross_bank flips the R14 bank select: in supervisor mode (normal: SSP),
+    // cross_bank=1 reads USP instead. Used by GETUSP/SETUSP microcode.
 
-    function automatic logic [31:0] read_reg(input logic [3:0] addr);
+    logic sp_select;  // 1=SSP, 0=USP (after cross_bank XOR)
+    assign sp_select = i_supervisor ^ i_cross_bank;
+
+    function automatic logic [31:0] read_reg(input logic [3:0] addr,
+                                             input logic        sp_sel);
         if (addr == REG_ZERO)
             read_reg = 32'd0;
         else if (addr == REG_SP)
-            read_reg = i_supervisor ? ssp : usp;
+            read_reg = sp_sel ? ssp : usp;
         else if (addr == REG_PC)
             read_reg = i_pc;
         else
             read_reg = regs[addr];
     endfunction
 
-    assign o_rd_data_a = read_reg(i_rd_addr_a);
-    assign o_rd_data_b = read_reg(i_rd_addr_b);
-    assign o_dbg_data  = read_reg(i_dbg_addr);
+    assign o_rd_data_a = read_reg(i_rd_addr_a, sp_select);
+    assign o_rd_data_b = read_reg(i_rd_addr_b, sp_select);
+    assign o_dbg_data  = read_reg(i_dbg_addr, i_supervisor);
 
     // ── Write logic (synchronous) ───────────────────────────────
     // `always_ff @(posedge i_clk)` = "on every rising clock edge, do this"
@@ -111,8 +119,8 @@ module regfile
             if (i_wr_addr == REG_ZERO || i_wr_addr == REG_PC) begin
                 // Writes to R0 and R15 are silently discarded
             end else if (i_wr_addr == REG_SP) begin
-                // R14 writes go to the active bank
-                if (i_supervisor)
+                // R14 writes go to the active bank (cross_bank flips)
+                if (sp_select)
                     ssp <= i_wr_data;
                 else
                     usp <= i_wr_data;

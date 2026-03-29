@@ -16,7 +16,7 @@ Penumbra is a 32-bit RISC-like minicomputer designed from scratch and implemente
 ## Architecture Summary
 The architecture is fully specified in `doc/`. Key specs:
 - **ISA:** `doc/isa/architecture-overview.md` — 4-format 32-bit encoding (R/L/M/B), 2-operand, R0=zero, 16 registers, ARM-style condition flags
-- **Datapath:** `doc/core/datapath.md` — three-bus (A/B/R), separate PC unit, 49-bit horizontal microcode, hardwired fetch unit, direct-mapped dispatch
+- **Datapath:** `doc/core/datapath.md` — three-bus (A/B/R), separate PC unit, 50-bit horizontal microcode, hardwired fetch unit, direct-mapped dispatch
 - **Microcode reference:** `doc/core/microcode-reference.md` — complete micro-word format, field reference, ROM layout, sequencer behavior, all implemented micro-routines, how to add new instructions
 - **Bus:** `doc/bus/bus-overview.md` — custom async Penumbra Bus (4-phase handshake), sync internal bus, sysreg sideband
 - **MMU/Cache:** `doc/mmu/mmu-overview.md` — software-managed 64-entry 2-way SA TLB, split I/D PIPT cache, write-through D-cache
@@ -41,7 +41,7 @@ The architecture is fully specified in `doc/`. Key specs:
 ### Naming: Hardware vs Software Terminology
 - **Supervisor** = hardware privilege level (SR.S bit, CPU mode). Use for anything the CPU implements: supervisor mode, supervisor stack pointer (SSP), "privileged / supervisor-only".
 - **Kernel** = OS software running in supervisor mode. Use when referring to the OS: kernel code, kernel handler, kernel pages, kernel-only (TLB access control from the programmer's perspective).
-- **Special-purpose registers (SPRs)** = CPU-internal registers accessed via `RDSPR` (EPC, ESR). Not device-mapped sysregs. Named from the programmer's perspective, not microarchitecture — e.g. EPC/ESR ("exception PC/SR"), not "shadow PC/SR" (implementation detail). Written only by hardware (exception entry) or restored by `ERET`.
+- **Special-purpose registers (SPRs)** = CPU-internal registers accessed via `RDSPR`/`WRSPR` (EPC, ESR, USP). Not device-mapped sysregs. Named from the programmer's perspective, not microarchitecture — e.g. EPC/ESR ("exception PC/SR"), not "shadow PC/SR" (implementation detail). EPC/ESR written only by hardware (exception entry) or restored by `ERET`. USP accessed via `RDSPR Rd, USP` / `WRSPR USP, Rd` using the cross_bank micro-word bit (bit 49) to reach the banked-away user stack pointer from supervisor mode.
 - **System registers (sysregs)** = device-mapped registers on the sysreg bus, accessed via `WRSYS`/`RDSYS` (MMU control, TLB entries, system ID). These belong to peripheral devices, not the CPU core.
 
 ## Build System
@@ -75,9 +75,9 @@ The CPU runs real programs in simulation with the full CPU → MMU → cache →
 | MAR | `rtl/core/mar.sv` | 6/6 | Memory address register, loads from R-bus |
 | MDR | `rtl/core/mdr.sv` | 7/7 | Memory data register, loads from memory or A-bus |
 | Datapath top | `rtl/core/datapath.sv` | 15/15 | Structural wiring of all modules, IR reg, reg addr routing, F-bit gating |
-| Microcode ROM | `rtl/core/ucode_rom.sv` | — | 256×49-bit ROM, $readmemh from microcode.hex |
+| Microcode ROM | `rtl/core/ucode_rom.sv` | — | 256×50-bit ROM, $readmemh from microcode.hex |
 | Sequencer | `rtl/core/sequencer.sv` | — | Micro-PC, branch_cond decode, EI/DI tracking, ei_shadow_clr |
-| CPU top | `rtl/core/cpu_top.sv` | 17 progs | Full integration: datapath + sequencer + ROM + MMU + sysid + cache + memory + fetch + IRQ + MMU traps + BREAK + SYSCALL + privilege traps + illegal instruction trap + WRSYS/RDSYS + BL |
+| CPU top | `rtl/core/cpu_top.sv` | 18 progs | Full integration: datapath + sequencer + ROM + MMU + sysid + cache + memory + fetch + IRQ + MMU traps + BREAK + SYSCALL + privilege traps + illegal instruction trap + WRSYS/RDSYS + RDSPR/WRSPR + BL |
 | Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_*, ACC_*, VEC_*, SYSDEV_*, SYSREG_* constants |
 | System ID | `rtl/soc/sysid.sv` | via cpu_top | Read-only MACHINE_ID register (Penumbra/1), sysreg device 1 |
 | TLB | `rtl/mmu/tlb.sv` | 111/111 | 64-entry 2-way SA, parallel lookup, one-hot permission check, indexed sysreg R/W |
@@ -154,7 +154,7 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 
 ### Software Tools
 - **Microcode assembler** (`sw/tools/uasm.py`): Symbolic microcode → $readmemh hex. Defaults: `pc=NEXT branch=FETCH`. Validates slot boundaries (detects multi-step routines that overflow their dispatch slot). Run: `python3 sw/tools/uasm.py input.uasm -o microcode.hex`
-- **ISA assembler** (`sw/tools/pasm.py`): Two-pass assembler for Penumbra ISA → $readmemh hex. All 4 formats (R/L/M/B), labels, label references in Format L immediates, pseudo-ops (NOP, RET), branch aliases (BZ/BNZ), `.equ` named constants, built-in sysreg constants (`#MMU`, `#TLB_INDEX`, `#TLB_V`, etc.). Smart mnemonic routing: ADD/SUB/CMP auto-select Format R (reg) or Format L (imm); ERET unifies exception return (0 args = EPC/ESR, 2 args = explicit). Run: `python3 sw/tools/pasm.py input.s -o program.hex`
+- **ISA assembler** (`sw/tools/pasm.py`): Two-pass assembler for Penumbra ISA → $readmemh hex. All 4 formats (R/L/M/B), labels, label references in Format L immediates, pseudo-ops (NOP, RET), branch aliases (BZ/BNZ), `.equ` named constants, built-in sysreg constants (`#MMU`, `#TLB_INDEX`, `#TLB_V`, etc.). Smart mnemonic routing: ADD/SUB/CMP auto-select Format R (reg) or Format L (imm); ERET unifies exception return (0 args = EPC/ESR, 2 args = explicit); RDSPR/WRSPR route to per-SPR opcodes (ESR, EPC, USP). GETUSP/SETUSP accepted as legacy aliases. Run: `python3 sw/tools/pasm.py input.s -o program.hex`
 - Makefile auto-assembles `.s`/`.uasm` sources into root-level `program.hex`/`microcode.hex` for `$readmemh`; hex files are build artifacts (gitignored)
 
 ### Test Convention
@@ -171,7 +171,7 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 | Immediate (Format L) | LLI, LLIS, LUI, ADD #imm, SUB #imm, CMP #imm | Formerly INC/DEC/CMPI (still accepted as aliases) |
 | Memory (Format M) | LDW (3 micro-ops), STW (4 micro-ops) | STALL-based, latency-agnostic |
 | Branch (Format B) | Bcc (all 15 conditions via single BRT entry), BL (2 micro-ops) | BL saves PC+4 to R13, dispatches to 0x62; BZ/BNZ aliases in assembler |
-| System (R-SYS, 0x40–0x5E) | JMP, EI, DI, WRSYS, RDSYS, ERET, ERET Rd/Rs, RDSPR, SYSCALL, BREAK | RET = JMP R13 (pseudo); ERET/RDSYS are 2-micro-op; SYSCALL/BREAK intercepted at dispatch |
+| System (R-SYS, 0x40–0x5E) | JMP, EI, DI, WRSYS, RDSYS, ERET, ERET Rd/Rs, RDSPR, WRSPR, SYSCALL, BREAK | RET = JMP R13 (pseudo); ERET/RDSYS are 2-micro-op; SYSCALL/BREAK intercepted at dispatch; RDSPR/WRSPR use cross_bank for USP |
 | Exception | int_entry | Shared by IRQ, MMU fault, BREAK, privilege violation, and illegal instruction dispatch |
 
 ### Known Bugs Fixed (Notable)
@@ -184,7 +184,7 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 
 ### Next Steps (in priority order)
 1. **Sub-word loads/stores** — LDH/LDB/LDHS/LDBS/STH/STB (byte-lane extraction in writeback path, byte-enable generation).
-2. **More system ops** — GETSR/SETSR, GETUSP/SETUSP.
+2. **More system ops** — GETSR/SETSR (if needed).
 3. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick.
 4. **UART** — Console I/O for first sign of life on real hardware.
 5. **Interrupt controller** — Multiple devices with priority encoding.

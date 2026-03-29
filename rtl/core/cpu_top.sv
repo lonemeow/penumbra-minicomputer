@@ -78,7 +78,7 @@ module cpu_top
     // Microcode ROM
     // ══════════════════════════════════════════════════════════
     logic [7:0]  upc;
-    logic [48:0] uword;
+    logic [49:0] uword;
 
     ucode_rom u_ucode_rom (
         .i_addr  (upc),
@@ -111,6 +111,7 @@ module cpu_top
     logic [2:0]  ctl_pc_src;
     logic        ctl_sys_cycle, ctl_sys_we, ctl_alu_start;
     logic        ctl_pc_load;
+    logic        ctl_cross_bank;
     logic        ctl_ei_set, ctl_di_set, ctl_ei_shadow_clr;
     logic        seq_illegal;
 
@@ -151,6 +152,7 @@ module cpu_top
         .o_alu_start     (ctl_alu_start),
         .o_pc_load       (ctl_pc_load),
         .o_illegal       (seq_illegal),
+        .o_cross_bank    (ctl_cross_bank),
         .o_ei_set        (ctl_ei_set),
         .o_di_set        (ctl_di_set),
         .o_ei_shadow_clr (ctl_ei_shadow_clr)
@@ -494,6 +496,7 @@ module cpu_top
         .i_pc_src       (ctl_pc_src),
         .i_alu_start    (ctl_alu_start),
         .i_pc_load      (ctl_pc_load),
+        .i_cross_bank   (ctl_cross_bank),
 
         // Exception / interrupt entry
         .i_except_entry (except_entry),

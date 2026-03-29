@@ -38,6 +38,7 @@ module datapath
     input  logic [2:0]  i_pc_src,       // PC source mux
     input  logic        i_alu_start,    // Start multi-cycle ALU op
     input  logic        i_pc_load,      // Load PC from pc_mux output
+    input  logic        i_cross_bank,   // R14 opposite bank (GETUSP/SETUSP)
 
     // ══════════════════════════════════════════════════════════════
     // Exception / interrupt control (from fetch unit)
@@ -244,6 +245,7 @@ module datapath
         .i_wr_en      (actual_w_en),
         .i_pc         (pc_value),
         .i_supervisor  (sr_s_wire),
+        .i_cross_bank  (i_cross_bank),
         .i_dbg_addr    (i_dbg_reg_addr),
         .o_dbg_data    (o_dbg_reg_data)
     );

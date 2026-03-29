@@ -3,7 +3,7 @@
 //
 // Manages the micro-PC that indexes into the microcode ROM, decodes
 // branch_cond to determine the next micro-PC, and fans out the packed
-// 49-bit micro-word into individual control signals for the datapath.
+// 50-bit micro-word into individual control signals for the datapath.
 //
 // States:
 //   FETCH — waiting for fetch unit to provide a new dispatch address
@@ -33,7 +33,7 @@ module sequencer
     // ── Microcode ROM interface ──────────────────────────────
     output logic [7:0]  o_upc,            // Micro-PC → ROM address
     // verilator lint_off UNUSEDSIGNAL
-    input  logic [48:0] i_uword,          // Micro-word from ROM (bits 1:0 are spare)
+    input  logic [49:0] i_uword,          // Micro-word from ROM
     // verilator lint_on UNUSEDSIGNAL
 
     // ── Datapath control outputs (decoded micro-word) ────────
@@ -64,6 +64,9 @@ module sequencer
     // ── Illegal instruction detection ─────────────────────────
     output logic        o_illegal,        // First micro-op is sentinel (branch=7)
 
+    // ── Register bank crossing ────────────────────────────────
+    output logic        o_cross_bank,    // R14 accesses opposite bank (GETUSP/SETUSP)
+
     // ── EI/DI outputs ─────────────────────────────────────────
     output logic        o_ei_set,
     output logic        o_di_set,
@@ -80,7 +83,8 @@ module sequencer
     logic [7:0] upc, next_upc;
 
     // ── Micro-word field extraction ──────────────────────────
-    // Extract from the 49-bit packed word (bits 48:0)
+    // Extract from the 50-bit packed word (bits 49:0)
+    logic        uw_cross_bank;
     logic [1:0]  uw_a_src;
     logic [3:0]  uw_reg_a, uw_reg_b, uw_reg_w;
     logic        uw_w_en;
@@ -100,6 +104,7 @@ module sequencer
     logic        uw_ei_set;
     logic        uw_di_set;
 
+    assign uw_cross_bank   = i_uword[49];
     assign uw_a_src        = i_uword[48:47];
     assign uw_reg_a        = i_uword[46:43];
     assign uw_reg_b        = i_uword[42:39];
@@ -252,6 +257,9 @@ module sequencer
     assign o_alu_start   = executing ? uw_alu_start    : 1'b0;
     assign o_pc_load     = executing;  // PC loads from mux every exec cycle
                                        // (pc_src=HOLD is a safe no-op)
+
+    // ── Cross-bank (GETUSP/SETUSP) ─────────────────────────────
+    assign o_cross_bank = executing ? uw_cross_bank : 1'b0;
 
     // ── EI/DI decode and ei_shadow_clr tracking ───────────────
     assign o_ei_set = executing ? uw_ei_set : 1'b0;

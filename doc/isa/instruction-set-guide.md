@@ -264,8 +264,8 @@ my_function:
 | ERET | `ERET Rd, Rs` | Exception return: SR = Rd, PC = Rs | Yes |
 | GETSR | `GETSR Rd` | Rd = SR | No |
 | SETSR | `SETSR Rs` | SR = Rs | Yes |
-| GETUSP | `GETUSP Rd` | Rd = user stack pointer (banked-away) | Yes |
-| SETUSP | `SETUSP Rs` | User stack pointer = Rs | Yes |
+| RDSPR | `RDSPR Rd, USP` | Rd = user stack pointer (banked-away) | Yes |
+| WRSPR | `WRSPR USP, Rd` | User stack pointer = Rd | Yes |
 | SYSCALL | `SYSCALL` | Trap to vector 5 (system call) | No |
 | BREAK | `BREAK` | Trap to vector 6 (debug breakpoint) | No |
 | ICACHE_INV | `ICACHE_INV` | Invalidate instruction cache | Yes |
@@ -409,10 +409,10 @@ All instructions are 32 bits. Bits [31:30] select one of four formats.
 | 1 | SUB | 9 | NOT | 17 | RDSYS | 25 | EI |
 | 2 | AND | 10 | MUL | 18 | GETSR | 26 | DI |
 | 3 | OR | 11 | MULU | 19 | SETSR | 27 | ERET Rd,Rs |
-| 4 | XOR | 12 | DIV | 20 | SYSCALL | 28 | (reserved) |
+| 4 | XOR | 12 | DIV | 20 | SYSCALL | 28 | WRSPR USP |
 | 5 | SHL | 13 | DIVU | 21 | BREAK | 29 | RDSPR ESR |
 | 6 | SHR | 14 | MOD | 22 | ERET | 30 | RDSPR EPC |
-| 7 | SAR | 15 | MODU | 23 | ICACHE_INV | 31 | GETUSP |
+| 7 | SAR | 15 | MODU | 23 | ICACHE_INV | 31 | RDSPR USP |
 
 ### Format L -- Immediate Operations (bits [31:30] = 01)
 
@@ -502,7 +502,7 @@ assembler but do not yet have microcode.
 | ERET | Yes | Both forms (EPC/ESR and Rd/Rs) |
 | BREAK | Yes | Trap to vector 6 |
 | GETSR, SETSR | No | |
-| GETUSP, SETUSP | No | |
+| RDSPR USP, WRSPR USP | Yes | cross_bank micro-word bit; GETUSP/SETUSP accepted as aliases |
 | SYSCALL | Yes | Trap to vector 5, unprivileged |
 | ICACHE_INV | No | |
 | NOP (pseudo) | Yes | ADD R0, R0 |

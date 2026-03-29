@@ -35,6 +35,9 @@ import re
 # Fields are listed MSB-first matching the spec.
 
 FIELDS = [
+    ("cross_bank", 49, 49, {
+        # 1-bit: R14 accesses opposite bank (GETUSP/SETUSP)
+    }),
     ("a_src", 48, 47, {
         "REG": 0, "ESR": 1, "EPC": 2, "VECTOR": 3,
     }),
@@ -104,7 +107,7 @@ for name, hi, lo, syms in FIELDS:
     FIELD_MAP[name] = (hi, lo, syms)
 
 ROM_SIZE = 256
-WORD_BITS = 49  # bits 48:0
+WORD_BITS = 50  # bits 49:0
 
 # ── Dispatch slot layout ─────────────────────────────────────
 # Each zone defines a contiguous range of ROM addresses with a fixed
