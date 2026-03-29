@@ -3,7 +3,7 @@
 //
 // Manages the micro-PC that indexes into the microcode ROM, decodes
 // branch_cond to determine the next micro-PC, and fans out the packed
-// 50-bit micro-word into individual control signals for the datapath.
+// 51-bit micro-word into individual control signals for the datapath.
 //
 // States:
 //   FETCH — waiting for fetch unit to provide a new dispatch address
@@ -28,12 +28,12 @@ module sequencer
     input  logic        i_mem_busy,       // Memory/cache busy
     input  logic        i_mem_fault,      // MMU fault (TLB miss / protection)
     input  logic        i_cond_result,    // Condition evaluator output
-    // i_sr_s removed — privilege check moved to dispatch time in cpu_top
+    input  logic        i_sr_s,           // Supervisor mode (for priv bit check)
 
     // ── Microcode ROM interface ──────────────────────────────
     output logic [7:0]  o_upc,            // Micro-PC → ROM address
     // verilator lint_off UNUSEDSIGNAL
-    input  logic [49:0] i_uword,          // Micro-word from ROM
+    input  logic [50:0] i_uword,          // Micro-word from ROM
     // verilator lint_on UNUSEDSIGNAL
 
     // ── Datapath control outputs (decoded micro-word) ────────
@@ -61,8 +61,9 @@ module sequencer
     output logic        o_alu_start,
     output logic        o_pc_load,
 
-    // ── Illegal instruction detection ─────────────────────────
+    // ── Illegal instruction / privilege violation detection ─────
     output logic        o_illegal,        // First micro-op is sentinel (branch=7)
+    output logic        o_priv_violation, // First micro-op has priv=1 in user mode
 
     // ── Register bank crossing ────────────────────────────────
     output logic        o_cross_bank,    // R14 accesses opposite bank (GETUSP/SETUSP)
@@ -83,7 +84,8 @@ module sequencer
     logic [7:0] upc, next_upc;
 
     // ── Micro-word field extraction ──────────────────────────
-    // Extract from the 50-bit packed word (bits 49:0)
+    // Extract from the 51-bit packed word (bits 50:0)
+    logic        uw_priv;
     logic        uw_cross_bank;
     logic [1:0]  uw_a_src;
     logic [3:0]  uw_reg_a, uw_reg_b, uw_reg_w;
@@ -104,6 +106,7 @@ module sequencer
     logic        uw_ei_set;
     logic        uw_di_set;
 
+    assign uw_priv         = i_uword[50];
     assign uw_cross_bank   = i_uword[49];
     assign uw_a_src        = i_uword[48:47];
     assign uw_reg_a        = i_uword[46:43];
@@ -169,7 +172,7 @@ module sequencer
             BR_BRF:   go_fetch = 1'b1;
             BR_SKIP:    advance  = 1'b1;  // fwd_offset handled in next_upc calc
             BR_ILLEGAL: go_fetch = 1'b1;  // Abort: unused ROM entry (sentinel)
-            default: ;  // 3'd5 unused (was BR_PRIV, now dispatch-time)
+            default: ;  // 3'd5 unused
         endcase
     end
 
@@ -227,43 +230,51 @@ module sequencer
     logic executing;
     assign executing = (state == S_EXEC);
 
-    assign o_upc         = upc;
-    assign o_fetch_go    = (state == S_EXEC) && go_fetch;
+    // ── Privilege check: suppress all enables on priv violation ─
+    // priv=1 in micro-word + user mode → block execution, abort to fetch.
+    // In discrete: one AND gate (priv & !SR.S) per enable line.
+    logic priv_block;
+    assign priv_block = executing & uw_priv & !i_sr_s;
 
-    assign o_a_src       = executing ? uw_a_src        : 2'b0;
-    assign o_reg_a_sel   = executing ? uw_reg_a        : 4'b0;
-    assign o_reg_b_sel   = executing ? uw_reg_b        : 4'b0;
-    // reg_w_sel is NOT gated by executing — it must remain stable through
-    // the posedge where the last micro-op's write completes. The write
-    // enable (w_en) is gated, so a stale address during S_FETCH is harmless.
+    logic exec_en;  // executing AND not blocked by privilege
+    assign exec_en = executing & !priv_block;
+
+    assign o_upc         = upc;
+    assign o_fetch_go    = (state == S_EXEC) && (go_fetch || priv_block);
+
+    assign o_a_src       = exec_en ? uw_a_src        : 2'b0;
+    assign o_reg_a_sel   = exec_en ? uw_reg_a        : 4'b0;
+    assign o_reg_b_sel   = exec_en ? uw_reg_b        : 4'b0;
+    // reg_w_sel is NOT gated — it must remain stable through the posedge
+    // where the last micro-op's write completes. w_en is gated, so a
+    // stale address during S_FETCH or priv_block is harmless.
     assign o_reg_w_sel   = uw_reg_w;
-    assign o_reg_w_en    = executing ? uw_w_en         : 1'b0;
-    assign o_alu_op      = executing ? uw_alu_op       : 5'b0;
-    assign o_b_mux_sel   = executing ? uw_bmux         : 2'b0;
+    assign o_reg_w_en    = exec_en ? uw_w_en         : 1'b0;
+    assign o_alu_op      = exec_en ? uw_alu_op       : 5'b0;
+    assign o_b_mux_sel   = exec_en ? uw_bmux         : 2'b0;
     assign o_w_mux_sel   = uw_wmux;  // Not gated — must be stable at write posedge
-    assign o_imm_mode    = executing ? uw_imm_mode     : 2'b0;
-    assign o_flag_w_en   = executing ? uw_flag_w_en    : 1'b0;
-    assign o_sr_load     = executing ? uw_sr_load      : 1'b0;
-    assign o_mar_load    = executing ? uw_mar_load     : 1'b0;
-    assign o_mdr_load_mem= executing ? uw_mdr_load_mem : 1'b0;
-    assign o_mdr_load_a  = executing ? uw_mdr_load_a   : 1'b0;
-    assign o_mem_read    = executing ? uw_mem_read     : 1'b0;
-    assign o_mem_write   = executing ? uw_mem_write    : 1'b0;
-    assign o_mem_size    = executing ? uw_mem_size     : 2'b0;
-    assign o_sign_ext    = executing ? uw_sign_ext     : 1'b0;
-    assign o_pc_src      = executing ? effective_pc_src : 3'b0;
-    assign o_sys_cycle   = executing ? uw_sys_cycle    : 1'b0;
-    assign o_sys_we      = executing ? uw_sys_we       : 1'b0;
-    assign o_alu_start   = executing ? uw_alu_start    : 1'b0;
-    assign o_pc_load     = executing;  // PC loads from mux every exec cycle
-                                       // (pc_src=HOLD is a safe no-op)
+    assign o_imm_mode    = exec_en ? uw_imm_mode     : 2'b0;
+    assign o_flag_w_en   = exec_en ? uw_flag_w_en    : 1'b0;
+    assign o_sr_load     = exec_en ? uw_sr_load      : 1'b0;
+    assign o_mar_load    = exec_en ? uw_mar_load     : 1'b0;
+    assign o_mdr_load_mem= exec_en ? uw_mdr_load_mem : 1'b0;
+    assign o_mdr_load_a  = exec_en ? uw_mdr_load_a   : 1'b0;
+    assign o_mem_read    = exec_en ? uw_mem_read     : 1'b0;
+    assign o_mem_write   = exec_en ? uw_mem_write    : 1'b0;
+    assign o_mem_size    = exec_en ? uw_mem_size     : 2'b0;
+    assign o_sign_ext    = exec_en ? uw_sign_ext     : 1'b0;
+    assign o_pc_src      = exec_en ? effective_pc_src : 3'b0;
+    assign o_sys_cycle   = exec_en ? uw_sys_cycle    : 1'b0;
+    assign o_sys_we      = exec_en ? uw_sys_we       : 1'b0;
+    assign o_alu_start   = exec_en ? uw_alu_start    : 1'b0;
+    assign o_pc_load     = exec_en;   // Suppressed on priv violation (no PC change)
 
     // ── Cross-bank (GETUSP/SETUSP) ─────────────────────────────
-    assign o_cross_bank = executing ? uw_cross_bank : 1'b0;
+    assign o_cross_bank = exec_en ? uw_cross_bank : 1'b0;
 
     // ── EI/DI decode and ei_shadow_clr tracking ───────────────
-    assign o_ei_set = executing ? uw_ei_set : 1'b0;
-    assign o_di_set = executing ? uw_di_set : 1'b0;
+    assign o_ei_set = exec_en ? uw_ei_set : 1'b0;
+    assign o_di_set = exec_en ? uw_di_set : 1'b0;
 
     // ei_pending tracks that EI executed; the NEXT go_fetch clears ei_shadow
     logic ei_pending;
@@ -283,5 +294,8 @@ module sequencer
 
     // ── Illegal instruction: sentinel detected on first micro-op ─
     assign o_illegal = executing & (uw_branch == BR_ILLEGAL);
+
+    // ── Privilege violation: priv=1 attempted in user mode ────────
+    assign o_priv_violation = priv_block;
 
 endmodule

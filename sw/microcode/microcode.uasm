@@ -124,10 +124,10 @@ cmpi:
 # ── WRSYS Rd, #dev, #reg (op=16, dispatch=0x40) ──────────────
 # Write register Rd to system register. A-bus carries Rd value,
 # sys_cycle + sys_we tell the target device to latch it.
-# Privileged — cpu_top blocks dispatch in user mode (VEC_PRIV trap).
+# Privileged — priv=1 checked by sequencer on first micro-op.
 .org 0x40
 wrsys:
-  reg_a=IR_RD sys_cycle=1 sys_we=1
+  priv=1 reg_a=IR_RD sys_cycle=1 sys_we=1
 
 # ── RDSYS Rd, #dev, #reg (op=17, dispatch=0x42) ──────────────
 # Read system register into Rd. Two micro-ops:
@@ -137,7 +137,7 @@ wrsys:
 # Privileged.
 .org 0x42
 rdsys:
-  sys_cycle=1 mdr_load_mem=1 pc=HOLD branch=SEQ
+  priv=1 sys_cycle=1 mdr_load_mem=1 pc=HOLD branch=SEQ
   reg_w=IR_RD w_en=1 wmux=MDR
 
 # ── SYSCALL (op=20, dispatch=0x48) ────────────────────────────
@@ -161,7 +161,7 @@ rdsys:
 # Step 1: EPC → A-bus → PC (jumps back to interrupted instruction)
 .org 0x4C
 rti:
-  a_src=ESR alu=PASS_A sr_load=1 pc=HOLD branch=SEQ
+  priv=1 a_src=ESR alu=PASS_A sr_load=1 pc=HOLD branch=SEQ
   a_src=EPC pc=ABUS
 
 # ── JMP Rs (op=24, dispatch=0x50) ────────────────────────────
@@ -174,13 +174,13 @@ jmp:
 # Enable interrupts: SR.I = 1, delayed by one instruction (ei_shadow)
 .org 0x52
 ei:
-  ei_set=1
+  priv=1 ei_set=1
 
 # ── DI (op=26, dispatch=0x54) ────────────────────────────────
 # Disable interrupts: SR.I = 0, immediate effect (privileged)
 .org 0x54
 di:
-  di_set=1
+  priv=1 di_set=1
 
 # ── ERET Rd, Rs (op=27, dispatch=0x56) ───────────────────────
 # Exception return to explicit context: SR ← Rd, PC ← Rs.
@@ -189,7 +189,7 @@ di:
 # Privileged.
 .org 0x56
 iret:
-  reg_a=IR_RD alu=PASS_A sr_load=1 pc=HOLD branch=SEQ
+  priv=1 reg_a=IR_RD alu=PASS_A sr_load=1 pc=HOLD branch=SEQ
   reg_a=IR_RS pc=ABUS
 
 # ── WRSPR USP, Rd (op=28, dispatch=0x58) ──────────────────────
@@ -197,28 +197,28 @@ iret:
 # Rd → A-bus → ALU PASS_A → R-bus → R14 (cross_bank: writes USP not SSP)
 .org 0x58
 wrspr_usp:
-  reg_a=IR_RD alu=PASS_A reg_w=R14 w_en=1 wmux=RBUS cross_bank=1
+  priv=1 reg_a=IR_RD alu=PASS_A reg_w=R14 w_en=1 wmux=RBUS cross_bank=1
 
 # ── RDSPR Rd, ESR (op=29, dispatch=0x5A) ──────────────────────
 # Read ESR into Rd. Privileged.
 # ESR → A-bus → ALU PASS_A → R-bus → Rd
 .org 0x5A
 rdspr_esr:
-  a_src=ESR alu=PASS_A reg_w=IR_RD w_en=1 wmux=RBUS
+  priv=1 a_src=ESR alu=PASS_A reg_w=IR_RD w_en=1 wmux=RBUS
 
 # ── RDSPR Rd, EPC (op=30, dispatch=0x5C) ──────────────────────
 # Read EPC into Rd. Privileged.
 # EPC → A-bus → ALU PASS_A → R-bus → Rd
 .org 0x5C
 rdspr_epc:
-  a_src=EPC alu=PASS_A reg_w=IR_RD w_en=1 wmux=RBUS
+  priv=1 a_src=EPC alu=PASS_A reg_w=IR_RD w_en=1 wmux=RBUS
 
 # ── RDSPR Rd, USP (op=31, dispatch=0x5E) ──────────────────────
 # Read banked-away user stack pointer into Rd. Privileged.
 # R14 (cross_bank: reads USP not SSP) → A-bus → ALU PASS_A → R-bus → Rd
 .org 0x5E
 rdspr_usp:
-  reg_a=R14 alu=PASS_A reg_w=IR_RD w_en=1 wmux=RBUS cross_bank=1
+  priv=1 reg_a=R14 alu=PASS_A reg_w=IR_RD w_en=1 wmux=RBUS cross_bank=1
 
 # ═══════════════════════════════════════════════════════════════
 # Format B — Branches (0x60)

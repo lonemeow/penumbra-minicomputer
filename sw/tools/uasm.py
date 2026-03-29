@@ -35,6 +35,9 @@ import re
 # Fields are listed MSB-first matching the spec.
 
 FIELDS = [
+    ("priv", 50, 50, {
+        # 1-bit: privileged instruction (sequencer checks on first micro-op)
+    }),
     ("cross_bank", 49, 49, {
         # 1-bit: R14 accesses opposite bank (GETUSP/SETUSP)
     }),
@@ -107,7 +110,7 @@ for name, hi, lo, syms in FIELDS:
     FIELD_MAP[name] = (hi, lo, syms)
 
 ROM_SIZE = 256
-WORD_BITS = 50  # bits 49:0
+WORD_BITS = 51  # bits 50:0
 
 # ── Dispatch slot layout ─────────────────────────────────────
 # Each zone defines a contiguous range of ROM addresses with a fixed
