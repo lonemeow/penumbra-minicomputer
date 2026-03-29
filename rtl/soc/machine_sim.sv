@@ -74,7 +74,7 @@ module machine_sim
     // ══════════════════════════════════════════════════════════
     // Simple synchronous memory (simulation backing store)
     // ══════════════════════════════════════════════════════════
-    simple_mem u_mem (
+    simple_mem #(.MEM_WORDS(4 * 1024 * 1024)) u_mem (   // 16 MB
         .i_clk     (i_clk),
         .i_rst     (i_rst),
         .i_addr    (mem_addr),

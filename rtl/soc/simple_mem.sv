@@ -1,8 +1,11 @@
 // Penumbra Simple Memory — synchronous SRAM model for simulation
 //
-// 4K words (16 KB), word-addressed. Loads program.hex at init.
+// Parameterizable size, word-addressed. Loads program.hex at init.
 // Synchronous read with 1-cycle latency, synchronous write.
 // Provides busy signal for the STALL mechanism.
+//
+// Addresses wrap modulo MEM_WORDS so software can probe RAM size
+// by writing/reading at power-of-two boundaries.
 //
 // Byte enables gate per-byte writes for sub-word stores.
 // Reads always return the full 32-bit word — byte extraction
@@ -14,10 +17,13 @@
 
 module simple_mem
     import penumbra_pkg::*;
+#(
+    parameter MEM_WORDS = 4 * 1024 * 1024   // Default 4M words = 16 MB
+)
 (
     input  logic        i_clk,
     input  logic        i_rst,
-    input  logic [31:0] i_addr,     // Byte address (bits [13:2] used)
+    input  logic [31:0] i_addr,     // Byte address (wraps modulo MEM_WORDS)
     input  logic [31:0] i_wdata,    // Write data
     input  logic [3:0]  i_byte_en,  // Per-byte write enables (active high)
     input  logic        i_we,       // Write enable (data access)
@@ -26,7 +32,7 @@ module simple_mem
     output logic        o_busy      // Access in progress (for STALL)
 );
 
-    localparam MEM_WORDS = 4096;
+    localparam ADDR_BITS = $clog2(MEM_WORDS);
 
     logic [31:0] mem [0:MEM_WORDS-1];
 
@@ -36,9 +42,9 @@ module simple_mem
         $readmemh("program.hex", mem);
     end
 
-    // Word-addressed (drop lower 2 bits)
-    logic [11:0] word_addr;
-    assign word_addr = i_addr[13:2];
+    // Word-addressed, wrapping modulo MEM_WORDS
+    logic [ADDR_BITS-1:0] word_addr;
+    assign word_addr = i_addr[ADDR_BITS+1:2];
 
     // ── Synchronous write (per-byte enables) ────────────────
     always_ff @(posedge i_clk) begin
