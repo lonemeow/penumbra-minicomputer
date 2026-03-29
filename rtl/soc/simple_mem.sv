@@ -1,6 +1,7 @@
 // Penumbra Simple Memory — synchronous SRAM model for simulation
 //
-// Parameterizable size, word-addressed. Loads program.hex at init.
+// Parameterizable size, word-addressed. Initialized to zero (matches
+// real hardware where RAM content is undefined at power-on).
 // Synchronous read with 1-cycle latency, synchronous write.
 // Provides busy signal for the STALL mechanism.
 //
@@ -39,7 +40,6 @@ module simple_mem
     initial begin
         for (int i = 0; i < MEM_WORDS; i++)
             mem[i] = 32'b0;
-        $readmemh("program.hex", mem);
     end
 
     // Word-addressed, wrapping modulo MEM_WORDS

@@ -58,6 +58,14 @@ _start:
     LLI  R4, #0x1089           ; PTE: PPN=1 (bits[31:12]=0x00001), flags=V|R|G=0x89
     WRSYS R4, #0, #4           ; TLB_PTE (commits entry)
 
+    ; ── Map ROM page (VPN 0xFFFFE → PPN 0xFFFFE) ──────────
+    LLI  R4, #30
+    WRSYS R4, #0, #5           ; TLB_INDEX = 30
+    LI   R4, #0x0FFFFE00       ; VPN=0xFFFFE, ASID=0
+    WRSYS R4, #0, #3
+    LI   R4, #0xFFFFE0B9       ; PPN=0xFFFFE, flags=V|R|W|X|G
+    WRSYS R4, #0, #4
+
     ; ── Enable MMU ──────────────────────────────────────────
     LLI  R4, #1
     WRSYS R4, #0, #0           ; MMUCR = 1 → MMU on
