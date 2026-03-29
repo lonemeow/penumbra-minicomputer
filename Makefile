@@ -114,6 +114,24 @@ test:
 		exit 1; \
 	fi
 
+# ── Interactive simulation ─────────────────────────────────────
+# Builds machine_sim with interactive testbench and boot ROM.
+# Bridges stdin/stdout to UART for terminal interaction.
+# Usage: make simulate
+DOCKER_RUN_IT = docker run --rm -it -v $(CURDIR):/work -w /work
+
+.PHONY: simulate
+simulate:
+	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
+	$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) \
+		--top-module machine_sim \
+		--Mdir $(BUILD_DIR)/machine_sim_interactive.verilator \
+		-o ../Vmachine_sim_interactive \
+		$(PKG_SV) $$(find rtl -name 'machine_sim.sv') sim/tb_interactive.cpp
+	@$(PASM) --org 0xFFFFE000 sw/rom/boot_rom.s -o program.hex
+	@$(UASM) sw/microcode/microcode.uasm -o microcode.hex
+	@$(DOCKER_RUN_IT) --entrypoint ./$(BUILD_DIR)/Vmachine_sim_interactive $(DOCKER_IMAGE)
+
 # ── Cleanup ────────────────────────────────────────────────────
 .PHONY: clean
 clean:

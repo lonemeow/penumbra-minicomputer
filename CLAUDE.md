@@ -50,6 +50,7 @@ The architecture is fully specified in `doc/`. Key specs:
 - `make sim MOD=<name>` — build & run a module's Verilator testbench (auto-includes penumbra_pkg.sv, sets --top-module)
 - `make sim MOD=machine_sim TB=<tb> PROG=<prog>` — run a specific testbench with a specific program (e.g., `TB=tb_cpu_prog PROG=test_fib`). Auto-assembles `sim/programs/<PROG>.s` and `sw/microcode/microcode.uasm` into hex before running; `.hex` files are build artifacts (gitignored), only `.s`/`.uasm` sources are committed.
 - `make test` — run all `sim/programs/test_*.s` programs through machine_sim; builds once, runs each, reports pass/fail summary
+- `make simulate` — build & run interactive boot ROM with terminal I/O. Assembles `sw/rom/boot_rom.s`, bridges stdin/stdout to UART RX/TX via `tb_interactive.cpp`. Docker runs with `-it` for raw terminal passthrough. No cycle limit, no VCD trace. Exit with Ctrl-C or BREAK.
 - `make wave MOD=<name>` — open VCD waveform in GTKWave
 - `make clean` — remove build artifacts
 - All simulation runs via Docker (`verilator/verilator:latest`) — no host install needed
@@ -57,7 +58,7 @@ The architecture is fully specified in `doc/`. Key specs:
 - **Important:** Always `rm -rf build/<mod>.verilator build/V<mod>` before rebuilding if you suspect stale binaries (WSL2 /mnt/c filesystem can have stale mtimes)
 
 ## Current Status
-The CPU runs real programs in simulation with the full CPU → MMU → cache → memory path wired, booting from ROM at `0xFFFF_E000` (matching the physical memory map). The simulator (machine_sim) has address decode routing accesses to boot ROM (8 KB, 0xFFFF_E000+), UART (4 KB, 0xFF00_0000), or RAM (16 MB, parameterizable, address-wrapping). A 16450-compatible simulation UART provides console I/O — TX bytes appear on stdout, RX accepts bytes from the testbench. The UART is memory-mapped (MMIO at `0xFF00_0000`, not on the sysreg bus), accessed via LDW/STW, with realistic TX busy timing (~2170 cycles at 115200 baud/25 MHz). The vector table uses MIPS/68k-style address-based dispatch: `int_entry` reads a handler address from physical RAM, bypassing the MMU. The TLB is implemented (64-entry 2-way SA, fully software-managed) and tested with MMU enabled (identity + non-identity mappings). MMU data faults (TLB miss, protection violation) are wired as synchronous exceptions — detected during STALL, abort the instruction, save EPC/ESR, and vector to the fault handler. WRSYS/RDSYS access a multi-device sysreg bus (device 0 = MMU, device 1 = SYS). RTL is built bottom-up from leaf modules. The 51-bit micro-word format is finalized (bit [50] = priv, [49] = cross_bank, [1:0] = ei_set/di_set).
+The CPU runs real programs in simulation with the full CPU → MMU → cache → memory path wired, booting from ROM at `0xFFFF_E000` (matching the physical memory map). The simulator (machine_sim) has address decode routing accesses to boot ROM (8 KB, 0xFFFF_E000+), UART (4 KB, 0xFF00_0000), or RAM (16 MB, parameterizable, address-wrapping). A 16450-compatible simulation UART provides console I/O — TX bytes appear on stdout, RX accepts bytes from the testbench. The UART is memory-mapped (MMIO at `0xFF00_0000`, not on the sysreg bus), accessed via LDW/STW, with realistic TX busy timing (~2170 cycles at 115200 baud/25 MHz). An interactive boot ROM (`sw/rom/boot_rom.s`) prints a banner and runs an echo loop over UART; `make simulate` launches it with terminal I/O bridged through Docker (`-it`). The vector table uses MIPS/68k-style address-based dispatch: `int_entry` reads a handler address from physical RAM, bypassing the MMU. The TLB is implemented (64-entry 2-way SA, fully software-managed) and tested with MMU enabled (identity + non-identity mappings). MMU data faults (TLB miss, protection violation) are wired as synchronous exceptions — detected during STALL, abort the instruction, save EPC/ESR, and vector to the fault handler. WRSYS/RDSYS access a multi-device sysreg bus (device 0 = MMU, device 1 = SYS). RTL is built bottom-up from leaf modules. The 51-bit micro-word format is finalized (bit [50] = priv, [49] = cross_bank, [1:0] = ei_set/di_set).
 
 ### Implemented RTL Modules (all tested)
 | Module | File | Tests | Description |
@@ -90,6 +91,10 @@ The CPU runs real programs in simulation with the full CPU → MMU → cache →
 | MMU | `rtl/mmu/mmu.sv` | — | Bypass/translate mux, force_bypass for vector table read, sysreg routing, fault latching, TLB instantiation |
 | Cache stub | `rtl/soc/cache_stub.sv` | — | Combinational pass-through with byte_en, placeholder for split I/D PIPT caches |
 | Simple memory | `rtl/soc/simple_mem.sv` | — | Parameterizable synchronous SRAM model (default 16 MB), $readmemh, 1-cycle read busy, per-byte write enables, address wrapping |
+
+### Boot ROM and Interactive Simulation
+- **Boot ROM** (`sw/rom/boot_rom.s`): Penumbra/1 boot monitor. Prints banner, enters UART echo loop. Identical binary on sim and real hardware. Uses polling I/O routines (`putchar`, `getchar`, `puts`) with dedicated registers (R12=UART base, R11=THRE mask, R10=DR mask). Assembled with `--org 0xFFFFE000`.
+- **Interactive testbench** (`sim/tb_interactive.cpp`): Bridges host stdin/stdout to UART RX/TX. Raw terminal mode (no echo, no line buffering — boot ROM handles character processing). Polls stdin every 1024 cycles for sub-character-time latency. UART RX handshake: checks `o_uart_rx_ack` on negedge (combinational, pre-posedge) to reliably detect acceptance. No VCD tracing (interactive sessions are long). Exits on BREAK or SIGINT (Ctrl-C). Status messages go to stderr.
 
 ### Exception and Interrupt Handling
 Six sources share the same `except_entry` → `int_entry` → vector dispatch path:
@@ -217,7 +222,7 @@ The simulation UART (`sim_uart.sv`) is an NS16450-compatible device at `0xFF00_0
 - **Real hardware:** Replace `sim_uart` with a baud-rate UART (add shift register + baud generator from DLL/DLM). Same register interface. Add 16-byte FIFOs by flipping IIR[7:6] to `11`.
 
 ### Next Steps (in priority order)
-1. **Boot ROM monitor** — Trivial ROM program that prints a banner and accepts commands over UART.
+1. **Boot ROM monitor** — Banner and echo loop working (`make simulate`). Next: command parser (memory read/write, go), S-record upload, stack setup for proper calling convention.
 2. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick.
 3. **Interrupt controller** — Multiple devices with priority encoding.
 4. **Instruction fetch faults** — Detect TLB miss during fetch phase (separate from STALL-based data fault path).
