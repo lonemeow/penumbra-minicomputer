@@ -77,7 +77,7 @@ The CPU runs real programs in simulation with the full CPU → MMU → cache →
 | Datapath top | `rtl/core/datapath.sv` | 15/15 | Structural wiring of all modules, IR reg, reg addr routing, F-bit gating |
 | Microcode ROM | `rtl/core/ucode_rom.sv` | — | 256×49-bit ROM, $readmemh from microcode.hex |
 | Sequencer | `rtl/core/sequencer.sv` | — | Micro-PC, branch_cond decode, EI/DI tracking, ei_shadow_clr |
-| CPU top | `rtl/core/cpu_top.sv` | 16 progs | Full integration: datapath + sequencer + ROM + MMU + sysid + cache + memory + fetch + IRQ + MMU traps + BREAK + privilege traps + illegal instruction trap + WRSYS/RDSYS + BL |
+| CPU top | `rtl/core/cpu_top.sv` | 17 progs | Full integration: datapath + sequencer + ROM + MMU + sysid + cache + memory + fetch + IRQ + MMU traps + BREAK + SYSCALL + privilege traps + illegal instruction trap + WRSYS/RDSYS + BL |
 | Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_*, ACC_*, VEC_*, SYSDEV_*, SYSREG_* constants |
 | System ID | `rtl/soc/sysid.sv` | via cpu_top | Read-only MACHINE_ID register (Penumbra/1), sysreg device 1 |
 | TLB | `rtl/mmu/tlb.sv` | 111/111 | 64-entry 2-way SA, parallel lookup, one-hot permission check, indexed sysreg R/W |
@@ -86,7 +86,7 @@ The CPU runs real programs in simulation with the full CPU → MMU → cache →
 | Simple memory | `rtl/soc/simple_mem.sv` | — | 4K×32 synchronous SRAM model, $readmemh, 1-cycle read busy |
 
 ### Exception and Interrupt Handling
-Five sources share the same `except_entry` → `int_entry` → vector dispatch path:
+Six sources share the same `except_entry` → `int_entry` → vector dispatch path:
 
 **External IRQ (asynchronous):**
 - **Check point:** Dispatch-time (when `ir_valid` fires, before entering S_EXEC)
@@ -101,7 +101,7 @@ Five sources share the same `except_entry` → `int_entry` → vector dispatch p
 - **Action:** `fault_except` pulse (once per fault via `!fault_pending` guard) → `except_entry` saves EPC/ESR, sets S=1/I=0. Sequencer aborts STALL (`go_fetch`), returns to S_FETCH.
 - **Dispatch:** `fault_pending` flag overrides next dispatch to 0x70 with `fault_vector` (VEC_TLB_MISS=2 or VEC_TLB_PROT=3). Cleared when int_entry executes (`ctl_pc_load`), one cycle after dispatch — so `vector_num` reads the correct fault vector during int_entry.
 - **PC preservation:** PC is in HOLD during STALL, so EPC = faulting instruction. Handler can fill TLB and ERET to restart.
-- **Priority:** fault_pending > illegal_pending > BREAK > priv_taken > IRQ (fault/illegal set SR.I=0, so irq_taken is false at next dispatch)
+- **Priority:** fault_pending > illegal_pending > BREAK > SYSCALL > priv_taken > IRQ (fault/illegal set SR.I=0, so irq_taken is false at next dispatch)
 - **Instruction fetch faults:** Not yet handled — kernel code assumed identity-mapped.
 
 **BREAK instruction (synchronous):**
@@ -109,6 +109,12 @@ Five sources share the same `except_entry` → `int_entry` → vector dispatch p
 - **Action:** Triggers `except_entry` like IRQ, vectors to VEC_BREAK (6). Works from any privilege level.
 - **Testbench:** `o_halted` pulses for one cycle at BREAK dispatch — testbench stops immediately. CPU continues with the exception normally (no special halt state).
 - **Unprivileged code:** BREAK just traps to the kernel, same as any exception. OS can install a BREAK handler for debugging.
+
+**SYSCALL instruction (synchronous):**
+- **Check point:** Dispatch-time, detected by `dispatch_addr == 0x48` (op=20).
+- **Action:** Triggers `except_entry` like BREAK, vectors to VEC_SYSCALL (5). Works from any privilege level — `syscall_taken` has higher priority than `priv_taken`, so it is not blocked by privilege checks despite being in the SYS zone.
+- **EPC:** Points at the SYSCALL instruction (not the next one). Handler must advance EPC by 4 before returning via `ERET Rd, Rs`.
+- **No microcode:** Slot 0x48 is left empty (sentinel fallback). Dispatch redirects to int_entry (0x70).
 
 **Privilege violation (synchronous):**
 - **Check point:** Dispatch-time. Privileged instructions are in the SYS zone (Format R, `op[4]=1`, dispatch 0x40–0x5E) except JMP (0x50) and EI (0x52). Detected by `is_sys_zone && !is_priv_exempt && !sr_s`.
@@ -124,7 +130,7 @@ Five sources share the same `except_entry` → `int_entry` → vector dispatch p
 
 **Vector table:** Fixed **physical** addresses, MMU bypassed for the vector fetch. `vector_addr = {26'b0, vector_num, 2'b00}` — word-aligned entries at physical 0x00. VEC_RESET=0, VEC_IRQ=1, VEC_TLB_MISS=2, VEC_TLB_PROT=3, VEC_PRIV=4, VEC_SYSCALL=5, VEC_BREAK=6, VEC_ILLEGAL=7. After int_entry completes, `vector_fetch` flag forces MMU bypass for one fetch cycle, cleared on ir_valid. No TLB mapping needed for the vector page — eliminates nested TLB miss on exception entry.
 
-**Dispatch-time vector latching:** Dispatch-time exceptions (BREAK, priv, IRQ) use `dispatch_pending`/`dispatch_vector` to register the vector number when `ir_valid` fires. This is necessary because `vector_num` is consumed one cycle later by int_entry's `a_src=VECTOR`, but the combinational inputs (`mem_rdata`, `sr_s`) have changed by then — `mem_rdata` reads from MAR (not PC) during S_EXEC, and `sr_s` flips to 1 from `except_entry`. MMU faults already had this pattern via `fault_pending`/`fault_vector`.
+**Dispatch-time vector latching:** Dispatch-time exceptions (BREAK, SYSCALL, priv, IRQ) use `dispatch_pending`/`dispatch_vector` to register the vector number when `ir_valid` fires. This is necessary because `vector_num` is consumed one cycle later by int_entry's `a_src=VECTOR`, but the combinational inputs (`mem_rdata`, `sr_s`) have changed by then — `mem_rdata` reads from MAR (not PC) during S_EXEC, and `sr_s` flips to 1 from `except_entry`. MMU faults already had this pattern via `fault_pending`/`fault_vector`.
 
 **Key bugs found:**
 - `ei_pending` clear condition must include `executing` — during S_FETCH, `go_fetch` can be stale from the previous micro-word's ROM output
@@ -165,7 +171,7 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 | Immediate (Format L) | LLI, LLIS, LUI, ADD #imm, SUB #imm, CMP #imm | Formerly INC/DEC/CMPI (still accepted as aliases) |
 | Memory (Format M) | LDW (3 micro-ops), STW (4 micro-ops) | STALL-based, latency-agnostic |
 | Branch (Format B) | Bcc (all 15 conditions via single BRT entry), BL (2 micro-ops) | BL saves PC+4 to R13, dispatches to 0x62; BZ/BNZ aliases in assembler |
-| System (R-SYS, 0x40–0x5E) | JMP, EI, DI, WRSYS, RDSYS, ERET, ERET Rd/Rs, RDSPR, BREAK | RET = JMP R13 (pseudo); ERET/RDSYS are 2-micro-op; BREAK intercepted at dispatch |
+| System (R-SYS, 0x40–0x5E) | JMP, EI, DI, WRSYS, RDSYS, ERET, ERET Rd/Rs, RDSPR, SYSCALL, BREAK | RET = JMP R13 (pseudo); ERET/RDSYS are 2-micro-op; SYSCALL/BREAK intercepted at dispatch |
 | Exception | int_entry | Shared by IRQ, MMU fault, BREAK, privilege violation, and illegal instruction dispatch |
 
 ### Known Bugs Fixed (Notable)
@@ -178,7 +184,7 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 
 ### Next Steps (in priority order)
 1. **Sub-word loads/stores** — LDH/LDB/LDHS/LDBS/STH/STB (byte-lane extraction in writeback path, byte-enable generation).
-2. **More system ops** — SYSCALL, GETSR/SETSR, GETUSP/SETUSP.
+2. **More system ops** — GETSR/SETSR, GETUSP/SETUSP.
 3. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick.
 4. **UART** — Console I/O for first sign of life on real hardware.
 5. **Interrupt controller** — Multiple devices with priority encoding.

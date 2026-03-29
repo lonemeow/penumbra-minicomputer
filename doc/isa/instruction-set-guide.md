@@ -325,7 +325,7 @@ entry is a 32-bit instruction word (typically a branch to the handler).
 | 2 | 0x08 | TLB miss | Implemented |
 | 3 | 0x0C | TLB protection fault | Implemented |
 | 4 | 0x10 | Privilege violation | Implemented |
-| 5 | 0x14 | SYSCALL | Reserved |
+| 5 | 0x14 | SYSCALL | Implemented |
 | 6 | 0x18 | BREAK (debug) | Implemented |
 | 7 | 0x1C | Illegal instruction | Implemented |
 | 8--15 | 0x20--0x3C | Reserved (NMI, alignment, bus error, etc.) | -- |
@@ -503,7 +503,7 @@ assembler but do not yet have microcode.
 | BREAK | Yes | Trap to vector 6 |
 | GETSR, SETSR | No | |
 | GETUSP, SETUSP | No | |
-| SYSCALL | No | |
+| SYSCALL | Yes | Trap to vector 5, unprivileged |
 | ICACHE_INV | No | |
 | NOP (pseudo) | Yes | ADD R0, R0 |
 | RET (pseudo) | Yes | JMP R13 |

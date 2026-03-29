@@ -298,11 +298,17 @@ module cpu_top
     logic break_taken;
     assign break_taken = (dispatch_addr == 8'h4A);
 
+    // SYSCALL detection at dispatch (dispatch_addr == 0x48 for op=20)
+    // Unprivileged — works from user mode (higher priority than priv_taken)
+    logic syscall_taken;
+    assign syscall_taken = (dispatch_addr == 8'h48);
+
     // ── Privilege violation detection at dispatch ─────────────
     // Privileged instructions are in the SYS zone (Format R, op[4]=1,
     // dispatch 0x40–0x5E) EXCEPT JMP (0x50) and EI (0x52).
-    // BREAK (0x4A) is also unprivileged but is caught by break_taken
-    // with higher priority, so it never reaches priv_taken.
+    // BREAK (0x4A) and SYSCALL (0x48) are also unprivileged but are
+    // caught by break_taken/syscall_taken with higher priority, so
+    // they never reach priv_taken.
     logic is_sys_zone;
     logic is_priv_exempt;
     logic priv_taken;
@@ -327,11 +333,12 @@ module cpu_top
         if (i_rst) begin
             dispatch_pending <= 1'b0;
             dispatch_vector  <= 4'b0;
-        end else if (ir_valid && (break_taken || priv_taken || irq_taken)) begin
+        end else if (ir_valid && (break_taken || syscall_taken || priv_taken || irq_taken)) begin
             dispatch_pending <= 1'b1;
-            dispatch_vector  <= break_taken ? VEC_BREAK :
-                                priv_taken  ? VEC_PRIV :
-                                              VEC_IRQ;
+            dispatch_vector  <= break_taken   ? VEC_BREAK :
+                                syscall_taken ? VEC_SYSCALL :
+                                priv_taken    ? VEC_PRIV :
+                                                VEC_IRQ;
         end else if (dispatch_pending && ctl_pc_load) begin
             // Clear after int_entry executes (same timing as fault_pending)
             dispatch_pending <= 1'b0;
@@ -339,7 +346,7 @@ module cpu_top
     end
 
     assign except_entry = fault_except | illegal_except |
-                          (break_taken & ir_valid) |
+                          (break_taken & ir_valid) | (syscall_taken & ir_valid) |
                           (priv_taken & ir_valid) | (irq_taken & ir_valid);
     assign vector_num   = fault_pending   ? fault_vector :
                           illegal_pending ? VEC_ILLEGAL :
@@ -348,7 +355,7 @@ module cpu_top
 
     // Override dispatch address when any exception taken
     logic [7:0] effective_dispatch;
-    assign effective_dispatch = (fault_pending | illegal_pending | dispatch_pending | break_taken | priv_taken | irq_taken) ? 8'h70 : dispatch_addr;
+    assign effective_dispatch = (fault_pending | illegal_pending | dispatch_pending | break_taken | syscall_taken | priv_taken | irq_taken) ? 8'h70 : dispatch_addr;
 
     // Debug observation: pulses when BREAK dispatches (testbench stop trigger)
     assign o_halted = break_taken & ir_valid;
