@@ -492,7 +492,7 @@ assembler but do not yet have microcode.
 | LLI, LLIS, LUI | Yes | |
 | ADD/SUB/CMP #imm | Yes | Format L encoding (formerly INC/DEC/CMPI) |
 | LDW, STW | Yes | STALL-based, latency-agnostic |
-| LDH, LDHS, LDB, LDBS, STH, STB | No | Sub-word access planned |
+| LDH, LDHS, LDB, LDBS, STH, STB | Yes | byte_ext/byte_rep + byte_en lane selection |
 | B, BEQ/BZ, BNE/BNZ, and all Bcc | Yes | All 16 conditions |
 | BL | Yes | Saves PC+4 to R13 |
 | JMP (RET) | Yes | |

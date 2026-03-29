@@ -77,13 +77,15 @@ The CPU runs real programs in simulation with the full CPU → MMU → cache →
 | Datapath top | `rtl/core/datapath.sv` | 15/15 | Structural wiring of all modules, IR reg, reg addr routing, F-bit gating |
 | Microcode ROM | `rtl/core/ucode_rom.sv` | — | 256×51-bit ROM, $readmemh from microcode.hex |
 | Sequencer | `rtl/core/sequencer.sv` | — | Micro-PC, branch_cond decode, EI/DI tracking, ei_shadow_clr |
-| CPU top | `rtl/core/cpu_top.sv` | 18 progs | Full integration: datapath + sequencer + ROM + MMU + sysid + cache + memory + fetch + IRQ + MMU traps + BREAK + SYSCALL + privilege traps + illegal instruction trap + WRSYS/RDSYS + RDSPR/WRSPR + BL |
+| Byte extractor | `rtl/core/byte_ext.sv` | 19/19 | Sub-word load extraction: byte/half from 32-bit word, sign/zero extend |
+| Byte replicator | `rtl/core/byte_rep.sv` | 10/10 | Sub-word store lane positioning: replicate byte/half across all lanes |
+| CPU top | `rtl/core/cpu_top.sv` | 20 progs | Full integration: datapath + sequencer + ROM + MMU + sysid + cache + memory + fetch + IRQ + MMU traps + BREAK + SYSCALL + privilege traps + illegal instruction trap + WRSYS/RDSYS + RDSPR/WRSPR + BL + sub-word loads/stores |
 | Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_*, ACC_*, VEC_*, SYSDEV_*, SYSREG_* constants |
 | System ID | `rtl/soc/sysid.sv` | via cpu_top | Read-only MACHINE_ID register (Penumbra/1), sysreg device 1 |
 | TLB | `rtl/mmu/tlb.sv` | 111/111 | 64-entry 2-way SA, parallel lookup, one-hot permission check, indexed sysreg R/W |
 | MMU | `rtl/mmu/mmu.sv` | — | Bypass/translate mux, force_bypass for vector fetch, sysreg routing, fault latching, TLB instantiation |
-| Cache stub | `rtl/soc/cache_stub.sv` | — | Combinational pass-through, placeholder for split I/D PIPT caches |
-| Simple memory | `rtl/soc/simple_mem.sv` | — | 4K×32 synchronous SRAM model, $readmemh, 1-cycle read busy |
+| Cache stub | `rtl/soc/cache_stub.sv` | — | Combinational pass-through with byte_en, placeholder for split I/D PIPT caches |
+| Simple memory | `rtl/soc/simple_mem.sv` | — | 4K×32 synchronous SRAM model, $readmemh, 1-cycle read busy, per-byte write enables |
 
 ### Exception and Interrupt Handling
 Six sources share the same `except_entry` → `int_entry` → vector dispatch path:
@@ -170,7 +172,7 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 |----------|-------------|-------|
 | ALU (R-ALU, 0x00–0x1E) | ADD, SUB, AND, OR, XOR, SHL, SHR, SAR, MOV, NOT | CMP/TEST via F-bit gating on SUB/AND |
 | Immediate (Format L) | LLI, LLIS, LUI, ADD #imm, SUB #imm, CMP #imm | Formerly INC/DEC/CMPI (still accepted as aliases) |
-| Memory (Format M) | LDW (3 micro-ops), STW (4 micro-ops) | STALL-based, latency-agnostic |
+| Memory (Format M) | LDW/LDH/LDHS/LDB/LDBS (3 micro-ops), STW/STH/STB (4 micro-ops) | STALL-based, latency-agnostic; byte_ext extracts on load, byte_rep replicates on store, byte_en selects lanes |
 | Branch (Format B) | Bcc (all 15 conditions via single BRT entry), BL (2 micro-ops) | BL saves PC+4 to R13, dispatches to 0x62; BZ/BNZ aliases in assembler |
 | System (R-SYS, 0x40–0x5E) | JMP, EI, DI, WRSYS, RDSYS, ERET, ERET Rd/Rs, RDSPR, WRSPR, SYSCALL, BREAK | RET = JMP R13 (pseudo); ERET/RDSYS are 2-micro-op; SYSCALL/BREAK intercepted at dispatch; RDSPR/WRSPR use cross_bank for USP |
 | Exception | int_entry | Shared by IRQ, MMU fault, BREAK, privilege violation, and illegal instruction dispatch |
@@ -184,8 +186,7 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 - **ERET (was IRET) assembled with wrong opcode:** Hardcoded `encode_format_r(31, ...)` instead of using table value (27). Dispatched to wrong ROM entry. Fix: use `op` from FORMAT_R_OPS lookup.
 
 ### Next Steps (in priority order)
-1. **Sub-word loads/stores** — LDH/LDB/LDHS/LDBS/STH/STB (byte-lane extraction in writeback path, byte-enable generation).
-2. **More system ops** — GETSR/SETSR (if needed).
+1. **More system ops** — GETSR/SETSR (if needed).
 3. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick.
 4. **UART** — Console I/O for first sign of life on real hardware.
 5. **Interrupt controller** — Multiple devices with priority encoding.

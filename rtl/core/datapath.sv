@@ -360,7 +360,14 @@ module datapath
         .o_data     (mdr_data)
     );
 
-    assign o_mem_wdata = mdr_data;
+    // ── Byte replicator (sub-word store support) ──────────────
+    // Replicates the low byte/halfword across all lanes so that
+    // byte_en selects the correct position for the write.
+    byte_rep u_byte_rep (
+        .i_data (mdr_data),
+        .i_size (i_mem_size),
+        .o_data (o_mem_wdata)
+    );
 
     // ── Byte extractor (sub-word load support) ───────────────
     // Extracts and sign/zero-extends byte or halfword from the
