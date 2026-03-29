@@ -56,7 +56,7 @@ The architecture is fully specified in `doc/`. Key specs:
 - **Important:** Always `rm -rf build/<mod>.verilator build/V<mod>` before rebuilding if you suspect stale binaries (WSL2 /mnt/c filesystem can have stale mtimes)
 
 ## Current Status
-The CPU runs real programs in simulation with the full CPU → MMU → cache → memory path wired. The TLB is implemented (64-entry 2-way SA, fully software-managed) and tested with MMU enabled (identity + non-identity mappings). MMU data faults (TLB miss, protection violation) are wired as synchronous exceptions — detected during STALL, abort the instruction, save EPC/ESR, and vector to the fault handler. WRSYS/RDSYS access a multi-device sysreg bus (device 0 = MMU, device 1 = SYS). RTL is built bottom-up from leaf modules. The 51-bit micro-word format is finalized (bit [50] = priv, [49] = cross_bank, [1:0] = ei_set/di_set).
+The CPU runs real programs in simulation with the full CPU → MMU → cache → memory path wired, booting from ROM at `0xFFFF_E000` (matching the physical memory map). The simulator (machine_sim) has address decode routing accesses to boot ROM (8 KB, 0xFFFF_E000+) or RAM (16 MB, parameterizable, address-wrapping). The vector table uses MIPS/68k-style address-based dispatch: `int_entry` reads a handler address from physical RAM, bypassing the MMU. The TLB is implemented (64-entry 2-way SA, fully software-managed) and tested with MMU enabled (identity + non-identity mappings). MMU data faults (TLB miss, protection violation) are wired as synchronous exceptions — detected during STALL, abort the instruction, save EPC/ESR, and vector to the fault handler. WRSYS/RDSYS access a multi-device sysreg bus (device 0 = MMU, device 1 = SYS). RTL is built bottom-up from leaf modules. The 51-bit micro-word format is finalized (bit [50] = priv, [49] = cross_bank, [1:0] = ei_set/di_set).
 
 ### Implemented RTL Modules (all tested)
 | Module | File | Tests | Description |
@@ -71,7 +71,7 @@ The CPU runs real programs in simulation with the full CPU → MMU → cache →
 | A-bus source mux | `rtl/core/amux.sv` | 4/4 | A-bus: reg/ESR/EPC/vector |
 | PC source mux | `rtl/core/pc_mux.sv` | 6/6 | Next PC: hold/+4/+offset/A-bus/MDR |
 | Status register | `rtl/core/status_reg.sv` | 64/64 | NZCV flags, S/I mode bits, ESR, ei_shadow |
-| PC register | `rtl/core/pc_reg.sv` | 31/31 | PC reg, PC+4 adder, PC+offset adder, EPC |
+| PC register | `rtl/core/pc_reg.sv` | 31/31 | PC reg (parameterizable RESET_PC), PC+4 adder, PC+offset adder, EPC |
 | MAR | `rtl/core/mar.sv` | 6/6 | Memory address register, loads from R-bus |
 | MDR | `rtl/core/mdr.sv` | 7/7 | Memory data register, loads from memory or A-bus |
 | Datapath top | `rtl/core/datapath.sv` | 15/15 | Structural wiring of all modules, IR reg, reg addr routing, F-bit gating |
@@ -79,14 +79,15 @@ The CPU runs real programs in simulation with the full CPU → MMU → cache →
 | Sequencer | `rtl/core/sequencer.sv` | — | Micro-PC, branch_cond decode, EI/DI tracking, ei_shadow_clr |
 | Byte extractor | `rtl/core/byte_ext.sv` | 19/19 | Sub-word load extraction: byte/half from 32-bit word, sign/zero extend |
 | Byte replicator | `rtl/core/byte_rep.sv` | 10/10 | Sub-word store lane positioning: replicate byte/half across all lanes |
-| CPU core | `rtl/core/cpu_core.sv` | 20 progs | Full CPU: datapath + sequencer + ROM + MMU + cache + fetch + IRQ + MMU traps + BREAK + SYSCALL + privilege traps + illegal instruction trap + WRSYS/RDSYS + RDSPR/WRSPR + BL + sub-word loads/stores |
-| Sim machine | `rtl/soc/machine_sim.sv` | (top) | Simulation integration: cpu_core + simple_mem + sysid. Verilator top module for `make test` |
+| CPU core | `rtl/core/cpu_core.sv` | 21 progs | Full CPU: datapath + sequencer + ROM + MMU + cache + fetch + IRQ + MMU traps + BREAK + SYSCALL + privilege traps + illegal instruction trap + WRSYS/RDSYS + RDSPR/WRSPR + BL + sub-word loads/stores. Parameterizable RESET_PC (default 0xFFFF_E000). |
+| Sim machine | `rtl/soc/machine_sim.sv` | (top) | Simulation integration: cpu_core + boot_rom + simple_mem + sysid. Address decode: addr[31:24]==0xFF → ROM, else → RAM. Verilator top module for `make test` |
+| Boot ROM | `rtl/soc/boot_rom.sv` | via machine_sim | Read-only memory (8 KB default), loads program.hex, same 1-cycle busy protocol as simple_mem |
 | Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_*, ACC_*, VEC_*, SYSDEV_*, SYSREG_* constants |
 | System ID | `rtl/soc/sysid.sv` | via machine_sim | Read-only MACHINE_ID register (Penumbra/1), sysreg device 1 |
 | TLB | `rtl/mmu/tlb.sv` | 111/111 | 64-entry 2-way SA, parallel lookup, one-hot permission check, indexed sysreg R/W |
-| MMU | `rtl/mmu/mmu.sv` | — | Bypass/translate mux, force_bypass for vector fetch, sysreg routing, fault latching, TLB instantiation |
+| MMU | `rtl/mmu/mmu.sv` | — | Bypass/translate mux, force_bypass for vector table read, sysreg routing, fault latching, TLB instantiation |
 | Cache stub | `rtl/soc/cache_stub.sv` | — | Combinational pass-through with byte_en, placeholder for split I/D PIPT caches |
-| Simple memory | `rtl/soc/simple_mem.sv` | — | 4K×32 synchronous SRAM model, $readmemh, 1-cycle read busy, per-byte write enables |
+| Simple memory | `rtl/soc/simple_mem.sv` | — | Parameterizable synchronous SRAM model (default 16 MB), $readmemh, 1-cycle read busy, per-byte write enables, address wrapping |
 
 ### Exception and Interrupt Handling
 Six sources share the same `except_entry` → `int_entry` → vector dispatch path:
@@ -132,7 +133,9 @@ Six sources share the same `except_entry` → `int_entry` → vector dispatch pa
 - **PC preservation:** Sentinel has `pc=HOLD` (field=0), so EPC = the illegal instruction. Handler can emulate and ERET with EPC+4, or abort the process.
 - **Covers:** All undefined opcodes, reserved Format L/M/B encodings, unimplemented instructions (MUL/DIV/MOD dispatch to sentinel ROM entries).
 
-**Vector table:** Fixed **physical** addresses, MMU bypassed for the vector fetch. `vector_addr = {26'b0, vector_num, 2'b00}` — word-aligned entries at physical 0x00. VEC_RESET=0, VEC_IRQ=1, VEC_TLB_MISS=2, VEC_TLB_PROT=3, VEC_PRIV=4, VEC_SYSCALL=5, VEC_BREAK=6, VEC_ILLEGAL=7. After int_entry completes, `vector_fetch` flag forces MMU bypass for one fetch cycle, cleared on ir_valid. No TLB mapping needed for the vector page — eliminates nested TLB miss on exception entry.
+**Vector table (MIPS/68k-style, address-based):** The vector table at physical 0x00 contains **handler addresses** (not instructions). `int_entry` (3 micro-ops at 0x70–0x72) reads the handler address from `vector_addr = {26'b0, vector_num, 2'b00}`, then loads it into PC via MDR. The vector table data read bypasses the MMU via `vector_read` flag (set on `except_entry`, cleared on `fetch_go`). VEC_RESET=0, VEC_IRQ=1, VEC_TLB_MISS=2, VEC_TLB_PROT=3, VEC_PRIV=4, VEC_SYSCALL=5, VEC_BREAK=6, VEC_ILLEGAL=7. Software writes handler addresses to RAM at boot time via `LA Rd, #handler` + `STW Rd, [R0 + #offset]`. No TLB mapping needed for the vector page — eliminates nested TLB miss on exception entry.
+
+**Reset vector:** CPU boots at `RESET_PC` (default `0xFFFF_E000`, parameterizable). This is NOT part of the vector table — it's a hardwired PC reset value. The reset vector table entry at 0x00 is unused (reset doesn't go through int_entry). `machine_sim` overrides to default; future `machine_ulx3s` uses the default for ROM boot.
 
 **Dispatch-time vector latching:** Dispatch-time exceptions (BREAK, SYSCALL, IRQ) use `dispatch_pending`/`dispatch_vector` to register the vector number when `ir_valid` fires. This is necessary because `vector_num` is consumed one cycle later by int_entry's `a_src=VECTOR`, but the combinational inputs (`mem_rdata`, `sr_s`) have changed by then — `mem_rdata` reads from MAR (not PC) during S_EXEC, and `sr_s` flips to 1 from `except_entry`. MMU faults already had this pattern via `fault_pending`/`fault_vector`.
 
@@ -158,8 +161,8 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 
 ### Software Tools
 - **Microcode assembler** (`sw/tools/uasm.py`): Symbolic microcode → $readmemh hex. Defaults: `pc=NEXT branch=FETCH`. Validates slot boundaries (detects multi-step routines that overflow their dispatch slot). Run: `python3 sw/tools/uasm.py input.uasm -o microcode.hex`
-- **ISA assembler** (`sw/tools/pasm.py`): Two-pass assembler for Penumbra ISA → $readmemh hex. All 4 formats (R/L/M/B), labels, label references in Format L immediates, pseudo-ops (NOP, RET), branch aliases (BZ/BNZ), `.equ` named constants, built-in sysreg constants (`#MMU`, `#TLB_INDEX`, `#TLB_V`, etc.). Smart mnemonic routing: ADD/SUB/CMP auto-select Format R (reg) or Format L (imm); ERET unifies exception return (0 args = EPC/ESR, 2 args = explicit); RDSPR/WRSPR route to per-SPR opcodes (ESR, EPC, USP). GETUSP/SETUSP accepted as legacy aliases. Run: `python3 sw/tools/pasm.py input.s -o program.hex`
-- Makefile auto-assembles `.s`/`.uasm` sources into root-level `program.hex`/`microcode.hex` for `$readmemh`; hex files are build artifacts (gitignored)
+- **ISA assembler** (`sw/tools/pasm.py`): Two-pass assembler for Penumbra ISA → $readmemh hex. All 4 formats (R/L/M/B), labels, label references in Format L immediates, pseudo-ops (NOP, RET, LA, LI), branch aliases (BZ/BNZ), `.equ` named constants, built-in sysreg constants (`#MMU`, `#TLB_INDEX`, `#TLB_V`, etc.). Smart mnemonic routing: ADD/SUB/CMP auto-select Format R (reg) or Format L (imm); ERET unifies exception return (0 args = EPC/ESR, 2 args = explicit); RDSPR/WRSPR route to per-SPR opcodes (ESR, EPC, USP). `LA Rd, #label` loads a full 32-bit label address (LLI+LUI). `LI Rd, #value` loads an arbitrary 32-bit immediate (LLI+LUI). `--org ADDR` sets code base address (default 0). GETUSP/SETUSP accepted as legacy aliases. Run: `python3 sw/tools/pasm.py --org 0xFFFFE000 input.s -o program.hex`
+- Makefile auto-assembles `.s`/`.uasm` sources into root-level `program.hex`/`microcode.hex` for `$readmemh`; hex files are build artifacts (gitignored). Programs assembled with `--org 0xFFFFE000` (boot ROM address).
 
 ### Test Convention
 - **Program runner** (`sim/tb_cpu_prog.cpp`): Generic testbench that runs a program until BREAK, checks R1 for pass/fail. VCD trace output to `waves/machine_sim.vcd`, register dump (R0–R15) on failure.
@@ -167,8 +170,10 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 - **Halt detection:** Testbench watches for `o_halted` pulse (BREAK instruction dispatch). Instant detection, no polling.
 - **Test termination:** Programs end with `BREAK` instruction. Pass path: `LLI R1, #1` then fall through to `fail: BREAK`. Fail path: assertion `BNE fail` branches to `fail: BREAK`.
 - **Calling convention:** Return via RET (JMP R13). Program preamble sets LR and calls the test subroutine.
+- **Boot from ROM:** Programs are assembled with `--org 0xFFFFE000` and loaded into boot ROM. `_start:` must be the first label in the source file (ROM execution begins at the first word). Programs that use exceptions install handler addresses in the RAM vector table at startup via `LA Rd, #handler` + `STW Rd, [R0 + #offset]`.
+- **ROM page mapping:** MMU-enabled tests must map the ROM page in the TLB before enabling the MMU: `TLB_INDEX=30` (set 30, way 0), `TLB_VPN=0x0FFFFE00`, `TLB_PTE=0xFFFFE0B9` (VPN/PPN 0xFFFFE, KERN_RWX).
 
-### Implemented Microcode (39 micro-ops)
+### Implemented Microcode (41 micro-ops)
 | Category | Instructions | Notes |
 |----------|-------------|-------|
 | ALU (R-ALU, 0x00–0x1E) | ADD, SUB, AND, OR, XOR, SHL, SHR, SAR, MOV, NOT | CMP/TEST via F-bit gating on SUB/AND |
@@ -176,7 +181,7 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 | Memory (Format M) | LDW/LDH/LDHS/LDB/LDBS (3 micro-ops), STW/STH/STB (4 micro-ops) | STALL-based, latency-agnostic; byte_ext extracts on load, byte_rep replicates on store, byte_en selects lanes |
 | Branch (Format B) | Bcc (all 15 conditions via single BRT entry), BL (2 micro-ops) | BL saves PC+4 to R13, dispatches to 0x62; BZ/BNZ aliases in assembler |
 | System (R-SYS, 0x40–0x5E) | JMP, EI, DI, WRSYS, RDSYS, ERET, ERET Rd/Rs, RDSPR, WRSPR, SYSCALL, BREAK | RET = JMP R13 (pseudo); ERET/RDSYS are 2-micro-op; SYSCALL/BREAK intercepted at dispatch; RDSPR/WRSPR use cross_bank for USP |
-| Exception | int_entry | Shared by IRQ, MMU fault, BREAK, privilege violation, and illegal instruction dispatch |
+| Exception | int_entry (3 micro-ops) | Reads handler address from vector table (MAR←vector_addr, STALL read, PC←MDR). Shared by all exception sources. MMU bypassed for vector read. |
 
 ### Known Bugs Fixed (Notable)
 - **IR corruption from shared mem_rdata bus:** ir_valid lingered one cycle into S_EXEC, causing IR to reload when mem_rdata was muxed to sysreg data. Fix: `ir_load = ir_valid && fetch_active`.
@@ -187,10 +192,9 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 - **ERET (was IRET) assembled with wrong opcode:** Hardcoded `encode_format_r(31, ...)` instead of using table value (27). Dispatched to wrong ROM entry. Fix: use `op` from FORMAT_R_OPS lookup.
 
 ### Next Steps (in priority order)
-1. **More system ops** — GETSR/SETSR (if needed).
-3. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick.
-4. **UART** — Console I/O for first sign of life on real hardware.
-5. **Interrupt controller** — Multiple devices with priority encoding.
-6. **Instruction fetch faults** — Detect TLB miss during fetch phase (separate from STALL-based data fault path).
-7. **Memory subsystem** — Cache (replace cache_stub), SDRAM controller, bus interface.
-8. **LLVM backend** — Compiler toolchain for NetBSD port. See `doc/toolchain/toolchain-strategy.md`.
+1. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick.
+2. **UART** — Console I/O for first sign of life on real hardware.
+3. **Interrupt controller** — Multiple devices with priority encoding.
+4. **Instruction fetch faults** — Detect TLB miss during fetch phase (separate from STALL-based data fault path).
+5. **Memory subsystem** — Cache (replace cache_stub), SDRAM controller, bus interface.
+6. **LLVM backend** — Compiler toolchain for NetBSD port. See `doc/toolchain/toolchain-strategy.md`.

@@ -396,11 +396,11 @@ Penumbra uses a **unified vector table** for all exceptions, traps, and external
 ### Entry Sequence
 
 On any interrupt, exception, or trap, the hardware performs:
-1. Set S=1 in SR (enter supervisor mode), set I=0 (disable interrupts)
-2. Swap SP to supervisor stack pointer (SSP)
-3. Push old SR onto supervisor stack
-4. Push old PC onto supervisor stack
-5. Load PC from `vector_table[vector_number]`
+1. Save PC → EPC, save SR → ESR (via `except_entry` pulse)
+2. Set S=1 in SR (enter supervisor mode), set I=0 (disable interrupts)
+3. Swap SP to supervisor stack pointer (SSP)
+4. Read handler address from `vector_table[vector_number]` at physical memory (MMU bypassed)
+5. Load PC from handler address (jump to handler)
 
 For **exceptions** (page fault, illegal instruction, etc.), the saved PC is the address of the faulting instruction (so the handler can retry after fixing the cause). For **external interrupts**, the saved PC is the next instruction (since the current instruction completed). For **software traps**, the saved PC is the next instruction (the trap was intentional).
 
@@ -412,20 +412,23 @@ Return-from-interrupt (RTI) restores ESR then EPC, reversing the entry sequence.
 
 ### Vector Table
 
-The vector table is at **fixed physical addresses** starting at `0x0000_0000`. The vector fetch after an exception bypasses the MMU (identity-mapped, no TLB entry needed), eliminating nested TLB miss problems. Each entry is a 32-bit instruction word (typically a branch to the handler).
+The vector table is at **fixed physical addresses** starting at `0x0000_0000` in RAM. Each entry contains a **32-bit handler address** (MIPS/68k-style, not an instruction like ARM). On exception, `int_entry` reads the handler address from the vector table with MMU bypass, then loads it into PC. Software writes handler addresses at boot time. This eliminates nested TLB miss problems (no TLB entry needed for the vector page).
+
+Note: Reset does not use the vector table. The CPU boots at `RESET_PC` (default `0xFFFF_E000`), a hardwired PC reset value pointing to boot ROM.
 
 `vector_addr = vector_number × 4`
 
 | Vector | Address | Source                | Status |
 |--------|---------|-----------------------|--------|
-| 0      | 0x00    | Reset                 | Implemented (hardwired) |
+| 0      | 0x00    | Reset                 | Unused (reset uses RESET_PC, not vector table) |
 | 1      | 0x04    | External IRQ          | Implemented |
 | 2      | 0x08    | TLB miss              | Implemented |
 | 3      | 0x0C    | TLB protection fault  | Implemented |
-| 4      | 0x10    | Privilege violation   | Reserved (VEC_PRIV) |
-| 5      | 0x14    | SYSCALL               | Reserved (VEC_SYSCALL) |
+| 4      | 0x10    | Privilege violation   | Implemented |
+| 5      | 0x14    | SYSCALL               | Implemented |
 | 6      | 0x18    | BREAK (debug)         | Implemented |
-| 7-15   | 0x1C–0x3C | (reserved for future: alignment, bus error, NMI, etc.) | — |
+| 7      | 0x1C    | Illegal instruction   | Implemented |
+| 8-15   | 0x20–0x3C | (reserved for future: alignment, bus error, NMI, etc.) | — |
 
 ### How the CPU Gets the Vector Number
 

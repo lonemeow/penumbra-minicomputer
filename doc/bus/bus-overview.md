@@ -390,8 +390,8 @@ The physical address space uses a fixed layout decoded from the top address bits
 0xFFFF_FFFF └─────────────────────┘
 ```
 
-- **Reset vector:** `0xFFFF_E000` (base of boot ROM). CPU starts here with MMU in flat mode (M=0).
-- **Exception vector table:** Fixed physical addresses at `0x0000_0000` in RAM. Vector fetches bypass the MMU.
+- **Reset vector:** `0xFFFF_E000` (base of boot ROM). CPU starts here with MMU in flat mode (M=0). This is a hardwired PC reset value, not part of the vector table.
+- **Exception vector table (MIPS/68k-style):** 16 words at physical `0x0000_0000` in RAM. Each entry contains a 32-bit handler address (not an instruction). The CPU reads the handler address from the vector table with MMU bypass, then jumps to that address. Software writes handler addresses at boot time via `STW`.
 - **Unmapped regions:** Accessing unmapped addresses produces a bus fault exception.
 
 ### I/O Peripheral Map
