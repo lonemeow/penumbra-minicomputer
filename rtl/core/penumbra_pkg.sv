@@ -83,6 +83,24 @@ package penumbra_pkg;
     localparam logic [3:0] SYSREG_MMU_TLB_PTE  = 4'd4;  // TLB lower: {PPN[19:0], SW[3:0], flags[7:0]}
     localparam logic [3:0] SYSREG_MMU_TLB_IDX  = 4'd5;  // TLB slot: {26'b0, way[0], set[4:0]}
 
+    // ── UART register offsets (word-strided within 4 KB page) ────
+    // Memory-mapped I/O at 0xFF00_0000. Each 8-bit register
+    // occupies a 32-bit word (data in bits [7:0]).
+    localparam logic [31:0] UART_BASE = 32'hFF00_0000;
+
+    localparam logic [4:0] UART_RBR = 5'h00;  // Receive buffer (read) / Transmit holding (write)
+    localparam logic [4:0] UART_THR = 5'h00;  // (same offset as RBR)
+    localparam logic [4:0] UART_IER = 5'h04;  // Interrupt enable
+    localparam logic [4:0] UART_IIR = 5'h08;  // Interrupt identification (read)
+    localparam logic [4:0] UART_FCR = 5'h08;  // FIFO control (write)
+    localparam logic [4:0] UART_LCR = 5'h0C;  // Line control (DLAB = bit 7)
+    localparam logic [4:0] UART_MCR = 5'h10;  // Modem control (OUT2 = bit 3)
+    localparam logic [4:0] UART_LSR = 5'h14;  // Line status
+    localparam logic [4:0] UART_MSR = 5'h18;  // Modem status
+    localparam logic [4:0] UART_SCR = 5'h1C;  // Scratch register
+    localparam logic [4:0] UART_DLL = 5'h00;  // Divisor latch low (DLAB=1)
+    localparam logic [4:0] UART_DLM = 5'h04;  // Divisor latch high (DLAB=1)
+
     // ── Exception vector numbers ────────────────────────────────
     // Vector address = {26'b0, vector_num, 2'b00} (word-aligned table at 0x00)
     localparam logic [3:0] VEC_RESET     = 4'd0;   // 0x00 — Reset

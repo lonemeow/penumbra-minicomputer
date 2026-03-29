@@ -9,6 +9,10 @@
 //   - Testbench detects the pulse immediately — no PC stability polling
 //   - On failure: dumps all registers and PC
 //
+// UART support:
+//   - TX bytes are printed to stdout as they are transmitted
+//   - RX is not driven (i_uart_rx_valid = 0) — future: stdin or buffer
+//
 // Usage: make sim MOD=machine_sim TB=tb_cpu_prog PROG=test_fib
 
 #include <cstdio>
@@ -24,6 +28,12 @@ static void tick(Vmachine_sim* d) {
     if (tfp) { tfp->dump(sim_time); sim_time++; }
     d->i_clk = 1; d->eval();
     if (tfp) { tfp->dump(sim_time); sim_time++; }
+
+    // Check for UART TX output on rising edge
+    if (d->o_uart_tx_valid) {
+        putchar(d->o_uart_tx_data);
+        fflush(stdout);
+    }
 }
 
 static uint32_t read_reg(Vmachine_sim* cpu, int reg) {
@@ -49,6 +59,8 @@ static int run_until_halt(Vmachine_sim* cpu, int limit) {
 static void reset(Vmachine_sim* cpu) {
     cpu->i_rst = 1;
     cpu->i_irq = 0;
+    cpu->i_uart_rx_valid = 0;
+    cpu->i_uart_rx_data = 0;
     cpu->i_dbg_reg_addr = 0;
     tick(cpu);
     tick(cpu);
@@ -65,7 +77,7 @@ int main() {
     printf("── Program Runner ──\n\n");
     reset(cpu);
 
-    int cycles = run_until_halt(cpu, 5000);
+    int cycles = run_until_halt(cpu, 50000);
     if (tfp) { tfp->close(); delete tfp; tfp = nullptr; }
 
     if (cycles < 0) {

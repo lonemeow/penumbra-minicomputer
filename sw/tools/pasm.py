@@ -64,6 +64,24 @@ BUILTIN_CONSTANTS = {
     "TLB_X":        0x20,
     "TLB_U":        0x40,
     "TLB_G":        0x80,
+
+    # UART MMIO (16450-compatible, word-strided at 0xFF00_0000)
+    "UART_BASE":    0xFF000000,
+    "UART_DATA":    0x00,   # RBR (read) / THR (write), DLAB=0
+    "UART_IER":     0x04,   # Interrupt enable, DLAB=0
+    "UART_IIR":     0x08,   # Interrupt identification (read)
+    "UART_LCR":     0x0C,   # Line control (DLAB = bit 7)
+    "UART_MCR":     0x10,   # Modem control
+    "UART_LSR":     0x14,   # Line status
+    "UART_MSR":     0x18,   # Modem status
+    "UART_SCR":     0x1C,   # Scratch register
+    "UART_DLL":     0x00,   # Divisor latch low (DLAB=1)
+    "UART_DLM":     0x04,   # Divisor latch high (DLAB=1)
+
+    # UART LSR bit masks
+    "LSR_DR":       0x01,   # Data ready (RX)
+    "LSR_THRE":     0x20,   # TX holding register empty
+    "LSR_TEMT":     0x40,   # Transmitter empty
 }
 
 # ── Register parsing ─────────────────────────────────────────

@@ -1,18 +1,21 @@
-// Penumbra Simulation Machine — cpu_core + RAM + boot ROM + sysreg devices
+// Penumbra Simulation Machine — cpu_core + RAM + boot ROM + UART + sysreg devices
 //
 // Integration top for Verilator simulation. Wires the CPU core to
-// simple synchronous memory, boot ROM, and sysreg peripherals (sysid).
+// simple synchronous memory, boot ROM, a 16450-compatible simulation
+// UART, and sysreg peripherals (sysid).
 //
 // Address decode matches the physical memory map:
-//   addr[31:24] == 0xFF → Boot ROM (8 KB at 0xFFFF_E000)
-//   otherwise           → RAM (16 MB at 0x0000_0000)
+//   0x0000_0000 – 0x01FF_FFFF   RAM (16 MB, wrapping)
+//   0xFF00_0000 – 0xFF00_0FFF   UART (4 KB page, MMIO)
+//   0xFFFF_E000 – 0xFFFF_FFFF   Boot ROM (8 KB)
+//   everything else              → RAM (wraps, no bus fault in sim)
 //
 // CPU boots from ROM at 0xFFFF_E000 (default RESET_PC), same as
 // real hardware. Programs are assembled with --org 0xFFFFE000.
 //
 // The real hardware equivalent (machine_ulx3s) would replace
 // simple_mem with an SDRAM controller, boot_rom with real flash,
-// and add UART/timer/IRQ controller.
+// sim_uart with a baud-rate UART, and add timer/IRQ controller.
 
 // verilator lint_off UNUSEDSIGNAL
 module machine_sim
@@ -21,8 +24,15 @@ module machine_sim
     input  logic        i_clk,
     input  logic        i_rst,
 
-    // ── External interrupt ──────────────────────────────────
+    // ── External interrupt (directly from testbench) ────────
     input  logic        i_irq,
+
+    // ── UART external signals (directly accessible by TB) ───
+    output logic        o_uart_tx_valid,
+    output logic [7:0]  o_uart_tx_data,
+    input  logic        i_uart_rx_valid,
+    input  logic [7:0]  i_uart_rx_data,
+    output logic        o_uart_rx_ack,
 
     // ── Debug / observation ports ────────────────────────────
     output logic [31:0] o_pc,
@@ -43,6 +53,11 @@ module machine_sim
     logic [31:0] sys_wdata;
     logic        sys_cycle, sys_we;
     logic [31:0] sys_rdata;
+
+    // ── Internal IRQ (UART IRQ OR external testbench IRQ) ───
+    logic uart_irq;
+    logic combined_irq;
+    assign combined_irq = i_irq | uart_irq;
 
     // ══════════════════════════════════════════════════════════
     // CPU Core (default RESET_PC = 0xFFFF_E000)
@@ -69,7 +84,7 @@ module machine_sim
         .i_sys_rdata    (sys_rdata),
 
         // Interrupt
-        .i_irq          (i_irq),
+        .i_irq          (combined_irq),
 
         // Debug
         .o_pc           (o_pc),
@@ -81,14 +96,22 @@ module machine_sim
     // ══════════════════════════════════════════════════════════
     // Address decode
     // ══════════════════════════════════════════════════════════
-    logic sel_rom;
-    assign sel_rom = (mem_addr[31:24] == 8'hFF);
+    //   sel_rom:  0xFFFF_E000 – 0xFFFF_FFFF  (8 KB boot ROM)
+    //   sel_uart: 0xFF00_0000 – 0xFF00_0FFF  (4 KB UART page)
+    //   sel_ram:  everything else (wraps in simple_mem)
+    logic sel_rom, sel_uart, sel_ram;
+
+    assign sel_rom  = (mem_addr[31:13] == 19'h7FFFF);       // 0xFFFF_Exxx
+    assign sel_uart = (mem_addr[31:12] == 20'hFF000);       // 0xFF00_0xxx
+    assign sel_ram  = ~sel_rom & ~sel_uart;
 
     // Gate enables to the selected device
-    logic ram_re, ram_we, rom_re;
-    assign ram_re = mem_re & ~sel_rom;
-    assign ram_we = mem_we & ~sel_rom;
-    assign rom_re = mem_re &  sel_rom;
+    logic ram_re, ram_we, rom_re, uart_re, uart_we;
+    assign ram_re  = mem_re & sel_ram;
+    assign ram_we  = mem_we & sel_ram;
+    assign rom_re  = mem_re & sel_rom;
+    assign uart_re = mem_re & sel_uart;
+    assign uart_we = mem_we & sel_uart;
 
     // ══════════════════════════════════════════════════════════
     // RAM (16 MB at 0x0000_0000)
@@ -123,16 +146,57 @@ module machine_sim
         .o_busy    (rom_busy)
     );
 
-    // ── Memory read mux ─────────────────────────────────────
-    // Registered sel_rom tracks which device was addressed on
+    // ══════════════════════════════════════════════════════════
+    // UART (4 KB at 0xFF00_0000, MMIO)
+    // ══════════════════════════════════════════════════════════
+    logic [31:0] uart_rdata;
+    logic        uart_busy;
+
+    sim_uart u_uart (
+        .i_clk       (i_clk),
+        .i_rst       (i_rst),
+        .i_addr      (mem_addr),
+        .i_wdata     (mem_wdata),
+        .i_we        (uart_we),
+        .i_re        (uart_re),
+        .o_rdata     (uart_rdata),
+        .o_busy      (uart_busy),
+        .o_tx_valid  (o_uart_tx_valid),
+        .o_tx_data   (o_uart_tx_data),
+        .i_rx_valid  (i_uart_rx_valid),
+        .i_rx_data   (i_uart_rx_data),
+        .o_rx_ack    (o_uart_rx_ack),
+        .o_irq       (uart_irq)
+    );
+
+    // ── Memory read data mux ────────────────────────────────
+    // Registered select tracks which device was addressed on
     // the previous cycle (when the read data becomes valid).
-    logic sel_rom_r;
+    logic sel_rom_r, sel_uart_r;
+
     always_ff @(posedge i_clk) begin
-        sel_rom_r <= sel_rom;
+        sel_rom_r  <= sel_rom;
+        sel_uart_r <= sel_uart;
     end
 
-    assign mem_rdata = sel_rom_r ? rom_rdata : ram_rdata;
-    assign mem_busy  = sel_rom   ? rom_busy  : ram_busy;
+    always_comb begin
+        if (sel_rom_r)
+            mem_rdata = rom_rdata;
+        else if (sel_uart_r)
+            mem_rdata = uart_rdata;
+        else
+            mem_rdata = ram_rdata;
+    end
+
+    // ── Busy mux (combinational — current cycle) ────────────
+    always_comb begin
+        if (sel_rom)
+            mem_busy = rom_busy;
+        else if (sel_uart)
+            mem_busy = uart_busy;
+        else
+            mem_busy = ram_busy;
+    end
 
     // ══════════════════════════════════════════════════════════
     // Sysreg devices (external, dev_id >= 1)
