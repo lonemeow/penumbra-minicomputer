@@ -60,7 +60,7 @@ endif
 		-o ../V$(MOD) \
 		$(PKG_SV) $$(find rtl -name '$(MOD).sv') sim/$(TB).cpp
 	@# Assemble program and microcode for $readmemh
-	@if test -f sim/programs/$(PROG).s; then $(PASM) sim/programs/$(PROG).s -o program.hex; fi
+	@if test -f sim/programs/$(PROG).s; then $(PASM) --org 0xFFFFE000 sim/programs/$(PROG).s -o program.hex; fi
 	@if test -f sw/microcode/microcode.uasm; then $(UASM) sw/microcode/microcode.uasm -o microcode.hex; fi
 	@echo "── Running $(MOD) testbench ──"
 	@$(DOCKER_RUN) --entrypoint ./$(BUILD_DIR)/V$(MOD) $(DOCKER_IMAGE)
@@ -90,7 +90,7 @@ test:
 	@$(UASM) sw/microcode/microcode.uasm -o microcode.hex
 	@pass=0; fail=0; failed=""; \
 	for prog in $(TEST_PROGS); do \
-		if ! $(PASM) sim/programs/$$prog.s -o program.hex; then \
+		if ! $(PASM) --org 0xFFFFE000 sim/programs/$$prog.s -o program.hex; then \
 			printf "  \033[31mFAIL\033[0m  %s (assembler error)\n" "$$prog"; \
 			fail=$$((fail + 1)); \
 			failed="$$failed $$prog"; \

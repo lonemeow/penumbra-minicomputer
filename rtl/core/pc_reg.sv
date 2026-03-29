@@ -16,6 +16,9 @@
 
 module pc_reg
     import penumbra_pkg::*;
+#(
+    parameter logic [31:0] RESET_PC = 32'hFFFF_E000  // Boot ROM base
+)
 (
     input  logic        i_clk,
     input  logic        i_rst,
@@ -43,7 +46,7 @@ module pc_reg
 
     always_ff @(posedge i_clk) begin
         if (i_rst)
-            pc <= 32'h0000_0000;    // Reset vector at address 0
+            pc <= RESET_PC;
         else if (i_pc_load)
             pc <= i_pc_next;
     end

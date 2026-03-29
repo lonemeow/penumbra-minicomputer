@@ -121,7 +121,7 @@ SLOT_ZONES = [
     (0x20, 0x40, 4, "Format L"),      # 8 ×4 slots
     (0x40, 0x60, 2, "R-SYS"),         # 16 ×2 slots (system ops, op[4]=1)
     (0x60, 0x64, 2, "Format B"),      # 2 ×2 slots: Bcc (0x60), BL (0x62)
-    (0x70, 0x71, 1, "Exception"),     # 1 single-entry slot (int_entry)
+    (0x70, 0x80, 1, "Exception"),     # int_entry (3 micro-ops: MAR, read, PC←MDR)
     (0x80, 0xC0, 4, "Format M"),      # 16 ×4 slots
 ]
 

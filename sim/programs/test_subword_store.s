@@ -6,11 +6,7 @@
 ;
 ; Result: R1=1 PASS, R1=0 FAIL
 
-.org 0x00
-    B    start
-
-.org 0x40
-start:
+_start:
     LLI  R1, #0
     LLI  R9, #0x200         ; base address (well past program code)
 

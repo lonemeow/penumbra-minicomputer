@@ -16,15 +16,6 @@
 .equ KERN_RWX, 0xB9
 
 ; ═══════════════════════════════════════════════════════════════
-; Vector table
-; ═══════════════════════════════════════════════════════════════
-.org 0x00
-    B    start              ; 0x00: reset
-    B    fail               ; 0x04: IRQ
-    B    tlb_miss_handler   ; 0x08: TLB miss
-    B    fail               ; 0x0C: protection fault
-
-; ═══════════════════════════════════════════════════════════════
 ; TLB miss handler — reads exception regs, ERETs to alternate_entry
 ; ═══════════════════════════════════════════════════════════════
 tlb_miss_handler:
@@ -42,7 +33,7 @@ tlb_miss_handler:
     LUI   R10, #0x8000        ; SR.S=1 (bit 31), SR.I=0
 
     ; Load alternate_entry address
-    LLI   R11, alternate_entry
+    LA    R11, #alternate_entry
 
     ; ERET to alternate_entry with constructed SR
     ERET  R10, R11
@@ -60,8 +51,12 @@ alternate_entry:
 ; ═══════════════════════════════════════════════════════════════
 ; Main test
 ; ═══════════════════════════════════════════════════════════════
-start:
+_start:
     LLI  R1, #0               ; assume fail
+
+    ; ── Install vector table in RAM ─────────────────────────
+    LA   R2, #tlb_miss_handler
+    STW  R2, [R0 + #8]        ; vector[2] = TLB miss (offset 0x08)
 
     ; ── Map VPN 0 → PPN 0 (code page) ────────────────────────
     LLI  R2, #0
@@ -70,12 +65,20 @@ start:
     LLI  R3, #KERN_RWX
     WRSYS R3, #MMU, #TLB_PTE
 
+    ; ── Map ROM page (VPN 0xFFFFE → PPN 0xFFFFE) ───────────
+    LLI  R2, #30
+    WRSYS R2, #MMU, #TLB_INDEX
+    LI   R3, #0x0FFFFE00
+    WRSYS R3, #MMU, #TLB_VPN
+    LI   R3, #0xFFFFE0B9
+    WRSYS R3, #MMU, #TLB_PTE
+
     ; ── Enable MMU ────────────────────────────────────────────
     LLI  R4, #1
     WRSYS R4, #MMU, #MMUCR
 
     ; ── Save address of the faulting LDW for handler to verify ─
-    LLI  R12, fault_ldw
+    LA   R12, #fault_ldw
 
     ; ── Access unmapped page → fault ──────────────────────────
     LLI  R5, #0x3000

@@ -12,7 +12,7 @@
 ;   3 = TLB_VPN, 4 = TLB_PTE, 5 = TLB_INDEX
 
 _start:
-    LLI  LR, #fail           ; set return address
+    LA   LR, #fail           ; set return address
     LLI  R1, #0              ; R1 = result accumulator (0 = fail)
 
     ; ── Test 1: Write/read MMUCR ─────────────────────────────

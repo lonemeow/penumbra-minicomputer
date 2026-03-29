@@ -4,7 +4,7 @@
 ; Computes fib(10), checks result = 55.
 
 ; ── Boot preamble ────────────────────────────────────────────
-        LLI  LR, #check        ; R13 = return address
+        LA   LR, #check        ; R13 = return address
         B    fib               ; call test
 
 check:

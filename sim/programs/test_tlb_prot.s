@@ -24,13 +24,14 @@
 .equ FSTAT_W,   0x200      ; bit [9] = write access
 
 ; ═══════════════════════════════════════════════════════════════
-; Vector table
+; Entry point — set up vectors at runtime, then run tests
 ; ═══════════════════════════════════════════════════════════════
-.org 0x00
-    B    start              ; 0x00: reset
-    B    fail               ; 0x04: IRQ
-    B    fail               ; 0x08: TLB miss — unexpected
-    B    prot_handler       ; 0x0C: protection fault
+_start:
+    ; Install TLB protection fault handler (VEC_TLB_PROT = 3, offset 0x0C)
+    LA   R2, #prot_handler
+    STW  R2, [R0 + #0x0C]
+
+    B    start
 
 ; ═══════════════════════════════════════════════════════════════
 ; Protection fault handler
@@ -99,6 +100,14 @@ start:
     LLI  R3, #0x0100
     WRSYS R3, #MMU, #TLB_VPN
     LLI  R3, #0x10A9            ; PTE: PPN=1, V|R|X|G (no W!)
+    WRSYS R3, #MMU, #TLB_PTE
+
+    ; Map ROM page (VPN 0xFFFFE → PPN 0xFFFFE)
+    LLI  R2, #30
+    WRSYS R2, #MMU, #TLB_INDEX
+    LI   R3, #0x0FFFFE00
+    WRSYS R3, #MMU, #TLB_VPN
+    LI   R3, #0xFFFFE0B9
     WRSYS R3, #MMU, #TLB_PTE
 
     ; Enable MMU

@@ -21,13 +21,59 @@
 .equ FSTAT_USR,  0x800     ; bit [11] = user-mode access
 
 ; ═══════════════════════════════════════════════════════════════
-; Vector table
+; Main setup (supervisor mode)
 ; ═══════════════════════════════════════════════════════════════
-.org 0x00
-    B    start              ; 0x00: reset
-    B    fail               ; 0x04: IRQ
-    B    fail               ; 0x08: TLB miss
-    B    prot_handler       ; 0x0C: protection fault
+_start:
+    LLI  R1, #0               ; assume fail
+
+    ; ── Install vector table in RAM ───────────────────────────
+    LA   R2, #prot_handler
+    STW  R2, [R0 + #0x0C]     ; vector[3] = protection fault handler
+
+    ; ── Plant sentinel at physical 0x1000 (MMU off) ───────────
+    LLI  R2, #0xFACE
+    LLI  R3, #0x1000
+    STW  R2, [R3]
+
+    ; ── Map VPN 0 → PPN 0 (user-accessible code page) ────────
+    LLI  R2, #0
+    WRSYS R2, #MMU, #TLB_INDEX
+    WRSYS R2, #MMU, #TLB_VPN
+    LLI  R3, #USER_RWX         ; V|R|W|X|U|G
+    WRSYS R3, #MMU, #TLB_PTE
+
+    ; ── Map VPN 1 → PPN 1 (kernel-only, no U) ────────────────
+    LLI  R2, #1
+    WRSYS R2, #MMU, #TLB_INDEX
+    LLI  R3, #0x0100           ; VPN=1, ASID=0
+    WRSYS R3, #MMU, #TLB_VPN
+    LLI  R3, #0x10B9           ; PTE: PPN=1, V|R|W|X|G (no U!)
+    WRSYS R3, #MMU, #TLB_PTE
+
+    ; ── Map ROM page (VPN 0xFFFFE → PPN 0xFFFFE) ───────────
+    LLI  R2, #30
+    WRSYS R2, #MMU, #TLB_INDEX
+    LI   R3, #0x0FFFFE00
+    WRSYS R3, #MMU, #TLB_VPN
+    LI   R3, #0xFFFFE0B9
+    WRSYS R3, #MMU, #TLB_PTE
+
+    ; ── Enable MMU ────────────────────────────────────────────
+    LLI  R6, #1
+    WRSYS R6, #MMU, #MMUCR
+
+    ; ── Set up handler expectations ───────────────────────────
+    LLI  R10, #0x1000          ; expected FAULT_ADDR
+
+    ; ── Switch to user mode via ERET ──────────────────────────
+    ; SR: S=0 (user mode), I=0
+    ; PC: user_code label
+    LLI  R2, #0                ; user-mode SR
+    LA   R3, #user_code
+    ERET R2, R3
+
+    ; Should never reach here
+    B    fail
 
 ; ═══════════════════════════════════════════════════════════════
 ; Protection fault handler (runs in supervisor mode)
@@ -92,49 +138,6 @@ user_code:
     ; PASS — user code successfully accessed remapped page
     LLI  R1, #1
     BREAK
-
-; ═══════════════════════════════════════════════════════════════
-; Main setup (supervisor mode)
-; ═══════════════════════════════════════════════════════════════
-start:
-    LLI  R1, #0               ; assume fail
-
-    ; ── Plant sentinel at physical 0x1000 (MMU off) ───────────
-    LLI  R2, #0xFACE
-    LLI  R3, #0x1000
-    STW  R2, [R3]
-
-    ; ── Map VPN 0 → PPN 0 (user-accessible code page) ────────
-    LLI  R2, #0
-    WRSYS R2, #MMU, #TLB_INDEX
-    WRSYS R2, #MMU, #TLB_VPN
-    LLI  R3, #USER_RWX         ; V|R|W|X|U|G
-    WRSYS R3, #MMU, #TLB_PTE
-
-    ; ── Map VPN 1 → PPN 1 (kernel-only, no U) ────────────────
-    LLI  R2, #1
-    WRSYS R2, #MMU, #TLB_INDEX
-    LLI  R3, #0x0100           ; VPN=1, ASID=0
-    WRSYS R3, #MMU, #TLB_VPN
-    LLI  R3, #0x10B9           ; PTE: PPN=1, V|R|W|X|G (no U!)
-    WRSYS R3, #MMU, #TLB_PTE
-
-    ; ── Enable MMU ────────────────────────────────────────────
-    LLI  R6, #1
-    WRSYS R6, #MMU, #MMUCR
-
-    ; ── Set up handler expectations ───────────────────────────
-    LLI  R10, #0x1000          ; expected FAULT_ADDR
-
-    ; ── Switch to user mode via ERET ──────────────────────────
-    ; SR: S=0 (user mode), I=0
-    ; PC: user_code label
-    LLI  R2, #0                ; user-mode SR
-    LLI  R3, user_code
-    ERET R2, R3
-
-    ; Should never reach here
-    B    fail
 
 fail:
     BREAK

@@ -240,13 +240,19 @@ bl:
 # ═══════════════════════════════════════════════════════════════
 # Exception/interrupt entry (0x70)
 # Hardware has already saved EPC, ESR, set S=1, I=0
-# via except_entry pulse. This micro-routine loads the vector
-# address into PC to jump to the handler.
+# via except_entry pulse. This micro-routine reads the handler
+# address from the vector table (MIPS/68k-style: table contains
+# addresses, not instructions) and jumps there.
+#
+# Vector table: 16 words at physical 0x00, MMU bypassed.
+# Software writes handler addresses via STW at boot time.
 # ═══════════════════════════════════════════════════════════════
 
 .org 0x70
 int_entry:
-  a_src=VECTOR pc=ABUS
+  a_src=VECTOR alu=PASS_A mar_load=1 pc=HOLD branch=SEQ
+  mem_read=1 mdr_load_mem=1 pc=HOLD branch=STALL
+  pc=MDR
 
 # ═══════════════════════════════════════════════════════════════
 # Format M — Memory load/store (0x80–0xBF, ×4 spacing)

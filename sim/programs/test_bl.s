@@ -6,11 +6,7 @@
 ;   3. RET (JMP R13) returns to the instruction after BL
 ;   4. Nested BL works with manual LR save/restore
 
-.org 0x00
-    B start             ; reset vector
-
-.org 0x40
-start:
+_start:
     ; ── Test 1: Basic BL and RET ──
     LLI R2, #0
     BL sub1

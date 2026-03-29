@@ -16,34 +16,14 @@
 .equ KERN_RWX, 0xB9          ; V|R|W|X|G
 
 ; ═══════════════════════════════════════════════════════════════
-; Vector table
-; ═══════════════════════════════════════════════════════════════
-.org 0x00
-    B    start              ; 0x00: reset
-    B    fail               ; 0x04: IRQ — unexpected
-    B    tlb_miss_handler   ; 0x08: TLB miss
-    B    fail               ; 0x0C: protection fault — unexpected
-
-; ═══════════════════════════════════════════════════════════════
-; TLB miss handler — maps VPN 1 → PPN 1, then returns
-; ═══════════════════════════════════════════════════════════════
-tlb_miss_handler:
-    ; Install mapping: VPN 1 → PPN 1 in TLB slot 1
-    LLI  R10, #1
-    WRSYS R10, #MMU, #TLB_INDEX   ; slot 1 (set=1, way=0)
-    LLI  R11, #0x0100             ; VPN word: VPN=1 (bits[27:8]), ASID=0
-    WRSYS R11, #MMU, #TLB_VPN
-    LLI  R11, #0x10B9             ; PTE: PPN=1 (bits[31:12]=0x00001), flags=KERN_RWX
-    WRSYS R11, #MMU, #TLB_PTE     ; commits entry
-
-    ; Return to faulting instruction (LDW at 0x1000 will now hit)
-    ERET
-
-; ═══════════════════════════════════════════════════════════════
 ; Main test
 ; ═══════════════════════════════════════════════════════════════
-start:
+_start:
     LLI  R1, #0                ; assume fail
+
+    ; ── Install vector table in RAM ──────────────────────────
+    LA   R2, #tlb_miss_handler
+    STW  R2, [R0 + #8]        ; vector[2] = TLB miss handler (VEC_TLB_MISS)
 
     ; ── Plant sentinel at physical 0x1000 (MMU off = bypass) ──
     LLI  R2, #0xFACE
@@ -55,6 +35,14 @@ start:
     WRSYS R4, #MMU, #TLB_INDEX
     WRSYS R4, #MMU, #TLB_VPN
     LLI  R5, #KERN_RWX
+    WRSYS R5, #MMU, #TLB_PTE
+
+    ; ── Map ROM page (VPN 0xFFFFE → PPN 0xFFFFE) ───────────
+    LLI  R4, #30
+    WRSYS R4, #MMU, #TLB_INDEX
+    LI   R5, #0x0FFFFE00
+    WRSYS R5, #MMU, #TLB_VPN
+    LI   R5, #0xFFFFE0B9
     WRSYS R5, #MMU, #TLB_PTE
 
     ; ── Enable MMU (page 1 intentionally NOT mapped) ─────────
@@ -76,3 +64,18 @@ start:
     LLI  R1, #1
 fail:
     BREAK
+
+; ═══════════════════════════════════════════════════════════════
+; TLB miss handler — maps VPN 1 → PPN 1, then returns
+; ═══════════════════════════════════════════════════════════════
+tlb_miss_handler:
+    ; Install mapping: VPN 1 → PPN 1 in TLB slot 1
+    LLI  R10, #1
+    WRSYS R10, #MMU, #TLB_INDEX   ; slot 1 (set=1, way=0)
+    LLI  R11, #0x0100             ; VPN word: VPN=1 (bits[27:8]), ASID=0
+    WRSYS R11, #MMU, #TLB_VPN
+    LLI  R11, #0x10B9             ; PTE: PPN=1 (bits[31:12]=0x00001), flags=KERN_RWX
+    WRSYS R11, #MMU, #TLB_PTE     ; commits entry
+
+    ; Return to faulting instruction (LDW at 0x1000 will now hit)
+    ERET

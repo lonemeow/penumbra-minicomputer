@@ -12,11 +12,7 @@
 ;
 ; Result: R1=1 PASS, R1=0 FAIL
 
-.org 0x00
-    B    start
-
-.org 0x40
-start:
+_start:
     LLI  R1, #0
 
     ; ── Store a known word pattern ────────────────────────

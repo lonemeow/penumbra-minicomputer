@@ -18,6 +18,9 @@
 
 module cpu_core
     import penumbra_pkg::*;
+#(
+    parameter logic [31:0] RESET_PC = 32'hFFFF_E000
+)
 (
     input  logic        i_clk,
     input  logic        i_rst,
@@ -343,16 +346,21 @@ module cpu_core
         endcase
     end
 
-    // ── Vector fetch bypass ──────────────────────────────────
-    logic vector_fetch;
+    // ── Vector table read bypass ────────────────────────────
+    // int_entry (0x70-0x72) reads a handler address from the
+    // vector table at physical 0x00. The data read at micro-op
+    // 0x71 must bypass the MMU (vector table is physical).
+    // Set when except_entry fires (one cycle before int_entry
+    // starts), cleared when int_entry completes (fetch_go).
+    logic vector_read;
 
     always_ff @(posedge i_clk) begin
         if (i_rst)
-            vector_fetch <= 1'b0;
-        else if (fetch_go && (upc == 8'h70))
-            vector_fetch <= 1'b1;
-        else if (ir_valid)
-            vector_fetch <= 1'b0;
+            vector_read <= 1'b0;
+        else if (except_entry)
+            vector_read <= 1'b1;
+        else if (fetch_go)
+            vector_read <= 1'b0;
     end
 
     // ══════════════════════════════════════════════════════════
@@ -365,7 +373,7 @@ module cpu_core
         .i_access_type (mmu_access_type),
         .i_user_mode   (mmu_user_mode),
         .i_req         (mmu_req),
-        .i_force_bypass(fetch_active && vector_fetch),
+        .i_force_bypass(vector_read && !fetch_active),
         .o_paddr       (mmu_paddr),
         .o_cacheable   (mmu_cacheable),
         .o_fault       (mmu_fault),
@@ -427,7 +435,7 @@ module cpu_core
     // verilator lint_on UNUSEDSIGNAL
     logic [3:0]  dp_r_sys_dev, dp_r_sys_reg;
 
-    datapath u_datapath (
+    datapath #(.RESET_PC(RESET_PC)) u_datapath (
         .i_clk          (i_clk),
         .i_rst          (i_rst),
 

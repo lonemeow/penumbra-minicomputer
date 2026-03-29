@@ -5,35 +5,13 @@
 ;   2. Handler can skip the faulting instruction and resume execution
 ;   3. Multiple different illegal instructions all trap correctly
 
-; ── Vector table ─────────────────────────────────────────
-.org 0x00
-    B start                     ; 0x00: reset
-    .word 0                     ; 0x04: IRQ (unused)
-    .word 0                     ; 0x08: TLB miss (unused)
-    .word 0                     ; 0x0C: TLB prot (unused)
-    .word 0                     ; 0x10: priv (unused)
-    .word 0                     ; 0x14: syscall (unused)
-    .word 0                     ; 0x18: break (unused)
-    B illegal_handler           ; 0x1C: illegal instruction (vector 7)
-
-; ── Illegal instruction handler ──────────────────────────
-;
-; Must skip the faulting instruction and resume execution.
-; Note: ERET (no args) would return to EPC (the faulting instruction),
-; causing an infinite trap loop. Use ERET Rd, Rs instead, which lets
-; you specify an arbitrary return address.
-;
-illegal_handler:
-    ADD   R2, #1                  ; count handler invocations
-    RDSPR R9, EPC
-    ADD   R9, #4
-    RDSPR R10, ESR
-    ERET  R10, R9
-
 ; ── Main test ────────────────────────────────────────────
-.org 0x80
-start:
+_start:
     LLI R2, #0                  ; R2 = handler call count
+
+    ; ── Install vector table in RAM ─────────────────────────
+    LA   R3, #illegal_handler
+    STW  R3, [R0 + #0x1C]      ; vector[7] = illegal instruction (VEC_ILLEGAL)
 
     ; Test 1: undefined Format L op=7 (reserved)
     ; Encoding: [01][111][Rd=0000][spare=0000000][imm16=0x0000] = 0x7C000000
@@ -54,3 +32,17 @@ start:
     LLI R1, #1
 fail:
     BREAK
+
+; ── Illegal instruction handler ──────────────────────────
+;
+; Must skip the faulting instruction and resume execution.
+; Note: ERET (no args) would return to EPC (the faulting instruction),
+; causing an infinite trap loop. Use ERET Rd, Rs instead, which lets
+; you specify an arbitrary return address.
+;
+illegal_handler:
+    ADD   R2, #1                  ; count handler invocations
+    RDSPR R9, EPC
+    ADD   R9, #4
+    RDSPR R10, ESR
+    ERET  R10, R9

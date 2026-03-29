@@ -14,6 +14,9 @@
 
 module datapath
     import penumbra_pkg::*;
+#(
+    parameter logic [31:0] RESET_PC = 32'hFFFF_E000
+)
 (
     input  logic        i_clk,
     input  logic        i_rst,
@@ -408,7 +411,7 @@ module datapath
     // ── PC unit ──────────────────────────────────────────────
     logic [31:0] pc_plus4, pc_offset, pc_next;
 
-    pc_reg u_pc_reg (
+    pc_reg #(.RESET_PC(RESET_PC)) u_pc_reg (
         .i_clk          (i_clk),
         .i_rst          (i_rst),
         .i_pc_load      (i_pc_load),
