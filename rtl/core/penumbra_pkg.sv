@@ -111,6 +111,12 @@ package penumbra_pkg;
     localparam logic [4:0] UART_DLL = 5'h00;  // Divisor latch low (DLAB=1)
     localparam logic [4:0] UART_DLM = 5'h04;  // Divisor latch high (DLAB=1)
 
+    // ── Physical address map (bus base addresses) ──────────────
+    // Fixed base addresses for memory-mapped devices.
+    // UART_BASE already defined above (32'hFF00_0000).
+    localparam logic [31:0] RAM_BASE = 32'h0000_0000;
+    localparam logic [31:0] ROM_BASE = 32'hFFFF_E000;
+
     // ── Special-purpose register (SPR) numbers ───────────────────
     // Used by RDSPR/WRSPR instructions — encoded in IR[15:12]
     localparam logic [3:0] SPR_ESR = 4'd0;   // Exception SR
