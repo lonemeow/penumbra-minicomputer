@@ -121,6 +121,7 @@ package penumbra_pkg;
     localparam logic [3:0] VEC_SYSCALL   = 4'd5;   // 0x14 — SYSCALL (future)
     localparam logic [3:0] VEC_BREAK     = 4'd6;   // 0x18 — BREAK (software breakpoint)
     localparam logic [3:0] VEC_ILLEGAL   = 4'd7;   // 0x1C — Illegal instruction
+    localparam logic [3:0] VEC_ALIGN     = 4'd8;   // 0x20 — Alignment fault
 
     // ── MMU fault status encoding ─────────────────────────────
     // FAULT_STATUS[3:0] = fault type

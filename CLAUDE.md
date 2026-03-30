@@ -81,7 +81,7 @@ The CPU runs real programs in simulation with the full CPU → MMU → split I/D
 | Sequencer | `rtl/core/sequencer.sv` | — | Micro-PC, branch_cond decode, EI/DI tracking, ei_shadow_clr |
 | Byte extractor | `rtl/core/byte_ext.sv` | 19/19 | Sub-word load extraction: byte/half from 32-bit word, sign/zero extend |
 | Byte replicator | `rtl/core/byte_rep.sv` | 10/10 | Sub-word store lane positioning: replicate byte/half across all lanes |
-| CPU core | `rtl/core/cpu_core.sv` | 27 progs | Full CPU: datapath + sequencer + ROM + MMU + split I/D cache + memory bus mux + fetch + IRQ + MMU traps (data + fetch) + BREAK + SYSCALL + privilege traps + illegal instruction trap + WRSYS/RDSYS + RDSPR/WRSPR + BL + sub-word loads/stores. Cache sysregs (devices 2–3) handled internally. Parameterizable RESET_PC (default 0xFFFF_E000). |
+| CPU core | `rtl/core/cpu_core.sv` | 28 progs | Full CPU: datapath + sequencer + ROM + MMU + split I/D cache + memory bus mux + fetch + IRQ + MMU traps (data + fetch) + alignment fault (fetch) + BREAK + SYSCALL + privilege traps + illegal instruction trap + WRSYS/RDSYS + RDSPR/WRSPR + BL + sub-word loads/stores. Cache sysregs (devices 2–3) handled internally. Parameterizable RESET_PC (default 0xFFFF_E000). |
 | Sim machine | `rtl/soc/machine_sim.sv` | (top) | Simulation integration: cpu_core + boot_rom + simple_mem + sim_uart + sysid. Address decode: 0xFFFF_E000+ → ROM, 0xFF00_0xxx → UART, else → RAM. UART IRQ wired to CPU. Verilator top module for `make test` |
 | Sim UART | `rtl/soc/sim_uart.sv` | via machine_sim | 16450-compatible UART (MMIO at 0xFF00_0000). 8 registers at word stride, DLAB mux, TX busy counter (parameterizable, default ~115200 baud at 25 MHz). NetBSD com(4) compatible via reg-shift=2, reg-io-width=4 |
 | Boot ROM | `rtl/soc/boot_rom.sv` | via machine_sim | Read-only memory (8 KB default), loads program.hex, same 1-cycle busy protocol as simple_mem |
@@ -98,7 +98,7 @@ The CPU runs real programs in simulation with the full CPU → MMU → split I/D
 - **Interactive testbench** (`sim/tb_interactive.cpp`): Bridges host stdin/stdout to UART RX/TX. Raw terminal mode (no echo, no line buffering — boot ROM handles character processing). Polls stdin every 1024 cycles for sub-character-time latency. UART RX handshake: checks `o_uart_rx_ack` on negedge (combinational, pre-posedge) to reliably detect acceptance. No VCD tracing (interactive sessions are long). Exits on BREAK or SIGINT (Ctrl-C). Status messages go to stderr.
 
 ### Exception and Interrupt Handling
-Six sources share the same `except_entry` → `int_entry` → vector dispatch path:
+Eight sources share the same `except_entry` → `int_entry` → vector dispatch path:
 
 **External IRQ (asynchronous):**
 - **Check point:** Dispatch-time (when `ir_valid` fires, before entering S_EXEC)
@@ -123,6 +123,14 @@ Six sources share the same `except_entry` → `int_entry` → vector dispatch pa
 - **Dispatch-time gate:** `break_taken` and `syscall_taken` gated by `!fault_pending` — stale `mem_rdata` during a fetch fault could produce any `dispatch_addr`, including 0x4A (BREAK) or 0x48 (SYSCALL). Without this gate, spurious `except_entry` would corrupt EPC/ESR, and `o_halted` would stop the testbench.
 - **PC preservation:** PC hasn't advanced (still in S_FETCH), so EPC = faulting PC. Handler fills TLB and ERETs to retry the fetch.
 - **Timing:** 2-cycle path, same as data faults — cycle N: `fault_except` → `except_entry` (saves EPC/ESR); cycle N+1: `fault_pending` overrides dispatch to int_entry (0x70).
+
+**Instruction fetch alignment fault (synchronous):**
+- **Check point:** During S_FETCH, before MMU lookup. `fetch_align_fault = fetch_active && (pc[1:0] != 2'b00)`.
+- **Detection:** All instructions are 32-bit, so PC must be word-aligned. Misalignment can occur via JMP Rs (register with odd address), ERET (corrupted EPC), or corrupted vector table entry.
+- **Priority:** Higher than MMU faults — `mmu_req` and `i_re` both gated by `!fetch_align_fault`, so no TLB lookup or cache read occurs. Alignment is checked first.
+- **Vector:** VEC_ALIGN=8 (address 0x20). `fault_vector` set to `VEC_ALIGN` when `fetch_align_fault` is true.
+- **PC preservation:** EPC = misaligned PC. Handler can diagnose or terminate the process. The misaligned address itself is the diagnostic — no separate FAULT_ADDR needed.
+- **Timing:** Same 2-cycle path as other fetch faults via `fault_pending`.
 
 **BREAK instruction (synchronous):**
 - **Check point:** Dispatch-time, detected by `dispatch_addr == 0x4A`
@@ -149,7 +157,7 @@ Six sources share the same `except_entry` → `int_entry` → vector dispatch pa
 - **PC preservation:** Sentinel has `pc=HOLD` (field=0), so EPC = the illegal instruction. Handler can emulate and ERET with EPC+4, or abort the process.
 - **Covers:** All undefined opcodes, reserved Format L/M/B encodings, unimplemented instructions (MUL/DIV/MOD dispatch to sentinel ROM entries).
 
-**Vector table (MIPS/68k-style, address-based):** The vector table at physical 0x00 contains **handler addresses** (not instructions). `int_entry` (3 micro-ops at 0x70–0x72) reads the handler address from `vector_addr = {26'b0, vector_num, 2'b00}`, then loads it into PC via MDR. The vector table data read bypasses the MMU via `vector_read` flag (set on `except_entry`, cleared on `fetch_go`). VEC_RESET=0, VEC_IRQ=1, VEC_TLB_MISS=2, VEC_TLB_PROT=3, VEC_PRIV=4, VEC_SYSCALL=5, VEC_BREAK=6, VEC_ILLEGAL=7. Software writes handler addresses to RAM at boot time via `LA Rd, #handler` + `STW Rd, [R0 + #offset]`. No TLB mapping needed for the vector page — eliminates nested TLB miss on exception entry.
+**Vector table (MIPS/68k-style, address-based):** The vector table at physical 0x00 contains **handler addresses** (not instructions). `int_entry` (3 micro-ops at 0x70–0x72) reads the handler address from `vector_addr = {26'b0, vector_num, 2'b00}`, then loads it into PC via MDR. The vector table data read bypasses the MMU via `vector_read` flag (set on `except_entry`, cleared on `fetch_go`). VEC_RESET=0, VEC_IRQ=1, VEC_TLB_MISS=2, VEC_TLB_PROT=3, VEC_PRIV=4, VEC_SYSCALL=5, VEC_BREAK=6, VEC_ILLEGAL=7, VEC_ALIGN=8. Software writes handler addresses to RAM at boot time via `LA Rd, #handler` + `STW Rd, [R0 + #offset]`. No TLB mapping needed for the vector page — eliminates nested TLB miss on exception entry.
 
 **Reset vector:** CPU boots at `RESET_PC` (default `0xFFFF_E000`, parameterizable). This is NOT part of the vector table — it's a hardwired PC reset value. The reset vector table entry at 0x00 is unused (reset doesn't go through int_entry). `machine_sim` overrides to default; future `machine_ulx3s` uses the default for ROM boot.
 

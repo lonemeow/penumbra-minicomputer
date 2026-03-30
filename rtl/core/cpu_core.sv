@@ -271,9 +271,15 @@ module cpu_core
     logic fetch_fault;
     assign fetch_fault = mmu_fault && fetch_active;
 
+    // Alignment fault: PC must be word-aligned (bits [1:0] == 0).
+    // Checked before MMU lookup — no point translating a misaligned address.
+    // Can happen via JMP Rs, ERET, or corrupted vector table entry.
+    logic fetch_align_fault;
+    assign fetch_align_fault = fetch_active && (pc[1:0] != 2'b00);
+
     always_comb begin
         data_fault   = mmu_fault && !fetch_active;
-        fault_except = (data_fault || fetch_fault) && !fault_pending;
+        fault_except = (data_fault || fetch_fault || fetch_align_fault) && !fault_pending;
     end
 
     always_ff @(posedge i_clk) begin
@@ -282,7 +288,8 @@ module cpu_core
             fault_vector  <= 4'b0;
         end else if (fault_except) begin
             fault_pending <= 1'b1;
-            fault_vector  <= mmu_hit ? VEC_TLB_PROT : VEC_TLB_MISS;
+            fault_vector  <= fetch_align_fault ? VEC_ALIGN :
+                             (mmu_hit ? VEC_TLB_PROT : VEC_TLB_MISS);
         end else if (fault_pending && ctl_pc_load) begin
             fault_pending <= 1'b0;
         end
@@ -371,7 +378,7 @@ module cpu_core
     assign mmu_access_type = fetch_active   ? ACC_EXEC  :
                              ctl_mem_write  ? ACC_WRITE  : ACC_READ;
     assign mmu_user_mode   = !sr_s;
-    assign mmu_req         = fetch_active || ctl_mem_read || ctl_mem_write;
+    assign mmu_req         = (fetch_active && !fetch_align_fault) || ctl_mem_read || ctl_mem_write;
 
     // Gate data access enables with !mmu_fault — a faulting access
     // must never reach the cache/memory. The sequencer detects the
@@ -466,7 +473,7 @@ module cpu_core
         .i_wdata      (32'b0),
         .i_byte_en    (4'b0),
         .i_we         (1'b0),
-        .i_re         (fetch_active && !mmu_fault),
+        .i_re         (fetch_active && !mmu_fault && !fetch_align_fault),
         .i_cacheable  (mmu_cacheable),
         .o_rdata      (icache_rdata),
         .o_busy       (icache_busy),

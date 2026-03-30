@@ -428,17 +428,19 @@ Note: Reset does not use the vector table. The CPU boots at `RESET_PC` (default 
 | 5      | 0x14    | SYSCALL               | Implemented |
 | 6      | 0x18    | BREAK (debug)         | Implemented |
 | 7      | 0x1C    | Illegal instruction   | Implemented |
-| 8-15   | 0x20–0x3C | (reserved for future: alignment, bus error, NMI, etc.) | — |
+| 8      | 0x20    | Alignment fault (fetch) | Implemented |
+| 9-15   | 0x24–0x3C | (reserved for future: data alignment, bus error, NMI, etc.) | — |
 
 ### How the CPU Gets the Vector Number
 
 | Source | Mechanism |
 |--------|-----------|
 | External IRQ | `irq_taken = i_irq & sr_i & !ei_shadow`, hardwired VEC_IRQ=1 |
-| TLB miss | `data_fault` during STALL with `!mmu_hit`, VEC_TLB_MISS=2 |
-| TLB protection | `data_fault` during STALL with `mmu_hit`, VEC_TLB_PROT=3 |
+| TLB miss | `data_fault` or `fetch_fault` with `!mmu_hit`, VEC_TLB_MISS=2 |
+| TLB protection | `data_fault` or `fetch_fault` with `mmu_hit`, VEC_TLB_PROT=3 |
+| Alignment (fetch) | `fetch_align_fault = fetch_active && (pc[1:0] != 0)`, VEC_ALIGN=8 |
 | BREAK | Detected at dispatch (`dispatch_addr == 0x4A`), VEC_BREAK=6 |
-| Priority | fault_pending > BREAK > IRQ |
+| Priority | fault_pending (align > TLB) > illegal > priv > BREAK > SYSCALL > IRQ |
 
 ### External Interrupt Hardware
 
