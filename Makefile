@@ -60,7 +60,9 @@ endif
 		-o ../V$(MOD) \
 		$(PKG_SV) $$(find rtl -name '$(MOD).sv') sim/$(TB).cpp
 	@# Assemble program and microcode for $readmemh
-	@if test -f sim/programs/$(PROG).s; then $(PASM) --org 0xFFFFE000 sim/programs/$(PROG).s -o program.hex; fi
+	@rm -f program.hex microcode.hex
+	@if test -f sim/programs/$(PROG).s; then $(PASM) --org 0xFFFFE000 sim/programs/$(PROG).s -o program.hex; \
+	else echo "ERROR: sim/programs/$(PROG).s not found" >&2; exit 1; fi
 	@if test -f sw/microcode/microcode.uasm; then $(UASM) sw/microcode/microcode.uasm -o microcode.hex; fi
 	@echo "── Running $(MOD) testbench ──"
 	@$(DOCKER_RUN) --entrypoint ./$(BUILD_DIR)/V$(MOD) $(DOCKER_IMAGE)

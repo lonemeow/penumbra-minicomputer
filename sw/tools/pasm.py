@@ -59,6 +59,15 @@ BUILTIN_CONSTANTS = {
     # SYS registers (device 1)
     "MACHINE_ID":   0,
 
+    # Cache device IDs (devices 2 and 3)
+    "DCACHE":       2,
+    "ICACHE":       3,
+
+    # Cache registers (shared layout for both D-cache and I-cache)
+    "CACHE_INFO":   0,
+    "CACHE_CTRL":   1,
+    "CACHE_INVAL":  2,
+
     # TLB PTE flag bits
     "TLB_V":        0x01,
     "TLB_C":        0x04,

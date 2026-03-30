@@ -1,17 +1,24 @@
-// Penumbra CPU Core — complete processor with MMU and cache
+// Penumbra CPU Core — complete processor with MMU and split I/D cache
 //
 // Wires together: datapath, micro-sequencer, microcode ROM, MMU,
-// and cache. Includes inline fetch logic that waits for the memory
-// busy signal (latency-agnostic, works with any backing store).
+// and split I/D caches. Includes inline fetch logic that waits for
+// the memory busy signal (latency-agnostic, works with any backing
+// store).
 //
 // External interfaces:
 //   - Memory bus (post-cache): address, data, byte enables, busy
 //   - Sysreg bus (device 1+): device ID, register, data, cycle/we
 //   - IRQ, debug/observation ports
 //
-// The MMU's sysreg interface (device 0) is handled internally.
-// External sysreg devices (sysid, timer, UART, etc.) are wired
-// by the machine-level integration module.
+// The MMU (device 0) and cache (devices 2–3) sysreg interfaces are
+// handled internally. External sysreg devices (sysid, timer, etc.)
+// are wired by the machine-level integration module.
+//
+// Memory bus mux: the I-cache and D-cache each have a memory-side
+// port. Since fetch (S_FETCH) and data access (S_EXEC) are mutually
+// exclusive, only one cache requests memory at a time. A simple
+// priority mux (D-cache priority) merges them to the single external
+// memory port.
 
 // verilator lint_off UNUSEDSIGNAL
 // verilator lint_off UNSIGNED
@@ -68,20 +75,32 @@ module cpu_core
     logic [31:0] mmu_sys_rdata;
 
     // ── Cache signals ──────────────────────────────────────
+    logic [31:0] icache_rdata, dcache_rdata;
+    logic        icache_busy,  dcache_busy;
     logic [31:0] cache_rdata;
     logic        cache_busy;
+
+    // Mux cache outputs based on active path
+    assign cache_rdata = fetch_active ? icache_rdata : dcache_rdata;
+    assign cache_busy  = fetch_active ? icache_busy  : dcache_busy;
 
     // ── Data access enables (only during execute, not fetch) ──
     logic data_re, data_we;
 
+    // ── Cache sysreg signals ────────────────────────────────
+    logic [31:0] dcache_sys_rdata, icache_sys_rdata;
+
     // ── Sysreg read mux ────────────────────────────────────
-    // Device 0 (MMU) handled internally; device 1+ from external bus.
+    // Devices 0 (MMU), 2 (DCACHE), 3 (ICACHE) handled internally;
+    // remaining devices from external bus.
     logic [31:0] sys_rdata;
     always_comb begin
-        if (dp_r_sys_dev == SYSDEV_MMU)
-            sys_rdata = mmu_sys_rdata;
-        else
-            sys_rdata = i_sys_rdata;
+        case (dp_r_sys_dev)
+            SYSDEV_MMU:    sys_rdata = mmu_sys_rdata;
+            SYSDEV_DCACHE: sys_rdata = dcache_sys_rdata;
+            SYSDEV_ICACHE: sys_rdata = icache_sys_rdata;
+            default:       sys_rdata = i_sys_rdata;
+        endcase
     end
 
     // ── Unified read data (used by both fetch and data path) ──
@@ -181,14 +200,11 @@ module cpu_core
     // Fetch logic — busy-aware instruction fetch
     //
     // During S_FETCH, the address bus carries PC (via fetch_active)
-    // and we assert a read enable through the same cache/memory
-    // path as data accesses. The fetch waits for busy to deassert
-    // before capturing the instruction into IR. This makes fetch
-    // latency-agnostic, just like the STALL-based data path.
-    //
-    // fetch_active and data_re/data_we are mutually exclusive
-    // (S_FETCH vs S_EXEC), so they safely share one memory port.
-    // When we add a split I/D cache, fetch gets its own port.
+    // and the I-cache serves the instruction read. The fetch waits
+    // for busy to deassert before capturing the instruction into IR.
+    // This makes fetch latency-agnostic, just like the STALL-based
+    // data path. The I-cache has its own memory port, merged with
+    // the D-cache port by the memory bus mux below.
     // ══════════════════════════════════════════════════════════
 
     logic fetch_active;
@@ -196,20 +212,29 @@ module cpu_core
 
     logic ir_load;
 
-    // Track that the memory has accepted our fetch request
-    // (we've seen busy go high at least once this fetch cycle)
+    // Track that the fetch request has been accepted.
+    //
+    // Two cases:
+    //   1. Cache miss / pass-through: cache_busy goes high on the
+    //      first cycle. fetch_pending set. Completes when busy drops.
+    //   2. Cache hit (zero-latency): cache_busy never goes high.
+    //      fetch_pending must still get set so completion fires.
+    //
+    // Solution: set fetch_pending when cache_busy is observed (case 1)
+    // OR after one cycle of fetch_active (case 2). The one-cycle
+    // delay ensures the address has propagated through MMU → cache
+    // before we sample the result.
     logic fetch_pending;
     always_ff @(posedge i_clk) begin
         if (i_rst || !fetch_active)
             fetch_pending <= 1'b0;
-        else if (cache_busy)
+        else if (cache_busy || fetch_active)
             fetch_pending <= 1'b1;
     end
 
-    // Fetch completes when pending and memory is no longer busy.
-    // This is a combinational pulse — lasts exactly one cycle
-    // because the sequencer transitions to S_EXEC at the next
-    // posedge, which clears fetch_active.
+    // Fetch completes when pending and cache is not busy.
+    // Cache hits: 2-cycle fetch (one cycle for address setup).
+    // Cache misses: completes when fill finishes.
     logic fetch_complete;
     assign fetch_complete = fetch_active && fetch_pending && !cache_busy;
 
@@ -351,9 +376,10 @@ module cpu_core
     assign data_re = ctl_mem_read  && !fetch_active && !mmu_fault;
     assign data_we = ctl_mem_write && !fetch_active && !mmu_fault;
 
-    // Unified read enable: fetch OR data read (mutually exclusive)
-    logic mem_re;
-    assign mem_re = data_re || fetch_active;
+    // Note: with split I/D caches, each cache gets its own read enable:
+    //   I-cache: i_re = fetch_active
+    //   D-cache: i_re = data_re
+    // No unified mem_re needed — the memory bus mux ORs the outputs.
 
     // ── Byte enable generation ───────────────────────────────
     logic [3:0] byte_en;
@@ -413,27 +439,89 @@ module cpu_core
     );
 
     // ══════════════════════════════════════════════════════════
-    // Cache (stub — pass-through to backing memory)
+    // Split I/D Caches
+    //
+    // I-cache: serves instruction fetch (read-only)
+    // D-cache: serves data loads/stores (read/write)
+    //
+    // Each has its own memory-side port, merged by the bus mux
+    // below. Both share the MMU's physical address and cacheable
+    // output — safe because fetch and data are mutually exclusive.
     // ══════════════════════════════════════════════════════════
-    cache_stub u_cache (
+
+    // ── I-cache memory-side signals ─────────────────────────
+    logic [31:0] icache_mem_addr, icache_mem_wdata;
+    logic [3:0]  icache_mem_byte_en;
+    logic        icache_mem_we, icache_mem_re;
+
+    cache u_icache (
+        .i_clk        (i_clk),
+        .i_rst        (i_rst),
+        .i_paddr      (mmu_paddr),
+        .i_wdata      (32'b0),
+        .i_byte_en    (4'b0),
+        .i_we         (1'b0),
+        .i_re         (fetch_active),
+        .i_cacheable  (mmu_cacheable),
+        .o_rdata      (icache_rdata),
+        .o_busy       (icache_busy),
+        .o_mem_addr   (icache_mem_addr),
+        .o_mem_wdata  (icache_mem_wdata),
+        .o_mem_byte_en(icache_mem_byte_en),
+        .o_mem_we     (icache_mem_we),
+        .o_mem_re     (icache_mem_re),
+        .i_mem_rdata  (i_mem_rdata),
+        .i_mem_busy   (i_mem_busy),
+        // Sysreg (device 3 = ICACHE)
+        .i_sys_reg    (dp_r_sys_reg),
+        .i_sys_wdata  (dp_a_bus),
+        .i_sys_we     (ctl_sys_cycle && ctl_sys_we && (dp_r_sys_dev == SYSDEV_ICACHE)),
+        .o_sys_rdata  (icache_sys_rdata)
+    );
+
+    // ── D-cache memory-side signals ─────────────────────────
+    logic [31:0] dcache_mem_addr, dcache_mem_wdata;
+    logic [3:0]  dcache_mem_byte_en;
+    logic        dcache_mem_we, dcache_mem_re;
+
+    cache u_dcache (
         .i_clk        (i_clk),
         .i_rst        (i_rst),
         .i_paddr      (mmu_paddr),
         .i_wdata      (dp_mem_wdata),
         .i_byte_en    (byte_en),
         .i_we         (data_we),
-        .i_re         (mem_re),
+        .i_re         (data_re),
         .i_cacheable  (mmu_cacheable),
-        .o_rdata      (cache_rdata),
-        .o_busy       (cache_busy),
-        .o_mem_addr   (o_mem_addr),
-        .o_mem_wdata  (o_mem_wdata),
-        .o_mem_byte_en(o_mem_byte_en),
-        .o_mem_we     (o_mem_we),
-        .o_mem_re     (o_mem_re),
+        .o_rdata      (dcache_rdata),
+        .o_busy       (dcache_busy),
+        .o_mem_addr   (dcache_mem_addr),
+        .o_mem_wdata  (dcache_mem_wdata),
+        .o_mem_byte_en(dcache_mem_byte_en),
+        .o_mem_we     (dcache_mem_we),
+        .o_mem_re     (dcache_mem_re),
         .i_mem_rdata  (i_mem_rdata),
-        .i_mem_busy   (i_mem_busy)
+        .i_mem_busy   (i_mem_busy),
+        // Sysreg (device 2 = DCACHE)
+        .i_sys_reg    (dp_r_sys_reg),
+        .i_sys_wdata  (dp_a_bus),
+        .i_sys_we     (ctl_sys_cycle && ctl_sys_we && (dp_r_sys_dev == SYSDEV_DCACHE)),
+        .o_sys_rdata  (dcache_sys_rdata)
     );
+
+    // ── Memory bus mux ──────────────────────────────────────
+    // D-cache priority. Since fetch and data access are mutually
+    // exclusive (S_FETCH vs S_EXEC), only one cache requests
+    // memory at a time. The mux is a safety net, not a real
+    // arbiter.
+    logic dcache_has_mem;
+    assign dcache_has_mem = dcache_mem_re | dcache_mem_we;
+
+    assign o_mem_addr    = dcache_has_mem ? dcache_mem_addr    : icache_mem_addr;
+    assign o_mem_wdata   = dcache_mem_wdata;    // only D-cache writes
+    assign o_mem_byte_en = dcache_mem_byte_en;
+    assign o_mem_we      = dcache_mem_we;       // only D-cache writes
+    assign o_mem_re      = dcache_mem_re | icache_mem_re;
 
     // ══════════════════════════════════════════════════════════
     // Sysreg bus — expose to external devices
