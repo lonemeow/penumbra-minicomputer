@@ -30,7 +30,7 @@ The architecture is fully specified in `doc/`. Key specs:
   - `hw/microcode/` - Microcode source (assembled into ROM)
   - `hw/rom/` - Boot ROM firmware
   - `hw/tools/` - Microcode assembler (`uasm.py`)
-  - `hw/constraints/` - ULX3S pin/timing constraints
+  - `hw/constraints/` - ULX3S pin/timing constraints (`ulx3s_v20.lpf` — covers all board revisions)
 - `sw/` - Software tools
   - `sw/tools/` - ISA assembler (`pasm.py`)
 - `doc/` - Architecture specs (ISA, MMU, bus, memory map, datapath, toolchain)
