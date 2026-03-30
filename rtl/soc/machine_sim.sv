@@ -51,6 +51,7 @@ module machine_sim
     logic        mem_we, mem_re;
     logic [31:0] mem_rdata;
     logic        mem_busy;
+    logic        bus_fault;
 
     // ── CPU ↔ sysreg bus ────────────────────────────────────
     logic [3:0]  sys_dev, sys_reg;
@@ -78,6 +79,7 @@ module machine_sim
         .o_mem_re       (mem_re),
         .i_mem_rdata    (mem_rdata),
         .i_mem_busy     (mem_busy),
+        .i_bus_fault    (bus_fault),
 
         // Sysreg bus (external devices)
         .o_sys_dev      (sys_dev),
@@ -206,9 +208,8 @@ module machine_sim
 
     // ── Bus fault detection ─────────────────────────────────
     // Active request with no device claiming the address.
-    // Real hardware: triggers bus error exception via timeout.
-    // Simulation: detected here, wired as exception in future.
-    logic bus_fault;
+    // Real hardware: detected via timeout (no ACK within deadline).
+    // Simulation: combinational — wired to cpu_core as exception.
     assign bus_fault = (mem_re | mem_we) & ~(ram_sel | rom_sel | uart_sel);
 
     // synthesis translate_off

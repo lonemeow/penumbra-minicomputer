@@ -40,6 +40,7 @@ module cpu_core
     output logic        o_mem_re,
     input  logic [31:0] i_mem_rdata,
     input  logic        i_mem_busy,
+    input  logic        i_bus_fault,
 
     // ── Sysreg bus (external devices, dev_id >= 1) ──────────
     output logic [3:0]  o_sys_dev,
@@ -277,10 +278,10 @@ module cpu_core
     logic [3:0]  fault_vector;
 
     logic fetch_fault;
-    assign fetch_fault = mmu_fault && fetch_active;
+    assign fetch_fault = (mmu_fault || i_bus_fault) && fetch_active;
 
     always_comb begin
-        data_fault   = mmu_fault && !fetch_active;
+        data_fault   = (mmu_fault || i_bus_fault) && !fetch_active;
         fault_except = (data_fault || fetch_fault) && !fault_pending;
     end
 
@@ -290,8 +291,9 @@ module cpu_core
             fault_vector  <= 4'b0;
         end else if (fault_except) begin
             fault_pending <= 1'b1;
-            fault_vector  <= mmu_align ? VEC_ALIGN :
-                             (mmu_hit  ? VEC_TLB_PROT : VEC_TLB_MISS);
+            fault_vector  <= i_bus_fault ? VEC_BUS_FAULT :
+                             mmu_align   ? VEC_ALIGN :
+                             (mmu_hit    ? VEC_TLB_PROT : VEC_TLB_MISS);
         end else if (fault_pending && ctl_pc_load) begin
             fault_pending <= 1'b0;
         end
@@ -441,6 +443,7 @@ module cpu_core
         .i_req         (mmu_req),
         .i_force_bypass(vector_read && !fetch_active),
         .i_mem_size    (mmu_mem_size),
+        .i_bus_fault   (i_bus_fault),
         .o_paddr       (mmu_paddr),
         .o_cacheable   (mmu_cacheable),
         .o_fault       (mmu_fault),

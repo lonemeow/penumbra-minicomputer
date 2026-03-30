@@ -356,17 +356,19 @@ After int_entry loads the vector address into PC, the next instruction fetch **b
 
 | Vector | Address | Source |
 |--------|---------|--------|
-| 0 | 0x00 | Reset |
+| 0 | 0x00 | Bus fault (no device at address) |
 | 1 | 0x04 | External IRQ |
 | 2 | 0x08 | TLB miss |
 | 3 | 0x0C | TLB protection fault |
 | 4 | 0x10 | Privilege violation |
-| 5 | 0x14 | SYSCALL (not yet implemented) |
+| 5 | 0x14 | SYSCALL |
 | 6 | 0x18 | BREAK |
+| 7 | 0x1C | Illegal instruction |
+| 8 | 0x20 | Alignment fault |
 
 ### Priority
 
-`fault_pending > BREAK > priv_taken > IRQ`
+`fault_pending > illegal_pending > priv_pending > BREAK > SYSCALL > IRQ`
 
 Fault sets SR.I=0, so `irq_taken` is false at the next dispatch — faults always take priority.
 

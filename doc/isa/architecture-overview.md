@@ -432,7 +432,7 @@ Note: Reset does not use the vector table. The CPU boots at `RESET_PC` (default 
 
 | Vector | Address | Source                | Status |
 |--------|---------|-----------------------|--------|
-| 0      | 0x00    | Reset                 | Unused (reset uses RESET_PC, not vector table) |
+| 0      | 0x00    | Bus fault (no device at address) | Implemented |
 | 1      | 0x04    | External IRQ          | Implemented |
 | 2      | 0x08    | TLB miss              | Implemented |
 | 3      | 0x0C    | TLB protection fault  | Implemented |
@@ -441,7 +441,7 @@ Note: Reset does not use the vector table. The CPU boots at `RESET_PC` (default 
 | 6      | 0x18    | BREAK (debug)         | Implemented |
 | 7      | 0x1C    | Illegal instruction   | Implemented |
 | 8      | 0x20    | Alignment fault (fetch + data) | Implemented |
-| 9-15   | 0x24–0x3C | (reserved for future: bus error, NMI, etc.) | — |
+| 9-15   | 0x24–0x3C | (reserved for future: NMI, etc.) | — |
 
 ### How the CPU Gets the Vector Number
 

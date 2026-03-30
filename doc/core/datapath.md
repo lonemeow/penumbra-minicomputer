@@ -487,7 +487,7 @@ STALL checks a unified busy signal: `cache_busy | alu_busy`. When the operation 
 
 - **busy=1:** Hold micro-PC (keep waiting).
 - **busy=0, fault=0:** micro-PC++ (normal completion).
-- **busy=0, fault=1:** Trigger exception via fetch unit. The D-cache/MMU provides the fault vector (4=TLB miss/page fault, 6=alignment fault, 9=bus error). Hardware pre-actions fire with `EPC ← PC` (still pointing at the faulting instruction, since `pc_src=001` hasn't executed). The instruction is effectively aborted mid-execution.
+- **busy=0, fault=1:** Trigger exception. The fault vector is selected by priority: bus fault (0), alignment (8), TLB protection (3), TLB miss (2). Hardware pre-actions fire with `EPC ← PC` (still pointing at the faulting instruction, since `pc_src=001` hasn't executed). The instruction is effectively aborted mid-execution. Bus faults are detected at the physical bus level (no device responded); all other faults are detected by the MMU.
 
 Since memory operations and multi-cycle ALU operations never overlap in the same micro-op, a single busy line is sufficient. The fault signal is only meaningful for memory operations (ALU operations cannot fault).
 

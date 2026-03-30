@@ -191,7 +191,7 @@ Slave devices that can take advantage of sequential addresses internally (e.g., 
 
 ### Bus Error / Timeout
 
-When an access hits unmapped address space, no device responds — no `ack` is asserted. A **bus timeout counter** on the master side detects this: if `req` is held for N cycles of a local reference oscillator without `ack`, it asserts `bus_error`. The CPU treats this as an exception.
+When an access hits unmapped address space, no device responds — no `ack` is asserted. A **bus timeout counter** on the master side detects this: if `req` is held for N cycles of a local reference oscillator without `ack`, it asserts `bus_error`. The CPU treats this as a **bus fault exception** (vector 0, `VEC_BUS_FAULT`). The MMU latches FAULT_ADDR (virtual address) and FAULT_STATUS (type=`FAULT_BUS`, access info). This is how the OS probes for RAM size at boot (bypass mode) and optional devices (MMU-enabled, like NetBSD `bus_space_peek`).
 
 In discrete, the timeout is a simple counter chip (e.g., 74x163 + comparator). On FPGA, it is a configurable down-counter in the async bridge. This catches both unmapped addresses and hung peripherals. There is no central address decoder or "default slave" — each device is responsible for recognizing its own address range (see [Address Decoding](#address-decoding)).
 

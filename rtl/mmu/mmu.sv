@@ -25,6 +25,7 @@ module mmu
     input  logic        i_req,          // Translation request
     input  logic        i_force_bypass, // Override: identity map this request (vector fetch)
     input  logic [1:0]  i_mem_size,     // Access size: 00=byte, 01=half, 10=word
+    input  logic        i_bus_fault,    // Bus fault (no device at physical address)
 
     // ── Translation output ─────────────────────────────────
     output logic [31:0] o_paddr,        // Physical address
@@ -94,6 +95,10 @@ module mmu
                 // TLB miss (no matching entry)
                 fault_addr   <= i_vaddr;
                 fault_status <= {20'b0, i_user_mode, i_access_type, 4'b0, FAULT_TLB_MISS};
+            end else if (i_bus_fault && !i_force_bypass) begin
+                // Bus fault (physical address not claimed by any device)
+                fault_addr   <= i_vaddr;
+                fault_status <= {20'b0, i_user_mode, i_access_type, 4'b0, FAULT_BUS};
             end
 
             // Sysreg writes

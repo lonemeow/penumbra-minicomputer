@@ -93,6 +93,16 @@ BUILTIN_CONSTANTS = {
     "LSR_DR":       0x01,   # Data ready (RX)
     "LSR_THRE":     0x20,   # TX holding register empty
     "LSR_TEMT":     0x40,   # Transmitter empty
+
+    # MMU fault status masks (mirrors penumbra_pkg.sv FSTAT_*)
+    "FAULT_TLB_MISS": 1,    # fault_type[3:0] = TLB miss
+    "FAULT_PROT":     2,    # fault_type[3:0] = protection violation
+    "FAULT_ALIGN":    3,    # fault_type[3:0] = alignment
+    "FAULT_BUS":      4,    # fault_type[3:0] = bus fault (no device)
+    "FSTAT_R":    0x100,    # bit 8: faulting access was read
+    "FSTAT_W":    0x200,    # bit 9: faulting access was write
+    "FSTAT_X":    0x400,    # bit 10: faulting access was execute
+    "FSTAT_USR":  0x800,    # bit 11: faulting access was user mode
 }
 
 # ── Register parsing ─────────────────────────────────────────

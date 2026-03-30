@@ -311,13 +311,13 @@ device/register map and assembly recipes.
 
 The vector table is at **fixed physical addresses** starting at 0x00. The vector
 fetch bypasses the MMU (no TLB mapping needed for the vector page). Each
-entry is a 32-bit instruction word (typically a branch to the handler).
+entry is a **32-bit handler address** (MIPS/68k-style, not an instruction like ARM).
 
 `vector_addr = vector_number × 4`
 
 | Vector | Address | Source | Status |
 |--------|---------|--------|--------|
-| 0 | 0x00 | Reset | Implemented |
+| 0 | 0x00 | Bus fault (no device) | Implemented |
 | 1 | 0x04 | External IRQ | Implemented |
 | 2 | 0x08 | TLB miss | Implemented |
 | 3 | 0x0C | TLB protection fault | Implemented |
@@ -325,7 +325,8 @@ entry is a 32-bit instruction word (typically a branch to the handler).
 | 5 | 0x14 | SYSCALL | Implemented |
 | 6 | 0x18 | BREAK (debug) | Implemented |
 | 7 | 0x1C | Illegal instruction | Implemented |
-| 8--15 | 0x20--0x3C | Reserved (NMI, alignment, bus error, etc.) | -- |
+| 8 | 0x20 | Alignment fault | Implemented |
+| 9--15 | 0x24--0x3C | Reserved (NMI, etc.) | -- |
 
 On exception entry, the hardware:
 1. Saves PC and SR to exception registers (EPC, ESR)

@@ -125,7 +125,7 @@ package penumbra_pkg;
 
     // ── Exception vector numbers ────────────────────────────────
     // Vector address = {26'b0, vector_num, 2'b00} (word-aligned table at 0x00)
-    localparam logic [3:0] VEC_RESET     = 4'd0;   // 0x00 — Reset
+    localparam logic [3:0] VEC_BUS_FAULT = 4'd0;   // 0x00 — Bus fault (no device at address)
     localparam logic [3:0] VEC_IRQ       = 4'd1;   // 0x04 — External interrupt
     localparam logic [3:0] VEC_TLB_MISS  = 4'd2;   // 0x08 — TLB miss (no matching entry)
     localparam logic [3:0] VEC_TLB_PROT  = 4'd3;   // 0x0C — TLB protection fault
@@ -140,6 +140,7 @@ package penumbra_pkg;
     localparam logic [3:0] FAULT_TLB_MISS = 4'b0001;
     localparam logic [3:0] FAULT_PROT     = 4'b0010;
     localparam logic [3:0] FAULT_ALIGN    = 4'b0011;
+    localparam logic [3:0] FAULT_BUS      = 4'b0100;
     // FAULT_STATUS[7:4] = reserved (gap for future fault types)
     // FAULT_STATUS[11:8] = faulting access info
     localparam int FSTAT_R   = 8;   // Faulting access was read
