@@ -24,7 +24,7 @@ module datapath
     // ══════════════════════════════════════════════════════════════
     // Micro-word control signals (from micro-sequencer / ROM)
     // ══════════════════════════════════════════════════════════════
-    input  logic [1:0]  i_a_src,        // A-bus source mux
+    input  logic [2:0]  i_a_src,        // A-bus source mux (3-bit: 0-3 direct, 4=SPR)
     input  logic [3:0]  i_reg_a_sel,    // Register address A (IR-indirect or literal)
     input  logic [3:0]  i_reg_b_sel,    // Register address B (IR-indirect or literal)
     input  logic [3:0]  i_reg_w_sel,    // Register address W (IR-indirect or literal)
@@ -43,7 +43,7 @@ module datapath
     input  logic [2:0]  i_pc_src,       // PC source mux
     input  logic        i_alu_start,    // Start multi-cycle ALU op
     input  logic        i_pc_load,      // Load PC from pc_mux output
-    input  logic        i_cross_bank,   // R14 opposite bank (GETUSP/SETUSP)
+    input  logic        i_spr_write,    // SPR write (WRSPR): sys_we & !sys_cycle
 
     // ══════════════════════════════════════════════════════════════
     // Exception / interrupt control (from fetch unit)
@@ -225,13 +225,85 @@ module datapath
     assign resolved_b = resolve_reg_sel(i_reg_b_sel, ir_rd_resolved, ir_rs_resolved);
     assign resolved_w = resolve_reg_sel(i_reg_w_sel, ir_rd_resolved, ir_rs_resolved);
 
+    // ── SPR decode logic ─────────────────────────────────────
+    // Decodes the SPR field (IR[15:12] = fe_r_sys_dev) for RDSPR/WRSPR.
+    //
+    // RDSPR (a_src=SPR=4): selects A-bus source based on SPR number.
+    //   SPR 0 (ESR) → amux select = ESR (01)
+    //   SPR 1 (EPC) → amux select = EPC (10)
+    //   SPR 2 (USP) → amux select = REG (00), reg_a override = R14, cross_bank = 1
+    //
+    // WRSPR (spr_write=1): routes R-bus to SPR write target.
+    //   SPR 0 (ESR) → esr_load from w_bus
+    //   SPR 1 (EPC) → epc_load from w_bus
+    //   SPR 2 (USP) → regfile write R14, cross_bank = 1
+
+    logic [1:0]  amux_sel;         // 2-bit select for amux (decoded from 3-bit a_src)
+    logic [3:0]  spr_reg_a;        // reg_a override for RDSPR USP
+    logic        spr_cross_bank;   // cross_bank for USP access
+    logic        spr_reg_a_override; // 1 when RDSPR USP needs reg_a = R14
+    logic        spr_esr_load;     // WRSPR ESR: write w_bus to ESR
+    logic        spr_epc_load;     // WRSPR EPC: write w_bus to EPC
+    logic        spr_w_en;         // WRSPR USP: force regfile write
+    logic [3:0]  spr_reg_w;        // WRSPR USP: force write to R14
+
+    always_comb begin
+        // Defaults: pass through, no overrides
+        amux_sel          = i_a_src[1:0];
+        spr_reg_a         = 4'd0;
+        spr_cross_bank    = 1'b0;
+        spr_reg_a_override = 1'b0;
+        spr_esr_load      = 1'b0;
+        spr_epc_load      = 1'b0;
+        spr_w_en          = 1'b0;
+        spr_reg_w         = 4'd0;
+
+        // a_src values 0-3 pass through directly to amux
+        // a_src = 4 (SPR): decode from IR[15:12]
+        if (i_a_src == 3'd4) begin
+            case (fe_r_sys_dev)
+                SPR_ESR: amux_sel = 2'b01;  // ESR
+                SPR_EPC: amux_sel = 2'b10;  // EPC
+                SPR_USP: begin
+                    amux_sel           = 2'b00;  // REG (register file)
+                    spr_reg_a          = REG_SP;
+                    spr_cross_bank     = 1'b1;
+                    spr_reg_a_override = 1'b1;
+                end
+                default: amux_sel = 2'b00;
+            endcase
+        end
+
+        // WRSPR decode: sys_we=1, sys_cycle=0
+        if (i_spr_write) begin
+            case (fe_r_sys_dev)
+                SPR_ESR: spr_esr_load = 1'b1;
+                SPR_EPC: spr_epc_load = 1'b1;
+                SPR_USP: begin
+                    spr_w_en       = 1'b1;
+                    spr_reg_w      = REG_SP;
+                    spr_cross_bank = 1'b1;
+                end
+                default: ;
+            endcase
+        end
+    end
+
+    // Apply SPR overrides to register addressing
+    logic [3:0] final_reg_a;
+    assign final_reg_a = spr_reg_a_override ? spr_reg_a : resolved_a;
+
+    logic [3:0] final_reg_w;
+    assign final_reg_w = spr_w_en ? spr_reg_w : resolved_w;
+
     // ── F-bit write-enable gating ────────────────────────────
     // For Format R flag-only variants (CMP, TEST): IR[16]=1 suppresses
     // the register write. Only applies when the write address comes from
     // IR (IR_RD encoding) — literal register writes (exception entry etc.)
     // are never gated by the F bit.
+    // spr_w_en overrides for WRSPR USP (regfile write forced by SPR decode).
     logic actual_w_en;
-    assign actual_w_en = i_reg_w_en
+    assign actual_w_en = (i_reg_w_en | spr_w_en)
         & ~(fmt == 2'b00 && fe_r_f && i_reg_w_sel == REG_SEL_IR_RD);
 
     // ── Register file ────────────────────────────────────────
@@ -241,16 +313,16 @@ module datapath
     regfile u_regfile (
         .i_clk        (i_clk),
         .i_rst        (i_rst),
-        .i_rd_addr_a  (resolved_a),
+        .i_rd_addr_a  (final_reg_a),
         .o_rd_data_a  (reg_a_data),
         .i_rd_addr_b  (resolved_b),
         .o_rd_data_b  (reg_b_data),
-        .i_wr_addr    (resolved_w),
+        .i_wr_addr    (final_reg_w),
         .i_wr_data    (w_bus),
         .i_wr_en      (actual_w_en),
         .i_pc         (pc_value),
         .i_supervisor  (sr_s_wire),
-        .i_cross_bank  (i_cross_bank),
+        .i_cross_bank  (spr_cross_bank),
         .i_dbg_addr    (i_dbg_reg_addr),
         .o_dbg_data    (o_dbg_reg_data)
     );
@@ -275,6 +347,7 @@ module datapath
         .i_sr_load      (i_sr_load),
         .i_wdata        (w_bus),
         .i_except_entry (i_except_entry),
+        .i_esr_load     (spr_esr_load),
         .i_ei_set       (i_ei_set),
         .i_di_set       (i_di_set),
         .i_ei_shadow_clr(i_ei_shadow_clr),
@@ -305,7 +378,7 @@ module datapath
         .i_esr   (esr),
         .i_epc   (epc),
         .i_vector_addr (vector_addr),
-        .i_sel         (i_a_src),
+        .i_sel         (amux_sel),
         .o_a_bus       (a_bus)
     );
 
@@ -418,6 +491,8 @@ module datapath
         .i_pc_next      (pc_next),
         .i_offset22     (fe_b_offset22),
         .i_except_entry (i_except_entry),
+        .i_epc_load     (spr_epc_load),
+        .i_epc_wdata    (w_bus),
         .o_pc           (pc_value),
         .o_pc_plus4     (pc_plus4),
         .o_pc_offset    (pc_offset),

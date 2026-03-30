@@ -258,14 +258,11 @@ my_function:
 | DI | `DI` | Disable interrupts (SR.I = 0, immediate) | Yes |
 | WRSYS | `WRSYS Rd, #dev, #reg` | Write Rd to system register | Yes |
 | RDSYS | `RDSYS Rd, #dev, #reg` | Read system register into Rd | Yes |
-| RDSPR | `RDSPR Rd, ESR` | Read exception status register into Rd | Yes |
-| RDSPR | `RDSPR Rd, EPC` | Read exception PC into Rd | Yes |
+| RDSPR | `RDSPR Rd, {ESR\|EPC\|USP}` | Read special-purpose register into Rd | Yes |
+| WRSPR | `WRSPR {ESR\|EPC\|USP}, Rd` | Write Rd to special-purpose register | Yes |
 | ERET | `ERET` | Exception return via EPC/ESR (restore PC + SR) | Yes |
-| ERET | `ERET Rd, Rs` | Exception return: SR = Rd, PC = Rs | Yes |
 | GETSR | `GETSR Rd` | Rd = SR | No |
 | SETSR | `SETSR Rs` | SR = Rs | Yes |
-| RDSPR | `RDSPR Rd, USP` | Rd = user stack pointer (banked-away) | Yes |
-| WRSPR | `WRSPR USP, Rd` | User stack pointer = Rd | Yes |
 | SYSCALL | `SYSCALL` | Trap to vector 5 (system call) | No |
 | BREAK | `BREAK` | Trap to vector 6 (debug breakpoint) | No |
 | ICACHE_INV | `ICACHE_INV` | Invalidate instruction cache | Yes |
@@ -336,7 +333,7 @@ On exception entry, the hardware:
 3. Loads PC from the vector table entry (physical fetch, MMU bypassed)
 
 `ERET` restores ESR then EPC (returns to interrupted/faulting instruction).
-`ERET Rd, Rs` atomically loads SR from Rd and PC from Rs (context switch to a different process).
+`WRSPR EPC, Rd`/`WRSPR ESR, Rd` modifies the return state before `ERET` (e.g., skip a faulting instruction, or context switch to a different process).
 `RDSPR Rd, ESR`/`RDSPR Rd, EPC` reads the exception registers so the kernel can save them.
 
 ---
@@ -354,7 +351,6 @@ label:                      ; Labels end with colon
     LDW  R3, [R4 + #8]     ; Memory: [base + #offset] or [base - #offset]
     BEQ  label              ; Branches take labels or numeric offsets
     ERET                    ; Exception return via EPC/ESR
-    ERET R2, R3             ; Exception return via explicit registers
     .word 0xDEADBEEF        ; Raw data directive
     .org 0x1000             ; Set assembly address
     .equ NAME, 0xFF         ; Named constant
@@ -408,11 +404,11 @@ All instructions are 32 bits. Bits [31:30] select one of four formats.
 | 0 | ADD | 8 | MOV | 16 | WRSYS | 24 | JMP |
 | 1 | SUB | 9 | NOT | 17 | RDSYS | 25 | EI |
 | 2 | AND | 10 | MUL | 18 | GETSR | 26 | DI |
-| 3 | OR | 11 | MULU | 19 | SETSR | 27 | ERET Rd,Rs |
-| 4 | XOR | 12 | DIV | 20 | SYSCALL | 28 | WRSPR USP |
-| 5 | SHL | 13 | DIVU | 21 | BREAK | 29 | RDSPR ESR |
-| 6 | SHR | 14 | MOD | 22 | ERET | 30 | RDSPR EPC |
-| 7 | SAR | 15 | MODU | 23 | ICACHE_INV | 31 | RDSPR USP |
+| 3 | OR | 11 | MULU | 19 | SETSR | 27 | WRSPR |
+| 4 | XOR | 12 | DIV | 20 | SYSCALL | 28 | RDSPR |
+| 5 | SHL | 13 | DIVU | 21 | BREAK | 29 | (free) |
+| 6 | SHR | 14 | MOD | 22 | ERET | 30 | (free) |
+| 7 | SAR | 15 | MODU | 23 | ICACHE_INV | 31 | (free) |
 
 ### Format L -- Immediate Operations (bits [31:30] = 01)
 
@@ -498,11 +494,11 @@ assembler but do not yet have microcode.
 | JMP (RET) | Yes | |
 | EI, DI | Yes | ei_shadow, privilege check |
 | WRSYS, RDSYS | Yes | Privileged; see `doc/isa/sysregs-reference.md` |
-| RDSPR | Yes | Reads EPC or ESR |
-| ERET | Yes | Both forms (EPC/ESR and Rd/Rs) |
+| RDSPR | Yes | Unified: reads ESR, EPC, or USP (SPR in IR[15:12]) |
+| WRSPR | Yes | Unified: writes ESR, EPC, or USP (SPR in IR[15:12]) |
+| ERET | Yes | Returns via EPC/ESR |
 | BREAK | Yes | Trap to vector 6 |
 | GETSR, SETSR | No | |
-| RDSPR USP, WRSPR USP | Yes | cross_bank micro-word bit; GETUSP/SETUSP accepted as aliases |
 | SYSCALL | Yes | Trap to vector 5, unprivileged |
 | ICACHE_INV | No | |
 | NOP (pseudo) | Yes | ADD R0, R0 |

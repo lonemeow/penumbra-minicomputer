@@ -134,7 +134,7 @@ module cpu_core
     logic [31:0] pc;
 
     // Sequencer → datapath control signals
-    logic [1:0]  ctl_a_src;
+    logic [2:0]  ctl_a_src;
     logic [3:0]  ctl_reg_a, ctl_reg_b, ctl_reg_w;
     logic        ctl_w_en;
     logic [4:0]  ctl_alu_op;
@@ -147,10 +147,18 @@ module cpu_core
     logic [1:0]  ctl_mem_size;
     logic        ctl_sign_ext;
     logic [2:0]  ctl_pc_src;
-    logic        ctl_sys_cycle, ctl_sys_we, ctl_alu_start;
+    logic [1:0]  ctl_sys_op;
+    logic        ctl_alu_start;
     logic        ctl_pc_load;
-    logic        ctl_cross_bank;
     logic        ctl_ei_set, ctl_di_set, ctl_ei_shadow_clr;
+
+    // Decode sys_op enumeration
+    logic        ctl_sys_cycle;  // Sysreg bus active (SYS_READ or SYS_WRITE)
+    logic        ctl_sys_we;     // Sysreg bus write (SYS_WRITE only)
+    logic        spr_write;      // SPR write (SPR_WRITE)
+    assign ctl_sys_cycle = ctl_sys_op[1];              // bit 1 set for SYS_READ(2) and SYS_WRITE(3)
+    assign ctl_sys_we    = (ctl_sys_op == 2'd3);       // SYS_WRITE only
+    assign spr_write     = (ctl_sys_op == 2'd1);       // SPR_WRITE only
     logic        seq_illegal;
     logic        seq_priv_violation;
 
@@ -186,13 +194,11 @@ module cpu_core
         .o_mem_size      (ctl_mem_size),
         .o_sign_ext      (ctl_sign_ext),
         .o_pc_src        (ctl_pc_src),
-        .o_sys_cycle     (ctl_sys_cycle),
-        .o_sys_we        (ctl_sys_we),
+        .o_sys_op        (ctl_sys_op),
         .o_alu_start     (ctl_alu_start),
         .o_pc_load       (ctl_pc_load),
         .o_illegal       (seq_illegal),
         .o_priv_violation(seq_priv_violation),
-        .o_cross_bank    (ctl_cross_bank),
         .o_ei_set        (ctl_ei_set),
         .o_di_set        (ctl_di_set),
         .o_ei_shadow_clr (ctl_ei_shadow_clr)
@@ -539,7 +545,7 @@ module cpu_core
     assign o_sys_reg   = dp_r_sys_reg;
     assign o_sys_wdata = dp_a_bus;
     assign o_sys_cycle = ctl_sys_cycle;
-    assign o_sys_we    = ctl_sys_we;
+    assign o_sys_we    = ctl_sys_we;  // Only asserted for SYS_WRITE (sys_op==3), never for SPR_WRITE
 
     // ══════════════════════════════════════════════════════════
     // Datapath
@@ -583,7 +589,7 @@ module cpu_core
         .i_pc_src       (ctl_pc_src),
         .i_alu_start    (ctl_alu_start),
         .i_pc_load      (ctl_pc_load),
-        .i_cross_bank   (ctl_cross_bank),
+        .i_spr_write    (spr_write),
 
         // Exception / interrupt entry
         .i_except_entry (except_entry),

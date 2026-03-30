@@ -75,7 +75,7 @@ R14 (SP) is hardware-banked between user and supervisor modes. The hardware main
 - **USP:** User stack pointer, active when S=0
 - **SSP:** Supervisor stack pointer, active when S=1
 
-On privilege transitions (interrupt, trap, RTI), the hardware swaps which physical register is visible as R14. The inactive SP is accessible via privileged instructions for context save/restore.
+On privilege transitions (interrupt, trap, ERET), the hardware swaps which physical register is visible as R14. The inactive SP is accessible via privileged instructions for context save/restore.
 
 This is the only banked register (B1 model). All other registers are shared across modes.
 
@@ -85,7 +85,7 @@ The PC is a **separate hardware register** with its own dedicated adder for bran
 
 **Reads:** When any instruction reads R15 (e.g., as a base register in a load/store), the register file returns the current PC value. This enables PC-relative addressing for loading constants from literal pools.
 
-**Writes:** R15 cannot be written through the ALU or register file write port. PC is modified only by dedicated control flow instructions: branches (B/Bcc/BL), indirect jumps (JMP), return from interrupt (RTI), and exception entry. This eliminates accidental PC writes and simplifies the datapath.
+**Writes:** R15 cannot be written through the ALU or register file write port. PC is modified only by dedicated control flow instructions: branches (B/Bcc/BL), indirect jumps (JMP), exception return (ERET), and exception entry. This eliminates accidental PC writes and simplifies the datapath.
 
 ### Link Register
 
@@ -155,13 +155,13 @@ System operations use the Format R encoding with the following opcodes. The `Rd`
 | 10011 | `SETSR Rd` | Write Rd to SR (privileged) | |
 | 10100 | `SYSCALL` | System call trap (vector 7) | |
 | 10101 | `BREAK` | Debug breakpoint (vector 8) | |
-| 10110 | `RTI` | Return from interrupt (privileged) | |
+| 10110 | `ERET` | Exception return: restore SR from ESR, PC from EPC (privileged) | |
 | 10111 | `ICACHE_INV` | Invalidate entire I-cache (privileged) | |
 | 11000 | `JMP Rs` | PC = Rs (indirect jump) | Rs field; assembler alias: `RET` = `JMP R13` |
 | 11001 | `EI` | Enable interrupts: SR.I = 1 (delayed — see below) | |
 | 11010 | `DI` | Disable interrupts: SR.I = 0 (immediate, privileged) | |
-| 11011 | `GETUSP Rd` | Read banked-away USP to Rd (privileged) | |
-| 11100 | `SETUSP Rs` | Write Rs to banked-away USP (privileged) | |
+| 11011 | `WRSPR {SPR}, Rd` | Write Rd to SPR (privileged) | SPR in spare[15:12]: 0=ESR, 1=EPC, 2=USP |
+| 11100 | `RDSPR Rd, {SPR}` | Read SPR into Rd (privileged) | SPR in spare[15:12]: 0=ESR, 1=EPC, 2=USP |
 | 11101-11111 | (reserved) | Future expansion (3 slots) | |
 
 ### Format L — Immediate (prefix `01`)
@@ -306,9 +306,9 @@ Two privilege levels:
 
 Controlled transitions:
 - **User to supervisor:** Via SYSCALL instruction or hardware interrupt/exception
-- **Supervisor to user:** Via return-from-interrupt (RTI) instruction
+- **Supervisor to user:** Via exception return (ERET) instruction
 
-Privileged instructions: SETSR, DI, WRSYS, RDSYS, RTI, ICACHE_INV, GETUSP, SETUSP. Executing a privileged instruction in user mode raises a privilege violation exception (vector 3).
+Privileged instructions: SETSR, DI, WRSYS, RDSYS, ERET, ICACHE_INV, WRSPR, RDSPR. Executing a privileged instruction in user mode raises a privilege violation exception (vector 3).
 
 Note: EI (enable interrupts) and GETSR (read SR) are **unprivileged** — user code can enable interrupts (they may have been temporarily disabled by the kernel before returning) and can read its own flags.
 
@@ -320,7 +320,7 @@ Note: EI (enable interrupts) and GETSR (read SR) are **unprivileged** — user c
 
 ```asm
 EI          ; SR.I = 1, but interrupts not yet recognized
-RTI         ; executes in the "shadow" — completes before any pending interrupt fires
+ERET        ; executes in the "shadow" — completes before any pending interrupt fires
             ; NOW pending interrupts are checked
 ```
 
@@ -354,7 +354,7 @@ STW   R1,  [SP + #0]
 STW   R2,  [SP + #4]
 ; ... save R3-R13 ...
 STW   R13, [SP + #48]
-GETUSP R1                   ; read banked-away user SP
+RDSPR R1, USP               ; read banked-away user SP
 STW   R1,  [SP + #52]       ; save it too
 
 ; Safe to re-enable interrupts (all critical state saved)
@@ -367,27 +367,39 @@ BL    schedule               ; pick next process, returns proc pointer in R1
 
 ; Restore context for chosen process
 LDW   R2,  [R1 + #PROC_USP]
-SETUSP R2                    ; restore user SP
+WRSPR USP, R2               ; restore user SP
+LDW   R2,  [R1 + #PROC_EPC]
+WRSPR EPC, R2               ; set return address
+LDW   R2,  [R1 + #PROC_ESR]
+WRSPR ESR, R2               ; set return SR (user mode, flags)
 LDW   R2,  [R1 + #PROC_R1]
 ; ... restore R3-R13 from process table ...
 LDW   R13, [R1 + #PROC_R13]
 LDW   R1,  [R1 + #PROC_R1]  ; restore R1 last (was used as pointer)
 
-; Atomic return: enable interrupts, then RTI in the shadow
+; Atomic return: enable interrupts, then ERET in the shadow
 EI
-RTI                          ; pops PC + SR, restores user mode + I=1
+ERET                         ; restores PC + SR from EPC/ESR, returns to user mode
 ```
 
 ## Stack Pointer Access
 
-### GETUSP / SETUSP
+### RDSPR / WRSPR — Special-Purpose Register Access
 
-When in supervisor mode (S=1), the user stack pointer (USP) is banked away and not accessible through R14 (which is SSP). Two privileged instructions provide access:
+Unified instructions for reading and writing the CPU's special-purpose registers. Both are privileged.
 
-- **`GETUSP Rd`** — Read the banked-away USP into Rd
-- **`SETUSP Rs`** — Write Rs to the banked-away USP
+- **`RDSPR Rd, {ESR|EPC|USP}`** — Read SPR into Rd
+- **`WRSPR {ESR|EPC|USP}, Rd`** — Write Rd to SPR
 
-These are essential for saving/restoring the full user context on interrupt entry and process switches. In user mode (S=0), these instructions raise a privilege violation — user code accesses SP (USP) normally through R14.
+SPR encoding in IR[15:12] (same position as `sys_dev` for WRSYS/RDSYS):
+
+| SPR | Number | Description |
+|-----|--------|-------------|
+| ESR | 0 | Exception SR — saved at exception entry |
+| EPC | 1 | Exception PC — saved at exception entry |
+| USP | 2 | User stack pointer — banked-away R14 |
+
+Writing EPC/ESR allows trap handlers to modify the return state before `ERET`. For example, skipping a faulting instruction: `RDSPR R2, EPC; ADD R2, #4; WRSPR EPC, R2; ERET`. USP access is essential for saving/restoring the full user context on interrupt entry and process switches.
 
 ## Exception and Interrupt Model
 
@@ -408,7 +420,7 @@ The kernel interrupt handler then saves remaining registers (R1-R13) and USP in 
 
 ### Exit Sequence
 
-Return-from-interrupt (RTI) restores ESR then EPC, reversing the entry sequence. For context switches (return to a *different* process), IRET Rd, Rs atomically loads SR from Rd and PC from Rs. Both are privileged. RDSPR Rd, ESR/EPC lets the kernel read the exception registers to save them to the process table.
+Return-from-interrupt (RTI/ERET) restores ESR then EPC, reversing the entry sequence. For context switches (return to a *different* process), the kernel uses WRSPR to set EPC/ESR to the new process's saved state, then ERET. RDSPR Rd, ESR/EPC lets the kernel read the exception registers to save them to the process table. All are privileged.
 
 ### Vector Table
 
@@ -483,7 +495,7 @@ Shared with memory bus:
   data[31:0]          — read/write value (existing bus, reused)
 
 Sideband control signals (new, accent bus):
-  sys_cycle            — 1 = this is a system register access, not a memory access
+  sys_cycle            — 1 = this is a sysreg bus access, not a memory access
   sys_dev[3:0]         — target device select
   sys_reg[3:0]         — register index within device
   sys_we               — write enable (1 = WRSYS, 0 = RDSYS)

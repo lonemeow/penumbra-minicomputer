@@ -41,6 +41,9 @@ module status_reg
     // ── Exception entry (hardware pre-action) ────────────────
     input  logic        i_except_entry, // Pulse: snapshot SR, then set S=1, I=0
 
+    // ── Software ESR write (WRSPR ESR) ──────────────────────
+    input  logic        i_esr_load,     // Pulse: write ESR from i_wdata
+
     // ── EI/DI control ────────────────────────────────────────
     input  logic        i_ei_set,       // EI instruction: set I=1, arm ei_shadow
     input  logic        i_di_set,       // DI instruction: set I=0
@@ -115,6 +118,10 @@ module status_reg
                 // Mode switch
                 sr_s <= 1'b1;
                 sr_i <= 1'b0;
+            end
+            // Priority 1b: Software ESR write (WRSPR ESR)
+            else if (i_esr_load) begin
+                esr <= i_wdata;
             end
             // Priority 2: Bulk load (RTI / SETSR)
             else if (i_sr_load) begin

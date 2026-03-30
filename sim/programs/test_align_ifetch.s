@@ -100,8 +100,8 @@ align_handler:
 not_test1:
     LA    R9, #after_test2
 do_eret:
-    RDSPR R11, ESR
-    ERET  R11, R9
+    WRSPR EPC, R9
+    ERET
 
 ; ═══════════════════════════════════════════════════════════════
 ; Target code — copied to RAM at 0x2000 for test 3

@@ -19,9 +19,8 @@ Source format:
         LA   R1, #label     ; Pseudo: load 32-bit label address (LLI+LUI)
         LI   R1, #0x12345678 ; Pseudo: load 32-bit immediate (LLI+LUI)
         ERET                ; Exception return via EPC/ESR
-        ERET R2, R3         ; Exception return via explicit regs
-        RDSPR R1, USP       ; Read user stack pointer
-        WRSPR USP, R1       ; Write user stack pointer
+        RDSPR R1, USP       ; Read special-purpose register (ESR, EPC, or USP)
+        WRSPR USP, R1       ; Write special-purpose register (ESR, EPC, or USP)
         .word 0xDEADBEEF   ; Raw 32-bit data
         .word 0x1234, 0x5678 ; Multiple words
         .byte 0x41, 0x42   ; Raw bytes (packed little-endian into words)
@@ -207,13 +206,8 @@ FORMAT_R_OPS = {
     "JMP":       (24, True,  0),  # Rs field is the target register
     "EI":        (25, False, 0),
     "DI":        (26, False, 0),
-    "IRET":      (27, True,  0),   # Legacy alias for ERET Rd, Rs
-    "_RDSPR_ESR": (29, False, 0),  # RDSPR Rd, ESR (internal: assembler maps RDSPR)
-    "_RDSPR_EPC": (30, False, 0),  # RDSPR Rd, EPC (internal: assembler maps RDSPR)
-    "_WRSPR_USP": (28, False, 0),  # WRSPR USP, Rd (internal: assembler maps WRSPR)
-    "_RDSPR_USP": (31, False, 0),  # RDSPR Rd, USP (internal: assembler maps RDSPR)
-    "GETUSP":    (31, False, 0),   # Legacy alias for RDSPR Rd, USP
-    "SETUSP":    (28, False, 0),   # Legacy alias for WRSPR USP, Rd
+    "WRSPR":     (27, False, 0),   # WRSPR {ESR|EPC|USP}, Rd — SPR in spare[15:12]
+    "RDSPR":     (28, False, 0),   # RDSPR Rd, {ESR|EPC|USP} — SPR in spare[15:12]
 }
 
 # ── Format L — Immediate ops ─────────────────────────────────
@@ -245,6 +239,9 @@ BRANCH_OPS = {
     # Semantic aliases (same condition, clearer intent in context)
     "BZ":  1,  "BNZ": 2,   # Zero/not-zero (after DEC, INC, etc.)
 }
+
+# SPR name → number mapping (encoded in IR[15:12], same position as sys_dev)
+SPR_NAMES = {"ESR": 0, "EPC": 1, "USP": 2}
 
 # Pseudo-instructions
 PSEUDO_OPS = {"NOP", "RET", "LA", "LI"}
@@ -281,26 +278,13 @@ def assemble_line(mnemonic, operands, addr, labels, line_num, constants=None):
     if mn == "RET":
         return encode_format_r(24, 0, 13, 0)  # JMP R13
 
-    # ── ERET — unified exception return ──────────────────────────
-    # ERET        → RTI (return via EPC/ESR, op=22)
-    # ERET Rd, Rs → IRET (return via explicit regs, op=27)
+    # ── ERET — exception return via EPC/ESR ─────────────────────
     if mn == "ERET":
         if len(operands) == 0:
-            # No-arg form: use EPC/ESR (same as RTI)
             op = FORMAT_R_OPS["RTI"][0]
             return encode_format_r(op, 0, 0, 0)
-        elif len(operands) == 2:
-            # Two-arg form: SR ← Rd, PC ← Rs (same as IRET)
-            rd = parse_reg(operands[0])
-            rs = parse_reg(operands[1])
-            if rd is None:
-                raise ValueError(f"bad register '{operands[0]}'")
-            if rs is None:
-                raise ValueError(f"bad register '{operands[1]}'")
-            op = FORMAT_R_OPS["IRET"][0]
-            return encode_format_r(op, rd, rs, 0)
         else:
-            raise ValueError("ERET expects 0 operands (EPC/ESR) or 2 operands (Rd, Rs)")
+            raise ValueError("ERET takes no operands (use WRSPR EPC/ESR to modify return state before ERET)")
 
     # ── Smart mnemonic routing ───────────────────────────────────
     # TODO(human): implement smart_route_to_format_l()
@@ -345,37 +329,36 @@ def assemble_line(mnemonic, operands, addr, labels, line_num, constants=None):
         # Fall through to Format R handling for reg-reg form
 
     # ── RDSPR Rd, {ESR|EPC|USP} — read special-purpose register ──
-    # (handled before FORMAT_R_OPS lookup since internal keys are _RDSPR_*)
+    # Unified: single opcode, SPR number in spare[15:12]
     if mn == "RDSPR":
         if len(operands) != 2:
-            raise ValueError("RDSPR expects Rd, ESR or Rd, EPC or Rd, USP")
+            raise ValueError("RDSPR expects Rd, {ESR|EPC|USP}")
         rd = parse_reg(operands[0])
         if rd is None:
             raise ValueError(f"bad register '{operands[0]}'")
         spec = operands[1].upper()
-        if spec == "ESR":
-            rdspr_op = FORMAT_R_OPS["_RDSPR_ESR"][0]
-        elif spec == "EPC":
-            rdspr_op = FORMAT_R_OPS["_RDSPR_EPC"][0]
-        elif spec == "USP":
-            rdspr_op = FORMAT_R_OPS["_RDSPR_USP"][0]
-        else:
-            raise ValueError(f"RDSPR: unknown special register '{operands[1]}', expected ESR, EPC, or USP")
-        return encode_format_r(rdspr_op, rd, 0, 0)
+        if spec not in SPR_NAMES:
+            raise ValueError(f"RDSPR: unknown SPR '{operands[1]}', expected ESR, EPC, or USP")
+        spr_num = SPR_NAMES[spec]
+        op = FORMAT_R_OPS["RDSPR"][0]
+        spare = spr_num << 12
+        return encode_format_r(op, rd, 0, 0, spare)
 
-    # ── WRSPR {USP}, Rd — write special-purpose register ─────
+    # ── WRSPR {ESR|EPC|USP}, Rd — write special-purpose register ──
+    # Unified: single opcode, SPR number in spare[15:12]
     if mn == "WRSPR":
         if len(operands) != 2:
-            raise ValueError("WRSPR expects USP, Rd")
+            raise ValueError("WRSPR expects {ESR|EPC|USP}, Rd")
         spec = operands[0].upper()
         rd = parse_reg(operands[1])
         if rd is None:
             raise ValueError(f"bad register '{operands[1]}'")
-        if spec == "USP":
-            wrspr_op = FORMAT_R_OPS["_WRSPR_USP"][0]
-        else:
-            raise ValueError(f"WRSPR: unknown special register '{operands[0]}', expected USP")
-        return encode_format_r(wrspr_op, rd, 0, 0)
+        if spec not in SPR_NAMES:
+            raise ValueError(f"WRSPR: unknown SPR '{operands[0]}', expected ESR, EPC, or USP")
+        spr_num = SPR_NAMES[spec]
+        op = FORMAT_R_OPS["WRSPR"][0]
+        spare = spr_num << 12
+        return encode_format_r(op, rd, 0, 0, spare)
 
     # ── Format R ──
     if mn in FORMAT_R_OPS:
@@ -383,18 +366,6 @@ def assemble_line(mnemonic, operands, addr, labels, line_num, constants=None):
 
         if mn in ("SYSCALL", "BREAK", "RTI", "ICACHE_INV", "EI", "DI"):
             return encode_format_r(op, 0, 0, 0)
-
-        # IRET Rd, Rs — SR ← Rd, PC ← Rs (atomic return to different context)
-        if mn == "IRET":
-            if len(operands) != 2:
-                raise ValueError("IRET expects Rd (SR source), Rs (PC source)")
-            rd = parse_reg(operands[0])
-            rs = parse_reg(operands[1])
-            if rd is None:
-                raise ValueError(f"bad register '{operands[0]}'")
-            if rs is None:
-                raise ValueError(f"bad register '{operands[1]}'")
-            return encode_format_r(op, rd, rs, 0)
 
         # WRSYS Rd, #dev, #reg  /  RDSYS Rd, #dev, #reg
         # Encoding: Format R with dev in spare[15:12], reg in spare[11:8]
@@ -421,7 +392,7 @@ def assemble_line(mnemonic, operands, addr, labels, line_num, constants=None):
                 raise ValueError(f"bad register '{operands[0]}'")
             return encode_format_r(op, 0, rs, 0)
 
-        if mn in ("GETSR", "GETUSP"):
+        if mn == "GETSR":
             if len(operands) != 1:
                 raise ValueError(f"{mn} expects Rd")
             rd = parse_reg(operands[0])
@@ -436,16 +407,6 @@ def assemble_line(mnemonic, operands, addr, labels, line_num, constants=None):
             if rs is None:
                 raise ValueError(f"bad register '{operands[0]}'")
             return encode_format_r(op, 0, rs, 0)
-
-        if mn == "SETUSP":
-            # Legacy alias for WRSPR USP, Rd — register goes in Rd field
-            # because microcode uses reg_a=IR_RD to read the source
-            if len(operands) != 1:
-                raise ValueError("SETUSP expects Rd")
-            rd = parse_reg(operands[0])
-            if rd is None:
-                raise ValueError(f"bad register '{operands[0]}'")
-            return encode_format_r(op, rd, 0, 0)
 
         # Standard ALU: mnemonic Rd, Rs
         if len(operands) != 2:

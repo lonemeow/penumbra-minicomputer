@@ -60,8 +60,10 @@ _start:
 
     ; Switch to user mode — user_code will copy R14 to R3 and SYSCALL back
     LLI  R2, #0              ; user-mode SR (S=0, I=0)
+    WRSPR ESR, R2
     LA   R4, #user_code
-    ERET R2, R4
+    WRSPR EPC, R4
+    ERET
 
     B    fail
 

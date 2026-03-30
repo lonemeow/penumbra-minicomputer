@@ -49,8 +49,10 @@ _start:
 
     ; ── Switch to user mode via ERET ──────────────────────────
     LLI  R2, #0                ; user-mode SR (S=0, I=0)
+    WRSPR ESR, R2
     LA   R3, #user_code
-    ERET R2, R3
+    WRSPR EPC, R3
+    ERET
 
     ; Should never reach here
     B    fail

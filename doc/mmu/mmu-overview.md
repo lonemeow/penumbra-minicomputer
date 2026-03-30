@@ -265,7 +265,7 @@ LDW   R1, [R0 + 0x40]
 LDW   R2, [R0 + 0x44]
 LDW   R3, [R0 + 0x48]
 LDW   R4, [R0 + 0x4C]
-RTI
+ERET
 
 .protection_fault:
 ; ... handle permission violation or page-not-present ...
@@ -310,13 +310,13 @@ When switching between processes:
 3. Load new process's page directory base pointer to the fixed location (0x50)
 4. Re-pin handler/kernel entries for the new address space
 5. Restore incoming process state
-6. `RTI` — first few instructions will TLB miss and be loaded on demand
+6. `ERET` — first few instructions will TLB miss and be loaded on demand
 
 ### With ASID (future)
 1. Save outgoing process state
 2. Set MMUCR.ASID to the incoming process's ASID
 3. Load new PD base pointer
-4. Restore incoming process state, `RTI`
+4. Restore incoming process state, `ERET`
 
 No TLB flush needed — entries from different ASIDs coexist. Kernel pages with G=1 are shared. ASID recycling: when all 256 ASIDs are used, flush the TLB and restart allocation.
 

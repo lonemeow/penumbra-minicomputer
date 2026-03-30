@@ -10,7 +10,7 @@ The single authoritative reference for the Penumbra microcode system. Covers the
 
 Penumbra uses **horizontal microcode** — each micro-word directly drives datapath control signals with no decoding. The microcode ROM holds 256 entries of 49 bits each. The micro-sequencer fetches one micro-word per clock cycle and fans out its fields to the datapath.
 
-Most ISA instructions execute in a single micro-op (one ROM entry). Multi-step instructions (loads, stores, RDSYS, RTI, IRET, BL) use 2-4 consecutive entries.
+Most ISA instructions execute in a single micro-op (one ROM entry). Multi-step instructions (loads, stores, RDSYS, ERET, BL) use 2-4 consecutive entries.
 
 The **fetch unit** is hardwired (not microcoded). It handles instruction fetch, IR latching, dispatch address computation, and interrupt/exception detection at dispatch time. The microcode only runs during instruction execution.
 
@@ -133,7 +133,7 @@ When set, latches the ALU's NZCV flag outputs into the status register. Used by 
 
 ### SR Load — `sr_load` [22] (1 bit)
 
-Bulk-loads the entire status register from the W-bus. Used by RTI (restore SR from ESR) and IRET (load SR from a GPR). Overwrites N, Z, C, V, S, and I bits simultaneously.
+Bulk-loads the entire status register from the W-bus. Used by ERET (restore SR from ESR). Overwrites N, Z, C, V, S, and I bits simultaneously.
 
 ### MAR Load — `mar_load` [21] (1 bit)
 
@@ -179,11 +179,20 @@ Selects the next PC value. The selected value loads into the PC register at the 
 
 **Conditional override:** When `branch=BRT` and the ISA condition is false, the sequencer forces `pc_src` to `NEXT` regardless of the micro-word value. Same for `branch=BRF` when condition is true. This implements conditional branches with a single micro-word.
 
-### System Register Bus — `sys_cycle` [10], `sys_we` [9] (1 bit each)
+### System/SPR Operation — `sys_op` [10:9] (2 bits)
 
-Controls the sysreg sideband bus. `sys_cycle=1` activates the bus; `sys_we` selects read (0) or write (1). The device ID and register index come from IR spare fields (routed by the datapath's field extractor).
+Controls the sysreg sideband bus and SPR write path.
 
-During a sysreg read (`sys_cycle=1, sys_we=0`), cpu_top muxes the sysreg data onto the memory read data bus, so `mdr_load_mem=1` captures it into MDR.
+| Value | Symbol | Meaning |
+|-------|--------|---------|
+| 0 | `NONE` | No system operation (default) |
+| 1 | `SPR_WRITE` | Write R-bus to SPR selected by IR[15:12] |
+| 2 | `SYS_READ` | Sysreg bus read cycle |
+| 3 | `SYS_WRITE` | Sysreg bus write cycle |
+
+For sysreg operations (`SYS_READ`/`SYS_WRITE`), the device ID and register index come from IR spare fields (routed by the field extractor). During a sysreg read, cpu_core muxes the sysreg data onto the memory read data bus, so `mdr_load_mem=1` captures it into MDR.
+
+For `SPR_WRITE` (WRSPR), hardware decodes IR[15:12] to select the target: ESR (0), EPC (1), or USP (2). The R-bus carries the write data.
 
 ### ALU Start — `alu_start` [8] (1 bit)
 
@@ -228,7 +237,7 @@ Only used when `branch=SKIP`. The micro-PC advances by `1 + fwd_offset` (skip 1-
 | `ei_set` | Sets SR.I=1 (enable interrupts). **Delayed** by one instruction via `ei_shadow` |
 | `di_set` | Sets SR.I=0 (disable interrupts). **Immediate** effect |
 
-The `ei_shadow` mechanism: when EI executes, a flip-flop is set that suppresses interrupt recognition until the next instruction completes. This allows atomic `EI; RTI` sequences where RTI executes in the "shadow" before any pending interrupt fires. The sequencer clears `ei_shadow` after the next instruction's `go_fetch`.
+The `ei_shadow` mechanism: when EI executes, a flip-flop is set that suppresses interrupt recognition until the next instruction completes. This allows atomic `EI; ERET` sequences where ERET executes in the "shadow" before any pending interrupt fires. The sequencer clears `ei_shadow` after the next instruction's `go_fetch`.
 
 ---
 
@@ -451,13 +460,13 @@ reg_a=IR_RD alu=SUB bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
 
 **WRSYS Rd, #dev, #reg** (op=16, dispatch=0x40) — Privileged
 ```
-reg_a=IR_RD sys_cycle=1 sys_we=1
+reg_a=IR_RD sys_op=SYS_WRITE
 ```
 → A-bus = Rd → sysreg write bus. Device/register from IR spare fields.
 
 **RDSYS Rd, #dev, #reg** (op=17, dispatch=0x42) — 2 micro-ops, Privileged
 ```
-Step 0: sys_cycle=1 mdr_load_mem=1 pc=HOLD branch=SEQ
+Step 0: sys_op=SYS_READ mdr_load_mem=1 pc=HOLD branch=SEQ
 Step 1: reg_w=IR_RD w_en=1 wmux=MDR
 ```
 → Step 0: sysreg data → mem_rdata bus → MDR. Step 1: MDR → Rd.
@@ -465,7 +474,7 @@ Step 1: reg_w=IR_RD w_en=1 wmux=MDR
 **BREAK** (op=21, dispatch=0x4A) — Intercepted at dispatch
 Never reaches ROM. Detected by `dispatch_addr == 0x4A`. Triggers `except_entry` → VEC_BREAK (6) → int_entry at 0x70.
 
-**RTI** (op=22, dispatch=0x4C) — 2 micro-ops, Privileged
+**ERET** (op=22, dispatch=0x4C) — 2 micro-ops, Privileged
 ```
 Step 0: a_src=ESR alu=PASS_A sr_load=1 pc=HOLD branch=SEQ
 Step 1: a_src=EPC pc=ABUS
@@ -490,24 +499,17 @@ di_set=1
 ```
 → SR.I = 0, immediate effect.
 
-**IRET Rd, Rs** (op=27, dispatch=0x56) — 2 micro-ops, Privileged
+**WRSPR {ESR|EPC|USP}, Rd** (op=27, dispatch=0x56) — Privileged
 ```
-Step 0: reg_a=IR_RD alu=PASS_A sr_load=1 pc=HOLD branch=SEQ
-Step 1: reg_a=IR_RS pc=ABUS
+reg_a=IR_RD alu=PASS_A sys_op=SPR_WRITE
 ```
-→ Atomic context switch: SR ← Rd (from register), PC ← Rs. Used for returning to a *different* process than the one that was interrupted.
+→ R-bus = Rd value → SPR write target. Hardware decodes IR[15:12]: SPR 0 (ESR) → esr_load, SPR 1 (EPC) → epc_load, SPR 2 (USP) → R14 cross_bank write.
 
-**RDSPR Rd, ESR** (op=29, dispatch=0x5A) — Privileged
+**RDSPR Rd, {ESR|EPC|USP}** (op=28, dispatch=0x58) — Privileged
 ```
-a_src=ESR alu=PASS_A reg_w=IR_RD w_en=1 wmux=RBUS
+a_src=SPR alu=PASS_A reg_w=IR_RD w_en=1 wmux=RBUS
 ```
-→ Rd = ESR. Lets the kernel read the saved status register to store in the process table.
-
-**RDSPR Rd, EPC** (op=30, dispatch=0x5C) — Privileged
-```
-a_src=EPC alu=PASS_A reg_w=IR_RD w_en=1 wmux=RBUS
-```
-→ Rd = EPC. Lets the kernel read the saved program counter.
+→ Rd = SPR value. Hardware decodes IR[15:12]: SPR 0 → A-bus=ESR, SPR 1 → A-bus=EPC, SPR 2 → A-bus=R14 cross_bank read.
 
 ### Format B — Branches (0x60, 0x62)
 

@@ -3,7 +3,7 @@
 Penumbra Microcode Assembler (uasm)
 
 Reads a symbolic microcode source file and produces a $readmemh-compatible
-hex file for the 256-entry × 49-bit microcode ROM.
+hex file for the 256-entry × 51-bit microcode ROM.
 
 Usage:
     python3 uasm.py input.uasm -o microcode.hex
@@ -38,11 +38,12 @@ FIELDS = [
     ("priv", 50, 50, {
         # 1-bit: privileged instruction (sequencer checks on first micro-op)
     }),
-    ("cross_bank", 49, 49, {
-        # 1-bit: R14 accesses opposite bank (GETUSP/SETUSP)
-    }),
-    ("a_src", 48, 47, {
-        "REG": 0, "ESR": 1, "EPC": 2, "VECTOR": 3,
+    ("a_src", 49, 47, {
+        "REG": 0, "ESR": 1, "EPC": 2, "VECTOR": 3, "SPR": 4,
+        # SPR: source determined by IR[15:12] (SPR number).
+        # Absorbs old cross_bank bit — a_src=4 (binary 100) maps to
+        # the old cross_bank=1,a_src=REG encoding. Hardware decodes
+        # SPR field for ESR/EPC/USP selection.
     }),
     ("reg_a", 46, 43, {
         "IR_RD": 0, "IR_RS": 1,
@@ -92,8 +93,9 @@ FIELDS = [
     ("pc", 13, 11, {
         "HOLD": 0, "NEXT": 1, "PLUS4": 1, "OFFSET": 2, "ABUS": 3, "MDR": 4,
     }),
-    ("sys_cycle", 10, 10, {}),
-    ("sys_we", 9, 9, {}),
+    ("sys_op", 10, 9, {
+        "NONE": 0, "SPR_WRITE": 1, "SYS_READ": 2, "SYS_WRITE": 3,
+    }),
     ("alu_start", 8, 8, {}),
     ("branch", 7, 5, {
         "SEQ": 0, "FETCH": 1, "STALL": 2, "BRT": 3, "BRF": 4,

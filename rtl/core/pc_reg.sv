@@ -34,6 +34,10 @@ module pc_reg
     // ── Exception entry ──────────────────────────────────────
     input  logic        i_except_entry, // Pulse: snapshot PC into EPC
 
+    // ── Software EPC write (WRSPR EPC) ──────────────────────
+    input  logic        i_epc_load,     // Pulse: write EPC from i_epc_wdata
+    input  logic [31:0] i_epc_wdata,    // Data for software EPC write
+
     // ── Outputs ──────────────────────────────────────────────
     output logic [31:0] o_pc,           // Current PC value (→ I-cache, R15 read mux)
     output logic [31:0] o_pc_plus4,     // PC + 4 (→ pc_mux input, BL return addr)
@@ -72,7 +76,9 @@ module pc_reg
         if (i_rst)
             epc <= 32'b0;
         else if (i_except_entry)
-            epc <= pc;
+            epc <= pc;              // Hardware snapshot (highest priority)
+        else if (i_epc_load)
+            epc <= i_epc_wdata;     // Software write via WRSPR EPC
     end
 
     assign o_epc = epc;

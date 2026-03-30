@@ -107,5 +107,5 @@ align_handler:
     MOV   R8, R7
     RDSPR R9, EPC
     ADD   R9, #4              ; skip faulting instruction (can't fix alignment)
-    RDSPR R12, ESR
-    ERET  R12, R9
+    WRSPR EPC, R9
+    ERET

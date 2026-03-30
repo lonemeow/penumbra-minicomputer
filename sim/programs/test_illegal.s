@@ -36,13 +36,12 @@ fail:
 ; ── Illegal instruction handler ──────────────────────────
 ;
 ; Must skip the faulting instruction and resume execution.
-; Note: ERET (no args) would return to EPC (the faulting instruction),
-; causing an infinite trap loop. Use ERET Rd, Rs instead, which lets
-; you specify an arbitrary return address.
+; WRSPR EPC advances past the faulting instruction, then ERET
+; returns via the updated EPC (ESR is unchanged).
 ;
 illegal_handler:
     ADD   R2, #1                  ; count handler invocations
     RDSPR R9, EPC
     ADD   R9, #4
-    RDSPR R10, ESR
-    ERET  R10, R9
+    WRSPR EPC, R9
+    ERET

@@ -271,21 +271,20 @@ SR.I = 0                   → immediate effect
 → return to fetch
 ```
 
-### GETUSP Rd
+### RDSPR Rd, {ESR|EPC|USP}
 
 Single micro-op:
 ```
-USP register → W-mux path → register file writes Rd
+a_src = SPR (hardware decodes IR[15:12] to select ESR, EPC, or R14 cross_bank)
+ALU PASS_A → R-bus → Rd
 ```
 
-Requires a path from the banked-away USP register to the register file write port. This can share the W-mux MDR input with a small mux, since GETUSP and memory loads never occur in the same micro-op.
-
-### SETUSP Rs
+### WRSPR {ESR|EPC|USP}, Rd
 
 Single micro-op:
 ```
-reg_a_sel = Rs       → A-bus = Rs value
-A-bus → USP register (banked-away SP)
+reg_a_sel = Rd       → A-bus = Rd value → ALU PASS_A → R-bus
+sys_op = SPR_WRITE (hardware decodes IR[15:12] to route R-bus to ESR, EPC, or R14 cross_bank write)
 ```
 
 ### WRSYS Rd, #dev, #reg
@@ -293,14 +292,14 @@ A-bus → USP register (banked-away SP)
 Single micro-op:
 ```
 reg_a_sel = Rd       → A-bus = Rd value → data bus
-sys_cycle = 1, sys_dev = IR[15:12], sys_reg = IR[11:8], sys_we = 1
+sys_op = SYS_WRITE, sys_dev = IR[15:12], sys_reg = IR[11:8]
 ```
 
 ### RDSYS Rd, #dev, #reg
 
 Single micro-op:
 ```
-sys_cycle = 1, sys_dev = IR[15:12], sys_reg = IR[11:8], sys_we = 0
+sys_op = SYS_READ, sys_dev = IR[15:12], sys_reg = IR[11:8]
 Device drives data bus → MDR
 W-mux selects MDR → register file writes Rd
 ```
@@ -399,7 +398,7 @@ The `flag_w_en` micro-word bit controls whether ALU flag outputs are latched int
 | LLI, LLIS, LUI | No | Constant loading |
 | Loads, stores | No | Memory access |
 | Branches | No | Control flow |
-| System (WRSYS, RDSYS, GETSR, SETSR, JMP, RTI, etc.) | No | System operations |
+| System (WRSYS, RDSYS, GETSR, SETSR, JMP, ERET, etc.) | No | System operations |
 
 ### Condition Code Evaluation
 
@@ -432,7 +431,7 @@ Condition evaluation hardware: each condition is a simple combinational function
 
 | Bits | Field | Width | Description |
 |------|-------|-------|-------------|
-| 48:47 | `a_src[1:0]` | 2 | A-bus source: 00=register file, 01=ESR, 10=EPC, 11=vector_addr |
+| 49:47 | `a_src[2:0]` | 3 | A-bus source: 0=register file, 1=ESR, 2=EPC, 3=vector_addr, 4=SPR (decode IR[15:12]) |
 | 46:43 | `reg_a_sel[3:0]` | 4 | Register file read port A address (used when a_src=00) |
 | 42:39 | `reg_b_sel[3:0]` | 4 | Register file read port B address |
 | 38:35 | `reg_w_sel[3:0]` | 4 | Register file write port address |
@@ -442,7 +441,7 @@ Condition evaluation hardware: each condition is a simple combinational function
 | 26 | `w_mux_sel` | 1 | Write-back source: 0=R-bus, 1=MDR |
 | 25:24 | `imm_mode[1:0]` | 2 | IR immediate handling: 00=zero-extend, 01=sign-extend, 10=shift-left-16 |
 | 23 | `flag_w_en` | 1 | Update SR condition flags (NZCV) from ALU |
-| 22 | `sr_load` | 1 | Load full SR from W-mux output (for RTI) |
+| 22 | `sr_load` | 1 | Load full SR from W-mux output (for ERET) |
 | 21 | `mar_load` | 1 | Load MAR from R-bus (D-cache/bus address only; I-cache is permanently wired to PC) |
 | 20 | `mdr_load_mem` | 1 | Load MDR from D-cache/memory (read data) |
 | 19 | `mdr_load_a` | 1 | Load MDR from A-bus (for stores) |
@@ -451,8 +450,7 @@ Condition evaluation hardware: each condition is a simple combinational function
 | 16:15 | `mem_size[1:0]` | 2 | Access size: 00=byte, 01=half, 10=word |
 | 14 | `sign_ext` | 1 | Sign-extend sub-word load result |
 | 13:11 | `pc_src[2:0]` | 3 | PC source: 000=hold, 001=PC+4, 010=PC+offset, 011=A-bus, 100=MDR |
-| 10 | `sys_cycle` | 1 | System register bus cycle |
-| 9 | `sys_we` | 1 | System register write enable |
+| 10:9 | `sys_op[1:0]` | 2 | System/SPR operation: 0=NONE, 1=SPR_WRITE, 2=SYS_READ, 3=SYS_WRITE |
 | 8 | `alu_start` | 1 | Start multi-cycle ALU operation (MUL/DIV/MOD; ignored for single-cycle ops) |
 | 7:5 | `branch_cond[2:0]` | 3 | Micro-sequencer control (see below) |
 | 4:2 | `fwd_offset[2:0]` | 3 | Forward skip offset, 0-7 (used only when branch_cond=SKIP) |

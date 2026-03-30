@@ -37,7 +37,7 @@ module sequencer
     // verilator lint_on UNUSEDSIGNAL
 
     // ── Datapath control outputs (decoded micro-word) ────────
-    output logic [1:0]  o_a_src,
+    output logic [2:0]  o_a_src,
     output logic [3:0]  o_reg_a_sel,
     output logic [3:0]  o_reg_b_sel,
     output logic [3:0]  o_reg_w_sel,
@@ -56,17 +56,13 @@ module sequencer
     output logic [1:0]  o_mem_size,
     output logic        o_sign_ext,
     output logic [2:0]  o_pc_src,
-    output logic        o_sys_cycle,
-    output logic        o_sys_we,
+    output logic [1:0]  o_sys_op,        // 00=NONE, 01=SPR_WRITE, 10=SYS_READ, 11=SYS_WRITE
     output logic        o_alu_start,
     output logic        o_pc_load,
 
     // ── Illegal instruction / privilege violation detection ─────
     output logic        o_illegal,        // First micro-op is sentinel (branch=7)
     output logic        o_priv_violation, // First micro-op has priv=1 in user mode
-
-    // ── Register bank crossing ────────────────────────────────
-    output logic        o_cross_bank,    // R14 accesses opposite bank (GETUSP/SETUSP)
 
     // ── EI/DI outputs ─────────────────────────────────────────
     output logic        o_ei_set,
@@ -86,8 +82,7 @@ module sequencer
     // ── Micro-word field extraction ──────────────────────────
     // Extract from the 51-bit packed word (bits 50:0)
     logic        uw_priv;
-    logic        uw_cross_bank;
-    logic [1:0]  uw_a_src;
+    logic [2:0]  uw_a_src;
     logic [3:0]  uw_reg_a, uw_reg_b, uw_reg_w;
     logic        uw_w_en;
     logic [4:0]  uw_alu_op;
@@ -100,15 +95,15 @@ module sequencer
     logic [1:0]  uw_mem_size;
     logic        uw_sign_ext;
     logic [2:0]  uw_pc_src;
-    logic        uw_sys_cycle, uw_sys_we, uw_alu_start;
+    logic [1:0]  uw_sys_op;
+    logic        uw_alu_start;
     logic [2:0]  uw_branch;
     logic [2:0]  uw_fwd_offset;
     logic        uw_ei_set;
     logic        uw_di_set;
 
     assign uw_priv         = i_uword[50];
-    assign uw_cross_bank   = i_uword[49];
-    assign uw_a_src        = i_uword[48:47];
+    assign uw_a_src        = i_uword[49:47];
     assign uw_reg_a        = i_uword[46:43];
     assign uw_reg_b        = i_uword[42:39];
     assign uw_reg_w        = i_uword[38:35];
@@ -127,8 +122,7 @@ module sequencer
     assign uw_mem_size     = i_uword[16:15];
     assign uw_sign_ext     = i_uword[14];
     assign uw_pc_src       = i_uword[13:11];
-    assign uw_sys_cycle    = i_uword[10];
-    assign uw_sys_we       = i_uword[9];
+    assign uw_sys_op       = i_uword[10:9];
     assign uw_alu_start    = i_uword[8];
     assign uw_branch       = i_uword[7:5];
     assign uw_fwd_offset   = i_uword[4:2];
@@ -242,7 +236,7 @@ module sequencer
     assign o_upc         = upc;
     assign o_fetch_go    = (state == S_EXEC) && (go_fetch || priv_block);
 
-    assign o_a_src       = exec_en ? uw_a_src        : 2'b0;
+    assign o_a_src       = exec_en ? uw_a_src        : 3'b0;
     assign o_reg_a_sel   = exec_en ? uw_reg_a        : 4'b0;
     assign o_reg_b_sel   = exec_en ? uw_reg_b        : 4'b0;
     // reg_w_sel is NOT gated — it must remain stable through the posedge
@@ -264,13 +258,9 @@ module sequencer
     assign o_mem_size    = exec_en ? uw_mem_size     : 2'b0;
     assign o_sign_ext    = exec_en ? uw_sign_ext     : 1'b0;
     assign o_pc_src      = exec_en ? effective_pc_src : 3'b0;
-    assign o_sys_cycle   = exec_en ? uw_sys_cycle    : 1'b0;
-    assign o_sys_we      = exec_en ? uw_sys_we       : 1'b0;
+    assign o_sys_op      = exec_en ? uw_sys_op       : 2'b0;
     assign o_alu_start   = exec_en ? uw_alu_start    : 1'b0;
     assign o_pc_load     = exec_en;   // Suppressed on priv violation (no PC change)
-
-    // ── Cross-bank (GETUSP/SETUSP) ─────────────────────────────
-    assign o_cross_bank = exec_en ? uw_cross_bank : 1'b0;
 
     // ── EI/DI decode and ei_shadow_clr tracking ───────────────
     assign o_ei_set = exec_en ? uw_ei_set : 1'b0;

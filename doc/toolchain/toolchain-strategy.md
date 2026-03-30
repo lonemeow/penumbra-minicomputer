@@ -23,9 +23,9 @@ The OS target was changed from Minix 2 to NetBSD.
 |---------|--------|-------|
 | Supervisor/user mode | Done | SR.S bit, dispatch-time privilege checks |
 | Software-managed TLB | Done | 64-entry 2-way SA, ASID, RWX+U+G permissions |
-| TLB miss exception | Done | Vector 2, handler refills TLB, RTI retries |
+| TLB miss exception | Done | Vector 2, handler refills TLB, ERET retries |
 | TLB protection fault | Done | Vector 3, triggers COW copy in UVM |
-| Exception save/restore | Done | EPC/ESR, RTI, IRET, RDSPR |
+| Exception save/restore | Done | EPC/ESR, ERET, RDSPR, WRSPR |
 | SYSCALL trap | Not yet | Microcode needed (vector 5, like BREAK) |
 | Timer interrupt | Not yet | Drives hardclock() / scheduler |
 | UART | Not yet | Console I/O (com driver) |

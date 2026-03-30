@@ -1,12 +1,12 @@
-; test_iret.s — ERET: return to a different context than the one that faulted
+; test_iret.s — WRSPR EPC: redirect execution after a fault
 ;
 ; Simulates a simplified context switch:
 ;   1. Enable MMU with page 0 identity-mapped
 ;   2. Access unmapped page → TLB miss trap
 ;   3. Handler reads EPC and ESR via RDSPR
 ;   4. Verifies EPC points at the faulting instruction
-;   5. Uses ERET to jump to a DIFFERENT address (not the faulting one)
-;      with a constructed SR value
+;   5. Uses WRSPR EPC + WRSPR ESR to set a different return context,
+;      then ERET to jump there
 ;
 ; This proves the kernel can redirect execution after a fault —
 ; the core mechanism behind "kill the process" or "switch to another process."
@@ -28,15 +28,16 @@ tlb_miss_handler:
     RDSPR R9, ESR
 
     ; Construct target SR: supervisor mode, interrupts disabled
-    ; (same as current state — we just want to prove ERET works)
     LLI   R10, #0
     LUI   R10, #0x8000        ; SR.S=1 (bit 31), SR.I=0
+    WRSPR ESR, R10
 
-    ; Load alternate_entry address
+    ; Set return address to alternate_entry (not the faulting instruction)
     LA    R11, #alternate_entry
+    WRSPR EPC, R11
 
-    ; ERET to alternate_entry with constructed SR
-    ERET  R10, R11
+    ; ERET returns via modified EPC/ESR
+    ERET
 
     ; Should never reach here
     B     fail

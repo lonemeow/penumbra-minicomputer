@@ -111,6 +111,12 @@ package penumbra_pkg;
     localparam logic [4:0] UART_DLL = 5'h00;  // Divisor latch low (DLAB=1)
     localparam logic [4:0] UART_DLM = 5'h04;  // Divisor latch high (DLAB=1)
 
+    // ── Special-purpose register (SPR) numbers ───────────────────
+    // Used by RDSPR/WRSPR instructions — encoded in IR[15:12]
+    localparam logic [3:0] SPR_ESR = 4'd0;   // Exception SR
+    localparam logic [3:0] SPR_EPC = 4'd1;   // Exception PC
+    localparam logic [3:0] SPR_USP = 4'd2;   // User stack pointer (banked R14)
+
     // ── Exception vector numbers ────────────────────────────────
     // Vector address = {26'b0, vector_num, 2'b00} (word-aligned table at 0x00)
     localparam logic [3:0] VEC_RESET     = 4'd0;   // 0x00 — Reset
