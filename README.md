@@ -25,27 +25,30 @@ A hobby project to design and build a vintage-style minicomputer implemented in 
 ## Repository Structure
 
 ```
-rtl/              - Synthesizable RTL (SystemVerilog)
-  core/           - CPU core (ALU, register file, decode, control)
-  mmu/            - Memory management unit
-  bus/            - System bus and arbitration
-  io/             - I/O controllers and peripherals
-  soc/            - Top-level SoC integration
-sim/              - Simulation testbenches and models
-sw/               - Software tools and firmware
-  asm/            - Assembler
-  monitor/        - ROM monitor / boot firmware
-  tests/          - ISA test programs
+hw/               - Hardware design
+  rtl/            - Synthesizable RTL (SystemVerilog)
+    core/         - CPU core (ALU, register file, decode, control)
+    mmu/          - Memory management unit
+    bus/          - System bus and arbitration
+    io/           - I/O controllers and peripherals
+    soc/          - Top-level SoC integration
+  sim/            - Simulation testbenches and test programs
+  microcode/      - Microcode source (assembled into ROM)
+  rom/            - Boot ROM firmware
+  tools/          - Microcode assembler (uasm.py)
+  constraints/    - FPGA pin constraints and timing for ULX3S
+sw/               - Software tools
+  tools/          - ISA assembler (pasm.py)
 doc/              - Architecture documentation
   isa/            - ISA specification
   mmu/            - MMU and memory map documentation
   bus/            - Bus protocol documentation
-constraints/      - FPGA pin constraints and timing for ULX3S
+  toolchain/      - LLVM backend strategy
 ```
 
 ## Status
 
-Early design phase - defining the ISA and core architecture.
+CPU runs real programs in simulation with full CPU, MMU, split I/D cache, and memory-mapped UART. Boot ROM monitor operational with interactive terminal I/O.
 
 ## License
 

@@ -15,8 +15,8 @@ waves/
 # Hex files are build artifacts (assembled from .s/.uasm sources)
 /program.hex
 /microcode.hex
-sim/programs/*.hex
-sw/microcode/*.hex
+hw/sim/programs/*.hex
+hw/microcode/*.hex
 *.vcd
 *.fst
 *.ghw

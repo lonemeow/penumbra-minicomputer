@@ -24,11 +24,16 @@ The architecture is fully specified in `doc/`. Key specs:
 - **Sysregs:** `doc/isa/sysregs-reference.md` — programmer's reference for WRSYS/RDSYS: device map, register layouts, TLB packing, assembly recipes
 
 ## Repository Layout
-- `rtl/` - Synthesizable SystemVerilog, organized by subsystem
-- `sim/` - Testbenches and simulation infrastructure
-- `sw/` - Assembler, ROM monitor, test programs
-- `doc/` - Architecture specs (ISA, MMU, bus, memory map, datapath)
-- `constraints/` - ULX3S pin/timing constraints
+- `hw/` - All hardware design
+  - `hw/rtl/` - Synthesizable SystemVerilog, organized by subsystem
+  - `hw/sim/` - Testbenches and test programs
+  - `hw/microcode/` - Microcode source (assembled into ROM)
+  - `hw/rom/` - Boot ROM firmware
+  - `hw/tools/` - Microcode assembler (`uasm.py`)
+  - `hw/constraints/` - ULX3S pin/timing constraints
+- `sw/` - Software tools
+  - `sw/tools/` - ISA assembler (`pasm.py`)
+- `doc/` - Architecture specs (ISA, MMU, bus, memory map, datapath, toolchain)
 
 ## Conventions
 - RTL filenames match the top-level module they contain
@@ -36,7 +41,7 @@ The architecture is fully specified in `doc/`. Key specs:
 - Use `logic` rather than `reg`/`wire` where possible
 - Prefix module ports: `i_` for inputs, `o_` for outputs
 - Clock signal: `i_clk`, synchronous active-high reset: `i_rst` — sampled on rising edge of `i_clk`; while asserted, all state holds reset values (system suspended); testbench holds for 2 cycles then releases
-- Shared constants in `rtl/core/penumbra_pkg.sv` (register addresses, ALU opcodes, condition codes)
+- Shared constants in `hw/rtl/core/penumbra_pkg.sv` (register addresses, ALU opcodes, condition codes)
 - Modules that use the package: `import penumbra_pkg::*;` inside the module declaration (not at file scope — Verilator warns about `import *` at $unit scope)
 
 ### Naming: Hardware vs Software Terminology
@@ -48,9 +53,9 @@ The architecture is fully specified in `doc/`. Key specs:
 ## Build System
 - `make smoke` — toolchain smoke test (trivial adder)
 - `make sim MOD=<name>` — build & run a module's Verilator testbench (auto-includes penumbra_pkg.sv, sets --top-module)
-- `make sim MOD=machine_sim TB=<tb> PROG=<prog>` — run a specific testbench with a specific program (e.g., `TB=tb_cpu_prog PROG=test_fib`). Auto-assembles `sim/programs/<PROG>.s` and `sw/microcode/microcode.uasm` into hex before running; `.hex` files are build artifacts (gitignored), only `.s`/`.uasm` sources are committed.
-- `make test` — run all `sim/programs/test_*.s` programs through machine_sim; builds once, runs each, reports pass/fail summary
-- `make simulate` — build & run interactive boot ROM with terminal I/O. Assembles `sw/rom/boot_rom.s`, bridges stdin/stdout to UART RX/TX via `tb_interactive.cpp`. Docker runs with `-it` for raw terminal passthrough. No cycle limit, no VCD trace. Exit with Ctrl-C or BREAK.
+- `make sim MOD=machine_sim TB=<tb> PROG=<prog>` — run a specific testbench with a specific program (e.g., `TB=tb_cpu_prog PROG=test_fib`). Auto-assembles `hw/sim/programs/<PROG>.s` and `hw/microcode/microcode.uasm` into hex before running; `.hex` files are build artifacts (gitignored), only `.s`/`.uasm` sources are committed.
+- `make test` — run all `hw/sim/programs/test_*.s` programs through machine_sim; builds once, runs each, reports pass/fail summary
+- `make simulate` — build & run interactive boot ROM with terminal I/O. Assembles `hw/rom/boot_rom.s`, bridges stdin/stdout to UART RX/TX via `tb_interactive.cpp`. Docker runs with `-it` for raw terminal passthrough. No cycle limit, no VCD trace. Exit with Ctrl-C or BREAK.
 - `make wave MOD=<name>` — open VCD waveform in GTKWave
 - `make clean` — remove build artifacts
 - All simulation runs via Docker (`verilator/verilator:latest`) — no host install needed
@@ -58,45 +63,45 @@ The architecture is fully specified in `doc/`. Key specs:
 - **Important:** Always `rm -rf build/<mod>.verilator build/V<mod>` before rebuilding if you suspect stale binaries (WSL2 /mnt/c filesystem can have stale mtimes)
 
 ## Current Status
-The CPU runs real programs in simulation with the full CPU → MMU → split I/D cache → memory path wired, booting from ROM at `0xFFFF_E000` (matching the physical memory map). Instruction fetch is busy-aware and latency-agnostic (waits for memory busy to deassert, tested with both 1-cycle ROM and 6-cycle SDRAM-latency RAM). RAM simulation models realistic SDRAM timing (READ_LATENCY=6, WRITE_LATENCY=3). Split I/D caches are wired into cpu_core — the I-cache serves instruction fetch, the D-cache serves data loads/stores. A memory bus mux merges both caches to the single external memory port (D-cache priority; safe because fetch and data access are mutually exclusive). Both caches are disabled at reset (pass-through); the kernel enables them via WRSYS after setting up TLB mappings with C=1. Cache sysregs (devices 2/3) are handled internally in cpu_core alongside the MMU (device 0). The simulator (machine_sim) uses a shared-bus model with device-side address decode: each device (RAM, ROM, UART) has a `bus_devsel` comparator that recognizes its own address range, and bus responses are OR-combined (FPGA equivalent of tri-state on a discrete backplane). Unmapped addresses trigger a **bus fault exception** (vector 0, `VEC_BUS_FAULT`) — the bus_fault signal is wired from machine_sim into cpu_core, which treats it like an MMU fault but with a different vector. Bus faults work in both bypass mode (RAM probing at boot) and with MMU enabled (device probing via mapped-but-unmapped pages, like NetBSD `bus_space_peek`). The MMU latches FAULT_ADDR (virtual address) and FAULT_STATUS (type=FAULT_BUS) on bus fault. RAM claims only its actual size (16 MB, no wrapping) — OS probes for RAM size by detecting bus faults. A 16450-compatible simulation UART provides console I/O — TX bytes appear on stdout, RX accepts bytes from the testbench. The UART is memory-mapped (MMIO at `0xFF00_0000`, not on the sysreg bus), accessed via LDW/STW, with realistic TX busy timing (~2170 cycles at 115200 baud/25 MHz). An interactive boot ROM (`sw/rom/boot_rom.s`) prints a banner and runs an echo loop over UART; `make simulate` launches it with terminal I/O bridged through Docker (`-it`). The vector table uses MIPS/68k-style address-based dispatch: `int_entry` reads a handler address from physical RAM, bypassing the MMU. The TLB is implemented (64-entry 2-way SA, fully software-managed) and tested with MMU enabled (identity + non-identity mappings). MMU faults (TLB miss, protection violation) are wired as synchronous exceptions for both data accesses and instruction fetches — data faults detected during STALL, fetch faults detected during S_FETCH — both abort the instruction, save EPC/ESR, and vector to the fault handler. WRSYS/RDSYS access a multi-device sysreg bus (device 0 = MMU, device 1 = SYS, device 2 = DCACHE, device 3 = ICACHE). RTL is built bottom-up from leaf modules. The 51-bit micro-word format is finalized (bit [50] = priv, [49:47] = a_src (3-bit, includes SPR decode), [10:9] = sys_op (NONE/SPR_WRITE/SYS_READ/SYS_WRITE), [1:0] = ei_set/di_set).
+The CPU runs real programs in simulation with the full CPU → MMU → split I/D cache → memory path wired, booting from ROM at `0xFFFF_E000` (matching the physical memory map). Instruction fetch is busy-aware and latency-agnostic (waits for memory busy to deassert, tested with both 1-cycle ROM and 6-cycle SDRAM-latency RAM). RAM simulation models realistic SDRAM timing (READ_LATENCY=6, WRITE_LATENCY=3). Split I/D caches are wired into cpu_core — the I-cache serves instruction fetch, the D-cache serves data loads/stores. A memory bus mux merges both caches to the single external memory port (D-cache priority; safe because fetch and data access are mutually exclusive). Both caches are disabled at reset (pass-through); the kernel enables them via WRSYS after setting up TLB mappings with C=1. Cache sysregs (devices 2/3) are handled internally in cpu_core alongside the MMU (device 0). The simulator (machine_sim) uses a shared-bus model with device-side address decode: each device (RAM, ROM, UART) has a `bus_devsel` comparator that recognizes its own address range, and bus responses are OR-combined (FPGA equivalent of tri-state on a discrete backplane). Unmapped addresses trigger a **bus fault exception** (vector 0, `VEC_BUS_FAULT`) — the bus_fault signal is wired from machine_sim into cpu_core, which treats it like an MMU fault but with a different vector. Bus faults work in both bypass mode (RAM probing at boot) and with MMU enabled (device probing via mapped-but-unmapped pages, like NetBSD `bus_space_peek`). The MMU latches FAULT_ADDR (virtual address) and FAULT_STATUS (type=FAULT_BUS) on bus fault. RAM claims only its actual size (16 MB, no wrapping) — OS probes for RAM size by detecting bus faults. A 16450-compatible simulation UART provides console I/O — TX bytes appear on stdout, RX accepts bytes from the testbench. The UART is memory-mapped (MMIO at `0xFF00_0000`, not on the sysreg bus), accessed via LDW/STW, with realistic TX busy timing (~2170 cycles at 115200 baud/25 MHz). An interactive boot ROM (`hw/rom/boot_rom.s`) prints a banner and runs an echo loop over UART; `make simulate` launches it with terminal I/O bridged through Docker (`-it`). The vector table uses MIPS/68k-style address-based dispatch: `int_entry` reads a handler address from physical RAM, bypassing the MMU. The TLB is implemented (64-entry 2-way SA, fully software-managed) and tested with MMU enabled (identity + non-identity mappings). MMU faults (TLB miss, protection violation) are wired as synchronous exceptions for both data accesses and instruction fetches — data faults detected during STALL, fetch faults detected during S_FETCH — both abort the instruction, save EPC/ESR, and vector to the fault handler. WRSYS/RDSYS access a multi-device sysreg bus (device 0 = MMU, device 1 = SYS, device 2 = DCACHE, device 3 = ICACHE). RTL is built bottom-up from leaf modules. The 51-bit micro-word format is finalized (bit [50] = priv, [49:47] = a_src (3-bit, includes SPR decode), [10:9] = sys_op (NONE/SPR_WRITE/SYS_READ/SYS_WRITE), [1:0] = ei_set/di_set).
 
 ### Implemented RTL Modules (all tested)
 | Module | File | Tests | Description |
 |--------|------|-------|-------------|
-| ALU | `rtl/core/alu.sv` | 39/39 | Unified compute unit, 11 single-cycle ops, multi-cycle stubs |
-| Register file | `rtl/core/regfile.sv` | 41/41 | 2R/1W, R0=zero, R14 banked USP/SSP, R15→PC, debug port |
-| Condition evaluator | `rtl/core/cond_eval.sv` | 256/256 | 16 ARM-style conditions, exhaustively tested |
-| Immediate extractor | `rtl/core/imm_ext.sv` | 14/14 | Zero/sign-extend, shift-left-16 |
-| Field extractor | `rtl/core/field_ext.sv` | 34/34 | IR → all format fields (R/L/M/B) |
-| B-mux | `rtl/core/bmux.sv` | 4/4 | ALU B input: reg/imm/const4/const8 |
-| W-mux | `rtl/core/wmux.sv` | 2/2 | Write-back: R-bus or MDR |
-| A-bus source mux | `rtl/core/amux.sv` | 4/4 | A-bus: reg/ESR/EPC/vector |
-| PC source mux | `rtl/core/pc_mux.sv` | 6/6 | Next PC: hold/+4/+offset/A-bus/MDR |
-| Status register | `rtl/core/status_reg.sv` | 64/64 | NZCV flags, S/I mode bits, ESR, ei_shadow |
-| PC register | `rtl/core/pc_reg.sv` | 31/31 | PC reg (parameterizable RESET_PC), PC+4 adder, PC+offset adder, EPC |
-| MAR | `rtl/core/mar.sv` | 6/6 | Memory address register, loads from R-bus |
-| MDR | `rtl/core/mdr.sv` | 7/7 | Memory data register, loads from memory or A-bus |
-| Datapath top | `rtl/core/datapath.sv` | 15/15 | Structural wiring of all modules, IR reg, reg addr routing, F-bit gating |
-| Microcode ROM | `rtl/core/ucode_rom.sv` | — | 256×51-bit ROM, $readmemh from microcode.hex |
-| Sequencer | `rtl/core/sequencer.sv` | — | Micro-PC, branch_cond decode, EI/DI tracking, ei_shadow_clr |
-| Byte extractor | `rtl/core/byte_ext.sv` | 19/19 | Sub-word load extraction: byte/half from 32-bit word, sign/zero extend |
-| Byte replicator | `rtl/core/byte_rep.sv` | 10/10 | Sub-word store lane positioning: replicate byte/half across all lanes |
-| CPU core | `rtl/core/cpu_core.sv` | 30 progs | Full CPU: datapath + sequencer + ROM + MMU + split I/D cache + memory bus mux + fetch + IRQ + MMU traps (data + fetch) + alignment faults (fetch + data, via MMU) + bus faults (via i_bus_fault from machine-level) + BREAK + SYSCALL + privilege traps + illegal instruction trap + WRSYS/RDSYS + RDSPR/WRSPR + BL + sub-word loads/stores. Cache sysregs (devices 2–3) handled internally. Parameterizable RESET_PC (default 0xFFFF_E000). |
-| Sim machine | `rtl/soc/machine_sim.sv` | (top) | Simulation integration: cpu_core + boot_rom + simple_mem + sim_uart + sysid. Shared-bus model with device-side address decode via `bus_devsel` — each device self-selects, responses OR-combined, unmapped addresses trigger bus fault exception (wired to cpu_core.i_bus_fault). UART IRQ wired to CPU. Verilator top module for `make test` |
-| Bus devsel | `rtl/soc/bus_devsel.sv` | via machine_sim | Combinational address comparator for device-side bus decode. Parameterized BASE/SIZE, elaboration-time assertions (power-of-2, alignment, non-zero). Discrete 74xx equivalent: 74x85 magnitude comparator per device. |
-| Sim UART | `rtl/soc/sim_uart.sv` | via machine_sim | 16450-compatible UART (MMIO at 0xFF00_0000). 8 registers at word stride, DLAB mux, TX busy counter (parameterizable, default ~115200 baud at 25 MHz). NetBSD com(4) compatible via reg-shift=2, reg-io-width=4 |
-| Boot ROM | `rtl/soc/boot_rom.sv` | via machine_sim | Read-only memory (8 KB default), loads program.hex, same 1-cycle busy protocol as simple_mem |
-| Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_*, ACC_*, VEC_*, FAULT_*, FSTAT_*, SYSDEV_*, SYSREG_*, SYSREG_CACHE_*, CACHE_TYPE_*, UART_*, SPR_*, RAM_BASE, ROM_BASE constants |
-| System ID | `rtl/soc/sysid.sv` | via machine_sim | Read-only MACHINE_ID register (Penumbra/1), sysreg device 1 |
-| TLB | `rtl/mmu/tlb.sv` | 111/111 | 64-entry 2-way SA, parallel lookup, one-hot permission check, indexed sysreg R/W |
-| MMU | `rtl/mmu/mmu.sv` | — | Bypass/translate mux, force_bypass for vector table read, alignment check (word/half/byte via i_mem_size), sysreg routing, fault latching (TLB miss/prot, alignment, bus fault via i_bus_fault), TLB instantiation |
-| Cache | `rtl/soc/cache.sv` | 42/42 | Parameterized PIPT cache (NUM_SETS, LINE_WORDS, NUM_WAYS). Write-through/write-no-allocate. Burst line fill on read miss. Sysreg interface (INFO/CTRL/INVAL). Pass-through when disabled (reset default) or uncacheable (C=0). Reusable for both I-cache and D-cache. |
-| Cache stub | `rtl/soc/cache_stub.sv` | — | Combinational pass-through, retained for reference. Replaced by cache.sv instances in cpu_core. |
-| Simple memory | `rtl/soc/simple_mem.sv` | — | Parameterizable synchronous SRAM model (default 16 MB), zeroed at init (no preload — matches real HW), configurable READ_LATENCY (default 6) and WRITE_LATENCY (default 3) modeling SDRAM timing, per-byte write enables. Bus decode limits addresses to RAM's actual range (no wrapping — unmapped addresses are bus faults). Latches address/data at access start. Read data poisoned (0xDEAD_BEEF) while busy. |
+| ALU | `hw/rtl/core/alu.sv` | 39/39 | Unified compute unit, 11 single-cycle ops, multi-cycle stubs |
+| Register file | `hw/rtl/core/regfile.sv` | 41/41 | 2R/1W, R0=zero, R14 banked USP/SSP, R15→PC, debug port |
+| Condition evaluator | `hw/rtl/core/cond_eval.sv` | 256/256 | 16 ARM-style conditions, exhaustively tested |
+| Immediate extractor | `hw/rtl/core/imm_ext.sv` | 14/14 | Zero/sign-extend, shift-left-16 |
+| Field extractor | `hw/rtl/core/field_ext.sv` | 34/34 | IR → all format fields (R/L/M/B) |
+| B-mux | `hw/rtl/core/bmux.sv` | 4/4 | ALU B input: reg/imm/const4/const8 |
+| W-mux | `hw/rtl/core/wmux.sv` | 2/2 | Write-back: R-bus or MDR |
+| A-bus source mux | `hw/rtl/core/amux.sv` | 4/4 | A-bus: reg/ESR/EPC/vector |
+| PC source mux | `hw/rtl/core/pc_mux.sv` | 6/6 | Next PC: hold/+4/+offset/A-bus/MDR |
+| Status register | `hw/rtl/core/status_reg.sv` | 64/64 | NZCV flags, S/I mode bits, ESR, ei_shadow |
+| PC register | `hw/rtl/core/pc_reg.sv` | 31/31 | PC reg (parameterizable RESET_PC), PC+4 adder, PC+offset adder, EPC |
+| MAR | `hw/rtl/core/mar.sv` | 6/6 | Memory address register, loads from R-bus |
+| MDR | `hw/rtl/core/mdr.sv` | 7/7 | Memory data register, loads from memory or A-bus |
+| Datapath top | `hw/rtl/core/datapath.sv` | 15/15 | Structural wiring of all modules, IR reg, reg addr routing, F-bit gating |
+| Microcode ROM | `hw/rtl/core/ucode_rom.sv` | — | 256×51-bit ROM, $readmemh from microcode.hex |
+| Sequencer | `hw/rtl/core/sequencer.sv` | — | Micro-PC, branch_cond decode, EI/DI tracking, ei_shadow_clr |
+| Byte extractor | `hw/rtl/core/byte_ext.sv` | 19/19 | Sub-word load extraction: byte/half from 32-bit word, sign/zero extend |
+| Byte replicator | `hw/rtl/core/byte_rep.sv` | 10/10 | Sub-word store lane positioning: replicate byte/half across all lanes |
+| CPU core | `hw/rtl/core/cpu_core.sv` | 30 progs | Full CPU: datapath + sequencer + ROM + MMU + split I/D cache + memory bus mux + fetch + IRQ + MMU traps (data + fetch) + alignment faults (fetch + data, via MMU) + bus faults (via i_bus_fault from machine-level) + BREAK + SYSCALL + privilege traps + illegal instruction trap + WRSYS/RDSYS + RDSPR/WRSPR + BL + sub-word loads/stores. Cache sysregs (devices 2–3) handled internally. Parameterizable RESET_PC (default 0xFFFF_E000). |
+| Sim machine | `hw/rtl/soc/machine_sim.sv` | (top) | Simulation integration: cpu_core + boot_rom + simple_mem + sim_uart + sysid. Shared-bus model with device-side address decode via `bus_devsel` — each device self-selects, responses OR-combined, unmapped addresses trigger bus fault exception (wired to cpu_core.i_bus_fault). UART IRQ wired to CPU. Verilator top module for `make test` |
+| Bus devsel | `hw/rtl/soc/bus_devsel.sv` | via machine_sim | Combinational address comparator for device-side bus decode. Parameterized BASE/SIZE, elaboration-time assertions (power-of-2, alignment, non-zero). Discrete 74xx equivalent: 74x85 magnitude comparator per device. |
+| Sim UART | `hw/rtl/soc/sim_uart.sv` | via machine_sim | 16450-compatible UART (MMIO at 0xFF00_0000). 8 registers at word stride, DLAB mux, TX busy counter (parameterizable, default ~115200 baud at 25 MHz). NetBSD com(4) compatible via reg-shift=2, reg-io-width=4 |
+| Boot ROM | `hw/rtl/soc/boot_rom.sv` | via machine_sim | Read-only memory (8 KB default), loads program.hex, same 1-cycle busy protocol as simple_mem |
+| Shared package | `hw/rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_*, ACC_*, VEC_*, FAULT_*, FSTAT_*, SYSDEV_*, SYSREG_*, SYSREG_CACHE_*, CACHE_TYPE_*, UART_*, SPR_*, RAM_BASE, ROM_BASE constants |
+| System ID | `hw/rtl/soc/sysid.sv` | via machine_sim | Read-only MACHINE_ID register (Penumbra/1), sysreg device 1 |
+| TLB | `hw/rtl/mmu/tlb.sv` | 111/111 | 64-entry 2-way SA, parallel lookup, one-hot permission check, indexed sysreg R/W |
+| MMU | `hw/rtl/mmu/mmu.sv` | — | Bypass/translate mux, force_bypass for vector table read, alignment check (word/half/byte via i_mem_size), sysreg routing, fault latching (TLB miss/prot, alignment, bus fault via i_bus_fault), TLB instantiation |
+| Cache | `hw/rtl/soc/cache.sv` | 42/42 | Parameterized PIPT cache (NUM_SETS, LINE_WORDS, NUM_WAYS). Write-through/write-no-allocate. Burst line fill on read miss. Sysreg interface (INFO/CTRL/INVAL). Pass-through when disabled (reset default) or uncacheable (C=0). Reusable for both I-cache and D-cache. |
+| Cache stub | `hw/rtl/soc/cache_stub.sv` | — | Combinational pass-through, retained for reference. Replaced by cache.sv instances in cpu_core. |
+| Simple memory | `hw/rtl/soc/simple_mem.sv` | — | Parameterizable synchronous SRAM model (default 16 MB), zeroed at init (no preload — matches real HW), configurable READ_LATENCY (default 6) and WRITE_LATENCY (default 3) modeling SDRAM timing, per-byte write enables. Bus decode limits addresses to RAM's actual range (no wrapping — unmapped addresses are bus faults). Latches address/data at access start. Read data poisoned (0xDEAD_BEEF) while busy. |
 
 ### Boot ROM and Interactive Simulation
-- **Boot ROM** (`sw/rom/boot_rom.s`): Penumbra/1 boot monitor with command parser. Identical binary on sim and real hardware. Commands: `d ADDR` (dump 64 bytes), `w ADDR VAL` (write word), `g ADDR` (jump), `?` (help). Stack-based calling convention: SP (R14) at `0x01000000` (top of 16 MB RAM), non-leaf functions push/pop LR. I/O globals pinned in R10-R12 (UART base, THRE mask, DR mask). Routines: `putchar`/`getchar` (leaf, polling), `puts` (null-terminated string), `readline` (line editing with echo and backspace), `parse_hex` (hex string→value), `print_hex32`/`print_hex8`/`print_nibble` (value→hex output, table-driven). Line buffer at RAM `0x1000`, 79-char max. Assembled with `--org 0xFFFFE000`.
-- **Interactive testbench** (`sim/tb_interactive.cpp`): Bridges host stdin/stdout to UART RX/TX. Raw terminal mode (no echo, no line buffering — boot ROM handles character processing). Polls stdin every 1024 cycles for sub-character-time latency. UART RX handshake: checks `o_uart_rx_ack` on negedge (combinational, pre-posedge) to reliably detect acceptance. No VCD tracing (interactive sessions are long). Exits on BREAK or SIGINT (Ctrl-C). Status messages go to stderr.
+- **Boot ROM** (`hw/rom/boot_rom.s`): Penumbra/1 boot monitor with command parser. Identical binary on sim and real hardware. Commands: `d ADDR` (dump 64 bytes), `w ADDR VAL` (write word), `g ADDR` (jump), `?` (help). Stack-based calling convention: SP (R14) at `0x01000000` (top of 16 MB RAM), non-leaf functions push/pop LR. I/O globals pinned in R10-R12 (UART base, THRE mask, DR mask). Routines: `putchar`/`getchar` (leaf, polling), `puts` (null-terminated string), `readline` (line editing with echo and backspace), `parse_hex` (hex string→value), `print_hex32`/`print_hex8`/`print_nibble` (value→hex output, table-driven). Line buffer at RAM `0x1000`, 79-char max. Assembled with `--org 0xFFFFE000`.
+- **Interactive testbench** (`hw/sim/tb_interactive.cpp`): Bridges host stdin/stdout to UART RX/TX. Raw terminal mode (no echo, no line buffering — boot ROM handles character processing). Polls stdin every 1024 cycles for sub-character-time latency. UART RX handshake: checks `o_uart_rx_ack` on negedge (combinational, pre-posedge) to reliably detect acceptance. No VCD tracing (interactive sessions are long). Exits on BREAK or SIGINT (Ctrl-C). Status messages go to stderr.
 
 ### Exception and Interrupt Handling
 Eight sources share the same `except_entry` → `int_entry` → vector dispatch path:
@@ -194,12 +199,12 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 - **Dispatch spacing:** Format R uses ×2 spacing split by op[4]: ALU (0x00–0x1E) and SYS (0x40–0x5E). Formula: `{0, op[4], 0, op[3:0], 0}` — pure wiring, zero gates. Format M uses ×4 spacing (0x80–0xBF). Multi-step system ops (ERET, RDSYS) fit in their ×2 slots without overflowing into adjacent instruction entries.
 
 ### Software Tools
-- **Microcode assembler** (`sw/tools/uasm.py`): Symbolic microcode → $readmemh hex. Defaults: `pc=NEXT branch=FETCH`. Validates slot boundaries (detects multi-step routines that overflow their dispatch slot). Run: `python3 sw/tools/uasm.py input.uasm -o microcode.hex`
+- **Microcode assembler** (`hw/tools/uasm.py`): Symbolic microcode → $readmemh hex. Defaults: `pc=NEXT branch=FETCH`. Validates slot boundaries (detects multi-step routines that overflow their dispatch slot). Run: `python3 hw/tools/uasm.py input.uasm -o microcode.hex`
 - **ISA assembler** (`sw/tools/pasm.py`): Two-pass assembler for Penumbra ISA → $readmemh hex. All 4 formats (R/L/M/B), labels, label references in Format L immediates, pseudo-ops (NOP, RET, LA, LI), branch aliases (BZ/BNZ), `.equ` named constants, built-in constants (`#MMU`, `#TLB_INDEX`, `#TLB_V`, `#DCACHE`, `#ICACHE`, `#CACHE_INFO`, `#CACHE_CTRL`, `#CACHE_INVAL`, `#UART_BASE`, `#UART_LSR`, `#LSR_THRE`, `#FAULT_BUS`, `#FAULT_TLB_MISS`, `#FSTAT_R`, `#FSTAT_W`, `#FSTAT_X`, `#FSTAT_USR`, etc.). Smart mnemonic routing: ADD/SUB/CMP auto-select Format R (reg) or Format L (imm); ERET is 0-arg only (use WRSPR EPC/ESR to modify return state); RDSPR/WRSPR are unified instructions with SPR name (ESR, EPC, USP) encoded in spare[15:12]. `LA Rd, #label` loads a full 32-bit label address (LLI+LUI). `LI Rd, #value` loads an arbitrary 32-bit immediate (LLI+LUI). `--org ADDR` sets code base address (default 0). Data directives: `.word` (one or more 32-bit values), `.byte` (one or more bytes, packed little-endian into words), `.asciz "string"` (null-terminated ASCII with C escape sequences: `\n \r \t \\ \" \0 \xNN`). Bytes are packed little-endian so that sequential LDB reads match string order. Run: `python3 sw/tools/pasm.py --org 0xFFFFE000 input.s -o program.hex`
 - Makefile auto-assembles `.s`/`.uasm` sources into root-level `program.hex`/`microcode.hex` for `$readmemh`; hex files are build artifacts (gitignored). Programs assembled with `--org 0xFFFFE000` (boot ROM address).
 
 ### Test Convention
-- **Program runner** (`sim/tb_cpu_prog.cpp`): Generic testbench that runs a program until BREAK (500000 cycle limit), checks R1 for pass/fail. VCD trace output to `waves/machine_sim.vcd`, register dump (R0–R15) on failure. UART TX bytes printed to stdout in real time.
+- **Program runner** (`hw/sim/tb_cpu_prog.cpp`): Generic testbench that runs a program until BREAK (500000 cycle limit), checks R1 for pass/fail. VCD trace output to `waves/machine_sim.vcd`, register dump (R0–R15) on failure. UART TX bytes printed to stdout in real time.
 - **Pass/fail convention:** R1 = 1 means PASS, R1 = 0 means FAIL. Tests self-check internally and set R1 accordingly.
 - **Halt detection:** Testbench watches for `o_halted` pulse (BREAK instruction dispatch). Instant detection, no polling.
 - **Test termination:** Programs end with `BREAK` instruction. Pass path: `LLI R1, #1` then fall through to `fail: BREAK`. Fail path: assertion `BNE fail` branches to `fail: BREAK`.
