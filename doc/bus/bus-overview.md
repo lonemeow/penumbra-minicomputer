@@ -79,24 +79,24 @@ The async external bus eliminates clock distribution problems and works identica
              │    addr[31:0], data[31:0], req, ack,                        │
              │    we, byte_en[3:0], data_dir, bus_error                    │
              │                   │                                         │
-      ┌──────┴──────┐           │                                         │
-      │   Address   │           │                                         │
-      │   Decoder   │           │                                         │
-      └──┬─────┬──┬─┘           │                                         │
-         │     │  │              │                                         │
-         v     v  v              │                                         │
-┌──────┐┌────┐┌──────────────────┼────────────────────┐                    │
-│Memory││Boot││   I/O Peripherals│                    │                    │
-│SDRAM ││ROM ││                  │                    │                    │
-│or    ││    ││┌──────┐┌─────┐┌──┴──┐┌───────┐┌─────┐│                    │
-│SRAM  ││    │││ UART ││ SPI ││GPIO ││Wiznet ││(fut)││                    │
-└──────┘└────┘│└──┬───┘└──┬──┘└──┬──┘└──┬────┘└─────┘│                    │
-              └───┼───────┼──────┼──────┼─────────────┘                    │
-                  └───┬───┴──┬───┴──────┘                                  │
-                      v      v                                              │
-            ┌──────────────────────┐     NMI ──────────────────────────────┘
-            │  Priority Encoder    │──── IRQ + vector[2:0] ──> CPU
-            │  (74x148 in discrete)│
+      Shared bus — each device decodes its own address range              │
+             │     (no central address decoder)                                │
+             │                                                                 │
+      ── ────┼──────── cfg (daisy-chained autoconfig) ──────────────────┐     │
+             │                                                          │     │
+     ┌───────┼───────┬───────────┬───────────┬───────────┐              │     │
+     │       │       │           │           │           │              │     │
+     v       v       v           v           v           v              │     │
+  ┌──────┐┌────┐┌──────┐┌─────┐┌─────┐┌───────┐┌─────────┐            │     │
+  │System││Boot││ UART ││ SPI ││GPIO ││Wiznet ││ (future) │            │     │
+  │RAM   ││ROM ││ [hw] ││[ac] ││[ac] ││ [ac]  ││  [ac]   │            │     │
+  │ [hw] ││[hw]││      ││     ││     ││       ││         │            │     │
+  └──────┘└────┘└──┬───┘└──┬──┘└──┬──┘└──┬────┘└─────────┘            │     │
+       [hw]=hardwired  └───┬───┴──┬───┴──────┘                          │     │
+       [ac]=autoconfigured v      v                                      │     │
+            ┌──────────────────────┐     NMI ──────────────────────────┘     │
+            │  Priority Encoder    │──── IRQ + vector[2:0] ──> CPU           │
+            │  (74x148 in discrete)│                                         │
             └──────────────────────┘
 ```
 
@@ -122,8 +122,9 @@ This design is motivated by two constraints:
 | `req` | 1 | Master → Slave | Request — master is presenting a valid transfer |
 | `ack` | 1 | Slave → Master | Acknowledge — slave has completed the transfer |
 | `bus_error` | 1 | Slave → Master | Access fault (unmapped address or timeout) |
+| `cfg` | 1 | Daisy-chained | Autoconfig chain — see [Device Discovery](#device-discovery-autoconfig) |
 
-**Total: 72 signals** (32 addr + 32 data + 8 control).
+**Total: 73 signals** (32 addr + 32 data + 9 control).
 
 ### Four-Phase Handshake
 
@@ -190,9 +191,9 @@ Slave devices that can take advantage of sequential addresses internally (e.g., 
 
 ### Bus Error / Timeout
 
-When an access hits unmapped address space, a **default slave** (part of the address decoder) asserts `bus_error` instead of `ack`. The CPU treats this as an exception.
+When an access hits unmapped address space, no device responds — no `ack` is asserted. A **bus timeout counter** on the master side detects this: if `req` is held for N cycles of a local reference oscillator without `ack`, it asserts `bus_error`. The CPU treats this as an exception.
 
-In discrete, a simple timeout counter provides the same function: if `req` is asserted for N cycles of a local reference oscillator without `ack`, the counter asserts `bus_error`. This catches both unmapped addresses and hung peripherals.
+In discrete, the timeout is a simple counter chip (e.g., 74x163 + comparator). On FPGA, it is a configurable down-counter in the async bridge. This catches both unmapped addresses and hung peripherals. There is no central address decoder or "default slave" — each device is responsible for recognizing its own address range (see [Address Decoding](#address-decoding)).
 
 ### Byte Lane Enables
 
@@ -317,15 +318,95 @@ DMA-capable peripherals (Wiznet at minimum) use dedicated request/acknowledge pa
 
 ## Bus Topology
 
-Shared-bus connecting via the Penumbra Bus:
+Shared-bus connecting via the Penumbra Bus. Each device decodes its own address range — the bus carries no decode logic.
+
+**Hardwired devices** (fixed addresses, always present):
 - CPU complex (bus master, via async bridge)
 - DMA controller (bus master)
-- Memory (SDRAM on FPGA, SRAM in discrete)
-- Boot ROM
-- UART (serial console)
-- GPIO
+- System RAM (SDRAM on FPGA, SRAM in discrete — hardwired at 0x0, size probed)
+- Boot ROM (8 KB at 0xFFFF_E000)
+- Console UART (4 KB at 0xFF00_0000)
+
+**Autoconfigured devices** (addresses assigned at boot via config chain):
+- Expansion RAM (additional memory cards)
 - SPI (SD card, other peripherals)
+- GPIO
 - Wiznet Ethernet adapter (MMIO + DMA)
+- Future expansion cards
+
+## Device Discovery (Autoconfig)
+
+Devices on the Penumbra Bus support automatic discovery and address assignment at boot time. This eliminates hardcoded address maps for expansion devices and enables plug-and-play on the discrete backplane. The protocol is inspired by the Amiga Zorro II/III autoconfig mechanism.
+
+### Hardwired vs Autoconfigured Devices
+
+A small set of **hardwired devices** must be functional before any software runs — they have fixed, design-time base addresses and are always present:
+
+- **System RAM** (`0x0000_0000`) — base-board memory. Size unknown at boot; the boot ROM probes upward by attempting reads until a bus fault occurs. Expansion RAM cards are separate devices that get autoconfigured addresses above system RAM.
+- **Console UART** (`0xFF00_0000`) — serial console for boot diagnostics. Must be available to print debug output during the autoconfig process itself.
+- **Boot ROM** (`0xFFFF_E000`) — contains the reset vector and autoconfig enumeration code.
+
+All other devices are **autoconfigured**: they start in an unconfigured state after reset and receive their base addresses from the boot ROM's autoconfig routine.
+
+### The Config Chain
+
+A single `cfg` signal is **daisy-chained** through all autoconfigurable devices on the bus:
+
+```
+                 cfg_in    cfg_out    cfg_in    cfg_out    cfg_in
+Bus controller ───────> Device 0 ───────> Device 1 ───────> Device 2 ──> ...
+  (sysreg)         (1st unconfigured    (2nd unconfigured
+                    device responds)     device waits)
+```
+
+- After reset, all autoconfigurable devices are in **config state** (unconfigured).
+- A device in config state **blocks** `cfg` — it does not pass `cfg_out` to the next device.
+- A device in enabled state (already configured) **passes** `cfg` through: `cfg_out = cfg_in`.
+- Only the **first unconfigured device** in the chain sees `cfg_in = 1` and responds to config cycles.
+
+Discrete implementation: one flip-flop per device (`configured`), one AND gate (`cfg_out = cfg_in & configured`).
+
+### Config Cycle Protocol
+
+The CPU triggers config cycles via a sysreg bus controller device (e.g., `SYSDEV_BUSCTL`). When the bus controller asserts `cfg` on the Penumbra Bus, the first unconfigured device in the chain responds to reads and writes at a fixed set of **config space registers**:
+
+| Offset | R/W | Description |
+|--------|-----|-------------|
+| 0 | R | Device ID (manufacturer + product code) |
+| 1 | R | Required size (power-of-2 byte count) |
+| 2 | R | Device type (0=memory, 1=I/O, ...) |
+| 3 | W | Assigned base address — writing transitions the device to enabled state |
+
+The config space is accessed via normal bus address/data lines while `cfg` is asserted. The address lines carry the config register offset (not the eventual device address). This keeps config space small and fixed regardless of the device.
+
+### Autoconfig Boot Sequence
+
+1. CPU boots from ROM at `0xFFFF_E000`, hardwired devices (system RAM, UART, ROM) already functional
+2. Boot ROM probes system RAM size by reading upward from `0x0000_0000` until bus fault
+3. Boot ROM begins autoconfig: triggers config cycle, reads device 0's ID and required size
+4. Boot ROM assigns a base address (from available physical space), writes it to config register 3
+5. Device 0 latches its base address, transitions to enabled state, passes `cfg` to device 1
+6. Repeat steps 3–5 until a config read returns no response (bus timeout = no more devices)
+7. Boot ROM builds a device table in RAM for the OS kernel
+
+### FPGA-Internal Autoconfig
+
+FPGA-internal devices (soft peripherals, SDRAM controllers, etc.) participate in the same autoconfig protocol. The `cfg` chain is simply wired in RTL between module instances:
+
+```systemverilog
+// In machine_fpga.sv (or similar integration module):
+assign fpga_uart_cfg_in  = busctl_cfg_out;    // first in chain
+assign fpga_spi_cfg_in   = fpga_uart_cfg_out; // second
+assign ext_bus_cfg        = fpga_spi_cfg_out;  // then to external bus
+```
+
+This means the same boot ROM autoconfig code discovers both FPGA-internal soft peripherals and external discrete cards — no distinction from software's perspective.
+
+### Expansion RAM
+
+Expansion RAM cards are autoconfigured like any other device. They report `type=memory` and their installed size during config. The boot ROM assigns them contiguous addresses above system RAM (or in other available ranges). The OS kernel's memory map includes both system RAM and all expansion RAM regions.
+
+This mirrors the Amiga model: Chip RAM (system RAM, hardwired at 0) + Zorro Fast RAM (expansion, autoconfigured).
 
 ## Arbitration
 
@@ -342,7 +423,7 @@ The architecture maps to both implementation targets:
 | CPU clock | 25-50 MHz | 5-10 MHz (local crystal) |
 | Internal bus | FPGA fabric wires (sync) | On-board traces (sync, local clock) |
 | External bus | Penumbra Bus via GPIO pins | Penumbra Bus via backplane |
-| Main memory | 32 MB SDRAM (onboard, via internal sync bus) | 1-2 MB SRAM (via Penumbra Bus) |
+| System RAM | 32 MB SDRAM (onboard, hardwired at 0x0, size probed) | 1-2 MB SRAM (hardwired at 0x0, size probed) |
 | I/O peripherals | Penumbra Bus via GPIO | Penumbra Bus via backplane |
 | Async bridge | SystemVerilog module at GPIO boundary | Implicit — CPU board drives backplane directly |
 
@@ -364,7 +445,7 @@ The FPGA build can optionally connect to **external SRAM via GPIO** to validate 
 
 The external memory board has a single 74x573 address latch that captures the address on `ALE`, then the same pins carry data for the transfer. This multiplexing exists **only** on the FPGA-to-external cable — it is not part of the Penumbra Bus standard.
 
-The address decoder on the FPGA routes physical addresses to either the onboard SDRAM (internal sync bus) or the external SRAM (via async bridge + GPIO), allowing both memory paths to be active simultaneously for testing and comparison.
+On the FPGA, the onboard SDRAM and external SRAM are both bus devices with their own address comparators — the SDRAM claims its range on the internal sync bus, while the external SRAM responds on the Penumbra Bus via GPIO. Both can be active simultaneously for testing and comparison.
 
 ## Physical Memory Map
 
@@ -374,53 +455,64 @@ The physical address space uses a fixed layout decoded from the top address bits
 
 ```
 0x0000_0000 ┌─────────────────────┐
-            │ RAM                 │  Cached (normal operation)
-            │ FPGA: 32 MB SDRAM  │
+            │ System RAM          │  Cached, hardwired at base 0
+            │ FPGA: up to 32 MB  │  Size probed at boot (bus fault)
             │ Discrete: 1-2 MB   │
-0x01FF_FFFF │   SRAM             │
-            └─────────────────────┘
-0x0200_0000 ┌─────────────────────┐
+            ├─────────────────────┤  ← probed boundary
+            │ Expansion RAM       │  Autoconfigured, assigned by boot ROM
+            │ (optional)          │
+            ├─────────────────────┤
             │ (unmapped)          │  Bus fault if accessed
 0xFEFF_FFFF └─────────────────────┘
 0xFF00_0000 ┌─────────────────────┐
             │ I/O Region (16 MB)  │  Always uncached (C=0)
+            │ Hardwired: UART     │
+            │ Autoconfigured: rest│
 0xFFFF_DFFF └─────────────────────┘
 0xFFFF_E000 ┌─────────────────────┐
-            │ Boot ROM (8 KB)     │  Always uncached (C=0)
+            │ Boot ROM (8 KB)     │  Always uncached (C=0), hardwired
 0xFFFF_FFFF └─────────────────────┘
 ```
 
 - **Reset vector:** `0xFFFF_E000` (base of boot ROM). CPU starts here with MMU in flat mode (M=0). This is a hardwired PC reset value, not part of the vector table.
 - **Exception vector table (MIPS/68k-style):** 16 words at physical `0x0000_0000` in RAM. Each entry contains a 32-bit handler address (not an instruction). The CPU reads the handler address from the vector table with MMU bypass, then jumps to that address. Software writes handler addresses at boot time via `STW`.
-- **Unmapped regions:** Accessing unmapped addresses produces a bus fault exception.
+- **Unmapped regions:** Accessing unmapped addresses produces a bus fault (bus timeout, no device responds).
+- **System RAM sizing:** System RAM is hardwired at address 0 and claims only its actual installed size. The boot ROM probes upward until bus fault to determine the boundary. Expansion RAM cards are autoconfigured and assigned addresses above system RAM (see [Device Discovery](#device-discovery-autoconfig)).
 
 ### I/O Peripheral Map
 
 Within the 16 MB I/O region at `0xFF00_0000`:
 
-| Base Address | Size | Peripheral | Notes |
-|-------------|------|------------|-------|
-| `0xFF00_0000` | 4 KB | UART | Serial console (NS16450-compatible, word-strided) — **implemented in sim** |
-| `0xFF00_1000` | 4 KB | SPI controller | SD card, flash |
-| `0xFF00_2000` | 4 KB | GPIO | General-purpose I/O |
-| `0xFF00_3000` - `0xFF00_FFFF` | 52 KB | (reserved) | Future simple peripherals |
-| `0xFF01_0000` | 64 KB | Wiznet Ethernet | Register + buffer window |
-| `0xFF02_0000` - `0xFFFF_DFFF` | ~15.8 MB | (reserved) | Future expansion |
+| Base Address | Size | Peripheral | Hardwired/AC | Notes |
+|-------------|------|------------|:---:|-------|
+| `0xFF00_0000` | 4 KB | UART | HW | Serial console (NS16450-compatible) — **implemented in sim** |
+| (assigned) | 4 KB | SPI controller | AC | SD card, flash |
+| (assigned) | 4 KB | GPIO | AC | General-purpose I/O |
+| (assigned) | 64 KB | Wiznet Ethernet | AC | Register + buffer window |
+| `0xFF00_1000` - `0xFFFF_DFFF` | ~16 MB | (available) | — | Autoconfig assigns from this pool |
+
+HW = hardwired (fixed address). AC = autoconfigured (address assigned at boot).
+
+Only the console UART has a fixed I/O address. All other peripherals receive their addresses from the autoconfig boot sequence, which assigns them from the available I/O space.
 
 Each simple peripheral gets a 4 KB page-aligned region. This is far more than needed (most use ~8 registers) but it means:
 - Each peripheral occupies exactly one MMU page, so cacheability and permissions are per-device
-- Address decoding within the I/O block uses `addr[19:12]` to select the device — one 74x138 decoder in discrete
+- The autoconfig routine assigns page-aligned addresses naturally
 
 ### Address Decoding
 
-Top-level decode checks the top 8 address bits:
+Address decoding is **device-side**: each device on the bus contains its own address comparator and responds only to accesses within its claimed range. There is no central address decoder. This models how real shared buses work (ISA, VMEbus, S-100) — each card has its own address selection logic.
 
-| `addr[31:24]` | Region |
-|---------------|--------|
-| `0x00` - `0x01` | RAM (32 MB max) |
-| `0x02` - `0xFE` | Unmapped (bus fault) |
-| `0xFF` | I/O + Boot ROM |
+Each device uses the pattern `(addr & ~(size - 1)) == base` to check if an address falls within its window. Size must be a power of 2 and base must be naturally aligned. In the RTL simulation, this is implemented by the `bus_devsel` module (one instance per device, with elaboration-time assertions for power-of-2, alignment, and non-zero size).
 
-Within the `0xFF` region, `addr[23:17]` distinguishes I/O (lower) from Boot ROM (upper, `0xFFFF_E000`+).
+**Hardwired devices** have fixed base addresses set at design time:
 
-Discrete decode cost: ~3-4 chips (one 74x85 comparator for RAM range, one for the 0xFF block, one 74x138 decoder for peripheral select).
+| Device | Base | Size | Notes |
+|--------|------|------|-------|
+| System RAM | `0x0000_0000` | Installed size | Probed at boot via bus fault |
+| Console UART | `0xFF00_0000` | 4 KB | Must be available before autoconfig |
+| Boot ROM | `0xFFFF_E000` | 8 KB | CPU starts here at reset |
+
+**Autoconfigured devices** have their base addresses assigned at boot time by the autoconfig protocol (see [Device Discovery](#device-discovery-autoconfig)). They do not respond to normal bus cycles until configured.
+
+Discrete decode cost per device: one 74x85 magnitude comparator on the upper address lines, with the number of compared bits determined by the device's address space size. Equivalent to DIP switches selecting the base address on an ISA card.
