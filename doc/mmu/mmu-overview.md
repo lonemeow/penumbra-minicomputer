@@ -456,12 +456,21 @@ _This section is for hardware designers, not OS implementers._
 
 ### Cache Architecture
 
-Split I/D cache, both direct-mapped PIPT:
-- **I-Cache:** Read-only, full invalidation instruction (privileged)
-- **D-Cache:** Write-through initially, upgradeable to write-back
-- **Line size:** TBD (likely 4 words / 16 bytes)
-- **Cache size:** TBD (likely 2–4 KB each, fits ECP5 EBR budget)
+Implemented in `rtl/soc/cache.sv` — a single parameterized module reused for both
+I-cache and D-cache instances. Split I/D, both direct-mapped PIPT:
+
+- **Module:** `cache.sv` with parameters: `NUM_SETS` (default 64), `LINE_WORDS` (default 4), `NUM_WAYS` (default 1), `CACHE_TYPE` (default WT/WnA)
+- **I-Cache:** Read-only, invalidate-all via sysreg (device 3). Required after code load.
+- **D-Cache:** Write-through, write-no-allocate. Invalidate via sysreg (device 2). Required for DMA coherence.
+- **Line size:** 4 words (16 bytes), parameterizable
+- **Cache size:** 4 KB per cache at default settings (64 sets × 4 words × 4 bytes), parameterizable
+- **Geometry discovery:** Software reads INFO sysreg to learn line size, sets, ways, and type
+- **Disabled at reset:** Cache starts disabled (CTRL.ENABLE=0), passes through like cache_stub. Kernel enables after TLB setup.
 - Cache misses stall via the same `busy` mechanism as long-latency ALU ops
+- Read miss: burst-fills entire line from memory (LINE_WORDS sequential reads), then returns to IDLE for re-hit
+- Write hit: updates cache line (byte-granular) + writes through to memory
+- Write miss: passes write to memory without filling (write-no-allocate)
+- Uncacheable (C=0): passes through to memory regardless of enable state
 
 ### TLB Hardware
 

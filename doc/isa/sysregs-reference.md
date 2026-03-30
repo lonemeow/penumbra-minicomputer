@@ -21,7 +21,9 @@ one of 16 registers within that device, for 256 total system registers.
 |-----|------|-------------|
 | 0 | MMU | TLB management, fault registers, address translation control |
 | 1 | SYS | Machine identification (read-only) |
-| 2–15 | — | Reserved for future devices (timer, interrupt controller, DMA) |
+| 2 | DCACHE | D-cache control, geometry info, invalidation |
+| 3 | ICACHE | I-cache control, geometry info, invalidation |
+| 4–15 | — | Reserved for future devices (timer, interrupt controller, DMA) |
 
 > **Note:** I/O peripherals (UART, SPI, GPIO, Ethernet) are **not** on the sysreg bus.
 > They are memory-mapped at `0xFF00_0000`+ and accessed via `LDW`/`STW`.
@@ -221,3 +223,70 @@ BNE   unsupported_hw
 
 Future revisions increment this value. Capability registers (TLB geometry,
 cache properties, optional features) will be added at registers 1+ when needed.
+
+---
+
+## Devices 2–3: DCACHE / ICACHE
+
+Devices 2 (D-cache) and 3 (I-cache) share the same register layout.
+Each is an independent instance of the parameterized `cache.sv` module.
+Cache is disabled at reset; the kernel enables it after setting up TLB mappings.
+
+| reg | Name | R/W | Description |
+|-----|------|-----|-------------|
+| 0 | INFO | R | Cache geometry and type (compile-time constant) |
+| 1 | CTRL | R/W | Control register |
+| 2 | INVAL | W | Invalidation trigger |
+| 3–15 | — | — | Reserved (reads as 0) |
+
+### INFO (reg 0) — Read-only
+
+Packed cache geometry for software discovery:
+
+```
+Bits [3:0]   — LINE_WORDS  (words per cache line, e.g. 4)
+Bits [13:4]  — NUM_SETS    (number of sets, e.g. 64)
+Bits [17:14] — NUM_WAYS    (associativity, e.g. 1 = direct-mapped)
+Bits [21:18] — CACHE_TYPE  (0 = write-through/write-no-allocate)
+Bits [31:22] — Reserved (0)
+```
+
+```asm
+; Discover D-cache line size at boot
+RDSYS R1, #2, #0          ; R1 = DCACHE INFO
+LLI   R2, #0x0F
+AND   R1, R2              ; R1 = LINE_WORDS
+```
+
+### CTRL (reg 1)
+
+| Bit | Name | Reset | Description |
+|-----|------|-------|-------------|
+| 0 | ENABLE | 0 | Cache enable. When 0, all accesses pass through to memory. |
+| 31:1 | — | 0 | Reserved |
+
+```asm
+; Enable D-cache after TLB setup
+LLI   R1, #1
+WRSYS R1, #2, #1          ; DCACHE CTRL.ENABLE = 1
+```
+
+### INVAL (reg 2) — Write-only
+
+Writing any value invalidates all cache lines (clears all valid bits).
+The written value is accepted as an address for future per-line invalidate
+support, but the current implementation ignores it and invalidates all.
+
+```asm
+; Invalidate I-cache after loading new code
+WRSYS R0, #3, #2          ; ICACHE INVAL (invalidate all)
+```
+
+**I-cache coherence:** After copying code to RAM (e.g., `exec()`, dynamic
+linking, JIT), the kernel must invalidate the I-cache before executing it.
+The D-cache write-through policy ensures data reaches RAM immediately, so
+only the I-cache needs invalidation.
+
+**DMA coherence:** Before DMA read (device → memory), invalidate D-cache
+lines covering the DMA buffer so the CPU reads fresh data from RAM, not
+stale cached copies. Alternatively, map DMA buffers with C=0 (uncached).

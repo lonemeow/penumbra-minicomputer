@@ -69,11 +69,21 @@ package penumbra_pkg;
     localparam logic [2:0] ACC_EXEC  = 3'b100;  // bit 2 = X
 
     // ── Sysreg device IDs ──────────────────────────────────────
-    localparam logic [3:0] SYSDEV_MMU = 4'd0;   // MMU (TLB, fault regs)
-    localparam logic [3:0] SYSDEV_SYS = 4'd1;   // System ID (read-only)
+    localparam logic [3:0] SYSDEV_MMU    = 4'd0;   // MMU (TLB, fault regs)
+    localparam logic [3:0] SYSDEV_SYS    = 4'd1;   // System ID (read-only)
+    localparam logic [3:0] SYSDEV_DCACHE = 4'd2;   // D-cache control
+    localparam logic [3:0] SYSDEV_ICACHE = 4'd3;   // I-cache control
 
     // ── SYS sysreg addresses (dev_id = 1) ───────────────────
     localparam logic [3:0] SYSREG_SYS_MACHID = 4'd0;  // Machine ID (read-only)
+
+    // ── Cache sysreg addresses (dev_id = 2 or 3) ────────────────
+    localparam logic [3:0] SYSREG_CACHE_INFO  = 4'd0;  // Read-only geometry/type
+    localparam logic [3:0] SYSREG_CACHE_CTRL  = 4'd1;  // [0]=enable (0 at reset)
+    localparam logic [3:0] SYSREG_CACHE_INVAL = 4'd2;  // Write to invalidate
+
+    // ── Cache type encoding (INFO register bits [21:18]) ──────
+    localparam logic [3:0] CACHE_TYPE_WT_WNA = 4'd0;   // Write-through, write-no-allocate
 
     // ── MMU sysreg addresses (dev_id = 0) ─────────────────────
     localparam logic [3:0] SYSREG_MMU_CR       = 4'd0;  // MMUCR: [0]=M (enable), [15:8]=ASID

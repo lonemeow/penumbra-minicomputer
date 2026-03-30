@@ -58,7 +58,7 @@ The architecture is fully specified in `doc/`. Key specs:
 - **Important:** Always `rm -rf build/<mod>.verilator build/V<mod>` before rebuilding if you suspect stale binaries (WSL2 /mnt/c filesystem can have stale mtimes)
 
 ## Current Status
-The CPU runs real programs in simulation with the full CPU → MMU → cache → memory path wired, booting from ROM at `0xFFFF_E000` (matching the physical memory map). The simulator (machine_sim) has address decode routing accesses to boot ROM (8 KB, 0xFFFF_E000+), UART (4 KB, 0xFF00_0000), or RAM (16 MB, parameterizable, address-wrapping). A 16450-compatible simulation UART provides console I/O — TX bytes appear on stdout, RX accepts bytes from the testbench. The UART is memory-mapped (MMIO at `0xFF00_0000`, not on the sysreg bus), accessed via LDW/STW, with realistic TX busy timing (~2170 cycles at 115200 baud/25 MHz). An interactive boot ROM (`sw/rom/boot_rom.s`) prints a banner and runs an echo loop over UART; `make simulate` launches it with terminal I/O bridged through Docker (`-it`). The vector table uses MIPS/68k-style address-based dispatch: `int_entry` reads a handler address from physical RAM, bypassing the MMU. The TLB is implemented (64-entry 2-way SA, fully software-managed) and tested with MMU enabled (identity + non-identity mappings). MMU data faults (TLB miss, protection violation) are wired as synchronous exceptions — detected during STALL, abort the instruction, save EPC/ESR, and vector to the fault handler. WRSYS/RDSYS access a multi-device sysreg bus (device 0 = MMU, device 1 = SYS). RTL is built bottom-up from leaf modules. The 51-bit micro-word format is finalized (bit [50] = priv, [49] = cross_bank, [1:0] = ei_set/di_set).
+The CPU runs real programs in simulation with the full CPU → MMU → cache → memory path wired, booting from ROM at `0xFFFF_E000` (matching the physical memory map). Instruction fetch is busy-aware and latency-agnostic (waits for memory busy to deassert, tested with both 1-cycle ROM and 6-cycle SDRAM-latency RAM). RAM simulation models realistic SDRAM timing (READ_LATENCY=6, WRITE_LATENCY=3). A parameterized PIPT cache module (`cache.sv`) is implemented and unit-tested (42/42) but not yet wired into cpu_core (pending D-cache/I-cache integration). The simulator (machine_sim) has address decode routing accesses to boot ROM (8 KB, 0xFFFF_E000+), UART (4 KB, 0xFF00_0000), or RAM (16 MB, parameterizable, address-wrapping). A 16450-compatible simulation UART provides console I/O — TX bytes appear on stdout, RX accepts bytes from the testbench. The UART is memory-mapped (MMIO at `0xFF00_0000`, not on the sysreg bus), accessed via LDW/STW, with realistic TX busy timing (~2170 cycles at 115200 baud/25 MHz). An interactive boot ROM (`sw/rom/boot_rom.s`) prints a banner and runs an echo loop over UART; `make simulate` launches it with terminal I/O bridged through Docker (`-it`). The vector table uses MIPS/68k-style address-based dispatch: `int_entry` reads a handler address from physical RAM, bypassing the MMU. The TLB is implemented (64-entry 2-way SA, fully software-managed) and tested with MMU enabled (identity + non-identity mappings). MMU data faults (TLB miss, protection violation) are wired as synchronous exceptions — detected during STALL, abort the instruction, save EPC/ESR, and vector to the fault handler. WRSYS/RDSYS access a multi-device sysreg bus (device 0 = MMU, device 1 = SYS). RTL is built bottom-up from leaf modules. The 51-bit micro-word format is finalized (bit [50] = priv, [49] = cross_bank, [1:0] = ei_set/di_set).
 
 ### Implemented RTL Modules (all tested)
 | Module | File | Tests | Description |
@@ -85,12 +85,13 @@ The CPU runs real programs in simulation with the full CPU → MMU → cache →
 | Sim machine | `rtl/soc/machine_sim.sv` | (top) | Simulation integration: cpu_core + boot_rom + simple_mem + sim_uart + sysid. Address decode: 0xFFFF_E000+ → ROM, 0xFF00_0xxx → UART, else → RAM. UART IRQ wired to CPU. Verilator top module for `make test` |
 | Sim UART | `rtl/soc/sim_uart.sv` | via machine_sim | 16450-compatible UART (MMIO at 0xFF00_0000). 8 registers at word stride, DLAB mux, TX busy counter (parameterizable, default ~115200 baud at 25 MHz). NetBSD com(4) compatible via reg-shift=2, reg-io-width=4 |
 | Boot ROM | `rtl/soc/boot_rom.sv` | via machine_sim | Read-only memory (8 KB default), loads program.hex, same 1-cycle busy protocol as simple_mem |
-| Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_*, ACC_*, VEC_*, SYSDEV_*, SYSREG_*, UART_* constants |
+| Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_*, ACC_*, VEC_*, SYSDEV_*, SYSREG_*, SYSREG_CACHE_*, CACHE_TYPE_*, UART_* constants |
 | System ID | `rtl/soc/sysid.sv` | via machine_sim | Read-only MACHINE_ID register (Penumbra/1), sysreg device 1 |
 | TLB | `rtl/mmu/tlb.sv` | 111/111 | 64-entry 2-way SA, parallel lookup, one-hot permission check, indexed sysreg R/W |
 | MMU | `rtl/mmu/mmu.sv` | — | Bypass/translate mux, force_bypass for vector table read, sysreg routing, fault latching, TLB instantiation |
-| Cache stub | `rtl/soc/cache_stub.sv` | — | Combinational pass-through with byte_en, placeholder for split I/D PIPT caches |
-| Simple memory | `rtl/soc/simple_mem.sv` | — | Parameterizable synchronous SRAM model (default 16 MB), zeroed at init (no preload — matches real HW), 1-cycle read busy, per-byte write enables, address wrapping |
+| Cache | `rtl/soc/cache.sv` | 42/42 | Parameterized PIPT cache (NUM_SETS, LINE_WORDS, NUM_WAYS). Write-through/write-no-allocate. Burst line fill on read miss. Sysreg interface (INFO/CTRL/INVAL). Pass-through when disabled (reset default) or uncacheable (C=0). Reusable for both I-cache and D-cache. |
+| Cache stub | `rtl/soc/cache_stub.sv` | — | Combinational pass-through, retained for reference. cpu_core still uses this pending integration of cache.sv. |
+| Simple memory | `rtl/soc/simple_mem.sv` | — | Parameterizable synchronous SRAM model (default 16 MB), zeroed at init (no preload — matches real HW), configurable READ_LATENCY (default 6) and WRITE_LATENCY (default 3) modeling SDRAM timing, per-byte write enables, address wrapping. Latches address/data at access start. Read data poisoned (0xDEAD_BEEF) while busy. |
 
 ### Boot ROM and Interactive Simulation
 - **Boot ROM** (`sw/rom/boot_rom.s`): Penumbra/1 boot monitor with command parser. Identical binary on sim and real hardware. Commands: `d ADDR` (dump 64 bytes), `w ADDR VAL` (write word), `g ADDR` (jump), `?` (help). Stack-based calling convention: SP (R14) at `0x01000000` (top of 16 MB RAM), non-leaf functions push/pop LR. I/O globals pinned in R10-R12 (UART base, THRE mask, DR mask). Routines: `putchar`/`getchar` (leaf, polling), `puts` (null-terminated string), `readline` (line editing with echo and backspace), `parse_hex` (hex string→value), `print_hex32`/`print_hex8`/`print_nibble` (value→hex output, table-driven). Line buffer at RAM `0x1000`, 79-char max. Assembled with `--org 0xFFFFE000`.
@@ -162,7 +163,7 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 
 ### Memory Access
 - **STALL-based:** Load/store micro-routines use `branch=STALL` to wait for memory. The same microcode works regardless of memory latency (1-cycle sync, cache miss, MMU walk).
-- **mem_busy signal:** Simple memory model provides 1-cycle busy for reads, 0-cycle for writes. Future: replaced by cache/bus controller busy signal.
+- **mem_busy signal:** Simple memory model provides configurable latency (READ_LATENCY=6, WRITE_LATENCY=3 by default, modeling SDRAM). Cache module sits between CPU and memory, serving hits with zero latency and burst-filling lines on miss. Read data poisoned (0xDEAD_BEEF) while busy to catch premature sampling. Faulting data accesses are gated with `!mmu_fault` to prevent stale writes to memory.
 - **MMU traps:** STALL path checks `i_mem_fault` alongside `i_mem_busy`. On fault, sequencer aborts to S_FETCH; `cpu_core` generates `except_entry` and sets `fault_pending` for vector dispatch. PC is in HOLD during STALL, so faulting instruction can be restarted after TLB refill.
 - **Dispatch spacing:** Format R uses ×2 spacing split by op[4]: ALU (0x00–0x1E) and SYS (0x40–0x5E). Formula: `{0, op[4], 0, op[3:0], 0}` — pure wiring, zero gates. Format M uses ×4 spacing (0x80–0xBF). Multi-step system ops (ERET, RDSYS) fit in their ×2 slots without overflowing into adjacent instruction entries.
 
@@ -222,9 +223,10 @@ The simulation UART (`sim_uart.sv`) is an NS16450-compatible device at `0xFF00_0
 - **Real hardware:** Replace `sim_uart` with a baud-rate UART (add shift register + baud generator from DLL/DLM). Same register interface. Add 16-byte FIFOs by flipping IIR[7:6] to `11`.
 
 ### Next Steps (in priority order)
-1. **Boot ROM monitor** — Command parser working (`make simulate`): dump, write, go, help. Next: S-record upload for loading programs over UART.
-2. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick.
-3. **Interrupt controller** — Multiple devices with priority encoding.
-4. **Instruction fetch faults** — Detect TLB miss during fetch phase (separate from STALL-based data fault path).
-5. **Memory subsystem** — Cache (replace cache_stub), SDRAM controller, bus interface.
-6. **LLVM backend** — Compiler toolchain for NetBSD port. See `doc/toolchain/toolchain-strategy.md`.
+1. **Cache integration** — `cache.sv` module is implemented and tested (42/42). Next: wire as D-cache in cpu_core (replace cache_stub), add I-cache instance with memory bus mux, add sysreg routing in machine_sim, write integration test programs.
+2. **Boot ROM monitor** — Command parser working (`make simulate`): dump, write, go, help. Next: S-record upload for loading programs over UART.
+3. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick.
+4. **Interrupt controller** — Multiple devices with priority encoding.
+5. **Instruction fetch faults** — Detect TLB miss during fetch phase (separate from STALL-based data fault path).
+6. **Memory subsystem** — SDRAM controller, bus interface.
+7. **LLVM backend** — Compiler toolchain for NetBSD port. See `doc/toolchain/toolchain-strategy.md`.

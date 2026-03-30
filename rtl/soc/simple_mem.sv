@@ -51,6 +51,15 @@ module simple_mem
     logic [ADDR_BITS-1:0] word_addr;
     assign word_addr = i_addr[ADDR_BITS+1:2];
 
+    // ── Latched write parameters ──────────────────────────
+    // Captured at access start so the commit uses the original
+    // values even if the bus changes during multi-cycle access.
+    // This models real SDRAM controller behavior (command latched
+    // at issue time).
+    logic [ADDR_BITS-1:0] latched_addr;
+    logic [31:0]          latched_wdata;
+    logic [3:0]           latched_byte_en;
+
     // ── Synchronous write (per-byte enables) ────────────────
     // Write commits on the cycle when busy deasserts (last cycle
     // of the access), not on the first posedge. This models real
@@ -59,10 +68,10 @@ module simple_mem
 
     always_ff @(posedge i_clk) begin
         if (write_commit) begin
-            if (i_byte_en[0]) mem[word_addr][ 7: 0] <= i_wdata[ 7: 0];
-            if (i_byte_en[1]) mem[word_addr][15: 8] <= i_wdata[15: 8];
-            if (i_byte_en[2]) mem[word_addr][23:16] <= i_wdata[23:16];
-            if (i_byte_en[3]) mem[word_addr][31:24] <= i_wdata[31:24];
+            if (latched_byte_en[0]) mem[latched_addr][ 7: 0] <= latched_wdata[ 7: 0];
+            if (latched_byte_en[1]) mem[latched_addr][15: 8] <= latched_wdata[15: 8];
+            if (latched_byte_en[2]) mem[latched_addr][23:16] <= latched_wdata[23:16];
+            if (latched_byte_en[3]) mem[latched_addr][31:24] <= latched_wdata[31:24];
         end
     end
 
@@ -110,12 +119,15 @@ module simple_mem
             in_access  <= 1'b0;
             is_write   <= 1'b0;
         end else if (!in_access && (i_re || i_we)) begin
-            // New access — start counting
-            in_access  <= 1'b1;
-            busy_count <= CTR_BITS'(1);
-            target     <= i_we ? WRITE_LATENCY[CTR_BITS-1:0]
-                               : READ_LATENCY[CTR_BITS-1:0];
-            is_write   <= i_we;
+            // New access — start counting, latch parameters
+            in_access      <= 1'b1;
+            busy_count     <= CTR_BITS'(1);
+            target         <= i_we ? WRITE_LATENCY[CTR_BITS-1:0]
+                                   : READ_LATENCY[CTR_BITS-1:0];
+            is_write       <= i_we;
+            latched_addr   <= word_addr;
+            latched_wdata  <= i_wdata;
+            latched_byte_en <= i_byte_en;
         end else if (in_access && busy_count >= target) begin
             // Access complete — return to idle
             in_access  <= 1'b0;
