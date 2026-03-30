@@ -127,6 +127,7 @@ package penumbra_pkg;
     // FAULT_STATUS[3:0] = fault type
     localparam logic [3:0] FAULT_TLB_MISS = 4'b0001;
     localparam logic [3:0] FAULT_PROT     = 4'b0010;
+    localparam logic [3:0] FAULT_ALIGN    = 4'b0011;
     // FAULT_STATUS[7:4] = reserved (gap for future fault types)
     // FAULT_STATUS[11:8] = faulting access info
     localparam int FSTAT_R   = 8;   // Faulting access was read

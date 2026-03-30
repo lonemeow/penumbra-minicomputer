@@ -24,12 +24,14 @@ module mmu
     input  logic        i_user_mode,    // 1 = user mode (from !SR.S)
     input  logic        i_req,          // Translation request
     input  logic        i_force_bypass, // Override: identity map this request (vector fetch)
+    input  logic [1:0]  i_mem_size,     // Access size: 00=byte, 01=half, 10=word
 
     // ── Translation output ─────────────────────────────────
     output logic [31:0] o_paddr,        // Physical address
     output logic        o_cacheable,    // PTE.C (0 in bypass mode)
-    output logic        o_fault,        // Access violation / TLB miss
+    output logic        o_fault,        // Access violation / TLB miss / alignment
     output logic        o_hit,          // TLB hit (always 1 in bypass)
+    output logic        o_align,        // Current fault is alignment (for vector select)
 
     // ── Sysreg interface (WRSYS/RDSYS, dev_id = 0) ────────
     input  logic [3:0]  i_sys_reg,      // Register address within MMU
@@ -79,10 +81,13 @@ module mmu
             tlb_index_reg <= 32'b0;
             tlb_vpn_reg   <= 32'b0;
         end else begin
-            // Latch fault info on TLB miss or protection fault
+            // Latch fault info — alignment > TLB prot > TLB miss.
             // Gated by !i_force_bypass so vector fetches don't overwrite
             // fault info from the original exception.
-            if (mmu_enabled && i_req && !i_force_bypass && tlb_fault) begin
+            if (i_req && !i_force_bypass && misaligned) begin
+                fault_addr   <= i_vaddr;
+                fault_status <= {20'b0, i_user_mode, i_access_type, 4'b0, FAULT_ALIGN};
+            end else if (mmu_enabled && i_req && !i_force_bypass && tlb_fault) begin
                 fault_addr   <= i_vaddr;
                 fault_status <= tlb_fault_status;
             end else if (mmu_enabled && i_req && !i_force_bypass && !tlb_hit) begin
@@ -156,11 +161,33 @@ module mmu
     );
 
     // ══════════════════════════════════════════════════════════
-    // Translation output mux: bypass (M=0) vs TLB (M=1)
+    // Alignment check — fires regardless of MMU enable/bypass.
+    // Word access requires addr[1:0]==0; half requires addr[0]==0.
+    // ══════════════════════════════════════════════════════════
+
+    logic misaligned;
+    always_comb begin
+        case (i_mem_size)
+            2'b10:   misaligned = (i_vaddr[1:0] != 2'b00);  // word
+            2'b01:   misaligned = i_vaddr[0];                // half
+            default: misaligned = 1'b0;                      // byte: always OK
+        endcase
+    end
+
+    assign o_align = i_req && misaligned;
+
+    // ══════════════════════════════════════════════════════════
+    // Translation output mux: alignment > TLB > bypass
     // ══════════════════════════════════════════════════════════
 
     always_comb begin
-        if (mmu_enabled && !i_force_bypass) begin
+        if (i_req && misaligned) begin
+            // Alignment fault — highest priority, even in bypass mode
+            o_paddr     = i_vaddr;
+            o_cacheable = 1'b0;
+            o_fault     = 1'b1;
+            o_hit       = 1'b0;
+        end else if (mmu_enabled && !i_force_bypass) begin
             o_paddr     = tlb_paddr;
             o_cacheable = tlb_cacheable;
             o_hit       = tlb_hit;

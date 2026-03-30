@@ -81,14 +81,14 @@ The CPU runs real programs in simulation with the full CPU → MMU → split I/D
 | Sequencer | `rtl/core/sequencer.sv` | — | Micro-PC, branch_cond decode, EI/DI tracking, ei_shadow_clr |
 | Byte extractor | `rtl/core/byte_ext.sv` | 19/19 | Sub-word load extraction: byte/half from 32-bit word, sign/zero extend |
 | Byte replicator | `rtl/core/byte_rep.sv` | 10/10 | Sub-word store lane positioning: replicate byte/half across all lanes |
-| CPU core | `rtl/core/cpu_core.sv` | 28 progs | Full CPU: datapath + sequencer + ROM + MMU + split I/D cache + memory bus mux + fetch + IRQ + MMU traps (data + fetch) + alignment fault (fetch) + BREAK + SYSCALL + privilege traps + illegal instruction trap + WRSYS/RDSYS + RDSPR/WRSPR + BL + sub-word loads/stores. Cache sysregs (devices 2–3) handled internally. Parameterizable RESET_PC (default 0xFFFF_E000). |
+| CPU core | `rtl/core/cpu_core.sv` | 29 progs | Full CPU: datapath + sequencer + ROM + MMU + split I/D cache + memory bus mux + fetch + IRQ + MMU traps (data + fetch) + alignment faults (fetch + data, via MMU) + BREAK + SYSCALL + privilege traps + illegal instruction trap + WRSYS/RDSYS + RDSPR/WRSPR + BL + sub-word loads/stores. Cache sysregs (devices 2–3) handled internally. Parameterizable RESET_PC (default 0xFFFF_E000). |
 | Sim machine | `rtl/soc/machine_sim.sv` | (top) | Simulation integration: cpu_core + boot_rom + simple_mem + sim_uart + sysid. Address decode: 0xFFFF_E000+ → ROM, 0xFF00_0xxx → UART, else → RAM. UART IRQ wired to CPU. Verilator top module for `make test` |
 | Sim UART | `rtl/soc/sim_uart.sv` | via machine_sim | 16450-compatible UART (MMIO at 0xFF00_0000). 8 registers at word stride, DLAB mux, TX busy counter (parameterizable, default ~115200 baud at 25 MHz). NetBSD com(4) compatible via reg-shift=2, reg-io-width=4 |
 | Boot ROM | `rtl/soc/boot_rom.sv` | via machine_sim | Read-only memory (8 KB default), loads program.hex, same 1-cycle busy protocol as simple_mem |
 | Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_*, ACC_*, VEC_*, SYSDEV_*, SYSREG_*, SYSREG_CACHE_*, CACHE_TYPE_*, UART_* constants |
 | System ID | `rtl/soc/sysid.sv` | via machine_sim | Read-only MACHINE_ID register (Penumbra/1), sysreg device 1 |
 | TLB | `rtl/mmu/tlb.sv` | 111/111 | 64-entry 2-way SA, parallel lookup, one-hot permission check, indexed sysreg R/W |
-| MMU | `rtl/mmu/mmu.sv` | — | Bypass/translate mux, force_bypass for vector table read, sysreg routing, fault latching, TLB instantiation |
+| MMU | `rtl/mmu/mmu.sv` | — | Bypass/translate mux, force_bypass for vector table read, alignment check (word/half/byte via i_mem_size), sysreg routing, fault latching, TLB instantiation |
 | Cache | `rtl/soc/cache.sv` | 42/42 | Parameterized PIPT cache (NUM_SETS, LINE_WORDS, NUM_WAYS). Write-through/write-no-allocate. Burst line fill on read miss. Sysreg interface (INFO/CTRL/INVAL). Pass-through when disabled (reset default) or uncacheable (C=0). Reusable for both I-cache and D-cache. |
 | Cache stub | `rtl/soc/cache_stub.sv` | — | Combinational pass-through, retained for reference. Replaced by cache.sv instances in cpu_core. |
 | Simple memory | `rtl/soc/simple_mem.sv` | — | Parameterizable synchronous SRAM model (default 16 MB), zeroed at init (no preload — matches real HW), configurable READ_LATENCY (default 6) and WRITE_LATENCY (default 3) modeling SDRAM timing, per-byte write enables, address wrapping. Latches address/data at access start. Read data poisoned (0xDEAD_BEEF) while busy. |
@@ -124,13 +124,13 @@ Eight sources share the same `except_entry` → `int_entry` → vector dispatch 
 - **PC preservation:** PC hasn't advanced (still in S_FETCH), so EPC = faulting PC. Handler fills TLB and ERETs to retry the fetch.
 - **Timing:** 2-cycle path, same as data faults — cycle N: `fault_except` → `except_entry` (saves EPC/ESR); cycle N+1: `fault_pending` overrides dispatch to int_entry (0x70).
 
-**Instruction fetch alignment fault (synchronous):**
-- **Check point:** During S_FETCH, before MMU lookup. `fetch_align_fault = fetch_active && (pc[1:0] != 2'b00)`.
-- **Detection:** All instructions are 32-bit, so PC must be word-aligned. Misalignment can occur via JMP Rs (register with odd address), ERET (corrupted EPC), or corrupted vector table entry.
-- **Priority:** Higher than MMU faults — `mmu_req` and `i_re` both gated by `!fetch_align_fault`, so no TLB lookup or cache read occurs. Alignment is checked first.
-- **Vector:** VEC_ALIGN=8 (address 0x20). `fault_vector` set to `VEC_ALIGN` when `fetch_align_fault` is true.
-- **PC preservation:** EPC = misaligned PC. Handler can diagnose or terminate the process. The misaligned address itself is the diagnostic — no separate FAULT_ADDR needed.
-- **Timing:** Same 2-cycle path as other fetch faults via `fault_pending`.
+**Alignment fault (synchronous, fetch or data):**
+- **Check point:** MMU checks alignment on every request via `i_mem_size`: word requires `addr[1:0]==0`, half requires `addr[0]==0`, byte always OK. Fires even in bypass mode (MMU disabled).
+- **Detection:** Fetch: misaligned PC (via JMP Rs, ERET, or corrupted vector table). Data: misaligned LDW/STW/LDH/STH address.
+- **Priority:** Highest fault — alignment is checked before TLB lookup. On misalignment, `o_fault=1` and `o_align=1`; TLB is not consulted.
+- **Vector:** VEC_ALIGN=8 (address 0x20). `fault_vector` set to `VEC_ALIGN` when `mmu_align` is true.
+- **FAULT_ADDR/STATUS:** Latched by MMU like TLB faults. `FAULT_STATUS = {user_mode, access_type, 4'b0, FAULT_ALIGN(3)}`. Access type distinguishes code (ACC_EXEC=0x400) vs data (ACC_READ=0x100, ACC_WRITE=0x200).
+- **PC preservation:** Fetch: EPC = misaligned PC. Data: EPC = faulting load/store instruction (PC in HOLD during STALL). Fetch handler diagnoses or terminates; data handler must advance EPC+4 to skip (alignment can't be "fixed").
 
 **BREAK instruction (synchronous):**
 - **Check point:** Dispatch-time, detected by `dispatch_addr == 0x4A`

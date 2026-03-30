@@ -68,10 +68,12 @@ module cpu_core
     logic [2:0]  mmu_access_type;
     logic        mmu_user_mode;
     logic        mmu_req;
+    logic [1:0]  mmu_mem_size;
     logic [31:0] mmu_paddr;
     logic        mmu_cacheable;
     logic        mmu_fault;
     logic        mmu_hit;
+    logic        mmu_align;
     logic [31:0] mmu_sys_rdata;
 
     // ── Cache signals ──────────────────────────────────────
@@ -271,15 +273,9 @@ module cpu_core
     logic fetch_fault;
     assign fetch_fault = mmu_fault && fetch_active;
 
-    // Alignment fault: PC must be word-aligned (bits [1:0] == 0).
-    // Checked before MMU lookup — no point translating a misaligned address.
-    // Can happen via JMP Rs, ERET, or corrupted vector table entry.
-    logic fetch_align_fault;
-    assign fetch_align_fault = fetch_active && (pc[1:0] != 2'b00);
-
     always_comb begin
         data_fault   = mmu_fault && !fetch_active;
-        fault_except = (data_fault || fetch_fault || fetch_align_fault) && !fault_pending;
+        fault_except = (data_fault || fetch_fault) && !fault_pending;
     end
 
     always_ff @(posedge i_clk) begin
@@ -288,8 +284,8 @@ module cpu_core
             fault_vector  <= 4'b0;
         end else if (fault_except) begin
             fault_pending <= 1'b1;
-            fault_vector  <= fetch_align_fault ? VEC_ALIGN :
-                             (mmu_hit ? VEC_TLB_PROT : VEC_TLB_MISS);
+            fault_vector  <= mmu_align ? VEC_ALIGN :
+                             (mmu_hit  ? VEC_TLB_PROT : VEC_TLB_MISS);
         end else if (fault_pending && ctl_pc_load) begin
             fault_pending <= 1'b0;
         end
@@ -378,13 +374,12 @@ module cpu_core
     assign mmu_access_type = fetch_active   ? ACC_EXEC  :
                              ctl_mem_write  ? ACC_WRITE  : ACC_READ;
     assign mmu_user_mode   = !sr_s;
-    assign mmu_req         = (fetch_active && !fetch_align_fault) || ctl_mem_read || ctl_mem_write;
+    assign mmu_mem_size    = fetch_active ? 2'b10 : ctl_mem_size;  // fetch is always word
+    assign mmu_req         = fetch_active || ctl_mem_read || ctl_mem_write;
 
     // Gate data access enables with !mmu_fault — a faulting access
-    // must never reach the cache/memory. The sequencer detects the
-    // fault via i_mem_fault and aborts. Without this gate, a multi-
-    // cycle memory would start counting and later commit with stale
-    // bus values (wrong address/data) after the CPU has moved on.
+    // must never reach the cache/memory. mmu_fault now covers TLB
+    // faults AND alignment faults (MMU checks alignment internally).
     assign data_re = ctl_mem_read  && !fetch_active && !mmu_fault;
     assign data_we = ctl_mem_write && !fetch_active && !mmu_fault;
 
@@ -429,7 +424,7 @@ module cpu_core
     end
 
     // ══════════════════════════════════════════════════════════
-    // MMU — translates virtual→physical, signals faults
+    // MMU — translates virtual→physical, checks alignment, signals faults
     // ══════════════════════════════════════════════════════════
     mmu u_mmu (
         .i_clk         (i_clk),
@@ -439,10 +434,12 @@ module cpu_core
         .i_user_mode   (mmu_user_mode),
         .i_req         (mmu_req),
         .i_force_bypass(vector_read && !fetch_active),
+        .i_mem_size    (mmu_mem_size),
         .o_paddr       (mmu_paddr),
         .o_cacheable   (mmu_cacheable),
         .o_fault       (mmu_fault),
         .o_hit         (mmu_hit),
+        .o_align       (mmu_align),
         // Sysreg interface (device 0 only — handled internally)
         .i_sys_reg     (dp_r_sys_reg),
         .i_sys_wdata   (dp_a_bus),
@@ -473,7 +470,7 @@ module cpu_core
         .i_wdata      (32'b0),
         .i_byte_en    (4'b0),
         .i_we         (1'b0),
-        .i_re         (fetch_active && !mmu_fault && !fetch_align_fault),
+        .i_re         (fetch_active && !mmu_fault),
         .i_cacheable  (mmu_cacheable),
         .o_rdata      (icache_rdata),
         .o_busy       (icache_busy),
