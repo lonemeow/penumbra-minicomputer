@@ -239,7 +239,7 @@ module cpu_core
     assign fetch_complete = fetch_active && fetch_pending && !cache_busy;
 
     assign ir_valid = fetch_complete;
-    assign ir_load  = fetch_complete;
+    assign ir_load  = fetch_complete && !fault_pending;
 
     // ── Dispatch address computation ─────────────────────────
     logic [1:0]  fetch_format;
@@ -268,9 +268,12 @@ module cpu_core
     logic        fault_pending;
     logic [3:0]  fault_vector;
 
+    logic fetch_fault;
+    assign fetch_fault = mmu_fault && fetch_active;
+
     always_comb begin
         data_fault   = mmu_fault && !fetch_active;
-        fault_except = data_fault && !fault_pending;
+        fault_except = (data_fault || fetch_fault) && !fault_pending;
     end
 
     always_ff @(posedge i_clk) begin
@@ -301,12 +304,14 @@ module cpu_core
     end
 
     // BREAK detection at dispatch (dispatch_addr == 0x4A for op=21)
+    // Gated by !fault_pending: during a fetch fault, dispatch_addr is
+    // derived from stale/garbage mem_rdata — must not trigger BREAK.
     logic break_taken;
-    assign break_taken = (dispatch_addr == 8'h4A);
+    assign break_taken = (dispatch_addr == 8'h4A) && !fault_pending;
 
     // SYSCALL detection at dispatch (dispatch_addr == 0x48 for op=20)
     logic syscall_taken;
-    assign syscall_taken = (dispatch_addr == 8'h48);
+    assign syscall_taken = (dispatch_addr == 8'h48) && !fault_pending;
 
     // ── Privilege violation detection (from sequencer) ─────────
     logic        priv_except;
@@ -461,7 +466,7 @@ module cpu_core
         .i_wdata      (32'b0),
         .i_byte_en    (4'b0),
         .i_we         (1'b0),
-        .i_re         (fetch_active),
+        .i_re         (fetch_active && !mmu_fault),
         .i_cacheable  (mmu_cacheable),
         .o_rdata      (icache_rdata),
         .o_busy       (icache_busy),

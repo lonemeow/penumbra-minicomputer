@@ -37,7 +37,7 @@ _start:
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R3, #0x0FFFFE00
     WRSYS R3, #MMU, #TLB_VPN
-    LI   R3, #0xFFFFE0B9
+    LI   R3, #0xFFFFE0F9        ; PPN=0xFFFFE, USER_RWX (user code runs from ROM)
     WRSYS R3, #MMU, #TLB_PTE
 
     ; ── Enable MMU ────────────────────────────────────────────
