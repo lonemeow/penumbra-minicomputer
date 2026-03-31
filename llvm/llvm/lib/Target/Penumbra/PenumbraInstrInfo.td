@@ -287,4 +287,15 @@ def BREAK   : FormatR_NoReg<0b10101, (outs), (ins), "break">;
 
 let isPseudo = 1 in {
   def NOP : PenumbraInst<(outs), (ins), "nop">;
+
+  // Stack frame adjustment pseudo-instructions. Required by PenumbraGenInstrInfo.
+  // Converted to real SUBi/ADDi SP adjustments by PenumbraFrameLowering.
+  def ADJCALLSTACKDOWN : PenumbraInst<(outs), (ins i32imm:$amt1, i32imm:$amt2),
+                                      "# ADJCALLSTACKDOWN $amt1, $amt2">;
+  def ADJCALLSTACKUP   : PenumbraInst<(outs), (ins i32imm:$amt1, i32imm:$amt2),
+                                      "# ADJCALLSTACKUP $amt1, $amt2">;
+
+  // RET pseudo: expands to JMP R13 (return via link register).
+  let isReturn = 1, isTerminator = 1, isBarrier = 1 in
+  def RET : PenumbraInst<(outs), (ins), "ret">;
 }

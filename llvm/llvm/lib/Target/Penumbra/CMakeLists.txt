@@ -13,6 +13,8 @@ tablegen(LLVM PenumbraGenSubtargetInfo.inc -gen-subtarget)
 add_public_tablegen_target(PenumbraCommonTableGen)
 
 add_llvm_target(PenumbraCodeGen
+  PenumbraFrameLowering.cpp
+  PenumbraInstrInfo.cpp
   PenumbraRegisterInfo.cpp
   PenumbraTargetMachine.cpp
 
