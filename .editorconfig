@@ -1,0 +1,30 @@
+root = true
+
+# Penumbra project defaults
+# llvm/ and (future) netbsd/ have their own root .editorconfig files
+# that override these entirely for their subtrees.
+
+[*]
+end_of_line = lf
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+# SystemVerilog / hardware
+[*.{sv,svh,v}]
+indent_style = space
+indent_size = 2
+
+# Python tools
+[*.py]
+indent_style = space
+indent_size = 4
+
+# Assembly
+[*.{s,uasm}]
+indent_style = tab
+tab_width = 8
+
+# Makefile requires tabs
+[Makefile]
+indent_style = tab
+tab_width = 8
