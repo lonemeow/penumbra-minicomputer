@@ -14,6 +14,7 @@ tablegen(LLVM PenumbraGenRegisterBank.inc -gen-register-bank)
 add_public_tablegen_target(PenumbraCommonTableGen)
 
 add_llvm_target(PenumbraCodeGen
+  GISel/PenumbraCallLowering.cpp
   GISel/PenumbraLegalizerInfo.cpp
   GISel/PenumbraRegisterBankInfo.cpp
   PenumbraFrameLowering.cpp

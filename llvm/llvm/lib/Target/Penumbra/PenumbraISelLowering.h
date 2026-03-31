@@ -7,6 +7,7 @@
 #ifndef LLVM_LIB_TARGET_PENUMBRA_PENUMBRAISELLOWERING_H
 #define LLVM_LIB_TARGET_PENUMBRA_PENUMBRAISELLOWERING_H
 
+#include "llvm/CodeGen/CallingConvLower.h"
 #include "llvm/CodeGen/TargetLowering.h"
 
 namespace llvm {
@@ -16,6 +17,9 @@ class PenumbraSubtarget;
 class PenumbraISelLowering : public TargetLowering {
 public:
   PenumbraISelLowering(const TargetMachine &TM, const PenumbraSubtarget &STI);
+
+  CCAssignFn *getCCAssignFn(CallingConv::ID CC, bool Return,
+                             bool IsVarArg) const;
 };
 
 } // namespace llvm

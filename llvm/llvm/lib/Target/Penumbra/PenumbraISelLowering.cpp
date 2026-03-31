@@ -11,6 +11,11 @@
 
 using namespace llvm;
 
+// TableGen-generated CC assignment functions (CC_Penumbra, RetCC_Penumbra).
+// Must be included after `using namespace llvm` — the generated code uses
+// MVT, CCValAssign, CCState etc. without namespace qualification.
+#include "PenumbraGenCallingConv.inc"
+
 PenumbraISelLowering::PenumbraISelLowering(const TargetMachine &TM,
                                             const PenumbraSubtarget &STI)
     : TargetLowering(TM, STI) {
@@ -38,4 +43,10 @@ PenumbraISelLowering::PenumbraISelLowering(const TargetMachine &TM,
   setOperationAction(ISD::CTPOP,   MVT::i32, Expand);
 
   computeRegisterProperties(STI.getRegisterInfo());
+}
+
+CCAssignFn *PenumbraISelLowering::getCCAssignFn(CallingConv::ID CC,
+                                                 bool Return,
+                                                 bool IsVarArg) const {
+  return Return ? RetCC_Penumbra : CC_Penumbra;
 }

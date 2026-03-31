@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "PenumbraSubtarget.h"
+#include "GISel/PenumbraCallLowering.h"
 
 #define GET_SUBTARGETINFO_CTOR
 #include "PenumbraGenSubtargetInfo.inc"
@@ -19,4 +20,6 @@ PenumbraSubtarget::PenumbraSubtarget(const Triple &TT, StringRef CPU,
       FrameLowering(),
       TLInfo(TM, *this),
       Legalizer(*this),
-      RegBankInfo(*getRegisterInfo()) {}
+      RegBankInfo(*getRegisterInfo()) {
+  CallLoweringInfo.reset(new PenumbraCallLowering(*getTargetLowering()));
+}

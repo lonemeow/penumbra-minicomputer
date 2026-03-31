@@ -7,12 +7,14 @@
 #ifndef LLVM_LIB_TARGET_PENUMBRA_PENUMBRASUBTARGET_H
 #define LLVM_LIB_TARGET_PENUMBRA_PENUMBRASUBTARGET_H
 
+#include "GISel/PenumbraCallLowering.h"
 #include "GISel/PenumbraLegalizerInfo.h"
 #include "GISel/PenumbraRegisterBankInfo.h"
 #include "PenumbraFrameLowering.h"
 #include "PenumbraISelLowering.h"
 #include "PenumbraInstrInfo.h"
 #include "PenumbraRegisterInfo.h"
+#include "llvm/CodeGen/GlobalISel/CallLowering.h"
 #include "llvm/CodeGen/GlobalISel/LegalizerInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/DataLayout.h"
@@ -30,6 +32,7 @@ class PenumbraSubtarget : public PenumbraGenSubtargetInfo {
   PenumbraISelLowering TLInfo;
   PenumbraLegalizerInfo Legalizer;
   PenumbraRegisterBankInfo RegBankInfo;
+  std::unique_ptr<CallLowering> CallLoweringInfo;
 
 public:
   PenumbraSubtarget(const Triple &TT, StringRef CPU, StringRef FS,
@@ -50,6 +53,9 @@ public:
   }
   const LegalizerInfo *getLegalizerInfo() const override {
     return &Legalizer;
+  }
+  const CallLowering *getCallLowering() const override {
+    return CallLoweringInfo.get();
   }
 };
 
