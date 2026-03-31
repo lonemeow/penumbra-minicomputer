@@ -1,0 +1,38 @@
+# Build artifacts (also in .gitignore)
+build/
+
+# LLVM upstream source — ignore everything except the Penumbra target
+# llvm/llvm/lib/Target/Penumbra/ remains accessible
+llvm/llvm/lib/Target/AArch64/
+llvm/llvm/lib/Target/AMDGPU/
+llvm/llvm/lib/Target/ARC/
+# llvm/llvm/lib/Target/ARM/ — kept as GlobalISel reference
+llvm/llvm/lib/Target/AVR/
+llvm/llvm/lib/Target/BPF/
+llvm/llvm/lib/Target/CSKY/
+llvm/llvm/lib/Target/DirectX/
+llvm/llvm/lib/Target/Hexagon/
+llvm/llvm/lib/Target/Lanai/
+llvm/llvm/lib/Target/LoongArch/
+# llvm/llvm/lib/Target/M68k/ — kept as GlobalISel reference
+llvm/llvm/lib/Target/MSP430/
+llvm/llvm/lib/Target/Mips/
+llvm/llvm/lib/Target/NVPTX/
+llvm/llvm/lib/Target/PowerPC/
+llvm/llvm/lib/Target/RISCV/
+llvm/llvm/lib/Target/SPIRV/
+llvm/llvm/lib/Target/Sparc/
+llvm/llvm/lib/Target/SystemZ/
+llvm/llvm/lib/Target/VE/
+llvm/llvm/lib/Target/WebAssembly/
+llvm/llvm/lib/Target/X86/
+llvm/llvm/lib/Target/XCore/
+llvm/llvm/lib/Target/Xtensa/
+llvm/llvm/test/
+llvm/llvm/unittests/
+llvm/llvm/clang/
+llvm/llvm/clang-tools-extra/
+llvm/llvm/lld/
+llvm/llvm/lldb/
+llvm/llvm/compiler-rt/
+llvm/llvm/docs/
