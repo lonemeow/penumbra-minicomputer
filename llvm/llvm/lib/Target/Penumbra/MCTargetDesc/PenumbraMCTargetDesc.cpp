@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "PenumbraMCTargetDesc.h"
+#include "PenumbraInstPrinter.h"
 #include "PenumbraMCAsmInfo.h"
 #include "TargetInfo/PenumbraTargetInfo.h"
 #include "llvm/MC/MCInstrInfo.h"
@@ -16,6 +17,7 @@
 using namespace llvm;
 
 #define GET_INSTRINFO_MC_DESC
+#define GET_INSTRINFO_MC_HELPER_DEFS
 #include "PenumbraGenInstrInfo.inc"
 
 #define GET_SUBTARGETINFO_MC_DESC
@@ -49,6 +51,14 @@ static MCAsmInfo *createPenumbraMCAsmInfo(const MCRegisterInfo & /*MRI*/,
   return new PenumbraMCAsmInfo(TT);
 }
 
+static MCInstPrinter *createPenumbraMCInstPrinter(const Triple & /*T*/,
+                                                  unsigned SyntaxVariant,
+                                                  const MCAsmInfo &MAI,
+                                                  const MCInstrInfo &MII,
+                                                  const MCRegisterInfo &MRI) {
+  return new PenumbraInstPrinter(MAI, MII, MRI);
+}
+
 extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void
 LLVMInitializePenumbraTargetMC() {
   Target &T = getThePenumbraTarget();
@@ -58,4 +68,7 @@ LLVMInitializePenumbraTargetMC() {
   TargetRegistry::RegisterMCInstrInfo(T, createPenumbraMCInstrInfo);
   TargetRegistry::RegisterMCRegInfo(T, createPenumbraMCRegisterInfo);
   TargetRegistry::RegisterMCSubtargetInfo(T, createPenumbraMCSubtargetInfo);
+  TargetRegistry::RegisterMCCodeEmitter(T, createPenumbraMCCodeEmitter);
+  TargetRegistry::RegisterMCAsmBackend(T, createPenumbraAsmBackend);
+  TargetRegistry::RegisterMCInstPrinter(T, createPenumbraMCInstPrinter);
 }

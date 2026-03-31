@@ -21,6 +21,17 @@ class MCSubtargetInfo;
 class MCTargetOptions;
 class Target;
 
+MCCodeEmitter *createPenumbraMCCodeEmitter(const MCInstrInfo &MCII,
+                                           MCContext &Ctx);
+
+MCAsmBackend *createPenumbraAsmBackend(const Target &T,
+                                       const MCSubtargetInfo &STI,
+                                       const MCRegisterInfo &MRI,
+                                       const MCTargetOptions &Options);
+
+std::unique_ptr<MCObjectTargetWriter>
+createPenumbraELFObjectWriter(uint8_t OSABI);
+
 } // namespace llvm
 
 // Defines symbolic names for Penumbra registers.
@@ -29,6 +40,7 @@ class Target;
 
 // Defines symbolic names for Penumbra instructions.
 #define GET_INSTRINFO_ENUM
+#define GET_INSTRINFO_MC_HELPER_DECLS
 #include "PenumbraGenInstrInfo.inc"
 
 #define GET_SUBTARGETINFO_ENUM

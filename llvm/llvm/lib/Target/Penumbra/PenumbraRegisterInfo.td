@@ -25,6 +25,7 @@ class PenumbraReg<bits<4> num, string n, list<string> altNames = []>
     : Register<n, altNames> {
   field bits<4> Num;
   let Num = num;
+  let HWEncoding{3-0} = num;
   let Namespace = "Penumbra";
 }
 

@@ -256,28 +256,28 @@ The simulation UART (`sim_uart.sv`) is an NS16450-compatible device at `0xFF00_0
 ### LLVM Backend (`llvm/llvm/lib/Target/Penumbra/`)
 The Penumbra LLVM backend is under development. Target triple: `penumbra-unknown-none` (eventually `penumbra-unknown-netbsd`). Build with `cmake -G Ninja -DLLVM_TARGETS_TO_BUILD=Penumbra` from `llvm/llvm/`, build dir `build/llvm/`. Uses ccache and Ninja. Use `-j2` for link steps (debug builds OOM at full parallelism on 15 GB WSL2).
 
-**Current state:** Target registered (`llc --version` shows `penumbra`), TableGen generates all `.inc` files, libraries compile and link. No MC-layer assembler yet (`llvm-mc` fails with "unable to create instruction printer").
+**Current state:** MC-layer assembler working. `llvm-mc -triple=penumbra -show-encoding` parses, matches, encodes, and prints all 4 instruction formats. Encodings verified bit-for-bit against `pasm.py`. ELF object emission is stubbed (fixups/relocations return placeholders).
 
 | File | Description |
 |------|-------------|
 | `Penumbra.td` | Top-level TableGen: includes, ProcessorModel, AsmWriter, Target, pointer remap |
-| `PenumbraRegisterInfo.td` | 16 GPRs (R0=zero, R13=LR, R14=SP, R15=PC), GPR/GPR_Allocatable/CCR classes |
-| `PenumbraInstrInfo.td` | All 4 instruction formats (R/L/M/B) with bit-accurate encoding. ALU, immediate, memory, branch, system instructions. Format R subclasses for 0-operand and 1-operand system ops |
+| `PenumbraRegisterInfo.td` | 16 GPRs (R0=zero, R13=LR, R14=SP, R15=PC), GPR/GPR_Allocatable/CCR classes, HWEncoding |
+| `PenumbraInstrInfo.td` | All 4 instruction formats (R/L/M/B) with bit-accurate encoding. ALU, immediate, memory, branch, system instructions. Format R subclasses for 0-operand and 1-operand system ops. Tied-operand constraints for 2-address destructive ops |
 | `PenumbraTargetMachine.{h,cpp}` | Inherits `CodeGenTargetMachineImpl`, data layout `e-m:e-p:32:32-i32:32-n32-S32` |
 | `MCTargetDesc/PenumbraMCAsmInfo.{h,cpp}` | ELF-based, little-endian, `;` comments, `.word`/`.half`/`.byte` directives |
-| `MCTargetDesc/PenumbraMCTargetDesc.{h,cpp}` | Registers MC components (InstrInfo, RegInfo, SubtargetInfo, AsmInfo) |
+| `MCTargetDesc/PenumbraMCTargetDesc.{h,cpp}` | Registers all MC components (InstrInfo, RegInfo, SubtargetInfo, AsmInfo, CodeEmitter, AsmBackend, InstPrinter) |
+| `MCTargetDesc/PenumbraInstPrinter.{h,cpp}` | MCInst → assembly text. Uses TableGen-generated `printInstruction`/`getRegisterName` |
+| `MCTargetDesc/PenumbraMCCodeEmitter.cpp` | MCInst → binary bytes (little-endian). Uses TableGen-generated `getBinaryCodeForInstr` |
+| `MCTargetDesc/PenumbraAsmBackend.cpp` | Fixup application, NOP emission (`0x00000000` = ADD R0,R0), ELF object writer creation |
+| `MCTargetDesc/PenumbraELFObjectWriter.cpp` | ELF relocation mapping (stub — `EM_PENUMBRA = 0xF0DA`, relocations return 0) |
+| `MCTargetDesc/PenumbraFixupKinds.h` | Fixup type enums: `fixup_penumbra_branch22`, `fixup_penumbra_imm16` |
+| `AsmParser/PenumbraAsmParser.cpp` | Assembly text → MCInst. Parses registers (`r0`–`r15`), immediates, punctuation (`[`, `]`, `+`). Uses TableGen-generated `MatchInstructionImpl` |
 | `TargetInfo/PenumbraTargetInfo.{h,cpp}` | Target registration (`Triple::penumbra`) |
-
-**Next MC-layer pieces needed for `llvm-mc` assembler:**
-1. **InstPrinter** — MCInst → assembly text
-2. **AsmParser** — assembly text → MCInst
-3. **MCCodeEmitter** (C++ wrapper) — MCInst → binary bytes
-4. **AsmBackend + ELF object writer** — relaxation, fixups, `.o` emission
 
 **Triple integration:** `penumbra` added to `Triple.h` (arch enum), `Triple.cpp` (name, prefix, parsing, 32-bit, little-endian, no-64-bit-variant, ELF format, DwarfCFI exception handling). Also added to `llvm/llvm/CMakeLists.txt` `LLVM_ALL_TARGETS`. Note: `TargetDataLayout.cpp:computeDataLayout()` has a `-Wswitch` warning for unhandled `penumbra` case — harmless (we provide our own data layout string in PenumbraTargetMachine.cpp).
 
 ### Next Steps (in priority order)
-1. **LLVM MC-layer assembler** — InstPrinter, AsmParser, MCCodeEmitter, AsmBackend to get `llvm-mc` working.
+1. **LLVM MC-layer assembler** — Complete ELF object emission (real fixups/relocations for branch22, imm16), register aliases (sp, lr, pc, zero), WRSYS/RDSYS encoding with device/register fields.
 2. **Boot ROM monitor** — Command parser working (`make simulate`): dump, write, go, help. Next: S-record upload for loading programs over UART.
 3. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick.
 4. **Interrupt controller** — Multiple devices with priority encoding.

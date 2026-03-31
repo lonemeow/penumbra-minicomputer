@@ -133,7 +133,7 @@ class FormatB<bits<4> cond, dag outs, dag ins, string asmstr,
 // ALU instructions (Format R, prefix=00, op 0x00-0x09)
 //===----------------------------------------------------------------------===//
 
-let Defs = [SR] in {
+let Defs = [SR], Constraints = "$Rd = $Rd_in" in {
   // 2-operand destructive: Rd = Rd op Rs
   def ADD  : FormatR<0b00000, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
                      "add\t$Rd, $Rs">;
@@ -178,14 +178,17 @@ def LLI  : FormatL<0b000, (outs GPR:$Rd), (ins i32imm:$imm16),
                    "lli\t$Rd, $imm16">;
 def LLIS : FormatL<0b001, (outs GPR:$Rd), (ins i32imm:$imm16),
                    "llis\t$Rd, $imm16">;
+let Constraints = "$Rd = $Rd_in" in
 def LUI  : FormatL<0b010, (outs GPR:$Rd), (ins GPR:$Rd_in, i32imm:$imm16),
                    "lui\t$Rd, $imm16">;
 
 let Defs = [SR] in {
-  def ADDi : FormatL<0b011, (outs GPR:$Rd), (ins GPR:$Rd_in, i32imm:$imm16),
-                     "add\t$Rd, $imm16">;
-  def SUBi : FormatL<0b100, (outs GPR:$Rd), (ins GPR:$Rd_in, i32imm:$imm16),
-                     "sub\t$Rd, $imm16">;
+  let Constraints = "$Rd = $Rd_in" in {
+    def ADDi : FormatL<0b011, (outs GPR:$Rd), (ins GPR:$Rd_in, i32imm:$imm16),
+                       "add\t$Rd, $imm16">;
+    def SUBi : FormatL<0b100, (outs GPR:$Rd), (ins GPR:$Rd_in, i32imm:$imm16),
+                       "sub\t$Rd, $imm16">;
+  }
   def CMPi : FormatL<0b101, (outs), (ins GPR:$Rd, i32imm:$imm16),
                      "cmp\t$Rd, $imm16">;
 }

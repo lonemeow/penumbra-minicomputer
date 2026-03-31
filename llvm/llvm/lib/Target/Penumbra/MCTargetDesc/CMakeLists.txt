@@ -1,5 +1,9 @@
 add_llvm_component_library(LLVMPenumbraDesc
+  PenumbraAsmBackend.cpp
+  PenumbraELFObjectWriter.cpp
+  PenumbraInstPrinter.cpp
   PenumbraMCAsmInfo.cpp
+  PenumbraMCCodeEmitter.cpp
   PenumbraMCTargetDesc.cpp
 
   LINK_COMPONENTS

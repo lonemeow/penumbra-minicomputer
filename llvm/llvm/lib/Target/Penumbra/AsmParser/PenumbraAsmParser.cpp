@@ -1,0 +1,319 @@
+//===-- PenumbraAsmParser.cpp - Parse Penumbra assembly to MCInst ---------===//
+//
+// Part of the Penumbra LLVM Backend
+//
+//===----------------------------------------------------------------------===//
+
+#include "MCTargetDesc/PenumbraMCTargetDesc.h"
+#include "TargetInfo/PenumbraTargetInfo.h"
+#include "llvm/ADT/StringSwitch.h"
+#include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCExpr.h"
+#include "llvm/MC/MCInst.h"
+#include "llvm/MC/MCInstrInfo.h"
+#include "llvm/MC/MCParser/MCAsmParser.h"
+#include "llvm/MC/MCParser/MCParsedAsmOperand.h"
+#include "llvm/MC/MCParser/MCTargetAsmParser.h"
+#include "llvm/MC/MCStreamer.h"
+#include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/Casting.h"
+#include "llvm/Support/Compiler.h"
+#include "llvm/Support/SMLoc.h"
+#include "llvm/Support/raw_ostream.h"
+#include <cstdint>
+#include <memory>
+
+using namespace llvm;
+
+// Forward-declare TableGen-generated register matcher (defined at end of file).
+static MCRegister MatchRegisterName(StringRef Name);
+
+namespace {
+
+//===----------------------------------------------------------------------===//
+// Operand representation
+//===----------------------------------------------------------------------===//
+
+class PenumbraOperand : public MCParsedAsmOperand {
+  enum KindTy { Token, Register, Immediate } Kind;
+
+  SMLoc StartLoc, EndLoc;
+
+  struct TokOp {
+    const char *Data;
+    unsigned Length;
+  };
+  struct RegOp {
+    MCRegister Reg;
+  };
+  struct ImmOp {
+    const MCExpr *Val;
+  };
+
+  union {
+    TokOp Tok;
+    RegOp RegInfo;
+    ImmOp Imm;
+  };
+
+public:
+  PenumbraOperand(KindTy K) : Kind(K) {}
+
+  bool isToken() const override { return Kind == Token; }
+  bool isReg() const override { return Kind == Register; }
+  bool isImm() const override { return Kind == Immediate; }
+  bool isMem() const override { return false; }
+
+  SMLoc getStartLoc() const override { return StartLoc; }
+  SMLoc getEndLoc() const override { return EndLoc; }
+
+  MCRegister getReg() const override {
+    assert(Kind == Register && "Not a register");
+    return RegInfo.Reg;
+  }
+
+  StringRef getToken() const {
+    assert(Kind == Token && "Not a token");
+    return StringRef(Tok.Data, Tok.Length);
+  }
+
+  const MCExpr *getImmVal() const {
+    assert(Kind == Immediate && "Not an immediate");
+    return Imm.Val;
+  }
+
+  void addRegOperands(MCInst &Inst, unsigned N) const {
+    assert(N == 1 && "Invalid number of operands");
+    Inst.addOperand(MCOperand::createReg(getReg()));
+  }
+
+  void addImmOperands(MCInst &Inst, unsigned N) const {
+    assert(N == 1 && "Invalid number of operands");
+    if (auto *CE = llvm::dyn_cast<MCConstantExpr>(getImmVal()))
+      Inst.addOperand(MCOperand::createImm(CE->getValue()));
+    else
+      Inst.addOperand(MCOperand::createExpr(getImmVal()));
+  }
+
+  void print(raw_ostream &OS, const MCAsmInfo &MAI) const override {
+    switch (Kind) {
+    case Token:
+      OS << "Tok:" << getToken();
+      break;
+    case Register:
+      OS << "Reg:" << getReg();
+      break;
+    case Immediate:
+      OS << "Imm:<expr>";
+      break;
+    }
+  }
+
+  static std::unique_ptr<PenumbraOperand> createToken(StringRef Str,
+                                                      SMLoc S) {
+    auto Op = std::make_unique<PenumbraOperand>(Token);
+    Op->Tok.Data = Str.data();
+    Op->Tok.Length = Str.size();
+    Op->StartLoc = S;
+    Op->EndLoc = S;
+    return Op;
+  }
+
+  static std::unique_ptr<PenumbraOperand> createReg(MCRegister Reg, SMLoc S,
+                                                    SMLoc E) {
+    auto Op = std::make_unique<PenumbraOperand>(Register);
+    Op->RegInfo.Reg = Reg;
+    Op->StartLoc = S;
+    Op->EndLoc = E;
+    return Op;
+  }
+
+  static std::unique_ptr<PenumbraOperand> createImm(const MCExpr *Val, SMLoc S,
+                                                    SMLoc E) {
+    auto Op = std::make_unique<PenumbraOperand>(Immediate);
+    Op->Imm.Val = Val;
+    Op->StartLoc = S;
+    Op->EndLoc = E;
+    return Op;
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// Assembly parser
+//===----------------------------------------------------------------------===//
+
+class PenumbraAsmParser : public MCTargetAsmParser {
+  MCAsmParser &Parser;
+
+  bool parseOperand(OperandVector &Operands);
+  bool parseRegister(MCRegister &Reg, SMLoc &StartLoc, SMLoc &EndLoc) override;
+  ParseStatus tryParseRegister(MCRegister &Reg, SMLoc &StartLoc,
+                               SMLoc &EndLoc) override;
+  bool parseInstruction(ParseInstructionInfo &Info, StringRef Name,
+                        SMLoc NameLoc, OperandVector &Operands) override;
+  bool matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
+                               OperandVector &Operands, MCStreamer &Out,
+                               uint64_t &ErrorInfo,
+                               bool MatchingInlineAsm) override;
+
+  // Auto-generated by TableGen.
+  unsigned validateTargetOperandClass(MCParsedAsmOperand &Op,
+                                      unsigned Kind) override;
+
+#define GET_ASSEMBLER_HEADER
+#include "PenumbraGenAsmMatcher.inc"
+
+public:
+  PenumbraAsmParser(const MCSubtargetInfo &STI, MCAsmParser &P,
+                    const MCInstrInfo &MII, const MCTargetOptions &Options)
+      : MCTargetAsmParser(Options, STI, MII), Parser(P) {
+    setAvailableFeatures(ComputeAvailableFeatures(STI.getFeatureBits()));
+  }
+};
+
+} // anonymous namespace
+
+//===----------------------------------------------------------------------===//
+// Register parsing
+//===----------------------------------------------------------------------===//
+
+bool PenumbraAsmParser::parseRegister(MCRegister &Reg, SMLoc &StartLoc,
+                                      SMLoc &EndLoc) {
+  return tryParseRegister(Reg, StartLoc, EndLoc).isFailure();
+}
+
+ParseStatus PenumbraAsmParser::tryParseRegister(MCRegister &Reg,
+                                                SMLoc &StartLoc,
+                                                SMLoc &EndLoc) {
+  StartLoc = Parser.getTok().getLoc();
+  if (Parser.getTok().isNot(AsmToken::Identifier))
+    return ParseStatus::NoMatch;
+
+  StringRef Name = Parser.getTok().getIdentifier();
+  MCRegister RegNo = MatchRegisterName(Name);
+  if (!RegNo)
+    return ParseStatus::NoMatch;
+
+  EndLoc = Parser.getTok().getEndLoc();
+  Reg = RegNo;
+  Parser.Lex(); // eat register token
+  return ParseStatus::Success;
+}
+
+//===----------------------------------------------------------------------===//
+// Operand parsing
+//===----------------------------------------------------------------------===//
+
+bool PenumbraAsmParser::parseOperand(OperandVector &Operands) {
+  SMLoc S = Parser.getTok().getLoc();
+
+  // Try register first.
+  MCRegister Reg;
+  SMLoc RegStart, RegEnd;
+  if (tryParseRegister(Reg, RegStart, RegEnd).isSuccess()) {
+    Operands.push_back(PenumbraOperand::createReg(Reg, RegStart, RegEnd));
+    return false;
+  }
+
+  // Punctuation tokens: [ ] +
+  if (Parser.getTok().is(AsmToken::LBrac) ||
+      Parser.getTok().is(AsmToken::RBrac) ||
+      Parser.getTok().is(AsmToken::Plus)) {
+    StringRef Tok = Parser.getTok().getString();
+    Operands.push_back(PenumbraOperand::createToken(Tok, S));
+    Parser.Lex();
+    return false;
+  }
+
+  // Otherwise, try immediate / expression.
+  const MCExpr *Expr;
+  if (!Parser.parseExpression(Expr)) {
+    SMLoc E = Parser.getTok().getLoc();
+    Operands.push_back(PenumbraOperand::createImm(Expr, S, E));
+    return false;
+  }
+
+  return Error(S, "unknown operand");
+}
+
+//===----------------------------------------------------------------------===//
+// Instruction parsing
+//===----------------------------------------------------------------------===//
+
+bool PenumbraAsmParser::parseInstruction(ParseInstructionInfo &Info,
+                                         StringRef Name, SMLoc NameLoc,
+                                         OperandVector &Operands) {
+  // The mnemonic is the first operand (as a token).
+  Operands.push_back(PenumbraOperand::createToken(Name, NameLoc));
+
+  // Parse operands separated by commas.
+  if (getLexer().isNot(AsmToken::EndOfStatement)) {
+    if (parseOperand(Operands))
+      return true;
+    while (getLexer().is(AsmToken::Comma)) {
+      Parser.Lex(); // eat comma
+      if (parseOperand(Operands))
+        return true;
+    }
+  }
+
+  if (getLexer().isNot(AsmToken::EndOfStatement))
+    return Error(getLexer().getLoc(), "unexpected token in operand list");
+
+  Parser.Lex(); // eat EndOfStatement
+  return false;
+}
+
+//===----------------------------------------------------------------------===//
+// Instruction matching
+//===----------------------------------------------------------------------===//
+
+bool PenumbraAsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
+                                                OperandVector &Operands,
+                                                MCStreamer &Out,
+                                                uint64_t &ErrorInfo,
+                                                bool MatchingInlineAsm) {
+  MCInst Inst;
+  switch (MatchInstructionImpl(Operands, Inst, ErrorInfo, MatchingInlineAsm)) {
+  case Match_Success:
+    Inst.setLoc(IDLoc);
+    Out.emitInstruction(Inst, getSTI());
+    return false;
+  case Match_MnemonicFail:
+    return Error(IDLoc, "unrecognized instruction mnemonic");
+  case Match_InvalidOperand: {
+    SMLoc ErrorLoc = IDLoc;
+    if (ErrorInfo != ~0ULL && ErrorInfo < Operands.size())
+      ErrorLoc = Operands[ErrorInfo]->getStartLoc();
+    return Error(ErrorLoc, "invalid operand for instruction");
+  }
+  case Match_MissingFeature:
+    return Error(IDLoc, "instruction requires a feature not currently enabled");
+  default:
+    return Error(IDLoc, "unable to match instruction");
+  }
+}
+
+unsigned
+PenumbraAsmParser::validateTargetOperandClass(MCParsedAsmOperand &Op,
+                                              unsigned Kind) {
+  return Match_InvalidOperand;
+}
+
+//===----------------------------------------------------------------------===//
+// Auto-generated matcher implementation
+//===----------------------------------------------------------------------===//
+
+#define GET_REGISTER_MATCHER
+#define GET_MATCHER_IMPLEMENTATION
+#include "PenumbraGenAsmMatcher.inc"
+
+//===----------------------------------------------------------------------===//
+// Registration
+//===----------------------------------------------------------------------===//
+
+extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void
+LLVMInitializePenumbraAsmParser() {
+  RegisterMCAsmParser<PenumbraAsmParser> X(getThePenumbraTarget());
+}
