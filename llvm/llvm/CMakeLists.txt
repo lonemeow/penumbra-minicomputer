@@ -527,6 +527,7 @@ set(LLVM_ALL_TARGETS
   Mips
   MSP430
   NVPTX
+  Penumbra
   PowerPC
   RISCV
   Sparc

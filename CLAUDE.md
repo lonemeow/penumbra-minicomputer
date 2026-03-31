@@ -253,9 +253,32 @@ The simulation UART (`sim_uart.sv`) is an NS16450-compatible device at `0xFF00_0
 - **Polling pattern:** `LDW LSR, TEST THRE, BZ poll, STW THR` — same as every 16450 driver since 1981.
 - **Real hardware:** Replace `sim_uart` with a baud-rate UART (add shift register + baud generator from DLL/DLM). Same register interface. Add 16-byte FIFOs by flipping IIR[7:6] to `11`.
 
+### LLVM Backend (`llvm/llvm/lib/Target/Penumbra/`)
+The Penumbra LLVM backend is under development. Target triple: `penumbra-unknown-none` (eventually `penumbra-unknown-netbsd`). Build with `cmake -G Ninja -DLLVM_TARGETS_TO_BUILD=Penumbra` from `llvm/llvm/`, build dir `build/llvm/`. Uses ccache and Ninja. Use `-j2` for link steps (debug builds OOM at full parallelism on 15 GB WSL2).
+
+**Current state:** Target registered (`llc --version` shows `penumbra`), TableGen generates all `.inc` files, libraries compile and link. No MC-layer assembler yet (`llvm-mc` fails with "unable to create instruction printer").
+
+| File | Description |
+|------|-------------|
+| `Penumbra.td` | Top-level TableGen: includes, ProcessorModel, AsmWriter, Target, pointer remap |
+| `PenumbraRegisterInfo.td` | 16 GPRs (R0=zero, R13=LR, R14=SP, R15=PC), GPR/GPR_Allocatable/CCR classes |
+| `PenumbraInstrInfo.td` | All 4 instruction formats (R/L/M/B) with bit-accurate encoding. ALU, immediate, memory, branch, system instructions. Format R subclasses for 0-operand and 1-operand system ops |
+| `PenumbraTargetMachine.{h,cpp}` | Inherits `CodeGenTargetMachineImpl`, data layout `e-m:e-p:32:32-i32:32-n32-S32` |
+| `MCTargetDesc/PenumbraMCAsmInfo.{h,cpp}` | ELF-based, little-endian, `;` comments, `.word`/`.half`/`.byte` directives |
+| `MCTargetDesc/PenumbraMCTargetDesc.{h,cpp}` | Registers MC components (InstrInfo, RegInfo, SubtargetInfo, AsmInfo) |
+| `TargetInfo/PenumbraTargetInfo.{h,cpp}` | Target registration (`Triple::penumbra`) |
+
+**Next MC-layer pieces needed for `llvm-mc` assembler:**
+1. **InstPrinter** — MCInst → assembly text
+2. **AsmParser** — assembly text → MCInst
+3. **MCCodeEmitter** (C++ wrapper) — MCInst → binary bytes
+4. **AsmBackend + ELF object writer** — relaxation, fixups, `.o` emission
+
+**Triple integration:** `penumbra` added to `Triple.h` (arch enum), `Triple.cpp` (name, prefix, parsing, 32-bit, little-endian, no-64-bit-variant, ELF format, DwarfCFI exception handling). Also added to `llvm/llvm/CMakeLists.txt` `LLVM_ALL_TARGETS`. Note: `TargetDataLayout.cpp:computeDataLayout()` has a `-Wswitch` warning for unhandled `penumbra` case — harmless (we provide our own data layout string in PenumbraTargetMachine.cpp).
+
 ### Next Steps (in priority order)
-1. **Boot ROM monitor** — Command parser working (`make simulate`): dump, write, go, help. Next: S-record upload for loading programs over UART.
-2. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick.
-3. **Interrupt controller** — Multiple devices with priority encoding.
-4. **Memory subsystem** — SDRAM controller, bus interface.
-5. **LLVM backend** — Compiler toolchain for NetBSD port. See `doc/toolchain/toolchain-strategy.md`.
+1. **LLVM MC-layer assembler** — InstPrinter, AsmParser, MCCodeEmitter, AsmBackend to get `llvm-mc` working.
+2. **Boot ROM monitor** — Command parser working (`make simulate`): dump, write, go, help. Next: S-record upload for loading programs over UART.
+3. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick.
+4. **Interrupt controller** — Multiple devices with priority encoding.
+5. **Memory subsystem** — SDRAM controller, bus interface.

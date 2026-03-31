@@ -148,7 +148,7 @@ NetBSD uses its own build framework (`build.sh`) which supports cross-compilatio
 |------|--------|-------|
 | ISA assembler (pasm.py) | Done | Two-pass, all formats, labels, .equ constants |
 | Microcode assembler (uasm.py) | Done | Symbolic fields, slot validation |
-| LLVM backend skeleton | Not started | |
+| LLVM backend skeleton | Done | Triple, registers, instruction encodings, target machine — compiles and links |
 | Calling convention | Proposed | Needs validation via hand-written assembly |
 | NetBSD MD layer | Not started | |
 | ELF object format | Not started | Need linker script for Penumbra memory map |
