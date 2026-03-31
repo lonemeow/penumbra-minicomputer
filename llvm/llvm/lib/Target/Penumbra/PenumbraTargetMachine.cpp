@@ -24,9 +24,10 @@ PenumbraTargetMachine::PenumbraTargetMachine(
     const TargetOptions &Options, std::optional<Reloc::Model> RM,
     std::optional<CodeModel::Model> CM, CodeGenOptLevel OL, bool JIT)
     : CodeGenTargetMachineImpl(T, PenumbraDataLayout, TT,
-                        CPU.empty() ? "penumbra1" : CPU, FS, Options,
-                        RM.value_or(Reloc::Static),
-                        CM.value_or(CodeModel::Small), OL) {}
+                               CPU.empty() ? "penumbra1" : CPU, FS, Options,
+                               RM.value_or(Reloc::Static),
+                               CM.value_or(CodeModel::Small), OL),
+      Subtarget(TT, CPU.empty() ? "penumbra1" : CPU, FS, *this) {}
 
 extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void
 LLVMInitializePenumbraTarget() {

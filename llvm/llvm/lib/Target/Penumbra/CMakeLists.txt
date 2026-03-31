@@ -14,8 +14,10 @@ add_public_tablegen_target(PenumbraCommonTableGen)
 
 add_llvm_target(PenumbraCodeGen
   PenumbraFrameLowering.cpp
+  PenumbraISelLowering.cpp
   PenumbraInstrInfo.cpp
   PenumbraRegisterInfo.cpp
+  PenumbraSubtarget.cpp
   PenumbraTargetMachine.cpp
 
   LINK_COMPONENTS
