@@ -14,8 +14,9 @@ using namespace llvm;
 PenumbraSubtarget::PenumbraSubtarget(const Triple &TT, StringRef CPU,
                                       StringRef FS, const TargetMachine &TM)
     : PenumbraGenSubtargetInfo(TT, CPU, /*TuneCPU=*/CPU, FS),
-      InstrInfo(),
-      FrameLowering(),
       RegInfo(),
+      InstrInfo(*this, RegInfo),
+      FrameLowering(),
       TLInfo(TM, *this),
+      Legalizer(*this),
       RegBankInfo(*getRegisterInfo()) {}

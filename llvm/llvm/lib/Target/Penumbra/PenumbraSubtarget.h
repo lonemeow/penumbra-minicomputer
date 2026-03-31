@@ -7,11 +7,13 @@
 #ifndef LLVM_LIB_TARGET_PENUMBRA_PENUMBRASUBTARGET_H
 #define LLVM_LIB_TARGET_PENUMBRA_PENUMBRASUBTARGET_H
 
+#include "GISel/PenumbraLegalizerInfo.h"
 #include "GISel/PenumbraRegisterBankInfo.h"
 #include "PenumbraFrameLowering.h"
 #include "PenumbraISelLowering.h"
 #include "PenumbraInstrInfo.h"
 #include "PenumbraRegisterInfo.h"
+#include "llvm/CodeGen/GlobalISel/LegalizerInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/DataLayout.h"
 
@@ -21,10 +23,12 @@
 namespace llvm {
 
 class PenumbraSubtarget : public PenumbraGenSubtargetInfo {
+  // RegInfo must be declared before InstrInfo — InstrInfo constructor needs TRI.
+  PenumbraRegisterInfo RegInfo;
   PenumbraInstrInfo InstrInfo;
   PenumbraFrameLowering FrameLowering;
-  PenumbraRegisterInfo RegInfo;
   PenumbraISelLowering TLInfo;
+  PenumbraLegalizerInfo Legalizer;
   PenumbraRegisterBankInfo RegBankInfo;
 
 public:
@@ -43,6 +47,9 @@ public:
   }
   const RegisterBankInfo *getRegBankInfo() const override {
     return &RegBankInfo;
+  }
+  const LegalizerInfo *getLegalizerInfo() const override {
+    return &Legalizer;
   }
 };
 

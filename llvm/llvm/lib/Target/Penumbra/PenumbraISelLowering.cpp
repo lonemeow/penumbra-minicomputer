@@ -13,7 +13,7 @@ using namespace llvm;
 
 PenumbraISelLowering::PenumbraISelLowering(const TargetMachine &TM,
                                             const PenumbraSubtarget &STI)
-    : TargetLowering(TM) {
+    : TargetLowering(TM, STI) {
   addRegisterClass(MVT::i32, &Penumbra::GPR_AllocatableRegClass);
 
   // No multiply/divide hardware — expand to libcalls

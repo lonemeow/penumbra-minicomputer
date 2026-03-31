@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "PenumbraRegisterBankInfo.h"
+#include "MCTargetDesc/PenumbraMCTargetDesc.h"
 #include "PenumbraSubtarget.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/RegisterBank.h"
