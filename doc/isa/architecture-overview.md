@@ -44,7 +44,7 @@ SR contains:
 
 Previous mode is preserved via exception registers (EPC, ESR) at exception entry, not bits within SR. See the datapath specification for the exception model.
 
-Carry convention is **ARM-style** (C = NOT borrow on subtraction). Flags are updated by arithmetic/logic ALU operations, INC, DEC, CMPI, and MUL/DIV/MOD. MOV, load immediates (LLI, LLIS, LUI), loads, stores, branches, and system instructions do **not** affect flags. See the datapath specification for full flag generation details.
+Carry convention is **ARM-style** (C = NOT borrow on subtraction). Flags are updated by arithmetic/logic ALU operations, INC, DEC, CMPI, ANDI, TESTI, and MUL/DIV/MOD. MOV, load immediates (LLI, LLIS, LUI), loads, stores, branches, and system instructions do **not** affect flags. See the datapath specification for full flag generation details.
 
 #### SR Bit Layout (32-bit)
 
@@ -189,8 +189,8 @@ All immediate fields are consistently 16 bits wide.
 | 011 | `INC Rd, #imm16` | Rd = Rd + zero_extend(imm16) | Increment by immediate |
 | 100 | `DEC Rd, #imm16` | Rd = Rd - zero_extend(imm16) | Decrement by immediate |
 | 101 | `CMPI Rd, #imm16` | flags = Rd - sign_extend(imm16) | Compare register to immediate (no write) |
-| 110 | (reserved) | | |
-| 111 | (reserved) | | |
+| 110 | `ANDI Rd, #imm16` | Rd = Rd & zero_extend(imm16) | Bitwise AND with immediate |
+| 111 | `TESTI Rd, #imm16` | flags = Rd & zero_extend(imm16) | Test bits with immediate (no write) |
 
 #### Loading 32-bit Constants
 

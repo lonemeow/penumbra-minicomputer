@@ -116,6 +116,18 @@ dec:
 cmpi:
   reg_a=IR_RD alu=SUB bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
 
+# ── AND Rd, #imm16 (op=110, dispatch=0x38) ──────────────────
+# Rd = Rd & zero_extend(imm16)   [assembler: AND Rd, #imm → Format L]
+.org 0x38
+andi:
+  reg_a=IR_RD reg_w=IR_RD w_en=1 alu=AND bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
+
+# ── TEST Rd, #imm16 (op=111, dispatch=0x3C) ─────────────────
+# Flags = Rd & zero_extend(imm16), Rd not written   [assembler: TEST Rd, #imm → Format L]
+.org 0x3C
+testi:
+  reg_a=IR_RD alu=AND bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
+
 # ═══════════════════════════════════════════════════════════════
 # Format R — System operations (0x40–0x5E, ×2 spacing)
 # Dispatch: {00, 1, op[3:0], 0}  (op[4]=1 → system zone)

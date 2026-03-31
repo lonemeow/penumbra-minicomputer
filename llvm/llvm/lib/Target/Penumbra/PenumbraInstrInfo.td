@@ -191,6 +191,11 @@ let Defs = [SR] in {
   }
   def CMPi : FormatL<0b101, (outs), (ins GPR:$Rd, i32imm:$imm16),
                      "cmp\t$Rd, $imm16">;
+  let Constraints = "$Rd = $Rd_in" in
+  def ANDi : FormatL<0b110, (outs GPR:$Rd), (ins GPR:$Rd_in, i32imm:$imm16),
+                     "and\t$Rd, $imm16">;
+  def TESTi : FormatL<0b111, (outs), (ins GPR:$Rd, i32imm:$imm16),
+                      "test\t$Rd, $imm16">;
 }
 
 //===----------------------------------------------------------------------===//

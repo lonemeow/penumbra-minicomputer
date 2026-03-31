@@ -212,11 +212,11 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 - **Boot from ROM:** Programs are assembled with `--org 0xFFFFE000` and loaded into boot ROM. `_start:` must be the first label in the source file (ROM execution begins at the first word). Programs that use exceptions install handler addresses in the RAM vector table at startup via `LA Rd, #handler` + `STW Rd, [R0 + #offset]`.
 - **ROM page mapping:** MMU-enabled tests must map the ROM page in the TLB before enabling the MMU: `TLB_INDEX=30` (set 30, way 0), `TLB_VPN=0x0FFFFE00`, `TLB_PTE=0xFFFFE0B9` (VPN/PPN 0xFFFFE, KERN_RWX).
 
-### Implemented Microcode (41 micro-ops)
+### Implemented Microcode (43 micro-ops)
 | Category | Instructions | Notes |
 |----------|-------------|-------|
 | ALU (R-ALU, 0x00–0x1E) | ADD, SUB, AND, OR, XOR, SHL, SHR, SAR, MOV, NOT | CMP/TEST via F-bit gating on SUB/AND |
-| Immediate (Format L) | LLI, LLIS, LUI, ADD #imm, SUB #imm, CMP #imm | Formerly INC/DEC/CMPI (still accepted as aliases) |
+| Immediate (Format L) | LLI, LLIS, LUI, ADD #imm, SUB #imm, CMP #imm, AND #imm, TEST #imm | Formerly INC/DEC/CMPI (still accepted as aliases). All 8 Format L slots now used. |
 | Memory (Format M) | LDW/LDH/LDHS/LDB/LDBS (3 micro-ops), STW/STH/STB (4 micro-ops) | STALL-based, latency-agnostic; byte_ext extracts on load, byte_rep replicates on store, byte_en selects lanes |
 | Branch (Format B) | Bcc (all 15 conditions via single BRT entry), BL (2 micro-ops) | BL saves PC+4 to R13, dispatches to 0x62; BZ/BNZ aliases in assembler |
 | System (R-SYS, 0x40–0x5E) | JMP, EI, DI, WRSYS, RDSYS, ERET, WRSPR, RDSPR, SYSCALL, BREAK | RET = JMP R13 (pseudo); ERET/RDSYS are 2-micro-op; SYSCALL/BREAK intercepted at dispatch; WRSPR/RDSPR unified with SPR select in IR[15:12] (ops 27–28, frees ops 29–31) |

@@ -225,7 +225,7 @@ FORMAT_R_OPS = {
 
 FORMAT_L_OPS = {
     "LLI":  0, "LLIS": 1, "LUI":  2,
-    "INC":  3, "DEC":  4, "CMPI": 5,
+    "INC":  3, "DEC":  4, "CMPI": 5, "ANDI": 6, "TESTI": 7,
 }
 
 # ── Format M — Memory load/store ─────────────────────────────
@@ -301,7 +301,7 @@ def assemble_line(mnemonic, operands, addr, labels, line_num, constants=None):
     # ADD/SUB/CMP with an immediate operand → Format L (INC/DEC/CMPI)
     # This function is called for mnemonics that exist in both Format R
     # (register-register) and have a Format L counterpart (register-immediate).
-    SMART_MNEMONICS = {"ADD": "INC", "SUB": "DEC", "CMP": "CMPI"}
+    SMART_MNEMONICS = {"ADD": "INC", "SUB": "DEC", "CMP": "CMPI", "AND": "ANDI", "TEST": "TESTI"}
 
     def smart_route_to_format_l(mn, operands, constants, labels):
         """Check if a smart mnemonic should be routed to Format L.

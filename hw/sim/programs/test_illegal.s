@@ -13,9 +13,9 @@ _start:
     LA   R3, #illegal_handler
     STW  R3, [R0 + #0x1C]      ; vector[7] = illegal instruction (VEC_ILLEGAL)
 
-    ; Test 1: undefined Format L op=7 (reserved)
-    ; Encoding: [01][111][Rd=0000][spare=0000000][imm16=0x0000] = 0x7C000000
-    .word 0x7C000000
+    ; Test 1: undefined Format R system op=31 (reserved)
+    ; Encoding: [00][11111][Rd=0000][Rs=0000][F=0][spare=0x0000] = 0x3E000000
+    .word 0x3E000000
 
     ; Handler should have incremented R2 to 1
     CMP  R2, #1
