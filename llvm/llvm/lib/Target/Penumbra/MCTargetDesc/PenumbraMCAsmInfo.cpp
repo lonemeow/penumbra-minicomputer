@@ -17,6 +17,7 @@ PenumbraMCAsmInfo::PenumbraMCAsmInfo(const Triple &TT) {
   // Assembly syntax
   CommentString = ";";
   SupportsDebugInformation = true;
+  ExceptionsType = ExceptionHandling::DwarfCFI;
 
   // Data directives
   Data32bitsDirective = "\t.word\t";

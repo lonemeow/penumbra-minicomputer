@@ -4,6 +4,9 @@
 //
 //===----------------------------------------------------------------------===//
 
-// Single register bank covering all allocatable GPRs.
-// Penumbra has one register file; there are no FP or vector banks.
-def GPRRegBank : RegisterBank<"GPRBank", [GPR_Allocatable]>;
+// Single register bank covering the full GPR class (all 16 registers).
+// The bank must cover the GPR register class used in instruction operand
+// definitions so that constrainRegClass() can succeed during instruction
+// selection. The register allocator uses GPR_Allocatable (the subclass
+// excluding reserved regs) when choosing physical registers.
+def GPRRegBank : RegisterBank<"GPRBank", [GPR]>;

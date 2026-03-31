@@ -9,10 +9,13 @@
 
 #include "PenumbraSubtarget.h"
 #include "llvm/CodeGen/CodeGenTargetMachineImpl.h"
+#include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
+#include "llvm/CodeGen/TargetPassConfig.h"
 
 namespace llvm {
 
 class PenumbraTargetMachine : public CodeGenTargetMachineImpl {
+  std::unique_ptr<TargetLoweringObjectFile> TLOF;
   PenumbraSubtarget Subtarget;
 
 public:
@@ -24,6 +27,12 @@ public:
 
   const PenumbraSubtarget *getSubtargetImpl(const Function &) const override {
     return &Subtarget;
+  }
+
+  TargetPassConfig *createPassConfig(PassManagerBase &PM) override;
+
+  TargetLoweringObjectFile *getObjFileLowering() const override {
+    return TLOF.get();
   }
 };
 

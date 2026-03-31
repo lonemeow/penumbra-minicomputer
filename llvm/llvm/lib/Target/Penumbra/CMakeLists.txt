@@ -15,6 +15,8 @@ add_public_tablegen_target(PenumbraCommonTableGen)
 
 add_llvm_target(PenumbraCodeGen
   GISel/PenumbraCallLowering.cpp
+  GISel/PenumbraInstructionSelector.cpp
+  PenumbraAsmPrinter.cpp
   GISel/PenumbraLegalizerInfo.cpp
   GISel/PenumbraRegisterBankInfo.cpp
   PenumbraFrameLowering.cpp
@@ -25,6 +27,8 @@ add_llvm_target(PenumbraCodeGen
   PenumbraTargetMachine.cpp
 
   LINK_COMPONENTS
+  Analysis
+  AsmPrinter
   CodeGen
   CodeGenTypes
   Core

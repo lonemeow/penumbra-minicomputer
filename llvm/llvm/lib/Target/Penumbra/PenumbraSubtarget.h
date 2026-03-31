@@ -15,6 +15,7 @@
 #include "PenumbraInstrInfo.h"
 #include "PenumbraRegisterInfo.h"
 #include "llvm/CodeGen/GlobalISel/CallLowering.h"
+#include "llvm/CodeGen/GlobalISel/InstructionSelector.h"
 #include "llvm/CodeGen/GlobalISel/LegalizerInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/DataLayout.h"
@@ -33,6 +34,7 @@ class PenumbraSubtarget : public PenumbraGenSubtargetInfo {
   PenumbraLegalizerInfo Legalizer;
   PenumbraRegisterBankInfo RegBankInfo;
   std::unique_ptr<CallLowering> CallLoweringInfo;
+  std::unique_ptr<InstructionSelector> InstSelector;
 
 public:
   PenumbraSubtarget(const Triple &TT, StringRef CPU, StringRef FS,
@@ -56,6 +58,9 @@ public:
   }
   const CallLowering *getCallLowering() const override {
     return CallLoweringInfo.get();
+  }
+  InstructionSelector *getInstructionSelector() const override {
+    return InstSelector.get();
   }
 };
 

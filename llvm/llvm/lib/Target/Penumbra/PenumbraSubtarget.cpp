@@ -6,6 +6,16 @@
 
 #include "PenumbraSubtarget.h"
 #include "GISel/PenumbraCallLowering.h"
+#include "PenumbraTargetMachine.h"
+#include "llvm/CodeGen/GlobalISel/InstructionSelector.h"
+
+namespace llvm {
+// Defined in GISel/PenumbraInstructionSelector.cpp.
+InstructionSelector *
+createPenumbraInstructionSelector(const PenumbraTargetMachine &TM,
+                                  const PenumbraSubtarget &STI,
+                                  const PenumbraRegisterBankInfo &RBI);
+} // namespace llvm
 
 #define GET_SUBTARGETINFO_CTOR
 #include "PenumbraGenSubtargetInfo.inc"
@@ -22,4 +32,6 @@ PenumbraSubtarget::PenumbraSubtarget(const Triple &TT, StringRef CPU,
       Legalizer(*this),
       RegBankInfo(*getRegisterInfo()) {
   CallLoweringInfo.reset(new PenumbraCallLowering(*getTargetLowering()));
+  InstSelector.reset(createPenumbraInstructionSelector(
+      static_cast<const PenumbraTargetMachine &>(TM), *this, RegBankInfo));
 }
