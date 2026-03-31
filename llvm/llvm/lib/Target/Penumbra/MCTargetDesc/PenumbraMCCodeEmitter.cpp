@@ -42,6 +42,18 @@ public:
   unsigned getMachineOpValue(const MCInst &Inst, const MCOperand &MO,
                              SmallVectorImpl<MCFixup> &Fixups,
                              const MCSubtargetInfo &STI) const;
+
+  /// Encode a 22-bit PC-relative branch target.  For resolved immediates,
+  /// returns the value directly.  For symbolic expressions (labels), creates
+  /// a fixup_penumbra_branch22 fixup and returns 0.
+  unsigned encodeBranchTarget(const MCInst &Inst, unsigned OpNo,
+                              SmallVectorImpl<MCFixup> &Fixups,
+                              const MCSubtargetInfo &STI) const;
+
+  /// Encode a 16-bit immediate that may be a symbolic expression.
+  unsigned encodeImm16(const MCInst &Inst, unsigned OpNo,
+                       SmallVectorImpl<MCFixup> &Fixups,
+                       const MCSubtargetInfo &STI) const;
 };
 
 } // anonymous namespace
@@ -61,6 +73,37 @@ unsigned PenumbraMCCodeEmitter::getMachineOpValue(
   if (MO.isImm())
     return static_cast<unsigned>(MO.getImm());
   llvm_unreachable("Unhandled operand kind in getMachineOpValue");
+}
+
+unsigned PenumbraMCCodeEmitter::encodeBranchTarget(
+    const MCInst &Inst, unsigned OpNo, SmallVectorImpl<MCFixup> &Fixups,
+    const MCSubtargetInfo &STI) const {
+  const MCOperand &MO = Inst.getOperand(OpNo);
+  if (MO.isImm())
+    return static_cast<unsigned>(MO.getImm());
+
+  // Symbolic expression — create a fixup for the linker/relaxer to resolve.
+  // Format B: offset22 lives in bits [25:4], fixup applied at byte offset 0.
+  Fixups.push_back(MCFixup::create(
+      0, MO.getExpr(),
+      static_cast<MCFixupKind>(Penumbra::fixup_penumbra_branch22),
+      /*PCRel=*/true));
+  return 0;
+}
+
+unsigned PenumbraMCCodeEmitter::encodeImm16(
+    const MCInst &Inst, unsigned OpNo, SmallVectorImpl<MCFixup> &Fixups,
+    const MCSubtargetInfo &STI) const {
+  const MCOperand &MO = Inst.getOperand(OpNo);
+  if (MO.isImm())
+    return static_cast<unsigned>(MO.getImm());
+
+  // Symbolic expression — create a fixup for 16-bit immediate.
+  // Format L: imm16 lives in bits [15:0], fixup applied at byte offset 0.
+  Fixups.push_back(MCFixup::create(
+      0, MO.getExpr(),
+      static_cast<MCFixupKind>(Penumbra::fixup_penumbra_imm16)));
+  return 0;
 }
 
 #include "PenumbraGenMCCodeEmitter.inc"

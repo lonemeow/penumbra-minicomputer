@@ -226,6 +226,10 @@ bool PenumbraAsmParser::parseOperand(OperandVector &Operands) {
     return false;
   }
 
+  // Consume optional '#' prefix on immediates (ARM-style).
+  if (Parser.getTok().is(AsmToken::Hash))
+    Parser.Lex();
+
   // Otherwise, try immediate / expression.
   const MCExpr *Expr;
   if (!Parser.parseExpression(Expr)) {
@@ -247,15 +251,16 @@ bool PenumbraAsmParser::parseInstruction(ParseInstructionInfo &Info,
   // The mnemonic is the first operand (as a token).
   Operands.push_back(PenumbraOperand::createToken(Name, NameLoc));
 
-  // Parse operands separated by commas.
-  if (getLexer().isNot(AsmToken::EndOfStatement)) {
+  // Parse operands.  Commas separate top-level operands but are optional
+  // inside memory brackets: "ldw r2, [r1 + #4]" has tokens [ r1 + #4 ]
+  // without commas between them.
+  while (getLexer().isNot(AsmToken::EndOfStatement)) {
+    if (getLexer().is(AsmToken::Comma))
+      Parser.Lex(); // eat optional comma
+    if (getLexer().is(AsmToken::EndOfStatement))
+      break;
     if (parseOperand(Operands))
       return true;
-    while (getLexer().is(AsmToken::Comma)) {
-      Parser.Lex(); // eat comma
-      if (parseOperand(Operands))
-        return true;
-    }
   }
 
   if (getLexer().isNot(AsmToken::EndOfStatement))

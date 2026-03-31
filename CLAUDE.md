@@ -202,6 +202,7 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 ### Software Tools
 - **Microcode assembler** (`hw/tools/uasm.py`): Symbolic microcode → $readmemh hex. Defaults: `pc=NEXT branch=FETCH`. Validates slot boundaries (detects multi-step routines that overflow their dispatch slot). Run: `python3 hw/tools/uasm.py input.uasm -o microcode.hex`
 - **ISA assembler** (`sw/tools/pasm.py`): Two-pass assembler for Penumbra ISA → $readmemh hex. All 4 formats (R/L/M/B), labels, label references in Format L immediates, pseudo-ops (NOP, RET, LA, LI), branch aliases (BZ/BNZ), `.equ` named constants, built-in constants (`#MMU`, `#TLB_INDEX`, `#TLB_V`, `#DCACHE`, `#ICACHE`, `#CACHE_INFO`, `#CACHE_CTRL`, `#CACHE_INVAL`, `#UART_BASE`, `#UART_LSR`, `#LSR_THRE`, `#FAULT_BUS`, `#FAULT_TLB_MISS`, `#FSTAT_R`, `#FSTAT_W`, `#FSTAT_X`, `#FSTAT_USR`, etc.). Smart mnemonic routing: ADD/SUB/CMP auto-select Format R (reg) or Format L (imm); ERET is 0-arg only (use WRSPR EPC/ESR to modify return state); RDSPR/WRSPR are unified instructions with SPR name (ESR, EPC, USP) encoded in spare[15:12]. `LA Rd, #label` loads a full 32-bit label address (LLI+LUI). `LI Rd, #value` loads an arbitrary 32-bit immediate (LLI+LUI). `--org ADDR` sets code base address (default 0). Data directives: `.word` (one or more 32-bit values), `.byte` (one or more bytes, packed little-endian into words), `.asciz "string"` (null-terminated ASCII with C escape sequences: `\n \r \t \\ \" \0 \xNN`). Bytes are packed little-endian so that sequential LDB reads match string order. Run: `python3 sw/tools/pasm.py --org 0xFFFFE000 input.s -o program.hex`
+- **Binary-to-hex converter** (`sw/tools/bin2hex.py`): Converts flat binary (from `llvm-objcopy -O binary`) to $readmemh hex. Reads 4-byte LE words, emits 8-digit uppercase hex per line. Pads to word boundary. Pipeline: `llvm-mc -triple=penumbra -filetype=obj prog.s -o prog.o && llvm-objcopy -O binary prog.o prog.bin && python3 sw/tools/bin2hex.py prog.bin -o prog.hex`
 - Makefile auto-assembles `.s`/`.uasm` sources into root-level `program.hex`/`microcode.hex` for `$readmemh`; hex files are build artifacts (gitignored). Programs assembled with `--org 0xFFFFE000` (boot ROM address).
 
 ### Test Convention
@@ -257,28 +258,30 @@ The simulation UART (`sim_uart.sv`) is an NS16450-compatible device at `0xFF00_0
 ### LLVM Backend (`llvm/llvm/lib/Target/Penumbra/`)
 The Penumbra LLVM backend is under development. Target triple: `penumbra-unknown-none` (eventually `penumbra-unknown-netbsd`). Build with `cmake -G Ninja -DLLVM_TARGETS_TO_BUILD=Penumbra` from `llvm/llvm/`, build dir `build/llvm/`. Uses ccache and Ninja. Use `-j2` for link steps (debug builds OOM at full parallelism on 15 GB WSL2).
 
-**Current state:** MC-layer assembler working. `llvm-mc -triple=penumbra -show-encoding` parses, matches, encodes, and prints all 4 instruction formats. Encodings verified bit-for-bit against `pasm.py`. ELF object emission is stubbed (fixups/relocations return placeholders).
+**Current state:** MC-layer assembler produces working ELF objects and raw hex. `llvm-mc -triple=penumbra` parses, matches, encodes, and emits all 4 instruction formats. Fixups for branch22 (PC-relative) and imm16 (absolute) are fully implemented — local labels resolve correctly. ELF relocations defined (R_PENUMBRA_32, R_PENUMBRA_BRANCH22, R_PENUMBRA_IMM16). Encodings verified bit-for-bit against `pasm.py`. Assembly syntax accepts ARM-style `#` prefix on immediates (optional: both `add r1, #1` and `add r1, 1` work).
 
 | File | Description |
 |------|-------------|
 | `Penumbra.td` | Top-level TableGen: includes, ProcessorModel, AsmWriter, Target, pointer remap |
 | `PenumbraRegisterInfo.td` | 16 GPRs (R0=zero, R12=TP, R13=LR, R14=SP, R15=PC), GPR/GPR_Allocatable/CCR classes, HWEncoding. R12 reserved (thread pointer), R11 scratch, R5–R10 callee-saved |
-| `PenumbraInstrInfo.td` | All 4 instruction formats (R/L/M/B) with bit-accurate encoding. ALU, immediate, memory, branch, system instructions. Format R subclasses for 0-operand and 1-operand system ops. Tied-operand constraints for 2-address destructive ops |
+| `PenumbraInstrInfo.td` | All 4 instruction formats (R/L/M/B) with bit-accurate encoding. ALU, immediate, memory, branch, system instructions. Format R subclasses for 0-operand and 1-operand system ops. Tied-operand constraints for 2-address destructive ops. Custom operand types `brtarget22` and `imm16op` with encoder methods for fixup generation |
 | `PenumbraTargetMachine.{h,cpp}` | Inherits `CodeGenTargetMachineImpl`, data layout `e-m:e-p:32:32-i32:32-n32-S32` |
 | `MCTargetDesc/PenumbraMCAsmInfo.{h,cpp}` | ELF-based, little-endian, `;` comments, `.word`/`.half`/`.byte` directives |
 | `MCTargetDesc/PenumbraMCTargetDesc.{h,cpp}` | Registers all MC components (InstrInfo, RegInfo, SubtargetInfo, AsmInfo, CodeEmitter, AsmBackend, InstPrinter) |
 | `MCTargetDesc/PenumbraInstPrinter.{h,cpp}` | MCInst → assembly text. Uses TableGen-generated `printInstruction`/`getRegisterName` |
-| `MCTargetDesc/PenumbraMCCodeEmitter.cpp` | MCInst → binary bytes (little-endian). Uses TableGen-generated `getBinaryCodeForInstr` |
-| `MCTargetDesc/PenumbraAsmBackend.cpp` | Fixup application, NOP emission (`0x00000000` = ADD R0,R0), ELF object writer creation |
-| `MCTargetDesc/PenumbraELFObjectWriter.cpp` | ELF relocation mapping (stub — `EM_PENUMBRA = 0xF0DA`, relocations return 0) |
-| `MCTargetDesc/PenumbraFixupKinds.h` | Fixup type enums: `fixup_penumbra_branch22`, `fixup_penumbra_imm16` |
-| `AsmParser/PenumbraAsmParser.cpp` | Assembly text → MCInst. Parses registers (`r0`–`r15`), immediates, punctuation (`[`, `]`, `+`). Uses TableGen-generated `MatchInstructionImpl` |
+| `MCTargetDesc/PenumbraMCCodeEmitter.cpp` | MCInst → binary bytes (little-endian). Uses TableGen-generated `getBinaryCodeForInstr`. Custom `encodeBranchTarget` and `encodeImm16` create fixups for symbolic operands |
+| `MCTargetDesc/PenumbraAsmBackend.cpp` | Fixup resolution (`applyFixup` for branch22/imm16), `getFixupKindInfo` (bit layout metadata), NOP emission (`0x00000000` = ADD R0,R0), ELF object writer creation |
+| `MCTargetDesc/PenumbraELFObjectWriter.cpp` | ELF relocation mapping (`EM_PENUMBRA = 0xF0DA`). Relocation types: R_PENUMBRA_NONE(0), R_PENUMBRA_32(1), R_PENUMBRA_BRANCH22(2), R_PENUMBRA_IMM16(3) |
+| `MCTargetDesc/PenumbraFixupKinds.h` | Fixup type enums: `fixup_penumbra_branch22` (PC-relative, bits [25:4]), `fixup_penumbra_imm16` (absolute, bits [15:0]) |
+| `AsmParser/PenumbraAsmParser.cpp` | Assembly text → MCInst. Parses registers (`r0`–`r15`), immediates (optional `#` prefix), punctuation (`[`, `]`, `+`). Uses TableGen-generated `MatchInstructionImpl` |
 | `TargetInfo/PenumbraTargetInfo.{h,cpp}` | Target registration (`Triple::penumbra`) |
 
 **Triple integration:** `penumbra` added to `Triple.h` (arch enum), `Triple.cpp` (name, prefix, parsing, 32-bit, little-endian, no-64-bit-variant, ELF format, DwarfCFI exception handling). Also added to `llvm/llvm/CMakeLists.txt` `LLVM_ALL_TARGETS`. Note: `TargetDataLayout.cpp:computeDataLayout()` has a `-Wswitch` warning for unhandled `penumbra` case — harmless (we provide our own data layout string in PenumbraTargetMachine.cpp).
 
+**Hex output pipeline:** `llvm-mc` → ELF object → `llvm-objcopy -O binary` → `bin2hex.py` → `$readmemh` hex. Same approach as ARM/RISC-V embedded toolchains. `bin2hex.py` (`sw/tools/bin2hex.py`) reads flat LE binary, emits one 32-bit word per line in uppercase hex. Output verified bit-for-bit against `pasm.py` for all instruction types.
+
 ### Next Steps (in priority order)
-1. **LLVM MC-layer assembler** — Complete ELF object emission (real fixups/relocations for branch22, imm16), register aliases (sp, lr, pc, zero, tp), WRSYS/RDSYS encoding with device/register fields.
+1. **LLVM MC-layer assembler** — Register aliases (sp, lr, pc, zero, tp), WRSYS/RDSYS encoding with device/register fields, pseudo-instructions (NOP, RET, LA, LI).
 2. **LLVM codegen** — Implement calling convention (CallingConv.td), frame lowering, instruction selection (ISelDAGToDAG/ISelLowering) using the ABI spec in `doc/abi/penumbra-abi.md`.
 3. **Boot ROM monitor** — Command parser working (`make simulate`): dump, write, go, help. Next: S-record upload for loading programs over UART.
 4. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick.

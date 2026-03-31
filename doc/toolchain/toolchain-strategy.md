@@ -26,13 +26,13 @@ The OS target was changed from Minix 2 to NetBSD.
 | TLB miss exception | Done | Vector 2, handler refills TLB, ERET retries |
 | TLB protection fault | Done | Vector 3, triggers COW copy in UVM |
 | Exception save/restore | Done | EPC/ESR, ERET, RDSPR, WRSPR |
-| SYSCALL trap | Not yet | Microcode needed (vector 5, like BREAK) |
+| SYSCALL trap | Done | Vector 5, intercepted at dispatch |
 | Timer interrupt | Not yet | Drives hardclock() / scheduler |
-| UART | Not yet | Console I/O (com driver) |
+| UART | Done | 16450-compatible, MMIO at 0xFF000000, com(4) compatible |
 | Interrupt controller | Not yet | Multiple devices, priority |
-| Sub-word loads/stores | Not yet | Byte/halfword for strings, structs |
+| Sub-word loads/stores | Done | LDH/LDHS/LDB/LDBS/STH/STB with byte_ext/byte_rep |
 | SDRAM controller | Not yet | NetBSD kernel needs 2-4 MB minimum |
-| Real cache | Not yet | cache_stub is pass-through; kernel working set needs caching |
+| Real cache | Done | Split I/D PIPT cache, write-through D-cache |
 
 ### Porting Reference
 
@@ -152,21 +152,26 @@ NetBSD uses its own build framework (`build.sh`) which supports cross-compilatio
 |------|--------|-------|
 | ISA assembler (pasm.py) | Done | Two-pass, all formats, labels, .equ constants |
 | Microcode assembler (uasm.py) | Done | Symbolic fields, slot validation |
-| LLVM backend skeleton | Done | Triple, registers, instruction encodings, target machine — compiles and links |
-| Calling convention | Proposed | Needs validation via hand-written assembly |
+| LLVM MC-layer assembler | Done | All 4 formats, fixups (branch22, imm16), ELF object emission, hex output pipeline |
+| ABI specification | Done | ILP32, register convention, calling convention, stack frame, ELF relocations |
+| bin2hex.py | Done | Flat binary → $readmemh hex (pipeline: llvm-mc → objcopy → bin2hex) |
+| Calling convention | Specified | R1–R4 args, R5–R10 callee-saved, R11 scratch, R12 TP, R13 LR |
+| LLVM codegen | Not started | Instruction selection, frame lowering, register allocation |
 | NetBSD MD layer | Not started | |
-| ELF object format | Not started | Need linker script for Penumbra memory map |
+| Linker (lld) | Not started | Need linker script for Penumbra memory map |
 
 ---
 
 ## Open Questions
 
-1. **ELF machine number.** Need to pick an unofficial `EM_PENUMBRA` value for ELF headers. Use a number in the private range (0xF000–0xFFFF).
+1. **Debug info.** DWARF support in the LLVM backend for source-level debugging. Lower priority but valuable.
 
-2. **Relocation types.** The assembler currently emits flat hex. For LLVM, need ELF relocations for: 22-bit branch offset (Format B), 16-bit immediate (Format L), LLI+LUI pairs (32-bit address materialization).
+2. **Floating point.** Initially software-emulated via compiler soft-float. Hardware FPU is a future project (reserved ALU opcodes 0x0B–0x10 for MUL/DIV, further slots for FP).
 
-3. **Debug info.** DWARF support in the LLVM backend for source-level debugging. Lower priority but valuable.
+## Resolved Questions
 
-4. **Floating point.** Initially software-emulated via compiler soft-float. Hardware FPU is a future project (reserved ALU opcodes 0x0B–0x10 for MUL/DIV, further slots for FP).
+1. **ELF machine number.** `EM_PENUMBRA = 0xF0DA` (private range). Implemented in PenumbraELFObjectWriter.cpp.
 
-5. **Alignment.** The ISA doc mentions alignment faults but they're not implemented. NetBSD expects either hardware alignment checking or the ability to handle misaligned accesses in software. Decision: trap on misaligned access (simplest hardware, matches MIPS behavior).
+2. **Relocation types.** Implemented: R_PENUMBRA_NONE(0), R_PENUMBRA_32(1), R_PENUMBRA_BRANCH22(2), R_PENUMBRA_IMM16(3). Local fixups resolved by assembler; relocations emitted for external symbols.
+
+3. **Alignment.** Implemented: MMU checks alignment for word (addr[1:0]==0), half (addr[0]==0), byte (always OK). Traps to VEC_ALIGN (vector 8). Works in both bypass and MMU-enabled mode.
