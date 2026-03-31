@@ -109,8 +109,9 @@ A Penumbra LLVM backend (`lib/Target/Penumbra/`) requires:
 ```
 R0        Zero (hardwired)
 R1-R4     Arguments / return values (caller-saved)
-R5-R11    Callee-saved (7 registers)
-R12       Scratch / temporary (caller-saved)
+R5-R10    Callee-saved (6 registers); R10 = frame pointer if needed
+R11       Scratch / temporary (caller-saved)
+R12       Thread pointer (reserved, not allocatable)
 R13       Link register (caller-saved, set by BL)
 R14       Stack pointer (hardware-banked USP/SSP)
 R15       Program counter (read-only)
@@ -118,12 +119,15 @@ R15       Program counter (read-only)
 
 **Stack frame:**
 - Grows downward (DEC SP)
-- Callee saves R5-R11 and R13 (if non-leaf) in prologue
+- Callee saves R5-R10 and R13 (if non-leaf) in prologue
 - Arguments beyond R1-R4 passed on stack
 - Return value in R1 (64-bit in R1:R2)
-- Frame pointer: optional, use R11 if needed
+- Frame pointer: optional, use R10 if needed
+- No home space / shadow area for register arguments
 
-This convention gives 4 argument registers (matches ARM32 and MIPS o32), 7 callee-saved registers (good register pressure for loops), and 2 scratch registers (R1 doubles as return, R12 for temporaries).
+See `doc/abi/penumbra-abi.md` for the full ABI specification.
+
+This convention gives 4 argument registers (matches ARM32 and MIPS o32), 6 callee-saved registers, 2 scratch registers (R11, R13/LR), and a reserved thread pointer (R12) for TLS.
 
 ### Build System
 

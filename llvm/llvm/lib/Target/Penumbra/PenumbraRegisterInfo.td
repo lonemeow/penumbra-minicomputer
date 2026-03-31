@@ -6,14 +6,16 @@
 //
 // Penumbra has 16 general-purpose 32-bit registers (R0-R15):
 //   R0  = hardwired zero
+//   R12 = thread pointer (reserved, not allocatable)
 //   R13 = link register (set by BL)
 //   R14 = stack pointer (hardware-banked USP/SSP)
 //   R15 = program counter (read-only from software)
 //
-// Calling convention (from toolchain-strategy.md):
+// Calling convention (see doc/abi/penumbra-abi.md):
 //   R1-R4   = arguments / return values (caller-saved)
-//   R5-R11  = callee-saved
-//   R12     = scratch (caller-saved)
+//   R5-R10  = callee-saved; R10 = frame pointer if needed
+//   R11     = scratch (caller-saved)
+//   R12     = thread pointer (reserved)
 //
 //===----------------------------------------------------------------------===//
 
@@ -60,12 +62,13 @@ def GPR : RegisterClass<"Penumbra", [i32], 32, (add
   (sequence "R%u", 0, 15))>;
 
 // Allocatable subset — used by the register allocator during codegen.
+// Excludes R0 (zero), R12 (thread pointer), R14 (SP), R15 (PC).
 // Caller-saved listed first (preferred), then callee-saved.
 def GPR_Allocatable : RegisterClass<"Penumbra", [i32], 32, (add
-  // Caller-saved (args + LR)
-  (sequence "R%u", 1, 4), R13,
+  // Caller-saved (args + scratch + LR)
+  (sequence "R%u", 1, 4), R11, R13,
   // Callee-saved
-  (sequence "R%u", 5, 11))> {
+  (sequence "R%u", 5, 10))> {
   let isAllocatable = 1;
 }
 
