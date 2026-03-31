@@ -22,6 +22,7 @@ The architecture is fully specified in `doc/`. Key specs:
 - **Bus:** `doc/bus/bus-overview.md` — custom async Penumbra Bus (4-phase handshake), sync internal bus, sysreg sideband
 - **MMU/Cache:** `doc/mmu/mmu-overview.md` — software-managed 64-entry 2-way SA TLB, split I/D PIPT cache, write-through D-cache
 - **Sysregs:** `doc/isa/sysregs-reference.md` — programmer's reference for WRSYS/RDSYS: device map, register layouts, TLB packing, assembly recipes
+- **ABI:** `doc/abi/penumbra-abi.md` — formal ABI spec: ILP32 data model, register convention (R1–R4 args, R5–R10 callee-saved, R11 scratch, R12 thread pointer, R13 LR), calling convention (no home space, ARM-style variadic spill), stack frame layout, ELF relocations, struct layout, TLS, DWARF register map
 
 ## Repository Layout
 - `hw/` - All hardware design
@@ -261,7 +262,7 @@ The Penumbra LLVM backend is under development. Target triple: `penumbra-unknown
 | File | Description |
 |------|-------------|
 | `Penumbra.td` | Top-level TableGen: includes, ProcessorModel, AsmWriter, Target, pointer remap |
-| `PenumbraRegisterInfo.td` | 16 GPRs (R0=zero, R13=LR, R14=SP, R15=PC), GPR/GPR_Allocatable/CCR classes, HWEncoding |
+| `PenumbraRegisterInfo.td` | 16 GPRs (R0=zero, R12=TP, R13=LR, R14=SP, R15=PC), GPR/GPR_Allocatable/CCR classes, HWEncoding. R12 reserved (thread pointer), R11 scratch, R5–R10 callee-saved |
 | `PenumbraInstrInfo.td` | All 4 instruction formats (R/L/M/B) with bit-accurate encoding. ALU, immediate, memory, branch, system instructions. Format R subclasses for 0-operand and 1-operand system ops. Tied-operand constraints for 2-address destructive ops |
 | `PenumbraTargetMachine.{h,cpp}` | Inherits `CodeGenTargetMachineImpl`, data layout `e-m:e-p:32:32-i32:32-n32-S32` |
 | `MCTargetDesc/PenumbraMCAsmInfo.{h,cpp}` | ELF-based, little-endian, `;` comments, `.word`/`.half`/`.byte` directives |
@@ -277,8 +278,9 @@ The Penumbra LLVM backend is under development. Target triple: `penumbra-unknown
 **Triple integration:** `penumbra` added to `Triple.h` (arch enum), `Triple.cpp` (name, prefix, parsing, 32-bit, little-endian, no-64-bit-variant, ELF format, DwarfCFI exception handling). Also added to `llvm/llvm/CMakeLists.txt` `LLVM_ALL_TARGETS`. Note: `TargetDataLayout.cpp:computeDataLayout()` has a `-Wswitch` warning for unhandled `penumbra` case — harmless (we provide our own data layout string in PenumbraTargetMachine.cpp).
 
 ### Next Steps (in priority order)
-1. **LLVM MC-layer assembler** — Complete ELF object emission (real fixups/relocations for branch22, imm16), register aliases (sp, lr, pc, zero), WRSYS/RDSYS encoding with device/register fields.
-2. **Boot ROM monitor** — Command parser working (`make simulate`): dump, write, go, help. Next: S-record upload for loading programs over UART.
-3. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick.
-4. **Interrupt controller** — Multiple devices with priority encoding.
-5. **Memory subsystem** — SDRAM controller, bus interface.
+1. **LLVM MC-layer assembler** — Complete ELF object emission (real fixups/relocations for branch22, imm16), register aliases (sp, lr, pc, zero, tp), WRSYS/RDSYS encoding with device/register fields.
+2. **LLVM codegen** — Implement calling convention (CallingConv.td), frame lowering, instruction selection (ISelDAGToDAG/ISelLowering) using the ABI spec in `doc/abi/penumbra-abi.md`.
+3. **Boot ROM monitor** — Command parser working (`make simulate`): dump, write, go, help. Next: S-record upload for loading programs over UART.
+4. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick.
+5. **Interrupt controller** — Multiple devices with priority encoding.
+6. **Memory subsystem** — SDRAM controller, bus interface.
