@@ -7,6 +7,7 @@
 #ifndef LLVM_LIB_TARGET_PENUMBRA_PENUMBRASUBTARGET_H
 #define LLVM_LIB_TARGET_PENUMBRA_PENUMBRASUBTARGET_H
 
+#include "GISel/PenumbraRegisterBankInfo.h"
 #include "PenumbraFrameLowering.h"
 #include "PenumbraISelLowering.h"
 #include "PenumbraInstrInfo.h"
@@ -24,6 +25,7 @@ class PenumbraSubtarget : public PenumbraGenSubtargetInfo {
   PenumbraFrameLowering FrameLowering;
   PenumbraRegisterInfo RegInfo;
   PenumbraISelLowering TLInfo;
+  PenumbraRegisterBankInfo RegBankInfo;
 
 public:
   PenumbraSubtarget(const Triple &TT, StringRef CPU, StringRef FS,
@@ -38,6 +40,9 @@ public:
   }
   const PenumbraISelLowering *getTargetLowering() const override {
     return &TLInfo;
+  }
+  const RegisterBankInfo *getRegBankInfo() const override {
+    return &RegBankInfo;
   }
 };
 

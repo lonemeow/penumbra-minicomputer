@@ -17,4 +17,5 @@ PenumbraSubtarget::PenumbraSubtarget(const Triple &TT, StringRef CPU,
       InstrInfo(),
       FrameLowering(),
       RegInfo(),
-      TLInfo(TM, *this) {}
+      TLInfo(TM, *this),
+      RegBankInfo(*getRegisterInfo()) {}

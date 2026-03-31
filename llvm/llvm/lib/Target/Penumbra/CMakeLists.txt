@@ -9,10 +9,12 @@ tablegen(LLVM PenumbraGenMCCodeEmitter.inc -gen-emitter)
 tablegen(LLVM PenumbraGenRegisterInfo.inc -gen-register-info)
 tablegen(LLVM PenumbraGenCallingConv.inc -gen-callingconv)
 tablegen(LLVM PenumbraGenSubtargetInfo.inc -gen-subtarget)
+tablegen(LLVM PenumbraGenRegisterBank.inc -gen-register-bank)
 
 add_public_tablegen_target(PenumbraCommonTableGen)
 
 add_llvm_target(PenumbraCodeGen
+  GISel/PenumbraRegisterBankInfo.cpp
   PenumbraFrameLowering.cpp
   PenumbraISelLowering.cpp
   PenumbraInstrInfo.cpp
@@ -24,6 +26,7 @@ add_llvm_target(PenumbraCodeGen
   CodeGen
   CodeGenTypes
   Core
+  GlobalISel
   MC
   PenumbraAsmParser
   PenumbraDesc
