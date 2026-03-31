@@ -7,11 +7,13 @@ tablegen(LLVM PenumbraGenAsmWriter.inc -gen-asm-writer)
 tablegen(LLVM PenumbraGenInstrInfo.inc -gen-instr-info)
 tablegen(LLVM PenumbraGenMCCodeEmitter.inc -gen-emitter)
 tablegen(LLVM PenumbraGenRegisterInfo.inc -gen-register-info)
+tablegen(LLVM PenumbraGenCallingConv.inc -gen-callingconv)
 tablegen(LLVM PenumbraGenSubtargetInfo.inc -gen-subtarget)
 
 add_public_tablegen_target(PenumbraCommonTableGen)
 
 add_llvm_target(PenumbraCodeGen
+  PenumbraRegisterInfo.cpp
   PenumbraTargetMachine.cpp
 
   LINK_COMPONENTS

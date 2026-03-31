@@ -21,6 +21,7 @@ include "llvm/Target/Target.td"
 
 include "PenumbraRegisterInfo.td"
 include "PenumbraInstrInfo.td"
+include "PenumbraCallingConv.td"
 
 //===----------------------------------------------------------------------===//
 // Penumbra processors — specific implementations of the ISA
