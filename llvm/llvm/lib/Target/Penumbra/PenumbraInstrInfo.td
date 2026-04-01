@@ -246,24 +246,32 @@ let isBranch = 1, isTerminator = 1 in {
   def B    : FormatB<0b0000, (outs), (ins brtarget22:$target), "b\t$target"> {
     let isBarrier = 1;
   }
-  def BEQ  : FormatB<0b0001, (outs), (ins brtarget22:$target), "beq\t$target">;
-  def BNE  : FormatB<0b0010, (outs), (ins brtarget22:$target), "bne\t$target">;
-  def BCS  : FormatB<0b0011, (outs), (ins brtarget22:$target), "bcs\t$target">;
-  def BCC  : FormatB<0b0100, (outs), (ins brtarget22:$target), "bcc\t$target">;
-  def BMI  : FormatB<0b0101, (outs), (ins brtarget22:$target), "bmi\t$target">;
-  def BPL  : FormatB<0b0110, (outs), (ins brtarget22:$target), "bpl\t$target">;
-  def BVS  : FormatB<0b0111, (outs), (ins brtarget22:$target), "bvs\t$target">;
-  def BVC  : FormatB<0b1000, (outs), (ins brtarget22:$target), "bvc\t$target">;
-  def BHI  : FormatB<0b1001, (outs), (ins brtarget22:$target), "bhi\t$target">;
-  def BLS  : FormatB<0b1010, (outs), (ins brtarget22:$target), "bls\t$target">;
-  def BGE  : FormatB<0b1011, (outs), (ins brtarget22:$target), "bge\t$target">;
-  def BLT  : FormatB<0b1100, (outs), (ins brtarget22:$target), "blt\t$target">;
-  def BGT  : FormatB<0b1101, (outs), (ins brtarget22:$target), "bgt\t$target">;
-  def BLE  : FormatB<0b1110, (outs), (ins brtarget22:$target), "ble\t$target">;
+
+  // Conditional branches read the status register (Z, N, C, V flags).
+  let Uses = [SR] in {
+    def BEQ  : FormatB<0b0001, (outs), (ins brtarget22:$target), "beq\t$target">;
+    def BNE  : FormatB<0b0010, (outs), (ins brtarget22:$target), "bne\t$target">;
+    def BCS  : FormatB<0b0011, (outs), (ins brtarget22:$target), "bcs\t$target">;
+    def BCC  : FormatB<0b0100, (outs), (ins brtarget22:$target), "bcc\t$target">;
+    def BMI  : FormatB<0b0101, (outs), (ins brtarget22:$target), "bmi\t$target">;
+    def BPL  : FormatB<0b0110, (outs), (ins brtarget22:$target), "bpl\t$target">;
+    def BVS  : FormatB<0b0111, (outs), (ins brtarget22:$target), "bvs\t$target">;
+    def BVC  : FormatB<0b1000, (outs), (ins brtarget22:$target), "bvc\t$target">;
+    def BHI  : FormatB<0b1001, (outs), (ins brtarget22:$target), "bhi\t$target">;
+    def BLS  : FormatB<0b1010, (outs), (ins brtarget22:$target), "bls\t$target">;
+    def BGE  : FormatB<0b1011, (outs), (ins brtarget22:$target), "bge\t$target">;
+    def BLT  : FormatB<0b1100, (outs), (ins brtarget22:$target), "blt\t$target">;
+    def BGT  : FormatB<0b1101, (outs), (ins brtarget22:$target), "bgt\t$target">;
+    def BLE  : FormatB<0b1110, (outs), (ins brtarget22:$target), "ble\t$target">;
+  }
 }
 
 let isCall = 1, Defs = [R13] in
 def BL   : FormatB<0b1111, (outs), (ins brtarget22:$target), "bl\t$target">;
+
+// Branch mnemonic aliases (ARM-style unsigned comparison synonyms).
+def : MnemonicAlias<"bhs", "bcs">;  // unsigned higher or same = carry set
+def : MnemonicAlias<"blo", "bcc">;  // unsigned lower = carry clear
 
 //===----------------------------------------------------------------------===//
 // System instructions (Format R, prefix=00, op 0x10-0x1C)

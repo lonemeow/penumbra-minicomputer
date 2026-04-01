@@ -13,6 +13,7 @@
 #include "llvm/CodeGenTypes/LowLevelType.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/IR/InstrTypes.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "penumbra-isel"
@@ -44,6 +45,9 @@ private:
                    MachineRegisterInfo &MRI) const;
   bool selectFrameIndex(MachineInstr &I, MachineBasicBlock &MBB,
                         MachineRegisterInfo &MRI) const;
+  bool selectBranch(MachineInstr &I, MachineBasicBlock &MBB) const;
+  bool selectBrCond(MachineInstr &I, MachineBasicBlock &MBB,
+                    MachineRegisterInfo &MRI) const;
 
   const PenumbraInstrInfo &TII;
   const PenumbraRegisterInfo &TRI;
@@ -59,10 +63,31 @@ PenumbraInstructionSelector::PenumbraInstructionSelector(
       TRI(*STI.getRegisterInfo()), RBI(RBI) {}
 
 bool PenumbraInstructionSelector::select(MachineInstr &I) {
-  // Non-generic instructions (already selected, e.g. copies inserted by RA
-  // or pseudos like ADJCALLSTACKDOWN): accept as-is.
-  if (!isPreISelGenericOpcode(I.getOpcode()))
+  // Handle non-generic (already selected) instructions, plus G_PHI which is
+  // "copy-like": despite being a generic opcode, G_PHI doesn't need full
+  // instruction selection — it just gets its opcode changed to the target PHI
+  // and its def constrained to a register class.  COPY similarly needs its
+  // dest constrained from a register bank to a concrete register class.
+  if (!isPreISelGenericOpcode(I.getOpcode()) ||
+      I.getOpcode() == TargetOpcode::G_PHI) {
+    if (I.getOpcode() == TargetOpcode::G_PHI) {
+      I.setDesc(TII.get(TargetOpcode::PHI));
+      return RBI.constrainGenericRegister(
+          I.getOperand(0).getReg(), Penumbra::GPR_AllocatableRegClass,
+          I.getParent()->getParent()->getRegInfo());
+    }
+
+    // COPY: constrain the dest register to a proper register class.
+    if (I.isCopy()) {
+      Register DstReg = I.getOperand(0).getReg();
+      if (DstReg.isVirtual())
+        return RBI.constrainGenericRegister(
+            DstReg, Penumbra::GPR_AllocatableRegClass,
+            I.getParent()->getParent()->getRegInfo());
+    }
+
     return true;
+  }
 
   MachineBasicBlock &MBB = *I.getParent();
   MachineRegisterInfo &MRI = MBB.getParent()->getRegInfo();
@@ -89,6 +114,10 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
   case G_LOAD:        return selectLoad(I, MBB, MRI);
   case G_STORE:       return selectStore(I, MBB, MRI);
   case G_FRAME_INDEX: return selectFrameIndex(I, MBB, MRI);
+
+  // ── Branches ──────────────────────────────────────────────────────────────
+  case G_BR:     return selectBranch(I, MBB);
+  case G_BRCOND: return selectBrCond(I, MBB, MRI);
 
   default:
     return false;
@@ -215,6 +244,97 @@ bool PenumbraInstructionSelector::selectFrameIndex(MachineInstr &I,
   Register DstReg = I.getOperand(0).getReg();
   if (!MRI.use_nodbg_empty(DstReg))
     return false; // address escapes to non-memory use — unsupported
+  I.eraseFromParent();
+  return true;
+}
+
+// ── ICMP predicate → Penumbra branch opcode ──────────────────────────────────
+static unsigned icmpPredToBranchOpc(CmpInst::Predicate Pred) {
+  // ICMP_EQ, ICMP_NE, ICMP_SGT, ICMP_SGE, ICMP_SLT, ICMP_SLE, ICMP_UGT, ICMP_UGE, ICMP_ULT,  ICMP_ULE
+  switch (Pred) {
+    case CmpInst::ICMP_EQ:
+      return Penumbra::BEQ;
+    case CmpInst::ICMP_NE:
+      return Penumbra::BNE;
+
+    case CmpInst::ICMP_SGT:
+      return Penumbra::BGT;
+    case CmpInst::ICMP_SGE:
+      return Penumbra::BGE;
+    case CmpInst::ICMP_SLT:
+      return Penumbra::BLT;
+    case CmpInst::ICMP_SLE:
+      return Penumbra::BLE;
+
+    case CmpInst::ICMP_UGT:
+      return Penumbra::BHI;
+    case CmpInst::ICMP_UGE:
+      return Penumbra::BCS;
+    case CmpInst::ICMP_ULT:
+      return Penumbra::BCC;
+    case CmpInst::ICMP_ULE:
+      return Penumbra::BLS;
+    default:
+      return 0;
+  }
+}
+
+// ── G_BR (unconditional branch) ──────────────────────────────────────────────
+bool PenumbraInstructionSelector::selectBranch(MachineInstr &I,
+                                                MachineBasicBlock &MBB) const {
+  BuildMI(MBB, I, I.getDebugLoc(), TII.get(Penumbra::B))
+      .addMBB(I.getOperand(0).getMBB());
+  I.eraseFromParent();
+  return true;
+}
+
+// ── G_BRCOND (conditional branch) ────────────────────────────────────────────
+// Folds with the G_ICMP that defines the condition:
+//   G_ICMP s1 %cond = pred, %lhs, %rhs   →   CMP %lhs, %rhs
+//   G_BRCOND %cond, %target               →   Bcc %target
+// If the condition is not from G_ICMP, falls back to TEST + BNE (nonzero).
+bool PenumbraInstructionSelector::selectBrCond(MachineInstr &I,
+                                                MachineBasicBlock &MBB,
+                                                MachineRegisterInfo &MRI) const {
+  Register CondReg = I.getOperand(0).getReg();
+  MachineBasicBlock *TargetMBB = I.getOperand(1).getMBB();
+  const DebugLoc &DL = I.getDebugLoc();
+
+  MachineInstr *CondDef = MRI.getVRegDef(CondReg);
+
+  if (CondDef && CondDef->getOpcode() == TargetOpcode::G_ICMP) {
+    // Fold G_ICMP + G_BRCOND into CMP + Bcc.
+    auto Pred = static_cast<CmpInst::Predicate>(
+        CondDef->getOperand(1).getPredicate());
+    Register LHS = CondDef->getOperand(2).getReg();
+    Register RHS = CondDef->getOperand(3).getReg();
+
+    unsigned BrOpc = icmpPredToBranchOpc(Pred);
+    if (!BrOpc)
+      return false;
+
+    auto CmpMI = BuildMI(MBB, I, DL, TII.get(Penumbra::CMP))
+                     .addReg(LHS)
+                     .addReg(RHS);
+    constrainSelectedInstRegOperands(*CmpMI, TII, TRI, RBI);
+
+    BuildMI(MBB, I, DL, TII.get(BrOpc)).addMBB(TargetMBB);
+
+    I.eraseFromParent();
+    // If G_ICMP has no remaining uses, erase it too.
+    if (MRI.use_nodbg_empty(CondDef->getOperand(0).getReg()))
+      CondDef->eraseFromParent();
+
+    return true;
+  }
+
+  // Fallback: condition is a generic s1/s32 value — TEST reg, reg + BNE.
+  auto TestMI = BuildMI(MBB, I, DL, TII.get(Penumbra::TEST))
+                    .addReg(CondReg)
+                    .addReg(CondReg);
+  constrainSelectedInstRegOperands(*TestMI, TII, TRI, RBI);
+
+  BuildMI(MBB, I, DL, TII.get(Penumbra::BNE)).addMBB(TargetMBB);
   I.eraseFromParent();
   return true;
 }

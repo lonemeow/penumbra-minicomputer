@@ -46,5 +46,20 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   getActionDefinitionsBuilder(G_PTR_ADD)
       .legalFor({{p0, s32}});
 
+  // Comparisons: G_ICMP produces s1 result, compares s32 operands.
+  const LLT s1 = LLT::scalar(1);
+  getActionDefinitionsBuilder(G_ICMP)
+      .legalFor({{s1, s32}})
+      .clampScalar(1, s32, s32);
+
+  // PHI nodes at control-flow joins.
+  getActionDefinitionsBuilder(G_PHI)
+      .legalFor({s32, p0})
+      .clampScalar(0, s32, s32);
+
+  // Branches.
+  getActionDefinitionsBuilder(G_BRCOND)
+      .legalFor({s1});
+
   getLegacyLegalizerInfo().computeTables();
 }
