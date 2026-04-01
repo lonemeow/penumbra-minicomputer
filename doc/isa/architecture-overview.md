@@ -191,7 +191,10 @@ All immediate fields are consistently 16 bits wide.
 | 0101 | `CMPI Rd, #imm16` | flags = Rd - sign_extend(imm16) | Compare register to immediate (no write) |
 | 0110 | `ANDI Rd, #imm16` | Rd = Rd & zero_extend(imm16) | Bitwise AND with immediate |
 | 0111 | `TESTI Rd, #imm16` | flags = Rd & zero_extend(imm16) | Test bits with immediate (no write) |
-| 1000–1111 | (reserved) | Future expansion (8 slots) | SHLi, SHRi, SARi planned |
+| 1000 | `SHL Rd, #imm5` | Rd = Rd << imm[4:0] | Shift left by immediate (0–31) |
+| 1001 | `SHR Rd, #imm5` | Rd = Rd >> imm[4:0] (logical) | Shift right by immediate (0–31) |
+| 1010 | `SAR Rd, #imm5` | Rd = Rd >> imm[4:0] (arithmetic) | Arithmetic shift right by immediate (0–31) |
+| 1011–1111 | (reserved) | Future expansion (5 slots) | |
 
 #### Loading 32-bit Constants
 

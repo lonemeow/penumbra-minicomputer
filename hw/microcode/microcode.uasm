@@ -128,6 +128,24 @@ andi:
 testi:
   reg_a=IR_RD alu=AND bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
 
+# ── SHL Rd, #imm5 (op=1000, dispatch=0x30) ───────────────────
+# Rd = Rd << imm[4:0]   [assembler: SHL Rd, #imm → Format L]
+.org 0x30
+shli:
+  reg_a=IR_RD reg_w=IR_RD w_en=1 alu=SHL bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
+
+# ── SHR Rd, #imm5 (op=1001, dispatch=0x32) ───────────────────
+# Rd = Rd >> imm[4:0] (logical)   [assembler: SHR Rd, #imm → Format L]
+.org 0x32
+shri:
+  reg_a=IR_RD reg_w=IR_RD w_en=1 alu=SHR bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
+
+# ── SAR Rd, #imm5 (op=1010, dispatch=0x34) ───────────────────
+# Rd = Rd >> imm[4:0] (arithmetic)   [assembler: SAR Rd, #imm → Format L]
+.org 0x34
+sari:
+  reg_a=IR_RD reg_w=IR_RD w_en=1 alu=SAR bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
+
 # ═══════════════════════════════════════════════════════════════
 # Format R — System operations (0x40–0x5E, ×2 spacing)
 # Dispatch: {00, 1, op[3:0], 0}  (op[4]=1 → system zone)

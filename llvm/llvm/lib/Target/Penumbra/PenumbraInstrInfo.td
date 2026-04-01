@@ -212,6 +212,16 @@ let Defs = [SR] in {
                      "and\t$Rd, $imm16">;
   def TESTi : FormatL<0b0111, (outs), (ins GPR:$Rd, imm16op:$imm16),
                       "test\t$Rd, $imm16">;
+
+  // Immediate shifts: shift amount in low 5 bits of imm16 field.
+  let Constraints = "$Rd = $Rd_in" in {
+    def SHLi : FormatL<0b1000, (outs GPR:$Rd), (ins GPR:$Rd_in, imm16op:$imm16),
+                       "shl\t$Rd, $imm16">;
+    def SHRi : FormatL<0b1001, (outs GPR:$Rd), (ins GPR:$Rd_in, imm16op:$imm16),
+                       "shr\t$Rd, $imm16">;
+    def SARi : FormatL<0b1010, (outs GPR:$Rd), (ins GPR:$Rd_in, imm16op:$imm16),
+                       "sar\t$Rd, $imm16">;
+  }
 }
 
 //===----------------------------------------------------------------------===//
