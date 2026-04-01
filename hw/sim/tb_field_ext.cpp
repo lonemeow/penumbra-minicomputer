@@ -53,13 +53,13 @@ int main(int argc, char** argv) {
     check("fmtR_mtsys_dev",    dut->o_r_sys_dev, 5);
     check("fmtR_mtsys_reg",    dut->o_r_sys_reg, 3);
 
-    // ── Format L: LLI R10, #0xABCD (op=000, Rd=10) ──────────────
-    // Bits: 01 000 1010 0000000 1010101111001101
-    dut->i_ir = 0b01'000'1010'0000000'1010101111001101;
+    // ── Format L: LLI R10, #0xABCD (op=0000, Rd=10) ─────────────
+    // Bits: 01 0000 1010 000000 1010101111001101
+    dut->i_ir = 0b01'0000'1010'000000'1010101111001101;
     dut->eval();
 
     check("fmtL_format",   dut->o_format,    0b01);
-    check("fmtL_op",       dut->o_l_op,      0b000);
+    check("fmtL_op",       dut->o_l_op,      0b0000);
     check("fmtL_rd",       dut->o_l_rd,      10);
     check("fmtL_imm16",    dut->o_imm16,     0xABCD);
 

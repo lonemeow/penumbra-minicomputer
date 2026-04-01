@@ -257,7 +257,7 @@ module cpu_core
     always_comb begin
         case (fetch_format)
             2'b00:   dispatch_addr = {1'b0, mem_rdata[29], 1'b0, mem_rdata[28:25], 1'b0};
-            2'b01:   dispatch_addr = {1'b0, 2'b01, mem_rdata[29:27], 2'b00};
+            2'b01:   dispatch_addr = {1'b0, 2'b01, mem_rdata[29:26], 1'b0};
             2'b10:   dispatch_addr = {2'b10, mem_rdata[29:26], 2'b00};
             2'b11:   dispatch_addr = (mem_rdata[29:26] == 4'b1111) ? 8'h62 : 8'h60;
             default: dispatch_addr = 8'h00;
@@ -560,7 +560,7 @@ module cpu_core
     // verilator lint_off UNUSEDSIGNAL
     logic [1:0]  dp_format;
     logic [4:0]  dp_r_op;
-    logic [2:0]  dp_l_op;
+    logic [3:0]  dp_l_op;
     logic        dp_m_load;
     logic [1:0]  dp_m_size;
     logic        dp_m_sign_ext;

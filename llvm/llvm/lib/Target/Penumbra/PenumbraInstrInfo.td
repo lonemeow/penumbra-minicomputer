@@ -82,17 +82,17 @@ class FormatR_NoReg<bits<5> op, dag outs, dag ins, string asmstr,
 }
 
 //--- Format L: prefix = 01 ---------------------------------------------------
-// [31:30]=01  [29:27]=op  [26:23]=Rd  [22:16]=spare  [15:0]=imm16
-class FormatL<bits<3> op, dag outs, dag ins, string asmstr,
+// [31:30]=01  [29:26]=op  [25:22]=Rd  [21:16]=spare  [15:0]=imm16
+class FormatL<bits<4> op, dag outs, dag ins, string asmstr,
               list<dag> pattern = []>
     : PenumbraInst<outs, ins, asmstr, pattern> {
   bits<4> Rd;
   bits<16> imm16;
 
   let Inst{31-30} = 0b01;
-  let Inst{29-27} = op;
-  let Inst{26-23} = Rd;
-  let Inst{22-16} = 0;
+  let Inst{29-26} = op;
+  let Inst{25-22} = Rd;
+  let Inst{21-16} = 0;
   let Inst{15-0}  = imm16;
 }
 
@@ -190,27 +190,27 @@ let F = 1 in {
 // Immediate instructions (Format L, prefix=01)
 //===----------------------------------------------------------------------===//
 
-def LLI  : FormatL<0b000, (outs GPR:$Rd), (ins imm16op:$imm16),
+def LLI  : FormatL<0b0000, (outs GPR:$Rd), (ins imm16op:$imm16),
                    "lli\t$Rd, $imm16">;
-def LLIS : FormatL<0b001, (outs GPR:$Rd), (ins imm16op:$imm16),
+def LLIS : FormatL<0b0001, (outs GPR:$Rd), (ins imm16op:$imm16),
                    "llis\t$Rd, $imm16">;
 let Constraints = "$Rd = $Rd_in" in
-def LUI  : FormatL<0b010, (outs GPR:$Rd), (ins GPR:$Rd_in, imm16op:$imm16),
+def LUI  : FormatL<0b0010, (outs GPR:$Rd), (ins GPR:$Rd_in, imm16op:$imm16),
                    "lui\t$Rd, $imm16">;
 
 let Defs = [SR] in {
   let Constraints = "$Rd = $Rd_in" in {
-    def ADDi : FormatL<0b011, (outs GPR:$Rd), (ins GPR:$Rd_in, imm16op:$imm16),
+    def ADDi : FormatL<0b0011, (outs GPR:$Rd), (ins GPR:$Rd_in, imm16op:$imm16),
                        "add\t$Rd, $imm16">;
-    def SUBi : FormatL<0b100, (outs GPR:$Rd), (ins GPR:$Rd_in, imm16op:$imm16),
+    def SUBi : FormatL<0b0100, (outs GPR:$Rd), (ins GPR:$Rd_in, imm16op:$imm16),
                        "sub\t$Rd, $imm16">;
   }
-  def CMPi : FormatL<0b101, (outs), (ins GPR:$Rd, imm16op:$imm16),
+  def CMPi : FormatL<0b0101, (outs), (ins GPR:$Rd, imm16op:$imm16),
                      "cmp\t$Rd, $imm16">;
   let Constraints = "$Rd = $Rd_in" in
-  def ANDi : FormatL<0b110, (outs GPR:$Rd), (ins GPR:$Rd_in, imm16op:$imm16),
+  def ANDi : FormatL<0b0110, (outs GPR:$Rd), (ins GPR:$Rd_in, imm16op:$imm16),
                      "and\t$Rd, $imm16">;
-  def TESTi : FormatL<0b111, (outs), (ins GPR:$Rd, imm16op:$imm16),
+  def TESTi : FormatL<0b0111, (outs), (ins GPR:$Rd, imm16op:$imm16),
                       "test\t$Rd, $imm16">;
 }
 

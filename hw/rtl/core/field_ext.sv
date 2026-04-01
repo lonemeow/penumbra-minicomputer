@@ -30,8 +30,8 @@ module field_ext (
     output logic [3:0]  o_r_sys_reg,   // IR[11:8]  — WRSYS/RDSYS register field
 
     // ── Format L fields ─────────────────────────────────────────
-    output logic [2:0]  o_l_op,        // IR[29:27] — Format L opcode (3-bit)
-    output logic [3:0]  o_l_rd,        // IR[26:23] — destination register
+    output logic [3:0]  o_l_op,        // IR[29:26] — Format L opcode (4-bit)
+    output logic [3:0]  o_l_rd,        // IR[25:22] — destination register
 
     // ── Format M fields ─────────────────────────────────────────
     output logic        o_m_load,      // IR[29]    — 1=load, 0=store
@@ -61,8 +61,8 @@ module field_ext (
     assign o_r_sys_reg  = i_ir[11:8];
 
     // Format L
-    assign o_l_op       = i_ir[29:27];
-    assign o_l_rd       = i_ir[26:23];
+    assign o_l_op       = i_ir[29:26];
+    assign o_l_rd       = i_ir[25:22];
 
     // Format M
     assign o_m_load     = i_ir[29];

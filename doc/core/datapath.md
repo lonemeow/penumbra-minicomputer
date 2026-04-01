@@ -497,7 +497,7 @@ The microcode ROM uses **direct mapping** from instruction bits to micro-PC star
 
 ```
 Format R: dispatch = {00, op[4:0]}         → entries 0-31
-Format L: dispatch = {01, op[2:0], 00}     → entries 32-63 (×4 spacing for multi-op routines)
+Format L: dispatch = {01, op[3:0], 0}      → entries 32-62 (×2 spacing)
 Format M: dispatch = {10, L, sz[1:0], SE, 0} → entries 64-95 (×2 spacing)
 Format B: dispatch = {11, 0000000}         → entry 96 (single routine, condition in hardware)
 ```

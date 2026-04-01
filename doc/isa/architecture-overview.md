@@ -168,29 +168,30 @@ System operations use the Format R encoding with the following opcodes. The `Rd`
 
 ```
  31 30 29 28 27 26 25 24 23 22 21 20 19 18 17 16 15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
-[  0  1 |  op (3 bits) |   Rd (4 bits)  |  spare  |           imm16 (16 bits)                      ]
+[  0  1 |  op (4 bits)  |   Rd (4 bits)  | spare |           imm16 (16 bits)                      ]
 ```
 
 | Field | Bits | Description |
 |-------|------|-------------|
 | prefix | 31:30 | `01` — Format L |
-| op | 29:27 | Immediate operation (3 bits, 8 opcodes) |
-| Rd | 26:23 | Destination register |
-| spare | 22:16 | Reserved (7 bits) |
+| op | 29:26 | Immediate operation (4 bits, 16 opcodes) |
+| Rd | 25:22 | Destination register |
+| spare | 21:16 | Reserved (6 bits) |
 | imm16 | 15:0 | 16-bit immediate value |
 
 All immediate fields are consistently 16 bits wide.
 
 | op | Mnemonic | Operation | Description |
 |----|----------|-----------|-------------|
-| 000 | `LLI Rd, #imm16` | Rd = zero_extend(imm16) | Load lower immediate (zero-extended) |
-| 001 | `LLIS Rd, #imm16` | Rd = sign_extend(imm16) | Load lower immediate (sign-extended) |
-| 010 | `LUI Rd, #imm16` | Rd = Rd OR (imm16 << 16) | Load upper immediate (ORs into upper half) |
-| 011 | `INC Rd, #imm16` | Rd = Rd + zero_extend(imm16) | Increment by immediate |
-| 100 | `DEC Rd, #imm16` | Rd = Rd - zero_extend(imm16) | Decrement by immediate |
-| 101 | `CMPI Rd, #imm16` | flags = Rd - sign_extend(imm16) | Compare register to immediate (no write) |
-| 110 | `ANDI Rd, #imm16` | Rd = Rd & zero_extend(imm16) | Bitwise AND with immediate |
-| 111 | `TESTI Rd, #imm16` | flags = Rd & zero_extend(imm16) | Test bits with immediate (no write) |
+| 0000 | `LLI Rd, #imm16` | Rd = zero_extend(imm16) | Load lower immediate (zero-extended) |
+| 0001 | `LLIS Rd, #imm16` | Rd = sign_extend(imm16) | Load lower immediate (sign-extended) |
+| 0010 | `LUI Rd, #imm16` | Rd = Rd OR (imm16 << 16) | Load upper immediate (ORs into upper half) |
+| 0011 | `INC Rd, #imm16` | Rd = Rd + zero_extend(imm16) | Increment by immediate |
+| 0100 | `DEC Rd, #imm16` | Rd = Rd - zero_extend(imm16) | Decrement by immediate |
+| 0101 | `CMPI Rd, #imm16` | flags = Rd - sign_extend(imm16) | Compare register to immediate (no write) |
+| 0110 | `ANDI Rd, #imm16` | Rd = Rd & zero_extend(imm16) | Bitwise AND with immediate |
+| 0111 | `TESTI Rd, #imm16` | flags = Rd & zero_extend(imm16) | Test bits with immediate (no write) |
+| 1000–1111 | (reserved) | Future expansion (8 slots) | SHLi, SHRi, SARi planned |
 
 #### Loading 32-bit Constants
 

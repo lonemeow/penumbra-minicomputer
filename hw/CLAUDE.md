@@ -84,7 +84,7 @@ Eight sources share the same `except_entry` → `int_entry` → vector dispatch 
 
 ## Register Address Routing
 The micro-word's `reg_a_sel`, `reg_b_sel`, `reg_w_sel` fields use a 4-bit encoding:
-- `4'b0000` (IR_RD): format-dependent destination register (R→IR[24:21], L→IR[26:23], M→IR[25:22])
+- `4'b0000` (IR_RD): format-dependent destination register (R→IR[24:21], L→IR[25:22], M→IR[25:22])
 - `4'b0001` (IR_RS): format-dependent source/base register (R→IR[20:17], M→IR[21:18])
 - `4'b0010–4'b1111`: literal register R2–R15
 
@@ -100,7 +100,7 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 | Category | Instructions | Notes |
 |----------|-------------|-------|
 | ALU (R-ALU, 0x00–0x1E) | ADD, SUB, AND, OR, XOR, SHL, SHR, SAR, MOV, NOT | CMP/TEST via F-bit gating on SUB/AND |
-| Immediate (Format L) | LLI, LLIS, LUI, ADD #imm, SUB #imm, CMP #imm, AND #imm, TEST #imm | All 8 Format L slots used |
+| Immediate (Format L) | LLI, LLIS, LUI, ADD #imm, SUB #imm, CMP #imm, AND #imm, TEST #imm | 8 of 16 Format L slots used |
 | Memory (Format M) | LDW/LDH/LDHS/LDB/LDBS (3 µ-ops), STW/STH/STB (4 µ-ops) | STALL-based, latency-agnostic |
 | Branch (Format B) | Bcc (all 15 conditions), BL (2 µ-ops) | BL saves PC+4 to R13 |
 | System (R-SYS, 0x40–0x5E) | JMP, EI, DI, WRSYS, RDSYS, ERET, WRSPR, RDSPR, SYSCALL, BREAK | SYSCALL/BREAK intercepted at dispatch |

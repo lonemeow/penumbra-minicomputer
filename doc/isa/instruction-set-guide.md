@@ -414,11 +414,11 @@ All instructions are 32 bits. Bits [31:30] select one of four formats.
 ### Format L -- Immediate Operations (bits [31:30] = 01)
 
 ```
-31 30  29   27  26   23  22       16  15             0
-[ 01 ][ op(3) ][ Rd(4) ][ spare(7) ][   imm16 (16)   ]
+31 30  29   26  25   22  21       16  15             0
+[ 01 ][ op(4) ][ Rd(4) ][ spare(6) ][   imm16 (16)   ]
 ```
 
-- **op:** immediate operation (3 bits, 8 possible)
+- **op:** immediate operation (4 bits, 16 possible)
 - **Rd:** destination register
 - **imm16:** 16-bit immediate value
 

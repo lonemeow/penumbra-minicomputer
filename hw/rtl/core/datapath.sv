@@ -89,7 +89,7 @@ module datapath
     // ══════════════════════════════════════════════════════════════
     output logic [1:0]  o_format,       // IR[31:30] — instruction format
     output logic [4:0]  o_r_op,         // Format R opcode (for dispatch)
-    output logic [2:0]  o_l_op,         // Format L opcode (for dispatch)
+    output logic [3:0]  o_l_op,         // Format L opcode (for dispatch)
     output logic        o_m_load,       // Format M load/store bit
     output logic [1:0]  o_m_size,       // Format M access size
     output logic        o_m_sign_ext,   // Format M sign-extend
@@ -139,7 +139,7 @@ module datapath
     logic [3:0]  fe_r_rd, fe_r_rs;
     logic        fe_r_f;
     logic [3:0]  fe_r_sys_dev, fe_r_sys_reg;
-    logic [2:0]  fe_l_op;
+    logic [3:0]  fe_l_op;
     logic [3:0]  fe_l_rd;
     logic        fe_m_load;
     logic [1:0]  fe_m_size;
@@ -193,7 +193,7 @@ module datapath
     always_comb begin
         case (fmt)
             2'b00:   ir_rd_resolved = fe_r_rd;   // Format R: IR[24:21]
-            2'b01:   ir_rd_resolved = fe_l_rd;   // Format L: IR[26:23]
+            2'b01:   ir_rd_resolved = fe_l_rd;   // Format L: IR[25:22]
             2'b10:   ir_rd_resolved = fe_m_rd;   // Format M: IR[25:22]
             default: ir_rd_resolved = 4'b0000;   // Format B: don't care
         endcase

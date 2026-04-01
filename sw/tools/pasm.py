@@ -221,7 +221,7 @@ FORMAT_R_OPS = {
 }
 
 # ── Format L — Immediate ops ─────────────────────────────────
-# Encoding: [01][op:3][Rd:4][spare:7][imm16:16]
+# Encoding: [01][op:4][Rd:4][spare:6][imm16:16]
 
 FORMAT_L_OPS = {
     "LLI":  0, "LLIS": 1, "LUI":  2,
@@ -264,7 +264,7 @@ def encode_format_r(op, rd, rs, f_bit, spare=0):
 def encode_format_l(op, rd, imm16):
     """Encode Format L instruction."""
     imm16 &= 0xFFFF
-    return (0b01 << 30) | (op << 27) | (rd << 23) | imm16
+    return (0b01 << 30) | (op << 26) | (rd << 22) | imm16
 
 def encode_format_m(l_bit, sz, se, rd, rb, offset16):
     """Encode Format M instruction."""

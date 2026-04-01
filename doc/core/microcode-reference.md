@@ -53,7 +53,7 @@ Address the register file's two read ports (A, B) and one write port (W).
 
 | Value | Symbol | Register |
 |-------|--------|----------|
-| 0 | `IR_RD` | Format-dependent destination: R→IR[24:21], L→IR[26:23], M→IR[25:22] |
+| 0 | `IR_RD` | Format-dependent destination: R→IR[24:21], L→IR[25:22], M→IR[25:22] |
 | 1 | `IR_RS` | Format-dependent source/base: R→IR[20:17], M→IR[21:18] |
 | 2-15 | `R2`–`R15` | Literal register number (direct address) |
 
@@ -279,7 +279,7 @@ Fields are `key=value` pairs separated by spaces. Values are symbolic names (upp
 | Zone | Addresses | Slot Size | Count | Purpose |
 |------|-----------|-----------|-------|---------|
 | R-ALU | 0x00–0x1F | ×2 | 16 | Format R ALU ops (op[4]=0) |
-| Format L | 0x20–0x3F | ×4 | 8 | Immediate operations |
+| Format L | 0x20–0x3E | ×2 | 16 | Immediate operations |
 | R-SYS | 0x40–0x5F | ×2 | 16 | Format R system ops (op[4]=1) |
 | Format B | 0x60–0x63 | ×2 | 2 | Conditional branch (0x60), BL (0x62) |
 | (gap) | 0x64–0x6F | — | — | Unused |
@@ -295,7 +295,7 @@ Computed by the fetch unit from `mem_rdata` (instruction bits, same cycle as IR 
 | Format | Formula | Range |
 |--------|---------|-------|
 | R (prefix 00) | `{0, op[4], 0, op[3:0], 0}` | 0x00–0x1E (ALU), 0x40–0x5E (SYS) |
-| L (prefix 01) | `{01, op[2:0], 00}` | 0x20–0x3C |
+| L (prefix 01) | `{01, op[3:0], 0}` | 0x20–0x3E |
 | M (prefix 10) | `{10, L, sz[1:0], SE, 00}` | 0x80–0xBC |
 | B (prefix 11) | `cond==1111 ? 0x62 : 0x60` | 0x60 or 0x62 |
 | Exception | Hardwired | 0x70 |
@@ -418,7 +418,7 @@ reg_a=IR_RS reg_w=IR_RD w_en=1 alu=NOT wmux=RBUS w_flags=1
 ```
 → Rd = ~Rs, flags updated.
 
-### Format L — Immediate Operations (0x20–0x3C)
+### Format L — Immediate Operations (0x20–0x2E)
 
 All single-cycle, single micro-op.
 
@@ -428,35 +428,47 @@ reg_w=IR_RD w_en=1 alu=PASS_B bmux=IMM wmux=RBUS imm_mode=ZERO_EXT
 ```
 → Rd = zero_extend(imm16).
 
-**LLIS** (op=1, dispatch=0x24)
+**LLIS** (op=1, dispatch=0x22)
 ```
 reg_w=IR_RD w_en=1 alu=PASS_B bmux=IMM wmux=RBUS imm_mode=SIGN_EXT
 ```
 → Rd = sign_extend(imm16).
 
-**LUI** (op=2, dispatch=0x28)
+**LUI** (op=2, dispatch=0x24)
 ```
 reg_a=IR_RD reg_w=IR_RD w_en=1 alu=OR bmux=IMM wmux=RBUS imm_mode=SHIFT_L16
 ```
 → Rd = Rd | (imm16 << 16). Typically preceded by LLI to build a 32-bit constant.
 
-**INC** (op=3, dispatch=0x2C)
+**INC** (op=3, dispatch=0x26)
 ```
 reg_a=IR_RD reg_w=IR_RD w_en=1 alu=ADD bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
 ```
 → Rd = Rd + zero_extend(imm16), flags updated.
 
-**DEC** (op=4, dispatch=0x30)
+**DEC** (op=4, dispatch=0x28)
 ```
 reg_a=IR_RD reg_w=IR_RD w_en=1 alu=SUB bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
 ```
 → Rd = Rd − zero_extend(imm16), flags updated.
 
-**CMPI** (op=5, dispatch=0x34)
+**CMPI** (op=5, dispatch=0x2A)
 ```
 reg_a=IR_RD alu=SUB bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
 ```
 → Flags = Rd − zero_extend(imm16). Rd **not** written (no `w_en`).
+
+**ANDI** (op=6, dispatch=0x2C)
+```
+reg_a=IR_RD reg_w=IR_RD w_en=1 alu=AND bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
+```
+→ Rd = Rd & zero_extend(imm16), flags updated.
+
+**TESTI** (op=7, dispatch=0x2E)
+```
+reg_a=IR_RD alu=AND bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
+```
+→ Flags = Rd & zero_extend(imm16). Rd **not** written (no `w_en`).
 
 ### Format R — System Operations (0x40–0x5E)
 
