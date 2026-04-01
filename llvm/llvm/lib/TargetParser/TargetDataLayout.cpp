@@ -581,6 +581,8 @@ std::string Triple::computeDataLayout(StringRef ABIName) const {
     return computeMipsDataLayout(*this, ABIName);
   case Triple::msp430:
     return "e-m:e-p:16:16-i32:16-i64:16-f32:16-f64:16-a:8-n8:16-S16";
+  case Triple::penumbra:
+    return "e-m:e-p:32:32-i32:32-i64:64-n32-S32";
   case Triple::ppc:
   case Triple::ppcle:
   case Triple::ppc64:

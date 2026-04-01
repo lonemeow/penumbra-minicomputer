@@ -23,6 +23,7 @@ static const char *PenumbraDataLayout =
     "-m:e"     // ELF mangling
     "-p:32:32" // 32-bit pointers, 32-bit aligned
     "-i32:32"  // i32 is 32-bit aligned
+    "-i64:64"  // i64 is 64-bit aligned (for long long)
     "-n32"     // native integer width is 32
     "-S32";    // stack is 32-bit aligned
 
@@ -72,6 +73,7 @@ PenumbraTargetMachine::PenumbraTargetMachine(
       TLOF(std::make_unique<TargetLoweringObjectFileELF>()),
       Subtarget(TT, CPU.empty() ? "penumbra1" : CPU, FS, *this) {
   initAsmInfo();
+  setGlobalISel(true);
 }
 
 extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void

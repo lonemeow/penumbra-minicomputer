@@ -12,7 +12,9 @@ This file provides LLVM backend context for work under `llvm/`. The root `CLAUDE
 ## Current State
 MC-layer assembler produces working ELF objects and raw hex. `llvm-mc -triple=penumbra` parses, matches, encodes, and emits all 4 instruction formats. Fixups for branch22 (PC-relative) and imm16 (absolute) are fully implemented — local labels resolve correctly. ELF relocations defined (R_PENUMBRA_32, R_PENUMBRA_BRANCH22, R_PENUMBRA_IMM16). Encodings verified bit-for-bit against `pasm.py`. Assembly syntax accepts ARM-style `#` prefix on immediates (optional).
 
-GlobalISel codegen pipeline is functional: `llc -march=penumbra -global-isel` compiles LLVM IR to Penumbra assembly. Supports i32 ALU ops (add/sub/and/or/xor/shifts), constants (LLI/LLIS/LUI), s32 loads/stores with frame-index folding, full calling convention (R1-R4 args, R1 return), control flow (G_ICMP+G_BRCOND folded to CMP+Bcc, G_BR, G_PHI), and G_SELECT (conditional select via branch diamond, with G_ICMP fold into CMP+Bcc). No SelectionDAG — GlobalISel only.
+GlobalISel codegen pipeline is functional: `llc -march=penumbra` compiles LLVM IR to Penumbra assembly (GlobalISel is the default). Supports i32 ALU ops (add/sub/and/or/xor/shifts), constants (LLI/LLIS/LUI), s32 loads/stores with frame-index folding, full calling convention (R1-R4 args, R1 return), control flow (G_ICMP+G_BRCOND folded to CMP+Bcc, G_BR, G_PHI), and G_SELECT (conditional select via branch diamond, with G_ICMP fold into CMP+Bcc). No SelectionDAG — GlobalISel only.
+
+Clang driver is wired: `clang --target=penumbra-unknown-none -S file.c` compiles C to Penumbra assembly. Works at `-O0`; `-O1+` triggers unlegalized ops (G_SMAX, G_ZEXT, etc.) that need more rules.
 
 ## File Map (`llvm/llvm/lib/Target/Penumbra/`)
 
@@ -26,7 +28,7 @@ GlobalISel codegen pipeline is functional: `llc -march=penumbra -global-isel` co
 | `PenumbraFrameLowering.{h,cpp}` | StackGrowsDown, Align(4), hasFPImpl()=false. Prologue (SUBi SP) / epilogue (ADDi SP) |
 | `PenumbraISelLowering.{h,cpp}` | TargetLowering: addRegisterClass(i32, GPR_Allocatable), getCCAssignFn(), EmitInstrWithCustomInserter (SELECT_GPR/SELECT_CC_GPR diamond expansion) |
 | `PenumbraSubtarget.{h,cpp}` | Central hub: owns InstrInfo, FrameLowering, TLInfo, and GlobalISel objects (CallLowering, InstructionSelector, LegalizerInfo, RegBankInfo) |
-| `PenumbraTargetMachine.{h,cpp}` | Inherits `CodeGenTargetMachineImpl`, data layout `e-m:e-p:32:32-i32:32-n32-S32`, PenumbraPassConfig (GlobalISel pipeline) |
+| `PenumbraTargetMachine.{h,cpp}` | Inherits `CodeGenTargetMachineImpl`, data layout `e-m:e-p:32:32-i32:32-i64:64-n32-S32`, PenumbraPassConfig (GlobalISel pipeline), `setGlobalISel(true)` |
 | `PenumbraAsmPrinter.cpp` | MachineInstr → MCInst emission. Expands RET pseudo to JMP R13, handles COPY and stack pseudos |
 | `GISel/PenumbraCallLowering.{h,cpp}` | lowerFormalArguments (R1-R4 → vregs), lowerReturn (vreg → R1 + RET), lowerCall (stub) |
 | `GISel/PenumbraLegalizerInfo.{h,cpp}` | Legal ops: G_ADD/SUB/AND/OR/XOR/SHL/SHR/SAR on s32, G_LOAD/STORE s32, G_CONSTANT s32/p0, G_FRAME_INDEX p0, G_ICMP {s1,s32}, G_SELECT {s32/p0,s1}, G_PHI, G_BRCOND |
