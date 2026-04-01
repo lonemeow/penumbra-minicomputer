@@ -48,6 +48,15 @@ PKG_SV = hw/rtl/core/penumbra_pkg.sv
 PASM  = python3 sw/tools/pasm.py
 UASM  = python3 hw/tools/uasm.py
 
+# ── LLVM toolchain (for C boot ROM) ─────────────────────────
+# Override with: make simulate LLVM_PREFIX=/path/to/llvm-build
+LLVM_PREFIX ?= $(CURDIR)/build/llvm
+CC        = $(LLVM_PREFIX)/bin/clang --target=penumbra-unknown-none
+MC        = $(LLVM_PREFIX)/bin/llvm-mc -triple=penumbra
+LD        = $(LLVM_PREFIX)/bin/ld.lld
+OBJCOPY   = $(LLVM_PREFIX)/bin/llvm-objcopy
+BIN2HEX   = python3 sw/tools/bin2hex.py
+
 .PHONY: sim
 sim:
 ifndef MOD
@@ -120,6 +129,7 @@ test:
 # Builds machine_sim with interactive testbench and boot ROM.
 # Bridges stdin/stdout to UART for terminal interaction.
 # Usage: make simulate
+#        make simulate LLVM_PREFIX=/other/llvm/build
 DOCKER_RUN_IT = docker run --rm -it -v $(CURDIR):/work -w /work
 
 .PHONY: simulate
@@ -130,7 +140,12 @@ simulate:
 		--Mdir $(BUILD_DIR)/machine_sim_interactive.verilator \
 		-o ../Vmachine_sim_interactive \
 		$(PKG_SV) $$(find hw/rtl -name 'machine_sim.sv') hw/sim/tb_interactive.cpp
-	@$(PASM) --org 0xFFFFE000 hw/rom/boot_rom.s -o program.hex
+	@# Build C boot ROM: clang → llvm-mc → ld.lld → objcopy → bin2hex
+	@$(CC) -c -O0 -o $(BUILD_DIR)/boot_rom.o hw/rom/boot_rom.c
+	@$(MC) -filetype=obj hw/rom/crt0.s -o $(BUILD_DIR)/crt0.o
+	@$(LD) -T hw/rom/rom.ld $(BUILD_DIR)/crt0.o $(BUILD_DIR)/boot_rom.o -o $(BUILD_DIR)/boot_rom.elf
+	@$(OBJCOPY) -O binary $(BUILD_DIR)/boot_rom.elf $(BUILD_DIR)/boot_rom.bin
+	@$(BIN2HEX) $(BUILD_DIR)/boot_rom.bin -o program.hex
 	@$(UASM) hw/microcode/microcode.uasm -o microcode.hex
 	@$(DOCKER_RUN_IT) --entrypoint ./$(BUILD_DIR)/Vmachine_sim_interactive $(DOCKER_IMAGE)
 

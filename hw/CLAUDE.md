@@ -37,7 +37,7 @@ This file provides detailed hardware context for work under `hw/`. The root `CLA
 | Simple memory | `rtl/soc/simple_mem.sv` | — | Parameterizable synchronous SRAM model (default 16 MB), configurable READ_LATENCY/WRITE_LATENCY modeling SDRAM timing. |
 
 ## Boot ROM and Interactive Simulation
-- **Boot ROM** (`rom/boot_rom.s`): Penumbra/1 boot monitor with command parser. Commands: `d ADDR` (dump), `w ADDR VAL` (write), `g ADDR` (jump), `?` (help). SP at `0x01000000`, non-leaf functions push/pop LR. Assembled with `--org 0xFFFFE000`.
+- **Boot ROM** (`rom/boot_rom.c` + `rom/crt0.s`): Penumbra/1 boot monitor in C. `crt0.s` sets SP and calls `main()`. Built with clang: `clang -c` → `llvm-mc` → `ld.lld` (via `rom/rom.ld`) → `llvm-objcopy` → `bin2hex.py`.
 - **Interactive testbench** (`sim/tb_interactive.cpp`): Bridges host stdin/stdout to UART RX/TX. Raw terminal mode. Polls stdin every 1024 cycles. Exits on BREAK or Ctrl-C.
 
 ## Exception and Interrupt Handling
