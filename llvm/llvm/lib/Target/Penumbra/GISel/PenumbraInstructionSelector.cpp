@@ -156,6 +156,7 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
   case G_TRUNC:
   case G_INTTOPTR:
   case G_PTRTOINT:
+  case G_FREEZE:
     I.setDesc(TII.get(TargetOpcode::COPY));
     return RBI.constrainGenericRegister(
         I.getOperand(0).getReg(), Penumbra::GPR_AllocatableRegClass, MRI);
@@ -242,13 +243,17 @@ bool PenumbraInstructionSelector::selectConstant(MachineInstr &I,
         .addImm(Val);
     constrainSelectedInstRegOperands(*MI, TII, TRI, RBI);
   } else {
+    // Use a fresh vreg for LLI so each vreg has exactly one def (SSA).
+    // The register allocator will typically coalesce them into the same
+    // physical register, so this is zero overhead.
+    Register TmpReg = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
     auto MI1 = BuildMI(MBB, I, DL, TII.get(Penumbra::LLI))
-        .addDef(DstReg)
+        .addDef(TmpReg)
         .addImm(Val & 0xFFFF);
     constrainSelectedInstRegOperands(*MI1, TII, TRI, RBI);
     auto MI2 = BuildMI(MBB, I, DL, TII.get(Penumbra::LUI))
         .addDef(DstReg)
-        .addReg(DstReg)
+        .addReg(TmpReg)
         .addImm((Val >> 16) & 0xFFFF);
     constrainSelectedInstRegOperands(*MI2, TII, TRI, RBI);
   }
@@ -593,14 +598,18 @@ void PenumbraInstructionSelector::emitLoadSymbolAddr(
     Register DstReg, const DebugLoc &DL, MachineBasicBlock &MBB,
     MachineBasicBlock::iterator InsertPt,
     const MachineOperand &LoOp, const MachineOperand &HiOp) const {
+  // Use a fresh vreg for LLI to maintain SSA (one def per vreg).
+  MachineRegisterInfo &MRI = MBB.getParent()->getRegInfo();
+  Register TmpReg = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
+
   auto LLIInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::LLI))
-      .addDef(DstReg)
+      .addDef(TmpReg)
       .add(LoOp);
   constrainSelectedInstRegOperands(*LLIInst, TII, TRI, RBI);
 
   auto LUIInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::LUI))
       .addDef(DstReg)
-      .addReg(DstReg)
+      .addReg(TmpReg)
       .add(HiOp);
   constrainSelectedInstRegOperands(*LUIInst, TII, TRI, RBI);
 }

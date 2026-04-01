@@ -98,5 +98,16 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   getActionDefinitionsBuilder(G_TRUNC)
       .legalFor({{s1, s32}, {s8, s32}, {s16, s32}});
 
+  // G_ABS: the optimizer generates this at -O1+ for signed division.
+  // Lower to the generic SELECT expansion (icmp + negate + select).
+  getActionDefinitionsBuilder(G_ABS).lower();
+
+  // G_FREEZE: converts potentially-poison values to well-defined ones.
+  // At -O1+ the optimizer inserts these around division and other ops.
+  // No-op on Penumbra — just pass the value through.
+  getActionDefinitionsBuilder(G_FREEZE)
+      .legalFor({s32, p0})
+      .clampScalar(0, s32, s32);
+
   getLegacyLegalizerInfo().computeTables();
 }

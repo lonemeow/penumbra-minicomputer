@@ -16,7 +16,7 @@ This file provides LLVM backend context for work under `llvm/`. The root `CLAUDE
 
 **GlobalISel codegen:** i32 ALU (add/sub/and/or/xor/shifts with constant folding to SHLi/SHRi/SARi), constants (LLI/LLIS/LUI), global addresses (G_GLOBAL_VALUE → LLI+LUI with lo16/hi16, refactored into shared `emitLoadSymbolAddr` helper), sub-word load/store (LDB/LDH/LDW, STB/STH/STW selected by memory operand size, frame-index folding into memory ops + LEAfi pseudo for escaped addresses), pointer arithmetic (G_PTR_ADD → ADD), type casts (G_INTTOPTR/G_PTRTOINT → COPY), extensions (G_ZEXT/G_SEXT/G_ANYEXT/G_TRUNC/G_SEXT_INREG), calling convention (R1-R4 args, R1 return, R13/LR callee-saved), control flow (G_ICMP+G_BRCOND → CMP+Bcc with pointer compare support, G_BR, G_PHI), G_SELECT (ICMP fold into SELECT_CC_GPR), jump tables (G_JUMP_TABLE + G_BRJT → SHLi+ADD+LDW+BRIND), MUL/DIV/REM → libcalls (__mulsi3/__udivsi3/__umodsi3/etc. via RuntimeLibcalls.td). No SelectionDAG — GlobalISel only.
 
-**Clang:** `clang --target=penumbra-unknown-none -c file.c` works at `-O0`. `-O1+` triggers unlegalized ops (G_SMAX, etc.) that need more rules.
+**Clang:** `clang --target=penumbra-unknown-none -c file.c` works at `-O0` and `-O1`. Boot ROM compiles and runs correctly at both levels. `-O2+` may trigger unlegalized ops (G_SMAX, etc.).
 
 **lld:** `ld.lld -T rom.ld` links Penumbra ELF objects. Supports all 6 relocation types. EM_PENUMBRA (0xF0DA) defined in central `llvm/BinaryFormat/ELF.h`.
 
@@ -35,10 +35,10 @@ This file provides LLVM backend context for work under `llvm/`. The root `CLAUDE
 | `PenumbraTargetMachine.{h,cpp}` | Inherits `CodeGenTargetMachineImpl`, data layout `e-m:e-p:32:32-i32:32-i64:64-n32-S32`, PenumbraPassConfig (GlobalISel pipeline), `setGlobalISel(true)` |
 | `PenumbraAsmPrinter.cpp` | MachineInstr → MCInst emission. Expands RET pseudo to JMP R13, handles COPY and stack pseudos. Wraps MO_GlobalAddress with lo16/hi16 MCSpecifierExpr based on target flags |
 | `GISel/PenumbraCallLowering.{h,cpp}` | lowerFormalArguments (R1-R4 → vregs), lowerReturn (vreg → R1 + RET), lowerCall (stub) |
-| `GISel/PenumbraLegalizerInfo.{h,cpp}` | Legal ops: G_ADD/SUB/AND/OR/XOR/SHL/SHR/SAR on s32, G_LOAD/STORE s32/s16/s8, G_CONSTANT s32/p0, G_FRAME_INDEX/G_GLOBAL_VALUE p0, G_PTR_ADD {p0,s32}, G_INTTOPTR/G_PTRTOINT {p0,s32}, G_ICMP {s1,s32}/{s1,p0}, G_SELECT {s32/p0,s1}, G_PHI, G_BRCOND, G_ZEXT/G_SEXT/G_ANYEXT/G_TRUNC, G_SEXT_INREG (lowered), G_MUL/G_UDIV/G_UREM/G_SDIV/G_SREM (libcall) |
+| `GISel/PenumbraLegalizerInfo.{h,cpp}` | Legal ops: G_ADD/SUB/AND/OR/XOR/SHL/SHR/SAR on s32, G_LOAD/STORE s32/s16/s8, G_CONSTANT s32/p0, G_FRAME_INDEX/G_GLOBAL_VALUE p0, G_PTR_ADD {p0,s32}, G_INTTOPTR/G_PTRTOINT {p0,s32}, G_ICMP {s1,s32}/{s1,p0}, G_SELECT {s32/p0,s1}, G_PHI, G_BRCOND, G_ZEXT/G_SEXT/G_ANYEXT/G_TRUNC, G_SEXT_INREG (lowered), G_MUL/G_UDIV/G_UREM/G_SDIV/G_SREM (libcall), G_ABS (lowered), G_FREEZE (legal, no-op) |
 | `GISel/PenumbraRegisterBankInfo.{h,cpp}` | Single GPR bank covering all 16 registers. Maps all ops to GPR |
 | `GISel/PenumbraRegisterBanks.td` | `def GPRRegBank : RegisterBank<"GPRBank", [GPR]>` |
-| `GISel/PenumbraInstructionSelector.cpp` | Manual select(): ALU ops, G_CONSTANT (LLI/LLIS/LUI), G_GLOBAL_VALUE (LLI+LUI with lo16/hi16 target flags), G_LOAD/G_STORE (LDB/LDH/LDW and STB/STH/STW by memop size, frame-index folding), G_PTR_ADD (→ADD), G_INTTOPTR/G_PTRTOINT (→COPY), G_FRAME_INDEX (fold into memop or LEAfi for escaped addresses), G_ICMP+G_BRCOND fold (CMP+Bcc), G_BR, G_PHI, G_SELECT, G_ZEXT/G_SEXT, COPY constraint |
+| `GISel/PenumbraInstructionSelector.cpp` | Manual select(): ALU ops, G_CONSTANT (LLI/LLIS/LUI), G_GLOBAL_VALUE (LLI+LUI with lo16/hi16 target flags), G_LOAD/G_STORE (LDB/LDH/LDW and STB/STH/STW by memop size, frame-index folding), G_PTR_ADD (→ADD), G_INTTOPTR/G_PTRTOINT/G_FREEZE (→COPY), G_FRAME_INDEX (fold into memop or LEAfi for escaped addresses), G_ICMP+G_BRCOND fold (CMP+Bcc), G_BR, G_PHI, G_SELECT, G_ZEXT/G_SEXT, COPY constraint. LLI+LUI pairs use SSA-correct intermediate vregs. |
 | `MCTargetDesc/PenumbraMCTargetDesc.{h,cpp}` | Registers all MC components |
 | `MCTargetDesc/PenumbraInstPrinter.{h,cpp}` | MCInst → assembly text |
 | `MCTargetDesc/PenumbraMCCodeEmitter.cpp` | MCInst → binary bytes. Custom `encodeBranchTarget` and `encodeImm16` create fixups |
@@ -73,6 +73,6 @@ Minimal ELF linker target. Handles all 6 relocation types. Registered via `EM_PE
 - **maybeAddReloc:** Must be called at the start of `applyFixup()` to generate ELF relocations for unresolved symbols. Without it, all symbol references silently resolve to zero.
 - **PC-relativity:** Set on `MCFixup` itself (`PCRel=true` in `MCFixup::create`), not in `MCFixupKindInfo`.
 - **Destructive 2-operand ops:** TableGen patterns use tied-operand constraints. Register allocator handles via COPY insertion.
-- **Global address materialization:** Instruction selector emits LLI+LUI with target flags (`S_Lo16`/`S_Hi16`). AsmPrinter converts flags to `MCSpecifierExpr` wrappers. MCCodeEmitter maps specifiers to `fixup_penumbra_lo16`/`fixup_penumbra_hi16`.
+- **Global address materialization:** Instruction selector emits LLI+LUI with target flags (`S_Lo16`/`S_Hi16`). AsmPrinter converts flags to `MCSpecifierExpr` wrappers. MCCodeEmitter maps specifiers to `fixup_penumbra_lo16`/`fixup_penumbra_hi16`. LLI+LUI pairs use an intermediate vreg (`%tmp = LLI lo` → `%dst = LUI %tmp, hi`) for SSA correctness — required for `-O1+` passes like OptimizePHIs.
 - **Assembly text roundtrip:** `%lo16()`/`%hi16()` syntax is parsed by the AsmParser's operand parser and emitted by `printSpecifierExpr`. Full `clang -S` → `llvm-mc` roundtrip works.
 - **Register class constraining:** All instruction selector helpers must call `constrainSelectedInstRegOperands()` — vregs left with only a bank assignment (no regclass) cause assertions after selection.
