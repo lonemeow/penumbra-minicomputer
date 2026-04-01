@@ -54,7 +54,7 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   // Comparisons: G_ICMP produces s1 result, compares s32 operands.
   const LLT s1 = LLT::scalar(1);
   getActionDefinitionsBuilder(G_ICMP)
-      .legalFor({{s1, s32}})
+      .legalFor({{s1, s32}, {s1, p0}})
       .clampScalar(1, s32, s32);
 
   // PHI nodes at control-flow joins.
@@ -74,6 +74,17 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   // Extensions: handled in instruction selection (AND for zext, SHL+SAR for sext).
   getActionDefinitionsBuilder({G_ZEXT, G_SEXT, G_ANYEXT})
       .legalForCartesianProduct({s8, s16, s32}, {s1, s8, s16});
+
+  // Division/remainder: no hardware support — lower to libcalls
+  // (__udivsi3, __umodsi3, __divsi3, __modsi3 in libc.c).
+  getActionDefinitionsBuilder({G_UDIV, G_UREM, G_SDIV, G_SREM})
+      .libcallFor({s32})
+      .clampScalar(0, s32, s32);
+
+  // Multiplication: no hardware support yet — lower to libcall (__mulsi3).
+  getActionDefinitionsBuilder(G_MUL)
+      .libcallFor({s32})
+      .clampScalar(0, s32, s32);
 
   // SEXT_INREG: lowered by framework to SHL+ASHR (our shift constant folding
   // then selects these to SHLi+SARi).

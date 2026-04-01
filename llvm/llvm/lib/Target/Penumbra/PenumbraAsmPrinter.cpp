@@ -55,6 +55,11 @@ static bool lowerOperand(const MachineOperand &MO, MCOperand &MCOp,
     MCOp = MCOperand::createExpr(
         MCSymbolRefExpr::create(MO.getMBB()->getSymbol(), AP.OutContext));
     return true;
+  case MachineOperand::MO_ExternalSymbol:
+    MCOp = MCOperand::createExpr(
+        MCSymbolRefExpr::create(AP.GetExternalSymbolSymbol(MO.getSymbolName()),
+                                AP.OutContext));
+    return true;
   case MachineOperand::MO_GlobalAddress: {
     const MCExpr *Expr =
         MCSymbolRefExpr::create(AP.getSymbol(MO.getGlobal()), AP.OutContext);

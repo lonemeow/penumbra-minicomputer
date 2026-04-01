@@ -3522,6 +3522,15 @@ def isDefaultLibcallArch : RuntimeLibcallPredicate<[{
 }]>;
 
 
+// ── Penumbra ────────────────────────────────────────────────────────────────
+def isPenumbra : RuntimeLibcallPredicate<
+  "TT.getArch() == Triple::penumbra">;
+
+def PenumbraSystemLibrary
+    : SystemRuntimeLibrary<isPenumbra,
+      (add DefaultRuntimeLibcallImpls)>;
+
+// ── Default (catch-all) ─────────────────────────────────────────────────────
 def isArch64Bit : RuntimeLibcallPredicate<[{TT.isArch64Bit()}]>;
 def LegacyDefaultSystemLibrary
     : SystemRuntimeLibrary<isDefaultLibcallArch,
