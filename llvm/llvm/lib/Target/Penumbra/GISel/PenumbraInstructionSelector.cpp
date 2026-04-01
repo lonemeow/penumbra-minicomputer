@@ -34,11 +34,16 @@ public:
   void setupGeneratedPerFunctionState(MachineFunction &) override {}
 
 private:
-  bool selectBinaryALU(MachineInstr &I, unsigned Opc) const;
-  bool selectConstant(MachineInstr &I) const;
-  bool selectLoad(MachineInstr &I) const;
-  bool selectStore(MachineInstr &I) const;
-  bool selectFrameIndex(MachineInstr &I) const;
+  bool selectBinaryALU(MachineInstr &I, MachineBasicBlock &MBB,
+                       MachineRegisterInfo &MRI, unsigned Opc) const;
+  bool selectConstant(MachineInstr &I, MachineBasicBlock &MBB,
+                      MachineRegisterInfo &MRI) const;
+  bool selectLoad(MachineInstr &I, MachineBasicBlock &MBB,
+                  MachineRegisterInfo &MRI) const;
+  bool selectStore(MachineInstr &I, MachineBasicBlock &MBB,
+                   MachineRegisterInfo &MRI) const;
+  bool selectFrameIndex(MachineInstr &I, MachineBasicBlock &MBB,
+                        MachineRegisterInfo &MRI) const;
 
   const PenumbraInstrInfo &TII;
   const PenumbraRegisterInfo &TRI;
@@ -59,28 +64,31 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
   if (!isPreISelGenericOpcode(I.getOpcode()))
     return true;
 
+  MachineBasicBlock &MBB = *I.getParent();
+  MachineRegisterInfo &MRI = MBB.getParent()->getRegInfo();
+
   using namespace TargetOpcode;
 
   switch (I.getOpcode()) {
   // ── Binary ALU ────────────────────────────────────────────────────────────
   // All map to 3-operand machine instructions with a tied dest=src1 constraint.
   // The register allocator inserts a COPY to satisfy the tie in SSA form.
-  case G_ADD:  return selectBinaryALU(I, Penumbra::ADD);
-  case G_SUB:  return selectBinaryALU(I, Penumbra::SUB);
-  case G_AND:  return selectBinaryALU(I, Penumbra::AND);
-  case G_OR:   return selectBinaryALU(I, Penumbra::OR);
-  case G_XOR:  return selectBinaryALU(I, Penumbra::XOR);
-  case G_SHL:  return selectBinaryALU(I, Penumbra::SHL);
-  case G_LSHR: return selectBinaryALU(I, Penumbra::SHR);
-  case G_ASHR: return selectBinaryALU(I, Penumbra::SAR);
+  case G_ADD:  return selectBinaryALU(I, MBB, MRI, Penumbra::ADD);
+  case G_SUB:  return selectBinaryALU(I, MBB, MRI, Penumbra::SUB);
+  case G_AND:  return selectBinaryALU(I, MBB, MRI, Penumbra::AND);
+  case G_OR:   return selectBinaryALU(I, MBB, MRI, Penumbra::OR);
+  case G_XOR:  return selectBinaryALU(I, MBB, MRI, Penumbra::XOR);
+  case G_SHL:  return selectBinaryALU(I, MBB, MRI, Penumbra::SHL);
+  case G_LSHR: return selectBinaryALU(I, MBB, MRI, Penumbra::SHR);
+  case G_ASHR: return selectBinaryALU(I, MBB, MRI, Penumbra::SAR);
 
   // ── Constants ─────────────────────────────────────────────────────────────
-  case G_CONSTANT: return selectConstant(I);
+  case G_CONSTANT: return selectConstant(I, MBB, MRI);
 
   // ── Memory ────────────────────────────────────────────────────────────────
-  case G_LOAD:        return selectLoad(I);
-  case G_STORE:       return selectStore(I);
-  case G_FRAME_INDEX: return selectFrameIndex(I);
+  case G_LOAD:        return selectLoad(I, MBB, MRI);
+  case G_STORE:       return selectStore(I, MBB, MRI);
+  case G_FRAME_INDEX: return selectFrameIndex(I, MBB, MRI);
 
   default:
     return false;
@@ -92,8 +100,9 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
 // Penumbra ALU has:              [def $Rd, use $Rd_in(tied), use $Rs]
 // We emit them directly; the RA satisfies the tied constraint by copying src1.
 bool PenumbraInstructionSelector::selectBinaryALU(MachineInstr &I,
+                                                   MachineBasicBlock &MBB,
+                                                   MachineRegisterInfo &MRI,
                                                    unsigned Opc) const {
-  MachineBasicBlock &MBB = *I.getParent();
   MachineInstr *NewI =
       BuildMI(MBB, I, I.getDebugLoc(), TII.get(Opc))
           .addDef(I.getOperand(0).getReg())  // $Rd  (output)
@@ -110,20 +119,12 @@ bool PenumbraInstructionSelector::selectBinaryALU(MachineInstr &I,
 //   LLIS Rd, #imm16 — load sign-extended 16-bit value into Rd
 //   LUI  Rd, #imm16 — load upper 16 bits: Rd = (Rd & 0xFFFF) | (imm16 << 16)
 //                     (tied: $Rd = $Rd_in — Rd is both input and output)
-bool PenumbraInstructionSelector::selectConstant(MachineInstr &I) const {
+bool PenumbraInstructionSelector::selectConstant(MachineInstr &I,
+                                                   MachineBasicBlock &MBB,
+                                                   MachineRegisterInfo &MRI) const {
   Register DstReg = I.getOperand(0).getReg();
   int64_t Val = I.getOperand(1).getCImm()->getSExtValue();
-  MachineBasicBlock &MBB = *I.getParent();
   const DebugLoc &DL = I.getDebugLoc();
-
-  // TODO(human): Emit the right instruction sequence to materialize Val into
-  // DstReg. Three cases:
-  //   1. Val fits in [0, 0xFFFF]   → single LLI  (zero-extend)
-  //   2. Val fits in [-32768, -1]  → single LLIS (sign-extend)
-  //   3. Full 32-bit               → LLI for low 16 bits, then LUI for high 16
-  //      LUI has constraint "$Rd = $Rd_in", so its operands are:
-  //      addDef(DstReg), addReg(DstReg), addImm((Val >> 16) & 0xFFFF)
-  // Hint: use int64_t comparisons for the range checks.
 
   if (Val >= 0 && Val <= 0xFFFF) {
     BuildMI(MBB, I, DL, TII.get(Penumbra::LLI))
@@ -162,72 +163,56 @@ bool PenumbraInstructionSelector::selectConstant(MachineInstr &I) const {
 //   STW:  (outs),           (ins GPR:$Rd, GPR:$Rb, i32imm:$offset)
 //           operand 0 = val   operand 1 = Rb (FI here)  operand 2 = offset
 
-bool PenumbraInstructionSelector::selectLoad(MachineInstr &I) const {
+bool PenumbraInstructionSelector::selectLoad(MachineInstr &I,
+                                              MachineBasicBlock &MBB,
+                                              MachineRegisterInfo &MRI) const {
   Register DstReg  = I.getOperand(0).getReg();
   Register AddrReg = I.getOperand(1).getReg();
-  MachineBasicBlock &MBB = *I.getParent();
-  MachineRegisterInfo &MRI = MBB.getParent()->getRegInfo();
   const DebugLoc &DL = I.getDebugLoc();
 
   if (MRI.getType(DstReg) != LLT::scalar(32))
     return false; // only s32 for now
 
-  MachineInstr *AddrDef = MRI.getVRegDef(AddrReg);
-  if (AddrDef && AddrDef->getOpcode() == TargetOpcode::G_FRAME_INDEX) {
-    // Fold frame index: LDW dst, [FI + 0]
-    int FI = AddrDef->getOperand(1).getIndex();
-    MachineInstr *NewI = BuildMI(MBB, I, DL, TII.get(Penumbra::LDW))
-        .addDef(DstReg)
-        .addFrameIndex(FI)
-        .addImm(0);
-    I.eraseFromParent();
-    return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
-  }
+  auto MIB = BuildMI(MBB, I, DL, TII.get(Penumbra::LDW)).addDef(DstReg);
 
-  // General pointer: LDW dst, [addr + 0]
-  MachineInstr *NewI = BuildMI(MBB, I, DL, TII.get(Penumbra::LDW))
-      .addDef(DstReg)
-      .addReg(AddrReg)
-      .addImm(0);
+  MachineInstr *AddrDef = MRI.getVRegDef(AddrReg);
+  if (AddrDef && AddrDef->getOpcode() == TargetOpcode::G_FRAME_INDEX)
+    MIB.addFrameIndex(AddrDef->getOperand(1).getIndex());
+  else
+    MIB.addReg(AddrReg);
+  MIB.addImm(0);
+
   I.eraseFromParent();
-  return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
+  return constrainSelectedInstRegOperands(*MIB, TII, TRI, RBI);
 }
 
-bool PenumbraInstructionSelector::selectStore(MachineInstr &I) const {
+bool PenumbraInstructionSelector::selectStore(MachineInstr &I,
+                                               MachineBasicBlock &MBB,
+                                               MachineRegisterInfo &MRI) const {
   Register ValReg  = I.getOperand(0).getReg();
   Register AddrReg = I.getOperand(1).getReg();
-  MachineBasicBlock &MBB = *I.getParent();
-  MachineRegisterInfo &MRI = MBB.getParent()->getRegInfo();
   const DebugLoc &DL = I.getDebugLoc();
 
   if (MRI.getType(ValReg) != LLT::scalar(32))
     return false;
 
-  MachineInstr *AddrDef = MRI.getVRegDef(AddrReg);
-  if (AddrDef && AddrDef->getOpcode() == TargetOpcode::G_FRAME_INDEX) {
-    // Fold frame index: STW val, [FI + 0]
-    int FI = AddrDef->getOperand(1).getIndex();
-    MachineInstr *NewI = BuildMI(MBB, I, DL, TII.get(Penumbra::STW))
-        .addReg(ValReg)
-        .addFrameIndex(FI)
-        .addImm(0);
-    I.eraseFromParent();
-    return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
-  }
+  auto MIB = BuildMI(MBB, I, DL, TII.get(Penumbra::STW)).addReg(ValReg);
 
-  // General pointer: STW val, [addr + 0]
-  MachineInstr *NewI = BuildMI(MBB, I, DL, TII.get(Penumbra::STW))
-      .addReg(ValReg)
-      .addReg(AddrReg)
-      .addImm(0);
+  MachineInstr *AddrDef = MRI.getVRegDef(AddrReg);
+  if (AddrDef && AddrDef->getOpcode() == TargetOpcode::G_FRAME_INDEX)
+    MIB.addFrameIndex(AddrDef->getOperand(1).getIndex());
+  else
+    MIB.addReg(AddrReg);
+  MIB.addImm(0);
+
   I.eraseFromParent();
-  return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
+  return constrainSelectedInstRegOperands(*MIB, TII, TRI, RBI);
 }
 
-bool PenumbraInstructionSelector::selectFrameIndex(MachineInstr &I) const {
+bool PenumbraInstructionSelector::selectFrameIndex(MachineInstr &I,
+                                                    MachineBasicBlock &MBB,
+                                                    MachineRegisterInfo &MRI) const {
   Register DstReg = I.getOperand(0).getReg();
-  MachineBasicBlock &MBB = *I.getParent();
-  MachineRegisterInfo &MRI = MBB.getParent()->getRegInfo();
   if (!MRI.use_nodbg_empty(DstReg))
     return false; // address escapes to non-memory use — unsupported
   I.eraseFromParent();

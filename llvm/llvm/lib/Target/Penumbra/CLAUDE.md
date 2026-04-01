@@ -12,7 +12,7 @@ This file provides LLVM backend context for work under `llvm/`. The root `CLAUDE
 ## Current State
 MC-layer assembler produces working ELF objects and raw hex. `llvm-mc -triple=penumbra` parses, matches, encodes, and emits all 4 instruction formats. Fixups for branch22 (PC-relative) and imm16 (absolute) are fully implemented — local labels resolve correctly. ELF relocations defined (R_PENUMBRA_32, R_PENUMBRA_BRANCH22, R_PENUMBRA_IMM16). Encodings verified bit-for-bit against `pasm.py`. Assembly syntax accepts ARM-style `#` prefix on immediates (optional).
 
-Codegen infrastructure in progress: CallingConv.td, RegisterInfo, FrameLowering header committed. Using GlobalISel (not SelectionDAG).
+GlobalISel codegen pipeline is functional: `llc -march=penumbra -global-isel` compiles LLVM IR to Penumbra assembly. Supports i32 ALU ops (add/sub/and/or/xor/shifts), constants (LLI/LLIS/LUI), s32 loads/stores with frame-index folding, and the full calling convention (R1-R4 args, R1 return). No SelectionDAG — GlobalISel only.
 
 ## File Map (`llvm/llvm/lib/Target/Penumbra/`)
 
@@ -23,8 +23,16 @@ Codegen infrastructure in progress: CallingConv.td, RegisterInfo, FrameLowering 
 | `PenumbraInstrInfo.td` | All 4 instruction formats (R/L/M/B) with bit-accurate encoding. Tied-operand constraints for 2-address ops. Custom `brtarget22` and `imm16op` operand types with encoder methods |
 | `PenumbraCallingConv.td` | CC_Penumbra (R1-R4 args, stack overflow), RetCC_Penumbra (R1), CSR_Penumbra (R5-R10) |
 | `PenumbraRegisterInfo.{h,cpp}` | Reserved regs (R0, R12, R14, R15), callee-saved, eliminateFrameIndex, getFrameRegister(R14) |
-| `PenumbraFrameLowering.h` | StackGrowsDown, Align(4), hasFPImpl()=false. Prologue/epilogue declared (no .cpp yet) |
-| `PenumbraTargetMachine.{h,cpp}` | Inherits `CodeGenTargetMachineImpl`, data layout `e-m:e-p:32:32-i32:32-n32-S32` |
+| `PenumbraFrameLowering.{h,cpp}` | StackGrowsDown, Align(4), hasFPImpl()=false. Prologue (SUBi SP) / epilogue (ADDi SP) |
+| `PenumbraISelLowering.{h,cpp}` | Minimal TargetLowering: addRegisterClass(i32, GPR_Allocatable), getCCAssignFn() |
+| `PenumbraSubtarget.{h,cpp}` | Central hub: owns InstrInfo, FrameLowering, TLInfo, and GlobalISel objects (CallLowering, InstructionSelector, LegalizerInfo, RegBankInfo) |
+| `PenumbraTargetMachine.{h,cpp}` | Inherits `CodeGenTargetMachineImpl`, data layout `e-m:e-p:32:32-i32:32-n32-S32`, PenumbraPassConfig (GlobalISel pipeline) |
+| `PenumbraAsmPrinter.cpp` | MachineInstr → MCInst emission. Expands RET pseudo to JMP R13, handles COPY and stack pseudos |
+| `GISel/PenumbraCallLowering.{h,cpp}` | lowerFormalArguments (R1-R4 → vregs), lowerReturn (vreg → R1 + RET), lowerCall (stub) |
+| `GISel/PenumbraLegalizerInfo.{h,cpp}` | Legal ops: G_ADD/SUB/AND/OR/XOR/SHL/SHR/SAR on s32, G_LOAD/STORE s32, G_CONSTANT s32/p0, G_FRAME_INDEX p0 |
+| `GISel/PenumbraRegisterBankInfo.{h,cpp}` | Single GPR bank covering all 16 registers. Maps all ops to GPR |
+| `GISel/PenumbraRegisterBanks.td` | `def GPRRegBank : RegisterBank<"GPRBank", [GPR]>` |
+| `GISel/PenumbraInstructionSelector.cpp` | Manual select(): ALU ops, G_CONSTANT (LLI/LLIS/LUI), G_LOAD/G_STORE (frame-index folding into LDW/STW), G_FRAME_INDEX |
 | `MCTargetDesc/PenumbraMCAsmInfo.{h,cpp}` | ELF-based, little-endian, `;` comments |
 | `MCTargetDesc/PenumbraMCTargetDesc.{h,cpp}` | Registers all MC components |
 | `MCTargetDesc/PenumbraInstPrinter.{h,cpp}` | MCInst → assembly text |
