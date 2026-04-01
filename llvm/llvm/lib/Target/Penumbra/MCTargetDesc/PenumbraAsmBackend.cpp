@@ -76,9 +76,10 @@ PenumbraAsmBackend::getFixupKindInfo(MCFixupKind Kind) const {
   return Infos[Kind - FirstTargetFixupKind];
 }
 
-void PenumbraAsmBackend::applyFixup(const MCFragment &, const MCFixup &Fixup,
+void PenumbraAsmBackend::applyFixup(const MCFragment &F, const MCFixup &Fixup,
                                     const MCValue &Target, uint8_t *Data,
                                     uint64_t Value, bool IsResolved) {
+  maybeAddReloc(F, Fixup, Target, Value, IsResolved);
   if (!Value)
     return; // Nothing to patch.
 
