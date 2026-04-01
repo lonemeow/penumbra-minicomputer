@@ -50,20 +50,30 @@ The architecture is fully specified in `doc/`. Key specs:
 - `make sim MOD=<name>` — build & run a module's Verilator testbench
 - `make sim MOD=machine_sim TB=<tb> PROG=<prog>` — run specific testbench with specific program. Auto-assembles `.s`/`.uasm` into hex.
 - `make test` — run all `hw/sim/programs/test_*.s` programs; reports pass/fail summary
-- `make simulate` — interactive boot ROM with terminal I/O via Docker (`-it`)
+- `make simulate` — build C boot ROM via clang pipeline, run interactive simulator with terminal I/O via Docker (`-it`). Override LLVM location: `make simulate LLVM_PREFIX=/path/to/llvm-build`
 - `make wave MOD=<name>` — open VCD waveform in GTKWave
 - `make clean` — remove build artifacts
 - All simulation runs via Docker — no host install needed. Build artifacts in `build/` (gitignored).
 - **Important:** `rm -rf build/<mod>.verilator build/V<mod>` if you suspect stale binaries (WSL2 stale mtimes)
 
+### Boot ROM Build Pipeline (`make simulate`)
+```
+hw/rom/boot_rom.c  →  clang -c  →  boot_rom.o  ─┐
+hw/rom/crt0.s      →  llvm-mc   →  crt0.o       ├→ ld.lld (rom.ld) → boot_rom.elf → objcopy → bin2hex → program.hex
+hw/rom/rom.ld  ────────────────────────────────────┘
+```
+
 ## Current Status
-The CPU is fully functional in simulation: all RTL modules implemented and tested, CPU runs real programs through the full CPU → MMU → split I/D cache → memory path, booting from ROM at `0xFFFF_E000`. Eight exception sources (IRQ, MMU faults, alignment, bus fault, BREAK, SYSCALL, privilege, illegal) are fully wired with MIPS/68k-style vector dispatch. The LLVM MC-layer assembler produces working ELF objects and raw hex, verified bit-for-bit against `pasm.py`. GlobalISel codegen is functional: `llc -march=penumbra -global-isel` compiles LLVM IR to assembly (i32 ALU, constants, s32 load/store with frame-index folding, calling convention, control flow via CMP+Bcc/B/PHI, G_SELECT via branch diamond). Clang integration is wired: `clang --target=penumbra-unknown-none -S` compiles C to Penumbra assembly (GlobalISel is the default; `-O0` works, `-O1+` needs more legalization rules like G_SMAX).
+The CPU is fully functional in simulation: all RTL modules implemented and tested, CPU runs real programs through the full CPU → MMU → split I/D cache → memory path, booting from ROM at `0xFFFF_E000`. Eight exception sources (IRQ, MMU faults, alignment, bus fault, BREAK, SYSCALL, privilege, illegal) are fully wired with MIPS/68k-style vector dispatch.
+
+**LLVM toolchain is end-to-end functional.** The boot ROM is compiled from C using clang, linked with lld, and runs on the simulated CPU. Full pipeline: `clang -c` → `ld.lld` → `llvm-objcopy` → `bin2hex.py` → simulator. MC-layer assembler produces working ELF objects with all 6 relocation types (NONE, 32, BRANCH22, IMM16, LO16, HI16). Assembly pseudo-instructions LI, LA, NOP, RET expand in the AsmParser. GlobalISel codegen handles i32 ALU, constants, global addresses (LLI+LUI with lo16/hi16 relocations), sub-word load/store (LDB/LDH/LDW, STB/STH/STW), pointer arithmetic, calling convention, control flow, G_SELECT, extensions/truncation, INTTOPTR/PTRTOINT. `-O0` works; `-O1+` needs more legalization rules (G_SMAX, etc.).
 
 ## Software Tools
+- **LLVM toolchain** (`build/llvm/bin/`, override with `LLVM_PREFIX`): clang (C compiler), llvm-mc (assembler), ld.lld (linker), llvm-objcopy. Target triple: `penumbra-unknown-none`. See `llvm/llvm/lib/Target/Penumbra/CLAUDE.md` for backend details.
 - **Microcode assembler** (`hw/tools/uasm.py`): Symbolic microcode → $readmemh hex. Run: `python3 hw/tools/uasm.py input.uasm -o microcode.hex`
-- **ISA assembler** (`sw/tools/pasm.py`): Two-pass assembler, all 4 formats, labels, pseudo-ops (NOP, RET, LA, LI), `.equ`, data directives (`.word`, `.byte`, `.asciz`). Run: `python3 sw/tools/pasm.py --org 0xFFFFE000 input.s -o program.hex`
-- **Binary-to-hex converter** (`sw/tools/bin2hex.py`): Flat LE binary → $readmemh hex. Pipeline: `llvm-mc → llvm-objcopy -O binary → bin2hex.py`
-- Makefile auto-assembles `.s`/`.uasm` into `program.hex`/`microcode.hex` for `$readmemh`; hex files are gitignored.
+- **ISA assembler** (`sw/tools/pasm.py`): Two-pass assembler, all 4 formats, labels, pseudo-ops (NOP, RET, LA, LI), `.equ`, data directives. Still used by `make test` for hardware test programs. Run: `python3 sw/tools/pasm.py --org 0xFFFFE000 input.s -o program.hex`
+- **Binary-to-hex converter** (`sw/tools/bin2hex.py`): Flat LE binary → $readmemh hex. Used in the clang pipeline.
+- Hex files are gitignored. Makefile auto-builds them from sources.
 
 ## Test Convention
 - **Program runner** (`hw/sim/tb_cpu_prog.cpp`): Runs program until BREAK (500000 cycle limit), checks R1 for pass/fail.
@@ -73,9 +83,8 @@ The CPU is fully functional in simulation: all RTL modules implemented and teste
 - **ROM page mapping (MMU tests):** TLB_INDEX=30, TLB_VPN=0x0FFFFE00, TLB_PTE=0xFFFFE0B9.
 
 ## Next Steps (in priority order)
-1. **LLVM codegen** — GlobalISel pipeline: InstrInfo, FrameLowering, ISelLowering, Subtarget, then GISel components (CallLowering, Legalizer, RegBankInfo, InstructionSelector, AsmPrinter)
-2. **LLVM MC-layer** — Register aliases (sp, lr, pc, zero, tp), WRSYS/RDSYS encoding, pseudo-instructions (NOP, RET, LA, LI)
-3. **Boot ROM monitor** — S-record upload for loading programs over UART
-4. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick
-5. **Interrupt controller** — Multiple devices with priority encoding
-6. **Memory subsystem** — SDRAM controller, bus interface
+1. **LLVM codegen hardening** — `-O1+` support (G_SMAX/G_SMIN legalization, MUL/DIV libcalls or traps), `%lo16()`/`%hi16()` AsmParser parsing (assembly text roundtrip), register aliases (sp, lr, pc, zero, tp), WRSYS/RDSYS encoding
+2. **Boot ROM monitor** — Rewrite UART I/O and command loop in C (d/w/g commands), S-record upload for loading programs over UART
+3. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick
+4. **Interrupt controller** — Multiple devices with priority encoding
+5. **Memory subsystem** — SDRAM controller, bus interface

@@ -3,18 +3,22 @@
 This file provides LLVM backend context for work under `llvm/`. The root `CLAUDE.md` has project-wide conventions.
 
 ## Build
-- Build from `llvm/llvm/`, build dir `build/llvm/`
-- `cmake -G Ninja -DLLVM_TARGETS_TO_BUILD=Penumbra`
+- Build from `llvm/llvm/`, build dir `build/llvm/` (overridable via `LLVM_PREFIX` in Makefile)
+- `cmake -G Ninja -DLLVM_TARGETS_TO_BUILD=Penumbra -DLLVM_ENABLE_PROJECTS="clang;lld" -DLLVM_USE_SPLIT_DWARF=ON`
 - Uses ccache and Ninja
 - Use `-j2` for link steps (debug builds OOM at full parallelism on 15 GB WSL2)
 - Target triple: `penumbra-unknown-none` (eventually `penumbra-unknown-netbsd`)
 
 ## Current State
-MC-layer assembler produces working ELF objects and raw hex. `llvm-mc -triple=penumbra` parses, matches, encodes, and emits all 4 instruction formats. Fixups for branch22 (PC-relative) and imm16 (absolute) are fully implemented — local labels resolve correctly. ELF relocations defined (R_PENUMBRA_32, R_PENUMBRA_BRANCH22, R_PENUMBRA_IMM16). Encodings verified bit-for-bit against `pasm.py`. Assembly syntax accepts ARM-style `#` prefix on immediates (optional).
+**End-to-end functional.** C boot ROM compiles with clang, links with lld, and runs on the simulated Penumbra CPU (prints "Penumbra/1" via UART).
 
-GlobalISel codegen pipeline is functional: `llc -march=penumbra` compiles LLVM IR to Penumbra assembly (GlobalISel is the default). Supports i32 ALU ops (add/sub/and/or/xor/shifts), constants (LLI/LLIS/LUI), s32 loads/stores with frame-index folding, full calling convention (R1-R4 args, R1 return), control flow (G_ICMP+G_BRCOND folded to CMP+Bcc, G_BR, G_PHI), and G_SELECT (conditional select via branch diamond, with G_ICMP fold into CMP+Bcc). No SelectionDAG — GlobalISel only.
+**MC-layer assembler:** `llvm-mc -triple=penumbra` encodes all 4 instruction formats. Six fixup/relocation types: branch22, imm16, lo16, hi16, 32, none. Pseudo-instructions LI, LA, NOP, RET expanded in the AsmParser. `%lo16()`/`%hi16()` MCSpecifierExpr modifiers for assembly output (not yet parseable from text — use `-c` instead of `-S` + `llvm-mc`). Encodings verified bit-for-bit against `pasm.py`.
 
-Clang driver is wired: `clang --target=penumbra-unknown-none -S file.c` compiles C to Penumbra assembly. Works at `-O0`; `-O1+` triggers unlegalized ops (G_SMAX, etc.) that need more rules. G_ZEXT/G_SEXT/G_ANYEXT/G_TRUNC/G_SEXT_INREG are handled. Shift-by-constant folds to SHLi/SHRi/SARi.
+**GlobalISel codegen:** i32 ALU (add/sub/and/or/xor/shifts with constant folding to SHLi/SHRi/SARi), constants (LLI/LLIS/LUI), global addresses (G_GLOBAL_VALUE → LLI+LUI with lo16/hi16), sub-word load/store (LDB/LDH/LDW, STB/STH/STW selected by memory operand size, frame-index folding), pointer arithmetic (G_PTR_ADD → ADD), type casts (G_INTTOPTR/G_PTRTOINT → COPY), extensions (G_ZEXT/G_SEXT/G_ANYEXT/G_TRUNC/G_SEXT_INREG), calling convention (R1-R4 args, R1 return), control flow (G_ICMP+G_BRCOND → CMP+Bcc, G_BR, G_PHI), G_SELECT (ICMP fold into SELECT_CC_GPR). No SelectionDAG — GlobalISel only.
+
+**Clang:** `clang --target=penumbra-unknown-none -c file.c` works at `-O0`. `-O1+` triggers unlegalized ops (G_SMAX, etc.) that need more rules.
+
+**lld:** `ld.lld -T rom.ld` links Penumbra ELF objects. Supports all 6 relocation types. EM_PENUMBRA (0xF0DA) defined in central `llvm/BinaryFormat/ELF.h`.
 
 ## File Map (`llvm/llvm/lib/Target/Penumbra/`)
 
@@ -29,20 +33,20 @@ Clang driver is wired: `clang --target=penumbra-unknown-none -S file.c` compiles
 | `PenumbraISelLowering.{h,cpp}` | TargetLowering: addRegisterClass(i32, GPR_Allocatable), getCCAssignFn(), EmitInstrWithCustomInserter (SELECT_GPR/SELECT_CC_GPR diamond expansion) |
 | `PenumbraSubtarget.{h,cpp}` | Central hub: owns InstrInfo, FrameLowering, TLInfo, and GlobalISel objects (CallLowering, InstructionSelector, LegalizerInfo, RegBankInfo) |
 | `PenumbraTargetMachine.{h,cpp}` | Inherits `CodeGenTargetMachineImpl`, data layout `e-m:e-p:32:32-i32:32-i64:64-n32-S32`, PenumbraPassConfig (GlobalISel pipeline), `setGlobalISel(true)` |
-| `PenumbraAsmPrinter.cpp` | MachineInstr → MCInst emission. Expands RET pseudo to JMP R13, handles COPY and stack pseudos |
+| `PenumbraAsmPrinter.cpp` | MachineInstr → MCInst emission. Expands RET pseudo to JMP R13, handles COPY and stack pseudos. Wraps MO_GlobalAddress with lo16/hi16 MCSpecifierExpr based on target flags |
 | `GISel/PenumbraCallLowering.{h,cpp}` | lowerFormalArguments (R1-R4 → vregs), lowerReturn (vreg → R1 + RET), lowerCall (stub) |
-| `GISel/PenumbraLegalizerInfo.{h,cpp}` | Legal ops: G_ADD/SUB/AND/OR/XOR/SHL/SHR/SAR on s32, G_LOAD/STORE s32, G_CONSTANT s32/p0, G_FRAME_INDEX p0, G_ICMP {s1,s32}, G_SELECT {s32/p0,s1}, G_PHI, G_BRCOND |
+| `GISel/PenumbraLegalizerInfo.{h,cpp}` | Legal ops: G_ADD/SUB/AND/OR/XOR/SHL/SHR/SAR on s32, G_LOAD/STORE s32/s16/s8, G_CONSTANT s32/p0, G_FRAME_INDEX/G_GLOBAL_VALUE p0, G_PTR_ADD {p0,s32}, G_INTTOPTR/G_PTRTOINT {p0,s32}, G_ICMP {s1,s32}, G_SELECT {s32/p0,s1}, G_PHI, G_BRCOND, G_ZEXT/G_SEXT/G_ANYEXT/G_TRUNC, G_SEXT_INREG (lowered) |
 | `GISel/PenumbraRegisterBankInfo.{h,cpp}` | Single GPR bank covering all 16 registers. Maps all ops to GPR |
 | `GISel/PenumbraRegisterBanks.td` | `def GPRRegBank : RegisterBank<"GPRBank", [GPR]>` |
-| `GISel/PenumbraInstructionSelector.cpp` | Manual select(): ALU ops, G_CONSTANT (LLI/LLIS/LUI), G_LOAD/G_STORE (frame-index folding into LDW/STW), G_FRAME_INDEX, G_ICMP+G_BRCOND fold (CMP+Bcc), G_BR, G_PHI, G_SELECT (ICMP fold into SELECT_CC_GPR, fallback SELECT_GPR), standalone G_ICMP (0/1 via SELECT_CC_GPR), COPY constraint |
-| `MCTargetDesc/PenumbraMCAsmInfo.{h,cpp}` | ELF-based, little-endian, `;` comments |
+| `GISel/PenumbraInstructionSelector.cpp` | Manual select(): ALU ops, G_CONSTANT (LLI/LLIS/LUI), G_GLOBAL_VALUE (LLI+LUI with lo16/hi16 target flags), G_LOAD/G_STORE (LDB/LDH/LDW and STB/STH/STW by memop size, frame-index folding), G_PTR_ADD (→ADD), G_INTTOPTR/G_PTRTOINT (→COPY), G_FRAME_INDEX, G_ICMP+G_BRCOND fold (CMP+Bcc), G_BR, G_PHI, G_SELECT, G_ZEXT/G_SEXT, COPY constraint |
 | `MCTargetDesc/PenumbraMCTargetDesc.{h,cpp}` | Registers all MC components |
 | `MCTargetDesc/PenumbraInstPrinter.{h,cpp}` | MCInst → assembly text |
 | `MCTargetDesc/PenumbraMCCodeEmitter.cpp` | MCInst → binary bytes. Custom `encodeBranchTarget` and `encodeImm16` create fixups |
-| `MCTargetDesc/PenumbraAsmBackend.cpp` | Fixup resolution, NOP emission (`0x00000000` = ADD R0,R0), ELF object writer |
-| `MCTargetDesc/PenumbraELFObjectWriter.cpp` | ELF relocation mapping (`EM_PENUMBRA = 0xF0DA`) |
-| `MCTargetDesc/PenumbraFixupKinds.h` | `fixup_penumbra_branch22` (bits [25:4]), `fixup_penumbra_imm16` (bits [15:0]) |
-| `AsmParser/PenumbraAsmParser.cpp` | Assembly text → MCInst. Registers, immediates (optional `#`), memory operands |
+| `MCTargetDesc/PenumbraAsmBackend.cpp` | Fixup resolution (branch22, imm16, lo16, hi16), `maybeAddReloc` for ELF relocations, NOP emission (`0x00000000` = ADD R0,R0) |
+| `MCTargetDesc/PenumbraELFObjectWriter.cpp` | ELF relocation mapping. Uses `EM_PENUMBRA` from `llvm/BinaryFormat/ELF.h` |
+| `MCTargetDesc/PenumbraFixupKinds.h` | Fixup kinds (branch22, imm16, lo16, hi16) and MCSpecifierExpr specifier values (S_Lo16, S_Hi16) |
+| `MCTargetDesc/PenumbraMCAsmInfo.{h,cpp}` | ELF-based, little-endian, `;` comments. `printSpecifierExpr` for `%lo16()`/`%hi16()` output |
+| `AsmParser/PenumbraAsmParser.cpp` | Assembly text → MCInst. Pseudo-instruction expansion: LI (constant or symbol → LLI/LLIS/LUI), LA (symbol → LLI+LUI with lo16/hi16), NOP (→ ADD R0,R0), RET (→ JMP R13). Registers, immediates (optional `#`), memory operands |
 | `TargetInfo/PenumbraTargetInfo.{h,cpp}` | Target registration (`Triple::penumbra`) |
 
 ## Triple Integration
@@ -51,7 +55,24 @@ Clang driver is wired: `clang --target=penumbra-unknown-none -S file.c` compiles
 ## Hex Output Pipeline
 `llvm-mc` → ELF object → `llvm-objcopy -O binary` → `bin2hex.py` → `$readmemh` hex. Same approach as ARM/RISC-V embedded. `bin2hex.py` (`sw/tools/bin2hex.py`) reads flat LE binary, emits one 32-bit word per line in uppercase hex.
 
+## lld Support (`llvm/lld/ELF/Arch/Penumbra.cpp`)
+Minimal ELF linker target. Handles all 6 relocation types. Registered via `EM_PENUMBRA` (0xF0DA) in `llvm/BinaryFormat/ELF.h`. Emulation string `elf32penumbra`, output format `elf32-penumbra`. Triple mapping for `Triple::penumbra` in `InputFiles.cpp`.
+
+## ELF Relocations
+| Type | Value | Description | Field |
+|------|-------|-------------|-------|
+| `R_PENUMBRA_NONE` | 0 | No relocation | — |
+| `R_PENUMBRA_32` | 1 | Absolute 32-bit (.word symbol) | Full word |
+| `R_PENUMBRA_BRANCH22` | 2 | PC-relative 22-bit word offset | bits [25:4] |
+| `R_PENUMBRA_IMM16` | 3 | 16-bit immediate | bits [15:0] |
+| `R_PENUMBRA_LO16` | 4 | Low 16 bits of absolute address | bits [15:0] |
+| `R_PENUMBRA_HI16` | 5 | High 16 bits of absolute address | bits [15:0] |
+
 ## Key Implementation Notes
 - **applyFixup Data pointer:** Pre-positioned at fixup location — do NOT add `Fixup.getOffset()`. Use `Data[i]` directly.
+- **maybeAddReloc:** Must be called at the start of `applyFixup()` to generate ELF relocations for unresolved symbols. Without it, all symbol references silently resolve to zero.
 - **PC-relativity:** Set on `MCFixup` itself (`PCRel=true` in `MCFixup::create`), not in `MCFixupKindInfo`.
 - **Destructive 2-operand ops:** TableGen patterns use tied-operand constraints. Register allocator handles via COPY insertion.
+- **Global address materialization:** Instruction selector emits LLI+LUI with target flags (`S_Lo16`/`S_Hi16`). AsmPrinter converts flags to `MCSpecifierExpr` wrappers. MCCodeEmitter maps specifiers to `fixup_penumbra_lo16`/`fixup_penumbra_hi16`.
+- **Assembly text roundtrip:** `%lo16()`/`%hi16()` syntax is emitted but **not yet parseable** by the AsmParser. Use `clang -c` (direct to object) instead of `clang -S` + `llvm-mc`.
+- **Register class constraining:** All instruction selector helpers must call `constrainSelectedInstRegOperands()` — vregs left with only a bank assignment (no regclass) cause assertions after selection.
