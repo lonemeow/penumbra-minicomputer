@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "MCTargetDesc/PenumbraFixupKinds.h"
 #include "MCTargetDesc/PenumbraMCTargetDesc.h"
 #include "PenumbraRegisterBankInfo.h"
 #include "PenumbraSubtarget.h"
@@ -59,6 +60,8 @@ private:
                   MachineRegisterInfo &MRI) const;
   bool selectSExt(MachineInstr &I, MachineBasicBlock &MBB,
                   MachineRegisterInfo &MRI) const;
+  bool selectGlobalValue(MachineInstr &I, MachineBasicBlock &MBB,
+                         MachineRegisterInfo &MRI) const;
 
   const PenumbraInstrInfo &TII;
   const PenumbraRegisterInfo &TRI;
@@ -118,8 +121,12 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
   case G_LSHR: return selectShift(I, MBB, MRI, Penumbra::SHR, Penumbra::SHRi);
   case G_ASHR: return selectShift(I, MBB, MRI, Penumbra::SAR, Penumbra::SARi);
 
-  // ── Constants ─────────────────────────────────────────────────────────────
-  case G_CONSTANT: return selectConstant(I, MBB, MRI);
+  // ── Constants / Addresses ─────────────────────────────────────────────────
+  case G_CONSTANT:     return selectConstant(I, MBB, MRI);
+  case G_GLOBAL_VALUE: return selectGlobalValue(I, MBB, MRI);
+
+  // ── Pointer arithmetic ────────────────────────────────────────────────────
+  case G_PTR_ADD: return selectBinaryALU(I, MBB, MRI, Penumbra::ADD);
 
   // ── Memory ────────────────────────────────────────────────────────────────
   case G_LOAD:        return selectLoad(I, MBB, MRI);
@@ -133,8 +140,11 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
   // ── Extensions / Truncation ─────────────────────────────────────────────────
   case G_ANYEXT:
   case G_TRUNC:
+  case G_INTTOPTR:
+  case G_PTRTOINT:
     I.setDesc(TII.get(TargetOpcode::COPY));
-    return true;
+    return RBI.constrainGenericRegister(
+        I.getOperand(0).getReg(), Penumbra::GPR_AllocatableRegClass, MRI);
 
   case G_ZEXT: return selectZExt(I, MBB, MRI);
   case G_SEXT: return selectSExt(I, MBB, MRI);
@@ -208,21 +218,25 @@ bool PenumbraInstructionSelector::selectConstant(MachineInstr &I,
   const DebugLoc &DL = I.getDebugLoc();
 
   if (Val >= 0 && Val <= 0xFFFF) {
-    BuildMI(MBB, I, DL, TII.get(Penumbra::LLI))
+    auto MI = BuildMI(MBB, I, DL, TII.get(Penumbra::LLI))
         .addDef(DstReg)
         .addImm(Val);
+    constrainSelectedInstRegOperands(*MI, TII, TRI, RBI);
   } else if (Val < 0 && Val >= -32768) {
-    BuildMI(MBB, I, DL, TII.get(Penumbra::LLIS))
+    auto MI = BuildMI(MBB, I, DL, TII.get(Penumbra::LLIS))
         .addDef(DstReg)
         .addImm(Val);
+    constrainSelectedInstRegOperands(*MI, TII, TRI, RBI);
   } else {
-    BuildMI(MBB, I, DL, TII.get(Penumbra::LLI))
+    auto MI1 = BuildMI(MBB, I, DL, TII.get(Penumbra::LLI))
         .addDef(DstReg)
         .addImm(Val & 0xFFFF);
-    BuildMI(MBB, I, DL, TII.get(Penumbra::LUI))
+    constrainSelectedInstRegOperands(*MI1, TII, TRI, RBI);
+    auto MI2 = BuildMI(MBB, I, DL, TII.get(Penumbra::LUI))
         .addDef(DstReg)
         .addReg(DstReg)
         .addImm((Val >> 16) & 0xFFFF);
+    constrainSelectedInstRegOperands(*MI2, TII, TRI, RBI);
   }
 
   I.eraseFromParent();
@@ -251,10 +265,21 @@ bool PenumbraInstructionSelector::selectLoad(MachineInstr &I,
   Register AddrReg = I.getOperand(1).getReg();
   const DebugLoc &DL = I.getDebugLoc();
 
-  if (MRI.getType(DstReg) != LLT::scalar(32))
-    return false; // only s32 for now
+  LLT DstTy = MRI.getType(DstReg);
+  if (DstTy != LLT::scalar(32) && DstTy != LLT::pointer(0, 32))
+    return false; // only s32/p0 for now
 
-  auto MIB = BuildMI(MBB, I, DL, TII.get(Penumbra::LDW)).addDef(DstReg);
+  // Select LDW/LDH/LDB based on memory operand size.
+  unsigned MemSize = I.memoperands().front()->getSize().getValue();
+  unsigned Opc;
+  switch (MemSize) {
+  case 4: Opc = Penumbra::LDW; break;
+  case 2: Opc = Penumbra::LDH; break;
+  case 1: Opc = Penumbra::LDB; break;
+  default: return false;
+  }
+
+  auto MIB = BuildMI(MBB, I, DL, TII.get(Opc)).addDef(DstReg);
 
   MachineInstr *AddrDef = MRI.getVRegDef(AddrReg);
   if (AddrDef && AddrDef->getOpcode() == TargetOpcode::G_FRAME_INDEX)
@@ -274,10 +299,21 @@ bool PenumbraInstructionSelector::selectStore(MachineInstr &I,
   Register AddrReg = I.getOperand(1).getReg();
   const DebugLoc &DL = I.getDebugLoc();
 
-  if (MRI.getType(ValReg) != LLT::scalar(32))
+  LLT ValTy = MRI.getType(ValReg);
+  if (ValTy != LLT::scalar(32) && ValTy != LLT::pointer(0, 32))
     return false;
 
-  auto MIB = BuildMI(MBB, I, DL, TII.get(Penumbra::STW)).addReg(ValReg);
+  // Select STW/STH/STB based on memory operand size.
+  unsigned MemSize = I.memoperands().front()->getSize().getValue();
+  unsigned StOpc;
+  switch (MemSize) {
+  case 4: StOpc = Penumbra::STW; break;
+  case 2: StOpc = Penumbra::STH; break;
+  case 1: StOpc = Penumbra::STB; break;
+  default: return false;
+  }
+
+  auto MIB = BuildMI(MBB, I, DL, TII.get(StOpc)).addReg(ValReg);
 
   MachineInstr *AddrDef = MRI.getVRegDef(AddrReg);
   if (AddrDef && AddrDef->getOpcode() == TargetOpcode::G_FRAME_INDEX)
@@ -519,6 +555,33 @@ bool PenumbraInstructionSelector::selectSExt(MachineInstr &I,
 
   I.eraseFromParent();
   return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
+}
+
+// ── G_GLOBAL_VALUE (global address materialization) ──────────────────────────
+// Emit LLI+LUI pair with lo16/hi16 target flags on the global address operand.
+// The AsmPrinter converts these flags into MCSpecifierExpr wrappers.
+bool PenumbraInstructionSelector::selectGlobalValue(MachineInstr &I,
+                                                     MachineBasicBlock &MBB,
+                                                     MachineRegisterInfo &MRI) const {
+  Register DstReg = I.getOperand(0).getReg();
+  const GlobalValue *GV = I.getOperand(1).getGlobal();
+  int64_t Offset = I.getOperand(1).getOffset();
+  const DebugLoc &DL = I.getDebugLoc();
+
+  // LLI Rd, :lo16:symbol
+  auto LLIInst = BuildMI(MBB, I, DL, TII.get(Penumbra::LLI))
+      .addDef(DstReg)
+      .addGlobalAddress(GV, Offset, Penumbra::S_Lo16);
+  constrainSelectedInstRegOperands(*LLIInst, TII, TRI, RBI);
+  // LUI Rd, Rd, :hi16:symbol
+  auto LUIInst = BuildMI(MBB, I, DL, TII.get(Penumbra::LUI))
+      .addDef(DstReg)
+      .addReg(DstReg)
+      .addGlobalAddress(GV, Offset, Penumbra::S_Hi16);
+  constrainSelectedInstRegOperands(*LUIInst, TII, TRI, RBI);
+
+  I.eraseFromParent();
+  return true;
 }
 
 // ── Factory function ──────────────────────────────────────────────────────────

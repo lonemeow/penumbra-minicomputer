@@ -4,10 +4,12 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "MCTargetDesc/PenumbraFixupKinds.h"
 #include "MCTargetDesc/PenumbraMCTargetDesc.h"
 #include "TargetInfo/PenumbraTargetInfo.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/MachineInstr.h"
+#include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbolELF.h"
@@ -53,10 +55,19 @@ static bool lowerOperand(const MachineOperand &MO, MCOperand &MCOp,
     MCOp = MCOperand::createExpr(
         MCSymbolRefExpr::create(MO.getMBB()->getSymbol(), AP.OutContext));
     return true;
-  case MachineOperand::MO_GlobalAddress:
-    MCOp = MCOperand::createExpr(
-        MCSymbolRefExpr::create(AP.getSymbol(MO.getGlobal()), AP.OutContext));
+  case MachineOperand::MO_GlobalAddress: {
+    const MCExpr *Expr =
+        MCSymbolRefExpr::create(AP.getSymbol(MO.getGlobal()), AP.OutContext);
+    if (MO.getOffset())
+      Expr = MCBinaryExpr::createAdd(
+          Expr, MCConstantExpr::create(MO.getOffset(), AP.OutContext),
+          AP.OutContext);
+    unsigned TF = MO.getTargetFlags();
+    if (TF == Penumbra::S_Lo16 || TF == Penumbra::S_Hi16)
+      Expr = MCSpecifierExpr::create(Expr, TF, AP.OutContext);
+    MCOp = MCOperand::createExpr(Expr);
     return true;
+  }
   default:
     return false;
   }
