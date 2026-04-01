@@ -144,7 +144,7 @@ simulate:
 		-o ../Vmachine_sim_interactive \
 		$(PKG_SV) $$(find hw/rtl -name 'machine_sim.sv') hw/sim/tb_interactive.cpp
 	@rm -f program.hex
-	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX)
+	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX) CFLAGS=$(CFLAGS)
 	@$(UASM) hw/microcode/microcode.uasm -o microcode.hex
 	@$(DOCKER_RUN_IT) --entrypoint ./$(BUILD_DIR)/Vmachine_sim_interactive $(DOCKER_IMAGE)
 

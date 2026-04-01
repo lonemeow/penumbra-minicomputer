@@ -24,7 +24,7 @@ LD       = $(LLVM_PREFIX)/bin/ld.lld
 OBJCOPY  = $(LLVM_PREFIX)/bin/llvm-objcopy
 BIN2HEX  = python3 $(ROOT)/sw/tools/bin2hex.py
 
-CFLAGS   = -O0 -MMD -MP
+CFLAGS   ?= -O0 -MMD -MP
 
 # ── Source discovery ──────────────────────────────────────────
 C_SRCS   := $(wildcard *.c)
@@ -39,24 +39,24 @@ OBJS     := $(ASM_OBJS) $(C_OBJS)
 all: $(OUT_HEX)
 
 $(OUT_HEX): $(BUILD)/boot_rom.bin
-	@$(BIN2HEX) $< -o $@
+	$(BIN2HEX) $< -o $@
 
 $(BUILD)/boot_rom.bin: $(BUILD)/boot_rom.elf
-	@$(OBJCOPY) -O binary $< $@
+	$(OBJCOPY) -O binary $< $@
 
 # Link: crt0 first (entry point), then remaining asm, then C objects.
 # Linker script places .text._start first regardless, but this keeps
 # the link order predictable.
 $(BUILD)/boot_rom.elf: $(OBJS) rom.ld
-	@$(LD) -T rom.ld $(BUILD)/crt0.o $(filter-out $(BUILD)/crt0.o,$(ASM_OBJS)) $(C_OBJS) -o $@
+	$(LD) -T rom.ld $(BUILD)/crt0.o $(filter-out $(BUILD)/crt0.o,$(ASM_OBJS)) $(C_OBJS) -o $@
 
 # Pattern rule: C → object
 $(BUILD)/%.o: %.c | $(BUILD)
-	@$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -c -o $@ $<
 
 # Pattern rule: assembly → object
 $(BUILD)/%.o: %.s | $(BUILD)
-	@$(MC) -filetype=obj $< -o $@
+	$(MC) -filetype=obj $< -o $@
 
 $(BUILD):
 	@mkdir -p $@

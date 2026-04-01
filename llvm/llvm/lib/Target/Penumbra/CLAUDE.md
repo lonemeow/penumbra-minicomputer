@@ -16,7 +16,7 @@ This file provides LLVM backend context for work under `llvm/`. The root `CLAUDE
 
 **GlobalISel codegen:** i32 ALU (add/sub/and/or/xor/shifts with constant folding to SHLi/SHRi/SARi), constants (LLI/LLIS/LUI), global addresses (G_GLOBAL_VALUE → LLI+LUI with lo16/hi16, refactored into shared `emitLoadSymbolAddr` helper), sub-word load/store (LDB/LDH/LDW, STB/STH/STW selected by memory operand size, frame-index folding into memory ops + LEAfi pseudo for escaped addresses), pointer arithmetic (G_PTR_ADD → ADD), type casts (G_INTTOPTR/G_PTRTOINT → COPY), extensions (G_ZEXT/G_SEXT/G_ANYEXT/G_TRUNC/G_SEXT_INREG), calling convention (R1-R4 args, R1 return, R13/LR callee-saved), control flow (G_ICMP+G_BRCOND → CMP+Bcc with pointer compare support, G_BR, G_PHI), G_SELECT (ICMP fold into SELECT_CC_GPR), jump tables (G_JUMP_TABLE + G_BRJT → SHLi+ADD+LDW+BRIND), MUL/DIV/REM → libcalls (__mulsi3/__udivsi3/__umodsi3/etc. via RuntimeLibcalls.td). No SelectionDAG — GlobalISel only.
 
-**Clang:** `clang --target=penumbra-unknown-none -c file.c` works at `-O0` and `-O1`. Boot ROM compiles and runs correctly at both levels. `-O2+` may trigger unlegalized ops (G_SMAX, etc.).
+**Clang:** `clang --target=penumbra-unknown-none -c file.c` works at `-O0` through `-O2`. Boot ROM compiles and runs correctly at all three levels. Higher levels or new code patterns may trigger unlegalized ops (G_SMAX, etc.).
 
 **lld:** `ld.lld -T rom.ld` links Penumbra ELF objects. Supports all 6 relocation types. EM_PENUMBRA (0xF0DA) defined in central `llvm/BinaryFormat/ELF.h`.
 
