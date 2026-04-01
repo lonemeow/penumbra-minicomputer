@@ -1,55 +1,146 @@
 # Penumbra Minicomputer
 
-A hobby project to design and build a vintage-style minicomputer implemented in FPGA, inspired by classic machines like the Data General Eclipse/MV series and the DEC VAX.
+A 32-bit RISC minicomputer designed from scratch and implemented on FPGA.
+Inspired by classic machines like the Data General Eclipse and DEC VAX, but
+with a clean load-store ISA.  The eventual goal is to run NetBSD and later
+build the design from discrete 74xx logic chips.
 
-## Project Goals
+## Status
 
-- Design a complete 32-bit minicomputer from the ground up, including CPU, MMU, DMA controllers, I/O buses, and peripherals
-- Implement a clean load-store, RISC-like ISA
-- Full MMU with virtual memory and memory protection
-- Learn hardware design across the entire machine, not just the CPU core
-- Eventually use lessons learned to build a second design from discrete 74xx logic on custom PCBs
+The CPU is fully functional in simulation.  A C boot ROM compiled with
+clang prints to UART and runs on the simulated CPU through the full
+pipeline: CPU core, MMU (software-managed TLB), split I/D cache, and
+memory-mapped I/O.
 
-## Architecture Overview
+**What works:**
+- All RTL modules implemented and tested (ALU, register file, sequencer,
+  datapath, MMU, TLB, cache, UART, bus)
+- 8 exception sources (IRQ, MMU faults, alignment, bus fault, BREAK,
+  SYSCALL, privilege, illegal instruction)
+- LLVM backend: clang compiles C, lld links, llvm-mc assembles
+- Boot ROM in C, compiled and linked via the LLVM toolchain
+- 30+ hardware test programs passing
 
-- **Word size:** 32-bit
-- **ISA style:** Load-store, RISC-like
-- **Memory management:** Full MMU with virtual memory, page-based protection
-- **Design philosophy:** Inspired by 1970s/80s minicomputers (DG Eclipse, DEC VAX) but with a clean, modern RISC sensibility
+## Prerequisites
 
-## Hardware Platform
+- **Docker** (for Verilator simulation — no host install needed)
+- **Python 3** (for assembler tools)
+- **CMake, Ninja, ccache** (for building LLVM)
+- **A C++ compiler** (g++ or clang++ for building LLVM itself)
 
-- **FPGA board:** [Radiona ULX3S](https://radiona.org/ulx3s/) (Lattice ECP5 FPGA)
-- **Toolchain:** Open-source (Yosys, nextpnr, Project Trellis)
+About 15 GB RAM recommended for LLVM debug builds (uses split DWARF to
+reduce memory pressure).
+
+## Building
+
+### 1. Clone
+
+```sh
+git clone --recurse-submodules https://github.com/<user>/penumbra-minicomputer.git
+cd penumbra-minicomputer
+```
+
+### 2. Build the LLVM toolchain
+
+This builds a custom clang, lld, llvm-mc, and llvm-objcopy with the
+Penumbra backend.  Takes 10-30 minutes depending on hardware.
+
+```sh
+mkdir -p build/llvm
+cd build/llvm
+cmake -G Ninja \
+  -DLLVM_TARGETS_TO_BUILD=Penumbra \
+  -DLLVM_ENABLE_PROJECTS="clang;lld" \
+  -DLLVM_USE_SPLIT_DWARF=ON \
+  -DCMAKE_BUILD_TYPE=Debug \
+  ../../llvm/llvm
+ninja -j4 clang lld llvm-mc llvm-objcopy
+cd ../..
+```
+
+> **Low memory?** Use `-j2` for the final link steps.  Debug builds with
+> split DWARF need ~8 GB; without split DWARF, ~15 GB.
+
+If you want the LLVM build tree elsewhere (e.g. a faster drive):
+
+```sh
+mkdir -p /other/drive/penumbra-llvm
+cd /other/drive/penumbra-llvm
+cmake -G Ninja \
+  -DLLVM_TARGETS_TO_BUILD=Penumbra \
+  -DLLVM_ENABLE_PROJECTS="clang;lld" \
+  -DLLVM_USE_SPLIT_DWARF=ON \
+  /path/to/penumbra-minicomputer/llvm/llvm
+ninja -j4 clang lld llvm-mc llvm-objcopy
+```
+
+Then pass `LLVM_PREFIX=/other/drive/penumbra-llvm` to make commands.
+
+### 3. Verify the hardware (optional)
+
+Run all hardware test programs (uses pasm.py assembler, no LLVM needed):
+
+```sh
+make test
+```
+
+### 4. Run the boot ROM
+
+Build the C boot ROM with clang and launch the interactive simulator:
+
+```sh
+make simulate
+```
+
+This compiles `hw/rom/boot_rom.c` with crt0 startup, links it at
+`0xFFFF_E000` (the reset vector), and boots the CPU in the Verilator
+simulator with UART bridged to your terminal.
+
+With a non-default LLVM location:
+
+```sh
+make simulate LLVM_PREFIX=/other/drive/penumbra-llvm
+```
+
+## Architecture
+
+- **Word size:** 32-bit, little-endian
+- **Registers:** 16 GPRs (R0=zero, R14=SP, R13=LR, R15=PC)
+- **ISA:** 4 instruction formats (R/L/M/B), 2-operand destructive ALU,
+  ARM-style NZCV condition flags
+- **MMU:** Software-managed 64-entry 2-way set-associative TLB
+- **Cache:** Split I/D, direct-mapped, write-through
+- **Microcode:** 51-bit horizontal, 256-entry ROM
+
+Full architecture docs in `doc/`.
 
 ## Repository Structure
 
 ```
-hw/               - Hardware design
-  rtl/            - Synthesizable RTL (SystemVerilog)
-    core/         - CPU core (ALU, register file, decode, control)
-    mmu/          - Memory management unit
-    bus/          - System bus and arbitration
-    io/           - I/O controllers and peripherals
-    soc/          - Top-level SoC integration
-  sim/            - Simulation testbenches and test programs
-  microcode/      - Microcode source (assembled into ROM)
-  rom/            - Boot ROM firmware
-  tools/          - Microcode assembler (uasm.py)
-  constraints/    - FPGA pin constraints and timing for ULX3S
-sw/               - Software tools
-  tools/          - ISA assembler (pasm.py)
-doc/              - Architecture documentation
-  isa/            - ISA specification
-  mmu/            - MMU and memory map documentation
-  bus/            - Bus protocol documentation
-  toolchain/      - LLVM backend strategy
+hw/                Hardware design
+  rtl/core/        CPU core (ALU, regfile, sequencer, datapath)
+  rtl/mmu/         MMU and TLB
+  rtl/soc/         SoC integration (boot ROM, UART, memory, cache)
+  sim/             Testbenches and test programs
+  microcode/       Microcode source
+  rom/             Boot ROM (C source, crt0, linker script)
+  tools/           Microcode assembler (uasm.py)
+sw/tools/          ISA assembler (pasm.py), binary converter (bin2hex.py)
+llvm/              LLVM backend (clang, lld, llvm-mc for Penumbra)
+doc/               Architecture specifications
 ```
 
-## Status
+## Make Targets
 
-CPU runs real programs in simulation with full CPU, MMU, split I/D cache, and memory-mapped UART. Boot ROM monitor operational with interactive terminal I/O.
+| Target | Description |
+|--------|-------------|
+| `make simulate` | Build C boot ROM and run interactive simulator |
+| `make test` | Run all hardware test programs (pass/fail summary) |
+| `make sim MOD=<name>` | Run a specific module's testbench |
+| `make smoke` | Quick toolchain sanity check |
+| `make wave MOD=<name>` | Open VCD waveform in GTKWave |
+| `make clean` | Remove build artifacts |
 
 ## License
 
-This project is open source. See [LICENSE](LICENSE) for details.
+This project is open source.  See [LICENSE](LICENSE) for details.

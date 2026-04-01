@@ -226,7 +226,12 @@ module machine_sim
     // ── System ID (device 1, read-only) ──────────────────────
     logic [31:0] sysid_rdata;
 
-    sysid u_sysid (
+    // Machine name: "Simulator"
+    sysid #(
+        .MACH_NAME0 (32'h756D6953),   // "Simu"
+        .MACH_NAME1 (32'h6F74616C),   // "lato"
+        .MACH_NAME2 (32'h00000072)    // "r\0\0\0"
+    ) u_sysid (
         .i_sys_reg  (sys_reg),
         .o_sys_rdata(sysid_rdata)
     );

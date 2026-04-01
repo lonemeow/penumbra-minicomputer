@@ -20,7 +20,7 @@ one of 16 registers within that device, for 256 total system registers.
 | dev | Name | Description |
 |-----|------|-------------|
 | 0 | MMU | TLB management, fault registers, address translation control |
-| 1 | SYS | Machine identification (read-only) |
+| 1 | SYS | CPU and machine identification (read-only) |
 | 2 | DCACHE | D-cache control, geometry info, invalidation |
 | 3 | ICACHE | I-cache control, geometry info, invalidation |
 | 4–15 | — | Reserved for future devices (timer, interrupt controller, DMA) |
@@ -198,31 +198,105 @@ RDSYS R3, #0, #4          ; R3 = TLB_PTE
 
 ## Device 1: SYS (System Identification)
 
-Read-only. Writes are ignored.
+Read-only. Writes are ignored. CPU core and machine/board identification are
+separate so the same core can be instantiated on different platforms.
 
 | reg | Name | R/W | Description |
 |-----|------|-----|-------------|
-| 0 | MACHINE_ID | R | Hardware identification |
-| 1–15 | — | — | Reserved (reads as 0); future: feature flags, TLB geometry, cache config |
+| 0 | CPU_ISA | R | ISA version and CPU feature flags |
+| 1 | MACH_FEAT | R | Machine/board feature flags |
+| 2–5 | CPU_NAME0–3 | R | CPU name string (16 bytes, packed LE, null-padded) |
+| 6–9 | MACH_NAME0–3 | R | Machine name string (16 bytes, packed LE, null-padded) |
+| 10–15 | — | — | Reserved (reads as 0) |
 
-### MACHINE_ID (reg 0)
+### CPU_ISA (reg 0)
 
-Returns a monotonically increasing hardware revision number. Software uses
-this to identify the platform and adapt at boot time.
+CPU core identification: ISA version in the low nibble, optional feature
+flags in the upper 28 bits. The meaning of the feature flags depends on the
+ISA version, so features that become mandatory in a future ISA revision can
+have their bits reclaimed.
+
+```
+ 31                          4 3       0
+┌────────────────────────────┬─────────┐
+│     Feature flags (28)     │ ISA (4) │
+└────────────────────────────┴─────────┘
+```
+
+**ISA version** (bits 3:0):
 
 | Value | Meaning |
 |-------|---------|
-| 1 | Penumbra/1 — first hardware revision (FPGA simulation) |
+| 1 | ISA v1 — base Penumbra instruction set |
+
+**Feature flags** (bits 31:4, ISA v1 definitions):
+
+| Bit | Name | Description |
+|-----|------|-------------|
+| 4 | HW_MUL | Hardware multiply present |
+| 5 | HW_DIV | Hardware divide present |
+| 6 | FPU | Floating-point unit present |
+| 7–31 | — | Reserved (0) |
 
 ```asm
-; Boot-time hardware check
-RDSYS R1, #1, #0          ; R1 = MACHINE_ID
-CMPI  R1, #1
-BNE   unsupported_hw
+; Boot-time ISA check
+RDSYS R1, #SYS, #CPU_ISA
+ANDI  R2, R1, #0x0F       ; R2 = ISA version
+CMPI  R2, #1
+BNE   unsupported_isa
+; Check for optional FPU
+ANDI  R2, R1, #0x40       ; bit 6
+BNE   has_fpu
 ```
 
-Future revisions increment this value. Capability registers (TLB geometry,
-cache properties, optional features) will be added at registers 1+ when needed.
+### MACH_FEAT (reg 1)
+
+Machine-level feature flags describing the board/platform.
+
+```
+ 31                                    0
+┌──────────────────────────────────────┐
+│         Machine features (32)        │
+└──────────────────────────────────────┘
+```
+
+| Bit | Name | Description |
+|-----|------|-------------|
+| 0 | BOOT_UART | Boot console is UART |
+| 1 | BOOT_DISPLAY | Boot console is display + keyboard |
+| 2–31 | — | Reserved (0) |
+
+### Name Strings (regs 2–5, 6–9)
+
+Each name is a 16-byte null-padded ASCII string packed little-endian into
+4 consecutive 32-bit registers. The first character occupies bits [7:0] of
+the first register (NAME0), the second character bits [15:8], and so on.
+
+Software reads regs sequentially and extracts bytes to build the printable
+string. Reading stops at the first null byte.
+
+```asm
+; Print CPU name (simplified — assumes UART ready)
+LLI  R4, #2               ; start at reg 2 (CPU_NAME0)
+LLI  R5, #6               ; stop at reg 6
+name_loop:
+    RDSYS R2, #SYS, R4    ; read next name word
+    ; extract and print 4 bytes from R2 ...
+    ADDI R4, #1
+    CMP  R4, R5
+    BNE  name_loop
+```
+
+**Default values:**
+
+| String | Default | Description |
+|--------|---------|-------------|
+| CPU name | `"Penumbra/1"` | Core type and revision |
+| Machine name | (per platform) | e.g. `"Simulator"`, `"ULX3S"` |
+
+The `sysid` module accepts parameters to override both names and feature
+registers per machine integration (e.g. `machine_sim.sv` sets the machine
+name to `"Simulator"`).
 
 ---
 

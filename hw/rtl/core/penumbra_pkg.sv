@@ -75,7 +75,16 @@ package penumbra_pkg;
     localparam logic [3:0] SYSDEV_ICACHE = 4'd3;   // I-cache control
 
     // ── SYS sysreg addresses (dev_id = 1) ───────────────────
-    localparam logic [3:0] SYSREG_SYS_MACHID = 4'd0;  // Machine ID (read-only)
+    localparam logic [3:0] SYSREG_SYS_CPU_ISA    = 4'd0;   // CPU ISA version + feature flags
+    localparam logic [3:0] SYSREG_SYS_MACH_FEAT  = 4'd1;   // Machine feature flags
+    localparam logic [3:0] SYSREG_SYS_CPU_NAME0  = 4'd2;   // CPU name bytes  0– 3
+    localparam logic [3:0] SYSREG_SYS_CPU_NAME1  = 4'd3;   // CPU name bytes  4– 7
+    localparam logic [3:0] SYSREG_SYS_CPU_NAME2  = 4'd4;   // CPU name bytes  8–11
+    localparam logic [3:0] SYSREG_SYS_CPU_NAME3  = 4'd5;   // CPU name bytes 12–15
+    localparam logic [3:0] SYSREG_SYS_MACH_NAME0 = 4'd6;   // Machine name bytes  0– 3
+    localparam logic [3:0] SYSREG_SYS_MACH_NAME1 = 4'd7;   // Machine name bytes  4– 7
+    localparam logic [3:0] SYSREG_SYS_MACH_NAME2 = 4'd8;   // Machine name bytes  8–11
+    localparam logic [3:0] SYSREG_SYS_MACH_NAME3 = 4'd9;   // Machine name bytes 12–15
 
     // ── Cache sysreg addresses (dev_id = 2 or 3) ────────────────
     localparam logic [3:0] SYSREG_CACHE_INFO  = 4'd0;  // Read-only geometry/type
