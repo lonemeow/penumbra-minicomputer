@@ -219,24 +219,28 @@ let Defs = [SR] in {
 //===----------------------------------------------------------------------===//
 
 // Loads: L=1
-def LDW  : FormatM<1, 0b10, 0, (outs GPR:$Rd), (ins GPR:$Rb, i32imm:$offset),
-                   "ldw\t$Rd, [$Rb + $offset]">;
-def LDH  : FormatM<1, 0b01, 0, (outs GPR:$Rd), (ins GPR:$Rb, i32imm:$offset),
-                   "ldh\t$Rd, [$Rb + $offset]">;
-def LDHS : FormatM<1, 0b01, 1, (outs GPR:$Rd), (ins GPR:$Rb, i32imm:$offset),
-                   "ldhs\t$Rd, [$Rb + $offset]">;
-def LDB  : FormatM<1, 0b00, 0, (outs GPR:$Rd), (ins GPR:$Rb, i32imm:$offset),
-                   "ldb\t$Rd, [$Rb + $offset]">;
-def LDBS : FormatM<1, 0b00, 1, (outs GPR:$Rd), (ins GPR:$Rb, i32imm:$offset),
-                   "ldbs\t$Rd, [$Rb + $offset]">;
+let mayLoad = 1 in {
+  def LDW  : FormatM<1, 0b10, 0, (outs GPR:$Rd), (ins GPR:$Rb, i32imm:$offset),
+                     "ldw\t$Rd, [$Rb + $offset]">;
+  def LDH  : FormatM<1, 0b01, 0, (outs GPR:$Rd), (ins GPR:$Rb, i32imm:$offset),
+                     "ldh\t$Rd, [$Rb + $offset]">;
+  def LDHS : FormatM<1, 0b01, 1, (outs GPR:$Rd), (ins GPR:$Rb, i32imm:$offset),
+                     "ldhs\t$Rd, [$Rb + $offset]">;
+  def LDB  : FormatM<1, 0b00, 0, (outs GPR:$Rd), (ins GPR:$Rb, i32imm:$offset),
+                     "ldb\t$Rd, [$Rb + $offset]">;
+  def LDBS : FormatM<1, 0b00, 1, (outs GPR:$Rd), (ins GPR:$Rb, i32imm:$offset),
+                     "ldbs\t$Rd, [$Rb + $offset]">;
+}
 
 // Stores: L=0
-def STW  : FormatM<0, 0b10, 0, (outs), (ins GPR:$Rd, GPR:$Rb, i32imm:$offset),
-                   "stw\t$Rd, [$Rb + $offset]">;
-def STH  : FormatM<0, 0b01, 0, (outs), (ins GPR:$Rd, GPR:$Rb, i32imm:$offset),
-                   "sth\t$Rd, [$Rb + $offset]">;
-def STB  : FormatM<0, 0b00, 0, (outs), (ins GPR:$Rd, GPR:$Rb, i32imm:$offset),
-                   "stb\t$Rd, [$Rb + $offset]">;
+let mayStore = 1 in {
+  def STW  : FormatM<0, 0b10, 0, (outs), (ins GPR:$Rd, GPR:$Rb, i32imm:$offset),
+                     "stw\t$Rd, [$Rb + $offset]">;
+  def STH  : FormatM<0, 0b01, 0, (outs), (ins GPR:$Rd, GPR:$Rb, i32imm:$offset),
+                     "sth\t$Rd, [$Rb + $offset]">;
+  def STB  : FormatM<0, 0b00, 0, (outs), (ins GPR:$Rd, GPR:$Rb, i32imm:$offset),
+                     "stb\t$Rd, [$Rb + $offset]">;
+}
 
 //===----------------------------------------------------------------------===//
 // Branch instructions (Format B, prefix=11)

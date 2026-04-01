@@ -14,12 +14,13 @@
 
 using namespace llvm;
 
-// Outgoing handler used only for building the RET instruction: copies a
-// vreg → physical return register and marks it as an implicit use on the RET.
+// Outgoing handler for both RET and BL: copies a vreg → physical register
+// and marks the register as an implicit use on the instruction being built.
 namespace {
-struct PenumbraReturnHandler : public CallLowering::OutgoingValueHandler {
-  PenumbraReturnHandler(MachineIRBuilder &MIRBuilder, MachineRegisterInfo &MRI,
-                        MachineInstrBuilder &MIB)
+struct PenumbraOutgoingValueHandler : public CallLowering::OutgoingValueHandler {
+  PenumbraOutgoingValueHandler(MachineIRBuilder &MIRBuilder,
+                               MachineRegisterInfo &MRI,
+                               MachineInstrBuilder &MIB)
       : OutgoingValueHandler(MIRBuilder, MRI), MIB(MIB) {}
 
   void assignValueToReg(Register ValVReg, Register PhysReg,
@@ -28,9 +29,48 @@ struct PenumbraReturnHandler : public CallLowering::OutgoingValueHandler {
     MIRBuilder.buildCopy(PhysReg, extendRegister(ValVReg, VA));
   }
 
-  // Stack returns not supported (RetCC_Penumbra only assigns to R1).
-  void assignValueToAddress(Register, Register, LLT, const MachinePointerInfo &,
-                            const CCValAssign &) override {}
+  void assignValueToAddress(Register ValVReg, Register Addr, LLT MemTy,
+                            const MachinePointerInfo &MPO,
+                            const CCValAssign &VA) override {
+    MachineFunction &MF = MIRBuilder.getMF();
+    auto *MMO = MF.getMachineMemOperand(MPO, MachineMemOperand::MOStore, MemTy,
+                                        inferAlignFromPtrInfo(MF, MPO));
+    Register ExtReg = extendRegister(ValVReg, VA);
+    MIRBuilder.buildStore(ExtReg, Addr, *MMO);
+  }
+
+  Register getStackAddress(uint64_t MemSize, int64_t Offset,
+                           MachinePointerInfo &MPO,
+                           ISD::ArgFlagsTy Flags) override {
+    LLT p0 = LLT::pointer(0, 32);
+    LLT s32 = LLT::scalar(32);
+    auto SPReg = MIRBuilder.buildCopy(p0, Register(Penumbra::R14));
+    auto OffsetReg = MIRBuilder.buildConstant(s32, Offset);
+    auto AddrReg = MIRBuilder.buildPtrAdd(p0, SPReg, OffsetReg);
+    MPO = MachinePointerInfo::getStack(MIRBuilder.getMF(), Offset);
+    return AddrReg.getReg(0);
+  }
+
+  MachineInstrBuilder &MIB;
+};
+
+// Incoming handler for call return values: marks physical registers as
+// implicit defs on the BL instruction.
+struct PenumbraCallReturnHandler : public CallLowering::IncomingValueHandler {
+  PenumbraCallReturnHandler(MachineIRBuilder &MIRBuilder,
+                            MachineRegisterInfo &MRI,
+                            MachineInstrBuilder &MIB)
+      : IncomingValueHandler(MIRBuilder, MRI), MIB(MIB) {}
+
+  void assignValueToReg(Register ValVReg, Register PhysReg,
+                        const CCValAssign &VA) override {
+    MIB.addDef(PhysReg, RegState::Implicit);
+    MIRBuilder.buildCopy(ValVReg, PhysReg);
+  }
+
+  void assignValueToAddress(Register ValVReg, Register Addr, LLT MemTy,
+                            const MachinePointerInfo &MPO,
+                            const CCValAssign &VA) override {}
   Register getStackAddress(uint64_t, int64_t, MachinePointerInfo &,
                            ISD::ArgFlagsTy) override {
     return {};
@@ -63,7 +103,7 @@ bool PenumbraCallLowering::lowerReturn(MachineIRBuilder &MIRBuilder,
     CCAssignFn *AssignFn =
         TLI.getCCAssignFn(F.getCallingConv(), /*Return=*/true, F.isVarArg());
     OutgoingValueAssigner ArgAssigner(AssignFn);
-    PenumbraReturnHandler ArgHandler(MIRBuilder, MRI, MIB);
+    PenumbraOutgoingValueHandler ArgHandler(MIRBuilder, MRI, MIB);
     if (!determineAndHandleAssignments(ArgHandler, ArgAssigner, SplitArgs,
                                        MIRBuilder, F.getCallingConv(),
                                        F.isVarArg()))
@@ -102,8 +142,65 @@ bool PenumbraCallLowering::lowerFormalArguments(
 
 bool PenumbraCallLowering::lowerCall(MachineIRBuilder &MIRBuilder,
                                      CallLoweringInfo &Info) const {
-  // Calls are not needed for the first milestone (leaf functions only).
-  return false;
+  MachineFunction &MF = MIRBuilder.getMF();
+  MachineRegisterInfo &MRI = MF.getRegInfo();
+  const DataLayout &DL = MF.getDataLayout();
+  const PenumbraISelLowering &TLI = *getTLI<PenumbraISelLowering>();
+  CallingConv::ID CC = Info.CallConv;
+
+  // TODO: tail calls
+  Info.IsTailCall = false;
+
+  // ADJCALLSTACKDOWN — reserve space for outgoing arguments on the stack.
+  // The actual amount is filled in after argument assignment.
+  MachineInstrBuilder CallSeqStart =
+      MIRBuilder.buildInstr(Penumbra::ADJCALLSTACKDOWN);
+
+  // Split outgoing arguments according to the calling convention.
+  SmallVector<ArgInfo, 8> SplitArgs;
+  for (auto &AInfo : Info.OrigArgs)
+    splitToValueTypes(AInfo, SplitArgs, DL, CC);
+
+  // Build the BL instruction (branch and link — saves PC+4 to R13).
+  // Only direct calls (symbol targets) for now.
+  auto MIB = MIRBuilder.buildInstrNoInsert(Penumbra::BL).add(Info.Callee);
+
+  // Add the call-preserved register mask so the register allocator knows
+  // which registers survive across the call.
+  const TargetRegisterInfo *TRI = MF.getSubtarget().getRegisterInfo();
+  MIB.addRegMask(TRI->getCallPreservedMask(MF, CC));
+
+  // Assign outgoing arguments to physical registers / stack slots.
+  CCAssignFn *AssignFn = TLI.getCCAssignFn(CC, /*Return=*/false, Info.IsVarArg);
+  OutgoingValueAssigner ArgAssigner(AssignFn);
+  PenumbraOutgoingValueHandler ArgHandler(MIRBuilder, MRI, MIB);
+  if (!determineAndHandleAssignments(ArgHandler, ArgAssigner, SplitArgs,
+                                     MIRBuilder, CC, Info.IsVarArg))
+    return false;
+
+  // Now insert the call.
+  MIRBuilder.insertInstr(MIB);
+
+  // Fill in the stack adjustment amounts.
+  uint64_t StackSize = ArgAssigner.StackSize;
+  CallSeqStart.addImm(StackSize).addImm(0);
+  MIRBuilder.buildInstr(Penumbra::ADJCALLSTACKUP).addImm(StackSize).addImm(0);
+
+  // Collect the return value if the call is non-void.
+  if (!Info.OrigRet.Ty->isVoidTy()) {
+    SmallVector<ArgInfo, 4> SplitRetArgs;
+    splitToValueTypes(Info.OrigRet, SplitRetArgs, DL, CC);
+
+    CCAssignFn *RetAssignFn = TLI.getCCAssignFn(CC, /*Return=*/true,
+                                                  Info.IsVarArg);
+    IncomingValueAssigner RetAssigner(RetAssignFn);
+    PenumbraCallReturnHandler RetHandler(MIRBuilder, MRI, MIB);
+    if (!determineAndHandleAssignments(RetHandler, RetAssigner, SplitRetArgs,
+                                       MIRBuilder, CC, Info.IsVarArg))
+      return false;
+  }
+
+  return true;
 }
 
 // ── IncomingValueHandler ──────────────────────────────────────────────────────

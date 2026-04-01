@@ -56,3 +56,12 @@ void PenumbraFrameLowering::emitEpilogue(MachineFunction &MF,
       .addReg(Penumbra::R14)
       .addImm(StackSize);
 }
+
+// ADJCALLSTACKDOWN/UP are absorbed into the prologue/epilogue stack
+// allocation — just erase them here.
+MachineBasicBlock::iterator
+PenumbraFrameLowering::eliminateCallFramePseudoInstr(
+    MachineFunction &MF, MachineBasicBlock &MBB,
+    MachineBasicBlock::iterator MI) const {
+  return MBB.erase(MI);
+}
