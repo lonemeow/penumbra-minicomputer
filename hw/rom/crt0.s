@@ -12,8 +12,8 @@
         .type   _start,@function
 
 _start:
-        ; Set up stack pointer (top of RAM, grows down)
-        li      r14, 0x01000000
+        ; Set up stack pointer (top of page 2, grows down)
+        li      r14, 0x2000
 
         ; Call main — returns in R1
         bl      main

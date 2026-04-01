@@ -123,7 +123,8 @@ int main() {
     }
 
     if (!cpu->o_halted) {
-        fprintf(stderr, "\n[Interrupted after %lu cycles]\n", (unsigned long)cycles);
+        fprintf(stderr, "\n[Interrupted after %lu cycles, PC=0x%08X]\n",
+                (unsigned long)cycles, cpu->o_pc);
     }
 
     restore_term();

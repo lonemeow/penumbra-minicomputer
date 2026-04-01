@@ -212,13 +212,6 @@ module machine_sim
     // Simulation: combinational — wired to cpu_core as exception.
     assign bus_fault = (mem_re | mem_we) & ~(ram_sel | rom_sel | uart_sel);
 
-    // synthesis translate_off
-    always_ff @(posedge i_clk) begin
-        if (!i_rst && bus_fault)
-            $display("BUS FAULT: addr=%08h re=%b we=%b (no device)", mem_addr, mem_re, mem_we);
-    end
-    // synthesis translate_on
-
     // ══════════════════════════════════════════════════════════
     // Sysreg devices (external, dev_id >= 1)
     // ══════════════════════════════════════════════════════════

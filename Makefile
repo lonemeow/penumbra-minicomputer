@@ -99,6 +99,8 @@ test:
 		$(PKG_SV) $$(find hw/rtl -name 'machine_sim.sv') hw/sim/tb_cpu_prog.cpp
 	@# Assemble microcode once (shared by all programs)
 	@$(UASM) hw/microcode/microcode.uasm -o microcode.hex
+	@# Remove program.hex so make simulate's ROM build doesn't see stale pasm output
+	@rm -f program.hex
 	@pass=0; fail=0; failed=""; \
 	for prog in $(TEST_PROGS); do \
 		if ! $(PASM) --org 0xFFFFE000 hw/sim/programs/$$prog.s -o program.hex; then \
@@ -120,6 +122,7 @@ test:
 	echo ""; \
 	total=$$((pass + fail)); \
 	echo "$$pass/$$total tests passed"; \
+	rm -f program.hex; \
 	if [ $$fail -gt 0 ]; then \
 		echo "  *** $$fail FAILED:$$failed ***"; \
 		exit 1; \
@@ -140,6 +143,7 @@ simulate:
 		--Mdir $(BUILD_DIR)/machine_sim_interactive.verilator \
 		-o ../Vmachine_sim_interactive \
 		$(PKG_SV) $$(find hw/rtl -name 'machine_sim.sv') hw/sim/tb_interactive.cpp
+	@rm -f program.hex
 	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX)
 	@$(UASM) hw/microcode/microcode.uasm -o microcode.hex
 	@$(DOCKER_RUN_IT) --entrypoint ./$(BUILD_DIR)/Vmachine_sim_interactive $(DOCKER_IMAGE)
