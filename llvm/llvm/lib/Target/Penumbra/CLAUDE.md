@@ -12,7 +12,7 @@ This file provides LLVM backend context for work under `llvm/`. The root `CLAUDE
 ## Current State
 MC-layer assembler produces working ELF objects and raw hex. `llvm-mc -triple=penumbra` parses, matches, encodes, and emits all 4 instruction formats. Fixups for branch22 (PC-relative) and imm16 (absolute) are fully implemented — local labels resolve correctly. ELF relocations defined (R_PENUMBRA_32, R_PENUMBRA_BRANCH22, R_PENUMBRA_IMM16). Encodings verified bit-for-bit against `pasm.py`. Assembly syntax accepts ARM-style `#` prefix on immediates (optional).
 
-GlobalISel codegen pipeline is functional: `llc -march=penumbra -global-isel` compiles LLVM IR to Penumbra assembly. Supports i32 ALU ops (add/sub/and/or/xor/shifts), constants (LLI/LLIS/LUI), s32 loads/stores with frame-index folding, and the full calling convention (R1-R4 args, R1 return). No SelectionDAG — GlobalISel only.
+GlobalISel codegen pipeline is functional: `llc -march=penumbra -global-isel` compiles LLVM IR to Penumbra assembly. Supports i32 ALU ops (add/sub/and/or/xor/shifts), constants (LLI/LLIS/LUI), s32 loads/stores with frame-index folding, full calling convention (R1-R4 args, R1 return), and control flow (G_ICMP+G_BRCOND folded to CMP+Bcc, G_BR, G_PHI). No SelectionDAG — GlobalISel only.
 
 ## File Map (`llvm/llvm/lib/Target/Penumbra/`)
 
@@ -32,7 +32,7 @@ GlobalISel codegen pipeline is functional: `llc -march=penumbra -global-isel` co
 | `GISel/PenumbraLegalizerInfo.{h,cpp}` | Legal ops: G_ADD/SUB/AND/OR/XOR/SHL/SHR/SAR on s32, G_LOAD/STORE s32, G_CONSTANT s32/p0, G_FRAME_INDEX p0 |
 | `GISel/PenumbraRegisterBankInfo.{h,cpp}` | Single GPR bank covering all 16 registers. Maps all ops to GPR |
 | `GISel/PenumbraRegisterBanks.td` | `def GPRRegBank : RegisterBank<"GPRBank", [GPR]>` |
-| `GISel/PenumbraInstructionSelector.cpp` | Manual select(): ALU ops, G_CONSTANT (LLI/LLIS/LUI), G_LOAD/G_STORE (frame-index folding into LDW/STW), G_FRAME_INDEX |
+| `GISel/PenumbraInstructionSelector.cpp` | Manual select(): ALU ops, G_CONSTANT (LLI/LLIS/LUI), G_LOAD/G_STORE (frame-index folding into LDW/STW), G_FRAME_INDEX, G_ICMP+G_BRCOND fold (CMP+Bcc), G_BR, G_PHI, COPY constraint |
 | `MCTargetDesc/PenumbraMCAsmInfo.{h,cpp}` | ELF-based, little-endian, `;` comments |
 | `MCTargetDesc/PenumbraMCTargetDesc.{h,cpp}` | Registers all MC components |
 | `MCTargetDesc/PenumbraInstPrinter.{h,cpp}` | MCInst → assembly text |
