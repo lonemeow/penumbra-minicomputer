@@ -14,7 +14,7 @@ This file provides LLVM backend context for work under `llvm/`. The root `CLAUDE
 
 **MC-layer assembler:** `llvm-mc -triple=penumbra` encodes all 4 instruction formats. Six fixup/relocation types: branch22, imm16, lo16, hi16, 32, none. Pseudo-instructions LI, LA, NOP, RET expanded in the AsmParser. `%lo16()`/`%hi16()` MCSpecifierExpr modifiers parsed and printed (full `clang -S` → `llvm-mc` roundtrip works). Encodings verified bit-for-bit against `pasm.py`.
 
-**GlobalISel codegen:** i32 ALU (add/sub/and/or/xor/shifts with constant folding to SHLi/SHRi/SARi), constants (LLI/LLIS/LUI), global addresses (G_GLOBAL_VALUE → LLI+LUI with lo16/hi16), sub-word load/store (LDB/LDH/LDW, STB/STH/STW selected by memory operand size, frame-index folding), pointer arithmetic (G_PTR_ADD → ADD), type casts (G_INTTOPTR/G_PTRTOINT → COPY), extensions (G_ZEXT/G_SEXT/G_ANYEXT/G_TRUNC/G_SEXT_INREG), calling convention (R1-R4 args, R1 return), control flow (G_ICMP+G_BRCOND → CMP+Bcc, G_BR, G_PHI), G_SELECT (ICMP fold into SELECT_CC_GPR). No SelectionDAG — GlobalISel only.
+**GlobalISel codegen:** i32 ALU (add/sub/and/or/xor/shifts with constant folding to SHLi/SHRi/SARi), constants (LLI/LLIS/LUI), global addresses (G_GLOBAL_VALUE → LLI+LUI with lo16/hi16), sub-word load/store (LDB/LDH/LDW, STB/STH/STW selected by memory operand size, frame-index folding into memory ops + LEAfi pseudo for escaped addresses), pointer arithmetic (G_PTR_ADD → ADD), type casts (G_INTTOPTR/G_PTRTOINT → COPY), extensions (G_ZEXT/G_SEXT/G_ANYEXT/G_TRUNC/G_SEXT_INREG), calling convention (R1-R4 args, R1 return, R13/LR callee-saved), control flow (G_ICMP+G_BRCOND → CMP+Bcc, G_BR, G_PHI), G_SELECT (ICMP fold into SELECT_CC_GPR). No SelectionDAG — GlobalISel only.
 
 **Clang:** `clang --target=penumbra-unknown-none -c file.c` works at `-O0`. `-O1+` triggers unlegalized ops (G_SMAX, etc.) that need more rules.
 
@@ -26,8 +26,8 @@ This file provides LLVM backend context for work under `llvm/`. The root `CLAUDE
 |------|-------------|
 | `Penumbra.td` | Top-level TableGen: includes, ProcessorModel, AsmWriter, Target, pointer remap |
 | `PenumbraRegisterInfo.td` | 16 GPRs (R0=zero, R12=TP, R13=LR, R14=SP, R15=PC), GPR/GPR_Allocatable/CCR classes, HWEncoding |
-| `PenumbraInstrInfo.td` | All 4 instruction formats (R/L/M/B) with bit-accurate encoding. Tied-operand constraints for 2-address ops. Custom `brtarget22` and `imm16op` operand types with encoder methods |
-| `PenumbraCallingConv.td` | CC_Penumbra (R1-R4 args, stack overflow), RetCC_Penumbra (R1), CSR_Penumbra (R5-R10) |
+| `PenumbraInstrInfo.td` | All 4 instruction formats (R/L/M/B) with bit-accurate encoding. Tied-operand constraints for 2-address ops. Custom `brtarget22` and `imm16op` operand types with encoder methods. Pseudos: RET, LEAfi, SELECT_GPR, SELECT_CC_GPR, ADJCALLSTACK{DOWN,UP} |
+| `PenumbraCallingConv.td` | CC_Penumbra (R1-R4 args, stack overflow), RetCC_Penumbra (R1), CSR_Penumbra (R5-R10, R13) |
 | `PenumbraRegisterInfo.{h,cpp}` | Reserved regs (R0, R12, R14, R15), callee-saved, eliminateFrameIndex, getFrameRegister(R14) |
 | `PenumbraFrameLowering.{h,cpp}` | StackGrowsDown, Align(4), hasFPImpl()=false. Prologue (SUBi SP) / epilogue (ADDi SP) |
 | `PenumbraISelLowering.{h,cpp}` | TargetLowering: addRegisterClass(i32, GPR_Allocatable), getCCAssignFn(), EmitInstrWithCustomInserter (SELECT_GPR/SELECT_CC_GPR diamond expansion) |
@@ -38,7 +38,7 @@ This file provides LLVM backend context for work under `llvm/`. The root `CLAUDE
 | `GISel/PenumbraLegalizerInfo.{h,cpp}` | Legal ops: G_ADD/SUB/AND/OR/XOR/SHL/SHR/SAR on s32, G_LOAD/STORE s32/s16/s8, G_CONSTANT s32/p0, G_FRAME_INDEX/G_GLOBAL_VALUE p0, G_PTR_ADD {p0,s32}, G_INTTOPTR/G_PTRTOINT {p0,s32}, G_ICMP {s1,s32}, G_SELECT {s32/p0,s1}, G_PHI, G_BRCOND, G_ZEXT/G_SEXT/G_ANYEXT/G_TRUNC, G_SEXT_INREG (lowered) |
 | `GISel/PenumbraRegisterBankInfo.{h,cpp}` | Single GPR bank covering all 16 registers. Maps all ops to GPR |
 | `GISel/PenumbraRegisterBanks.td` | `def GPRRegBank : RegisterBank<"GPRBank", [GPR]>` |
-| `GISel/PenumbraInstructionSelector.cpp` | Manual select(): ALU ops, G_CONSTANT (LLI/LLIS/LUI), G_GLOBAL_VALUE (LLI+LUI with lo16/hi16 target flags), G_LOAD/G_STORE (LDB/LDH/LDW and STB/STH/STW by memop size, frame-index folding), G_PTR_ADD (→ADD), G_INTTOPTR/G_PTRTOINT (→COPY), G_FRAME_INDEX, G_ICMP+G_BRCOND fold (CMP+Bcc), G_BR, G_PHI, G_SELECT, G_ZEXT/G_SEXT, COPY constraint |
+| `GISel/PenumbraInstructionSelector.cpp` | Manual select(): ALU ops, G_CONSTANT (LLI/LLIS/LUI), G_GLOBAL_VALUE (LLI+LUI with lo16/hi16 target flags), G_LOAD/G_STORE (LDB/LDH/LDW and STB/STH/STW by memop size, frame-index folding), G_PTR_ADD (→ADD), G_INTTOPTR/G_PTRTOINT (→COPY), G_FRAME_INDEX (fold into memop or LEAfi for escaped addresses), G_ICMP+G_BRCOND fold (CMP+Bcc), G_BR, G_PHI, G_SELECT, G_ZEXT/G_SEXT, COPY constraint |
 | `MCTargetDesc/PenumbraMCTargetDesc.{h,cpp}` | Registers all MC components |
 | `MCTargetDesc/PenumbraInstPrinter.{h,cpp}` | MCInst → assembly text |
 | `MCTargetDesc/PenumbraMCCodeEmitter.cpp` | MCInst → binary bytes. Custom `encodeBranchTarget` and `encodeImm16` create fixups |

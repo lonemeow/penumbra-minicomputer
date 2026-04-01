@@ -140,12 +140,7 @@ simulate:
 		--Mdir $(BUILD_DIR)/machine_sim_interactive.verilator \
 		-o ../Vmachine_sim_interactive \
 		$(PKG_SV) $$(find hw/rtl -name 'machine_sim.sv') hw/sim/tb_interactive.cpp
-	@# Build C boot ROM: clang → llvm-mc → ld.lld → objcopy → bin2hex
-	@$(CC) -c -O0 -o $(BUILD_DIR)/boot_rom.o hw/rom/boot_rom.c
-	@$(MC) -filetype=obj hw/rom/crt0.s -o $(BUILD_DIR)/crt0.o
-	@$(LD) -T hw/rom/rom.ld $(BUILD_DIR)/crt0.o $(BUILD_DIR)/boot_rom.o -o $(BUILD_DIR)/boot_rom.elf
-	@$(OBJCOPY) -O binary $(BUILD_DIR)/boot_rom.elf $(BUILD_DIR)/boot_rom.bin
-	@$(BIN2HEX) $(BUILD_DIR)/boot_rom.bin -o program.hex
+	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX)
 	@$(UASM) hw/microcode/microcode.uasm -o microcode.hex
 	@$(DOCKER_RUN_IT) --entrypoint ./$(BUILD_DIR)/Vmachine_sim_interactive $(DOCKER_IMAGE)
 
