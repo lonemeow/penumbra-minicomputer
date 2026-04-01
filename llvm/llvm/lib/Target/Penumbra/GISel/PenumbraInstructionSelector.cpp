@@ -330,10 +330,24 @@ bool PenumbraInstructionSelector::selectFrameIndex(MachineInstr &I,
                                                     MachineBasicBlock &MBB,
                                                     MachineRegisterInfo &MRI) const {
   Register DstReg = I.getOperand(0).getReg();
-  if (!MRI.use_nodbg_empty(DstReg))
-    return false; // address escapes to non-memory use — unsupported
+  int FI = I.getOperand(1).getIndex();
+
+  if (MRI.use_nodbg_empty(DstReg)) {
+    // All uses were folded into memory instructions — just erase.
+    I.eraseFromParent();
+    return true;
+  }
+
+  // Address escapes (e.g. passed to a function): materialise SP + offset
+  // via LEAfi pseudo.  eliminateFrameIndex will resolve the FI → R14 and
+  // fill in the real offset; expandPostRAPseudo expands to MOV + ADDi.
+  MachineInstr *NewI =
+      BuildMI(MBB, I, I.getDebugLoc(), TII.get(Penumbra::LEAfi))
+          .addDef(DstReg)
+          .addFrameIndex(FI)
+          .addImm(0);
   I.eraseFromParent();
-  return true;
+  return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
 }
 
 // ── ICMP predicate → Penumbra branch opcode ──────────────────────────────────

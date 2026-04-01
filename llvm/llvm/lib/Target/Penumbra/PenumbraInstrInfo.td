@@ -321,6 +321,14 @@ let isPseudo = 1 in {
   let isReturn = 1, isTerminator = 1, isBarrier = 1 in
   def RET : PenumbraInst<(outs), (ins), "ret">;
 
+  // LEAfi: load effective address of a frame index (stack slot).
+  // Materialises SP + offset into a register.  The frame index is
+  // embedded in operand 1; eliminateFrameIndex replaces it with R14
+  // and fills in the real offset.  expandPostRAPseudo expands into
+  // MOV Rd, R14 + ADDi Rd, #offset.
+  def LEAfi : PenumbraInst<(outs GPR:$Rd), (ins GPR:$base, i32imm:$offset),
+                           "# LEAfi $Rd, $base, $offset">;
+
   // SELECT_GPR: conditional select pseudo, expanded after regalloc by
   // EmitInstrWithCustomInserter into a diamond of basic blocks + PHI.
   // Uses TEST+BNE on the condition register.

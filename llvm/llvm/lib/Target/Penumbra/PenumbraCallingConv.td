@@ -25,4 +25,6 @@ def RetCC_Penumbra : CallingConv<[
     CCIfType<[i32], CCAssignToReg<[R1]>>
 ]>;
 
-def CSR_Penumbra : CalleeSavedRegs<(add (sequence "R%u", 5, 10))>;
+// R13 (LR) is included so LLVM saves/restores it in functions that make
+// calls — without it, nested BL clobbers the return address.
+def CSR_Penumbra : CalleeSavedRegs<(add (sequence "R%u", 5, 10), R13)>;

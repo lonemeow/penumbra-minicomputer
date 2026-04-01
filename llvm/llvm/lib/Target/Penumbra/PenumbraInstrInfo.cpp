@@ -29,6 +29,30 @@ void PenumbraInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
       .addReg(SrcReg, getKillRegState(KillSrc));
 }
 
+bool PenumbraInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
+  if (MI.getOpcode() != Penumbra::LEAfi)
+    return false;
+
+  // LEAfi Rd, R14, #offset  →  MOV Rd, R14  [+ ADDi Rd, #offset if nonzero]
+  MachineBasicBlock &MBB = *MI.getParent();
+  const DebugLoc &DL = MI.getDebugLoc();
+  Register DstReg = MI.getOperand(0).getReg();
+  Register BaseReg = MI.getOperand(1).getReg();
+  int64_t Offset = MI.getOperand(2).getImm();
+
+  BuildMI(MBB, MI, DL, get(Penumbra::MOV), DstReg)
+      .addReg(BaseReg);
+
+  if (Offset != 0) {
+    BuildMI(MBB, MI, DL, get(Penumbra::ADDi), DstReg)
+        .addReg(DstReg)
+        .addImm(Offset);
+  }
+
+  MI.eraseFromParent();
+  return true;
+}
+
 void PenumbraInstrInfo::storeRegToStackSlot(
     MachineBasicBlock &MBB, MachineBasicBlock::iterator MI, Register SrcReg,
     bool IsKill, int FrameIdx, const TargetRegisterClass *RC, Register VReg,
