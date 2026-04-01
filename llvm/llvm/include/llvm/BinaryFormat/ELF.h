@@ -325,6 +325,7 @@ enum {
   EM_VE = 251,            // NEC SX-Aurora VE
   EM_CSKY = 252,          // C-SKY 32-bit processor
   EM_LOONGARCH = 258,     // LoongArch
+  EM_PENUMBRA = 0xF0DA,  // Penumbra 32-bit minicomputer (private range)
 };
 
 // Object file classes.

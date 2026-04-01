@@ -6,6 +6,7 @@
 
 #include "PenumbraFixupKinds.h"
 #include "PenumbraMCTargetDesc.h"
+#include "llvm/BinaryFormat/ELF.h"
 #include "llvm/MC/MCELFObjectWriter.h"
 #include "llvm/MC/MCFixup.h"
 #include "llvm/MC/MCValue.h"
@@ -16,8 +17,7 @@ using namespace llvm;
 
 namespace {
 
-// Use a private ELF machine number (official numbers require registration).
-enum { EM_PENUMBRA = 0xF0DA };
+// EM_PENUMBRA is defined in llvm/BinaryFormat/ELF.h
 
 // ELF relocation types for Penumbra.
 enum {
@@ -32,7 +32,7 @@ enum {
 class PenumbraELFObjectWriter : public MCELFObjectTargetWriter {
 public:
   PenumbraELFObjectWriter(uint8_t OSABI)
-      : MCELFObjectTargetWriter(/*Is64Bit=*/false, OSABI, EM_PENUMBRA,
+      : MCELFObjectTargetWriter(/*Is64Bit=*/false, OSABI, ELF::EM_PENUMBRA,
                                 /*HasRelocationAddend=*/true) {}
 
 protected:
