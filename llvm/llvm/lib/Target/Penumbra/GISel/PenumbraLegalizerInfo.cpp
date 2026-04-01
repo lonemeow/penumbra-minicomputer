@@ -61,5 +61,10 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   getActionDefinitionsBuilder(G_BRCOND)
       .legalFor({s1});
 
+  // Select (ternary): result s32/p0, condition s1.
+  getActionDefinitionsBuilder(G_SELECT)
+      .legalFor({{s32, s1}, {p0, s1}})
+      .clampScalar(0, s32, s32);
+
   getLegacyLegalizerInfo().computeTables();
 }

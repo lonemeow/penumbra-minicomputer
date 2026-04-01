@@ -57,7 +57,7 @@ The architecture is fully specified in `doc/`. Key specs:
 - **Important:** `rm -rf build/<mod>.verilator build/V<mod>` if you suspect stale binaries (WSL2 stale mtimes)
 
 ## Current Status
-The CPU is fully functional in simulation: all RTL modules implemented and tested, CPU runs real programs through the full CPU → MMU → split I/D cache → memory path, booting from ROM at `0xFFFF_E000`. Eight exception sources (IRQ, MMU faults, alignment, bus fault, BREAK, SYSCALL, privilege, illegal) are fully wired with MIPS/68k-style vector dispatch. The LLVM MC-layer assembler produces working ELF objects and raw hex, verified bit-for-bit against `pasm.py`. GlobalISel codegen is functional: `llc -march=penumbra -global-isel` compiles LLVM IR to assembly (i32 ALU, constants, s32 load/store with frame-index folding, calling convention, control flow via CMP+Bcc/B/PHI).
+The CPU is fully functional in simulation: all RTL modules implemented and tested, CPU runs real programs through the full CPU → MMU → split I/D cache → memory path, booting from ROM at `0xFFFF_E000`. Eight exception sources (IRQ, MMU faults, alignment, bus fault, BREAK, SYSCALL, privilege, illegal) are fully wired with MIPS/68k-style vector dispatch. The LLVM MC-layer assembler produces working ELF objects and raw hex, verified bit-for-bit against `pasm.py`. GlobalISel codegen is functional: `llc -march=penumbra -global-isel` compiles LLVM IR to assembly (i32 ALU, constants, s32 load/store with frame-index folding, calling convention, control flow via CMP+Bcc/B/PHI, G_SELECT via branch diamond).
 
 ## Software Tools
 - **Microcode assembler** (`hw/tools/uasm.py`): Symbolic microcode → $readmemh hex. Run: `python3 hw/tools/uasm.py input.uasm -o microcode.hex`

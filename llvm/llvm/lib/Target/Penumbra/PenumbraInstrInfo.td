@@ -310,4 +310,20 @@ let isPseudo = 1 in {
   // RET pseudo: expands to JMP R13 (return via link register).
   let isReturn = 1, isTerminator = 1, isBarrier = 1 in
   def RET : PenumbraInst<(outs), (ins), "ret">;
+
+  // SELECT_GPR: conditional select pseudo, expanded after regalloc by
+  // EmitInstrWithCustomInserter into a diamond of basic blocks + PHI.
+  // Uses TEST+BNE on the condition register.
+  let usesCustomInserter = 1 in
+  def SELECT_GPR : PenumbraInst<(outs GPR:$dst),
+                                (ins GPR:$trueval, GPR:$falseval, GPR:$cond),
+                                "# SELECT_GPR $dst, $trueval, $falseval, $cond">;
+
+  // SELECT_CC_GPR: like SELECT_GPR, but carries CMP operands and a branch
+  // opcode directly — avoids the TEST+BNE round-trip when the condition
+  // originates from G_ICMP.  The $cc immediate is a Penumbra branch opcode.
+  let usesCustomInserter = 1 in
+  def SELECT_CC_GPR : PenumbraInst<(outs GPR:$dst),
+      (ins GPR:$trueval, GPR:$falseval, GPR:$lhs, GPR:$rhs, i32imm:$cc),
+      "# SELECT_CC_GPR $dst, $trueval, $falseval, $lhs, $rhs, $cc">;
 }

@@ -48,6 +48,10 @@ private:
   bool selectBranch(MachineInstr &I, MachineBasicBlock &MBB) const;
   bool selectBrCond(MachineInstr &I, MachineBasicBlock &MBB,
                     MachineRegisterInfo &MRI) const;
+  bool selectSelect(MachineInstr &I, MachineBasicBlock &MBB,
+                    MachineRegisterInfo &MRI) const;
+  bool selectICmp(MachineInstr &I, MachineBasicBlock &MBB,
+                  MachineRegisterInfo &MRI) const;
 
   const PenumbraInstrInfo &TII;
   const PenumbraRegisterInfo &TRI;
@@ -118,6 +122,10 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
   // ── Branches ──────────────────────────────────────────────────────────────
   case G_BR:     return selectBranch(I, MBB);
   case G_BRCOND: return selectBrCond(I, MBB, MRI);
+
+  // ── Compare / Select ────────────────────────────────────────────────────────
+  case G_ICMP:   return selectICmp(I, MBB, MRI);
+  case G_SELECT: return selectSelect(I, MBB, MRI);
 
   default:
     return false;
@@ -249,33 +257,21 @@ bool PenumbraInstructionSelector::selectFrameIndex(MachineInstr &I,
 }
 
 // ── ICMP predicate → Penumbra branch opcode ──────────────────────────────────
+// Maps LLVM ICMP predicates to the Penumbra conditional branch that tests the
+// same condition after a CMP.  Returns 0 for unsupported predicates.
 static unsigned icmpPredToBranchOpc(CmpInst::Predicate Pred) {
-  // ICMP_EQ, ICMP_NE, ICMP_SGT, ICMP_SGE, ICMP_SLT, ICMP_SLE, ICMP_UGT, ICMP_UGE, ICMP_ULT,  ICMP_ULE
   switch (Pred) {
-    case CmpInst::ICMP_EQ:
-      return Penumbra::BEQ;
-    case CmpInst::ICMP_NE:
-      return Penumbra::BNE;
-
-    case CmpInst::ICMP_SGT:
-      return Penumbra::BGT;
-    case CmpInst::ICMP_SGE:
-      return Penumbra::BGE;
-    case CmpInst::ICMP_SLT:
-      return Penumbra::BLT;
-    case CmpInst::ICMP_SLE:
-      return Penumbra::BLE;
-
-    case CmpInst::ICMP_UGT:
-      return Penumbra::BHI;
-    case CmpInst::ICMP_UGE:
-      return Penumbra::BCS;
-    case CmpInst::ICMP_ULT:
-      return Penumbra::BCC;
-    case CmpInst::ICMP_ULE:
-      return Penumbra::BLS;
-    default:
-      return 0;
+  case CmpInst::ICMP_EQ:  return Penumbra::BEQ;
+  case CmpInst::ICMP_NE:  return Penumbra::BNE;
+  case CmpInst::ICMP_SGT: return Penumbra::BGT;
+  case CmpInst::ICMP_SGE: return Penumbra::BGE;
+  case CmpInst::ICMP_SLT: return Penumbra::BLT;
+  case CmpInst::ICMP_SLE: return Penumbra::BLE;
+  case CmpInst::ICMP_UGT: return Penumbra::BHI;
+  case CmpInst::ICMP_UGE: return Penumbra::BCS;
+  case CmpInst::ICMP_ULT: return Penumbra::BCC;
+  case CmpInst::ICMP_ULE: return Penumbra::BLS;
+  default:                 return 0;
   }
 }
 
@@ -337,6 +333,100 @@ bool PenumbraInstructionSelector::selectBrCond(MachineInstr &I,
   BuildMI(MBB, I, DL, TII.get(Penumbra::BNE)).addMBB(TargetMBB);
   I.eraseFromParent();
   return true;
+}
+
+// ── G_SELECT (conditional select) ────────────────────────────────────────────
+// When the condition comes from G_ICMP, fold the comparison into SELECT_CC_GPR
+// (CMP+Bcc in the diamond).  Otherwise fall back to SELECT_GPR (TEST+BNE).
+bool PenumbraInstructionSelector::selectSelect(MachineInstr &I,
+                                                MachineBasicBlock &MBB,
+                                                MachineRegisterInfo &MRI) const {
+  Register DstReg   = I.getOperand(0).getReg();
+  Register CondReg  = I.getOperand(1).getReg();
+  Register TrueReg  = I.getOperand(2).getReg();
+  Register FalseReg = I.getOperand(3).getReg();
+  const DebugLoc &DL = I.getDebugLoc();
+
+  MachineInstr *CondDef = MRI.getVRegDef(CondReg);
+
+  // Fold G_ICMP condition into SELECT_CC_GPR: CMP+Bcc instead of TEST+BNE.
+  if (CondDef && CondDef->getOpcode() == TargetOpcode::G_ICMP) {
+    auto Pred = static_cast<CmpInst::Predicate>(
+        CondDef->getOperand(1).getPredicate());
+    unsigned BrOpc = icmpPredToBranchOpc(Pred);
+    if (!BrOpc)
+      return false;
+
+    Register LHS = CondDef->getOperand(2).getReg();
+    Register RHS = CondDef->getOperand(3).getReg();
+
+    MachineInstr *NewI =
+        BuildMI(MBB, I, DL, TII.get(Penumbra::SELECT_CC_GPR))
+            .addDef(DstReg)
+            .addReg(TrueReg)
+            .addReg(FalseReg)
+            .addReg(LHS)
+            .addReg(RHS)
+            .addImm(BrOpc);
+
+    I.eraseFromParent();
+    if (MRI.use_nodbg_empty(CondDef->getOperand(0).getReg()))
+      CondDef->eraseFromParent();
+    return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
+  }
+
+  // Generic condition: SELECT_GPR with TEST+BNE.
+  MachineInstr *NewI =
+      BuildMI(MBB, I, DL, TII.get(Penumbra::SELECT_GPR))
+          .addDef(DstReg)
+          .addReg(TrueReg)
+          .addReg(FalseReg)
+          .addReg(CondReg);
+
+  I.eraseFromParent();
+  return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
+}
+
+// ── G_ICMP (standalone comparison → 0/1 value) ──────────────────────────────
+// When G_ICMP is consumed by G_BRCOND or G_SELECT, those handlers fold it away.
+// If it survives (e.g. `int x = a > b;`), materialize 0/1 via SELECT_CC_GPR.
+bool PenumbraInstructionSelector::selectICmp(MachineInstr &I,
+                                              MachineBasicBlock &MBB,
+                                              MachineRegisterInfo &MRI) const {
+  // Already consumed by a fold?
+  if (MRI.use_nodbg_empty(I.getOperand(0).getReg())) {
+    I.eraseFromParent();
+    return true;
+  }
+
+  Register DstReg = I.getOperand(0).getReg();
+  auto Pred = static_cast<CmpInst::Predicate>(
+      I.getOperand(1).getPredicate());
+  Register LHS = I.getOperand(2).getReg();
+  Register RHS = I.getOperand(3).getReg();
+  const DebugLoc &DL = I.getDebugLoc();
+
+  unsigned BrOpc = icmpPredToBranchOpc(Pred);
+  if (!BrOpc)
+    return false;
+
+  // Materialize constants 1 (true) and 0 (false).
+  Register OneReg = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
+  Register ZeroReg = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
+  BuildMI(MBB, I, DL, TII.get(Penumbra::LLI)).addDef(OneReg).addImm(1);
+  BuildMI(MBB, I, DL, TII.get(Penumbra::LLI)).addDef(ZeroReg).addImm(0);
+
+  MachineInstr *NewI =
+      BuildMI(MBB, I, DL, TII.get(Penumbra::SELECT_CC_GPR))
+          .addDef(DstReg)
+          .addReg(OneReg)
+          .addReg(ZeroReg)
+          .addReg(LHS)
+          .addReg(RHS)
+          .addImm(BrOpc);
+
+  I.eraseFromParent();
+  return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
 }
 
 // ── Factory function ──────────────────────────────────────────────────────────

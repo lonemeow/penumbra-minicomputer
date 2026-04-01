@@ -5,8 +5,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "PenumbraISelLowering.h"
+#include "PenumbraInstrInfo.h"
 #include "PenumbraSubtarget.h"
 #include "MCTargetDesc/PenumbraMCTargetDesc.h"
+#include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/TargetLowering.h"
 
 using namespace llvm;
@@ -49,4 +51,79 @@ CCAssignFn *PenumbraISelLowering::getCCAssignFn(CallingConv::ID CC,
                                                  bool Return,
                                                  bool IsVarArg) const {
   return Return ? RetCC_Penumbra : CC_Penumbra;
+}
+
+// Expand SELECT_GPR / SELECT_CC_GPR pseudo into a conditional-branch diamond.
+//
+// After expansion (three blocks):
+//   thisMBB:
+//     ... preceding instructions ...
+//     TEST/CMP (set flags)
+//     Bcc tailMBB           ; condition true → trueval wins
+//   falseMBB:               ; fall-through (condition false)
+//     B tailMBB
+//   tailMBB:
+//     %dst = PHI(%trueval, thisMBB, %falseval, falseMBB)
+//     ... following instructions ...
+MachineBasicBlock *
+PenumbraISelLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
+                                                   MachineBasicBlock *MBB) const {
+  unsigned Opc = MI.getOpcode();
+  assert((Opc == Penumbra::SELECT_GPR || Opc == Penumbra::SELECT_CC_GPR) &&
+         "Unexpected custom inserter instruction");
+
+  MachineFunction *MF = MBB->getParent();
+  const auto &TII = *MF->getSubtarget().getInstrInfo();
+  const auto *BB = MBB->getBasicBlock();
+  const auto DL = MI.getDebugLoc();
+
+  auto I = ++MBB->getIterator();
+
+  auto *FalseMBB = MF->CreateMachineBasicBlock(BB);
+  auto *TailMBB = MF->CreateMachineBasicBlock(BB);
+  MF->insert(I, FalseMBB);
+  MF->insert(I, TailMBB);
+
+  FalseMBB->setCallFrameSize(MBB->getCallFrameSize());
+  TailMBB->setCallFrameSize(MBB->getCallFrameSize());
+
+  // Move tail instructions and transfer original successors BEFORE adding
+  // new CFG edges (transferSuccessors moves ALL successors from MBB).
+  TailMBB->splice(TailMBB->end(), MBB, std::next(MI.getIterator()), MBB->end());
+  TailMBB->transferSuccessorsAndUpdatePHIs(MBB);
+
+  MBB->addSuccessor(FalseMBB);
+  MBB->addSuccessor(TailMBB);
+  FalseMBB->addSuccessor(TailMBB);
+
+  // PHI in tailMBB picks trueval or falseval depending on which path was taken.
+  BuildMI(*TailMBB, TailMBB->begin(), DL, TII.get(Penumbra::PHI),
+          MI.getOperand(0).getReg())
+      .addReg(MI.getOperand(1).getReg())
+      .addMBB(MBB)
+      .addReg(MI.getOperand(2).getReg())
+      .addMBB(FalseMBB);
+
+  // Emit the flag-setting instruction + conditional branch in thisMBB.
+  if (Opc == Penumbra::SELECT_CC_GPR) {
+    // SELECT_CC_GPR: operands are dst, trueval, falseval, lhs, rhs, cc.
+    BuildMI(MBB, DL, TII.get(Penumbra::CMP))
+        .addReg(MI.getOperand(3).getReg())
+        .addReg(MI.getOperand(4).getReg());
+    unsigned BrOpc = MI.getOperand(5).getImm();
+    BuildMI(MBB, DL, TII.get(BrOpc)).addMBB(TailMBB);
+  } else {
+    // SELECT_GPR: operands are dst, trueval, falseval, cond.
+    auto CondReg = MI.getOperand(3).getReg();
+    BuildMI(MBB, DL, TII.get(Penumbra::TEST))
+        .addReg(CondReg)
+        .addReg(CondReg);
+    BuildMI(MBB, DL, TII.get(Penumbra::BNE)).addMBB(TailMBB);
+  }
+
+  // FalseMBB: unconditional jump to tailMBB.
+  BuildMI(FalseMBB, DL, TII.get(Penumbra::B)).addMBB(TailMBB);
+
+  MI.eraseFromParent();
+  return TailMBB;
 }

@@ -20,6 +20,10 @@ public:
 
   CCAssignFn *getCCAssignFn(CallingConv::ID CC, bool Return,
                              bool IsVarArg) const;
+
+  MachineBasicBlock *
+  EmitInstrWithCustomInserter(MachineInstr &MI,
+                              MachineBasicBlock *MBB) const override;
 };
 
 } // namespace llvm
