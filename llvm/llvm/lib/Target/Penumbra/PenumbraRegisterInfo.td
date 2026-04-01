@@ -36,9 +36,11 @@ class PenumbraGPR<bits<4> num, string n, list<string> altNames = []>
 
 def R0  : PenumbraGPR<0,  "r0", ["zero"]>;
 
-foreach i = 1-12 in {
+foreach i = 1-11 in {
   def R#i : PenumbraGPR<i, "r"#i>;
 }
+
+def R12 : PenumbraGPR<12, "r12", ["tp"]>;
 
 def R13 : PenumbraGPR<13, "r13", ["lr"]>;
 def R14 : PenumbraGPR<14, "r14", ["sp"]>;

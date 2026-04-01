@@ -16,6 +16,8 @@ enum Fixups {
   fixup_penumbra_branch22 = FirstTargetFixupKind,
   // 16-bit immediate (Format L imm16, bits [15:0]).
   fixup_penumbra_imm16,
+  // 16-bit memory offset (Format M, bits [17:2]).
+  fixup_penumbra_memoffset16,
   // Low 16 bits of a 32-bit absolute address (for LI/LA expansion).
   fixup_penumbra_lo16,
   // High 16 bits of a 32-bit absolute address (for LI/LA expansion).

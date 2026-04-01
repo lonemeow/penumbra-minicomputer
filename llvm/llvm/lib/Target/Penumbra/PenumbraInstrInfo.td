@@ -145,6 +145,12 @@ def imm16op : Operand<i32> {
   let EncoderMethod = "encodeImm16";
 }
 
+// 16-bit memory offset for Format M (bits [17:2]).
+// Expression operands create fixup_penumbra_memoffset16 targeting bits [17:2].
+def memoffset16 : Operand<i32> {
+  let EncoderMethod = "encodeMemOffset16";
+}
+
 //===----------------------------------------------------------------------===//
 // ALU instructions (Format R, prefix=00, op 0x00-0x09)
 //===----------------------------------------------------------------------===//
@@ -230,25 +236,25 @@ let Defs = [SR] in {
 
 // Loads: L=1
 let mayLoad = 1 in {
-  def LDW  : FormatM<1, 0b10, 0, (outs GPR:$Rd), (ins GPR:$Rb, i32imm:$offset),
+  def LDW  : FormatM<1, 0b10, 0, (outs GPR:$Rd), (ins GPR:$Rb, memoffset16:$offset),
                      "ldw\t$Rd, [$Rb + $offset]">;
-  def LDH  : FormatM<1, 0b01, 0, (outs GPR:$Rd), (ins GPR:$Rb, i32imm:$offset),
+  def LDH  : FormatM<1, 0b01, 0, (outs GPR:$Rd), (ins GPR:$Rb, memoffset16:$offset),
                      "ldh\t$Rd, [$Rb + $offset]">;
-  def LDHS : FormatM<1, 0b01, 1, (outs GPR:$Rd), (ins GPR:$Rb, i32imm:$offset),
+  def LDHS : FormatM<1, 0b01, 1, (outs GPR:$Rd), (ins GPR:$Rb, memoffset16:$offset),
                      "ldhs\t$Rd, [$Rb + $offset]">;
-  def LDB  : FormatM<1, 0b00, 0, (outs GPR:$Rd), (ins GPR:$Rb, i32imm:$offset),
+  def LDB  : FormatM<1, 0b00, 0, (outs GPR:$Rd), (ins GPR:$Rb, memoffset16:$offset),
                      "ldb\t$Rd, [$Rb + $offset]">;
-  def LDBS : FormatM<1, 0b00, 1, (outs GPR:$Rd), (ins GPR:$Rb, i32imm:$offset),
+  def LDBS : FormatM<1, 0b00, 1, (outs GPR:$Rd), (ins GPR:$Rb, memoffset16:$offset),
                      "ldbs\t$Rd, [$Rb + $offset]">;
 }
 
 // Stores: L=0
 let mayStore = 1 in {
-  def STW  : FormatM<0, 0b10, 0, (outs), (ins GPR:$Rd, GPR:$Rb, i32imm:$offset),
+  def STW  : FormatM<0, 0b10, 0, (outs), (ins GPR:$Rd, GPR:$Rb, memoffset16:$offset),
                      "stw\t$Rd, [$Rb + $offset]">;
-  def STH  : FormatM<0, 0b01, 0, (outs), (ins GPR:$Rd, GPR:$Rb, i32imm:$offset),
+  def STH  : FormatM<0, 0b01, 0, (outs), (ins GPR:$Rd, GPR:$Rb, memoffset16:$offset),
                      "sth\t$Rd, [$Rb + $offset]">;
-  def STB  : FormatM<0, 0b00, 0, (outs), (ins GPR:$Rd, GPR:$Rb, i32imm:$offset),
+  def STB  : FormatM<0, 0b00, 0, (outs), (ins GPR:$Rd, GPR:$Rb, memoffset16:$offset),
                      "stb\t$Rd, [$Rb + $offset]">;
 }
 
@@ -294,11 +300,89 @@ def : MnemonicAlias<"blo", "bcc">;  // unsigned lower = carry clear
 let isReturn = 1, isTerminator = 1, isBarrier = 1 in
 def JMP  : FormatR_Rs<0b11000, (outs), (ins GPR:$Rs), "jmp\t$Rs">;
 
+// Indirect branch (non-return) — same encoding as JMP but not marked isReturn,
+// so the epilogue inserter doesn't place stack restore before it.
+// Used by jump tables where the targets are within the same function.
+let isBranch = 1, isTerminator = 1, isBarrier = 1, isIndirectBranch = 1 in
+def BRIND : FormatR_Rs<0b11000, (outs), (ins GPR:$Rs), "jmp\t$Rs">;
+
 let isReturn = 1, isTerminator = 1, isBarrier = 1 in
 def ERET : FormatR_NoReg<0b10110, (outs), (ins), "eret">;
 
 def EI   : FormatR_NoReg<0b11001, (outs), (ins), "ei">;
 def DI   : FormatR_NoReg<0b11010, (outs), (ins), "di">;
+
+// WRSYS Rd, #dev, #reg — write Rd to system register.
+// Hardware reads source from Rd field (bits [24:21]).
+// Device ID in bits [15:12], register ID in bits [11:8].
+let hasSideEffects = 1 in
+def WRSYS : PenumbraInst<(outs), (ins GPR:$Rd, i32imm:$dev, i32imm:$reg),
+                         "wrsys\t$Rd, $dev, $reg"> {
+  bits<4> Rd;
+  bits<4> dev;
+  bits<4> reg;
+
+  let Inst{31-30} = 0b00;
+  let Inst{29-25} = 0b10000;   // op = 16
+  let Inst{24-21} = Rd;
+  let Inst{20-17} = 0;
+  let Inst{16}    = 0;
+  let Inst{15-12} = dev;
+  let Inst{11-8}  = reg;
+  let Inst{7-0}   = 0;
+}
+
+// RDSYS Rd, #dev, #reg — read system register into Rd.
+let hasSideEffects = 1 in
+def RDSYS : PenumbraInst<(outs GPR:$Rd), (ins i32imm:$dev, i32imm:$reg),
+                         "rdsys\t$Rd, $dev, $reg"> {
+  bits<4> Rd;
+  bits<4> dev;
+  bits<4> reg;
+
+  let Inst{31-30} = 0b00;
+  let Inst{29-25} = 0b10001;   // op = 17
+  let Inst{24-21} = Rd;
+  let Inst{20-17} = 0;
+  let Inst{16}    = 0;
+  let Inst{15-12} = dev;
+  let Inst{11-8}  = reg;
+  let Inst{7-0}   = 0;
+}
+
+// RDSPR Rd, #spr — read special-purpose register into Rd.
+// SPR number in bits [15:12].  SPRs: EPC=0, ESR=1, USP=2.
+let hasSideEffects = 1 in
+def RDSPR : PenumbraInst<(outs GPR:$Rd), (ins i32imm:$spr),
+                         "rdspr\t$Rd, $spr"> {
+  bits<4> Rd;
+  bits<4> spr;
+
+  let Inst{31-30} = 0b00;
+  let Inst{29-25} = 0b11100;   // op = 28, dispatch 0x58
+  let Inst{24-21} = Rd;
+  let Inst{20-17} = 0;
+  let Inst{16}    = 0;
+  let Inst{15-12} = spr;
+  let Inst{11-0}  = 0;
+}
+
+// WRSPR #spr, Rd — write Rd to special-purpose register.
+// Hardware reads source from Rd field (bits [24:21]), not Rs.
+let hasSideEffects = 1 in
+def WRSPR : PenumbraInst<(outs), (ins i32imm:$spr, GPR:$Rd),
+                         "wrspr\t$spr, $Rd"> {
+  bits<4> spr;
+  bits<4> Rd;
+
+  let Inst{31-30} = 0b00;
+  let Inst{29-25} = 0b11011;   // op = 27, dispatch 0x56
+  let Inst{24-21} = Rd;
+  let Inst{20-17} = 0;
+  let Inst{16}    = 0;
+  let Inst{15-12} = spr;
+  let Inst{11-0}  = 0;
+}
 
 def SYSCALL : FormatR_NoReg<0b10100, (outs), (ins), "syscall">;
 def BREAK   : FormatR_NoReg<0b10101, (outs), (ins), "break">;

@@ -62,6 +62,18 @@ private:
                   MachineRegisterInfo &MRI) const;
   bool selectGlobalValue(MachineInstr &I, MachineBasicBlock &MBB,
                          MachineRegisterInfo &MRI) const;
+  bool selectJumpTable(MachineInstr &I, MachineBasicBlock &MBB,
+                       MachineRegisterInfo &MRI) const;
+  bool selectBrJT(MachineInstr &I, MachineBasicBlock &MBB,
+                  MachineRegisterInfo &MRI) const;
+
+  // Emit LLI+LUI pair to materialise a symbol address into DstReg.
+  // LoOp/HiOp are the lo16/hi16 operands (GlobalAddress, JumpTableIndex, etc.)
+  void emitLoadSymbolAddr(Register DstReg, const DebugLoc &DL,
+                          MachineBasicBlock &MBB,
+                          MachineBasicBlock::iterator InsertPt,
+                          const MachineOperand &LoOp,
+                          const MachineOperand &HiOp) const;
 
   const PenumbraInstrInfo &TII;
   const PenumbraRegisterInfo &TRI;
@@ -132,6 +144,8 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
   case G_LOAD:        return selectLoad(I, MBB, MRI);
   case G_STORE:       return selectStore(I, MBB, MRI);
   case G_FRAME_INDEX: return selectFrameIndex(I, MBB, MRI);
+  case G_JUMP_TABLE:  return selectJumpTable(I, MBB, MRI);
+  case G_BRJT:        return selectBrJT(I, MBB, MRI);
 
   // ── Branches ──────────────────────────────────────────────────────────────
   case G_BR:     return selectBranch(I, MBB);
@@ -571,28 +585,94 @@ bool PenumbraInstructionSelector::selectSExt(MachineInstr &I,
   return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
 }
 
-// ── G_GLOBAL_VALUE (global address materialization) ──────────────────────────
-// Emit LLI+LUI pair with lo16/hi16 target flags on the global address operand.
-// The AsmPrinter converts these flags into MCSpecifierExpr wrappers.
+// ── LLI+LUI symbol address helper ────────────────────────────────────────────
+// Shared by G_GLOBAL_VALUE, G_JUMP_TABLE, and future symbol materialisations.
+// Emits:  LLI Rd, :lo16:sym  /  LUI Rd, Rd, :hi16:sym
+// Caller provides the lo16/hi16 MachineOperands (GlobalAddress, JTI, etc.).
+void PenumbraInstructionSelector::emitLoadSymbolAddr(
+    Register DstReg, const DebugLoc &DL, MachineBasicBlock &MBB,
+    MachineBasicBlock::iterator InsertPt,
+    const MachineOperand &LoOp, const MachineOperand &HiOp) const {
+  auto LLIInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::LLI))
+      .addDef(DstReg)
+      .add(LoOp);
+  constrainSelectedInstRegOperands(*LLIInst, TII, TRI, RBI);
+
+  auto LUIInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::LUI))
+      .addDef(DstReg)
+      .addReg(DstReg)
+      .add(HiOp);
+  constrainSelectedInstRegOperands(*LUIInst, TII, TRI, RBI);
+}
+
+// ── G_GLOBAL_VALUE ───────────────────────────────────────────────────────────
 bool PenumbraInstructionSelector::selectGlobalValue(MachineInstr &I,
                                                      MachineBasicBlock &MBB,
                                                      MachineRegisterInfo &MRI) const {
   Register DstReg = I.getOperand(0).getReg();
   const GlobalValue *GV = I.getOperand(1).getGlobal();
   int64_t Offset = I.getOperand(1).getOffset();
+
+  emitLoadSymbolAddr(
+      DstReg, I.getDebugLoc(), MBB, I.getIterator(),
+      MachineOperand::CreateGA(GV, Offset, Penumbra::S_Lo16),
+      MachineOperand::CreateGA(GV, Offset, Penumbra::S_Hi16));
+
+  I.eraseFromParent();
+  return true;
+}
+
+// ── G_JUMP_TABLE ─────────────────────────────────────────────────────────────
+bool PenumbraInstructionSelector::selectJumpTable(MachineInstr &I,
+                                                   MachineBasicBlock &MBB,
+                                                   MachineRegisterInfo &MRI) const {
+  Register DstReg = I.getOperand(0).getReg();
+  unsigned JTI = I.getOperand(1).getIndex();
+
+  emitLoadSymbolAddr(
+      DstReg, I.getDebugLoc(), MBB, I.getIterator(),
+      MachineOperand::CreateJTI(JTI, Penumbra::S_Lo16),
+      MachineOperand::CreateJTI(JTI, Penumbra::S_Hi16));
+
+  I.eraseFromParent();
+  return true;
+}
+
+// ── G_BRJT (indexed jump through table) ──────────────────────────────────────
+// Expands to: SHLi tmp, index, #2  →  ADD tmp, base  →  LDW target, [tmp]
+//             →  JMP target
+bool PenumbraInstructionSelector::selectBrJT(MachineInstr &I,
+                                              MachineBasicBlock &MBB,
+                                              MachineRegisterInfo &MRI) const {
+  Register BaseReg = I.getOperand(0).getReg();
+  // operand 1 is the JTI metadata — not needed at this stage
+  Register IdxReg = I.getOperand(2).getReg();
   const DebugLoc &DL = I.getDebugLoc();
 
-  // LLI Rd, :lo16:symbol
-  auto LLIInst = BuildMI(MBB, I, DL, TII.get(Penumbra::LLI))
-      .addDef(DstReg)
-      .addGlobalAddress(GV, Offset, Penumbra::S_Lo16);
-  constrainSelectedInstRegOperands(*LLIInst, TII, TRI, RBI);
-  // LUI Rd, Rd, :hi16:symbol
-  auto LUIInst = BuildMI(MBB, I, DL, TII.get(Penumbra::LUI))
-      .addDef(DstReg)
-      .addReg(DstReg)
-      .addGlobalAddress(GV, Offset, Penumbra::S_Hi16);
-  constrainSelectedInstRegOperands(*LUIInst, TII, TRI, RBI);
+  // tmp = index << 2 (word-sized entries)
+  Register ShiftReg = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
+  BuildMI(MBB, I, DL, TII.get(Penumbra::SHLi))
+      .addDef(ShiftReg)
+      .addReg(IdxReg)
+      .addImm(2);
+
+  // tmp = tmp + base
+  Register AddrReg = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
+  BuildMI(MBB, I, DL, TII.get(Penumbra::ADD))
+      .addDef(AddrReg)
+      .addReg(ShiftReg)
+      .addReg(BaseReg);
+
+  // target = [tmp + 0]
+  Register TargetReg = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
+  BuildMI(MBB, I, DL, TII.get(Penumbra::LDW))
+      .addDef(TargetReg)
+      .addReg(AddrReg)
+      .addImm(0);
+
+  // Indirect branch (not a return — targets are within this function)
+  BuildMI(MBB, I, DL, TII.get(Penumbra::BRIND))
+      .addReg(TargetReg);
 
   I.eraseFromParent();
   return true;

@@ -55,6 +55,11 @@ public:
   unsigned encodeImm16(const MCInst &Inst, unsigned OpNo,
                        SmallVectorImpl<MCFixup> &Fixups,
                        const MCSubtargetInfo &STI) const;
+
+  /// Encode a 16-bit memory offset (Format M, bits [17:2]).
+  unsigned encodeMemOffset16(const MCInst &Inst, unsigned OpNo,
+                             SmallVectorImpl<MCFixup> &Fixups,
+                             const MCSubtargetInfo &STI) const;
 };
 
 } // anonymous namespace
@@ -73,6 +78,17 @@ unsigned PenumbraMCCodeEmitter::getMachineOpValue(
     return Ctx.getRegisterInfo()->getEncodingValue(MO.getReg());
   if (MO.isImm())
     return static_cast<unsigned>(MO.getImm());
+  if (MO.isExpr()) {
+    // Try to evaluate constant expressions (e.g. "label - .").
+    int64_t Val;
+    if (MO.getExpr()->evaluateAsAbsolute(Val))
+      return static_cast<unsigned>(Val);
+    // Non-constant expression: create an imm16 fixup for the linker.
+    Fixups.push_back(MCFixup::create(
+        0, MO.getExpr(),
+        static_cast<MCFixupKind>(Penumbra::fixup_penumbra_imm16)));
+    return 0;
+  }
   llvm_unreachable("Unhandled operand kind in getMachineOpValue");
 }
 
@@ -119,6 +135,20 @@ unsigned PenumbraMCCodeEmitter::encodeImm16(
 
   // Format L: imm16 lives in bits [15:0], fixup applied at byte offset 0.
   Fixups.push_back(MCFixup::create(0, Expr, Kind));
+  return 0;
+}
+
+unsigned PenumbraMCCodeEmitter::encodeMemOffset16(
+    const MCInst &Inst, unsigned OpNo, SmallVectorImpl<MCFixup> &Fixups,
+    const MCSubtargetInfo &STI) const {
+  const MCOperand &MO = Inst.getOperand(OpNo);
+  if (MO.isImm())
+    return static_cast<unsigned>(MO.getImm());
+
+  // Format M: offset16 lives in bits [17:2].
+  Fixups.push_back(MCFixup::create(
+      0, MO.getExpr(),
+      static_cast<MCFixupKind>(Penumbra::fixup_penumbra_memoffset16)));
   return 0;
 }
 

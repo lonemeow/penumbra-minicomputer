@@ -55,6 +55,15 @@ static bool lowerOperand(const MachineOperand &MO, MCOperand &MCOp,
     MCOp = MCOperand::createExpr(
         MCSymbolRefExpr::create(MO.getMBB()->getSymbol(), AP.OutContext));
     return true;
+  case MachineOperand::MO_JumpTableIndex: {
+    const MCExpr *Expr =
+        MCSymbolRefExpr::create(AP.GetJTISymbol(MO.getIndex()), AP.OutContext);
+    unsigned TF = MO.getTargetFlags();
+    if (TF == Penumbra::S_Lo16 || TF == Penumbra::S_Hi16)
+      Expr = MCSpecifierExpr::create(Expr, TF, AP.OutContext);
+    MCOp = MCOperand::createExpr(Expr);
+    return true;
+  }
   case MachineOperand::MO_ExternalSymbol:
     MCOp = MCOperand::createExpr(
         MCSymbolRefExpr::create(AP.GetExternalSymbolSymbol(MO.getSymbolName()),

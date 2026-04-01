@@ -201,6 +201,16 @@ ParseStatus PenumbraAsmParser::tryParseRegister(MCRegister &Reg,
 
   StringRef Name = Parser.getTok().getIdentifier();
   MCRegister RegNo = MatchRegisterName(Name);
+  // Check alternate names: zero=R0, tp=R12, lr=R13, sp=R14, pc=R15
+  if (!RegNo) {
+    RegNo = StringSwitch<MCRegister>(Name.lower())
+        .Case("zero", Penumbra::R0)
+        .Case("tp",   Penumbra::R12)
+        .Case("lr",   Penumbra::R13)
+        .Case("sp",   Penumbra::R14)
+        .Case("pc",   Penumbra::R15)
+        .Default(MCRegister());
+  }
   if (!RegNo)
     return ParseStatus::NoMatch;
 
@@ -226,11 +236,30 @@ bool PenumbraAsmParser::parseOperand(OperandVector &Operands) {
   }
 
   // Punctuation tokens: [ ] +
-  if (Parser.getTok().is(AsmToken::LBrac) ||
-      Parser.getTok().is(AsmToken::RBrac) ||
-      Parser.getTok().is(AsmToken::Plus)) {
-    StringRef Tok = Parser.getTok().getString();
-    Operands.push_back(PenumbraOperand::createToken(Tok, S));
+  // For "[Rb]" without offset, insert "+ 0" so the matcher sees the full
+  // "[Rb + offset]" pattern that Format M instructions expect.
+  if (Parser.getTok().is(AsmToken::LBrac)) {
+    Operands.push_back(PenumbraOperand::createToken("[", S));
+    Parser.Lex();
+    return false;
+  }
+  if (Parser.getTok().is(AsmToken::Plus)) {
+    Operands.push_back(PenumbraOperand::createToken("+", S));
+    Parser.Lex();
+    return false;
+  }
+  if (Parser.getTok().is(AsmToken::RBrac)) {
+    // Check if previous operand was a register (i.e. "[Rb]" with no offset).
+    // Insert "+ 0" before the "]".
+    if (Operands.size() >= 2) {
+      auto &Prev = static_cast<PenumbraOperand &>(*Operands.back());
+      if (Prev.isReg()) {
+        Operands.push_back(PenumbraOperand::createToken("+", S));
+        const MCExpr *Zero = MCConstantExpr::create(0, getContext());
+        Operands.push_back(PenumbraOperand::createImm(Zero, S, S));
+      }
+    }
+    Operands.push_back(PenumbraOperand::createToken("]", S));
     Parser.Lex();
     return false;
   }
@@ -238,6 +267,23 @@ bool PenumbraAsmParser::parseOperand(OperandVector &Operands) {
   // Consume optional '#' prefix on immediates (ARM-style).
   if (Parser.getTok().is(AsmToken::Hash))
     Parser.Lex();
+
+  // SPR names: esr=0, epc=1, usp=2 (for RDSPR/WRSPR).
+  // Hardware SPR decode: IR[15:12]=0 → ESR, 1 → EPC, 2 → USP.
+  if (Parser.getTok().is(AsmToken::Identifier)) {
+    StringRef Name = Parser.getTok().getIdentifier();
+    int SprVal = -1;
+    if (Name.equals_insensitive("esr"))      SprVal = 0;
+    else if (Name.equals_insensitive("epc")) SprVal = 1;
+    else if (Name.equals_insensitive("usp")) SprVal = 2;
+    if (SprVal >= 0) {
+      SMLoc E = Parser.getTok().getEndLoc();
+      const MCExpr *Expr = MCConstantExpr::create(SprVal, getContext());
+      Operands.push_back(PenumbraOperand::createImm(Expr, S, E));
+      Parser.Lex();
+      return false;
+    }
+  }
 
   // Parse %lo16(expr) / %hi16(expr) specifier expressions.
   if (Parser.getTok().is(AsmToken::Percent)) {
