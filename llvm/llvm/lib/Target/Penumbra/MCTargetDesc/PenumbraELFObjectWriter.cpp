@@ -25,6 +25,8 @@ enum {
   R_PENUMBRA_32 = 1,       // Absolute 32-bit (.word symbol)
   R_PENUMBRA_BRANCH22 = 2, // PC-relative 22-bit word offset (Format B)
   R_PENUMBRA_IMM16 = 3,    // 16-bit immediate (Format L)
+  R_PENUMBRA_LO16 = 4,     // Low 16 bits of absolute address
+  R_PENUMBRA_HI16 = 5,     // High 16 bits of absolute address
 };
 
 class PenumbraELFObjectWriter : public MCELFObjectTargetWriter {
@@ -48,6 +50,10 @@ unsigned PenumbraELFObjectWriter::getRelocType(const MCFixup &Fixup,
     return R_PENUMBRA_BRANCH22;
   if (Kind == Penumbra::fixup_penumbra_imm16)
     return R_PENUMBRA_IMM16;
+  if (Kind == Penumbra::fixup_penumbra_lo16)
+    return R_PENUMBRA_LO16;
+  if (Kind == Penumbra::fixup_penumbra_hi16)
+    return R_PENUMBRA_HI16;
   // Standard data fixups (FK_Data_4 from .word directives).
   if (Kind == FK_Data_4)
     return R_PENUMBRA_32;

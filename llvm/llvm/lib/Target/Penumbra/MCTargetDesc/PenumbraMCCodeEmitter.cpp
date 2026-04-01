@@ -9,6 +9,7 @@
 #include "llvm/MC/MCCodeEmitter.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/MC/MCFixup.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstrInfo.h"
@@ -98,11 +99,26 @@ unsigned PenumbraMCCodeEmitter::encodeImm16(
   if (MO.isImm())
     return static_cast<unsigned>(MO.getImm());
 
-  // Symbolic expression — create a fixup for 16-bit immediate.
+  // Check for lo16/hi16 specifier expressions (from LI/LA pseudo expansion).
+  const MCExpr *Expr = MO.getExpr();
+  MCFixupKind Kind =
+      static_cast<MCFixupKind>(Penumbra::fixup_penumbra_imm16);
+
+  if (const auto *SE = dyn_cast<MCSpecifierExpr>(Expr)) {
+    switch (SE->getSpecifier()) {
+    case Penumbra::S_Lo16:
+      Kind = static_cast<MCFixupKind>(Penumbra::fixup_penumbra_lo16);
+      break;
+    case Penumbra::S_Hi16:
+      Kind = static_cast<MCFixupKind>(Penumbra::fixup_penumbra_hi16);
+      break;
+    default:
+      break;
+    }
+  }
+
   // Format L: imm16 lives in bits [15:0], fixup applied at byte offset 0.
-  Fixups.push_back(MCFixup::create(
-      0, MO.getExpr(),
-      static_cast<MCFixupKind>(Penumbra::fixup_penumbra_imm16)));
+  Fixups.push_back(MCFixup::create(0, Expr, Kind));
   return 0;
 }
 

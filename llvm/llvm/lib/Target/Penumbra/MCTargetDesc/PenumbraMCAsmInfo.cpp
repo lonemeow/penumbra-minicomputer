@@ -5,6 +5,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "PenumbraMCAsmInfo.h"
+#include "PenumbraFixupKinds.h"
+#include "llvm/MC/MCExpr.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 
@@ -24,4 +27,21 @@ PenumbraMCAsmInfo::PenumbraMCAsmInfo(const Triple &TT) {
   Data16bitsDirective = "\t.half\t";
   Data8bitsDirective = "\t.byte\t";
   ZeroDirective = "\t.zero\t";
+}
+
+void PenumbraMCAsmInfo::printSpecifierExpr(raw_ostream &OS,
+                                           const MCSpecifierExpr &Expr) const {
+  switch (Expr.getSpecifier()) {
+  case Penumbra::S_Lo16:
+    OS << "%lo16(";
+    break;
+  case Penumbra::S_Hi16:
+    OS << "%hi16(";
+    break;
+  default:
+    OS << "%unknown(";
+    break;
+  }
+  printExpr(OS, *Expr.getSubExpr());
+  OS << ')';
 }

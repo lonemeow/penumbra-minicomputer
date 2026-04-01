@@ -11,11 +11,15 @@
 
 namespace llvm {
 
+class MCSpecifierExpr;
 class Triple;
 
 class PenumbraMCAsmInfo : public MCAsmInfoELF {
 public:
   explicit PenumbraMCAsmInfo(const Triple &TT);
+
+  void printSpecifierExpr(raw_ostream &OS,
+                          const MCSpecifierExpr &Expr) const override;
 };
 
 } // namespace llvm
