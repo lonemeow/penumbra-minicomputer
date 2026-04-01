@@ -35,7 +35,8 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
         {s32, p0, s16, 2},  // STH (store) / plain LDH (zero-extend, handled by G_ZEXTLOAD too)
         {s32, p0, s8,  1},  // STB / plain LDB
         {p0,  p0, s32, 4},  // pointer load/store
-      });
+      })
+      .clampScalar(0, s32, s32);
 
   getActionDefinitionsBuilder({G_SEXTLOAD, G_ZEXTLOAD})
       .legalForTypesWithMemDesc({
@@ -65,6 +66,18 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   getActionDefinitionsBuilder(G_SELECT)
       .legalFor({{s32, s1}, {p0, s1}})
       .clampScalar(0, s32, s32);
+
+  // Extensions: handled in instruction selection (AND for zext, SHL+SAR for sext).
+  getActionDefinitionsBuilder({G_ZEXT, G_SEXT, G_ANYEXT})
+      .legalForCartesianProduct({s8, s16, s32}, {s1, s8, s16});
+
+  // SEXT_INREG: lowered by framework to SHL+ASHR (our shift constant folding
+  // then selects these to SHLi+SARi).
+  getActionDefinitionsBuilder(G_SEXT_INREG).lower();
+
+  // Truncation: no-op at the register level (just use the low bits).
+  getActionDefinitionsBuilder(G_TRUNC)
+      .legalFor({{s1, s32}, {s8, s32}, {s16, s32}});
 
   getLegacyLegalizerInfo().computeTables();
 }

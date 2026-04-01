@@ -14,7 +14,7 @@ MC-layer assembler produces working ELF objects and raw hex. `llvm-mc -triple=pe
 
 GlobalISel codegen pipeline is functional: `llc -march=penumbra` compiles LLVM IR to Penumbra assembly (GlobalISel is the default). Supports i32 ALU ops (add/sub/and/or/xor/shifts), constants (LLI/LLIS/LUI), s32 loads/stores with frame-index folding, full calling convention (R1-R4 args, R1 return), control flow (G_ICMP+G_BRCOND folded to CMP+Bcc, G_BR, G_PHI), and G_SELECT (conditional select via branch diamond, with G_ICMP fold into CMP+Bcc). No SelectionDAG — GlobalISel only.
 
-Clang driver is wired: `clang --target=penumbra-unknown-none -S file.c` compiles C to Penumbra assembly. Works at `-O0`; `-O1+` triggers unlegalized ops (G_SMAX, G_ZEXT, etc.) that need more rules.
+Clang driver is wired: `clang --target=penumbra-unknown-none -S file.c` compiles C to Penumbra assembly. Works at `-O0`; `-O1+` triggers unlegalized ops (G_SMAX, etc.) that need more rules. G_ZEXT/G_SEXT/G_ANYEXT/G_TRUNC/G_SEXT_INREG are handled. Shift-by-constant folds to SHLi/SHRi/SARi.
 
 ## File Map (`llvm/llvm/lib/Target/Penumbra/`)
 

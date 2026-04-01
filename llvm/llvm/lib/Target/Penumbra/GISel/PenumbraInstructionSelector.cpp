@@ -37,6 +37,9 @@ public:
 private:
   bool selectBinaryALU(MachineInstr &I, MachineBasicBlock &MBB,
                        MachineRegisterInfo &MRI, unsigned Opc) const;
+  bool selectShift(MachineInstr &I, MachineBasicBlock &MBB,
+                   MachineRegisterInfo &MRI, unsigned RegOpc,
+                   unsigned ImmOpc) const;
   bool selectConstant(MachineInstr &I, MachineBasicBlock &MBB,
                       MachineRegisterInfo &MRI) const;
   bool selectLoad(MachineInstr &I, MachineBasicBlock &MBB,
@@ -51,6 +54,10 @@ private:
   bool selectSelect(MachineInstr &I, MachineBasicBlock &MBB,
                     MachineRegisterInfo &MRI) const;
   bool selectICmp(MachineInstr &I, MachineBasicBlock &MBB,
+                  MachineRegisterInfo &MRI) const;
+  bool selectZExt(MachineInstr &I, MachineBasicBlock &MBB,
+                  MachineRegisterInfo &MRI) const;
+  bool selectSExt(MachineInstr &I, MachineBasicBlock &MBB,
                   MachineRegisterInfo &MRI) const;
 
   const PenumbraInstrInfo &TII;
@@ -107,9 +114,9 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
   case G_AND:  return selectBinaryALU(I, MBB, MRI, Penumbra::AND);
   case G_OR:   return selectBinaryALU(I, MBB, MRI, Penumbra::OR);
   case G_XOR:  return selectBinaryALU(I, MBB, MRI, Penumbra::XOR);
-  case G_SHL:  return selectBinaryALU(I, MBB, MRI, Penumbra::SHL);
-  case G_LSHR: return selectBinaryALU(I, MBB, MRI, Penumbra::SHR);
-  case G_ASHR: return selectBinaryALU(I, MBB, MRI, Penumbra::SAR);
+  case G_SHL:  return selectShift(I, MBB, MRI, Penumbra::SHL, Penumbra::SHLi);
+  case G_LSHR: return selectShift(I, MBB, MRI, Penumbra::SHR, Penumbra::SHRi);
+  case G_ASHR: return selectShift(I, MBB, MRI, Penumbra::SAR, Penumbra::SARi);
 
   // ── Constants ─────────────────────────────────────────────────────────────
   case G_CONSTANT: return selectConstant(I, MBB, MRI);
@@ -122,6 +129,15 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
   // ── Branches ──────────────────────────────────────────────────────────────
   case G_BR:     return selectBranch(I, MBB);
   case G_BRCOND: return selectBrCond(I, MBB, MRI);
+
+  // ── Extensions / Truncation ─────────────────────────────────────────────────
+  case G_ANYEXT:
+  case G_TRUNC:
+    I.setDesc(TII.get(TargetOpcode::COPY));
+    return true;
+
+  case G_ZEXT: return selectZExt(I, MBB, MRI);
+  case G_SEXT: return selectSExt(I, MBB, MRI);
 
   // ── Compare / Select ────────────────────────────────────────────────────────
   case G_ICMP:   return selectICmp(I, MBB, MRI);
@@ -147,6 +163,34 @@ bool PenumbraInstructionSelector::selectBinaryALU(MachineInstr &I,
           .addReg(I.getOperand(2).getReg()); // $Rs
   I.eraseFromParent();
   return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
+}
+
+// ── Shift helper ─────────────────────────────────────────────────────────────
+// Like selectBinaryALU, but folds a constant shift amount into the immediate
+// form (SHLi/SHRi/SARi) when the second operand is a G_CONSTANT in 0–31.
+bool PenumbraInstructionSelector::selectShift(MachineInstr &I,
+                                               MachineBasicBlock &MBB,
+                                               MachineRegisterInfo &MRI,
+                                               unsigned RegOpc,
+                                               unsigned ImmOpc) const {
+  Register ShAmtReg = I.getOperand(2).getReg();
+  MachineInstr *ShAmtDef = MRI.getVRegDef(ShAmtReg);
+
+  if (ShAmtDef && ShAmtDef->getOpcode() == TargetOpcode::G_CONSTANT) {
+    int64_t Amt = ShAmtDef->getOperand(1).getCImm()->getSExtValue();
+    MachineInstr *NewI =
+        BuildMI(MBB, I, I.getDebugLoc(), TII.get(ImmOpc))
+            .addDef(I.getOperand(0).getReg())
+            .addReg(I.getOperand(1).getReg())
+            .addImm(Amt);
+    I.eraseFromParent();
+    if (MRI.use_nodbg_empty(ShAmtDef->getOperand(0).getReg()))
+      ShAmtDef->eraseFromParent();
+    return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
+  }
+
+  // Non-constant or out-of-range: fall back to register shift.
+  return selectBinaryALU(I, MBB, MRI, RegOpc);
 }
 
 // ── G_CONSTANT ────────────────────────────────────────────────────────────────
@@ -424,6 +468,54 @@ bool PenumbraInstructionSelector::selectICmp(MachineInstr &I,
           .addReg(LHS)
           .addReg(RHS)
           .addImm(BrOpc);
+
+  I.eraseFromParent();
+  return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
+}
+
+// ── G_ZEXT (zero-extend) ─────────────────────────────────────────────────────
+// s1→s32: AND #1, s8→s32: AND #0xFF, s16→s32: AND #0xFFFF
+bool PenumbraInstructionSelector::selectZExt(MachineInstr &I,
+                                              MachineBasicBlock &MBB,
+                                              MachineRegisterInfo &MRI) const {
+  Register DstReg = I.getOperand(0).getReg();
+  Register SrcReg = I.getOperand(1).getReg();
+  unsigned SrcBits = MRI.getType(SrcReg).getSizeInBits();
+  const DebugLoc &DL = I.getDebugLoc();
+
+  uint64_t Mask = (1ULL << SrcBits) - 1; // 1, 0xFF, or 0xFFFF
+  MachineInstr *NewI =
+      BuildMI(MBB, I, DL, TII.get(Penumbra::ANDi))
+          .addDef(DstReg)
+          .addReg(SrcReg)
+          .addImm(Mask);
+
+  I.eraseFromParent();
+  return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
+}
+
+// ── G_SEXT (sign-extend) ────────────────────────────────────────────────────
+// Shift left to put the sign bit at bit 31, then arithmetic shift right.
+// s1→s32: SHL 31 + SAR 31, s8→s32: SHL 24 + SAR 24, s16→s32: SHL 16 + SAR 16
+bool PenumbraInstructionSelector::selectSExt(MachineInstr &I,
+                                              MachineBasicBlock &MBB,
+                                              MachineRegisterInfo &MRI) const {
+  Register DstReg = I.getOperand(0).getReg();
+  Register SrcReg = I.getOperand(1).getReg();
+  unsigned SrcBits = MRI.getType(SrcReg).getSizeInBits();
+  const DebugLoc &DL = I.getDebugLoc();
+
+  unsigned ShAmt = 32 - SrcBits;
+  Register TmpReg = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
+  BuildMI(MBB, I, DL, TII.get(Penumbra::SHLi))
+      .addDef(TmpReg)
+      .addReg(SrcReg)
+      .addImm(ShAmt);
+  MachineInstr *NewI =
+      BuildMI(MBB, I, DL, TII.get(Penumbra::SARi))
+          .addDef(DstReg)
+          .addReg(TmpReg)
+          .addImm(ShAmt);
 
   I.eraseFromParent();
   return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
