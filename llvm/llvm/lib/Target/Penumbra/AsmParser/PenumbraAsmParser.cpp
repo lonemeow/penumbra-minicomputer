@@ -239,6 +239,37 @@ bool PenumbraAsmParser::parseOperand(OperandVector &Operands) {
   if (Parser.getTok().is(AsmToken::Hash))
     Parser.Lex();
 
+  // Parse %lo16(expr) / %hi16(expr) specifier expressions.
+  if (Parser.getTok().is(AsmToken::Percent)) {
+    SMLoc ModLoc = Parser.getTok().getLoc();
+    Parser.Lex(); // eat '%'
+    if (Parser.getTok().isNot(AsmToken::Identifier))
+      return Error(ModLoc, "expected modifier name after '%'");
+    StringRef Name = Parser.getTok().getIdentifier();
+    unsigned Spec;
+    if (Name == "lo16")
+      Spec = Penumbra::S_Lo16;
+    else if (Name == "hi16")
+      Spec = Penumbra::S_Hi16;
+    else
+      return Error(ModLoc, "unknown modifier %" + Name);
+    Parser.Lex(); // eat modifier name
+    if (Parser.getTok().isNot(AsmToken::LParen))
+      return Error(Parser.getTok().getLoc(), "expected '('");
+    Parser.Lex(); // eat '('
+    const MCExpr *SubExpr;
+    if (Parser.parseExpression(SubExpr))
+      return true;
+    if (Parser.getTok().isNot(AsmToken::RParen))
+      return Error(Parser.getTok().getLoc(), "expected ')'");
+    Parser.Lex(); // eat ')'
+    const MCExpr *Expr =
+        MCSpecifierExpr::create(SubExpr, Spec, getContext(), ModLoc);
+    SMLoc E = Parser.getTok().getLoc();
+    Operands.push_back(PenumbraOperand::createImm(Expr, S, E));
+    return false;
+  }
+
   // Otherwise, try immediate / expression.
   const MCExpr *Expr;
   if (!Parser.parseExpression(Expr)) {

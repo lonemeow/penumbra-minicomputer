@@ -112,6 +112,6 @@ ninja -j4 clang lld llvm-mc llvm-objcopy
 ## Known Limitations
 
 - `-O1+` triggers unlegalized generic ops (G_SMAX, MUL/DIV)
-- `%lo16()`/`%hi16()` assembly syntax not parseable (use `clang -c`, not `-S` + `llvm-mc`)
+- `clang -S` → `llvm-mc` roundtrip works, but `clang -c` (direct to object) is faster
 - No function calls from C yet (lowerCall is a stub)
 - No MUL/DIV hardware support (trap + SW emulation planned)

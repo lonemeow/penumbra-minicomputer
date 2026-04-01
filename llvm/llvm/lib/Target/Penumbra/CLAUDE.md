@@ -12,7 +12,7 @@ This file provides LLVM backend context for work under `llvm/`. The root `CLAUDE
 ## Current State
 **End-to-end functional.** C boot ROM compiles with clang, links with lld, and runs on the simulated Penumbra CPU (prints "Penumbra/1" via UART).
 
-**MC-layer assembler:** `llvm-mc -triple=penumbra` encodes all 4 instruction formats. Six fixup/relocation types: branch22, imm16, lo16, hi16, 32, none. Pseudo-instructions LI, LA, NOP, RET expanded in the AsmParser. `%lo16()`/`%hi16()` MCSpecifierExpr modifiers for assembly output (not yet parseable from text — use `-c` instead of `-S` + `llvm-mc`). Encodings verified bit-for-bit against `pasm.py`.
+**MC-layer assembler:** `llvm-mc -triple=penumbra` encodes all 4 instruction formats. Six fixup/relocation types: branch22, imm16, lo16, hi16, 32, none. Pseudo-instructions LI, LA, NOP, RET expanded in the AsmParser. `%lo16()`/`%hi16()` MCSpecifierExpr modifiers parsed and printed (full `clang -S` → `llvm-mc` roundtrip works). Encodings verified bit-for-bit against `pasm.py`.
 
 **GlobalISel codegen:** i32 ALU (add/sub/and/or/xor/shifts with constant folding to SHLi/SHRi/SARi), constants (LLI/LLIS/LUI), global addresses (G_GLOBAL_VALUE → LLI+LUI with lo16/hi16), sub-word load/store (LDB/LDH/LDW, STB/STH/STW selected by memory operand size, frame-index folding), pointer arithmetic (G_PTR_ADD → ADD), type casts (G_INTTOPTR/G_PTRTOINT → COPY), extensions (G_ZEXT/G_SEXT/G_ANYEXT/G_TRUNC/G_SEXT_INREG), calling convention (R1-R4 args, R1 return), control flow (G_ICMP+G_BRCOND → CMP+Bcc, G_BR, G_PHI), G_SELECT (ICMP fold into SELECT_CC_GPR). No SelectionDAG — GlobalISel only.
 
@@ -74,5 +74,5 @@ Minimal ELF linker target. Handles all 6 relocation types. Registered via `EM_PE
 - **PC-relativity:** Set on `MCFixup` itself (`PCRel=true` in `MCFixup::create`), not in `MCFixupKindInfo`.
 - **Destructive 2-operand ops:** TableGen patterns use tied-operand constraints. Register allocator handles via COPY insertion.
 - **Global address materialization:** Instruction selector emits LLI+LUI with target flags (`S_Lo16`/`S_Hi16`). AsmPrinter converts flags to `MCSpecifierExpr` wrappers. MCCodeEmitter maps specifiers to `fixup_penumbra_lo16`/`fixup_penumbra_hi16`.
-- **Assembly text roundtrip:** `%lo16()`/`%hi16()` syntax is emitted but **not yet parseable** by the AsmParser. Use `clang -c` (direct to object) instead of `clang -S` + `llvm-mc`.
+- **Assembly text roundtrip:** `%lo16()`/`%hi16()` syntax is parsed by the AsmParser's operand parser and emitted by `printSpecifierExpr`. Full `clang -S` → `llvm-mc` roundtrip works.
 - **Register class constraining:** All instruction selector helpers must call `constrainSelectedInstRegOperands()` — vregs left with only a bank assignment (no regclass) cause assertions after selection.
