@@ -317,11 +317,10 @@ static void cmd_examine(const char *args) {
 
     for (int i=0; i<roundup_len; i++) {
         if ((i & 0xF) == 0) {
-            console_printf("%08x   ", addr);
+            console_printf("%08x   ", (unsigned long)mem_ptr);
         }
         if (i < len) {
             unsigned char val = *mem_ptr++;
-            addr++; // FIXME: Compiler can't deal with casting ptr to int yet
 
             console_printf(" %02x", val);
 
