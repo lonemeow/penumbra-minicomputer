@@ -4,6 +4,7 @@
 
 #include "uart.h"
 #include "libc.h"
+#include <stdarg.h>
 
 typedef void (*trap_handler)(void);
 
@@ -82,11 +83,7 @@ static int console_gets(char *buffer, int max) {
     return i;
 }
 
-/*
- * Formatted output helpers — no varargs needed.
- * console_put_dec / console_put_hex print numbers directly.
- * console_printf is not available (no G_VAARG support in backend yet).
- */
+/* Formatted output helpers. */
 static void console_put_unsigned(unsigned int val, int base) {
     char buf[12];
     console_puts(utoa(val, buf, base));
@@ -103,6 +100,15 @@ static void console_put_dec(int val) {
 static void console_put_hex(unsigned int val) {
     console_puts("0x");
     console_put_unsigned(val, 16);
+}
+
+static void console_printf(const char *fmt, ...) {
+    char buf[128];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    console_puts(buf);
 }
 
 static const char *trap_name(int trapno) {
@@ -123,16 +129,8 @@ static const char *trap_name(int trapno) {
 /* Called from assembly trampolines in trap_entry.s.
  * R1=trapno, R2=EPC, R3=MMU FAULT_ADDR */
 void unhandled_trap(int trapno, unsigned int epc, unsigned int fault_addr) {
-    console_puts("\r\n*** TRAP #");
-    console_put_dec(trapno);
-    console_puts(": ");
-    console_puts(trap_name(trapno));
-    console_puts(" ***\r\n");
-    console_puts("  EPC=");
-    console_put_hex(epc);
-    console_puts("  FAULT_ADDR=");
-    console_put_hex(fault_addr);
-    console_puts("\r\n");
+    console_printf("\r\n*** TRAP #%d: %s ***\r\n", trapno, trap_name(trapno));
+    console_printf("  EPC=0x%x  FAULT_ADDR=0x%x\r\n", epc, fault_addr);
     /* Trampoline executes BREAK after we return, halting the simulator. */
 }
 
@@ -188,9 +186,7 @@ int main(void) {
     console_puts("Detecting base RAM... ");
     long npages = detect_ram();
     long ram_kb = npages * 4096 / 1024;
-    console_put_dec(ram_kb);
-    console_puts("kB found\r\n");
-    console_puts("\r\n");
+    console_printf("%dkB found\r\n\r\n", (int)ram_kb);
 
     /* Spin — placeholder for command loop */
     for (;;) {

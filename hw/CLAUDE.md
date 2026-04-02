@@ -37,7 +37,7 @@ This file provides detailed hardware context for work under `hw/`. The root `CLA
 | Simple memory | `rtl/soc/simple_mem.sv` | — | Parameterizable synchronous SRAM model (default 16 MB), configurable READ_LATENCY/WRITE_LATENCY modeling SDRAM timing. |
 
 ## Boot ROM and Interactive Simulation
-- **Boot ROM** (`rom/`): Penumbra/1 boot monitor in C. `crt0.s` sets SP (low RAM, page 2) and calls `main()`. Features: line-editing console, trap vector setup with assembly trampolines (`trap_entry.s`), bus-fault-based RAM detection (`detect_ram.s`), number formatting (decimal/hex). Has its own `rom/Makefile` with automatic `*.c`/`*.s` discovery, header deps, and pattern rules. Built with clang: `clang -c` → `llvm-mc` → `ld.lld` (via `rom/rom.ld`) → `llvm-objcopy` → `bin2hex.py`.
+- **Boot ROM** (`rom/`): Penumbra/1 boot monitor in C. `crt0.s` sets SP (low RAM, page 2) and calls `main()`. Features: line-editing console, trap vector setup with assembly trampolines (`trap_entry.s`), bus-fault-based RAM detection (`detect_ram.s`), `console_printf`/`snprintf`/`vsnprintf` (varargs, supports `%d %u %x %s %c %%`). Has its own `rom/Makefile` with automatic `*.c`/`*.s` discovery, header deps, and pattern rules. Built with clang: `clang -c` → `llvm-mc` → `ld.lld` (via `rom/rom.ld`) → `llvm-objcopy` → `bin2hex.py`.
 - **Interactive testbench** (`sim/tb_interactive.cpp`): Bridges host stdin/stdout to UART RX/TX. Raw terminal mode. Polls stdin every 1024 cycles. Exits on BREAK or Ctrl-C. Prints PC on Ctrl-C interrupt.
 
 ## Exception and Interrupt Handling

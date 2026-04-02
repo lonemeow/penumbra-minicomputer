@@ -1,3 +1,5 @@
+#include "libc.h"
+
 unsigned long strlen(const char *s) {
     unsigned long i = 0;
     while (*s++ != '\0') {
@@ -88,4 +90,83 @@ int __modsi3(int n, int d) {
     unsigned int r;
     __divmodsi4(un, ud, 0, &r);
     return n < 0 ? -(int)r : (int)r;
+}
+
+/* ── Formatted output ──────────────────────────────────────────────────── */
+
+/* Helper: safely emit one character to the buffer. */
+static int emit(char *buf, unsigned long size, unsigned long pos, char c) {
+    if (pos < size - 1)
+        buf[pos] = c;
+    return 1;
+}
+
+/* Helper: emit a string to the buffer. */
+static int emit_str(char *buf, unsigned long size, unsigned long pos,
+                    const char *s) {
+    int n = 0;
+    while (*s)
+        n += emit(buf, size, pos + n, *s++);
+    return n;
+}
+
+int vsnprintf(char *buf, unsigned long size, const char *fmt, va_list ap) {
+    int pos = 0;
+    char scratch[12];
+
+    while (*fmt) {
+        if (*fmt == '%') {
+            fmt++;
+            switch (*fmt) {
+            case '%':
+                pos += emit(buf, size, pos, '%');
+                break;
+            case 'u': {
+                unsigned int val = va_arg(ap, unsigned int);
+                char *p = utoa(val, scratch, 10);
+                pos += emit_str(buf, size, pos, p);
+                break;
+            }
+            case 'd': {
+                int val = va_arg(ap, int);
+                if (val < 0) {
+                    pos += emit(buf, size, pos, '-');
+                    val = -val;
+                }
+                char *p = utoa(val, scratch, 10);
+                pos += emit_str(buf, size, pos, p);
+                break;
+            }
+            case 'x': {
+                unsigned int val = va_arg(ap, unsigned int);
+                char *p = utoa(val, scratch, 16);
+                pos += emit_str(buf, size, pos, p);
+                break;
+            }
+            case 's': {
+                char *p = va_arg(ap, char *);
+                pos += emit_str(buf, size, pos, p);
+                break;
+            }
+            case 'c': {
+                char c = (char)va_arg(ap, int);
+                pos += emit(buf, size, pos, c);
+                break;
+            }
+            }
+        } else {
+            emit(buf, size, pos++, *fmt);
+        }
+        fmt++;
+    }
+    buf[pos < size ? pos : size-1] = '\0';
+    return pos;
+}
+
+int snprintf(char *buf, unsigned long size, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf, size, fmt, ap);
+    va_end(ap);
+    return n;
 }
