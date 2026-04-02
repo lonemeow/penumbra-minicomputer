@@ -8,16 +8,16 @@
 ; from the boot stack, so C code in the handler can use the stack
 ; without corrupting the interrupted function's frame.
 ;
-; void unhandled_trap(int trapno, unsigned int epc, unsigned int fault_addr);
+; SPR/sysreg reads (EPC, ESR, FAULT_ADDR, etc.) are done in C via
+; inline asm — see penumbra.h.  This keeps the trampolines minimal
+; and makes it easy to add new diagnostic output.
+;
+; void unhandled_trap(int trapno);
 
         .text
 
-; Macro: set up trap stack + call handler with trap number, EPC, and fault addr.
-; void unhandled_trap(int trapno, unsigned int epc, unsigned int fault_addr);
-; Clobbers R1-R3 and R14 — fine since we BREAK after.
+; Macro: set up trap stack + call handler with trap number.
 .macro TRAP_ENTRY num
-        rdspr   r2, epc                 ; R2 = EPC (arg 2)
-        rdsys   r3, #0, #1              ; R3 = MMU FAULT_ADDR (arg 3)
         lli     r1, \num                ; R1 = trap number (arg 1)
         li      r14, 0x00FFFC00         ; trap stack (1 KB below main stack top)
         bl      unhandled_trap
@@ -59,3 +59,18 @@ _trap_illegal:
         .globl  _trap_align
 _trap_align:
         TRAP_ENTRY 8
+
+; ── Bus fault ignore handler ────────────────────────────────────────
+; Advances EPC past the faulting instruction and resumes via ERET.
+; Used during RAM detection to silently skip faulting probes.
+; Uses R12 as scratch (saved/restored via PC-relative storage).
+        .globl  _trap_bus_ignore
+_trap_bus_ignore:
+        stw     r12, [pc + .Ltrap_scratch - .]
+        rdspr   r12, epc
+        add     r12, 4
+        wrspr   epc, r12
+        ldw     r12, [pc + .Ltrap_scratch - .]
+        eret
+.Ltrap_scratch:
+        .long   0

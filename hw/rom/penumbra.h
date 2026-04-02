@@ -1,0 +1,88 @@
+/*
+ * penumbra.h — Inline asm helpers for Penumbra system registers
+ *
+ * Provides C-callable access to SPRs (via RDSPR/WRSPR) and device
+ * sysregs (via RDSYS/WRSYS) that would otherwise require handwritten
+ * assembly.
+ *
+ * SPR/sysreg numbers are encoded as instruction immediates, so they
+ * must be compile-time constants.  We use macros with token-paste
+ * stringification to embed the number directly in the asm template,
+ * bypassing the "i" constraint (which doesn't survive -O0/optnone).
+ * This is the same technique Linux uses for ARM64 read_sysreg().
+ */
+
+#ifndef PENUMBRA_H
+#define PENUMBRA_H
+
+/* Freestanding — no stdint.h.  Penumbra is ILP32: int = long = 32 bits. */
+typedef unsigned int uint32_t;
+
+/* ── Stringification helper ──────────────────────────────────────────── */
+#define _PENUMBRA_STR(x) #x
+#define PENUMBRA_STR(x)  _PENUMBRA_STR(x)
+
+/* ── Special-Purpose Registers (RDSPR/WRSPR) ────────────────────────── */
+
+#define SPR_ESR  0   /* Exception Status Register (saved SR) */
+#define SPR_EPC  1   /* Exception PC */
+#define SPR_USP  2   /* User Stack Pointer (banked R14) */
+
+#define penumbra_read_spr(spr) ({                                       \
+    uint32_t __val;                                                     \
+    asm volatile("rdspr %0, " PENUMBRA_STR(spr) : "=r"(__val));         \
+    __val;                                                              \
+})
+
+#define penumbra_write_spr(spr, val) do {                               \
+    uint32_t __v = (val);                                               \
+    asm volatile("wrspr " PENUMBRA_STR(spr) ", %0" : : "r"(__v));       \
+} while (0)
+
+/* ── Device System Registers (RDSYS/WRSYS) ──────────────────────────
+ *
+ * Device 0 = MMU:
+ *   0 = MMUCR        (control: enable bit, ASID)
+ *   1 = FAULT_ADDR   (faulting virtual address, read-only)
+ *   2 = FAULT_STATUS (fault type + access info bits, read-only)
+ *
+ * Device 1 = System ID (read-only)
+ */
+
+#define SYSDEV_MMU    0
+#define SYSDEV_SYSID  1
+
+#define MMU_CR           0
+#define MMU_FAULT_ADDR   1
+#define MMU_FAULT_STATUS 2
+
+/* FAULT_STATUS bit positions */
+#define FSTAT_R    8   /* Faulting access was read */
+#define FSTAT_W    9   /* Faulting access was write */
+#define FSTAT_X   10   /* Faulting access was execute (fetch) */
+#define FSTAT_USR 11   /* Faulting access was user mode */
+
+#define penumbra_read_sysreg(dev, reg) ({                               \
+    uint32_t __val;                                                     \
+    asm volatile("rdsys %0, " PENUMBRA_STR(dev) ", " PENUMBRA_STR(reg)  \
+                 : "=r"(__val));                                        \
+    __val;                                                              \
+})
+
+#define penumbra_write_sysreg(dev, reg, val) do {                       \
+    uint32_t __v = (val);                                               \
+    asm volatile("wrsys %0, " PENUMBRA_STR(dev) ", " PENUMBRA_STR(reg)  \
+                 : : "r"(__v));                                         \
+} while (0)
+
+/* ── Interrupt control ───────────────────────────────────────────────── */
+
+static inline void disable_interrupts(void) {
+    asm volatile("di" ::: "memory");
+}
+
+static inline void enable_interrupts(void) {
+    asm volatile("ei" ::: "memory");
+}
+
+#endif /* PENUMBRA_H */

@@ -4,6 +4,7 @@
 
 #include "uart.h"
 #include "libc.h"
+#include "penumbra.h"
 #include <stdarg.h>
 
 typedef void (*trap_handler)(void);
@@ -127,10 +128,26 @@ static const char *trap_name(int trapno) {
 }
 
 /* Called from assembly trampolines in trap_entry.s.
- * R1=trapno, R2=EPC, R3=MMU FAULT_ADDR */
-void unhandled_trap(int trapno, unsigned int epc, unsigned int fault_addr) {
+ * SPR/sysreg reads done here via inline asm (penumbra.h) so we can
+ * easily add diagnostics without touching assembly. */
+void unhandled_trap(int trapno) {
+    uint32_t epc        = penumbra_read_spr(SPR_EPC);
+    uint32_t esr        = penumbra_read_spr(SPR_ESR);
+    uint32_t fault_addr = penumbra_read_sysreg(SYSDEV_MMU, MMU_FAULT_ADDR);
+    uint32_t fault_stat = penumbra_read_sysreg(SYSDEV_MMU, MMU_FAULT_STATUS);
+
     console_printf("\r\n*** TRAP #%d: %s ***\r\n", trapno, trap_name(trapno));
-    console_printf("  EPC=0x%x  FAULT_ADDR=0x%x\r\n", epc, fault_addr);
+    console_printf("  EPC=0x%x  ESR=0x%x\r\n", epc, esr);
+    console_printf("  FAULT_ADDR=0x%x  FAULT_STATUS=0x%x", fault_addr, fault_stat);
+
+    /* Decode access type bits */
+    console_puts(" (");
+    if (fault_stat & (1 << FSTAT_R))   console_puts("R");
+    if (fault_stat & (1 << FSTAT_W))   console_puts("W");
+    if (fault_stat & (1 << FSTAT_X))   console_puts("X");
+    if (fault_stat & (1 << FSTAT_USR)) console_puts(" USR");
+    console_puts(")\r\n");
+
     /* Trampoline executes BREAK after we return, halting the simulator. */
 }
 
@@ -158,17 +175,27 @@ static void setup_traps(void) {
 }
 
 extern void _trap_bus_ignore(void);
-extern long _detect_page(long pagenum);
 
-static long detect_ram() {
+/*
+ * Probe the last word of a page to test if it is backed by RAM.
+ * Write a pattern, read it back — if it matches, the page exists.
+ * If not (bus fault), _trap_bus_ignore advances EPC and we return 0.
+ */
+static int detect_page(long pagenum) {
+    volatile unsigned int *addr =
+        (volatile unsigned int *)(((pagenum + 1) << 12) - 4);
+    *addr = 0x12345678;
+    return *addr == 0x12345678;
+}
+
+static long detect_ram(void) {
     void (*prev_vector)(void) = TRAP_VECTORS[TRAP_BUS_FAULT];
     TRAP_VECTORS[TRAP_BUS_FAULT] = _trap_bus_ignore;
 
-    // There must be at least 2 pages mapped at 0x00000000 for this ROM to work
-    // We must not touch those pages as they contain the ROM stack and other data
+    /* Pages 0-1 are reserved (vector table, trap stack, boot data) */
     long npages = 2;
-    while (_detect_page(++npages))
-        ;
+    while (detect_page(npages))
+        npages++;
 
     TRAP_VECTORS[TRAP_BUS_FAULT] = prev_vector;
     return npages;
