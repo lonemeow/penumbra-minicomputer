@@ -64,6 +64,16 @@ static void cfg_write(Vautoconfig_test* d, uint32_t offset, uint32_t data) {
     bus_write(d, 0xFE000000 + offset, data);
 }
 
+// Configure a device (write base) then toggle CFG_EN to advance chain.
+// This matches the protocol: software must deassert/reassert CFG_EN
+// between devices so the chain settles.
+static void cfg_assign_base(Vautoconfig_test* d, uint32_t base) {
+    cfg_write(d, 0x1C, base);
+    // Toggle CFG_EN — protocol requires this between devices
+    d->i_cfg_en = 0; tick(d);
+    d->i_cfg_en = 1; tick(d);
+}
+
 #define CHECK(name, cond) do { \
     tests++; \
     if (!(cond)) { errors++; printf("  FAIL: %s\n", name); } \
@@ -113,10 +123,10 @@ static void test_configure_dev0(Vautoconfig_test* d) {
     d->i_cfg_en = 1;
     tick(d);
 
-    // Assign base address 0x10000000 to dev0
-    cfg_write(d, 0x1C, 0x10000000);
+    // Assign base address 0x10000000 to dev0, toggle CFG_EN
+    cfg_assign_base(d, 0x10000000);
 
-    // dev0 should now be configured, chain passes through
+    // dev0 should now be configured, chain passes through to dev1
     CHECK("dev0 cfg_out high (configured)", d->o_dev0_cfg_out == 1);
     CHECK("dev1 cfg_out low (still unconfigured)", d->o_dev1_cfg_out == 0);
 }
@@ -127,8 +137,8 @@ static void test_config_read_dev1_after_dev0(Vautoconfig_test* d) {
     d->i_cfg_en = 1;
     tick(d);
 
-    // Configure dev0
-    cfg_write(d, 0x1C, 0x10000000);
+    // Configure dev0, toggle CFG_EN
+    cfg_assign_base(d, 0x10000000);
 
     // Now config reads should hit dev1
     CHECK_EQ("dev1 CLASS = MEMORY", cfg_read(d, 0x00), 1);    // ACFG_CLASS_MEMORY
@@ -142,12 +152,12 @@ static void test_configure_both(Vautoconfig_test* d) {
     d->i_cfg_en = 1;
     tick(d);
 
-    // Configure dev0 at 0x10000000
-    cfg_write(d, 0x1C, 0x10000000);
+    // Configure dev0 at 0x10000000, toggle CFG_EN
+    cfg_assign_base(d, 0x10000000);
     CHECK("dev0 configured", d->o_dev0_cfg_out == 1);
 
-    // Configure dev1 at 0x20000000
-    cfg_write(d, 0x1C, 0x20000000);
+    // Configure dev1 at 0x20000000, toggle CFG_EN
+    cfg_assign_base(d, 0x20000000);
     CHECK("dev1 configured", d->o_dev1_cfg_out == 1);
 
     // Disable config mode
@@ -162,8 +172,8 @@ static void test_device_access_after_config(Vautoconfig_test* d) {
     tick(d);
 
     // Configure dev0 at 0x10000000, dev1 at 0x20000000
-    cfg_write(d, 0x1C, 0x10000000);
-    cfg_write(d, 0x1C, 0x20000000);
+    cfg_assign_base(d, 0x10000000);
+    cfg_assign_base(d, 0x20000000);
     d->i_cfg_en = 0;
     tick(d);
 
@@ -186,8 +196,8 @@ static void test_bus_rst_reconfigures(Vautoconfig_test* d) {
     tick(d);
 
     // Configure both devices
-    cfg_write(d, 0x1C, 0x10000000);
-    cfg_write(d, 0x1C, 0x20000000);
+    cfg_assign_base(d, 0x10000000);
+    cfg_assign_base(d, 0x20000000);
     d->i_cfg_en = 0;
     tick(d);
 
@@ -239,8 +249,8 @@ static void test_config_at_different_bases(Vautoconfig_test* d) {
     tick(d);
 
     // Configure dev0 at a different address
-    cfg_write(d, 0x1C, 0xFF001000);
-    cfg_write(d, 0x1C, 0x00100000);
+    cfg_assign_base(d, 0xFF001000);
+    cfg_assign_base(d, 0x00100000);
     d->i_cfg_en = 0;
     tick(d);
 

@@ -371,10 +371,10 @@ Bus controller ───────> Device 0 ───────> Device 1 �
 
 - After reset (`rst` pulse), all autoconfigurable devices return to **config state** (unconfigured).
 - A device in config state **blocks** `cfg` — it does not pass `cfg_out` to the next device.
-- A device in enabled state (already configured) **passes** `cfg` through: `cfg_out = cfg_in`.
+- A device in enabled state (already configured) **passes** `cfg` through, but only after `cfg_en` has been toggled (deasserted then reasserted) since the device was configured. This prevents the chain from propagating during the same bus cycle that configured the device, which would cause the next device to see a stale write. See [CFG_EN Toggle Protocol](#cfg_en-toggle-protocol) below.
 - Only the **first unconfigured device** in the chain sees `cfg_in = 1` and responds to config cycles.
 
-Discrete implementation: one flip-flop per device (`configured`, async-cleared by `rst`), one AND gate (`cfg_out = cfg_in & configured`).
+Discrete implementation: two flip-flops per device (`configured` and `cfg_seen_low`, both async-cleared by `rst`), one AND gate (`cfg_out = cfg_in & configured & cfg_seen_low`). `cfg_seen_low` is set when `cfg_en` goes low after configuration, preventing premature chain propagation.
 
 ### Bus Controller Sysreg Device
 
@@ -404,7 +404,7 @@ When `CFG_EN` is set, a fixed address range at `0xFE00_0000` (32 bytes, 8 word-a
 | `0xFE00_0010` | R | **CFG_NAME1** | Device name bytes 4–7 |
 | `0xFE00_0014` | R | **CFG_NAME2** | Device name bytes 8–11 |
 | `0xFE00_0018` | R | **CFG_NAME3** | Device name bytes 12–15 |
-| `0xFE00_001C` | W | **CFG_BASE** | Assigned base address. Writing transitions the device to enabled state: it latches the base address, begins responding to normal bus cycles at that address, and passes `cfg_out` to the next device in the chain. |
+| `0xFE00_001C` | W | **CFG_BASE** | Assigned base address. Writing transitions the device to enabled state: it latches the base address and begins responding to normal bus cycles at that address. The `cfg` chain does NOT propagate immediately — software must toggle `CFG_EN` (deassert then reassert) to advance to the next device. See [CFG_EN Toggle Protocol](#cfg_en-toggle-protocol). |
 
 **Device class codes (CFG_CLASS):**
 
@@ -426,6 +426,25 @@ If no unconfigured device remains in the chain, reads to config space produce a 
 
 Config space decode: one address comparator (same `bus_devsel` pattern as other devices) gated by `cfg`. In discrete: one 74x85 comparator + one AND gate with `cfg`.
 
+### CFG_EN Toggle Protocol
+
+**Software must deassert and reassert `CFG_EN` after configuring each device.** This is a hard requirement of the autoconfig protocol.
+
+When `CFG_BASE` is written, the device latches its base address and transitions to the enabled state. However, the `cfg` chain does **not** propagate to the next device until `CFG_EN` has been toggled. This prevents a race condition where the next device in the chain sees the same write that configured the previous device.
+
+The hardware enforces this with a `cfg_seen_low` flip-flop in each device: `cfg_out = cfg_in & configured & cfg_seen_low`. The `cfg_seen_low` flag is cleared on reset and set when `cfg_en` goes low after the device is configured. Until software toggles `CFG_EN`, the newly-configured device blocks the chain just like an unconfigured device.
+
+**Software sequence per device:**
+1. Read config registers (`CFG_CLASS`, `CFG_SIZE`, etc.) — `CFG_EN` is asserted
+2. Write `CFG_BASE` with the assigned address — device configures
+3. Clear `CFG_EN`: `WRSYS SYSDEV_BUS, BUSCTL, 0` — chain settles, `cfg_seen_low` sets
+4. Set `CFG_EN`: `WRSYS SYSDEV_BUS, BUSCTL, CFG_EN` — next unconfigured device becomes active
+5. Repeat from step 1 for the next device
+
+**Why this matters:** On the async external bus, a write to `CFG_BASE` takes time (4-phase handshake). The CPU stalls until the write completes (bus busy). During this time, the chain could propagate and a subsequent device could see the write address still on the bus. The toggle ensures the chain only advances when software is ready.
+
+**Discrete 74xx implementation:** One extra flip-flop per device (`cfg_seen_low`), set when `cfg_en` falls while `configured` is high.
+
 ### Autoconfig Boot Sequence
 
 1. CPU boots from ROM at `0xFFFF_E000`, hardwired devices (system RAM, UART, ROM) already functional
@@ -434,14 +453,15 @@ Config space decode: one address comparator (same `bus_devsel` pattern as other 
 4. Boot ROM delays (short loop — enough for slow async bus devices to see the reset)
 5. Boot ROM deasserts reset and enables config: `WRSYS SYSDEV_BUS, BUSCTL, 2` (RST=0, CFG_EN=1)
 6. Boot ROM installs bus-fault-ignore trap handler (same `_trap_bus_ignore` used for RAM probing)
-7. Boot ROM reads `CFG_CLASS` at `0xFE00_0000` — if bus fault, no more devices → go to step 12
+7. Boot ROM reads `CFG_CLASS` at `0xFE00_0000` — if bus fault, no more devices → go to step 13
 8. Boot ROM reads `CFG_SIZE`, `CFG_ID`, and `CFG_NAME0–3` to identify the device
-9. Boot ROM prints device name to console (e.g., `"  SPI        4096 bytes"`)
-10. Boot ROM assigns a base address (from available physical space), writes it to `CFG_BASE` at `0xFE00_001C`
-11. Device latches base address, transitions to enabled state, passes `cfg` to next device. Go to step 7
-12. Boot ROM disables config mode: `WRSYS SYSDEV_BUS, BUSCTL, 0` (clears CFG_EN)
-13. Boot ROM restores normal bus fault handler
-14. Boot ROM records the device table in the boot data structure (passed to stage 1 / kernel via R1)
+9. Boot ROM assigns a base address (from available physical space), writes it to `CFG_BASE` at `0xFE00_001C`
+10. Boot ROM toggles `CFG_EN`: clear then set (advances chain to next device)
+11. Boot ROM prints device info to console
+12. Go to step 7
+13. Boot ROM disables config mode: `WRSYS SYSDEV_BUS, BUSCTL, 0` (clears CFG_EN)
+14. Boot ROM restores normal bus fault handler
+15. Boot ROM records the device table in the boot data structure (passed to stage 1 / kernel via R1)
 
 ```c
 // C pseudocode for the autoconfig loop:
@@ -457,21 +477,20 @@ TRAP_VECTORS[TRAP_BUS_FAULT] = _trap_bus_ignore;
 int ndevs = 0;
 
 for (;;) {
-    uint32_t cls  = *(volatile uint32_t *)0xFE000000;     // CFG_CLASS
-    if (/* bus fault */) break;                            // no more devices
-    uint32_t size = *(volatile uint32_t *)0xFE000004;     // CFG_SIZE
-    uint32_t id   = *(volatile uint32_t *)0xFE000008;     // CFG_ID
-    // Read device name (CFG_NAME0–3 at 0x0C, 0x10, 0x14, 0x18)
-    char name[17];
-    for (int i = 0; i < 4; i++)
-        ((uint32_t *)name)[i] = *(volatile uint32_t *)(0xFE00000C + i*4);
-    name[16] = '\0';
-
-    console_printf("  %-16s %d bytes (class %d)\n", name, size, cls);
+    uint32_t cls = bus_probe_read(0xFE000000);            // CFG_CLASS
+    if (cls == 0xFFFFFFFF) break;                         // bus fault → no more devices
+    uint32_t size = bus_probe_read(0xFE000004);           // CFG_SIZE
+    uint32_t id   = bus_probe_read(0xFE000008);           // CFG_ID
+    // ... read CFG_NAME0–3 ...
 
     uint32_t base = allocate_address(cls, size);
     *(volatile uint32_t *)0xFE00001C = base;              // CFG_BASE → device enables
-    devtable[ndevs++] = (struct bootdev){ cls, id, base, size, name };
+
+    // Toggle CFG_EN to advance chain to next device
+    penumbra_write_sysreg(SYSDEV_BUS, BUS_CTL, 0);       // clear CFG_EN
+    penumbra_write_sysreg(SYSDEV_BUS, BUS_CTL, BUSCTL_CFG_EN);  // set CFG_EN
+
+    devtable[ndevs++] = (struct bootdev){ cls, id, base, size };
 }
 
 TRAP_VECTORS[TRAP_BUS_FAULT] = prev_handler;

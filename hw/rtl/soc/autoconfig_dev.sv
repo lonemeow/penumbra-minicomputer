@@ -5,6 +5,10 @@
 // base address. The inner device sees a standard bus interface and
 // doesn't know it's autoconfigured.
 //
+// Protocol: software must deassert and reassert CFG_EN between
+// configuring each device. This lets the chain settle before the
+// next device becomes active, avoiding write-through races.
+//
 // Config space (active when cfg_in=1 and device is unconfigured):
 //   0x00  CFG_CLASS  (R)  — device class / base protocol
 //   0x04  CFG_SIZE   (R)  — required address space (bytes, power-of-2)
@@ -14,10 +18,6 @@
 //   0x14  CFG_NAME2  (R)  — device name bytes  8-11
 //   0x18  CFG_NAME3  (R)  — device name bytes 12-15
 //   0x1C  CFG_BASE   (W)  — write assigned base → device enables
-//
-// Once configured, the wrapper does dynamic address decode using
-// the latched base address and forwards bus cycles to the inner
-// device. The cfg chain passes through to the next device.
 //
 // Discrete 74xx: one flip-flop (configured), one latch (base addr),
 // one comparator (dynamic address decode), config ROM (pull-ups).
@@ -60,8 +60,6 @@ module autoconfig_dev
     output logic        o_sel,         // Device selected this cycle (for bus fault)
 
     // ── Inner device bus interface ─────────────────────────
-    // Forward bus signals to the wrapped device when selected.
-    // Address is passed through as-is (inner device uses low bits).
     output logic [31:0] o_dev_addr,
     output logic [31:0] o_dev_wdata,
     output logic [3:0]  o_dev_byte_en,
@@ -71,6 +69,15 @@ module autoconfig_dev
     input  logic        i_dev_busy
 );
 
+    // ── Config space address decode ────────────────────────
+    logic cfg_space_sel;
+    assign cfg_space_sel = (i_addr[31:5] == AUTOCONFIG_BASE[31:5]);
+
+    // Active when: CFG_EN set, this device is first unconfigured
+    // in chain (cfg_in=1), and address is in config range.
+    logic cfg_active;
+    assign cfg_active = i_cfg_en & i_cfg_in & !configured & cfg_space_sel;
+
     // ── Config state ───────────────────────────────────────
     logic        configured;
     logic [31:0] base_addr;
@@ -79,9 +86,7 @@ module autoconfig_dev
         if (i_rst || i_bus_rst) begin
             configured <= 1'b0;
             base_addr  <= 32'b0;
-        end else if (!configured && i_cfg_en && i_cfg_in
-                     && i_we && cfg_space_sel
-                     && i_addr[4:2] == 3'b111) begin
+        end else if (cfg_active && i_we && i_addr[4:2] == 3'b111) begin
             // Write to CFG_BASE (offset 0x1C) → latch and enable
             base_addr  <= i_wdata;
             configured <= 1'b1;
@@ -89,17 +94,20 @@ module autoconfig_dev
     end
 
     // ── Config chain output ────────────────────────────────
-    // Pass cfg through only when configured
-    assign o_cfg_out = i_cfg_in & configured;
-
-    // ── Config space address decode ────────────────────────
-    // Active when: CFG_EN set, this device is first unconfigured
-    // in chain (cfg_in=1), and address is in config range.
-    logic cfg_space_sel;
-    assign cfg_space_sel = (i_addr[31:5] == AUTOCONFIG_BASE[31:5]);
-
-    logic cfg_active;
-    assign cfg_active = i_cfg_en & i_cfg_in & !configured & cfg_space_sel;
+    // Only pass cfg through when configured AND cfg_en was
+    // deasserted since configuration. This prevents the chain
+    // from propagating during the same bus cycle that configured
+    // this device. Software must toggle CFG_EN between devices.
+    logic cfg_seen_low;
+    always_ff @(posedge i_clk) begin
+        if (i_rst || i_bus_rst)
+            cfg_seen_low <= 1'b0;
+        else if (!i_cfg_en)
+            cfg_seen_low <= 1'b1;
+        else if (!configured)
+            cfg_seen_low <= 1'b0;
+    end
+    assign o_cfg_out = i_cfg_in & configured & cfg_seen_low;
 
     // ── Config space read mux ──────────────────────────────
     logic [31:0] cfg_rdata;
@@ -118,47 +126,46 @@ module autoconfig_dev
     end
 
     // ── Dynamic address decode (configured state) ──────────
-    // Same logic as bus_devsel but with runtime base address.
     logic dev_sel;
     assign dev_sel = configured
                    & ((i_addr & ~(DEV_SIZE - 1)) == base_addr);
 
-    // ── Read data output ───────────────────────────────────────
-    // Config space: register on i_re (same pattern as sim_uart).
-    // Inner device: pass through — already registered internally.
-    // Mux selects based on registered state to match _sel_r timing.
-    logic [31:0] cfg_rdata_r;
-    logic        was_cfg_read;
+    // ── Read data output ───────────────────────────────────
+    // Track whether previous cycle was a config read or device read.
+    // Parent module gates our o_rdata with _sel_r to prevent
+    // stale data leaking through the bus OR-combine.
+    logic was_cfg;
     always_ff @(posedge i_clk) begin
-        if (i_rst || i_bus_rst) begin
-            cfg_rdata_r  <= 32'b0;
-            was_cfg_read <= 1'b0;
-        end else if (cfg_active && i_re) begin
-            cfg_rdata_r  <= cfg_rdata;
-            was_cfg_read <= 1'b1;
-        end else if (dev_sel && i_re) begin
-            was_cfg_read <= 1'b0;
-        end
+        if (i_rst || i_bus_rst)
+            was_cfg <= 1'b0;
+        else
+            was_cfg <= cfg_active;
     end
 
-    assign o_rdata = was_cfg_read ? cfg_rdata_r : i_dev_rdata;
+    // Config data: registered for 1-cycle read latency.
+    logic [31:0] cfg_rdata_r;
+    always_ff @(posedge i_clk)
+        cfg_rdata_r <= cfg_rdata;
 
-    // Busy: config reads assert busy combinationally on the first
-    // cycle, then clear on the next. This gives the registered
-    // select (_sel_r) in machine_sim time to propagate before
-    // the CPU samples mem_rdata.
-    logic cfg_access_done;
+    // Mux between config data (registered here) and inner device
+    // data (registered inside the inner device).
+    assign o_rdata = was_cfg ? cfg_rdata_r : i_dev_rdata;
+
+    // ── Busy ───────────────────────────────────────────────
+    // Config reads assert busy for 1 cycle so the registered
+    // select in the bus OR-combine has time to propagate
+    // before the CPU samples mem_rdata.
+    logic cfg_was_active;
     always_ff @(posedge i_clk) begin
         if (i_rst)
-            cfg_access_done <= 1'b0;
+            cfg_was_active <= 1'b0;
         else
-            cfg_access_done <= cfg_active && (i_re || i_we);
+            cfg_was_active <= cfg_active && (i_re || i_we);
     end
-    // Busy on the first cycle of a config access, clear on the second
-    wire cfg_busy = cfg_active && (i_re || i_we) && !cfg_access_done;
+    wire cfg_busy = cfg_active && (i_re || i_we) && !cfg_was_active;
     assign o_busy = cfg_busy | (dev_sel ? i_dev_busy : 1'b0);
 
-    // Selection signal for bus fault detection
+    // ── Selection (for bus fault detection) ─────────────────
     assign o_sel = cfg_active | dev_sel;
 
     // ── Inner device bus forwarding ────────────────────────

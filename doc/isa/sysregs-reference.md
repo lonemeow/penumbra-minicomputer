@@ -394,6 +394,9 @@ slow devices may need a longer reset pulse. There is no hardware auto-clear.
 
 **CFG_EN** gates the `cfg` daisy chain and enables the config address range
 on the memory bus. When clear, accesses to `0xFE00_0000` produce a bus fault.
+**Important:** software must toggle CFG_EN (clear then set) after writing
+`CFG_BASE` for each device. This advances the config chain to the next
+unconfigured device. See `doc/bus/bus-overview.md` for full protocol details.
 
 ```asm
 ; Assert bus reset
@@ -409,7 +412,14 @@ LLI   R2, #100
 LLI   R1, #2
 WRSYS R1, #4, #0          ; BUS BUSCTL = CFG_EN (RST=0)
 
-; ... enumerate devices via LDW/STW to 0xFE000000 ...
+; ... read config registers, write CFG_BASE ...
+
+; Toggle CFG_EN to advance to next device
+WRSYS R0, #4, #0          ; clear CFG_EN
+LLI   R1, #2
+WRSYS R1, #4, #0          ; set CFG_EN — next device now active
+
+; ... repeat for next device ...
 
 ; Disable config mode when done
 WRSYS R0, #4, #0          ; BUS BUSCTL = 0

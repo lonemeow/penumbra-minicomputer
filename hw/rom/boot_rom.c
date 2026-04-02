@@ -277,6 +277,12 @@ static int autoconfig(void) {
         }
         *(volatile uint32_t *)(AUTOCONFIG_BASE + 0x1C) = base;
 
+        /* Toggle CFG_EN so the chain settles before probing the
+         * next device. Without this, the newly-configured device's
+         * cfg passthrough could race with the write. */
+        penumbra_write_sysreg(SYSDEV_BUS, BUS_CTL, 0);
+        penumbra_write_sysreg(SYSDEV_BUS, BUS_CTL, BUSCTL_CFG_EN);
+
         console_printf("  %s %s @ 0x%x (%d bytes)\r\n",
                         name, class_name(cls), base, (int)size);
 

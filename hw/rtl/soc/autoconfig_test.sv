@@ -135,8 +135,15 @@ module autoconfig_test
         .o_busy    (dev1_busy)
     );
 
-    // ── OR-combine responses ───────────────────────────────
-    assign o_rdata = ac0_rdata | ac1_rdata;
+    // ── OR-combine responses (with _sel_r gating) ──────────
+    logic ac0_sel_r, ac1_sel_r;
+    always_ff @(posedge i_clk) begin
+        ac0_sel_r <= ac0_sel;
+        ac1_sel_r <= ac1_sel;
+    end
+
+    assign o_rdata = (ac0_sel_r ? ac0_rdata : 32'b0) |
+                     (ac1_sel_r ? ac1_rdata : 32'b0);
     assign o_busy  = ac0_busy  | ac1_busy;
     assign o_sel   = ac0_sel   | ac1_sel;
 
