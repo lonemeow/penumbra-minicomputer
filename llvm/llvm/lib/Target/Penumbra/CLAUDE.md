@@ -4,10 +4,13 @@ This file provides LLVM backend context for work under `llvm/`. The root `CLAUDE
 
 ## Build
 - Build from `llvm/llvm/`, build dir `build/llvm/` (overridable via `LLVM_PREFIX` in Makefile)
-- `cmake -G Ninja -DLLVM_TARGETS_TO_BUILD=Penumbra -DLLVM_ENABLE_PROJECTS="clang;lld" -DLLVM_USE_SPLIT_DWARF=ON`
+- `cmake -G Ninja -DLLVM_TARGETS_TO_BUILD=Penumbra -DLLVM_ENABLE_PROJECTS="clang;lld" -DLLVM_USE_SPLIT_DWARF=ON -DLLVM_INCLUDE_TESTS=ON -DLLVM_BUILD_TESTS=ON`
 - Uses ccache and Ninja
 - Use `-j2` for link steps (debug builds OOM at full parallelism on 15 GB WSL2)
 - Target triple: `penumbra-unknown-none` (eventually `penumbra-unknown-netbsd`)
+- Run codegen tests: `build/llvm/bin/llvm-lit llvm/llvm/test/CodeGen/Penumbra/`
+- Regenerate CHECK lines: `python3 llvm/llvm/utils/update_llc_test_checks.py --llc-binary build/llvm/bin/llc <test>.ll`
+- Penumbra registered in `utils/UpdateTestChecks/asm.py` (reuses AVR scrubber/function-RE)
 
 ## Current State
 **End-to-end functional.** C boot ROM compiles with clang, links with lld, and runs on the simulated Penumbra CPU (prints "Penumbra/1" via UART).

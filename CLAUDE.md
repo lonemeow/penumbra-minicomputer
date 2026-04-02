@@ -56,6 +56,13 @@ The architecture is fully specified in `doc/`. Key specs:
 - All simulation runs via Docker — no host install needed. Build artifacts in `build/` (gitignored).
 - **Important:** `rm -rf build/<mod>.verilator build/V<mod>` if you suspect stale binaries (WSL2 stale mtimes)
 
+### LLVM Backend Tests
+Regression tests for the Penumbra codegen backend live in `llvm/llvm/test/CodeGen/Penumbra/`. They use LLVM's **Lit** test framework with **FileCheck** assertions.
+- **Run all Penumbra tests:** `build/llvm/bin/llvm-lit llvm/llvm/test/CodeGen/Penumbra/`
+- **Run one test:** `build/llvm/bin/llvm-lit -v llvm/llvm/test/CodeGen/Penumbra/alu.ll`
+- **Regenerate CHECK lines after codegen changes:** `python3 llvm/llvm/utils/update_llc_test_checks.py --llc-binary build/llvm/bin/llc llvm/llvm/test/CodeGen/Penumbra/<test>.ll`
+- Requires `LLVM_INCLUDE_TESTS=ON` and `LLVM_BUILD_TESTS=ON` in CMake config.
+
 ### Boot ROM Build Pipeline (`make simulate`)
 The boot ROM has its own Makefile (`hw/rom/Makefile`) with automatic source discovery (all `*.c` files), pattern rules, and header dependency tracking via `-MMD -MP`. The main Makefile delegates with `$(MAKE) -C hw/rom`. Can also be built standalone: `make -C hw/rom`.
 ```

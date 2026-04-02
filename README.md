@@ -52,9 +52,11 @@ cmake -G Ninja \
   -DLLVM_TARGETS_TO_BUILD=Penumbra \
   -DLLVM_ENABLE_PROJECTS="clang;lld" \
   -DLLVM_USE_SPLIT_DWARF=ON \
+  -DLLVM_INCLUDE_TESTS=ON \
+  -DLLVM_BUILD_TESTS=ON \
   -DCMAKE_BUILD_TYPE=Debug \
   ../../llvm/llvm
-ninja -j4 clang lld llvm-mc llvm-objcopy
+ninja -j4 clang lld llvm-mc llvm-objcopy llc
 cd ../..
 ```
 
@@ -140,6 +142,45 @@ doc/               Architecture specifications
 | `make smoke` | Quick toolchain sanity check |
 | `make wave MOD=<name>` | Open VCD waveform in GTKWave |
 | `make clean` | Remove build artifacts |
+
+## Testing
+
+### Hardware tests
+
+Run all CPU test programs (uses pasm.py, no LLVM needed):
+
+```sh
+make test
+```
+
+### LLVM backend tests
+
+The Penumbra codegen backend has regression tests using LLVM's
+[Lit](https://llvm.org/docs/CommandGuide/lit.html) framework with
+[FileCheck](https://llvm.org/docs/CommandGuide/FileCheck.html) assertions.
+Tests live in `llvm/llvm/test/CodeGen/Penumbra/`.
+
+Run all backend tests:
+
+```sh
+build/llvm/bin/llvm-lit llvm/llvm/test/CodeGen/Penumbra/
+```
+
+Run a single test with verbose output:
+
+```sh
+build/llvm/bin/llvm-lit -v llvm/llvm/test/CodeGen/Penumbra/alu.ll
+```
+
+After changing codegen, regenerate the expected CHECK lines:
+
+```sh
+python3 llvm/llvm/utils/update_llc_test_checks.py \
+  --llc-binary build/llvm/bin/llc \
+  llvm/llvm/test/CodeGen/Penumbra/<test>.ll
+```
+
+Review the diff to make sure the output changes are intentional.
 
 ## License
 
