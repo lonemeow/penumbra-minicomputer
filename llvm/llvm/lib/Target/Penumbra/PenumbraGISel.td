@@ -59,3 +59,14 @@ def : Pat<(i32 (sra GPR:$src, uimm5:$amt)), (SARi GPR:$src, uimm5:$amt)>;
 //===----------------------------------------------------------------------===//
 
 def : Pat<(i32 (not GPR:$src)), (NOT GPR:$src)>;
+
+//===----------------------------------------------------------------------===//
+// Constants
+//===----------------------------------------------------------------------===//
+//
+// LLI:  unsigned 16-bit (0–65535)
+// LLIS: negative signed 16-bit (-32768–-1)
+// Values outside both ranges need LLI+LUI (handled manually in selectConstant).
+
+def : Pat<(i32 uimm16:$val), (LLI uimm16:$val)>;
+def : Pat<(i32 simm16neg:$val), (LLIS simm16neg:$val)>;

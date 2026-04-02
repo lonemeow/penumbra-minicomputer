@@ -141,6 +141,9 @@ def uimm16 : ImmLeaf<i32, [{return isUInt<16>(Imm);}]>;
 // Signed 16-bit immediate (-32768–32767) — fits in LLIS sign-extended field.
 def simm16 : ImmLeaf<i32, [{return isInt<16>(Imm);}]>;
 
+// Negative signed 16-bit (-32768–-1) — values that need LLIS, not LLI.
+def simm16neg : ImmLeaf<i32, [{return Imm < 0 && Imm >= -32768;}]>;
+
 // 5-bit shift amount (0–31).
 def uimm5 : ImmLeaf<i32, [{return isUInt<5>(Imm);}]>;
 

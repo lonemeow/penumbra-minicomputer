@@ -213,13 +213,9 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
   }
 }
 
-// ── G_CONSTANT ────────────────────────────────────────────────────────────────
-// Materialize a 32-bit constant into a register.
-// Penumbra immediate instructions:
-//   LLI  Rd, #imm16 — load zero-extended 16-bit value into Rd
-//   LLIS Rd, #imm16 — load sign-extended 16-bit value into Rd
-//   LUI  Rd, #imm16 — load upper 16 bits: Rd = (Rd & 0xFFFF) | (imm16 << 16)
-//                     (tied: $Rd = $Rd_in — Rd is both input and output)
+// ── G_CONSTANT (wide only) ───────────────────────────────────────────────────
+// selectImpl handles LLI (0–65535) and LLIS (-32768–-1) via TableGen patterns.
+// This manual path only handles values that need two instructions: LLI + LUI.
 bool PenumbraInstructionSelector::selectConstant(MachineInstr &I,
                                                    MachineBasicBlock &MBB,
                                                    MachineRegisterInfo &MRI) const {
@@ -227,31 +223,17 @@ bool PenumbraInstructionSelector::selectConstant(MachineInstr &I,
   int64_t Val = I.getOperand(1).getCImm()->getSExtValue();
   const DebugLoc &DL = I.getDebugLoc();
 
-  if (Val >= 0 && Val <= 0xFFFF) {
-    auto MI = BuildMI(MBB, I, DL, TII.get(Penumbra::LLI))
-        .addDef(DstReg)
-        .addImm(Val);
-    constrainSelectedInstRegOperands(*MI, TII, TRI, RBI);
-  } else if (Val < 0 && Val >= -32768) {
-    auto MI = BuildMI(MBB, I, DL, TII.get(Penumbra::LLIS))
-        .addDef(DstReg)
-        .addImm(Val);
-    constrainSelectedInstRegOperands(*MI, TII, TRI, RBI);
-  } else {
-    // Use a fresh vreg for LLI so each vreg has exactly one def (SSA).
-    // The register allocator will typically coalesce them into the same
-    // physical register, so this is zero overhead.
-    Register TmpReg = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
-    auto MI1 = BuildMI(MBB, I, DL, TII.get(Penumbra::LLI))
-        .addDef(TmpReg)
-        .addImm(Val & 0xFFFF);
-    constrainSelectedInstRegOperands(*MI1, TII, TRI, RBI);
-    auto MI2 = BuildMI(MBB, I, DL, TII.get(Penumbra::LUI))
-        .addDef(DstReg)
-        .addReg(TmpReg)
-        .addImm((Val >> 16) & 0xFFFF);
-    constrainSelectedInstRegOperands(*MI2, TII, TRI, RBI);
-  }
+  // Use a fresh vreg for LLI so each vreg has exactly one def (SSA).
+  Register TmpReg = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
+  auto MI1 = BuildMI(MBB, I, DL, TII.get(Penumbra::LLI))
+      .addDef(TmpReg)
+      .addImm(Val & 0xFFFF);
+  constrainSelectedInstRegOperands(*MI1, TII, TRI, RBI);
+  auto MI2 = BuildMI(MBB, I, DL, TII.get(Penumbra::LUI))
+      .addDef(DstReg)
+      .addReg(TmpReg)
+      .addImm((Val >> 16) & 0xFFFF);
+  constrainSelectedInstRegOperands(*MI2, TII, TRI, RBI);
 
   I.eraseFromParent();
   return true;
