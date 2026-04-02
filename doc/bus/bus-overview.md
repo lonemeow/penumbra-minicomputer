@@ -47,10 +47,10 @@ The async external bus eliminates clock distribution problems and works identica
 │    │               │  sys_reg[3:0], sys_we                    │          │
 │    └───────┬───────┘                                          │          │
 │            │                 ┌────────┐ ┌───────┐ ┌────────┐  │          │
-│    ┌───────┴───────┐        │ Timer  │ │  DMA  │ │(future)│  │          │
-│    │  MMU / TLB    │◄───────┤ dev 2  │ │ Ctrl  │ │ dev 4+)│  │          │
-│    │  (dev 0)      │ sysreg └───┬────┘ │ dev 3 │ └────────┘  │          │
-│    └───────┬───────┘            │      └───┬───┘             │          │
+│    ┌───────┴───────┐        │D-cache │ │I-cache│ │  Bus   │  │          │
+│    │  MMU / TLB    │◄───────┤ dev 2  │ │ dev 3 │ │ Ctrl  │  │          │
+│    │  (dev 0)      │ sysreg └───┬────┘ └───┬───┘ │ dev 4 │  │          │
+│    └───────┬───────┘            │          │     └───┬───┘  │          │
 │            │                    │          │                  │          │
 │   phys addr + C bit             │          │                  │          │
 │            │                    │          │                  │          │
@@ -122,9 +122,10 @@ This design is motivated by two constraints:
 | `req` | 1 | Master → Slave | Request — master is presenting a valid transfer |
 | `ack` | 1 | Slave → Master | Acknowledge — slave has completed the transfer |
 | `bus_error` | 1 | Slave → Master | Access fault (unmapped address or timeout) |
+| `rst` | 1 | Master → Slave | Bus reset — resets all devices to unconfigured state. Directly driven by system hardware reset; also software-triggerable via the bus controller sysreg. Active high pulse. |
 | `cfg` | 1 | Daisy-chained | Autoconfig chain — see [Device Discovery](#device-discovery-autoconfig) |
 
-**Total: 73 signals** (32 addr + 32 data + 9 control).
+**Total: 74 signals** (32 addr + 32 data + 10 control).
 
 ### Four-Phase Handshake
 
@@ -348,6 +349,15 @@ A small set of **hardwired devices** must be functional before any software runs
 
 All other devices are **autoconfigured**: they start in an unconfigured state after reset and receive their base addresses from the boot ROM's autoconfig routine.
 
+### Bus Reset
+
+The `rst` signal resets all autoconfigurable devices on the bus back to their unconfigured state. It is asserted in two situations:
+
+1. **Hardware reset:** The FPGA (or discrete reset circuit) drives `rst` high during system power-on or hard reset. All devices, including the CPU, start from a known state.
+2. **Software reset:** The boot ROM (or OS) writes to the bus controller sysreg to pulse `rst`. This resets external devices without resetting the CPU, allowing the software to re-run the autoconfig protocol (e.g., after hot-plug, or during an OS reboot that doesn't involve a hardware power cycle).
+
+In discrete: `rst` is directly wired to each device's config flip-flop (active-high async clear). The software-triggered pulse comes from a flip-flop in the bus controller, OR'd with the hardware reset signal.
+
 ### The Config Chain
 
 A single `cfg` signal is **daisy-chained** through all autoconfigurable devices on the bus:
@@ -359,48 +369,93 @@ Bus controller ───────> Device 0 ───────> Device 1 �
                     device responds)     device waits)
 ```
 
-- After reset, all autoconfigurable devices are in **config state** (unconfigured).
+- After reset (`rst` pulse), all autoconfigurable devices return to **config state** (unconfigured).
 - A device in config state **blocks** `cfg` — it does not pass `cfg_out` to the next device.
 - A device in enabled state (already configured) **passes** `cfg` through: `cfg_out = cfg_in`.
 - Only the **first unconfigured device** in the chain sees `cfg_in = 1` and responds to config cycles.
 
-Discrete implementation: one flip-flop per device (`configured`), one AND gate (`cfg_out = cfg_in & configured`).
+Discrete implementation: one flip-flop per device (`configured`, async-cleared by `rst`), one AND gate (`cfg_out = cfg_in & configured`).
 
-### Config Cycle Protocol
+### Bus Controller Sysreg Device
 
-The CPU triggers config cycles via a sysreg bus controller device (e.g., `SYSDEV_BUSCTL`). When the bus controller asserts `cfg` on the Penumbra Bus, the first unconfigured device in the chain responds to reads and writes at a fixed set of **config space registers**:
+The bus controller is a CPU-internal sysreg device (`SYSDEV_BUS`, device 2) that controls the `rst` and `cfg` signals on the Penumbra Bus. It has a single register:
 
-| Offset | R/W | Description |
-|--------|-----|-------------|
-| 0 | R | Device ID (manufacturer + product code) |
-| 1 | R | Required size (power-of-2 byte count) |
-| 2 | R | Device type (0=memory, 1=I/O, ...) |
-| 3 | W | Assigned base address — writing transitions the device to enabled state |
+| Sysreg | Name | R/W | Description |
+|--------|------|-----|-------------|
+| 0 | `BUSCTL` | R/W | Bit 0: `RST` — write 1 to pulse bus reset (auto-clears after one cycle). Bit 1: `CFG_EN` — enable config chain and config address decode on the bus. |
 
-The config space is accessed via normal bus address/data lines while `cfg` is asserted. The address lines carry the config register offset (not the eventual device address). This keeps config space small and fixed regardless of the device.
+- **RST (bit 0):** Writing 1 asserts `rst` on the bus for one cycle, returning all autoconfigured devices to their unconfigured state. The bit auto-clears; reading always returns 0.
+- **CFG_EN (bit 1):** When set, the bus controller asserts `cfg` on the daisy chain and enables the config address range (`0xFE00_0000`). When clear, `cfg` is deasserted, and accesses to the config address range produce a bus fault (unmapped). Software must set `CFG_EN` before reading/writing config space, and clear it when enumeration is complete.
+
+Reset default: `0x00` (config mode disabled, no reset pulse).
+
+Discrete implementation: two flip-flops (RST, CFG_EN) driven by the sysreg write bus, one OR gate (hardware reset | software RST → bus `rst`).
+
+### Config Space
+
+When `CFG_EN` is set, a fixed address range at `0xFE00_0000` (16 bytes, 4 word-aligned registers) becomes active on the memory bus. Reads and writes to this range go to the **first unconfigured device** in the config chain (the one whose `cfg_in = 1`). The address lines carry the config register offset; the device's eventual base address is not involved.
+
+| Address | R/W | Description |
+|---------|-----|-------------|
+| `0xFE00_0000` | R | **CFG_ID** — Device ID (manufacturer + product code) |
+| `0xFE00_0004` | R | **CFG_SIZE** — Required size in bytes (power-of-2) |
+| `0xFE00_0008` | R | **CFG_TYPE** — Device type (0=memory, 1=I/O, ...) |
+| `0xFE00_000C` | W | **CFG_BASE** — Assigned base address. Writing transitions the device to enabled state: it latches the base address, begins responding to normal bus cycles at that address, and passes `cfg_out` to the next device in the chain. |
+
+If no unconfigured device remains in the chain, reads to config space produce a **bus fault** (no device responds → bus timeout). Software uses this to detect the end of the device list.
+
+Config space decode: one address comparator (same `bus_devsel` pattern as other devices) gated by `cfg`. In discrete: one 74x85 comparator + one AND gate with `cfg`.
 
 ### Autoconfig Boot Sequence
 
 1. CPU boots from ROM at `0xFFFF_E000`, hardwired devices (system RAM, UART, ROM) already functional
 2. Boot ROM probes system RAM size by reading upward from `0x0000_0000` until bus fault
-3. Boot ROM begins autoconfig: triggers config cycle, reads device 0's ID and required size
-4. Boot ROM assigns a base address (from available physical space), writes it to config register 3
-5. Device 0 latches its base address, transitions to enabled state, passes `cfg` to device 1
-6. Repeat steps 3–5 until a config read returns no response (bus timeout = no more devices)
-7. Boot ROM builds a device table in RAM for the OS kernel
+3. Boot ROM pulses bus reset: `WRSYS SYSDEV_BUS, BUSCTL, 1` (clears any stale device configs)
+4. Boot ROM enables config mode: `WRSYS SYSDEV_BUS, BUSCTL, 2` (sets CFG_EN)
+5. Boot ROM installs bus-fault-ignore trap handler (same `_trap_bus_ignore` used for RAM probing)
+6. Boot ROM reads `CFG_ID` at `0xFE00_0000` — if bus fault, no more devices → go to step 10
+7. Boot ROM reads `CFG_SIZE` and `CFG_TYPE` to determine the device's requirements
+8. Boot ROM assigns a base address (from available physical space), writes it to `CFG_BASE` at `0xFE00_000C`
+9. Device latches base address, transitions to enabled state, passes `cfg` to next device. Go to step 6
+10. Boot ROM disables config mode: `WRSYS SYSDEV_BUS, BUSCTL, 0` (clears CFG_EN)
+11. Boot ROM restores normal bus fault handler
+12. Boot ROM records the device table in the boot data structure (passed to stage 1 / kernel via R1)
+
+```c
+// C pseudocode for the autoconfig loop:
+penumbra_write_sysreg(SYSDEV_BUS, BUS_CTL, BUS_RST);     // pulse RST
+penumbra_write_sysreg(SYSDEV_BUS, BUS_CTL, BUS_CFG_EN);  // enable config mode
+
+TRAP_VECTORS[TRAP_BUS_FAULT] = _trap_bus_ignore;
+int ndevs = 0;
+
+for (;;) {
+    uint32_t id = *(volatile uint32_t *)0xFE000000;       // CFG_ID
+    if (/* bus fault */) break;                            // no more devices
+    uint32_t size = *(volatile uint32_t *)0xFE000004;     // CFG_SIZE
+    uint32_t type = *(volatile uint32_t *)0xFE000008;     // CFG_TYPE
+    uint32_t base = allocate_address(type, size);
+    *(volatile uint32_t *)0xFE00000C = base;              // CFG_BASE → device enables
+    devtable[ndevs++] = (struct bootdev){ id, base, size, type };
+}
+
+TRAP_VECTORS[TRAP_BUS_FAULT] = prev_handler;
+penumbra_write_sysreg(SYSDEV_BUS, BUS_CTL, 0);           // disable config mode
+```
 
 ### FPGA-Internal Autoconfig
 
-FPGA-internal devices (soft peripherals, SDRAM controllers, etc.) participate in the same autoconfig protocol. The `cfg` chain is simply wired in RTL between module instances:
+FPGA-internal devices (soft peripherals, SDRAM controllers, etc.) participate in the same autoconfig protocol. The bus controller's `cfg` output feeds into the daisy chain, which is wired in RTL between module instances:
 
 ```systemverilog
 // In machine_fpga.sv (or similar integration module):
-assign fpga_uart_cfg_in  = busctl_cfg_out;    // first in chain
-assign fpga_spi_cfg_in   = fpga_uart_cfg_out; // second
-assign ext_bus_cfg        = fpga_spi_cfg_out;  // then to external bus
+// Bus controller (sysreg device 2) drives cfg and rst
+assign bus_rst            = hw_rst | busctl_sw_rst;     // hardware OR software reset
+assign fpga_spi_cfg_in   = busctl_cfg_out;              // first autoconfigured device
+assign ext_bus_cfg        = fpga_spi_cfg_out;            // then to external bus connector
 ```
 
-This means the same boot ROM autoconfig code discovers both FPGA-internal soft peripherals and external discrete cards — no distinction from software's perspective.
+The config address range (`0xFE00_0000`) is decoded by the bus, and the `cfg` daisy chain determines which device responds. FPGA-internal and external discrete cards are indistinguishable from software's perspective — the same `LDW`/`STW` to config space discovers both.
 
 ### Expansion RAM
 
@@ -463,6 +518,11 @@ The physical address space uses a fixed layout decoded from the top address bits
             │ (optional)          │
             ├─────────────────────┤
             │ (unmapped)          │  Bus fault if accessed
+0xFDFF_FFFF └─────────────────────┘
+0xFE00_0000 ┌─────────────────────┐
+            │ Config Space (16 B) │  Autoconfig registers (only when CFG_EN set)
+0xFE00_000F └─────────────────────┘
+            │ (unmapped)          │
 0xFEFF_FFFF └─────────────────────┘
 0xFF00_0000 ┌─────────────────────┐
             │ I/O Region (16 MB)  │  Always uncached (C=0)

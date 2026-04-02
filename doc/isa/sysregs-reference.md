@@ -23,7 +23,8 @@ one of 16 registers within that device, for 256 total system registers.
 | 1 | SYS | CPU and machine identification (read-only) |
 | 2 | DCACHE | D-cache control, geometry info, invalidation |
 | 3 | ICACHE | I-cache control, geometry info, invalidation |
-| 4–15 | — | Reserved for future devices (timer, interrupt controller, DMA) |
+| 4 | BUS | Bus controller (autoconfig, bus reset) |
+| 5–15 | — | Reserved for future devices (timer, interrupt controller, DMA) |
 
 > **Note:** I/O peripherals (UART, SPI, GPIO, Ethernet) are **not** on the sysreg bus.
 > They are memory-mapped at `0xFF00_0000`+ and accessed via `LDW`/`STW`.
@@ -364,3 +365,45 @@ only the I-cache needs invalidation.
 **DMA coherence:** Before DMA read (device → memory), invalidate D-cache
 lines covering the DMA buffer so the CPU reads fresh data from RAM, not
 stale cached copies. Alternatively, map DMA buffers with C=0 (uncached).
+
+---
+
+## Device 4: BUS (Bus Controller)
+
+Controls the Penumbra Bus `rst` and `cfg` signals for device discovery
+(autoconfig) and bus reset. See `doc/bus/bus-overview.md` for the full
+autoconfig protocol.
+
+| reg | Name | R/W | Description |
+|-----|------|-----|-------------|
+| 0 | BUSCTL | R/W | Bus control register |
+| 1–15 | — | — | Reserved (reads as 0) |
+
+### BUSCTL (reg 0)
+
+| Bit | Name | Reset | Description |
+|-----|------|-------|-------------|
+| 0 | RST | 0 | Write 1 to pulse `rst` on the bus (auto-clears after one cycle). Reads as 0. |
+| 1 | CFG_EN | 0 | Enable config chain (`cfg` signal) and config address range (`0xFE00_0000`). |
+| 31:2 | — | 0 | Reserved |
+
+**RST** resets all autoconfigured devices on the bus back to their unconfigured
+state. This is used at the start of the autoconfig sequence (to clear any
+stale configs from a previous boot) and can also be used by the OS to re-run
+autoconfig without a hardware power cycle.
+
+**CFG_EN** gates the `cfg` daisy chain and enables the config address range
+on the memory bus. When clear, accesses to `0xFE00_0000` produce a bus fault.
+
+```asm
+; Pulse bus reset, then enable config mode
+LLI   R1, #1
+WRSYS R1, #4, #0          ; BUS BUSCTL = RST (auto-clears)
+LLI   R1, #2
+WRSYS R1, #4, #0          ; BUS BUSCTL = CFG_EN
+
+; ... enumerate devices via LDW/STW to 0xFE000000 ...
+
+; Disable config mode when done
+WRSYS R0, #4, #0          ; BUS BUSCTL = 0
+```
