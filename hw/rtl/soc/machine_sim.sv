@@ -189,6 +189,29 @@ module machine_sim
         .o_irq       (uart_irq)
     );
 
+    // ══════════════════════════════════════════════════════════
+    // Autoconfig device chain
+    //
+    // The cfg daisy chain starts at busctl_cfg_en and passes
+    // through each autoconfigured device. Currently empty —
+    // devices will be inserted here (SPI, etc.).
+    // ══════════════════════════════════════════════════════════
+
+    // Head of the cfg chain — currently no devices, so the
+    // chain ends immediately. Any config space read will get
+    // no response → bus fault → "no more devices".
+    logic        acfg_chain_end;
+    assign acfg_chain_end = busctl_cfg_en;  // passes through when no devices
+
+    // Autoconfig device bus signals (OR'd into bus response).
+    // With no devices, these are all zero.
+    logic [31:0] acfg_rdata;
+    logic        acfg_busy;
+    logic        acfg_sel;
+    assign acfg_rdata = 32'b0;
+    assign acfg_busy  = 1'b0;
+    assign acfg_sel   = 1'b0;
+
     // ── Bus response OR-combine ─────────────────────────────
     // Read data: masked by registered select (one-cycle delay
     // aligns with synchronous slave read latency). Only the
@@ -198,19 +221,21 @@ module machine_sim
     // data output, active-low OE driven by the device's select.
     assign mem_rdata = (ram_sel_r  ? ram_rdata_raw  : 32'b0) |
                        (rom_sel_r  ? rom_rdata_raw  : 32'b0) |
-                       (uart_sel_r ? uart_rdata_raw : 32'b0);
+                       (uart_sel_r ? uart_rdata_raw : 32'b0) |
+                       acfg_rdata;
 
     // Busy: combinational (current cycle) so the CPU stalls
     // immediately when the addressed device needs time.
     assign mem_busy = (ram_sel  ? ram_busy_raw  : 1'b0) |
                       (rom_sel  ? rom_busy_raw  : 1'b0) |
-                      (uart_sel ? uart_busy_raw : 1'b0);
+                      (uart_sel ? uart_busy_raw : 1'b0) |
+                      acfg_busy;
 
     // ── Bus fault detection ─────────────────────────────────
     // Active request with no device claiming the address.
     // Real hardware: detected via timeout (no ACK within deadline).
     // Simulation: combinational — wired to cpu_core as exception.
-    assign bus_fault = (mem_re | mem_we) & ~(ram_sel | rom_sel | uart_sel);
+    assign bus_fault = (mem_re | mem_we) & ~(ram_sel | rom_sel | uart_sel | acfg_sel);
 
     // ══════════════════════════════════════════════════════════
     // Sysreg devices (external, dev_id >= 1)

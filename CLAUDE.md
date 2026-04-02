@@ -92,7 +92,7 @@ The CPU is fully functional in simulation: all RTL modules implemented and teste
 
 ## Next Steps (in priority order)
 1. **LLVM codegen hardening** — legalize remaining ops as they surface (G_SMAX/G_SMIN/G_UMAX/G_UMIN), ALU immediate folding
-2. **Boot chain** — four-stage boot (ROM → stage 1 → stage 2 → kernel), SPI controller for SD card, bus autoconfig implementation. See `doc/boot/boot-process.md` and `doc/boot/spi-controller.md`
+2. **Boot chain** — SPI controller (`sim_spi.sv`) behind autoconfig wrapper, wire into `machine_sim.sv`, implement address allocation in ROM autoconfig loop. Then: SD card testbench emulator, FAT32 boot. See `doc/boot/boot-process.md` and `doc/boot/spi-controller.md`
 3. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick
 4. **Interrupt controller** — Multiple devices with priority encoding
 5. **Memory subsystem** — SDRAM controller, bus interface

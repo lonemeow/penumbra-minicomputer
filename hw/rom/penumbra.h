@@ -75,6 +75,32 @@ typedef unsigned int uint32_t;
                  : : "r"(__v));                                         \
 } while (0)
 
+/* ── Bus Controller (SYSDEV_BUS, device 4) ──────────────────────────── */
+
+#define SYSDEV_BUS    4
+#define BUS_CTL       0   /* BUSCTL: bit 0 = RST, bit 1 = CFG_EN */
+
+#define BUSCTL_RST    0x1
+#define BUSCTL_CFG_EN 0x2
+
+/* ── Autoconfig config space (0xFE00_0000, active when CFG_EN) ──────── */
+
+#define AUTOCONFIG_BASE   0xFE000000
+#define ACFG_CLASS  (*(volatile uint32_t *)(AUTOCONFIG_BASE + 0x00))
+#define ACFG_SIZE   (*(volatile uint32_t *)(AUTOCONFIG_BASE + 0x04))
+#define ACFG_ID     (*(volatile uint32_t *)(AUTOCONFIG_BASE + 0x08))
+#define ACFG_NAME0  (*(volatile uint32_t *)(AUTOCONFIG_BASE + 0x0C))
+#define ACFG_NAME1  (*(volatile uint32_t *)(AUTOCONFIG_BASE + 0x10))
+#define ACFG_NAME2  (*(volatile uint32_t *)(AUTOCONFIG_BASE + 0x14))
+#define ACFG_NAME3  (*(volatile uint32_t *)(AUTOCONFIG_BASE + 0x18))
+#define ACFG_BASE   (*(volatile uint32_t *)(AUTOCONFIG_BASE + 0x1C))
+
+/* Device class codes */
+#define ACFG_CLASS_UNKNOWN  0
+#define ACFG_CLASS_MEMORY   1
+#define ACFG_CLASS_UART     2
+#define ACFG_CLASS_SPI      3
+
 /* ── Interrupt control ───────────────────────────────────────────────── */
 
 static inline void disable_interrupts(void) {

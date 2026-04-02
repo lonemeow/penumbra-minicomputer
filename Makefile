@@ -133,7 +133,7 @@ test:
 # Bridges stdin/stdout to UART for terminal interaction.
 # Usage: make simulate
 #        make simulate LLVM_PREFIX=/other/llvm/build
-DOCKER_RUN_IT = docker run --rm -it -v $(CURDIR):/work -w /work
+DOCKER_RUN_IT ?= docker run --rm -it -v $(CURDIR):/work -w /work
 
 .PHONY: simulate
 simulate:

@@ -201,6 +201,91 @@ static long detect_ram(void) {
     return npages;
 }
 
+/*
+ * Autoconfig — enumerate devices on the bus via config chain.
+ *
+ * Returns the number of devices found. Device info is printed
+ * to the console for diagnostics. With no devices on the chain,
+ * the first config read faults immediately and we return 0.
+ */
+static const char *class_name(uint32_t cls) {
+    switch (cls) {
+    case ACFG_CLASS_MEMORY: return "Memory";
+    case ACFG_CLASS_UART:   return "UART";
+    case ACFG_CLASS_SPI:    return "SPI";
+    default:                return "Unknown";
+    }
+}
+
+/*
+ * Try to read a word from addr. If the read bus-faults (no device
+ * responds), _trap_bus_ignore skips the LDW and the register keeps
+ * the sentinel value 0xFFFFFFFF.
+ *
+ * Uses inline asm to guarantee a single LDW instruction — at -O0
+ * the compiler might insert extra loads/stores around a volatile
+ * read that break the skip-one-instruction pattern.
+ */
+static uint32_t bus_probe_read(uint32_t addr) {
+    uint32_t val = 0xFFFFFFFF;  /* sentinel — survives if LDW is skipped */
+    asm volatile("ldw %0, [%1]" : "+r"(val) : "r"(addr) : "memory");
+    return val;
+}
+
+static int autoconfig(void) {
+    int ndevs = 0;
+
+    /* Assert bus reset to clear any stale device configs */
+    penumbra_write_sysreg(SYSDEV_BUS, BUS_CTL, BUSCTL_RST);
+
+    /* Brief delay for async bus devices */
+    for (volatile int i = 0; i < 100; i++) {}
+
+    /* Deassert reset, enable config mode */
+    penumbra_write_sysreg(SYSDEV_BUS, BUS_CTL, BUSCTL_CFG_EN);
+
+    /* Install bus-fault-ignore handler for probing */
+    void (*prev_vector)(void) = TRAP_VECTORS[TRAP_BUS_FAULT];
+    TRAP_VECTORS[TRAP_BUS_FAULT] = _trap_bus_ignore;
+
+    for (;;) {
+        /* Probe: read CFG_CLASS, sentinel 0xFFFFFFFF means bus fault */
+        uint32_t cls = bus_probe_read(AUTOCONFIG_BASE + 0x00);
+        if (cls == 0xFFFFFFFF)
+            break;
+
+        uint32_t size = bus_probe_read(AUTOCONFIG_BASE + 0x04);
+        uint32_t id   = bus_probe_read(AUTOCONFIG_BASE + 0x08);
+
+        /* Read device name (4 words → 16 bytes, word-aligned) */
+        uint32_t name_words[5];  /* 5th word for null terminator space */
+        name_words[0] = bus_probe_read(AUTOCONFIG_BASE + 0x0C);
+        name_words[1] = bus_probe_read(AUTOCONFIG_BASE + 0x10);
+        name_words[2] = bus_probe_read(AUTOCONFIG_BASE + 0x14);
+        name_words[3] = bus_probe_read(AUTOCONFIG_BASE + 0x18);
+        name_words[4] = 0;
+        char *name = (char *)name_words;
+
+        console_printf("  %-16s class=%s size=%d id=0x%x\r\n",
+                        name, class_name(cls), (int)size, id);
+
+        /*
+         * TODO: allocate a base address from available physical
+         * space and write it to ACFG_BASE. For now, just report
+         * what we find.
+         */
+        (void)id;
+
+        ndevs++;
+    }
+
+    /* Restore and disable config mode */
+    TRAP_VECTORS[TRAP_BUS_FAULT] = prev_vector;
+    penumbra_write_sysreg(SYSDEV_BUS, BUS_CTL, 0);
+
+    return ndevs;
+}
+
 int main(void) {
     char cmdbuffer[64];
 
@@ -213,7 +298,11 @@ int main(void) {
     console_puts("Detecting base RAM... ");
     long npages = detect_ram();
     long ram_kb = npages * 4096 / 1024;
-    console_printf("%dkB found\r\n\r\n", (int)ram_kb);
+    console_printf("%dkB found\r\n", (int)ram_kb);
+
+    console_puts("Probing bus devices...\r\n");
+    int ndevs = autoconfig();
+    console_printf("%d device(s) found\r\n\r\n", ndevs);
 
     /* Spin — placeholder for command loop */
     for (;;) {
