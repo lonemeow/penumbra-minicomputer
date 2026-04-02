@@ -5,7 +5,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "PenumbraLegalizerInfo.h"
+#include "PenumbraMachineFunctionInfo.h"
+#include "llvm/CodeGen/GlobalISel/LegalizerHelper.h"
 #include "llvm/CodeGen/GlobalISel/LegalizerInfo.h"
+#include "llvm/CodeGen/GlobalISel/MachineIRBuilder.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/TargetOpcodes.h"
 
 using namespace llvm;
@@ -44,7 +48,7 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
         {s32, p0, s8,  1},
       });
 
-  getActionDefinitionsBuilder(G_PTR_ADD)
+  getActionDefinitionsBuilder({G_PTR_ADD, G_PTRMASK})
       .legalFor({{p0, s32}});
 
   // Pointer/integer casts: no-op on Penumbra (pointers = 32-bit integers).
@@ -109,5 +113,39 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
       .legalFor({s32, p0})
       .clampScalar(0, s32, s32);
 
+  // Varargs: G_VASTART is custom-lowered to store the save area address
+  // into the va_list pointer.  G_VAARG is lowered generically (pointer
+  // bump + load).
+  getActionDefinitionsBuilder(G_VASTART).customFor({p0});
+  getActionDefinitionsBuilder(G_VAARG)
+      .clampScalar(0, s32, s32)
+      .lowerForCartesianProduct({s32, p0}, {p0});
+
   getLegacyLegalizerInfo().computeTables();
+}
+
+bool PenumbraLegalizerInfo::legalizeCustom(
+    LegalizerHelper &Helper, MachineInstr &MI,
+    LostDebugLocObserver &LocObserver) const {
+  MachineIRBuilder &MIRBuilder = Helper.MIRBuilder;
+
+  switch (MI.getOpcode()) {
+  default:
+    return false;
+  case TargetOpcode::G_VASTART: {
+    // G_VASTART stores the address of the first anonymous argument into
+    // the va_list pointer (operand 0).  The frame index was recorded by
+    // lowerFormalArguments in PenumbraMachineFunctionInfo.
+    MachineFunction *MF = MI.getParent()->getParent();
+    auto *FuncInfo = MF->getInfo<PenumbraMachineFunctionInfo>();
+    int FI = FuncInfo->getVarArgsFrameIndex();
+    LLT AddrTy = MIRBuilder.getMRI()->getType(MI.getOperand(0).getReg());
+    auto FINAddr = MIRBuilder.buildFrameIndex(AddrTy, FI);
+    assert(MI.hasOneMemOperand());
+    MIRBuilder.buildStore(FINAddr, MI.getOperand(0).getReg(),
+                          **MI.memoperands_begin());
+    MI.eraseFromParent();
+    return true;
+  }
+  }
 }

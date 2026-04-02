@@ -138,7 +138,8 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
   case G_GLOBAL_VALUE: return selectGlobalValue(I, MBB, MRI);
 
   // ── Pointer arithmetic ────────────────────────────────────────────────────
-  case G_PTR_ADD: return selectBinaryALU(I, MBB, MRI, Penumbra::ADD);
+  case G_PTR_ADD:  return selectBinaryALU(I, MBB, MRI, Penumbra::ADD);
+  case G_PTRMASK:  return selectBinaryALU(I, MBB, MRI, Penumbra::AND);
 
   // ── Memory ────────────────────────────────────────────────────────────────
   case G_LOAD:        return selectLoad(I, MBB, MRI);

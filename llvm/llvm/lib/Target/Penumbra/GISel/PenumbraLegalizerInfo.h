@@ -15,6 +15,9 @@ class PenumbraSubtarget;
 
 struct PenumbraLegalizerInfo : public LegalizerInfo {
   PenumbraLegalizerInfo(const PenumbraSubtarget &ST);
+
+  bool legalizeCustom(LegalizerHelper &Helper, MachineInstr &MI,
+                      LostDebugLocObserver &LocObserver) const override;
 };
 
 } // namespace llvm

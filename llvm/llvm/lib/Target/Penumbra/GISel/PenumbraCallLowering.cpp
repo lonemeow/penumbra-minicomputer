@@ -7,6 +7,7 @@
 #include "PenumbraCallLowering.h"
 #include "MCTargetDesc/PenumbraMCTargetDesc.h"
 #include "PenumbraISelLowering.h"
+#include "PenumbraMachineFunctionInfo.h"
 #include "PenumbraSubtarget.h"
 #include "llvm/CodeGen/CallingConvLower.h"
 #include "llvm/CodeGen/GlobalISel/MachineIRBuilder.h"
@@ -135,9 +136,66 @@ bool PenumbraCallLowering::lowerFormalArguments(
       TLI.getCCAssignFn(F.getCallingConv(), /*Return=*/false, F.isVarArg());
   IncomingValueAssigner ArgAssigner(AssignFn);
   PenumbraIncomingValueHandler ArgHandler(MIRBuilder, MRI);
-  return determineAndHandleAssignments(ArgHandler, ArgAssigner, SplitArgs,
-                                       MIRBuilder, F.getCallingConv(),
-                                       F.isVarArg());
+  if (!determineAndHandleAssignments(ArgHandler, ArgAssigner, SplitArgs,
+                                     MIRBuilder, F.getCallingConv(),
+                                     F.isVarArg()))
+    return false;
+
+  // Variadic functions: spill all argument registers (R1-R4) to the stack
+  // so that va_arg can walk a contiguous region covering both register-passed
+  // and stack-passed arguments.  The ABI requires this save area to sit
+  // immediately below the caller's stack-passed arguments.
+  if (F.isVarArg()) {
+    static const MCPhysReg ArgRegs[] = {Penumbra::R1, Penumbra::R2,
+                                        Penumbra::R3, Penumbra::R4};
+    const unsigned NumArgRegs = std::size(ArgRegs);
+    // How many regs were consumed by named args?
+    unsigned NumNamed = SplitArgs.size();
+    if (NumNamed > NumArgRegs)
+      NumNamed = NumArgRegs;
+
+    // Offset from SP where the save area starts.  Named register args were
+    // already assigned by CC_Penumbra.  The save area covers all 4 register
+    // slots (16 bytes), placed at a fixed negative offset from the incoming
+    // SP so that it is contiguous with any stack-passed arguments.
+    unsigned SaveSize = NumArgRegs * 4;  // 16 bytes for R1-R4
+    int64_t SaveOffset = -(int64_t)SaveSize;
+
+    MachineFrameInfo &MFI = MF.getFrameInfo();
+
+    // Spill each argument register to its slot.
+    LLT s32 = LLT::scalar(32);
+    LLT p0 = LLT::pointer(0, 32);
+    for (unsigned i = 0; i < NumArgRegs; ++i) {
+      int SlotFI = MFI.CreateFixedObject(4, SaveOffset + i * 4,
+                                         /*IsSpillSlot=*/true);
+      auto FINReg = MIRBuilder.buildFrameIndex(p0, SlotFI);
+      // If this register carries a named arg it was already live-in'd above.
+      // For unused arg regs we need to add them as live-ins.
+      if (i >= NumNamed) {
+        MIRBuilder.getMRI()->addLiveIn(ArgRegs[i]);
+        MIRBuilder.getMBB().addLiveIn(ArgRegs[i]);
+      }
+      Register CopyReg = MRI.createGenericVirtualRegister(s32);
+      MIRBuilder.buildCopy(CopyReg, Register(ArgRegs[i]));
+      MachinePointerInfo MPO =
+          MachinePointerInfo::getFixedStack(MF, SlotFI);
+      auto *MMO = MF.getMachineMemOperand(MPO, MachineMemOperand::MOStore,
+                                          s32, Align(4));
+      MIRBuilder.buildStore(CopyReg, FINReg, *MMO);
+    }
+
+    // Record the frame index for the start of the save area.  va_start
+    // will use this to initialise the va_list pointer.  The va_list points
+    // past the named args: if 2 named args exist, va_list = &save[2].
+    auto *FuncInfo = MF.getInfo<PenumbraMachineFunctionInfo>();
+    // VarArgs start at the first anonymous slot.
+    int VaFI = MFI.CreateFixedObject(4, SaveOffset + NumNamed * 4,
+                                     /*IsSpillSlot=*/false);
+    FuncInfo->setVarArgsFrameIndex(VaFI);
+  }
+
+  return true;
 }
 
 bool PenumbraCallLowering::lowerCall(MachineIRBuilder &MIRBuilder,

@@ -7,6 +7,7 @@
 #ifndef LLVM_LIB_TARGET_PENUMBRA_PENUMBRATARGETMACHINE_H
 #define LLVM_LIB_TARGET_PENUMBRA_PENUMBRATARGETMACHINE_H
 
+#include "PenumbraMachineFunctionInfo.h"
 #include "PenumbraSubtarget.h"
 #include "llvm/CodeGen/CodeGenTargetMachineImpl.h"
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
@@ -30,6 +31,13 @@ public:
   }
 
   TargetPassConfig *createPassConfig(PassManagerBase &PM) override;
+
+  MachineFunctionInfo *
+  createMachineFunctionInfo(BumpPtrAllocator &Allocator, const Function &F,
+                            const TargetSubtargetInfo *STI) const override {
+    return PenumbraMachineFunctionInfo::create<PenumbraMachineFunctionInfo>(
+        Allocator, F, STI);
+  }
 
   TargetLoweringObjectFile *getObjFileLowering() const override {
     return TLOF.get();
