@@ -52,8 +52,10 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
       .legalFor({{p0, s32}});
 
   // Pointer/integer casts: no-op on Penumbra (pointers = 32-bit integers).
+  // G_INTTOPTR: type0=p0 (result), type1=s32 (source).
+  // G_PTRTOINT: type0=s32 (result), type1=p0 (source).
   getActionDefinitionsBuilder({G_INTTOPTR, G_PTRTOINT})
-      .legalFor({{p0, s32}});
+      .legalFor({{p0, s32}, {s32, p0}});
 
   // Comparisons: G_ICMP produces s1 result, compares s32 operands.
   const LLT s1 = LLT::scalar(1);
