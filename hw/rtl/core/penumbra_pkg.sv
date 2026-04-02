@@ -73,6 +73,7 @@ package penumbra_pkg;
     localparam logic [3:0] SYSDEV_SYS    = 4'd1;   // System ID (read-only)
     localparam logic [3:0] SYSDEV_DCACHE = 4'd2;   // D-cache control
     localparam logic [3:0] SYSDEV_ICACHE = 4'd3;   // I-cache control
+    localparam logic [3:0] SYSDEV_BUS    = 4'd4;   // Bus controller (autoconfig, reset)
 
     // ── SYS sysreg addresses (dev_id = 1) ───────────────────
     localparam logic [3:0] SYSREG_SYS_CPU_ISA    = 4'd0;   // CPU ISA version + feature flags
@@ -101,6 +102,36 @@ package penumbra_pkg;
     localparam logic [3:0] SYSREG_MMU_TLB_VPN  = 4'd3;  // TLB upper: {4'b0, VPN[19:0], ASID[7:0]}
     localparam logic [3:0] SYSREG_MMU_TLB_PTE  = 4'd4;  // TLB lower: {PPN[19:0], SW[3:0], flags[7:0]}
     localparam logic [3:0] SYSREG_MMU_TLB_IDX  = 4'd5;  // TLB slot: {26'b0, way[0], set[4:0]}
+
+    // ── Bus controller sysreg addresses (dev_id = 4) ─────────────
+    localparam logic [3:0] SYSREG_BUS_CTL = 4'd0;  // BUSCTL: [0]=RST (auto-clear), [1]=CFG_EN
+
+    // ── Autoconfig config space (memory-mapped, active when CFG_EN) ──
+    localparam logic [31:0] AUTOCONFIG_BASE = 32'hFE00_0000;
+    localparam int          AUTOCONFIG_SIZE = 32;    // 8 word-aligned registers
+
+    // Config space register offsets (word-strided)
+    localparam logic [4:0] ACFG_CLASS = 5'h00;  // 0xFE000000: Device class (R)
+    localparam logic [4:0] ACFG_SIZE  = 5'h04;  // 0xFE000004: Required size (R)
+    localparam logic [4:0] ACFG_ID    = 5'h08;  // 0xFE000008: Device ID (R)
+    localparam logic [4:0] ACFG_NAME0 = 5'h0C;  // 0xFE00000C: Name bytes  0-3 (R)
+    localparam logic [4:0] ACFG_NAME1 = 5'h10;  // 0xFE000010: Name bytes  4-7 (R)
+    localparam logic [4:0] ACFG_NAME2 = 5'h14;  // 0xFE000014: Name bytes  8-11 (R)
+    localparam logic [4:0] ACFG_NAME3 = 5'h18;  // 0xFE000018: Name bytes 12-15 (R)
+    localparam logic [4:0] ACFG_BASE  = 5'h1C;  // 0xFE00001C: Assigned base (W)
+
+    // Device class codes for ACFG_CLASS
+    //
+    // The class code identifies the base register protocol the device
+    // implements. Generic firmware (boot ROM, stage 1) can use any
+    // device whose class it understands without a device-specific driver.
+    // Devices with extended features (e.g. DMA-capable SPI) still report
+    // the base class and implement the base registers; OS drivers detect
+    // extra capabilities via CFG_ID.
+    localparam logic [31:0] ACFG_CLASS_UNKNOWN  = 32'd0;  // No standard protocol — needs device-specific driver
+    localparam logic [31:0] ACFG_CLASS_MEMORY   = 32'd1;  // Plain memory (RAM/ROM) — no registers, just address space
+    localparam logic [31:0] ACFG_CLASS_UART     = 32'd2;  // NS16450-compatible UART register interface
+    localparam logic [31:0] ACFG_CLASS_SPI      = 32'd3;  // Penumbra SPI master (DATA/STATUS/CONTROL/CLKDIV)
 
     // ── UART register offsets (word-strided within 4 KB page) ────
     // Memory-mapped I/O at 0xFF00_0000. Each 8-bit register

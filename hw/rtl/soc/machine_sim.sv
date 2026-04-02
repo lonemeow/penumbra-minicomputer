@@ -229,12 +229,29 @@ module machine_sim
         .o_sys_rdata(sysid_rdata)
     );
 
+    // ── Bus Controller (device 4) ──────────────────────────
+    logic [31:0] busctl_rdata;
+    logic        busctl_bus_rst;
+    logic        busctl_cfg_en;
+
+    busctl u_busctl (
+        .i_clk       (i_clk),
+        .i_rst       (i_rst),
+        .i_sys_reg   (sys_reg),
+        .i_sys_wdata (sys_wdata),
+        .i_sys_we    (sys_we & sys_cycle & (sys_dev == SYSDEV_BUS)),
+        .o_sys_rdata (busctl_rdata),
+        .o_bus_rst   (busctl_bus_rst),
+        .o_cfg_en    (busctl_cfg_en)
+    );
+
     // ── Sysreg read mux ─────────────────────────────────────
     // Routes read data from external devices back to cpu_core.
     // Device 0 (MMU) is handled inside cpu_core.
     always_comb begin
         case (sys_dev)
             SYSDEV_SYS: sys_rdata = sysid_rdata;
+            SYSDEV_BUS: sys_rdata = busctl_rdata;
             default:    sys_rdata = 32'b0;
         endcase
     end

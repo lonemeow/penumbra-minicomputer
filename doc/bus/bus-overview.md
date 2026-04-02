@@ -378,29 +378,49 @@ Discrete implementation: one flip-flop per device (`configured`, async-cleared b
 
 ### Bus Controller Sysreg Device
 
-The bus controller is a CPU-internal sysreg device (`SYSDEV_BUS`, device 2) that controls the `rst` and `cfg` signals on the Penumbra Bus. It has a single register:
+The bus controller is a CPU-internal sysreg device (`SYSDEV_BUS`, device 4) that controls the `rst` and `cfg` signals on the Penumbra Bus. It has a single register:
 
 | Sysreg | Name | R/W | Description |
 |--------|------|-----|-------------|
-| 0 | `BUSCTL` | R/W | Bit 0: `RST` — write 1 to pulse bus reset (auto-clears after one cycle). Bit 1: `CFG_EN` — enable config chain and config address decode on the bus. |
+| 0 | `BUSCTL` | R/W | Bit 0: `RST` — assert/deassert bus reset (sticky). Bit 1: `CFG_EN` — enable config chain and config address decode on the bus. |
 
-- **RST (bit 0):** Writing 1 asserts `rst` on the bus for one cycle, returning all autoconfigured devices to their unconfigured state. The bit auto-clears; reading always returns 0.
+- **RST (bit 0):** A plain R/W bit. Writing 1 asserts `rst` on the bus, returning all autoconfigured devices to their unconfigured state. Writing 0 deasserts it. Software controls the timing: assert RST, delay as needed for slow devices on the async bus, then deassert. There is no hardware auto-clear — the external bus is asynchronous, so "one cycle" has no well-defined meaning for external devices.
 - **CFG_EN (bit 1):** When set, the bus controller asserts `cfg` on the daisy chain and enables the config address range (`0xFE00_0000`). When clear, `cfg` is deasserted, and accesses to the config address range produce a bus fault (unmapped). Software must set `CFG_EN` before reading/writing config space, and clear it when enumeration is complete.
 
-Reset default: `0x00` (config mode disabled, no reset pulse).
+Reset default: `0x00` (config mode disabled, bus reset deasserted).
 
 Discrete implementation: two flip-flops (RST, CFG_EN) driven by the sysreg write bus, one OR gate (hardware reset | software RST → bus `rst`).
 
 ### Config Space
 
-When `CFG_EN` is set, a fixed address range at `0xFE00_0000` (16 bytes, 4 word-aligned registers) becomes active on the memory bus. Reads and writes to this range go to the **first unconfigured device** in the config chain (the one whose `cfg_in = 1`). The address lines carry the config register offset; the device's eventual base address is not involved.
+When `CFG_EN` is set, a fixed address range at `0xFE00_0000` (32 bytes, 8 word-aligned registers) becomes active on the memory bus. Reads and writes to this range go to the **first unconfigured device** in the config chain (the one whose `cfg_in = 1`). The address lines carry the config register offset; the device's eventual base address is not involved.
 
-| Address | R/W | Description |
-|---------|-----|-------------|
-| `0xFE00_0000` | R | **CFG_ID** — Device ID (manufacturer + product code) |
-| `0xFE00_0004` | R | **CFG_SIZE** — Required size in bytes (power-of-2) |
-| `0xFE00_0008` | R | **CFG_TYPE** — Device type (0=memory, 1=I/O, ...) |
-| `0xFE00_000C` | W | **CFG_BASE** — Assigned base address. Writing transitions the device to enabled state: it latches the base address, begins responding to normal bus cycles at that address, and passes `cfg_out` to the next device in the chain. |
+| Address | R/W | Name | Description |
+|---------|-----|------|-------------|
+| `0xFE00_0000` | R | **CFG_CLASS** | Device class code (see table below) |
+| `0xFE00_0004` | R | **CFG_SIZE** | Required address space in bytes (power-of-2) |
+| `0xFE00_0008` | R | **CFG_ID** | Device ID (manufacturer + product, or 0 for generic) |
+| `0xFE00_000C` | R | **CFG_NAME0** | Device name bytes 0–3 (packed LE, null-padded) |
+| `0xFE00_0010` | R | **CFG_NAME1** | Device name bytes 4–7 |
+| `0xFE00_0014` | R | **CFG_NAME2** | Device name bytes 8–11 |
+| `0xFE00_0018` | R | **CFG_NAME3** | Device name bytes 12–15 |
+| `0xFE00_001C` | W | **CFG_BASE** | Assigned base address. Writing transitions the device to enabled state: it latches the base address, begins responding to normal bus cycles at that address, and passes `cfg_out` to the next device in the chain. |
+
+**Device class codes (CFG_CLASS):**
+
+The class code identifies the **base register protocol** the device implements. Generic firmware (boot ROM, stage 1 bootloader) can use any device whose class it understands — no device-specific driver needed.
+
+| Value | Name | Base protocol | Description |
+|-------|------|---------------|-------------|
+| 0 | `CLASS_UNKNOWN` | (none) | No standard register protocol. Needs a device-specific OS driver matched by `CFG_ID`. Cannot be used at boot without explicit support. |
+| 1 | `CLASS_MEMORY` | (none — just address space) | Plain memory (RAM, ROM). No registers to program — once the autoconfig base address is assigned, software reads/writes it directly. Boot ROM maps it as additional RAM. |
+| 2 | `CLASS_UART` | NS16450 register layout | UART-compatible serial port. Boot ROM can use it as a console (RBR/THR/LSR polling). NetBSD `com(4)` driver works unmodified. |
+| 3 | `CLASS_SPI` | Penumbra SPI master (DATA/STATUS/CONTROL/CLKDIV) | SPI controller with the standard 4-register interface. Boot ROM knows how to do SD-SPI through this to load the stage 1 bootloader. |
+| 4–255 | — | — | Reserved for future standard protocols |
+
+**Extended devices:** A device with extra capabilities (e.g., an SPI controller with a built-in DMA engine) still reports the base class (`CLASS_SPI`) and implements the base register interface. The boot ROM uses only the base registers. Later, the OS driver reads `CFG_ID` to detect the specific variant and enables extended features. This ensures any `CLASS_SPI` device can be booted from, even if the OS hasn't loaded a device-specific driver yet.
+
+**Device name (CFG_NAME0–3):** A 16-byte null-padded ASCII string, packed little-endian — same format as the CPU/machine name in the `sysid` sysreg. Examples: `"SPI"`, `"WizNet W5500"`, `"Exp. RAM 4MB"`. The boot ROM prints this during enumeration for diagnostic purposes. It makes autoconfig debugging much easier when you can see which physical card on the backplane corresponds to which probe step.
 
 If no unconfigured device remains in the chain, reads to config space produce a **bus fault** (no device responds → bus timeout). Software uses this to detect the end of the device list.
 
@@ -410,33 +430,48 @@ Config space decode: one address comparator (same `bus_devsel` pattern as other 
 
 1. CPU boots from ROM at `0xFFFF_E000`, hardwired devices (system RAM, UART, ROM) already functional
 2. Boot ROM probes system RAM size by reading upward from `0x0000_0000` until bus fault
-3. Boot ROM pulses bus reset: `WRSYS SYSDEV_BUS, BUSCTL, 1` (clears any stale device configs)
-4. Boot ROM enables config mode: `WRSYS SYSDEV_BUS, BUSCTL, 2` (sets CFG_EN)
-5. Boot ROM installs bus-fault-ignore trap handler (same `_trap_bus_ignore` used for RAM probing)
-6. Boot ROM reads `CFG_ID` at `0xFE00_0000` — if bus fault, no more devices → go to step 10
-7. Boot ROM reads `CFG_SIZE` and `CFG_TYPE` to determine the device's requirements
-8. Boot ROM assigns a base address (from available physical space), writes it to `CFG_BASE` at `0xFE00_000C`
-9. Device latches base address, transitions to enabled state, passes `cfg` to next device. Go to step 6
-10. Boot ROM disables config mode: `WRSYS SYSDEV_BUS, BUSCTL, 0` (clears CFG_EN)
-11. Boot ROM restores normal bus fault handler
-12. Boot ROM records the device table in the boot data structure (passed to stage 1 / kernel via R1)
+3. Boot ROM asserts bus reset: `WRSYS SYSDEV_BUS, BUSCTL, 1` (RST=1)
+4. Boot ROM delays (short loop — enough for slow async bus devices to see the reset)
+5. Boot ROM deasserts reset and enables config: `WRSYS SYSDEV_BUS, BUSCTL, 2` (RST=0, CFG_EN=1)
+6. Boot ROM installs bus-fault-ignore trap handler (same `_trap_bus_ignore` used for RAM probing)
+7. Boot ROM reads `CFG_CLASS` at `0xFE00_0000` — if bus fault, no more devices → go to step 12
+8. Boot ROM reads `CFG_SIZE`, `CFG_ID`, and `CFG_NAME0–3` to identify the device
+9. Boot ROM prints device name to console (e.g., `"  SPI        4096 bytes"`)
+10. Boot ROM assigns a base address (from available physical space), writes it to `CFG_BASE` at `0xFE00_001C`
+11. Device latches base address, transitions to enabled state, passes `cfg` to next device. Go to step 7
+12. Boot ROM disables config mode: `WRSYS SYSDEV_BUS, BUSCTL, 0` (clears CFG_EN)
+13. Boot ROM restores normal bus fault handler
+14. Boot ROM records the device table in the boot data structure (passed to stage 1 / kernel via R1)
 
 ```c
 // C pseudocode for the autoconfig loop:
-penumbra_write_sysreg(SYSDEV_BUS, BUS_CTL, BUS_RST);     // pulse RST
-penumbra_write_sysreg(SYSDEV_BUS, BUS_CTL, BUS_CFG_EN);  // enable config mode
+#define BUSCTL_RST    1
+#define BUSCTL_CFG_EN 2
+
+// Assert bus reset, delay, then enable config mode
+penumbra_write_sysreg(SYSDEV_BUS, BUS_CTL, BUSCTL_RST);
+for (volatile int i = 0; i < 100; i++) {}  // delay for async bus
+penumbra_write_sysreg(SYSDEV_BUS, BUS_CTL, BUSCTL_CFG_EN);
 
 TRAP_VECTORS[TRAP_BUS_FAULT] = _trap_bus_ignore;
 int ndevs = 0;
 
 for (;;) {
-    uint32_t id = *(volatile uint32_t *)0xFE000000;       // CFG_ID
+    uint32_t cls  = *(volatile uint32_t *)0xFE000000;     // CFG_CLASS
     if (/* bus fault */) break;                            // no more devices
     uint32_t size = *(volatile uint32_t *)0xFE000004;     // CFG_SIZE
-    uint32_t type = *(volatile uint32_t *)0xFE000008;     // CFG_TYPE
-    uint32_t base = allocate_address(type, size);
-    *(volatile uint32_t *)0xFE00000C = base;              // CFG_BASE → device enables
-    devtable[ndevs++] = (struct bootdev){ id, base, size, type };
+    uint32_t id   = *(volatile uint32_t *)0xFE000008;     // CFG_ID
+    // Read device name (CFG_NAME0–3 at 0x0C, 0x10, 0x14, 0x18)
+    char name[17];
+    for (int i = 0; i < 4; i++)
+        ((uint32_t *)name)[i] = *(volatile uint32_t *)(0xFE00000C + i*4);
+    name[16] = '\0';
+
+    console_printf("  %-16s %d bytes (class %d)\n", name, size, cls);
+
+    uint32_t base = allocate_address(cls, size);
+    *(volatile uint32_t *)0xFE00001C = base;              // CFG_BASE → device enables
+    devtable[ndevs++] = (struct bootdev){ cls, id, base, size, name };
 }
 
 TRAP_VECTORS[TRAP_BUS_FAULT] = prev_handler;
@@ -449,7 +484,7 @@ FPGA-internal devices (soft peripherals, SDRAM controllers, etc.) participate in
 
 ```systemverilog
 // In machine_fpga.sv (or similar integration module):
-// Bus controller (sysreg device 2) drives cfg and rst
+// Bus controller (sysreg device 4) drives cfg and rst
 assign bus_rst            = hw_rst | busctl_sw_rst;     // hardware OR software reset
 assign fpga_spi_cfg_in   = busctl_cfg_out;              // first autoconfigured device
 assign ext_bus_cfg        = fpga_spi_cfg_out;            // then to external bus connector

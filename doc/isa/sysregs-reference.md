@@ -383,24 +383,31 @@ autoconfig protocol.
 
 | Bit | Name | Reset | Description |
 |-----|------|-------|-------------|
-| 0 | RST | 0 | Write 1 to pulse `rst` on the bus (auto-clears after one cycle). Reads as 0. |
+| 0 | RST | 0 | Assert/deassert `rst` on the bus (sticky — software controls timing). |
 | 1 | CFG_EN | 0 | Enable config chain (`cfg` signal) and config address range (`0xFE00_0000`). |
 | 31:2 | — | 0 | Reserved |
 
-**RST** resets all autoconfigured devices on the bus back to their unconfigured
-state. This is used at the start of the autoconfig sequence (to clear any
-stale configs from a previous boot) and can also be used by the OS to re-run
-autoconfig without a hardware power cycle.
+**RST** is a plain R/W bit. Writing 1 asserts `rst` on the bus, resetting all
+autoconfigured devices back to their unconfigured state. Writing 0 deasserts
+it. Software controls the hold time: the external bus is asynchronous, so
+slow devices may need a longer reset pulse. There is no hardware auto-clear.
 
 **CFG_EN** gates the `cfg` daisy chain and enables the config address range
 on the memory bus. When clear, accesses to `0xFE00_0000` produce a bus fault.
 
 ```asm
-; Pulse bus reset, then enable config mode
+; Assert bus reset
 LLI   R1, #1
-WRSYS R1, #4, #0          ; BUS BUSCTL = RST (auto-clears)
+WRSYS R1, #4, #0          ; BUS BUSCTL = RST
+
+; Delay for slow devices on async bus
+LLI   R2, #100
+.delay: SUBI R2, #1
+        BNE  .delay
+
+; Deassert reset, enable config mode
 LLI   R1, #2
-WRSYS R1, #4, #0          ; BUS BUSCTL = CFG_EN
+WRSYS R1, #4, #0          ; BUS BUSCTL = CFG_EN (RST=0)
 
 ; ... enumerate devices via LDW/STW to 0xFE000000 ...
 

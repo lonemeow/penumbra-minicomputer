@@ -33,9 +33,10 @@ This means a board without an SD card (or with a different storage device) simpl
 The simulation (`machine_sim.sv`) implements the same autoconfig protocol as real hardware — the SPI controller participates in the `cfg` daisy chain and receives its address from the boot ROM's autoconfig code. This ensures the full discovery path is tested in simulation.
 
 **Autoconfig identity:**
-- Device type: I/O peripheral
+- Class: `CLASS_SERIAL` (1) — byte-oriented I/O controller
 - Required size: 4 KB (one page)
-- Device ID: TBD (assigned from Penumbra device ID space)
+- Name: `"SPI"` (16 bytes, null-padded)
+- ID: 0 (generic — any SPI master with this register layout is compatible)
 
 ## Register Interface
 
