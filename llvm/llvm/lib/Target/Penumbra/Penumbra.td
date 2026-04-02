@@ -29,8 +29,15 @@ include "GISel/PenumbraRegisterBanks.td"
 //===----------------------------------------------------------------------===//
 
 // The original minicomputer: single-issue, microcoded, no branch prediction.
-// Scheduling model will be added when codegen is implemented.
-def : ProcessorModel<"penumbra1", NoSchedModel, []>;
+def Penumbra1Model : SchedMachineModel {
+  let IssueWidth = 1;            // Single-issue, microcoded
+  let MicroOpBufferSize = 0;     // In-order: no reorder buffer
+  let LoadLatency = 4;           // Cache hit: ~4 cycles (micro-ops + cache)
+  let HighLatency = 8;           // Threshold for "expensive" ops
+  let MispredictPenalty = 0;     // No branch predictor
+  let CompleteModel = 0;         // Don't require itineraries for every opcode
+}
+def : ProcessorModel<"penumbra1", Penumbra1Model, []>;
 
 //===----------------------------------------------------------------------===//
 // Assembly printer
