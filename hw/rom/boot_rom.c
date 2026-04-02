@@ -296,6 +296,51 @@ static int autoconfig(void) {
     return ndevs;
 }
 
+/*
+ * cmd_examine — hex dump memory at a given address.
+ *
+ * Usage: x <addr> [<length>]
+ * Displays 16 bytes per line: hex on the left, ASCII on the right.
+ * Reads byte-at-a-time (LDB) so it works on any alignment/MMIO.
+ */
+static void cmd_examine(const char *args) {
+    const char *p = args;
+    unsigned long addr = strtoul(p, &p, 16);
+    unsigned long len  = strtoul(p, &p, 10);
+    if (len == 0) {
+        len = 16;
+    }
+    int roundup_len = len + (16 - (len % 16)) % 16;
+    volatile unsigned char *mem_ptr = (unsigned char *)addr;
+
+    char hexbuffer[17];
+
+    for (int i=0; i<roundup_len; i++) {
+        if ((i & 0xF) == 0) {
+            console_printf("%08x   ", addr);
+        }
+        if (i < len) {
+            unsigned char val = *mem_ptr++;
+            addr++; // FIXME: Compiler can't deal with casting ptr to int yet
+
+            console_printf(" %02x", val);
+
+            if (isprint(val)) {
+                hexbuffer[i & 0xF] = val;
+            } else {
+                hexbuffer[i & 0xF] = '.';
+            }
+        } else {
+            console_puts("   ");
+                hexbuffer[i & 0xF] = ' ';
+        }
+        if ((i & 0xF) == 0xF) {
+            hexbuffer[16] = '\0';
+            console_printf(" | %s\r\n", hexbuffer);
+        }
+    }
+}
+
 int main(void) {
     char cmdbuffer[64];
 
@@ -321,6 +366,13 @@ int main(void) {
             if (strcmp(cmdbuffer, "b") == 0 ||
                 strcmp(cmdbuffer, "break") == 0) {
                 asm volatile("break");
+            } else if (cmdbuffer[0] == 'x' &&
+                       (cmdbuffer[1] == ' ' || cmdbuffer[1] == '\0')) {
+                cmd_examine(cmdbuffer + 1);
+            } else if (strncmp(cmdbuffer, "examine ", 8) == 0) {
+                cmd_examine(cmdbuffer + 8);
+            } else {
+                console_puts("?\r\n");
             }
         }
     }

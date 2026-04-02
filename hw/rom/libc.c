@@ -13,8 +13,17 @@ int strcmp(const char *a, const char *b) {
     return (unsigned char)*a - (unsigned char)*b;
 }
 
+int strncmp(const char *a, const char *b, unsigned long n) {
+    while (n-- && *a && *a == *b) { a++; b++; }
+    return n == (unsigned long)-1 ? 0 : (unsigned char)*a - (unsigned char)*b;
+}
+
 int isprint(int c) {
     return c >= 0x20 && c <= 0x7E;
+}
+
+int isdigit(int c) {
+    return c >= '0' && c <= '9';
 }
 
 static const char HEX_CHARS[] = "0123456789abcdef";
@@ -97,6 +106,34 @@ int __modsi3(int n, int d) {
     return n < 0 ? -(int)r : (int)r;
 }
 
+/* ── String-to-integer ─────────────────────────────────────────────────── */
+
+unsigned long strtoul(const char *s, char **endp, int base) {
+    unsigned long val = 0;
+
+    while (*s == ' ') s++;
+
+    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+        if (base == 0) base = 16;
+        if (base == 16) s += 2;
+    }
+
+    for (;;) {
+        int digit;
+        char c = *s;
+        if (c >= '0' && c <= '9')      digit = c - '0';
+        else if (c >= 'a' && c <= 'f')  digit = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'F')  digit = c - 'A' + 10;
+        else break;
+        if (digit >= base) break;
+        val = val * base + digit;
+        s++;
+    }
+
+    if (endp) *endp = s;
+    return val;
+}
+
 /* ── Formatted output ──────────────────────────────────────────────────── */
 
 /* Helper: safely emit one character to the buffer. */
@@ -115,6 +152,19 @@ static int emit_str(char *buf, unsigned long size, unsigned long pos,
     return n;
 }
 
+static int emit_str_padded(char *buf, unsigned long size, unsigned long pos,
+                           const char *s, int padwidth, char padchar) {
+    int n = 0;
+    if (padwidth > 0) {
+        int len = strlen(s);
+        while (n < (padwidth - len)) {
+            n += emit(buf, size, pos + n, padchar);
+        }
+    }
+
+    return n + emit_str(buf, size, pos + n, s);
+}
+
 int vsnprintf(char *buf, unsigned long size, const char *fmt, va_list ap) {
     int pos = 0;
     char scratch[12];
@@ -122,6 +172,15 @@ int vsnprintf(char *buf, unsigned long size, const char *fmt, va_list ap) {
     while (*fmt) {
         if (*fmt == '%') {
             fmt++;
+            char padchar = ' ';
+            int padwidth = 0;
+            if (isdigit(*fmt)) {
+                if (*fmt == '0') {
+                    padchar = '0';
+                    fmt++;
+                }
+                padwidth = strtoul(fmt, &fmt, 10);
+            }
             switch (*fmt) {
             case '%':
                 pos += emit(buf, size, pos, '%');
@@ -129,7 +188,7 @@ int vsnprintf(char *buf, unsigned long size, const char *fmt, va_list ap) {
             case 'u': {
                 unsigned int val = va_arg(ap, unsigned int);
                 char *p = utoa(val, scratch, 10);
-                pos += emit_str(buf, size, pos, p);
+                pos += emit_str_padded(buf, size, pos, p, padwidth, padchar);
                 break;
             }
             case 'd': {
@@ -137,20 +196,21 @@ int vsnprintf(char *buf, unsigned long size, const char *fmt, va_list ap) {
                 if (val < 0) {
                     pos += emit(buf, size, pos, '-');
                     val = -val;
+                    padwidth -= 1;
                 }
                 char *p = utoa(val, scratch, 10);
-                pos += emit_str(buf, size, pos, p);
+                pos += emit_str_padded(buf, size, pos, p, padwidth, padchar);
                 break;
             }
             case 'x': {
                 unsigned int val = va_arg(ap, unsigned int);
                 char *p = utoa(val, scratch, 16);
-                pos += emit_str(buf, size, pos, p);
+                pos += emit_str_padded(buf, size, pos, p, padwidth, padchar);
                 break;
             }
             case 's': {
                 char *p = va_arg(ap, char *);
-                pos += emit_str(buf, size, pos, p);
+                pos += emit_str_padded(buf, size, pos, p, padwidth, padchar);
                 break;
             }
             case 'c': {
