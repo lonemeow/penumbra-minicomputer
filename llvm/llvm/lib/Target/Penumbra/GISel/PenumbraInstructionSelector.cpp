@@ -148,11 +148,27 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
   MachineBasicBlock &MBB = *I.getParent();
   MachineRegisterInfo &MRI = MBB.getParent()->getRegInfo();
 
-  // Try TableGen-generated patterns first (ALU reg-reg, etc.).
+  using namespace TargetOpcode;
+
+  // Route loads/stores with frame-index base to manual selection BEFORE
+  // selectImpl — the manual path folds the FI into the memory instruction's
+  // base operand, avoiding a separate LEAfi materialization.
+  // Store-zero (R0 substitution) is handled automatically by the generated
+  // selector via GIZeroRegister on the GPRz store data operand.
+  if (I.getOpcode() == G_LOAD || I.getOpcode() == G_STORE) {
+    Register AddrReg = I.getOperand(1).getReg();
+    MachineInstr *AddrDef = MRI.getVRegDef(AddrReg);
+    if (AddrDef && AddrDef->getOpcode() == G_FRAME_INDEX) {
+      if (I.getOpcode() == G_LOAD)
+        return selectLoad(I, MBB, MRI);
+      else
+        return selectStore(I, MBB, MRI);
+    }
+  }
+
+  // Try TableGen-generated patterns (ALU, shifts, constants, loads/stores).
   if (selectImpl(I, *CoverageInfo))
     return true;
-
-  using namespace TargetOpcode;
 
   switch (I.getOpcode()) {
   // ── Pointer arithmetic ────────────────────────────────────────────────────
@@ -181,8 +197,9 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
   case G_GLOBAL_VALUE: return selectGlobalValue(I, MBB, MRI);
 
   // ── Memory ────────────────────────────────────────────────────────────────
-  case G_LOAD:        return selectLoad(I, MBB, MRI);
-  case G_STORE:       return selectStore(I, MBB, MRI);
+  // G_LOAD/G_STORE: handled by pre-check (FI fold / store-zero) or selectImpl.
+  // Only G_LOAD/G_STORE that fall through here are bugs (selectImpl should
+  // have matched them).
   case G_FRAME_INDEX: return selectFrameIndex(I, MBB, MRI);
   case G_JUMP_TABLE:  return selectJumpTable(I, MBB, MRI);
   case G_BRJT:        return selectBrJT(I, MBB, MRI);
@@ -309,18 +326,10 @@ bool PenumbraInstructionSelector::selectStore(MachineInstr &I,
   default: return false;
   }
 
-  // Use R0 (hardwired zero) directly when storing a constant zero,
-  // avoiding a redundant LLI Rd, #0 materialization.
-  MachineInstr *ValDef = MRI.getVRegDef(ValReg);
-  bool IsZero = ValDef &&
-      ValDef->getOpcode() == TargetOpcode::G_CONSTANT &&
-      ValDef->getOperand(1).getCImm()->isZero();
-
-  auto MIB = BuildMI(MBB, I, DL, TII.get(StOpc));
-  if (IsZero)
-    MIB.addReg(Penumbra::R0);
-  else
-    MIB.addReg(ValReg);
+  // This manual path is only reached for frame-index-folded stores.
+  // Non-FI stores (including store-zero with R0 substitution via GIZeroRegister)
+  // are handled by selectImpl's TableGen patterns.
+  auto MIB = BuildMI(MBB, I, DL, TII.get(StOpc)).addReg(ValReg);
 
   MachineInstr *AddrDef = MRI.getVRegDef(AddrReg);
   if (AddrDef && AddrDef->getOpcode() == TargetOpcode::G_FRAME_INDEX)
@@ -330,8 +339,6 @@ bool PenumbraInstructionSelector::selectStore(MachineInstr &I,
   MIB.addImm(0);
 
   I.eraseFromParent();
-  if (IsZero && MRI.use_nodbg_empty(ValDef->getOperand(0).getReg()))
-    ValDef->eraseFromParent();
   return constrainSelectedInstRegOperands(*MIB, TII, TRI, RBI);
 }
 

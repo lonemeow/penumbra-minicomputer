@@ -252,26 +252,29 @@ let Defs = [SR] in {
 //===----------------------------------------------------------------------===//
 
 // Loads: L=1
+// $Rb uses GPRz: allows R0 as base (zero-base addressing for low memory).
 let mayLoad = 1 in {
-  def LDW  : FormatM<1, 0b10, 0, (outs GPR:$Rd), (ins GPR:$Rb, memoffset16:$offset),
+  def LDW  : FormatM<1, 0b10, 0, (outs GPR:$Rd), (ins GPRz:$Rb, memoffset16:$offset),
                      "ldw\t$Rd, [$Rb + $offset]">;
-  def LDH  : FormatM<1, 0b01, 0, (outs GPR:$Rd), (ins GPR:$Rb, memoffset16:$offset),
+  def LDH  : FormatM<1, 0b01, 0, (outs GPR:$Rd), (ins GPRz:$Rb, memoffset16:$offset),
                      "ldh\t$Rd, [$Rb + $offset]">;
-  def LDHS : FormatM<1, 0b01, 1, (outs GPR:$Rd), (ins GPR:$Rb, memoffset16:$offset),
+  def LDHS : FormatM<1, 0b01, 1, (outs GPR:$Rd), (ins GPRz:$Rb, memoffset16:$offset),
                      "ldhs\t$Rd, [$Rb + $offset]">;
-  def LDB  : FormatM<1, 0b00, 0, (outs GPR:$Rd), (ins GPR:$Rb, memoffset16:$offset),
+  def LDB  : FormatM<1, 0b00, 0, (outs GPR:$Rd), (ins GPRz:$Rb, memoffset16:$offset),
                      "ldb\t$Rd, [$Rb + $offset]">;
-  def LDBS : FormatM<1, 0b00, 1, (outs GPR:$Rd), (ins GPR:$Rb, memoffset16:$offset),
+  def LDBS : FormatM<1, 0b00, 1, (outs GPR:$Rd), (ins GPRz:$Rb, memoffset16:$offset),
                      "ldbs\t$Rd, [$Rb + $offset]">;
 }
 
 // Stores: L=0
+// $Rd (data) uses GPRz: enables R0 zero-register substitution via GIZeroRegister.
+// $Rb (base) uses GPRz: allows R0 as base (zero-base addressing for low memory).
 let mayStore = 1 in {
-  def STW  : FormatM<0, 0b10, 0, (outs), (ins GPRz:$Rd, GPR:$Rb, memoffset16:$offset),
+  def STW  : FormatM<0, 0b10, 0, (outs), (ins GPRz:$Rd, GPRz:$Rb, memoffset16:$offset),
                      "stw\t$Rd, [$Rb + $offset]">;
-  def STH  : FormatM<0, 0b01, 0, (outs), (ins GPRz:$Rd, GPR:$Rb, memoffset16:$offset),
+  def STH  : FormatM<0, 0b01, 0, (outs), (ins GPRz:$Rd, GPRz:$Rb, memoffset16:$offset),
                      "sth\t$Rd, [$Rb + $offset]">;
-  def STB  : FormatM<0, 0b00, 0, (outs), (ins GPRz:$Rd, GPR:$Rb, memoffset16:$offset),
+  def STB  : FormatM<0, 0b00, 0, (outs), (ins GPRz:$Rd, GPRz:$Rb, memoffset16:$offset),
                      "stb\t$Rd, [$Rb + $offset]">;
 }
 

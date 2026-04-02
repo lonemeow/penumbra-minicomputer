@@ -45,3 +45,17 @@ stw r0, [r1 + 0]
 
 ; CHECK: stb	r0, [r14 + 4]           ; encoding: [0x10,0x00,0x38,0x80]
 stb r0, [sp + 4]
+
+; --- R0 as base address (zero-base addressing for low memory) ---
+
+; CHECK: ldw	r1, [r0 + 100]          ; encoding: [0x90,0x01,0x40,0xb0]
+ldw r1, [r0 + 100]
+
+; CHECK: ldb	r3, [r0 + 255]          ; encoding: [0xfc,0x03,0xc0,0xa0]
+ldb r3, [r0 + 255]
+
+; CHECK: stw	r0, [r0 + 0]            ; encoding: [0x00,0x00,0x00,0x90]
+stw r0, [r0 + 0]
+
+; CHECK: sth	r2, [r0 + 8]            ; encoding: [0x20,0x00,0x80,0x88]
+sth r2, [r0 + 8]
