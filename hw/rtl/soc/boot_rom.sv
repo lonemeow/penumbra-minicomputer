@@ -12,7 +12,7 @@
 module boot_rom
     import penumbra_pkg::*;
 #(
-    parameter ROM_WORDS = 2048   // Default 2K words = 8 KB
+    parameter ROM_WORDS = 16384  // Default 16K words = 64 KB
 )
 (
     input  logic        i_clk,

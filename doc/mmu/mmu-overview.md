@@ -355,7 +355,7 @@ For Minix 2 with small processes: ~1 PD + 1–2 PT pages per process = 8–12 KB
 After reset:
 - SR = `{ S=1, I=0, flags=0 }` — supervisor mode, interrupts disabled
 - MMUCR = `{ M=0, ASID=0 }` — flat/bypass mode
-- PC = `0xFFFF_E000` (boot ROM)
+- PC = `0xFFFF_0000` (boot ROM)
 
 Recommended boot procedure:
 1. Execute boot ROM in flat mode (M=0) — all addresses are physical, uncached

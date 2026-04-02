@@ -191,7 +191,7 @@ The linker resolves `R_PENUMBRA_IMM16` on LLI and `R_PENUMBRA_IMM16_HI` on LUI t
 Standard ELF sections. The linker script defines the memory map:
 
 ```
-ROM:  0xFFFF_E000 – 0xFFFF_FFFF  (8 KB, boot ROM)
+ROM:  0xFFFF_0000 – 0xFFFF_FFFF  (64 KB, boot ROM)
 RAM:  0x0000_0000 – 0x00FF_FFFF  (16 MB, main memory)
 MMIO: 0xFF00_0000 – 0xFF00_001F  (UART)
 ```

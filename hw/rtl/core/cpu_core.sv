@@ -26,7 +26,7 @@
 module cpu_core
     import penumbra_pkg::*;
 #(
-    parameter logic [31:0] RESET_PC = 32'hFFFF_E000
+    parameter logic [31:0] RESET_PC = 32'hFFFF_0000
 )
 (
     input  logic        i_clk,

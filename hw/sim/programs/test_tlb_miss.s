@@ -27,13 +27,13 @@ _start:
     LLI  R3, #KERN_RWX
     WRSYS R3, #MMU, #TLB_PTE    ; PPN=0, flags=V|R|W|X|G
 
-    ; ── Map ROM page (VPN 0xFFFFE → PPN 0xFFFFE) ───────────
+    ; ── Map ROM page (VPN 0xFFFF0 → PPN 0xFFFF0) ───────────
     ; Set index = VPN[4:0] = 0x1E = 30, way 0 → TLB_INDEX = 30
-    LLI  R2, #30
+    LLI  R2, #16
     WRSYS R2, #MMU, #TLB_INDEX
-    LI   R3, #0x0FFFFE00        ; VPN = 0xFFFFE
+    LI   R3, #0x0FFFF000        ; VPN = 0xFFFF0
     WRSYS R3, #MMU, #TLB_VPN
-    LI   R3, #0xFFFFE0B9        ; PPN = 0xFFFFE, KERN_RWX
+    LI   R3, #0xFFFF00B9        ; PPN = 0xFFFF0, KERN_RWX
     WRSYS R3, #MMU, #TLB_PTE
 
     ; ── Enable MMU ──────────────────────────────────────────

@@ -95,7 +95,7 @@ make simulate
 ```
 
 This compiles `hw/rom/boot_rom.c` with crt0 startup, links it at
-`0xFFFF_E000` (the reset vector), and boots the CPU in the Verilator
+`0xFFFF_0000` (the reset vector), and boots the CPU in the Verilator
 simulator with UART bridged to your terminal.
 
 With a non-default LLVM location:

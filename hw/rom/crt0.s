@@ -5,7 +5,7 @@
 ;
 ; Assembled with:  llvm-mc -triple=penumbra -filetype=obj crt0.s -o crt0.o
 ;
-; This must be linked first so _start lands at RESET_PC (0xFFFF_E000).
+; This must be linked first so _start lands at RESET_PC (0xFFFF_0000).
 
         .section .text._start,"ax",@progbits
         .globl  _start

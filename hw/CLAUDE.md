@@ -23,14 +23,14 @@ This file provides detailed hardware context for work under `hw/`. The root `CLA
 | Sequencer | `rtl/core/sequencer.sv` | — | Micro-PC, branch_cond decode, EI/DI tracking, ei_shadow_clr |
 | Byte extractor | `rtl/core/byte_ext.sv` | 19/19 | Sub-word load extraction: byte/half from 32-bit word, sign/zero extend |
 | Byte replicator | `rtl/core/byte_rep.sv` | 10/10 | Sub-word store lane positioning: replicate byte/half across all lanes |
-| CPU core | `rtl/core/cpu_core.sv` | 30 progs | Full CPU: datapath + sequencer + ROM + MMU + split I/D cache + memory bus mux + fetch + IRQ + MMU traps (data + fetch) + alignment faults + bus faults + BREAK + SYSCALL + privilege traps + illegal instruction trap + WRSYS/RDSYS + RDSPR/WRSPR + BL + sub-word loads/stores. Parameterizable RESET_PC (default 0xFFFF_E000). |
+| CPU core | `rtl/core/cpu_core.sv` | 30 progs | Full CPU: datapath + sequencer + ROM + MMU + split I/D cache + memory bus mux + fetch + IRQ + MMU traps (data + fetch) + alignment faults + bus faults + BREAK + SYSCALL + privilege traps + illegal instruction trap + WRSYS/RDSYS + RDSPR/WRSPR + BL + sub-word loads/stores. Parameterizable RESET_PC (default 0xFFFF_0000). |
 | Sim machine | `rtl/soc/machine_sim.sv` | (top) | Simulation integration: cpu_core + boot_rom + simple_mem + sim_uart + sysid + busctl + autoconfig SPI. Shared-bus model with device-side address decode via `bus_devsel`. UART IRQ wired to CPU. |
 | Bus devsel | `rtl/soc/bus_devsel.sv` | via machine_sim | Combinational address comparator for device-side bus decode. Parameterized BASE/SIZE. |
 | Bus controller | `rtl/soc/busctl.sv` | 43/43 | Sysreg device 4 (SYSDEV_BUS). RST (sticky) and CFG_EN bits for autoconfig. |
 | Autoconfig wrapper | `rtl/soc/autoconfig_dev.sv` | 28/28 | Generic wrapper: config space regs, cfg daisy chain with CFG_EN toggle protocol, dynamic base address decode. |
 | Sim UART | `rtl/soc/sim_uart.sv` | via machine_sim | 16450-compatible UART (MMIO at 0xFF00_0000). NetBSD com(4) compatible via reg-shift=2, reg-io-width=4 |
 | Sim SPI | `rtl/soc/sim_spi.sv` | via machine_sim | SPI master (CLASS_SPI). 4 registers: DATA, STATUS, CONTROL, CLKDIV. Autoconfigured. |
-| Boot ROM | `rtl/soc/boot_rom.sv` | via machine_sim | Read-only memory (8 KB default), loads program.hex |
+| Boot ROM | `rtl/soc/boot_rom.sv` | via machine_sim | Read-only memory (64 KB default), loads program.hex |
 | Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_*, ACC_*, VEC_*, FAULT_*, FSTAT_*, SYSDEV_*, SYSREG_*, CACHE_TYPE_*, UART_*, SPR_*, ACFG_*, RAM_BASE, ROM_BASE, AUTOCONFIG_BASE constants |
 | System ID | `rtl/soc/sysid.sv` | via machine_sim | Read-only MACHINE_ID register (Penumbra/1), sysreg device 1 |
 | TLB | `rtl/mmu/tlb.sv` | 111/111 | 64-entry 2-way SA, parallel lookup, one-hot permission check, indexed sysreg R/W |
@@ -81,7 +81,7 @@ Eight sources share the same `except_entry` → `int_entry` → vector dispatch 
 
 **Vector table (MIPS/68k-style):** Physical 0x00, contains handler addresses (not instructions). `int_entry` reads handler via MDR, bypasses MMU. Vectors: BUS_FAULT=0, IRQ=1, TLB_MISS=2, TLB_PROT=3, PRIV=4, SYSCALL=5, BREAK=6, ILLEGAL=7, ALIGN=8.
 
-**Reset:** CPU boots at `RESET_PC` (default `0xFFFF_E000`), hardwired — not part of vector table.
+**Reset:** CPU boots at `RESET_PC` (default `0xFFFF_0000`), hardwired — not part of vector table.
 
 **Dispatch-time vector latching:** `dispatch_pending`/`dispatch_vector` register vector number at `ir_valid` because combinational inputs change between dispatch and int_entry execution.
 

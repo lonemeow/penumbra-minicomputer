@@ -70,7 +70,7 @@ endif
 		$(PKG_SV) $$(find hw/rtl -name '$(MOD).sv') hw/sim/$(TB).cpp
 	@# Assemble program and microcode for $readmemh
 	@rm -f program.hex microcode.hex
-	@if test -f hw/sim/programs/$(PROG).s; then $(PASM) --org 0xFFFFE000 hw/sim/programs/$(PROG).s -o program.hex; \
+	@if test -f hw/sim/programs/$(PROG).s; then $(PASM) --org 0xFFFF0000 hw/sim/programs/$(PROG).s -o program.hex; \
 	else echo "ERROR: hw/sim/programs/$(PROG).s not found" >&2; exit 1; fi
 	@if test -f hw/microcode/microcode.uasm; then $(UASM) hw/microcode/microcode.uasm -o microcode.hex; fi
 	@echo "── Running $(MOD) testbench ──"
@@ -103,7 +103,7 @@ test:
 	@rm -f program.hex
 	@pass=0; fail=0; failed=""; \
 	for prog in $(TEST_PROGS); do \
-		if ! $(PASM) --org 0xFFFFE000 hw/sim/programs/$$prog.s -o program.hex; then \
+		if ! $(PASM) --org 0xFFFF0000 hw/sim/programs/$$prog.s -o program.hex; then \
 			printf "  \033[31mFAIL\033[0m  %s (assembler error)\n" "$$prog"; \
 			fail=$$((fail + 1)); \
 			failed="$$failed $$prog"; \

@@ -72,7 +72,7 @@ hw/rom/rom.ld ──────────────────────
 ```
 
 ## Current Status
-The CPU is fully functional in simulation: all RTL modules implemented and tested, CPU runs real programs through the full CPU → MMU → split I/D cache → memory path, booting from ROM at `0xFFFF_E000`. Eight exception sources (IRQ, MMU faults, alignment, bus fault, BREAK, SYSCALL, privilege, illegal) are fully wired with MIPS/68k-style vector dispatch.
+The CPU is fully functional in simulation: all RTL modules implemented and tested, CPU runs real programs through the full CPU → MMU → split I/D cache → memory path, booting from ROM at `0xFFFF_0000`. Eight exception sources (IRQ, MMU faults, alignment, bus fault, BREAK, SYSCALL, privilege, illegal) are fully wired with MIPS/68k-style vector dispatch.
 
 **Bus autoconfig is working end-to-end.** Bus controller sysreg (`busctl.sv`, device 4), generic autoconfig device wrapper (`autoconfig_dev.sv`), and SPI controller (`sim_spi.sv`) are implemented. Boot ROM runs autoconfig: resets bus, enables config chain, probes devices via bus-fault detection, allocates base addresses, and configures devices. Protocol requires software to toggle CFG_EN between devices (see `doc/bus/bus-overview.md`). The SPI controller is the first autoconfigured device; it reports as `CLASS_SPI` and is assigned `0xFF001000`.
 
@@ -81,7 +81,7 @@ The CPU is fully functional in simulation: all RTL modules implemented and teste
 ## Software Tools
 - **LLVM toolchain** (`build/llvm/bin/`, override with `LLVM_PREFIX`): clang (C compiler), llvm-mc (assembler), ld.lld (linker), llvm-objcopy. Target triple: `penumbra-unknown-none`. See `llvm/llvm/lib/Target/Penumbra/CLAUDE.md` for backend details.
 - **Microcode assembler** (`hw/tools/uasm.py`): Symbolic microcode → $readmemh hex. Run: `python3 hw/tools/uasm.py input.uasm -o microcode.hex`
-- **ISA assembler** (`sw/tools/pasm.py`): Two-pass assembler, all 4 formats, labels, pseudo-ops (NOP, RET, LA, LI), `.equ`, data directives. Still used by `make test` for hardware test programs. Run: `python3 sw/tools/pasm.py --org 0xFFFFE000 input.s -o program.hex`
+- **ISA assembler** (`sw/tools/pasm.py`): Two-pass assembler, all 4 formats, labels, pseudo-ops (NOP, RET, LA, LI), `.equ`, data directives. Still used by `make test` for hardware test programs. Run: `python3 sw/tools/pasm.py --org 0xFFFF0000 input.s -o program.hex`
 - **Binary-to-hex converter** (`sw/tools/bin2hex.py`): Flat LE binary → $readmemh hex. Used in the clang pipeline.
 - Hex files are gitignored. Makefile auto-builds them from sources.
 
@@ -89,8 +89,8 @@ The CPU is fully functional in simulation: all RTL modules implemented and teste
 - **Program runner** (`hw/sim/tb_cpu_prog.cpp`): Runs program until BREAK (500000 cycle limit), checks R1 for pass/fail.
 - **Pass/fail:** R1 = 1 means PASS, R1 = 0 means FAIL. Tests self-check and set R1.
 - **Halt:** Testbench watches `o_halted` pulse (BREAK dispatch). Programs end with `BREAK`.
-- **Boot from ROM:** Programs assembled with `--org 0xFFFFE000`. `_start:` must be first label.
-- **ROM page mapping (MMU tests):** TLB_INDEX=30, TLB_VPN=0x0FFFFE00, TLB_PTE=0xFFFFE0B9.
+- **Boot from ROM:** Programs assembled with `--org 0xFFFF0000`. `_start:` must be first label.
+- **ROM page mapping (MMU tests):** TLB_INDEX=16, TLB_VPN=0x0FFFF000, TLB_PTE=0xFFFF00B9.
 
 ## Next Steps (in priority order)
 1. **LLVM codegen hardening** — legalize remaining ops as they surface (G_SMAX/G_SMIN/G_UMAX/G_UMIN), ALU immediate folding

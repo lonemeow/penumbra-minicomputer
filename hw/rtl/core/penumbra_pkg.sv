@@ -155,7 +155,7 @@ package penumbra_pkg;
     // Fixed base addresses for memory-mapped devices.
     // UART_BASE already defined above (32'hFF00_0000).
     localparam logic [31:0] RAM_BASE = 32'h0000_0000;
-    localparam logic [31:0] ROM_BASE = 32'hFFFF_E000;
+    localparam logic [31:0] ROM_BASE = 32'hFFFF_0000;
 
     // ── Special-purpose register (SPR) numbers ───────────────────
     // Used by RDSPR/WRSPR instructions — encoded in IR[15:12]

@@ -46,11 +46,11 @@ copy:
     LLI  R3, #KERN_RWX_C
     WRSYS R3, #MMU, #TLB_PTE
 
-    LLI  R2, #30
+    LLI  R2, #16
     WRSYS R2, #MMU, #TLB_INDEX
-    LI   R2, #0x0FFFFE00
+    LI   R2, #0x0FFFF000
     WRSYS R2, #MMU, #TLB_VPN
-    LI   R2, #0xFFFFE0B9
+    LI   R2, #0xFFFF00B9
     WRSYS R2, #MMU, #TLB_PTE
 
     LLI  R4, #1

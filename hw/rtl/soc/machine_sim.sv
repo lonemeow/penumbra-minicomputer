@@ -16,10 +16,10 @@
 // Address map (device-side decode):
 //   0x0000_0000 – (RAM_WORDS*4-1)  RAM (simple_mem, parameterized)
 //   0xFF00_0000 – 0xFF00_0FFF      UART (sim_uart, 4 KB page)
-//   0xFFFF_E000 – 0xFFFF_FFFF      Boot ROM (boot_rom, 8 KB)
+//   0xFFFF_0000 – 0xFFFF_FFFF      Boot ROM (boot_rom, 64 KB)
 //   everything else                 unmapped (bus fault)
 //
-// CPU boots from ROM at 0xFFFF_E000 (default RESET_PC).
+// CPU boots from ROM at 0xFFFF_0000 (default RESET_PC).
 
 // verilator lint_off UNUSEDSIGNAL
 module machine_sim
@@ -65,7 +65,7 @@ module machine_sim
     assign combined_irq = i_irq | uart_irq;
 
     // ══════════════════════════════════════════════════════════
-    // CPU Core (default RESET_PC = 0xFFFF_E000)
+    // CPU Core (default RESET_PC = 0xFFFF_0000)
     // ══════════════════════════════════════════════════════════
     cpu_core u_cpu (
         .i_clk          (i_clk),
@@ -118,7 +118,7 @@ module machine_sim
 
     // ── Device parameters ──────────────────────────────────
     localparam int RAM_WORDS      = 4 * 1024 * 1024;  // 16 MB
-    localparam int ROM_WORDS      = 2048;              // 8 KB
+    localparam int ROM_WORDS      = 16384;             // 64 KB
     localparam int UART_PAGE_SIZE = 4096;              // 4 KB
 
     // ── RAM ─────────────────────────────────────────────────

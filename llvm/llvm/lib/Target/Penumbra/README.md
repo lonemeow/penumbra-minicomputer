@@ -95,7 +95,7 @@ TargetInfo/
 
 `llvm/lld/ELF/Arch/Penumbra.cpp` provides the linker target.  Handles
 6 relocation types.  Linker script `hw/rom/rom.ld` places code at
-0xFFFF_E000 (boot ROM address).
+0xFFFF_0000 (boot ROM address).
 
 ## Building
 

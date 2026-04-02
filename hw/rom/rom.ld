@@ -1,6 +1,6 @@
 /* rom.ld — Penumbra boot ROM linker script
  *
- * ROM lives at 0xFFFF_E000 (8 KB).  CPU boots at this address.
+ * ROM lives at 0xFFFF_0000 (64 KB).  CPU boots at this address.
  * RAM starts at 0x0000_0000 (16 MB).  Stack grows down from top of RAM.
  *
  * Everything lands in ROM — no writable .data/.bss support yet.
@@ -11,7 +11,7 @@ ENTRY(_start)
 
 MEMORY
 {
-    ROM (rx)  : ORIGIN = 0xFFFFE000, LENGTH = 8K
+    ROM (rx)  : ORIGIN = 0xFFFF0000, LENGTH = 64K
     RAM (rwx) : ORIGIN = 0x00000000, LENGTH = 16M
 }
 
@@ -28,7 +28,7 @@ SECTIONS
     } > ROM
 
     /* Ensure we don't silently overflow the ROM */
-    ASSERT(. <= 0xFFFFFFFF, "ROM overflow: code + rodata exceed 8 KB")
+    ASSERT(. <= 0xFFFFFFFF, "ROM overflow: code + rodata exceed 64 KB")
 
     /* Discard everything else — no writable sections in ROM builds */
     /DISCARD/ : {

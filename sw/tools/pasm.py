@@ -5,7 +5,7 @@ Penumbra Assembler (pasm)
 Two-pass assembler for the Penumbra ISA. Produces $readmemh-compatible hex.
 
 Usage:
-    python3 pasm.py input.s -o output.hex [--org 0xFFFFE000]
+    python3 pasm.py input.s -o output.hex [--org 0xFFFF0000]
 
 Source format:
     ; Comments start with semicolon

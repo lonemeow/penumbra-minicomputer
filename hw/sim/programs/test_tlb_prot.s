@@ -102,12 +102,12 @@ start:
     LLI  R3, #0x10A9            ; PTE: PPN=1, V|R|X|G (no W!)
     WRSYS R3, #MMU, #TLB_PTE
 
-    ; Map ROM page (VPN 0xFFFFE → PPN 0xFFFFE)
-    LLI  R2, #30
+    ; Map ROM page (VPN 0xFFFF0 → PPN 0xFFFF0)
+    LLI  R2, #16
     WRSYS R2, #MMU, #TLB_INDEX
-    LI   R3, #0x0FFFFE00
+    LI   R3, #0x0FFFF000
     WRSYS R3, #MMU, #TLB_VPN
-    LI   R3, #0xFFFFE0B9
+    LI   R3, #0xFFFF00B9
     WRSYS R3, #MMU, #TLB_PTE
 
     ; Enable MMU

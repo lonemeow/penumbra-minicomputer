@@ -325,7 +325,7 @@ Shared-bus connecting via the Penumbra Bus. Each device decodes its own address 
 - CPU complex (bus master, via async bridge)
 - DMA controller (bus master)
 - System RAM (SDRAM on FPGA, SRAM in discrete — hardwired at 0x0, size probed)
-- Boot ROM (8 KB at 0xFFFF_E000)
+- Boot ROM (64 KB at 0xFFFF_0000)
 - Console UART (4 KB at 0xFF00_0000)
 
 **Autoconfigured devices** (addresses assigned at boot via config chain):
@@ -345,7 +345,7 @@ A small set of **hardwired devices** must be functional before any software runs
 
 - **System RAM** (`0x0000_0000`) — base-board memory. Size unknown at boot; the boot ROM probes upward by attempting reads until a bus fault occurs. Expansion RAM cards are separate devices that get autoconfigured addresses above system RAM.
 - **Console UART** (`0xFF00_0000`) — serial console for boot diagnostics. Must be available to print debug output during the autoconfig process itself.
-- **Boot ROM** (`0xFFFF_E000`) — contains the reset vector and autoconfig enumeration code.
+- **Boot ROM** (`0xFFFF_0000`) — contains the reset vector and autoconfig enumeration code.
 
 All other devices are **autoconfigured**: they start in an unconfigured state after reset and receive their base addresses from the boot ROM's autoconfig routine.
 
@@ -447,7 +447,7 @@ The hardware enforces this with a `cfg_seen_low` flip-flop in each device: `cfg_
 
 ### Autoconfig Boot Sequence
 
-1. CPU boots from ROM at `0xFFFF_E000`, hardwired devices (system RAM, UART, ROM) already functional
+1. CPU boots from ROM at `0xFFFF_0000`, hardwired devices (system RAM, UART, ROM) already functional
 2. Boot ROM probes system RAM size by reading upward from `0x0000_0000` until bus fault
 3. Boot ROM asserts bus reset: `WRSYS SYSDEV_BUS, BUSCTL, 1` (RST=1)
 4. Boot ROM delays (short loop — enough for slow async bus devices to see the reset)
@@ -582,13 +582,13 @@ The physical address space uses a fixed layout decoded from the top address bits
             │ I/O Region (16 MB)  │  Always uncached (C=0)
             │ Hardwired: UART     │
             │ Autoconfigured: rest│
-0xFFFF_DFFF └─────────────────────┘
-0xFFFF_E000 ┌─────────────────────┐
-            │ Boot ROM (8 KB)     │  Always uncached (C=0), hardwired
+0xFFFE_FFFF └─────────────────────┘
+0xFFFF_0000 ┌─────────────────────┐
+            │ Boot ROM (64 KB)    │  Always uncached (C=0), hardwired
 0xFFFF_FFFF └─────────────────────┘
 ```
 
-- **Reset vector:** `0xFFFF_E000` (base of boot ROM). CPU starts here with MMU in flat mode (M=0). This is a hardwired PC reset value, not part of the vector table.
+- **Reset vector:** `0xFFFF_0000` (base of boot ROM). CPU starts here with MMU in flat mode (M=0). This is a hardwired PC reset value, not part of the vector table.
 - **Exception vector table (MIPS/68k-style):** 16 words at physical `0x0000_0000` in RAM. Each entry contains a 32-bit handler address (not an instruction). The CPU reads the handler address from the vector table with MMU bypass, then jumps to that address. Software writes handler addresses at boot time via `STW`.
 - **Unmapped regions:** Accessing unmapped addresses produces a bus fault (bus timeout, no device responds).
 - **System RAM sizing:** System RAM is hardwired at address 0 and claims only its actual installed size. The boot ROM probes upward until bus fault to determine the boundary. Expansion RAM cards are autoconfigured and assigned addresses above system RAM (see [Device Discovery](#device-discovery-autoconfig)).
@@ -603,7 +603,7 @@ Within the 16 MB I/O region at `0xFF00_0000`:
 | (assigned) | 4 KB | SPI controller | AC | SD card, flash |
 | (assigned) | 4 KB | GPIO | AC | General-purpose I/O |
 | (assigned) | 64 KB | Wiznet Ethernet | AC | Register + buffer window |
-| `0xFF00_1000` - `0xFFFF_DFFF` | ~16 MB | (available) | — | Autoconfig assigns from this pool |
+| `0xFF00_1000` - `0xFFFE_FFFF` | ~16 MB | (available) | — | Autoconfig assigns from this pool |
 
 HW = hardwired (fixed address). AC = autoconfigured (address assigned at boot).
 
@@ -625,7 +625,7 @@ Each device uses the pattern `(addr & ~(size - 1)) == base` to check if an addre
 |--------|------|------|-------|
 | System RAM | `0x0000_0000` | Installed size | Probed at boot via bus fault |
 | Console UART | `0xFF00_0000` | 4 KB | Must be available before autoconfig |
-| Boot ROM | `0xFFFF_E000` | 8 KB | CPU starts here at reset |
+| Boot ROM | `0xFFFF_0000` | 64 KB | CPU starts here at reset |
 
 **Autoconfigured devices** have their base addresses assigned at boot time by the autoconfig protocol (see [Device Discovery](#device-discovery-autoconfig)). They do not respond to normal bus cycles until configured.
 

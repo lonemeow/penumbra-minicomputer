@@ -23,12 +23,12 @@ _start:
     LLI  R3, #KERN_RWX
     WRSYS R3, #MMU, #TLB_PTE    ; PPN=0, flags=V|R|W|X|G (commits)
 
-    ; ── Map ROM page (VPN 0xFFFFE → PPN 0xFFFFE) ──────────
-    LLI  R2, #30
+    ; ── Map ROM page (VPN 0xFFFF0 → PPN 0xFFFF0) ──────────
+    LLI  R2, #16
     WRSYS R2, #MMU, #TLB_INDEX
-    LI   R2, #0x0FFFFE00       ; VPN=0xFFFFE, ASID=0
+    LI   R2, #0x0FFFF000       ; VPN=0xFFFF0, ASID=0
     WRSYS R2, #MMU, #TLB_VPN
-    LI   R2, #0xFFFFE0B9       ; PPN=0xFFFFE, flags=V|R|W|X|G
+    LI   R2, #0xFFFF00B9       ; PPN=0xFFFF0, flags=V|R|W|X|G
     WRSYS R2, #MMU, #TLB_PTE
 
     ; ── Enable MMU ──────────────────────────────────────────

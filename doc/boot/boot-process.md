@@ -19,7 +19,7 @@ The Penumbra boot process has four stages, designed to work with varying hardwar
 
 ## Stage 0: Boot ROM
 
-**Location:** On-chip ROM at `0xFFFF_E000` (CPU reset vector).
+**Location:** On-chip ROM at `0xFFFF_0000` (CPU reset vector).
 
 **Responsibilities:**
 - Hardware initialization (trap vectors, UART)

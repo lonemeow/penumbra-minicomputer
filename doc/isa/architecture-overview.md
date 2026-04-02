@@ -430,7 +430,7 @@ Return-from-interrupt (RTI/ERET) restores ESR then EPC, reversing the entry sequ
 
 The vector table is at **fixed physical addresses** starting at `0x0000_0000` in RAM. Each entry contains a **32-bit handler address** (MIPS/68k-style, not an instruction like ARM). On exception, `int_entry` reads the handler address from the vector table with MMU bypass, then loads it into PC. Software writes handler addresses at boot time. This eliminates nested TLB miss problems (no TLB entry needed for the vector page).
 
-Note: Reset does not use the vector table. The CPU boots at `RESET_PC` (default `0xFFFF_E000`), a hardwired PC reset value pointing to boot ROM.
+Note: Reset does not use the vector table. The CPU boots at `RESET_PC` (default `0xFFFF_0000`), a hardwired PC reset value pointing to boot ROM.
 
 `vector_addr = vector_number × 4`
 

@@ -32,12 +32,12 @@ _start:
     LLI  R3, #USER_RWX
     WRSYS R3, #MMU, #TLB_PTE
 
-    ; ── Map ROM page (VPN 0xFFFFE → PPN 0xFFFFE) ───────────
-    LLI  R2, #30
+    ; ── Map ROM page (VPN 0xFFFF0 → PPN 0xFFFF0) ───────────
+    LLI  R2, #16
     WRSYS R2, #MMU, #TLB_INDEX
-    LI   R3, #0x0FFFFE00
+    LI   R3, #0x0FFFF000
     WRSYS R3, #MMU, #TLB_VPN
-    LI   R3, #0xFFFFE0F9        ; PPN=0xFFFFE, USER_RWX (user code runs from ROM)
+    LI   R3, #0xFFFF00F9        ; PPN=0xFFFF0, USER_RWX (user code runs from ROM)
     WRSYS R3, #MMU, #TLB_PTE
 
     ; ── Enable MMU ────────────────────────────────────────────
