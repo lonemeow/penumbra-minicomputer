@@ -48,9 +48,6 @@ private:
   // TableGen-generated pattern matcher.
   bool selectImpl(MachineInstr &I, CodeGenCoverage &CoverageInfo) const;
 
-  bool selectShift(MachineInstr &I, MachineBasicBlock &MBB,
-                   MachineRegisterInfo &MRI, unsigned RegOpc,
-                   unsigned ImmOpc) const;
   bool selectConstant(MachineInstr &I, MachineBasicBlock &MBB,
                       MachineRegisterInfo &MRI) const;
   bool selectLoad(MachineInstr &I, MachineBasicBlock &MBB,
@@ -179,11 +176,6 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
     return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
   }
 
-  // ── Shifts (constant folding into immediate form) ─────────────────────────
-  case G_SHL:  return selectShift(I, MBB, MRI, Penumbra::SHL, Penumbra::SHLi);
-  case G_LSHR: return selectShift(I, MBB, MRI, Penumbra::SHR, Penumbra::SHRi);
-  case G_ASHR: return selectShift(I, MBB, MRI, Penumbra::SAR, Penumbra::SARi);
-
   // ── Constants / Addresses ─────────────────────────────────────────────────
   case G_CONSTANT:     return selectConstant(I, MBB, MRI);
   case G_GLOBAL_VALUE: return selectGlobalValue(I, MBB, MRI);
@@ -219,40 +211,6 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
   default:
     return false;
   }
-}
-
-// ── Shift helper ─────────────────────────────────────────────────────────────
-// Like selectBinaryALU, but folds a constant shift amount into the immediate
-// form (SHLi/SHRi/SARi) when the second operand is a G_CONSTANT in 0–31.
-bool PenumbraInstructionSelector::selectShift(MachineInstr &I,
-                                               MachineBasicBlock &MBB,
-                                               MachineRegisterInfo &MRI,
-                                               unsigned RegOpc,
-                                               unsigned ImmOpc) const {
-  Register ShAmtReg = I.getOperand(2).getReg();
-  MachineInstr *ShAmtDef = MRI.getVRegDef(ShAmtReg);
-
-  if (ShAmtDef && ShAmtDef->getOpcode() == TargetOpcode::G_CONSTANT) {
-    int64_t Amt = ShAmtDef->getOperand(1).getCImm()->getSExtValue();
-    MachineInstr *NewI =
-        BuildMI(MBB, I, I.getDebugLoc(), TII.get(ImmOpc))
-            .addDef(I.getOperand(0).getReg())
-            .addReg(I.getOperand(1).getReg())
-            .addImm(Amt);
-    I.eraseFromParent();
-    if (MRI.use_nodbg_empty(ShAmtDef->getOperand(0).getReg()))
-      ShAmtDef->eraseFromParent();
-    return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
-  }
-
-  // Non-constant: emit register-form shift (SHL/SHR/SAR).
-  MachineInstr *NewI =
-      BuildMI(MBB, I, I.getDebugLoc(), TII.get(RegOpc))
-          .addDef(I.getOperand(0).getReg())
-          .addReg(I.getOperand(1).getReg())
-          .addReg(I.getOperand(2).getReg());
-  I.eraseFromParent();
-  return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
 }
 
 // ── G_CONSTANT ────────────────────────────────────────────────────────────────

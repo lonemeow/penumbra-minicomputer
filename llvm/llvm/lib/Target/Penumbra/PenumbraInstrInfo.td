@@ -133,6 +133,19 @@ class FormatB<bits<4> cond, dag outs, dag ins, string asmstr,
 // Custom operand types
 //===----------------------------------------------------------------------===//
 
+// ── Immediate predicates for GlobalISel pattern matching ────────────────────
+
+// Unsigned 16-bit immediate (0–65535) — fits in a single LLI or ALU-imm field.
+def uimm16 : ImmLeaf<i32, [{return isUInt<16>(Imm);}]>;
+
+// Signed 16-bit immediate (-32768–32767) — fits in LLIS sign-extended field.
+def simm16 : ImmLeaf<i32, [{return isInt<16>(Imm);}]>;
+
+// 5-bit shift amount (0–31).
+def uimm5 : ImmLeaf<i32, [{return isUInt<5>(Imm);}]>;
+
+// ── Operand types with encoder methods ──────────────────────────────────────
+
 // 22-bit PC-relative branch target (word offset, stored in bits [25:4]).
 // The EncoderMethod handles symbolic expressions by creating a fixup.
 def brtarget22 : Operand<i32> {

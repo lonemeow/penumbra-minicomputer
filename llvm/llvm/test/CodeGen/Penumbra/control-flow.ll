@@ -66,19 +66,18 @@ define i32 @phi_loop(i32 %n) {
 ; CHECK-LABEL: phi_loop:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  ; %bb.0: ; %entry
-; CHECK-NEXT:    lli r3, 1
-; CHECK-NEXT:    lli r2, 0
-; CHECK-NEXT:    mov r4, r2
+; CHECK-NEXT:    mov r2, r1
+; CHECK-NEXT:    lli r1, 0
+; CHECK-NEXT:    mov r3, r1
 ; CHECK-NEXT:    b .LBB3_1
 ; CHECK-NEXT:  .LBB3_1: ; %loop
 ; CHECK-NEXT:    ; =>This Inner Loop Header: Depth=1
-; CHECK-NEXT:    add r2, r4
-; CHECK-NEXT:    add r4, r3
-; CHECK-NEXT:    cmp r4, r1
+; CHECK-NEXT:    add r1, r3
+; CHECK-NEXT:    add r3, 1
+; CHECK-NEXT:    cmp r3, r2
 ; CHECK-NEXT:    blt .LBB3_1
 ; CHECK-NEXT:    b .LBB3_2
 ; CHECK-NEXT:  .LBB3_2: ; %exit
-; CHECK-NEXT:    mov r1, r2
 ; CHECK-NEXT:    jmp r13
 entry:
   br label %loop
