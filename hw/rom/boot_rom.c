@@ -136,17 +136,8 @@ void unhandled_trap(int trapno) {
     uint32_t fault_addr = penumbra_read_sysreg(SYSDEV_MMU, MMU_FAULT_ADDR);
     uint32_t fault_stat = penumbra_read_sysreg(SYSDEV_MMU, MMU_FAULT_STATUS);
 
-    console_printf("\r\n*** TRAP #%d: %s ***\r\n", trapno, trap_name(trapno));
-    console_printf("  EPC=0x%x  ESR=0x%x\r\n", epc, esr);
-    console_printf("  FAULT_ADDR=0x%x  FAULT_STATUS=0x%x", fault_addr, fault_stat);
-
-    /* Decode access type bits */
-    console_puts(" (");
-    if (fault_stat & (1 << FSTAT_R))   console_puts("R");
-    if (fault_stat & (1 << FSTAT_W))   console_puts("W");
-    if (fault_stat & (1 << FSTAT_X))   console_puts("X");
-    if (fault_stat & (1 << FSTAT_USR)) console_puts(" USR");
-    console_puts(")\r\n");
+    console_printf("\r\nTRAP %d (%s) pc=0x%x", trapno, trap_name(trapno), epc);
+    console_printf(" sr=0x%x fa=0x%x fs=0x%x\r\n", esr, fault_addr, fault_stat);
 
     /* Trampoline executes BREAK after we return, halting the simulator. */
 }
@@ -227,13 +218,22 @@ static const char *class_name(uint32_t cls) {
  * read that break the skip-one-instruction pattern.
  */
 static uint32_t bus_probe_read(uint32_t addr) {
-    uint32_t val = 0xFFFFFFFF;  /* sentinel — survives if LDW is skipped */
-    asm volatile("ldw %0, [%1]" : "+r"(val) : "r"(addr) : "memory");
+    uint32_t val;
+    /* Two instructions: set sentinel, then try the load.
+     * If LDW bus-faults, _trap_bus_ignore skips it and val keeps 0xFFFFFFFF.
+     * Early-clobber (&) ensures val and addr get different registers. */
+    asm volatile(
+        "lli %0, #0xFFFF\n\t"
+        "lui %0, #0xFFFF\n\t"
+        "ldw %0, [%1]"
+        : "=&r"(val) : "r"(addr) : "memory"
+    );
     return val;
 }
 
 static int autoconfig(void) {
     int ndevs = 0;
+    uint32_t next_io_addr = 0xFF001000;
 
     /* Assert bus reset to clear any stale device configs */
     penumbra_write_sysreg(SYSDEV_BUS, BUS_CTL, BUSCTL_RST);
@@ -266,15 +266,19 @@ static int autoconfig(void) {
         name_words[4] = 0;
         char *name = (char *)name_words;
 
-        console_printf("  %-16s class=%s size=%d id=0x%x\r\n",
-                        name, class_name(cls), (int)size, id);
+        /* Allocate base address and configure the device */
+        uint32_t base;
+        if (cls == ACFG_CLASS_MEMORY) {
+            base = 0x01000000;  /* TODO: track actual system RAM end */
+        } else {
+            uint32_t mask = size - 1;
+            base = (next_io_addr + mask) & ~mask;
+            next_io_addr = base + size;
+        }
+        *(volatile uint32_t *)(AUTOCONFIG_BASE + 0x1C) = base;
 
-        /*
-         * TODO: allocate a base address from available physical
-         * space and write it to ACFG_BASE. For now, just report
-         * what we find.
-         */
-        (void)id;
+        console_printf("  %s %s @ 0x%x (%d bytes)\r\n",
+                        name, class_name(cls), base, (int)size);
 
         ndevs++;
     }
@@ -289,9 +293,7 @@ static int autoconfig(void) {
 int main(void) {
     char cmdbuffer[64];
 
-    console_puts("Penumbra boot\r\n");
-    console_puts("-------------\r\n");
-    console_puts("\r\n");
+    console_puts("Penumbra/1 boot\r\n\r\n");
 
     setup_traps();
 

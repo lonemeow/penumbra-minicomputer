@@ -28,14 +28,15 @@ static void reset(Vautoconfig_test* d) {
     d->i_rst = 0;
 }
 
-// Read a word from the bus. Returns data after 1-cycle read latency.
+// Read a word from the bus. Holds i_re while busy (like the real CPU's
+// STALL-based load), then reads o_rdata on the cycle after busy clears.
 static uint32_t bus_read(Vautoconfig_test* d, uint32_t addr) {
     d->i_addr = addr;
     d->i_re = 1;
     tick(d);
-    d->i_re = 0;
-    // Wait for busy to clear
+    // Keep re asserted while busy (models CPU STALL)
     while (d->o_busy) tick(d);
+    d->i_re = 0;
     uint32_t val = d->o_rdata;
     tick(d);  // drain
     return val;
@@ -48,8 +49,8 @@ static void bus_write(Vautoconfig_test* d, uint32_t addr, uint32_t data) {
     d->i_we = 1;
     d->i_byte_en = 0xF;
     tick(d);
-    d->i_we = 0;
     while (d->o_busy) tick(d);
+    d->i_we = 0;
     tick(d);  // drain
 }
 

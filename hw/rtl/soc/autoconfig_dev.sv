@@ -123,29 +123,40 @@ module autoconfig_dev
     assign dev_sel = configured
                    & ((i_addr & ~(DEV_SIZE - 1)) == base_addr);
 
-    // ── Registered select for read data alignment ──────────
-    logic cfg_active_r;
-    logic dev_sel_r;
+    // ── Read data output ───────────────────────────────────────
+    // Config space: register on i_re (same pattern as sim_uart).
+    // Inner device: pass through — already registered internally.
+    // Mux selects based on registered state to match _sel_r timing.
+    logic [31:0] cfg_rdata_r;
+    logic        was_cfg_read;
     always_ff @(posedge i_clk) begin
-        cfg_active_r <= cfg_active;
-        dev_sel_r    <= dev_sel;
+        if (i_rst || i_bus_rst) begin
+            cfg_rdata_r  <= 32'b0;
+            was_cfg_read <= 1'b0;
+        end else if (cfg_active && i_re) begin
+            cfg_rdata_r  <= cfg_rdata;
+            was_cfg_read <= 1'b1;
+        end else if (dev_sel && i_re) begin
+            was_cfg_read <= 1'b0;
+        end
     end
 
-    // ── Output mux ─────────────────────────────────────────
-    // Config space reads use combinational (1-cycle latency via
-    // registered cfg_active_r). Device reads come from inner device.
-    always_comb begin
-        if (cfg_active_r)
-            o_rdata = cfg_rdata;
-        else if (dev_sel_r)
-            o_rdata = i_dev_rdata;
+    assign o_rdata = was_cfg_read ? cfg_rdata_r : i_dev_rdata;
+
+    // Busy: config reads assert busy combinationally on the first
+    // cycle, then clear on the next. This gives the registered
+    // select (_sel_r) in machine_sim time to propagate before
+    // the CPU samples mem_rdata.
+    logic cfg_access_done;
+    always_ff @(posedge i_clk) begin
+        if (i_rst)
+            cfg_access_done <= 1'b0;
         else
-            o_rdata = 32'b0;
+            cfg_access_done <= cfg_active && (i_re || i_we);
     end
-
-    // Busy: config reads complete in 1 cycle (no busy).
-    // Device busy comes from inner device when selected.
-    assign o_busy = dev_sel ? i_dev_busy : 1'b0;
+    // Busy on the first cycle of a config access, clear on the second
+    wire cfg_busy = cfg_active && (i_re || i_we) && !cfg_access_done;
+    assign o_busy = cfg_busy | (dev_sel ? i_dev_busy : 1'b0);
 
     // Selection signal for bus fault detection
     assign o_sel = cfg_active | dev_sel;

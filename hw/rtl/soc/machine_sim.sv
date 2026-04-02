@@ -193,24 +193,84 @@ module machine_sim
     // Autoconfig device chain
     //
     // The cfg daisy chain starts at busctl_cfg_en and passes
-    // through each autoconfigured device. Currently empty —
-    // devices will be inserted here (SPI, etc.).
+    // through each autoconfigured device. Each device's cfg_out
+    // feeds the next device's cfg_in. Bus fault at chain end
+    // signals "no more devices" to the ROM autoconfig loop.
     // ══════════════════════════════════════════════════════════
 
-    // Head of the cfg chain — currently no devices, so the
-    // chain ends immediately. Any config space read will get
-    // no response → bus fault → "no more devices".
-    logic        acfg_chain_end;
-    assign acfg_chain_end = busctl_cfg_en;  // passes through when no devices
+    // ── SPI controller (first device in chain) ──────────────
+    logic [31:0] spi_dev_addr, spi_dev_wdata;
+    logic [3:0]  spi_dev_byte_en;
+    logic        spi_dev_we, spi_dev_re;
+    logic [31:0] spi_dev_rdata;
+    logic        spi_dev_busy;
 
-    // Autoconfig device bus signals (OR'd into bus response).
-    // With no devices, these are all zero.
+    logic [31:0] ac_spi_rdata;
+    logic        ac_spi_busy, ac_spi_sel;
+    logic        ac_spi_cfg_out;
+
+    autoconfig_dev #(
+        .DEV_CLASS (ACFG_CLASS_SPI),
+        .DEV_SIZE  (32'd4096),
+        .DEV_ID    (32'd0),
+        // "SPI\0" packed LE
+        .DEV_NAME0 (32'h00495053)
+    ) u_ac_spi (
+        .i_clk       (i_clk),
+        .i_rst       (i_rst),
+        .i_bus_rst   (busctl_bus_rst),
+        .i_cfg_en    (busctl_cfg_en),
+        .i_cfg_in    (busctl_cfg_en),      // first in chain
+        .o_cfg_out   (ac_spi_cfg_out),
+        .i_addr      (mem_addr),
+        .i_wdata     (mem_wdata),
+        .i_byte_en   (mem_byte_en),
+        .i_we        (mem_we),
+        .i_re        (mem_re),
+        .o_rdata     (ac_spi_rdata),
+        .o_busy      (ac_spi_busy),
+        .o_sel       (ac_spi_sel),
+        .o_dev_addr  (spi_dev_addr),
+        .o_dev_wdata (spi_dev_wdata),
+        .o_dev_byte_en(spi_dev_byte_en),
+        .o_dev_we    (spi_dev_we),
+        .o_dev_re    (spi_dev_re),
+        .i_dev_rdata (spi_dev_rdata),
+        .i_dev_busy  (spi_dev_busy)
+    );
+
+    /* verilator lint_off PINCONNECTEMPTY */
+    sim_spi u_spi (
+        .i_clk       (i_clk),
+        .i_rst       (i_rst),
+        .i_addr      (spi_dev_addr),
+        .i_wdata     (spi_dev_wdata),
+        .i_we        (spi_dev_we),
+        .i_re        (spi_dev_re),
+        .o_rdata     (spi_dev_rdata),
+        .o_busy      (spi_dev_busy),
+        .o_cmd_valid (),                   // TODO: wire to testbench
+        .o_cmd_data  (),
+        .i_resp_valid(1'b0),               // no SD card emulation yet
+        .i_resp_data (8'hFF),
+        .o_cs0       (),
+        .o_cs1       ()
+    );
+    /* verilator lint_on PINCONNECTEMPTY */
+
+    // ── Autoconfig chain end (after last device) ────────────
+    // ac_spi_cfg_out passes through when SPI is configured.
+    // No more devices after SPI → bus fault terminates probe.
+
+    // Autoconfig device bus signals (OR'd into bus response)
     logic [31:0] acfg_rdata;
     logic        acfg_busy;
     logic        acfg_sel;
-    assign acfg_rdata = 32'b0;
-    assign acfg_busy  = 1'b0;
-    assign acfg_sel   = 1'b0;
+    logic        acfg_sel_r;
+    assign acfg_rdata = ac_spi_rdata;
+    assign acfg_busy  = ac_spi_busy;
+    assign acfg_sel   = ac_spi_sel;
+    always_ff @(posedge i_clk) acfg_sel_r <= acfg_sel;
 
     // ── Bus response OR-combine ─────────────────────────────
     // Read data: masked by registered select (one-cycle delay
@@ -222,7 +282,7 @@ module machine_sim
     assign mem_rdata = (ram_sel_r  ? ram_rdata_raw  : 32'b0) |
                        (rom_sel_r  ? rom_rdata_raw  : 32'b0) |
                        (uart_sel_r ? uart_rdata_raw : 32'b0) |
-                       acfg_rdata;
+                       (acfg_sel_r ? acfg_rdata     : 32'b0);
 
     // Busy: combinational (current cycle) so the CPU stalls
     // immediately when the addressed device needs time.
