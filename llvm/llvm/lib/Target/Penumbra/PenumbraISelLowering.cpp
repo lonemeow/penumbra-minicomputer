@@ -6,6 +6,7 @@
 
 #include "PenumbraISelLowering.h"
 #include "PenumbraInstrInfo.h"
+#include "PenumbraRegisterInfo.h"
 #include "PenumbraSubtarget.h"
 #include "MCTargetDesc/PenumbraMCTargetDesc.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -51,6 +52,47 @@ CCAssignFn *PenumbraISelLowering::getCCAssignFn(CallingConv::ID CC,
                                                  bool Return,
                                                  bool IsVarArg) const {
   return Return ? RetCC_Penumbra : CC_Penumbra;
+}
+
+//===----------------------------------------------------------------------===//
+// Inline assembly support
+//===----------------------------------------------------------------------===//
+
+TargetLowering::ConstraintType
+PenumbraISelLowering::getConstraintType(StringRef Constraint) const {
+  if (Constraint.size() == 1) {
+    switch (Constraint[0]) {
+    case 'r':
+      return C_RegisterClass;
+    default:
+      break;
+    }
+  }
+  return TargetLowering::getConstraintType(Constraint);
+}
+
+std::pair<unsigned, const TargetRegisterClass *>
+PenumbraISelLowering::getRegForInlineAsmConstraint(
+    const TargetRegisterInfo *TRI, StringRef Constraint, MVT VT) const {
+  if (Constraint.size() == 1) {
+    switch (Constraint[0]) {
+    case 'r':
+      if (VT == MVT::i32 || VT == MVT::Other)
+        return {0U, &Penumbra::GPR_AllocatableRegClass};
+      break;
+    }
+  }
+
+  // Physical register name in braces: {r1}, {sp}, {cc}, etc.
+  if (StringRef(Constraint).starts_with("{") &&
+      StringRef(Constraint).ends_with("}")) {
+    StringRef RegName = Constraint.substr(1, Constraint.size() - 2);
+    // Map "cc" to the status register (condition code clobber).
+    if (RegName == "cc")
+      return {Penumbra::SR, &Penumbra::CCRRegClass};
+  }
+
+  return TargetLowering::getRegForInlineAsmConstraint(TRI, Constraint, VT);
 }
 
 // Expand SELECT_GPR / SELECT_CC_GPR pseudo into a conditional-branch diamond.

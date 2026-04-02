@@ -32,6 +32,7 @@ PenumbraSubtarget::PenumbraSubtarget(const Triple &TT, StringRef CPU,
       Legalizer(*this),
       RegBankInfo(*getRegisterInfo()) {
   CallLoweringInfo.reset(new PenumbraCallLowering(*getTargetLowering()));
+  InlineAsmLoweringInfo.reset(new InlineAsmLowering(getTargetLowering()));
   InstSelector.reset(createPenumbraInstructionSelector(
       static_cast<const PenumbraTargetMachine &>(TM), *this, RegBankInfo));
 }

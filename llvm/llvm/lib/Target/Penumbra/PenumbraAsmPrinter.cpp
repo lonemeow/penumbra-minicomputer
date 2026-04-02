@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "MCTargetDesc/PenumbraFixupKinds.h"
+#include "MCTargetDesc/PenumbraInstPrinter.h"
 #include "MCTargetDesc/PenumbraMCTargetDesc.h"
 #include "TargetInfo/PenumbraTargetInfo.h"
 #include "llvm/CodeGen/AsmPrinter.h"
@@ -33,6 +34,11 @@ public:
   }
 
   void emitInstruction(const MachineInstr *MI) override;
+
+  bool PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
+                       const char *ExtraCode, raw_ostream &OS) override;
+  bool PrintAsmMemoryOperand(const MachineInstr *MI, unsigned OpNo,
+                             const char *ExtraCode, raw_ostream &OS) override;
 };
 
 } // end anonymous namespace
@@ -127,6 +133,49 @@ void PenumbraAsmPrinter::emitInstruction(const MachineInstr *MI) {
       Inst.addOperand(MCOp);
   }
   EmitToStreamer(*OutStreamer, Inst);
+}
+
+/// PrintAsmOperand - Print an inline asm operand for use in an asm template.
+/// Called for each $0, $1, etc. in the template string. Returns false on
+/// success, true on failure (LLVM convention).
+bool PenumbraAsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
+                                          const char *ExtraCode,
+                                          raw_ostream &OS) {
+  if (ExtraCode && ExtraCode[0])
+    return AsmPrinter::PrintAsmOperand(MI, OpNo, ExtraCode, OS);
+
+  auto MO = MI->getOperand(OpNo);
+  switch (MO.getType()) {
+  case MachineOperand::MO_Register:
+    OS << PenumbraInstPrinter::getRegisterName(MO.getReg());
+    break;
+  case MachineOperand::MO_Immediate:
+    OS << MO.getImm();
+    break;
+  case MachineOperand::MO_GlobalAddress:
+    PrintSymbolOperand(MO, OS);
+    break;
+  default:
+    return true;
+  }
+
+  return false;
+}
+
+bool PenumbraAsmPrinter::PrintAsmMemoryOperand(const MachineInstr *MI,
+                                                unsigned OpNo,
+                                                const char *ExtraCode,
+                                                raw_ostream &OS) {
+  // No modifier support for memory operands.
+  if (ExtraCode && ExtraCode[0])
+    return true;
+
+  const MachineOperand &MO = MI->getOperand(OpNo);
+  if (!MO.isReg())
+    return true;
+
+  OS << "[" << PenumbraInstPrinter::getRegisterName(MO.getReg()) << "]";
+  return false;
 }
 
 extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void
