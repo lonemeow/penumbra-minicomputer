@@ -76,22 +76,23 @@ This maps to NetBSD's `__cpu_simple_lock` on uniprocessor builds. No hardware at
 LLVM, not GCC or lcc/vbcc, for the Penumbra compiler toolchain.
 
 **Why LLVM:**
-- **Better backend infrastructure** for new targets. TableGen instruction descriptions, SelectionDAG pattern matching, and the register allocator are modular and well-documented
+- **Better backend infrastructure** for new targets. TableGen instruction descriptions, GlobalISel instruction selection, and the register allocator are modular and well-documented
 - **Better optimization** for novel RISC targets, based on research into other homebrew CPU LLVM backends
 - **Active development** of the backend framework; GCC's backend interface is more entangled
 - **Clang frontend** provides C11/C++17 support out of the box; GCC requires more porting effort in the frontend
 
-### LLVM Backend Work Items
+### LLVM Backend Components
 
-A Penumbra LLVM backend (`lib/Target/Penumbra/`) requires:
+The Penumbra LLVM backend (`llvm/llvm/lib/Target/Penumbra/`) consists of:
 
 1. **TableGen instruction descriptions** — encoding, operands, patterns for each instruction
-2. **Register info** — 16 registers, calling convention, reserved registers (R0, R14, R15)
-3. **Instruction selection** — lowering IR to Penumbra instructions via SelectionDAG patterns
-4. **Frame lowering** — stack frame layout, prologue/epilogue generation
-5. **ABI/calling convention** — argument passing, return values, callee-saved registers
-6. **MC layer** — assembly printer, object file emission (ELF)
-7. **Immediate materialization** — LLI/LUI patterns for 32-bit constants
+2. **Register info** — 16 registers, calling convention, reserved registers (R0, R12, R14, R15)
+3. **Instruction selection** — GlobalISel with hybrid TableGen patterns (`PenumbraGISel.td`) + manual C++ for complex cases
+4. **Frame lowering** — stack frame layout, prologue/epilogue generation (SUBi/ADDi SP)
+5. **ABI/calling convention** — R1-R4 args, R1 return, R5-R10 callee-saved, R13/LR
+6. **MC layer** — assembly parser, printer, ELF object emission, 7 relocation types
+7. **Immediate materialization** — LLI (uimm16), LLIS (simm16neg) via TableGen; LLI+LUI pair for wide constants in C++
+8. **lld linker support** — `elf32penumbra` emulation, all relocation types
 
 ### ISA Characteristics Affecting Codegen
 
@@ -152,13 +153,14 @@ NetBSD uses its own build framework (`build.sh`) which supports cross-compilatio
 |------|--------|-------|
 | ISA assembler (pasm.py) | Done | Two-pass, all formats, labels, .equ constants |
 | Microcode assembler (uasm.py) | Done | Symbolic fields, slot validation |
-| LLVM MC-layer assembler | Done | All 4 formats, fixups (branch22, imm16), ELF object emission, hex output pipeline |
-| ABI specification | Done | ILP32, register convention, calling convention, stack frame, ELF relocations |
+| LLVM MC-layer assembler | Done | All 4 formats, 7 fixup/relocation types, ELF object emission, pseudo-instructions (LI/LA/NOP/RET) |
+| ABI specification | Done | ILP32, register convention, calling convention, stack frame, ELF relocations. See `doc/abi/penumbra-abi.md` |
 | bin2hex.py | Done | Flat binary → $readmemh hex (pipeline: llvm-mc → objcopy → bin2hex) |
-| Calling convention | Specified | R1–R4 args, R5–R10 callee-saved, R11 scratch, R12 TP, R13 LR |
-| LLVM codegen | Not started | Instruction selection, frame lowering, register allocation |
+| Calling convention | Done | R1–R4 args, R5–R10 callee-saved, R11 scratch, R12 TP, R13 LR. Implemented in `PenumbraCallingConv.td` |
+| LLVM codegen (GlobalISel) | Done | Hybrid TableGen + C++ instruction selection, frame lowering, register allocation. `-O0` through `-O2` working. Boot ROM compiles from C |
+| Linker (lld) | Done | `elf32penumbra` emulation, all 6 relocation types. `EM_PENUMBRA` (0xF0DA) |
+| Inline assembly | Done | `r`/`i` constraints, `~{cc}`/`~{memory}` clobbers |
 | NetBSD MD layer | Not started | |
-| Linker (lld) | Not started | Need linker script for Penumbra memory map |
 
 ---
 
@@ -172,6 +174,6 @@ NetBSD uses its own build framework (`build.sh`) which supports cross-compilatio
 
 1. **ELF machine number.** `EM_PENUMBRA = 0xF0DA` (private range). Implemented in PenumbraELFObjectWriter.cpp.
 
-2. **Relocation types.** Implemented: R_PENUMBRA_NONE(0), R_PENUMBRA_32(1), R_PENUMBRA_BRANCH22(2), R_PENUMBRA_IMM16(3). Local fixups resolved by assembler; relocations emitted for external symbols.
+2. **Relocation types.** Implemented: R_PENUMBRA_NONE(0), R_PENUMBRA_32(1), R_PENUMBRA_BRANCH22(2), R_PENUMBRA_IMM16(3), R_PENUMBRA_LO16(4), R_PENUMBRA_HI16(5), R_PENUMBRA_MEMOFFSET16(6). Local fixups resolved by assembler; relocations emitted for external symbols.
 
 3. **Alignment.** Implemented: MMU checks alignment for word (addr[1:0]==0), half (addr[0]==0), byte (always OK). Traps to VEC_ALIGN (vector 8). Works in both bypass and MMU-enabled mode.
