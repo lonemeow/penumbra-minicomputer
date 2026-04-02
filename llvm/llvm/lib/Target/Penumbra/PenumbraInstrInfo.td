@@ -170,37 +170,38 @@ def memoffset16 : Operand<i32> {
 
 let Defs = [SR], Constraints = "$Rd = $Rd_in" in {
   // 2-operand destructive: Rd = Rd op Rs
-  def ADD  : FormatR<0b00000, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
+  // $Rs uses GPRz: allows R0 (zero substitution) and R15 (PC-relative).
+  def ADD  : FormatR<0b00000, (outs GPR:$Rd), (ins GPR:$Rd_in, GPRz:$Rs),
                      "add\t$Rd, $Rs">;
-  def SUB  : FormatR<0b00001, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
+  def SUB  : FormatR<0b00001, (outs GPR:$Rd), (ins GPR:$Rd_in, GPRz:$Rs),
                      "sub\t$Rd, $Rs">;
-  def AND  : FormatR<0b00010, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
+  def AND  : FormatR<0b00010, (outs GPR:$Rd), (ins GPR:$Rd_in, GPRz:$Rs),
                      "and\t$Rd, $Rs">;
-  def OR   : FormatR<0b00011, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
+  def OR   : FormatR<0b00011, (outs GPR:$Rd), (ins GPR:$Rd_in, GPRz:$Rs),
                      "or\t$Rd, $Rs">;
-  def XOR  : FormatR<0b00100, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
+  def XOR  : FormatR<0b00100, (outs GPR:$Rd), (ins GPR:$Rd_in, GPRz:$Rs),
                      "xor\t$Rd, $Rs">;
-  def SHL  : FormatR<0b00101, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
+  def SHL  : FormatR<0b00101, (outs GPR:$Rd), (ins GPR:$Rd_in, GPRz:$Rs),
                      "shl\t$Rd, $Rs">;
-  def SHR  : FormatR<0b00110, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
+  def SHR  : FormatR<0b00110, (outs GPR:$Rd), (ins GPR:$Rd_in, GPRz:$Rs),
                      "shr\t$Rd, $Rs">;
-  def SAR  : FormatR<0b00111, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
+  def SAR  : FormatR<0b00111, (outs GPR:$Rd), (ins GPR:$Rd_in, GPRz:$Rs),
                      "sar\t$Rd, $Rs">;
 }
 
 // MOV doesn't set flags (per ISA doc)
-def MOV  : FormatR<0b01000, (outs GPR:$Rd), (ins GPR:$Rs),
+def MOV  : FormatR<0b01000, (outs GPR:$Rd), (ins GPRz:$Rs),
                    "mov\t$Rd, $Rs">;
 // NOT doesn't set flags
-def NOT  : FormatR<0b01001, (outs GPR:$Rd), (ins GPR:$Rs),
+def NOT  : FormatR<0b01001, (outs GPR:$Rd), (ins GPRz:$Rs),
                    "not\t$Rd, $Rs">;
 
 // Flag-only variants (F=1): CMP = SUB with F=1, TEST = AND with F=1
 let F = 1 in {
   let Defs = [SR] in {
-    def CMP  : FormatR<0b00001, (outs), (ins GPR:$Rd, GPR:$Rs),
+    def CMP  : FormatR<0b00001, (outs), (ins GPRz:$Rd, GPRz:$Rs),
                        "cmp\t$Rd, $Rs">;
-    def TEST : FormatR<0b00010, (outs), (ins GPR:$Rd, GPR:$Rs),
+    def TEST : FormatR<0b00010, (outs), (ins GPRz:$Rd, GPRz:$Rs),
                        "test\t$Rd, $Rs">;
   }
 }

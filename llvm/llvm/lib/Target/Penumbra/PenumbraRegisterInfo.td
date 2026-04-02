@@ -75,9 +75,10 @@ def GPR_Allocatable : RegisterClass<"Penumbra", [i32], 32, (add
 }
 
 // GPR with zero-register substitution for GlobalISel.
-// When the selector sees a store of constant 0, it substitutes R0 (the
-// hardwired zero register) instead of materializing LLI Rd, #0.
-def GPRz : RegisterOperand<GPR_Allocatable> {
+// Wraps full GPR class so R0 (zero), R15 (PC), and other special registers
+// are valid as source operands.  GIZeroRegister tells the generated selector
+// to substitute R0 when storing/using a constant zero.
+def GPRz : RegisterOperand<GPR> {
   let GIZeroRegister = R0;
 }
 

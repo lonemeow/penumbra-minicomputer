@@ -327,7 +327,18 @@ bool PenumbraInstructionSelector::selectStore(MachineInstr &I,
   default: return false;
   }
 
-  auto MIB = BuildMI(MBB, I, DL, TII.get(StOpc)).addReg(ValReg);
+  // Use R0 (hardwired zero) directly when storing a constant zero,
+  // avoiding a redundant LLI Rd, #0 materialization.
+  MachineInstr *ValDef = MRI.getVRegDef(ValReg);
+  bool IsZero = ValDef &&
+      ValDef->getOpcode() == TargetOpcode::G_CONSTANT &&
+      ValDef->getOperand(1).getCImm()->isZero();
+
+  auto MIB = BuildMI(MBB, I, DL, TII.get(StOpc));
+  if (IsZero)
+    MIB.addReg(Penumbra::R0);
+  else
+    MIB.addReg(ValReg);
 
   MachineInstr *AddrDef = MRI.getVRegDef(AddrReg);
   if (AddrDef && AddrDef->getOpcode() == TargetOpcode::G_FRAME_INDEX)
@@ -337,6 +348,8 @@ bool PenumbraInstructionSelector::selectStore(MachineInstr &I,
   MIB.addImm(0);
 
   I.eraseFromParent();
+  if (IsZero && MRI.use_nodbg_empty(ValDef->getOperand(0).getReg()))
+    ValDef->eraseFromParent();
   return constrainSelectedInstRegOperands(*MIB, TII, TRI, RBI);
 }
 
