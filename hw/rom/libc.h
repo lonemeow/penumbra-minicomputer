@@ -4,6 +4,7 @@
 #include <stdarg.h>
 
 unsigned long strlen(const char *s);
+int strcmp(const char *a, const char *b);
 int isprint(int c);
 
 /* Convert unsigned value to string in buf (must hold ≥12 chars for decimal,

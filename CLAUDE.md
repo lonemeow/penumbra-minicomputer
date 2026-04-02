@@ -50,7 +50,7 @@ The architecture is fully specified in `doc/`. Key specs:
 - `make sim MOD=<name>` — build & run a module's Verilator testbench
 - `make sim MOD=machine_sim TB=<tb> PROG=<prog>` — run specific testbench with specific program. Auto-assembles `.s`/`.uasm` into hex.
 - `make test` — run all `hw/sim/programs/test_*.s` programs; reports pass/fail summary
-- `make simulate` — build C boot ROM via clang pipeline, run interactive simulator with terminal I/O via Docker (`-it`). Override LLVM location: `make simulate LLVM_PREFIX=/path/to/llvm-build`
+- `make simulate` — build C boot ROM via clang pipeline, run interactive simulator with terminal I/O via Docker (`-it`). Override LLVM location: `make simulate LLVM_PREFIX=/path/to/llvm-build`. For non-interactive use (piped input): `echo "break" | make simulate INTERACTIVE=0` — the ROM monitor accepts `break` (or `b`) to halt the simulator cleanly.
 - `make wave MOD=<name>` — open VCD waveform in GTKWave
 - `make clean` — remove build artifacts
 - All simulation runs via Docker — no host install needed. Build artifacts in `build/` (gitignored).

@@ -8,6 +8,11 @@ unsigned long strlen(const char *s) {
     return i;
 }
 
+int strcmp(const char *a, const char *b) {
+    while (*a && *a == *b) { a++; b++; }
+    return (unsigned char)*a - (unsigned char)*b;
+}
+
 int isprint(int c) {
     return c >= 0x20 && c <= 0x7E;
 }

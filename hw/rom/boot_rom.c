@@ -304,13 +304,16 @@ int main(void) {
     int ndevs = autoconfig();
     console_printf("%d device(s) found\r\n\r\n", ndevs);
 
-    /* Spin — placeholder for command loop */
+    /* Monitor command loop */
     for (;;) {
         console_puts("> ");
 
         int len = console_gets(cmdbuffer, sizeof(cmdbuffer));
         if (len > 0) {
-            /* Command parsing and handling goes here */
+            if (strcmp(cmdbuffer, "b") == 0 ||
+                strcmp(cmdbuffer, "break") == 0) {
+                asm volatile("break");
+            }
         }
     }
 }

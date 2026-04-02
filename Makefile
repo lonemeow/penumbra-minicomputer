@@ -131,9 +131,14 @@ test:
 # ── Interactive simulation ─────────────────────────────────────
 # Builds machine_sim with interactive testbench and boot ROM.
 # Bridges stdin/stdout to UART for terminal interaction.
-# Usage: make simulate
+# Usage: make simulate                    (interactive, default)
+#        make simulate INTERACTIVE=0      (non-interactive, for piped input)
 #        make simulate LLVM_PREFIX=/other/llvm/build
-DOCKER_RUN_IT ?= docker run --rm -it -v $(CURDIR):/work -w /work
+ifeq ($(INTERACTIVE),0)
+DOCKER_RUN_IT = docker run --rm -i -v $(CURDIR):/work -w /work
+else
+DOCKER_RUN_IT = docker run --rm -it -v $(CURDIR):/work -w /work
+endif
 
 .PHONY: simulate
 simulate:
