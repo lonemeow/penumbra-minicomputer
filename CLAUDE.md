@@ -92,7 +92,7 @@ The CPU is fully functional in simulation: all RTL modules implemented and teste
 
 ## Next Steps (in priority order)
 1. **LLVM codegen hardening** — legalize remaining ops as they surface (G_SMAX/G_SMIN/G_UMAX/G_UMIN), ALU immediate folding
-2. **Boot ROM monitor** — Rewrite UART I/O and command loop in C (d/w/g commands), S-record upload for loading programs over UART
+2. **Boot chain** — four-stage boot (ROM → stage 1 → stage 2 → kernel), SPI controller for SD card, bus autoconfig implementation. See `doc/boot/boot-process.md` and `doc/boot/spi-controller.md`
 3. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick
 4. **Interrupt controller** — Multiple devices with priority encoding
 5. **Memory subsystem** — SDRAM controller, bus interface

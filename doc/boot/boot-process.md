@@ -24,10 +24,11 @@ The Penumbra boot process has four stages, designed to work with varying hardwar
 **Responsibilities:**
 - Hardware initialization (trap vectors, UART)
 - RAM detection via bus-fault probing
-- Boot device detection (SD card, serial upload, etc.)
-- Load stage 1 bootloader from boot device into base RAM
-- Populate boot data structure with hardware discovery results
-- Jump to stage 1
+- Bus autoconfig enumeration (discovers SPI controller, other peripherals)
+- Boot device detection (SPI controller → SD card, or serial upload fallback)
+- SD card initialization and stage 1 loading from partition gap
+- Populate boot data structure with hardware discovery results (RAM, peripherals, boot device)
+- Jump to stage 1 with R1 = boot data pointer
 
 **Environment:** Physical addressing, supervisor mode, no MMU. Stack in low RAM (page 2+). The boot ROM is OS-agnostic — it knows nothing about NetBSD or any other OS.
 
@@ -40,10 +41,10 @@ The Penumbra boot process has four stages, designed to work with varying hardwar
 **Storage:** Partition gap — raw sectors between the MBR (sector 0) and the first partition (typically sector 2048 for 1 MB-aligned partitions). The ROM reads these sectors directly by LBA; no filesystem parsing needed. This gives ~1 MB of space, far more than the 512-byte MBR. The MBR itself is not used for code.
 
 **Responsibilities:**
-- Initialize the SD card / storage controller (SPI mode)
+- Use SPI controller (base address from boot data) to access SD card (already initialized by ROM)
 - Parse the MBR partition table to locate the FAT32 boot partition
 - Load the stage 2 bootloader from the boot partition
-- Pass boot data forward (possibly augmented with storage device info)
+- Pass boot data forward (possibly augmented with boot partition info)
 - Jump to stage 2
 
 **Environment:** Physical addressing, supervisor mode, no MMU. Inherits boot data from ROM via R1 (pointer to boot data structure in physical RAM).
