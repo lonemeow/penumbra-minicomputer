@@ -74,6 +74,13 @@ def GPR_Allocatable : RegisterClass<"Penumbra", [i32], 32, (add
   let isAllocatable = 1;
 }
 
+// GPR with zero-register substitution for GlobalISel.
+// When the selector sees a store of constant 0, it substitutes R0 (the
+// hardwired zero register) instead of materializing LLI Rd, #0.
+def GPRz : RegisterOperand<GPR_Allocatable> {
+  let GIZeroRegister = R0;
+}
+
 def CCR : RegisterClass<"Penumbra", [i32], 32, (add SR)> {
   let CopyCost = -1;
   let isAllocatable = 0;

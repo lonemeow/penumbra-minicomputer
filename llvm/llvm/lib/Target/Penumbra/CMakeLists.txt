@@ -11,6 +11,9 @@ tablegen(LLVM PenumbraGenCallingConv.inc -gen-callingconv)
 tablegen(LLVM PenumbraGenSubtargetInfo.inc -gen-subtarget)
 tablegen(LLVM PenumbraGenRegisterBank.inc -gen-register-bank)
 
+set(LLVM_TARGET_DEFINITIONS PenumbraGISel.td)
+tablegen(LLVM PenumbraGenGlobalISel.inc -gen-global-isel)
+
 add_public_tablegen_target(PenumbraCommonTableGen)
 
 add_llvm_target(PenumbraCodeGen

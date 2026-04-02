@@ -9,7 +9,9 @@
 #include "PenumbraRegisterBankInfo.h"
 #include "PenumbraSubtarget.h"
 #include "PenumbraTargetMachine.h"
+#include "llvm/CodeGen/GlobalISel/GIMatchTableExecutorImpl.h"
 #include "llvm/CodeGen/GlobalISel/InstructionSelector.h"
+#include "llvm/CodeGen/GlobalISel/MachineIRBuilder.h"
 #include "llvm/CodeGen/GlobalISel/Utils.h"
 #include "llvm/CodeGenTypes/LowLevelType.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -20,6 +22,10 @@
 #define DEBUG_TYPE "penumbra-isel"
 
 using namespace llvm;
+
+#define GET_GLOBALISEL_PREDICATE_BITSET
+#include "PenumbraGenGlobalISel.inc"
+#undef GET_GLOBALISEL_PREDICATE_BITSET
 
 namespace {
 
@@ -32,12 +38,16 @@ public:
   bool select(MachineInstr &I) override;
   static const char *getName() { return DEBUG_TYPE; }
 
-  // No TableGen-generated match table yet — per-function state is a no-op.
-  void setupGeneratedPerFunctionState(MachineFunction &) override {}
+  void setupMF(MachineFunction &MF, GISelValueTracking *VT,
+               CodeGenCoverage *CoverageInfo, ProfileSummaryInfo *PSI,
+               BlockFrequencyInfo *BFI) override {
+    InstructionSelector::setupMF(MF, VT, CoverageInfo, PSI, BFI);
+  }
 
 private:
-  bool selectBinaryALU(MachineInstr &I, MachineBasicBlock &MBB,
-                       MachineRegisterInfo &MRI, unsigned Opc) const;
+  // TableGen-generated pattern matcher.
+  bool selectImpl(MachineInstr &I, CodeGenCoverage &CoverageInfo) const;
+
   bool selectShift(MachineInstr &I, MachineBasicBlock &MBB,
                    MachineRegisterInfo &MRI, unsigned RegOpc,
                    unsigned ImmOpc) const;
@@ -78,15 +88,38 @@ private:
   const PenumbraInstrInfo &TII;
   const PenumbraRegisterInfo &TRI;
   const PenumbraRegisterBankInfo &RBI;
+
+  // Required by generated selector code (references Subtarget->).
+  const PenumbraSubtarget *Subtarget;
+
+#define GET_GLOBALISEL_PREDICATES_DECL
+#include "PenumbraGenGlobalISel.inc"
+#undef GET_GLOBALISEL_PREDICATES_DECL
+
+#define GET_GLOBALISEL_TEMPORARIES_DECL
+#include "PenumbraGenGlobalISel.inc"
+#undef GET_GLOBALISEL_TEMPORARIES_DECL
 };
 
 } // end anonymous namespace
+
+#define GET_GLOBALISEL_IMPL
+#include "PenumbraGenGlobalISel.inc"
+#undef GET_GLOBALISEL_IMPL
 
 PenumbraInstructionSelector::PenumbraInstructionSelector(
     const PenumbraTargetMachine &TM, const PenumbraSubtarget &STI,
     const PenumbraRegisterBankInfo &RBI)
     : InstructionSelector(), TII(*STI.getInstrInfo()),
-      TRI(*STI.getRegisterInfo()), RBI(RBI) {}
+      TRI(*STI.getRegisterInfo()), RBI(RBI), Subtarget(&STI),
+#define GET_GLOBALISEL_PREDICATES_INIT
+#include "PenumbraGenGlobalISel.inc"
+#undef GET_GLOBALISEL_PREDICATES_INIT
+#define GET_GLOBALISEL_TEMPORARIES_INIT
+#include "PenumbraGenGlobalISel.inc"
+#undef GET_GLOBALISEL_TEMPORARIES_INIT
+{
+}
 
 bool PenumbraInstructionSelector::select(MachineInstr &I) {
   // Handle non-generic (already selected) instructions, plus G_PHI which is
@@ -118,17 +151,35 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
   MachineBasicBlock &MBB = *I.getParent();
   MachineRegisterInfo &MRI = MBB.getParent()->getRegInfo();
 
+  // Try TableGen-generated patterns first (ALU reg-reg, etc.).
+  if (selectImpl(I, *CoverageInfo))
+    return true;
+
   using namespace TargetOpcode;
 
   switch (I.getOpcode()) {
-  // ── Binary ALU ────────────────────────────────────────────────────────────
-  // All map to 3-operand machine instructions with a tied dest=src1 constraint.
-  // The register allocator inserts a COPY to satisfy the tie in SSA form.
-  case G_ADD:  return selectBinaryALU(I, MBB, MRI, Penumbra::ADD);
-  case G_SUB:  return selectBinaryALU(I, MBB, MRI, Penumbra::SUB);
-  case G_AND:  return selectBinaryALU(I, MBB, MRI, Penumbra::AND);
-  case G_OR:   return selectBinaryALU(I, MBB, MRI, Penumbra::OR);
-  case G_XOR:  return selectBinaryALU(I, MBB, MRI, Penumbra::XOR);
+  // ── Pointer arithmetic ────────────────────────────────────────────────────
+  // These operate on p0 types, which the i32-only TableGen patterns don't match.
+  case G_PTR_ADD: {
+    MachineInstr *NewI =
+        BuildMI(MBB, I, I.getDebugLoc(), TII.get(Penumbra::ADD))
+            .addDef(I.getOperand(0).getReg())
+            .addReg(I.getOperand(1).getReg())
+            .addReg(I.getOperand(2).getReg());
+    I.eraseFromParent();
+    return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
+  }
+  case G_PTRMASK: {
+    MachineInstr *NewI =
+        BuildMI(MBB, I, I.getDebugLoc(), TII.get(Penumbra::AND))
+            .addDef(I.getOperand(0).getReg())
+            .addReg(I.getOperand(1).getReg())
+            .addReg(I.getOperand(2).getReg());
+    I.eraseFromParent();
+    return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
+  }
+
+  // ── Shifts (constant folding into immediate form) ─────────────────────────
   case G_SHL:  return selectShift(I, MBB, MRI, Penumbra::SHL, Penumbra::SHLi);
   case G_LSHR: return selectShift(I, MBB, MRI, Penumbra::SHR, Penumbra::SHRi);
   case G_ASHR: return selectShift(I, MBB, MRI, Penumbra::SAR, Penumbra::SARi);
@@ -136,10 +187,6 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
   // ── Constants / Addresses ─────────────────────────────────────────────────
   case G_CONSTANT:     return selectConstant(I, MBB, MRI);
   case G_GLOBAL_VALUE: return selectGlobalValue(I, MBB, MRI);
-
-  // ── Pointer arithmetic ────────────────────────────────────────────────────
-  case G_PTR_ADD:  return selectBinaryALU(I, MBB, MRI, Penumbra::ADD);
-  case G_PTRMASK:  return selectBinaryALU(I, MBB, MRI, Penumbra::AND);
 
   // ── Memory ────────────────────────────────────────────────────────────────
   case G_LOAD:        return selectLoad(I, MBB, MRI);
@@ -174,23 +221,6 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
   }
 }
 
-// ── Binary ALU helper ─────────────────────────────────────────────────────────
-// G_ADD/G_SUB/... have operands: [def dst, use src1, use src2]
-// Penumbra ALU has:              [def $Rd, use $Rd_in(tied), use $Rs]
-// We emit them directly; the RA satisfies the tied constraint by copying src1.
-bool PenumbraInstructionSelector::selectBinaryALU(MachineInstr &I,
-                                                   MachineBasicBlock &MBB,
-                                                   MachineRegisterInfo &MRI,
-                                                   unsigned Opc) const {
-  MachineInstr *NewI =
-      BuildMI(MBB, I, I.getDebugLoc(), TII.get(Opc))
-          .addDef(I.getOperand(0).getReg())  // $Rd  (output)
-          .addReg(I.getOperand(1).getReg())  // $Rd_in (tied; RA inserts COPY)
-          .addReg(I.getOperand(2).getReg()); // $Rs
-  I.eraseFromParent();
-  return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
-}
-
 // ── Shift helper ─────────────────────────────────────────────────────────────
 // Like selectBinaryALU, but folds a constant shift amount into the immediate
 // form (SHLi/SHRi/SARi) when the second operand is a G_CONSTANT in 0–31.
@@ -215,8 +245,14 @@ bool PenumbraInstructionSelector::selectShift(MachineInstr &I,
     return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
   }
 
-  // Non-constant or out-of-range: fall back to register shift.
-  return selectBinaryALU(I, MBB, MRI, RegOpc);
+  // Non-constant: emit register-form shift (SHL/SHR/SAR).
+  MachineInstr *NewI =
+      BuildMI(MBB, I, I.getDebugLoc(), TII.get(RegOpc))
+          .addDef(I.getOperand(0).getReg())
+          .addReg(I.getOperand(1).getReg())
+          .addReg(I.getOperand(2).getReg());
+  I.eraseFromParent();
+  return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
 }
 
 // ── G_CONSTANT ────────────────────────────────────────────────────────────────

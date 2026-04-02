@@ -250,11 +250,11 @@ let mayLoad = 1 in {
 
 // Stores: L=0
 let mayStore = 1 in {
-  def STW  : FormatM<0, 0b10, 0, (outs), (ins GPR:$Rd, GPR:$Rb, memoffset16:$offset),
+  def STW  : FormatM<0, 0b10, 0, (outs), (ins GPRz:$Rd, GPR:$Rb, memoffset16:$offset),
                      "stw\t$Rd, [$Rb + $offset]">;
-  def STH  : FormatM<0, 0b01, 0, (outs), (ins GPR:$Rd, GPR:$Rb, memoffset16:$offset),
+  def STH  : FormatM<0, 0b01, 0, (outs), (ins GPRz:$Rd, GPR:$Rb, memoffset16:$offset),
                      "sth\t$Rd, [$Rb + $offset]">;
-  def STB  : FormatM<0, 0b00, 0, (outs), (ins GPR:$Rd, GPR:$Rb, memoffset16:$offset),
+  def STB  : FormatM<0, 0b00, 0, (outs), (ins GPRz:$Rd, GPR:$Rb, memoffset16:$offset),
                      "stb\t$Rd, [$Rb + $offset]">;
 }
 
