@@ -45,9 +45,35 @@ _rtt(void)
 		;
 }
 
-/* TODO(human): implement main() */
 int
 main(uint32_t bootdata)
 {
+	const char **path;
+	int fd;
+
+	printf("NetBSD/Penumbra boot\n\n");
+
+	if (sd_boot_init(bootdata) != 0) {
+		printf("SD init failed, halting.\n");
+		_rtt();
+	}
+
+	for (path = boot2_paths; *path != NULL; path++) {
+		fd = open(*path, 0);
+		if (fd >= 0) {
+			printf("Found: %s\n", *path);
+			close(fd);
+			break;
+		}
+	}
+
+	if (*path == NULL) {
+		printf("Stage 2 not found, halting.\n");
+		_rtt();
+	}
+
+	/* TODO: loadfile() and jump to stage 2 */
+	printf("Loading not yet implemented.\n");
+	_rtt();
 	return 1;
 }
