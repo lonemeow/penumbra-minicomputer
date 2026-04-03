@@ -51,7 +51,7 @@ This file provides detailed hardware context for work under `hw/`. The root `CLA
   - `libc.c`/`.h` — minimal C library (strlen, strcmp, strtoul, snprintf, software mul/div)
   - `uart.c`/`.h` — UART polling driver
   - `crt0.s` — startup (set SP, call main), `trap_entry.s` — exception trampolines, `rom.ld` — linker script
-  - Monitor commands: `x <addr> [len]` (hex dump), `load sd:<dev>,<cs>[:<part>] <addr> <lba> <count>` (SD read, raw or partition-relative LBA), `part sd:<dev>,<cs>` (display MBR partition table), `break`/`b` (halt). SD naming uses per-class controller index: `sd:0,0` = first SD controller, CS0.
+  - Monitor commands: `x <addr> [len]` (hex dump), `load sd:<dev>,<cs>[:<part>] <addr> <lba> <count>` (SD read, raw or partition-relative LBA), `part sd:<dev>,<cs>` (display MBR partition table), `go <addr>`/`g <addr>` (jump to address with R1=boot data), `break`/`b` (halt). SD naming uses per-class controller index: `sd:0,0` = first SD controller, CS0.
   - Has its own `rom/Makefile` with automatic `*.c`/`*.s` discovery, header deps, and pattern rules. Built with clang: `clang -c` → `llvm-mc` → `ld.lld` (via `rom/rom.ld`) → `llvm-objcopy` → `bin2hex.py`.
 - **Interactive testbench** (`sim/tb_interactive.cpp`): Bridges host stdin/stdout to UART RX/TX. Raw terminal mode. Polls stdin every 1024 cycles. Exits on BREAK or Ctrl-C. SD card emulation via `+sdcard=disk.img` plusarg (or `SDCARD=` make variable).
 

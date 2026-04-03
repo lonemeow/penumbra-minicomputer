@@ -423,6 +423,39 @@ out:
     sd_deinit(dev->base);
 }
 
+/*
+ * cmd_go — jump to an address and execute.
+ *
+ * Usage: go <addr>
+ *
+ * Calls the target as a C function with R1 = boot data pointer
+ * (BOOTDATA_BASE). If the target returns, we fall back into the
+ * monitor loop. A real stage 1 bootloader won't return.
+ */
+static void cmd_go(const char *args) {
+    const char *p = args;
+    unsigned long addr = strtoul(p, (char **)&p, 16);
+
+    if (addr == 0) {
+        console_puts("usage: go <addr>\r\n");
+        return;
+    }
+
+    console_printf("jumping to 0x%x\r\n", (unsigned int)addr);
+
+    /* Set R1 = boot data pointer, then jump.  One-way — the target
+     * is not expected to return (stage 1 takes over, or test code
+     * ends with BREAK). */
+    uint32_t bd = BOOTDATA_BASE;
+    asm volatile(
+        "mov r1, %0\n\t"
+        "jmp %1"
+        : : "r"(bd), "r"((uint32_t)addr)
+        : "r1"
+    );
+    __builtin_unreachable();
+}
+
 /* ── Main and boot sequence ───────────────────────────────────────── */
 
 int main(void) {
@@ -485,6 +518,11 @@ int main(void) {
                 cmd_load(cmdbuffer + 5);
             } else if (strncmp(cmdbuffer, "part ", 5) == 0) {
                 cmd_part(cmdbuffer + 5);
+            } else if (cmdbuffer[0] == 'g' &&
+                       (cmdbuffer[1] == ' ' || cmdbuffer[1] == '\0')) {
+                cmd_go(cmdbuffer + 1);
+            } else if (strncmp(cmdbuffer, "go ", 3) == 0) {
+                cmd_go(cmdbuffer + 3);
             } else {
                 console_puts("?\r\n");
             }
