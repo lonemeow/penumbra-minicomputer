@@ -1,0 +1,8 @@
+#	$NetBSD$
+#
+# Penumbra machine-dependent configuration info — placeholder
+#
+
+maxpartitions 8
+
+maxusers 2 8 64

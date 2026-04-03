@@ -1,62 +1,57 @@
-# Penumbra stage 1 bootloader — standalone Makefile
+#	$NetBSD$
 #
-# Builds the stage 1 bootloader using the Penumbra clang toolchain.
-# This is a standalone build (not using NetBSD build.sh) that compiles
-# our boot sources plus selected libsa/libkern files from the NetBSD tree.
+# Penumbra stage 1 bootloader
 #
-# Usage:
-#   make                  — compile boot objects (link TBD)
-#   make clean            — remove build artifacts
-#   make LLVM_PREFIX=...  — override LLVM toolchain location
+# Can be built two ways:
+#   1. Via build.sh: ./build.sh -U -m penumbra tools && nbmake-penumbra
+#   2. Standalone:   make -f Makefile.standalone
 
-ROOT      := $(realpath ../../../../../..)
-NBSDSRC   := $(ROOT)/netbsd
-SYSDIR    := $(NBSDSRC)/sys
-ARCHDIR   := $(SYSDIR)/arch/penumbra
-BUILD     := $(ROOT)/build/boot1
+PROG=		boot1
+SRCS=		boot.c conf.c
+# MD libsa glue — built alongside the bootloader
+SRCS+=		sdblk.c cons.c
 
-# ── LLVM toolchain ────────────────────────────────────────────
-LLVM_PREFIX ?= $(ROOT)/build/llvm
-CC       = $(LLVM_PREFIX)/bin/clang --target=penumbra-unknown-none
-LD       = $(LLVM_PREFIX)/bin/ld.lld
-OBJCOPY  = $(LLVM_PREFIX)/bin/llvm-objcopy
+NOMAN=		# no manual page
+NOSSP=		yes
+NOPIE=		yes
 
-# ── Compiler flags ────────────────────────────────────────────
-# -D_STANDALONE enables standalone-mode types in NetBSD headers.
-# The machine/ symlink is created at build time.
-CFLAGS   = -O0 -ffreestanding -nostdinc -D_STANDALONE \
-           -I$(SYSDIR) -MMD -MP
+# We are a standalone (freestanding) program, not a hosted one
+LIBCRT0=
+LIBCRTI=
+LIBC=
+LIBCRTBEGIN=
+LIBCRTEND=
 
-# ── Our source files ─────────────────────────────────────────
-BOOT_SRCS = boot.c conf.c
-LIBSA_SRCS = sdblk.c cons.c
+S=		${.CURDIR}/../../../..
 
-BOOT_OBJS  = $(BOOT_SRCS:%.c=$(BUILD)/boot/%.o)
-LIBSA_OBJS = $(LIBSA_SRCS:%.c=$(BUILD)/libsa/%.o)
+.PATH:		${.CURDIR}/../libsa
 
-OUR_OBJS   = $(BOOT_OBJS) $(LIBSA_OBJS)
+CPPFLAGS+=	-nostdinc -D_STANDALONE -I${S}
+CFLAGS+=	-O0 -ffreestanding
 
-# ── Targets ───────────────────────────────────────────────────
-.PHONY: all clean machine-symlink
+STRIPFLAG=
+BINMODE=	444
 
-all: machine-symlink $(OUR_OBJS)
-	@echo "Stage 1 objects built OK."
+.include <bsd.prog.mk>
 
-# Create machine/ symlink for <machine/*.h> resolution
-machine-symlink:
-	@ln -sfn arch/penumbra/include $(SYSDIR)/machine
+# Pull in libkern for memcpy, strlen, etc.
+KERN_AS=	library
+.include "${S}/lib/libkern/Makefile.inc"
+LIBKERN=	${KERNLIB}
 
-$(BUILD)/boot/%.o: $(ARCHDIR)/stand/boot/%.c | $(BUILD)/boot
-	$(CC) $(CFLAGS) -c -o $@ $<
+# Pull in libsa for standalone I/O (dosfs, printf, alloc, etc.)
+SA_AS=		library
+SAMISCMAKEFLAGS+="SA_USE_LOADFILE=yes"
+.include "${S}/lib/libsa/Makefile.inc"
+LIBSA=		${SALIB}
 
-$(BUILD)/libsa/%.o: $(ARCHDIR)/stand/libsa/%.c | $(BUILD)/libsa
-	$(CC) $(CFLAGS) -c -o $@ $<
+LDADD+=		${LIBSA} ${LIBKERN}
+DPADD+=		${LIBSA} ${LIBKERN}
 
-$(BUILD)/boot $(BUILD)/libsa:
-	@mkdir -p $@
-
-clean:
-	rm -rf $(BUILD)
-	rm -f $(SYSDIR)/machine
-
--include $(OUR_OBJS:.o=.d)
+# Stub out CRT objects the link expects
+/usr/lib/crt0.o:
+	true
+/usr/lib/crtbegin.o:
+	true
+/usr/lib/crtend.o:
+	true

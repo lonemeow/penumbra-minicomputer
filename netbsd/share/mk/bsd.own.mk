@@ -62,6 +62,12 @@ NEED_OWN_INSTALL_TARGET?=	yes
 # TOOLCHAIN_MISSING?=	yes
 # .endif
 
+.if ${MACHINE_ARCH} == "penumbra"
+TOOLCHAIN_MISSING?=	yes
+HAVE_LLVM?=		yes
+ACTIVE_CC=		clang
+.endif
+
 TOOLCHAIN_MISSING?=	no
 
 #
@@ -678,6 +684,7 @@ MACHINES.m68k=		amiga atari cesfic hp300 luna68k mac68k \
 MACHINES.mips=		algor arc cobalt emips evbmips ews4800mips \
 			hpcmips mipsco newsmips pmax sbmips sgimips
 MACHINES.or1k=		or1k
+MACHINES.penumbra=	penumbra
 MACHINES.powerpc=	amigappc bebox evbppc ibmnws macppc mvmeppc \
 			ofppc prep rs6000 sandpoint
 MACHINES.riscv=		riscv
@@ -842,16 +849,19 @@ MKGCC:= no
 .endif
 
 MKGDB.or1k=	no
+MKGDB.penumbra=	no
 MKGDB.riscv32=	no
 MKGDB.riscv64=	no
 
-# No kernel modules for or1k or riscv (yet)
+# No kernel modules for or1k, penumbra, or riscv (yet)
 MKKMOD.or1k=	no
+MKKMOD.penumbra=	no
 MKKMOD.riscv32=	no
 MKKMOD.riscv64=	no
 
-# No profiling for or1k (yet)
+# No profiling for or1k or penumbra (yet)
 MKPROFILE.or1k=	no
+MKPROFILE.penumbra=	no
 MKPROFILE.riscv32=no
 MKPROFILE.riscv64=no
 
@@ -945,7 +955,9 @@ MACHINE_GNU_ARCH=${GNU_ARCH.${MACHINE_ARCH}:U${MACHINE_ARCH}}
 # In order to identify NetBSD to GNU packages, we sometimes need
 # an "elf" tag for historically a.out platforms.
 #
-.if (!empty(MACHINE_ARCH:Mearm*))
+.if ${MACHINE_ARCH} == "penumbra"
+MACHINE_GNU_PLATFORM?=penumbra-unknown-none
+.elif (!empty(MACHINE_ARCH:Mearm*))
 MACHINE_GNU_PLATFORM?=${MACHINE_GNU_ARCH}--netbsdelf-${MACHINE_ARCH:C/eb//:C/v[4-7]//:S/earm/eabi/}
 .elif (${MACHINE_GNU_ARCH} == "arm" || \
      ${MACHINE_GNU_ARCH} == "armeb" || \
