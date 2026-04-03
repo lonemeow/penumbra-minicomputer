@@ -159,7 +159,7 @@ The kernel looks up `dev_index=0` → SPI controller at `0xFF001000`, CS pin 0, 
 
 **SD card naming convention (ROM monitor):**
 
-The ROM monitor uses `sd:<controller>,<cs>` syntax where `<controller>` is the device index of the SPI controller and `<cs>` is the chip-select pin (0 or 1). For example, `sd:0,0` means "first SPI controller, CS0". This maps directly to the `BTAG_BOOTDEV` fields and is unambiguous even when multiple SPI controllers exist (e.g., FPGA onboard + external bus).
+The ROM monitor uses `sd:<controller>,<cs>` syntax where `<controller>` is the index among SD-class devices (0 = first SD controller, 1 = second, etc.) and `<cs>` is the chip-select pin (0 or 1). For example, `sd:0,0` means "first SD controller, CS0". This is unambiguous even when multiple SPI controllers exist (e.g., FPGA onboard + external bus). Note that this is a per-class index, not the global device index used in `BTAG_BOOTDEV` — the ROM translates between the two.
 
 **Entry alignment:** All entries are 4-byte aligned (matching Penumbra's ILP32 word size). The `size` field is always a multiple of 4. Consumers advance by `size` bytes and can assume word-aligned access.
 
@@ -206,7 +206,7 @@ Target layout for the ULX3S SD card:
 
 5. **Device indexing:** Autoconfig assigns sequential device indices (0, 1, 2, ...). `BTAG_DEVICE` carries the index; `BTAG_BOOTDEV` references boot device by index. Kernel maps boot device → hardware by matching indices.
 
-6. **SD card naming:** ROM monitor uses `sd:<dev_index>,<cs>` syntax. `dev_index` is the autoconfig device index of the SPI controller, `cs` is the chip-select pin (0 or 1). Maps directly to `BTAG_BOOTDEV` fields.
+6. **SD card naming:** ROM monitor uses `sd:<controller>,<cs>[:<partition>]` syntax. `controller` is the index among SD-class devices (not the global device index), `cs` is the chip-select pin (0 or 1), optional `partition` (1-based) enables partition-relative LBA addressing. The ROM translates the per-class controller index to the global device index for `BTAG_BOOTDEV`.
 
 7. **SD card controller:** SPI master in SPI mode (sim_spi.sv, CLASS_SPI). Byte-at-a-time polled transfers. Autoconfigured. Testbench SD emulator backed by disk image file (`+sdcard=`). See `doc/boot/spi-controller.md`.
 

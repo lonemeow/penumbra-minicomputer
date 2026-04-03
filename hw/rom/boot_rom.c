@@ -342,6 +342,58 @@ static void cmd_examine(const char *args) {
     }
 }
 
+/* ── Little-endian unaligned reads ─────────────────────────────────── *
+ *
+ * MBR partition entries sit at byte 446 (446 % 4 == 2), so the
+ * uint32_t fields are half-word aligned at best.  Byte-at-a-time
+ * extraction avoids alignment faults.
+ */
+
+static unsigned int read_le16(const unsigned char *p) {
+    return (unsigned int)p[0] | ((unsigned int)p[1] << 8);
+}
+
+static uint32_t read_le32(const unsigned char *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+           ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+/* ── MBR partition table ──────────────────────────────────────────── */
+
+#define MBR_SIGNATURE       0xAA55
+#define MBR_PART_OFFSET     446
+#define MBR_PART_ENTRY_SIZE 16
+#define MBR_SIG_OFFSET      510
+#define MBR_MAX_PARTS       4
+
+/* Partition type codes (subset) */
+#define PTYPE_EMPTY    0x00
+#define PTYPE_FAT12    0x01
+#define PTYPE_FAT16S   0x04
+#define PTYPE_FAT16    0x06
+#define PTYPE_FAT32    0x0B
+#define PTYPE_FAT32L   0x0C   /* FAT32 with LBA */
+#define PTYPE_LINUX    0x83
+#define PTYPE_FREEBSD  0xA5
+#define PTYPE_NETBSD   0xA9
+#define PTYPE_SWAP     0x82
+
+static const char *part_type_name(unsigned char type) {
+    switch (type) {
+    case PTYPE_EMPTY:   return "empty";
+    case PTYPE_FAT12:   return "FAT12";
+    case PTYPE_FAT16S:  return "FAT16 <32M";
+    case PTYPE_FAT16:   return "FAT16";
+    case PTYPE_FAT32:   return "FAT32";
+    case PTYPE_FAT32L:  return "FAT32-LBA";
+    case PTYPE_LINUX:   return "Linux";
+    case PTYPE_FREEBSD: return "FreeBSD";
+    case PTYPE_NETBSD:  return "NetBSD";
+    case PTYPE_SWAP:    return "Linux swap";
+    default:            return "unknown";
+    }
+}
+
 /* ── SD card (SPI mode) ───────────────────────────────────────────── *
  *
  * Fully stateless: each operation does init → work → deinit, so the
@@ -513,6 +565,45 @@ static int sd_read_sector(uint32_t base, uint32_t lba,
 }
 
 /*
+ * Read MBR from sector 0 and look up partition `part` (1-based).
+ * On success, stores partition LBA start in *lba_start and sector
+ * count in *sector_count.  Returns 0 on success, negative on error:
+ *   -1  SD init failed
+ *   -2  sector 0 read failed
+ *   -3  bad MBR signature
+ *   -4  partition empty or out of range
+ */
+static int mbr_get_partition(uint32_t spi_base, int part,
+                             uint32_t *lba_start, uint32_t *sector_count) {
+    unsigned char mbr[512];
+
+    int rc = sd_init(spi_base);
+    if (rc != 0)
+        return -1;
+
+    rc = sd_read_sector(spi_base, 0, mbr);
+    sd_deinit(spi_base);
+    if (rc != 0)
+        return -2;
+
+    if (read_le16(mbr + MBR_SIG_OFFSET) != MBR_SIGNATURE)
+        return -3;
+
+    if (part < 1 || part > MBR_MAX_PARTS)
+        return -4;
+
+    const unsigned char *e = mbr + MBR_PART_OFFSET +
+                             (part - 1) * MBR_PART_ENTRY_SIZE;
+    unsigned char type = e[4];
+    if (type == PTYPE_EMPTY)
+        return -4;
+
+    *lba_start    = read_le32(e + 8);
+    *sector_count = read_le32(e + 12);
+    return 0;
+}
+
+/*
  * Probe for SD card presence on a single controller.
  * Does CMD0 only — just checks if a card responds.
  * Returns 1 if a card is present, 0 if empty slot.
@@ -539,7 +630,9 @@ static int sd_detect(uint32_t base) {
 
 /*
  * Probe all CLASS_SD devices and report which have cards.
- * Returns the device index of the first SD card found, or -1.
+ * Returns the SD controller index of the first card found, or -1.
+ * (sd:X,Y naming — X is the Nth SD controller, not the global
+ * device index.)
  */
 static int sd_probe(void) {
     int first = -1;
@@ -547,12 +640,11 @@ static int sd_probe(void) {
         struct btag_device *dev = bd_find_device_by_class(ACFG_CLASS_SD, i);
         if (!dev)
             break;
-        int idx = bd_device_index(dev);
-        console_printf("  sd:%d,0 ... ", idx);
+        console_printf("  sd:%d,0 ... ", i);
         if (sd_detect(dev->base)) {
             console_puts("card present\r\n");
             if (first < 0)
-                first = idx;
+                first = i;
         } else {
             console_puts("empty\r\n");
         }
@@ -563,7 +655,10 @@ static int sd_probe(void) {
 /*
  * cmd_load — read sectors from SD card into memory.
  *
- * Usage: load sd:<dev>,<cs> <addr> <lba> <count>
+ * Usage: load sd:<dev>,<cs>[:<part>] <addr> <lba> <count>
+ *
+ * Without :<part>, LBA is absolute (raw card access).
+ * With :<part> (1-based), LBA is relative to the partition start.
  *
  * Full lifecycle per command: init → read sectors → deinit.
  * Card can be swapped between load commands.
@@ -571,15 +666,22 @@ static int sd_probe(void) {
 static void cmd_load(const char *args) {
     const char *p = args;
 
-    /* Parse sd:<dev>,<cs> */
+    /* Parse sd:<dev>,<cs>[:<part>] */
     if (!(p[0] == 's' && p[1] == 'd' && p[2] == ':')) {
-        console_puts("usage: load sd:<dev>,<cs> <addr> <lba> <count>\r\n");
+        console_puts("usage: load sd:<dev>,<cs>[:<part>] <addr>"
+                      " <lba> <count>\r\n");
         return;
     }
     p += 3;
     unsigned long dev_nth = strtoul(p, (char **)&p, 10);
     if (*p == ',') p++;
     unsigned long cs = strtoul(p, (char **)&p, 10);
+
+    int partition = -1;   /* -1 = raw/whole device */
+    if (*p == ':') {
+        p++;
+        partition = (int)strtoul(p, (char **)&p, 10);
+    }
     while (*p == ' ') p++;
 
     unsigned long addr  = strtoul(p, (char **)&p, 16);
@@ -587,17 +689,46 @@ static void cmd_load(const char *args) {
     unsigned long count = strtoul(p, (char **)&p, 10);
 
     if (count == 0) {
-        console_puts("usage: load sd:<dev>,<cs> <addr> <lba> <count>\r\n");
+        console_puts("usage: load sd:<dev>,<cs>[:<part>] <addr>"
+                      " <lba> <count>\r\n");
         return;
     }
 
-    struct btag_device *dev = bd_find_device((int)dev_nth);
-    if (!dev || dev->cls != ACFG_CLASS_SD) {
-        console_printf("sd:%d — not an SD device\r\n", (int)dev_nth);
+    struct btag_device *dev =
+        bd_find_device_by_class(ACFG_CLASS_SD, (int)dev_nth);
+    if (!dev) {
+        console_printf("sd:%d — no such SD controller\r\n", (int)dev_nth);
         return;
     }
 
     (void)cs;  /* TODO: support CS1 */
+
+    /* If a partition was specified, read MBR for the LBA offset */
+    uint32_t lba_offset = 0;
+    if (partition >= 0) {
+        uint32_t part_start, part_size;
+        int prc = mbr_get_partition(dev->base, partition,
+                                    &part_start, &part_size);
+        if (prc == -1) {
+            console_puts("SD init failed (MBR read)\r\n");
+            return;
+        } else if (prc == -2) {
+            console_puts("failed to read sector 0\r\n");
+            return;
+        } else if (prc == -3) {
+            console_puts("no valid MBR signature\r\n");
+            return;
+        } else if (prc == -4) {
+            console_printf("partition %d: empty or invalid\r\n", partition);
+            return;
+        }
+
+        if (lba + count > part_size)
+            console_printf("warning: read extends past partition end"
+                           " (%d sectors)\r\n", (int)part_size);
+
+        lba_offset = part_start;
+    }
 
     /* Init card fresh each time (supports hot-swap) */
     int rc = sd_init(dev->base);
@@ -609,8 +740,9 @@ static void cmd_load(const char *args) {
     unsigned char *dst = (unsigned char *)addr;
     int err = 0;
     for (unsigned long i = 0; i < count; i++) {
-        if (sd_read_sector(dev->base, lba + i, dst) != 0) {
-            console_printf("read error at LBA %d\r\n", (int)(lba + i));
+        if (sd_read_sector(dev->base, lba_offset + lba + i, dst) != 0) {
+            console_printf("read error at LBA %d\r\n",
+                            (int)(lba_offset + lba + i));
             err = 1;
             break;
         }
@@ -622,6 +754,120 @@ static void cmd_load(const char *args) {
     if (!err)
         console_printf("loaded %d sectors (%d bytes) to 0x%x\r\n",
                         (int)count, (int)(count * 512), (unsigned int)addr);
+}
+
+/*
+ * Format a byte count as a human-readable size (e.g. "1.5GB").
+ * Uses the largest unit where the integer part is ≥ 1, with one
+ * decimal digit via integer fixed-point: frac = (rem * 10) / div.
+ * No floating point needed.
+ */
+static void humanize_size(unsigned long bytes, char *buf, unsigned long bufsize) {
+    static const char * const suffixes[] = {
+        "B", "kB", "MB", "GB"
+    };
+    static const unsigned long divisors[] = {
+        1, 1024, 1024 * 1024, 1024 * 1024 * 1024
+    };
+
+    /* Pick largest unit where whole part ≥ 1 */
+    int idx = 0;
+    for (int i = 3; i >= 1; i--) {
+        if (bytes >= divisors[i]) {
+            idx = i;
+            break;
+        }
+    }
+
+    unsigned long whole = bytes / divisors[idx];
+    unsigned long frac  = (bytes % divisors[idx]) * 10 / divisors[idx];
+
+    if (idx == 0 || frac == 0)
+        snprintf(buf, bufsize, "%u%s", (unsigned int)whole, suffixes[idx]);
+    else
+        snprintf(buf, bufsize, "%u.%u%s", (unsigned int)whole,
+                 (unsigned int)frac, suffixes[idx]);
+}
+
+/*
+ * cmd_part — display MBR partition table from an SD card.
+ *
+ * Usage: part sd:<dev>,<cs>
+ *
+ * Reads sector 0, validates the MBR signature, and prints all
+ * four partition entries.  Helpers available:
+ *   - sd_init(base), sd_read_sector(base, lba, buf), sd_deinit(base)
+ *   - read_le16(p), read_le32(p) for unaligned LE fields
+ *   - part_type_name(type) for human-readable type strings
+ *   - console_printf(fmt, ...) for formatted output
+ *   - MBR_PART_OFFSET (446), MBR_PART_ENTRY_SIZE (16), MBR_SIG_OFFSET (510)
+ *   - MBR_SIGNATURE (0xAA55), MBR_MAX_PARTS (4), PTYPE_EMPTY (0x00)
+ *
+ * Partition entry layout (16 bytes at MBR_PART_OFFSET + i*16):
+ *   byte  0:    status (0x80 = active/bootable)
+ *   bytes 1-3:  CHS start (ignore)
+ *   byte  4:    partition type
+ *   bytes 5-7:  CHS end (ignore)
+ *   bytes 8-11: LBA start (LE32)
+ *   bytes 12-15: sector count (LE32)
+ */
+static void cmd_part(const char *args) {
+        if (strncmp(args, "sd:", 3)) {
+        console_puts("usage: part sd:<dev>,<cs>\r\n");
+        return;
+    }
+
+    const char *p = args + 3;
+    unsigned long dev_nth = strtoul(p, (char **)&p, 10);
+    if (*p == ',') p++;
+    unsigned long cs = strtoul(p, (char **)&p, 10);
+
+    struct btag_device *dev =
+        bd_find_device_by_class(ACFG_CLASS_SD, (int)dev_nth);
+    if (!dev) {
+        console_printf("sd:%d — no such SD controller\r\n", (int)dev_nth);
+        return;
+    }
+
+    int rc = sd_init(dev->base);
+    if (rc != 0) {
+        console_printf("SD init failed (err=%d)\r\n", rc);
+        return;
+    }
+
+    (void)cs;  /* TODO: support CS1 */
+
+    unsigned char mbr[512];
+    if (sd_read_sector(dev->base, 0, mbr) != 0) {
+        console_puts("Error reading SD card\r\n");
+        goto out;
+    }
+
+    unsigned short mbr_sig = read_le16(mbr + MBR_SIG_OFFSET);
+    if (mbr_sig != MBR_SIGNATURE) {
+        console_puts("No MBR signature found\r\n");
+        goto out;
+    }
+
+    console_printf("MBR partition table on device %s card %d:\r\n\r\n", dev->name, cs);
+
+    for (int part_idx=0; part_idx<4; part_idx++) {
+        unsigned char *part_data = mbr + MBR_PART_OFFSET + part_idx * MBR_PART_ENTRY_SIZE;
+
+        unsigned char part_status = part_data[0];
+        unsigned char part_type = part_data[4];
+        unsigned long part_start_lba = read_le32(part_data + 8);
+        unsigned long part_sector_count = read_le32(part_data + 12);
+
+        char humanized_size[32];
+        humanize_size(part_sector_count * 512, humanized_size, sizeof(humanized_size));
+
+        console_printf("  %d %10s %d %s %s\r\n", part_idx + 1, part_type_name(part_type),
+            part_start_lba, humanized_size, part_status & 0x80 ? "(bootable)" : "");
+    }
+
+out:
+    sd_deinit(dev->base);
 }
 
 int main(void) {
@@ -653,9 +899,12 @@ int main(void) {
 
     /* ── SD card presence check ───────────────────────────────── */
     console_puts("Probing SD slots...\r\n");
-    int boot_sd = sd_probe();
-    if (boot_sd >= 0)
-        bd_add_bootdev(&bd_cursor, boot_sd, 0, 0);
+    int boot_sd = sd_probe();    /* SD controller index, not global */
+    if (boot_sd >= 0) {
+        struct btag_device *sd_dev =
+            bd_find_device_by_class(ACFG_CLASS_SD, boot_sd);
+        bd_add_bootdev(&bd_cursor, bd_device_index(sd_dev), 0, 0);
+    }
 
     /* ── Finalize boot data ────────────────────────────────────── */
     bd_finalize(&bd_cursor);
@@ -679,6 +928,8 @@ int main(void) {
                 cmd_examine(cmdbuffer + 8);
             } else if (strncmp(cmdbuffer, "load ", 5) == 0) {
                 cmd_load(cmdbuffer + 5);
+            } else if (strncmp(cmdbuffer, "part ", 5) == 0) {
+                cmd_part(cmdbuffer + 5);
             } else {
                 console_puts("?\r\n");
             }
