@@ -32,7 +32,7 @@ rm netbsd/sys/machine
 
 ## Machine Headers (`include/`)
 
-All 16 headers are minimal stubs, sufficient for `#include <lib/libsa/stand.h>` to compile cleanly. Most integer-type headers delegate to `sys/common_*` via compiler builtins.
+All 18 headers are minimal stubs, sufficient for `#include <lib/libsa/stand.h>` and `<lib/libsa/loadfile.h>` to compile cleanly. Most integer-type headers delegate to `sys/common_*` via compiler builtins.
 
 | Header | Purpose | Notes |
 |--------|---------|-------|
@@ -52,6 +52,8 @@ All 16 headers are minimal stubs, sufficient for `#include <lib/libsa/stand.h>` 
 | `wchar_limits.h` | Wide character limits | 32-bit signed wchar_t/wint_t |
 | `signal.h` | Signal definitions | `sig_atomic_t`, minimal `sigcontext` |
 | `mcontext.h` | Machine context | 18 gregs (R0-R15 + SR + PC), `_UC_MACHINE_*` macros |
+| `elf_machdep.h` | ELF machine type | EM_PENUMBRA (0xF0DA), 7 relocation types |
+| `loadfile_machdep.h` | ELF loader macros | BOOT_ELF32, LOAD/READ/BCOPY/BZERO macros for libsa loadfile |
 
 ## Key Design Decisions
 
@@ -61,14 +63,21 @@ All 16 headers are minimal stubs, sufficient for `#include <lib/libsa/stand.h>` 
 
 ## Current Status
 
-- [x] Machine headers — compiles `<lib/libsa/stand.h>` cleanly
-- [ ] libsa glue — block device strategy (SPI/SD sector reads)
-- [ ] Stage 1 bootloader — main, conf.c, devopen
-- [ ] Stage 2 bootloader — ELF loading, MMU enable
+- [x] Machine headers — 18 headers, compiles `<lib/libsa/stand.h>` and `<lib/libsa/loadfile.h>` cleanly
+- [x] libsa glue — `sdblk.c` (SD block device strategy via SPI), `cons.c` (UART console)
+- [x] Stage 1 bootloader — `boot.c` (main: init SD, search FAT32 for stage 2), `conf.c` (device/fs wiring)
+- [x] Build system — standalone Makefile, compiles all 4 objects at `-O0`
+- [ ] Stage 1 linking — crt0.s, linker script, link against libsa/libkern sources
+- [ ] Stage 1 testing — run in simulator with FAT32 disk image
+- [ ] Stage 2 bootloader — ELF loading via `loadfile()`, MMU enable
 - [ ] Kernel port — locore.S, pmap, trap handling
+
+## Known Issues
+
+- **`-O1` G_STORE s1 legalization bug:** At `-O1`, the LLVM backend crashes on `G_STORE %val:_(s1)` — the optimizer narrows boolean stores to i1 which the Penumbra legalizer doesn't handle. Building at `-O0` for now. Fix needed in `PenumbraLegalizerInfo.cpp` (widen s1 stores to s32).
 
 ## Next Steps
 
-1. **libsa block device** — implement `blkdevstrategy()` that reads SD sectors via SPI controller, bridging `hw/rom/sdcard.c` protocol to libsa's `open_file` interface
-2. **Stage 1 boot main** — `conf.c` (wire dosfs + block device), `devopen()` (parse boot data, find boot partition), `boot.c` (load stage 2 from FAT32)
-3. **Build integration** — standalone Makefile (like `hw/rom/Makefile`) using clang pipeline; eventually wire into `make simulate`
+1. **Link stage 1** — crt0.s (set SP, call main with R1=bootdata), linker script, compile needed libsa sources (dosfs.c, open.c, close.c, read.c, printf.c, alloc.c, etc.) and libkern (memcpy, strlen, etc.)
+2. **Test in simulator** — create a FAT32 disk image with a dummy `boot/boot2` file, run stage 1 via `make simulate SDCARD=disk.img`, verify it finds the file
+3. **ELF loading** — use libsa's `loadfile()` to load stage 2 into RAM and jump to it
