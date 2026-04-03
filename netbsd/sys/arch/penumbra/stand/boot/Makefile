@@ -28,25 +28,35 @@ S=		${.CURDIR}/../../../..
 
 CPPFLAGS+=	-nostdinc -D_STANDALONE -I${S}
 CFLAGS+=	-O0 -ffreestanding
+CWARNFLAGS+=	-Wno-main
 
 STRIPFLAG=
 BINMODE=	444
 
+SAMISCMAKEFLAGS= SA_USE_LOADFILE=yes SA_INCLUDE_NET=no
+
 .include <bsd.prog.mk>
 
-# Pull in libkern for memcpy, strlen, etc.
+### find out what to use for libkern
 KERN_AS=	library
 .include "${S}/lib/libkern/Makefile.inc"
 LIBKERN=	${KERNLIB}
 
-# Pull in libsa for standalone I/O (dosfs, printf, alloc, etc.)
+### find out what to use for libsa
 SA_AS=		library
-SAMISCMAKEFLAGS+="SA_USE_LOADFILE=yes"
 .include "${S}/lib/libsa/Makefile.inc"
 LIBSA=		${SALIB}
 
-LDADD+=		${LIBSA} ${LIBKERN}
-DPADD+=		${LIBSA} ${LIBKERN}
+CLEANFILES+=	${PROG}.sym
+
+# Custom link rule: build libraries first, then link
+${PROG}: ${PROG}.sym
+	${OBJCOPY} -O binary ${PROG}.sym ${PROG}
+
+${PROG}.sym: ${OBJS} ${SALIB} ${KERNLIB}
+	${_MKTARGET_LINK}
+	${LD} -T ${.CURDIR}/boot.ld -o ${PROG}.sym \
+	    ${OBJS} ${SALIB} ${KERNLIB}
 
 # Stub out CRT objects the link expects
 /usr/lib/crt0.o:
@@ -55,3 +65,7 @@ DPADD+=		${LIBSA} ${LIBKERN}
 	true
 /usr/lib/crtend.o:
 	true
+
+cleandir: .WAIT cleandirlocal
+cleandirlocal:
+	-rm -rf lib
