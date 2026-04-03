@@ -40,3 +40,4 @@ __pycache__/
 *.pyc
 *.pyo
 .venv/
+netbsd/sys/machine
