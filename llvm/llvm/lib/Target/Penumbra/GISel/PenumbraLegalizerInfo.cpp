@@ -9,8 +9,10 @@
 #include "llvm/CodeGen/GlobalISel/LegalizerHelper.h"
 #include "llvm/CodeGen/GlobalISel/LegalizerInfo.h"
 #include "llvm/CodeGen/GlobalISel/MachineIRBuilder.h"
+#include "llvm/CodeGen/GlobalISel/Utils.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/TargetOpcodes.h"
+#include "llvm/Support/MathExtras.h"
 
 using namespace llvm;
 
@@ -85,15 +87,22 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   getActionDefinitionsBuilder({G_ZEXT, G_SEXT, G_ANYEXT})
       .legalForCartesianProduct({s8, s16, s32}, {s1, s8, s16});
 
-  // Division/remainder: no hardware support — lower to libcalls
-  // (__udivsi3, __umodsi3, __divsi3, __modsi3 in libc.c).
-  getActionDefinitionsBuilder({G_UDIV, G_UREM, G_SDIV, G_SREM})
+  // Division/remainder: custom-lower to catch power-of-2 constants
+  // (SHR for udiv, AND for urem), fall back to libcalls otherwise.
+  getActionDefinitionsBuilder({G_UDIV, G_UREM})
+      .customFor({s32})
+      .clampScalar(0, s32, s32);
+
+  // Signed division/remainder: always libcall (signed power-of-2 lowering
+  // needs rounding adjustment — not worth the complexity yet).
+  getActionDefinitionsBuilder({G_SDIV, G_SREM})
       .libcallFor({s32})
       .clampScalar(0, s32, s32);
 
-  // Multiplication: no hardware support yet — lower to libcall (__mulsi3).
+  // Multiplication: custom-lower power-of-2 and power-of-2 ± 1 constants
+  // to shifts (+ add/sub), fall back to libcall otherwise.
   getActionDefinitionsBuilder(G_MUL)
-      .libcallFor({s32})
+      .customFor({s32})
       .clampScalar(0, s32, s32);
 
   // SEXT_INREG: lowered by framework to SHL+ASHR (our shift constant folding
@@ -131,9 +140,101 @@ bool PenumbraLegalizerInfo::legalizeCustom(
     LostDebugLocObserver &LocObserver) const {
   MachineIRBuilder &MIRBuilder = Helper.MIRBuilder;
 
+  // Helper: fall back to a libcall for ops we can't strength-reduce.
+  auto Libcall = [&]() {
+    return Helper.libcall(MI, LocObserver) == LegalizerHelper::Legalized;
+  };
+
+  // Helper: try to read a constant integer from a vreg (looks through COPYs).
+  MachineRegisterInfo &MRI = *MIRBuilder.getMRI();
+  auto GetConstant = [&](Register Reg) {
+    return getIConstantVRegValWithLookThrough(Reg, MRI);
+  };
+
   switch (MI.getOpcode()) {
   default:
     return false;
+
+  case TargetOpcode::G_MUL: {
+    Register Dst = MI.getOperand(0).getReg();
+    Register Src = MI.getOperand(1).getReg();
+    auto MaybeVal = GetConstant(MI.getOperand(2).getReg());
+    if (!MaybeVal)
+      return Libcall();
+
+    uint64_t C = MaybeVal->Value.getZExtValue();
+    LLT Ty = MRI.getType(Dst);
+
+    if (C == 0) {
+      MIRBuilder.buildConstant(Dst, 0);
+    } else if (C == 1) {
+      MIRBuilder.buildCopy(Dst, Src);
+    } else if (isPowerOf2_64(C)) {
+      auto ShiftAmt = MIRBuilder.buildConstant(Ty, Log2_64(C));
+      MIRBuilder.buildShl(Dst, Src, ShiftAmt);
+    } else if (isPowerOf2_64(C - 1)) {
+      // x * (2^n + 1) = (x << n) + x
+      auto ShiftAmt = MIRBuilder.buildConstant(Ty, Log2_64(C - 1));
+      auto Shifted = MIRBuilder.buildShl(Ty, Src, ShiftAmt);
+      MIRBuilder.buildAdd(Dst, Shifted, Src);
+    } else if (isPowerOf2_64(C + 1)) {
+      // x * (2^n - 1) = (x << n) - x
+      auto ShiftAmt = MIRBuilder.buildConstant(Ty, Log2_64(C + 1));
+      auto Shifted = MIRBuilder.buildShl(Ty, Src, ShiftAmt);
+      MIRBuilder.buildSub(Dst, Shifted, Src);
+    } else {
+      return Libcall();
+    }
+
+    MI.eraseFromParent();
+    return true;
+  }
+
+  case TargetOpcode::G_UDIV: {
+    Register Dst = MI.getOperand(0).getReg();
+    Register Src = MI.getOperand(1).getReg();
+    auto MaybeVal = GetConstant(MI.getOperand(2).getReg());
+    if (!MaybeVal)
+      return Libcall();
+
+    uint64_t C = MaybeVal->Value.getZExtValue();
+    if (C == 0 || !isPowerOf2_64(C))
+      return Libcall();
+
+    LLT Ty = MRI.getType(Dst);
+    if (C == 1) {
+      MIRBuilder.buildCopy(Dst, Src);
+    } else {
+      auto ShiftAmt = MIRBuilder.buildConstant(Ty, Log2_64(C));
+      MIRBuilder.buildLShr(Dst, Src, ShiftAmt);
+    }
+    MI.eraseFromParent();
+    return true;
+  }
+
+  case TargetOpcode::G_UREM: {
+    Register Dst = MI.getOperand(0).getReg();
+    Register Src = MI.getOperand(1).getReg();
+    auto MaybeVal = GetConstant(MI.getOperand(2).getReg());
+    if (!MaybeVal)
+      return Libcall();
+
+    uint64_t C = MaybeVal->Value.getZExtValue();
+    if (C == 0 || !isPowerOf2_64(C))
+      return Libcall();
+
+    LLT Ty = MRI.getType(Dst);
+    if (C == 1) {
+      // x % 1 == 0
+      MIRBuilder.buildConstant(Dst, 0);
+    } else {
+      auto Mask = MIRBuilder.buildConstant(Ty, C - 1);
+      MIRBuilder.buildAnd(Dst, Src, Mask);
+    }
+    MI.eraseFromParent();
+    return true;
+  }
+
   case TargetOpcode::G_VASTART: {
     // G_VASTART stores the address of the first anonymous argument into
     // the va_list pointer (operand 0).  The frame index was recorded by
