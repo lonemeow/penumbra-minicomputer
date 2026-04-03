@@ -1,0 +1,53 @@
+#	$NetBSD: README.files,v 1.5.34.3 2024/12/20 18:31:34 martin Exp $
+
+What's in this directory:
+
+
+CHANGES		Changes between the 9.0 and 10.0 releases.
+
+CHANGES-10.0	Changes between the creation of the netbsd-10 branch and
+		the 10.0 release.
+
+CHANGES-10.1	Changes between the 10.0 and the 10.1 release.
+
+CHANGES-10.2	Changes between the 10.1 and the 10.2 release.
+
+CHANGES.prev	Changes in previous NetBSD releases.
+
+LAST_MINUTE	Last minute changes and notes about the release.
+
+README.files	This file.
+
+images/		Bootable images, including ISOs and USB disk images.
+
+patches/	Post-release binary code patches.
+
+shared/		Binary sets shared between multiple ports.
+
+source/		Source code.
+
+source/sets/	Source distribution sets; see below.
+
+source/patches/	Post-release source code patches.
+
+
+
+In addition to the files and directories listed above, there is one
+directory per architecture, for each of the architectures for which
+NetBSD XXX.XXX has a binary distribution.  The contents of each
+architecture's directory are described in an "INSTALL" file found in
+that directory.
+
+The most recent list of mirror sites for NetBSD is viewable at the URL:
+
+	http://www.NetBSD.org/mirrors/
+
+If you are receiving this distribution on a CD set, some files and
+subdirectories may be on a separate disc; read all README files for more
+information.
+
+See http://www.NetBSD.org/about/crypto-export.html for the formal status of
+the exportability out of the United States of some pieces of the
+distribution tree containing cryptographic software.  If you export these
+bits and the above document says you should not do so, it's your fault,
+not ours.
