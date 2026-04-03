@@ -1,0 +1,3831 @@
+# $NetBSD: CHANGES-10.1,v 1.1.2.79 2024/12/16 13:08:11 martin Exp $
+
+A complete list of changes from the NetBSD 10.0 release on 2024-03-28
+until the 10.1 release:
+
+doc/CHANGES-10.1                                created
+doc/LAST_MINUTE                                 patched by hand
+doc/README.files                                patched by hand
+external/gpl2/groff/tmac/mdoc.local             patched by hand
+sys/sys/param.h                                 patched by hand
+
+	Welcome to 10.0_STABLE!
+
+lib/libc/time/strptime.c			1.66
+
+	strptime(3): PR 58041: pacify -Wsign-compare.
+	[riastradh, ticket #648]
+
+share/man/man4/ugen.4				1.39
+sys/dev/usb/uftdi.c				1.77
+sys/dev/usb/ugen.c				1.176
+sys/dev/usb/usbdevices.config			1.43
+
+	uftdi(4): fix openocd with the Tigard debug board.
+	[thorpej, ticket #649]
+
+sys/dev/usb/ugen.c				1.177
+
+	ugen(4): add a "ugen-unit" device property for devpubd(8) scripts.
+	[thorpej, ticket #651]
+
+sys/arch/alpha/pci/irongate_pci.c		1.13
+
+	alpha: add a missing barrier in irongate_conf_read0().
+	[thorpej, ticket #652]
+
+sys/dev/pci/if_iwn.c				1.100
+
+	iwn(4): PR 58105: use the correct firmware file on
+	Intel Centrino N 130.
+	[riastradh, ticket #653]
+
+share/mk/bsd.lib.mk				1.398,1.399,1.152 (via patch)
+
+	bsd.x11.mk: PR 58104: use TOOL_AWK, not the build host's awk.
+	[riastradh, ticket #654]
+
+share/mk/bsd.own.mk				1.1365,1.1366
+sys/arch/aarch64/include/sljit_machdep.h	1.4,1.5
+sys/external/bsd/sljit/dist/sljit_src/sljitNativeARM_64.c 1.5
+sys/modules/Makefile				1.285
+
+	aarch64: PR 58103: enable SLJIT acceleration.
+	[riastradh, ticket #655]
+
+sys/stand/efiboot/efiboot.c			1.23
+
+	efiboot: PR 58075: avoid invalid memory access with netboot.
+	[riastradh, ticket #656]
+
+distrib/evbarm/instkernel/sshramdisk/Makefile	1.26
+
+	evbarm/sshramdisk: PR 58035: put firmware files in the right
+        place.
+	[riastradh, ticket #657]
+
+share/man/man4/wg.4				1.8,1.9
+
+	wg(4): PR 58015: man page improvements.
+	[riastradh, ticket #658]
+
+sys/netinet/sctp_asconf.c			1.14
+sys/netinet6/in6_ifattach.c			1.122
+sys/netinet6/nd6.c				1.282
+
+	ipsecif(4): fix invalid IPv6 route after deletion of a tunnel.
+	[knakahara, ticket #659]
+
+sbin/ifconfig/ifconfig.8			1.126-1.129
+
+	ifconfig(8): PR 58125: document lagg(4) parameters.
+	[andvar, ticket #660]
+
+sys/dev/pci/if_mcx.c				1.27
+
+	mcx(4): PR 58124: enforce full-duplex mark in mcx_media_status(),
+	when link is up.
+	[andvar, ticket #661]
+
+sys/arch/x86/x86/viac7temp.c			1.10
+
+	viac7temp(4): PR 58148: fix the kernel module.
+	[andvar, ticket #662]
+
+share/mk/bsd.hostlib.mk				1.21
+
+	Fix reproducible toolchain build on host toolchains   
+        that do not support -iremap.
+	[jakllsch, ticket #664]
+
+sys/ddb/db_proc.c				1.16
+
+	ddb(4): fix alignment of 'ps/[lw]' output.
+	[skrll, ticket #665]
+
+sys/arch/arm/arm32/pmap.c			1.443
+
+	arm: PR 58135: don't unconditionally set XN in pmap_clearbit.
+	[skrll, ticket #666]
+
+sys/arch/aarch64/aarch64/cpu_machdep.c		1.15
+sys/arch/aarch64/aarch64/sig_machdep.c		1.9
+
+	aarch64: PR 58149: cannot return from a signal handler if SP was
+	misaligned when the signal arrived.
+	[skrll, ticket #667]
+
+sys/kern/init_main.c				1.547
+sys/kern/kern_hook.c				1.15
+sys/kern/vfs_mount.c				1.104
+sys/miscfs/procfs/procfs.h			1.83,1.84
+sys/miscfs/procfs/procfs_subr.c			1.117
+sys/miscfs/procfs/procfs_vfsops.c		1.112-1.114
+sys/miscfs/procfs/procfs_vnops.c		1.230
+
+	procfs: PR 39913, PR 57775: make kernel hooks exechook, exithook
+	and forkhook MP-safe and make it safe to remove procfs nodes on
+	exehook or proc exit.
+	[hannken, ticket #668]
+
+sys/dev/ccd.c					1.190
+
+	ccd(4): PR 58043: allocate buffers with PR_NOWAIT and defer to
+	kthread if out of memory. 
+	[hannken, ticket #669]
+
+external/bsd/ntp/lib/libntp/Makefile		1.28-1.34
+
+	ntpd(8): fix timestamp in the binary for reproducable builds.
+	[jakllsch, ticket #663]
+
+sys/arch/vax/vax/unimpl_emul.S			1.5
+
+	vax: fix assembler code to use constants of the correct size
+	to fix reproducable builds (no functional change)
+	[kalvisd, ticket #670]
+
+sys/uvm/pmap/pmap.c				1.78
+sys/uvm/pmap/pmap.h				1.27
+
+	PR 58006: fix kernel hang in pmap_page_clear_attributes().
+	[skrll, ticket #671]
+
+distrib/sets/lists/xbase/mi			1.175
+external/mit/xorg/bin/xsetwallpaper/Makefile	1.6
+
+	PR 58172: install xsetwallpaper(1) manual page.
+	[jakllsch, ticket #672]
+
+sys/netinet6/frag6.c				1.78
+
+	inet6: fix calculation of fragment length.
+	[ozaki-r, ticket #673]
+
+sbin/raidctl/raidctl.8				1.80
+sbin/raidctl/raidctl.c				1.79
+sys/dev/raidframe/raidframeio.h			1.12
+sys/dev/raidframe/rf_diskqueue.c		1.64
+sys/dev/raidframe/rf_diskqueue.h		1.30
+sys/dev/raidframe/rf_disks.c			1.94,1.95
+sys/dev/raidframe/rf_disks.h			1.15
+sys/dev/raidframe/rf_driver.c			1.141
+sys/dev/raidframe/rf_netbsdkintf.c		1.414
+sys/dev/raidframe/rf_raid.h			1.52
+sys/dev/raidframe/rf_reconstruct.c		1.129
+
+	raid(4): implement hot removal of spares and components.
+	[oster, ticket #674]
+
+sbin/raidctl/raidctl.8				1.81
+sbin/raidctl/raidctl.c				1.80
+
+	raidctl(8): implement single command-line configuration of simple
+	RAID sets.
+	[oster, ticket #675]
+
+sys/dev/usb/uftdi.c				1.79
+
+	uftdi(4): add a match quirk to prevent matching any interface
+	on SiPEED FPGA development boards (e.g. Tang Nano 9K).
+	The FT2232s on these boards are wired up only for JTAG.
+	[thorpej, ticket #676]
+
+external/gpl3/gcc.old/dist/gcc/cp/cfns.h	1.12
+(applied to external/gpl3/gcc/dist/gcc/cp/cfns.h)
+usr.sbin/mtree/create.c				1.78
+
+	Fix tool build on FreeBSD 14 (and possibly other systems).
+	[hgutch, ticket #677]
+
+lib/libc/gen/usleep.3				1.20,1.21
+lib/libc/gen/usleep.c				1.21
+
+	usleep(3): PR 58184: allow calls with useconds >= 1000000.
+	[jdolecek, ticket #678]
+
+sys/dev/usb/uftdi.c				1.78
+sys/dev/usb/usbdevs				1.815
+sys/dev/usb/usbdevs.h				(regen)
+sys/dev/usb/usbdevs_data.h			(regen)
+
+	uftdi(4): PR 58127: add some USB serial adapters.
+	[maya, ticket #679]
+
+libexec/httpd/dir-index-bozo.c			1.37
+
+	httpd(8): PR 57962: create mobile-friendly directory listings.
+	[maya, ticket #680]
+
+etc/Makefile					1.470
+
+	PR/58200: change "makeobsolete" to use the tool version of sed.
+	[christos, ticket #681]
+
+distrib/common/Makefile.bootcd			1.48
+distrib/common/bootimage/Makefile.installimage	1.11
+distrib/i386/cdroms/installcd/Makefile		1.12
+share/mk/bsd.own.mk				1.1373
+sys/arch/i386/conf/LEGACY			1.3
+
+	i386: reduce size of ISO image:
+	 - remove redundant kernels and floppy images
+	 - do not build AMD GPU firmware
+	 - remove DRM support from the LEGACY kernel (targetting ISA machines)
+	[nia, ticket #682]
+
+external/mit/xf86-input-ws/dist/src/ws.c	1.17,1.18
+
+	xf86-input-ws: print log message about touchpad scrolling only once.
+	[nia, ticket #683]
+
+sys/arch/hp300/stand/inst/Makefile		1.11
+sys/arch/hp300/stand/uboot/Makefile		1.11
+
+	hp300: PR 58211: fix hardlinks in /usr/mdec.
+	[tsutsui, ticket #684]
+
+sys/arch/hp300/stand/common/if_le.c		1.15,1.16
+
+	hp300: do not panic on fatal errors on receiving packets with invalid
+	length.
+	[tsutsui, ticket #685]
+
+sys/arch/mac68k/dev/pm_direct.c			1.31
+
+	mac68k: avoid random crashes on some Powerbook models
+	when using mouse or keyboard.
+	[nat, ticket #686]
+
+sys/dev/pci/if_vmx.c				1.13
+
+	vmx(4):	set IFM_FDX flag if the link is up.
+	[msaitoh, ticket #687]
+
+usr.bin/tic/tic.c				1.41
+
+	tic(1): PR 58034: only mark the terminfo entry promoted if
+	it actually was.
+	[wiz, ticket #688]
+
+sys/dev/hil/hil.c				1.8
+
+	hp300: fix "stray level 1 interrupt" panic by pressing keys
+	during autoconf(9).
+	[tsutsui, ticket #689]
+
+distrib/notes/hp300/hardware			1.28
+share/man/man4/man4.hp300/topcat.4		1.8
+sys/arch/hp300/dev/diofb.c			1.8-1.10
+sys/arch/hp300/dev/diofbvar.h			1.5
+sys/arch/hp300/dev/topcat.c			1.7-1.12
+sys/arch/hp300/dev/topcatreg.h			1.5
+
+	hp300: topcat(4) framebuffer fixes.
+	[tsutsui, ticket #690]
+
+sys/arch/i386/conf/LEGACY			1.4
+
+	Exclude DRM_LEGACY from the ISA kernel.
+	[nia, ticket #691]
+
+sbin/disklabel/main.c				1.58
+
+	disklabel(8): avoid writing a label to the wrong sector
+	on some architectures from installer/ramdisk versions of
+	the disklabel command.
+	[tsutsui, ticket #692]
+
+sys/arch/hp300/hp300/autoconf.c			1.113
+
+	hp300: fix boot device selection for SCSI disks.
+	[tsutsui, ticket #693]
+
+sys/arch/vax/include/mcontext.h			1.11
+sys/arch/vax/vax/machdep.c			1.200
+sys/arch/vax/vax/sig_machdep.c			1.27
+
+	vax: implement _UC_SETSTACK / _UC_CLRSTACK.
+	[thorpej, ticket #694]
+
+sys/arch/evbarm/conf/GENERIC64			1.216
+
+	aarch64: add some simple PCI audio devices to GENERIC64
+	(for use in QEMU).
+	[nia, ticket #698]
+
+sys/dev/pci/eap.c				1.103
+
+	eap(4): restore the full set of supported hardware encodings
+	from netbsd-7.
+	[nia, ticket #697]
+
+share/man/man4/eap.4				1.18-1.20
+
+	eap(4): improve man page.
+	[nia, ticket #696]
+
+sys/arch/sgimips/sgimips/machdep.c		1.155
+
+	sgimips: PR 58269: call mips_vector_init earlier to fix boot.
+	[skrll, ticket #695]
+
+external/bsd/tre/dist/src/agrep.c		1.5,1.6
+
+	agrep(1): PR 53513: rewrite check for binary files.
+	[andvar, ticket #699]
+
+distrib/sets/lists/man/mi			1.1773 (adapted)
+share/man/man4/man4.i386/Makefile		1.81
+share/man/man4/man4.i386/viac7temp.4		delete
+share/man/man4/man4.x86/Makefile		1.24
+share/man/man4/man4.x86/viac7temp.4		1.1
+sys/arch/amd64/conf/ALL				1.188
+sys/arch/amd64/conf/GENERIC			1.612
+sys/arch/i386/conf/ALL				1.519
+sys/arch/i386/conf/GENERIC			1.1256
+sys/arch/x86/x86/viac7temp.c			1.11
+
+	viac7temp(4): rewrite temperature sensor to read value from MSR.
+	Add the driver to amd64 GENERIC.
+	[andvar, ticket #700]
+
+
+sys/arch/x86/x86/fpu.c				1.88
+
+	xen: workaround panic "fpudna from userland" on i386 Xen PV domU.
+	[manu, ticket #701]
+
+sys/dev/usb/if_urtwn.c				1.108
+sys/dev/usb/usbdevs				1.812
+sys/dev/usb/usbdevs.h				(regen)
+sys/dev/usb/usbdevs_data.h			(regen)
+
+	urtwn(4): PR 57819: add Mercusys and Mercusys MW150USV2 support.
+	[nia, ticket #702]
+
+usr.bin/aiomixer/main.c				1.6
+
+	aiomixer(1): fix setting volume on sb(4) emulated in QEMU.
+	[nia, ticket #703]
+
+usr.bin/ftp/ftp.1				1.154
+
+	ftp.1: drop a sentence that's no longer accurate.
+	[gutteridge, ticket #704]
+
+distrib/sets/lists/base/mi			1.1345
+external/public-domain/tz/share/zoneinfo/Makefile 1.5
+
+	Install /usr/share/zoneinfo/leap-seconds.list.
+	[kre, ticket #705]
+
+sys/fs/msdosfs/msdosfs_rename.c			1.4
+
+	PR 58146: fix msdosfs rename crash in RUMP.
+	[rhialto, ticket #706]
+
+sys/arch/macppc/macppc/mainbus.c		1.26
+
+	macppc: PR 57394: check for proper error value from OF_finddevice().
+	[tsutsui, ticket #707]
+
+sys/arch/mac68k/dev/aed.c			1.39
+sys/arch/macppc/dev/aed.c			1.35
+
+	mac68k/macppc: PR 58303: fix passing of emulated 2nd and 3rd button
+	events to the corresponding adb mouse.
+	[nat, ticket #708]
+
+crypto/external/bsd/openssh/bin/Makefile.inc	1.5
+
+	openssh: use ${EXTERNAL_OPENSSL_SUBDIR} instead of hard-coded
+	`openssl`.
+	[rin, ticket #709]
+
+usr.sbin/envstat/prog_ops.h			1.3
+usr.sbin/powerd/prog_ops.h			1.2
+usr.sbin/traceroute/prog_ops.h			1.3
+
+	envstat(8), powerd(8), traceroute(8): add support to CRUNCHOPS
+	to enable building rump-fied programs as crunched binaries.
+	[rin, ticket #710]
+
+lib/libpthread/pthread.c			1.185
+
+	libpthread: PR 57831: fix resource leak in pthread_create().
+	[hannken, ticket #711]
+
+sys/dev/mii/miidevs				1.169-1.171
+sys/dev/mii/miidevs.h				(regen)
+sys/dev/mii/miidevs_data.h			(regen)
+
+	miidevs: Add MaxLinear GPY21[125] 2.5G PHY and
+	GPY115 Gigabit PHY.
+	[msaitoh, ticket #712]
+
+sys/dev/pci/igc/if_igc.c			1.7-1.9,1.14
+
+	igc(4):
+	 - Fix build of the MODULAR kernel, which explicitly excludes vlans.
+	 - Notify which of 64- or 32-bit DMA is used
+	 - Cleanup
+	[rin, ticket #713]
+
+sys/dev/clk/clk.c				1.8
+
+	clk(4): clk_set_rate: Add KASSERT to check `clk != NULL`
+	[rin, ticket #714]
+
+sys/dev/fdt/fdt_powerdomain.c			1.2
+
+	fdt_powerdomain: fix out of bounds data access in the "all"
+	(index -1) case.
+	[rin, ticket #715]
+
+sys/lib/libsa/netif.c				1.27
+
+	libsa: do not panic when the requested NIC is not available.
+	[rin, ticket #716]
+
+sys/arch/x86/x86/coretemp.c			1.40,1.41
+
+	coretemp(4): do not accept impossibly low TjMax values.
+	[gutteridge, ticket #717]
+
+sys/dev/pckbport/synaptics.c			1.83
+
+	pms(4): PR 57874: fix synaptics capability parsing to
+	unbreak old devices.
+	[gutteridge, ticket #718]
+
+etc/etc.aarch64/MAKEDEV.conf			1.10
+etc/etc.amd64/MAKEDEV.conf			1.36
+etc/etc.i386/MAKEDEV.conf			1.36
+
+	Fix some missing device nodes. PRs 58093, 58100, 58101 and 58102.
+	[skrll, ticket #719]
+
+xsrc/external/mit/xorg-server/dist/hw/xfree86/modes/xf86Modes.c 1.2
+
+	PR 58321: make sure we fill in the name field in generated/
+	converted modes.
+	[tsutsui, ticket #720]
+
+external/gpl3/gcc.old/dist/gcc/doc/gcc.info	1.15
+external/gpl3/gcc.old/dist/gcc/doc/gcc.texi	1.13
+						(applied to external/gpl3/gcc)
+
+	PR 58336: fix broken gcc.info file.
+	[hgutch, ticket #721]
+	
+distrib/hp300/cdroms/installcd/Makefile		1.4
+sys/arch/hp300/dev/dcm.c			1.91
+sys/arch/hp300/dev/dcmreg.h			1.11
+sys/arch/hp300/dev/diofbreg.h			1.4
+sys/arch/hp300/dev/diofbvar.h			1.4
+sys/arch/hp300/dev/dma.c			1.45
+sys/arch/hp300/dev/dnkbd.c			1.14
+sys/arch/hp300/dev/dvbox.c			1.4
+sys/arch/hp300/dev/frodoreg.h			1.6
+sys/arch/hp300/dev/hpib.c			1.45
+sys/arch/hp300/dev/mcclock_frodo.c		1.2
+sys/arch/hp300/dev/rbox.c			1.4
+sys/arch/hp300/dev/rboxreg.h			1.3
+sys/arch/hp300/dev/rtc.c			1.22
+sys/arch/hp300/dev/sti_sgc.c			1.8
+sys/arch/hp300/dev/topcatreg.h			1.3
+sys/arch/hp300/hp300/autoconf.c			1.111,1.114
+sys/arch/hp300/hp300/machdep.c			1.238
+sys/arch/hp300/hp300/trap.c			1.156
+sys/arch/hp300/include/bus.h			1.23
+sys/arch/hp300/include/cpu.h			1.73
+sys/arch/hp300/stand/Makefile.buildboot		1.38,1.39
+sys/arch/hp300/stand/common/clock.c		1.14
+sys/arch/hp300/stand/common/conf.c		1.15
+sys/arch/hp300/stand/common/conf.h		1.4
+sys/arch/hp300/stand/common/devopen.c		1.14,1.15
+sys/arch/hp300/stand/common/hil.c		1.15
+sys/arch/hp300/stand/common/ite_dumb.c		1.2
+sys/arch/hp300/stand/common/ite_sti.c		1.2
+sys/arch/hp300/stand/common/machdep.c		1.16
+sys/arch/hp300/stand/common/netio.c		1.19
+sys/arch/hp300/stand/common/prf.c		1.6
+sys/arch/hp300/stand/common/rd.c		1.16
+sys/arch/hp300/stand/common/scsi.c		1.12,1.13
+sys/arch/hp300/stand/common/scsireg.h		1.5,1.6
+sys/arch/hp300/stand/common/scsivar.h		1.5
+sys/arch/hp300/stand/common/sd.c		1.12,1.13
+sys/arch/hp300/stand/inst/Makefile		1.12
+sys/arch/hp300/stand/inst/inst.c		1.25
+sys/arch/hp300/stand/mkboot/Makefile		1.12,1.13
+sys/arch/hp300/stand/mkboot/mkboot.c		1.12-1.20
+sys/arch/hp300/stand/mkboot/volhdr.h		1.6
+sys/arch/hp300/stand/mkboot/volhdr.h		delete
+sys/arch/hp300/stand/uboot/Makefile		1.12,1.13
+sys/fs/cd9660/cd9660_extern.h			1.29
+sys/fs/cd9660/cd9660_util.c			1.15,1.16
+sys/sys/bootblock.h				1.59
+tools/Makefile.nbincludes			1.11 (patch)
+usr.sbin/installboot/Makefile			1.59
+usr.sbin/installboot/arch/hp300.c		1.18,1.19
+usr.sbin/installboot/cd9660.c			1.1,1.2
+usr.sbin/installboot/fstypes.c			1.14
+usr.sbin/installboot/installboot.8		1.106-1.109
+usr.sbin/installboot/installboot.h		1.44,1.45
+
+	hp300: create bootable CD images.
+	Various minor fixes. PRs 57909, 54455.
+	[tsutsui, ticket #722]
+
+sys/dev/pci/pcireg.h				1.171
+
+	PCI_CLASS_MASK: use unsigned to avoid undefined behavior.
+	[rin, ticket #723]
+
+share/mk/bsd.kmodule.mk				1.86
+sys/arch/aarch64/aarch64/netbsd32_machdep_13.c	1.4
+sys/arch/aarch64/aarch64/netbsd32_machdep_16.c	1.4
+sys/arch/mips/mips/netbsd32_machdep_13.c	1.4
+sys/arch/mips/mips/netbsd32_machdep_16.c	1.8
+sys/arch/powerpc/powerpc/compat_13_machdep.c	1.23
+sys/arch/powerpc/powerpc/compat_16_machdep.c	1.25,1.26
+sys/arch/sun2/sun2/enable.h			1.5
+sys/arch/sun2/sun2/genassym.cf			1.17
+sys/modules/Makefile.compat			1.1
+sys/modules/compat_13/Makefile			1.3-1.5
+sys/modules/compat_16/Makefile			1.3,1.4
+sys/modules/compat_netbsd32_13/Makefile		1.5
+sys/modules/compat_netbsd32_16/Makefile		1.5
+sys/arch/amiga/amiga/locore.s			1.169
+sys/arch/atari/atari/locore.s			1.125
+sys/arch/cesfic/cesfic/locore.s			1.45
+sys/arch/hp300/hp300/locore.s			1.183
+sys/arch/luna68k/luna68k/locore.s		1.81
+sys/arch/m68k/conf/files.m68k			1.53
+sys/arch/m68k/include/pte_motorola.h		1.10 (adapted, via patch)
+sys/arch/m68k/m68k/compat_13_sigreturn13.s	1.8
+sys/arch/m68k/m68k/compat_16_sigreturn14.s	1.6
+sys/arch/m68k/m68k/sigreturn.s			delete
+sys/arch/mac68k/mac68k/locore.s			1.182
+sys/arch/mvme68k/mvme68k/locore.s		1.129
+sys/arch/news68k/news68k/locore.s		1.84
+sys/arch/next68k/next68k/locore.s		1.84
+sys/arch/sun2/sun2/locore.s			1.37
+sys/arch/sun3/sun3/locore.s			1.109
+sys/arch/sun3/sun3x/locore.s			1.77
+sys/arch/x68k/x68k/locore.s			1.130
+
+	PR 58346: fix compat modules build.
+	[pgoyette, ticket #724]
+
+sys/arch/xen/xen/xbdback_xenbus.c		upto 1.107
+
+	Add back proper support for disk transfer request which are
+	not contiguous in memory (this support was lost with rev 1.83,
+	between netbsd-9 and netbsd-10 branches).
+	This fixes a possible virtual disk corruption with linux domUs.
+	[bouyer, ticket #726]
+
+usr.sbin/btpand/btpand.c			1.9
+
+	btpand(8): fix off-by-one bug causing out of bounds memory access.
+	[plunky, ticket #727]
+
+share/man/man9/atomic_loadstore.9		1.8
+
+	atomic_loadstore(9): PR 58340: clarify relation to __HAVE_ATOMIC64_OPS.
+	[rin, ticket #728]
+
+sys/dev/pci/igc/if_igc.h			1.3
+
+	igc(4): use __HAVE_ATOMIC64_LOADSTORE instead of __HAVE_ATOMIC64_OPS
+	to detect atomic_loadstore(9) is applicable to 64-bit integers.
+	[rin, ticket #729]
+
+crypto/external/bsd/openssh/dist/log.c		1.29
+crypto/external/bsd/openssh/dist/version.h	(patch)
+
+	sshd(8): PR 58386:  avoid strnvis and syslog_r in signal handler
+	context. Fixes CVE-2024-6387.
+	[riastradh, ticket #737]
+
+sys/dev/pci/pcidevs				1.1507
+sys/dev/pci/pcidevs.h				(regen)
+sys/dev/pci/pcidevs_data.h			(regen)
+
+	PR 58358: add Brainboxes as manufacturer and some of their devices.
+	[nia, ticket #730]
+
+usr.sbin/sysinst/msg.mi.de			1.49,1.50
+usr.sbin/sysinst/msg.mi.en			1.52
+
+	sysinst(8): note that leaving the network "media type" empty
+	autoconfigures.
+	[nia, ticket #731]
+
+sys/arch/powerpc/oea/altivec.c			1.35
+
+	powerpc: PR 58283; do not try to restore altivec registers
+	in vec_restore_from_mcontext() if no altivec is supported.
+	[tsutsui, ticket #732]
+
+distrib/cdrom/Makefile				1.54-1.57
+distrib/cdrom/boothfs.uue			1.2
+distrib/cdrom/macppc_installboot/Makefile	1.12-1.14
+distrib/cdrom/macppc_installboot/cd9660.c	1.5,1.6
+distrib/cdrom/macppc_installboot/cd9660.c	delete
+distrib/cdrom/macppc_installboot/installboot.c	1.6,1.7
+distrib/cdrom/macppc_installboot/installboot.h	1.5
+distrib/cdrom/macppc_mkboothfs/mkboothfs.c	1.4
+distrib/macppc/Makefile				1.18
+etc/Makefile					1.471,1.472
+etc/etc.mac68k/Makefile.inc			1.25,1.26
+etc/etc.macppc/Makefile.inc			1.13
+external/gpl2/mkhybrid/README.md		1.1
+external/gpl2/mkhybrid/bin/Makefile		1.1-1.3
+external/gpl2/mkhybrid/dist/COPYING		1.1
+external/gpl2/mkhybrid/dist/ChangeLog		1.1
+external/gpl2/mkhybrid/dist/ChangeLog.mkhybrid	1.1
+external/gpl2/mkhybrid/dist/Makefile.in		1.1,1.2
+external/gpl2/mkhybrid/dist/README		1.1
+external/gpl2/mkhybrid/dist/README.eltorito	1.1
+external/gpl2/mkhybrid/dist/README.hfs_boot	1.1
+external/gpl2/mkhybrid/dist/README.hfs_magic	1.1
+external/gpl2/mkhybrid/dist/README.mkhybrid	1.1
+external/gpl2/mkhybrid/dist/README.mkisofs	1.1
+external/gpl2/mkhybrid/dist/README.session	1.1
+external/gpl2/mkhybrid/dist/README.win32	1.1
+external/gpl2/mkhybrid/dist/TODO		1.1
+external/gpl2/mkhybrid/dist/acconfig.h		1.1
+external/gpl2/mkhybrid/dist/apple.c		1.1-1.4
+external/gpl2/mkhybrid/dist/apple.h		1.1,1.2
+external/gpl2/mkhybrid/dist/apple_proto.h	1.1,1.2
+external/gpl2/mkhybrid/dist/config.h		1.1,1.2
+external/gpl2/mkhybrid/dist/config.h.in		1.1-1.3
+external/gpl2/mkhybrid/dist/configure		1.1-1.3
+external/gpl2/mkhybrid/dist/configure.in	1.1-1.3
+external/gpl2/mkhybrid/dist/defaults.h		1.1-1.3
+external/gpl2/mkhybrid/dist/desktop.c		1.1,1.2
+external/gpl2/mkhybrid/dist/eltorito.c		1.1
+external/gpl2/mkhybrid/dist/getopt.c		1.1-1.3
+external/gpl2/mkhybrid/dist/getopt.h		1.1,1.2
+external/gpl2/mkhybrid/dist/getopt1.c		1.1-1.3
+external/gpl2/mkhybrid/dist/hash.c		1.1,1.2
+external/gpl2/mkhybrid/dist/include/fctldefs.h	1.1
+external/gpl2/mkhybrid/dist/include/mconfig.h	1.1,1.2
+external/gpl2/mkhybrid/dist/include/prototyp.h	1.1
+external/gpl2/mkhybrid/dist/include/statdefs.h	1.1
+external/gpl2/mkhybrid/dist/install-sh		1.1
+external/gpl2/mkhybrid/dist/iso9660.h		1.1
+external/gpl2/mkhybrid/dist/joliet.c		1.1
+external/gpl2/mkhybrid/dist/libfile/LEGAL.NOTICE 1.1
+external/gpl2/mkhybrid/dist/libfile/README	1.1
+external/gpl2/mkhybrid/dist/libfile/apprentice.c 1.1,1.2
+external/gpl2/mkhybrid/dist/libfile/file.h	1.1-1.3
+external/gpl2/mkhybrid/dist/libfile/lfile.c	1.1,1.2
+external/gpl2/mkhybrid/dist/libfile/patchlevel.h 1.1
+external/gpl2/mkhybrid/dist/libfile/proto.h	1.1
+external/gpl2/mkhybrid/dist/libfile/softmagic.c	1.1,1.2
+external/gpl2/mkhybrid/dist/libhfs_iso/Makefile	1.1
+external/gpl2/mkhybrid/dist/libhfs_iso/README	1.1
+external/gpl2/mkhybrid/dist/libhfs_iso/block.c	1.1
+external/gpl2/mkhybrid/dist/libhfs_iso/block.h	1.1
+external/gpl2/mkhybrid/dist/libhfs_iso/btree.c	1.1
+external/gpl2/mkhybrid/dist/libhfs_iso/btree.h	1.1
+external/gpl2/mkhybrid/dist/libhfs_iso/data.c	1.1
+external/gpl2/mkhybrid/dist/libhfs_iso/data.h	1.1
+external/gpl2/mkhybrid/dist/libhfs_iso/file.c	1.1
+external/gpl2/mkhybrid/dist/libhfs_iso/file.h	1.1
+external/gpl2/mkhybrid/dist/libhfs_iso/hfs.c	1.1
+external/gpl2/mkhybrid/dist/libhfs_iso/hfs.h	1.1,1.2
+external/gpl2/mkhybrid/dist/libhfs_iso/hybrid.h	1.1
+external/gpl2/mkhybrid/dist/libhfs_iso/internal.h 1.1
+external/gpl2/mkhybrid/dist/libhfs_iso/low.c	1.1
+external/gpl2/mkhybrid/dist/libhfs_iso/low.h	1.1
+external/gpl2/mkhybrid/dist/libhfs_iso/lvolume.c 1.1
+external/gpl2/mkhybrid/dist/libhfs_iso/node.c	1.1
+external/gpl2/mkhybrid/dist/libhfs_iso/node.h	1.1
+external/gpl2/mkhybrid/dist/libhfs_iso/record.c	1.1
+external/gpl2/mkhybrid/dist/libhfs_iso/record.h	1.1
+external/gpl2/mkhybrid/dist/libhfs_iso/volume.h	1.1
+external/gpl2/mkhybrid/dist/mac_label.c		1.1,1.2
+external/gpl2/mkhybrid/dist/mac_label.h		1.1
+external/gpl2/mkhybrid/dist/mac_label_proto.h	1.1
+external/gpl2/mkhybrid/dist/mactypes.h		1.1
+external/gpl2/mkhybrid/dist/magic		1.1
+external/gpl2/mkhybrid/dist/mapping		1.1
+external/gpl2/mkhybrid/dist/match.c		1.1,1.2
+external/gpl2/mkhybrid/dist/match.h		1.1,1.2
+external/gpl2/mkhybrid/dist/mkhybrid.8		1.1,1.2
+external/gpl2/mkhybrid/dist/mkisofs.8		1.1
+external/gpl2/mkhybrid/dist/mkisofs.c		1.1-1.7
+external/gpl2/mkhybrid/dist/mkisofs.h		1.1-1.6
+external/gpl2/mkhybrid/dist/mkisofs.spec	1.1
+external/gpl2/mkhybrid/dist/multi.c		1.1
+external/gpl2/mkhybrid/dist/name.c		1.1
+external/gpl2/mkhybrid/dist/rock.c		1.1
+external/gpl2/mkhybrid/dist/tree.c		1.1-1.3
+external/gpl2/mkhybrid/dist/volume.c		1.1,1.2
+external/gpl2/mkhybrid/dist/volume.h		1.1,1.2
+external/gpl2/mkhybrid/dist/write.c		1.1,1.2
+external/gpl2/mkhybrid/dist/write.h		1.1
+share/mk/bsd.own.mk				1.1375,1.1376
+tools/Makefile					1.221,1.222
+tools/macppc_installboot/Makefile		1.1
+tools/mkhybrid/Makefile				1.1
+
+	mac68k, macppc: add a tool mkhybrid(8) to create bootable
+	install CD images.
+	[tsutsui, ticket #733]
+
+share/man/man4/ddb.4				1.204
+
+	ddb(4): vax: clarify how to enter into DDB from console.
+	[rin, ticket #734]
+
+sys/arch/aarch64/include/vmparam.h		1.21
+sys/arch/arm/pci/pci_msi_machdep.c		1.10
+sys/dev/acpi/acpi_resource.c			1.43
+sys/dev/pci/pci_resource.c			1.5
+
+	Fixes for Ampere Altra/Altra Max:
+	pci_resource: make unexpected bus numbers in bridges non-fatal.
+	acpi: ignore producer/consumer bit for fixed memory resources.
+	aarch64: Bump VM_PHYSSEG_MAX to match DRAM_BANKS / FDT_MEMORY_RANGES.
+	arm: pci: fix ITS ID lookup for MSIs.
+	[jmcneill, ticket #735]
+
+sys/altq/altq_rmclass.c				1.31
+
+	altq, cbq: take care of borrowed classes on sleeping.
+	[ozaki-r, ticket #736]
+
+sys/arch/x86/include/specialreg.h		1.212
+sys/arch/x86/x86/identcpu.c			1.129,1.130
+
+	x86: PR 58370: VIA CPU probe fixes.
+	[andvar, ticket #738]
+
+sys/conf/copts.mk				1.12 (patch)
+sys/net/zlib.c					1.39
+
+	Avoid errors for newer gcc -Wimplicit-fallthrough warnings in
+	net/zlib.c
+	[rin, ticket #739]
+
+sys/netinet6/ip6_output.c			1.232
+sys/netipsec/ipsec.c				1.178
+sys/netipsec/ipsec_input.c			1.79
+sys/netipsec/ipsec_output.c			1.86
+
+	ipsec: remove unnecessary splsoftnet protection, the code is
+	already MP-safe.
+	[rin, ticket #740]
+
+sys/kern/uipc_socket.c				1.309
+
+	PR 55690: make kqfilter() behave the same with option PIPE_SOCKETPAIR
+	pipe as it does for standard one - refuse EVFILT_WRITE if the reader
+	is already disconnected.
+	[jdolecek, ticket #741]
+
+bin/cp/utils.c					1.50
+
+	cp(1): PR 57857: always copy regular files, even if they appear to
+	be zero-sized.
+	[rin, ticket #742]
+
+bin/ls/ls.c					1.78
+
+	ls(1): PR 57892: print full pathname in error messages.
+	[rin, ticket #743]
+
+common/lib/libc/arch/aarch64/string/bcopy.S	1.3
+
+	aarch64: PR 57388: minor bug fix in bcopy.S.
+	[rin, ticket #744]
+
+common/lib/libc/arch/arm/string/memcpy_arm.S	1.6,1.7
+common/lib/libc/arch/arm/string/memcpy_neon.S	1.2
+common/lib/libc/arch/arm/string/memcpy_xscale.S	1.6
+common/lib/libc/arch/arm/string/memmove.S	1.11
+common/lib/libc/arch/arm/string/memset.S	1.9
+common/lib/libc/arch/arm/string/memset_naive.S	1.2
+common/lib/libc/arch/arm/string/strlen_neon.S	1.4
+
+	arm: string: Use unsigned comparison for pointers and size_t values.
+	[rin, ticket #745]
+
+etc/services					1.105,1.106
+
+	/etc/services: resolve a conflict for port 2049 and restore local
+	additions. PR 57759.
+	[rin, ticket #746]
+
+external/bsd/libproc/dist/proc_sym.c		1.5,1.6
+
+	libproc: sanitize process symbols so binary doesn't end up in dtrace
+	profiling.
+	[rin, ticket #747]
+
+lib/libc/atomic/atomic_ops.3			1.9
+
+	atomic_ops(3): note that aarch64 implements CAS.
+	[rin, ticket #748]
+
+lib/libc/gdtoa/strtod.c				1.19
+
+	libc: PR 55668: remove workarounds for older gcc versions
+	for the internal routine used by strtod(3).
+	[rin, ticket #749]
+
+lib/libc/gen/err.3				1.24
+
+	err(3): improve the manual page.
+	[rin, ticket #750]
+
+lib/libc/gen/usleep.3				1.22
+
+	usleep(3): PR 58184: add CAVEATS for NetBSD before 10.1.
+	[rin, ticket #751]
+
+share/man/man4/options.4			1.531
+
+	options(4): update `file-system UDF' description, it is not considered
+	experimental any more.
+	[reinoud, ticket #752]
+
+lib/libc/net/getaddrinfo.3			1.61
+
+	freeaddrinfo(3): note that a call with NULL argument causes
+	a segmentation fault.
+	[rin, ticket #753]
+
+lib/libc/stdio/fvwrite.c			1.31
+
+	fvwrite: optimize for unbuffered write.
+	[rin, ticket #754]
+
+lib/libc/sys/stat.2				1.60
+
+	stat(2): improve manual page.
+	[rin, ticket #755]
+
+lib/libcurses/refresh.c				1.127
+
+	curses(3): fix random application crashes.
+	[rin, ticket #756]
+
+lib/libpthread/pthread.c			1.182
+
+	libpthread: avoid deadlocks in snprintf(3).
+	[rin, ticket #757]
+
+lib/libpthread/pthread_attr_getguardsize.3	1.6
+lib/libpthread/pthread_attr_getstack.3		1.9
+
+	pthread: PR 57721: document the setstack vs setguardsize bug.
+	Suggest the safe, compatible workaround.
+	[rin, ticket #758]
+
+lib/libutil/stat_flags.3			1.9
+
+	stat_flags(3): improve manual page.
+	[rin, ticket #759]
+
+sbin/mount_procfs/mount_procfs.8		1.39
+
+	mount_procfs(8): document the format of the region descriptor
+	lines contained in the 'map' and 'maps' special files.
+	[rin, ticket #760]
+
+bin/sh/histedit.c				1.68
+
+	sh(1): ignore non-numeric values for HISTSIZE.
+	[kre, ticket #761]
+
+distrib/sets/lists/comp/mi			1.2463
+share/man/man9/Makefile				1.471
+share/man/man9/imax.9				1.7,1.8
+
+	imax(9): document the renaming from  max/min to uimax/uimin.
+	[rin, ticket #762]
+
+sys/net/if_bridge.c				1.192
+
+	bridge(4): add missing curlwp_bind() for pppoe.
+	[rin, ticket #763]
+
+common/lib/libc/arch/i386/atomic/atomic.S	1.37
+common/lib/libc/arch/x86_64/atomic/atomic.S	1.30
+sys/arch/amd64/amd64/cpufunc.S			1.68
+sys/arch/i386/i386/cpufunc.S			1.52
+sys/arch/xen/include/hypervisor.h		1.60
+sys/arch/xen/include/xenring.h			1.8
+
+	xen: PR 57199: don't hotpatch away LOCK prefix in xen_mb,
+	even on UP boots.
+	[riastradh, ticket #764]
+
+distrib/sets/lists/debug/module.mi		1.27
+distrib/sets/lists/modules/mi			1.160
+sys/modules/Makefile				1.291
+
+	modules: Build `ipl` module only if MKIPFILTER is enabled.
+	[rin, ticket #765]
+
+distrib/amd64/ramdisks/Makefile			1.6
+
+	PR 58316 and 57948: only enable the build of ramdisk-zfsroot if
+	ZFS is enabled.
+	[ozaki-r, ticket #766]
+
+distrib/sets/lists/comp/mi			1.2465
+share/man/man9/Makefile				1.472
+
+	crashme(9): install man page.
+	[rin, ticket #767]
+
+lib/libcurses/screen.c				1.39
+tests/lib/libcurses/tests/curs_set		1.2
+
+	curses: PR 58090, PR 58313: init old_mode to 1 (normal visible cursor).
+	[uwe, ticket #768]
+
+share/man/man4/sht4xtemp.4			1.3
+
+	Fix a typo in the man page.
+	[brad, ticket #769]
+
+libexec/ld.elf_so/rtld.c			1.216
+
+	PR 57628: at the end of _rtld_init() explicitly initialize the
+	ld.elf_so local copy of the atomic access support functions
+	for machines that do not implement all required ops in hardware
+	(like 32bit sparc).
+	[martin, ticket #775]
+
+sys/dev/pci/if_vioif.c				1.108
+
+	vioif(4): fix missing check for stopping state in RX interrupt.
+	[rin, ticket #770]
+
+share/man/man4/virtio.4				1.10,1.11
+
+	virtio(4) PR 58533: add references to viocon.
+	[uwe, ticket #771]
+
+sys/dev/pci/if_vioif.c				1.111
+
+	vioif(4): PR 58049: respect queue size limits.
+	[isaki, ticket #772]
+
+lib/libc/compat-43/killpg.c			1.10
+sys/kern/kern_descrip.c				1.263
+sys/kern/kern_ktrace.c				1.185
+sys/kern/kern_proc.c				1.276
+sys/kern/sys_sig.c				1.58
+sys/kern/tty.c					1.313
+tests/lib/libc/sys/t_kill.c			1.2
+
+	PR 58425: disallow INT_MIN as a (negative) pid arg.
+	Add a test for this.
+	[kre, ticket #773]
+
+bin/sh/histedit.c				1.72
+
+	sh(1): fix sh histedit core dump.
+	[kre, ticket #774]
+
+bin/pax/ar_subs.c				1.58
+bin/pax/buf_subs.c				1.31
+bin/pax/extern.h				1.61
+bin/pax/file_subs.c				1.65
+bin/pax/ftree.c					1.43
+bin/pax/pax.c					1.50,1.51
+tests/bin/pax/t_pax.sh				1.3-1.7
+
+	pax(1): Fix various PRs and add tests for the bugs.
+	PR 33753: pax(1) deletes target file if rewriting it fails
+	(`don't installworld to a full disk')
+	PR 41736: pax reports an error when copying zero files
+	PR 44498: tar(1) unnecessarily demands that getcwd() work
+	[riastradh, ticket #776]
+
+libexec/ld.elf_so/README.TLS			1.7
+libexec/ld.elf_so/arch/aarch64/rtld_start.S	1.6,1.7
+libexec/ld.elf_so/tls.c				1.15,1.20,1.21
+tests/libexec/ld.elf_so/t_tls_extern.c		1.15,1.16
+
+	ld.elf_so(1): PR 58154: fix aarch64 thread-local storage
+	[riastradh, ticket #777]
+
+sys/dev/virtio/viocon.c				1.10
+
+	viocon(4): PR 58555: fix crash at boot on certain hosts.
+	[riastradh, ticket #778]
+
+libexec/ld.elf_so/arch/hppa/hppa_reloc.c	1.52,1.53
+
+	hppa: ld.elf_so(1): avoid a crash on R_PARISC_NONE relocations.
+	[macallan, ticket #779]
+
+tests/net/if_tap/t_tap.sh			1.12
+
+	t_tap: fix `tap_bridged` test case.
+	[rin, ticket #780]
+
+tests/net/net_common.sh				1.45
+
+	Halt rump servers only if already started.
+	[rin, ticket #781]
+
+sys/dev/pci/if_rge.c				1.29
+
+	rge(4): PR 57694:
+	- handle stuck transmitter (descriptor still owned)
+	- restart send queue after transmit
+	- count output packets
+	- use deferred start
+	[mrg, ticket #782]
+
+sys/uvm/uvm_map.c				1.407,1.412,1.413
+
+	uvm_findspace(): PR 51254: for sh3, convert a KASSERTMSG(9) into
+	printf(9).
+	[rin, ticket #783]
+
+sys/net/bpf.c					1.253
+
+	bpf: PR 58531: mark bpfread_filtops FILTEROP_MPSAFE.
+	[rin, ticket #784]
+
+external/bsd/mdocml/dist/mdoc.7			1.6
+external/bsd/mdocml/dist/st.c			1.3
+external/gpl2/groff/dist/tmac/doc-syms		1.6
+external/gpl2/groff/dist/tmac/groff_mdoc.man	1.8
+
+	mandoc: merge upstream changes to add IEEE 1003.1-2024 (Posix 2024)
+	groff: add IEEE Std 1003.1-2024
+	[wiz, ticket #785]
+
+lib/librumphijack/hijack.c			1.140
+
+	librumphijack: support flock(2).
+	[ozaki-r, ticket #786]
+
+lib/libc/gdtoa/hdtoa.c				1.13
+tests/lib/libc/stdio/t_printf.c			1.11-1.18
+
+	libc: PR 56937: fix long double formatting.
+	[riastradh, ticket #787]
+
+sys/netbt/bt_proto.c				1.17
+
+	netbt(4): PR 56988: initialize bt_lock earlier.
+	[riastradh, ticket #788]
+
+sys/dev/hdaudio/hdafg.c				1.30
+
+	hdafg(4): PR 57322: do hotplug detection in kthread, not callout.
+	[riastradh, ticket #789]
+
+tests/lib/libc/gen/t_fpclassify.c		1.4,1.5
+
+	tests/lib/libc/gen/t_fpclassify: PR 57422: enable long double
+	tests on all architectures, not just those where long double is
+	_larger_ than double -- the long double functions should work
+	even if it's the same as double.
+	[riastradh, ticket #790]
+
+sys/dev/acpi/acpi_display.c			1.24
+
+	acpiout(4): PR 57825: fix brightness controls on certain
+	machines.
+	[riastradh, ticket #791]
+
+common/lib/libc/stdlib/_strtoi.h		1.3
+lib/libc/stdlib/Makefile.inc			1.97
+lib/libc/stdlib/strtoi.3			1.8,1.9
+lib/libc/stdlib/strtonum.c			1.7
+lib/libc/stdlib/strtou.3			delete
+tests/lib/libc/stdlib/t_strtoi.c		1.3
+
+	strtoi(3), strtou(3): PR 57828: prioritize ERANGE over ENOTSUP.
+	[riastradh, ticket #792]
+
+sys/sys/socket.h				1.132
+
+	<sys/socket.h>: PR 57871: use unsigned char, not u_char, for
+	POSIX apps.
+	[riastradh, ticket #793]
+
+lib/libcrypt/crypt-argon2.c			1.20-1.22
+lib/libcrypt/crypt-sha1.c			1.11
+lib/libcrypt/crypt.c				1.41
+lib/libcrypt/hmac.c				1.5
+lib/libcrypt/md5crypt.c				1.16
+lib/libcrypt/pw_gensalt.c			1.14
+
+	libcrypt: PR 57895: fix uninitialized variable reference.
+	[riastradh, ticket #794]
+
+distrib/sets/lists/debug/mi			1.425
+distrib/sets/lists/tests/mi			1.1306
+lib/libc/arch/arm/gen/setjmp.S			1.19
+lib/libc/arch/i386/gen/setjmp.S			1.18
+lib/libc/arch/i386/gen/sigsetjmp.S		1.19
+lib/libc/arch/sh3/gen/setjmp.S			1.12
+lib/libc/arch/sh3/gen/sigsetjmp.S		1.11
+lib/libc/arch/x86_64/gen/__setjmp14.S		1.4
+lib/libc/arch/x86_64/gen/__sigsetjmp14.S	1.4
+tests/lib/libc/setjmp/Makefile			1.3
+tests/lib/libc/setjmp/t_sigstack.c		1.1-1.12
+
+	longjmp(3): PR 57946: restore stack first, then signal mask.
+	[riastradh, ticket #795]
+
+sys/ufs/ext2fs/ext2fs_dir.h			1.23
+
+	ext2fs: PR 58018: fix readdir type for regular files.
+	[riastradh, ticket #796]
+
+usr.bin/audio/common/wav.c			1.23
+usr.bin/audio/record/record.c			1.59
+
+	audioplay(1)/audiorecord(1): PR 57973:
+	- fix a bug in the RIFF parser on 64-bit platforms
+	- fix audio-conversion functions for two types of input/output
+	[mrg, ticket #797]
+
+usr.bin/config/defs.h				1.109
+usr.bin/config/files.c				1.38
+usr.bin/config/mkioconf.c			1.36
+usr.bin/config/mkmakefile.c			1.73
+usr.bin/config/pack.c				1.11
+
+	config(1): PR 58115: make sort order deterministic to fix
+	reproducible build.
+	[riastradh, ticket #798]
+
+sys/arch/x86/x86/cpu_rng.c			1.21
+
+	x86/cpu_rng: PR 58122: fix health test false alarm rate.
+	[riastradh, ticket #799]
+
+external/mpl/bind/dist/lib/ns/query.c		1.21
+
+	named(8): PR 58170: remove incorrect blocklist report for a
+	request that we cannot evaluate legitimacy of, in order to
+	avoid blocking legitimate clients.
+	[riastradh, ticket #800]
+
+distrib/sets/lists/debug/mi			1.433
+distrib/sets/lists/tests/mi			1.1313
+etc/mtree/NetBSD.dist.tests			1.204
+external/gpl3/gcc/dist/libstdc++-v3/config/io/basic_file_stdio.cc 1.2
+tests/lib/Makefile				1.36
+tests/lib/libstdc++/Makefile			1.1
+tests/lib/libstdc++/h_cin_nosync.cc		1.1
+tests/lib/libstdc++/t_sync_with_stdio.sh	1.1,1.2
+
+	libstdc++: PR 58206: avoid undefined behaviour in sync_with_stdio -
+	don't fflush stdin.
+	[riastradh, ticket #801]
+
+sys/uvm/uvm_map.c				1.423,1.425
+
+	uvm_map(9): PR 51254_ make sure search in the nearest gap is monotonic.
+	[riastradh, ticket #804]
+
+sys/dev/pci/if_re_pci.c				1.53
+sys/dev/pci/pcidevs				1.1503
+sys/dev/pci/pcidevs.h				regen
+sys/dev/pci/pcidevs_data.h			regen
+
+	re(4): PR 57969: add (Realtek/)Killer E2600 Ethernet.
+	[jakllsch, ticket #805]
+
+sys/dev/pci/pucdata.c				1.116
+
+	puc(4): PR 58358: add Brainboxes puc(4) devices.
+	[jakllsch, ticket #806]
+
+sbin/fsirand/fsirand.8				1.11
+usr.sbin/mountd/exports.5			1.33-1.38
+usr.sbin/mountd/mountd.8			1.43
+
+	nfs: PR 58063: clarify export semantics and security model.
+	[riastradh, ticket #807]
+
+tests/lib/libc/stdlib/Makefile			1.34
+tests/lib/libc/stdlib/t_posix_memalign.c	1.6,1.7
+
+	posix_memalign(3), aligned_alloc(3): improve tests.
+	[riastradh, ticket #808]
+
+sys/dev/pci/cy82c693.c				1.11
+
+	cypide(4): PR 58602: fix locking rules violation.
+	[thorpej, ticket #809]
+
+tests/kernel/kqueue/t_sig.c			1.5
+
+	tests/kqueue: fix mismatch between '=' and '=='
+	[rin, ticket #810]
+
+distrib/sets/lists/tests/mi			1.1333
+etc/mtree/NetBSD.dist.tests			1.206
+sbin/ifconfig/ifconfig.8			1.130
+sbin/ifconfig/ifconfig.c			1.251
+sys/rump/net/lib/libshmif/if_shmem.c		1.85-1.87
+tests/net/Makefile				1.42
+tests/net/if_shmif/Makefile			1.1
+tests/net/if_shmif/t_shmif.sh			1.1
+
+	shmif(4): support linkstate change
+	- tweak shmif behavior about linkstate,
+	- suport linkstate change on shmif via ifconfig media,
+	- show linkstate on ifconfig -v, and
+	- add tests for shmif on the above changes.
+	[ozaki-r, ticket #811]
+
+sys/netinet/if_arp.c				1.314
+sys/netinet/in.c				1.248
+tests/net/arp/t_arp.sh				1.46
+tests/net/arp/t_dad.sh				1.16
+
+	ipv4: fix some behaviors when DAD is disabled
+	and add tests.
+	[ozaki-r, ticket #812]
+
+tests/kernel/kqueue/t_empty.c			1.2
+tests/net/net/t_tcp.c				1.13
+
+	tests: fix false positives due to race b/w connect(2) 
+	and accept(2)
+	[rin, ticket #813]
+
+usr.bin/ftp/ssl.c				1.16
+
+	ftp(1): adapt to newer OpenSSL EOF handling in ssl transfers.
+	[wiz, ticket #814]
+
+sys/arch/i386/stand/lib/biosmemx.S		1.12,1.13
+sys/arch/i386/stand/lib/bootinfo_memmap.c	1.7,1.8
+sys/arch/i386/stand/lib/getextmemx.c		1.11,1.12
+
+
+	x86: PR 49470: work around broken BIOS implementations that
+	copy more than the requested data when querying memory details.
+	[andvar, ticket #815]
+
+tests/lib/libm/t_fenv.c				1.16
+
+	The fetestexcept_trap test case only makes sense on FPUs that implement
+	exceptions.
+	[rin, ticket #816]
+
+distrib/sets/lists/base/mi			1.1350 (patch)
+distrib/sets/lists/debug/mi			1.447 (patch)
+distrib/sets/lists/man/mi			1.1787 (patch)
+distrib/sets/lists/tests/mi			1.1335 (patch)
+etc/mtree/NetBSD.dist.tests			1.207
+sys/rump/net/lib/libshmif/if_shmem.c		1.88
+sys/rump/net/lib/libshmif/shmifvar.h		1.12
+tests/usr.bin/Makefile				1.41 (patch)
+tests/usr.bin/shmif_pcapin/Makefile		1.1
+tests/usr.bin/shmif_pcapin/d_pcap.in.bz2.uue	1.1
+tests/usr.bin/shmif_pcapin/d_pcap.out.bz2.uue	1.1
+tests/usr.bin/shmif_pcapin/t_basic.sh		1.1
+usr.bin/Makefile				1.240
+usr.bin/shmif_pcapin/Makefile			1.1
+usr.bin/shmif_pcapin/shmif_pcapin.1		1.1
+usr.bin/shmif_pcapin/shmif_pcapin.c		1.1
+
+	shmif_pcapin(1): utility program for shmif(4) tests.
+	[ozaki-r, ticket #817]
+
+distrib/sets/lists/tests/mi			1.1336
+sbin/brconfig/brconfig.8			1.21
+sbin/brconfig/brconfig.c			1.18
+sys/net/if_bridge.c				1.194
+sys/net/if_bridgevar.h				1.39
+tests/net/if_bridge/Makefile			1.4
+tests/net/if_bridge/broadcast.pcap.uue		1.1
+tests/net/if_bridge/t_bridge.sh			1.20,1.21
+tests/net/if_bridge/unicast.pcap.uue		1.1
+
+	bridge(4): implement interface protection.
+	[ozaki-r, ticket #818]
+
+share/man/man4/ip6.4				1.35
+
+	ip6(4): fix copy-paste; ip6 is subnode of inet6, not inet
+	[rin, ticket #819]
+
+sys/external/bsd/libnv/dist/nvpair.c		1.13
+
+	libnv(9), npf(4): PR 58652: fix NUL bounds check.
+	[riastradh, ticket #820]
+
+sys/arch/x86/x86/intr.c				1.169
+sys/kern/kern_idle.c				1.36
+sys/kern/kern_softint.c				1.76
+sys/kern/subr_workqueue.c			1.48
+sys/kern/subr_xcall.c				1.38
+
+	Add KASSERTs for preemption count.
+	[rin, ticket #821]
+
+sys/dev/vmt/vmt_subr.c				1.4-1.9
+
+	vmt(4): process all queued messages from hypervisor without delay.
+	[rin, ticket #822]
+
+sys/dev/pci/ehci_pci.c				1.77
+
+	ehci(4): set up pmf(4) handlers even if attach fails
+	to allow suspend/resume to work.
+	[rin, ticket #823]
+
+lib/librumpuser/rumpuser_daemonize.c		1.9,1.10
+
+	rumpuser(3): add support for RUMP_STDOUT, RUMP_STDERR environment
+	variables.
+	[rin, ticket #824]
+
+sys/net/if_tap.c				1.129-1.132
+
+	tap(4): PRs 58166 and 58167: misc cleanups.
+	[rin, ticket #825]
+
+sys/netinet6/ip6_output.c			1.235
+
+	ip6_output: initialize plen for ip6_hopopts_input.
+	[rin, ticket #826]
+
+sys/net/nd.c					1.6,1.7
+
+	ndp: PRs 58297 and 58301: fix memory leak.
+	[rin, ticket #827]
+
+sys/dev/usb/if_cdce.c				1.82
+
+	cdce(4): pretend link up unconditionally.
+	[rin, ticket #828]
+
+sys/kern/subr_localcount.c			1.8
+
+	localcount(9): PR 58610: update per-CPU total at splhigh.
+	[rin, ticket #829]
+
+sys/kern/uipc_socket.c				1.304
+sys/kern/uipc_syscalls.c			1.207
+
+	socket(2): fix very old performance regressions.
+	[rin, ticket #830]
+
+sys/kern/sys_eventfd.c				1.11
+
+	eventfd(2): PR 57703: prune dead branch (fixes pullup #468)
+	[rin, ticket #831]
+
+sys/arch/x86/x86/intr.c				1.166
+
+	x86: intr_establish: fix use-after-free when detecting unsharable
+	interrupts.
+	[rin, ticket #832]
+
+lib/libpuffs/dispatcher.c			1.50
+
+	libpuffs: fix return value for pathconf(2).
+	[rin, ticket #833]
+
+usr.sbin/crash/crash.c				1.16
+
+	crash(8): implement cngetc(9).
+	[rin, ticket #834]
+
+sbin/newfs/mkfs.c				1.136
+
+	newfs(8): fallback to 80-column output if the window size is
+	unknown.
+	[rin, ticket #835]
+
+sys/dev/spi/spivar.h				1.13
+
+	spivar.h: refine and add some macros (NFC).
+	[rin, ticket #836]
+
+usr.bin/netstat/mbuf.c				1.36
+
+	netstat(1): avoid truncation and missing NUL for `-m` option.
+	[rin, ticket #837]
+
+sys/dev/scsipi/sd.c				1.336
+
+	sd(4): do not try to discover wedges when the unit is not online.
+	[rin, ticket #838]
+
+sys/dev/dkwedge/dkwedge_mbr.c			1.13
+
+	dkwedge: correctly print error code for missing MBR.
+	[rin, ticket #839]
+
+sys/modules/Makefile				1.282
+
+	Skip the sys/modules directory for "make includes" to speed up
+	the build.
+	[rin, ticket #840]
+
+sys/dev/usb/ucycom.c				1.57
+
+	ucycom(4): prevent (malicious) devices from leaking kernel memory
+	content to userland.
+	[rin, ticket #841]
+
+lib/libintl/gettext.c				1.32,1.33
+
+	libintl: PR 58136: fix use after free.
+	[rin, ticket #842]
+
+sys/kern/vfs_mount.c				1.105
+
+	dounmount(): avoid undefined behaviour.
+	[rin, ticket #843]
+
+sys/dev/acpi/acpi_bat.c				1.122,1.123
+
+	acpibat(4): PR 58201: fix inappropriate use of sysmon(9) APIs.
+	[rin, ticket #844]
+
+sys/arch/amiga/amiga/trap.c			1.143
+
+	amiga: avoid panic for user-space NULL pointer dereference.
+	[rin, ticket #845]
+
+usr.bin/tic/tic.c				1.42
+
+	tic(1): PR 58270: honor user-provided umask.
+	[rin, ticket #846]
+
+sys/arch/macppc/macppc/machdep.c		1.177
+
+	macppc: fix (potential) crash when switching backlight on/off with
+	quiesced Open Firmware.
+	[rin, ticket #847]
+
+distrib/notes/macppc/install			1.43
+
+	macppc: PR 54537: fix documententation for bootable ISO.
+	[rin, ticket #848]
+
+etc/mtree/special				1.179
+
+	PR 58465: backup /etc/wpa_supplicant.conf if present
+	[rin, ticket #849]
+
+usr.bin/grep/file.c				1.12,1.13
+
+	grep(1): fix native build with option WITHOUT_BZ2.
+	[rin, ticket #850]
+
+sys/dev/vnd.c					1.290
+
+	vnd(4): avoid division by zero when the backing file is revoked.
+	[rin, ticket #851]
+
+sys/net/if_tap.c				1.134
+
+	tap(4): explicitly include "opt_net_mpsafe.h".
+	[rin, ticket #852]
+
+share/man/man4/igc.4				1.2
+sys/dev/pci/igc/igc_defines.h			1.4
+
+	igc(4): sync typo fixes with -current.
+	[rin, ticket #853]
+
+distrib/sets/lists/base/mi			1.1349
+share/misc/Makefile				1.41
+share/misc/dot.clang-format			1.1
+
+	Add basic clang-format configuration file for NetBSD sources.
+	[rin, ticket #854]
+
+lib/libcurses/get_wch.c				1.27
+
+	curses(3): check return value for fgetc(3).
+	[rin, ticket #855]
+
+tests/lib/libc/gen/t_siginfo.c			1.54,1.55
+
+	t_siginfo: skip unsupported sigbus_adraln test for x86
+	[rin, ticket #856]
+
+sys/miscfs/procfs/procfs_vfsops.c		1.118,1.119
+sys/modules/procfs/Makefile			1.8
+
+	procfs kernel module: fix dependencies.
+	[pgoyette, ticket #857]
+
+sys/net/bpf.c					1.256,1.257
+sys/net/bpfdesc.h				1.49,1.50
+
+	bpf(4): PR 58596: fix locking.
+	[ozaki-r, ticket #858]
+
+sys/netinet/if_arp.c				1.315
+tests/net/arp/t_arp.sh				1.47,1.48
+
+	arp: fix cache initial state
+	[ozaki-r, ticket #859]
+
+share/man/man9/bus_dma.9			1.68
+
+	bus_dma(9): documentation improvements for sync operations.
+	[rin, ticket #860]
+
+sys/netinet/dccp_tfrc.c				1.11
+
+	DCCP: fix uninitialized variables.
+	[rin, ticket #862]
+
+sys/netinet/sctp_output.c			1.34
+
+	SCTP: Handle EHOSTDOWN the same way as EHOSTUNREACH and ENETDOWN.
+	[rin, ticket #863]
+
+sys/netinet6/frag6.c				1.77
+
+	Add a check for FreeBSD-SA-23:06.ipv6, although it is not
+	reproducible for us.  
+	[ozaki-r, ticket #865]
+
+sys/miscfs/procfs/procfs_vfsops.c		1.120 (patch)
+
+	procfs kernel module: define dependencies based on build options.
+	[pgoyette, ticket #868]
+
+sys/arch/aarch64/aarch64/cpu.c			1.73
+usr.sbin/cpuctl/arch/aarch64.c			1.22
+
+	aarch64: correct width of MPIDR.
+	[rin, ticket #869]
+
+sys/kern/kern_sysctl.c				1.267,1.268
+
+	Fix SYSCTL_DEBUG_CREATE for non-x86 by using copyin(9) for
+	the user buffer.
+	[rin, ticket #870]
+
+sys/kern/subr_pool.c				1.286
+
+	subr_pool: Avoid undefined behavior (left shift of signed value
+	potentialy altering the sign bit)
+	[rin, ticket #871]
+
+external/cddl/osnet/dist/uts/common/fs/zfs/zfs_ctldir.c 1.15
+
+	Provide pathconf for .zfs control directory.
+	[rin, ticket #872]
+
+sys/fs/union/union_vfsops.c			1.87
+
+	unionfs: set the lower mount only on success.
+	[rin, ticket #873]
+
+sys/arch/sparc64/sparc64/lock_stubs.s		1.12
+
+	sparc64: add missing LoadStore ordering for mutex_enter stub.
+	[rin, ticket #874]
+
+sys/arch/i386/i386/bioscall.S			1.11
+
+	i386/bioscall: disable preemption while we load the kernel pmap.
+	[rin, ticket #875]
+
+sys/arch/amd64/amd64/amd64_trap.S		1.55
+
+	amd64: annotate trap vectors with their mnemonics.
+	[rin, ticket #876]
+
+sys/dev/usb/ucom.c				1.138
+
+	ucom(4): PR 57259: simplify logic.
+	[rin, ticket #877]
+
+distrib/sets/lists/comp/mi			1.2426
+share/man/man9/Makefile				1.466
+share/man/man9/portfeatures.9			1.1-1.3
+
+	portfeatures(9): new man page for __HAVE* macros.
+	[rin, ticket #878]
+
+sys/nfs/nfs_vfsops.c				1.244
+
+	nfs: avoid overflow of nfs_commitsize on machines with > 32GB RAM.
+	[rin, ticket #879]
+
+sys/nfs/nfs_clntsubs.c				1.7
+sys/nfs/nfs_iod.c				1.9
+sys/nfs/nfs_vfsops.c				1.245
+
+	nfs: PR 57279: fix 32 bit time_t leftover in NFS code.
+	[rin, ticket #880]
+
+sys/arch/x86/x86/bus_dma.c			1.90
+
+	x86/bus_dma.c: enhance error diagnostics by using KASSERTMSG.
+	[rin, ticket #881]
+
+sys/kern/uipc_mbuf.c				1.249,1.250
+
+	uipc_mbuf: enhance error diagnostics by using KASSERTMSGs.
+	[rin, ticket #882]
+
+sys/arch/sparc64/sparc64/db_trace.c		1.56,1.57
+
+	sparc64: ddb: Use db_read_bytes() instead of pointer
+	dereference to avoid potential crashes.
+	[rin, ticket #883]
+
+sys/dev/md.c					1.87
+
+	md(4): Add constraints check for size given by ioctl(2).
+	[rin, ticket #884]
+
+sys/dev/usb/xhci.c				1.178,1.179
+sys/dev/usb/xhcireg.h				1.23
+
+	xhci(4): PR 56115: fix clearing of EINT and other transient flags.
+	[rin, ticket #885]
+
+external/bsd/libarchive/dist/libarchive/archive_read_disk_posix.c 1.3
+
+	libarchive: PR 56080: fix crash for tar(1) on NFS.
+	[rin, ticket #886]
+
+distrib/sets/lists/comp/mi			1.2435,1.2436
+share/man/man9/Makefile				1.467
+share/man/man9/versioningsyscalls.9		1.1-1.7
+
+	versioningsyscalls(9): new man page describing the details of
+	versioning a syscall.
+	[rin, ticket #887]
+
+sys/dev/dksubr.c				1.114
+
+	dk(4): call rnd_add_uint32(9) without spin lock held.
+	[rin, ticket #888]
+
+lib/libpthread/Makefile				1.97
+lib/librumpuser/configure.ac			1.6
+lib/librumpuser/rumpuser_port.h			1.53
+sys/rump/share/man/man3/rumpuser.3		1.4
+sys/rump/share/man/man7/rumpkernel.7		1.4
+sys/rump/share/man/man7/rumpkernel.7		1.5
+
+	rump: PR 57501: fix URLs for rump.
+	[rin, ticket #889]
+
+sys/arch/x86/x86/fpu.c				1.87
+
+	x86/fpu: in kernel mode fpu traps, print the instruction pointer.
+	[rin, ticket #890]
+
+lib/libc/string/Makefile.inc			1.88,1.89
+lib/libc/string/strcpy.3			1.24-1.27
+lib/libc/string/strlcpy.3			1.15-1.21
+lib/libc/string/strncpy.3			1.1-1.16
+
+	Major documentation improvements for strcpy(3) family routines.
+	[rin, ticket #891]
+
+sys/dev/wscons/wsmouse.c			1.73
+
+	wsmouse(4): make wsmouse_input safe to call from MP-safe interrupts.
+	[rin, ticket #892]
+
+sys/arch/i386/stand/Makefile.booters		1.98
+sys/arch/i386/stand/efiboot/Makefile.efiboot	1.23
+sys/arch/i386/stand/libsa/nfs.c			delete
+sys/arch/i386/stand/pxeboot/Makefile		1.29
+sys/lib/libsa/nfs.c				1.51-1.53
+sys/lib/libsa/nfsv2.h				1.5
+sys/lib/libsa/nfsv3.h				1.1
+sys/lib/libsa/rpcv2.h				1.4
+
+	libsa: add support for NFSv3 (fallback to NFSv2 if it fails).
+	[rin, ticket #894]
+
+sys/arch/evbppc/conf/WII			1.5
+
+	evbppc/wii: PR 58676: add DKWEDGE_AUTODISCOVER and DKWEDGE_METHOD_GPT.
+	[jakllsch, ticket #897]
+
+sys/stand/efiboot/exec.c			1.26
+
+	efiboot: fix memory deallocation in an error path of efi_rng().
+	[rin, ticket #898]
+
+sys/net/if_tun.c				1.177
+
+	tun(4): mark tunread_filtops `FILTEROP_MPSAFE`.
+	[rin, ticket #899]
+
+sys/arch/amd64/amd64/db_interface.c		1.42
+sys/arch/i386/i386/db_interface.c		1.89
+
+	x86: ddb: call x86_pause() when CPUs are paused.
+	[rin, ticket #900]
+
+sys/net/if_gif.c				1.159
+
+	if(4): drop locks before freeing unreferenced memory
+	in gif_set_tunnel.
+	[rin, ticket #901]
+
+sbin/ifconfig/carp.c				1.15
+sbin/ifconfig/ifconfig.8			1.125
+sys/netinet/ip_carp.c				1.118,1.119
+tests/net/carp/t_basic.sh			1.9
+
+	carp(4): various fixes:
+	- fix parser for carp state.
+	- use backing device to send advertisements.
+	- select virtual address as sender if backing interface is anonymous.
+	- use correct scope for IPv6.
+	- fix some tests.
+	[rin, ticket #902]
+
+sys/netinet/ip_output.c				1.326
+
+	Allow multicast packets to be sent from unnumbered interfaces.
+	[rin, ticket #903]
+
+sys/dev/pci/if_vmx.c				1.12
+
+	vmxnet(4): fix various MP bugs.
+	[rin, ticket #904]
+
+sys/kern/subr_xcall.c				1.36
+
+	xcall(9): if !mp_online, raise spl or set LP_BOUND to call func.
+	[rin, ticket #905]
+
+crypto/dist/ipsec-tools/src/racoon/grabmyaddr.c	1.40
+
+	racoon: cast to the correct message structure
+	[rin, ticket #906]
+
+usr.sbin/ifwatchd/ifwatchd.c			1.47
+
+	ifwatchd(8): don't call UP script when an IP address becomes
+	deprecated.
+	[rin, ticket #907]
+
+sys/arch/i386/i386/vector.S			1.90
+
+	i386: PR 58653: fix Hyper-V upcall interrupt handler.
+	[rin, ticket #908]
+
+sys/dev/usb/ohci.c				1.328
+
+	ohci(4): fix/add some memory sync calls.
+	[skrll, ticket #926]
+
+sys/arch/evbppc/conf/WII			1.6
+sys/arch/evbppc/include/wii.h			1.8
+sys/arch/evbppc/wii/dev/ehci_hollywood.c	1.3
+sys/arch/evbppc/wii/dev/hollywood.c		1.3
+sys/arch/evbppc/wii/dev/hollywood.h		1.3
+sys/arch/evbppc/wii/dev/ohci_hollywood.c	1.3
+sys/arch/evbppc/wii/dev/sdhc_hollywood.c	1.3
+sys/dev/usb/ohci.c				1.329
+sys/dev/usb/ohcireg.h				1.29
+sys/dev/usb/ohcivar.h				1.63
+
+	evbppc: wii: add support for ohci(4).
+	[jmcneill, ticket #910]
+
+sbin/gpt/biosboot.c				1.33
+
+	gpt(8): PR 58663: portability fix for the tool version.
+	[lloyd, ticket #911]
+
+distrib/sets/lists/debug/mi			1.449
+distrib/sets/lists/tests/mi			1.1339
+lib/libm/src/s_remquo.c				1.3,1.4
+tests/lib/libm/Makefile				1.51
+tests/lib/libm/t_remquo.c			1.1,1.2
+
+	libm: fix remquo() returning wrong quotient.
+	[gdt, ticket #912]
+
+etc/defaults/npf.boot.conf			1.4
+
+	NPF: allow DHCPv6 during early boot stage so that dhcpcd(8) does
+	not complain at boot when using the ia_pd option.
+	[nakayama, ticket #913]
+
+sys/dev/pci/ld_virtio.c				1.33-1.35
+sys/dev/pci/vioscsi.c				1.35
+sys/dev/pci/virtio.c				1.79-1.82
+sys/dev/pci/virtio_pci.c			1.45-1.54
+sys/dev/virtio/viocon.c				1.9
+
+	virtio(4): various fixes:
+	- PR 57981: ld@virtio: fix F_SEG_MAX negotiation
+	- PR 58338: ld@virtio: fix maximum size parameters
+	- virtio@pci: add support to arm{,64}be
+	- PR 58555: viocon: fix kernel panic during boot
+	- vioscsi: improve error handling for queue shortage
+	[rin, ticket #914]
+
+sys/arch/x86/x86/tsc.c				1.59,1.60
+
+	x86/tsc(4): mitigation for AMD errata 778.
+	[rin, ticket #915]
+
+sys/net/lagg/if_lagg.c				1.54,1.55,1.59,1.60,1.62-1.70
+sys/net/lagg/if_lagg_lacp.c			1.28-1.43
+sys/net/lagg/if_lagg_lacp.h			1.5
+sys/net/lagg/if_laggproto.c			1.7-1.16
+sys/net/lagg/if_laggproto.h			1.19,1.20
+tests/net/if_lagg/t_lagg.sh			1.11
+
+	lagg(4): various fixes to improve stability.
+	[rin, ticket #916]
+
+sys/altq/altq_cbq.c				1.40,1.41
+
+	altq: fix regressions on CBQ
+	[ozaki-r, ticket #917]
+
+sys/arch/x86/include/specialreg.h		1.209-1.211
+sys/arch/x86/x86/errata.c			1.28-1.30,1.33-1.35
+usr.sbin/cpuctl/arch/i386.c			1.144
+
+	x68: mitigation for AMD Zen2 errata 1474
+	[rin, ticket #919]
+
+tools/gmp/Makefile				1.6
+
+	PR 58707: build fix for tools/gmp on newer macOS toolchains.
+	[bad, ticket #921]
+
+sys/arch/aarch64/aarch64/cpu.c			1.79,1.80
+sys/arch/arm/include/cputypes.h			1.17
+usr.sbin/cpuctl/arch/aarch64.c			1.24
+
+	aarch64: PR 58704: add Ampere 1/1A CPU identification.
+	[jakllsch, ticket #922]
+
+external/cddl/osnet/sys/sys/types.h		1.21
+
+	PR 57807: fix cross-build on recent -current.
+	[rin, ticket #923]
+
+sys/rump/net/lib/libshmif/if_shmem.c		1.89
+
+	shmif(4): fix logics for media change and status.
+	[rin, ticket #924]
+
+share/man/man4/cgd.4				1.25
+
+	cgd(4): improve man page.
+	[nia, ticket #925]
+
+sys/arch/x86/x86/mpacpi.c			1.111
+
+	x86: PR 57737: remove a bogus check on X2APIC Id that cause issues on
+	recent systems.
+	[bouyer, ticket #927]
+
+share/man/man9/bus_dma.9			1.69
+sys/arch/sparc64/dev/pci_machdep.c		1.83
+sys/arch/sparc64/include/pci_machdep.h		1.31
+sys/arch/x86/x86/bus_dma.c			1.91
+sys/arch/xen/include/pci_machdep.h		1.24
+sys/arch/xen/xen/xpci_xenbus.c			1.29
+sys/dev/acpi/acpi_mcfg.c			1.29
+sys/dev/pci/pci.c				1.168 (patch)
+sys/dev/pci/pcivar.h				1.120
+sys/external/bsd/common/include/asm/barrier.h	1.20,1.21
+sys/external/bsd/common/include/linux/bitops.h	1.17
+sys/external/bsd/common/include/linux/printk.h	1.14
+sys/external/bsd/common/linux/linux_tasklet.c	1.12
+sys/external/bsd/drm2/amdgpu/files.amdgpu	1.31
+sys/external/bsd/drm2/dist/drm/amd/amdgpu/amdgpu.h 1.9
+sys/external/bsd/drm2/dist/drm/amd/amdgpu/amdgpu_acpi.c 1.6
+sys/external/bsd/drm2/dist/drm/amd/amdgpu/amdgpu_cik.c 1.7
+sys/external/bsd/drm2/dist/drm/amd/amdgpu/amdgpu_device.c 1.20,1.21
+sys/external/bsd/drm2/dist/drm/amd/amdgpu/amdgpu_gart.c 1.12
+sys/external/bsd/drm2/dist/drm/amd/amdgpu/amdgpu_si.c 1.5
+sys/external/bsd/drm2/dist/drm/amd/amdgpu/amdgpu_vi.c 1.4
+sys/external/bsd/drm2/dist/drm/amd/display/dc/core/amdgpu_dc_stream.c 1.3
+sys/external/bsd/drm2/dist/drm/amd/powerplay/hwmgr/amdgpu_hwmgr.c 1.3
+sys/external/bsd/drm2/dist/drm/amd/powerplay/hwmgr/amdgpu_smu7_hwmgr.c 1.5
+sys/external/bsd/drm2/dist/drm/drm_dp_helper.c	1.17
+sys/external/bsd/drm2/dist/drm/drm_gem.c	1.24,1.25
+sys/external/bsd/drm2/dist/drm/i915/display/intel_acpi.h 1.5
+sys/external/bsd/drm2/dist/drm/i915/display/intel_opregion.h 1.6
+sys/external/bsd/drm2/dist/drm/i915/gem/i915_gem_dmabuf.c 1.7
+sys/external/bsd/drm2/dist/drm/i915/gem/i915_gem_mman.c 1.23,1.26,1.27
+sys/external/bsd/drm2/dist/drm/i915/i915_drv.h	1.49
+sys/external/bsd/drm2/dist/drm/i915/i915_gem.h	1.8
+sys/external/bsd/drm2/dist/drm/nouveau/include/nvkm/core/device.h 1.10
+sys/external/bsd/drm2/dist/drm/nouveau/nouveau_acpi.c 1.5
+sys/external/bsd/drm2/dist/drm/nouveau/nouveau_acpi.h 1.4
+sys/external/bsd/drm2/dist/drm/nouveau/nouveau_display.c 1.6
+sys/external/bsd/drm2/dist/drm/nouveau/nouveau_drv.h 1.5
+sys/external/bsd/drm2/dist/drm/nouveau/nvkm/engine/device/nouveau_nvkm_engine_device_acpi.c 1.4
+sys/external/bsd/drm2/dist/drm/nouveau/nvkm/engine/device/nouveau_nvkm_engine_device_base.c 1.13
+sys/external/bsd/drm2/dist/drm/nouveau/nvkm/engine/device/nouveau_nvkm_engine_device_pci.c 1.12
+sys/external/bsd/drm2/dist/drm/nouveau/nvkm/engine/device/nouveau_nvkm_engine_device_tegra.c 1.4
+sys/external/bsd/drm2/dist/drm/nouveau/nvkm/engine/device/priv.h 1.4
+sys/external/bsd/drm2/dist/drm/nouveau/nvkm/engine/disp/nouveau_nvkm_engine_disp_sorgm200.c 1.3
+sys/external/bsd/drm2/dist/drm/nouveau/nvkm/subdev/bios/nouveau_nvkm_subdev_bios_shadowacpi.c 1.4
+sys/external/bsd/drm2/dist/drm/nouveau/nvkm/subdev/instmem/nouveau_nvkm_subdev_instmem_gk20a.c 1.10
+sys/external/bsd/drm2/dist/drm/nouveau/nvkm/subdev/mxm/nouveau_nvkm_subdev_mxm_base.c 1.5
+sys/external/bsd/drm2/dist/drm/nouveau/nvkm/subdev/pci/nouveau_nvkm_subdev_pci_pcie.c 1.4,1.5
+sys/external/bsd/drm2/dist/drm/radeon/radeon.h	1.12
+sys/external/bsd/drm2/dist/drm/radeon/radeon_acpi.c 1.5,1.6
+sys/external/bsd/drm2/dist/drm/radeon/radeon_bios.c 1.13,1.14
+sys/external/bsd/drm2/dist/drm/radeon/radeon_ci_dpm.c 1.7
+sys/external/bsd/drm2/dist/drm/radeon/radeon_cik.c 1.8
+sys/external/bsd/drm2/dist/drm/radeon/radeon_drv.h 1.5
+sys/external/bsd/drm2/dist/drm/radeon/radeon_evergreen.c 1.6
+sys/external/bsd/drm2/dist/drm/radeon/radeon_r600.c 1.7
+sys/external/bsd/drm2/dist/drm/radeon/radeon_rv770.c 1.3
+sys/external/bsd/drm2/dist/drm/radeon/radeon_si.c 1.6
+sys/external/bsd/drm2/dist/drm/radeon/radeon_si_dpm.c 1.9
+sys/external/bsd/drm2/drm/drm_cdevsw.c		1.31
+sys/external/bsd/drm2/drm/drm_gem_cma_helper.c	1.15
+sys/external/bsd/drm2/drm/drm_module.c		1.32
+sys/external/bsd/drm2/include/acpi/acpi_bus.h	1.1
+sys/external/bsd/drm2/include/acpi/video.h	1.3
+sys/external/bsd/drm2/include/linux/acpi.h	1.11
+sys/external/bsd/drm2/include/linux/interval_tree.h 1.14
+sys/external/bsd/drm2/include/linux/kref.h	1.14
+sys/external/bsd/drm2/include/linux/mxm-wmi.h	1.1
+sys/external/bsd/drm2/include/linux/nbsd-namespace-acpi.h 1.2
+sys/external/bsd/drm2/include/linux/pci.h	1.57,1.58
+sys/external/bsd/drm2/include/linux/smp.h	1.5
+sys/external/bsd/drm2/linux/linux_dma_buf.c	1.17
+sys/external/bsd/drm2/linux/linux_pci.c		1.26,1.30
+sys/external/bsd/drm2/linux/linux_sync_file.c	1.3
+sys/external/bsd/drm2/linux/linux_xa.c		1.4
+sys/external/bsd/drm2/nouveau/files.nouveau	1.40
+sys/external/bsd/drm2/pci/files.drmkms_pci	1.18
+sys/external/bsd/drm2/radeon/files.radeon	1.40
+sys/external/bsd/drm2/radeon/radeon_pci.c	1.23
+sys/external/bsd/drm2/ttm/ttm_bo_vm.c		1.23,1.28
+sys/modules/amdgpu/Makefile			1.9
+sys/modules/drmkms/drmkms_pci.h			1.1
+
+	drm: fix various issues
+	- PR 58133: X server crashes; radeon 5450; modesetting
+	- PR 58180: render nodes are busted
+	- PR 58210: linux_sync_file missing struct file::f_data initialization
+	- PR 58307: Slow/incremental updating of mouse cursor sprite
+	- PR 58308: x86 bus_dmamem_map lacks BUS_DMA_PREFETCHABLE support
+	- PR 58309: BUS_DMA_PREFETCHABLE is undocumented
+	- PR 58384: amdgpu maps wrong bar for pre-bonaire chips
+	- PR 58385: amdgpu_gart_map maps the same GPU vaddr over and over again
+	[rin, ticket #928]
+
+crypto/external/bsd/openssh/dist/kex.c		1.38
+
+	openssh: kex: do not pass NULL as %s for logit() in our local diff.
+	[rin, ticket #929]
+
+crypto/external/bsd/openssh/dist/pfilter.c	1.9
+distrib/sets/lists/base/shl.mi			1.987 (patch)
+distrib/sets/lists/comp/mi			1.2462
+distrib/sets/lists/debug/shl.mi			1.347 (patch)
+external/bsd/blocklist/README			1.3
+external/bsd/blocklist/bin/blocklistd.8		1.3
+external/bsd/blocklist/bin/blocklistd.c		1.5
+external/bsd/blocklist/bin/support.c		1.2
+external/bsd/blocklist/bin/support.h		1.2
+external/bsd/blocklist/include/bl.h		1.2
+external/bsd/blocklist/include/blocklist.h	1.3
+external/bsd/blocklist/lib/bl.c			1.3
+external/bsd/blocklist/lib/blocklist.c		1.3
+external/bsd/blocklist/lib/libblocklist.3	1.4
+external/bsd/blocklist/lib/libblocklist.3	1.5
+external/bsd/blocklist/lib/libblocklist.3	1.6
+external/bsd/blocklist/lib/shlib_version	1.2
+external/bsd/blocklist/libexec/blocklistd-helper 1.8
+lib/libc/gen/Makefile.inc			1.218
+lib/libc/gen/syslog.3				1.34
+lib/libc/gen/syslog.3				1.35
+lib/libc/gen/syslog_ss.c			1.4
+lib/libc/include/extern.h			1.30
+sys/sys/syslog.h				1.42
+
+	sshd(8): CVE-2024-6387: use vsyslog_ss() for logging via
+	blocklist(3).
+	[rin, ticket #930]
+
+crypto/external/bsd/openssh/dist/auth.c		1.37
+crypto/external/bsd/openssh/dist/auth2.c	1.30,1.32
+crypto/external/bsd/openssh/dist/monitor.c	1.44
+
+	sshd(8): fix spurious block for users with multiple public keys.
+	[rin, ticket #931]
+
+sys/netinet/tcp_input.c				1.441
+
+	tcp_reass: PR 58708: mitigate CVE-2018-6922 (SegmentSmack).
+	[rin, ticket #932]
+
+sys/crypto/sodium/sodium_selftest.h		1.1
+sys/crypto/sodium/sodium_selftest.h		1.2
+sys/external/isc/libsodium/conf/files.libsodium	1.7
+sys/external/isc/libsodium/include/assert.h	delete
+sys/external/isc/libsodium/include/core.h	1.2
+sys/external/isc/libsodium/include/crypto_verify_16.h 1.2
+sys/external/isc/libsodium/include/errno.h	delete
+sys/external/isc/libsodium/include/stdint.h	1.2
+sys/external/isc/libsodium/include/stdlib.h	1.2
+sys/external/isc/libsodium/include/string.h	1.2
+sys/external/isc/libsodium/src/sodium_module.c	1.2
+sys/external/isc/libsodium/src/sodium_selftest.c 1.1,1.2
+sys/modules/sodium/Makefile.sodmod		1.4
+sys/rump/kern/lib/libcrypto/Makefile		1.24
+
+	sodium(9): PR 58468: fix crypto_verify_16 and add self-tests.
+	[riastradh, ticket #933]
+
+sys/net/if_wg.c					1.75,1.77,1.79-1.132
+tests/net/if_wg/t_basic.sh			1.5,1.6
+tests/net/if_wg/t_misc.sh			1.13-1.16
+
+	wg(4): fix or at least improve on a host of issues:
+	- PR 55729: net/if_wg/t_misc:wg_rekey test case fails
+	- PR 56252: wg(4) state machine has race conditions
+	- PR 58463: if_wg does not work when idle.
+	- PR 58470: modunload if_wg crashes if no wgN interfaces have been
+	  created
+	- PR 58477: experimental wg(4) ALTQ support is probably buggy
+	- PR 58478: experimental wg(4) probably doesn't build with INET6-only
+	- PR 58479: experimental wg(4) uses 32-bit cookie secret, not 32-byte
+	  cookie secret
+	- PR 58480: experimental wg(4) sliding window logic has oopsie
+	- PR 58508: experimental wg(4) queues LIFO, not FIFO, pending first
+	  handshake
+	- PR 58510: experimental wg(4) lacks memory ordering between
+	  wg_count_dec and module unload
+	- PR 58520: experimental wg(4) lacks barriers around access to
+	  packet pending initiation
+	- PR 58521: experimental wg(4) may drop packet after minutes of quiet
+	- PR 58688: userland panic of kernel via wg(4)
+	[riastradh, ticket #934]
+
+lib/libc/gen/readdir.c				1.27
+
+	readdir(3): PR 57145: preserve errno on end-of-directory.
+	[riastradh, ticket #935]
+
+distrib/sets/lists/debug/module.md.amd64	1.15,1.16 (patch)
+distrib/sets/lists/debug/module.md.i386		1.9,1.10 (patch)
+distrib/sets/lists/man/mi			1.1785 (patch)
+distrib/sets/lists/modules/md.amd64		1.101,1.102 (patch)
+distrib/sets/lists/modules/md.i386		1.98,1.99 (patch)
+share/man/man4/Makefile				1.734 (patch)
+share/man/man4/acpihed.4			1.1,1.2 (patch), 1.3
+share/man/man4/apei.4				1.1,1.2 (patch), 1.3
+sys/arch/amd64/conf/ALL				1.185 (patch)
+sys/arch/amd64/conf/ALL				1.186 (patch)
+sys/arch/i386/conf/ALL				1.516 (patch)
+sys/arch/i386/conf/ALL				1.517 (patch)
+sys/dev/acpi/acpi_hed.c				1.1 (patch)
+sys/dev/acpi/apei.c				1.1-1.3 (patch)
+sys/dev/acpi/apei_bert.c			1.1 (patch)
+sys/dev/acpi/apei_bertvar.h			1.1 (patch)
+sys/dev/acpi/apei_cper.h			1.1 (patch)
+sys/dev/acpi/apei_cper.h			1.2 (patch)
+sys/dev/acpi/apei_einj.c			1.1-1.7 (patch)
+sys/dev/acpi/apei_einjvar.h			1.1 (patch)
+sys/dev/acpi/apei_erst.c			1.1-1.3 (patch)
+sys/dev/acpi/apei_erstvar.h			1.1 (patch)
+sys/dev/acpi/apei_hed.h				1.1 (patch)
+sys/dev/acpi/apei_hest.c			1.1-1.3 (patch)
+sys/dev/acpi/apei_hestvar.h			1.1 (patch)
+sys/dev/acpi/apei_interp.c			1.1-1.4 (patch)
+sys/dev/acpi/apei_interp.h			1.1,1.2 (patch)
+sys/dev/acpi/apei_mapreg.c			1.1-1.4 (patch)
+sys/dev/acpi/apei_mapreg.h			1.1 (patch)
+sys/dev/acpi/apei_reg.c				1.1-1.3 (patch)
+sys/dev/acpi/apei_reg.h				1.1-1.3 (patch)
+sys/dev/acpi/apeivar.h				1.1 (patch)
+sys/dev/acpi/files.acpi				1.131,1.132 (patch)
+sys/modules/Makefile				1.283,1.284 (patch)
+sys/modules/acpihed/Makefile			1.1 (patch)
+sys/modules/acpihed/acpihed.ioconf		1.1 (patch)
+sys/modules/apei/Makefile			1.1 (patch)
+sys/modules/apei/apei.ioconf			1.1 (patch)
+
+	apei(4): PR 58046: new driver for ACPI Platform Error Interfaces.
+	[riastradh, ticket #936]
+
+sys/dev/random.c				1.11
+sys/kern/kern_entropy.c				1.67-1.69
+sys/sys/entropy.h				1.5
+
+	entropy(9): PR 58646: fix bugs around signal delivery during
+	access to the entropy pool.
+	[riastradh, ticket #937]
+
+include/limits.h				1.44
+include/unistd.h				1.167
+lib/libc/gen/getentropy.3			1.7
+
+	getentropy(3): PR 58603: expose to POSIX.1-2024 applications.
+	[riastradh, ticket #938]
+
+distrib/sets/lists/debug/mi			1.446 (patch)
+distrib/sets/lists/debug/module.md.amd64	1.18 (patch)
+distrib/sets/lists/debug/module.md.i386		1.12 (patch)
+distrib/sets/lists/man/mi			1.1786 (patch)
+distrib/sets/lists/modules/md.amd64		1.103 (patch)
+distrib/sets/lists/modules/md.i386		1.100 (patch)
+distrib/sets/lists/tests/mi			1.1334 (patch)
+lib/libc/gen/Makefile.inc			1.219,1.220 (patch)
+lib/libc/gen/arc4random.3			1.22,1.23,1.34-1.38 (patch)
+lib/libc/gen/getentropy.3			1.8 (patch)
+lib/libc/include/arc4random.h			1.1 (patch)
+lib/libc/include/reentrant.h			1.22 (patch)
+share/man/man4/Makefile				1.735 (patch)
+share/man/man4/acpivmgenid.4			1.1-1.3 (patch), 1.4
+share/man/man4/rnd.4				1.42,1.44 (patch)
+sys/arch/amd64/conf/ALL				1.190 (patch)
+sys/arch/amd64/conf/GENERIC			1.614 (patch)
+sys/arch/evbarm/conf/GENERIC64			1.219 (patch)
+sys/arch/i386/conf/ALL				1.521 (patch)
+sys/arch/i386/conf/GENERIC			1.1258 (patch)
+sys/dev/acpi/acpi_vmgenid.c			1.1,1.2 (patch)
+sys/dev/acpi/files.acpi				1.133 (patch)
+sys/kern/kern_entropy.c				1.70,1.71 (patch)
+sys/modules/Makefile				1.292 (patch)
+sys/modules/acpivmgenid/Makefile		1.1 (patch)
+sys/modules/acpivmgenid/acpivmgenid.ioconf	1.1 (patch)
+sys/sys/entropy.h				1.6 (patch)
+tests/lib/libc/gen/Makefile			1.56 (patch)
+tests/lib/libc/gen/t_arc4random.c		1.1 (patch)
+
+	PR 58632: getentropy(2) and arc4random(3) do not reseed on VM fork
+
+	acpivmgenid(4): new driver for ACPI VM generation ID, a de facto
+	standard virtual device exposed by virtual machine hosts to notify
+	guests when the VM has been cloned and needs to be reseeded with
+	fresh entropy so the two clones have independent RNG outputs.
+
+	arc4random(3): reseed when the entropy epoch changes.
+	[riastradh, ticket #939]
+
+sys/arch/x86/pci/amdzentemp.c			1.21
+
+	amdzentemp(4): add support for CPU family 0x1a 
+	model 0x40...0x4f (Zen 5)
+	[msaitoh, ticket #940]
+
+sbin/cgdconfig/Makefile				1.23
+sbin/cgdconfig/cgdconfig.8			1.58,1.59
+sbin/cgdconfig/cgdconfig.c			1.62,1.63
+sbin/cgdconfig/params.c				1.35
+sbin/cgdconfig/params.h				1.15
+
+	cgdconfig(8): PR 58212: add zfs verification method.
+	[riastradh, ticket #941]
+
+share/man/man9/ts2timo.9			1.4,1.5
+sys/kern/subr_time.c				1.39
+
+	PR 58733: avoid ts2timo() clobbering its arg.
+	[kre, ticket #942]
+
+sys/kern/kern_resource.c			1.190,1.191
+sys/kern/subr_time.c				1.36,1.37
+sys/kern/subr_time.c				1.38
+sys/sys/resourcevar.h				1.58
+tests/lib/libc/sys/t_clock_gettime.c		1.4-1.6
+
+	clock_gettime(2): PR 57512: fix CLOCK_PROCESS/THREAD_CPUTIME_ID
+	so they are monotonic using the same calculation as getrusage.
+	[riastradh, ticket #943]
+
+include/limits.h				1.45
+
+	limits.h: PR 45435: add missing PTHREAD_STACK_MIN for POSIX
+	compliance.
+	[riastradh, ticket #945]
+
+lib/libc/sys/poll.2				1.38
+lib/libc/sys/select.2				1.44-1.46
+
+	select(2): PR 49999: update man page to clarify return values,
+	note when pselect(2) was added, and cite standards conformance.
+	[riastradh, ticket #946]
+
+distrib/sets/lists/comp/mi			1.2473
+lib/libc/locale/Makefile.inc			1.68
+lib/libc/locale/mbsrtowcs.3			1.13-1.15
+lib/libc/locale/wcsrtombs.3			1.14-1.16
+
+	mbsnrtowcs(3), wcsnrtombs(3): PR 52343: add man pages.
+	[riastradh, ticket #947]
+
+sys/sys/signal.h				1.76
+
+	signal.h: PR 55429: fix POSIX constant namespacing.
+	[riastradh, ticket #948]
+
+sys/sys/featuretest.h				1.13
+
+	sys/featuretest.h: PR 55577: make _XOPEN_SOURCE imply
+	_POSIX_C_SOURCE.
+	[riastradh, ticket #949]
+
+distrib/sets/lists/debug/mi			1.448
+distrib/sets/lists/tests/mi			1.1337
+include/math.h					1.71,1.72
+tests/lib/libm/Makefile				1.50
+tests/lib/libm/t_errhandling.c			1.1-1.3
+
+	math.h: PR 56234: add missing C99 definitions.
+	[riastradh, ticket #950]
+
+include/stdlib.h				1.126
+
+	stdlib.h: PR 56402: fix visibility of lldiv_t.
+	[riastradh, ticket #951]
+
+sys/sys/endian.h				1.32-1.35
+sys/sys/rbtree.h				1.9-1.11
+usr.sbin/tprof/tprof_top.c			1.10
+lib/libc/gen/fixunstfdi_ieee754.c		1.2
+lib/libc/gen/fixunstfsi_ieee754.c		1.3
+
+	sys/endian.h: PR 57806 + 57807: fix declaration visibility.
+	[riastradh, ticket #952]
+
+sys/conf/newvers.mk				1.3,1.4
+sys/conf/newvers.sh				1.63,1.64
+sys/conf/newvers_stand.mk			1.5
+sys/conf/newvers_stand.sh			1.10
+
+	sys/conf/newvers: PR 58220: use TOOL_AWK and TOOL_DATE instead
+	of the host system's tools.
+	[riastradh, ticket #953]
+
+include/stdlib.h				1.127
+
+	stdlib.h: PR 58741: fix visibility of reallocarray so it is
+	only exposed to POSIX 2024, NetBSD, or OpenBSD programs.
+	Programs built for, e.g., POSIX 2008 should not have reallocarray 
+	declared.
+	[riastradh, ticket #954]
+
+sys/arch/aarch64/aarch64/cpu.c			1.78
+sys/arch/aarch64/include/cpu.h			1.51
+
+	aarch64: PR 58572: count RNDRRS failure events and add dtrace probe.
+	[riastradh, ticket #955]
+
+tests/lib/libc/c063/t_fchmodat.c		1.4-1.7
+tests/lib/libc/c063/t_utimensat.c		1.7
+
+	tests/lib/libc/c063: fix bugs in various tests so they actually
+	test what is intended by doing ATF_CHECK(foo == bar) instead of
+	ATF_CHECK(foo = bar), plus some other associated fixes and
+	tidying.
+	[riastradh, ticket #956]
+
+tests/lib/libc/c063/t_utimensat.c		1.8,1.9
+
+	tests/lib/libc/c063: PR 58571: tidy up t_utimensat and skip the atime
+	tests on file systems mounted noatime.
+	[riastradh, ticket #957]
+
+distrib/sets/lists/base/mi			1.1351-1.1353
+external/mpl/mozilla-certdata/dist/certdata.txt up to 1.1.1.3
+external/mpl/mozilla-certdata/share/Makefile	1.5
+external/mpl/mozilla-certdata/share/certs/FIRMAPROFESIONAL_CA_ROOT-A_WEB.pem 1.1
+external/mpl/mozilla-certdata/share/certs/SecureSign_Root_CA12.pem 1.1
+external/mpl/mozilla-certdata/share/certs/SecureSign_Root_CA14.pem 1.1
+external/mpl/mozilla-certdata/share/certs/SecureSign_Root_CA15.pem 1.1
+external/mpl/mozilla-certdata/share/certs/TWCA_CYBER_Root_CA.pem 1.1
+external/mpl/mozilla-certdata/share/certs/TWCA_Global_Root_CA_G2.pem 1.1
+external/mpl/mozilla-certdata/share/email.trust	1.3
+external/mpl/mozilla-certdata/share/server.trust 1.3
+
+	mozilla-certdata: PR 58667: update to 2024-08-23.
+	[riastradh, ticket #958]
+
+tools/README					1.6
+
+	tools/README: PR 58699: fix path to nbtools_config.h.
+	[riastradh, ticket #959]
+
+external/gpl3/gcc/dist/gcc/regsub.cc		1.2
+	(applied to .../regsub.c)
+
+	tools/gcc: PR 58686: use <sys/types.h> for ssize_t (in our own
+	local patches to gcc) to fix tools on some platforms.
+	[riastradh, ticket #960]
+
+sys/arch/xen/xen/xen_clock.c			1.19
+
+	xen clock: PR 58362: avoid passing stack garbage to hypervisor in
+	XENPF_settime, by zeroing the op first.
+	[riastradh, ticket #961]
+
+lib/libc/compat/gen/compat_ldexp_ieee754.c	1.9
+
+	ldexp(3): PR 58347: avoid undefined behaviour in arithmetic overflow
+	on certain inputs.
+	[riastradh, ticket #962]
+
+distrib/sets/lists/debug/mi			1.435
+distrib/sets/lists/tests/mi			1.1315
+lib/libm/src/s_nexttoward.c			1.3
+tests/lib/libm/Makefile				1.49
+tests/lib/libm/t_next.c				1.1-1.7
+lib/libm/src/s_nextafter.c			1.17
+lib/libm/src/s_nexttowardf.c			1.4,1.5
+
+	nexttoward(3): PR 58236: fix for subnormal inputs so it goes in
+	the correct direction, not the opposite direction.
+	Provide nexttowardf() an d nexttowardl() on architectures
+	where they were missing before.
+	[riastradh, ticket #963]
+
+build.sh					1.378,1.379
+
+	build.sh: PR 58399: improve xsrc existence test.
+	[riastradh, ticket #964]
+
+sys/dev/usb/if_url.c				1.98
+
+	url(4): PR 58382: fix panic from buffer overrun.
+	[riastradh, ticket #965]
+
+share/man/man3/tm.3				1.6,1.7
+
+	tm(3): PR 58651: fix types of NetBSD extensions tm_gmtoff and
+	tm_zone in man page.
+	[riastradh, ticket #966]
+
+sys/dev/usb/if_ure.c				1.60
+sys/dev/usb/usbdevs				1.816
+sys/dev/usb/usbdevs.h				(regen)
+sys/dev/usb/usbdevs_data.h			(regen)
+
+	ure(4): PR 58250: add support for TP-Link UE300.
+	[riastradh, ticket #967]
+
+sys/dev/pci/if_bge.c				1.394
+sys/dev/pci/if_bgevar.h				1.41,1.42
+
+	bge(4): PR 58584: fix locking issues.
+	[skrll, ticket #968]
+
+share/man/man5/acct.5				1.11,1.12
+
+	acct(5): PR 58515: update man page to reflect reality.
+	[riastradh, ticket #969]
+
+distrib/sets/lists/tests/mi			1.1342 (patch)
+etc/mtree/NetBSD.dist.tests			1.208 (patch)
+tests/usr.bin/Makefile				1.42 (patch)
+tests/usr.bin/ftp/Makefile			1.1 (patch)
+tests/usr.bin/ftp/custom_headers.sh		1.1 (patch)
+tests/usr.bin/ftp/t_custom_headers.sh		1.1 (patch)
+usr.bin/ftp/cmds.c				1.142,1.143 (patch)
+usr.bin/ftp/complete.c				1.48 (patch)
+usr.bin/ftp/fetch.c				1.239-1.241 (patch)
+usr.bin/ftp/ftp.1				1.151-1.153,1.155-1.159 (patch)
+usr.bin/ftp/ftp.c				1.176,1.177 (patch)
+usr.bin/ftp/ftp_var.h				1.87-1.89 (patch)
+usr.bin/ftp/main.c				1.130-1.133 (patch)
+usr.bin/ftp/progressbar.c			1.25,1.26 (patch)
+usr.bin/ftp/ruserpass.c				1.34 (patch)
+usr.bin/ftp/ssl.c				1.17-1.20 (patch)
+usr.bin/ftp/util.c				1.168 (patch)
+
+	ftp(1): add options -b <buflen> and -H <httpheader>, bump the
+	default buffer length from 4 KiB to 16 KiB based on some empirical
+	data about real-world usage like sourceforge.net, clarify units in
+	various places, update and improve documentation.
+
+	PR 58581: ftp(1) should allow specifying header fields in http
+	requests
+	[riastradh, ticket #970]
+
+lib/libc/locale/global_locale.c			1.29
+lib/libc/locale/setlocale.c			1.66
+lib/libc/locale/setlocale_local.h		1.18
+lib/libc/string/Makefile.inc			1.90
+lib/libc/string/strerror_r.c			1.6
+
+	strerror(3): cache localized message catalog in memory rather than 
+	opening and re-parsing the file every time strerror(3) is called.
+	[riastradh, ticket #971]
+
+sys/kern/subr_devsw.c				1.52
+
+	devsw: PR 56816: don't leak reference on open d_devtounit failure.
+	[riastradh, ticket #972]
+
+sys/sys/cdefs.h					1.162
+
+	sys/cdefs.h: make various macros work more robustly.
+	[riastradh, ticket #973]
+
+sys/arch/evbppc/include/wii.h			1.9
+sys/arch/evbppc/wii/autoconf.c			1.3
+sys/arch/evbppc/wii/dev/avenc.c			1.2
+sys/arch/evbppc/wii/dev/ehci_hollywood.c	1.4
+sys/arch/evbppc/wii/dev/vireg.h			1.3
+sys/arch/evbppc/wii/dev/wiifb.c			1.7
+sys/arch/evbppc/wii/machdep.c			1.5,1.7
+sys/arch/evbppc/wii/wii_locore.S		1.3
+sys/arch/evbppc/wii/wii_mmuinit.S		1.2
+
+	evbppc: wii: support loading the kernel from boot2
+	[jmcneill, ticket #974]
+
+external/cddl/osnet/dev/dtrace/amd64/dtrace_asm.S	(apply patch)
+external/cddl/osnet/dev/dtrace/amd64/dtrace_subr.c	(apply patch)
+external/cddl/osnet/dev/dtrace/i386/dtrace_asm.S	(apply patch)
+external/cddl/osnet/dev/dtrace/i386/dtrace_subr.c	(apply patch)
+
+	dtrace: add support for SMAP.
+	[chs, ticket #975]
+
+distrib/sets/lists/base/shl.mi			1.988 (patch)
+distrib/sets/lists/comp/mi			1.2468-1.2470 (patch)
+distrib/sets/lists/debug/mi			1.442-1.444 (patch)
+distrib/sets/lists/debug/shl.mi			1.347 (patch)
+distrib/sets/lists/tests/mi			1.1330-1.1332 (patch)
+include/Makefile				1.147 (patch)
+include/uchar.h					1.1-1.6 (patch)
+lib/libc/include/namespace.h			1.204,1.205 (patch)
+lib/libc/locale/Makefile.inc			1.66,1.67 (patch)
+lib/libc/locale/c16rtomb.3			1.1-1.11 (patch)
+lib/libc/locale/c16rtomb.c			1.1-1.7 (patch)
+lib/libc/locale/c32rtomb.3			1.1-1.11 (patch)
+lib/libc/locale/c32rtomb.c			1.1-1.6 (patch)
+lib/libc/locale/c32rtomb.h			1.1,1.2 (patch)
+lib/libc/locale/c8rtomb.3			1.1-1.9 (patch)
+lib/libc/locale/c8rtomb.c			1.1-1.6 (patch)
+lib/libc/locale/mbrtoc16.3			1.1-1.10 (patch)
+lib/libc/locale/mbrtoc16.c			1.1-1.7 (patch)
+lib/libc/locale/mbrtoc32.3			1.1-1.9 (patch)
+lib/libc/locale/mbrtoc32.c			1.1-1.9 (patch)
+lib/libc/locale/mbrtoc32.h			1.1,1.2 (patch)
+lib/libc/locale/mbrtoc8.3			1.1-1.7 (patch)
+lib/libc/locale/mbrtoc8.c			1.1-1.8 (patch)
+lib/libc/shlib_version				1.297 (patch)
+share/man/man3/Makefile				1.93 (patch)
+share/man/man3/uchar.3				1.1,1.2 (patch)
+tests/lib/libc/locale/Makefile			1.15-1.18 (patch)
+tests/lib/libc/locale/t_c16rtomb.c		1.1-1.6 (patch)
+tests/lib/libc/locale/t_c32rtomb.c		1.1-1.7 (patch)
+tests/lib/libc/locale/t_mbrtoc16.c		1.1-1.3 (patch)
+tests/lib/libc/locale/t_mbrtoc32.c		1.1 (patch)
+tests/lib/libc/locale/t_mbrtoc8.c		1.1-1.3 (patch)
+tests/lib/libc/locale/t_uchar.c			1.1-1.3 (patch)
+
+	uchar.h: New header file for UTF-8/16/32<->multibyte conversion,
+	for compliance with C11 and C23, and functions in libc to
+	implement it.
+
+	PR 52374: <uchar.h> missing
+	PR 58601: uchar.h C23 compliance: char8_t, mbrtoc8, c8rtomb
+	PR 58612: c8rtomb/c16rtomb/c32rtomb yield suboptimal shift sequences
+	PR 58613: c*rtomb, mbrtoc* should have locale-parametric _l variants
+	PR 58615: incomplete c8rtomb, c16rtomb handles NUL termination wrong
+	PR 58618: mbrtocN(3) fails to keep shift state
+	[riastradh, ticket #976]
+
+sys/dev/sdmmc/sdmmc_cis.c			1.9
+
+	sdmmc(4): decode CISTPL_FUNCE of type PCMCIA_TPLFE_TYPE_LAN_NID
+	[jmcneill, ticket #977]
+
+bin/date/date.c					(apply patch)
+external/gpl2/gmake/dist/main.c			1.2
+sys/sys/signal.h				1.77
+sys/sys/signal.h				1.78
+usr.bin/sed/process.c				1.54
+
+	PR 58674: tools portability build "fixes".
+	[kre, ticket #978]
+
+tests/usr.bin/gzip/t_gzip.sh			1.2-1.4
+usr.bin/gzip/unlz.c				1.9,1.10
+usr.bin/gzip/unxz.c				1.9
+
+	gzip(1) PR 58223: fix lzip dict size, do not write to stdout.
+	[christos, ticket #979]
+
+external/bsd/fetch/dist/libfetch/common.c       up to 1.7
+external/bsd/fetch/dist/libfetch/common.h       up to 1.3
+external/bsd/fetch/dist/libfetch/fetch.3        up to 1.5
+external/bsd/fetch/dist/libfetch/ftp.c          up to 1.8
+external/bsd/fetch/dist/libfetch/http.c         up to 1.6
+
+	libfetch: PR 57179: fix pkg_install core dumps.
+	[wiz, ticket #980]
+
+sys/conf/newvers_stand.sh			1.11
+
+	sys/conf/newvers_stand.sh: PR 58220: use TOOL_AWK instead
+	of the host system's awk.
+	[riastradh, ticket #984]
+
+sys/dev/sdmmc/ld_sdmmc.c			1.44
+sys/dev/sdmmc/sdmmc_mem.c			1.76
+sys/dev/sdmmc/sdmmcreg.h			1.35
+sys/dev/sdmmc/sdmmcvar.h			1.37
+
+	sdmmc: Add support for SD card caches.
+	[jmcneill, ticket #985]
+
+sys/arch/evbppc/wii/machdep.c			1.8
+sys/arch/powerpc/powerpc/clock.c		1.19
+
+	Improve delay() accuracy on Nintendo Wii.
+	[jmcneill, ticket #986]
+
+sys/compat/netbsd32/netbsd32_compat_80.c	1.7,1.8 (patch)
+
+	compat_netbsd32_80: add missing _90 dependency.
+	[rin, ticket #987]
+
+sys/compat/netbsd32/netbsd32_ioctl.c		1.121
+sys/compat/netbsd32/netbsd32_ioctl.h		1.80
+
+	COMPAT_NETBSD32: PR 58235: add support for SIOCGIFDATA and
+	SIOCZIFDATA ioctls.
+	[rin, ticket #988]
+
+sys/compat/netbsd32/netbsd32_compat_16.c	1.5,1.6
+sys/compat/netbsd32/netbsd32_signal.c		1.54
+
+	COMPAT_NETBSD32: fixes for signal handling.
+	[rin, ticket #989]
+
+sys/crypto/cprng_fast/cprng_fast.c		1.20
+
+	cprng_fast(9): PR 58575: revert to asynchronous seeding in softint.
+	This should address deadlocks and LOCKDEBUG crashes.
+	[riastradh, ticket #990]
+
+distrib/sets/lists/base/shl.mi			1.980 (patch)
+distrib/sets/lists/debug/shl.mi			1.341 (patch)
+distrib/sets/lists/tests/mi		i	1.1320-1.1323,1.1327,1.1343 (patch)
+external/bsd/libarchive/dist/cpio/test/test_extract_cpio_absolute_paths.c up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_ar_mode.c up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_compat_tar_directory.c up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_compat_tar_directory_1.tar.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_pax_xattr_rht_security_selinux.c up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_pax_xattr_schily.c up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_compat_lzip_3.lz.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_compat_lzip_4.tlz.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_compat_zstd_2.tar.zst.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_pax_xattr_header.c up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_short_writes.c up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_pax_xattr_header_all.tar.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_pax_xattr_header_libarchive.tar.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_pax_xattr_header_schily.tar.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_filter_uudecode_base64_raw.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_filter_uudecode_raw.c up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_filter_uudecode_raw.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_7zip_deflate_arm64.7z.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_7zip_delta4_lzma1.7z.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_7zip_delta4_lzma2.7z.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_7zip_lzma2_arm.7z.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar_filter.c up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_7zip_lzma2_arm64.7z.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_7zip_packinfo_digests.7z.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_7zip_packinfo_digests.c up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_7zip_solid_zstd.7z.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_7zip_win_attrib.7z.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_7zip_zstd.7z.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_7zip_zstd_arm.7z.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_7zip_zstd_bcj.7z.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_7zip_zstd_nobcj.7z.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_lha_filename_utf16.c up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_lha_filename_utf16.lzh.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar5_arm_filter_on_window_boundary.rar.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar5_bad_window_sz_in_mltarc_file.rar.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar5_block_size_is_too_small.rar.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar5_decode_number_out_of_bounds_read.rar.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar5_different_solid_window_size.rar.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar5_different_window_size.rar.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar5_sfx.exe.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar5_different_winsize_on_merge.rar.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar5_window_buf_and_size_desync.rar.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar_filter.rar.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar_ppmd_use_after_free2.rar.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_tar_invalid_pax_size.c up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_tar_invalid_pax_size.tar.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_xar_doublelink.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_xar_doublelink.xar.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_7z_deflate.zip.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_write_disk_fixup.c up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_7z_lzma.zip.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_lzma_stream_end.zipx.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_zstd.zipx.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_zstd_multi.zipx.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_pax_xattr_rht_security_selinux.tar.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_pax_xattr_schily.tar.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_write_format_zip64_stream.c up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_write_format_zip_entry_size_unset.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_write_format_zip_stream.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_7zip_filename_encoding.c up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_archive_read.c up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_filter_gzip_recursive.c up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_filter_gzip_recursive.gz.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_7zip_extract_second.7z.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_huge_rpm.c up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_huge_rpm.rpm.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_iso_3.iso.Z.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar4_encrypted.rar.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar4_encrypted_filenames.rar.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar4_solid_encrypted.rar.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar4_solid_encrypted_filenames.rar.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar5_data_ready_pointer_leak.rar.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar5_encrypted.rar.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar5_encrypted_filenames.rar.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar5_solid_encrypted.rar.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar5_solid_encrypted_filenames.rar.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar_encryption.c up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_tar_pax_large_attr.c up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_tar_pax_large_attr.tar.Z.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_read_format_xar_duplicate_filename_node.xar.uu up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_write_disk_secure_noabsolutepaths.c up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/test/test_write_format_zip_windows_path.c up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/archive_read_support_filter_by_code.c up to 1.1.1.1
+external/bsd/libarchive/dist/libarchive/archive_write_set_format_cpio_binary.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_write_set_format_cpio_odc.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_write_set_format_private.h up to 1.1.1.1
+external/bsd/libarchive/dist/tar/test/test_option_group.c up to 1.1.1.2
+external/bsd/libarchive/dist/tar/test/test_option_ignore_zeros.c up to 1.1.1.2
+external/bsd/libarchive/dist/tar/test/test_option_owner.c up to 1.1.1.2
+external/bsd/libarchive/dist/tar/test/test_option_safe_writes.c up to 1.1.1.2
+external/bsd/libarchive/dist/tar/test/test_option_P.c up to 1.1.1.1
+external/bsd/libarchive/dist/CONTRIBUTING.md    delete
+external/bsd/libarchive/dist/libarchive/test/test_compat_pax_libarchive_2x.c delete
+external/bsd/libarchive/dist/libarchive/test/test_compat_pax_libarchive_2x.tar.Z.uu delete
+external/bsd/libarchive/dist/libarchive/test/test_read_pax_schily_xattr.c delete
+external/bsd/libarchive/dist/libarchive/test/test_read_pax_schily_xattr.tar.uu delete
+external/bsd/libarchive/prepare-import.sh       up to 1.6
+external/bsd/libarchive/dist/COPYING            up to 1.1.1.5
+external/bsd/libarchive/dist/NEWS               up to 1.1.1.8
+external/bsd/libarchive/dist/README.md          up to 1.1.1.3
+external/bsd/libarchive/dist/cat/bsdcat.1       up to 1.1.1.3
+external/bsd/libarchive/dist/cat/bsdcat.c       up to 1.1.1.4
+external/bsd/libarchive/dist/cat/bsdcat.h       up to 1.1.1.3
+external/bsd/libarchive/dist/cat/bsdcat_platform.h up to 1.1.1.3
+external/bsd/libarchive/dist/cat/cmdline.c      up to 1.1.1.3
+external/bsd/libarchive/dist/cat/test/list.h    up to 1.1.1.2
+external/bsd/libarchive/dist/cat/test/test.h    up to 1.1.1.3
+external/bsd/libarchive/dist/cat/test/test_0.c  up to 1.3
+external/bsd/libarchive/dist/cat/test/test_empty_gz.c up to 1.1.1.2
+external/bsd/libarchive/dist/cat/test/test_empty_lz4.c up to 1.1.1.2
+external/bsd/libarchive/dist/cat/test/test_empty_xz.c up to 1.1.1.2
+external/bsd/libarchive/dist/cat/test/test_empty_zstd.c up to 1.1.1.2
+external/bsd/libarchive/dist/cat/test/test_error.c up to 1.1.1.2
+external/bsd/libarchive/dist/cat/test/test_error_mixed.c up to 1.1.1.2
+external/bsd/libarchive/dist/cat/test/test_expand_Z.c up to 1.1.1.2
+external/bsd/libarchive/dist/cat/test/test_expand_bz2.c up to 1.1.1.2
+external/bsd/libarchive/dist/cat/test/test_expand_gz.c up to 1.1.1.2
+external/bsd/libarchive/dist/cat/test/test_expand_lz4.c up to 1.1.1.2
+external/bsd/libarchive/dist/cat/test/test_expand_mixed.c up to 1.1.1.2
+external/bsd/libarchive/dist/cat/test/test_expand_plain.c up to 1.1.1.2
+external/bsd/libarchive/dist/cat/test/test_expand_xz.c up to 1.1.1.2
+external/bsd/libarchive/dist/cat/test/test_expand_zstd.c up to 1.1.1.2
+external/bsd/libarchive/dist/cat/test/test_help.c up to 1.1.1.2
+external/bsd/libarchive/dist/cat/test/test_stdin.c up to 1.1.1.2
+external/bsd/libarchive/dist/cat/test/test_version.c up to 1.1.1.2
+external/bsd/libarchive/dist/cpio/bsdcpio.1     up to 1.1.1.6
+external/bsd/libarchive/dist/cpio/cmdline.c     up to 1.1.1.6
+external/bsd/libarchive/dist/cpio/cpio.c        up to 1.1.1.6
+external/bsd/libarchive/dist/cpio/cpio.h        up to 1.1.1.6
+external/bsd/libarchive/dist/cpio/cpio_platform.h up to 1.1.1.5
+external/bsd/libarchive/dist/cpio/cpio_windows.c up to 1.1.1.4
+external/bsd/libarchive/dist/cpio/cpio_windows.h up to 1.1.1.4
+external/bsd/libarchive/dist/cpio/test/test.h   up to 1.1.1.6
+external/bsd/libarchive/dist/cpio/test/test_0.c up to 1.1.1.5
+external/bsd/libarchive/dist/cpio/test/test_basic.c up to 1.4
+external/bsd/libarchive/dist/cpio/test/test_cmdline.c up to 1.1.1.3
+external/bsd/libarchive/dist/cpio/test/test_extract_cpio_Z.c up to 1.1.1.3
+external/bsd/libarchive/dist/cpio/test/test_extract_cpio_bz2.c up to 1.1.1.3
+external/bsd/libarchive/dist/cpio/test/test_extract_cpio_grz.c up to 1.1.1.3
+external/bsd/libarchive/dist/cpio/test/test_extract_cpio_gz.c up to 1.1.1.3
+external/bsd/libarchive/dist/cpio/test/test_extract_cpio_lrz.c up to 1.1.1.3
+external/bsd/libarchive/dist/cpio/test/test_extract_cpio_lz.c up to 1.1.1.3
+external/bsd/libarchive/dist/cpio/test/test_extract_cpio_lz4.c up to 1.1.1.3
+external/bsd/libarchive/dist/cpio/test/test_extract_cpio_lzma.c up to 1.1.1.3
+external/bsd/libarchive/dist/cpio/test/test_extract_cpio_lzo.c up to 1.1.1.3
+external/bsd/libarchive/dist/cpio/test/test_extract_cpio_xz.c up to 1.1.1.3
+external/bsd/libarchive/dist/cpio/test/test_extract_cpio_zstd.c up to 1.1.1.3
+external/bsd/libarchive/dist/cpio/test/test_format_newc.c up to 1.5
+external/bsd/libarchive/dist/cpio/test/test_gcpio_compat.c up to 1.1.1.5
+external/bsd/libarchive/dist/cpio/test/test_gcpio_compat_ref.bin.uu up to 1.1.1.2
+external/bsd/libarchive/dist/cpio/test/test_gcpio_compat_ref.crc.uu up to 1.1.1.2
+external/bsd/libarchive/dist/cpio/test/test_gcpio_compat_ref.newc.uu up to 1.1.1.2
+external/bsd/libarchive/dist/cpio/test/test_gcpio_compat_ref.ustar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/cpio/test/test_missing_file.c up to 1.1.1.3
+external/bsd/libarchive/dist/cpio/test/test_option_0.c up to 1.1.1.3
+external/bsd/libarchive/dist/cpio/test/test_option_B_upper.c up to 1.1.1.3
+external/bsd/libarchive/dist/cpio/test/test_option_C_upper.c up to 1.1.1.3
+external/bsd/libarchive/dist/cpio/test/test_option_J_upper.c up to 1.1.1.4
+external/bsd/libarchive/dist/cpio/test/test_option_L_upper.c up to 1.1.1.4
+external/bsd/libarchive/dist/cpio/test/test_option_Z_upper.c up to 1.1.1.5
+external/bsd/libarchive/dist/cpio/test/test_option_a.c up to 1.1.1.5
+external/bsd/libarchive/dist/cpio/test/test_option_b64encode.c up to 1.1.1.4
+external/bsd/libarchive/dist/cpio/test/test_option_c.c up to 1.1.1.6
+external/bsd/libarchive/dist/cpio/test/test_option_d.c up to 1.1.1.4
+external/bsd/libarchive/dist/cpio/test/test_option_f.c up to 1.1.1.4
+external/bsd/libarchive/dist/cpio/test/test_option_f.cpio.uu up to 1.1.1.2
+external/bsd/libarchive/dist/cpio/test/test_option_grzip.c up to 1.1.1.4
+external/bsd/libarchive/dist/cpio/test/test_option_help.c up to 1.1.1.4
+external/bsd/libarchive/dist/cpio/test/test_option_l.c up to 1.1.1.3
+external/bsd/libarchive/dist/cpio/test/test_option_lrzip.c up to 1.1.1.4
+external/bsd/libarchive/dist/cpio/test/test_option_lz4.c up to 1.1.1.4
+external/bsd/libarchive/dist/cpio/test/test_option_lzma.c up to 1.1.1.4
+external/bsd/libarchive/dist/cpio/test/test_option_lzop.c up to 1.1.1.4
+external/bsd/libarchive/dist/cpio/test/test_option_m.c up to 1.1.1.4
+external/bsd/libarchive/dist/cpio/test/test_option_m.cpio.uu up to 1.1.1.2
+external/bsd/libarchive/dist/cpio/test/test_option_passphrase.c up to 1.1.1.3
+external/bsd/libarchive/dist/cpio/test/test_option_t.c up to 1.1.1.6
+external/bsd/libarchive/dist/cpio/test/test_option_t.cpio.uu up to 1.1.1.2
+external/bsd/libarchive/dist/cpio/test/test_option_t.stdout.uu up to 1.1.1.2
+external/bsd/libarchive/dist/cpio/test/test_option_tv.stdout.uu up to 1.1.1.3
+external/bsd/libarchive/dist/cpio/test/test_option_u.c up to 1.1.1.5
+external/bsd/libarchive/dist/cpio/test/test_option_uuencode.c up to 1.1.1.4
+external/bsd/libarchive/dist/cpio/test/test_option_version.c up to 1.1.1.4
+external/bsd/libarchive/dist/cpio/test/test_option_xz.c up to 1.1.1.4
+external/bsd/libarchive/dist/cpio/test/test_option_y.c up to 1.1.1.6
+external/bsd/libarchive/dist/cpio/test/test_option_z.c up to 1.1.1.6
+external/bsd/libarchive/dist/cpio/test/test_option_zstd.c up to 1.1.1.3
+external/bsd/libarchive/dist/cpio/test/test_owner_parse.c up to 1.1.1.6
+external/bsd/libarchive/dist/cpio/test/test_passthrough_dotdot.c up to 1.1.1.3
+external/bsd/libarchive/dist/cpio/test/test_passthrough_reverse.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive.h up to 1.7
+external/bsd/libarchive/dist/libarchive/archive_acl.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_acl_private.h up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_blake2.h up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_blake2_impl.h up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_blake2s_ref.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_blake2sp_ref.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_check_magic.c up to 1.4
+external/bsd/libarchive/dist/libarchive/archive_cmdline.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_cmdline_private.h up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_crc32.h up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_cryptor.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_cryptor_private.h up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_digest.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_digest_private.h up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_disk_acl_freebsd.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_disk_acl_linux.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_disk_acl_sunos.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_endian.h up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_entry.3 up to 1.6
+external/bsd/libarchive/dist/libarchive/archive_entry.c up to 1.1.1.6
+external/bsd/libarchive/dist/libarchive/archive_entry.h up to 1.1.1.6
+external/bsd/libarchive/dist/libarchive/archive_entry_acl.3 up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_entry_copy_bhfi.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_entry_copy_stat.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_entry_link_resolver.c up to 1.1.1.5
+external/bsd/libarchive/dist/libarchive/archive_entry_locale.h up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_entry_misc.3 up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_entry_paths.3 up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_entry_perms.3 up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_entry_private.h up to 1.1.1.6
+external/bsd/libarchive/dist/libarchive/archive_entry_sparse.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_entry_stat.3 up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_entry_stat.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_entry_strmode.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_entry_time.3 up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_entry_xattr.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_getdate.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_getdate.h up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_hmac.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_hmac_private.h up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_match.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_openssl_evp_private.h up to 1.5
+external/bsd/libarchive/dist/libarchive/archive_openssl_hmac_private.h up to 1.6
+external/bsd/libarchive/dist/libarchive/archive_options.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_options_private.h up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_pack_dev.c up to 1.4
+external/bsd/libarchive/dist/libarchive/archive_pack_dev.h up to 1.4
+external/bsd/libarchive/dist/libarchive/archive_pathmatch.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_pathmatch.h up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_platform.h up to 1.1.1.5
+external/bsd/libarchive/dist/libarchive/archive_platform_acl.h up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_platform_xattr.h up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_ppmd7.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_ppmd7_private.h up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_ppmd8.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_ppmd8_private.h up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_ppmd_private.h up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_private.h up to 1.4
+external/bsd/libarchive/dist/libarchive/archive_random.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_random_private.h up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_rb.h up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_read.3 up to 1.7
+external/bsd/libarchive/dist/libarchive/archive_read.c up to 1.4
+external/bsd/libarchive/dist/libarchive/archive_read_add_passphrase.3 up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_read_add_passphrase.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_read_append_filter.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_read_data.3 up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_read_data_into_fd.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_read_disk.3 up to 1.6
+external/bsd/libarchive/dist/libarchive/archive_read_disk_entry_from_file.c up to 1.8
+external/bsd/libarchive/dist/libarchive/archive_read_disk_posix.c up to 1.5
+external/bsd/libarchive/dist/libarchive/archive_read_disk_private.h up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_read_disk_set_standard_lookup.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_read_disk_windows.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_read_extract.3 up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_read_extract.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_read_extract2.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_read_filter.3 up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_read_format.3 up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_read_free.3 up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_read_header.3 up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_read_new.3 up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_read_open.3 up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_read_open_fd.c up to 1.1.1.6
+external/bsd/libarchive/dist/libarchive/archive_read_open_file.c up to 1.1.1.6
+external/bsd/libarchive/dist/libarchive/archive_read_open_filename.c up to 1.4
+external/bsd/libarchive/dist/libarchive/archive_read_open_memory.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_read_private.h up to 1.1.1.5
+external/bsd/libarchive/dist/libarchive/archive_read_set_format.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_read_set_options.3 up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_read_set_options.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_read_support_filter_all.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_read_support_filter_bzip2.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_read_support_filter_compress.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_read_support_filter_grzip.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_read_support_filter_gzip.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_read_support_filter_lrzip.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_read_support_filter_lz4.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_read_support_filter_lzop.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_read_support_filter_none.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_read_support_filter_program.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_read_support_filter_rpm.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_read_support_filter_uu.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_read_support_filter_xz.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_read_support_filter_zstd.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_read_support_format_7zip.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_read_support_format_all.c up to 1.1.1.5
+external/bsd/libarchive/dist/libarchive/archive_read_support_format_ar.c up to 1.1.1.6
+external/bsd/libarchive/dist/libarchive/archive_read_support_format_by_code.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_read_support_format_cab.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_read_support_format_cpio.c up to 1.1.1.6
+external/bsd/libarchive/dist/libarchive/archive_read_support_format_empty.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_read_support_format_iso9660.c up to 1.6
+external/bsd/libarchive/dist/libarchive/archive_read_support_format_lha.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_read_support_format_mtree.c up to 1.4
+external/bsd/libarchive/dist/libarchive/archive_read_support_format_rar.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_read_support_format_rar5.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_read_support_format_raw.c up to 1.1.1.5
+external/bsd/libarchive/dist/libarchive/archive_read_support_format_tar.c up to 1.1.1.6
+external/bsd/libarchive/dist/libarchive/archive_read_support_format_warc.c up to 1.3
+external/bsd/libarchive/dist/libarchive/archive_read_support_format_xar.c up to 1.4
+external/bsd/libarchive/dist/libarchive/archive_read_support_format_zip.c up to 1.1.1.7
+external/bsd/libarchive/dist/libarchive/archive_string.c up to 1.1.1.6
+external/bsd/libarchive/dist/libarchive/archive_string.h up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_string_composition.h up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_string_sprintf.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_util.3 up to 1.4
+external/bsd/libarchive/dist/libarchive/archive_util.c up to 1.4
+external/bsd/libarchive/dist/libarchive/archive_version_details.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_virtual.c up to 1.1.1.5
+external/bsd/libarchive/dist/libarchive/archive_windows.c up to 1.1.1.6
+external/bsd/libarchive/dist/libarchive/archive_windows.h up to 1.1.1.7
+external/bsd/libarchive/dist/libarchive/archive_write.3 up to 1.8
+external/bsd/libarchive/dist/libarchive/archive_write.c up to 1.1.1.6
+external/bsd/libarchive/dist/libarchive/archive_write_add_filter.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_write_add_filter_b64encode.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_write_add_filter_by_name.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_write_add_filter_bzip2.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_write_add_filter_compress.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_write_add_filter_grzip.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_write_add_filter_gzip.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_write_add_filter_lrzip.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_write_add_filter_lz4.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_write_add_filter_lzop.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_write_add_filter_none.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_write_add_filter_program.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_write_add_filter_uuencode.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_write_add_filter_xz.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_write_add_filter_zstd.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_write_blocksize.3 up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_write_data.3 up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_write_disk.3 up to 1.6
+external/bsd/libarchive/dist/libarchive/archive_write_disk_posix.c up to 1.8
+external/bsd/libarchive/dist/libarchive/archive_write_disk_private.h up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_write_disk_set_standard_lookup.c up to 1.1.1.6
+external/bsd/libarchive/dist/libarchive/archive_write_disk_windows.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_write_filter.3 up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/archive_write_finish_entry.3 up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_write_format.3 up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_write_free.3 up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_write_header.3 up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_write_new.3 up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_write_open.3 up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_write_open_fd.c up to 1.1.1.5
+external/bsd/libarchive/dist/libarchive/archive_write_open_file.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_write_open_filename.c up to 1.1.1.5
+external/bsd/libarchive/dist/libarchive/archive_write_open_memory.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_write_private.h up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_write_set_format.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_write_set_format_7zip.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_write_set_format_ar.c up to 1.6
+external/bsd/libarchive/dist/libarchive/archive_write_set_format_by_name.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_write_set_format_cpio.c up to 1.1.1.5
+external/bsd/libarchive/dist/libarchive/archive_write_set_format_cpio_newc.c up to 1.1.1.6
+external/bsd/libarchive/dist/libarchive/archive_write_set_format_filter_by_ext.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_write_set_format_gnutar.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_write_set_format_iso9660.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_write_set_format_mtree.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_write_set_format_pax.c up to 1.1.1.6
+external/bsd/libarchive/dist/libarchive/archive_write_set_format_raw.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_write_set_format_shar.c up to 1.6
+external/bsd/libarchive/dist/libarchive/archive_write_set_format_ustar.c up to 1.6
+external/bsd/libarchive/dist/libarchive/archive_write_set_format_v7tar.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_write_set_format_warc.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_write_set_format_xar.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/archive_write_set_format_zip.c up to 1.1.1.5
+external/bsd/libarchive/dist/libarchive/archive_write_set_options.3 up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_write_set_options.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_write_set_passphrase.3 up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_write_set_passphrase.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/archive_xxhash.h up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/cpio.5  up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/filter_fork.h up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/filter_fork_posix.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/filter_fork_windows.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/libarchive-formats.5 up to 1.4
+external/bsd/libarchive/dist/libarchive/libarchive.3 up to 1.4
+external/bsd/libarchive/dist/libarchive/libarchive_changes.3 up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/libarchive_internals.3 up to 1.4
+external/bsd/libarchive/dist/libarchive/mtree.5 up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/tar.5   up to 1.4
+external/bsd/libarchive/dist/libarchive/xxhash.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/README up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/read_open_memory.c up to 1.1.1.5
+external/bsd/libarchive/dist/libarchive/test/test_acl_nfs4.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_acl_pax.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_acl_platform_nfs4.c up to 1.3
+external/bsd/libarchive/dist/libarchive/test/test_acl_platform_posix1e.c up to 1.3
+external/bsd/libarchive/dist/libarchive/test/test_acl_posix1e.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_acl_text.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_archive_api_feature.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_archive_clear_error.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_archive_cmdline.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_archive_getdate.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_archive_match_owner.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_archive_match_path.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_archive_match_time.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_archive_pathmatch.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_archive_read_add_passphrase.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_archive_read_close_twice.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_archive_read_close_twice_open_fd.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_archive_read_close_twice_open_filename.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_archive_read_multiple_data_objects.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_archive_read_next_header_empty.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_archive_read_next_header_raw.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_archive_read_open2.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_archive_read_set_filter_option.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_archive_read_set_format_option.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_archive_read_set_option.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_archive_read_set_options.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_archive_read_support.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_archive_set_error.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_archive_string.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_archive_string_conversion.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_archive_string_conversion.txt.Z.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_archive_write_add_filter_by_name.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_archive_write_set_filter_option.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_archive_write_set_format_by_name.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_archive_write_set_format_filter_by_ext.c up to 1.3
+external/bsd/libarchive/dist/libarchive/test/test_archive_write_set_format_option.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_archive_write_set_option.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_archive_write_set_options.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_archive_write_set_passphrase.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_bad_fd.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_compat_bzip2.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_compat_bzip2_1.tbz.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_compat_bzip2_2.tbz.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_compat_cpio.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_compat_cpio_1.cpio.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_compat_gtar.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_compat_gtar_1.tar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_compat_gtar_2.tar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_compat_gzip.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_compat_gzip_1.tgz.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_compat_gzip_2.tgz.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_compat_lz4.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_compat_lzip.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_compat_lzma.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_compat_lzma_1.tlz.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_compat_lzma_2.tlz.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_compat_lzma_3.tlz.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_compat_lzop.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_compat_mac.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_compat_perl_archive_tar.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_compat_plexus_archiver_tar.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_compat_solaris_pax_sparse.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_compat_solaris_tar_acl.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_compat_star_acl.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_compat_tar_hardlink.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_compat_tar_hardlink_1.tar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_compat_uudecode.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_compat_uudecode_large.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_compat_xz.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_compat_xz_1.txz.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_compat_zip.c up to 1.3
+external/bsd/libarchive/dist/libarchive/test/test_compat_zip_1.zip.uu up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_compat_zip_8.zip.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_compat_zstd.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_empty_write.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_entry.c up to 1.1.1.7
+external/bsd/libarchive/dist/libarchive/test/test_entry_strmode.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_extattr_freebsd.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_filter_count.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_fuzz.c up to 1.4
+external/bsd/libarchive/dist/libarchive/test/test_fuzz_1.iso.Z.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_gnutar_filename_encoding.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_link_resolver.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_open_failure.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_open_fd.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_open_file.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_open_filename.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_pax_filename_encoding.c up to 1.1.1.5
+external/bsd/libarchive/dist/libarchive/test/test_pax_filename_encoding.tar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_rar_multivolume_single_file.part1.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_rar_multivolume_single_file.part2.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_rar_multivolume_single_file.part3.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_rar_multivolume_uncompressed_files.part01.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_rar_multivolume_uncompressed_files.part02.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_rar_multivolume_uncompressed_files.part03.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_rar_multivolume_uncompressed_files.part04.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_rar_multivolume_uncompressed_files.part05.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_rar_multivolume_uncompressed_files.part06.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_rar_multivolume_uncompressed_files.part07.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_rar_multivolume_uncompressed_files.part08.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_rar_multivolume_uncompressed_files.part09.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_rar_multivolume_uncompressed_files.part10.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_data_large.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_read_disk.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_disk_directory_traversals.c up to 1.4
+external/bsd/libarchive/dist/libarchive/test/test_read_disk_entry_from_file.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_extract.c up to 1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_file_nonexistent.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_filter_lrzip.tar.lrz.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_filter_program.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_filter_program_signature.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_filter_uudecode.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_7zip.c up to 1.4
+external/bsd/libarchive/dist/libarchive/test/test_read_format_7zip_copy.7z.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_7zip_encryption_data.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_7zip_encryption_header.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_7zip_encryption_partially.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_7zip_malformed.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_ar.ar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_ar.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_read_format_cab.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_cab_filename.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_cab_filename_cp932.cab.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_cpio_afio.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_cpio_bin.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_read_format_cpio_bin_Z.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_read_format_cpio_bin_be.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_cpio_bin_be.cpio.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_cpio_bin_bz2.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_read_format_cpio_bin_gz.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_read_format_cpio_bin_le.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_cpio_bin_lzip.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_cpio_bin_lzma.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_cpio_bin_xz.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_cpio_filename.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_cpio_filename_cp866.cpio.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_cpio_filename_eucjp.cpio.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_cpio_filename_koi8r.cpio.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_cpio_filename_utf8_jp.cpio.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_cpio_filename_utf8_ru.cpio.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_cpio_odc.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_read_format_cpio_svr4_gzip.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_read_format_cpio_svr4c_Z.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_read_format_empty.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_read_format_gtar_filename.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_gtar_filename_cp866.tar.Z.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_gtar_filename_eucjp.tar.Z.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_gtar_filename_koi8r.tar.Z.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_gtar_gz.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_read_format_gtar_lzma.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_gtar_sparse.c up to 1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_gtar_sparse_1_13.tar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_gtar_sparse_1_17.tar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_gtar_sparse_1_17_posix00.tar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_gtar_sparse_1_17_posix01.tar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_gtar_sparse_1_17_posix10.tar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_gtar_sparse_1_17_posix10_modified.tar.uu up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_gtar_sparse_skip_entry.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_gtar_sparse_skip_entry.tar.Z.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_iso.iso.Z.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_iso_Z.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_iso_joliet.iso.Z.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_iso_joliet_long.iso.Z.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_iso_joliet_rockridge.iso.Z.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_iso_multi_extent.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_iso_multi_extent.iso.Z.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_iso_rockridge.iso.Z.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_iso_rockridge_ce.iso.Z.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_iso_rockridge_new.iso.Z.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_iso_rockridge_rr_moved.iso.Z.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_iso_xorriso.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_iso_zisofs.iso.Z.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_isojoliet_bz2.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_isojoliet_long.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_isojoliet_rr.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_isojoliet_versioned.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_isorr_bz2.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_read_format_isorr_ce.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_isorr_new_bz2.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_isorr_rr_moved.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_isozisofs_bz2.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_lha.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_lha_bugfix_0.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_lha_filename.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_lha_filename_cp932.lzh.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_mtree.c up to 1.1.1.6
+external/bsd/libarchive/dist/libarchive/test/test_read_format_mtree.mtree.uu up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_pax_bz2.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar5.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar5_compressed.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar5_multiarchive.part01.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar5_multiarchive.part02.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar5_multiarchive.part03.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar5_multiarchive.part04.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar5_multiarchive.part05.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar5_multiarchive.part06.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar5_multiarchive.part07.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar5_multiarchive.part08.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar5_multiple_files.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar5_multiple_files_solid.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar5_stored.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar_binary_data.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar_compress_best.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar_compress_normal.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar_encryption_data.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar_encryption_header.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar_encryption_partially.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar_invalid1.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar_multi_lzss_blocks.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar_multivolume.part0001.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar_multivolume.part0002.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar_multivolume.part0003.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar_multivolume.part0004.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar_noeof.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar_ppmd_lzss_conversion.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar_sfx.exe.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar_subblock.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_rar_windows.rar.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_raw.bufr.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_raw.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_read_format_raw.data.Z.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_raw.data.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_tar.c up to 1.1.1.5
+external/bsd/libarchive/dist/libarchive/test/test_read_format_tar_concatenated.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_tar_empty_filename.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_read_format_tar_empty_filename.tar.uu up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_tar_empty_pax.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_tar_empty_pax.tar.Z.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_tar_empty_with_gnulabel.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_tar_filename.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_tbz.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_read_format_tgz.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_read_format_tlz.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_txz.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_tz.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_read_format_ustar_filename.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_warc.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_xar.c up to 1.1.1.5
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip.c up to 1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_7075_utf8_paths.c up to 1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_bzip2.zipx.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_comment_stored.c up to 1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_encryption_data.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_encryption_header.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_encryption_partially.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_filename.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_filename_cp866.zip.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_filename_cp932.zip.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_filename_koi8r.zip.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_filename_utf8_jp.zip.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_filename_utf8_ru.zip.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_filename_utf8_ru2.zip.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_high_compression.c up to 1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_jar.c up to 1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_lzma.zipx.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_mac_metadata.c up to 1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_malformed.c up to 1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_nested.c up to 1.4
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_nofiletype.c up to 1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_padded.c up to 1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_ppmd8.zipx.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_sfx.c up to 1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_traditional_encryption_data.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_winzip_aes.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_winzip_aes128.zip.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_winzip_aes256.zip.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_winzip_aes256_stored.zip.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_winzip_aes_large.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_with_invalid_traditional_eocd.c up to 1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_with_invalid_traditional_eocd.zip.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_format_zip_zip64.c up to 1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_large.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_read_large_splitted_rar_aa.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_large_splitted_rar_ab.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_large_splitted_rar_ac.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_large_splitted_rar_ad.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_large_splitted_rar_ae.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_pax_truncated.c up to 1.3
+external/bsd/libarchive/dist/libarchive/test/test_read_position.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_read_set_format.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_splitted_rar_aa.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_splitted_rar_ab.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_splitted_rar_ac.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_splitted_rar_ad.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_read_truncated.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_read_truncated_filter.c up to 1.4
+external/bsd/libarchive/dist/libarchive/test/test_sparse_basic.c up to 1.5
+external/bsd/libarchive/dist/libarchive/test/test_splitted_rar_seek_support_aa.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_splitted_rar_seek_support_ab.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_splitted_rar_seek_support_ac.uu up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_tar_filenames.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_tar_large.c up to 1.1.1.5
+external/bsd/libarchive/dist/libarchive/test/test_ustar_filename_encoding.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_ustar_filenames.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_write_disk.c up to 1.3
+external/bsd/libarchive/dist/libarchive/test/test_write_disk_appledouble.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_write_disk_failures.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_write_disk_hardlink.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_write_disk_hfs_compression.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_write_disk_lookup.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_write_disk_mac_metadata.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_write_disk_no_hfs_compression.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_write_disk_perms.c up to 1.1.1.5
+external/bsd/libarchive/dist/libarchive/test/test_write_disk_secure.c up to 1.6
+external/bsd/libarchive/dist/libarchive/test/test_write_disk_secure744.c up to 1.3
+external/bsd/libarchive/dist/libarchive/test/test_write_disk_secure745.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_write_disk_secure746.c up to 1.3
+external/bsd/libarchive/dist/libarchive/test/test_write_disk_sparse.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_write_disk_symlink.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_write_disk_times.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_write_filter_b64encode.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_write_filter_bzip2.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_write_filter_compress.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_write_filter_gzip.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_write_filter_gzip_timestamp.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_write_filter_lrzip.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_write_filter_lz4.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_write_filter_lzip.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_write_filter_lzma.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_write_filter_lzop.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_write_filter_program.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_write_filter_uuencode.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_write_filter_xz.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_write_filter_zstd.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_write_format_7zip.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_write_format_7zip_empty.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_write_format_7zip_large.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_write_format_ar.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_write_format_cpio.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_write_format_cpio_empty.c up to 1.3
+external/bsd/libarchive/dist/libarchive/test/test_write_format_cpio_newc.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_write_format_cpio_odc.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_write_format_gnutar.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_write_format_gnutar_filenames.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_write_format_iso9660.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_write_format_iso9660_filename.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_write_format_mtree.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_write_format_mtree_absolute_path.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_write_format_mtree_classic.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_write_format_mtree_classic_indent.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_write_format_mtree_fflags.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_write_format_mtree_no_separator.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_write_format_mtree_quoted_filename.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_write_format_pax.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_write_format_shar_empty.c up to 1.3
+external/bsd/libarchive/dist/libarchive/test/test_write_format_tar.c up to 1.3
+external/bsd/libarchive/dist/libarchive/test/test_write_format_tar_empty.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_write_format_tar_sparse.c up to 1.3
+external/bsd/libarchive/dist/libarchive/test/test_write_format_tar_ustar.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_write_format_tar_v7tar.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_write_format_warc.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_write_format_warc_empty.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_write_format_xar.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_write_format_xar_empty.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_write_format_zip.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_write_format_zip_compression_store.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_write_format_zip_empty.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive/test/test_write_format_zip_empty_zip64.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_write_format_zip_file.c up to 1.3
+external/bsd/libarchive/dist/libarchive/test/test_write_format_zip_file_zip64.c up to 1.3
+external/bsd/libarchive/dist/libarchive/test/test_write_format_zip_large.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_write_format_zip_zip64.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_write_open_memory.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive/test/test_write_read_format_zip.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_xattr_platform.c up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive/test/test_zip_filename_encoding.c up to 1.1.1.3
+external/bsd/libarchive/dist/libarchive_fe/err.c up to 1.4
+external/bsd/libarchive/dist/libarchive_fe/err.h up to 1.4
+external/bsd/libarchive/dist/libarchive_fe/lafe_platform.h up to 1.1.1.2
+external/bsd/libarchive/dist/libarchive_fe/line_reader.c up to 1.1.1.4
+external/bsd/libarchive/dist/libarchive_fe/passphrase.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/bsdtar.1       up to 1.1.1.7
+external/bsd/libarchive/dist/tar/bsdtar.c       up to 1.4
+external/bsd/libarchive/dist/tar/bsdtar.h       up to 1.1.1.6
+external/bsd/libarchive/dist/tar/bsdtar_platform.h up to 1.1.1.5
+external/bsd/libarchive/dist/tar/bsdtar_windows.c up to 1.1.1.4
+external/bsd/libarchive/dist/tar/bsdtar_windows.h up to 1.1.1.4
+external/bsd/libarchive/dist/tar/cmdline.c      up to 1.1.1.5
+external/bsd/libarchive/dist/tar/creation_set.c up to 1.1.1.4
+external/bsd/libarchive/dist/tar/read.c         up to 1.1.1.5
+external/bsd/libarchive/dist/tar/subst.c        up to 1.1.1.5
+external/bsd/libarchive/dist/tar/util.c         up to 1.1.1.5
+external/bsd/libarchive/dist/tar/write.c        up to 1.5
+external/bsd/libarchive/dist/tar/test/test.h    up to 1.1.1.6
+external/bsd/libarchive/dist/tar/test/test_0.c  up to 1.1.1.5
+external/bsd/libarchive/dist/tar/test/test_basic.c up to 1.4
+external/bsd/libarchive/dist/tar/test/test_copy.c up to 1.5
+external/bsd/libarchive/dist/tar/test/test_empty_mtree.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_extract_tar_Z.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_extract_tar_bz2.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_extract_tar_grz.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_extract_tar_gz.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_extract_tar_lrz.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_extract_tar_lz.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_extract_tar_lz4.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_extract_tar_lzma.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_extract_tar_lzo.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_extract_tar_xz.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_extract_tar_zstd.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_format_newc.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_help.c up to 1.1.1.4
+external/bsd/libarchive/dist/tar/test/test_leading_slash.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_missing_file.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_option_C_mtree.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_option_C_upper.c up to 1.4
+external/bsd/libarchive/dist/tar/test/test_option_H_upper.c up to 1.1.1.4
+external/bsd/libarchive/dist/tar/test/test_option_L_upper.c up to 1.1.1.4
+external/bsd/libarchive/dist/tar/test/test_option_O_upper.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_option_T_upper.c up to 1.1.1.4
+external/bsd/libarchive/dist/tar/test/test_option_U_upper.c up to 1.4
+external/bsd/libarchive/dist/tar/test/test_option_X_upper.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_option_a.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_option_acls.c up to 1.1.1.4
+external/bsd/libarchive/dist/tar/test/test_option_b.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_option_b64encode.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_option_exclude.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_option_exclude_vcs.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_option_fflags.c up to 1.1.1.4
+external/bsd/libarchive/dist/tar/test/test_option_gid_gname.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_option_grzip.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_option_j.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_option_k.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_option_keep_newer_files.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_option_lrzip.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_option_lz4.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_option_lzma.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_option_lzop.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_option_n.c up to 1.1.1.4
+external/bsd/libarchive/dist/tar/test/test_option_newer_than.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_option_nodump.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_option_older_than.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_option_passphrase.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_option_q.c up to 1.1.1.4
+external/bsd/libarchive/dist/tar/test/test_option_r.c up to 1.1.1.4
+external/bsd/libarchive/dist/tar/test/test_option_s.c up to 1.4
+external/bsd/libarchive/dist/tar/test/test_option_uid_uname.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_option_uuencode.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_option_xattrs.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_option_xz.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_option_z.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_option_zstd.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_patterns.c up to 1.1.1.5
+external/bsd/libarchive/dist/tar/test/test_print_longpath.c up to 1.1.1.3
+external/bsd/libarchive/dist/tar/test/test_stdio.c up to 1.1.1.5
+external/bsd/libarchive/dist/tar/test/test_strip_components.c up to 1.1.1.5
+external/bsd/libarchive/dist/tar/test/test_symlink_dir.c up to 1.4
+external/bsd/libarchive/dist/tar/test/test_version.c up to 1.1.1.4
+external/bsd/libarchive/dist/tar/test/test_windows.c up to 1.1.1.3
+external/bsd/libarchive/dist/test_utils/test_common.h up to 1.4
+external/bsd/libarchive/dist/test_utils/test_main.c up to 1.4
+external/bsd/libarchive/dist/test_utils/test_utils.c up to 1.2
+external/bsd/libarchive/dist/test_utils/test_utils.h up to 1.2
+external/bsd/libarchive/include/config_netbsd.h up to 1.14
+external/bsd/libarchive/lib/libarchive/Makefile up to 1.17 (patch)
+external/bsd/libarchive/lib/libarchive/shlib_version up to 1.4
+tests/lib/libarchive/Makefile			1.7,1.10-1.13 (patch)
+tests/usr.bin/cpio/Makefile			1.5 (patch)
+tests/usr.bin/tar/Makefile			1.5 (patch)
+
+	libarchive: PR 58738: update to 3.7.7 for security fixes
+	[rin, ticket #991]
+
+usr.sbin/postinstall/postinstall.in		1.68,1.71
+
+	PR 58476: fix fallout from blacklist -> blocklist renaming.
+	[spz, ticket #992]
+
+usr.bin/env/env.1				1.16
+usr.bin/env/env.c				1.24
+
+	Implement "env -C dir" to chdir.
+	[kim, ticket #993]
+
+sys/dev/acpi/apei.c				1.4-1.9
+sys/dev/acpi/apei_cper.h			1.3-1.5
+sys/dev/acpi/apei_hest.c			1.4-1.6
+
+	apei(4): PR 58775: add support for displaying the content of PCIe
+	hardware errors, and rate-limit error messages to one per minute of
+	each severity level (fatal, recoverable, correctable, other).
+	[riastradh, ticket #994]
+
+etc/etc.evbppc/Makefile.inc			1.16
+
+	evbppc: include X sets in wii.img
+	[jmcneill, ticket #995]
+
+lib/libc/arch/aarch64/gen/fpsetround.c		1.4
+tests/lib/libc/gen/t_fpsetround.c		1.7,1.8
+
+	aarch64: PR 58782: fpsetround(3): don't toggle all the other bits
+	in the fpcr register.
+	[rin, ticket #996]
+
+sys/dev/iscsi/iscsi_ioctl.c			1.35
+sys/dev/iscsi/iscsi_main.c			1.42
+sys/dev/iscsi/iscsi_send.c			1.41
+
+	iscsi:
+	- use correct status value SCSI_BUSY (0x08) when running
+	  out of sessions.
+	- avoid race in timeout handling.
+	[rin, ticket #997]
+
+xsrc/external/mit/xorg-server/dist/ChangeLog         up to 1.1.1.27
+xsrc/external/mit/xorg-server/dist/aclocal.m4        up to 1.1.1.22
+xsrc/external/mit/xorg-server/dist/config.guess      up to 1.1.1.17
+xsrc/external/mit/xorg-server/dist/config.sub        up to 1.1.1.17
+xsrc/external/mit/xorg-server/dist/configure         up to 1.20
+xsrc/external/mit/xorg-server/dist/configure.ac      up to 1.22
+xsrc/external/mit/xorg-server/dist/install-sh        up to 1.1.1.11
+xsrc/external/mit/xorg-server/dist/meson.build       up to 1.1.1.17
+xsrc/external/mit/xorg-server/dist/Xext/sync.c       up to 1.13
+xsrc/external/mit/xorg-server/dist/Xi/exevents.c     up to 1.1.1.14
+xsrc/external/mit/xorg-server/dist/Xi/xichangehierarchy.c up to 1.7
+xsrc/external/mit/xorg-server/dist/Xi/xipassivegrab.c up to 1.8
+xsrc/external/mit/xorg-server/dist/Xi/xiquerypointer.c up to 1.5
+xsrc/external/mit/xorg-server/dist/Xi/xiselectev.c   up to 1.6
+xsrc/external/mit/xorg-server/dist/dix/colormap.c    up to 1.1.1.7
+xsrc/external/mit/xorg-server/dist/dix/devices.c     up to 1.15
+xsrc/external/mit/xorg-server/dist/dix/dispatch.c    up to 1.8
+xsrc/external/mit/xorg-server/dist/dix/dixfonts.c    up to 1.6
+xsrc/external/mit/xorg-server/dist/dix/enterleave.c  up to 1.9
+xsrc/external/mit/xorg-server/dist/dix/eventconvert.c up to 1.1.1.7
+xsrc/external/mit/xorg-server/dist/dix/gc.c          up to 1.1.1.8
+xsrc/external/mit/xorg-server/dist/dix/property.c    up to 1.1.1.9
+xsrc/external/mit/xorg-server/dist/dix/ptrveloc.c    up to 1.1.1.7
+xsrc/external/mit/xorg-server/dist/dix/resource.c    up to 1.1.1.10
+xsrc/external/mit/xorg-server/dist/glamor/glamor.c   up to 1.1.1.7
+xsrc/external/mit/xorg-server/dist/glamor/glamor_glyphblt.c up to 1.1.1.3
+xsrc/external/mit/xorg-server/dist/glamor/glamor_picture.c up to 1.1.1.5
+xsrc/external/mit/xorg-server/dist/glamor/glamor_text.c up to 1.1.1.2
+xsrc/external/mit/xorg-server/dist/glx/glxcmds.c     up to 1.16
+xsrc/external/mit/xorg-server/dist/hw/kdrive/ephyr/ephyr_glamor_xv.c up to 1.1.1.3
+xsrc/external/mit/xorg-server/dist/hw/kdrive/ephyr/ephyrcursor.c up to 1.1.1.3
+xsrc/external/mit/xorg-server/dist/hw/kdrive/ephyr/ephyrinit.c up to 1.1.1.9
+xsrc/external/mit/xorg-server/dist/hw/xfree86/common/compiler.h up to 1.21
+xsrc/external/mit/xorg-server/dist/hw/xfree86/common/xf86Config.c up to 1.18
+xsrc/external/mit/xorg-server/dist/hw/xfree86/common/xf86Mode.c up to 1.1.1.9
+xsrc/external/mit/xorg-server/dist/hw/xfree86/man/xorg.conf.man up to 1.1.1.5
+xsrc/external/mit/xorg-server/dist/hw/xfree86/modes/xf86Modes.c up to 1.3
+xsrc/external/mit/xorg-server/dist/hw/xfree86/os-support/bsd/alpha_video.c up to 1.7
+xsrc/external/mit/xorg-server/dist/hw/xfree86/parser/DRI.c up to 1.1.1.7
+xsrc/external/mit/xorg-server/dist/hw/xfree86/parser/Device.c up to 1.5
+xsrc/external/mit/xorg-server/dist/hw/xfree86/parser/Extensions.c up to 1.1.1.5
+xsrc/external/mit/xorg-server/dist/hw/xfree86/parser/Files.c up to 1.1.1.6
+xsrc/external/mit/xorg-server/dist/hw/xfree86/parser/Flags.c up to 1.1.1.8
+xsrc/external/mit/xorg-server/dist/hw/xfree86/parser/Input.c up to 1.1.1.5
+xsrc/external/mit/xorg-server/dist/hw/xfree86/parser/InputClass.c up to 1.1.1.4
+xsrc/external/mit/xorg-server/dist/hw/xfree86/parser/Layout.c up to 1.1.1.5
+xsrc/external/mit/xorg-server/dist/hw/xfree86/parser/Module.c up to 1.1.1.5
+xsrc/external/mit/xorg-server/dist/hw/xfree86/parser/Monitor.c up to 1.1.1.8
+xsrc/external/mit/xorg-server/dist/hw/xfree86/parser/OutputClass.c up to 1.1.1.3
+xsrc/external/mit/xorg-server/dist/hw/xfree86/parser/Pointer.c up to 1.1.1.6
+xsrc/external/mit/xorg-server/dist/hw/xfree86/parser/Screen.c up to 1.1.1.6
+xsrc/external/mit/xorg-server/dist/hw/xfree86/parser/Vendor.c up to 1.1.1.5
+xsrc/external/mit/xorg-server/dist/hw/xfree86/parser/Video.c up to 1.1.1.5
+xsrc/external/mit/xorg-server/dist/hw/xfree86/parser/read.c up to 1.1.1.6
+xsrc/external/mit/xorg-server/dist/hw/xfree86/parser/scan.c up to 1.1.1.7
+xsrc/external/mit/xorg-server/dist/hw/xnest/Cursor.c up to 1.1.1.5
+xsrc/external/mit/xorg-server/dist/hw/xnest/Events.c up to 1.1.1.6
+xsrc/external/mit/xorg-server/dist/hw/xquartz/xpr/appledri.c up to 1.1.1.6
+xsrc/external/mit/xorg-server/dist/include/do-not-use-config.h.in up to 1.1.1.16
+xsrc/external/mit/xorg-server/dist/include/opaque.h  up to 1.1.1.7
+xsrc/external/mit/xorg-server/dist/man/Xserver.man   up to 1.1.1.4
+xsrc/external/mit/xorg-server/dist/mi/mipointer.c    up to 1.1.1.10
+xsrc/external/mit/xorg-server/dist/miext/shadow/shadow.h up to 1.2
+xsrc/external/mit/xorg-server/dist/miext/shadow/shafb4.c up to 1.2
+xsrc/external/mit/xorg-server/dist/os/client.c       up to 1.1.1.5
+xsrc/external/mit/xorg-server/dist/os/utils.c        up to 1.14
+xsrc/external/mit/xorg-server/dist/randr/rrmonitor.c up to 1.1.1.4
+xsrc/external/mit/xorg-server/dist/randr/rrproperty.c up to 1.1.1.8
+xsrc/external/mit/xorg-server/dist/randr/rrproviderproperty.c up to 1.1.1.2
+xsrc/external/mit/xorg-server/dist/render/glyph.c    up to 1.6
+xsrc/external/mit/xorg-server/dist/render/glyphstr.h up to 1.4
+xsrc/external/mit/xorg-server/dist/render/render.c   up to 1.9
+xsrc/external/mit/xorg-server/dist/xkb/xkb.c         up to 1.10
+xsrc/external/mit/xorg-server/include/dix-config.h   up to 1.53
+xsrc/external/mit/xorg-server/include/version-config.h up to 1.23
+xsrc/external/mit/xorg-server/include/xorg-config.h  up to 1.33
+xsrc/external/mit/xorg-server/include/xorg-server.h  up to 1.33
+share/mk/bsd.x11.mk					(apply patch)
+
+	Update Xorg server to 21.1.14.
+	[mrg, ticket #998]
+
+xsrc/external/mit/xorg-server.old/dist/Xi/exevents.c	1.3
+xsrc/external/mit/xorg-server.old/dist/Xi/exevents.c	1.4
+xsrc/external/mit/xorg-server.old/dist/Xi/xichangehierarchy.c 1.3
+xsrc/external/mit/xorg-server.old/dist/Xi/xipassivegrab.c 1.2
+xsrc/external/mit/xorg-server.old/dist/Xi/xiproperty.c 1.3
+xsrc/external/mit/xorg-server.old/dist/Xi/xiquerypointer.c 1.2
+xsrc/external/mit/xorg-server.old/dist/Xi/xiselectev.c 1.2
+xsrc/external/mit/xorg-server.old/dist/dix/devices.c	1.2
+xsrc/external/mit/xorg-server.old/dist/dix/devices.c	1.3
+xsrc/external/mit/xorg-server.old/dist/dix/property.c 1.2
+xsrc/external/mit/xorg-server.old/dist/glx/glxcmds.c	1.2
+xsrc/external/mit/xorg-server.old/dist/randr/rrproperty.c 1.3
+
+	xorg.old: merge upstream changes for
+	CVE-2022-46344, ZDI-CAN 19405
+	CVE-2023-6478, ZDI-CAN-22561
+	CVE-2023-6816, ZDI-CAN-22664, ZDI-CAN-22665
+	CVE-2024-0229, ZDI-CAN-22678
+	CVE-2024-0408
+	CVE-2024-21885, ZDI-CAN-22744
+	CVE-2024-21886, ZDI-CAN-22840
+	CVE-2024-31080
+	CVE-2024-31081
+	CVE-2024-21886, ZDI-CAN-22840
+	[mrg, ticket #999]
+
+sys/kern/kern_exec.c				1.522
+	Fix lock leak in error path.
+	[mlelstv, ticket #1000]
+
+external/cddl/osnet/dist/uts/common/fs/zfs/zvol.c 1.14
+
+	zvol: Implement DIOCCACHESYNC for zfs volumes (zvol).
+	[gdt, ticket #1001]
+
+tests/net/npf/t_npf.sh				1.5-1.7
+usr.sbin/npf/npfctl/npf_bpf_comp.c		1.17
+usr.sbin/npf/npftest/libnpftest/npf_rule_test.c	1.20-1.23
+usr.sbin/npf/npftest/npftest.conf		1.10-1.12
+
+	npf: PR 55403: fix compilation of rules that match sets of multiple
+	IPv6 addresses or address ranges at a time in npfctl(8). 
+	[riastradh, ticket #1002]
+
+sys/kern/kern_descrip.c				1.264
+
+	Fix close-on-exec flag (O_CLOEXEC).
+	[kre, ticket #1003]
+
+lib/libc/string/__strsignal.c			1.26
+sys/arch/macppc/stand/fixcoff/fixcoff.c		1.13
+tools/compat/Makefile				1.93
+tools/compat/compat_defs.h			1.123
+tools/compat/configure				1.106
+tools/compat/configure.ac			1.108
+tools/compat/nbtool_config.h.in			1.57
+usr.bin/elf2aout/elf2aout.c			1.24
+
+	Build portability fixes.
+	[kre, ticket #1004]
+
+sbin/gpt/add.c					1.45
+
+	gpt(8): PR 58806: never create a partition with a null guid.
+	[kre, ticket #1005]
+
+share/man/man5/security.conf.5			1.44
+
+	security.conf(5): fix path for /var/backups
+	[plunky, ticket #1006]
+
+distrib/sets/lists/debug/mi			1.454 (patch)
+distrib/sets/lists/tests/mi			1.1346 (patch)
+sys/compat/netbsd32/netbsd32_ioctl.c		1.122
+sys/sys/filedesc.h				1.71
+tests/kernel/Makefile				1.83 (patch)
+tests/kernel/h_cloexec.c			1.1
+tests/kernel/t_cloexec.c			1.1
+
+	Add tests and comments for close-on-exec fixes from ticket #1003.
+	[riastradh, ticket #1007]
+
+sys/arch/x86/x86/pmap.c				1.427
+
+	x86/pmap: PR 58666: fix null pointer dereference under memory
+	pressure by passing _all_ the flags necessary for uvm_km_alloc
+	to wait rather than fail, not just some of them; this way
+	pmap_pdp_alloc never returns a null pointer, as callers expect.
+	[riastradh, ticket #1008]
+
+sys/conf/newvers_stand.mk			1.6
+
+	sys/conf/newvers_stand.mk: PR 58220: use TOOL_AWK rather than
+	whatever `awk' runs.
+	[riastradh, ticket #1009]
+
+external/bsd/nvi/dist/regex/engine.c:		1.4
+
+	vi(1): PR 57630: fix crash on certain substitutions.
+	[riastradh, ticket #1010]
+
+sys/kern/sys_select.c				1.67
+tests/lib/libc/sys/t_select.c			1.5
+
+	select(2): PR 57504: fail with EBADF, rather than hanging,
+	on very large fd_set inputs with bad file descriptors included.
+	[riastradh, ticket #1011]
+
+external/historical/nawk/dist/lib.c		1.14
+
+	awk(1): PR 58421: handle I/O errors on input instead of going into
+	an infinite loop.
+	[riastradh, ticket #1012]
+
+lib/libtelnet/enc-proto.h			1.11
+lib/libtelnet/enc_des.c				1.18
+lib/libtelnet/encrypt.c				1.20
+lib/libtelnet/encrypt.h				1.10
+libexec/telnetd/state.c				1.33,1.35
+libexec/telnetd/sys_term.c			1.50
+libexec/telnetd/telnetd.c			1.59,1.60
+
+	telnetd(8): PR 21450, PR 58787: fix issues in autologin, a memory
+	leak of getaddrinfo(3), and a buffer overrun on input.
+	[riastradh, ticket #1013]
+
+external/cddl/osnet/dist/uts/common/fs/zfs/dmu.c 1.7
+external/cddl/osnet/dist/uts/common/fs/zfs/vdev.c 1.7
+
+	zfs: PR 58111: fix possible data corruption on FIOSEEKDATA/FIOSEEKHOLE.
+	[riastradh, ticket #1014]
+
+usr.bin/getent/getent.c				1.20,1.21
+
+	getent(1): PR 58836: make sure all 3 colons are printed for group
+	database.
+	[kre, ticket #1015]
+
+bin/sh/eval.c					(apply patch, part of
+						rev 1.195)
+
+	sh(1): fix "exec" builtin to not close-on-exec fd's >2 for "exec cmd"
+	[kre, ticket #1016]
+
+external/bsd/libarchive/lib/libarchive/Makefile	1.20
+tests/lib/libarchive/Makefile			1.16
+
+	libarchive: PR 58829: hide private symbols.
+	[riastradh, ticket #1017]
+
+sys/dev/pci/virtio_pci.c			1.55
+
+	virtio(4): PR 58680: fix big-endian 64-bit register access.
+	The access is supposed to be always little-endian, irrespective
+	of the host or guest's byte order.  This was previously implemented
+	correctly, but through a series of changes via the confusing name
+	bus_space_write_8 it was changed to be guest-endian instead of
+	little-endian.
+	[riastradh, ticket #1018]
+
+usr.bin/ftp/ftp.1				1.151 (fix for #970)
+
+	ftp(1): wording and formatting improvements
+	[lukem, ticket #1020]
+
+usr.bin/ftp/cmds.c				1.144
+usr.bin/ftp/extern.h				1.84
+usr.bin/ftp/fetch.c				1.242
+usr.bin/ftp/ftp.1				1.160
+usr.bin/ftp/ftp.c				1.178
+usr.bin/ftp/main.c				1.134,1.135
+usr.bin/ftp/progressbar.c			1.27
+usr.bin/ftp/ruserpass.c				1.35
+usr.bin/ftp/util.c				1.165
+usr.bin/ftp/version.h				1.99
+
+	ftp(1): PR 54713, PR 58281: update to version 20241129.
+	- if a http file size is known and the fetch finishes with less bytes
+	  transferred, exit non-zero.
+	- improve help
+	- various internal cleanup
+	[lukem, ticket #1021]
+
+sys/dev/pci/pcidevs				1.504-1.506, 1.508-1.513
+sys/dev/pci/pcidevs.h				regen
+sys/dev/pci/pcidevs_data.h			regen
+
+	Update pcidevs:
+	 - Add Zhaoxin devices, mainly from my TVS-675 NAS device, and
+	   some additional to fill the gaps from pci-ids database.
+	 - Add Phison PS5021 and PS5026.
+	 - Add some Intel Rapotr Lake graphics.
+	 - Add Realtek RTL8126.
+	 - Add the intel "arc" a-series of cards.
+	 - Add Areca ARC-1224.
+	 - Add some AMD devices.
+	 - Add Raspberry Pi5 Ethernet.
+	 - Add many Brainboxes devices. Reported in PR kern/55824
+	   by Cameron Williams.
+	[msaitoh, ticket #1024]
+
+share/man/man4/puc.4				1.46
+sys/dev/pci/pucdata.c				1.117
+
+	Add many Brainboxes devices. Reported in PR/kern 58824
+	[msaitoh, ticket #1025]
+
+share/man/man4/uftdi.4				1.24
+
+	Add Brainboxes devices to the supported list. PR/kern 55824
+	[msaitoh, ticket #1026]
+
+sys/arch/hppa/stand/mkboot/mkboot.c		1.5
+sys/arch/powerpc/stand/mkbootimage/mkbootimage.c 1.21
+usr.bin/elf2aout/elf2aout.c			1.25
+
+	Build fixes for newer GCC versions.
+	[gutteridge, ticket #1019]
+
+sys/net/if_wg.c					1.133
+
+	wg(4): PR 58859: avoid spurious kassert for harmless race in
+	session retry.
+	[alnsn, ticket #1022]
+
+usr.bin/mkubootimage/crc32.c			1.5
+usr.bin/mkubootimage/crc32.h			1.1
+usr.bin/mkubootimage/mkubootimage.1		1.15
+usr.bin/mkubootimage/mkubootimage.c		1.31,1.34
+
+	mkubootimage(1): PR 57914 and 58674: tool build fixes for newer GCC
+	and build reproducibility.
+	[gutteridge, ticket #1023]
+
+sys/uvm/uvm_km.c				1.166
+
+	kmem: improve behavior when using all of physical memory as kmem.
+	[chs, ticket #1027]
+
+sys/kern/subr_pool.c				1.292
+
+	pool: fix pool_sethiwat().
+	[chs, ticket #1028]
+
+lib/libpthread/res_state.c			1.8
+
+	libpthread: PR 58888: zero-initialize res_state objects.
+	[riastradh, ticket #1029]
+
+external/gpl2/groff/tmac/mdoc.local             edited manually
+sys/sys/param.h                                 edited manually
+
+	Welcome to 10.1!
+
