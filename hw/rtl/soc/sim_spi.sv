@@ -128,8 +128,20 @@ module sim_spi
             o_rdata <= 32'b0;
     end
 
-    // ── Bus busy (always 0 — single-cycle access) ──────────
-    assign o_busy = 1'b0;
+    // ── Read busy — 1-cycle latency for registered read mux ──
+    // Same pattern as sim_uart: busy on first cycle of read,
+    // data valid on second cycle when busy clears.
+    logic access_pending;
+    always_ff @(posedge i_clk) begin
+        if (i_rst)
+            access_pending <= 1'b0;
+        else if (i_re && !access_pending)
+            access_pending <= 1'b1;
+        else
+            access_pending <= 1'b0;
+    end
+
+    assign o_busy = i_re && !access_pending;
 
     // ── CS outputs ─────────────────────────────────────────
     assign o_cs0 = control[0];

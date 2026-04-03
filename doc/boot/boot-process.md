@@ -133,16 +133,35 @@ Each entry has a common 8-byte header:
 
 Consumers walk the list by advancing by `size` bytes per entry. Unknown tags are skipped. The list is terminated by `BTAG_END`.
 
-**Defined tags (initial set):**
+**Defined tags:**
 
 | Tag | Value | Payload | Description |
 |-----|-------|---------|-------------|
 | `BTAG_END` | 0 | (none) | Terminates the list |
-| `BTAG_MEMORY` | 1 | `base`, `size` | Physical RAM region |
-| `BTAG_CONSOLE` | 2 | `base`, `type` | Console UART |
-| `BTAG_BOOTDEV` | 3 | `type`, ... | Boot device info (added by stage 1) |
+| `BTAG_MEMORY` | 1 | `base`, `size` | Physical RAM region (multiple allowed) |
+| `BTAG_DEVICE` | 2 | `cls`, `base`, `size`, `id`, `name[16]` | Discovered or injected device |
+| `BTAG_CONSOLE` | 3 | `dev_nth` | Console output device (index into BTAG_DEVICE entries) |
+| `BTAG_BOOTDEV` | 4 | `dev_nth`, `cs`, `partition` | Boot device (see below) |
 
-Additional tags as hardware grows (cache geometry, detected peripherals, etc.).
+Additional tags as hardware grows (cache geometry, etc.).
+
+**Device indexing and boot device identification:**
+
+Each device discovered by autoconfig receives a sequential **device index** (0, 1, 2, ...) in discovery order. `BTAG_DEVICE` entries carry this index along with the device class and MMIO base address. `BTAG_BOOTDEV` references the boot device by `dev_index` plus the CS pin and partition number used. This allows the kernel to map the boot device back to its hardware:
+
+```
+BTAG_DEVICE  dev_index=0  cls=SPI  base=0xFF001000   (onboard)
+BTAG_DEVICE  dev_index=1  cls=SPI  base=0xFF002000   (external bus)
+BTAG_BOOTDEV dev_index=0  cs=0  partition=1
+```
+
+The kernel looks up `dev_index=0` → SPI controller at `0xFF001000`, CS pin 0, partition 1 → that's where root lives.
+
+**SD card naming convention (ROM monitor):**
+
+The ROM monitor uses `sd:<controller>,<cs>` syntax where `<controller>` is the device index of the SPI controller and `<cs>` is the chip-select pin (0 or 1). For example, `sd:0,0` means "first SPI controller, CS0". This maps directly to the `BTAG_BOOTDEV` fields and is unambiguous even when multiple SPI controllers exist (e.g., FPGA onboard + external bus).
+
+**Entry alignment:** All entries are 4-byte aligned (matching Penumbra's ILP32 word size). The `size` field is always a multiple of 4. Consumers advance by `size` bytes and can assume word-aligned access.
 
 **Location in RAM:** The ROM places the boot data at the top of the first detected RAM page that isn't reserved for the vector table or trap stack. The exact address depends on RAM layout, but R1 always points to it, so consumers don't need to know a fixed address.
 
@@ -183,16 +202,20 @@ Target layout for the ULX3S SD card:
 
 3. **Direct-mapped region:** No hardware bypass (unlike MIPS KSEG0). Bootloader pre-maps kernel pages in TLB. Kernel takes over TLB management early in `locore.S`.
 
+4. **Boot data entry alignment:** 4-byte aligned (ILP32 word size). Entry `size` is always a multiple of 4.
+
+5. **Device indexing:** Autoconfig assigns sequential device indices (0, 1, 2, ...). `BTAG_DEVICE` carries the index; `BTAG_BOOTDEV` references boot device by index. Kernel maps boot device → hardware by matching indices.
+
+6. **SD card naming:** ROM monitor uses `sd:<dev_index>,<cs>` syntax. `dev_index` is the autoconfig device index of the SPI controller, `cs` is the chip-select pin (0 or 1). Maps directly to `BTAG_BOOTDEV` fields.
+
+7. **SD card controller:** SPI master in SPI mode (sim_spi.sv, CLASS_SPI). Byte-at-a-time polled transfers. Autoconfigured. Testbench SD emulator backed by disk image file (`+sdcard=`). See `doc/boot/spi-controller.md`.
+
 ## Open Questions
 
 1. **Kernel link address:** What virtual address should the kernel be linked at? `0x8000_0000` is conventional for MIPS (KSEG0). We need to pick a Penumbra convention.
 
-2. **Boot data extensibility:** Tagged entries use `size` field for skipping (chosen over next-pointer approach). Still need to decide: should entries be 4-byte aligned? 8-byte aligned? Alignment affects padding and simplicity of pointer arithmetic.
+2. **Minimum pre-mapped pages:** How many kernel pages must the bootloader map before jumping? Depends on how much code runs before `locore.S` establishes its own TLB entries. To be determined during the port.
 
-3. **Minimum pre-mapped pages:** How many kernel pages must the bootloader map before jumping? Depends on how much code runs before `locore.S` establishes its own TLB entries. To be determined during the port.
+3. **Kernel image format:** Raw binary? ELF? a.out? NetBSD traditionally uses ELF with a boot header. The stage 2 loader needs to parse it.
 
-4. **SD card controller:** Not yet designed. Needs SPI mode support at minimum for the ULX3S SD card slot. This blocks all storage-related boot stages.
-
-5. **Kernel image format:** Raw binary? ELF? a.out? NetBSD traditionally uses ELF with a boot header. The stage 2 loader needs to parse it.
-
-6. **Boot data physical location:** ROM places boot data in a known RAM area (not a fixed address — depends on detected RAM). R1 points to it. Should the boot data be at the bottom of usable RAM (simple, but kernel must know to avoid it) or at the top (out of the way, but requires knowing RAM size to find it)?
+4. **Boot data physical location:** ROM places boot data in a known RAM area (not a fixed address — depends on detected RAM). R1 points to it. Should the boot data be at the bottom of usable RAM (simple, but kernel must know to avoid it) or at the top (out of the way, but requires knowing RAM size to find it)?

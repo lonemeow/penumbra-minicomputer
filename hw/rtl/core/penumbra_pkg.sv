@@ -132,6 +132,7 @@ package penumbra_pkg;
     localparam logic [31:0] ACFG_CLASS_MEMORY   = 32'd1;  // Plain memory (RAM/ROM) — no registers, just address space
     localparam logic [31:0] ACFG_CLASS_UART     = 32'd2;  // NS16450-compatible UART register interface
     localparam logic [31:0] ACFG_CLASS_SPI      = 32'd3;  // Penumbra SPI master (DATA/STATUS/CONTROL/CLKDIV)
+    localparam logic [31:0] ACFG_CLASS_SD       = 32'd4;  // SD/MMC card slot (SPI register interface, CS0 = card)
 
     // ── UART register offsets (word-strided within 4 KB page) ────
     // Memory-mapped I/O at 0xFF00_0000. Each 8-bit register

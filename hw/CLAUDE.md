@@ -29,7 +29,7 @@ This file provides detailed hardware context for work under `hw/`. The root `CLA
 | Bus controller | `rtl/soc/busctl.sv` | 43/43 | Sysreg device 4 (SYSDEV_BUS). RST (sticky) and CFG_EN bits for autoconfig. |
 | Autoconfig wrapper | `rtl/soc/autoconfig_dev.sv` | 28/28 | Generic wrapper: config space regs, cfg daisy chain with CFG_EN toggle protocol, dynamic base address decode. |
 | Sim UART | `rtl/soc/sim_uart.sv` | via machine_sim | 16450-compatible UART (MMIO at 0xFF00_0000). NetBSD com(4) compatible via reg-shift=2, reg-io-width=4 |
-| Sim SPI | `rtl/soc/sim_spi.sv` | via machine_sim | SPI master (CLASS_SPI). 4 registers: DATA, STATUS, CONTROL, CLKDIV. Autoconfigured. |
+| Sim SPI | `rtl/soc/sim_spi.sv` | via machine_sim | SPI master (CLASS_SD in machine_sim). 4 registers: DATA, STATUS, CONTROL, CLKDIV. Autoconfigured. Testbench SD card emulator (`sd_card_sim.h`) via `+sdcard=` plusarg. |
 | Boot ROM | `rtl/soc/boot_rom.sv` | via machine_sim | Read-only memory (64 KB default), loads program.hex |
 | Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_*, ACC_*, VEC_*, FAULT_*, FSTAT_*, SYSDEV_*, SYSREG_*, CACHE_TYPE_*, UART_*, SPR_*, ACFG_*, RAM_BASE, ROM_BASE, AUTOCONFIG_BASE constants |
 | System ID | `rtl/soc/sysid.sv` | via machine_sim | Read-only MACHINE_ID register (Penumbra/1), sysreg device 1 |
@@ -40,8 +40,8 @@ This file provides detailed hardware context for work under `hw/`. The root `CLA
 | Simple memory | `rtl/soc/simple_mem.sv` | — | Parameterizable synchronous SRAM model (default 16 MB), configurable READ_LATENCY/WRITE_LATENCY modeling SDRAM timing. |
 
 ## Boot ROM and Interactive Simulation
-- **Boot ROM** (`rom/`): Penumbra/1 boot monitor in C. `crt0.s` sets SP (low RAM, page 2) and calls `main()`. Features: line-editing console, trap vector setup with assembly trampolines (`trap_entry.s`), bus-fault-based RAM detection (`detect_ram.s`), `console_printf`/`snprintf`/`vsnprintf` (varargs, supports `%d %u %x %s %c %%`). Has its own `rom/Makefile` with automatic `*.c`/`*.s` discovery, header deps, and pattern rules. Built with clang: `clang -c` → `llvm-mc` → `ld.lld` (via `rom/rom.ld`) → `llvm-objcopy` → `bin2hex.py`.
-- **Interactive testbench** (`sim/tb_interactive.cpp`): Bridges host stdin/stdout to UART RX/TX. Raw terminal mode. Polls stdin every 1024 cycles. Exits on BREAK or Ctrl-C. Prints PC on Ctrl-C interrupt.
+- **Boot ROM** (`rom/`): Penumbra/1 boot monitor in C. `crt0.s` sets SP (low RAM, page 1 top) and calls `main()`. Features: line-editing console, trap vector setup with assembly trampolines (`trap_entry.s`), bus-fault-based RAM detection, bus autoconfig with device discovery, SD card detection and sector reading, boot data tagged list at 0x0040 (`bootdata.h`). No globals — ROM has no writable data section; all state in boot data or on the stack. Monitor commands: `x <addr> [len]` (hex dump), `load sd:<dev>,<cs> <addr> <lba> <count>` (SD read), `break`/`b` (halt). Has its own `rom/Makefile` with automatic `*.c`/`*.s` discovery, header deps, and pattern rules. Built with clang: `clang -c` → `llvm-mc` → `ld.lld` (via `rom/rom.ld`) → `llvm-objcopy` → `bin2hex.py`.
+- **Interactive testbench** (`sim/tb_interactive.cpp`): Bridges host stdin/stdout to UART RX/TX. Raw terminal mode. Polls stdin every 1024 cycles. Exits on BREAK or Ctrl-C. SD card emulation via `+sdcard=disk.img` plusarg (or `SDCARD=` make variable).
 
 ## Exception and Interrupt Handling
 Eight sources share the same `except_entry` → `int_entry` → vector dispatch path:
@@ -98,6 +98,7 @@ F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal
 - **Split I/D caches** between CPU and memory. Cache hits: zero latency; misses: burst-fill. Memory bus mux merges both caches (D-cache priority; fetch and data mutually exclusive).
 - **MMU traps:** STALL path checks `i_mem_fault` alongside `i_mem_busy`. On fault, sequencer aborts to S_FETCH.
 - **Dispatch spacing:** Format R: ×2 split by op[4] (ALU 0x00–0x1E, SYS 0x40–0x5E). Format M: ×4 (0x80–0xBF).
+- **IMPORTANT — Device `o_busy` contract:** The CPU's STALL sequencer exits and latches `mem_rdata` on the cycle when `o_busy` drops. Any device with registered read output (1+ cycle latency) **must** assert `o_busy` for at least 1 cycle on reads so the data is valid when busy clears. Use the `access_pending` pattern from `sim_uart.sv`: `o_busy = i_re && !access_pending`. A device that reports `o_busy = 0` immediately but has registered read data will return stale/zero values — this caused a real bug in `sim_spi.sv`.
 
 ## Implemented Microcode (43 micro-ops)
 | Category | Instructions | Notes |

@@ -33,9 +33,9 @@ This means a board without an SD card (or with a different storage device) simpl
 The simulation (`machine_sim.sv`) implements the same autoconfig protocol as real hardware — the SPI controller participates in the `cfg` daisy chain and receives its address from the boot ROM's autoconfig code. This ensures the full discovery path is tested in simulation.
 
 **Autoconfig identity:**
-- Class: `CLASS_SERIAL` (1) — byte-oriented I/O controller
+- Class: `CLASS_SD` (4) — SD/MMC card slot (SPI register interface, CS0 = card). A generic SPI controller without an attached SD card would use `CLASS_SPI` (3) instead; the distinction allows the ROM to know which devices can be used for booting without blind probing.
 - Required size: 4 KB (one page)
-- Name: `"SPI"` (16 bytes, null-padded)
+- Name: `"SD"` (16 bytes, null-padded)
 - ID: 0 (generic — any SPI master with this register layout is compatible)
 
 ## Register Interface

@@ -38,6 +38,13 @@ module machine_sim
     input  logic [7:0]  i_uart_rx_data,
     output logic        o_uart_rx_ack,
 
+    // ── SPI signals (directly accessible by TB for SD card) ──
+    output logic        o_spi_cmd_valid,
+    output logic [7:0]  o_spi_cmd_data,
+    input  logic        i_spi_resp_valid,
+    input  logic [7:0]  i_spi_resp_data,
+    output logic        o_spi_cs0,
+
     // ── Debug / observation ports ────────────────────────────
     output logic [31:0] o_pc,
     output logic        o_halted,
@@ -210,11 +217,11 @@ module machine_sim
     logic        ac_spi_cfg_out;
 
     autoconfig_dev #(
-        .DEV_CLASS (ACFG_CLASS_SPI),
+        .DEV_CLASS (ACFG_CLASS_SD),
         .DEV_SIZE  (32'd4096),
         .DEV_ID    (32'd0),
-        // "SPI\0" packed LE
-        .DEV_NAME0 (32'h00495053)
+        // "SD\0\0" packed LE
+        .DEV_NAME0 (32'h00004453)
     ) u_ac_spi (
         .i_clk       (i_clk),
         .i_rst       (i_rst),
@@ -249,11 +256,11 @@ module machine_sim
         .i_re        (spi_dev_re),
         .o_rdata     (spi_dev_rdata),
         .o_busy      (spi_dev_busy),
-        .o_cmd_valid (),                   // TODO: wire to testbench
-        .o_cmd_data  (),
-        .i_resp_valid(1'b0),               // no SD card emulation yet
-        .i_resp_data (8'hFF),
-        .o_cs0       (),
+        .o_cmd_valid (o_spi_cmd_valid),
+        .o_cmd_data  (o_spi_cmd_data),
+        .i_resp_valid(i_spi_resp_valid),
+        .i_resp_data (i_spi_resp_data),
+        .o_cs0       (o_spi_cs0),
         .o_cs1       ()
     );
     /* verilator lint_on PINCONNECTEMPTY */

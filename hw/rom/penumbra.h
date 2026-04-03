@@ -100,6 +100,10 @@ typedef unsigned int uint32_t;
 #define ACFG_CLASS_MEMORY   1
 #define ACFG_CLASS_UART     2
 #define ACFG_CLASS_SPI      3
+#define ACFG_CLASS_SD       4
+
+/* ── Built-in device addresses (hardwired, not autoconfigured) ──────── */
+#define UART_ADDR  0xFF000000
 
 /* ── Interrupt control ───────────────────────────────────────────────── */
 

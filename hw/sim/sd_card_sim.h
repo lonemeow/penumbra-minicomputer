@@ -1,0 +1,337 @@
+// Simulated SD card (SPI mode) for Penumbra testbench
+//
+// Byte-level SD-SPI protocol emulator backed by a disk image file.
+// Models the full-duplex SPI exchange: each MOSI byte in produces
+// one MISO byte out. Connects to sim_spi.sv signals via the
+// testbench (o_cmd_valid → exchange(), result → i_resp_data).
+//
+// Supported commands (minimal set for boot):
+//   CMD0  (GO_IDLE_STATE)     → R1 with idle bit
+//   CMD8  (SEND_IF_COND)      → R7 (R1 + 4 bytes echo)
+//   CMD55 (APP_CMD)           → R1 (prefix for ACMD)
+//   ACMD41 (SD_SEND_OP_COND)  → R1 (clears idle after init)
+//   CMD58 (READ_OCR)          → R1 + 4-byte OCR
+//   CMD17 (READ_SINGLE_BLOCK) → R1 + data token + 512 bytes + 2 CRC
+//   CMD24 (WRITE_SINGLE_BLOCK)→ R1, then accepts data token + 512 + CRC
+//
+// Usage:
+//   SdCardSim sd("disk.img");
+//   sd.select(cs0_is_low);           // call each cycle
+//   if (cmd_valid) {
+//       uint8_t miso = sd.exchange(mosi_byte);
+//       // present miso on i_resp_data for SPI controller to latch
+//   }
+
+#pragma once
+
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <vector>
+
+class SdCardSim {
+public:
+    explicit SdCardSim(const char* image_path) {
+        if (image_path && image_path[0]) {
+            img_ = fopen(image_path, "r+b");
+            if (!img_) {
+                img_ = fopen(image_path, "rb");
+                if (img_)
+                    fprintf(stderr, "[SD] opened '%s' read-only\n", image_path);
+                else
+                    fprintf(stderr, "[SD] warning: cannot open '%s'\n", image_path);
+            } else {
+                fprintf(stderr, "[SD] opened '%s' read-write\n", image_path);
+            }
+            if (img_) {
+                fseek(img_, 0, SEEK_END);
+                long sz = ftell(img_);
+                total_sectors_ = (sz > 0) ? (uint32_t)(sz / 512) : 0;
+                fseek(img_, 0, SEEK_SET);
+                fprintf(stderr, "[SD] image size: %lu bytes (%u sectors)\n",
+                        (unsigned long)sz, total_sectors_);
+            }
+        }
+    }
+
+    ~SdCardSim() {
+        if (img_) fclose(img_);
+    }
+
+    void set_trace(bool on) { trace_ = on; }
+
+    // Called each cycle with current CS0 state (active low: true = selected)
+    void select(bool selected) {
+        if (trace_ && selected != selected_)
+            fprintf(stderr, "[SD] CS0 %s\n", selected ? "assert" : "deassert");
+        if (!selected && selected_) {
+            // CS deasserted — reset command state
+            cmd_pos_ = 0;
+            state_ = S_IDLE;
+            resp_queue_.clear();
+            resp_idx_ = 0;
+            write_pos_ = 0;
+        }
+        selected_ = selected;
+    }
+
+    // Full-duplex SPI byte exchange: MOSI byte in, MISO byte out.
+    // Called once per o_cmd_valid pulse. The returned byte is held
+    // on i_resp_data for the SPI controller to latch.
+    uint8_t exchange(uint8_t mosi) {
+        if (!selected_ || !img_) return 0xFF;  // no card = MISO high
+
+        uint8_t miso = 0xFF;
+        switch (state_) {
+        case S_IDLE:
+        case S_RECEIVING_CMD:
+            // Accumulate command bytes; MISO is 0xFF during command
+            if (cmd_pos_ == 0) {
+                if ((mosi & 0xC0) != 0x40) {
+                    if (trace_) fprintf(stderr, "[SD] idle: mosi=0x%02X (skip)\n", mosi);
+                    return 0xFF;  // not a command start byte
+                }
+                state_ = S_RECEIVING_CMD;
+            }
+            cmd_buf_[cmd_pos_++] = mosi;
+            if (cmd_pos_ == 6) {
+                uint8_t cmd = cmd_buf_[0] & 0x3F;
+                if (trace_) fprintf(stderr, "[SD] CMD%d arg=0x%08X\n", cmd, cmd_arg());
+                process_command();
+                cmd_pos_ = 0;
+            }
+            return 0xFF;
+
+        case S_SENDING_RESPONSE:
+        case S_SENDING_DATA:
+            // Firmware clocks dummy 0xFF to read response bytes
+            if (resp_idx_ < resp_queue_.size()) {
+                miso = resp_queue_[resp_idx_++];
+                if (trace_ && resp_idx_ <= 8)
+                    fprintf(stderr, "[SD] resp[%zu]: 0x%02X\n", resp_idx_-1, miso);
+                if (resp_idx_ >= resp_queue_.size()) {
+                    resp_queue_.clear();
+                    resp_idx_ = 0;
+                    state_ = S_IDLE;
+                }
+                return miso;
+            }
+            state_ = S_IDLE;
+            return 0xFF;
+
+        case S_RECEIVING_DATA:
+            // CMD24 write: firmware sends data token + 512 bytes + 2 CRC
+            write_buf_[write_pos_++] = mosi;
+            if (write_pos_ == 515) {
+                flush_write();
+                return 0x05;  // data accepted token
+            }
+            return 0xFF;
+        }
+
+        return 0xFF;
+    }
+
+    bool is_present() const { return img_ != nullptr; }
+
+private:
+    // SD-SPI command indices
+    static constexpr uint8_t CMD0   = 0;
+    static constexpr uint8_t CMD8   = 8;
+    static constexpr uint8_t CMD9   = 9;
+    static constexpr uint8_t CMD17  = 17;
+    static constexpr uint8_t CMD24  = 24;
+    static constexpr uint8_t CMD55  = 55;
+    static constexpr uint8_t CMD58  = 58;
+    static constexpr uint8_t ACMD41 = 41;
+
+    // R1 response bits
+    static constexpr uint8_t R1_IDLE          = 0x01;
+    static constexpr uint8_t R1_ILLEGAL_CMD   = 0x04;
+    static constexpr uint8_t R1_ADDRESS_ERROR = 0x20;
+
+    enum State {
+        S_IDLE,
+        S_RECEIVING_CMD,
+        S_SENDING_RESPONSE,
+        S_SENDING_DATA,
+        S_RECEIVING_DATA,
+    };
+
+    // SD-SPI command dispatch.  Called when cmd_buf_[] holds a
+    // complete 6-byte command.  Queues response into resp_queue_.
+    void process_command() {
+        resp_idx_ = 0;
+        resp_queue_.clear();
+
+        bool prev_app_cmd = app_cmd_;
+        app_cmd_ = false;
+        state_ = S_SENDING_RESPONSE;
+
+        uint8_t cmd = cmd_buf_[0] & 0x3F;
+
+        switch (cmd) {
+        case CMD0:
+            initialized_ = false;
+            resp_queue_.push_back(R1_IDLE);
+            break;
+
+        case CMD8:
+            // R7: R1 + echo back 4-byte argument (voltage + check pattern)
+            resp_queue_.push_back(R1_IDLE);
+            resp_queue_.push_back(cmd_buf_[1]);
+            resp_queue_.push_back(cmd_buf_[2]);
+            resp_queue_.push_back(cmd_buf_[3]);
+            resp_queue_.push_back(cmd_buf_[4]);
+            break;
+
+        case CMD55:
+            app_cmd_ = true;
+            resp_queue_.push_back(initialized_ ? 0x00 : R1_IDLE);
+            break;
+
+        case ACMD41:
+            if (!prev_app_cmd) {
+                resp_queue_.push_back(R1_ILLEGAL_CMD);
+            } else if (!initialized_) {
+                // First ACMD41: card leaves idle → ready
+                initialized_ = true;
+                resp_queue_.push_back(0x00);
+            } else {
+                resp_queue_.push_back(0x00);
+            }
+            break;
+
+        case CMD9: {
+            // CSD register (version 2.0 for SDHC)
+            if (!initialized_) {
+                resp_queue_.push_back(R1_IDLE | R1_ILLEGAL_CMD);
+                break;
+            }
+            resp_queue_.push_back(0x00);         // R1 OK
+            resp_queue_.push_back(0xFF);         // Nwr gap
+            resp_queue_.push_back(0xFE);         // data token
+            // 16-byte CSD v2.0 structure
+            uint8_t csd[16] = {};
+            csd[0] = 0x40;                      // CSD_STRUCTURE = 1 (v2.0)
+            csd[1] = 0x0E;                      // TAAC
+            csd[2] = 0x00;                      // NSAC
+            csd[3] = 0x32;                      // TRAN_SPEED = 25 MHz
+            csd[4] = 0x5B;                      // CCC high
+            csd[5] = 0x59;                      // CCC low + READ_BL_LEN=9
+            // C_SIZE: capacity = (C_SIZE + 1) * 512 KB
+            // total_sectors_ / 1024 - 1 = C_SIZE
+            uint32_t c_size = (total_sectors_ > 1024)
+                            ? (total_sectors_ / 1024 - 1) : 0;
+            csd[6]  = 0x00;
+            csd[7]  = (c_size >> 16) & 0x3F;
+            csd[8]  = (c_size >> 8) & 0xFF;
+            csd[9]  = c_size & 0xFF;
+            csd[10] = 0x7F;                     // various flags
+            csd[11] = 0x80;
+            csd[12] = 0x0A;
+            csd[13] = 0x40;
+            csd[14] = 0x00;
+            csd[15] = 0x01;                     // CRC (don't care in SPI)
+            for (int i = 0; i < 16; i++)
+                resp_queue_.push_back(csd[i]);
+            resp_queue_.push_back(0x00);         // dummy CRC16
+            resp_queue_.push_back(0x00);
+            state_ = S_SENDING_DATA;
+            break;
+        }
+
+        case CMD58:
+            // R3: R1 + 4-byte OCR (SDHC, power-up complete, 3.3V)
+            resp_queue_.push_back(initialized_ ? 0x00 : R1_IDLE);
+            resp_queue_.push_back(0x40);  // CCS=1 (SDHC), power-up complete
+            resp_queue_.push_back(0xFF);
+            resp_queue_.push_back(0x80);
+            resp_queue_.push_back(0x00);
+            break;
+
+        case CMD17: {
+            if (!initialized_) {
+                resp_queue_.push_back(R1_IDLE | R1_ILLEGAL_CMD);
+                break;
+            }
+            if (cmd_arg() >= total_sectors_) {
+                resp_queue_.push_back(R1_ADDRESS_ERROR);
+                break;
+            }
+            resp_queue_.push_back(0x00);         // R1 OK
+            resp_queue_.push_back(0xFF);         // Nwr gap
+            resp_queue_.push_back(0xFF);
+            resp_queue_.push_back(0xFE);         // data token
+            // 512 bytes from disk image (SDHC: arg is LBA)
+            uint8_t sector[512];
+            memset(sector, 0xFF, sizeof(sector));
+            fseek(img_, (long)cmd_arg() * 512L, SEEK_SET);
+            size_t n = fread(sector, 1, 512, img_);
+            (void)n;
+            for (size_t i = 0; i < 512; i++)
+                resp_queue_.push_back(sector[i]);
+            resp_queue_.push_back(0x00);         // dummy CRC16
+            resp_queue_.push_back(0x00);
+            state_ = S_SENDING_DATA;
+            break;
+        }
+
+        case CMD24:
+            if (!initialized_) {
+                resp_queue_.push_back(R1_IDLE | R1_ILLEGAL_CMD);
+            } else if (cmd_arg() >= total_sectors_) {
+                resp_queue_.push_back(R1_ADDRESS_ERROR);
+            } else {
+                resp_queue_.push_back(0x00);     // R1 OK
+                write_lba_ = cmd_arg();
+                write_pos_ = 0;
+                state_ = S_RECEIVING_DATA;
+            }
+            break;
+
+        default:
+            resp_queue_.push_back(R1_ILLEGAL_CMD);
+            break;
+        }
+    }
+
+    void flush_write() {
+        // write_buf_[0] = data token (0xFE)
+        // write_buf_[1..512] = sector data
+        // write_buf_[513..514] = CRC (ignored)
+        if (img_ && write_lba_ < total_sectors_) {
+            fseek(img_, (long)write_lba_ * 512L, SEEK_SET);
+            fwrite(&write_buf_[1], 1, 512, img_);
+            fflush(img_);
+        }
+        state_ = S_IDLE;
+        write_pos_ = 0;
+    }
+
+    uint32_t cmd_arg() const {
+        return ((uint32_t)cmd_buf_[1] << 24) |
+               ((uint32_t)cmd_buf_[2] << 16) |
+               ((uint32_t)cmd_buf_[3] << 8)  |
+               (uint32_t)cmd_buf_[4];
+    }
+
+    FILE*    img_ = nullptr;
+    uint32_t total_sectors_ = 0;
+    bool     trace_ = false;
+    bool     selected_ = false;
+    bool     initialized_ = false;
+    bool     app_cmd_ = false;
+    State    state_ = S_IDLE;
+
+    uint8_t  cmd_buf_[6] = {};
+    int      cmd_pos_ = 0;
+
+    std::vector<uint8_t> resp_queue_;
+    size_t   resp_idx_ = 0;
+
+    // CMD24 write state
+    uint8_t  write_buf_[515] = {};
+    int      write_pos_ = 0;
+    uint32_t write_lba_ = 0;
+};
