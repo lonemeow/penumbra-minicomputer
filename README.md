@@ -18,8 +18,10 @@ memory-mapped I/O.
 - 8 exception sources (IRQ, MMU faults, alignment, bus fault, BREAK,
   SYSCALL, privilege, illegal instruction)
 - LLVM backend: clang compiles C, lld links, llvm-mc assembles
-- Boot ROM in C, compiled and linked via the LLVM toolchain
+- Boot ROM in C: autoconfig, SD card boot, interactive monitor
+- Bus autoconfig, SPI controller, SD card read, MBR partition parsing
 - 30+ hardware test programs passing
+- NetBSD port started: machine headers + stage 1 bootloader skeleton
 
 ## Prerequisites
 
@@ -129,6 +131,8 @@ hw/                Hardware design
   tools/           Microcode assembler (uasm.py)
 sw/tools/          ISA assembler (pasm.py), binary converter (bin2hex.py)
 llvm/              LLVM backend (clang, lld, llvm-mc for Penumbra)
+netbsd/            NetBSD 10.1 source tree (git subtree)
+  sys/arch/penumbra/  Machine-dependent port (headers, bootloader)
 doc/               Architecture specifications
 ```
 
@@ -181,6 +185,50 @@ python3 llvm/llvm/utils/update_llc_test_checks.py \
 ```
 
 Review the diff to make sure the output changes are intentional.
+
+## NetBSD Port
+
+The goal is to run NetBSD on Penumbra.  The NetBSD 10.1 source tree is
+included as a git subtree under `netbsd/`.  Machine-dependent port files
+live in `netbsd/sys/arch/penumbra/`.
+
+**Current status:** Machine headers and stage 1 bootloader sources compile.
+See `doc/netbsd/porting-status.md` for the full roadmap.
+
+### Prerequisites
+
+In addition to the LLVM toolchain above, you need:
+
+- **zlib-dev** (for NetBSD host tools): `sudo apt install zlib1g-dev`
+
+### Building (quick, standalone)
+
+Compile the bootloader objects directly without the NetBSD build system:
+
+```sh
+make -C netbsd/sys/arch/penumbra/stand/boot -f Makefile.standalone
+```
+
+### Building (via build.sh)
+
+For the full NetBSD build infrastructure (builds libsa, libkern, etc.):
+
+```sh
+# 1. Create toolchain symlinks (one-time setup)
+sh netbsd/sys/arch/penumbra/toolchain-setup.sh
+
+# 2. Build NetBSD host tools
+cd netbsd
+./build.sh -U -m penumbra -a penumbra \
+  -V EXTERNAL_TOOLCHAIN=$PWD/../build/llvm \
+  -O ../build/netbsd-obj \
+  -T ../build/netbsd-tools \
+  -D ../build/netbsd-dest \
+  tools
+
+# 3. Use nbmake-penumbra to build the bootloader (once tools are built)
+../build/netbsd-tools/bin/nbmake-penumbra -C sys/arch/penumbra/stand/boot
+```
 
 ## License
 
