@@ -7,12 +7,12 @@
  * No globals — ROM has no writable data section.
  */
 
-#include "uart.h"
-#include "spi.h"
+#include "console.h"
+#include "sdcard.h"
+#include "util.h"
 #include "bootdata.h"
 #include "libc.h"
 #include "penumbra.h"
-#include <stdarg.h>
 
 typedef void (*trap_handler)(void);
 
@@ -29,95 +29,6 @@ typedef void (*trap_handler)(void);
 #define TRAP_ALIGN_FLT 8
 
 #define NUM_TRAPS      16
-
-static void console_putc(char c) {
-    uart_write(c);
-}
-
-static void console_puts(const char *s) {
-    while (*s) {
-        uart_write(*s++);
-    }
-}
-
-/*
- * console_gets — read a line with editing into buffer (max chars incl. NUL).
- *
- * Supports:
- *   - Printable characters (0x20–0x7E): insert at cursor
- *   - Backspace (0x08) or DEL (0x7F): delete character before cursor
- *   - Ctrl-U (0x15): kill entire line
- *   - Enter (\r or \n): accept line
- *
- * Echoes characters as typed. Backspace sends "\b \b" (back, space, back)
- * to erase the character on the terminal.
- *
- * Returns the length of the entered string (not counting NUL).
- */
-static int console_gets(char *buffer, int max) {
-    int i = 0;
-
-    for (;;) {
-        int c = uart_read();
-
-        if (c == '\r' || c == '\n') {
-            console_puts("\r\n");
-            break;
-        }
-
-        switch (c) {
-            case 0x08:
-            case 0x7F:
-                if (i > 0) {
-                    i--;
-                    console_puts("\b \b");
-                }
-                break;
-            case 0x15:
-                for (; i>0; i--) {
-                    console_puts("\b \b");
-                }
-                break;
-
-            default:
-                if (isprint(c) && i < (max - 1)) {
-                    buffer[i++] = (char)c;
-                    console_putc(c);
-                }
-        }
-    }
-
-    buffer[i] = '\0';
-    return i;
-}
-
-/* Formatted output helpers. */
-static void console_put_unsigned(unsigned int val, int base) {
-    char buf[12];
-    console_puts(utoa(val, buf, base));
-}
-
-static void console_put_dec(int val) {
-    if (val < 0) {
-        console_putc('-');
-        val = -val;
-    }
-    console_put_unsigned((unsigned int)val, 10);
-}
-
-static void console_put_hex(unsigned int val) {
-    console_puts("0x");
-    console_put_unsigned(val, 16);
-}
-
-static void console_printf(const char *fmt, ...) {
-    char buf[128];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, ap);
-    va_end(ap);
-    console_puts(buf);
-}
 
 static const char *trap_name(int trapno) {
     switch (trapno) {
@@ -298,6 +209,8 @@ static int autoconfig(uint32_t *cursor) {
     return ndevs;
 }
 
+/* ── Monitor commands ─────────────────────────────────────────────── */
+
 /*
  * cmd_examine — hex dump memory at a given address.
  *
@@ -340,316 +253,6 @@ static void cmd_examine(const char *args) {
             console_printf(" | %s\r\n", hexbuffer);
         }
     }
-}
-
-/* ── Little-endian unaligned reads ─────────────────────────────────── *
- *
- * MBR partition entries sit at byte 446 (446 % 4 == 2), so the
- * uint32_t fields are half-word aligned at best.  Byte-at-a-time
- * extraction avoids alignment faults.
- */
-
-static unsigned int read_le16(const unsigned char *p) {
-    return (unsigned int)p[0] | ((unsigned int)p[1] << 8);
-}
-
-static uint32_t read_le32(const unsigned char *p) {
-    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
-           ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-}
-
-/* ── MBR partition table ──────────────────────────────────────────── */
-
-#define MBR_SIGNATURE       0xAA55
-#define MBR_PART_OFFSET     446
-#define MBR_PART_ENTRY_SIZE 16
-#define MBR_SIG_OFFSET      510
-#define MBR_MAX_PARTS       4
-
-/* Partition type codes (subset) */
-#define PTYPE_EMPTY    0x00
-#define PTYPE_FAT12    0x01
-#define PTYPE_FAT16S   0x04
-#define PTYPE_FAT16    0x06
-#define PTYPE_FAT32    0x0B
-#define PTYPE_FAT32L   0x0C   /* FAT32 with LBA */
-#define PTYPE_LINUX    0x83
-#define PTYPE_FREEBSD  0xA5
-#define PTYPE_NETBSD   0xA9
-#define PTYPE_SWAP     0x82
-
-static const char *part_type_name(unsigned char type) {
-    switch (type) {
-    case PTYPE_EMPTY:   return "empty";
-    case PTYPE_FAT12:   return "FAT12";
-    case PTYPE_FAT16S:  return "FAT16 <32M";
-    case PTYPE_FAT16:   return "FAT16";
-    case PTYPE_FAT32:   return "FAT32";
-    case PTYPE_FAT32L:  return "FAT32-LBA";
-    case PTYPE_LINUX:   return "Linux";
-    case PTYPE_FREEBSD: return "FreeBSD";
-    case PTYPE_NETBSD:  return "NetBSD";
-    case PTYPE_SWAP:    return "Linux swap";
-    default:            return "unknown";
-    }
-}
-
-/* ── SD card (SPI mode) ───────────────────────────────────────────── *
- *
- * Fully stateless: each operation does init → work → deinit, so the
- * card can be swapped between commands and the next boot stage
- * inherits clean hardware state.
- */
-
-/* R1 response bit masks */
-#define SD_R1_IDLE       0x01
-#define SD_R1_ERASE_RST  0x02
-#define SD_R1_ILLEGAL    0x04
-#define SD_R1_CRC_ERR    0x08
-#define SD_R1_ERASE_SEQ  0x10
-#define SD_R1_ADDR_ERR   0x20
-#define SD_R1_PARAM_ERR  0x40
-#define SD_R1_NO_RESP    0xFF
-
-/* Timeout limits (iteration counts, not real time) */
-#define SD_CMD0_RETRIES   20
-#define SD_ACMD41_RETRIES 1500
-#define SD_DATA_RETRIES   1000
-#define SD_RESP_RETRIES   8
-
-/*
- * Send an SD command (6 bytes) and return the R1 response.
- * Polls up to SD_RESP_RETRIES bytes waiting for bit 7 to clear.
- */
-static unsigned char sd_command(uint32_t base, unsigned char cmd,
-                                uint32_t arg) {
-    spi_transfer(base, 0x40 | cmd);
-    spi_transfer(base, (unsigned char)(arg >> 24));
-    spi_transfer(base, (unsigned char)(arg >> 16));
-    spi_transfer(base, (unsigned char)(arg >> 8));
-    spi_transfer(base, (unsigned char)(arg));
-    /* CRC — only CMD0 and CMD8 need valid CRC in SPI mode */
-    if (cmd == 0)
-        spi_transfer(base, 0x95);
-    else if (cmd == 8)
-        spi_transfer(base, 0x87);
-    else
-        spi_transfer(base, 0xFF);
-
-    unsigned char r;
-    for (int i = 0; i < SD_RESP_RETRIES; i++) {
-        r = spi_transfer(base, 0xFF);
-        if (!(r & 0x80))
-            return r;
-    }
-    return r;
-}
-
-/* Read a 32-bit big-endian response (CMD8 R7 tail, CMD58 OCR, etc.) */
-static uint32_t sd_read_response32(uint32_t base) {
-    uint32_t val;
-    val  = (uint32_t)spi_transfer(base, 0xFF) << 24;
-    val |= (uint32_t)spi_transfer(base, 0xFF) << 16;
-    val |= (uint32_t)spi_transfer(base, 0xFF) << 8;
-    val |= (uint32_t)spi_transfer(base, 0xFF);
-    return val;
-}
-
-/*
- * Initialize SD card on the given SPI controller.
- * Leaves CS asserted and clock set fast on success.
- * On failure, deasserts CS and resets clock.
- *
- * Returns 0 on success, negative error code on failure:
- *   -1  CMD0 no response (empty slot)
- *   -2  CMD0 unexpected response
- *   -3  CMD8 rejected
- *   -4  CMD8 voltage/pattern mismatch
- *   -5  CMD55 rejected
- *   -6  ACMD41 rejected
- *   -7  ACMD41 timeout (card never left idle)
- *   -8  CMD58 not SDHC (no block addressing)
- */
-static int sd_init(uint32_t base) {
-    unsigned char r1;
-
-    /* Slow clock for init (≤400 kHz) */
-    spi_set_clkdiv(base, 0xFF);
-
-    /* 80+ clock cycles with CS deasserted (card power-up) */
-    spi_cs0(base, 1);
-    for (int i = 0; i < 20; i++)
-        spi_transfer(base, 0xFF);
-
-    spi_cs0(base, 0);
-
-    /* CMD0 — go idle */
-    for (int i = 0; i < SD_CMD0_RETRIES; i++) {
-        r1 = sd_command(base, 0, 0);
-        if (r1 == SD_R1_IDLE)
-            break;
-    }
-    if (r1 == SD_R1_NO_RESP) { r1 = -1; goto fail; }
-    if (r1 != SD_R1_IDLE)    { r1 = -2; goto fail; }
-
-    /* CMD8 — send interface condition (voltage check) */
-    r1 = sd_command(base, 8, 0x1AA);
-    if (r1 != SD_R1_IDLE) { r1 = -3; goto fail; }
-    uint32_t r7 = sd_read_response32(base);
-    if ((r7 & 0xFFF) != 0x1AA) { r1 = -4; goto fail; }
-
-    /* CMD55 + ACMD41 — app-specific init, wait for ready */
-    for (int i = 0; i < SD_ACMD41_RETRIES; i++) {
-        r1 = sd_command(base, 55, 0);
-        if (r1 != SD_R1_IDLE) { r1 = -5; goto fail; }
-        r1 = sd_command(base, 41, 0x40000000);
-        if (r1 == 0x00)
-            break;
-        if (r1 != SD_R1_IDLE) { r1 = -6; goto fail; }
-    }
-    if (r1 != 0x00) { r1 = -7; goto fail; }
-
-    /* CMD58 — read OCR, check SDHC (block addressing) */
-    r1 = sd_command(base, 58, 0);
-    uint32_t ocr = sd_read_response32(base);
-    if (!(ocr & 0x40000000)) { r1 = -8; goto fail; }
-
-    /* Switch to fast clock for data transfers */
-    spi_set_clkdiv(base, 0);
-    return 0;
-
-fail:
-    spi_cs0(base, 1);
-    spi_set_clkdiv(base, 0xFF);
-    return (int)(signed char)r1;
-}
-
-/*
- * Return the SPI controller to clean state: CS deasserted, slow
- * clock. The next user (ROM monitor retry, stage 1 bootloader)
- * starts from a known baseline.
- */
-static void sd_deinit(uint32_t base) {
-    spi_cs0(base, 1);
-    spi_set_clkdiv(base, 0xFF);
-}
-
-/*
- * Read one 512-byte sector from an already-initialized SD card.
- * Returns 0 on success, -1 on error.
- */
-static int sd_read_sector(uint32_t base, uint32_t lba,
-                          unsigned char *dst) {
-    unsigned char r1 = sd_command(base, 17, lba);
-    if (r1 != 0x00)
-        return -1;
-
-    /* Wait for data token (0xFE) */
-    unsigned char tok;
-    for (int i = 0; i < SD_DATA_RETRIES; i++) {
-        tok = spi_transfer(base, 0xFF);
-        if (tok == 0xFE)
-            break;
-    }
-    if (tok != 0xFE)
-        return -1;
-
-    for (int i = 0; i < 512; i++)
-        dst[i] = spi_transfer(base, 0xFF);
-
-    /* Discard CRC16 */
-    spi_transfer(base, 0xFF);
-    spi_transfer(base, 0xFF);
-
-    return 0;
-}
-
-/*
- * Read MBR from sector 0 and look up partition `part` (1-based).
- * On success, stores partition LBA start in *lba_start and sector
- * count in *sector_count.  Returns 0 on success, negative on error:
- *   -1  SD init failed
- *   -2  sector 0 read failed
- *   -3  bad MBR signature
- *   -4  partition empty or out of range
- */
-static int mbr_get_partition(uint32_t spi_base, int part,
-                             uint32_t *lba_start, uint32_t *sector_count) {
-    unsigned char mbr[512];
-
-    int rc = sd_init(spi_base);
-    if (rc != 0)
-        return -1;
-
-    rc = sd_read_sector(spi_base, 0, mbr);
-    sd_deinit(spi_base);
-    if (rc != 0)
-        return -2;
-
-    if (read_le16(mbr + MBR_SIG_OFFSET) != MBR_SIGNATURE)
-        return -3;
-
-    if (part < 1 || part > MBR_MAX_PARTS)
-        return -4;
-
-    const unsigned char *e = mbr + MBR_PART_OFFSET +
-                             (part - 1) * MBR_PART_ENTRY_SIZE;
-    unsigned char type = e[4];
-    if (type == PTYPE_EMPTY)
-        return -4;
-
-    *lba_start    = read_le32(e + 8);
-    *sector_count = read_le32(e + 12);
-    return 0;
-}
-
-/*
- * Probe for SD card presence on a single controller.
- * Does CMD0 only — just checks if a card responds.
- * Returns 1 if a card is present, 0 if empty slot.
- */
-static int sd_detect(uint32_t base) {
-    unsigned char r1;
-
-    spi_set_clkdiv(base, 0xFF);
-    spi_cs0(base, 1);
-    for (int i = 0; i < 20; i++)
-        spi_transfer(base, 0xFF);
-
-    spi_cs0(base, 0);
-    for (int i = 0; i < SD_CMD0_RETRIES; i++) {
-        r1 = sd_command(base, 0, 0);
-        if (r1 == SD_R1_IDLE)
-            break;
-    }
-    spi_cs0(base, 1);
-    spi_set_clkdiv(base, 0xFF);
-
-    return r1 == SD_R1_IDLE;
-}
-
-/*
- * Probe all CLASS_SD devices and report which have cards.
- * Returns the SD controller index of the first card found, or -1.
- * (sd:X,Y naming — X is the Nth SD controller, not the global
- * device index.)
- */
-static int sd_probe(void) {
-    int first = -1;
-    for (int i = 0; ; i++) {
-        struct btag_device *dev = bd_find_device_by_class(ACFG_CLASS_SD, i);
-        if (!dev)
-            break;
-        console_printf("  sd:%d,0 ... ", i);
-        if (sd_detect(dev->base)) {
-            console_puts("card present\r\n");
-            if (first < 0)
-                first = i;
-        } else {
-            console_puts("empty\r\n");
-        }
-    }
-    return first;
 }
 
 /*
@@ -757,59 +360,9 @@ static void cmd_load(const char *args) {
 }
 
 /*
- * Format a byte count as a human-readable size (e.g. "1.5GB").
- * Uses the largest unit where the integer part is ≥ 1, with one
- * decimal digit via integer fixed-point: frac = (rem * 10) / div.
- * No floating point needed.
- */
-static void humanize_size(unsigned long bytes, char *buf, unsigned long bufsize) {
-    static const char * const suffixes[] = {
-        "B", "kB", "MB", "GB"
-    };
-    static const unsigned long divisors[] = {
-        1, 1024, 1024 * 1024, 1024 * 1024 * 1024
-    };
-
-    /* Pick largest unit where whole part ≥ 1 */
-    int idx = 0;
-    for (int i = 3; i >= 1; i--) {
-        if (bytes >= divisors[i]) {
-            idx = i;
-            break;
-        }
-    }
-
-    unsigned long whole = bytes / divisors[idx];
-    unsigned long frac  = (bytes % divisors[idx]) * 10 / divisors[idx];
-
-    if (idx == 0 || frac == 0)
-        snprintf(buf, bufsize, "%u%s", (unsigned int)whole, suffixes[idx]);
-    else
-        snprintf(buf, bufsize, "%u.%u%s", (unsigned int)whole,
-                 (unsigned int)frac, suffixes[idx]);
-}
-
-/*
  * cmd_part — display MBR partition table from an SD card.
  *
  * Usage: part sd:<dev>,<cs>
- *
- * Reads sector 0, validates the MBR signature, and prints all
- * four partition entries.  Helpers available:
- *   - sd_init(base), sd_read_sector(base, lba, buf), sd_deinit(base)
- *   - read_le16(p), read_le32(p) for unaligned LE fields
- *   - part_type_name(type) for human-readable type strings
- *   - console_printf(fmt, ...) for formatted output
- *   - MBR_PART_OFFSET (446), MBR_PART_ENTRY_SIZE (16), MBR_SIG_OFFSET (510)
- *   - MBR_SIGNATURE (0xAA55), MBR_MAX_PARTS (4), PTYPE_EMPTY (0x00)
- *
- * Partition entry layout (16 bytes at MBR_PART_OFFSET + i*16):
- *   byte  0:    status (0x80 = active/bootable)
- *   bytes 1-3:  CHS start (ignore)
- *   byte  4:    partition type
- *   bytes 5-7:  CHS end (ignore)
- *   bytes 8-11: LBA start (LE32)
- *   bytes 12-15: sector count (LE32)
  */
 static void cmd_part(const char *args) {
         if (strncmp(args, "sd:", 3)) {
@@ -869,6 +422,8 @@ static void cmd_part(const char *args) {
 out:
     sd_deinit(dev->base);
 }
+
+/* ── Main and boot sequence ───────────────────────────────────────── */
 
 int main(void) {
     char cmdbuffer[64];

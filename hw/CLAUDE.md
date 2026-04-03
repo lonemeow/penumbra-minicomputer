@@ -40,7 +40,19 @@ This file provides detailed hardware context for work under `hw/`. The root `CLA
 | Simple memory | `rtl/soc/simple_mem.sv` | — | Parameterizable synchronous SRAM model (default 16 MB), configurable READ_LATENCY/WRITE_LATENCY modeling SDRAM timing. |
 
 ## Boot ROM and Interactive Simulation
-- **Boot ROM** (`rom/`): Penumbra/1 boot monitor in C. `crt0.s` sets SP (low RAM, page 1 top) and calls `main()`. Features: line-editing console, trap vector setup with assembly trampolines (`trap_entry.s`), bus-fault-based RAM detection, bus autoconfig with device discovery, SD card detection and sector reading, MBR partition table parsing, boot data tagged list at 0x0040 (`bootdata.h`). No globals — ROM has no writable data section; all state in boot data or on the stack. Monitor commands: `x <addr> [len]` (hex dump), `load sd:<dev>,<cs>[:<part>] <addr> <lba> <count>` (SD read, raw or partition-relative LBA), `part sd:<dev>,<cs>` (display MBR partition table), `break`/`b` (halt). SD naming uses per-class controller index: `sd:0,0` = first SD controller, CS0. Has its own `rom/Makefile` with automatic `*.c`/`*.s` discovery, header deps, and pattern rules. Built with clang: `clang -c` → `llvm-mc` → `ld.lld` (via `rom/rom.ld`) → `llvm-objcopy` → `bin2hex.py`.
+- **Boot ROM** (`rom/`): Penumbra/1 boot monitor in C. No globals — ROM has no writable data section; all state in boot data or on the stack. Source files:
+  - `boot_rom.c` — main(), trap setup, RAM detection, bus autoconfig, monitor command loop (`x`, `load`, `part`, `break`)
+  - `console.c`/`.h` — line-editing input (`console_gets`), formatted output (`console_printf`, `console_puts`)
+  - `sdcard.c`/`.h` — SD-SPI protocol (init/deinit/read_sector/detect), MBR partition parsing (`mbr_get_partition`, `part_type_name`), device probing (`sd_probe`)
+  - `util.c`/`.h` — unaligned LE reads (`read_le16`/`read_le32`), human-readable size formatting (`humanize_size`)
+  - `bootdata.h` — boot data tagged list builder/lookup (inline, header-only)
+  - `spi.h` — low-level SPI register access (inline, header-only)
+  - `penumbra.h` — SPR/sysreg access, system constants (inline, header-only)
+  - `libc.c`/`.h` — minimal C library (strlen, strcmp, strtoul, snprintf, software mul/div)
+  - `uart.c`/`.h` — UART polling driver
+  - `crt0.s` — startup (set SP, call main), `trap_entry.s` — exception trampolines, `rom.ld` — linker script
+  - Monitor commands: `x <addr> [len]` (hex dump), `load sd:<dev>,<cs>[:<part>] <addr> <lba> <count>` (SD read, raw or partition-relative LBA), `part sd:<dev>,<cs>` (display MBR partition table), `break`/`b` (halt). SD naming uses per-class controller index: `sd:0,0` = first SD controller, CS0.
+  - Has its own `rom/Makefile` with automatic `*.c`/`*.s` discovery, header deps, and pattern rules. Built with clang: `clang -c` → `llvm-mc` → `ld.lld` (via `rom/rom.ld`) → `llvm-objcopy` → `bin2hex.py`.
 - **Interactive testbench** (`sim/tb_interactive.cpp`): Bridges host stdin/stdout to UART RX/TX. Raw terminal mode. Polls stdin every 1024 cycles. Exits on BREAK or Ctrl-C. SD card emulation via `+sdcard=disk.img` plusarg (or `SDCARD=` make variable).
 
 ## Exception and Interrupt Handling
