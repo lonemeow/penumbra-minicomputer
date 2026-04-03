@@ -105,6 +105,7 @@
 ./ofppc/include/elf_machdep.h
 ./or1k/include/disklabel.h
 ./or1k/include/elf_machdep.h
+./penumbra/include/elf_machdep.h
 ./playstation2/include/disklabel.h
 ./playstation2/include/elf_machdep.h
 ./pmax/include/disklabel.h

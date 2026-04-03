@@ -217,16 +217,16 @@ For the full NetBSD build infrastructure (builds libsa, libkern, etc.):
 # 1. Create toolchain symlinks (one-time setup)
 sh netbsd/sys/arch/penumbra/toolchain-setup.sh
 
-# 2. Build NetBSD host tools
+# 2. Build NetBSD host tools (use -u for incremental rebuilds after first time)
 cd netbsd
-./build.sh -U -m penumbra -a penumbra \
+./build.sh -U -j4 -m penumbra -a penumbra \
   -V EXTERNAL_TOOLCHAIN=$PWD/../build/llvm \
   -O ../build/netbsd-obj \
   -T ../build/netbsd-tools \
   -D ../build/netbsd-dest \
   tools
 
-# 3. Use nbmake-penumbra to build the bootloader (once tools are built)
+# 3. Use nbmake-penumbra to build the bootloader
 ../build/netbsd-tools/bin/nbmake-penumbra -C sys/arch/penumbra/stand/boot
 ```
 

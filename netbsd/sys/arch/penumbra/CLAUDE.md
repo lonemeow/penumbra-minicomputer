@@ -20,9 +20,26 @@ sys/arch/penumbra/
 
 ## Build
 
-The port is compiled using the Penumbra clang cross-compiler (`build/llvm/bin/clang --target=penumbra-unknown-none`). The `machine/` include path is resolved by creating a symlink: `netbsd/sys/machine → arch/penumbra/include`.
+### Via build.sh (preferred)
 
-Test that headers compile:
+Penumbra is registered in `build.sh` with `TOOLCHAIN_MISSING=yes` (no in-tree GCC). Uses `EXTERNAL_TOOLCHAIN` pointing at our LLVM build, with prefixed symlinks created by `toolchain-setup.sh`.
+```sh
+sh netbsd/sys/arch/penumbra/toolchain-setup.sh   # one-time: creates penumbra-unknown-none-* symlinks
+cd netbsd
+./build.sh -U -j4 -m penumbra tools \
+  -V EXTERNAL_TOOLCHAIN=$PWD/../build/llvm \
+  -O ../build/netbsd-obj -T ../build/netbsd-tools -D ../build/netbsd-dest
+../build/netbsd-tools/bin/nbmake-penumbra -C sys/arch/penumbra/stand/boot
+```
+
+### Standalone (quick iteration)
+
+```sh
+make -C netbsd/sys/arch/penumbra/stand/boot -f Makefile.standalone
+```
+
+### Header-only compile test
+
 ```sh
 ln -sfn arch/penumbra/include netbsd/sys/machine
 build/llvm/bin/clang --target=penumbra-unknown-none -ffreestanding -nostdinc \

@@ -72,12 +72,28 @@ Stage 1 is loaded by the ROM from the partition gap (sectors 1–2047, ~1 MB). I
 
 ## Build Notes
 
-The NetBSD subtree is large. We don't use `build.sh` yet — the bootloader is built with a standalone Makefile using the Penumbra clang/lld toolchain, similar to the ROM build.
+Penumbra is registered in `build.sh` with `TOOLCHAIN_MISSING=yes` and `HAVE_LLVM=yes`. We use `EXTERNAL_TOOLCHAIN` pointing at our LLVM build, with prefixed symlinks (created by `toolchain-setup.sh`). A one-line fix in `tools/Makefile` gates `dbsym`/`mdsetimage` on `MKBINUTILS` — these tools need libbfd from GNU binutils which we don't have.
 
-Compile test for headers:
+Build flow:
 ```sh
-ln -sfn arch/penumbra/include netbsd/sys/machine
-build/llvm/bin/clang --target=penumbra-unknown-none -ffreestanding -nostdinc \
-  -D_STANDALONE -I netbsd/sys -c test.c -o /dev/null
-rm netbsd/sys/machine
+# 1. Create toolchain symlinks (one-time)
+sh sys/arch/penumbra/toolchain-setup.sh
+
+# 2. Build host tools (nbmake, config, etc.)
+cd netbsd && ./build.sh -U -j4 -m penumbra tools \
+  -V EXTERNAL_TOOLCHAIN=$PWD/../build/llvm \
+  -O ../build/netbsd-obj -T ../build/netbsd-tools -D ../build/netbsd-dest
+
+# 3. Build bootloader
+../build/netbsd-tools/bin/nbmake-penumbra -C sys/arch/penumbra/stand/boot
 ```
+
+Quick standalone build (no build.sh needed):
+```sh
+make -C netbsd/sys/arch/penumbra/stand/boot -f Makefile.standalone
+```
+
+Key files modified in the NetBSD tree (outside `sys/arch/penumbra/`):
+- `build.sh` — penumbra in `valid_MACHINE_ARCH` table
+- `share/mk/bsd.own.mk` — TOOLCHAIN_MISSING, HAVE_LLVM, MACHINE_GNU_PLATFORM, MACHINES.penumbra
+- `share/mk/bsd.endian.mk` — penumbra in little-endian list

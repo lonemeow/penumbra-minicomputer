@@ -1,15 +1,14 @@
 #!/bin/sh
 #
-# toolchain-setup.sh — Create prefixed symlinks for NetBSD build.sh
+# toolchain-setup.sh — Create prefixed symlinks for NetBSD build system
 #
-# NetBSD's EXTERNAL_TOOLCHAIN mechanism expects tools named
-# penumbra-unknown-none-{clang,ar,ld,...} in $EXTERNAL_TOOLCHAIN/bin/.
-# This script creates those symlinks pointing to our LLVM tools.
+# Creates penumbra-unknown-none-{clang,ar,ld,...} symlinks in the LLVM
+# build's bin/ directory, so EXTERNAL_TOOLCHAIN can find them.
 #
 # Usage:
 #   sh toolchain-setup.sh [/path/to/llvm/build]
 #
-# Default LLVM path: ../../build/llvm (relative to this script)
+# Default LLVM path: ../../build/llvm (relative to project root)
 
 set -e
 
@@ -38,7 +37,7 @@ create_link() {
     echo "  $PREFIX-$gnu_name -> $llvm_name"
 }
 
-echo "Creating toolchain symlinks in $BIN/"
+echo "Creating toolchain symlinks in $TARGET_DIR/"
 
 # Compiler
 create_link clang      clang
@@ -58,6 +57,8 @@ create_link size       llvm-size
 create_link strings    llvm-strings
 create_link strip      llvm-strip
 
+echo ""
 echo "Done. Use with:"
-echo "  cd netbsd && ./build.sh -m penumbra -a penumbra \\"
-echo "    -V EXTERNAL_TOOLCHAIN=$LLVM_PREFIX tools"
+echo "  cd netbsd && ./build.sh -U -j4 -m penumbra tools \\"
+echo "    -V EXTERNAL_TOOLCHAIN=$LLVM_PREFIX \\"
+echo "    -O ../build/netbsd-obj -T ../build/netbsd-tools -D ../build/netbsd-dest"
