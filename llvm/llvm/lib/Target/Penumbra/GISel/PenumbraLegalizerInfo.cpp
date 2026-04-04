@@ -142,6 +142,13 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   // Lower to the generic SELECT expansion (icmp + negate + select).
   getActionDefinitionsBuilder(G_ABS).lower();
 
+  // Bit-counting: no hardware instructions, lower to shift/logic sequences.
+  getActionDefinitionsBuilder({G_CTTZ, G_CTTZ_ZERO_UNDEF,
+                               G_CTLZ, G_CTLZ_ZERO_UNDEF,
+                               G_CTPOP})
+      .lowerFor({{s32, s32}})
+      .clampScalar(0, s32, s32);
+
   // G_FREEZE: converts potentially-poison values to well-defined ones.
   // At -O1+ the optimizer inserts these around division and other ops.
   // No-op on Penumbra — just pass the value through.
