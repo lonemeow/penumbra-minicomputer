@@ -320,6 +320,11 @@ def : MnemonicAlias<"blo", "bcc">;  // unsigned lower = carry clear
 let isReturn = 1, isTerminator = 1, isBarrier = 1 in
 def JMP  : FormatR_Rs<0b11000, (outs), (ins GPR:$Rs), "jmp\t$Rs">;
 
+// JALR: jump and link register — R13 = PC+4, PC = Rs.
+// Used for indirect calls (function pointers). op=23.
+let isCall = 1, Defs = [R13, SR] in
+def JALR : FormatR_Rs<0b10111, (outs), (ins GPR:$Rs), "jalr\t$Rs">;
+
 // Indirect branch (non-return) — same encoding as JMP but not marked isReturn,
 // so the epilogue inserter doesn't place stack restore before it.
 // Used by jump tables where the targets are within the same function.

@@ -219,9 +219,15 @@ bool PenumbraCallLowering::lowerCall(MachineIRBuilder &MIRBuilder,
   for (auto &AInfo : Info.OrigArgs)
     splitToValueTypes(AInfo, SplitArgs, DL, CC);
 
-  // Build the BL instruction (branch and link — saves PC+4 to R13).
-  // Only direct calls (symbol targets) for now.
-  auto MIB = MIRBuilder.buildInstrNoInsert(Penumbra::BL).add(Info.Callee);
+  // Build the call instruction.
+  // Direct calls (symbol target): BL (branch and link, Format B, PC-relative).
+  // Indirect calls (register target): JALR (jump and link register, Format R).
+  MachineInstrBuilder MIB;
+  if (Info.Callee.isReg()) {
+    MIB = MIRBuilder.buildInstrNoInsert(Penumbra::JALR).add(Info.Callee);
+    MRI.setRegClass(Info.Callee.getReg(), &Penumbra::GPRRegClass);
+  } else
+    MIB = MIRBuilder.buildInstrNoInsert(Penumbra::BL).add(Info.Callee);
 
   // Add the call-preserved register mask so the register allocator knows
   // which registers survive across the call.
