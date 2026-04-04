@@ -14,7 +14,7 @@ BUILD     := $(ROOT)/build/boot1
 
 LLVM_PREFIX ?= $(ROOT)/build/llvm
 CC       = $(LLVM_PREFIX)/bin/clang --target=penumbra-unknown-none
-CFLAGS   = -O0 -ffreestanding -nostdinc -D_STANDALONE -D__NetBSD__ -I$(SYSDIR) -MMD -MP
+CFLAGS   = -O0 -ffreestanding -fPIC -nostdinc -D_STANDALONE -D__NetBSD__ -I$(SYSDIR) -MMD -MP
 
 BOOT_SRCS = boot.c conf.c
 LIBSA_SRCS = sdblk.c cons.c
