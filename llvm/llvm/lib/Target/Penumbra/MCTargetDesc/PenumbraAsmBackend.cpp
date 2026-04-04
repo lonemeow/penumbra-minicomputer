@@ -68,6 +68,10 @@ PenumbraAsmBackend::getFixupKindInfo(MCFixupKind Kind) const {
       {"fixup_penumbra_lo16", 0, 16, 0},
       // hi16: high 16 bits of absolute address, into bits [15:0]
       {"fixup_penumbra_hi16", 0, 16, 0},
+      // memoffset16_pcrel: PC-relative 16-bit offset, into bits [17:2]
+      {"fixup_penumbra_memoffset16_pcrel", 2, 16, 0},
+      // imm16_pcrel: PC-relative 16-bit immediate, into bits [15:0]
+      {"fixup_penumbra_imm16_pcrel", 0, 16, 0},
   };
 
   if (Kind < FirstTargetFixupKind)
@@ -127,6 +131,24 @@ void PenumbraAsmBackend::applyFixup(const MCFragment &F, const MCFixup &Fixup,
   if (Kind == static_cast<MCFixupKind>(Penumbra::fixup_penumbra_hi16)) {
     // High 16 bits of absolute address, into bits [15:0].
     uint32_t Encoded = (static_cast<uint32_t>(Value) >> 16) & 0xFFFF;
+    support::endian::write32le(
+        Data, support::endian::read32le(Data) | Encoded);
+    return;
+  }
+
+  if (Kind ==
+      static_cast<MCFixupKind>(Penumbra::fixup_penumbra_memoffset16_pcrel)) {
+    // PC-relative 16-bit offset, into bits [17:2] (same layout as memoffset16).
+    uint32_t Encoded = (static_cast<uint32_t>(Value) & 0xFFFF) << 2;
+    support::endian::write32le(
+        Data, support::endian::read32le(Data) | Encoded);
+    return;
+  }
+
+  if (Kind ==
+      static_cast<MCFixupKind>(Penumbra::fixup_penumbra_imm16_pcrel)) {
+    // PC-relative 16-bit immediate, into bits [15:0].
+    uint32_t Encoded = static_cast<uint32_t>(Value) & 0xFFFF;
     support::endian::write32le(
         Data, support::endian::read32le(Data) | Encoded);
     return;

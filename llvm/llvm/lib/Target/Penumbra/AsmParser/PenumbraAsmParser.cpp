@@ -297,6 +297,8 @@ bool PenumbraAsmParser::parseOperand(OperandVector &Operands) {
       Spec = Penumbra::S_Lo16;
     else if (Name == "hi16")
       Spec = Penumbra::S_Hi16;
+    else if (Name == "pcrel")
+      Spec = Penumbra::S_PCRel;
     else
       return Error(ModLoc, "unknown modifier %" + Name);
     Parser.Lex(); // eat modifier name

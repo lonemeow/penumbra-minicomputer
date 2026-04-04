@@ -63,7 +63,7 @@ This file provides LLVM backend context for work under `llvm/`. The root `CLAUDE
 `llvm-mc` → ELF object → `llvm-objcopy -O binary` → `bin2hex.py` → `$readmemh` hex. Same approach as ARM/RISC-V embedded. `bin2hex.py` (`sw/tools/bin2hex.py`) reads flat LE binary, emits one 32-bit word per line in uppercase hex.
 
 ## lld Support (`llvm/lld/ELF/Arch/Penumbra.cpp`)
-Minimal ELF linker target. Handles all 6 relocation types. Registered via `EM_PENUMBRA` (0xF0DA) in `llvm/BinaryFormat/ELF.h`. Emulation string `elf32penumbra`, output format `elf32-penumbra`. Triple mapping for `Triple::penumbra` in `InputFiles.cpp`.
+Minimal ELF linker target. Handles all 8 relocation types (including PC-relative memoffset and imm16 for PIC). Registered via `EM_PENUMBRA` (0xF0DA) in `llvm/BinaryFormat/ELF.h`. Emulation string `elf32penumbra`, output format `elf32-penumbra`. Triple mapping for `Triple::penumbra` in `InputFiles.cpp`.
 
 ## ELF Relocations
 | Type | Value | Description | Field |
@@ -74,6 +74,8 @@ Minimal ELF linker target. Handles all 6 relocation types. Registered via `EM_PE
 | `R_PENUMBRA_IMM16` | 3 | 16-bit immediate | bits [15:0] |
 | `R_PENUMBRA_LO16` | 4 | Low 16 bits of absolute address | bits [15:0] |
 | `R_PENUMBRA_HI16` | 5 | High 16 bits of absolute address | bits [15:0] |
+| `R_PENUMBRA_MEMOFFSET16_PCREL` | 6 | PC-relative 16-bit memory offset | bits [17:2] |
+| `R_PENUMBRA_IMM16_PCREL` | 7 | PC-relative 16-bit immediate | bits [15:0] |
 
 ## Key Implementation Notes
 - **applyFixup Data pointer:** Pre-positioned at fixup location — do NOT add `Fixup.getOffset()`. Use `Data[i]` directly.

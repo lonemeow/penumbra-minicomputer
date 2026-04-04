@@ -28,6 +28,8 @@ enum {
   R_PENUMBRA_IMM16 = 3,
   R_PENUMBRA_LO16 = 4,
   R_PENUMBRA_HI16 = 5,
+  R_PENUMBRA_MEMOFFSET16_PCREL = 6,
+  R_PENUMBRA_IMM16_PCREL = 7,
 };
 
 namespace {
@@ -50,6 +52,8 @@ RelExpr Penumbra::getRelExpr(RelType type, const Symbol &s,
                              const uint8_t *loc) const {
   switch (type) {
   case R_PENUMBRA_BRANCH22:
+  case R_PENUMBRA_MEMOFFSET16_PCREL:
+  case R_PENUMBRA_IMM16_PCREL:
     return R_PC;
   default:
     return R_ABS;
@@ -79,6 +83,17 @@ void Penumbra::relocate(uint8_t *loc, const Relocation &rel,
   case R_PENUMBRA_HI16:
     // High 16 bits of address, into bits [15:0].
     write32le(loc, (read32le(loc) & 0xFFFF0000) | ((val >> 16) & 0xFFFF));
+    break;
+  case R_PENUMBRA_MEMOFFSET16_PCREL: {
+    // PC-relative 16-bit offset, into bits [17:2] (Format M).
+    uint32_t insn = read32le(loc);
+    insn = (insn & ~(0xFFFF << 2)) | ((static_cast<uint32_t>(val) & 0xFFFF) << 2);
+    write32le(loc, insn);
+    break;
+  }
+  case R_PENUMBRA_IMM16_PCREL:
+    // PC-relative 16-bit immediate, into bits [15:0] (Format L).
+    write32le(loc, (read32le(loc) & 0xFFFF0000) | (val & 0xFFFF));
     break;
   default:
     Err(ctx) << getErrorLoc(ctx, loc) << "unrecognized relocation " << rel.type;

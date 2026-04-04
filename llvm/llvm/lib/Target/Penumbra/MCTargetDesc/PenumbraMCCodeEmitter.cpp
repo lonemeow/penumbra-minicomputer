@@ -115,10 +115,11 @@ unsigned PenumbraMCCodeEmitter::encodeImm16(
   if (MO.isImm())
     return static_cast<unsigned>(MO.getImm());
 
-  // Check for lo16/hi16 specifier expressions (from LI/LA pseudo expansion).
+  // Check for lo16/hi16/pcrel specifier expressions.
   const MCExpr *Expr = MO.getExpr();
   MCFixupKind Kind =
       static_cast<MCFixupKind>(Penumbra::fixup_penumbra_imm16);
+  bool PCRel = false;
 
   if (const auto *SE = dyn_cast<MCSpecifierExpr>(Expr)) {
     switch (SE->getSpecifier()) {
@@ -128,13 +129,17 @@ unsigned PenumbraMCCodeEmitter::encodeImm16(
     case Penumbra::S_Hi16:
       Kind = static_cast<MCFixupKind>(Penumbra::fixup_penumbra_hi16);
       break;
+    case Penumbra::S_PCRel:
+      Kind = static_cast<MCFixupKind>(Penumbra::fixup_penumbra_imm16_pcrel);
+      PCRel = true;
+      break;
     default:
       break;
     }
   }
 
   // Format L: imm16 lives in bits [15:0], fixup applied at byte offset 0.
-  Fixups.push_back(MCFixup::create(0, Expr, Kind));
+  Fixups.push_back(MCFixup::create(0, Expr, Kind, PCRel));
   return 0;
 }
 
@@ -146,9 +151,21 @@ unsigned PenumbraMCCodeEmitter::encodeMemOffset16(
     return static_cast<unsigned>(MO.getImm());
 
   // Format M: offset16 lives in bits [17:2].
-  Fixups.push_back(MCFixup::create(
-      0, MO.getExpr(),
-      static_cast<MCFixupKind>(Penumbra::fixup_penumbra_memoffset16)));
+  // Check for %pcrel() specifier → PC-relative fixup.
+  const MCExpr *Expr = MO.getExpr();
+  MCFixupKind Kind =
+      static_cast<MCFixupKind>(Penumbra::fixup_penumbra_memoffset16);
+  bool PCRel = false;
+
+  if (const auto *SE = dyn_cast<MCSpecifierExpr>(Expr)) {
+    if (SE->getSpecifier() == Penumbra::S_PCRel) {
+      Kind = static_cast<MCFixupKind>(
+          Penumbra::fixup_penumbra_memoffset16_pcrel);
+      PCRel = true;
+    }
+  }
+
+  Fixups.push_back(MCFixup::create(0, Expr, Kind, PCRel));
   return 0;
 }
 

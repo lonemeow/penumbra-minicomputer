@@ -38,6 +38,9 @@ void PenumbraMCAsmInfo::printSpecifierExpr(raw_ostream &OS,
   case Penumbra::S_Hi16:
     OS << "%hi16(";
     break;
+  case Penumbra::S_PCRel:
+    OS << "%pcrel(";
+    break;
   default:
     OS << "%unknown(";
     break;
