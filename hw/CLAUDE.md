@@ -23,15 +23,15 @@ This file provides detailed hardware context for work under `hw/`. The root `CLA
 | Sequencer | `rtl/core/sequencer.sv` | — | Micro-PC, branch_cond decode, EI/DI tracking, ei_shadow_clr |
 | Byte extractor | `rtl/core/byte_ext.sv` | 19/19 | Sub-word load extraction: byte/half from 32-bit word, sign/zero extend |
 | Byte replicator | `rtl/core/byte_rep.sv` | 10/10 | Sub-word store lane positioning: replicate byte/half across all lanes |
-| CPU core | `rtl/core/cpu_core.sv` | 30 progs | Full CPU: datapath + sequencer + ROM + MMU + split I/D cache + memory bus mux + fetch + IRQ + MMU traps (data + fetch) + alignment faults + bus faults + BREAK + SYSCALL + privilege traps + illegal instruction trap + WRSYS/RDSYS + RDSPR/WRSPR + BL + sub-word loads/stores. Parameterizable RESET_PC (default 0xFFFF_0000). |
-| Sim machine | `rtl/soc/machine_sim.sv` | (top) | Simulation integration: cpu_core + boot_rom + simple_mem + sim_uart + sysid + busctl + autoconfig SPI. Shared-bus model with device-side address decode via `bus_devsel`. UART IRQ wired to CPU. |
-| Bus devsel | `rtl/soc/bus_devsel.sv` | via machine_sim | Combinational address comparator for device-side bus decode. Parameterized BASE/SIZE. |
-| Bus controller | `rtl/soc/busctl.sv` | 43/43 | Sysreg device 4 (SYSDEV_BUS). RST (sticky) and CFG_EN bits for autoconfig. |
-| Autoconfig wrapper | `rtl/soc/autoconfig_dev.sv` | 28/28 | Generic wrapper: config space regs, cfg daisy chain with CFG_EN toggle protocol, dynamic base address decode. |
-| Sim UART | `rtl/soc/sim_uart.sv` | via machine_sim | 16450-compatible UART (MMIO at 0xFF00_0000). NetBSD com(4) compatible via reg-shift=2, reg-io-width=4 |
-| Sim SPI | `rtl/soc/sim_spi.sv` | via machine_sim | SPI master (CLASS_SD in machine_sim). 4 registers: DATA, STATUS, CONTROL, CLKDIV. Autoconfigured. Testbench SD card emulator (`sd_card_sim.h`) via `+sdcard=` plusarg. |
+| CPU core | `rtl/core/cpu_core.sv` | 30 progs | Full CPU: datapath + sequencer + ROM + MMU + split I/D cache + memory bus mux + fetch + IRQ + all traps + WRSYS/RDSYS + RDSPR/WRSPR + BL + sub-word loads/stores. Parameterizable RESET_PC (default 0xFFFF\_0000). |
+| Sim machine | `rtl/soc/machine_sim.sv` | (top) | Simulation integration: cpu\_core + boot\_rom + simple\_mem + sim\_uart + sysid + busctl + autoconfig SPI. Shared-bus with `bus_devsel`. UART IRQ wired. |
+| Bus devsel | `rtl/soc/bus_devsel.sv` | via machine\_sim | Combinational address comparator for device-side bus decode. Parameterized BASE/SIZE. |
+| Bus controller | `rtl/soc/busctl.sv` | 43/43 | Sysreg device 4 (SYSDEV\_BUS). RST (sticky) and CFG\_EN bits for autoconfig. |
+| Autoconfig wrapper | `rtl/soc/autoconfig_dev.sv` | 28/28 | Config space regs, cfg daisy chain with CFG\_EN toggle, dynamic base address decode. |
+| Sim UART | `rtl/soc/sim_uart.sv` | via machine\_sim | 16450-compatible UART (MMIO at 0xFF00\_0000). NetBSD com(4) compatible. |
+| Sim SPI | `rtl/soc/sim_spi.sv` | via machine\_sim | SPI master (CLASS\_SD). 4 regs: DATA, STATUS, CONTROL, CLKDIV. SD emulator via `+sdcard=`. |
 | Boot ROM | `rtl/soc/boot_rom.sv` | via machine_sim | Read-only memory (64 KB default), loads program.hex |
-| Shared package | `rtl/core/penumbra_pkg.sv` | — | REG_*, ALU_*, COND_*, SR_*, ACC_*, VEC_*, FAULT_*, FSTAT_*, SYSDEV_*, SYSREG_*, CACHE_TYPE_*, UART_*, SPR_*, ACFG_*, RAM_BASE, ROM_BASE, AUTOCONFIG_BASE constants |
+| Shared package | `rtl/core/penumbra_pkg.sv` | — | REG\_\*, ALU\_\*, COND\_\*, SR\_\*, VEC\_\*, FAULT\_\*, SYSDEV\_\*, SYSREG\_\*, CACHE\_TYPE\_\*, UART\_\*, SPR\_\*, ACFG\_\* and base address constants |
 | System ID | `rtl/soc/sysid.sv` | via machine_sim | Read-only MACHINE_ID register (Penumbra/1), sysreg device 1 |
 | TLB | `rtl/mmu/tlb.sv` | 111/111 | 64-entry 2-way SA, parallel lookup, one-hot permission check, indexed sysreg R/W |
 | MMU | `rtl/mmu/mmu.sv` | — | Bypass/translate mux, force_bypass for vector table read, alignment check, sysreg routing, fault latching, TLB instantiation |
@@ -40,62 +40,115 @@ This file provides detailed hardware context for work under `hw/`. The root `CLA
 | Simple memory | `rtl/soc/simple_mem.sv` | — | Parameterizable synchronous SRAM model (default 16 MB), configurable READ_LATENCY/WRITE_LATENCY modeling SDRAM timing. |
 
 ## Boot ROM and Interactive Simulation
-- **Boot ROM** (`rom/`): Penumbra/1 boot monitor in C. No globals — ROM has no writable data section; all state in boot data or on the stack. Source files:
-  - `boot_rom.c` — main(), trap setup, RAM detection, bus autoconfig, monitor command loop (`x`, `load`, `part`, `break`)
-  - `console.c`/`.h` — line-editing input (`console_gets`), formatted output (`console_printf`, `console_puts`)
-  - `sdcard.c`/`.h` — SD-SPI protocol (init/deinit/read_sector/detect), MBR partition parsing (`mbr_get_partition`, `part_type_name`), device probing (`sd_probe`)
-  - `util.c`/`.h` — unaligned LE reads (`read_le16`/`read_le32`), human-readable size formatting (`humanize_size`)
-  - `bootdata.h` — boot data tagged list builder/lookup (inline, header-only)
-  - `spi.h` — low-level SPI register access (inline, header-only)
-  - `penumbra.h` — SPR/sysreg access, system constants (inline, header-only)
-  - `libc.c`/`.h` — minimal C library (strlen, strcmp, strtoul, snprintf, software mul/div)
+- **Boot ROM** (`rom/`): Penumbra/1 boot monitor in C.
+  No globals — ROM has no writable data section;
+  all state in boot data or on the stack. Source files:
+  - `boot_rom.c` — main(), trap setup, RAM detection,
+    bus autoconfig, monitor command loop
+  - `console.c`/`.h` — line-editing input (`console_gets`),
+    formatted output (`console_printf`, `console_puts`)
+  - `sdcard.c`/`.h` — SD-SPI protocol
+    (init/deinit/read_sector/detect),
+    MBR partition parsing, device probing
+  - `util.c`/`.h` — unaligned LE reads, size formatting
+  - `bootdata.h` — boot data tagged list builder/lookup
+    (inline, header-only)
+  - `spi.h` — low-level SPI register access
+    (inline, header-only)
+  - `penumbra.h` — SPR/sysreg access, system constants
+    (inline, header-only)
+  - `libc.c`/`.h` — minimal C library
+    (strlen, strcmp, strtoul, snprintf, software mul/div)
   - `uart.c`/`.h` — UART polling driver
-  - `crt0.s` — startup (set SP, call main), `trap_entry.s` — exception trampolines, `rom.ld` — linker script
-  - Monitor commands: `x <addr> [len]` (hex dump), `load sd:<dev>,<cs>[:<part>] <addr> <lba> <count>` (SD read, raw or partition-relative LBA), `part sd:<dev>,<cs>` (display MBR partition table), `go <addr>`/`g <addr>` (jump to address with R1=boot data), `break`/`b` (halt). SD naming uses per-class controller index: `sd:0,0` = first SD controller, CS0.
-  - Has its own `rom/Makefile` with automatic `*.c`/`*.s` discovery, header deps, and pattern rules. Built with clang: `clang -c` → `llvm-mc` → `ld.lld` (via `rom/rom.ld`) → `llvm-objcopy` → `bin2hex.py`.
-- **Interactive testbench** (`sim/tb_interactive.cpp`): Bridges host stdin/stdout to UART RX/TX. Raw terminal mode. Polls stdin every 1024 cycles. Exits on BREAK or Ctrl-C. SD card emulation via `+sdcard=disk.img` plusarg (or `SDCARD=` make variable).
+  - `crt0.s` — startup (set SP, call main),
+    `trap_entry.s` — exception trampolines,
+    `rom.ld` — linker script
+  - Monitor commands:
+    `x <addr> [len]` (hex dump),
+    `load sd:<dev>,<cs>[:<part>] <addr> <lba> <count>`
+    (SD read, raw or partition-relative LBA),
+    `part sd:<dev>,<cs>` (display MBR partition table),
+    `go <addr>`/`g <addr>` (jump to address with R1=boot data),
+    `break`/`b` (halt).
+    SD naming: per-class controller index
+    (`sd:0,0` = first SD controller, CS0).
+  - Has its own `rom/Makefile` with automatic `*.c`/`*.s` discovery,
+    header deps, and pattern rules.
+    Built with clang: `clang -c` → `llvm-mc`
+    → `ld.lld` (via `rom/rom.ld`) → `llvm-objcopy` → `bin2hex.py`.
+- **Interactive testbench** (`sim/tb_interactive.cpp`):
+  Bridges host stdin/stdout to UART RX/TX.
+  Raw terminal mode. Polls stdin every 1024 cycles.
+  Exits on BREAK or Ctrl-C.
+  SD card emulation via `+sdcard=disk.img` plusarg
+  (or `SDCARD=` make variable).
 
 ## Exception and Interrupt Handling
 Eight sources share the same `except_entry` → `int_entry` → vector dispatch path:
 
 **External IRQ (asynchronous):**
-- Check at dispatch-time (`ir_valid`). `irq_taken = i_irq & sr_i & !ei_shadow`.
-- Override dispatch to 0x70 (int_entry), pulse `except_entry` (saves EPC/ESR, sets S=1/I=0).
-- EI sets sr_i=1 and ei_shadow=1 (cleared after next instruction). DI sets sr_i=0 immediately (privileged).
+- Check at dispatch-time (`ir_valid`).
+  `irq_taken = i_irq & sr_i & !ei_shadow`.
+- Override dispatch to 0x70 (int_entry),
+  pulse `except_entry` (saves EPC/ESR, sets S=1/I=0).
+- EI sets sr_i=1 and ei_shadow=1 (cleared after next instruction).
+  DI sets sr_i=0 immediately (privileged).
 
 **MMU data fault (synchronous):**
-- Check during STALL on load/store. `data_fault = mmu_fault && !fetch_active`.
-- `fault_except` pulse → `except_entry`. Sequencer aborts STALL, returns to S_FETCH.
-- `fault_pending` overrides next dispatch to int_entry with fault vector. Cleared at `ctl_pc_load`.
+- Check during STALL on load/store.
+  `data_fault = mmu_fault && !fetch_active`.
+- `fault_except` pulse → `except_entry`.
+  Sequencer aborts STALL, returns to S_FETCH.
+- `fault_pending` overrides next dispatch to int_entry
+  with fault vector. Cleared at `ctl_pc_load`.
 - Priority: fault > illegal > priv > BREAK > SYSCALL > IRQ.
 
 **MMU instruction fetch fault (synchronous):**
 - Check during S_FETCH. `fetch_fault = mmu_fault && fetch_active`.
-- I-cache gated: `i_re = fetch_active && !mmu_fault`. IR load gated by `!fault_pending`.
-- `break_taken`/`syscall_taken` gated by `!fault_pending` to prevent stale `mem_rdata` dispatch.
+- I-cache gated: `i_re = fetch_active && !mmu_fault`.
+  IR load gated by `!fault_pending`.
+- `break_taken`/`syscall_taken` gated by `!fault_pending`
+  to prevent stale `mem_rdata` dispatch.
 
 **Alignment fault (synchronous, fetch or data):**
-- MMU checks alignment via `i_mem_size`. Fires even in bypass mode. Checked before TLB lookup.
+- MMU checks alignment via `i_mem_size`.
+  Fires even in bypass mode. Checked before TLB lookup.
 - Vector VEC_ALIGN=8. FAULT_STATUS includes access type (code/data).
 
 **Bus fault (synchronous, fetch or data):**
-- Fires when physical bus request hits no device. Wired from `machine_sim` to `cpu_core.i_bus_fault`.
+- Fires when physical bus request hits no device.
+  Wired from `machine_sim` to `cpu_core.i_bus_fault`.
 - Vector VEC_BUS_FAULT=0. Highest priority in `fault_vector` selection.
-- Use cases: RAM probing at boot, device probing with MMU enabled (NetBSD `bus_space_peek`).
+- Use cases: RAM probing at boot,
+  device probing with MMU enabled (NetBSD `bus_space_peek`).
 
-**BREAK instruction:** Dispatch-time (`0x4A`), vectors to VEC_BREAK (6). `o_halted` pulses for testbench.
+**BREAK instruction:** Dispatch-time (`0x4A`),
+vectors to VEC_BREAK (6). `o_halted` pulses for testbench.
 
-**SYSCALL instruction:** Dispatch-time (`0x48`), vectors to VEC_SYSCALL (5). EPC points at SYSCALL; handler must advance EPC+4.
+**SYSCALL instruction:** Dispatch-time (`0x48`),
+vectors to VEC_SYSCALL (5).
+EPC points at SYSCALL; handler must advance EPC+4.
 
-**Privilege violation:** First micro-op of S_EXEC checks `priv=1 && !sr_s`. Suppresses all enables, vectors to VEC_PRIV (4).
+**Privilege violation:** First micro-op of S_EXEC checks
+`priv=1 && !sr_s`.
+Suppresses all enables, vectors to VEC_PRIV (4).
 
-**Illegal instruction:** First micro-op detects sentinel (`branch==BR_ILLEGAL`). Vectors to VEC_ILLEGAL (7).
+**Illegal instruction:** First micro-op detects sentinel
+(`branch==BR_ILLEGAL`). Vectors to VEC_ILLEGAL (7).
 
-**Vector table (MIPS/68k-style):** Physical 0x00, contains handler addresses (not instructions). `int_entry` reads handler via MDR, bypasses MMU. Vectors: BUS_FAULT=0, IRQ=1, TLB_MISS=2, TLB_PROT=3, PRIV=4, SYSCALL=5, BREAK=6, ILLEGAL=7, ALIGN=8.
+**Vector table (MIPS/68k-style):** Physical 0x00,
+contains handler addresses (not instructions).
+`int_entry` reads handler via MDR, bypasses MMU.
+Vectors: BUS_FAULT=0, IRQ=1, TLB_MISS=2, TLB_PROT=3,
+PRIV=4, SYSCALL=5, BREAK=6, ILLEGAL=7, ALIGN=8.
 
-**Reset:** CPU boots at `RESET_PC` (default `0xFFFF_0000`), hardwired — not part of vector table.
+**Reset:** CPU boots at `RESET_PC` (default `0xFFFF_0000`),
+hardwired — not part of vector table.
 
-**Dispatch-time vector latching:** `dispatch_pending`/`dispatch_vector` register vector number at `ir_valid` because combinational inputs change between dispatch and int_entry execution.
+**Dispatch-time vector latching:**
+`dispatch_pending`/`dispatch_vector` register vector number
+at `ir_valid` because combinational inputs change between
+dispatch and int_entry execution.
 
 ## Register Address Routing
 The micro-word's `reg_a_sel`, `reg_b_sel`, `reg_w_sel` fields use a 4-bit encoding:
@@ -106,11 +159,27 @@ The micro-word's `reg_a_sel`, `reg_b_sel`, `reg_w_sel` fields use a 4-bit encodi
 F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal addresses).
 
 ## Memory Access
-- **STALL-based:** Load/store micro-routines use `branch=STALL`. Same microcode works regardless of memory latency.
-- **Split I/D caches** between CPU and memory. Cache hits: zero latency; misses: burst-fill. Memory bus mux merges both caches (D-cache priority; fetch and data mutually exclusive).
-- **MMU traps:** STALL path checks `i_mem_fault` alongside `i_mem_busy`. On fault, sequencer aborts to S_FETCH.
-- **Dispatch spacing:** Format R: ×2 split by op[4] (ALU 0x00–0x1E, SYS 0x40–0x5E). Format M: ×4 (0x80–0xBF).
-- **IMPORTANT — Device `o_busy` contract:** The CPU's STALL sequencer exits and latches `mem_rdata` on the cycle when `o_busy` drops. Any device with registered read output (1+ cycle latency) **must** assert `o_busy` for at least 1 cycle on reads so the data is valid when busy clears. Use the `access_pending` pattern from `sim_uart.sv`: `o_busy = i_re && !access_pending`. A device that reports `o_busy = 0` immediately but has registered read data will return stale/zero values — this caused a real bug in `sim_spi.sv`.
+- **STALL-based:** Load/store micro-routines use `branch=STALL`.
+  Same microcode works regardless of memory latency.
+- **Split I/D caches** between CPU and memory.
+  Cache hits: zero latency; misses: burst-fill.
+  Memory bus mux merges both caches
+  (D-cache priority; fetch and data mutually exclusive).
+- **MMU traps:** STALL path checks `i_mem_fault` alongside
+  `i_mem_busy`. On fault, sequencer aborts to S_FETCH.
+- **Dispatch spacing:** Format R: ×2 split by op[4]
+  (ALU 0x00–0x1E, SYS 0x40–0x5E). Format M: ×4 (0x80–0xBF).
+- **IMPORTANT — Device `o_busy` contract:**
+  The CPU's STALL sequencer exits and latches `mem_rdata` on the
+  cycle when `o_busy` drops.
+  Any device with registered read output (1+ cycle latency)
+  **must** assert `o_busy` for at least 1 cycle on reads
+  so the data is valid when busy clears.
+  Use the `access_pending` pattern from `sim_uart.sv`:
+  `o_busy = i_re && !access_pending`.
+  A device that reports `o_busy = 0` immediately but has registered
+  read data will return stale/zero values —
+  this caused a real bug in `sim_spi.sv`.
 
 ## Implemented Microcode (43 micro-ops)
 | Category | Instructions | Notes |
