@@ -94,6 +94,29 @@ define i1 @cmp_i64_eq(i64 %a, i64 %b) {
   ret i1 %cmp
 }
 
+; Zero-extend i32 to i64 — low half is source, high half is zero.
+define i64 @zext_i32_to_i64(i32 %x) {
+; CHECK-LABEL: zext_i32_to_i64:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:    lli r2, 0
+; CHECK-NEXT:    jmp r13
+  %ext = zext i32 %x to i64
+  ret i64 %ext
+}
+
+; Sign-extend i32 to i64 — high half is arithmetic shift of sign bit.
+define i64 @sext_i32_to_i64(i32 %x) {
+; CHECK-LABEL: sext_i32_to_i64:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:    mov r2, r1
+; CHECK-NEXT:    sar r2, 31
+; CHECK-NEXT:    jmp r13
+  %ext = sext i32 %x to i64
+  ret i64 %ext
+}
+
 ; Mixed i32 + i64 args — i32 in R1, i64 in R2:R3.
 define i64 @mixed_args(i32 %x, i64 %y) {
 ; CHECK-LABEL: mixed_args:

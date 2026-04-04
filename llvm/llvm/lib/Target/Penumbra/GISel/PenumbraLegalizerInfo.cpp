@@ -18,16 +18,26 @@ using namespace llvm;
 
 PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   using namespace TargetOpcode;
+  using namespace LegalityPredicates;
+  using namespace LegalizeMutations;
 
   const LLT s1  = LLT::scalar(1);
   const LLT s8  = LLT::scalar(8);
   const LLT s16 = LLT::scalar(16);
   const LLT s32 = LLT::scalar(32);
+  const LLT s64 = LLT::scalar(64);
   const LLT p0  = LLT::pointer(0, 32);
 
-  getActionDefinitionsBuilder({G_ADD, G_SUB, G_AND, G_OR, G_XOR, G_SHL, G_LSHR, G_ASHR})
+  getActionDefinitionsBuilder({G_ADD, G_SUB, G_AND, G_OR, G_XOR})
       .legalFor({s32})
       .clampScalar(0, s32, s32);
+
+  // Shifts: clamp both the value (type 0) and shift amount (type 1) to s32.
+  // Without clamping type 1, i64 narrowing can produce s64 shift amounts.
+  getActionDefinitionsBuilder({G_SHL, G_LSHR, G_ASHR})
+      .legalFor({{s32, s32}})
+      .clampScalar(0, s32, s32)
+      .clampScalar(1, s32, s32);
 
   // Add/sub with overflow and carry: produced by i64 narrowing.
   // All lowered to basic ADD/SUB + ICMP sequences. The hardware has ADC/SBC
@@ -91,9 +101,12 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
       .legalFor({{s32, s1}, {p0, s1}})
       .clampScalar(0, s32, s32);
 
-  // Extensions: handled in instruction selection (AND for zext, SHL+SAR for sext).
+  // Extensions: sub-word→s32 handled in instruction selection (AND for zext,
+  // SHL+SAR for sext).  s32→s64 narrowed by the framework: splits s64 result
+  // into two s32 halves via G_MERGE_VALUES ({src, 0} for zext, etc.).
   getActionDefinitionsBuilder({G_ZEXT, G_SEXT, G_ANYEXT})
-      .legalForCartesianProduct({s8, s16, s32}, {s1, s8, s16});
+      .legalForCartesianProduct({s8, s16, s32}, {s1, s8, s16})
+      .narrowScalarIf(typeIs(0, s64), changeTo(0, s32));
 
   // Division/remainder: custom-lower to catch power-of-2 constants
   // (SHR for udiv, AND for urem), fall back to libcalls otherwise.
