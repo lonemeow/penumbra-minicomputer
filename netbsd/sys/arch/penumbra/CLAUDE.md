@@ -29,10 +29,17 @@ cd netbsd
 ./build.sh -U -j4 -m penumbra tools \
   -V EXTERNAL_TOOLCHAIN=$PWD/../build/llvm \
   -O ../build/netbsd-obj -T ../build/netbsd-tools -D ../build/netbsd-dest
-../build/netbsd-tools/bin/nbmake-penumbra -C sys/arch/penumbra/stand/boot
+../build/netbsd-tools/bin/nbmake-penumbra -C sys/arch/penumbra/stand/boot obj  # once: create obj dir
+../build/netbsd-tools/bin/nbmake-penumbra -C sys/arch/penumbra/stand/boot      # build
 ```
 
-### Standalone (quick iteration)
+**Important:** The `obj` step creates
+`build/netbsd-obj/sys/arch/penumbra/stand/boot/` so that build
+artifacts go there instead of polluting the source tree.
+Without it, bmake silently falls back to in-source builds.
+You only need to run `obj` once per subdirectory.
+
+### Standalone (quick iteration, builds in-source)
 
 ```sh
 make -C netbsd/sys/arch/penumbra/stand/boot -f Makefile.standalone
