@@ -93,3 +93,28 @@ define void @store_byte(ptr %p, i32 %v) {
   store i8 %trunc, ptr %p
   ret void
 }
+
+; Bool (i1) load/store — widened to byte access by the legalizer.
+
+define i32 @load_bool(ptr %p) {
+; CHECK-LABEL: load_bool:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:    ldb r1, [r1 + 0]
+; CHECK-NEXT:    and r1, 1
+; CHECK-NEXT:    jmp r13
+  %v = load i1, ptr %p
+  %ext = zext i1 %v to i32
+  ret i32 %ext
+}
+
+define void @store_bool(ptr %p, i1 %v) {
+; CHECK-LABEL: store_bool:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:    and r2, 1
+; CHECK-NEXT:    stb r2, [r1 + 0]
+; CHECK-NEXT:    jmp r13
+  store i1 %v, ptr %p
+  ret void
+}

@@ -61,6 +61,8 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
         {s32, p0, s8,  1},  // STB / plain LDB
         {p0,  p0, s32, 4},  // pointer load/store
       })
+      .widenScalarToNextPow2(0, /* MinSize = */ 8)
+      .lowerIfMemSizeNotByteSizePow2()
       .clampScalar(0, s32, s32);
 
   getActionDefinitionsBuilder({G_SEXTLOAD, G_ZEXTLOAD})
