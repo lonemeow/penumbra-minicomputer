@@ -26,6 +26,7 @@ module alu (
     input  logic [31:0] i_a,       // A-bus operand
     input  logic [31:0] i_b,       // B-bus operand (from B-mux)
     input  logic [4:0]  i_op,      // ALU operation select (5-bit, see encoding below)
+    input  logic        i_carry_in,// Carry flag from SR (used by ADC/SBC)
 
     // Multi-cycle control
     // verilator lint_off UNUSEDSIGNAL
@@ -61,17 +62,19 @@ module alu (
     localparam logic [4:0] OP_PASS_A = 5'b01000;
     localparam logic [4:0] OP_PASS_B = 5'b01001;
     localparam logic [4:0] OP_NOT    = 5'b01010;
+    localparam logic [4:0] OP_ADC    = 5'b01011;  // add with carry
+    localparam logic [4:0] OP_SBC    = 5'b01100;  // subtract with borrow
 
     // Multi-cycle operations (stubs — not yet implemented in hardware)
     // verilator lint_off UNUSEDPARAM
-    localparam logic [4:0] OP_MUL    = 5'b01011;  // signed multiply
-    localparam logic [4:0] OP_MULU   = 5'b01100;  // unsigned multiply
-    localparam logic [4:0] OP_DIV    = 5'b01101;  // signed divide
-    localparam logic [4:0] OP_DIVU   = 5'b01110;  // unsigned divide
-    localparam logic [4:0] OP_MOD    = 5'b01111;  // signed modulo
-    localparam logic [4:0] OP_MODU   = 5'b10000;  // unsigned modulo
+    localparam logic [4:0] OP_MUL    = 5'b01101;  // signed multiply
+    localparam logic [4:0] OP_MULU   = 5'b01110;  // unsigned multiply
+    localparam logic [4:0] OP_DIV    = 5'b01111;  // signed divide
+    localparam logic [4:0] OP_DIVU   = 5'b10000;  // unsigned divide
+    localparam logic [4:0] OP_MOD    = 5'b10001;  // signed modulo
+    localparam logic [4:0] OP_MODU   = 5'b10010;  // unsigned modulo
     // verilator lint_on UNUSEDPARAM
-    // 5'b10001–5'b11111: reserved for future FP ops
+    // 5'b10011–5'b11111: reserved for future ops
 
     // ── Adder with subtract support ─────────────────────────────
     // SUB is implemented as: A + ~B + 1  (two's complement subtraction)
@@ -84,14 +87,26 @@ module alu (
 
     logic        sub_mode;
     logic [31:0] b_eff;       // B after conditional inversion
-    logic        cin;         // Carry-in: 1 for subtract, 0 for add
+    logic        cin;         // Carry-in: depends on operation
     logic [32:0] adder_full;  // 33-bit result to capture carry-out
     logic [31:0] adder_result;
     logic        adder_cout;
 
-    assign sub_mode     = (i_op == OP_SUB);
+    // SUB/SBC invert B; ADD/ADC do not.
+    assign sub_mode     = (i_op == OP_SUB) || (i_op == OP_SBC);
     assign b_eff        = i_b ^ {32{sub_mode}};  // XOR with all-1s = bitwise NOT
-    assign cin          = sub_mode;
+    // Carry-in:
+    //   ADD: 0
+    //   SUB: 1 (completes two's complement: A + ~B + 1 = A - B)
+    //   ADC: carry flag from SR
+    //   SBC: carry flag from SR (ARM convention: A + ~B + C = A - B - !C)
+    always_comb begin
+        case (i_op)
+            OP_ADC:  cin = i_carry_in;
+            OP_SBC:  cin = i_carry_in;
+            default: cin = sub_mode;  // 1 for SUB, 0 for ADD/others
+        endcase
+    end
     assign adder_full   = {1'b0, i_a} + {1'b0, b_eff} + {32'b0, cin};
     assign adder_result = adder_full[31:0];
     assign adder_cout   = adder_full[32];
@@ -171,6 +186,14 @@ module alu (
                 result_mux = ~i_b;
                 carry_mux = 1'b0;
             end
+            OP_ADC: begin
+                result_mux = adder_result;
+                carry_mux = adder_cout;
+            end
+            OP_SBC: begin
+                result_mux = adder_result;
+                carry_mux = adder_cout;
+            end
             default: begin
                 result_mux = 32'b0;
                 carry_mux = 1'b0;
@@ -204,7 +227,7 @@ module alu (
     // ── Output mux and flags ────────────────────────────────────
     // Select between single-cycle (combinational) and multi-cycle results.
     logic is_multicycle_op;
-    assign is_multicycle_op = (i_op >= OP_MUL);  // MUL and above are multi-cycle
+    assign is_multicycle_op = (i_op >= OP_MUL);  // MUL (0x0D) and above are multi-cycle
 
     assign o_result = is_multicycle_op ? multicycle_result : result_mux;
     assign o_busy   = multicycle_busy;
@@ -217,7 +240,8 @@ module alu (
     // Both operands same sign, but result differs → overflow.
     // Uses b_eff (B after conditional inversion) so the same logic
     // works for both ADD (b_eff = B) and SUB (b_eff = ~B).
-    assign o_flag_v = (i_op == OP_ADD || i_op == OP_SUB)
+    assign o_flag_v = (i_op == OP_ADD || i_op == OP_SUB ||
+                       i_op == OP_ADC || i_op == OP_SBC)
                     ? (i_a[31] == b_eff[31]) && (o_result[31] != i_a[31])
                     : 1'b0;
 

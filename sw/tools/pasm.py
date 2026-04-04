@@ -209,25 +209,22 @@ FORMAT_R_OPS = {
     "XOR":  (4,  True,  0), "SHL":  (5,  True,  0),
     "SHR":  (6,  True,  0), "SAR":  (7,  True,  0),
     "MOV":  (8,  True,  0), "NOT":  (9,  True,  0),
-    "MUL":  (10, True,  0), "MULU": (11, True,  0),
-    "DIV":  (12, True,  0), "DIVU": (13, True,  0),
-    "MOD":  (14, True,  0), "MODU": (15, True,  0),
+    "ADC":  (10, True,  0), "SBC":  (11, True,  0),
+    "MUL":  (12, True,  0), "MULU": (13, True,  0),
+    "DIV":  (14, True,  0), "DIVU": (15, True,  0),
+    "MOD":  (16, True,  0), "MODU": (17, True,  0),
     # F=1 aliases (CMP Rd, Rs — register form; CMP Rd, #imm routed to Format L)
     "CMP":  (1,  True,  1), "TEST": (2,  True,  1),
     # System ops (no Rs for most)
-    "WRSYS":     (16, True,  0),  # WRSYS Rd, #dev, #reg (special 3-operand)
-    "RDSYS":     (17, True,  0),  # RDSYS Rd, #dev, #reg (special 3-operand)
-    "GETSR":     (18, False, 0),
-    "SETSR":     (19, False, 0),
-    "SYSCALL":   (20, False, 0),
-    "BREAK":     (21, False, 0),
-    "RTI":       (22, False, 0),  # Legacy alias for ERET (no args)
-    "JALR":      (23, True,  0),  # Rs field is the target register
-    "JMP":       (24, True,  0),  # Rs field is the target register
-    "EI":        (25, False, 0),
-    "DI":        (26, False, 0),
-    "WRSPR":     (27, False, 0),   # WRSPR {ESR|EPC|USP}, Rd — SPR in spare[15:12]
-    "RDSPR":     (28, False, 0),   # RDSPR Rd, {ESR|EPC|USP} — SPR in spare[15:12]
+    "WRSYS":     (23, True,  0),  # WRSYS Rd, #dev, #reg (special 3-operand)
+    "RDSYS":     (24, True,  0),  # RDSYS Rd, #dev, #reg (special 3-operand)
+    "SYSCALL":   (25, False, 0),
+    "BREAK":     (26, False, 0),
+    "RTI":       (27, False, 0),  # Legacy alias for ERET (no args)
+    "EI":        (28, False, 0),
+    "DI":        (29, False, 0),
+    "WRSPR":     (30, False, 0),   # WRSPR {ESR|EPC|USP}, Rd — SPR in spare[15:12]
+    "RDSPR":     (31, False, 0),   # RDSPR Rd, {ESR|EPC|USP} — SPR in spare[15:12]
 }
 
 # ── Format L — Immediate ops ─────────────────────────────────
@@ -237,6 +234,7 @@ FORMAT_L_OPS = {
     "LLI":  0, "LLIS": 1, "LUI":  2,
     "INC":  3, "DEC":  4, "CMPI": 5, "ANDI": 6, "TESTI": 7,
     "SHLI": 8, "SHRI": 9, "SARI": 10,
+    "JMP": 11, "JALR": 12,
 }
 
 # ── Format M — Memory load/store ─────────────────────────────
@@ -297,7 +295,7 @@ def assemble_line(mnemonic, operands, addr, labels, line_num, constants=None):
     if mn == "NOP":
         return encode_format_r(0, 0, 0, 0)  # ADD R0, R0
     if mn == "RET":
-        return encode_format_r(24, 0, 13, 0)  # JMP R13
+        return encode_format_l(11, 13, 0)  # JMP R13 (Format L, op=11)
 
     # ── ERET — exception return via EPC/ESR ─────────────────────
     if mn == "ERET":
@@ -406,30 +404,6 @@ def assemble_line(mnemonic, operands, addr, labels, line_num, constants=None):
             spare = (dev << 12) | (reg << 8)
             return encode_format_r(op, rd, 0, 0, spare)
 
-        if mn in ("JMP", "JALR"):
-            if len(operands) != 1:
-                raise ValueError(f"{mn} expects 1 operand (Rs)")
-            rs = parse_reg(operands[0])
-            if rs is None:
-                raise ValueError(f"bad register '{operands[0]}'")
-            return encode_format_r(op, 0, rs, 0)
-
-        if mn == "GETSR":
-            if len(operands) != 1:
-                raise ValueError(f"{mn} expects Rd")
-            rd = parse_reg(operands[0])
-            if rd is None:
-                raise ValueError(f"bad register '{operands[0]}'")
-            return encode_format_r(op, rd, 0, 0)
-
-        if mn == "SETSR":
-            if len(operands) != 1:
-                raise ValueError("SETSR expects Rs")
-            rs = parse_reg(operands[0])
-            if rs is None:
-                raise ValueError(f"bad register '{operands[0]}'")
-            return encode_format_r(op, 0, rs, 0)
-
         # Standard ALU: mnemonic Rd, Rs
         if len(operands) != 2:
             raise ValueError(f"{mn} expects Rd, Rs")
@@ -442,6 +416,16 @@ def assemble_line(mnemonic, operands, addr, labels, line_num, constants=None):
         return encode_format_r(op, rd, rs, f_bit)
 
     # ── Format L ──
+    # JMP/JALR: single register operand encoded in Rd field (Format L)
+    if mn in ("JMP", "JALR"):
+        op = FORMAT_L_OPS[mn]
+        if len(operands) != 1:
+            raise ValueError(f"{mn} expects 1 operand (register)")
+        rs = parse_reg(operands[0])
+        if rs is None:
+            raise ValueError(f"bad register '{operands[0]}'")
+        return encode_format_l(op, rs, 0)
+
     if mn in FORMAT_L_OPS:
         op = FORMAT_L_OPS[mn]
         if len(operands) != 2:

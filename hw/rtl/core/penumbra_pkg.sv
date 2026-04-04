@@ -28,12 +28,14 @@ package penumbra_pkg;
     localparam logic [4:0] ALU_PASS_A = 5'b01000;
     localparam logic [4:0] ALU_PASS_B = 5'b01001;
     localparam logic [4:0] ALU_NOT    = 5'b01010;
-    localparam logic [4:0] ALU_MUL    = 5'b01011;
-    localparam logic [4:0] ALU_MULU   = 5'b01100;
-    localparam logic [4:0] ALU_DIV    = 5'b01101;
-    localparam logic [4:0] ALU_DIVU   = 5'b01110;
-    localparam logic [4:0] ALU_MOD    = 5'b01111;
-    localparam logic [4:0] ALU_MODU   = 5'b10000;
+    localparam logic [4:0] ALU_ADC    = 5'b01011;  // add with carry
+    localparam logic [4:0] ALU_SBC    = 5'b01100;  // subtract with borrow
+    localparam logic [4:0] ALU_MUL    = 5'b01101;
+    localparam logic [4:0] ALU_MULU   = 5'b01110;
+    localparam logic [4:0] ALU_DIV    = 5'b01111;
+    localparam logic [4:0] ALU_DIVU   = 5'b10000;
+    localparam logic [4:0] ALU_MOD    = 5'b10001;
+    localparam logic [4:0] ALU_MODU   = 5'b10010;
 
     // ── Status register bit positions ───────────────────────────
     // Condition flags in [3:0], system bits in [31:30].

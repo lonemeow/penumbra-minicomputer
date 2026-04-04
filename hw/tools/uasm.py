@@ -65,8 +65,9 @@ FIELDS = [
         "ADD": 0, "SUB": 1, "AND": 2, "OR": 3, "XOR": 4,
         "SHL": 5, "SHR": 6, "SAR": 7,
         "PASS_A": 8, "PASS_B": 9, "NOT": 10,
-        "MUL": 11, "MULU": 12, "DIV": 13, "DIVU": 14,
-        "MOD": 15, "MODU": 16,
+        "ADC": 11, "SBC": 12,
+        "MUL": 13, "MULU": 14, "DIV": 15, "DIVU": 16,
+        "MOD": 17, "MODU": 18,
     }),
     ("bmux", 28, 27, {
         "REG": 0, "IMM": 1, "CONST4": 2, "CONST8": 3,

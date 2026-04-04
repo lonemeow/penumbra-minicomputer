@@ -2,12 +2,25 @@
 #
 # Dispatch addresses (computed by fetch unit from IR bits):
 #   Format R: {00, op[4], op[3:0], 0}    → ×2 spacing
-#     ALU (op[4]=0): 0x00–0x1E            16 instructions, 2 entries each
-#     SYS (op[4]=1): 0x40–0x5E            16 instructions, 2 entries each
+#     ALU (op 0–17):  0x00–0x12, 0x40–0x42   (12+6 single-cycle + 6 multi-cycle stubs)
+#     SYS (op 23–31): 0x4E–0x5E              (9 system instructions)
+#     Gap (op 18–22): unused, illegal sentinel
 #   Format L: {01, op[3:0], 0}            → entries 0x20–0x3E (×2 spacing)
 #   Format M: {10, L, sz[1:0], SE, 00}    → entries 0x80–0xBF (×4 spacing)
 #   Format B: {11, 0000000}               → entry 0x60
 #   Interrupt/fault entry:                → entry 0x70 (hardwired)
+#
+# Format R opcode map:
+#   ALU:  0=ADD 1=SUB 2=AND 3=OR 4=XOR 5=SHL 6=SHR 7=SAR
+#         8=MOV 9=NOT 10=ADC 11=SBC
+#         12=MUL 13=MULU 14=DIV 15=DIVU 16=MOD 17=MODU
+#   Gap:  18–22 (reserved)
+#   SYS:  23=WRSYS 24=RDSYS 25=SYSCALL 26=BREAK 27=ERET
+#         28=EI 29=DI 30=WRSPR 31=RDSPR
+#
+# Format L opcode map:
+#   0=LLI 1=LLIS 2=LUI 3=INC 4=DEC 5=CMPI 6=ANDI 7=TESTI
+#   8=SHLi 9=SHRi 10=SARi 11=JMP 12=JALR 13–15=(reserved)
 #
 # Register address encoding:
 #   IR_RD = format-dependent Rd, IR_RS = format-dependent Rs/Rb
@@ -19,7 +32,7 @@
 #   a_src=REG, alu=ADD, bmux=REG, wmux=RBUS, all enables off.
 
 # ═══════════════════════════════════════════════════════════════
-# Format R — ALU operations (0x00–0x1E, ×2 spacing)
+# Format R — ALU operations (op 0–11)
 # Dispatch: {00, 0, op[3:0], 0}
 # ═══════════════════════════════════════════════════════════════
 
@@ -74,6 +87,18 @@ mov:
 .org 0x12
 not:
   reg_a=IR_RS reg_w=IR_RD w_en=1 alu=NOT wmux=RBUS w_flags=1
+
+# ── ADC (op=10, dispatch=0x14) ────────────────────────────────
+# Rd = Rd + Rs + Carry (add with carry from SR.C)
+.org 0x14
+adc:
+  reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=ADC bmux=REG wmux=RBUS w_flags=1
+
+# ── SBC (op=11, dispatch=0x16) ────────────────────────────────
+# Rd = Rd - Rs - ~Carry (subtract with borrow, ARM convention)
+.org 0x16
+sbc:
+  reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=SBC bmux=REG wmux=RBUS w_flags=1
 
 # ═══════════════════════════════════════════════════════════════
 # Format L — Immediate operations (0x20–0x3E, ×2 spacing)
@@ -146,100 +171,100 @@ shri:
 sari:
   reg_a=IR_RD reg_w=IR_RD w_en=1 alu=SAR bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
 
+# ── JMP Rs (op=11, dispatch=0x36) ────────────────────────────
+# PC = Rd field (register indirect jump; RET = JMP R13)
+# Note: Format L uses Rd field for the register, not Rs.
+.org 0x36
+jmp:
+  reg_a=IR_RD pc=ABUS
+
+# ── JALR Rs (op=12, dispatch=0x38) ───────────────────────────
+# Jump and link register: R13 = PC+4, PC = Rd field.
+# Used for indirect calls (function pointers, vtables).
+.org 0x38
+jalr:
+  reg_a=R15 bmux=CONST4 alu=ADD reg_w=R13 w_en=1 wmux=RBUS pc=HOLD branch=SEQ
+  reg_a=IR_RD pc=ABUS
+
 # ═══════════════════════════════════════════════════════════════
-# Format R — System operations (0x40–0x5E, ×2 spacing)
-# Dispatch: {00, 1, op[3:0], 0}  (op[4]=1 → system zone)
+# Format R — System operations (op 23–31)
+# Dispatch: {00, 1, op[3:0], 0}  (op[4]=1 → +0x40 offset)
 # ═══════════════════════════════════════════════════════════════
 
-# ── WRSYS Rd, #dev, #reg (op=16, dispatch=0x40) ──────────────
-# Write register Rd to system register. A-bus carries Rd value,
+# ── WRSYS Rd, #dev, #reg (op=23, dispatch=0x4E) ──────────────
+# Write register Rd to system device register. A-bus carries Rd value,
 # sys_cycle + sys_we tell the target device to latch it.
 # Privileged — priv=1 checked by sequencer on first micro-op.
-.org 0x40
+.org 0x4E
 wrsys:
   priv=1 reg_a=IR_RD sys_op=SYS_WRITE
 
-# ── RDSYS Rd, #dev, #reg (op=17, dispatch=0x42) ──────────────
+# ── RDSYS Rd, #dev, #reg (op=24, dispatch=0x50) ──────────────
 # Read system register into Rd. Two micro-ops:
 #   Step 0: sys_cycle=1 puts device data on sysreg bus → cpu_top
 #           muxes it onto mem_rdata → MDR captures it.
 #   Step 1: writeback MDR to Rd.
 # Privileged.
-.org 0x42
+.org 0x50
 rdsys:
   priv=1 sys_op=SYS_READ mdr_load_mem=1 pc=HOLD branch=SEQ
   reg_w=IR_RD w_en=1 wmux=MDR
 
-# ── SYSCALL (op=20, dispatch=0x48) ────────────────────────────
+# ── SYSCALL (op=25, dispatch=0x52) ────────────────────────────
 # System call trap: intercepted at dispatch time by cpu_top.
 # Triggers except_entry → VEC_SYSCALL exception (like BREAK).
 # Unprivileged — works from user mode.
 # This microcode entry is never reached — dispatch redirects to
 # int_entry (0x70). Slot left empty intentionally.
 
-# ── BREAK (op=21, dispatch=0x4A) ──────────────────────────────
+# ── BREAK (op=26, dispatch=0x54) ──────────────────────────────
 # Software breakpoint: intercepted at dispatch time by cpu_top.
 # Triggers except_entry → VEC_BREAK exception (like IRQ/fault).
 # This microcode entry is never reached — dispatch redirects to
 # int_entry (0x70). Slot left empty intentionally.
 
-# ── ERET (op=22, dispatch=0x4C) ───────────────────────────────
+# ── ERET (op=27, dispatch=0x56) ───────────────────────────────
 # Exception return via EPC/ESR: restore ESR then EPC.
 # Privileged — must be in supervisor mode.
 # Step 0: ESR → ALU PASS_A → R-bus → w_bus → sr_load
 #         (restores NZCV flags, S and I mode bits)
 # Step 1: EPC → A-bus → PC (jumps back to interrupted instruction)
-.org 0x4C
+.org 0x56
 rti:
   priv=1 a_src=ESR alu=PASS_A sr_load=1 pc=HOLD branch=SEQ
   a_src=EPC pc=ABUS
 
-# ── JALR Rs (op=23, dispatch=0x4E) ───────────────────────────
-# Jump and link register: R13 = PC+4, PC = Rs.
-# Combines BL's link-save (step 0) with JMP's indirect (step 1).
-# Used for indirect calls (function pointers, vtables).
-.org 0x4E
-jalr:
-  reg_a=R15 bmux=CONST4 alu=ADD reg_w=R13 w_en=1 wmux=RBUS pc=HOLD branch=SEQ
-  reg_a=IR_RS pc=ABUS
-
-# ── JMP Rs (op=24, dispatch=0x50) ────────────────────────────
-# PC = Rs (register indirect jump; RET = JMP R13)
-.org 0x50
-jmp:
-  reg_a=IR_RS pc=ABUS
-
-# ── EI (op=25, dispatch=0x52) ────────────────────────────────
+# ── EI (op=28, dispatch=0x58) ────────────────────────────────
 # Enable interrupts: SR.I = 1, delayed by one instruction (ei_shadow)
-.org 0x52
+.org 0x58
 ei:
   priv=1 ei_set=1
 
-# ── DI (op=26, dispatch=0x54) ────────────────────────────────
+# ── DI (op=29, dispatch=0x5A) ────────────────────────────────
 # Disable interrupts: SR.I = 0, immediate effect (privileged)
-.org 0x54
+.org 0x5A
 di:
   priv=1 di_set=1
 
-# ── WRSPR {ESR|EPC|USP}, Rd (op=27, dispatch=0x56) ────────────
+# ── WRSPR {ESR|EPC|USP}, Rd (op=30, dispatch=0x5C) ────────────
 # Write Rd to the SPR selected by IR[15:12]. Privileged.
 # Rd → A-bus → ALU PASS_A → R-bus → target SPR.
 # Hardware decode (spr_write = sys_we & !sys_cycle):
 #   SPR 0 (ESR): esr_load from R-bus
 #   SPR 1 (EPC): epc_load from R-bus
 #   SPR 2 (USP): R14 cross_bank write from R-bus
-.org 0x56
+.org 0x5C
 wrspr:
   priv=1 reg_a=IR_RD alu=PASS_A sys_op=SPR_WRITE
 
-# ── RDSPR Rd, {ESR|EPC|USP} (op=28, dispatch=0x58) ────────────
+# ── RDSPR Rd, {ESR|EPC|USP} (op=31, dispatch=0x5E) ────────────
 # Read SPR selected by IR[15:12] into Rd. Privileged.
 # a_src=SPR: hardware decodes IR[15:12] to select source:
 #   SPR 0 (ESR): A-bus ← ESR latch
 #   SPR 1 (EPC): A-bus ← EPC latch
 #   SPR 2 (USP): A-bus ← R14 cross_bank read
 # Source → ALU PASS_A → R-bus → Rd
-.org 0x58
+.org 0x5E
 rdspr:
   priv=1 a_src=SPR alu=PASS_A reg_w=IR_RD w_en=1 wmux=RBUS
 

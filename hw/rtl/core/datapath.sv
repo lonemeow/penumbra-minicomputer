@@ -409,18 +409,19 @@ module datapath
     logic        alu_flag_n, alu_flag_z, alu_flag_c, alu_flag_v;
 
     alu u_alu (
-        .i_clk    (i_clk),
-        .i_rst    (i_rst),
-        .i_a      (a_bus),
-        .i_b      (b_bus),
-        .i_op     (i_alu_op),
-        .i_start  (i_alu_start),
-        .o_busy   (o_alu_busy),
-        .o_result (r_bus),
-        .o_flag_z (alu_flag_z),
-        .o_flag_n (alu_flag_n),
-        .o_flag_c (alu_flag_c),
-        .o_flag_v (alu_flag_v)
+        .i_clk      (i_clk),
+        .i_rst      (i_rst),
+        .i_a        (a_bus),
+        .i_b        (b_bus),
+        .i_op       (i_alu_op),
+        .i_carry_in (sr_flag_c),
+        .i_start    (i_alu_start),
+        .o_busy     (o_alu_busy),
+        .o_result   (r_bus),
+        .o_flag_z   (alu_flag_z),
+        .o_flag_n   (alu_flag_n),
+        .o_flag_c   (alu_flag_c),
+        .o_flag_v   (alu_flag_v)
     );
 
     // ── MDR ──────────────────────────────────────────────────

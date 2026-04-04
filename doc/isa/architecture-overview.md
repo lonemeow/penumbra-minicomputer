@@ -136,12 +136,15 @@ When F=0, the result is written to Rd and flags are updated. When F=1, flags are
 | 00111 | `SAR Rd, Rs` | Rd = Rd >> Rs[4:0] (arithmetic) | — |
 | 01000 | `MOV Rd, Rs` | Rd = Rs | — |
 | 01001 | `NOT Rd, Rs` | Rd = ~Rs | — |
-| 01010 | `MUL Rd, Rs` | Rd = Rd × Rs (signed, stalls) | — |
-| 01011 | `MULU Rd, Rs` | Rd = Rd × Rs (unsigned, stalls) | — |
-| 01100 | `DIV Rd, Rs` | Rd = Rd / Rs (signed, stalls) | — |
-| 01101 | `DIVU Rd, Rs` | Rd = Rd / Rs (unsigned, stalls) | — |
-| 01110 | `MOD Rd, Rs` | Rd = Rd % Rs (signed, stalls) | — |
-| 01111 | `MODU Rd, Rs` | Rd = Rd % Rs (unsigned, stalls) | — |
+| 01010 | `ADC Rd, Rs` | Rd = Rd + Rs + C (add with carry) | — |
+| 01011 | `SBC Rd, Rs` | Rd = Rd - Rs - ~C (subtract with borrow) | — |
+| 01100 | `MUL Rd, Rs` | Rd = Rd × Rs (signed, stalls) | — |
+| 01101 | `MULU Rd, Rs` | Rd = Rd × Rs (unsigned, stalls) | — |
+| 01110 | `DIV Rd, Rs` | Rd = Rd / Rs (signed, stalls) | — |
+| 01111 | `DIVU Rd, Rs` | Rd = Rd / Rs (unsigned, stalls) | — |
+| 10000 | `MOD Rd, Rs` | Rd = Rd % Rs (signed, stalls) | — |
+| 10001 | `MODU Rd, Rs` | Rd = Rd % Rs (unsigned, stalls) | — |
+| 10010–10110 | (reserved) | Future ALU expansion (5 slots) | — |
 
 #### System Operations
 
@@ -149,20 +152,15 @@ System operations use the Format R encoding with the following opcodes. The `Rd`
 
 | op | Mnemonic | Description | Field usage |
 |----|----------|-------------|-------------|
-| 10000 | `WRSYS Rd, #dev, #reg` | Write Rd to system device register | spare[15:12]=dev, spare[11:8]=reg |
-| 10001 | `RDSYS Rd, #dev, #reg` | Read system device register to Rd | spare[15:12]=dev, spare[11:8]=reg |
-| 10010 | `GETSR Rd` | Read SR to Rd | |
-| 10011 | `SETSR Rd` | Write Rd to SR (privileged) | |
-| 10100 | `SYSCALL` | System call trap (vector 7) | |
-| 10101 | `BREAK` | Debug breakpoint (vector 8) | |
-| 10110 | `ERET` | Exception return: restore SR from ESR, PC from EPC (privileged) | |
-| 10111 | `ICACHE_INV` | Invalidate entire I-cache (privileged) | |
-| 11000 | `JMP Rs` | PC = Rs (indirect jump) | Rs field; assembler alias: `RET` = `JMP R13` |
-| 11001 | `EI` | Enable interrupts: SR.I = 1 (delayed — see below) | |
-| 11010 | `DI` | Disable interrupts: SR.I = 0 (immediate, privileged) | |
-| 11011 | `WRSPR {SPR}, Rd` | Write Rd to SPR (privileged) | SPR in spare[15:12]: 0=ESR, 1=EPC, 2=USP |
-| 11100 | `RDSPR Rd, {SPR}` | Read SPR into Rd (privileged) | SPR in spare[15:12]: 0=ESR, 1=EPC, 2=USP |
-| 11101-11111 | (reserved) | Future expansion (3 slots) | |
+| 10111 | `WRSYS Rd, #dev, #reg` | Write Rd to system device register | spare[15:12]=dev, spare[11:8]=reg |
+| 11000 | `RDSYS Rd, #dev, #reg` | Read system device register to Rd | spare[15:12]=dev, spare[11:8]=reg |
+| 11001 | `SYSCALL` | System call trap (vector 5) | |
+| 11010 | `BREAK` | Debug breakpoint (vector 6) | |
+| 11011 | `ERET` | Exception return: restore SR from ESR, PC from EPC (privileged) | |
+| 11100 | `EI` | Enable interrupts: SR.I = 1 (delayed — see below) | |
+| 11101 | `DI` | Disable interrupts: SR.I = 0 (immediate, privileged) | |
+| 11110 | `WRSPR {SPR}, Rd` | Write Rd to SPR (privileged) | SPR in spare[15:12]: 0=ESR, 1=EPC, 2=USP |
+| 11111 | `RDSPR Rd, {SPR}` | Read SPR into Rd (privileged) | SPR in spare[15:12]: 0=ESR, 1=EPC, 2=USP |
 
 ### Format L — Immediate (prefix `01`)
 
@@ -194,7 +192,9 @@ All immediate fields are consistently 16 bits wide.
 | 1000 | `SHL Rd, #imm5` | Rd = Rd << imm[4:0] | Shift left by immediate (0–31) |
 | 1001 | `SHR Rd, #imm5` | Rd = Rd >> imm[4:0] (logical) | Shift right by immediate (0–31) |
 | 1010 | `SAR Rd, #imm5` | Rd = Rd >> imm[4:0] (arithmetic) | Arithmetic shift right by immediate (0–31) |
-| 1011–1111 | (reserved) | Future expansion (5 slots) | |
+| 1011 | `JMP Rd` | PC = Rd (indirect jump) | Rd field holds source reg; `RET` = `JMP R13` |
+| 1100 | `JALR Rd` | R13 = PC+4, PC = Rd (indirect call) | Used for function pointers, vtables |
+| 1101–1111 | (reserved) | Future expansion (3 slots) | |
 
 #### Loading 32-bit Constants
 

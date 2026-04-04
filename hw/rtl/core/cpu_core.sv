@@ -314,15 +314,15 @@ module cpu_core
             illegal_pending <= 1'b0;
     end
 
-    // BREAK detection at dispatch (dispatch_addr == 0x4A for op=21)
+    // BREAK detection at dispatch (dispatch_addr == 0x54 for op=26)
     // Gated by !fault_pending: during a fetch fault, dispatch_addr is
     // derived from stale/garbage mem_rdata — must not trigger BREAK.
     logic break_taken;
-    assign break_taken = (dispatch_addr == 8'h4A) && !fault_pending;
+    assign break_taken = (dispatch_addr == 8'h54) && !fault_pending;
 
-    // SYSCALL detection at dispatch (dispatch_addr == 0x48 for op=20)
+    // SYSCALL detection at dispatch (dispatch_addr == 0x52 for op=25)
     logic syscall_taken;
-    assign syscall_taken = (dispatch_addr == 8'h48) && !fault_pending;
+    assign syscall_taken = (dispatch_addr == 8'h52) && !fault_pending;
 
     // ── Privilege violation detection (from sequencer) ─────────
     logic        priv_except;
