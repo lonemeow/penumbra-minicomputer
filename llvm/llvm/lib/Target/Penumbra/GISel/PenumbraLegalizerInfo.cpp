@@ -108,23 +108,27 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
       .legalForCartesianProduct({s8, s16, s32}, {s1, s8, s16})
       .narrowScalarIf(typeIs(0, s64), changeTo(0, s32));
 
-  // Division/remainder: custom-lower to catch power-of-2 constants
+  // Division/remainder: custom-lower s32 to catch power-of-2 constants
   // (SHR for udiv, AND for urem), fall back to libcalls otherwise.
+  // s64 goes straight to libcall (__udivdi3/__umoddi3).
   getActionDefinitionsBuilder({G_UDIV, G_UREM})
       .customFor({s32})
-      .clampScalar(0, s32, s32);
+      .libcallFor({s64})
+      .clampScalar(0, s32, s64);
 
   // Signed division/remainder: always libcall (signed power-of-2 lowering
   // needs rounding adjustment — not worth the complexity yet).
   getActionDefinitionsBuilder({G_SDIV, G_SREM})
-      .libcallFor({s32})
-      .clampScalar(0, s32, s32);
+      .libcallFor({s32, s64})
+      .clampScalar(0, s32, s64);
 
-  // Multiplication: custom-lower power-of-2 and power-of-2 ± 1 constants
+  // Multiplication: custom-lower s32 power-of-2 and power-of-2 ± 1 constants
   // to shifts (+ add/sub), fall back to libcall otherwise.
+  // s64 goes straight to libcall (__muldi3).
   getActionDefinitionsBuilder(G_MUL)
       .customFor({s32})
-      .clampScalar(0, s32, s32);
+      .libcallFor({s64})
+      .clampScalar(0, s32, s64);
 
   // SEXT_INREG: lowered by framework to SHL+ASHR (our shift constant folding
   // then selects these to SHLi+SARi).
@@ -152,6 +156,9 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   getActionDefinitionsBuilder(G_VAARG)
       .clampScalar(0, s32, s32)
       .lowerForCartesianProduct({s32, p0}, {p0});
+
+  // Memory operations: lower to memcpy/memmove/memset libcalls.
+  getActionDefinitionsBuilder({G_MEMCPY, G_MEMMOVE, G_MEMSET}).libcall();
 
   getLegacyLegalizerInfo().computeTables();
 }
