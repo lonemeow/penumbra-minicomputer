@@ -194,6 +194,15 @@ rti:
   priv=1 a_src=ESR alu=PASS_A sr_load=1 pc=HOLD branch=SEQ
   a_src=EPC pc=ABUS
 
+# ── JALR Rs (op=23, dispatch=0x4E) ───────────────────────────
+# Jump and link register: R13 = PC+4, PC = Rs.
+# Combines BL's link-save (step 0) with JMP's indirect (step 1).
+# Used for indirect calls (function pointers, vtables).
+.org 0x4E
+jalr:
+  reg_a=R15 bmux=CONST4 alu=ADD reg_w=R13 w_en=1 wmux=RBUS pc=HOLD branch=SEQ
+  reg_a=IR_RS pc=ABUS
+
 # ── JMP Rs (op=24, dispatch=0x50) ────────────────────────────
 # PC = Rs (register indirect jump; RET = JMP R13)
 .org 0x50

@@ -222,7 +222,7 @@ FORMAT_R_OPS = {
     "SYSCALL":   (20, False, 0),
     "BREAK":     (21, False, 0),
     "RTI":       (22, False, 0),  # Legacy alias for ERET (no args)
-    "ICACHE_INV":(23, False, 0),
+    "JALR":      (23, True,  0),  # Rs field is the target register
     "JMP":       (24, True,  0),  # Rs field is the target register
     "EI":        (25, False, 0),
     "DI":        (26, False, 0),
@@ -406,9 +406,9 @@ def assemble_line(mnemonic, operands, addr, labels, line_num, constants=None):
             spare = (dev << 12) | (reg << 8)
             return encode_format_r(op, rd, 0, 0, spare)
 
-        if mn == "JMP":
+        if mn in ("JMP", "JALR"):
             if len(operands) != 1:
-                raise ValueError(f"JMP expects 1 operand (Rs)")
+                raise ValueError(f"{mn} expects 1 operand (Rs)")
             rs = parse_reg(operands[0])
             if rs is None:
                 raise ValueError(f"bad register '{operands[0]}'")
