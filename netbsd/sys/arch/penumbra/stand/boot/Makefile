@@ -10,6 +10,8 @@ PROG=		boot1
 SRCS=		boot.c conf.c
 # MD libsa glue — built alongside the bootloader
 SRCS+=		sdblk.c cons.c
+# Compiler-rt builtins (no hardware MUL)
+SRCS+=		mulsi3.c
 
 NOMAN=		# no manual page
 NOSSP=		yes

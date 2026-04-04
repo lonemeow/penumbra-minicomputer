@@ -30,6 +30,7 @@ SECTIONS
     }
 
     _end = .;
+    PROVIDE(end = .);
 
     /DISCARD/ : {
         *(.comment)
