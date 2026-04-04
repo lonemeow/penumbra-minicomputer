@@ -87,22 +87,35 @@ All 18 headers are minimal stubs, sufficient for `#include <lib/libsa/stand.h>` 
 
 ## Current Status
 
-- [x] Machine headers — 20 headers (added `aout_machdep.h`, `mutex.h`), compiles `<lib/libsa/stand.h>` and `<lib/libsa/loadfile.h>` cleanly
-- [x] libsa glue — `sdblk.c` (SD block device strategy via SPI), `cons.c` (UART console)
-- [x] Stage 1 bootloader — `boot.c` (main: init SD, search FAT32 for stage 2), `conf.c` (device/fs wiring)
-- [x] Build system — standalone Makefile + build.sh integration via `bsd.prog.mk`
-- [x] Stage 1 linking — linker script (`boot.ld`), links against libsa/libkern, `mulsi3.c` for software multiply, `PROVIDE(end)` for heap
-- [x] PIC support — fully position-independent (`-fPIC`), no absolute relocations. 32KB binary + 39KB with symbols.
-- [ ] Stage 1 testing — run in simulator with FAT32 disk image
-- [ ] Stage 2 bootloader — ELF loading via `loadfile()`, MMU enable
+- [x] Machine headers — 20 headers (added `aout_machdep.h`,
+  `mutex.h`), compiles `<lib/libsa/stand.h>` and
+  `<lib/libsa/loadfile.h>` cleanly
+- [x] libsa glue — `sdblk.c` (SD block device strategy via SPI),
+  `cons.c` (UART console)
+- [x] Build system — standalone Makefile + build.sh integration
+  via `bsd.prog.mk`
+- [ ] Boot loader (`LOADER`) — loaded by ROM from FAT32,
+  responsible for ELF kernel loading, MMU enable, bootinfo
+  translation, jump to kernel
 - [ ] Kernel port — locore.S, pmap, trap handling
+
+**Note:** The original stage 1/stage 2 bootloader split via
+libsa has been superseded.  The ROM now includes its own FAT32
+reader and loads `LOADER` directly from the boot partition.
+The libsa-based `boot.c`/`conf.c`/`sdblk.c` code in `stand/boot/`
+is retained for reference but is no longer the active boot path.
+The new boot loader will be built independently of libsa.
 
 ## Known Issues
 
-_(s1 store bug fixed — widenScalarToNextPow2 + lowerIfMemSizeNotByteSizePow2 added to legalizer)_
+_(s1 store bug fixed — widenScalarToNextPow2 +
+lowerIfMemSizeNotByteSizePow2 added to legalizer)_
 
 ## Next Steps
 
-1. **Test in simulator** — create a FAT32 disk image with a dummy `boot/boot2` file, run stage 1 via `make simulate SDCARD=disk.img`, verify it finds the file
-2. **ELF loading** — use libsa's `loadfile()` to load stage 2 into RAM and jump to it
-3. **PIC jump table optimization** — narrow 32-bit label-difference entries to 16-bit when offsets fit ±32KB (EK_Inline + LDH)
+1. **Boot loader** — write `LOADER` binary: parse boot data,
+   load kernel ELF from FAT32, enable MMU, build NetBSD bootinfo,
+   jump to kernel
+2. **PIC jump table optimization** — narrow 32-bit
+   label-difference entries to 16-bit when offsets fit ±32KB
+   (EK_Inline + LDH)

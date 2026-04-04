@@ -5,8 +5,11 @@
 #
 # Disk layout (from doc/boot/boot-process.md):
 #   Sector 0:           MBR partition table
-#   Sectors 1–2047:     Partition gap (stage 1 bootloader, ~1 MB)
-#   Sectors 2048+:      Partition 1: FAT32 (stage 2 + kernel)
+#   Sectors 1–2047:     Partition gap (unused)
+#   Sectors 2048+:      Partition 1: FAT32 (boot loader + kernel)
+#
+# The ROM's "boot" command mounts the FAT32 partition and loads
+# the file named LOADER from the root directory.
 #
 # Usage:
 #   mksdimage.sh -o disk.img [options]
@@ -14,19 +17,19 @@
 # Options:
 #   -o FILE         Output image path (required)
 #   -s SIZE_MB      Total image size in MB (default: 64, minimum ~34 for FAT32)
-#   -1 FILE         Stage 1 binary to write into partition gap
-#   -2 FILE         Stage 2 binary, placed at /boot/boot2 on FAT32
-#   -k FILE         Kernel image, placed at /boot/penumbra on FAT32
+#   -1 FILE         Binary to write into partition gap (rarely needed)
+#   -2 FILE         Boot loader, placed as LOADER on FAT32
+#   -k FILE         Kernel image, placed as PENUMBRA on FAT32
 #   -e DIR          Extra directory: copy all contents onto FAT32 root
 #   -T TOOLDIR      NetBSD tools directory (default: auto-detect)
 #   -v              Verbose output
 #
 # Examples:
-#   # Minimal image with a dummy boot2 for testing stage 1:
-#   mksdimage.sh -o disk.img -2 /dev/null
+#   # Image with boot loader for ROM "boot sd:0,0" command:
+#   mksdimage.sh -o disk.img -2 loader.bin
 #
-#   # Full image with stage 1 in gap + stage 2 and kernel on FAT32:
-#   mksdimage.sh -o disk.img -1 boot1.bin -2 boot2 -k netbsd
+#   # Full image with loader and kernel:
+#   mksdimage.sh -o disk.img -2 loader.bin -k netbsd
 
 set -euo pipefail
 
@@ -167,15 +170,13 @@ BOOTFSROOT="$BOOTIMGTMP/fsroot"
 mkdir $BOOTFSROOT
 
 if [ -n "$STAGE2" ]; then
-    mkdir -p "$BOOTFSROOT/boot"
-    log "Copying $STAGE2 -> boot/boot2"
-    cp "$STAGE2" "$BOOTFSROOT/boot/boot2"
+    log "Copying $STAGE2 -> LOADER"
+    cp "$STAGE2" "$BOOTFSROOT/LOADER"
 fi
 
 if [ -n "$KERNEL" ]; then
-    mkdir -p "$BOOTFSROOT/boot"
-    log "Copying $KERNEL -> boot/penumbra"
-    cp "$KERNEL" "$BOOTFSROOT/boot/penumbra"
+    log "Copying $KERNEL -> PENUMBRA"
+    cp "$KERNEL" "$BOOTFSROOT/PENUMBRA"
 fi
 
 if [ -n "$EXTRA_DIR" ]; then

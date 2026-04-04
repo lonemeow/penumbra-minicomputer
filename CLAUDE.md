@@ -149,6 +149,12 @@ MIPS/68k-style vector dispatch.
   `load sd:<dev>,<cs>[:<part>] <addr> <lba> <count>` reads sectors
   (raw absolute LBA without `:<part>`,
   or partition-relative LBA with it).
+- **ROM FAT32 boot:** `boot sd:<dev>,<cs>` mounts the first
+  FAT32 partition, loads `LOADER` from root directory into RAM
+  at `0x10000`, and jumps with R1=bootdata.
+  FAT32 reader (`fat32.c`) uses a block-read callback for
+  device independence.
+  Tested end-to-end with `nbmakefs`-generated images.
 - SD naming uses per-class controller index
   (`sd:0,0` = first SD controller, CS0),
   not the global device index.
@@ -208,7 +214,6 @@ MIPS/68k-style vector dispatch.
   MOV PC + ADDi `%pcrel()` for globals,
   EK_LabelDifference32 jump table entries;
   PC (R15) is a readable GPR so PIC needs no GOT (±32KB reach).
-  NetBSD stage 1 bootloader builds fully PIC.
 - `-O0` through `-O2` work; higher levels or new code patterns
   may still need more legalization rules (G_SMAX, etc.).
 
@@ -242,9 +247,9 @@ MIPS/68k-style vector dispatch.
 ## Next Steps (in priority order)
 1. **LLVM codegen hardening** — legalize remaining ops as they surface
    (G_SMAX/G_SMIN/G_UMAX/G_UMIN), migrate more patterns to TableGen
-2. **Boot chain — stage 1 loader** — ROM can read SD sectors;
-   next is stage 1 bootloader: load from partition gap,
-   parse MBR, load stage 2 from FAT32.
+2. **Boot loader** — ROM loads `LOADER` from FAT32;
+   next is the loader itself: ELF kernel loading, MMU enable,
+   bootinfo translation, jump to kernel.
    See `doc/boot/boot-process.md`
 3. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick
 4. **Interrupt controller** — Multiple devices with priority encoding

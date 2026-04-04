@@ -63,7 +63,11 @@ This file provides detailed hardware context for work under `hw/`. The root `CLA
   - `crt0.s` — startup (set SP, call main),
     `trap_entry.s` — exception trampolines,
     `rom.ld` — linker script
+  - `fat32.c`/`.h` — minimal read-only FAT32 reader
+    (mount, root directory search, file read via cluster chain).
+    Device-independent via `blk_read_fn` callback.
   - Monitor commands:
+    `boot sd:<dev>,<cs>` (mount FAT32, load `LOADER`, jump),
     `x <addr> [len]` (hex dump),
     `load sd:<dev>,<cs>[:<part>] <addr> <lba> <count>`
     (SD read, raw or partition-relative LBA),

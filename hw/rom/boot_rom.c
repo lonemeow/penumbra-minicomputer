@@ -9,6 +9,7 @@
 
 #include "console.h"
 #include "sdcard.h"
+#include "fat32.h"
 #include "util.h"
 #include "bootdata.h"
 #include "libc.h"
@@ -423,6 +424,126 @@ out:
     sd_deinit(dev->base);
 }
 
+/* ── FAT32 block-read adapter for SD ─────────────────────────────── */
+
+static int sd_blk_read(uint32_t lba, unsigned char *dst, void *ctx)
+{
+    uint32_t base = (uint32_t)(unsigned long)ctx;
+    return sd_read_sector(base, lba, dst);
+}
+
+/*
+ * cmd_boot — load and execute the boot loader from a FAT32 partition.
+ *
+ * Usage: boot sd:<dev>,<cs>
+ *
+ * Finds the first FAT32 partition, mounts it, loads LOADER from the
+ * root directory into RAM, and jumps to it with R1 = boot data.
+ */
+#define BOOT_FILENAME "LOADER"
+#define BOOT_LOAD_ADDR 0x00010000  /* 64 KB — above vectors/bootdata/stack */
+
+static void cmd_boot(const char *args) {
+    const char *p = args;
+
+    if (!(p[0] == 's' && p[1] == 'd' && p[2] == ':')) {
+        console_puts("usage: boot sd:<dev>,<cs>\r\n");
+        return;
+    }
+    p += 3;
+    unsigned long dev_nth = strtoul(p, (char **)&p, 10);
+    if (*p == ',') p++;
+    unsigned long cs = strtoul(p, (char **)&p, 10);
+
+    struct btag_device *dev =
+        bd_find_device_by_class(ACFG_CLASS_SD, (int)dev_nth);
+    if (!dev) {
+        console_printf("sd:%d — no such SD controller\r\n", (int)dev_nth);
+        return;
+    }
+
+    (void)cs;
+
+    /* Init SD card */
+    int rc = sd_init(dev->base);
+    if (rc != 0) {
+        console_printf("SD init failed (err=%d)\r\n", rc);
+        return;
+    }
+
+    /* Find first FAT32 partition from MBR */
+    unsigned char mbr[512];
+    if (sd_read_sector(dev->base, 0, mbr) != 0) {
+        console_puts("MBR read failed\r\n");
+        goto out;
+    }
+    if (read_le16(mbr + MBR_SIG_OFFSET) != MBR_SIGNATURE) {
+        console_puts("No MBR signature\r\n");
+        goto out;
+    }
+
+    uint32_t part_lba = 0;
+    int part;
+    for (part = 0; part < 4; part++) {
+        unsigned char *pe = mbr + MBR_PART_OFFSET + part * MBR_PART_ENTRY_SIZE;
+        unsigned char ptype = pe[4];
+        if (ptype == PTYPE_FAT32 || ptype == PTYPE_FAT32L) {
+            part_lba = read_le32(pe + 8);
+            break;
+        }
+    }
+    if (part_lba == 0) {
+        console_puts("No FAT32 partition found\r\n");
+        goto out;
+    }
+    console_printf("FAT32 partition %d at LBA %d\r\n", part + 1,
+                    (int)part_lba);
+
+    /* Mount FAT32 */
+    struct fat32 fs;
+    rc = fat32_mount(&fs, sd_blk_read, (void *)(unsigned long)dev->base,
+                     part_lba);
+    if (rc != 0) {
+        console_printf("FAT32 mount failed (err=%d)\r\n", rc);
+        goto out;
+    }
+
+    /* Find loader file */
+    uint32_t file_cluster, file_size;
+    rc = fat32_find_root(&fs, BOOT_FILENAME, &file_cluster, &file_size);
+    if (rc != 0) {
+        console_printf("%s not found\r\n", BOOT_FILENAME);
+        goto out;
+    }
+    console_printf("Loading %s (%d bytes)\r\n", BOOT_FILENAME,
+                    (int)file_size);
+
+    /* Load file into RAM */
+    unsigned char *load_addr = (unsigned char *)BOOT_LOAD_ADDR;
+    rc = fat32_read_file(&fs, file_cluster, load_addr, file_size);
+    if (rc != 0) {
+        console_puts("Read error\r\n");
+        goto out;
+    }
+
+    sd_deinit(dev->base);
+
+    console_printf("Jumping to 0x%x\r\n", BOOT_LOAD_ADDR);
+
+    /* Jump to loaded binary with R1 = boot data pointer */
+    uint32_t bd = BOOTDATA_BASE;
+    asm volatile(
+        "mov r1, %0\n\t"
+        "jmp %1"
+        : : "r"(bd), "r"((uint32_t)BOOT_LOAD_ADDR)
+        : "r1"
+    );
+    __builtin_unreachable();
+
+out:
+    sd_deinit(dev->base);
+}
+
 /*
  * cmd_go — jump to an address and execute.
  *
@@ -523,6 +644,8 @@ int main(void) {
                 cmd_go(cmdbuffer + 1);
             } else if (strncmp(cmdbuffer, "go ", 3) == 0) {
                 cmd_go(cmdbuffer + 3);
+            } else if (strncmp(cmdbuffer, "boot ", 5) == 0) {
+                cmd_boot(cmdbuffer + 5);
             } else {
                 console_puts("?\r\n");
             }
