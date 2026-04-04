@@ -82,6 +82,7 @@ private:
                           const MachineOperand &LoOp,
                           const MachineOperand &HiOp) const;
 
+  const PenumbraTargetMachine &TM;
   const PenumbraInstrInfo &TII;
   const PenumbraRegisterInfo &TRI;
   const PenumbraRegisterBankInfo &RBI;
@@ -107,7 +108,7 @@ private:
 PenumbraInstructionSelector::PenumbraInstructionSelector(
     const PenumbraTargetMachine &TM, const PenumbraSubtarget &STI,
     const PenumbraRegisterBankInfo &RBI)
-    : InstructionSelector(), TII(*STI.getInstrInfo()),
+    : InstructionSelector(), TM(TM), TII(*STI.getInstrInfo()),
       TRI(*STI.getRegisterInfo()), RBI(RBI), Subtarget(&STI),
 #define GET_GLOBALISEL_PREDICATES_INIT
 #include "PenumbraGenGlobalISel.inc"
@@ -624,10 +625,42 @@ bool PenumbraInstructionSelector::selectGlobalValue(MachineInstr &I,
   const GlobalValue *GV = I.getOperand(1).getGlobal();
   int64_t Offset = I.getOperand(1).getOffset();
 
-  emitLoadSymbolAddr(
-      DstReg, I.getDebugLoc(), MBB, I.getIterator(),
-      MachineOperand::CreateGA(GV, Offset, Penumbra::S_Lo16),
-      MachineOperand::CreateGA(GV, Offset, Penumbra::S_Hi16));
+  if (TM.getRelocationModel() == Reloc::PIC_) {
+    // PIC: materialise address as PC + pcrel offset.
+    //   MOV TmpReg, PC         (copy current PC = addr of MOV)
+    //   ADDi DstReg, %pcrel(sym + 4)  (add PC-relative offset)
+    //
+    // The linker resolves %pcrel(X) to X - addr_of_ADDi.
+    // Since TmpReg holds addr_of_MOV = addr_of_ADDi - 4, we need
+    // the immediate to be (sym - addr_of_ADDi + 4) so the result
+    // is (addr_of_ADDi - 4) + (sym - addr_of_ADDi + 4) = sym.
+    // We achieve this by adding 4 to the relocation addend.
+    DebugLoc DL = I.getDebugLoc();
+    auto InsertPt = I.getIterator();
+    Register TmpReg =
+        MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
+
+    // MOV TmpReg, PC (R15)
+    auto MOVInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::MOV))
+        .addDef(TmpReg)
+        .addReg(Penumbra::R15);
+    constrainSelectedInstRegOperands(*MOVInst, TII, TRI, RBI);
+
+    // ADDi DstReg, TmpReg, %pcrel(sym) with addend +4
+    // Linker computes: sym + addend - ADDi_addr.
+    // Result: A + (sym + Offset + 4 - (A+4)) = sym + Offset. ✓
+    auto ADDiInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::ADDi))
+        .addDef(DstReg)
+        .addReg(TmpReg)
+        .add(MachineOperand::CreateGA(GV, Offset + 4, Penumbra::S_PCRel));
+    constrainSelectedInstRegOperands(*ADDiInst, TII, TRI, RBI);
+  } else {
+    // Static: absolute address via LLI+LUI.
+    emitLoadSymbolAddr(
+        DstReg, I.getDebugLoc(), MBB, I.getIterator(),
+        MachineOperand::CreateGA(GV, Offset, Penumbra::S_Lo16),
+        MachineOperand::CreateGA(GV, Offset, Penumbra::S_Hi16));
+  }
 
   I.eraseFromParent();
   return true;
