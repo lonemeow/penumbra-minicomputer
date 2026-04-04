@@ -1,0 +1,39 @@
+root = true
+
+# NetBSD Kernel Normal Form (KNF)
+# See https://man.netbsd.org/style.9
+
+[*]
+end_of_line = lf
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+# C sources and headers: KNF uses tabs, 8-column tab stops
+[*.{c,h}]
+indent_style = tab
+indent_size = 8
+tab_width = 8
+max_line_length = 80
+
+# Assembly
+[*.{S,s}]
+indent_style = tab
+indent_size = 8
+tab_width = 8
+
+# Makefiles
+[{Makefile,Makefile.*,*.mk}]
+indent_style = tab
+indent_size = 8
+tab_width = 8
+
+# Linker scripts
+[*.ld]
+indent_style = space
+indent_size = 4
+
+# Config files, shell scripts
+[*.{sh,conf}]
+indent_style = tab
+indent_size = 8
+tab_width = 8
