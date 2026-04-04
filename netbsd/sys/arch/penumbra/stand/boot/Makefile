@@ -35,7 +35,14 @@ CWARNFLAGS+=	-Wno-main
 STRIPFLAG=
 BINMODE=	444
 
+CLEANFILES+=	${PROG}.sym
+
 SAMISCMAKEFLAGS= SA_USE_LOADFILE=yes SA_INCLUDE_NET=no
+
+# Custom link rule: must be defined BEFORE bsd.prog.mk so that its
+# .if !commands(${_P}) check sees our rule and skips the default link.
+${PROG}: ${PROG}.sym
+	${OBJCOPY} -O binary ${PROG}.sym ${PROG}
 
 .include <bsd.prog.mk>
 
@@ -48,12 +55,6 @@ LIBKERN=	${KERNLIB}
 SA_AS=		library
 .include "${S}/lib/libsa/Makefile.inc"
 LIBSA=		${SALIB}
-
-CLEANFILES+=	${PROG}.sym
-
-# Custom link rule: build libraries first, then link
-${PROG}: ${PROG}.sym
-	${OBJCOPY} -O binary ${PROG}.sym ${PROG}
 
 ${PROG}.sym: ${OBJS} ${SALIB} ${KERNLIB}
 	${_MKTARGET_LINK}
