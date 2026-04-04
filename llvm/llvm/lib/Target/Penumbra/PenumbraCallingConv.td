@@ -22,7 +22,7 @@ def CC_Penumbra : CallingConv<[
 
 def RetCC_Penumbra : CallingConv<[
     CCIfType<[i1, i8, i16], CCPromoteToType<i32>>,
-    CCIfType<[i32], CCAssignToReg<[R1]>>
+    CCIfType<[i32], CCAssignToReg<[R1, R2]>>
 ]>;
 
 // R13 (LR) is included so LLVM saves/restores it in functions that make
