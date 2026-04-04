@@ -221,7 +221,7 @@ bool PenumbraCallLowering::lowerCall(MachineIRBuilder &MIRBuilder,
 
   // Build the call instruction.
   // Direct calls (symbol target): BL (branch and link, Format B, PC-relative).
-  // Indirect calls (register target): JALR (jump and link register, Format R).
+  // Indirect calls (register target): JALR (jump and link register, Format L).
   MachineInstrBuilder MIB;
   if (Info.Callee.isReg()) {
     MIB = MIRBuilder.buildInstrNoInsert(Penumbra::JALR).add(Info.Callee);

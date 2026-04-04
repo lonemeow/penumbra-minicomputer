@@ -19,14 +19,23 @@ using namespace llvm;
 PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   using namespace TargetOpcode;
 
+  const LLT s1  = LLT::scalar(1);
   const LLT s8  = LLT::scalar(8);
   const LLT s16 = LLT::scalar(16);
   const LLT s32 = LLT::scalar(32);
   const LLT p0  = LLT::pointer(0, 32);
 
   getActionDefinitionsBuilder({G_ADD, G_SUB, G_AND, G_OR, G_XOR, G_SHL, G_LSHR, G_ASHR})
-      .legalFor({s32}) 
+      .legalFor({s32})
       .clampScalar(0, s32, s32);
+
+  // Add/sub with overflow and carry: produced by i64 narrowing.
+  // All lowered to basic ADD/SUB + ICMP sequences. The hardware has ADC/SBC
+  // instructions but using them requires SR flag management that GlobalISel
+  // doesn't handle well at -O0. A future peephole pass can fuse
+  // ADD+compare+ADC chains into ADD+ADC.
+  getActionDefinitionsBuilder({G_UADDO, G_USUBO, G_UADDE, G_USUBE})
+      .lowerFor({{s32, s1}});
 
   getActionDefinitionsBuilder(G_CONSTANT)
       .legalFor({s32, p0})
@@ -60,7 +69,6 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
       .legalFor({{p0, s32}, {s32, p0}});
 
   // Comparisons: G_ICMP produces s1 result, compares s32 operands.
-  const LLT s1 = LLT::scalar(1);
   getActionDefinitionsBuilder(G_ICMP)
       .legalFor({{s1, s32}, {s1, p0}})
       .clampScalar(1, s32, s32);

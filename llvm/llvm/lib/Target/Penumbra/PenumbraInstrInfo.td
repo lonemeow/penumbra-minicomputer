@@ -96,6 +96,19 @@ class FormatL<bits<4> op, dag outs, dag ins, string asmstr,
   let Inst{15-0}  = imm16;
 }
 
+// Format L with only a register operand (e.g. JMP Rd, JALR Rd) — imm16 fixed to 0.
+class FormatL_Reg<bits<4> op, dag outs, dag ins, string asmstr,
+                  list<dag> pattern = []>
+    : PenumbraInst<outs, ins, asmstr, pattern> {
+  bits<4> Rd;
+
+  let Inst{31-30} = 0b01;
+  let Inst{29-26} = op;
+  let Inst{25-22} = Rd;
+  let Inst{21-16} = 0;
+  let Inst{15-0}  = 0;
+}
+
 //--- Format M: prefix = 10 ---------------------------------------------------
 // [31:30]=10  [29]=L  [28:27]=sz  [26]=SE  [25:22]=Rd  [21:18]=Rb
 // [17:2]=offset16  [1:0]=spare
@@ -168,7 +181,7 @@ def memoffset16 : Operand<i32> {
 }
 
 //===----------------------------------------------------------------------===//
-// ALU instructions (Format R, prefix=00, op 0x00-0x09)
+// ALU instructions (Format R, prefix=00, op 0-11)
 //===----------------------------------------------------------------------===//
 
 let Defs = [SR], Constraints = "$Rd = $Rd_in" in {
@@ -198,6 +211,14 @@ def MOV  : FormatR<0b01000, (outs GPR:$Rd), (ins GPRz:$Rs),
 // NOT doesn't set flags
 def NOT  : FormatR<0b01001, (outs GPR:$Rd), (ins GPRz:$Rs),
                    "not\t$Rd, $Rs">;
+
+// ADC/SBC: add/subtract with carry from SR.C
+let Defs = [SR], Uses = [SR], Constraints = "$Rd = $Rd_in" in {
+  def ADC  : FormatR<0b01010, (outs GPR:$Rd), (ins GPR:$Rd_in, GPRz:$Rs),
+                     "adc\t$Rd, $Rs">;
+  def SBC  : FormatR<0b01011, (outs GPR:$Rd), (ins GPR:$Rd_in, GPRz:$Rs),
+                     "sbc\t$Rd, $Rs">;
+}
 
 // Flag-only variants (F=1): CMP = SUB with F=1, TEST = AND with F=1
 let F = 1 in {
@@ -314,28 +335,33 @@ def : MnemonicAlias<"bhs", "bcs">;  // unsigned higher or same = carry set
 def : MnemonicAlias<"blo", "bcc">;  // unsigned lower = carry clear
 
 //===----------------------------------------------------------------------===//
-// System instructions (Format R, prefix=00, op 0x10-0x1C)
+// Indirect jump/call (Format L, prefix=01, op 11-12)
 //===----------------------------------------------------------------------===//
 
+// JMP Rd — PC = Rd. Register in Rd field of Format L.
+// Assembler alias: RET = JMP R13.
 let isReturn = 1, isTerminator = 1, isBarrier = 1 in
-def JMP  : FormatR_Rs<0b11000, (outs), (ins GPR:$Rs), "jmp\t$Rs">;
+def JMP  : FormatL_Reg<0b1011, (outs), (ins GPR:$Rd), "jmp\t$Rd">;
 
-// JALR: jump and link register — R13 = PC+4, PC = Rs.
-// Used for indirect calls (function pointers). op=23.
+// JALR Rd — R13 = PC+4, PC = Rd. Indirect call via register.
 let isCall = 1, Defs = [R13, SR] in
-def JALR : FormatR_Rs<0b10111, (outs), (ins GPR:$Rs), "jalr\t$Rs">;
+def JALR : FormatL_Reg<0b1100, (outs), (ins GPR:$Rd), "jalr\t$Rd">;
 
 // Indirect branch (non-return) — same encoding as JMP but not marked isReturn,
 // so the epilogue inserter doesn't place stack restore before it.
 // Used by jump tables where the targets are within the same function.
 let isBranch = 1, isTerminator = 1, isBarrier = 1, isIndirectBranch = 1 in
-def BRIND : FormatR_Rs<0b11000, (outs), (ins GPR:$Rs), "jmp\t$Rs">;
+def BRIND : FormatL_Reg<0b1011, (outs), (ins GPR:$Rd), "jmp\t$Rd">;
+
+//===----------------------------------------------------------------------===//
+// System instructions (Format R, prefix=00, op 23-31)
+//===----------------------------------------------------------------------===//
 
 let isReturn = 1, isTerminator = 1, isBarrier = 1 in
-def ERET : FormatR_NoReg<0b10110, (outs), (ins), "eret">;
+def ERET : FormatR_NoReg<0b11011, (outs), (ins), "eret">;
 
-def EI   : FormatR_NoReg<0b11001, (outs), (ins), "ei">;
-def DI   : FormatR_NoReg<0b11010, (outs), (ins), "di">;
+def EI   : FormatR_NoReg<0b11100, (outs), (ins), "ei">;
+def DI   : FormatR_NoReg<0b11101, (outs), (ins), "di">;
 
 // WRSYS Rd, #dev, #reg — write Rd to system register.
 // Hardware reads source from Rd field (bits [24:21]).
@@ -348,7 +374,7 @@ def WRSYS : PenumbraInst<(outs), (ins GPR:$Rd, i32imm:$dev, i32imm:$reg),
   bits<4> reg;
 
   let Inst{31-30} = 0b00;
-  let Inst{29-25} = 0b10000;   // op = 16
+  let Inst{29-25} = 0b10111;   // op = 23
   let Inst{24-21} = Rd;
   let Inst{20-17} = 0;
   let Inst{16}    = 0;
@@ -366,7 +392,7 @@ def RDSYS : PenumbraInst<(outs GPR:$Rd), (ins i32imm:$dev, i32imm:$reg),
   bits<4> reg;
 
   let Inst{31-30} = 0b00;
-  let Inst{29-25} = 0b10001;   // op = 17
+  let Inst{29-25} = 0b11000;   // op = 24
   let Inst{24-21} = Rd;
   let Inst{20-17} = 0;
   let Inst{16}    = 0;
@@ -376,7 +402,7 @@ def RDSYS : PenumbraInst<(outs GPR:$Rd), (ins i32imm:$dev, i32imm:$reg),
 }
 
 // RDSPR Rd, #spr — read special-purpose register into Rd.
-// SPR number in bits [15:12].  SPRs: EPC=0, ESR=1, USP=2.
+// SPR number in bits [15:12].  SPRs: ESR=0, EPC=1, USP=2.
 let hasSideEffects = 1 in
 def RDSPR : PenumbraInst<(outs GPR:$Rd), (ins i32imm:$spr),
                          "rdspr\t$Rd, $spr"> {
@@ -384,7 +410,7 @@ def RDSPR : PenumbraInst<(outs GPR:$Rd), (ins i32imm:$spr),
   bits<4> spr;
 
   let Inst{31-30} = 0b00;
-  let Inst{29-25} = 0b11100;   // op = 28, dispatch 0x58
+  let Inst{29-25} = 0b11111;   // op = 31
   let Inst{24-21} = Rd;
   let Inst{20-17} = 0;
   let Inst{16}    = 0;
@@ -401,7 +427,7 @@ def WRSPR : PenumbraInst<(outs), (ins i32imm:$spr, GPR:$Rd),
   bits<4> Rd;
 
   let Inst{31-30} = 0b00;
-  let Inst{29-25} = 0b11011;   // op = 27, dispatch 0x56
+  let Inst{29-25} = 0b11110;   // op = 30
   let Inst{24-21} = Rd;
   let Inst{20-17} = 0;
   let Inst{16}    = 0;
@@ -409,8 +435,8 @@ def WRSPR : PenumbraInst<(outs), (ins i32imm:$spr, GPR:$Rd),
   let Inst{11-0}  = 0;
 }
 
-def SYSCALL : FormatR_NoReg<0b10100, (outs), (ins), "syscall">;
-def BREAK   : FormatR_NoReg<0b10101, (outs), (ins), "break">;
+def SYSCALL : FormatR_NoReg<0b11001, (outs), (ins), "syscall">;
+def BREAK   : FormatR_NoReg<0b11010, (outs), (ins), "break">;
 
 //===----------------------------------------------------------------------===//
 // Pseudo-instructions
