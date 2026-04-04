@@ -1096,6 +1096,11 @@ enum {
 #include "ELFRelocs/Xtensa.def"
 };
 
+// ELF Relocation types for Penumbra
+enum {
+#include "ELFRelocs/Penumbra.def"
+};
+
 #undef ELF_RELOC
 
 // Section header.

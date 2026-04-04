@@ -18,10 +18,10 @@ test_pcrel_imm:
 ; ENC: fixup {{.*}} kind: fixup_penumbra_imm16_pcrel
   add r2, %pcrel(myvar)
 
-; Verify two relocations are emitted at the expected offsets.
+; Verify relocations with correct type names and offsets.
 ; RELOC: Relocations [
 ; RELOC:   Section {{.*}} .rela.text {
-; RELOC:     0x0
-; RELOC:     0x4
+; RELOC:     0x0 R_PENUMBRA_MEMOFFSET16_PCREL myvar 0x0
+; RELOC:     0x4 R_PENUMBRA_IMM16_PCREL myvar 0x0
 ; RELOC:   }
 ; RELOC: ]
