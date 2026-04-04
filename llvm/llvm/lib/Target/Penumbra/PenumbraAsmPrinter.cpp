@@ -65,7 +65,15 @@ static bool lowerOperand(const MachineOperand &MO, MCOperand &MCOp,
     const MCExpr *Expr =
         MCSymbolRefExpr::create(AP.GetJTISymbol(MO.getIndex()), AP.OutContext);
     unsigned TF = MO.getTargetFlags();
-    if (TF == Penumbra::S_Lo16 || TF == Penumbra::S_Hi16)
+    if (TF == Penumbra::S_PCRel) {
+      // Add +4 to compensate for MOV+ADDi sequence: the MOV captures PC
+      // of itself (4 bytes before ADDi), so the pcrel relocation on ADDi
+      // needs +4 to produce the correct address.
+      Expr = MCBinaryExpr::createAdd(
+          Expr, MCConstantExpr::create(4, AP.OutContext), AP.OutContext);
+    }
+    if (TF == Penumbra::S_Lo16 || TF == Penumbra::S_Hi16 ||
+        TF == Penumbra::S_PCRel)
       Expr = MCSpecifierExpr::create(Expr, TF, AP.OutContext);
     MCOp = MCOperand::createExpr(Expr);
     return true;

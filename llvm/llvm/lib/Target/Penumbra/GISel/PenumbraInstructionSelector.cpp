@@ -673,18 +673,38 @@ bool PenumbraInstructionSelector::selectJumpTable(MachineInstr &I,
   Register DstReg = I.getOperand(0).getReg();
   unsigned JTI = I.getOperand(1).getIndex();
 
-  emitLoadSymbolAddr(
-      DstReg, I.getDebugLoc(), MBB, I.getIterator(),
-      MachineOperand::CreateJTI(JTI, Penumbra::S_Lo16),
-      MachineOperand::CreateJTI(JTI, Penumbra::S_Hi16));
+  if (TM.getRelocationModel() == Reloc::PIC_) {
+    // PIC: materialise JT base as PC + pcrel offset.
+    DebugLoc DL = I.getDebugLoc();
+    auto InsertPt = I.getIterator();
+    Register TmpReg =
+        MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
+
+    auto MOVInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::MOV))
+        .addDef(TmpReg)
+        .addReg(Penumbra::R15);
+    constrainSelectedInstRegOperands(*MOVInst, TII, TRI, RBI);
+
+    auto ADDiInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::ADDi))
+        .addDef(DstReg)
+        .addReg(TmpReg)
+        .add(MachineOperand::CreateJTI(JTI, Penumbra::S_PCRel));
+    constrainSelectedInstRegOperands(*ADDiInst, TII, TRI, RBI);
+  } else {
+    // Static: absolute address via LLI+LUI.
+    emitLoadSymbolAddr(
+        DstReg, I.getDebugLoc(), MBB, I.getIterator(),
+        MachineOperand::CreateJTI(JTI, Penumbra::S_Lo16),
+        MachineOperand::CreateJTI(JTI, Penumbra::S_Hi16));
+  }
 
   I.eraseFromParent();
   return true;
 }
 
 // ── G_BRJT (indexed jump through table) ──────────────────────────────────────
-// Expands to: SHLi tmp, index, #2  →  ADD tmp, base  →  LDW target, [tmp]
-//             →  JMP target
+// Static: SHLi idx,2 → ADD idx,base → LDW target,[idx] → JMP target
+// PIC:    SHLi idx,2 → ADD idx,base → LDW offset,[idx] → ADD offset,base → JMP offset
 bool PenumbraInstructionSelector::selectBrJT(MachineInstr &I,
                                               MachineBasicBlock &MBB,
                                               MachineRegisterInfo &MRI) const {
@@ -692,6 +712,7 @@ bool PenumbraInstructionSelector::selectBrJT(MachineInstr &I,
   // operand 1 is the JTI metadata — not needed at this stage
   Register IdxReg = I.getOperand(2).getReg();
   const DebugLoc &DL = I.getDebugLoc();
+  bool IsPIC = TM.getRelocationModel() == Reloc::PIC_;
 
   // tmp = index << 2 (word-sized entries)
   Register ShiftReg = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
@@ -707,12 +728,23 @@ bool PenumbraInstructionSelector::selectBrJT(MachineInstr &I,
       .addReg(ShiftReg)
       .addReg(BaseReg);
 
-  // target = [tmp + 0]
-  Register TargetReg = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
+  // entry = [tmp + 0]
+  Register EntryReg = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
   BuildMI(MBB, I, DL, TII.get(Penumbra::LDW))
-      .addDef(TargetReg)
+      .addDef(EntryReg)
       .addReg(AddrReg)
       .addImm(0);
+
+  Register TargetReg = EntryReg;
+  if (IsPIC) {
+    // PIC: entry is a label difference (target - JT_base).
+    // Add JT base back to get the absolute target.
+    TargetReg = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
+    BuildMI(MBB, I, DL, TII.get(Penumbra::ADD))
+        .addDef(TargetReg)
+        .addReg(EntryReg)
+        .addReg(BaseReg);
+  }
 
   // Indirect branch (not a return — targets are within this function)
   BuildMI(MBB, I, DL, TII.get(Penumbra::BRIND))

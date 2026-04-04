@@ -26,6 +26,9 @@ public:
   EmitInstrWithCustomInserter(MachineInstr &MI,
                               MachineBasicBlock *MBB) const override;
 
+  // Jump table encoding: use label differences for PIC.
+  unsigned getJumpTableEncoding() const override;
+
   // Inline assembly support.
   ConstraintType getConstraintType(StringRef Constraint) const override;
   std::pair<unsigned, const TargetRegisterClass *>

@@ -10,6 +10,7 @@
 #include "PenumbraSubtarget.h"
 #include "MCTargetDesc/PenumbraMCTargetDesc.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/CodeGen/TargetLowering.h"
 
 using namespace llvm;
@@ -46,6 +47,17 @@ PenumbraISelLowering::PenumbraISelLowering(const TargetMachine &TM,
   setOperationAction(ISD::CTPOP,   MVT::i32, Expand);
 
   computeRegisterProperties(STI.getRegisterInfo());
+}
+
+unsigned PenumbraISelLowering::getJumpTableEncoding() const {
+  // In PIC mode, emit jump table entries as label differences (target - JT base)
+  // so the table is position-independent.  The instruction selector adds
+  // the JT base back at runtime.
+  // TODO: Optimize to 16-bit entries when all offsets fit in ±32KB,
+  // using EK_Inline with LDH + SHLi 1 for smaller footprint.
+  if (isPositionIndependent())
+    return MachineJumpTableInfo::EK_LabelDifference32;
+  return MachineJumpTableInfo::EK_BlockAddress;
 }
 
 CCAssignFn *PenumbraISelLowering::getCCAssignFn(CallingConv::ID CC,
