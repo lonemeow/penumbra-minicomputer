@@ -80,21 +80,22 @@ All 18 headers are minimal stubs, sufficient for `#include <lib/libsa/stand.h>` 
 
 ## Current Status
 
-- [x] Machine headers — 18 headers, compiles `<lib/libsa/stand.h>` and `<lib/libsa/loadfile.h>` cleanly
+- [x] Machine headers — 20 headers (added `aout_machdep.h`, `mutex.h`), compiles `<lib/libsa/stand.h>` and `<lib/libsa/loadfile.h>` cleanly
 - [x] libsa glue — `sdblk.c` (SD block device strategy via SPI), `cons.c` (UART console)
 - [x] Stage 1 bootloader — `boot.c` (main: init SD, search FAT32 for stage 2), `conf.c` (device/fs wiring)
-- [x] Build system — standalone Makefile, compiles all 4 objects at `-O0`
-- [ ] Stage 1 linking — crt0.s, linker script, link against libsa/libkern sources
+- [x] Build system — standalone Makefile + build.sh integration via `bsd.prog.mk`
+- [x] Stage 1 linking — linker script (`boot.ld`), links against libsa/libkern, `mulsi3.c` for software multiply, `PROVIDE(end)` for heap
+- [x] PIC support — fully position-independent (`-fPIC`), no absolute relocations. 32KB binary + 39KB with symbols.
 - [ ] Stage 1 testing — run in simulator with FAT32 disk image
 - [ ] Stage 2 bootloader — ELF loading via `loadfile()`, MMU enable
 - [ ] Kernel port — locore.S, pmap, trap handling
 
 ## Known Issues
 
-- **`-O1` G_STORE s1 legalization bug:** At `-O1`, the LLVM backend crashes on `G_STORE %val:_(s1)` — the optimizer narrows boolean stores to i1 which the Penumbra legalizer doesn't handle. Building at `-O0` for now. Fix needed in `PenumbraLegalizerInfo.cpp` (widen s1 stores to s32).
+_(s1 store bug fixed — widenScalarToNextPow2 + lowerIfMemSizeNotByteSizePow2 added to legalizer)_
 
 ## Next Steps
 
-1. **Link stage 1** — crt0.s (set SP, call main with R1=bootdata), linker script, compile needed libsa sources (dosfs.c, open.c, close.c, read.c, printf.c, alloc.c, etc.) and libkern (memcpy, strlen, etc.)
-2. **Test in simulator** — create a FAT32 disk image with a dummy `boot/boot2` file, run stage 1 via `make simulate SDCARD=disk.img`, verify it finds the file
-3. **ELF loading** — use libsa's `loadfile()` to load stage 2 into RAM and jump to it
+1. **Test in simulator** — create a FAT32 disk image with a dummy `boot/boot2` file, run stage 1 via `make simulate SDCARD=disk.img`, verify it finds the file
+2. **ELF loading** — use libsa's `loadfile()` to load stage 2 into RAM and jump to it
+3. **PIC jump table optimization** — narrow 32-bit label-difference entries to 16-bit when offsets fit ±32KB (EK_Inline + LDH)
