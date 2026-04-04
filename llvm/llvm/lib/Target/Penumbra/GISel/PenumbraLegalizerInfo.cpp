@@ -85,6 +85,11 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
       .legalFor({{s1, s32}, {s1, p0}})
       .clampScalar(1, s32, s32);
 
+  // Undefined value: used by the optimizer for uninitialized variables.
+  getActionDefinitionsBuilder(G_IMPLICIT_DEF)
+      .legalFor({s32, s64, p0})
+      .clampScalar(0, s32, s64);
+
   // PHI nodes at control-flow joins.
   getActionDefinitionsBuilder(G_PHI)
       .legalFor({s32, p0})

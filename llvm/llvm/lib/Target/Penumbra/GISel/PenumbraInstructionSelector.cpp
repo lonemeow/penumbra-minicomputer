@@ -218,6 +218,11 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
     return RBI.constrainGenericRegister(
         I.getOperand(0).getReg(), Penumbra::GPR_AllocatableRegClass, MRI);
 
+  case G_IMPLICIT_DEF:
+    I.setDesc(TII.get(TargetOpcode::IMPLICIT_DEF));
+    return RBI.constrainGenericRegister(
+        I.getOperand(0).getReg(), Penumbra::GPR_AllocatableRegClass, MRI);
+
   case G_ZEXT: return selectZExt(I, MBB, MRI);
   case G_SEXT: return selectSExt(I, MBB, MRI);
 
