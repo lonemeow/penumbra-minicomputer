@@ -175,9 +175,11 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   getActionDefinitionsBuilder({G_BSWAP, G_BITREVERSE})
       .lowerFor({s32, s64});
 
-  // Min/max: lower to icmp + select.
+  // Min/max: lower to icmp + select for any scalar width.
+  // s64 lowers to icmp+select at s64 level, then the framework narrows
+  // those via existing s64→s32 rules (G_ICMP clampScalar, G_SELECT).
   getActionDefinitionsBuilder({G_SMIN, G_SMAX, G_UMIN, G_UMAX})
-      .lowerFor({s32});
+      .lower();
 
   // G_ABS: the optimizer generates this at -O1+ for signed division.
   // Lower to the generic SELECT expansion (icmp + negate + select).
@@ -204,6 +206,9 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   getActionDefinitionsBuilder(G_VAARG)
       .clampScalar(0, s32, s32)
       .lowerForCartesianProduct({s32, p0}, {p0});
+
+  // Prefetch: no cache hints on Penumbra, just discard.
+  getActionDefinitionsBuilder(G_PREFETCH).custom();
 
   // Memory operations: lower to memcpy/memmove/memset libcalls.
   getActionDefinitionsBuilder({G_MEMCPY, G_MEMMOVE, G_MEMSET}).libcall();
@@ -310,6 +315,11 @@ bool PenumbraLegalizerInfo::legalizeCustom(
     MI.eraseFromParent();
     return true;
   }
+
+  case TargetOpcode::G_PREFETCH:
+    // No cache hints on Penumbra — just discard the prefetch.
+    MI.eraseFromParent();
+    return true;
 
   case TargetOpcode::G_VASTART: {
     // G_VASTART stores the address of the first anonymous argument into

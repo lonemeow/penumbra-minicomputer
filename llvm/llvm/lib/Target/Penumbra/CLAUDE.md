@@ -102,9 +102,14 @@ or MOV PC + ADDi (PIC); BRJT always adds base back).
   otherwise libcalls;
   s64 all via libcalls (__muldi3/__udivdi3/__umoddi3/etc.).
 - G_MEMCPY/G_MEMMOVE/G_MEMSET via libcalls.
+- G_PREFETCH: custom-lowered to no-op (erased) —
+  Penumbra has no cache hint instructions.
 - Varargs: G_VASTART custom-lowered, G_VAARG generic lowering,
   R1-R4 save area in variadic prologues.
 - No SelectionDAG — GlobalISel only.
+- **Not yet implemented:** `analyzeBranch`/`insertBranch`/`removeBranch`
+  in TargetInstrInfo — needed for `-O2` machine passes
+  (branch folding, block placement). Kernel builds at `-O0` for now.
 
 **Inline assembly:**
 `asm volatile("..." : "=r"(out) : "r"(in) : "cc", "memory")` works.
@@ -221,9 +226,10 @@ Triple mapping for `Triple::penumbra` in `InputFiles.cpp`.
 - **Lowered:** G_ABS, G_CTTZ/G_CTLZ/G_CTPOP
   (and \_ZERO\_UNDEF variants) to shift/logic,
   G_FSHL/G_FSHR (s32+s64), G_BSWAP/G_BITREVERSE (s32+s64),
-  G_UADDO/G_USUBO/G_UADDE/G_USUBE (s64 narrowed to s32).
+  G_UADDO/G_USUBO/G_UADDE/G_USUBE (s64 narrowed to s32),
+  G_SMIN/G_SMAX/G_UMIN/G_UMAX (any width, lowered to icmp+select).
 - **Libcall:** G_MEMCPY/G_MEMMOVE/G_MEMSET.
-- **Custom:** G_VASTART, G_MUL, G_UDIV, G_UREM
+- **Custom:** G_VASTART, G_MUL, G_UDIV, G_UREM, G_PREFETCH (no-op)
   (via legalizeCustom() override). G_VAARG lowered.
 
 ## Key Implementation Notes
