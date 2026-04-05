@@ -16,14 +16,16 @@
 
 #define ELF32_MACHDEP_ID	EM_PENUMBRA
 
-/* Penumbra relocations (matches LLVM ELF.h) */
-#define R_PENUMBRA_NONE		0
-#define R_PENUMBRA_32		1
-#define R_PENUMBRA_BRANCH22	2
-#define R_PENUMBRA_IMM16	3
-#define R_PENUMBRA_MEMOFFSET16	4
-#define R_PENUMBRA_LO16		5
-#define R_PENUMBRA_HI16		6
+/* Penumbra relocations (matches LLVM ELFRelocs/Penumbra.def) */
+#define R_PENUMBRA_NONE			0
+#define R_PENUMBRA_32			1
+#define R_PENUMBRA_BRANCH22		2
+#define R_PENUMBRA_IMM16		3
+#define R_PENUMBRA_LO16			4
+#define R_PENUMBRA_HI16			5
+#define R_PENUMBRA_MEMOFFSET16_PCREL	6
+#define R_PENUMBRA_IMM16_PCREL		7
+#define R_PENUMBRA_RELATIVE		8
 
 #define R_TYPE(name)	__CONCAT(R_PENUMBRA_,name)
 

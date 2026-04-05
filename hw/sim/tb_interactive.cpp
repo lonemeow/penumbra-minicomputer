@@ -153,7 +153,7 @@ int main(int argc, char** argv) {
 
         // ── BREAK halts the simulation ──────────────────────────
         if (cpu->o_halted) {
-            fprintf(stderr, "\n[BREAK after %lu cycles]\n", (unsigned long)cycles);
+            fprintf(stderr, "\n[BREAK after %lu cycles, PC=%x]\n", (unsigned long)cycles, cpu->o_pc);
             break;
         }
     }

@@ -1,16 +1,16 @@
 /*
- * boot.ld — Linker script for Penumbra stage 1 bootloader
+ * boot.ld — Linker script for Penumbra boot loader (PIE ELF)
  *
- * Loaded by ROM into base RAM at 0x00001000 (page 1, after vector
- * table and boot data on page 0).  Stage 1 has up to ~1 MB from
- * the partition gap.
+ * Linked as a PIE (--pie --image-base=0) so the ROM can load it
+ * at any available RAM address.  The CRT stub in crt0.s handles
+ * self-relocation before calling main().
  */
 
-ENTRY(main)
+ENTRY(_start)
 
 SECTIONS
 {
-    . = 0x00001000;
+    . = SIZEOF_HEADERS;
 
     .text : {
         *(.text .text.*)
@@ -22,6 +22,14 @@ SECTIONS
 
     .data : {
         *(.data .data.*)
+    }
+
+    .dynamic : {
+        *(.dynamic)
+    }
+
+    .rel.dyn : {
+        *(.rel.dyn)
     }
 
     .bss : {

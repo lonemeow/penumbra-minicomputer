@@ -708,7 +708,7 @@ static void cmd_boot(const char *args) {
 
     /* Entry point adjusted for actual load position */
     uint32_t entry = load_base + (ehdr->e_entry - base_vaddr);
-    console_printf("Jumping to 0x%x\r\n", entry);
+    console_printf("Jumping to 0x%x\r\n\r\n", entry);
 
     /* Jump with R1 = boot data pointer */
     uint32_t bd = BOOTDATA_BASE;
