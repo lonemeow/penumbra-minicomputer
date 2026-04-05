@@ -32,7 +32,8 @@ GENASSYM_CONF=	${PENUMBRA}/penumbra/genassym.cf
 # needed because -nostdinc strips the compiler's built-in include path.
 COMPILER_RESOURCE_DIR!=	${CC} -print-resource-dir
 CPPFLAGS+=	-Dpenumbra -D__NetBSD__ -isystem ${COMPILER_RESOURCE_DIR}/include
-CFLAGS+=	-ffreestanding -Wno-unused-command-line-argument
+CFLAGS+=	-ffreestanding -Wno-unused-command-line-argument \
+		-Wno-error=unused-but-set-variable
 AFLAGS+=	-x assembler-with-cpp
 
 ##
