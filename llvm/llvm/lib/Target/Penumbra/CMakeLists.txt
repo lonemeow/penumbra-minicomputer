@@ -9,6 +9,7 @@ tablegen(LLVM PenumbraGenMCCodeEmitter.inc -gen-emitter)
 tablegen(LLVM PenumbraGenRegisterInfo.inc -gen-register-info)
 tablegen(LLVM PenumbraGenCallingConv.inc -gen-callingconv)
 tablegen(LLVM PenumbraGenSubtargetInfo.inc -gen-subtarget)
+tablegen(LLVM PenumbraGenDisassemblerTables.inc -gen-disassembler)
 tablegen(LLVM PenumbraGenRegisterBank.inc -gen-register-bank)
 
 set(LLVM_TARGET_DEFINITIONS PenumbraGISel.td)
@@ -49,5 +50,6 @@ add_llvm_target(PenumbraCodeGen
   )
 
 add_subdirectory(AsmParser)
+add_subdirectory(Disassembler)
 add_subdirectory(MCTargetDesc)
 add_subdirectory(TargetInfo)

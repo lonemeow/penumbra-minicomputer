@@ -28,6 +28,7 @@ class PenumbraInst<dag outs, dag ins, string asmstr,
     : Instruction {
   let Namespace = "Penumbra";
   let Size = 4;
+  let DecoderNamespace = "Penumbra";
 
   field bits<32> Inst;
   field bits<32> SoftFail = 0;
@@ -166,18 +167,28 @@ def uimm5 : ImmLeaf<i32, [{return isUInt<5>(Imm);}]>;
 // The EncoderMethod handles symbolic expressions by creating a fixup.
 def brtarget22 : Operand<i32> {
   let EncoderMethod = "encodeBranchTarget";
+  let DecoderMethod = "decodeBranchTarget";
 }
 
 // 16-bit immediate that may reference a symbol (e.g. LLI Rd, #label_lo).
 // The EncoderMethod handles symbolic expressions by creating a fixup.
 def imm16op : Operand<i32> {
   let EncoderMethod = "encodeImm16";
+  let DecoderMethod = "decodeImm16";
+}
+
+// Signed 16-bit immediate (LLIS — hardware sign-extends to 32-bit).
+// Uses the same encoder but a sign-extending decoder for proper display.
+def simm16op : Operand<i32> {
+  let EncoderMethod = "encodeImm16";
+  let DecoderMethod = "decodeSimm16";
 }
 
 // 16-bit memory offset for Format M (bits [17:2]).
 // Expression operands create fixup_penumbra_memoffset16 targeting bits [17:2].
 def memoffset16 : Operand<i32> {
   let EncoderMethod = "encodeMemOffset16";
+  let DecoderMethod = "decodeMemOffset16";
 }
 
 //===----------------------------------------------------------------------===//
@@ -236,7 +247,7 @@ let F = 1 in {
 
 def LLI  : FormatL<0b0000, (outs GPR:$Rd), (ins imm16op:$imm16),
                    "lli\t$Rd, $imm16">;
-def LLIS : FormatL<0b0001, (outs GPR:$Rd), (ins imm16op:$imm16),
+def LLIS : FormatL<0b0001, (outs GPR:$Rd), (ins simm16op:$imm16),
                    "llis\t$Rd, $imm16">;
 let Constraints = "$Rd = $Rd_in" in
 def LUI  : FormatL<0b0010, (outs GPR:$Rd), (ins GPR:$Rd_in, imm16op:$imm16),
@@ -350,7 +361,8 @@ def JALR : FormatL_Reg<0b1100, (outs), (ins GPR:$Rd), "jalr\t$Rd">;
 // Indirect branch (non-return) — same encoding as JMP but not marked isReturn,
 // so the epilogue inserter doesn't place stack restore before it.
 // Used by jump tables where the targets are within the same function.
-let isBranch = 1, isTerminator = 1, isBarrier = 1, isIndirectBranch = 1 in
+let isBranch = 1, isTerminator = 1, isBarrier = 1, isIndirectBranch = 1,
+    isCodeGenOnly = 1 in
 def BRIND : FormatL_Reg<0b1011, (outs), (ins GPR:$Rd), "jmp\t$Rd">;
 
 //===----------------------------------------------------------------------===//

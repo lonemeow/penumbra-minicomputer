@@ -42,6 +42,18 @@ instruction formats.
 - Relocation type names registered in `ELFRelocs/Penumbra.def`
   for `llvm-readobj`/`llvm-objdump`.
 
+**Disassembler:** `llvm-mc -disassemble -triple penumbra` and
+`llvm-objdump -d` decode all instruction formats.
+- Auto-generated decoder tables from TableGen `Inst` bit fields.
+- Custom decoders: `decodeBranchTarget` (22-bit signed word offset
+  → absolute address with symbolic lookup),
+  `decodeSimm16` (sign-extended for LLIS),
+  `decodeMemOffset16` (sign-extended for load/store offsets).
+- `ELFObjectFile.h` maps `EM_PENUMBRA` → `elf32-penumbra` / `Triple::penumbra`
+  for all LLVM binary utilities.
+- Lit test: `test/MC/Disassembler/Penumbra/penumbra.txt`
+  (vectors from `pasm.py` reference assembler).
+
 **GlobalISel codegen (hybrid TableGen + C++):**
 Simple 1:1 patterns are expressed as TableGen `Pat<>` rules in
 `PenumbraGISel.td` and imported via `selectImpl()`.
@@ -136,6 +148,7 @@ EM_PENUMBRA (0xF0DA) defined in central `llvm/BinaryFormat/ELF.h`.
 | `GISel/PenumbraRegisterBankInfo.{h,cpp}` | Single GPR bank covering all 16 registers. Maps all ops to GPR |
 | `GISel/PenumbraRegisterBanks.td` | `def GPRRegBank : RegisterBank<"GPRBank", [GPR]>` |
 | `GISel/PenumbraInstructionSelector.cpp` | Hybrid: `selectImpl()` for TableGen patterns, manual C++ for complex cases. See "Manual C++ handles" above for full list. LLI+LUI pairs use SSA-correct intermediate vregs. |
+| `Disassembler/PenumbraDisassembler.{h,cpp}` | Binary → MCInst. Custom decoders for branch targets (symbolic lookup), signed immediates (LLIS), signed memory offsets |
 | `MCTargetDesc/PenumbraMCTargetDesc.{h,cpp}` | Registers all MC components |
 | `MCTargetDesc/PenumbraInstPrinter.{h,cpp}` | MCInst → assembly text |
 | `MCTargetDesc/PenumbraMCCodeEmitter.cpp` | MCInst → binary bytes. Custom `encodeBranchTarget` and `encodeImm16` create fixups |

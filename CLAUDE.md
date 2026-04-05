@@ -175,6 +175,11 @@ MIPS/68k-style vector dispatch.
   LO16, HI16, MEMOFFSET16_PCREL, IMM16_PCREL, RELATIVE).
   Relocation names registered in `ELFRelocs/Penumbra.def`
   for `llvm-readobj`.
+- Disassembler fully functional: `llvm-objdump -d` and
+  `llvm-mc -disassemble` decode all instruction formats.
+  Auto-generated decoder tables with custom decoders for
+  branch targets, signed immediates, and memory offsets.
+  `EM_PENUMBRA` mapped in `ELFObjectFile.h` for all binary utilities.
 - Assembly pseudo-instructions LI, LA, NOP, RET expand
   in the AsmParser.
   Register aliases (pc, sp, lr, zero, tp),
