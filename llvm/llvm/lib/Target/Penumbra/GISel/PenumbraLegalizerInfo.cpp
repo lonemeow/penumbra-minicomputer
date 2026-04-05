@@ -113,6 +113,20 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
       .legalFor({{s32, s1}, {p0, s1}})
       .clampScalar(0, s32, s32);
 
+  // Merge/unmerge: used by i64 narrowing (two s32 ↔ one s64) and by the
+  // optimizer when building bitfields from individual bits.  Widen small
+  // sources to s32 so the framework can handle them.
+  for (unsigned Op : {G_MERGE_VALUES, G_UNMERGE_VALUES}) {
+    unsigned BigTyIdx = Op == G_MERGE_VALUES ? 0 : 1;
+    unsigned LitTyIdx = Op == G_MERGE_VALUES ? 1 : 0;
+    getActionDefinitionsBuilder(Op)
+        .legalIf(all(typeIs(BigTyIdx, s64), typeIs(LitTyIdx, s32)))
+        .widenScalarToNextPow2(LitTyIdx, 32)
+        .widenScalarToNextPow2(BigTyIdx, 32)
+        .clampScalar(LitTyIdx, s32, s32)
+        .clampScalar(BigTyIdx, s32, s64);
+  }
+
   // Extensions: sub-word→s32 handled in instruction selection (AND for zext,
   // SHL+SAR for sext).  s32→s64 narrowed by the framework: splits s64 result
   // into two s32 halves via G_MERGE_VALUES ({src, 0} for zext, etc.).
@@ -159,6 +173,10 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   // Bitreverse: similar, lower to shift/mask sequence.
   getActionDefinitionsBuilder({G_BSWAP, G_BITREVERSE})
       .lowerFor({s32, s64});
+
+  // Min/max: lower to icmp + select.
+  getActionDefinitionsBuilder({G_SMIN, G_SMAX, G_UMIN, G_UMAX})
+      .lowerFor({s32});
 
   // G_ABS: the optimizer generates this at -O1+ for signed division.
   // Lower to the generic SELECT expansion (icmp + negate + select).
