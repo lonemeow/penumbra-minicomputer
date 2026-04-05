@@ -10,13 +10,16 @@
 #include "PenumbraSubtarget.h"
 #include "PenumbraTargetMachine.h"
 #include "llvm/CodeGen/GlobalISel/GIMatchTableExecutorImpl.h"
+#include "llvm/CodeGen/GlobalISel/GenericMachineInstrs.h"
 #include "llvm/CodeGen/GlobalISel/InstructionSelector.h"
 #include "llvm/CodeGen/GlobalISel/MachineIRBuilder.h"
 #include "llvm/CodeGen/GlobalISel/Utils.h"
 #include "llvm/CodeGenTypes/LowLevelType.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/IR/InstrTypes.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "penumbra-isel"
@@ -73,6 +76,8 @@ private:
                        MachineRegisterInfo &MRI) const;
   bool selectBrJT(MachineInstr &I, MachineBasicBlock &MBB,
                   MachineRegisterInfo &MRI) const;
+  bool selectIntrinsic(MachineInstr &I, MachineBasicBlock &MBB,
+                       MachineRegisterInfo &MRI) const;
 
   // Emit LLI+LUI pair to materialise a symbol address into DstReg.
   // LoOp/HiOp are the lo16/hi16 operands (GlobalAddress, JumpTableIndex, etc.)
@@ -230,6 +235,26 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
   // ── Compare / Select ────────────────────────────────────────────────────────
   case G_ICMP:   return selectICmp(I, MBB, MRI);
   case G_SELECT: return selectSelect(I, MBB, MRI);
+
+  // ── Stack save/restore (alloca) ─────────────────────────────────────────────
+  case G_STACKSAVE: {
+    auto NewI = BuildMI(MBB, I, I.getDebugLoc(), TII.get(Penumbra::MOV))
+        .addDef(I.getOperand(0).getReg())
+        .addReg(Penumbra::R14);
+    I.eraseFromParent();
+    return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
+  }
+  case G_STACKRESTORE: {
+    auto NewI = BuildMI(MBB, I, I.getDebugLoc(), TII.get(Penumbra::MOV))
+        .addDef(Penumbra::R14)
+        .addReg(I.getOperand(0).getReg());
+    I.eraseFromParent();
+    return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
+  }
+
+  // ── Intrinsics ──────────────────────────────────────────────────────────────
+  case G_INTRINSIC: return selectIntrinsic(I, MBB, MRI);
+  case G_INTRINSIC_W_SIDE_EFFECTS: return selectIntrinsic(I, MBB, MRI);
 
   default:
     return false;
@@ -755,6 +780,69 @@ bool PenumbraInstructionSelector::selectBrJT(MachineInstr &I,
 
   I.eraseFromParent();
   return true;
+}
+
+// ── G_INTRINSIC ─────────────────────────────────────────────────────────────
+bool PenumbraInstructionSelector::selectIntrinsic(
+    MachineInstr &I, MachineBasicBlock &MBB, MachineRegisterInfo &MRI) const {
+  unsigned IntrinID = cast<GIntrinsic>(I).getIntrinsicID();
+  const DebugLoc &DL = I.getDebugLoc();
+
+  // __builtin_return_address(0) → read LR (R13).
+  if (IntrinID == Intrinsic::returnaddress) {
+    Register DstReg = I.getOperand(0).getReg();
+    unsigned Depth = I.getOperand(2).getImm();
+    if (Depth != 0)
+      return false;
+    MachineFunction &MF = *I.getParent()->getParent();
+    MF.getFrameInfo().setReturnAddressIsTaken(true);
+    // Ensure R13 is available as a live-in to this block.
+    if (!MBB.isLiveIn(Penumbra::R13))
+      MBB.addLiveIn(Penumbra::R13);
+    auto NewI = BuildMI(MBB, I, DL, TII.get(Penumbra::MOV))
+        .addDef(DstReg)
+        .addReg(Penumbra::R13);
+    I.eraseFromParent();
+    return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
+  }
+
+  // __builtin_frame_address(0) → read SP (R14).
+  if (IntrinID == Intrinsic::frameaddress) {
+    Register DstReg = I.getOperand(0).getReg();
+    unsigned Depth = I.getOperand(2).getImm();
+    if (Depth != 0)
+      return false;
+    if (!MBB.isLiveIn(Penumbra::R14))
+      MBB.addLiveIn(Penumbra::R14);
+    auto NewI = BuildMI(MBB, I, DL, TII.get(Penumbra::MOV))
+        .addDef(DstReg)
+        .addReg(Penumbra::R14);
+    I.eraseFromParent();
+    return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
+  }
+
+  // va_copy(dst, src) — copy the va_list pointer.
+  // On Penumbra, va_list is just a pointer (4 bytes), so this is a
+  // 4-byte store: *dst = *src (both operands are pointers to va_list).
+  if (IntrinID == Intrinsic::vacopy) {
+    Register DstPtr = I.getOperand(1).getReg();
+    Register SrcPtr = I.getOperand(2).getReg();
+    // Load the pointer value from src va_list
+    Register Tmp = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
+    BuildMI(MBB, I, DL, TII.get(Penumbra::LDW))
+        .addDef(Tmp)
+        .addReg(SrcPtr)
+        .addImm(0);
+    // Store it to dst va_list
+    BuildMI(MBB, I, DL, TII.get(Penumbra::STW))
+        .addReg(Tmp)
+        .addReg(DstPtr)
+        .addImm(0);
+    I.eraseFromParent();
+    return true;
+  }
+
+  return false;
 }
 
 // ── Factory function ──────────────────────────────────────────────────────────

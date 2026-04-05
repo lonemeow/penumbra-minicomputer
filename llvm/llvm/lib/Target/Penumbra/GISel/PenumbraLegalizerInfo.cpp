@@ -204,8 +204,12 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   // bump + load).
   getActionDefinitionsBuilder(G_VASTART).customFor({p0});
   getActionDefinitionsBuilder(G_VAARG)
-      .clampScalar(0, s32, s32)
-      .lowerForCartesianProduct({s32, p0}, {p0});
+      .clampScalar(0, s32, s64)
+      .lowerForCartesianProduct({s32, s64, p0}, {p0});
+
+  // Stack save/restore: used by alloca.  SP is R14.
+  getActionDefinitionsBuilder(G_STACKSAVE).legalFor({p0});
+  getActionDefinitionsBuilder(G_STACKRESTORE).legalFor({p0});
 
   // Prefetch: no cache hints on Penumbra, just discard.
   getActionDefinitionsBuilder(G_PREFETCH).custom();

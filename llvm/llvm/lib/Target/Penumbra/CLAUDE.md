@@ -104,8 +104,12 @@ or MOV PC + ADDi (PIC); BRJT always adds base back).
 - G_MEMCPY/G_MEMMOVE/G_MEMSET via libcalls.
 - G_PREFETCH: custom-lowered to no-op (erased) —
   Penumbra has no cache hint instructions.
-- Varargs: G_VASTART custom-lowered, G_VAARG generic lowering,
+- Varargs: G_VASTART custom-lowered, G_VAARG generic lowering
+  (s32/s64/p0), va_copy selected to LDW+STW pair,
   R1-R4 save area in variadic prologues.
+- G_STACKSAVE/G_STACKRESTORE: selected to MOV SP (R14).
+- `@llvm.returnaddress(0)` → MOV from R13 (LR),
+  `@llvm.frameaddress(0)` → MOV from R14 (SP).
 - No SelectionDAG — GlobalISel only.
 - **Not yet implemented:** `analyzeBranch`/`insertBranch`/`removeBranch`
   in TargetInstrInfo — needed for `-O2` machine passes
@@ -229,8 +233,9 @@ Triple mapping for `Triple::penumbra` in `InputFiles.cpp`.
   G_UADDO/G_USUBO/G_UADDE/G_USUBE (s64 narrowed to s32),
   G_SMIN/G_SMAX/G_UMIN/G_UMAX (any width, lowered to icmp+select).
 - **Libcall:** G_MEMCPY/G_MEMMOVE/G_MEMSET.
+- **Legal:** G_STACKSAVE/G_STACKRESTORE (p0).
 - **Custom:** G_VASTART, G_MUL, G_UDIV, G_UREM, G_PREFETCH (no-op)
-  (via legalizeCustom() override). G_VAARG lowered.
+  (via legalizeCustom() override). G_VAARG lowered (s32/s64/p0).
 
 ## Key Implementation Notes
 - **applyFixup Data pointer:** Pre-positioned at fixup location —
