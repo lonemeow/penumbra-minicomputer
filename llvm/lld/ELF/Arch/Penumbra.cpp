@@ -20,24 +20,15 @@ using namespace llvm::ELF;
 using namespace lld;
 using namespace lld::elf;
 
-// Penumbra ELF relocation types (must match PenumbraELFObjectWriter.cpp).
-enum {
-  R_PENUMBRA_NONE = 0,
-  R_PENUMBRA_32 = 1,
-  R_PENUMBRA_BRANCH22 = 2,
-  R_PENUMBRA_IMM16 = 3,
-  R_PENUMBRA_LO16 = 4,
-  R_PENUMBRA_HI16 = 5,
-  R_PENUMBRA_MEMOFFSET16_PCREL = 6,
-  R_PENUMBRA_IMM16_PCREL = 7,
-};
-
 namespace {
 class Penumbra final : public TargetInfo {
 public:
   Penumbra(Ctx &);
   RelExpr getRelExpr(RelType type, const Symbol &s,
                      const uint8_t *loc) const override;
+  RelType getDynRel(RelType type) const override;
+  int64_t getImplicitAddend(const uint8_t *buf,
+                            RelType type) const override;
   void relocate(uint8_t *loc, const Relocation &rel,
                 uint64_t val) const override;
 };
@@ -46,6 +37,8 @@ public:
 Penumbra::Penumbra(Ctx &ctx) : TargetInfo(ctx) {
   // BREAK instruction = 0x2A000000
   trapInstr = {0x00, 0x00, 0x00, 0x2A};
+  relativeRel = R_PENUMBRA_RELATIVE;
+  symbolicRel = R_PENUMBRA_32;
 }
 
 RelExpr Penumbra::getRelExpr(RelType type, const Symbol &s,
@@ -60,10 +53,31 @@ RelExpr Penumbra::getRelExpr(RelType type, const Symbol &s,
   }
 }
 
+RelType Penumbra::getDynRel(RelType type) const {
+  if (type == R_PENUMBRA_32)
+    return type;
+  return R_PENUMBRA_NONE;
+}
+
+int64_t Penumbra::getImplicitAddend(const uint8_t *buf,
+                                    RelType type) const {
+  switch (type) {
+  case R_PENUMBRA_32:
+  case R_PENUMBRA_RELATIVE:
+    return SignExtend64<32>(read32le(buf));
+  case R_PENUMBRA_NONE:
+    return 0;
+  default:
+    InternalErr(ctx, buf) << "cannot read addend for relocation " << type;
+    return 0;
+  }
+}
+
 void Penumbra::relocate(uint8_t *loc, const Relocation &rel,
                         uint64_t val) const {
   switch (rel.type) {
   case R_PENUMBRA_32:
+  case R_PENUMBRA_RELATIVE:
     write32le(loc, val);
     break;
   case R_PENUMBRA_BRANCH22: {
@@ -91,10 +105,22 @@ void Penumbra::relocate(uint8_t *loc, const Relocation &rel,
     write32le(loc, insn);
     break;
   }
-  case R_PENUMBRA_IMM16_PCREL:
+  case R_PENUMBRA_IMM16_PCREL: {
     // PC-relative 16-bit immediate, into bits [15:0] (Format L).
-    write32le(loc, (read32le(loc) & 0xFFFF0000) | (val & 0xFFFF));
+    // The instruction is ADDi (INC, opcode 0011) which zero-extends.
+    // If the offset is negative, flip to SUBi (DEC, opcode 0100) and
+    // negate the value so the unsigned immediate works correctly.
+    uint32_t insn = read32le(loc);
+    int64_t sval = static_cast<int64_t>(val);
+    if (sval < 0) {
+      // Change ADDi (op=0011) to SUBi (op=0100) in bits [29:26]
+      insn = (insn & ~(0xFu << 26)) | (0x4u << 26);
+      sval = -sval;
+    }
+    insn = (insn & 0xFFFF0000) | (static_cast<uint32_t>(sval) & 0xFFFF);
+    write32le(loc, insn);
     break;
+  }
   default:
     Err(ctx) << getErrorLoc(ctx, loc) << "unrecognized relocation " << rel.type;
   }

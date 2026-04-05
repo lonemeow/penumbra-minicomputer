@@ -147,10 +147,18 @@ void PenumbraAsmBackend::applyFixup(const MCFragment &F, const MCFixup &Fixup,
 
   if (Kind ==
       static_cast<MCFixupKind>(Penumbra::fixup_penumbra_imm16_pcrel)) {
-    // PC-relative 16-bit immediate, into bits [15:0].
-    uint32_t Encoded = static_cast<uint32_t>(Value) & 0xFFFF;
-    support::endian::write32le(
-        Data, support::endian::read32le(Data) | Encoded);
+    // PC-relative 16-bit immediate, into bits [15:0] (Format L).
+    // ADDi (INC) zero-extends the immediate, so negative offsets don't
+    // work.  Flip to SUBi (DEC) and negate the value when negative.
+    uint32_t Insn = support::endian::read32le(Data);
+    int64_t SVal = static_cast<int64_t>(Value);
+    if (SVal < 0) {
+      // Change ADDi (op=0011) to SUBi (op=0100) in bits [29:26]
+      Insn = (Insn & ~(0xFu << 26)) | (0x4u << 26);
+      SVal = -SVal;
+    }
+    Insn = (Insn & 0xFFFF0000) | (static_cast<uint32_t>(SVal) & 0xFFFF);
+    support::endian::write32le(Data, Insn);
     return;
   }
 

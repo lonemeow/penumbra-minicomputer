@@ -703,8 +703,8 @@ bool PenumbraInstructionSelector::selectJumpTable(MachineInstr &I,
 }
 
 // ── G_BRJT (indexed jump through table) ──────────────────────────────────────
-// Static: SHLi idx,2 → ADD idx,base → LDW target,[idx] → JMP target
-// PIC:    SHLi idx,2 → ADD idx,base → LDW offset,[idx] → ADD offset,base → JMP offset
+// Always label-difference entries:
+//   SHLi idx,2 → ADD idx,base → LDW offset,[idx] → ADD offset,base → JMP offset
 bool PenumbraInstructionSelector::selectBrJT(MachineInstr &I,
                                               MachineBasicBlock &MBB,
                                               MachineRegisterInfo &MRI) const {
@@ -712,7 +712,8 @@ bool PenumbraInstructionSelector::selectBrJT(MachineInstr &I,
   // operand 1 is the JTI metadata — not needed at this stage
   Register IdxReg = I.getOperand(2).getReg();
   const DebugLoc &DL = I.getDebugLoc();
-  bool IsPIC = TM.getRelocationModel() == Reloc::PIC_;
+  // Always label-difference entries — always add base back.
+  (void)TM;
 
   // tmp = index << 2 (word-sized entries)
   Register ShiftReg = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
@@ -735,16 +736,13 @@ bool PenumbraInstructionSelector::selectBrJT(MachineInstr &I,
       .addReg(AddrReg)
       .addImm(0);
 
-  Register TargetReg = EntryReg;
-  if (IsPIC) {
-    // PIC: entry is a label difference (target - JT_base).
-    // Add JT base back to get the absolute target.
-    TargetReg = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
-    BuildMI(MBB, I, DL, TII.get(Penumbra::ADD))
-        .addDef(TargetReg)
-        .addReg(EntryReg)
-        .addReg(BaseReg);
-  }
+  // Entry is a label difference (target - JT_base).
+  // Add JT base back to get the absolute target.
+  Register TargetReg = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
+  BuildMI(MBB, I, DL, TII.get(Penumbra::ADD))
+      .addDef(TargetReg)
+      .addReg(EntryReg)
+      .addReg(BaseReg);
 
   // Indirect branch (not a return — targets are within this function)
   BuildMI(MBB, I, DL, TII.get(Penumbra::BRIND))

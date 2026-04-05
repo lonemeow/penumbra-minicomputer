@@ -10,6 +10,7 @@
 #include "llvm/CodeGen/GlobalISel/InstructionSelect.h"
 #include "llvm/CodeGen/GlobalISel/Legalizer.h"
 #include "llvm/CodeGen/GlobalISel/RegBankSelect.h"
+#include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/TargetRegistry.h"
@@ -17,6 +18,24 @@
 #include "llvm/Support/Compiler.h"
 
 using namespace llvm;
+
+// ── Target Object File ──────────────────────────────────────────────────────
+// Override one method: place jump tables in the function section so that
+// label-difference entries (.word target - JT_base) can be resolved by
+// the assembler without cross-section relocations.
+
+namespace {
+class PenumbraTargetObjectFile : public TargetLoweringObjectFileELF {
+public:
+  bool shouldPutJumpTableInFunctionSection(bool UsesLabelDifference,
+                                           const Function &F) const override {
+    if (UsesLabelDifference)
+      return true;
+    return TargetLoweringObjectFileELF::shouldPutJumpTableInFunctionSection(
+        UsesLabelDifference, F);
+  }
+};
+} // namespace
 
 static const char *PenumbraDataLayout =
     "e"        // little-endian
@@ -70,7 +89,7 @@ PenumbraTargetMachine::PenumbraTargetMachine(
                                CPU.empty() ? "penumbra1" : CPU, FS, Options,
                                RM.value_or(Reloc::Static),
                                CM.value_or(CodeModel::Small), OL),
-      TLOF(std::make_unique<TargetLoweringObjectFileELF>()),
+      TLOF(std::make_unique<PenumbraTargetObjectFile>()),
       Subtarget(TT, CPU.empty() ? "penumbra1" : CPU, FS, *this) {
   initAsmInfo();
   setGlobalISel(true);

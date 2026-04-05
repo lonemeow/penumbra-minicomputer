@@ -26,7 +26,9 @@ public:
   EmitInstrWithCustomInserter(MachineInstr &MI,
                               MachineBasicBlock *MBB) const override;
 
-  // Jump table encoding: use label differences for PIC.
+  // Jump table encoding: always use label differences.
+  // This avoids relocations, works at any load address (PIC/PIE/static),
+  // and enables future optimization to 16-bit entries.
   unsigned getJumpTableEncoding() const override;
 
   // Inline assembly support.

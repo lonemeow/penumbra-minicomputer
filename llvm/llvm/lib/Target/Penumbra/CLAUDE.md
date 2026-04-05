@@ -69,9 +69,9 @@ G_ICMP+G_BRCOND fold (CMP+Bcc with pointer compare),
 G_BR, G_PHI,
 G_SELECT (ICMP fold into SELECT_CC_GPR),
 G_ZEXT/G_SEXT,
-jump tables (static: LLI+LUI base + absolute entries;
-PIC: MOV PC + ADDi base + EK_LabelDifference32 entries
-+ ADD base back).
+jump tables (always EK_LabelDifference32 entries placed
+inline in .text; base materialized via LLI+LUI (static)
+or MOV PC + ADDi (PIC); BRJT always adds base back).
 
 **Other features:**
 - Calling convention: R1-R4 args, R1 return / R1:R2 for i64,
@@ -162,9 +162,17 @@ Same approach as ARM/RISC-V embedded.
 emits one 32-bit word per line in uppercase hex.
 
 ## lld Support (`llvm/lld/ELF/Arch/Penumbra.cpp`)
-Minimal ELF linker target.
-Handles all 8 relocation types
+ELF linker target with PIE support.
+Handles all 9 relocation types
 (including PC-relative memoffset and imm16 for PIC).
+PIE support: `relativeRel = R_PENUMBRA_RELATIVE`,
+`symbolicRel = R_PENUMBRA_32`, `getDynRel()` maps
+`R_PENUMBRA_32` to dynamic, `getImplicitAddend()` reads
+32-bit values for verification.
+**Negative pcrel fix:** `R_PENUMBRA_IMM16_PCREL` handler
+detects negative offsets and flips ADDi (INC, op=0011) to
+SUBi (DEC, op=0100) with negated value, since ADDi
+zero-extends its immediate.  Same fix in `PenumbraAsmBackend`.
 Registered via `EM_PENUMBRA` (0xF0DA) in `llvm/BinaryFormat/ELF.h`.
 Emulation string `elf32penumbra`, output format `elf32-penumbra`.
 Triple mapping for `Triple::penumbra` in `InputFiles.cpp`.
@@ -180,6 +188,7 @@ Triple mapping for `Triple::penumbra` in `InputFiles.cpp`.
 | `R_PENUMBRA_HI16` | 5 | High 16 bits of absolute address | bits [15:0] |
 | `R_PENUMBRA_MEMOFFSET16_PCREL` | 6 | PC-relative 16-bit memory offset | bits [17:2] |
 | `R_PENUMBRA_IMM16_PCREL` | 7 | PC-relative 16-bit immediate | bits [15:0] |
+| `R_PENUMBRA_RELATIVE` | 8 | PIE dynamic relocation (bias adjust) | Full word |
 
 ## Legalization (`GISel/PenumbraLegalizerInfo.{h,cpp}`)
 - **Legal s32:** G_ADD, G_SUB, G_AND, G_OR, G_XOR,
@@ -230,9 +239,20 @@ Triple mapping for `Triple::penumbra` in `InputFiles.cpp`.
   Math: `MOV_addr + (sym + 4 - ADDi_addr)
   = MOV_addr + (sym + 4 - (MOV_addr + 4)) = sym`. ✓
   PC reads as current instruction address (no pipeline offset).
-- **PIC jump tables:** `EK_LabelDifference32` entries
-  (`.word target - JT_base`).
-  BRJT expansion adds base back:
+  **Negative offset handling:** ADDi (INC) zero-extends its
+  16-bit immediate, so negative pcrel offsets produce wrong
+  values.  The linker and assembler detect negative
+  `R_PENUMBRA_IMM16_PCREL` values and flip ADDi (op=0011)
+  to SUBi (op=0100) with the negated value.
+- **Jump tables:** Always `EK_LabelDifference32` entries
+  (`.word target - JT_base`), regardless of PIC/static mode.
+  Placed inline in `.text` via `PenumbraTargetObjectFile`
+  (overrides `shouldPutJumpTableInFunctionSection`) so the
+  assembler can resolve the label difference within one
+  section — avoids cross-section relocations that would
+  become absolute + RELATIVE in PIE, breaking the
+  base-addition scheme.
+  BRJT expansion always adds base back:
   `LDW offset,[entry_addr]` → `ADD offset, base` → `JMP`.
   JTI operands get +4 addend in AsmPrinter
   (same MOV+ADDi correction).
