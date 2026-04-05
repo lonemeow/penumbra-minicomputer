@@ -171,8 +171,8 @@ MIPS/68k-style vector dispatch.
 - Full pipeline: `clang -c` → `ld.lld` → `llvm-objcopy`
   → `bin2hex.py` → simulator.
 - MC-layer assembler produces working ELF objects with
-  9 relocation types (NONE, 32, BRANCH22, IMM16, MEMOFFSET16,
-  LO16, HI16, MEMOFFSET16_PCREL, IMM16_PCREL).
+  10 relocation types (NONE, 32, BRANCH22, IMM16,
+  LO16, HI16, MEMOFFSET16_PCREL, IMM16_PCREL, RELATIVE).
   Relocation names registered in `ELFRelocs/Penumbra.def`
   for `llvm-readobj`.
 - Assembly pseudo-instructions LI, LA, NOP, RET expand

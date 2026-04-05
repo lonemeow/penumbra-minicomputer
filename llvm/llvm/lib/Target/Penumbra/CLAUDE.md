@@ -128,8 +128,8 @@ EM_PENUMBRA (0xF0DA) defined in central `llvm/BinaryFormat/ELF.h`.
 | `PenumbraFrameLowering.{h,cpp}` | StackGrowsDown, Align(4), hasFPImpl()=false. Prologue (SUBi SP) / epilogue (ADDi SP) |
 | `PenumbraISelLowering.{h,cpp}` | TargetLowering: JT encoding (EK\_LabelDifference32 for PIC, EK\_BlockAddress for static), SELECT diamond expansion, inline asm (`r`→GPR\_Allocatable, `{cc}`→SR/CCR) |
 | `PenumbraSubtarget.{h,cpp}` | Central hub: owns InstrInfo, FrameLowering, TLInfo, and all GlobalISel objects |
-| `PenumbraTargetMachine.{h,cpp}` | Data layout `e-m:e-p:32:32-i32:32-i64:64-n32-S32`, GlobalISel pipeline, `setGlobalISel(true)`. PIC via `-fPIC` |
-| `PenumbraAsmPrinter.cpp` | MachineInstr → MCInst. Expands RET→JMP R13. Wraps globals/JTI with lo16/hi16/pcrel MCSpecifierExpr. PrintAsmOperand for inline asm |
+| `PenumbraTargetMachine.{h,cpp}` | Data layout `e-m:e-p:32:32-i32:32-i64:64-n32-S32`, GlobalISel pipeline, `setGlobalISel(true)`. PIC via `-fPIC`. `PenumbraTargetObjectFile` (local class): always inlines jump tables in `.text` |
+| `PenumbraAsmPrinter.cpp` | MachineInstr → MCInst. Expands RET→JMP R13. Wraps globals/JTI with lo16/hi16/pcrel MCSpecifierExpr. `emitJumpTableEntry` override: always emits label-difference entries. PrintAsmOperand for inline asm |
 | `PenumbraMachineFunctionInfo.h` | Per-function state: VarArgsFrameIndex for variadic R1-R4 save area |
 | `GISel/PenumbraCallLowering.{h,cpp}` | lowerFormalArguments (R1-R4→vregs, variadic save area), lowerReturn (vreg→R1+RET), lowerCall |
 | `GISel/PenumbraLegalizerInfo.{h,cpp}` | See "Legalization" section below |
