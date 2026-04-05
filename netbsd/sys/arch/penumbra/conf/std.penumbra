@@ -1,0 +1,11 @@
+#	$NetBSD$
+#
+# Standard options for Penumbra kernels.
+
+machine		penumbra
+include		"conf/std"		# MI standard options
+
+options		EXEC_ELF32		# exec ELF32 binaries
+options		EXEC_SCRIPT		# exec #! scripts
+
+makeoptions	DEFTEXTADDR="0x80010000"

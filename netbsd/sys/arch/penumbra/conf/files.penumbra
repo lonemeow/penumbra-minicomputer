@@ -1,8 +1,30 @@
 #	$NetBSD$
 #
-# Penumbra machine-dependent configuration info — placeholder
+# Penumbra machine-dependent configuration info.
 #
 
+# maxpartitions must be the first item in files.${ARCH}
 maxpartitions 8
 
 maxusers 2 8 64
+
+# Console glue
+file	dev/cons.c
+
+# Machine-dependent kernel code
+file	arch/penumbra/penumbra/machdep.c
+file	arch/penumbra/penumbra/autoconf.c
+file	arch/penumbra/penumbra/trap.c
+file	arch/penumbra/penumbra/pmap.c
+
+# System bus
+device	mainbus {}
+attach	mainbus at root
+file	arch/penumbra/penumbra/mainbus.c		mainbus
+
+# CPU
+device	cpu
+attach	cpu at mainbus
+file	arch/penumbra/penumbra/cpu.c			cpu
+
+include	"arch/penumbra/conf/majors.penumbra"

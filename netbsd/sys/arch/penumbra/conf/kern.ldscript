@@ -1,0 +1,50 @@
+/* $NetBSD$ */
+
+/* Linker script for NetBSD/penumbra kernels */
+OUTPUT_FORMAT("elf32-penumbra")
+OUTPUT_ARCH(penumbra)
+ENTRY(_start)
+
+_DYNAMIC_LINK = 0;
+
+SECTIONS
+{
+  /* Read-only sections, merged into text segment.
+     Kernel Makefile sets start address via -Ttext. */
+  .text :
+  {
+    _ftext = . ;
+    *(.text)
+    *(.text.*)
+    *(.gnu.warning)
+  } =0
+  _etext = .;
+  PROVIDE (etext = .);
+
+  .rodata : { *(.rodata) *(.rodata.*) }
+
+  . = ALIGN(0x1000);
+  .data :
+  {
+    _fdata = . ;
+    *(.data)
+    CONSTRUCTORS
+    . = ALIGN(32);
+    *(.data.cacheline_aligned)
+    . = ALIGN(32);
+    *(.data.read_mostly)
+    . = ALIGN(32);
+  }
+  _edata = .;
+  PROVIDE (edata = .);
+
+  __bss_start = .;
+  _fbss = .;
+  .bss :
+  {
+    *(.bss)
+    *(COMMON)
+  }
+  _end = . ;
+  PROVIDE (end = .);
+}

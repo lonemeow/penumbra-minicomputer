@@ -1,0 +1,51 @@
+#	$NetBSD$
+#
+# Generate assembly symbol definitions from C structures.
+# Used by config(1) to produce assym.h for locore.S et al.
+#
+
+include <sys/param.h>
+include <sys/proc.h>
+include <sys/cpu.h>
+
+include <machine/pcb.h>
+include <machine/frame.h>
+include <machine/psl.h>
+include <machine/vmparam.h>
+
+# Page constants
+define	PAGE_SIZE		PAGE_SIZE
+define	PGSHIFT			PGSHIFT
+
+# Trap frame offsets
+define	TF_R0			offsetof(struct trapframe, tf_regs[0])
+define	TF_R1			offsetof(struct trapframe, tf_regs[1])
+define	TF_R13			offsetof(struct trapframe, tf_regs[13])
+define	TF_R14			offsetof(struct trapframe, tf_regs[14])
+define	TF_R15			offsetof(struct trapframe, tf_regs[15])
+define	TF_SR			offsetof(struct trapframe, tf_sr)
+define	TF_EPC			offsetof(struct trapframe, tf_epc)
+define	TF_CAUSE		offsetof(struct trapframe, tf_cause)
+define	TF_BADVADDR		offsetof(struct trapframe, tf_badvaddr)
+define	TF_SIZE			sizeof(struct trapframe)
+
+# PCB offsets
+define	PCB_CONTEXT		offsetof(struct pcb, pcb_context)
+define	PCB_ONFAULT		offsetof(struct pcb, pcb_onfault)
+
+# Processor status register bits
+define	PSL_S			PSL_S
+define	PSL_I			PSL_I
+define	PSL_M			PSL_M
+
+# LWP fields
+define	L_PCB			offsetof(struct lwp, l_addr)
+define	L_CPU			offsetof(struct lwp, l_cpu)
+
+# cpu_info fields
+define	CI_CURLWP		offsetof(struct cpu_info, ci_curlwp)
+define	CI_IDEPTH		offsetof(struct cpu_info, ci_idepth)
+
+# VM constants
+define	VM_MIN_KERNEL_ADDRESS	VM_MIN_KERNEL_ADDRESS
+define	KERNEL_TEXT_BASE	KERNEL_TEXT_BASE

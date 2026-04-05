@@ -253,13 +253,30 @@ MIPS/68k-style vector dispatch.
 - **Boot from ROM:** Programs assembled with `--org 0xFFFF0000`. `_start:` must be first label.
 - **ROM page mapping (MMU tests):** TLB_INDEX=16, TLB_VPN=0x0FFFF000, TLB_PTE=0xFFFF00B9.
 
+**NetBSD kernel scaffolding in place.**
+- Machine headers (39 files), kernel config, MD build system,
+  and stub kernel sources all present.
+- `config MINIMAL` → `make depend` → `make` works end-to-end.
+  Compilation starts but hits LLVM codegen gaps
+  (`G_PTRTOINT` to sub-word types).
+- Virtual memory layout: 2G/2G user/kernel split,
+  kernel text at `0x8001_0000`, compact user layout with
+  stack at 64 MB for flat single-level page table optimization.
+- Kernel build output in `build/netbsd-kernel/MINIMAL/`
+  (out of source tree).
+- See `netbsd/sys/arch/penumbra/CLAUDE.md` for detailed
+  kernel port context.
+
 ## Next Steps (in priority order)
-1. **LLVM codegen hardening** — legalize remaining ops as they surface
-   (G_SMAX/G_SMIN/G_UMAX/G_UMIN), migrate more patterns to TableGen
+1. **LLVM codegen hardening** — legalize `G_PTRTOINT`/`G_INTTOPTR`
+   for sub-word types, plus remaining ops as they surface
+   (G_SMAX/G_SMIN/G_UMAX/G_UMIN); iterate on kernel compilation
 2. **Boot loader** — ROM loads `PENBOOT.ELF` (PIE) from FAT32;
-   next is the loader itself: CRT self-relocator, ELF kernel
-   loading, MMU enable, bootinfo translation, jump to kernel.
+   next is the loader itself: kernel ELF loading,
+   MMU enable, bootinfo translation, jump to kernel.
    See `doc/boot/boot-process.md`
-3. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick
-4. **Interrupt controller** — Multiple devices with priority encoding
-5. **Memory subsystem** — SDRAM controller, bus interface
+3. **Kernel implementation** — fill in pmap (software TLB),
+   trap handling, console driver; get to `main()` → `cpu_startup()`
+4. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick
+5. **Interrupt controller** — Multiple devices with priority encoding
+6. **Memory subsystem** — SDRAM controller, bus interface

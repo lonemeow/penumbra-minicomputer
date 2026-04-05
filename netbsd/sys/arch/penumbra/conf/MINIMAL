@@ -1,0 +1,32 @@
+#	$NetBSD$
+#
+# MINIMAL -- bare-minimum Penumbra kernel config for initial build testing.
+# Not expected to produce a bootable kernel yet.
+#
+
+include		"arch/penumbra/conf/std.penumbra"
+
+maxusers	2
+
+# Kernel options
+options		DDB			# kernel debugger
+
+# File systems (minimal set)
+file-system	FFS			# Berkeley Fast File System
+
+# Networking (minimal)
+options		INET			# IP
+
+# System bus
+mainbus0	at root
+cpu0		at mainbus?
+
+# Console
+options		CONSDEV_OVERRIDE="\"uart\""
+
+# Pseudo-devices
+pseudo-device	loop			# loopback interface
+pseudo-device	pty			# pseudo-terminals
+pseudo-device	ksyms			# /dev/ksyms
+
+config		netbsd root on ? type ?
