@@ -8,6 +8,10 @@ include		"arch/penumbra/conf/std.penumbra"
 
 maxusers	2
 
+# Build at -O0 for now: our LLVM backend doesn't yet implement
+# analyzeBranch/insertBranch needed by -O2 machine passes.
+makeoptions	COPTS="-O0"
+
 # Kernel options
 options		DDB			# kernel debugger
 

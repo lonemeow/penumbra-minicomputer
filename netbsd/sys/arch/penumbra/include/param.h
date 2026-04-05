@@ -24,8 +24,42 @@
 #define NBPG		(1 << PGSHIFT)
 #define PGOFSET		(NBPG - 1)
 
+#ifdef _KERNEL_OPT
+#include "opt_param.h"
+#endif
+
+/*
+ * u-space (kernel stack + PCB for each LWP).
+ */
+#define	UPAGES		3		/* pages of u-area */
+#define	USPACE		(UPAGES * NBPG)	/* total size of u-area */
+
+#ifndef MSGBUFSIZE
+#define	MSGBUFSIZE	NBPG		/* default message buffer size */
+#endif
+
+/*
+ * Constants related to network buffer management.
+ * MCLBYTES must be no larger than NBPG (the software page size).
+ */
+#define	MSIZE		256		/* size of an mbuf */
+
+#ifndef MCLSHIFT
+#define	MCLSHIFT	11		/* convert bytes to m_buf clusters */
+					/* 2K cluster can hold Ether frame */
+#endif
+
+#define	MCLBYTES	(1 << MCLSHIFT)	/* size of a m_buf cluster */
+
 #define BLKDEV_IOSIZE	2048
 
 #define MAXPHYS		(64 * 1024)
+
+/*
+ * Minimum and maximum sizes of the kernel malloc arena in PAGE_SIZE-sized
+ * logical pages.
+ */
+#define	NKMEMPAGES_MIN_DEFAULT	((4 * 1024 * 1024) >> PAGE_SHIFT)
+#define	NKMEMPAGES_MAX_DEFAULT	((32 * 1024 * 1024) >> PAGE_SHIFT)
 
 #endif /* _PENUMBRA_PARAM_H_ */
