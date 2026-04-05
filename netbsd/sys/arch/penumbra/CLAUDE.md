@@ -172,8 +172,8 @@ Headers fall into three categories:
 
 ## Known Issues
 
-- `G_PTRTOINT` to sub-word types (s8/s16) crashes the LLVM backend.
-  Needs widening rule in the legalizer.
+- _(fixed)_ `G_PTRTOINT`/`G_INTTOPTR` to sub-word types (s8/s16)
+  — added `minScalar` widening rules in legalizer.
 - _(s1 store bug fixed — widenScalarToNextPow2 +
   lowerIfMemSizeNotByteSizePow2 added to legalizer)_
 

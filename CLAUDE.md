@@ -257,8 +257,8 @@ MIPS/68k-style vector dispatch.
 - Machine headers (39 files), kernel config, MD build system,
   and stub kernel sources all present.
 - `config MINIMAL` → `make depend` → `make` works end-to-end.
-  Compilation starts but hits LLVM codegen gaps
-  (`G_PTRTOINT` to sub-word types).
+  Compilation starts; iterating on LLVM codegen gaps as they
+  surface (sub-word `G_PTRTOINT`/`G_INTTOPTR` fixed).
 - Virtual memory layout: 2G/2G user/kernel split,
   kernel text at `0x8001_0000`, compact user layout with
   stack at 64 MB for flat single-level page table optimization.
@@ -268,9 +268,8 @@ MIPS/68k-style vector dispatch.
   kernel port context.
 
 ## Next Steps (in priority order)
-1. **LLVM codegen hardening** — legalize `G_PTRTOINT`/`G_INTTOPTR`
-   for sub-word types, plus remaining ops as they surface
-   (G_SMAX/G_SMIN/G_UMAX/G_UMIN); iterate on kernel compilation
+1. **LLVM codegen hardening** — legalize remaining ops as they surface
+   during kernel compilation (G_SMAX/G_SMIN/G_UMAX/G_UMIN, etc.)
 2. **Boot loader** — ROM loads `PENBOOT.ELF` (PIE) from FAT32;
    next is the loader itself: kernel ELF loading,
    MMU enable, bootinfo translation, jump to kernel.

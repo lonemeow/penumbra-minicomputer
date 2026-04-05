@@ -19,3 +19,33 @@ define ptr @inttoptr(i32 %addr) {
   %p = inttoptr i32 %addr to ptr
   ret ptr %p
 }
+
+; Sub-word ptrtoint: (char)(uintptr_t)ptr — widened to s32, then truncated.
+define i8 @ptrtoint_i8(ptr %p) {
+; CHECK-LABEL: ptrtoint_i8:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:    jmp r13
+  %addr = ptrtoint ptr %p to i8
+  ret i8 %addr
+}
+
+define i16 @ptrtoint_i16(ptr %p) {
+; CHECK-LABEL: ptrtoint_i16:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:    jmp r13
+  %addr = ptrtoint ptr %p to i16
+  ret i16 %addr
+}
+
+; Sub-word inttoptr: inttoptr i8 — widened to s32 first.
+define ptr @inttoptr_i8(i8 %addr) {
+; CHECK-LABEL: inttoptr_i8:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:    and r1, 255
+; CHECK-NEXT:    jmp r13
+  %p = inttoptr i8 %addr to ptr
+  ret ptr %p
+}

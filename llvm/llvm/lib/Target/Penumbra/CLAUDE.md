@@ -209,7 +209,7 @@ Triple mapping for `Triple::penumbra` in `InputFiles.cpp`.
   G_LOAD/G_STORE (s32/s16/s8),
   G_CONSTANT (s32/p0), G_FRAME_INDEX/G_GLOBAL_VALUE (p0),
   G_PTR_ADD/G_PTRMASK {p0,s32},
-  G_INTTOPTR/G_PTRTOINT {p0,s32},
+  G_INTTOPTR/G_PTRTOINT {p0,s32} (sub-word widened to s32),
   G_ICMP {s1,s32}/{s1,p0}, G_SELECT {s32/p0,s1},
   G_PHI, G_BRCOND, G_FREEZE (no-op).
 - **Extensions:** G_ZEXT/G_SEXT/G_ANYEXT sub-word→s32 legal,
