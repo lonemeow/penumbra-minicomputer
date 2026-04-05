@@ -91,20 +91,51 @@ The architecture is fully specified in `doc/`. Key specs:
 - **Important:** `rm -rf build/<mod>.verilator build/V<mod>`
   if you suspect stale binaries (WSL2 stale mtimes)
 
+### LLVM Toolchain Build
+Build dir: `build/llvm/`. Initial cmake (one-time):
+```sh
+cmake -G Ninja -S llvm/llvm -B build/llvm \
+  -DLLVM_TARGETS_TO_BUILD=Penumbra \
+  -DLLVM_ENABLE_PROJECTS="clang;lld" \
+  -DLLVM_USE_SPLIT_DWARF=ON \
+  -DLLVM_INCLUDE_TESTS=ON -DLLVM_BUILD_TESTS=ON \
+  -DLLVM_PARALLEL_LINK_JOBS=2
+```
+Incremental rebuild — **target only what's needed** to avoid
+building all unit tests:
+```sh
+ninja -C build/llvm -j10 llc clang lld
+```
+
 ### LLVM Backend Tests
-Regression tests for the Penumbra codegen backend live in
-`llvm/llvm/test/CodeGen/Penumbra/`.
-They use LLVM's **Lit** test framework with **FileCheck** assertions.
-- **Run all Penumbra tests:**
-  `build/llvm/bin/llvm-lit llvm/llvm/test/CodeGen/Penumbra/`
-- **Run one test:**
-  `build/llvm/bin/llvm-lit -v llvm/llvm/test/CodeGen/Penumbra/alu.ll`
-- **Regenerate CHECK lines after codegen changes:**
-  `python3 llvm/llvm/utils/update_llc_test_checks.py
-  --llc-binary build/llvm/bin/llc
-  llvm/llvm/test/CodeGen/Penumbra/<test>.ll`
-- Requires `LLVM_INCLUDE_TESTS=ON` and `LLVM_BUILD_TESTS=ON`
-  in CMake config.
+Regression tests: `llvm/llvm/test/CodeGen/Penumbra/` (Lit + FileCheck).
+```sh
+build/llvm/bin/llvm-lit llvm/llvm/test/CodeGen/Penumbra/       # all
+build/llvm/bin/llvm-lit -v llvm/llvm/test/CodeGen/Penumbra/alu.ll  # one
+```
+Regenerate CHECK lines after codegen changes:
+```sh
+python3 llvm/llvm/utils/update_llc_test_checks.py \
+  --llc-binary build/llvm/bin/llc \
+  llvm/llvm/test/CodeGen/Penumbra/<test>.ll
+```
+
+### NetBSD Kernel Build
+Prerequisites: NetBSD tools built via `build.sh` (one-time, see
+`netbsd/sys/arch/penumbra/CLAUDE.md`).
+Build output: `build/netbsd-kernel/MINIMAL/` (out of source tree).
+All commands from project root:
+```sh
+# 1. Generate kernel Makefile (re-run after conf/ changes)
+build/netbsd-tools/bin/nbconfig \
+  -b $PWD/build/netbsd-kernel/MINIMAL \
+  -s $PWD/netbsd/sys \
+  $PWD/netbsd/sys/arch/penumbra/conf/MINIMAL
+
+# 2. Dependencies + build
+build/netbsd-tools/bin/nbmake-penumbra -C build/netbsd-kernel/MINIMAL depend
+build/netbsd-tools/bin/nbmake-penumbra -C build/netbsd-kernel/MINIMAL -j10
+```
 
 ### Boot ROM Build Pipeline (`make simulate`)
 The boot ROM has its own Makefile (`hw/rom/Makefile`) with automatic
@@ -223,8 +254,10 @@ MIPS/68k-style vector dispatch.
   MOV PC + ADDi `%pcrel()` for globals,
   EK_LabelDifference32 jump table entries;
   PC (R15) is a readable GPR so PIC needs no GOT (±32KB reach).
-- `-O0` through `-O2` work; higher levels or new code patterns
-  may still need more legalization rules (G_SMAX, etc.).
+- `-O0` works fully (kernel compiles all .o files at `-O0`).
+  `-O1`/`-O2` work for most code but need
+  `analyzeBranch`/`insertBranch`/`removeBranch` in TargetInstrInfo
+  for branch optimization passes; kernel builds at `-O0` for now.
 
 ## Software Tools
 - **LLVM toolchain** (`build/llvm/bin/`, override with `LLVM_PREFIX`):
@@ -253,12 +286,12 @@ MIPS/68k-style vector dispatch.
 - **Boot from ROM:** Programs assembled with `--org 0xFFFF0000`. `_start:` must be first label.
 - **ROM page mapping (MMU tests):** TLB_INDEX=16, TLB_VPN=0x0FFFF000, TLB_PTE=0xFFFF00B9.
 
-**NetBSD kernel scaffolding in place.**
+**NetBSD kernel compilation reaches link stage.**
 - Machine headers (39 files), kernel config, MD build system,
-  and stub kernel sources all present.
-- `config MINIMAL` → `make depend` → `make` works end-to-end.
-  Compilation starts; iterating on LLVM codegen gaps as they
-  surface (sub-word `G_PTRTOINT`/`G_INTTOPTR` fixed).
+  stub kernel sources, and assembly string functions all present.
+- `config MINIMAL` → `make depend` → `make` compiles all .o files
+  at `-O0`. Link fails with expected undefined symbols (stubs).
+- DDB (kernel debugger) disabled for now — needs extensive MD hooks.
 - Virtual memory layout: 2G/2G user/kernel split,
   kernel text at `0x8001_0000`, compact user layout with
   stack at 64 MB for flat single-level page table optimization.
@@ -268,14 +301,16 @@ MIPS/68k-style vector dispatch.
   kernel port context.
 
 ## Next Steps (in priority order)
-1. **LLVM codegen hardening** — legalize remaining ops as they surface
-   during kernel compilation (G_SMAX/G_SMIN/G_UMAX/G_UMIN, etc.)
-2. **Boot loader** — ROM loads `PENBOOT.ELF` (PIE) from FAT32;
+1. **Kernel link** — provide missing symbols (undefined stubs)
+   to get the kernel to link, even if implementations are no-ops
+2. **LLVM `-O2` support** — implement `analyzeBranch`/`insertBranch`/
+   `removeBranch` for branch optimization passes
+3. **Boot loader** — ROM loads `PENBOOT.ELF` (PIE) from FAT32;
    next is the loader itself: kernel ELF loading,
    MMU enable, bootinfo translation, jump to kernel.
    See `doc/boot/boot-process.md`
-3. **Kernel implementation** — fill in pmap (software TLB),
+4. **Kernel implementation** — fill in pmap (software TLB),
    trap handling, console driver; get to `main()` → `cpu_startup()`
-4. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick
-5. **Interrupt controller** — Multiple devices with priority encoding
-6. **Memory subsystem** — SDRAM controller, bus interface
+5. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick
+6. **Interrupt controller** — Multiple devices with priority encoding
+7. **Memory subsystem** — SDRAM controller, bus interface

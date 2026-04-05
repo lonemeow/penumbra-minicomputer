@@ -18,10 +18,10 @@ memory-mapped I/O.
 - 8 exception sources (IRQ, MMU faults, alignment, bus fault, BREAK,
   SYSCALL, privilege, illegal instruction)
 - LLVM backend: clang compiles C, lld links, llvm-mc assembles
-- Boot ROM in C: autoconfig, SD card boot, interactive monitor
+- Boot ROM in C: autoconfig, SD card boot, FAT32, interactive monitor
 - Bus autoconfig, SPI controller, SD card read, MBR partition parsing
-- 30+ hardware test programs passing
-- NetBSD port started: machine headers + stage 1 bootloader skeleton
+- 30+ hardware test programs passing, 26 LLVM codegen lit tests passing
+- NetBSD kernel: all .o files compile at `-O0`, link stage reached
 
 ## Prerequisites
 
@@ -44,41 +44,28 @@ cd penumbra-minicomputer
 
 ### 2. Build the LLVM toolchain
 
-This builds a custom clang, lld, llvm-mc, and llvm-objcopy with the
-Penumbra backend.  Takes 10-30 minutes depending on hardware.
+This builds a custom clang, lld, and llc with the Penumbra backend.
 
 ```sh
-mkdir -p build/llvm
-cd build/llvm
-cmake -G Ninja \
+# One-time cmake configuration
+cmake -G Ninja -S llvm/llvm -B build/llvm \
   -DLLVM_TARGETS_TO_BUILD=Penumbra \
   -DLLVM_ENABLE_PROJECTS="clang;lld" \
   -DLLVM_USE_SPLIT_DWARF=ON \
   -DLLVM_INCLUDE_TESTS=ON \
   -DLLVM_BUILD_TESTS=ON \
-  -DCMAKE_BUILD_TYPE=Debug \
-  ../../llvm/llvm
-ninja -j4 clang lld llvm-mc llvm-objcopy llc
-cd ../..
+  -DLLVM_PARALLEL_LINK_JOBS=2
+
+# Build only the tools we need (much faster than a full build)
+ninja -C build/llvm -j10 llc clang lld
 ```
 
-> **Low memory?** Use `-j2` for the final link steps.  Debug builds with
-> split DWARF need ~8 GB; without split DWARF, ~15 GB.
+> **Low memory?** `-DLLVM_PARALLEL_LINK_JOBS=2` limits link parallelism.
+> Debug builds with split DWARF need ~8 GB; without split DWARF, ~15 GB.
+> Use `-j4` instead of `-j10` on machines with less RAM.
 
-If you want the LLVM build tree elsewhere (e.g. a faster drive):
-
-```sh
-mkdir -p /other/drive/penumbra-llvm
-cd /other/drive/penumbra-llvm
-cmake -G Ninja \
-  -DLLVM_TARGETS_TO_BUILD=Penumbra \
-  -DLLVM_ENABLE_PROJECTS="clang;lld" \
-  -DLLVM_USE_SPLIT_DWARF=ON \
-  /path/to/penumbra-minicomputer/llvm/llvm
-ninja -j4 clang lld llvm-mc llvm-objcopy
-```
-
-Then pass `LLVM_PREFIX=/other/drive/penumbra-llvm` to make commands.
+If you want the LLVM build tree elsewhere, pass
+`LLVM_PREFIX=/other/drive/penumbra-llvm` to make commands.
 
 ### 3. Verify the hardware (optional)
 
@@ -192,8 +179,9 @@ The goal is to run NetBSD on Penumbra.  The NetBSD 10.1 source tree is
 included as a git subtree under `netbsd/`.  Machine-dependent port files
 live in `netbsd/sys/arch/penumbra/`.
 
-**Current status:** Machine headers and stage 1 bootloader sources compile.
-See `doc/netbsd/porting-status.md` for the full roadmap.
+**Current status:** All kernel .o files compile at `-O0`.  Link stage
+reached (fails with expected undefined symbols from stubs).
+See `netbsd/sys/arch/penumbra/CLAUDE.md` for detailed port context.
 
 ### Prerequisites
 
@@ -201,23 +189,13 @@ In addition to the LLVM toolchain above, you need:
 
 - **zlib-dev** (for NetBSD host tools): `sudo apt install zlib1g-dev`
 
-### Building (quick, standalone)
-
-Compile the bootloader objects directly without the NetBSD build system:
+### Building NetBSD host tools (one-time)
 
 ```sh
-make -C netbsd/sys/arch/penumbra/stand/boot -f Makefile.standalone
-```
-
-### Building (via build.sh)
-
-For the full NetBSD build infrastructure (builds libsa, libkern, etc.):
-
-```sh
-# 1. Create toolchain symlinks (one-time setup)
+# Create toolchain symlinks
 sh netbsd/sys/arch/penumbra/toolchain-setup.sh
 
-# 2. Build NetBSD host tools (use -u for incremental rebuilds after first time)
+# Build NetBSD host tools (use -u for incremental rebuilds after first time)
 cd netbsd
 ./build.sh -U -j4 -m penumbra -a penumbra \
   -V EXTERNAL_TOOLCHAIN=$PWD/../build/llvm \
@@ -225,9 +203,30 @@ cd netbsd
   -T ../build/netbsd-tools \
   -D ../build/netbsd-dest \
   tools
+cd ..
+```
 
-# 3. Use nbmake-penumbra to build the bootloader
-../build/netbsd-tools/bin/nbmake-penumbra -C sys/arch/penumbra/stand/boot
+### Building the kernel
+
+All commands from the project root.  Build output goes to
+`build/netbsd-kernel/MINIMAL/` (out of source tree).
+
+```sh
+# 1. Generate kernel Makefile (re-run after changing conf/ files)
+build/netbsd-tools/bin/nbconfig \
+  -b $PWD/build/netbsd-kernel/MINIMAL \
+  -s $PWD/netbsd/sys \
+  $PWD/netbsd/sys/arch/penumbra/conf/MINIMAL
+
+# 2. Dependencies + build
+build/netbsd-tools/bin/nbmake-penumbra -C build/netbsd-kernel/MINIMAL depend
+build/netbsd-tools/bin/nbmake-penumbra -C build/netbsd-kernel/MINIMAL -j10
+```
+
+### Building the bootloader (standalone)
+
+```sh
+make -C netbsd/sys/arch/penumbra/stand/boot -f Makefile.standalone
 ```
 
 ## License

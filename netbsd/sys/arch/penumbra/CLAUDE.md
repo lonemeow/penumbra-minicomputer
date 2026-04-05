@@ -35,34 +35,23 @@ cd netbsd
 ### Kernel Build
 
 Build output goes to `build/netbsd-kernel/MINIMAL/` (out of source tree).
+All commands run from the project root.
 
 ```sh
-# Generate kernel Makefile from config
-cd netbsd/sys/arch/penumbra/conf
-../../../../../build/netbsd-tools/bin/nbconfig \
-  -b ../../../../../build/netbsd-kernel/MINIMAL \
-  -s ../../../../../netbsd/sys MINIMAL
+# 1. Generate kernel Makefile from config (re-run after changing conf/ files)
+build/netbsd-tools/bin/nbconfig \
+  -b $PWD/build/netbsd-kernel/MINIMAL \
+  -s $PWD/netbsd/sys \
+  $PWD/netbsd/sys/arch/penumbra/conf/MINIMAL
 
-# Build (from the compile directory)
-cd ../../../../../build/netbsd-kernel/MINIMAL
-../../../build/netbsd-tools/bin/nbmake-penumbra depend
-../../../build/netbsd-tools/bin/nbmake-penumbra
-```
-
-Or more concisely from the project root:
-```sh
-# config
-(cd netbsd/sys/arch/penumbra/conf && \
-  $PWD/../../../../../build/netbsd-tools/bin/nbconfig \
-  -b $PWD/../../../../../build/netbsd-kernel/MINIMAL \
-  -s $PWD/../../../.. MINIMAL)
-
-# depend + build
+# 2. Generate dependencies
 build/netbsd-tools/bin/nbmake-penumbra -C build/netbsd-kernel/MINIMAL depend
-build/netbsd-tools/bin/nbmake-penumbra -C build/netbsd-kernel/MINIMAL
+
+# 3. Build
+build/netbsd-tools/bin/nbmake-penumbra -C build/netbsd-kernel/MINIMAL -j10
 ```
 
-**Important:** Re-run `nbconfig` after changing any `conf/` files.
+**Important:** Re-run step 1 after changing any `conf/` files.
 The `build/netbsd-kernel/` directory is gitignored.
 
 ### Bootloader Build (standalone)
@@ -161,27 +150,20 @@ Headers fall into three categories:
 - [x] Machine headers — 39 files, sufficient for kernel compilation
 - [x] Kernel config — `config MINIMAL` generates Makefile successfully
 - [x] `make depend` — passes cleanly
-- [x] `make` — begins compiling kernel code
+- [x] `make` — **all .o files compile at `-O0`**, link stage reached
 - [x] libsa glue — `sdblk.c` (SD block device), `cons.c` (UART)
 - [x] Build system — build.sh integration, out-of-tree kernel build
-- [ ] **LLVM codegen gaps** — `G_PTRTOINT` to s8 not legalized
-  (first file to fail: `prop_data.c`). More patterns will surface.
+- [x] Assembly string functions — memcpy, memset, memcmp, strlen,
+  strcmp, strcpy in `common/lib/libc/arch/penumbra/string/`
+- [ ] **Kernel link** — many undefined symbols from stubs
 - [ ] Boot loader (`PENBOOT.ELF`) — CRT self-relocator done,
   kernel loading / MMU enable not yet implemented
 - [ ] Kernel port — all MD stubs need real implementations
-
-## Known Issues
-
-- _(fixed)_ `G_PTRTOINT`/`G_INTTOPTR` to sub-word types (s8/s16)
-  — added `minScalar` widening rules in legalizer.
-- _(s1 store bug fixed — widenScalarToNextPow2 +
-  lowerIfMemSizeNotByteSizePow2 added to legalizer)_
+- [ ] DDB — disabled, needs extensive MD hooks
 
 ## Next Steps
 
-1. **LLVM codegen hardening** — fix `G_PTRTOINT`/`G_INTTOPTR`
-   legalization for sub-word types; more patterns will surface
-   as kernel compilation progresses
+1. **Kernel link** — provide missing symbols to get past the linker
 2. **Boot loader** — kernel ELF loading, MMU enable, bootinfo
    translation, jump to kernel
 3. **Kernel implementation** — fill in pmap, trap handling,

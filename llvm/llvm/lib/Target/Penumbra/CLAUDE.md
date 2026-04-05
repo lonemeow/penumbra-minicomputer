@@ -3,22 +3,43 @@
 This file provides LLVM backend context for work under `llvm/`. The root `CLAUDE.md` has project-wide conventions.
 
 ## Build
-- Build from `llvm/llvm/`, build dir `build/llvm/` (overridable via `LLVM_PREFIX` in Makefile)
-- ```
-  cmake -G Ninja -DLLVM_TARGETS_TO_BUILD=Penumbra \
-    -DLLVM_ENABLE_PROJECTS="clang;lld" \
-    -DLLVM_USE_SPLIT_DWARF=ON \
-    -DLLVM_INCLUDE_TESTS=ON -DLLVM_BUILD_TESTS=ON \
-    -DLLVM_PARALLEL_LINK_JOBS=2
-  ```
+Source dir: `llvm/llvm/`, build dir: `build/llvm/`
+(overridable via `LLVM_PREFIX` in Makefile).
+
+**Initial cmake (one-time):**
+```sh
+cmake -G Ninja -S llvm/llvm -B build/llvm \
+  -DLLVM_TARGETS_TO_BUILD=Penumbra \
+  -DLLVM_ENABLE_PROJECTS="clang;lld" \
+  -DLLVM_USE_SPLIT_DWARF=ON \
+  -DLLVM_INCLUDE_TESTS=ON -DLLVM_BUILD_TESTS=ON \
+  -DLLVM_PARALLEL_LINK_JOBS=2
+```
+
+**Incremental rebuild (target only what's needed):**
+```sh
+ninja -C build/llvm -j10 llc clang lld    # codegen + compiler + linker
+```
+A full `ninja -C build/llvm` builds everything including unit tests —
+much slower; only needed if running `llvm-lit` for the first time.
+
 - Uses ccache and Ninja
-- `-DLLVM_PARALLEL_LINK_JOBS=2` limits link parallelism
-  (debug builds OOM at full parallelism on 15 GB WSL2)
-- Target triple: `penumbra-unknown-none` (eventually `penumbra-unknown-netbsd`)
-- Run codegen tests: `build/llvm/bin/llvm-lit llvm/llvm/test/CodeGen/Penumbra/`
-- Regenerate CHECK lines:
-  `python3 llvm/llvm/utils/update_llc_test_checks.py
-  --llc-binary build/llvm/bin/llc <test>.ll`
+- `-j10` for compilation, `-j2` link jobs (set in cmake) to avoid
+  OOM on 15 GB WSL2
+- Target triple: `penumbra-unknown-none`
+
+**Tests:**
+```sh
+build/llvm/bin/llvm-lit llvm/llvm/test/CodeGen/Penumbra/       # all tests
+build/llvm/bin/llvm-lit -v llvm/llvm/test/CodeGen/Penumbra/alu.ll  # one test
+```
+
+**Regenerate CHECK lines:**
+```sh
+python3 llvm/llvm/utils/update_llc_test_checks.py \
+  --llc-binary build/llvm/bin/llc \
+  llvm/llvm/test/CodeGen/Penumbra/<test>.ll
+```
 - Penumbra registered in `utils/UpdateTestChecks/asm.py`
   (reuses AVR scrubber/function-RE)
 
