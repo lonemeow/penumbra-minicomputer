@@ -56,6 +56,23 @@ typedef unsigned int uint32_t;
 #define MMU_FAULT_ADDR   1
 #define MMU_FAULT_STATUS 2
 
+/* System ID registers (device 1, read-only) */
+#define SYS_CPU_ISA    0
+#define SYS_MACH_FEAT  1
+#define SYS_CPU_NAME0  2
+#define SYS_CPU_NAME1  3
+#define SYS_CPU_NAME2  4
+#define SYS_CPU_NAME3  5
+#define SYS_MACH_NAME0 6
+#define SYS_MACH_NAME1 7
+#define SYS_MACH_NAME2 8
+#define SYS_MACH_NAME3 9
+
+/* CPU_ISA feature flag bit indices */
+#define CPU_FEAT_BIT_HW_MUL  0
+#define CPU_FEAT_BIT_HW_DIV  1
+#define CPU_FEAT_BIT_FPU     2
+
 /* FAULT_STATUS bit positions */
 #define FSTAT_R    8   /* Faulting access was read */
 #define FSTAT_W    9   /* Faulting access was write */

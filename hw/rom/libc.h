@@ -6,6 +6,7 @@
 unsigned long strlen(const char *s);
 int strcmp(const char *a, const char *b);
 int strncmp(const char *a, const char *b, unsigned long n);
+char *strncat(char *dest, const char *src, unsigned long n);
 int isprint(int c);
 int isdigit(int c);
 

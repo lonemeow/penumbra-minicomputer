@@ -18,6 +18,22 @@ int strncmp(const char *a, const char *b, unsigned long n) {
     return n == (unsigned long)-1 ? 0 : (unsigned char)*a - (unsigned char)*b;
 }
 
+char *strncat(char *dest, const char *src, unsigned long n) {
+    char *ptr = dest;
+
+    while (*ptr != '\0') {
+        ptr++;
+    }
+
+    while (n > 0 && *src != '\0') {
+        *ptr++ = *src++;
+        n--;
+    }
+
+    *ptr = '\0';
+   return dest;
+}
+
 int isprint(int c) {
     return c >= 0x20 && c <= 0x7E;
 }

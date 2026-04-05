@@ -757,12 +757,101 @@ static void cmd_go(const char *args) {
     __builtin_unreachable();
 }
 
+/* ── System identification ────────────────────────────────────────── */
+
+/*
+ * Unpack a 32-bit LE word into 4 bytes of a name buffer.
+ */
+static void unpack_name_word(char *buf, int pos, uint32_t word) {
+    buf[pos + 0] = (char)(word & 0xFF);
+    buf[pos + 1] = (char)((word >> 8) & 0xFF);
+    buf[pos + 2] = (char)((word >> 16) & 0xFF);
+    buf[pos + 3] = (char)((word >> 24) & 0xFF);
+}
+
+/*
+ * Read CPU name from sysid regs 2–5 into buf (17 bytes min).
+ * Each RDSYS uses a compile-time constant register number.
+ */
+static void read_cpu_name(char *buf) {
+    unpack_name_word(buf,  0, penumbra_read_sysreg(SYSDEV_SYSID, SYS_CPU_NAME0));
+    unpack_name_word(buf,  4, penumbra_read_sysreg(SYSDEV_SYSID, SYS_CPU_NAME1));
+    unpack_name_word(buf,  8, penumbra_read_sysreg(SYSDEV_SYSID, SYS_CPU_NAME2));
+    unpack_name_word(buf, 12, penumbra_read_sysreg(SYSDEV_SYSID, SYS_CPU_NAME3));
+    buf[16] = '\0';
+}
+
+/*
+ * Read machine name from sysid regs 6–9 into buf (17 bytes min).
+ */
+static void read_mach_name(char *buf) {
+    unpack_name_word(buf,  0, penumbra_read_sysreg(SYSDEV_SYSID, SYS_MACH_NAME0));
+    unpack_name_word(buf,  4, penumbra_read_sysreg(SYSDEV_SYSID, SYS_MACH_NAME1));
+    unpack_name_word(buf,  8, penumbra_read_sysreg(SYSDEV_SYSID, SYS_MACH_NAME2));
+    unpack_name_word(buf, 12, penumbra_read_sysreg(SYSDEV_SYSID, SYS_MACH_NAME3));
+    buf[16] = '\0';
+}
+
+/*
+ * Decode CPU_ISA register value into a human-readable string.
+ * isa_val has ISA version in bits [3:0] and feature flags in [31:4].
+ *
+ * Example outputs:
+ *   "ISA v1"                    — base ISA, no optional features
+ *   "ISA v1, MUL"               — hardware multiply
+ *   "ISA v1, MUL, DIV, FPU"    — all features
+ *   "ISA v1, MUL, UNK_3"       — unknown future feature bit
+ */
+static void format_cpu_features(char *buf, int bufsz, uint32_t isa_val) {
+    int version = isa_val & 0x0F;
+    snprintf(buf, bufsz, "ISA v%d", version);
+
+    for (int bit = 0; bit < 28; bit++) {
+        /* Feature flags start at bit 4 */
+        uint32_t mask = 1u << (bit + 4);
+        /* TODO: flag meanings could differ per ISA version */
+        if (isa_val & mask) {
+            switch (bit) {
+            case CPU_FEAT_BIT_HW_MUL:
+                strncat(buf, ", MUL", bufsz);
+                break;
+            case CPU_FEAT_BIT_HW_DIV:
+                strncat(buf, ", DIV", bufsz);
+                break;
+            case CPU_FEAT_BIT_FPU:
+                strncat(buf, ", FPU", bufsz);
+                break;
+            default: {
+                char tmp[12];
+                snprintf(tmp, sizeof(tmp), ", UNK_%d", bit);
+                strncat(buf, tmp, bufsz);
+                break;
+            }
+            }
+        }
+    }
+}
+
+static void print_banner(void) {
+    char cpu_name[17], mach_name[17], feat_str[48];
+
+    read_cpu_name(cpu_name);
+    read_mach_name(mach_name);
+
+    uint32_t cpu_isa = penumbra_read_sysreg(SYSDEV_SYSID, SYS_CPU_ISA);
+    format_cpu_features(feat_str, sizeof(feat_str), cpu_isa);
+
+    console_puts("\r\nPenumbra boot\r\n\r\n");
+    console_printf("CPU:      %s (%s)\r\n", cpu_name, feat_str);
+    console_printf("Hardware: %s\r\n\r\n", mach_name);
+}
+
 /* ── Main and boot sequence ───────────────────────────────────────── */
 
 int main(void) {
     char cmdbuffer[64];
 
-    console_puts("Penumbra/1 boot\r\n\r\n");
+    print_banner();
 
     setup_traps();
 
