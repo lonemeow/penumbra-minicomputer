@@ -46,6 +46,7 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   // ADD+compare+ADC chains into ADD+ADC.
   getActionDefinitionsBuilder({G_UADDO, G_USUBO, G_UADDE, G_USUBE})
       .lowerFor({{s32, s1}})
+      .minScalar(0, s32)
       .narrowScalarIf(typeIs(0, s64), changeTo(0, s32));
 
   getActionDefinitionsBuilder(G_CONSTANT)
