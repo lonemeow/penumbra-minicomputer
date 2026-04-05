@@ -30,15 +30,21 @@ early boot firmware.
 - Populate boot data structure with hardware discovery results
   (RAM, peripherals, boot device)
 - Mount the first FAT32 partition on the boot SD card
-- Load the `LOADER` file from the FAT32 root directory into RAM
-- Jump to loader with R1 = boot data pointer
+- Load `PENBOOT.ELF` (PIE ELF) from the FAT32 root directory:
+  parse ELF headers, allocate RAM for scratch and load
+  destination (via `find_memory_region()`, which walks boot
+  data MEMORY devices and avoids reserved areas), copy PT_LOAD
+  segments, zero .bss
+- Jump to loader entry point with R1 = boot data pointer
 
 The ROM includes a minimal read-only FAT32 reader (`fat32.c`)
 with a block-read callback abstraction, so it works with any
-storage device — not just SD cards.  The `boot sd:<dev>,<cs>`
-monitor command drives the full sequence.  For testing and
-development, `load` and `go` commands provide raw sector reads
-and direct address jumps.
+storage device — not just SD cards.  It also includes minimal
+ELF32 parsing (`elf.h`) to load PIE binaries at dynamically
+chosen addresses.  The `boot sd:<dev>,<cs>` monitor command
+drives the full sequence.  For testing and development, `load`
+and `go` commands provide raw sector reads and direct address
+jumps.
 
 **Environment:** Physical addressing, supervisor mode, no MMU.
 Stack in low RAM (page 2+).  The boot ROM is OS-agnostic — it
@@ -50,9 +56,12 @@ jumping to the loader.
 
 ## Boot Loader
 
-**Location:** Loaded into RAM by the ROM from `LOADER` on the
-FAT32 boot partition.  This is a full-size binary (no partition
-gap size constraints), loaded at `0x00010000` by default.
+**Location:** Loaded into RAM by the ROM from `PENBOOT.ELF` on
+the FAT32 boot partition.  This is a PIE (Position Independent
+Executable) ELF binary.  The ROM parses ELF headers and loads
+PT_LOAD segments into dynamically allocated RAM — no fixed load
+address.  The loader self-relocates at startup using a CRT stub
+that processes `R_PENUMBRA_32` relocations via PT_DYNAMIC.
 
 **Responsibilities:**
 - Load the kernel image from the FAT32 boot partition into RAM
@@ -129,13 +138,13 @@ The structure is a **tagged list** — a sequence of variable-length entries, ea
 │   version: 1                     │
 │   total_size: N                  │
 ├──────────────────────────────────┤
-│ Entry: type=BTAG_MEMORY          │
-│   size: (entry size incl header) │
-│   ram_base, ram_size             │
+│ Entry: type=BTAG_DEVICE           │
+│   cls=MEMORY, base, size          │
+│   (base RAM detected by ROM)      │
 ├──────────────────────────────────┤
-│ Entry: type=BTAG_CONSOLE         │
-│   size: ...                      │
-│   uart_base, uart_type           │
+│ Entry: type=BTAG_DEVICE           │
+│   cls=UART, base, size            │
+│   (built-in UART, injected)       │
 ├──────────────────────────────────┤
 │ Entry: type=BTAG_BOOTDEV         │
 │   size: ...                      │
@@ -162,10 +171,15 @@ Consumers walk the list by advancing by `size` bytes per entry. Unknown tags are
 | Tag | Value | Payload | Description |
 |-----|-------|---------|-------------|
 | `BTAG_END` | 0 | (none) | Terminates the list |
-| `BTAG_MEMORY` | 1 | `base`, `size` | Physical RAM region (multiple allowed) |
-| `BTAG_DEVICE` | 2 | `cls`, `base`, `size`, `id`, `name[16]` | Discovered or injected device |
+| `BTAG_DEVICE` | 2 | `cls`, `base`, `size`, `id`, `name[16]` | Discovered or injected device (including RAM) |
 | `BTAG_CONSOLE` | 3 | `dev_nth` | Console output device (index into BTAG_DEVICE entries) |
 | `BTAG_BOOTDEV` | 4 | `dev_nth`, `cs`, `partition` | Boot device (see below) |
+
+RAM regions use `BTAG_DEVICE` with `cls=ACFG_CLASS_MEMORY` — no
+separate memory tag.  This means base RAM (detected by the ROM),
+extension RAM (discovered via autoconfig), and any future memory
+source all use the same entry type.  Consumers find RAM by
+filtering on the MEMORY device class.
 
 Additional tags as hardware grows (cache geometry, etc.).
 
@@ -209,8 +223,8 @@ Target layout for the ULX3S SD card:
 │ Partition gap (sectors 1–2047)      │  Unused (available for future use)
 ├─────────────────────────────────────┤
 │ Partition 1: FAT32                  │  Boot loader + kernel image
-│   LOADER                            │  Boot loader (loaded by ROM)
-│   PENUMBRA                          │  Kernel image (loaded by LOADER)
+│   PENBOOT.ELF                       │  Boot loader (PIE ELF, loaded by ROM)
+│   PENUMBRA                          │  Kernel image (loaded by boot loader)
 ├─────────────────────────────────────┤
 │ Partition 2: UFS/FFS                │  Root filesystem
 │   NetBSD root (/, /etc, /bin, ...)  │
@@ -223,10 +237,11 @@ Target layout for the ULX3S SD card:
 
 ## Resolved Decisions
 
-1. **Boot loader location:** `LOADER` file on the FAT32 boot
-   partition (root directory, 8.3 name).  The ROM mounts FAT32
-   directly — no intermediate stage in the partition gap.
-   This avoids PIC/relocation issues and removes size constraints.
+1. **Boot loader location:** `PENBOOT.ELF` (PIE ELF) on the
+   FAT32 boot partition (root directory).  The ROM mounts FAT32,
+   parses ELF headers, loads PT_LOAD segments into dynamically
+   allocated RAM, and jumps to entry.  The loader self-relocates
+   at startup.  No fixed load address — works with any RAM map.
 
 2. **Boot data passing:** R1 = physical pointer to boot data. Tagged list format for extensibility (type + size per entry, skip unknown tags).
 
@@ -246,6 +261,4 @@ Target layout for the ULX3S SD card:
 
 2. **Minimum pre-mapped pages:** How many kernel pages must the bootloader map before jumping? Depends on how much code runs before `locore.S` establishes its own TLB entries. To be determined during the port.
 
-3. **Kernel image format:** Raw binary? ELF? a.out? NetBSD traditionally uses ELF with a boot header. The stage 2 loader needs to parse it.
-
-4. **Boot data physical location:** ROM places boot data in a known RAM area (not a fixed address — depends on detected RAM). R1 points to it. Should the boot data be at the bottom of usable RAM (simple, but kernel must know to avoid it) or at the top (out of the way, but requires knowing RAM size to find it)?
+3. **Boot data physical location:** ROM places boot data in a known RAM area (not a fixed address — depends on detected RAM). R1 points to it. Should the boot data be at the bottom of usable RAM (simple, but kernel must know to avoid it) or at the top (out of the way, but requires knowing RAM size to find it)?

@@ -39,17 +39,9 @@ struct btag_hdr {
 
 /* ── Tag types ───────────────────────────────────────────────────── */
 #define BTAG_END       0
-#define BTAG_MEMORY    1   /* physical RAM region */
 #define BTAG_DEVICE    2   /* discovered/injected device */
 #define BTAG_CONSOLE   3   /* console output device */
 #define BTAG_BOOTDEV   4   /* boot storage device */
-
-/* ── BTAG_MEMORY ─────────────────────────────────────────────────── */
-struct btag_memory {
-    struct btag_hdr hdr;   /* type=BTAG_MEMORY, size=16 */
-    uint32_t base;
-    uint32_t size;
-};
 
 /* ── BTAG_DEVICE ─────────────────────────────────────────────────── */
 struct btag_device {
@@ -82,11 +74,11 @@ struct btag_bootdev {
  *
  * Usage:
  *   uint32_t cursor = bd_init();
- *   bd_add_memory(&cursor, base, size);
+ *   bd_add_device(&cursor, ACFG_CLASS_MEMORY, base, size, 0, "RAM");
  *   bd_add_device(&cursor, cls, base, size, id, name);
  *   ...
  *   bd_finalize(&cursor);
- *   // R1 = BOOTDATA_BASE, jump to stage 1
+ *   // R1 = BOOTDATA_BASE, jump to loader
  */
 
 /* Initialize boot data header, return cursor past it. */
@@ -96,15 +88,6 @@ static inline uint32_t bd_init(void) {
     hdr->version = BOOTDATA_VERSION;
     hdr->total_size = 0;  /* filled by bd_finalize */
     return BOOTDATA_BASE + sizeof(struct bootdata_hdr);
-}
-
-static inline void bd_add_memory(uint32_t *cursor, uint32_t base, uint32_t size) {
-    struct btag_memory *e = (struct btag_memory *)(*cursor);
-    e->hdr.type = BTAG_MEMORY;
-    e->hdr.size = sizeof(struct btag_memory);
-    e->base = base;
-    e->size = size;
-    *cursor += e->hdr.size;
 }
 
 /* Add a device entry. Returns the 0-based device index (position

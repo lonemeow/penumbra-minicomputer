@@ -26,6 +26,21 @@ int isdigit(int c) {
     return c >= '0' && c <= '9';
 }
 
+void *memcpy(void *dst, const void *src, unsigned long n) {
+    unsigned char *d = dst;
+    const unsigned char *s = src;
+    while (n--)
+        *d++ = *s++;
+    return dst;
+}
+
+void *memset(void *dst, int c, unsigned long n) {
+    unsigned char *d = dst;
+    while (n--)
+        *d++ = (unsigned char)c;
+    return dst;
+}
+
 static const char HEX_CHARS[] = "0123456789abcdef";
 
 char *utoa(unsigned int val, char *buf, int base) {

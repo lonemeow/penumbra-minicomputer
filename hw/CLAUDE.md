@@ -66,8 +66,11 @@ This file provides detailed hardware context for work under `hw/`. The root `CLA
   - `fat32.c`/`.h` — minimal read-only FAT32 reader
     (mount, root directory search, file read via cluster chain).
     Device-independent via `blk_read_fn` callback.
+  - `elf.h` — minimal ELF32 header definitions
+    (Ehdr, Phdr, constants) for PIE loading.
   - Monitor commands:
-    `boot sd:<dev>,<cs>` (mount FAT32, load `LOADER`, jump),
+    `boot sd:<dev>,<cs>` (mount FAT32, load `PENBOOT.ELF`
+    as PIE ELF, allocate RAM, copy PT_LOAD segments, jump),
     `x <addr> [len]` (hex dump),
     `load sd:<dev>,<cs>[:<part>] <addr> <lba> <count>`
     (SD read, raw or partition-relative LBA),

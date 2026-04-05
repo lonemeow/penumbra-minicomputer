@@ -9,6 +9,9 @@ int strncmp(const char *a, const char *b, unsigned long n);
 int isprint(int c);
 int isdigit(int c);
 
+void *memcpy(void *dst, const void *src, unsigned long n);
+void *memset(void *dst, int c, unsigned long n);
+
 /* Convert unsigned value to string in buf (must hold ≥12 chars for decimal,
  * ≥9 for hex).  base is 10 or 16.  Returns pointer into buf where the
  * number starts (digits are written right-to-left). */

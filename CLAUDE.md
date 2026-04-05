@@ -150,8 +150,12 @@ MIPS/68k-style vector dispatch.
   (raw absolute LBA without `:<part>`,
   or partition-relative LBA with it).
 - **ROM FAT32 boot:** `boot sd:<dev>,<cs>` mounts the first
-  FAT32 partition, loads `LOADER` from root directory into RAM
-  at `0x10000`, and jumps with R1=bootdata.
+  FAT32 partition, loads `PENBOOT.ELF` (PIE ELF) from root
+  directory. The ROM parses ELF headers, allocates RAM for
+  scratch and load destination via `find_memory_region()`
+  (walks boot data MEMORY devices, avoids reserved areas),
+  copies PT_LOAD segments, and jumps to the entry point
+  with R1=bootdata. No hardcoded load address.
   FAT32 reader (`fat32.c`) uses a block-read callback for
   device independence.
   Tested end-to-end with `nbmakefs`-generated images.
@@ -247,9 +251,9 @@ MIPS/68k-style vector dispatch.
 ## Next Steps (in priority order)
 1. **LLVM codegen hardening** — legalize remaining ops as they surface
    (G_SMAX/G_SMIN/G_UMAX/G_UMIN), migrate more patterns to TableGen
-2. **Boot loader** — ROM loads `LOADER` from FAT32;
-   next is the loader itself: ELF kernel loading, MMU enable,
-   bootinfo translation, jump to kernel.
+2. **Boot loader** — ROM loads `PENBOOT.ELF` (PIE) from FAT32;
+   next is the loader itself: CRT self-relocator, ELF kernel
+   loading, MMU enable, bootinfo translation, jump to kernel.
    See `doc/boot/boot-process.md`
 3. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick
 4. **Interrupt controller** — Multiple devices with priority encoding

@@ -18,7 +18,7 @@
 #   -o FILE         Output image path (required)
 #   -s SIZE_MB      Total image size in MB (default: 64, minimum ~34 for FAT32)
 #   -1 FILE         Binary to write into partition gap (rarely needed)
-#   -2 FILE         Boot loader, placed as LOADER on FAT32
+#   -2 FILE         Boot loader, placed as PENBOOT.ELF on FAT32
 #   -k FILE         Kernel image, placed as PENUMBRA on FAT32
 #   -e DIR          Extra directory: copy all contents onto FAT32 root
 #   -T TOOLDIR      NetBSD tools directory (default: auto-detect)
@@ -170,8 +170,8 @@ BOOTFSROOT="$BOOTIMGTMP/fsroot"
 mkdir $BOOTFSROOT
 
 if [ -n "$STAGE2" ]; then
-    log "Copying $STAGE2 -> LOADER"
-    cp "$STAGE2" "$BOOTFSROOT/LOADER"
+    log "Copying $STAGE2 -> PENBOOT.ELF"
+    cp "$STAGE2" "$BOOTFSROOT/PENBOOT.ELF"
 fi
 
 if [ -n "$KERNEL" ]; then

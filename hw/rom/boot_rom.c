@@ -10,6 +10,7 @@
 #include "console.h"
 #include "sdcard.h"
 #include "fat32.h"
+#include "elf.h"
 #include "util.h"
 #include "bootdata.h"
 #include "libc.h"
@@ -437,11 +438,154 @@ static int sd_blk_read(uint32_t lba, unsigned char *dst, void *ctx)
  *
  * Usage: boot sd:<dev>,<cs>
  *
- * Finds the first FAT32 partition, mounts it, loads LOADER from the
- * root directory into RAM, and jumps to it with R1 = boot data.
+ * Finds the first FAT32 partition, mounts it, loads LOADER (ELF PIE)
+ * from the root directory, copies PT_LOAD segments to a chosen RAM
+ * address, and jumps to the entry point with R1 = boot data.
+ *
+ * The LOADER is a PIE ELF that self-relocates at startup using a
+ * small CRT stub.  The ROM just needs to load segments and jump.
  */
-#define BOOT_FILENAME "LOADER"
-#define BOOT_LOAD_ADDR 0x00010000  /* 64 KB — above vectors/bootdata/stack */
+#define BOOT_FILENAME "PENBOOT.ELF"
+
+/*
+ * Validate an ELF32 header for Penumbra PIE.
+ * Returns 0 on success, prints an error and returns -1 on failure.
+ */
+static int elf_validate(const struct elf32_ehdr *ehdr) {
+    if (ehdr->e_ident[0] != ELFMAG0 || ehdr->e_ident[1] != ELFMAG1 ||
+        ehdr->e_ident[2] != ELFMAG2 || ehdr->e_ident[3] != ELFMAG3) {
+        console_puts("Not an ELF file\r\n");
+        return -1;
+    }
+    if (ehdr->e_ident[4] != ELFCLASS32 || ehdr->e_ident[5] != ELFDATA2LSB) {
+        console_puts("Not ELF32 little-endian\r\n");
+        return -1;
+    }
+    if (ehdr->e_machine != EM_PENUMBRA) {
+        console_printf("Wrong ELF machine: 0x%x\r\n",
+                        (unsigned int)ehdr->e_machine);
+        return -1;
+    }
+    if (ehdr->e_type != ET_DYN) {
+        console_puts("Not a PIE (ET_DYN) ELF\r\n");
+        return -1;
+    }
+    if (ehdr->e_phnum == 0) {
+        console_puts("No program headers\r\n");
+        return -1;
+    }
+    return 0;
+}
+
+/*
+ * Compute total memory footprint of PT_LOAD segments.
+ * Returns the span from lowest vaddr to highest vaddr+memsz.
+ * Also stores the lowest vaddr in *base_vaddr.
+ */
+static uint32_t elf_memsz(const unsigned char *file,
+                          const struct elf32_ehdr *ehdr,
+                          uint32_t *base_vaddr) {
+    uint32_t lo = 0xFFFFFFFF, hi = 0;
+    int i;
+    for (i = 0; i < ehdr->e_phnum; i++) {
+        const struct elf32_phdr *ph =
+            (const struct elf32_phdr *)(file + ehdr->e_phoff +
+                                        i * ehdr->e_phentsize);
+        if (ph->p_type != PT_LOAD)
+            continue;
+        if (ph->p_vaddr < lo)
+            lo = ph->p_vaddr;
+        if (ph->p_vaddr + ph->p_memsz > hi)
+            hi = ph->p_vaddr + ph->p_memsz;
+    }
+    *base_vaddr = lo;
+    return hi - lo;
+}
+
+/*
+ * Find a contiguous RAM region of at least `size` bytes that does not
+ * overlap any reserved region.  Walks ACFG_CLASS_MEMORY devices in
+ * the boot data.  Returns a page-aligned (4096) address, or 0 on
+ * failure.
+ *
+ * `reserved` is a NULL-terminated array of pointers to reserved
+ * regions (vectors/stack, scratch buffer, etc.).
+ */
+struct reserved_region {
+    uint32_t base;
+    uint32_t size;
+};
+
+static uint32_t find_memory_region(uint32_t size,
+                                   struct reserved_region **reserved) {
+    int i = 0;
+    while (1) {
+        struct btag_device *ram_dev =
+            bd_find_device_by_class(ACFG_CLASS_MEMORY, i);
+        if (!ram_dev)
+            return 0;
+
+        uint32_t cand_start = ram_dev->base;
+        uint32_t cand_end = cand_start + ram_dev->dev_size;
+
+        int j;
+        for (j = 0; reserved[j]; j++) {
+            uint32_t res_start = reserved[j]->base;
+            uint32_t res_end = res_start + reserved[j]->size;
+
+            if (res_start <= cand_start && res_end >= cand_end) {
+                /* Completely covered */
+                cand_start = cand_end;
+            } else if (res_start <= cand_start && res_end > cand_start) {
+                /* Overlaps at start */
+                cand_start = res_end;
+            } else if (res_start < cand_end && res_end >= cand_end) {
+                /* Overlaps at end */
+                cand_end = res_start;
+            } else if (res_start > cand_start && res_end < cand_end) {
+                /* Splits the block; take the larger side */
+                if ((res_start - cand_start) >= (cand_end - res_end))
+                    cand_end = res_start;
+                else
+                    cand_start = res_end;
+            }
+        }
+
+        /* Page-align the start */
+        cand_start = (cand_start + 0xFFF) & ~0xFFF;
+
+        if (cand_end > cand_start && (cand_end - cand_start) >= size)
+            return cand_start;
+
+        i++;
+    }
+}
+
+/*
+ * Load PT_LOAD segments from an ELF file buffer into memory at
+ * load_base.  Copies file data and zeroes .bss regions.
+ */
+static void elf_load_segments(const unsigned char *file,
+                              const struct elf32_ehdr *ehdr,
+                              uint32_t load_base,
+                              uint32_t base_vaddr) {
+    int i;
+    for (i = 0; i < ehdr->e_phnum; i++) {
+        const struct elf32_phdr *ph =
+            (const struct elf32_phdr *)(file + ehdr->e_phoff +
+                                        i * ehdr->e_phentsize);
+        if (ph->p_type != PT_LOAD)
+            continue;
+
+        uint32_t dst = load_base + (ph->p_vaddr - base_vaddr);
+        /* Copy file contents */
+        memcpy((void *)dst, file + ph->p_offset, ph->p_filesz);
+        /* Zero .bss (memsz > filesz) */
+        if (ph->p_memsz > ph->p_filesz)
+            memset((void *)(dst + ph->p_filesz), 0,
+                   ph->p_memsz - ph->p_filesz);
+    }
+}
 
 static void cmd_boot(const char *args) {
     const char *p = args;
@@ -518,9 +662,19 @@ static void cmd_boot(const char *args) {
     console_printf("Loading %s (%d bytes)\r\n", BOOT_FILENAME,
                     (int)file_size);
 
-    /* Load file into RAM */
-    unsigned char *load_addr = (unsigned char *)BOOT_LOAD_ADDR;
-    rc = fat32_read_file(&fs, file_cluster, load_addr, file_size);
+    /* Base reserved region: pages 0–1 (vectors, boot data, stack) */
+    struct reserved_region res_low = { 0x00000000, 4096 * 2 };
+    struct reserved_region *res_base[] = { &res_low, 0, 0, 0 };
+
+    /* Allocate scratch buffer for the raw ELF file */
+    uint32_t scratch_addr = find_memory_region(file_size, res_base);
+    if (scratch_addr == 0) {
+        console_puts("No RAM for scratch buffer\r\n");
+        goto out;
+    }
+
+    unsigned char *scratch = (unsigned char *)scratch_addr;
+    rc = fat32_read_file(&fs, file_cluster, scratch, file_size);
     if (rc != 0) {
         console_puts("Read error\r\n");
         goto out;
@@ -528,14 +682,40 @@ static void cmd_boot(const char *args) {
 
     sd_deinit(dev->base);
 
-    console_printf("Jumping to 0x%x\r\n", BOOT_LOAD_ADDR);
+    /* Parse and validate ELF */
+    const struct elf32_ehdr *ehdr = (const struct elf32_ehdr *)scratch;
+    if (elf_validate(ehdr) != 0)
+        return;
 
-    /* Jump to loaded binary with R1 = boot data pointer */
+    /* Compute memory footprint */
+    uint32_t base_vaddr;
+    uint32_t memsz = elf_memsz(scratch, ehdr, &base_vaddr);
+    console_printf("ELF: %d bytes in memory, vaddr base 0x%x\r\n",
+                    (int)memsz, base_vaddr);
+
+    /* Allocate load destination (scratch is now also reserved) */
+    struct reserved_region res_scratch = { scratch_addr, file_size };
+    res_base[1] = &res_scratch;
+    uint32_t load_base = find_memory_region(memsz, res_base);
+    if (load_base == 0) {
+        console_puts("No suitable RAM region for loader\r\n");
+        return;
+    }
+    console_printf("Loading at 0x%x\r\n", load_base);
+
+    /* Copy PT_LOAD segments to their final location */
+    elf_load_segments(scratch, ehdr, load_base, base_vaddr);
+
+    /* Entry point adjusted for actual load position */
+    uint32_t entry = load_base + (ehdr->e_entry - base_vaddr);
+    console_printf("Jumping to 0x%x\r\n", entry);
+
+    /* Jump with R1 = boot data pointer */
     uint32_t bd = BOOTDATA_BASE;
     asm volatile(
         "mov r1, %0\n\t"
         "jmp %1"
-        : : "r"(bd), "r"((uint32_t)BOOT_LOAD_ADDR)
+        : : "r"(bd), "r"(entry)
         : "r1"
     );
     __builtin_unreachable();
@@ -594,7 +774,8 @@ int main(void) {
     long npages = detect_ram();
     long ram_kb = npages * 4096 / 1024;
     console_printf("%dkB found\r\n", (int)ram_kb);
-    bd_add_memory(&bd_cursor, 0x00000000, (uint32_t)(npages * 4096));
+    bd_add_device(&bd_cursor, ACFG_CLASS_MEMORY, 0x00000000,
+                  (uint32_t)(npages * 4096), 0, "RAM");
 
     /* ── Inject built-in UART as a device ──────────────────────── */
     int uart_dev = bd_add_device(&bd_cursor, ACFG_CLASS_UART,
