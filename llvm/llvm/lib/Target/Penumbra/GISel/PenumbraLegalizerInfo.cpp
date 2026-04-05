@@ -45,7 +45,8 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   // doesn't handle well at -O0. A future peephole pass can fuse
   // ADD+compare+ADC chains into ADD+ADC.
   getActionDefinitionsBuilder({G_UADDO, G_USUBO, G_UADDE, G_USUBE})
-      .lowerFor({{s32, s1}});
+      .lowerFor({{s32, s1}})
+      .narrowScalarIf(typeIs(0, s64), changeTo(0, s32));
 
   getActionDefinitionsBuilder(G_CONSTANT)
       .legalFor({s32, p0})
@@ -148,6 +149,16 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   // Truncation: no-op at the register level (just use the low bits).
   getActionDefinitionsBuilder(G_TRUNC)
       .legalFor({{s1, s32}, {s8, s32}, {s16, s32}});
+
+  // Funnel shifts: used by compiler-rt __udivsi3 and other soft-div code.
+  // Lower to (a << sh) | (b >> (32 - sh)) for G_FSHL, reversed for G_FSHR.
+  getActionDefinitionsBuilder({G_FSHL, G_FSHR})
+      .lowerFor({s32, s64});
+
+  // Byte swap: used by SHA1, networking, etc. Lower to shift/mask/OR.
+  // Bitreverse: similar, lower to shift/mask sequence.
+  getActionDefinitionsBuilder({G_BSWAP, G_BITREVERSE})
+      .lowerFor({s32, s64});
 
   // G_ABS: the optimizer generates this at -O1+ for signed division.
   // Lower to the generic SELECT expansion (icmp + negate + select).

@@ -219,7 +219,9 @@ Triple mapping for `Triple::penumbra` in `InputFiles.cpp`.
   to shifts/logic, libcall fallback).
   G_SDIV/G_SREM libcall s32+s64. s64 all via libcalls.
 - **Lowered:** G_ABS, G_CTTZ/G_CTLZ/G_CTPOP
-  (and \_ZERO\_UNDEF variants) to shift/logic.
+  (and \_ZERO\_UNDEF variants) to shift/logic,
+  G_FSHL/G_FSHR (s32+s64), G_BSWAP/G_BITREVERSE (s32+s64),
+  G_UADDO/G_USUBO/G_UADDE/G_USUBE (s64 narrowed to s32).
 - **Libcall:** G_MEMCPY/G_MEMMOVE/G_MEMSET.
 - **Custom:** G_VASTART, G_MUL, G_UDIV, G_UREM
   (via legalizeCustom() override). G_VAARG lowered.
