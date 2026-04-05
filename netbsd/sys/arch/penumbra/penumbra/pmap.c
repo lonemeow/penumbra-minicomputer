@@ -33,6 +33,7 @@ __KERNEL_RCSID(0, "$NetBSD$");
 
 /* Kernel pmap */
 struct pmap kernel_pmap_store;
+struct pmap *const kernel_pmap_ptr = &kernel_pmap_store;
 
 /* Virtual address range available for kernel VM allocation */
 static vaddr_t virtual_avail;

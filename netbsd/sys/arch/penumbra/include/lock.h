@@ -6,12 +6,13 @@
 /*
  * Machine-dependent spin lock primitives.
  *
+ * __cpu_simple_lock_t is typedef'd in <sys/types.h> as:
+ *   typedef volatile __cpu_simple_lock_nv_t __cpu_simple_lock_t;
+ *
  * Penumbra is uniprocessor (no SMP), so simple locks can be
  * implemented by disabling interrupts.  When SMP is added,
  * these will need atomic (LL/SC or CAS) implementations.
  */
-
-typedef __cpu_simple_lock_nv_t __cpu_simple_lock_t;
 
 #ifdef _KERNEL
 

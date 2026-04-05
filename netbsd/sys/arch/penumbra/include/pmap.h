@@ -55,10 +55,9 @@ struct pmap {
 	int		pm_stats_wired;
 };
 
-typedef struct pmap *pmap_t;
+/* pmap_t and pmap_kernel() are defined by <uvm/uvm_pmap.h> */
 
 extern struct pmap kernel_pmap_store;
-#define pmap_kernel()		(&kernel_pmap_store)
 #define pmap_resident_count(pm)	((pm)->pm_stats_resident)
 #define pmap_wired_count(pm)	((pm)->pm_stats_wired)
 
