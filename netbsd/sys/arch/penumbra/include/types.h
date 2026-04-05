@@ -34,7 +34,7 @@ typedef vsize_t		vm_size_t;
 typedef __register_t	register_t;
 
 typedef struct label_t {
-	register_t val[12];	/* callee-saved R5-R10, R12(TP), R13(LR), R14(SP), R15(PC), SR, filler */
+	register_t val[9];	/* callee-saved R5-R10, R12(TP), R13(LR), R14(SP) */
 } label_t;
 
 #endif /* _KERNEL || _KMEMUSER || _KERNTYPES || _STANDALONE */

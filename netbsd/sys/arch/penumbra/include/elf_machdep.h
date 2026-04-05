@@ -15,6 +15,7 @@
 			break;
 
 #define ELF32_MACHDEP_ID	EM_PENUMBRA
+#define ELF32_MACHDEP_ENDIANNESS	ELFDATA2LSB
 
 /* Penumbra relocations (matches LLVM ELFRelocs/Penumbra.def) */
 #define R_PENUMBRA_NONE			0

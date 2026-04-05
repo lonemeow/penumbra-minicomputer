@@ -55,6 +55,10 @@
 
 #define MAXPHYS		(64 * 1024)
 
+/* Microsecond delay — stub, busy-loops for now */
+void	delay(unsigned int);
+#define	DELAY(n)	delay(n)
+
 /*
  * Minimum and maximum sizes of the kernel malloc arena in PAGE_SIZE-sized
  * logical pages.

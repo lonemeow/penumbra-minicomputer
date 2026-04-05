@@ -36,6 +36,7 @@
 
 /* User virtual address range */
 #define VM_MIN_ADDRESS		((vaddr_t) 0x00001000)
+#define VM_MAX_ADDRESS		((vaddr_t) 0xFFFFFFFF)
 #define VM_MAXUSER_ADDRESS	((vaddr_t) 0x80000000)
 
 /* Kernel virtual address range */

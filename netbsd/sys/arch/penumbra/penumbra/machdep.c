@@ -24,6 +24,10 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <machine/vmparam.h>
 #include <machine/pmap.h>
 
+/* Forward declarations */
+void	penumbra_init(void);
+int	main(void);
+
 /* Bootinfo pointer, saved by locore.S _start */
 uint32_t penumbra_bootinfo;
 
@@ -85,9 +89,7 @@ cpu_startup(void)
 	printf("%s%s", copyright, version);
 	printf("Penumbra minicomputer, 32-bit RISC\n");
 
-	/* Allocate a submap for physio */
-	phys_map = uvm_km_suballoc(kernel_map, &phys_map_min, &phys_map_max,
-	    VM_PHYS_SIZE, 0, false, NULL);
+	/* TODO: allocate physio submap via uvm_km_suballoc */
 }
 
 /*
@@ -167,4 +169,16 @@ void
 cpu_dumpconf(void)
 {
 	/* no dump support yet */
+}
+
+/*
+ * Microsecond delay — busy-loop stub.
+ * TODO: calibrate against a timer.
+ */
+void
+delay(unsigned int us)
+{
+	volatile unsigned int i;
+	for (i = 0; i < us * 10; i++)
+		;
 }

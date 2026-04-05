@@ -31,6 +31,9 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <machine/vmparam.h>
 #include <machine/psl.h>
 
+/* Linker-defined end of kernel BSS */
+extern char _end[];
+
 /* Kernel pmap */
 struct pmap kernel_pmap_store;
 struct pmap *const kernel_pmap_ptr = &kernel_pmap_store;

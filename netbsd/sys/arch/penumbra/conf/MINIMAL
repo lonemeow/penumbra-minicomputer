@@ -13,7 +13,7 @@ maxusers	2
 makeoptions	COPTS="-O0"
 
 # Kernel options
-options		DDB			# kernel debugger
+#options	DDB			# kernel debugger (needs MD hooks)
 
 # File systems (minimal set)
 file-system	FFS			# Berkeley Fast File System

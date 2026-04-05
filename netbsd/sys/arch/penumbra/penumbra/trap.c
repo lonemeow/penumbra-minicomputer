@@ -33,6 +33,9 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #define EXC_SYSCALL	6
 #define EXC_ILLEGAL	7
 
+/* Forward declaration */
+void	trap(struct trapframe *);
+
 /*
  * trap: main exception dispatch.
  * Called from locore.S exception stubs with trapframe pointer.
