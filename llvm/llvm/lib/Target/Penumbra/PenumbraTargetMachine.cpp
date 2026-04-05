@@ -29,10 +29,11 @@ class PenumbraTargetObjectFile : public TargetLoweringObjectFileELF {
 public:
   bool shouldPutJumpTableInFunctionSection(bool UsesLabelDifference,
                                            const Function &F) const override {
-    if (UsesLabelDifference)
-      return true;
-    return TargetLoweringObjectFileELF::shouldPutJumpTableInFunctionSection(
-        UsesLabelDifference, F);
+    // Always inline JT in .text so label-difference entries can be
+    // resolved by the assembler within one section.  We emit label
+    // differences from emitJumpTableEntry regardless of the MIR
+    // encoding, so the JT must always be in the function section.
+    return true;
   }
 };
 } // namespace

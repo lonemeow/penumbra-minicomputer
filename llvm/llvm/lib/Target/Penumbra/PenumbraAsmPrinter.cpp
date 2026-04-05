@@ -10,6 +10,9 @@
 #include "TargetInfo/PenumbraTargetInfo.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/MachineInstr.h"
+#include "llvm/CodeGen/MachineJumpTableInfo.h"
+#include "llvm/CodeGen/TargetLowering.h"
+#include "llvm/IR/DataLayout.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCStreamer.h"
@@ -34,6 +37,9 @@ public:
   }
 
   void emitInstruction(const MachineInstr *MI) override;
+  void emitJumpTableEntry(const MachineJumpTableInfo &MJTI,
+                          const MachineBasicBlock *MBB,
+                          unsigned uid) const override;
 
   bool PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
                        const char *ExtraCode, raw_ostream &OS) override;
@@ -185,6 +191,20 @@ bool PenumbraAsmPrinter::PrintAsmMemoryOperand(const MachineInstr *MI,
 
   OS << "[" << PenumbraInstPrinter::getRegisterName(MO.getReg()) << "]";
   return false;
+}
+
+void PenumbraAsmPrinter::emitJumpTableEntry(const MachineJumpTableInfo &MJTI,
+                                            const MachineBasicBlock *MBB,
+                                            unsigned uid) const {
+  // Always emit label-difference entries (.word target - JT_base),
+  // regardless of the MachineJumpTableInfo encoding.  This avoids
+  // dynamic relocations in PIE and matches the BRJT instruction
+  // selection which always adds the base back.
+  const MCExpr *Value = MCSymbolRefExpr::create(MBB->getSymbol(), OutContext);
+  const TargetLowering *TLI = MF->getSubtarget().getTargetLowering();
+  const MCExpr *Base = TLI->getPICJumpTableRelocBaseExpr(MF, uid, OutContext);
+  Value = MCBinaryExpr::createSub(Value, Base, OutContext);
+  OutStreamer->emitValue(Value, getDataLayout().getPointerSize());
 }
 
 extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void

@@ -717,36 +717,41 @@ bool PenumbraInstructionSelector::selectBrJT(MachineInstr &I,
 
   // tmp = index << 2 (word-sized entries)
   Register ShiftReg = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
-  BuildMI(MBB, I, DL, TII.get(Penumbra::SHLi))
+  auto SHLInst = BuildMI(MBB, I, DL, TII.get(Penumbra::SHLi))
       .addDef(ShiftReg)
       .addReg(IdxReg)
       .addImm(2);
+  constrainSelectedInstRegOperands(*SHLInst, TII, TRI, RBI);
 
   // tmp = tmp + base
   Register AddrReg = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
-  BuildMI(MBB, I, DL, TII.get(Penumbra::ADD))
+  auto AddInst = BuildMI(MBB, I, DL, TII.get(Penumbra::ADD))
       .addDef(AddrReg)
       .addReg(ShiftReg)
       .addReg(BaseReg);
+  constrainSelectedInstRegOperands(*AddInst, TII, TRI, RBI);
 
   // entry = [tmp + 0]
   Register EntryReg = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
-  BuildMI(MBB, I, DL, TII.get(Penumbra::LDW))
+  auto LDWInst = BuildMI(MBB, I, DL, TII.get(Penumbra::LDW))
       .addDef(EntryReg)
       .addReg(AddrReg)
       .addImm(0);
+  constrainSelectedInstRegOperands(*LDWInst, TII, TRI, RBI);
 
   // Entry is a label difference (target - JT_base).
   // Add JT base back to get the absolute target.
   Register TargetReg = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
-  BuildMI(MBB, I, DL, TII.get(Penumbra::ADD))
+  auto AddBackInst = BuildMI(MBB, I, DL, TII.get(Penumbra::ADD))
       .addDef(TargetReg)
       .addReg(EntryReg)
       .addReg(BaseReg);
+  constrainSelectedInstRegOperands(*AddBackInst, TII, TRI, RBI);
 
   // Indirect branch (not a return — targets are within this function)
-  BuildMI(MBB, I, DL, TII.get(Penumbra::BRIND))
+  auto BRInst = BuildMI(MBB, I, DL, TII.get(Penumbra::BRIND))
       .addReg(TargetReg);
+  constrainSelectedInstRegOperands(*BRInst, TII, TRI, RBI);
 
   I.eraseFromParent();
   return true;
