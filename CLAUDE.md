@@ -34,7 +34,8 @@ The architecture is fully specified in `doc/`. Key specs:
   custom async Penumbra Bus (4-phase handshake), sync internal bus,
   sysreg sideband
 - **MMU/Cache:** `doc/mmu/mmu-overview.md` —
-  software-managed 64-entry 2-way SA TLB, split I/D PIPT cache,
+  software-managed 64-entry 2-way SA TLB + 4-entry FA pinned TLB,
+  split I/D PIPT cache,
   write-through D-cache
 - **Sysregs:** `doc/isa/sysregs-reference.md` —
   WRSYS/RDSYS device map, register layouts, TLB packing
@@ -283,7 +284,7 @@ MIPS/68k-style vector dispatch.
   Fast instruction-level simulator for software development.
   Single C++ file, no dependencies beyond g++.
   Covers full ISA (all 4 formats), 8 exception types,
-  software-managed TLB (64-entry 2-way SA), privilege modes
+  software-managed TLB (64-entry 2-way SA + 4-entry FA pinned), privilege modes
   with SP banking, 16450 UART, SPI+SD card emulation,
   and bus autoconfig. Passes all 38 hardware test programs.
   Build: `make -C sw/sim` (or built automatically by `make simulate`).

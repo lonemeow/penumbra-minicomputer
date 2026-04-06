@@ -14,7 +14,8 @@ This means:
 | Property | Value |
 |----------|-------|
 | Page size | 4 KB (12-bit offset) |
-| TLB slots | 64 (0–63); each virtual page maps to exactly 2 candidate slots |
+| Main TLB | 64 slots (0–63), 2-way set-associative; each virtual page maps to exactly 2 candidate slots |
+| Pinned TLB | 4 slots, fully associative; checked in parallel, pinned hit wins |
 | TLB entry width | Two 32-bit sysreg words: TLB_VPN and TLB_PTE |
 | Exception vectors | VEC_TLB_MISS=2 (0x08), VEC_TLB_PROT=3 (0x0C) — separate vectors, also distinguished by FAULT_STATUS |
 | Sysreg device ID | 0 |
@@ -33,7 +34,7 @@ Accessed via `WRSYS`/`RDSYS` with device ID 0.
 | 2 | FAULT_STATUS | R | Fault reason and access info (latched by hardware on fault) |
 | 3 | TLB_VPN | R/W | TLB entry upper word: VPN + ASID |
 | 4 | TLB_PTE | R/W | TLB entry lower word: PPN + flags. **Write commits entry to TLB.** |
-| 5 | TLB_INDEX | R/W | Target TLB slot for reads/writes |
+| 5 | TLB_INDEX | R/W | TLB slot selector; **bit 6 selects pinned TLB** |
 | 6–15 | — | — | Reserved |
 
 ### MMUCR Layout
@@ -94,7 +95,7 @@ the programmer constructs and the layouts that matter for OS code.
 | VPN | TLB_VPN | 27:8 | — | Virtual page number. Matched against `vaddr[31:12]`. |
 | ASID | TLB_VPN | 7:0 | — | Address space ID. Matched against MMUCR.ASID (unless G=1). |
 | PPN | TLB_PTE | 31:12 | — | Physical page number. Combined with page offset for physical address. |
-| SW | TLB_PTE | 11:8 | — | Software-defined (4 bits). Hardware stores but never reads. Use for dirty tracking, LRU, pinning. |
+| SW | TLB_PTE | 11:8 | — | Software-defined (4 bits). Hardware stores but never reads. Use for dirty tracking, LRU, age. |
 | G | TLB_PTE | 7 | 0x80 | Global — skip ASID match. Use for kernel pages shared across all address spaces. |
 | U | TLB_PTE | 6 | 0x40 | User-accessible. 0 = supervisor only. Supervisor always bypasses this check. |
 | X | TLB_PTE | 5 | 0x20 | Execute permission. Checked on instruction fetches. |
@@ -118,9 +119,9 @@ If any check fails: protection fault (vector 4, FAULT_STATUS.TYPE = `0010`).
 
 ## TLB Operations
 
-### TLB_INDEX
+### TLB_INDEX (Main TLB)
 
-The TLB has 64 slots, numbered 0–63. TLB_INDEX selects which slot to
+The main TLB has 64 slots, numbered 0–63. TLB_INDEX selects which slot to
 read or write:
 
 ```
@@ -182,6 +183,16 @@ RDSYS R5, #0, #4        ; R5 = way1 PTE
 ```
 
 Check V bit (bit 0 of TLB_PTE) to determine which slots are occupied. Use SW bits for replacement policy decisions.
+
+### Pinned TLB
+
+The pinned TLB is a 4-entry fully-associative structure checked in parallel with the main TLB. A pinned hit takes priority over any main TLB match for the same virtual address.
+
+Use the pinned TLB for entries that must never cause TLB misses: the TLB miss handler code page, the page global directory, and optionally the kernel stack. No set constraint applies — any virtual page can go in any pinned slot.
+
+Accessed via the same TLB_INDEX/TLB_VPN/TLB_PTE sysregs as the main TLB. Setting **bit 6** of TLB_INDEX selects the pinned TLB; bits 1:0 select the slot (0–3). The same 3-write protocol applies.
+
+On context switch, update the PGD pinned entry (3 WRSYS writes: TLB_INDEX with bit 6 set, TLB_VPN, TLB_PTE).
 
 ### Invalidating Entries
 
@@ -274,16 +285,15 @@ ERET
 
 ### Handler Safety — Pinning
 
-The TLB miss handler must not cause recursive TLB misses. Pin these pages using SW bits and never replace them:
+The TLB miss handler must not cause recursive TLB misses. Critical entries are placed in the **hardware pinned TLB** (4-entry fully-associative), which is separate from the main TLB and never subject to replacement:
 
-| Pinned page | Purpose | Entries |
-|-------------|---------|---------|
-| Vector page (0x00000000) | Handler code, scratch save area, PD base pointer | 1 |
-| Page directory | First-level page table walk | 1 |
-| Kernel page table pages | Second-level walk for kernel space | 2–3 |
-| **Total** | | **4–5 of 64** |
+| Pinned slot | Maps | Purpose |
+|-------------|------|---------|
+| 0 | Vector/handler page (VA 0) | TLB miss handler code, scratch save area, PD base pointer |
+| 1 | Page global directory | First-level page table walk (updated on context switch) |
+| 2–3 | Reserved | Kernel stack or future use |
 
-Since replacement is fully software-controlled, "pinning" is just a convention: the handler checks SW bits and never evicts entries where the pin bit is set.
+Pinned entries do not consume main TLB slots. The full 64-entry main TLB is available for demand-loaded user and kernel mappings.
 
 ---
 
@@ -306,9 +316,9 @@ When switching between processes:
 
 ### Without ASID (initial implementation)
 1. Save outgoing process state (registers, PC, SR)
-2. Flush all TLB entries (software loop, ~320 instructions)
+2. Flush all main TLB entries (software loop, ~320 instructions)
 3. Load new process's page directory base pointer to the fixed location (0x50)
-4. Re-pin handler/kernel entries for the new address space
+4. Update pinned TLB slot 1 (PGD) to point to new process's page directory
 5. Restore incoming process state
 6. `ERET` — first few instructions will TLB miss and be loaded on demand
 
@@ -333,7 +343,7 @@ The hardware has no knowledge of in-memory page tables. The OS is free to use an
 └──────────────┴──────┴─┴─┴─┴─┴─┴─┴─┴─┘
 ```
 
-If the in-memory PTE uses this layout, the miss handler can load it directly into TLB_PTE with no translation — a single `LDW` + `WRSYS` pair. The SW bits can carry OS metadata (pinned, dirty, age) that gets copied into the TLB entry.
+If the in-memory PTE uses this layout, the miss handler can load it directly into TLB_PTE with no translation — a single `LDW` + `WRSYS` pair. The SW bits can carry OS metadata (dirty, referenced, wired, age) that gets copied into the TLB entry.
 
 ### Two-Level Page Table (Recommended)
 
@@ -364,10 +374,9 @@ Recommended boot procedure:
 4. Set up interrupt vector table at `0x0000_0000` (including TLB miss handler)
 5. Set up scratch save area at `0x0000_0040` and PD base at `0x0000_0050`
 6. Build initial page tables in SDRAM
-7. Load initial TLB entries: pin vector page, PD, kernel PT pages (G=1, pin bit in SW)
-8. **Identity-map the boot code page** (see below)
-9. Set M=1 via `WRSYS` to enable TLB translation
-10. Jump to kernel entry point — now running with virtual addressing
+7. Load pinned TLB entries via PIN_INDEX/PIN_VPN/PIN_PTE: handler page, PGD (G=1)
+8. Set M=1 via `WRSYS` to enable TLB translation — the TLB miss handler resolves the first fetch
+9. Jump to kernel virtual entry point — TLB miss handler loads entries on demand
 
 ### Enabling the MMU safely
 
@@ -375,39 +384,44 @@ Recommended boot procedure:
 
 When `WRSYS` sets MMUCR.M=1, the next instruction fetch goes through the TLB. If that fetch address has no TLB entry, the CPU takes a TLB miss exception — but the exception handler itself needs TLB entries to run, creating an unrecoverable fault.
 
-The safe pattern is **identity-map before enable**: ensure the page containing the code that enables the MMU has a TLB entry where virtual address = physical address. When M transitions from 0 to 1, the first translated fetch returns the same physical address that bypass mode would have, so execution continues seamlessly.
+There are two safe patterns:
+
+**Pattern A: Identity-map before enable.** Ensure the page containing the code that enables the MMU has a TLB entry where VA = PA. The first translated fetch returns the same physical address.
+
+**Pattern B: Rely on the TLB miss handler.** If the pinned TLB contains the miss handler page and PGD, the first fetch after M=1 will TLB miss, the handler will resolve it from the page directory, and execution resumes. This avoids needing an identity map but requires the handler and PGD to be set up first.
 
 ```asm
-; Boot code running at physical address 0x0000_0xxx (M=0)
+; Boot code running at physical address (M=0)
 
-; Step 1: Identity-map the page containing this code
-;         VPN = 0x00000 (page 0), PPN = 0x00000, V=1, R=1, X=1, G=1
-LLI   R1, #0
-WRSYS R1, #0, #5           ; TLB_INDEX = {way=0, set=0}
-LLI   R2, #0               ; TLB_VPN = {VPN=0, ASID=0}
-WRSYS R2, #0, #3
-LLI   R3, #0xA9            ; TLB_PTE = {PPN=0, flags: V=1, X=1, R=1, G=1}
-WRSYS R3, #0, #4           ; entry committed
+; Step 1: Pin handler page and PGD in pinned TLB
+LLI   R1, #0x40            ; TLB_INDEX: bit 6 = pinned, slot 0
+WRSYS R1, #0, #5
+LLI   R1, #0               ; TLB_VPN = {VPN=0, ASID=0}
+WRSYS R1, #0, #3
+LLI   R2, #0xBD            ; V|C|R|W|X|G
+WRSYS R2, #0, #4           ; TLB_PTE — handler page committed to pinned slot 0
 
-; Step 2: Also identity-map the vector/handler page (if different),
-;         kernel page directory, kernel PT pages — all pinned
+; ... pin PGD in slot 1 ...
 
-; Step 3: Enable MMU
-LLI   R10, #0x0501         ; MMUCR: M=1, ASID=5
-WRSYS R10, #0, #0          ; ← M goes high on the next clock edge
+; Step 2: Write handler address to vector table at physical 0x08
+; Step 3: Build page directory with kernel mappings
 
-; Next instruction fetch is now TLB-translated, but identity map
-; ensures the physical address is the same. Execution continues.
+; Step 4: Enable MMU
+LLI   R10, #0x0001         ; MMUCR: M=1, ASID=0
+WRSYS R10, #0, #0          ; ← M goes high; next fetch TLB misses
 
-; Step 4: Jump to kernel virtual address
-LLI   R11, kernel_entry
+; TLB miss handler fires, resolves the fetch from PGD,
+; installs main TLB entry, returns. Execution continues.
+
+; Step 5: Jump to kernel virtual address
+LA    R11, kernel_entry
 JMP   R11
 ```
 
 **Rules for MMU enable:**
-1. The page containing the `WRSYS` that sets M=1 **must** be identity-mapped in the TLB before the write
-2. The vector page (0x00000000) and TLB miss handler code **must** have valid, pinned TLB entries before M=1
-3. The instruction immediately after the `WRSYS` must be on the same identity-mapped page (don't let the enable instruction be the last word of a page)
+1. The TLB miss handler code page **must** be in the pinned TLB (or identity-mapped in the main TLB) before M=1
+2. The page directory must be accessible to the handler (pinned, or in the same pinned page)
+3. If using pattern A (identity map), the `WRSYS` and the next instruction must be on the same identity-mapped page
 
 ### WRSYS as a serializing instruction
 
@@ -474,16 +488,35 @@ I-cache and D-cache instances. Split I/D, both direct-mapped PIPT:
 
 ### TLB Hardware
 
-The TLB is a pure lookup table — no state machines, no replacement FSM:
+Two parallel lookup structures, combined with pinned-hit-wins priority:
+
+**Main TLB (64-entry, 2-way set-associative):**
 1. **Storage:** 64 × 64-bit register file, addressed by {way, set}
 2. **Lookup:** Parallel 20-bit VPN + 8-bit ASID comparators on both ways, gated by V and G
 3. **Permission check:** One-hot access type AND with {X,W,R}, plus U check for user mode — single gate level
 4. **Sysreg access:** Indexed read/write via TLB_INDEX addressing
 
+**Pinned TLB (4-entry, fully associative):**
+1. **Storage:** 4 × 64-bit register file
+2. **Lookup:** 4-wide parallel VPN + ASID comparators (all entries checked simultaneously)
+3. **Permission check:** Same logic as main TLB
+4. **Priority:** Pinned hit masks main TLB result
+5. **Sysreg access:** Indexed read/write via PIN_INDEX addressing
+
 ### Discrete 74xx Feasibility
 
+**Main TLB:**
 - TLB storage: eight 64×8-bit SRAMs (byte-aligned 64-bit entries)
 - VPN comparison: three 74HC688 (8-bit comparator) per way × 2 ways = 6 ICs
 - ASID comparison: one 74HC688 per way = 2 ICs
 - Permission check: one 74HC08 (AND) + one 74HC32 (OR)
-- Total: ~20 ICs for the complete TLB
+- Subtotal: ~20 ICs
+
+**Pinned TLB:**
+- Storage: 4 × 8 bytes = 32 bytes in latches or small SRAM
+- VPN comparison: three 74HC688 per entry × 4 entries = 12 ICs
+- ASID/G logic: ~4 ICs
+- Priority mux: ~2 ICs
+- Subtotal: ~20 ICs
+
+**Total: ~40 ICs for the complete TLB subsystem**

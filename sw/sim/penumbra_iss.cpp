@@ -285,13 +285,20 @@ static struct {
     uint32_t pte[64];   // {PPN[19:0], SW[3:0], flags[7:0]}
 } tlb;
 
+// --- Pinned TLB (4 entries, fully associative) ---
+static constexpr int PTLB_ENTRIES = 4;
+static struct {
+    uint32_t vpn[PTLB_ENTRIES];
+    uint32_t pte[PTLB_ENTRIES];
+} ptlb;
+
 // --- MMU state ---
 static struct {
     uint32_t cr;          // [0]=M enable, [15:8]=ASID
     uint32_t fault_addr;
     uint32_t fault_status;
-    uint32_t tlb_idx;     // [5]=way, [4:0]=set
-    uint32_t tlb_vpn_reg; // Staging register
+    uint32_t tlb_idx;     // [6]=pinned, [5]=way, [4:0]=set (or [1:0]=pin slot)
+    uint32_t tlb_vpn_reg; // Shared staging register
     bool     enabled() const { return cr & 1; }
     uint8_t  asid()    const { return (cr >> 8) & 0xFF; }
 } mmu;
@@ -369,7 +376,6 @@ static bool tlb_lookup(uint32_t vaddr, uint8_t asid, uint8_t access,
                        bool user_mode, uint32_t& paddr, bool& cacheable,
                        bool& fault) {
     uint32_t va_vpn = vaddr >> 12;
-    int set = va_vpn & 0x1F;
 
     // Build access permission mask from one-hot access type:
     //   access bit 0 (read)  → TLB_R
@@ -381,6 +387,26 @@ static bool tlb_lookup(uint32_t vaddr, uint8_t asid, uint8_t access,
     if (access & 4) need_mask |= TLB_X;
     if (user_mode)  need_mask |= TLB_U;
 
+    // Check pinned TLB first (fully associative, priority over main)
+    for (int i = 0; i < PTLB_ENTRIES; i++) {
+        uint32_t pte_word = ptlb.pte[i];
+        if (!(pte_word & TLB_V)) continue;
+
+        uint32_t entry_vpn  = TLB_VPN_GET_VPN(ptlb.vpn[i]);
+        uint8_t  entry_asid = TLB_VPN_GET_ASID(ptlb.vpn[i]);
+        bool     global     = pte_word & TLB_G;
+
+        if (entry_vpn != va_vpn) continue;
+        if (!global && entry_asid != asid) continue;
+
+        fault = (pte_word & need_mask) != need_mask;
+        paddr = (TLB_PTE_GET_PPN(pte_word) << 12) | (vaddr & 0xFFF);
+        cacheable = pte_word & TLB_C;
+        return true;
+    }
+
+    // Fall through to main TLB (set-associative)
+    int set = va_vpn & 0x1F;
     for (int way = 0; way < 2; way++) {
         int idx = way * 32 + set;
         uint32_t vpn_word = tlb.vpn[idx];
@@ -395,7 +421,6 @@ static bool tlb_lookup(uint32_t vaddr, uint8_t asid, uint8_t access,
         if (entry_vpn != va_vpn) continue;
         if (!global && entry_asid != asid) continue;
 
-        // Hit — check permissions
         fault = (pte_word & need_mask) != need_mask;
         paddr = (TLB_PTE_GET_PPN(pte_word) << 12) | (vaddr & 0xFFF);
         cacheable = pte_word & TLB_C;
@@ -618,12 +643,20 @@ static uint32_t sysreg_read(int dev, int reg) {
             case MMU_FADDR: return mmu.fault_addr;
             case MMU_FSTAT: return mmu.fault_status;
             case MMU_TLB_VPN: {
-                int idx = (mmu.tlb_idx & 0x20 ? 32 : 0) + (mmu.tlb_idx & 0x1F);
-                return tlb.vpn[idx];
+                if (mmu.tlb_idx & 0x40) {
+                    return ptlb.vpn[mmu.tlb_idx & (PTLB_ENTRIES - 1)];
+                } else {
+                    int idx = (mmu.tlb_idx & 0x20 ? 32 : 0) + (mmu.tlb_idx & 0x1F);
+                    return tlb.vpn[idx];
+                }
             }
             case MMU_TLB_PTE: {
-                int idx = (mmu.tlb_idx & 0x20 ? 32 : 0) + (mmu.tlb_idx & 0x1F);
-                return tlb.pte[idx];
+                if (mmu.tlb_idx & 0x40) {
+                    return ptlb.pte[mmu.tlb_idx & (PTLB_ENTRIES - 1)];
+                } else {
+                    int idx = (mmu.tlb_idx & 0x20 ? 32 : 0) + (mmu.tlb_idx & 0x1F);
+                    return tlb.pte[idx];
+                }
             }
             case MMU_TLB_IDX: return mmu.tlb_idx;
             default: return 0;
@@ -645,10 +678,16 @@ static void sysreg_write(int dev, int reg, uint32_t val) {
             case MMU_TLB_IDX: mmu.tlb_idx = val; break;
             case MMU_TLB_VPN: mmu.tlb_vpn_reg = val; break;
             case MMU_TLB_PTE: {
-                // Writing PTE commits both VPN and PTE to TLB
-                int idx = (mmu.tlb_idx & 0x20 ? 32 : 0) + (mmu.tlb_idx & 0x1F);
-                tlb.vpn[idx] = mmu.tlb_vpn_reg;
-                tlb.pte[idx] = val;
+                // Writing PTE commits VPN + PTE; TLB_INDEX[6] selects target
+                if (mmu.tlb_idx & 0x40) {
+                    int i = mmu.tlb_idx & (PTLB_ENTRIES - 1);
+                    ptlb.vpn[i] = mmu.tlb_vpn_reg;
+                    ptlb.pte[i] = val;
+                } else {
+                    int idx = (mmu.tlb_idx & 0x20 ? 32 : 0) + (mmu.tlb_idx & 0x1F);
+                    tlb.vpn[idx] = mmu.tlb_vpn_reg;
+                    tlb.pte[idx] = val;
+                }
                 break;
             }
         }

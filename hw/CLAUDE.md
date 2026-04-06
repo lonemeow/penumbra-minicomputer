@@ -33,8 +33,10 @@ This file provides detailed hardware context for work under `hw/`. The root `CLA
 | Boot ROM | `rtl/soc/boot_rom.sv` | via machine_sim | Read-only memory (64 KB default), loads program.hex |
 | Shared package | `rtl/core/penumbra_pkg.sv` | — | REG\_\*, ALU\_\*, COND\_\*, SR\_\*, VEC\_\*, FAULT\_\*, SYSDEV\_\*, SYSREG\_\*, CACHE\_TYPE\_\*, UART\_\*, SPR\_\*, ACFG\_\* and base address constants |
 | System ID | `rtl/soc/sysid.sv` | via machine_sim | Read-only MACHINE_ID register (Penumbra/1), sysreg device 1 |
-| TLB | `rtl/mmu/tlb.sv` | 111/111 | 64-entry 2-way SA, parallel lookup, one-hot permission check, indexed sysreg R/W |
-| MMU | `rtl/mmu/mmu.sv` | — | Bypass/translate mux, force_bypass for vector table read, alignment check, sysreg routing, fault latching, TLB instantiation |
+| TLB (main) | `rtl/mmu/tlb.sv` | 111/111 | 64-entry 2-way SA, parallel lookup, one-hot permission check, indexed sysreg R/W |
+| TLB (pinned) | `rtl/mmu/tlb_pinned.sv` | via test\_ptlb | 4-entry FA, parallel lookup, pinned-hit-wins priority over main TLB |
+| TLB unit | `rtl/mmu/tlb_unit.sv` | — | Wraps main + pinned TLB behind unified lookup + sysreg interface (regs 3-8) |
+| MMU | `rtl/mmu/mmu.sv` | — | Bypass/translate mux, force\_bypass for vector table read, alignment check, sysreg routing (regs 0-2), fault latching |
 | Cache | `rtl/soc/cache.sv` | 42/42 | Parameterized PIPT cache (NUM_SETS, LINE_WORDS, NUM_WAYS). Write-through/write-no-allocate. Burst line fill on read miss. Sysreg interface. |
 | Cache stub | `rtl/soc/cache_stub.sv` | — | Combinational pass-through, retained for reference. Replaced by cache.sv in cpu_core. |
 | Simple memory | `rtl/soc/simple_mem.sv` | — | Parameterizable synchronous SRAM model (default 16 MB), configurable READ_LATENCY/WRITE_LATENCY modeling SDRAM timing. |

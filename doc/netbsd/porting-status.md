@@ -60,7 +60,7 @@ Stage 1 is loaded by the ROM from the partition gap (sectors 1–2047, ~1 MB). I
 
 ### Kernel (locore.S + early init)
 - Exception vectors, trap dispatch
-- `pmap` — software TLB management (64-entry 2-way SA, WRSYS/RDSYS interface)
+- `pmap` — software TLB management (64-entry 2-way SA + 4-entry FA pinned, WRSYS/RDSYS interface)
 - Console driver — NS16450 UART at `0xFF000000` (com(4) compatible)
 - Root mount from UFS/FFS partition on SD card
 

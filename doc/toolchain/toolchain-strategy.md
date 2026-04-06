@@ -13,7 +13,7 @@ The OS target was changed from Minix 2 to NetBSD.
 **Why NetBSD:**
 - **Demand paging and COW fork** via UVM, the machine-independent virtual memory subsystem
 - **Clean MD/MI separation.** NetBSD's `sys/arch/<port>/` structure isolates machine-dependent code. A new port requires: `locore.S`, `trap.c`, `pmap.c`, `machdep.c`, `autoconf.c`, clock/interrupt glue, console driver
-- **Software-managed TLB is first-class.** The MIPS port (`sys/arch/mips/`) has used software TLB refill for 30+ years. Penumbra's TLB design (64-entry 2-way SA, ASID, per-page RWX+U+G, software refill via exception) maps directly to the MIPS pmap model
+- **Software-managed TLB is first-class.** The MIPS port (`sys/arch/mips/`) has used software TLB refill for 30+ years. Penumbra's TLB design (64-entry 2-way SA + 4-entry FA pinned, ASID, per-page RWX+U+G, software refill via exception) maps directly to the MIPS pmap model
 - **Monolithic kernel.** System calls are function calls into the kernel, not cross-process messages. One trap, one context switch — not three
 - **Prior experience.** We have direct NetBSD kernel experience: bug fixes in amiga and sgimips early boot code, device driver work. Familiar with the port structure, build system, and kernel internals
 
@@ -22,7 +22,7 @@ The OS target was changed from Minix 2 to NetBSD.
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Supervisor/user mode | Done | SR.S bit, dispatch-time privilege checks |
-| Software-managed TLB | Done | 64-entry 2-way SA, ASID, RWX+U+G permissions |
+| Software-managed TLB | Done | 64-entry 2-way SA + 4-entry FA pinned, ASID, RWX+U+G permissions |
 | TLB miss exception | Done | Vector 2, handler refills TLB, ERET retries |
 | TLB protection fault | Done | Vector 3, triggers COW copy in UVM |
 | Exception save/restore | Done | EPC/ESR, ERET, RDSPR, WRSPR |

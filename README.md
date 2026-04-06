@@ -99,7 +99,7 @@ make simulate LLVM_PREFIX=/other/drive/penumbra-llvm
 - **Registers:** 16 GPRs (R0=zero, R14=SP, R13=LR, R15=PC)
 - **ISA:** 4 instruction formats (R/L/M/B), 2-operand destructive ALU,
   ARM-style NZCV condition flags
-- **MMU:** Software-managed 64-entry 2-way set-associative TLB
+- **MMU:** Software-managed 64-entry 2-way set-associative TLB + 4-entry fully-associative pinned TLB
 - **Cache:** Split I/D, direct-mapped, write-through
 - **Microcode:** 51-bit horizontal, 256-entry ROM
 

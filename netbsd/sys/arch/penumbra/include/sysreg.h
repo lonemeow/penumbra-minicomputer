@@ -27,7 +27,7 @@
 #define MMU_FAULT_STATUS	2	/* Fault type + access info (read-only) */
 #define MMU_TLB_VPN		3	/* Staged TLB upper word (VPN + ASID) */
 #define MMU_TLB_PTE		4	/* TLB lower word; write commits entry */
-#define MMU_TLB_INDEX		5	/* Selects TLB slot (0–63) for R/W */
+#define MMU_TLB_INDEX		5	/* Selects TLB slot; bit 6 = pinned */
 
 /* MMUCR fields */
 #define MMUCR_M			0x0001	/* MMU enable */
@@ -42,9 +42,11 @@
 
 /* ── TLB geometry ───────────────────────────────────────────────────── */
 
-#define TLB_NSLOTS	64	/* Total slots */
+#define TLB_NSLOTS	64	/* Total main TLB slots */
 #define TLB_NSETS	32	/* Sets (indexed by VPN[4:0]) */
 #define TLB_NWAYS	2	/* Ways per set */
+#define PTLB_NSLOTS	4	/* Pinned TLB slots (fully associative) */
+#define TLB_INDEX_PINNED 0x40	/* Set bit 6 in TLB_INDEX to target pinned TLB */
 
 /* TLB_VPN word: (VPN << 8) | ASID */
 #define TLB_VPN_SHIFT	8

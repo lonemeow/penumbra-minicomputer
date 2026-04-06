@@ -79,7 +79,11 @@ _start_bias:
 	/* Invalidate I-cache — stale bootloader code may be cached */
 	wrsys	r0, #SYSDEV_ICACHE, #CACHE_INVAL
 
-	/* Step 3 done — halt until we add more */
+	/*
+	 * Next: set up pinned TLB entries (handler page, PGD),
+	 * install TLB miss handler, build page directory,
+	 * enable MMU, jump to virtual addresses.
+	 */
 	break
 
 /*

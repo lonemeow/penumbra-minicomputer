@@ -531,7 +531,7 @@ System register access is for CPU-adjacent devices only. External peripherals (U
 - Page-based virtual memory managed by the MMU (4 KB pages)
 - Memory protection (read/write/execute per page, user/supervisor)
 - Per-page cacheability control (C bit in page table entry) for memory-mapped I/O
-- Software-managed TLB (64-entry, 2-way set-associative)
+- Software-managed TLB (64-entry 2-way SA main + 4-entry FA pinned)
 - See the MMU overview for full details
 
 ### Byte Ordering

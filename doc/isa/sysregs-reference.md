@@ -41,7 +41,7 @@ one of 16 registers within that device, for 256 total system registers.
 | 2 | FAULT_STATUS | R | Fault type and access info (latched on fault) |
 | 3 | TLB_VPN | R/W | Staged TLB upper word (VPN + ASID) |
 | 4 | TLB_PTE | R/W | TLB lower word (PPN + flags); **write commits entry** |
-| 5 | TLB_INDEX | R/W | Selects TLB slot for indexed read/write |
+| 5 | TLB_INDEX | R/W | Selects TLB slot; **bit 6 = pinned TLB** (see below) |
 | 6–15 | — | — | Reserved (reads as 0) |
 
 ### MMUCR (reg 0)
@@ -87,7 +87,7 @@ WRSYS R1, #0, #0
 - **set** (bits 4:0): Set index, 0–31.
 - **way** (bit 5): Way within the set, 0 or 1.
 
-The hardware requires that an entry for virtual address VA lives in set `VA[16:12]`.
+The hardware requires that a main TLB entry for virtual address VA lives in set `VA[16:12]`.
 Software chooses which of the two ways (0 or 1) to use for replacement.
 
 ```asm
@@ -95,6 +95,36 @@ Software chooses which of the two ways (0 or 1) to use for replacement.
 LLI  R1, #0x25          ; (1 << 5) | 5 = 0x25
 WRSYS R1, #0, #5
 ```
+
+### Pinned TLB (via TLB_INDEX bit 6)
+
+The pinned TLB is a 4-entry fully-associative structure checked in
+parallel with the main TLB.  A pinned hit takes priority.  Use it for
+entries that must never cause TLB misses (TLB miss handler code, page
+global directory).
+
+Setting **bit 6** of TLB_INDEX selects the pinned TLB.  Bits 1:0
+then select the pinned slot (0–3).  The same TLB_VPN/TLB_PTE
+registers and 3-write protocol apply — no separate registers needed.
+
+```
+ TLB_INDEX bit 6 = 0:  main TLB     {way=bit5, set=bits4:0}
+ TLB_INDEX bit 6 = 1:  pinned TLB   {slot=bits1:0}
+```
+
+```asm
+; Pin slot 0: map VPN 0 → PPN 0 with kernel flags
+LLI  R1, #0x40         ; bit 6 = pinned, slot 0
+WRSYS R1, #0, #5       ; TLB_INDEX
+LLI  R1, #0
+WRSYS R1, #0, #3       ; TLB_VPN = {VPN=0, ASID=0}
+LLI  R2, #0xBD         ; V|C|R|W|X|G
+WRSYS R2, #0, #4       ; TLB_PTE — commits to pinned slot 0
+```
+
+No set constraint applies — any virtual page can be placed in any
+pinned slot.  Reads via RDSYS also follow TLB_INDEX bit 6 to select
+which TLB to read from.
 
 ### TLB_VPN (reg 3) and TLB_PTE (reg 4) — Sysreg Packing
 
@@ -193,6 +223,23 @@ WRSYS R1, #0, #4          ; PTE = 0 (V=0 → invalid)
 WRSYS R_idx, #0, #5       ; select slot
 RDSYS R2, #0, #3          ; R2 = TLB_VPN
 RDSYS R3, #0, #4          ; R3 = TLB_PTE
+```
+
+**Load a pinned TLB entry** (bit 6 set in TLB_INDEX):
+
+```asm
+; R_idx has bit 6 set + slot number (e.g., 0x40 = pinned slot 0)
+WRSYS R_idx, #0, #5       ; select pinned slot
+WRSYS R_vpn, #0, #3       ; stage VPN + ASID
+WRSYS R_pte, #0, #4       ; commit PPN + flags (to pinned TLB)
+```
+
+**Invalidate a pinned TLB entry:**
+
+```asm
+WRSYS R_idx, #0, #5       ; select pinned slot (bit 6 set)
+LLI  R1, #0
+WRSYS R1, #0, #4          ; TLB_PTE = 0 (V=0 → invalid)
 ```
 
 ---

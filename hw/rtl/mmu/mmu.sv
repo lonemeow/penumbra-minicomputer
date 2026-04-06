@@ -2,13 +2,11 @@
 //
 // Orchestrates TLB lookup and bypass mode. When M=0 (reset default),
 // identity maps all addresses as uncacheable. When M=1, routes
-// translation through the TLB and reports misses/faults.
+// translation through the TLB unit and reports misses/faults.
 //
-// TLB: 64-entry 2-way set-associative, 64-bit entries,
-// fully software-managed (no hardware replacement or dirty tracking).
-//
-// Sysreg interface (dev_id=0) provides MMUCR, fault registers,
-// and TLB indexed access via TLB_VPN/TLB_PTE/TLB_INDEX.
+// TLB details (main + pinned) are encapsulated in tlb_unit.sv.
+// This module handles: MMUCR, fault latching, alignment checks,
+// bypass logic, and sysreg routing for registers 0-2.
 
 // verilator lint_off UNUSEDSIGNAL
 
@@ -42,7 +40,7 @@ module mmu
 );
 
     // ══════════════════════════════════════════════════════════
-    // Control registers
+    // Control registers (regs 0-2)
     // ══════════════════════════════════════════════════════════
 
     // MMUCR: [0]=M (enable), [15:8]=ASID
@@ -56,33 +54,46 @@ module mmu
     assign mmu_enabled  = mmucr[0];
     assign current_asid = mmucr[15:8];
 
-    // ── TLB index register ─────────────────────────────────
-    logic [31:0] tlb_index_reg;
-    logic [4:0]  idx_set;
-    logic        idx_way;
-    assign idx_set = tlb_index_reg[4:0];
-    assign idx_way = tlb_index_reg[5];
-
-    // ── TLB VPN staging register ───────────────────────────
-    // Written first, then TLB_PTE write commits both to TLB
-    logic [31:0] tlb_vpn_reg;
-
     // ══════════════════════════════════════════════════════════
-    // Sysreg write logic
+    // TLB unit (main + pinned, sysregs 3-8)
     // ══════════════════════════════════════════════════════════
 
-    logic tlb_write_en;  // Pulse on TLB_PTE write → commits entry
-    assign tlb_write_en = i_sys_we && (i_sys_reg == SYSREG_MMU_TLB_PTE);
+    logic        lookup_en;
+    assign lookup_en = mmu_enabled && i_req && !i_force_bypass;
+
+    logic [31:0] tlb_paddr, tlb_fault_status, tlb_rdata;
+    logic        tlb_cacheable, tlb_hit, tlb_fault;
+
+    tlb_unit u_tlb_unit (
+        .i_clk          (i_clk),
+        .i_rst          (i_rst),
+        .i_vaddr        (i_vaddr),
+        .i_access_type  (i_access_type),
+        .i_user_mode    (i_user_mode),
+        .i_asid         (current_asid),
+        .i_lookup_en    (lookup_en),
+        .o_paddr        (tlb_paddr),
+        .o_cacheable    (tlb_cacheable),
+        .o_hit          (tlb_hit),
+        .o_fault        (tlb_fault),
+        .o_fault_status (tlb_fault_status),
+        .i_sys_reg      (i_sys_reg),
+        .i_sys_wdata    (i_sys_wdata),
+        .i_sys_we       (i_sys_we),
+        .o_sys_rdata    (tlb_rdata)
+    );
+
+    // ══════════════════════════════════════════════════════════
+    // Sysreg write logic (regs 0-2 only; 3-8 handled by tlb_unit)
+    // ══════════════════════════════════════════════════════════
 
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
-            mmucr         <= 32'b0;
-            fault_addr    <= 32'b0;
-            fault_status  <= 32'b0;
-            tlb_index_reg <= 32'b0;
-            tlb_vpn_reg   <= 32'b0;
+            mmucr        <= 32'b0;
+            fault_addr   <= 32'b0;
+            fault_status <= 32'b0;
         end else begin
-            // Latch fault info — alignment > TLB prot > TLB miss.
+            // Latch fault info — alignment > TLB prot > TLB miss > bus fault.
             // Gated by !i_force_bypass so vector fetches don't overwrite
             // fault info from the original exception.
             if (i_req && !i_force_bypass && misaligned) begin
@@ -92,82 +103,34 @@ module mmu
                 fault_addr   <= i_vaddr;
                 fault_status <= tlb_fault_status;
             end else if (mmu_enabled && i_req && !i_force_bypass && !tlb_hit) begin
-                // TLB miss (no matching entry)
                 fault_addr   <= i_vaddr;
                 fault_status <= {20'b0, i_user_mode, i_access_type, 4'b0, FAULT_TLB_MISS};
             end else if (i_bus_fault && !i_force_bypass) begin
-                // Bus fault (physical address not claimed by any device)
                 fault_addr   <= i_vaddr;
                 fault_status <= {20'b0, i_user_mode, i_access_type, 4'b0, FAULT_BUS};
             end
 
-            // Sysreg writes
-            if (i_sys_we) begin
-                case (i_sys_reg)
-                    SYSREG_MMU_CR:      mmucr         <= i_sys_wdata;
-                    SYSREG_MMU_TLB_IDX: tlb_index_reg <= i_sys_wdata;
-                    SYSREG_MMU_TLB_VPN: tlb_vpn_reg   <= i_sys_wdata;
-                    // TLB_PTE: data goes directly to TLB via tlb_write_en
-                    // FAULT_ADDR, FAULT_STATUS: read-only (hardware-latched)
-                    default: ;  // ignore writes to read-only or unimplemented regs
-                endcase
-            end
+            // MMUCR write
+            if (i_sys_we && i_sys_reg == SYSREG_MMU_CR)
+                mmucr <= i_sys_wdata;
         end
     end
 
     // ══════════════════════════════════════════════════════════
-    // Sysreg read mux
+    // Sysreg read mux — regs 0-2 from here, 3-8 from tlb_unit
     // ══════════════════════════════════════════════════════════
-
-    logic [31:0] tlb_read_vpn, tlb_read_pte;
 
     always_comb begin
         case (i_sys_reg)
-            SYSREG_MMU_CR:      o_sys_rdata = mmucr;
-            SYSREG_MMU_FADDR:   o_sys_rdata = fault_addr;
-            SYSREG_MMU_FSTAT:   o_sys_rdata = fault_status;
-            SYSREG_MMU_TLB_VPN: o_sys_rdata = tlb_read_vpn;
-            SYSREG_MMU_TLB_PTE: o_sys_rdata = tlb_read_pte;
-            SYSREG_MMU_TLB_IDX: o_sys_rdata = tlb_index_reg;
-            default:            o_sys_rdata = 32'b0;
+            SYSREG_MMU_CR:    o_sys_rdata = mmucr;
+            SYSREG_MMU_FADDR: o_sys_rdata = fault_addr;
+            SYSREG_MMU_FSTAT: o_sys_rdata = fault_status;
+            default:          o_sys_rdata = tlb_rdata;
         endcase
     end
 
     // ══════════════════════════════════════════════════════════
-    // TLB instance
-    // ══════════════════════════════════════════════════════════
-
-    logic [31:0] tlb_paddr;
-    logic        tlb_cacheable, tlb_hit, tlb_fault;
-    logic [31:0] tlb_fault_status;
-
-    tlb u_tlb (
-        .i_clk          (i_clk),
-        .i_rst          (i_rst),
-        // Lookup
-        .i_vaddr        (i_vaddr),
-        .i_access_type  (i_access_type),
-        .i_user_mode    (i_user_mode),
-        .i_asid         (current_asid),
-        .i_lookup_en    (mmu_enabled && i_req && !i_force_bypass),
-        .o_paddr        (tlb_paddr),
-        .o_cacheable    (tlb_cacheable),
-        .o_hit          (tlb_hit),
-        .o_fault        (tlb_fault),
-        .o_fault_status (tlb_fault_status),
-        // Indexed access
-        .i_idx_set      (idx_set),
-        .i_idx_way      (idx_way),
-        .i_write_vpn    (tlb_vpn_reg),
-        .i_write_pte    (i_sys_wdata),
-        .i_write_en     (tlb_write_en),
-        .o_read_vpn     (tlb_read_vpn),
-        .o_read_pte     (tlb_read_pte)
-    );
-
-    // ══════════════════════════════════════════════════════════
     // Alignment check — fires regardless of MMU enable/bypass.
-    // Word access requires addr[1:0]==0; half requires addr[0]==0.
     // ══════════════════════════════════════════════════════════
 
     logic misaligned;
@@ -187,7 +150,6 @@ module mmu
 
     always_comb begin
         if (i_req && misaligned) begin
-            // Alignment fault — highest priority, even in bypass mode
             o_paddr     = i_vaddr;
             o_cacheable = 1'b0;
             o_fault     = 1'b1;
@@ -198,7 +160,6 @@ module mmu
             o_hit       = tlb_hit;
             o_fault     = tlb_fault || (i_req && !tlb_hit);
         end else begin
-            // Bypass: identity map, uncacheable, no faults
             o_paddr     = i_vaddr;
             o_cacheable = 1'b0;
             o_fault     = 1'b0;

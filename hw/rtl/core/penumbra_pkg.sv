@@ -103,7 +103,7 @@ package penumbra_pkg;
     localparam logic [3:0] SYSREG_MMU_FSTAT    = 4'd2;  // Fault status (read-only)
     localparam logic [3:0] SYSREG_MMU_TLB_VPN  = 4'd3;  // TLB upper: {4'b0, VPN[19:0], ASID[7:0]}
     localparam logic [3:0] SYSREG_MMU_TLB_PTE  = 4'd4;  // TLB lower: {PPN[19:0], SW[3:0], flags[7:0]}
-    localparam logic [3:0] SYSREG_MMU_TLB_IDX  = 4'd5;  // TLB slot: {26'b0, way[0], set[4:0]}
+    localparam logic [3:0] SYSREG_MMU_TLB_IDX  = 4'd5;  // TLB slot: bit6=pinned, {way[0], set[4:0]} or {pin_slot[1:0]}
 
     // ── Bus controller sysreg addresses (dev_id = 4) ─────────────
     localparam logic [3:0] SYSREG_BUS_CTL = 4'd0;  // BUSCTL: [0]=RST (auto-clear), [1]=CFG_EN
