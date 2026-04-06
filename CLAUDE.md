@@ -84,6 +84,8 @@ The architecture is fully specified in `doc/`. Key specs:
   - Override LLVM location: `make simulate LLVM_PREFIX=/path/to/llvm-build`
   - Non-interactive (piped input): `echo "break" | make simulate INTERACTIVE=0`
   - With SD card image: `make simulate SDCARD=disk.img`
+  - Instruction trace: `make simulate TRACE=build/trace.log`
+    (dumps PC, SR, R1–R14 for every instruction)
   - ROM monitor accepts `break` (or `b`) to halt the simulator cleanly.
 - `make wave MOD=<name>` — open VCD waveform in GTKWave
 - `make clean` — remove build artifacts
@@ -307,12 +309,14 @@ MIPS/68k-style vector dispatch.
   kernel port context.
 
 ## Next Steps (in priority order)
-1. **Boot loader** — ROM loads `PENBOOT.ELF` (PIE) from FAT32;
-   next is the loader itself: kernel ELF loading,
-   MMU enable, bootinfo translation, jump to kernel.
+1. **Kernel locore.S** — PIC entry stub in locore.S: compute
+   virt-to-phys offset from bootinfo, set up initial TLB entries
+   for kernel text + stack + UART, enable MMU, jump to virtual
+   entry.  Bootloader already loads kernel and jumps with MMU off.
    See `doc/boot/boot-process.md`
 2. **Kernel implementation** — fill in MD stubs (grep `TODO(stub)`):
-   locore.S entry, trap handling, console driver, pmap (software TLB);
+   copy bootinfo to BSS, parse memory, trap handling,
+   console driver, pmap (software TLB);
    get to `main()` → `cpu_startup()`
 3. **LLVM `-O2` support** — implement `analyzeBranch`/`insertBranch`/
    `removeBranch` for branch optimization passes

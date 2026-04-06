@@ -54,11 +54,13 @@ build/netbsd-tools/bin/nbmake-penumbra -C build/netbsd-kernel/MINIMAL -j10
 **Important:** Re-run step 1 after changing any `conf/` files.
 The `build/netbsd-kernel/` directory is gitignored.
 
-### Bootloader Build (standalone)
+### Bootloader Build
 
 ```sh
-make -C netbsd/sys/arch/penumbra/stand/boot -f Makefile.standalone
+build/netbsd-tools/bin/nbmake-penumbra -C netbsd/sys/arch/penumbra/stand/boot
 ```
+
+Output: `build/netbsd-obj/sys/arch/penumbra/stand/boot/PENBOOT.ELF`
 
 ## Virtual Memory Layout
 
@@ -159,16 +161,21 @@ Headers fall into three categories:
 - [x] Build system — build.sh integration, out-of-tree kernel build
 - [x] Assembly string functions — memcpy, memset, memcmp, strlen,
   strcmp, strcpy in `common/lib/libc/arch/penumbra/string/`
-- [ ] Boot loader (`PENBOOT.ELF`) — CRT self-relocator done,
-  kernel loading / MMU enable not yet implemented
+- [x] Boot loader (`PENBOOT.ELF`) — CRT self-relocator, boot data
+  → bootinfo translation, kernel ELF loading via libsa `loadfile()`.
+  Builds via nbmake (libsa + libkern linked as `.a` archives).
+  Loads kernel at dynamic physical address, jumps with MMU off.
+- [ ] Boot loader MMU enable — locore.S PIC entry stub needs to
+  set up initial TLB mappings, enable MMU, jump to virtual address
 - [ ] Kernel port — MD stubs need real implementations
   (grep for `TODO(stub)` to find them)
 - [ ] DDB — disabled, needs extensive MD hooks
 
 ## Next Steps
 
-1. **Boot loader** — kernel ELF loading, MMU enable, bootinfo
-   translation, jump to kernel
+1. **Kernel locore.S** — PIC entry stub: compute virt-to-phys offset,
+   set up initial TLB entries, enable MMU, jump to virtual entry.
+   Then: copy bootinfo to BSS, parse memory regions, call
+   `penumbra_init()` → `cpu_startup()`
 2. **Kernel implementation** — fill in MD stubs (`TODO(stub)`):
-   locore.S entry, trap handling, pmap, console driver;
-   get to `main()` → `cpu_startup()`
+   trap handling, pmap (software TLB), console driver
