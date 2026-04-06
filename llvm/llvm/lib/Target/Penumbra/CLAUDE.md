@@ -56,7 +56,8 @@ instruction formats.
 - `%lo16()`/`%hi16()`/`%pcrel()` MCSpecifierExpr modifiers
   parsed and printed (full `clang -S` → `llvm-mc` roundtrip works).
 - Register aliases (pc, sp, lr, zero, tp),
-  SPR names (epc, esr, usp),
+  SPR names (epc, esr, usp, sr — context-sensitive, sr parsed
+  as SPR index only in RDSPR/WRSPR context since it's also a register),
   `[Rb]` without offset,
   and expression offsets (`[pc + label - .]`) all supported.
 - RDSPR/WRSPR/RDSYS/WRSYS instructions fully encoded.
@@ -219,6 +220,11 @@ zero-extends its immediate.  Same fix in `PenumbraAsmBackend`.
 Registered via `EM_PENUMBRA` (0xF0DA) in `llvm/BinaryFormat/ELF.h`.
 Emulation string `elf32penumbra`, output format `elf32-penumbra`.
 Triple mapping for `Triple::penumbra` in `InputFiles.cpp`.
+**Duplicate absolute symbol fix** (`llvm/lld/ELF/Symbols.cpp`):
+upstream lld's GNU ld compatibility check for duplicate absolute
+symbols accidentally excluded value 0 (C++ truthiness).
+Fixed locally — needed for NetBSD kernel option tracking symbols
+(`_KERNEL_OPT_N*`) which have value 0 for unconfigured devices.
 
 ## ELF Relocations
 | Type | Value | Description | Field |

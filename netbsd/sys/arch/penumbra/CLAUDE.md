@@ -137,12 +137,13 @@ Headers fall into three categories:
 | File | Purpose |
 |------|---------|
 | `locore.S` | Entry point, exception vectors, trap frame save/restore, setjmp/longjmp |
-| `machdep.c` | `penumbra_init()`, `cpu_startup()`, `cpu_reboot()`, LWP stubs |
+| `machdep.c` | `penumbra_init()`, `cpu_startup()`, `cpu_reboot()`, LWP/signal/ptrace stubs, `__mulsi3`, `mm_md_physacc` |
 | `autoconf.c` | `cpu_configure()`, `cpu_rootconf()` |
 | `mainbus.c` | Root bus device driver |
 | `cpu.c` | CPU device driver |
 | `trap.c` | Exception dispatch, SPL stubs |
 | `pmap.c` | Software TLB management (stub — flat/2-level PT design) |
+| `copy.c` | copyin/copyout/copyinstr/copyoutstr stubs (break traps) |
 | `genassym.cf` | Struct offset definitions for assembly code |
 
 ## Current Status
@@ -150,21 +151,24 @@ Headers fall into three categories:
 - [x] Machine headers — 39 files, sufficient for kernel compilation
 - [x] Kernel config — `config MINIMAL` generates Makefile successfully
 - [x] `make depend` — passes cleanly
-- [x] `make` — **all .o files compile at `-O0`**, link stage reached
+- [x] `make` — **all .o files compile at `-O0`**
+- [x] **Kernel links** — 4 MB ELF binary at `build/netbsd-kernel/MINIMAL/netbsd`
+- [x] Atomics — interrupt-disable CAS (`RDSPR SR`/`DI`/op/`WRSPR SR`),
+  generic CAS-based ops, no-op membars (uniprocessor)
 - [x] libsa glue — `sdblk.c` (SD block device), `cons.c` (UART)
 - [x] Build system — build.sh integration, out-of-tree kernel build
 - [x] Assembly string functions — memcpy, memset, memcmp, strlen,
   strcmp, strcpy in `common/lib/libc/arch/penumbra/string/`
-- [ ] **Kernel link** — many undefined symbols from stubs
 - [ ] Boot loader (`PENBOOT.ELF`) — CRT self-relocator done,
   kernel loading / MMU enable not yet implemented
-- [ ] Kernel port — all MD stubs need real implementations
+- [ ] Kernel port — MD stubs need real implementations
+  (grep for `TODO(stub)` to find them)
 - [ ] DDB — disabled, needs extensive MD hooks
 
 ## Next Steps
 
-1. **Kernel link** — provide missing symbols to get past the linker
-2. **Boot loader** — kernel ELF loading, MMU enable, bootinfo
+1. **Boot loader** — kernel ELF loading, MMU enable, bootinfo
    translation, jump to kernel
-3. **Kernel implementation** — fill in pmap, trap handling,
-   console driver, get to `main()` → `cpu_startup()`
+2. **Kernel implementation** — fill in MD stubs (`TODO(stub)`):
+   locore.S entry, trap handling, pmap, console driver;
+   get to `main()` → `cpu_startup()`

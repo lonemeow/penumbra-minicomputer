@@ -67,7 +67,7 @@ The architecture is fully specified in `doc/`. Key specs:
 - **Supervisor** = hardware privilege level (SR.S bit, CPU mode). Use for CPU-level concepts.
 - **Kernel** = OS software running in supervisor mode. Use for OS-level concepts.
 - **Special-purpose registers (SPRs)** = CPU-internal registers via
-  `RDSPR`/`WRSPR` (EPC, ESR, USP). SPR number encoded in IR[15:12].
+  `RDSPR`/`WRSPR` (ESR, EPC, USP, SR). SPR number encoded in IR[15:12].
 - **System registers (sysregs)** = device-mapped registers via
   `WRSYS`/`RDSYS` (MMU, TLB, system ID). Belong to peripheral devices.
 
@@ -214,7 +214,7 @@ MIPS/68k-style vector dispatch.
 - Assembly pseudo-instructions LI, LA, NOP, RET expand
   in the AsmParser.
   Register aliases (pc, sp, lr, zero, tp),
-  SPR names (epc, esr, usp),
+  SPR names (epc, esr, usp, sr),
   memory shorthand (`[Rb]`), and expression offsets supported.
   RDSPR/WRSPR/RDSYS/WRSYS fully encoded.
 - GlobalISel codegen uses a hybrid TableGen + C++ approach:
@@ -286,11 +286,17 @@ MIPS/68k-style vector dispatch.
 - **Boot from ROM:** Programs assembled with `--org 0xFFFF0000`. `_start:` must be first label.
 - **ROM page mapping (MMU tests):** TLB_INDEX=16, TLB_VPN=0x0FFFF000, TLB_PTE=0xFFFF00B9.
 
-**NetBSD kernel compilation reaches link stage.**
+**NetBSD kernel links successfully.**
 - Machine headers (39 files), kernel config, MD build system,
   stub kernel sources, and assembly string functions all present.
-- `config MINIMAL` → `make depend` → `make` compiles all .o files
-  at `-O0`. Link fails with expected undefined symbols (stubs).
+- `config MINIMAL` → `make depend` → `make` produces a 4 MB
+  ELF kernel binary at `build/netbsd-kernel/MINIMAL/netbsd`.
+- All MD functions are either implemented or break-trap stubs
+  (grep for `TODO(stub)` to find stubs needing real implementations).
+- Atomics: interrupt-disable CAS (`RDSPR SR` / `DI` / load-cmp-store
+  / `WRSPR SR`), generic CAS-based inc/dec/add/and/or, no-op membars.
+  TODO: replace with RAS (Restartable Atomic Sequences) once kernel
+  RAS infrastructure is in place.
 - DDB (kernel debugger) disabled for now — needs extensive MD hooks.
 - Virtual memory layout: 2G/2G user/kernel split,
   kernel text at `0x8001_0000`, compact user layout with
@@ -301,16 +307,15 @@ MIPS/68k-style vector dispatch.
   kernel port context.
 
 ## Next Steps (in priority order)
-1. **Kernel link** — provide missing symbols (undefined stubs)
-   to get the kernel to link, even if implementations are no-ops
-2. **LLVM `-O2` support** — implement `analyzeBranch`/`insertBranch`/
-   `removeBranch` for branch optimization passes
-3. **Boot loader** — ROM loads `PENBOOT.ELF` (PIE) from FAT32;
+1. **Boot loader** — ROM loads `PENBOOT.ELF` (PIE) from FAT32;
    next is the loader itself: kernel ELF loading,
    MMU enable, bootinfo translation, jump to kernel.
    See `doc/boot/boot-process.md`
-4. **Kernel implementation** — fill in pmap (software TLB),
-   trap handling, console driver; get to `main()` → `cpu_startup()`
-5. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick
-6. **Interrupt controller** — Multiple devices with priority encoding
-7. **Memory subsystem** — SDRAM controller, bus interface
+2. **Kernel implementation** — fill in MD stubs (grep `TODO(stub)`):
+   locore.S entry, trap handling, console driver, pmap (software TLB);
+   get to `main()` → `cpu_startup()`
+3. **LLVM `-O2` support** — implement `analyzeBranch`/`insertBranch`/
+   `removeBranch` for branch optimization passes
+4. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick
+5. **Interrupt controller** — Multiple devices with priority encoding
+6. **Memory subsystem** — SDRAM controller, bus interface
