@@ -227,6 +227,33 @@ ParseStatus PenumbraAsmParser::tryParseRegister(MCRegister &Reg,
 bool PenumbraAsmParser::parseOperand(OperandVector &Operands) {
   SMLoc S = Parser.getTok().getLoc();
 
+  // SPR names must be checked before registers because "sr" is both an
+  // SPR name (index 3) and a register (for inline asm clobbers).
+  // Only check when the instruction is RDSPR/WRSPR.
+  if (Operands.size() >= 1) {
+    auto &Mnemonic = static_cast<PenumbraOperand &>(*Operands[0]);
+    if (Mnemonic.isToken()) {
+      StringRef Tok = Mnemonic.getToken();
+      if (Tok.equals_insensitive("rdspr") || Tok.equals_insensitive("wrspr")) {
+        if (Parser.getTok().is(AsmToken::Identifier)) {
+          StringRef Name = Parser.getTok().getIdentifier();
+          int SprVal = -1;
+          if (Name.equals_insensitive("esr"))      SprVal = 0;
+          else if (Name.equals_insensitive("epc")) SprVal = 1;
+          else if (Name.equals_insensitive("usp")) SprVal = 2;
+          else if (Name.equals_insensitive("sr"))  SprVal = 3;
+          if (SprVal >= 0) {
+            SMLoc E = Parser.getTok().getEndLoc();
+            const MCExpr *Expr = MCConstantExpr::create(SprVal, getContext());
+            Operands.push_back(PenumbraOperand::createImm(Expr, S, E));
+            Parser.Lex();
+            return false;
+          }
+        }
+      }
+    }
+  }
+
   // Try register first.
   MCRegister Reg;
   SMLoc RegStart, RegEnd;
@@ -267,24 +294,6 @@ bool PenumbraAsmParser::parseOperand(OperandVector &Operands) {
   // Consume optional '#' prefix on immediates (ARM-style).
   if (Parser.getTok().is(AsmToken::Hash))
     Parser.Lex();
-
-  // SPR names: esr=0, epc=1, usp=2, sr=3 (for RDSPR/WRSPR).
-  // Hardware SPR decode: IR[15:12]=0 → ESR, 1 → EPC, 2 → USP, 3 → SR.
-  if (Parser.getTok().is(AsmToken::Identifier)) {
-    StringRef Name = Parser.getTok().getIdentifier();
-    int SprVal = -1;
-    if (Name.equals_insensitive("esr"))      SprVal = 0;
-    else if (Name.equals_insensitive("epc")) SprVal = 1;
-    else if (Name.equals_insensitive("usp")) SprVal = 2;
-    else if (Name.equals_insensitive("sr"))  SprVal = 3;
-    if (SprVal >= 0) {
-      SMLoc E = Parser.getTok().getEndLoc();
-      const MCExpr *Expr = MCConstantExpr::create(SprVal, getContext());
-      Operands.push_back(PenumbraOperand::createImm(Expr, S, E));
-      Parser.Lex();
-      return false;
-    }
-  }
 
   // Parse %lo16(expr) / %hi16(expr) specifier expressions.
   if (Parser.getTok().is(AsmToken::Percent)) {
