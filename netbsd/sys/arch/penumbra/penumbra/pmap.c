@@ -275,3 +275,23 @@ tlb_invalidate_addr(vaddr_t va, int asid)
 {
 	/* TODO: clear the specific TLB entry for va/asid */
 }
+
+/*
+ * pmap_remove_all — remove all mappings from a pmap.
+ * Called on process exit.
+ */
+bool
+pmap_remove_all(struct pmap *pmap)
+{
+	/* TODO(stub): walk page table, free entries, invalidate TLB */
+	return false;
+}
+
+/*
+ * pmap_phys_address — convert page frame to physical address.
+ */
+paddr_t
+pmap_phys_address(paddr_t frame)
+{
+	return ptoa(frame);
+}

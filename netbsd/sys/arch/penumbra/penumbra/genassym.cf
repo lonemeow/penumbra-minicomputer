@@ -36,7 +36,6 @@ define	PCB_ONFAULT		offsetof(struct pcb, pcb_onfault)
 # Processor status register bits
 define	PSL_S			PSL_S
 define	PSL_I			PSL_I
-define	PSL_M			PSL_M
 
 # LWP fields
 define	L_PCB			offsetof(struct lwp, l_addr)

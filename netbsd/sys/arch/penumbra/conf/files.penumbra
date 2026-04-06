@@ -16,6 +16,7 @@ file	arch/penumbra/penumbra/machdep.c
 file	arch/penumbra/penumbra/autoconf.c
 file	arch/penumbra/penumbra/trap.c
 file	arch/penumbra/penumbra/pmap.c
+file	arch/penumbra/penumbra/copy.c
 
 # System bus
 device	mainbus {}
