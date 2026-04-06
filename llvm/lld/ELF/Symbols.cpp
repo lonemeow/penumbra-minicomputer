@@ -534,7 +534,7 @@ void elf::reportDuplicate(Ctx &ctx, const Symbol &sym, const InputFile *newFile,
   if (!d || d->getName() == "__x86.get_pc_thunk.bx")
     return;
   // Allow absolute symbols with the same value for GNU ld compatibility.
-  if (!d->section && !errSec && errOffset && d->value == errOffset)
+  if (!d->section && !errSec && d->value == errOffset)
     return;
   if (!d->section || !errSec) {
     Err(ctx) << "duplicate symbol: " << &sym << "\n>>> defined in " << sym.file
