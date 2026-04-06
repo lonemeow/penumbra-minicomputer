@@ -219,7 +219,8 @@ let Defs = [SR], Constraints = "$Rd = $Rd_in" in {
 // MOV doesn't set flags (per ISA doc)
 def MOV  : FormatR<0b01000, (outs GPR:$Rd), (ins GPRz:$Rs),
                    "mov\t$Rd, $Rs">;
-// NOT doesn't set flags
+// NOT sets flags (it's a logic ALU operation; microcode has w_flags=1)
+let Defs = [SR] in
 def NOT  : FormatR<0b01001, (outs GPR:$Rd), (ins GPRz:$Rs),
                    "not\t$Rd, $Rs">;
 
@@ -338,7 +339,7 @@ let isBranch = 1, isTerminator = 1 in {
   }
 }
 
-let isCall = 1, Defs = [R13] in
+let isCall = 1, Defs = [R13, SR] in
 def BL   : FormatB<0b1111, (outs), (ins brtarget22:$target), "bl\t$target">;
 
 // Branch mnemonic aliases (ARM-style unsigned comparison synonyms).
@@ -479,7 +480,9 @@ let isPseudo = 1 in {
   // SELECT_GPR: conditional select pseudo, expanded after regalloc by
   // EmitInstrWithCustomInserter into a diamond of basic blocks + PHI.
   // Uses TEST+BNE on the condition register.
-  let usesCustomInserter = 1 in
+  // Must declare Defs = [SR] because the expansion emits TEST/CMP
+  // which clobbers flags.
+  let usesCustomInserter = 1, Defs = [SR] in
   def SELECT_GPR : PenumbraInst<(outs GPR:$dst),
                                 (ins GPR:$trueval, GPR:$falseval, GPR:$cond),
                                 "# SELECT_GPR $dst, $trueval, $falseval, $cond">;
@@ -487,7 +490,9 @@ let isPseudo = 1 in {
   // SELECT_CC_GPR: like SELECT_GPR, but carries CMP operands and a branch
   // opcode directly — avoids the TEST+BNE round-trip when the condition
   // originates from G_ICMP.  The $cc immediate is a Penumbra branch opcode.
-  let usesCustomInserter = 1 in
+  // Must declare Defs = [SR] because the expansion emits CMP
+  // which clobbers flags.
+  let usesCustomInserter = 1, Defs = [SR] in
   def SELECT_CC_GPR : PenumbraInst<(outs GPR:$dst),
       (ins GPR:$trueval, GPR:$falseval, GPR:$lhs, GPR:$rhs, i32imm:$cc),
       "# SELECT_CC_GPR $dst, $trueval, $falseval, $lhs, $rhs, $cc">;
