@@ -175,8 +175,8 @@ if [ -n "$STAGE2" ]; then
 fi
 
 if [ -n "$KERNEL" ]; then
-    log "Copying $KERNEL -> PENUMBRA"
-    cp "$KERNEL" "$BOOTFSROOT/PENUMBRA"
+    log "Copying $KERNEL -> netbsd"
+    cp "$KERNEL" "$BOOTFSROOT/netbsd"
 fi
 
 if [ -n "$EXTRA_DIR" ]; then

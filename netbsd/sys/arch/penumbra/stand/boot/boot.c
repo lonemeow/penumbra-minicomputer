@@ -1,32 +1,291 @@
 /*
- * boot.c — Penumbra stage 1 bootloader
+ * boot.c — Penumbra boot loader
  *
- * Loaded by the ROM from the partition gap into base RAM.
+ * Loaded by the ROM as PENBOOT.ELF (PIE) from FAT32.
  * Receives R1 = physical pointer to Penumbra boot data.
- * Loads the stage 2 bootloader from the FAT32 boot partition.
+ *
+ * Walks the firmware boot data in a single pass to:
+ *   1. Build a NetBSD bootinfo structure
+ *   2. Collect physical memory regions
+ *
+ * Then loads the kernel ELF at a dynamically chosen physical
+ * address, populates remaining bootinfo entries (symtab, kernbase),
+ * and jumps to the kernel's physical entry with MMU off.
+ * The kernel's locore.S PIC stub handles MMU setup.
  */
 
 #include <lib/libsa/stand.h>
 #include <lib/libsa/loadfile.h>
+#include <lib/libkern/libkern.h>
+#include <machine/bootinfo.h>
+#include "bootdata_defs.h"
 
 /* SD block device init (from libsa/sdblk.c) */
 extern int sd_boot_init(uint32_t bootdata);
 
-/* Boot data pointer, set by crt0 from R1 */
-extern uint32_t boot_data;
+/* Forward declarations for translation helpers */
+static struct btag_device *find_device_nth(uint32_t, int);
+static int translate_bootdata_device(struct btag_device *);
+static int translate_bootdata_bootdev(struct btag_bootdev *, uint32_t);
+static int translate_bootdata_console(struct btag_console *, uint32_t);
 
-static const char *boot2_paths[] = {
-	"boot/boot2",
-	"boot2",
+/* Kernel filename on the FAT32 boot partition */
+static const char *kernel_paths[] = {
+	"netbsd",
+	"netbsd.gz",
 	NULL
 };
 
+/* ── Memory region tracking ──────────────────────────────────────── */
+
+#define MAX_MEMREGIONS	8
+
+struct memregion {
+	uint32_t base;
+	uint32_t size;
+};
+
+static struct memregion memregions[MAX_MEMREGIONS];
+static int nmemregions;
+
 /*
- * devopen — called by libsa's open() to set up the device.
- *
- * For our single-device setup, this just points *file at the
- * filename portion and selects device 0 (SD).
+ * Find a free region of `size` bytes in the collected memory map,
+ * avoiding the reserved range [res_base, res_base+res_size).
+ * Returns a page-aligned physical address, or 0 on failure.
  */
+static uint32_t
+find_load_addr(uint32_t size, uint32_t res_base, uint32_t res_size)
+{
+	int i;
+
+	for (i = 0; i < nmemregions; i++) {
+		uint32_t start = memregions[i].base;
+		uint32_t end = start + memregions[i].size;
+
+		/* Avoid the reserved region (bootloader + boot data) */
+		uint32_t rend = res_base + res_size;
+		if (res_base <= start && rend > start)
+			start = rend;
+		if (res_base < end && rend >= end)
+			end = res_base;
+		if (res_base > start && rend < end) {
+			/* Split — take the larger piece */
+			if ((res_base - start) >= (end - rend))
+				end = res_base;
+			else
+				start = rend;
+		}
+
+		/* Page-align */
+		start = (start + 0xFFF) & ~0xFFF;
+
+		if (end > start && (end - start) >= size)
+			return start;
+	}
+
+	return 0;
+}
+
+/* ── Bootinfo builder ────────────────────────────────────────────── */
+
+/* Bootinfo is built into this static buffer */
+static char bootinfo_buf[BOOTINFO_MAXSIZE] __attribute__((aligned(4)));
+static struct bootinfo *bi = (struct bootinfo *)bootinfo_buf;
+static char *bi_next;		/* next free byte in bootinfo_buf */
+
+static void
+bi_init(void)
+{
+	bi->magic = BOOTINFO_MAGIC;
+	bi->size = sizeof(struct bootinfo);
+	bi->nentries = 0;
+	bi_next = bootinfo_buf + sizeof(struct bootinfo);
+}
+
+static void *
+bi_alloc(uint32_t type, uint32_t len)
+{
+	struct btinfo_common *entry;
+
+	/* Ensure 4-byte alignment */
+	len = (len + 3) & ~3;
+
+	if ((bi_next - bootinfo_buf) + len > BOOTINFO_MAXSIZE) {
+		printf("bootinfo overflow\n");
+		return NULL;
+	}
+
+	entry = (struct btinfo_common *)bi_next;
+	entry->len = len;
+	entry->type = type;
+	bi->nentries++;
+	bi->size += len;
+	bi_next += len;
+	return entry;
+}
+
+/* ── Boot data → bootinfo translation ────────────────────────────── */
+
+/*
+ * translate_bootdata — walk firmware boot data, build bootinfo
+ *
+ * Single pass over the Penumbra boot data tagged list.
+ * For each entry, emit the corresponding bootinfo entry and
+ * collect memory regions into memregions[].
+ */
+static int
+translate_bootdata(uint32_t bootdata)
+{
+	struct bootdata_hdr *hdr = (struct bootdata_hdr *)bootdata;
+	uint32_t p;
+
+	if (hdr->magic != BOOTDATA_MAGIC) {
+		printf("Bad boot data magic: 0x%x\n", hdr->magic);
+		return -1;
+	}
+
+	bi_init();
+	nmemregions = 0;
+	p = bootdata + sizeof(struct bootdata_hdr);
+
+	while (1)
+	{
+		struct btag_hdr *h = (struct btag_hdr *)p;
+		p += h->size;
+
+		switch (h->type)
+		{
+		case BTAG_END:
+			return 0;
+
+		case BTAG_DEVICE:
+			if (translate_bootdata_device((struct btag_device *)h) != 0)
+				return -1;
+			break;
+
+		case BTAG_BOOTDEV:
+			if (translate_bootdata_bootdev((struct btag_bootdev *)h, bootdata) != 0)
+				return -1;
+			break;
+
+		case BTAG_CONSOLE:
+			if (translate_bootdata_console((struct btag_console *)h, bootdata) != 0)
+				return -1;
+			break;
+
+		default:
+			break;
+		}
+	}
+}
+
+static int
+translate_bootdata_console(struct btag_console *cdev, uint32_t bootdata)
+{
+	struct btag_device *dev = find_device_nth(bootdata, cdev->dev_nth);
+	if (dev == NULL)
+	{
+		printf("Boot device not found in device table");
+		return -1;
+	}
+
+	struct btinfo_console *info = bi_alloc(BTINFO_CONSOLE, sizeof(struct btinfo_console));
+	if (info == NULL)
+		return -1;
+
+	info->addr = dev->base;
+	strcpy(info->devname, "com0");
+
+	return 0;
+}
+
+static int
+translate_bootdata_bootdev(struct btag_bootdev *bdev, uint32_t bootdata)
+{
+	struct btag_device *dev = find_device_nth(bootdata, bdev->dev_nth);
+	if (dev == NULL)
+	{
+		printf("Boot device not found in device table");
+		return -1;
+	}
+
+	struct btinfo_bootpath *info = bi_alloc(BTINFO_BOOTPATH, sizeof(struct btinfo_bootpath));
+	if (info == NULL)
+		return -1;
+
+	info->bus_addr = dev->base;
+	// FIXME: Poor naming, this should be just device index (cs is SDcard specific terminology)
+	info->cs = bdev->cs;
+	info->partition = bdev->partition;
+
+	return 0;
+}
+
+static int
+translate_bootdata_device(struct btag_device *dev)
+{
+	switch (dev->cls)
+	{
+	case ACFG_CLASS_MEMORY:
+	{
+		if (nmemregions < MAX_MEMREGIONS)
+		{
+			memregions[nmemregions].base = dev->base;
+			memregions[nmemregions].size = dev->dev_size;
+			nmemregions++;
+		}
+		struct btinfo_memory *info = bi_alloc(BTINFO_MEMORY, sizeof(struct btinfo_memory));
+		if (info == NULL)
+			return -1;
+
+		info->base = dev->base;
+		info->size = dev->dev_size;
+		break;
+	}
+	default:
+	{
+		/* Pass through all other devices (UART, SPI, etc.)
+		 * — kernel can't re-run autoconfig without bus reset. */
+		struct btinfo_device *info = bi_alloc(BTINFO_DEVICE,
+		    sizeof(struct btinfo_device));
+		if (info == NULL)
+			return -1;
+		info->cls = dev->cls;
+		info->addr = dev->base;
+		info->size = dev->dev_size;
+		info->id = dev->id;
+		memcpy(info->name, dev->name, sizeof(info->name));
+		break;
+	}
+	}
+
+	return 0;
+}
+
+/*
+ * Find the nth BTAG_DEVICE entry in boot data.
+ */
+static struct btag_device *
+find_device_nth(uint32_t bootdata, int nth)
+{
+	uint32_t q = bootdata + sizeof(struct bootdata_hdr);
+	int count = 0;
+
+	for (;;) {
+		struct btag_hdr *h = (struct btag_hdr *)q;
+		if (h->type == BTAG_END)
+			return NULL;
+		if (h->type == BTAG_DEVICE) {
+			if (count == nth)
+				return (struct btag_device *)q;
+			count++;
+		}
+		q += h->size;
+	}
+}
+
+/* ── devopen / _rtt (required by libsa) ──────────────────────────── */
+
 int
 devopen(struct open_file *f, const char *fname, char **file)
 {
@@ -35,7 +294,6 @@ devopen(struct open_file *f, const char *fname, char **file)
 	return 0;
 }
 
-/* libsa requires _rtt() for panic/exit */
 void
 _rtt(void)
 {
@@ -45,35 +303,124 @@ _rtt(void)
 		;
 }
 
+/* ── Main ────────────────────────────────────────────────────────── */
+
+#define KERNEL_TEXT_BASE	0x80010000
+
 int
 main(uint32_t bootdata)
 {
 	const char **path;
-	int fd;
+	u_long marks[MARK_MAX];
+	u_long kernel_size, offset;
+	uint32_t load_phys;
+	struct btinfo_symtab *bi_sym;
+	struct btinfo_kernbase *bi_kern;
+	int rc;
 
-	printf("NetBSD/Penumbra boot\n\n");
+	printf("NetBSD/penumbra boot\n\n");
 
+	/* Phase 1: Translate boot data → bootinfo + memory map */
+	rc = translate_bootdata(bootdata);
+	if (rc != 0)
+		_rtt();
+
+	printf("Memory regions: %d\n", nmemregions);
+	for (rc = 0; rc < nmemregions; rc++)
+		printf("  0x%x - 0x%x (%u KB)\n",
+		    memregions[rc].base,
+		    memregions[rc].base + memregions[rc].size,
+		    memregions[rc].size / 1024);
+
+	/* Phase 2: Init SD and find the kernel on FAT32 */
 	if (sd_boot_init(bootdata) != 0) {
-		printf("SD init failed, halting.\n");
+		printf("SD init failed.\n");
 		_rtt();
 	}
 
-	for (path = boot2_paths; *path != NULL; path++) {
-		fd = open(*path, 0);
-		if (fd >= 0) {
-			printf("Found: %s\n", *path);
-			close(fd);
+
+	/* Phase 3: COUNT pass — measure kernel memory footprint */
+	for (path = kernel_paths; *path != NULL; path++) {
+		marks[MARK_START] = 0;
+		rc = loadfile(*path, marks, COUNT_KERNEL);
+		if (rc == 0) {
+			printf("Found %s\n", *path);
 			break;
 		}
 	}
-
 	if (*path == NULL) {
-		printf("Stage 2 not found, halting.\n");
+		printf("Kernel not found.\n");
 		_rtt();
 	}
 
-	/* TODO: loadfile() and jump to stage 2 */
-	printf("Loading not yet implemented.\n");
-	_rtt();
-	return 1;
+	kernel_size = marks[MARK_END] - marks[MARK_START];
+	printf("Kernel: %lu bytes, vaddr 0x%lx - 0x%lx\n",
+	    kernel_size, marks[MARK_START], marks[MARK_END]);
+
+	/* Phase 4: Allocate physical RAM for the kernel.
+	 * Reserve the first 64 KB (vectors, boot data, stack,
+	 * bootloader itself). */
+	load_phys = find_load_addr(kernel_size, 0, 0x10000);
+	if (load_phys == 0) {
+		printf("No RAM for kernel.\n");
+		_rtt();
+	}
+	printf("Loading at physical 0x%x\n", load_phys);
+
+	/*
+	 * Compute loadfile offset:
+	 * The kernel is linked at KERNEL_TEXT_BASE.  loadfile() adds
+	 * marks[MARK_START] to every p_vaddr.  We want:
+	 *   p_vaddr + offset == physical load address
+	 * So: offset = load_phys - KERNEL_TEXT_BASE
+	 * (wraps unsigned — that's fine, the addition wraps back)
+	 */
+	offset = (u_long)load_phys - (u_long)KERNEL_TEXT_BASE;
+
+	/* Phase 5: LOAD pass — actually read kernel into RAM */
+	marks[MARK_START] = offset;
+	rc = loadfile(*path, marks, LOAD_KERNEL);
+	if (rc != 0) {
+		printf("Load failed.\n");
+		_rtt();
+	}
+
+	printf("Entry: 0x%lx (virt), 0x%lx (phys)\n",
+	    marks[MARK_ENTRY],
+	    marks[MARK_ENTRY] + offset);
+
+	/* Phase 6: Add final bootinfo entries */
+	bi_sym = bi_alloc(BTINFO_SYMTAB, sizeof(*bi_sym));
+	if (bi_sym != NULL) {
+		bi_sym->nsym = marks[MARK_NSYM];
+		bi_sym->ssym = marks[MARK_SYM] + offset;
+		bi_sym->esym = marks[MARK_END] + offset;
+	}
+
+	bi_kern = bi_alloc(BTINFO_KERNBASE, sizeof(*bi_kern));
+	if (bi_kern != NULL) {
+		bi_kern->phys_base = load_phys;
+		bi_kern->kern_start = marks[MARK_START];
+		bi_kern->kern_end = marks[MARK_END];
+	}
+
+	printf("Bootinfo: %d entries, %d bytes\n",
+	    bi->nentries, (int)(bi_next - bootinfo_buf));
+
+	/* Phase 7: Jump to kernel with MMU off.
+	 * R1 = bootinfo (physical), R2 = kernel phys entry point.
+	 * The kernel's locore.S PIC stub takes it from here. */
+	uint32_t bi_phys = (uint32_t)bootinfo_buf;
+	uint32_t entry_phys = (uint32_t)(marks[MARK_ENTRY] + offset);
+
+	printf("Jumping to kernel at 0x%x\n\n", entry_phys);
+
+	__asm volatile(
+	    "mov r1, %0\n\t"
+	    "mov r2, %1\n\t"
+	    "jmp %1"
+	    : : "r"(bi_phys), "r"(entry_phys)
+	    : "r1", "r2"
+	);
+	__builtin_unreachable();
 }

@@ -13,47 +13,9 @@
 #include <lib/libsa/stand.h>
 
 /*
- * We need the boot data structures.  These are defined in hw/rom/bootdata.h
- * but that header depends on hw/rom/penumbra.h (which provides uint32_t).
- * Since we're compiling in a NetBSD environment where uint32_t comes from
- * <sys/types.h>, we define the boot data structures locally.
+ * Boot data structures shared with boot.c.
  */
-
-/* Boot data base address and tag types — must match hw/rom/bootdata.h */
-#define BOOTDATA_MAGIC   0x50454E42  /* "PENB" */
-
-#define BTAG_END       0
-#define BTAG_MEMORY    1
-#define BTAG_DEVICE    2
-#define BTAG_CONSOLE   3
-#define BTAG_BOOTDEV   4
-
-struct btag_hdr {
-	uint32_t type;
-	uint32_t size;
-};
-
-struct bootdata_hdr {
-	uint32_t magic;
-	uint32_t version;
-	uint32_t total_size;
-};
-
-struct btag_device {
-	struct btag_hdr hdr;
-	uint32_t cls;
-	uint32_t base;
-	uint32_t dev_size;
-	uint32_t id;
-	char     name[16];
-};
-
-struct btag_bootdev {
-	struct btag_hdr hdr;
-	uint32_t dev_nth;
-	uint32_t cs;
-	uint32_t partition;
-};
+#include "bootdata_defs.h"
 
 /* ── SPI register interface ──────────────────────────────────────── */
 

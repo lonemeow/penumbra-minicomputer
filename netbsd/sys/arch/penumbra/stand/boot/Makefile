@@ -27,7 +27,7 @@ S=		${.CURDIR}/../../../..
 
 .PATH:		${.CURDIR}/../libsa
 
-CPPFLAGS+=	-nostdinc -D_STANDALONE -D__NetBSD__ -I${S}
+CPPFLAGS+=	-nostdinc -D_STANDALONE -D__NetBSD__ -I${S} -I${.CURDIR}
 CFLAGS+=	-O0 -ffreestanding -fPIE
 CWARNFLAGS+=	-Wno-main
 
