@@ -39,6 +39,7 @@ static const char *kernel_paths[] = {
 /* ── Memory region tracking ──────────────────────────────────────── */
 
 #define MAX_MEMREGIONS	8
+#define MAX_RESERVED	4
 
 struct memregion {
 	uint32_t base;
@@ -49,38 +50,59 @@ static struct memregion memregions[MAX_MEMREGIONS];
 static int nmemregions;
 
 /*
- * Find a free region of `size` bytes in the collected memory map,
- * avoiding the reserved range [res_base, res_base+res_size).
- * Returns a page-aligned physical address, or 0 on failure.
+ * Find a contiguous region of `size` bytes in the collected memory map
+ * (memregions[]), avoiding all reserved regions in `res[]`.
+ *
+ * Parameters:
+ *   size  — minimum bytes needed
+ *   res   — array of reserved regions to avoid
+ *   nres  — number of entries in res[]
+ *
+ * Returns a page-aligned (4 KB) physical address, or 0 on failure.
  */
 static uint32_t
-find_load_addr(uint32_t size, uint32_t res_base, uint32_t res_size)
+find_free_region(uint32_t size, const struct memregion *res, int nres)
 {
-	int i;
+	for (int i = 0; i < nmemregions; i++)
+	{
+		uint32_t cand_start = memregions[i].base;
+		uint32_t cand_end = cand_start + memregions[i].size;
 
-	for (i = 0; i < nmemregions; i++) {
-		uint32_t start = memregions[i].base;
-		uint32_t end = start + memregions[i].size;
+		for (int j = 0; j < nres; j++)
+		{
+			uint32_t res_start = res[j].base;
+			uint32_t res_end = res_start + res[j].size;
 
-		/* Avoid the reserved region (bootloader + boot data) */
-		uint32_t rend = res_base + res_size;
-		if (res_base <= start && rend > start)
-			start = rend;
-		if (res_base < end && rend >= end)
-			end = res_base;
-		if (res_base > start && rend < end) {
-			/* Split — take the larger piece */
-			if ((res_base - start) >= (end - rend))
-				end = res_base;
-			else
-				start = rend;
+			if (res_start <= cand_start && res_end >= cand_end)
+			{
+				/* Completely covered */
+				cand_start = cand_end;
+			}
+			else if (res_start <= cand_start && res_end > cand_start)
+			{
+				/* Overlaps at start */
+				cand_start = res_end;
+			}
+			else if (res_start < cand_end && res_end >= cand_end)
+			{
+				/* Overlaps at end */
+				cand_end = res_start;
+			}
+			else if (res_start > cand_start && res_end < cand_end)
+			{
+				/* Splits the block; take the larger side */
+				if ((res_start - cand_start) >= (cand_end - res_end))
+					cand_end = res_start;
+				else
+					cand_start = res_end;
+			}
 		}
 
-		/* Page-align */
-		start = (start + 0xFFF) & ~0xFFF;
+		/* Page-align the start */
+		cand_start = (cand_start + 0xFFF) & ~0xFFF;
 
-		if (end > start && (end - start) >= size)
-			return start;
+		if (cand_end > cand_start && (cand_end - cand_start) >= size)
+			return cand_start;
 	}
 
 	return 0;
@@ -306,6 +328,10 @@ _rtt(void)
 /* ── Main ────────────────────────────────────────────────────────── */
 
 #define KERNEL_TEXT_BASE	0x80010000
+#define HEAP_SIZE		(64 * 1024)
+
+/* Linker-provided symbols for the bootloader's own footprint */
+extern char _start[], _end[];
 
 int
 main(uint32_t bootdata)
@@ -332,18 +358,54 @@ main(uint32_t bootdata)
 		    memregions[rc].base + memregions[rc].size,
 		    memregions[rc].size / 1024);
 
+	/*
+	 * Phase 1.5: Set up heap in a safe RAM region.
+	 *
+	 * The bootloader is a PIE loaded at an arbitrary address.
+	 * Reserve the low page (vectors + boot data + stack) and the
+	 * bootloader's own text/data/bss, then find a free region
+	 * for the libsa heap.
+	 */
+	struct memregion res[MAX_RESERVED];
+	int nres = 0;
+
+	/* Low memory: vectors (page 0), boot data, CRT stack (sp = 0xB000) */
+	res[nres].base = 0;
+	res[nres].size = 0xC000;
+	nres++;
+
+	/* Bootloader's own PIE image */
+	res[nres].base = (uint32_t)_start;
+	res[nres].size = (uint32_t)(_end - _start);
+	nres++;
+
+	uint32_t heap_base = find_free_region(HEAP_SIZE, res, nres);
+	if (heap_base == 0) {
+		printf("No RAM for heap.\n");
+		_rtt();
+	}
+	setheap((void *)heap_base, (void *)(heap_base + HEAP_SIZE));
+	printf("Heap: 0x%x - 0x%x (%u KB)\n",
+	    heap_base, heap_base + HEAP_SIZE, HEAP_SIZE / 1024);
+
+	/* Add heap to reserved list for subsequent allocations */
+	res[nres].base = heap_base;
+	res[nres].size = HEAP_SIZE;
+	nres++;
+
 	/* Phase 2: Init SD and find the kernel on FAT32 */
 	if (sd_boot_init(bootdata) != 0) {
 		printf("SD init failed.\n");
 		_rtt();
 	}
 
-
-	/* Phase 3: COUNT pass — measure kernel memory footprint */
+	/* Phase 3: COUNT pass — measure kernel memory footprint.
+	 * loadfile() returns fd on success, -1 on failure. */
 	for (path = kernel_paths; *path != NULL; path++) {
 		marks[MARK_START] = 0;
 		rc = loadfile(*path, marks, COUNT_KERNEL);
-		if (rc == 0) {
+		if (rc >= 0) {
+			close(rc);
 			printf("Found %s\n", *path);
 			break;
 		}
@@ -357,10 +419,9 @@ main(uint32_t bootdata)
 	printf("Kernel: %lu bytes, vaddr 0x%lx - 0x%lx\n",
 	    kernel_size, marks[MARK_START], marks[MARK_END]);
 
-	/* Phase 4: Allocate physical RAM for the kernel.
-	 * Reserve the first 64 KB (vectors, boot data, stack,
-	 * bootloader itself). */
-	load_phys = find_load_addr(kernel_size, 0, 0x10000);
+	/* Phase 4: Allocate physical RAM for the kernel,
+	 * avoiding low mem, bootloader, and heap. */
+	load_phys = find_free_region(kernel_size, res, nres);
 	if (load_phys == 0) {
 		printf("No RAM for kernel.\n");
 		_rtt();
@@ -380,21 +441,25 @@ main(uint32_t bootdata)
 	/* Phase 5: LOAD pass — actually read kernel into RAM */
 	marks[MARK_START] = offset;
 	rc = loadfile(*path, marks, LOAD_KERNEL);
-	if (rc != 0) {
-		printf("Load failed.\n");
+	if (rc < 0) {
+		printf("Load failed (errno=%d: %s).\n",
+		    errno, strerror(errno));
 		_rtt();
 	}
+	close(rc);
 
-	printf("Entry: 0x%lx (virt), 0x%lx (phys)\n",
-	    marks[MARK_ENTRY],
-	    marks[MARK_ENTRY] + offset);
+	/*
+	 * marks[] are already physical addresses — loadfile() applied
+	 * offset via the LOADADDR() macro, so don't add offset again.
+	 */
+	printf("Entry: 0x%lx (phys)\n", marks[MARK_ENTRY]);
 
 	/* Phase 6: Add final bootinfo entries */
 	bi_sym = bi_alloc(BTINFO_SYMTAB, sizeof(*bi_sym));
 	if (bi_sym != NULL) {
 		bi_sym->nsym = marks[MARK_NSYM];
-		bi_sym->ssym = marks[MARK_SYM] + offset;
-		bi_sym->esym = marks[MARK_END] + offset;
+		bi_sym->ssym = marks[MARK_SYM];
+		bi_sym->esym = marks[MARK_END];
 	}
 
 	bi_kern = bi_alloc(BTINFO_KERNBASE, sizeof(*bi_kern));
@@ -411,7 +476,7 @@ main(uint32_t bootdata)
 	 * R1 = bootinfo (physical), R2 = kernel phys entry point.
 	 * The kernel's locore.S PIC stub takes it from here. */
 	uint32_t bi_phys = (uint32_t)bootinfo_buf;
-	uint32_t entry_phys = (uint32_t)(marks[MARK_ENTRY] + offset);
+	uint32_t entry_phys = (uint32_t)marks[MARK_ENTRY];
 
 	printf("Jumping to kernel at 0x%x\n\n", entry_phys);
 
