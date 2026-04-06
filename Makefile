@@ -1,9 +1,13 @@
 # Penumbra Minicomputer — Build System
 # Usage:
-#   make smoke          — build & run smoke test (verify toolchain)
-#   make sim MOD=<name> — build & run testbench for a module
-#   make wave MOD=<name>— open waveform in GTKWave
-#   make clean          — remove build artifacts
+#   make simulate            — build ROM + ISS, run interactively (fast)
+#   make simulate-rtl        — build ROM + Verilator RTL sim (cycle-accurate)
+#   make test-iss            — run all HW tests on ISS (fast, no Docker)
+#   make test                — run all HW tests on RTL sim (slow, Docker)
+#   make sim MOD=<name>      — build & run testbench for a module
+#   make smoke               — toolchain smoke test
+#   make wave MOD=<name>     — open waveform in GTKWave
+#   make clean               — remove build artifacts
 
 # ── Configuration ──────────────────────────────────────────────
 # Docker-based Verilator (avoids host install, works on WSL2)
@@ -129,20 +133,68 @@ test:
 		exit 1; \
 	fi
 
-# ── Interactive simulation ─────────────────────────────────────
-# Builds machine_sim with interactive testbench and boot ROM.
-# Bridges stdin/stdout to UART for terminal interaction.
+# ── Run all program tests on ISS (fast, no Docker) ────────────
+# Same test programs as `make test` but runs on the ISS.
+# Usage: make test-iss
+.PHONY: test-iss
+test-iss: $(ISS)
+	@pass=0; fail=0; failed=""; \
+	for prog in $(TEST_PROGS); do \
+		if ! $(PASM) --org 0xFFFF0000 hw/sim/programs/$$prog.s -o /tmp/$$prog.hex 2>/dev/null; then \
+			printf "  \033[31mFAIL\033[0m  %s (assembler error)\n" "$$prog"; \
+			fail=$$((fail + 1)); \
+			failed="$$failed $$prog"; \
+			continue; \
+		fi; \
+		r1=$$(echo "break" | timeout 5 ./$(ISS) /tmp/$$prog.hex +trace=/tmp/iss_test.log 2>/dev/null; \
+			tail -1 /tmp/iss_test.log 2>/dev/null | grep -o 'R1=[0-9a-f]*' | head -1); \
+		if echo "$$r1" | grep -q '00000001'; then \
+			printf "  \033[32mPASS\033[0m  %s\n" "$$prog"; \
+			pass=$$((pass + 1)); \
+		else \
+			printf "  \033[31mFAIL\033[0m  %s ($$r1)\n" "$$prog"; \
+			fail=$$((fail + 1)); \
+			failed="$$failed $$prog"; \
+		fi; \
+	done; \
+	echo ""; \
+	total=$$((pass + fail)); \
+	echo "$$pass/$$total tests passed"; \
+	if [ $$fail -gt 0 ]; then \
+		echo "  *** $$fail FAILED:$$failed ***"; \
+		exit 1; \
+	fi
+
+# ── Interactive simulation (ISS — fast, instruction-level) ─────
+# Builds boot ROM and runs through the ISS. No Docker needed.
 # Usage: make simulate                    (interactive, default)
-#        make simulate INTERACTIVE=0      (non-interactive, for piped input)
+#        make simulate SDCARD=build/boot.img
+#        make simulate TRACE=build/trace.log
 #        make simulate LLVM_PREFIX=/other/llvm/build
+ISS = sw/sim/penumbra-iss
+
+.PHONY: simulate
+simulate: $(ISS)
+	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX) CFLAGS=$(CFLAGS)
+	@$(ISS) program.hex $(if $(SDCARD),+sdcard=$(SDCARD)) $(if $(TRACE),+trace=$(TRACE))
+
+$(ISS): sw/sim/penumbra_iss.cpp
+	@$(MAKE) -C sw/sim
+
+# ── RTL simulation (Verilator — cycle-accurate, slow) ─────────
+# Full RTL simulation via Docker/Verilator. Use for hardware
+# verification or when cycle-accurate behavior matters.
+# Usage: make simulate-rtl
+#        make simulate-rtl INTERACTIVE=0   (non-interactive, piped input)
+#        make simulate-rtl SDCARD=build/boot.img
 ifeq ($(INTERACTIVE),0)
 DOCKER_RUN_IT = docker run --rm -i -v $(CURDIR):/work -w /work
 else
 DOCKER_RUN_IT = docker run --rm -it -v $(CURDIR):/work -w /work
 endif
 
-.PHONY: simulate
-simulate:
+.PHONY: simulate-rtl
+simulate-rtl:
 	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
 	$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) \
 		--top-module machine_sim \
@@ -158,3 +210,4 @@ simulate:
 .PHONY: clean
 clean:
 	rm -rf $(BUILD_DIR) $(WAVE_DIR)
+	@$(MAKE) -C sw/sim clean 2>/dev/null || true

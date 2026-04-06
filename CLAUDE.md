@@ -45,7 +45,7 @@ The architecture is fully specified in `doc/`. Key specs:
 ## Repository Layout
 - `hw/` - All hardware design (RTL, testbenches, microcode, boot ROM, tools).
   See `hw/CLAUDE.md` for detailed hardware context.
-- `sw/` - Software tools (`sw/tools/pasm.py` assembler, `sw/tools/bin2hex.py` converter)
+- `sw/` - Software tools and ISS (`sw/tools/` assembler/converter, `sw/sim/` instruction set simulator)
 - `llvm/` - LLVM backend. See `llvm/llvm/lib/Target/Penumbra/CLAUDE.md` for detailed LLVM context.
 - `doc/` - Architecture specs (ISA, MMU, bus, memory map, datapath, toolchain, ABI)
 
@@ -72,24 +72,30 @@ The architecture is fully specified in `doc/`. Key specs:
   `WRSYS`/`RDSYS` (MMU, TLB, system ID). Belong to peripheral devices.
 
 ## Build System
+- `make simulate` — build boot ROM + ISS, run interactively (fast,
+  no Docker). Uses instruction-level simulator (`sw/sim/penumbra_iss.cpp`).
+  - Override LLVM location: `make simulate LLVM_PREFIX=/path/to/llvm-build`
+  - With SD card image: `make simulate SDCARD=disk.img`
+  - Instruction trace: `make simulate TRACE=build/trace.log`
+    (dumps PC, SR, R1–R14 for every instruction)
+  - ROM monitor accepts `break` (or `b`) to halt the simulator cleanly.
+- `make simulate-rtl` — build boot ROM + Verilator RTL sim,
+  run interactively via Docker (`-it`). Cycle-accurate but slow.
+  - Non-interactive (piped input): `echo "break" | make simulate-rtl INTERACTIVE=0`
+  - Same SDCARD/TRACE options as `make simulate`.
+- `make test-iss` — run all `hw/sim/programs/test_*.s` on ISS
+  (fast, no Docker); reports pass/fail summary
+- `make test` — run all test programs on RTL sim via Docker
 - `make smoke` — toolchain smoke test (trivial adder)
 - `make sim MOD=<name>` — build & run a module's Verilator testbench
 - `make sim MOD=machine_sim TB=<tb> PROG=<prog>` —
   run specific testbench with specific program.
   Auto-assembles `.s`/`.uasm` into hex.
-- `make test` — run all `hw/sim/programs/test_*.s` programs;
-  reports pass/fail summary
-- `make simulate` — build C boot ROM via clang pipeline,
-  run interactive simulator with terminal I/O via Docker (`-it`).
-  - Override LLVM location: `make simulate LLVM_PREFIX=/path/to/llvm-build`
-  - Non-interactive (piped input): `echo "break" | make simulate INTERACTIVE=0`
-  - With SD card image: `make simulate SDCARD=disk.img`
-  - Instruction trace: `make simulate TRACE=build/trace.log`
-    (dumps PC, SR, R1–R14 for every instruction)
-  - ROM monitor accepts `break` (or `b`) to halt the simulator cleanly.
 - `make wave MOD=<name>` — open VCD waveform in GTKWave
 - `make clean` — remove build artifacts
-- All simulation runs via Docker — no host install needed. Build artifacts in `build/` (gitignored).
+- RTL simulation runs via Docker — no host install needed.
+  ISS compiles natively with g++ (no dependencies).
+  Build artifacts in `build/` (gitignored).
 - **Important:** `rm -rf build/<mod>.verilator build/V<mod>`
   if you suspect stale binaries (WSL2 stale mtimes)
 
@@ -273,6 +279,15 @@ MIPS/68k-style vector dispatch.
   for branch optimization passes; kernel builds at `-O0` for now.
 
 ## Software Tools
+- **Instruction Set Simulator** (`sw/sim/penumbra_iss.cpp`):
+  Fast instruction-level simulator for software development.
+  Single C++ file, no dependencies beyond g++.
+  Covers full ISA (all 4 formats), 8 exception types,
+  software-managed TLB (64-entry 2-way SA), privilege modes
+  with SP banking, 16450 UART, SPI+SD card emulation,
+  and bus autoconfig. Passes all 38 hardware test programs.
+  Build: `make -C sw/sim` (or built automatically by `make simulate`).
+  Run: `sw/sim/penumbra-iss program.hex [+sdcard=img] [+trace=log]`
 - **LLVM toolchain** (`build/llvm/bin/`, override with `LLVM_PREFIX`):
   clang (C compiler), llvm-mc (assembler), ld.lld (linker),
   llvm-objcopy. Target triple: `penumbra-unknown-none`.
