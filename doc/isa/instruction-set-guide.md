@@ -22,8 +22,8 @@ The assembler accepts `LR`, `SP`, and `PC` as aliases for R13, R14, and R15.
 ## Status Register
 
 The status register (SR) is separate from the register file. It is modified
-implicitly by flag-setting instructions and explicitly by SETSR, ERET, and
-exception entry.
+implicitly by flag-setting instructions and explicitly by WRSPR SR, ERET, and
+exception entry. It can be read via `RDSPR Rd, SR`.
 
 ```
 Bit 31   30   29..4      3    2    1    0
@@ -258,14 +258,11 @@ my_function:
 | DI | `DI` | Disable interrupts (SR.I = 0, immediate) | Yes |
 | WRSYS | `WRSYS Rd, #dev, #reg` | Write Rd to system register | Yes |
 | RDSYS | `RDSYS Rd, #dev, #reg` | Read system register into Rd | Yes |
-| RDSPR | `RDSPR Rd, {ESR\|EPC\|USP}` | Read special-purpose register into Rd | Yes |
-| WRSPR | `WRSPR {ESR\|EPC\|USP}, Rd` | Write Rd to special-purpose register | Yes |
+| RDSPR | `RDSPR Rd, {ESR\|EPC\|USP\|SR}` | Read special-purpose register into Rd | Yes |
+| WRSPR | `WRSPR {ESR\|EPC\|USP\|SR}, Rd` | Write Rd to special-purpose register | Yes |
 | ERET | `ERET` | Exception return via EPC/ESR (restore PC + SR) | Yes |
-| GETSR | `GETSR Rd` | Rd = SR | No |
-| SETSR | `SETSR Rs` | SR = Rs | Yes |
 | SYSCALL | `SYSCALL` | Trap to vector 5 (system call) | No |
 | BREAK | `BREAK` | Trap to vector 6 (debug breakpoint) | No |
-| ICACHE_INV | `ICACHE_INV` | Invalidate instruction cache | Yes |
 
 **EI timing guarantee:** The instruction immediately after EI always executes
 before any pending interrupt is recognized. This enables the `EI` / `ERET`
@@ -404,12 +401,12 @@ All instructions are 32 bits. Bits [31:30] select one of four formats.
 |----|----------|----|----------|----|----------|----|----------|
 | 0 | ADD | 8 | MOV | 16 | WRSYS | 24 | JMP |
 | 1 | SUB | 9 | NOT | 17 | RDSYS | 25 | EI |
-| 2 | AND | 10 | MUL | 18 | GETSR | 26 | DI |
-| 3 | OR | 11 | MULU | 19 | SETSR | 27 | WRSPR |
+| 2 | AND | 10 | MUL | 18 | (free) | 26 | DI |
+| 3 | OR | 11 | MULU | 19 | (free) | 27 | WRSPR |
 | 4 | XOR | 12 | DIV | 20 | SYSCALL | 28 | RDSPR |
 | 5 | SHL | 13 | DIVU | 21 | BREAK | 29 | (free) |
 | 6 | SHR | 14 | MOD | 22 | ERET | 30 | (free) |
-| 7 | SAR | 15 | MODU | 23 | ICACHE_INV | 31 | (free) |
+| 7 | SAR | 15 | MODU | 23 | (free) | 31 | (free) |
 
 ### Format L -- Immediate Operations (bits [31:30] = 01)
 
@@ -495,12 +492,10 @@ assembler but do not yet have microcode.
 | JMP (RET) | Yes | |
 | EI, DI | Yes | ei_shadow, privilege check |
 | WRSYS, RDSYS | Yes | Privileged; see `doc/isa/sysregs-reference.md` |
-| RDSPR | Yes | Unified: reads ESR, EPC, or USP (SPR in IR[15:12]) |
-| WRSPR | Yes | Unified: writes ESR, EPC, or USP (SPR in IR[15:12]) |
+| RDSPR | Yes | Unified: reads ESR, EPC, USP, or SR (SPR in IR[15:12]) |
+| WRSPR | Yes | Unified: writes ESR, EPC, USP, or SR (SPR in IR[15:12]) |
 | ERET | Yes | Returns via EPC/ESR |
 | BREAK | Yes | Trap to vector 6 |
-| GETSR, SETSR | No | |
 | SYSCALL | Yes | Trap to vector 5, unprivileged |
-| ICACHE_INV | No | |
 | NOP (pseudo) | Yes | ADD R0, R0 |
 | RET (pseudo) | Yes | JMP R13 |

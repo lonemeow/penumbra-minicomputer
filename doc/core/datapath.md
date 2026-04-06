@@ -398,7 +398,7 @@ The `flag_w_en` micro-word bit controls whether ALU flag outputs are latched int
 | LLI, LLIS, LUI | No | Constant loading |
 | Loads, stores | No | Memory access |
 | Branches | No | Control flow |
-| System (WRSYS, RDSYS, GETSR, SETSR, JMP, ERET, etc.) | No | System operations |
+| System (WRSYS, RDSYS, RDSPR, WRSPR, JMP, ERET, etc.) | No | System operations |
 
 ### Condition Code Evaluation
 

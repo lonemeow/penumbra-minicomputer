@@ -9,7 +9,7 @@
 //   1. Exception entry (i_except_entry): atomically sets S=1, I=0,
 //      and snapshots SR into ESR *before* the modification.
 //   2. Bulk load (i_sr_load): overwrites entire SR from i_wdata
-//      (used by RTI and SETSR to restore saved state).
+//      (used by ERET and WRSPR SR to restore saved state).
 //   3. Flag update (i_flag_w_en): updates only NZCV from ALU outputs,
 //      leaving S and I untouched.
 //
@@ -56,7 +56,7 @@ module status_reg
     output logic        o_flag_v,
     output logic        o_sr_s,         // Supervisor bit (1=supervisor)
     output logic        o_sr_i,         // Interrupt enable (1=enabled)
-    output logic [31:0] o_sr_read,      // Full SR as 32-bit word (for GETSR)
+    output logic [31:0] o_sr_read,      // Full SR as 32-bit word (for RDSPR SR)
     output logic [31:0] o_esr,    // Exception SR (ESR) — saved at exception entry
     output logic        o_ei_shadow     // EI delay: suppress next IRQ check
 );
@@ -123,7 +123,7 @@ module status_reg
             else if (i_esr_load) begin
                 esr <= i_wdata;
             end
-            // Priority 2: Bulk load (RTI / SETSR)
+            // Priority 2: Bulk load (ERET / WRSPR SR)
             else if (i_sr_load) begin
                 flag_n <= i_wdata[SR_N];
                 flag_z <= i_wdata[SR_Z];

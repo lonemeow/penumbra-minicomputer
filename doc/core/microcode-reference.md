@@ -192,7 +192,7 @@ Controls the sysreg sideband bus and SPR write path.
 
 For sysreg operations (`SYS_READ`/`SYS_WRITE`), the device ID and register index come from IR spare fields (routed by the field extractor). During a sysreg read, cpu_core muxes the sysreg data onto the memory read data bus, so `mdr_load_mem=1` captures it into MDR.
 
-For `SPR_WRITE` (WRSPR), hardware decodes IR[15:12] to select the target: ESR (0), EPC (1), or USP (2). The R-bus carries the write data.
+For `SPR_WRITE` (WRSPR), hardware decodes IR[15:12] to select the target: ESR (0), EPC (1), USP (2), or SR (3). The R-bus carries the write data.
 
 ### ALU Start — `alu_start` [8] (1 bit)
 
@@ -513,13 +513,13 @@ di_set=1
 ```
 → SR.I = 0, immediate effect.
 
-**WRSPR {ESR|EPC|USP}, Rd** (op=27, dispatch=0x56) — Privileged
+**WRSPR {ESR|EPC|USP|SR}, Rd** (op=27, dispatch=0x56) — Privileged
 ```
 reg_a=IR_RD alu=PASS_A sys_op=SPR_WRITE
 ```
-→ R-bus = Rd value → SPR write target. Hardware decodes IR[15:12]: SPR 0 (ESR) → esr_load, SPR 1 (EPC) → epc_load, SPR 2 (USP) → R14 cross_bank write.
+→ R-bus = Rd value → SPR write target. Hardware decodes IR[15:12]: SPR 0 (ESR) → esr_load, SPR 1 (EPC) → epc_load, SPR 2 (USP) → R14 cross_bank write, SPR 3 (SR) → sr_load.
 
-**RDSPR Rd, {ESR|EPC|USP}** (op=28, dispatch=0x58) — Privileged
+**RDSPR Rd, {ESR|EPC|USP|SR}** (op=28, dispatch=0x58) — Privileged
 ```
 a_src=SPR alu=PASS_A reg_w=IR_RD w_en=1 wmux=RBUS
 ```

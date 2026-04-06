@@ -35,7 +35,7 @@ R0 always reads as zero. Any instruction that writes to R0 completes normally (i
 
 ### Status Register (SR)
 
-The status register is **not** part of the 16-register GPR file. It is a separate hardware register internal to the CPU, accessed via dedicated privileged instructions (`GETSR`, `SETSR`).
+The status register is **not** part of the 16-register GPR file. It is a separate hardware register internal to the CPU, accessible as SPR 3 via `RDSPR Rd, SR` and `WRSPR SR, Rd`.
 
 SR contains:
 - **Condition flags:** Z (zero), N (negative), C (carry), V (overflow)
@@ -65,7 +65,7 @@ Carry convention is **ARM-style** (C = NOT borrow on subtraction). Flags are upd
 | 1 | Z | Zero flag |
 | 0 | N | Negative flag (= result[31]) |
 
-System bits are in the upper word, condition flags in the lower nibble. Bits [29:4] are reserved for future use and should be written as zero for forward compatibility. This layout is used by GETSR, SETSR, and the exception entry save (EPC/ESR).
+System bits are in the upper word, condition flags in the lower nibble. Bits [29:4] are reserved for future use and should be written as zero for forward compatibility. This layout is used by RDSPR/WRSPR SR and the exception entry save (EPC/ESR).
 
 The SR contains only CPU-internal state. Registers belonging to other system devices (MMU, interrupt controller, etc.) are accessed via the system register bus — see [System Register Access](#system-register-access) below.
 
@@ -312,9 +312,9 @@ Controlled transitions:
 - **User to supervisor:** Via SYSCALL instruction or hardware interrupt/exception
 - **Supervisor to user:** Via exception return (ERET) instruction
 
-Privileged instructions: SETSR, DI, WRSYS, RDSYS, ERET, ICACHE_INV, WRSPR, RDSPR. Executing a privileged instruction in user mode raises a privilege violation exception (vector 3).
+Privileged instructions: DI, WRSYS, RDSYS, ERET, WRSPR, RDSPR. Executing a privileged instruction in user mode raises a privilege violation exception (vector 3).
 
-Note: EI (enable interrupts) and GETSR (read SR) are **unprivileged** — user code can enable interrupts (they may have been temporarily disabled by the kernel before returning) and can read its own flags.
+Note: EI (enable interrupts) is **unprivileged** — user code can enable interrupts (they may have been temporarily disabled by the kernel before returning). RDSPR/WRSPR (including SR) are privileged.
 
 ## Interrupt Control
 
@@ -338,14 +338,14 @@ EI is **unprivileged** — user code may execute it (the kernel may have disable
 
 DI is **privileged** — only the kernel may disable interrupts.
 
-### Why Dedicated Instructions
+### Why Dedicated EI/DI Instructions
 
 Interrupt enable/disable must be atomic single instructions to avoid race conditions:
 
-- **Read-modify-write race:** A GETSR/OR/SETSR sequence to set I=1 can be interrupted by NMI between GETSR and SETSR. The NMI handler's SR modifications would be overwritten by the stale value in SETSR.
-- **Pending interrupt timing:** The one-instruction delay on EI cannot be implemented with a general SETSR — the delay is specific to the I bit.
+- **Read-modify-write race:** An `RDSPR SR` / OR / `WRSPR SR` sequence to set I=1 can be interrupted between the read and write. The interrupt handler's SR modifications would be overwritten by the stale value in WRSPR.
+- **Pending interrupt timing:** The one-instruction delay on EI cannot be implemented with a general WRSPR SR — the delay is specific to the I bit.
 
-GETSR/SETSR still exist for reading flags and kernel-level SR manipulation, but **must not be used for interrupt control**. Always use EI/DI.
+`RDSPR/WRSPR SR` are useful for saving and restoring the full SR state (e.g., atomic sections that need to preserve the caller's interrupt state), but **must not be used as a substitute for EI/DI** for simple interrupt enable/disable. Always use EI/DI for that.
 
 ### Typical Interrupt Handler Pattern
 
@@ -392,8 +392,8 @@ ERET                         ; restores PC + SR from EPC/ESR, returns to user mo
 
 Unified instructions for reading and writing the CPU's special-purpose registers. Both are privileged.
 
-- **`RDSPR Rd, {ESR|EPC|USP}`** — Read SPR into Rd
-- **`WRSPR {ESR|EPC|USP}, Rd`** — Write Rd to SPR
+- **`RDSPR Rd, {ESR|EPC|USP|SR}`** — Read SPR into Rd
+- **`WRSPR {ESR|EPC|USP|SR}, Rd`** — Write Rd to SPR
 
 SPR encoding in IR[15:12] (same position as `sys_dev` for WRSYS/RDSYS):
 
@@ -402,6 +402,7 @@ SPR encoding in IR[15:12] (same position as `sys_dev` for WRSYS/RDSYS):
 | ESR | 0 | Exception SR — saved at exception entry |
 | EPC | 1 | Exception PC — saved at exception entry |
 | USP | 2 | User stack pointer — banked-away R14 |
+| SR  | 3 | Current status register (flags + mode bits) |
 
 Writing EPC/ESR allows trap handlers to modify the return state before `ERET`. For example, skipping a faulting instruction: `RDSPR R2, EPC; ADD R2, #4; WRSPR EPC, R2; ERET`. USP access is essential for saving/restoring the full user context on interrupt entry and process switches.
 

@@ -165,6 +165,7 @@ package penumbra_pkg;
     localparam logic [3:0] SPR_ESR = 4'd0;   // Exception SR
     localparam logic [3:0] SPR_EPC = 4'd1;   // Exception PC
     localparam logic [3:0] SPR_USP = 4'd2;   // User stack pointer (banked R14)
+    localparam logic [3:0] SPR_SR  = 4'd3;   // Current status register
 
     // ── Exception vector numbers ────────────────────────────────
     // Vector address = {26'b0, vector_num, 2'b00} (word-aligned table at 0x00)

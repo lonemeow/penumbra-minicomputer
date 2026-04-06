@@ -4,7 +4,7 @@
 //   - Reset state (supervisor mode, interrupts disabled, flags clear)
 //   - Flag latch from ALU via flag_w_en
 //   - flag_w_en=0 does not modify flags
-//   - Bulk load via sr_load (RTI/SETSR path)
+//   - Bulk load via sr_load (ERET/WRSPR SR path)
 //   - sr_load ignores reserved bits
 //   - Exception entry: snapshot to ESR then S=1, I=0
 //   - Exception entry preserves flags, only changes S and I

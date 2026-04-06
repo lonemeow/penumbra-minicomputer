@@ -232,11 +232,13 @@ module datapath
     //   SPR 0 (ESR) → amux select = ESR (01)
     //   SPR 1 (EPC) → amux select = EPC (10)
     //   SPR 2 (USP) → amux select = REG (00), reg_a override = R14, cross_bank = 1
+    //   SPR 3 (SR)  → amux select = ESR (01), sr_read selected instead of ESR
     //
     // WRSPR (spr_write=1): routes R-bus to SPR write target.
     //   SPR 0 (ESR) → esr_load from w_bus
     //   SPR 1 (EPC) → epc_load from w_bus
     //   SPR 2 (USP) → regfile write R14, cross_bank = 1
+    //   SPR 3 (SR)  → sr_load from w_bus (bulk-load entire SR)
 
     logic [1:0]  amux_sel;         // 2-bit select for amux (decoded from 3-bit a_src)
     logic [3:0]  spr_reg_a;        // reg_a override for RDSPR USP
@@ -244,6 +246,8 @@ module datapath
     logic        spr_reg_a_override; // 1 when RDSPR USP needs reg_a = R14
     logic        spr_esr_load;     // WRSPR ESR: write w_bus to ESR
     logic        spr_epc_load;     // WRSPR EPC: write w_bus to EPC
+    logic        spr_sr_load;      // WRSPR SR: write w_bus to SR
+    logic        spr_read_sr;      // RDSPR SR: select sr_read instead of ESR on amux
     logic        spr_w_en;         // WRSPR USP: force regfile write
     logic [3:0]  spr_reg_w;        // WRSPR USP: force write to R14
 
@@ -255,6 +259,8 @@ module datapath
         spr_reg_a_override = 1'b0;
         spr_esr_load      = 1'b0;
         spr_epc_load      = 1'b0;
+        spr_sr_load       = 1'b0;
+        spr_read_sr       = 1'b0;
         spr_w_en          = 1'b0;
         spr_reg_w         = 4'd0;
 
@@ -270,6 +276,10 @@ module datapath
                     spr_cross_bank     = 1'b1;
                     spr_reg_a_override = 1'b1;
                 end
+                SPR_SR: begin
+                    amux_sel    = 2'b01;  // ESR slot, sr_read selected
+                    spr_read_sr = 1'b1;
+                end
                 default: amux_sel = 2'b00;
             endcase
         end
@@ -284,6 +294,7 @@ module datapath
                     spr_reg_w      = REG_SP;
                     spr_cross_bank = 1'b1;
                 end
+                SPR_SR: spr_sr_load = 1'b1;
                 default: ;
             endcase
         end
@@ -330,9 +341,7 @@ module datapath
     // ── Status register ──────────────────────────────────────
     logic        sr_flag_n, sr_flag_z, sr_flag_c, sr_flag_v;
     logic        sr_s_wire, sr_i_wire;
-    // verilator lint_off UNUSEDSIGNAL
-    logic [31:0] sr_read;   // Full SR word — used by GETSR (future micro-op path)
-    // verilator lint_on UNUSEDSIGNAL
+    logic [31:0] sr_read;   // Full SR word — used by RDSPR SR
     logic [31:0] esr;
     logic        ei_shadow_wire;
 
@@ -344,7 +353,7 @@ module datapath
         .i_alu_flag_c   (alu_flag_c),
         .i_alu_flag_v   (alu_flag_v),
         .i_flag_w_en    (i_flag_w_en),
-        .i_sr_load      (i_sr_load),
+        .i_sr_load      (i_sr_load | spr_sr_load),
         .i_wdata        (w_bus),
         .i_except_entry (i_except_entry),
         .i_esr_load     (spr_esr_load),
@@ -373,9 +382,13 @@ module datapath
 
     logic [31:0] epc;
 
+    // RDSPR SR: select sr_read instead of ESR on amux input 01
+    logic [31:0] amux_esr_or_sr;
+    assign amux_esr_or_sr = spr_read_sr ? sr_read : esr;
+
     amux u_amux (
         .i_reg_a       (reg_a_data),
-        .i_esr   (esr),
+        .i_esr   (amux_esr_or_sr),
         .i_epc   (epc),
         .i_vector_addr (vector_addr),
         .i_sel         (amux_sel),

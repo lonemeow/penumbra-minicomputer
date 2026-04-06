@@ -260,7 +260,7 @@ BRANCH_OPS = {
 }
 
 # SPR name → number mapping (encoded in IR[15:12], same position as sys_dev)
-SPR_NAMES = {"ESR": 0, "EPC": 1, "USP": 2}
+SPR_NAMES = {"ESR": 0, "EPC": 1, "USP": 2, "SR": 3}
 
 # Pseudo-instructions
 PSEUDO_OPS = {"NOP", "RET", "LA", "LI"}
