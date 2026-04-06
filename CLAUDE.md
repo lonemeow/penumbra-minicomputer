@@ -93,6 +93,17 @@ The architecture is fully specified in `doc/`. Key specs:
 - **Important:** `rm -rf build/<mod>.verilator build/V<mod>`
   if you suspect stale binaries (WSL2 stale mtimes)
 
+### SD Card Image
+Build a test SD image with bootloader and/or kernel for `make simulate`:
+```sh
+sw/tools/mksdimage.sh -o build/boot.img \
+  -2 build/netbsd-obj/sys/arch/penumbra/stand/boot/PENBOOT.ELF \
+  -k build/netbsd-kernel/MINIMAL/netbsd
+```
+Options: `-s SIZE_MB` (default 64), `-v` (verbose), `-e DIR` (extra files).
+Requires NetBSD cross-tools (`nbfdisk`, `nbmakefs`).
+Use with: `make simulate SDCARD=build/boot.img`
+
 ### LLVM Toolchain Build
 Build dir: `build/llvm/`. Initial cmake (one-time):
 ```sh

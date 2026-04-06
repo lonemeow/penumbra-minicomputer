@@ -18,16 +18,21 @@
 #include <cstdio>
 #include <cstdint>
 #include "Vmachine_sim.h"
+#if VM_TRACE
 #include "verilated_vcd_c.h"
-
 static VerilatedVcdC* tfp = nullptr;
 static uint64_t sim_time = 0;
+#endif
 
 static void tick(Vmachine_sim* d) {
     d->i_clk = 0; d->eval();
+#if VM_TRACE
     if (tfp) { tfp->dump(sim_time); sim_time++; }
+#endif
     d->i_clk = 1; d->eval();
+#if VM_TRACE
     if (tfp) { tfp->dump(sim_time); sim_time++; }
+#endif
 
     // Check for UART TX output on rising edge
     if (d->o_uart_tx_valid) {
@@ -68,17 +73,21 @@ static void reset(Vmachine_sim* cpu) {
 }
 
 int main() {
-    Verilated::traceEverOn(true);
     Vmachine_sim* cpu = new Vmachine_sim;
+#if VM_TRACE
+    Verilated::traceEverOn(true);
     tfp = new VerilatedVcdC;
     cpu->trace(tfp, 99);
     tfp->open("waves/machine_sim.vcd");
+#endif
 
     printf("── Program Runner ──\n\n");
     reset(cpu);
 
     int cycles = run_until_halt(cpu, 500000);
+#if VM_TRACE
     if (tfp) { tfp->close(); delete tfp; tfp = nullptr; }
+#endif
 
     if (cycles < 0) {
         printf("  FAIL: no BREAK within cycle limit\n");
