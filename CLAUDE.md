@@ -315,11 +315,25 @@ MIPS/68k-style vector dispatch.
 - **Boot from ROM:** Programs assembled with `--org 0xFFFF0000`. `_start:` must be first label.
 - **ROM page mapping (MMU tests):** TLB_INDEX=16, TLB_VPN=0x0FFFF000, TLB_PTE=0xFFFF00B9.
 
-**NetBSD kernel links successfully.**
+**NetBSD kernel boots to `main()` on the ISS.**
 - Machine headers (39 files), kernel config, MD build system,
   stub kernel sources, and assembly string functions all present.
 - `config MINIMAL` → `make depend` → `make` produces a 4 MB
   ELF kernel binary at `build/netbsd-kernel/MINIMAL/netbsd`.
+- **locore.S early boot complete:** PIC bias computation,
+  bootstrap TLB miss handler (algorithmic VA→PA mapping),
+  MMU enable, physical-to-virtual transition, BSS zero,
+  call to `penumbra_init()`.  Boots on ISS end-to-end:
+  ROM → bootloader → kernel → `penumbra_init()` → `main()`.
+- **Early console working:** 16450 UART wired to `cn_tab` in
+  `consinit()`, printf/panic output visible from first call.
+- Bootstrap TLB handler maps kernel VA linearly (VA + phys_bias)
+  and MMIO identity-mapped (uncached).  Runs until `pmap_bootstrap()`
+  installs the real handler.  Handler copied to vector page (PA 0x80),
+  pinned in slot 0.  Alternating-way replacement.
+- Current panic: `uvm_init: page size not set` — expected,
+  need to parse bootinfo memory regions and call
+  `uvm_page_physload()` before `main()`.
 - All MD functions are either implemented or break-trap stubs
   (grep for `TODO(stub)` to find stubs needing real implementations).
 - Atomics: interrupt-disable CAS (`RDSPR SR` / `DI` / load-cmp-store
@@ -330,21 +344,20 @@ MIPS/68k-style vector dispatch.
 - Virtual memory layout: 2G/2G user/kernel split,
   kernel text at `0x8001_0000`, compact user layout with
   stack at 64 MB for flat single-level page table optimization.
+- `pmap.h` uses `_LOCORE` guards for assembly-safe inclusion.
 - Kernel build output in `build/netbsd-kernel/MINIMAL/`
   (out of source tree).
 - See `netbsd/sys/arch/penumbra/CLAUDE.md` for detailed
   kernel port context.
 
 ## Next Steps (in priority order)
-1. **Kernel locore.S** — PIC entry stub in locore.S: compute
-   virt-to-phys offset from bootinfo, set up initial TLB entries
-   for kernel text + stack + UART, enable MMU, jump to virtual
-   entry.  Bootloader already loads kernel and jumps with MMU off.
-   See `doc/boot/boot-process.md`
+1. **Kernel UVM init** — parse bootinfo memory regions in
+   `penumbra_init()`, call `uvm_page_physload()` to register
+   physical RAM, set page size.  Currently panics at
+   `uvm_init: page size not set`.
 2. **Kernel implementation** — fill in MD stubs (grep `TODO(stub)`):
-   copy bootinfo to BSS, parse memory, trap handling,
-   console driver, pmap (software TLB);
-   get to `main()` → `cpu_startup()`
+   trap handling, pmap (software TLB with real page tables);
+   get past `main()` → `cpu_startup()`
 3. **LLVM `-O2` support** — implement `analyzeBranch`/`insertBranch`/
    `removeBranch` for branch optimization passes
 4. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick

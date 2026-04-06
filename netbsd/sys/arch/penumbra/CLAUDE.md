@@ -138,8 +138,8 @@ Headers fall into three categories:
 
 | File | Purpose |
 |------|---------|
-| `locore.S` | Entry point, exception vectors, trap frame save/restore, setjmp/longjmp |
-| `machdep.c` | `penumbra_init()`, `cpu_startup()`, `cpu_reboot()`, LWP/signal/ptrace stubs, `__mulsi3`, `mm_md_physacc` |
+| `locore.S` | Entry point, bootstrap TLB miss handler, MMU enable, BSS zero, setjmp/longjmp |
+| `machdep.c` | `penumbra_init()`, early UART console, `cpu_startup()`, `cpu_reboot()`, stubs, `__mulsi3` |
 | `autoconf.c` | `cpu_configure()`, `cpu_rootconf()` |
 | `mainbus.c` | Root bus device driver |
 | `cpu.c` | CPU device driver |
@@ -165,17 +165,22 @@ Headers fall into three categories:
   → bootinfo translation, kernel ELF loading via libsa `loadfile()`.
   Builds via nbmake (libsa + libkern linked as `.a` archives).
   Loads kernel at dynamic physical address, jumps with MMU off.
-- [ ] Boot loader MMU enable — locore.S PIC entry stub needs to
-  set up initial TLB mappings, enable MMU, jump to virtual address
+- [x] **locore.S early boot** — PIC bias computation, bootstrap TLB
+  miss handler (algorithmic VA→PA), MMU enable, physical-to-virtual
+  jump, BSS zero, call `penumbra_init()`.  Boots end-to-end on ISS.
+- [x] **Early console** — 16450 UART wired to `cn_tab` in `consinit()`,
+  printf/panic output visible from first call.
+  TODO: UART address hardcoded, should come from bootinfo.
+- [x] `pmap.h` — `_LOCORE` guards for assembly-safe inclusion
+- [ ] Kernel UVM init — parse bootinfo, register physical memory.
+  Currently panics: `uvm_init: page size not set`
 - [ ] Kernel port — MD stubs need real implementations
   (grep for `TODO(stub)` to find them)
 - [ ] DDB — disabled, needs extensive MD hooks
 
 ## Next Steps
 
-1. **Kernel locore.S** — PIC entry stub: compute virt-to-phys offset,
-   set up initial TLB entries, enable MMU, jump to virtual entry.
-   Then: copy bootinfo to BSS, parse memory regions, call
-   `penumbra_init()` → `cpu_startup()`
+1. **UVM init** — parse bootinfo memory regions in `penumbra_init()`,
+   call `uvm_page_physload()`, set page size.  Unblocks `main()`.
 2. **Kernel implementation** — fill in MD stubs (`TODO(stub)`):
-   trap handling, pmap (software TLB), console driver
+   trap handling, pmap (software TLB with real page tables)

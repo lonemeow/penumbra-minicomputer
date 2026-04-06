@@ -33,6 +33,8 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <machine/reg.h>
 #include <machine/mcontext.h>
 
+#include <dev/cons.h>
+
 /* Forward declarations */
 void	penumbra_init(void);
 int	main(void);
@@ -45,6 +47,68 @@ struct cpu_info cpu_info_store;
 
 /* Physical memory regions */
 struct vm_map *phys_map;
+
+/* ── Early boot UART console ──────────────────────────────────
+ * 16450-compatible, word-strided registers at 0xFF000000.
+ * Wired as the kernel console in consinit() so printf() works
+ * from the very first call in penumbra_init().
+ *
+ * TODO: UART base address should come from bootinfo device list
+ * rather than being hardcoded.  The bootloader passes BTAG_CONSOLE
+ * identifying the console device.
+ */
+
+#define UART_BASE	((volatile uint32_t *)0xFF000000)
+#define UART_THR	(UART_BASE[0])
+#define UART_RBR	(UART_BASE[0])
+#define UART_LSR	(UART_BASE[5])	/* word-strided: offset 0x14 */
+#define LSR_DR		0x01		/* Data Ready */
+#define LSR_THRE	0x20		/* TX Holding Register Empty */
+
+static inline void
+uart_putc(int c)
+{
+	while (!(UART_LSR & LSR_THRE))
+		;
+	UART_THR = (uint32_t)c;
+}
+
+static void penumbra_cnprobe(struct consdev *cp)
+{
+	cp->cn_dev = makedev(0, 0);
+	cp->cn_pri = CN_REMOTE;
+}
+
+static void penumbra_cninit(struct consdev *cp)
+{
+	/* UART already initialized by bootloader */
+}
+
+static int penumbra_cngetc(dev_t dev)
+{
+	while (!(UART_LSR & LSR_DR))
+		;
+	return (int)UART_RBR;
+}
+
+static void penumbra_cnputc(dev_t dev, int c)
+{
+	uart_putc(c);
+}
+
+static void penumbra_cnpollc(dev_t dev, int on)
+{
+	/* nothing */
+}
+
+static struct consdev penumbra_consdev = {
+	.cn_probe = penumbra_cnprobe,
+	.cn_init = penumbra_cninit,
+	.cn_getc = penumbra_cngetc,
+	.cn_putc = penumbra_cnputc,
+	.cn_pollc = penumbra_cnpollc,
+	.cn_pri = CN_REMOTE,
+};
 
 /*
  * Early machine initialization.
@@ -62,8 +126,6 @@ penumbra_init(void)
 	/*
 	 * TODO: Parse bootinfo to find memory regions
 	 * TODO: Initialize UVM with physical pages
-	 * TODO: Set up initial kernel pmap
-	 * TODO: Call main()
 	 */
 
 	/* Initialize pmap (page table / TLB management) */
@@ -81,10 +143,10 @@ penumbra_init(void)
 void
 consinit(void)
 {
-	/*
-	 * TODO: Initialize UART at 0xFF000000 (physical).
-	 * For now, the bootloader has already set up the UART.
-	 */
+
+	cn_tab = &penumbra_consdev;
+	penumbra_cnprobe(cn_tab);
+	penumbra_cninit(cn_tab);
 }
 
 /*
@@ -117,7 +179,8 @@ cpu_reboot(int howto, char *bootstr)
 		printf("rebooting...\n\n");
 	}
 
-	/* TODO: actual reset — write to a reset sysreg or spin */
+	/* TODO: actual reset — write to a reset sysreg */
+	__asm volatile("break");
 	for (;;)
 		;
 }

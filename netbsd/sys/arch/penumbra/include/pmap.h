@@ -3,17 +3,10 @@
 #ifndef _PENUMBRA_PMAP_H_
 #define _PENUMBRA_PMAP_H_
 
-#include <sys/mutex.h>
-#include <machine/vmparam.h>
-#include <machine/types.h>
-
 /*
- * Penumbra page table entry.
- * Matches TLB_PTE hardware format: PPN[31:12] | SW[11:8] | flags[7:0]
+ * PTE flag bits (must match hardware TLB_PTE layout).
+ * These are pure numeric defines, safe for assembly inclusion.
  */
-typedef uint32_t pt_entry_t;
-
-/* PTE flag bits (must match hardware TLB_PTE layout) */
 #define PTE_V		0x01	/* valid */
 #define PTE_C		0x04	/* cacheable */
 #define PTE_R		0x08	/* read */
@@ -36,7 +29,17 @@ typedef uint32_t pt_entry_t;
 /* Uncached kernel PTE: for MMIO */
 #define PTE_KERNEL_NC	(PTE_V | PTE_R | PTE_W | PTE_G)
 
-#ifdef _KERNEL
+#if defined(_KERNEL) && !defined(_LOCORE)
+
+#include <sys/mutex.h>
+#include <machine/vmparam.h>
+#include <machine/types.h>
+
+/*
+ * Penumbra page table entry.
+ * Matches TLB_PTE hardware format: PPN[31:12] | SW[11:8] | flags[7:0]
+ */
+typedef uint32_t pt_entry_t;
 
 /*
  * Page table structure.
@@ -73,6 +76,6 @@ void		tlb_invalidate_all(void);
 void		tlb_invalidate_asid(int);
 void		tlb_invalidate_addr(vaddr_t, int);
 
-#endif /* _KERNEL */
+#endif /* _KERNEL && !_LOCORE */
 
 #endif /* _PENUMBRA_PMAP_H_ */
