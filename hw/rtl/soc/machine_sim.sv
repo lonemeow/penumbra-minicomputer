@@ -49,7 +49,11 @@ module machine_sim
     output logic [31:0] o_pc,
     output logic        o_halted,
     input  logic [3:0]  i_dbg_reg_addr,
-    output logic [31:0] o_dbg_reg_data
+    output logic [31:0] o_dbg_reg_data,
+
+    // ── Instruction trace ────────────────────────────────────
+    output logic        o_trace_valid,
+    output logic [31:0] o_trace_sr
 );
 
     // ── CPU ↔ memory bus (shared, directly from CPU) ────────
@@ -103,7 +107,11 @@ module machine_sim
         .o_pc           (o_pc),
         .o_halted       (o_halted),
         .i_dbg_reg_addr (i_dbg_reg_addr),
-        .o_dbg_reg_data (o_dbg_reg_data)
+        .o_dbg_reg_data (o_dbg_reg_data),
+
+        // Trace
+        .o_trace_valid  (o_trace_valid),
+        .o_trace_sr     (o_trace_sr)
     );
 
     // ══════════════════════════════════════════════════════════

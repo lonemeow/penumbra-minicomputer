@@ -57,7 +57,11 @@ module cpu_core
     output logic [31:0] o_pc,
     output logic        o_halted,
     input  logic [3:0]  i_dbg_reg_addr,
-    output logic [31:0] o_dbg_reg_data
+    output logic [31:0] o_dbg_reg_data,
+
+    // ── Instruction trace ────────────────────────────────────
+    output logic        o_trace_valid,
+    output logic [31:0] o_trace_sr
 );
 
     // ══════════════════════════════════════════════════════════
@@ -636,8 +640,13 @@ module cpu_core
         .o_a_bus        (dp_a_bus),
 
         .i_dbg_reg_addr (i_dbg_reg_addr),
-        .o_dbg_reg_data (o_dbg_reg_data)
+        .o_dbg_reg_data (o_dbg_reg_data),
+
+        .o_trace_sr     (o_trace_sr)
     );
+
+    // Trace: instruction-valid pulse
+    assign o_trace_valid = ir_valid;
 
     assign o_pc = pc;
 

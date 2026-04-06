@@ -27,6 +27,7 @@
 static volatile sig_atomic_t running = 1;
 static struct termios orig_termios;
 static bool term_raw = false;
+static FILE* trace_fp = nullptr;
 
 static void sigint_handler(int) { running = 0; }
 
@@ -76,13 +77,25 @@ static const char* get_sdcard_path() {
 int main(int argc, char** argv) {
     Vmachine_sim* cpu = new Vmachine_sim;
 
-    // Check for +sdcard= in args (Verilator-style plusarg)
+    // Check for +sdcard= and +trace= in args (Verilator-style plusargs)
     const char* sd_path = nullptr;
+    const char* trace_path = nullptr;
     for (int i = 1; i < argc; i++) {
         if (strncmp(argv[i], "+sdcard=", 8) == 0)
             sd_path = argv[i] + 8;
+        else if (strncmp(argv[i], "+trace=", 7) == 0)
+            trace_path = argv[i] + 7;
     }
     if (!sd_path) sd_path = get_sdcard_path();
+
+    if (trace_path) {
+        trace_fp = fopen(trace_path, "w");
+        if (!trace_fp) {
+            fprintf(stderr, "[TRACE] cannot open '%s'\n", trace_path);
+        } else {
+            fprintf(stderr, "[TRACE] writing to '%s'\n", trace_path);
+        }
+    }
 
     SdCardSim sd(sd_path);
     if (sd.is_present())
@@ -115,6 +128,23 @@ int main(int argc, char** argv) {
         cpu->eval();
         cycles++;
 
+
+        // ── Instruction trace → file ────────────────────────────
+        if (trace_fp && cpu->o_trace_valid) {
+            uint32_t sr = cpu->o_trace_sr;
+            fprintf(trace_fp, "PC=%08x SR=%08x [%c%c%c%c]",
+                    cpu->o_pc, sr,
+                    (sr & 0x80000000) ? 'N' : '-',
+                    (sr & 0x40000000) ? 'Z' : '-',
+                    (sr & 0x20000000) ? 'C' : '-',
+                    (sr & 0x10000000) ? 'V' : '-');
+            for (int r = 1; r <= 14; r++) {
+                cpu->i_dbg_reg_addr = r;
+                cpu->eval();
+                fprintf(trace_fp, " R%d=%08x", r, cpu->o_dbg_reg_data);
+            }
+            fprintf(trace_fp, "\n");
+        }
 
         // ── UART TX → stdout ────────────────────────────────────
         if (cpu->o_uart_tx_valid) {
@@ -163,6 +193,10 @@ int main(int argc, char** argv) {
                 (unsigned long)cycles, cpu->o_pc);
     }
 
+    if (trace_fp) {
+        fclose(trace_fp);
+        fprintf(stderr, "[TRACE] done\n");
+    }
     restore_term();
     delete cpu;
     return 0;

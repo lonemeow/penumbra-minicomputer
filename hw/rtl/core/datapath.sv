@@ -104,7 +104,10 @@ module datapath
 
     // ── Debug port ───────────────────────────────────────────
     input  logic [3:0]  i_dbg_reg_addr,
-    output logic [31:0] o_dbg_reg_data
+    output logic [31:0] o_dbg_reg_data,
+
+    // ── Trace port ──────────────────────────────────────────
+    output logic [31:0] o_trace_sr
 );
 
     // ── Register address routing encoding ────────────────────
@@ -385,6 +388,9 @@ module datapath
     // RDSPR SR: select sr_read instead of ESR on amux input 01
     logic [31:0] amux_esr_or_sr;
     assign amux_esr_or_sr = spr_read_sr ? sr_read : esr;
+
+    // Trace: expose SR for instruction-level dumps
+    assign o_trace_sr = sr_read;
 
     amux u_amux (
         .i_reg_a       (reg_a_data),

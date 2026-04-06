@@ -89,6 +89,12 @@ This file provides detailed hardware context for work under `hw/`. The root `CLA
   Exits on BREAK or Ctrl-C.
   SD card emulation via `+sdcard=disk.img` plusarg
   (or `SDCARD=` make variable).
+  Instruction trace via `+trace=file.log` plusarg
+  (or `TRACE=` make variable): dumps PC, SR (flags),
+  and R1–R14 for every instruction to the file.
+  Trace ports: `o_trace_valid` (instruction complete),
+  `o_trace_sr` (full SR value) exposed through
+  cpu_core → machine_sim.
 
 ## Exception and Interrupt Handling
 Eight sources share the same `except_entry` → `int_entry` → vector dispatch path:
