@@ -270,6 +270,22 @@ def encode_format_r(op, rd, rs, f_bit, spare=0):
     """Encode Format R instruction."""
     return (0b00 << 30) | (op << 25) | (rd << 21) | (rs << 17) | (f_bit << 16) | spare
 
+def check_format_l_range(mn, imm):
+    """Validate immediate range for Format L instructions.
+
+    LLIS sign-extends: -32768..32767.
+    All others zero-extend: 0..65535.
+    Negative values for zero-extending ops are almost certainly a bug.
+    """
+    if mn == "LLIS":
+        if imm < -32768 or imm > 32767:
+            raise ValueError(f"{mn}: immediate {imm} out of range for sign-extended 16-bit (-32768..32767)")
+    else:
+        if imm < 0:
+            raise ValueError(f"{mn}: negative immediate {imm} not valid (this instruction zero-extends)")
+        if imm > 0xFFFF:
+            raise ValueError(f"{mn}: immediate {imm} out of range for 16-bit (0..65535)")
+
 def encode_format_l(op, rd, imm16):
     """Encode Format L instruction."""
     imm16 &= 0xFFFF
@@ -339,7 +355,9 @@ def assemble_line(mnemonic, operands, addr, labels, line_num, constants=None):
             imm = labels[label_name]
         else:
             imm = parse_imm(operands[1], constants)
-        op = FORMAT_L_OPS[SMART_MNEMONICS[mn]]
+        target_mn = SMART_MNEMONICS[mn]
+        check_format_l_range(target_mn, imm)
+        op = FORMAT_L_OPS[target_mn]
         return encode_format_l(op, rd, imm)
 
     if mn in SMART_MNEMONICS:
@@ -439,6 +457,7 @@ def assemble_line(mnemonic, operands, addr, labels, line_num, constants=None):
             imm = labels[label_name]
         else:
             imm = parse_imm(operands[1], constants)
+        check_format_l_range(mn, imm)
         return encode_format_l(op, rd, imm)
 
     # ── Format M ──
