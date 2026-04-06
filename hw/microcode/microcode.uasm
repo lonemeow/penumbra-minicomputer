@@ -86,7 +86,7 @@ mov:
 # Rd = ~Rs
 .org 0x12
 not:
-  reg_a=IR_RS reg_w=IR_RD w_en=1 alu=NOT wmux=RBUS w_flags=1
+  reg_b=IR_RS reg_w=IR_RD w_en=1 alu=NOT wmux=RBUS w_flags=1
 
 # ── ADC (op=10, dispatch=0x14) ────────────────────────────────
 # Rd = Rd + Rs + Carry (add with carry from SR.C)
