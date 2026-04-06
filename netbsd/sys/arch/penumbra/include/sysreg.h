@@ -1,0 +1,83 @@
+/*	$NetBSD$	*/
+
+/*
+ * Penumbra system register definitions.
+ *
+ * Device and register numbers for RDSYS/WRSYS instructions.
+ * Safe for inclusion from both C and assembly (.S) files.
+ *
+ * See doc/isa/sysregs-reference.md for the full specification.
+ */
+
+#ifndef _PENUMBRA_SYSREG_H_
+#define _PENUMBRA_SYSREG_H_
+
+/* ── Device numbers (RDSYS/WRSYS dev field) ─────────────────────────── */
+
+#define SYSDEV_MMU	0	/* MMU / TLB management */
+#define SYSDEV_SYSID	1	/* CPU and machine ID (read-only) */
+#define SYSDEV_DCACHE	2	/* D-cache control */
+#define SYSDEV_ICACHE	3	/* I-cache control */
+#define SYSDEV_BUS	4	/* Bus controller (autoconfig) */
+
+/* ── Device 0: MMU registers ────────────────────────────────────────── */
+
+#define MMU_MMUCR		0	/* Control: bit 0 = M (enable), [15:8] = ASID */
+#define MMU_FAULT_ADDR		1	/* Faulting VA (read-only, latched on fault) */
+#define MMU_FAULT_STATUS	2	/* Fault type + access info (read-only) */
+#define MMU_TLB_VPN		3	/* Staged TLB upper word (VPN + ASID) */
+#define MMU_TLB_PTE		4	/* TLB lower word; write commits entry */
+#define MMU_TLB_INDEX		5	/* Selects TLB slot (0–63) for R/W */
+
+/* MMUCR fields */
+#define MMUCR_M			0x0001	/* MMU enable */
+#define MMUCR_ASID_SHIFT	8
+#define MMUCR_ASID_MASK		0xFF00
+
+/* FAULT_STATUS bit positions */
+#define FSTAT_R		8	/* Faulting access was read */
+#define FSTAT_W		9	/* Faulting access was write */
+#define FSTAT_X		10	/* Faulting access was execute */
+#define FSTAT_USR	11	/* Faulting access was user mode */
+
+/* ── TLB geometry ───────────────────────────────────────────────────── */
+
+#define TLB_NSLOTS	64	/* Total slots */
+#define TLB_NSETS	32	/* Sets (indexed by VPN[4:0]) */
+#define TLB_NWAYS	2	/* Ways per set */
+
+/* TLB_VPN word: (VPN << 8) | ASID */
+#define TLB_VPN_SHIFT	8
+
+/* TLB_PTE word: (PPN << 12) | (SW << 8) | flags */
+/* Flag and PPN bits defined in <machine/pmap.h> */
+
+/* ── Device 1: System ID registers (read-only) ─────────────────────── */
+
+#define SYS_CPU_ISA	0
+#define SYS_MACH_FEAT	1
+#define SYS_CPU_NAME0	2
+#define SYS_CPU_NAME1	3
+#define SYS_CPU_NAME2	4
+#define SYS_CPU_NAME3	5
+#define SYS_MACH_NAME0	6
+#define SYS_MACH_NAME1	7
+#define SYS_MACH_NAME2	8
+#define SYS_MACH_NAME3	9
+
+/* ── Device 2/3: Cache registers ────────────────────────────────────── */
+
+#define CACHE_CTRL	0	/* bit 0 = ENABLE */
+#define CACHE_GEOM	1	/* Geometry (read-only) */
+#define CACHE_INVAL	2	/* Write to invalidate all */
+
+#define CACHE_CTRL_ENABLE	0x01
+
+/* ── Device 4: Bus controller ───────────────────────────────────────── */
+
+#define BUS_CTL		0	/* bit 0 = RST, bit 1 = CFG_EN */
+
+#define BUSCTL_RST	0x01
+#define BUSCTL_CFG_EN	0x02
+
+#endif /* _PENUMBRA_SYSREG_H_ */

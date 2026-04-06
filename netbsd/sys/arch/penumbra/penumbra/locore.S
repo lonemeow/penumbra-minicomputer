@@ -3,22 +3,30 @@
 /*
  * Penumbra low-level kernel entry and exception handling.
  *
- * Entry point: _start (jumped to by bootloader with MMU on,
- * R1 = bootinfo pointer, running in supervisor mode).
+ * Entry point: _start (jumped to by bootloader with MMU OFF,
+ * R1 = bootinfo physical address, running in supervisor mode).
  *
- * Exception vectors live at physical 0x0000_0000 (mapped by
- * the bootloader before jumping here):
- *   0x00: reset
- *   0x04: IRQ
- *   0x08: TLB miss
- *   0x0C: TLB protection
- *   0x10: bus fault
- *   0x14: BREAK
- *   0x18: SYSCALL
- *   0x1C: illegal / privilege
+ * The bootloader loads the kernel ELF at an arbitrary physical
+ * address and jumps with:
+ *   R1  = bootinfo physical address
+ *   R2  = kernel physical entry point
+ *   SR.S = 1 (supervisor), SR.M = 0 (MMU off), SR.I = 0 (irqs off)
+ *
+ * The kernel is linked at KERNEL_TEXT_BASE (0x8001_0000).
+ * locore.S must: compute virt-to-phys bias, set up initial TLB
+ * entries, enable the MMU, and jump to virtual addresses before
+ * any C code can run.
+ *
+ * Exception vectors live at physical 0x0000_0000:
+ *   0x00: reset        0x04: IRQ
+ *   0x08: TLB miss     0x0C: TLB protection
+ *   0x10: bus fault    0x14: BREAK
+ *   0x18: SYSCALL      0x1C: illegal / privilege
  */
 
 #include "assym.h"
+#include <machine/sysreg.h>
+#include <machine/pmap.h>
 
 	.text
 	.globl	_start
@@ -28,11 +36,50 @@
  * Kernel entry point.
  * Called by bootloader with:
  *   R1 = bootinfo physical address
- *   SR.S = 1 (supervisor), SR.M = 1 (MMU on), SR.I = 0 (irqs off)
- *   Kernel mapped at KERNEL_TEXT_BASE via TLB
+ *   R2 = kernel physical entry point
+ *   SR.S = 1 (supervisor), SR.M = 0 (MMU off), SR.I = 0 (irqs off)
+ *
+ * Register allocation for early boot:
+ *   R5 = saved bootinfo physical address
+ *   R6 = phys_bias (physical - virtual offset)
  */
 _start:
-// TODO: Implement proper kernel entry routine (minimal page tables, TLB, stack)
+	/* Save bootinfo pointer — R1 will be clobbered */
+	mov	r5, r1
+
+	/*
+	 * Compute phys_bias = physical_addr - virtual_addr.
+	 * LA loads the link-time (virtual) address of _start_bias;
+	 * mov r6, pc at that label reads the runtime (physical) address.
+	 */
+	la	r1, _start_bias
+_start_bias:
+	mov	r6, pc
+	sub	r6, r1
+
+	/*
+	 * Set up early boot stack (physical address).
+	 * The boot stack lives in BSS — physical memory is already
+	 * allocated by the ELF loader (p_memsz).  Convert the
+	 * link-time virtual address to physical using the bias.
+	 * Stack grows downward, so point SP at the top.
+	 */
+	la	sp, _boot_stack_top
+	add	sp, r6
+
+	/* Flush the entire TLB — invalidate all slots */
+	mov	r1, r0
+.Lflush_tlb:
+	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_INDEX
+	wrsys	r0, #SYSDEV_MMU, #MMU_TLB_PTE
+	add	r1, #1
+	cmp	r1, #TLB_NSLOTS
+	blo	.Lflush_tlb
+
+	/* Invalidate I-cache — stale bootloader code may be cached */
+	wrsys	r0, #SYSDEV_ICACHE, #CACHE_INVAL
+
+	/* Step 3 done — halt until we add more */
 	break
 
 /*
@@ -87,3 +134,15 @@ longjmp:
 	ldw	r14, [r1 + 32]
 	lli	r1, 1		/* return 1 */
 	ret
+
+/*
+ * Early boot stack — used before MMU is enabled.
+ * 4 KB is enough for the pre-MMU TLB setup code.
+ */
+	.bss
+	.align	4
+	.globl	_boot_stack
+_boot_stack:
+	.space	4096
+	.globl	_boot_stack_top
+_boot_stack_top:
