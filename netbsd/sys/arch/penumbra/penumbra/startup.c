@@ -25,12 +25,15 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/reboot.h>
+#include <sys/lwp.h>
+#include <sys/proc.h>
 
-#include <uvm/uvm_extern.h>
+#include <uvm/uvm.h>
 
 #include <machine/cpu.h>
 #include <machine/vmparam.h>
 #include <machine/pmap.h>
+#include <machine/pcb.h>
 #include <machine/bootinfo.h>
 
 #include <dev/cons.h>
@@ -39,6 +42,7 @@ __KERNEL_RCSID(0, "$NetBSD$");
 void	penumbra_init(void);
 int	main(void);
 static void	penumbra_physmem_init(void);
+static void	penumbra_lwp0_init(void);
 
 /*
  * Bootinfo store — locore.S copies the bootloader's bootinfo here
@@ -229,6 +233,32 @@ penumbra_physmem_init(void)
 }
 
 
+/* ── lwp0 uarea initialization ───────────────────────────────── */
+
+/*
+ * Allocate and set up the uarea for lwp0 (the boot LWP).
+ * Must be called after pmap_bootstrap() so uvm_pageboot_alloc works.
+ *
+ * The uarea layout is:
+ *   +0                  PCB (struct pcb)
+ *   ...                 kernel stack (grows up toward USPACE)
+ *   +USPACE-TF_SIZE    trapframe (struct trapframe)
+ *   +USPACE
+ */
+static void
+penumbra_lwp0_init(void)
+{
+	vaddr_t va = uvm_pageboot_alloc(USPACE);
+	uvm_lwp_setuarea(&lwp0, va);
+	struct pcb *pcb0 = lwp_getpcb(&lwp0);
+	memset(pcb0, 0, sizeof(struct pcb));
+
+	struct trapframe *tf = (struct trapframe *)(va + USPACE) - 1;
+	memset(tf, 0, sizeof(struct trapframe));
+
+	lwp0.l_md.md_utf = tf;
+}
+
 /* ── penumbra_init: main early boot entry point ──────────────── */
 
 /*
@@ -275,6 +305,13 @@ penumbra_init(void)
 	 * virtual_avail for UVM.  No device knowledge.
 	 */
 	pmap_bootstrap();
+
+	/*
+	 * Allocate lwp0's uarea.  Must happen after pmap so
+	 * uvm_pageboot_alloc can steal pages.  curlwp is already
+	 * set to &lwp0 via the cpu_info_store initializer.
+	 */
+	penumbra_lwp0_init();
 
 	/*
 	 * Map the console UART permanently via pmap.

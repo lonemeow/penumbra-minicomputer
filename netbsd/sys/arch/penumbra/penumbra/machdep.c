@@ -40,7 +40,9 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <machine/mcontext.h>
 
 /* Single CPU info structure (uniprocessor) */
-struct cpu_info cpu_info_store;
+struct cpu_info cpu_info_store = {
+	.ci_curlwp = &lwp0,
+};
 
 /* Physical memory regions */
 struct vm_map *phys_map;
