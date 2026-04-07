@@ -48,6 +48,12 @@
 #define PTLB_NSLOTS	4	/* Pinned TLB slots (fully associative) */
 #define TLB_INDEX_PINNED 0x40	/* Set bit 6 in TLB_INDEX to target pinned TLB */
 
+/* Pinned TLB slot assignments (TLB_INDEX = TLB_INDEX_PINNED | slot) */
+#define PTLB_VECTOR	(TLB_INDEX_PINNED | 0)	/* vector page (VA 0x0) */
+#define PTLB_L1		(TLB_INDEX_PINNED | 1)	/* kernel L1 page table */
+#define PTLB_L2WIN	(TLB_INDEX_PINNED | 2)	/* L2 window (TLB handler) */
+#define PTLB_SCRATCH	(TLB_INDEX_PINNED | 3)	/* scratch window (C code) */
+
 /* TLB_VPN word: (VPN << 8) | ASID */
 #define TLB_VPN_SHIFT	8
 

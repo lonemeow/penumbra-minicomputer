@@ -315,29 +315,37 @@ MIPS/68k-style vector dispatch.
 - **Boot from ROM:** Programs assembled with `--org 0xFFFF0000`. `_start:` must be first label.
 - **ROM page mapping (MMU tests):** TLB_INDEX=16, TLB_VPN=0x0FFFF000, TLB_PTE=0xFFFF00B9.
 
-**NetBSD kernel boots past UVM physmem init on the ISS.**
+**NetBSD kernel boots past pmap_bootstrap on the ISS.**
 - Machine headers (39 files), kernel config, MD build system,
   stub kernel sources, and assembly string functions all present.
 - `config MINIMAL` → `make depend` → `make` produces a 4 MB
   ELF kernel binary at `build/netbsd-kernel/MINIMAL/netbsd`.
-- **locore.S early boot complete:** PIC bias computation,
-  BSS zero and bootinfo copy in physical mode (before MMU),
-  bootstrap TLB miss handler with PA region table, MMU enable,
-  virtual jump.  Boots on ISS end-to-end:
-  ROM → bootloader → kernel → `penumbra_init()`.
-- **Bootstrap TLB handler:** region-table-based design.
-  Single linear mapping (`PA = VA + phys_bias`) with per-region
-  cacheability (cached for RAM, uncached for MMIO).
-  locore pre-populates kernel image entry; `startup.c` adds
-  RAM and MMIO regions from bootinfo.  Supports arbitrary
-  RAM/MMIO physical addresses (no identity-map assumptions).
-  Region table at vector page PA 0x200, handler at PA 0x80.
-- **Early console working:** 16450 UART, address from bootinfo
-  (`BTINFO_CONSOLE`), VA computed via `BOOT_PA_TO_VA()`.
-- **UVM init progress:** `uvm_md_init()`, bootinfo-driven
-  `uvm_page_physload()`, `pmap_steal_memory()` for early
-  page allocation.  Gets past physmem registration.
-  Currently crashes in `uvm_km_kmem_free` accessing unmapped VA.
+- **locore.S early boot:** PIC bias computation, BSS zero and
+  bootinfo copy in physical mode.  Builds kernel page table
+  (L1 + L2 pre-allocated in BSS), installs real page-table-walking
+  TLB miss handler, pins L1 in TLB slot 1, enables MMU.
+  No bootstrap handler — real handler active from first instruction.
+  Safety check: BREAK trap if kernel exceeds BSS L2 coverage.
+- **Real pmap / TLB handler:** 2-level page table (L1→L2),
+  no direct-map.  All mappings are explicit PTEs.  TLB miss
+  handler walks L1 (pinned slot 1) → L2 (window in slot 2).
+  Scratch window (pinned slot 3) for C code physical page access.
+  Pinned slots: `PTLB_VECTOR`, `PTLB_L1`, `PTLB_L2WIN`,
+  `PTLB_SCRATCH` (sysreg.h).  Page table naming: `PT_L1_*`
+  / `PT_L2_*` (avoids confusion with L1/L2 caches).
+- **pmap_kenter_pa / pmap_kremove:** wired kernel mappings via
+  L1→L2 walk + scratch window.  `PTE_MAKE()` macro builds PTEs
+  from prot/flags/extra.  `pmap_map_device()` for MMIO.
+- **pmap_steal_memory:** steals physical pages, maps at
+  `virtual_avail` via scratch window + page table insertion.
+- **Early console:** 16450 UART, initially pinned via scratch
+  window, permanently remapped by `pmap_map_device()` after
+  `pmap_bootstrap()`.
+- **UVM init:** `uvm_md_init()`, bootinfo-driven
+  `uvm_page_physload()`, `pmap_steal_memory()`.  Gets past
+  `pmap_bootstrap` into UVM's `main()` init.  Currently faults
+  when UVM allocates VAs beyond BSS L2 coverage (needs dynamic
+  L2 allocation in `pmap_kenter_pa`).
 - All MD functions are either implemented or break-trap stubs
   (grep for `TODO(stub)` to find stubs needing real implementations).
 - Atomics: interrupt-disable CAS (`RDSPR SR` / `DI` / load-cmp-store
@@ -346,8 +354,9 @@ MIPS/68k-style vector dispatch.
   RAS infrastructure is in place.
 - DDB (kernel debugger) disabled for now — needs extensive MD hooks.
 - Virtual memory layout: 2G/2G user/kernel split,
-  kernel text at `0x8001_0000`, compact user layout with
-  stack at 64 MB for flat single-level page table optimization.
+  kernel text at `0x8001_0000`.  Top 3 pages reserved:
+  guard (0xFFFFF000), L1 pin (0xFFFFE000), L2 window (0xFFFFD000),
+  scratch (0xFFFFC000).
 - `pmap.h` uses `_LOCORE` guards for assembly-safe inclusion.
 - Kernel build output in `build/netbsd-kernel/MINIMAL/`
   (out of source tree).
@@ -355,15 +364,9 @@ MIPS/68k-style vector dispatch.
   kernel port context.
 
 ## Next Steps (in priority order)
-1. **Kernel pmap** — implement real TLB miss handler and kernel
-   page table.  Bootstrap handler (linear mapping + region table)
-   can't support arbitrary VA→PA mappings needed by `pmap_kenter_pa`.
-   Steps: (a) allocate kernel page table in `pmap_bootstrap()`,
-   pre-populate with kernel/RAM/MMIO entries; (b) install real
-   TLB miss handler that walks page table; (c) implement
-   `pmap_kenter_pa`/`pmap_kremove` for wired kernel mappings.
-   UVM physmem init works, crash is in `uvm_km_init` which
-   needs real pmap to map dynamically allocated kernel pages.
+1. **Dynamic L2 allocation** — `pmap_kenter_pa` panics if no L2
+   table exists.  Need to allocate L2 pages via `uvm_pagealloc`
+   + scratch window when VAs exceed BSS pre-allocated coverage.
 2. **Kernel implementation** — fill in MD stubs (grep `TODO(stub)`):
    trap handling, context switching;
    get past `main()` → `cpu_startup()`

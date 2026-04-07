@@ -125,6 +125,7 @@ struct bootinfo {
 
 #ifdef _KERNEL
 void	*lookup_bootinfo(unsigned int);
+void	*lookup_bootinfo_n(unsigned int, int);
 #endif
 
 #endif /* _PENUMBRA_BOOTINFO_H_ */

@@ -10,7 +10,7 @@
  * All kernel pages require TLB entries with G=1 (global).
  *
  * User VA:    0x0000_1000 – 0x7FFF_FFFF  (2 GB - 4K)
- * Kernel VA:  0x8000_0000 – 0xFFFF_FFFF  (2 GB)
+ * Kernel VA:  0x8000_0000 – 0xFFFC_FFFF  (2 GB - 12K)
  *
  * User layout is compact to optimize TLB usage:
  *   0x0000_0000  unmapped null guard page
@@ -21,11 +21,17 @@
  *                mmap region above 64 MB (for large programs)
  *   0x7FFF_FFFF  end of user VA
  *
- * Page table optimization: processes start with a flat single-level
- * page table covering 0–64 MB (16K entries, 64 KB).  If VA usage
- * grows beyond 64 MB, pmap promotes to a 2-level table.
+ * Top three pages are reserved for the TLB miss handler:
+ *   0xFFFF_F000  unmapped guard (catches (void *)-1 derefs)
+ *   0xFFFF_E000  L1 pinned TLB slot (current page table L1)
+ *   0xFFFF_D000  L2 window pinned TLB slot (transient L2 mapping)
  *
- * Kernel VA includes identity-mappable device MMIO near the top
+ * Page tables are always 2-level: L1 (1024 entries, 4 KB)
+ * → L2 tables (1024 entries each, 4 KB, covering 4 MB per table).
+ * The TLB miss handler is stateless — it always walks 2-level,
+ * regardless of address space or VA range.
+ *
+ * Kernel VA includes device MMIO near the top
  * (ROM at 0xFFFF_0000, UART at 0xFF00_0000 physical).
  */
 
@@ -39,23 +45,15 @@
 #define VM_MAX_ADDRESS		((vaddr_t) 0xFFFFFFFF)
 #define VM_MAXUSER_ADDRESS	((vaddr_t) 0x80000000)
 
-/* Kernel virtual address range */
+/* Kernel virtual address range (top 3 pages reserved for TLB handler) */
 #define VM_MIN_KERNEL_ADDRESS	((vaddr_t) 0x80000000)
-#define VM_MAX_KERNEL_ADDRESS	((vaddr_t) 0xFFFFF000)
+#define VM_MAX_KERNEL_ADDRESS	((vaddr_t) 0xFFFFD000)
 
 /*
- * User stack starts at 64 MB — keeps text, heap, and stack within
- * the flat single-level page table region (16K PTEs, 64 KB).
- * Programs needing more VA (large mmap, shared libs) trigger
- * promotion to a 2-level page table.
+ * User stack starts at 64 MB — keeps text, heap, and stack
+ * within a compact VA range for TLB efficiency.
  */
 #define USRSTACK		((vaddr_t) 0x04000000)
-
-/*
- * Flat page table threshold: VA range covered by single-level PT.
- * 64 MB = 16384 pages × 4 bytes/PTE = 64 KB page table.
- */
-#define PENUMBRA_PT1_LIMIT	((vaddr_t) 0x04000000)
 
 /* Kernel text load address: 64K above kernel base (null guard) */
 #define KERNEL_TEXT_BASE	((vaddr_t) 0x80010000)

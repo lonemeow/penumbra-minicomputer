@@ -7,11 +7,19 @@
  * fully software-managed TLB.  The OS controls all TLB loads,
  * evictions, and invalidations via WRSYS/RDSYS instructions.
  *
- * Page table layout:
- *   - Processes start with a flat single-level page table
- *     covering 0 – 64 MB (16K entries, 64 KB).
- *   - If VA usage exceeds PENUMBRA_PT1_LIMIT, pmap promotes
- *     to a 2-level page table (1K directory → 1K tables).
+ * Page table layout — always 2-level:
+ *   L1: 1024 entries × 4 bytes = 4 KB (one page)
+ *   L2:  1024 entries × 4 bytes = 4 KB (covers 4 MB each)
+ *
+ * No direct-map.  All mappings are explicit page table entries.
+ * Physical pages with no kernel VA are accessed via a scratch
+ * window (pinned TLB slot 3 at SCRATCH_VA).
+ *
+ * Pinned TLB allocation:
+ *   Slot 0: Vector page (VA 0x0) — handler code, scratch area
+ *   Slot 1: Current L1 table (VA 0xFFFFE000) — updated on ctx switch
+ *   Slot 2: L2 window (VA 0xFFFFD000) — handler's transient L2
+ *   Slot 3: Scratch window (VA 0xFFFFC000) — C code page access
  */
 
 #include <sys/cdefs.h>
@@ -30,13 +38,11 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <machine/pmap.h>
 #include <machine/vmparam.h>
 #include <machine/psl.h>
+#include <machine/sysreg.h>
+#include <machine/bootinfo.h>
 
-/* Linker-defined end of kernel BSS */
+/* Linker-defined symbols */
 extern char _end[];
-
-/* Bootstrap PA↔VA conversion — only valid during early boot */
-extern int32_t phys_bias;
-#define BOOT_PA_TO_VA(pa)	((vaddr_t)((pa) - phys_bias))
 
 /* Kernel pmap */
 struct pmap kernel_pmap_store;
@@ -46,11 +52,61 @@ struct pmap *const kernel_pmap_ptr = &kernel_pmap_store;
 static vaddr_t virtual_avail;
 static vaddr_t virtual_end;
 
+
+/* ── Scratch window ───────────────────────────────────────────
+ *
+ * Temporarily map a physical page at SCRATCH_VA via pinned TLB
+ * slot 3.  Used to access pages that have no kernel VA mapping:
+ * freshly stolen pages, new L2 tables, pmap_zero_page, etc.
+ *
+ * pmap_scratch_map() is in locore.S (needs WRSYS).
+ */
+
+void *
+pmap_scratch_va(void)
+{
+	return (void *)SCRATCH_VA;
+}
+
+
+/* ── L2 table access helpers ──────────────────────────────────
+ *
+ * L2 tables are physical pages.  To read/write them from C code,
+ * we map them into the scratch window.  The L1 table is always
+ * accessible at PT_L1_VA (pinned slot 1).
+ *
+ * For pmap_kenter_pa / pmap_kremove (hot path), the L2 table
+ * may already be the kernel image's BSS-resident L2, which IS
+ * mapped in the kernel VA range.  For those, we can access them
+ * directly.  For dynamically allocated L2 tables, we must use
+ * the scratch window.
+ *
+ * To keep things simple initially, we always use the scratch
+ * window for L2 access.
+ */
+
 /*
- * pmap_bootstrap: early pmap initialization.
- * Called from penumbra_init() before main().
- * At this point, the bootloader has set up enough TLB entries
- * to run the kernel text/data/bss.
+ * Map an L2 table into the scratch window and return a pointer.
+ */
+static pt_entry_t *
+pmap_l2_map(paddr_t l2_pa)
+{
+	pmap_scratch_map(l2_pa, PTE_KERNEL);
+	return (pt_entry_t *)SCRATCH_VA;
+}
+
+
+/* ── pmap_bootstrap ───────────────────────────────────────────
+ *
+ * Called from penumbra_init() after physical memory is registered
+ * with UVM.  Adopts the L1 and L2 tables that locore.S built
+ * in BSS (physical mode).  The real TLB miss handler and pinned
+ * L1 are already active — locore.S set them up before enabling
+ * the MMU.
+ *
+ * Maps the console UART at a kernel VA (MMIO can't be in the
+ * kernel image VA range because MMIO PAs are high and would
+ * need separate L2 tables).
  */
 void
 pmap_bootstrap(void)
@@ -59,16 +115,65 @@ pmap_bootstrap(void)
 	/* Initialize kernel pmap */
 	mutex_init(&kernel_pmap_store.pm_lock, MUTEX_DEFAULT, IPL_VM);
 	kernel_pmap_store.pm_asid = 0;	/* kernel uses ASID 0 + G=1 */
-	kernel_pmap_store.pm_level = 1;
 	kernel_pmap_store.pm_count = 1;
 
 	/*
-	 * Set up kernel virtual address space.
-	 * virtual_avail starts after kernel BSS (rounded up to page).
-	 * virtual_end is the top of kernel VA.
+	 * Adopt the L1 table that locore.S built in BSS.
+	 * It's already pinned in TLB slot 1, and populated with
+	 * L2 entries covering the kernel image.
 	 */
-	virtual_avail = round_page((vaddr_t)&_end);
+	kernel_pmap_store.pm_l1 = (pt_entry_t *)_boot_l1;
+	kernel_pmap_store.pm_l1_pa = (paddr_t)((vaddr_t)_boot_l1 + phys_bias);
+
+	printf("pmap: L1 at VA 0x%x PA 0x%x\n",
+	    (unsigned)(vaddr_t)_boot_l1,
+	    (unsigned)kernel_pmap_store.pm_l1_pa);
+
+	/*
+	 * virtual_avail: first kernel VA available for dynamic mapping.
+	 * Must be past the entire loaded kernel image including the
+	 * symbol table (which the bootloader places after BSS).
+	 * BTINFO_KERNBASE.kern_end gives the true virtual end.
+	 * Fall back to _end (BSS end) if bootinfo is missing.
+	 */
+	{
+		struct btinfo_kernbase *bk = lookup_bootinfo(BTINFO_KERNBASE);
+		if (bk != NULL)
+			virtual_avail = round_page(bk->kern_end);
+		else
+			virtual_avail = round_page((vaddr_t)&_end);
+	}
 	virtual_end = VM_MAX_KERNEL_ADDRESS;
+
+	printf("pmap: virtual_avail = 0x%x, virtual_end = 0x%x\n",
+	    (unsigned)virtual_avail, (unsigned)virtual_end);
+}
+
+/*
+ * pmap_map_device: map a physical device page into kernel VA space.
+ *
+ * Allocates a kernel VA from virtual_avail and maps it uncached
+ * via pmap_kenter_pa.  Returns the kernel VA (page-aligned).
+ * Used for early MMIO device mapping (UART, etc.) before UVM's
+ * bus_space is available.
+ *
+ * The L2 table for this VA must already exist (covered by the
+ * BSS-allocated L2 tables) or pmap_kenter_pa will panic.
+ */
+vaddr_t
+pmap_map_device(paddr_t pa, vsize_t size)
+{
+	vaddr_t va = virtual_avail;
+
+	size = round_page(size);
+	pa = trunc_page(pa);
+	virtual_avail += size;
+
+	for (vsize_t off = 0; off < size; off += PAGE_SIZE)
+		pmap_kenter_pa(va + off, pa + off,
+		    VM_PROT_READ | VM_PROT_WRITE, PMAP_NOCACHE);
+
+	return va;
 }
 
 /*
@@ -84,9 +189,11 @@ pmap_virtual_space(vaddr_t *vstartp, vaddr_t *vendp)
 
 /*
  * pmap_steal_memory: allocate physical pages during early boot.
- * Called by UVM before the full VM system is running (e.g., to
- * allocate the vm_page array).  Returns a kernel VA for the
- * stolen pages, accessible via the bootstrap linear mapping.
+ *
+ * Steals physical pages from UVM physseg, maps them at
+ * virtual_avail in the kernel page table, and returns the VA.
+ * Uses the scratch window to access the L2 table (and to
+ * zero the stolen page if it's not yet mapped).
  */
 vaddr_t
 pmap_steal_memory(vsize_t size, vaddr_t *vstartp, vaddr_t *vendp)
@@ -110,16 +217,50 @@ pmap_steal_memory(vsize_t size, vaddr_t *vstartp, vaddr_t *vendp)
 		uvm_physseg_unplug(atop(pa), npgs);
 
 		/*
-		 * Return the VA via the bootstrap linear mapping.
-		 * PA = VA + phys_bias → VA = PA - phys_bias.
+		 * Map each stolen page at virtual_avail.
+		 * Install PTEs in the kernel page table.
 		 */
-		vaddr_t va = BOOT_PA_TO_VA(pa);
-		if (va + size > *vstartp)
-		{
-			*vstartp = va + size;
+		vaddr_t va = *vstartp;
+		vaddr_t va_cur = va;
+		paddr_t pa_cur = pa;
+		int i;
+
+		for (i = 0; i < npgs; i++, va_cur += PAGE_SIZE,
+		    pa_cur += PAGE_SIZE) {
+			pt_entry_t *l1 = kernel_pmap_store.pm_l1;
+			unsigned int l1_idx = PT_L1_INDEX(va_cur);
+
+			/*
+			 * If no L2 table for this VA range, we need
+			 * to allocate one.  For now, panic — the
+			 * kernel image's L2 tables should cover early
+			 * stolen pages, and pmap_bootstrap will have
+			 * extended coverage for UART/etc.
+			 *
+			 * TODO: steal an L2 page dynamically here
+			 * using the scratch window.
+			 */
+			if (!(l1[l1_idx] & PTE_V))
+				panic("pmap_steal_memory: no L2 for "
+				    "VA 0x%x (l1_idx %u)",
+				    (unsigned)va_cur, l1_idx);
+
+			/* Map L2 via scratch, install PTE */
+			paddr_t l2_pa = l1[l1_idx] & PTE_PPN_MASK;
+			pt_entry_t *l2 = pmap_l2_map(l2_pa);
+			l2[PT_L2_INDEX(va_cur)] =
+			    (pa_cur & PTE_PPN_MASK) | PTE_KERNEL;
 		}
 
-		memset((void *)va, 0, size);
+		*vstartp = va + size;
+
+		/* Zero the stolen pages via scratch window */
+		pa_cur = pa;
+		for (i = 0; i < npgs; i++, pa_cur += PAGE_SIZE) {
+			pmap_scratch_map(pa_cur, PTE_KERNEL);
+			memset((void *)SCRATCH_VA, 0, PAGE_SIZE);
+		}
+
 		return va;
 	}
 	panic("pmap_steal_memory: no memory to steal %u bytes", (unsigned)size);
@@ -141,7 +282,7 @@ pmap_init(void)
 pmap_t
 pmap_create(void)
 {
-	/* TODO: allocate pmap + flat page table */
+	/* TODO: allocate pmap + L1 table, copy kernel L1 entries */
 	return NULL;
 }
 
@@ -161,7 +302,7 @@ pmap_reference(pmap_t pm)
 }
 
 /*
- * pmap_enter: create a mapping.
+ * pmap_enter: create a mapping in a user or kernel pmap.
  */
 int
 pmap_enter(pmap_t pm, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
@@ -208,18 +349,59 @@ pmap_extract(pmap_t pm, vaddr_t va, paddr_t *pap)
 }
 
 /*
- * pmap_kenter_pa / pmap_kremove: wired kernel mappings.
+ * pmap_kenter_pa: create a wired kernel mapping.
+ *
+ * Maps a single page at kernel VA to physical address PA with
+ * the given protection.  The mapping is wired (never paged out)
+ * and global (G=1, shared across all address spaces).
+ *
+ * Called by UVM to map dynamically allocated kernel pages.
+ * If no L2 table exists for this VA range, one is allocated
+ * via the scratch window.
  */
 void
 pmap_kenter_pa(vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 {
-	/* TODO */
+	pt_entry_t *l1 = kernel_pmap_store.pm_l1;
+	unsigned int l1_idx = PT_L1_INDEX(va);
+
+	if (!(l1[l1_idx] & PTE_V))
+		panic("pmap_kenter_pa: no L2 for VA 0x%x (l1 %u)",
+		    (unsigned)va, l1_idx);
+
+	paddr_t l2_pa = l1[l1_idx] & PTE_PPN_MASK;
+	pt_entry_t *l2 = pmap_l2_map(l2_pa);
+
+	l2[PT_L2_INDEX(va)] = PTE_MAKE(pa, prot, flags, PTE_G);
+	tlb_invalidate_addr(va, 0);
 }
 
+/*
+ * pmap_kremove: remove wired kernel mappings.
+ *
+ * Removes len bytes of wired kernel mappings starting at va.
+ * Must invalidate TLB entries for the removed range.
+ */
 void
 pmap_kremove(vaddr_t va, vsize_t len)
 {
-	/* TODO */
+	pt_entry_t *l1 = kernel_pmap_store.pm_l1;
+	vaddr_t eva = va + len;
+
+	for (; va < eva; va += PAGE_SIZE) {
+		unsigned int l1_idx = PT_L1_INDEX(va);
+		if (!(l1[l1_idx] & PTE_V))
+			continue;
+
+		paddr_t l2_pa = l1[l1_idx] & PTE_PPN_MASK;
+		pt_entry_t *l2 = pmap_l2_map(l2_pa);
+		unsigned int l2_idx = PT_L2_INDEX(va);
+
+		if (l2[l2_idx] & PTE_V) {
+			l2[l2_idx] = 0;
+			tlb_invalidate_addr(va, 0);
+		}
+	}
 }
 
 /*
@@ -237,7 +419,7 @@ pmap_copy(pmap_t dst, pmap_t src, vaddr_t dstaddr, vsize_t len, vaddr_t srcaddr)
 void
 pmap_activate(struct lwp *l)
 {
-	/* TODO: load ASID into MMUCR */
+	/* TODO: load ASID into MMUCR, re-pin L1 in slot 1 */
 }
 
 void
@@ -248,17 +430,28 @@ pmap_deactivate(struct lwp *l)
 
 /*
  * pmap_zero_page / pmap_copy_page: page operations.
+ * Operate on physical pages via the scratch window.
  */
 void
 pmap_zero_page(paddr_t pa)
 {
-	/* TODO: temporary map + memset */
+
+	pmap_scratch_map(pa, PTE_KERNEL);
+	memset((void *)SCRATCH_VA, 0, PAGE_SIZE);
 }
 
 void
 pmap_copy_page(paddr_t src, paddr_t dst)
 {
-	/* TODO: temporary map + memcpy */
+	static char buf[PAGE_SIZE] __aligned(4);
+
+	/* Read source via scratch window into a temp buffer */
+	pmap_scratch_map(src, PTE_KERNEL);
+	memcpy(buf, (const void *)SCRATCH_VA, PAGE_SIZE);
+
+	/* Write temp buffer to destination via scratch window */
+	pmap_scratch_map(dst, PTE_KERNEL);
+	memcpy((void *)SCRATCH_VA, buf, PAGE_SIZE);
 }
 
 /*
@@ -303,25 +496,9 @@ pmap_is_referenced(struct vm_page *pg)
 }
 
 /*
- * TLB operations.
+ * TLB invalidation is implemented in locore.S (WRSYS/RDSYS).
+ * Declarations: tlb_invalidate_all/asid/addr in pmap.h.
  */
-void
-tlb_invalidate_all(void)
-{
-	/* TODO: walk all 64 TLB slots, clear V bit */
-}
-
-void
-tlb_invalidate_asid(int asid)
-{
-	/* TODO: walk TLB, clear entries matching ASID */
-}
-
-void
-tlb_invalidate_addr(vaddr_t va, int asid)
-{
-	/* TODO: clear the specific TLB entry for va/asid */
-}
 
 /*
  * pmap_remove_all — remove all mappings from a pmap.

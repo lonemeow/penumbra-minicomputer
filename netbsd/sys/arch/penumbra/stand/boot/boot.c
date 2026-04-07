@@ -449,8 +449,10 @@ main(uint32_t bootdata)
 	close(rc);
 
 	/*
-	 * marks[] are already physical addresses — loadfile() applied
-	 * offset via the LOADADDR() macro, so don't add offset again.
+	 * marks[] are physical addresses after the LOAD pass —
+	 * loadfile() applied offset via LOADADDR().
+	 * Convert back to virtual for bootinfo entries that the
+	 * kernel expects as virtual addresses.
 	 */
 	printf("Entry: 0x%lx (phys)\n", marks[MARK_ENTRY]);
 
@@ -458,15 +460,15 @@ main(uint32_t bootdata)
 	bi_sym = bi_alloc(BTINFO_SYMTAB, sizeof(*bi_sym));
 	if (bi_sym != NULL) {
 		bi_sym->nsym = marks[MARK_NSYM];
-		bi_sym->ssym = marks[MARK_SYM];
-		bi_sym->esym = marks[MARK_END];
+		bi_sym->ssym = marks[MARK_SYM] - offset;
+		bi_sym->esym = marks[MARK_END] - offset;
 	}
 
 	bi_kern = bi_alloc(BTINFO_KERNBASE, sizeof(*bi_kern));
 	if (bi_kern != NULL) {
 		bi_kern->phys_base = load_phys;
-		bi_kern->kern_start = marks[MARK_START];
-		bi_kern->kern_end = marks[MARK_END];
+		bi_kern->kern_start = marks[MARK_START] - offset;
+		bi_kern->kern_end = marks[MARK_END] - offset;
 	}
 
 	printf("Bootinfo: %d entries, %d bytes\n",

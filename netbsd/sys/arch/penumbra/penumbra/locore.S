@@ -13,9 +13,13 @@
  *   SR.S = 1 (supervisor), SR.M = 0 (MMU off), SR.I = 0 (irqs off)
  *
  * The kernel is linked at KERNEL_TEXT_BASE (0x8001_0000).
- * locore.S must: compute virt-to-phys bias, set up initial TLB
- * entries, enable the MMU, and jump to virtual addresses before
- * any C code can run.
+ * locore.S must: compute virt-to-phys bias, set up the kernel
+ * page table (L1 + L2 tables in BSS), install the real
+ * page-table-walking TLB miss handler, enable the MMU, and
+ * jump to virtual addresses before any C code can run.
+ *
+ * No bootstrap handler — the real handler is installed from the
+ * start.  The page table is built entirely in physical mode.
  *
  * Exception vectors live at physical 0x0000_0000:
  *   0x00: reset        0x04: IRQ
@@ -28,14 +32,7 @@
 #include <machine/sysreg.h>
 #include <machine/pmap.h>
 
-/*
- * Bootstrap constants (assembly-safe, must match pmap.h).
- * Used by the bootstrap TLB miss handler until pmap takes over.
- */
-#define BPTE_KERNEL	0xBD		/* V|C|R|W|X|G */
-#define BPTE_KERNEL_NC	0x99		/* V|R|W|G (uncached, for MMIO) */
 #define KERN_TEXT_VA	0x80010000	/* KERNEL_TEXT_BASE */
-#define MMIO_BASE_VA	0xFF000000	/* Device MMIO region start */
 #define BOOTINFO_MAGIC	0x50454E49	/* "PENI" — must match bootinfo.h */
 #define BOOTINFO_MAXSIZE 4096
 
@@ -97,6 +94,9 @@ _start_bias:
  * physical mode so that step 5 can copy bootinfo into a BSS
  * buffer before the MMU transition makes bootloader memory
  * unreachable.  Addresses use PA = VA + phys_bias.
+ *
+ * This also zeroes the BSS-allocated L1 and L2 tables
+ * (_boot_l1, _boot_l2), so they start with all entries invalid.
  * ═══════════════════════════════════════════════════════════════ */
 
 	la	r1, __bss_start
@@ -163,27 +163,147 @@ _start_bias:
 .Lbootinfo_done:
 
 /* ═══════════════════════════════════════════════════════════════
- * Step 6: Copy bootstrap TLB miss handler to vector page
+ * Step 6: Build kernel page table (physical mode)
  *
- * The handler code lives in the kernel image (.text).  We copy
- * it to PA 0x80 in the vector page, where it runs from pinned
- * TLB slot 0 after MMU enable.
+ * The L1 and L2 tables live in BSS (zeroed in step 4).
+ * Populate L1 entries and L2 PTEs for the kernel image
+ * (KERNEL_TEXT_BASE through _boot_stack_top).
  *
- * Vector page layout (physical page 0):
- *   0x00-0x1F   Exception vectors (8 × 4-byte addresses)
- *   0x40-0x4F   Scratch register save area (R1-R4)
- *   0x50        phys_bias (4 bytes)
- *   0x54        way_counter (4 bytes)
- *   0x80+       TLB miss handler code (~200 bytes)
- *   0x200+      Region table: array of { pa_base, pa_end, pte_flags }
- *               Sentinel: entry with pa_base == 0 && pa_end == 0
- *               Populated by locore (kernel image) then C code (RAM, MMIO)
+ * Register allocation:
+ *   R5 = saved bootinfo PA (preserved)
+ *   R6 = phys_bias (preserved)
+ *   R7 = L1 table physical address
+ *   R8 = current VA being mapped (page-aligned)
+ *   R9 = end VA (page-aligned, exclusive)
+ *   R10 = current PA being mapped
  * ═══════════════════════════════════════════════════════════════ */
 
-	la	r1, _boot_miss_handler
+	/* Compute L1 table PA */
+	la	r7, _boot_l1
+	add	r7, r6			/* R7 = PA of _boot_l1 */
+
+	/*
+	 * Install L1 entries for all BOOT_NL2 L2 tables.
+	 * L2 tables are contiguous in BSS: _boot_l2[0], [1], [2].
+	 * First L1 index = KERNEL_TEXT_BASE >> 22.
+	 * Install BOOT_NL2 consecutive entries starting there,
+	 * giving headroom beyond _end for stolen pages and UART.
+	 */
+	li	r1, #KERN_TEXT_VA
+	shr	r1, #PT_L1_SHIFT		/* R1 = first L1 index */
+
+	mov	r2, r1
+	add	r2, #(BOOT_NL2 - 1)		/* R2 = last L1 index (inclusive) */
+
+	la	r3, _boot_l2
+	add	r3, r6			/* R3 = PA of first L2 table */
+
+	mov	r4, r1			/* R4 = current L1 index */
+.Ll1e_loop:
+	cmp	r4, r2
+	bhi	.Ll1e_done
+
+	/* L1[r4] = L2_PA | PTE_V */
+	mov	r8, r4
+	shl	r8, #2			/* byte offset in L1 */
+	add	r8, r7			/* PA of L1 entry */
+	mov	r9, r3
+	lli	r10, #PTE_V
+	or	r9, r10			/* L1E = L2_PA | V */
+	stw	r9, [r8]
+
+	add	r3, #4096		/* next L2 table */
+	add	r4, #1
+	b	.Ll1e_loop
+.Ll1e_done:
+
+	/*
+	 * Populate L2 PTEs for kernel image.
+	 * Map from KERNEL_TEXT_BASE to round_page(_end).
+	 * PTE = PA | PTE_KERNEL (V|C|R|W|X|G = 0xBD).
+	 *
+	 * Safety check: verify _end fits within BOOT_NL2 L2 tables.
+	 * If the kernel outgrows the pre-allocated tables, halt
+	 * immediately rather than silently corrupting memory.
+	 */
+	li	r8, #KERN_TEXT_VA	/* R8 = current VA */
+
+	la	r9, _end
+	add	r9, #0xFFF		/* round up to page */
+	shr	r9, #12
+	shl	r9, #12			/* R9 = end VA (rounded) */
+
+	/* Check: does _end exceed BOOT_NL2 coverage? */
+	mov	r1, r9
+	shr	r1, #PT_L1_SHIFT	/* L1 index of _end */
+	li	r2, #KERN_TEXT_VA
+	shr	r2, #PT_L1_SHIFT	/* first L1 index */
+	sub	r1, r2			/* number of L2 tables needed - 1 */
+	cmp	r1, #BOOT_NL2
+	blo	.Lpt_fits
+	/* Kernel too large for BOOT_NL2 L2 tables — halt */
+	break
+.Lpt_fits:
+
+	mov	r10, r8
+	add	r10, r6			/* R10 = current PA */
+
+.Lpte_loop:
+	cmp	r8, r9
+	bhs	.Lpte_done
+
+	/*
+	 * Compute L2 table address for this VA.
+	 * L1 index = VA >> 22
+	 * L2 table = _boot_l2 + (l1_idx - first_l1_idx) * 4096
+	 * L2 index = (VA >> 12) & 0x3FF
+	 */
+	mov	r1, r8
+	shr	r1, #PT_L1_SHIFT		/* L1 index */
+	li	r2, #KERN_TEXT_VA
+	shr	r2, #PT_L1_SHIFT		/* first L1 index */
+	sub	r1, r2			/* offset in L2 array */
+	shl	r1, #12			/* * 4096 = byte offset */
+	la	r2, _boot_l2
+	add	r2, r6			/* PA of _boot_l2 base */
+	add	r1, r2			/* PA of L2 table for this VA */
+
+	mov	r2, r8
+	shr	r2, #PT_L2_SHIFT
+	and	r2, #0x3FF		/* L2 index */
+	shl	r2, #2			/* byte offset in L2 */
+	add	r1, r2			/* PA of PTE slot */
+
+	/* Build PTE = PA | PTE_KERNEL */
+	mov	r2, r10
+	shr	r2, #PTE_PPN_SHIFT
+	shl	r2, #PTE_PPN_SHIFT	/* PPN aligned */
+	lli	r3, #PTE_KERNEL
+	or	r2, r3			/* PTE value */
+	stw	r2, [r1]		/* write PTE */
+
+	add	r8, #4096		/* next VA page */
+	add	r10, #4096		/* next PA page */
+	b	.Lpte_loop
+.Lpte_done:
+
+/* ═══════════════════════════════════════════════════════════════
+ * Step 7: Copy real TLB miss handler to vector page
+ *
+ * The real handler walks L1 → L2 via pinned TLB slots.
+ * Copy to vector page offset 0x80 (same location as before).
+ *
+ * Vector page layout:
+ *   0x00-0x1F   Exception vectors (8 × 4-byte addresses)
+ *   0x40-0x4F   Scratch register save area (R1-R4)
+ *   0x54        way_counter (4 bytes)
+ *   0x80+       TLB miss handler code
+ * ═══════════════════════════════════════════════════════════════ */
+
+	la	r1, _real_miss_handler
 	add	r1, r6			/* physical source address */
 	lli	r2, #0x80		/* destination in vector page */
-	la	r3, _boot_handlers_end
+	la	r3, _real_handlers_end
 	add	r3, r6			/* physical end of handler code */
 .Lcopy_handler:
 	ldw	r4, [r1]
@@ -197,7 +317,7 @@ _start_bias:
 	wrsys	r0, #SYSDEV_ICACHE, #CACHE_INVAL
 
 /* ═══════════════════════════════════════════════════════════════
- * Step 7: Install exception vectors and boot parameters
+ * Step 8: Install exception vectors and boot parameters
  * ═══════════════════════════════════════════════════════════════ */
 
 	/* TLB miss vector → handler at PA 0x80 */
@@ -205,8 +325,8 @@ _start_bias:
 	stw	r1, [r0 + #0x08]
 
 	/* Compute PA of panic handler in vector page */
-	la	r1, _boot_prot_panic
-	la	r2, _boot_miss_handler
+	la	r1, _real_prot_panic
+	la	r2, _real_miss_handler
 	sub	r1, r2			/* offset from handler start */
 	add	r1, #0x80		/* PA in vector page */
 
@@ -218,48 +338,39 @@ _start_bias:
 	stw	r1, [r0 + #0x1C]	/* illegal / privilege */
 
 	/* Boot parameters for handler scratch area */
-	stw	r6, [r0 + #0x50]	/* phys_bias */
 	stw	r0, [r0 + #0x54]	/* way_counter = 0 */
 
-	/*
-	 * Populate initial region table entry at 0x200.
-	 * One entry: the kernel image (text through BSS + stack).
-	 * PA range = [text_start + phys_bias, round_page(_end) + phys_bias)
-	 * This is enough to run until C code adds RAM and MMIO regions.
-	 */
-	li	r1, #KERN_TEXT_VA
-	add	r1, r6			/* PA of kernel text start */
-	stw	r1, [r0 + #0x200]	/* region[0].pa_base */
-
-	la	r1, _boot_stack_top	/* VA of end of kernel BSS+stack */
-	add	r1, #0xFFF		/* round up to page boundary */
-	shr	r1, #12
-	shl	r1, #12
-	add	r1, r6			/* PA of kernel end (rounded) */
-	stw	r1, [r0 + #0x204]	/* region[0].pa_end */
-
-	lli	r1, #BPTE_KERNEL	/* cached, supervisor RWX */
-	stw	r1, [r0 + #0x208]	/* region[0].pte_flags */
-
-	/* Sentinel: terminate region table */
-	stw	r0, [r0 + #0x20C]	/* region[1].pa_base = 0 */
-	stw	r0, [r0 + #0x210]	/* region[1].pa_end = 0 */
-
 /* ═══════════════════════════════════════════════════════════════
- * Step 8: Pin the vector/handler page (pinned TLB slot 0)
+ * Step 9: Pin TLB slots
  *
- * Maps VA 0x0000_0000 → PA 0x0000_0000 (identity).
- * Covers: exception vectors, scratch save area, handler code.
+ * Slot 0: Vector page — VA 0x0 → PA 0x0 (identity)
+ * Slot 1: Kernel L1 — VA 0xFFFFE000 → PA of _boot_l1
  * ═══════════════════════════════════════════════════════════════ */
 
-	lli	r1, #TLB_INDEX_PINNED	/* 0x40 = pinned slot 0 */
+	/* Pin vector page (slot 0): VA 0 → PA 0 */
+	lli	r1, #PTLB_VECTOR
 	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_INDEX
 	wrsys	r0, #SYSDEV_MMU, #MMU_TLB_VPN	/* VPN=0, ASID=0 */
-	lli	r1, #BPTE_KERNEL
+	lli	r1, #PTE_KERNEL
+	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_PTE
+
+	/* Pin kernel L1 (slot 1): VA 0xFFFFE000 → PA of _boot_l1
+	 * VPN = 0xFFFFE → TLB_VPN = 0x0FFFFE00
+	 * PTE = l1_pa | V|C|R|W|G (0x9D)
+	 */
+	lli	r1, #PTLB_L1
+	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_INDEX
+
+	lli	r1, #0xFE00
+	lui	r1, #0x0FFF		/* R1 = 0x0FFFFE00 */
+	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_VPN
+
+	lli	r1, #0x9D		/* V|C|R|W|G */
+	or	r1, r7			/* R7 = L1 PA (still in reg) */
 	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_PTE
 
 /* ═══════════════════════════════════════════════════════════════
- * Step 9: Identity-map current page for MMU enable transition
+ * Step 10: Identity-map current page for MMU enable transition
  *
  * After WRSYS sets M=1, the next instruction fetch uses the
  * physical PC as a virtual address.  This TLB entry maps
@@ -284,12 +395,16 @@ _start_bias:
 
 	/* TLB_PTE: PPN << 12 | kernel flags */
 	shl	r1, #12
-	lli	r2, #BPTE_KERNEL
+	lli	r2, #PTE_KERNEL
 	or	r1, r2
 	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_PTE
 
 /* ═══════════════════════════════════════════════════════════════
- * Step 10: Enable MMU
+ * Step 11: Enable MMU
+ *
+ * The real page-table-walking handler is active from this point.
+ * Kernel image PTEs are in the page table.  L1 is pinned.
+ * The first TLB miss after M=1 will be resolved by the handler.
  * ═══════════════════════════════════════════════════════════════ */
 
 	lli	r1, #MMUCR_M
@@ -302,7 +417,7 @@ _start_bias:
 	 */
 
 /* ═══════════════════════════════════════════════════════════════
- * Step 11: Jump to kernel virtual addresses
+ * Step 12: Jump to kernel virtual addresses
  * ═══════════════════════════════════════════════════════════════ */
 
 	la	r13, .Lvirtual_entry
@@ -310,8 +425,9 @@ _start_bias:
 
 	/*
 	 * ── Running at kernel virtual addresses from here ──
-	 * BSS is already zeroed and bootinfo copied (steps 4-5).
-	 * TLB misses are resolved by the bootstrap handler.
+	 * BSS is already zeroed and bootinfo copied.
+	 * TLB misses are resolved by the real page-table handler.
+	 * Kernel image is mapped; MMIO is not (yet).
 	 */
 .Lvirtual_entry:
 	/* Set up virtual kernel stack */
@@ -321,27 +437,23 @@ _start_bias:
 	bl	penumbra_init
 	break				/* NOTREACHED */
 
+
 /* ═══════════════════════════════════════════════════════════════
- * Bootstrap TLB miss handler
+ * Real TLB miss handler — page table walking.
  *
- * Copied to the vector page at PA 0x80 during early boot.
- * Resolves TLB misses using a single linear mapping:
- *   PA = VA + phys_bias  (modular 32-bit arithmetic)
+ * Walks a 2-level page table (L1 → L2) using pinned TLB slots:
+ *   Slot 0: Vector page (handler code + scratch)
+ *   Slot 1: Current L1 table (at fixed VA 0xFFFFE000)
+ *   Slot 2: L2 window (at fixed VA 0xFFFFD000, remapped per miss)
  *
- * The computed PA is looked up in a region table at PA 0x200 in
- * the vector page.  Each 12-byte entry has { pa_base, pa_end,
- * pte_flags }.  RAM regions use cached flags; MMIO uses uncached.
- * If PA is not in any region, the handler panics.
+ * This code is copied to vector page offset 0x80 by locore.S
+ * during early boot (physical mode).  Active from MMU enable.
  *
- * The region table is populated by locore.S from bootinfo before
- * the handler is installed.
- *
- * Runs until pmap_bootstrap() installs the real handler.
- * All branches are PC-relative, so the code works after copy.
- * Scratch register save at VA 0x40, boot params at VA 0x50.
+ * Scratch register save at VA 0x40.  Way counter at VA 0x54.
+ * All branches are PC-relative — works correctly after copy.
  * ═══════════════════════════════════════════════════════════════ */
 	.balign	4
-_boot_miss_handler:
+_real_miss_handler:
 	/* Save scratch registers to vector page */
 	stw	r1, [r0 + #0x40]
 	stw	r2, [r0 + #0x44]
@@ -351,76 +463,91 @@ _boot_miss_handler:
 	/* Read faulting virtual address */
 	rdsys	r1, #SYSDEV_MMU, #MMU_FAULT_ADDR
 
-	/* Compute PA = VA + phys_bias */
-	ldw	r2, [r0 + #0x50]	/* R2 = phys_bias */
-	mov	r3, r1			/* R3 = VA */
-	add	r3, r2			/* R3 = PA */
-
-	/*
-	 * Walk region table at 0x200.
-	 * R4 = table pointer, entries are { pa_base, pa_end, pte_flags }.
-	 * Table ends when pa_base == 0 and pa_end == 0 (sentinel).
+	/* ── L1 lookup ──────────────────────────────
+	 * R1 = faulting VA
+	 * L1 is pinned at VA 0xFFFFE000 (slot 1).
+	 * L1 index = VA[31:22], each entry is 4 bytes.
 	 */
-	lli	r2, #0x200		/* R2 = table pointer */
-.Lbmh_region_loop:
-	ldw	r4, [r2]		/* R4 = pa_base */
-	ldw	r1, [r2 + #4]		/* R1 = pa_end */
-	or	r4, r1			/* check sentinel (both zero) */
-	beq	.Lbmh_panic		/* end of table — no match */
+	mov	r2, r1
+	shr	r2, #PT_L1_SHIFT		/* R2 = L1 index (bits 31:22) */
+	shl	r2, #2			/* R2 = byte offset into L1 */
 
-	/* Reload pa_base for comparison */
-	ldw	r4, [r2]		/* R4 = pa_base */
-	cmp	r3, r4
-	blo	.Lbmh_next		/* PA < pa_base → skip */
-	cmp	r3, r1			/* R1 still = pa_end */
-	bhs	.Lbmh_next		/* PA ≥ pa_end → skip */
+	lli	r3, #0xE000
+	lui	r3, #0xFFFF		/* R3 = 0xFFFFE000 (PT_L1_VA) */
+	add	r3, r2			/* R3 = &L1[index] */
+	ldw	r3, [r3]		/* R3 = L1E (L2 PA | flags) */
 
-	/* Match: build PTE from PA and region's pte_flags */
-	li	r1, #PTE_PPN_MASK
-	and	r3, r1			/* clear page offset bits */
-	ldw	r4, [r2 + #8]		/* pte_flags */
-	or	r3, r4			/* R3 = PTE */
+	/* Check L1 entry valid bit */
+	mov	r4, r3
+	and	r4, #PTE_V
+	beq	.Lrmh_fault		/* L1E invalid → page fault */
 
-	/* Recover faulting VA for TLB load */
-	ldw	r1, [r0 + #0x40]	/* saved R1 — no, need fault VA */
-	rdsys	r1, #SYSDEV_MMU, #MMU_FAULT_ADDR
-	b	.Lbmh_load_tlb
-
-.Lbmh_next:
-	add	r2, #12			/* advance to next entry */
-	b	.Lbmh_region_loop
-
-.Lbmh_panic:
-	/*
-	 * Unmapped PA — print faulting VA and PA to UART, then halt.
-	 * R3 = computed PA.  Re-read faulting VA from MMU.
-	 * UART TX at phys_bias-adjusted address isn't available here,
-	 * so store VA/PA to vector page scratch for C code to read.
+	/* ── Map L2 table into pinned window (slot 2) ──
+	 * Extract L2 table PA from L1E (clear flag bits),
+	 * then remap pinned slot 2 to point there.
+	 *
+	 * Window VA = 0xFFFFD000.  TLB entry:
+	 *   TLB_INDEX = 0x42 (pinned bit | slot 2)
+	 *   TLB_VPN  = (0xFFFFD >> 0) << 8 = 0x0FFFFD00
+	 *   TLB_PTE  = L2_PA | V|C|R|G (0x8D)
 	 */
-	rdsys	r1, #SYSDEV_MMU, #MMU_FAULT_ADDR
-	stw	r1, [r0 + #0x60]	/* faulting VA */
-	stw	r3, [r0 + #0x64]	/* computed PA */
-	stw	r2, [r0 + #0x68]	/* table pointer (debug) */
-	break				/* unmapped address — fatal */
+	shr	r3, #PTE_PPN_SHIFT
+	shl	r3, #PTE_PPN_SHIFT	/* R3 = L2 table PA (aligned) */
 
-.Lbmh_load_tlb:
-	/* R1 = faulting VA, R3 = PTE value */
+	lli	r4, #PTLB_L2WIN
+	wrsys	r4, #SYSDEV_MMU, #MMU_TLB_INDEX
 
-	/* Build TLB_VPN = (VPN << 8) | ASID=0 */
+	lli	r4, #0xFD00
+	lui	r4, #0x0FFF		/* R4 = 0x0FFFFD00 (TLB_VPN) */
+	wrsys	r4, #SYSDEV_MMU, #MMU_TLB_VPN
+
+	lli	r4, #0x8D		/* V|C|R|G = 0x01|0x04|0x08|0x80 */
+	or	r4, r3			/* R4 = L2_PA | flags */
+	wrsys	r4, #SYSDEV_MMU, #MMU_TLB_PTE
+
+	/* ── L2 table lookup ─────────────────────────
+	 * L2 index = VA[21:12], each entry is 4 bytes.
+	 * L2 table is now accessible at VA 0xFFFFD000.
+	 */
+	mov	r2, r1
+	shr	r2, #PT_L2_SHIFT
+	and	r2, #0x3FF		/* R2 = L2 index (bits 21:12) */
+	shl	r2, #2			/* R2 = byte offset into L2 */
+
+	lli	r3, #0xD000
+	lui	r3, #0xFFFF		/* R3 = 0xFFFFD000 (PT_L2WIN_VA) */
+	add	r3, r2			/* R3 = &L2[index] */
+	ldw	r3, [r3]		/* R3 = PTE value */
+
+	/* Check PTE valid bit */
+	mov	r4, r3
+	and	r4, #PTE_V
+	beq	.Lrmh_fault		/* PTE invalid → page fault */
+
+	/* ── Load PTE into main TLB ──────────────────
+	 * R1 = faulting VA, R3 = PTE value.
+	 * Build TLB_VPN from faulting VA + current ASID.
+	 * Use alternating way counter for replacement.
+	 */
+
+	/* TLB_VPN = (VPN << 8) | ASID */
 	mov	r2, r1
 	shr	r2, #12
-	shl	r2, #8
+	shl	r2, #8			/* R2 = VPN << 8 */
 
-	/* Compute TLB set = VPN[4:0] */
+	rdsys	r4, #SYSDEV_MMU, #MMU_MMUCR
+	shr	r4, #MMUCR_ASID_SHIFT
+	and	r4, #0xFF		/* R4 = current ASID */
+	or	r2, r4			/* R2 = TLB_VPN */
+
+	/* TLB_INDEX = set | way */
 	mov	r4, r1
 	shr	r4, #12
-	and	r4, #0x1F
+	and	r4, #0x1F		/* R4 = set = VPN[4:0] */
+	ldw	r1, [r0 + #0x54]	/* R1 = way counter (0 or 0x20) */
+	or	r4, r1			/* R4 = TLB_INDEX */
 
-	/* Way selection: alternating counter */
-	ldw	r1, [r0 + #0x54]	/* way (0 or 0x20) */
-	or	r4, r1			/* TLB_INDEX = set | way */
-
-	/* Write TLB entry (3-write commit protocol) */
+	/* 3-write commit protocol */
 	wrsys	r4, #SYSDEV_MMU, #MMU_TLB_INDEX
 	wrsys	r2, #SYSDEV_MMU, #MMU_TLB_VPN
 	wrsys	r3, #SYSDEV_MMU, #MMU_TLB_PTE
@@ -438,9 +565,150 @@ _boot_miss_handler:
 	ldw	r4, [r0 + #0x4C]
 	eret
 
-_boot_prot_panic:
+.Lrmh_fault:
+	/*
+	 * Page fault — no valid mapping for this VA.
+	 * Store debug info at vector page scratch and halt.
+	 * TODO: dispatch to C trap handler for demand paging.
+	 */
+	rdsys	r1, #SYSDEV_MMU, #MMU_FAULT_ADDR
+	stw	r1, [r0 + #0x60]	/* faulting VA */
+	stw	r3, [r0 + #0x64]	/* L1E or PTE value */
+	rdsys	r1, #SYSDEV_MMU, #MMU_FAULT_STATUS
+	stw	r1, [r0 + #0x68]	/* fault status */
 	break
-_boot_handlers_end:
+
+_real_prot_panic:
+	break
+_real_handlers_end:
+
+
+/* ═══════════════════════════════════════════════════════════════
+ * TLB invalidation routines — called from C (pmap.c).
+ * ═══════════════════════════════════════════════════════════════ */
+
+/*
+ * tlb_invalidate_all: invalidate all 64 main TLB slots.
+ * Does NOT touch pinned TLB entries.
+ */
+	.globl	tlb_invalidate_all
+	.type	tlb_invalidate_all, @function
+tlb_invalidate_all:
+	mov	r1, r0			/* index = 0 */
+.Ltia_loop:
+	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_INDEX
+	wrsys	r0, #SYSDEV_MMU, #MMU_TLB_PTE	/* V=0 → invalid */
+	add	r1, #1
+	cmp	r1, #TLB_NSLOTS
+	blo	.Ltia_loop
+	ret
+
+/*
+ * tlb_invalidate_asid(int asid): invalidate all TLB entries
+ * matching the given ASID.  Skips global (G=1) entries.
+ */
+	.globl	tlb_invalidate_asid
+	.type	tlb_invalidate_asid, @function
+tlb_invalidate_asid:
+	/* R1 = asid */
+	stw	r5, [sp + #-4]
+	stw	r6, [sp + #-8]
+	sub	sp, #8
+	mov	r5, r1			/* R5 = target ASID */
+	mov	r2, r0			/* R2 = slot index */
+.Ltias_loop:
+	wrsys	r2, #SYSDEV_MMU, #MMU_TLB_INDEX
+	rdsys	r3, #SYSDEV_MMU, #MMU_TLB_PTE
+	mov	r4, r3
+	and	r4, #PTE_V
+	beq	.Ltias_next		/* skip invalid entries */
+	mov	r4, r3
+	and	r4, #PTE_G
+	bne	.Ltias_next		/* skip global entries */
+	rdsys	r3, #SYSDEV_MMU, #MMU_TLB_VPN
+	mov	r6, r3
+	and	r6, #0xFF		/* extract ASID from TLB_VPN */
+	cmp	r6, r5
+	bne	.Ltias_next
+	wrsys	r0, #SYSDEV_MMU, #MMU_TLB_PTE	/* invalidate */
+.Ltias_next:
+	add	r2, #1
+	cmp	r2, #TLB_NSLOTS
+	blo	.Ltias_loop
+	add	sp, #8
+	ldw	r5, [sp + #-4]
+	ldw	r6, [sp + #-8]
+	ret
+
+/*
+ * tlb_invalidate_addr(vaddr_t va, int asid): invalidate TLB
+ * entry for a specific VA + ASID.  Checks both ways of the set.
+ */
+	.globl	tlb_invalidate_addr
+	.type	tlb_invalidate_addr, @function
+tlb_invalidate_addr:
+	/* R1 = va, R2 = asid */
+	/* Compute expected TLB_VPN = (VPN << 8) | ASID */
+	mov	r3, r1
+	shr	r3, #12
+	shl	r3, #8
+	or	r3, r2			/* R3 = expected TLB_VPN */
+
+	/* Compute set = VPN[4:0] */
+	mov	r4, r1
+	shr	r4, #12
+	and	r4, #0x1F		/* R4 = set index */
+
+	/* Check way 0 */
+	wrsys	r4, #SYSDEV_MMU, #MMU_TLB_INDEX
+	rdsys	r1, #SYSDEV_MMU, #MMU_TLB_VPN
+	cmp	r1, r3
+	bne	.Ltia_w1
+	wrsys	r0, #SYSDEV_MMU, #MMU_TLB_PTE	/* invalidate way 0 */
+	ret
+
+.Ltia_w1:
+	/* Check way 1 */
+	mov	r1, r4
+	add	r1, #0x20		/* way 1 = set + 0x20 (bit 5 clear in set) */
+	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_INDEX
+	rdsys	r1, #SYSDEV_MMU, #MMU_TLB_VPN
+	cmp	r1, r3
+	bne	.Ltia_done
+	wrsys	r0, #SYSDEV_MMU, #MMU_TLB_PTE	/* invalidate way 1 */
+.Ltia_done:
+	ret
+
+
+/*
+ * pmap_scratch_map(paddr_t pa, pt_entry_t flags)
+ *
+ * Map a physical page at SCRATCH_VA (0xFFFFC000) via pinned slot 3.
+ * Used by C code to access pages that have no kernel VA yet.
+ *
+ * R1 = physical address (page-aligned)
+ * R2 = PTE flags (e.g., PTE_KERNEL or PTE_KERNEL_NC)
+ */
+	.globl	pmap_scratch_map
+	.type	pmap_scratch_map, @function
+pmap_scratch_map:
+	/* TLB_INDEX = pinned slot 3 */
+	lli	r3, #PTLB_SCRATCH
+	wrsys	r3, #SYSDEV_MMU, #MMU_TLB_INDEX
+
+	/* TLB_VPN for SCRATCH_VA = 0xFFFFC000
+	 * VPN = 0xFFFFC → (0xFFFFC << 8) = 0x0FFFFC00
+	 */
+	lli	r3, #0xFC00
+	lui	r3, #0x0FFF		/* R3 = 0x0FFFFC00 */
+	wrsys	r3, #SYSDEV_MMU, #MMU_TLB_VPN
+
+	/* TLB_PTE = PA | flags */
+	or	r1, r2			/* R1 = PA | flags */
+	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_PTE
+
+	ret
+
 
 /*
  * cpu_switchto(oldlwp, newlwp, returning)
@@ -497,8 +765,8 @@ longjmp:
 
 /*
  * phys_bias: physical - virtual address offset (PA = VA + phys_bias).
- * Set by _start before BSS zero (stored to physical address),
- * used by C code in machdep.c for PA↔VA conversions.
+ * Set by _start before BSS zero (stored to physical address).
+ * Used during bootstrap for PA↔VA conversions.
  */
 	.data
 	.align	4
@@ -507,8 +775,7 @@ phys_bias:
 	.long	0
 
 /*
- * Early boot stack — used before MMU is enabled.
- * 4 KB is enough for the pre-MMU TLB setup code.
+ * Early boot stack — 4 KB, in BSS.
  */
 	.bss
 	.align	4
@@ -517,3 +784,18 @@ _boot_stack:
 	.space	4096
 	.globl	_boot_stack_top
 _boot_stack_top:
+
+/*
+ * Kernel page table — pre-allocated in BSS (zeroed by step 4).
+ * L1: 1 page (4 KB) = 1024 L1 entries.
+ * L2: BOOT_NL2 pages (12 KB) = 3 × 1024 PTE entries = 12 MB coverage.
+ * These are adopted by pmap_bootstrap() as the permanent kernel
+ * page table.  The L1 is pinned in TLB slot 1 from early boot.
+ */
+	.balign	4096
+	.globl	_boot_l1
+_boot_l1:
+	.space	4096
+	.globl	_boot_l2
+_boot_l2:
+	.space	(BOOT_NL2 * 4096)
