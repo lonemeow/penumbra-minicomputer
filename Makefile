@@ -7,6 +7,7 @@
 #   make sim MOD=<name>      — build & run testbench for a module
 #   make smoke               — toolchain smoke test
 #   make wave MOD=<name>     — open waveform in GTKWave
+#   make sdimage             — build SD image with bootloader, kernel, rootfs
 #   make clean               — remove build artifacts
 
 # ── Configuration ──────────────────────────────────────────────
@@ -206,8 +207,27 @@ simulate-rtl:
 	@$(UASM) hw/microcode/microcode.uasm -o microcode.hex
 	@$(DOCKER_RUN_IT) --entrypoint ./$(BUILD_DIR)/Vmachine_sim_interactive $(DOCKER_IMAGE) $(if $(SDCARD),+sdcard=$(SDCARD)) $(if $(TRACE),+trace=$(TRACE))
 
+# ── SD card image ──────────────────────────────────────────────
+# Builds boot loader, kernel, and minimal rootfs into an SD image.
+# Prerequisites: kernel and bootloader already built (see CLAUDE.md).
+# Usage: make sdimage
+#        make sdimage SDIMAGE=build/custom.img
+SDIMAGE  ?= $(BUILD_DIR)/boot.img
+ROOTFS   := $(BUILD_DIR)/rootfs
+BOOT_ELF := $(BUILD_DIR)/netbsd-obj/sys/arch/penumbra/stand/boot/PENBOOT.ELF
+KERNEL   := $(BUILD_DIR)/netbsd-kernel/MINIMAL/netbsd
+
+.PHONY: sdimage
+sdimage:
+	@$(MAKE) -C sw/init
+	@mkdir -p $(ROOTFS)/sbin
+	@cp $(BUILD_DIR)/init/init $(ROOTFS)/sbin/init
+	@sw/tools/mksdimage.sh -o $(SDIMAGE) -2 $(BOOT_ELF) -k $(KERNEL) -e $(ROOTFS) -v
+	@echo "SD image: $(SDIMAGE)"
+
 # ── Cleanup ────────────────────────────────────────────────────
 .PHONY: clean
 clean:
 	rm -rf $(BUILD_DIR) $(WAVE_DIR)
 	@$(MAKE) -C sw/sim clean 2>/dev/null || true
+	@$(MAKE) -C sw/init clean 2>/dev/null || true
