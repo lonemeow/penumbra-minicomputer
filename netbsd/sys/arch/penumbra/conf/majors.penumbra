@@ -10,7 +10,7 @@ device-major	swap		char 3   block 1	vmswap
 device-major	pts		char 4			pty
 device-major	ptc		char 5			pty
 device-major	log		char 6
-device-major	sd		char 8   block 8	sd
+device-major	psd		char 8   block 8	psd
 device-major	filedesc	char 10
 device-major	bpf		char 11			bpfilter
 device-major	com		char 26			com

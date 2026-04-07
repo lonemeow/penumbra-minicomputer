@@ -34,7 +34,7 @@ Most integer-type headers delegate to NetBSD's `sys/common_*` headers, which use
 
 ## Kernel Status
 
-**The kernel boots to the root device prompt on the ISS.** This includes full UVM initialization, autoconf (mainbus, cpu), softint thread creation, scheduler context switching, and sysctl setup.
+**The kernel mounts a root filesystem from SD card on the ISS.** Full boot chain: ROM autoconfig → bootloader → kernel → device drivers → msdosfs root mount. Boots past `main()` through UVM init, autoconf, softint threads, scheduler, and attempts to exec `/sbin/init`.
 
 ### What Works
 
@@ -49,6 +49,8 @@ Most integer-type headers delegate to NetBSD's `sys/common_*` headers, which use
 - **Console:** Early boot uses 16450 UART via TLB scratch window, then `pmap_map_device()`. The `pcom` driver takes over `cn_tab` during autoconf using a proper `bus_space` mapping.
 
 - **Device autoconfiguration:** `pbbus` bridge walks `BTINFO_DEVICE` entries from bootinfo and attaches child devices. ROM autoconfig results (device class, MMIO base, size) are passed through the bootloader to the kernel. `bus_space` (map/unmap/read/write) implemented for memory-mapped I/O.
+
+- **SD card block device (psd):** Polled SPI/SD driver attaches at pbbus for `ACFG_CLASS_SD`. Implements full SD-SPI protocol (init, sector read) via `bus_space`. MBR partition table parsed at attach; partition offsets applied in strategy. Provides `bdevsw`/`cdevsw` at major 8. Kernel successfully mounts msdosfs root from `psd0e` (MBR partition 1).
 
 - **curlwp:** Defined as `curcpu()->ci_curlwp` macro so MI code and `cpu_switchto` share the same variable. `cpu_info_store` statically initializes it to `&lwp0`.
 

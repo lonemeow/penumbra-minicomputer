@@ -19,6 +19,7 @@ options		PMAP_STEAL_MEMORY	# early boot page allocation
 
 # File systems (minimal set)
 file-system	FFS			# Berkeley Fast File System
+file-system	MSDOSFS			# MS-DOS FAT file system
 
 # Networking (minimal)
 options		INET			# IP
@@ -28,6 +29,7 @@ mainbus0	at root
 cpu0		at mainbus?
 pbbus0		at mainbus?
 pcom0		at pbbus?
+psd0		at pbbus?
 
 # Console
 options		CONSDEV_OVERRIDE="\"uart\""

@@ -315,7 +315,7 @@ MIPS/68k-style vector dispatch.
 - **Boot from ROM:** Programs assembled with `--org 0xFFFF0000`. `_start:` must be first label.
 - **ROM page mapping (MMU tests):** TLB_INDEX=16, TLB_VPN=0x0FFFF000, TLB_PTE=0xFFFF00B9.
 
-**NetBSD kernel boots to root device prompt on the ISS.**
+**NetBSD kernel mounts root filesystem from SD card on the ISS.**
 - Machine headers (39 files), kernel config, MD build system,
   stub kernel sources, and assembly string functions all present.
 - `config MINIMAL` → `make depend` → `make` produces a ~5 MB
@@ -347,6 +347,9 @@ MIPS/68k-style vector dispatch.
   entries from bootinfo, attaches child devices by ACFG_CLASS_*.
   `bus_space` implemented (map via UVM + pmap_kenter_pa, read/write
   via volatile pointers).  UART and SD controller enumerated.
+- **SD card block device (psd):** polled SPI/SD driver, MBR
+  partition parsing, bdevsw/cdevsw at major 8.  Kernel mounts
+  msdosfs root from `psd0e` and reaches `init: trying /sbin/init`.
 - **UVM init:** `uvm_md_init()`, bootinfo-driven
   `uvm_page_physload()`, `pmap_steal_memory()`.  Full UVM init
   completes: pool allocator, vmem, kmem, radix trees all

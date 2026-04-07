@@ -155,6 +155,7 @@ Headers fall into three categories:
 | `cpu.c` | CPU device driver |
 | `pbbus.c` | Penumbra Bus bridge — walks BTINFO_DEVICE entries from bootinfo, attaches child devices by class |
 | `pcom.c` | Console UART driver — attaches at pbbus (ACFG_CLASS_UART), takes over cn_tab from early console |
+| `psd.c` | SD card block device — SPI/SD protocol via bus_space, MBR partition parsing, bdevsw/cdevsw at major 8. Polled sector-at-a-time I/O. |
 | `bus_space.c` | bus_space implementation — map/unmap via UVM + pmap_kenter_pa, read/write via volatile pointers |
 | `trap.c` | Exception dispatch (all 9 vector types, panics for now), SPL stubs |
 | `pmap.c` | Software TLB management: `pmap_bootstrap()`, `pmap_steal_memory()`/`pmap_steal_page()`, `pmap_kenter_pa()`/`pmap_kremove()` with dynamic L2 allocation, `pmap_extract()`, `pmap_map_device()`, scratch window helpers. Unimplemented stubs panic. |
@@ -256,6 +257,13 @@ Headers fall into three categories:
   (ACFG_CLASS_UART), maps registers via bus_space, takes over
   `cn_tab` from early boot console.  Seamless handoff — no
   output lost during transition.
+- [x] **SD card block device (psd)** — polled SPI/SD driver
+  attaches at pbbus for ACFG_CLASS_SD.  Full SD-SPI protocol
+  (CMD0/CMD8/ACMD41/CMD58 init, CMD17 sector read) via
+  bus_space.  MBR partition table parsed at attach, offsets
+  applied in strategy.  bdevsw/cdevsw at major 8.
+  Kernel mounts msdosfs root from psd0e (MBR partition 1)
+  and reaches `init: trying /sbin/init`.
 - [ ] Kernel port — remaining MD stubs need real implementations
   (grep for `TODO(stub)` to find them)
 - [ ] DDB — disabled, needs extensive MD hooks

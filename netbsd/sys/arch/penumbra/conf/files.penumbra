@@ -43,6 +43,11 @@ device	pcom
 attach	pcom at pbbus
 file	arch/penumbra/penumbra/pcom.c			pcom
 
+# SD card block device
+device	psd: disk
+attach	psd at pbbus
+file	arch/penumbra/penumbra/psd.c			psd
+
 # bus_space implementation
 file	arch/penumbra/penumbra/bus_space.c
 
