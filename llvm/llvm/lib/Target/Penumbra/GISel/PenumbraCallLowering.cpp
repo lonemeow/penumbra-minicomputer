@@ -185,12 +185,21 @@ bool PenumbraCallLowering::lowerFormalArguments(
       MIRBuilder.buildStore(CopyReg, FINReg, *MMO);
     }
 
-    // Record the frame index for the start of the save area.  va_start
-    // will use this to initialise the va_list pointer.  The va_list points
-    // past the named args: if 2 named args exist, va_list = &save[2].
+    // Record the frame index for where va_arg should start reading.
+    // The save area (SP-16..SP-1) holds R1-R4, contiguous with any
+    // stack-passed args at SP+0.  If all named args fit in registers,
+    // va_list points into the save area past the last named reg slot.
+    // Otherwise, it points past the last stack-passed named arg.
+    // Use ArgAssigner.StackSize (the actual bytes consumed on the
+    // caller's stack by named args) to account for types wider than
+    // 4 bytes (e.g., i64 takes two stack slots but one SplitArg).
     auto *FuncInfo = MF.getInfo<PenumbraMachineFunctionInfo>();
-    // VarArgs start at the first anonymous slot.
-    int VaFI = MFI.CreateFixedObject(4, SaveOffset + NumNamed * 4,
+    int64_t VaOffset;
+    if (ArgAssigner.StackSize == 0)
+      VaOffset = SaveOffset + SplitArgs.size() * 4;
+    else
+      VaOffset = (int64_t)ArgAssigner.StackSize;
+    int VaFI = MFI.CreateFixedObject(4, VaOffset,
                                      /*IsSpillSlot=*/false);
     FuncInfo->setVarArgsFrameIndex(VaFI);
   }

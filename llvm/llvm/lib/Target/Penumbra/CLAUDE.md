@@ -129,6 +129,9 @@ or MOV PC + ADDi (PIC); BRJT always adds base back).
 - Varargs: G_VASTART custom-lowered, G_VAARG generic lowering
   (s32/s64/p0), va_copy selected to LDW+STW pair,
   R1-R4 save area in variadic prologues.
+  va_start offset uses ArgAssigner.StackSize (not SplitArgs.size())
+  so it correctly handles >4 named args and wide types (e.g. i64)
+  that occupy multiple stack slots.
 - G_STACKSAVE/G_STACKRESTORE: selected to MOV SP (R14).
 - `@llvm.returnaddress(0)` → MOV from R13 (LR),
   `@llvm.frameaddress(0)` → MOV from R14 (SP).
