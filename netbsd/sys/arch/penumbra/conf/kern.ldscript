@@ -47,4 +47,12 @@ SECTIONS
   }
   _end = . ;
   PROVIDE (end = .);
+
+  /*
+   * The TLB miss handler + scratch data is copied to the vector page
+   * at offset 0x80.  It must fit within the remaining 4096 - 128 = 3968
+   * bytes of the page.
+   */
+  ASSERT(_real_handlers_end - _real_miss_handler <= 4096 - 128,
+         "TLB miss handler too large for vector page")
 }

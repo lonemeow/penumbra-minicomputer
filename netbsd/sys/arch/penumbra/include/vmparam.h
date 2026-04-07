@@ -21,10 +21,12 @@
  *                mmap region above 64 MB (for large programs)
  *   0x7FFF_FFFF  end of user VA
  *
- * Top three pages are reserved for the TLB miss handler:
+ * Top five pages are reserved for the TLB miss handler:
  *   0xFFFF_F000  unmapped guard (catches (void *)-1 derefs)
  *   0xFFFF_E000  L1 pinned TLB slot (current page table L1)
  *   0xFFFF_D000  L2 window pinned TLB slot (transient L2 mapping)
+ *   0xFFFF_C000  scratch window (pmap C code page access)
+ *   0xFFFF_B000  vector page (handler code + scratch data)
  *
  * Page tables are always 2-level: L1 (1024 entries, 4 KB)
  * → L2 tables (1024 entries each, 4 KB, covering 4 MB per table).
@@ -45,9 +47,9 @@
 #define VM_MAX_ADDRESS		((vaddr_t) 0xFFFFFFFF)
 #define VM_MAXUSER_ADDRESS	((vaddr_t) 0x80000000)
 
-/* Kernel virtual address range (top 3 pages reserved for TLB handler) */
+/* Kernel virtual address range (top 5 pages reserved for TLB handler) */
 #define VM_MIN_KERNEL_ADDRESS	((vaddr_t) 0x80000000)
-#define VM_MAX_KERNEL_ADDRESS	((vaddr_t) 0xFFFFD000)
+#define VM_MAX_KERNEL_ADDRESS	((vaddr_t) 0xFFFFB000)
 
 /*
  * User stack starts at 64 MB — keeps text, heap, and stack

@@ -16,7 +16,7 @@
  * window (pinned TLB slot 3 at SCRATCH_VA).
  *
  * Pinned TLB allocation:
- *   Slot 0: Vector page (VA 0x0) — handler code, scratch area
+ *   Slot 0: Vector page (VECTOR_VA 0xFFFFB000) — handler code, scratch
  *   Slot 1: Current L1 table (VA 0xFFFFE000) — updated on ctx switch
  *   Slot 2: L2 window (VA 0xFFFFD000) — handler's transient L2
  *   Slot 3: Scratch window (VA 0xFFFFC000) — C code page access
@@ -52,6 +52,18 @@ struct pmap *const kernel_pmap_ptr = &kernel_pmap_store;
 static vaddr_t virtual_avail;
 static vaddr_t virtual_end;
 
+/*
+ * Two-phase L2 allocation flag.
+ *
+ * Before pmap_init(): UVM is not yet operational, so L2 tables
+ * must be allocated by stealing pages directly from physseg.
+ * After pmap_init(): UVM is ready, use uvm_pagealloc().
+ *
+ * pmap_init() sets this to true.  pmap_alloc_l2() checks it
+ * to decide which allocator to use.
+ */
+static bool pmap_initialized;
+
 
 /* ── Scratch window ───────────────────────────────────────────
  *
@@ -66,6 +78,44 @@ void *
 pmap_scratch_va(void)
 {
 	return (void *)SCRATCH_VA;
+}
+
+
+/* ── Dynamic L2 allocation ───────────────────────────────────
+ *
+ * When pmap_kenter_pa or pmap_steal_memory encounters an L1 entry
+ * with no L2 table, this helper allocates a new L2 page, zeros it,
+ * and installs it in the L1.
+ *
+ * Two-phase: before pmap_init(), steal from physseg directly;
+ * after pmap_init(), use uvm_pagealloc().
+ */
+
+/*
+ * pmap_alloc_l2: allocate a zeroed L2 table and install it in L1.
+ *
+ * Two-phase: before pmap_init(), steal from physseg;
+ * after pmap_init(), use uvm_pagealloc with UVM_PGA_USERESERVE
+ * (L2 allocation is critical — dipping into reserve is justified).
+ */
+static void
+pmap_alloc_l2(pt_entry_t *l1, unsigned int l1_idx)
+{
+	paddr_t pa;
+	
+	if (!pmap_initialized)
+	{
+		pa = pmap_steal_page();
+	}
+	else
+	{
+		struct vm_page *page = uvm_pagealloc(NULL, 0, NULL, UVM_PGA_USERESERVE | UVM_PGA_ZERO);
+		if (!page)
+			panic("pmap: Unable to allocate L2 page table page");
+		pa = VM_PAGE_TO_PHYS(page);
+	}
+
+	l1[l1_idx] = PT_L1E_MAKE(pa);
 }
 
 
@@ -230,20 +280,8 @@ pmap_steal_memory(vsize_t size, vaddr_t *vstartp, vaddr_t *vendp)
 			pt_entry_t *l1 = kernel_pmap_store.pm_l1;
 			unsigned int l1_idx = PT_L1_INDEX(va_cur);
 
-			/*
-			 * If no L2 table for this VA range, we need
-			 * to allocate one.  For now, panic — the
-			 * kernel image's L2 tables should cover early
-			 * stolen pages, and pmap_bootstrap will have
-			 * extended coverage for UART/etc.
-			 *
-			 * TODO: steal an L2 page dynamically here
-			 * using the scratch window.
-			 */
 			if (!(l1[l1_idx] & PTE_V))
-				panic("pmap_steal_memory: no L2 for "
-				    "VA 0x%x (l1_idx %u)",
-				    (unsigned)va_cur, l1_idx);
+				pmap_alloc_l2(l1, l1_idx);
 
 			/* Map L2 via scratch, install PTE */
 			paddr_t l2_pa = l1[l1_idx] & PTE_PPN_MASK;
@@ -266,6 +304,30 @@ pmap_steal_memory(vsize_t size, vaddr_t *vstartp, vaddr_t *vendp)
 	panic("pmap_steal_memory: no memory to steal %u bytes", (unsigned)size);
 }
 
+paddr_t
+pmap_steal_page(void)
+{
+	uvm_physseg_t bank;
+
+	for (bank = uvm_physseg_get_first();
+	     uvm_physseg_valid_p(bank);
+	     bank = uvm_physseg_get_next(bank)) {
+		if (uvm_physseg_get_avail_end(bank) -
+		    uvm_physseg_get_avail_start(bank) < 1)
+			continue;
+
+		/* Steal from the start of the available region */
+		paddr_t pa = ptoa(uvm_physseg_get_avail_start(bank));
+		uvm_physseg_unplug(atop(pa), 1);
+		/* Zero the stolen page */
+		pmap_scratch_map(pa, PTE_KERNEL);
+		memset((void *)SCRATCH_VA, 0, PAGE_SIZE);
+		return pa;
+	}
+
+	panic("pmap: Unable to steal page");
+}
+
 /*
  * pmap_init: called after UVM is operational.
  * Allocate pools for pmap structures, PTEs, etc.
@@ -273,6 +335,15 @@ pmap_steal_memory(vsize_t size, vaddr_t *vstartp, vaddr_t *vendp)
 void
 pmap_init(void)
 {
+
+	/*
+	 * Switch L2 allocation from physseg stealing to uvm_pagealloc.
+	 * Must happen before any other pmap_init work, since pool
+	 * setup may trigger pmap_kenter_pa → pmap_alloc_l2.
+	 */
+	pmap_initialized = true;
+	printf("pmap_init: done\n");
+
 	/* TODO: initialize PTE pools, ASID allocator */
 }
 
@@ -307,8 +378,8 @@ pmap_reference(pmap_t pm)
 int
 pmap_enter(pmap_t pm, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 {
-	/* TODO: install PTE, shoot down stale TLB entry */
-	return 0;
+	panic("pmap_enter: not yet implemented (va=0x%x pa=0x%x)",
+	    (unsigned)va, (unsigned)pa);
 }
 
 /*
@@ -317,7 +388,8 @@ pmap_enter(pmap_t pm, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 void
 pmap_remove(pmap_t pm, vaddr_t sva, vaddr_t eva)
 {
-	/* TODO */
+	panic("pmap_remove: not yet implemented (0x%x-0x%x)",
+	    (unsigned)sva, (unsigned)eva);
 }
 
 /*
@@ -326,7 +398,8 @@ pmap_remove(pmap_t pm, vaddr_t sva, vaddr_t eva)
 void
 pmap_protect(pmap_t pm, vaddr_t sva, vaddr_t eva, vm_prot_t prot)
 {
-	/* TODO */
+	panic("pmap_protect: not yet implemented (0x%x-0x%x)",
+	    (unsigned)sva, (unsigned)eva);
 }
 
 /*
@@ -335,7 +408,8 @@ pmap_protect(pmap_t pm, vaddr_t sva, vaddr_t eva, vm_prot_t prot)
 void
 pmap_unwire(pmap_t pm, vaddr_t va)
 {
-	/* TODO */
+	panic("pmap_unwire: not yet implemented (va=0x%x)",
+	    (unsigned)va);
 }
 
 /*
@@ -344,8 +418,23 @@ pmap_unwire(pmap_t pm, vaddr_t va)
 bool
 pmap_extract(pmap_t pm, vaddr_t va, paddr_t *pap)
 {
-	/* TODO */
-	return false;
+	pt_entry_t *l1 = pm->pm_l1;
+	unsigned int l1_idx = PT_L1_INDEX(va);
+
+	if (!(l1[l1_idx] & PTE_V))
+		return false;
+
+	paddr_t l2_pa = l1[l1_idx] & PTE_PPN_MASK;
+	pt_entry_t *l2 = pmap_l2_map(l2_pa);
+	pt_entry_t pte = l2[PT_L2_INDEX(va)];
+
+	if (!(pte & PTE_V))
+		return false;
+
+	if (pap != NULL)
+		*pap = (pte & PTE_PPN_MASK) | (va & PAGE_MASK);
+
+	return true;
 }
 
 /*
@@ -366,8 +455,7 @@ pmap_kenter_pa(vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 	unsigned int l1_idx = PT_L1_INDEX(va);
 
 	if (!(l1[l1_idx] & PTE_V))
-		panic("pmap_kenter_pa: no L2 for VA 0x%x (l1 %u)",
-		    (unsigned)va, l1_idx);
+		pmap_alloc_l2(l1, l1_idx);
 
 	paddr_t l2_pa = l1[l1_idx] & PTE_PPN_MASK;
 	pt_entry_t *l2 = pmap_l2_map(l2_pa);

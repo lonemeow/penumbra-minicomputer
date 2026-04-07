@@ -293,11 +293,11 @@ _start_bias:
  * The real handler walks L1 → L2 via pinned TLB slots.
  * Copy to vector page offset 0x80 (same location as before).
  *
- * Vector page layout:
+ * Vector page layout (PA 0x0, mapped at VECTOR_VA):
  *   0x00-0x1F   Exception vectors (8 × 4-byte addresses)
- *   0x40-0x4F   Scratch register save area (R1-R4)
- *   0x54        way_counter (4 bytes)
  *   0x80+       TLB miss handler code
+ *   (after code) Scratch data (R1-R4 save, way counter)
+ *               Accessed via PC-relative — no VA 0 dependency
  * ═══════════════════════════════════════════════════════════════ */
 
 	la	r1, _real_miss_handler
@@ -317,18 +317,29 @@ _start_bias:
 	wrsys	r0, #SYSDEV_ICACHE, #CACHE_INVAL
 
 /* ═══════════════════════════════════════════════════════════════
- * Step 8: Install exception vectors and boot parameters
+ * Step 8: Install exception vectors
+ *
+ * Vector table entries contain virtual addresses.  After MMU
+ * enable, the CPU loads the handler VA from the vector table
+ * (physical fetch, MMU bypassed for the table read itself)
+ * and jumps to it (MMU translates the handler VA).
+ *
+ * The handler code is at PA 0x80, mapped via pinned slot 0 at
+ * VECTOR_VA (0xFFFFB000).  So handler VA = VECTOR_VA + 0x80.
  * ═══════════════════════════════════════════════════════════════ */
 
-	/* TLB miss vector → handler at PA 0x80 */
-	lli	r1, #0x80
+	/* TLB miss vector → handler at VECTOR_VA + 0x80 */
+	lli	r1, #0xB080
+	lui	r1, #0xFFFF		/* R1 = 0xFFFFB080 */
 	stw	r1, [r0 + #0x08]
 
-	/* Compute PA of panic handler in vector page */
-	la	r1, _real_prot_panic
-	la	r2, _real_miss_handler
-	sub	r1, r2			/* offset from handler start */
-	add	r1, #0x80		/* PA in vector page */
+	/* Compute VA of panic handler */
+	la	r2, _real_prot_panic
+	la	r3, _real_miss_handler
+	sub	r2, r3			/* offset from handler start */
+	lli	r1, #0xB080
+	lui	r1, #0xFFFF
+	add	r1, r2			/* R1 = VECTOR_VA + 0x80 + offset */
 
 	/* All other vectors → panic for now */
 	stw	r1, [r0 + #0x0C]	/* TLB protection fault */
@@ -337,21 +348,28 @@ _start_bias:
 	stw	r1, [r0 + #0x18]	/* SYSCALL */
 	stw	r1, [r0 + #0x1C]	/* illegal / privilege */
 
-	/* Boot parameters for handler scratch area */
-	stw	r0, [r0 + #0x54]	/* way_counter = 0 */
+	/* way_counter is part of _rmh_scratch, zeroed by the copy
+	 * (source is in BSS-like .text zero-initialized data) */
 
 /* ═══════════════════════════════════════════════════════════════
  * Step 9: Pin TLB slots
  *
- * Slot 0: Vector page — VA 0x0 → PA 0x0 (identity)
+ * Slot 0: Vector page — VECTOR_VA (0xFFFFB000) → PA 0x0
  * Slot 1: Kernel L1 — VA 0xFFFFE000 → PA of _boot_l1
  * ═══════════════════════════════════════════════════════════════ */
 
-	/* Pin vector page (slot 0): VA 0 → PA 0 */
+	/* Pin vector page (slot 0): VECTOR_VA (0xFFFFB000) → PA 0
+	 * VPN = 0xFFFFB → TLB_VPN = 0x0FFFFB00
+	 * PTE = PA 0 | V|C|R|W|X|G (0xBD — handler needs R+X, scratch needs R+W)
+	 */
 	lli	r1, #PTLB_VECTOR
 	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_INDEX
-	wrsys	r0, #SYSDEV_MMU, #MMU_TLB_VPN	/* VPN=0, ASID=0 */
-	lli	r1, #PTE_KERNEL
+
+	lli	r1, #0xFB00
+	lui	r1, #0x0FFF		/* R1 = 0x0FFFFB00 */
+	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_VPN
+
+	lli	r1, #PTE_KERNEL		/* V|C|R|W|X|G */
 	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_PTE
 
 	/* Pin kernel L1 (slot 1): VA 0xFFFFE000 → PA of _boot_l1
@@ -442,23 +460,32 @@ _start_bias:
  * Real TLB miss handler — page table walking.
  *
  * Walks a 2-level page table (L1 → L2) using pinned TLB slots:
- *   Slot 0: Vector page (handler code + scratch)
+ *   Slot 0: Vector page at VECTOR_VA (handler code + scratch)
  *   Slot 1: Current L1 table (at fixed VA 0xFFFFE000)
  *   Slot 2: L2 window (at fixed VA 0xFFFFD000, remapped per miss)
  *
  * This code is copied to vector page offset 0x80 by locore.S
  * during early boot (physical mode).  Active from MMU enable.
+ * VA 0x0 is NOT mapped — the handler uses PC-relative addressing
+ * for its scratch area, which lives after the handler code.
  *
- * Scratch register save at VA 0x40.  Way counter at VA 0x54.
- * All branches are PC-relative — works correctly after copy.
+ * All branches and scratch accesses are PC-relative — works
+ * correctly regardless of where the code is mapped.
  * ═══════════════════════════════════════════════════════════════ */
 	.balign	4
+	.globl	_real_miss_handler
+	.globl	_real_handlers_end
 _real_miss_handler:
-	/* Save scratch registers to vector page */
-	stw	r1, [r0 + #0x40]
-	stw	r2, [r0 + #0x44]
-	stw	r3, [r0 + #0x48]
-	stw	r4, [r0 + #0x4C]
+	/* Save scratch registers via PC-relative addressing.
+	 * The scratch area is at _rmh_scratch, after the handler code.
+	 * [pc + label - .] computes the PC-relative offset at link time;
+	 * since code + scratch are copied together, the offset is
+	 * preserved at the final runtime address.
+	 */
+	stw	r1, [pc + _rmh_save_r1 - .]
+	stw	r2, [pc + _rmh_save_r2 - .]
+	stw	r3, [pc + _rmh_save_r3 - .]
+	stw	r4, [pc + _rmh_save_r4 - .]
 
 	/* Read faulting virtual address */
 	rdsys	r1, #SYSDEV_MMU, #MMU_FAULT_ADDR
@@ -544,7 +571,7 @@ _real_miss_handler:
 	mov	r4, r1
 	shr	r4, #12
 	and	r4, #0x1F		/* R4 = set = VPN[4:0] */
-	ldw	r1, [r0 + #0x54]	/* R1 = way counter (0 or 0x20) */
+	ldw	r1, [pc + _rmh_way_counter - .]
 	or	r4, r1			/* R4 = TLB_INDEX */
 
 	/* 3-write commit protocol */
@@ -554,32 +581,53 @@ _real_miss_handler:
 
 	/* Toggle way counter for next miss */
 	lli	r1, #0x20
-	ldw	r2, [r0 + #0x54]
+	ldw	r2, [pc + _rmh_way_counter - .]
 	xor	r2, r1
-	stw	r2, [r0 + #0x54]
+	stw	r2, [pc + _rmh_way_counter - .]
 
 	/* Restore scratch registers and return */
-	ldw	r1, [r0 + #0x40]
-	ldw	r2, [r0 + #0x44]
-	ldw	r3, [r0 + #0x48]
-	ldw	r4, [r0 + #0x4C]
+	ldw	r1, [pc + _rmh_save_r1 - .]
+	ldw	r2, [pc + _rmh_save_r2 - .]
+	ldw	r3, [pc + _rmh_save_r3 - .]
+	ldw	r4, [pc + _rmh_save_r4 - .]
 	eret
 
 .Lrmh_fault:
 	/*
 	 * Page fault — no valid mapping for this VA.
-	 * Store debug info at vector page scratch and halt.
+	 * Leave debug info in registers for BREAK dump:
+	 *   R1 = faulting VA
+	 *   R2 = EPC (faulting instruction)
+	 *   R3 = L1E or PTE value (from handler walk)
+	 *   R4 = fault status
 	 * TODO: dispatch to C trap handler for demand paging.
 	 */
+	mov	r4, r3			/* save L1E/PTE before clobber */
 	rdsys	r1, #SYSDEV_MMU, #MMU_FAULT_ADDR
-	stw	r1, [r0 + #0x60]	/* faulting VA */
-	stw	r3, [r0 + #0x64]	/* L1E or PTE value */
-	rdsys	r1, #SYSDEV_MMU, #MMU_FAULT_STATUS
-	stw	r1, [r0 + #0x68]	/* fault status */
+	rdspr	r2, epc
+	mov	r3, r4			/* L1E or PTE */
+	rdsys	r4, #SYSDEV_MMU, #MMU_FAULT_STATUS
 	break
 
 _real_prot_panic:
 	break
+
+/* ── Handler scratch data ────────────────────────────────────
+ * Accessed via PC-relative addressing from the handler above.
+ * Copied to the vector page together with the handler code.
+ */
+	.balign	4
+_rmh_scratch:
+_rmh_save_r1:
+	.long	0
+_rmh_save_r2:
+	.long	0
+_rmh_save_r3:
+	.long	0
+_rmh_save_r4:
+	.long	0
+_rmh_way_counter:
+	.long	0
 _real_handlers_end:
 
 

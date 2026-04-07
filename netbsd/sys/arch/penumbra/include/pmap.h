@@ -71,10 +71,12 @@
 /*
  * Fixed kernel VAs for pinned TLB slots.
  * Last page (0xFFFFF000) is an unmapped guard to catch -1 derefs.
+ * VA 0x0 is NOT mapped — it is the user null guard page.
  */
 #define PT_L1_VA	0xFFFFE000	/* pinned slot 1: current L1 table */
 #define PT_L2WIN_VA	0xFFFFD000	/* pinned slot 2: L2 window (handler) */
 #define SCRATCH_VA	0xFFFFC000	/* pinned slot 3: C scratch window */
+#define VECTOR_VA	0xFFFFB000	/* pinned slot 0: vector/handler page */
 
 /*
  * Number of pre-allocated L2 tables in BSS (locore.S).
@@ -147,6 +149,7 @@ extern char _boot_l2[];
 void		pmap_bootstrap(void);
 void		pmap_virtual_space(vaddr_t *, vaddr_t *);
 vaddr_t		pmap_steal_memory(vsize_t, vaddr_t *, vaddr_t *);
+paddr_t		pmap_steal_page(void);
 vaddr_t		pmap_map_device(paddr_t, vsize_t);
 
 /* TLB operations — implemented in locore.S */

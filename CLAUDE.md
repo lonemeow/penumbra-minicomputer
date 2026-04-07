@@ -354,9 +354,10 @@ MIPS/68k-style vector dispatch.
   RAS infrastructure is in place.
 - DDB (kernel debugger) disabled for now — needs extensive MD hooks.
 - Virtual memory layout: 2G/2G user/kernel split,
-  kernel text at `0x8001_0000`.  Top 3 pages reserved:
+  kernel text at `0x8001_0000`.  Top 5 pages reserved:
   guard (0xFFFFF000), L1 pin (0xFFFFE000), L2 window (0xFFFFD000),
-  scratch (0xFFFFC000).
+  scratch (0xFFFFC000), vector page (0xFFFFB000).
+  VA 0 is unmapped — null guard page.
 - `pmap.h` uses `_LOCORE` guards for assembly-safe inclusion.
 - Kernel build output in `build/netbsd-kernel/MINIMAL/`
   (out of source tree).
@@ -364,12 +365,10 @@ MIPS/68k-style vector dispatch.
   kernel port context.
 
 ## Next Steps (in priority order)
-1. **Dynamic L2 allocation** — `pmap_kenter_pa` panics if no L2
-   table exists.  Need to allocate L2 pages via `uvm_pagealloc`
-   + scratch window when VAs exceed BSS pre-allocated coverage.
-2. **Kernel implementation** — fill in MD stubs (grep `TODO(stub)`):
+1. **Kernel implementation** — fill in MD stubs (grep `TODO(stub)`):
    trap handling, context switching;
-   get past `main()` → `cpu_startup()`
+   get past `main()` → `cpu_startup()`.
+   Debug NULL vm_page pointer in `pool_init` / UVM early boot.
 3. **LLVM `-O2` support** — implement `analyzeBranch`/`insertBranch`/
    `removeBranch` for branch optimization passes
 4. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick

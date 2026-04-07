@@ -77,6 +77,7 @@ Output: `build/netbsd-obj/sys/arch/penumbra/stand/boot/PENBOOT.ELF`
                          kernel data / bss / page tables
                          MMIO devices (mapped via pmap_map_device)
                          virtual_avail → kernel VM pool (UVM)
+0xFFFF_B000  VECTOR_VA    pinned slot 0: vector page (handler + scratch)
 0xFFFF_C000  SCRATCH_VA   pinned slot 3: scratch window
 0xFFFF_D000  PT_L2WIN_VA  pinned slot 2: L2 window (handler)
 0xFFFF_E000  PT_L1_VA     pinned slot 1: current L1 table
@@ -151,7 +152,7 @@ Headers fall into three categories:
 | `mainbus.c` | Root bus device driver |
 | `cpu.c` | CPU device driver |
 | `trap.c` | Exception dispatch, SPL stubs |
-| `pmap.c` | Software TLB management: `pmap_bootstrap()`, `pmap_steal_memory()`, `pmap_kenter_pa()`/`pmap_kremove()`, `pmap_map_device()`, scratch window helpers, stubs for remaining pmap ops |
+| `pmap.c` | Software TLB management: `pmap_bootstrap()`, `pmap_steal_memory()`/`pmap_steal_page()`, `pmap_kenter_pa()`/`pmap_kremove()` with dynamic L2 allocation, `pmap_extract()`, `pmap_map_device()`, scratch window helpers. Unimplemented stubs panic. |
 | `copy.c` | copyin/copyout/copyinstr/copyoutstr stubs (break traps) |
 | `genassym.cf` | Struct offset definitions for assembly code |
 
@@ -181,12 +182,18 @@ Headers fall into three categories:
   walked by TLB miss handler via pinned slots (L1 in slot 1,
   L2 window in slot 2).  No direct-map — all mappings explicit.
   Scratch window (pinned slot 3) for C code physical page access.
+  Vector page pinned at `VECTOR_VA` (0xFFFFB000), not VA 0 —
+  handler uses PC-relative addressing for scratch data.
+  VA 0 is unmapped (null guard page).
   Pinned slots named: `PTLB_VECTOR`, `PTLB_L1`, `PTLB_L2WIN`,
   `PTLB_SCRATCH` (sysreg.h).
 - [x] **pmap_kenter_pa / pmap_kremove** — wired kernel page
   mapping via L1→L2 walk + scratch window for L2 access.
+  Dynamic L2 allocation (two-phase: steal before pmap_init,
+  uvm_pagealloc after).  `pmap_extract()` implemented.
   `PTE_MAKE()` macro builds PTEs from prot/flags/extra bits.
   `pmap_map_device()` for early MMIO mapping.
+  Unimplemented pmap stubs panic (not silent no-ops).
 - [x] **pmap_steal_memory** — steals physical pages from UVM
   physseg, maps at `virtual_avail` via scratch window + page
   table insertion.  Panics if L2 table missing (covered by
@@ -206,10 +213,9 @@ Headers fall into three categories:
 
 ## Next Steps
 
-1. **Dynamic L2 allocation** — `pmap_kenter_pa` currently panics
-   if no L2 table exists for the target VA.  Need to allocate
-   L2 pages via `uvm_pagealloc` + scratch window when VAs
-   exceed the BSS pre-allocated L2 coverage (~12 MB).
+1. **Debug NULL vm_page in pool_init** — `pool_init` dereferences a
+   NULL vm_page pointer during early UVM boot.  Now faults cleanly
+   (VA 0 is unmapped) instead of silently reading garbage.
 2. **Page fault handler** — dispatch TLB miss/protection faults
    to C code for demand paging (currently just BREAKs).
 3. **Kernel implementation** — fill in remaining MD stubs

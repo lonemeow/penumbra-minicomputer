@@ -49,7 +49,7 @@
 #define TLB_INDEX_PINNED 0x40	/* Set bit 6 in TLB_INDEX to target pinned TLB */
 
 /* Pinned TLB slot assignments (TLB_INDEX = TLB_INDEX_PINNED | slot) */
-#define PTLB_VECTOR	(TLB_INDEX_PINNED | 0)	/* vector page (VA 0x0) */
+#define PTLB_VECTOR	(TLB_INDEX_PINNED | 0)	/* vector page (VECTOR_VA) */
 #define PTLB_L1		(TLB_INDEX_PINNED | 1)	/* kernel L1 page table */
 #define PTLB_L2WIN	(TLB_INDEX_PINNED | 2)	/* L2 window (TLB handler) */
 #define PTLB_SCRATCH	(TLB_INDEX_PINNED | 3)	/* scratch window (C code) */
