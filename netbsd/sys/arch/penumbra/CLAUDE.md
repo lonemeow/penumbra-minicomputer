@@ -213,19 +213,25 @@ Headers fall into three categories:
   `pcb_context` to resume in `lwp_trampoline` which calls `func(arg)`.
   `_JB_*` symbolic indices for label_t slots defined in `types.h`.
   First kthread creation succeeds; boots past `cpu_lwp_fork` into
-  autoconf.  Currently panics at `pmap_protect` (not yet implemented).
+  autoconf and softint thread creation.
+- [x] **pmap_protect / pmap_remove / pmap_unwire** —
+  `pmap_protect` downgrades PTE permissions via `PTE_PROT_BITS()`
+  macro (shared with `PTE_MAKE`).  `VM_PROT_NONE` delegates to
+  `pmap_remove`.  `pmap_unwire` is a no-op (no SW wired bit).
+  Kernel gets past kthread stack protection into softint_thread,
+  then hits TLB protection fault (no fault handler yet).
 - [ ] Kernel port — remaining MD stubs need real implementations
   (grep for `TODO(stub)` to find them)
 - [ ] DDB — disabled, needs extensive MD hooks
 
 ## Next Steps
 
-1. **`pmap_protect`** — next blocker; kernel calls it during
-   kthread stack setup (making pages read-only).
-2. **`pmap_remove`** — needed soon after pmap_protect.
-3. **Page fault handler** — dispatch TLB miss/protection faults
-   to C code for demand paging (currently just BREAKs).
-4. **Remaining MD stubs** — fill in `TODO(stub)` functions as
+1. **Trap/fault handler** — dispatch TLB protection faults and
+   other exceptions to C code.  TLB protection fault is the
+   current blocker (kernel writes to a page downgraded by
+   `pmap_protect`, hardware faults, no handler to call
+   `uvm_fault()`).
+2. **Remaining MD stubs** — fill in `TODO(stub)` functions as
    the kernel reaches them.
 5. **Timer** — programmable timer for NetBSD hardclock() tick
 6. **Interrupt controller** — multiple devices with priority

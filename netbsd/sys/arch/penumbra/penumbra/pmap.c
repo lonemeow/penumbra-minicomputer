@@ -391,33 +391,84 @@ pmap_enter(pmap_t pm, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 }
 
 /*
- * pmap_remove: remove mappings in range.
+ * pmap_remove: remove mappings in a VA range.
+ *
+ * Walks L1→L2 page table, clears valid PTEs, and invalidates
+ * the TLB for each removed page.
  */
 void
 pmap_remove(pmap_t pm, vaddr_t sva, vaddr_t eva)
 {
-	panic("pmap_remove: not yet implemented (0x%x-0x%x)",
-	    (unsigned)sva, (unsigned)eva);
+	pt_entry_t *l1 = pm->pm_l1;
+
+	int s = splhigh();
+	for (vaddr_t va = sva; va < eva; va += PAGE_SIZE) {
+		unsigned int l1_idx = PT_L1_INDEX(va);
+		if (!(l1[l1_idx] & PTE_V))
+			continue;
+
+		paddr_t l2_pa = l1[l1_idx] & PTE_PPN_MASK;
+		pt_entry_t *l2 = pmap_l2_map(l2_pa);
+		unsigned int l2_idx = PT_L2_INDEX(va);
+
+		if (l2[l2_idx] & PTE_V) {
+			l2[l2_idx] = 0;
+			tlb_invalidate_addr(va, 0);
+		}
+	}
+	splx(s);
 }
 
 /*
- * pmap_protect: change protection on a range.
+ * pmap_protect: change protection on a VA range.
+ *
+ * NetBSD contract: only removes permissions, never adds.
+ * If new protection is VM_PROT_NONE, removes the mapping entirely.
+ * Otherwise, masks the PTE permission bits down to match prot.
  */
 void
 pmap_protect(pmap_t pm, vaddr_t sva, vaddr_t eva, vm_prot_t prot)
 {
-	panic("pmap_protect: not yet implemented (0x%x-0x%x)",
-	    (unsigned)sva, (unsigned)eva);
+
+	/* VM_PROT_NONE → remove entirely */
+	if ((prot & VM_PROT_READ) == 0) {
+		pmap_remove(pm, sva, eva);
+		return;
+	}
+
+	pt_entry_t *l1 = pm->pm_l1;
+	pt_entry_t keep = PTE_PROT_BITS(prot);
+
+	int s = splhigh();
+	for (vaddr_t va = sva; va < eva; va += PAGE_SIZE) {
+		unsigned int l1_idx = PT_L1_INDEX(va);
+		if (!(l1[l1_idx] & PTE_V))
+			continue;
+
+		paddr_t l2_pa = l1[l1_idx] & PTE_PPN_MASK;
+		pt_entry_t *l2 = pmap_l2_map(l2_pa);
+		unsigned int l2_idx = PT_L2_INDEX(va);
+
+		if (!(l2[l2_idx] & PTE_V))
+			continue;
+
+		l2[l2_idx] = (l2[l2_idx] & ~PTE_PROT_BITS(VM_PROT_ALL)) | keep;
+		tlb_invalidate_addr(va, 0);
+	}
+	splx(s);
 }
 
 /*
- * pmap_unwire: clear wired attribute.
+ * pmap_unwire: clear wired attribute on a mapping.
+ *
+ * We don't currently track wired state in PTEs (no software
+ * wired bit), so this is a no-op.  Wired mappings are managed
+ * by UVM's bookkeeping, not by PTE bits.
  */
 void
 pmap_unwire(pmap_t pm, vaddr_t va)
 {
-	panic("pmap_unwire: not yet implemented (va=0x%x)",
-	    (unsigned)va);
+	/* nothing — no PTE wired bit to clear */
 }
 
 /*

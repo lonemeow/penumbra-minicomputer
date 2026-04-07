@@ -60,11 +60,14 @@
  * flags: PMAP_NOCACHE to disable caching (MMIO)
  * extra: PTE bits the caller always wants set (PTE_G for kernel, etc.)
  */
-#define PTE_MAKE(pa, prot, flags, extra)				\
-	(((pa) & PTE_PPN_MASK) | PTE_V					\
-	 | (((prot) & VM_PROT_READ)    ? PTE_R : 0)			\
+#define PTE_PROT_BITS(prot)                             \
+	((((prot) & VM_PROT_READ)      ? PTE_R : 0)			\
 	 | (((prot) & VM_PROT_WRITE)   ? PTE_W : 0)			\
-	 | (((prot) & VM_PROT_EXECUTE) ? PTE_X : 0)			\
+	 | (((prot) & VM_PROT_EXECUTE) ? PTE_X : 0))
+
+#define PTE_MAKE(pa, prot, flags, extra)				\
+	(((pa) & PTE_PPN_MASK) | PTE_V						\
+	 | PTE_PROT_BITS(prot)                              \
 	 | (((flags) & PMAP_NOCACHE)   ? 0     : PTE_C)		\
 	 | (extra))
 
