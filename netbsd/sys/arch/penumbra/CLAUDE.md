@@ -181,17 +181,28 @@ Headers fall into three categories:
   `uvm_page_physload()` for RAM regions (excluding kernel image),
   `pmap_steal_memory()` for early page allocation via linear mapping.
 - [x] `pmap.h` — `_LOCORE` guards, `PMAP_STEAL_MEMORY` defined
-- [ ] **UVM debugging** — gets past `uvm_page_physload` but crashes
-  in `uvm_km_kmem_free` accessing unmapped VA.  Likely a missing
-  mapping or uninitialized pointer in vmem/kmem init.
+- [ ] **Real pmap / TLB handler** — bootstrap handler uses
+  a linear mapping (PA = VA + phys_bias) with a region table.
+  This can't support arbitrary VA→PA mappings needed by
+  `pmap_kenter_pa`, so `uvm_km_init` crashes when it tries
+  to allocate and map kernel virtual memory.  Need real pmap
+  before UVM can fully initialize.
 - [ ] Kernel port — MD stubs need real implementations
   (grep for `TODO(stub)` to find them)
 - [ ] DDB — disabled, needs extensive MD hooks
 
 ## Next Steps
 
-1. **Debug UVM crash** — crash in `uvm_km_kmem_free` accessing
-   VA `0xD00042D0` (PA `0x500222D0`, outside RAM).  Likely
-   a vmem arena pointer issue during `uvm_init()` → `uvm_km_init()`.
-2. **Kernel implementation** — fill in MD stubs (`TODO(stub)`):
-   trap handling, pmap (software TLB with real page tables)
+1. **Kernel page table** — allocate the kernel page table
+   in `pmap_bootstrap()`, pre-populate entries for the kernel
+   image, RAM direct-map, and MMIO devices (mirroring what
+   the bootstrap TLB handler currently maps via the region table).
+2. **Real TLB miss handler** — walks the kernel page table,
+   loads TLB entries from PTEs.  Replaces the bootstrap handler
+   on the vector page.  Must cover everything the bootstrap
+   handler did at the moment of handoff.
+3. **`pmap_kenter_pa` / `pmap_kremove`** — write/remove wired
+   kernel PTEs.  Once the real handler is active, these let
+   UVM map dynamically allocated kernel pages.
+4. **Kernel implementation** — fill in remaining MD stubs
+   (`TODO(stub)`): trap handling, context switching, etc.

@@ -355,12 +355,17 @@ MIPS/68k-style vector dispatch.
   kernel port context.
 
 ## Next Steps (in priority order)
-1. **Debug UVM crash** — crash in `uvm_km_kmem_free` accessing
-   unmapped VA `0xD00042D0`.  UVM physmem init works
-   (`uvm_page_physload` + `pmap_steal_memory`), crash is in
-   subsequent kmem/vmem initialization.
+1. **Kernel pmap** — implement real TLB miss handler and kernel
+   page table.  Bootstrap handler (linear mapping + region table)
+   can't support arbitrary VA→PA mappings needed by `pmap_kenter_pa`.
+   Steps: (a) allocate kernel page table in `pmap_bootstrap()`,
+   pre-populate with kernel/RAM/MMIO entries; (b) install real
+   TLB miss handler that walks page table; (c) implement
+   `pmap_kenter_pa`/`pmap_kremove` for wired kernel mappings.
+   UVM physmem init works, crash is in `uvm_km_init` which
+   needs real pmap to map dynamically allocated kernel pages.
 2. **Kernel implementation** — fill in MD stubs (grep `TODO(stub)`):
-   trap handling, pmap (software TLB with real page tables);
+   trap handling, context switching;
    get past `main()` → `cpu_startup()`
 3. **LLVM `-O2` support** — implement `analyzeBranch`/`insertBranch`/
    `removeBranch` for branch optimization passes
