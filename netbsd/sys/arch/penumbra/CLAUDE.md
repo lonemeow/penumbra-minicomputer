@@ -252,3 +252,10 @@ Headers fall into three categories:
    the kernel reaches them.
 5. **Timer** — programmable timer for NetBSD hardclock() tick
 6. **Interrupt controller** — multiple devices with priority
+
+## Documentation
+
+When significant kernel changes are made or milestones reached,
+update `doc/netbsd/porting-status.md` (human-facing status document)
+and the "Current Status" sections in both `CLAUDE.md` (project root)
+and this file.  Keep all three in sync.
