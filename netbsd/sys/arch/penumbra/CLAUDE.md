@@ -213,9 +213,8 @@ Headers fall into three categories:
 
 ## Next Steps
 
-1. **Debug NULL vm_page in pool_init** — `pool_init` dereferences a
-   NULL vm_page pointer during early UVM boot.  Now faults cleanly
-   (VA 0 is unmapped) instead of silently reading garbage.
+1. **`cpu_lwp_fork`** — implement LWP context creation (next
+   blocker: kernel tries to create first process).
 2. **Page fault handler** — dispatch TLB miss/protection faults
    to C code for demand paging (currently just BREAKs).
 3. **Kernel implementation** — fill in remaining MD stubs

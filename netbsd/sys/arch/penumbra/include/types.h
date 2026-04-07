@@ -9,7 +9,7 @@
 
 /* Penumbra is ILP32: 32-bit registers, addresses, pointers */
 typedef __int32_t		__register_t;
-typedef unsigned int		__cpu_simple_lock_nv_t;
+typedef unsigned char		__cpu_simple_lock_nv_t;
 
 typedef __uint32_t		__vaddr_t;
 

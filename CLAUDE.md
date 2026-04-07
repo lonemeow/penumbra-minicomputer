@@ -315,7 +315,7 @@ MIPS/68k-style vector dispatch.
 - **Boot from ROM:** Programs assembled with `--org 0xFFFF0000`. `_start:` must be first label.
 - **ROM page mapping (MMU tests):** TLB_INDEX=16, TLB_VPN=0x0FFFF000, TLB_PTE=0xFFFF00B9.
 
-**NetBSD kernel boots past pmap_bootstrap on the ISS.**
+**NetBSD kernel boots past UVM init into main() on the ISS.**
 - Machine headers (39 files), kernel config, MD build system,
   stub kernel sources, and assembly string functions all present.
 - `config MINIMAL` → `make depend` → `make` produces a 4 MB
@@ -342,10 +342,11 @@ MIPS/68k-style vector dispatch.
   window, permanently remapped by `pmap_map_device()` after
   `pmap_bootstrap()`.
 - **UVM init:** `uvm_md_init()`, bootinfo-driven
-  `uvm_page_physload()`, `pmap_steal_memory()`.  Gets past
-  `pmap_bootstrap` into UVM's `main()` init.  Currently faults
-  when UVM allocates VAs beyond BSS L2 coverage (needs dynamic
-  L2 allocation in `pmap_kenter_pa`).
+  `uvm_page_physload()`, `pmap_steal_memory()`.  Full UVM init
+  completes: pool allocator, vmem, kmem, radix trees all
+  operational.  Boots past `main()` into `cpu_startup()` and
+  sysctl setup.  Currently hits `cpu_lwp_fork` TODO(stub) when
+  the kernel tries to create the first process.
 - All MD functions are either implemented or break-trap stubs
   (grep for `TODO(stub)` to find stubs needing real implementations).
 - Atomics: interrupt-disable CAS (`RDSPR SR` / `DI` / load-cmp-store
@@ -366,9 +367,8 @@ MIPS/68k-style vector dispatch.
 
 ## Next Steps (in priority order)
 1. **Kernel implementation** — fill in MD stubs (grep `TODO(stub)`):
-   trap handling, context switching;
-   get past `main()` → `cpu_startup()`.
-   Debug NULL vm_page pointer in `pool_init` / UVM early boot.
+   trap handling, context switching (`cpu_lwp_fork` is next blocker);
+   get past first process creation.
 3. **LLVM `-O2` support** — implement `analyzeBranch`/`insertBranch`/
    `removeBranch` for branch optimization passes
 4. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick

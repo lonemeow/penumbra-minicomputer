@@ -30,7 +30,7 @@
 
 #ifdef _KERNEL
 
-typedef int ipl_t;
+typedef unsigned char ipl_t;
 typedef struct {
 	ipl_t	_spl;
 } ipl_cookie_t;
