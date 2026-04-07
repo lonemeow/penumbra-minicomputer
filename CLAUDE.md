@@ -354,8 +354,13 @@ MIPS/68k-style vector dispatch.
   Kernel creates first kthread successfully.
   `pmap_protect`/`pmap_remove`/`pmap_unwire` implemented;
   `PTE_PROT_BITS()` macro shared with `PTE_MAKE`.
-  Boots into softint thread creation, currently hits TLB
-  protection fault (no trap handler dispatches to `uvm_fault()`).
+  Boots into softint thread creation.
+- **Trap handler (Stage 1):** per-vector entry stubs on the
+  vector page, common trapframe save/restore, C dispatch in
+  `trap()` with all 9 exception vectors.  Panics with
+  diagnostic info (PC, VA, cause).  Vector numbering fixed
+  to match architecture spec.  Currently hits NULL deref
+  in `softint_thread` (VA=0x10, needs investigation).
 - All MD functions are either implemented or break-trap stubs
   (grep for `TODO(stub)` to find stubs needing real implementations).
 - Atomics: interrupt-disable CAS (`RDSPR SR` / `DI` / load-cmp-store
@@ -376,8 +381,8 @@ MIPS/68k-style vector dispatch.
 
 ## Next Steps (in priority order)
 1. **Kernel implementation** — fill in MD stubs (grep `TODO(stub)`):
-   trap/fault handler is next blocker (TLB protection fault →
-   `uvm_fault()`); then remaining process management stubs.
+   trap handler Stage 2 (TLB faults → `uvm_fault()`), investigate
+   softint_thread NULL deref, then remaining stubs.
 3. **LLVM `-O2` support** — implement `analyzeBranch`/`insertBranch`/
    `removeBranch` for branch optimization passes
 4. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick

@@ -22,10 +22,9 @@
  * start.  The page table is built entirely in physical mode.
  *
  * Exception vectors live at physical 0x0000_0000:
- *   0x00: reset        0x04: IRQ
- *   0x08: TLB miss     0x0C: TLB protection
- *   0x10: bus fault    0x14: BREAK
- *   0x18: SYSCALL      0x1C: illegal / privilege
+ *   0x00: bus fault    0x04: IRQ          0x08: TLB miss
+ *   0x0C: TLB prot    0x10: privilege     0x14: SYSCALL
+ *   0x18: BREAK        0x1C: illegal      0x20: alignment
  */
 
 #include "assym.h"
@@ -328,25 +327,79 @@ _start_bias:
  * VECTOR_VA (0xFFFFB000).  So handler VA = VECTOR_VA + 0x80.
  * ═══════════════════════════════════════════════════════════════ */
 
-	/* TLB miss vector → handler at VECTOR_VA + 0x80 */
-	lli	r1, #0xB080
-	lui	r1, #0xFFFF		/* R1 = 0xFFFFB080 */
-	stw	r1, [r0 + #0x08]
+	/*
+	 * Install exception vector addresses.
+	 *
+	 * Vector table at PA 0x00, entries are handler VAs.
+	 * All handlers live on the vector page (VECTOR_VA + offset).
+	 * Compute each VA = VECTOR_VA + 0x80 + (label - _real_miss_handler).
+	 *
+	 * Vector layout (from architecture spec):
+	 *   0: bus fault  1: IRQ       2: TLB miss  3: TLB prot
+	 *   4: privilege  5: SYSCALL   6: BREAK     7: illegal
+	 *   8: alignment
+	 */
 
-	/* Compute VA of panic handler */
-	la	r2, _real_prot_panic
-	la	r3, _real_miss_handler
-	sub	r2, r3			/* offset from handler start */
-	lli	r1, #0xB080
-	lui	r1, #0xFFFF
-	add	r1, r2			/* R1 = VECTOR_VA + 0x80 + offset */
+	/* Helper: R3 = base = VECTOR_VA + 0x80 */
+	lli	r3, #0xB080
+	lui	r3, #0xFFFF
+	/* R5 = link-time base of handler code */
+	la	r5, _real_miss_handler
 
-	/* All other vectors → panic for now */
-	stw	r1, [r0 + #0x0C]	/* TLB protection fault */
-	stw	r1, [r0 + #0x10]	/* bus fault */
-	stw	r1, [r0 + #0x14]	/* BREAK */
-	stw	r1, [r0 + #0x18]	/* SYSCALL */
-	stw	r1, [r0 + #0x1C]	/* illegal / privilege */
+	/* Macro-like pattern: compute VA of each stub and store.
+	 * VA = R3 + (stub_label - _real_miss_handler)
+	 */
+
+	/* Vector 2: TLB miss → _real_miss_handler (offset 0) */
+	stw	r3, [r0 + #0x08]
+
+	/* Vector 0: bus fault → _trap_entry_busfault */
+	la	r1, _trap_entry_busfault
+	sub	r1, r5
+	add	r1, r3
+	stw	r1, [r0 + #0x00]
+
+	/* Vector 1: IRQ → _trap_entry_irq */
+	la	r1, _trap_entry_irq
+	sub	r1, r5
+	add	r1, r3
+	stw	r1, [r0 + #0x04]
+
+	/* Vector 3: TLB prot → _trap_entry_tlbprot */
+	la	r1, _trap_entry_tlbprot
+	sub	r1, r5
+	add	r1, r3
+	stw	r1, [r0 + #0x0C]
+
+	/* Vector 4: privilege → _trap_entry_priv */
+	la	r1, _trap_entry_priv
+	sub	r1, r5
+	add	r1, r3
+	stw	r1, [r0 + #0x10]
+
+	/* Vector 5: SYSCALL → _trap_entry_syscall */
+	la	r1, _trap_entry_syscall
+	sub	r1, r5
+	add	r1, r3
+	stw	r1, [r0 + #0x14]
+
+	/* Vector 6: BREAK → _trap_entry_break */
+	la	r1, _trap_entry_break
+	sub	r1, r5
+	add	r1, r3
+	stw	r1, [r0 + #0x18]
+
+	/* Vector 7: illegal → _trap_entry_illegal */
+	la	r1, _trap_entry_illegal
+	sub	r1, r5
+	add	r1, r3
+	stw	r1, [r0 + #0x1C]
+
+	/* Vector 8: alignment → _trap_entry_align */
+	la	r1, _trap_entry_align
+	sub	r1, r5
+	add	r1, r3
+	stw	r1, [r0 + #0x20]
 
 	/* way_counter is part of _rmh_scratch, zeroed by the copy
 	 * (source is in BSS-like .text zero-initialized data) */
@@ -594,27 +647,200 @@ _real_miss_handler:
 
 .Lrmh_fault:
 	/*
-	 * Page fault — no valid mapping for this VA.
-	 * Leave debug info in registers for BREAK dump:
-	 *   R1 = faulting VA
-	 *   R2 = EPC (faulting instruction)
-	 *   R3 = L1E or PTE value (from handler walk)
-	 *   R4 = fault status
-	 * TODO: dispatch to C trap handler for demand paging.
+	 * TLB miss handler failed to find a mapping.
+	 * R1-R4 were saved to _rmh_save_r{1..4} on handler entry.
+	 * Restore them and enter the common trap path with cause=2
+	 * (EXC_TLB_MISS).
 	 */
-	mov	r4, r3			/* save L1E/PTE before clobber */
+	ldw	r1, [pc + _rmh_save_r1 - .]
+	ldw	r2, [pc + _rmh_save_r2 - .]
+	ldw	r3, [pc + _rmh_save_r3 - .]
+	ldw	r4, [pc + _rmh_save_r4 - .]
+	/* Fall through to _trap_entry_tlbmiss */
+
+/* ── Per-vector trap entry stubs ─────────────────────────────
+ *
+ * Each stub saves R1 to scratch, loads the vector number into R1,
+ * and branches to _trap_common.  The vector table points each
+ * exception vector to the appropriate stub.
+ *
+ * These live on the vector page (pinned slot 0) so they are
+ * always TLB-resident — no nested TLB miss on exception entry.
+ *
+ * Vector numbers (from architecture spec):
+ *   0=bus fault, 1=IRQ, 2=TLB miss, 3=TLB prot,
+ *   4=privilege, 5=SYSCALL, 6=BREAK, 7=illegal, 8=alignment
+ */
+
+_trap_entry_tlbmiss:	/* vector 2 — reached from .Lrmh_fault above */
+	stw	r1, [pc + _trap_save_r1 - .]
+	lli	r1, #2
+	b	_trap_common
+
+_trap_entry_busfault:	/* vector 0 */
+	stw	r1, [pc + _trap_save_r1 - .]
+	lli	r1, #0
+	b	_trap_common
+
+_trap_entry_irq:	/* vector 1 */
+	stw	r1, [pc + _trap_save_r1 - .]
+	lli	r1, #1
+	b	_trap_common
+
+_trap_entry_tlbprot:	/* vector 3 */
+	stw	r1, [pc + _trap_save_r1 - .]
+	lli	r1, #3
+	b	_trap_common
+
+_trap_entry_priv:	/* vector 4 */
+	stw	r1, [pc + _trap_save_r1 - .]
+	lli	r1, #4
+	b	_trap_common
+
+_trap_entry_syscall:	/* vector 5 */
+	stw	r1, [pc + _trap_save_r1 - .]
+	lli	r1, #5
+	b	_trap_common
+
+_trap_entry_break:	/* vector 6 */
+	stw	r1, [pc + _trap_save_r1 - .]
+	lli	r1, #6
+	b	_trap_common
+
+_trap_entry_illegal:	/* vector 7 */
+	stw	r1, [pc + _trap_save_r1 - .]
+	lli	r1, #7
+	b	_trap_common
+
+_trap_entry_align:	/* vector 8 */
+	stw	r1, [pc + _trap_save_r1 - .]
+	lli	r1, #8
+	b	_trap_common
+
+/* ── Common trap entry ───────────────────────────────────────
+ *
+ * On entry:
+ *   R1 = vector number (cause)
+ *   Original R1 saved in _trap_save_r1 (PC-relative scratch)
+ *   R2-R13 = untouched from faulting context
+ *   R14 = kernel SP (hardware switched on exception entry)
+ *   EPC = faulting PC (SPR)
+ *   ESR = faulting SR (SPR)
+ *
+ * Builds a struct trapframe on the kernel stack and calls
+ * trap() in C.  On return, restores all registers and ERETs.
+ */
+_trap_common:
+	/* Save R2-R4 to scratch (R1 already saved by stub) */
+	stw	r2, [pc + _trap_save_r2 - .]
+	stw	r3, [pc + _trap_save_r3 - .]
+	stw	r4, [pc + _trap_save_r4 - .]
+
+	/* R1 = cause number — stash in R4 (callee-clobberable) */
+	mov	r4, r1
+
+	/* Allocate trapframe on kernel stack */
+	sub	r14, #TF_SIZE
+
+	/* Save R0 (always 0, but keep trapframe consistent) */
+	stw	r0, [r14 + TF_R0]
+
+	/* Recover original R1 from scratch and save it */
+	ldw	r1, [pc + _trap_save_r1 - .]
+	stw	r1, [r14 + TF_R0 + 4]
+
+	/* Save R2-R4 from scratch */
+	ldw	r1, [pc + _trap_save_r2 - .]
+	stw	r1, [r14 + TF_R0 + 8]
+	ldw	r1, [pc + _trap_save_r3 - .]
+	stw	r1, [r14 + TF_R0 + 12]
+	ldw	r1, [pc + _trap_save_r4 - .]
+	stw	r1, [r14 + TF_R0 + 16]
+
+	/* Save R5-R13 directly */
+	stw	r5,  [r14 + TF_R0 + 20]
+	stw	r6,  [r14 + TF_R0 + 24]
+	stw	r7,  [r14 + TF_R0 + 28]
+	stw	r8,  [r14 + TF_R0 + 32]
+	stw	r9,  [r14 + TF_R0 + 36]
+	stw	r10, [r14 + TF_R0 + 40]
+	stw	r11, [r14 + TF_R0 + 44]
+	stw	r12, [r14 + TF_R0 + 48]
+	stw	r13, [r14 + TF_R0 + 52]
+
+	/* Save pre-exception SP: R14 + TF_SIZE (before our SUB) */
+	mov	r1, r14
+	add	r1, #TF_SIZE
+	stw	r1, [r14 + TF_R0 + 56]		/* tf_regs[14] = original SP */
+
+	/* Save EPC as tf_regs[15] (PC at time of exception) */
+	rdspr	r1, epc
+	stw	r1, [r14 + TF_R0 + 60]		/* tf_regs[15] */
+
+	/* Save ESR, EPC, cause, badvaddr */
+	rdspr	r1, esr
+	stw	r1, [r14 + TF_SR]
+	rdspr	r1, epc
+	stw	r1, [r14 + TF_EPC]
+	stw	r4, [r14 + TF_CAUSE]
 	rdsys	r1, #SYSDEV_MMU, #MMU_FAULT_ADDR
-	rdspr	r2, epc
-	mov	r3, r4			/* L1E or PTE */
-	rdsys	r4, #SYSDEV_MMU, #MMU_FAULT_STATUS
-	break
+	stw	r1, [r14 + TF_BADVADDR]
 
-_real_prot_panic:
-	break
+	/* Call trap(tf) — R1 = pointer to trapframe */
+	mov	r1, r14
+	la	r11, trap
+	jalr	r11
 
-/* ── Handler scratch data ────────────────────────────────────
- * Accessed via PC-relative addressing from the handler above.
- * Copied to the vector page together with the handler code.
+	/* ── Return from trap ────────────────────────────────
+	 * Restore all registers from trapframe and ERET.
+	 * TODO: check for AST/signal delivery before returning
+	 * to userspace.
+	 */
+
+	/* Restore EPC and ESR */
+	ldw	r1, [r14 + TF_EPC]
+	wrspr	epc, r1
+	ldw	r1, [r14 + TF_SR]
+	wrspr	esr, r1
+
+	/* Restore R1-R13 (R0 is hardwired zero, R14 restored last) */
+	ldw	r1,  [r14 + TF_R0 + 4]
+	ldw	r2,  [r14 + TF_R0 + 8]
+	ldw	r3,  [r14 + TF_R0 + 12]
+	ldw	r4,  [r14 + TF_R0 + 16]
+	ldw	r5,  [r14 + TF_R0 + 20]
+	ldw	r6,  [r14 + TF_R0 + 24]
+	ldw	r7,  [r14 + TF_R0 + 28]
+	ldw	r8,  [r14 + TF_R0 + 32]
+	ldw	r9,  [r14 + TF_R0 + 36]
+	ldw	r10, [r14 + TF_R0 + 40]
+	ldw	r11, [r14 + TF_R0 + 44]
+	ldw	r12, [r14 + TF_R0 + 48]
+	ldw	r13, [r14 + TF_R0 + 52]
+
+	/* Deallocate trapframe (restore SP) */
+	add	r14, #TF_SIZE
+
+	/* Return from exception — restores PC from EPC, SR from ESR */
+	eret
+
+/* ── Trap handler scratch data ──────────────────────────────
+ * Separate from the TLB miss handler scratch.
+ * Accessed via PC-relative addressing.
+ */
+	.balign	4
+_trap_save_r1:
+	.long	0
+_trap_save_r2:
+	.long	0
+_trap_save_r3:
+	.long	0
+_trap_save_r4:
+	.long	0
+
+/* ── TLB miss handler scratch data ──────────────────────────
+ * Accessed via PC-relative addressing from the TLB miss handler.
+ * Copied to the vector page together with all handler code.
  */
 	.balign	4
 _rmh_scratch:

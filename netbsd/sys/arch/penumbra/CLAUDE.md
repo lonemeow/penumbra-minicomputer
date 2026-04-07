@@ -144,14 +144,14 @@ Headers fall into three categories:
 
 | File | Purpose |
 |------|---------|
-| `locore.S` | Entry point, BSS zero (phys mode), bootinfo copy, kernel page table build (L1+L2 in BSS), real TLB miss handler, MMU enable, TLB invalidation, scratch window, setjmp/longjmp |
+| `locore.S` | Entry point, BSS zero (phys mode), bootinfo copy, kernel page table build (L1+L2 in BSS), real TLB miss handler, per-vector trap entry stubs + common trapframe save/restore, MMU enable, TLB invalidation, scratch window, setjmp/longjmp |
 | `startup.c` | Early boot: `penumbra_init()`, bootinfo parsing, early UART console via scratch window, `consinit()`, `penumbra_physmem_init()`, UART remap via `pmap_map_device()` |
 | `machdep.c` | Kernel runtime: `cpu_startup()`, `cpu_reboot()`, `cpu_lwp_fork()` (LWP context setup), `lwp_trampoline` (extern), remaining LWP/process/signal stubs, `kcopy`, ufetch/ustore |
 | `mulsi3.c` | Compiler runtime: `__mulsi3` (software 32-bit multiply for LLVM libcalls) |
 | `autoconf.c` | `cpu_configure()`, `cpu_rootconf()` |
 | `mainbus.c` | Root bus device driver |
 | `cpu.c` | CPU device driver |
-| `trap.c` | Exception dispatch, SPL stubs |
+| `trap.c` | Exception dispatch (all 9 vector types, panics for now), SPL stubs |
 | `pmap.c` | Software TLB management: `pmap_bootstrap()`, `pmap_steal_memory()`/`pmap_steal_page()`, `pmap_kenter_pa()`/`pmap_kremove()` with dynamic L2 allocation, `pmap_extract()`, `pmap_map_device()`, scratch window helpers. Unimplemented stubs panic. |
 | `copy.c` | copyin/copyout/copyinstr/copyoutstr stubs (break traps) |
 | `genassym.cf` | Struct offset definitions for assembly code |
@@ -218,19 +218,24 @@ Headers fall into three categories:
   `pmap_protect` downgrades PTE permissions via `PTE_PROT_BITS()`
   macro (shared with `PTE_MAKE`).  `VM_PROT_NONE` delegates to
   `pmap_remove`.  `pmap_unwire` is a no-op (no SW wired bit).
-  Kernel gets past kthread stack protection into softint_thread,
-  then hits TLB protection fault (no fault handler yet).
+  Kernel gets past kthread stack protection into softint_thread.
+- [x] **Trap handler (Stage 1)** — per-vector entry stubs on the
+  vector page, common trapframe save/restore in `_trap_common`,
+  C dispatch in `trap()`.  All 9 exception vectors wired.
+  Fixed vector numbering to match architecture spec
+  (0=bus, 1=IRQ, 2=TLB miss, ..., 8=alignment).
+  Currently all handlers panic with diagnostic info.
+  Kernel now panics with proper message on NULL deref
+  in `softint_thread` (VA=0x10, a real kernel bug to investigate).
 - [ ] Kernel port — remaining MD stubs need real implementations
   (grep for `TODO(stub)` to find them)
 - [ ] DDB — disabled, needs extensive MD hooks
 
 ## Next Steps
 
-1. **Trap/fault handler** — dispatch TLB protection faults and
-   other exceptions to C code.  TLB protection fault is the
-   current blocker (kernel writes to a page downgraded by
-   `pmap_protect`, hardware faults, no handler to call
-   `uvm_fault()`).
+1. **Trap handler Stage 2** — dispatch TLB miss/prot faults
+   to `uvm_fault()` instead of panicking; handle the
+   `softint_thread` NULL deref (likely missing MD init).
 2. **Remaining MD stubs** — fill in `TODO(stub)` functions as
    the kernel reaches them.
 5. **Timer** — programmable timer for NetBSD hardclock() tick

@@ -23,15 +23,16 @@ __KERNEL_RCSID(0, "$NetBSD$");
 
 #include <uvm/uvm_extern.h>
 
-/* Exception vector numbers (match hardware dispatch) */
-#define EXC_RESET	0
+/* Exception vector numbers (match hardware vector table at PA 0x00) */
+#define EXC_BUSFAULT	0
 #define EXC_IRQ		1
 #define EXC_TLB_MISS	2
 #define EXC_TLB_PROT	3
-#define EXC_BUSFAULT	4
-#define EXC_BREAK	5
-#define EXC_SYSCALL	6
+#define EXC_PRIV	4
+#define EXC_SYSCALL	5
+#define EXC_BREAK	6
 #define EXC_ILLEGAL	7
+#define EXC_ALIGN	8
 
 /* Forward declaration */
 void	trap(struct trapframe *);
@@ -49,58 +50,50 @@ trap(struct trapframe *tf)
 	switch (type) {
 	case EXC_IRQ:
 		/* TODO: call interrupt dispatcher */
+		panic("IRQ (no handler yet), pc=0x%08x", tf->tf_epc);
 		break;
 
 	case EXC_TLB_MISS:
 	case EXC_TLB_PROT:
-		/*
-		 * TLB miss/protection: call pmap to load TLB entry.
-		 * If pmap can't handle it, deliver SIGSEGV to process
-		 * (user) or panic (kernel).
-		 */
-		/* TODO: pmap_tlb_miss(tf->tf_badvaddr, type, tf) */
-		if (usermode) {
-			printf("user TLB fault at 0x%08x, pc=0x%08x\n",
-			    tf->tf_badvaddr, tf->tf_epc);
-		} else {
-			panic("kernel TLB fault at 0x%08x, pc=0x%08x",
-			    tf->tf_badvaddr, tf->tf_epc);
-		}
+		/* TODO: call uvm_fault() for demand paging */
+		panic("%s %s fault at va=0x%08x, pc=0x%08x",
+		    usermode ? "user" : "kernel",
+		    type == EXC_TLB_MISS ? "TLB miss" : "TLB prot",
+		    tf->tf_badvaddr, tf->tf_epc);
 		break;
 
 	case EXC_BUSFAULT:
-		if (usermode) {
-			printf("user bus fault at pc=0x%08x\n", tf->tf_epc);
-		} else {
-			panic("kernel bus fault at pc=0x%08x", tf->tf_epc);
-		}
+		panic("%s bus fault at va=0x%08x, pc=0x%08x",
+		    usermode ? "user" : "kernel",
+		    tf->tf_badvaddr, tf->tf_epc);
 		break;
 
-	case EXC_BREAK:
-		/* TODO: DDB entry point, or deliver SIGTRAP */
-		printf("BREAK at pc=0x%08x\n", tf->tf_epc);
+	case EXC_PRIV:
+		panic("%s privilege violation at pc=0x%08x",
+		    usermode ? "user" : "kernel", tf->tf_epc);
 		break;
 
 	case EXC_SYSCALL:
 		/* TODO: system call dispatch */
-		if (usermode) {
-			printf("syscall from pc=0x%08x\n", tf->tf_epc);
-			/* Advance PC past SYSCALL instruction */
-			tf->tf_epc += 4;
-		} else {
-			panic("syscall in kernel mode at pc=0x%08x",
-			    tf->tf_epc);
-		}
+		panic("syscall from %s at pc=0x%08x",
+		    usermode ? "user" : "kernel", tf->tf_epc);
+		break;
+
+	case EXC_BREAK:
+		/* TODO: DDB entry point, or deliver SIGTRAP */
+		panic("BREAK at pc=0x%08x (sr=0x%08x)",
+		    tf->tf_epc, tf->tf_sr);
 		break;
 
 	case EXC_ILLEGAL:
-		if (usermode) {
-			printf("illegal instruction at pc=0x%08x\n",
-			    tf->tf_epc);
-		} else {
-			panic("illegal instruction in kernel at pc=0x%08x",
-			    tf->tf_epc);
-		}
+		panic("%s illegal instruction at pc=0x%08x",
+		    usermode ? "user" : "kernel", tf->tf_epc);
+		break;
+
+	case EXC_ALIGN:
+		panic("%s alignment fault at va=0x%08x, pc=0x%08x",
+		    usermode ? "user" : "kernel",
+		    tf->tf_badvaddr, tf->tf_epc);
 		break;
 
 	default:
