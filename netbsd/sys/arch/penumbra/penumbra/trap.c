@@ -54,13 +54,56 @@ trap(struct trapframe *tf)
 		break;
 
 	case EXC_TLB_MISS:
-	case EXC_TLB_PROT:
-		/* TODO: call uvm_fault() for demand paging */
-		panic("%s %s fault at va=0x%08x, pc=0x%08x",
+	case EXC_TLB_PROT: {
+		struct pcb *pcb = lwp_getpcb(curlwp);
+		vaddr_t va = trunc_page(tf->tf_badvaddr);
+		struct vmspace *vs = curlwp->l_proc->p_vmspace;
+		struct vm_map *map;
+		vm_prot_t ftype;
+		void *onfault;
+		int rv;
+
+		/*
+		 * Pick the right map: kernel addresses use kernel_map,
+		 * user addresses use the process's vm_map.
+		 * User mode accessing kernel VA is always illegal.
+		 */
+		if (usermode && va >= VM_MIN_KERNEL_ADDRESS) {
+			/* TODO: deliver SIGSEGV once signals work */
+			panic("user access to kernel va=0x%08x, pc=0x%08x",
+			    tf->tf_badvaddr, tf->tf_epc);
+		}
+		if (va >= VM_MIN_KERNEL_ADDRESS)
+			map = kernel_map;
+		else
+			map = &vs->vm_map;
+
+		/* TLB prot faults are writes; misses could be read or exec */
+		ftype = (type == EXC_TLB_PROT) ? VM_PROT_WRITE
+						: VM_PROT_READ;
+
+		onfault = pcb->pcb_onfault;
+		pcb->pcb_onfault = NULL;
+		rv = uvm_fault(map, va, ftype);
+		pcb->pcb_onfault = onfault;
+
+		if (rv == 0)
+			break;	/* success — RTE retries faulting insn */
+
+		/* uvm_fault failed */
+		if (!usermode && onfault != NULL) {
+			/* copyin/copyout fault recovery */
+			tf->tf_epc = (uint32_t)onfault;
+			pcb->pcb_onfault = NULL;
+			break;
+		}
+		/* TODO: user mode → deliver SIGSEGV */
+		panic("%s %s fault at va=0x%08x, pc=0x%08x (rv=%d)",
 		    usermode ? "user" : "kernel",
 		    type == EXC_TLB_MISS ? "TLB miss" : "TLB prot",
-		    tf->tf_badvaddr, tf->tf_epc);
+		    tf->tf_badvaddr, tf->tf_epc, rv);
 		break;
+	}
 
 	case EXC_BUSFAULT:
 		panic("%s bus fault at va=0x%08x, pc=0x%08x",
