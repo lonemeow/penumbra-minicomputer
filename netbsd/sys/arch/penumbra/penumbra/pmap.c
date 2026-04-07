@@ -31,6 +31,7 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <sys/malloc.h>
 #include <sys/pool.h>
 #include <sys/mutex.h>
+#include <sys/kmem.h>
 
 #include <uvm/uvm.h>
 
@@ -106,24 +107,23 @@ pmap_scratch_va(void)
  * after pmap_init(), use uvm_pagealloc with UVM_PGA_USERESERVE
  * (L2 allocation is critical — dipping into reserve is justified).
  */
-static void
+static bool
 pmap_alloc_l2(pt_entry_t *l1, unsigned int l1_idx)
 {
 	paddr_t pa;
-	
-	if (!pmap_initialized)
-	{
+
+	if (!pmap_initialized) {
 		pa = pmap_steal_page();
-	}
-	else
-	{
-		struct vm_page *page = uvm_pagealloc(NULL, 0, NULL, UVM_PGA_USERESERVE | UVM_PGA_ZERO);
-		if (!page)
-			panic("pmap: Unable to allocate L2 page table page");
-		pa = VM_PAGE_TO_PHYS(page);
+	} else {
+		struct vm_page *pg = uvm_pagealloc(NULL, 0, NULL,
+		    UVM_PGA_USERESERVE | UVM_PGA_ZERO);
+		if (pg == NULL)
+			return false;
+		pa = VM_PAGE_TO_PHYS(pg);
 	}
 
 	l1[l1_idx] = PT_L1E_MAKE(pa);
+	return true;
 }
 
 
@@ -288,8 +288,10 @@ pmap_steal_memory(vsize_t size, vaddr_t *vstartp, vaddr_t *vendp)
 			pt_entry_t *l1 = kernel_pmap_store.pm_l1;
 			unsigned int l1_idx = PT_L1_INDEX(va_cur);
 
-			if (!(l1[l1_idx] & PTE_V))
-				pmap_alloc_l2(l1, l1_idx);
+			if (!(l1[l1_idx] & PTE_V)) {
+				if (!pmap_alloc_l2(l1, l1_idx))
+					panic("pmap_steal_memory: L2 alloc");
+			}
 
 			/* Map L2 via scratch, install PTE */
 			paddr_t l2_pa = l1[l1_idx] & PTE_PPN_MASK;
@@ -357,21 +359,78 @@ pmap_init(void)
 
 /*
  * pmap_create: create a new user pmap.
+ *
+ * Allocates a pmap struct and an L1 page table.
+ * Copies the kernel half of the L1 (entries covering
+ * VM_MIN_KERNEL_ADDRESS and above) so supervisor-mode
+ * code can access kernel memory in any address space.
+ * The user half is zeroed (no user mappings yet).
  */
 pmap_t
 pmap_create(void)
 {
-	/* TODO: allocate pmap + L1 table, copy kernel L1 entries */
-	return NULL;
+	struct pmap *pm;
+
+	pm = kmem_alloc(sizeof(*pm), KM_SLEEP);
+	memset(pm, 0, sizeof(*pm));
+	mutex_init(&pm->pm_lock, MUTEX_DEFAULT, IPL_VM);
+	pm->pm_count = 1;
+	pm->pm_asid = 0;	/* TODO: ASID allocator */
+
+	/*
+	 * Allocate L1 table (one physical page).
+	 * Zero the user half, copy the kernel half from kernel_pmap.
+	 */
+	struct vm_page *pg = uvm_pagealloc(NULL, 0, NULL,
+	    UVM_PGA_USERESERVE | UVM_PGA_ZERO);
+	if (pg == NULL)
+		panic("pmap_create: cannot allocate L1 table");
+	pm->pm_l1_pa = VM_PAGE_TO_PHYS(pg);
+
+	/*
+	 * We need a kernel VA to access the new L1.  Use uvm_km_alloc
+	 * to get one page of KVA, then wire it to the L1's PA.
+	 */
+	vaddr_t va = uvm_km_alloc(kernel_map, PAGE_SIZE, 0,
+	    UVM_KMF_VAONLY | UVM_KMF_WAITVA);
+	if (va == 0)
+		panic("pmap_create: cannot allocate KVA for L1");
+	pmap_kenter_pa(va, pm->pm_l1_pa,
+	    VM_PROT_READ | VM_PROT_WRITE, 0);
+	pmap_update(pmap_kernel());
+	pm->pm_l1 = (pt_entry_t *)va;
+
+	/* Copy kernel L1 entries (upper half: VA >= 0x80000000) */
+	unsigned int kern_start = PT_L1_INDEX(VM_MIN_KERNEL_ADDRESS);
+	pt_entry_t *kl1 = kernel_pmap_store.pm_l1;
+	for (unsigned int i = kern_start; i < PT_L1_NENTRIES; i++)
+		pm->pm_l1[i] = kl1[i];
+
+	return pm;
 }
 
 /*
  * pmap_destroy: free a user pmap.
+ *
+ * Drops a reference; when it hits zero, free the L1 table
+ * and the pmap struct.  (L2 tables should already be freed
+ * by pmap_remove_all.)
  */
 void
 pmap_destroy(pmap_t pm)
 {
-	/* TODO */
+	if (--pm->pm_count > 0)
+		return;
+
+	/* Free the L1 KVA mapping and page */
+	pmap_kremove((vaddr_t)pm->pm_l1, PAGE_SIZE);
+	pmap_update(pmap_kernel());
+	uvm_km_free(kernel_map, (vaddr_t)pm->pm_l1, PAGE_SIZE,
+	    UVM_KMF_VAONLY);
+	uvm_pagefree(PHYS_TO_VM_PAGE(pm->pm_l1_pa));
+
+	mutex_destroy(&pm->pm_lock);
+	kmem_free(pm, sizeof(*pm));
 }
 
 void
@@ -381,13 +440,51 @@ pmap_reference(pmap_t pm)
 }
 
 /*
- * pmap_enter: create a mapping in a user or kernel pmap.
+ * pmap_enter: create or update a mapping in a pmap.
+ *
+ * Called by uvm_fault (demand paging), mmap, etc.
+ * For kernel pmap: global, no PTE_U.
+ * For user pmap: PTE_U set, PTE_SW_MANAGED for UVM-owned pages.
+ *
+ * flags contains PMAP_WIRED if the mapping should be wired,
+ * and may OR in access type (VM_PROT_*) for initial fault info.
  */
 int
-pmap_enter(pmap_t pm, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
+pmap_enter(pmap_t pmap, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 {
-	panic("pmap_enter: not yet implemented (va=0x%x pa=0x%x)",
-	    (unsigned)va, (unsigned)pa);
+	bool is_kernel = (pmap == pmap_kernel());
+	uint32_t extra = is_kernel ? PTE_G : PTE_U;
+	pt_entry_t *l1 = pmap->pm_l1;
+	unsigned int l1_idx = PT_L1_INDEX(va);
+
+	if (pmap_initialized && uvm_pageismanaged(pa))
+		extra |= PTE_SW_MANAGED;
+
+	int s = splhigh();
+
+	if (!(l1[l1_idx] & PTE_V)) {
+		if (!pmap_alloc_l2(l1, l1_idx)) {
+			splx(s);
+			return ENOMEM;
+		}
+	}
+
+	paddr_t l2_pa = l1[l1_idx] & PTE_PPN_MASK;
+	pt_entry_t *l2 = pmap_l2_map(l2_pa);
+
+	pt_entry_t old_pte = l2[PT_L2_INDEX(va)];
+	l2[PT_L2_INDEX(va)] = PTE_MAKE(pa, prot, flags, extra);
+
+	if (!(old_pte & PTE_V))
+		pmap->pm_stats_resident++;
+
+	if (flags & PMAP_WIRED)
+		pmap->pm_stats_wired++;
+
+	tlb_invalidate_addr(va, 0);
+	splx(s);
+
+	return 0;
 }
 
 /*
@@ -517,8 +614,11 @@ pmap_kenter_pa(vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 
 	int s = splhigh();
 
-	if (!(l1[l1_idx] & PTE_V))
-		pmap_alloc_l2(l1, l1_idx);
+	if (!(l1[l1_idx] & PTE_V)) {
+		if (!pmap_alloc_l2(l1, l1_idx))
+			panic("pmap_kenter_pa: L2 alloc failed for va=0x%x",
+			    (unsigned)va);
+	}
 
 	paddr_t l2_pa = l1[l1_idx] & PTE_PPN_MASK;
 	pt_entry_t *l2 = pmap_l2_map(l2_pa);
@@ -569,12 +669,38 @@ pmap_copy(pmap_t dst, pmap_t src, vaddr_t dstaddr, vsize_t len, vaddr_t srcaddr)
 }
 
 /*
+ * Pin an L1 page table in TLB slot 1.
+ * PT_L1_VA (0xFFFFE000) always maps the active L1.
+ * VPN = 0xFFFFE → TLB_VPN = 0x0FFFFE00.
+ */
+static inline void
+pmap_pin_l1(paddr_t l1_pa)
+{
+	uint32_t idx = PTLB_L1;
+	uint32_t vpn = 0x0FFFFE00;
+	uint32_t pte = (l1_pa & PTE_PPN_MASK) | PTE_KERNEL;
+
+	__asm__ volatile(
+		"WRSYS %0, %1, %2" : : "r"(idx),
+		    "n"(SYSDEV_MMU), "n"(MMU_TLB_INDEX));
+	__asm__ volatile(
+		"WRSYS %0, %1, %2" : : "r"(vpn),
+		    "n"(SYSDEV_MMU), "n"(MMU_TLB_VPN));
+	__asm__ volatile(
+		"WRSYS %0, %1, %2" : : "r"(pte),
+		    "n"(SYSDEV_MMU), "n"(MMU_TLB_PTE) : "memory");
+}
+
+/*
  * pmap_activate / pmap_deactivate: switch active pmap.
  */
 void
 pmap_activate(struct lwp *l)
 {
-	/* TODO: load ASID into MMUCR, re-pin L1 in slot 1 */
+	struct pmap *pm = l->l_proc->p_vmspace->vm_map.pmap;
+
+	/* Re-pin L1 so TLB miss handler walks the right page table */
+	pmap_pin_l1(pm->pm_l1_pa);
 }
 
 void

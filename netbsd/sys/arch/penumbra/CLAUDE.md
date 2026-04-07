@@ -157,9 +157,9 @@ Headers fall into three categories:
 | `pcom.c` | Console UART driver — attaches at pbbus (ACFG_CLASS_UART), takes over cn_tab from early console |
 | `psd.c` | SD card block device — SPI/SD protocol via bus_space, MBR partition parsing, bdevsw/cdevsw at major 8. Polled sector-at-a-time I/O. |
 | `bus_space.c` | bus_space implementation — map/unmap via UVM + pmap_kenter_pa, read/write via volatile pointers |
-| `trap.c` | Exception dispatch (all 9 vector types, panics for now), SPL stubs |
-| `pmap.c` | Software TLB management: `pmap_bootstrap()`, `pmap_steal_memory()`/`pmap_steal_page()`, `pmap_kenter_pa()`/`pmap_kremove()` with dynamic L2 allocation, `pmap_extract()`, `pmap_map_device()`, scratch window helpers. Unimplemented stubs panic. |
-| `copy.c` | copyin/copyout/copyinstr/copyoutstr stubs (break traps) |
+| `trap.c` | Exception dispatch (all 9 vectors), TLB fault → uvm_fault() demand paging, pcb_onfault recovery for copyin/copyout, SPL stubs |
+| `pmap.c` | Software TLB management: `pmap_bootstrap()`, `pmap_steal_memory()`/`pmap_steal_page()`, `pmap_kenter_pa()`/`pmap_kremove()`, `pmap_enter()` (demand paging), `pmap_create()`/`pmap_destroy()` (user address spaces), `pmap_activate()` (L1 re-pin), `pmap_extract()`, `pmap_map_device()`, scratch window helpers. |
+| `copy.S` | Assembly copyin/copyout/copyinstr/copyoutstr with pcb_onfault fault recovery, ufetch/ustore (8/16/32), user address validation |
 | `genassym.cf` | Struct offset definitions for assembly code |
 
 ## Current Status
@@ -238,12 +238,12 @@ Headers fall into three categories:
   `pmap_protect` downgrades PTE permissions via `PTE_PROT_BITS()`
   macro (shared with `PTE_MAKE`).  `VM_PROT_NONE` delegates to
   `pmap_remove`.  `pmap_unwire` is a no-op (no SW wired bit).
-- [x] **Trap handler (Stage 1)** — per-vector entry stubs on the
-  vector page, common trapframe save/restore in `_trap_common`,
+- [x] **Trap handler (Stage 1 + 2)** — per-vector entry stubs on
+  the vector page, common trapframe save/restore in `_trap_common`,
   C dispatch in `trap()`.  All 9 exception vectors wired.
-  Fixed vector numbering to match architecture spec
-  (0=bus, 1=IRQ, 2=TLB miss, ..., 8=alignment).
-  Currently all handlers panic with diagnostic info.
+  **TLB miss/prot dispatched to `uvm_fault()` for demand paging.**
+  On fault failure: `pcb_onfault` recovery (copyin/copyout) or
+  panic.  User-mode access to kernel VA rejected early.
   Double-fault detection: if ESR.S set and EPC in pinned page
   region (0xFFFFxxxx), BREAK to halt instead of infinite-looping.
 - [x] **Device autoconfig (pbbus)** — bus bridge walks
@@ -264,15 +264,33 @@ Headers fall into three categories:
   applied in strategy.  bdevsw/cdevsw at major 8.
   Kernel mounts msdosfs root from psd0e (MBR partition 1)
   and reaches `init: trying /sbin/init`.
+- [x] **copyin/copyout (copy.S)** — assembly implementations with
+  standard NetBSD `pcb_onfault` fault recovery pattern.
+  copyin/copyout use memcpy + onfault, copyinstr/copyoutstr do
+  byte-loop with ENAMETOOLONG.  ufetch/ustore (8/16/32-bit)
+  are leaf functions.  User address validation against
+  `VM_MAXUSER_ADDRESS`.  Fault stubs clean up stack frame and
+  return EFAULT.
+- [x] **pmap_enter / pmap_create** — `pmap_enter()` creates
+  mappings for both kernel and user pmaps.  Sets `PTE_U` for
+  user, `PTE_G` for kernel, `PTE_SW_MANAGED` for UVM pages.
+  `pmap_create()` allocates L1 page table, copies kernel half,
+  maps L1 via `uvm_km_alloc` + `pmap_kenter_pa`.
+  `pmap_destroy()` frees L1 page and pmap struct.
+  `pmap_activate()` re-pins L1 in TLB slot 1 via inline WRSYS.
+  `pmap_alloc_l2()` returns bool (ENOMEM-safe for `pmap_enter`,
+  panic for `pmap_kenter_pa`).
 - [ ] Kernel port — remaining MD stubs need real implementations
   (grep for `TODO(stub)` to find them)
 - [ ] DDB — disabled, needs extensive MD hooks
 
 ## Next Steps
 
-1. **Trap handler Stage 2** — dispatch TLB miss/prot faults
-   to `uvm_fault()` instead of panicking.
-2. **Remaining MD stubs** — fill in `TODO(stub)` functions as
+1. **ELF exec** — fix ENOEXEC (error 8) when exec'ing /sbin/init.
+   ELF machine type or exec format issue.
+2. **Syscall dispatch** — wire SYSCALL trap to `syscall()` so
+   userland can call write/exit.
+3. **Remaining MD stubs** — fill in `TODO(stub)` functions as
    the kernel reaches them.
 5. **Timer** — programmable timer for NetBSD hardclock() tick
 6. **Interrupt controller** — multiple devices with priority

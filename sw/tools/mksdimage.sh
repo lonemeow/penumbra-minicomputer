@@ -181,7 +181,7 @@ fi
 
 if [ -n "$EXTRA_DIR" ]; then
     log "Copying $EXTRA_DIR"
-    cp -r "$EXTRA_DIR" "$BOOTFSROOT/"
+    cp -r "$EXTRA_DIR/." "$BOOTFSROOT/"
 fi
 
 log "Creating boot filesystem (FAT32)"

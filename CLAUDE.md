@@ -376,14 +376,22 @@ MIPS/68k-style vector dispatch.
   stack and returns the new SP (lwp0 kernel stack, 12 KB).
   locore.S switches SP before calling `penumbra_main()` → `main()`.
   ARM-style pattern (init returns new SP to assembly).
-- **Trap handler (Stage 1):** per-vector entry stubs on the
+- **Trap handler (Stage 1 + 2):** per-vector entry stubs on the
   vector page, common trapframe save/restore, C dispatch in
-  `trap()` with all 9 exception vectors.  Panics with
-  diagnostic info (PC, VA, cause).  Double-fault detection:
-  if ESR.S is set and EPC is in the pinned page region
-  (0xFFFFxxxx), BREAK to halt instead of infinite-looping.
-- All MD functions are either implemented or break-trap stubs
-  (grep for `TODO(stub)` to find stubs needing real implementations).
+  `trap()` with all 9 exception vectors.  TLB miss/prot
+  dispatched to `uvm_fault()` for demand paging; on failure,
+  `pcb_onfault` recovery for copyin/copyout or panic.
+  User-mode access to kernel VA rejected early.
+  Double-fault detection: BREAK on recursive pinned-page faults.
+- **copyin/copyout (copy.S):** assembly with `pcb_onfault`
+  fault recovery.  copyinstr/copyoutstr byte-loop.
+  ufetch/ustore 8/16/32.  User address validation.
+- **pmap_enter / pmap_create:** demand paging for user and
+  kernel pmaps.  `pmap_create` allocates L1, copies kernel half.
+  `pmap_activate` re-pins L1 in TLB slot 1.
+  `pmap_alloc_l2` returns bool (ENOMEM-safe).
+- All remaining MD functions are either implemented or break-trap
+  stubs (grep for `TODO(stub)`).
 - Atomics: interrupt-disable CAS (`RDSPR SR` / `DI` / load-cmp-store
   / `WRSPR SR`), generic CAS-based inc/dec/add/and/or, no-op membars.
   TODO: replace with RAS (Restartable Atomic Sequences) once kernel
@@ -401,9 +409,9 @@ MIPS/68k-style vector dispatch.
   kernel port context.
 
 ## Next Steps (in priority order)
-1. **Kernel implementation** — fill in MD stubs (grep `TODO(stub)`):
-   trap handler Stage 2 (TLB faults → `uvm_fault()`),
-   then remaining stubs as the kernel reaches them.
+1. **Kernel implementation** — fix ENOEXEC for /sbin/init,
+   syscall dispatch, then remaining MD stubs as the kernel
+   reaches them (grep `TODO(stub)`).
 3. **LLVM `-O2` support** — implement `analyzeBranch`/`insertBranch`/
    `removeBranch` for branch optimization passes
 4. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick
