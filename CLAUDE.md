@@ -341,7 +341,12 @@ MIPS/68k-style vector dispatch.
   `virtual_avail` via scratch window + page table insertion.
 - **Early console:** 16450 UART, initially pinned via scratch
   window, permanently remapped by `pmap_map_device()` after
-  `pmap_bootstrap()`.
+  `pmap_bootstrap()`.  `pcom` driver takes over `cn_tab` during
+  autoconf with a proper `bus_space` mapping.
+- **Device autoconfig:** `pbbus` bridge walks `BTINFO_DEVICE`
+  entries from bootinfo, attaches child devices by ACFG_CLASS_*.
+  `bus_space` implemented (map via UVM + pmap_kenter_pa, read/write
+  via volatile pointers).  UART and SD controller enumerated.
 - **UVM init:** `uvm_md_init()`, bootinfo-driven
   `uvm_page_physload()`, `pmap_steal_memory()`.  Full UVM init
   completes: pool allocator, vmem, kmem, radix trees all

@@ -32,4 +32,7 @@ mainbus_attach(device_t parent, device_t self, void *aux)
 
 	/* Attach CPU */
 	config_found(self, NULL, NULL, CFARGS_NONE);
+
+	/* Attach Penumbra Bus bridge (enumerates bootinfo devices) */
+	config_found(self, NULL, NULL, CFARGS_NONE);
 }

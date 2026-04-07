@@ -46,7 +46,9 @@ Most integer-type headers delegate to NetBSD's `sys/common_*` headers, which use
 
 - **Trap handling (Stage 1):** Per-vector entry stubs, common trapframe save/restore, C dispatch in `trap()`. All 9 exception vectors wired. Double-fault detection (ESR.S + EPC in pinned region) prevents infinite fault loops.
 
-- **Console:** 16450 UART, initially via TLB scratch window, permanently mapped via `pmap_map_device()` before UVM takes ownership of the VA range.
+- **Console:** Early boot uses 16450 UART via TLB scratch window, then `pmap_map_device()`. The `pcom` driver takes over `cn_tab` during autoconf using a proper `bus_space` mapping.
+
+- **Device autoconfiguration:** `pbbus` bridge walks `BTINFO_DEVICE` entries from bootinfo and attaches child devices. ROM autoconfig results (device class, MMIO base, size) are passed through the bootloader to the kernel. `bus_space` (map/unmap/read/write) implemented for memory-mapped I/O.
 
 - **curlwp:** Defined as `curcpu()->ci_curlwp` macro so MI code and `cpu_switchto` share the same variable. `cpu_info_store` statically initializes it to `&lwp0`.
 

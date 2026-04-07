@@ -33,4 +33,17 @@ device	cpu
 attach	cpu at mainbus
 file	arch/penumbra/penumbra/cpu.c			cpu
 
+# Penumbra Bus bridge (enumerates bootinfo devices)
+device	pbbus { }
+attach	pbbus at mainbus
+file	arch/penumbra/penumbra/pbbus.c			pbbus
+
+# Console UART
+device	pcom
+attach	pcom at pbbus
+file	arch/penumbra/penumbra/pcom.c			pcom
+
+# bus_space implementation
+file	arch/penumbra/penumbra/bus_space.c
+
 include	"arch/penumbra/conf/majors.penumbra"

@@ -123,6 +123,17 @@ struct bootinfo {
 	/* struct btinfo_common entries[] follows */
 };
 
+/*
+ * Device classes — shared between ROM, bootloader, and kernel.
+ * These values are baked into autoconfig hardware registers and
+ * boot data, so they must never change.
+ */
+#define ACFG_CLASS_UNKNOWN	0
+#define ACFG_CLASS_MEMORY	1
+#define ACFG_CLASS_UART		2
+#define ACFG_CLASS_SPI		3
+#define ACFG_CLASS_SD		4
+
 #ifdef _KERNEL
 void	*lookup_bootinfo(unsigned int);
 void	*lookup_bootinfo_n(unsigned int, int);

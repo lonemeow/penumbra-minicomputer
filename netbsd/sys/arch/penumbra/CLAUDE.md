@@ -109,6 +109,8 @@ Headers fall into three categories:
 `lock.h` (simple locks), `rwlock.h`, `mutex.h`,
 `db_machdep.h` (DDB debugger), `cpu_counter.h`,
 `bus_defs.h`/`bus_funcs.h` (bus_space types),
+`bootinfo.h` (bootinfo tags, ACFG_CLASS_* device classes),
+`pbbus.h` (Penumbra Bus attach args),
 `setjmp.h`, `profile.h`
 
 **Boot/ELF headers:**
@@ -149,8 +151,11 @@ Headers fall into three categories:
 | `machdep.c` | Kernel runtime: `cpu_startup()`, `cpu_reboot()`, `cpu_lwp_fork()` (LWP context setup), `lwp_trampoline` (extern), remaining LWP/process/signal stubs, `kcopy`, ufetch/ustore |
 | `mulsi3.c` | Compiler runtime: `__mulsi3` (software 32-bit multiply for LLVM libcalls) |
 | `autoconf.c` | `cpu_configure()`, `cpu_rootconf()` |
-| `mainbus.c` | Root bus device driver |
+| `mainbus.c` | Root bus device driver (attaches cpu + pbbus) |
 | `cpu.c` | CPU device driver |
+| `pbbus.c` | Penumbra Bus bridge — walks BTINFO_DEVICE entries from bootinfo, attaches child devices by class |
+| `pcom.c` | Console UART driver — attaches at pbbus (ACFG_CLASS_UART), takes over cn_tab from early console |
+| `bus_space.c` | bus_space implementation — map/unmap via UVM + pmap_kenter_pa, read/write via volatile pointers |
 | `trap.c` | Exception dispatch (all 9 vector types, panics for now), SPL stubs |
 | `pmap.c` | Software TLB management: `pmap_bootstrap()`, `pmap_steal_memory()`/`pmap_steal_page()`, `pmap_kenter_pa()`/`pmap_kremove()` with dynamic L2 allocation, `pmap_extract()`, `pmap_map_device()`, scratch window helpers. Unimplemented stubs panic. |
 | `copy.c` | copyin/copyout/copyinstr/copyoutstr stubs (break traps) |
@@ -240,6 +245,17 @@ Headers fall into three categories:
   Currently all handlers panic with diagnostic info.
   Double-fault detection: if ESR.S set and EPC in pinned page
   region (0xFFFFxxxx), BREAK to halt instead of infinite-looping.
+- [x] **Device autoconfig (pbbus)** — bus bridge walks
+  `BTINFO_DEVICE` entries from bootinfo, attaches child devices
+  by ACFG_CLASS_*.  Device classes defined once in `bootinfo.h`,
+  shared across ROM, bootloader, and kernel.
+- [x] **bus_space** — `bus_space_map` allocates kernel VA via
+  `uvm_km_alloc` + `pmap_kenter_pa` (uncached).  Read/write ops
+  are volatile pointer dereferences.
+- [x] **Console UART (pcom)** — attaches at pbbus
+  (ACFG_CLASS_UART), maps registers via bus_space, takes over
+  `cn_tab` from early boot console.  Seamless handoff — no
+  output lost during transition.
 - [ ] Kernel port — remaining MD stubs need real implementations
   (grep for `TODO(stub)` to find them)
 - [ ] DDB — disabled, needs extensive MD hooks
