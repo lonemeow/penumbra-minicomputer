@@ -80,8 +80,8 @@ struct btinfo_bootpath {
 struct btinfo_symtab {
 	struct btinfo_common common;
 	uint32_t nsym;		/* number of symbols */
-	uint32_t ssym;		/* start of symbol table (physical) */
-	uint32_t esym;		/* end of symbol table (physical) */
+	uint32_t ssym;		/* start of symbol table (virtual) */
+	uint32_t esym;		/* end of symbol table (virtual) */
 };
 
 /*

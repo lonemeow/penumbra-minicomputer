@@ -113,11 +113,14 @@ pmap_steal_memory(vsize_t size, vaddr_t *vstartp, vaddr_t *vendp)
 		 * Return the VA via the bootstrap linear mapping.
 		 * PA = VA + phys_bias → VA = PA - phys_bias.
 		 */
+		vaddr_t va = BOOT_PA_TO_VA(pa);
+		if (va + size > *vstartp)
 		{
-			vaddr_t va = BOOT_PA_TO_VA(pa);
-			memset((void *)va, 0, size);
-			return va;
+			*vstartp = va + size;
 		}
+
+		memset((void *)va, 0, size);
+		return va;
 	}
 	panic("pmap_steal_memory: no memory to steal %u bytes", (unsigned)size);
 }

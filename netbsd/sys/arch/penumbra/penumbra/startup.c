@@ -274,8 +274,28 @@ static void
 penumbra_physmem_init(void)
 {
 	struct btinfo_memory *bm;
-	extern char _end[];
+	struct btinfo_kernbase *bk;
+	paddr_t kern_pa_end;
 	int i;
+
+	/*
+	 * Determine the physical end of the loaded kernel.
+	 * The bootloader loads text+data+bss AND the symbol table
+	 * contiguously starting at phys_base.  Compute the physical
+	 * end from phys_base + total virtual size (kern_end includes
+	 * symtab).  Fall back to _end if no bootinfo.
+	 */
+	bk = lookup_bootinfo(BTINFO_KERNBASE);
+	if (bk != NULL) {
+		vsize_t kern_vsize = bk->kern_end - bk->kern_start;
+		kern_pa_end = round_page(bk->phys_base + kern_vsize);
+	} else {
+		extern char _end[];
+		kern_pa_end = round_page(
+		    BOOT_VA_TO_PA((vaddr_t)&_end));
+	}
+
+	printf("  kernel PA end: 0x%x\n", (unsigned)kern_pa_end);
 
 	/*
 	 * Walk all BTINFO_MEMORY entries.
@@ -284,23 +304,19 @@ penumbra_physmem_init(void)
 	for (i = 0; (bm = lookup_bootinfo_n(BTINFO_MEMORY, i)) != NULL; i++) {
 		paddr_t seg_start = bm->base;
 		paddr_t seg_end = bm->base + bm->size;
-		paddr_t avail_start;
 
 		printf("  RAM: 0x%x - 0x%x (%u KB)\n",
 		    (unsigned)seg_start, (unsigned)seg_end,
 		    (unsigned)(bm->size / 1024));
 
 		/*
-		 * The kernel is loaded somewhere in physical RAM.
-		 * Exclude everything below the kernel BSS end so
-		 * we don't hand kernel pages to UVM.  phys_bias
-		 * converts the kernel virtual _end to physical.
+		 * Exclude the kernel's physical footprint (text +
+		 * data + bss + symbol table) from this region.
 		 */
-		avail_start = round_page(BOOT_VA_TO_PA((vaddr_t)&_end));
-		if (avail_start > seg_start && avail_start < seg_end)
-			seg_start = avail_start;
+		if (kern_pa_end > seg_start && kern_pa_end < seg_end)
+			seg_start = kern_pa_end;
 
-		/* Skip regions entirely below kernel end */
+		/* Skip regions entirely covered by kernel */
 		if (seg_start >= seg_end)
 			continue;
 
