@@ -8,11 +8,16 @@ maxpartitions 8
 
 maxusers 2 8 64
 
+# PMAP options
+defflag	opt_pmap.h			PMAP_STEAL_MEMORY
+
 # Console glue
 file	dev/cons.c
 
 # Machine-dependent kernel code
+file	arch/penumbra/penumbra/startup.c
 file	arch/penumbra/penumbra/machdep.c
+file	arch/penumbra/penumbra/mulsi3.c
 file	arch/penumbra/penumbra/autoconf.c
 file	arch/penumbra/penumbra/trap.c
 file	arch/penumbra/penumbra/pmap.c

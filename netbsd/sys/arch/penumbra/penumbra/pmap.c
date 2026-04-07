@@ -34,6 +34,10 @@ __KERNEL_RCSID(0, "$NetBSD$");
 /* Linker-defined end of kernel BSS */
 extern char _end[];
 
+/* Bootstrap PA↔VA conversion — only valid during early boot */
+extern int32_t phys_bias;
+#define BOOT_PA_TO_VA(pa)	((vaddr_t)((pa) - phys_bias))
+
 /* Kernel pmap */
 struct pmap kernel_pmap_store;
 struct pmap *const kernel_pmap_ptr = &kernel_pmap_store;
@@ -76,6 +80,46 @@ pmap_virtual_space(vaddr_t *vstartp, vaddr_t *vendp)
 {
 	*vstartp = virtual_avail;
 	*vendp = virtual_end;
+}
+
+/*
+ * pmap_steal_memory: allocate physical pages during early boot.
+ * Called by UVM before the full VM system is running (e.g., to
+ * allocate the vm_page array).  Returns a kernel VA for the
+ * stolen pages, accessible via the bootstrap linear mapping.
+ */
+vaddr_t
+pmap_steal_memory(vsize_t size, vaddr_t *vstartp, vaddr_t *vendp)
+{
+	uvm_physseg_t bank;
+	int npgs;
+	paddr_t pa;
+
+	size = round_page(size);
+	npgs = atop(size);
+
+	for (bank = uvm_physseg_get_first();
+	     uvm_physseg_valid_p(bank);
+	     bank = uvm_physseg_get_next(bank)) {
+		if (uvm_physseg_get_avail_end(bank) -
+		    uvm_physseg_get_avail_start(bank) < npgs)
+			continue;
+
+		/* Steal from the start of the available region */
+		pa = ptoa(uvm_physseg_get_avail_start(bank));
+		uvm_physseg_unplug(atop(pa), npgs);
+
+		/*
+		 * Return the VA via the bootstrap linear mapping.
+		 * PA = VA + phys_bias → VA = PA - phys_bias.
+		 */
+		{
+			vaddr_t va = BOOT_PA_TO_VA(pa);
+			memset((void *)va, 0, size);
+			return va;
+		}
+	}
+	panic("pmap_steal_memory: no memory to steal %u bytes", (unsigned)size);
 }
 
 /*

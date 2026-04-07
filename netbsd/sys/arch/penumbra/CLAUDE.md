@@ -138,13 +138,15 @@ Headers fall into three categories:
 
 | File | Purpose |
 |------|---------|
-| `locore.S` | Entry point, bootstrap TLB miss handler, MMU enable, BSS zero, setjmp/longjmp |
-| `machdep.c` | `penumbra_init()`, early UART console, `cpu_startup()`, `cpu_reboot()`, stubs, `__mulsi3` |
+| `locore.S` | Entry point, BSS zero (phys mode), bootinfo copy, bootstrap TLB miss handler with region table, MMU enable, setjmp/longjmp |
+| `startup.c` | Early boot: `penumbra_init()`, bootstrap region table, bootinfo parsing, early UART console, `consinit()`, `penumbra_physmem_init()` |
+| `machdep.c` | Kernel runtime: `cpu_startup()`, `cpu_reboot()`, LWP/process stubs, signal stubs, `kcopy`, ufetch/ustore |
+| `mulsi3.c` | Compiler runtime: `__mulsi3` (software 32-bit multiply for LLVM libcalls) |
 | `autoconf.c` | `cpu_configure()`, `cpu_rootconf()` |
 | `mainbus.c` | Root bus device driver |
 | `cpu.c` | CPU device driver |
 | `trap.c` | Exception dispatch, SPL stubs |
-| `pmap.c` | Software TLB management (stub — flat/2-level PT design) |
+| `pmap.c` | Software TLB management: `pmap_bootstrap()`, `pmap_steal_memory()`, stubs for full pmap ops |
 | `copy.c` | copyin/copyout/copyinstr/copyoutstr stubs (break traps) |
 | `genassym.cf` | Struct offset definitions for assembly code |
 
@@ -165,22 +167,31 @@ Headers fall into three categories:
   → bootinfo translation, kernel ELF loading via libsa `loadfile()`.
   Builds via nbmake (libsa + libkern linked as `.a` archives).
   Loads kernel at dynamic physical address, jumps with MMU off.
-- [x] **locore.S early boot** — PIC bias computation, bootstrap TLB
-  miss handler (algorithmic VA→PA), MMU enable, physical-to-virtual
-  jump, BSS zero, call `penumbra_init()`.  Boots end-to-end on ISS.
-- [x] **Early console** — 16450 UART wired to `cn_tab` in `consinit()`,
-  printf/panic output visible from first call.
-  TODO: UART address hardcoded, should come from bootinfo.
-- [x] `pmap.h` — `_LOCORE` guards for assembly-safe inclusion
-- [ ] Kernel UVM init — parse bootinfo, register physical memory.
-  Currently panics: `uvm_init: page size not set`
+- [x] **locore.S early boot** — PIC bias computation, BSS zero
+  and bootinfo copy in physical mode (before MMU), bootstrap TLB
+  miss handler with PA region table, MMU enable, virtual jump.
+- [x] **Bootstrap TLB handler** — region-table-based: single linear
+  mapping (`PA = VA + phys_bias`) with per-region cacheability.
+  locore pre-populates kernel image entry; C code (`startup.c`)
+  adds RAM and MMIO regions from bootinfo before `consinit()`.
+  Supports arbitrary RAM/MMIO physical addresses.
+- [x] **Early console** — 16450 UART, address from bootinfo
+  (`BTINFO_CONSOLE`), VA computed via `BOOT_PA_TO_VA()` at runtime.
+- [x] **UVM init** — `uvm_md_init()`, bootinfo parsing,
+  `uvm_page_physload()` for RAM regions (excluding kernel image),
+  `pmap_steal_memory()` for early page allocation via linear mapping.
+- [x] `pmap.h` — `_LOCORE` guards, `PMAP_STEAL_MEMORY` defined
+- [ ] **UVM debugging** — gets past `uvm_page_physload` but crashes
+  in `uvm_km_kmem_free` accessing unmapped VA.  Likely a missing
+  mapping or uninitialized pointer in vmem/kmem init.
 - [ ] Kernel port — MD stubs need real implementations
   (grep for `TODO(stub)` to find them)
 - [ ] DDB — disabled, needs extensive MD hooks
 
 ## Next Steps
 
-1. **UVM init** — parse bootinfo memory regions in `penumbra_init()`,
-   call `uvm_page_physload()`, set page size.  Unblocks `main()`.
+1. **Debug UVM crash** — crash in `uvm_km_kmem_free` accessing
+   VA `0xD00042D0` (PA `0x500222D0`, outside RAM).  Likely
+   a vmem arena pointer issue during `uvm_init()` → `uvm_km_init()`.
 2. **Kernel implementation** — fill in MD stubs (`TODO(stub)`):
    trap handling, pmap (software TLB with real page tables)

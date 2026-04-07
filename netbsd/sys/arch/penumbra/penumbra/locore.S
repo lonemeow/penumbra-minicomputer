@@ -36,6 +36,8 @@
 #define BPTE_KERNEL_NC	0x99		/* V|R|W|G (uncached, for MMIO) */
 #define KERN_TEXT_VA	0x80010000	/* KERNEL_TEXT_BASE */
 #define MMIO_BASE_VA	0xFF000000	/* Device MMIO region start */
+#define BOOTINFO_MAGIC	0x50454E49	/* "PENI" — must match bootinfo.h */
+#define BOOTINFO_MAXSIZE 4096
 
 	.text
 	.globl	_start
@@ -89,7 +91,79 @@ _start_bias:
 	wrsys	r0, #SYSDEV_ICACHE, #CACHE_INVAL
 
 /* ═══════════════════════════════════════════════════════════════
- * Step 4: Copy bootstrap TLB miss handler to vector page
+ * Step 4: Zero BSS (physical mode)
+ *
+ * BSS must be zeroed before any C code runs.  Done here in
+ * physical mode so that step 5 can copy bootinfo into a BSS
+ * buffer before the MMU transition makes bootloader memory
+ * unreachable.  Addresses use PA = VA + phys_bias.
+ * ═══════════════════════════════════════════════════════════════ */
+
+	la	r1, __bss_start
+	add	r1, r6			/* PA of __bss_start */
+	la	r2, _end
+	add	r2, r6			/* PA of _end */
+.Lzero_bss:
+	cmp	r1, r2
+	bhs	.Lbss_done
+	stw	r0, [r1]
+	add	r1, #4
+	b	.Lzero_bss
+.Lbss_done:
+
+	/* Export phys_bias to .data for C code */
+	la	r1, phys_bias
+	add	r1, r6			/* PA of phys_bias */
+	stw	r6, [r1]
+
+/* ═══════════════════════════════════════════════════════════════
+ * Step 5: Copy bootinfo to kernel BSS (physical mode)
+ *
+ * R5 = bootinfo physical address (from bootloader).
+ * Copy into bootinfo_store[] (BSS, just zeroed) so the kernel
+ * can access it after MMU enable.  Read the size field from the
+ * bootinfo header; clamp to BOOTINFO_MAXSIZE (4096).
+ * Also set penumbra_bootinfo to the virtual address of the store.
+ * ═══════════════════════════════════════════════════════════════ */
+
+	/* Validate magic before copying */
+	ldw	r1, [r5]		/* bootinfo->magic */
+	li	r2, #BOOTINFO_MAGIC
+	cmp	r1, r2
+	bne	.Lbootinfo_done		/* skip if invalid */
+
+	/* Read size, clamp to BOOTINFO_MAXSIZE */
+	ldw	r3, [r5 + #4]		/* bootinfo->size */
+	li	r1, #BOOTINFO_MAXSIZE
+	cmp	r3, r1
+	bls	.Lbi_size_ok
+	mov	r3, r1			/* clamp */
+.Lbi_size_ok:
+
+	/* Copy r3 bytes from r5 (src PA) to bootinfo_store (dst PA) */
+	la	r1, bootinfo_store
+	add	r1, r6			/* PA of bootinfo_store */
+	mov	r2, r5			/* source = bootinfo phys */
+.Lbi_copy:
+	cmp	r3, #0
+	beq	.Lbi_copy_done
+	ldw	r4, [r2]
+	stw	r4, [r1]
+	add	r1, #4
+	add	r2, #4
+	sub	r3, #4
+	b	.Lbi_copy
+.Lbi_copy_done:
+
+	/* Set penumbra_bootinfo = virtual address of bootinfo_store */
+	la	r1, penumbra_bootinfo
+	add	r1, r6			/* PA of penumbra_bootinfo */
+	la	r2, bootinfo_store	/* VA of bootinfo_store */
+	stw	r2, [r1]
+.Lbootinfo_done:
+
+/* ═══════════════════════════════════════════════════════════════
+ * Step 6: Copy bootstrap TLB miss handler to vector page
  *
  * The handler code lives in the kernel image (.text).  We copy
  * it to PA 0x80 in the vector page, where it runs from pinned
@@ -98,9 +172,12 @@ _start_bias:
  * Vector page layout (physical page 0):
  *   0x00-0x1F   Exception vectors (8 × 4-byte addresses)
  *   0x40-0x4F   Scratch register save area (R1-R4)
- *   0x50-0x5B   Boot params (phys_bias, kernel_end, way_ctr)
- *   0x5C        Saved bootinfo physical pointer
- *   0x80+       TLB miss handler code
+ *   0x50        phys_bias (4 bytes)
+ *   0x54        way_counter (4 bytes)
+ *   0x80+       TLB miss handler code (~200 bytes)
+ *   0x200+      Region table: array of { pa_base, pa_end, pte_flags }
+ *               Sentinel: entry with pa_base == 0 && pa_end == 0
+ *               Populated by locore (kernel image) then C code (RAM, MMIO)
  * ═══════════════════════════════════════════════════════════════ */
 
 	la	r1, _boot_miss_handler
@@ -120,7 +197,7 @@ _start_bias:
 	wrsys	r0, #SYSDEV_ICACHE, #CACHE_INVAL
 
 /* ═══════════════════════════════════════════════════════════════
- * Step 5: Install exception vectors and boot parameters
+ * Step 7: Install exception vectors and boot parameters
  * ═══════════════════════════════════════════════════════════════ */
 
 	/* TLB miss vector → handler at PA 0x80 */
@@ -142,16 +219,34 @@ _start_bias:
 
 	/* Boot parameters for handler scratch area */
 	stw	r6, [r0 + #0x50]	/* phys_bias */
-	la	r1, _end
+	stw	r0, [r0 + #0x54]	/* way_counter = 0 */
+
+	/*
+	 * Populate initial region table entry at 0x200.
+	 * One entry: the kernel image (text through BSS + stack).
+	 * PA range = [text_start + phys_bias, round_page(_end) + phys_bias)
+	 * This is enough to run until C code adds RAM and MMIO regions.
+	 */
+	li	r1, #KERN_TEXT_VA
+	add	r1, r6			/* PA of kernel text start */
+	stw	r1, [r0 + #0x200]	/* region[0].pa_base */
+
+	la	r1, _boot_stack_top	/* VA of end of kernel BSS+stack */
 	add	r1, #0xFFF		/* round up to page boundary */
 	shr	r1, #12
 	shl	r1, #12
-	stw	r1, [r0 + #0x54]	/* kernel_end (VA, page-aligned) */
-	stw	r0, [r0 + #0x58]	/* way_counter = 0 */
-	stw	r5, [r0 + #0x5C]	/* bootinfo physical pointer */
+	add	r1, r6			/* PA of kernel end (rounded) */
+	stw	r1, [r0 + #0x204]	/* region[0].pa_end */
+
+	lli	r1, #BPTE_KERNEL	/* cached, supervisor RWX */
+	stw	r1, [r0 + #0x208]	/* region[0].pte_flags */
+
+	/* Sentinel: terminate region table */
+	stw	r0, [r0 + #0x20C]	/* region[1].pa_base = 0 */
+	stw	r0, [r0 + #0x210]	/* region[1].pa_end = 0 */
 
 /* ═══════════════════════════════════════════════════════════════
- * Step 6: Pin the vector/handler page (pinned TLB slot 0)
+ * Step 8: Pin the vector/handler page (pinned TLB slot 0)
  *
  * Maps VA 0x0000_0000 → PA 0x0000_0000 (identity).
  * Covers: exception vectors, scratch save area, handler code.
@@ -164,7 +259,7 @@ _start_bias:
 	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_PTE
 
 /* ═══════════════════════════════════════════════════════════════
- * Step 7: Identity-map current page for MMU enable transition
+ * Step 9: Identity-map current page for MMU enable transition
  *
  * After WRSYS sets M=1, the next instruction fetch uses the
  * physical PC as a virtual address.  This TLB entry maps
@@ -194,7 +289,7 @@ _start_bias:
 	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_PTE
 
 /* ═══════════════════════════════════════════════════════════════
- * Step 8: Enable MMU
+ * Step 10: Enable MMU
  * ═══════════════════════════════════════════════════════════════ */
 
 	lli	r1, #MMUCR_M
@@ -207,7 +302,7 @@ _start_bias:
 	 */
 
 /* ═══════════════════════════════════════════════════════════════
- * Step 9: Jump to kernel virtual addresses
+ * Step 11: Jump to kernel virtual addresses
  * ═══════════════════════════════════════════════════════════════ */
 
 	la	r13, .Lvirtual_entry
@@ -215,27 +310,12 @@ _start_bias:
 
 	/*
 	 * ── Running at kernel virtual addresses from here ──
+	 * BSS is already zeroed and bootinfo copied (steps 4-5).
 	 * TLB misses are resolved by the bootstrap handler.
 	 */
 .Lvirtual_entry:
 	/* Set up virtual kernel stack */
 	la	sp, _boot_stack_top
-
-	/* Zero BSS */
-	la	r1, __bss_start
-	la	r2, _end
-.Lzero_bss:
-	cmp	r1, r2
-	bhs	.Lbss_done
-	stw	r0, [r1]
-	add	r1, #4
-	b	.Lzero_bss
-.Lbss_done:
-
-	/* Save bootinfo pointer to global (BSS, now zeroed) */
-	ldw	r1, [r0 + #0x5C]	/* from vector page scratch area */
-	la	r2, penumbra_bootinfo
-	stw	r1, [r2]
 
 	/* Call penumbra_init() — does not return */
 	bl	penumbra_init
@@ -245,10 +325,16 @@ _start_bias:
  * Bootstrap TLB miss handler
  *
  * Copied to the vector page at PA 0x80 during early boot.
- * Resolves TLB misses using algorithmic VA→PA mapping:
- *   - Kernel pages: PA = VA + phys_bias (linear offset)
- *   - MMIO pages:   PA = VA (identity, uncached)
- *   - Anything else: panic (unmapped address)
+ * Resolves TLB misses using a single linear mapping:
+ *   PA = VA + phys_bias  (modular 32-bit arithmetic)
+ *
+ * The computed PA is looked up in a region table at PA 0x200 in
+ * the vector page.  Each 12-byte entry has { pa_base, pa_end,
+ * pte_flags }.  RAM regions use cached flags; MMIO uses uncached.
+ * If PA is not in any region, the handler panics.
+ *
+ * The region table is populated by locore.S from bootinfo before
+ * the handler is installed.
  *
  * Runs until pmap_bootstrap() installs the real handler.
  * All branches are PC-relative, so the code works after copy.
@@ -265,48 +351,56 @@ _boot_miss_handler:
 	/* Read faulting virtual address */
 	rdsys	r1, #SYSDEV_MMU, #MMU_FAULT_ADDR
 
-	/* ── Kernel VA range: KERN_TEXT_VA ≤ VA < kernel_end ── */
-	li	r2, #KERN_TEXT_VA
-	cmp	r1, r2
-	blo	.Lbmh_check_mmio
-	ldw	r2, [r0 + #0x54]	/* kernel_end (VA) */
-	cmp	r1, r2
-	bhs	.Lbmh_check_mmio
-
-	/* ── Kernel page: PA = VA + phys_bias ────────────────
-	 * R1 = faulting VA (in kernel range)
-	 * R2 = phys_bias (loaded below)
-	 * Need to produce R3 = PTE value, then branch to
-	 * .Lbmh_load_tlb.
-	 */
+	/* Compute PA = VA + phys_bias */
 	ldw	r2, [r0 + #0x50]	/* R2 = phys_bias */
-
 	mov	r3, r1			/* R3 = VA */
-	add	r3, r2			/* R3 = VA + phys_bias = PA */
-	li	r2, #PTE_PPN_MASK
-	and	r3, r2			/* clear page offset */
-	lli	r2, #BPTE_KERNEL
-	or	r3, r2			/* R3 = PTE */
-	b	.Lbmh_load_tlb
+	add	r3, r2			/* R3 = PA */
 
-.Lbmh_check_mmio:
-	/* ── Device MMIO: VA ≥ 0xFF000000, identity mapped ──
-	 * TODO: MMIO base should come from bootinfo device list
-	 * rather than being hardcoded to 0xFF000000.
+	/*
+	 * Walk region table at 0x200.
+	 * R4 = table pointer, entries are { pa_base, pa_end, pte_flags }.
+	 * Table ends when pa_base == 0 and pa_end == 0 (sentinel).
 	 */
-	li	r2, #MMIO_BASE_VA
-	cmp	r1, r2
-	blo	.Lbmh_panic
+	lli	r2, #0x200		/* R2 = table pointer */
+.Lbmh_region_loop:
+	ldw	r4, [r2]		/* R4 = pa_base */
+	ldw	r1, [r2 + #4]		/* R1 = pa_end */
+	or	r4, r1			/* check sentinel (both zero) */
+	beq	.Lbmh_panic		/* end of table — no match */
 
-	/* Identity map, uncached */
-	mov	r3, r1
-	shr	r3, #12
-	shl	r3, #12			/* PA = VA, page-aligned */
-	lli	r4, #BPTE_KERNEL_NC
-	or	r3, r4
+	/* Reload pa_base for comparison */
+	ldw	r4, [r2]		/* R4 = pa_base */
+	cmp	r3, r4
+	blo	.Lbmh_next		/* PA < pa_base → skip */
+	cmp	r3, r1			/* R1 still = pa_end */
+	bhs	.Lbmh_next		/* PA ≥ pa_end → skip */
+
+	/* Match: build PTE from PA and region's pte_flags */
+	li	r1, #PTE_PPN_MASK
+	and	r3, r1			/* clear page offset bits */
+	ldw	r4, [r2 + #8]		/* pte_flags */
+	or	r3, r4			/* R3 = PTE */
+
+	/* Recover faulting VA for TLB load */
+	ldw	r1, [r0 + #0x40]	/* saved R1 — no, need fault VA */
+	rdsys	r1, #SYSDEV_MMU, #MMU_FAULT_ADDR
 	b	.Lbmh_load_tlb
+
+.Lbmh_next:
+	add	r2, #12			/* advance to next entry */
+	b	.Lbmh_region_loop
 
 .Lbmh_panic:
+	/*
+	 * Unmapped PA — print faulting VA and PA to UART, then halt.
+	 * R3 = computed PA.  Re-read faulting VA from MMU.
+	 * UART TX at phys_bias-adjusted address isn't available here,
+	 * so store VA/PA to vector page scratch for C code to read.
+	 */
+	rdsys	r1, #SYSDEV_MMU, #MMU_FAULT_ADDR
+	stw	r1, [r0 + #0x60]	/* faulting VA */
+	stw	r3, [r0 + #0x64]	/* computed PA */
+	stw	r2, [r0 + #0x68]	/* table pointer (debug) */
 	break				/* unmapped address — fatal */
 
 .Lbmh_load_tlb:
@@ -323,7 +417,7 @@ _boot_miss_handler:
 	and	r4, #0x1F
 
 	/* Way selection: alternating counter */
-	ldw	r1, [r0 + #0x58]	/* way (0 or 0x20) */
+	ldw	r1, [r0 + #0x54]	/* way (0 or 0x20) */
 	or	r4, r1			/* TLB_INDEX = set | way */
 
 	/* Write TLB entry (3-write commit protocol) */
@@ -333,9 +427,9 @@ _boot_miss_handler:
 
 	/* Toggle way counter for next miss */
 	lli	r1, #0x20
-	ldw	r2, [r0 + #0x58]
+	ldw	r2, [r0 + #0x54]
 	xor	r2, r1
-	stw	r2, [r0 + #0x58]
+	stw	r2, [r0 + #0x54]
 
 	/* Restore scratch registers and return */
 	ldw	r1, [r0 + #0x40]
@@ -400,6 +494,17 @@ longjmp:
 	ldw	r14, [r1 + 32]
 	lli	r1, 1		/* return 1 */
 	ret
+
+/*
+ * phys_bias: physical - virtual address offset (PA = VA + phys_bias).
+ * Set by _start before BSS zero (stored to physical address),
+ * used by C code in machdep.c for PA↔VA conversions.
+ */
+	.data
+	.align	4
+	.globl	phys_bias
+phys_bias:
+	.long	0
 
 /*
  * Early boot stack — used before MMU is enabled.

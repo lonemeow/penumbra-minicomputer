@@ -14,6 +14,7 @@ makeoptions	COPTS="-O0"
 
 # Kernel options
 #options	DDB			# kernel debugger (needs MD hooks)
+options		PMAP_STEAL_MEMORY	# early boot page allocation
 
 # File systems (minimal set)
 file-system	FFS			# Berkeley Fast File System

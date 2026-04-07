@@ -67,9 +67,18 @@ extern struct pmap kernel_pmap_store;
 /* Stub out pmap_update for now — TLB is software-managed */
 #define pmap_update(pm)		((void)0)
 
+/*
+ * Tell UVM we provide pmap_steal_memory().
+ * During early boot, physical pages can be accessed via the
+ * bootstrap linear mapping (PA = VA + phys_bias), so stolen
+ * pages don't need explicit pmap_kenter_pa() calls.
+ */
+#define PMAP_STEAL_MEMORY
+
 /* Required pmap interface — implemented in pmap.c */
 void		pmap_bootstrap(void);
 void		pmap_virtual_space(vaddr_t *, vaddr_t *);
+vaddr_t		pmap_steal_memory(vsize_t, vaddr_t *, vaddr_t *);
 
 /* TLB operations */
 void		tlb_invalidate_all(void);

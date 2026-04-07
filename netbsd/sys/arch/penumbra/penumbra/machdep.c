@@ -1,7 +1,13 @@
 /*	$NetBSD$	*/
 
 /*
- * Penumbra machine-dependent startup and utilities.
+ * Penumbra machine-dependent kernel runtime.
+ *
+ * cpu_startup, cpu_reboot, LWP/process management stubs,
+ * signal support, user memory access, and other MD hooks
+ * required by the MI kernel.
+ *
+ * Early boot initialization is in startup.c.
  */
 
 #include <sys/cdefs.h>
@@ -33,121 +39,15 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <machine/reg.h>
 #include <machine/mcontext.h>
 
-#include <dev/cons.h>
-
-/* Forward declarations */
-void	penumbra_init(void);
-int	main(void);
-
-/* Bootinfo pointer, saved by locore.S _start */
-uint32_t penumbra_bootinfo;
-
 /* Single CPU info structure (uniprocessor) */
 struct cpu_info cpu_info_store;
 
 /* Physical memory regions */
 struct vm_map *phys_map;
 
-/* ── Early boot UART console ──────────────────────────────────
- * 16450-compatible, word-strided registers at 0xFF000000.
- * Wired as the kernel console in consinit() so printf() works
- * from the very first call in penumbra_init().
- *
- * TODO: UART base address should come from bootinfo device list
- * rather than being hardcoded.  The bootloader passes BTAG_CONSOLE
- * identifying the console device.
- */
-
-#define UART_BASE	((volatile uint32_t *)0xFF000000)
-#define UART_THR	(UART_BASE[0])
-#define UART_RBR	(UART_BASE[0])
-#define UART_LSR	(UART_BASE[5])	/* word-strided: offset 0x14 */
-#define LSR_DR		0x01		/* Data Ready */
-#define LSR_THRE	0x20		/* TX Holding Register Empty */
-
-static inline void
-uart_putc(int c)
-{
-	while (!(UART_LSR & LSR_THRE))
-		;
-	UART_THR = (uint32_t)c;
-}
-
-static void penumbra_cnprobe(struct consdev *cp)
-{
-	cp->cn_dev = makedev(0, 0);
-	cp->cn_pri = CN_REMOTE;
-}
-
-static void penumbra_cninit(struct consdev *cp)
-{
-	/* UART already initialized by bootloader */
-}
-
-static int penumbra_cngetc(dev_t dev)
-{
-	while (!(UART_LSR & LSR_DR))
-		;
-	return (int)UART_RBR;
-}
-
-static void penumbra_cnputc(dev_t dev, int c)
-{
-	uart_putc(c);
-}
-
-static void penumbra_cnpollc(dev_t dev, int on)
-{
-	/* nothing */
-}
-
-static struct consdev penumbra_consdev = {
-	.cn_probe = penumbra_cnprobe,
-	.cn_init = penumbra_cninit,
-	.cn_getc = penumbra_cngetc,
-	.cn_putc = penumbra_cnputc,
-	.cn_pollc = penumbra_cnpollc,
-	.cn_pri = CN_REMOTE,
-};
-
-/*
- * Early machine initialization.
- * Called from locore.S after BSS is zeroed.
- */
-void
-penumbra_init(void)
-{
-
-	/* Initialize the console so we can printf */
-	consinit();
-
-	printf("NetBSD/penumbra booting\n");
-
-	/*
-	 * TODO: Parse bootinfo to find memory regions
-	 * TODO: Initialize UVM with physical pages
-	 */
-
-	/* Initialize pmap (page table / TLB management) */
-	pmap_bootstrap();
-
-	/* Hand off to MI kernel main */
-	main();
-	/* NOTREACHED */
-}
-
-/*
- * Console initialization — called very early.
- * Sets up UART for printf.
- */
-void
-consinit(void)
-{
-
-	cn_tab = &penumbra_consdev;
-	penumbra_cnprobe(cn_tab);
-	penumbra_cninit(cn_tab);
-}
+/* Machine name strings (referenced by MI kernel) */
+char machine[] = "penumbra";
+char machine_arch[] = "penumbra";
 
 /*
  * cpu_startup: called from init_main.c after basic VM is running.
@@ -183,6 +83,62 @@ cpu_reboot(int howto, char *bootstr)
 	__asm volatile("break");
 	for (;;)
 		;
+}
+
+/*
+ * Clock initialization — stub.
+ * TODO: implement with a programmable timer.
+ */
+void
+cpu_initclocks(void)
+{
+	/* no timer hardware yet */
+}
+
+void
+setstatclockrate(int rate)
+{
+	/* no stat clock yet */
+}
+
+/*
+ * Microsecond delay — busy-loop stub.
+ * TODO: calibrate against a timer.
+ */
+void
+delay(unsigned int us)
+{
+	volatile unsigned int i;
+	for (i = 0; i < us * 10; i++)
+		;
+}
+
+/*
+ * Idle loop.
+ */
+void
+cpu_idle(void)
+{
+	/* TODO: WFI or similar low-power instruction */
+}
+
+/*
+ * cpu_dumpconf — configure crash dump device.
+ */
+void
+cpu_dumpconf(void)
+{
+	/* no dump support yet */
+}
+
+/*
+ * cpu_intr_p — return true if running in interrupt context.
+ */
+bool
+cpu_intr_p(void)
+{
+	/* TODO: track interrupt nesting depth */
+	return false;
 }
 
 /*
@@ -223,70 +179,6 @@ cpu_lwp_setprivate(struct lwp *l, void *v)
 {
 	/* TODO: set thread pointer (R12) in trapframe */
 	return 0;
-}
-
-/*
- * Idle loop.
- */
-void
-cpu_idle(void)
-{
-	/* TODO: WFI or similar low-power instruction */
-}
-
-/*
- * cpu_dumpconf — configure crash dump device.
- */
-void
-cpu_dumpconf(void)
-{
-	/* no dump support yet */
-}
-
-/*
- * Microsecond delay — busy-loop stub.
- * TODO: calibrate against a timer.
- */
-void
-delay(unsigned int us)
-{
-	volatile unsigned int i;
-	for (i = 0; i < us * 10; i++)
-		;
-}
-
-/* Forward declarations for functions defined below */
-int mm_md_physacc(paddr_t, vm_prot_t);
-int32_t __mulsi3(int32_t, int32_t);
-
-/* Machine name strings (referenced by MI kernel) */
-char machine[] = "penumbra";
-char machine_arch[] = "penumbra";
-
-/*
- * Clock initialization — stub.
- * TODO: implement with a programmable timer.
- */
-void
-cpu_initclocks(void)
-{
-	/* no timer hardware yet */
-}
-
-void
-setstatclockrate(int rate)
-{
-	/* no stat clock yet */
-}
-
-/*
- * cpu_intr_p — return true if running in interrupt context.
- */
-bool
-cpu_intr_p(void)
-{
-	/* TODO: track interrupt nesting depth */
-	return false;
 }
 
 /*
@@ -340,7 +232,41 @@ cpu_getmcontext(struct lwp *l, mcontext_t *mcp, unsigned int *flags)
 }
 
 int
+cpu_setmcontext(struct lwp *l, const mcontext_t *mcp, unsigned int flags)
+{
+	/* TODO(stub) */ __asm volatile("break");
+	return 0;
+}
+
+int
+cpu_mcontext_validate(struct lwp *l, const mcontext_t *mcp)
+{
+	/* TODO(stub) */
+	return 0;
+}
+
+void
+sendsig_siginfo(const ksiginfo_t *ksi, const sigset_t *mask)
+{
+	/* TODO(stub) */ __asm volatile("break");
+}
+
+int
 process_read_regs(struct lwp *l, struct reg *regs)
+{
+	/* TODO(stub) */ __asm volatile("break");
+	return 0;
+}
+
+int
+process_write_regs(struct lwp *l, const struct reg *regs)
+{
+	/* TODO(stub) */ __asm volatile("break");
+	return 0;
+}
+
+int
+process_set_pc(struct lwp *l, void *addr)
 {
 	/* TODO(stub) */ __asm volatile("break");
 	return 0;
@@ -381,51 +307,6 @@ sys_sysarch(struct lwp *l, const struct sys_sysarch_args *uap,
 }
 
 /*
- * copyoutstr — copy kernel string to user space.
- * TODO: implement with fault recovery.
- */
-int
-copyoutstr(const void *kaddr, void *uaddr, size_t len, size_t *done)
-{
-	/* TODO(stub) */ __asm volatile("break");
-	return EFAULT;
-}
-
-int
-cpu_setmcontext(struct lwp *l, const mcontext_t *mcp, unsigned int flags)
-{
-	/* TODO(stub) */ __asm volatile("break");
-	return 0;
-}
-
-int
-cpu_mcontext_validate(struct lwp *l, const mcontext_t *mcp)
-{
-	/* TODO(stub) */
-	return 0;
-}
-
-void
-sendsig_siginfo(const ksiginfo_t *ksi, const sigset_t *mask)
-{
-	/* TODO(stub) */ __asm volatile("break");
-}
-
-int
-process_write_regs(struct lwp *l, const struct reg *regs)
-{
-	/* TODO(stub) */ __asm volatile("break");
-	return 0;
-}
-
-int
-process_set_pc(struct lwp *l, void *addr)
-{
-	/* TODO(stub) */ __asm volatile("break");
-	return 0;
-}
-
-/*
  * kcopy — kernel-to-kernel copy with fault protection.
  */
 int
@@ -434,6 +315,17 @@ kcopy(const void *src, void *dst, size_t len)
 	/* TODO(stub): implement with pcb_onfault recovery */
 	memcpy(dst, src, len);
 	return 0;
+}
+
+/*
+ * copyoutstr — copy kernel string to user space.
+ * TODO: implement with fault recovery.
+ */
+int
+copyoutstr(const void *kaddr, void *uaddr, size_t len, size_t *done)
+{
+	/* TODO(stub) */ __asm volatile("break");
+	return EFAULT;
 }
 
 /*
@@ -492,30 +384,13 @@ _ustore_32(uint32_t *uaddr, uint32_t val)
 /*
  * mm_md_physacc — check physical memory accessibility for /dev/mem.
  * Returns 0 if accessible, error otherwise.
+ * Declared in <dev/mm.h>.
  */
+#include <dev/mm.h>
+
 int
 mm_md_physacc(paddr_t pa, vm_prot_t prot)
 {
 	/* Allow all physical access for now */
 	return 0;
-}
-
-/*
- * Compiler runtime: 32-bit multiply.
- * Penumbra has no hardware MUL — this is the libcall target.
- */
-int32_t
-__mulsi3(int32_t a, int32_t b)
-{
-	int32_t result = 0;
-	uint32_t ua = (uint32_t)a;
-	uint32_t ub = (uint32_t)b;
-
-	while (ub) {
-		if (ub & 1)
-			result += ua;
-		ua <<= 1;
-		ub >>= 1;
-	}
-	return result;
 }

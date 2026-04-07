@@ -315,25 +315,29 @@ MIPS/68k-style vector dispatch.
 - **Boot from ROM:** Programs assembled with `--org 0xFFFF0000`. `_start:` must be first label.
 - **ROM page mapping (MMU tests):** TLB_INDEX=16, TLB_VPN=0x0FFFF000, TLB_PTE=0xFFFF00B9.
 
-**NetBSD kernel boots to `main()` on the ISS.**
+**NetBSD kernel boots past UVM physmem init on the ISS.**
 - Machine headers (39 files), kernel config, MD build system,
   stub kernel sources, and assembly string functions all present.
 - `config MINIMAL` → `make depend` → `make` produces a 4 MB
   ELF kernel binary at `build/netbsd-kernel/MINIMAL/netbsd`.
 - **locore.S early boot complete:** PIC bias computation,
-  bootstrap TLB miss handler (algorithmic VA→PA mapping),
-  MMU enable, physical-to-virtual transition, BSS zero,
-  call to `penumbra_init()`.  Boots on ISS end-to-end:
-  ROM → bootloader → kernel → `penumbra_init()` → `main()`.
-- **Early console working:** 16450 UART wired to `cn_tab` in
-  `consinit()`, printf/panic output visible from first call.
-- Bootstrap TLB handler maps kernel VA linearly (VA + phys_bias)
-  and MMIO identity-mapped (uncached).  Runs until `pmap_bootstrap()`
-  installs the real handler.  Handler copied to vector page (PA 0x80),
-  pinned in slot 0.  Alternating-way replacement.
-- Current panic: `uvm_init: page size not set` — expected,
-  need to parse bootinfo memory regions and call
-  `uvm_page_physload()` before `main()`.
+  BSS zero and bootinfo copy in physical mode (before MMU),
+  bootstrap TLB miss handler with PA region table, MMU enable,
+  virtual jump.  Boots on ISS end-to-end:
+  ROM → bootloader → kernel → `penumbra_init()`.
+- **Bootstrap TLB handler:** region-table-based design.
+  Single linear mapping (`PA = VA + phys_bias`) with per-region
+  cacheability (cached for RAM, uncached for MMIO).
+  locore pre-populates kernel image entry; `startup.c` adds
+  RAM and MMIO regions from bootinfo.  Supports arbitrary
+  RAM/MMIO physical addresses (no identity-map assumptions).
+  Region table at vector page PA 0x200, handler at PA 0x80.
+- **Early console working:** 16450 UART, address from bootinfo
+  (`BTINFO_CONSOLE`), VA computed via `BOOT_PA_TO_VA()`.
+- **UVM init progress:** `uvm_md_init()`, bootinfo-driven
+  `uvm_page_physload()`, `pmap_steal_memory()` for early
+  page allocation.  Gets past physmem registration.
+  Currently crashes in `uvm_km_kmem_free` accessing unmapped VA.
 - All MD functions are either implemented or break-trap stubs
   (grep for `TODO(stub)` to find stubs needing real implementations).
 - Atomics: interrupt-disable CAS (`RDSPR SR` / `DI` / load-cmp-store
@@ -351,10 +355,10 @@ MIPS/68k-style vector dispatch.
   kernel port context.
 
 ## Next Steps (in priority order)
-1. **Kernel UVM init** — parse bootinfo memory regions in
-   `penumbra_init()`, call `uvm_page_physload()` to register
-   physical RAM, set page size.  Currently panics at
-   `uvm_init: page size not set`.
+1. **Debug UVM crash** — crash in `uvm_km_kmem_free` accessing
+   unmapped VA `0xD00042D0`.  UVM physmem init works
+   (`uvm_page_physload` + `pmap_steal_memory`), crash is in
+   subsequent kmem/vmem initialization.
 2. **Kernel implementation** — fill in MD stubs (grep `TODO(stub)`):
    trap handling, pmap (software TLB with real page tables);
    get past `main()` → `cpu_startup()`

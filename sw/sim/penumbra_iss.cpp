@@ -1269,6 +1269,10 @@ int main(int argc, char** argv) {
         fprintf(stderr, "\n[Interrupted after %lu instructions, PC=0x%08X]\n",
                 (unsigned long)cpu.insn_count, cpu.pc);
     }
+    fprintf(stderr, "SR=%08X", cpu.sr);
+    for (int r = 1; r <= 14; r++)
+        fprintf(stderr, " R%d=%08x", r, cpu.r[r]);
+    fprintf(stderr, "\n");
 
     if (trace_fp) { fclose(trace_fp); fprintf(stderr, "[TRACE] done\n"); }
     restore_term();
