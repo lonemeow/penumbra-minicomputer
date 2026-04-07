@@ -38,6 +38,7 @@ struct cpu_info {
 
 extern struct cpu_info cpu_info_store;
 #define	curcpu()		(&cpu_info_store)
+#define	curlwp			(curcpu()->ci_curlwp)
 #define	cpu_number()		0		/* uniprocessor */
 
 #define cpu_proc_fork(p1, p2)	/* nothing */

@@ -144,8 +144,8 @@ Headers fall into three categories:
 
 | File | Purpose |
 |------|---------|
-| `locore.S` | Entry point, BSS zero (phys mode), bootinfo copy, kernel page table build (L1+L2 in BSS), real TLB miss handler, per-vector trap entry stubs + common trapframe save/restore, MMU enable, TLB invalidation, scratch window, setjmp/longjmp |
-| `startup.c` | Early boot: `penumbra_init()`, bootinfo parsing, early UART console via scratch window, `consinit()`, `penumbra_physmem_init()`, UART remap via `pmap_map_device()` |
+| `locore.S` | Entry point, BSS zero (phys mode), bootinfo copy, kernel page table build (L1+L2 in BSS), real TLB miss handler, per-vector trap entry stubs + common trapframe save/restore (with double-fault detection), MMU enable, TLB invalidation, scratch window, cpu_switchto, lwp_trampoline, setjmp/longjmp |
+| `startup.c` | Early boot: `penumbra_init()` (phase 1 on boot stack — returns new SP), `penumbra_main()` (phase 2 on lwp0 stack — calls main()), bootinfo parsing, early UART console via scratch window, `consinit()`, `penumbra_physmem_init()`, UART remap via `pmap_map_device()` |
 | `machdep.c` | Kernel runtime: `cpu_startup()`, `cpu_reboot()`, `cpu_lwp_fork()` (LWP context setup), `lwp_trampoline` (extern), remaining LWP/process/signal stubs, `kcopy`, ufetch/ustore |
 | `mulsi3.c` | Compiler runtime: `__mulsi3` (software 32-bit multiply for LLVM libcalls) |
 | `autoconf.c` | `cpu_configure()`, `cpu_rootconf()` |
@@ -162,7 +162,8 @@ Headers fall into three categories:
 - [x] Kernel config — `config MINIMAL` generates Makefile successfully
 - [x] `make depend` — passes cleanly
 - [x] `make` — **all .o files compile at `-O0`**
-- [x] **Kernel links** — 4 MB ELF binary at `build/netbsd-kernel/MINIMAL/netbsd`
+- [x] **Kernel links** — ~5 MB ELF binary at `build/netbsd-kernel/MINIMAL/netbsd`
+  (DIAGNOSTIC enabled for development)
 - [x] Atomics — interrupt-disable CAS (`RDSPR SR`/`DI`/op/`WRSPR SR`),
   generic CAS-based ops, no-op membars (uniprocessor)
 - [x] libsa glue — `sdblk.c` (SD block device), `cons.c` (UART)
@@ -200,33 +201,45 @@ Headers fall into three categories:
   BSS pre-allocation for early boot).
 - [x] **Early console** — 16450 UART, initially pinned via
   scratch window (slot 3), permanently remapped via
-  `pmap_map_device()` after `pmap_bootstrap()`.
+  `pmap_map_device()` after `pmap_bootstrap()` but before
+  `uvm_pageboot_alloc()` — `pmap_map_device` allocates from
+  pmap's local `virtual_avail`, which becomes stale once UVM
+  snapshots it via `pmap_virtual_space()`.
 - [x] **UVM init** — `uvm_md_init()`, bootinfo parsing,
   `uvm_page_physload()` for RAM regions (excluding kernel image),
   `pmap_steal_memory()` for early page allocation.
-  Gets past `pmap_bootstrap` and into UVM's `main()` init.
+  Full UVM init completes; boots past `main()` into
+  `cpu_startup()`, autoconf, and softint thread creation.
 - [x] `pmap.h` — `_LOCORE` guards, `PMAP_STEAL_MEMORY`,
   `PT_L1_*`/`PT_L2_*` naming, `PTE_MAKE()` macro
 - [x] **Context switching** — `cpu_switchto` (locore.S) saves/restores
   callee-saved registers via `pcb_context` (label_t).  `cpu_lwp_fork`
   sets up new LWP kernel stacks: copies parent trapframe, wires
-  `pcb_context` to resume in `lwp_trampoline` which calls `func(arg)`.
+  `pcb_context` to resume in `lwp_trampoline`.  `lwp_trampoline`
+  calls `lwp_startup(prev, newlwp)` before `func(arg)` (unlocks
+  prev LWP, clears LP_RUNNING, resets SPL — required by MI).
   `_JB_*` symbolic indices for label_t slots defined in `types.h`.
-  First kthread creation succeeds; boots past `cpu_lwp_fork` into
-  autoconf and softint thread creation.
+  `cpu_switchto` includes SP sanity check (BREAK on corrupt
+  pcb_context).  Softint threads run; boots to root device prompt.
+- [x] **curlwp** — `#define curlwp (curcpu()->ci_curlwp)` in cpu.h.
+  Ensures MI code and `cpu_switchto` share the same variable.
+  `cpu_info_store` statically initializes `ci_curlwp = &lwp0`.
+- [x] **Boot stack switch** — `penumbra_init()` returns new SP
+  (lwp0 kernel stack top, 12 KB USPACE).  locore.S does
+  `mov sp, r1; bl penumbra_main`.  ARM-style pattern.
+  The 4 KB boot stack overflows at `-O0` + DIAGNOSTIC.
 - [x] **pmap_protect / pmap_remove / pmap_unwire** —
   `pmap_protect` downgrades PTE permissions via `PTE_PROT_BITS()`
   macro (shared with `PTE_MAKE`).  `VM_PROT_NONE` delegates to
   `pmap_remove`.  `pmap_unwire` is a no-op (no SW wired bit).
-  Kernel gets past kthread stack protection into softint_thread.
 - [x] **Trap handler (Stage 1)** — per-vector entry stubs on the
   vector page, common trapframe save/restore in `_trap_common`,
   C dispatch in `trap()`.  All 9 exception vectors wired.
   Fixed vector numbering to match architecture spec
   (0=bus, 1=IRQ, 2=TLB miss, ..., 8=alignment).
   Currently all handlers panic with diagnostic info.
-  Kernel now panics with proper message on NULL deref
-  in `softint_thread` (VA=0x10, a real kernel bug to investigate).
+  Double-fault detection: if ESR.S set and EPC in pinned page
+  region (0xFFFFxxxx), BREAK to halt instead of infinite-looping.
 - [ ] Kernel port — remaining MD stubs need real implementations
   (grep for `TODO(stub)` to find them)
 - [ ] DDB — disabled, needs extensive MD hooks
@@ -234,8 +247,7 @@ Headers fall into three categories:
 ## Next Steps
 
 1. **Trap handler Stage 2** — dispatch TLB miss/prot faults
-   to `uvm_fault()` instead of panicking; handle the
-   `softint_thread` NULL deref (likely missing MD init).
+   to `uvm_fault()` instead of panicking.
 2. **Remaining MD stubs** — fill in `TODO(stub)` functions as
    the kernel reaches them.
 5. **Timer** — programmable timer for NetBSD hardclock() tick

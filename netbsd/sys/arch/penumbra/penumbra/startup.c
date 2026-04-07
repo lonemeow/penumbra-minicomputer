@@ -39,7 +39,8 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <dev/cons.h>
 
 /* Forward declarations */
-void	penumbra_init(void);
+vaddr_t	penumbra_init(void);
+void	penumbra_main(void);
 int	main(void);
 static void	penumbra_physmem_init(void);
 static void	penumbra_lwp0_init(void);
@@ -259,13 +260,18 @@ penumbra_lwp0_init(void)
 	lwp0.l_md.md_utf = tf;
 }
 
-/* ── penumbra_init: main early boot entry point ──────────────── */
+/* ── penumbra_init: early boot on boot stack ─────────────────── */
 
 /*
- * Early machine initialization.
+ * Early machine initialization (Phase 1 — runs on the boot stack).
  * Called from locore.S after BSS is zeroed and bootinfo copied.
+ *
+ * Returns the new kernel stack pointer for lwp0.  locore.S will
+ * switch SP to this value and call penumbra_main() on the new stack.
+ * The boot stack is only 4 KB and cannot survive the deep call
+ * chains of main() (especially at -O0 with DIAGNOSTIC).
  */
-void
+vaddr_t
 penumbra_init(void)
 {
 
@@ -307,19 +313,18 @@ penumbra_init(void)
 	pmap_bootstrap();
 
 	/*
-	 * Allocate lwp0's uarea.  Must happen after pmap so
-	 * uvm_pageboot_alloc can steal pages.  curlwp is already
-	 * set to &lwp0 via the cpu_info_store initializer.
-	 */
-	penumbra_lwp0_init();
-
-	/*
 	 * Map the console UART permanently via pmap.
-	 * Until now it was accessible through the scratch window
-	 * (pinned slot 3).  pmap_map_device allocates a kernel VA
-	 * and installs a proper PTE, so the TLB miss handler can
-	 * resolve UART accesses.  The scratch window is now free
-	 * for other uses (pmap_steal_memory, pmap_zero_page, etc.).
+	 *
+	 * Must happen BEFORE penumbra_lwp0_init(), because that
+	 * calls uvm_pageboot_alloc() which snapshots virtual_avail
+	 * into UVM's own variable via pmap_virtual_space().  After
+	 * that point, pmap's local virtual_avail is stale.
+	 * pmap_map_device() allocates from the local virtual_avail,
+	 * so it must run while virtual_avail is still authoritative.
+	 *
+	 * Until now the UART was accessible through the scratch
+	 * window (pinned slot 3).  pmap_map_device installs a
+	 * proper PTE, freeing the scratch window for other uses.
 	 */
 	{
 		struct btinfo_console *bc = lookup_bootinfo(BTINFO_CONSOLE);
@@ -332,6 +337,29 @@ penumbra_init(void)
 		    (unsigned)uart_pa, (unsigned)(vaddr_t)uart_base);
 	}
 
+	/*
+	 * Allocate lwp0's uarea.  Must happen after pmap so
+	 * uvm_pageboot_alloc can steal pages.  curlwp is already
+	 * set to &lwp0 via the cpu_info_store initializer.
+	 */
+	penumbra_lwp0_init();
+
+	/*
+	 * Return the new stack top: the trapframe at the top of
+	 * lwp0's uarea.  locore.S will switch SP to this address.
+	 */
+	return (vaddr_t)lwp0.l_md.md_utf;
+}
+
+/* ── penumbra_main: continuation on lwp0 kernel stack ────────── */
+
+/*
+ * Phase 2 of boot — called from locore.S after switching to
+ * lwp0's kernel stack (USPACE = 12 KB).
+ */
+void
+penumbra_main(void)
+{
 	/* Hand off to MI kernel main */
 	main();
 	/* NOTREACHED */

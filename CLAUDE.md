@@ -315,11 +315,12 @@ MIPS/68k-style vector dispatch.
 - **Boot from ROM:** Programs assembled with `--org 0xFFFF0000`. `_start:` must be first label.
 - **ROM page mapping (MMU tests):** TLB_INDEX=16, TLB_VPN=0x0FFFF000, TLB_PTE=0xFFFF00B9.
 
-**NetBSD kernel boots past UVM init into main() on the ISS.**
+**NetBSD kernel boots to root device prompt on the ISS.**
 - Machine headers (39 files), kernel config, MD build system,
   stub kernel sources, and assembly string functions all present.
-- `config MINIMAL` → `make depend` → `make` produces a 4 MB
-  ELF kernel binary at `build/netbsd-kernel/MINIMAL/netbsd`.
+- `config MINIMAL` → `make depend` → `make` produces a ~5 MB
+  ELF kernel binary at `build/netbsd-kernel/MINIMAL/netbsd`
+  (DIAGNOSTIC enabled for development).
 - **locore.S early boot:** PIC bias computation, BSS zero and
   bootinfo copy in physical mode.  Builds kernel page table
   (L1 + L2 pre-allocated in BSS), installs real page-table-walking
@@ -350,17 +351,29 @@ MIPS/68k-style vector dispatch.
   callee-saved registers via `pcb_context` (label_t).
   `cpu_lwp_fork` sets up new LWP kernel stacks with trapframe +
   pcb_context wired to resume in `lwp_trampoline`.
+  `lwp_trampoline` calls `lwp_startup(prev, newlwp)` before
+  `func(arg)` to finish the context switch (unlock prev LWP,
+  clear LP_RUNNING, reset SPL).
   `_JB_*` symbolic indices for label_t slots (types.h).
-  Kernel creates first kthread successfully.
+  `cpu_switchto` includes SP sanity check (BREAK on corrupt
+  pcb_context) for development safety.
   `pmap_protect`/`pmap_remove`/`pmap_unwire` implemented;
   `PTE_PROT_BITS()` macro shared with `PTE_MAKE`.
-  Boots into softint thread creation.
+  Softint threads run successfully; boots to root device prompt.
+- **curlwp:** Defined as `curcpu()->ci_curlwp` macro in cpu.h,
+  ensuring MI code and `cpu_switchto` share the same variable.
+  (Without this, the MI `extern struct lwp *curlwp` global
+  diverges from `ci_curlwp` updated by `cpu_switchto`.)
+- **Boot stack switch:** `penumbra_init()` runs on a 4 KB boot
+  stack and returns the new SP (lwp0 kernel stack, 12 KB).
+  locore.S switches SP before calling `penumbra_main()` → `main()`.
+  ARM-style pattern (init returns new SP to assembly).
 - **Trap handler (Stage 1):** per-vector entry stubs on the
   vector page, common trapframe save/restore, C dispatch in
   `trap()` with all 9 exception vectors.  Panics with
-  diagnostic info (PC, VA, cause).  Vector numbering fixed
-  to match architecture spec.  Currently hits NULL deref
-  in `softint_thread` (VA=0x10, needs investigation).
+  diagnostic info (PC, VA, cause).  Double-fault detection:
+  if ESR.S is set and EPC is in the pinned page region
+  (0xFFFFxxxx), BREAK to halt instead of infinite-looping.
 - All MD functions are either implemented or break-trap stubs
   (grep for `TODO(stub)` to find stubs needing real implementations).
 - Atomics: interrupt-disable CAS (`RDSPR SR` / `DI` / load-cmp-store
@@ -381,8 +394,8 @@ MIPS/68k-style vector dispatch.
 
 ## Next Steps (in priority order)
 1. **Kernel implementation** — fill in MD stubs (grep `TODO(stub)`):
-   trap handler Stage 2 (TLB faults → `uvm_fault()`), investigate
-   softint_thread NULL deref, then remaining stubs.
+   trap handler Stage 2 (TLB faults → `uvm_fault()`),
+   then remaining stubs as the kernel reaches them.
 3. **LLVM `-O2` support** — implement `analyzeBranch`/`insertBranch`/
    `removeBranch` for branch optimization passes
 4. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick

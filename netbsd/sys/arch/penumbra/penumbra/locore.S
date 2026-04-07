@@ -501,11 +501,20 @@ _start_bias:
 	 * Kernel image is mapped; MMIO is not (yet).
 	 */
 .Lvirtual_entry:
-	/* Set up virtual kernel stack */
+	/* Set up virtual boot stack (4 KB — only for early init) */
 	la	sp, _boot_stack_top
 
-	/* Call penumbra_init() — does not return */
+	/*
+	 * Phase 1: early init on boot stack.
+	 * penumbra_init() returns the new SP (lwp0 kernel stack top)
+	 * in R1.  Must switch to it before calling main(), since
+	 * the boot stack is too small for the full init call chain.
+	 */
 	bl	penumbra_init
+
+	/* Switch to lwp0's kernel stack and continue boot */
+	mov	sp, r1
+	bl	penumbra_main
 	break				/* NOTREACHED */
 
 
@@ -738,6 +747,32 @@ _trap_common:
 
 	/* R1 = cause number — stash in R4 (callee-clobberable) */
 	mov	r4, r1
+
+	/*
+	 * Double-fault detection: if the faulting context was
+	 * supervisor mode (ESR.S set) AND EPC is in the pinned
+	 * page region (0xFFFFxxxx — vector page, scratch, L2
+	 * window, L1), we faulted inside an exception handler.
+	 * The kernel cannot recover — building a trapframe would
+	 * just fault again.  BREAK to halt with full register
+	 * state for post-mortem debugging.
+	 *
+	 * Both checks are needed: a user program dereferencing
+	 * 0xFFFFxxxx triggers a legitimate TLB miss that should
+	 * be dispatched normally (and will result in SIGSEGV).
+	 */
+	rdspr	r1, esr
+	lui	r2, #0x8000		/* R2 = PSL_S = 0x80000000 */
+	and	r1, r2
+	cmp	r1, r0
+	beq	.Lnot_double_fault	/* user mode — not a double fault */
+	rdspr	r1, epc
+	lui	r2, #0xFFFF		/* R2 = 0xFFFF0000 */
+	and	r1, r2			/* R1 = EPC & 0xFFFF0000 */
+	cmp	r1, r2			/* EPC in 0xFFFFxxxx range? */
+	bne	.Lnot_double_fault
+	break				/* double fault — halt CPU */
+.Lnot_double_fault:
 
 	/* Allocate trapframe on kernel stack */
 	sub	r14, #TF_SIZE
@@ -1042,6 +1077,19 @@ cpu_switchto:
 	ldw	r13, [r11 + 28]
 	ldw	r14, [r11 + 32]
 
+	/*
+	 * Sanity check: SP must be in kernel VA space (bit 31 set).
+	 * If not, the pcb_context is corrupt — BREAK to halt with
+	 * diagnostics instead of crashing in an unrecoverable way.
+	 * Uses R1 as scratch (will be overwritten below anyway).
+	 */
+	lui	r1, #0x8000		/* R1 = 0x80000000 */
+	and	r1, r14			/* test bit 31 of new SP */
+	cmp	r1, r0
+	bne	.Lsp_restore_ok
+	break				/* bad pcb_context — halt for debug */
+.Lsp_restore_ok:
+
 	/* Return oldlwp (in R5, need it in R1) */
 	mov	r1, r5
 	ldw	r5,  [r11 + 0]			/* now safe to restore R5 */
@@ -1052,17 +1100,24 @@ cpu_switchto:
  *
  * cpu_switchto restores pcb_context which has LR = lwp_trampoline.
  * At entry (from the pcb_context set up by cpu_lwp_fork):
+ *   R1 = prev_lwp (cpu_switchto return value)
  *   R5 = func     (the LWP's startup function)
  *   R6 = arg      (argument to func)
  *   R7 = newlwp   (the LWP being started)
  *
- * Calls func(arg), which either:
+ * Must call lwp_startup(prev, newlwp) first to finish the context
+ * switch (unlock prev, clear LP_RUNNING, reset SPL).
+ * Then calls func(arg), which either:
  *   - For kernel threads: runs the thread body (never returns)
  *   - For fork children: calls md_child_return → returns to user
  */
 	.globl	lwp_trampoline
 	.type	lwp_trampoline, @function
 lwp_trampoline:
+	/* R1 = prev_lwp (already in place as first arg) */
+	mov	r2, r7			/* R2 = newlwp (second arg) */
+	bl	lwp_startup
+
 	mov	r1, r6			/* arg → R1 (first argument) */
 	jalr	r5			/* call func(arg) */
 
