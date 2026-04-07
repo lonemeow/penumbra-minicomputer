@@ -72,6 +72,14 @@ static bool pmap_initialized;
  * freshly stolen pages, new L2 tables, pmap_zero_page, etc.
  *
  * pmap_scratch_map() is in locore.S (needs WRSYS).
+ *
+ * IMPORTANT: The scratch window is a single shared resource.
+ * All code that uses pmap_scratch_map() / pmap_l2_map() must
+ * hold splhigh() to prevent interrupt handlers from re-entering
+ * pmap and clobbering the mapping.  The TLB miss handler is safe
+ * (uses a separate L2 window in pinned slot 2), but any interrupt
+ * that triggers pmap operations would corrupt the scratch mapping.
+ * Early boot code (before interrupts are possible) is exempt.
  */
 
 void *
@@ -424,9 +432,11 @@ pmap_extract(pmap_t pm, vaddr_t va, paddr_t *pap)
 	if (!(l1[l1_idx] & PTE_V))
 		return false;
 
+	int s = splhigh();
 	paddr_t l2_pa = l1[l1_idx] & PTE_PPN_MASK;
 	pt_entry_t *l2 = pmap_l2_map(l2_pa);
 	pt_entry_t pte = l2[PT_L2_INDEX(va)];
+	splx(s);
 
 	if (!(pte & PTE_V))
 		return false;
@@ -454,6 +464,8 @@ pmap_kenter_pa(vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 	pt_entry_t *l1 = kernel_pmap_store.pm_l1;
 	unsigned int l1_idx = PT_L1_INDEX(va);
 
+	int s = splhigh();
+
 	if (!(l1[l1_idx] & PTE_V))
 		pmap_alloc_l2(l1, l1_idx);
 
@@ -462,6 +474,8 @@ pmap_kenter_pa(vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 
 	l2[PT_L2_INDEX(va)] = PTE_MAKE(pa, prot, flags, PTE_G);
 	tlb_invalidate_addr(va, 0);
+
+	splx(s);
 }
 
 /*
@@ -476,6 +490,7 @@ pmap_kremove(vaddr_t va, vsize_t len)
 	pt_entry_t *l1 = kernel_pmap_store.pm_l1;
 	vaddr_t eva = va + len;
 
+	int s = splhigh();
 	for (; va < eva; va += PAGE_SIZE) {
 		unsigned int l1_idx = PT_L1_INDEX(va);
 		if (!(l1[l1_idx] & PTE_V))
@@ -490,6 +505,7 @@ pmap_kremove(vaddr_t va, vsize_t len)
 			tlb_invalidate_addr(va, 0);
 		}
 	}
+	splx(s);
 }
 
 /*
@@ -523,9 +539,10 @@ pmap_deactivate(struct lwp *l)
 void
 pmap_zero_page(paddr_t pa)
 {
-
+	int s = splhigh();
 	pmap_scratch_map(pa, PTE_KERNEL);
 	memset((void *)SCRATCH_VA, 0, PAGE_SIZE);
+	splx(s);
 }
 
 void
@@ -533,6 +550,7 @@ pmap_copy_page(paddr_t src, paddr_t dst)
 {
 	static char buf[PAGE_SIZE] __aligned(4);
 
+	int s = splhigh();
 	/* Read source via scratch window into a temp buffer */
 	pmap_scratch_map(src, PTE_KERNEL);
 	memcpy(buf, (const void *)SCRATCH_VA, PAGE_SIZE);
@@ -540,6 +558,7 @@ pmap_copy_page(paddr_t src, paddr_t dst)
 	/* Write temp buffer to destination via scratch window */
 	pmap_scratch_map(dst, PTE_KERNEL);
 	memcpy((void *)SCRATCH_VA, buf, PAGE_SIZE);
+	splx(s);
 }
 
 /*
