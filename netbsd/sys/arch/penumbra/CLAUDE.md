@@ -146,7 +146,7 @@ Headers fall into three categories:
 |------|---------|
 | `locore.S` | Entry point, BSS zero (phys mode), bootinfo copy, kernel page table build (L1+L2 in BSS), real TLB miss handler, MMU enable, TLB invalidation, scratch window, setjmp/longjmp |
 | `startup.c` | Early boot: `penumbra_init()`, bootinfo parsing, early UART console via scratch window, `consinit()`, `penumbra_physmem_init()`, UART remap via `pmap_map_device()` |
-| `machdep.c` | Kernel runtime: `cpu_startup()`, `cpu_reboot()`, LWP/process stubs, signal stubs, `kcopy`, ufetch/ustore |
+| `machdep.c` | Kernel runtime: `cpu_startup()`, `cpu_reboot()`, `cpu_lwp_fork()` (LWP context setup), `lwp_trampoline` (extern), remaining LWP/process/signal stubs, `kcopy`, ufetch/ustore |
 | `mulsi3.c` | Compiler runtime: `__mulsi3` (software 32-bit multiply for LLVM libcalls) |
 | `autoconf.c` | `cpu_configure()`, `cpu_rootconf()` |
 | `mainbus.c` | Root bus device driver |
@@ -207,17 +207,25 @@ Headers fall into three categories:
   Gets past `pmap_bootstrap` and into UVM's `main()` init.
 - [x] `pmap.h` — `_LOCORE` guards, `PMAP_STEAL_MEMORY`,
   `PT_L1_*`/`PT_L2_*` naming, `PTE_MAKE()` macro
-- [ ] Kernel port — MD stubs need real implementations
+- [x] **Context switching** — `cpu_switchto` (locore.S) saves/restores
+  callee-saved registers via `pcb_context` (label_t).  `cpu_lwp_fork`
+  sets up new LWP kernel stacks: copies parent trapframe, wires
+  `pcb_context` to resume in `lwp_trampoline` which calls `func(arg)`.
+  `_JB_*` symbolic indices for label_t slots defined in `types.h`.
+  First kthread creation succeeds; boots past `cpu_lwp_fork` into
+  autoconf.  Currently panics at `pmap_protect` (not yet implemented).
+- [ ] Kernel port — remaining MD stubs need real implementations
   (grep for `TODO(stub)` to find them)
 - [ ] DDB — disabled, needs extensive MD hooks
 
 ## Next Steps
 
-1. **`cpu_lwp_fork`** — implement LWP context creation (next
-   blocker: kernel tries to create first process).
-2. **Page fault handler** — dispatch TLB miss/protection faults
+1. **`pmap_protect`** — next blocker; kernel calls it during
+   kthread stack setup (making pages read-only).
+2. **`pmap_remove`** — needed soon after pmap_protect.
+3. **Page fault handler** — dispatch TLB miss/protection faults
    to C code for demand paging (currently just BREAKs).
-3. **Kernel implementation** — fill in remaining MD stubs
-   (`TODO(stub)`): trap handling, context switching, etc.
-4. **Timer** — programmable timer for NetBSD hardclock() tick
-5. **Interrupt controller** — multiple devices with priority
+4. **Remaining MD stubs** — fill in `TODO(stub)` functions as
+   the kernel reaches them.
+5. **Timer** — programmable timer for NetBSD hardclock() tick
+6. **Interrupt controller** — multiple devices with priority

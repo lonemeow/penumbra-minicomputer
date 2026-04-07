@@ -760,13 +760,91 @@ pmap_scratch_map:
 
 /*
  * cpu_switchto(oldlwp, newlwp, returning)
- * Switch context from oldlwp to newlwp.
- * Stub — will be implemented for scheduler support.
+ *
+ * Switch context from oldlwp (R1) to newlwp (R2).
+ * Returns oldlwp in R1 (so the resumed LWP knows who it replaced).
+ *
+ * If oldlwp == NULL (first switch after boot), skip saving.
+ *
+ * Context is saved/restored via pcb_context (label_t):
+ *   [0]=R5 [4]=R6 [8]=R7 [12]=R8 [16]=R9 [20]=R10
+ *   [24]=R12(TP) [28]=R13(LR) [32]=R14(SP)
  */
 	.globl	cpu_switchto
 	.type	cpu_switchto, @function
 cpu_switchto:
-// TODO: Not implemented
+	/* Save old context if oldlwp != NULL */
+	cmp	r1, r0
+	beq	.Lswitch_restore
+
+	/*
+	 * R1 = oldlwp; save into oldlwp->l_addr->pcb_context.
+	 * pcb_context is at offset 0 in struct pcb (first field),
+	 * and pcb is at l_addr (= L_PCB offset in struct lwp).
+	 * label_t.val[]: [0]=R5 [1]=R6 ... [7]=R13(LR) [8]=R14(SP)
+	 */
+	ldw	r11, [r1 + L_PCB]		/* R11 = old PCB = &pcb_context */
+
+	stw	r5,  [r11 + 0]
+	stw	r6,  [r11 + 4]
+	stw	r7,  [r11 + 8]
+	stw	r8,  [r11 + 12]
+	stw	r9,  [r11 + 16]
+	stw	r10, [r11 + 20]
+	stw	r12, [r11 + 24]
+	stw	r13, [r11 + 28]
+	stw	r14, [r11 + 32]
+
+.Lswitch_restore:
+	/* R2 = newlwp; stash in callee-saved regs for the restore */
+	mov	r5, r1			/* R5 = oldlwp (return value) */
+	mov	r6, r2			/* R6 = newlwp */
+
+	/* Update curlwp: cpu_info_store.ci_curlwp = newlwp */
+	la	r11, cpu_info_store
+	stw	r6, [r11 + CI_CURLWP]
+
+	/* Restore new context from newlwp->l_addr->pcb_context */
+	ldw	r11, [r6 + L_PCB]		/* R11 = new PCB = &pcb_context */
+
+	ldw	r6,  [r11 + 4]
+	ldw	r7,  [r11 + 8]
+	ldw	r8,  [r11 + 12]
+	ldw	r9,  [r11 + 16]
+	ldw	r10, [r11 + 20]
+	ldw	r12, [r11 + 24]
+	ldw	r13, [r11 + 28]
+	ldw	r14, [r11 + 32]
+
+	/* Return oldlwp (in R5, need it in R1) */
+	mov	r1, r5
+	ldw	r5,  [r11 + 0]			/* now safe to restore R5 */
+	ret
+
+/*
+ * lwp_trampoline — entry point for newly-forked LWPs.
+ *
+ * cpu_switchto restores pcb_context which has LR = lwp_trampoline.
+ * At entry (from the pcb_context set up by cpu_lwp_fork):
+ *   R5 = func     (the LWP's startup function)
+ *   R6 = arg      (argument to func)
+ *   R7 = newlwp   (the LWP being started)
+ *
+ * Calls func(arg), which either:
+ *   - For kernel threads: runs the thread body (never returns)
+ *   - For fork children: calls md_child_return → returns to user
+ */
+	.globl	lwp_trampoline
+	.type	lwp_trampoline, @function
+lwp_trampoline:
+	mov	r1, r6			/* arg → R1 (first argument) */
+	jalr	r5			/* call func(arg) */
+
+	/* If func returns, we'd return to userspace via the
+	 * trapframe (trap_return).  For now, kernel threads
+	 * never return from func, so trap here as a safety net.
+	 * TODO: implement trap_return for fork/exec path.
+	 */
 	break
 
 /*

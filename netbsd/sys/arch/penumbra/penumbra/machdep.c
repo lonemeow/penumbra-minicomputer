@@ -184,16 +184,77 @@ cpu_lwp_setprivate(struct lwp *l, void *v)
 }
 
 /*
- * Process/LWP management — stubs.
- * TODO: implement for real once context switching works.
+ * Assembly trampoline for new LWPs (in locore.S).
+ * cpu_switchto restores pcb_context with LR = lwp_trampoline,
+ * which calls func(arg) then returns to userspace.
+ */
+extern void lwp_trampoline(void);
+
+/*
+ * cpu_lwp_fork — set up a new LWP so cpu_switchto can resume it.
+ *
+ * Creates the child's kernel stack layout:
+ *
+ *   uarea base (+0)       → struct pcb (includes pcb_context)
+ *                           kernel stack space (grows up)
+ *   uarea + USPACE - TF   → struct trapframe (copy of parent's)
+ *   uarea + USPACE
+ *
+ * pcb_context is set so that when cpu_switchto does its longjmp-style
+ * restore, the child resumes in lwp_trampoline which calls func(arg).
+ *
+ * label_t layout: [0]=R5 [4]=R6 [8]=R7 [12]=R8 [16]=R9 [20]=R10
+ *                 [24]=R12(TP) [28]=R13(LR) [32]=R14(SP)
  */
 void
 cpu_lwp_fork(struct lwp *l1, struct lwp *l2, void *stack, size_t stacksize,
     void (*func)(void *), void *arg)
 {
-	/* TODO(stub) */ __asm volatile("break");
+	struct pcb *pcb1 = lwp_getpcb(l1);
+	struct pcb *pcb2 = lwp_getpcb(l2);
+
+	/* Start with a copy of the parent's PCB (onfault, etc.) */
+	*pcb2 = *pcb1;
+	pcb2->pcb_onfault = NULL;
+
+	/* Child's uarea base (set by the MI layer before calling us) */
+	vaddr_t uarea = uvm_lwp_getuarea(l2);
+
+	/* Place trapframe at the top of the uarea (same layout as lwp0) */
+	struct trapframe *tf2 = (struct trapframe *)(uarea + USPACE) - 1;
+
+	/* Copy parent's trapframe to child */
+	struct trapframe *tf1 = l1->l_md.md_utf;
+	*tf2 = *tf1;
+
+	/* Child returns 0 from fork (R1 = return value) */
+	tf2->tf_regs[TF_R1] = 0;
+
+	/* If caller provided a user stack, update the child's SP */
+	if (stack != NULL)
+		tf2->tf_regs[TF_R14] = (uint32_t)((char *)stack + stacksize);
+
+	l2->l_md.md_utf = tf2;
+	l2->l_md.md_astpending = 0;
+
+	/*
+	 * Set up pcb_context so cpu_switchto resumes into lwp_trampoline.
+	 * lwp_trampoline expects: R5=func, R6=arg, R7=newlwp.
+	 */
+	pcb2->pcb_context.val[_JB_R5]  = (register_t)func;
+	pcb2->pcb_context.val[_JB_R6]  = (register_t)arg;
+	pcb2->pcb_context.val[_JB_R7]  = (register_t)l2;
+	pcb2->pcb_context.val[_JB_R13] = (register_t)lwp_trampoline;
+	pcb2->pcb_context.val[_JB_R14] = (register_t)tf2;
 }
 
+/*
+ * startlwp — trampoline for new user LWPs (fork/clone).
+ *
+ * Called from lwp_trampoline as func(arg) where arg is a ucontext_t*.
+ * Applies the saved user context and returns to userspace.
+ * Not needed until we support fork/exec of user processes.
+ */
 void
 startlwp(void *arg)
 {

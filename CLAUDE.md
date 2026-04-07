@@ -345,8 +345,14 @@ MIPS/68k-style vector dispatch.
   `uvm_page_physload()`, `pmap_steal_memory()`.  Full UVM init
   completes: pool allocator, vmem, kmem, radix trees all
   operational.  Boots past `main()` into `cpu_startup()` and
-  sysctl setup.  Currently hits `cpu_lwp_fork` TODO(stub) when
-  the kernel tries to create the first process.
+  sysctl setup.
+- **Context switching:** `cpu_switchto` (locore.S) saves/restores
+  callee-saved registers via `pcb_context` (label_t).
+  `cpu_lwp_fork` sets up new LWP kernel stacks with trapframe +
+  pcb_context wired to resume in `lwp_trampoline`.
+  `_JB_*` symbolic indices for label_t slots (types.h).
+  Kernel creates first kthread successfully.
+  Currently hits `pmap_protect` panic (not yet implemented).
 - All MD functions are either implemented or break-trap stubs
   (grep for `TODO(stub)` to find stubs needing real implementations).
 - Atomics: interrupt-disable CAS (`RDSPR SR` / `DI` / load-cmp-store
@@ -367,8 +373,8 @@ MIPS/68k-style vector dispatch.
 
 ## Next Steps (in priority order)
 1. **Kernel implementation** — fill in MD stubs (grep `TODO(stub)`):
-   trap handling, context switching (`cpu_lwp_fork` is next blocker);
-   get past first process creation.
+   `pmap_protect` is next blocker; then pmap_remove, page fault
+   handler, remaining process management stubs.
 3. **LLVM `-O2` support** — implement `analyzeBranch`/`insertBranch`/
    `removeBranch` for branch optimization passes
 4. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick

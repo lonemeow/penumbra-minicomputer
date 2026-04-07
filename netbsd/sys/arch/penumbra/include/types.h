@@ -37,6 +37,17 @@ typedef struct label_t {
 	register_t val[9];	/* callee-saved R5-R10, R12(TP), R13(LR), R14(SP) */
 } label_t;
 
+/* Indices into label_t.val[] — match setjmp/longjmp/cpu_switchto order */
+#define	_JB_R5		0
+#define	_JB_R6		1
+#define	_JB_R7		2
+#define	_JB_R8		3
+#define	_JB_R9		4
+#define	_JB_R10		5
+#define	_JB_R12		6	/* TP */
+#define	_JB_R13		7	/* LR */
+#define	_JB_R14		8	/* SP */
+
 #endif /* _KERNEL || _KMEMUSER || _KERNTYPES || _STANDALONE */
 
 #define __SIMPLELOCK_LOCKED	1

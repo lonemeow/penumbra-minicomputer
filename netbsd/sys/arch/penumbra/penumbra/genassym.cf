@@ -40,6 +40,7 @@ define	PSL_I			PSL_I
 # LWP fields
 define	L_PCB			offsetof(struct lwp, l_addr)
 define	L_CPU			offsetof(struct lwp, l_cpu)
+define	L_MD_UTF		offsetof(struct lwp, l_md.md_utf)
 
 # cpu_info fields
 define	CI_CURLWP		offsetof(struct cpu_info, ci_curlwp)
