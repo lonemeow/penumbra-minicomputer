@@ -44,7 +44,8 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   // instructions but using them requires SR flag management that GlobalISel
   // doesn't handle well at -O0. A future peephole pass can fuse
   // ADD+compare+ADC chains into ADD+ADC.
-  getActionDefinitionsBuilder({G_UADDO, G_USUBO, G_UADDE, G_USUBE})
+  getActionDefinitionsBuilder({G_UADDO, G_USUBO, G_UADDE, G_USUBE,
+                               G_SADDO, G_SSUBO, G_SADDE, G_SSUBE})
       .lowerFor({{s32, s1}})
       .minScalar(0, s32)
       .narrowScalarIf(typeIs(0, s64), changeTo(0, s32));
@@ -217,13 +218,25 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   getActionDefinitionsBuilder(G_STACKSAVE).legalFor({p0});
   getActionDefinitionsBuilder(G_STACKRESTORE).legalFor({p0});
 
+  // FP rounding mode: no FPU, always "round to nearest" (1).
+  // Custom-lower to a constant.
+  getActionDefinitionsBuilder(G_GET_ROUNDING).customFor({s32});
+
   // Prefetch: no cache hints on Penumbra, just discard.
   getActionDefinitionsBuilder(G_PREFETCH).custom();
 
   // Floating-point operations: Penumbra has no FPU, everything goes to
   // libcalls (__addsf3, __fixunsdfsi, __floatsidf, etc.).
+  // G_FNEG/G_FABS/G_FCOPYSIGN/G_IS_FPCLASS: pure bit manipulation
+  // (flip/clear/copy sign bit, exponent/mantissa inspection).
+  // No libcall exists — lower to integer ops on the bit pattern.
+  getActionDefinitionsBuilder({G_FNEG, G_FABS, G_FCOPYSIGN})
+      .lowerFor({s32, s64});
+  getActionDefinitionsBuilder(G_IS_FPCLASS)
+      .lowerFor({{s1, s32}, {s1, s64}});
+
   getActionDefinitionsBuilder({G_FADD, G_FSUB, G_FMUL, G_FDIV, G_FREM,
-                               G_FNEG, G_FABS, G_FSQRT,
+                               G_FSQRT,
                                G_FMINNUM, G_FMAXNUM,
                                G_FMINIMUM, G_FMAXIMUM,
                                G_FMA, G_FMAD,
@@ -231,8 +244,7 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
                                G_INTRINSIC_ROUND, G_INTRINSIC_ROUNDEVEN,
                                G_INTRINSIC_TRUNC,
                                G_FLOG, G_FLOG2, G_FLOG10,
-                               G_FEXP, G_FEXP2, G_FPOW,
-                               G_FCOPYSIGN})
+                               G_FEXP, G_FEXP2, G_FPOW})
       .libcallFor({s32, s64});
 
   getActionDefinitionsBuilder({G_FPTOUI, G_FPTOSI})
@@ -381,6 +393,14 @@ bool PenumbraLegalizerInfo::legalizeCustom(
     // No cache hints on Penumbra — just discard the prefetch.
     MI.eraseFromParent();
     return true;
+
+  case TargetOpcode::G_GET_ROUNDING: {
+    // No FPU — always round to nearest (1).
+    Register Dst = MI.getOperand(0).getReg();
+    MIRBuilder.buildConstant(Dst, 1);
+    MI.eraseFromParent();
+    return true;
+  }
 
   case TargetOpcode::G_VAARG: {
     // Custom va_arg: load value from va_list pointer, advance by size.

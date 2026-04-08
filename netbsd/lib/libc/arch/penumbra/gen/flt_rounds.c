@@ -13,6 +13,8 @@
 #error "Hardware FPU enabled but flt_rounds.c is still the soft-float stub — read FPCSR instead"
 #endif
 
+int __flt_rounds(void);
+
 int
 __flt_rounds(void)
 {
