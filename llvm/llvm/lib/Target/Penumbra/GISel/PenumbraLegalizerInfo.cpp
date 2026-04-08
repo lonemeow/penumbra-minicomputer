@@ -190,7 +190,9 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
                                G_CTLZ, G_CTLZ_ZERO_UNDEF,
                                G_CTPOP})
       .lowerFor({{s32, s32}})
-      .clampScalar(0, s32, s32);
+      .narrowScalarIf(typeIs(1, s64), changeTo(1, s32))
+      .clampScalar(0, s32, s32)
+      .clampScalar(1, s32, s32);
 
   // G_FREEZE: converts potentially-poison values to well-defined ones.
   // At -O1+ the optimizer inserts these around division and other ops.
@@ -215,6 +217,57 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
 
   // Prefetch: no cache hints on Penumbra, just discard.
   getActionDefinitionsBuilder(G_PREFETCH).custom();
+
+  // Floating-point operations: Penumbra has no FPU, everything goes to
+  // libcalls (__addsf3, __fixunsdfsi, __floatsidf, etc.).
+  getActionDefinitionsBuilder({G_FADD, G_FSUB, G_FMUL, G_FDIV, G_FREM,
+                               G_FNEG, G_FABS, G_FSQRT,
+                               G_FMINNUM, G_FMAXNUM,
+                               G_FMINIMUM, G_FMAXIMUM,
+                               G_FMA, G_FMAD,
+                               G_FCEIL, G_FFLOOR, G_FRINT, G_FNEARBYINT,
+                               G_INTRINSIC_ROUND, G_INTRINSIC_ROUNDEVEN,
+                               G_INTRINSIC_TRUNC,
+                               G_FLOG, G_FLOG2, G_FLOG10,
+                               G_FEXP, G_FEXP2, G_FPOW,
+                               G_FCOPYSIGN})
+      .libcallFor({s32, s64});
+
+  getActionDefinitionsBuilder({G_FPTOUI, G_FPTOSI})
+      .libcallFor({{s32, s32}, {s32, s64}, {s64, s32}, {s64, s64}});
+
+  getActionDefinitionsBuilder({G_UITOFP, G_SITOFP})
+      .libcallFor({{s32, s32}, {s64, s32}, {s32, s64}, {s64, s64}});
+
+  getActionDefinitionsBuilder(G_FPEXT)
+      .libcallFor({{s64, s32}});
+
+  getActionDefinitionsBuilder(G_FPTRUNC)
+      .libcallFor({{s32, s64}});
+
+  getActionDefinitionsBuilder(G_FCMP)
+      .libcallFor({{s1, s32}, {s1, s64}});
+
+  getActionDefinitionsBuilder(G_FCONSTANT)
+      .customFor({s32, s64});
+
+  // Atomic operations: all handled via __atomic_* libcalls.
+  // Clang emits libcalls directly (MaxAtomicInlineWidth = 0), so no
+  // G_ATOMICRMW / G_ATOMIC_CMPXCHG should reach the legalizer.
+  // If they somehow do (e.g. from IR), fall back to libcall.
+  getActionDefinitionsBuilder({G_ATOMICRMW_XCHG, G_ATOMICRMW_ADD,
+                               G_ATOMICRMW_SUB, G_ATOMICRMW_AND,
+                               G_ATOMICRMW_NAND, G_ATOMICRMW_OR,
+                               G_ATOMICRMW_XOR, G_ATOMICRMW_MAX,
+                               G_ATOMICRMW_MIN, G_ATOMICRMW_UMAX,
+                               G_ATOMICRMW_UMIN})
+      .libcallFor({{s32, p0}});
+
+  getActionDefinitionsBuilder(G_ATOMIC_CMPXCHG)
+      .libcallFor({{s32, p0}});
+
+  getActionDefinitionsBuilder(G_ATOMIC_CMPXCHG_WITH_SUCCESS)
+      .lower();
 
   // Memory operations: lower to memcpy/memmove/memset libcalls.
   getActionDefinitionsBuilder({G_MEMCPY, G_MEMMOVE, G_MEMSET}).libcall();
@@ -356,6 +409,27 @@ bool PenumbraLegalizerInfo::legalizeCustom(
         *MIRBuilder.getMF().getMachineMemOperand(
             MachinePointerInfo(), MachineMemOperand::MOStore, PtrTy, Align(4)));
 
+    MI.eraseFromParent();
+    return true;
+  }
+
+  case TargetOpcode::G_FCONSTANT: {
+    // Materialize FP constant as an integer bit pattern.
+    Register Dst = MI.getOperand(0).getReg();
+    LLT Ty = MRI.getType(Dst);
+    const ConstantFP *CFP = MI.getOperand(1).getFPImm();
+    APInt IntVal = CFP->getValueAPF().bitcastToAPInt();
+
+    if (Ty.getSizeInBits() == 32) {
+      MIRBuilder.buildConstant(Dst, IntVal.getZExtValue());
+    } else {
+      // s64: split into two s32 halves via merge
+      auto Lo = MIRBuilder.buildConstant(LLT::scalar(32),
+                                         IntVal.getLoBits(32).getZExtValue());
+      auto Hi = MIRBuilder.buildConstant(LLT::scalar(32),
+                                         IntVal.getHiBits(32).getZExtValue());
+      MIRBuilder.buildMergeLikeInstr(Dst, {Lo, Hi});
+    }
     MI.eraseFromParent();
     return true;
   }

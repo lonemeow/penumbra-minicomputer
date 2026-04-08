@@ -22,6 +22,11 @@ public:
       : TargetInfo(Triple) {
     resetDataLayout();
     RegParmMax = 4; // R1-R4 used for argument passing
+    // All atomic operations go through __atomic_* libcalls.
+    // The library implementation handles synchronization
+    // (interrupt-disable CAS now, LL/SC or RAS in future).
+    MaxAtomicPromoteWidth = 32;
+    MaxAtomicInlineWidth = 0;
   }
 
   void getTargetDefines(const LangOptions &Opts,

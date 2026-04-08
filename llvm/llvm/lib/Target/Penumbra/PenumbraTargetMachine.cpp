@@ -10,6 +10,7 @@
 #include "llvm/CodeGen/GlobalISel/InstructionSelect.h"
 #include "llvm/CodeGen/GlobalISel/Legalizer.h"
 #include "llvm/CodeGen/GlobalISel/RegBankSelect.h"
+#include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/InitializePasses.h"
@@ -54,6 +55,12 @@ class PenumbraPassConfig : public TargetPassConfig {
 public:
   PenumbraPassConfig(PenumbraTargetMachine &TM, PassManagerBase &PM)
       : TargetPassConfig(TM, PM) {}
+
+  // Expand atomic operations to __atomic_* libcalls before GlobalISel.
+  void addIRPasses() override {
+    addPass(createAtomicExpandLegacyPass());
+    TargetPassConfig::addIRPasses();
+  }
 
   // GlobalISel pipeline — four mandatory passes in order.
   bool addIRTranslator() override {

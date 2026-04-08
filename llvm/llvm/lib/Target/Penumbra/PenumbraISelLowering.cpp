@@ -25,6 +25,11 @@ PenumbraISelLowering::PenumbraISelLowering(const TargetMachine &TM,
     : TargetLowering(TM, STI) {
   addRegisterClass(MVT::i32, &Penumbra::GPR_AllocatableRegClass);
 
+  // No hardware atomics — all atomic operations expand to __atomic_* libcalls
+  // via AtomicExpandPass.  The library handles synchronization (interrupt-
+  // disable CAS now, RAS or LL/SC in future).
+  setMaxAtomicSizeInBitsSupported(0);
+
   // No multiply/divide hardware — expand to libcalls
   setOperationAction(ISD::MUL,        MVT::i32, Expand);
   setOperationAction(ISD::MULHS,      MVT::i32, Expand);
