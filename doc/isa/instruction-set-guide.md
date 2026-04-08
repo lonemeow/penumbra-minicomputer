@@ -315,7 +315,7 @@ entry is a **32-bit handler address** (MIPS/68k-style, not an instruction like A
 | Vector | Address | Source | Status |
 |--------|---------|--------|--------|
 | 0 | 0x00 | Bus fault (no device) | Implemented |
-| 1 | 0x04 | External IRQ | Implemented |
+| 1 | 0x04 | Timer interrupt | Implemented |
 | 2 | 0x08 | TLB miss | Implemented |
 | 3 | 0x0C | TLB protection fault | Implemented |
 | 4 | 0x10 | Privilege violation | Implemented |
@@ -323,7 +323,8 @@ entry is a **32-bit handler address** (MIPS/68k-style, not an instruction like A
 | 6 | 0x18 | BREAK (debug) | Implemented |
 | 7 | 0x1C | Illegal instruction | Implemented |
 | 8 | 0x20 | Alignment fault | Implemented |
-| 9--15 | 0x24--0x3C | Reserved (NMI, etc.) | -- |
+| 9 | 0x24 | External device IRQ | Implemented |
+| 10--15 | 0x28--0x3C | Reserved (NMI, etc.) | -- |
 
 On exception entry, the hardware:
 1. Saves PC and SR to exception registers (EPC, ESR)

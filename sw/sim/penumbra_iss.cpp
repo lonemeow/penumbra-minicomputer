@@ -160,11 +160,13 @@ static constexpr uint32_t SR_S = 1u << 31;
 static constexpr uint32_t SR_FLAGS = SR_N|SR_Z|SR_C|SR_V;
 
 // Exception vectors
-enum { VEC_BUS_FAULT=0, VEC_IRQ=1, VEC_TLB_MISS=2, VEC_TLB_PROT=3,
-       VEC_PRIV=4, VEC_SYSCALL=5, VEC_BREAK=6, VEC_ILLEGAL=7, VEC_ALIGN=8 };
+enum { VEC_BUS_FAULT=0, VEC_TIMER=1, VEC_TLB_MISS=2, VEC_TLB_PROT=3,
+       VEC_PRIV=4, VEC_SYSCALL=5, VEC_BREAK=6, VEC_ILLEGAL=7, VEC_ALIGN=8,
+       VEC_EXT_IRQ=9 };
 
 // Sysreg device IDs
-enum { SYSDEV_MMU=0, SYSDEV_SYS=1, SYSDEV_DCACHE=2, SYSDEV_ICACHE=3, SYSDEV_BUS=4 };
+enum { SYSDEV_MMU=0, SYSDEV_SYS=1, SYSDEV_DCACHE=2, SYSDEV_ICACHE=3, SYSDEV_BUS=4,
+       SYSDEV_TIMER=7 };
 
 // MMU sysreg addresses
 enum { MMU_CR=0, MMU_FADDR=1, MMU_FSTAT=2, MMU_TLB_VPN=3, MMU_TLB_PTE=4, MMU_TLB_IDX=5 };
@@ -256,6 +258,88 @@ static struct {
 } spi;
 
 static SdCardSim* sd_card = nullptr;
+
+// --- Timer (sysreg device 7) ---
+// Simulates a 16-bit countdown timer ticking at TICK_FREQ_HZ.
+// In the ISS, one "tick" occurs every TIMER_PRESCALE instructions
+// (approximating the cycle-based prescaler in RTL).
+// With a 25 MHz assumed CPU clock and 1 MHz timer, that's ÷25.
+// Since ISS instructions average ~1 cycle, prescale=25 is reasonable.
+static constexpr int      TIMER_PRESCALE  = 25;
+static constexpr uint32_t TIMER_FREQ_HZ   = 1000000;
+
+static struct {
+    // Sysreg registers
+    uint16_t count;
+    uint16_t reload;
+    bool     tick_en;
+    bool     irq_en;
+    bool     autoload;
+    bool     udf;          // Underflow flag
+
+    // Internal prescaler
+    int      prescale_cnt;
+
+    // Timer sysreg register indices
+    enum { TM_FREQ=0, TM_CR=1, TM_COUNT=2, TM_RELOAD=3, TM_STATUS=4 };
+
+    void reset() {
+        count = 0; reload = 0;
+        tick_en = false; irq_en = false; autoload = false;
+        udf = false; prescale_cnt = 0;
+    }
+
+    bool irq() const { return udf && irq_en; }
+
+    // Called once per ISS instruction
+    void step() {
+        if (!tick_en) return;
+        if (++prescale_cnt < TIMER_PRESCALE) return;
+        prescale_cnt = 0;
+
+        // One timer tick
+        if (count == 0) {
+            // Underflow
+            udf = true;
+            if (autoload)
+                count = reload;
+            else
+                tick_en = false;
+        } else {
+            count--;
+        }
+    }
+
+    uint32_t read_reg(int reg) const {
+        switch (reg) {
+            case TM_FREQ:   return TIMER_FREQ_HZ;
+            case TM_CR:     return (autoload ? 4u : 0) | (irq_en ? 2u : 0) | (tick_en ? 1u : 0);
+            case TM_COUNT:  return count;
+            case TM_RELOAD: return reload;
+            case TM_STATUS: return udf ? 1u : 0u;
+            default:         return 0;
+        }
+    }
+
+    void write_reg(int reg, uint32_t val) {
+        switch (reg) {
+            case TM_CR:
+                tick_en  = val & 1;
+                irq_en   = (val >> 1) & 1;
+                autoload = (val >> 2) & 1;
+                break;
+            case TM_COUNT:
+                count = (uint16_t)val;
+                break;
+            case TM_RELOAD:
+                reload = (uint16_t)val;
+                break;
+            case TM_STATUS:
+                if (val & 1) udf = false;  // Write-1-to-clear
+                break;
+        }
+    }
+} timer;
 
 // --- Bus controller (sysreg device 4) ---
 static struct {
@@ -666,6 +750,7 @@ static uint32_t sysreg_read(int dev, int reg) {
         if (reg == 0) return (0u << 18) | (4 << 12) | (4 << 6) | 4; // fake geometry
         return 0;
     case SYSDEV_BUS: return (reg == 0) ? busctl.reg : 0;
+    case SYSDEV_TIMER: return timer.read_reg(reg);
     default: return 0;
     }
 }
@@ -698,6 +783,9 @@ static void sysreg_write(int dev, int reg, uint32_t val) {
             if (busctl.rst()) { acfg.reset(); spi.reset(); }
             if (!busctl.cfg_en()) acfg.cfg_seen_low = true;
         }
+        break;
+    case SYSDEV_TIMER:
+        timer.write_reg(reg, val);
         break;
     case SYSDEV_DCACHE: case SYSDEV_ICACHE:
         break; // Cache control: accept and ignore in ISS
@@ -893,10 +981,20 @@ static uint32_t insn_fetch(bool& took_exception) {
 // ═══════════════════════════════════════════════════════════════
 
 static void execute_one() {
-    // Check for pending IRQ before fetching
-    if ((cpu.sr & SR_I) && !cpu.ei_shadow && uart.irq()) {
-        exception_entry(VEC_IRQ);
-        return;
+    // Step timer (one instruction = one prescaler step)
+    timer.step();
+
+    // Check for pending interrupts before fetching.
+    // Timer has priority over external (UART) IRQ.
+    if ((cpu.sr & SR_I) && !cpu.ei_shadow) {
+        if (timer.irq()) {
+            exception_entry(VEC_TIMER);
+            return;
+        }
+        if (uart.irq()) {
+            exception_entry(VEC_EXT_IRQ);
+            return;
+        }
     }
 
     bool took_exception;
@@ -1201,6 +1299,7 @@ static void cpu_reset() {
     cpu.sr = SR_S;              // Start in supervisor mode, IRQs disabled
     memset(&uart, 0, sizeof(uart));
     spi.reset();
+    timer.reset();
     busctl.reg = 0;
     acfg.reset();
     memset(&mmu, 0, sizeof(mmu));

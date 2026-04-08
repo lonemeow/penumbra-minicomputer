@@ -75,6 +75,28 @@ module machine_sim
     logic combined_irq;
     assign combined_irq = i_irq | uart_irq;
 
+    // ── Timer tick prescaler (CPU clock → 1 MHz) ────────────
+    // Generates a toggle signal at 1 MHz from the CPU clock.
+    // The timer module synchronises and edge-detects internally.
+    localparam int PRESCALE_DIV = 25;   // 25 MHz / 25 = 1 MHz
+    logic [$clog2(PRESCALE_DIV)-1:0] prescale_cnt;
+    logic timer_tick;
+
+    always_ff @(posedge i_clk) begin
+        if (i_rst) begin
+            prescale_cnt <= '0;
+            timer_tick   <= 1'b0;
+        end else if (prescale_cnt == PRESCALE_DIV[4:0] - 5'd1) begin
+            prescale_cnt <= '0;
+            timer_tick   <= ~timer_tick;  // Toggle for edge detection
+        end else begin
+            prescale_cnt <= prescale_cnt + 1;
+        end
+    end
+
+    // ── Timer IRQ ───────────────────────────────────────────
+    logic timer_irq;
+
     // ══════════════════════════════════════════════════════════
     // CPU Core (default RESET_PC = 0xFFFF_0000)
     // ══════════════════════════════════════════════════════════
@@ -100,7 +122,8 @@ module machine_sim
         .o_sys_we       (sys_we),
         .i_sys_rdata    (sys_rdata),
 
-        // Interrupt
+        // Interrupts
+        .i_timer_irq    (timer_irq),
         .i_irq          (combined_irq),
 
         // Debug
@@ -345,14 +368,31 @@ module machine_sim
         .o_cfg_en    (busctl_cfg_en)
     );
 
+    // ── Timer (device 7) ────────────────────────────────────
+    logic [31:0] timer_rdata;
+
+    timer #(
+        .TICK_FREQ_HZ (32'd1_000_000)
+    ) u_timer (
+        .i_clk       (i_clk),
+        .i_rst       (i_rst),
+        .i_tick      (timer_tick),
+        .i_sys_reg   (sys_reg),
+        .i_sys_wdata (sys_wdata),
+        .i_sys_we    (sys_we & sys_cycle & (sys_dev == SYSDEV_TIMER)),
+        .o_sys_rdata (timer_rdata),
+        .o_irq       (timer_irq)
+    );
+
     // ── Sysreg read mux ─────────────────────────────────────
     // Routes read data from external devices back to cpu_core.
     // Device 0 (MMU) is handled inside cpu_core.
     always_comb begin
         case (sys_dev)
-            SYSDEV_SYS: sys_rdata = sysid_rdata;
-            SYSDEV_BUS: sys_rdata = busctl_rdata;
-            default:    sys_rdata = 32'b0;
+            SYSDEV_SYS:   sys_rdata = sysid_rdata;
+            SYSDEV_BUS:   sys_rdata = busctl_rdata;
+            SYSDEV_TIMER: sys_rdata = timer_rdata;
+            default:      sys_rdata = 32'b0;
         endcase
     end
 

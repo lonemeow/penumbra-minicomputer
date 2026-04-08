@@ -275,22 +275,25 @@ On `fault`, the MMU latches the faulting address and reason into its FAULT_ADDR 
 
 ## Interrupt Signals
 
+The CPU has two interrupt inputs with separate vectors:
+
 | Signal | Width | Direction | Description |
 |--------|-------|-----------|-------------|
-| `irq` | 1 | Priority Encoder → CPU | At least one unmasked interrupt pending |
-| `irq_vector[2:0]` | 3 | Priority Encoder → CPU | Highest-priority pending device number |
-| `nmi` | 1 | Direct → CPU | Non-maskable interrupt (debug, critical fault) |
-| `irq_lines[7:0]` | 8 | Peripherals → Priority Encoder | Individual device interrupt requests |
+| `timer_irq` | 1 | Timer (sysreg) → CPU | Timer underflow (VEC_TIMER=1, higher priority) |
+| `irq` | 1 | External bus → CPU | Shared wired-OR from all bus devices (VEC_EXT_IRQ=9) |
 
-Priority is fixed by wiring order to the encoder. Suggested priority (highest first):
-1. Timer (drives NetBSD hardclock scheduler)
-2. UART
-3. Wiznet Ethernet
-4. DMA complete
-5. SPI/SD
-6. (reserved)
-7. (reserved)
-8. (reserved)
+The **timer** is an internal sysreg device (device 7) with its own dedicated
+vector. It does not use the external bus interrupt line.
+
+The **external bus** carries a single `irq` wire (active-high, wired-OR).
+All external devices (UART, Ethernet, SPI, etc.) share this line. The
+interrupt handler reads the interrupt controller (future sysreg device 8) or
+polls individual device status registers to determine the source. Software
+handles priority in the handler.
+
+This design minimises bus wiring (one signal vs. 8+ lines) and avoids
+autoconfig complexity for interrupt assignment. Each external device can
+report its interrupt status via its own MMIO registers.
 
 ## Long-Latency Unit Interface
 

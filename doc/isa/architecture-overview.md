@@ -438,7 +438,7 @@ Note: Reset does not use the vector table. The CPU boots at `RESET_PC` (default 
 | Vector | Address | Source                | Status |
 |--------|---------|-----------------------|--------|
 | 0      | 0x00    | Bus fault (no device at address) | Implemented |
-| 1      | 0x04    | External IRQ          | Implemented |
+| 1      | 0x04    | Timer interrupt       | Implemented |
 | 2      | 0x08    | TLB miss              | Implemented |
 | 3      | 0x0C    | TLB protection fault  | Implemented |
 | 4      | 0x10    | Privilege violation   | Implemented |
@@ -446,39 +446,43 @@ Note: Reset does not use the vector table. The CPU boots at `RESET_PC` (default 
 | 6      | 0x18    | BREAK (debug)         | Implemented |
 | 7      | 0x1C    | Illegal instruction   | Implemented |
 | 8      | 0x20    | Alignment fault (fetch + data) | Implemented |
-| 9-15   | 0x24–0x3C | (reserved for future: NMI, etc.) | — |
+| 9      | 0x24    | External device IRQ   | Implemented |
+| 10-15  | 0x28–0x3C | (reserved for future: NMI, etc.) | — |
 
 ### How the CPU Gets the Vector Number
 
 | Source | Mechanism |
 |--------|-----------|
-| External IRQ | `irq_taken = i_irq & sr_i & !ei_shadow`, hardwired VEC_IRQ=1 |
+| Timer IRQ | `timer_irq_taken = i_timer_irq & sr_i & !ei_shadow`, VEC_TIMER=1 |
+| External IRQ | `ext_irq_taken = i_irq & sr_i & !ei_shadow & !i_timer_irq`, VEC_EXT_IRQ=9 |
 | TLB miss | `data_fault` or `fetch_fault` with `!mmu_hit && !mmu_align`, VEC_TLB_MISS=2 |
 | TLB protection | `data_fault` or `fetch_fault` with `mmu_hit`, VEC_TLB_PROT=3 |
 | Alignment | MMU checks `i_mem_size` vs `addr[1:0]`, sets `o_align`, VEC_ALIGN=8 |
-| BREAK | Detected at dispatch (`dispatch_addr == 0x4A`), VEC_BREAK=6 |
-| Priority | fault_pending (align > TLB) > illegal > priv > BREAK > SYSCALL > IRQ |
+| BREAK | Detected at dispatch (`dispatch_addr == 0x54`), VEC_BREAK=6 |
+| Priority | fault_pending (align > TLB) > illegal > priv > BREAK > SYSCALL > timer > ext IRQ |
 
-### External Interrupt Hardware
+### Interrupt Architecture
 
-External interrupts use a simple **priority encoder** (one 74x148 chip in discrete):
+The CPU has two asynchronous interrupt inputs, each with its own vector:
 
-```
-Device IRQ lines ──→ Priority Encoder ──→ IRQ (active) + vector[2:0] ──→ CPU
-                                                                          ↑
-NMI (debug button, critical fault) ──────────────────────────────────────┘
-```
+- **Timer interrupt** (`i_timer_irq`, VEC_TIMER=1): Dedicated vector for the
+  programmable interval timer (sysreg device 7). Higher priority. Drives
+  NetBSD `hardclock()` scheduler tick.
+- **External device interrupt** (`i_irq`, VEC_EXT_IRQ=9): Shared interrupt
+  line for all external bus devices (UART, Ethernet, etc.). The external bus
+  carries a single wired-OR `irq` signal. Software reads a status register
+  (future interrupt controller, sysreg device 8) to determine the source.
 
-- Priority is fixed by wiring order (timer = highest, as it drives the Minix 2 scheduler)
-- The CPU checks `IRQ` between instructions; if asserted, it reads the 3-bit vector from the encoder and enters the interrupt sequence
-- NMI bypasses the priority encoder and is non-maskable (ignores the I bit in SR)
+Both are masked by `SR.I` (global interrupt enable) and gated by `ei_shadow`
+(one-instruction delay after EI). Timer has strict priority: if both are
+pending simultaneously, the timer is taken first.
 
 ### Software Trap Instructions
 
 Two trap instructions with fixed vector assignments:
 
-- **SYSCALL** — vector 7. Used for Minix 2 system calls. The syscall function number and arguments are passed in GPRs by software convention.
-- **BREAK** — vector 8. Used for debug breakpoints. A debugger can patch instructions with BREAK and use the handler to implement single-stepping, watchpoints, etc.
+- **SYSCALL** — vector 5. Used for NetBSD system calls. The syscall number and arguments are passed in GPRs by software convention (R1=number, R2–R4=args).
+- **BREAK** — vector 6. Used for debug breakpoints. A debugger can patch instructions with BREAK and use the handler to implement single-stepping, watchpoints, etc.
 
 ## System Register Access
 

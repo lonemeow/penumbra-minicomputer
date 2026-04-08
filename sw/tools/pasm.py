@@ -104,6 +104,23 @@ BUILTIN_CONSTANTS = {
     "LSR_THRE":     0x20,   # TX holding register empty
     "LSR_TEMT":     0x40,   # Transmitter empty
 
+    # Bus controller (device 4)
+    "BUS":          4,
+    "BUSCTL":       0,
+
+    # Timer (device 7)
+    "TIMER":        7,
+    "TM_FREQ":      0,
+    "TM_CR":        1,
+    "TM_COUNT":     2,
+    "TM_RELOAD":    3,
+    "TM_STATUS":    4,
+
+    # Timer TMCR bit masks
+    "TM_TICK_EN":   0x01,
+    "TM_IRQ_EN":    0x02,
+    "TM_AUTOLOAD":  0x04,
+
     # MMU fault status masks (mirrors penumbra_pkg.sv FSTAT_*)
     "FAULT_TLB_MISS": 1,    # fault_type[3:0] = TLB miss
     "FAULT_PROT":     2,    # fault_type[3:0] = protection violation

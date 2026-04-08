@@ -76,6 +76,9 @@ package penumbra_pkg;
     localparam logic [3:0] SYSDEV_DCACHE = 4'd2;   // D-cache control
     localparam logic [3:0] SYSDEV_ICACHE = 4'd3;   // I-cache control
     localparam logic [3:0] SYSDEV_BUS    = 4'd4;   // Bus controller (autoconfig, reset)
+    // Devices 5–6 reserved for future cache levels (L2, L3)
+    localparam logic [3:0] SYSDEV_TIMER  = 4'd7;   // Programmable interval timer
+    localparam logic [3:0] SYSDEV_INTC   = 4'd8;   // Interrupt controller (future)
 
     // ── SYS sysreg addresses (dev_id = 1) ───────────────────
     localparam logic [3:0] SYSREG_SYS_CPU_ISA    = 4'd0;   // CPU ISA version + feature flags
@@ -107,6 +110,15 @@ package penumbra_pkg;
 
     // ── Bus controller sysreg addresses (dev_id = 4) ─────────────
     localparam logic [3:0] SYSREG_BUS_CTL = 4'd0;  // BUSCTL: [0]=RST (auto-clear), [1]=CFG_EN
+
+    // ── Timer sysreg addresses (dev_id = 7) ─────────────────────
+    // 16-bit countdown timer, ticks at a fixed hardware frequency
+    // (typically 1 MHz) independent of CPU clock.
+    localparam logic [3:0] SYSREG_TM_FREQ   = 4'd0;  // Tick frequency in Hz (read-only, hardwired)
+    localparam logic [3:0] SYSREG_TM_CR     = 4'd1;  // Control: [0]=TICK_EN, [1]=IRQ_EN, [2]=AUTOLOAD
+    localparam logic [3:0] SYSREG_TM_COUNT  = 4'd2;  // Current 16-bit counter (counts down each tick)
+    localparam logic [3:0] SYSREG_TM_RELOAD = 4'd3;  // 16-bit reload value (→COUNT on underflow)
+    localparam logic [3:0] SYSREG_TM_STATUS = 4'd4;  // [0]=UDF (underflow), write-1-to-clear
 
     // ── Autoconfig config space (memory-mapped, active when CFG_EN) ──
     localparam logic [31:0] AUTOCONFIG_BASE = 32'hFE00_0000;
@@ -170,14 +182,15 @@ package penumbra_pkg;
     // ── Exception vector numbers ────────────────────────────────
     // Vector address = {26'b0, vector_num, 2'b00} (word-aligned table at 0x00)
     localparam logic [3:0] VEC_BUS_FAULT = 4'd0;   // 0x00 — Bus fault (no device at address)
-    localparam logic [3:0] VEC_IRQ       = 4'd1;   // 0x04 — External interrupt
+    localparam logic [3:0] VEC_TIMER     = 4'd1;   // 0x04 — Timer interrupt
     localparam logic [3:0] VEC_TLB_MISS  = 4'd2;   // 0x08 — TLB miss (no matching entry)
     localparam logic [3:0] VEC_TLB_PROT  = 4'd3;   // 0x0C — TLB protection fault
     localparam logic [3:0] VEC_PRIV      = 4'd4;   // 0x10 — Privilege violation
-    localparam logic [3:0] VEC_SYSCALL   = 4'd5;   // 0x14 — SYSCALL (future)
+    localparam logic [3:0] VEC_SYSCALL   = 4'd5;   // 0x14 — SYSCALL instruction
     localparam logic [3:0] VEC_BREAK     = 4'd6;   // 0x18 — BREAK (software breakpoint)
     localparam logic [3:0] VEC_ILLEGAL   = 4'd7;   // 0x1C — Illegal instruction
     localparam logic [3:0] VEC_ALIGN     = 4'd8;   // 0x20 — Alignment fault
+    localparam logic [3:0] VEC_EXT_IRQ   = 4'd9;   // 0x24 — External device interrupt
 
     // ── MMU fault status encoding ─────────────────────────────
     // FAULT_STATUS[3:0] = fault type

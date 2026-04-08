@@ -24,7 +24,10 @@ one of 16 registers within that device, for 256 total system registers.
 | 2 | DCACHE | D-cache control, geometry info, invalidation |
 | 3 | ICACHE | I-cache control, geometry info, invalidation |
 | 4 | BUS | Bus controller (autoconfig, bus reset) |
-| 5–15 | — | Reserved for future devices (timer, interrupt controller, DMA) |
+| 5–6 | — | Reserved for future cache levels (L2, L3) |
+| 7 | TIMER | Programmable interval timer |
+| 8 | INTC | Interrupt controller (future) |
+| 9–15 | — | Reserved for future devices (DMA, etc.) |
 
 > **Note:** I/O peripherals (UART, SPI, GPIO, Ethernet) are **not** on the sysreg bus.
 > They are memory-mapped at `0xFF00_0000`+ and accessed via `LDW`/`STW`.
@@ -470,4 +473,153 @@ WRSYS R1, #4, #0          ; set CFG_EN — next device now active
 
 ; Disable config mode when done
 WRSYS R0, #4, #0          ; BUS BUSCTL = 0
+```
+
+---
+
+## Device 7: TIMER (Programmable Interval Timer)
+
+16-bit countdown timer that ticks at a fixed hardware frequency independent
+of CPU clock. Designed for periodic interrupts (NetBSD `hardclock` at 100 Hz)
+and general-purpose timeouts. The tick frequency is a hardware parameter
+(typically 1 MHz) reported via the TMFREQ register.
+
+The timer drives the **VEC_TIMER** exception vector (vector 1) directly —
+it does not go through an external interrupt controller.
+
+| reg | Name | R/W | Description |
+|-----|------|-----|-------------|
+| 0 | TMFREQ | R | Timer tick frequency in Hz (hardwired constant) |
+| 1 | TMCR | R/W | Control register |
+| 2 | TMCOUNT | R/W | Current 16-bit counter value (counts down each tick) |
+| 3 | TMRELOAD | R/W | 16-bit reload value (copied to TMCOUNT on underflow) |
+| 4 | TMSTATUS | R/W1C | Status register |
+| 5–15 | — | — | Reserved (reads as 0) |
+
+### TMFREQ (reg 0) — Read-only
+
+```
+ 31                                    0
+┌──────────────────────────────────────┐
+│     Timer tick frequency in Hz       │
+└──────────────────────────────────────┘
+```
+
+Hardwired by the hardware implementation. Default: 1,000,000 (1 MHz).
+The kernel reads this at boot to compute the reload value for the desired
+interrupt rate: `reload = TMFREQ / desired_hz`.
+
+Writing to TMFREQ has no effect.
+
+### TMCR (reg 1)
+
+```
+ 31                          3   2      1      0
+┌────────────────────────────┬───┬──────┬──────┐
+│         (reserved)         │ALD│IRQ_EN│TCK_EN│
+└────────────────────────────┴───┴──────┴──────┘
+```
+
+| Bit | Name | Reset | Description |
+|-----|------|-------|-------------|
+| 0 | TICK_EN | 0 | Enable counting. When 1, TMCOUNT decrements on each tick. |
+| 1 | IRQ_EN | 0 | Enable interrupt output. When 1, `o_irq = UDF & IRQ_EN`. |
+| 2 | AUTOLOAD | 0 | Auto-reload on underflow. See behaviour below. |
+| 31:3 | — | 0 | Reserved |
+
+### TMCOUNT (reg 2) — 16-bit counter
+
+```
+ 31              16 15                   0
+┌─────────────────┬──────────────────────┐
+│     (zero)      │    Counter (16)      │
+└─────────────────┴──────────────────────┘
+```
+
+Counts down by 1 on each timer tick when TICK_EN=1. Upper 16 bits always
+read as zero; writes are masked to 16 bits. Writing while the timer is
+running updates the counter immediately — the next tick decrements from
+the new value.
+
+### TMRELOAD (reg 3) — 16-bit reload value
+
+Same format as TMCOUNT. Writing TMRELOAD does not affect the running
+counter. The reload value is only used on underflow (when AUTOLOAD=1).
+
+### TMSTATUS (reg 4)
+
+```
+ 31                                1   0
+┌──────────────────────────────────┬───┐
+│           (reserved)             │UDF│
+└──────────────────────────────────┴───┘
+```
+
+| Bit | Name | Reset | Description |
+|-----|------|-------|-------------|
+| 0 | UDF | 0 | Underflow flag. Set by hardware on underflow. **Write-1-to-clear.** |
+| 31:1 | — | 0 | Reserved |
+
+The interrupt output is level-triggered: `o_irq = UDF & IRQ_EN`. The
+handler **must** clear UDF by writing 1 to TMSTATUS before returning
+(ERET), otherwise the interrupt fires again immediately.
+
+### Timer Behaviour
+
+When TICK_EN=1, the counter decrements by 1 on each synchronised tick edge.
+When the counter is at 0 and the next tick arrives (**underflow**):
+
+- UDF flag in TMSTATUS is set.
+- If AUTOLOAD=1: TMCOUNT is loaded from TMRELOAD. Counting continues.
+- If AUTOLOAD=0: TICK_EN is cleared automatically (one-shot mode).
+
+**Periodic mode** (AUTOLOAD=1): The timer fires repeatedly with a period
+of `(TMRELOAD + 1)` ticks. For 100 Hz with a 1 MHz tick:
+`TMRELOAD = 1000000 / 100 - 1 = 9999`.
+
+**One-shot mode** (AUTOLOAD=0): The timer fires once after `(TMCOUNT + 1)`
+ticks, then stops. Software must re-enable TICK_EN to start another countdown.
+
+### Clock Domain
+
+The tick input may originate from a separate clock domain (e.g., an external
+oscillator on a discrete build). The timer internally synchronises it via a
+two-flip-flop synchroniser and rising-edge detector. This adds 2–3 CPU clock
+cycles of latency, which is negligible for scheduling purposes.
+
+On FPGA, the tick is generated by a prescaler dividing the CPU clock
+(e.g., ÷25 for 1 MHz from 25 MHz). On a discrete 74xx build, it could be
+a standalone 1 MHz crystal oscillator.
+
+### Example: Set Up 100 Hz Periodic Timer
+
+```asm
+; Read timer frequency
+RDSYS R1, #TIMER, #TM_FREQ     ; R1 = 1000000
+
+; Compute reload = freq / 100 - 1 = 9999
+; (In practice, the kernel does this division at boot.)
+LI    R2, #9999
+WRSYS R2, #TIMER, #TM_RELOAD
+WRSYS R2, #TIMER, #TM_COUNT    ; Also set initial count
+
+; Enable: periodic + IRQ
+LLI   R3, #0x07                 ; TICK_EN | IRQ_EN | AUTOLOAD
+WRSYS R3, #TIMER, #TM_CR
+
+; Enable CPU interrupts
+EI
+```
+
+### Example: Timer Interrupt Handler
+
+```asm
+timer_handler:
+    ; ... handle tick (update jiffies, run scheduler, etc.) ...
+
+    ; Acknowledge interrupt: clear UDF via write-1-to-clear
+    LLI   R10, #1
+    WRSYS R10, #TIMER, #TM_STATUS
+
+    ERET
 ```

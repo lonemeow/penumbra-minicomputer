@@ -50,8 +50,9 @@ module cpu_core
     output logic        o_sys_we,
     input  logic [31:0] i_sys_rdata,
 
-    // ── External interrupt ──────────────────────────────────
-    input  logic        i_irq,
+    // ── Interrupts ───────────────────────────────────────────
+    input  logic        i_timer_irq,    // Timer interrupt (VEC_TIMER, higher priority)
+    input  logic        i_irq,          // External device interrupt (VEC_EXT_IRQ)
 
     // ── Debug / observation ports ────────────────────────────
     output logic [31:0] o_pc,
@@ -343,7 +344,13 @@ module cpu_core
             priv_pending <= 1'b0;
     end
 
-    assign irq_taken    = i_irq & sr_i & !ei_shadow;
+    // Timer IRQ has priority over external IRQ.
+    // Both are gated by SR.I (global interrupt enable) and ei_shadow.
+    logic        timer_irq_taken;
+    logic        ext_irq_taken;
+    assign timer_irq_taken = i_timer_irq & sr_i & !ei_shadow;
+    assign ext_irq_taken   = i_irq & sr_i & !ei_shadow & !i_timer_irq;
+    assign irq_taken       = timer_irq_taken | ext_irq_taken;
 
     // ── Dispatch-time exception: register the vector ─────────
     logic        dispatch_pending;
@@ -355,9 +362,10 @@ module cpu_core
             dispatch_vector  <= 4'b0;
         end else if (ir_valid && (break_taken || syscall_taken || irq_taken)) begin
             dispatch_pending <= 1'b1;
-            dispatch_vector  <= break_taken   ? VEC_BREAK :
-                                syscall_taken ? VEC_SYSCALL :
-                                                VEC_IRQ;
+            dispatch_vector  <= break_taken     ? VEC_BREAK :
+                                syscall_taken   ? VEC_SYSCALL :
+                                timer_irq_taken ? VEC_TIMER :
+                                                  VEC_EXT_IRQ;
         end else if (dispatch_pending && ctl_pc_load) begin
             dispatch_pending <= 1'b0;
         end
@@ -370,7 +378,7 @@ module cpu_core
                           illegal_pending  ? VEC_ILLEGAL :
                           priv_pending     ? VEC_PRIV :
                           dispatch_pending ? dispatch_vector :
-                                             VEC_IRQ;
+                                             VEC_EXT_IRQ;
 
     // Override dispatch address when any exception taken
     logic [7:0] effective_dispatch;
