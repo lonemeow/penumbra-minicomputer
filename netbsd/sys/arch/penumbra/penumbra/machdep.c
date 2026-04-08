@@ -368,7 +368,17 @@ startlwp(void *arg)
 void
 md_child_return(struct lwp *l)
 {
-	/* TODO(stub) */ __asm volatile("break");
+	struct trapframe *tf = l->l_md.md_utf;
+
+	/*
+	 * Set up the child's return values for fork(2):
+	 *   R1 = 0     (fork returns 0 in child)
+	 *   R2 = 1     (rval[1] = 1 marks this as the child)
+	 *   C flag clear (success)
+	 */
+	tf->tf_regs[TF_R1] = 0;
+	tf->tf_regs[TF_R2] = 1;
+	tf->tf_sr &= ~PSL_C;
 }
 
 /*
@@ -396,6 +406,7 @@ void
 setregs(struct lwp *l, struct exec_package *pack, vaddr_t stack)
 {
 	struct trapframe *tf = l->l_md.md_utf;
+	struct proc *p = l->l_proc;
 
 	/* Clear all registers — don't leak kernel state */
 	memset(tf, 0, sizeof(*tf));
@@ -403,6 +414,14 @@ setregs(struct lwp *l, struct exec_package *pack, vaddr_t stack)
 	/* Entry point and stack pointer */
 	tf->tf_epc = pack->ep_entry;
 	tf->tf_regs[TF_R14] = stack;	/* SP */
+
+	/*
+	 * Set up arguments for _start -> ___start(cleanup, ps_strings):
+	 *   R1 = cleanup (0 for static binaries, set by rtld for dynamic)
+	 *   R2 = ps_strings pointer
+	 */
+	tf->tf_regs[TF_R1] = 0;		/* cleanup */
+	tf->tf_regs[TF_R2] = p->p_psstrp;	/* ps_strings */
 
 	/* User mode: supervisor off, interrupts on */
 	tf->tf_sr = PSL_USERSET & ~PSL_USERCLR;

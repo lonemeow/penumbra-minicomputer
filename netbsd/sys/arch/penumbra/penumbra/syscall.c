@@ -4,8 +4,9 @@
  * Penumbra system call dispatch.
  *
  * Syscall ABI:
- *   R1        = syscall number (input), return value (output)
+ *   R1        = syscall number (input), return value rval[0] (output)
  *   R2–R4     = arguments 1–3 (in registers)
+ *   R2        = rval[1] on success (used by fork/pipe to return 2nd value)
  *   args 4–7  = on user stack at SP+0, SP+4, ... (if needed)
  *   C flag    = 0 on success, 1 on error (R1 = errno)
  *
@@ -107,6 +108,7 @@ syscall(struct trapframe *tf)
 
 	case 0:
 		tf->tf_regs[TF_R1] = rval[0];
+		tf->tf_regs[TF_R2] = rval[1];
 		tf->tf_sr &= ~PSL_C;
 		break;
 
