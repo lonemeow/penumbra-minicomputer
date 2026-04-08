@@ -65,7 +65,13 @@ NEED_OWN_INSTALL_TARGET?=	yes
 .if ${MACHINE_ARCH} == "penumbra"
 TOOLCHAIN_MISSING?=	yes
 HAVE_LLVM?=		yes
+HAVE_LIBGCC_EH?=	yes	# skip libunwind (no C++ headers, no EH support yet)
 ACTIVE_CC=		clang
+# Our clang (22.x) is newer than NetBSD's; suppress warnings that
+# upstream hasn't adapted to yet.
+CWARNFLAGS.clang+=	-Wno-unterminated-string-initialization
+CWARNFLAGS.clang+=	-Wno-atomic-alignment
+CWARNFLAGS.clang+=	-Wno-macro-redefined
 .endif
 
 TOOLCHAIN_MISSING?=	no
@@ -208,6 +214,7 @@ HAVE_LIBGCC_EH?=	yes
     ${MACHINE} == "alpha" || \
     ${MACHINE} == "hppa" || \
     ${MACHINE} == "ia64" || \
+    ${MACHINE} == "penumbra" || \
     ${MACHINE_CPU} == "mips"
 HAVE_SSP?=	no
 .else

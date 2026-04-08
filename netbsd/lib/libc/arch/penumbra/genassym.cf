@@ -1,0 +1,29 @@
+#	$NetBSD$
+
+include <sys/types.h>
+include <sys/signal.h>
+include <sys/ucontext.h>
+
+include <machine/setjmp.h>
+
+# ucontext register offsets (for signal trampoline / getcontext)
+define UC_GREGS_SP	offsetof(ucontext_t, uc_mcontext.__gregs[14])
+define UC_GREGS_PC	offsetof(ucontext_t, uc_mcontext.__gregs[_REG_PC])
+define UC_GREGS_RV	offsetof(ucontext_t, uc_mcontext.__gregs[1])
+
+# signal constants
+define SIG_BLOCK	SIG_BLOCK
+define SIG_SETMASK	SIG_SETMASK
+
+# jmp_buf byte offsets (slot index * slot size)
+define JB_MAGIC		_JB_MAGIC * sizeof(_BSD_JBSLOT_T_)
+define JB_R5		_JB_R5 * sizeof(_BSD_JBSLOT_T_)
+define JB_R6		_JB_R6 * sizeof(_BSD_JBSLOT_T_)
+define JB_R7		_JB_R7 * sizeof(_BSD_JBSLOT_T_)
+define JB_R8		_JB_R8 * sizeof(_BSD_JBSLOT_T_)
+define JB_R9		_JB_R9 * sizeof(_BSD_JBSLOT_T_)
+define JB_R10		_JB_R10 * sizeof(_BSD_JBSLOT_T_)
+define JB_R12		_JB_R12 * sizeof(_BSD_JBSLOT_T_)
+define JB_R13		_JB_R13 * sizeof(_BSD_JBSLOT_T_)
+define JB_R14		_JB_R14 * sizeof(_BSD_JBSLOT_T_)
+define JB_SIGMASK	_JB_SIGMASK * sizeof(_BSD_JBSLOT_T_)

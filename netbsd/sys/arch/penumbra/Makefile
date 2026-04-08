@@ -1,5 +1,5 @@
 #	$NetBSD$
 
-SUBDIR=	stand
+SUBDIR=	include stand
 
 .include <bsd.subdir.mk>
