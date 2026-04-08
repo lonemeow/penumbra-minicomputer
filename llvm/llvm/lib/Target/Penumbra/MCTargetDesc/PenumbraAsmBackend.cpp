@@ -72,6 +72,10 @@ PenumbraAsmBackend::getFixupKindInfo(MCFixupKind Kind) const {
       {"fixup_penumbra_memoffset16_pcrel", 2, 16, 0},
       // imm16_pcrel: PC-relative 16-bit immediate, into bits [15:0]
       {"fixup_penumbra_imm16_pcrel", 0, 16, 0},
+      // tls_gd_lo16: TLS GD low 16 bits, into bits [15:0]
+      {"fixup_penumbra_tls_gd_lo16", 0, 16, 0},
+      // tls_gd_hi16: TLS GD high 16 bits, into bits [15:0]
+      {"fixup_penumbra_tls_gd_hi16", 0, 16, 0},
   };
 
   if (Kind < FirstTargetFixupKind)
@@ -120,16 +124,18 @@ void PenumbraAsmBackend::applyFixup(const MCFragment &F, const MCFixup &Fixup,
     return;
   }
 
-  if (Kind == static_cast<MCFixupKind>(Penumbra::fixup_penumbra_lo16)) {
-    // Low 16 bits of absolute address, into bits [15:0].
+  if (Kind == static_cast<MCFixupKind>(Penumbra::fixup_penumbra_lo16) ||
+      Kind == static_cast<MCFixupKind>(Penumbra::fixup_penumbra_tls_gd_lo16)) {
+    // Low 16 bits into bits [15:0] (absolute address or TLS GD offset).
     uint32_t Encoded = static_cast<uint32_t>(Value) & 0xFFFF;
     support::endian::write32le(
         Data, support::endian::read32le(Data) | Encoded);
     return;
   }
 
-  if (Kind == static_cast<MCFixupKind>(Penumbra::fixup_penumbra_hi16)) {
-    // High 16 bits of absolute address, into bits [15:0].
+  if (Kind == static_cast<MCFixupKind>(Penumbra::fixup_penumbra_hi16) ||
+      Kind == static_cast<MCFixupKind>(Penumbra::fixup_penumbra_tls_gd_hi16)) {
+    // High 16 bits into bits [15:0] (absolute address or TLS GD offset).
     uint32_t Encoded = (static_cast<uint32_t>(Value) >> 16) & 0xFFFF;
     support::endian::write32le(
         Data, support::endian::read32le(Data) | Encoded);

@@ -129,6 +129,12 @@ unsigned PenumbraMCCodeEmitter::encodeImm16(
     case Penumbra::S_Hi16:
       Kind = static_cast<MCFixupKind>(Penumbra::fixup_penumbra_hi16);
       break;
+    case Penumbra::S_TLSgd_Lo16:
+      Kind = static_cast<MCFixupKind>(Penumbra::fixup_penumbra_tls_gd_lo16);
+      break;
+    case Penumbra::S_TLSgd_Hi16:
+      Kind = static_cast<MCFixupKind>(Penumbra::fixup_penumbra_tls_gd_hi16);
+      break;
     case Penumbra::S_PCRel:
       Kind = static_cast<MCFixupKind>(Penumbra::fixup_penumbra_imm16_pcrel);
       PCRel = true;

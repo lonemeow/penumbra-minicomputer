@@ -25,6 +25,9 @@ PenumbraISelLowering::PenumbraISelLowering(const TargetMachine &TM,
     : TargetLowering(TM, STI) {
   addRegisterClass(MVT::i32, &Penumbra::GPR_AllocatableRegClass);
 
+  // SP register — needed by G_DYN_STACKALLOC lowering and G_STACKSAVE/RESTORE.
+  setStackPointerRegisterToSaveRestore(Penumbra::R14);
+
   // No hardware atomics — all atomic operations expand to __atomic_* libcalls
   // via AtomicExpandPass.  The library handles synchronization (interrupt-
   // disable CAS now, RAS or LL/SC in future).

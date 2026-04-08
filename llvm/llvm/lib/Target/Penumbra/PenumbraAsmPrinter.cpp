@@ -98,7 +98,8 @@ static bool lowerOperand(const MachineOperand &MO, MCOperand &MCOp,
           AP.OutContext);
     unsigned TF = MO.getTargetFlags();
     if (TF == Penumbra::S_Lo16 || TF == Penumbra::S_Hi16 ||
-        TF == Penumbra::S_PCRel)
+        TF == Penumbra::S_PCRel ||
+        TF == Penumbra::S_TLSgd_Lo16 || TF == Penumbra::S_TLSgd_Hi16)
       Expr = MCSpecifierExpr::create(Expr, TF, AP.OutContext);
     MCOp = MCOperand::createExpr(Expr);
     return true;

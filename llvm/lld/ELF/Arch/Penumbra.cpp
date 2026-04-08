@@ -48,6 +48,12 @@ RelExpr Penumbra::getRelExpr(RelType type, const Symbol &s,
   case R_PENUMBRA_MEMOFFSET16_PCREL:
   case R_PENUMBRA_IMM16_PCREL:
     return R_PC;
+  case R_PENUMBRA_TLS_GD_LO16:
+  case R_PENUMBRA_TLS_GD_HI16:
+    // For static linking, resolve GD directly as TP-relative offset
+    // (implicit GD→LE relaxation).  For dynamic linking, this will need
+    // to become R_TLSGD_GOT to create GOT entries.
+    return R_TPREL;
   default:
     return R_ABS;
   }
@@ -91,11 +97,13 @@ void Penumbra::relocate(uint8_t *loc, const Relocation &rel,
   }
   case R_PENUMBRA_IMM16:
   case R_PENUMBRA_LO16:
-    // 16-bit immediate / low 16 bits of address, into bits [15:0].
+  case R_PENUMBRA_TLS_GD_LO16:
+    // 16-bit immediate / low 16 bits of address / TLS offset, into bits [15:0].
     write32le(loc, (read32le(loc) & 0xFFFF0000) | (val & 0xFFFF));
     break;
   case R_PENUMBRA_HI16:
-    // High 16 bits of address, into bits [15:0].
+  case R_PENUMBRA_TLS_GD_HI16:
+    // High 16 bits of address / TLS offset, into bits [15:0].
     write32le(loc, (read32le(loc) & 0xFFFF0000) | ((val >> 16) & 0xFFFF));
     break;
   case R_PENUMBRA_MEMOFFSET16_PCREL: {

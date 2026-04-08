@@ -650,6 +650,20 @@ bool PenumbraInstructionSelector::selectGlobalValue(MachineInstr &I,
   const GlobalValue *GV = I.getOperand(1).getGlobal();
   int64_t Offset = I.getOperand(1).getOffset();
 
+  // TLS globals: emit LLI+LUI with GD relocation types.  The IR pass has
+  // already replaced @llvm.threadlocal.address with a call to __tls_get_addr,
+  // so this G_GLOBAL_VALUE is the argument to that call.  The linker resolves
+  // GD relocations to a TP-relative offset (static) or GOT entry address
+  // (dynamic).
+  if (GV->isThreadLocal()) {
+    emitLoadSymbolAddr(
+        DstReg, I.getDebugLoc(), MBB, I.getIterator(),
+        MachineOperand::CreateGA(GV, Offset, Penumbra::S_TLSgd_Lo16),
+        MachineOperand::CreateGA(GV, Offset, Penumbra::S_TLSgd_Hi16));
+    I.eraseFromParent();
+    return true;
+  }
+
   if (TM.getRelocationModel() == Reloc::PIC_) {
     // PIC: materialise address as PC + pcrel offset.
     //   MOV TmpReg, PC         (copy current PC = addr of MOV)

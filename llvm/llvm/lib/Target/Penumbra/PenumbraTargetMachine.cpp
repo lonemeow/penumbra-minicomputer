@@ -13,6 +13,11 @@
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/PassRegistry.h"
@@ -48,6 +53,55 @@ static const char *PenumbraDataLayout =
     "-n32"     // native integer width is 32
     "-S32";    // stack is 32-bit aligned
 
+// ── TLS Lowering Pass ────────────────────────────────────────────────────────
+// Replace @llvm.threadlocal.address intrinsics with calls to __tls_get_addr
+// before GlobalISel runs.  This lets the existing call-lowering infrastructure
+// handle the calling convention (R1 arg, BL, clobber mask) automatically.
+
+namespace {
+class PenumbraLowerTLS : public FunctionPass {
+public:
+  static char ID;
+  PenumbraLowerTLS() : FunctionPass(ID) {}
+
+  bool runOnFunction(Function &F) override {
+    SmallVector<IntrinsicInst *, 16> ToReplace;
+
+    // Collect the intrinsics
+    for (BasicBlock &BB : F) {
+      for (Instruction &I : BB) {
+        if (auto *II = dyn_cast<IntrinsicInst>(&I)) {
+          if (II->getIntrinsicID() == Intrinsic::threadlocal_address) {
+            ToReplace.push_back(II);
+          }
+        }
+      }
+    }
+
+    // Replace with calls
+    if (!ToReplace.empty()) {
+      Module *M = F.getParent();
+      Type *PtrType = PointerType::getUnqual(F.getContext());
+      FunctionType *PtrToPtrFuncType =
+          FunctionType::get(PtrType, {PtrType}, false);
+      FunctionCallee TlsGetAddrFunc =
+          M->getOrInsertFunction("__tls_get_addr", PtrToPtrFuncType);
+      for (auto *II : ToReplace) {
+        IRBuilder<> Builder(II);
+        Value *TLSAddr = II->getArgOperand(0);
+        CallInst *NewCall = Builder.CreateCall(TlsGetAddrFunc, {TLSAddr});
+        II->replaceAllUsesWith(NewCall);
+        II->eraseFromParent();
+      }
+      return true;
+    } else {
+      return false;
+    }
+  }
+};
+char PenumbraLowerTLS::ID = 0;
+} // namespace
+
 // ── PassConfig ───────────────────────────────────────────────────────────────
 
 namespace {
@@ -56,9 +110,10 @@ public:
   PenumbraPassConfig(PenumbraTargetMachine &TM, PassManagerBase &PM)
       : TargetPassConfig(TM, PM) {}
 
-  // Expand atomic operations to __atomic_* libcalls before GlobalISel.
+  // Pre-GlobalISel IR passes.
   void addIRPasses() override {
     addPass(createAtomicExpandLegacyPass());
+    addPass(new PenumbraLowerTLS());
     TargetPassConfig::addIRPasses();
   }
 

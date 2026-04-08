@@ -786,6 +786,10 @@ static int64_t getTlsTpOffset(Ctx &ctx, const Symbol &s) {
     if (s.type != STT_TLS)
       return 0;
     return s.getVA(ctx, 0) + (tls->p_vaddr & (tls->p_align - 1));
+  case EM_PENUMBRA:
+    // Variant 1, no TCB gap (like RISC-V).  TP (R12) points directly at
+    // the start of the static TLS block.
+    return s.getVA(ctx, 0) + (tls->p_vaddr & (tls->p_align - 1));
 
     // Variant 2.
   case EM_HEXAGON:

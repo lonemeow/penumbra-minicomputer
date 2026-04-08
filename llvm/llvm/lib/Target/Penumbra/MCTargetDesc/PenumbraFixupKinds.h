@@ -28,6 +28,11 @@ enum Fixups {
   // 16-bit PC-relative immediate (Format L, bits [15:0]).
   // Used for ADDi Rd, %pcrel(sym) in PIC address materialization.
   fixup_penumbra_imm16_pcrel,
+  // TLS General-Dynamic: low 16 bits of GD argument (TP-relative offset for
+  // static linking, GOT entry address for dynamic linking), into bits [15:0].
+  fixup_penumbra_tls_gd_lo16,
+  // TLS General-Dynamic: high 16 bits of GD argument, into bits [15:0].
+  fixup_penumbra_tls_gd_hi16,
 
   // Marker
   NumTargetFixupKinds
@@ -39,7 +44,9 @@ enum Specifier {
   S_None = 0,
   S_Lo16,
   S_Hi16,
-  S_PCRel,  // %pcrel() — PC-relative offset
+  S_PCRel,     // %pcrel() — PC-relative offset
+  S_TLSgd_Lo16, // %tlsgd_lo16() — TLS General-Dynamic, low 16 bits
+  S_TLSgd_Hi16, // %tlsgd_hi16() — TLS General-Dynamic, high 16 bits
 };
 
 } // namespace llvm::Penumbra

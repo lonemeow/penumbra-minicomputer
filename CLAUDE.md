@@ -274,7 +274,11 @@ MIPS/68k-style vector dispatch.
   comparisons; G_FCONSTANT → integer bit pattern materialization),
   **atomics** (all atomic ops → `__atomic_*` libcalls via
   AtomicExpandPass; `MaxAtomicInlineWidth=0`,
-  `setMaxAtomicSizeInBitsSupported(0)`).
+  `setMaxAtomicSizeInBitsSupported(0)`),
+  **TLS** (General-Dynamic model: IR pass lowers
+  `@llvm.threadlocal.address` → `call @__tls_get_addr`;
+  lld resolves as TP-relative offset for static linking),
+  **G_DYN_STACKALLOC** (VLAs/runtime alloca, lowered by framework).
 - `-fPIC` supported: PC-relative addressing via
   MOV PC + ADDi `%pcrel()` for globals,
   EK_LabelDifference32 jump table entries;
@@ -304,6 +308,7 @@ MIPS/68k-style vector dispatch.
 - **ISA assembler** (`sw/tools/pasm.py`):
   Two-pass assembler, all 4 formats, labels,
   pseudo-ops (NOP, RET, LA, LI), `.equ`, data directives.
+  Comments: both `;` (legacy) and `//` (LLVM convention).
   Still used by `make test` for hardware test programs.
   Run: `python3 sw/tools/pasm.py --org 0xFFFF0000 input.s -o program.hex`
 - **Binary-to-hex converter** (`sw/tools/bin2hex.py`):
@@ -450,17 +455,15 @@ MIPS/68k-style vector dispatch.
   `HAVE_LIBGCC_EH=yes` (skip libunwind), clang 22 warning
   suppressions, jemalloc `LG_QUANTUM=3`.
 - **Hundreds of libc .c files compile at `-O0`.**
-  Blocked on TLS support (`@llvm.threadlocal.address` intrinsic)
-  needed by jemalloc's `__thread` variables.
+  TLS support (`__tls_get_addr` GD model) and G_DYN_STACKALLOC
+  unblocked jemalloc's `__thread` variables and VLAs.
 - Build command: `./build.sh -U -j10 -m penumbra
   -V EXTERNAL_TOOLCHAIN=$PWD/../build/llvm
   -O ../build/netbsd-obj -T ../build/netbsd-tools
   -D ../build/netbsd-dest -V DBG=-O0 libs`
 
 ## Next Steps (in priority order)
-1. **LLVM TLS support** — lower `@llvm.threadlocal.address` to
-   R12 (thread pointer) + offset.  Blocks libc build (jemalloc).
-2. **Userland build completion** — fix remaining libc compile/link
+1. **Userland build completion** — fix remaining libc compile/link
    errors, then `build.sh` `distribution` for full rootfs.
 3. **Kernel implementation** — remaining MD stubs as the kernel
    reaches them (grep `TODO(stub)`): signals, mcontext, startlwp.

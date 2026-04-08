@@ -50,11 +50,13 @@ links with lld, and runs on the simulated Penumbra CPU
 
 **MC-layer assembler:** `llvm-mc -triple=penumbra` encodes all 4
 instruction formats.
-- Nine fixup/relocation types: branch22, imm16, memoffset16,
-  lo16, hi16, memoffset16_pcrel, imm16_pcrel, 32, none.
+- Eleven fixup/relocation types: branch22, imm16, memoffset16,
+  lo16, hi16, memoffset16_pcrel, imm16_pcrel, 32, none,
+  tls_gd_lo16, tls_gd_hi16.
 - Pseudo-instructions LI, LA, NOP, RET expanded in the AsmParser.
-- `%lo16()`/`%hi16()`/`%pcrel()` MCSpecifierExpr modifiers
-  parsed and printed (full `clang -S` → `llvm-mc` roundtrip works).
+- `%lo16()`/`%hi16()`/`%pcrel()`/`%tlsgd_lo16()`/`%tlsgd_hi16()`
+  MCSpecifierExpr modifiers parsed and printed
+  (full `clang -S` → `llvm-mc` roundtrip works).
 - Register aliases (pc, sp, lr, zero, tp),
   SPR names (epc, esr, usp, sr — context-sensitive, sr parsed
   as SPR index only in RDSPR/WRSPR context since it's also a register),
@@ -132,9 +134,20 @@ or MOV PC + ADDi (PIC); BRJT always adds base back).
   va_start offset uses ArgAssigner.StackSize (not SplitArgs.size())
   so it correctly handles >4 named args and wide types (e.g. i64)
   that occupy multiple stack slots.
+- G_DYN_STACKALLOC: lowered by framework to SP subtract + alignment
+  (VLAs, runtime-sized `alloca`).
+  `setStackPointerRegisterToSaveRestore(R14)` in ISelLowering.
 - G_STACKSAVE/G_STACKRESTORE: selected to MOV SP (R14).
 - `@llvm.returnaddress(0)` → MOV from R13 (LR),
   `@llvm.frameaddress(0)` → MOV from R14 (SP).
+- **TLS (thread-local storage):** General-Dynamic model via
+  `__tls_get_addr` libcall.  IR pass (`PenumbraLowerTLS` in
+  `PenumbraTargetMachine.cpp`) replaces `@llvm.threadlocal.address`
+  intrinsics with calls to `__tls_get_addr` before GlobalISel.
+  `selectGlobalValue` detects `isThreadLocal()` and emits LLI+LUI
+  with `S_TLSgd_Lo16`/`S_TLSgd_Hi16` target flags.
+  lld resolves as `R_TPREL` (TP-relative offset) for static linking;
+  GOT-based dynamic resolution to be added later.
 - No SelectionDAG — GlobalISel only.
 - **Not yet implemented:** `analyzeBranch`/`insertBranch`/`removeBranch`
   in TargetInstrInfo — needed for `-O2` machine passes
@@ -158,7 +171,9 @@ Higher levels or new code patterns may trigger
 unlegalized ops (G_SMAX, etc.).
 
 **lld:** `ld.lld -T rom.ld` links Penumbra ELF objects.
-Supports all 6 relocation types.
+Supports all 11 relocation types including TLS GD.
+TLS LE resolution via `R_TPREL` (Variant 1, no TCB gap, like RISC-V).
+`EM_PENUMBRA` to `getTlsTpOffset` mapping in `InputSection.cpp`.
 EM_PENUMBRA (0xF0DA) defined in central `llvm/BinaryFormat/ELF.h`.
 
 ## File Map (`llvm/llvm/lib/Target/Penumbra/`)
@@ -172,9 +187,9 @@ EM_PENUMBRA (0xF0DA) defined in central `llvm/BinaryFormat/ELF.h`.
 | `PenumbraCallingConv.td` | CC\_Penumbra (R1-R4 args, stack overflow), RetCC\_Penumbra (R1, R2 for i64), CSR\_Penumbra (R5-R10, R13) |
 | `PenumbraRegisterInfo.{h,cpp}` | Reserved regs (R0, R12, R14, R15), callee-saved, eliminateFrameIndex, getFrameRegister(R14) |
 | `PenumbraFrameLowering.{h,cpp}` | StackGrowsDown, Align(4), hasFPImpl()=false. Prologue (SUBi SP) / epilogue (ADDi SP) |
-| `PenumbraISelLowering.{h,cpp}` | TargetLowering: JT encoding (EK\_LabelDifference32 for PIC, EK\_BlockAddress for static), SELECT diamond expansion, inline asm (`r`→GPR\_Allocatable, `{cc}`→SR/CCR) |
+| `PenumbraISelLowering.{h,cpp}` | TargetLowering: JT encoding (EK\_LabelDifference32), SELECT diamond expansion, inline asm (`r`→GPR\_Allocatable, `{cc}`→SR/CCR), `setStackPointerRegisterToSaveRestore(R14)` |
 | `PenumbraSubtarget.{h,cpp}` | Central hub: owns InstrInfo, FrameLowering, TLInfo, and all GlobalISel objects |
-| `PenumbraTargetMachine.{h,cpp}` | Data layout `e-m:e-p:32:32-i32:32-i64:64-n32-S32`, GlobalISel pipeline, `setGlobalISel(true)`. PIC via `-fPIC`. `PenumbraTargetObjectFile` (local class): always inlines jump tables in `.text` |
+| `PenumbraTargetMachine.{h,cpp}` | Data layout `e-m:e-p:32:32-i32:32-i64:64-n32-S32`, GlobalISel pipeline, `setGlobalISel(true)`. PIC via `-fPIC`. `PenumbraTargetObjectFile` (local class): always inlines jump tables in `.text`. `PenumbraLowerTLS` IR pass: replaces `@llvm.threadlocal.address` with `call @__tls_get_addr` |
 | `PenumbraAsmPrinter.cpp` | MachineInstr → MCInst. Expands RET→JMP R13. Wraps globals/JTI with lo16/hi16/pcrel MCSpecifierExpr. `emitJumpTableEntry` override: always emits label-difference entries. PrintAsmOperand for inline asm |
 | `PenumbraMachineFunctionInfo.h` | Per-function state: VarArgsFrameIndex for variadic R1-R4 save area |
 | `GISel/PenumbraCallLowering.{h,cpp}` | lowerFormalArguments (R1-R4→vregs, variadic save area), lowerReturn (vreg→R1+RET), lowerCall |
@@ -189,7 +204,7 @@ EM_PENUMBRA (0xF0DA) defined in central `llvm/BinaryFormat/ELF.h`.
 | `MCTargetDesc/PenumbraAsmBackend.cpp` | Fixup resolution (branch22, imm16, lo16, hi16), `maybeAddReloc` for ELF relocs, NOP = `0x00000000` (ADD R0,R0) |
 | `MCTargetDesc/PenumbraELFObjectWriter.cpp` | ELF relocation mapping. Uses `EM_PENUMBRA` from `llvm/BinaryFormat/ELF.h` |
 | `MCTargetDesc/PenumbraFixupKinds.h` | Fixup kinds (branch22, imm16, memoffset16, lo16, hi16, pcrel variants) and MCSpecifierExpr values (S\_Lo16, S\_Hi16, S\_PCRel) |
-| `MCTargetDesc/PenumbraMCAsmInfo.{h,cpp}` | ELF-based, little-endian, `;` comments. `printSpecifierExpr` for `%lo16()`/`%hi16()`/`%pcrel()` |
+| `MCTargetDesc/PenumbraMCAsmInfo.{h,cpp}` | ELF-based, little-endian, `//` comments, `;` statement separator. `printSpecifierExpr` for `%lo16()`/`%hi16()`/`%pcrel()`/`%tlsgd_lo16()`/`%tlsgd_hi16()` |
 | `AsmParser/PenumbraAsmParser.cpp` | Assembly text → MCInst. Pseudo expansion: LI→LLI/LLIS/LUI, LA→LLI+LUI, NOP→ADD R0,R0, RET→JMP R13. Regs, imms, mem operands |
 | `TargetInfo/PenumbraTargetInfo.{h,cpp}` | Target registration (`Triple::penumbra`) |
 
@@ -241,6 +256,8 @@ Fixed locally — needed for NetBSD kernel option tracking symbols
 | `R_PENUMBRA_MEMOFFSET16_PCREL` | 6 | PC-relative 16-bit memory offset | bits [17:2] |
 | `R_PENUMBRA_IMM16_PCREL` | 7 | PC-relative 16-bit immediate | bits [15:0] |
 | `R_PENUMBRA_RELATIVE` | 8 | PIE dynamic relocation (bias adjust) | Full word |
+| `R_PENUMBRA_TLS_GD_LO16` | 9 | TLS GD: low 16 bits of TP offset | bits [15:0] |
+| `R_PENUMBRA_TLS_GD_HI16` | 10 | TLS GD: high 16 bits of TP offset | bits [15:0] |
 
 ## Legalization (`GISel/PenumbraLegalizerInfo.{h,cpp}`)
 - **Legal s32:** G_ADD, G_SUB, G_AND, G_OR, G_XOR,
@@ -264,6 +281,7 @@ Fixed locally — needed for NetBSD kernel option tracking symbols
   G_SMIN/G_SMAX/G_UMIN/G_UMAX (any width, lowered to icmp+select).
 - **Libcall:** G_MEMCPY/G_MEMMOVE/G_MEMSET.
 - **Legal:** G_STACKSAVE/G_STACKRESTORE (p0).
+- **Lowered:** G_DYN_STACKALLOC (framework: SP subtract + alignment).
 - **Custom:** G_VASTART, G_MUL, G_UDIV, G_UREM, G_PREFETCH (no-op)
   (via legalizeCustom() override). G_VAARG lowered (s32/s64/p0).
 

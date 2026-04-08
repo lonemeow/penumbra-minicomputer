@@ -211,7 +211,9 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
       .clampScalar(0, s32, s64)
       .customForCartesianProduct({s32, s64, p0}, {p0});
 
-  // Stack save/restore: used by alloca.  SP is R14.
+  // Stack save/restore/dynamic alloc: used by alloca.  SP is R14.
+  // G_DYN_STACKALLOC is lowered by the framework to SP subtract + alignment.
+  getActionDefinitionsBuilder(G_DYN_STACKALLOC).lower();
   getActionDefinitionsBuilder(G_STACKSAVE).legalFor({p0});
   getActionDefinitionsBuilder(G_STACKRESTORE).legalFor({p0});
 
