@@ -32,7 +32,8 @@ ENTRY(ptrace)
 	ldw	r13, [r14 + XCALLFRAME_LR]
 	add	r14, #XCALLFRAME_SIZ
 #else
-	la	r11, _C_LABEL(errno)
+	mov	r11, r15
+	add	r11, %pcrel(_C_LABEL(errno)+4)
 	stw	r0, [r11]
 #endif
 	SYSTRAP(ptrace)

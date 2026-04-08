@@ -10,7 +10,8 @@ WEAK_ALIAS(sbrk, _sbrk)
 #endif
 
 ENTRY(_sbrk)
-	la	r11, _C_LABEL(__curbrk)
+	mov	r11, r15
+	add	r11, %pcrel(_C_LABEL(__curbrk)+4)
 	ldw	r2, [r11]
 	add	r1, r2			/* new break = curbrk + increment */
 	SYSTRAP(break)

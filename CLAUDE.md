@@ -277,10 +277,15 @@ MIPS/68k-style vector dispatch.
   `setMaxAtomicSizeInBitsSupported(0)`),
   **TLS** (General-Dynamic model: IR pass lowers
   `@llvm.threadlocal.address` → `call @__tls_get_addr`;
-  lld resolves as TP-relative offset for static linking),
-  **G_DYN_STACKALLOC** (VLAs/runtime alloca, lowered by framework).
+  PIC: `%tlsgd_pcrel` with GOT tls_index; static: TP-relative),
+  **G_DYN_STACKALLOC** (VLAs/runtime alloca),
+  G_SADDO/G_SSUBO/G_SADDE/G_SSUBE, G_FNEG/G_FABS/G_FCOPYSIGN
+  (bit manipulation), G_IS_FPCLASS, G_GET_ROUNDING (const 1).
+- GOT/PLT: 16-byte PLT entries (LLI+LUI+LDW+JMP R11),
+  `R_PENUMBRA_GLOB_DAT`/`JUMP_SLOT` dynamic relocs.
+  Shared libraries link with `ld.lld` via `PenumbraToolChain`.
 - `-fPIC` supported: PC-relative addressing via
-  MOV PC + ADDi `%pcrel()` for globals,
+  MOV PC + ADDi `%pcrel()` for globals and TLS,
   EK_LabelDifference32 jump table entries;
   PC (R15) is a readable GPR so PIC needs no GOT (±32KB reach).
 - `-O0` works fully (kernel compiles all .o files at `-O0`).
@@ -454,9 +459,11 @@ MIPS/68k-style vector dispatch.
 - Build system (`bsd.own.mk`): `HAVE_SSP=no` (no stack protector),
   `HAVE_LIBGCC_EH=yes` (skip libunwind), clang 22 warning
   suppressions, jemalloc `LG_QUANTUM=3`.
-- **Hundreds of libc .c files compile at `-O0`.**
-  TLS support (`__tls_get_addr` GD model) and G_DYN_STACKALLOC
-  unblocked jemalloc's `__thread` variables and VLAs.
+- **libc cross-build nearly complete at `-O0`.**
+  TLS (GD model with GOT/PLT for shared libs), G_DYN_STACKALLOC,
+  soft-float bit ops, signed overflow, GOT/PLT, and PIC assembly
+  fixes unblocked jemalloc and shared library linking.
+  `libc.a` builds; `libc.so` link in progress.
 - Build command: `./build.sh -U -j10 -m penumbra
   -V EXTERNAL_TOOLCHAIN=$PWD/../build/llvm
   -O ../build/netbsd-obj -T ../build/netbsd-tools

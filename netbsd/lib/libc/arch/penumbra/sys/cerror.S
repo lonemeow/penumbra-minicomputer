@@ -27,7 +27,8 @@ ENTRY_NP(__cerror)
 	add	r14, #CALLFRAME_SIZ
 #else
 	/* Non-reentrant: store directly to global errno */
-	la	r2, _C_LABEL(errno)
+	mov	r2, r15
+	add	r2, %pcrel(_C_LABEL(errno)+4)
 	stw	r1, [r2]
 #endif /* _REENTRANT */
 	li	r1, #-1

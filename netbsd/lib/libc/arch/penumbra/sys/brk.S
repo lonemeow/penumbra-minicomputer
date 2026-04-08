@@ -22,7 +22,8 @@ _C_LABEL(__curbrk):
 	.text
 
 ENTRY(_brk)
-	la	r11, _C_LABEL(__minbrk)
+	mov	r11, r15
+	add	r11, %pcrel(_C_LABEL(__minbrk)+4)
 	ldw	r2, [r11 + 0]
 	cmp	r1, r2
 	bhs	1f

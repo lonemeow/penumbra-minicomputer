@@ -72,6 +72,12 @@ ACTIVE_CC=		clang
 CWARNFLAGS.clang+=	-Wno-unterminated-string-initialization
 CWARNFLAGS.clang+=	-Wno-atomic-alignment
 CWARNFLAGS.clang+=	-Wno-macro-redefined
+CWARNFLAGS.clang+=	-Wno-cast-function-type-mismatch
+CWARNFLAGS.clang+=	-Wno-unused-but-set-variable
+CWARNFLAGS.clang+=	-Wno-null-pointer-subtraction
+# Triple is penumbra-unknown-none (bare-metal), but userland needs __NetBSD__
+# for correct #ifdef guards.  TODO: change triple OS to 'netbsd'.
+CPPFLAGS+=		-D__NetBSD__
 .endif
 
 TOOLCHAIN_MISSING?=	no
@@ -186,6 +192,7 @@ HAVE_NVMM=	no
 _LIBC_COMPILER_RT.${MACHINE_ARCH}=	yes
 .endif
 
+_LIBC_COMPILER_RT.penumbra=	yes
 _LIBC_COMPILER_RT.aarch64=	yes
 _LIBC_COMPILER_RT.aarch64eb=	yes
 _LIBC_COMPILER_RT.i386=		yes
