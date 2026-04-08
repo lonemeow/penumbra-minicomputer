@@ -30,8 +30,10 @@ enum {
   R_PENUMBRA_MEMOFFSET16_PCREL = 6, // PC-relative 16-bit memory offset
   R_PENUMBRA_IMM16_PCREL = 7,      // PC-relative 16-bit immediate
   // R_PENUMBRA_RELATIVE = 8 — defined in Penumbra.def, not used here.
-  R_PENUMBRA_TLS_GD_LO16 = 9,     // TLS GD: low 16 bits of TP-relative offset
-  R_PENUMBRA_TLS_GD_HI16 = 10,    // TLS GD: high 16 bits of TP-relative offset
+  R_PENUMBRA_TLS_GD_LO16 = 9,     // TLS GD: low 16 bits
+  R_PENUMBRA_TLS_GD_HI16 = 10,    // TLS GD: high 16 bits
+  // 11-15: GOT/PLT/TLS dynamic relocs (linker-only, not emitted by MC)
+  R_PENUMBRA_TLS_GD_PCREL = 16,   // TLS GD: PC-relative to GOT entry (PIC)
 };
 
 class PenumbraELFObjectWriter : public MCELFObjectTargetWriter {
@@ -67,6 +69,8 @@ unsigned PenumbraELFObjectWriter::getRelocType(const MCFixup &Fixup,
     return R_PENUMBRA_TLS_GD_LO16;
   if (Kind == Penumbra::fixup_penumbra_tls_gd_hi16)
     return R_PENUMBRA_TLS_GD_HI16;
+  if (Kind == Penumbra::fixup_penumbra_tls_gd_pcrel)
+    return R_PENUMBRA_TLS_GD_PCREL;
   // Standard data fixups (FK_Data_4 from .word directives).
   if (Kind == FK_Data_4)
     return R_PENUMBRA_32;

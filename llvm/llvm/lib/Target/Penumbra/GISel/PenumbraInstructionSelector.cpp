@@ -650,16 +650,33 @@ bool PenumbraInstructionSelector::selectGlobalValue(MachineInstr &I,
   const GlobalValue *GV = I.getOperand(1).getGlobal();
   int64_t Offset = I.getOperand(1).getOffset();
 
-  // TLS globals: emit LLI+LUI with GD relocation types.  The IR pass has
-  // already replaced @llvm.threadlocal.address with a call to __tls_get_addr,
-  // so this G_GLOBAL_VALUE is the argument to that call.  The linker resolves
-  // GD relocations to a TP-relative offset (static) or GOT entry address
-  // (dynamic).
+  // TLS globals: the IR pass replaced @llvm.threadlocal.address with a call
+  // to __tls_get_addr, so this G_GLOBAL_VALUE is the argument to that call.
+  // PIC: MOV PC + ADDi %tlsgd_pcrel — linker creates GOT tls_index entry,
+  //      resolves pcrel offset to it.
+  // Static: LLI+LUI %tlsgd — linker resolves as TP-relative offset (LE).
   if (GV->isThreadLocal()) {
-    emitLoadSymbolAddr(
-        DstReg, I.getDebugLoc(), MBB, I.getIterator(),
-        MachineOperand::CreateGA(GV, Offset, Penumbra::S_TLSgd_Lo16),
-        MachineOperand::CreateGA(GV, Offset, Penumbra::S_TLSgd_Hi16));
+    if (TM.getRelocationModel() == Reloc::PIC_) {
+      DebugLoc DL = I.getDebugLoc();
+      auto InsertPt = I.getIterator();
+      Register TmpReg =
+          MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
+      auto MOVInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::MOV))
+          .addDef(TmpReg)
+          .addReg(Penumbra::R15);
+      constrainSelectedInstRegOperands(*MOVInst, TII, TRI, RBI);
+      auto ADDiInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::ADDi))
+          .addDef(DstReg)
+          .addReg(TmpReg)
+          .add(MachineOperand::CreateGA(GV, Offset + 4,
+                                        Penumbra::S_TLSgd_PCRel));
+      constrainSelectedInstRegOperands(*ADDiInst, TII, TRI, RBI);
+    } else {
+      emitLoadSymbolAddr(
+          DstReg, I.getDebugLoc(), MBB, I.getIterator(),
+          MachineOperand::CreateGA(GV, Offset, Penumbra::S_TLSgd_Lo16),
+          MachineOperand::CreateGA(GV, Offset, Penumbra::S_TLSgd_Hi16));
+    }
     I.eraseFromParent();
     return true;
   }

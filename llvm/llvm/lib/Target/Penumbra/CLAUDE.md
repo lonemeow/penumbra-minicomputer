@@ -164,15 +164,21 @@ InlineAsmLowering wired into GlobalISel via subtarget.
 at `-O0` through `-O2`.
 Boot ROM compiles and runs correctly at all three levels.
 `-fPIC` supported: uses PC-relative addressing
-(MOV PC + ADDi %pcrel) for globals,
+(MOV PC + ADDi %pcrel) for globals and TLS GD,
 label-difference jump table entries.
-NetBSD stage 1 bootloader builds fully PIC.
-Higher levels or new code patterns may trigger
-unlegalized ops (G_SMAX, etc.).
+`PenumbraToolChain` (`clang/lib/Driver/ToolChains/Penumbra.{h,cpp}`)
+uses `ld.lld` directly for linking (overrides `buildLinker()`).
+NetBSD libc cross-build compiles at `-O0`.
 
 **lld:** `ld.lld -T rom.ld` links Penumbra ELF objects.
-Supports all 11 relocation types including TLS GD.
-TLS LE resolution via `R_TPREL` (Variant 1, no TCB gap, like RISC-V).
+Supports all 17 relocation types including GOT/PLT and TLS GD.
+**GOT/PLT:** PLT entries are 16 bytes (LLI+LUI+LDW+JMP using R11
+scratch register).  `R_PENUMBRA_GLOB_DAT` for GOT, `R_PENUMBRA_JUMP_SLOT`
+for PLT.  Shared libraries (`-shared`) work with PIC code.
+**TLS GD:** PIC uses `R_PENUMBRA_TLS_GD_PCREL` (PC-relative to
+GOT tls_index entry); lld creates GOT pairs with
+`R_PENUMBRA_TLS_DTPMOD32`/`R_PENUMBRA_TLS_DTPOFF32` dynamic relocs.
+Static uses `R_TPREL` (Variant 1, no TCB gap, like RISC-V).
 `EM_PENUMBRA` to `getTlsTpOffset` mapping in `InputSection.cpp`.
 EM_PENUMBRA (0xF0DA) defined in central `llvm/BinaryFormat/ELF.h`.
 
@@ -256,8 +262,14 @@ Fixed locally — needed for NetBSD kernel option tracking symbols
 | `R_PENUMBRA_MEMOFFSET16_PCREL` | 6 | PC-relative 16-bit memory offset | bits [17:2] |
 | `R_PENUMBRA_IMM16_PCREL` | 7 | PC-relative 16-bit immediate | bits [15:0] |
 | `R_PENUMBRA_RELATIVE` | 8 | PIE dynamic relocation (bias adjust) | Full word |
-| `R_PENUMBRA_TLS_GD_LO16` | 9 | TLS GD: low 16 bits of TP offset | bits [15:0] |
-| `R_PENUMBRA_TLS_GD_HI16` | 10 | TLS GD: high 16 bits of TP offset | bits [15:0] |
+| `R_PENUMBRA_TLS_GD_LO16` | 9 | TLS GD: low 16 bits (static: TP offset) | bits [15:0] |
+| `R_PENUMBRA_TLS_GD_HI16` | 10 | TLS GD: high 16 bits (static: TP offset) | bits [15:0] |
+| `R_PENUMBRA_GLOB_DAT` | 11 | GOT entry (absolute address) | Full word |
+| `R_PENUMBRA_JUMP_SLOT` | 12 | PLT GOT entry | Full word |
+| `R_PENUMBRA_TLS_TPOFF32` | 13 | TLS IE: TP-relative offset in GOT | Full word |
+| `R_PENUMBRA_TLS_DTPMOD32` | 14 | TLS GD: module index in GOT | Full word |
+| `R_PENUMBRA_TLS_DTPOFF32` | 15 | TLS GD: module offset in GOT | Full word |
+| `R_PENUMBRA_TLS_GD_PCREL` | 16 | TLS GD: PC-relative to GOT entry (PIC) | bits [15:0] |
 
 ## Legalization (`GISel/PenumbraLegalizerInfo.{h,cpp}`)
 - **Legal s32:** G_ADD, G_SUB, G_AND, G_OR, G_XOR,
@@ -277,12 +289,16 @@ Fixed locally — needed for NetBSD kernel option tracking symbols
 - **Lowered:** G_ABS, G_CTTZ/G_CTLZ/G_CTPOP
   (and \_ZERO\_UNDEF variants) to shift/logic,
   G_FSHL/G_FSHR (s32+s64), G_BSWAP/G_BITREVERSE (s32+s64),
-  G_UADDO/G_USUBO/G_UADDE/G_USUBE (s64 narrowed to s32),
-  G_SMIN/G_SMAX/G_UMIN/G_UMAX (any width, lowered to icmp+select).
+  G_UADDO/G_USUBO/G_UADDE/G_USUBE/G_SADDO/G_SSUBO/G_SADDE/G_SSUBE
+  (s64 narrowed to s32),
+  G_SMIN/G_SMAX/G_UMIN/G_UMAX (any width, lowered to icmp+select),
+  G_FNEG/G_FABS/G_FCOPYSIGN (integer bit manipulation, no libcall),
+  G_IS_FPCLASS (exponent/mantissa bit inspection).
 - **Libcall:** G_MEMCPY/G_MEMMOVE/G_MEMSET.
 - **Legal:** G_STACKSAVE/G_STACKRESTORE (p0).
 - **Lowered:** G_DYN_STACKALLOC (framework: SP subtract + alignment).
-- **Custom:** G_VASTART, G_MUL, G_UDIV, G_UREM, G_PREFETCH (no-op)
+- **Custom:** G_VASTART, G_MUL, G_UDIV, G_UREM, G_PREFETCH (no-op),
+  G_GET_ROUNDING (constant 1 = round-to-nearest, no FPU)
   (via legalizeCustom() override). G_VAARG lowered (s32/s64/p0).
 
 ## Key Implementation Notes

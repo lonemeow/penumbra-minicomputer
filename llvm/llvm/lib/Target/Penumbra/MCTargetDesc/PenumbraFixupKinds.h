@@ -33,6 +33,9 @@ enum Fixups {
   fixup_penumbra_tls_gd_lo16,
   // TLS General-Dynamic: high 16 bits of GD argument, into bits [15:0].
   fixup_penumbra_tls_gd_hi16,
+  // TLS General-Dynamic: PC-relative offset to GOT tls_index entry (PIC).
+  // Format L, bits [15:0]. Used in ADDi for PIC TLS access.
+  fixup_penumbra_tls_gd_pcrel,
 
   // Marker
   NumTargetFixupKinds
@@ -45,8 +48,9 @@ enum Specifier {
   S_Lo16,
   S_Hi16,
   S_PCRel,     // %pcrel() — PC-relative offset
-  S_TLSgd_Lo16, // %tlsgd_lo16() — TLS General-Dynamic, low 16 bits
-  S_TLSgd_Hi16, // %tlsgd_hi16() — TLS General-Dynamic, high 16 bits
+  S_TLSgd_Lo16,  // %tlsgd_lo16() — TLS General-Dynamic, low 16 bits
+  S_TLSgd_Hi16,  // %tlsgd_hi16() — TLS General-Dynamic, high 16 bits
+  S_TLSgd_PCRel, // %tlsgd_pcrel() — TLS GD PC-relative (PIC)
 };
 
 } // namespace llvm::Penumbra

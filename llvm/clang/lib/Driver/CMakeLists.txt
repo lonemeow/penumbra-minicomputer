@@ -73,6 +73,7 @@ add_clang_library(clangDriver
   ToolChains/MSP430.cpp
   ToolChains/MSVC.cpp
   ToolChains/NetBSD.cpp
+  ToolChains/Penumbra.cpp
   ToolChains/OHOS.cpp
   ToolChains/OpenBSD.cpp
   ToolChains/PS4CPU.cpp

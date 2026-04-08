@@ -49,6 +49,9 @@ void PenumbraMCAsmInfo::printSpecifierExpr(raw_ostream &OS,
   case Penumbra::S_TLSgd_Hi16:
     OS << "%tlsgd_hi16(";
     break;
+  case Penumbra::S_TLSgd_PCRel:
+    OS << "%tlsgd_pcrel(";
+    break;
   default:
     OS << "%unknown(";
     break;

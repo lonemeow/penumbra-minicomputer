@@ -76,6 +76,8 @@ PenumbraAsmBackend::getFixupKindInfo(MCFixupKind Kind) const {
       {"fixup_penumbra_tls_gd_lo16", 0, 16, 0},
       // tls_gd_hi16: TLS GD high 16 bits, into bits [15:0]
       {"fixup_penumbra_tls_gd_hi16", 0, 16, 0},
+      // tls_gd_pcrel: TLS GD PC-relative, into bits [15:0]
+      {"fixup_penumbra_tls_gd_pcrel", 0, 16, 0},
   };
 
   if (Kind < FirstTargetFixupKind)
@@ -152,7 +154,9 @@ void PenumbraAsmBackend::applyFixup(const MCFragment &F, const MCFixup &Fixup,
   }
 
   if (Kind ==
-      static_cast<MCFixupKind>(Penumbra::fixup_penumbra_imm16_pcrel)) {
+          static_cast<MCFixupKind>(Penumbra::fixup_penumbra_imm16_pcrel) ||
+      Kind ==
+          static_cast<MCFixupKind>(Penumbra::fixup_penumbra_tls_gd_pcrel)) {
     // PC-relative 16-bit immediate, into bits [15:0] (Format L).
     // ADDi (INC) zero-extends the immediate, so negative offsets don't
     // work.  Flip to SUBi (DEC) and negate the value when negative.

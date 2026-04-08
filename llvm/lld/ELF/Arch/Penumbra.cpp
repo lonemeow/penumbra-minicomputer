@@ -5,11 +5,13 @@
 //===----------------------------------------------------------------------===//
 //
 // Penumbra is a 32-bit little-endian RISC minicomputer.  This file implements
-// the minimal lld target support needed to link Penumbra ELF objects.
+// the lld target support needed to link Penumbra ELF objects, including
+// GOT/PLT for shared libraries and TLS (General-Dynamic model).
 //
 //===----------------------------------------------------------------------===//
 
 #include "Symbols.h"
+#include "SyntheticSections.h"
 #include "Target.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Support/Endian.h"
@@ -31,14 +33,41 @@ public:
                             RelType type) const override;
   void relocate(uint8_t *loc, const Relocation &rel,
                 uint64_t val) const override;
+  void writePltHeader(uint8_t *buf) const override;
+  void writePlt(uint8_t *buf, const Symbol &sym,
+                uint64_t pltEntryAddr) const override;
+  void writeGotPlt(uint8_t *buf, const Symbol &s) const override;
 };
 } // namespace
+
+// Instruction encodings (little-endian):
+//   LLI R11, imm16:       0x42C00000 | (imm16 & 0xFFFF)
+//   LUI R11, imm16:       0x4AC00000 | (imm16 & 0xFFFF)
+//   LDW R11, [R11 + 0]:   0xB2EC0000
+//   JMP R11:               0x6EC00000
+// R11 is the ABI scratch register — not callee-saved, safe to clobber.
+static constexpr uint32_t LLI_R11 = 0x42C00000;
+static constexpr uint32_t LUI_R11 = 0x4AC00000;
+static constexpr uint32_t LDW_R11_R11 = 0xB2EC0000;
+static constexpr uint32_t JMP_R11 = 0x6EC00000;
 
 Penumbra::Penumbra(Ctx &ctx) : TargetInfo(ctx) {
   // BREAK instruction = 0x2A000000
   trapInstr = {0x00, 0x00, 0x00, 0x2A};
   relativeRel = R_PENUMBRA_RELATIVE;
   symbolicRel = R_PENUMBRA_32;
+
+  // GOT/PLT
+  gotRel = R_PENUMBRA_GLOB_DAT;
+  pltRel = R_PENUMBRA_JUMP_SLOT;
+  pltHeaderSize = 16; // 4 instructions
+  pltEntrySize = 16;
+  ipltEntrySize = 16;
+
+  // TLS
+  tlsGotRel = R_PENUMBRA_TLS_TPOFF32;
+  tlsModuleIndexRel = R_PENUMBRA_TLS_DTPMOD32;
+  tlsOffsetRel = R_PENUMBRA_TLS_DTPOFF32;
 }
 
 RelExpr Penumbra::getRelExpr(RelType type, const Symbol &s,
@@ -47,13 +76,15 @@ RelExpr Penumbra::getRelExpr(RelType type, const Symbol &s,
   case R_PENUMBRA_BRANCH22:
   case R_PENUMBRA_MEMOFFSET16_PCREL:
   case R_PENUMBRA_IMM16_PCREL:
-    return R_PC;
+    return R_PLT_PC;
   case R_PENUMBRA_TLS_GD_LO16:
   case R_PENUMBRA_TLS_GD_HI16:
-    // For static linking, resolve GD directly as TP-relative offset
-    // (implicit GD→LE relaxation).  For dynamic linking, this will need
-    // to become R_TLSGD_GOT to create GOT entries.
-    return R_TPREL;
+    // Absolute TLS GD — used by non-PIC code. For static linking,
+    // lld relaxes GD→LE automatically (R_TPREL fallback).
+    return R_TLSGD_PC;
+  case R_PENUMBRA_TLS_GD_PCREL:
+    // PIC TLS GD — PC-relative offset to GOT tls_index entry.
+    return R_TLSGD_PC;
   default:
     return R_ABS;
   }
@@ -70,6 +101,11 @@ int64_t Penumbra::getImplicitAddend(const uint8_t *buf,
   switch (type) {
   case R_PENUMBRA_32:
   case R_PENUMBRA_RELATIVE:
+  case R_PENUMBRA_GLOB_DAT:
+  case R_PENUMBRA_JUMP_SLOT:
+  case R_PENUMBRA_TLS_TPOFF32:
+  case R_PENUMBRA_TLS_DTPMOD32:
+  case R_PENUMBRA_TLS_DTPOFF32:
     return SignExtend64<32>(read32le(buf));
   case R_PENUMBRA_NONE:
     return 0;
@@ -79,11 +115,48 @@ int64_t Penumbra::getImplicitAddend(const uint8_t *buf,
   }
 }
 
+void Penumbra::writeGotPlt(uint8_t *buf, const Symbol &s) const {
+  // RELA: addend is in the relocation entry, not in-place. Write 0.
+  write32le(buf, 0);
+}
+
+// PLT header: resolver stub — loads GOT[2] (resolver address) and jumps.
+//   LLI  R11, lo16(&GOT[2])
+//   LUI  R11, hi16(&GOT[2])
+//   LDW  R11, [R11]
+//   JMP  R11
+void Penumbra::writePltHeader(uint8_t *buf) const {
+  uint64_t got2 = ctx.in.gotPlt->getVA() + 8; // GOT[2]
+  write32le(buf + 0, LLI_R11 | (got2 & 0xFFFF));
+  write32le(buf + 4, LUI_R11 | ((got2 >> 16) & 0xFFFF));
+  write32le(buf + 8, LDW_R11_R11);
+  write32le(buf + 12, JMP_R11);
+}
+
+// PLT entry: loads target address from GOT and jumps.
+//   LLI  R11, lo16(&GOT[n])
+//   LUI  R11, hi16(&GOT[n])
+//   LDW  R11, [R11]
+//   JMP  R11
+void Penumbra::writePlt(uint8_t *buf, const Symbol &sym,
+                        uint64_t pltEntryAddr) const {
+  uint64_t gotAddr = sym.getGotPltVA(ctx);
+  write32le(buf + 0, LLI_R11 | (gotAddr & 0xFFFF));
+  write32le(buf + 4, LUI_R11 | ((gotAddr >> 16) & 0xFFFF));
+  write32le(buf + 8, LDW_R11_R11);
+  write32le(buf + 12, JMP_R11);
+}
+
 void Penumbra::relocate(uint8_t *loc, const Relocation &rel,
                         uint64_t val) const {
   switch (rel.type) {
   case R_PENUMBRA_32:
   case R_PENUMBRA_RELATIVE:
+  case R_PENUMBRA_GLOB_DAT:
+  case R_PENUMBRA_JUMP_SLOT:
+  case R_PENUMBRA_TLS_TPOFF32:
+  case R_PENUMBRA_TLS_DTPMOD32:
+  case R_PENUMBRA_TLS_DTPOFF32:
     write32le(loc, val);
     break;
   case R_PENUMBRA_BRANCH22: {
@@ -98,26 +171,26 @@ void Penumbra::relocate(uint8_t *loc, const Relocation &rel,
   case R_PENUMBRA_IMM16:
   case R_PENUMBRA_LO16:
   case R_PENUMBRA_TLS_GD_LO16:
-    // 16-bit immediate / low 16 bits of address / TLS offset, into bits [15:0].
+    // 16-bit immediate / low 16 bits, into bits [15:0].
     write32le(loc, (read32le(loc) & 0xFFFF0000) | (val & 0xFFFF));
     break;
   case R_PENUMBRA_HI16:
   case R_PENUMBRA_TLS_GD_HI16:
-    // High 16 bits of address / TLS offset, into bits [15:0].
+    // High 16 bits, into bits [15:0].
     write32le(loc, (read32le(loc) & 0xFFFF0000) | ((val >> 16) & 0xFFFF));
     break;
   case R_PENUMBRA_MEMOFFSET16_PCREL: {
     // PC-relative 16-bit offset, into bits [17:2] (Format M).
     uint32_t insn = read32le(loc);
-    insn = (insn & ~(0xFFFF << 2)) | ((static_cast<uint32_t>(val) & 0xFFFF) << 2);
+    insn = (insn & ~(0xFFFF << 2)) |
+           ((static_cast<uint32_t>(val) & 0xFFFF) << 2);
     write32le(loc, insn);
     break;
   }
-  case R_PENUMBRA_IMM16_PCREL: {
+  case R_PENUMBRA_IMM16_PCREL:
+  case R_PENUMBRA_TLS_GD_PCREL: {
     // PC-relative 16-bit immediate, into bits [15:0] (Format L).
-    // The instruction is ADDi (INC, opcode 0011) which zero-extends.
-    // If the offset is negative, flip to SUBi (DEC, opcode 0100) and
-    // negate the value so the unsigned immediate works correctly.
+    // ADDi (INC) zero-extends, so negative offsets need SUBi (DEC).
     uint32_t insn = read32le(loc);
     int64_t sval = static_cast<int64_t>(val);
     if (sval < 0) {
