@@ -15,6 +15,7 @@ struct mdlwp {
 };
 
 struct mdproc {
+	void		(*md_syscall)(struct trapframe *);
 	int		md_flags;
 #define MDP_SYSCALL	0x0001		/* has used SYSCALL instruction */
 };

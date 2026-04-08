@@ -20,6 +20,7 @@ file	arch/penumbra/penumbra/machdep.c
 file	arch/penumbra/penumbra/mulsi3.c
 file	arch/penumbra/penumbra/autoconf.c
 file	arch/penumbra/penumbra/trap.c
+file	arch/penumbra/penumbra/syscall.c
 file	arch/penumbra/penumbra/pmap.c
 file	arch/penumbra/penumbra/copy.S
 

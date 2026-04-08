@@ -117,9 +117,9 @@ trap(struct trapframe *tf)
 		break;
 
 	case EXC_SYSCALL:
-		/* TODO: system call dispatch */
-		panic("syscall from %s at pc=0x%08x",
-		    usermode ? "user" : "kernel", tf->tf_epc);
+		if (!usermode)
+			panic("kernel syscall at pc=0x%08x", tf->tf_epc);
+		(*curlwp->l_proc->p_md.md_syscall)(tf);
 		break;
 
 	case EXC_BREAK:

@@ -14,7 +14,7 @@ The full boot chain is documented in `doc/boot/boot-process.md`. Summary:
 |-------|----------|--------|-------------|
 | ROM | `hw/rom/` | **Done** | Hardware init, autoconfig, SD card, FAT32, ELF loader |
 | Bootloader | `netbsd/sys/arch/penumbra/stand/boot/` | **Done** | PIE ELF (PENBOOT.ELF), loaded from FAT32 root by ROM. Translates boot data → bootinfo, loads kernel via libsa `loadfile()`, jumps with MMU off |
-| Kernel | `netbsd/sys/arch/penumbra/penumbra/` | **Boots to root device prompt** | locore.S, pmap, traps, context switching, console — all working |
+| Kernel | `netbsd/sys/arch/penumbra/penumbra/` | **Execs /sbin/init, syscalls work** | locore.S, pmap, traps, context switching, console, exec, syscall dispatch — all working |
 
 The ROM loads `PENBOOT.ELF` from the FAT32 partition, which in turn loads the kernel ELF at a dynamic physical address and jumps to it. No intermediate stage — the bootloader handles ELF parsing, bootinfo setup, and kernel handoff directly.
 
@@ -34,7 +34,7 @@ Most integer-type headers delegate to NetBSD's `sys/common_*` headers, which use
 
 ## Kernel Status
 
-**The kernel mounts a root filesystem from SD card on the ISS.** Full boot chain: ROM autoconfig → bootloader → kernel → device drivers → msdosfs root mount. Boots past `main()` through UVM init, autoconf, softint threads, scheduler, and attempts to exec `/sbin/init`.
+**The kernel execs `/sbin/init` and dispatches syscalls.** Full boot chain: ROM autoconfig → bootloader → kernel → device drivers → msdosfs root mount → exec init → userland syscalls. Init calls `SYS_write` and `SYS_exit` successfully.
 
 ### What Works
 
@@ -54,15 +54,22 @@ Most integer-type headers delegate to NetBSD's `sys/common_*` headers, which use
 
 - **curlwp:** Defined as `curcpu()->ci_curlwp` macro so MI code and `cpu_switchto` share the same variable. `cpu_info_store` statically initializes it to `&lwp0`.
 
+- **Demand paging:** TLB miss/prot faults dispatch to `uvm_fault()` for demand paging and COW. `pcb_onfault` recovery for copyin/copyout kernel faults. User-mode access to kernel VA rejected early.
+
+- **copyin/copyout (copy.S):** Assembly implementations with `pcb_onfault` fault recovery. copyinstr/copyoutstr byte-loop. ufetch/ustore (8/16/32). User address validation against `VM_MAXUSER_ADDRESS`.
+
+- **Exec and return-to-user:** `setregs()` initializes user trapframe. `lwp_trampoline` → `trap_return` handles SP banking (USP save/restore) and pinned-scratch ESR/EPC stash to prevent TLB-miss clobbering before eret. Kernel execs `/sbin/init` and reaches userland.
+
+- **Syscall dispatch:** `SYSCALL` instruction (vector 5) dispatches through `md_syscall` function pointer. R1=syscall number, R2–R4=args, overflow from user stack via `copyin()`. Return convention: R1=retval on success (C flag clear), R1=errno on error (C flag set). ERESTART backs up EPC to re-execute SYSCALL. Indirect syscalls (`SYS_syscall`/`SYS___syscall`) explicitly rejected with ENOSYS until implemented.
+
 - **DIAGNOSTIC:** Enabled for development — all KASSERT checks active.
 
 ### What's Next
 
-1. **Trap handler Stage 2** — dispatch TLB miss/prot faults to `uvm_fault()` instead of panicking (needed for demand paging, COW, stack growth).
-2. **Remaining MD stubs** — fill in `TODO(stub)` functions as the kernel reaches them. `copyin`/`copyout` are needed early.
-3. **Timer** — programmable timer peripheral for `hardclock()` scheduler tick.
-4. **Interrupt controller** — multiple devices with priority encoding.
-5. **User-mode support** — SYSCALL/ERET, signal delivery, USP banking.
+1. **Remaining MD stubs** — fill in `TODO(stub)` functions as the kernel reaches them (signals, mcontext, startlwp).
+2. **Timer** — programmable timer peripheral for `hardclock()` scheduler tick.
+3. **Interrupt controller** — multiple devices with priority encoding.
+4. **Signal delivery** — `sendsig_siginfo`, signal trampoline, `cpu_getmcontext`/`cpu_setmcontext`.
 
 ### Key Design Decisions
 

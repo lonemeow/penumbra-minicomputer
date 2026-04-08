@@ -304,11 +304,7 @@ setregs(struct lwp *l, struct exec_package *pack, vaddr_t stack)
 	tf->tf_sr = PSL_USERSET & ~PSL_USERCLR;
 }
 
-void
-syscall_intern(struct proc *p)
-{
-	/* TODO: set p->p_md.md_syscall */
-}
+/* syscall_intern() is now in syscall.c */
 
 /*
  * Signal and debug support — stubs.

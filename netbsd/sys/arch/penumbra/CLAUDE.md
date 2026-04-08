@@ -148,7 +148,7 @@ Headers fall into three categories:
 |------|---------|
 | `locore.S` | Entry point, BSS zero (phys mode), bootinfo copy, kernel page table build (L1+L2 in BSS), real TLB miss handler, per-vector trap entry stubs + common trapframe save/restore (with double-fault detection), MMU enable, TLB invalidation, scratch window, cpu_switchto, lwp_trampoline, setjmp/longjmp |
 | `startup.c` | Early boot: `penumbra_init()` (phase 1 on boot stack — returns new SP), `penumbra_main()` (phase 2 on lwp0 stack — calls main()), bootinfo parsing, early UART console via scratch window, `consinit()`, `penumbra_physmem_init()`, UART remap via `pmap_map_device()` |
-| `machdep.c` | Kernel runtime: `cpu_startup()`, `cpu_reboot()`, `cpu_lwp_fork()` (LWP context setup), `lwp_trampoline` (extern), remaining LWP/process/signal stubs, `kcopy`, ufetch/ustore |
+| `machdep.c` | Kernel runtime: `cpu_startup()`, `cpu_reboot()`, `cpu_lwp_fork()` (LWP context setup), `setregs()`, `lwp_trampoline` (extern), remaining LWP/process/signal stubs, `kcopy` |
 | `mulsi3.c` | Compiler runtime: `__mulsi3` (software 32-bit multiply for LLVM libcalls) |
 | `autoconf.c` | `cpu_configure()`, `cpu_rootconf()` |
 | `mainbus.c` | Root bus device driver (attaches cpu + pbbus) |
@@ -158,6 +158,7 @@ Headers fall into three categories:
 | `psd.c` | SD card block device — SPI/SD protocol via bus_space, MBR partition parsing, bdevsw/cdevsw at major 8. Polled sector-at-a-time I/O. |
 | `bus_space.c` | bus_space implementation — map/unmap via UVM + pmap_kenter_pa, read/write via volatile pointers |
 | `trap.c` | Exception dispatch (all 9 vectors), TLB fault → uvm_fault() demand paging, pcb_onfault recovery for copyin/copyout, SPL stubs |
+| `syscall.c` | Syscall dispatch: `syscall_intern()` + `syscall()`. R1=number, R2–R4=args, stack overflow via copyin. Carry-flag error convention (C=0 success, C=1 error). Indirect syscalls rejected with ENOSYS. |
 | `pmap.c` | Software TLB management: `pmap_bootstrap()`, `pmap_steal_memory()`/`pmap_steal_page()`, `pmap_kenter_pa()`/`pmap_kremove()`, `pmap_enter()` (demand paging), `pmap_create()`/`pmap_destroy()` (user address spaces), `pmap_activate()` (L1 re-pin), `pmap_extract()`, `pmap_map_device()`, scratch window helpers. |
 | `copy.S` | Assembly copyin/copyout/copyinstr/copyoutstr with pcb_onfault fault recovery, ufetch/ustore (8/16/32), user address validation |
 | `genassym.cf` | Struct offset definitions for assembly code |
@@ -288,20 +289,28 @@ Headers fall into three categories:
   `trap_return` handles SP banking (save/restore USP via SPR),
   stashes EPC/ESR/R1/R2 in pinned vector page scratch to avoid
   TLB-miss clobbering of ESR/EPC before eret.
-  Kernel successfully execs `/sbin/init` and reaches userland
-  (panics on first SYSCALL — syscall dispatch not yet implemented).
+  Kernel successfully execs `/sbin/init` and reaches userland.
+- [x] **Syscall dispatch (syscall.c)** — `SYSCALL` (vector 5)
+  dispatched via `md_syscall` function pointer set by
+  `syscall_intern()`.  R1=syscall number, R2–R4=register args,
+  overflow from user stack via `copyin()`.  Return convention:
+  R1=retval + C flag clear on success, R1=errno + C flag set on
+  error.  ERESTART backs up EPC.  Indirect syscalls
+  (`SYS_syscall`/`SYS___syscall`) rejected with ENOSYS.
+  `userret()` called on every syscall return path.
+  Init calls SYS_write + SYS_exit successfully.
 - [ ] Kernel port — remaining MD stubs need real implementations
   (grep for `TODO(stub)` to find them)
 - [ ] DDB — disabled, needs extensive MD hooks
 
 ## Next Steps
 
-1. **Syscall dispatch** — wire SYSCALL trap to `syscall()` so
-   userland can call write/exit.
-3. **Remaining MD stubs** — fill in `TODO(stub)` functions as
-   the kernel reaches them.
-5. **Timer** — programmable timer for NetBSD hardclock() tick
-6. **Interrupt controller** — multiple devices with priority
+1. **Remaining MD stubs** — fill in `TODO(stub)` functions as
+   the kernel reaches them (signals, mcontext, startlwp).
+2. **Timer** — programmable timer for NetBSD hardclock() tick
+3. **Interrupt controller** — multiple devices with priority
+4. **Signal delivery** — sendsig_siginfo, signal trampoline,
+   cpu_getmcontext/cpu_setmcontext
 
 ## Documentation
 

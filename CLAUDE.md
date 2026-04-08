@@ -394,7 +394,13 @@ MIPS/68k-style vector dispatch.
   trapframe, `lwp_trampoline` → `trap_return` handles SP banking
   (USP save/restore) and pinned-scratch ESR/EPC stash to prevent
   TLB-miss clobbering before eret.  Kernel execs `/sbin/init`
-  and reaches userland (SYSCALL panic — dispatch not yet wired).
+  and reaches userland.
+- **Syscall dispatch (syscall.c):** `SYSCALL` (vector 5) dispatched
+  via `md_syscall` function pointer.  R1=syscall number, R2–R4=args,
+  overflow from user stack via `copyin()`.  Carry-flag error convention
+  (C=0 success, C=1 error).  Indirect syscalls (`SYS_syscall`/
+  `SYS___syscall`) rejected with ENOSYS.  Init calls SYS_write +
+  SYS_exit successfully.
 - All remaining MD functions are either implemented or break-trap
   stubs (grep for `TODO(stub)`).
 - Atomics: interrupt-disable CAS (`RDSPR SR` / `DI` / load-cmp-store
@@ -414,9 +420,8 @@ MIPS/68k-style vector dispatch.
   kernel port context.
 
 ## Next Steps (in priority order)
-1. **Kernel implementation** — syscall dispatch (write/exit),
-   then remaining MD stubs as the kernel reaches them
-   (grep `TODO(stub)`).
+1. **Kernel implementation** — remaining MD stubs as the kernel
+   reaches them (grep `TODO(stub)`): signals, mcontext, startlwp.
 3. **LLVM `-O2` support** — implement `analyzeBranch`/`insertBranch`/
    `removeBranch` for branch optimization passes
 4. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick
