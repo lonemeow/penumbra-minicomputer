@@ -568,7 +568,8 @@ def assemble(source_lines, org=0):
     instructions = []  # (line_num, addr, mnemonic, operands_str)
 
     for line_num, raw_line in enumerate(source_lines, 1):
-        line = raw_line.split(";")[0].strip()
+        # Strip comments: both ; (legacy) and // (LLVM convention).
+        line = raw_line.split("//")[0].split(";")[0].strip()
         if not line:
             continue
 

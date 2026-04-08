@@ -6,7 +6,7 @@
 define i64 @return_i64_const() {
 ; CHECK-LABEL: return_i64_const:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    lli r1, 42
 ; CHECK-NEXT:    lli r2, 0
 ; CHECK-NEXT:    jmp r13
@@ -17,7 +17,7 @@ define i64 @return_i64_const() {
 define i64 @return_neg1() {
 ; CHECK-LABEL: return_neg1:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    llis r1, -1
 ; CHECK-NEXT:    llis r2, -1
 ; CHECK-NEXT:    jmp r13
@@ -28,7 +28,7 @@ define i64 @return_neg1() {
 define i64 @passthrough_i64(i64 %x) {
 ; CHECK-LABEL: passthrough_i64:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    jmp r13
   ret i64 %x
 }
@@ -37,7 +37,7 @@ define i64 @passthrough_i64(i64 %x) {
 define i32 @trunc_i64(i64 %x) {
 ; CHECK-LABEL: trunc_i64:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    jmp r13
   %val = trunc i64 %x to i32
   ret i32 %val
@@ -47,7 +47,7 @@ define i32 @trunc_i64(i64 %x) {
 define i32 @high_half(i64 %x) {
 ; CHECK-LABEL: high_half:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    mov r1, r2
 ; CHECK-NEXT:    jmp r13
   %shifted = lshr i64 %x, 32
@@ -59,7 +59,7 @@ define i32 @high_half(i64 %x) {
 define i64 @and_i64(i64 %a, i64 %b) {
 ; CHECK-LABEL: and_i64:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    and r1, r3
 ; CHECK-NEXT:    and r2, r4
 ; CHECK-NEXT:    jmp r13
@@ -71,9 +71,9 @@ define i64 @and_i64(i64 %a, i64 %b) {
 define i1 @cmp_i64_eq(i64 %a, i64 %b) {
 ; CHECK-LABEL: cmp_i64_eq:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub r14, 4
-; CHECK-NEXT:    stw r5, [r14 + 0] ; 4-byte Folded Spill
+; CHECK-NEXT:    stw r5, [r14 + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r11, r1
 ; CHECK-NEXT:    lli r5, 0
 ; CHECK-NEXT:    xor r11, r3
@@ -83,11 +83,11 @@ define i1 @cmp_i64_eq(i64 %a, i64 %b) {
 ; CHECK-NEXT:    lli r2, 0
 ; CHECK-NEXT:    cmp r11, r5
 ; CHECK-NEXT:    beq .LBB6_2
-; CHECK-NEXT:  ; %bb.1:
+; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r1, r2
 ; CHECK-NEXT:    b .LBB6_2
 ; CHECK-NEXT:  .LBB6_2:
-; CHECK-NEXT:    ldw r5, [r14 + 0] ; 4-byte Folded Reload
+; CHECK-NEXT:    ldw r5, [r14 + 0] // 4-byte Folded Reload
 ; CHECK-NEXT:    add r14, 4
 ; CHECK-NEXT:    jmp r13
   %cmp = icmp eq i64 %a, %b
@@ -98,7 +98,7 @@ define i1 @cmp_i64_eq(i64 %a, i64 %b) {
 define i64 @zext_i32_to_i64(i32 %x) {
 ; CHECK-LABEL: zext_i32_to_i64:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    lli r2, 0
 ; CHECK-NEXT:    jmp r13
   %ext = zext i32 %x to i64
@@ -109,7 +109,7 @@ define i64 @zext_i32_to_i64(i32 %x) {
 define i64 @sext_i32_to_i64(i32 %x) {
 ; CHECK-LABEL: sext_i32_to_i64:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    mov r2, r1
 ; CHECK-NEXT:    sar r2, 31
 ; CHECK-NEXT:    jmp r13
@@ -121,7 +121,7 @@ define i64 @sext_i32_to_i64(i32 %x) {
 define i64 @mixed_args(i32 %x, i64 %y) {
 ; CHECK-LABEL: mixed_args:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    mov r1, r2
 ; CHECK-NEXT:    mov r2, r3
 ; CHECK-NEXT:    jmp r13

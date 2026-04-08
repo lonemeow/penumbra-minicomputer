@@ -6,10 +6,10 @@
 define i32 @reg_output() {
 ; CHECK-LABEL: reg_output:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
-; CHECK-NEXT:    ;APP
+; CHECK-NEXT:  // %bb.0:
+; CHECK-NEXT:    //APP
 ; CHECK-NEXT:    mov r1, r0
-; CHECK-NEXT:    ;NO_APP
+; CHECK-NEXT:    //NO_APP
 ; CHECK-NEXT:    jmp r13
   %val = call i32 asm "mov $0, r0", "=r"()
   ret i32 %val
@@ -19,10 +19,10 @@ define i32 @reg_output() {
 define void @reg_input(i32 %val) {
 ; CHECK-LABEL: reg_input:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
-; CHECK-NEXT:    ;APP
+; CHECK-NEXT:  // %bb.0:
+; CHECK-NEXT:    //APP
 ; CHECK-NEXT:    test r1, r1
-; CHECK-NEXT:    ;NO_APP
+; CHECK-NEXT:    //NO_APP
 ; CHECK-NEXT:    jmp r13
   call void asm sideeffect "test $0, $0", "r"(i32 %val)
   ret void
@@ -32,10 +32,10 @@ define void @reg_input(i32 %val) {
 define void @imm_input() {
 ; CHECK-LABEL: imm_input:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
-; CHECK-NEXT:    ;APP
+; CHECK-NEXT:  // %bb.0:
+; CHECK-NEXT:    //APP
 ; CHECK-NEXT:    add r1, 42
-; CHECK-NEXT:    ;NO_APP
+; CHECK-NEXT:    //NO_APP
 ; CHECK-NEXT:    jmp r13
   call void asm sideeffect "add r1, $0", "i"(i32 42)
   ret void
@@ -45,10 +45,10 @@ define void @imm_input() {
 define void @cc_clobber(i32 %a) {
 ; CHECK-LABEL: cc_clobber:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
-; CHECK-NEXT:    ;APP
+; CHECK-NEXT:  // %bb.0:
+; CHECK-NEXT:    //APP
 ; CHECK-NEXT:    test r1, r1
-; CHECK-NEXT:    ;NO_APP
+; CHECK-NEXT:    //NO_APP
 ; CHECK-NEXT:    jmp r13
   call void asm sideeffect "test $0, $0", "r,~{cc}"(i32 %a)
   ret void
@@ -58,10 +58,10 @@ define void @cc_clobber(i32 %a) {
 define void @memory_fence() {
 ; CHECK-LABEL: memory_fence:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
-; CHECK-NEXT:    ;APP
+; CHECK-NEXT:  // %bb.0:
+; CHECK-NEXT:    //APP
 ; CHECK-NEXT:    di
-; CHECK-NEXT:    ;NO_APP
+; CHECK-NEXT:    //NO_APP
 ; CHECK-NEXT:    jmp r13
   call void asm sideeffect "di", "~{memory}"()
   ret void
@@ -71,10 +71,10 @@ define void @memory_fence() {
 define i32 @input_output(i32 %in) {
 ; CHECK-LABEL: input_output:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
-; CHECK-NEXT:    ;APP
+; CHECK-NEXT:  // %bb.0:
+; CHECK-NEXT:    //APP
 ; CHECK-NEXT:    mov r1, r1
-; CHECK-NEXT:    ;NO_APP
+; CHECK-NEXT:    //NO_APP
 ; CHECK-NEXT:    jmp r13
   %out = call i32 asm "mov $0, $1", "=r,r"(i32 %in)
   ret i32 %out

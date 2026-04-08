@@ -9,13 +9,13 @@
 define i32 @return_undef() {
 ; O0-LABEL: return_undef:
 ; O0:         .cfi_startproc
-; O0-NEXT:  ; %bb.1:
-; O0-NEXT:    ; implicit-def: $r1
+; O0-NEXT:  // %bb.1:
+; O0-NEXT:    // implicit-def: $r1
 ; O0-NEXT:    jmp r13
 ;
 ; O1-LABEL: return_undef:
 ; O1:         .cfi_startproc
-; O1-NEXT:  ; %bb.0:
+; O1-NEXT:  // %bb.0:
 ; O1-NEXT:    jmp r13
   ret i32 undef
 }
@@ -23,13 +23,13 @@ define i32 @return_undef() {
 define ptr @return_undef_ptr() {
 ; O0-LABEL: return_undef_ptr:
 ; O0:         .cfi_startproc
-; O0-NEXT:  ; %bb.1:
-; O0-NEXT:    ; implicit-def: $r1
+; O0-NEXT:  // %bb.1:
+; O0-NEXT:    // implicit-def: $r1
 ; O0-NEXT:    jmp r13
 ;
 ; O1-LABEL: return_undef_ptr:
 ; O1:         .cfi_startproc
-; O1-NEXT:  ; %bb.0:
+; O1-NEXT:  // %bb.0:
 ; O1-NEXT:    jmp r13
   ret ptr undef
 }
@@ -38,36 +38,36 @@ define ptr @return_undef_ptr() {
 define i32 @cond_undef(i1 %c, i32 %a) {
 ; O0-LABEL: cond_undef:
 ; O0:         .cfi_startproc
-; O0-NEXT:  ; %bb.1: ; %entry
+; O0-NEXT:  // %bb.1: // %entry
 ; O0-NEXT:    sub r14, 8
-; O0-NEXT:    stw r2, [r14 + 4] ; 4-byte Folded Spill
+; O0-NEXT:    stw r2, [r14 + 4] // 4-byte Folded Spill
 ; O0-NEXT:    test r1, r1
 ; O0-NEXT:    bne .LBB2_2
 ; O0-NEXT:    b .LBB2_3
-; O0-NEXT:  .LBB2_2: ; %then
-; O0-NEXT:    ldw r1, [r14 + 4] ; 4-byte Folded Reload
-; O0-NEXT:    stw r1, [r14 + 0] ; 4-byte Folded Spill
+; O0-NEXT:  .LBB2_2: // %then
+; O0-NEXT:    ldw r1, [r14 + 4] // 4-byte Folded Reload
+; O0-NEXT:    stw r1, [r14 + 0] // 4-byte Folded Spill
 ; O0-NEXT:    b .LBB2_4
-; O0-NEXT:  .LBB2_3: ; %else
-; O0-NEXT:    ; implicit-def: $r1
+; O0-NEXT:  .LBB2_3: // %else
+; O0-NEXT:    // implicit-def: $r1
 ; O0-NEXT:    b .LBB2_4
-; O0-NEXT:  .LBB2_4: ; %join
-; O0-NEXT:    ldw r1, [r14 + 0] ; 4-byte Folded Reload
+; O0-NEXT:  .LBB2_4: // %join
+; O0-NEXT:    ldw r1, [r14 + 0] // 4-byte Folded Reload
 ; O0-NEXT:    add r14, 8
 ; O0-NEXT:    jmp r13
 ;
 ; O1-LABEL: cond_undef:
 ; O1:         .cfi_startproc
-; O1-NEXT:  ; %bb.0: ; %entry
+; O1-NEXT:  // %bb.0: // %entry
 ; O1-NEXT:    mov r3, r1
 ; O1-NEXT:    mov r1, r2
 ; O1-NEXT:    test r3, r3
 ; O1-NEXT:    bne .LBB2_2
 ; O1-NEXT:    b .LBB2_1
-; O1-NEXT:  .LBB2_1: ; %else
-; O1-NEXT:    ; implicit-def: $r1
+; O1-NEXT:  .LBB2_1: // %else
+; O1-NEXT:    // implicit-def: $r1
 ; O1-NEXT:    b .LBB2_2
-; O1-NEXT:  .LBB2_2: ; %join
+; O1-NEXT:  .LBB2_2: // %join
 ; O1-NEXT:    jmp r13
 entry:
   br i1 %c, label %then, label %else

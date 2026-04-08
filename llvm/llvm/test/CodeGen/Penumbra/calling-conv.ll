@@ -7,11 +7,11 @@ declare i32 @extern_func(i32, i32)
 define i32 @call_two_args(i32 %a, i32 %b) {
 ; CHECK-LABEL: call_two_args:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub r14, 4
-; CHECK-NEXT:    stw r13, [r14 + 0] ; 4-byte Folded Spill
+; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    bl extern_func
-; CHECK-NEXT:    ldw r13, [r14 + 0] ; 4-byte Folded Reload
+; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
 ; CHECK-NEXT:    add r14, 4
 ; CHECK-NEXT:    jmp r13
   %result = call i32 @extern_func(i32 %a, i32 %b)
@@ -21,13 +21,13 @@ define i32 @call_two_args(i32 %a, i32 %b) {
 define i32 @call_four_args(i32 %a, i32 %b, i32 %c, i32 %d) {
 ; CHECK-LABEL: call_four_args:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub r14, 4
-; CHECK-NEXT:    stw r13, [r14 + 0] ; 4-byte Folded Spill
+; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r1, r3
 ; CHECK-NEXT:    mov r2, r4
 ; CHECK-NEXT:    bl extern_func
-; CHECK-NEXT:    ldw r13, [r14 + 0] ; 4-byte Folded Reload
+; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
 ; CHECK-NEXT:    add r14, 4
 ; CHECK-NEXT:    jmp r13
   %result = call i32 @extern_func(i32 %c, i32 %d)
@@ -38,17 +38,17 @@ define i32 @call_four_args(i32 %a, i32 %b, i32 %c, i32 %d) {
 define i32 @callee_saved(i32 %a) {
 ; CHECK-LABEL: callee_saved:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub r14, 8
-; CHECK-NEXT:    stw r5, [r14 + 4] ; 4-byte Folded Spill
-; CHECK-NEXT:    stw r13, [r14 + 0] ; 4-byte Folded Spill
+; CHECK-NEXT:    stw r5, [r14 + 4] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r5, r1
 ; CHECK-NEXT:    mov r2, r5
 ; CHECK-NEXT:    bl extern_func
 ; CHECK-NEXT:    mov r2, r5
 ; CHECK-NEXT:    bl extern_func
-; CHECK-NEXT:    ldw r13, [r14 + 0] ; 4-byte Folded Reload
-; CHECK-NEXT:    ldw r5, [r14 + 4] ; 4-byte Folded Reload
+; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r5, [r14 + 4] // 4-byte Folded Reload
 ; CHECK-NEXT:    add r14, 8
 ; CHECK-NEXT:    jmp r13
   %call1 = call i32 @extern_func(i32 %a, i32 %a)
@@ -60,7 +60,7 @@ define i32 @callee_saved(i32 %a) {
 define i32 @leaf_add(i32 %a, i32 %b) {
 ; CHECK-LABEL: leaf_add:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    add r1, r2
 ; CHECK-NEXT:    jmp r13
   %sum = add i32 %a, %b

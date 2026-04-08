@@ -13,9 +13,9 @@ declare i32 @llvm.ctpop.i32(i32)
 define i32 @test_cttz(i32 %a) {
 ; O0-LABEL: test_cttz:
 ; O0:         .cfi_startproc
-; O0-NEXT:  ; %bb.1:
+; O0-NEXT:  // %bb.1:
 ; O0-NEXT:    sub r14, 4
-; O0-NEXT:    stw r13, [r14 + 0] ; 4-byte Folded Spill
+; O0-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; O0-NEXT:    mov r2, r1
 ; O0-NEXT:    llis r3, -1
 ; O0-NEXT:    not r1, r2
@@ -44,15 +44,15 @@ define i32 @test_cttz(i32 %a) {
 ; O0-NEXT:    lui r2, 257
 ; O0-NEXT:    bl __mulsi3
 ; O0-NEXT:    shr r1, 24
-; O0-NEXT:    ldw r13, [r14 + 0] ; 4-byte Folded Reload
+; O0-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
 ; O0-NEXT:    add r14, 4
 ; O0-NEXT:    jmp r13
 ;
 ; O1-LABEL: test_cttz:
 ; O1:         .cfi_startproc
-; O1-NEXT:  ; %bb.0:
+; O1-NEXT:  // %bb.0:
 ; O1-NEXT:    sub r14, 4
-; O1-NEXT:    stw r13, [r14 + 0] ; 4-byte Folded Spill
+; O1-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; O1-NEXT:    llis r2, -1
 ; O1-NEXT:    not r3, r1
 ; O1-NEXT:    add r1, r2
@@ -80,7 +80,7 @@ define i32 @test_cttz(i32 %a) {
 ; O1-NEXT:    lui r2, 257
 ; O1-NEXT:    bl __mulsi3
 ; O1-NEXT:    shr r1, 24
-; O1-NEXT:    ldw r13, [r14 + 0] ; 4-byte Folded Reload
+; O1-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
 ; O1-NEXT:    add r14, 4
 ; O1-NEXT:    jmp r13
   %r = call i32 @llvm.cttz.i32(i32 %a, i1 true)
@@ -90,9 +90,9 @@ define i32 @test_cttz(i32 %a) {
 define i32 @test_ctlz(i32 %a) {
 ; O0-LABEL: test_ctlz:
 ; O0:         .cfi_startproc
-; O0-NEXT:  ; %bb.1:
+; O0-NEXT:  // %bb.1:
 ; O0-NEXT:    sub r14, 4
-; O0-NEXT:    stw r13, [r14 + 0] ; 4-byte Folded Spill
+; O0-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; O0-NEXT:    mov r2, r1
 ; O0-NEXT:    shr r2, 1
 ; O0-NEXT:    or r1, r2
@@ -134,15 +134,15 @@ define i32 @test_ctlz(i32 %a) {
 ; O0-NEXT:    shr r2, 24
 ; O0-NEXT:    lli r1, 32
 ; O0-NEXT:    sub r1, r2
-; O0-NEXT:    ldw r13, [r14 + 0] ; 4-byte Folded Reload
+; O0-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
 ; O0-NEXT:    add r14, 4
 ; O0-NEXT:    jmp r13
 ;
 ; O1-LABEL: test_ctlz:
 ; O1:         .cfi_startproc
-; O1-NEXT:  ; %bb.0:
+; O1-NEXT:  // %bb.0:
 ; O1-NEXT:    sub r14, 4
-; O1-NEXT:    stw r13, [r14 + 0] ; 4-byte Folded Spill
+; O1-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; O1-NEXT:    mov r2, r1
 ; O1-NEXT:    shr r2, 1
 ; O1-NEXT:    or r1, r2
@@ -184,7 +184,7 @@ define i32 @test_ctlz(i32 %a) {
 ; O1-NEXT:    lli r2, 32
 ; O1-NEXT:    sub r2, r1
 ; O1-NEXT:    mov r1, r2
-; O1-NEXT:    ldw r13, [r14 + 0] ; 4-byte Folded Reload
+; O1-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
 ; O1-NEXT:    add r14, 4
 ; O1-NEXT:    jmp r13
   %r = call i32 @llvm.ctlz.i32(i32 %a, i1 true)
@@ -194,9 +194,9 @@ define i32 @test_ctlz(i32 %a) {
 define i32 @test_ctpop(i32 %a) {
 ; O0-LABEL: test_ctpop:
 ; O0:         .cfi_startproc
-; O0-NEXT:  ; %bb.1:
+; O0-NEXT:  // %bb.1:
 ; O0-NEXT:    sub r14, 4
-; O0-NEXT:    stw r13, [r14 + 0] ; 4-byte Folded Spill
+; O0-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; O0-NEXT:    mov r2, r1
 ; O0-NEXT:    shr r2, 1
 ; O0-NEXT:    lli r3, 21845
@@ -220,15 +220,15 @@ define i32 @test_ctpop(i32 %a) {
 ; O0-NEXT:    lui r2, 257
 ; O0-NEXT:    bl __mulsi3
 ; O0-NEXT:    shr r1, 24
-; O0-NEXT:    ldw r13, [r14 + 0] ; 4-byte Folded Reload
+; O0-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
 ; O0-NEXT:    add r14, 4
 ; O0-NEXT:    jmp r13
 ;
 ; O1-LABEL: test_ctpop:
 ; O1:         .cfi_startproc
-; O1-NEXT:  ; %bb.0:
+; O1-NEXT:  // %bb.0:
 ; O1-NEXT:    sub r14, 4
-; O1-NEXT:    stw r13, [r14 + 0] ; 4-byte Folded Spill
+; O1-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; O1-NEXT:    mov r2, r1
 ; O1-NEXT:    shr r2, 1
 ; O1-NEXT:    lli r3, 21845
@@ -252,7 +252,7 @@ define i32 @test_ctpop(i32 %a) {
 ; O1-NEXT:    lui r2, 257
 ; O1-NEXT:    bl __mulsi3
 ; O1-NEXT:    shr r1, 24
-; O1-NEXT:    ldw r13, [r14 + 0] ; 4-byte Folded Reload
+; O1-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
 ; O1-NEXT:    add r14, 4
 ; O1-NEXT:    jmp r13
   %r = call i32 @llvm.ctpop.i32(i32 %a)

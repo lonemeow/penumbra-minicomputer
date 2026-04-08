@@ -17,8 +17,10 @@ PenumbraMCAsmInfo::PenumbraMCAsmInfo(const Triple &TT) {
   CodePointerSize = 4;
   CalleeSaveStackSlotSize = 4;
 
-  // Assembly syntax
-  CommentString = ";";
+  // Assembly syntax — ";" is the default statement separator (SeparatorString),
+  // which NetBSD asm.h macros depend on for multi-statement macro expansions.
+  // Use "//" for comments (like ARM/AArch64) to avoid the conflict.
+  CommentString = "//";
   SupportsDebugInformation = true;
   ExceptionsType = ExceptionHandling::DwarfCFI;
 
@@ -40,6 +42,12 @@ void PenumbraMCAsmInfo::printSpecifierExpr(raw_ostream &OS,
     break;
   case Penumbra::S_PCRel:
     OS << "%pcrel(";
+    break;
+  case Penumbra::S_TLSgd_Lo16:
+    OS << "%tlsgd_lo16(";
+    break;
+  case Penumbra::S_TLSgd_Hi16:
+    OS << "%tlsgd_hi16(";
     break;
   default:
     OS << "%unknown(";

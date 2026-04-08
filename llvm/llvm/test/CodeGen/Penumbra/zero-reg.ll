@@ -6,7 +6,7 @@
 define void @store_zero_word(ptr %p) {
 ; CHECK-LABEL: store_zero_word:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    stw r0, [r1 + 0]
 ; CHECK-NEXT:    jmp r13
   store i32 0, ptr %p, align 4
@@ -16,7 +16,7 @@ define void @store_zero_word(ptr %p) {
 define void @store_zero_byte(ptr %p) {
 ; CHECK-LABEL: store_zero_byte:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    stb r0, [r1 + 0]
 ; CHECK-NEXT:    jmp r13
   store i8 0, ptr %p, align 1
@@ -26,7 +26,7 @@ define void @store_zero_byte(ptr %p) {
 define void @store_zero_half(ptr %p) {
 ; CHECK-LABEL: store_zero_half:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sth r0, [r1 + 0]
 ; CHECK-NEXT:    jmp r13
   store i16 0, ptr %p, align 2
@@ -37,7 +37,7 @@ define void @store_zero_half(ptr %p) {
 define void @store_nonzero(ptr %p) {
 ; CHECK-LABEL: store_nonzero:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    lli r2, 42
 ; CHECK-NEXT:    stw r2, [r1 + 0]
 ; CHECK-NEXT:    jmp r13

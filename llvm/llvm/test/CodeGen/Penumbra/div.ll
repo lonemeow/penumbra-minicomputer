@@ -9,21 +9,21 @@
 define i32 @udiv(i32 %a, i32 %b) {
 ; O0-LABEL: udiv:
 ; O0:         .cfi_startproc
-; O0-NEXT:  ; %bb.1:
+; O0-NEXT:  // %bb.1:
 ; O0-NEXT:    sub r14, 4
-; O0-NEXT:    stw r13, [r14 + 0] ; 4-byte Folded Spill
+; O0-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; O0-NEXT:    bl __udivsi3
-; O0-NEXT:    ldw r13, [r14 + 0] ; 4-byte Folded Reload
+; O0-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
 ; O0-NEXT:    add r14, 4
 ; O0-NEXT:    jmp r13
 ;
 ; O1-LABEL: udiv:
 ; O1:         .cfi_startproc
-; O1-NEXT:  ; %bb.0:
+; O1-NEXT:  // %bb.0:
 ; O1-NEXT:    sub r14, 4
-; O1-NEXT:    stw r13, [r14 + 0] ; 4-byte Folded Spill
+; O1-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; O1-NEXT:    bl __udivsi3
-; O1-NEXT:    ldw r13, [r14 + 0] ; 4-byte Folded Reload
+; O1-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
 ; O1-NEXT:    add r14, 4
 ; O1-NEXT:    jmp r13
   %result = udiv i32 %a, %b
@@ -33,21 +33,21 @@ define i32 @udiv(i32 %a, i32 %b) {
 define i32 @sdiv(i32 %a, i32 %b) {
 ; O0-LABEL: sdiv:
 ; O0:         .cfi_startproc
-; O0-NEXT:  ; %bb.1:
+; O0-NEXT:  // %bb.1:
 ; O0-NEXT:    sub r14, 4
-; O0-NEXT:    stw r13, [r14 + 0] ; 4-byte Folded Spill
+; O0-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; O0-NEXT:    bl __divsi3
-; O0-NEXT:    ldw r13, [r14 + 0] ; 4-byte Folded Reload
+; O0-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
 ; O0-NEXT:    add r14, 4
 ; O0-NEXT:    jmp r13
 ;
 ; O1-LABEL: sdiv:
 ; O1:         .cfi_startproc
-; O1-NEXT:  ; %bb.0:
+; O1-NEXT:  // %bb.0:
 ; O1-NEXT:    sub r14, 4
-; O1-NEXT:    stw r13, [r14 + 0] ; 4-byte Folded Spill
+; O1-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; O1-NEXT:    bl __divsi3
-; O1-NEXT:    ldw r13, [r14 + 0] ; 4-byte Folded Reload
+; O1-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
 ; O1-NEXT:    add r14, 4
 ; O1-NEXT:    jmp r13
   %result = sdiv i32 %a, %b
@@ -57,21 +57,21 @@ define i32 @sdiv(i32 %a, i32 %b) {
 define i32 @urem(i32 %a, i32 %b) {
 ; O0-LABEL: urem:
 ; O0:         .cfi_startproc
-; O0-NEXT:  ; %bb.1:
+; O0-NEXT:  // %bb.1:
 ; O0-NEXT:    sub r14, 4
-; O0-NEXT:    stw r13, [r14 + 0] ; 4-byte Folded Spill
+; O0-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; O0-NEXT:    bl __umodsi3
-; O0-NEXT:    ldw r13, [r14 + 0] ; 4-byte Folded Reload
+; O0-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
 ; O0-NEXT:    add r14, 4
 ; O0-NEXT:    jmp r13
 ;
 ; O1-LABEL: urem:
 ; O1:         .cfi_startproc
-; O1-NEXT:  ; %bb.0:
+; O1-NEXT:  // %bb.0:
 ; O1-NEXT:    sub r14, 4
-; O1-NEXT:    stw r13, [r14 + 0] ; 4-byte Folded Spill
+; O1-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; O1-NEXT:    bl __umodsi3
-; O1-NEXT:    ldw r13, [r14 + 0] ; 4-byte Folded Reload
+; O1-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
 ; O1-NEXT:    add r14, 4
 ; O1-NEXT:    jmp r13
   %result = urem i32 %a, %b
@@ -81,21 +81,21 @@ define i32 @urem(i32 %a, i32 %b) {
 define i32 @srem(i32 %a, i32 %b) {
 ; O0-LABEL: srem:
 ; O0:         .cfi_startproc
-; O0-NEXT:  ; %bb.1:
+; O0-NEXT:  // %bb.1:
 ; O0-NEXT:    sub r14, 4
-; O0-NEXT:    stw r13, [r14 + 0] ; 4-byte Folded Spill
+; O0-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; O0-NEXT:    bl __modsi3
-; O0-NEXT:    ldw r13, [r14 + 0] ; 4-byte Folded Reload
+; O0-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
 ; O0-NEXT:    add r14, 4
 ; O0-NEXT:    jmp r13
 ;
 ; O1-LABEL: srem:
 ; O1:         .cfi_startproc
-; O1-NEXT:  ; %bb.0:
+; O1-NEXT:  // %bb.0:
 ; O1-NEXT:    sub r14, 4
-; O1-NEXT:    stw r13, [r14 + 0] ; 4-byte Folded Spill
+; O1-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; O1-NEXT:    bl __modsi3
-; O1-NEXT:    ldw r13, [r14 + 0] ; 4-byte Folded Reload
+; O1-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
 ; O1-NEXT:    add r14, 4
 ; O1-NEXT:    jmp r13
   %result = srem i32 %a, %b

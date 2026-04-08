@@ -10,7 +10,7 @@
 define i32 @load_global() {
 ; CHECK-LABEL: load_global:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    lli r1, %lo16(gvar)
 ; CHECK-NEXT:    lui r1, %hi16(gvar)
 ; CHECK-NEXT:    ldw r1, [r1 + 0]
@@ -22,7 +22,7 @@ define i32 @load_global() {
 define void @store_global(i32 %v) {
 ; CHECK-LABEL: store_global:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    lli r2, %lo16(gvar)
 ; CHECK-NEXT:    lui r2, %hi16(gvar)
 ; CHECK-NEXT:    stw r1, [r2 + 0]
@@ -34,7 +34,7 @@ define void @store_global(i32 %v) {
 define ptr @addr_global() {
 ; CHECK-LABEL: addr_global:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    lli r1, %lo16(gvar)
 ; CHECK-NEXT:    lui r1, %hi16(gvar)
 ; CHECK-NEXT:    jmp r13
@@ -46,7 +46,7 @@ define ptr @addr_global() {
 define i32 @load_global_offset() {
 ; CHECK-LABEL: load_global_offset:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    lli r1, %lo16(array)
 ; CHECK-NEXT:    lui r1, %hi16(array)
 ; CHECK-NEXT:    lli r2, 8

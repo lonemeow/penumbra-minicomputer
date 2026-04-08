@@ -6,13 +6,13 @@
 define i32 @call_indirect(ptr %fn, i32 %arg) {
 ; CHECK-LABEL: call_indirect:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub r14, 4
-; CHECK-NEXT:    stw r13, [r14 + 0] ; 4-byte Folded Spill
+; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r3, r1
 ; CHECK-NEXT:    mov r1, r2
 ; CHECK-NEXT:    jalr r3
-; CHECK-NEXT:    ldw r13, [r14 + 0] ; 4-byte Folded Reload
+; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
 ; CHECK-NEXT:    add r14, 4
 ; CHECK-NEXT:    jmp r13
   %result = call i32 %fn(i32 %arg)
@@ -23,14 +23,14 @@ define i32 @call_indirect(ptr %fn, i32 %arg) {
 define i32 @call_indirect_multi(ptr %fn, i32 %a, i32 %b) {
 ; CHECK-LABEL: call_indirect_multi:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub r14, 4
-; CHECK-NEXT:    stw r13, [r14 + 0] ; 4-byte Folded Spill
+; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r4, r1
 ; CHECK-NEXT:    mov r1, r2
 ; CHECK-NEXT:    mov r2, r3
 ; CHECK-NEXT:    jalr r4
-; CHECK-NEXT:    ldw r13, [r14 + 0] ; 4-byte Folded Reload
+; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
 ; CHECK-NEXT:    add r14, 4
 ; CHECK-NEXT:    jmp r13
   %result = call i32 %fn(i32 %a, i32 %b)
@@ -41,11 +41,11 @@ define i32 @call_indirect_multi(ptr %fn, i32 %a, i32 %b) {
 define void @call_indirect_void(ptr %fn) {
 ; CHECK-LABEL: call_indirect_void:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub r14, 4
-; CHECK-NEXT:    stw r13, [r14 + 0] ; 4-byte Folded Spill
+; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    jalr r1
-; CHECK-NEXT:    ldw r13, [r14 + 0] ; 4-byte Folded Reload
+; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
 ; CHECK-NEXT:    add r14, 4
 ; CHECK-NEXT:    jmp r13
   call void %fn()
@@ -58,16 +58,16 @@ declare i32 @direct_func(i32)
 define i32 @mixed_calls(ptr %fn, i32 %x) {
 ; CHECK-LABEL: mixed_calls:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub r14, 8
-; CHECK-NEXT:    stw r5, [r14 + 4] ; 4-byte Folded Spill
-; CHECK-NEXT:    stw r13, [r14 + 0] ; 4-byte Folded Spill
+; CHECK-NEXT:    stw r5, [r14 + 4] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r5, r1
 ; CHECK-NEXT:    mov r1, r2
 ; CHECK-NEXT:    bl direct_func
 ; CHECK-NEXT:    jalr r5
-; CHECK-NEXT:    ldw r13, [r14 + 0] ; 4-byte Folded Reload
-; CHECK-NEXT:    ldw r5, [r14 + 4] ; 4-byte Folded Reload
+; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r5, [r14 + 4] // 4-byte Folded Reload
 ; CHECK-NEXT:    add r14, 8
 ; CHECK-NEXT:    jmp r13
   %r1 = call i32 @direct_func(i32 %x)

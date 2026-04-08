@@ -5,7 +5,7 @@
 define i32 @ptrtoint(ptr %p) {
 ; CHECK-LABEL: ptrtoint:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    jmp r13
   %addr = ptrtoint ptr %p to i32
   ret i32 %addr
@@ -14,7 +14,7 @@ define i32 @ptrtoint(ptr %p) {
 define ptr @inttoptr(i32 %addr) {
 ; CHECK-LABEL: inttoptr:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    jmp r13
   %p = inttoptr i32 %addr to ptr
   ret ptr %p
@@ -24,7 +24,7 @@ define ptr @inttoptr(i32 %addr) {
 define i8 @ptrtoint_i8(ptr %p) {
 ; CHECK-LABEL: ptrtoint_i8:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    jmp r13
   %addr = ptrtoint ptr %p to i8
   ret i8 %addr
@@ -33,7 +33,7 @@ define i8 @ptrtoint_i8(ptr %p) {
 define i16 @ptrtoint_i16(ptr %p) {
 ; CHECK-LABEL: ptrtoint_i16:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    jmp r13
   %addr = ptrtoint ptr %p to i16
   ret i16 %addr
@@ -43,7 +43,7 @@ define i16 @ptrtoint_i16(ptr %p) {
 define ptr @inttoptr_i8(i8 %addr) {
 ; CHECK-LABEL: inttoptr_i8:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    and r1, 255
 ; CHECK-NEXT:    jmp r13
   %p = inttoptr i8 %addr to ptr

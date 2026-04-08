@@ -5,14 +5,14 @@
 define i32 @branch_eq(i32 %a, i32 %b, i32 %x, i32 %y) {
 ; CHECK-LABEL: branch_eq:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    cmp r1, r2
 ; CHECK-NEXT:    beq .LBB0_1
 ; CHECK-NEXT:    b .LBB0_2
-; CHECK-NEXT:  .LBB0_1: ; %if.then
+; CHECK-NEXT:  .LBB0_1: // %if.then
 ; CHECK-NEXT:    mov r1, r3
 ; CHECK-NEXT:    jmp r13
-; CHECK-NEXT:  .LBB0_2: ; %if.else
+; CHECK-NEXT:  .LBB0_2: // %if.else
 ; CHECK-NEXT:    mov r1, r4
 ; CHECK-NEXT:    jmp r13
   %cmp = icmp eq i32 %a, %b
@@ -26,14 +26,14 @@ if.else:
 define i32 @branch_slt(i32 %a, i32 %b, i32 %x, i32 %y) {
 ; CHECK-LABEL: branch_slt:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    cmp r1, r2
 ; CHECK-NEXT:    blt .LBB1_1
 ; CHECK-NEXT:    b .LBB1_2
-; CHECK-NEXT:  .LBB1_1: ; %if.then
+; CHECK-NEXT:  .LBB1_1: // %if.then
 ; CHECK-NEXT:    mov r1, r3
 ; CHECK-NEXT:    jmp r13
-; CHECK-NEXT:  .LBB1_2: ; %if.else
+; CHECK-NEXT:  .LBB1_2: // %if.else
 ; CHECK-NEXT:    mov r1, r4
 ; CHECK-NEXT:    jmp r13
   %cmp = icmp slt i32 %a, %b
@@ -47,12 +47,12 @@ if.else:
 define i32 @select_eq(i32 %a, i32 %b, i32 %x, i32 %y) {
 ; CHECK-LABEL: select_eq:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    mov r11, r1
 ; CHECK-NEXT:    mov r1, r3
 ; CHECK-NEXT:    cmp r11, r2
 ; CHECK-NEXT:    beq .LBB2_2
-; CHECK-NEXT:  ; %bb.1:
+; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r1, r4
 ; CHECK-NEXT:    b .LBB2_2
 ; CHECK-NEXT:  .LBB2_2:
@@ -65,19 +65,19 @@ define i32 @select_eq(i32 %a, i32 %b, i32 %x, i32 %y) {
 define i32 @phi_loop(i32 %n) {
 ; CHECK-LABEL: phi_loop:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0: ; %entry
+; CHECK-NEXT:  // %bb.0: // %entry
 ; CHECK-NEXT:    mov r2, r1
 ; CHECK-NEXT:    lli r1, 0
 ; CHECK-NEXT:    mov r3, r1
 ; CHECK-NEXT:    b .LBB3_1
-; CHECK-NEXT:  .LBB3_1: ; %loop
-; CHECK-NEXT:    ; =>This Inner Loop Header: Depth=1
+; CHECK-NEXT:  .LBB3_1: // %loop
+; CHECK-NEXT:    // =>This Inner Loop Header: Depth=1
 ; CHECK-NEXT:    add r1, r3
 ; CHECK-NEXT:    add r3, 1
 ; CHECK-NEXT:    cmp r3, r2
 ; CHECK-NEXT:    blt .LBB3_1
 ; CHECK-NEXT:    b .LBB3_2
-; CHECK-NEXT:  .LBB3_2: ; %exit
+; CHECK-NEXT:  .LBB3_2: // %exit
 ; CHECK-NEXT:    jmp r13
 entry:
   br label %loop

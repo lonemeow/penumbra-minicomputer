@@ -6,7 +6,7 @@
 define i32 @const_small() {
 ; CHECK-LABEL: const_small:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    lli r1, 42
 ; CHECK-NEXT:    jmp r13
   ret i32 42
@@ -16,7 +16,7 @@ define i32 @const_small() {
 define i32 @const_ffff() {
 ; CHECK-LABEL: const_ffff:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    lli r1, 65535
 ; CHECK-NEXT:    jmp r13
   ret i32 65535
@@ -26,7 +26,7 @@ define i32 @const_ffff() {
 define i32 @const_neg1() {
 ; CHECK-LABEL: const_neg1:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    llis r1, -1
 ; CHECK-NEXT:    jmp r13
   ret i32 -1
@@ -36,7 +36,7 @@ define i32 @const_neg1() {
 define i32 @const_neg100() {
 ; CHECK-LABEL: const_neg100:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    llis r1, -100
 ; CHECK-NEXT:    jmp r13
   ret i32 -100
@@ -46,7 +46,7 @@ define i32 @const_neg100() {
 define i32 @const_large() {
 ; CHECK-LABEL: const_large:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    lli r1, 22136
 ; CHECK-NEXT:    lui r1, 4660
 ; CHECK-NEXT:    jmp r13
@@ -57,7 +57,7 @@ define i32 @const_large() {
 define i32 @const_upper_only() {
 ; CHECK-LABEL: const_upper_only:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    lli r1, 0
 ; CHECK-NEXT:    lui r1, 65535
 ; CHECK-NEXT:    jmp r13
@@ -68,7 +68,7 @@ define i32 @const_upper_only() {
 define i32 @const_deadbeef() {
 ; CHECK-LABEL: const_deadbeef:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    lli r1, 48879
 ; CHECK-NEXT:    lui r1, 57005
 ; CHECK-NEXT:    jmp r13

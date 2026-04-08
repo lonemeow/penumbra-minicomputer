@@ -110,6 +110,13 @@ ASM_FUNCTION_AVR_RE = re.compile(
     flags=(re.M | re.S),
 )
 
+ASM_FUNCTION_PENUMBRA_RE = re.compile(
+    r'^_?(?P<func>[^:]+):[ \t]*//[ \t]*@"?(?P=func)"?\n[^:]*?'
+    r"(?P<body>.*?)\n"
+    r".Lfunc_end[0-9]+:\n",
+    flags=(re.M | re.S),
+)
+
 ASM_FUNCTION_PPC_RE = re.compile(
     r"#[ \-\t]*Begin function (?P<func>[^.:]+)\n"
     r".*?"
@@ -587,7 +594,7 @@ def get_run_handler(triple):
         "mips": (scrub_asm_mips, ASM_FUNCTION_MIPS_RE),
         "msp430": (scrub_asm_msp430, ASM_FUNCTION_MSP430_RE),
         "avr": (scrub_asm_avr, ASM_FUNCTION_AVR_RE),
-        "penumbra": (scrub_asm_avr, ASM_FUNCTION_AVR_RE),
+        "penumbra": (scrub_asm_avr, ASM_FUNCTION_PENUMBRA_RE),
         "ppc32": (scrub_asm_powerpc, ASM_FUNCTION_PPC_RE),
         "ppc64": (scrub_asm_powerpc, ASM_FUNCTION_PPC_RE),
         "powerpc": (scrub_asm_powerpc, ASM_FUNCTION_PPC_RE),

@@ -7,7 +7,7 @@ declare ptr @llvm.returnaddress(i32)
 define ptr @ret_addr() {
 ; CHECK-LABEL: ret_addr:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    mov r1, r13
 ; CHECK-NEXT:    jmp r13
   %r = call ptr @llvm.returnaddress(i32 0)
@@ -19,7 +19,7 @@ declare ptr @llvm.frameaddress(i32)
 define ptr @frame_addr() {
 ; CHECK-LABEL: frame_addr:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    mov r1, r14
 ; CHECK-NEXT:    jmp r13
   %r = call ptr @llvm.frameaddress(i32 0)
@@ -32,7 +32,7 @@ declare void @llvm.stackrestore(ptr)
 define void @stack_save_restore() {
 ; CHECK-LABEL: stack_save_restore:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    mov r1, r14
 ; CHECK-NEXT:    mov r14, r1
 ; CHECK-NEXT:    jmp r13

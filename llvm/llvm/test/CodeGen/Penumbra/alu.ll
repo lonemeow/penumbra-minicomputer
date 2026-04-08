@@ -5,7 +5,7 @@
 define i32 @add_reg_reg(i32 %a, i32 %b) {
 ; CHECK-LABEL: add_reg_reg:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    add r1, r2
 ; CHECK-NEXT:    jmp r13
   %result = add i32 %a, %b
@@ -15,7 +15,7 @@ define i32 @add_reg_reg(i32 %a, i32 %b) {
 define i32 @sub_reg_reg(i32 %a, i32 %b) {
 ; CHECK-LABEL: sub_reg_reg:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub r1, r2
 ; CHECK-NEXT:    jmp r13
   %result = sub i32 %a, %b
@@ -25,7 +25,7 @@ define i32 @sub_reg_reg(i32 %a, i32 %b) {
 define i32 @and_reg_reg(i32 %a, i32 %b) {
 ; CHECK-LABEL: and_reg_reg:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    and r1, r2
 ; CHECK-NEXT:    jmp r13
   %result = and i32 %a, %b
@@ -35,7 +35,7 @@ define i32 @and_reg_reg(i32 %a, i32 %b) {
 define i32 @or_reg_reg(i32 %a, i32 %b) {
 ; CHECK-LABEL: or_reg_reg:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    or r1, r2
 ; CHECK-NEXT:    jmp r13
   %result = or i32 %a, %b
@@ -45,7 +45,7 @@ define i32 @or_reg_reg(i32 %a, i32 %b) {
 define i32 @xor_reg_reg(i32 %a, i32 %b) {
 ; CHECK-LABEL: xor_reg_reg:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    xor r1, r2
 ; CHECK-NEXT:    jmp r13
   %result = xor i32 %a, %b
@@ -55,7 +55,7 @@ define i32 @xor_reg_reg(i32 %a, i32 %b) {
 define i32 @shl_reg_reg(i32 %a, i32 %b) {
 ; CHECK-LABEL: shl_reg_reg:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    shl r1, r2
 ; CHECK-NEXT:    jmp r13
   %result = shl i32 %a, %b
@@ -65,7 +65,7 @@ define i32 @shl_reg_reg(i32 %a, i32 %b) {
 define i32 @shr_reg_reg(i32 %a, i32 %b) {
 ; CHECK-LABEL: shr_reg_reg:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    shr r1, r2
 ; CHECK-NEXT:    jmp r13
   %result = lshr i32 %a, %b
@@ -75,7 +75,7 @@ define i32 @shr_reg_reg(i32 %a, i32 %b) {
 define i32 @sar_reg_reg(i32 %a, i32 %b) {
 ; CHECK-LABEL: sar_reg_reg:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sar r1, r2
 ; CHECK-NEXT:    jmp r13
   %result = ashr i32 %a, %b
@@ -85,7 +85,7 @@ define i32 @sar_reg_reg(i32 %a, i32 %b) {
 define i32 @shl_imm(i32 %a) {
 ; CHECK-LABEL: shl_imm:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    shl r1, 3
 ; CHECK-NEXT:    jmp r13
   %result = shl i32 %a, 3
@@ -95,7 +95,7 @@ define i32 @shl_imm(i32 %a) {
 define i32 @shr_imm(i32 %a) {
 ; CHECK-LABEL: shr_imm:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    shr r1, 8
 ; CHECK-NEXT:    jmp r13
   %result = lshr i32 %a, 8
@@ -105,7 +105,7 @@ define i32 @shr_imm(i32 %a) {
 define i32 @sar_imm(i32 %a) {
 ; CHECK-LABEL: sar_imm:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sar r1, 16
 ; CHECK-NEXT:    jmp r13
   %result = ashr i32 %a, 16

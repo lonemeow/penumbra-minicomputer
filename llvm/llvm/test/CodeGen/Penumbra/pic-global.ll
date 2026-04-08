@@ -11,14 +11,14 @@
 define ptr @get_address() {
 ; PIC-LABEL: get_address:
 ; PIC:         .cfi_startproc
-; PIC-NEXT:  ; %bb.1:
+; PIC-NEXT:  // %bb.1:
 ; PIC-NEXT:    mov r1, r15
 ; PIC-NEXT:    add r1, %pcrel(myvar+4)
 ; PIC-NEXT:    jmp r13
 ;
 ; STATIC-LABEL: get_address:
 ; STATIC:         .cfi_startproc
-; STATIC-NEXT:  ; %bb.1:
+; STATIC-NEXT:  // %bb.1:
 ; STATIC-NEXT:    lli r1, %lo16(myvar)
 ; STATIC-NEXT:    lui r1, %hi16(myvar)
 ; STATIC-NEXT:    jmp r13
@@ -28,7 +28,7 @@ define ptr @get_address() {
 define i32 @load_global() {
 ; PIC-LABEL: load_global:
 ; PIC:         .cfi_startproc
-; PIC-NEXT:  ; %bb.1:
+; PIC-NEXT:  // %bb.1:
 ; PIC-NEXT:    mov r1, r15
 ; PIC-NEXT:    add r1, %pcrel(myvar+4)
 ; PIC-NEXT:    ldw r1, [r1 + 0]
@@ -36,7 +36,7 @@ define i32 @load_global() {
 ;
 ; STATIC-LABEL: load_global:
 ; STATIC:         .cfi_startproc
-; STATIC-NEXT:  ; %bb.1:
+; STATIC-NEXT:  // %bb.1:
 ; STATIC-NEXT:    lli r1, %lo16(myvar)
 ; STATIC-NEXT:    lui r1, %hi16(myvar)
 ; STATIC-NEXT:    ldw r1, [r1 + 0]
@@ -48,7 +48,7 @@ define i32 @load_global() {
 define void @store_global(i32 %v) {
 ; PIC-LABEL: store_global:
 ; PIC:         .cfi_startproc
-; PIC-NEXT:  ; %bb.1:
+; PIC-NEXT:  // %bb.1:
 ; PIC-NEXT:    mov r2, r15
 ; PIC-NEXT:    add r2, %pcrel(myvar+4)
 ; PIC-NEXT:    stw r1, [r2 + 0]
@@ -56,7 +56,7 @@ define void @store_global(i32 %v) {
 ;
 ; STATIC-LABEL: store_global:
 ; STATIC:         .cfi_startproc
-; STATIC-NEXT:  ; %bb.1:
+; STATIC-NEXT:  // %bb.1:
 ; STATIC-NEXT:    lli r2, %lo16(myvar)
 ; STATIC-NEXT:    lui r2, %hi16(myvar)
 ; STATIC-NEXT:    stw r1, [r2 + 0]

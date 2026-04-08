@@ -11,7 +11,7 @@ declare void @llvm.va_end(ptr)
 define i32 @first_vararg(i32 %named, ...) {
 ; CHECK-LABEL: first_vararg:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub r14, 20
 ; CHECK-NEXT:    stw r1, [r14 + 4]
 ; CHECK-NEXT:    stw r2, [r14 + 8]
@@ -38,7 +38,7 @@ define i32 @first_vararg(i32 %named, ...) {
 define i32 @multi_named(i32 %a, i32 %b, i32 %c, ...) {
 ; CHECK-LABEL: multi_named:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub r14, 20
 ; CHECK-NEXT:    stw r1, [r14 + 4]
 ; CHECK-NEXT:    stw r2, [r14 + 8]
@@ -68,7 +68,7 @@ define i32 @multi_named(i32 %a, i32 %b, i32 %c, ...) {
 define i32 @many_named(i32 %a, i32 %b, i32 %c, i32 %d, i32 %e, i32 %f, ...) {
 ; CHECK-LABEL: many_named:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub r14, 20
 ; CHECK-NEXT:    stw r1, [r14 + 4]
 ; CHECK-NEXT:    stw r2, [r14 + 8]
@@ -98,7 +98,7 @@ define i32 @many_named(i32 %a, i32 %b, i32 %c, i32 %d, i32 %e, i32 %f, ...) {
 define i64 @vaarg_i64(i32 %named, ...) {
 ; CHECK-LABEL: vaarg_i64:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub r14, 20
 ; CHECK-NEXT:    stw r1, [r14 + 4]
 ; CHECK-NEXT:    stw r2, [r14 + 8]
@@ -133,7 +133,7 @@ define i64 @vaarg_i64(i32 %named, ...) {
 define i32 @many_named_i64(i32 %a, i32 %b, i32 %c, i32 %d, i64 %e, i32 %f, ...) {
 ; CHECK-LABEL: many_named_i64:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub r14, 20
 ; CHECK-NEXT:    stw r1, [r14 + 4]
 ; CHECK-NEXT:    stw r2, [r14 + 8]

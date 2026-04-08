@@ -10,13 +10,13 @@
 define i32 @mul_by_8(i32 %a) {
 ; O0-LABEL: mul_by_8:
 ; O0:         .cfi_startproc
-; O0-NEXT:  ; %bb.1:
+; O0-NEXT:  // %bb.1:
 ; O0-NEXT:    shl r1, 3
 ; O0-NEXT:    jmp r13
 ;
 ; O1-LABEL: mul_by_8:
 ; O1:         .cfi_startproc
-; O1-NEXT:  ; %bb.0:
+; O1-NEXT:  // %bb.0:
 ; O1-NEXT:    shl r1, 3
 ; O1-NEXT:    jmp r13
   %r = mul i32 %a, 8
@@ -27,7 +27,7 @@ define i32 @mul_by_8(i32 %a) {
 define i32 @mul_by_5(i32 %a) {
 ; O0-LABEL: mul_by_5:
 ; O0:         .cfi_startproc
-; O0-NEXT:  ; %bb.1:
+; O0-NEXT:  // %bb.1:
 ; O0-NEXT:    mov r2, r1
 ; O0-NEXT:    mov r1, r2
 ; O0-NEXT:    shl r1, 2
@@ -36,7 +36,7 @@ define i32 @mul_by_5(i32 %a) {
 ;
 ; O1-LABEL: mul_by_5:
 ; O1:         .cfi_startproc
-; O1-NEXT:  ; %bb.0:
+; O1-NEXT:  // %bb.0:
 ; O1-NEXT:    mov r2, r1
 ; O1-NEXT:    shl r2, 2
 ; O1-NEXT:    add r2, r1
@@ -49,7 +49,7 @@ define i32 @mul_by_5(i32 %a) {
 define i32 @mul_by_3(i32 %a) {
 ; O0-LABEL: mul_by_3:
 ; O0:         .cfi_startproc
-; O0-NEXT:  ; %bb.1:
+; O0-NEXT:  // %bb.1:
 ; O0-NEXT:    mov r2, r1
 ; O0-NEXT:    mov r1, r2
 ; O0-NEXT:    shl r1, 1
@@ -58,7 +58,7 @@ define i32 @mul_by_3(i32 %a) {
 ;
 ; O1-LABEL: mul_by_3:
 ; O1:         .cfi_startproc
-; O1-NEXT:  ; %bb.0:
+; O1-NEXT:  // %bb.0:
 ; O1-NEXT:    mov r2, r1
 ; O1-NEXT:    shl r2, 1
 ; O1-NEXT:    add r2, r1
@@ -72,7 +72,7 @@ define i32 @mul_by_3(i32 %a) {
 define i32 @mul_by_7(i32 %a) {
 ; O0-LABEL: mul_by_7:
 ; O0:         .cfi_startproc
-; O0-NEXT:  ; %bb.1:
+; O0-NEXT:  // %bb.1:
 ; O0-NEXT:    mov r2, r1
 ; O0-NEXT:    mov r1, r2
 ; O0-NEXT:    shl r1, 3
@@ -81,7 +81,7 @@ define i32 @mul_by_7(i32 %a) {
 ;
 ; O1-LABEL: mul_by_7:
 ; O1:         .cfi_startproc
-; O1-NEXT:  ; %bb.0:
+; O1-NEXT:  // %bb.0:
 ; O1-NEXT:    mov r2, r1
 ; O1-NEXT:    shl r2, 3
 ; O1-NEXT:    sub r2, r1
@@ -94,7 +94,7 @@ define i32 @mul_by_7(i32 %a) {
 define i32 @mul_by_15(i32 %a) {
 ; O0-LABEL: mul_by_15:
 ; O0:         .cfi_startproc
-; O0-NEXT:  ; %bb.1:
+; O0-NEXT:  // %bb.1:
 ; O0-NEXT:    mov r2, r1
 ; O0-NEXT:    mov r1, r2
 ; O0-NEXT:    shl r1, 4
@@ -103,7 +103,7 @@ define i32 @mul_by_15(i32 %a) {
 ;
 ; O1-LABEL: mul_by_15:
 ; O1:         .cfi_startproc
-; O1-NEXT:  ; %bb.0:
+; O1-NEXT:  // %bb.0:
 ; O1-NEXT:    mov r2, r1
 ; O1-NEXT:    shl r2, 4
 ; O1-NEXT:    sub r2, r1
@@ -117,13 +117,13 @@ define i32 @mul_by_15(i32 %a) {
 define i32 @mul_by_0(i32 %a) {
 ; O0-LABEL: mul_by_0:
 ; O0:         .cfi_startproc
-; O0-NEXT:  ; %bb.1:
+; O0-NEXT:  // %bb.1:
 ; O0-NEXT:    lli r1, 0
 ; O0-NEXT:    jmp r13
 ;
 ; O1-LABEL: mul_by_0:
 ; O1:         .cfi_startproc
-; O1-NEXT:  ; %bb.0:
+; O1-NEXT:  // %bb.0:
 ; O1-NEXT:    lli r1, 0
 ; O1-NEXT:    jmp r13
   %r = mul i32 %a, 0
@@ -133,12 +133,12 @@ define i32 @mul_by_0(i32 %a) {
 define i32 @mul_by_1(i32 %a) {
 ; O0-LABEL: mul_by_1:
 ; O0:         .cfi_startproc
-; O0-NEXT:  ; %bb.1:
+; O0-NEXT:  // %bb.1:
 ; O0-NEXT:    jmp r13
 ;
 ; O1-LABEL: mul_by_1:
 ; O1:         .cfi_startproc
-; O1-NEXT:  ; %bb.0:
+; O1-NEXT:  // %bb.0:
 ; O1-NEXT:    jmp r13
   %r = mul i32 %a, 1
   ret i32 %r
@@ -148,23 +148,23 @@ define i32 @mul_by_1(i32 %a) {
 define i32 @mul_by_6(i32 %a) {
 ; O0-LABEL: mul_by_6:
 ; O0:         .cfi_startproc
-; O0-NEXT:  ; %bb.1:
+; O0-NEXT:  // %bb.1:
 ; O0-NEXT:    sub r14, 4
-; O0-NEXT:    stw r13, [r14 + 0] ; 4-byte Folded Spill
+; O0-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; O0-NEXT:    lli r2, 6
 ; O0-NEXT:    bl __mulsi3
-; O0-NEXT:    ldw r13, [r14 + 0] ; 4-byte Folded Reload
+; O0-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
 ; O0-NEXT:    add r14, 4
 ; O0-NEXT:    jmp r13
 ;
 ; O1-LABEL: mul_by_6:
 ; O1:         .cfi_startproc
-; O1-NEXT:  ; %bb.0:
+; O1-NEXT:  // %bb.0:
 ; O1-NEXT:    sub r14, 4
-; O1-NEXT:    stw r13, [r14 + 0] ; 4-byte Folded Spill
+; O1-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; O1-NEXT:    lli r2, 6
 ; O1-NEXT:    bl __mulsi3
-; O1-NEXT:    ldw r13, [r14 + 0] ; 4-byte Folded Reload
+; O1-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
 ; O1-NEXT:    add r14, 4
 ; O1-NEXT:    jmp r13
   %r = mul i32 %a, 6
@@ -175,13 +175,13 @@ define i32 @mul_by_6(i32 %a) {
 define i32 @udiv_by_4(i32 %a) {
 ; O0-LABEL: udiv_by_4:
 ; O0:         .cfi_startproc
-; O0-NEXT:  ; %bb.1:
+; O0-NEXT:  // %bb.1:
 ; O0-NEXT:    shr r1, 2
 ; O0-NEXT:    jmp r13
 ;
 ; O1-LABEL: udiv_by_4:
 ; O1:         .cfi_startproc
-; O1-NEXT:  ; %bb.0:
+; O1-NEXT:  // %bb.0:
 ; O1-NEXT:    shr r1, 2
 ; O1-NEXT:    jmp r13
   %r = udiv i32 %a, 4
@@ -191,12 +191,12 @@ define i32 @udiv_by_4(i32 %a) {
 define i32 @udiv_by_1(i32 %a) {
 ; O0-LABEL: udiv_by_1:
 ; O0:         .cfi_startproc
-; O0-NEXT:  ; %bb.1:
+; O0-NEXT:  // %bb.1:
 ; O0-NEXT:    jmp r13
 ;
 ; O1-LABEL: udiv_by_1:
 ; O1:         .cfi_startproc
-; O1-NEXT:  ; %bb.0:
+; O1-NEXT:  // %bb.0:
 ; O1-NEXT:    jmp r13
   %r = udiv i32 %a, 1
   ret i32 %r
@@ -206,13 +206,13 @@ define i32 @udiv_by_1(i32 %a) {
 define i32 @urem_by_16(i32 %a) {
 ; O0-LABEL: urem_by_16:
 ; O0:         .cfi_startproc
-; O0-NEXT:  ; %bb.1:
+; O0-NEXT:  // %bb.1:
 ; O0-NEXT:    and r1, 15
 ; O0-NEXT:    jmp r13
 ;
 ; O1-LABEL: urem_by_16:
 ; O1:         .cfi_startproc
-; O1-NEXT:  ; %bb.0:
+; O1-NEXT:  // %bb.0:
 ; O1-NEXT:    and r1, 15
 ; O1-NEXT:    jmp r13
   %r = urem i32 %a, 16
@@ -222,13 +222,13 @@ define i32 @urem_by_16(i32 %a) {
 define i32 @urem_by_1(i32 %a) {
 ; O0-LABEL: urem_by_1:
 ; O0:         .cfi_startproc
-; O0-NEXT:  ; %bb.1:
+; O0-NEXT:  // %bb.1:
 ; O0-NEXT:    lli r1, 0
 ; O0-NEXT:    jmp r13
 ;
 ; O1-LABEL: urem_by_1:
 ; O1:         .cfi_startproc
-; O1-NEXT:  ; %bb.0:
+; O1-NEXT:  // %bb.0:
 ; O1-NEXT:    lli r1, 0
 ; O1-NEXT:    jmp r13
   %r = urem i32 %a, 1
@@ -239,23 +239,23 @@ define i32 @urem_by_1(i32 %a) {
 define i32 @udiv_by_3(i32 %a) {
 ; O0-LABEL: udiv_by_3:
 ; O0:         .cfi_startproc
-; O0-NEXT:  ; %bb.1:
+; O0-NEXT:  // %bb.1:
 ; O0-NEXT:    sub r14, 4
-; O0-NEXT:    stw r13, [r14 + 0] ; 4-byte Folded Spill
+; O0-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; O0-NEXT:    lli r2, 3
 ; O0-NEXT:    bl __udivsi3
-; O0-NEXT:    ldw r13, [r14 + 0] ; 4-byte Folded Reload
+; O0-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
 ; O0-NEXT:    add r14, 4
 ; O0-NEXT:    jmp r13
 ;
 ; O1-LABEL: udiv_by_3:
 ; O1:         .cfi_startproc
-; O1-NEXT:  ; %bb.0:
+; O1-NEXT:  // %bb.0:
 ; O1-NEXT:    sub r14, 4
-; O1-NEXT:    stw r13, [r14 + 0] ; 4-byte Folded Spill
+; O1-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; O1-NEXT:    lli r2, 3
 ; O1-NEXT:    bl __udivsi3
-; O1-NEXT:    ldw r13, [r14 + 0] ; 4-byte Folded Reload
+; O1-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
 ; O1-NEXT:    add r14, 4
 ; O1-NEXT:    jmp r13
   %r = udiv i32 %a, 3

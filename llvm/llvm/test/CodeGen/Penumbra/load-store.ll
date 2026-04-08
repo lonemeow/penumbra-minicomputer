@@ -5,7 +5,7 @@
 define i32 @load_word(ptr %p) {
 ; CHECK-LABEL: load_word:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    ldw r1, [r1 + 0]
 ; CHECK-NEXT:    jmp r13
   %v = load i32, ptr %p
@@ -15,7 +15,7 @@ define i32 @load_word(ptr %p) {
 define i32 @load_half_zext(ptr %p) {
 ; CHECK-LABEL: load_half_zext:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    ldh r1, [r1 + 0]
 ; CHECK-NEXT:    and r1, 65535
 ; CHECK-NEXT:    jmp r13
@@ -27,7 +27,7 @@ define i32 @load_half_zext(ptr %p) {
 define i32 @load_half_sext(ptr %p) {
 ; CHECK-LABEL: load_half_sext:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    ldh r1, [r1 + 0]
 ; CHECK-NEXT:    shl r1, 16
 ; CHECK-NEXT:    sar r1, 16
@@ -40,7 +40,7 @@ define i32 @load_half_sext(ptr %p) {
 define i32 @load_byte_zext(ptr %p) {
 ; CHECK-LABEL: load_byte_zext:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    ldb r1, [r1 + 0]
 ; CHECK-NEXT:    and r1, 255
 ; CHECK-NEXT:    jmp r13
@@ -52,7 +52,7 @@ define i32 @load_byte_zext(ptr %p) {
 define i32 @load_byte_sext(ptr %p) {
 ; CHECK-LABEL: load_byte_sext:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    ldb r1, [r1 + 0]
 ; CHECK-NEXT:    shl r1, 24
 ; CHECK-NEXT:    sar r1, 24
@@ -65,7 +65,7 @@ define i32 @load_byte_sext(ptr %p) {
 define void @store_word(ptr %p, i32 %v) {
 ; CHECK-LABEL: store_word:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    stw r2, [r1 + 0]
 ; CHECK-NEXT:    jmp r13
   store i32 %v, ptr %p
@@ -75,7 +75,7 @@ define void @store_word(ptr %p, i32 %v) {
 define void @store_half(ptr %p, i32 %v) {
 ; CHECK-LABEL: store_half:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sth r2, [r1 + 0]
 ; CHECK-NEXT:    jmp r13
   %trunc = trunc i32 %v to i16
@@ -86,7 +86,7 @@ define void @store_half(ptr %p, i32 %v) {
 define void @store_byte(ptr %p, i32 %v) {
 ; CHECK-LABEL: store_byte:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    stb r2, [r1 + 0]
 ; CHECK-NEXT:    jmp r13
   %trunc = trunc i32 %v to i8
@@ -99,7 +99,7 @@ define void @store_byte(ptr %p, i32 %v) {
 define i32 @load_bool(ptr %p) {
 ; CHECK-LABEL: load_bool:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    ldb r1, [r1 + 0]
 ; CHECK-NEXT:    and r1, 1
 ; CHECK-NEXT:    jmp r13
@@ -111,7 +111,7 @@ define i32 @load_bool(ptr %p) {
 define void @store_bool(ptr %p, i1 %v) {
 ; CHECK-LABEL: store_bool:
 ; CHECK:         .cfi_startproc
-; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    and r2, 1
 ; CHECK-NEXT:    stb r2, [r1 + 0]
 ; CHECK-NEXT:    jmp r13
