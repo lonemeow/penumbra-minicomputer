@@ -199,13 +199,15 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
       .legalFor({s32, p0})
       .clampScalar(0, s32, s32);
 
-  // Varargs: G_VASTART is custom-lowered to store the save area address
-  // into the va_list pointer.  G_VAARG is lowered generically (pointer
-  // bump + load).
+  // Varargs: G_VASTART stores the save area address into the va_list.
+  // G_VAARG is custom-lowered to a pointer bump + load WITHOUT
+  // alignment rounding — our CC passes i64 halves in consecutive
+  // 4-byte slots without alignment gaps, so va_arg must not skip
+  // slots to reach 8-byte alignment.
   getActionDefinitionsBuilder(G_VASTART).customFor({p0});
   getActionDefinitionsBuilder(G_VAARG)
       .clampScalar(0, s32, s64)
-      .lowerForCartesianProduct({s32, s64, p0}, {p0});
+      .customForCartesianProduct({s32, s64, p0}, {p0});
 
   // Stack save/restore: used by alloca.  SP is R14.
   getActionDefinitionsBuilder(G_STACKSAVE).legalFor({p0});
@@ -324,6 +326,39 @@ bool PenumbraLegalizerInfo::legalizeCustom(
     // No cache hints on Penumbra — just discard the prefetch.
     MI.eraseFromParent();
     return true;
+
+  case TargetOpcode::G_VAARG: {
+    // Custom va_arg: load value from va_list pointer, advance by size.
+    // No alignment rounding — our ABI uses 4-byte stack slots for all
+    // types including i64 (consecutive halves, no gap).
+    Register Dst = MI.getOperand(0).getReg();
+    Register ListPtr = MI.getOperand(1).getReg();
+    LLT DstTy = MRI.getType(Dst);
+    LLT PtrTy = LLT::pointer(0, 32);
+    unsigned Size = DstTy.getSizeInBytes();
+
+    // Load current va_list pointer value
+    auto CurPtr = MIRBuilder.buildLoad(PtrTy, ListPtr,
+        *MIRBuilder.getMF().getMachineMemOperand(
+            MachinePointerInfo(), MachineMemOperand::MOLoad, PtrTy, Align(4)));
+
+    // Load the argument value from that address
+    MIRBuilder.buildLoad(Dst, CurPtr,
+        *MIRBuilder.getMF().getMachineMemOperand(
+            MachinePointerInfo(), MachineMemOperand::MOLoad, DstTy, Align(4)));
+
+    // Advance pointer by argument size
+    auto SizeConst = MIRBuilder.buildConstant(LLT::scalar(32), Size);
+    auto NextPtr = MIRBuilder.buildPtrAdd(PtrTy, CurPtr, SizeConst);
+
+    // Store updated pointer back to va_list
+    MIRBuilder.buildStore(NextPtr, ListPtr,
+        *MIRBuilder.getMF().getMachineMemOperand(
+            MachinePointerInfo(), MachineMemOperand::MOStore, PtrTy, Align(4)));
+
+    MI.eraseFromParent();
+    return true;
+  }
 
   case TargetOpcode::G_VASTART: {
     // G_VASTART stores the address of the first anonymous argument into

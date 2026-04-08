@@ -20,16 +20,11 @@ define i32 @first_vararg(i32 %named, ...) {
 ; CHECK-NEXT:    mov r1, r14
 ; CHECK-NEXT:    add r1, 8
 ; CHECK-NEXT:    stw r1, [r14 + 0]
-; CHECK-NEXT:    ldw r1, [r14 + 0]
-; CHECK-NEXT:    lli r2, 3
-; CHECK-NEXT:    add r1, r2
-; CHECK-NEXT:    llis r2, -4
-; CHECK-NEXT:    and r1, r2
-; CHECK-NEXT:    lli r2, 4
-; CHECK-NEXT:    mov r3, r1
-; CHECK-NEXT:    add r3, r2
-; CHECK-NEXT:    stw r3, [r14 + 0]
-; CHECK-NEXT:    ldw r1, [r1 + 0]
+; CHECK-NEXT:    ldw r2, [r14 + 0]
+; CHECK-NEXT:    ldw r1, [r2 + 0]
+; CHECK-NEXT:    lli r3, 4
+; CHECK-NEXT:    add r2, r3
+; CHECK-NEXT:    stw r2, [r14 + 0]
 ; CHECK-NEXT:    add r14, 20
 ; CHECK-NEXT:    jmp r13
   %vl = alloca ptr, align 4
@@ -52,16 +47,11 @@ define i32 @multi_named(i32 %a, i32 %b, i32 %c, ...) {
 ; CHECK-NEXT:    mov r1, r14
 ; CHECK-NEXT:    add r1, 16
 ; CHECK-NEXT:    stw r1, [r14 + 0]
-; CHECK-NEXT:    ldw r1, [r14 + 0]
-; CHECK-NEXT:    lli r2, 3
-; CHECK-NEXT:    add r1, r2
-; CHECK-NEXT:    llis r2, -4
-; CHECK-NEXT:    and r1, r2
-; CHECK-NEXT:    lli r2, 4
-; CHECK-NEXT:    mov r3, r1
-; CHECK-NEXT:    add r3, r2
-; CHECK-NEXT:    stw r3, [r14 + 0]
-; CHECK-NEXT:    ldw r1, [r1 + 0]
+; CHECK-NEXT:    ldw r2, [r14 + 0]
+; CHECK-NEXT:    ldw r1, [r2 + 0]
+; CHECK-NEXT:    lli r3, 4
+; CHECK-NEXT:    add r2, r3
+; CHECK-NEXT:    stw r2, [r14 + 0]
 ; CHECK-NEXT:    add r14, 20
 ; CHECK-NEXT:    jmp r13
   %vl = alloca ptr, align 4
@@ -87,16 +77,11 @@ define i32 @many_named(i32 %a, i32 %b, i32 %c, i32 %d, i32 %e, i32 %f, ...) {
 ; CHECK-NEXT:    mov r1, r14
 ; CHECK-NEXT:    add r1, 28
 ; CHECK-NEXT:    stw r1, [r14 + 0]
-; CHECK-NEXT:    ldw r1, [r14 + 0]
-; CHECK-NEXT:    lli r2, 3
-; CHECK-NEXT:    add r1, r2
-; CHECK-NEXT:    llis r2, -4
-; CHECK-NEXT:    and r1, r2
-; CHECK-NEXT:    lli r2, 4
-; CHECK-NEXT:    mov r3, r1
-; CHECK-NEXT:    add r3, r2
-; CHECK-NEXT:    stw r3, [r14 + 0]
-; CHECK-NEXT:    ldw r1, [r1 + 0]
+; CHECK-NEXT:    ldw r2, [r14 + 0]
+; CHECK-NEXT:    ldw r1, [r2 + 0]
+; CHECK-NEXT:    lli r3, 4
+; CHECK-NEXT:    add r2, r3
+; CHECK-NEXT:    stw r2, [r14 + 0]
 ; CHECK-NEXT:    add r14, 20
 ; CHECK-NEXT:    jmp r13
   %vl = alloca ptr, align 4
@@ -104,6 +89,40 @@ define i32 @many_named(i32 %a, i32 %b, i32 %c, i32 %d, i32 %e, i32 %f, ...) {
   %arg = va_arg ptr %vl, i32
   call void @llvm.va_end(ptr %vl)
   ret i32 %arg
+}
+
+; Variadic function that reads an i64 argument via va_arg.
+; The i64 must be read from two consecutive 4-byte slots WITHOUT
+; alignment rounding — our ABI does not require 8-byte alignment
+; for i64 values in varargs.
+define i64 @vaarg_i64(i32 %named, ...) {
+; CHECK-LABEL: vaarg_i64:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  ; %bb.0:
+; CHECK-NEXT:    sub r14, 20
+; CHECK-NEXT:    stw r1, [r14 + 4]
+; CHECK-NEXT:    stw r2, [r14 + 8]
+; CHECK-NEXT:    stw r3, [r14 + 12]
+; CHECK-NEXT:    stw r4, [r14 + 16]
+; CHECK-NEXT:    mov r1, r14
+; CHECK-NEXT:    add r1, 8
+; CHECK-NEXT:    stw r1, [r14 + 0]
+; CHECK-NEXT:    ldw r3, [r14 + 0]
+; CHECK-NEXT:    ldw r1, [r3 + 0]
+; CHECK-NEXT:    lli r2, 4
+; CHECK-NEXT:    mov r4, r3
+; CHECK-NEXT:    add r4, r2
+; CHECK-NEXT:    ldw r2, [r4 + 0]
+; CHECK-NEXT:    lli r4, 8
+; CHECK-NEXT:    add r3, r4
+; CHECK-NEXT:    stw r3, [r14 + 0]
+; CHECK-NEXT:    add r14, 20
+; CHECK-NEXT:    jmp r13
+  %vl = alloca ptr, align 4
+  call void @llvm.va_start(ptr %vl)
+  %arg = va_arg ptr %vl, i64
+  call void @llvm.va_end(ptr %vl)
+  ret i64 %arg
 }
 
 ; Variadic function with >4 named args including an i64.
@@ -123,16 +142,11 @@ define i32 @many_named_i64(i32 %a, i32 %b, i32 %c, i32 %d, i64 %e, i32 %f, ...) 
 ; CHECK-NEXT:    mov r1, r14
 ; CHECK-NEXT:    add r1, 32
 ; CHECK-NEXT:    stw r1, [r14 + 0]
-; CHECK-NEXT:    ldw r1, [r14 + 0]
-; CHECK-NEXT:    lli r2, 3
-; CHECK-NEXT:    add r1, r2
-; CHECK-NEXT:    llis r2, -4
-; CHECK-NEXT:    and r1, r2
-; CHECK-NEXT:    lli r2, 4
-; CHECK-NEXT:    mov r3, r1
-; CHECK-NEXT:    add r3, r2
-; CHECK-NEXT:    stw r3, [r14 + 0]
-; CHECK-NEXT:    ldw r1, [r1 + 0]
+; CHECK-NEXT:    ldw r2, [r14 + 0]
+; CHECK-NEXT:    ldw r1, [r2 + 0]
+; CHECK-NEXT:    lli r3, 4
+; CHECK-NEXT:    add r2, r3
+; CHECK-NEXT:    stw r2, [r14 + 0]
 ; CHECK-NEXT:    add r14, 20
 ; CHECK-NEXT:    jmp r13
   %vl = alloca ptr, align 4
