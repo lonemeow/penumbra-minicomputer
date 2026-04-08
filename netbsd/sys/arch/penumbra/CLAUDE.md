@@ -283,6 +283,8 @@ Headers fall into three categories:
   panic for `pmap_kenter_pa`).
 - [x] **setregs / exec / return-to-user** — `setregs()` initializes
   user trapframe (entry point, SP, user-mode SR).
+  Passes `cleanup=0` in R1, `p_psstrp` in R2 for
+  `___start(cleanup, ps_strings)` in crt0-common.c.
   `cpu_spawn_return()` is a no-op (trap return handles it).
   `lwp_trampoline` loads `md_utf` and jumps to `trap_return`
   after func(arg) returns.
@@ -294,8 +296,11 @@ Headers fall into three categories:
   dispatched via `md_syscall` function pointer set by
   `syscall_intern()`.  R1=syscall number, R2–R4=register args,
   overflow from user stack via `copyin()`.  Return convention:
-  R1=retval + C flag clear on success, R1=errno + C flag set on
-  error.  ERESTART backs up EPC.  Indirect syscalls
+  R1=rval[0] + R2=rval[1] + C flag clear on success,
+  R1=errno + C flag set on error.  Two-value return needed by
+  fork (R2 distinguishes parent/child) and pipe (two fds).
+  `md_child_return` sets R1=0, R2=1 for fork child.
+  ERESTART backs up EPC.  Indirect syscalls
   (`SYS_syscall`/`SYS___syscall`) rejected with ENOSYS.
   `userret()` called on every syscall return path.
   Init calls SYS_write + SYS_exit successfully.

@@ -264,12 +264,17 @@ MIPS/68k-style vector dispatch.
   power-of-2 UDIV→SHR, power-of-2 UREM→AND;
   s64 via libcalls),
   G_MEMCPY/G_MEMMOVE/G_MEMSET via libcalls,
-  G_CTTZ/G_CTLZ/G_CTPOP (lowered to shift/logic),
+  G_CTTZ/G_CTLZ/G_CTPOP (lowered to shift/logic; s64 narrowed to s32),
   pointer comparisons, G_FREEZE, G_ABS,
   varargs (G_VASTART/G_VAARG with R1-R4 register save area),
   inline assembly (`r`/`i` constraints,
   `~{cc}`/`~{memory}` clobbers),
-  G_IMPLICIT_DEF.
+  G_IMPLICIT_DEF,
+  **soft-float** (all FP ops → libcalls: arithmetic, conversions,
+  comparisons; G_FCONSTANT → integer bit pattern materialization),
+  **atomics** (all atomic ops → `__atomic_*` libcalls via
+  AtomicExpandPass; `MaxAtomicInlineWidth=0`,
+  `setMaxAtomicSizeInBitsSupported(0)`).
 - `-fPIC` supported: PC-relative addressing via
   MOV PC + ADDi `%pcrel()` for globals,
   EK_LabelDifference32 jump table entries;
@@ -398,9 +403,12 @@ MIPS/68k-style vector dispatch.
 - **Syscall dispatch (syscall.c):** `SYSCALL` (vector 5) dispatched
   via `md_syscall` function pointer.  R1=syscall number, R2–R4=args,
   overflow from user stack via `copyin()`.  Carry-flag error convention
-  (C=0 success, C=1 error).  Indirect syscalls (`SYS_syscall`/
-  `SYS___syscall`) rejected with ENOSYS.  Init calls SYS_write +
-  SYS_exit successfully.
+  (C=0 success, C=1 error).  Two-value return: `rval[0]` in R1,
+  `rval[1]` in R2 (needed by fork/pipe).  `md_child_return` sets
+  R1=0, R2=1 for fork child.  `setregs` passes cleanup=0 in R1,
+  `p_psstrp` in R2 for `___start(cleanup, ps_strings)`.
+  Indirect syscalls (`SYS_syscall`/`SYS___syscall`) rejected with
+  ENOSYS.  Init calls SYS_write + SYS_exit successfully.
 - All remaining MD functions are either implemented or break-trap
   stubs (grep for `TODO(stub)`).
 - Atomics: interrupt-disable CAS (`RDSPR SR` / `DI` / load-cmp-store
@@ -419,11 +427,44 @@ MIPS/68k-style vector dispatch.
 - See `netbsd/sys/arch/penumbra/CLAUDE.md` for detailed
   kernel port context.
 
+**Userland cross-build (`build.sh libs`) in progress.**
+- CSU startup files (`crt0.S`, `crti.S`, `crtn.S`, `crtbegin.h`,
+  `crtend.S`) in `lib/csu/arch/penumbra/`.
+  Uses `.init_array`/`.fini_array` (HAVE_INITFINI_ARRAY).
+  `crt0.S` is a single `b ___start` — kernel passes R1=cleanup,
+  R2=ps_strings matching `___start()` signature directly.
+- libc MD files in `lib/libc/arch/penumbra/`:
+  `SYS.h` (SYSTRAP/PSEUDO/RSYSCALL macros, carry-flag convention),
+  `sys/cerror.S` (BCS → errno + return -1),
+  12 custom syscall wrappers (fork, pipe, brk, sbrk, clone, vfork,
+  ptrace, getcontext, shmat, __syscall, syscall).
+  `gen/flt_rounds.c` (soft-float stub),
+  `gen/nanf.c` (IEEE 754 LE quiet NaN),
+  `gdtoa/arith.h` + `gd_qnan.h`,
+  `genassym.cf` (jmp_buf / ucontext offsets).
+- Machine headers: `asm.h` (ENTRY/END/CALLFRAME macros),
+  `fenv.h`, `float.h`, `ieee.h`, `ieeefp.h`, `math.h`,
+  `kcore.h`, updated `setjmp.h` with userland jmp_buf layout.
+  `include/Makefile` installs headers to sysroot.
+- Build system (`bsd.own.mk`): `HAVE_SSP=no` (no stack protector),
+  `HAVE_LIBGCC_EH=yes` (skip libunwind), clang 22 warning
+  suppressions, jemalloc `LG_QUANTUM=3`.
+- **Hundreds of libc .c files compile at `-O0`.**
+  Blocked on TLS support (`@llvm.threadlocal.address` intrinsic)
+  needed by jemalloc's `__thread` variables.
+- Build command: `./build.sh -U -j10 -m penumbra
+  -V EXTERNAL_TOOLCHAIN=$PWD/../build/llvm
+  -O ../build/netbsd-obj -T ../build/netbsd-tools
+  -D ../build/netbsd-dest -V DBG=-O0 libs`
+
 ## Next Steps (in priority order)
-1. **Kernel implementation** — remaining MD stubs as the kernel
+1. **LLVM TLS support** — lower `@llvm.threadlocal.address` to
+   R12 (thread pointer) + offset.  Blocks libc build (jemalloc).
+2. **Userland build completion** — fix remaining libc compile/link
+   errors, then `build.sh` `distribution` for full rootfs.
+3. **Kernel implementation** — remaining MD stubs as the kernel
    reaches them (grep `TODO(stub)`): signals, mcontext, startlwp.
-3. **LLVM `-O2` support** — implement `analyzeBranch`/`insertBranch`/
+4. **LLVM `-O2` support** — implement `analyzeBranch`/`insertBranch`/
    `removeBranch` for branch optimization passes
-4. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick
 5. **Interrupt controller** — Multiple devices with priority encoding
 6. **Memory subsystem** — SDRAM controller, bus interface
