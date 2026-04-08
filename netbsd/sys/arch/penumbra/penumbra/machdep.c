@@ -27,6 +27,7 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <sys/signal.h>
 #include <sys/signalvar.h>
 #include <sys/ptrace.h>
+#include <sys/timetc.h>
 
 #include <uvm/uvm_extern.h>
 
@@ -37,6 +38,7 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <machine/vmparam.h>
 #include <machine/pmap.h>
 #include <machine/reg.h>
+#include <machine/sysreg.h>
 #include <machine/mcontext.h>
 
 /* Single CPU info structure (uniprocessor) */
@@ -88,13 +90,97 @@ cpu_reboot(int howto, char *bootstr)
 }
 
 /*
- * Clock initialization — stub.
- * TODO: implement with a programmable timer.
+ * Timecounter — synthesises a monotonic 32-bit counter from the
+ * hardware timer's 16-bit countdown register.
+ *
+ * The MI timecounter API requires the counter to wrap at a power-of-2
+ * matching tc_counter_mask.  Our hardware timer wraps at (reload+1)
+ * which is 10000 for 100 Hz — not a power of 2.
+ *
+ * Solution: accumulate a base counter in the hardclock handler
+ * (bumped by reload+1 each interrupt), and add the current sub-tick
+ * offset.  The result is a continuous 32-bit value at 1 MHz, wrapping
+ * naturally at 2^32 (~71 minutes).
+ */
+static uint32_t timer_reload_val;
+static volatile uint32_t timer_tc_base;	/* accumulated ticks at last interrupt */
+
+void	timer_tc_tick(void);	/* called from trap.c timer handler */
+
+static u_int
+timer_get_timecount(struct timecounter *tc)
+{
+	uint32_t count;
+
+	__asm __volatile(
+	    "RDSYS %0, %1, %2" : "=r"(count)
+	    : "i"(SYSDEV_TIMER), "i"(TM_COUNT)
+	);
+	return timer_tc_base + (timer_reload_val - count);
+}
+
+/*
+ * Called from the timer interrupt handler (trap.c) to advance
+ * the timecounter base by one period.
+ */
+void
+timer_tc_tick(void)
+{
+	timer_tc_base += timer_reload_val + 1;
+}
+
+static struct timecounter timer_timecounter = {
+	.tc_get_timecount	= timer_get_timecount,
+	.tc_counter_mask	= ~0u,
+	.tc_frequency		= 0,		/* set at init */
+	.tc_name		= "penumbra_timer",
+	.tc_quality		= 100,
+};
+
+/*
+ * Clock initialization — program the hardware timer for periodic
+ * interrupts at hz (default 100) ticks per second, and register
+ * the timecounter for sub-tick timestamp resolution.
  */
 void
 cpu_initclocks(void)
 {
-	/* no timer hardware yet */
+	uint32_t freq;
+	uint32_t reload;
+
+	/* Read timer tick frequency from hardware */
+	__asm __volatile(
+	    "RDSYS %0, %1, %2"
+	    : "=r"(freq) : "i"(SYSDEV_TIMER), "i"(TM_FREQ)
+	);
+
+	/* Compute reload value: period = (reload + 1) ticks */
+	reload = freq / hz - 1;
+
+	printf("timer: %u Hz tick, reload %u for %d Hz hardclock\n",
+	    freq, reload, hz);
+
+	/* Set reload and initial count */
+	__asm __volatile(
+	    "WRSYS %0, %1, %2"
+	    : : "r"(reload), "i"(SYSDEV_TIMER), "i"(TM_RELOAD)
+	);
+	__asm __volatile(
+	    "WRSYS %0, %1, %2"
+	    : : "r"(reload), "i"(SYSDEV_TIMER), "i"(TM_COUNT)
+	);
+
+	/* Enable: TICK_EN | IRQ_EN | AUTOLOAD */
+	uint32_t cr = TMCR_TICK_EN | TMCR_IRQ_EN | TMCR_AUTOLOAD;
+	__asm __volatile(
+	    "WRSYS %0, %1, %2"
+	    : : "r"(cr), "i"(SYSDEV_TIMER), "i"(TM_CR)
+	);
+
+	/* Register timecounter for sub-tick timestamp resolution */
+	timer_reload_val = reload;
+	timer_timecounter.tc_frequency = freq;
+	tc_init(&timer_timecounter);
 }
 
 void
@@ -104,15 +190,33 @@ setstatclockrate(int rate)
 }
 
 /*
- * Microsecond delay — busy-loop stub.
- * TODO: calibrate against a timer.
+ * Microsecond delay — busy-wait using the hardware timer counter.
+ *
+ * The timer ticks at 1 MHz (1 tick = 1 µs), counting down with
+ * auto-reload.  We accumulate elapsed ticks by reading TMCOUNT
+ * snapshots, handling the reload wrap.
  */
 void
 delay(unsigned int us)
 {
-	volatile unsigned int i;
-	for (i = 0; i < us * 10; i++)
-		;
+	uint32_t prev, now, elapsed = 0;
+
+	__asm __volatile(
+	    "RDSYS %0, %1, %2" : "=r"(prev)
+	    : "i"(SYSDEV_TIMER), "i"(TM_COUNT)
+	);
+
+	while (elapsed < us) {
+		__asm __volatile(
+		    "RDSYS %0, %1, %2" : "=r"(now)
+		    : "i"(SYSDEV_TIMER), "i"(TM_COUNT)
+		);
+		if (now <= prev)
+			elapsed += prev - now;
+		else
+			elapsed += prev + 1;	/* wrapped past zero */
+		prev = now;
+	}
 }
 
 /*

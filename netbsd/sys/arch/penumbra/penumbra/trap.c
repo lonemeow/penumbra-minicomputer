@@ -20,12 +20,13 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <machine/psl.h>
 #include <machine/pcb.h>
 #include <machine/pmap.h>
+#include <machine/sysreg.h>
 
 #include <uvm/uvm_extern.h>
 
 /* Exception vector numbers (match hardware vector table at PA 0x00) */
 #define EXC_BUSFAULT	0
-#define EXC_IRQ		1
+#define EXC_TIMER	1
 #define EXC_TLB_MISS	2
 #define EXC_TLB_PROT	3
 #define EXC_PRIV	4
@@ -33,9 +34,11 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #define EXC_BREAK	6
 #define EXC_ILLEGAL	7
 #define EXC_ALIGN	8
+#define EXC_EXT_IRQ	9
 
-/* Forward declaration */
+/* Forward declarations */
 void	trap(struct trapframe *);
+void	timer_tc_tick(void);	/* machdep.c — advance timecounter base */
 
 /*
  * trap: main exception dispatch.
@@ -48,9 +51,30 @@ trap(struct trapframe *tf)
 	int usermode = USERMODE(tf->tf_sr);
 
 	switch (type) {
-	case EXC_IRQ:
-		/* TODO: call interrupt dispatcher */
-		panic("IRQ (no handler yet), pc=0x%08x", tf->tf_epc);
+	case EXC_TIMER: {
+		/* Clear timer underflow flag (write-1-to-clear) */
+		uint32_t one = TMST_UDF;
+		__asm __volatile(
+		    "WRSYS %0, %1, %2"
+		    : : "r"(one), "i"(SYSDEV_TIMER), "i"(TM_STATUS)
+		);
+
+		/* Advance timecounter base before hardclock reads it */
+		timer_tc_tick();
+
+		struct clockframe cf;
+		cf.cf_pc = tf->tf_epc;
+		cf.cf_sr = tf->tf_sr;
+		cf.cf_intr_depth = curcpu()->ci_idepth;
+		curcpu()->ci_idepth++;
+		hardclock(&cf);
+		curcpu()->ci_idepth--;
+		break;
+	}
+
+	case EXC_EXT_IRQ:
+		/* TODO: read interrupt controller, dispatch by source */
+		panic("external IRQ (no handler yet), pc=0x%08x", tf->tf_epc);
 		break;
 
 	case EXC_TLB_MISS:
@@ -146,32 +170,47 @@ trap(struct trapframe *tf)
 }
 
 /*
- * Interrupt SPL stubs — these will be real once the
- * interrupt controller is implemented.
+ * Interrupt priority level (SPL) implementation.
+ *
+ * Uniprocessor with a single timer interrupt: any IPL above NONE
+ * disables the CPU interrupt bit (DI), IPL_NONE enables it (EI).
+ * We track the current IPL so splx() can restore the previous state.
  */
+static int current_ipl;
+
 void
 intr_init(void)
 {
-	/* TODO: set up interrupt controller */
+	current_ipl = IPL_HIGH;		/* interrupts off at boot */
 }
 
 int
 splraise(int ipl)
 {
-	/* TODO: disable interrupts, return old IPL */
-	return 0;
+	int old = current_ipl;
+
+	if (ipl > current_ipl) {
+		current_ipl = ipl;
+		__asm __volatile("DI");
+	}
+	return old;
 }
 
 void
 splx(int ipl)
 {
-	/* TODO: restore IPL */
+	current_ipl = ipl;
+	if (ipl == IPL_NONE)
+		__asm __volatile("EI");
+	else
+		__asm __volatile("DI");
 }
 
 void
 spl0(void)
 {
-	/* TODO: enable all interrupts */
+	current_ipl = IPL_NONE;
+	__asm __volatile("EI");
 }
 
 int splhigh(void)	{ return splraise(IPL_HIGH); }

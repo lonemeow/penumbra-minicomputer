@@ -19,6 +19,8 @@
 #define SYSDEV_DCACHE	2	/* D-cache control */
 #define SYSDEV_ICACHE	3	/* I-cache control */
 #define SYSDEV_BUS	4	/* Bus controller (autoconfig) */
+/* Devices 5-6 reserved for future cache levels (L2, L3) */
+#define SYSDEV_TIMER	7	/* Programmable interval timer */
 
 /* ── Device 0: MMU registers ────────────────────────────────────────── */
 
@@ -87,5 +89,21 @@
 
 #define BUSCTL_RST	0x01
 #define BUSCTL_CFG_EN	0x02
+
+/* ── Device 7: Timer registers ─────────────────────────────────────── */
+
+#define TM_FREQ		0	/* Tick frequency in Hz (read-only) */
+#define TM_CR		1	/* Control register */
+#define TM_COUNT	2	/* Current 16-bit counter (counts down) */
+#define TM_RELOAD	3	/* 16-bit reload value */
+#define TM_STATUS	4	/* Status: bit 0 = UDF (write-1-to-clear) */
+
+/* TMCR bit masks */
+#define TMCR_TICK_EN	0x01	/* Enable counting */
+#define TMCR_IRQ_EN	0x02	/* Enable interrupt output */
+#define TMCR_AUTOLOAD	0x04	/* Auto-reload on underflow */
+
+/* TMSTATUS bit masks */
+#define TMST_UDF	0x01	/* Underflow flag (write-1-to-clear) */
 
 #endif /* _PENUMBRA_SYSREG_H_ */

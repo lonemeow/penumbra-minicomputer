@@ -359,8 +359,8 @@ _start_bias:
 	add	r1, r3
 	stw	r1, [r0 + #0x00]
 
-	/* Vector 1: IRQ → _trap_entry_irq */
-	la	r1, _trap_entry_irq
+	/* Vector 1: timer interrupt → _trap_entry_timer */
+	la	r1, _trap_entry_timer
 	sub	r1, r5
 	add	r1, r3
 	stw	r1, [r0 + #0x04]
@@ -400,6 +400,12 @@ _start_bias:
 	sub	r1, r5
 	add	r1, r3
 	stw	r1, [r0 + #0x20]
+
+	/* Vector 9: external device IRQ → _trap_entry_extirq */
+	la	r1, _trap_entry_extirq
+	sub	r1, r5
+	add	r1, r3
+	stw	r1, [r0 + #0x24]
 
 	/* way_counter is part of _rmh_scratch, zeroed by the copy
 	 * (source is in BSS-like .text zero-initialized data) */
@@ -691,7 +697,7 @@ _trap_entry_busfault:	/* vector 0 */
 	lli	r1, #0
 	b	_trap_common
 
-_trap_entry_irq:	/* vector 1 */
+_trap_entry_timer:	/* vector 1: timer interrupt */
 	stw	r1, [pc + _trap_save_r1 - .]
 	lli	r1, #1
 	b	_trap_common
@@ -724,6 +730,11 @@ _trap_entry_illegal:	/* vector 7 */
 _trap_entry_align:	/* vector 8 */
 	stw	r1, [pc + _trap_save_r1 - .]
 	lli	r1, #8
+	b	_trap_common
+
+_trap_entry_extirq:	/* vector 9: external device IRQ */
+	stw	r1, [pc + _trap_save_r1 - .]
+	lli	r1, #9
 	b	_trap_common
 
 /* ── Common trap entry ───────────────────────────────────────
