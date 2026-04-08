@@ -762,7 +762,7 @@ _trap_common:
 	 * be dispatched normally (and will result in SIGSEGV).
 	 */
 	rdspr	r1, esr
-	lui	r2, #0x8000		/* R2 = PSL_S = 0x80000000 */
+	li	r2, 0x80000000		/* PSL_S */
 	and	r1, r2
 	cmp	r1, r0
 	beq	.Lnot_double_fault	/* user mode — not a double fault */
@@ -803,9 +803,22 @@ _trap_common:
 	stw	r12, [r14 + TF_R0 + 48]
 	stw	r13, [r14 + TF_R0 + 52]
 
-	/* Save pre-exception SP: R14 + TF_SIZE (before our SUB) */
-	mov	r1, r14
+	/*
+	 * Save pre-exception SP.  If we came from user mode, the
+	 * hardware swapped SP↔USP on entry, so the user SP is now
+	 * in the USP SPR.  If from kernel mode, R14 was the kernel
+	 * SP and we subtracted TF_SIZE, so the original is R14+TF_SIZE.
+	 */
+	rdspr	r1, esr
+	li	r2, 0x80000000		/* PSL_S */
+	and	r1, r2			/* Z=1 if from user mode */
+	bne	.Lsave_kern_sp
+	rdspr	r1, usp			/* user mode: SP was banked */
+	b	.Lsave_sp_done
+.Lsave_kern_sp:
+	mov	r1, r14			/* kernel mode: undo our SUB */
 	add	r1, #TF_SIZE
+.Lsave_sp_done:
 	stw	r1, [r14 + TF_R0 + 56]		/* tf_regs[14] = original SP */
 
 	/* Save EPC as tf_regs[15] (PC at time of exception) */
@@ -827,20 +840,51 @@ _trap_common:
 	jalr	r11
 
 	/* ── Return from trap ────────────────────────────────
+	 *
 	 * Restore all registers from trapframe and ERET.
+	 * R14 must point to the trapframe.
+	 * Also used by lwp_trampoline to return to userland
+	 * after exec/fork.
+	 *
+	 * CRITICAL: A TLB miss between wrspr ESR/EPC and eret
+	 * would overwrite ESR/EPC with the current supervisor
+	 * context.  To avoid this, all trapframe loads happen
+	 * first, with EPC/ESR/R1/R2 stashed in the pinned
+	 * vector page scratch area.  The final sequence loads
+	 * from pinned scratch (no TLB miss) and erets.
+	 *
 	 * TODO: check for AST/signal delivery before returning
 	 * to userspace.
 	 */
+	.globl	trap_return
+trap_return:
 
-	/* Restore EPC and ESR */
-	ldw	r1, [r14 + TF_EPC]
-	wrspr	epc, r1
+	/* If returning to user mode, set USP from trapframe */
 	ldw	r1, [r14 + TF_SR]
-	wrspr	esr, r1
+	li	r2, 0x80000000		/* PSL_S */
+	and	r1, r2			/* Z=1 if returning to user mode */
+	bne	.Lrestore_regs		/* returning to kernel — skip USP */
+	ldw	r1, [r14 + TF_R0 + 56]	/* tf_regs[14] = user SP */
+	wrspr	usp, r1
 
-	/* Restore R1-R13 (R0 is hardwired zero, R14 restored last) */
-	ldw	r1,  [r14 + TF_R0 + 4]
-	ldw	r2,  [r14 + TF_R0 + 8]
+.Lrestore_regs:
+	/*
+	 * Stash EPC, ESR, R1, R2 in the pinned vector page scratch
+	 * area.  All further loads are from the trapframe (may TLB
+	 * miss — safe because ESR/EPC haven't been written yet).
+	 * After all trapframe loads, we read back from the pinned
+	 * scratch (no TLB miss) and write SPRs immediately before eret.
+	 */
+	ldw	r1, [r14 + TF_EPC]
+	stw	r1, [pc + _trap_save_r3 - .]
+	ldw	r1, [r14 + TF_SR]
+	stw	r1, [pc + _trap_save_r4 - .]
+	ldw	r1, [r14 + TF_R0 + 4]		/* user R1 */
+	stw	r1, [pc + _trap_save_r1 - .]
+	ldw	r1, [r14 + TF_R0 + 8]		/* user R2 */
+	stw	r1, [pc + _trap_save_r2 - .]
+
+	/* Restore R3-R13 from trapframe (may TLB miss — safe) */
 	ldw	r3,  [r14 + TF_R0 + 12]
 	ldw	r4,  [r14 + TF_R0 + 16]
 	ldw	r5,  [r14 + TF_R0 + 20]
@@ -853,10 +897,22 @@ _trap_common:
 	ldw	r12, [r14 + TF_R0 + 48]
 	ldw	r13, [r14 + TF_R0 + 52]
 
-	/* Deallocate trapframe (restore SP) */
+	/* Deallocate trapframe (restore kernel SP) */
 	add	r14, #TF_SIZE
 
-	/* Return from exception — restores PC from EPC, SR from ESR */
+	/*
+	 * Final sequence: all loads from PINNED vector page scratch.
+	 * No TLB miss possible — ESR/EPC writes are safe.
+	 */
+	ldw	r1, [pc + _trap_save_r3 - .]	/* EPC */
+	wrspr	epc, r1
+	ldw	r1, [pc + _trap_save_r4 - .]	/* ESR */
+	wrspr	esr, r1
+	ldw	r1, [pc + _trap_save_r1 - .]	/* user R1 */
+	ldw	r2, [pc + _trap_save_r2 - .]	/* user R2 */
+
+	/* Return from exception — restores PC from EPC, SR from ESR.
+	 * If returning to user mode, hardware swaps SP ↔ USP. */
 	eret
 
 /* ── Trap handler scratch data ──────────────────────────────
@@ -1083,8 +1139,8 @@ cpu_switchto:
 	 * diagnostics instead of crashing in an unrecoverable way.
 	 * Uses R1 as scratch (will be overwritten below anyway).
 	 */
-	lui	r1, #0x8000		/* R1 = 0x80000000 */
-	and	r1, r14			/* test bit 31 of new SP */
+	li	r1, 0x80000000		/* test bit 31 of new SP */
+	and	r1, r14
 	cmp	r1, r0
 	bne	.Lsp_restore_ok
 	break				/* bad pcb_context — halt for debug */
@@ -1121,12 +1177,17 @@ lwp_trampoline:
 	mov	r1, r6			/* arg → R1 (first argument) */
 	jalr	r5			/* call func(arg) */
 
-	/* If func returns, we'd return to userspace via the
-	 * trapframe (trap_return).  For now, kernel threads
-	 * never return from func, so trap here as a safety net.
-	 * TODO: implement trap_return for fork/exec path.
+	/*
+	 * func returned — this is an exec'd or fork'd user process.
+	 * Load the trapframe pointer from curlwp->l_md.md_utf and
+	 * jump to trap_return to restore registers and ERET to user.
+	 * Kernel threads never return from func, so reaching here
+	 * always means "return to userland".
 	 */
-	break
+	la	r11, cpu_info_store
+	ldw	r11, [r11 + CI_CURLWP]	/* curlwp */
+	ldw	r14, [r11 + L_MD_UTF]	/* md_utf → trapframe pointer */
+	b	trap_return
 
 /*
  * setjmp / longjmp for kernel use (label_t).

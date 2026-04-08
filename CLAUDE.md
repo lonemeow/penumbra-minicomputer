@@ -390,6 +390,11 @@ MIPS/68k-style vector dispatch.
   kernel pmaps.  `pmap_create` allocates L1, copies kernel half.
   `pmap_activate` re-pins L1 in TLB slot 1.
   `pmap_alloc_l2` returns bool (ENOMEM-safe).
+- **Exec and return-to-user:** `setregs` initializes user
+  trapframe, `lwp_trampoline` → `trap_return` handles SP banking
+  (USP save/restore) and pinned-scratch ESR/EPC stash to prevent
+  TLB-miss clobbering before eret.  Kernel execs `/sbin/init`
+  and reaches userland (SYSCALL panic — dispatch not yet wired).
 - All remaining MD functions are either implemented or break-trap
   stubs (grep for `TODO(stub)`).
 - Atomics: interrupt-disable CAS (`RDSPR SR` / `DI` / load-cmp-store
@@ -409,9 +414,9 @@ MIPS/68k-style vector dispatch.
   kernel port context.
 
 ## Next Steps (in priority order)
-1. **Kernel implementation** — fix ENOEXEC for /sbin/init,
-   syscall dispatch, then remaining MD stubs as the kernel
-   reaches them (grep `TODO(stub)`).
+1. **Kernel implementation** — syscall dispatch (write/exit),
+   then remaining MD stubs as the kernel reaches them
+   (grep `TODO(stub)`).
 3. **LLVM `-O2` support** — implement `analyzeBranch`/`insertBranch`/
    `removeBranch` for branch optimization passes
 4. **Timer** — Programmable timer/counter for NetBSD hardclock() scheduler tick

@@ -19,6 +19,23 @@
 
 #include <stdint.h>
 
+/*
+ * NetBSD ELF note — identifies this binary as a NetBSD executable.
+ * Without this, the kernel's exec_elf32 probe rejects the binary
+ * with ENOEXEC.  Format per netbsd.org/docs/kernel/elf-notes.html.
+ */
+__asm__(
+    ".section \".note.netbsd.ident\", \"\", @note\n"
+    ".long 2f - 1f\n"          /* name size */
+    ".long 4f - 3f\n"          /* desc size */
+    ".long 1\n"                /* type: NT_NETBSD_IDENT */
+    "1: .asciz \"NetBSD\"\n"
+    "2: .p2align 2\n"
+    "3: .long 1001000000\n"    /* __NetBSD_Version__ 10.1 */
+    "4: .p2align 2\n"
+    ".previous\n"
+);
+
 static int penumbra_syscall(uint32_t num, uint32_t arg1, uint32_t arg2, uint32_t arg3)
 {
 	register uint32_t r1 __asm__("r1") = num;

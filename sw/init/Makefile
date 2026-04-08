@@ -13,7 +13,7 @@ OBJCOPY := $(LLVM_PREFIX)/bin/llvm-objcopy
 
 TARGET  := penumbra-unknown-none
 CFLAGS  := --target=$(TARGET) -ffreestanding -nostdlib -O2 -Wall
-LDFLAGS := -nostdlib --image-base=0x1000
+LDFLAGS := -nostdlib -T $(CURDIR)/init.ld
 
 BUILD   := ../../build/init
 OUT     := $(BUILD)/init

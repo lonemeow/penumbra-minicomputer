@@ -267,16 +267,41 @@ md_child_return(struct lwp *l)
 	/* TODO(stub) */ __asm volatile("break");
 }
 
+/*
+ * cpu_spawn_return: return to userland after execve/fork.
+ *
+ * The MI layer calls this to jump to user mode.  The trapframe
+ * was set up by setregs (exec) or cpu_lwp_fork (fork).
+ * Nothing MD-specific needed here — the normal trap return in
+ * locore.S restores the trapframe and does RTE.
+ */
 void
 cpu_spawn_return(struct lwp *l)
 {
-	/* TODO(stub) */ __asm volatile("break");
+	/* Nothing to do — trap return handles it */
 }
 
+/*
+ * setregs: set up initial user registers for exec.
+ *
+ * Initialize the trapframe so that when we return to user mode,
+ * the process starts executing at pack->ep_entry with the stack
+ * at 'stack'.  Clear all GPRs to avoid leaking kernel state.
+ */
 void
 setregs(struct lwp *l, struct exec_package *pack, vaddr_t stack)
 {
-	/* TODO(stub) */ __asm volatile("break");
+	struct trapframe *tf = l->l_md.md_utf;
+
+	/* Clear all registers — don't leak kernel state */
+	memset(tf, 0, sizeof(*tf));
+
+	/* Entry point and stack pointer */
+	tf->tf_epc = pack->ep_entry;
+	tf->tf_regs[TF_R14] = stack;	/* SP */
+
+	/* User mode: supervisor off, interrupts on */
+	tf->tf_sr = PSL_USERSET & ~PSL_USERCLR;
 }
 
 void

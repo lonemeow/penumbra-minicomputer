@@ -280,15 +280,23 @@ Headers fall into three categories:
   `pmap_activate()` re-pins L1 in TLB slot 1 via inline WRSYS.
   `pmap_alloc_l2()` returns bool (ENOMEM-safe for `pmap_enter`,
   panic for `pmap_kenter_pa`).
+- [x] **setregs / exec / return-to-user** — `setregs()` initializes
+  user trapframe (entry point, SP, user-mode SR).
+  `cpu_spawn_return()` is a no-op (trap return handles it).
+  `lwp_trampoline` loads `md_utf` and jumps to `trap_return`
+  after func(arg) returns.
+  `trap_return` handles SP banking (save/restore USP via SPR),
+  stashes EPC/ESR/R1/R2 in pinned vector page scratch to avoid
+  TLB-miss clobbering of ESR/EPC before eret.
+  Kernel successfully execs `/sbin/init` and reaches userland
+  (panics on first SYSCALL — syscall dispatch not yet implemented).
 - [ ] Kernel port — remaining MD stubs need real implementations
   (grep for `TODO(stub)` to find them)
 - [ ] DDB — disabled, needs extensive MD hooks
 
 ## Next Steps
 
-1. **ELF exec** — fix ENOEXEC (error 8) when exec'ing /sbin/init.
-   ELF machine type or exec format issue.
-2. **Syscall dispatch** — wire SYSCALL trap to `syscall()` so
+1. **Syscall dispatch** — wire SYSCALL trap to `syscall()` so
    userland can call write/exit.
 3. **Remaining MD stubs** — fill in `TODO(stub)` functions as
    the kernel reaches them.
