@@ -85,7 +85,6 @@ define i1 @cmp_i64_eq(i64 %a, i64 %b) {
 ; CHECK-NEXT:    beq .LBB6_2
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r1, r2
-; CHECK-NEXT:    b .LBB6_2
 ; CHECK-NEXT:  .LBB6_2:
 ; CHECK-NEXT:    ldw r5, [r14 + 0] // 4-byte Folded Reload
 ; CHECK-NEXT:    add r14, 4

@@ -149,9 +149,15 @@ or MOV PC + ADDi (PIC); BRJT always adds base back).
   lld resolves as `R_TPREL` (TP-relative offset) for static linking;
   GOT-based dynamic resolution to be added later.
 - No SelectionDAG — GlobalISel only.
-- **Not yet implemented:** `analyzeBranch`/`insertBranch`/`removeBranch`
-  in TargetInstrInfo — needed for `-O2` machine passes
-  (branch folding, block placement). Kernel builds at `-O0` for now.
+- **Branch analysis:** `analyzeBranch`/`insertBranch`/`removeBranch`/
+  `reverseBranchCondition` implemented in `PenumbraInstrInfo.cpp`.
+  Cond vector is single element (branch opcode).  All 14 conditional
+  branch opcodes have opposite-pairs (BEQ↔BNE, BCS↔BCC, etc.).
+  Enables `-O1`/`-Os`/`-O2` (branch folding, block placement).
+- **G_FENCE:** Legalized as always-legal, selected to `MEMBARRIER`
+  pseudo (compiler barrier, no hardware instruction — uniprocessor).
+- **G_BRINDIRECT:** Legalized for p0, selected to BRIND (JMP Rd).
+  Used by computed gotos (Lua VM dispatch).
 
 **Inline assembly:**
 `asm volatile("..." : "=r"(out) : "r"(in) : "cc", "memory")` works.
@@ -288,14 +294,17 @@ Fixed locally — needed for NetBSD kernel option tracking symbols
   G_SDIV/G_SREM libcall s32+s64. s64 all via libcalls.
 - **Lowered:** G_ABS, G_CTTZ/G_CTLZ/G_CTPOP
   (and \_ZERO\_UNDEF variants) to shift/logic,
-  G_FSHL/G_FSHR (s32+s64), G_BSWAP/G_BITREVERSE (s32+s64),
+  G_FSHL/G_FSHR (s32+s64),
+  G_BSWAP/G_BITREVERSE (sub-word widened to s32, then lowered for s32+s64),
   G_UADDO/G_USUBO/G_UADDE/G_USUBE/G_SADDO/G_SSUBO/G_SADDE/G_SSUBE
   (s64 narrowed to s32),
   G_SMIN/G_SMAX/G_UMIN/G_UMAX (any width, lowered to icmp+select),
   G_FNEG/G_FABS/G_FCOPYSIGN (integer bit manipulation, no libcall),
   G_IS_FPCLASS (exponent/mantissa bit inspection).
 - **Libcall:** G_MEMCPY/G_MEMMOVE/G_MEMSET.
-- **Legal:** G_STACKSAVE/G_STACKRESTORE (p0).
+- **Legal:** G_STACKSAVE/G_STACKRESTORE (p0),
+  G_FENCE (always legal — compiler barrier only, no hardware instruction),
+  G_BRINDIRECT (p0 — computed goto).
 - **Lowered:** G_DYN_STACKALLOC (framework: SP subtract + alignment).
 - **Custom:** G_VASTART, G_MUL, G_UDIV, G_UREM, G_PREFETCH (no-op),
   G_GET_ROUNDING (constant 1 = round-to-nearest, no FPU)

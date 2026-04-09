@@ -83,7 +83,6 @@ define i64 @fshl_i64(i64 %a, i64 %b, i64 %sh) {
 ; CHECK-NEXT:    bcc .LBB2_2
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r13, r11
-; CHECK-NEXT:    b .LBB2_2
 ; CHECK-NEXT:  .LBB2_2:
 ; CHECK-NEXT:    lli r11, 1
 ; CHECK-NEXT:    lli r10, 0
@@ -91,13 +90,11 @@ define i64 @fshl_i64(i64 %a, i64 %b, i64 %sh) {
 ; CHECK-NEXT:    bcc .LBB2_4
 ; CHECK-NEXT:  // %bb.3:
 ; CHECK-NEXT:    mov r11, r10
-; CHECK-NEXT:    b .LBB2_4
 ; CHECK-NEXT:  .LBB2_4:
 ; CHECK-NEXT:    cmp r1, r2
 ; CHECK-NEXT:    beq .LBB2_6
 ; CHECK-NEXT:  // %bb.5:
 ; CHECK-NEXT:    mov r13, r11
-; CHECK-NEXT:    b .LBB2_6
 ; CHECK-NEXT:  .LBB2_6:
 ; CHECK-NEXT:    lli r2, 0
 ; CHECK-NEXT:    mov r10, r7
@@ -116,22 +113,15 @@ define i64 @fshl_i64(i64 %a, i64 %b, i64 %sh) {
 ; CHECK-NEXT:    lli r7, 0
 ; CHECK-NEXT:    shl r6, r8
 ; CHECK-NEXT:    test r13, r13
-; CHECK-NEXT:    bne .LBB2_8
-; CHECK-NEXT:  // %bb.7:
-; CHECK-NEXT:    mov r1, r7
-; CHECK-NEXT:    b .LBB2_8
-; CHECK-NEXT:  .LBB2_8:
+; CHECK-NEXT:    beq .LBB2_7
+; CHECK-NEXT:  // %bb.8:
 ; CHECK-NEXT:    test r13, r13
-; CHECK-NEXT:    bne .LBB2_10
-; CHECK-NEXT:  // %bb.9:
-; CHECK-NEXT:    mov r11, r6
-; CHECK-NEXT:    b .LBB2_10
+; CHECK-NEXT:    beq .LBB2_9
 ; CHECK-NEXT:  .LBB2_10:
 ; CHECK-NEXT:    cmp r10, r2
 ; CHECK-NEXT:    beq .LBB2_12
-; CHECK-NEXT:  // %bb.11:
+; CHECK-NEXT:  .LBB2_11:
 ; CHECK-NEXT:    stw r11, [r14 + 8] // 4-byte Folded Spill
-; CHECK-NEXT:    b .LBB2_12
 ; CHECK-NEXT:  .LBB2_12:
 ; CHECK-NEXT:    ldw r11, [r14 + 12] // 4-byte Folded Reload
 ; CHECK-NEXT:    shr r11, 1
@@ -154,7 +144,6 @@ define i64 @fshl_i64(i64 %a, i64 %b, i64 %sh) {
 ; CHECK-NEXT:    bcc .LBB2_14
 ; CHECK-NEXT:  // %bb.13:
 ; CHECK-NEXT:    mov r11, r13
-; CHECK-NEXT:    b .LBB2_14
 ; CHECK-NEXT:  .LBB2_14:
 ; CHECK-NEXT:    lli r13, 1
 ; CHECK-NEXT:    lli r6, 0
@@ -162,13 +151,11 @@ define i64 @fshl_i64(i64 %a, i64 %b, i64 %sh) {
 ; CHECK-NEXT:    bcc .LBB2_16
 ; CHECK-NEXT:  // %bb.15:
 ; CHECK-NEXT:    mov r13, r6
-; CHECK-NEXT:    b .LBB2_16
 ; CHECK-NEXT:  .LBB2_16:
 ; CHECK-NEXT:    cmp r3, r2
 ; CHECK-NEXT:    beq .LBB2_18
 ; CHECK-NEXT:  // %bb.17:
 ; CHECK-NEXT:    mov r11, r13
-; CHECK-NEXT:    b .LBB2_18
 ; CHECK-NEXT:  .LBB2_18:
 ; CHECK-NEXT:    lli r2, 0
 ; CHECK-NEXT:    mov r6, r5
@@ -186,22 +173,15 @@ define i64 @fshl_i64(i64 %a, i64 %b, i64 %sh) {
 ; CHECK-NEXT:    lli r3, 0
 ; CHECK-NEXT:    shr r4, r7
 ; CHECK-NEXT:    test r11, r11
-; CHECK-NEXT:    bne .LBB2_20
-; CHECK-NEXT:  // %bb.19:
-; CHECK-NEXT:    mov r9, r4
-; CHECK-NEXT:    b .LBB2_20
-; CHECK-NEXT:  .LBB2_20:
+; CHECK-NEXT:    beq .LBB2_19
+; CHECK-NEXT:  // %bb.20:
 ; CHECK-NEXT:    cmp r6, r2
-; CHECK-NEXT:    beq .LBB2_22
-; CHECK-NEXT:  // %bb.21:
-; CHECK-NEXT:    mov r10, r9
-; CHECK-NEXT:    b .LBB2_22
+; CHECK-NEXT:    bne .LBB2_21
 ; CHECK-NEXT:  .LBB2_22:
 ; CHECK-NEXT:    test r11, r11
 ; CHECK-NEXT:    bne .LBB2_24
-; CHECK-NEXT:  // %bb.23:
+; CHECK-NEXT:  .LBB2_23:
 ; CHECK-NEXT:    mov r13, r3
-; CHECK-NEXT:    b .LBB2_24
 ; CHECK-NEXT:  .LBB2_24:
 ; CHECK-NEXT:    or r1, r10
 ; CHECK-NEXT:    ldw r2, [r14 + 8] // 4-byte Folded Reload
@@ -215,6 +195,24 @@ define i64 @fshl_i64(i64 %a, i64 %b, i64 %sh) {
 ; CHECK-NEXT:    ldw r5, [r14 + 40] // 4-byte Folded Reload
 ; CHECK-NEXT:    add r14, 44
 ; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:  .LBB2_7:
+; CHECK-NEXT:    mov r1, r7
+; CHECK-NEXT:    test r13, r13
+; CHECK-NEXT:    bne .LBB2_10
+; CHECK-NEXT:  .LBB2_9:
+; CHECK-NEXT:    mov r11, r6
+; CHECK-NEXT:    cmp r10, r2
+; CHECK-NEXT:    bne .LBB2_11
+; CHECK-NEXT:    b .LBB2_12
+; CHECK-NEXT:  .LBB2_19:
+; CHECK-NEXT:    mov r9, r4
+; CHECK-NEXT:    cmp r6, r2
+; CHECK-NEXT:    beq .LBB2_22
+; CHECK-NEXT:  .LBB2_21:
+; CHECK-NEXT:    mov r10, r9
+; CHECK-NEXT:    test r11, r11
+; CHECK-NEXT:    beq .LBB2_23
+; CHECK-NEXT:    b .LBB2_24
   %r = call i64 @llvm.fshl.i64(i64 %a, i64 %b, i64 %sh)
   ret i64 %r
 }

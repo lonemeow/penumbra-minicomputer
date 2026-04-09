@@ -31,6 +31,10 @@ void penumbra::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   if (!D.SysRoot.empty())
     CmdArgs.push_back(Args.MakeArgString("--sysroot=" + D.SysRoot));
 
+  // Match GNU ld behavior: don't error on version script symbols that
+  // aren't defined (e.g. Heimdal lists DllMain, a Windows-only symbol).
+  CmdArgs.push_back("--undefined-version");
+
   // Output file.
   CmdArgs.push_back("-o");
   CmdArgs.push_back(Output.getFilename());
@@ -38,12 +42,20 @@ void penumbra::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   // Forward all -Wl, flags and linker inputs.
   Args.addAllArgs(CmdArgs, {options::OPT_T_Group, options::OPT_s,
                              options::OPT_t, options::OPT_r});
+  Args.addAllArgs(CmdArgs, {options::OPT_L, options::OPT_u});
   TC.AddFilePathLibArgs(Args, CmdArgs);
   AddLinkerInputs(TC, Inputs, Args, CmdArgs, JA);
 
   // Forward -shared, -static, -nostdlib, etc.
   Args.addAllArgs(CmdArgs, {options::OPT_shared, options::OPT_static,
                              options::OPT_rdynamic});
+
+  // Add default library search paths and -lc unless suppressed.
+  if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nodefaultlibs)) {
+    CmdArgs.push_back("-L=/lib");
+    CmdArgs.push_back("-L=/usr/lib");
+    CmdArgs.push_back("-lc");
+  }
 
   // Find ld.lld in the same directory as clang.
   const char *Exec = Args.MakeArgString(TC.GetProgramPath("ld.lld"));

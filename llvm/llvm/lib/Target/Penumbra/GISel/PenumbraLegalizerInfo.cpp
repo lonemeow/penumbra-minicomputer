@@ -102,9 +102,16 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
       .legalFor({s32, p0})
       .clampScalar(0, s32, s32);
 
+  // Fences: Penumbra is uniprocessor with no store buffer, so memory fences
+  // are pure compiler barriers (no hardware instruction needed).
+  getActionDefinitionsBuilder(G_FENCE).alwaysLegal();
+
   // Branches.
   getActionDefinitionsBuilder(G_BRCOND)
       .legalFor({s1});
+
+  // Indirect branch: G_BRINDIRECT jumps through a pointer (computed goto).
+  getActionDefinitionsBuilder(G_BRINDIRECT).legalFor({p0});
 
   // Jump tables: G_JUMP_TABLE materialises table address, G_BRJT branches.
   getActionDefinitionsBuilder(G_JUMP_TABLE).legalFor({p0});
@@ -173,8 +180,11 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
 
   // Byte swap: used by SHA1, networking, etc. Lower to shift/mask/OR.
   // Bitreverse: similar, lower to shift/mask sequence.
+  // Sub-word (s8/s16) widened to s32 first, then lowered.
   getActionDefinitionsBuilder({G_BSWAP, G_BITREVERSE})
-      .lowerFor({s32, s64});
+      .lowerFor({s32, s64})
+      .widenScalarToNextPow2(0)
+      .clampScalar(0, s32, s64);
 
   // Min/max: lower to icmp + select for any scalar width.
   // s64 lowers to icmp+select at s64 level, then the framework narrows

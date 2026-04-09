@@ -213,6 +213,18 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
   // ── Branches ──────────────────────────────────────────────────────────────
   case G_BR:     return selectBranch(I, MBB);
   case G_BRCOND: return selectBrCond(I, MBB, MRI);
+  case G_FENCE:
+    // Uniprocessor: no hardware barrier needed, just a compiler barrier.
+    BuildMI(MBB, I, I.getDebugLoc(), TII.get(TargetOpcode::MEMBARRIER));
+    I.eraseFromParent();
+    return true;
+  case G_BRINDIRECT: {
+    auto MI = BuildMI(MBB, I, I.getDebugLoc(), TII.get(Penumbra::BRIND))
+                  .addReg(I.getOperand(0).getReg());
+    constrainSelectedInstRegOperands(*MI, TII, TRI, RBI);
+    I.eraseFromParent();
+    return true;
+  }
 
   // ── Extensions / Truncation ─────────────────────────────────────────────────
   case G_ANYEXT:

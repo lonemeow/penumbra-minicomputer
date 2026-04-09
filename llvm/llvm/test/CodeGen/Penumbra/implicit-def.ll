@@ -63,10 +63,8 @@ define i32 @cond_undef(i1 %c, i32 %a) {
 ; O1-NEXT:    mov r1, r2
 ; O1-NEXT:    test r3, r3
 ; O1-NEXT:    bne .LBB2_2
-; O1-NEXT:    b .LBB2_1
-; O1-NEXT:  .LBB2_1: // %else
+; O1-NEXT:  // %bb.1: // %else
 ; O1-NEXT:    // implicit-def: $r1
-; O1-NEXT:    b .LBB2_2
 ; O1-NEXT:  .LBB2_2: // %join
 ; O1-NEXT:    jmp r13
 entry:

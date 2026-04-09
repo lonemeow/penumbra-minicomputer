@@ -11,7 +11,6 @@ define i32 @umin_i32(i32 %a, i32 %b) {
 ; CHECK-NEXT:    bcc .LBB0_2
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r1, r2
-; CHECK-NEXT:    b .LBB0_2
 ; CHECK-NEXT:  .LBB0_2:
 ; CHECK-NEXT:    jmp r13
   %r = call i32 @llvm.umin.i32(i32 %a, i32 %b)
@@ -27,7 +26,6 @@ define i32 @umax_i32(i32 %a, i32 %b) {
 ; CHECK-NEXT:    bhi .LBB1_2
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r1, r2
-; CHECK-NEXT:    b .LBB1_2
 ; CHECK-NEXT:  .LBB1_2:
 ; CHECK-NEXT:    jmp r13
   %r = call i32 @llvm.umax.i32(i32 %a, i32 %b)
@@ -43,7 +41,6 @@ define i32 @smin_i32(i32 %a, i32 %b) {
 ; CHECK-NEXT:    blt .LBB2_2
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r1, r2
-; CHECK-NEXT:    b .LBB2_2
 ; CHECK-NEXT:  .LBB2_2:
 ; CHECK-NEXT:    jmp r13
   %r = call i32 @llvm.smin.i32(i32 %a, i32 %b)
@@ -59,7 +56,6 @@ define i32 @smax_i32(i32 %a, i32 %b) {
 ; CHECK-NEXT:    bgt .LBB3_2
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r1, r2
-; CHECK-NEXT:    b .LBB3_2
 ; CHECK-NEXT:  .LBB3_2:
 ; CHECK-NEXT:    jmp r13
   %r = call i32 @llvm.smax.i32(i32 %a, i32 %b)
