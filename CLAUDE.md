@@ -116,6 +116,21 @@ Setup in `hw/tools/oss-cad-suite/`.
 - **USB flashing:** `fujprog` needs USB device access;
   the container runs with `--privileged` and `/dev/bus/usb` mapped.
 - **Adding tools:** `ln -s ../docker-wrapper.sh hw/tools/oss-cad-suite/bin/<toolname>`
+- **sv2v:** SystemVerilog→Verilog-2005 converter (v0.0.13, pinned).
+  Required because Yosys's `read_verilog -sv` doesn't support
+  module-level `import` used throughout the codebase.
+- **Yosys $readmemh bug:** sv2v generates zero-fill for loops before
+  `$readmemh` in initial blocks. Yosys incorrectly prioritizes the
+  for-loop `$meminit` over the `$readmemh`, producing empty ROMs.
+  Fix: `hw/tools/inline_hex.py` strips these zero-fill loops from
+  the sv2v output.  The Makefile runs this automatically.
+- **FPGA build flow:**
+  `make fpga TOP=ulx3s_top` — full build (sv2v → fix → yosys → nextpnr → ecppack)
+  `make flash TOP=ulx3s_top` — build + flash to ULX3S via USB
+  `make fpga-lint TOP=ulx3s_top` — Verilator lint check
+- **ULX3S system:** `hw/rtl/fpga/ulx3s_top.sv` — board top-level,
+  12.5 MHz PLL (25 MHz crystal), 256 KB BRAM, real UART (TX+RX),
+  boot ROM, btn[1] reset.  Serial: 115200 8N1 on `/dev/ttyUSB0`.
 
 ### SD Card Image
 Build a test SD image with bootloader and/or kernel for `make simulate`:
