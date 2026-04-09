@@ -163,34 +163,8 @@ module uart
     // ══════════════════════════════════════════════════════════
     // RX shift register
     // ══════════════════════════════════════════════════════════
-    // TODO(human): Implement the UART RX shift register.
-    //
-    // The receiver needs to:
-    //   1. Detect start bit: wait for i_rx to go LOW (falling edge
-    //      from idle HIGH), then wait 8 baud16x_ticks to reach the
-    //      middle of the start bit. Sample i_rx — if still LOW,
-    //      it's a valid start bit; if HIGH, it was a glitch, go
-    //      back to waiting.
-    //   2. Sample 8 data bits: for each bit, count 16 baud16x_ticks
-    //      (one full bit period), sample i_rx at tick 8 (mid-bit).
-    //      Shift the sampled bit into an 8-bit register LSB-first.
-    //   3. Check stop bit: count 16 more ticks, sample at mid-bit.
-    //      If LOW, it's a framing error (ignore for now).
-    //   4. Deliver byte: copy the shift register into rbr, set
-    //      rx_ready = 1 (which sets DR in LSR and may trigger IRQ).
-    //      If rx_ready is already set (overrun), the new byte
-    //      is lost (standard NS16450 behavior).
-    //
-    // You'll need:
-    //   - rx_state (IDLE, START, DATA, STOP)
-    //   - rx_sample_cnt [3:0] — counts 16 baud16x_ticks per bit
-    //   - rx_bit_idx [2:0] — which of the 8 data bits we're on
-    //   - rx_shift [7:0] — received data shift register
-    //   - A synchronizer for i_rx (2-FF) to avoid metastability
-    //
-    // Until implemented, rx_ready is never set (no RX capability).
-    // The boot ROM's uart_read() will block forever, but that's OK
-    // since the monitor prompt requires TX only for initial bring-up.
+    // 16x oversampling receiver: detects start bit falling edge,
+    // samples data at mid-bit, delivers byte to RBR.
 
     // Synchronize i_rx to avoid metastability
     logic rx_sync1, rx_sync2;
@@ -203,20 +177,62 @@ module uart
     logic rbr_read;
     assign rbr_read = read_first && !dlab && (reg_sel == 3'd0);
 
-    // RX state — stub: only handle rbr_read clearing rx_ready
+    logic [3:0]  rx_sample_cnt;
+    logic [2:0]  rx_bit_idx;
+    logic [7:0]  rx_shift;
+
+    typedef enum logic [2:0] {IDLE, START, DATA, STOP} state_e_rx;
+    state_e_rx rx_state = IDLE;
+
+    // RX state machine + RBR delivery
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
-            rbr      <= 8'd0;
-            rx_ready <= 1'b0;
+            rbr           <= 8'd0;
+            rx_ready      <= 1'b0;
+            rx_state      <= IDLE;
         end else if (rbr_read) begin
             rx_ready <= 1'b0;
+        end else if (baud16x_tick) begin
+            case (rx_state)
+                IDLE: begin
+                    if (!rx_sync2) begin
+                        rx_state      <= START;
+                        rx_sample_cnt <= 0;
+                    end
+                end
+                START: begin
+                    rx_sample_cnt <= rx_sample_cnt + 1;
+                    if (rx_sample_cnt == 7) begin
+                        if (!rx_sync2) begin
+                            rx_state <= DATA;
+                            rx_sample_cnt <= 0;
+                            rx_bit_idx    <= 0;
+                        end else begin
+                            rx_state <= IDLE;
+                        end
+                    end
+                end
+                DATA: begin
+                    rx_sample_cnt <= rx_sample_cnt + 1;
+                    if (rx_sample_cnt == 15) begin
+                        rx_sample_cnt        <= 0;
+                        rx_shift[rx_bit_idx] <= rx_sync2;
+                        rx_bit_idx           <= rx_bit_idx + 1;
+                        if (rx_bit_idx == 7) begin
+                            rx_state <= STOP;
+                        end
+                    end
+                end
+                STOP: begin
+                    rx_sample_cnt <= rx_sample_cnt + 1;
+                    if (rx_sample_cnt == 15) begin
+                        rx_state <= IDLE;
+                        rbr      <= rx_shift;
+                        rx_ready <= 1'b1;
+                    end
+                end
+            endcase
         end
-        // TODO(human): add RX shift register state machine here.
-        // When a complete byte is received:
-        //   if (!rx_ready) begin
-        //       rbr      <= rx_shift;
-        //       rx_ready <= 1'b1;
-        //   end
     end
 
     // ══════════════════════════════════════════════════════════
