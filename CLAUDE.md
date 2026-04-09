@@ -130,7 +130,10 @@ Setup in `hw/tools/oss-cad-suite/`.
   `make fpga-lint TOP=ulx3s_top` — Verilator lint check
 - **ULX3S system:** `hw/rtl/fpga/ulx3s_top.sv` — board top-level,
   12.5 MHz PLL (25 MHz crystal), 256 KB BRAM, real UART (TX+RX),
-  boot ROM, btn[1] reset.  Serial: 115200 8N1 on `/dev/ttyUSB0`.
+  real SPI with SD card (autoconfig), boot ROM, btn[1] reset.
+  Serial: 115200 8N1 on `/dev/ttyUSB0`.
+  SD card: micro SD slot in SPI mode, autoconfigured as CLASS\_SD.
+  Boot ROM `boot sd:0,0` loads `PENBOOT.ELF` from FAT32 partition.
 
 ### SD Card Image
 Build a test SD image with bootloader and/or kernel for `make simulate`:

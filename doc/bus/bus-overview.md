@@ -361,6 +361,21 @@ The `rst` signal resets all autoconfigurable devices on the bus back to their un
 
 In discrete: `rst` is directly wired to each device's config flip-flop (active-high async clear). The software-triggered pulse comes from a flip-flop in the bus controller, OR'd with the hardware reset signal.
 
+### Reset Timing
+
+The bus reset signal only resets **autoconfig state** (the `configured` and `cfg_seen_low` flip-flops in each device). It does **not** initialize device-specific hardware (SDRAM controllers, SD cards, etc.) — each device driver performs its own initialization after autoconfig assigns its base address.
+
+**Minimum reset durations:**
+
+| Reset type | Minimum duration | Rationale |
+|------------|-----------------|-----------|
+| Hardware (power-on) | **10 ms** | Covers PLL lock, power rail stabilization, crystal oscillator startup. Board implementations must meet this regardless of clock frequency. |
+| Software (bus reset pulse) | **100 µs** | Propagation through async external bus: worst case is 74xx gate delays + backplane trace delays + RC settling. 100 µs is generous; real 74HC async clear is <100 ns, but the spec allows for long backplanes and slow LS/ALS parts. |
+
+**Board implementation:** The hardware reset counter width must satisfy `2^N / f_clk >= 10 ms`. At 12.5 MHz, N=17 gives 10.5 ms (the ULX3S uses N=18 for margin). Future boards at higher clock speeds need wider counters.
+
+**Software implementation:** The boot ROM delay loop between asserting and deasserting `BUSCTL_RST` must hold the pulse for at least 100 µs. The current implementation uses a calibrated iteration count based on the system clock frequency (see `BUS_RESET_DELAY_ITERS` in `boot_rom.c`).
+
 ### The Config Chain
 
 A single `cfg` signal is **daisy-chained** through all autoconfigurable devices on the bus:
@@ -473,7 +488,7 @@ The hardware enforces this with a `cfg_seen_low` flip-flop in each device: `cfg_
 
 // Assert bus reset, delay, then enable config mode
 penumbra_write_sysreg(SYSDEV_BUS, BUS_CTL, BUSCTL_RST);
-for (volatile int i = 0; i < 100; i++) {}  // delay for async bus
+for (volatile int i = 0; i < BUS_RESET_DELAY_ITERS; i++) {}  // >= 100 µs
 penumbra_write_sysreg(SYSDEV_BUS, BUS_CTL, BUSCTL_CFG_EN);
 
 TRAP_VECTORS[TRAP_BUS_FAULT] = _trap_bus_ignore;

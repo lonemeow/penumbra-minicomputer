@@ -247,7 +247,8 @@ FPGA_SRC_FULL   = hw/rtl/core/penumbra_pkg.sv \
                   hw/rtl/soc/bus_devsel.sv hw/rtl/soc/boot_rom.sv \
                   hw/rtl/soc/cache.sv \
                   hw/rtl/soc/sysid.sv hw/rtl/soc/busctl.sv hw/rtl/soc/timer.sv \
-                  hw/rtl/io/uart.sv \
+                  hw/rtl/soc/autoconfig_dev.sv \
+                  hw/rtl/io/uart.sv hw/rtl/io/spi.sv \
                   $(FPGA_RTL)/fpga_ram.sv $(FPGA_RTL)/ulx3s_top.sv
 
 # Select source set based on TOP module

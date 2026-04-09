@@ -30,6 +30,10 @@ This file provides detailed hardware context for work under `hw/`. The root `CLA
 | Autoconfig wrapper | `rtl/soc/autoconfig_dev.sv` | 28/28 | Config space regs, cfg daisy chain with CFG\_EN toggle, dynamic base address decode. |
 | Sim UART | `rtl/soc/sim_uart.sv` | via machine\_sim | 16450-compatible UART (MMIO at 0xFF00\_0000). NetBSD com(4) compatible. |
 | Sim SPI | `rtl/soc/sim_spi.sv` | via machine\_sim | SPI master (CLASS\_SD). 4 regs: DATA, STATUS, CONTROL, CLKDIV. SD emulator via `+sdcard=`. |
+| Real UART | `rtl/io/uart.sv` | via ulx3s\_top | NS16450-compatible UART with real baud rate generator, TX shift register, RX 16x oversampling. CLK\_FREQ/BAUD\_RATE params. |
+| Real SPI | `rtl/io/spi.sv` | via ulx3s\_top | SPI master with real shift register + clock divider. Same 4-reg interface as sim\_spi. CPOL/CPHA support. DEFAULT\_CLKDIV param. |
+| UART TX | `rtl/fpga/uart_tx.sv` | via test tops | Standalone UART TX shift register for test designs (ulx3s\_hello, etc.) |
+| FPGA RAM | `rtl/fpga/fpga_ram.sv` | via ulx3s\_top | BRAM-friendly memory: four byte-wide banks with `ram_style` attribute. Address wraps for size probing. |
 | Boot ROM | `rtl/soc/boot_rom.sv` | via machine_sim | Read-only memory (64 KB default), loads program.hex |
 | Shared package | `rtl/core/penumbra_pkg.sv` | — | REG\_\*, ALU\_\*, COND\_\*, SR\_\*, VEC\_\*, FAULT\_\*, SYSDEV\_\*, SYSREG\_\*, CACHE\_TYPE\_\*, UART\_\*, SPR\_\*, ACFG\_\* and base address constants |
 | System ID | `rtl/soc/sysid.sv` | via machine_sim | Read-only MACHINE_ID register (Penumbra/1), sysreg device 1 |

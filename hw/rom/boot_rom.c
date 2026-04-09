@@ -151,8 +151,8 @@ static int autoconfig(uint32_t *cursor) {
     /* Assert bus reset to clear any stale device configs */
     penumbra_write_sysreg(SYSDEV_BUS, BUS_CTL, BUSCTL_RST);
 
-    /* Brief delay for async bus devices */
-    for (volatile int i = 0; i < 100; i++) {}
+    /* Hold reset pulse >= 100 µs for external async bus devices */
+    for (volatile int i = 0; i < BUS_RESET_DELAY_ITERS; i++) {}
 
     /* Deassert reset, enable config mode */
     penumbra_write_sysreg(SYSDEV_BUS, BUS_CTL, BUSCTL_CFG_EN);

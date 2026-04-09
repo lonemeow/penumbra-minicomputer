@@ -19,7 +19,14 @@ module ulx3s_top (
     input  logic [6:0] btn,
     output logic       ftdi_rxd,    // FPGA TX → FTDI RX → host
     input  logic       ftdi_txd,    // host → FTDI TX → FPGA RX
-    output logic       wifi_en      // LOW = hold ESP32 in reset
+    output logic       wifi_en,     // LOW = hold ESP32 in reset
+
+    // ── SD card (SPI mode) ─────────────────────────────────
+    // Uses sd_clk, sd_cmd, sd_d[0] (MISO), sd_d[3] (CS).
+    // sd_d[1:2] driven high per SD SPI spec.
+    output logic       sd_clk,      // SPI SCK
+    output logic       sd_cmd,      // SPI MOSI
+    inout  wire  [3:0] sd_d         // [0]=MISO in, [3]=CS out, [2:1]=high
 );
     import penumbra_pkg::*;
 
@@ -63,6 +70,8 @@ module ulx3s_top (
 
     // ── Reset: PLL lock + btn[1] (FIRE1) manual reset ──────────
     // Hold reset until PLL locks, then count 2^18 clocks.
+    // 2^18 / 12.5 MHz ≈ 21 ms — exceeds 10 ms minimum for
+    // power-on reset (see doc/bus/bus-overview.md Reset Timing).
     // Pressing btn[1] reasserts reset (synchronizer for btn input).
     logic btn1_sync1, btn1_sync2;
     always_ff @(posedge clk) begin
@@ -258,16 +267,103 @@ module ulx3s_top (
     assign led[4] = mem_re;           // any bus read?
     assign led[5] = mem_we;           // any bus write?
 
+    // ══════════════════════════════════════════════════════════
+    // Autoconfig device chain
+    //
+    // Same pattern as machine_sim.sv: busctl_cfg_en starts the
+    // daisy chain, each device's cfg_out feeds the next cfg_in.
+    // Bus fault at chain end signals "no more devices" to the
+    // ROM autoconfig loop.
+    // ══════════════════════════════════════════════════════════
+
+    // ── SPI controller (first device in chain) ──────────────
+    logic [31:0] spi_dev_addr, spi_dev_wdata;
+    logic [3:0]  spi_dev_byte_en;
+    logic        spi_dev_we, spi_dev_re;
+    logic [31:0] spi_dev_rdata;
+    logic        spi_dev_busy;
+
+    logic [31:0] ac_spi_rdata;
+    logic        ac_spi_busy, ac_spi_sel;
+    logic        ac_spi_cfg_out;
+
+    autoconfig_dev #(
+        .DEV_CLASS (ACFG_CLASS_SD),
+        .DEV_SIZE  (32'd4096),
+        .DEV_ID    (32'd0),
+        .DEV_NAME0 (32'h00004453)    // "SD\0\0" packed LE
+    ) u_ac_spi (
+        .i_clk       (clk),
+        .i_rst       (rst),
+        .i_bus_rst   (busctl_bus_rst),
+        .i_cfg_en    (busctl_cfg_en),
+        .i_cfg_in    (busctl_cfg_en),      // first in chain
+        .o_cfg_out   (ac_spi_cfg_out),
+        .i_addr      (mem_addr),
+        .i_wdata     (mem_wdata),
+        .i_byte_en   (mem_byte_en),
+        .i_we        (mem_we),
+        .i_re        (mem_re),
+        .o_rdata     (ac_spi_rdata),
+        .o_busy      (ac_spi_busy),
+        .o_sel       (ac_spi_sel),
+        .o_dev_addr  (spi_dev_addr),
+        .o_dev_wdata (spi_dev_wdata),
+        .o_dev_byte_en(spi_dev_byte_en),
+        .o_dev_we    (spi_dev_we),
+        .o_dev_re    (spi_dev_re),
+        .i_dev_rdata (spi_dev_rdata),
+        .i_dev_busy  (spi_dev_busy)
+    );
+
+    logic spi_cs0;
+
+    spi #(
+        // 12.5 MHz / (2*(63+1)) ≈ 98 kHz — safe for SD card init (needs <400 kHz)
+        .DEFAULT_CLKDIV (16'd63)
+    ) u_spi (
+        .i_clk   (clk),
+        .i_rst   (rst),
+        .i_addr  (spi_dev_addr),
+        .i_wdata (spi_dev_wdata),
+        .i_we    (spi_dev_we),
+        .i_re    (spi_dev_re),
+        .o_rdata (spi_dev_rdata),
+        .o_busy  (spi_dev_busy),
+        .o_sclk  (sd_clk),
+        .o_mosi  (sd_cmd),
+        .i_miso  (sd_d[0]),
+        .o_cs0   (spi_cs0),
+        .o_cs1   ()
+    );
+
+    // SD card SPI mode pin mapping
+    assign sd_d[3] = spi_cs0;     // CS (active low, directly from SPI control)
+    assign sd_d[2] = 1'b1;        // Unused in SPI mode, pull high
+    assign sd_d[1] = 1'b1;        // Unused in SPI mode, pull high
+
+    // Autoconfig combined bus signals
+    logic [31:0] acfg_rdata;
+    logic        acfg_busy;
+    logic        acfg_sel;
+    logic        acfg_sel_r;
+    assign acfg_rdata = ac_spi_rdata;
+    assign acfg_busy  = ac_spi_busy;
+    assign acfg_sel   = ac_spi_sel;
+    always_ff @(posedge clk) acfg_sel_r <= acfg_sel;
+
     // ── Bus response OR-combine ─────────────────────────────
     assign mem_rdata = (ram_sel_r  ? ram_rdata_raw  : 32'b0) |
                        (rom_sel_r  ? rom_rdata_raw  : 32'b0) |
-                       (uart_sel_r ? uart_rdata_raw : 32'b0);
+                       (uart_sel_r ? uart_rdata_raw : 32'b0) |
+                       (acfg_sel_r ? acfg_rdata     : 32'b0);
 
     assign mem_busy = (ram_sel  ? ram_busy_raw  : 1'b0) |
                       (rom_sel  ? rom_busy_raw  : 1'b0) |
-                      (uart_sel ? uart_busy_raw : 1'b0);
+                      (uart_sel ? uart_busy_raw : 1'b0) |
+                      acfg_busy;
 
-    assign bus_fault = (mem_re | mem_we) & ~(ram_sel | rom_sel | uart_sel);
+    assign bus_fault = (mem_re | mem_we) & ~(ram_sel | rom_sel | uart_sel | acfg_sel);
 
     // ══════════════════════════════════════════════════════════
     // Sysreg devices
