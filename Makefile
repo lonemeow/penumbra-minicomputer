@@ -8,6 +8,9 @@
 #   make smoke               — toolchain smoke test
 #   make wave MOD=<name>     — open waveform in GTKWave
 #   make sdimage             — build SD image with bootloader, kernel, rootfs
+#   make fpga-lint [TOP=<m>] — Verilator lint check on FPGA modules
+#   make fpga [TOP=<module>] — synthesize + PnR + bitstream (default: ulx3s_hello)
+#   make flash [TOP=<module>]— fpga + flash to ULX3S via USB
 #   make clean               — remove build artifacts
 
 # ── Configuration ──────────────────────────────────────────────
@@ -224,6 +227,38 @@ sdimage:
 	@cp $(BUILD_DIR)/init/init $(ROOTFS)/sbin/init
 	@sw/tools/mksdimage.sh -o $(SDIMAGE) -2 $(BOOT_ELF) -k $(KERNEL) -e $(ROOTFS) -v
 	@echo "SD image: $(SDIMAGE)"
+
+# ── FPGA build (OSS CAD Suite via Docker wrappers) ────────────
+FPGA_TOOLS = hw/tools/oss-cad-suite/bin
+FPGA_RTL   = hw/rtl/fpga
+LPF        = hw/constraints/ulx3s_v20.lpf
+
+# Synthesis + PnR + bitstream for a top-level module.
+# Usage: make fpga TOP=ulx3s_hello
+TOP ?= ulx3s_hello
+FPGA_SRC = $(wildcard $(FPGA_RTL)/*.sv)
+
+.PHONY: fpga flash fpga-lint
+
+fpga-lint: $(FPGA_SRC)
+	$(DOCKER_RUN) $(DOCKER_IMAGE) --lint-only -Wall $(FPGA_SRC) --top $(TOP)
+
+fpga: $(BUILD_DIR)/$(TOP).bit
+	@echo "Bitstream: $(BUILD_DIR)/$(TOP).bit"
+
+$(BUILD_DIR)/$(TOP).json: $(FPGA_SRC)
+	@mkdir -p $(BUILD_DIR)
+	$(FPGA_TOOLS)/yosys -p "read_verilog -sv $(FPGA_SRC); synth_ecp5 -top $(TOP) -json $@"
+
+$(BUILD_DIR)/$(TOP).config: $(BUILD_DIR)/$(TOP).json $(LPF)
+	$(FPGA_TOOLS)/nextpnr-ecp5 --85k --package CABGA381 \
+		--lpf $(LPF) --json $< --textcfg $@
+
+$(BUILD_DIR)/$(TOP).bit: $(BUILD_DIR)/$(TOP).config
+	$(FPGA_TOOLS)/ecppack $< $@
+
+flash: $(BUILD_DIR)/$(TOP).bit
+	$(FPGA_TOOLS)/fujprog $<
 
 # ── Cleanup ────────────────────────────────────────────────────
 .PHONY: clean
