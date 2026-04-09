@@ -30,12 +30,15 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
 
   getActionDefinitionsBuilder({G_ADD, G_SUB, G_AND, G_OR, G_XOR})
       .legalFor({s32})
+      .widenScalarToNextPow2(0, 32)
       .clampScalar(0, s32, s32);
 
   // Shifts: clamp both the value (type 0) and shift amount (type 1) to s32.
   // Without clamping type 1, i64 narrowing can produce s64 shift amounts.
   getActionDefinitionsBuilder({G_SHL, G_LSHR, G_ASHR})
       .legalFor({{s32, s32}})
+      .widenScalarToNextPow2(0, 32)
+      .widenScalarToNextPow2(1, 32)
       .clampScalar(0, s32, s32)
       .clampScalar(1, s32, s32);
 
@@ -48,13 +51,24 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
                                G_SADDO, G_SSUBO, G_SADDE, G_SSUBE})
       .lowerFor({{s32, s1}})
       .minScalar(0, s32)
-      .narrowScalarIf(typeIs(0, s64), changeTo(0, s32));
+      .narrowScalarIf(typeIs(0, s64), changeTo(0, s32))
+      .lower();
+
+  // Multiply with overflow: lower to wide multiply + overflow check.
+  // G_UMULH/G_SMULH (high-half multiply): lower to wide MUL + shift.
+  getActionDefinitionsBuilder({G_SMULO, G_UMULO})
+      .lowerFor({{s32, s1}})
+      .minScalar(0, s32);
+
+  getActionDefinitionsBuilder({G_UMULH, G_SMULH})
+      .lowerFor({s32})
+      .minScalar(0, s32);
 
   getActionDefinitionsBuilder(G_CONSTANT)
       .legalFor({s32, p0})
       .clampScalar(0, s32, s32);
 
-  getActionDefinitionsBuilder({G_FRAME_INDEX, G_GLOBAL_VALUE})
+  getActionDefinitionsBuilder({G_FRAME_INDEX, G_GLOBAL_VALUE, G_BLOCK_ADDR})
       .legalFor({p0});
 
   getActionDefinitionsBuilder({G_STORE, G_LOAD})
@@ -90,6 +104,7 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   // Comparisons: G_ICMP produces s1 result, compares s32 operands.
   getActionDefinitionsBuilder(G_ICMP)
       .legalFor({{s1, s32}, {s1, p0}})
+      .widenScalarToNextPow2(1, 32)
       .clampScalar(1, s32, s32);
 
   // Undefined value: used by the optimizer for uninitialized variables.
@@ -141,6 +156,7 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   // into two s32 halves via G_MERGE_VALUES ({src, 0} for zext, etc.).
   getActionDefinitionsBuilder({G_ZEXT, G_SEXT, G_ANYEXT})
       .legalForCartesianProduct({s8, s16, s32}, {s1, s8, s16})
+      .widenScalarToNextPow2(0, 32)
       .narrowScalarIf(typeIs(0, s64), changeTo(0, s32));
 
   // Division/remainder: custom-lower s32 to catch power-of-2 constants
@@ -170,8 +186,10 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   getActionDefinitionsBuilder(G_SEXT_INREG).lower();
 
   // Truncation: no-op at the register level (just use the low bits).
+  // Accept any source width (odd widths like s33 from G_SADDO lowering).
   getActionDefinitionsBuilder(G_TRUNC)
-      .legalFor({{s1, s32}, {s8, s32}, {s16, s32}});
+      .legalFor({{s1, s32}, {s8, s32}, {s16, s32}})
+      .alwaysLegal();
 
   // Funnel shifts: used by compiler-rt __udivsi3 and other soft-div code.
   // Lower to (a << sh) | (b >> (32 - sh)) for G_FSHL, reversed for G_FSHR.
@@ -254,14 +272,32 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
                                G_INTRINSIC_ROUND, G_INTRINSIC_ROUNDEVEN,
                                G_INTRINSIC_TRUNC,
                                G_FLOG, G_FLOG2, G_FLOG10,
-                               G_FEXP, G_FEXP2, G_FPOW})
+                               G_FEXP, G_FEXP2, G_FPOW,
+                               G_FSIN, G_FCOS, G_FTAN,
+                               G_FASIN, G_FACOS, G_FATAN, G_FATAN2,
+                               G_FSINH, G_FCOSH, G_FTANH,
+                               G_FLDEXP, G_FMODF})
       .libcallFor({s32, s64});
 
+  // G_FSINCOS: returns two FP values (sin + cos).
+  getActionDefinitionsBuilder(G_FSINCOS)
+      .libcallFor({{s32, s32}, {s64, s64}});
+
+  // G_FFREXP: returns mantissa + exponent; G_FCANONICALIZE: no-op lower.
+  getActionDefinitionsBuilder(G_FFREXP)
+      .libcallFor({{s32, s32}, {s64, s32}});
+  getActionDefinitionsBuilder(G_FCANONICALIZE)
+      .lowerFor({s32, s64});
+
+  // FP→int: widen sub-word int results (s8/s16) to s32 before libcall.
+  // int→FP: widen sub-word int sources (s8/s16) to s32 before libcall.
   getActionDefinitionsBuilder({G_FPTOUI, G_FPTOSI})
-      .libcallFor({{s32, s32}, {s32, s64}, {s64, s32}, {s64, s64}});
+      .libcallFor({{s32, s32}, {s32, s64}, {s64, s32}, {s64, s64}})
+      .minScalar(0, s32);
 
   getActionDefinitionsBuilder({G_UITOFP, G_SITOFP})
-      .libcallFor({{s32, s32}, {s64, s32}, {s32, s64}, {s64, s64}});
+      .libcallFor({{s32, s32}, {s64, s32}, {s32, s64}, {s64, s64}})
+      .minScalar(1, s32);
 
   getActionDefinitionsBuilder(G_FPEXT)
       .libcallFor({{s64, s32}});

@@ -17,6 +17,7 @@ namespace driver {
 namespace tools {
 namespace penumbra {
 
+/// Bare-metal linker for penumbra-unknown-none.
 class LLVM_LIBRARY_VISIBILITY Linker final : public Tool {
 public:
   Linker(const ToolChain &TC) : Tool("penumbra::Linker", "ld.lld", TC) {}
@@ -33,6 +34,8 @@ public:
 
 namespace toolchains {
 
+/// Bare-metal toolchain for penumbra-unknown-none (ROM, hardware tests).
+/// For penumbra-unknown-netbsd, the stock NetBSD toolchain is used instead.
 class LLVM_LIBRARY_VISIBILITY PenumbraToolChain : public Generic_ELF {
 public:
   PenumbraToolChain(const Driver &D, const llvm::Triple &Triple,
@@ -42,10 +45,6 @@ public:
   Tool *buildLinker() const override {
     return new tools::penumbra::Linker(*this);
   }
-
-  void AddClangSystemIncludeArgs(const llvm::opt::ArgList &DriverArgs,
-                                 llvm::opt::ArgStringList &CC1Args)
-      const override;
 
   void addLibCxxIncludePaths(
       const llvm::opt::ArgList &DriverArgs,

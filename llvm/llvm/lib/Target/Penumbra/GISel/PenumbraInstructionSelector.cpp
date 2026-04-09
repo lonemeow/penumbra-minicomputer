@@ -72,6 +72,8 @@ private:
                   MachineRegisterInfo &MRI) const;
   bool selectGlobalValue(MachineInstr &I, MachineBasicBlock &MBB,
                          MachineRegisterInfo &MRI) const;
+  bool selectBlockAddress(MachineInstr &I, MachineBasicBlock &MBB,
+                          MachineRegisterInfo &MRI) const;
   bool selectJumpTable(MachineInstr &I, MachineBasicBlock &MBB,
                        MachineRegisterInfo &MRI) const;
   bool selectBrJT(MachineInstr &I, MachineBasicBlock &MBB,
@@ -201,6 +203,7 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
   // ── Constants / Addresses ─────────────────────────────────────────────────
   case G_CONSTANT:     return selectConstant(I, MBB, MRI);
   case G_GLOBAL_VALUE: return selectGlobalValue(I, MBB, MRI);
+  case G_BLOCK_ADDR:   return selectBlockAddress(I, MBB, MRI);
 
   // ── Memory ────────────────────────────────────────────────────────────────
   // G_LOAD/G_STORE: handled by pre-check (FI fold / store-zero) or selectImpl.
@@ -728,6 +731,41 @@ bool PenumbraInstructionSelector::selectGlobalValue(MachineInstr &I,
         DstReg, I.getDebugLoc(), MBB, I.getIterator(),
         MachineOperand::CreateGA(GV, Offset, Penumbra::S_Lo16),
         MachineOperand::CreateGA(GV, Offset, Penumbra::S_Hi16));
+  }
+
+  I.eraseFromParent();
+  return true;
+}
+
+// ── G_BLOCK_ADDR ─────────────────────────────────────────────────────────────
+// Materialise a basic block address (GCC computed goto: &&label).
+// Same as a global address — LLI+LUI (static) or MOV PC + ADDi (PIC).
+bool PenumbraInstructionSelector::selectBlockAddress(MachineInstr &I,
+                                                      MachineBasicBlock &MBB,
+                                                      MachineRegisterInfo &MRI) const {
+  Register DstReg = I.getOperand(0).getReg();
+  const BlockAddress *BA = I.getOperand(1).getBlockAddress();
+  int64_t Offset = I.getOperand(1).getOffset();
+
+  if (TM.getRelocationModel() == Reloc::PIC_) {
+    DebugLoc DL = I.getDebugLoc();
+    auto InsertPt = I.getIterator();
+    Register TmpReg =
+        MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
+    auto MOVInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::MOV))
+        .addDef(TmpReg)
+        .addReg(Penumbra::R15);
+    constrainSelectedInstRegOperands(*MOVInst, TII, TRI, RBI);
+    auto ADDiInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::ADDi))
+        .addDef(DstReg)
+        .addReg(TmpReg)
+        .add(MachineOperand::CreateBA(BA, Offset + 4, Penumbra::S_PCRel));
+    constrainSelectedInstRegOperands(*ADDiInst, TII, TRI, RBI);
+  } else {
+    emitLoadSymbolAddr(
+        DstReg, I.getDebugLoc(), MBB, I.getIterator(),
+        MachineOperand::CreateBA(BA, Offset, Penumbra::S_Lo16),
+        MachineOperand::CreateBA(BA, Offset, Penumbra::S_Hi16));
   }
 
   I.eraseFromParent();

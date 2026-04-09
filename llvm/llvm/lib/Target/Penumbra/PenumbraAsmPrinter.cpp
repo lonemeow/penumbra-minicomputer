@@ -89,9 +89,15 @@ static bool lowerOperand(const MachineOperand &MO, MCOperand &MCOp,
         MCSymbolRefExpr::create(AP.GetExternalSymbolSymbol(MO.getSymbolName()),
                                 AP.OutContext));
     return true;
-  case MachineOperand::MO_GlobalAddress: {
-    const MCExpr *Expr =
-        MCSymbolRefExpr::create(AP.getSymbol(MO.getGlobal()), AP.OutContext);
+  case MachineOperand::MO_GlobalAddress:
+  case MachineOperand::MO_BlockAddress: {
+    const MCExpr *Expr;
+    if (MO.isGlobal())
+      Expr = MCSymbolRefExpr::create(AP.getSymbol(MO.getGlobal()),
+                                     AP.OutContext);
+    else
+      Expr = MCSymbolRefExpr::create(
+          AP.GetBlockAddressSymbol(MO.getBlockAddress()), AP.OutContext);
     if (MO.getOffset())
       Expr = MCBinaryExpr::createAdd(
           Expr, MCConstantExpr::create(MO.getOffset(), AP.OutContext),
@@ -170,6 +176,7 @@ bool PenumbraAsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
     OS << MO.getImm();
     break;
   case MachineOperand::MO_GlobalAddress:
+  case MachineOperand::MO_BlockAddress:
     PrintSymbolOperand(MO, OS);
     break;
   default:

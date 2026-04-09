@@ -6846,11 +6846,7 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
       TC = std::make_unique<toolchains::OpenBSD>(*this, Target, Args);
       break;
     case llvm::Triple::NetBSD:
-      if (Target.getArch() == llvm::Triple::penumbra)
-        TC = std::make_unique<toolchains::PenumbraToolChain>(*this, Target,
-                                                              Args);
-      else
-        TC = std::make_unique<toolchains::NetBSD>(*this, Target, Args);
+      TC = std::make_unique<toolchains::NetBSD>(*this, Target, Args);
       break;
     case llvm::Triple::FreeBSD:
       if (Target.isPPC())

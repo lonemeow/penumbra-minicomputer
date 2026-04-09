@@ -236,6 +236,14 @@ void netbsd::Linker::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back("elf64_sparc");
     break;
 
+  case llvm::Triple::penumbra:
+    CmdArgs.push_back("-m");
+    CmdArgs.push_back("elf32penumbra");
+    // Match GNU ld defaults for NetBSD build system compatibility.
+    CmdArgs.push_back("--allow-shlib-undefined");
+    CmdArgs.push_back("--undefined-version");
+    break;
+
   default:
     break;
   }
@@ -301,6 +309,7 @@ void netbsd::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   case llvm::Triple::sparcv9:
   case llvm::Triple::x86:
   case llvm::Triple::x86_64:
+  case llvm::Triple::penumbra:
     useLibgcc = false;
     break;
   default:

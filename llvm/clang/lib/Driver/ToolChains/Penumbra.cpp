@@ -8,15 +8,16 @@
 #include "clang/Driver/CommonArgs.h"
 #include "clang/Driver/Compilation.h"
 #include "clang/Driver/InputInfo.h"
-#include "clang/Options/Options.h"
 #include "llvm/Option/ArgList.h"
-#include "llvm/Support/Path.h"
 
 using namespace clang;
 using namespace clang::driver;
 using namespace clang::driver::tools;
 using namespace llvm::opt;
 
+/// Bare-metal linker for penumbra-unknown-none.
+/// Minimal: no CRT files, no -lc, no -lgcc.  Used for ROM and
+/// hardware test programs that supply their own startup code.
 void penumbra::Linker::ConstructJob(Compilation &C, const JobAction &JA,
                                     const InputInfo &Output,
                                     const InputInfoList &Inputs,
@@ -33,10 +34,6 @@ void penumbra::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   if (!D.SysRoot.empty())
     CmdArgs.push_back(Args.MakeArgString("--sysroot=" + D.SysRoot));
 
-  // Match GNU ld behavior: don't error on version script symbols that
-  // aren't defined (e.g. Heimdal lists DllMain, a Windows-only symbol).
-  CmdArgs.push_back("--undefined-version");
-
   // Output file.
   CmdArgs.push_back("-o");
   CmdArgs.push_back(Output.getFilename());
@@ -52,34 +49,9 @@ void penumbra::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   Args.addAllArgs(CmdArgs, {options::OPT_shared, options::OPT_static,
                              options::OPT_rdynamic});
 
-  // Add default library search paths and -lc unless suppressed.
-  if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nodefaultlibs)) {
-    CmdArgs.push_back("-L=/lib");
-    CmdArgs.push_back("-L=/usr/lib");
-    CmdArgs.push_back("-lc");
-  }
-
   // Find ld.lld in the same directory as clang.
   const char *Exec = Args.MakeArgString(TC.GetProgramPath("ld.lld"));
   C.addCommand(std::make_unique<Command>(JA, *this,
                                          ResponseFileSupport::AtFileCurCP(),
                                          Exec, CmdArgs, Inputs, Output));
-}
-
-void toolchains::PenumbraToolChain::AddClangSystemIncludeArgs(
-    const ArgList &DriverArgs, ArgStringList &CC1Args) const {
-  if (DriverArgs.hasArg(options::OPT_nostdinc))
-    return;
-
-  if (!DriverArgs.hasArg(options::OPT_nobuiltininc)) {
-    SmallString<128> Dir(getDriver().ResourceDir);
-    llvm::sys::path::append(Dir, "include");
-    addSystemInclude(DriverArgs, CC1Args, Dir);
-  }
-
-  if (!DriverArgs.hasArg(options::OPT_nostdlibinc)) {
-    const std::string &SysRoot = getDriver().SysRoot;
-    if (!SysRoot.empty())
-      addSystemInclude(DriverArgs, CC1Args, SysRoot + "/usr/include");
-  }
 }
