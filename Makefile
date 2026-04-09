@@ -234,9 +234,28 @@ FPGA_RTL   = hw/rtl/fpga
 LPF        = hw/constraints/ulx3s_v20.lpf
 
 # Synthesis + PnR + bitstream for a top-level module.
-# Usage: make fpga TOP=ulx3s_hello
+# Usage: make fpga TOP=ulx3s_hello   (simple test designs)
+#        make fpga TOP=ulx3s_top     (full CPU system)
 TOP ?= ulx3s_hello
-FPGA_SRC = $(wildcard $(FPGA_RTL)/*.sv)
+
+# Source files: simple test tops use only fpga/*.sv;
+# ulx3s_top needs the full RTL (core, mmu, soc devices, io).
+FPGA_SRC_SIMPLE = $(wildcard $(FPGA_RTL)/*.sv)
+FPGA_SRC_FULL   = hw/rtl/core/penumbra_pkg.sv \
+                  $(filter-out %/smoke_adder.sv %/penumbra_pkg.sv, $(wildcard hw/rtl/core/*.sv)) \
+                  $(wildcard hw/rtl/mmu/*.sv) \
+                  hw/rtl/soc/bus_devsel.sv hw/rtl/soc/boot_rom.sv \
+                  hw/rtl/soc/cache.sv \
+                  hw/rtl/soc/sysid.sv hw/rtl/soc/busctl.sv hw/rtl/soc/timer.sv \
+                  hw/rtl/io/uart.sv \
+                  $(FPGA_RTL)/fpga_ram.sv $(FPGA_RTL)/ulx3s_top.sv
+
+# Select source set based on TOP module
+ifeq ($(TOP),ulx3s_top)
+FPGA_SRC = $(FPGA_SRC_FULL)
+else
+FPGA_SRC = $(FPGA_SRC_SIMPLE)
+endif
 
 .PHONY: fpga flash fpga-lint
 
@@ -246,13 +265,20 @@ fpga-lint: $(FPGA_SRC)
 fpga: $(BUILD_DIR)/$(TOP).bit
 	@echo "Bitstream: $(BUILD_DIR)/$(TOP).bit"
 
+# Build hex files and convert SV→V before synthesis.
+# sv2v converts full SystemVerilog (module-level imports, packages)
+# to Verilog-2005 that Yosys reads natively.
 $(BUILD_DIR)/$(TOP).json: $(FPGA_SRC)
 	@mkdir -p $(BUILD_DIR)
-	$(FPGA_TOOLS)/yosys -p "read_verilog -sv $(FPGA_SRC); synth_ecp5 -top $(TOP) -json $@"
+	$(if $(filter ulx3s_top,$(TOP)),$(UASM) hw/microcode/microcode.uasm -o microcode.hex)
+	$(if $(filter ulx3s_top,$(TOP)),$(MAKE) -C hw/rom)
+	$(FPGA_TOOLS)/sv2v $(FPGA_SRC) -w $(BUILD_DIR)/$(TOP)_sv2v.v
+	$(if $(filter ulx3s_top,$(TOP)),python3 hw/tools/inline_hex.py $(BUILD_DIR)/$(TOP)_sv2v.v $(BUILD_DIR)/$(TOP)_sv2v.v)
+	$(FPGA_TOOLS)/yosys -p "read_verilog $(BUILD_DIR)/$(TOP)_sv2v.v; synth_ecp5 -top $(TOP) -json $@"
 
 $(BUILD_DIR)/$(TOP).config: $(BUILD_DIR)/$(TOP).json $(LPF)
-	$(FPGA_TOOLS)/nextpnr-ecp5 --85k --package CABGA381 \
-		--lpf $(LPF) --json $< --textcfg $@
+	$(FPGA_TOOLS)/nextpnr-ecp5 --85k --package CABGA381 --speed 6 \
+		--timing-allow-fail --lpf $(LPF) --json $< --textcfg $@
 
 $(BUILD_DIR)/$(TOP).bit: $(BUILD_DIR)/$(TOP).config
 	$(FPGA_TOOLS)/ecppack $< $@
