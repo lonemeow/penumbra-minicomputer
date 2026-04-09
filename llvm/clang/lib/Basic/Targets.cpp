@@ -133,7 +133,13 @@ std::unique_ptr<TargetInfo> AllocateTarget(const llvm::Triple &Triple,
     return std::make_unique<LanaiTargetInfo>(Triple, Opts);
 
   case llvm::Triple::penumbra:
-    return std::make_unique<PenumbraTargetInfo>(Triple, Opts);
+    switch (os) {
+    case llvm::Triple::NetBSD:
+      return std::make_unique<NetBSDTargetInfo<PenumbraTargetInfo>>(Triple,
+                                                                    Opts);
+    default:
+      return std::make_unique<PenumbraTargetInfo>(Triple, Opts);
+    }
 
   case llvm::Triple::aarch64_32:
     if (Triple.isOSDarwin())

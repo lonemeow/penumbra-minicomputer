@@ -34,6 +34,7 @@ enum {
   R_PENUMBRA_TLS_GD_HI16 = 10,    // TLS GD: high 16 bits
   // 11-15: GOT/PLT/TLS dynamic relocs (linker-only, not emitted by MC)
   R_PENUMBRA_TLS_GD_PCREL = 16,   // TLS GD: PC-relative to GOT entry (PIC)
+  R_PENUMBRA_PC32 = 17,           // PC-relative 32-bit (.eh_frame, etc.)
 };
 
 class PenumbraELFObjectWriter : public MCELFObjectTargetWriter {
@@ -73,7 +74,7 @@ unsigned PenumbraELFObjectWriter::getRelocType(const MCFixup &Fixup,
     return R_PENUMBRA_TLS_GD_PCREL;
   // Standard data fixups (FK_Data_4 from .word directives).
   if (Kind == FK_Data_4)
-    return R_PENUMBRA_32;
+    return IsPCRel ? R_PENUMBRA_PC32 : R_PENUMBRA_32;
   return R_PENUMBRA_NONE;
 }
 

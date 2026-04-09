@@ -29,6 +29,8 @@ class PenumbraReg<bits<4> num, string n, list<string> altNames = []>
   let Num = num;
   let HWEncoding{3-0} = num;
   let Namespace = "Penumbra";
+  // DWARF register numbers match hardware encoding (0–15).
+  let DwarfNumbers = [num];
 }
 
 class PenumbraGPR<bits<4> num, string n, list<string> altNames = []>

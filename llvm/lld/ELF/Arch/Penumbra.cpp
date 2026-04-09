@@ -73,6 +73,8 @@ Penumbra::Penumbra(Ctx &ctx) : TargetInfo(ctx) {
 RelExpr Penumbra::getRelExpr(RelType type, const Symbol &s,
                              const uint8_t *loc) const {
   switch (type) {
+  case R_PENUMBRA_PC32:
+    return R_PC;
   case R_PENUMBRA_BRANCH22:
   case R_PENUMBRA_MEMOFFSET16_PCREL:
   case R_PENUMBRA_IMM16_PCREL:
@@ -100,6 +102,7 @@ int64_t Penumbra::getImplicitAddend(const uint8_t *buf,
                                     RelType type) const {
   switch (type) {
   case R_PENUMBRA_32:
+  case R_PENUMBRA_PC32:
   case R_PENUMBRA_RELATIVE:
   case R_PENUMBRA_GLOB_DAT:
   case R_PENUMBRA_JUMP_SLOT:
@@ -151,6 +154,7 @@ void Penumbra::relocate(uint8_t *loc, const Relocation &rel,
                         uint64_t val) const {
   switch (rel.type) {
   case R_PENUMBRA_32:
+  case R_PENUMBRA_PC32:
   case R_PENUMBRA_RELATIVE:
   case R_PENUMBRA_GLOB_DAT:
   case R_PENUMBRA_JUMP_SLOT:

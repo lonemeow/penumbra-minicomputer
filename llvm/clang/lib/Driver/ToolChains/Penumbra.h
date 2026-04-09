@@ -43,6 +43,10 @@ public:
     return new tools::penumbra::Linker(*this);
   }
 
+  void AddClangSystemIncludeArgs(const llvm::opt::ArgList &DriverArgs,
+                                 llvm::opt::ArgStringList &CC1Args)
+      const override;
+
   void addLibCxxIncludePaths(
       const llvm::opt::ArgList &DriverArgs,
       llvm::opt::ArgStringList &CC1Args) const override {}

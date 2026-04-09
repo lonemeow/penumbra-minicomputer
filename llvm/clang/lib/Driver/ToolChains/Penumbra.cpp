@@ -8,7 +8,9 @@
 #include "clang/Driver/CommonArgs.h"
 #include "clang/Driver/Compilation.h"
 #include "clang/Driver/InputInfo.h"
+#include "clang/Options/Options.h"
 #include "llvm/Option/ArgList.h"
+#include "llvm/Support/Path.h"
 
 using namespace clang;
 using namespace clang::driver;
@@ -62,4 +64,22 @@ void penumbra::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   C.addCommand(std::make_unique<Command>(JA, *this,
                                          ResponseFileSupport::AtFileCurCP(),
                                          Exec, CmdArgs, Inputs, Output));
+}
+
+void toolchains::PenumbraToolChain::AddClangSystemIncludeArgs(
+    const ArgList &DriverArgs, ArgStringList &CC1Args) const {
+  if (DriverArgs.hasArg(options::OPT_nostdinc))
+    return;
+
+  if (!DriverArgs.hasArg(options::OPT_nobuiltininc)) {
+    SmallString<128> Dir(getDriver().ResourceDir);
+    llvm::sys::path::append(Dir, "include");
+    addSystemInclude(DriverArgs, CC1Args, Dir);
+  }
+
+  if (!DriverArgs.hasArg(options::OPT_nostdlibinc)) {
+    const std::string &SysRoot = getDriver().SysRoot;
+    if (!SysRoot.empty())
+      addSystemInclude(DriverArgs, CC1Args, SysRoot + "/usr/include");
+  }
 }
