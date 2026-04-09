@@ -25,7 +25,7 @@ sys/arch/penumbra/
 ### Prerequisites (one-time)
 
 ```sh
-sh netbsd/sys/arch/penumbra/toolchain-setup.sh   # creates penumbra-unknown-none-* symlinks
+sh netbsd/sys/arch/penumbra/toolchain-setup.sh   # creates penumbra-unknown-netbsd-* symlinks
 cd netbsd
 ./build.sh -U -j4 -m penumbra tools \
   -V EXTERNAL_TOOLCHAIN=$PWD/../build/llvm \
@@ -124,8 +124,8 @@ Headers fall into three categories:
   Integer-type headers delegate to `sys/common_*` one-liners.
 - **Reference port:** evbmips/mips for structure; all code is
   Penumbra-specific (no `<mips/*.h>` includes).
-- **`-D__NetBSD__`:** Added in Makefile.penumbra because our
-  target triple (`penumbra-unknown-none`) doesn't predefine it.
+- **`__NetBSD__`:** Defined automatically by clang via the
+  `penumbra-unknown-netbsd` triple (`NetBSDTargetInfo<>` wrapper).
 - **`-isystem` resource dir:** Compiler's freestanding headers
   (limits.h, stdint.h) re-added after `-nostdinc` strips them.
 - **No `-msoft-float`:** Penumbra has no FPU concept at all,

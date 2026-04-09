@@ -239,8 +239,8 @@ MIPS/68k-style vector dispatch.
 - Full pipeline: `clang -c` → `ld.lld` → `llvm-objcopy`
   → `bin2hex.py` → simulator.
 - MC-layer assembler produces working ELF objects with
-  10 relocation types (NONE, 32, BRANCH22, IMM16,
-  LO16, HI16, MEMOFFSET16_PCREL, IMM16_PCREL, RELATIVE).
+  18 relocation types including GOT/PLT, TLS, and PC32
+  (for .eh_frame PIC pointers).
   Relocation names registered in `ELFRelocs/Penumbra.def`
   for `llvm-readobj`.
 - Disassembler fully functional: `llvm-objdump -d` and
@@ -324,7 +324,8 @@ MIPS/68k-style vector dispatch.
   Run: `sw/sim/penumbra-iss program.hex [+sdcard=img] [+trace=log]`
 - **LLVM toolchain** (`build/llvm/bin/`, override with `LLVM_PREFIX`):
   clang (C compiler), llvm-mc (assembler), ld.lld (linker),
-  llvm-objcopy. Target triple: `penumbra-unknown-none`.
+  llvm-objcopy. Target triple: `penumbra-unknown-netbsd` (userland/kernel),
+  `penumbra-unknown-none` (bare-metal ROM/hw).
   See `llvm/llvm/lib/Target/Penumbra/CLAUDE.md` for backend details.
 - **Microcode assembler** (`hw/tools/uasm.py`):
   Symbolic microcode → $readmemh hex.
@@ -490,7 +491,7 @@ MIPS/68k-style vector dispatch.
   Clang 22 warning suppressions for NetBSD 10 codebase.
 - Known shortcuts: userland CAS uses privileged instructions
   (needs RAS), libpthread is minimal stubs, signal delivery
-  panics instead of SIGILL, setjmp/longjmp not implemented.
+  panics instead of SIGILL.
   See memory file `project_userland_shortcuts.md`.
 - Build command: `./build.sh -U -j10 -m penumbra
   -V EXTERNAL_TOOLCHAIN=$PWD/../build/llvm
@@ -505,6 +506,6 @@ MIPS/68k-style vector dispatch.
 3. **RAS atomics** — Restartable Atomic Sequences for userland CAS
    (current impl uses privileged DI/EI instructions).
 4. **Kernel implementation** — remaining MD stubs as the kernel
-   reaches them (grep `TODO(stub)`): setjmp, mcontext, startlwp.
+   reaches them (grep `TODO(stub)`): mcontext, startlwp.
 5. **Interrupt controller** — Multiple devices with priority encoding
 6. **Memory subsystem** — SDRAM controller, bus interface

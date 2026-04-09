@@ -26,7 +26,8 @@ much slower; only needed if running `llvm-lit` for the first time.
 - Uses ccache and Ninja
 - `-j10` for compilation, `-j2` link jobs (set in cmake) to avoid
   OOM on 15 GB WSL2
-- Target triple: `penumbra-unknown-none`
+- Target triple: `penumbra-unknown-none` (bare-metal),
+  `penumbra-unknown-netbsd` (NetBSD userland/kernel)
 
 **Tests:**
 ```sh
@@ -167,7 +168,9 @@ Supported constraints: `r` (GPR), `i` (immediate),
 InlineAsmLowering wired into GlobalISel via subtarget.
 
 **Clang:** `clang --target=penumbra-unknown-none -c file.c` works
-at `-O0` through `-O2`.
+at `-O0` through `-O2` (bare-metal).
+`clang --target=penumbra-unknown-netbsd` for NetBSD (defines `__NetBSD__`
+via `NetBSDTargetInfo<>` wrapper).
 Boot ROM compiles and runs correctly at all three levels.
 `-fPIC` supported: uses PC-relative addressing
 (MOV PC + ADDi %pcrel) for globals and TLS GD,
@@ -276,6 +279,7 @@ Fixed locally — needed for NetBSD kernel option tracking symbols
 | `R_PENUMBRA_TLS_DTPMOD32` | 14 | TLS GD: module index in GOT | Full word |
 | `R_PENUMBRA_TLS_DTPOFF32` | 15 | TLS GD: module offset in GOT | Full word |
 | `R_PENUMBRA_TLS_GD_PCREL` | 16 | TLS GD: PC-relative to GOT entry (PIC) | bits [15:0] |
+| `R_PENUMBRA_PC32` | 17 | PC-relative 32-bit (.eh_frame FDE pointers) | Full word |
 
 ## Legalization (`GISel/PenumbraLegalizerInfo.{h,cpp}`)
 - **Legal s32:** G_ADD, G_SUB, G_AND, G_OR, G_XOR,
