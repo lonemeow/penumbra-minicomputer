@@ -1,7 +1,6 @@
 # $NetBSD$
 
-# setjmp/longjmp — needed once implementations exist
-#SRCS+=	__setjmp14.S __sigsetjmp14.S _setjmp.S
+SRCS+=	__setjmp14.S __sigsetjmp14.S _setjmp.S
 
 SRCS+=	bswap16.c bswap32.c bswap64.c
 SRCS+=	flt_rounds.c

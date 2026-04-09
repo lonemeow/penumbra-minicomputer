@@ -9,6 +9,20 @@
  * shared lib components.
  */
 
+/*
+ * lld does not implicitly create empty output sections the way
+ * GNU ld does.  If no input .data exists (common for minimal rump
+ * shared libs), the INSERT AFTER .data below fails because the
+ * anchor section is absent.  Create an explicit .data first.
+ * lld processes INSERT commands in script order, so this runs
+ * before the link_set INSERT and guarantees the anchor exists.
+ */
+SECTIONS
+{
+	.data : { *(.data) }
+}
+INSERT AFTER .text;
+
 SECTIONS
 {
 	link_set_modules :

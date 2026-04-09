@@ -2,7 +2,7 @@
 #
 # toolchain-setup.sh — Create prefixed symlinks for NetBSD build system
 #
-# Creates penumbra-unknown-none-{clang,ar,ld,...} symlinks in the LLVM
+# Creates penumbra-unknown-netbsd-{clang,ar,ld,...} symlinks in the LLVM
 # build's bin/ directory, so EXTERNAL_TOOLCHAIN can find them.
 #
 # Usage:
@@ -16,7 +16,7 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$SCRIPT_DIR/../../../.." && pwd)
 LLVM_PREFIX="${1:-$ROOT/build/llvm}"
 BIN="$LLVM_PREFIX/bin"
-PREFIX="penumbra-unknown-none"
+PREFIX="penumbra-unknown-netbsd"
 
 if [ ! -x "$BIN/clang" ]; then
     echo "error: $BIN/clang not found" >&2

@@ -34,6 +34,13 @@
 #define _JB_R14		9	/* SP */
 #define _JB_SIGMASK	10
 
+/*
+ * Magic values stored in jmp_buf[0].
+ * siglongjmp checks the magic to decide whether to restore the signal mask.
+ */
+#define _JB_MAGIC__SETJMP	0x50454E00	/* _setjmp  (no sigmask) */
+#define _JB_MAGIC_SETJMP	0x50454E01	/* __setjmp14 (sigmask saved) */
+
 #ifndef _BSD_JBSLOT_T_
 #define _BSD_JBSLOT_T_	long	/* 4 bytes on ILP32 */
 #endif

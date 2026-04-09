@@ -81,6 +81,9 @@ CWARNFLAGS.clang+=	-Wno-strict-prototypes
 CWARNFLAGS.clang+=	-Wno-alloc-size
 CWARNFLAGS.clang+=	-Wno-array-parameter
 CWARNFLAGS.clang+=	-Wno-missing-format-attribute
+CWARNFLAGS.clang+=	-Wno-tautological-compare
+CWARNFLAGS.clang+=	-Wno-uninitialized-const-pointer
+CWARNFLAGS.clang+=	-Wno-default-const-init-var-unsafe
 # bsd.sys.mk appends -Wall to CFLAGS after CWARNFLAGS, which re-enables
 # some of the above.  Repeat the -Wall-sensitive ones in COPTS so they
 # appear last in the compile command (bsd.sys.mk compile rule appends
@@ -88,9 +91,7 @@ CWARNFLAGS.clang+=	-Wno-missing-format-attribute
 COPTS+=		-Wno-unused-but-set-variable
 COPTS+=		-Wno-strict-prototypes
 COPTS+=		-Wno-deprecated-non-prototype
-# Triple is penumbra-unknown-none (bare-metal), but userland needs __NetBSD__
-# for correct #ifdef guards.  TODO: change triple OS to 'netbsd'.
-CPPFLAGS+=		-D__NetBSD__
+# __NetBSD__ is now defined by clang via the penumbra-unknown-netbsd triple.
 .endif
 
 TOOLCHAIN_MISSING?=	no
@@ -983,7 +984,7 @@ MACHINE_GNU_ARCH=${GNU_ARCH.${MACHINE_ARCH}:U${MACHINE_ARCH}}
 # an "elf" tag for historically a.out platforms.
 #
 .if ${MACHINE_ARCH} == "penumbra"
-MACHINE_GNU_PLATFORM?=penumbra-unknown-none
+MACHINE_GNU_PLATFORM?=penumbra-unknown-netbsd
 .elif (!empty(MACHINE_ARCH:Mearm*))
 MACHINE_GNU_PLATFORM?=${MACHINE_GNU_ARCH}--netbsdelf-${MACHINE_ARCH:C/eb//:C/v[4-7]//:S/earm/eabi/}
 .elif (${MACHINE_GNU_ARCH} == "arm" || \
