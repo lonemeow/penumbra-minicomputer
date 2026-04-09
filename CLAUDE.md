@@ -296,11 +296,16 @@ MIPS/68k-style vector dispatch.
   `@llvm.threadlocal.address` → `call @__tls_get_addr`;
   PIC: `%tlsgd_pcrel` with GOT tls_index; static: TP-relative),
   **G_DYN_STACKALLOC** (VLAs/runtime alloca),
-  G_SADDO/G_SSUBO/G_SADDE/G_SSUBE, G_FNEG/G_FABS/G_FCOPYSIGN
-  (bit manipulation), G_IS_FPCLASS, G_GET_ROUNDING (const 1).
+  G_SADDO/G_SSUBO/G_SADDE/G_SSUBE (non-power-of-2 widths handled
+  via widenScalarToNextPow2), G_SMULO/G_UMULO/G_SMULH/G_UMULH,
+  G_FNEG/G_FABS/G_FCOPYSIGN (bit manipulation), G_IS_FPCLASS,
+  G_GET_ROUNDING (const 1), G_BLOCK_ADDR (computed goto),
+  **soft-float trig/math** (G_FSIN/G_FCOS/G_FTAN/G_FASIN/G_FACOS/
+  G_FATAN/G_FATAN2/G_FSINH/G_FCOSH/G_FTANH/G_FLDEXP/G_FMODF/
+  G_FSINCOS/G_FFREXP/G_FCANONICALIZE → libcalls).
 - GOT/PLT: 16-byte PLT entries (LLI+LUI+LDW+JMP R11),
   `R_PENUMBRA_GLOB_DAT`/`JUMP_SLOT` dynamic relocs.
-  Shared libraries link with `ld.lld` via `PenumbraToolChain`.
+  Shared libraries link with `ld.lld` via `toolchains::NetBSD`.
 - `-fPIC` supported: PC-relative addressing via
   MOV PC + ADDi `%pcrel()` for globals and TLS,
   EK_LabelDifference32 jump table entries;
@@ -491,16 +496,21 @@ MIPS/68k-style vector dispatch.
   Clang 22 warning suppressions for NetBSD 10 codebase.
 - Known shortcuts: userland CAS uses privileged instructions
   (needs RAS), libpthread is minimal stubs, signal delivery
-  panics instead of SIGILL.
+  panics instead of SIGILL, makecontext not implemented.
   See memory file `project_userland_shortcuts.md`.
-- Build command: `./build.sh -U -j10 -m penumbra
-  -V EXTERNAL_TOOLCHAIN=$PWD/../build/llvm
-  -O ../build/netbsd-obj -T ../build/netbsd-tools
-  -D ../build/netbsd-dest -V DBG=-O0 libs`
+- **`build.sh distribution` nearly complete.**
+  Full userland builds: all libraries, nearly all programs.
+  Only `openssl` fails (static libcrypto missing EC nist curve
+  `.o` files — NetBSD build system bug).
+  Uses stock `toolchains::NetBSD` with Penumbra emulation/flags
+  in `NetBSD.cpp` (no custom toolchain class for NetBSD).
+  `PenumbraToolChain` retained for bare-metal only.
+  Generic and 64-bit `__atomic_*` implementations added
+  (lock-based, asm-label trick to bypass clang builtin check).
 
 ## Next Steps (in priority order)
-1. **Userland build completion** — fix remaining `build.sh libs`
-   failures, then `build.sh distribution` for full rootfs.
+1. **Root filesystem** — `build.sh sets` to create installable
+   sets, boot with full userland on the ISS.
 2. **Kernel signals** — `sendsig_siginfo`, trap.c SIGILL/SIGSEGV
    delivery, signal trampoline testing.
 3. **RAS atomics** — Restartable Atomic Sequences for userland CAS

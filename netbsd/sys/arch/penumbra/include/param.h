@@ -55,9 +55,13 @@
 
 #define MAXPHYS		(64 * 1024)
 
+#if defined(_KERNEL) && !defined(_LOCORE)
 /* Microsecond delay — stub, busy-loops for now */
+#ifndef __HIDE_DELAY
 void	delay(unsigned int);
 #define	DELAY(n)	delay(n)
+#endif
+#endif /* _KERNEL && !_LOCORE */
 
 /*
  * Minimum and maximum sizes of the kernel malloc arena in PAGE_SIZE-sized

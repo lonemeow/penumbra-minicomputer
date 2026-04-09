@@ -27,6 +27,13 @@ SRCS+=	atomic_cas_by_cas32.c
 # GCC-compatible __atomic_load_N / __atomic_store_N builtins.
 SRCS+=	atomic_load.c atomic_store.c
 
+# Generic (unsized) __atomic_load/__atomic_store/__atomic_exchange/
+# __atomic_compare_exchange/__atomic_is_lock_free for arbitrary types.
+SRCS+=	atomic_generic.c
+
+# 64-bit atomics (lock-based, no hardware 64-bit CAS).
+SRCS+=	atomic_64.c
+
 # Additional CAS-based atomics needed by libc (sub-word and sub/xor/nand).
 SRCS+=	atomic_sub_32_cas.c atomic_sub_16_cas.c atomic_sub_8_cas.c \
 	atomic_xor_32_cas.c atomic_xor_16_cas.c atomic_xor_8_cas.c \

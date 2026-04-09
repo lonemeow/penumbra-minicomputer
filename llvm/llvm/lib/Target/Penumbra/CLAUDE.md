@@ -176,8 +176,12 @@ Boot ROM compiles and runs correctly at all three levels.
 (MOV PC + ADDi %pcrel) for globals and TLS GD,
 label-difference jump table entries.
 `PenumbraToolChain` (`clang/lib/Driver/ToolChains/Penumbra.{h,cpp}`)
-uses `ld.lld` directly for linking (overrides `buildLinker()`).
-NetBSD libc cross-build compiles at `-O0`.
+is the bare-metal toolchain (ROM, hw tests) — uses `ld.lld` directly.
+For `penumbra-unknown-netbsd`, the stock `toolchains::NetBSD`
+(`clang/lib/Driver/ToolChains/NetBSD.cpp`) is used with Penumbra
+additions: `elf32penumbra` emulation, `useLibgcc=false`,
+`--allow-shlib-undefined`, `--undefined-version`.
+`build.sh distribution` compiles nearly all of NetBSD userland.
 
 **lld:** `ld.lld -T rom.ld` links Penumbra ELF objects.
 Supports all 17 relocation types including GOT/PLT and TLS GD.

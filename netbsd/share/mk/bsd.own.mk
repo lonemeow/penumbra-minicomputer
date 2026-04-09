@@ -84,6 +84,8 @@ CWARNFLAGS.clang+=	-Wno-missing-format-attribute
 CWARNFLAGS.clang+=	-Wno-tautological-compare
 CWARNFLAGS.clang+=	-Wno-uninitialized-const-pointer
 CWARNFLAGS.clang+=	-Wno-default-const-init-var-unsafe
+CWARNFLAGS.clang+=	-Wno-incompatible-pointer-types
+CWARNFLAGS.clang+=	-Wno-fortify-source
 # bsd.sys.mk appends -Wall to CFLAGS after CWARNFLAGS, which re-enables
 # some of the above.  Repeat the -Wall-sensitive ones in COPTS so they
 # appear last in the compile command (bsd.sys.mk compile rule appends

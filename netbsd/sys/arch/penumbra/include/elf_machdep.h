@@ -17,6 +17,11 @@
 #define ELF32_MACHDEP_ID	EM_PENUMBRA
 #define ELF32_MACHDEP_ENDIANNESS	ELFDATA2LSB
 
+/* No 64-bit ELF support — stubs for generic ELF code that uses both. */
+#define ELF64_MACHDEP_ID_CASES		/* nothing */
+#define ELF64_MACHDEP_ID		EM_NONE
+#define ELF64_MACHDEP_ENDIANNESS	ELFDATA2LSB
+
 /* Penumbra relocations (matches LLVM ELFRelocs/Penumbra.def) */
 #define R_PENUMBRA_NONE			0
 #define R_PENUMBRA_32			1
