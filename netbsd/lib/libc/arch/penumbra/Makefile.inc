@@ -1,5 +1,10 @@
 #	$NetBSD$
 
+SRCS+=	__sigtramp2.S
+
 CPPFLAGS+=	-I.
 
-# No softfloat — Penumbra has no FPU concept.
+.if ${MKSOFTFLOAT} != "no"
+CPPFLAGS+=	-DSOFTFLOAT
+.include <softfloat/Makefile.inc>
+.endif

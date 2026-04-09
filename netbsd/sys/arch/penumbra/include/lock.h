@@ -26,12 +26,24 @@ __SIMPLELOCK_UNLOCKED_P(const __cpu_simple_lock_t *lp)
 	return *lp == __SIMPLELOCK_UNLOCKED;
 }
 
-#ifdef _KERNEL
-
 static __inline void
 __cpu_simple_lock_init(__cpu_simple_lock_t *lp)
 {
 	*lp = __SIMPLELOCK_UNLOCKED;
+	__insn_barrier();
+}
+
+static __inline void
+__cpu_simple_lock_clear(__cpu_simple_lock_t *lp)
+{
+	*lp = __SIMPLELOCK_UNLOCKED;
+	__insn_barrier();
+}
+
+static __inline void
+__cpu_simple_lock_set(__cpu_simple_lock_t *lp)
+{
+	*lp = __SIMPLELOCK_LOCKED;
 	__insn_barrier();
 }
 
@@ -45,9 +57,14 @@ __cpu_simple_lock(__cpu_simple_lock_t *lp)
 static __inline int
 __cpu_simple_lock_try(__cpu_simple_lock_t *lp)
 {
-	*lp = __SIMPLELOCK_LOCKED;
-	__insn_barrier();
-	return 1;
+	/*
+	 * Use atomic CAS so this is safe under preemptive scheduling.
+	 * In kernel context the CAS uses DI/EI; in userland it uses
+	 * the libc atomic_cas_32 (currently also DI/EI via syscall,
+	 * future: RAS).
+	 */
+	return __sync_bool_compare_and_swap(lp, __SIMPLELOCK_UNLOCKED,
+	    __SIMPLELOCK_LOCKED);
 }
 
 static __inline void
@@ -56,7 +73,5 @@ __cpu_simple_unlock(__cpu_simple_lock_t *lp)
 	__insn_barrier();
 	*lp = __SIMPLELOCK_UNLOCKED;
 }
-
-#endif /* _KERNEL */
 
 #endif /* _PENUMBRA_LOCK_H_ */

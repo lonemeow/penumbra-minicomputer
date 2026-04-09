@@ -24,6 +24,22 @@ typedef int fexcept_t;
 #define	FE_DOWNWARD	2
 #define	FE_UPWARD	3
 
+/*
+ * fenv_t layout (pure software — no hardware FP register):
+ *   bits  4:0  — exception flags (FE_*)
+ *   bits  9:5  — exception mask
+ *   bits 11:10 — rounding mode
+ */
+#define __FENV_GET_FLAGS(__envp)		((*(__envp)) & 0x1f)
+#define __FENV_GET_MASK(__envp)		(((*(__envp)) >> 5) & 0x1f)
+#define __FENV_GET_ROUND(__envp)	(((*(__envp)) >> 10) & 0x03)
+#define __FENV_SET_FLAGS(__envp, __val) \
+	(*(__envp) = (*(__envp) & ~0x1f) | ((__val) & 0x1f))
+#define __FENV_SET_MASK(__envp, __val) \
+	(*(__envp) = (*(__envp) & ~(0x1f << 5)) | (((__val) & 0x1f) << 5))
+#define __FENV_SET_ROUND(__envp, __val) \
+	(*(__envp) = (*(__envp) & ~(0x03 << 10)) | (((__val) & 0x03) << 10))
+
 __BEGIN_DECLS
 
 extern const fenv_t	__fe_dfl_env;

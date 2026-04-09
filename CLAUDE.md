@@ -289,9 +289,11 @@ MIPS/68k-style vector dispatch.
   EK_LabelDifference32 jump table entries;
   PC (R15) is a readable GPR so PIC needs no GOT (±32KB reach).
 - `-O0` works fully (kernel compiles all .o files at `-O0`).
-  `-O1`/`-O2` work for most code but need
-  `analyzeBranch`/`insertBranch`/`removeBranch` in TargetInstrInfo
-  for branch optimization passes; kernel builds at `-O0` for now.
+  `-O1`/`-Os`/`-O2` work: `analyzeBranch`/`insertBranch`/
+  `removeBranch`/`reverseBranchCondition` implemented for
+  branch folding and block placement passes.
+  `G_FENCE` (compiler barrier), `G_BRINDIRECT` (computed goto),
+  sub-word `G_BSWAP` (s16 widened to s32) all handled.
 
 ## Software Tools
 - **Instruction Set Simulator** (`sw/sim/penumbra_iss.cpp`):
@@ -459,22 +461,33 @@ MIPS/68k-style vector dispatch.
 - Build system (`bsd.own.mk`): `HAVE_SSP=no` (no stack protector),
   `HAVE_LIBGCC_EH=yes` (skip libunwind), clang 22 warning
   suppressions, jemalloc `LG_QUANTUM=3`.
-- **libc cross-build nearly complete at `-O0`.**
-  TLS (GD model with GOT/PLT for shared libs), G_DYN_STACKALLOC,
-  soft-float bit ops, signed overflow, GOT/PLT, and PIC assembly
-  fixes unblocked jemalloc and shared library linking.
-  `libc.a` builds; `libc.so` link in progress.
+- **`build.sh libs` largely functional.**
+  `libc.so`, `libm.so`, `libcrypto.so`, and most other shared
+  libraries build and link.  Remaining failures are downstream
+  of missing C++ support (`MKCXX=no`) or libpthread stubs.
+  Key fixes: softfloat enabled (`MKSOFTFLOAT=yes`), `__mulsi3`
+  (shift-and-add), full atomic suite (CAS-based sub-word ops,
+  load/store, init), signal trampoline stub, TLS inlines in
+  mcontext.h, `__FPE`/`__FEE`/`__FPR`/`__FER`/`__FENV_*` macros,
+  clang driver `-L`/`-lc`/`--undefined-version` fixes.
+  Clang 22 warning suppressions for NetBSD 10 codebase.
+- Known shortcuts: userland CAS uses privileged instructions
+  (needs RAS), libpthread is minimal stubs, signal delivery
+  panics instead of SIGILL, setjmp/longjmp not implemented.
+  See memory file `project_userland_shortcuts.md`.
 - Build command: `./build.sh -U -j10 -m penumbra
   -V EXTERNAL_TOOLCHAIN=$PWD/../build/llvm
   -O ../build/netbsd-obj -T ../build/netbsd-tools
   -D ../build/netbsd-dest -V DBG=-O0 libs`
 
 ## Next Steps (in priority order)
-1. **Userland build completion** — fix remaining libc compile/link
-   errors, then `build.sh` `distribution` for full rootfs.
-3. **Kernel implementation** — remaining MD stubs as the kernel
-   reaches them (grep `TODO(stub)`): signals, mcontext, startlwp.
-4. **LLVM `-O2` support** — implement `analyzeBranch`/`insertBranch`/
-   `removeBranch` for branch optimization passes
+1. **Userland build completion** — fix remaining `build.sh libs`
+   failures, then `build.sh distribution` for full rootfs.
+2. **Kernel signals** — `sendsig_siginfo`, trap.c SIGILL/SIGSEGV
+   delivery, signal trampoline testing.
+3. **RAS atomics** — Restartable Atomic Sequences for userland CAS
+   (current impl uses privileged DI/EI instructions).
+4. **Kernel implementation** — remaining MD stubs as the kernel
+   reaches them (grep `TODO(stub)`): setjmp, mcontext, startlwp.
 5. **Interrupt controller** — Multiple devices with priority encoding
 6. **Memory subsystem** — SDRAM controller, bus interface

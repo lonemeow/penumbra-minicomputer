@@ -28,4 +28,47 @@ typedef struct {
 #define _UC_MACHINE_INTRV(uc)	((uc)->uc_mcontext.__gregs[1])	/* R1=retval */
 #define _UC_MACHINE_SET_PC(uc, v) ((uc)->uc_mcontext.__gregs[_REG_PC] = (v))
 
+/*
+ * TLS support — Variant 1, no TCB gap (like RISC-V).
+ * TP (R12) points past tls_tcb; tcb is at negative offset from TP.
+ */
+#if defined(_RTLD_SOURCE) || defined(_LIBC_SOURCE) || \
+    defined(__LIBPTHREAD_SOURCE__)
+
+#include <sys/tls.h>
+
+#define	TLS_TP_OFFSET	0x0
+#define	TLS_DTV_OFFSET	0x800
+__CTASSERT(TLS_TP_OFFSET + sizeof(struct tls_tcb) < 0x800);
+
+static __inline void *
+__lwp_getprivate_fast(void)
+{
+	void *__tp;
+	__asm("mov %0, r12" : "=r"(__tp));
+	return __tp;
+}
+
+static __inline void *
+__lwp_gettcb_fast(void)
+{
+	void *__tcb;
+	__asm __volatile(
+		"add %[__tcb], r12, %[__offset]"
+	    :	[__tcb] "=r" (__tcb)
+	    :	[__offset] "i" (-(TLS_TP_OFFSET + sizeof(struct tls_tcb))));
+	return __tcb;
+}
+
+static __inline void
+__lwp_settcb(void *__tcb)
+{
+	__asm __volatile(
+		"add r12, %[__tcb], %[__offset]"
+	    :
+	    :	[__tcb] "r" (__tcb),
+		[__offset] "i" (TLS_TP_OFFSET + sizeof(struct tls_tcb)));
+}
+#endif /* _RTLD_SOURCE || _LIBC_SOURCE || __LIBPTHREAD_SOURCE__ */
+
 #endif /* _PENUMBRA_MCONTEXT_H_ */

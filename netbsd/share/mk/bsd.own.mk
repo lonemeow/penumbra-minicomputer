@@ -66,6 +66,7 @@ NEED_OWN_INSTALL_TARGET?=	yes
 TOOLCHAIN_MISSING?=	yes
 HAVE_LLVM?=		yes
 HAVE_LIBGCC_EH?=	yes	# skip libunwind (no C++ headers, no EH support yet)
+MKCXX=			no	# no C++ standard library yet
 ACTIVE_CC=		clang
 # Our clang (22.x) is newer than NetBSD's; suppress warnings that
 # upstream hasn't adapted to yet.
@@ -75,6 +76,18 @@ CWARNFLAGS.clang+=	-Wno-macro-redefined
 CWARNFLAGS.clang+=	-Wno-cast-function-type-mismatch
 CWARNFLAGS.clang+=	-Wno-unused-but-set-variable
 CWARNFLAGS.clang+=	-Wno-null-pointer-subtraction
+CWARNFLAGS.clang+=	-Wno-deprecated-non-prototype
+CWARNFLAGS.clang+=	-Wno-strict-prototypes
+CWARNFLAGS.clang+=	-Wno-alloc-size
+CWARNFLAGS.clang+=	-Wno-array-parameter
+CWARNFLAGS.clang+=	-Wno-missing-format-attribute
+# bsd.sys.mk appends -Wall to CFLAGS after CWARNFLAGS, which re-enables
+# some of the above.  Repeat the -Wall-sensitive ones in COPTS so they
+# appear last in the compile command (bsd.sys.mk compile rule appends
+# COPTS.${file} and COPTS after CFLAGS).
+COPTS+=		-Wno-unused-but-set-variable
+COPTS+=		-Wno-strict-prototypes
+COPTS+=		-Wno-deprecated-non-prototype
 # Triple is penumbra-unknown-none (bare-metal), but userland needs __NetBSD__
 # for correct #ifdef guards.  TODO: change triple OS to 'netbsd'.
 CPPFLAGS+=		-D__NetBSD__
@@ -1106,7 +1119,8 @@ MKSOFTFLOAT?=	yes
 #
 .if (${MACHINE_CPU} == "arm" && ${MACHINE_ARCH:M*hf*} == "") || \
     ${MACHINE_ARCH} == "coldfire" || ${MACHINE_CPU} == "or1k" || \
-    ${MACHINE} == "emips" || ${MACHINE_CPU} == "sh3"
+    ${MACHINE} == "emips" || ${MACHINE_CPU} == "sh3" || \
+    ${MACHINE_ARCH} == "penumbra"
 MKSOFTFLOAT=	yes
 .endif
 

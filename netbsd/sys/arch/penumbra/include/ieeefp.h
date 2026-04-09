@@ -9,6 +9,11 @@
 
 #include <penumbra/fenv.h>
 
+#define	__FPE(x) (x)	/* C99 FP exception → hw exception */
+#define	__FEE(x) (x)	/* hw exception → C99 FP exception */
+#define	__FPR(x) (x)	/* C99 rounding → hw rounding */
+#define	__FER(x) (x)	/* hw rounding → C99 rounding */
+
 #if !defined(_ISOC99_SOURCE)
 
 typedef int fp_except;

@@ -19,3 +19,6 @@ SRCS+=	signbitf_ieee754.c signbitd_ieee754.c signbitl_ieee754.c
 SRCS+=	fabs_ieee754.c
 
 SRCS+=	nanf.c
+
+# Software 32-bit multiply (no hardware MUL instruction).
+SRCS+=	mulsi3.c
