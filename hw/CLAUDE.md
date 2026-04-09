@@ -227,3 +227,20 @@ NS16450-compatible at `0xFF00_0000`, accessed via LDW/STW (memory bus, not sysre
 - Testbench: `o_uart_tx_valid`/`o_uart_tx_data` for TX, `i_uart_rx_valid`/`i_uart_rx_data` + `o_uart_rx_ack` for RX.
 - IRQ: `o_irq` when enabled interrupt + MCR OUT2.
 - Polling: `LDW LSR, TEST THRE, BZ poll, STW THR`.
+
+## FPGA Toolchain (OSS CAD Suite)
+Tools for FPGA synthesis, PnR, bitstream packing, and flashing
+are containerized in `tools/oss-cad-suite/`.
+Docker image based on Ubuntu 22.04 + OSS CAD Suite release.
+
+**Available tools** (via wrapper symlinks in `tools/oss-cad-suite/bin/`):
+| Tool | Purpose |
+|------|---------|
+| `yosys` | RTL synthesis (SystemVerilog → netlist) |
+| `nextpnr-ecp5` | Place and route for Lattice ECP5 |
+| `ecppack` | Bitstream packing (nextpnr output → `.bit`) |
+| `fujprog` | Flash bitstream to ULX3S via USB/FTDI |
+
+All symlinks resolve to `docker-wrapper.sh` (multi-call pattern).
+Container runs as host UID to avoid root-owned output files.
+`fujprog` requires USB passthrough (`--privileged`, `/dev/bus/usb`).

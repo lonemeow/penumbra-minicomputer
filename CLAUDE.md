@@ -100,6 +100,23 @@ The architecture is fully specified in `doc/`. Key specs:
 - **Important:** `rm -rf build/<mod>.verilator build/V<mod>`
   if you suspect stale binaries (WSL2 stale mtimes)
 
+### FPGA Toolchain (OSS CAD Suite)
+FPGA synthesis and place-and-route use the OSS CAD Suite
+(Yosys, nextpnr-ecp5, ecppack, fujprog) via Docker.
+Setup in `hw/tools/oss-cad-suite/`.
+- **Wrapper scripts:** `hw/tools/oss-cad-suite/bin/` contains
+  symlinks (`yosys`, `nextpnr-ecp5`, `ecppack`, `fujprog`)
+  that all point to `docker-wrapper.sh`.
+  The wrapper uses `basename "$0"` (multi-call pattern)
+  to run the correct tool inside the container, mounting
+  the caller's CWD as `/work`.
+- **Add to PATH:** `export PATH="$PWD/hw/tools/oss-cad-suite/bin:$PATH"`
+  then use `yosys`, `nextpnr-ecp5`, etc. as normal commands.
+- **Interactive shell:** `docker compose -f hw/tools/oss-cad-suite/docker-compose.yml run --rm fpga-dev bash`
+- **USB flashing:** `fujprog` needs USB device access;
+  the container runs with `--privileged` and `/dev/bus/usb` mapped.
+- **Adding tools:** `ln -s ../docker-wrapper.sh hw/tools/oss-cad-suite/bin/<toolname>`
+
 ### SD Card Image
 Build a test SD image with bootloader and/or kernel for `make simulate`:
 ```sh
