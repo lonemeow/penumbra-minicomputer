@@ -760,6 +760,28 @@ _trap_common:
 	mov	r4, r1
 
 	/*
+	 * Snapshot volatile hardware state into pinned scratch.
+	 *
+	 * Must happen BEFORE any faultable memory access.  The
+	 * trapframe lives on the kernel stack, which can TLB-miss.
+	 * A resolved miss clobbers ESR, EPC, FAULT_ADDR, and
+	 * FAULT_STATUS via the handler's ERET.  All stores here
+	 * are PC-relative into the pinned vector page — no TLB
+	 * miss possible.
+	 *
+	 * R1, R2, R3 are free (originals saved in scratch above).
+	 * R4 = cause number (must preserve).
+	 */
+	rdspr	r1, esr
+	stw	r1, [pc + _trap_save_hw_esr - .]
+	rdspr	r2, epc
+	stw	r2, [pc + _trap_save_hw_epc - .]
+	rdsys	r3, #SYSDEV_MMU, #MMU_FAULT_ADDR
+	stw	r3, [pc + _trap_save_hw_badvaddr - .]
+	rdsys	r3, #SYSDEV_MMU, #MMU_FAULT_STATUS
+	stw	r3, [pc + _trap_save_hw_fstat - .]
+
+	/*
 	 * Double-fault detection: if the faulting context was
 	 * supervisor mode (ESR.S set) AND EPC is in the pinned
 	 * page region (0xFFFFxxxx — vector page, scratch, L2
@@ -771,16 +793,18 @@ _trap_common:
 	 * Both checks are needed: a user program dereferencing
 	 * 0xFFFFxxxx triggers a legitimate TLB miss that should
 	 * be dispatched normally (and will result in SIGSEGV).
+	 *
+	 * R1=ESR, R2=EPC still in registers from above.
+	 * R1-R3 are freely clobberable (saved to scratch).
 	 */
-	rdspr	r1, esr
-	li	r2, 0x80000000		/* PSL_S */
-	and	r1, r2
+	li	r3, 0x80000000		/* PSL_S */
+	and	r1, r3
 	cmp	r1, r0
 	beq	.Lnot_double_fault	/* user mode — not a double fault */
-	rdspr	r1, epc
-	lui	r2, #0xFFFF		/* R2 = 0xFFFF0000 */
-	and	r1, r2			/* R1 = EPC & 0xFFFF0000 */
-	cmp	r1, r2			/* EPC in 0xFFFFxxxx range? */
+	mov	r1, r2			/* R1 = EPC */
+	lui	r3, #0xFFFF		/* R3 = 0xFFFF0000 */
+	and	r1, r3			/* R1 = EPC & 0xFFFF0000 */
+	cmp	r1, r3			/* EPC in 0xFFFFxxxx range? */
 	bne	.Lnot_double_fault
 	break				/* double fault — halt CPU */
 .Lnot_double_fault:
@@ -819,8 +843,11 @@ _trap_common:
 	 * hardware swapped SP↔USP on entry, so the user SP is now
 	 * in the USP SPR.  If from kernel mode, R14 was the kernel
 	 * SP and we subtracted TF_SIZE, so the original is R14+TF_SIZE.
+	 *
+	 * Read ESR from pinned scratch (not from SPR — a TLB miss
+	 * during the register saves above may have clobbered it).
 	 */
-	rdspr	r1, esr
+	ldw	r1, [pc + _trap_save_hw_esr - .]
 	li	r2, 0x80000000		/* PSL_S */
 	and	r1, r2			/* Z=1 if from user mode */
 	bne	.Lsave_kern_sp
@@ -833,18 +860,18 @@ _trap_common:
 	stw	r1, [r14 + TF_R0 + 56]		/* tf_regs[14] = original SP */
 
 	/* Save EPC as tf_regs[15] (PC at time of exception) */
-	rdspr	r1, epc
+	ldw	r1, [pc + _trap_save_hw_epc - .]
 	stw	r1, [r14 + TF_R0 + 60]		/* tf_regs[15] */
 
-	/* Save ESR, EPC, cause, badvaddr */
-	rdspr	r1, esr
+	/* Save ESR, EPC, cause, badvaddr, fstat — all from scratch */
+	ldw	r1, [pc + _trap_save_hw_esr - .]
 	stw	r1, [r14 + TF_SR]
-	rdspr	r1, epc
+	ldw	r1, [pc + _trap_save_hw_epc - .]
 	stw	r1, [r14 + TF_EPC]
 	stw	r4, [r14 + TF_CAUSE]
-	rdsys	r1, #SYSDEV_MMU, #MMU_FAULT_ADDR
+	ldw	r1, [pc + _trap_save_hw_badvaddr - .]
 	stw	r1, [r14 + TF_BADVADDR]
-	rdsys	r1, #SYSDEV_MMU, #MMU_FAULT_STATUS
+	ldw	r1, [pc + _trap_save_hw_fstat - .]
 	stw	r1, [r14 + TF_FAULT_STATUS]
 
 	/* Call trap(tf) — R1 = pointer to trapframe */
@@ -931,6 +958,12 @@ trap_return:
 /* ── Trap handler scratch data ──────────────────────────────
  * Separate from the TLB miss handler scratch.
  * Accessed via PC-relative addressing.
+ *
+ * The _trap_save_hw_* slots capture volatile hardware state
+ * (ESR, EPC, FAULT_ADDR, FAULT_STATUS) before any faultable
+ * memory access.  A TLB miss during trapframe allocation would
+ * otherwise clobber these registers when the miss handler
+ * succeeds and ERETs.
  */
 	.balign	4
 _trap_save_r1:
@@ -940,6 +973,14 @@ _trap_save_r2:
 _trap_save_r3:
 	.long	0
 _trap_save_r4:
+	.long	0
+_trap_save_hw_esr:
+	.long	0
+_trap_save_hw_epc:
+	.long	0
+_trap_save_hw_badvaddr:
+	.long	0
+_trap_save_hw_fstat:
 	.long	0
 
 /* ── TLB miss handler scratch data ──────────────────────────

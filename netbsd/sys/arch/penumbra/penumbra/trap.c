@@ -21,6 +21,7 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <machine/pcb.h>
 #include <machine/pmap.h>
 #include <machine/sysreg.h>
+#include <machine/userret.h>
 
 #include <uvm/uvm_extern.h>
 
@@ -179,6 +180,13 @@ trap(struct trapframe *tf)
 		panic("unexpected exception type %d at pc=0x%08x",
 		    type, tf->tf_epc);
 	}
+
+	/*
+	 * On return to userland: check for ASTs, pending signals,
+	 * and RAS (Restartable Atomic Sequence) restart.
+	 */
+	if (usermode)
+		userret(curlwp, tf);
 }
 
 /*
