@@ -22,8 +22,8 @@ _C_LABEL(__curbrk):
 	.text
 
 ENTRY(_brk)
-	mov	r11, r15
-	add	r11, %pcrel(_C_LABEL(__minbrk)+4)
+	lli	r11, %lo16(_C_LABEL(__minbrk))
+	lui	r11, %hi16(_C_LABEL(__minbrk))
 	ldw	r2, [r11 + 0]
 	cmp	r1, r2
 	bhs	1f
@@ -31,7 +31,9 @@ ENTRY(_brk)
 1:
 	SYSTRAP(break)
 	JUMP_TO_CERROR()		/* error */
-	stw	r1, [r11 + 4]		/* update __curbrk */
+	lli	r11, %lo16(_C_LABEL(__curbrk))
+	lui	r11, %hi16(_C_LABEL(__curbrk))
+	stw	r1, [r11 + 0]		/* update __curbrk */
 	mov	r1, r0			/* return 0 */
 	ret
 END(_brk)

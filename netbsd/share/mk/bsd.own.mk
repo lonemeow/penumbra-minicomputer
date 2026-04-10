@@ -67,6 +67,7 @@ TOOLCHAIN_MISSING?=	yes
 HAVE_LLVM?=		yes
 HAVE_LIBGCC_EH?=	yes	# skip libunwind (no C++ headers, no EH support yet)
 MKCXX=			no	# no C++ standard library yet
+MKPIC=			no	# no dynamic linker; PIC reach too small for large binaries
 ACTIVE_CC=		clang
 # Our clang (22.x) is newer than NetBSD's; suppress warnings that
 # upstream hasn't adapted to yet.
