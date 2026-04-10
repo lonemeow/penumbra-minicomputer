@@ -136,15 +136,18 @@ Setup in `hw/tools/oss-cad-suite/`.
   Boot ROM `boot sd:0,0` loads `PENBOOT.ELF` from FAT32 partition.
 
 ### SD Card Image
-Build a test SD image with bootloader and/or kernel for `make simulate`:
+Build SD images for `make simulate SDCARD=build/boot.img`:
 ```sh
-sw/tools/mksdimage.sh -o build/boot.img \
-  -2 build/netbsd-obj/sys/arch/penumbra/stand/boot/PENBOOT.ELF \
-  -k build/netbsd-kernel/MINIMAL/netbsd
+make sdimage              # boot partition only (FAT32: bootloader + kernel)
+make sdimage-rootfs       # boot + FFS root (minimal rescue, ~86 MB)
+make sdimage-rootfs ROOTFS_FULL=1  # boot + FFS root (full distribution)
 ```
-Options: `-s SIZE_MB` (default 64), `-v` (verbose), `-e DIR` (extra files).
+The rootfs script (`sw/tools/mkrootfs.sh`) creates an FFS image from
+`build/netbsd-dest/`.  Minimal mode (`-m`) includes only `/rescue`
+(statically linked, works without `ld.elf_so`), `/lib`, and `/etc`.
+The SD image has two MBR partitions: FAT32 boot (`psd0e`) and
+FFS root (`psd0f`).  At boot, type `psd0f` at the root device prompt.
 Requires NetBSD cross-tools (`nbfdisk`, `nbmakefs`).
-Use with: `make simulate SDCARD=build/boot.img`
 
 ### LLVM Toolchain Build
 Build dir: `build/llvm/`. Initial cmake (one-time):

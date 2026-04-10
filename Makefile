@@ -211,22 +211,35 @@ simulate-rtl:
 	@$(DOCKER_RUN_IT) --entrypoint ./$(BUILD_DIR)/Vmachine_sim_interactive $(DOCKER_IMAGE) $(if $(SDCARD),+sdcard=$(SDCARD)) $(if $(TRACE),+trace=$(TRACE))
 
 # ── SD card image ──────────────────────────────────────────────
-# Builds boot loader, kernel, and minimal rootfs into an SD image.
+# Builds SD image with bootloader, kernel, and optionally a root filesystem.
 # Prerequisites: kernel and bootloader already built (see CLAUDE.md).
-# Usage: make sdimage
-#        make sdimage SDIMAGE=build/custom.img
-SDIMAGE  ?= $(BUILD_DIR)/boot.img
-ROOTFS   := $(BUILD_DIR)/rootfs
-BOOT_ELF := $(BUILD_DIR)/netbsd-obj/sys/arch/penumbra/stand/boot/PENBOOT.ELF
-KERNEL   := $(BUILD_DIR)/netbsd-kernel/MINIMAL/netbsd
+# For rootfs: run `build.sh distribution` first.
+#
+# Usage:
+#   make sdimage                      — boot partition only (FAT32)
+#   make sdimage-rootfs               — boot + FFS root (minimal rescue)
+#   make sdimage-rootfs ROOTFS_FULL=1 — boot + FFS root (full distribution)
+SDIMAGE    ?= $(BUILD_DIR)/boot.img
+BOOT_ELF   := $(BUILD_DIR)/netbsd-obj/sys/arch/penumbra/stand/boot/PENBOOT.ELF
+KERNEL     := $(BUILD_DIR)/netbsd-kernel/MINIMAL/netbsd
+DESTDIR    := $(BUILD_DIR)/netbsd-dest
+ROOTFS_IMG := $(BUILD_DIR)/rootfs.img
 
 .PHONY: sdimage
 sdimage:
-	@$(MAKE) -C sw/init
-	@mkdir -p $(ROOTFS)/sbin
-	@cp $(BUILD_DIR)/init/init $(ROOTFS)/sbin/init
-	@sw/tools/mksdimage.sh -o $(SDIMAGE) -2 $(BOOT_ELF) -k $(KERNEL) -e $(ROOTFS) -v
+	@sw/tools/mksdimage.sh -o $(SDIMAGE) -2 $(BOOT_ELF) -k $(KERNEL) -v
 	@echo "SD image: $(SDIMAGE)"
+
+.PHONY: rootfs
+rootfs:
+	@sw/tools/mkrootfs.sh -d $(DESTDIR) -o $(ROOTFS_IMG) \
+		$(if $(ROOTFS_FULL),,-m) -v
+
+.PHONY: sdimage-rootfs
+sdimage-rootfs: rootfs
+	@sw/tools/mksdimage.sh -o $(SDIMAGE) -2 $(BOOT_ELF) -k $(KERNEL) \
+		-r $(ROOTFS_IMG) -v
+	@echo "SD image: $(SDIMAGE) (with FFS root)"
 
 # ── FPGA build (OSS CAD Suite via Docker wrappers) ────────────
 FPGA_TOOLS = hw/tools/oss-cad-suite/bin
@@ -248,7 +261,7 @@ FPGA_SRC_FULL   = hw/rtl/core/penumbra_pkg.sv \
                   hw/rtl/soc/cache.sv \
                   hw/rtl/soc/sysid.sv hw/rtl/soc/busctl.sv hw/rtl/soc/timer.sv \
                   hw/rtl/soc/autoconfig_dev.sv \
-                  hw/rtl/io/uart.sv hw/rtl/io/spi.sv \
+                  hw/rtl/io/uart.sv hw/rtl/io/spi.sv hw/rtl/io/sdram.sv \
                   $(FPGA_RTL)/fpga_ram.sv $(FPGA_RTL)/ulx3s_top.sv
 
 # Select source set based on TOP module

@@ -17,9 +17,12 @@
 # Options:
 #   -o FILE         Output image path (required)
 #   -s SIZE_MB      Total image size in MB (default: 64, minimum ~34 for FAT32)
+#   -b SIZE_MB      Boot partition size in MB (default: all remaining space,
+#                   or 16 MB when -r is also given)
 #   -1 FILE         Binary to write into partition gap (rarely needed)
 #   -2 FILE         Boot loader, placed as PENBOOT.ELF on FAT32
 #   -k FILE         Kernel image, placed as PENUMBRA on FAT32
+#   -r FILE         Root filesystem image (FFS), placed as partition 2
 #   -e DIR          Extra directory: copy all contents onto FAT32 root
 #   -T TOOLDIR      NetBSD tools directory (default: auto-detect)
 #   -v              Verbose output
@@ -30,16 +33,21 @@
 #
 #   # Full image with loader and kernel:
 #   mksdimage.sh -o disk.img -2 loader.bin -k netbsd
+#
+#   # Boot + FFS root filesystem:
+#   mksdimage.sh -o disk.img -2 loader.bin -k netbsd -r rootfs.img
 
 set -euo pipefail
 
 # --- Defaults ---------------------------------------------------------------
 
 OUTPUT=""
-SIZE_MB=64
+SIZE_MB=""
+BOOT_MB=""
 STAGE1=""
 STAGE2=""
 KERNEL=""
+ROOTFS=""
 EXTRA_DIR=""
 TOOLDIR=""
 VERBOSE=0
@@ -51,13 +59,15 @@ usage() {
     exit 1
 }
 
-while getopts "o:s:1:2:k:e:T:vh" opt; do
+while getopts "o:s:b:1:2:k:r:e:T:vh" opt; do
     case $opt in
         o) OUTPUT="$OPTARG" ;;
         s) SIZE_MB="$OPTARG" ;;
+        b) BOOT_MB="$OPTARG" ;;
         1) STAGE1="$OPTARG" ;;
         2) STAGE2="$OPTARG" ;;
         k) KERNEL="$OPTARG" ;;
+        r) ROOTFS="$OPTARG" ;;
         e) EXTRA_DIR="$OPTARG" ;;
         T) TOOLDIR="$OPTARG" ;;
         v) VERBOSE=1 ;;
@@ -98,7 +108,7 @@ fi
 
 # Find fdisk — it may be prefixed with the target triple
 NBFDISK=""
-for name in nbfdisk penumbra-unknown-none-fdisk; do
+for name in nbfdisk penumbra-unknown-netbsd-fdisk; do
     if [ -x "$TOOLDIR/$name" ]; then
         NBFDISK="$TOOLDIR/$name"
         break
@@ -125,11 +135,35 @@ GAP_START=1          # first sector after MBR
 GAP_END=2047         # last sector of gap (inclusive)
 PART1_START=2048     # 1 MB aligned
 
-TOTAL_SECTORS=$(( SIZE_MB * 1024 * 1024 / SECTOR ))
-PART1_SECTORS=$(( TOTAL_SECTORS - PART1_START ))
+# If root filesystem given, auto-size the total image if not specified
+if [ -n "$ROOTFS" ]; then
+    ROOTFS_BYTES=$(stat -c%s "$ROOTFS" 2>/dev/null || stat -f%z "$ROOTFS")
+    ROOTFS_MB=$(( (ROOTFS_BYTES + 1048575) / 1048576 ))
+    : "${BOOT_MB:=34}"  # FAT32 minimum ~34 MB (65525 clusters)
+    : "${SIZE_MB:=$(( BOOT_MB + ROOTFS_MB + 2 ))}"  # +2 for MBR gap + alignment
+else
+    : "${BOOT_MB:=}"
+    : "${SIZE_MB:=64}"
+fi
 
-log "Image: ${SIZE_MB} MB, ${TOTAL_SECTORS} sectors"
-log "FAT32 partition: start=${PART1_START}, size=${PART1_SECTORS}"
+TOTAL_SECTORS=$(( SIZE_MB * 1024 * 1024 / SECTOR ))
+
+if [ -n "$ROOTFS" ]; then
+    # Two partitions: FAT32 boot + FFS root
+    PART1_SECTORS=$(( BOOT_MB * 1024 * 1024 / SECTOR ))
+    PART2_START=$(( PART1_START + PART1_SECTORS ))
+    PART2_SECTORS=$(( TOTAL_SECTORS - PART2_START ))
+
+    log "Image: ${SIZE_MB} MB, ${TOTAL_SECTORS} sectors"
+    log "FAT32 boot:  start=${PART1_START}, size=${PART1_SECTORS} (${BOOT_MB} MB)"
+    log "FFS root:    start=${PART2_START}, size=${PART2_SECTORS} (${ROOTFS_MB} MB)"
+else
+    # Single partition: FAT32 fills remainder
+    PART1_SECTORS=$(( TOTAL_SECTORS - PART1_START ))
+
+    log "Image: ${SIZE_MB} MB, ${TOTAL_SECTORS} sectors"
+    log "FAT32 partition: start=${PART1_START}, size=${PART1_SECTORS}"
+fi
 
 # --- Create empty image -----------------------------------------------------
 
@@ -141,7 +175,13 @@ log "Created blank image: $OUTPUT"
 # Initialize MBR, then add partition 0 as FAT32-LBA (sysid 11)
 "$NBFDISK" -Ffi "$OUTPUT" >/dev/null 2>&1
 "$NBFDISK" -Ffu -0 -s "11/${PART1_START}/${PART1_SECTORS}" "$OUTPUT" >/dev/null 2>&1
-log "MBR written (partition 0: FAT32-LBA)"
+log "MBR partition 0: FAT32-LBA"
+
+# Add partition 1 as NetBSD/FFS (sysid 169) if root filesystem given
+if [ -n "$ROOTFS" ]; then
+    "$NBFDISK" -Ffu -1 -s "169/${PART2_START}/${PART2_SECTORS}" "$OUTPUT" >/dev/null 2>&1
+    log "MBR partition 1: NetBSD (FFS)"
+fi
 
 # --- Write stage 1 into partition gap ---------------------------------------
 
@@ -190,6 +230,13 @@ boot_image_size=$(( PART1_SECTORS * 512 ))
 
 log "Inserting boot filesystem to SD card image"
 dd if="$BOOTIMGTMP/boot.img" of="$OUTPUT" bs=$SECTOR seek=$PART1_START conv=notrunc status=none
+
+# --- Write FFS root filesystem into partition 2 ----------------------------
+
+if [ -n "$ROOTFS" ]; then
+    log "Inserting FFS root filesystem to partition 2"
+    dd if="$ROOTFS" of="$OUTPUT" bs=$SECTOR seek=$PART2_START conv=notrunc status=none
+fi
 
 # --- Done -------------------------------------------------------------------
 
