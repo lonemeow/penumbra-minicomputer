@@ -434,7 +434,10 @@ module ulx3s_top (
     logic [31:0] timer_rdata;
 
     timer #(
-        .TICK_FREQ_HZ (TICK_FREQ)
+        // TODO: TICK_FREQ (1041666) triggers marginal SDRAM timing failure
+        // via placement changes.  Use nominal 1 MHz until SDRAM clock
+        // phasing is fixed (see doc/hw/sdram-optimization.md).
+        .TICK_FREQ_HZ (32'd1_000_000)
     ) u_timer (
         .i_clk       (clk),
         .i_rst       (rst),
