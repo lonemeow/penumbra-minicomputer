@@ -4,15 +4,17 @@
  * Penumbra system call dispatch.
  *
  * Syscall ABI:
- *   R1        = syscall number (input), return value rval[0] (output)
- *   R2–R4     = arguments 1–3 (in registers)
+ *   R11       = syscall number (in scratch register, set by SYSTRAP)
+ *   R1–R4     = arguments 1–4 (in registers)
+ *   R1        = return value rval[0] (output)
  *   R2        = rval[1] on success (used by fork/pipe to return 2nd value)
- *   args 4–7  = on user stack at SP+0, SP+4, ... (if needed)
+ *   args 5+   = on user stack at SP+0, SP+4, ... (if needed)
  *   C flag    = 0 on success, 1 on error (R1 = errno)
  *
- * The carry-flag convention (same as aarch64/arm) lets userland
- * distinguish error returns from valid negative return values
- * without ambiguity.
+ * R11 (scratch) is used for the syscall number to avoid clobbering
+ * R1, which carries the first C argument.  The carry-flag convention
+ * (same as aarch64/arm) lets userland distinguish error returns from
+ * valid negative return values without ambiguity.
  */
 
 #include <sys/cdefs.h>
@@ -33,10 +35,10 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <uvm/uvm_extern.h>
 
 /*
- * Number of syscall arguments passed in registers (R2–R4).
+ * Number of syscall arguments passed in registers (R1–R4).
  * Remaining arguments are fetched from the user stack.
  */
-#define NARGREG		3
+#define NARGREG		4
 
 static void syscall(struct trapframe *);
 
@@ -66,8 +68,8 @@ syscall(struct trapframe *tf)
 	 */
 	tf->tf_epc += 4;
 
-	/* Syscall number from R1 */
-	code = tf->tf_regs[TF_R1];
+	/* Syscall number from R11 (scratch register, set by SYSTRAP) */
+	code = tf->tf_regs[TF_R11];
 
 	/*
 	 * Indirect syscalls (SYS_syscall, SYS___syscall) need argument
@@ -83,9 +85,10 @@ syscall(struct trapframe *tf)
 	else
 		callp = p->p_emul->e_sysent + code;
 
-	args[0] = tf->tf_regs[TF_R2];
-	args[1] = tf->tf_regs[TF_R3];
-	args[2] = tf->tf_regs[TF_R4];
+	args[0] = tf->tf_regs[TF_R1];
+	args[1] = tf->tf_regs[TF_R2];
+	args[2] = tf->tf_regs[TF_R3];
+	args[3] = tf->tf_regs[TF_R4];
 
 	if (callp->sy_narg > NARGREG) {
 		error = copyin((const void *)(uintptr_t)tf->tf_regs[TF_R14],
@@ -121,5 +124,5 @@ syscall(struct trapframe *tf)
 		break;
 	}
 
-	userret(l);
+	/* userret() is called by trap() after we return */
 }
