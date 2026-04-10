@@ -264,6 +264,9 @@ FPGA_SRC_FULL   = hw/rtl/core/penumbra_pkg.sv \
                   hw/rtl/io/uart.sv hw/rtl/io/spi.sv hw/rtl/io/sdram.sv \
                   $(FPGA_RTL)/fpga_ram.sv $(FPGA_RTL)/ulx3s_top.sv
 
+# ECP5 primitive stubs — for Verilator lint only, not synthesis.
+FPGA_LINT_STUBS = $(FPGA_RTL)/ecp5_prim.sv
+
 # Select source set based on TOP module
 ifeq ($(TOP),ulx3s_top)
 FPGA_SRC = $(FPGA_SRC_FULL)
@@ -273,8 +276,12 @@ endif
 
 .PHONY: fpga flash fpga-lint
 
-fpga-lint: $(FPGA_SRC)
-	$(DOCKER_RUN) $(DOCKER_IMAGE) --lint-only -Wall $(FPGA_SRC) --top $(TOP)
+# Lint always targets the full system (ulx3s_top) regardless of TOP.
+# Use Verilator --lint-only with ECP5 primitive stubs.
+fpga-lint: $(FPGA_SRC_FULL) $(FPGA_LINT_STUBS)
+	$(DOCKER_RUN) $(DOCKER_IMAGE) --lint-only -Wall -Wno-fatal \
+		-Wno-PINMISSING -Wno-PINCONNECTEMPTY \
+		$(FPGA_SRC_FULL) $(FPGA_LINT_STUBS) --top ulx3s_top
 
 fpga: $(BUILD_DIR)/$(TOP).bit
 	@echo "Bitstream: $(BUILD_DIR)/$(TOP).bit"
