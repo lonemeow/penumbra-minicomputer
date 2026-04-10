@@ -3,7 +3,7 @@
 .if defined(LIB) && (${LIB} == "kern" || ${LIB} == "c" || ${LIB} == "pthread" \
 	|| ${LIB} == "rump")
 
-# Penumbra atomic CAS: interrupt-disable based (uniprocessor).
+# Penumbra atomic CAS: RAS-based (Restartable Atomic Sequences).
 SRCS+=	atomic_cas.S
 
 # Generic CAS-based implementations for all other operations.
@@ -60,5 +60,9 @@ SRCS+=	atomic_sub_32_cas.c atomic_sub_16_cas.c atomic_sub_8_cas.c \
 
 # CAS-based init (no-op on Penumbra — hardware CAS always available).
 SRCS+=	atomic_init_cas.c
+
+# RAS registration constructor — registers the CAS code range with the
+# kernel so interrupted sequences are restarted.
+SRCS+=	atomic_ras_init.c
 
 .endif

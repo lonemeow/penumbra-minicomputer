@@ -1,11 +1,16 @@
 /*	$NetBSD$	*/
 
 /*
- * Penumbra atomic compare-and-swap using interrupt disable.
+ * Penumbra atomic compare-and-swap using RAS (Restartable Atomic Sequences).
  *
- * This is the uniprocessor implementation: RDSPR SR / DI / ... / WRSPR SR.
- * TODO: Replace with RAS (Restartable Atomic Sequences) once kernel
- * RAS infrastructure is in place.
+ * The critical load-compare-store sequence contains no privileged
+ * instructions.  If a timer interrupt (or any exception) preempts
+ * execution inside the RAS region, the kernel's userret() detects
+ * this via ras_lookup() and resets PC to the start of the sequence,
+ * retrying it from the beginning.
+ *
+ * The RAS region must be registered by userland via rasctl() before
+ * first use — see atomic_ras_init.c for the constructor that does this.
  *
  * uint32_t _atomic_cas_32(volatile uint32_t *ptr, uint32_t old, uint32_t new)
  *   R1 = ptr, R2 = old, R3 = new
@@ -16,15 +21,19 @@
 
 	.globl	_atomic_cas_32
 	.type	_atomic_cas_32, @function
+
+	/* RAS boundary labels — used by atomic_ras_init.c for registration */
+	.globl	_atomic_cas_32_ras_start
+	.globl	_atomic_cas_32_ras_end
+
 _atomic_cas_32:
-	rdspr	r4, sr		/* save SR */
-	di			/* disable interrupts */
+_atomic_cas_32_ras_start:
 	ldw	r11, [r1]	/* r11 = *ptr */
 	cmp	r11, r2		/* compare with expected */
 	bne	1f
 	stw	r3, [r1]	/* *ptr = new (if matched) */
+_atomic_cas_32_ras_end:
 1:
-	wrspr	sr, r4		/* restore SR (re-enable IRQs if they were on) */
 	mov	r1, r11		/* return previous value */
 	ret
 
