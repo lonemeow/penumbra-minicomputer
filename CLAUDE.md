@@ -129,11 +129,13 @@ Setup in `hw/tools/oss-cad-suite/`.
   `make flash TOP=ulx3s_top` — build + flash to ULX3S via USB
   `make fpga-lint TOP=ulx3s_top` — Verilator lint check
 - **ULX3S system:** `hw/rtl/fpga/ulx3s_top.sv` — board top-level,
-  12.5 MHz PLL (25 MHz crystal), 256 KB BRAM, real UART (TX+RX),
-  real SPI with SD card (autoconfig), boot ROM, btn[1] reset.
-  Serial: 115200 8N1 on `/dev/ttyUSB0`.
+  12.5 MHz PLL (25 MHz crystal), 32 MB SDRAM (W9825G6KH or compatible),
+  real UART (TX+RX), real SPI with SD card (autoconfig), boot ROM,
+  btn[1] reset.  Serial: 115200 8N1 on `/dev/ttyUSB0`.
   SD card: micro SD slot in SPI mode, autoconfigured as CLASS\_SD.
   Boot ROM `boot sd:0,0` loads `PENBOOT.ELF` from FAT32 partition.
+  SDRAM controller: CL=2, BL=2, auto-precharge, universal-safe timings
+  for all ULX3S SDRAM variants (see `doc/hw/sdram-optimization.md`).
 
 ### SD Card Image
 Build SD images for `make simulate SDCARD=build/boot.img`:

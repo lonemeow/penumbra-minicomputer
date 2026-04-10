@@ -26,7 +26,19 @@ module ulx3s_top (
     // sd_d[1:2] driven high per SD SPI spec.
     output logic       sd_clk,      // SPI SCK
     output logic       sd_cmd,      // SPI MOSI
-    inout  wire  [3:0] sd_d         // [0]=MISO in, [3]=CS out, [2:1]=high
+    inout  wire  [3:0] sd_d,        // [0]=MISO in, [3]=CS out, [2:1]=high
+
+    // ── SDRAM ──────────────────────────────────────────────
+    output logic        sdram_clk,
+    output logic        sdram_cke,
+    output logic        sdram_csn,
+    output logic        sdram_wen,
+    output logic        sdram_rasn,
+    output logic        sdram_casn,
+    output logic [12:0] sdram_a,
+    output logic [1:0]  sdram_ba,
+    inout  wire  [15:0] sdram_d,
+    output logic [1:0]  sdram_dqm
 );
     import penumbra_pkg::*;
 
@@ -104,7 +116,7 @@ module ulx3s_top (
     assign led[2] = pll_lock;     // DEBUG: PLL locked
     assign led[3] = rst;          // DEBUG: reset active
     // led[4] and led[5] assigned below after UART instantiation
-    assign led[7:6] = '0;
+    // led[6] and led[7] assigned below after SDRAM instantiation
 
     // Debug: toggle on THR write (proves CPU writes to UART)
     logic dbg_thr_toggle;
@@ -196,28 +208,40 @@ module ulx3s_top (
     // ══════════════════════════════════════════════════════════
 
     // ── Device parameters ──────────────────────────────────
-    localparam int RAM_WORDS = 65536;      // 256 KB BRAM
-    localparam int ROM_WORDS = 16384;      // 64 KB boot ROM
+    localparam int SDRAM_BYTES = 32 * 1024 * 1024;   // 32 MB
+    localparam int ROM_WORDS   = 16384;               // 64 KB boot ROM
 
-    // ── RAM (BRAM) ──────────────────────────────────────────
+    // ── SDRAM (system RAM) ──────────────────────────────────
     logic        ram_sel, ram_sel_r;
     logic [31:0] ram_rdata_raw;
     logic        ram_busy_raw;
 
-    bus_devsel #(.BASE(RAM_BASE), .SIZE(32'(RAM_WORDS * 4)))
+    bus_devsel #(.BASE(RAM_BASE), .SIZE(SDRAM_BYTES))
         u_ram_sel (.i_addr(mem_addr), .o_sel(ram_sel));
     always_ff @(posedge clk) ram_sel_r <= ram_sel;
 
-    fpga_ram #(.MEM_WORDS(RAM_WORDS)) u_ram (
-        .i_clk     (clk),
-        .i_rst     (rst),
-        .i_addr    (mem_addr),
-        .i_wdata   (mem_wdata),
-        .i_byte_en (mem_byte_en),
-        .i_we      (mem_we & ram_sel),
-        .i_re      (mem_re & ram_sel),
-        .o_rdata   (ram_rdata_raw),
-        .o_busy    (ram_busy_raw)
+    sdram u_sdram (
+        .i_clk      (clk),
+        .i_rst      (rst),
+        .i_addr     (mem_addr),
+        .i_wdata    (mem_wdata),
+        .i_byte_en  (mem_byte_en),
+        .i_we       (mem_we & ram_sel),
+        .i_re       (mem_re & ram_sel),
+        .o_rdata    (ram_rdata_raw),
+        .o_busy     (ram_busy_raw),
+        .o_sdram_clk  (sdram_clk),
+        .o_sdram_cke  (sdram_cke),
+        .o_sdram_csn  (sdram_csn),
+        .o_sdram_rasn (sdram_rasn),
+        .o_sdram_casn (sdram_casn),
+        .o_sdram_wen  (sdram_wen),
+        .o_sdram_a    (sdram_a),
+        .o_sdram_ba   (sdram_ba),
+        .io_sdram_d   (sdram_d),
+        .o_sdram_dqm  (sdram_dqm),
+        .o_dbg_init_done   (led[6]),
+        .o_dbg_access_done (led[7])
     );
 
     // ── Boot ROM ────────────────────────────────────────────

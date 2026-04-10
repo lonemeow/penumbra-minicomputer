@@ -856,6 +856,11 @@ int main(void) {
     setup_traps();
 
     /* ── Initialize boot data tagged list ──────────────────────── */
+    /* Zero the boot data area — SDRAM contains random garbage at
+     * power-up (unlike BRAM which is bitstream-initialized to 0).
+     * The tagged list walkers rely on BTAG_END (0) as a sentinel,
+     * so any unwritten memory must be zero.  One page is plenty. */
+    memset((void *)BOOTDATA_BASE, 0, 4096 - BOOTDATA_BASE);
     uint32_t bd_cursor = bd_init();
 
     /* ── RAM detection ─────────────────────────────────────────── */
