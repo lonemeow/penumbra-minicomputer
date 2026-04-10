@@ -514,26 +514,40 @@ MIPS/68k-style vector dispatch.
   Clang 22 warning suppressions for NetBSD 10 codebase.
 - Known shortcuts: userland CAS uses privileged instructions
   (needs RAS), libpthread is minimal stubs, signal delivery
-  panics instead of SIGILL, makecontext not implemented.
+  panics instead of SIGILL.
   See memory file `project_userland_shortcuts.md`.
-- **`build.sh distribution` nearly complete.**
-  Full userland builds: all libraries, nearly all programs.
-  Only `openssl` fails (static libcrypto missing EC nist curve
-  `.o` files — NetBSD build system bug).
+- **`build.sh distribution` completes successfully.**
+  Full userland builds: all libraries, all programs, system
+  configuration (`etc.penumbra`).
   Uses stock `toolchains::NetBSD` with Penumbra emulation/flags
   in `NetBSD.cpp` (no custom toolchain class for NetBSD).
   `PenumbraToolChain` retained for bare-metal only.
   Generic and 64-bit `__atomic_*` implementations added
   (lock-based, asm-label trick to bypass clang builtin check).
+  `makecontext`/`resumecontext` implemented for ucontext support.
+  OpenSSL libcrypto: `ec.inc` excludes 64-bit nist curve
+  optimizations (`OPENSSL_NO_EC_NISTP_64_GCC_128`), default
+  `sha.inc` used (no arch override needed).
+  lld: `-dc`/`-dp` GNU ld compat flags silently ignored.
+  `mcontext.h` corrected: `_REG_PC=15` (R15 is PC),
+  `_NGREG=17`, added `_REG_SP`/`_REG_LR` named constants.
+  `SLOPPY_FLIST=yes` in mk.conf to tolerate missing `ld.elf_so`
+  (rtld not yet ported) and toolchain binaries.
+- **Dynamic linker (`ld.elf_so`) not yet ported.**
+  Needs `arch/penumbra/` directory with `rtld_start.S`,
+  `mdreloc.c`, `Makefile.inc`.  Required before dynamically-linked
+  binaries can run.  Statically-linked rescue binaries work.
 
 ## Next Steps (in priority order)
 1. **Root filesystem** — `build.sh sets` to create installable
    sets, boot with full userland on the ISS.
-2. **Kernel signals** — `sendsig_siginfo`, trap.c SIGILL/SIGSEGV
+2. **Dynamic linker** — port `ld.elf_so` (rtld_start.S, mdreloc.c)
+   so dynamically-linked binaries can run.
+3. **Kernel signals** — `sendsig_siginfo`, trap.c SIGILL/SIGSEGV
    delivery, signal trampoline testing.
-3. **RAS atomics** — Restartable Atomic Sequences for userland CAS
+4. **RAS atomics** — Restartable Atomic Sequences for userland CAS
    (current impl uses privileged DI/EI instructions).
-4. **Kernel implementation** — remaining MD stubs as the kernel
+5. **Kernel implementation** — remaining MD stubs as the kernel
    reaches them (grep `TODO(stub)`): mcontext, startlwp.
-5. **Interrupt controller** — Multiple devices with priority encoding
-6. **Memory subsystem** — SDRAM controller, bus interface
+6. **Interrupt controller** — Multiple devices with priority encoding
+7. **Memory subsystem** — SDRAM controller, bus interface

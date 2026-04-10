@@ -5,8 +5,8 @@ SRCS+=	__setjmp14.S __sigsetjmp14.S _setjmp.S
 SRCS+=	bswap16.c bswap32.c bswap64.c
 SRCS+=	flt_rounds.c
 
-# ucontext — needed once signal trampoline is implemented
-#SRCS+=	_lwp.c makecontext.c resumecontext.c swapcontext.S
+# ucontext
+SRCS+=	makecontext.c resumecontext.c
 
 # Common ieee754 constants and functions
 SRCS+=	infinityf_ieee754.c infinity_ieee754.c infinityl_ieee754.c

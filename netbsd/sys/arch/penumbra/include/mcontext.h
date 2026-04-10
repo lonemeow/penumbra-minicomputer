@@ -5,24 +5,31 @@
 
 /*
  * Machine-dependent context for ucontext.
- * Minimal stub — full definition needed for kernel port.
+ *
+ * __gregs[0..15] = R0–R15 (R15 is the program counter).
+ * __gregs[16]    = SR (status register).
+ *
+ * When filled from a trapframe, __gregs[_REG_PC] holds EPC
+ * (the saved PC), not the trap-vector value of R15.
  */
 
-#define _NGREG	18	/* R0-R15 + SR + PC */
+#define _NGREG	17	/* R0-R15 + SR */
 
 typedef int		__greg_t;
 typedef __greg_t	__gregset_t[_NGREG];
 
 #define _REG_R0		0
 #define _REG_R15	15
-#define _REG_PC		16
-#define _REG_SR		17
+#define _REG_PC		15	/* R15 is the program counter */
+#define _REG_SP		14	/* R14 is the stack pointer */
+#define _REG_LR		13	/* R13 is the link register */
+#define _REG_SR		16
 
 typedef struct {
 	__gregset_t	__gregs;
 } mcontext_t;
 
-#define _UC_MACHINE_SP(uc)	((uc)->uc_mcontext.__gregs[14])	/* R14=SP */
+#define _UC_MACHINE_SP(uc)	((uc)->uc_mcontext.__gregs[_REG_SP])
 #define _UC_MACHINE_FP(uc)	0	/* no dedicated FP register */
 #define _UC_MACHINE_PC(uc)	((uc)->uc_mcontext.__gregs[_REG_PC])
 #define _UC_MACHINE_INTRV(uc)	((uc)->uc_mcontext.__gregs[1])	/* R1=retval */

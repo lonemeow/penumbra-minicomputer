@@ -1,0 +1,11 @@
+#
+#	$NetBSD$
+#
+# name	getty				type	status		comments
+
+# Console pseudo-device
+console	"/usr/libexec/getty default"	vt100	off secure
+constty	"/usr/libexec/getty default"	vt100	on secure
+
+# Penumbra 16450 UART serial port
+tty00	"/usr/libexec/getty default"	vt100	on secure

@@ -7,7 +7,7 @@ include <sys/ucontext.h>
 include <machine/setjmp.h>
 
 # ucontext register offsets (for signal trampoline / getcontext)
-define UC_GREGS_SP	offsetof(ucontext_t, uc_mcontext.__gregs[14])
+define UC_GREGS_SP	offsetof(ucontext_t, uc_mcontext.__gregs[_REG_SP])
 define UC_GREGS_PC	offsetof(ucontext_t, uc_mcontext.__gregs[_REG_PC])
 define UC_GREGS_RV	offsetof(ucontext_t, uc_mcontext.__gregs[1])
 
