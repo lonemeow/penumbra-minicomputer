@@ -54,49 +54,93 @@ static const char *PenumbraDataLayout =
     "-S32";    // stack is 32-bit aligned
 
 // ── TLS Lowering Pass ────────────────────────────────────────────────────────
-// Replace @llvm.threadlocal.address intrinsics with calls to __tls_get_addr
-// before GlobalISel runs.  This lets the existing call-lowering infrastructure
-// handle the calling convention (R1 arg, BL, clobber mask) automatically.
+// Lower @llvm.threadlocal.address intrinsics before GlobalISel runs.
+//
+// General-Dynamic model (PIC / shared libraries):
+//   Replace with a call to __tls_get_addr.  The instruction selector
+//   materialises the GOT tls_index address; the dynamic linker resolves it.
+//
+// Local-Exec / Initial-Exec model (static binaries):
+//   Leave the intrinsic in place — the IRTranslator lowers it to
+//   G_GLOBAL_VALUE, and the instruction selector emits
+//   LLI+LUI (TP offset) + ADD R12 (TP register).
 
 namespace {
 class PenumbraLowerTLS : public FunctionPass {
+  const TargetMachine *TM = nullptr;
+
 public:
   static char ID;
   PenumbraLowerTLS() : FunctionPass(ID) {}
+  explicit PenumbraLowerTLS(const TargetMachine *TM)
+      : FunctionPass(ID), TM(TM) {}
 
   bool runOnFunction(Function &F) override {
-    SmallVector<IntrinsicInst *, 16> ToReplace;
+    SmallVector<IntrinsicInst *, 16> GDIntrinsics;
+    SmallVector<IntrinsicInst *, 16> LEIntrinsics;
 
-    // Collect the intrinsics
     for (BasicBlock &BB : F) {
       for (Instruction &I : BB) {
         if (auto *II = dyn_cast<IntrinsicInst>(&I)) {
           if (II->getIntrinsicID() == Intrinsic::threadlocal_address) {
-            ToReplace.push_back(II);
+            auto *GV = dyn_cast<GlobalValue>(
+                II->getArgOperand(0)->stripPointerCasts());
+            TLSModel::Model Model = TM
+                ? TM->getTLSModel(GV)
+                : TLSModel::GeneralDynamic;
+            if (Model == TLSModel::GeneralDynamic ||
+                Model == TLSModel::LocalDynamic) {
+              GDIntrinsics.push_back(II);
+            } else {
+              LEIntrinsics.push_back(II);
+            }
           }
         }
       }
     }
 
-    // Replace with calls
-    if (!ToReplace.empty()) {
-      Module *M = F.getParent();
-      Type *PtrType = PointerType::getUnqual(F.getContext());
+    if (GDIntrinsics.empty() && LEIntrinsics.empty())
+      return false;
+
+    Module *M = F.getParent();
+    Type *PtrType = PointerType::getUnqual(F.getContext());
+    Type *I32Type = Type::getInt32Ty(F.getContext());
+
+    // GD/LD: replace with call to __tls_get_addr.
+    if (!GDIntrinsics.empty()) {
       FunctionType *PtrToPtrFuncType =
           FunctionType::get(PtrType, {PtrType}, false);
       FunctionCallee TlsGetAddrFunc =
           M->getOrInsertFunction("__tls_get_addr", PtrToPtrFuncType);
-      for (auto *II : ToReplace) {
+      for (auto *II : GDIntrinsics) {
         IRBuilder<> Builder(II);
         Value *TLSAddr = II->getArgOperand(0);
         CallInst *NewCall = Builder.CreateCall(TlsGetAddrFunc, {TLSAddr});
         II->replaceAllUsesWith(NewCall);
         II->eraseFromParent();
       }
-      return true;
-    } else {
-      return false;
     }
+
+    // LE/IE: emit TP + offset inline (no function call).
+    // Read R12 (TP register) via inline asm, add the TP-relative
+    // offset (linker resolves TLS GD relocs as R_TPREL for static).
+    if (!LEIntrinsics.empty()) {
+      FunctionType *ReadTPTy = FunctionType::get(I32Type, false);
+      InlineAsm *ReadTP = InlineAsm::get(ReadTPTy,
+          "mov $0, r12", "=r", /*hasSideEffects=*/false);
+      for (auto *II : LEIntrinsics) {
+        IRBuilder<> Builder(II);
+        Value *TLSVar = II->getArgOperand(0);
+        Value *TPVal = Builder.CreateCall(ReadTP);
+        Value *Offset = Builder.CreatePtrToInt(TLSVar, I32Type);
+        Value *Addr = Builder.CreateIntToPtr(
+            Builder.CreateAdd(TPVal, Offset), PtrType);
+        II->replaceAllUsesWith(Addr);
+        II->eraseFromParent();
+      }
+    }
+
+    return true;
   }
 };
 char PenumbraLowerTLS::ID = 0;
@@ -113,7 +157,7 @@ public:
   // Pre-GlobalISel IR passes.
   void addIRPasses() override {
     addPass(createAtomicExpandLegacyPass());
-    addPass(new PenumbraLowerTLS());
+    addPass(new PenumbraLowerTLS(&getTM<PenumbraTargetMachine>()));
     TargetPassConfig::addIRPasses();
   }
 

@@ -665,11 +665,11 @@ bool PenumbraInstructionSelector::selectGlobalValue(MachineInstr &I,
   const GlobalValue *GV = I.getOperand(1).getGlobal();
   int64_t Offset = I.getOperand(1).getOffset();
 
-  // TLS globals: the IR pass replaced @llvm.threadlocal.address with a call
-  // to __tls_get_addr, so this G_GLOBAL_VALUE is the argument to that call.
-  // PIC: MOV PC + ADDi %tlsgd_pcrel — linker creates GOT tls_index entry,
-  //      resolves pcrel offset to it.
-  // Static: LLI+LUI %tlsgd — linker resolves as TP-relative offset (LE).
+  // TLS globals: the IR pass handles all TLS models.
+  // GD/LD: replaced with __tls_get_addr call (this G_GLOBAL_VALUE is
+  //        the argument — GOT address for PIC, TP offset for static).
+  // LE/IE: replaced with read_tp + ptrtoint + add (this G_GLOBAL_VALUE
+  //        provides the TP-relative offset via TLS relocations).
   if (GV->isThreadLocal()) {
     if (TM.getRelocationModel() == Reloc::PIC_) {
       DebugLoc DL = I.getDebugLoc();
