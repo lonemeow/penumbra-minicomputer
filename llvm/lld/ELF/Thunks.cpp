@@ -415,6 +415,17 @@ public:
   void addSymbols(ThunkSection &isec) override;
 };
 
+// Penumbra BL has 22-bit signed word offset (±8 MB).  For longer
+// branches, use LLI+LUI+JMP via the R11 scratch register (12 bytes).
+class PenumbraAbsLongThunk final : public Thunk {
+public:
+  PenumbraAbsLongThunk(Ctx &ctx, Symbol &dest, int64_t addend)
+      : Thunk(ctx, dest, addend) {}
+  uint32_t size() override { return 12; }
+  void writeTo(uint8_t *buf) override;
+  void addSymbols(ThunkSection &isec) override;
+};
+
 // Hexagon CPUs need thunks for R_HEX_B{9,1{3,5},22}_PCREL,
 // R_HEX_{,GD_}PLT_B22_PCREL when their destination is out of
 // range.
@@ -1245,6 +1256,21 @@ void AVRThunk::addSymbols(ThunkSection &isec) {
             isec);
 }
 
+void PenumbraAbsLongThunk::writeTo(uint8_t *buf) {
+  uint64_t dst = destination.getVA(ctx, addend);
+  // LLI R11, lo16(dst):  0x42C00000 | lo16
+  // LUI R11, hi16(dst):  0x4AC00000 | hi16
+  // JMP R11:              0x6EC00000
+  write32(ctx, buf + 0, 0x42C00000 | (dst & 0xFFFF));
+  write32(ctx, buf + 4, 0x4AC00000 | ((dst >> 16) & 0xFFFF));
+  write32(ctx, buf + 8, 0x6EC00000);
+}
+
+void PenumbraAbsLongThunk::addSymbols(ThunkSection &isec) {
+  addSymbol(ctx.saver.save("__PenumbraLongThunk_" + destination.getName()),
+            STT_FUNC, 0, isec);
+}
+
 // Write MIPS LA25 thunk code to call PIC function from the non-PIC one.
 void MipsThunk::writeTo(uint8_t *buf) {
   uint64_t s = destination.getVA(ctx);
@@ -1741,6 +1767,12 @@ static std::unique_ptr<Thunk> addThunkAVR(Ctx &ctx, RelType type, Symbol &s,
   }
 }
 
+static std::unique_ptr<Thunk> addThunkPenumbra(Ctx &ctx, RelType type,
+                                               Symbol &s, int64_t a) {
+  assert(type == R_PENUMBRA_BRANCH22 && "unexpected relocation type for thunk");
+  return std::make_unique<PenumbraAbsLongThunk>(ctx, s, a);
+}
+
 static std::unique_ptr<Thunk> addThunkHexagon(Ctx &ctx,
                                               const InputSection &isec,
                                               Relocation &rel, Symbol &s) {
@@ -1830,9 +1862,11 @@ std::unique_ptr<Thunk> elf::addThunk(Ctx &ctx, const InputSection &isec,
     return addThunkPPC64(ctx, rel.type, s, a);
   case EM_HEXAGON:
     return addThunkHexagon(ctx, isec, rel, s);
+  case EM_PENUMBRA:
+    return addThunkPenumbra(ctx, rel.type, s, a);
   default:
     llvm_unreachable(
-        "add Thunk only supported for ARM, AVR, Hexagon, Mips and PowerPC");
+        "add Thunk only supported for ARM, AVR, Hexagon, Mips, Penumbra and PowerPC");
   }
 }
 

@@ -31,6 +31,12 @@ public:
   RelType getDynRel(RelType type) const override;
   int64_t getImplicitAddend(const uint8_t *buf,
                             RelType type) const override;
+  uint32_t getThunkSectionSpacing() const override;
+  bool needsThunk(RelExpr expr, RelType type, const InputFile *file,
+                  uint64_t branchAddr, const Symbol &s,
+                  int64_t a) const override;
+  bool inBranchRange(RelType type, uint64_t src,
+                     uint64_t dst) const override;
   void relocate(uint8_t *loc, const Relocation &rel,
                 uint64_t val) const override;
   void writePltHeader(uint8_t *buf) const override;
@@ -63,6 +69,8 @@ Penumbra::Penumbra(Ctx &ctx) : TargetInfo(ctx) {
   pltHeaderSize = 16; // 4 instructions
   pltEntrySize = 16;
   ipltEntrySize = 16;
+
+  needsThunks = true;
 
   // TLS
   tlsGotRel = R_PENUMBRA_TLS_TPOFF32;
@@ -150,6 +158,33 @@ void Penumbra::writePlt(uint8_t *buf, const Symbol &sym,
   write32le(buf + 12, JMP_R11);
 }
 
+uint32_t Penumbra::getThunkSectionSpacing() const {
+  // Branch range is ±8 MiB (22-bit signed word offset).
+  // Subtract margin for thunk section overhead.
+  return (8 * 1024 * 1024) - 0x30000;
+}
+
+bool Penumbra::needsThunk(RelExpr expr, RelType type, const InputFile *file,
+                          uint64_t branchAddr, const Symbol &s,
+                          int64_t a) const {
+  if (type != R_PENUMBRA_BRANCH22)
+    return false;
+  uint64_t dst = expr == R_PLT_PC ? s.getPltVA(ctx) : s.getVA(ctx, a);
+  return !inBranchRange(type, branchAddr, dst);
+}
+
+bool Penumbra::inBranchRange(RelType type, uint64_t src, uint64_t dst) const {
+  if (type != R_PENUMBRA_BRANCH22)
+    return true;
+  // 22-bit signed word offset: ±8 MB.
+  uint64_t range = 8 * 1024 * 1024;
+  if (dst > src) {
+    range -= 4;
+    return dst - src <= range;
+  }
+  return src - dst <= range;
+}
+
 void Penumbra::relocate(uint8_t *loc, const Relocation &rel,
                         uint64_t val) const {
   switch (rel.type) {
@@ -166,6 +201,12 @@ void Penumbra::relocate(uint8_t *loc, const Relocation &rel,
   case R_PENUMBRA_BRANCH22: {
     // PC-relative 22-bit word offset in bits [25:4].
     int64_t wordOffset = static_cast<int64_t>(val) >> 2;
+    if (wordOffset < -(1 << 21) || wordOffset >= (1 << 21))
+      Err(ctx) << getErrorLoc(ctx, loc)
+               << "branch relocation out of range: " << val
+               << " (signed: " << static_cast<int64_t>(val) << ")"
+               << " to '" << rel.sym->getName() << "'"
+               << " is not in [-8388608, 8388604]";
     uint32_t insn = read32le(loc);
     insn = (insn & ~(0x3FFFFF << 4)) |
            ((static_cast<uint32_t>(wordOffset) & 0x3FFFFF) << 4);
@@ -184,7 +225,12 @@ void Penumbra::relocate(uint8_t *loc, const Relocation &rel,
     write32le(loc, (read32le(loc) & 0xFFFF0000) | ((val >> 16) & 0xFFFF));
     break;
   case R_PENUMBRA_MEMOFFSET16_PCREL: {
-    // PC-relative 16-bit offset, into bits [17:2] (Format M).
+    // PC-relative 16-bit signed offset, into bits [17:2] (Format M).
+    int64_t sval = static_cast<int64_t>(val);
+    if (sval < -32768 || sval > 32767)
+      Err(ctx) << getErrorLoc(ctx, loc)
+               << "PC-relative memory offset out of range: " << val
+               << " is not in [-32768, 32767]";
     uint32_t insn = read32le(loc);
     insn = (insn & ~(0xFFFF << 2)) |
            ((static_cast<uint32_t>(val) & 0xFFFF) << 2);
@@ -202,6 +248,10 @@ void Penumbra::relocate(uint8_t *loc, const Relocation &rel,
       insn = (insn & ~(0xFu << 26)) | (0x4u << 26);
       sval = -sval;
     }
+    if (sval > 0xFFFF)
+      Err(ctx) << getErrorLoc(ctx, loc)
+               << "PC-relative relocation out of range: " << val
+               << " is not in [-65535, 65535]; recompile with -fno-PIC";
     insn = (insn & 0xFFFF0000) | (static_cast<uint32_t>(sval) & 0xFFFF);
     write32le(loc, insn);
     break;
