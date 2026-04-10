@@ -844,6 +844,8 @@ _trap_common:
 	stw	r4, [r14 + TF_CAUSE]
 	rdsys	r1, #SYSDEV_MMU, #MMU_FAULT_ADDR
 	stw	r1, [r14 + TF_BADVADDR]
+	rdsys	r1, #SYSDEV_MMU, #MMU_FAULT_STATUS
+	stw	r1, [r14 + TF_FAULT_STATUS]
 
 	/* Call trap(tf) — R1 = pointer to trapframe */
 	mov	r1, r14

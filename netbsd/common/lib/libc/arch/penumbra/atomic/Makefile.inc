@@ -20,6 +20,12 @@ SRCS+=	membar_ops_nop.c
 # Sub-word CAS emulation on top of 32-bit CAS.
 SRCS+=	atomic_cas_by_cas32.c
 
+# C11 __atomic_compare_exchange_N wrappers (clang emits these for
+# sub-word atomics when MaxAtomicInlineWidth=0).
+SRCS+=	atomic_c11_compare_exchange_cas_32.c \
+	atomic_c11_compare_exchange_cas_16.c \
+	atomic_c11_compare_exchange_cas_8.c
+
 .endif
 
 .if defined(LIB) && (${LIB} == "c")

@@ -27,6 +27,7 @@ define	TF_SR			offsetof(struct trapframe, tf_sr)
 define	TF_EPC			offsetof(struct trapframe, tf_epc)
 define	TF_CAUSE		offsetof(struct trapframe, tf_cause)
 define	TF_BADVADDR		offsetof(struct trapframe, tf_badvaddr)
+define	TF_FAULT_STATUS		offsetof(struct trapframe, tf_fault_status)
 define	TF_SIZE			sizeof(struct trapframe)
 
 # PCB offsets

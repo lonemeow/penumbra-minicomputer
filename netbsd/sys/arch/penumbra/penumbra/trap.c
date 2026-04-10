@@ -40,6 +40,11 @@ __KERNEL_RCSID(0, "$NetBSD$");
 void	trap(struct trapframe *);
 void	timer_tc_tick(void);	/* machdep.c — advance timecounter base */
 
+#define FSTAT_TO_VM_PROT(s)                                \
+	((((s) & (1 << FSTAT_R)) ? VM_PROT_READ    : 0)   \
+	| (((s) & (1 << FSTAT_W)) ? VM_PROT_WRITE   : 0)  \
+	| (((s) & (1 << FSTAT_X)) ? VM_PROT_EXECUTE : 0))
+
 /*
  * trap: main exception dispatch.
  * Called from locore.S exception stubs with trapframe pointer.
@@ -102,9 +107,14 @@ trap(struct trapframe *tf)
 		else
 			map = &vs->vm_map;
 
-		/* TLB prot faults are writes; misses could be read or exec */
-		ftype = (type == EXC_TLB_PROT) ? VM_PROT_WRITE
-						: VM_PROT_READ;
+		/*
+		 * Determine ftype from hardware fault status.
+		 * MMU_FAULT_STATUS bits [10:8] encode the access type:
+		 *   bit 8  (FSTAT_R) = read
+		 *   bit 9  (FSTAT_W) = write
+		 *   bit 10 (FSTAT_X) = execute
+		 */
+		ftype = FSTAT_TO_VM_PROT(tf->tf_fault_status);
 
 		onfault = pcb->pcb_onfault;
 		pcb->pcb_onfault = NULL;
@@ -122,10 +132,12 @@ trap(struct trapframe *tf)
 			break;
 		}
 		/* TODO: user mode → deliver SIGSEGV */
-		panic("%s %s fault at va=0x%08x, pc=0x%08x (rv=%d)",
+		panic("%s %s fault at va=0x%08x, pc=0x%08x "
+		    "(rv=%d, fstat=0x%x, ftype=0x%x)",
 		    usermode ? "user" : "kernel",
 		    type == EXC_TLB_MISS ? "TLB miss" : "TLB prot",
-		    tf->tf_badvaddr, tf->tf_epc, rv);
+		    tf->tf_badvaddr, tf->tf_epc, rv,
+		    tf->tf_fault_status, ftype);
 		break;
 	}
 

@@ -20,6 +20,7 @@ struct trapframe {
 	uint32_t tf_epc;	/* saved PC (from EPC SPR) */
 	uint32_t tf_cause;	/* exception cause vector number */
 	uint32_t tf_badvaddr;	/* faulting address (for MMU faults) */
+	uint32_t tf_fault_status; /* MMU_FAULT_STATUS (access type + fault info) */
 };
 
 /* Register indices into tf_regs[] */
@@ -35,6 +36,6 @@ struct trapframe {
 #define TF_R15		15	/* program counter */
 
 /* Size of trapframe in bytes (for assembly) */
-#define TF_SIZE		(20 * 4)
+#define TF_SIZE		(21 * 4)
 
 #endif /* _PENUMBRA_FRAME_H_ */
