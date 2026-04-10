@@ -993,6 +993,8 @@ start_init(void *arg)
 	 * hand-craft a descriptor onto /dev/console to hand to init,
 	 * but that's a _lot_ more work, and the benefit from this easy
 	 * hack makes up for the "good is the enemy of the best" effect.
+	 *
+	 * TODO: pcom needs a cdevsw before fd_open("/dev/console") can work.
 	 */
 	check_console(l);
 

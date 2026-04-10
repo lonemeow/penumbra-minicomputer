@@ -315,9 +315,10 @@ MIPS/68k-style vector dispatch.
   **atomics** (all atomic ops → `__atomic_*` libcalls via
   AtomicExpandPass; `MaxAtomicInlineWidth=0`,
   `setMaxAtomicSizeInBitsSupported(0)`),
-  **TLS** (General-Dynamic model: IR pass lowers
-  `@llvm.threadlocal.address` → `call @__tls_get_addr`;
-  PIC: `%tlsgd_pcrel` with GOT tls_index; static: TP-relative),
+  **TLS** (IR pass selects model: General-Dynamic for PIC/shared →
+  `call @__tls_get_addr`; Local-Exec for static → inline
+  `TP + offset` via `mov r,r12` + add; PIC: `%tlsgd_pcrel`
+  with GOT tls_index; static: R_TPREL TP-relative offset),
   **G_DYN_STACKALLOC** (VLAs/runtime alloca),
   G_SADDO/G_SSUBO/G_SADDE/G_SSUBE (non-power-of-2 widths handled
   via widenScalarToNextPow2), G_SMULO/G_UMULO/G_SMULH/G_UMULH,
@@ -441,10 +442,15 @@ MIPS/68k-style vector dispatch.
   ARM-style pattern (init returns new SP to assembly).
 - **Trap handler (Stage 1 + 2):** per-vector entry stubs on the
   vector page, common trapframe save/restore, C dispatch in
-  `trap()` with all 9 exception vectors.  TLB miss/prot
-  dispatched to `uvm_fault()` for demand paging; on failure,
-  `pcb_onfault` recovery for copyin/copyout or panic.
-  User-mode access to kernel VA rejected early.
+  `trap()` with all 9 exception vectors.  `_trap_common`
+  snapshots volatile hardware state (ESR, EPC, FAULT_ADDR,
+  FAULT_STATUS) into pinned vector page scratch before any
+  faultable memory access — prevents TLB misses during
+  trapframe allocation from clobbering the original exception
+  context.  TLB miss/prot dispatched to `uvm_fault()` for
+  demand paging; on failure, `pcb_onfault` recovery for
+  copyin/copyout or panic.  `userret()` called on all
+  user-mode returns (RAS restart, AST, signals).
   Double-fault detection: BREAK on recursive pinned-page faults.
 - **copyin/copyout (copy.S):** assembly with `pcb_onfault`
   fault recovery.  copyinstr/copyoutstr byte-loop.
@@ -459,7 +465,8 @@ MIPS/68k-style vector dispatch.
   TLB-miss clobbering before eret.  Kernel execs `/sbin/init`
   and reaches userland.
 - **Syscall dispatch (syscall.c):** `SYSCALL` (vector 5) dispatched
-  via `md_syscall` function pointer.  R1=syscall number, R2–R4=args,
+  via `md_syscall` function pointer.  R11=syscall number (scratch
+  register, set by SYSTRAP), R1–R4=args (4 register args),
   overflow from user stack via `copyin()`.  Carry-flag error convention
   (C=0 success, C=1 error).  Two-value return: `rval[0]` in R1,
   `rval[1]` in R2 (needed by fork/pipe).  `md_child_return` sets
@@ -469,10 +476,12 @@ MIPS/68k-style vector dispatch.
   ENOSYS.  Init calls SYS_write + SYS_exit successfully.
 - All remaining MD functions are either implemented or break-trap
   stubs (grep for `TODO(stub)`).
-- Atomics: interrupt-disable CAS (`RDSPR SR` / `DI` / load-cmp-store
-  / `WRSPR SR`), generic CAS-based inc/dec/add/and/or, no-op membars.
-  TODO: replace with RAS (Restartable Atomic Sequences) once kernel
-  RAS infrastructure is in place.
+- Atomics: RAS-based CAS (Restartable Atomic Sequences) for userland,
+  interrupt-disable CAS for kernel.  `__HAVE_RAS` defined,
+  `userret()` checks `ras_lookup()` on every return to user mode.
+  `atomic_cas_32` uses plain load/cmp/store with RAS labels;
+  `.init_array` constructor registers the sequence via `rasctl()`.
+  Generic CAS-based inc/dec/add/and/or, no-op membars.
 - DDB (kernel debugger) disabled for now — needs extensive MD hooks.
 - Virtual memory layout: 2G/2G user/kernel split,
   kernel text at `0x8001_0000`.  Top 5 pages reserved:
@@ -517,9 +526,8 @@ MIPS/68k-style vector dispatch.
   mcontext.h, `__FPE`/`__FEE`/`__FPR`/`__FER`/`__FENV_*` macros,
   clang driver `-L`/`-lc`/`--undefined-version` fixes.
   Clang 22 warning suppressions for NetBSD 10 codebase.
-- Known shortcuts: userland CAS uses privileged instructions
-  (needs RAS), libpthread is minimal stubs, signal delivery
-  panics instead of SIGILL.
+- Known shortcuts: libpthread is minimal stubs, signal delivery
+  panics instead of delivering the signal.
   See memory file `project_userland_shortcuts.md`.
 - **`build.sh distribution` completes successfully.**
   Full userland builds: all libraries, all programs, system
@@ -550,8 +558,9 @@ MIPS/68k-style vector dispatch.
    so dynamically-linked binaries can run.
 3. **Kernel signals** — `sendsig_siginfo`, trap.c SIGILL/SIGSEGV
    delivery, signal trampoline testing.
-4. **RAS atomics** — Restartable Atomic Sequences for userland CAS
-   (current impl uses privileged DI/EI instructions).
+4. **Kernel signals** — `sendsig_siginfo`, trap.c SIGSEGV/SIGILL
+   delivery, signal trampoline — needed for userland to handle
+   faults instead of panicking.
 5. **Kernel implementation** — remaining MD stubs as the kernel
    reaches them (grep `TODO(stub)`): mcontext, startlwp.
 6. **Interrupt controller** — Multiple devices with priority encoding

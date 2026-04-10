@@ -141,14 +141,17 @@ or MOV PC + ADDi (PIC); BRJT always adds base back).
 - G_STACKSAVE/G_STACKRESTORE: selected to MOV SP (R14).
 - `@llvm.returnaddress(0)` → MOV from R13 (LR),
   `@llvm.frameaddress(0)` → MOV from R14 (SP).
-- **TLS (thread-local storage):** General-Dynamic model via
-  `__tls_get_addr` libcall.  IR pass (`PenumbraLowerTLS` in
-  `PenumbraTargetMachine.cpp`) replaces `@llvm.threadlocal.address`
-  intrinsics with calls to `__tls_get_addr` before GlobalISel.
-  `selectGlobalValue` detects `isThreadLocal()` and emits LLI+LUI
-  with `S_TLSgd_Lo16`/`S_TLSgd_Hi16` target flags.
-  lld resolves as `R_TPREL` (TP-relative offset) for static linking;
-  GOT-based dynamic resolution to be added later.
+- **TLS (thread-local storage):** IR pass (`PenumbraLowerTLS` in
+  `PenumbraTargetMachine.cpp`) checks TLS model via
+  `TargetMachine::getTLSModel()`:
+  **Local-Exec/Initial-Exec** (static binaries): emits inline
+  `mov r,r12` (read TP) + `ptrtoint @tls_var` + `add` —
+  no function call, instruction selector emits LLI+LUI with
+  TLS GD relocs that lld resolves as `R_TPREL`.
+  **General-Dynamic** (PIC/shared): replaces with
+  `call @__tls_get_addr`; `selectGlobalValue` emits LLI+LUI
+  or MOV PC + ADDi with `S_TLSgd_*` target flags.
+  GOT-based dynamic resolution to be added with `ld.elf_so`.
 - No SelectionDAG — GlobalISel only.
 - **Branch analysis:** `analyzeBranch`/`insertBranch`/`removeBranch`/
   `reverseBranchCondition` implemented in `PenumbraInstrInfo.cpp`.
@@ -208,7 +211,7 @@ EM_PENUMBRA (0xF0DA) defined in central `llvm/BinaryFormat/ELF.h`.
 | `PenumbraFrameLowering.{h,cpp}` | StackGrowsDown, Align(4), hasFPImpl()=false. Prologue (SUBi SP) / epilogue (ADDi SP) |
 | `PenumbraISelLowering.{h,cpp}` | TargetLowering: JT encoding (EK\_LabelDifference32), SELECT diamond expansion, inline asm (`r`→GPR\_Allocatable, `{cc}`→SR/CCR), `setStackPointerRegisterToSaveRestore(R14)` |
 | `PenumbraSubtarget.{h,cpp}` | Central hub: owns InstrInfo, FrameLowering, TLInfo, and all GlobalISel objects |
-| `PenumbraTargetMachine.{h,cpp}` | Data layout `e-m:e-p:32:32-i32:32-i64:64-n32-S32`, GlobalISel pipeline, `setGlobalISel(true)`. PIC via `-fPIC`. `PenumbraTargetObjectFile` (local class): always inlines jump tables in `.text`. `PenumbraLowerTLS` IR pass: replaces `@llvm.threadlocal.address` with `call @__tls_get_addr` |
+| `PenumbraTargetMachine.{h,cpp}` | Data layout `e-m:e-p:32:32-i32:32-i64:64-n32-S32`, GlobalISel pipeline, `setGlobalISel(true)`. PIC via `-fPIC`. `PenumbraTargetObjectFile` (local class): always inlines jump tables in `.text`. `PenumbraLowerTLS` IR pass: lowers `@llvm.threadlocal.address` (GD → `__tls_get_addr` call; LE/IE → inline TP+offset) |
 | `PenumbraAsmPrinter.cpp` | MachineInstr → MCInst. Expands RET→JMP R13. Wraps globals/JTI with lo16/hi16/pcrel MCSpecifierExpr. `emitJumpTableEntry` override: always emits label-difference entries. PrintAsmOperand for inline asm |
 | `PenumbraMachineFunctionInfo.h` | Per-function state: VarArgsFrameIndex for variadic R1-R4 save area |
 | `GISel/PenumbraCallLowering.{h,cpp}` | lowerFormalArguments (R1-R4→vregs, variadic save area), lowerReturn (vreg→R1+RET), lowerCall |

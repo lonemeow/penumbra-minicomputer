@@ -158,7 +158,7 @@ Headers fall into three categories:
 | `psd.c` | SD card block device — SPI/SD protocol via bus_space, MBR partition parsing, bdevsw/cdevsw at major 8. Polled sector-at-a-time I/O. |
 | `bus_space.c` | bus_space implementation — map/unmap via UVM + pmap_kenter_pa, read/write via volatile pointers |
 | `trap.c` | Exception dispatch (all 9 vectors), TLB fault → uvm_fault() demand paging, pcb_onfault recovery for copyin/copyout, SPL stubs |
-| `syscall.c` | Syscall dispatch: `syscall_intern()` + `syscall()`. R1=number, R2–R4=args, stack overflow via copyin. Carry-flag error convention (C=0 success, C=1 error). Indirect syscalls rejected with ENOSYS. |
+| `syscall.c` | Syscall dispatch: `syscall_intern()` + `syscall()`. R11=syscall number (scratch, set by SYSTRAP), R1–R4=args (4 register args), stack overflow via copyin. Carry-flag error convention (C=0 success, C=1 error). Indirect syscalls rejected with ENOSYS. |
 | `pmap.c` | Software TLB management: `pmap_bootstrap()`, `pmap_steal_memory()`/`pmap_steal_page()`, `pmap_kenter_pa()`/`pmap_kremove()`, `pmap_enter()` (demand paging), `pmap_create()`/`pmap_destroy()` (user address spaces), `pmap_activate()` (L1 re-pin), `pmap_extract()`, `pmap_map_device()`, scratch window helpers. |
 | `copy.S` | Assembly copyin/copyout/copyinstr/copyoutstr with pcb_onfault fault recovery, ufetch/ustore (8/16/32), user address validation |
 | `genassym.cf` | Struct offset definitions for assembly code |
@@ -242,9 +242,14 @@ Headers fall into three categories:
 - [x] **Trap handler (Stage 1 + 2)** — per-vector entry stubs on
   the vector page, common trapframe save/restore in `_trap_common`,
   C dispatch in `trap()`.  All 9 exception vectors wired.
+  `_trap_common` snapshots volatile hardware state (ESR, EPC,
+  FAULT_ADDR, FAULT_STATUS) into pinned scratch before any
+  faultable stack access — prevents TLB misses during trapframe
+  allocation from clobbering the original exception context.
   **TLB miss/prot dispatched to `uvm_fault()` for demand paging.**
   On fault failure: `pcb_onfault` recovery (copyin/copyout) or
-  panic.  User-mode access to kernel VA rejected early.
+  panic.  `userret()` called on all user-mode trap returns
+  (RAS restart, AST, signals).
   Double-fault detection: if ESR.S set and EPC in pinned page
   region (0xFFFFxxxx), BREAK to halt instead of infinite-looping.
 - [x] **Device autoconfig (pbbus)** — bus bridge walks
