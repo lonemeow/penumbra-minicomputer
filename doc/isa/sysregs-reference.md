@@ -258,7 +258,8 @@ separate so the same core can be instantiated on different platforms.
 | 1 | MACH_FEAT | R | Machine/board feature flags |
 | 2–5 | CPU_NAME0–3 | R | CPU name string (16 bytes, packed LE, null-padded) |
 | 6–9 | MACH_NAME0–3 | R | Machine name string (16 bytes, packed LE, null-padded) |
-| 10–15 | — | — | Reserved (reads as 0) |
+| 10 | CPU_FREQ | R | CPU clock frequency in Hz (0 = unknown) |
+| 11–15 | — | — | Reserved (reads as 0) |
 
 ### CPU_ISA (reg 0)
 
@@ -348,6 +349,19 @@ name_loop:
 The `sysid` module accepts parameters to override both names and feature
 registers per machine integration (e.g. `machine_sim.sv` sets the machine
 name to `"Simulator"`).
+
+### CPU_FREQ (reg 10)
+
+CPU clock frequency in Hz, as a plain 32-bit unsigned integer.
+Set per-board via the `CPU_FREQ` parameter on the `sysid` module.
+Returns 0 if the platform does not report a frequency.
+
+Useful for boot banner display, kernel timekeeping calibration,
+and benchmarking. For the ULX3S at 12.5 MHz: reads as 12,500,000.
+
+```asm
+RDSYS R1, #SYS, #10       ; R1 = CPU clock frequency in Hz
+```
 
 ---
 

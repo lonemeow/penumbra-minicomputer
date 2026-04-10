@@ -346,7 +346,8 @@ module machine_sim
     sysid #(
         .MACH_NAME0 (32'h756D6953),   // "Simu"
         .MACH_NAME1 (32'h6F74616C),   // "lato"
-        .MACH_NAME2 (32'h00000072)    // "r\0\0\0"
+        .MACH_NAME2 (32'h00000072),   // "r\0\0\0"
+        .CPU_FREQ   (32'd25_000_000)  // Simulated at 25 MHz
     ) u_sysid (
         .i_sys_reg  (sys_reg),
         .o_sys_rdata(sysid_rdata)

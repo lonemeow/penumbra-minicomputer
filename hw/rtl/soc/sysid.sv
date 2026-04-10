@@ -9,7 +9,8 @@
 //   1      MACH_FEAT    — Machine feature flags
 //   2–5    CPU_NAME0–3  — CPU name string, 16 bytes packed LE, null-padded
 //   6–9    MACH_NAME0–3 — Machine name string, 16 bytes packed LE, null-padded
-//   10–15  Reserved (reads as 0)
+//   10     CPU_FREQ     — CPU clock frequency in Hz (parameterized per-board)
+//   11–15  Reserved (reads as 0)
 //
 // Name strings are little-endian: first character in bits [7:0] of NAME0,
 // second in [15:8], etc. Software reads regs 2–5 (or 6–9) sequentially
@@ -45,7 +46,10 @@ module sysid
     parameter logic [31:0]  MACH_NAME0 = 32'h00000000,
     parameter logic [31:0]  MACH_NAME1 = 32'h00000000,
     parameter logic [31:0]  MACH_NAME2 = 32'h00000000,
-    parameter logic [31:0]  MACH_NAME3 = 32'h00000000
+    parameter logic [31:0]  MACH_NAME3 = 32'h00000000,
+
+    // ── Clock frequency ────────────────────────────────────
+    parameter logic [31:0]  CPU_FREQ = 32'd0              // Hz (0 = unknown)
 )(
     input  logic [3:0]  i_sys_reg,
     output logic [31:0] o_sys_rdata
@@ -67,6 +71,7 @@ module sysid
             SYSREG_SYS_MACH_NAME1: o_sys_rdata = MACH_NAME1;
             SYSREG_SYS_MACH_NAME2: o_sys_rdata = MACH_NAME2;
             SYSREG_SYS_MACH_NAME3: o_sys_rdata = MACH_NAME3;
+            SYSREG_SYS_CPU_FREQ:   o_sys_rdata = CPU_FREQ;
             default:                o_sys_rdata = 32'b0;
         endcase
     end

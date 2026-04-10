@@ -42,6 +42,11 @@ module ulx3s_top (
 );
     import penumbra_pkg::*;
 
+    // ── Board constants ──────────────────────────────────────────
+    // Single source of truth for system clock frequency.
+    // Update this if PLL parameters change.
+    localparam int CLK_FREQ = 12_500_000;   // Hz (derived from PLL below)
+
     // ── ESP32 disable ──────────────────────────────────────────
     assign wifi_en = 1'b0;
 
@@ -151,8 +156,11 @@ module ulx3s_top (
     logic uart_irq;
     logic timer_irq;
 
-    // ── Timer tick prescaler (25 MHz → 1 MHz toggle) ────────
-    localparam int PRESCALE_DIV = 6;    // 12.5 MHz / (2×6) ≈ 1.04 MHz toggle
+    // ── Timer tick prescaler (CLK_FREQ → ~1 MHz toggle) ───────
+    // Tick freq = CLK_FREQ / (2 * PRESCALE_DIV).
+    // Choose divisor closest to 1 MHz: round(CLK_FREQ / 2_000_000).
+    localparam int PRESCALE_DIV  = (CLK_FREQ + 1_000_000) / 2_000_000;
+    localparam int TICK_FREQ     = CLK_FREQ / (2 * PRESCALE_DIV);
     logic [$clog2(PRESCALE_DIV)-1:0] prescale_cnt;
     logic timer_tick;
 
@@ -272,7 +280,7 @@ module ulx3s_top (
     always_ff @(posedge clk) uart_sel_r <= uart_sel;
 
     uart #(
-        .CLK_FREQ  (12_500_000),
+        .CLK_FREQ  (CLK_FREQ),
         .BAUD_RATE (115_200)
     ) u_uart (
         .i_clk   (clk),
@@ -399,7 +407,8 @@ module ulx3s_top (
     sysid #(
         .MACH_NAME0 (32'h33584C55),   // "ULX3"
         .MACH_NAME1 (32'h00000053),   // "S\0\0\0"
-        .MACH_NAME2 (32'h00000000)
+        .MACH_NAME2 (32'h00000000),
+        .CPU_FREQ   (CLK_FREQ)
     ) u_sysid (
         .i_sys_reg  (sys_reg),
         .o_sys_rdata(sysid_rdata)
@@ -425,7 +434,7 @@ module ulx3s_top (
     logic [31:0] timer_rdata;
 
     timer #(
-        .TICK_FREQ_HZ (32'd1_000_000)
+        .TICK_FREQ_HZ (TICK_FREQ)
     ) u_timer (
         .i_clk       (clk),
         .i_rst       (rst),

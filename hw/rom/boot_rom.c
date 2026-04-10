@@ -841,8 +841,19 @@ static void print_banner(void) {
     uint32_t cpu_isa = penumbra_read_sysreg(SYSDEV_SYSID, SYS_CPU_ISA);
     format_cpu_features(feat_str, sizeof(feat_str), cpu_isa);
 
+    uint32_t cpu_freq = penumbra_read_sysreg(SYSDEV_SYSID, SYS_CPU_FREQ);
+
     console_puts("\r\nPenumbra boot\r\n\r\n");
-    console_printf("CPU:      %s (%s)\r\n", cpu_name, feat_str);
+    console_printf("CPU:      %s (%s)", cpu_name, feat_str);
+    if (cpu_freq > 0) {
+        uint32_t mhz = cpu_freq / 1000000;
+        uint32_t khz_frac = (cpu_freq / 1000) % 1000;
+        if (khz_frac)
+            console_printf(" @ %d.%03d MHz", (int)mhz, (int)khz_frac);
+        else
+            console_printf(" @ %d MHz", (int)mhz);
+    }
+    console_puts("\r\n");
     console_printf("Hardware: %s\r\n\r\n", mach_name);
 }
 
@@ -866,8 +877,9 @@ int main(void) {
     /* ── RAM detection ─────────────────────────────────────────── */
     console_puts("Detecting base RAM... ");
     long npages = detect_ram();
-    long ram_kb = npages * 4096 / 1024;
-    console_printf("%dkB found\r\n", (int)ram_kb);
+    char ram_size_str[32];
+    humanize_size((unsigned long)npages * 4096, ram_size_str, sizeof(ram_size_str));
+    console_printf("%s found\r\n", ram_size_str);
     bd_add_device(&bd_cursor, ACFG_CLASS_MEMORY, 0x00000000,
                   (uint32_t)(npages * 4096), 0, "RAM");
 

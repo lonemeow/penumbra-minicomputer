@@ -396,6 +396,7 @@ static uint32_t sysid_read(int reg) {
         case 1: return 0;            // MACH_FEAT
         case 2: case 3: case 4: case 5: return cpu_name[reg-2];
         case 6: case 7: case 8: case 9: return mach_name[reg-6];
+        case 10: return 25000000;    // CPU_FREQ: 25 MHz (simulated)
         default: return 0;
     }
 }

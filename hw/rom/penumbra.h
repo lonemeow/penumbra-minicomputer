@@ -67,6 +67,7 @@ typedef unsigned int uint32_t;
 #define SYS_MACH_NAME1 7
 #define SYS_MACH_NAME2 8
 #define SYS_MACH_NAME3 9
+#define SYS_CPU_FREQ   10
 
 /* CPU_ISA feature flag bit indices */
 #define CPU_FEAT_BIT_HW_MUL  0

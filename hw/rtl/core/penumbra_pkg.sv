@@ -91,6 +91,7 @@ package penumbra_pkg;
     localparam logic [3:0] SYSREG_SYS_MACH_NAME1 = 4'd7;   // Machine name bytes  4– 7
     localparam logic [3:0] SYSREG_SYS_MACH_NAME2 = 4'd8;   // Machine name bytes  8–11
     localparam logic [3:0] SYSREG_SYS_MACH_NAME3 = 4'd9;   // Machine name bytes 12–15
+    localparam logic [3:0] SYSREG_SYS_CPU_FREQ   = 4'd10;  // CPU clock frequency in Hz
 
     // ── Cache sysreg addresses (dev_id = 2 or 3) ────────────────
     localparam logic [3:0] SYSREG_CACHE_INFO  = 4'd0;  // Read-only geometry/type
