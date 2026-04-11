@@ -364,20 +364,25 @@ bool PenumbraLegalizerInfo::legalizeCustom(
 
     uint64_t C = MaybeVal->Value.getZExtValue();
     LLT Ty = MRI.getType(Dst);
+    unsigned BitWidth = Ty.getSizeInBits();
 
     if (C == 0) {
       MIRBuilder.buildConstant(Dst, 0);
     } else if (C == 1) {
       MIRBuilder.buildCopy(Dst, Src);
-    } else if (isPowerOf2_64(C)) {
+    } else if (C == maskTrailingOnes<uint64_t>(BitWidth)) {
+      // x * -1 = 0 - x (negate)
+      auto Zero = MIRBuilder.buildConstant(Ty, 0);
+      MIRBuilder.buildSub(Dst, Zero, Src);
+    } else if (isPowerOf2_64(C) && Log2_64(C) < BitWidth) {
       auto ShiftAmt = MIRBuilder.buildConstant(Ty, Log2_64(C));
       MIRBuilder.buildShl(Dst, Src, ShiftAmt);
-    } else if (isPowerOf2_64(C - 1)) {
+    } else if (isPowerOf2_64(C - 1) && Log2_64(C - 1) < BitWidth) {
       // x * (2^n + 1) = (x << n) + x
       auto ShiftAmt = MIRBuilder.buildConstant(Ty, Log2_64(C - 1));
       auto Shifted = MIRBuilder.buildShl(Ty, Src, ShiftAmt);
       MIRBuilder.buildAdd(Dst, Shifted, Src);
-    } else if (isPowerOf2_64(C + 1)) {
+    } else if (isPowerOf2_64(C + 1) && Log2_64(C + 1) < BitWidth) {
       // x * (2^n - 1) = (x << n) - x
       auto ShiftAmt = MIRBuilder.buildConstant(Ty, Log2_64(C + 1));
       auto Shifted = MIRBuilder.buildShl(Ty, Src, ShiftAmt);
