@@ -36,6 +36,7 @@ M=		${.CURDIR}/arch/${ARCHSUBDIR}
      (${LDELFSO_MACHINE_ARCH} == "m68k") ||				\
      (${MACHINE_CPU} == "mips") ||					\
      (${MACHINE_CPU} == "or1k") ||					\
+     (${LDELFSO_MACHINE_ARCH} == "penumbra") ||				\
      (${MACHINE_CPU} == "powerpc") ||					\
      (${MACHINE_CPU} == "riscv") ||					\
      (${MACHINE_CPU} == "sh3") ||					\

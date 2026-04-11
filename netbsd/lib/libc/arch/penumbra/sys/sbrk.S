@@ -10,8 +10,14 @@ WEAK_ALIAS(sbrk, _sbrk)
 #endif
 
 ENTRY(_sbrk)
+#ifdef __PIC__
+	mov	r3, pc
+	add	r3, #8
+	add	r3, #%pcrel(_C_LABEL(__curbrk))
+#else
 	lli	r3, %lo16(_C_LABEL(__curbrk))
 	lui	r3, %hi16(_C_LABEL(__curbrk))
+#endif
 	ldw	r4, [r3]		/* R4 = old __curbrk */
 	add	r1, r4			/* new break = curbrk + increment */
 	SYSTRAP(break)

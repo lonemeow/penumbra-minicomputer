@@ -66,8 +66,9 @@ NEED_OWN_INSTALL_TARGET?=	yes
 TOOLCHAIN_MISSING?=	yes
 HAVE_LLVM?=		yes
 HAVE_LIBGCC_EH?=	yes	# skip libunwind (no C++ headers, no EH support yet)
+USE_UNWIND=		no	# no _Unwind support (no libgcc_s or libunwind)
 MKCXX=			no	# no C++ standard library yet
-MKPIC=			no	# no dynamic linker; PIC reach too small for large binaries
+MKPIC=			no	# needs GOT-based PIC in LLVM backend for large .so files
 ACTIVE_CC=		clang
 # Our clang (22.x) is newer than NetBSD's; suppress warnings that
 # upstream hasn't adapted to yet.

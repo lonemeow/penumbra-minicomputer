@@ -150,6 +150,45 @@ gets R1=0, R2=1) and pipe (two fds).
 Generic CAS-based inc/dec/add/and/or built on top.  No-op
 memory barriers (uniprocessor, no store buffer reordering).
 
+## PIC Reach Limitation
+
+Penumbra's current PIC model uses `MOV PC + ADDi %pcrel(sym)`,
+which has only 16-bit (±64KB) reach.  This works for small PIE
+binaries (bootloader, ld.elf_so itself) but fails when linking
+large shared libraries like `libc.so` (~3 MB), where code-to-data
+offsets exceed 64KB.
+
+`MKPIC=no` is set until this is resolved.  The fix is GOT-based
+PIC in the LLVM backend: load global addresses from a per-object
+GOT (within 16-bit reach) instead of computing them PC-relative.
+Other architectures solve this differently:
+- RISC-V: `AUIPC` gives 32-bit PC-relative reach
+- ARM: literal pools (32-bit constants near the code)
+- MIPS: `$gp`-relative GOT access
+
+Hand-written assembly (brk.S, sbrk.S, cerror.S) uses `#ifdef
+__PIC__` guards: PC-relative under PIC, absolute LLI/LUI
+otherwise.
+
+## Dynamic Linker (ld.elf_so)
+
+MD code in `libexec/ld.elf_so/arch/penumbra/`.  RELA format
+(explicit addends, matching LLVM `HasRelocationAddend=true`).
+RISCV port is the primary reference.
+
+- `rtld_start.S`: entry point computes relocbase using the
+  same `%pcrel(_DYNAMIC)` + `.Ldynamic_linkaddr` technique
+  as the bootloader `crt0.S`.  Self-relocates, calls `_rtld()`,
+  jumps to program entry with (cleanup, obj_main, ps_strings).
+- `mdreloc.c`: handles NONE, RELATIVE, 32, GLOB_DAT, JUMP_SLOT,
+  TLS_DTPMOD32, TLS_DTPOFF32, TLS_TPOFF32.
+- Eager PLT binding only (empty `_rtld_relocate_plt_lazy`).
+  Lazy binding would need a revised PLT layout with per-entry
+  relocation index identification.
+- `_rtld_bind_start` stub present for future lazy binding.
+
+Not yet buildable — blocked on GOT-based PIC (see above).
+
 ## Userland Build Integration
 
 Uses stock `toolchains::NetBSD` in clang with Penumbra
@@ -157,8 +196,9 @@ emulation flags in `NetBSD.cpp` (no custom toolchain class for
 NetBSD target).  `PenumbraToolChain` retained for bare-metal
 (`penumbra-unknown-none`) only.
 
-Key build flags: `MKSOFTFLOAT=yes`, `MKCXX=no`, `HAVE_SSP=no`,
-`HAVE_LIBGCC_EH=yes` (skip libunwind), `SLOPPY_FLIST=yes`
+Key build flags: `MKSOFTFLOAT=yes`, `MKCXX=no`, `MKPIC=no`,
+`HAVE_SSP=no`, `HAVE_LIBGCC_EH=yes` (skip libunwind),
+`USE_UNWIND=no` (no `_Unwind` support), `SLOPPY_FLIST=yes`
 (tolerate missing `ld.elf_so`).
 
 ## NetBSD Tree Modifications
@@ -185,6 +225,12 @@ Files modified outside `sys/arch/penumbra/`:
   setjmp, softfloat, gdtoa, makecontext, mulsi3
 - `lib/libpthread/arch/penumbra/pthread_md.h` -- minimal stubs
 - `lib/libkvm/kvm_penumbra.c` -- kvm support
+
+**Dynamic linker:**
+- `libexec/ld.elf_so/arch/penumbra/` -- rtld_start.S, mdreloc.c,
+  Makefile.inc (not yet buildable, blocked on GOT-based PIC)
+- `libexec/ld.elf_so/Makefile` -- penumbra in arch whitelist
+- `lib/libexecinfo/Makefile` -- USE_UNWIND `?=` override
 
 **Other:**
 - `etc/etc.penumbra/` -- MAKEDEV.conf, Makefile.inc, ttys

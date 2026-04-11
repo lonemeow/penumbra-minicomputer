@@ -32,7 +32,20 @@
 #define R_PENUMBRA_MEMOFFSET16_PCREL	6
 #define R_PENUMBRA_IMM16_PCREL		7
 #define R_PENUMBRA_RELATIVE		8
+#define R_PENUMBRA_TLS_GD_LO16		9
+#define R_PENUMBRA_TLS_GD_HI16		10
+#define R_PENUMBRA_GLOB_DAT		11
+#define R_PENUMBRA_JUMP_SLOT		12
+#define R_PENUMBRA_TLS_TPOFF32		13
+#define R_PENUMBRA_TLS_DTPMOD32		14
+#define R_PENUMBRA_TLS_DTPOFF32		15
+#define R_PENUMBRA_TLS_GD_PCREL		16
+#define R_PENUMBRA_PC32			17
+
+/* Size-qualified aliases for ld.elf_so R_TYPESZ() macro */
+#define R_PENUMBRA_ADDR32		R_PENUMBRA_32
 
 #define R_TYPE(name)	__CONCAT(R_PENUMBRA_,name)
+#define R_TYPESZ(name)	__CONCAT(__CONCAT(R_PENUMBRA_,name),32)
 
 #endif /* _PENUMBRA_ELF_MACHDEP_H_ */

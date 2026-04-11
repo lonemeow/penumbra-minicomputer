@@ -3,7 +3,7 @@
 .include <bsd.own.mk>
 
 LIBEXECINFO_MACHINE_ARCH?= ${MACHINE_ARCH}
-USE_UNWIND=yes
+USE_UNWIND?=yes
 WARNS?=4
 INCSDIR=/usr/include
 INCS=execinfo.h

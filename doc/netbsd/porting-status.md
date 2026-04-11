@@ -129,10 +129,13 @@ DDB (kernel debugger) disabled -- needs extensive MD hooks.
 - **libc MD:** `SYS.h` (SYSTRAP/PSEUDO/RSYSCALL), `cerror.S`,
   12 custom syscall wrappers, softfloat, `makecontext`/
   `resumecontext`, `__mulsi3`, atomics (RAS + generic).
-- **Libraries:** `libc.so`, `libm.so`, `libcrypto.so`, and most
-  other shared libraries build and link.
-- **Limitations:** libpthread is minimal stubs.  No `ld.elf_so`
-  (dynamic linker not ported).  `MKCXX=no` (no C++ support).
+- **Libraries:** All static libraries build and link.
+  Shared libraries (`.so`) blocked on GOT-based PIC (see below).
+- **Dynamic linker (`ld.elf_so`):** MD code written
+  (`rtld_start.S`, `mdreloc.c`), RELA relocations, eager PLT
+  binding.  Blocked on GOT-based PIC — cannot be built yet.
+- **Limitations:** libpthread is minimal stubs.  `MKPIC=no`
+  (PIC reach limitation).  `MKCXX=no` (no C++ support).
 
 ## Kernel Config (MINIMAL)
 
@@ -154,10 +157,12 @@ make simulate SDCARD=build/boot.img
 
 ## What's Next
 
-1. **Root filesystem** -- `build.sh sets`, boot with full
+1. **GOT-based PIC** -- LLVM backend needs GOT-relative data
+   access for `-fPIC`.  Current `MOV PC + ADDi %pcrel` has
+   only 16-bit reach (±64KB), insufficient for large `.so`
+   files.  Blocks shared libraries and `ld.elf_so` activation.
+2. **Root filesystem** -- `build.sh sets`, boot with full
    userland on the ISS.
-2. **Dynamic linker** -- port `ld.elf_so` (`rtld_start.S`,
-   `mdreloc.c`) so dynamically-linked binaries can run.
 3. **Remaining MD stubs** -- as the kernel reaches them.
 4. **Interrupt controller** -- multiple devices with priority.
 5. **SDRAM controller** -- memory subsystem for real hardware.
