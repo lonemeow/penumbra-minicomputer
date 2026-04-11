@@ -91,6 +91,7 @@
 #if defined(_KERNEL) && !defined(_LOCORE)
 
 #include <sys/mutex.h>
+#include <sys/queue.h>
 #include <machine/vmparam.h>
 #include <machine/types.h>
 
@@ -99,6 +100,40 @@
  * Matches TLB_PTE hardware format: PPN[31:12] | SW[11:8] | flags[7:0]
  */
 typedef uint32_t pt_entry_t;
+
+/*
+ * PV entry: tracks one virtual mapping of a physical page.
+ * Pool-allocated, linked per-page via vm_page_md.pvh_list.
+ * Used by pmap_page_protect() to find all PTEs mapping a page.
+ */
+struct pmap;	/* forward declaration */
+
+struct pv_entry {
+	SLIST_ENTRY(pv_entry) pv_link;	/* next PV entry for this page */
+	struct pmap	*pv_pmap;	/* pmap containing this mapping */
+	vaddr_t		pv_va;		/* VA of this mapping */
+};
+
+/*
+ * Per-physical-page metadata.  Embedded in every struct vm_page
+ * (as pg->mdpage) when __HAVE_VM_PAGE_MD is defined.  Tracks all
+ * virtual mappings via a PV (Physical-to-Virtual) linked list,
+ * and accumulates page attributes for UVM page replacement.
+ */
+#define	__HAVE_VM_PAGE_MD
+
+#define	PMAP_MD_MODIFIED	0x01	/* page has been written */
+#define	PMAP_MD_REFERENCED	0x02	/* page has been accessed */
+
+struct vm_page_md {
+	SLIST_HEAD(, pv_entry) pvh_list; /* PV entry list head */
+	unsigned int	pvh_attrs;	/* PMAP_MD_* flags */
+};
+
+#define	VM_MDPAGE_INIT(pg)	do {			\
+	SLIST_INIT(&(pg)->mdpage.pvh_list);		\
+	(pg)->mdpage.pvh_attrs = 0;			\
+} while (/*CONSTCOND*/0)
 
 /*
  * Page table structure — always 2-level (L1 + L2 tables).

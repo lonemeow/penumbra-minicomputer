@@ -154,6 +154,55 @@ pmap_l2_map(paddr_t l2_pa)
 }
 
 
+/* ── PV list management ──────────────────────────────────────
+ *
+ * Each UVM-managed physical page has a linked list of PV entries
+ * tracking every virtual mapping.  This allows pmap_page_protect()
+ * to find and modify/remove all PTEs that map a given page —
+ * critical for COW (fork), pageout, and page replacement.
+ *
+ * PV entries are pool-allocated.  The list head lives in
+ * vm_page_md (pg->mdpage.pvh_list).
+ */
+static struct pool pv_pool;
+
+/*
+ * pv_enter: insert a pre-allocated PV entry into a page's PV list.
+ * Caller must hold splhigh().
+ */
+static void
+pv_enter(struct vm_page *pg, struct pv_entry *pv,
+    struct pmap *pm, vaddr_t va)
+{
+	struct vm_page_md *md = VM_PAGE_TO_MD(pg);
+
+	pv->pv_pmap = pm;
+	pv->pv_va = va;
+	SLIST_INSERT_HEAD(&md->pvh_list, pv, pv_link);
+}
+
+/*
+ * pv_remove: find and remove the PV entry for (pm, va) from a page's
+ * PV list.  Frees the entry back to pv_pool.
+ * Caller must hold splhigh().
+ */
+static void
+pv_remove(struct vm_page *pg, struct pmap *pm, vaddr_t va)
+{
+	struct vm_page_md *md = VM_PAGE_TO_MD(pg);
+	struct pv_entry *pv;
+
+	SLIST_FOREACH(pv, &md->pvh_list, pv_link) {
+		if (pv->pv_pmap == pm && pv->pv_va == va) {
+			SLIST_REMOVE(&md->pvh_list, pv, pv_entry, pv_link);
+			pool_put(&pv_pool, pv);
+			return;
+		}
+	}
+	/* Not found — may have been removed by pmap_page_protect already */
+}
+
+
 /* ── pmap_bootstrap ───────────────────────────────────────────
  *
  * Called from penumbra_init() after physical memory is registered
@@ -352,9 +401,14 @@ pmap_init(void)
 	 * setup may trigger pmap_kenter_pa → pmap_alloc_l2.
 	 */
 	pmap_initialized = true;
+
+	/* Initialize PV entry pool */
+	pool_init(&pv_pool, sizeof(struct pv_entry), 0, 0, 0,
+	    "pvpl", NULL, IPL_VM);
+
 	printf("pmap_init: done\n");
 
-	/* TODO: initialize PTE pools, ASID allocator */
+	/* TODO: ASID allocator */
 }
 
 /*
@@ -456,15 +510,30 @@ pmap_enter(pmap_t pmap, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 	uint32_t extra = is_kernel ? PTE_G : PTE_U;
 	pt_entry_t *l1 = pmap->pm_l1;
 	unsigned int l1_idx = PT_L1_INDEX(va);
+	bool managed = pmap_initialized && uvm_pageismanaged(pa);
 
-	if (pmap_initialized && uvm_pageismanaged(pa))
+	if (managed)
 		extra |= PTE_SW_MANAGED;
+
+	/*
+	 * Pre-allocate PV entry outside critical section.
+	 * pool_get at splhigh with PR_NOWAIT may fail if the pool
+	 * needs to grow (which requires sleeping allocation).
+	 */
+	struct pv_entry *new_pv = NULL;
+	if (managed) {
+		new_pv = pool_get(&pv_pool, PR_NOWAIT);
+		if (new_pv == NULL)
+			return ENOMEM;
+	}
 
 	int s = splhigh();
 
 	if (!(l1[l1_idx] & PTE_V)) {
 		if (!pmap_alloc_l2(l1, l1_idx)) {
 			splx(s);
+			if (new_pv != NULL)
+				pool_put(&pv_pool, new_pv);
 			return ENOMEM;
 		}
 	}
@@ -480,6 +549,40 @@ pmap_enter(pmap_t pmap, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 
 	if (flags & PMAP_WIRED)
 		pmap->pm_stats_wired++;
+
+	/*
+	 * PV tracking: handle old mapping's PV entry.
+	 * If old PTE was managed and maps a different PA, remove it.
+	 * If same page, the PV entry is already correct.
+	 */
+	if ((old_pte & PTE_V) && (old_pte & PTE_SW_MANAGED)) {
+		paddr_t old_pa = old_pte & PTE_PPN_MASK;
+		if (managed && old_pa == (pa & PTE_PPN_MASK)) {
+			/* Same managed page — PV entry already in list */
+			pool_put(&pv_pool, new_pv);
+			new_pv = NULL;
+		} else {
+			/* Different page — remove stale PV entry */
+			struct vm_page *old_pg = PHYS_TO_VM_PAGE(old_pa);
+			if (old_pg != NULL)
+				pv_remove(old_pg, pmap, va);
+		}
+	}
+
+	/* PV tracking: insert new PV entry for managed page */
+	if (new_pv != NULL) {
+		struct vm_page *pg = PHYS_TO_VM_PAGE(pa);
+		pv_enter(pg, new_pv, pmap, va);
+	}
+
+	/* Update page attributes for managed pages */
+	if (managed) {
+		struct vm_page *pg = PHYS_TO_VM_PAGE(pa);
+		struct vm_page_md *md = VM_PAGE_TO_MD(pg);
+		md->pvh_attrs |= PMAP_MD_REFERENCED;
+		if (prot & VM_PROT_WRITE)
+			md->pvh_attrs |= PMAP_MD_MODIFIED;
+	}
 
 	tlb_invalidate_addr(va, 0);
 	splx(s);
@@ -507,9 +610,19 @@ pmap_remove(pmap_t pm, vaddr_t sva, vaddr_t eva)
 		paddr_t l2_pa = l1[l1_idx] & PTE_PPN_MASK;
 		pt_entry_t *l2 = pmap_l2_map(l2_pa);
 		unsigned int l2_idx = PT_L2_INDEX(va);
+		pt_entry_t pte = l2[l2_idx];
 
-		if (l2[l2_idx] & PTE_V) {
+		if (pte & PTE_V) {
+			/* Remove PV entry for managed pages */
+			if (pte & PTE_SW_MANAGED) {
+				struct vm_page *pg =
+				    PHYS_TO_VM_PAGE(pte & PTE_PPN_MASK);
+				if (pg != NULL) {
+					pv_remove(pg, pm, va);
+				}
+			}
 			l2[l2_idx] = 0;
+			pm->pm_stats_resident--;
 			tlb_invalidate_addr(va, 0);
 		}
 	}
@@ -744,7 +857,29 @@ pmap_copy_page(paddr_t src, paddr_t dst)
 void
 pmap_page_protect(struct vm_page *pg, vm_prot_t prot)
 {
-	/* TODO */
+	struct vm_page_md *md = VM_PAGE_TO_MD(pg);
+	struct pv_entry *pv;
+
+	if ((prot & VM_PROT_READ) == 0) {
+		/*
+		 * Remove all mappings to this page.
+		 * Delegate to pmap_remove() which handles PTE clear,
+		 * PV removal, stats, and TLB invalidation.  Each call
+		 * does its own splhigh()/splx(), allowing interrupts
+		 * between pages when tearing down large mappings.
+		 */
+		while ((pv = SLIST_FIRST(&md->pvh_list)) != NULL)
+			pmap_remove(pv->pv_pmap, pv->pv_va,
+			    pv->pv_va + PAGE_SIZE);
+	} else {
+		/*
+		 * Downgrade: remove permissions not in prot (never adds).
+		 * Delegate to pmap_protect() per PV entry.
+		 */
+		SLIST_FOREACH(pv, &md->pvh_list, pv_link)
+			pmap_protect(pv->pv_pmap, pv->pv_va,
+			    pv->pv_va + PAGE_SIZE, prot);
+	}
 }
 
 /*
@@ -754,29 +889,66 @@ pmap_page_protect(struct vm_page *pg, vm_prot_t prot)
 bool
 pmap_clear_modify(struct vm_page *pg)
 {
-	/* TODO */
-	return false;
+	struct vm_page_md *md = VM_PAGE_TO_MD(pg);
+	bool was = (md->pvh_attrs & PMAP_MD_MODIFIED) != 0;
+
+	md->pvh_attrs &= ~PMAP_MD_MODIFIED;
+
+	/*
+	 * Remove write permission from all PTEs mapping this page.
+	 * This ensures the next write faults, re-enters pmap_enter()
+	 * with VM_PROT_WRITE, and re-sets PMAP_MD_MODIFIED.
+	 * Without this, UVM could skip writeback of a dirty page.
+	 */
+	struct pv_entry *pv;
+	int s = splhigh();
+	SLIST_FOREACH(pv, &md->pvh_list, pv_link) {
+		pt_entry_t *l1 = pv->pv_pmap->pm_l1;
+		unsigned int l1_idx = PT_L1_INDEX(pv->pv_va);
+		if (!(l1[l1_idx] & PTE_V))
+			continue;
+		paddr_t l2_pa = l1[l1_idx] & PTE_PPN_MASK;
+		pt_entry_t *l2 = pmap_l2_map(l2_pa);
+		unsigned int l2_idx = PT_L2_INDEX(pv->pv_va);
+		if ((l2[l2_idx] & PTE_V) && (l2[l2_idx] & PTE_W)) {
+			l2[l2_idx] &= ~PTE_W;
+			tlb_invalidate_addr(pv->pv_va, 0);
+		}
+	}
+	splx(s);
+
+	return was;
 }
 
 bool
 pmap_clear_reference(struct vm_page *pg)
 {
-	/* TODO */
-	return false;
+	struct vm_page_md *md = VM_PAGE_TO_MD(pg);
+	bool was = (md->pvh_attrs & PMAP_MD_REFERENCED) != 0;
+
+	/*
+	 * Clear the software reference flag.  Could also strip all
+	 * PTE permissions (like pmap_clear_modify strips PTE_W) so
+	 * the next access faults and re-sets PMAP_MD_REFERENCED —
+	 * but one extra trap per page per page-daemon sweep is
+	 * expensive for a 12.5 MHz CPU.  For now just clear the
+	 * flag; it gets re-set on the next pmap_enter().
+	 */
+	md->pvh_attrs &= ~PMAP_MD_REFERENCED;
+
+	return was;
 }
 
 bool
 pmap_is_modified(struct vm_page *pg)
 {
-	/* TODO */
-	return false;
+	return (VM_PAGE_TO_MD(pg)->pvh_attrs & PMAP_MD_MODIFIED) != 0;
 }
 
 bool
 pmap_is_referenced(struct vm_page *pg)
 {
-	/* TODO */
-	return false;
+	return (VM_PAGE_TO_MD(pg)->pvh_attrs & PMAP_MD_REFERENCED) != 0;
 }
 
 /*
