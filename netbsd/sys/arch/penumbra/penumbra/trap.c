@@ -116,10 +116,38 @@ trap(struct trapframe *tf)
 			    tf->tf_badvaddr, type);
 			break;
 		}
-		if (va >= VM_MIN_KERNEL_ADDRESS)
+		if (va >= VM_MIN_KERNEL_ADDRESS) {
+			/*
+			 * Kernel VA TLB miss: check for stale L1.
+			 *
+			 * User pmaps get a snapshot of the kernel L1
+			 * at fork time.  Kernel L2 tables allocated
+			 * after that (by pmap_kenter_pa → pmap_alloc_l2)
+			 * are only in the kernel pmap's L1.  Propagate
+			 * the missing entry lazily on first fault.
+			 *
+			 * This relies on kernel L2 tables never being
+			 * freed — see pmap_alloc_l2().
+			 */
+			if (type == EXC_TLB_MISS) {
+				pmap_t active = vs->vm_map.pmap;
+				if (active != pmap_kernel()) {
+					pt_entry_t *kl1 =
+					    kernel_pmap_store.pm_l1;
+					pt_entry_t *ul1 = active->pm_l1;
+					unsigned int idx =
+					    PT_L1_INDEX(va);
+					if (!(ul1[idx] & PTE_V) &&
+					    (kl1[idx] & PTE_V)) {
+						ul1[idx] = kl1[idx];
+						break;
+					}
+				}
+			}
 			map = kernel_map;
-		else
+		} else {
 			map = &vs->vm_map;
+		}
 
 		/*
 		 * Determine ftype from hardware fault status.

@@ -106,6 +106,14 @@ pmap_scratch_va(void)
  * Two-phase: before pmap_init(), steal from physseg;
  * after pmap_init(), use uvm_pagealloc with UVM_PGA_USERESERVE
  * (L2 allocation is critical — dipping into reserve is justified).
+ *
+ * INVARIANT: Kernel L2 tables are never freed.  User pmaps get
+ * a snapshot of the kernel L1 at pmap_create() time; entries
+ * added later are lazily propagated by trap.c on TLB miss.
+ * If kernel L2 tables were freed, user pmaps would hold stale
+ * L1 entries pointing to recycled pages — silent corruption.
+ * To add kernel L2 reclamation, switch to eager propagation
+ * (maintain a list of active user pmaps and update all L1s).
  */
 static bool
 pmap_alloc_l2(pt_entry_t *l1, unsigned int l1_idx)
@@ -454,11 +462,18 @@ pmap_create(void)
 	pmap_update(pmap_kernel());
 	pm->pm_l1 = (pt_entry_t *)va;
 
-	/* Copy kernel L1 entries (upper half: VA >= 0x80000000) */
+	/*
+	 * Copy kernel L1 entries (upper half: VA >= 0x80000000).
+	 * Entries added after this copy are lazily propagated by
+	 * trap.c on TLB miss (see pmap_alloc_l2 invariant).
+	 * splhigh prevents an interrupt from observing a half-copied L1.
+	 */
 	unsigned int kern_start = PT_L1_INDEX(VM_MIN_KERNEL_ADDRESS);
 	pt_entry_t *kl1 = kernel_pmap_store.pm_l1;
+	int s = splhigh();
 	for (unsigned int i = kern_start; i < PT_L1_NENTRIES; i++)
 		pm->pm_l1[i] = kl1[i];
+	splx(s);
 
 	return pm;
 }
