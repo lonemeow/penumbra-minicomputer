@@ -161,6 +161,27 @@ pmap_l2_map(paddr_t l2_pa)
 	return (pt_entry_t *)SCRATCH_VA;
 }
 
+/*
+ * pmap_pte_lookup: walk L1→L2 and return a pointer to the PTE
+ * for the given VA.  Returns NULL if the L1 entry is invalid
+ * (no L2 table allocated for this VA range).
+ *
+ * The returned pointer is into the scratch window and is only
+ * valid until the next pmap_l2_map/pmap_pte_lookup/pmap_scratch_map.
+ * Caller must hold splhigh().
+ */
+static pt_entry_t *
+pmap_pte_lookup(pt_entry_t *l1, vaddr_t va)
+{
+	unsigned int l1_idx = PT_L1_INDEX(va);
+
+	if (!(l1[l1_idx] & PTE_V))
+		return NULL;
+
+	pt_entry_t *l2 = pmap_l2_map(l1[l1_idx] & PTE_PPN_MASK);
+	return &l2[PT_L2_INDEX(va)];
+}
+
 
 /* ── PV list management ──────────────────────────────────────
  *
@@ -350,11 +371,8 @@ pmap_steal_memory(vsize_t size, vaddr_t *vstartp, vaddr_t *vendp)
 					panic("pmap_steal_memory: L2 alloc");
 			}
 
-			/* Map L2 via scratch, install PTE */
-			paddr_t l2_pa = l1[l1_idx] & PTE_PPN_MASK;
-			pt_entry_t *l2 = pmap_l2_map(l2_pa);
-			l2[PT_L2_INDEX(va_cur)] =
-			    (pa_cur & PTE_PPN_MASK) | PTE_KERNEL;
+			pt_entry_t *ptep = pmap_pte_lookup(l1, va_cur);
+			*ptep = (pa_cur & PTE_PPN_MASK) | PTE_KERNEL;
 		}
 
 		*vstartp = va + size;
@@ -553,11 +571,9 @@ pmap_enter(pmap_t pmap, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 		}
 	}
 
-	paddr_t l2_pa = l1[l1_idx] & PTE_PPN_MASK;
-	pt_entry_t *l2 = pmap_l2_map(l2_pa);
-
-	pt_entry_t old_pte = l2[PT_L2_INDEX(va)];
-	l2[PT_L2_INDEX(va)] = PTE_MAKE(pa, prot, flags, extra);
+	pt_entry_t *ptep = pmap_pte_lookup(l1, va);
+	pt_entry_t old_pte = *ptep;
+	*ptep = PTE_MAKE(pa, prot, flags, extra);
 
 	if (!(old_pte & PTE_V))
 		pmap->pm_stats_resident++;
@@ -614,32 +630,24 @@ pmap_enter(pmap_t pmap, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 void
 pmap_remove(pmap_t pm, vaddr_t sva, vaddr_t eva)
 {
-	pt_entry_t *l1 = pm->pm_l1;
-
 	int s = splhigh();
 	for (vaddr_t va = sva; va < eva; va += PAGE_SIZE) {
-		unsigned int l1_idx = PT_L1_INDEX(va);
-		if (!(l1[l1_idx] & PTE_V))
+		pt_entry_t *ptep = pmap_pte_lookup(pm->pm_l1, va);
+		if (ptep == NULL || !(*ptep & PTE_V))
 			continue;
 
-		paddr_t l2_pa = l1[l1_idx] & PTE_PPN_MASK;
-		pt_entry_t *l2 = pmap_l2_map(l2_pa);
-		unsigned int l2_idx = PT_L2_INDEX(va);
-		pt_entry_t pte = l2[l2_idx];
+		pt_entry_t pte = *ptep;
 
-		if (pte & PTE_V) {
-			/* Remove PV entry for managed pages */
-			if (pte & PTE_SW_MANAGED) {
-				struct vm_page *pg =
-				    PHYS_TO_VM_PAGE(pte & PTE_PPN_MASK);
-				if (pg != NULL) {
-					pv_remove(pg, pm, va);
-				}
-			}
-			l2[l2_idx] = 0;
-			pm->pm_stats_resident--;
-			tlb_invalidate_addr(va, 0);
+		/* Remove PV entry for managed pages */
+		if (pte & PTE_SW_MANAGED) {
+			struct vm_page *pg =
+			    PHYS_TO_VM_PAGE(pte & PTE_PPN_MASK);
+			if (pg != NULL)
+				pv_remove(pg, pm, va);
 		}
+		*ptep = 0;
+		pm->pm_stats_resident--;
+		tlb_invalidate_addr(va, 0);
 	}
 	splx(s);
 }
@@ -661,23 +669,15 @@ pmap_protect(pmap_t pm, vaddr_t sva, vaddr_t eva, vm_prot_t prot)
 		return;
 	}
 
-	pt_entry_t *l1 = pm->pm_l1;
 	pt_entry_t keep = PTE_PROT_BITS(prot);
 
 	int s = splhigh();
 	for (vaddr_t va = sva; va < eva; va += PAGE_SIZE) {
-		unsigned int l1_idx = PT_L1_INDEX(va);
-		if (!(l1[l1_idx] & PTE_V))
+		pt_entry_t *ptep = pmap_pte_lookup(pm->pm_l1, va);
+		if (ptep == NULL || !(*ptep & PTE_V))
 			continue;
 
-		paddr_t l2_pa = l1[l1_idx] & PTE_PPN_MASK;
-		pt_entry_t *l2 = pmap_l2_map(l2_pa);
-		unsigned int l2_idx = PT_L2_INDEX(va);
-
-		if (!(l2[l2_idx] & PTE_V))
-			continue;
-
-		l2[l2_idx] = (l2[l2_idx] & ~PTE_PROT_BITS(VM_PROT_ALL)) | keep;
+		*ptep = (*ptep & ~PTE_PROT_BITS(VM_PROT_ALL)) | keep;
 		tlb_invalidate_addr(va, 0);
 	}
 	splx(s);
@@ -702,16 +702,9 @@ pmap_unwire(pmap_t pm, vaddr_t va)
 bool
 pmap_extract(pmap_t pm, vaddr_t va, paddr_t *pap)
 {
-	pt_entry_t *l1 = pm->pm_l1;
-	unsigned int l1_idx = PT_L1_INDEX(va);
-
-	if (!(l1[l1_idx] & PTE_V))
-		return false;
-
 	int s = splhigh();
-	paddr_t l2_pa = l1[l1_idx] & PTE_PPN_MASK;
-	pt_entry_t *l2 = pmap_l2_map(l2_pa);
-	pt_entry_t pte = l2[PT_L2_INDEX(va)];
+	pt_entry_t *ptep = pmap_pte_lookup(pm->pm_l1, va);
+	pt_entry_t pte = ptep ? *ptep : 0;
 	splx(s);
 
 	if (!(pte & PTE_V))
@@ -748,10 +741,8 @@ pmap_kenter_pa(vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 			    (unsigned)va);
 	}
 
-	paddr_t l2_pa = l1[l1_idx] & PTE_PPN_MASK;
-	pt_entry_t *l2 = pmap_l2_map(l2_pa);
-
-	l2[PT_L2_INDEX(va)] = PTE_MAKE(pa, prot, flags, PTE_G);
+	pt_entry_t *ptep = pmap_pte_lookup(l1, va);
+	*ptep = PTE_MAKE(pa, prot, flags, PTE_G);
 	tlb_invalidate_addr(va, 0);
 
 	splx(s);
@@ -771,16 +762,9 @@ pmap_kremove(vaddr_t va, vsize_t len)
 
 	int s = splhigh();
 	for (; va < eva; va += PAGE_SIZE) {
-		unsigned int l1_idx = PT_L1_INDEX(va);
-		if (!(l1[l1_idx] & PTE_V))
-			continue;
-
-		paddr_t l2_pa = l1[l1_idx] & PTE_PPN_MASK;
-		pt_entry_t *l2 = pmap_l2_map(l2_pa);
-		unsigned int l2_idx = PT_L2_INDEX(va);
-
-		if (l2[l2_idx] & PTE_V) {
-			l2[l2_idx] = 0;
+		pt_entry_t *ptep = pmap_pte_lookup(l1, va);
+		if (ptep != NULL && (*ptep & PTE_V)) {
+			*ptep = 0;
 			tlb_invalidate_addr(va, 0);
 		}
 	}
@@ -918,15 +902,10 @@ pmap_clear_modify(struct vm_page *pg)
 	struct pv_entry *pv;
 	int s = splhigh();
 	SLIST_FOREACH(pv, &md->pvh_list, pv_link) {
-		pt_entry_t *l1 = pv->pv_pmap->pm_l1;
-		unsigned int l1_idx = PT_L1_INDEX(pv->pv_va);
-		if (!(l1[l1_idx] & PTE_V))
-			continue;
-		paddr_t l2_pa = l1[l1_idx] & PTE_PPN_MASK;
-		pt_entry_t *l2 = pmap_l2_map(l2_pa);
-		unsigned int l2_idx = PT_L2_INDEX(pv->pv_va);
-		if ((l2[l2_idx] & PTE_V) && (l2[l2_idx] & PTE_W)) {
-			l2[l2_idx] &= ~PTE_W;
+		pt_entry_t *ptep = pmap_pte_lookup(pv->pv_pmap->pm_l1,
+		    pv->pv_va);
+		if (ptep != NULL && (*ptep & PTE_V) && (*ptep & PTE_W)) {
+			*ptep &= ~PTE_W;
 			tlb_invalidate_addr(pv->pv_va, 0);
 		}
 	}
