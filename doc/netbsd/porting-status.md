@@ -1,131 +1,163 @@
-# NetBSD Port — Status and Progress
+# NetBSD Port -- Status
 
-## Goal
+Penumbra port of NetBSD 10.1. Source tree is a squashed subtree
+from `netbsd-10` in `netbsd/`. MD code in `sys/arch/penumbra/`.
 
-Port NetBSD 10.1 to the Penumbra minicomputer. The NetBSD source tree is included as a squashed git subtree from the `netbsd-10` branch (`netbsd/`). Machine-dependent code lives in `netbsd/sys/arch/penumbra/`.
+## Current State
 
-Reference port: evbmips (ILP32 little-endian MIPS with software-managed TLB). All code is Penumbra-specific — no `<mips/*.h>` includes.
+**Boots to single-user shell on the ISS.**  ROM autoconfig -->
+bootloader --> kernel --> device drivers --> FFS root mount -->
+exec `/rescue/init` --> interactive shell with console I/O.
+
+`build.sh distribution` completes -- full userland cross-builds.
+Statically-linked rescue binaries work.  Dynamic linker not yet
+ported, so dynamically-linked binaries don't run.
 
 ## Boot Chain
 
-The full boot chain is documented in `doc/boot/boot-process.md`. Summary:
+| Stage | Location | Status |
+|-------|----------|--------|
+| ROM | `hw/rom/` | Done |
+| Bootloader (PENBOOT.ELF) | `sys/arch/penumbra/stand/boot/` | Done |
+| Kernel | `sys/arch/penumbra/penumbra/` | Boots to single-user shell |
+| Userland | `build.sh distribution` | Builds; static binaries work |
 
-| Stage | Location | Status | Description |
-|-------|----------|--------|-------------|
-| ROM | `hw/rom/` | **Done** | Hardware init, autoconfig, SD card, FAT32, ELF loader |
-| Bootloader | `netbsd/sys/arch/penumbra/stand/boot/` | **Done** | PIE ELF (PENBOOT.ELF), loaded from FAT32 root by ROM. Translates boot data → bootinfo, loads kernel via libsa `loadfile()`, jumps with MMU off |
-| Kernel | `netbsd/sys/arch/penumbra/penumbra/` | **Execs /sbin/init, syscalls work** | locore.S, pmap, traps, context switching, console, exec, syscall dispatch — all working |
+ROM loads `PENBOOT.ELF` from FAT32 on SD card.  Bootloader
+translates ROM boot data to bootinfo, loads kernel ELF via
+libsa `loadfile()`, jumps with MMU off.
 
-The ROM loads `PENBOOT.ELF` from the FAT32 partition, which in turn loads the kernel ELF at a dynamic physical address and jumps to it. No intermediate stage — the bootloader handles ELF parsing, bootinfo setup, and kernel handoff directly.
+## Kernel Subsystems
 
-## Machine Headers
+### Working
 
-**Status: Done** — 39 headers in `netbsd/sys/arch/penumbra/include/`, sufficient for full kernel compilation.
+- **Early boot (locore.S):** PIC bias, BSS zero, bootinfo copy
+  in physical mode.  Kernel page table (L1+L2 in BSS), real
+  TLB miss handler pinned before MMU enable.  Two-phase startup:
+  `penumbra_init()` on 4 KB boot stack returns new SP, locore
+  switches to lwp0's 12 KB USPACE before `main()`.
 
-The headers define Penumbra as:
-- **ILP32** — `int`, `long`, and pointers are all 32-bit
-- **Little-endian** — `_BYTE_ORDER = _LITTLE_ENDIAN`
-- **4 KB pages** — matches the Penumbra MMU (`PGSHIFT=12`)
-- **4-byte alignment** — `__ALIGNBYTES=3`
-- **16 general registers** — R0=zero, R14=SP, R15=PC
-- **2G/2G user/kernel split** — kernel at `0x8001_0000`, user from `0x0000_1000`
+- **pmap / TLB:** Software-managed 2-level page table (L1-->L2).
+  Full pmap interface: `pmap_enter` (demand paging), `pmap_create`/
+  `pmap_destroy` (user address spaces), `pmap_activate` (L1
+  re-pin + ASID on context switch), `pmap_protect`/`pmap_remove`/
+  `pmap_remove_all`, `pmap_kenter_pa`/`pmap_kremove` (wired
+  mappings), `pmap_extract`, `pmap_map_device`.
 
-Most integer-type headers delegate to NetBSD's `sys/common_*` headers, which use compiler builtins provided by clang.
+- **ASID management:** Generational allocator (1--255, 0=kernel).
+  Stale ASIDs get fresh allocation on `pmap_activate`.  When 255
+  exhausted, generation bumps, TLB flushed, allocation restarts.
 
-## Kernel Status
+- **PV lists:** Per-physical-page SLIST tracking all managed
+  mappings.  `pmap_page_protect` walks PV entries.
+  `pmap_clear_modify` write-protects via PV walk.
 
-**The kernel execs `/sbin/init` and dispatches syscalls.** Full boot chain: ROM autoconfig → bootloader → kernel → device drivers → msdosfs root mount → exec init → userland syscalls. Init calls `SYS_write` and `SYS_exit` successfully.
+- **I-cache coherency:** `icache_invalidate()` flushes I-cache in
+  `pmap_enter()` for executable page mappings.  `pmap_procwr()`
+  for MI ptrace/exec code-write synchronization.  Full-flush
+  only (hardware has no per-address invalidation yet).
 
-### What Works
+- **Demand paging:** TLB miss/prot --> `uvm_fault()` for demand
+  paging and COW.  `pcb_onfault` recovery for copyin/copyout.
 
-- **Early boot (locore.S):** PIC bias computation, BSS zero, bootinfo copy in physical mode. Builds kernel page table (L1 + L2 in BSS), installs real page-table-walking TLB miss handler, enables MMU. Two-phase startup: `penumbra_init()` runs on 4 KB boot stack and returns new SP; locore switches to lwp0's 12 KB kernel stack before calling `main()`.
+- **UVM:** `uvm_md_init()`, bootinfo-driven `uvm_page_physload()`,
+  `pmap_steal_memory()`.  Full UVM init: pool allocator, vmem,
+  kmem, radix trees.
 
-- **Virtual memory (pmap.c):** Software-managed 2-level page table (L1→L2). TLB miss handler walks page tables via pinned slots. `pmap_kenter_pa`/`pmap_kremove` for wired kernel mappings. Dynamic L2 allocation (steal before pmap_init, uvm_pagealloc after). `pmap_protect`/`pmap_remove`/`pmap_unwire`. Scratch window for physical page access.
+- **Context switching:** `cpu_switchto` (locore.S) saves/restores
+  callee-saved registers.  `cpu_lwp_fork` sets up new LWP stacks.
+  `lwp_trampoline` --> `lwp_startup` --> `func(arg)`.  Softint
+  threads run.
 
-- **Context switching:** `cpu_switchto` saves/restores callee-saved registers via `pcb_context`. `lwp_trampoline` calls `lwp_startup(prev, newlwp)` then `func(arg)`. SP sanity check catches corrupt pcb_context early.
+- **Trap handling:** Per-vector entry stubs on the vector page,
+  common trapframe save/restore, C dispatch in `trap()`.
+  All 9 exception vectors.  Volatile hardware state (ESR, EPC,
+  FAULT_ADDR, FAULT_STATUS) stashed into pinned scratch before
+  any faultable access.  Double-fault detection.
 
-- **Trap handling (Stage 1):** Per-vector entry stubs, common trapframe save/restore, C dispatch in `trap()`. All 9 exception vectors wired. Double-fault detection (ESR.S + EPC in pinned region) prevents infinite fault loops.
+- **Console UART:** MI `com(4)` driver via `com_pbbus.c`.
+  Word-strided 32-bit registers (shift=2, width=4).  Polled I/O
+  via `sc_poll_ticks=1` callout.  Userland RX+TX works.
 
-- **Console:** Early boot uses 16450 UART via TLB scratch window, then `pmap_map_device()`. The `pcom` driver takes over `cn_tab` during autoconf using a proper `bus_space` mapping.
+- **Device autoconfig:** `pbbus` bridge walks `BTINFO_DEVICE`
+  entries from bootinfo.  `bus_space` (map/unmap/read/write)
+  via UVM + `pmap_kenter_pa`.
 
-- **Device autoconfiguration:** `pbbus` bridge walks `BTINFO_DEVICE` entries from bootinfo and attaches child devices. ROM autoconfig results (device class, MMIO base, size) are passed through the bootloader to the kernel. `bus_space` (map/unmap/read/write) implemented for memory-mapped I/O.
+- **SD card block device (psd):** Polled SPI/SD driver.  MBR
+  partition parsing.  bdevsw/cdevsw at major 8.  Kernel mounts
+  FFS root from `psd0f`.
 
-- **SD card block device (psd):** Polled SPI/SD driver attaches at pbbus for `ACFG_CLASS_SD`. Implements full SD-SPI protocol (init, sector read) via `bus_space`. MBR partition table parsed at attach; partition offsets applied in strategy. Provides `bdevsw`/`cdevsw` at major 8. Kernel successfully mounts msdosfs root from `psd0e` (MBR partition 1).
+- **Exec / return-to-user:** `setregs()` initializes user
+  trapframe.  `trap_return` handles SP banking (USP save/restore)
+  and pinned-scratch ESR/EPC stash before eret.
 
-- **curlwp:** Defined as `curcpu()->ci_curlwp` macro so MI code and `cpu_switchto` share the same variable. `cpu_info_store` statically initializes it to `&lwp0`.
+- **Syscall dispatch:** R11=syscall number (scratch register,
+  set by SYSTRAP), R1--R4=args, overflow from user stack via
+  `copyin()`.  Carry-flag error convention (C=0 success, C=1
+  error).  Two-value return (R1+R2) for fork/pipe.
 
-- **Demand paging:** TLB miss/prot faults dispatch to `uvm_fault()` for demand paging and COW. `pcb_onfault` recovery for copyin/copyout kernel faults. User-mode access to kernel VA rejected early.
+- **Signal delivery:** `sendsig_siginfo` builds signal frame on
+  user stack.  `cpu_getmcontext`/`cpu_setmcontext` for
+  trapframe <--> mcontext.  `trap.c` delivers SIGSEGV/SIGBUS/
+  SIGILL/SIGTRAP to user-mode processes.
 
-- **copyin/copyout (copy.S):** Assembly implementations with `pcb_onfault` fault recovery. copyinstr/copyoutstr byte-loop. ufetch/ustore (8/16/32). User address validation against `VM_MAXUSER_ADDRESS`.
+- **copyin/copyout (copy.S):** Assembly with `pcb_onfault` fault
+  recovery.  copyinstr/copyoutstr, ufetch/ustore (8/16/32).
 
-- **Exec and return-to-user:** `setregs()` initializes user trapframe. `lwp_trampoline` → `trap_return` handles SP banking (USP save/restore) and pinned-scratch ESR/EPC stash to prevent TLB-miss clobbering before eret. Kernel execs `/sbin/init` and reaches userland.
+- **Atomics:** RAS-based CAS for userland (`__HAVE_RAS`),
+  interrupt-disable CAS for kernel.  Generic CAS-based
+  inc/dec/add/and/or, no-op membars (uniprocessor).
 
-- **Syscall dispatch:** `SYSCALL` instruction (vector 5) dispatches through `md_syscall` function pointer. R1=syscall number, R2–R4=args, overflow from user stack via `copyin()`. Return convention: R1=retval on success (C flag clear), R1=errno on error (C flag set). ERESTART backs up EPC to re-execute SYSCALL. Indirect syscalls (`SYS_syscall`/`SYS___syscall`) explicitly rejected with ENOSYS until implemented.
+- **SPL:** Hardware-based, reads SR.I directly (no global
+  variable that desyncs on exception entry).
 
-- **DIAGNOSTIC:** Enabled for development — all KASSERT checks active.
+### Remaining Stubs
 
-- **Signal delivery working.** `sendsig_siginfo` builds signal frame on user stack, redirects to handler with LR = libc sigtramp. `cpu_getmcontext`/`cpu_setmcontext`/`cpu_mcontext_validate` implemented. `trap.c` delivers SIGSEGV/SIGBUS/SIGILL/SIGTRAP to user-mode processes via `trapsignal()`. `cpu_lwp_setprivate` writes TP (R12) to trapframe (`__HAVE_CPU_LWP_SETPRIVATE`). `/rescue/sh` starts and exits cleanly on the ISS.
+Kernel functions that will panic if reached (grep `TODO(stub)`):
 
-### What's Next
+- `process_read_regs`, `process_write_regs`, `process_set_pc`
+- `cpu_coredump`
+- `vmapbuf` / `vunmapbuf`
 
-1. **Remaining MD stubs** — fill in `TODO(stub)` functions as the kernel reaches them (grep `TODO(stub)`).
-2. **Interrupt controller** — multiple devices with priority encoding.
-3. **Memory subsystem** — SDRAM controller, bus interface.
+DDB (kernel debugger) disabled -- needs extensive MD hooks.
 
-### Key Design Decisions
+## Userland
 
-- **No direct-map:** All kernel memory is mapped via explicit PTEs. Physical pages without kernel VAs are accessed via the scratch window (pinned TLB slot 3). This differs from MIPS (KSEG0/KSEG1) but matches the 74xx-feasible TLB design.
+`build.sh distribution` completes.  Key components:
 
-- **UART mapping timing:** `pmap_map_device()` must run before any `uvm_pageboot_alloc()` call, because the latter snapshots `virtual_avail` into UVM's own variable via `pmap_virtual_space()`. After that point, pmap's local `virtual_avail` is stale and must not be used for allocation.
+- **CSU:** `crt0.S`, `crti.S`, `crtn.S`, `crtbegin.h`, `crtend.S`.
+  `.init_array`/`.fini_array` (HAVE_INITFINI_ARRAY).
+- **libc MD:** `SYS.h` (SYSTRAP/PSEUDO/RSYSCALL), `cerror.S`,
+  12 custom syscall wrappers, softfloat, `makecontext`/
+  `resumecontext`, `__mulsi3`, atomics (RAS + generic).
+- **Libraries:** `libc.so`, `libm.so`, `libcrypto.so`, and most
+  other shared libraries build and link.
+- **Limitations:** libpthread is minimal stubs.  No `ld.elf_so`
+  (dynamic linker not ported).  `MKCXX=no` (no C++ support).
 
-- **Boot stack switch:** ARM-style pattern — C init function returns new SP to assembly, which switches and calls the continuation. The 4 KB boot stack cannot survive `main()` at `-O0` with DIAGNOSTIC.
+## Kernel Config (MINIMAL)
 
-## Build
+Built at `-O0` with DIAGNOSTIC.  FFS + MSDOSFS file systems,
+minimal INET networking, com(4) UART, psd(4) SD card, loop/pty/
+ksyms pseudo-devices.
 
-### Prerequisites (one-time)
+## SD Image + Boot
 
 ```sh
-sh netbsd/sys/arch/penumbra/toolchain-setup.sh
-cd netbsd
-./build.sh -U -j4 -m penumbra tools \
-  -V EXTERNAL_TOOLCHAIN=$PWD/../build/llvm \
-  -O ../build/netbsd-obj -T ../build/netbsd-tools -D ../build/netbsd-dest
-```
-
-### Kernel Build
-
-```sh
-# Generate Makefile (re-run after conf/ changes)
-build/netbsd-tools/bin/nbconfig \
-  -b $PWD/build/netbsd-kernel/MINIMAL \
-  -s $PWD/netbsd/sys \
-  $PWD/netbsd/sys/arch/penumbra/conf/MINIMAL
-
-# Build
-build/netbsd-tools/bin/nbmake-penumbra -C build/netbsd-kernel/MINIMAL depend
-build/netbsd-tools/bin/nbmake-penumbra -C build/netbsd-kernel/MINIMAL -j10
-```
-
-### Bootloader Build
-
-```sh
-build/netbsd-tools/bin/nbmake-penumbra -C netbsd/sys/arch/penumbra/stand/boot
-```
-
-### SD Image + Boot
-
-```sh
-sw/tools/mksdimage.sh -o build/boot.img \
-  -2 build/netbsd-obj/sys/arch/penumbra/stand/boot/PENBOOT.ELF \
-  -k build/netbsd-kernel/MINIMAL/netbsd
+make sdimage                # boot partition only (FAT32)
+make sdimage-rootfs         # boot + FFS root (minimal rescue)
+make sdimage-rootfs ROOTFS_FULL=1  # boot + full distribution
 
 make simulate SDCARD=build/boot.img
 # At ROM prompt: boot sd:0,0
+# At root device prompt: psd0f
 ```
 
-### NetBSD Tree Modifications
+## What's Next
 
-Key files modified outside `sys/arch/penumbra/`:
-- `build.sh` — penumbra in `valid_MACHINE_ARCH` table
-- `share/mk/bsd.own.mk` — TOOLCHAIN_MISSING, HAVE_LLVM, MACHINE_GNU_PLATFORM
-- `share/mk/bsd.endian.mk` — penumbra in little-endian list
+1. **Root filesystem** -- `build.sh sets`, boot with full
+   userland on the ISS.
+2. **Dynamic linker** -- port `ld.elf_so` (`rtld_start.S`,
+   `mdreloc.c`) so dynamically-linked binaries can run.
+3. **Remaining MD stubs** -- as the kernel reaches them.
+4. **Interrupt controller** -- multiple devices with priority.
+5. **SDRAM controller** -- memory subsystem for real hardware.
