@@ -806,7 +806,7 @@ _trap_common:
 	 * R1=ESR, R2=EPC still in registers from above.
 	 * R1-R3 are freely clobberable (saved to scratch).
 	 */
-	li	r3, 0x80000000		/* PSL_S */
+	li	r3, PSL_S
 	and	r1, r3
 	cmp	r1, r0
 	beq	.Lnot_double_fault	/* user mode — not a double fault */
@@ -857,7 +857,7 @@ _trap_common:
 	 * during the register saves above may have clobbered it).
 	 */
 	ldw	r1, [pc + _trap_save_hw_esr - .]
-	li	r2, 0x80000000		/* PSL_S */
+	li	r2, PSL_S
 	and	r1, r2			/* Z=1 if from user mode */
 	bne	.Lsave_kern_sp
 	rdspr	r1, usp			/* user mode: SP was banked */
@@ -910,7 +910,7 @@ trap_return:
 
 	/* If returning to user mode, set USP from trapframe */
 	ldw	r1, [r14 + TF_SR]
-	li	r2, 0x80000000		/* PSL_S */
+	li	r2, PSL_S
 	and	r1, r2			/* Z=1 if returning to user mode */
 	bne	.Lrestore_regs		/* returning to kernel — skip USP */
 	ldw	r1, [r14 + TF_R0 + 56]	/* tf_regs[14] = user SP */

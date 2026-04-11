@@ -337,7 +337,9 @@ Headers fall into three categories:
   `/rescue/init` boots to interactive single-user shell on the ISS.
 - [x] **SPL / interrupt management** — hardware-based SPL reads
   SR.I directly (no global variable that desyncs on exception
-  entry).  `cpu_idle()` calls `spl0()` to ensure timer
+  entry).  All SPL paths (`splraiseipl`, `splraise`, named
+  `splhigh`/`splvm`/etc.) collapse to SR.I=0 (disable) for any
+  IPL above NONE.  `cpu_idle()` calls `spl0()` to ensure timer
   interrupts fire in the idle loop (required for callout-driven
   com(4) polling).
 - [ ] Kernel port — remaining MD stubs: `process_read_regs`,

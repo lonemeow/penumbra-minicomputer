@@ -30,6 +30,8 @@
 
 #ifdef _KERNEL
 
+#include <machine/psl.h>
+
 typedef unsigned char ipl_t;
 typedef struct {
 	ipl_t	_spl;
@@ -44,8 +46,14 @@ makeiplcookie(ipl_t ipl)
 static inline int
 splraiseipl(ipl_cookie_t icookie)
 {
-	/* Stub — will be implemented with SR.I manipulation */
-	return icookie._spl;
+	uint32_t sr;
+	int old;
+
+	__asm __volatile("RDSPR %0, sr" : "=r"(sr));
+	old = (sr & PSL_I) ? IPL_NONE : IPL_HIGH;
+	if (icookie._spl > IPL_NONE)
+		__asm __volatile("DI");
+	return old;
 }
 
 int	splraise(int);
