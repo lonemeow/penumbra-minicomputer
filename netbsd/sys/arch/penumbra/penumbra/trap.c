@@ -46,6 +46,19 @@ void	timer_tc_tick(void);	/* machdep.c — advance timecounter base */
 	| (((s) & (1 << FSTAT_W)) ? VM_PROT_WRITE   : 0)  \
 	| (((s) & (1 << FSTAT_X)) ? VM_PROT_EXECUTE : 0))
 
+static void
+user_trap_signal(int signo, int code, vaddr_t addr, int trap)
+{
+	ksiginfo_t ksi;
+
+	KSI_INIT_TRAP(&ksi);
+	ksi.ksi_signo = signo;
+	ksi.ksi_code = code;
+	ksi.ksi_addr = (void *)addr;
+	ksi.ksi_trap = trap;
+	trapsignal(curlwp, &ksi);
+}
+
 /*
  * trap: main exception dispatch.
  * Called from locore.S exception stubs with trapframe pointer.
@@ -99,13 +112,8 @@ trap(struct trapframe *tf)
 		 * User mode accessing kernel VA is always illegal.
 		 */
 		if (usermode && va >= VM_MIN_KERNEL_ADDRESS) {
-			ksiginfo_t ksi;
-			KSI_INIT_TRAP(&ksi);
-			ksi.ksi_signo = SIGSEGV;
-			ksi.ksi_code = SEGV_MAPERR;
-			ksi.ksi_addr = (void *)(uintptr_t)tf->tf_badvaddr;
-			ksi.ksi_trap = type;
-			trapsignal(curlwp, &ksi);
+			user_trap_signal(SIGSEGV, SEGV_MAPERR,
+			    tf->tf_badvaddr, type);
 			break;
 		}
 		if (va >= VM_MIN_KERNEL_ADDRESS)
@@ -138,14 +146,9 @@ trap(struct trapframe *tf)
 			break;
 		}
 		if (usermode) {
-			ksiginfo_t ksi;
-			KSI_INIT_TRAP(&ksi);
-			ksi.ksi_signo = SIGSEGV;
-			ksi.ksi_code = (type == EXC_TLB_PROT)
-			    ? SEGV_ACCERR : SEGV_MAPERR;
-			ksi.ksi_addr = (void *)(uintptr_t)tf->tf_badvaddr;
-			ksi.ksi_trap = type;
-			trapsignal(curlwp, &ksi);
+			user_trap_signal(SIGSEGV,
+			    type == EXC_TLB_PROT ? SEGV_ACCERR : SEGV_MAPERR,
+			    tf->tf_badvaddr, type);
 			break;
 		}
 		panic("kernel %s fault at va=0x%08x, pc=0x%08x "
@@ -158,13 +161,8 @@ trap(struct trapframe *tf)
 
 	case EXC_BUSFAULT:
 		if (usermode) {
-			ksiginfo_t ksi;
-			KSI_INIT_TRAP(&ksi);
-			ksi.ksi_signo = SIGBUS;
-			ksi.ksi_code = BUS_ADRERR;
-			ksi.ksi_addr = (void *)(uintptr_t)tf->tf_badvaddr;
-			ksi.ksi_trap = type;
-			trapsignal(curlwp, &ksi);
+			user_trap_signal(SIGBUS, BUS_ADRERR,
+			    tf->tf_badvaddr, type);
 			break;
 		}
 		panic("kernel bus fault at va=0x%08x, pc=0x%08x",
@@ -173,13 +171,8 @@ trap(struct trapframe *tf)
 
 	case EXC_PRIV:
 		if (usermode) {
-			ksiginfo_t ksi;
-			KSI_INIT_TRAP(&ksi);
-			ksi.ksi_signo = SIGILL;
-			ksi.ksi_code = ILL_PRVOPC;
-			ksi.ksi_addr = (void *)(uintptr_t)tf->tf_epc;
-			ksi.ksi_trap = type;
-			trapsignal(curlwp, &ksi);
+			user_trap_signal(SIGILL, ILL_PRVOPC,
+			    tf->tf_epc, type);
 			break;
 		}
 		panic("kernel privilege violation at pc=0x%08x",
@@ -194,13 +187,8 @@ trap(struct trapframe *tf)
 
 	case EXC_BREAK:
 		if (usermode) {
-			ksiginfo_t ksi;
-			KSI_INIT_TRAP(&ksi);
-			ksi.ksi_signo = SIGTRAP;
-			ksi.ksi_code = TRAP_BRKPT;
-			ksi.ksi_addr = (void *)(uintptr_t)tf->tf_epc;
-			ksi.ksi_trap = type;
-			trapsignal(curlwp, &ksi);
+			user_trap_signal(SIGTRAP, TRAP_BRKPT,
+			    tf->tf_epc, type);
 			break;
 		}
 		/* Kernel BREAK — halt (future: DDB entry point) */
@@ -210,13 +198,8 @@ trap(struct trapframe *tf)
 
 	case EXC_ILLEGAL:
 		if (usermode) {
-			ksiginfo_t ksi;
-			KSI_INIT_TRAP(&ksi);
-			ksi.ksi_signo = SIGILL;
-			ksi.ksi_code = ILL_ILLOPC;
-			ksi.ksi_addr = (void *)(uintptr_t)tf->tf_epc;
-			ksi.ksi_trap = type;
-			trapsignal(curlwp, &ksi);
+			user_trap_signal(SIGILL, ILL_ILLOPC,
+			    tf->tf_epc, type);
 			break;
 		}
 		panic("kernel illegal instruction at pc=0x%08x",
@@ -225,13 +208,8 @@ trap(struct trapframe *tf)
 
 	case EXC_ALIGN:
 		if (usermode) {
-			ksiginfo_t ksi;
-			KSI_INIT_TRAP(&ksi);
-			ksi.ksi_signo = SIGBUS;
-			ksi.ksi_code = BUS_ADRALN;
-			ksi.ksi_addr = (void *)(uintptr_t)tf->tf_badvaddr;
-			ksi.ksi_trap = type;
-			trapsignal(curlwp, &ksi);
+			user_trap_signal(SIGBUS, BUS_ADRALN,
+			    tf->tf_badvaddr, type);
 			break;
 		}
 		panic("kernel alignment fault at va=0x%08x, pc=0x%08x",
