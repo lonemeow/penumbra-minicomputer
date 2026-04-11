@@ -107,6 +107,7 @@ static uint32_t timer_reload_val;
 static volatile uint32_t timer_tc_base;	/* accumulated ticks at last interrupt */
 
 void	timer_tc_tick(void);	/* called from trap.c timer handler */
+void	timer_early_init(void);	/* called from startup.c before autoconf */
 
 static u_int
 timer_get_timecount(struct timecounter *tc)
@@ -191,11 +192,42 @@ setstatclockrate(int rate)
 }
 
 /*
+ * Start the timer as a free-running counter for delay().
+ *
+ * Called early from penumbra_init(), before autoconf.  Sets up
+ * the timer with max reload and TICK_EN + AUTOLOAD but no IRQ,
+ * so delay() has a working 1 MHz counter from the start.
+ * cpu_initclocks() later reconfigures for periodic interrupts.
+ */
+void
+timer_early_init(void)
+{
+	uint32_t reload = 0xFFFF;	/* max 16-bit countdown */
+	uint32_t cr = TMCR_TICK_EN | TMCR_AUTOLOAD;
+
+	__asm __volatile(
+	    "WRSYS %0, %1, %2"
+	    : : "r"(reload), "i"(SYSDEV_TIMER), "i"(TM_RELOAD)
+	);
+	__asm __volatile(
+	    "WRSYS %0, %1, %2"
+	    : : "r"(reload), "i"(SYSDEV_TIMER), "i"(TM_COUNT)
+	);
+	__asm __volatile(
+	    "WRSYS %0, %1, %2"
+	    : : "r"(cr), "i"(SYSDEV_TIMER), "i"(TM_CR)
+	);
+}
+
+/*
  * Microsecond delay — busy-wait using the hardware timer counter.
  *
  * The timer ticks at 1 MHz (1 tick = 1 µs), counting down with
  * auto-reload.  We accumulate elapsed ticks by reading TMCOUNT
  * snapshots, handling the reload wrap.
+ *
+ * timer_early_init() ensures the counter is running before
+ * autoconf, so delay() works from the very first driver probe.
  */
 void
 delay(unsigned int us)

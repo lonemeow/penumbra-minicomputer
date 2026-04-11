@@ -39,10 +39,9 @@ device	pbbus { }
 attach	pbbus at mainbus
 file	arch/penumbra/penumbra/pbbus.c			pbbus
 
-# Console UART
-device	pcom
-attach	pcom at pbbus
-file	arch/penumbra/penumbra/pcom.c			pcom
+# Console UART (MI com driver with pbbus attachment)
+attach	com at pbbus with com_pbbus
+file	arch/penumbra/penumbra/com_pbbus.c		com_pbbus
 
 # SD card block device
 device	psd: disk

@@ -405,8 +405,20 @@ MIPS/68k-style vector dispatch.
   `virtual_avail` via scratch window + page table insertion.
 - **Early console:** 16450 UART, initially pinned via scratch
   window, permanently remapped by `pmap_map_device()` after
-  `pmap_bootstrap()`.  `pcom` driver takes over `cn_tab` during
-  autoconf with a proper `bus_space` mapping.
+  `pmap_bootstrap()`.  Stays active for kernel printf throughout
+  boot.  Timer started early (`timer_early_init()`) so `delay()`
+  works before `cpu_initclocks()`.
+- **Console UART (MI com):** uses NetBSD's MI `com(4)` driver
+  (`sys/dev/ic/com.c`) with a thin pbbus attachment
+  (`com_pbbus.c`).  Word-strided 32-bit registers via
+  `com_init_regs_stride_width(shift=2, width=4)`.
+  Polled I/O via `sc_poll_ticks=1` callout (no interrupt handler
+  wired); `COM_HW_NOIEN` suppresses MCR_IENABLE to prevent IRQ
+  assertion while IER still enables RX/TX status in IIR.
+  `COM_HW_CONSOLE` set manually — `com_attach_subr()` sets
+  `cn_dev` on the early console's `cn_tab`, enabling MI `cnopen()`
+  to redirect `/dev/console` to the com cdevsw (major 26).
+  Userland I/O through `/dev/console` is operational.
 - **Device autoconfig:** `pbbus` bridge walks `BTINFO_DEVICE`
   entries from bootinfo, attaches child devices by ACFG_CLASS_*.
   `bus_space` implemented (map via UVM + pmap_kenter_pa, read/write

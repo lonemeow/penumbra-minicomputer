@@ -25,6 +25,17 @@ void	bus_space_write_1(bus_space_tag_t, bus_space_handle_t, bus_size_t, uint8_t)
 void	bus_space_write_2(bus_space_tag_t, bus_space_handle_t, bus_size_t, uint16_t);
 void	bus_space_write_4(bus_space_tag_t, bus_space_handle_t, bus_size_t, uint32_t);
 
+/* Multi write (used by MI com driver for FIFO drain) */
+void	bus_space_write_multi_1(bus_space_tag_t, bus_space_handle_t,
+	    bus_size_t, const uint8_t *, bus_size_t);
+
+/* Barrier (no-op on uniprocessor MMIO) */
+void	bus_space_barrier(bus_space_tag_t, bus_space_handle_t,
+	    bus_size_t, bus_size_t, int);
+
+/* bus_space_is_equal — tag comparison (tags are trivial integers) */
+#define	bus_space_is_equal(t1, t2)	((t1) == (t2))
+
 #endif /* _KERNEL */
 
 #endif /* _PENUMBRA_BUS_FUNCS_H_ */

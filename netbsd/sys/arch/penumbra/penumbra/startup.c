@@ -41,6 +41,7 @@ __KERNEL_RCSID(0, "$NetBSD$");
 /* Forward declarations */
 vaddr_t	penumbra_init(void);
 void	penumbra_main(void);
+void	timer_early_init(void);
 int	main(void);
 static void	penumbra_physmem_init(void);
 static void	penumbra_lwp0_init(void);
@@ -296,6 +297,11 @@ penumbra_init(void)
 
 	/* Initialize the console so we can printf */
 	consinit();
+
+	/* Start the hardware timer for delay() — must happen before
+	 * autoconf, which calls delay() during device probing.
+	 * cpu_initclocks() reconfigures for periodic interrupts later. */
+	timer_early_init();
 
 	printf("NetBSD/penumbra booting\n");
 	printf("phys_bias = 0x%x\n", (unsigned)phys_bias);

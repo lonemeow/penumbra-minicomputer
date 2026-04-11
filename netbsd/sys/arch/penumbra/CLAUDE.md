@@ -154,7 +154,8 @@ Headers fall into three categories:
 | `mainbus.c` | Root bus device driver (attaches cpu + pbbus) |
 | `cpu.c` | CPU device driver |
 | `pbbus.c` | Penumbra Bus bridge — walks BTINFO_DEVICE entries from bootinfo, attaches child devices by class |
-| `pcom.c` | Console UART driver — attaches at pbbus (ACFG_CLASS_UART), takes over cn_tab from early console |
+| `pcom.c` | Legacy console UART driver (unused — replaced by MI com(4) via com_pbbus.c) |
+| `com_pbbus.c` | MI com(4) bus attachment for pbbus — ACFG_CLASS_UART, stride=2/width=4, polled I/O, COM_HW_CONSOLE |
 | `psd.c` | SD card block device — SPI/SD protocol via bus_space, MBR partition parsing, bdevsw/cdevsw at major 8. Polled sector-at-a-time I/O. |
 | `bus_space.c` | bus_space implementation — map/unmap via UVM + pmap_kenter_pa, read/write via volatile pointers |
 | `trap.c` | Exception dispatch (all 9 vectors), TLB fault → uvm_fault() demand paging, pcb_onfault recovery for copyin/copyout, SPL stubs |
@@ -259,10 +260,13 @@ Headers fall into three categories:
 - [x] **bus_space** — `bus_space_map` allocates kernel VA via
   `uvm_km_alloc` + `pmap_kenter_pa` (uncached).  Read/write ops
   are volatile pointer dereferences.
-- [x] **Console UART (pcom)** — attaches at pbbus
-  (ACFG_CLASS_UART), maps registers via bus_space, takes over
-  `cn_tab` from early boot console.  Seamless handoff — no
-  output lost during transition.
+- [x] **Console UART (MI com)** — uses NetBSD's MI `com(4)`
+  driver with thin pbbus attachment (`com_pbbus.c`).
+  Word-strided 32-bit registers, polled I/O via callout
+  (`sc_poll_ticks=1`), `COM_HW_NOIEN` + `COM_HW_CONSOLE`.
+  Early console stays active for kernel printf; MI com tty
+  layer handles userland `/dev/console` I/O (major 26).
+  Userland console output verified end-to-end.
 - [x] **SD card block device (psd)** — polled SPI/SD driver
   attaches at pbbus for ACFG_CLASS_SD.  Full SD-SPI protocol
   (CMD0/CMD8/ACMD41/CMD58 init, CMD17 sector read) via

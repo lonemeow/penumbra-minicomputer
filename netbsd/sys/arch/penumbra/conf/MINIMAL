@@ -28,7 +28,7 @@ options		INET			# IP
 mainbus0	at root
 cpu0		at mainbus?
 pbbus0		at mainbus?
-pcom0		at pbbus?
+com0		at pbbus?
 psd0		at pbbus?
 
 # Console

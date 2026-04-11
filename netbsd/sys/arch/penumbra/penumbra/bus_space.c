@@ -103,3 +103,21 @@ bus_space_write_4(bus_space_tag_t t, bus_space_handle_t h, bus_size_t o,
 
 	*(volatile uint32_t *)(h + o) = v;
 }
+
+void
+bus_space_write_multi_1(bus_space_tag_t t, bus_space_handle_t h,
+    bus_size_t o, const uint8_t *a, bus_size_t c)
+{
+	volatile uint8_t *p = (volatile uint8_t *)(h + o);
+
+	while (c-- > 0)
+		*p = *a++;
+}
+
+void
+bus_space_barrier(bus_space_tag_t t, bus_space_handle_t h,
+    bus_size_t o, bus_size_t l, int flags)
+{
+
+	/* No-op: uniprocessor, memory-mapped, no write buffer */
+}
