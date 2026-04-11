@@ -166,7 +166,15 @@ enum { VEC_BUS_FAULT=0, VEC_TIMER=1, VEC_TLB_MISS=2, VEC_TLB_PROT=3,
 
 // Sysreg device IDs
 enum { SYSDEV_MMU=0, SYSDEV_SYS=1, SYSDEV_DCACHE=2, SYSDEV_ICACHE=3, SYSDEV_BUS=4,
-       SYSDEV_TIMER=7 };
+       SYSDEV_TIMER=7, SYSDEV_DEBUG=15 };
+
+// Debug watchpoints — halt on physical memory write to watched addresses
+static constexpr int DBG_MAX_WATCH = 16;
+static struct {
+    uint32_t watch_pa[DBG_MAX_WATCH];
+    int      watch_count;
+    uint32_t watch_val;    // Only trigger when this value is written (0xFFFFFFFF = any)
+} dbg;
 
 // MMU sysreg addresses
 enum { MMU_CR=0, MMU_FADDR=1, MMU_FSTAT=2, MMU_TLB_VPN=3, MMU_TLB_PTE=4, MMU_TLB_IDX=5 };
@@ -683,6 +691,25 @@ static void phys_write(uint32_t addr, uint32_t data, int size, bool& bus_fault) 
 
     // RAM
     if (addr < RAM_SIZE) {
+        // Debug watchpoint: halt on write to watched PA
+        if (dbg.watch_count > 0) {
+            uint32_t wa = addr & (size==0 ? ~0u : size==1 ? ~1u : ~3u);
+            uint32_t wsz = 1u << size;
+            for (int wi = 0; wi < dbg.watch_count; wi++) {
+                uint32_t wpa = dbg.watch_pa[wi];
+                if (wa <= wpa && wa + wsz > wpa) {
+                    if (dbg.watch_val == 0xFFFFFFFF ||
+                        data == dbg.watch_val) {
+                        uint32_t old = rd32(&ram[wpa & ~3u]);
+                        printf("\n[WATCHPOINT] PA=0x%08X old=0x%08X "
+                               "new=0x%08X sz=%d PC=0x%08X\n",
+                               wpa, old, data, 1<<size, cpu.pc);
+                        cpu.halted = true;
+                    }
+                    break;
+                }
+            }
+        }
         if (size==0) wr8(&ram[addr], data);
         else if (size==1) wr16(&ram[addr & ~1u], data);
         else wr32(&ram[addr & ~3u], data);
@@ -787,6 +814,20 @@ static void sysreg_write(int dev, int reg, uint32_t val) {
         break;
     case SYSDEV_TIMER:
         timer.write_reg(reg, val);
+        break;
+    case SYSDEV_DEBUG:
+        if (reg == 0) {  // WATCH_PA: add to list (0 = clear all)
+            if (val == 0) {
+                dbg.watch_count = 0;
+                printf("[DEBUG] Watchpoints cleared\n");
+            } else if (dbg.watch_count < DBG_MAX_WATCH) {
+                dbg.watch_pa[dbg.watch_count++] = val;
+                printf("[DEBUG] Watchpoint #%d: PA=0x%08X val=0x%08X\n",
+                       dbg.watch_count, val, dbg.watch_val);
+            }
+        } else if (reg == 1) {  // WATCH_VAL
+            dbg.watch_val = val;
+        }
         break;
     case SYSDEV_DCACHE: case SYSDEV_ICACHE:
         break; // Cache control: accept and ignore in ISS
@@ -1365,6 +1406,15 @@ int main(int argc, char** argv) {
     if (cpu.halted) {
         fprintf(stderr, "\n[BREAK after %lu instructions, PC=0x%08X]\n",
                 (unsigned long)cpu.insn_count, cpu.pc);
+        // Dump watched memory values from raw RAM array
+        for (int wi = 0; wi < dbg.watch_count; wi++) {
+            uint32_t wpa = dbg.watch_pa[wi];
+            if (wpa < RAM_SIZE - 3) {
+                uint32_t val = rd32(&ram[wpa & ~3u]);
+                fprintf(stderr, "[W%d] PA=0x%08X raw RAM value=0x%08X\n",
+                        wi, wpa, val);
+            }
+        }
     } else {
         fprintf(stderr, "\n[Interrupted after %lu instructions, PC=0x%08X]\n",
                 (unsigned long)cpu.insn_count, cpu.pc);

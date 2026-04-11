@@ -625,15 +625,24 @@ _real_miss_handler:
 	 * Use alternating way counter for replacement.
 	 */
 
-	/* TLB_VPN = (VPN << 8) | ASID */
+	/*
+	 * TLB_VPN = (VPN << 8) | ASID.
+	 * For global (G=1) entries, use ASID=0 so that
+	 * tlb_invalidate_addr(va, 0) can find them regardless
+	 * of which process context installed them.
+	 */
 	mov	r2, r1
 	shr	r2, #12
 	shl	r2, #8			/* R2 = VPN << 8 */
 
+	mov	r4, r3
+	and	r4, #PTE_G
+	bne	.Lrmh_asid_done		/* G=1 → ASID=0, already in R2 */
 	rdsys	r4, #SYSDEV_MMU, #MMU_MMUCR
 	shr	r4, #MMUCR_ASID_SHIFT
 	and	r4, #0xFF		/* R4 = current ASID */
-	or	r2, r4			/* R2 = TLB_VPN */
+	or	r2, r4			/* R2 = TLB_VPN with ASID */
+.Lrmh_asid_done:
 
 	/* TLB_INDEX = set | way */
 	mov	r4, r1
@@ -1062,6 +1071,10 @@ tlb_invalidate_asid:
 /*
  * tlb_invalidate_addr(vaddr_t va, int asid): invalidate TLB
  * entry for a specific VA + ASID.  Checks both ways of the set.
+ *
+ * Works correctly for G=1 entries because the TLB miss handler
+ * always installs G=1 entries with ASID=0, and kernel code
+ * always calls tlb_invalidate_addr(va, 0) for kernel VAs.
  */
 	.globl	tlb_invalidate_addr
 	.type	tlb_invalidate_addr, @function
@@ -1089,7 +1102,7 @@ tlb_invalidate_addr:
 .Ltia_w1:
 	/* Check way 1 */
 	mov	r1, r4
-	add	r1, #0x20		/* way 1 = set + 0x20 (bit 5 clear in set) */
+	add	r1, #0x20		/* way 1 = set + 0x20 (bit 5) */
 	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_INDEX
 	rdsys	r1, #SYSDEV_MMU, #MMU_TLB_VPN
 	cmp	r1, r3

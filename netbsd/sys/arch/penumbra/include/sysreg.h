@@ -19,8 +19,15 @@
 #define SYSDEV_DCACHE	2	/* D-cache control */
 #define SYSDEV_ICACHE	3	/* I-cache control */
 #define SYSDEV_BUS	4	/* Bus controller (autoconfig) */
-/* Devices 5-6 reserved for future cache levels (L2, L3) */
+/* Devices 5-6 reserved */
 #define SYSDEV_TIMER	7	/* Programmable interval timer */
+/* Devices 8-14 reserved */
+#define SYSDEV_DEBUG	15	/* ISS-only debug (watchpoint); no-op on hardware */
+
+/* ── Device 15: ISS debug registers (simulator only) ───────────────── */
+
+#define DBG_WATCH_PA	0	/* Add PA to watchpoint list (0=clear all) */
+#define DBG_WATCH_VAL	1	/* Value filter: only trigger on this value (0xFFFFFFFF=any) */
 
 /* ── Device 0: MMU registers ────────────────────────────────────────── */
 
