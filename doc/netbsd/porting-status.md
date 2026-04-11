@@ -64,12 +64,13 @@ Most integer-type headers delegate to NetBSD's `sys/common_*` headers, which use
 
 - **DIAGNOSTIC:** Enabled for development — all KASSERT checks active.
 
+- **Signal delivery working.** `sendsig_siginfo` builds signal frame on user stack, redirects to handler with LR = libc sigtramp. `cpu_getmcontext`/`cpu_setmcontext`/`cpu_mcontext_validate` implemented. `trap.c` delivers SIGSEGV/SIGBUS/SIGILL/SIGTRAP to user-mode processes via `trapsignal()`. `cpu_lwp_setprivate` writes TP (R12) to trapframe (`__HAVE_CPU_LWP_SETPRIVATE`). `/rescue/sh` starts and exits cleanly on the ISS.
+
 ### What's Next
 
-1. **Remaining MD stubs** — fill in `TODO(stub)` functions as the kernel reaches them (signals, mcontext, startlwp).
-2. **Timer** — programmable timer peripheral for `hardclock()` scheduler tick.
-3. **Interrupt controller** — multiple devices with priority encoding.
-4. **Signal delivery** — `sendsig_siginfo`, signal trampoline, `cpu_getmcontext`/`cpu_setmcontext`.
+1. **Remaining MD stubs** — fill in `TODO(stub)` functions as the kernel reaches them (grep `TODO(stub)`).
+2. **Interrupt controller** — multiple devices with priority encoding.
+3. **Memory subsystem** — SDRAM controller, bus interface.
 
 ### Key Design Decisions
 

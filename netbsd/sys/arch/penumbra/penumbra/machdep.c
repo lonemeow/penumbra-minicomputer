@@ -40,6 +40,7 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <machine/reg.h>
 #include <machine/sysreg.h>
 #include <machine/mcontext.h>
+#include <machine/userret.h>
 
 /* Single CPU info structure (uniprocessor) */
 struct cpu_info cpu_info_store = {
@@ -283,7 +284,8 @@ cpu_lwp_free2(struct lwp *l)
 int
 cpu_lwp_setprivate(struct lwp *l, void *v)
 {
-	/* TODO: set thread pointer (R12) in trapframe */
+
+	l->l_md.md_utf->tf_regs[TF_TP] = (uint32_t)(uintptr_t)v;
 	return 0;
 }
 
@@ -357,12 +359,19 @@ cpu_lwp_fork(struct lwp *l1, struct lwp *l2, void *stack, size_t stacksize,
  *
  * Called from lwp_trampoline as func(arg) where arg is a ucontext_t*.
  * Applies the saved user context and returns to userspace.
- * Not needed until we support fork/exec of user processes.
  */
 void
 startlwp(void *arg)
 {
-	/* TODO(stub) */ __asm volatile("break");
+	ucontext_t * const uc = arg;
+	struct lwp * const l = curlwp;
+	int error __diagused;
+
+	error = cpu_setmcontext(l, &uc->uc_mcontext, uc->uc_flags);
+	KASSERT(error == 0);
+
+	kmem_free(uc, sizeof(ucontext_t));
+	userret(l, l->l_md.md_utf);
 }
 
 void
@@ -435,27 +444,141 @@ setregs(struct lwp *l, struct exec_package *pack, vaddr_t stack)
 void
 cpu_getmcontext(struct lwp *l, mcontext_t *mcp, unsigned int *flags)
 {
-	/* TODO(stub) */ __asm volatile("break");
+	const struct trapframe *tf = l->l_md.md_utf;
+
+	/* Copy R0–R15 and SR into the gregset */
+	memcpy(mcp->__gregs, tf->tf_regs, sizeof(tf->tf_regs));
+	mcp->__gregs[_REG_PC] = tf->tf_epc;	/* EPC is the real saved PC */
+	mcp->__gregs[_REG_SR] = tf->tf_sr;
+
+	*flags |= _UC_CPU | _UC_TLSBASE;
 }
 
 int
 cpu_setmcontext(struct lwp *l, const mcontext_t *mcp, unsigned int flags)
 {
-	/* TODO(stub) */ __asm volatile("break");
+	struct trapframe *tf = l->l_md.md_utf;
+
+	if (flags & _UC_CPU) {
+		int error = cpu_mcontext_validate(l, mcp);
+		if (error)
+			return error;
+
+		/* Restore R0–R14 from the gregset */
+		memcpy(tf->tf_regs, mcp->__gregs, 15 * sizeof(__greg_t));
+
+		/* Restore PC from the mcontext (slot 15 → EPC) */
+		tf->tf_epc = mcp->__gregs[_REG_PC];
+
+		/*
+		 * Restore only user-settable SR bits (condition flags).
+		 * Supervisor and interrupt bits are forced to user-mode values.
+		 */
+		tf->tf_sr = (mcp->__gregs[_REG_SR] & PSL_FLAGS)
+		    | (PSL_USERSET & ~PSL_USERCLR);
+	}
+
+	if (flags & _UC_TLSBASE) {
+		/* Restore thread pointer (R12) */
+		tf->tf_regs[TF_R12] = mcp->__gregs[12];
+		lwp_setprivate(l, (void *)(uintptr_t)mcp->__gregs[12]);
+	}
+
 	return 0;
 }
 
 int
 cpu_mcontext_validate(struct lwp *l, const mcontext_t *mcp)
 {
-	/* TODO(stub) */
+
+	/* PC must be in user address space */
+	if ((uint32_t)mcp->__gregs[_REG_PC] >= VM_MAXUSER_ADDRESS)
+		return EINVAL;
+
+	/* SP must be in user address space */
+	if ((uint32_t)mcp->__gregs[_REG_SP] >= VM_MAXUSER_ADDRESS)
+		return EINVAL;
+
+	/* Must not set supervisor or clear interrupt-enable */
+	if (mcp->__gregs[_REG_SR] & PSL_S)
+		return EINVAL;
+
 	return 0;
 }
+
+/*
+ * Signal frame layout pushed onto the user stack:
+ *
+ *     ┌──────────────┐  ← old SP (or signal stack top)
+ *     │  siginfo_t   │  sf_si
+ *     │  ucontext_t  │  sf_uc (contains mcontext with saved regs)
+ *     └──────────────┘  ← sf (new SP)
+ *
+ * The signal handler is called as:
+ *     handler(signo, &sf->sf_si, &sf->sf_uc)
+ * with LR pointing to the libc sigtramp (__sigtramp_siginfo_2).
+ */
+struct sigframe_siginfo {
+	siginfo_t	sf_si;
+	ucontext_t	sf_uc;
+};
 
 void
 sendsig_siginfo(const ksiginfo_t *ksi, const sigset_t *mask)
 {
-	/* TODO(stub) */ __asm volatile("break");
+	struct lwp * const l = curlwp;
+	struct proc * const p = l->l_proc;
+	struct sigacts * const sa = p->p_sigacts;
+	struct trapframe * const tf = l->l_md.md_utf;
+	const int signo = ksi->ksi_signo;
+	const sig_t catcher = SIGACTION(p, signo).sa_handler;
+	bool onstack;
+	int error;
+
+	/* Determine where to put the signal frame: signal stack or user stack */
+	onstack = (l->l_sigstk.ss_flags & (SS_DISABLE | SS_ONSTACK)) == 0
+	    && (SIGACTION(p, signo).sa_flags & SA_ONSTACK) != 0;
+	vaddr_t sp;
+	if (onstack)
+		sp = (vaddr_t)l->l_sigstk.ss_sp + l->l_sigstk.ss_size;
+	else
+		sp = tf->tf_regs[TF_R14];
+
+	/* Allocate the signal frame below the chosen stack pointer */
+	struct sigframe_siginfo *sf =
+	    (struct sigframe_siginfo *)sp - 1;
+
+	/* Build the signal frame in kernel memory, then copyout */
+	struct sigframe_siginfo ksf;
+	memset(&ksf, 0, sizeof(ksf));
+	ksf.sf_si._info = ksi->ksi_info;
+	ksf.sf_uc.uc_flags = _UC_SIGMASK
+	    | (l->l_sigstk.ss_flags & SS_ONSTACK ? _UC_SETSTACK : _UC_CLRSTACK);
+	ksf.sf_uc.uc_sigmask = *mask;
+	ksf.sf_uc.uc_link = l->l_ctxlink;
+	sendsig_reset(l, signo);
+
+	mutex_exit(p->p_lock);
+	cpu_getmcontext(l, &ksf.sf_uc.uc_mcontext, &ksf.sf_uc.uc_flags);
+	error = copyout(&ksf, sf, sizeof(ksf));
+	mutex_enter(p->p_lock);
+
+	if (error != 0) {
+		/* Stack trashed — kill the process */
+		sigexit(l, SIGILL);
+		/* NOTREACHED */
+	}
+
+	tf->tf_regs[TF_R1] = signo;
+	tf->tf_regs[TF_R2] = (intptr_t)&sf->sf_si;
+	tf->tf_regs[TF_R3] = (intptr_t)&sf->sf_uc;
+	tf->tf_regs[TF_R5] = (intptr_t)&sf->sf_uc;
+	tf->tf_regs[TF_R13] = (intptr_t)sa->sa_sigdesc[signo].sd_tramp;
+	tf->tf_regs[TF_R14] = (intptr_t)sf;
+	tf->tf_epc = (intptr_t)catcher;
+
+	if (onstack)
+		l->l_sigstk.ss_flags |= SS_ONSTACK;
 }
 
 int

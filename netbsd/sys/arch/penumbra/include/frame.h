@@ -26,14 +26,25 @@ struct trapframe {
 /* Register indices into tf_regs[] */
 #define TF_R0		0
 #define TF_R1		1	/* return value / arg0 */
-#define TF_R2		2
-#define TF_R3		3
-#define TF_R4		4
-#define TF_R11		11	/* scratch */
-#define TF_R12		12	/* thread pointer */
-#define TF_R13		13	/* link register */
-#define TF_R14		14	/* stack pointer */
-#define TF_R15		15	/* program counter */
+#define TF_R2		2	/* arg1 / rval[1] */
+#define TF_R3		3	/* arg2 */
+#define TF_R4		4	/* arg3 */
+#define TF_R5		5	/* callee-saved */
+#define TF_R6		6	/* callee-saved */
+#define TF_R7		7	/* callee-saved */
+#define TF_R8		8	/* callee-saved */
+#define TF_R9		9	/* callee-saved */
+#define TF_R10		10	/* callee-saved */
+#define TF_R11		11	/* scratch / syscall number */
+#define TF_R12		12	/* thread pointer (TP) */
+#define TF_R13		13	/* link register (LR) */
+#define TF_R14		14	/* stack pointer (SP) */
+#define TF_R15		15	/* program counter (PC) */
+
+/* Semantic aliases */
+#define TF_SP		TF_R14
+#define TF_LR		TF_R13
+#define TF_TP		TF_R12
 
 /* Size of trapframe in bytes (for assembly) */
 #define TF_SIZE		(21 * 4)

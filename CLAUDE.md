@@ -474,8 +474,21 @@ MIPS/68k-style vector dispatch.
   `p_psstrp` in R2 for `___start(cleanup, ps_strings)`.
   Indirect syscalls (`SYS_syscall`/`SYS___syscall`) rejected with
   ENOSYS.  Init calls SYS_write + SYS_exit successfully.
-- All remaining MD functions are either implemented or break-trap
-  stubs (grep for `TODO(stub)`).
+- **Signal delivery working.**  `sendsig_siginfo` builds a signal
+  frame (siginfo + ucontext) on the user stack and redirects the
+  trapframe to the handler; LR set to libc `__sigtramp_siginfo_2`
+  which calls `setcontext()` to restore the interrupted context.
+  `cpu_getmcontext`/`cpu_setmcontext` copy trapframe ↔ mcontext.
+  `cpu_mcontext_validate` rejects kernel addresses and supervisor
+  mode.  `startlwp` applies ucontext for fork'd LWPs.
+  `trap.c` delivers SIGSEGV/SIGBUS/SIGILL/SIGTRAP to user-mode
+  processes instead of panicking; kernel-mode faults still panic.
+  `cpu_lwp_setprivate` writes TP (R12) to trapframe
+  (`__HAVE_CPU_LWP_SETPRIVATE` defined in types.h).
+  `/rescue/sh` starts and exits cleanly on the ISS.
+- Remaining MD stubs: `process_read_regs`, `process_write_regs`,
+  `process_set_pc`, `cpu_coredump`, `vmapbuf`/`vunmapbuf`
+  (grep for `TODO(stub)`).
 - Atomics: RAS-based CAS (Restartable Atomic Sequences) for userland,
   interrupt-disable CAS for kernel.  `__HAVE_RAS` defined,
   `userret()` checks `ras_lookup()` on every return to user mode.
@@ -526,8 +539,7 @@ MIPS/68k-style vector dispatch.
   mcontext.h, `__FPE`/`__FEE`/`__FPR`/`__FER`/`__FENV_*` macros,
   clang driver `-L`/`-lc`/`--undefined-version` fixes.
   Clang 22 warning suppressions for NetBSD 10 codebase.
-- Known shortcuts: libpthread is minimal stubs, signal delivery
-  panics instead of delivering the signal.
+- Known shortcuts: libpthread is minimal stubs.
   See memory file `project_userland_shortcuts.md`.
 - **`build.sh distribution` completes successfully.**
   Full userland builds: all libraries, all programs, system
@@ -556,12 +568,8 @@ MIPS/68k-style vector dispatch.
    sets, boot with full userland on the ISS.
 2. **Dynamic linker** — port `ld.elf_so` (rtld_start.S, mdreloc.c)
    so dynamically-linked binaries can run.
-3. **Kernel signals** — `sendsig_siginfo`, trap.c SIGILL/SIGSEGV
-   delivery, signal trampoline testing.
-4. **Kernel signals** — `sendsig_siginfo`, trap.c SIGSEGV/SIGILL
-   delivery, signal trampoline — needed for userland to handle
-   faults instead of panicking.
-5. **Kernel implementation** — remaining MD stubs as the kernel
-   reaches them (grep `TODO(stub)`): mcontext, startlwp.
-6. **Interrupt controller** — Multiple devices with priority encoding
-7. **Memory subsystem** — SDRAM controller, bus interface
+3. **Kernel implementation** — remaining MD stubs as the kernel
+   reaches them (grep `TODO(stub)`): process_read_regs,
+   cpu_coredump, vmapbuf/vunmapbuf.
+4. **Interrupt controller** — Multiple devices with priority encoding
+5. **Memory subsystem** — SDRAM controller, bus interface

@@ -309,18 +309,33 @@ Headers fall into three categories:
   (`SYS_syscall`/`SYS___syscall`) rejected with ENOSYS.
   `userret()` called on every syscall return path.
   Init calls SYS_write + SYS_exit successfully.
-- [ ] Kernel port — remaining MD stubs need real implementations
-  (grep for `TODO(stub)` to find them)
+- [x] **Signal delivery** — `sendsig_siginfo` builds signal frame
+  (siginfo + ucontext) on user stack, redirects trapframe to handler
+  with LR = libc `__sigtramp_siginfo_2`.  R5 (callee-saved) holds
+  ucontext pointer for the trampoline's `setcontext()` call.
+  `cpu_getmcontext`/`cpu_setmcontext` copy trapframe ↔ mcontext
+  (EPC is the authoritative PC, not tf_regs[15]).
+  `cpu_mcontext_validate` rejects kernel VA and supervisor mode.
+  `startlwp` applies ucontext for fork'd LWPs.
+  `trap.c` delivers SIGSEGV/SIGBUS/SIGILL/SIGTRAP via `trapsignal()`
+  for user-mode faults; kernel-mode faults still panic.
+  `_UC_SETSTACK`/`_UC_CLRSTACK`/`_UC_TLSBASE` defined in mcontext.h.
+- [x] **TLS (cpu_lwp_setprivate)** — `__HAVE_CPU_LWP_SETPRIVATE`
+  defined in types.h; `cpu_lwp_setprivate` writes TP (R12) to
+  trapframe.  Required for MI `lwp_setprivate()` to update the
+  user trapframe after `_lwp_setprivate` syscall.
+  `/rescue/sh` starts and exits cleanly on the ISS.
+- [ ] Kernel port — remaining MD stubs: `process_read_regs`,
+  `process_write_regs`, `process_set_pc`, `cpu_coredump`,
+  `vmapbuf`/`vunmapbuf` (grep for `TODO(stub)`)
 - [ ] DDB — disabled, needs extensive MD hooks
 
 ## Next Steps
 
 1. **Remaining MD stubs** — fill in `TODO(stub)` functions as
-   the kernel reaches them (signals, mcontext, startlwp).
-2. **Timer** — programmable timer for NetBSD hardclock() tick
-3. **Interrupt controller** — multiple devices with priority
-4. **Signal delivery** — sendsig_siginfo, signal trampoline,
-   cpu_getmcontext/cpu_setmcontext
+   the kernel reaches them (grep `TODO(stub)`).
+2. **Interrupt controller** — multiple devices with priority
+3. **Memory subsystem** — SDRAM controller, bus interface
 
 ## Documentation
 

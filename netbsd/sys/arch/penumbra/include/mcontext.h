@@ -35,6 +35,11 @@ typedef struct {
 #define _UC_MACHINE_INTRV(uc)	((uc)->uc_mcontext.__gregs[1])	/* R1=retval */
 #define _UC_MACHINE_SET_PC(uc, v) ((uc)->uc_mcontext.__gregs[_REG_PC] = (v))
 
+/* MD uc_flags bits — see <sys/ucontext.h> for layout rules */
+#define	_UC_SETSTACK	0x00010000
+#define	_UC_CLRSTACK	0x00020000
+#define	_UC_TLSBASE	0x00080000
+
 /*
  * TLS support — Variant 1, no TCB gap (like RISC-V).
  * TP (R12) points past tls_tcb; tcb is at negative offset from TP.
