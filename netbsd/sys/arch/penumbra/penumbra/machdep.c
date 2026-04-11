@@ -292,8 +292,8 @@ cpu_dumpconf(void)
 bool
 cpu_intr_p(void)
 {
-	/* TODO: track interrupt nesting depth */
-	return false;
+
+	return curcpu()->ci_idepth > 0;
 }
 
 /*
@@ -302,6 +302,7 @@ cpu_intr_p(void)
 void
 cpu_need_resched(struct cpu_info *ci, struct lwp *l, int flags)
 {
+	/* UP only: SMP would need IPI when ci != curcpu(). */
 	ci->ci_want_resched = 1;
 }
 
@@ -314,7 +315,8 @@ cpu_need_proftick(struct lwp *l)
 void
 cpu_signotify(struct lwp *l)
 {
-	/* TODO */
+	/* UP only: SMP would need IPI when l->l_cpu != curcpu(). */
+	l->l_md.md_astpending = 1;
 }
 
 void
