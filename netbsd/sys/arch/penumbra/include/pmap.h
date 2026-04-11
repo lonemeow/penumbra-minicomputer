@@ -94,6 +94,24 @@
 #include <sys/queue.h>
 #include <machine/vmparam.h>
 #include <machine/types.h>
+#include <machine/sysreg.h>
+
+/*
+ * Invalidate the entire I-cache.  Required after mapping executable
+ * pages (demand paging, exec) because the split I/D caches are not
+ * coherent — data written through D-cache is in memory but the
+ * I-cache may hold stale lines for the same physical address.
+ *
+ * Hardware only supports full invalidation (no per-address ops).
+ * Write-through D-cache means no writeback is needed first.
+ */
+static inline void
+icache_invalidate(void)
+{
+	__asm__ volatile("WRSYS %0, %1, %2"
+	    : : "r"(0), "n"(SYSDEV_ICACHE), "n"(CACHE_INVAL)
+	    : "memory");
+}
 
 /*
  * Penumbra page table entry.
@@ -195,6 +213,9 @@ vaddr_t		pmap_map_device(paddr_t, vsize_t);
 void		tlb_invalidate_all(void);
 void		tlb_invalidate_asid(int);
 void		tlb_invalidate_addr(vaddr_t, int);
+
+/* I-cache coherence for split I/D caches */
+void		pmap_procwr(struct proc *, vaddr_t, size_t);
 
 #endif /* _KERNEL && !_LOCORE */
 

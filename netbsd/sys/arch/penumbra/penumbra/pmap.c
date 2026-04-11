@@ -695,6 +695,11 @@ pmap_enter(pmap_t pmap, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 	}
 
 	pmap_tlb_invalidate(pmap, va);
+
+	if (prot & VM_PROT_EXECUTE) {
+		icache_invalidate();
+	}
+
 	splx(s);
 
 	return 0;
@@ -1040,6 +1045,19 @@ bool
 pmap_is_referenced(struct vm_page *pg)
 {
 	return (VM_PAGE_TO_MD(pg)->pvh_attrs & PMAP_MD_REFERENCED) != 0;
+}
+
+/*
+ * pmap_procwr: synchronize I-cache after writing to executable pages.
+ *
+ * Called by MI code after ptrace writes, exec segment loads, etc.
+ * With write-through D-cache, the data is already in memory —
+ * just invalidate the I-cache.  Hardware only supports full flush.
+ */
+void
+pmap_procwr(struct proc *p, vaddr_t va, size_t len)
+{
+	icache_invalidate();
 }
 
 /*
