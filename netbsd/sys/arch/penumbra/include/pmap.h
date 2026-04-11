@@ -146,7 +146,8 @@ struct pmap {
 	kmutex_t	pm_lock;
 	pt_entry_t	*pm_l1;	/* L1 table kernel VA */
 	paddr_t		pm_l1_pa;	/* L1 table physical address (for TLB pin) */
-	int		pm_asid;	/* address space ID (0-255) */
+	uint32_t	pm_asid_gen;	/* ASID generation (0 = never assigned) */
+	uint8_t		pm_asid;	/* address space ID (1-255; 0=kernel) */
 	int		pm_count;	/* reference count */
 	int		pm_stats_resident;
 	int		pm_stats_wired;

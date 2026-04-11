@@ -148,19 +148,19 @@ Headers fall into three categories:
 |------|---------|
 | `locore.S` | Entry point, BSS zero (phys mode), bootinfo copy, kernel page table build (L1+L2 in BSS), real TLB miss handler, per-vector trap entry stubs + common trapframe save/restore (with double-fault detection), MMU enable, TLB invalidation, scratch window, cpu_switchto, lwp_trampoline, setjmp/longjmp |
 | `startup.c` | Early boot: `penumbra_init()` (phase 1 on boot stack — returns new SP), `penumbra_main()` (phase 2 on lwp0 stack — calls main()), bootinfo parsing, early UART console via scratch window, `consinit()`, `penumbra_physmem_init()`, UART remap via `pmap_map_device()` |
-| `machdep.c` | Kernel runtime: `cpu_startup()`, `cpu_reboot()`, `cpu_lwp_fork()` (LWP context setup), `setregs()`, `lwp_trampoline` (extern), remaining LWP/process/signal stubs, `kcopy` |
+| `machdep.c` | Kernel runtime: `cpu_startup()`, `cpu_reboot()`, `cpu_lwp_fork()` (LWP context setup), `setregs()`, `lwp_trampoline` (extern), remaining LWP/process/signal stubs, `kcopy`, `cpu_idle()` (spl0 for timer interrupts), timer/delay |
 | `mulsi3.c` | Compiler runtime: `__mulsi3` (software 32-bit multiply for LLVM libcalls) |
 | `autoconf.c` | `cpu_configure()`, `cpu_rootconf()` |
 | `mainbus.c` | Root bus device driver (attaches cpu + pbbus) |
 | `cpu.c` | CPU device driver |
 | `pbbus.c` | Penumbra Bus bridge — walks BTINFO_DEVICE entries from bootinfo, attaches child devices by class |
 | `pcom.c` | Legacy console UART driver (unused — replaced by MI com(4) via com_pbbus.c) |
-| `com_pbbus.c` | MI com(4) bus attachment for pbbus — ACFG_CLASS_UART, stride=2/width=4, polled I/O, COM_HW_CONSOLE |
+| `com_pbbus.c` | MI com(4) bus attachment for pbbus — ACFG_CLASS_UART, stride=2/width=4, polled I/O, `comcnattach1()` console registration |
 | `psd.c` | SD card block device — SPI/SD protocol via bus_space, MBR partition parsing, bdevsw/cdevsw at major 8. Polled sector-at-a-time I/O. |
 | `bus_space.c` | bus_space implementation — map/unmap via UVM + pmap_kenter_pa, read/write via volatile pointers |
-| `trap.c` | Exception dispatch (all 9 vectors), TLB fault → uvm_fault() demand paging, pcb_onfault recovery for copyin/copyout, SPL stubs |
+| `trap.c` | Exception dispatch (all 9 vectors), TLB fault → uvm_fault() demand paging, pcb_onfault recovery for copyin/copyout, hardware-based SPL (SR.I derived, no global variable) |
 | `syscall.c` | Syscall dispatch: `syscall_intern()` + `syscall()`. R11=syscall number (scratch, set by SYSTRAP), R1–R4=args (4 register args), stack overflow via copyin. Carry-flag error convention (C=0 success, C=1 error). Indirect syscalls rejected with ENOSYS. |
-| `pmap.c` | Software TLB management: `pmap_bootstrap()`, `pmap_steal_memory()`/`pmap_steal_page()`, `pmap_kenter_pa()`/`pmap_kremove()`, `pmap_enter()` (demand paging), `pmap_create()`/`pmap_destroy()` (user address spaces), `pmap_activate()` (L1 re-pin), `pmap_extract()`, `pmap_map_device()`, scratch window helpers. |
+| `pmap.c` | Software TLB management: `pmap_bootstrap()`, `pmap_steal_memory()`/`pmap_steal_page()`, `pmap_kenter_pa()`/`pmap_kremove()`, `pmap_enter()` (demand paging), `pmap_create()`/`pmap_destroy()` (user address spaces), `pmap_activate()` (L1 re-pin + MMUCR ASID), generational ASID allocator, `pmap_remove_all()`, `pmap_extract()`, `pmap_map_device()`, scratch window helpers. |
 | `copy.S` | Assembly copyin/copyout/copyinstr/copyoutstr with pcb_onfault fault recovery, ufetch/ustore (8/16/32), user address validation |
 | `genassym.cf` | Struct offset definitions for assembly code |
 
@@ -263,10 +263,12 @@ Headers fall into three categories:
 - [x] **Console UART (MI com)** — uses NetBSD's MI `com(4)`
   driver with thin pbbus attachment (`com_pbbus.c`).
   Word-strided 32-bit registers, polled I/O via callout
-  (`sc_poll_ticks=1`), `COM_HW_NOIEN` + `COM_HW_CONSOLE`.
-  Early console stays active for kernel printf; MI com tty
-  layer handles userland `/dev/console` I/O (major 26).
-  Userland console output verified end-to-end.
+  (`sc_poll_ticks=1`), `COM_HW_NOIEN`.  `comcnattach1()`
+  called from `com_pbbus_attach` to properly register console
+  (cn_tab, comcons_info, cn_init_magic); `com_attach_subr`
+  auto-detects `COM_HW_CONSOLE`.  Userland console I/O
+  (RX + TX) verified — `/rescue/init` boots to interactive
+  single-user shell.
 - [x] **SD card block device (psd)** — polled SPI/SD driver
   attaches at pbbus for ACFG_CLASS_SD.  Full SD-SPI protocol
   (CMD0/CMD8/ACMD41/CMD58 init, CMD17 sector read) via
@@ -287,7 +289,11 @@ Headers fall into three categories:
   `pmap_create()` allocates L1 page table, copies kernel half,
   maps L1 via `uvm_km_alloc` + `pmap_kenter_pa`.
   `pmap_destroy()` frees L1 page and pmap struct.
-  `pmap_activate()` re-pins L1 in TLB slot 1 via inline WRSYS.
+  `pmap_activate()` re-pins L1 and sets MMUCR.ASID on every
+  context switch.  Generational ASID allocator (1–255,
+  0=kernel); on exhaustion bumps generation and flushes TLB.
+  `pmap_remove_all()` walks user page table, removes PV
+  entries, frees L2 pages, and bulk-invalidates by ASID.
   `pmap_alloc_l2()` returns bool (ENOMEM-safe for `pmap_enter`,
   panic for `pmap_kenter_pa`).
 - [x] **setregs / exec / return-to-user** — `setregs()` initializes
@@ -328,7 +334,12 @@ Headers fall into three categories:
   defined in types.h; `cpu_lwp_setprivate` writes TP (R12) to
   trapframe.  Required for MI `lwp_setprivate()` to update the
   user trapframe after `_lwp_setprivate` syscall.
-  `/rescue/sh` starts and exits cleanly on the ISS.
+  `/rescue/init` boots to interactive single-user shell on the ISS.
+- [x] **SPL / interrupt management** — hardware-based SPL reads
+  SR.I directly (no global variable that desyncs on exception
+  entry).  `cpu_idle()` calls `spl0()` to ensure timer
+  interrupts fire in the idle loop (required for callout-driven
+  com(4) polling).
 - [ ] Kernel port — remaining MD stubs: `process_read_regs`,
   `process_write_regs`, `process_set_pc`, `cpu_coredump`,
   `vmapbuf`/`vunmapbuf` (grep for `TODO(stub)`)

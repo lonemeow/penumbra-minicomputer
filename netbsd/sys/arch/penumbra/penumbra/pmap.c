@@ -65,6 +65,85 @@ static vaddr_t virtual_end;
  */
 static bool pmap_initialized;
 
+/*
+ * ASID allocator — generational.
+ *
+ * Each pmap's ASID is tagged with a generation number.  On context
+ * switch, pmap_activate() compares the pmap's generation against
+ * the global generation; if stale, a fresh ASID is allocated.
+ *
+ * 8-bit ASID space: 0 is reserved for the kernel (all kernel TLB
+ * entries use G=1, which bypasses ASID matching), so user ASIDs
+ * range from 1–255.  When the pool is exhausted, the generation
+ * bumps, the entire TLB is flushed (all stale-ASID entries gone),
+ * and allocation restarts from 1.
+ *
+ * This avoids a full TLB flush on every context switch — the flush
+ * only happens once every 255 distinct user pmap activations.
+ */
+static uint32_t pmap_asid_generation = 1;
+static uint8_t  pmap_asid_next = 1;
+
+/*
+ * pmap_asid_alloc: assign a fresh ASID to a pmap.
+ *
+ * Called from pmap_activate() when pm->pm_asid_gen doesn't match
+ * pmap_asid_generation (i.e., the pmap's ASID is stale or was
+ * never assigned).
+ *
+ * Must handle exhaustion of the 1–255 range: bump the global
+ * generation, flush the TLB, and restart allocation from 1.
+ *
+ * After return: pm->pm_asid is a valid ASID (1–255) and
+ * pm->pm_asid_gen == pmap_asid_generation.
+ */
+static void
+pmap_asid_alloc(struct pmap *pm)
+{
+
+	/* Caller must hold splhigh() — called from pmap_activate(). */
+	if (pmap_asid_next > 255) {
+		pmap_asid_generation++;
+		pmap_asid_next = 1;
+		tlb_invalidate_all();
+	}
+
+	pm->pm_asid = pmap_asid_next++;
+	pm->pm_asid_gen = pmap_asid_generation;
+}
+
+/*
+ * Write MMUCR: set MMU-enable + ASID field.
+ * Called from pmap_activate() on every context switch.
+ */
+static inline void
+pmap_set_mmucr(uint8_t asid)
+{
+	uint32_t val = MMUCR_M | ((uint32_t)asid << MMUCR_ASID_SHIFT);
+
+	__asm__ volatile(
+	    "WRSYS %0, %1, %2" : : "r"(val),
+	    "n"(SYSDEV_MMU), "n"(MMU_MMUCR));
+}
+
+/*
+ * Invalidate a TLB entry for a VA in the context of a specific pmap.
+ *
+ * Kernel pmap: always ASID 0 (entries use G=1).
+ * User pmap with current generation: invalidate with pm_asid.
+ * User pmap with stale generation: skip — TLB was already flushed
+ * when the generation bumped, so no matching entries can exist.
+ */
+static inline void
+pmap_tlb_invalidate(struct pmap *pm, vaddr_t va)
+{
+
+	if (pm == pmap_kernel())
+		tlb_invalidate_addr(va, 0);
+	else if (pm->pm_asid_gen == pmap_asid_generation)
+		tlb_invalidate_addr(va, pm->pm_asid);
+}
+
 
 /* ── Scratch window ───────────────────────────────────────────
  *
@@ -250,7 +329,8 @@ pmap_bootstrap(void)
 
 	/* Initialize kernel pmap */
 	mutex_init(&kernel_pmap_store.pm_lock, MUTEX_DEFAULT, IPL_VM);
-	kernel_pmap_store.pm_asid = 0;	/* kernel uses ASID 0 + G=1 */
+	kernel_pmap_store.pm_asid = 0;
+	kernel_pmap_store.pm_asid_gen = 0;	/* kernel: always ASID 0 + G=1 */
 	kernel_pmap_store.pm_count = 1;
 
 	/*
@@ -433,8 +513,6 @@ pmap_init(void)
 	    "pvpl", NULL, IPL_VM);
 
 	printf("pmap_init: done\n");
-
-	/* TODO: ASID allocator */
 }
 
 /*
@@ -455,7 +533,8 @@ pmap_create(void)
 	memset(pm, 0, sizeof(*pm));
 	mutex_init(&pm->pm_lock, MUTEX_DEFAULT, IPL_VM);
 	pm->pm_count = 1;
-	pm->pm_asid = 0;	/* TODO: ASID allocator */
+	pm->pm_asid = 0;
+	pm->pm_asid_gen = 0;	/* force ASID allocation on first activate */
 
 	/*
 	 * Allocate L1 table (one physical page).
@@ -615,7 +694,7 @@ pmap_enter(pmap_t pmap, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 			md->pvh_attrs |= PMAP_MD_MODIFIED;
 	}
 
-	tlb_invalidate_addr(va, 0);
+	pmap_tlb_invalidate(pmap, va);
 	splx(s);
 
 	return 0;
@@ -647,7 +726,7 @@ pmap_remove(pmap_t pm, vaddr_t sva, vaddr_t eva)
 		}
 		*ptep = 0;
 		pm->pm_stats_resident--;
-		tlb_invalidate_addr(va, 0);
+		pmap_tlb_invalidate(pm, va);
 	}
 	splx(s);
 }
@@ -678,7 +757,7 @@ pmap_protect(pmap_t pm, vaddr_t sva, vaddr_t eva, vm_prot_t prot)
 			continue;
 
 		*ptep = (*ptep & ~PTE_PROT_BITS(VM_PROT_ALL)) | keep;
-		tlb_invalidate_addr(va, 0);
+		pmap_tlb_invalidate(pm, va);
 	}
 	splx(s);
 }
@@ -805,14 +884,32 @@ pmap_pin_l1(paddr_t l1_pa)
 
 /*
  * pmap_activate / pmap_deactivate: switch active pmap.
+ *
+ * Called on every context switch.  Re-pins the L1 page table and
+ * sets MMUCR.ASID so the TLB miss handler installs entries tagged
+ * with the correct address space.  If the pmap's ASID is stale
+ * (generation mismatch), allocates a fresh one first.
  */
 void
 pmap_activate(struct lwp *l)
 {
 	struct pmap *pm = l->l_proc->p_vmspace->vm_map.pmap;
+	int s = splhigh();
 
-	/* Re-pin L1 so TLB miss handler walks the right page table */
+	if (pm == pmap_kernel()) {
+		pmap_pin_l1(pm->pm_l1_pa);
+		pmap_set_mmucr(0);
+		splx(s);
+		return;
+	}
+
+	/* Allocate a fresh ASID if this pmap's is stale */
+	if (pm->pm_asid_gen != pmap_asid_generation)
+		pmap_asid_alloc(pm);
+
 	pmap_pin_l1(pm->pm_l1_pa);
+	pmap_set_mmucr(pm->pm_asid);
+	splx(s);
 }
 
 void
@@ -906,7 +1003,7 @@ pmap_clear_modify(struct vm_page *pg)
 		    pv->pv_va);
 		if (ptep != NULL && (*ptep & PTE_V) && (*ptep & PTE_W)) {
 			*ptep &= ~PTE_W;
-			tlb_invalidate_addr(pv->pv_va, 0);
+			pmap_tlb_invalidate(pv->pv_pmap, pv->pv_va);
 		}
 	}
 	splx(s);
@@ -951,14 +1048,60 @@ pmap_is_referenced(struct vm_page *pg)
  */
 
 /*
- * pmap_remove_all — remove all mappings from a pmap.
- * Called on process exit.
+ * pmap_remove_all — remove all user mappings from a pmap.
+ *
+ * Called by UVM on process exit, before pmap_destroy().
+ * Walks the user half of L1, removes PV entries for managed pages,
+ * frees L2 table pages, and bulk-invalidates TLB entries by ASID.
  */
 bool
 pmap_remove_all(struct pmap *pmap)
 {
-	/* TODO(stub): walk page table, free entries, invalidate TLB */
-	return false;
+
+	if (pmap == pmap_kernel())
+		return false;
+
+	unsigned int kern_start = PT_L1_INDEX(VM_MIN_KERNEL_ADDRESS);
+	pt_entry_t *l1 = pmap->pm_l1;
+
+	int s = splhigh();
+
+	/* Bulk-invalidate all TLB entries for this ASID */
+	if (pmap->pm_asid_gen == pmap_asid_generation)
+		tlb_invalidate_asid(pmap->pm_asid);
+
+	/* Walk user half of L1 */
+	for (unsigned int i = 0; i < kern_start; i++) {
+		if (!(l1[i] & PTE_V))
+			continue;
+
+		paddr_t l2_pa = l1[i] & PTE_PPN_MASK;
+		pt_entry_t *l2 = pmap_l2_map(l2_pa);
+
+		/* Remove PV entries for managed pages */
+		for (unsigned int j = 0; j < PT_L2_NENTRIES; j++) {
+			if (!(l2[j] & PTE_V))
+				continue;
+			if (l2[j] & PTE_SW_MANAGED) {
+				vaddr_t va = ((vaddr_t)i << PT_L1_SHIFT) |
+				    ((vaddr_t)j << PT_L2_SHIFT);
+				struct vm_page *pg =
+				    PHYS_TO_VM_PAGE(l2[j] & PTE_PPN_MASK);
+				if (pg != NULL)
+					pv_remove(pg, pmap, va);
+			}
+			pmap->pm_stats_resident--;
+		}
+
+		/* Free L2 table page and clear L1 entry */
+		struct vm_page *l2pg = PHYS_TO_VM_PAGE(l2_pa);
+		if (l2pg != NULL)
+			uvm_pagefree(l2pg);
+		l1[i] = 0;
+	}
+
+	splx(s);
+	return true;
 }
 
 /*

@@ -258,7 +258,23 @@ delay(unsigned int us)
 void
 cpu_idle(void)
 {
-	/* TODO: WFI or similar low-power instruction */
+
+	/*
+	 * Ensure interrupts are enabled while waiting.
+	 *
+	 * The MI idle loop (kern_idle.c) calls spl0() before the
+	 * main loop, but mutex operations inside sched_idle() and
+	 * uvm_idle() may leave the hardware interrupt bit cleared
+	 * due to the binary nature of our SPL model (any IPL > NONE
+	 * disables interrupts; nested mutex release can't distinguish
+	 * "restore to NONE" from "restore to SOFTCLOCK").
+	 *
+	 * Other ports with similar constraints (ARM wfi, MIPS wait)
+	 * ensure interrupts are enabled in cpu_idle for the same
+	 * reason — the CPU must be interruptible to receive timer
+	 * ticks and process callouts.
+	 */
+	spl0();
 }
 
 /*

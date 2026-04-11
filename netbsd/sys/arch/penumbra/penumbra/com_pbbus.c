@@ -92,18 +92,21 @@ com_pbbus_attach(device_t parent, device_t self, void *aux)
 	sc->sc_poll_ticks = 1;
 
 	/*
-	 * Mark as console so com_attach_subr() sets cn_dev on
-	 * cn_tab (the early boot console from startup.c).
-	 * This lets MI cnopen() redirect /dev/console to com's
-	 * cdevsw for userland I/O.
+	 * Register as the system console via comcnattach1().
+	 * This sets up cn_tab (MI com console vtable),
+	 * comcons_info (rate/cflag for comopen defaults), and
+	 * cn_init_magic (console magic sequence — null without
+	 * this causes a panic on first RX character).
 	 *
-	 * We intentionally skip comcnattach1() here — it would
-	 * call cominit() → bus_space_map() creating a redundant
-	 * mapping (startup.c already mapped the UART via
-	 * pmap_map_device).  The early console stays active for
-	 * kernel printf; the MI com tty layer handles userland.
+	 * cominit() inside comcnattach1 creates a second
+	 * bus_space mapping of the same UART PA — harmless
+	 * (uncached MMIO, two VAs for one PA is fine).
+	 *
+	 * com_attach_subr() then auto-detects COM_HW_CONSOLE
+	 * by matching cr_iot + cr_iobase against comcons_info.
 	 */
-	SET(sc->sc_hwflags, COM_HW_CONSOLE);
+	comcnattach1(&sc->sc_regs, 115200, COM_PBBUS_FREQ,
+	    COM_TYPE_NORMAL, (TTYDEF_CFLAG & ~(CSIZE | PARENB)) | CS8);
 
 	com_attach_subr(sc);
 }

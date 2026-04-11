@@ -262,32 +262,48 @@ trap(struct trapframe *tf)
  *
  * Uniprocessor with a single timer interrupt: any IPL above NONE
  * disables the CPU interrupt bit (DI), IPL_NONE enables it (EI).
- * We track the current IPL so splx() can restore the previous state.
+ *
+ * The "current IPL" is derived from the hardware SR.I bit, not
+ * tracked in a global variable.  This avoids a desync where
+ * exception entry clears SR.I (hardware) without updating any
+ * software variable — a global would give splraise() stale data,
+ * causing splx() to erroneously re-enable interrupts inside
+ * exception handlers.
+ *
+ * For our binary model: SR.I=1 → IPL_NONE, SR.I=0 → IPL_HIGH.
+ * NetBSD's multi-level IPL distinctions (SOFTCLOCK, VM, SCHED, …)
+ * collapse into this single bit.
  */
-static int current_ipl;
+
+static inline int
+current_ipl(void)
+{
+	uint32_t sr;
+
+	__asm __volatile("RDSPR %0, sr" : "=r"(sr));
+	return (sr & PSL_I) ? IPL_NONE : IPL_HIGH;
+}
 
 void
 intr_init(void)
 {
-	current_ipl = IPL_HIGH;		/* interrupts off at boot */
+	/* Interrupts are already disabled by hardware at boot. */
 }
 
 int
 splraise(int ipl)
 {
-	int old = current_ipl;
+	int old = current_ipl();
 
-	if (ipl > current_ipl) {
-		current_ipl = ipl;
+	if (ipl > IPL_NONE)
 		__asm __volatile("DI");
-	}
 	return old;
 }
 
 void
 splx(int ipl)
 {
-	current_ipl = ipl;
+
 	if (ipl == IPL_NONE)
 		__asm __volatile("EI");
 	else
@@ -297,7 +313,7 @@ splx(int ipl)
 void
 spl0(void)
 {
-	current_ipl = IPL_NONE;
+
 	__asm __volatile("EI");
 }
 

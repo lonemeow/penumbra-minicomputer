@@ -415,10 +415,12 @@ MIPS/68k-style vector dispatch.
   Polled I/O via `sc_poll_ticks=1` callout (no interrupt handler
   wired); `COM_HW_NOIEN` suppresses MCR_IENABLE to prevent IRQ
   assertion while IER still enables RX/TX status in IIR.
-  `COM_HW_CONSOLE` set manually — `com_attach_subr()` sets
-  `cn_dev` on the early console's `cn_tab`, enabling MI `cnopen()`
-  to redirect `/dev/console` to the com cdevsw (major 26).
-  Userland I/O through `/dev/console` is operational.
+  `comcnattach1()` called from `com_pbbus_attach()` to register
+  as system console — sets up `cn_tab`, `comcons_info`
+  (rate/cflag), and `cn_init_magic` (console magic sequence).
+  `com_attach_subr()` auto-detects `COM_HW_CONSOLE` by matching
+  `cr_iot`/`cr_iobase` against `comcons_info`.
+  Userland I/O through `/dev/console` is operational (RX and TX).
 - **Device autoconfig:** `pbbus` bridge walks `BTINFO_DEVICE`
   entries from bootinfo, attaches child devices by ACFG_CLASS_*.
   `bus_space` implemented (map via UVM + pmap_kenter_pa, read/write
@@ -471,17 +473,22 @@ MIPS/68k-style vector dispatch.
   kernel pmaps.  `pmap_create` allocates L1, copies kernel half
   (under splhigh); entries added later propagated lazily by
   trap.c on TLB miss (kernel L2 never freed invariant).
-  `pmap_activate` re-pins L1 in TLB slot 1.
-  `pmap_alloc_l2` returns bool (ENOMEM-safe).
+  `pmap_activate` re-pins L1 and sets MMUCR.ASID on every
+  context switch.  `pmap_alloc_l2` returns bool (ENOMEM-safe).
+  `pmap_remove_all` walks user page table, removes PV entries,
+  frees L2 pages, and bulk-invalidates TLB by ASID.
+- **ASID management:** generational allocator (1–255, 0=kernel).
+  Each pmap's ASID is tagged with a generation; on activate,
+  stale ASIDs get a fresh allocation.  When 255 exhausted,
+  generation bumps, TLB flushed, allocation restarts.
+  TLB invalidation uses per-pmap ASIDs via `pmap_tlb_invalidate`.
+  G=1 kernel entries always use ASID=0.
 - **PV lists:** per-physical-page SLIST of (pmap, VA) entries
   tracks all managed mappings.  `pmap_enter`/`pmap_remove`
   maintain PV lists; `pmap_page_protect` delegates to
   `pmap_remove`/`pmap_protect` per entry (no code duplication).
   `pmap_clear_modify` write-protects via PV walk;
   `pmap_is_modified`/`pmap_is_referenced` check page-level flags.
-- **TLB miss handler ASID:** G=1 entries installed with ASID=0
-  (not current process ASID) so `tlb_invalidate_addr(va, 0)`
-  can find them regardless of context.
 - **Exec and return-to-user:** `setregs` initializes user
   trapframe, `lwp_trampoline` → `trap_return` handles SP banking
   (USP save/restore) and pinned-scratch ESR/EPC stash to prevent
@@ -508,9 +515,8 @@ MIPS/68k-style vector dispatch.
   processes instead of panicking; kernel-mode faults still panic.
   `cpu_lwp_setprivate` writes TP (R12) to trapframe
   (`__HAVE_CPU_LWP_SETPRIVATE` defined in types.h).
-  `/rescue/sh` starts and exits cleanly on the ISS.
-  `/rescue/init` forks successfully (PV lists + LLVM negation fix);
-  kernel reaches idle loop.  Shell output pending (needs /dev/console).
+  `/rescue/init` boots to single-user shell on the ISS.
+  Interactive console I/O works (RX + TX via polled com(4)).
 - Remaining MD stubs: `process_read_regs`, `process_write_regs`,
   `process_set_pc`, `cpu_coredump`, `vmapbuf`/`vunmapbuf`
   (grep for `TODO(stub)`).
