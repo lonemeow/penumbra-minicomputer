@@ -122,7 +122,8 @@ or MOV PC + ADDi (PIC); BRJT always adds base back).
   zext/sext i32→i64 via narrowScalarIf splitting.
 - Extensions: G_ANYEXT/G_TRUNC/G_SEXT_INREG.
 - MUL/DIV/REM: s32 strength-reduced when possible
-  (constant power-of-2 MUL→SHL, power-of-2±1 MUL→SHL+ADD/SUB,
+  (MUL by -1→SUB from zero, constant power-of-2 MUL→SHL,
+  power-of-2±1 MUL→SHL+ADD/SUB with shift < bit_width guard,
   power-of-2 UDIV→LSHR, power-of-2 UREM→AND),
   otherwise libcalls;
   s64 all via libcalls (__muldi3/__udivdi3/__umoddi3/etc.).

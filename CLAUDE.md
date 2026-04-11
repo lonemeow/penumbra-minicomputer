@@ -456,9 +456,20 @@ MIPS/68k-style vector dispatch.
   fault recovery.  copyinstr/copyoutstr byte-loop.
   ufetch/ustore 8/16/32.  User address validation.
 - **pmap_enter / pmap_create:** demand paging for user and
-  kernel pmaps.  `pmap_create` allocates L1, copies kernel half.
+  kernel pmaps.  `pmap_create` allocates L1, copies kernel half
+  (under splhigh); entries added later propagated lazily by
+  trap.c on TLB miss (kernel L2 never freed invariant).
   `pmap_activate` re-pins L1 in TLB slot 1.
   `pmap_alloc_l2` returns bool (ENOMEM-safe).
+- **PV lists:** per-physical-page SLIST of (pmap, VA) entries
+  tracks all managed mappings.  `pmap_enter`/`pmap_remove`
+  maintain PV lists; `pmap_page_protect` delegates to
+  `pmap_remove`/`pmap_protect` per entry (no code duplication).
+  `pmap_clear_modify` write-protects via PV walk;
+  `pmap_is_modified`/`pmap_is_referenced` check page-level flags.
+- **TLB miss handler ASID:** G=1 entries installed with ASID=0
+  (not current process ASID) so `tlb_invalidate_addr(va, 0)`
+  can find them regardless of context.
 - **Exec and return-to-user:** `setregs` initializes user
   trapframe, `lwp_trampoline` → `trap_return` handles SP banking
   (USP save/restore) and pinned-scratch ESR/EPC stash to prevent
@@ -486,6 +497,8 @@ MIPS/68k-style vector dispatch.
   `cpu_lwp_setprivate` writes TP (R12) to trapframe
   (`__HAVE_CPU_LWP_SETPRIVATE` defined in types.h).
   `/rescue/sh` starts and exits cleanly on the ISS.
+  `/rescue/init` forks successfully (PV lists + LLVM negation fix);
+  kernel reaches idle loop.  Shell output pending (needs /dev/console).
 - Remaining MD stubs: `process_read_regs`, `process_write_regs`,
   `process_set_pc`, `cpu_coredump`, `vmapbuf`/`vunmapbuf`
   (grep for `TODO(stub)`).
