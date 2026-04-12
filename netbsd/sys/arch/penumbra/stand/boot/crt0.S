@@ -15,14 +15,14 @@
  *   1. Find _DYNAMIC at runtime via PC-relative addressing
  *   2. Load _DYNAMIC's link-time address via LLI/LUI
  *   3. bias = runtime_DYNAMIC - linktime_DYNAMIC
- *   4. Walk .dynamic to find DT_REL (addr) and DT_RELSZ (size)
- *   5. For each R_PENUMBRA_RELATIVE: *(offset + bias) += bias
+ *   4. Walk .dynamic to find DT_RELA (addr) and DT_RELASZ (size)
+ *   5. For each R_PENUMBRA_RELATIVE: *(offset + bias) = bias + addend
  *   6. Call main(bootdata)
  */
 
 #define DT_NULL              0
-#define DT_REL               17
-#define DT_RELSZ             18
+#define DT_RELA              7
+#define DT_RELASZ            8
 #define R_PENUMBRA_RELATIVE  8
 
     .text
@@ -73,10 +73,10 @@ _start:
     beq  .Lreloc_done
 
     /*
-     * Walk .dynamic table to find DT_REL and DT_RELSZ.
+     * Walk .dynamic table to find DT_RELA and DT_RELASZ.
      * r2 = pointer into .dynamic (runtime address)
-     * r6 = DT_REL value (link-time address of .rel.dyn)
-     * r7 = DT_RELSZ value (size in bytes)
+     * r6 = DT_RELA value (link-time address of .rela.dyn)
+     * r7 = DT_RELASZ value (size in bytes)
      */
     lli  r6, #0
     lli  r7, #0
@@ -86,56 +86,57 @@ _start:
     cmp  r8, #DT_NULL
     beq  .Ldyn_done
     ldw  r9, [r2 + 4]       /* d_val */
-    cmp  r8, #DT_REL
-    beq  .Lfound_rel
-    cmp  r8, #DT_RELSZ
-    beq  .Lfound_relsz
+    cmp  r8, #DT_RELA
+    beq  .Lfound_rela
+    cmp  r8, #DT_RELASZ
+    beq  .Lfound_relasz
     add  r2, #8
     b    .Ldyn_loop
 
-.Lfound_rel:
+.Lfound_rela:
     mov  r6, r9
     add  r2, #8
     b    .Ldyn_loop
 
-.Lfound_relsz:
+.Lfound_relasz:
     mov  r7, r9
     add  r2, #8
     b    .Ldyn_loop
 
 .Ldyn_done:
-    /* r6 = link-time .rel.dyn address, adjust to runtime */
-    add  r6, r4             /* r6 = runtime &.rel.dyn */
+    /* r6 = link-time .rela.dyn address, adjust to runtime */
+    add  r6, r4             /* r6 = runtime &.rela.dyn */
     /* r7 = size; compute end pointer */
-    add  r7, r6             /* r7 = end of .rel.dyn */
+    add  r7, r6             /* r7 = end of .rela.dyn */
 
     /*
-     * Process Elf32_Rel entries (8 bytes each):
+     * Process Elf32_Rela entries (12 bytes each):
      *   [0] r_offset  — location to patch (link-time)
      *   [4] r_info    — (sym << 8) | type
+     *   [8] r_addend  — explicit addend
      *
      * For R_PENUMBRA_RELATIVE (type 8):
      *   runtime_addr = r_offset + bias
-     *   *runtime_addr += bias
+     *   *runtime_addr = bias + r_addend
      */
-.Lrel_loop:
+.Lrela_loop:
     cmp  r6, r7
     bhs  .Lreloc_done
     ldw  r8, [r6]           /* r_offset */
     ldw  r9, [r6 + 4]       /* r_info */
     and  r9, #0xFF          /* type = r_info & 0xFF */
     cmp  r9, #R_PENUMBRA_RELATIVE
-    bne  .Lrel_next
+    bne  .Lrela_next
 
-    /* Patch this location */
+    /* Patch this location: *(offset + bias) = bias + addend */
     add  r8, r4             /* r8 = runtime address */
-    ldw  r9, [r8]           /* current value (link-time addr) */
-    add  r9, r4             /* add bias */
+    ldw  r9, [r6 + 8]       /* r_addend */
+    add  r9, r4             /* bias + addend */
     stw  r9, [r8]           /* write back */
 
-.Lrel_next:
-    add  r6, #8
-    b    .Lrel_loop
+.Lrela_next:
+    add  r6, #12
+    b    .Lrela_loop
 
 .Lreloc_done:
     /* Restore boot data pointer and call main */

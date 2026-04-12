@@ -49,6 +49,11 @@ void penumbra::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   Args.addAllArgs(CmdArgs, {options::OPT_shared, options::OPT_static,
                              options::OPT_rdynamic});
 
+  // Self-relocating PIE code (bootloader, benchmarks) reads
+  // pre-relocation data values to compute the load bias.
+  // Without written addends these are zero under RELA.
+  CmdArgs.push_back("--apply-dynamic-relocs");
+
   // Find ld.lld in the same directory as clang.
   const char *Exec = Args.MakeArgString(TC.GetProgramPath("ld.lld"));
   C.addCommand(std::make_unique<Command>(JA, *this,

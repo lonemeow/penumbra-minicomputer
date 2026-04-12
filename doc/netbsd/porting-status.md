@@ -129,13 +129,14 @@ DDB (kernel debugger) disabled -- needs extensive MD hooks.
 - **libc MD:** `SYS.h` (SYSTRAP/PSEUDO/RSYSCALL), `cerror.S`,
   12 custom syscall wrappers, softfloat, `makecontext`/
   `resumecontext`, `__mulsi3`, atomics (RAS + generic).
-- **Libraries:** All static libraries build and link.
-  Shared libraries (`.so`) blocked on GOT-based PIC (see below).
-- **Dynamic linker (`ld.elf_so`):** MD code written
-  (`rtld_start.S`, `mdreloc.c`), RELA relocations, eager PLT
-  binding.  Blocked on GOT-based PIC — cannot be built yet.
-- **Limitations:** libpthread is minimal stubs.  `MKPIC=no`
-  (PIC reach limitation).  `MKCXX=no` (no C++ support).
+- **Libraries:** All static and shared libraries build and link.
+  `MKPIC=yes` with GOT-based PIC (full 32-bit reach).
+- **Dynamic linker (`ld.elf_so`):** Functional.
+  `rtld_start.S`, `mdreloc.c`, RELA relocations, eager PLT
+  binding.  Dynamically-linked binaries load and run.
+  Library search path requires `ldconfig /lib /usr/lib`.
+- **Limitations:** libpthread is minimal stubs.
+  `MKCXX=no` (no C++ support).
 
 ## Kernel Config (MINIMAL)
 
@@ -157,12 +158,8 @@ make simulate SDCARD=build/boot.img
 
 ## What's Next
 
-1. **GOT-based PIC** -- LLVM backend needs GOT-relative data
-   access for `-fPIC`.  Current `MOV PC + ADDi %pcrel` has
-   only 16-bit reach (±64KB), insufficient for large `.so`
-   files.  Blocks shared libraries and `ld.elf_so` activation.
-2. **Root filesystem** -- `build.sh sets`, boot with full
+1. **Root filesystem** -- `build.sh sets`, boot with full
    userland on the ISS.
-3. **Remaining MD stubs** -- as the kernel reaches them.
-4. **Interrupt controller** -- multiple devices with priority.
-5. **SDRAM controller** -- memory subsystem for real hardware.
+2. **Remaining MD stubs** -- as the kernel reaches them.
+3. **Interrupt controller** -- multiple devices with priority.
+4. **SDRAM controller** -- memory subsystem for real hardware.

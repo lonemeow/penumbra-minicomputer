@@ -258,6 +258,13 @@ emits one 32-bit word per line in uppercase hex.
 ELF linker target with PIE support.
 Handles all 9 relocation types
 (including PC-relative memoffset and imm16 for PIC).
+**RELA format:** `EM_PENUMBRA` is in lld's RELA architecture list
+(`Driver.cpp:getIsRela`), so dynamic relocations use explicit addends
+(12-byte `Elf32_Rela` entries with `DT_RELA`/`DT_RELASZ`).
+Self-relocating PIE code (bootloader, ld.elf_so) needs
+`--apply-dynamic-relocs` so lld writes addends to the data sections
+(the bias computation reads pre-relocation values before the
+relocator runs).
 PIE support: `relativeRel = R_PENUMBRA_RELATIVE`,
 `symbolicRel = R_PENUMBRA_32`, `getDynRel()` maps
 `R_PENUMBRA_32` to dynamic, `getImplicitAddend()` reads

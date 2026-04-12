@@ -242,6 +242,10 @@ void netbsd::Linker::ConstructJob(Compilation &C, const JobAction &JA,
     // Match GNU ld defaults for NetBSD build system compatibility.
     CmdArgs.push_back("--allow-shlib-undefined");
     CmdArgs.push_back("--undefined-version");
+    // Self-relocating PIE code (ld.elf_so, bootloader) reads
+    // pre-relocation data values to compute the load bias.
+    // Without written addends these are zero under RELA.
+    CmdArgs.push_back("--apply-dynamic-relocs");
     break;
 
   default:

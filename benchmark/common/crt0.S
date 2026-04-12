@@ -15,8 +15,8 @@
 
 /* ── ELF dynamic section tags ─────────────────────────────────── */
 #define DT_NULL             0
-#define DT_REL              17
-#define DT_RELSZ            18
+#define DT_RELA             7
+#define DT_RELASZ           8
 #define R_PENUMBRA_RELATIVE 8
 
 /* ── MMU sysregs (device 0) ───────────────────────────────────── */
@@ -49,7 +49,7 @@
  * Phase 1: Entry + PIE self-relocation
  *
  * Same algorithm as the bootloader (stand/boot/crt0.S):
- * compute load bias from _DYNAMIC, walk .rel.dyn, patch
+ * compute load bias from _DYNAMIC, walk .rela.dyn, patch
  * R_PENUMBRA_RELATIVE entries.
  * ═════════════════════════════════════════════════════════════════ */
 
@@ -79,7 +79,7 @@ _start:
         cmp     r4, #0
         beq     .Lreloc_done
 
-        /* Walk .dynamic for DT_REL and DT_RELSZ */
+        /* Walk .dynamic for DT_RELA and DT_RELASZ */
         lli     r6, #0
         lli     r7, #0
 
@@ -88,42 +88,42 @@ _start:
         cmp     r8, #DT_NULL
         beq     .Ldyn_done
         ldw     r9, [r2 + 4]
-        cmp     r8, #DT_REL
-        beq     .Lfound_rel
-        cmp     r8, #DT_RELSZ
-        beq     .Lfound_relsz
+        cmp     r8, #DT_RELA
+        beq     .Lfound_rela
+        cmp     r8, #DT_RELASZ
+        beq     .Lfound_relasz
         add     r2, #8
         b       .Ldyn_loop
 
-.Lfound_rel:
+.Lfound_rela:
         mov     r6, r9
         add     r2, #8
         b       .Ldyn_loop
 
-.Lfound_relsz:
+.Lfound_relasz:
         mov     r7, r9
         add     r2, #8
         b       .Ldyn_loop
 
 .Ldyn_done:
-        add     r6, r4                  /* runtime &.rel.dyn */
-        add     r7, r6                  /* end of .rel.dyn */
+        add     r6, r4                  /* runtime &.rela.dyn */
+        add     r7, r6                  /* end of .rela.dyn */
 
-.Lrel_loop:
+.Lrela_loop:
         cmp     r6, r7
         bhs     .Lreloc_done
         ldw     r8, [r6]               /* r_offset */
         ldw     r9, [r6 + 4]            /* r_info */
         and     r9, #0xFF              /* type */
         cmp     r9, #R_PENUMBRA_RELATIVE
-        bne     .Lrel_next
+        bne     .Lrela_next
         add     r8, r4                  /* runtime address */
-        ldw     r9, [r8]
-        add     r9, r4                  /* add bias */
+        ldw     r9, [r6 + 8]            /* r_addend */
+        add     r9, r4                  /* bias + addend */
         stw     r9, [r8]
-.Lrel_next:
-        add     r6, #8
-        b       .Lrel_loop
+.Lrela_next:
+        add     r6, #12
+        b       .Lrela_loop
 
 .Lreloc_done:
 

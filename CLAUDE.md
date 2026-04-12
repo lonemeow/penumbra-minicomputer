@@ -625,18 +625,19 @@ MIPS/68k-style vector dispatch.
   `_NGREG=17`, added `_REG_SP`/`_REG_LR` named constants.
   `SLOPPY_FLIST=yes` in mk.conf to tolerate missing `ld.elf_so`
   (rtld not yet ported) and toolchain binaries.
-- **Dynamic linker (`ld.elf_so`) not yet ported.**
-  Needs `arch/penumbra/` directory with `rtld_start.S`,
-  `mdreloc.c`, `Makefile.inc`.  Required before dynamically-linked
-  binaries can run.  Statically-linked rescue binaries work.
-  GOT-based PIC codegen is implemented (`MKPIC=yes`), so shared
-  libraries build — `ld.elf_so` is the remaining blocker.
+- **Dynamic linker (`ld.elf_so`) ported and functional.**
+  `rtld_start.S` (bootstrap + PLT resolver), `mdreloc.c`
+  (RELATIVE, GLOB_DAT, JUMP_SLOT, TLS relocations),
+  `Makefile.inc` in `libexec/ld.elf_so/arch/penumbra/`.
+  Self-relocation via RELA format (`DT_RELA`);
+  `--apply-dynamic-relocs` required for written addends
+  (bias computation reads pre-relocation data).
+  Dynamically-linked binaries load and run; library search
+  path requires `ldconfig /lib /usr/lib` (or `/etc/ld.so.conf`).
 
 ## Next Steps (in priority order)
 1. **Root filesystem** — `build.sh sets` to create installable
    sets, boot with full userland on the ISS.
-2. **Dynamic linker** — port `ld.elf_so` (rtld_start.S, mdreloc.c)
-   so dynamically-linked binaries can run.
 3. **Kernel implementation** — remaining MD stubs as the kernel
    reaches them (grep `TODO(stub)`): process_read_regs,
    cpu_coredump, vmapbuf/vunmapbuf.

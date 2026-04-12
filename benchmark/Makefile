@@ -19,7 +19,7 @@ TARGET  := penumbra-unknown-none
 COPT    ?= -O2
 CFLAGS  := --target=$(TARGET) -fPIE $(COPT) -ffreestanding -nostdlib -I common
 ASFLAGS := --target=$(TARGET) -fPIE -c
-LDFLAGS := --pie --image-base=0 -T common/bench.ld
+LDFLAGS := --pie --apply-dynamic-relocs --image-base=0 -T common/bench.ld
 
 BUILDDIR := $(PROJROOT)/build/benchmark
 

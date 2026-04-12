@@ -59,7 +59,8 @@ LIBSA=		${SALIB}
 
 ${PROG}.sym: ${OBJS} ${SALIB} ${KERNLIB}
 	${_MKTARGET_LINK}
-	${LD} --pie -T ${.CURDIR}/boot.ld -e _start -o ${PROG}.sym \
+	${LD} --pie --apply-dynamic-relocs \
+	    -T ${.CURDIR}/boot.ld -e _start -o ${PROG}.sym \
 	    ${OBJS} ${SALIB} ${KERNLIB}
 
 # Stub out CRT objects the link expects
