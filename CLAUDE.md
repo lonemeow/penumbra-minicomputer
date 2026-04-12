@@ -302,6 +302,9 @@ MIPS/68k-style vector dispatch.
   `llvm-mc -disassemble` decode all instruction formats.
   Auto-generated decoder tables with custom decoders for
   branch targets, signed immediates, and memory offsets.
+  `MCInstrAnalysis` provides branch target `<symbol>` annotations
+  and LLI/LUI pair tracking for address resolution
+  (`// 0xADDR <symbol>` comments on LUI instructions).
   `EM_PENUMBRA` mapped in `ELFObjectFile.h` for all binary utilities.
 - Assembly pseudo-instructions LI, LA, NOP, RET expand
   in the AsmParser.

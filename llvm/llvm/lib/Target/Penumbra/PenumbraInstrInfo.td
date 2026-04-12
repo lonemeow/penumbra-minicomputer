@@ -168,6 +168,7 @@ def uimm5 : ImmLeaf<i32, [{return isUInt<5>(Imm);}]>;
 def brtarget22 : Operand<i32> {
   let EncoderMethod = "encodeBranchTarget";
   let DecoderMethod = "decodeBranchTarget";
+  let PrintMethod = "printBranchTarget";
 }
 
 // 16-bit immediate that may reference a symbol (e.g. LLI Rd, #label_lo).

@@ -78,8 +78,20 @@ instruction formats.
   `decodeMemOffset16` (sign-extended for load/store offsets).
 - `ELFObjectFile.h` maps `EM_PENUMBRA` → `elf32-penumbra` / `Triple::penumbra`
   for all LLVM binary utilities.
-- Lit test: `test/MC/Disassembler/Penumbra/penumbra.txt`
-  (vectors from `pasm.py` reference assembler).
+- **MCInstrAnalysis** (in `PenumbraMCTargetDesc.cpp`):
+  `evaluateBranch` resolves direct branch/call targets for
+  `<symbol>` annotations in `llvm-objdump`.
+  `updateState`/`evaluateMemoryOperandAddress` track GPR values
+  across LLI/LUI instruction pairs, annotating LUI with the
+  reconstructed 32-bit address and symbol name (printed as
+  `// 0xADDR <symbol>` comment).  State is invalidated on
+  terminators, calls, and any non-tracked GPR write.
+  Branch targets printed as hex addresses via `printBranchTarget`.
+- Lit tests: `test/MC/Disassembler/Penumbra/penumbra.txt`
+  (vectors from `pasm.py` reference assembler),
+  `test/MC/Penumbra/disasm-annotations.s` (branch target and
+  LLI/LUI address annotations on linked binary, relocation
+  display on .o file, register invalidation).
 
 **GlobalISel codegen (hybrid TableGen + C++):**
 Simple 1:1 patterns are expressed as TableGen `Pat<>` rules in
@@ -229,7 +241,7 @@ EM_PENUMBRA (0xF0DA) defined in central `llvm/BinaryFormat/ELF.h`.
 | `GISel/PenumbraRegisterBanks.td` | `def GPRRegBank : RegisterBank<"GPRBank", [GPR]>` |
 | `GISel/PenumbraInstructionSelector.cpp` | Hybrid: `selectImpl()` for TableGen patterns, manual C++ for complex cases. See "Manual C++ handles" above for full list. LLI+LUI pairs use SSA-correct intermediate vregs. |
 | `Disassembler/PenumbraDisassembler.{h,cpp}` | Binary → MCInst. Custom decoders for branch targets (symbolic lookup), signed immediates (LLIS), signed memory offsets |
-| `MCTargetDesc/PenumbraMCTargetDesc.{h,cpp}` | Registers all MC components |
+| `MCTargetDesc/PenumbraMCTargetDesc.{h,cpp}` | Registers all MC components. `PenumbraMCInstrAnalysis`: branch target evaluation + GPR state tracking for LLI/LUI address annotation |
 | `MCTargetDesc/PenumbraInstPrinter.{h,cpp}` | MCInst → assembly text |
 | `MCTargetDesc/PenumbraMCCodeEmitter.cpp` | MCInst → binary bytes. Custom `encodeBranchTarget` and `encodeImm16` create fixups |
 | `MCTargetDesc/PenumbraAsmBackend.cpp` | Fixup resolution (branch22, imm16, lo16, hi16), `maybeAddReloc` for ELF relocs, NOP = `0x00000000` (ADD R0,R0) |

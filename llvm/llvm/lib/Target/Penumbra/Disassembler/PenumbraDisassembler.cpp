@@ -71,9 +71,9 @@ static DecodeStatus DecodeGPRzRegisterClass(MCInst &Inst, unsigned RegNo,
 static DecodeStatus decodeBranchTarget(MCInst &Inst, unsigned FieldVal,
                                        uint64_t Address,
                                        const MCDisassembler *Decoder) {
-  uint64_t Target = Address + (SignExtend32<22>(FieldVal) << 2);
+  int64_t Target = Address + (SignExtend64<22>(FieldVal) << 2);
   if (!Decoder->tryAddingSymbolicOperand(Inst, Target, Address, true, 0, 4, 0)) {
-    Inst.addOperand(MCOperand::createImm(FieldVal));
+    Inst.addOperand(MCOperand::createImm(Target));
   }
   return MCDisassembler::Success;
 }

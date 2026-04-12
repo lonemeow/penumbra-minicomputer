@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "PenumbraInstPrinter.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
@@ -35,6 +36,15 @@ void PenumbraInstPrinter::printOperand(const MCInst *MI, unsigned OpNo,
     O << getRegisterName(MO.getReg());
   else if (MO.isImm())
     O << MO.getImm();
+  else if (MO.isExpr())
+    MAI.printExpr(O, *MO.getExpr());
+}
+
+void PenumbraInstPrinter::printBranchTarget(const MCInst *MI, unsigned OpNo,
+                                            raw_ostream &O) {
+  const MCOperand &MO = MI->getOperand(OpNo);
+  if (MO.isImm())
+    O << "0x" << utohexstr(static_cast<uint64_t>(MO.getImm()));
   else if (MO.isExpr())
     MAI.printExpr(O, *MO.getExpr());
 }
