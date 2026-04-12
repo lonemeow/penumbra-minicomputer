@@ -39,6 +39,8 @@ enum {
   R_PENUMBRA_GOT_PCREL_HI16 = 19, // GOT PC-relative: high 16 bits
   R_PENUMBRA_TLS_GD_GOT_PCREL_LO16 = 20, // TLS GD GOT PC-relative: low 16
   R_PENUMBRA_TLS_GD_GOT_PCREL_HI16 = 21, // TLS GD GOT PC-relative: high 16
+  R_PENUMBRA_COPY = 22,                   // Copy relocation
+  R_PENUMBRA_IRELATIVE = 23,              // Indirect function (IFUNC)
 };
 
 class PenumbraELFObjectWriter : public MCELFObjectTargetWriter {

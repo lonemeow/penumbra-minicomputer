@@ -9,12 +9,6 @@
  *   R2 = ps_strings
  *   PC = _rtld_start
  *
- * Protocol:
- *   1. Compute load bias (same technique as bootloader crt0.S)
- *   2. Self-relocate via _rtld_relocate_nonplt_self(dynp, relocbase)
- *   3. Call _rtld(sp, relocbase) -> returns entry point
- *   4. Jump to entry with (cleanup, obj_main, ps_strings) in R1-R3
- *
  * Callee-saved: R5-R10.  Scratch: R1-R4, R11.  R13=LR, R14=SP.
  */
 
@@ -24,64 +18,65 @@
 	.globl _C_LABEL(_rtld)
 
 /*
- * _rtld_start: dynamic linker entry point.
+ * Bias computation:
  *
- * The kernel sets up the stack and jumps here.  We must
- * self-relocate, then call _rtld() to process all shared
- * objects, and finally jump to the program's real entry point.
+ * All pool entries are offsets from .Lpc (the MOV PC anchor).
+ * Pool is placed AFTER .Lpc so LDW offsets are positive.
+ * Pool values are cross-section differences resolved by the
+ * static linker (R_PENUMBRA_PC32) — no dynamic relocs.
  *
- * _rtld() writes two pointers to the stack area we pass:
- *   sp[0] = cleanup function pointer
- *   sp[1] = obj_main pointer
- *
- * The program's ___start(cleanup, obj_main, ps_strings) expects
- * these in R1, R2, R3.
+ *   runtime _DYNAMIC = runtime .Lpc + pool[0]
+ *   runtime .Ldynamic_linkaddr = runtime .Lpc + pool[1]
+ *   linktime _DYNAMIC = *(.Ldynamic_linkaddr)  (pre-relocation)
+ *   bias = runtime _DYNAMIC - linktime _DYNAMIC
  */
 ENTRY(_rtld_start)
-	mov r6, r2 /* Save ps_strings to a callee-saved register */
+	mov	r6, r2			/* save ps_strings */
 
-	mov r2, pc
-	add r2, 8
-	add r2, %pcrel(_DYNAMIC) /* r2 = Runtime address of _DYNAMIC (PC-relative) */
+.Lpc:
+	mov	r2, r15			/* r2 = runtime .Lpc */
 
-    mov  r3, pc
-    add  r3, 8
-    add  r3, %pcrel(.Ldynamic_linkaddr)
-    ldw  r3, [r3] /* r3 = link-time _DYNAMIC (read from .data, pre-relocation) */
+	/* runtime _DYNAMIC */
+	ldw	r3, [r2 + (.Lpool_dyn - .Lpc)]
+	mov	r1, r2
+	add	r1, r3			/* r1 = runtime _DYNAMIC */
 
-    mov  r5, r2
-    sub  r5, r3 /* r5 = Relocbase */
+	/* linktime _DYNAMIC from .data word */
+	ldw	r3, [r2 + (.Lpool_linkaddr - .Lpc)]
+	mov	r4, r2
+	add	r4, r3			/* r4 = runtime &.Ldynamic_linkaddr */
+	ldw	r3, [r4]		/* r3 = linktime _DYNAMIC (pre-reloc) */
 
-	mov r1, r2
-	mov r2, r5
-	bl  _rtld_relocate_nonplt_self /* _rtld_relocate_nonplt_self(dynamic_pcrel, relocbase) */
+	/* bias */
+	mov	r5, r1
+	sub	r5, r3			/* r5 = bias = runtime - linktime */
 
-	sub sp, 8 /* Allocate 2 words on stack for cleanup, obj_main */
-	mov r1, sp
-	mov r2, r5
-	bl  _rtld /* _rtld(storearea, relocbase) */
+	mov	r2, r5			/* arg2 = relocbase */
+	bl	_rtld_relocate_nonplt_self
 
-	mov r11, r1       /* entry point */
-	ldw r1, [sp]      /* cleanup */
-	ldw r2, [sp + 4]  /* obj_main */
-	mov r3, r6        /* ps_strings */
-	add sp, 8
-	jmp r11
+	sub	sp, 8
+	mov	r1, sp			/* arg1 = &storearea */
+	mov	r2, r5			/* arg2 = relocbase */
+	bl	_rtld			/* returns entry point in r1 */
+
+	mov	r11, r1			/* entry point */
+	ldw	r1, [sp]		/* cleanup */
+	ldw	r2, [sp + 4]		/* obj_main */
+	mov	r3, r6			/* ps_strings */
+	add	sp, 8
+	jmp	r11
+
+	/* Literal pool: offsets from .Lpc, resolved by static linker */
+	.align	2
+.Lpool_dyn:
+	.long	_DYNAMIC - .Lpc
+.Lpool_linkaddr:
+	.long	.Ldynamic_linkaddr - .Lpc
 END(_rtld_start)
 
 /*
- * _rtld_bind_start: lazy PLT resolver entry.
- *
- * Called from PLT header when a lazy GOT.PLT slot is invoked.
- * GOT.PLT[0] = &_rtld_bind_start (set by _rtld_setup_pltgot)
- * GOT.PLT[1] = obj pointer
- *
- * For now we use eager binding only (_rtld_relocate_plt_lazy
- * is a no-op), so this stub should never be reached.  Include
- * it as a placeholder for future lazy binding support.
- *
- * If reached, save all argument registers, call _rtld_bind,
- * restore arguments, and jump to the resolved function.
+ * _rtld_bind_start: lazy PLT resolver entry (placeholder).
+ * Eager binding only for now.
  */
 
 #define BIND_FRAME_SIZ	(8 * SZREG)
@@ -90,11 +85,8 @@ END(_rtld_start)
 #define BIND_FRAME_R3	(5 * SZREG)
 #define BIND_FRAME_R2	(4 * SZREG)
 #define BIND_FRAME_R1	(3 * SZREG)
-#define BIND_FRAME_OBJ	(1 * SZREG)
-#define BIND_FRAME_OFF	(0 * SZREG)
 
 ENTRY_NP(_rtld_bind_start)
-	/* Save argument registers and LR */
 	sub	sp, #BIND_FRAME_SIZ
 	stw	r1,  [sp + BIND_FRAME_R1]
 	stw	r2,  [sp + BIND_FRAME_R2]
@@ -102,12 +94,9 @@ ENTRY_NP(_rtld_bind_start)
 	stw	r4,  [sp + BIND_FRAME_R4]
 	stw	r13, [sp + BIND_FRAME_LR]
 
-	/* _rtld_bind(obj, reloff) */
-	/* obj and reloff must be passed by PLT header — TBD */
 	bl	_C_LABEL(_rtld_bind)
-	mov	r11, r1			/* save resolved address */
+	mov	r11, r1
 
-	/* Restore argument registers and LR */
 	ldw	r1,  [sp + BIND_FRAME_R1]
 	ldw	r2,  [sp + BIND_FRAME_R2]
 	ldw	r3,  [sp + BIND_FRAME_R3]
@@ -115,11 +104,12 @@ ENTRY_NP(_rtld_bind_start)
 	ldw	r13, [sp + BIND_FRAME_LR]
 	add	sp, #BIND_FRAME_SIZ
 
-	/* Jump to resolved function */
 	jmp	r11
 END(_rtld_bind_start)
 
-    .data
-    .align 4
+	/* Link-time _DYNAMIC in writable .data — gets R_RELATIVE.
+	 * Before self-relocation, holds original link-time value. */
+	.data
+	.align	4
 .Ldynamic_linkaddr:
-    .long _DYNAMIC
+	.long	_DYNAMIC

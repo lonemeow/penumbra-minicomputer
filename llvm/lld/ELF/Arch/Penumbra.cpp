@@ -71,6 +71,8 @@ Penumbra::Penumbra(Ctx &ctx) : TargetInfo(ctx) {
   ipltEntrySize = 16;
 
   needsThunks = true;
+  copyRel = R_PENUMBRA_COPY;
+  iRelativeRel = R_PENUMBRA_IRELATIVE;
 
   // TLS
   tlsGotRel = R_PENUMBRA_TLS_TPOFF32;
@@ -127,6 +129,8 @@ int64_t Penumbra::getImplicitAddend(const uint8_t *buf,
   case R_PENUMBRA_TLS_TPOFF32:
   case R_PENUMBRA_TLS_DTPMOD32:
   case R_PENUMBRA_TLS_DTPOFF32:
+  case R_PENUMBRA_COPY:
+  case R_PENUMBRA_IRELATIVE:
     return SignExtend64<32>(read32le(buf));
   case R_PENUMBRA_NONE:
     return 0;
@@ -206,6 +210,8 @@ void Penumbra::relocate(uint8_t *loc, const Relocation &rel,
   case R_PENUMBRA_TLS_TPOFF32:
   case R_PENUMBRA_TLS_DTPMOD32:
   case R_PENUMBRA_TLS_DTPOFF32:
+  case R_PENUMBRA_COPY:
+  case R_PENUMBRA_IRELATIVE:
     write32le(loc, val);
     break;
   case R_PENUMBRA_BRANCH22: {
