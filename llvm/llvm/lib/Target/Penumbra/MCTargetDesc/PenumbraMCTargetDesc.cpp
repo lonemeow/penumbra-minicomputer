@@ -123,6 +123,50 @@ public:
       return;
     }
 
+    // MOV Rd, Rs — copy or capture PC.
+    // Ops: [0]=Rd, [1]=Rs.
+    if (Opc == Penumbra::MOV) {
+      if (auto DstIdx = regIndex(Inst.getOperand(0).getReg())) {
+        unsigned SrcReg = Inst.getOperand(1).getReg();
+        if (SrcReg == Penumbra::R15) {
+          // MOV Rd, PC — snapshot the instruction address.
+          GPRState[*DstIdx] = Addr;
+          GPRValid[*DstIdx] = true;
+        } else if (auto SrcIdx = regIndex(SrcReg);
+                   SrcIdx && GPRValid[*SrcIdx]) {
+          GPRState[*DstIdx] = GPRState[*SrcIdx];
+          GPRValid[*DstIdx] = true;
+        } else {
+          GPRValid[*DstIdx] = false;
+        }
+      }
+      return;
+    }
+
+    // ADD Rd, Rs — Rd = Rd + Rs (register form).
+    // Ops: [0]=Rd, [1]=Rd_in (tied), [2]=Rs.
+    if (Opc == Penumbra::ADD) {
+      if (auto DstIdx = regIndex(Inst.getOperand(0).getReg())) {
+        if (auto SrcIdx = regIndex(Inst.getOperand(2).getReg());
+            GPRValid[*DstIdx] && SrcIdx && GPRValid[*SrcIdx])
+          GPRState[*DstIdx] += GPRState[*SrcIdx];
+        else
+          GPRValid[*DstIdx] = false;
+      }
+      return;
+    }
+
+    // ADDi Rd, imm16 — Rd = Rd + zero_extend(imm16).
+    // Ops: [0]=Rd, [1]=Rd_in (tied), [2]=imm16.
+    if (Opc == Penumbra::ADDi) {
+      if (auto DstIdx = regIndex(Inst.getOperand(0).getReg())) {
+        if (GPRValid[*DstIdx])
+          GPRState[*DstIdx] += Inst.getOperand(2).getImm();
+        // If not valid, leave invalid.
+      }
+      return;
+    }
+
     // Any other instruction that defines a GPR invalidates its tracking.
     const MCInstrDesc &Desc = Info->get(Opc);
     for (unsigned I = 0, E = Desc.getNumDefs(); I < E; ++I) {
@@ -136,19 +180,39 @@ public:
   evaluateMemoryOperandAddress(const MCInst &Inst,
                                const MCSubtargetInfo *STI, uint64_t Addr,
                                uint64_t Size) const override {
+    unsigned Opc = Inst.getOpcode();
+
     // Annotate LUI with the full 32-bit address reconstructed from
     // the preceding LLI.  At this point updateState() hasn't been
     // called for this instruction yet, so GPRState holds the lo16
     // value from LLI.
-    if (Inst.getOpcode() == Penumbra::LUI) {
+    if (Opc == Penumbra::LUI) {
       if (auto Idx = regIndex(Inst.getOperand(0).getReg())) {
         if (GPRValid[*Idx]) {
           uint64_t Lo = GPRState[*Idx] & 0xFFFF;
           uint64_t Hi = Inst.getOperand(2).getImm();
+          // Both zero usually means unresolved relocations in a .o file.
+          if (Lo == 0 && Hi == 0)
+            return std::nullopt;
           return (Hi << 16) | Lo;
         }
       }
     }
+
+    // Annotate loads when the base register is tracked — shows what
+    // memory address is actually being accessed (e.g. GOT entry).
+    // FormatM loads: [0]=Rd, [1]=Rb (base), [2]=offset.
+    if (Opc == Penumbra::LDW || Opc == Penumbra::LDH ||
+        Opc == Penumbra::LDHS || Opc == Penumbra::LDB ||
+        Opc == Penumbra::LDBS) {
+      if (auto BaseIdx = regIndex(Inst.getOperand(1).getReg())) {
+        if (GPRValid[*BaseIdx]) {
+          int64_t Offset = Inst.getOperand(2).getImm();
+          return static_cast<uint64_t>(GPRState[*BaseIdx] + Offset);
+        }
+      }
+    }
+
     return std::nullopt;
   }
 

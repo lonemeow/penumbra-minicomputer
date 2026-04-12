@@ -44,15 +44,16 @@ helper:
 
   .globl no_annotate
 no_annotate:
-  // LLI followed by a clobbering ADD before LUI — tracking invalidated.
+  // LLI followed by a clobbering SUB before LUI — tracking invalidated.
+  // (ADDi is tracked, so use SUBi which isn't.)
   lli r1, %lo16(mydata)
-  add r1, 1
+  sub r1, 1
   lui r1, %hi16(mydata)
   jmp r13
 
 // LINKED-LABEL: <no_annotate>:
 // LINKED:       lli r1,
-// LINKED-NEXT:  add r1, 1
+// LINKED-NEXT:  sub r1, 1
 // LINKED-NEXT:  lui r1,
 // LINKED-NOT:   mydata
 // LINKED:       jmp r13
