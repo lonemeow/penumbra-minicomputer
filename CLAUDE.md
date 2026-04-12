@@ -295,7 +295,7 @@ MIPS/68k-style vector dispatch.
 - Full pipeline: `clang -c` → `ld.lld` → `llvm-objcopy`
   → `bin2hex.py` → simulator.
 - MC-layer assembler produces working ELF objects with
-  18 relocation types including GOT/PLT, TLS, and PC32
+  22 relocation types including GOT/PLT, TLS, GOT-PCREL, and PC32
   (for .eh_frame PIC pointers).
   Relocation names registered in `ELFRelocs/Penumbra.def`
   for `llvm-readobj`.
@@ -363,10 +363,14 @@ MIPS/68k-style vector dispatch.
 - GOT/PLT: 16-byte PLT entries (LLI+LUI+LDW+JMP R11),
   `R_PENUMBRA_GLOB_DAT`/`JUMP_SLOT` dynamic relocs.
   Shared libraries link with `ld.lld` via `toolchains::NetBSD`.
-- `-fPIC` supported: PC-relative addressing via
-  MOV PC + ADDi `%pcrel()` for globals and TLS,
-  EK_LabelDifference32 jump table entries;
-  PC (R15) is a readable GPR so PIC needs no GOT (±32KB reach).
+- `-fPIC`/`-fPIE` supported: GOT-indirect addressing via
+  MOV PC + LLI/LUI `%got_pcrel_lo16`/`%got_pcrel_hi16` + ADD + LDW
+  for globals (5 instructions, full 32-bit reach).
+  TLS GD PIC uses `%tlsgd_got_pcrel_lo16`/`hi16` (4 instructions,
+  no LDW — address of GOT tls_index pair passed to `__tls_get_addr`).
+  EK_LabelDifference32 jump table entries.
+  `needsRelocateWithSymbol` prevents section+offset folding for
+  GOT/TLS relocs.  `MKPIC=yes` in bsd.own.mk, libc.so links.
 - `-O0` works fully (kernel compiles all .o files at `-O0`).
   `-O1`/`-Os`/`-O2` work: `analyzeBranch`/`insertBranch`/
   `removeBranch`/`reverseBranchCondition` implemented for
@@ -626,6 +630,8 @@ MIPS/68k-style vector dispatch.
   Needs `arch/penumbra/` directory with `rtld_start.S`,
   `mdreloc.c`, `Makefile.inc`.  Required before dynamically-linked
   binaries can run.  Statically-linked rescue binaries work.
+  GOT-based PIC codegen is implemented (`MKPIC=yes`), so shared
+  libraries build — `ld.elf_so` is the remaining blocker.
 
 ## Next Steps (in priority order)
 1. **Root filesystem** — `build.sh sets` to create installable

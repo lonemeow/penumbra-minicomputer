@@ -27,8 +27,16 @@ ENTRY_NP(__cerror)
 	add	r14, #CALLFRAME_SIZ
 #else
 	/* Non-reentrant: store directly to global errno */
+#ifdef __PIC__
 	mov	r2, r15
-	add	r2, %pcrel(_C_LABEL(errno)+4)
+	lli	r11, %got_pcrel_lo16(_C_LABEL(errno)+4)
+	lui	r11, %got_pcrel_hi16(_C_LABEL(errno)+8)
+	add	r2, r11
+	ldw	r2, [r2]
+#else
+	lli	r2, %lo16(_C_LABEL(errno))
+	lui	r2, %hi16(_C_LABEL(errno))
+#endif
 	stw	r1, [r2]
 #endif /* _REENTRANT */
 	li	r1, #-1

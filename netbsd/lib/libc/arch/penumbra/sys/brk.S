@@ -23,9 +23,11 @@ _C_LABEL(__curbrk):
 
 ENTRY(_brk)
 #ifdef __PIC__
-	mov	r11, pc
-	add	r11, #8
-	add	r11, #%pcrel(_C_LABEL(__minbrk))
+	mov	r11, r15
+	lli	r2, %got_pcrel_lo16(_C_LABEL(__minbrk)+4)
+	lui	r2, %got_pcrel_hi16(_C_LABEL(__minbrk)+8)
+	add	r11, r2
+	ldw	r11, [r11]
 #else
 	lli	r11, %lo16(_C_LABEL(__minbrk))
 	lui	r11, %hi16(_C_LABEL(__minbrk))
@@ -38,9 +40,11 @@ ENTRY(_brk)
 	SYSTRAP(break)
 	JUMP_TO_CERROR()		/* error */
 #ifdef __PIC__
-	mov	r11, pc
-	add	r11, #8
-	add	r11, #%pcrel(_C_LABEL(__curbrk))
+	mov	r11, r15
+	lli	r2, %got_pcrel_lo16(_C_LABEL(__curbrk)+4)
+	lui	r2, %got_pcrel_hi16(_C_LABEL(__curbrk)+8)
+	add	r11, r2
+	ldw	r11, [r11]
 #else
 	lli	r11, %lo16(_C_LABEL(__curbrk))
 	lui	r11, %hi16(_C_LABEL(__curbrk))

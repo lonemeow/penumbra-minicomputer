@@ -11,9 +11,11 @@ WEAK_ALIAS(sbrk, _sbrk)
 
 ENTRY(_sbrk)
 #ifdef __PIC__
-	mov	r3, pc
-	add	r3, #8
-	add	r3, #%pcrel(_C_LABEL(__curbrk))
+	mov	r3, r15
+	lli	r11, %got_pcrel_lo16(_C_LABEL(__curbrk)+4)
+	lui	r11, %got_pcrel_hi16(_C_LABEL(__curbrk)+8)
+	add	r3, r11
+	ldw	r3, [r3]
 #else
 	lli	r3, %lo16(_C_LABEL(__curbrk))
 	lui	r3, %hi16(_C_LABEL(__curbrk))
