@@ -5,15 +5,22 @@
 ; RUN:   -verify-machineinstrs < %s | FileCheck %s -check-prefix=STATIC
 
 ; PIC vs static global address materialization.
+; PIC/PIE uses GOT-indirect: MOV PC + LLI/LUI got_pcrel + ADD + LDW from GOT.
+; Static uses absolute LLI+LUI.
+; GOT entries are full data words — R_PENUMBRA_RELATIVE patches them for PIE.
 
 @myvar = global i32 42
+@pievar = dso_local global i32 99
 
 define ptr @get_address() {
 ; PIC-LABEL: get_address:
 ; PIC:         .cfi_startproc
 ; PIC-NEXT:  // %bb.1:
 ; PIC-NEXT:    mov r1, r15
-; PIC-NEXT:    add r1, %pcrel(myvar+4)
+; PIC-NEXT:    lli r2, %got_pcrel_lo16(myvar+4)
+; PIC-NEXT:    lui r2, %got_pcrel_hi16(myvar+8)
+; PIC-NEXT:    add r1, r2
+; PIC-NEXT:    ldw r1, [r1 + 0]
 ; PIC-NEXT:    jmp r13
 ;
 ; STATIC-LABEL: get_address:
@@ -30,7 +37,10 @@ define i32 @load_global() {
 ; PIC:         .cfi_startproc
 ; PIC-NEXT:  // %bb.1:
 ; PIC-NEXT:    mov r1, r15
-; PIC-NEXT:    add r1, %pcrel(myvar+4)
+; PIC-NEXT:    lli r2, %got_pcrel_lo16(myvar+4)
+; PIC-NEXT:    lui r2, %got_pcrel_hi16(myvar+8)
+; PIC-NEXT:    add r1, r2
+; PIC-NEXT:    ldw r1, [r1 + 0]
 ; PIC-NEXT:    ldw r1, [r1 + 0]
 ; PIC-NEXT:    jmp r13
 ;
@@ -50,7 +60,10 @@ define void @store_global(i32 %v) {
 ; PIC:         .cfi_startproc
 ; PIC-NEXT:  // %bb.1:
 ; PIC-NEXT:    mov r2, r15
-; PIC-NEXT:    add r2, %pcrel(myvar+4)
+; PIC-NEXT:    lli r3, %got_pcrel_lo16(myvar+4)
+; PIC-NEXT:    lui r3, %got_pcrel_hi16(myvar+8)
+; PIC-NEXT:    add r2, r3
+; PIC-NEXT:    ldw r2, [r2 + 0]
 ; PIC-NEXT:    stw r1, [r2 + 0]
 ; PIC-NEXT:    jmp r13
 ;
@@ -63,4 +76,26 @@ define void @store_global(i32 %v) {
 ; STATIC-NEXT:    jmp r13
   store i32 %v, ptr @myvar
   ret void
+}
+
+; PIE test: dso_local globals also use GOT in PIC model.
+; GOT entries are data words — R_RELATIVE patches them for PIE.
+define dso_local ptr @get_pie_address() {
+; PIC-LABEL: get_pie_address:
+; PIC:         .cfi_startproc
+; PIC-NEXT:  // %bb.1:
+; PIC-NEXT:    mov r1, r15
+; PIC-NEXT:    lli r2, %got_pcrel_lo16(pievar+4)
+; PIC-NEXT:    lui r2, %got_pcrel_hi16(pievar+8)
+; PIC-NEXT:    add r1, r2
+; PIC-NEXT:    ldw r1, [r1 + 0]
+; PIC-NEXT:    jmp r13
+;
+; STATIC-LABEL: get_pie_address:
+; STATIC:         .cfi_startproc
+; STATIC-NEXT:  // %bb.1:
+; STATIC-NEXT:    lli r1, %lo16(pievar)
+; STATIC-NEXT:    lui r1, %hi16(pievar)
+; STATIC-NEXT:    jmp r13
+  ret ptr @pievar
 }

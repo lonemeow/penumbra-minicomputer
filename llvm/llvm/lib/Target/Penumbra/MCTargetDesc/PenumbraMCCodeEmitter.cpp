@@ -143,6 +143,22 @@ unsigned PenumbraMCCodeEmitter::encodeImm16(
       Kind = static_cast<MCFixupKind>(Penumbra::fixup_penumbra_imm16_pcrel);
       PCRel = true;
       break;
+    case Penumbra::S_GOT_PCRel_Lo16:
+      Kind = static_cast<MCFixupKind>(Penumbra::fixup_penumbra_got_pcrel_lo16);
+      PCRel = true;
+      break;
+    case Penumbra::S_GOT_PCRel_Hi16:
+      Kind = static_cast<MCFixupKind>(Penumbra::fixup_penumbra_got_pcrel_hi16);
+      PCRel = true;
+      break;
+    case Penumbra::S_TLSgd_GOT_PCRel_Lo16:
+      Kind = static_cast<MCFixupKind>(Penumbra::fixup_penumbra_tls_gd_got_pcrel_lo16);
+      PCRel = true;
+      break;
+    case Penumbra::S_TLSgd_GOT_PCRel_Hi16:
+      Kind = static_cast<MCFixupKind>(Penumbra::fixup_penumbra_tls_gd_got_pcrel_hi16);
+      PCRel = true;
+      break;
     default:
       break;
     }

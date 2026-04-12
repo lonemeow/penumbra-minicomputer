@@ -672,20 +672,49 @@ bool PenumbraInstructionSelector::selectGlobalValue(MachineInstr &I,
   //        provides the TP-relative offset via TLS relocations).
   if (GV->isThreadLocal()) {
     if (TM.getRelocationModel() == Reloc::PIC_) {
+      // PIC TLS GD: compute GOT tls_index pair address via PC-relative
+      // GOT offset, same 5-instruction pattern as regular GOT globals.
+      //   MOV  PCReg, PC
+      //   LLI  OffReg, %tlsgd_got_pcrel_lo16(sym + 4)
+      //   LUI  OffReg, %tlsgd_got_pcrel_hi16(sym + 8)
+      //   ADD  PCReg, OffReg
+      //   LDW  DstReg, [PCReg]      — not needed: result IS the GOT address
+      //
+      // Unlike regular globals, we want the address OF the GOT tls_index
+      // pair, not its contents.  The caller passes this to __tls_get_addr.
+      // So: 4 instructions (no LDW dereference).
       DebugLoc DL = I.getDebugLoc();
       auto InsertPt = I.getIterator();
-      Register TmpReg =
+      Register PCReg =
           MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
+      Register OffLoReg =
+          MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
+      Register OffReg =
+          MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
+
       auto MOVInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::MOV))
-          .addDef(TmpReg)
+          .addDef(PCReg)
           .addReg(Penumbra::R15);
       constrainSelectedInstRegOperands(*MOVInst, TII, TRI, RBI);
-      auto ADDiInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::ADDi))
-          .addDef(DstReg)
-          .addReg(TmpReg)
+
+      auto LLIInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::LLI))
+          .addDef(OffLoReg)
           .add(MachineOperand::CreateGA(GV, Offset + 4,
-                                        Penumbra::S_TLSgd_PCRel));
-      constrainSelectedInstRegOperands(*ADDiInst, TII, TRI, RBI);
+                                        Penumbra::S_TLSgd_GOT_PCRel_Lo16));
+      constrainSelectedInstRegOperands(*LLIInst, TII, TRI, RBI);
+
+      auto LUIInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::LUI))
+          .addDef(OffReg)
+          .addReg(OffLoReg)
+          .add(MachineOperand::CreateGA(GV, Offset + 8,
+                                        Penumbra::S_TLSgd_GOT_PCRel_Hi16));
+      constrainSelectedInstRegOperands(*LUIInst, TII, TRI, RBI);
+
+      auto ADDInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::ADD))
+          .addDef(DstReg)
+          .addReg(PCReg)
+          .addReg(OffReg);
+      constrainSelectedInstRegOperands(*ADDInst, TII, TRI, RBI);
     } else {
       emitLoadSymbolAddr(
           DstReg, I.getDebugLoc(), MBB, I.getIterator(),
@@ -697,34 +726,75 @@ bool PenumbraInstructionSelector::selectGlobalValue(MachineInstr &I,
   }
 
   if (TM.getRelocationModel() == Reloc::PIC_) {
-    // PIC: materialise address as PC + pcrel offset.
-    //   MOV TmpReg, PC         (copy current PC = addr of MOV)
-    //   ADDi DstReg, %pcrel(sym + 4)  (add PC-relative offset)
+    // PIC/PIE: all globals go through the GOT.
+    // GOT entries are full 32-bit data words — R_PENUMBRA_RELATIVE
+    // patches them correctly for PIE (bootloader self-relocator).
+    // No text relocs needed — code is PC-relative to the GOT entry.
     //
-    // The linker resolves %pcrel(X) to X - addr_of_ADDi.
-    // Since TmpReg holds addr_of_MOV = addr_of_ADDi - 4, we need
-    // the immediate to be (sym - addr_of_ADDi + 4) so the result
-    // is (addr_of_ADDi - 4) + (sym - addr_of_ADDi + 4) = sym.
-    // We achieve this by adding 4 to the relocation addend.
+    //   MOV  PCReg, PC                          (capture PC = addr of MOV, P)
+    //   LLI  OffReg, %got_pcrel_lo16(sym + 4)   (lo16(GOT[sym] - P))
+    //   LUI  OffReg, %got_pcrel_hi16(sym + 8)   (hi16(GOT[sym] - P))
+    //   ADD  PCReg, OffReg                       (PCReg = &GOT[sym])
+    //   LDW  DstReg, [PCReg + 0]                (DstReg = *GOT[sym])
+    //
+    // Non-zero G_GLOBAL_VALUE offsets (e.g. &array[5]) are applied
+    // after the GOT load via ADDi, since the GOT entry stores the
+    // base symbol address only.
     DebugLoc DL = I.getDebugLoc();
     auto InsertPt = I.getIterator();
-    Register TmpReg =
+    Register PCReg =
+        MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
+    Register OffLoReg =
+        MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
+    Register OffReg =
+        MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
+    Register GotAddrReg =
         MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
 
-    // MOV TmpReg, PC (R15)
+    // MOV PCReg, PC (R15) — capture address of this instruction
     auto MOVInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::MOV))
-        .addDef(TmpReg)
+        .addDef(PCReg)
         .addReg(Penumbra::R15);
     constrainSelectedInstRegOperands(*MOVInst, TII, TRI, RBI);
 
-    // ADDi DstReg, TmpReg, %pcrel(sym) with addend +4
-    // Linker computes: sym + addend - ADDi_addr.
-    // Result: A + (sym + Offset + 4 - (A+4)) = sym + Offset. ✓
-    auto ADDiInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::ADDi))
-        .addDef(DstReg)
-        .addReg(TmpReg)
-        .add(MachineOperand::CreateGA(GV, Offset + 4, Penumbra::S_PCRel));
-    constrainSelectedInstRegOperands(*ADDiInst, TII, TRI, RBI);
+    // LLI OffLoReg, %got_pcrel_lo16(sym + 4)
+    auto LLIInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::LLI))
+        .addDef(OffLoReg)
+        .add(MachineOperand::CreateGA(GV, 4, Penumbra::S_GOT_PCRel_Lo16));
+    constrainSelectedInstRegOperands(*LLIInst, TII, TRI, RBI);
+
+    // LUI OffReg, OffLoReg, %got_pcrel_hi16(sym + 8)
+    auto LUIInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::LUI))
+        .addDef(OffReg)
+        .addReg(OffLoReg)
+        .add(MachineOperand::CreateGA(GV, 8, Penumbra::S_GOT_PCRel_Hi16));
+    constrainSelectedInstRegOperands(*LUIInst, TII, TRI, RBI);
+
+    // ADD GotAddrReg, PCReg, OffReg — PCReg + offset = &GOT[sym]
+    auto ADDInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::ADD))
+        .addDef(GotAddrReg)
+        .addReg(PCReg)
+        .addReg(OffReg);
+    constrainSelectedInstRegOperands(*ADDInst, TII, TRI, RBI);
+
+    // LDW DstReg/TmpReg, [GotAddrReg + 0] — load symbol address from GOT
+    Register LoadDst = (Offset != 0)
+        ? MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass)
+        : DstReg;
+    auto LDWInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::LDW))
+        .addDef(LoadDst)
+        .addReg(GotAddrReg)
+        .addImm(0);
+    constrainSelectedInstRegOperands(*LDWInst, TII, TRI, RBI);
+
+    // If G_GLOBAL_VALUE has a non-zero offset, add it after the GOT load.
+    if (Offset != 0) {
+      auto ADDiInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::ADDi))
+          .addDef(DstReg)
+          .addReg(LoadDst)
+          .addImm(Offset);
+      constrainSelectedInstRegOperands(*ADDiInst, TII, TRI, RBI);
+    }
   } else {
     // Static: absolute address via LLI+LUI.
     emitLoadSymbolAddr(

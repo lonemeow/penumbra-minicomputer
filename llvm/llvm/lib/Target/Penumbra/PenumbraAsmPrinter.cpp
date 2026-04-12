@@ -106,7 +106,11 @@ static bool lowerOperand(const MachineOperand &MO, MCOperand &MCOp,
     if (TF == Penumbra::S_Lo16 || TF == Penumbra::S_Hi16 ||
         TF == Penumbra::S_PCRel ||
         TF == Penumbra::S_TLSgd_Lo16 || TF == Penumbra::S_TLSgd_Hi16 ||
-        TF == Penumbra::S_TLSgd_PCRel)
+        TF == Penumbra::S_TLSgd_PCRel ||
+        TF == Penumbra::S_GOT_PCRel_Lo16 ||
+        TF == Penumbra::S_GOT_PCRel_Hi16 ||
+        TF == Penumbra::S_TLSgd_GOT_PCRel_Lo16 ||
+        TF == Penumbra::S_TLSgd_GOT_PCRel_Hi16)
       Expr = MCSpecifierExpr::create(Expr, TF, AP.OutContext);
     MCOp = MCOperand::createExpr(Expr);
     return true;

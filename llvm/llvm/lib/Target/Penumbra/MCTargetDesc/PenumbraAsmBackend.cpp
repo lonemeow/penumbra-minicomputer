@@ -78,6 +78,14 @@ PenumbraAsmBackend::getFixupKindInfo(MCFixupKind Kind) const {
       {"fixup_penumbra_tls_gd_hi16", 0, 16, 0},
       // tls_gd_pcrel: TLS GD PC-relative, into bits [15:0]
       {"fixup_penumbra_tls_gd_pcrel", 0, 16, 0},
+      // got_pcrel_lo16: GOT PC-relative low 16, into bits [15:0]
+      {"fixup_penumbra_got_pcrel_lo16", 0, 16, 0},
+      // got_pcrel_hi16: GOT PC-relative high 16, into bits [15:0]
+      {"fixup_penumbra_got_pcrel_hi16", 0, 16, 0},
+      // tls_gd_got_pcrel_lo16: TLS GD GOT PC-relative low 16, into bits [15:0]
+      {"fixup_penumbra_tls_gd_got_pcrel_lo16", 0, 16, 0},
+      // tls_gd_got_pcrel_hi16: TLS GD GOT PC-relative high 16, into bits [15:0]
+      {"fixup_penumbra_tls_gd_got_pcrel_hi16", 0, 16, 0},
   };
 
   if (Kind < FirstTargetFixupKind)
@@ -169,6 +177,36 @@ void PenumbraAsmBackend::applyFixup(const MCFragment &F, const MCFixup &Fixup,
     }
     Insn = (Insn & 0xFFFF0000) | (static_cast<uint32_t>(SVal) & 0xFFFF);
     support::endian::write32le(Data, Insn);
+    return;
+  }
+
+  if (Kind ==
+          static_cast<MCFixupKind>(Penumbra::fixup_penumbra_got_pcrel_lo16)) {
+    // GOT PC-relative low 16 bits, into bits [15:0].
+    // Always emitted as a relocation (linker computes GOT entry address).
+    uint32_t Encoded = static_cast<uint32_t>(Value) & 0xFFFF;
+    support::endian::write32le(
+        Data, (support::endian::read32le(Data) & 0xFFFF0000) | Encoded);
+    return;
+  }
+
+  if (Kind ==
+          static_cast<MCFixupKind>(Penumbra::fixup_penumbra_got_pcrel_hi16) ||
+      Kind ==
+          static_cast<MCFixupKind>(Penumbra::fixup_penumbra_tls_gd_got_pcrel_hi16)) {
+    // GOT/TLS-GD GOT PC-relative high 16 bits, into bits [15:0].
+    uint32_t Encoded = (static_cast<uint32_t>(Value) >> 16) & 0xFFFF;
+    support::endian::write32le(
+        Data, (support::endian::read32le(Data) & 0xFFFF0000) | Encoded);
+    return;
+  }
+
+  if (Kind ==
+          static_cast<MCFixupKind>(Penumbra::fixup_penumbra_tls_gd_got_pcrel_lo16)) {
+    // TLS GD GOT PC-relative low 16 bits, into bits [15:0].
+    uint32_t Encoded = static_cast<uint32_t>(Value) & 0xFFFF;
+    support::endian::write32le(
+        Data, (support::endian::read32le(Data) & 0xFFFF0000) | Encoded);
     return;
   }
 

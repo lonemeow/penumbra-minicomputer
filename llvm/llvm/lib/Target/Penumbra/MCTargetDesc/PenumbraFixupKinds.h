@@ -36,6 +36,18 @@ enum Fixups {
   // TLS General-Dynamic: PC-relative offset to GOT tls_index entry (PIC).
   // Format L, bits [15:0]. Used in ADDi for PIC TLS access.
   fixup_penumbra_tls_gd_pcrel,
+  // GOT PC-relative: low 16 bits of (GOT[sym] - P + A).
+  // Used in LLI for PIC global address materialization via GOT.
+  fixup_penumbra_got_pcrel_lo16,
+  // GOT PC-relative: high 16 bits of (GOT[sym] - P + A).
+  // Used in LUI for PIC global address materialization via GOT.
+  fixup_penumbra_got_pcrel_hi16,
+  // TLS GD GOT PC-relative: low 16 bits of (GOT_tls_pair - P + A).
+  // Used in LLI for PIC TLS General-Dynamic access via GOT.
+  fixup_penumbra_tls_gd_got_pcrel_lo16,
+  // TLS GD GOT PC-relative: high 16 bits of (GOT_tls_pair - P + A).
+  // Used in LUI for PIC TLS General-Dynamic access via GOT.
+  fixup_penumbra_tls_gd_got_pcrel_hi16,
 
   // Marker
   NumTargetFixupKinds
@@ -51,6 +63,10 @@ enum Specifier {
   S_TLSgd_Lo16,  // %tlsgd_lo16() — TLS General-Dynamic, low 16 bits
   S_TLSgd_Hi16,  // %tlsgd_hi16() — TLS General-Dynamic, high 16 bits
   S_TLSgd_PCRel, // %tlsgd_pcrel() — TLS GD PC-relative (PIC)
+  S_GOT_PCRel_Lo16, // %got_pcrel_lo16() — GOT entry, PC-relative, low 16
+  S_GOT_PCRel_Hi16, // %got_pcrel_hi16() — GOT entry, PC-relative, high 16
+  S_TLSgd_GOT_PCRel_Lo16, // %tlsgd_got_pcrel_lo16() — TLS GD GOT, PC-rel, lo16
+  S_TLSgd_GOT_PCRel_Hi16, // %tlsgd_got_pcrel_hi16() — TLS GD GOT, PC-rel, hi16
 };
 
 } // namespace llvm::Penumbra

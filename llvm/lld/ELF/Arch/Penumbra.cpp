@@ -95,6 +95,16 @@ RelExpr Penumbra::getRelExpr(RelType type, const Symbol &s,
   case R_PENUMBRA_TLS_GD_PCREL:
     // PIC TLS GD — PC-relative offset to GOT tls_index entry.
     return R_TLSGD_PC;
+  case R_PENUMBRA_GOT_PCREL_LO16:
+  case R_PENUMBRA_GOT_PCREL_HI16:
+    // GOT PC-relative — PC-relative offset to GOT entry for symbol.
+    // lld allocates a GOT entry and computes (GOT[sym] - P + A).
+    return R_GOT_PC;
+  case R_PENUMBRA_TLS_GD_GOT_PCREL_LO16:
+  case R_PENUMBRA_TLS_GD_GOT_PCREL_HI16:
+    // TLS GD GOT PC-relative — PC-relative offset to GOT tls_index pair.
+    // lld allocates a TLS GD GOT pair and computes (GOT[sym] - P + A).
+    return R_TLSGD_PC;
   default:
     return R_ABS;
   }
@@ -223,6 +233,19 @@ void Penumbra::relocate(uint8_t *loc, const Relocation &rel,
   case R_PENUMBRA_TLS_GD_HI16:
     // High 16 bits, into bits [15:0].
     write32le(loc, (read32le(loc) & 0xFFFF0000) | ((val >> 16) & 0xFFFF));
+    break;
+  case R_PENUMBRA_GOT_PCREL_LO16:
+    // GOT PC-relative: low 16 bits of (GOT[sym] - P + A), into bits [15:0].
+    write32le(loc, (read32le(loc) & 0xFFFF0000) | (val & 0xFFFF));
+    break;
+  case R_PENUMBRA_GOT_PCREL_HI16:
+  case R_PENUMBRA_TLS_GD_GOT_PCREL_HI16:
+    // GOT/TLS-GD GOT PC-relative: high 16 bits, into bits [15:0].
+    write32le(loc, (read32le(loc) & 0xFFFF0000) | ((val >> 16) & 0xFFFF));
+    break;
+  case R_PENUMBRA_TLS_GD_GOT_PCREL_LO16:
+    // TLS GD GOT PC-relative: low 16 bits, into bits [15:0].
+    write32le(loc, (read32le(loc) & 0xFFFF0000) | (val & 0xFFFF));
     break;
   case R_PENUMBRA_MEMOFFSET16_PCREL: {
     // PC-relative 16-bit signed offset, into bits [17:2] (Format M).

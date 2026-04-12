@@ -315,6 +315,14 @@ bool PenumbraAsmParser::parseOperand(OperandVector &Operands) {
       Spec = Penumbra::S_TLSgd_Hi16;
     else if (Name == "tlsgd_pcrel")
       Spec = Penumbra::S_TLSgd_PCRel;
+    else if (Name == "got_pcrel_lo16")
+      Spec = Penumbra::S_GOT_PCRel_Lo16;
+    else if (Name == "got_pcrel_hi16")
+      Spec = Penumbra::S_GOT_PCRel_Hi16;
+    else if (Name == "tlsgd_got_pcrel_lo16")
+      Spec = Penumbra::S_TLSgd_GOT_PCRel_Lo16;
+    else if (Name == "tlsgd_got_pcrel_hi16")
+      Spec = Penumbra::S_TLSgd_GOT_PCRel_Hi16;
     else
       return Error(ModLoc, "unknown modifier %" + Name);
     Parser.Lex(); // eat modifier name

@@ -99,7 +99,8 @@ substitution, s1 widened to s8).
 **Manual C++ handles:**
 wide constants (LLI+LUI),
 global addresses (static: LLI+LUI with lo16/hi16;
-PIC: MOV PC + ADDi %pcrel with +4 addend correction),
+PIC/PIE: GOT-indirect via MOV PC + LLI/LUI got_pcrel + ADD + LDW,
+5 instructions, full 32-bit reach),
 frame-index folding into load/store + LEAfi for escaped addresses,
 G_PTR_ADD (→ADD), G_PTRMASK (→AND),
 G_INTTOPTR/G_PTRTOINT/G_FREEZE (→COPY),
@@ -178,9 +179,13 @@ at `-O0` through `-O2` (bare-metal).
 `clang --target=penumbra-unknown-netbsd` for NetBSD (defines `__NetBSD__`
 via `NetBSDTargetInfo<>` wrapper).
 Boot ROM compiles and runs correctly at all three levels.
-`-fPIC` supported: uses PC-relative addressing
-(MOV PC + ADDi %pcrel) for globals and TLS GD,
-label-difference jump table entries.
+`-fPIC`/`-fPIE` supported: GOT-indirect addressing for globals
+(MOV PC + LLI/LUI got_pcrel + ADD + LDW from GOT, 32-bit reach).
+TLS GD PIC uses GOT-indirect to tls_index pair
+(MOV PC + LLI/LUI tlsgd_got_pcrel + ADD, 4 instructions).
+Label-difference jump table entries.
+`needsRelocateWithSymbol` prevents section+offset folding for
+GOT/TLS relocs (addend must only contain PC adjustment).
 `PenumbraToolChain` (`clang/lib/Driver/ToolChains/Penumbra.{h,cpp}`)
 is the bare-metal toolchain (ROM, hw tests) — uses `ld.lld` directly.
 For `penumbra-unknown-netbsd`, the stock `toolchains::NetBSD`
@@ -190,12 +195,13 @@ additions: `elf32penumbra` emulation, `useLibgcc=false`,
 `build.sh distribution` compiles nearly all of NetBSD userland.
 
 **lld:** `ld.lld -T rom.ld` links Penumbra ELF objects.
-Supports all 17 relocation types including GOT/PLT and TLS GD.
+Supports all 21 relocation types including GOT/PLT and TLS GD.
 **GOT/PLT:** PLT entries are 16 bytes (LLI+LUI+LDW+JMP using R11
 scratch register).  `R_PENUMBRA_GLOB_DAT` for GOT, `R_PENUMBRA_JUMP_SLOT`
 for PLT.  Shared libraries (`-shared`) work with PIC code.
-**TLS GD:** PIC uses `R_PENUMBRA_TLS_GD_PCREL` (PC-relative to
-GOT tls_index entry); lld creates GOT pairs with
+**TLS GD:** PIC uses `R_PENUMBRA_TLS_GD_GOT_PCREL_LO16/HI16`
+(GOT-indirect PC-relative to tls_index pair, 32-bit reach);
+lld creates GOT pairs with
 `R_PENUMBRA_TLS_DTPMOD32`/`R_PENUMBRA_TLS_DTPOFF32` dynamic relocs.
 Static uses `R_TPREL` (Variant 1, no TCB gap, like RISC-V).
 `EM_PENUMBRA` to `getTlsTpOffset` mapping in `InputSection.cpp`.
@@ -290,6 +296,10 @@ Fixed locally — needed for NetBSD kernel option tracking symbols
 | `R_PENUMBRA_TLS_DTPOFF32` | 15 | TLS GD: module offset in GOT | Full word |
 | `R_PENUMBRA_TLS_GD_PCREL` | 16 | TLS GD: PC-relative to GOT entry (PIC) | bits [15:0] |
 | `R_PENUMBRA_PC32` | 17 | PC-relative 32-bit (.eh_frame FDE pointers) | Full word |
+| `R_PENUMBRA_GOT_PCREL_LO16` | 18 | GOT PC-relative: low 16 bits | bits [15:0] |
+| `R_PENUMBRA_GOT_PCREL_HI16` | 19 | GOT PC-relative: high 16 bits | bits [15:0] |
+| `R_PENUMBRA_TLS_GD_GOT_PCREL_LO16` | 20 | TLS GD GOT PC-relative: low 16 | bits [15:0] |
+| `R_PENUMBRA_TLS_GD_GOT_PCREL_HI16` | 21 | TLS GD GOT PC-relative: high 16 | bits [15:0] |
 
 ## Legalization (`GISel/PenumbraLegalizerInfo.{h,cpp}`)
 - **Legal s32:** G_ADD, G_SUB, G_AND, G_OR, G_XOR,
@@ -344,19 +354,22 @@ Fixed locally — needed for NetBSD kernel option tracking symbols
   (`%tmp = LLI lo` → `%dst = LUI %tmp, hi`)
   for SSA correctness — required for `-O1+` passes
   like OptimizePHIs.
-- **Global address materialization (PIC):**
-  `MOV Rd, PC` + `ADDi Rd, %pcrel(sym+4)`.
-  The +4 addend compensates for MOV capturing PC of itself
-  (4 bytes before ADDi).
-  Linker resolves `%pcrel(X)` as `X - addr_of_instruction`.
-  Math: `MOV_addr + (sym + 4 - ADDi_addr)
-  = MOV_addr + (sym + 4 - (MOV_addr + 4)) = sym`. ✓
-  PC reads as current instruction address (no pipeline offset).
-  **Negative offset handling:** ADDi (INC) zero-extends its
-  16-bit immediate, so negative pcrel offsets produce wrong
-  values.  The linker and assembler detect negative
-  `R_PENUMBRA_IMM16_PCREL` values and flip ADDi (op=0011)
-  to SUBi (op=0100) with the negated value.
+- **Global address materialization (PIC/PIE):**
+  GOT-indirect with full 32-bit reach:
+  `MOV Rd, PC` + `LLI Rt, %got_pcrel_lo16(sym+4)` +
+  `LUI Rt, %got_pcrel_hi16(sym+8)` + `ADD Rd, Rt` +
+  `LDW Rd, [Rd]`.
+  Addends +4/+8 compensate for MOV-to-LLI/LUI distance.
+  LLI+LUI reconstruct the 32-bit GOT-to-PC offset (unsigned
+  lo16 | hi16<<16, no sign-extension issues).
+  Works for both PIE (GOT entries get R_RELATIVE) and shared
+  libraries (GOT entries get R_GLOB_DAT).
+  `needsRelocateWithSymbol()` returns true for GOT/TLS relocs
+  to prevent section+offset folding (the addend must only
+  contain the PC adjustment, not the symbol's section offset).
+  **TLS GD PIC:** Same pattern but 4 instructions (no LDW) —
+  the GOT tls_index pair ADDRESS is the argument to
+  `__tls_get_addr`, not its contents.
 - **Jump tables:** Always `EK_LabelDifference32` entries
   (`.word target - JT_base`), regardless of PIC/static mode.
   Placed inline in `.text` via `PenumbraTargetObjectFile`

@@ -35,6 +35,10 @@ enum {
   // 11-15: GOT/PLT/TLS dynamic relocs (linker-only, not emitted by MC)
   R_PENUMBRA_TLS_GD_PCREL = 16,   // TLS GD: PC-relative to GOT entry (PIC)
   R_PENUMBRA_PC32 = 17,           // PC-relative 32-bit (.eh_frame, etc.)
+  R_PENUMBRA_GOT_PCREL_LO16 = 18, // GOT PC-relative: low 16 bits
+  R_PENUMBRA_GOT_PCREL_HI16 = 19, // GOT PC-relative: high 16 bits
+  R_PENUMBRA_TLS_GD_GOT_PCREL_LO16 = 20, // TLS GD GOT PC-relative: low 16
+  R_PENUMBRA_TLS_GD_GOT_PCREL_HI16 = 21, // TLS GD GOT PC-relative: high 16
 };
 
 class PenumbraELFObjectWriter : public MCELFObjectTargetWriter {
@@ -46,6 +50,7 @@ public:
 protected:
   unsigned getRelocType(const MCFixup &Fixup, const MCValue &Target,
                         bool IsPCRel) const override;
+  bool needsRelocateWithSymbol(const MCValue &, unsigned Type) const override;
 };
 
 } // anonymous namespace
@@ -72,10 +77,38 @@ unsigned PenumbraELFObjectWriter::getRelocType(const MCFixup &Fixup,
     return R_PENUMBRA_TLS_GD_HI16;
   if (Kind == Penumbra::fixup_penumbra_tls_gd_pcrel)
     return R_PENUMBRA_TLS_GD_PCREL;
+  if (Kind == Penumbra::fixup_penumbra_got_pcrel_lo16)
+    return R_PENUMBRA_GOT_PCREL_LO16;
+  if (Kind == Penumbra::fixup_penumbra_got_pcrel_hi16)
+    return R_PENUMBRA_GOT_PCREL_HI16;
+  if (Kind == Penumbra::fixup_penumbra_tls_gd_got_pcrel_lo16)
+    return R_PENUMBRA_TLS_GD_GOT_PCREL_LO16;
+  if (Kind == Penumbra::fixup_penumbra_tls_gd_got_pcrel_hi16)
+    return R_PENUMBRA_TLS_GD_GOT_PCREL_HI16;
   // Standard data fixups (FK_Data_4 from .word directives).
   if (Kind == FK_Data_4)
     return IsPCRel ? R_PENUMBRA_PC32 : R_PENUMBRA_32;
   return R_PENUMBRA_NONE;
+}
+
+bool PenumbraELFObjectWriter::needsRelocateWithSymbol(
+    const MCValue &, unsigned Type) const {
+  // GOT and TLS relocations must keep the symbol reference — if the
+  // assembler folds local symbols to section+offset, the GV offset
+  // contaminates the GOT entry address computation (the linker
+  // applies addend to GOT_entry_VA, not to the loaded value).
+  switch (Type) {
+  case R_PENUMBRA_GOT_PCREL_LO16:
+  case R_PENUMBRA_GOT_PCREL_HI16:
+  case R_PENUMBRA_TLS_GD_LO16:
+  case R_PENUMBRA_TLS_GD_HI16:
+  case R_PENUMBRA_TLS_GD_PCREL:
+  case R_PENUMBRA_TLS_GD_GOT_PCREL_LO16:
+  case R_PENUMBRA_TLS_GD_GOT_PCREL_HI16:
+    return true;
+  default:
+    return false;
+  }
 }
 
 std::unique_ptr<MCObjectTargetWriter>
