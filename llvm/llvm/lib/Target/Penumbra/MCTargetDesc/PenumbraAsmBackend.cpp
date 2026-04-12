@@ -29,6 +29,9 @@ public:
   PenumbraAsmBackend(const Target &T, Triple::OSType OST)
       : MCAsmBackend(llvm::endianness::little), OSType(OST) {}
 
+  std::optional<bool> evaluateFixup(const MCFragment &, MCFixup &,
+                                    MCValue &, uint64_t &) override;
+
   void applyFixup(const MCFragment &, const MCFixup &Fixup,
                   const MCValue &Target, uint8_t *Data, uint64_t Value,
                   bool IsResolved) override;
@@ -45,6 +48,26 @@ public:
 };
 
 } // anonymous namespace
+
+std::optional<bool>
+PenumbraAsmBackend::evaluateFixup(const MCFragment &, MCFixup &Fixup,
+                                  MCValue &, uint64_t &) {
+  // GOT-related fixups must never be resolved at assembly time — the GOT
+  // entry doesn't exist until the linker creates it.  Force a relocation
+  // so the linker sees R_PENUMBRA_GOT_PCREL_* and allocates a GOT slot.
+  // Without this, same-section local symbols (e.g. static functions)
+  // get their PC-relative offset resolved by the assembler, but the
+  // code still does an LDW dereference expecting a GOT entry.
+  switch (static_cast<unsigned>(Fixup.getKind())) {
+  case Penumbra::fixup_penumbra_got_pcrel_lo16:
+  case Penumbra::fixup_penumbra_got_pcrel_hi16:
+  case Penumbra::fixup_penumbra_tls_gd_got_pcrel_lo16:
+  case Penumbra::fixup_penumbra_tls_gd_got_pcrel_hi16:
+    return false; // Never resolved — always emit a relocation.
+  default:
+    return {};    // Use default evaluation for all other fixups.
+  }
+}
 
 std::optional<MCFixupKind>
 PenumbraAsmBackend::getFixupKind(StringRef Name) const {
