@@ -22,6 +22,7 @@ extern int dhrystone_main(void);
 void bench_main(uint32_t bootdata) {
     (void)bootdata;
     bench_init();
+    
     bench_timer_start();
     dhrystone_main();
 
@@ -44,11 +45,13 @@ void bench_main(uint32_t bootdata) {
     bench_print_uint(DHRYSTONE_ITERATIONS);
     bench_puts("\n");
     if (us > 0) {
-        uint32_t dhrystones_per_sec = DHRYSTONE_ITERATIONS * 1000000 / us;
+        uint32_t us_per_iter = us / DHRYSTONE_ITERATIONS;
+        uint32_t dhrystones_per_sec = us_per_iter > 0
+            ? 1000000 / us_per_iter : 0;
         uint32_t dmips_x100 = dhrystones_per_sec * 100 / VAX_DMIPS_REF;
 
         bench_puts("us/iteration:    ");
-        bench_print_uint(us / DHRYSTONE_ITERATIONS);
+        bench_print_uint(us_per_iter);
         bench_puts("\n");
         bench_puts("Dhrystones/sec:  ");
         bench_print_uint(dhrystones_per_sec);
