@@ -237,9 +237,8 @@ make benchmark BENCH_ITERS=100    # override iteration count
 make benchmark COPT="-Os"         # override optimization level
 ```
 
-Baseline results (1000 iterations, -O2, no hardware MUL):
-- ISS: ~14,600 Dhrystones/sec, ~8.3 DMIPS
-- RTL: ~2,500 Dhrystones/sec, ~1.4 DMIPS
+Baseline results (-O2, no hardware MUL):
+- RTL (cycle-accurate): ~1.8 DMIPS (~3,160 Dhrystones/sec)
 
 ## Current Status
 The CPU is fully functional in simulation: all RTL modules implemented

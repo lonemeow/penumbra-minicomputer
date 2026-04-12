@@ -68,6 +68,16 @@ $(BUILDDIR)/softfloat_stub.o: common/softfloat_stub.c | $(BUILDDIR)
 
 DHRYSTONE_ITERATIONS ?= 1000
 
+# Stamp file: forces recompilation when iteration count changes.
+# make doesn't track -D flag changes, so we write the current value
+# to a file and depend on it.
+DHRY_STAMP := $(BUILDDIR)/.dhry_iters
+$(DHRY_STAMP): FORCE | $(BUILDDIR)
+	@if [ ! -f $@ ] || [ "$$(cat $@)" != "$(DHRYSTONE_ITERATIONS)" ]; then \
+		echo "$(DHRYSTONE_ITERATIONS)" > $@; \
+	fi
+FORCE:
+
 DHRY_CFLAGS := $(CFLAGS) -isystem dhrystone/include \
                -DTIME -Dmain=dhrystone_main \
                -DDHRYSTONE_ITERATIONS=$(DHRYSTONE_ITERATIONS) \
@@ -77,16 +87,16 @@ DHRY_CFLAGS := $(CFLAGS) -isystem dhrystone/include \
 DHRY_OBJ := $(BUILDDIR)/dhry_1.o $(BUILDDIR)/dhry_2.o \
             $(BUILDDIR)/dhry_shim.o $(BUILDDIR)/dhry_entry.o
 
-$(BUILDDIR)/dhry_1.o: dhrystone/dhry_1.c dhrystone/dhry.h | $(BUILDDIR)
+$(BUILDDIR)/dhry_1.o: dhrystone/dhry_1.c dhrystone/dhry.h $(DHRY_STAMP) | $(BUILDDIR)
 	$(CC) $(DHRY_CFLAGS) -c $< -o $@
 
 $(BUILDDIR)/dhry_2.o: dhrystone/dhry_2.c dhrystone/dhry.h | $(BUILDDIR)
 	$(CC) $(DHRY_CFLAGS) -c $< -o $@
 
-$(BUILDDIR)/dhry_shim.o: dhrystone/shim.c common/bench.h | $(BUILDDIR)
+$(BUILDDIR)/dhry_shim.o: dhrystone/shim.c common/bench.h $(DHRY_STAMP) | $(BUILDDIR)
 	$(CC) $(CFLAGS) -DDHRYSTONE_ITERATIONS=$(DHRYSTONE_ITERATIONS) -c $< -o $@
 
-$(BUILDDIR)/dhry_entry.o: dhrystone/entry.c common/bench.h | $(BUILDDIR)
+$(BUILDDIR)/dhry_entry.o: dhrystone/entry.c common/bench.h $(DHRY_STAMP) | $(BUILDDIR)
 	$(CC) $(CFLAGS) -DDHRYSTONE_ITERATIONS=$(DHRYSTONE_ITERATIONS) -c $< -o $@
 
 dhrystone: $(BUILDDIR)/DHRYSTON.ELF

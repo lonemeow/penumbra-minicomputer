@@ -120,6 +120,9 @@ hw/                Hardware design
   tools/           Microcode assembler (uasm.py)
 sw/tools/          ISA assembler (pasm.py), binary converter (bin2hex.py)
 llvm/              LLVM backend (clang, lld, llvm-mc for Penumbra)
+benchmark/         Bare-metal benchmarks (Dhrystone 2.1)
+  common/          Harness: PIE CRT, TLB handler, timer, UART output
+  dhrystone/       Vendored Dhrystone + shim headers
 netbsd/            NetBSD 10.1 source tree (git subtree)
   sys/arch/penumbra/  Machine-dependent port (headers, bootloader)
 doc/               Architecture specifications
@@ -134,6 +137,9 @@ doc/               Architecture specifications
 | `make sim MOD=<name>` | Run a specific module's testbench |
 | `make smoke` | Quick toolchain sanity check |
 | `make wave MOD=<name>` | Open VCD waveform in GTKWave |
+| `make benchmark` | Build and run benchmarks on ISS (fast) |
+| `make benchmark-rtl` | Build and run benchmarks on Verilator (cycle-accurate) |
+| `make sdimage-bench` | Build benchmark SD card image only |
 | `make clean` | Remove build artifacts |
 
 ## Testing
@@ -174,6 +180,31 @@ python3 llvm/llvm/utils/update_llc_test_checks.py \
 ```
 
 Review the diff to make sure the output changes are intentional.
+
+## Benchmarks
+
+Bare-metal benchmarks for measuring compiler and hardware performance.
+Benchmarks are PIE ELFs booted directly from the ROM via
+`boot sd:0,0/DHRYSTON.ELF`.
+
+```sh
+# Quick run on ISS (instruction-level, fast)
+make benchmark
+
+# Cycle-accurate run on Verilator RTL sim
+make benchmark-rtl
+
+# Override iteration count or optimization level
+make benchmark BENCH_ITERS=10000
+make benchmark COPT="-Os"
+```
+
+**Dhrystone 2.1** — Original 1988 source (public domain, unmodified).
+Adapted via shim headers and `-Dmain=dhrystone_main` — no changes to
+the benchmark source files.
+
+Current baseline (-O2, no hardware MUL): **~1.8 DMIPS** on the
+cycle-accurate RTL simulator.
 
 ## NetBSD Port
 
