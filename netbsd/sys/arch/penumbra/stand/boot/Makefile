@@ -2,9 +2,9 @@
 #
 # Penumbra boot loader (PIE ELF, loaded by ROM from FAT32)
 #
-# Can be built two ways:
-#   1. Via build.sh: ./build.sh -U -m penumbra tools && nbmake-penumbra
-#   2. Standalone:   make -f Makefile.standalone
+# Build with nbmake-penumbra (requires tools built via build.sh):
+#   nbmake-penumbra -C netbsd/sys/arch/penumbra/stand obj   # create objdir first
+#   nbmake-penumbra -C netbsd/sys/arch/penumbra/stand/boot
 
 PROG=		PENBOOT.ELF
 SRCS=		crt0.S boot.c conf.c

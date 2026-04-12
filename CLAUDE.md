@@ -166,7 +166,9 @@ cmake -G Ninja -S llvm/llvm -B build/llvm \
 Incremental rebuild — **target only what's needed** to avoid
 building all unit tests:
 ```sh
-ninja -C build/llvm -j10 llc clang lld
+ninja -C build/llvm -j10 llc clang lld \
+  llvm-mc llvm-ar llvm-nm llvm-objcopy llvm-objdump \
+  llvm-readobj llvm-size llvm-strings
 ```
 
 ### LLVM Backend Tests

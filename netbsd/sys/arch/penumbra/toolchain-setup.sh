@@ -23,12 +23,20 @@ if [ ! -x "$BIN/clang" ]; then
     exit 1
 fi
 
+MISSING=0
+
 # Map GNU-style tool names to LLVM tool names
 create_link() {
     local gnu_name="$1"
     local llvm_name="$2"
     local target="$BIN/$PREFIX-$gnu_name"
 
+    if [ ! -e "$BIN/$llvm_name" ]; then
+        echo "error: $BIN/$llvm_name not found — did you build it?" >&2
+        echo "  hint: ninja -C $(dirname "$BIN") llvm-mc llvm-ar llvm-nm llvm-objcopy llvm-objdump llvm-readobj llvm-size llvm-strings" >&2
+        MISSING=1
+        return
+    fi
     if [ -e "$target" ] && [ ! -L "$target" ]; then
         echo "skip: $target exists and is not a symlink"
         return
@@ -56,6 +64,12 @@ create_link readelf    llvm-readelf
 create_link size       llvm-size
 create_link strings    llvm-strings
 create_link strip      llvm-strip
+
+if [ "$MISSING" -ne 0 ]; then
+    echo "" >&2
+    echo "error: some LLVM tools are missing — aborting without creating broken symlinks" >&2
+    exit 1
+fi
 
 echo ""
 echo "Done. Use with:"

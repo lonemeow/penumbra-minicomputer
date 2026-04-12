@@ -57,6 +57,8 @@ The `build/netbsd-kernel/` directory is gitignored.
 ### Bootloader Build
 
 ```sh
+# Create objdir first (bmake silently builds in-tree without it)
+build/netbsd-tools/bin/nbmake-penumbra -C netbsd/sys/arch/penumbra/stand obj
 build/netbsd-tools/bin/nbmake-penumbra -C netbsd/sys/arch/penumbra/stand/boot
 ```
 

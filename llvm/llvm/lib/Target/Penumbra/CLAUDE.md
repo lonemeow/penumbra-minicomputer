@@ -18,7 +18,9 @@ cmake -G Ninja -S llvm/llvm -B build/llvm \
 
 **Incremental rebuild (target only what's needed):**
 ```sh
-ninja -C build/llvm -j10 llc clang lld    # codegen + compiler + linker
+ninja -C build/llvm -j10 llc clang lld \
+  llvm-mc llvm-ar llvm-nm llvm-objcopy llvm-objdump \
+  llvm-readobj llvm-size llvm-strings
 ```
 A full `ninja -C build/llvm` builds everything including unit tests —
 much slower; only needed if running `llvm-lit` for the first time.

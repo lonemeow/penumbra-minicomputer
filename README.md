@@ -57,7 +57,9 @@ cmake -G Ninja -S llvm/llvm -B build/llvm \
   -DLLVM_PARALLEL_LINK_JOBS=2
 
 # Build only the tools we need (much faster than a full build)
-ninja -C build/llvm -j10 llc clang lld
+ninja -C build/llvm -j10 llc clang lld \
+  llvm-mc llvm-ar llvm-nm llvm-objcopy llvm-objdump \
+  llvm-readobj llvm-size llvm-strings
 ```
 
 > **Low memory?** `-DLLVM_PARALLEL_LINK_JOBS=2` limits link parallelism.
@@ -223,10 +225,14 @@ build/netbsd-tools/bin/nbmake-penumbra -C build/netbsd-kernel/MINIMAL depend
 build/netbsd-tools/bin/nbmake-penumbra -C build/netbsd-kernel/MINIMAL -j10
 ```
 
-### Building the bootloader (standalone)
+### Building the bootloader
 
 ```sh
-make -C netbsd/sys/arch/penumbra/stand/boot -f Makefile.standalone
+# Create objdir (required — without it, bmake silently builds in-tree)
+build/netbsd-tools/bin/nbmake-penumbra -C netbsd/sys/arch/penumbra/stand obj
+
+# Build (output: build/netbsd-obj/sys/arch/penumbra/stand/boot/PENBOOT.ELF)
+build/netbsd-tools/bin/nbmake-penumbra -C netbsd/sys/arch/penumbra/stand/boot
 ```
 
 ## License
