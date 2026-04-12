@@ -241,6 +241,58 @@ sdimage-rootfs: rootfs
 		-r $(ROOTFS_IMG) -v
 	@echo "SD image: $(SDIMAGE) (with FFS root)"
 
+# ── Benchmark SD image and runners ───────────────────────────
+# Builds benchmark ELFs and creates an SD image containing them.
+# Usage:
+#   make sdimage-bench             — build benchmarks + SD image
+#   make benchmark                 — run all benchmarks on ISS (fast)
+#   make benchmark-rtl             — run all benchmarks on Verilator (cycle-accurate)
+#   make benchmark BENCH_ITERS=10  — override iteration count
+BENCH_IMG   := $(BUILD_DIR)/bench.img
+BENCH_ITERS ?= 1000
+
+.PHONY: sdimage-bench
+sdimage-bench:
+	@$(MAKE) -C benchmark DHRYSTONE_ITERATIONS=$(BENCH_ITERS) LLVM_PREFIX=$(LLVM_PREFIX)
+	@mkdir -p $(BUILD_DIR)/bench_sd
+	@cp $(BUILD_DIR)/benchmark/*.ELF $(BUILD_DIR)/bench_sd/ 2>/dev/null || true
+	@sw/tools/mksdimage.sh -o $(BENCH_IMG) -e $(BUILD_DIR)/bench_sd -v
+	@echo "Benchmark SD image: $(BENCH_IMG)"
+
+# List of benchmark ELF names (FAT32 8.3 format, no path)
+BENCH_ELFS := DHRYSTON.ELF
+
+.PHONY: benchmark
+benchmark: sdimage-bench $(ISS)
+	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX) CFLAGS=$(CFLAGS)
+	@for elf in $(BENCH_ELFS); do \
+		echo "═══ Running $$elf on ISS ═══"; \
+		echo "boot sd:0,0/$$elf" | $(ISS) program.hex +sdcard=$(BENCH_IMG) \
+			|| echo "*** $$elf FAILED ***"; \
+		echo ""; \
+	done
+
+.PHONY: benchmark-rtl
+benchmark-rtl: sdimage-bench
+	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
+	$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) \
+		--top-module machine_sim \
+		--Mdir $(BUILD_DIR)/machine_sim_interactive.verilator \
+		-o ../Vmachine_sim_interactive \
+		$(PKG_SV) $$(find hw/rtl -name 'machine_sim.sv') hw/sim/tb_interactive.cpp
+	@rm -f program.hex
+	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX) CFLAGS=$(CFLAGS)
+	@$(UASM) hw/microcode/microcode.uasm -o microcode.hex
+	@for elf in $(BENCH_ELFS); do \
+		echo "═══ Running $$elf on RTL sim ═══"; \
+		echo "boot sd:0,0/$$elf" | \
+			docker run --rm -i -v $(CURDIR):/work -w /work \
+			--entrypoint ./$(BUILD_DIR)/Vmachine_sim_interactive \
+			$(DOCKER_IMAGE) +sdcard=$(BENCH_IMG) \
+			|| echo "*** $$elf FAILED ***"; \
+		echo ""; \
+	done
+
 # ── FPGA build (OSS CAD Suite via Docker wrappers) ────────────
 FPGA_TOOLS = hw/tools/oss-cad-suite/bin
 FPGA_RTL   = hw/rtl/fpga

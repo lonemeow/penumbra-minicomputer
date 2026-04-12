@@ -48,6 +48,8 @@ The architecture is fully specified in `doc/`. Key specs:
   See `hw/CLAUDE.md` for detailed hardware context.
 - `sw/` - Software tools and ISS (`sw/tools/` assembler/converter, `sw/sim/` instruction set simulator)
 - `llvm/` - LLVM backend. See `llvm/llvm/lib/Target/Penumbra/CLAUDE.md` for detailed LLVM context.
+- `benchmark/` - Bare-metal benchmarks (Dhrystone). PIE ELFs loaded via
+  `boot sd:0,0/DHRYSTON.ELF`. See "Benchmarks" section below.
 - `doc/` - Architecture specs (ISA, MMU, bus, memory map, datapath, toolchain, ABI)
 
 ## Conventions
@@ -209,6 +211,34 @@ hw/rom/crt0.s →  llvm-mc   →  crt0.o ├→ ld.lld (rom.ld) → boot_rom.elf
 hw/rom/rom.ld ─────────────────────────┘
 ```
 
+## Benchmarks
+Bare-metal benchmarks in `benchmark/`, built as PIE ELFs loaded from
+SD card FAT32 via `boot sd:0,0/DHRYSTON.ELF`.
+
+**Harness** (`benchmark/common/`): PIE self-relocating CRT, identity-mapping
+TLB miss handler (cached RAM, uncached MMIO), timer IRQ for tick
+accumulation, polled UART output, software mul/div (librt.c).
+Compiler runtime and string functions provided (no compiler-rt/libc
+dependency).  Soft-float stubs for benchmarks that use float in
+reporting (not in measurement loops).
+
+**Dhrystone 2.1** (`benchmark/dhrystone/`): Original 1988 source files
+(dhry.h, dhry_1.c, dhry_2.c) unmodified from Reinhold P. Weicker's
+Usenet posting.  Adapted via shim headers (`-isystem dhrystone/include`)
+and `-Dmain=dhrystone_main`.
+
+Build and run:
+```sh
+make benchmark                    # ISS (fast, ~seconds)
+make benchmark-rtl                # Verilator (cycle-accurate, slower)
+make benchmark BENCH_ITERS=100    # override iteration count
+make benchmark COPT="-Os"         # override optimization level
+```
+
+Baseline results (1000 iterations, -O2, no hardware MUL):
+- ISS: ~14,600 Dhrystones/sec, ~8.3 DMIPS
+- RTL: ~2,500 Dhrystones/sec, ~1.4 DMIPS
+
 ## Current Status
 The CPU is fully functional in simulation: all RTL modules implemented
 and tested, CPU runs real programs through the full
@@ -240,9 +270,10 @@ MIPS/68k-style vector dispatch.
   `load sd:<dev>,<cs>[:<part>] <addr> <lba> <count>` reads sectors
   (raw absolute LBA without `:<part>`,
   or partition-relative LBA with it).
-- **ROM FAT32 boot:** `boot sd:<dev>,<cs>` mounts the first
-  FAT32 partition, loads `PENBOOT.ELF` (PIE ELF) from root
-  directory. The ROM parses ELF headers, allocates RAM for
+- **ROM FAT32 boot:** `boot sd:<dev>,<cs>[/file]` mounts the first
+  FAT32 partition, loads the named file (default `PENBOOT.ELF`)
+  as a PIE ELF from the root directory.
+  The ROM parses ELF headers, allocates RAM for
   scratch and load destination via `find_memory_region()`
   (walks boot data MEMORY devices, avoids reserved areas),
   copies PT_LOAD segments, and jumps to the entry point

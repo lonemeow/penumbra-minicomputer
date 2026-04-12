@@ -1,0 +1,15 @@
+Dhrystone Benchmark, Version 2.1 (C version)
+
+Author:  Reinhold P. Weicker, Siemens AG, Erlangen, Germany
+Date:    May 25, 1988
+
+The original Dhrystone source code was distributed via Usenet
+(comp.arch) without any copyright notice or license restriction.
+It is widely considered to be in the public domain.
+
+The files dhry.h, dhry_1.c, and dhry_2.c in this directory are
+unmodified from the original 1988 distribution, obtained from:
+  https://github.com/Keith-S-Thompson/dhrystone (v2.1/)
+
+The remaining files (entry.c, shim.c, include/) are Penumbra
+bare-metal adaptations and follow the project's main license.

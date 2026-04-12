@@ -436,11 +436,12 @@ static int sd_blk_read(uint32_t lba, unsigned char *dst, void *ctx)
 /*
  * cmd_boot — load and execute the boot loader from a FAT32 partition.
  *
- * Usage: boot sd:<dev>,<cs>
+ * Usage: boot sd:<dev>,<cs>[/file]
  *
- * Finds the first FAT32 partition, mounts it, loads LOADER (ELF PIE)
+ * Finds the first FAT32 partition, mounts it, loads an ELF PIE
  * from the root directory, copies PT_LOAD segments to a chosen RAM
  * address, and jumps to the entry point with R1 = boot data.
+ * Optional /filename overrides the default (PENBOOT.ELF).
  *
  * The LOADER is a PIE ELF that self-relocates at startup using a
  * small CRT stub.  The ROM just needs to load segments and jump.
@@ -591,13 +592,24 @@ static void cmd_boot(const char *args) {
     const char *p = args;
 
     if (!(p[0] == 's' && p[1] == 'd' && p[2] == ':')) {
-        console_puts("usage: boot sd:<dev>,<cs>\r\n");
+        console_puts("usage: boot sd:<dev>,<cs>[/file]\r\n");
         return;
     }
     p += 3;
     unsigned long dev_nth = strtoul(p, (char **)&p, 10);
     if (*p == ',') p++;
     unsigned long cs = strtoul(p, (char **)&p, 10);
+
+    /* Optional /filename — default to PENBOOT.ELF */
+    const char *filename = BOOT_FILENAME;
+    if (*p == '/') {
+        p++;
+        if (*p == '\0') {
+            console_puts("missing filename\r\n");
+            return;
+        }
+        filename = p;
+    }
 
     struct btag_device *dev =
         bd_find_device_by_class(ACFG_CLASS_SD, (int)dev_nth);
@@ -654,12 +666,12 @@ static void cmd_boot(const char *args) {
 
     /* Find loader file */
     uint32_t file_cluster, file_size;
-    rc = fat32_find_root(&fs, BOOT_FILENAME, &file_cluster, &file_size);
+    rc = fat32_find_root(&fs, filename, &file_cluster, &file_size);
     if (rc != 0) {
-        console_printf("%s not found\r\n", BOOT_FILENAME);
+        console_printf("%s not found\r\n", filename);
         goto out;
     }
-    console_printf("Loading %s (%d bytes)\r\n", BOOT_FILENAME,
+    console_printf("Loading %s (%d bytes)\r\n", filename,
                     (int)file_size);
 
     /* Base reserved region: pages 0–1 (vectors, boot data, stack) */
