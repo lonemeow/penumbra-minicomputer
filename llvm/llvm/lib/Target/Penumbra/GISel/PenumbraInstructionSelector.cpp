@@ -673,16 +673,9 @@ bool PenumbraInstructionSelector::selectGlobalValue(MachineInstr &I,
   if (GV->isThreadLocal()) {
     if (TM.getRelocationModel() == Reloc::PIC_) {
       // PIC TLS GD: compute GOT tls_index pair address via PC-relative
-      // GOT offset, same 5-instruction pattern as regular GOT globals.
-      //   MOV  PCReg, PC
-      //   LLI  OffReg, %tlsgd_got_pcrel_lo16(sym + 4)
-      //   LUI  OffReg, %tlsgd_got_pcrel_hi16(sym + 8)
-      //   ADD  PCReg, OffReg
-      //   LDW  DstReg, [PCReg]      — not needed: result IS the GOT address
-      //
-      // Unlike regular globals, we want the address OF the GOT tls_index
-      // pair, not its contents.  The caller passes this to __tls_get_addr.
-      // So: 4 instructions (no LDW dereference).
+      // GOT offset.  The 4-instruction pattern (MOV PC + LLI/LUI + ADD)
+      // plus the subsequent BL __tls_get_addr gives a 5-instruction
+      // sequence that lld can relax to inline LE for static linking.
       DebugLoc DL = I.getDebugLoc();
       auto InsertPt = I.getIterator();
       Register PCReg =
@@ -716,6 +709,8 @@ bool PenumbraInstructionSelector::selectGlobalValue(MachineInstr &I,
           .addReg(OffReg);
       constrainSelectedInstRegOperands(*ADDInst, TII, TRI, RBI);
     } else {
+      // Non-PIC TLS: absolute address with TLS GD relocs.
+      // Used by LE path (PtrToInt) — linker resolves as R_TPREL.
       emitLoadSymbolAddr(
           DstReg, I.getDebugLoc(), MBB, I.getIterator(),
           MachineOperand::CreateGA(GV, Offset, Penumbra::S_TLSgd_Lo16),

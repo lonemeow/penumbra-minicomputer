@@ -88,8 +88,13 @@ public:
             TLSModel::Model Model = TM
                 ? TM->getTLSModel(GV)
                 : TLSModel::GeneralDynamic;
-            if (Model == TLSModel::GeneralDynamic ||
-                Model == TLSModel::LocalDynamic) {
+            // PIC code uses GD (__tls_get_addr with GOT-PCREL pattern).
+            // The 5-instruction GOT-PCREL sequence can be relaxed by
+            // lld to inline LE (MOV TP + TPREL) for static linking.
+            // Non-PIC code uses LE directly (PtrToInt resolves to
+            // absolute TLS relocs, linker resolves as R_TPREL).
+            bool IsPIC = TM && TM->getRelocationModel() == Reloc::PIC_;
+            if (IsPIC && Model != TLSModel::LocalExec) {
               GDIntrinsics.push_back(II);
             } else {
               LEIntrinsics.push_back(II);
