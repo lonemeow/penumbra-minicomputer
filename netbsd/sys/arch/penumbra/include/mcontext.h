@@ -66,9 +66,10 @@ __lwp_gettcb_fast(void)
 {
 	void *__tcb;
 	__asm __volatile(
-		"add %[__tcb], r12, %[__offset]"
-	    :	[__tcb] "=r" (__tcb)
-	    :	[__offset] "i" (-(TLS_TP_OFFSET + sizeof(struct tls_tcb))));
+		"mov %[__tcb], r12\n\t"
+		"sub %[__tcb], %[__offset]"
+	    :	[__tcb] "=&r" (__tcb)
+	    :	[__offset] "i" (TLS_TP_OFFSET + sizeof(struct tls_tcb)));
 	return __tcb;
 }
 
@@ -76,10 +77,12 @@ static __inline void
 __lwp_settcb(void *__tcb)
 {
 	__asm __volatile(
-		"add r12, %[__tcb], %[__offset]"
+		"mov r12, %[__tcb]\n\t"
+		"add r12, %[__offset]"
 	    :
 	    :	[__tcb] "r" (__tcb),
-		[__offset] "i" (TLS_TP_OFFSET + sizeof(struct tls_tcb)));
+		[__offset] "i" (TLS_TP_OFFSET + sizeof(struct tls_tcb))
+	    :	"r12");
 }
 #endif /* _RTLD_SOURCE || _LIBC_SOURCE || __LIBPTHREAD_SOURCE__ */
 

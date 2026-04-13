@@ -53,6 +53,7 @@ typedef struct label_t {
 #define __SIMPLELOCK_LOCKED	1
 #define __SIMPLELOCK_UNLOCKED	0
 
+#define __HAVE___LWP_SETTCB
 #define __HAVE_COMMON___TLS_GET_ADDR
 #define __HAVE_CPU_LWP_SETPRIVATE
 #define __HAVE_RAS

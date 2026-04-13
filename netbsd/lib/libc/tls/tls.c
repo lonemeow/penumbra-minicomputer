@@ -61,19 +61,27 @@ static size_t tls_size;
 static size_t tls_allocation;
 static void *initial_thread_tcb;
 
-void * __libc_tls_get_addr(void);
+void * __libc_tls_get_addr(void *);
 
 __weak_alias(__tls_get_addr, __libc_tls_get_addr)
 #ifdef __i386__
 __weak_alias(___tls_get_addr, __libc_tls_get_addr)
 #endif
 
+/*
+ * Static-binary __tls_get_addr.  For dynamic binaries, ld.elf_so's
+ * strong symbol overrides this weak alias.
+ *
+ * arg points to a tls_index: { size_t ti_module, size_t ti_offset }.
+ * For a single-module static binary, the TLS block starts at TP
+ * (Variant I) and the variable is at TP + ti_offset + TLS_DTV_OFFSET.
+ */
 void *
-__libc_tls_get_addr(void)
+__libc_tls_get_addr(void *arg_)
 {
-
-	abort();
-	/* NOTREACHED */
+	size_t *arg = (size_t *)arg_;
+	void *tp = __lwp_getprivate_fast();
+	return (uint8_t *)tp + arg[1] + TLS_DTV_OFFSET;
 }
 
 __weak_alias(_rtld_tls_allocate, __libc_rtld_tls_allocate)

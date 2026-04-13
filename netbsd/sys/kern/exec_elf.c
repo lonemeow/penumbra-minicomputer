@@ -850,6 +850,9 @@ exec_elf_makecmds(struct lwp *l, struct exec_package *epp)
 		ap->arg_interp = epp->ep_vmcmds.evs_cmds[nused].ev_addr;
 		epp->ep_entryoffset = interp_offset;
 		epp->ep_entry = ap->arg_interp + interp_offset;
+		printf("elf interp: base=0x%lx entry=0x%lx\n",
+		    (unsigned long)ap->arg_interp,
+		    (unsigned long)epp->ep_entry);
 		PNBUF_PUT(interp);
 		interp = NULL;
 	} else {

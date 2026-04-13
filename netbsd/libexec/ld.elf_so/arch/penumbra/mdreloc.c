@@ -174,6 +174,10 @@ _rtld_relocate_nonplt_objects(Obj_Entry *obj)
 			break;
 		}
 
+		case R_TYPE(COPY):
+			/* Handled by _rtld_do_copy_relocations. */
+			break;
+
 		default:
 			rdbg(("sym = %lu, type = %lu, offset = %p, "
 			    "addend = %p, contents = %p",
@@ -212,8 +216,10 @@ _rtld_relocate_plt_object(const Obj_Entry *obj, const Elf_Rela *rela,
 	    obj, &defobj, tp != NULL);
 	if (__predict_false(def == NULL))
 		return -1;
-	if (__predict_false(def == &_rtld_sym_zero))
-		return -1;
+	if (__predict_false(def == &_rtld_sym_zero)) {
+		/* Undefined weak symbol — leave GOT entry as 0. */
+		return 0;
+	}
 
 	if (ELF_ST_TYPE(def->st_info) == STT_GNU_IFUNC) {
 		if (tp == NULL)
