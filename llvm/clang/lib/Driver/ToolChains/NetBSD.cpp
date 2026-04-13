@@ -246,6 +246,15 @@ void netbsd::Linker::ConstructJob(Compilation &C, const JobAction &JA,
     // pre-relocation data values to compute the load bias.
     // Without written addends these are zero under RELA.
     CmdArgs.push_back("--apply-dynamic-relocs");
+    // NetBSD 10 ld.elf_so requires exactly 2 PT_LOAD segments.
+    // lld defaults to 4 (separate RO data + RELRO split).
+    // Upstream multi-segment support is pending; use classic layout.
+    CmdArgs.push_back("--no-rosegment");
+    CmdArgs.push_back("-z");
+    CmdArgs.push_back("norelro");
+    // Penumbra has no lazy PLT binding — always resolve eagerly.
+    CmdArgs.push_back("-z");
+    CmdArgs.push_back("now");
     break;
 
   default:
