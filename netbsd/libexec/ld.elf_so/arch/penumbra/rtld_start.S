@@ -61,8 +61,7 @@ ENTRY(_rtld_start)
 
 	mov	r11, r1			/* entry point */
 	ldw	r1, [sp]		/* cleanup */
-	ldw	r2, [sp + 4]		/* obj_main */
-	mov	r3, r6			/* ps_strings */
+	mov	r2, r6			/* ps_strings (saved from kernel R2) */
 	add	sp, 8
 	jmp	r11
 

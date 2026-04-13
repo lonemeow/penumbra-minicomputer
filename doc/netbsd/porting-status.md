@@ -5,13 +5,14 @@ from `netbsd-10` in `netbsd/`. MD code in `sys/arch/penumbra/`.
 
 ## Current State
 
-**Boots to single-user shell on the ISS.**  ROM autoconfig -->
-bootloader --> kernel --> device drivers --> FFS root mount -->
-exec `/rescue/init` --> interactive shell with console I/O.
+**Boots to single-user shell with full dynamically-linked userland
+on the ISS.**  ROM autoconfig --> bootloader --> kernel --> device
+drivers --> FFS root mount --> exec `/sbin/init` --> interactive
+shell with console I/O.
 
 `build.sh distribution` completes -- full userland cross-builds.
-Statically-linked rescue binaries work.  Dynamic linker not yet
-ported, so dynamically-linked binaries don't run.
+Both statically-linked rescue binaries and dynamically-linked
+system binaries (`/bin/sh`, `/bin/ls`, `ldd`, etc.) work.
 
 ## Boot Chain
 
@@ -20,7 +21,7 @@ ported, so dynamically-linked binaries don't run.
 | ROM | `hw/rom/` | Done |
 | Bootloader (PENBOOT.ELF) | `sys/arch/penumbra/stand/boot/` | Done |
 | Kernel | `sys/arch/penumbra/penumbra/` | Boots to single-user shell |
-| Userland | `build.sh distribution` | Builds; static binaries work |
+| Userland | `build.sh distribution` | Full userland; dynamic binaries work |
 
 ROM loads `PENBOOT.ELF` from FAT32 on SD card.  Bootloader
 translates ROM boot data to bootinfo, loads kernel ELF via
@@ -131,9 +132,10 @@ DDB (kernel debugger) disabled -- needs extensive MD hooks.
   `resumecontext`, `__mulsi3`, atomics (RAS + generic).
 - **Libraries:** All static and shared libraries build and link.
   `MKPIC=yes` with GOT-based PIC (full 32-bit reach).
-- **Dynamic linker (`ld.elf_so`):** Functional.
+- **Dynamic linker (`ld.elf_so`):** Fully functional.
   `rtld_start.S`, `mdreloc.c`, RELA relocations, eager PLT
-  binding.  Dynamically-linked binaries load and run.
+  binding, TLS Variant I (`__HAVE___LWP_GETTCB_FAST`).
+  Dynamically-linked binaries load and run end-to-end.
   Library search path requires `ldconfig /lib /usr/lib`.
 - **Limitations:** libpthread is minimal stubs.
   `MKCXX=no` (no C++ support).
@@ -158,8 +160,6 @@ make simulate SDCARD=build/boot.img
 
 ## What's Next
 
-1. **Root filesystem** -- `build.sh sets`, boot with full
-   userland on the ISS.
-2. **Remaining MD stubs** -- as the kernel reaches them.
-3. **Interrupt controller** -- multiple devices with priority.
-4. **SDRAM controller** -- memory subsystem for real hardware.
+1. **Remaining MD stubs** -- as the kernel reaches them.
+2. **Interrupt controller** -- multiple devices with priority.
+3. **SDRAM controller** -- memory subsystem for real hardware.

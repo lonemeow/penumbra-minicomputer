@@ -626,17 +626,21 @@ MIPS/68k-style vector dispatch.
   lld: `-dc`/`-dp` GNU ld compat flags silently ignored.
   `mcontext.h` corrected: `_REG_PC=15` (R15 is PC),
   `_NGREG=17`, added `_REG_SP`/`_REG_LR` named constants.
-  `SLOPPY_FLIST=yes` in mk.conf to tolerate missing `ld.elf_so`
-  (rtld not yet ported) and toolchain binaries.
-- **Dynamic linker (`ld.elf_so`) ported and functional.**
+  `SLOPPY_FLIST=yes` in mk.conf to tolerate missing toolchain
+  binaries in DESTDIR.
+- **Dynamic linker (`ld.elf_so`) ported and fully functional.**
   `rtld_start.S` (bootstrap + PLT resolver), `mdreloc.c`
   (RELATIVE, GLOB_DAT, JUMP_SLOT, TLS relocations),
   `Makefile.inc` in `libexec/ld.elf_so/arch/penumbra/`.
   Self-relocation via RELA format (`DT_RELA`);
   `--apply-dynamic-relocs` required for written addends
   (bias computation reads pre-relocation data).
-  Dynamically-linked binaries load and run; library search
-  path requires `ldconfig /lib /usr/lib` (or `/etc/ld.so.conf`).
+  TLS Variant I with `__HAVE___LWP_GETTCB_FAST`; common
+  `__tls_get_addr` (no arch-specific override needed).
+  `_rtld_start` passes cleanup (R1) and ps_strings (R2) to
+  `___start` — matching the 2-argument CRT convention.
+  Dynamically-linked binaries (including `/bin/sh`, `/bin/ls`,
+  `ldd`) load and run end-to-end on the ISS with full userland.
 
 ## Next Steps (in priority order)
 1. **Root filesystem** — `build.sh sets` to create installable
