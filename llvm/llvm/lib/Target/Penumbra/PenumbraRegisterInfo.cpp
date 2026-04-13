@@ -41,6 +41,12 @@ PenumbraRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   Reserved.set(Penumbra::R12); // Thread pointer
   Reserved.set(Penumbra::R14); // Stack pointer
   Reserved.set(Penumbra::R15); // Program counter
+
+  const PenumbraFrameLowering *TFI = static_cast<const PenumbraFrameLowering *>(
+      MF.getSubtarget().getFrameLowering());
+  if (TFI->hasFP(MF))
+    Reserved.set(Penumbra::R10); // Frame pointer
+
   return Reserved;
 }
 
@@ -51,13 +57,18 @@ bool PenumbraRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator MI,
   MachineInstr &Inst = *MI;
   MachineFunction &MF = *Inst.getParent()->getParent();
   const MachineFrameInfo &MFI = MF.getFrameInfo();
+  const PenumbraFrameLowering *TFI = static_cast<const PenumbraFrameLowering *>(
+      MF.getSubtarget().getFrameLowering());
 
   // Calculate the actual offset: frame object offset + SP adjustment.
   int Offset = MFI.getObjectOffset(Inst.getOperand(FIOperandNum).getIndex()) +
                MFI.getStackSize() + SPAdj;
 
-  // Replace the frame index with the stack pointer and set the offset.
-  Inst.getOperand(FIOperandNum).ChangeToRegister(Penumbra::R14, /*isDef=*/false);
+  // When FP is active, use R10 (FP) as the base register.
+  // FP = SP after frame allocation, so offsets are the same.
+  Register BaseReg = TFI->hasFP(MF) ? Penumbra::R10 : Penumbra::R14;
+
+  Inst.getOperand(FIOperandNum).ChangeToRegister(BaseReg, /*isDef=*/false);
   // The offset operand is typically the next one (FIOperandNum + 1).
   Inst.getOperand(FIOperandNum + 1).ChangeToImmediate(Offset);
 
@@ -66,5 +77,7 @@ bool PenumbraRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator MI,
 
 Register
 PenumbraRegisterInfo::getFrameRegister(const MachineFunction &MF) const {
-  return Penumbra::R14; // SP — no frame pointer by default
+  const PenumbraFrameLowering *TFI = static_cast<const PenumbraFrameLowering *>(
+      MF.getSubtarget().getFrameLowering());
+  return TFI->hasFP(MF) ? Penumbra::R10 : Penumbra::R14;
 }

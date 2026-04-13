@@ -10,18 +10,39 @@
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 
 using namespace llvm;
 
+// R10 is used as frame pointer when the function has dynamic stack
+// allocation (alloca/VLAs).  Without FP, SP-relative accesses break
+// because alloca moves SP after the frame is set up.
+static const MCPhysReg FPReg = Penumbra::R10;
+
+bool PenumbraFrameLowering::hasFPImpl(const MachineFunction &MF) const {
+  const MachineFrameInfo &MFI = MF.getFrameInfo();
+  return MFI.hasVarSizedObjects();
+}
+
+// Ensure R10 is saved/restored when used as FP.
+void PenumbraFrameLowering::determineCalleeSaves(MachineFunction &MF,
+                                                  BitVector &SavedRegs,
+                                                  RegScavenger *RS) const {
+  TargetFrameLowering::determineCalleeSaves(MF, SavedRegs, RS);
+  if (hasFP(MF))
+    SavedRegs.set(FPReg);
+}
+
 // Emit the function prologue: allocate the stack frame by subtracting
-// StackSize from SP (R14).  Callee-saved register spills are inserted
-// separately by PrologEpilogInserter, which calls storeRegToStackSlot.
+// StackSize from SP (R14).  When FP is needed, set FP = SP after
+// frame allocation so that locals are accessible via [FP+offset]
+// even after alloca moves SP.
 void PenumbraFrameLowering::emitPrologue(MachineFunction &MF,
                                           MachineBasicBlock &MBB) const {
   MachineFrameInfo &MFI = MF.getFrameInfo();
   uint64_t StackSize = MFI.getStackSize();
-  if (StackSize == 0)
+  if (StackSize == 0 && !hasFP(MF))
     return;
 
   MachineBasicBlock::iterator MBBI = MBB.begin();
@@ -29,15 +50,26 @@ void PenumbraFrameLowering::emitPrologue(MachineFunction &MF,
   const auto &TII =
       *static_cast<const PenumbraInstrInfo *>(MF.getSubtarget().getInstrInfo());
 
-  // sub r14, #StackSize  — grow stack downward
-  BuildMI(MBB, MBBI, DL, TII.get(Penumbra::SUBi), Penumbra::R14)
-      .addReg(Penumbra::R14)
-      .addImm(StackSize);
+  if (StackSize != 0) {
+    // sub r14, #StackSize  — grow stack downward
+    BuildMI(MBB, MBBI, DL, TII.get(Penumbra::SUBi), Penumbra::R14)
+        .addReg(Penumbra::R14)
+        .addImm(StackSize);
+  }
+
+  if (hasFP(MF)) {
+    // mov r10, r14  — FP = SP after frame allocation
+    // Inserted after SUB SP but before CSR spills (which PEI
+    // places after the prologue).  CSR spills will use [FP+offset]
+    // via eliminateFrameIndex, and FP = SP at that point.
+    BuildMI(MBB, MBBI, DL, TII.get(Penumbra::MOV), FPReg)
+        .addReg(Penumbra::R14);
+  }
 }
 
 // Emit the function epilogue: release the stack frame by adding StackSize
-// back to SP before the return.  Callee-saved register reloads are inserted
-// by PrologEpilogInserter before this runs.
+// back to SP before the return.  When FP is used, SP was already restored
+// from FP by restoreCalleeSavedRegisters.
 void PenumbraFrameLowering::emitEpilogue(MachineFunction &MF,
                                           MachineBasicBlock &MBB) const {
   MachineFrameInfo &MFI = MF.getFrameInfo();
@@ -55,6 +87,54 @@ void PenumbraFrameLowering::emitEpilogue(MachineFunction &MF,
   BuildMI(MBB, MBBI, DL, TII.get(Penumbra::ADDi), Penumbra::R14)
       .addReg(Penumbra::R14)
       .addImm(StackSize);
+}
+
+// Custom CSR restore for functions with FP.  We must:
+//   1. Restore SP from FP (undo any alloca)
+//   2. Restore all CSRs except FP using [FP+offset]
+//   3. Restore FP last (its load still reads from valid FP)
+// For non-FP functions, return false to use the default PEI handling.
+bool PenumbraFrameLowering::restoreCalleeSavedRegisters(
+    MachineBasicBlock &MBB, MachineBasicBlock::iterator MI,
+    MutableArrayRef<CalleeSavedInfo> CSI,
+    const TargetRegisterInfo *TRI) const {
+  if (CSI.empty())
+    return true;
+
+  MachineFunction &MF = *MBB.getParent();
+  if (!hasFP(MF))
+    return false; // default handling for non-FP functions
+
+  const auto &TII =
+      *static_cast<const PenumbraInstrInfo *>(MF.getSubtarget().getInstrInfo());
+  DebugLoc DL = MI != MBB.end() ? MI->getDebugLoc() : DebugLoc();
+
+  // 1. Restore SP from FP before any CSR restores.
+  BuildMI(MBB, MI, DL, TII.get(Penumbra::MOV), Penumbra::R14)
+      .addReg(FPReg);
+
+  // 2. Restore all CSRs except FP.
+  const CalleeSavedInfo *FPEntry = nullptr;
+  for (const CalleeSavedInfo &CS : CSI) {
+    if (CS.getReg() == FPReg) {
+      FPEntry = &CS;
+      continue;
+    }
+    TII.loadRegFromStackSlot(MBB, MI, CS.getReg(), CS.getFrameIdx(),
+                             TRI->getMinimalPhysRegClass(CS.getReg()),
+                             Register());
+  }
+
+  // 3. Restore FP last.  The LDW reads from [FP+offset] while FP is
+  //    still the frame pointer; the loaded value then overwrites FP
+  //    with the caller's saved value.
+  if (FPEntry)
+    TII.loadRegFromStackSlot(MBB, MI, FPEntry->getReg(),
+                             FPEntry->getFrameIdx(),
+                             TRI->getMinimalPhysRegClass(FPEntry->getReg()),
+                             Register());
+
+  return true;
 }
 
 // ADJCALLSTACKDOWN/UP are absorbed into the prologue/epilogue stack

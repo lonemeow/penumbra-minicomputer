@@ -8,6 +8,9 @@ define ptr @dynamic_alloca(i32 %n) {
 ; CHECK-LABEL: dynamic_alloca:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.1:
+; CHECK-NEXT:    sub r14, 4
+; CHECK-NEXT:    mov r10, r14
+; CHECK-NEXT:    stw r10, [r10 + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r2, r1
 ; CHECK-NEXT:    add r2, 3
 ; CHECK-NEXT:    llis r1, -4
@@ -15,6 +18,9 @@ define ptr @dynamic_alloca(i32 %n) {
 ; CHECK-NEXT:    mov r1, r14
 ; CHECK-NEXT:    sub r1, r2
 ; CHECK-NEXT:    mov r14, r1
+; CHECK-NEXT:    mov r14, r10
+; CHECK-NEXT:    ldw r10, [r10 + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    add r14, 4
 ; CHECK-NEXT:    jmp r13
   %p = alloca i8, i32 %n
   ret ptr %p
