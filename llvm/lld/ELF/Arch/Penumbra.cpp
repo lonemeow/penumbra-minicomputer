@@ -43,19 +43,38 @@ public:
   void writePlt(uint8_t *buf, const Symbol &sym,
                 uint64_t pltEntryAddr) const override;
   void writeGotPlt(uint8_t *buf, const Symbol &s) const override;
+  RelExpr adjustTlsExpr(RelType type, RelExpr expr) const override;
 };
 } // namespace
 
 // Instruction encodings (little-endian):
-//   LLI R11, imm16:       0x42C00000 | (imm16 & 0xFFFF)
-//   LUI R11, imm16:       0x4AC00000 | (imm16 & 0xFFFF)
-//   LDW R11, [R11 + 0]:   0xB2EC0000
-//   JMP R11:               0x6EC00000
+//   LLI R11, imm16:          0x42C00000 | (imm16 & 0xFFFF)
+//   LUI R11, imm16:          0x4AC00000 | (imm16 & 0xFFFF)
+//   MOV R11, PC (R15):       0x117E0000
+//   ADDi R11, imm16:         0x4EC00000 | (imm16 & 0xFFFF)
+//   LDW R11, [R11 + off16]:  0xB2EC0000 | (off16 & 0xFFFF)
+//   JMP R11:                 0x6EC00000
 // R11 is the ABI scratch register — not callee-saved, safe to clobber.
 static constexpr uint32_t LLI_R11 = 0x42C00000;
 static constexpr uint32_t LUI_R11 = 0x4AC00000;
+static constexpr uint32_t MOV_R11_PC = 0x117E0000;
+static constexpr uint32_t ADDi_R11 = 0x4EC00000;
 static constexpr uint32_t LDW_R11_R11 = 0xB2EC0000;
 static constexpr uint32_t JMP_R11 = 0x6EC00000;
+
+// Split a PC-relative offset into an ADDi unsigned-16 part and an
+// LDW signed-16 displacement.  The PLT stub computes:
+//   R11 = PLT_addr + hi + lo = GOT_entry_addr
+static void splitPcRelOffset(int64_t offset, uint16_t &hi, int16_t &lo) {
+  int32_t rem = static_cast<int32_t>(offset);
+  if (rem <= 32767) {
+    hi = 0;
+    lo = static_cast<int16_t>(rem);
+  } else {
+    lo = 32767;
+    hi = static_cast<uint16_t>(rem - 32767);
+  }
+}
 
 Penumbra::Penumbra(Ctx &ctx) : TargetInfo(ctx) {
   // BREAK instruction = 0x2A000000
@@ -145,31 +164,45 @@ void Penumbra::writeGotPlt(uint8_t *buf, const Symbol &s) const {
   write32le(buf, 0);
 }
 
+// Encode LDW memory offset: field is at instruction bits [17:2],
+// so the byte offset is shifted left by 2 in the encoding.
+static uint32_t encodeLdwOffset(int16_t byteOffset) {
+  return ((static_cast<uint32_t>(byteOffset) & 0xFFFF) << 2) & 0x3FFFC;
+}
+
 // PLT header: resolver stub — loads GOT[2] (resolver address) and jumps.
-//   LLI  R11, lo16(&GOT[2])
-//   LUI  R11, hi16(&GOT[2])
-//   LDW  R11, [R11]
-//   JMP  R11
+// PC-relative: MOV R11,PC + ADDi + LDW [R11+disp] + JMP R11
 void Penumbra::writePltHeader(uint8_t *buf) const {
   uint64_t got2 = ctx.in.gotPlt->getVA() + 8; // GOT[2]
-  write32le(buf + 0, LLI_R11 | (got2 & 0xFFFF));
-  write32le(buf + 4, LUI_R11 | ((got2 >> 16) & 0xFFFF));
-  write32le(buf + 8, LDW_R11_R11);
+  uint64_t pltAddr = ctx.in.plt->getVA();      // PLT header address
+  uint16_t hi;
+  int16_t lo;
+  splitPcRelOffset(got2 - pltAddr, hi, lo);
+  write32le(buf + 0, MOV_R11_PC);
+  write32le(buf + 4, ADDi_R11 | (hi & 0xFFFF));
+  write32le(buf + 8, LDW_R11_R11 | encodeLdwOffset(lo));
   write32le(buf + 12, JMP_R11);
 }
 
-// PLT entry: loads target address from GOT and jumps.
-//   LLI  R11, lo16(&GOT[n])
-//   LUI  R11, hi16(&GOT[n])
-//   LDW  R11, [R11]
-//   JMP  R11
+// PLT entry: PC-relative GOT access — position-independent.
+//   MOV  R11, PC               ; R11 = address of this instruction
+//   ADDi R11, hi_offset        ; add unsigned 16-bit high portion
+//   LDW  R11, [R11 + lo_disp]  ; load function addr from GOT entry
+//   JMP  R11                   ; tail-call to resolved function
 void Penumbra::writePlt(uint8_t *buf, const Symbol &sym,
                         uint64_t pltEntryAddr) const {
   uint64_t gotAddr = sym.getGotPltVA(ctx);
-  write32le(buf + 0, LLI_R11 | (gotAddr & 0xFFFF));
-  write32le(buf + 4, LUI_R11 | ((gotAddr >> 16) & 0xFFFF));
-  write32le(buf + 8, LDW_R11_R11);
+  uint16_t hi;
+  int16_t lo;
+  splitPcRelOffset(gotAddr - pltEntryAddr, hi, lo);
+  write32le(buf + 0, MOV_R11_PC);
+  write32le(buf + 4, ADDi_R11 | (hi & 0xFFFF));
+  write32le(buf + 8, LDW_R11_R11 | encodeLdwOffset(lo));
   write32le(buf + 12, JMP_R11);
+}
+
+RelExpr Penumbra::adjustTlsExpr(RelType type, RelExpr expr) const {
+  return expr;
 }
 
 uint32_t Penumbra::getThunkSectionSpacing() const {
@@ -287,6 +320,27 @@ void Penumbra::relocate(uint8_t *loc, const Relocation &rel,
   }
   default:
     Err(ctx) << getErrorLoc(ctx, loc) << "unrecognized relocation " << rel.type;
+  }
+
+  // TLS GD→LE relaxation for the 5-instruction PIC GOT-PCREL pattern.
+  // The non-PIC TLS_GD_LO16/HI16 pattern is already handled by the
+  // switch above (val = TPREL, written to LLI/LUI immediate field).
+  //
+  // PIC pattern:
+  //   loc-4: MOV R1, PC(R15) → MOV R1, TP(R12)    [0x10380000]
+  //   loc+0: LLI R2, gdlo    → LLI R2, tprel_lo16  (this reloc)
+  //   loc+4: LUI R2, gdhi    → LUI R2, tprel_hi16  (next reloc)
+  //   loc+8: ADD R1, R2       (unchanged)
+  //  loc+12: BL __tls_get_addr → NOP (ADD R0,R0)    [0x00000000]
+  if (rel.expr == R_RELAX_TLS_GD_TO_LE) {
+    if (rel.type == R_PENUMBRA_TLS_GD_GOT_PCREL_LO16) {
+      write32le(loc - 4, 0x10380000);  // MOV R1, R12
+      write32le(loc, (read32le(loc) & 0xFFFF0000) | (val & 0xFFFF));
+      write32le(loc + 12, 0x00000000); // NOP
+    } else if (rel.type == R_PENUMBRA_TLS_GD_GOT_PCREL_HI16) {
+      write32le(loc, (read32le(loc) & 0xFFFF0000) | ((val >> 16) & 0xFFFF));
+    }
+    // TLS_GD_LO16/HI16: switch above already wrote the correct value.
   }
 }
 
