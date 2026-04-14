@@ -137,8 +137,10 @@ DDB (kernel debugger) disabled -- needs extensive MD hooks.
   binding, TLS Variant I (`__HAVE___LWP_GETTCB_FAST`).
   Dynamically-linked binaries load and run end-to-end.
   Library search path requires `ldconfig /lib /usr/lib`.
+- **C++ / ATF:** `MKCXX=yes`, `MKLIBCXX=yes`.  libunwind ported
+  (in-tree, built into libc).  libc++ and libcxxrt link as shared
+  libraries.  libatf-c available for the ATF test suite.
 - **Limitations:** libpthread is minimal stubs.
-  `MKCXX=no` (no C++ support).
 
 ## Kernel Config (MINIMAL)
 
@@ -160,6 +162,22 @@ make simulate SDCARD=build/boot.img
 
 ## What's Next
 
-1. **Remaining MD stubs** -- as the kernel reaches them.
-2. **Interrupt controller** -- multiple devices with priority.
-3. **SDRAM controller** -- memory subsystem for real hardware.
+See `doc/TODO.md` for detailed descriptions.
+
+**Userland testing:**
+1. **ISS raw TTY mode** -- pass Ctrl-C/Z through to simulated OS
+   for job control and signal testing.
+2. **Boot arguments** -- ROM->bootloader->kernel argument passing
+   so `boot sd:0,0` reaches single-user with no further prompts.
+3. **SD write support / MI sdmmc** -- replace custom read-only psd
+   driver with NetBSD MI sdmmc stack for read/write and multi-block.
+4. **ATF regression tests** -- build rootfs with test suite, run
+   on ISS.
+
+**Kernel:**
+5. **Remaining MD stubs** -- as the kernel reaches them.
+
+**Hardware:**
+6. **SDRAM controller** -- 32 MB SDRAM for kernel boot on real HW.
+7. **Interrupt controller** -- multiple devices with priority.
+8. **ESP32 WiFi NIC** -- SLIP-framed Ethernet bridge over UART.
