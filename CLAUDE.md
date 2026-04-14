@@ -379,6 +379,15 @@ MIPS/68k-style vector dispatch.
   branch folding and block placement passes.
   `G_FENCE` (compiler barrier), `G_BRINDIRECT` (computed goto),
   sub-word `G_BSWAP` (s16 widened to s32) all handled.
+- **C++ support:** Exception handling via DWARF unwinding
+  (R1=exception pointer, R2=selector registers),
+  `G_TRAP`/`G_DEBUGTRAP` → BREAK instruction,
+  EH pointer encoding (pcrel for PIC, absptr for static),
+  `G_PTRTOINT` s64 narrowing for DWARF evaluator,
+  STT_TLS on extern `__thread` symbol fixups,
+  `__GCC_ATOMIC_*_LOCK_FREE=2` for <=32-bit types,
+  `@llvm.clear_cache` → no-op (ISS; needs syscall for HW).
+  libc++ and libcxxrt build and link as shared libraries.
 
 ## Software Tools
 - **Instruction Set Simulator** (`sw/sim/penumbra_iss.cpp`):
@@ -599,18 +608,25 @@ MIPS/68k-style vector dispatch.
 - Build system (`bsd.own.mk`): `HAVE_SSP=no` (no stack protector),
   `HAVE_LIBGCC_EH=yes` (skip libunwind), clang 22 warning
   suppressions, jemalloc `LG_QUANTUM=3`.
-- **`build.sh libs` largely functional.**
-  `libc.so`, `libm.so`, `libcrypto.so`, and most other shared
-  libraries build and link.  Remaining failures are downstream
-  of missing C++ support (`MKCXX=no`) or libpthread stubs.
+- **`build.sh libs` fully functional.**
+  `libc.so`, `libm.so`, `libcrypto.so`, `libc++.so`, `libatf-c.so`,
+  and all other shared libraries build and link.
   Key fixes: softfloat enabled (`MKSOFTFLOAT=yes`), `__mulsi3`
   (shift-and-add), full atomic suite (CAS-based sub-word ops,
   load/store, init), signal trampoline stub, TLS inlines in
   mcontext.h, `__FPE`/`__FEE`/`__FPR`/`__FER`/`__FENV_*` macros,
   clang driver `-L`/`-lc`/`--undefined-version` fixes.
   Clang 22 warning suppressions for NetBSD 10 codebase.
+- **C++ enabled (`MKCXX=yes`):** libunwind (Registers_penumbra
+  class + save/restore assembly) built into libc, libc++ and
+  libcxxrt link as shared libraries, libatf-c available for
+  the ATF test suite.  `MKLIBCXX=yes`, `HAVE_LIBGCC_EH=no`,
+  `USE_UNWIND=yes`.  `MKGROFF=no` (link-order bug with lld).
 - Known shortcuts: libpthread is minimal stubs.
   See memory file `project_userland_shortcuts.md`.
+- **libc additions:** `swapcontext.S` (save/patch/setcontext),
+  `_lwp_makecontext` (LWP creation with R1=arg, R12=TP),
+  `fma`/`fmaf`/`fmal` in libm.
 - **`build.sh distribution` completes successfully.**
   Full userland builds: all libraries, all programs, system
   configuration (`etc.penumbra`).
@@ -643,7 +659,9 @@ MIPS/68k-style vector dispatch.
   `ldd`) load and run end-to-end on the ISS with full userland.
 
 ## Next Steps (in priority order)
-1. **Root filesystem** — `build.sh sets` to create installable
+1. **ATF regression tests** — build rootfs with test suite,
+   run `t_swapcontext` and other ATF tests on the ISS.
+2. **Root filesystem** — `build.sh sets` to create installable
    sets, boot with full userland on the ISS.
 3. **Kernel implementation** — remaining MD stubs as the kernel
    reaches them (grep `TODO(stub)`): process_read_regs,
