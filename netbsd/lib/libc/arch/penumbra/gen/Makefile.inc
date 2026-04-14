@@ -5,8 +5,8 @@ SRCS+=	__setjmp14.S __sigsetjmp14.S _setjmp.S
 SRCS+=	bswap16.c bswap32.c bswap64.c
 SRCS+=	flt_rounds.c
 
-# ucontext
-SRCS+=	makecontext.c resumecontext.c
+# ucontext / LWP
+SRCS+=	makecontext.c resumecontext.c swapcontext.S _lwp.c
 
 # Common ieee754 constants and functions
 SRCS+=	infinityf_ieee754.c infinity_ieee754.c infinityl_ieee754.c

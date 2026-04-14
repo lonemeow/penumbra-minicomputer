@@ -1273,6 +1273,75 @@ private:
   uint32_t reg[REGNO_OR1K_FPCSR + 1];
 };
 
+enum {
+  DWARF_PENUMBRA_R0 = 0,
+  DWARF_PENUMBRA_R15 = 15,
+  DWARF_PENUMBRA_LR = 13,
+  DWARF_PENUMBRA_SP = 14,
+
+  REGNO_PENUMBRA_R0 = 0,
+  REGNO_PENUMBRA_R15 = 15,
+  REGNO_PENUMBRA_LR = 13,
+  REGNO_PENUMBRA_SP = 14,
+};
+
+/// Penumbra register context for stack unwinding.
+///
+/// 16 GPRs (R0-R15), no FPU.  R0=zero, R13=LR, R14=SP, R15=PC.
+/// R10 is the frame pointer when used (dynamic alloca).
+/// DWARF register numbers match hardware encoding (0-15).
+class Registers_penumbra {
+public:
+  enum {
+    LAST_REGISTER = REGNO_PENUMBRA_R15,
+    LAST_RESTORE_REG = REGNO_PENUMBRA_R15,
+    RETURN_OFFSET = 0,
+    RETURN_MASK = 0,
+  };
+
+  __dso_hidden Registers_penumbra();
+
+  static int dwarf2regno(int num) {
+    if (num >= DWARF_PENUMBRA_R0 && num <= DWARF_PENUMBRA_R15)
+      return REGNO_PENUMBRA_R0 + (num - DWARF_PENUMBRA_R0);
+    return LAST_REGISTER + 1;
+  }
+
+  bool validRegister(int num) const {
+    return num >= 0 && num <= LAST_RESTORE_REG;
+  }
+
+  uint64_t getRegister(int num) const {
+    assert(validRegister(num));
+    return reg[num];
+  }
+
+  void setRegister(int num, uint64_t value) {
+    assert(validRegister(num));
+    reg[num] = value;
+  }
+
+  uint64_t getIP() const { return reg[REGNO_PENUMBRA_LR]; }
+
+  void setIP(uint64_t value) { reg[REGNO_PENUMBRA_LR] = value; }
+
+  uint64_t getSP() const { return reg[REGNO_PENUMBRA_SP]; }
+
+  void setSP(uint64_t value) { reg[REGNO_PENUMBRA_SP] = value; }
+
+  bool validFloatVectorRegister(int num) const {
+    return false;
+  }
+
+  void copyFloatVectorRegister(int num, uint64_t addr_) {
+  }
+
+  __dso_hidden void jumpto() const __dead;
+
+private:
+  uint32_t reg[REGNO_PENUMBRA_R15 + 1];
+};
+
 #if __i386__
 typedef Registers_x86 NativeUnwindRegisters;
 #elif __x86_64__
@@ -1303,6 +1372,8 @@ typedef Registers_Alpha NativeUnwindRegisters;
 typedef Registers_HPPA NativeUnwindRegisters;
 #elif __or1k__
 typedef Registers_or1k NativeUnwindRegisters;
+#elif __penumbra__
+typedef Registers_penumbra NativeUnwindRegisters;
 #endif
 } // namespace _Unwind
 

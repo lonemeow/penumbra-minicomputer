@@ -216,6 +216,11 @@ COMMON_SRCS+= s_fma.c s_fmaf.c s_fmal.c
 COMMON_SRCS += fenv.c
 .endif
 COMMON_SRCS+= s_fma.c s_fmaf.c s_fmal.c
+
+.elif (${LIBC_MACHINE_ARCH} == "penumbra")
+# Penumbra: pure soft-float, no arch-specific libm files.
+COMMON_SRCS+= s_fma.c s_fmaf.c s_fmal.c
+
 .endif
 # End of list of CPU tests
 

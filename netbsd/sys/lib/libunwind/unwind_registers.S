@@ -1347,3 +1347,64 @@ ENTRY_NP(_ZNK7_Unwind14Registers_or1k6jumptoEv)
 END(_ZNK7_Unwind14Registers_or1k6jumptoEv)
 
 #endif
+
+#ifdef __penumbra__
+/*
+ * Penumbra unwind register save/restore.
+ *
+ * Register layout in struct (16 x uint32_t, 64 bytes total):
+ *   [r1 + 0]   R0  (zero, stored for regularity)
+ *   [r1 + 4]   R1  (this pointer at capture time)
+ *   [r1 + 8]   R2
+ *   ...
+ *   [r1 + 48]  R12 (TP)
+ *   [r1 + 52]  R13 (LR — return address / unwind target)
+ *   [r1 + 56]  R14 (SP)
+ *   [r1 + 60]  R15 (PC at capture time)
+ *
+ * C++ mangled names — "Registers_penumbra" is 19 chars:
+ *   Constructor: _ZN7_Unwind18Registers_penumbraC1Ev
+ *   jumpto:      _ZNK7_Unwind18Registers_penumbra6jumptoEv
+ */
+
+.hidden _ZN7_Unwind18Registers_penumbraC1Ev
+ENTRY_NP(_ZN7_Unwind18Registers_penumbraC1Ev)
+	stw r0, [r1 + 0]
+	stw r1, [r1 + 4]
+	stw r2, [r1 + 8]
+	stw r3, [r1 + 12]
+	stw r4, [r1 + 16]
+	stw r5, [r1 + 20]
+	stw r6, [r1 + 24]
+	stw r7, [r1 + 28]
+	stw r8, [r1 + 32]
+	stw r9, [r1 + 36]
+	stw r10, [r1 + 40]
+	stw r11, [r1 + 44]
+	stw r12, [r1 + 48]
+	stw r13, [r1 + 52]
+	stw r14, [r1 + 56]
+	stw r15, [r1 + 60]
+	ret
+END(_ZN7_Unwind18Registers_penumbraC1Ev)
+
+.hidden _ZNK7_Unwind18Registers_penumbra6jumptoEv
+ENTRY_NP(_ZNK7_Unwind18Registers_penumbra6jumptoEv)
+	ldw r2, [r1 + 8]
+	ldw r3, [r1 + 12]
+	ldw r4, [r1 + 16]
+	ldw r5, [r1 + 20]
+	ldw r6, [r1 + 24]
+	ldw r7, [r1 + 28]
+	ldw r8, [r1 + 32]
+	ldw r9, [r1 + 36]
+	ldw r10, [r1 + 40]
+	ldw r11, [r1 + 44]
+	ldw r12, [r1 + 48]
+	ldw r13, [r1 + 52]
+	ldw r14, [r1 + 56]
+	ldw r1, [r1]
+	jmp r13
+END(_ZNK7_Unwind18Registers_penumbra6jumptoEv)
+
+#endif

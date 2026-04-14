@@ -32,6 +32,7 @@ typedef vaddr_t		vm_offset_t;
 typedef vsize_t		vm_size_t;
 
 typedef __register_t	register_t;
+#define	PRIxREGISTER	"x"
 
 typedef struct label_t {
 	register_t val[9];	/* callee-saved R5-R10, R12(TP), R13(LR), R14(SP) */

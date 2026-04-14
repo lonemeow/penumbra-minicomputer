@@ -65,9 +65,12 @@ NEED_OWN_INSTALL_TARGET?=	yes
 .if ${MACHINE_ARCH} == "penumbra"
 TOOLCHAIN_MISSING?=	yes
 HAVE_LLVM?=		yes
-HAVE_LIBGCC_EH?=	yes	# skip libunwind (no C++ headers, no EH support yet)
-USE_UNWIND=		no	# no _Unwind support (no libgcc_s or libunwind)
-MKCXX=			no	# no C++ standard library yet
+HAVE_LIBGCC_EH?=	no	# build in-tree libunwind (sys/lib/libunwind) into libc
+USE_UNWIND=		yes	# Penumbra unwind support in sys/lib/libunwind
+MKCXX=			yes	# libc++ via in-tree libunwind + libcxxrt
+MKLIBCXX=		yes	# install libc++ headers + build libc++ library
+MKGROFF=		no	# groff has link-order bug with lld (make_printer)
+HAVE_GCC=		0	# no GCC, clang only — disables ObjC tests etc.
 MKPIC=			yes	# GOT-based PIC codegen implemented (2026-04-11)
 ACTIVE_CC=		clang
 # Our clang (22.x) is newer than NetBSD's; suppress warnings that
@@ -88,6 +91,10 @@ CWARNFLAGS.clang+=	-Wno-uninitialized-const-pointer
 CWARNFLAGS.clang+=	-Wno-default-const-init-var-unsafe
 CWARNFLAGS.clang+=	-Wno-incompatible-pointer-types
 CWARNFLAGS.clang+=	-Wno-fortify-source
+CWARNFLAGS.clang+=	-Wno-unqualified-std-cast-call
+CWARNFLAGS.clang+=	-Wno-vla-cxx-extension
+CWARNFLAGS.clang+=	-Wno-unused-but-set-parameter
+CWARNFLAGS.clang+=	-Wno-single-bit-bitfield-constant-conversion
 # bsd.sys.mk appends -Wall to CFLAGS after CWARNFLAGS, which re-enables
 # some of the above.  Repeat the -Wall-sensitive ones in COPTS so they
 # appear last in the compile command (bsd.sys.mk compile rule appends
