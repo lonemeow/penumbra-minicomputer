@@ -72,6 +72,20 @@ CCAssignFn *PenumbraISelLowering::getCCAssignFn(CallingConv::ID CC,
 }
 
 //===----------------------------------------------------------------------===//
+// Exception handling
+//===----------------------------------------------------------------------===//
+
+Register PenumbraISelLowering::getExceptionPointerRegister(
+    const Constant *PersonalityFn) const {
+  return Penumbra::R1;
+}
+
+Register PenumbraISelLowering::getExceptionSelectorRegister(
+    const Constant *PersonalityFn) const {
+  return Penumbra::R2;
+}
+
+//===----------------------------------------------------------------------===//
 // Inline assembly support
 //===----------------------------------------------------------------------===//
 

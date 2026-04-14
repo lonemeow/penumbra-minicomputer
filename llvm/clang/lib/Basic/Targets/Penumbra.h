@@ -22,9 +22,13 @@ public:
       : TargetInfo(Triple) {
     resetDataLayout();
     RegParmMax = 4; // R1-R4 used for argument passing
-    // All atomic operations go through __atomic_* libcalls.
-    // The library implementation handles synchronization
-    // (interrupt-disable CAS now, LL/SC or RAS in future).
+    // All atomic operations go through __atomic_* libcalls
+    // (no inline atomic instructions).  Keep InlineWidth=0 so
+    // clang emits libcalls directly (not IR atomics).
+    // The LOCK_FREE macros are overridden in getTargetDefines()
+    // to report "always lock-free" for <=32-bit types, since
+    // the library implementations (RAS userland, interrupt-disable
+    // kernel) are always lock-free on uniprocessor.
     MaxAtomicPromoteWidth = 32;
     MaxAtomicInlineWidth = 0;
   }

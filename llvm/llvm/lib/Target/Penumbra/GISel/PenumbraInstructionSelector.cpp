@@ -221,6 +221,11 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
     BuildMI(MBB, I, I.getDebugLoc(), TII.get(TargetOpcode::MEMBARRIER));
     I.eraseFromParent();
     return true;
+  case G_TRAP:
+  case G_DEBUGTRAP:
+    BuildMI(MBB, I, I.getDebugLoc(), TII.get(Penumbra::BREAK));
+    I.eraseFromParent();
+    return true;
   case G_BRINDIRECT: {
     auto MI = BuildMI(MBB, I, I.getDebugLoc(), TII.get(Penumbra::BRIND))
                   .addReg(I.getOperand(0).getReg());
@@ -984,6 +989,16 @@ bool PenumbraInstructionSelector::selectIntrinsic(
         .addReg(Tmp)
         .addReg(DstPtr)
         .addImm(0);
+    I.eraseFromParent();
+    return true;
+  }
+
+  // __clear_cache(begin, end) — flush I-cache for modified code pages.
+  // TODO: Penumbra has split I/D caches and needs a real icache flush
+  // syscall for hardware.  On the ISS there's no separate I-cache, so
+  // a no-op is correct.  When the kernel gains an icache flush syscall,
+  // emit a call to __clear_cache here instead.
+  if (IntrinID == Intrinsic::clear_cache) {
     I.eraseFromParent();
     return true;
   }

@@ -31,6 +31,13 @@ public:
   // and enables future optimization to 16-bit entries.
   unsigned getJumpTableEncoding() const override;
 
+  // Exception handling: personality function returns exception pointer
+  // in R1, selector in R2 (matching the calling convention).
+  Register
+  getExceptionPointerRegister(const Constant *PersonalityFn) const override;
+  Register
+  getExceptionSelectorRegister(const Constant *PersonalityFn) const override;
+
   // Inline assembly support.
   ConstraintType getConstraintType(StringRef Constraint) const override;
   std::pair<unsigned, const TargetRegisterClass *>

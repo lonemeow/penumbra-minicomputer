@@ -9,6 +9,7 @@
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/MC/MCELFObjectWriter.h"
 #include "llvm/MC/MCFixup.h"
+#include "llvm/MC/MCSymbolELF.h"
 #include "llvm/MC/MCValue.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <cstdint>
@@ -61,6 +62,19 @@ unsigned PenumbraELFObjectWriter::getRelocType(const MCFixup &Fixup,
                                                const MCValue &Target,
                                                bool IsPCRel) const {
   unsigned Kind = Fixup.getKind();
+
+  // Mark symbols referenced by TLS fixups as STT_TLS.  Without this,
+  // undefined extern __thread symbols get STT_NOTYPE and lld's
+  // sym.isTls() check fails, skipping TLS GOT entry allocation.
+  if (Kind == Penumbra::fixup_penumbra_tls_gd_lo16 ||
+      Kind == Penumbra::fixup_penumbra_tls_gd_hi16 ||
+      Kind == Penumbra::fixup_penumbra_tls_gd_pcrel ||
+      Kind == Penumbra::fixup_penumbra_tls_gd_got_pcrel_lo16 ||
+      Kind == Penumbra::fixup_penumbra_tls_gd_got_pcrel_hi16) {
+    if (auto *SA = const_cast<MCSymbol *>(Target.getAddSym()))
+      static_cast<MCSymbolELF *>(SA)->setType(ELF::STT_TLS);
+  }
+
   if (Kind == Penumbra::fixup_penumbra_branch22)
     return R_PENUMBRA_BRANCH22;
   if (Kind == Penumbra::fixup_penumbra_imm16)

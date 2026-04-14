@@ -134,6 +134,7 @@ void TargetLoweringObjectFileELF::Initialize(MCContext &Ctx,
       break;
     // Fallthrough if not using EHABI
     [[fallthrough]];
+  case Triple::penumbra:
   case Triple::ppc:
   case Triple::ppcle:
   case Triple::x86:
