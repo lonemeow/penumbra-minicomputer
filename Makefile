@@ -174,13 +174,14 @@ test-iss: $(ISS)
 # Usage: make simulate                    (interactive, default)
 #        make simulate SDCARD=build/boot.img
 #        make simulate TRACE=build/trace.log
+#        make simulate RAW=1                  (full raw TTY for job control)
 #        make simulate LLVM_PREFIX=/other/llvm/build
 ISS = sw/sim/penumbra-iss
 
 .PHONY: simulate
 simulate: $(ISS)
 	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX) CFLAGS=$(CFLAGS)
-	@$(ISS) program.hex $(if $(SDCARD),+sdcard=$(SDCARD)) $(if $(TRACE),+trace=$(TRACE))
+	@$(ISS) program.hex $(if $(SDCARD),+sdcard=$(SDCARD)) $(if $(TRACE),+trace=$(TRACE)) $(if $(RAW),+raw)
 
 $(ISS): sw/sim/penumbra_iss.cpp
 	@$(MAKE) -C sw/sim

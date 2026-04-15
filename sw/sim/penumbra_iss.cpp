@@ -13,7 +13,15 @@
 // Trace output format (compatible with RTL tb_interactive):
 //   PC=XXXXXXXX SR=XXXXXXXX [SVNZCV] R1=... R2=... ... R14=...
 //
-// Usage: penumbra-iss [program.hex] [+sdcard=path] [+trace=path]
+// Usage: penumbra-iss [program.hex] [+sdcard=path] [+trace=path] [+raw]
+//
+// +raw enables full raw TTY mode: all control characters (Ctrl-C,
+// Ctrl-Z, etc.) pass through to the simulated UART for job control
+// inside the guest OS.  Use Ctrl-A as escape prefix:
+//   Ctrl-A X     — exit simulator
+//   Ctrl-A C     — dump CPU state
+//   Ctrl-A H     — help
+//   Ctrl-A Ctrl-A — send literal Ctrl-A
 
 #include <cstdint>
 #include <cstdio>
@@ -416,6 +424,7 @@ static uint32_t sysid_read(int reg) {
 static volatile sig_atomic_t running = 1;
 static struct termios orig_termios;
 static bool term_raw = false;
+static bool full_raw = false;  // +raw: pass all control chars through
 static FILE* trace_fp = nullptr;
 
 static void sigint_handler(int) { running = 0; }
@@ -427,7 +436,15 @@ static void raw_mode() {
     tcgetattr(STDIN_FILENO, &orig_termios);
     atexit(restore_term);
     struct termios raw = orig_termios;
-    raw.c_lflag &= ~(ECHO | ICANON);
+    if (full_raw) {
+        // Full raw: clear everything so Ctrl-C/Z/\ pass through to guest
+        raw.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP |
+                         INLCR | IGNCR | ICRNL | IXON);
+        raw.c_oflag &= ~(OPOST);
+        raw.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
+    } else {
+        raw.c_lflag &= ~(ECHO | ICANON);
+    }
     raw.c_cc[VMIN] = 0; raw.c_cc[VTIME] = 0;
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
     term_raw = true;
@@ -1319,15 +1336,106 @@ static bool load_hex(const char* path, uint8_t* mem, size_t max_size) {
 // UART RX Polling (stdin → UART)
 // ═══════════════════════════════════════════════════════════════
 
+// Escape prefix state for +raw mode (Ctrl-A is the escape character).
+static bool esc_pending = false;
+
+const char * const register_names[] = {
+    "R0",
+    "R1",
+    "R2",
+    "R3",
+    "R4",
+    "R5",
+    "R6",
+    "R7",
+    "R8",
+    "R9",
+    "R10",
+    "R11",
+    "R12",
+    "LR",
+    "SP",
+    "PC"
+};
+
+static void print_sr_flag(uint32_t mask, char flag) {
+    flag = (cpu.sr & mask) ? flag : '-';
+    fprintf(stderr, "%c", flag);
+}
+
+static void print_cpu_state() {
+    fprintf(stderr, "\r\n----- CPU STATE -----\r\n");
+    for (int i = 0; i < 16; i++) {
+        if (i > 0) {
+            if ((i % 6) == 0) {
+                fprintf(stderr, "\r\n");
+            } else {
+                fprintf(stderr, " ");
+            }
+        }
+        uint32_t regval = i == 15 ? cpu.pc : cpu.r[i];
+        fprintf(stderr, "%3s=%08X", register_names[i], regval);
+    }
+    fprintf(stderr, "\r\n");
+    fprintf(stderr, "SR=%08x (", cpu.sr);
+    print_sr_flag(SR_N, 'N');
+    print_sr_flag(SR_Z, 'Z');
+    print_sr_flag(SR_C, 'C');
+    print_sr_flag(SR_V, 'V');
+    print_sr_flag(SR_I, 'I');
+    print_sr_flag(SR_S, 'S');
+    fprintf(stderr, ")\r\n");
+}
+
+static void print_cmd_help() {
+    fprintf(stderr, "\r\n");
+    fprintf(stderr, "Available commands:\r\n\r\n");
+    fprintf(stderr, "Ctrl-A H: This help\r\n");
+    fprintf(stderr, "Ctrl-A X: Exit simulator\r\n");
+    fprintf(stderr, "Ctrl-A C: Dump CPU state\r\n");
+    fprintf(stderr, "\r\n");
+}
+
+static bool handle_escape(char c) {
+    switch (c) {
+        case '\01':
+            return false;
+        case 'x':
+        case 'X':
+            running = false;
+            break;
+        case 'h':
+        case 'H':
+            print_cmd_help();
+            break;
+        case 'c':
+        case 'C':
+            print_cpu_state();
+            break;
+    }
+    return true;
+}
+
 static void poll_uart_rx() {
     if (uart.rx_ready) return;
     struct pollfd pfd = {STDIN_FILENO, POLLIN, 0};
     if (poll(&pfd, 1, 0) > 0 && (pfd.revents & POLLIN)) {
         char c;
-        if (read(STDIN_FILENO, &c, 1) == 1) {
-            uart.rbr = (uint8_t)c;
-            uart.rx_ready = true;
+        if (read(STDIN_FILENO, &c, 1) != 1) return;
+
+        if (full_raw) {
+            if (esc_pending) {
+                esc_pending = false;
+                if (handle_escape(c)) return;
+                // handle_escape returned false — feed byte to UART
+            } else if (c == '\x01') {  // Ctrl-A
+                esc_pending = true;
+                return;
+            }
         }
+
+        uart.rbr = (uint8_t)c;
+        uart.rx_ready = true;
     }
 }
 
@@ -1360,11 +1468,12 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; i++) {
         if (strncmp(argv[i], "+sdcard=", 8) == 0) sd_path = argv[i] + 8;
         else if (strncmp(argv[i], "+trace=", 7) == 0) trace_path = argv[i] + 7;
+        else if (strcmp(argv[i], "+raw") == 0) full_raw = true;
         else hex_path = argv[i];
     }
 
     if (!hex_path) {
-        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+trace=path]\n");
+        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+trace=path] [+raw]\n");
         return 1;
     }
 
@@ -1385,10 +1494,14 @@ int main(int argc, char** argv) {
         else fprintf(stderr, "[TRACE] cannot open '%s'\n", trace_path);
     }
 
-    signal(SIGINT, sigint_handler);
+    if (!full_raw)
+        signal(SIGINT, sigint_handler);
     raw_mode();
 
-    fprintf(stderr, "── Penumbra ISS (Ctrl-C to exit) ──\n\n");
+    if (full_raw)
+        fprintf(stderr, "── Penumbra ISS (Ctrl-A X to exit, Ctrl-A H for help) ──\n\n");
+    else
+        fprintf(stderr, "── Penumbra ISS (Ctrl-C to exit) ──\n\n");
 
     // Main loop
     while (running && !cpu.halted) {
@@ -1402,6 +1515,9 @@ int main(int argc, char** argv) {
         // Poll stdin periodically for UART RX
         if ((cpu.insn_count & 0xFF) == 0) poll_uart_rx();
     }
+
+    // Restore terminal before printing exit summary so \n works normally
+    restore_term();
 
     if (cpu.halted) {
         fprintf(stderr, "\n[BREAK after %lu instructions, PC=0x%08X]\n",
@@ -1425,6 +1541,5 @@ int main(int argc, char** argv) {
     fprintf(stderr, "\n");
 
     if (trace_fp) { fclose(trace_fp); fprintf(stderr, "[TRACE] done\n"); }
-    restore_term();
     return 0;
 }

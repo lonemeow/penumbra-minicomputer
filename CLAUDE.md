@@ -81,6 +81,10 @@ The architecture is fully specified in `doc/`. Key specs:
   - With SD card image: `make simulate SDCARD=disk.img`
   - Instruction trace: `make simulate TRACE=build/trace.log`
     (dumps PC, SR, R1–R14 for every instruction)
+  - Raw TTY mode: `make simulate RAW=1` passes all control characters
+    (Ctrl-C, Ctrl-Z, etc.) through to the guest OS for job control.
+    Use Ctrl-A as escape prefix (Ctrl-A X = exit, Ctrl-A C = CPU state,
+    Ctrl-A H = help, Ctrl-A Ctrl-A = literal Ctrl-A).
   - ROM monitor accepts `break` (or `b`) to halt the simulator cleanly.
 - `make simulate-rtl` — build boot ROM + Verilator RTL sim,
   run interactively via Docker (`-it`). Cycle-accurate but slow.
