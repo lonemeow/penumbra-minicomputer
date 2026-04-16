@@ -187,5 +187,6 @@ See `doc/TODO.md` for detailed descriptions.
 
 **Hardware:**
 6. **SDRAM controller** -- 32 MB SDRAM for kernel boot on real HW.
-7. **Interrupt controller** -- multiple devices with priority.
+7. **Kernel IRQ dispatch** -- poll device status registers on
+   shared `/IRQ` (replaces current EXC_EXT_IRQ panic).
 8. **ESP32 WiFi NIC** -- SLIP-framed Ethernet bridge over UART.

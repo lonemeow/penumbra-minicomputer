@@ -29,7 +29,7 @@ The OS target was changed from Minix 2 to NetBSD.
 | SYSCALL trap | Done | Vector 5, intercepted at dispatch |
 | Timer interrupt | Not yet | Drives hardclock() / scheduler |
 | UART | Done | 16450-compatible, MMIO at 0xFF000000, com(4) compatible |
-| Interrupt controller | Not yet | Multiple devices, priority |
+| Device IRQ dispatch | Not yet | Shared /IRQ line, software polling per device status |
 | Sub-word loads/stores | Done | LDH/LDHS/LDB/LDBS/STH/STB with byte_ext/byte_rep |
 | SDRAM controller | Not yet | NetBSD kernel needs 2-4 MB minimum |
 | Real cache | Done | Split I/D PIPT cache, write-through D-cache |

@@ -26,8 +26,7 @@ one of 16 registers within that device, for 256 total system registers.
 | 4 | BUS | Bus controller (autoconfig, bus reset) |
 | 5–6 | — | Reserved for future cache levels (L2, L3) |
 | 7 | TIMER | Programmable interval timer |
-| 8 | INTC | Interrupt controller (future) |
-| 9–15 | — | Reserved for future devices (DMA, etc.) |
+| 8–15 | — | Reserved for future devices (DMA, etc.) |
 
 > **Note:** I/O peripherals (UART, SPI, GPIO, Ethernet) are **not** on the sysreg bus.
 > They are memory-mapped at `0xFF00_0000`+ and accessed via `LDW`/`STW`.

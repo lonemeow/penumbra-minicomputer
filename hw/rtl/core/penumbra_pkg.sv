@@ -78,7 +78,7 @@ package penumbra_pkg;
     localparam logic [3:0] SYSDEV_BUS    = 4'd4;   // Bus controller (autoconfig, reset)
     // Devices 5–6 reserved for future cache levels (L2, L3)
     localparam logic [3:0] SYSDEV_TIMER  = 4'd7;   // Programmable interval timer
-    localparam logic [3:0] SYSDEV_INTC   = 4'd8;   // Interrupt controller (future)
+    // Devices 8–15 reserved for future expansion
 
     // ── SYS sysreg addresses (dev_id = 1) ───────────────────
     localparam logic [3:0] SYSREG_SYS_CPU_ISA    = 4'd0;   // CPU ISA version + feature flags

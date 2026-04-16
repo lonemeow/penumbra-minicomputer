@@ -377,10 +377,11 @@ ACFG_NIC_PNIC` on pbbus.  At attach:
 
 ### Polling Fallback
 
-Until the interrupt controller is implemented, the driver
-can use polled mode with a callout (like `com(4)` does with
-`sc_poll_ticks`).  Poll STATUS register for RX_FRAME_RDY
-every N ticks.
+The PNIC controller asserts the shared `/IRQ` line when frames
+are available (IRQ status register, like all bus devices).  As
+a fallback, the driver can also use polled mode with a callout
+(like `com(4)` does with `sc_poll_ticks`).  Poll STATUS register
+for RX_FRAME_RDY every N ticks.
 
 ## Userland Tool (`pnicctl`)
 

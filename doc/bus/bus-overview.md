@@ -94,10 +94,8 @@ The async external bus eliminates clock distribution problems and works identica
   └──────┘└────┘└──┬───┘└──┬──┘└──┬──┘└──┬────┘└─────────┘            │     │
        [hw]=hardwired  └───┬───┴──┬───┴──────┘                          │     │
        [ac]=autoconfigured v      v                                      │     │
-            ┌──────────────────────┐     NMI ──────────────────────────┘     │
-            │  Priority Encoder    │──── IRQ + vector[2:0] ──> CPU           │
-            │  (74x148 in discrete)│                                         │
-            └──────────────────────┘
+                      ─────┴──────┴──── /IRQ (shared, wired-OR) ──> CPU  │     │
+                                        NMI ─────────────────────────┘     │
 ```
 
 ## Penumbra Bus Protocol
@@ -285,15 +283,25 @@ The CPU has two interrupt inputs with separate vectors:
 The **timer** is an internal sysreg device (device 7) with its own dedicated
 vector. It does not use the external bus interrupt line.
 
-The **external bus** carries a single `irq` wire (active-high, wired-OR).
-All external devices (UART, Ethernet, SPI, etc.) share this line. The
-interrupt handler reads the interrupt controller (future sysreg device 8) or
-polls individual device status registers to determine the source. Software
-handles priority in the handler.
+The **external bus** carries a single `irq` wire (active-low
+open-drain, active-high internally after inversion; wired-OR).
+All devices — both onboard (FPGA) and external (discrete bus) —
+share this line.  There is no interrupt controller; the interrupt
+handler polls each device's status register to identify the
+source (PCI-style shared interrupt).
 
-This design minimises bus wiring (one signal vs. 8+ lines) and avoids
-autoconfig complexity for interrupt assignment. Each external device can
-report its interrupt status via its own MMIO registers.
+This design makes no architectural distinction between onboard
+and external devices — critical because devices that are
+"internal" on FPGA become external boards in the discrete build.
+Each device provides its own IRQ status register (e.g., UART has
+IIR per the 16450 spec; SPI has IRQ_STATUS).  The kernel handler
+for `EXC_EXT_IRQ` (vector 9) walks known devices checking status.
+
+**Why no interrupt controller:** Minimises bus wiring (one
+signal vs. N lines), avoids autoconfig complexity for interrupt
+assignment, and is trivially discrete-feasible (one pull-up
+resistor, one open-collector gate per device).  Interrupt rate
+is low enough that software polling cost is negligible.
 
 ## Long-Latency Unit Interface
 

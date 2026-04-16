@@ -672,5 +672,6 @@ MIPS/68k-style vector dispatch.
 3. **Kernel implementation** — remaining MD stubs as the kernel
    reaches them (grep `TODO(stub)`): process_read_regs,
    cpu_coredump, vmapbuf/vunmapbuf.
-4. **Interrupt controller** — Multiple devices with priority encoding
+4. **SPI FIFO + MI sdmmc** — Hardware FIFO for SPI controller,
+   shared `/IRQ` dispatch in kernel, MI sdmmc driver (see `doc/TODO.md`)
 5. **Memory subsystem** — SDRAM controller, bus interface

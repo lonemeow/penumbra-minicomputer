@@ -469,9 +469,9 @@ The CPU has two asynchronous interrupt inputs, each with its own vector:
   programmable interval timer (sysreg device 7). Higher priority. Drives
   NetBSD `hardclock()` scheduler tick.
 - **External device interrupt** (`i_irq`, VEC_EXT_IRQ=9): Shared interrupt
-  line for all external bus devices (UART, Ethernet, etc.). The external bus
-  carries a single wired-OR `irq` signal. Software reads a status register
-  (future interrupt controller, sysreg device 8) to determine the source.
+  line for all devices (UART, SPI, etc.). One wired-OR `/IRQ` signal on the
+  bus — no interrupt controller. Software polls each device's status register
+  to identify the source (PCI-style shared interrupt).
 
 Both are masked by `SR.I` (global interrupt enable) and gated by `ei_shadow`
 (one-instruction delay after EI). Timer has strict priority: if both are
@@ -486,7 +486,7 @@ Two trap instructions with fixed vector assignments:
 
 ## System Register Access
 
-Penumbra uses a unified mechanism to access control registers on CPU-adjacent system devices (MMU, interrupt controller, timer, DMA controller). Two privileged instructions address a flat device:register space:
+Penumbra uses a unified mechanism to access control registers on CPU-adjacent system devices (MMU, caches, timer, bus controller). Two privileged instructions address a flat device:register space:
 
 ```
 WRSYS Rsrc, #dev, #reg    ; Move To System register: Rsrc → device[dev].register[reg]
@@ -518,11 +518,14 @@ Each system device has a 4-bit comparator on `sys_dev` to recognize its ID. When
 
 | sys_dev | Device               | Example registers |
 |---------|----------------------|-------------------|
-| 0       | MMU                  | MMUCR (M bit), fault address, fault status, TLB control |
-| 1       | Interrupt controller | Mask, pending, priority |
-| 2       | Timer                | Count, compare, control |
-| 3       | DMA controller       | Source addr, dest addr, length, control/status |
-| 4-15    | Reserved             | Future expansion |
+| 0       | MMU                  | MMUCR, fault address, fault status, TLB control |
+| 1       | SYS                  | Machine ID (read-only) |
+| 2       | DCACHE               | D-cache control, geometry, invalidation |
+| 3       | ICACHE               | I-cache control, geometry, invalidation |
+| 4       | BUS                  | Bus controller (autoconfig, bus reset) |
+| 5–6     | —                    | Reserved (future cache levels) |
+| 7       | TIMER                | Count, compare, control |
+| 8–15    | —                    | Reserved (future expansion) |
 
 ### External Peripherals
 
