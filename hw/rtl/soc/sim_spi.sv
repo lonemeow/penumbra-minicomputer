@@ -1,123 +1,333 @@
-// Penumbra Simulation SPI Master — byte-at-a-time polled SPI controller
+// Penumbra Simulation SPI Master v2 — FIFO-capable SPI controller
 //
 // Memory-mapped I/O device (4 KB page, base assigned by autoconfig).
-// Implements the Penumbra SPI register protocol (CLASS_SPI):
+// Same register interface as the real spi.sv (see doc/boot/spi-controller.md).
 //
-//   0x00  DATA     (R/W)  TX/RX byte. Write starts transfer.
-//   0x04  STATUS   (R)    Bit 0: BUSY, Bit 1: DONE
-//   0x08  CONTROL  (R/W)  Bit 0: CS0, Bit 1: CS1, Bit 4: CPOL, Bit 5: CPHA
-//   0x0C  CLKDIV   (R/W)  Clock divider (16-bit). SPI_CLK = CLK / (2*(CLKDIV+1))
+// Register map (word-strided, addr[4:2] decode):
+//   0x00  CAP          (R)     Version [7:0], FIFO depth [23:8]
+//   0x04  STATUS       (R)     SPI busy/done, FIFO levels/flags
+//   0x08  CONTROL      (R/W)   CS, mode, speed, FIFO_EN, flush
+//   0x0C  DATA         (R/W)   TX/RX byte (single or FIFO)
+//   0x10  XFER_COUNT   (R/W)   Transfer count + START
+//   0x14  IRQ_STATUS   (R/W1C) XFER_DONE(latched), thresholds(live)
+//   0x18  IRQ_ENABLE   (R/W)   Per-source IRQ mask
 //
 // Simulation-only: transfers complete after SPI_BUSY_CYCLES (no real
-// shift register or clock divider). The testbench can drive i_resp_data
+// shift register or clock divider). The testbench drives i_resp_data
 // to supply MISO bytes (e.g., SD card emulation).
 //
-// Bus protocol: 1-cycle read latency, 0-cycle write (same as sim_uart).
+// Bus protocol: 1-cycle read latency, 0-cycle write.
 
 // verilator lint_off UNUSEDSIGNAL
 
 module sim_spi
     import penumbra_pkg::*;
 #(
-    parameter SPI_BUSY_CYCLES = 2   // cycles per byte transfer
+    parameter SPI_BUSY_CYCLES = 2,      // cycles per byte transfer
+    parameter FIFO_DEPTH      = 512     // TX and RX FIFO depth (power of 2)
 )(
     input  logic        i_clk,
     input  logic        i_rst,
 
     // ── Memory bus interface ────────────────────────────────
-    input  logic [31:0] i_addr,     // Full byte address (uses [3:2])
-    input  logic [31:0] i_wdata,    // Write data (uses [15:0])
+    input  logic [31:0] i_addr,     // Full byte address (uses [4:2])
+    input  logic [31:0] i_wdata,    // Write data
     input  logic        i_we,       // Write enable
     input  logic        i_re,       // Read enable
     output logic [31:0] o_rdata,    // Read data (1-cycle latency)
-    output logic        o_busy,     // Access in progress (always 0)
+    output logic        o_busy,     // Access in progress
 
     // ── SPI signals exposed to testbench ────────────────────
-    output logic        o_cmd_valid,   // Pulses when DATA is written
+    output logic        o_cmd_valid,   // Pulses when a byte is shifted
     output logic [7:0]  o_cmd_data,    // Byte being sent (MOSI)
     input  logic        i_resp_valid,  // Testbench presents response byte
     input  logic [7:0]  i_resp_data,   // Byte from testbench (MISO)
     output logic        o_cs0,         // Directly from CONTROL register
-    output logic        o_cs1
+    output logic        o_cs1,
+
+    // ── Interrupt output ───────────────────────────────────
+    output logic        o_irq
 );
 
     // ── Register select from word-aligned address ───────────
-    logic [1:0] reg_sel;
-    assign reg_sel = i_addr[3:2];
+    logic [2:0] reg_sel;
+    assign reg_sel = i_addr[4:2];
 
-    localparam REG_DATA    = 2'd0;
-    localparam REG_STATUS  = 2'd1;
-    localparam REG_CONTROL = 2'd2;
-    localparam REG_CLKDIV  = 2'd3;
+    localparam REG_CAP         = 3'd0;  // 0x00
+    localparam REG_STATUS      = 3'd1;  // 0x04
+    localparam REG_CONTROL     = 3'd2;  // 0x08
+    localparam REG_DATA        = 3'd3;  // 0x0C
+    localparam REG_XFER_COUNT  = 3'd4;  // 0x10
+    localparam REG_IRQ_STATUS  = 3'd5;  // 0x14
+    localparam REG_IRQ_ENABLE  = 3'd6;  // 0x18
 
-    // ── Registers ──────────────────────────────────────────
-    logic [7:0]  tx_data;       // Last written TX byte
-    logic [7:0]  rx_data;       // Last received RX byte
-    logic [7:0]  control;       // CS0, CS1, CPOL, CPHA
-    logic [15:0] clkdiv;        // Clock divider
+    // ── FIFO level width ───────────────────────────────────
+    localparam FIFO_LEVEL_BITS = $clog2(FIFO_DEPTH) + 1;
 
-    // ── Transfer state machine ─────────────────────────────
+    // ══════════════════════════════════════════════════════════
+    // Control register
+    // ══════════════════════════════════════════════════════════
+    logic [15:0] control;
+    logic fifo_en;
+    assign fifo_en = control[7];
+
+    // ── IRQ enable register ─────────────────────────────────
+    logic [2:0] irq_enable;
+
+    // ══════════════════════════════════════════════════════════
+    // TX and RX FIFOs
+    // ══════════════════════════════════════════════════════════
+    logic       tx_wr, tx_rd, tx_full, tx_empty;
+    logic [7:0] tx_wdata, tx_rdata;
+    logic [FIFO_LEVEL_BITS-1:0] tx_level;
+    logic       tx_flush;
+
+    logic       rx_wr, rx_rd, rx_full, rx_empty;
+    logic [7:0] rx_wdata, rx_rdata;
+    logic [FIFO_LEVEL_BITS-1:0] rx_level;
+    logic       rx_flush;
+
+    spi_fifo #(.DEPTH(FIFO_DEPTH)) u_tx_fifo (
+        .i_clk   (i_clk),
+        .i_rst   (i_rst),
+        .i_wr    (tx_wr),
+        .i_wdata (tx_wdata),
+        .i_rd    (tx_rd),
+        .o_rdata (tx_rdata),
+        .o_full  (tx_full),
+        .o_empty (tx_empty),
+        .o_level (tx_level),
+        .i_flush (tx_flush)
+    );
+
+    spi_fifo #(.DEPTH(FIFO_DEPTH)) u_rx_fifo (
+        .i_clk   (i_clk),
+        .i_rst   (i_rst),
+        .i_wr    (rx_wr),
+        .i_wdata (rx_wdata),
+        .i_rd    (rx_rd),
+        .o_rdata (rx_rdata),
+        .o_full  (rx_full),
+        .o_empty (rx_empty),
+        .o_level (rx_level),
+        .i_flush (rx_flush)
+    );
+
+    // ══════════════════════════════════════════════════════════
+    // Simulated SPI transfer — busy counter instead of shift reg
+    // ══════════════════════════════════════════════════════════
     logic        spi_busy;
     logic        spi_done;
     logic [7:0]  busy_count;
+    logic        shift_done;    // Completion pulse (1 cycle)
+    logic [7:0]  tx_byte;       // Byte being "sent" this transfer
 
+    // ══════════════════════════════════════════════════════════
+    // Transfer engine state machine
+    // ══════════════════════════════════════════════════════════
+    typedef enum logic [1:0] {
+        ENG_IDLE       = 2'd0,
+        ENG_LOAD_BYTE  = 2'd1,
+        ENG_SHIFTING   = 2'd2,
+        ENG_STORE_BYTE = 2'd3
+    } engine_state_t;
+
+    engine_state_t eng_state;
+    logic [15:0]   eng_count;
+    logic          eng_active;
+    assign eng_active = (eng_state != ENG_IDLE);
+
+    // XFER_DONE — latched, write-1-to-clear
+    logic xfer_done;
+
+    // ── Register write decode ───────────────────────────────
+    logic wr_control, wr_data, wr_xfer_count, wr_irq_status, wr_irq_enable;
+    assign wr_control    = i_we && (reg_sel == REG_CONTROL);
+    assign wr_data       = i_we && (reg_sel == REG_DATA);
+    assign wr_xfer_count = i_we && (reg_sel == REG_XFER_COUNT);
+    assign wr_irq_status = i_we && (reg_sel == REG_IRQ_STATUS);
+    assign wr_irq_enable = i_we && (reg_sel == REG_IRQ_ENABLE);
+
+    // ── Read-side ───────────────────────────────────────────
+    logic read_first;
+    logic access_pending;
+    assign read_first = i_re && !access_pending;
+
+    logic rd_data;
+    assign rd_data = read_first && (reg_sel == REG_DATA);
+
+    // ── Single-byte legacy rx_data register ─────────────────
+    logic [7:0] rx_data;
+
+    // ══════════════════════════════════════════════════════════
+    // FIFO control signals
+    // ══════════════════════════════════════════════════════════
+    assign tx_wr    = wr_data && fifo_en;
+    assign tx_wdata = i_wdata[7:0];
+    assign rx_rd    = rd_data && fifo_en;
+    assign tx_flush = wr_control && i_wdata[14] && fifo_en;
+    assign rx_flush = wr_control && i_wdata[15] && fifo_en;
+
+    // ══════════════════════════════════════════════════════════
+    // Main sequential logic
+    // ══════════════════════════════════════════════════════════
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
-            tx_data    <= 8'h00;
-            rx_data    <= 8'hFF;
-            control    <= 8'h03;   // Both CS deasserted, mode 0
-            clkdiv     <= 16'h00FF;
-            spi_busy   <= 1'b0;
-            spi_done   <= 1'b0;
-            busy_count <= 0;
+            control     <= 16'h0003;
+            irq_enable  <= 3'b0;
+            spi_busy    <= 1'b0;
+            spi_done    <= 1'b0;
+            busy_count  <= 8'd0;
+            shift_done  <= 1'b0;
+            tx_byte     <= 8'h00;
+            rx_data     <= 8'hFF;
             o_cmd_valid <= 1'b0;
+            o_cmd_data  <= 8'h00;
+            eng_state   <= ENG_IDLE;
+            eng_count   <= 16'd0;
+            xfer_done   <= 1'b0;
         end else begin
+            shift_done  <= 1'b0;
             o_cmd_valid <= 1'b0;
 
+            // ── Register writes ────────────────────────────
+            if (wr_control)
+                control <= i_wdata[15:0] & 16'h3FFF;
+
+            if (wr_irq_enable)
+                irq_enable <= i_wdata[2:0];
+
+            if (wr_irq_status && i_wdata[0])
+                xfer_done <= 1'b0;
+
+            // ── Simulated SPI transfer (busy counter) ──────
             if (spi_busy) begin
                 if (busy_count == 0) begin
-                    // Transfer complete
-                    spi_busy <= 1'b0;
-                    spi_done <= 1'b1;
-                    // Latch response from testbench if available,
-                    // otherwise default to 0xFF (SD card idle)
-                    if (i_resp_valid)
-                        rx_data <= i_resp_data;
-                    else
-                        rx_data <= 8'hFF;
+                    spi_busy   <= 1'b0;
+                    shift_done <= 1'b1;
+                    // Latch response from testbench
+                    if (!eng_active) begin
+                        spi_done <= 1'b1;
+                        rx_data  <= i_resp_valid ? i_resp_data : 8'hFF;
+                    end
                 end else begin
                     busy_count <= busy_count - 8'd1;
                 end
             end
 
-            // Register writes
-            if (i_we) begin
-                case (reg_sel)
-                    REG_DATA: begin
-                        tx_data     <= i_wdata[7:0];
+            // ── Single-byte transfer start (FIFO_EN=0) ────
+            if (wr_data && !fifo_en && !eng_active) begin
+                tx_byte     <= i_wdata[7:0];
+                spi_busy    <= 1'b1;
+                spi_done    <= 1'b0;
+                busy_count  <= SPI_BUSY_CYCLES[7:0] - 8'd1;
+                o_cmd_valid <= 1'b1;
+                o_cmd_data  <= i_wdata[7:0];
+            end
+
+            // ── Transfer engine FSM ────────────────────────
+            case (eng_state)
+                ENG_IDLE: begin
+                    if (wr_xfer_count && i_wdata[16] && fifo_en) begin
+                        eng_count <= i_wdata[15:0];
+                        if (i_wdata[15:0] != 0) begin
+                            eng_state <= ENG_LOAD_BYTE;
+                        end else begin
+                            xfer_done <= 1'b1;
+                        end
+                    end
+                end
+
+                ENG_LOAD_BYTE: begin
+                    // Stall if TX FIFO empty
+                    if (!spi_busy && !tx_empty) begin
+                        tx_byte     <= tx_rdata;
                         spi_busy    <= 1'b1;
-                        spi_done    <= 1'b0;
                         busy_count  <= SPI_BUSY_CYCLES[7:0] - 8'd1;
                         o_cmd_valid <= 1'b1;
-                        o_cmd_data  <= i_wdata[7:0];
+                        o_cmd_data  <= tx_rdata;
+                        eng_state   <= ENG_SHIFTING;
                     end
-                    REG_CONTROL: control <= i_wdata[7:0];
-                    REG_CLKDIV:  clkdiv  <= i_wdata[15:0];
-                    default: ;
-                endcase
-            end
+                end
+
+                ENG_SHIFTING: begin
+                    if (shift_done)
+                        eng_state <= ENG_STORE_BYTE;
+                end
+
+                ENG_STORE_BYTE: begin
+                    // Stall if RX FIFO full
+                    if (!rx_full) begin
+                        eng_count <= eng_count - 1;
+                        if (eng_count == 1) begin
+                            eng_state <= ENG_IDLE;
+                            xfer_done <= 1'b1;
+                        end else begin
+                            eng_state <= ENG_LOAD_BYTE;
+                        end
+                    end
+                end
+
+                default: eng_state <= ENG_IDLE;
+            endcase
         end
     end
 
-    // ── Read mux (registered for 1-cycle latency) ──────────
+    // ── Engine TX FIFO pop ──────────────────────────────────
+    assign tx_rd = (eng_state == ENG_LOAD_BYTE) && !spi_busy && !tx_empty;
+
+    // ── Engine RX FIFO push — in ENG_STORE_BYTE when space available ──
+    assign rx_wr    = (eng_state == ENG_STORE_BYTE) && !rx_full;
+    assign rx_wdata = i_resp_valid ? i_resp_data : 8'hFF;
+
+    // ── CS outputs ─────────────────────────────────────────
+    assign o_cs0 = control[0];
+    assign o_cs1 = control[1];
+
+    // ══════════════════════════════════════════════════════════
+    // IRQ logic
+    // ══════════════════════════════════════════════════════════
+    logic rx_thresh, tx_thresh;
+    assign rx_thresh = fifo_en && (rx_level >= FIFO_LEVEL_BITS'(FIFO_DEPTH / 2));
+    assign tx_thresh = fifo_en && (tx_level <= FIFO_LEVEL_BITS'(FIFO_DEPTH / 2));
+
+    assign o_irq = (xfer_done & irq_enable[0])
+                 | (rx_thresh & irq_enable[1])
+                 | (tx_thresh & irq_enable[2]);
+
+    // ══════════════════════════════════════════════════════════
+    // Read data mux (registered for 1-cycle latency)
+    // ══════════════════════════════════════════════════════════
+    logic [31:0] status_val;
+    assign status_val = {
+        rx_full,
+        rx_empty,
+        tx_full,
+        tx_empty,
+        {(12 - FIFO_LEVEL_BITS){1'b0}}, rx_level,
+        {(12 - FIFO_LEVEL_BITS){1'b0}}, tx_level,
+        2'b0,
+        spi_done,
+        spi_busy
+    };
+
+    logic [31:0] cap_val;
+    assign cap_val = {8'b0, FIFO_DEPTH[15:0], 8'd1};
+
+    logic [31:0] irq_status_val;
+    assign irq_status_val = {29'b0, tx_thresh, rx_thresh, xfer_done};
+
     logic [31:0] rdata_next;
     always_comb begin
         case (reg_sel)
-            REG_DATA:    rdata_next = {24'b0, rx_data};
-            REG_STATUS:  rdata_next = {30'b0, spi_done, spi_busy};
-            REG_CONTROL: rdata_next = {24'b0, control};
-            REG_CLKDIV:  rdata_next = {16'b0, clkdiv};
-            default:     rdata_next = 32'b0;
+            REG_CAP:        rdata_next = cap_val;
+            REG_STATUS:     rdata_next = status_val;
+            REG_CONTROL:    rdata_next = {16'b0, control};
+            REG_DATA:       rdata_next = {24'b0, fifo_en ? rx_rdata : rx_data};
+            REG_XFER_COUNT: rdata_next = {16'b0, eng_count};
+            REG_IRQ_STATUS: rdata_next = irq_status_val;
+            REG_IRQ_ENABLE: rdata_next = {29'b0, irq_enable};
+            default:        rdata_next = 32'b0;
         endcase
     end
 
@@ -128,10 +338,7 @@ module sim_spi
             o_rdata <= 32'b0;
     end
 
-    // ── Read busy — 1-cycle latency for registered read mux ──
-    // Same pattern as sim_uart: busy on first cycle of read,
-    // data valid on second cycle when busy clears.
-    logic access_pending;
+    // ── Read busy — 1-cycle latency (access_pending pattern) ─
     always_ff @(posedge i_clk) begin
         if (i_rst)
             access_pending <= 1'b0;
@@ -143,8 +350,6 @@ module sim_spi
 
     assign o_busy = i_re && !access_pending;
 
-    // ── CS outputs ─────────────────────────────────────────
-    assign o_cs0 = control[0];
-    assign o_cs1 = control[1];
-
 endmodule
+
+// verilator lint_on UNUSEDSIGNAL

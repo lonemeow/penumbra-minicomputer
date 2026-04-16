@@ -70,10 +70,11 @@ module machine_sim
     logic        sys_cycle, sys_we;
     logic [31:0] sys_rdata;
 
-    // ── Internal IRQ (UART IRQ OR external testbench IRQ) ───
+    // ── Internal IRQ (UART + SPI + external testbench IRQ) ──
     logic uart_irq;
+    logic spi_irq;
     logic combined_irq;
-    assign combined_irq = i_irq | uart_irq;
+    assign combined_irq = i_irq | uart_irq | spi_irq;
 
     // ── Timer tick prescaler (CPU clock → 1 MHz) ────────────
     // Generates a toggle signal at 1 MHz from the CPU clock.
@@ -292,7 +293,8 @@ module machine_sim
         .i_resp_valid(i_spi_resp_valid),
         .i_resp_data (i_spi_resp_data),
         .o_cs0       (o_spi_cs0),
-        .o_cs1       ()
+        .o_cs1       (),
+        .o_irq       (spi_irq)
     );
     /* verilator lint_on PINCONNECTEMPTY */
 

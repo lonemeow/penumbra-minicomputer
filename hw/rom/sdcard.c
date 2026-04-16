@@ -90,7 +90,7 @@ int sd_init(uint32_t base) {
     unsigned char r1;
 
     /* Slow clock for init (<=400 kHz) */
-    spi_set_clkdiv(base, 0xFF);
+    spi_slow(base);
 
     /* 80+ clock cycles with CS deasserted (card power-up) */
     spi_cs0(base, 1);
@@ -131,18 +131,18 @@ int sd_init(uint32_t base) {
     if (!(ocr & 0x40000000)) { r1 = -8; goto fail; }
 
     /* Switch to fast clock for data transfers */
-    spi_set_clkdiv(base, 0);
+    spi_fast(base);
     return 0;
 
 fail:
     spi_cs0(base, 1);
-    spi_set_clkdiv(base, 0xFF);
+    spi_slow(base);
     return (int)(signed char)r1;
 }
 
 void sd_deinit(uint32_t base) {
     spi_cs0(base, 1);
-    spi_set_clkdiv(base, 0xFF);
+    spi_slow(base);
 }
 
 int sd_read_sector(uint32_t base, uint32_t lba, unsigned char *dst) {
@@ -203,7 +203,7 @@ int mbr_get_partition(uint32_t spi_base, int part,
 int sd_detect(uint32_t base) {
     unsigned char r1;
 
-    spi_set_clkdiv(base, 0xFF);
+    spi_slow(base);
     spi_cs0(base, 1);
     for (int i = 0; i < 20; i++)
         spi_transfer(base, 0xFF);
@@ -215,7 +215,7 @@ int sd_detect(uint32_t base) {
             break;
     }
     spi_cs0(base, 1);
-    spi_set_clkdiv(base, 0xFF);
+    spi_slow(base);
 
     return r1 == SD_R1_IDLE;
 }

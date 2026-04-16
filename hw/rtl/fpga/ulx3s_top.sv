@@ -154,6 +154,7 @@ module ulx3s_top (
 
     // ── IRQ ─────────────────────────────────────────────────
     logic uart_irq;
+    logic spi_irq;
     logic timer_irq;
 
     // ── Timer tick prescaler (CLK_FREQ → ~1 MHz toggle) ───────
@@ -200,7 +201,7 @@ module ulx3s_top (
         .i_sys_rdata    (sys_rdata),
 
         .i_timer_irq    (timer_irq),
-        .i_irq          (uart_irq),
+        .i_irq          (uart_irq | spi_irq),
 
         .o_pc           (),
         .o_halted       (halted),
@@ -351,8 +352,11 @@ module ulx3s_top (
     logic spi_cs0;
 
     spi #(
-        // 12.5 MHz / (2*(63+1)) ≈ 98 kHz — safe for SD card init (needs <400 kHz)
-        .DEFAULT_CLKDIV (16'd63)
+        .FIFO_DEPTH (512),
+        // 12.5 MHz / (2*(15+1)) ≈ 390 kHz — safe for SD card init (needs <400 kHz)
+        .SLOW_DIV   (16'd15),
+        // 12.5 MHz / (2*(0+1)) = 6.25 MHz — operational speed
+        .FAST_DIV   (16'd0)
     ) u_spi (
         .i_clk   (clk),
         .i_rst   (rst),
@@ -366,7 +370,8 @@ module ulx3s_top (
         .o_mosi  (sd_cmd),
         .i_miso  (sd_d[0]),
         .o_cs0   (spi_cs0),
-        .o_cs1   ()
+        .o_cs1   (),
+        .o_irq   (spi_irq)
     );
 
     // SD card SPI mode pin mapping

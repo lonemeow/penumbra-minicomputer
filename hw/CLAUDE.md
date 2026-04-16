@@ -29,9 +29,10 @@ This file provides detailed hardware context for work under `hw/`. The root `CLA
 | Bus controller | `rtl/soc/busctl.sv` | 43/43 | Sysreg device 4 (SYSDEV\_BUS). RST (sticky) and CFG\_EN bits for autoconfig. |
 | Autoconfig wrapper | `rtl/soc/autoconfig_dev.sv` | 28/28 | Config space regs, cfg daisy chain with CFG\_EN toggle, dynamic base address decode. |
 | Sim UART | `rtl/soc/sim_uart.sv` | via machine\_sim | 16450-compatible UART (MMIO at 0xFF00\_0000). NetBSD com(4) compatible. |
-| Sim SPI | `rtl/soc/sim_spi.sv` | via machine\_sim | SPI master (CLASS\_SD). 4 regs: DATA, STATUS, CONTROL, CLKDIV. SD emulator via `+sdcard=`. |
+| Sim SPI | `rtl/soc/sim_spi.sv` | via machine\_sim | SPI master v2 (CLASS\_SD). 7 regs: CAP, STATUS, CONTROL, DATA, XFER\_COUNT, IRQ\_STATUS, IRQ\_ENABLE. Hardware TX/RX FIFO, transfer engine, IRQ. SD emulator via `+sdcard=`. |
 | Real UART | `rtl/io/uart.sv` | via ulx3s\_top | NS16450-compatible UART with real baud rate generator, TX shift register, RX 16x oversampling. CLK\_FREQ/BAUD\_RATE params. |
-| Real SPI | `rtl/io/spi.sv` | via ulx3s\_top | SPI master with real shift register + clock divider. Same 4-reg interface as sim\_spi. CPOL/CPHA support. DEFAULT\_CLKDIV param. |
+| SPI FIFO | `rtl/io/spi_fifo.sv` | via spi | Parameterized synchronous FIFO (power-of-2 depth, 8-bit data). Used for SPI TX/RX paths. |
+| Real SPI | `rtl/io/spi.sv` | 54/54 | SPI master v2 with hardware TX/RX FIFO, autonomous transfer engine (stall-on-empty/full), IRQ output. FIFO\_DEPTH, SLOW\_DIV, FAST\_DIV params. See `doc/boot/spi-controller.md`. |
 | SDRAM | `rtl/io/sdram.sv` | via ulx3s\_top | SDR SDRAM controller (32 MB). CL=2, BL=2, auto-precharge. Universal-safe timings for all ULX3S SDRAM variants. Same bus interface as fpga\_ram/simple\_mem. |
 | UART TX | `rtl/fpga/uart_tx.sv` | via test tops | Standalone UART TX shift register for test designs (ulx3s\_hello, etc.) |
 | FPGA RAM | `rtl/fpga/fpga_ram.sv` | via ulx3s\_top | BRAM-friendly memory: four byte-wide banks with `ram_style` attribute. Address wraps for size probing. |

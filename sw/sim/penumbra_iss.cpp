@@ -254,20 +254,97 @@ static struct {
     bool    irq() const { return ((iir() & 1) == 0) && (mcr & 0x08); }
 } uart;
 
-// --- SPI controller ---
-static struct {
-    uint8_t  rx_data;
-    uint8_t  control;   // bit 0 = CS0, bit 1 = CS1
-    uint16_t clkdiv;
-    bool     done;
+// --- SPI controller (v2 register interface) ---
+// ISS is instruction-level — transfers complete instantly (no cycle delay).
+// FIFO mode is supported for register compatibility but the engine runs
+// the full transfer synchronously on the XFER_COUNT write.
+static constexpr int ISS_SPI_FIFO_DEPTH = 512;
 
-    void reset() { rx_data=0xFF; control=0x03; clkdiv=0xFF; done=false; }
+static struct {
+    uint8_t  rx_data;       // Single-byte mode RX latch
+    uint16_t control;       // CS, mode, speed, FIFO_EN
+    bool     done;          // Single-byte DONE flag
+
+    // FIFO state (circular buffers)
+    uint8_t  tx_fifo[ISS_SPI_FIFO_DEPTH];
+    uint8_t  rx_fifo[ISS_SPI_FIFO_DEPTH];
+    int      tx_head, tx_tail, tx_count;
+    int      rx_head, rx_tail, rx_count;
+
+    // IRQ state
+    uint8_t  irq_enable;
+    bool     xfer_done;
+    uint16_t eng_count;     // Remaining count (for read-back)
+
+    bool fifo_en() const { return (control >> 7) & 1; }
+
+    void tx_push(uint8_t v) {
+        if (tx_count < ISS_SPI_FIFO_DEPTH) {
+            tx_fifo[tx_tail] = v;
+            tx_tail = (tx_tail + 1) % ISS_SPI_FIFO_DEPTH;
+            tx_count++;
+        }
+    }
+    uint8_t tx_pop() {
+        if (tx_count == 0) return 0xFF;
+        uint8_t v = tx_fifo[tx_head];
+        tx_head = (tx_head + 1) % ISS_SPI_FIFO_DEPTH;
+        tx_count--;
+        return v;
+    }
+    void rx_push(uint8_t v) {
+        if (rx_count < ISS_SPI_FIFO_DEPTH) {
+            rx_fifo[rx_tail] = v;
+            rx_tail = (rx_tail + 1) % ISS_SPI_FIFO_DEPTH;
+            rx_count++;
+        }
+    }
+    uint8_t rx_pop() {
+        if (rx_count == 0) return 0xFF;
+        uint8_t v = rx_fifo[rx_head];
+        rx_head = (rx_head + 1) % ISS_SPI_FIFO_DEPTH;
+        rx_count--;
+        return v;
+    }
+    void tx_flush() { tx_head = tx_tail = tx_count = 0; }
+    void rx_flush() { rx_head = rx_tail = rx_count = 0; }
+
+    bool rx_thresh() const { return rx_count >= ISS_SPI_FIFO_DEPTH / 2; }
+    bool tx_thresh() const { return tx_count <= ISS_SPI_FIFO_DEPTH / 2; }
+
+    void reset() {
+        rx_data = 0xFF; control = 0x03; done = false;
+        tx_flush(); rx_flush();
+        irq_enable = 0; xfer_done = false; eng_count = 0;
+    }
+
     uint32_t read_reg(int reg) const {
         switch (reg) {
-            case 0: return rx_data;
-            case 1: return done ? 0x02 : 0x00; // STATUS: bit1=DONE, bit0=BUSY
+            case 0: // CAP
+                return (ISS_SPI_FIFO_DEPTH << 8) | 1;
+            case 1: { // STATUS
+                uint32_t s = done ? 0x02 : 0x00;
+                if (fifo_en()) {
+                    s |= ((uint32_t)tx_count << 4);
+                    s |= ((uint32_t)rx_count << 16);
+                    if (tx_count == 0)                s |= (1u << 28);
+                    if (tx_count == ISS_SPI_FIFO_DEPTH) s |= (1u << 29);
+                    if (rx_count == 0)                s |= (1u << 30);
+                    if (rx_count == ISS_SPI_FIFO_DEPTH) s |= (1u << 31);
+                }
+                return s;
+            }
             case 2: return control;
-            case 3: return clkdiv;
+            case 3: // DATA
+                return 0; // Read handled in spi_read() for pop side-effect
+            case 4: return eng_count;
+            case 5: { // IRQ_STATUS
+                uint32_t s = xfer_done ? 1 : 0;
+                if (rx_thresh()) s |= 2;
+                if (tx_thresh()) s |= 4;
+                return s;
+            }
+            case 6: return irq_enable;
             default: return 0;
         }
     }
@@ -628,22 +705,54 @@ static void uart_write(uint32_t addr, uint32_t data) {
     }
 }
 
-// SPI register write (triggers SD card exchange on DATA write)
+// SPI single-byte exchange via SD card emulator
+static uint8_t spi_exchange(uint8_t mosi) {
+    if (sd_card) {
+        sd_card->select(!(spi.control & 1)); // CS0 active-low
+        return sd_card->exchange(mosi);
+    }
+    return 0xFF;
+}
+
+// SPI register write (v2 register interface)
 static void spi_write(int reg, uint32_t data) {
     switch (reg) {
-        case 0: { // DATA — trigger SPI exchange
+        case 2: // CONTROL
+            spi.control = data & 0x3FFF;
+            if (data & (1 << 14)) spi.tx_flush(); // FLUSH_TX
+            if (data & (1 << 15)) spi.rx_flush(); // FLUSH_RX
+            break;
+        case 3: { // DATA
             uint8_t mosi = data & 0xFF;
-            if (sd_card) {
-                sd_card->select(!(spi.control & 1)); // CS0 active-low
-                spi.rx_data = sd_card->exchange(mosi);
+            if (spi.fifo_en()) {
+                spi.tx_push(mosi);
             } else {
-                spi.rx_data = 0xFF;
+                // Single-byte mode: instant transfer
+                spi.rx_data = spi_exchange(mosi);
+                spi.done = true;
             }
-            spi.done = true;
             break;
         }
-        case 2: spi.control = data & 0xFF; break;
-        case 3: spi.clkdiv = data & 0xFFFF; break;
+        case 4: // XFER_COUNT
+            if (data & (1 << 16) && spi.fifo_en()) {
+                // START — run transfer synchronously in ISS
+                uint16_t count = data & 0xFFFF;
+                for (uint16_t i = 0; i < count; i++) {
+                    uint8_t tx = spi.tx_pop(); // 0xFF if empty
+                    uint8_t rx = spi_exchange(tx);
+                    spi.rx_push(rx);
+                }
+                spi.eng_count = 0;
+                spi.xfer_done = true;
+            }
+            break;
+        case 5: // IRQ_STATUS (W1C)
+            if (data & 1) spi.xfer_done = false;
+            break;
+        case 6: // IRQ_ENABLE
+            spi.irq_enable = data & 0x07;
+            break;
+        // case 0 (CAP) and case 1 (STATUS) are read-only
     }
 }
 
@@ -679,7 +788,13 @@ static uint32_t phys_read(uint32_t addr, int size, bool& bus_fault) {
 
     // SPI at dynamic base (when configured)
     if (acfg.dev_sel(addr)) {
-        int reg = (addr >> 2) & 3;
+        int reg = (addr >> 2) & 7;
+        if (reg == 3) { // DATA — has pop side-effect
+            if (spi.fifo_en())
+                return spi.rx_pop();
+            else
+                return spi.rx_data;
+        }
         return spi.read_reg(reg);
     }
 
@@ -744,7 +859,7 @@ static void phys_write(uint32_t addr, uint32_t data, int size, bool& bus_fault) 
 
     // SPI at dynamic base
     if (acfg.dev_sel(addr)) {
-        spi_write((addr >> 2) & 3, data);
+        spi_write((addr >> 2) & 7, data);
         return;
     }
 
@@ -1050,7 +1165,11 @@ static void execute_one() {
             exception_entry(VEC_TIMER);
             return;
         }
-        if (uart.irq()) {
+        // External IRQ: shared wired-OR of UART + SPI
+        bool spi_irq = (spi.xfer_done && (spi.irq_enable & 1))
+                     || (spi.rx_thresh() && (spi.irq_enable & 2))
+                     || (spi.tx_thresh() && (spi.irq_enable & 4));
+        if (uart.irq() || spi_irq) {
             exception_entry(VEC_EXT_IRQ);
             return;
         }

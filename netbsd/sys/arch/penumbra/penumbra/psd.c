@@ -5,7 +5,7 @@
  *
  * Attaches via pbbus for ACFG_CLASS_SD devices.  Talks SD-SPI
  * protocol through the Penumbra SPI controller's MMIO registers
- * (DATA, STATUS, CONTROL, CLKDIV at word-stride offsets).
+ * (SPI v2 register interface, see doc/boot/spi-controller.md).
  *
  * Polled I/O only — no interrupts, no DMA.  Sufficient for
  * initial root filesystem mount and basic operation.
@@ -29,14 +29,20 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <machine/bus_funcs.h>
 #include <machine/pbbus.h>
 
-/* ── SPI register offsets (word-strided) ──────────────────────── */
+/* ── SPI v2 register offsets (word-strided) ──────────────────── */
 
-#define SPI_DATA	0x00	/* R/W: TX/RX byte */
-#define SPI_STATUS	0x04	/* R:   bit 0 = BUSY */
-#define SPI_CONTROL	0x08	/* R/W: bit 0 = CS0 */
-#define SPI_CLKDIV	0x0C	/* R/W: clock divider */
+#define SPI_CAP		0x00	/* R:   version, FIFO depth */
+#define SPI_STATUS	0x04	/* R:   bit 0 = BUSY, FIFO levels */
+#define SPI_CONTROL	0x08	/* R/W: CS, mode, speed, FIFO_EN */
+#define SPI_DATA	0x0C	/* R/W: TX/RX byte */
+#define SPI_XFER_COUNT	0x10	/* R/W: transfer count + START */
+#define SPI_IRQ_STATUS	0x14	/* R/W1C: interrupt flags */
+#define SPI_IRQ_ENABLE	0x18	/* R/W: interrupt mask */
 
 #define SPI_STATUS_BUSY	0x01
+#define SPI_CTL_CS0	0x01
+#define SPI_CTL_FAST	0x40
+#define SPI_CTL_FIFO_EN	0x80
 
 /* ── SD SPI protocol constants ────────────────────────────────── */
 
@@ -136,35 +142,48 @@ static const struct dkdriver psd_dkdriver = {
 
 /* ── SPI low-level (bus_space) ────────────────────────────────── */
 
+/* Read-modify-write helpers (same pattern as HSET4/HCLR4 in sdhc.c) */
+#define	SREG_RD(sc, reg)	\
+	bus_space_read_4((sc)->sc_iot, (sc)->sc_ioh, (reg))
+#define	SREG_WR(sc, reg, val)	\
+	bus_space_write_4((sc)->sc_iot, (sc)->sc_ioh, (reg), (val))
+#define	SREG_SET(sc, reg, bits)	\
+	SREG_WR((sc), (reg), SREG_RD((sc), (reg)) | (bits))
+#define	SREG_CLR(sc, reg, bits)	\
+	SREG_WR((sc), (reg), SREG_RD((sc), (reg)) & ~(bits))
+
 static inline uint8_t
 psd_spi_transfer(struct psd_softc *sc, uint8_t tx)
 {
 
-	bus_space_write_4(sc->sc_iot, sc->sc_ioh, SPI_DATA, tx);
-	while (bus_space_read_4(sc->sc_iot, sc->sc_ioh, SPI_STATUS) &
-	    SPI_STATUS_BUSY)
+	SREG_WR(sc, SPI_DATA, tx);
+	while (SREG_RD(sc, SPI_STATUS) & SPI_STATUS_BUSY)
 		;
-	return (uint8_t)bus_space_read_4(sc->sc_iot, sc->sc_ioh, SPI_DATA);
+	return (uint8_t)SREG_RD(sc, SPI_DATA);
 }
 
 static inline void
 psd_spi_cs(struct psd_softc *sc, int assert)
 {
-	uint32_t ctl;
 
-	ctl = bus_space_read_4(sc->sc_iot, sc->sc_ioh, SPI_CONTROL);
 	if (assert)
-		ctl &= ~0x01u;		/* CS0 active low */
+		SREG_CLR(sc, SPI_CONTROL, SPI_CTL_CS0);
 	else
-		ctl |= 0x01u;
-	bus_space_write_4(sc->sc_iot, sc->sc_ioh, SPI_CONTROL, ctl);
+		SREG_SET(sc, SPI_CONTROL, SPI_CTL_CS0);
 }
 
 static inline void
-psd_spi_clkdiv(struct psd_softc *sc, uint32_t div)
+psd_spi_fast(struct psd_softc *sc)
 {
 
-	bus_space_write_4(sc->sc_iot, sc->sc_ioh, SPI_CLKDIV, div);
+	SREG_SET(sc, SPI_CONTROL, SPI_CTL_FAST);
+}
+
+static inline void
+psd_spi_slow(struct psd_softc *sc)
+{
+
+	SREG_CLR(sc, SPI_CONTROL, SPI_CTL_FAST);
 }
 
 /* ── SD SPI protocol ──────────────────────────────────────────── */
@@ -217,7 +236,7 @@ psd_sd_init(struct psd_softc *sc)
 	int i;
 
 	/* Slow clock for init (<=400 kHz) */
-	psd_spi_clkdiv(sc, 0xFF);
+	psd_spi_slow(sc);
 
 	/* 80+ clock cycles with CS deasserted */
 	psd_spi_cs(sc, 0);
@@ -264,7 +283,7 @@ psd_sd_init(struct psd_softc *sc)
 		return ENODEV;
 
 	/* Fast clock for data */
-	psd_spi_clkdiv(sc, 0);
+	psd_spi_fast(sc);
 	return 0;
 }
 
@@ -273,7 +292,7 @@ psd_sd_deinit(struct psd_softc *sc)
 {
 
 	psd_spi_cs(sc, 0);
-	psd_spi_clkdiv(sc, 0xFF);
+	psd_spi_slow(sc);
 }
 
 static int

@@ -17,13 +17,15 @@
  */
 #include "bootdata_defs.h"
 
-/* ── SPI register interface ──────────────────────────────────────── */
+/* ── SPI v2 register interface ───────────────────────────────────── */
 
-#define SPI_DATA     0
-#define SPI_STATUS   1
-#define SPI_CONTROL  2
-#define SPI_CLKDIV   3
+#define SPI_CAP        0	/* R:   version, FIFO depth */
+#define SPI_STATUS     1	/* R:   bit 0 = BUSY */
+#define SPI_CONTROL    2	/* R/W: CS, mode, speed, FIFO_EN */
+#define SPI_DATA       3	/* R/W: TX/RX byte */
 #define SPI_STATUS_BUSY  0x01
+#define SPI_CTL_CS0      0x01
+#define SPI_CTL_FAST     0x40
 
 static unsigned char
 spi_transfer(uint32_t base, unsigned char tx)
@@ -43,18 +45,26 @@ spi_cs0(uint32_t base, int state)
 	uint32_t ctl = regs[SPI_CONTROL];
 
 	if (state)
-		ctl |= 0x01u;
+		ctl |= SPI_CTL_CS0;
 	else
-		ctl &= ~0x01u;
+		ctl &= ~SPI_CTL_CS0;
 	regs[SPI_CONTROL] = ctl;
 }
 
 static void
-spi_set_clkdiv(uint32_t base, unsigned int div)
+spi_fast(uint32_t base)
 {
 	volatile uint32_t *regs = (volatile uint32_t *)base;
 
-	regs[SPI_CLKDIV] = div;
+	regs[SPI_CONTROL] = regs[SPI_CONTROL] | SPI_CTL_FAST;
+}
+
+static void
+spi_slow(uint32_t base)
+{
+	volatile uint32_t *regs = (volatile uint32_t *)base;
+
+	regs[SPI_CONTROL] = regs[SPI_CONTROL] & ~SPI_CTL_FAST;
 }
 
 /* ── SD SPI protocol ─────────────────────────────────────────────── */
@@ -108,7 +118,7 @@ sd_init(uint32_t base)
 {
 	unsigned char r1;
 
-	spi_set_clkdiv(base, 0xFF);
+	spi_slow(base);
 	spi_cs0(base, 1);
 	for (int i = 0; i < 20; i++)
 		spi_transfer(base, 0xFF);
@@ -142,7 +152,7 @@ sd_init(uint32_t base)
 	uint32_t ocr = sd_read_response32(base);
 	if (!(ocr & 0x40000000)) return -8;
 
-	spi_set_clkdiv(base, 0);
+	spi_fast(base);
 	return 0;
 }
 
@@ -150,7 +160,7 @@ static void
 sd_deinit(uint32_t base)
 {
 	spi_cs0(base, 1);
-	spi_set_clkdiv(base, 0xFF);
+	spi_slow(base);
 }
 
 static int

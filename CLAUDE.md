@@ -266,6 +266,15 @@ MIPS/68k-style vector dispatch.
   (see `doc/bus/bus-overview.md`).
 - SPI controller is the first autoconfigured device;
   reports as `CLASS_SD`, assigned `0xFF001000`.
+- **SPI v2 with hardware FIFO** (`spi.sv`, `sim_spi.sv`):
+  7-register interface (CAP, STATUS, CONTROL, DATA, XFER_COUNT,
+  IRQ_STATUS, IRQ_ENABLE).  16550-style FIFO enable bit — DATA
+  works in single-byte polled mode (ROM) or FIFO burst mode
+  (kernel).  Autonomous transfer engine with stall-on-empty/full
+  (no data loss or corruption).  FAST/SLOW clock select
+  (no CLKDIV register).  Parameterized FIFO depth (512 FPGA,
+  16–32 discrete).  IRQ: latched XFER_DONE (W1C) + live
+  watermarks (RX/TX threshold).  See `doc/boot/spi-controller.md`.
 - Testbench SD card emulator (`sd_card_sim.h`) speaks SD-SPI protocol
   backed by a disk image file (`+sdcard=`).
 - Boot ROM builds a tagged list of boot data at 0x0040
@@ -672,6 +681,7 @@ MIPS/68k-style vector dispatch.
 3. **Kernel implementation** — remaining MD stubs as the kernel
    reaches them (grep `TODO(stub)`): process_read_regs,
    cpu_coredump, vmapbuf/vunmapbuf.
-4. **SPI FIFO + MI sdmmc** — Hardware FIFO for SPI controller,
-   shared `/IRQ` dispatch in kernel, MI sdmmc driver (see `doc/TODO.md`)
+4. **MI sdmmc + SPI IRQ** — Kernel IRQ dispatch for SPI,
+   MI sdmmc driver using FIFO burst mode (see `doc/TODO.md`).
+   SPI v2 FIFO hardware is complete (Phase 1 done).
 5. **Memory subsystem** — SDRAM controller, bus interface
