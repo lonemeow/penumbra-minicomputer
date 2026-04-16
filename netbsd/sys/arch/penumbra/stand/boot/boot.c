@@ -16,6 +16,7 @@
 
 #include <lib/libsa/stand.h>
 #include <lib/libsa/loadfile.h>
+#include <lib/libsa/bootcfg.h>
 #include <lib/libkern/libkern.h>
 #include <machine/bootinfo.h>
 #include "bootdata_defs.h"
@@ -325,6 +326,38 @@ _rtt(void)
 		;
 }
 
+/* ── Boot config file ───────────────────────────────────────────── */
+
+/*
+ * Read boot.cfg from the FAT32 boot partition via libsa's
+ * perform_bootcfg() and emit bootinfo entries for recognized keys.
+ *
+ * Currently used:
+ *   root=psd0f  → BTINFO_ROOTDEVICE (auto-select root device)
+ */
+static void
+load_boot_config(void)
+{
+	int rc;
+
+	rc = perform_bootcfg(BOOTCFG_FILENAME, bootcfg_do_noop, 0);
+	if (rc != 0)
+		return;		/* no boot.cfg — that's fine */
+
+	if (bootcfg_info.root != NULL) {
+		struct btinfo_rootdevice *bi_root;
+
+		bi_root = bi_alloc(BTINFO_ROOTDEVICE,
+		    sizeof(struct btinfo_rootdevice));
+		if (bi_root != NULL) {
+			strlcpy(bi_root->devname, bootcfg_info.root,
+			    sizeof(bi_root->devname));
+			printf("Root device: %s (from boot.cfg)\n",
+			    bi_root->devname);
+		}
+	}
+}
+
 /* ── Main ────────────────────────────────────────────────────────── */
 
 #define KERNEL_TEXT_BASE	0x80010000
@@ -398,6 +431,9 @@ main(uint32_t bootdata)
 		printf("SD init failed.\n");
 		_rtt();
 	}
+
+	/* Phase 2.5: Read boot config file for root device etc. */
+	load_boot_config();
 
 	/* Phase 3: COUNT pass — measure kernel memory footprint.
 	 * loadfile() returns fd on success, -1 on failure. */

@@ -24,8 +24,11 @@ system binaries (`/bin/sh`, `/bin/ls`, `ldd`, etc.) work.
 | Userland | `build.sh distribution` | Full userland; dynamic binaries work |
 
 ROM loads `PENBOOT.ELF` from FAT32 on SD card.  Bootloader
-translates ROM boot data to bootinfo, loads kernel ELF via
-libsa `loadfile()`, jumps with MMU off.
+translates ROM boot data to bootinfo, reads `boot.cfg` from
+FAT32 via libsa `perform_bootcfg()` (root device, etc.),
+loads kernel ELF via libsa `loadfile()`, jumps with MMU off.
+Kernel auto-selects root device from `BTINFO_ROOTDEVICE` in
+bootinfo — `boot sd:0,0` reaches single-user with no prompts.
 
 ## Kernel Subsystems
 
@@ -157,8 +160,13 @@ make sdimage-rootfs ROOTFS_FULL=1  # boot + full distribution
 
 make simulate SDCARD=build/boot.img
 # At ROM prompt: boot sd:0,0
-# At root device prompt: psd0f
+# Boots to single-user shell (root=psd0f via boot.cfg)
 ```
+
+Rootfs images include `boot.cfg` on the FAT32 partition with
+`root=psd0f`.  The bootloader reads this via libsa
+`perform_bootcfg()` and passes `BTINFO_ROOTDEVICE` to the
+kernel, which auto-selects the root device without prompting.
 
 ## What's Next
 

@@ -154,7 +154,9 @@ The rootfs script (`sw/tools/mkrootfs.sh`) creates an FFS image from
 `build/netbsd-dest/`.  Minimal mode (`-m`) includes only `/rescue`
 (statically linked, works without `ld.elf_so`), `/lib`, and `/etc`.
 The SD image has two MBR partitions: FAT32 boot (`psd0e`) and
-FFS root (`psd0f`).  At boot, type `psd0f` at the root device prompt.
+FFS root (`psd0f`).  Rootfs images include a `boot.cfg` on the
+FAT32 partition with `root=psd0f`, so `boot sd:0,0` reaches
+single-user shell with no further interaction.
 Requires NetBSD cross-tools (`nbfdisk`, `nbmakefs`).
 
 ### LLVM Toolchain Build

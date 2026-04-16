@@ -40,6 +40,7 @@ struct btinfo_common {
 #define BTINFO_SYMTAB		4	/* kernel symbol table */
 #define BTINFO_KERNBASE		5	/* kernel physical load address */
 #define BTINFO_DEVICE		6	/* discovered peripheral device */
+#define BTINFO_ROOTDEVICE	7	/* root device name string */
 
 /*
  * BTINFO_MEMORY — one entry per physical RAM region.
@@ -109,6 +110,16 @@ struct btinfo_device {
 	uint32_t size;		/* MMIO region size */
 	uint32_t id;		/* device ID from autoconfig */
 	char name[16];		/* device name */
+};
+
+/*
+ * BTINFO_ROOTDEVICE — root device name from bootloader config.
+ * String like "psd0f" — device name + partition letter.
+ * Parsed by cpu_rootconf() to set booted_device/booted_partition.
+ */
+struct btinfo_rootdevice {
+	struct btinfo_common common;
+	char devname[16];	/* e.g. "psd0f" */
 };
 
 /*

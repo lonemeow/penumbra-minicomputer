@@ -219,6 +219,11 @@ if [ -n "$KERNEL" ]; then
     cp "$KERNEL" "$BOOTFSROOT/netbsd"
 fi
 
+if [ -n "$ROOTFS" ]; then
+    log "Writing boot.cfg (root=psd0f)"
+    printf 'root=psd0f\n' > "$BOOTFSROOT/boot.cfg"
+fi
+
 if [ -n "$EXTRA_DIR" ]; then
     log "Copying $EXTRA_DIR"
     cp -r "$EXTRA_DIR/." "$BOOTFSROOT/"
