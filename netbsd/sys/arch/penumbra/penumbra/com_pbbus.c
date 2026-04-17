@@ -7,8 +7,8 @@
  * The UART is 16450-compatible with word-strided registers (reg_shift=2,
  * 32-bit wide accesses).
  *
- * No interrupt support yet — uses polled I/O via the MI com driver's
- * built-in poll callout (sc_poll_ticks).
+ * IRQ-driven: comintr() registers via intr_establish_xname() on the
+ * shared /IRQ line.  See penumbra/intr.c for the dispatcher.
  */
 
 #include <sys/cdefs.h>
@@ -22,6 +22,7 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <machine/bootinfo.h>
 #include <machine/bus_defs.h>
 #include <machine/bus_funcs.h>
+#include <machine/intr.h>
 #include <machine/pbbus.h>
 
 #include <dev/ic/comreg.h>
@@ -76,20 +77,13 @@ com_pbbus_attach(device_t parent, device_t self, void *aux)
 	sc->sc_frequency = COM_PBBUS_FREQ;
 
 	/*
-	 * No interrupt handler wired — use polled I/O via the MI
-	 * com driver's built-in poll callout.
-	 *
-	 * COM_HW_NOIEN suppresses MCR_IENABLE (OUT2), which gates
-	 * the UART's IRQ output (see ISS: irq = !IIR_NOPEND && MCR[3]).
-	 * This prevents actual IRQ delivery to the CPU.
-	 *
-	 * IER is still set by comopen() (IER_ERXRDY | IER_ERLS),
-	 * so IIR correctly reports pending RX/TX data.  comintr()
-	 * checks IIR first — without IER enabled, it bails on
-	 * IIR_NOPEND and never processes input.
+	 * Fully IRQ-driven.  The MI com driver asserts MCR_IENABLE
+	 * (OUT2) itself, which gates the UART's IRQ output through
+	 * to the shared /IRQ line.  Our handler shows up in
+	 * vmstat -i under "shared irq com0" via the evcnt attached
+	 * inside intr_establish_xname().
 	 */
-	SET(sc->sc_hwflags, COM_HW_NOIEN);
-	sc->sc_poll_ticks = 1;
+	intr_establish_xname(0, IPL_SERIAL, comintr, sc, device_xname(self));
 
 	/*
 	 * Register as the system console via comcnattach1().

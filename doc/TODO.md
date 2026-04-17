@@ -91,19 +91,33 @@ backward compatibility with ROM and bootloader):
 
 **Deliverables:** RTL module + Verilator testbench.
 
-### Phase 2: Kernel IRQ Dispatch + ISS Update
+### Phase 2: Kernel IRQ Dispatch — DONE
 
-Wire the shared IRQ:
-- `machine_sim.sv`: OR all device `o_irq` outputs into
-  `i_irq` (replaces current `combined_irq`)
-- `trap.c`: replace `EXC_EXT_IRQ` panic with polling loop
-  that checks UART IIR, SPI IRQ_STATUS, etc.
+Implemented:
+- `machine_sim.sv` and ISS already OR every device's `o_irq`
+  into the CPU's `i_irq` input.
+- `netbsd/sys/arch/penumbra/penumbra/intr.c` — shared-IRQ
+  dispatcher with `LIST_HEAD` handler registry.  Public API:
+  `intr_establish(_xname)`, `intr_disestablish`, `intr_init`.
+  Walks every handler unconditionally on each IRQ (wire-OR
+  semantics — short-circuiting would strand a simultaneous
+  asserter).  Per-handler `struct evcnt` under group
+  `"shared irq"` exposes counts to `vmstat -i`; separate
+  spurious counter for unclaimed IRQs.
+- `trap.c` EXC_EXT_IRQ calls `intr_dispatch()` with
+  `ci_idepth++/--` bracketing.
+- `com_pbbus.c` registers `comintr` as the first consumer
+  (replaces the former `sc_poll_ticks=1` callout).
 
-Update ISS to emulate:
-- SPI FIFO registers (CAP, FIFO_DATA, FIFO_CTRL, etc.)
-- Multi-block SD commands (CMD18, CMD24, CMD25)
-- Shared IRQ delivery
-- Fix STATUS register bit mapping (BUSY vs DONE)
+Note on ISS vs RTL TX IRQ counts: the ISS UART model reports
+THRE≈instant, so `comintr`'s drain loop blasts through the
+entire TX queue per IRQ.  Observed count ≈ number of write()
+calls, not byte count.  RTL sim gives 1 IRQ/byte (TX_BUSY
+simulated as 2170 cycles).  SPI FIFO on real hardware
+coalesces similarly via watermark IRQs.
+
+Deferred to Phase 3 (part of the sdmmc work):
+- Multi-block SD commands (CMD18, CMD24, CMD25) in the ISS.
 
 ### Phase 3: MI sdmmc Kernel Driver
 

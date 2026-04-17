@@ -157,10 +157,11 @@ Headers fall into three categories:
 | `cpu.c` | CPU device driver |
 | `pbbus.c` | Penumbra Bus bridge — walks BTINFO_DEVICE entries from bootinfo, attaches child devices by class |
 | `pcom.c` | Legacy console UART driver (unused — replaced by MI com(4) via com_pbbus.c) |
-| `com_pbbus.c` | MI com(4) bus attachment for pbbus — ACFG_CLASS_UART, stride=2/width=4, polled I/O, `comcnattach1()` console registration |
+| `com_pbbus.c` | MI com(4) bus attachment for pbbus — ACFG_CLASS_UART, stride=2/width=4, IRQ-driven via `intr_establish_xname`, `comcnattach1()` console registration |
 | `psd.c` | SD card block device — SPI/SD protocol via bus_space, MBR partition parsing, bdevsw/cdevsw at major 8. Polled sector-at-a-time I/O. |
 | `bus_space.c` | bus_space implementation — map/unmap via UVM + pmap_kenter_pa, read/write via volatile pointers |
-| `trap.c` | Exception dispatch (all 9 vectors), TLB fault → uvm_fault() demand paging, pcb_onfault recovery for copyin/copyout, hardware-based SPL (SR.I derived, no global variable) |
+| `trap.c` | Exception dispatch (all 9 vectors), TLB fault → uvm_fault() demand paging, pcb_onfault recovery for copyin/copyout, hardware-based SPL (SR.I derived, no global variable). EXC_EXT_IRQ delegates to `intr_dispatch()` |
+| `intr.c` | Shared-IRQ dispatch — `intr_establish`/`_xname`/`_disestablish`/`_dispatch`, per-handler `LIST_HEAD` registry with `struct evcnt` under group `"shared irq"`, spurious counter, `intr_init()` |
 | `syscall.c` | Syscall dispatch: `syscall_intern()` + `syscall()`. R11=syscall number (scratch, set by SYSTRAP), R1–R4=args (4 register args), stack overflow via copyin. Carry-flag error convention (C=0 success, C=1 error). Indirect syscalls rejected with ENOSYS. |
 | `pmap.c` | Software TLB management: `pmap_bootstrap()`, `pmap_steal_memory()`/`pmap_steal_page()`, `pmap_kenter_pa()`/`pmap_kremove()`, `pmap_enter()` (demand paging), `pmap_create()`/`pmap_destroy()` (user address spaces), `pmap_activate()` (L1 re-pin + MMUCR ASID), generational ASID allocator, `pmap_remove_all()`, `pmap_extract()`, `pmap_map_device()`, scratch window helpers. |
 | `copy.S` | Assembly copyin/copyout/copyinstr/copyoutstr with pcb_onfault fault recovery, ufetch/ustore (8/16/32), user address validation |
@@ -342,8 +343,18 @@ Headers fall into three categories:
   entry).  All SPL paths (`splraiseipl`, `splraise`, named
   `splhigh`/`splvm`/etc.) collapse to SR.I=0 (disable) for any
   IPL above NONE.  `cpu_idle()` calls `spl0()` to ensure timer
-  interrupts fire in the idle loop (required for callout-driven
-  com(4) polling).
+  interrupts fire in the idle loop.
+- [x] **Shared-IRQ dispatch (`intr.c`)** — no interrupt
+  controller; devices wire-OR their `/IRQ` outputs onto the
+  single CPU external interrupt input.  `intr_establish_xname()`
+  links handlers into a `LIST_HEAD` registry; `intr_dispatch()`
+  (called from `trap.c` EXC_EXT_IRQ with `ci_idepth` bracketing)
+  walks every handler unconditionally — wire-OR semantics require
+  not short-circuiting after the first claim, or a simultaneous
+  asserter gets stranded.  Per-handler `struct evcnt` visible
+  in `vmstat -i` under group `"shared irq"`; spurious counter
+  tracks unclaimed IRQs.  `com_pbbus` attaches as first consumer
+  (replaces former `sc_poll_ticks=1` callout).
 - [ ] Kernel port — remaining MD stubs: `process_read_regs`,
   `process_write_regs`, `process_set_pc`, `cpu_coredump`,
   `vmapbuf`/`vunmapbuf` (grep for `TODO(stub)`)
@@ -351,9 +362,13 @@ Headers fall into three categories:
 
 ## Next Steps
 
-1. **Remaining MD stubs** — fill in `TODO(stub)` functions as
+1. **MI sdmmc attachment** — replace custom `psd.c` with
+   `sdmmc_chip_functions` implementation against the SPI
+   v2 FIFO hardware.  Uses the new shared-IRQ dispatcher
+   for XFER_DONE and watermark IRQs.  See `doc/TODO.md`
+   Phase 3.
+2. **Remaining MD stubs** — fill in `TODO(stub)` functions as
    the kernel reaches them (grep `TODO(stub)`).
-2. **Interrupt controller** — multiple devices with priority
 3. **Memory subsystem** — SDRAM controller, bus interface
 
 ## Documentation

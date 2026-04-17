@@ -69,6 +69,11 @@ int	splsched(void);
 int	splddb(void);
 
 void	intr_init(void);
+void	intr_dispatch(void);
+void   *intr_establish(int irq, int ipl, int (*handler)(void *), void *arg);
+void   *intr_establish_xname(int irq, int ipl, int (*handler)(void *),
+	    void *arg, const char *xname);
+void	intr_disestablish(void *cookie);
 
 #endif /* _KERNEL */
 

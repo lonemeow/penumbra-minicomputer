@@ -79,8 +79,23 @@ bootinfo — `boot sd:0,0` reaches single-user with no prompts.
   any faultable access.  Double-fault detection.
 
 - **Console UART:** MI `com(4)` driver via `com_pbbus.c`.
-  Word-strided 32-bit registers (shift=2, width=4).  Polled I/O
-  via `sc_poll_ticks=1` callout.  Userland RX+TX works.
+  Word-strided 32-bit registers (shift=2, width=4).  IRQ-driven
+  via `intr_establish_xname()` on the shared /IRQ line.
+  Userland RX+TX works; kernel `cnputc` path remains polled by
+  MI convention.
+
+- **Shared-IRQ dispatch (`intr.c`):** Penumbra has no interrupt
+  controller.  Devices wire-OR their `/IRQ` outputs onto the
+  single CPU external interrupt input.  `intr_establish_xname()`
+  links a handler into a registry; `intr_dispatch()` (called
+  from `trap.c` EXC_EXT_IRQ with `ci_idepth` bracketing) walks
+  every handler and calls it.  Walk is unconditional --- any
+  non-claimant could still be asserting, so short-circuiting
+  would strand it.  Per-handler `struct evcnt` under group
+  `"shared irq"` exposes counts to `vmstat -i`; separate
+  spurious counter for unclaimed IRQs.  IPL is binary (SR.I is
+  one bit) so handlers effectively run at IPL_HIGH regardless
+  of the requested level.
 
 - **Device autoconfig:** `pbbus` bridge walks `BTINFO_DEVICE`
   entries from bootinfo.  `bus_space` (map/unmap/read/write)

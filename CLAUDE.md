@@ -475,15 +475,30 @@ MIPS/68k-style vector dispatch.
   (`sys/dev/ic/com.c`) with a thin pbbus attachment
   (`com_pbbus.c`).  Word-strided 32-bit registers via
   `com_init_regs_stride_width(shift=2, width=4)`.
-  Polled I/O via `sc_poll_ticks=1` callout (no interrupt handler
-  wired); `COM_HW_NOIEN` suppresses MCR_IENABLE to prevent IRQ
-  assertion while IER still enables RX/TX status in IIR.
-  `comcnattach1()` called from `com_pbbus_attach()` to register
-  as system console — sets up `cn_tab`, `comcons_info`
-  (rate/cflag), and `cn_init_magic` (console magic sequence).
-  `com_attach_subr()` auto-detects `COM_HW_CONSOLE` by matching
-  `cr_iot`/`cr_iobase` against `comcons_info`.
-  Userland I/O through `/dev/console` is operational (RX and TX).
+  IRQ-driven: `comintr` registers via `intr_establish_xname()`
+  on the shared /IRQ line; MI com asserts MCR_IENABLE (OUT2)
+  itself to gate the UART output pin.  `comcnattach1()` called
+  from `com_pbbus_attach()` to register as system console —
+  sets up `cn_tab`, `comcons_info` (rate/cflag), and
+  `cn_init_magic`.  `com_attach_subr()` auto-detects
+  `COM_HW_CONSOLE` by matching `cr_iot`/`cr_iobase` against
+  `comcons_info`.  Userland tty I/O is fully IRQ-driven;
+  console `cnputc` path remains polled by MI convention.
+- **Shared-IRQ dispatch (`intr.c`):** Penumbra has no interrupt
+  controller — devices wire-OR their `/IRQ` outputs onto a
+  single CPU input (vector 9).  `intr_establish_xname()` links
+  a handler into a `LIST_HEAD` registry; `intr_dispatch()`
+  (called from `trap.c` EXC_EXT_IRQ with `ci_idepth` bracketing)
+  walks every handler and calls it.  Handler returns 1 if it
+  saw pending work, 0 otherwise.  Walk is unconditional —
+  wire-OR means any non-claimant could still be asserting, so
+  short-circuiting would strand it and produce an IRQ storm.
+  Per-handler `struct evcnt` attached under group
+  `"shared irq"` exposes counts to `vmstat -i` /
+  `kern.intr.intrs`; a separate `spurious` counter records
+  IRQs that nobody claimed.  IPL is binary (SR.I is one bit),
+  so `ih_ipl` is stored but unused in dispatch — every handler
+  effectively runs at IPL_HIGH.
 - **Device autoconfig:** `pbbus` bridge walks `BTINFO_DEVICE`
   entries from bootinfo, attaches child devices by ACFG_CLASS_*.
   `bus_space` implemented (map via UVM + pmap_kenter_pa, read/write

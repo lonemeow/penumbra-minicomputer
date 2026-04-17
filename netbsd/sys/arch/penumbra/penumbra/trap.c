@@ -103,8 +103,14 @@ trap(struct trapframe *tf)
 	}
 
 	case EXC_EXT_IRQ:
-		/* TODO: read interrupt controller, dispatch by source */
-		panic("external IRQ (no handler yet), pc=0x%08x", tf->tf_epc);
+		/*
+		 * Shared IRQ line: no interrupt controller.
+		 * intr_dispatch() walks every registered handler and
+		 * each device identifies itself via its status register.
+		 */
+		curcpu()->ci_idepth++;
+		intr_dispatch();
+		curcpu()->ci_idepth--;
 		break;
 
 	case EXC_TLB_MISS:
@@ -293,12 +299,6 @@ current_ipl(void)
 
 	__asm __volatile("RDSPR %0, sr" : "=r"(sr));
 	return (sr & PSL_I) ? IPL_NONE : IPL_HIGH;
-}
-
-void
-intr_init(void)
-{
-	/* Interrupts are already disabled by hardware at boot. */
 }
 
 int
