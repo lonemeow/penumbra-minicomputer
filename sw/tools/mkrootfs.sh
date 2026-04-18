@@ -11,6 +11,7 @@
 # Options:
 #   -d DESTDIR      Source directory (build/netbsd-dest, required)
 #   -o FILE         Output FFS image (required)
+#   -k KERNEL       Kernel binary to copy to /netbsd (optional)
 #   -s SIZE_MB      Image size in MB (default: auto-fit with 20% slack)
 #   -m              Minimal mode: rescue + etc + lib only (no /usr)
 #   -T TOOLDIR      NetBSD tools directory (default: auto-detect)
@@ -30,6 +31,7 @@ set -euo pipefail
 
 DESTDIR=""
 OUTPUT=""
+KERNEL=""
 SIZE_MB=""
 MINIMAL=0
 TOOLDIR=""
@@ -42,10 +44,11 @@ usage() {
     exit 1
 }
 
-while getopts "d:o:s:mT:vh" opt; do
+while getopts "d:o:k:s:mT:vh" opt; do
     case $opt in
         d) DESTDIR="$OPTARG" ;;
         o) OUTPUT="$OPTARG" ;;
+        k) KERNEL="$OPTARG" ;;
         s) SIZE_MB="$OPTARG" ;;
         m) MINIMAL=1 ;;
         T) TOOLDIR="$OPTARG" ;;
@@ -157,6 +160,13 @@ else
     fi
 fi
 
+# Copy kernel to /netbsd if provided
+if [ -n "$KERNEL" ]; then
+    log "Copying $KERNEL -> /netbsd"
+    cp "$KERNEL" "$STAGING/netbsd"
+    chmod 644 "$STAGING/netbsd"
+fi
+
 # Create a minimal /etc/rc that just drops to a shell
 if [ ! -e "$STAGING/etc/rc" ]; then
     cat > "$STAGING/etc/rc" <<'RCEOF'
@@ -226,15 +236,15 @@ else
 fi
 
 # Generate device nodes via MAKEDEV -s
-# The 'std' target covers console/mem/random/etc; 'ld0' adds the
-# logical-disk block/char nodes (ld0a..h + rld0a..h) that pmci
-# exposes as the SD card.  Without ld0, /dev/ld0f doesn't exist
-# and `mount -u /` cannot resolve the root device.
+# The 'std' target covers console/mem/random/etc; 'init' adds the
+# target-specific boot devices (ld0/ld1) and standard pseudo-devices.
+# Without the boot device (ld0), /dev/ld0f doesn't exist and
+# `mount -u /` cannot resolve the root device.
 if [ -x "$MAKEDEV_SCRIPT" ]; then
-    log "Generating device nodes via MAKEDEV -s std ld0"
+    log "Generating device nodes via MAKEDEV -s std init"
     # MAKEDEV -s outputs mtree specs relative to /dev.
     # Prefix paths with ./dev/ and skip the "." root dir line.
-    MACHINE=penumbra sh "$MAKEDEV_SCRIPT" -s std ld0 2>/dev/null | \
+    MACHINE=penumbra sh "$MAKEDEV_SCRIPT" -s std init 2>/dev/null | \
         grep -v '^[.] ' | sed 's,^\./,./dev/,' >> "$SPECFILE"
 else
     log "Warning: MAKEDEV not found, no device nodes will be created"
@@ -258,6 +268,12 @@ if [ "$MINIMAL" -eq 1 ]; then
 ./bin/sh type=link link=/rescue/sh
 ./etc/rc type=file uname=root gname=wheel mode=0755
 MINEOF
+fi
+
+if [ -n "$KERNEL" ]; then
+    cat >> "$SPECFILE" <<'KERNELEOF'
+./netbsd type=file uname=root gname=wheel mode=0644
+KERNELEOF
 fi
 
 # Only add a spec entry for /etc/fstab if we created it ourselves;

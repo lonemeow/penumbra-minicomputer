@@ -234,7 +234,7 @@ sdimage:
 .PHONY: rootfs
 rootfs:
 	@sw/tools/mkrootfs.sh -d $(DESTDIR) -o $(ROOTFS_IMG) \
-		$(if $(ROOTFS_FULL),,-m) -v
+		-k $(KERNEL) $(if $(ROOTFS_FULL),,-m) -v
 
 .PHONY: sdimage-rootfs
 sdimage-rootfs: rootfs
