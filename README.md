@@ -2,270 +2,68 @@
 
 A 32-bit RISC minicomputer designed from scratch and implemented on FPGA.
 Inspired by classic machines like the Data General Eclipse and DEC VAX, but
-with a clean load-store ISA.  The eventual goal is to run NetBSD and later
+with a clean load-store ISA. The eventual goal is to run NetBSD and later
 build the design from discrete 74xx logic chips.
 
-## Status
+---
 
-The CPU is fully functional in simulation.  A C boot ROM compiled with
-clang prints to UART and runs on the simulated CPU through the full
-pipeline: CPU core, MMU (software-managed TLB), split I/D cache, and
-memory-mapped I/O.
-
-**What works:**
-- All RTL modules implemented and tested (ALU, register file, sequencer,
-  datapath, MMU, TLB, cache, UART, bus)
-- 8 exception sources (IRQ, MMU faults, alignment, bus fault, BREAK,
-  SYSCALL, privilege, illegal instruction)
-- LLVM backend: clang compiles C, lld links, llvm-mc assembles
-- Boot ROM in C: autoconfig, SD card boot, FAT32, interactive monitor
-- Bus autoconfig, SPI controller, SD card read, MBR partition parsing
-- 30+ hardware test programs passing, 26 LLVM codegen lit tests passing
-- NetBSD kernel: all .o files compile at `-O0`, link stage reached
-
-## Prerequisites
-
-- **Docker** (for Verilator simulation — no host install needed)
-- **Python 3** (for assembler tools)
-- **CMake, Ninja, ccache** (for building LLVM)
-- **A C++ compiler** (g++ or clang++ for building LLVM itself)
-
-About 15 GB RAM recommended for LLVM debug builds (uses split DWARF to
-reduce memory pressure).
-
-## Building
-
-### 1. Clone
+## ⚡ Quick Start
 
 ```sh
+# 1. Clone with submodules
 git clone --recurse-submodules https://github.com/<user>/penumbra-minicomputer.git
 cd penumbra-minicomputer
-```
 
-### 2. Build the LLVM toolchain
-
-This builds a custom clang, lld, and llc with the Penumbra backend.
-
-```sh
-# One-time cmake configuration
-cmake -G Ninja -S llvm/llvm -B build/llvm \
-  -DLLVM_TARGETS_TO_BUILD=Penumbra \
-  -DLLVM_ENABLE_PROJECTS="clang;lld" \
-  -DLLVM_USE_SPLIT_DWARF=ON \
-  -DLLVM_INCLUDE_TESTS=ON \
-  -DLLVM_BUILD_TESTS=ON \
-  -DLLVM_PARALLEL_LINK_JOBS=2
-
-# Build only the tools we need (much faster than a full build)
-ninja -C build/llvm -j10 llc clang lld \
-  llvm-mc llvm-ar llvm-nm llvm-objcopy llvm-objdump \
-  llvm-readobj llvm-size llvm-strings
-```
-
-> **Low memory?** `-DLLVM_PARALLEL_LINK_JOBS=2` limits link parallelism.
-> Debug builds with split DWARF need ~8 GB; without split DWARF, ~15 GB.
-> Use `-j4` instead of `-j10` on machines with less RAM.
-
-If you want the LLVM build tree elsewhere, pass
-`LLVM_PREFIX=/other/drive/penumbra-llvm` to make commands.
-
-### 3. Verify the hardware (optional)
-
-Run all hardware test programs (uses pasm.py assembler, no LLVM needed):
-
-```sh
+# 2. Run hardware tests (no LLVM required)
 make test
-```
 
-### 4. Run the boot ROM
-
-Build the C boot ROM with clang and launch the interactive simulator:
-
-```sh
+# 3. Build boot ROM and run interactive simulation (requires LLVM, see DEVELOP.md)
 make simulate
 ```
 
-This compiles `hw/rom/boot_rom.c` with crt0 startup, links it at
-`0xFFFF_0000` (the reset vector), and boots the CPU in the Verilator
-simulator with UART bridged to your terminal.
+---
 
-With a non-default LLVM location:
+## 🏗️ Architecture Summary
 
-```sh
-make simulate LLVM_PREFIX=/other/drive/penumbra-llvm
-```
+Penumbra is a modern RISC implementation with a "classic" aesthetic.
 
-## Architecture
+- **Word size:** 32-bit, little-endian.
+- **ISA:** 4 instruction formats (R/L/M/B), 16 GPRs (R0=zero, R14=SP, R13=LR, R15=PC).
+- **Execution:** 3-bus datapath, 51-bit horizontal microcode, 256-entry ROM.
+- **MMU:** Software-managed 64-entry 2-way SA TLB + 4-entry FA pinned TLB.
+- **Memory:** Split I/D PIPT caches, write-through D-cache.
+- **Bus:** Asynchronous Penumbra Bus with 4-phase handshake and autoconfig.
 
-- **Word size:** 32-bit, little-endian
-- **Registers:** 16 GPRs (R0=zero, R14=SP, R13=LR, R15=PC)
-- **ISA:** 4 instruction formats (R/L/M/B), 2-operand destructive ALU,
-  ARM-style NZCV condition flags
-- **MMU:** Software-managed 64-entry 2-way set-associative TLB + 4-entry fully-associative pinned TLB
-- **Cache:** Split I/D, direct-mapped, write-through
-- **Microcode:** 51-bit horizontal, 256-entry ROM
+Detailed specifications are available in the **[Documentation Index](doc/README.md)**.
 
-Full architecture docs in `doc/`.
+---
 
-## Repository Structure
+## 📈 Status
 
-```
-hw/                Hardware design
-  rtl/core/        CPU core (ALU, regfile, sequencer, datapath)
-  rtl/mmu/         MMU and TLB
-  rtl/soc/         SoC integration (boot ROM, UART, memory, cache)
-  sim/             Testbenches and test programs
-  microcode/       Microcode source
-  rom/             Boot ROM (C source, crt0, linker script)
-  tools/           Microcode assembler (uasm.py)
-sw/tools/          ISA assembler (pasm.py), binary converter (bin2hex.py)
-llvm/              LLVM backend (clang, lld, llvm-mc for Penumbra)
-benchmark/         Bare-metal benchmarks (Dhrystone 2.1)
-  common/          Harness: PIE CRT, TLB handler, timer, UART output
-  dhrystone/       Vendored Dhrystone + shim headers
-netbsd/            NetBSD 10.1 source tree (git subtree)
-  sys/arch/penumbra/  Machine-dependent port (headers, bootloader)
-doc/               Architecture specifications
-```
+The system is fully functional in cycle-accurate and instruction-level simulation.
 
-## Make Targets
+- **Hardware:** All RTL modules (CPU, MMU, Cache, Bus, UART, SPI) implemented and verified.
+- **Toolchain:** Custom LLVM backend (clang/lld) fully operational.
+- **OS:** NetBSD 10.1 port in progress; kernel compiles and reaches link stage.
+- **Firmware:** C boot ROM with FAT32 support, PIE ELF loading, and monitor commands.
 
-| Target | Description |
-|--------|-------------|
-| `make simulate` | Build C boot ROM and run interactive simulator |
-| `make test` | Run all hardware test programs (pass/fail summary) |
-| `make sim MOD=<name>` | Run a specific module's testbench |
-| `make smoke` | Quick toolchain sanity check |
-| `make wave MOD=<name>` | Open VCD waveform in GTKWave |
-| `make benchmark` | Build and run benchmarks on ISS (fast) |
-| `make benchmark-rtl` | Build and run benchmarks on Verilator (cycle-accurate) |
-| `make sdimage-bench` | Build benchmark SD card image only |
-| `make clean` | Remove build artifacts |
+---
 
-## Testing
+## 📁 Repository Layout
 
-### Hardware tests
+- `hw/` — RTL design (SystemVerilog), testbenches, microcode, and boot ROM.
+- `sw/` — Instruction set simulator (ISS) and assembler tools.
+- `llvm/` — Penumbra backend for the LLVM compiler infrastructure.
+- `doc/` — Comprehensive architecture and system documentation.
+- `netbsd/` — NetBSD kernel and userland source tree.
+- `benchmark/` — Dhrystone and other bare-metal performance tests.
 
-Run all CPU test programs (uses pasm.py, no LLVM needed):
+---
 
-```sh
-make test
-```
+## 🛠️ Development
 
-### LLVM backend tests
+For instructions on building the LLVM toolchain, compiling the NetBSD kernel, and running the full test suite, see **[DEVELOP.md](DEVELOP.md)**.
 
-The Penumbra codegen backend has regression tests using LLVM's
-[Lit](https://llvm.org/docs/CommandGuide/lit.html) framework with
-[FileCheck](https://llvm.org/docs/CommandGuide/FileCheck.html) assertions.
-Tests live in `llvm/llvm/test/CodeGen/Penumbra/`.
+## 📜 License
 
-Run all backend tests:
-
-```sh
-build/llvm/bin/llvm-lit llvm/llvm/test/CodeGen/Penumbra/
-```
-
-Run a single test with verbose output:
-
-```sh
-build/llvm/bin/llvm-lit -v llvm/llvm/test/CodeGen/Penumbra/alu.ll
-```
-
-After changing codegen, regenerate the expected CHECK lines:
-
-```sh
-python3 llvm/llvm/utils/update_llc_test_checks.py \
-  --llc-binary build/llvm/bin/llc \
-  llvm/llvm/test/CodeGen/Penumbra/<test>.ll
-```
-
-Review the diff to make sure the output changes are intentional.
-
-## Benchmarks
-
-Bare-metal benchmarks for measuring compiler and hardware performance.
-Benchmarks are PIE ELFs booted directly from the ROM via
-`boot sd:0,0/DHRYSTON.ELF`.
-
-```sh
-# Quick run on ISS (instruction-level, fast)
-make benchmark
-
-# Cycle-accurate run on Verilator RTL sim
-make benchmark-rtl
-
-# Override iteration count or optimization level
-make benchmark BENCH_ITERS=10000
-make benchmark COPT="-Os"
-```
-
-**Dhrystone 2.1** — Original 1988 source (public domain, unmodified).
-Adapted via shim headers and `-Dmain=dhrystone_main` — no changes to
-the benchmark source files.
-
-Current baseline (-O2, no hardware MUL): **~1.8 DMIPS** on the
-cycle-accurate RTL simulator.
-
-## NetBSD Port
-
-The goal is to run NetBSD on Penumbra.  The NetBSD 10.1 source tree is
-included as a git subtree under `netbsd/`.  Machine-dependent port files
-live in `netbsd/sys/arch/penumbra/`.
-
-**Current status:** All kernel .o files compile at `-O0`.  Link stage
-reached (fails with expected undefined symbols from stubs).
-See `netbsd/sys/arch/penumbra/CLAUDE.md` for detailed port context.
-
-### Prerequisites
-
-In addition to the LLVM toolchain above, you need:
-
-- **zlib-dev** (for NetBSD host tools): `sudo apt install zlib1g-dev`
-
-### Building NetBSD host tools (one-time)
-
-```sh
-# Create toolchain symlinks
-sh netbsd/sys/arch/penumbra/toolchain-setup.sh
-
-# Build NetBSD host tools (use -u for incremental rebuilds after first time)
-cd netbsd
-./build.sh -U -j4 -m penumbra -a penumbra \
-  -V EXTERNAL_TOOLCHAIN=$PWD/../build/llvm \
-  -O ../build/netbsd-obj \
-  -T ../build/netbsd-tools \
-  -D ../build/netbsd-dest \
-  tools
-cd ..
-```
-
-### Building the kernel
-
-All commands from the project root.  Build output goes to
-`build/netbsd-kernel/MINIMAL/` (out of source tree).
-
-```sh
-# 1. Generate kernel Makefile (re-run after changing conf/ files)
-build/netbsd-tools/bin/nbconfig \
-  -b $PWD/build/netbsd-kernel/MINIMAL \
-  -s $PWD/netbsd/sys \
-  $PWD/netbsd/sys/arch/penumbra/conf/MINIMAL
-
-# 2. Dependencies + build
-build/netbsd-tools/bin/nbmake-penumbra -C build/netbsd-kernel/MINIMAL depend
-build/netbsd-tools/bin/nbmake-penumbra -C build/netbsd-kernel/MINIMAL -j10
-```
-
-### Building the bootloader
-
-```sh
-# Create objdir (required — without it, bmake silently builds in-tree)
-build/netbsd-tools/bin/nbmake-penumbra -C netbsd/sys/arch/penumbra/stand obj
-
-# Build (output: build/netbsd-obj/sys/arch/penumbra/stand/boot/PENBOOT.ELF)
-build/netbsd-tools/bin/nbmake-penumbra -C netbsd/sys/arch/penumbra/stand/boot
-```
-
-## License
-
-This project is open source.  See [LICENSE](LICENSE) for details.
+This project is open source. See [LICENSE](LICENSE) for details.
