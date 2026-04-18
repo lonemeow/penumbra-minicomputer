@@ -66,4 +66,4 @@ For instructions on building the LLVM toolchain, compiling the NetBSD kernel, an
 
 ## 📜 License
 
-This project is open source. See [LICENSE](LICENSE) for details.
+This project is open source, licensed under the **BSD 2-Clause License**. See [LICENSE](LICENSE) for details and third-party component licenses.

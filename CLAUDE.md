@@ -9,6 +9,7 @@ and later build the design from discrete 74xx chips.
 
 ## Key Decisions
 - **HDL:** SystemVerilog for RTL
+- **License:** BSD 2-Clause for Penumbra code; third-party code (LLVM, NetBSD) under original licenses. See LICENSE.
 - **Toolchain:** Open-source FPGA tools (Yosys, nextpnr-ecp5, Project Trellis)
 - **Simulation:** Verilator 5.046 via Docker (`verilator/verilator:latest`), driven by Makefile
 - **Target board:** ULX3S with ECP5-85F (32 MB SDRAM, USB, HDMI, GPIO, etc.)
