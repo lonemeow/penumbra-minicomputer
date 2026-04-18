@@ -10,19 +10,21 @@ state, H=help), `make simulate RAW=1`.
 ## Boot Arguments — DONE
 
 Implemented: bootloader reads `boot.cfg` from FAT32 via libsa
-`perform_bootcfg()`, `root=psd0f` emits `BTINFO_ROOTDEVICE`,
+`perform_bootcfg()`, `root=ld0f` emits `BTINFO_ROOTDEVICE`,
 kernel `cpu_rootconf()` auto-selects root device.
 `make sdimage-rootfs` includes `boot.cfg` automatically.
 
 ## SPI FIFO + MI sdmmc
 
-The current SPI controller is byte-at-a-time polled, making SD
-card I/O very slow.  The current `psd` kernel driver is read-only
-(CMD17 only) and custom (not using NetBSD's MI sdmmc stack).
+The v1 SPI controller was byte-at-a-time polled, making SD card
+I/O slow.  The original `psd` kernel driver was read-only (CMD17
+only) and custom — not using NetBSD's MI sdmmc stack.
 
-Rather than building a complex MI sdmmc driver against the
-current hardware interface and then reworking it, we settle the
-hardware first.
+The roadmap settled the hardware first (SPI v2 with FIFO +
+transfer engine + IRQ), then landed the shared-IRQ dispatcher,
+then replaced `psd` with a proper MI sdmmc host (`pmci`) in
+polled mode as a clean baseline.  Only the FIFO/IRQ-driven
+`pmci` variant (Phase 3.5) remains.
 
 ### Interrupt Model
 
@@ -119,22 +121,30 @@ coalesces similarly via watermark IRQs.
 Deferred to Phase 3 (part of the sdmmc work):
 - Multi-block SD commands (CMD18, CMD24, CMD25) in the ISS.
 
-### Phase 3: MI sdmmc Kernel Driver
+### Phase 3: MI sdmmc Kernel Driver — DONE (polled)
 
-Implement `sdmmc_chip_functions` for the Penumbra SPI
-controller (with FIFO support).  Attach NetBSD's MI
-`sdmmc`/`ld_sdmmc` stack.  Remove custom `psd` driver.
+Implemented:
+- `netbsd/sys/arch/penumbra/penumbra/pmci.c` — host
+  controller driver, implements `sdmmc_chip_functions`
+  over the SPI v2 register interface.  Polled
+  byte-at-a-time transfers (FIFO_EN=0); FIFO-burst path
+  deferred to Phase 3.5.
+- `files.penumbra` pulls in `dev/sdmmc/files.sdmmc` and
+  `kern/subr_disk_mbr.c` (for `readdisklabel`).
+- `bus_dma_*` panic stubs in `bus_space.c` — the MI
+  sdmmc code references them behind SMC_CAPS_DMA, which
+  we never set.
+- Custom `psd.c` driver removed.
+- `boot.cfg` default changed to `root=ld0f` in
+  `sw/tools/mksdimage.sh`.
+- Boot ROM path, bootloader, and kernel all verified
+  end-to-end via `make simulate SDCARD=...` — boots to
+  single-user shell.
 
-**exec_command callback** translates `struct sdmmc_command`
-into SPI byte sequences using the same protocol as psd
-(command framing, R1/R3/R7 responses, data tokens).
+### Phase 3.5: SPI FIFO + IRQ-driven pmci
 
-**FIFO strategy** (adaptive based on CAP register):
-- depth >= 512: fill TX FIFO with entire sector, start,
-  wait for completion IRQ, drain RX FIFO
-- depth < 512: watermark-driven streaming — fill to
-  high-water, start, refill on TX-low IRQ, drain on
-  RX-high IRQ
-
-**Boot device naming change:** `psd0f` → `ld0f` (or similar).
-Update `boot.cfg` and documentation.
+Extend `pmci_exec_command` to use the SPI v2 FIFO-burst
+engine for the 512-byte data phase, with `intr_establish_xname()`
+wakeups on XFER_DONE (large-FIFO) or TX_THRESH/RX_THRESH
+(small-FIFO, discrete build).  Polled baseline remains
+the fallback / reference implementation.

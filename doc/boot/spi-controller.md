@@ -8,7 +8,7 @@ The hardware provides a shift register with configurable clock speed, chip-selec
 
 ### Design History
 
-The original v1 controller was byte-at-a-time polled with 4 registers (DATA, STATUS, CONTROL, CLKDIV). The v2 redesign replaces the register layout entirely (no backward-compatible legacy registers) with a unified interface that supports both polled single-byte mode and FIFO-driven burst mode via a 16550-style FIFO enable bit. All software consumers (boot ROM `spi.h`, NetBSD `psd` driver) are updated to the new layout.
+The original v1 controller was byte-at-a-time polled with 4 registers (DATA, STATUS, CONTROL, CLKDIV). The v2 redesign replaces the register layout entirely (no backward-compatible legacy registers) with a unified interface that supports both polled single-byte mode and FIFO-driven burst mode via a 16550-style FIFO enable bit. All software consumers (boot ROM `spi.h`, NetBSD `pmci(4)` host driver) use the v2 layout; the original `psd` driver that accompanied v1 has been removed.
 
 ## NetBSD Driver Strategy
 
@@ -24,7 +24,7 @@ NetBSD has no in-tree SPI-mode SD driver. The SD/MMC stack is:
  hardware
 ```
 
-We will write a custom host controller driver (`penspi(4)`) that implements `sdmmc_chip_functions` by talking to the SPI master registers. The driver is small (~500 lines) because `sdmmc(4)` handles all the SD protocol complexity — the host driver just sends and receives bytes.
+The NetBSD driver is `pmci(4)` (Penumbra MMC Controller Interface, in `netbsd/sys/arch/penumbra/penumbra/pmci.c`).  It implements `sdmmc_chip_functions` by talking to the SPI master registers directly — no MI `spi(4)` layer — and attaches the MI sdmmc stack as `pmci → sdmmcbus → sdmmc → ld`.  The driver is small (~500 lines) because `sdmmc(4)` handles all the SD protocol complexity; the host driver just shovels bytes.
 
 The standard SDHCI (SD Host Controller Interface) register set has ~30 registers and requires DMA, power sequencing, and clock management. It is far too complex for our purposes and for a future 74xx build.
 

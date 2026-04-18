@@ -44,12 +44,21 @@ file	arch/penumbra/penumbra/pbbus.c			pbbus
 attach	com at pbbus with com_pbbus
 file	arch/penumbra/penumbra/com_pbbus.c		com_pbbus
 
-# SD card block device
-device	psd: disk
-attach	psd at pbbus
-file	arch/penumbra/penumbra/psd.c			psd
+# SD/MMC host controller: Penumbra SPI-mode MMC interface.
+# The `sdmmcbus' interface attribute lets files.sdmmc's
+# "attach sdmmc at sdmmcbus" pick pmci up as a host; sdmmc in
+# turn attaches ld_sdmmc -> ld as the block device.
+include "dev/sdmmc/files.sdmmc"
+device	pmci: sdmmcbus
+attach	pmci at pbbus
+file	arch/penumbra/penumbra/pmci.c			pmci
 
 # bus_space implementation
 file	arch/penumbra/penumbra/bus_space.c
+
+# MI MBR-style disklabel reader — needed by ld_sdmmc and any other
+# block-device driver that wants partition tables (readdisklabel /
+# writedisklabel).  Pulled in by the `disk' attribute.
+file	kern/subr_disk_mbr.c				disk
 
 include	"arch/penumbra/conf/majors.penumbra"

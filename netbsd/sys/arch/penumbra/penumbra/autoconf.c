@@ -48,7 +48,7 @@ cpu_rootconf(void)
 	bi = lookup_bootinfo(BTINFO_ROOTDEVICE);
 	if (bi != NULL) {
 		/*
-		 * Parse "psd0f" → device "psd0", partition 'f' - 'a' = 5.
+		 * Parse "ld0f" → device "ld0", partition 'f' - 'a' = 5.
 		 * The last character is the partition letter if alphabetic.
 		 */
 		char devname[sizeof(bi->devname)];

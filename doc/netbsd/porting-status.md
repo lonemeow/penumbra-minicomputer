@@ -101,9 +101,14 @@ bootinfo — `boot sd:0,0` reaches single-user with no prompts.
   entries from bootinfo.  `bus_space` (map/unmap/read/write)
   via UVM + `pmap_kenter_pa`.
 
-- **SD card block device (psd):** Polled SPI/SD driver.  MBR
-  partition parsing.  bdevsw/cdevsw at major 8.  Kernel mounts
-  FFS root from `psd0f`.
+- **SD/MMC host controller (pmci) + MI sdmmc stack:** Polled
+  SPI-mode driver implementing `sdmmc_chip_functions` over the
+  SPI v2 register interface.  Attaches the MI sdmmc layer
+  (`pmci → sdmmcbus → sdmmc → ld_sdmmc → ld`), which owns card
+  discovery (CID/CSD/SCR/SWITCH_FUNC) and block-device framing.
+  `bus_dma_*` are panic stubs -- no DMA engine, SMC_CAPS_DMA
+  never set.  `kern/subr_disk_mbr.c` for MBR partition parsing.
+  Kernel mounts FFS root from `ld0f`.
 
 - **Exec / return-to-user:** `setregs()` initializes user
   trapframe.  `trap_return` handles SP banking (USP save/restore)
@@ -163,8 +168,8 @@ DDB (kernel debugger) disabled -- needs extensive MD hooks.
 ## Kernel Config (MINIMAL)
 
 Built at `-O0` with DIAGNOSTIC.  FFS + MSDOSFS file systems,
-minimal INET networking, com(4) UART, psd(4) SD card, loop/pty/
-ksyms pseudo-devices.
+minimal INET networking, com(4) UART, pmci + MI sdmmc (ld0),
+loop/pty/ksyms pseudo-devices.
 
 ## SD Image + Boot
 
@@ -175,11 +180,11 @@ make sdimage-rootfs ROOTFS_FULL=1  # boot + full distribution
 
 make simulate SDCARD=build/boot.img
 # At ROM prompt: boot sd:0,0
-# Boots to single-user shell (root=psd0f via boot.cfg)
+# Boots to single-user shell (root=ld0f via boot.cfg)
 ```
 
 Rootfs images include `boot.cfg` on the FAT32 partition with
-`root=psd0f`.  The bootloader reads this via libsa
+`root=ld0f`.  The bootloader reads this via libsa
 `perform_bootcfg()` and passes `BTINFO_ROOTDEVICE` to the
 kernel, which auto-selects the root device without prompting.
 
@@ -192,8 +197,10 @@ See `doc/TODO.md` for detailed descriptions.
    for job control and signal testing.
 2. **Boot arguments** -- ROM->bootloader->kernel argument passing
    so `boot sd:0,0` reaches single-user with no further prompts.
-3. **SD write support / MI sdmmc** -- replace custom read-only psd
-   driver with NetBSD MI sdmmc stack for read/write and multi-block.
+3. **SPI FIFO + IRQ-driven pmci** -- extend `pmci.c` with the
+   SPI v2 FIFO-burst data path and `intr_establish_xname()`
+   wakeups on XFER_DONE / watermark IRQs.  Polled baseline is
+   the reference; FIFO path is additive inside `pmci_exec_command`.
 4. **ATF regression tests** -- build rootfs with test suite, run
    on ISS.
 

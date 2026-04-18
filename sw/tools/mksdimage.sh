@@ -220,8 +220,8 @@ if [ -n "$KERNEL" ]; then
 fi
 
 if [ -n "$ROOTFS" ]; then
-    log "Writing boot.cfg (root=psd0f)"
-    printf 'root=psd0f\n' > "$BOOTFSROOT/boot.cfg"
+    log "Writing boot.cfg (root=ld0f)"
+    printf 'root=ld0f\n' > "$BOOTFSROOT/boot.cfg"
 fi
 
 if [ -n "$EXTRA_DIR" ]; then

@@ -36,6 +36,29 @@ void	bus_space_barrier(bus_space_tag_t, bus_space_handle_t,
 /* bus_space_is_equal — tag comparison (tags are trivial integers) */
 #define	bus_space_is_equal(t1, t2)	((t1) == (t2))
 
+/*
+ * bus_dma — not implemented on Penumbra.  The API surface is
+ * provided as panic stubs so MI drivers that reference these
+ * symbols inside SMC_CAPS_DMA-gated code paths can link.  Any
+ * actual invocation fails hard with a readable panic message
+ * rather than corrupting memory.
+ */
+struct proc;
+int	bus_dmamap_create(bus_dma_tag_t, bus_size_t, int, bus_size_t,
+	    bus_size_t, int, bus_dmamap_t *);
+void	bus_dmamap_destroy(bus_dma_tag_t, bus_dmamap_t);
+int	bus_dmamap_load(bus_dma_tag_t, bus_dmamap_t, void *, bus_size_t,
+	    struct proc *, int);
+void	bus_dmamap_unload(bus_dma_tag_t, bus_dmamap_t);
+void	bus_dmamap_sync(bus_dma_tag_t, bus_dmamap_t, bus_addr_t,
+	    bus_size_t, int);
+int	bus_dmamem_alloc(bus_dma_tag_t, bus_size_t, bus_size_t, bus_size_t,
+	    bus_dma_segment_t *, int, int *, int);
+void	bus_dmamem_free(bus_dma_tag_t, bus_dma_segment_t *, int);
+int	bus_dmamem_map(bus_dma_tag_t, bus_dma_segment_t *, int, size_t,
+	    void **, int);
+void	bus_dmamem_unmap(bus_dma_tag_t, void *, size_t);
+
 #endif /* _KERNEL */
 
 #endif /* _PENUMBRA_BUS_FUNCS_H_ */

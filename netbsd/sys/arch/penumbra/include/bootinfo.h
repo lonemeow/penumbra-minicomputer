@@ -114,12 +114,12 @@ struct btinfo_device {
 
 /*
  * BTINFO_ROOTDEVICE — root device name from bootloader config.
- * String like "psd0f" — device name + partition letter.
+ * String like "ld0f" — device name + partition letter.
  * Parsed by cpu_rootconf() to set booted_device/booted_partition.
  */
 struct btinfo_rootdevice {
 	struct btinfo_common common;
-	char devname[16];	/* e.g. "psd0f" */
+	char devname[16];	/* e.g. "ld0f" */
 };
 
 /*

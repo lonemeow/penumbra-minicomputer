@@ -158,7 +158,7 @@ Headers fall into three categories:
 | `pbbus.c` | Penumbra Bus bridge — walks BTINFO_DEVICE entries from bootinfo, attaches child devices by class |
 | `pcom.c` | Legacy console UART driver (unused — replaced by MI com(4) via com_pbbus.c) |
 | `com_pbbus.c` | MI com(4) bus attachment for pbbus — ACFG_CLASS_UART, stride=2/width=4, IRQ-driven via `intr_establish_xname`, `comcnattach1()` console registration |
-| `psd.c` | SD card block device — SPI/SD protocol via bus_space, MBR partition parsing, bdevsw/cdevsw at major 8. Polled sector-at-a-time I/O. |
+| `pmci.c` | SD/MMC host controller driver — implements MI `sdmmc_chip_functions` over the Penumbra SPI v2 register interface. Polled byte-at-a-time transfers (FIFO_EN=0). Bounded timeouts: `SD_RESP_RETRIES=8` (Ncr), `SD_DATA_TOKEN_RETRIES=100000` (~130 ms Nac at FAST), `SD_BUSY_RETRIES=500000` (~650 ms Nbr). CMD9/CMD10 apply a wire-byte reverse + CRC-slot shift to match `MMC_RSP_BITS` layout. Attaches `sdmmc → ld_sdmmc → ld`. |
 | `bus_space.c` | bus_space implementation — map/unmap via UVM + pmap_kenter_pa, read/write via volatile pointers |
 | `trap.c` | Exception dispatch (all 9 vectors), TLB fault → uvm_fault() demand paging, pcb_onfault recovery for copyin/copyout, hardware-based SPL (SR.I derived, no global variable). EXC_EXT_IRQ delegates to `intr_dispatch()` |
 | `intr.c` | Shared-IRQ dispatch — `intr_establish`/`_xname`/`_disestablish`/`_dispatch`, per-handler `LIST_HEAD` registry with `struct evcnt` under group `"shared irq"`, spurious counter, `intr_init()` |
@@ -272,13 +272,20 @@ Headers fall into three categories:
   auto-detects `COM_HW_CONSOLE`.  Userland console I/O
   (RX + TX) verified — `/rescue/init` boots to interactive
   single-user shell.
-- [x] **SD card block device (psd)** — polled SPI/SD driver
-  attaches at pbbus for ACFG_CLASS_SD.  Full SD-SPI protocol
-  (CMD0/CMD8/ACMD41/CMD58 init, CMD17 sector read) via
-  bus_space.  MBR partition table parsed at attach, offsets
-  applied in strategy.  bdevsw/cdevsw at major 8.
-  Kernel mounts msdosfs root from psd0e (MBR partition 1)
-  and reaches `init: trying /sbin/init`.
+- [x] **SD/MMC host controller (pmci) + MI sdmmc stack** —
+  replaces the former custom `psd.c`.  `pmci.c` implements
+  `sdmmc_chip_functions` + `sdmmc_spi_chip_functions.initialize`
+  over the SPI v2 register interface; the MI sdmmc layer drives
+  card discovery (CMD0/CMD8/ACMD41/CMD58/CMD6/CMD9/CMD10/ACMD51)
+  and `ld_sdmmc` exposes the result as `ld0`.  Polled
+  byte-at-a-time transfers (FIFO_EN=0) with bounded-retry
+  timeouts sized for SD-spec worst case at FAST clock
+  (Nbr up to 250 ms).  CMD9/CMD10 payloads get a wire-byte
+  reverse + CRC-slot shift to match `MMC_RSP_BITS` layout.
+  `kern/subr_disk_mbr.c` provides `readdisklabel`/`writedisklabel`
+  for MBR parsing.  `bus_dma_*` are panic stubs (Penumbra has
+  no DMA engine; SMC_CAPS_DMA is never set).  Kernel mounts
+  FFS root from `ld0f` and reaches single-user shell.
 - [x] **copyin/copyout (copy.S)** — assembly implementations with
   standard NetBSD `pcb_onfault` fault recovery pattern.
   copyin/copyout use memcpy + onfault, copyinstr/copyoutstr do
@@ -362,11 +369,11 @@ Headers fall into three categories:
 
 ## Next Steps
 
-1. **MI sdmmc attachment** — replace custom `psd.c` with
-   `sdmmc_chip_functions` implementation against the SPI
-   v2 FIFO hardware.  Uses the new shared-IRQ dispatcher
-   for XFER_DONE and watermark IRQs.  See `doc/TODO.md`
-   Phase 3.
+1. **SPI FIFO + IRQ-driven pmci** — extend `pmci.c` with
+   FIFO-burst data transfers and `intr_establish_xname()`
+   wakeups on XFER_DONE / RX_THRESH / TX_THRESH.  The
+   polled baseline is the reference; FIFO path is an
+   additive change inside `pmci_exec_command`.
 2. **Remaining MD stubs** — fill in `TODO(stub)` functions as
    the kernel reaches them (grep `TODO(stub)`).
 3. **Memory subsystem** — SDRAM controller, bus interface

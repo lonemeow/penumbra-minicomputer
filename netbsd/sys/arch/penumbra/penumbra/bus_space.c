@@ -121,3 +121,79 @@ bus_space_barrier(bus_space_tag_t t, bus_space_handle_t h,
 
 	/* No-op: uniprocessor, memory-mapped, no write buffer */
 }
+
+/*
+ * bus_dma — panic stubs.  Penumbra has no DMA engine; the API
+ * surface only exists so MI drivers that reference these symbols
+ * behind capability flags (e.g. SMC_CAPS_DMA in sdmmc) can link.
+ * Any actual invocation is a driver bug: something set a DMA
+ * capability without a backing implementation.
+ */
+int
+bus_dmamap_create(bus_dma_tag_t t, bus_size_t size, int nsegs,
+    bus_size_t maxsegsz, bus_size_t boundary, int flags, bus_dmamap_t *dmamp)
+{
+
+	panic("%s: Penumbra has no DMA support", __func__);
+}
+
+void
+bus_dmamap_destroy(bus_dma_tag_t t, bus_dmamap_t dmam)
+{
+
+	panic("%s: Penumbra has no DMA support", __func__);
+}
+
+int
+bus_dmamap_load(bus_dma_tag_t t, bus_dmamap_t dmam, void *buf,
+    bus_size_t buflen, struct proc *p, int flags)
+{
+
+	panic("%s: Penumbra has no DMA support", __func__);
+}
+
+void
+bus_dmamap_unload(bus_dma_tag_t t, bus_dmamap_t dmam)
+{
+
+	panic("%s: Penumbra has no DMA support", __func__);
+}
+
+void
+bus_dmamap_sync(bus_dma_tag_t t, bus_dmamap_t dmam, bus_addr_t offset,
+    bus_size_t len, int ops)
+{
+
+	panic("%s: Penumbra has no DMA support", __func__);
+}
+
+int
+bus_dmamem_alloc(bus_dma_tag_t t, bus_size_t size, bus_size_t alignment,
+    bus_size_t boundary, bus_dma_segment_t *segs, int nsegs, int *rsegs,
+    int flags)
+{
+
+	panic("%s: Penumbra has no DMA support", __func__);
+}
+
+void
+bus_dmamem_free(bus_dma_tag_t t, bus_dma_segment_t *segs, int nsegs)
+{
+
+	panic("%s: Penumbra has no DMA support", __func__);
+}
+
+int
+bus_dmamem_map(bus_dma_tag_t t, bus_dma_segment_t *segs, int nsegs,
+    size_t size, void **kvap, int flags)
+{
+
+	panic("%s: Penumbra has no DMA support", __func__);
+}
+
+void
+bus_dmamem_unmap(bus_dma_tag_t t, void *kva, size_t size)
+{
+
+	panic("%s: Penumbra has no DMA support", __func__);
+}

@@ -333,7 +333,7 @@ _rtt(void)
  * perform_bootcfg() and emit bootinfo entries for recognized keys.
  *
  * Currently used:
- *   root=psd0f  → BTINFO_ROOTDEVICE (auto-select root device)
+ *   root=ld0f   → BTINFO_ROOTDEVICE (auto-select root device)
  */
 static void
 load_boot_config(void)

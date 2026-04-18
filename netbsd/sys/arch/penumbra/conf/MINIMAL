@@ -29,7 +29,11 @@ mainbus0	at root
 cpu0		at mainbus?
 pbbus0		at mainbus?
 com0		at pbbus?
-psd0		at pbbus?
+
+# SD/MMC host (pmci) -> MI sdmmc -> ld block device.
+pmci0		at pbbus?
+sdmmc*		at pmci?
+ld*		at sdmmc?
 
 # Console
 options		CONSDEV_OVERRIDE="\"uart\""

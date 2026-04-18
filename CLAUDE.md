@@ -153,10 +153,11 @@ make sdimage-rootfs ROOTFS_FULL=1  # boot + FFS root (full distribution)
 The rootfs script (`sw/tools/mkrootfs.sh`) creates an FFS image from
 `build/netbsd-dest/`.  Minimal mode (`-m`) includes only `/rescue`
 (statically linked, works without `ld.elf_so`), `/lib`, and `/etc`.
-The SD image has two MBR partitions: FAT32 boot (`psd0e`) and
-FFS root (`psd0f`).  Rootfs images include a `boot.cfg` on the
-FAT32 partition with `root=psd0f`, so `boot sd:0,0` reaches
-single-user shell with no further interaction.
+The SD image has two MBR partitions: FAT32 boot (first) and
+FFS root (second, mounted as `ld0f` in the kernel).  Rootfs
+images include a `boot.cfg` on the FAT32 partition with
+`root=ld0f`, so `boot sd:0,0` reaches single-user shell with
+no further interaction.
 Requires NetBSD cross-tools (`nbfdisk`, `nbmakefs`).
 
 ### LLVM Toolchain Build
@@ -503,9 +504,16 @@ MIPS/68k-style vector dispatch.
   entries from bootinfo, attaches child devices by ACFG_CLASS_*.
   `bus_space` implemented (map via UVM + pmap_kenter_pa, read/write
   via volatile pointers).  UART and SD controller enumerated.
-- **SD card block device (psd):** polled SPI/SD driver, MBR
-  partition parsing, bdevsw/cdevsw at major 8.  Kernel mounts
-  msdosfs root from `psd0e` and reaches `init: trying /sbin/init`.
+- **SD/MMC host controller (pmci):** polled SPI-mode driver
+  implementing `sdmmc_chip_functions` over the Penumbra SPI v2
+  register interface.  Attaches NetBSD's MI `sdmmc(4)` stack
+  (`pmci → sdmmcbus → sdmmc → ld_sdmmc → ld`), so card discovery,
+  CID/CSD decoding, and block-device framing are all handled by
+  the MI layer.  CMD9/CMD10 payloads get a wire-byte reverse +
+  CRC-slot shift to match the `MMC_RSP_BITS` layout the MI
+  decoder expects.  No DMA — bus_dma_* are panic stubs since
+  SMC_CAPS_DMA is never set.  Kernel mounts FFS root from
+  `ld0f` and reaches single-user shell.
 - **UVM init:** `uvm_md_init()`, bootinfo-driven
   `uvm_page_physload()`, `pmap_steal_memory()`.  Full UVM init
   completes: pool allocator, vmem, kmem, radix trees all
@@ -696,7 +704,10 @@ MIPS/68k-style vector dispatch.
 3. **Kernel implementation** — remaining MD stubs as the kernel
    reaches them (grep `TODO(stub)`): process_read_regs,
    cpu_coredump, vmapbuf/vunmapbuf.
-4. **MI sdmmc + SPI IRQ** — Kernel IRQ dispatch for SPI,
-   MI sdmmc driver using FIFO burst mode (see `doc/TODO.md`).
-   SPI v2 FIFO hardware is complete (Phase 1 done).
+4. **SPI FIFO + IRQ-driven pmci** — extend `pmci.c` with
+   the SPI v2 FIFO-burst data path and IRQ wakeups on
+   XFER_DONE / watermark events via `intr_establish_xname()`.
+   Polled baseline + MI sdmmc stack are already in place;
+   this is an additive change inside `pmci_exec_command`.
+   See `doc/TODO.md` Phase 3.5.
 5. **Memory subsystem** — SDRAM controller, bus interface
