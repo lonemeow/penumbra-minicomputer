@@ -101,18 +101,8 @@ bootinfo — `boot sd:0,0` reaches single-user with no prompts.
   entries from bootinfo.  `bus_space` (map/unmap/read/write)
   via UVM + `pmap_kenter_pa`.
 
-- **SD/MMC host controller (pmci) + MI sdmmc stack:** Polled
-  SPI-mode driver implementing `sdmmc_chip_functions` over the
-  SPI v2 register interface.  Attaches the MI sdmmc layer
-  (`pmci → sdmmcbus → sdmmc → ld_sdmmc → ld`), which owns card
-  discovery (CID/CSD/SCR/SWITCH_FUNC) and block-device framing.
-  `bus_dma_*` are panic stubs -- no DMA engine, SMC_CAPS_DMA
-  never set.  `kern/subr_disk_mbr.c` for MBR partition parsing.
-  Both read (CMD17) and write (CMD24) paths verified; the write
-  path polls for the data-response token so the 0..8-byte Ncrc
-  gap the SD spec allows is handled.  Kernel mounts FFS root
-  from `ld0f` and `mount -uw /` succeeds with the `/etc/fstab`
-  that `mkrootfs.sh` now installs.
+- **SD card block device (ld0):** pmci driver + MI `sdmmc(4)` stack.
+  MBR partition parsing.  Kernel mounts FFS root from `ld0f`.
 
 - **Exec / return-to-user:** `setregs()` initializes user
   trapframe.  `trap_return` handles SP banking (USP save/restore)
@@ -161,9 +151,9 @@ DDB (kernel debugger) disabled -- needs extensive MD hooks.
   `MKPIC=yes` with GOT-based PIC (full 32-bit reach).
 - **Dynamic linker (`ld.elf_so`):** Fully functional.
   `rtld_start.S`, `mdreloc.c`, RELA relocations, eager PLT
-  binding, TLS Variant I (`__HAVE___LWP_GETTCB_FAST`).
-  Dynamically-linked binaries load and run end-to-end.
-  Library search path requires `ldconfig /lib /usr/lib`.
+  binding, JUMP_SLOT, TLS Variant I (`__HAVE___LWP_GETTCB_FAST`).
+  Dynamically-linked binaries (including `/bin/sh`, `/bin/ls`,
+  `ldd`) load and run end-to-end on the ISS with full userland.
 - **C++ / ATF:** `MKCXX=yes`, `MKLIBCXX=yes`.  libunwind ported
   (in-tree, built into libc).  libc++ and libcxxrt link as shared
   libraries.  libatf-c available for the ATF test suite.
@@ -192,12 +182,6 @@ Rootfs images include `boot.cfg` on the FAT32 partition with
 `perform_bootcfg()` and passes `BTINFO_ROOTDEVICE` to the
 kernel, which auto-selects the root device without prompting.
 
-`mkrootfs.sh` also installs `/etc/fstab` (mapping `/` to
-`/dev/ld0f`) and invokes `MAKEDEV -s std ld0` so `/dev/ld0*`
-nodes are present in the image.  Without these, the kernel's
-placeholder `root_device` string in `f_mntfromname` leaks to
-userland and `mount -uw /` fails.
-
 ## What's Next
 
 See `doc/TODO.md` for detailed descriptions.
@@ -207,10 +191,8 @@ See `doc/TODO.md` for detailed descriptions.
    for job control and signal testing.
 2. **Boot arguments** -- ROM->bootloader->kernel argument passing
    so `boot sd:0,0` reaches single-user with no further prompts.
-3. **SPI FIFO + IRQ-driven pmci** -- extend `pmci.c` with the
-   SPI v2 FIFO-burst data path and `intr_establish_xname()`
-   wakeups on XFER_DONE / watermark IRQs.  Polled baseline is
-   the reference; FIFO path is additive inside `pmci_exec_command`.
+3. **SD write support / MI sdmmc** -- replace custom read-only psd
+   driver with NetBSD MI sdmmc stack for read/write and multi-block.
 4. **ATF regression tests** -- build rootfs with test suite, run
    on ISS.
 

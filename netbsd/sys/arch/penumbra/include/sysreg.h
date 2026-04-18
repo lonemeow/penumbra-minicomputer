@@ -84,8 +84,8 @@
 
 /* ── Device 2/3: Cache registers ────────────────────────────────────── */
 
-#define CACHE_CTRL	0	/* bit 0 = ENABLE */
-#define CACHE_GEOM	1	/* Geometry (read-only) */
+#define CACHE_GEOM	0	/* Geometry (read-only) */
+#define CACHE_CTRL	1	/* bit 0 = ENABLE */
 #define CACHE_INVAL	2	/* Write to invalidate all */
 
 #define CACHE_CTRL_ENABLE	0x01

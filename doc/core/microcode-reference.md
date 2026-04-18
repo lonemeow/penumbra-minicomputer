@@ -8,35 +8,39 @@ The single authoritative reference for the Penumbra microcode system. Covers the
 
 ## Overview
 
-Penumbra uses **horizontal microcode** — each micro-word directly drives datapath control signals with no decoding. The microcode ROM holds 256 entries of 49 bits each. The micro-sequencer fetches one micro-word per clock cycle and fans out its fields to the datapath.
+Penumbra uses **horizontal microcode** — each micro-word directly drives datapath control signals with no decoding. The microcode ROM holds 256 entries of 51 bits each. The micro-sequencer fetches one micro-word per clock cycle and fans out its fields to the datapath.
 
 Most ISA instructions execute in a single micro-op (one ROM entry). Multi-step instructions (loads, stores, RDSYS, ERET, BL) use 2-4 consecutive entries.
 
 The **fetch unit** is hardwired (not microcoded). It handles instruction fetch, IR latching, dispatch address computation, and interrupt/exception detection at dispatch time. The microcode only runs during instruction execution.
 
 **Tools:**
-- Microcode assembler: `sw/tools/uasm.py` — symbolic source → `$readmemh` hex
-- Microcode source: `sw/microcode/microcode.uasm`
+- Microcode assembler: `hw/tools/uasm.py` — symbolic source → `$readmemh` hex
+- Microcode source: `hw/microcode/microcode.uasm`
 
 ---
 
-## Micro-Word Format (49 bits)
+## Micro-Word Format (51 bits)
 
-Bits are numbered 48 (MSB) to 0 (LSB).
+Bits are numbered 50 (MSB) to 0 (LSB).
 
 ```
- 48  47  46    43  42    39  38    35  34  33      29  28  27  26  25  24  23  22  21  20  19  18  17  16  15  14  13    11  10   9   8   7     5   4     2   1   0
-┌───────┬────────┬────────┬────────┬───┬──────────┬──────┬───┬──────┬───┬───┬───┬───┬───┬───┬───┬──────┬───┬────────┬───┬───┬───┬────────┬────────┬───┬───┐
-│a_src  │ reg_a  │ reg_b  │ reg_w  │wEn│ alu_op   │ bmux │wmx│imm_m │flg│srL│mar│mdr│mdr│mRd│mWr│m_size│sEx│ pc_src │sys│sWE│aSt│ branch │fwd_off │ ei│ di│
-│ [1:0] │ [3:0]  │ [3:0]  │ [3:0]  │   │ [4:0]    │[1:0] │   │[1:0] │   │   │   │mem│ a │   │   │[1:0] │   │ [2:0]  │cyc│   │   │ [2:0]  │ [2:0]  │set│set│
-└───────┴────────┴────────┴────────┴───┴──────────┴──────┴───┴──────┴───┴───┴───┴───┴───┴───┴───┴──────┴───┴────────┴───┴───┴───┴────────┴────────┴───┴───┘
+ 50  49    47  46    43  42    39  38    35  34  33      29  28  27  26  25  24  23  22  21  20  19  18  17  16  15  14  13    11  10   9   8   7     5   4     2   1   0
+┌───┬────────┬────────┬────────┬────────┬───┬──────────┬──────┬───┬──────┬───┬───┬───┬───┬───┬───┬───┬──────┬───┬────────┬───┬───┬───┬────────┬────────┬───┬───┐
+│prv│ a_src  │ reg_a  │ reg_b  │ reg_w  │wEn│ alu_op   │ bmux │wmx│imm_m │flg│srL│mar│mdr│mdr│mRd│mWr│m_size│sEx│ pc_src │sys│sWE│aSt│ branch │fwd_off │ ei│ di│
+│   │ [2:0]  │ [3:0]  │ [3:0]  │ [3:0]  │   │ [4:0]    │[1:0] │   │[1:0] │   │   │   │mem│ a │   │   │[1:0] │   │ [2:0]  │cyc│   │   │ [2:0]  │ [2:0]  │set│set│
+└───┴────────┴────────┴────────┴────────┴───┴──────────┴──────┴───┴──────┴───┴───┴───┴───┴───┴───┴───┴──────┴───┴────────┴───┴───┴───┴────────┴────────┴───┴───┘
 ```
 
 ---
 
 ## Field Reference
 
-### A-Bus Source — `a_src` [48:47] (2 bits)
+### Privileged Instruction — `priv` [50] (1 bit)
+
+If set, the micro-sequencer checks the `SR.S` bit during the first micro-op of the instruction's execution. If `SR.S == 0` (user mode), a privilege violation exception (vector 4) is triggered immediately. This allows for zero-overhead privilege checking on a per-instruction basis.
+
+### A-Bus Source — `a_src` [49:47] (3 bits)
 
 Selects what drives the A-bus input to the ALU.
 
@@ -46,6 +50,9 @@ Selects what drives the A-bus input to the ALU.
 | 1 | `ESR` | Exception Status Register (saved SR at exception entry) |
 | 2 | `EPC` | Exception Program Counter (saved PC at exception entry) |
 | 3 | `VECTOR` | Vector address = `{26'b0, vector_num, 2'b00}` (hardware-computed) |
+| 4 | `SPR` | Special-purpose register (ESR, EPC, USP, or SR) selected by `IR[15:12]` |
+
+Values 5–7 are reserved.
 
 ### Register Address Fields — `reg_a` [46:43], `reg_b` [42:39], `reg_w` [38:35] (4 bits each)
 
@@ -70,7 +77,7 @@ Enables the register file write port. Subject to **F-bit gating**: for Format R 
 
 F-bit gating only applies when `reg_w = IR_RD`. Literal register addresses (R2-R15) are never gated.
 
-### ALU Operation — `alu_op` [33:29] (5 bits)
+### ALU Operation — `alu` [33:29] (5 bits)
 
 | Value | Symbol | Operation | Cycles | Flags |
 |-------|--------|-----------|--------|-------|
@@ -85,13 +92,15 @@ F-bit gating only applies when `reg_w = IR_RD`. Literal register addresses (R2-R
 | 8 | `PASS_A` | A (pass-through) | 1 | — |
 | 9 | `PASS_B` | B (pass-through) | 1 | — |
 | 10 | `NOT` | ~A | 1 | NZ |
-| 11 | `MUL` | A × B (signed) | N | NZCV (stub: asserts busy forever) |
-| 12 | `MULU` | A × B (unsigned) | N | NZCV (stub) |
-| 13 | `DIV` | A / B (signed) | N | NZCV (stub) |
-| 14 | `DIVU` | A / B (unsigned) | N | NZCV (stub) |
-| 15 | `MOD` | A % B (signed) | N | NZCV (stub) |
-| 16 | `MODU` | A % B (unsigned) | N | NZCV (stub) |
-| 17-31 | — | Reserved for future FP ops | — | — |
+| 11 | `ADC` | A + B + Cin | 1 | NZCV |
+| 12 | `SBC` | A - B - ~Cin | 1 | NZCV |
+| 13 | `MUL` | A × B (signed) | N | NZCV (stub: asserts busy forever) |
+| 14 | `MULU` | A × B (unsigned) | N | NZCV (stub) |
+| 15 | `DIV` | A / B (signed) | N | NZCV (stub) |
+| 16 | `DIVU` | A / B (unsigned) | N | NZCV (stub) |
+| 17 | `MOD` | A % B (signed) | N | NZCV (stub) |
+| 18 | `MODU` | A % B (unsigned) | N | NZCV (stub) |
+| 19-31 | — | Reserved for future FP ops | — | — |
 
 Flags are only written to SR when `w_flags=1`. The flag column shows what the ALU *computes*, not what gets latched.
 
@@ -159,13 +168,11 @@ Initiate a cache/memory read or write at the address in MAR. Typically paired wi
 | 1 | `HALF` | 16-bit |
 | 2 | `WORD` | 32-bit |
 
-Currently only `WORD` is used (sub-word loads/stores not yet implemented in microcode).
-
 ### Sign Extend — `sign_ext` [14] (1 bit)
 
 For sub-word loads: when set, sign-extends the loaded byte/halfword to 32 bits. When clear, zero-extends. Ignored for word loads and all stores.
 
-### PC Source — `pc_src` [13:11] (3 bits)
+### PC Source — `pc` [13:11] (3 bits)
 
 Selects the next PC value. The selected value loads into the PC register at the clock edge when `pc_load` is asserted (which equals `executing` — always true during S_EXEC).
 
@@ -177,7 +184,7 @@ Selects the next PC value. The selected value loads into the PC register at the 
 | 3 | `ABUS` | A-bus value | Indirect jump (JMP Rs), vector fetch |
 | 4 | `MDR` | MDR value | (Reserved, not currently used) |
 
-**Conditional override:** When `branch=BRT` and the ISA condition is false, the sequencer forces `pc_src` to `NEXT` regardless of the micro-word value. Same for `branch=BRF` when condition is true. This implements conditional branches with a single micro-word.
+**Conditional override:** When `branch=BRT` and the ISA condition is false, the sequencer forces `pc` to `NEXT` regardless of the micro-word value. Same for `branch=BRF` when condition is true. This implements conditional branches with a single micro-word.
 
 ### System/SPR Operation — `sys_op` [10:9] (2 bits)
 
@@ -207,11 +214,11 @@ Controls micro-sequencer flow. Determines whether the micro-PC advances, holds, 
 | 0 | `SEQ` | micro-PC++ | Continue to next micro-op |
 | 1 | `FETCH` | → S_FETCH | Instruction complete, fetch next |
 | 2 | `STALL` | fault → S_FETCH; !busy → micro-PC++; else hold | Wait for memory/ALU |
-| 3 | `BRT` | → S_FETCH (pc_src overridden if cond false) | Branch if True |
-| 4 | `BRF` | → S_FETCH (pc_src overridden if cond true) | Branch if False |
-| 5 | — | (removed: was BR_PRIV, now dispatch-time) | — |
+| 3 | `BRT` | → S_FETCH (pc overridden if cond false) | Branch if True |
+| 4 | `BRF` | → S_FETCH (pc overridden if cond true) | Branch if False |
+| 5 | — | (reserved) | — |
 | 6 | `SKIP` | micro-PC += 1 + fwd_offset | Forward skip |
-| 7 | — | Reserved | — |
+| 7 | — | Detected as BR_ILLEGAL | Traps to vector 7 |
 
 **STALL details:** Three-way resolution:
 1. `mem_fault` asserted → abort instruction (`go_fetch`), cpu_top generates exception
@@ -220,9 +227,9 @@ Controls micro-sequencer flow. Determines whether the micro-PC advances, holds, 
 
 The unified busy signal is `cache_busy | alu_busy`. Memory and ALU ops never overlap in the same micro-op.
 
-**BRT/BRF details:** Both always return to fetch (`go_fetch=1`). The difference is in `pc_src` override:
-- BRT: if ISA condition **false**, force `pc_src = NEXT` (fall through)
-- BRF: if ISA condition **true**, force `pc_src = NEXT` (fall through)
+**BRT/BRF details:** Both always return to fetch (`go_fetch=1`). The difference is in `pc` override:
+- BRT: if ISA condition **false**, force `pc = NEXT` (fall through)
+- BRF: if ISA condition **true**, force `pc = NEXT` (fall through)
 
 The ISA condition is evaluated by `cond_eval` from IR[29:26] (Format B condition field) against SR flags.
 
@@ -279,7 +286,7 @@ Fields are `key=value` pairs separated by spaces. Values are symbolic names (upp
 | Zone | Addresses | Slot Size | Count | Purpose |
 |------|-----------|-----------|-------|---------|
 | R-ALU | 0x00–0x1F | ×2 | 16 | Format R ALU ops (op[4]=0) |
-| Format L | 0x20–0x3E | ×2 | 16 | Immediate operations |
+| Format L | 0x20–0x3F | ×4 | 8 | Immediate operations |
 | R-SYS | 0x40–0x5F | ×2 | 16 | Format R system ops (op[4]=1) |
 | Format B | 0x60–0x63 | ×2 | 2 | Conditional branch (0x60), BL (0x62) |
 | (gap) | 0x64–0x6F | — | — | Unused |
@@ -295,7 +302,7 @@ Computed by the fetch unit from `mem_rdata` (instruction bits, same cycle as IR 
 | Format | Formula | Range |
 |--------|---------|-------|
 | R (prefix 00) | `{0, op[4], 0, op[3:0], 0}` | 0x00–0x1E (ALU), 0x40–0x5E (SYS) |
-| L (prefix 01) | `{01, op[3:0], 0}` | 0x20–0x3E |
+| L (prefix 01) | `{01, op[3:0], 00}` | 0x20–0x3C |
 | M (prefix 10) | `{10, L, sz[1:0], SE, 00}` | 0x80–0xBC |
 | B (prefix 11) | `cond==1111 ? 0x62 : 0x60` | 0x60 or 0x62 |
 | Exception | Hardwired | 0x70 |
@@ -357,7 +364,7 @@ After int_entry loads the vector address into PC, the next instruction fetch **b
 | Vector | Address | Source |
 |--------|---------|--------|
 | 0 | 0x00 | Bus fault (no device at address) |
-| 1 | 0x04 | External IRQ |
+| 1 | 0x04 | Timer interrupt |
 | 2 | 0x08 | TLB miss |
 | 3 | 0x0C | TLB protection fault |
 | 4 | 0x10 | Privilege violation |
@@ -428,43 +435,43 @@ reg_w=IR_RD w_en=1 alu=PASS_B bmux=IMM wmux=RBUS imm_mode=ZERO_EXT
 ```
 → Rd = zero_extend(imm16).
 
-**LLIS** (op=1, dispatch=0x22)
+**LLIS** (op=1, dispatch=0x24)
 ```
 reg_w=IR_RD w_en=1 alu=PASS_B bmux=IMM wmux=RBUS imm_mode=SIGN_EXT
 ```
 → Rd = sign_extend(imm16).
 
-**LUI** (op=2, dispatch=0x24)
+**LUI** (op=2, dispatch=0x28)
 ```
 reg_a=IR_RD reg_w=IR_RD w_en=1 alu=OR bmux=IMM wmux=RBUS imm_mode=SHIFT_L16
 ```
 → Rd = Rd | (imm16 << 16). Typically preceded by LLI to build a 32-bit constant.
 
-**INC** (op=3, dispatch=0x26)
+**INC** (op=3, dispatch=0x2C)
 ```
 reg_a=IR_RD reg_w=IR_RD w_en=1 alu=ADD bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
 ```
 → Rd = Rd + zero_extend(imm16), flags updated.
 
-**DEC** (op=4, dispatch=0x28)
+**DEC** (op=4, dispatch=0x30)
 ```
 reg_a=IR_RD reg_w=IR_RD w_en=1 alu=SUB bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
 ```
 → Rd = Rd − zero_extend(imm16), flags updated.
 
-**CMPI** (op=5, dispatch=0x2A)
+**CMPI** (op=5, dispatch=0x34)
 ```
 reg_a=IR_RD alu=SUB bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
 ```
 → Flags = Rd − zero_extend(imm16). Rd **not** written (no `w_en`).
 
-**ANDI** (op=6, dispatch=0x2C)
+**ANDI** (op=6, dispatch=0x38)
 ```
 reg_a=IR_RD reg_w=IR_RD w_en=1 alu=AND bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
 ```
 → Rd = Rd & zero_extend(imm16), flags updated.
 
-**TESTI** (op=7, dispatch=0x2E)
+**TESTI** (op=7, dispatch=0x3C)
 ```
 reg_a=IR_RD alu=AND bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
 ```
@@ -474,13 +481,13 @@ reg_a=IR_RD alu=AND bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
 
 **WRSYS Rd, #dev, #reg** (op=16, dispatch=0x40) — Privileged
 ```
-reg_a=IR_RD sys_op=SYS_WRITE
+priv=1 reg_a=IR_RD sys_op=SYS_WRITE
 ```
 → A-bus = Rd → sysreg write bus. Device/register from IR spare fields.
 
 **RDSYS Rd, #dev, #reg** (op=17, dispatch=0x42) — 2 micro-ops, Privileged
 ```
-Step 0: sys_op=SYS_READ mdr_load_mem=1 pc=HOLD branch=SEQ
+Step 0: priv=1 sys_op=SYS_READ mdr_load_mem=1 pc=HOLD branch=SEQ
 Step 1: reg_w=IR_RD w_en=1 wmux=MDR
 ```
 → Step 0: sysreg data → mem_rdata bus → MDR. Step 1: MDR → Rd.
@@ -490,7 +497,7 @@ Never reaches ROM. Detected by `dispatch_addr == 0x4A`. Triggers `except_entry` 
 
 **ERET** (op=22, dispatch=0x4C) — 2 micro-ops, Privileged
 ```
-Step 0: a_src=ESR alu=PASS_A sr_load=1 pc=HOLD branch=SEQ
+Step 0: priv=1 a_src=ESR alu=PASS_A sr_load=1 pc=HOLD branch=SEQ
 Step 1: a_src=EPC pc=ABUS
 ```
 → Step 0: ESR → A-bus → ALU → R-bus → W-bus → SR (restores flags, S, I bits, may trigger SP bank swap). Step 1: EPC → A-bus → PC (resume at saved address).
@@ -509,19 +516,19 @@ ei_set=1
 
 **DI** (op=26, dispatch=0x54) — Privileged
 ```
-di_set=1
+priv=1 di_set=1
 ```
 → SR.I = 0, immediate effect.
 
 **WRSPR {ESR|EPC|USP|SR}, Rd** (op=27, dispatch=0x56) — Privileged
 ```
-reg_a=IR_RD alu=PASS_A sys_op=SPR_WRITE
+priv=1 reg_a=IR_RD alu=PASS_A sys_op=SPR_WRITE
 ```
 → R-bus = Rd value → SPR write target. Hardware decodes IR[15:12]: SPR 0 (ESR) → esr_load, SPR 1 (EPC) → epc_load, SPR 2 (USP) → R14 cross_bank write, SPR 3 (SR) → sr_load.
 
 **RDSPR Rd, {ESR|EPC|USP|SR}** (op=28, dispatch=0x58) — Privileged
 ```
-a_src=SPR alu=PASS_A reg_w=IR_RD w_en=1 wmux=RBUS
+priv=1 a_src=SPR alu=PASS_A reg_w=IR_RD w_en=1 wmux=RBUS
 ```
 → Rd = SPR value. Hardware decodes IR[15:12]: SPR 0 → A-bus=ESR, SPR 1 → A-bus=EPC, SPR 2 → A-bus=R14 cross_bank read.
 
@@ -634,12 +641,14 @@ Verify no regressions.
 
 ## Design History
 
-This document replaces `doc/core/microcode-validation.md`, which was a design exploration document used during initial architecture development. That document tracked the evolution from a 55-bit micro-word to the final 49-bit format, identified 17 design issues, and validated the format through hand-written bit-level micro-programs for representative instructions.
+This document replaces `doc/core/microcode-validation.md`, which was a design exploration document used during initial architecture development. That document tracked the evolution from a 55-bit micro-word to the final 51-bit format, identified 17 design issues, and validated the format through hand-written bit-level micro-programs for representative instructions.
 
 Key design changes discovered during validation:
-- Micro-word reduced from 55 to 49 bits by removing `next_addr[9:0]`, `mar_src`, `stall_sel`, `pc_mdr_load`, and the separate `lu_*` fields
+- Micro-word finalized at 51 bits
+- `priv` bit added for hardware privilege checking
+- `a_src` expanded to 3 bits to support `SPR` access
 - Instruction fetch moved from a 4-micro-op ROM routine to a hardwired fetch unit
-- Privilege checking moved from microcode (`BR_PRIV`) to dispatch-time detection in cpu_top
+- Privilege checking moved from microcode (`BR_PRIV`) to hardware `priv` bit
 - Exception entry reduced from a 7-micro-op stack-push sequence to a 1-micro-op vector jump, with hardware pre-actions handling EPC/ESR save and mode switch
 - Interrupt entry uses the same unified path as MMU faults, BREAK, and privilege violations
 - `ei_set`/`di_set` occupy bits [1:0] (originally listed as spare in the validation doc)

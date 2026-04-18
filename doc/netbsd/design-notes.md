@@ -180,8 +180,7 @@ list (`Driver.cpp:getIsRela`).  Self-relocating PIE code needs
 - Eager PLT binding only (empty `_rtld_relocate_plt_lazy`).
   `_rtld_bind_start` stub present for future lazy binding.
 - Functional: ld.elf_so loads, self-relocates, resolves symbols,
-  and runs dynamically-linked binaries.  Library search path
-  requires `ldconfig /lib /usr/lib` (or `/etc/ld.so.conf`).
+  and runs dynamically-linked binaries end-to-end.
 
 ## Userland Build Integration
 
