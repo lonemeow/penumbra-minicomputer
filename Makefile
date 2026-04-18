@@ -16,7 +16,7 @@
 # ── Configuration ──────────────────────────────────────────────
 # Docker-based Verilator (avoids host install, works on WSL2)
 DOCKER_IMAGE ?= verilator/verilator:latest
-DOCKER_RUN   = docker run --rm -v $(CURDIR):/work -w /work
+DOCKER_RUN   = docker run --rm -u $(shell id -u):$(shell id -g) -v $(CURDIR):/work -w /work
 
 # Verilator runs inside the container; its entrypoint IS verilator.
 # For commands that aren't verilator (like running the built binary),
@@ -193,9 +193,9 @@ $(ISS): sw/sim/penumbra_iss.cpp
 #        make simulate-rtl INTERACTIVE=0   (non-interactive, piped input)
 #        make simulate-rtl SDCARD=build/boot.img
 ifeq ($(INTERACTIVE),0)
-DOCKER_RUN_IT = docker run --rm -i -v $(CURDIR):/work -w /work
+DOCKER_RUN_IT = docker run --rm -u $(shell id -u):$(shell id -g) -i -v $(CURDIR):/work -w /work
 else
-DOCKER_RUN_IT = docker run --rm -it -v $(CURDIR):/work -w /work
+DOCKER_RUN_IT = docker run --rm -u $(shell id -u):$(shell id -g) -it -v $(CURDIR):/work -w /work
 endif
 
 .PHONY: simulate-rtl
@@ -287,7 +287,7 @@ benchmark-rtl: sdimage-bench
 	@for elf in $(BENCH_ELFS); do \
 		echo "═══ Running $$elf on RTL sim ═══"; \
 		echo "boot sd:0,0/$$elf" | \
-			docker run --rm -i -v $(CURDIR):/work -w /work \
+			docker run --rm -u $(shell id -u):$(shell id -g) -i -v $(CURDIR):/work -w /work \
 			--entrypoint ./$(BUILD_DIR)/Vmachine_sim_interactive \
 			$(DOCKER_IMAGE) +sdcard=$(BENCH_IMG) \
 			|| echo "*** $$elf FAILED ***"; \
