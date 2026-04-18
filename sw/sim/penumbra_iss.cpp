@@ -100,10 +100,42 @@ private:
         case 8: resp_.push_back(0x01);
             for (int i=1;i<5;i++) resp_.push_back(cmd_[i]);
             break;
+        case 6: { // CMD6 / SD_SEND_SWITCH_FUNC — 64-byte function status.
+            // Advertises Group 1 = SDR12 (default) only.  MI sdmmc
+            // calls this in mode 0 (query) if the card reports SCR
+            // sd_spec >= 1.10 and CCC has SWITCH class.  With only
+            // bit 0 of Group 1 set, select_transfer_mode picks
+            // best_func = 0 and skips the mode-1 follow-up.
+            if (!init_) { resp_.push_back(0x05); break; }
+            resp_.push_back(0x00); resp_.push_back(0xFF); resp_.push_back(0xFE);
+            uint8_t sfs[64] = {};
+            sfs[13] = 0x01;  // Group 1 support bitmap: SDR12 only
+            for (int i=0;i<64;i++) resp_.push_back(sfs[i]);
+            resp_.push_back(0); resp_.push_back(0);
+            state_ = S_SEND_DATA; break;
+        }
         case 55: app_cmd_ = true; resp_.push_back(init_?0x00:0x01); break;
         case 41:
             if (!prev_app) { resp_.push_back(0x04); break; }
             init_ = true; resp_.push_back(0x00); break;
+        case 51: { // ACMD51 (SD_SEND_SCR): 8-byte SD Configuration Register.
+            // MI sdmmc queries this during enumeration to learn spec
+            // version / bus widths.  Structure-version must be 0 or 1
+            // to pass sdmmc_mem_decode_scr; everything else is advisory.
+            if (!prev_app) { resp_.push_back(0x04); break; }
+            if (!init_)    { resp_.push_back(0x05); break; }
+            resp_.push_back(0x00); resp_.push_back(0xFF); resp_.push_back(0xFE);
+            uint8_t scr[8] = {
+                0x02,  // [0] SCR_STRUCTURE=0, SD_SPEC=2 (v2.00)
+                0x01,  // [1] 1-bit bus width only, no security
+                0x00,  // [2] no SPEC3/SPEC4
+                0x00,  // [3] no CMD_SUPPORT bits
+                0,0,0,0,  // [4..7] manufacturer reserved
+            };
+            for (int i=0;i<8;i++) resp_.push_back(scr[i]);
+            resp_.push_back(0); resp_.push_back(0);
+            state_ = S_SEND_DATA; break;
+        }
         case 9: { // CSD
             if (!init_) { resp_.push_back(0x05); break; }
             resp_.push_back(0x00); resp_.push_back(0xFF); resp_.push_back(0xFE);
@@ -113,6 +145,27 @@ private:
             csd[7]=(csz>>16)&0x3F; csd[8]=(csz>>8)&0xFF; csd[9]=csz&0xFF;
             csd[10]=0x7F; csd[11]=0x80; csd[12]=0x0A; csd[13]=0x40; csd[15]=0x01;
             for (int i=0;i<16;i++) resp_.push_back(csd[i]);
+            resp_.push_back(0); resp_.push_back(0);
+            state_ = S_SEND_DATA; break;
+        }
+        case 10: { // CID — 16-byte manufacturer identification register.
+            // Values are arbitrary but have to be structurally valid so
+            // the MI sdmmc_decode_cid path can extract non-empty strings
+            // for the boot banner.  Any real card would fill this with
+            // manufacturer-supplied data; the ISS forges a stable
+            // identity that identifies transfers as simulator-sourced.
+            if (!init_) { resp_.push_back(0x05); break; }
+            resp_.push_back(0x00); resp_.push_back(0xFF); resp_.push_back(0xFE);
+            uint8_t cid[16] = {
+                0x03,                    // [ 0] MID: SanDisk-ish
+                'P', 'S',                // [ 1.. 2] OID: "PS"
+                'I','S','S','_','_',     // [ 3.. 7] PNM: "ISS__"
+                0x10,                    // [ 8] PRV: v1.0
+                0x00,0x00,0x00,0x01,     // [ 9..12] PSN: serial 1
+                0x01, 0x64,              // [13..14] MDT: 2026/04
+                0x01,                    // [15] CRC7 + end bit
+            };
+            for (int i=0;i<16;i++) resp_.push_back(cid[i]);
             resp_.push_back(0); resp_.push_back(0);
             state_ = S_SEND_DATA; break;
         }

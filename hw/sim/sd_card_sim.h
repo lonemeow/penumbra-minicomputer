@@ -7,9 +7,13 @@
 //
 // Supported commands (minimal set for boot):
 //   CMD0  (GO_IDLE_STATE)     → R1 with idle bit
+//   CMD6  (SEND_SWITCH_FUNC)  → R1 + data token + 64 bytes + 2 CRC
 //   CMD8  (SEND_IF_COND)      → R7 (R1 + 4 bytes echo)
+//   CMD9  (SEND_CSD)          → R1 + data token + 16 CSD bytes + 2 CRC
+//   CMD10 (SEND_CID)          → R1 + data token + 16 CID bytes + 2 CRC
 //   CMD55 (APP_CMD)           → R1 (prefix for ACMD)
 //   ACMD41 (SD_SEND_OP_COND)  → R1 (clears idle after init)
+//   ACMD51 (SD_SEND_SCR)      → R1 + data token + 8 SCR bytes + 2 CRC
 //   CMD58 (READ_OCR)          → R1 + 4-byte OCR
 //   CMD17 (READ_SINGLE_BLOCK) → R1 + data token + 512 bytes + 2 CRC
 //   CMD24 (WRITE_SINGLE_BLOCK)→ R1, then accepts data token + 512 + CRC
@@ -137,13 +141,16 @@ public:
 private:
     // SD-SPI command indices
     static constexpr uint8_t CMD0   = 0;
+    static constexpr uint8_t CMD6   = 6;
     static constexpr uint8_t CMD8   = 8;
     static constexpr uint8_t CMD9   = 9;
+    static constexpr uint8_t CMD10  = 10;
     static constexpr uint8_t CMD17  = 17;
     static constexpr uint8_t CMD24  = 24;
     static constexpr uint8_t CMD55  = 55;
     static constexpr uint8_t CMD58  = 58;
     static constexpr uint8_t ACMD41 = 41;
+    static constexpr uint8_t ACMD51 = 51;
 
     // R1 response bits
     static constexpr uint8_t R1_IDLE          = 0x01;
@@ -185,6 +192,28 @@ private:
             resp_queue_.push_back(cmd_buf_[4]);
             break;
 
+        case CMD6: {
+            // SD_SEND_SWITCH_FUNC — 64-byte mode-status response.
+            // We advertise Group 1 (access mode) as SDR12-only, which
+            // lets select_transfer_mode pick best_func = 0 and skip
+            // the mode-1 follow-up that would actually switch speeds.
+            if (!initialized_) {
+                resp_queue_.push_back(R1_IDLE | R1_ILLEGAL_CMD);
+                break;
+            }
+            resp_queue_.push_back(0x00);         // R1 OK
+            resp_queue_.push_back(0xFF);         // Nwr gap
+            resp_queue_.push_back(0xFE);         // data token
+            uint8_t sfs[64] = {};
+            sfs[13] = 0x01;                      // Group 1: SDR12 only
+            for (int i = 0; i < 64; i++)
+                resp_queue_.push_back(sfs[i]);
+            resp_queue_.push_back(0x00);         // dummy CRC16
+            resp_queue_.push_back(0x00);
+            state_ = S_SENDING_DATA;
+            break;
+        }
+
         case CMD55:
             app_cmd_ = true;
             resp_queue_.push_back(initialized_ ? 0x00 : R1_IDLE);
@@ -201,6 +230,35 @@ private:
                 resp_queue_.push_back(0x00);
             }
             break;
+
+        case ACMD51: {
+            // SD Configuration Register — 8 bytes.  MI sdmmc queries
+            // this during enumeration; SCR_STRUCTURE must be 0 or 1
+            // for sdmmc_mem_decode_scr to accept it.
+            if (!prev_app_cmd) {
+                resp_queue_.push_back(R1_ILLEGAL_CMD);
+                break;
+            }
+            if (!initialized_) {
+                resp_queue_.push_back(R1_IDLE | R1_ILLEGAL_CMD);
+                break;
+            }
+            resp_queue_.push_back(0x00);         // R1 OK
+            resp_queue_.push_back(0xFF);         // Nwr gap
+            resp_queue_.push_back(0xFE);         // data token
+            uint8_t scr[8] = {
+                0x02,   // [0] SCR_STRUCTURE=0, SD_SPEC=2 (v2.00)
+                0x01,   // [1] 1-bit bus width only, no security
+                0x00, 0x00,
+                0, 0, 0, 0,
+            };
+            for (int i = 0; i < 8; i++)
+                resp_queue_.push_back(scr[i]);
+            resp_queue_.push_back(0x00);         // dummy CRC16
+            resp_queue_.push_back(0x00);
+            state_ = S_SENDING_DATA;
+            break;
+        }
 
         case CMD9: {
             // CSD register (version 2.0 for SDHC)
@@ -235,6 +293,37 @@ private:
             csd[15] = 0x01;                     // CRC (don't care in SPI)
             for (int i = 0; i < 16; i++)
                 resp_queue_.push_back(csd[i]);
+            resp_queue_.push_back(0x00);         // dummy CRC16
+            resp_queue_.push_back(0x00);
+            state_ = S_SENDING_DATA;
+            break;
+        }
+
+        case CMD10: {
+            // CID register — 16 bytes of manufacturer-assigned
+            // identification.  The MI sdmmc stack reads CID before
+            // CSD and refuses to enumerate the card if this command
+            // returns illegal-command.  Values are arbitrary but
+            // structurally valid so sdmmc_decode_cid extracts
+            // non-empty strings for the boot banner.
+            if (!initialized_) {
+                resp_queue_.push_back(R1_IDLE | R1_ILLEGAL_CMD);
+                break;
+            }
+            resp_queue_.push_back(0x00);         // R1 OK
+            resp_queue_.push_back(0xFF);         // Nwr gap
+            resp_queue_.push_back(0xFE);         // data token
+            uint8_t cid[16] = {
+                0x03,                             // [ 0] MID: SanDisk-ish
+                'P', 'S',                         // [ 1.. 2] OID: "PS"
+                'R','T','L','_','_',              // [ 3.. 7] PNM: "RTL__"
+                0x10,                             // [ 8] PRV: v1.0
+                0x00, 0x00, 0x00, 0x01,           // [ 9..12] PSN: serial 1
+                0x01, 0x64,                       // [13..14] MDT: 2026/04
+                0x01,                             // [15] CRC7 + end bit
+            };
+            for (int i = 0; i < 16; i++)
+                resp_queue_.push_back(cid[i]);
             resp_queue_.push_back(0x00);         // dummy CRC16
             resp_queue_.push_back(0x00);
             state_ = S_SENDING_DATA;
