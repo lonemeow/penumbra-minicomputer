@@ -108,7 +108,11 @@ bootinfo — `boot sd:0,0` reaches single-user with no prompts.
   discovery (CID/CSD/SCR/SWITCH_FUNC) and block-device framing.
   `bus_dma_*` are panic stubs -- no DMA engine, SMC_CAPS_DMA
   never set.  `kern/subr_disk_mbr.c` for MBR partition parsing.
-  Kernel mounts FFS root from `ld0f`.
+  Both read (CMD17) and write (CMD24) paths verified; the write
+  path polls for the data-response token so the 0..8-byte Ncrc
+  gap the SD spec allows is handled.  Kernel mounts FFS root
+  from `ld0f` and `mount -uw /` succeeds with the `/etc/fstab`
+  that `mkrootfs.sh` now installs.
 
 - **Exec / return-to-user:** `setregs()` initializes user
   trapframe.  `trap_return` handles SP banking (USP save/restore)
@@ -187,6 +191,12 @@ Rootfs images include `boot.cfg` on the FAT32 partition with
 `root=ld0f`.  The bootloader reads this via libsa
 `perform_bootcfg()` and passes `BTINFO_ROOTDEVICE` to the
 kernel, which auto-selects the root device without prompting.
+
+`mkrootfs.sh` also installs `/etc/fstab` (mapping `/` to
+`/dev/ld0f`) and invokes `MAKEDEV -s std ld0` so `/dev/ld0*`
+nodes are present in the image.  Without these, the kernel's
+placeholder `root_device` string in `f_mntfromname` leaks to
+userland and `mount -uw /` fails.
 
 ## What's Next
 

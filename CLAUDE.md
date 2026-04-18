@@ -157,7 +157,9 @@ The SD image has two MBR partitions: FAT32 boot (first) and
 FFS root (second, mounted as `ld0f` in the kernel).  Rootfs
 images include a `boot.cfg` on the FAT32 partition with
 `root=ld0f`, so `boot sd:0,0` reaches single-user shell with
-no further interaction.
+no further interaction.  The rootfs also includes an `/etc/fstab`
+mapping `/` to `/dev/ld0f` (so `mount -uw /` works without
+arguments) and `/dev/ld0*` nodes via `MAKEDEV -s std ld0`.
 Requires NetBSD cross-tools (`nbfdisk`, `nbmakefs`).
 
 ### LLVM Toolchain Build
@@ -511,9 +513,11 @@ MIPS/68k-style vector dispatch.
   CID/CSD decoding, and block-device framing are all handled by
   the MI layer.  CMD9/CMD10 payloads get a wire-byte reverse +
   CRC-slot shift to match the `MMC_RSP_BITS` layout the MI
-  decoder expects.  No DMA — bus_dma_* are panic stubs since
-  SMC_CAPS_DMA is never set.  Kernel mounts FFS root from
-  `ld0f` and reaches single-user shell.
+  decoder expects.  CMD24 write path uses `pmci_wait_token` to
+  poll for the data-response token (0..8-byte Ncrc gap per SD
+  spec).  No DMA — bus_dma_* are panic stubs since SMC_CAPS_DMA
+  is never set.  Kernel mounts FFS root from `ld0f` rw and
+  reaches single-user shell; read/write both verified.
 - **UVM init:** `uvm_md_init()`, bootinfo-driven
   `uvm_page_physload()`, `pmap_steal_memory()`.  Full UVM init
   completes: pool allocator, vmem, kmem, radix trees all

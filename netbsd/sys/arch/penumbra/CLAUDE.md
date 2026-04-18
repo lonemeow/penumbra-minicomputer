@@ -158,7 +158,7 @@ Headers fall into three categories:
 | `pbbus.c` | Penumbra Bus bridge — walks BTINFO_DEVICE entries from bootinfo, attaches child devices by class |
 | `pcom.c` | Legacy console UART driver (unused — replaced by MI com(4) via com_pbbus.c) |
 | `com_pbbus.c` | MI com(4) bus attachment for pbbus — ACFG_CLASS_UART, stride=2/width=4, IRQ-driven via `intr_establish_xname`, `comcnattach1()` console registration |
-| `pmci.c` | SD/MMC host controller driver — implements MI `sdmmc_chip_functions` over the Penumbra SPI v2 register interface. Polled byte-at-a-time transfers (FIFO_EN=0). Bounded timeouts: `SD_RESP_RETRIES=8` (Ncr), `SD_DATA_TOKEN_RETRIES=100000` (~130 ms Nac at FAST), `SD_BUSY_RETRIES=500000` (~650 ms Nbr). CMD9/CMD10 apply a wire-byte reverse + CRC-slot shift to match `MMC_RSP_BITS` layout. Attaches `sdmmc → ld_sdmmc → ld`. |
+| `pmci.c` | SD/MMC host controller driver — implements MI `sdmmc_chip_functions` over the Penumbra SPI v2 register interface. Polled byte-at-a-time transfers (FIFO_EN=0). Bounded timeouts: `SD_RESP_RETRIES=8` (Ncr), `SD_DATA_TOKEN_RETRIES=100000` (~130 ms Nac at FAST), `SD_BUSY_RETRIES=500000` (~650 ms Nbr). CMD9/CMD10 apply a wire-byte reverse + CRC-slot shift to match `MMC_RSP_BITS` layout. CMD24 write path polls for the data-response token (Ncrc 0..8 bytes). Attaches `sdmmc → ld_sdmmc → ld`. |
 | `bus_space.c` | bus_space implementation — map/unmap via UVM + pmap_kenter_pa, read/write via volatile pointers |
 | `trap.c` | Exception dispatch (all 9 vectors), TLB fault → uvm_fault() demand paging, pcb_onfault recovery for copyin/copyout, hardware-based SPL (SR.I derived, no global variable). EXC_EXT_IRQ delegates to `intr_dispatch()` |
 | `intr.c` | Shared-IRQ dispatch — `intr_establish`/`_xname`/`_disestablish`/`_dispatch`, per-handler `LIST_HEAD` registry with `struct evcnt` under group `"shared irq"`, spurious counter, `intr_init()` |
@@ -284,8 +284,11 @@ Headers fall into three categories:
   reverse + CRC-slot shift to match `MMC_RSP_BITS` layout.
   `kern/subr_disk_mbr.c` provides `readdisklabel`/`writedisklabel`
   for MBR parsing.  `bus_dma_*` are panic stubs (Penumbra has
-  no DMA engine; SMC_CAPS_DMA is never set).  Kernel mounts
-  FFS root from `ld0f` and reaches single-user shell.
+  no DMA engine; SMC_CAPS_DMA is never set).  CMD24 write path
+  polls for the data-response token (not a single read) so the
+  SD-spec 0..8-byte Ncrc gap is handled.  Kernel mounts FFS
+  root from `ld0f`, reaches single-user shell, and `mount -uw /`
+  succeeds — read and write both verified on the ISS.
 - [x] **copyin/copyout (copy.S)** — assembly implementations with
   standard NetBSD `pcb_onfault` fault recovery pattern.
   copyin/copyout use memcpy + onfault, copyinstr/copyoutstr do

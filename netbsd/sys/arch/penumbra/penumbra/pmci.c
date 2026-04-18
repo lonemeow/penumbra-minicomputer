@@ -417,7 +417,7 @@ pmci_write(struct pmci_softc *sc, struct sdmmc_command *cmd)
 {
 	const uint8_t *data = cmd->c_data;
 	uint8_t resp;
-	int i;
+	int error, i;
 
 	/* One pad byte between R1 and the data token (SD spec Nwr >= 1). */
 	(void)pmci_byte(sc, SD_IDLE);
@@ -430,8 +430,18 @@ pmci_write(struct pmci_softc *sc, struct sdmmc_command *cmd)
 	(void)pmci_byte(sc, SD_IDLE);
 	(void)pmci_byte(sc, SD_IDLE);
 
-	/* Data response: card reports accept / CRC-err / write-err. */
-	resp = pmci_byte(sc, SD_IDLE);
+	/*
+	 * Data-response token: the SD spec allows 0..8 bytes (Ncrc)
+	 * of 0xFF gap between the final CRC byte and the token, so
+	 * we must poll rather than read a single byte.  The token
+	 * is packed as 0bxxx0rrr1 where rrr=0b010 means accepted
+	 * (0x05 in the low 5 bits).
+	 */
+	error = pmci_wait_token(sc, SD_RESP_RETRIES, &resp);
+	if (error) {
+		cmd->c_error = error;
+		return;
+	}
 	if ((resp & SD_DATA_RESP_MASK) != SD_DATA_RESP_ACCEPTED) {
 		cmd->c_error = EIO;
 		return;

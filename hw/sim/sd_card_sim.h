@@ -85,6 +85,15 @@ public:
     uint8_t exchange(uint8_t mosi) {
         if (!selected_ || !img_) return 0xFF;  // no card = MISO high
 
+        // Abort-mid-stream escape: if a write is pending its data
+        // token and a command-start byte arrives instead, the host
+        // driver is retrying after a failure — drop back to IDLE so
+        // the new command is recognised.
+        if (state_ == S_RECEIVING_DATA && write_pos_ == 0 &&
+            (mosi & 0xC0) == 0x40) {
+            state_ = S_IDLE;
+        }
+
         uint8_t miso = 0xFF;
         switch (state_) {
         case S_IDLE:
@@ -116,7 +125,8 @@ public:
                 if (resp_idx_ >= resp_queue_.size()) {
                     resp_queue_.clear();
                     resp_idx_ = 0;
-                    state_ = S_IDLE;
+                    state_ = post_resp_state_;
+                    post_resp_state_ = S_IDLE;
                 }
                 return miso;
             }
@@ -124,11 +134,21 @@ public:
             return 0xFF;
 
         case S_RECEIVING_DATA:
-            // CMD24 write: firmware sends data token + 512 bytes + 2 CRC
+            // CMD24 write: host first sends at least one 0xFF pad
+            // byte (Nwr gap), then the 0xFE data-start token, then
+            // 512 data bytes + 2 CRC.  Skip pads until the token
+            // arrives so the buffer indexing stays aligned.
+            if (write_pos_ == 0 && mosi != 0xFE) return 0xFF;
             write_buf_[write_pos_++] = mosi;
             if (write_pos_ == 515) {
                 flush_write();
-                return 0x05;  // data accepted token
+                // Queue the data-response token to be returned on
+                // the next exchange, not inline with the final CRC
+                // byte.  Real cards leave >= 1 byte (Ncrc) of 0xFF
+                // between CRC and response; our driver polls.
+                resp_queue_.push_back(0x05);
+                state_ = S_SENDING_RESPONSE;
+                return 0xFF;
             }
             return 0xFF;
         }
@@ -174,6 +194,7 @@ private:
         bool prev_app_cmd = app_cmd_;
         app_cmd_ = false;
         state_ = S_SENDING_RESPONSE;
+        post_resp_state_ = S_IDLE;
 
         uint8_t cmd = cmd_buf_[0] & 0x3F;
 
@@ -372,10 +393,14 @@ private:
             } else if (cmd_arg() >= total_sectors_) {
                 resp_queue_.push_back(R1_ADDRESS_ERROR);
             } else {
+                // Host expects to read R1 before the data phase.
+                // Stay in S_SENDING_RESPONSE until R1 is drained,
+                // then transition to S_RECEIVING_DATA via
+                // post_resp_state_.
                 resp_queue_.push_back(0x00);     // R1 OK
                 write_lba_ = cmd_arg();
                 write_pos_ = 0;
-                state_ = S_RECEIVING_DATA;
+                post_resp_state_ = S_RECEIVING_DATA;
             }
             break;
 
@@ -412,6 +437,7 @@ private:
     bool     initialized_ = false;
     bool     app_cmd_ = false;
     State    state_ = S_IDLE;
+    State    post_resp_state_ = S_IDLE;
 
     uint8_t  cmd_buf_[6] = {};
     int      cmd_pos_ = 0;

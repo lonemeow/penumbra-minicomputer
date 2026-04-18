@@ -63,6 +63,16 @@ public:
 
     uint8_t exchange(uint8_t mosi) {
         if (!selected_ || !img_) return 0xFF;
+        // If we're waiting for a data token but a command-start byte
+        // arrives instead, the host driver has aborted a write
+        // mid-stream (typical after a timeout-retry).  Real cards
+        // don't need this because real hosts don't abort mid-stream,
+        // but the MI sdmmc layer does, so drop back to IDLE so the
+        // new command is recognised.
+        if (state_ == S_RECV_DATA && write_pos_ == 0 &&
+            (mosi & 0xC0) == 0x40) {
+            state_ = S_IDLE;
+        }
         switch (state_) {
         case S_IDLE: case S_RECV_CMD:
             if (cmd_pos_ == 0 && (mosi & 0xC0) != 0x40) return 0xFF;
@@ -73,13 +83,30 @@ public:
         case S_SEND_RESP: case S_SEND_DATA:
             if (resp_idx_ < resp_.size()) {
                 uint8_t b = resp_[resp_idx_++];
-                if (resp_idx_ >= resp_.size()) { resp_.clear(); resp_idx_ = 0; state_ = S_IDLE; }
+                if (resp_idx_ >= resp_.size()) {
+                    resp_.clear(); resp_idx_ = 0;
+                    state_ = post_resp_state_;
+                    post_resp_state_ = S_IDLE;
+                }
                 return b;
             }
             state_ = S_IDLE; return 0xFF;
         case S_RECV_DATA:
+            // Skip leading 0xFF pad bytes (Nwr gap between R1 and
+            // the data token).  Start accumulating once the 0xFE
+            // data-start token arrives.
+            if (write_pos_ == 0 && mosi != 0xFE) return 0xFF;
             wbuf_[write_pos_++] = mosi;
-            if (write_pos_ == 515) { flush_write(); return 0x05; }
+            if (write_pos_ == 515) {
+                flush_write();
+                // Queue the data-response token to be returned on
+                // the next exchange, not inline with the final CRC
+                // byte.  Real cards leave >= 1 byte (Ncrc) of 0xFF
+                // between CRC and response; our driver polls.
+                resp_.push_back(0x05);
+                state_ = S_SEND_RESP;
+                return 0xFF;
+            }
             return 0xFF;
         }
         return 0xFF;
@@ -94,6 +121,7 @@ private:
         resp_.clear(); resp_idx_ = 0;
         bool prev_app = app_cmd_; app_cmd_ = false;
         state_ = S_SEND_RESP;
+        post_resp_state_ = S_IDLE;
         uint8_t cmd = cmd_[0] & 0x3F;
         switch (cmd) {
         case 0: init_ = false; resp_.push_back(0x01); break;
@@ -187,8 +215,11 @@ private:
         case 24:
             if (!init_) { resp_.push_back(0x05); break; }
             if (cmd_arg() >= total_sectors_) { resp_.push_back(0x20); break; }
+            // R1 must drain before we start receiving data; stay in
+            // S_SEND_RESP until the host reads the response byte,
+            // then transition to S_RECV_DATA for the data phase.
             resp_.push_back(0x00); write_lba_=cmd_arg(); write_pos_=0;
-            state_=S_RECV_DATA; break;
+            post_resp_state_ = S_RECV_DATA; break;
         default: resp_.push_back(0x04); break;
         }
     }
@@ -202,6 +233,7 @@ private:
     FILE* img_ = nullptr; uint32_t total_sectors_ = 0;
     bool selected_=false, init_=false, app_cmd_=false;
     State state_ = S_IDLE;
+    State post_resp_state_ = S_IDLE;
     uint8_t cmd_[6]={}; int cmd_pos_=0;
     std::vector<uint8_t> resp_; size_t resp_idx_=0;
     uint8_t wbuf_[515]={}; int write_pos_=0; uint32_t write_lba_=0;
