@@ -253,7 +253,7 @@ Target layout for the ULX3S SD card:
 
 6. **SD card naming:** ROM monitor uses `sd:<controller>,<cs>[:<partition>]` syntax. `controller` is the index among SD-class devices (not the global device index), `cs` is the chip-select pin (0 or 1), optional `partition` (1-based) enables partition-relative LBA addressing. The ROM translates the per-class controller index to the global device index for `BTAG_BOOTDEV`.
 
-7. **SD card controller:** SPI master in SPI mode (sim_spi.sv, CLASS_SPI). Byte-at-a-time polled transfers. Autoconfigured. Testbench SD emulator backed by disk image file (`+sdcard=`). See `doc/boot/spi-controller.md`.
+7. **SD card controller:** SPI master in SPI mode (sim_spi.sv, CLASS_SPI). Byte-at-a-time polled transfers. Autoconfigured. Testbench SD emulator backed by disk image file (`+sdcard=`). See `doc/system/devices/spi.md`.
 
 ## Open Questions
 

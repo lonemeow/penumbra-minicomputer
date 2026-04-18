@@ -126,7 +126,7 @@ R15       Program counter (read-only)
 - Frame pointer: optional, use R10 if needed
 - No home space / shadow area for register arguments
 
-See `doc/abi/penumbra-abi.md` for the full ABI specification.
+See `doc/system/abi.md` for the full ABI specification.
 
 This convention gives 4 argument registers (matches ARM32 and MIPS o32), 6 callee-saved registers, 2 scratch registers (R11, R13/LR), and a reserved thread pointer (R12) for TLS.
 
@@ -154,7 +154,7 @@ NetBSD uses its own build framework (`build.sh`) which supports cross-compilatio
 | ISA assembler (pasm.py) | Done | Two-pass, all formats, labels, .equ constants |
 | Microcode assembler (uasm.py) | Done | Symbolic fields, slot validation |
 | LLVM MC-layer assembler | Done | All 4 formats, 7 fixup/relocation types, ELF object emission, pseudo-instructions (LI/LA/NOP/RET) |
-| ABI specification | Done | ILP32, register convention, calling convention, stack frame, ELF relocations. See `doc/abi/penumbra-abi.md` |
+| ABI specification | Done | ILP32, register convention, calling convention, stack frame, ELF relocations. See `doc/system/abi.md` |
 | bin2hex.py | Done | Flat binary → $readmemh hex (pipeline: llvm-mc → objcopy → bin2hex) |
 | Calling convention | Done | R1–R4 args, R5–R10 callee-saved, R11 scratch, R12 TP, R13 LR. Implemented in `PenumbraCallingConv.td` |
 | LLVM codegen (GlobalISel) | Done | Hybrid TableGen + C++ instruction selection, frame lowering, register allocation. `-O0` through `-O2` working. Boot ROM compiles from C |

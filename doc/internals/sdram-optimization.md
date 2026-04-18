@@ -74,7 +74,7 @@ we're running at higher clock speeds where latency matters more.
 ## Bus Protocol Support
 
 The Penumbra Bus already supports burst transfers (see
-`doc/bus/bus-overview.md` § Burst Transfers).  During a cache line
+`doc/system/bus.md` § Burst Transfers).  During a cache line
 fill, the master holds `req` asserted and drives sequential addresses:
 
 ```

@@ -12,8 +12,8 @@ and later build the design from discrete 74xx chips.
 - **Toolchain:** Open-source FPGA tools (Yosys, nextpnr-ecp5, Project Trellis)
 - **Simulation:** Verilator 5.046 via Docker (`verilator/verilator:latest`), driven by Makefile
 - **Target board:** ULX3S with ECP5-85F (32 MB SDRAM, USB, HDMI, GPIO, etc.)
-- **OS target:** NetBSD (drives privilege, interrupt, MMU design). See `doc/toolchain/toolchain-strategy.md`
-- **Compiler:** LLVM backend (GlobalISel, not SelectionDAG). ABI spec in `doc/abi/penumbra-abi.md`
+- **OS target:** NetBSD (drives privilege, interrupt, MMU design). See `doc/system/toolchain.md`
+- **Compiler:** LLVM backend (GlobalISel, not SelectionDAG). ABI spec in `doc/system/abi.md`
 - **Discrete build:** All design decisions must be feasible in 74xx discrete logic
 - **Byte order:** Little-endian. `addr[1:0]=00` maps to bits `[7:0]`
   (defined by `byte_ext`/`byte_rep`). Matches x86/RISC-V/ARM-LE.
@@ -22,24 +22,24 @@ and later build the design from discrete 74xx chips.
 
 ## Architecture Summary
 The architecture is fully specified in `doc/`. Key specs:
-- **ISA:** `doc/isa/architecture-overview.md` —
+- **ISA:** `doc/system/architecture.md` —
   4-format 32-bit encoding (R/L/M/B), 2-operand, R0=zero,
   16 registers, ARM-style condition flags
-- **Datapath:** `doc/core/datapath.md` —
+- **Datapath:** `doc/internals/datapath.md` —
   three-bus (A/B/R), separate PC unit, 51-bit horizontal microcode,
   hardwired fetch unit, direct-mapped dispatch
-- **Microcode reference:** `doc/core/microcode-reference.md` —
+- **Microcode reference:** `doc/internals/microcode.md` —
   complete micro-word format, field reference, ROM layout, sequencer behavior
-- **Bus:** `doc/bus/bus-overview.md` —
+- **Bus:** `doc/system/bus.md` (Software) and `doc/hardware/bus-protocol.md` (Hardware) —
   custom async Penumbra Bus (4-phase handshake), sync internal bus,
   sysreg sideband
-- **MMU/Cache:** `doc/mmu/mmu-overview.md` —
+- **MMU/Cache:** `doc/system/mmu.md` (Software) and `doc/internals/mmu-internals.md` (Hardware) —
   software-managed 64-entry 2-way SA TLB + 4-entry FA pinned TLB,
   split I/D PIPT cache,
   write-through D-cache
-- **Sysregs:** `doc/isa/sysregs-reference.md` —
+- **Sysregs:** `doc/system/sysregs.md` —
   WRSYS/RDSYS device map, register layouts, TLB packing
-- **ABI:** `doc/abi/penumbra-abi.md` —
+- **ABI:** `doc/system/abi.md` —
   ILP32, R1–R4 args, R5–R10 callee-saved, R11 scratch,
   R12 TP, R13 LR, R14 SP, R15 PC
 
@@ -50,7 +50,7 @@ The architecture is fully specified in `doc/`. Key specs:
 - `llvm/` - LLVM backend. See `llvm/llvm/lib/Target/Penumbra/CLAUDE.md` for detailed LLVM context.
 - `benchmark/` - Bare-metal benchmarks (Dhrystone). PIE ELFs loaded via
   `boot sd:0,0/DHRYSTON.ELF`. See "Benchmarks" section below.
-- `doc/` - Architecture specs (ISA, MMU, bus, memory map, datapath, toolchain, ABI)
+- `doc/` - Architecture specs (System, Hardware, Internals)
 
 ## Conventions
 - RTL filenames match the top-level module they contain
@@ -141,7 +141,7 @@ Setup in `hw/tools/oss-cad-suite/`.
   SD card: micro SD slot in SPI mode, autoconfigured as CLASS\_SD.
   Boot ROM `boot sd:0,0` loads `PENBOOT.ELF` from FAT32 partition.
   SDRAM controller: CL=2, BL=2, auto-precharge, universal-safe timings
-  for all ULX3S SDRAM variants (see `doc/hw/sdram-optimization.md`).
+  for all ULX3S SDRAM variants (see `doc/internals/sdram-optimization.md`).
 
 ### SD Card Image
 Build SD images for `make simulate SDCARD=build/boot.img`:
@@ -266,7 +266,7 @@ MIPS/68k-style vector dispatch.
   probes devices via bus-fault detection,
   allocates base addresses, and configures devices.
   Protocol requires software to toggle CFG_EN between devices
-  (see `doc/bus/bus-overview.md`).
+  (see `doc/system/bus.md`).
 - SPI controller is the first autoconfigured device;
   reports as `CLASS_SD`, assigned `0xFF001000`.
 - **SPI v2 with hardware FIFO** (`spi.sv`, `sim_spi.sv`):

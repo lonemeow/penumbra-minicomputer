@@ -641,7 +641,7 @@ Verify no regressions.
 
 ## Design History
 
-This document replaces `doc/core/microcode-validation.md`, which was a design exploration document used during initial architecture development. That document tracked the evolution from a 55-bit micro-word to the final 51-bit format, identified 17 design issues, and validated the format through hand-written bit-level micro-programs for representative instructions.
+This document replaces `doc/internals/microcode-validation.md`, which was a design exploration document used during initial architecture development. That document tracked the evolution from a 55-bit micro-word to the final 51-bit format, identified 17 design issues, and validated the format through hand-written bit-level micro-programs for representative instructions.
 
 Key design changes discovered during validation:
 - Micro-word finalized at 51 bits
