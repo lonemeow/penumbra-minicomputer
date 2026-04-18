@@ -141,7 +141,11 @@ jumping to kernel.  Still supervisor mode.
 
 ### Passing Convention
 
-Boot data is passed through the entire chain via **R1** (first argument register), which holds a physical pointer to the boot data structure in RAM. Each stage may append entries before passing the pointer forward.
+Boot data and load information are passed through the entire chain via registers:
+- **R1:** Holds a physical pointer to the boot data tagged list in RAM.
+- **R2:** Holds the physical entry point of the loaded binary (Stage 2 or Stage 3).
+
+Each stage may append entries to the tagged list before passing the pointer in R1 forward.
 
 ### Penumbra Boot Data (firmware-level)
 
@@ -263,7 +267,7 @@ Target layout for the ULX3S SD card:
 
 2. **Boot data passing:** R1 = physical pointer to boot data. Tagged list format for extensibility (type + size per entry, skip unknown tags).
 
-3. **Direct-mapped region:** No hardware bypass (unlike MIPS KSEG0). Bootloader pre-maps kernel pages in TLB. Kernel takes over TLB management early in `locore.S`.
+3. **Direct-mapped region:** No hardware bypass (unlike MIPS KSEG0). The kernel handles its own MMU setup in early `locore.S` using a 2-level page table built in physical mode.
 
 4. **Boot data entry alignment:** 4-byte aligned (ILP32 word size). Entry `size` is always a multiple of 4.
 
@@ -273,10 +277,12 @@ Target layout for the ULX3S SD card:
 
 7. **SD card controller:** SPI master in SPI mode (sim_spi.sv, CLASS_SPI). Byte-at-a-time polled transfers. Autoconfigured. Testbench SD emulator backed by disk image file (`+sdcard=`). See `doc/system/devices/spi.md`.
 
+8. **Kernel link address:** The kernel (Stage 3) can be linked at any virtual address. To support loading at an arbitrary physical address, the kernel's early entry code must be position-independent (PIC) so it can execute in physical mode before the MMU is enabled.
+
+9. **Initial MMU setup:** The bootloader is not required to pre-map kernel pages. The kernel's entry code is responsible for building its own page tables in physical mode, installing its exception handlers, and enabling the MMU before jumping to its virtual link address.
+
+10. **Boot data physical location:** The ROM places the boot data at physical address `0x0000_0040` (page 0, immediately following the exception vector table).
+
 ## Open Questions
 
-1. **Kernel link address:** What virtual address should the kernel be linked at? `0x8000_0000` is conventional for MIPS (KSEG0). We need to pick a Penumbra convention.
-
-2. **Minimum pre-mapped pages:** How many kernel pages must the bootloader map before jumping? Depends on how much code runs before `locore.S` establishes its own TLB entries. To be determined during the port.
-
-3. **Boot data physical location:** ROM places boot data in a known RAM area (not a fixed address — depends on detected RAM). R1 points to it. Should the boot data be at the bottom of usable RAM (simple, but kernel must know to avoid it) or at the top (out of the way, but requires knowing RAM size to find it)?
+(None currently identified.)
