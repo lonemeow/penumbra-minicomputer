@@ -48,8 +48,10 @@ Detailed design of the CPU core and internal FPGA logic.
 
 *   **[Datapath Design](./internals/datapath.md)** — The three-bus architecture and signal flow.
 *   **[Microcode Reference](./internals/microcode.md)** — Bit-level micro-word format and routine catalog.
+*   **[Microcode Syntax](./internals/uasm-syntax.md)** — Writing microcode assembly for `uasm.py`.
 *   **[MMU Internals](./internals/mmu-internals.md)** — TLB hardware structure and discrete logic mapping.
 *   **[SDRAM Optimization](./internals/sdram-optimization.md)** — Controller strategies for bandwidth improvement.
+*   **[Coding Standards](./internals/coding-standards.md)** — RTL naming and style conventions for hardware.
 *   **[Development Setup](./internals/setup.md)** — How to build and simulate the RTL.
 
 ---

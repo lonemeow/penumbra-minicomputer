@@ -74,7 +74,44 @@ make wave MOD=<name>     # Open VCD waveform in GTKWave
 
 ---
 
-## 3. LLVM Backend Testing
+## 3. Hardware Development Workflow
+
+When modifying the Penumbra hardware core, follow this general cycle:
+
+### 1. Modify RTL or Microcode
+- **RTL:** Edit modules in `hw/rtl/`. Follow the [Coding Standards](doc/internals/coding-standards.md).
+- **Microcode:** Edit `hw/microcode/microcode.uasm`. See [Microcode Syntax](doc/internals/uasm-syntax.md).
+
+### 2. Update Build Artifacts
+If you modified microcode or the boot ROM, rebuild them:
+```sh
+make -C hw/rom
+```
+This updates `build/microcode.hex` and `build/program.hex`.
+
+### 3. Verify via Simulation
+- **Unit Test:** Run the testbench for the specific module you changed.
+  ```sh
+  make sim MOD=<module_name>
+  ```
+- **Regression:** Run the full hardware test suite to ensure no regressions.
+  ```sh
+  make test
+  ```
+- **Interactive:** Run the boot ROM on the cycle-accurate RTL model to verify system-level behavior.
+  ```sh
+  make simulate-rtl
+  ```
+
+### 4. Debugging
+If a test fails, use the waveform viewer to inspect signals:
+```sh
+make wave MOD=<module_name>
+```
+
+---
+
+## 4. LLVM Backend Testing
 
 The Penumbra codegen backend uses LLVM's Lit framework with FileCheck. Tests live in `llvm/llvm/test/CodeGen/Penumbra/`.
 
@@ -93,7 +130,7 @@ python3 llvm/llvm/utils/update_llc_test_checks.py \
 
 ---
 
-## 4. Benchmarks
+## 5. Benchmarks
 
 Benchmarks are PIE ELFs booted from the ROM.
 
@@ -110,7 +147,7 @@ make benchmark BENCH_ITERS=10000
 
 ---
 
-## 5. NetBSD Porting
+## 6. NetBSD Porting
 
 ### Host Tools Setup (one-time)
 

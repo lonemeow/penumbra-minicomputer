@@ -7,14 +7,32 @@ varying hardware configurations and to support NetBSD (or other
 operating systems) without hardcoding OS assumptions into the
 early boot firmware.
 
-```
- ROM                   physical mode, no MMU
-   │                   hardware init, FAT32 file load
-   ▼
- Boot loader           physical mode → enables MMU, loads kernel
-   │
-   ▼
- Kernel                runs with MMU on, at fixed virtual address
+### Software Stack Map
+
+```text
+ ┌───────────────────────┐ 
+ │  Stage 0: HW Reset    │ CPU starts at RESET_PC (0xFFFF_0000)
+ └──────────┬────────────┘
+            │
+ ┌──────────▼────────────┐ 
+ │  Stage 1: Boot ROM    │ Hardware init, Autoconfig, Disk Probe
+ │  (Monitor)            │ Load PENBOOT.ELF from FAT32 partition
+ └──────────┬────────────┘
+            │ physical pointer to Boot Data (R1)
+ ┌──────────▼────────────┐ 
+ │  Stage 2: PENBOOT.ELF │ PIE self-relocation, NetBSD bootinfo setup
+ │  (Loader)             │ Load netbsd kernel, Enable MMU
+ └──────────┬────────────┘
+            │ virtual pointer to bootinfo (R1)
+ ┌──────────▼────────────┐ 
+ │  Stage 3: netbsd      │ Early locore.S, pmap/UVM setup
+ │  (Kernel)             │ Device attachment, mount /dev/ld0f
+ └──────────┬────────────┘
+            │ execve()
+ ┌──────────▼────────────┐ 
+ │  Stage 4: /sbin/init  │ Start system services, getty
+ │  (Userland)           │ Login shell
+ └───────────────────────┘
 ```
 
 ## Boot ROM
