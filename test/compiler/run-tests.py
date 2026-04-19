@@ -106,6 +106,8 @@ def run_single_test(args):
         proc = subprocess.run(cmd_iss, capture_output=True, text=True, timeout=30)
         actual_output = proc.stdout
         exit_code = proc.returncode
+        # llvm-test-suite expects the exit code to be printed at the end of the output
+        actual_output += f"exit {exit_code}\n"
     except subprocess.TimeoutExpired:
         return TestResult(name, display_name, False, "timeout (30s)")
     except Exception as e:
@@ -117,9 +119,7 @@ def run_single_test(args):
         with open(ref_path, "r") as f:
             expected_output = f.read()
         
-        # llvm-test-suite reference outputs often end with "exit 0"
-        expected_lines = [l.strip() for l in expected_output.strip().splitlines() 
-                         if l.strip() and not l.strip().startswith("exit ")]
+        expected_lines = [l.strip() for l in expected_output.strip().splitlines() if l.strip()]
         actual_lines = [l.strip() for l in actual_output.strip().splitlines() if l.strip()]
         
         # Normalized comparison: check if all non-empty expected lines exist 
