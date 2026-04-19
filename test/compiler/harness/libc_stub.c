@@ -84,6 +84,25 @@ static void print_hex(unsigned int u) {
     }
 }
 
+static void print_double(double d) {
+    if (d < 0) {
+        putchar('-');
+        d = -d;
+    }
+    // Print integer part
+    unsigned int ipart = (unsigned int)d;
+    print_int(ipart);
+    putchar('.');
+    // Print fractional part (6 digits)
+    double fpart = d - (double)ipart;
+    for (int i = 0; i < 6; i++) {
+        fpart *= 10.0;
+        int digit = (int)fpart;
+        putchar(digit + '0');
+        fpart -= (double)digit;
+    }
+}
+
 int printf(const char *format, ...) {
     va_list ap;
     va_start(ap, format);
@@ -93,6 +112,7 @@ int printf(const char *format, ...) {
             switch (*format) {
                 case 'd': print_int(va_arg(ap, int)); break;
                 case 'x': print_hex(va_arg(ap, unsigned int)); break;
+                case 'f': print_double(va_arg(ap, double)); break;
                 case 's': {
                     char *s = va_arg(ap, char *);
                     if (!s) s = "(null)";
@@ -214,6 +234,7 @@ int __ltdf2(double a, double b)      { (void)a; (void)b; return 0; }
 int __ledf2(double a, double b)      { (void)a; (void)b; return 0; }
 int __gtdf2(double a, double b)      { (void)a; (void)b; return 0; }
 int __gedf2(double a, double b)      { (void)a; (void)b; return 0; }
+int __fixdfsi(double a)             { (void)a; return 0; }
 unsigned int __fixunsdfsi(double a)       { (void)a; return 0; }
 unsigned int __fixunssfsi(float a)        { (void)a; return 0; }
 double __floatunsidf(unsigned int a)      { (void)a; return 0.0; }

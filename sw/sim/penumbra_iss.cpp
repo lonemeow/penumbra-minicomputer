@@ -589,6 +589,7 @@ static struct termios orig_termios;
 static bool term_raw = false;
 static bool full_raw = false;  // +raw: pass all control chars through
 static bool hosted_mode = false;  // +hosted: native syscall interception
+static bool quiet_mode = false;   // +quiet: suppress banner/exit messages
 static int  hosted_exit_code = 0; // return code from SYS_exit in hosted mode
 static uint64_t max_insns = 0;    // +max-insn=N: halt after N instructions
 static bool trap_user_pc_zero = false;  // +trap-pc0: abort on user-mode PC=0
@@ -1746,12 +1747,13 @@ int main(int argc, char** argv) {
         else if (strncmp(argv[i], "+max-insn=", 10) == 0) max_insns = strtoull(argv[i] + 10, nullptr, 0);
         else if (strcmp(argv[i], "+raw") == 0) full_raw = true;
         else if (strcmp(argv[i], "+hosted") == 0) hosted_mode = true;
+        else if (strcmp(argv[i], "+quiet") == 0) quiet_mode = true;
         else if (strcmp(argv[i], "+trap-pc0") == 0) trap_user_pc_zero = true;
         else hex_path = argv[i];
     }
 
     if (!hex_path) {
-        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+trace=path] [+raw] [+hosted] [+max-insn=N] [+trap-pc0]\n");
+        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+trace=path] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0]\n");
         return 1;
     }
 
@@ -1781,10 +1783,12 @@ int main(int argc, char** argv) {
         signal(SIGINT, sigint_handler);
     raw_mode();
 
-    if (full_raw)
-        fprintf(stderr, "── Penumbra ISS (Ctrl-A X to exit, Ctrl-A H for help) ──\n\n");
-    else
-        fprintf(stderr, "── Penumbra ISS (Ctrl-C to exit) ──\n\n");
+    if (!quiet_mode) {
+        if (full_raw)
+            fprintf(stderr, "── Penumbra ISS (Ctrl-A X to exit, Ctrl-A H for help) ──\n\n");
+        else
+            fprintf(stderr, "── Penumbra ISS (Ctrl-C to exit) ──\n\n");
+    }
 
     // Main loop
     while (running && !cpu.halted) {
@@ -1808,26 +1812,30 @@ int main(int argc, char** argv) {
     // Restore terminal before printing exit summary so \n works normally
     restore_term();
 
-    if (cpu.halted) {
-        fprintf(stderr, "\n[BREAK after %lu instructions, PC=0x%08X]\n",
-                (unsigned long)cpu.insn_count, cpu.pc);
-        // Dump watched memory values from raw RAM array
-        for (int wi = 0; wi < dbg.watch_count; wi++) {
-            uint32_t wpa = dbg.watch_pa[wi];
-            if (wpa < RAM_SIZE - 3) {
-                uint32_t val = rd32(&ram[wpa & ~3u]);
-                fprintf(stderr, "[W%d] PA=0x%08X raw RAM value=0x%08X\n",
-                        wi, wpa, val);
+    if (!quiet_mode) {
+        if (cpu.halted) {
+            fprintf(stderr, "\n[BREAK after %lu instructions, PC=0x%08X]\n",
+                    (unsigned long)cpu.insn_count, cpu.pc);
+            // Dump watched memory values from raw RAM array
+            for (int wi = 0; wi < dbg.watch_count; wi++) {
+                uint32_t wpa = dbg.watch_pa[wi];
+                if (wpa < RAM_SIZE - 3) {
+                    uint32_t val = rd32(&ram[wpa & ~3u]);
+                    fprintf(stderr, "[W%d] PA=0x%08X raw RAM value=0x%08X\n",
+                            wi, wpa, val);
+                }
             }
+        } else {
+            fprintf(stderr, "\n[Interrupted after %lu instructions, PC=0x%08X]\n",
+                    (unsigned long)cpu.insn_count, cpu.pc);
         }
-    } else {
-        fprintf(stderr, "\n[Interrupted after %lu instructions, PC=0x%08X]\n",
-                (unsigned long)cpu.insn_count, cpu.pc);
     }
-    fprintf(stderr, "SR=%08X", cpu.sr);
-    for (int r = 1; r <= 14; r++)
-        fprintf(stderr, " R%d=%08x", r, cpu.r[r]);
-    fprintf(stderr, "\n");
+    if (!quiet_mode) {
+        fprintf(stderr, "SR=%08X", cpu.sr);
+        for (int r = 1; r <= 14; r++)
+            fprintf(stderr, " R%d=%08x", r, cpu.r[r]);
+        fprintf(stderr, "\n");
+    }
 
     if (trace_fp) { fclose(trace_fp); fprintf(stderr, "[TRACE] done\n"); }
     return hosted_mode ? hosted_exit_code : 0;
