@@ -70,6 +70,7 @@ def run_single_test(args):
         "-include", "stdlib.h",
         "-include", "stdio.h",
         "-include", "string.h",
+        "-include", "alloca.h",
         "-c", test_path, "-o", obj_test
     ]
     try:
