@@ -15,6 +15,20 @@ SECTIONS
         *(.rodata .rodata.*)
     }
 
+    .init_array : {
+        _init_array_start = .;
+        KEEP (*(SORT_BY_INIT_PRIORITY(.init_array.*) SORT_BY_INIT_PRIORITY(.ctors.*)))
+        KEEP (*(.init_array .ctors))
+        _init_array_end = .;
+    }
+
+    .fini_array : {
+        _fini_array_start = .;
+        KEEP (*(SORT_BY_INIT_PRIORITY(.fini_array.*) SORT_BY_INIT_PRIORITY(.dtors.*)))
+        KEEP (*(.fini_array .dtors))
+        _fini_array_end = .;
+    }
+
     .data : {
         *(.data .data.*)
     }
