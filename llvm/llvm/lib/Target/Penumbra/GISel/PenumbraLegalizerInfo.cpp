@@ -84,12 +84,32 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   getActionDefinitionsBuilder({G_FRAME_INDEX, G_GLOBAL_VALUE, G_BLOCK_ADDR})
       .legalFor({p0});
 
+  // Penumbra is a strict-alignment target: LDW/STW require 4-byte
+  // alignment, LDH/STH require 2-byte alignment, and byte ops are
+  // free.  The 4th column below is "minimum alignment in bits" —
+  // the predicate isCompatible() checks `Query.AlignInBits >= rule`.
+  // Loads/stores that don't meet the alignment fall through to the
+  // unaligned `.lowerIf` below, which hands off to LegalizerHelper's
+  // lowerLoad/lowerStore for recursive byte-wise splitting.
+  //
+  // Scope the predicate to hardware-supported memory sizes (8/16/32):
+  // wider loads (s64) are narrowed into s32 halves by clampScalar /
+  // narrowScalarIf first, and each half reaches the legalizer as an
+  // s32 load with its own alignment.  Firing the splitter on an s64
+  // too early produces a shift/OR chain whose zero operands never get
+  // combined away.
+  auto isUnaligned = [=](const LegalityQuery &Q) {
+    unsigned MemBits = Q.MMODescrs[0].MemoryTy.getSizeInBits();
+    if (MemBits != 8 && MemBits != 16 && MemBits != 32)
+      return false;
+    return Q.MMODescrs[0].AlignInBits < MemBits;
+  };
   getActionDefinitionsBuilder({G_STORE, G_LOAD})
       .legalForTypesWithMemDesc({
-        {s32, p0, s32, 4},  // LDW/STW
-        {s32, p0, s16, 2},  // STH (store) / plain LDH (zero-extend, handled by G_ZEXTLOAD too)
-        {s32, p0, s8,  1},  // STB / plain LDB
-        {p0,  p0, s32, 4},  // pointer load/store
+        {s32, p0, s32, 32},  // LDW/STW  — 4-byte aligned
+        {s32, p0, s16, 16},  // LDH/STH  — 2-byte aligned
+        {s32, p0, s8,  8},   // LDB/STB  — always aligned
+        {p0,  p0, s32, 32},  // pointer load/store — 4-byte aligned
       })
       // Scalarize vectors before the scalar-only widen/clamp rules below,
       // which would otherwise see a vector type and decide the op is
@@ -97,6 +117,7 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
       .scalarize(0)
       .widenScalarToNextPow2(0, /* MinSize = */ 8)
       .lowerIfMemSizeNotByteSizePow2()
+      .lowerIf(isUnaligned)
       .clampScalar(0, s32, s32);
 
   // Extending loads: sub-word memory → s32 register is directly supported
@@ -104,12 +125,21 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   // bitfield loads) are narrowed: the helper emits a s32 load + explicit
   // G_ZEXT/G_SEXT to s64, and the extension is then split by our G_ZEXT
   // narrowing rule into two s32 halves (low = loaded value, high = 0 or
-  // SAR).  s128 is not yet supported.
+  // SAR).  s128 is not yet supported.  Unaligned extending loads are
+  // split by the helper (same path as the plain G_LOAD rule above).
   getActionDefinitionsBuilder({G_SEXTLOAD, G_ZEXTLOAD})
       .legalForTypesWithMemDesc({
-        {s32, p0, s16, 2},
-        {s32, p0, s8,  1},
+        {s32, p0, s16, 16},
+        {s32, p0, s8,   8},
       })
+      // Widen sub-s32 destinations first so lowerLoad's recursive split
+      // (which preserves the destination type) stays within our s32
+      // legal set — otherwise a split G_ZEXTLOAD can surface with e.g.
+      // s16 destination that matches no rule.  minScalar (not
+      // widenScalarToNextPow2) is required because s16 is already a
+      // power of two and the latter would leave it alone.
+      .minScalar(0, s32)
+      .lowerIf(isUnaligned)
       .narrowScalarIf(typeIs(0, s64), changeTo(0, s32));
 
   getActionDefinitionsBuilder({G_PTR_ADD, G_PTRMASK})

@@ -208,6 +208,10 @@ static void kdoprnt(int (*put)(int), const char *fmt, va_list ap) {
         case 'l':
             lflag++;
             goto reswitch;
+        case 'L':
+            // Penumbra long double == double (64-bit), so %Lf behaves
+            // like %f.  Swallow L and re-enter the switch.
+            goto reswitch;
         case 'c':
             put(va_arg(ap, int));
             break;
