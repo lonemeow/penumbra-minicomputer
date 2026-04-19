@@ -175,6 +175,7 @@ test-iss: $(ISS)
 TEST_COMPILER_DIR = test/compiler
 HARNESS_DIR      = $(TEST_COMPILER_DIR)/harness
 LLVM_TEST_SUITE  = $(TEST_COMPILER_DIR)/llvm-test-suite
+COMPILER_RT_BUILTINS = build/compiler-rt-builtins/lib/linux/libclang_rt.builtins-penumbra.a
 OPT             ?= -O2
 
 # We only run UnitTests and Regression for now
@@ -192,6 +193,7 @@ test-compiler: $(ISS)
 		--cc "$(CC)" \
 		--objcopy "$(OBJCOPY)" \
 		--bin2hex "sw/tools/bin2hex.py" \
+		--builtins "$(COMPILER_RT_BUILTINS)" \
 		--report "$(BUILD_DIR)/test-compiler-report.txt" \
 		--jobs $$(nproc)
 

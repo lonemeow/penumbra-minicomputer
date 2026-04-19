@@ -130,7 +130,60 @@ python3 llvm/llvm/utils/update_llc_test_checks.py \
 
 ---
 
-## 5. Benchmarks
+## 5. Compiler Correctness Testing
+
+Penumbra uses a subset of the LLVM `SingleSource` test suite (including GCC C-Torture) to verify code generation. These tests run on the ISS in a special `+hosted` mode with a minimal `libc` harness.
+
+### Building compiler-rt builtins
+
+The tests require `compiler-rt` to provide soft-float and 64-bit integer operations.
+
+```sh
+# One-time build of compiler-rt builtins
+mkdir -p build/compiler-rt-builtins
+cmake -G Ninja -S llvm/compiler-rt/lib/builtins -B build/compiler-rt-builtins \
+  -DCMAKE_C_COMPILER=$PWD/build/llvm/bin/clang \
+  -DCMAKE_CXX_COMPILER=$PWD/build/llvm/bin/clang++ \
+  -DCMAKE_AR=$PWD/build/llvm/bin/llvm-ar \
+  -DCMAKE_NM=$PWD/build/llvm/bin/llvm-nm \
+  -DCMAKE_RANLIB=$PWD/build/llvm/bin/llvm-ranlib \
+  -DCMAKE_C_COMPILER_TARGET=penumbra-unknown-none \
+  -DCMAKE_CXX_COMPILER_TARGET=penumbra-unknown-none \
+  -DCMAKE_ASM_COMPILER_TARGET=penumbra-unknown-none \
+  -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+  -DCMAKE_C_FLAGS="-ffreestanding -nostdinc -isystem $PWD/build/llvm/lib/clang/22/include" \
+  -DCMAKE_ASM_FLAGS="-ffreestanding -nostdinc -isystem $PWD/build/llvm/lib/clang/22/include" \
+  -DCOMPILER_RT_BAREMETAL_BUILD=ON -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON \
+  -DCOMPILER_RT_INCLUDE_TESTS=OFF -DCOMPILER_RT_USE_LIBCXX=OFF \
+  -DCOMPILER_RT_BUILD_CRT=OFF -DCOMPILER_RT_BUILD_SANITIZERS=OFF \
+  -DCOMPILER_RT_BUILD_XRAY=OFF -DCOMPILER_RT_BUILD_LIBFUZZER=OFF \
+  -DCOMPILER_RT_BUILD_PROFILE=OFF -DCOMPILER_RT_BUILD_MEMPROF=OFF \
+  -DCOMPILER_RT_BUILD_ORC=OFF -DCOMPILER_RT_BUILD_GWP_ASAN=OFF \
+  -DCOMPILER_RT_BUILD_CTX_PROFILE=OFF
+
+ninja -C build/compiler-rt-builtins
+```
+
+### Running compiler tests
+
+Tests are executed in parallel and verified against `.reference_output` files where available.
+
+```sh
+# Run the full suite at -O2 (default)
+make test-compiler
+
+# Run at a different optimization level
+make test-compiler OPT="-Os"
+
+# Run a specific subset or single test
+make test-compiler COMPILER_TESTS="test/compiler/llvm-test-suite/UnitTests/2002-05-02-ArgumentTest.c"
+```
+
+A full report is written to `build/test-compiler-report.txt`.
+
+---
+
+## 6. Benchmarks
 
 Benchmarks are PIE ELFs booted from the ROM.
 
@@ -147,7 +200,7 @@ make benchmark BENCH_ITERS=10000
 
 ---
 
-## 6. NetBSD Porting
+## 7. NetBSD Porting
 
 ### Host Tools Setup (one-time)
 

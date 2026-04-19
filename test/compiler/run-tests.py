@@ -23,7 +23,7 @@ class TestResult:
         self.output = output
 
 def run_single_test(args):
-    test_path, opt, harness_dir, build_dir, iss_path, cc, objcopy, bin2hex = args
+    test_path, opt, harness_dir, build_dir, iss_path, cc, objcopy, bin2hex, builtins = args
     name = os.path.splitext(os.path.basename(test_path))[0]
     obj = os.path.join(build_dir, f"{name}.elf")
     hex_file = os.path.join(build_dir, f"{name}.hex")
@@ -36,8 +36,12 @@ def run_single_test(args):
         "-T", os.path.join(harness_dir, "test.ld"),
         os.path.join(harness_dir, "crt0.S"),
         os.path.join(harness_dir, "libc_stub.c"),
-        test_path, "-o", obj
+        test_path
     ]
+    if builtins:
+        cmd_compile.append(builtins)
+    
+    cmd_compile += ["-o", obj]
     try:
         subprocess.run(cmd_compile, check=True, capture_output=True, text=True)
     except subprocess.CalledProcessError as e:
@@ -108,6 +112,7 @@ def main():
     parser.add_argument("--cc", required=True, help="Path to clang")
     parser.add_argument("--objcopy", required=True, help="Path to llvm-objcopy")
     parser.add_argument("--bin2hex", required=True, help="Path to bin2hex.py")
+    parser.add_argument("--builtins", help="Path to libclang_rt.builtins-penumbra.a")
     parser.add_argument("--report", default="test-report.txt", help="Report file path")
     parser.add_argument("-j", "--jobs", type=int, default=multiprocessing.cpu_count(), help="Number of parallel jobs")
     
@@ -127,7 +132,7 @@ def main():
     print(f"Running with {args.jobs} parallel jobs at {args.opt}...")
 
     worker_args = [
-        (f, args.opt, args.harness_dir, args.build_dir, args.iss, args.cc, args.objcopy, args.bin2hex)
+        (f, args.opt, args.harness_dir, args.build_dir, args.iss, args.cc, args.objcopy, args.bin2hex, args.builtins)
         for f in test_files
     ]
 

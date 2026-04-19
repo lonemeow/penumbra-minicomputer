@@ -160,7 +160,7 @@ size_t strlen(const char *s) {
     return len;
 }
 
-// Compiler runtime (math)
+// Compiler runtime (math) — needed because compiler-rt only has 64-bit/float
 static inline void __divmodsi4(uint32_t n, uint32_t d,
                                uint32_t *qp, uint32_t *rp) {
     uint32_t q = 0;
@@ -220,26 +220,3 @@ int __modsi3(int n, int d) {
     __divmodsi4(un, ud, 0, &r);
     return n < 0 ? -(int)r : (int)r;
 }
-
-// Soft-float stubs (to allow linking, may cause runtime fail if test relies on FP accuracy)
-double __adddf3(double a, double b)  { (void)a; (void)b; return 0.0; }
-double __subdf3(double a, double b)  { (void)a; (void)b; return 0.0; }
-double __muldf3(double a, double b)  { (void)a; (void)b; return 0.0; }
-double __divdf3(double a, double b)  { (void)a; (void)b; return 0.0; }
-float __addsf3(float a, float b)     { (void)a; (void)b; return 0.0f; }
-float __subsf3(float a, float b)     { (void)a; (void)b; return 0.0f; }
-float __mulsf3(float a, float b)     { (void)a; (void)b; return 0.0f; }
-float __divsf3(float a, float b)     { (void)a; (void)b; return 0.0f; }
-int __ltdf2(double a, double b)      { (void)a; (void)b; return 0; }
-int __ledf2(double a, double b)      { (void)a; (void)b; return 0; }
-int __gtdf2(double a, double b)      { (void)a; (void)b; return 0; }
-int __gedf2(double a, double b)      { (void)a; (void)b; return 0; }
-int __fixdfsi(double a)             { (void)a; return 0; }
-unsigned int __fixunsdfsi(double a)       { (void)a; return 0; }
-unsigned int __fixunssfsi(float a)        { (void)a; return 0; }
-double __floatunsidf(unsigned int a)      { (void)a; return 0.0; }
-float  __floatunsisf(unsigned int a)      { (void)a; return 0.0f; }
-double __floatsidf(int a)                 { (void)a; return 0.0; }
-float  __floatsisf(int a)                 { (void)a; return 0.0f; }
-double __extendsfdf2(float a)             { (void)a; return 0.0; }
-float  __truncdfsf2(double a)             { (void)a; return 0.0f; }
