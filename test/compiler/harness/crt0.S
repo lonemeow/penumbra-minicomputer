@@ -40,6 +40,9 @@ bss_loop:
     b    init_loop
     init_done:
 
+    lli  r1, 1
+    la   r2, _argv
+
     // Call main
     bl   main
 
@@ -77,3 +80,16 @@ abort:
     lli  r11, #1
     syscall
     break
+
+// argv[0] for main's argv[] array.  Standard C requires argv[argc] == NULL.
+// Most tests use argv only to defeat constant folding, so a single entry
+// plus NULL terminator is enough.
+.section .rodata
+.align 4
+_prog_name:
+    .asciz "test"
+.align 4
+.global _argv
+_argv:
+    .long _prog_name
+    .long 0
