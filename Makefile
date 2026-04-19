@@ -181,20 +181,9 @@ OPT             ?= -O2
 # We only run UnitTests and Regression for now
 # to keep the runtime reasonable.
 
-# UnitTests/Integer tests that depend on the LLVM "Bit Accurate Types"
-# extension: __attribute__((bitwidth(N))), __bitwidthof__,
-# __builtin_bit_concat, __builtin_bit_select.  Those are from an
-# abandoned research compiler that added arbitrary-precision integer
-# support; mainstream clang silently ignores the bitwidth attribute
-# and doesn't recognize the intrinsics, so these tests can't work.
-# Plain-C tests in the same directory (field.c, matrix.c, etc.) still
-# run and cover real integer behavior.
-BITWIDTH_NAMES := arith array bigint bit_concat bit_select bit_set \
-                  bitbit bitlogic big_bit_concat big_part_set \
-                  integer_all_onesp multiple_assign negConst \
-                  part_select part_select2 part_set reduce_xor \
-                  reductions test4 test_part_set
-BITWIDTH_EXCLUDES := $(foreach n,$(BITWIDTH_NAMES),--exclude "*/Integer/$(n).c")
+# Exclude patterns live in test/compiler/excludes.txt (organized by
+# category with comments).  See that file for what's excluded and why.
+COMPILER_EXCLUDES_FILE := $(TEST_COMPILER_DIR)/excludes.txt
 
 # If COMPILER_TESTS is set, run only those specific files.  Otherwise
 # walk the full UnitTests and Regression trees.
@@ -220,33 +209,7 @@ test-compiler: $(ISS)
 		--bin2hex "sw/tools/bin2hex.py" \
 		--builtins "$(COMPILER_RT_BUILTINS)" \
 		--resource-dir "$$($(CC) -print-resource-dir)" \
-		--exclude "*/SSE/*" \
-		--exclude "*/AltiVec/*" \
-		--exclude "*/lasx/*" \
-		--exclude "*/lsx/*" \
-		--exclude "*/Vector/*" \
-		--exclude "*/AArch64/*" \
-		--exclude "*/NEON/*" \
-		--exclude "*/HVX/*" \
-		--exclude "*/AVX512*" \
-		--exclude "*/builtins/*" \
-		--exclude "*/20020412-1.c" \
-		--exclude "*/20040308-1.c" \
-		--exclude "*/20040423-1.c" \
-		--exclude "*/20041218-2.c" \
-		--exclude "*/20070919-1.c" \
-		--exclude "*/align-nest.c" \
-		--exclude "*/pr41935.c" \
-		--exclude "*/pr82210.c" \
-		--exclude "*/nestfunc-*.c" \
-		--exclude "*/nest-*.c" \
-		--exclude "*/20000822-1.c" \
-		--exclude "*/20010209-1.c" \
-		--exclude "*/20010605-1.c" \
-		--exclude "*/20020412-1.c" \
-		--exclude "*/Stanford/FloatMM.c" \
-		--exclude "*/Stanford/RealMM.c" \
-		$(BITWIDTH_EXCLUDES) \
+		--exclude-file "$(COMPILER_EXCLUDES_FILE)" \
 		--report "$(BUILD_DIR)/test-compiler-report.txt" \
 		--jobs $$(nproc)
 

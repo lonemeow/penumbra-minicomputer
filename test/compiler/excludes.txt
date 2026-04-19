@@ -1,0 +1,135 @@
+# Penumbra compiler-test exclude list.
+# One glob pattern per line.  Blank lines and '#' comments are ignored.
+# Patterns match gitignore-style against any tail of the test's relative
+# path, so "Dir/foo.c" fires for both "Dir/foo.c" and "X/Dir/foo.c", and
+# "*.c" fires for any .c file.
+
+# ─── Target-architecture SIMD / vector test trees ───────────────
+# Penumbra is scalar-only — vector intrinsic tests target x86/ARM/LoongArch.
+SSE/*
+AltiVec/*
+lasx/*
+lsx/*
+Vector/*
+AArch64/*
+NEON/*
+HVX/*
+AVX512*
+builtins/*
+
+# ─── Prior one-off exclusions ───────────────────────────────────
+# Tests that depend on specific GCC bugs, huge constants, or
+# platform-specific behavior.  Added as failures were triaged.
+20020412-1.c
+20040308-1.c
+20040423-1.c
+20041218-2.c
+20070919-1.c
+align-nest.c
+pr41935.c
+pr82210.c
+nestfunc-*.c
+nest-*.c
+20000822-1.c
+20010209-1.c
+20010605-1.c
+
+# ─── Benchmarks/Stanford: soft-float dominated ─────────────────
+# FloatMM / RealMM spend essentially 100% of their runtime in
+# __mulsf3/__addsf3 libcalls (thousands of FP mults in tight loops).
+# Too slow for the ISS to finish within its instruction ceiling.
+Stanford/FloatMM.c
+Stanford/RealMM.c
+
+# ─── LLVM "Bit Accurate Types" research extension ──────────────
+# __attribute__((bitwidth(N))), __bitwidthof__, __builtin_bit_concat,
+# __builtin_bit_select.  From an abandoned arbitrary-precision-integer
+# research compiler; mainstream clang silently ignores the attribute
+# and rejects the intrinsics.  Plain-C tests in UnitTests/Integer
+# (field.c, matrix.c, etc.) still run.
+Integer/arith.c
+Integer/array.c
+Integer/bigint.c
+Integer/bit_concat.c
+Integer/bit_select.c
+Integer/bit_set.c
+Integer/bitbit.c
+Integer/bitlogic.c
+Integer/big_bit_concat.c
+Integer/big_part_set.c
+Integer/integer_all_onesp.c
+Integer/multiple_assign.c
+Integer/negConst.c
+Integer/part_select.c
+Integer/part_select2.c
+Integer/part_set.c
+Integer/reduce_xor.c
+Integer/reductions.c
+Integer/test4.c
+Integer/test_part_set.c
+
+# ─── GCC nested functions (trampolines) ────────────────────────
+# clang rejects outright: "function definition is not allowed here".
+# Nothing for the Penumbra backend to implement; excluded wholesale.
+20030501-1.c
+20040520-1.c
+20061220-1.c
+20090219-1.c
+920415-1.c
+920428-2.c
+920501-7.c
+920612-2.c
+920721-4.c
+921017-1.c
+921215-1.c
+931002-1.c
+comp-goto-2.c
+pr22061-3.c
+pr22061-4.c
+pr24135.c
+pr51447.c
+pr71494.c
+
+# ─── __builtin_setjmp / __builtin_longjmp ──────────────────────
+# GCC-only intrinsics with custom target-specific lowering; clang
+# reports "not supported for the current target".
+built-in-setjmp.c
+pr60003.c
+pr64242.c
+pr84521.c
+
+# ─── Other unsupported extensions (one-offs) ───────────────────
+pr84748.c        # __int128 on a 32-bit target
+pr80692.c        # _Decimal64 ('DD' float suffix)
+990413-2.c       # x86 asm constraint "=t" (FP stack top)
+pr85331.c        # GCC vector-assign-from-scalar
+va-arg-pack-1.c  # __builtin_va_arg_pack (GCC-only)
+
+# ─── C23 / clang-22 syntax the vendored tests predate ──────────
+# The "2020-01-06-coverage-*" series uses constructs clang-22 rejects
+# with "expected ')'".  Not Penumbra-specific.
+2020-01-06-coverage-001.c
+2020-01-06-coverage-002.c
+2020-01-06-coverage-003.c
+2020-01-06-coverage-004.c
+2020-01-06-coverage-005.c
+2020-01-06-coverage-006.c
+2020-01-06-coverage-007.c
+2020-01-06-coverage-008.c
+2020-01-06-coverage-009.c
+2020-01-06-coverage-010.c
+
+# ─── Stdio FILE* plumbing (harness-bound, not codegen) ─────────
+# These test fprintf/stdout/stderr/FILE* handling.  Our harness libc
+# is line-buffered stdout with no FILE abstraction, so they fail at
+# compile time on missing stdout/stderr/FILE identifiers — low value
+# for a bring-up compiler test suite.
+PR491.c
+fprintf-1.c
+fprintf-2.c
+fprintf-chk-1.c
+gofast.c
+user-printf.c
+vfprintf-1.c
+vfprintf-chk-1.c
+printf-2.c

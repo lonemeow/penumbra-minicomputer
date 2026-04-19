@@ -166,7 +166,8 @@ def main():
     parser.add_argument("--bin2hex", required=True, help="Path to bin2hex.py")
     parser.add_argument("--builtins", help="Path to libclang_rt.builtins-penumbra.a")
     parser.add_argument("--resource-dir", help="Clang resource directory")
-    parser.add_argument("--exclude", action="append", help="Glob pattern to exclude tests")
+    parser.add_argument("--exclude", action="append", default=[], help="Glob pattern to exclude tests (repeatable)")
+    parser.add_argument("--exclude-file", action="append", default=[], help="File listing exclude patterns, one per line (# comments allowed)")
     parser.add_argument("--report", default="test-report.txt", help="Report file path")
     parser.add_argument("-j", "--jobs", type=int, default=multiprocessing.cpu_count(), help="Number of parallel jobs")
     
@@ -174,6 +175,15 @@ def main():
 
     if not args.test_dir and not args.test_file:
         parser.error("at least one --test-dir or --test-file is required")
+
+    # Merge --exclude-file contents into args.exclude.  One pattern per
+    # line; blank lines and lines starting with '#' are ignored.
+    for ef in args.exclude_file:
+        with open(ef) as fh:
+            for line in fh:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    args.exclude.append(line)
 
     os.makedirs(args.build_dir, exist_ok=True)
 
@@ -201,14 +211,20 @@ def main():
                     # e.g. llvm-test-suite/UnitTests/test.c
                     rel_path = os.path.relpath(full_path, parent_dir)
                     
-                    # Check exclusions
+                    # Check exclusions.  Patterns match against any tail
+                    # of rel_path (gitignore-style "match at any depth"):
+                    # "Stanford/FloatMM.c" fires for both "Stanford/FloatMM.c"
+                    # and "Benchmarks/Stanford/FloatMM.c"; "*.c" fires for
+                    # any .c file.  Equivalent to checking fnmatch against
+                    # rel_path itself and every suffix down to the basename.
                     excluded = False
-                    if args.exclude:
-                        for pattern in args.exclude:
-                            if fnmatch.fnmatch(rel_path, pattern) or fnmatch.fnmatch(os.path.basename(full_path), pattern):
-                                excluded = True
-                                break
-                    
+                    parts = rel_path.split(os.sep)
+                    for pattern in args.exclude:
+                        if any(fnmatch.fnmatch(os.sep.join(parts[i:]), pattern)
+                               for i in range(len(parts))):
+                            excluded = True
+                            break
+
                     if not excluded:
                         test_data.append((full_path, rel_path))
     
