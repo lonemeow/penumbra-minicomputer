@@ -40,7 +40,7 @@ def run_single_test(args):
     
     common_flags = shlex.split(cc) + [
         opt, "-ffreestanding", "-nostdlib", "-nostdinc",
-        "-I", harness_dir,
+        "-I", harness_dir, "-w",
     ]
     if resource_dir:
         common_flags += ["-isystem", os.path.join(resource_dir, "include")]
