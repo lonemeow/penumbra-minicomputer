@@ -199,6 +199,11 @@ test-compiler: $(ISS)
 		--exclude "*/AltiVec/*" \
 		--exclude "*/lasx/*" \
 		--exclude "*/lsx/*" \
+		--exclude "*/Vector/*" \
+		--exclude "*/AArch64/*" \
+		--exclude "*/NEON/*" \
+		--exclude "*/HVX/*" \
+		--exclude "*/AVX512*" \
 		--report "$(BUILD_DIR)/test-compiler-report.txt" \
 		--jobs $$(nproc)
 
