@@ -169,6 +169,51 @@ test-iss: $(ISS)
 		exit 1; \
 	fi
 
+# ── Compiler Correctness Tests ─────────────────────────────────
+# Runs curated tests from llvm-test-suite on ISS +hosted mode.
+# Usage: make test-compiler [OPT="-O2"]
+TEST_COMPILER_DIR = test/compiler
+HARNESS_DIR      = $(TEST_COMPILER_DIR)/harness
+LLVM_TEST_SUITE  = $(TEST_COMPILER_DIR)/llvm-test-suite
+OPT             ?= -O2
+
+# We only run UnitTests and Regression for now
+# to keep the runtime reasonable.
+COMPILER_TESTS := $(shell find $(LLVM_TEST_SUITE)/UnitTests -name "*.c") \
+                  $(shell find $(LLVM_TEST_SUITE)/Regression -name "*.c")
+
+.PHONY: test-compiler
+test-compiler: $(ISS)
+	@mkdir -p $(BUILD_DIR)/test-compiler
+	@pass=0; fail=0; failed=""; \
+	echo "── Running compiler correctness tests ($(OPT)) ──"; \
+	for test in $(COMPILER_TESTS); do \
+		name=$$(basename $$test .c); \
+		obj=$(BUILD_DIR)/test-compiler/$$name.elf; \
+		hex=$(BUILD_DIR)/test-compiler/$$name.hex; \
+		if ! $(CC) $(OPT) -ffreestanding -nostdlib -I $(HARNESS_DIR) -T $(HARNESS_DIR)/test.ld \
+			$(HARNESS_DIR)/crt0.S $(HARNESS_DIR)/libc_stub.c $$test -o $$obj > /dev/null 2>&1; then \
+			printf "  \033[31mFAIL\033[0m  %s (compile error)\n" "$$name"; \
+			fail=$$((fail + 1)); failed="$$failed $$name"; continue; \
+		fi; \
+		$(OBJCOPY) -O binary $$obj $(BUILD_DIR)/test-compiler/$$name.bin; \
+		$(BIN2HEX) $(BUILD_DIR)/test-compiler/$$name.bin -o $$hex; \
+		if ./$(ISS) $$hex +hosted > /dev/null 2>&1; then \
+			printf "  \033[32mPASS\033[0m  %s\n" "$$name"; \
+			pass=$$((pass + 1)); \
+		else \
+			printf "  \033[31mFAIL\033[0m  %s (runtime error)\n" "$$name"; \
+			fail=$$((fail + 1)); failed="$$failed $$name"; \
+		fi; \
+	done; \
+	echo ""; \
+	total=$$((pass + fail)); \
+	echo "$$pass/$$total tests passed"; \
+	if [ $$fail -gt 0 ]; then \
+		echo "  *** $$fail FAILED:$$failed ***"; \
+		exit 1; \
+	fi
+
 # ── Interactive simulation (ISS — fast, instruction-level) ─────
 # Builds boot ROM and runs through the ISS. No Docker needed.
 # Usage: make simulate                    (interactive, default)

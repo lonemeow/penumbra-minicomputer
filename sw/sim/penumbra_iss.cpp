@@ -1751,7 +1751,12 @@ int main(int argc, char** argv) {
     memset(rom, 0, sizeof(rom));
     cpu_reset();
 
-    if (!load_hex(hex_path, rom, ROM_SIZE)) return 1;
+    if (hosted_mode) {
+        if (!load_hex(hex_path, ram, RAM_SIZE)) return 1;
+        cpu.pc = 0;
+    } else {
+        if (!load_hex(hex_path, rom, ROM_SIZE)) return 1;
+    }
 
     SdCardSim sd(sd_path);
     sd_card = sd.is_present() ? &sd : nullptr;
