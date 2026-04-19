@@ -122,7 +122,25 @@ static void print_double(int (*put)(int), double d, int width, int precision) {
     // only the bit pattern distinguishes them.
     union { double d; uint64_t u; } bits;
     bits.d = d;
-    if (bits.u >> 63) {
+    uint64_t exp_bits = (bits.u >> 52) & 0x7FF;
+    uint64_t mantissa = bits.u & (((uint64_t)1 << 52) - 1);
+    int sign = (int)(bits.u >> 63);
+
+    // IEEE 754: exponent all-1s encodes NaN (mantissa != 0) or
+    // infinity (mantissa == 0).  Convert to the arithmetic absolute
+    // value via `d = -d` would invoke undefined/implementation-defined
+    // behavior for NaN, so classify from the bit pattern first.
+    if (exp_bits == 0x7FF) {
+        if (mantissa != 0) {
+            put('n'); put('a'); put('n');
+        } else {
+            if (sign) put('-');
+            put('i'); put('n'); put('f');
+        }
+        return;
+    }
+
+    if (sign) {
         put('-');
         d = -d;
     }
