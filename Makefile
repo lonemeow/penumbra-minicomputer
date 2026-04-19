@@ -181,11 +181,20 @@ OPT             ?= -O2
 # We only run UnitTests and Regression for now
 # to keep the runtime reasonable.
 
+# If COMPILER_TESTS is set, run only those specific files.  Otherwise
+# walk the full UnitTests and Regression trees.
+ifdef COMPILER_TESTS
+COMPILER_TEST_ARGS := $(foreach t,$(COMPILER_TESTS),--test-file "$(t)")
+else
+COMPILER_TEST_ARGS := \
+	--test-dir "$(LLVM_TEST_SUITE)/UnitTests" \
+	--test-dir "$(LLVM_TEST_SUITE)/Regression"
+endif
+
 .PHONY: test-compiler
 test-compiler: $(ISS)
 	@$(PYTHON) $(TEST_COMPILER_DIR)/run-tests.py \
-		--test-dir "$(LLVM_TEST_SUITE)/UnitTests" \
-		--test-dir "$(LLVM_TEST_SUITE)/Regression" \
+		$(COMPILER_TEST_ARGS) \
 		"--opt=$(OPT)" \
 		--harness-dir "$(HARNESS_DIR)" \
 		--build-dir "$(BUILD_DIR)/test-compiler" \

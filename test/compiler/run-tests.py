@@ -155,7 +155,8 @@ def run_single_test(args):
 
 def main():
     parser = argparse.ArgumentParser(description="Penumbra Compiler Test Runner")
-    parser.add_argument("--test-dir", action="append", required=True, help="Directory containing tests")
+    parser.add_argument("--test-dir", action="append", default=[], help="Directory containing tests")
+    parser.add_argument("--test-file", action="append", default=[], help="Specific test file (repeatable). When set, skips --test-dir walking.")
     parser.add_argument("--opt", default="-O2", help="Optimization level")
     parser.add_argument("--harness-dir", required=True, help="Harness directory")
     parser.add_argument("--build-dir", required=True, help="Build directory")
@@ -171,9 +172,21 @@ def main():
     
     args = parser.parse_args()
 
+    if not args.test_dir and not args.test_file:
+        parser.error("at least one --test-dir or --test-file is required")
+
     os.makedirs(args.build_dir, exist_ok=True)
 
     test_data = []
+    # --test-file mode: run only the specified files, bypassing directory
+    # walking and exclusion patterns.  Used by `make test-compiler
+    # COMPILER_TESTS=...` to target individual tests.
+    for f in args.test_file:
+        full_path = os.path.abspath(f)
+        # display_name is relative to cwd so the report is readable
+        rel_path = os.path.relpath(full_path)
+        test_data.append((full_path, rel_path))
+
     for d in args.test_dir:
         # Find absolute path of test dir to calculate relative paths correctly
         abs_test_dir = os.path.abspath(d)
