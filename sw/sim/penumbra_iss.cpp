@@ -1781,7 +1781,8 @@ int main(int argc, char** argv) {
 
     if (!full_raw)
         signal(SIGINT, sigint_handler);
-    raw_mode();
+    if (!hosted_mode)
+        raw_mode();
 
     if (!quiet_mode) {
         if (full_raw)
