@@ -117,18 +117,31 @@ static void kprintn(int (*put)(int), uint64_t ul, int base, int width, int zerop
 }
 
 static void print_double(int (*put)(int), double d, int width, int precision) {
-    if (d < 0) {
+    // Detect the sign via the MSB of the bit pattern rather than `d < 0`,
+    // because IEEE 754 treats -0.0 and +0.0 as equal under comparison —
+    // only the bit pattern distinguishes them.
+    union { double d; uint64_t u; } bits;
+    bits.d = d;
+    if (bits.u >> 63) {
         put('-');
         d = -d;
     }
-    
+
+    if (precision < 0) precision = 6;
+
+    int i;
+    double r_add = 0.5;
+    for (i = 0; i < precision; i++) {
+        r_add *= 0.1;
+    }
+    d += r_add;
+
     uint64_t ipart = (uint64_t)d;
     kprintn(put, ipart, 10, 0, 0);
     put('.');
-    
-    if (precision < 0) precision = 6;
+
     double fpart = d - (double)ipart;
-    for (int i = 0; i < precision; i++) {
+    for (i = 0; i < precision; i++) {
         fpart *= 10.0;
         int digit = (int)fpart;
         put(digit + '0');
