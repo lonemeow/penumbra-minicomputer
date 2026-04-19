@@ -60,6 +60,15 @@ makecontext(ucontext_t *ucp, void (*func)(void), int argc, ...)
 	gr[_REG_LR] = (__greg_t)(uintptr_t)_resumecontext;
 	gr[_REG_PC] = (__greg_t)(uintptr_t)func;
 
+	/*
+	 * On Penumbra, R12 is both a GPR and the thread pointer by ABI.
+	 * The ucontext may have been filled by getcontext() in a different
+	 * thread (see t_swapcontext: main thread builds the context, worker
+	 * pthread runs makecontext on it).  The new context must resume as
+	 * *this* thread, so overwrite the stale R12/TP with the current one.
+	 */
+	gr[_REG_R12] = (__greg_t)(uintptr_t)__lwp_getprivate_fast();
+
 	va_start(ap, argc);
 	/* Pass up to four arguments in R1-R4. */
 	for (i = 0; i < argc && i < 4; i++)

@@ -7,7 +7,8 @@ SRCS+=	flt_rounds.c
 
 # ucontext / LWP
 SRCS+=	makecontext.c resumecontext.c swapcontext.S _lwp.c
-CPPFLAGS._lwp.c	+= -D_LIBC_SOURCE
+CPPFLAGS._lwp.c		+= -D_LIBC_SOURCE
+CPPFLAGS.makecontext.c	+= -D_LIBC_SOURCE
 
 # Common ieee754 constants and functions
 SRCS+=	infinityf_ieee754.c infinity_ieee754.c infinityl_ieee754.c

@@ -19,6 +19,7 @@ typedef int		__greg_t;
 typedef __greg_t	__gregset_t[_NGREG];
 
 #define _REG_R0		0
+#define _REG_R12	12
 #define _REG_R15	15
 #define _REG_PC		15	/* R15 is the program counter */
 #define _REG_SP		14	/* R14 is the stack pointer */
