@@ -48,6 +48,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifndef NULL
+#define NULL ((void*)0)
+#endif
+
 void exit(int status) {
     __asm__ volatile (
         "mov r1, %0\n"
@@ -218,6 +222,19 @@ static int sputchar(int c) {
     return c;
 }
 
+void *memset(void *s, int c, size_t n) {
+    unsigned char *p = s;
+    while (n--) *p++ = (unsigned char)c;
+    return s;
+}
+
+void *memcpy(void *dest, const void *src, size_t n) {
+    char *d = dest;
+    const char *s = src;
+    while (n--) *d++ = *s++;
+    return dest;
+}
+
 int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap) {
     sbuf = buf;
     ebuf = buf + size - 1;
@@ -263,19 +280,48 @@ int printf(const char *fmt, ...) {
     return 0;
 }
 
-/* ── Memory management stubs ───────────────────────────────────────────── */
+/* ── Memory management ─────────────────────────────────────────────────── */
 
-void *memset(void *s, int c, size_t n) {
-    unsigned char *p = s;
-    while (n--) *p++ = (unsigned char)c;
-    return s;
+#define HEAP_SIZE (128 * 1024)
+static uint8_t heap[HEAP_SIZE];
+static size_t heap_ptr = 0;
+
+void *malloc(size_t size) {
+    // 8-byte alignment for the header + payload
+    size_t actual_size = (size + 7 + 8) & ~7;
+    if (heap_ptr + actual_size > HEAP_SIZE) return NULL;
+    
+    size_t *header = (size_t *)&heap[heap_ptr];
+    *header = size;
+    
+    void *ptr = &heap[heap_ptr + 8];
+    heap_ptr += actual_size;
+    return ptr;
 }
 
-void *memcpy(void *dest, const void *src, size_t n) {
-    char *d = dest;
-    const char *s = src;
-    while (n--) *d++ = *s++;
-    return dest;
+void free(void *ptr) {
+    // No-op for bump allocator
+}
+
+void *calloc(size_t nmemb, size_t size) {
+    size_t total = nmemb * size;
+    void *ptr = malloc(total);
+    if (ptr) memset(ptr, 0, total);
+    return ptr;
+}
+
+void *realloc(void *ptr, size_t size) {
+    if (!ptr) return malloc(size);
+    if (size == 0) return NULL;
+    
+    size_t old_size = *((size_t *)ptr - 1);
+    if (size <= old_size) return ptr; // Could shrink but no need
+    
+    void *new_ptr = malloc(size);
+    if (new_ptr) {
+        memcpy(new_ptr, ptr, old_size);
+    }
+    return new_ptr;
 }
 
 int memcmp(const void *s1, const void *s2, size_t n) {
