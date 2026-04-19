@@ -1063,6 +1063,13 @@ static void sysreg_write(int dev, int reg, uint32_t val) {
 static bool pc_written;  // Set by exception entry, branches, jumps
 
 static void exception_entry(int vector) {
+    if (hosted_mode) {
+        fprintf(stderr, "\n[ERROR] Exception %d at PC=0x%08X in hosted mode. Aborting.\n", vector, cpu.pc);
+        fprintf(stderr, "  FAULT_ADDR=0x%08X FAULT_STATUS=0x%08X\n", mmu.fault_addr, mmu.fault_status);
+        hosted_exit_code = 1;
+        cpu.halted = true;
+        return;
+    }
     // Save exception state
     cpu.epc = cpu.pc;
     cpu.esr = cpu.sr;
@@ -1580,11 +1587,11 @@ static void trace_insn() {
 // Program Loading
 // ═══════════════════════════════════════════════════════════════
 
-static bool load_hex(const char* path, uint8_t* mem, size_t max_size) {
+static bool load_hex(const char* path, uint8_t* mem, size_t max_size, uint32_t offset = 0) {
     FILE* f = fopen(path, "r");
     if (!f) { fprintf(stderr, "Cannot open '%s'\n", path); return false; }
     char line[256];
-    size_t addr = 0;
+    size_t addr = offset;
     while (fgets(line, sizeof(line), f) && addr < max_size) {
         if (line[0] == '/' || line[0] == '\n' || line[0] == '\r') continue;
         uint32_t word;
@@ -1754,8 +1761,8 @@ int main(int argc, char** argv) {
     cpu_reset();
 
     if (hosted_mode) {
-        if (!load_hex(hex_path, ram, RAM_SIZE)) return 1;
-        cpu.pc = 0;
+        if (!load_hex(hex_path, ram, RAM_SIZE, 0x1000)) return 1;
+        cpu.pc = 0x1000;
     } else {
         if (!load_hex(hex_path, rom, ROM_SIZE)) return 1;
     }
