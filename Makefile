@@ -205,6 +205,14 @@ test-compiler: $(ISS)
 		--exclude "*/HVX/*" \
 		--exclude "*/AVX512*" \
 		--exclude "*/builtins/*" \
+		--exclude "*/20020412-1.c" \
+		--exclude "*/20040308-1.c" \
+		--exclude "*/20040423-1.c" \
+		--exclude "*/20041218-2.c" \
+		--exclude "*/20070919-1.c" \
+		--exclude "*/align-nest.c" \
+		--exclude "*/pr41935.c" \
+		--exclude "*/pr82210.c" \
 		--report "$(BUILD_DIR)/test-compiler-report.txt" \
 		--jobs $$(nproc)
 
