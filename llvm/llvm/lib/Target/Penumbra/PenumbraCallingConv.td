@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// Calling convention for Penumbra (see doc/abi/penumbra-abi.md):
+// Calling convention for Penumbra (see doc/system/abi.md):
 //   Arguments:  R1-R4 (first 4 scalar args), then stack (4-byte slots)
 //   Return:     R1 (32-bit), R1+R2 (64-bit)
 //   Callee-saved: R5-R10

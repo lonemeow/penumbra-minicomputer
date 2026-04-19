@@ -101,7 +101,7 @@ typedef unsigned int uint32_t;
 #define BUSCTL_RST    0x1
 #define BUSCTL_CFG_EN 0x2
 
-/* Bus reset pulse minimum: 100 µs (see doc/bus/bus-overview.md).
+/* Bus reset pulse minimum: 100 µs (see doc/hardware/bus-protocol.md).
  * Each volatile loop iteration is ~25-30 cycles (load, compare, branch,
  * increment, store).  At 12.5 MHz that's ~2 µs/iteration.
  * 100 iterations ≈ 200 µs — comfortably above the 100 µs spec.

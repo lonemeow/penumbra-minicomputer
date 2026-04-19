@@ -5,7 +5,7 @@
  *
  * Host controller driver that implements NetBSD's MI sdmmc_chip_functions
  * against the Penumbra SPI v2 register interface
- * (doc/boot/spi-controller.md).  The hardware talks SPI; the SD protocol
+ * (doc/system/devices/spi.md).  The hardware talks SPI; the SD protocol
  * is driven by the MI sdmmc(4) layer above us, which calls exec_command
  * with a fully-framed SD command and expects the response filled in.
  *

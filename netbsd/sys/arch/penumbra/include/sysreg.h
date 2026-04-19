@@ -6,7 +6,7 @@
  * Device and register numbers for RDSYS/WRSYS instructions.
  * Safe for inclusion from both C and assembly (.S) files.
  *
- * See doc/isa/sysregs-reference.md for the full specification.
+ * See doc/system/sysregs.md for the full specification.
  */
 
 #ifndef _PENUMBRA_SYSREG_H_

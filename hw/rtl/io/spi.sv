@@ -13,7 +13,8 @@
 //   0x14  IRQ_STATUS   (R/W1C) XFER_DONE(latched), thresholds(live)
 //   0x18  IRQ_ENABLE   (R/W)   Per-source IRQ mask
 //
-// See doc/boot/spi-controller.md for full specification.
+// See doc/system/devices/spi.md (software interface) and
+// doc/hardware/spi-hardware.md (internal state machines).
 //
 // Bus protocol: 1-cycle read latency, 0-cycle write.
 

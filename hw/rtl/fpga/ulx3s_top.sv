@@ -88,7 +88,7 @@ module ulx3s_top (
     // ── Reset: PLL lock + btn[1] (FIRE1) manual reset ──────────
     // Hold reset until PLL locks, then count 2^18 clocks.
     // 2^18 / 12.5 MHz ≈ 21 ms — exceeds 10 ms minimum for
-    // power-on reset (see doc/bus/bus-overview.md Reset Timing).
+    // power-on reset (see doc/hardware/bus-protocol.md Reset Timing).
     // Pressing btn[1] reasserts reset (synchronizer for btn input).
     logic btn1_sync1, btn1_sync2;
     always_ff @(posedge clk) begin
@@ -441,7 +441,7 @@ module ulx3s_top (
     timer #(
         // TODO: TICK_FREQ (1041666) triggers marginal SDRAM timing failure
         // via placement changes.  Use nominal 1 MHz until SDRAM clock
-        // phasing is fixed (see doc/hw/sdram-optimization.md).
+        // phasing is fixed (see doc/internals/sdram-optimization.md).
         .TICK_FREQ_HZ (32'd1_000_000)
     ) u_timer (
         .i_clk       (clk),

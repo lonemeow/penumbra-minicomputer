@@ -42,3 +42,27 @@ ack:       ______/‾‾\/‾‾‾\/‾‾‾\/‾‾‾\________
 data:      ------[W0 ][W1  ][W2  ][W3  ]-----
 ```
 The slave responds to each address independently.
+
+## Reset Timing
+
+The `rst` line resets **autoconfig state** (the `configured` and
+`cfg_seen_low` flip-flops in each device). It does not initialize
+device-specific hardware (SDRAM controllers, SD cards, …) — each
+device driver performs its own initialization after autoconfig
+assigns a base address.
+
+Two pulse sources drive the same line:
+
+| Source                | Minimum duration | Rationale |
+|-----------------------|------------------|-----------|
+| Hardware (power-on)   | **10 ms**        | Covers PLL lock, power rail stabilization, crystal oscillator startup. Board implementations must meet this regardless of clock frequency. |
+| Software (`BUSCTL.RST`)| **100 µs**      | Propagation through the async external bus: worst case is 74xx gate delays + backplane trace delays + RC settling. 74HC async clear is <100 ns, but the spec allows for long backplanes and slow LS/ALS parts. |
+
+**Board implementation.** The hardware reset counter width must satisfy
+`2^N / f_clk >= 10 ms`. At 12.5 MHz, `N=17` gives 10.5 ms (the ULX3S
+uses `N=18` for margin). Faster clocks need wider counters.
+
+**Software implementation.** The boot ROM delay loop between asserting
+and deasserting `BUSCTL.RST` must hold the pulse for at least 100 µs.
+The current ROM uses a calibrated iteration count based on the system
+clock frequency (`BUS_RESET_DELAY_ITERS` in `boot_rom.c`).

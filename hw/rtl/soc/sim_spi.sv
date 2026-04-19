@@ -1,7 +1,7 @@
 // Penumbra Simulation SPI Master v2 — FIFO-capable SPI controller
 //
 // Memory-mapped I/O device (4 KB page, base assigned by autoconfig).
-// Same register interface as the real spi.sv (see doc/boot/spi-controller.md).
+// Same register interface as the real spi.sv (see doc/system/devices/spi.md).
 //
 // Register map (word-strided, addr[4:2] decode):
 //   0x00  CAP          (R)     Version [7:0], FIFO depth [23:8]

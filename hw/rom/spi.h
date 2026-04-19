@@ -5,7 +5,7 @@
  * MMIO base address. No globals (ROM has no writable data section).
  * The base address comes from the boot data device list.
  *
- * Register layout: SPI v2 (see doc/boot/spi-controller.md).
+ * Register layout: SPI v2 (see doc/system/devices/spi.md).
  * Boot ROM uses single-byte polled mode only (FIFO_EN=0).
  */
 

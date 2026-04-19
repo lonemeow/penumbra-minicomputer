@@ -3,7 +3,7 @@
 #
 # Uses NetBSD cross-tools (nbfdisk, nbmakefs) so no host packages needed.
 #
-# Disk layout (from doc/boot/boot-process.md):
+# Disk layout (from doc/system/boot-protocol.md):
 #   Sector 0:           MBR partition table
 #   Sectors 1–2047:     Partition gap (unused)
 #   Sectors 2048+:      Partition 1: FAT32 (boot loader + kernel)

@@ -11,7 +11,7 @@
 //   R14 = stack pointer (hardware-banked USP/SSP)
 //   R15 = program counter (read-only from software)
 //
-// Calling convention (see doc/abi/penumbra-abi.md):
+// Calling convention (see doc/system/abi.md):
 //   R1-R4   = arguments / return values (caller-saved)
 //   R5-R10  = callee-saved; R10 = frame pointer if needed
 //   R11     = scratch (caller-saved)
