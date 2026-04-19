@@ -94,10 +94,12 @@ int puts(const char *s) {
 
 /* ── Formatted output (adapted from NetBSD libsa) ──────────────────────── */
 
-static void kprintn(int (*put)(int), uint64_t ul, int base, int width, int zeropad) {
+static void kprintn(int (*put)(int), uint64_t ul, int base, int width, int zeropad, int upper) {
     char buf[64];
     char *p = buf;
-    static const char hexdigits[] = "0123456789abcdef";
+    static const char hexdigits_lo[] = "0123456789abcdef";
+    static const char hexdigits_up[] = "0123456789ABCDEF";
+    const char *hexdigits = upper ? hexdigits_up : hexdigits_lo;
 
     do {
         *p++ = hexdigits[ul % base];
@@ -159,7 +161,7 @@ static void print_double(int (*put)(int), double d, int width, int precision) {
     while (width > len) { put(' '); width--; }
 
     if (sign) put('-');
-    kprintn(put, ipart, 10, 0, 0);
+    kprintn(put, ipart, 10, 0, 0, 0);
     if (precision > 0) {
         put('.');
         double fpart = d - (double)ipart;
@@ -214,33 +216,39 @@ static void kdoprnt(int (*put)(int), const char *fmt, va_list ap) {
             if (!p) p = "(null)";
             while (*p) put(*p++);
             break;
-        case 'd':
+        case 'd': case 'i':
             if (lflag >= 2) ul = va_arg(ap, long long);
             else if (lflag == 1) ul = va_arg(ap, long);
             else ul = va_arg(ap, int);
-            
+
             if ((int64_t)ul < 0) {
                 put('-');
                 ul = -(int64_t)ul;
             }
-            kprintn(put, ul, 10, width, zeropad);
+            kprintn(put, ul, 10, width, zeropad, 0);
             break;
         case 'u':
             if (lflag >= 2) ul = va_arg(ap, unsigned long long);
             else if (lflag == 1) ul = va_arg(ap, unsigned long);
             else ul = va_arg(ap, unsigned int);
-            kprintn(put, ul, 10, width, zeropad);
+            kprintn(put, ul, 10, width, zeropad, 0);
             break;
-        case 'x':
+        case 'o':
             if (lflag >= 2) ul = va_arg(ap, unsigned long long);
             else if (lflag == 1) ul = va_arg(ap, unsigned long);
             else ul = va_arg(ap, unsigned int);
-            kprintn(put, ul, 16, width, zeropad);
+            kprintn(put, ul, 8, width, zeropad, 0);
+            break;
+        case 'x': case 'X':
+            if (lflag >= 2) ul = va_arg(ap, unsigned long long);
+            else if (lflag == 1) ul = va_arg(ap, unsigned long);
+            else ul = va_arg(ap, unsigned int);
+            kprintn(put, ul, 16, width, zeropad, ch == 'X');
             break;
         case 'p':
             put('0'); put('x');
             ul = (uintptr_t)va_arg(ap, void *);
-            kprintn(put, ul, 16, 8, 1);
+            kprintn(put, ul, 16, 8, 1, 0);
             break;
         case 'f':
             print_double(put, va_arg(ap, double), width, precision);
