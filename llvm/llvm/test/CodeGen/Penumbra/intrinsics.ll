@@ -2,14 +2,44 @@
 ; RUN: llc -mtriple=penumbra -global-isel -verify-machineinstrs < %s \
 ; RUN:   | FileCheck %s
 
-; returnaddress(0) → MOV from LR (R13)
+; returnaddress(0) captures R13 at entry-block head so it survives
+; intervening BL/JALR calls which otherwise overwrite the live LR
+; with their own call-site return address.
+
 declare ptr @llvm.returnaddress(i32)
-define ptr @ret_addr() {
-; CHECK-LABEL: ret_addr:
+declare void @ext_fn()
+
+; Leaf: no intervening calls, but we still route through a captured
+; vreg so the selector path is the same shape for both cases.
+define ptr @ret_addr_leaf() {
+; CHECK-LABEL: ret_addr_leaf:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    mov r1, r13
+; CHECK-NEXT:    mov r1, r1
 ; CHECK-NEXT:    jmp r13
+  %r = call ptr @llvm.returnaddress(i32 0)
+  ret ptr %r
+}
+
+; Non-leaf: the call to ext_fn() clobbers R13.  The captured value
+; must be kept alive across the call (spill, CSR, whatever RegAlloc
+; picks) and read back for the return, NOT re-read from live R13.
+define ptr @ret_addr_nonleaf() {
+; CHECK-LABEL: ret_addr_nonleaf:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  // %bb.0:
+; CHECK-NEXT:    sub r14, 8
+; CHECK-NEXT:    stw r5, [r14 + 4] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    mov r5, r13
+; CHECK-NEXT:    bl ext_fn
+; CHECK-NEXT:    mov r1, r5
+; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r5, [r14 + 4] // 4-byte Folded Reload
+; CHECK-NEXT:    add r14, 8
+; CHECK-NEXT:    jmp r13
+  call void @ext_fn()
   %r = call ptr @llvm.returnaddress(i32 0)
   ret ptr %r
 }

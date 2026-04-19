@@ -6,6 +6,7 @@
 
 #include "MCTargetDesc/PenumbraFixupKinds.h"
 #include "MCTargetDesc/PenumbraMCTargetDesc.h"
+#include "PenumbraMachineFunctionInfo.h"
 #include "PenumbraRegisterBankInfo.h"
 #include "PenumbraSubtarget.h"
 #include "PenumbraTargetMachine.h"
@@ -939,7 +940,12 @@ bool PenumbraInstructionSelector::selectIntrinsic(
   unsigned IntrinID = cast<GIntrinsic>(I).getIntrinsicID();
   const DebugLoc &DL = I.getDebugLoc();
 
-  // __builtin_return_address(0) → read LR (R13).
+  // __builtin_return_address(0) → read a vreg that captures R13 at
+  // function entry.  Reading R13 directly would be wrong in non-leaf
+  // functions: every BL/JALR clobbers R13 with its own call-site
+  // return address before we reach this point.  The capture is done
+  // lazily: on first use, insert a MOV from R13 into a fresh vreg at
+  // the top of the entry block; subsequent uses reuse that vreg.
   if (IntrinID == Intrinsic::returnaddress) {
     Register DstReg = I.getOperand(0).getReg();
     unsigned Depth = I.getOperand(2).getImm();
@@ -947,12 +953,28 @@ bool PenumbraInstructionSelector::selectIntrinsic(
       return false;
     MachineFunction &MF = *I.getParent()->getParent();
     MF.getFrameInfo().setReturnAddressIsTaken(true);
-    // Ensure R13 is available as a live-in to this block.
-    if (!MBB.isLiveIn(Penumbra::R13))
-      MBB.addLiveIn(Penumbra::R13);
+    auto *FuncInfo = MF.getInfo<PenumbraMachineFunctionInfo>();
+    Register RAVReg = FuncInfo->getReturnAddressVReg();
+    if (!RAVReg.isValid()) {
+      // First reference: materialize the capture at entry-block head.
+      // Both the function-level MRI and the entry block need R13 marked
+      // as live-in.  The MRI live-in is what `spillCalleeSavedRegisters`
+      // checks to suppress the kill flag on R13's CSR spill so that this
+      // later read stays valid.
+      MachineBasicBlock &EntryMBB = MF.front();
+      if (!MRI.isLiveIn(Penumbra::R13))
+        MRI.addLiveIn(Penumbra::R13);
+      if (!EntryMBB.isLiveIn(Penumbra::R13))
+        EntryMBB.addLiveIn(Penumbra::R13);
+      RAVReg = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
+      BuildMI(EntryMBB, EntryMBB.begin(), DL, TII.get(Penumbra::MOV))
+          .addDef(RAVReg)
+          .addReg(Penumbra::R13);
+      FuncInfo->setReturnAddressVReg(RAVReg);
+    }
     auto NewI = BuildMI(MBB, I, DL, TII.get(Penumbra::MOV))
         .addDef(DstReg)
-        .addReg(Penumbra::R13);
+        .addReg(RAVReg);
     I.eraseFromParent();
     return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
   }

@@ -89,6 +89,34 @@ void PenumbraFrameLowering::emitEpilogue(MachineFunction &MF,
       .addImm(StackSize);
 }
 
+// Spill CSRs at the prologue insertion point.  Mirrors AArch64's
+// `getPrologueDeath` pattern: if a CSR is also marked live-in to the
+// function, suppress the kill flag on its spill — the live-in status
+// means a later instruction still needs the incoming value.  The main
+// case is R13 when __builtin_return_address(0) seeds a capture MOV at
+// the entry-block head; spilling R13 to the stack doesn't alter R13
+// itself, so an over-eager kill annotation would falsely report the
+// value as dead and trip the machine verifier.
+bool PenumbraFrameLowering::spillCalleeSavedRegisters(
+    MachineBasicBlock &MBB, MachineBasicBlock::iterator MI,
+    ArrayRef<CalleeSavedInfo> CSI, const TargetRegisterInfo *TRI) const {
+  if (CSI.empty())
+    return true;
+
+  MachineFunction &MF = *MBB.getParent();
+  const TargetInstrInfo &TII = *MF.getSubtarget().getInstrInfo();
+  const MachineRegisterInfo &MRI = MF.getRegInfo();
+
+  for (const CalleeSavedInfo &CS : CSI) {
+    Register Reg = CS.getReg();
+    bool IsKill = !MRI.isLiveIn(Reg);
+    TII.storeRegToStackSlot(MBB, MI, Reg, IsKill, CS.getFrameIdx(),
+                             TRI->getMinimalPhysRegClass(Reg),
+                             Register());
+  }
+  return true;
+}
+
 // Custom CSR restore for functions with FP.  We must:
 //   1. Restore SP from FP (undo any alloca)
 //   2. Restore all CSRs except FP using [FP+offset]

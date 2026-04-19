@@ -155,7 +155,14 @@ or MOV PC + ADDi (PIC); BRJT always adds base back).
   (VLAs, runtime-sized `alloca`).
   `setStackPointerRegisterToSaveRestore(R14)` in ISelLowering.
 - G_STACKSAVE/G_STACKRESTORE: selected to MOV SP (R14).
-- `@llvm.returnaddress(0)` → MOV from R13 (LR),
+- `@llvm.returnaddress(0)` → MOV from a vreg that captures R13 at
+  the top of the entry block.  Reading R13 directly at the use site
+  is wrong in non-leaf functions: every BL/JALR clobbers R13 with
+  its own call-site return address, so the live R13 no longer
+  holds the caller's return address.  The capture is lazy
+  (only materialized when the intrinsic is actually used) and the
+  vreg handle lives in `PenumbraMachineFunctionInfo` so repeated
+  references share one capture.
   `@llvm.frameaddress(0)` → MOV from R14 (SP).
 - **TLS (thread-local storage):** IR pass (`PenumbraLowerTLS` in
   `PenumbraTargetMachine.cpp`) checks TLS model via
