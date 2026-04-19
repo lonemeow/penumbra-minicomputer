@@ -6,5 +6,7 @@
 
 void exit(int status);
 void abort(void);
+int abs(int j);
+int atoi(const char *nptr);
 
 #endif
