@@ -1,8 +1,52 @@
+/*-
+ * Copyright (c) 1993
+ *	The Regents of the University of California.  All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ * 3. Neither the name of the University nor the names of its contributors
+ *    may be used to endorse or promote products derived from this software
+ *    without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ *
+ *	@(#)printf.c	8.1 (Berkeley) 6/11/93
+ */
+
+/*
+ * Copyright (c) 2026, Penumbra Minicomputer Contributors
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice, this
+ *    list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ *    this list of conditions and the following disclaimer in the documentation
+ *    and/or other materials provided with the distribution.
+ */
+
 // test/compiler/harness/libc_stub.c
 #include <stdarg.h>
 #include <stddef.h>
-
-typedef unsigned int uint32_t;
+#include <stdint.h>
 
 void exit(int status) {
     __asm__ volatile (
@@ -44,94 +88,167 @@ int puts(const char *s) {
     return 0;
 }
 
-static void print_int(int n) {
-    char buf[12];
-    int i = 0;
-    unsigned int u;
-    if (n < 0) {
-        putchar('-');
-        u = -n;
-    } else {
-        u = n;
+/* ── Formatted output (adapted from NetBSD libsa) ──────────────────────── */
+
+static void kprintn(int (*put)(int), uint64_t ul, int base, int width, int zeropad) {
+    char buf[64];
+    char *p = buf;
+    static const char hexdigits[] = "0123456789abcdef";
+
+    do {
+        *p++ = hexdigits[ul % base];
+    } while (ul /= base);
+
+    int len = p - buf;
+    if (width > 0) {
+        while (len < width) {
+            put(zeropad ? '0' : ' ');
+            width--;
+        }
     }
-    if (u == 0) {
-        putchar('0');
-        return;
-    }
-    while (u > 0) {
-        buf[i++] = (u % 10) + '0';
-        u /= 10;
-    }
-    while (i > 0) {
-        putchar(buf[--i]);
-    }
+
+    do {
+        put(*--p);
+    } while (p > buf);
 }
 
-static void print_hex(unsigned int u) {
-    char buf[8];
-    int i = 0;
-    if (u == 0) {
-        putchar('0');
-        return;
-    }
-    while (u > 0) {
-        int d = u % 16;
-        buf[i++] = (d < 10) ? (d + '0') : (d - 10 + 'a');
-        u /= 16;
-    }
-    while (i > 0) {
-        putchar(buf[--i]);
-    }
-}
-
-static void print_double(double d) {
+static void print_double(int (*put)(int), double d, int width, int precision) {
     if (d < 0) {
-        putchar('-');
+        put('-');
         d = -d;
     }
-    // Print integer part
-    unsigned int ipart = (unsigned int)d;
-    print_int(ipart);
-    putchar('.');
-    // Print fractional part (6 digits)
+    
+    uint64_t ipart = (uint64_t)d;
+    kprintn(put, ipart, 10, 0, 0);
+    put('.');
+    
+    if (precision < 0) precision = 6;
     double fpart = d - (double)ipart;
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < precision; i++) {
         fpart *= 10.0;
         int digit = (int)fpart;
-        putchar(digit + '0');
+        put(digit + '0');
         fpart -= (double)digit;
     }
 }
 
-int printf(const char *format, ...) {
-    va_list ap;
-    va_start(ap, format);
-    while (*format) {
-        if (*format == '%') {
-            format++;
-            switch (*format) {
-                case 'd': print_int(va_arg(ap, int)); break;
-                case 'x': print_hex(va_arg(ap, unsigned int)); break;
-                case 'f': print_double(va_arg(ap, double)); break;
-                case 's': {
-                    char *s = va_arg(ap, char *);
-                    if (!s) s = "(null)";
-                    while (*s) putchar(*s++);
-                    break;
-                }
-                case 'c': putchar(va_arg(ap, int)); break;
-                case '%': putchar('%'); break;
-            }
-        } else {
-            putchar(*format);
+static void kdoprnt(int (*put)(int), const char *fmt, va_list ap) {
+    char *p;
+    int ch;
+    uint64_t ul;
+    int lflag, width, zeropad, precision;
+
+    for (;;) {
+        while ((ch = *fmt++) != '%') {
+            if (ch == '\0') return;
+            put(ch);
         }
-        format++;
+        lflag = 0; width = 0; zeropad = 0; precision = -1;
+    reswitch:
+        switch (ch = *fmt++) {
+        case '0':
+            if (width == 0) {
+                zeropad = 1;
+                goto reswitch;
+            }
+            /* FALLTHROUGH */
+        case '1': case '2': case '3': case '4': case '5':
+        case '6': case '7': case '8': case '9':
+            width = width * 10 + ch - '0';
+            goto reswitch;
+        case '.':
+            precision = 0;
+            while ((ch = *fmt) >= '0' && ch <= '9') {
+                precision = precision * 10 + ch - '0';
+                fmt++;
+            }
+            goto reswitch;
+        case 'l':
+            lflag++;
+            goto reswitch;
+        case 'c':
+            put(va_arg(ap, int));
+            break;
+        case 's':
+            p = va_arg(ap, char *);
+            if (!p) p = "(null)";
+            while (*p) put(*p++);
+            break;
+        case 'd':
+            if (lflag >= 2) ul = va_arg(ap, long long);
+            else if (lflag == 1) ul = va_arg(ap, long);
+            else ul = va_arg(ap, int);
+            
+            if ((int64_t)ul < 0) {
+                put('-');
+                ul = -(int64_t)ul;
+            }
+            kprintn(put, ul, 10, width, zeropad);
+            break;
+        case 'u':
+            if (lflag >= 2) ul = va_arg(ap, unsigned long long);
+            else if (lflag == 1) ul = va_arg(ap, unsigned long);
+            else ul = va_arg(ap, unsigned int);
+            kprintn(put, ul, 10, width, zeropad);
+            break;
+        case 'x':
+            if (lflag >= 2) ul = va_arg(ap, unsigned long long);
+            else if (lflag == 1) ul = va_arg(ap, unsigned long);
+            else ul = va_arg(ap, unsigned int);
+            kprintn(put, ul, 16, width, zeropad);
+            break;
+        case 'p':
+            put('0'); put('x');
+            ul = (uintptr_t)va_arg(ap, void *);
+            kprintn(put, ul, 16, 8, 1);
+            break;
+        case 'f':
+            print_double(put, va_arg(ap, double), width, precision);
+            break;
+        case '%':
+            put('%');
+            break;
+        }
     }
+}
+
+static char *sbuf, *ebuf;
+static int sputchar(int c) {
+    if (sbuf < ebuf) *sbuf++ = c;
+    return c;
+}
+
+int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap) {
+    sbuf = buf;
+    ebuf = buf + size - 1;
+    kdoprnt(sputchar, fmt, ap);
+    if (buf != NULL && size > 0) *sbuf = '\0';
+    return sbuf - buf;
+}
+
+int snprintf(char *buf, size_t size, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf, size, fmt, ap);
+    va_end(ap);
+    return n;
+}
+
+int vprintf(const char *fmt, va_list ap) {
+    kdoprnt(putchar, fmt, ap);
+    return 0;
+}
+
+int printf(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    kdoprnt(putchar, fmt, ap);
     va_end(ap);
     return 0;
 }
 
-// Memory management stubs
+/* ── Memory management stubs ───────────────────────────────────────────── */
+
 void *memset(void *s, int c, size_t n) {
     unsigned char *p = s;
     while (n--) *p++ = (unsigned char)c;
@@ -160,7 +277,8 @@ size_t strlen(const char *s) {
     return len;
 }
 
-// Compiler runtime (math) — needed because compiler-rt only has 64-bit/float
+/* ── Compiler runtime (math) ───────────────────────────────────────────── */
+
 static inline void __divmodsi4(uint32_t n, uint32_t d,
                                uint32_t *qp, uint32_t *rp) {
     uint32_t q = 0;
