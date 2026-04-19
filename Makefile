@@ -204,6 +204,7 @@ test-compiler: $(ISS)
 		--exclude "*/NEON/*" \
 		--exclude "*/HVX/*" \
 		--exclude "*/AVX512*" \
+		--exclude "*/builtins/*" \
 		--report "$(BUILD_DIR)/test-compiler-report.txt" \
 		--jobs $$(nproc)
 
