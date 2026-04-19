@@ -17,17 +17,19 @@ YELLOW = "\033[33m"
 RESET = "\033[0m"
 
 class TestResult:
-    def __init__(self, name, success, reason, output=""):
+    def __init__(self, name, display_name, success, reason, output=""):
         self.name = name
+        self.display_name = display_name
         self.success = success
         self.reason = reason
         self.output = output
 
 def run_single_test(args):
-    test_path, opt, harness_dir, build_dir, iss_path, cc, objcopy, bin2hex, builtins, resource_dir = args
-    name = os.path.splitext(os.path.basename(test_path))[0]
+    test_path, opt, harness_dir, build_dir, iss_path, cc, objcopy, bin2hex, builtins, resource_dir, display_name = args
+    # Use a sanitized name for filesystem paths
+    name = display_name.replace("/", "_").replace(".", "_")
     
-    # We create a per-test sub-directory to avoid object name collisions if many tests have same name
+    # We create a per-test sub-directory to avoid object name collisions
     test_build_dir = os.path.join(build_dir, name)
     os.makedirs(test_build_dir, exist_ok=True)
     
@@ -54,14 +56,14 @@ def run_single_test(args):
         subprocess.run(common_flags + ["-c", os.path.join(harness_dir, "crt0.S"), "-o", obj_crt0], 
                        check=True, capture_output=True, text=True)
     except subprocess.CalledProcessError as e:
-        return TestResult(name, False, "crt0.S compile error", e.stderr)
+        return TestResult(name, display_name, False, "crt0.S compile error", e.stderr)
 
     # 2. Compile libc_stub.c
     try:
         subprocess.run(common_flags + ["-c", os.path.join(harness_dir, "libc_stub.c"), "-o", obj_libc], 
                        check=True, capture_output=True, text=True)
     except subprocess.CalledProcessError as e:
-        return TestResult(name, False, "libc_stub.c compile error", e.stderr)
+        return TestResult(name, display_name, False, "libc_stub.c compile error", e.stderr)
 
     # 3. Compile test.c
     cmd_test = common_flags + [
@@ -72,7 +74,7 @@ def run_single_test(args):
     try:
         subprocess.run(cmd_test, check=True, capture_output=True, text=True)
     except subprocess.CalledProcessError as e:
-        return TestResult(name, False, "compile error", e.stderr)
+        return TestResult(name, display_name, False, "compile error", e.stderr)
 
     # 4. Link
     cmd_link = shlex.split(cc) + [
@@ -88,14 +90,14 @@ def run_single_test(args):
     try:
         subprocess.run(cmd_link, check=True, capture_output=True, text=True)
     except subprocess.CalledProcessError as e:
-        return TestResult(name, False, "link error", e.stderr)
+        return TestResult(name, display_name, False, "link error", e.stderr)
 
     # 5. Objcopy + Bin2Hex
     try:
         subprocess.run(shlex.split(objcopy) + ["-O", "binary", elf_file, bin_file], check=True, capture_output=True)
         subprocess.run([sys.executable, bin2hex, bin_file, "-o", hex_file], check=True, capture_output=True)
     except subprocess.CalledProcessError as e:
-        return TestResult(name, False, "objcopy/bin2hex error", e.stderr)
+        return TestResult(name, display_name, False, "objcopy/bin2hex error", e.stderr)
 
     # 6. Run in ISS
     # We use a 1M instruction limit and +quiet to get only program output
@@ -105,9 +107,9 @@ def run_single_test(args):
         actual_output = proc.stdout
         exit_code = proc.returncode
     except subprocess.TimeoutExpired:
-        return TestResult(name, False, "timeout (30s)")
+        return TestResult(name, display_name, False, "timeout (30s)")
     except Exception as e:
-        return TestResult(name, False, "simulator error", str(e))
+        return TestResult(name, display_name, False, "simulator error", str(e))
 
     # 4. Verify output if reference exists
     ref_path = os.path.splitext(test_path)[0] + ".reference_output"
@@ -138,12 +140,12 @@ def run_single_test(args):
         if not found_all:
             mismatch_info = f"--- Expected (essential lines) ---\n" + "\n".join(expected_lines) + \
                             f"\n\n--- Actual ---\n{actual_output}"
-            return TestResult(name, False, "output mismatch", mismatch_info)
+            return TestResult(name, display_name, False, "output mismatch", mismatch_info)
 
     if exit_code != 0:
-        return TestResult(name, False, f"exit code {exit_code}", actual_output)
+        return TestResult(name, display_name, False, f"exit code {exit_code}", actual_output)
 
-    return TestResult(name, True, "pass", actual_output)
+    return TestResult(name, display_name, True, "pass", actual_output)
 
 def main():
     parser = argparse.ArgumentParser(description="Penumbra Compiler Test Runner")
@@ -165,31 +167,39 @@ def main():
 
     os.makedirs(args.build_dir, exist_ok=True)
 
-    test_files = []
+    test_data = []
     for d in args.test_dir:
+        # Find absolute path of test dir to calculate relative paths correctly
+        abs_test_dir = os.path.abspath(d)
+        parent_dir = os.path.dirname(abs_test_dir)
+        
         for root, _, files in os.walk(d):
             for f in files:
                 if f.endswith(".c"):
-                    full_path = os.path.join(root, f)
+                    full_path = os.path.abspath(os.path.join(root, f))
+                    
+                    # display_name is path relative to the test root's parent
+                    # e.g. llvm-test-suite/UnitTests/test.c
+                    rel_path = os.path.relpath(full_path, parent_dir)
                     
                     # Check exclusions
                     excluded = False
                     if args.exclude:
                         for pattern in args.exclude:
-                            if fnmatch.fnmatch(full_path, pattern) or fnmatch.fnmatch(os.path.basename(full_path), pattern):
+                            if fnmatch.fnmatch(rel_path, pattern) or fnmatch.fnmatch(os.path.basename(full_path), pattern):
                                 excluded = True
                                 break
                     
                     if not excluded:
-                        test_files.append(full_path)
+                        test_data.append((full_path, rel_path))
     
-    test_files.sort()
-    print(f"Found {len(test_files)} tests in {args.test_dir}")
+    test_data.sort(key=lambda x: x[1])
+    print(f"Found {len(test_data)} tests")
     print(f"Running with {args.jobs} parallel jobs at {args.opt}...")
 
     worker_args = [
-        (f, args.opt, args.harness_dir, args.build_dir, args.iss, args.cc, args.objcopy, args.bin2hex, args.builtins, args.resource_dir)
-        for f in test_files
+        (full_path, args.opt, args.harness_dir, args.build_dir, args.iss, args.cc, args.objcopy, args.bin2hex, args.builtins, args.resource_dir, rel_path)
+        for full_path, rel_path in test_data
     ]
 
     results = []
@@ -200,17 +210,12 @@ def main():
     
     # ProcessPoolExecutor for parallelism
     with ProcessPoolExecutor(max_workers=args.jobs) as executor:
-        # map ensures we get results in order, but we want to print as they finish
-        # for better UX. use as_completed or just use map and accept wait?
-        # Actually map is fine if we want deterministic output order, 
-        # but let's use imap or similar if we want to print progress.
-        
         for result in executor.map(run_single_test, worker_args):
             if result.success:
-                print(f"  {GREEN}PASS{RESET}  {result.name}")
+                print(f"  {GREEN}PASS{RESET}  {result.display_name}")
                 passed += 1
             else:
-                print(f"  {RED}FAIL{RESET}  {result.name} ({result.reason})")
+                print(f"  {RED}FAIL{RESET}  {result.display_name} ({result.reason})")
                 failed += 1
             results.append(result)
 
@@ -223,11 +228,12 @@ def main():
         f.write(f"Date: {time.ctime()}\n")
         f.write(f"Opt level: {args.opt}\n")
         f.write(f"Duration: {duration:.2f}s\n")
-        f.write(f"Total: {len(results)}, Passed: {passed}, Failed: {failed}\n\n")
+        f.write(f"Total: {len(results)}, Passed: {passed}, Failed: {failed}\n")
+        f.write(f"Status: {'PASS' if failed == 0 else 'FAIL'}\n\n")
         
         for r in results:
             status = "PASS" if r.success else "FAIL"
-            f.write(f"[{status}] {r.name} ({r.reason})\n")
+            f.write(f"[{status}] {r.display_name} ({r.reason})\n")
             if not r.success and r.output:
                 f.write(f"--- Output ---\n{r.output}\n--------------\n")
             f.write("\n")
