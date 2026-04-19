@@ -9,7 +9,8 @@ This section defines the programmer-visible behavior of the Penumbra architectur
 
 ### ISA & Software Environment
 *   **[Architecture Overview](./system/architecture.md)** — Design philosophy, registers, and memory model.
-*   **[Instruction Set Guide](./system/instruction-set.md)** — Complete programmer's reference for all instructions.
+*   **[Instruction Set Guide](./system/instruction-set.md)** — Programmer's reference for all instructions.
+*   **[Instruction Encoding](./system/instruction-encoding.md)** — Bit-level reference for assembler / disassembler / binary-tool authors.
 *   **[ABI Specification](./system/abi.md)** — Data models, calling conventions, and ELF details.
 *   **[Toolchain Strategy](./system/toolchain.md)** — LLVM backend and compiler considerations.
 

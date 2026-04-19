@@ -475,13 +475,13 @@ The micro-sequencer uses a micro-PC register to index into the microcode ROM. Se
 | 010 | STALL | busy ? hold : (fault ? exception via fetch unit : micro-PC++) | unconditional |
 | 011 | BRT | hand off to fetch unit | applied if ISA cond true, else forced to PC+4 |
 | 100 | BRF | hand off to fetch unit | applied if ISA cond false, else forced to PC+4 |
-| 101 | PRIV | SR.S=0 ? exception (vector 3) via fetch unit : micro-PC++ | unconditional |
+| 101 | PRIV | SR.S=0 ? exception (vector 4, VEC_PRIV) via fetch unit : micro-PC++ | unconditional |
 | 110 | SKIP | micro-PC += 1 + fwd_offset | unconditional |
 | 111 | (reserved) | — | — |
 
 FETCH, BRT, and BRF all signal "instruction complete" to the fetch unit. The difference is `pc_src` handling: FETCH applies `pc_src` unconditionally; BRT/BRF conditionally gate `pc_src` based on the ISA condition evaluator, enabling single-micro-op conditional branches.
 
-PRIV checks the supervisor bit in SR. If SR.S=1 (supervisor mode), micro-PC increments normally — the privileged instruction executes with 1 micro-op overhead. If SR.S=0 (user mode), the fetch unit is signaled to trigger a privilege violation exception (vector 3) using the same hardware pre-actions as interrupt entry. Every privileged instruction's micro-routine begins with `branch_cond=PRIV` as its first micro-op.
+PRIV checks the supervisor bit in SR. If SR.S=1 (supervisor mode), micro-PC increments normally — the privileged instruction executes with 1 micro-op overhead. If SR.S=0 (user mode), the fetch unit is signaled to trigger a privilege violation exception (vector 4, `VEC_PRIV`) using the same hardware pre-actions as interrupt entry. Every privileged instruction's micro-routine begins with `branch_cond=PRIV` as its first micro-op.
 
 STALL checks a unified busy signal: `cache_busy | alu_busy`. When the operation completes (`busy` deasserts), the sequencer also checks a `fault` signal from the D-cache/MMU. Three-way resolution:
 

@@ -1,6 +1,6 @@
 # Penumbra NetBSD Port — Claude Code Context
 
-This file provides context for the NetBSD machine-dependent port under `netbsd/sys/arch/penumbra/`. The root `CLAUDE.md` has project-wide conventions; `doc/boot/boot-process.md` has the full boot chain design.
+This file provides context for the NetBSD machine-dependent port under `netbsd/sys/arch/penumbra/`. The root `CLAUDE.md` has project-wide conventions; `doc/system/boot-protocol.md` has the full boot chain design.
 
 ## Overview
 

@@ -278,7 +278,8 @@ MIPS/68k-style vector dispatch.
   (no data loss or corruption).  FAST/SLOW clock select
   (no CLKDIV register).  Parameterized FIFO depth (512 FPGA,
   16–32 discrete).  IRQ: latched XFER_DONE (W1C) + live
-  watermarks (RX/TX threshold).  See `doc/boot/spi-controller.md`.
+  watermarks (RX/TX threshold).  See `doc/system/devices/spi.md`
+  and `doc/hardware/spi-hardware.md`.
 - Testbench SD card emulator (`sd_card_sim.h`) speaks SD-SPI protocol
   backed by a disk image file (`+sdcard=`).
 - Boot ROM builds a tagged list of boot data at 0x0040
