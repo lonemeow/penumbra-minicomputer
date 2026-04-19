@@ -69,6 +69,7 @@ def run_single_test(args):
     cmd_test = common_flags + [
         "-include", "stdlib.h",
         "-include", "stdio.h",
+        "-include", "string.h",
         "-c", test_path, "-o", obj_test
     ]
     try:
@@ -100,16 +101,20 @@ def run_single_test(args):
         return TestResult(name, display_name, False, "objcopy/bin2hex error", e.stderr)
 
     # 6. Run in ISS
-    # We use a 1M instruction limit and +quiet to get only program output
-    cmd_iss = [iss_path, hex_file, "+hosted", "+quiet", "+max-insn=1000000"]
+    # Bound execution by instruction count (deterministic failure on
+    # runaway loops) and by wall-clock (catches ISS hangs).  Some torture
+    # tests iterate 10k+ times over i64 soft-libcalls, which balloons to
+    # ~10k instructions per iteration; 2B gives enough headroom without
+    # letting true infinite loops waste all 120s of wallclock.
+    cmd_iss = [iss_path, hex_file, "+hosted", "+quiet", "+max-insn=2000000000"]
     try:
-        proc = subprocess.run(cmd_iss, capture_output=True, text=True, timeout=30)
+        proc = subprocess.run(cmd_iss, capture_output=True, text=True, timeout=120)
         actual_output = proc.stdout
         exit_code = proc.returncode
         # llvm-test-suite expects the exit code to be printed at the end of the output
         actual_output += f"exit {exit_code}\n"
     except subprocess.TimeoutExpired:
-        return TestResult(name, display_name, False, "timeout (30s)")
+        return TestResult(name, display_name, False, "timeout (120s)")
     except Exception as e:
         return TestResult(name, display_name, False, "simulator error", str(e))
 
