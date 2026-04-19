@@ -178,11 +178,17 @@ def main():
 
     # Merge --exclude-file contents into args.exclude.  One pattern per
     # line; blank lines and lines starting with '#' are ignored.
+    # Inline comments (`pattern.c   # note`) are stripped from the tail.
     for ef in args.exclude_file:
         with open(ef) as fh:
             for line in fh:
+                # Strip inline comment, then whitespace.  '#' never
+                # appears in glob patterns, so this is unambiguous.
+                hash_at = line.find("#")
+                if hash_at >= 0:
+                    line = line[:hash_at]
                 line = line.strip()
-                if line and not line.startswith("#"):
+                if line:
                     args.exclude.append(line)
 
     os.makedirs(args.build_dir, exist_ok=True)
