@@ -7,6 +7,7 @@ import argparse
 import time
 import shlex
 import re
+import fnmatch
 from concurrent.futures import ProcessPoolExecutor
 
 # ANSI color codes
@@ -119,6 +120,7 @@ def main():
     parser.add_argument("--bin2hex", required=True, help="Path to bin2hex.py")
     parser.add_argument("--builtins", help="Path to libclang_rt.builtins-penumbra.a")
     parser.add_argument("--resource-dir", help="Clang resource directory")
+    parser.add_argument("--exclude", action="append", help="Glob pattern to exclude tests")
     parser.add_argument("--report", default="test-report.txt", help="Report file path")
     parser.add_argument("-j", "--jobs", type=int, default=multiprocessing.cpu_count(), help="Number of parallel jobs")
     
@@ -131,7 +133,18 @@ def main():
         for root, _, files in os.walk(d):
             for f in files:
                 if f.endswith(".c"):
-                    test_files.append(os.path.join(root, f))
+                    full_path = os.path.join(root, f)
+                    
+                    # Check exclusions
+                    excluded = False
+                    if args.exclude:
+                        for pattern in args.exclude:
+                            if fnmatch.fnmatch(full_path, pattern) or fnmatch.fnmatch(os.path.basename(full_path), pattern):
+                                excluded = True
+                                break
+                    
+                    if not excluded:
+                        test_files.append(full_path)
     
     test_files.sort()
     print(f"Found {len(test_files)} tests in {args.test_dir}")
