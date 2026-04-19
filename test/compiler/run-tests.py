@@ -26,41 +26,74 @@ class TestResult:
 def run_single_test(args):
     test_path, opt, harness_dir, build_dir, iss_path, cc, objcopy, bin2hex, builtins, resource_dir = args
     name = os.path.splitext(os.path.basename(test_path))[0]
-    obj = os.path.join(build_dir, f"{name}.elf")
-    hex_file = os.path.join(build_dir, f"{name}.hex")
-    bin_file = os.path.join(build_dir, f"{name}.bin")
     
-    # 1. Compile
-    cmd_compile = shlex.split(cc) + [
+    # We create a per-test sub-directory to avoid object name collisions if many tests have same name
+    test_build_dir = os.path.join(build_dir, name)
+    os.makedirs(test_build_dir, exist_ok=True)
+    
+    obj_crt0 = os.path.join(test_build_dir, "crt0.o")
+    obj_libc = os.path.join(test_build_dir, "libc_stub.o")
+    obj_test = os.path.join(test_build_dir, "test.o")
+    elf_file = os.path.join(test_build_dir, "test.elf")
+    hex_file = os.path.join(test_build_dir, "test.hex")
+    bin_file = os.path.join(test_build_dir, "test.bin")
+    
+    common_flags = shlex.split(cc) + [
         opt, "-ffreestanding", "-nostdlib", "-nostdinc",
         "-I", harness_dir,
     ]
     if resource_dir:
-        cmd_compile += ["-isystem", os.path.join(resource_dir, "include")]
-    
-    cmd_compile += [
-        "-T", os.path.join(harness_dir, "test.ld"),
-        os.path.join(harness_dir, "crt0.S"),
-        os.path.join(harness_dir, "libc_stub.c"),
-        test_path
-    ]
-    if builtins:
-        cmd_compile.append(builtins)
-    
-    cmd_compile += ["-o", obj]
+        common_flags += ["-isystem", os.path.join(resource_dir, "include")]
+
+    # 1. Compile crt0.S
     try:
-        subprocess.run(cmd_compile, check=True, capture_output=True, text=True)
+        subprocess.run(common_flags + ["-c", os.path.join(harness_dir, "crt0.S"), "-o", obj_crt0], 
+                       check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        return TestResult(name, False, "crt0.S compile error", e.stderr)
+
+    # 2. Compile libc_stub.c
+    try:
+        subprocess.run(common_flags + ["-c", os.path.join(harness_dir, "libc_stub.c"), "-o", obj_libc], 
+                       check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        return TestResult(name, False, "libc_stub.c compile error", e.stderr)
+
+    # 3. Compile test.c
+    cmd_test = common_flags + [
+        "-include", "stdlib.h",
+        "-include", "stdio.h",
+        "-c", test_path, "-o", obj_test
+    ]
+    try:
+        subprocess.run(cmd_test, check=True, capture_output=True, text=True)
     except subprocess.CalledProcessError as e:
         return TestResult(name, False, "compile error", e.stderr)
 
-    # 2. Objcopy + Bin2Hex
+    # 4. Link
+    cmd_link = shlex.split(cc) + [
+        "-target", "penumbra-unknown-none", # Ensure target is passed for linking
+        "-ffreestanding", "-nostdlib",
+        "-T", os.path.join(harness_dir, "test.ld"),
+        obj_crt0, obj_libc, obj_test
+    ]
+    if builtins:
+        cmd_link.append(builtins)
+    cmd_link += ["-o", elf_file]
+    
     try:
-        subprocess.run(shlex.split(objcopy) + ["-O", "binary", obj, bin_file], check=True, capture_output=True)
+        subprocess.run(cmd_link, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        return TestResult(name, False, "link error", e.stderr)
+
+    # 5. Objcopy + Bin2Hex
+    try:
+        subprocess.run(shlex.split(objcopy) + ["-O", "binary", elf_file, bin_file], check=True, capture_output=True)
         subprocess.run([sys.executable, bin2hex, bin_file, "-o", hex_file], check=True, capture_output=True)
     except subprocess.CalledProcessError as e:
         return TestResult(name, False, "objcopy/bin2hex error", e.stderr)
 
-    # 3. Run in ISS
+    # 6. Run in ISS
     # We use a 1M instruction limit and +quiet to get only program output
     cmd_iss = [iss_path, hex_file, "+hosted", "+quiet", "+max-insn=1000000"]
     try:
