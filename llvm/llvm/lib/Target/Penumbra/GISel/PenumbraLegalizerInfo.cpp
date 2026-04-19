@@ -93,11 +93,18 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
       .lowerIfMemSizeNotByteSizePow2()
       .clampScalar(0, s32, s32);
 
+  // Extending loads: sub-word memory → s32 register is directly supported
+  // by LDB/LDBS/LDH/LDHS.  Wider destinations (s64 from optimizer-merged
+  // bitfield loads) are narrowed: the helper emits a s32 load + explicit
+  // G_ZEXT/G_SEXT to s64, and the extension is then split by our G_ZEXT
+  // narrowing rule into two s32 halves (low = loaded value, high = 0 or
+  // SAR).  s128 is not yet supported.
   getActionDefinitionsBuilder({G_SEXTLOAD, G_ZEXTLOAD})
       .legalForTypesWithMemDesc({
         {s32, p0, s16, 2},
         {s32, p0, s8,  1},
-      });
+      })
+      .narrowScalarIf(typeIs(0, s64), changeTo(0, s32));
 
   getActionDefinitionsBuilder({G_PTR_ADD, G_PTRMASK})
       .legalFor({{p0, s32}});
