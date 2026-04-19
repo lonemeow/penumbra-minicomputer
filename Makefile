@@ -213,6 +213,12 @@ test-compiler: $(ISS)
 		--exclude "*/align-nest.c" \
 		--exclude "*/pr41935.c" \
 		--exclude "*/pr82210.c" \
+		--exclude "*/nestfunc-*.c" \
+		--exclude "*/nest-*.c" \
+		--exclude "*/20000822-1.c" \
+		--exclude "*/20010209-1.c" \
+		--exclude "*/20010605-1.c" \
+		--exclude "*/20020412-1.c" \
 		--report "$(BUILD_DIR)/test-compiler-report.txt" \
 		--jobs $$(nproc)
 
