@@ -181,6 +181,21 @@ OPT             ?= -O2
 # We only run UnitTests and Regression for now
 # to keep the runtime reasonable.
 
+# UnitTests/Integer tests that depend on the LLVM "Bit Accurate Types"
+# extension: __attribute__((bitwidth(N))), __bitwidthof__,
+# __builtin_bit_concat, __builtin_bit_select.  Those are from an
+# abandoned research compiler that added arbitrary-precision integer
+# support; mainstream clang silently ignores the bitwidth attribute
+# and doesn't recognize the intrinsics, so these tests can't work.
+# Plain-C tests in the same directory (field.c, matrix.c, etc.) still
+# run and cover real integer behavior.
+BITWIDTH_NAMES := arith array bigint bit_concat bit_select bit_set \
+                  bitbit bitlogic big_bit_concat big_part_set \
+                  integer_all_onesp multiple_assign negConst \
+                  part_select part_select2 part_set reduce_xor \
+                  reductions test4 test_part_set
+BITWIDTH_EXCLUDES := $(foreach n,$(BITWIDTH_NAMES),--exclude "*/Integer/$(n).c")
+
 # If COMPILER_TESTS is set, run only those specific files.  Otherwise
 # walk the full UnitTests and Regression trees.
 ifdef COMPILER_TESTS
@@ -231,6 +246,7 @@ test-compiler: $(ISS)
 		--exclude "*/20020412-1.c" \
 		--exclude "*/Stanford/FloatMM.c" \
 		--exclude "*/Stanford/RealMM.c" \
+		$(BITWIDTH_EXCLUDES) \
 		--report "$(BUILD_DIR)/test-compiler-report.txt" \
 		--jobs $$(nproc)
 
