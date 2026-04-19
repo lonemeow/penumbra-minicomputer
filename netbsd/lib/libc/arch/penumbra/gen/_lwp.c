@@ -7,6 +7,7 @@ __RCSID("$NetBSD$");
 
 #include "namespace.h"
 #include <sys/types.h>
+#include <sys/tls.h>
 #include <ucontext.h>
 #include <lwp.h>
 #include <stdlib.h>
@@ -30,6 +31,7 @@ _lwp_makecontext(ucontext_t *u, void (*start)(void *),
 	u->uc_mcontext.__gregs[_REG_SP]   = (__greg_t)sp;
 	u->uc_mcontext.__gregs[_REG_LR]   = (__greg_t)(uintptr_t)_lwp_exit;
 	u->uc_mcontext.__gregs[_REG_PC]   = (__greg_t)(uintptr_t)start;
-	u->uc_mcontext.__gregs[12]        = (__greg_t)(uintptr_t)private; /* R12 = TP */
+	u->uc_mcontext.__gregs[12]        = (__greg_t)(uintptr_t)private
+	    + TLS_TP_OFFSET + sizeof(struct tls_tcb);               /* R12 = TP */
 	u->uc_flags |= _UC_TLSBASE;
 }
