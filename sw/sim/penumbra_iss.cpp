@@ -588,6 +588,8 @@ static volatile sig_atomic_t running = 1;
 static struct termios orig_termios;
 static bool term_raw = false;
 static bool full_raw = false;  // +raw: pass all control chars through
+static bool hosted_mode = false;  // +hosted: native syscall interception
+static int  hosted_exit_code = 0; // return code from SYS_exit in hosted mode
 static bool trap_user_pc_zero = false;  // +trap-pc0: abort on user-mode PC=0
 static FILE* trace_fp = nullptr;
 
@@ -1238,6 +1240,36 @@ static uint32_t insn_fetch(bool& took_exception) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// Hosted Mode Syscalls
+// ═══════════════════════════════════════════════════════════════
+
+static bool handle_hosted_syscall() {
+    uint32_t nr = reg_read(11); // R11 = syscall number
+    if (nr == 1) { // SYS_exit
+        hosted_exit_code = (int)reg_read(1); // R1 = status
+        cpu.halted = true;
+        return true;
+    } else if (nr == 4) { // SYS_write
+        uint32_t fd = reg_read(1);  // R1 = fd
+        uint32_t buf = reg_read(2); // R2 = buf
+        uint32_t len = reg_read(3); // R3 = len
+        if (fd == 1 || fd == 2) {
+            for (uint32_t i = 0; i < len; i++) {
+                bool took_exc;
+                uint8_t c = (uint8_t)mem_load(buf + i, 0, false, took_exc);
+                if (took_exc) break;
+                if (write((int)fd, &c, 1) != 1) { /* ignore */ }
+            }
+            reg_write(1, len); // Success: return len
+        } else {
+            reg_write(1, (uint32_t)-1); // Error
+        }
+        return true;
+    }
+    return false; // Not a hosted syscall we handle
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Instruction Execute
 // ═══════════════════════════════════════════════════════════════
 
@@ -1358,7 +1390,11 @@ static void execute_one() {
                 reg_write(rd, sysreg_read(sys_dev, sys_reg));
                 break;
             case 25: // SYSCALL
-                exception_entry(VEC_SYSCALL);
+                if (hosted_mode && handle_hosted_syscall()) {
+                    // Handled natively by simulator
+                } else {
+                    exception_entry(VEC_SYSCALL);
+                }
                 break;
             case 26: // BREAK — halt without vectoring (matches RTL testbench:
                 //   o_halted fires at dispatch, before exception entry runs)
@@ -1700,12 +1736,13 @@ int main(int argc, char** argv) {
         if (strncmp(argv[i], "+sdcard=", 8) == 0) sd_path = argv[i] + 8;
         else if (strncmp(argv[i], "+trace=", 7) == 0) trace_path = argv[i] + 7;
         else if (strcmp(argv[i], "+raw") == 0) full_raw = true;
+        else if (strcmp(argv[i], "+hosted") == 0) hosted_mode = true;
         else if (strcmp(argv[i], "+trap-pc0") == 0) trap_user_pc_zero = true;
         else hex_path = argv[i];
     }
 
     if (!hex_path) {
-        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+trace=path] [+raw] [+trap-pc0]\n");
+        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+trace=path] [+raw] [+hosted] [+trap-pc0]\n");
         return 1;
     }
 
@@ -1773,5 +1810,5 @@ int main(int argc, char** argv) {
     fprintf(stderr, "\n");
 
     if (trace_fp) { fclose(trace_fp); fprintf(stderr, "[TRACE] done\n"); }
-    return 0;
+    return hosted_mode ? hosted_exit_code : 0;
 }
