@@ -590,6 +590,7 @@ static bool term_raw = false;
 static bool full_raw = false;  // +raw: pass all control chars through
 static bool hosted_mode = false;  // +hosted: native syscall interception
 static int  hosted_exit_code = 0; // return code from SYS_exit in hosted mode
+static uint64_t max_insns = 0;    // +max-insn=N: halt after N instructions
 static bool trap_user_pc_zero = false;  // +trap-pc0: abort on user-mode PC=0
 static FILE* trace_fp = nullptr;
 
@@ -1735,6 +1736,7 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; i++) {
         if (strncmp(argv[i], "+sdcard=", 8) == 0) sd_path = argv[i] + 8;
         else if (strncmp(argv[i], "+trace=", 7) == 0) trace_path = argv[i] + 7;
+        else if (strncmp(argv[i], "+max-insn=", 10) == 0) max_insns = strtoull(argv[i] + 10, nullptr, 0);
         else if (strcmp(argv[i], "+raw") == 0) full_raw = true;
         else if (strcmp(argv[i], "+hosted") == 0) hosted_mode = true;
         else if (strcmp(argv[i], "+trap-pc0") == 0) trap_user_pc_zero = true;
@@ -1742,7 +1744,7 @@ int main(int argc, char** argv) {
     }
 
     if (!hex_path) {
-        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+trace=path] [+raw] [+hosted] [+trap-pc0]\n");
+        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+trace=path] [+raw] [+hosted] [+max-insn=N] [+trap-pc0]\n");
         return 1;
     }
 
@@ -1779,6 +1781,12 @@ int main(int argc, char** argv) {
 
     // Main loop
     while (running && !cpu.halted) {
+        if (max_insns > 0 && cpu.insn_count >= max_insns) {
+            fprintf(stderr, "\n[ERROR] Instruction limit reached (%llu)\n", (unsigned long long)max_insns);
+            hosted_exit_code = 124; // Standard timeout exit code
+            cpu.halted = true;
+            break;
+        }
         trace_insn();
         execute_one();
 
