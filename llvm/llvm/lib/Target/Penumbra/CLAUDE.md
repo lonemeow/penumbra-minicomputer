@@ -46,6 +46,15 @@ python3 llvm/llvm/utils/update_llc_test_checks.py \
 - Penumbra registered in `utils/UpdateTestChecks/asm.py`
   (reuses AVR scrubber/function-RE)
 
+**Compiler Correctness Tests (llvm-test-suite):**
+Executes thousands of C tests on ISS in `+hosted` mode.
+Requires `compiler-rt` (see root `CLAUDE.md` for build).
+```sh
+make test-compiler                # all tests at -O2
+make test-compiler OPT="-Os"      # override optimization
+make test-compiler COMPILER_TESTS="test/compiler/llvm-test-suite/UnitTests/2002-05-02-ArgumentTest.c"
+```
+
 ## Current State
 **End-to-end functional.** C boot ROM compiles with clang,
 links with lld, and runs on the simulated Penumbra CPU

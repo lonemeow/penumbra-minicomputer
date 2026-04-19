@@ -94,6 +94,9 @@ The architecture is fully specified in `doc/`. Key specs:
 - `make test-iss` — run all `hw/sim/programs/test_*.s` on ISS
   (fast, no Docker); reports pass/fail summary
 - `make test` — run all test programs on RTL sim via Docker
+- `make test-compiler` — run comprehensive C compiler correctness
+  tests from `llvm-test-suite` on ISS in `+hosted` mode.
+  See "Compiler Correctness Tests" section below for setup.
 - `make smoke` — toolchain smoke test (trivial adder)
 - `make sim MOD=<name>` — build & run a module's Verilator testbench
 - `make sim MOD=machine_sim TB=<tb> PROG=<prog>` —
@@ -193,6 +196,43 @@ python3 llvm/llvm/utils/update_llc_test_checks.py \
   --llc-binary build/llvm/bin/llc \
   llvm/llvm/test/CodeGen/Penumbra/<test>.ll
 ```
+
+### Compiler Correctness Tests
+Comprehensive C tests from `llvm-test-suite` (including GCC torture)
+running on ISS in `+hosted` mode. Requires `compiler-rt`.
+
+Build `compiler-rt` builtins (one-time):
+```sh
+mkdir -p build/compiler-rt-builtins
+cmake -G Ninja -S llvm/compiler-rt/lib/builtins -B build/compiler-rt-builtins \
+  -DCMAKE_C_COMPILER=$PWD/build/llvm/bin/clang \
+  -DCMAKE_CXX_COMPILER=$PWD/build/llvm/bin/clang++ \
+  -DCMAKE_AR=$PWD/build/llvm/bin/llvm-ar \
+  -DCMAKE_NM=$PWD/build/llvm/bin/llvm-nm \
+  -DCMAKE_RANLIB=$PWD/build/llvm/bin/llvm-ranlib \
+  -DCMAKE_C_COMPILER_TARGET=penumbra-unknown-none \
+  -DCMAKE_CXX_COMPILER_TARGET=penumbra-unknown-none \
+  -DCMAKE_ASM_COMPILER_TARGET=penumbra-unknown-none \
+  -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+  -DCMAKE_C_FLAGS="-ffreestanding -nostdinc -isystem $PWD/build/llvm/lib/clang/22/include" \
+  -DCMAKE_ASM_FLAGS="-ffreestanding -nostdinc -isystem $PWD/build/llvm/lib/clang/22/include" \
+  -DCOMPILER_RT_BAREMETAL_BUILD=ON -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON \
+  -DCOMPILER_RT_INCLUDE_TESTS=OFF -DCOMPILER_RT_USE_LIBCXX=OFF \
+  -DCOMPILER_RT_BUILD_CRT=OFF -DCOMPILER_RT_BUILD_SANITIZERS=OFF \
+  -DCOMPILER_RT_BUILD_XRAY=OFF -DCOMPILER_RT_BUILD_LIBFUZZER=OFF \
+  -DCOMPILER_RT_BUILD_PROFILE=OFF -DCOMPILER_RT_BUILD_MEMPROF=OFF \
+  -DCOMPILER_RT_BUILD_ORC=OFF -DCOMPILER_RT_BUILD_GWP_ASAN=OFF \
+  -DCOMPILER_RT_BUILD_CTX_PROFILE=OFF
+ninja -C build/compiler-rt-builtins
+```
+
+Run tests:
+```sh
+make test-compiler                # all tests at -O2
+make test-compiler OPT="-Os"      # override optimization
+make test-compiler COMPILER_TESTS="path/to/test.c"  # single test
+```
+Full report in `build/test-compiler-report.txt`.
 
 ### NetBSD Kernel Build
 Prerequisites: NetBSD tools built via `build.sh` (one-time, see
