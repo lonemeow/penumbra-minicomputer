@@ -31,7 +31,8 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   getActionDefinitionsBuilder({G_ADD, G_SUB, G_AND, G_OR, G_XOR})
       .legalFor({s32})
       .widenScalarToNextPow2(0, 32)
-      .clampScalar(0, s32, s32);
+      .clampScalar(0, s32, s32)
+      .scalarize(0);
 
   // Shifts: clamp both the value (type 0) and shift amount (type 1) to s32.
   // Without clamping type 1, i64 narrowing can produce s64 shift amounts.
@@ -40,7 +41,8 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
       .widenScalarToNextPow2(0, 32)
       .widenScalarToNextPow2(1, 32)
       .clampScalar(0, s32, s32)
-      .clampScalar(1, s32, s32);
+      .clampScalar(1, s32, s32)
+      .scalarize(0);
 
   // Add/sub with overflow and carry: produced by i64 narrowing.
   // All lowered to basic ADD/SUB + ICMP sequences. The hardware has ADC/SBC
@@ -89,6 +91,10 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
         {s32, p0, s8,  1},  // STB / plain LDB
         {p0,  p0, s32, 4},  // pointer load/store
       })
+      // Scalarize vectors before the scalar-only widen/clamp rules below,
+      // which would otherwise see a vector type and decide the op is
+      // unsupported.
+      .scalarize(0)
       .widenScalarToNextPow2(0, /* MinSize = */ 8)
       .lowerIfMemSizeNotByteSizePow2()
       .clampScalar(0, s32, s32);
@@ -140,7 +146,8 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   // PHI nodes at control-flow joins.
   getActionDefinitionsBuilder(G_PHI)
       .legalFor({s32, p0})
-      .clampScalar(0, s32, s32);
+      .clampScalar(0, s32, s32)
+      .scalarize(0);
 
   // Fences: Penumbra is uniprocessor with no store buffer, so memory fences
   // are pure compiler barriers (no hardware instruction needed).
@@ -163,7 +170,8 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   // Select (ternary): result s32/p0, condition s1.
   getActionDefinitionsBuilder(G_SELECT)
       .legalFor({{s32, s1}, {p0, s1}})
-      .clampScalar(0, s32, s32);
+      .clampScalar(0, s32, s32)
+      .scalarize(0);
 
   // Merge/unmerge: used by i64 narrowing (two s32 ↔ one s64) and by the
   // optimizer when building bitfields from individual bits.  Widen small
@@ -193,13 +201,15 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   getActionDefinitionsBuilder({G_UDIV, G_UREM})
       .customFor({s32})
       .libcallFor({s64})
-      .clampScalar(0, s32, s64);
+      .clampScalar(0, s32, s64)
+      .scalarize(0);
 
   // Signed division/remainder: always libcall (signed power-of-2 lowering
   // needs rounding adjustment — not worth the complexity yet).
   getActionDefinitionsBuilder({G_SDIV, G_SREM})
       .libcallFor({s32, s64})
-      .clampScalar(0, s32, s64);
+      .clampScalar(0, s32, s64)
+      .scalarize(0);
 
   // Multiplication: custom-lower s32 power-of-2 and power-of-2 ± 1 constants
   // to shifts (+ add/sub), fall back to libcall otherwise.
@@ -207,7 +217,8 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   getActionDefinitionsBuilder(G_MUL)
       .customFor({s32})
       .libcallFor({s64})
-      .clampScalar(0, s32, s64);
+      .clampScalar(0, s32, s64)
+      .scalarize(0);
 
   // SEXT_INREG: lowered by framework to SHL+ASHR (our shift constant folding
   // then selects these to SHLi+SARi).
@@ -305,7 +316,8 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
                                G_FASIN, G_FACOS, G_FATAN, G_FATAN2,
                                G_FSINH, G_FCOSH, G_FTANH,
                                G_FLDEXP, G_FMODF})
-      .libcallFor({s32, s64});
+      .libcallFor({s32, s64})
+      .scalarize(0);
 
   // G_FSINCOS: returns two FP values (sin + cos).
   getActionDefinitionsBuilder(G_FSINCOS)
@@ -359,6 +371,24 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
 
   // Memory operations: lower to memcpy/memmove/memset libcalls.
   getActionDefinitionsBuilder({G_MEMCPY, G_MEMMOVE, G_MEMSET}).libcall();
+
+  // Penumbra has no vector unit.  The front end accepts GCC
+  // vector_size/OpenCL vector extensions and the IR optimizer can
+  // auto-vectorize, so vector ops do reach the legalizer — we
+  // unroll them into per-element scalar ops that the rules above
+  // then handle normally.  G_BITCAST between vector and scalar (e.g.
+  // (<2 x s32>) <-> s64 from unions) lowers to G_UNMERGE/G_MERGE,
+  // which our existing narrow rules already cover.
+  getActionDefinitionsBuilder(G_BITCAST)
+      .legalFor({{s32, s32}, {s32, p0}, {p0, s32}, {s64, s64}})
+      .lower();
+
+  getActionDefinitionsBuilder({G_EXTRACT_VECTOR_ELT, G_INSERT_VECTOR_ELT})
+      .lower();
+
+  getActionDefinitionsBuilder(G_BUILD_VECTOR).lower();
+  getActionDefinitionsBuilder(G_SHUFFLE_VECTOR).lower();
+  getActionDefinitionsBuilder(G_CONCAT_VECTORS).lower();
 
   getLegacyLegalizerInfo().computeTables();
 }
