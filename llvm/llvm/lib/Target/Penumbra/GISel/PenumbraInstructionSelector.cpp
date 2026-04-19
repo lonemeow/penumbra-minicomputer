@@ -949,8 +949,18 @@ bool PenumbraInstructionSelector::selectIntrinsic(
   if (IntrinID == Intrinsic::returnaddress) {
     Register DstReg = I.getOperand(0).getReg();
     unsigned Depth = I.getOperand(2).getImm();
-    if (Depth != 0)
-      return false;
+    // Depth > 0 would need a frame-pointer chain to walk, which
+    // Penumbra's ABI doesn't provide.  The GCC/Clang contract
+    // permits returning an unspecified value in that case, so
+    // materialize 0 — callers that check the result stay correct,
+    // and compilation succeeds rather than failing selection.
+    if (Depth != 0) {
+      auto NewI = BuildMI(MBB, I, DL, TII.get(Penumbra::LLI))
+          .addDef(DstReg)
+          .addImm(0);
+      I.eraseFromParent();
+      return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
+    }
     MachineFunction &MF = *I.getParent()->getParent();
     MF.getFrameInfo().setReturnAddressIsTaken(true);
     auto *FuncInfo = MF.getInfo<PenumbraMachineFunctionInfo>();
