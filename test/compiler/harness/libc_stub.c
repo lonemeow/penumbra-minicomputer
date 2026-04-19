@@ -125,45 +125,50 @@ static void print_double(int (*put)(int), double d, int width, int precision) {
     uint64_t exp_bits = (bits.u >> 52) & 0x7FF;
     uint64_t mantissa = bits.u & (((uint64_t)1 << 52) - 1);
     int sign = (int)(bits.u >> 63);
+    int i;
 
     // IEEE 754: exponent all-1s encodes NaN (mantissa != 0) or
-    // infinity (mantissa == 0).  Convert to the arithmetic absolute
-    // value via `d = -d` would invoke undefined/implementation-defined
-    // behavior for NaN, so classify from the bit pattern first.
+    // infinity (mantissa == 0).  Negating a NaN via `d = -d` is UB, so
+    // classify from the bit pattern first.
     if (exp_bits == 0x7FF) {
-        if (mantissa != 0) {
-            put('n'); put('a'); put('n');
-        } else {
-            if (sign) put('-');
-            put('i'); put('n'); put('f');
-        }
+        int is_nan = (mantissa != 0);
+        int len = 3 + ((!is_nan && sign) ? 1 : 0);
+        while (width > len) { put(' '); width--; }
+        if (!is_nan && sign) put('-');
+        if (is_nan) { put('n'); put('a'); put('n'); }
+        else        { put('i'); put('n'); put('f'); }
         return;
     }
 
-    if (sign) {
-        put('-');
-        d = -d;
-    }
-
+    if (sign) d = -d;
     if (precision < 0) precision = 6;
 
-    int i;
     double r_add = 0.5;
-    for (i = 0; i < precision; i++) {
-        r_add *= 0.1;
-    }
+    for (i = 0; i < precision; i++) r_add *= 0.1;
     d += r_add;
 
     uint64_t ipart = (uint64_t)d;
-    kprintn(put, ipart, 10, 0, 0);
-    put('.');
 
-    double fpart = d - (double)ipart;
-    for (i = 0; i < precision; i++) {
-        fpart *= 10.0;
-        int digit = (int)fpart;
-        put(digit + '0');
-        fpart -= (double)digit;
+    // Compute rendered length so we can left-pad to `width`.  Length is
+    // optional sign + integer digits + (precision > 0 ? '.' + precision : 0).
+    int int_digits = 0;
+    uint64_t t = ipart;
+    if (t == 0) int_digits = 1;
+    else while (t > 0) { t /= 10; int_digits++; }
+    int len = (sign ? 1 : 0) + int_digits + (precision > 0 ? 1 + precision : 0);
+    while (width > len) { put(' '); width--; }
+
+    if (sign) put('-');
+    kprintn(put, ipart, 10, 0, 0);
+    if (precision > 0) {
+        put('.');
+        double fpart = d - (double)ipart;
+        for (i = 0; i < precision; i++) {
+            fpart *= 10.0;
+            int digit = (int)fpart;
+            put(digit + '0');
+            fpart -= (double)digit;
+        }
     }
 }
 
