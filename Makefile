@@ -188,7 +188,8 @@ COMPILER_TEST_ARGS := $(foreach t,$(COMPILER_TESTS),--test-file "$(t)")
 else
 COMPILER_TEST_ARGS := \
 	--test-dir "$(LLVM_TEST_SUITE)/UnitTests" \
-	--test-dir "$(LLVM_TEST_SUITE)/Regression"
+	--test-dir "$(LLVM_TEST_SUITE)/Regression" \
+	--test-dir "$(LLVM_TEST_SUITE)/Benchmarks/Stanford"
 endif
 
 .PHONY: test-compiler
@@ -228,6 +229,8 @@ test-compiler: $(ISS)
 		--exclude "*/20010209-1.c" \
 		--exclude "*/20010605-1.c" \
 		--exclude "*/20020412-1.c" \
+		--exclude "*/Stanford/FloatMM.c" \
+		--exclude "*/Stanford/RealMM.c" \
 		--report "$(BUILD_DIR)/test-compiler-report.txt" \
 		--jobs $$(nproc)
 
