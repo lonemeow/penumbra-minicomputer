@@ -60,6 +60,17 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
       .lowerFor({{s32, s1}})
       .minScalar(0, s32);
 
+  // Saturating add/subtract: no hardware support, lower to the generic
+  // add+compare+select expansion (LegalizerHelper picks between the
+  // min/max and AddO-based forms depending on legality of the helpers —
+  // our G_UADDO/G_USUBO are already lowered, which is what it uses).
+  // Sub-word widened to s32; s64 narrowed to s32 pairs.
+  getActionDefinitionsBuilder({G_UADDSAT, G_USUBSAT, G_SADDSAT, G_SSUBSAT})
+      .lowerFor({s32})
+      .widenScalarToNextPow2(0, 32)
+      .narrowScalarIf(typeIs(0, s64), changeTo(0, s32))
+      .clampScalar(0, s32, s32);
+
   getActionDefinitionsBuilder({G_UMULH, G_SMULH})
       .lowerFor({s32})
       .minScalar(0, s32);
