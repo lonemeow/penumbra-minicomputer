@@ -23,7 +23,7 @@ class TestResult:
         self.output = output
 
 def run_single_test(args):
-    test_path, opt, harness_dir, build_dir, iss_path, cc, objcopy, bin2hex, builtins = args
+    test_path, opt, harness_dir, build_dir, iss_path, cc, objcopy, bin2hex, builtins, resource_dir = args
     name = os.path.splitext(os.path.basename(test_path))[0]
     obj = os.path.join(build_dir, f"{name}.elf")
     hex_file = os.path.join(build_dir, f"{name}.hex")
@@ -31,8 +31,13 @@ def run_single_test(args):
     
     # 1. Compile
     cmd_compile = shlex.split(cc) + [
-        opt, "-ffreestanding", "-nostdlib",
+        opt, "-ffreestanding", "-nostdlib", "-nostdinc",
         "-I", harness_dir,
+    ]
+    if resource_dir:
+        cmd_compile += ["-isystem", os.path.join(resource_dir, "include")]
+    
+    cmd_compile += [
         "-T", os.path.join(harness_dir, "test.ld"),
         os.path.join(harness_dir, "crt0.S"),
         os.path.join(harness_dir, "libc_stub.c"),
@@ -113,6 +118,7 @@ def main():
     parser.add_argument("--objcopy", required=True, help="Path to llvm-objcopy")
     parser.add_argument("--bin2hex", required=True, help="Path to bin2hex.py")
     parser.add_argument("--builtins", help="Path to libclang_rt.builtins-penumbra.a")
+    parser.add_argument("--resource-dir", help="Clang resource directory")
     parser.add_argument("--report", default="test-report.txt", help="Report file path")
     parser.add_argument("-j", "--jobs", type=int, default=multiprocessing.cpu_count(), help="Number of parallel jobs")
     
@@ -132,7 +138,7 @@ def main():
     print(f"Running with {args.jobs} parallel jobs at {args.opt}...")
 
     worker_args = [
-        (f, args.opt, args.harness_dir, args.build_dir, args.iss, args.cc, args.objcopy, args.bin2hex, args.builtins)
+        (f, args.opt, args.harness_dir, args.build_dir, args.iss, args.cc, args.objcopy, args.bin2hex, args.builtins, args.resource_dir)
         for f in test_files
     ]
 

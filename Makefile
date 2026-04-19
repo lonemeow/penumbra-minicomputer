@@ -194,6 +194,7 @@ test-compiler: $(ISS)
 		--objcopy "$(OBJCOPY)" \
 		--bin2hex "sw/tools/bin2hex.py" \
 		--builtins "$(COMPILER_RT_BUILTINS)" \
+		--resource-dir "$$($(CC) -print-resource-dir)" \
 		--report "$(BUILD_DIR)/test-compiler-report.txt" \
 		--jobs $$(nproc)
 
