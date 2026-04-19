@@ -6,12 +6,14 @@
 
 #include "PenumbraFrameLowering.h"
 #include "PenumbraInstrInfo.h"
+#include "PenumbraRegisterInfo.h"
 #include "MCTargetDesc/PenumbraMCTargetDesc.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/Support/MathExtras.h"
 
 using namespace llvm;
 
@@ -34,6 +36,37 @@ void PenumbraFrameLowering::determineCalleeSaves(MachineFunction &MF,
     SavedRegs.set(FPReg);
 }
 
+// Emit `R14 = R14 <op> StackSize` for stack growth/shrink.  Frames up to
+// 64 KiB use a single immediate-form instruction (SUBi/ADDi); larger frames
+// materialize StackSize in scratch R11 and use the register form.  R11 is
+// caller-save scratch and is dead both at function entry (no incoming live
+// value) and just before function exit (no return value lives there), so
+// it's always safe to clobber from prologue/epilogue.
+static void adjustSP(MachineBasicBlock &MBB,
+                     MachineBasicBlock::iterator MBBI, DebugLoc DL,
+                     const PenumbraInstrInfo &TII, uint64_t StackSize,
+                     unsigned ImmOpc, unsigned RegOpc) {
+  if (isUInt<16>(StackSize)) {
+    // <op>i r14, #StackSize
+    BuildMI(MBB, MBBI, DL, TII.get(ImmOpc), Penumbra::R14)
+        .addReg(Penumbra::R14)
+        .addImm(StackSize);
+    return;
+  }
+  // Large frame: three-instruction sequence.
+  //   lli r11, lo16(StackSize)
+  //   lui r11, hi16(StackSize)
+  //   <op> r14, r11
+  BuildMI(MBB, MBBI, DL, TII.get(Penumbra::LLI), Penumbra::R11)
+      .addImm(StackSize & 0xFFFF);
+  BuildMI(MBB, MBBI, DL, TII.get(Penumbra::LUI), Penumbra::R11)
+      .addReg(Penumbra::R11)
+      .addImm((StackSize >> 16) & 0xFFFF);
+  BuildMI(MBB, MBBI, DL, TII.get(RegOpc), Penumbra::R14)
+      .addReg(Penumbra::R14)
+      .addReg(Penumbra::R11);
+}
+
 // Emit the function prologue: allocate the stack frame by subtracting
 // StackSize from SP (R14).  When FP is needed, set FP = SP after
 // frame allocation so that locals are accessible via [FP+offset]
@@ -50,12 +83,9 @@ void PenumbraFrameLowering::emitPrologue(MachineFunction &MF,
   const auto &TII =
       *static_cast<const PenumbraInstrInfo *>(MF.getSubtarget().getInstrInfo());
 
-  if (StackSize != 0) {
-    // sub r14, #StackSize  — grow stack downward
-    BuildMI(MBB, MBBI, DL, TII.get(Penumbra::SUBi), Penumbra::R14)
-        .addReg(Penumbra::R14)
-        .addImm(StackSize);
-  }
+  if (StackSize != 0)
+    adjustSP(MBB, MBBI, DL, TII, StackSize,
+             /*ImmOpc=*/Penumbra::SUBi, /*RegOpc=*/Penumbra::SUB);
 
   if (hasFP(MF)) {
     // mov r10, r14  — FP = SP after frame allocation
@@ -83,10 +113,8 @@ void PenumbraFrameLowering::emitEpilogue(MachineFunction &MF,
   const auto &TII =
       *static_cast<const PenumbraInstrInfo *>(MF.getSubtarget().getInstrInfo());
 
-  // add r14, #StackSize  — shrink stack back
-  BuildMI(MBB, MBBI, DL, TII.get(Penumbra::ADDi), Penumbra::R14)
-      .addReg(Penumbra::R14)
-      .addImm(StackSize);
+  adjustSP(MBB, MBBI, DL, TII, StackSize,
+           /*ImmOpc=*/Penumbra::ADDi, /*RegOpc=*/Penumbra::ADD);
 }
 
 // Spill CSRs at the prologue insertion point.  Mirrors AArch64's
@@ -172,4 +200,27 @@ PenumbraFrameLowering::eliminateCallFramePseudoInstr(
     MachineFunction &MF, MachineBasicBlock &MBB,
     MachineBasicBlock::iterator MI) const {
   return MBB.erase(MI);
+}
+
+// Pre-allocate an emergency spill slot for the RegScavenger — but only
+// when the frame is big enough that eliminateFrameIndex might need one.
+// Small frames (16-bit offset fits in the memory-offset field) never
+// take the scratch path, so adding a slot there is pure bloat
+// (every leaf function would pay +4 bytes of SP adjust).
+// Follows the RISC-V pattern of using estimateStackSize with a
+// slightly pessimistic threshold, since the final StackSize is only
+// known after this hook runs and can grow a bit due to CSR-save
+// padding and alignment.
+void PenumbraFrameLowering::processFunctionBeforeFrameFinalized(
+    MachineFunction &MF, RegScavenger *RS) const {
+  MachineFrameInfo &MFI = MF.getFrameInfo();
+  if (isInt<15>(MFI.estimateStackSize(MF)))
+    return; // comfortably within 16-bit signed offset; no scratch needed
+
+  const TargetRegisterInfo *TRI = MF.getSubtarget().getRegisterInfo();
+  const TargetRegisterClass *RC = &Penumbra::GPR_AllocatableRegClass;
+  int FI = MFI.CreateStackObject(TRI->getSpillSize(*RC),
+                                 TRI->getSpillAlign(*RC),
+                                 /*isSpillSlot=*/true);
+  RS->addScavengingFrameIndex(FI);
 }

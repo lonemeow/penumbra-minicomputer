@@ -14,6 +14,7 @@
 //   PC=XXXXXXXX SR=XXXXXXXX [SVNZCV] R1=... R2=... ... R14=...
 //
 // Usage: penumbra-iss [program.hex] [+sdcard=path] [+trace=path] [+raw]
+//                     [+trap-pc0]
 //
 // +raw enables full raw TTY mode: all control characters (Ctrl-C,
 // Ctrl-Z, etc.) pass through to the simulated UART for job control
@@ -587,6 +588,7 @@ static volatile sig_atomic_t running = 1;
 static struct termios orig_termios;
 static bool term_raw = false;
 static bool full_raw = false;  // +raw: pass all control chars through
+static bool trap_user_pc_zero = false;  // +trap-pc0: abort on user-mode PC=0
 static FILE* trace_fp = nullptr;
 
 static void sigint_handler(int) { running = 0; }
@@ -1260,6 +1262,31 @@ static void execute_one() {
         }
     }
 
+    // DEBUG: catch "jumped to NULL" bugs.  User-mode PC=0 is never
+    // legitimate under normal operation — no code lives on page 0
+    // (VM_MIN_ADDRESS is 0x1000, null page is an unmapped guard).
+    // Gated behind +trap-pc0 because OS-level tests can legitimately
+    // probe memory protection by jumping to address 0 and recovering
+    // from the SIGSEGV; firing the trap would mask that behavior.
+    // `prev_pc` (set at the bottom of this function) gives the
+    // address of the instruction that set PC=0.
+    static uint32_t prev_pc = 0;
+    if (trap_user_pc_zero && cpu.pc == 0 && !(cpu.sr & SR_S)) {
+        fprintf(stderr,
+            "\n[iss] user PC=0 (null-pointer jump) from prev PC=0x%08x:\n",
+            prev_pc);
+        fprintf(stderr, "  PC=%08x LR=%08x SP=%08x SR=%08x\n",
+                cpu.pc, cpu.r[13], cpu.r[14], cpu.sr);
+        for (int r = 1; r <= 12; r++)
+            fprintf(stderr, "  R%d=%08x%s", r, cpu.r[r],
+                    (r % 4 == 0) ? "\n" : "");
+        fprintf(stderr, "\n  insn_count=%llu\n",
+                (unsigned long long)cpu.insn_count);
+        fflush(stderr);
+        std::abort();
+    }
+    prev_pc = cpu.pc;
+
     bool took_exception;
     uint32_t insn = insn_fetch(took_exception);
     if (took_exception) return;
@@ -1673,11 +1700,12 @@ int main(int argc, char** argv) {
         if (strncmp(argv[i], "+sdcard=", 8) == 0) sd_path = argv[i] + 8;
         else if (strncmp(argv[i], "+trace=", 7) == 0) trace_path = argv[i] + 7;
         else if (strcmp(argv[i], "+raw") == 0) full_raw = true;
+        else if (strcmp(argv[i], "+trap-pc0") == 0) trap_user_pc_zero = true;
         else hex_path = argv[i];
     }
 
     if (!hex_path) {
-        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+trace=path] [+raw]\n");
+        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+trace=path] [+raw] [+trap-pc0]\n");
         return 1;
     }
 

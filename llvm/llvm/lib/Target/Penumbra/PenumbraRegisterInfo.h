@@ -28,6 +28,17 @@ public:
                            unsigned FIOperandNum,
                            RegScavenger *RS = nullptr) const override;
 
+  // Large frame offsets need a scratch register to materialize, and the
+  // elimination runs after register allocation — so we ask PEI to keep
+  // a RegScavenger alive across the pass so we can grab a free register
+  // at the rewrite point.
+  bool requiresRegisterScavenging(const MachineFunction &MF) const override {
+    return true;
+  }
+  bool requiresFrameIndexScavenging(const MachineFunction &MF) const override {
+    return true;
+  }
+
   Register getFrameRegister(const MachineFunction &MF) const override;
 };
 

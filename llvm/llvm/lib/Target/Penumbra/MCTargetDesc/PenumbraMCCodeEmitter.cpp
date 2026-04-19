@@ -15,6 +15,7 @@
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/Support/EndianStream.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cstdint>
@@ -71,6 +72,39 @@ void PenumbraMCCodeEmitter::encodeInstruction(
   support::endian::write<uint32_t>(CB, Value, llvm::endianness::little);
 }
 
+// Range-check a literal immediate and error via MCContext if out of range.
+// Treats the valid range as the union of signed and unsigned for the given
+// bit width: for 16 bits, accept [-32768, 65535]; for N bits generally,
+// accept [-(1<<(N-1)), (1<<N) - 1].  That's wide enough to cover every
+// instruction that uses the field (signed LLIS and unsigned LLI both fit),
+// but still catches silent truncation of values that don't fit in N bits.
+static void checkImmRange(MCContext &Ctx, const MCInst &Inst, int64_t Value,
+                          unsigned Bits, const char *Field) {
+  int64_t Min = -(int64_t(1) << (Bits - 1));
+  int64_t Max = (int64_t(1) << Bits) - 1;
+  if (Value < Min || Value > Max) {
+    SmallString<128> Msg;
+    raw_svector_ostream OS(Msg);
+    OS << "immediate " << Value << " out of range [" << Min << ", " << Max
+       << "] for " << Field;
+    Ctx.reportError(Inst.getLoc(), OS.str());
+  }
+}
+
+// Signed-only range check (for memory offsets, which are sign-extended).
+static void checkSimmRange(MCContext &Ctx, const MCInst &Inst, int64_t Value,
+                           unsigned Bits, const char *Field) {
+  int64_t Min = -(int64_t(1) << (Bits - 1));
+  int64_t Max = (int64_t(1) << (Bits - 1)) - 1;
+  if (Value < Min || Value > Max) {
+    SmallString<128> Msg;
+    raw_svector_ostream OS(Msg);
+    OS << "immediate " << Value << " out of range [" << Min << ", " << Max
+       << "] for " << Field;
+    Ctx.reportError(Inst.getLoc(), OS.str());
+  }
+}
+
 unsigned PenumbraMCCodeEmitter::getMachineOpValue(
     const MCInst &Inst, const MCOperand &MO, SmallVectorImpl<MCFixup> &Fixups,
     const MCSubtargetInfo &STI) const {
@@ -96,8 +130,11 @@ unsigned PenumbraMCCodeEmitter::encodeBranchTarget(
     const MCInst &Inst, unsigned OpNo, SmallVectorImpl<MCFixup> &Fixups,
     const MCSubtargetInfo &STI) const {
   const MCOperand &MO = Inst.getOperand(OpNo);
-  if (MO.isImm())
+  if (MO.isImm()) {
+    // Format B: 22-bit signed word offset.
+    checkSimmRange(Ctx, Inst, MO.getImm(), 22, "branch target (word offset)");
     return static_cast<unsigned>(MO.getImm());
+  }
 
   // Symbolic expression — create a fixup for the linker/relaxer to resolve.
   // Format B: offset22 lives in bits [25:4], fixup applied at byte offset 0.
@@ -112,8 +149,10 @@ unsigned PenumbraMCCodeEmitter::encodeImm16(
     const MCInst &Inst, unsigned OpNo, SmallVectorImpl<MCFixup> &Fixups,
     const MCSubtargetInfo &STI) const {
   const MCOperand &MO = Inst.getOperand(OpNo);
-  if (MO.isImm())
+  if (MO.isImm()) {
+    checkImmRange(Ctx, Inst, MO.getImm(), 16, "imm16");
     return static_cast<unsigned>(MO.getImm());
+  }
 
   // Check for lo16/hi16/pcrel specifier expressions.
   const MCExpr *Expr = MO.getExpr();
@@ -173,8 +212,11 @@ unsigned PenumbraMCCodeEmitter::encodeMemOffset16(
     const MCInst &Inst, unsigned OpNo, SmallVectorImpl<MCFixup> &Fixups,
     const MCSubtargetInfo &STI) const {
   const MCOperand &MO = Inst.getOperand(OpNo);
-  if (MO.isImm())
+  if (MO.isImm()) {
+    // Format M: 16-bit signed memory offset.
+    checkSimmRange(Ctx, Inst, MO.getImm(), 16, "memory offset");
     return static_cast<unsigned>(MO.getImm());
+  }
 
   // Format M: offset16 lives in bits [17:2].
   // Check for %pcrel() specifier → PC-relative fixup.

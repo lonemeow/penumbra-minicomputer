@@ -418,7 +418,12 @@ MIPS/68k-style vector dispatch.
   with SP banking, 16450 UART, SPI+SD card emulation,
   and bus autoconfig. Passes all 38 hardware test programs.
   Build: `make -C sw/sim` (or built automatically by `make simulate`).
-  Run: `sw/sim/penumbra-iss program.hex [+sdcard=img] [+trace=log]`
+  Run: `sw/sim/penumbra-iss program.hex [+sdcard=img] [+trace=log]
+  [+raw] [+trap-pc0]`.  `+trap-pc0` aborts the sim with full register
+  dump if user-mode code ever fetches from PC=0 — useful for catching
+  null-pointer jumps (bad function pointers, clobbered LR on return).
+  Off by default because some OS-level tests may deliberately probe
+  memory protection at address 0.
 - **LLVM toolchain** (`build/llvm/bin/`, override with `LLVM_PREFIX`):
   clang (C compiler), llvm-mc (assembler), ld.lld (linker),
   llvm-objcopy. Target triple: `penumbra-unknown-netbsd` (userland/kernel),

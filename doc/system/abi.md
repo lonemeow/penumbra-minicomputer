@@ -151,6 +151,25 @@ func:
     ret                         ; jmp lr
 ```
 
+**Large frames (FRAME_SIZE > 65535 bytes).** `SUBi`/`ADDi` take a 16-bit
+immediate, so a frame that doesn't fit requires materializing the size
+in a scratch register first:
+
+```asm
+    lli   t1, #lo16(FRAME_SIZE)
+    lui   t1, #hi16(FRAME_SIZE)
+    sub   sp, t1                ; prologue
+    ...
+    lli   t1, #lo16(FRAME_SIZE)
+    lui   t1, #hi16(FRAME_SIZE)
+    add   sp, t1                ; epilogue
+```
+
+Memory accesses to frame slots at offsets larger than ±32767 similarly
+need base+offset materialization before the load/store. The compiler
+handles this automatically in `PenumbraFrameLowering::adjustSP` and
+`PenumbraRegisterInfo::eliminateFrameIndex`.
+
 ### Variadic Functions
 
 - Named arguments follow normal register/stack rules.

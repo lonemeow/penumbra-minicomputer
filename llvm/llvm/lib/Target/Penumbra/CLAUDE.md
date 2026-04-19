@@ -235,8 +235,8 @@ EM_PENUMBRA (0xF0DA) defined in central `llvm/BinaryFormat/ELF.h`.
 | `PenumbraInstrInfo.td` | All 4 formats (R/L/M/B) with bit-accurate encoding. Tied-operand constraints for 2-addr ops. ADC/SBC Uses=[SR]. `GPRz` with GIZeroRegister=R0. Pseudos: RET, LEAfi, SELECT\_GPR, SELECT\_CC\_GPR, ADJCALLSTACK |
 | `PenumbraGISel.td` | ~28 TableGen `Pat<>` rules: ALU reg-reg/reg-imm, shifts, NOT, constants (LLI/LLIS), all load/store (i32/p0). ImmLeaf predicates: uimm16, simm16, simm16neg, uimm5 |
 | `PenumbraCallingConv.td` | CC\_Penumbra (R1-R4 args, stack overflow), RetCC\_Penumbra (R1, R2 for i64), CSR\_Penumbra (R5-R10, R13) |
-| `PenumbraRegisterInfo.{h,cpp}` | Reserved regs (R0, R12, R14, R15), callee-saved, eliminateFrameIndex, getFrameRegister(R14) |
-| `PenumbraFrameLowering.{h,cpp}` | StackGrowsDown, Align(4), hasFPImpl()=false. Prologue (SUBi SP) / epilogue (ADDi SP) |
+| `PenumbraRegisterInfo.{h,cpp}` | Reserved regs (R0, R12, R14, R15), callee-saved, getFrameRegister(R14). `eliminateFrameIndex` folds small offsets directly, expands large offsets to `LLI+LUI+ADD` via a fresh virtual register (rewritten later by the scavenger, not a fixed scratch — RA may have live values in any particular reg). `requiresRegisterScavenging`/`requiresFrameIndexScavenging` both true |
+| `PenumbraFrameLowering.{h,cpp}` | StackGrowsDown, Align(4), hasFPImpl()=true when alloca present. `adjustSP` helper used by both prologue (SUB/SUBi) and epilogue (ADD/ADDi): small frames use the 16-bit immediate form, large frames (StackSize > 65535) materialize the size in R11 via LLI+LUI and use the reg-reg form. `processFunctionBeforeFrameFinalized` adds an emergency spill slot for RegScavenger when the estimated frame exceeds 15-bit signed — otherwise leaf functions don't pay for it |
 | `PenumbraISelLowering.{h,cpp}` | TargetLowering: JT encoding (EK\_LabelDifference32), SELECT diamond expansion, inline asm (`r`→GPR\_Allocatable, `{cc}`→SR/CCR), `setStackPointerRegisterToSaveRestore(R14)` |
 | `PenumbraSubtarget.{h,cpp}` | Central hub: owns InstrInfo, FrameLowering, TLInfo, and all GlobalISel objects |
 | `PenumbraTargetMachine.{h,cpp}` | Data layout `e-m:e-p:32:32-i32:32-i64:64-n32-S32`, GlobalISel pipeline, `setGlobalISel(true)`. PIC via `-fPIC`. `PenumbraTargetObjectFile` (local class): always inlines jump tables in `.text`. `PenumbraLowerTLS` IR pass: lowers `@llvm.threadlocal.address` (GD → `__tls_get_addr` call; LE/IE → inline TP+offset) |
@@ -361,6 +361,15 @@ Fixed locally — needed for NetBSD kernel option tracking symbols
   (via legalizeCustom() override). G_VAARG lowered (s32/s64/p0).
 
 ## Key Implementation Notes
+- **Range-checked encoders.** Both the MC code emitter
+  (`encodeImm16`/`encodeMemOffset16`/`encodeBranchTarget`) and the
+  asm backend `applyFixup` hard-error on out-of-range immediates
+  rather than silently truncating.  Emitter uses
+  `Ctx.reportError(Inst.getLoc(), ...)` (llc/clang exit non-zero
+  without writing an object); backend uses
+  `report_fatal_error` for resolved fixups.  `imm16_pcrel` accepts
+  the symmetric `[-65535, 65535]` range because ADDi↔SUBi flip
+  lets either sign reach the full uimm16.
 - **applyFixup Data pointer:** Pre-positioned at fixup location —
   do NOT add `Fixup.getOffset()`. Use `Data[i]` directly.
 - **maybeAddReloc:** Must be called at the start of `applyFixup()`

@@ -23,6 +23,14 @@ public:
                     MachineBasicBlock &MBB) const override;
   bool hasFPImpl(const MachineFunction &MF) const override;
 
+  // Called before PEI finalizes frame offsets.  Creates an emergency
+  // spill slot so that RegScavenger can always satisfy a
+  // scavengeRegisterBackwards request in eliminateFrameIndex — even in
+  // register-pressure-heavy functions where no register happens to be
+  // free at the rewrite point.
+  void processFunctionBeforeFrameFinalized(MachineFunction &MF,
+                                           RegScavenger *RS) const override;
+
   void determineCalleeSaves(MachineFunction &MF, BitVector &SavedRegs,
                             RegScavenger *RS) const override;
 

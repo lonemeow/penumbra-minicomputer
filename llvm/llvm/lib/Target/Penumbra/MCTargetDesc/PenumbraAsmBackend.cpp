@@ -6,6 +6,7 @@
 
 #include "PenumbraFixupKinds.h"
 #include "PenumbraMCTargetDesc.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/MC/MCAsmBackend.h"
 #include "llvm/MC/MCELFObjectWriter.h"
 #include "llvm/MC/MCFixup.h"
@@ -119,6 +120,43 @@ PenumbraAsmBackend::getFixupKindInfo(MCFixupKind Kind) const {
   return Infos[Kind - FirstTargetFixupKind];
 }
 
+// Range-check a fixup value and return the low `Bits` of it.  Hard-aborts
+// on overflow when `Check` is true (only resolved fixups are checked —
+// unresolved fixups carry a linker placeholder that's meaningless to check).
+// Doing the range check and the low-bits mask in the same helper keeps them
+// tied together: you can't accidentally skip the check while still producing
+// an encoded value.
+static uint32_t checkedMask(const MCFixup &Fixup, int64_t Value, int64_t Min,
+                            int64_t Max, unsigned Bits, bool Check,
+                            const char *Name) {
+  if (Check && (Value < Min || Value > Max)) {
+    SmallString<128> Msg;
+    raw_svector_ostream OS(Msg);
+    OS << "fixup value " << Value << " out of range [" << Min << ", " << Max
+       << "] for " << Name;
+    report_fatal_error(OS.str().str().c_str());
+  }
+  uint32_t Mask = (Bits >= 32) ? 0xFFFFFFFFu : ((1u << Bits) - 1);
+  return static_cast<uint32_t>(Value) & Mask;
+}
+
+// Signed `Bits`-wide field, e.g. 16-bit signed memory offset.
+static uint32_t checkedSigned(const MCFixup &Fixup, int64_t Value,
+                              unsigned Bits, bool Check, const char *Name) {
+  int64_t Min = -(int64_t(1) << (Bits - 1));
+  int64_t Max = (int64_t(1) << (Bits - 1)) - 1;
+  return checkedMask(Fixup, Value, Min, Max, Bits, Check, Name);
+}
+
+// Format L imm16: the field is 16 bits but source instructions interpret it
+// as either signed (LLIS) or unsigned (LLI/ADDi/...), so accept the union
+// [-32768, 65535].
+static uint32_t checkedMixed16(const MCFixup &Fixup, int64_t Value, bool Check,
+                               const char *Name) {
+  return checkedMask(Fixup, Value, -(int64_t(1) << 15),
+                     (int64_t(1) << 16) - 1, 16, Check, Name);
+}
+
 void PenumbraAsmBackend::applyFixup(const MCFragment &F, const MCFixup &Fixup,
                                     const MCValue &Target, uint8_t *Data,
                                     uint64_t Value, bool IsResolved) {
@@ -126,32 +164,42 @@ void PenumbraAsmBackend::applyFixup(const MCFragment &F, const MCFixup &Fixup,
   if (!Value)
     return; // Nothing to patch.
 
+  // Only validate when the fixup is fully resolved at assembly time.
+  // Unresolved fixups carry a placeholder Value that the linker will
+  // overwrite — range-checking the placeholder is meaningless.
+  bool CheckRange = IsResolved;
+
   // NOTE: Data already points to the fixup location (Contents + Offset),
   // so we access Data[0..3] directly — do NOT add Fixup.getOffset() again.
   MCFixupKind Kind = Fixup.getKind();
 
   if (Kind == static_cast<MCFixupKind>(Penumbra::fixup_penumbra_branch22)) {
     // Value is a PC-relative byte offset.  Convert to word offset.
-    int64_t WordOffset = static_cast<int64_t>(Value) >> 2;
-    // Mask to 22 bits and shift into position [25:4].
-    uint32_t Encoded = (static_cast<uint32_t>(WordOffset) & 0x3FFFFF) << 4;
-    // OR into the little-endian instruction word.
+    int64_t ByteOffset = static_cast<int64_t>(Value);
+    if (CheckRange && (ByteOffset & 3) != 0)
+      report_fatal_error("branch target is not 4-byte aligned");
+    // 22-bit signed word offset: ±8 MB; then shift into position [25:4].
+    uint32_t Encoded = checkedSigned(Fixup, ByteOffset >> 2, 22, CheckRange,
+                                     "branch22")
+                       << 4;
     support::endian::write32le(
         Data, support::endian::read32le(Data) | Encoded);
     return;
   }
 
   if (Kind == static_cast<MCFixupKind>(Penumbra::fixup_penumbra_imm16)) {
-    // Value is a 16-bit immediate, goes into bits [15:0].
-    uint32_t Encoded = static_cast<uint32_t>(Value) & 0xFFFF;
+    // 16-bit immediate (signed LLIS or unsigned LLI) into bits [15:0].
+    uint32_t Encoded = checkedMixed16(Fixup, Value, CheckRange, "imm16");
     support::endian::write32le(
         Data, support::endian::read32le(Data) | Encoded);
     return;
   }
 
   if (Kind == static_cast<MCFixupKind>(Penumbra::fixup_penumbra_memoffset16)) {
-    // Value is a 16-bit memory offset, goes into bits [17:2].
-    uint32_t Encoded = (static_cast<uint32_t>(Value) & 0xFFFF) << 2;
+    // 16-bit signed memory offset, into bits [17:2].
+    uint32_t Encoded = checkedSigned(Fixup, Value, 16, CheckRange,
+                                     "memoffset16")
+                       << 2;
     support::endian::write32le(
         Data, support::endian::read32le(Data) | Encoded);
     return;
@@ -177,8 +225,10 @@ void PenumbraAsmBackend::applyFixup(const MCFragment &F, const MCFixup &Fixup,
 
   if (Kind ==
       static_cast<MCFixupKind>(Penumbra::fixup_penumbra_memoffset16_pcrel)) {
-    // PC-relative 16-bit offset, into bits [17:2] (same layout as memoffset16).
-    uint32_t Encoded = (static_cast<uint32_t>(Value) & 0xFFFF) << 2;
+    // PC-relative 16-bit signed offset, into bits [17:2].
+    uint32_t Encoded = checkedSigned(Fixup, Value, 16, CheckRange,
+                                     "memoffset16_pcrel")
+                       << 2;
     support::endian::write32le(
         Data, support::endian::read32le(Data) | Encoded);
     return;
@@ -191,14 +241,20 @@ void PenumbraAsmBackend::applyFixup(const MCFragment &F, const MCFixup &Fixup,
     // PC-relative 16-bit immediate, into bits [15:0] (Format L).
     // ADDi (INC) zero-extends the immediate, so negative offsets don't
     // work.  Flip to SUBi (DEC) and negate the value when negative.
-    uint32_t Insn = support::endian::read32le(Data);
+    // Both ADDi and SUBi take a uimm16, so the pre-flip range is the
+    // symmetric [-65535, 65535]: any |V| that fits in 16 bits can be
+    // reached in one instruction via the right opcode choice.
     int64_t SVal = static_cast<int64_t>(Value);
+    uint32_t Insn = support::endian::read32le(Data);
     if (SVal < 0) {
       // Change ADDi (op=0011) to SUBi (op=0100) in bits [29:26]
       Insn = (Insn & ~(0xFu << 26)) | (0x4u << 26);
       SVal = -SVal;
     }
-    Insn = (Insn & 0xFFFF0000) | (static_cast<uint32_t>(SVal) & 0xFFFF);
+    // Post-flip value must fit in uimm16.
+    uint32_t Encoded = checkedMask(Fixup, SVal, 0, (int64_t(1) << 16) - 1,
+                                   16, CheckRange, "imm16_pcrel");
+    Insn = (Insn & 0xFFFF0000) | Encoded;
     support::endian::write32le(Data, Insn);
     return;
   }
