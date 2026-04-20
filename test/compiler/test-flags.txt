@@ -45,3 +45,8 @@ Regression/C/gcc-c-torture/execute/960521-1.c     -DSTACK_SIZE=16384
 Regression/C/gcc-c-torture/execute/alias-access-path-1.c  -fhosted -fno-builtin
 Regression/C/gcc-c-torture/execute/strlen-2.c             -fhosted -fno-builtin
 Regression/C/gcc-c-torture/execute/strlen-4.c             -fhosted -fno-builtin
+Regression/C/gcc-c-torture/execute/memchr-1.c             -fhosted -fno-builtin
+Regression/C/gcc-c-torture/execute/pr68648.c              -fhosted -fno-builtin
+Regression/C/gcc-c-torture/execute/pr87053.c              -fhosted -fno-builtin
+Regression/C/gcc-c-torture/execute/pr90949.c              -fhosted -fno-builtin
+Regression/C/gcc-c-torture/execute/return-addr.c          -fhosted -fno-builtin

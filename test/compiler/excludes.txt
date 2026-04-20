@@ -135,6 +135,7 @@ pr79737-2.c              # int32_t b:18; c:1; d:24; e:15; f:14; (72 bits) — mi
 # all 931004-*) pass fine — only the stack-overflow path is broken.
 # Tracked in doc/TODO.md.
 920625-1.c           # 4 × {double,double} structs + stack overflow
+complex-7.c          # 5 × _Complex (byval {float,float}) overflows to stack
 
 # ─── Other unsupported extensions (one-offs) ───────────────────
 pr84748.c        # __int128 on a 32-bit target
@@ -156,6 +157,7 @@ float-floor.c    # floor
 980709-1.c       # pow
 ieee/mzero4.c    # sin/sinf/tan/tanf/atan/atanf
 ieee/20041213-1.c  # sqrt
+ieee/920810-1.c  # sprintf("%g", -0.0) — harness printf only supports %f
 
 # ─── setjmp/longjmp libc tests ─────────────────────────────────
 # UnitTests/SetjmpLongjmp/C/* exercise the libc save/restore
