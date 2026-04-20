@@ -199,7 +199,10 @@ python3 llvm/llvm/utils/update_llc_test_checks.py \
 
 ### Compiler Correctness Tests
 Comprehensive C tests from `llvm-test-suite` (including GCC torture)
-running on ISS in `+hosted` mode. Requires `compiler-rt`.
+running on ISS in `+hosted` mode. Requires `compiler-rt`.  Current
+state: 1606/1606 passing at both `-O0` and `-O2`; excluded tests
+(harness-limitation or upstream-known-bad) and deferred backend
+gaps are tracked in `test/compiler/excludes.txt` and `doc/TODO.md`.
 
 Build `compiler-rt` builtins (one-time):
 ```sh
