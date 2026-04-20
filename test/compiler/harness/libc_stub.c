@@ -283,6 +283,33 @@ void *memcpy(void *dest, const void *src, size_t n) {
     return dest;
 }
 
+// GNU extension: like memcpy but returns dest+n rather than dest.
+// Lets callers chain copies without re-incrementing the pointer.
+void *mempcpy(void *dest, const void *src, size_t n) {
+    char *d = dest;
+    const char *s = src;
+    while (n--) *d++ = *s++;
+    return d;
+}
+
+// memmove handles overlap: when dest < src the forward copy is safe,
+// but when dest > src and the ranges overlap, forward copying would
+// clobber bytes at the src tail before they're read.  Copy backward
+// in that case.  Clang sometimes synthesizes llvm.memmove from
+// overlapping struct assignments, so this stub has to be correct.
+void *memmove(void *dest, const void *src, size_t n) {
+    char *d = dest;
+    const char *s = src;
+    if (d < s) {
+        while (n--) *d++ = *s++;
+    } else {
+        d += n;
+        s += n;
+        while (n--) *--d = *--s;
+    }
+    return dest;
+}
+
 int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap) {
     sbuf = buf;
     ebuf = buf + size - 1;
@@ -497,6 +524,62 @@ int rand(void) {
 
 void srand(unsigned int seed) {
     rand_state = seed;
+}
+
+// Atomic libcalls.  clang lowers all atomic ops to these because
+// MaxAtomicInlineWidth=0 (no inline atomic codegen).  The ISS is
+// uniprocessor and single-threaded, so the memorder argument is
+// irrelevant and plain load/op/store is correct.  These stubs exist
+// to satisfy linker references in tests that use __sync_* / C11
+// atomics; they're not a model of real atomic semantics.
+
+unsigned int __atomic_fetch_add_4(volatile void *ptr, unsigned int val, int memorder) {
+    (void)memorder;
+    volatile unsigned int *p = (volatile unsigned int *)ptr;
+    unsigned int old = *p;
+    *p = old + val;
+    return old;
+}
+
+unsigned int __atomic_exchange_4(volatile void *ptr, unsigned int val, int memorder) {
+    (void)memorder;
+    volatile unsigned int *p = (volatile unsigned int *)ptr;
+    unsigned int old = *p;
+    *p = val;
+    return old;
+}
+
+unsigned long long __atomic_fetch_add_8(volatile void *ptr, unsigned long long val, int memorder) {
+    (void)memorder;
+    volatile unsigned long long *p = (volatile unsigned long long *)ptr;
+    unsigned long long old = *p;
+    *p = old + val;
+    return old;
+}
+
+unsigned long long __atomic_fetch_sub_8(volatile void *ptr, unsigned long long val, int memorder) {
+    (void)memorder;
+    volatile unsigned long long *p = (volatile unsigned long long *)ptr;
+    unsigned long long old = *p;
+    *p = old - val;
+    return old;
+}
+
+int __atomic_compare_exchange_4(volatile void *ptr, void *expected, unsigned int desired,
+                                int weak, int success_memorder, int failure_memorder) {
+    (void)weak;
+    (void)success_memorder;
+    (void)failure_memorder;
+    volatile unsigned int *p = (volatile unsigned int *)ptr;
+    unsigned int *exp = (unsigned int *)expected;
+
+    if (*p == *exp) {
+        *p = desired;
+        return 1;
+    } else {
+        *exp = *p;
+        return 0;
+    }
 }
 
 int atoi(const char *nptr) {
