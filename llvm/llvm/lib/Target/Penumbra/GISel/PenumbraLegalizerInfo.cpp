@@ -275,11 +275,17 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
 
   // Byte swap: used by SHA1, networking, etc. Lower to shift/mask/OR.
   // Bitreverse: similar, lower to shift/mask sequence.
-  // Sub-word (s8/s16) widened to s32 first, then lowered.
+  // Sub-word (s8/s16) widened to s32 first.  s64 narrowed to two s32.
+  // Then the s32 lowering runs.  We can't just `.lowerFor({s32, s64})`
+  // because LegalizerHelper::lowerBswap has a signed-int-shift UB in
+  // its per-byte mask computation that corrupts the mask for byte 3
+  // of an s64 (APInt(64, 0xFF << 24) sign-extends into the high
+  // half).  Other 32-bit targets (e.g. RISC-V) avoid this path by
+  // narrowing first, so the bug never trips.  Match that convention.
   getActionDefinitionsBuilder({G_BSWAP, G_BITREVERSE})
-      .lowerFor({s32, s64})
+      .lowerFor({s32})
       .widenScalarToNextPow2(0)
-      .clampScalar(0, s32, s64);
+      .clampScalar(0, s32, s32);
 
   // Min/max: lower to icmp + select for any scalar width.
   // s64 lowers to icmp+select at s64 level, then the framework narrows

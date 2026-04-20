@@ -354,7 +354,9 @@ Fixed locally — needed for NetBSD kernel option tracking symbols
 - **Lowered:** G_ABS, G_CTTZ/G_CTLZ/G_CTPOP
   (and \_ZERO\_UNDEF variants) to shift/logic,
   G_FSHL/G_FSHR (s32+s64),
-  G_BSWAP/G_BITREVERSE (sub-word widened to s32, then lowered for s32+s64),
+  G_BSWAP/G_BITREVERSE (sub-word widened to s32, s64 narrowed to two s32,
+    then lowered at s32; see `doc/llvm-lowerBswap-bug.md` for why we
+    don't lower directly at s64),
   G_UADDO/G_USUBO/G_UADDE/G_USUBE/G_SADDO/G_SSUBO/G_SADDE/G_SSUBE
   (s64 narrowed to s32),
   G_SMIN/G_SMAX/G_UMIN/G_UMAX (any width, lowered to icmp+select),

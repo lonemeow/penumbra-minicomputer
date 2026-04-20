@@ -290,86 +290,31 @@ define i64 @bswap_i64(i64 %a) {
 ; CHECK-LABEL: bswap_i64:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 16
-; CHECK-NEXT:    stw r5, [r14 + 12] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r6, [r14 + 8] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r7, [r14 + 4] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
-; CHECK-NEXT:    lli r11, 0
-; CHECK-NEXT:    mov r13, r1
-; CHECK-NEXT:    shl r13, 24
+; CHECK-NEXT:    mov r4, r2
+; CHECK-NEXT:    shl r4, 24
 ; CHECK-NEXT:    mov r3, r2
 ; CHECK-NEXT:    shr r3, 24
-; CHECK-NEXT:    lli r4, 0
-; CHECK-NEXT:    or r3, r11
-; CHECK-NEXT:    or r4, r13
-; CHECK-NEXT:    mov r11, r1
-; CHECK-NEXT:    and r11, 65280
-; CHECK-NEXT:    lli r5, 0
-; CHECK-NEXT:    shl r11, 8
-; CHECK-NEXT:    or r3, r5
-; CHECK-NEXT:    or r4, r11
-; CHECK-NEXT:    mov r11, r2
-; CHECK-NEXT:    shr r11, 8
-; CHECK-NEXT:    lli r5, 0
-; CHECK-NEXT:    and r11, 65280
-; CHECK-NEXT:    and r5, 0
-; CHECK-NEXT:    or r3, r11
-; CHECK-NEXT:    or r4, r5
-; CHECK-NEXT:    lli r11, 0
-; CHECK-NEXT:    lui r11, 255
-; CHECK-NEXT:    mov r13, r1
-; CHECK-NEXT:    and r13, r11
-; CHECK-NEXT:    mov r5, r2
-; CHECK-NEXT:    and r5, 0
-; CHECK-NEXT:    mov r6, r13
-; CHECK-NEXT:    shl r6, 24
-; CHECK-NEXT:    shl r5, 24
-; CHECK-NEXT:    shr r13, 8
-; CHECK-NEXT:    or r5, r13
-; CHECK-NEXT:    or r3, r6
-; CHECK-NEXT:    or r4, r5
-; CHECK-NEXT:    mov r13, r1
-; CHECK-NEXT:    shr r13, 24
-; CHECK-NEXT:    mov r5, r2
-; CHECK-NEXT:    shl r5, 8
-; CHECK-NEXT:    or r13, r5
-; CHECK-NEXT:    mov r5, r2
-; CHECK-NEXT:    shr r5, 24
-; CHECK-NEXT:    and r13, r11
-; CHECK-NEXT:    and r5, 0
-; CHECK-NEXT:    or r3, r13
-; CHECK-NEXT:    or r4, r5
-; CHECK-NEXT:    lli r11, 0
-; CHECK-NEXT:    lui r11, 65280
-; CHECK-NEXT:    llis r5, -1
-; CHECK-NEXT:    mov r13, r1
-; CHECK-NEXT:    and r13, r11
-; CHECK-NEXT:    mov r6, r2
-; CHECK-NEXT:    and r6, r5
-; CHECK-NEXT:    mov r7, r13
-; CHECK-NEXT:    shl r7, 8
-; CHECK-NEXT:    shl r6, 8
-; CHECK-NEXT:    shr r13, 24
-; CHECK-NEXT:    or r6, r13
-; CHECK-NEXT:    or r3, r7
-; CHECK-NEXT:    or r4, r6
-; CHECK-NEXT:    shr r1, 8
-; CHECK-NEXT:    mov r13, r2
-; CHECK-NEXT:    shl r13, 24
-; CHECK-NEXT:    or r1, r13
+; CHECK-NEXT:    or r3, r4
+; CHECK-NEXT:    mov r4, r2
+; CHECK-NEXT:    and r4, 65280
+; CHECK-NEXT:    shl r4, 8
+; CHECK-NEXT:    or r3, r4
 ; CHECK-NEXT:    shr r2, 8
-; CHECK-NEXT:    and r1, r11
-; CHECK-NEXT:    and r2, r5
-; CHECK-NEXT:    or r3, r1
-; CHECK-NEXT:    or r4, r2
+; CHECK-NEXT:    and r2, 65280
+; CHECK-NEXT:    or r3, r2
+; CHECK-NEXT:    mov r4, r1
+; CHECK-NEXT:    shl r4, 24
+; CHECK-NEXT:    mov r2, r1
+; CHECK-NEXT:    shr r2, 24
+; CHECK-NEXT:    or r2, r4
+; CHECK-NEXT:    mov r4, r1
+; CHECK-NEXT:    and r4, 65280
+; CHECK-NEXT:    shl r4, 8
+; CHECK-NEXT:    or r2, r4
+; CHECK-NEXT:    shr r1, 8
+; CHECK-NEXT:    and r1, 65280
+; CHECK-NEXT:    or r2, r1
 ; CHECK-NEXT:    mov r1, r3
-; CHECK-NEXT:    mov r2, r4
-; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r7, [r14 + 4] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r6, [r14 + 8] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r5, [r14 + 12] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 16
 ; CHECK-NEXT:    jmp r13
   %r = call i64 @llvm.bswap.i64(i64 %a)
   ret i64 %r
