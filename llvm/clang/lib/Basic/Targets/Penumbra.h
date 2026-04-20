@@ -31,6 +31,11 @@ public:
     // kernel) are always lock-free on uniprocessor.
     MaxAtomicPromoteWidth = 32;
     MaxAtomicInlineWidth = 0;
+    // doc/system/abi.md fixes the stack at 4-byte alignment, so
+    // `__attribute__((aligned))` (no argument) must cap at 4 —
+    // otherwise __BIGGEST_ALIGNMENT__ over-promises what the
+    // backend can guarantee for automatic storage.
+    DefaultAlignForAttributeAligned = 32;
   }
 
   void getTargetDefines(const LangOptions &Opts,
