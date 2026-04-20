@@ -24,8 +24,53 @@ class TestResult:
         self.reason = reason
         self.output = output
 
+# Per-test flags from GCC `{ dg-options "..." }` directives.  We only
+# forward flags that clang understands and that change semantics the
+# test legitimately depends on — wrapping overflow, aliasing model,
+# dialect, inline semantics, etc.  GCC-only flags (-ftree-*,
+# -fexpensive-optimizations), target selection (-mno-mmx), and
+# warning flags (redundant with `-w`) are ignored.
+DG_SAFE_FLAGS = {
+    "-fwrapv",
+    "-fno-strict-overflow",
+    "-fno-strict-aliasing",
+    "-fgnu89-inline",
+    "-fnon-call-exceptions",
+    "-fno-inline",
+    "-fno-common",
+    "-fsigned-char",
+    "-funsigned-char",
+    # -ffast-math is intentionally excluded: it makes clang pattern-match
+    # a<b?a:b into llvm.minnum/maxnum, which lower to fmin/fmax libcalls
+    # our harness doesn't stub.  The tests using it pass fine without.
+}
+DG_SAFE_PREFIXES = ("-fno-builtin", "-std=", "-finput-charset=")
+
+# Match `{ dg-options "..." }` (with optional inner braces) and
+# capture both the flag body and any trailing `{ target ... }`
+# qualifier so we can skip architecture-conditional forms.
+DG_OPTIONS_RE = re.compile(
+    r'\{\s*dg-options\s+(?:\{\s*)?"([^"]*)"(?:\s*\})?\s*(\{[^}]*\})?',
+)
+
+def extract_dg_options(source_path):
+    try:
+        with open(source_path, "r", errors="replace") as f:
+            text = f.read(4096)
+    except OSError:
+        return []
+    flags = []
+    for m in DG_OPTIONS_RE.finditer(text):
+        qualifier = m.group(2) or ""
+        if "target" in qualifier:
+            continue  # architecture-specific, not for us
+        for tok in m.group(1).split():
+            if tok in DG_SAFE_FLAGS or tok.startswith(DG_SAFE_PREFIXES):
+                flags.append(tok)
+    return flags
+
 def run_single_test(args):
-    test_path, opt, harness_dir, build_dir, iss_path, cc, objcopy, bin2hex, builtins, resource_dir, display_name = args
+    test_path, opt, harness_dir, build_dir, iss_path, cc, objcopy, bin2hex, builtins, resource_dir, display_name, override_flags = args
     # Use a sanitized name for filesystem paths
     name = display_name.replace("/", "_").replace(".", "_")
     
@@ -65,12 +110,19 @@ def run_single_test(args):
     except subprocess.CalledProcessError as e:
         return TestResult(name, display_name, False, "libc_stub.c compile error", e.stderr)
 
-    # 3. Compile test.c
+    # 3. Compile test.c — honor safe `dg-options` flags from the source
+    # (things like -fwrapv or -fgnu89-inline that tests explicitly
+    # request), plus any per-test overrides from the flags file (for
+    # tests that need flags their source doesn't declare, e.g. -std=gnu99
+    # for tests that rely on C99 constant promotion or scoping).
+    # Appended after common_flags so they override defaults.
+    dg_flags = extract_dg_options(test_path)
     cmd_test = common_flags + [
         "-include", "stdlib.h",
         "-include", "stdio.h",
         "-include", "string.h",
         "-include", "alloca.h",
+    ] + dg_flags + list(override_flags) + [
         "-c", test_path, "-o", obj_test
     ]
     try:
@@ -168,6 +220,7 @@ def main():
     parser.add_argument("--resource-dir", help="Clang resource directory")
     parser.add_argument("--exclude", action="append", default=[], help="Glob pattern to exclude tests (repeatable)")
     parser.add_argument("--exclude-file", action="append", default=[], help="File listing exclude patterns, one per line (# comments allowed)")
+    parser.add_argument("--flags-file", action="append", default=[], help="File of per-test flag overrides: '<pattern>  <flags...>' per line")
     parser.add_argument("--report", default="test-report.txt", help="Report file path")
     parser.add_argument("-j", "--jobs", type=int, default=multiprocessing.cpu_count(), help="Number of parallel jobs")
     
@@ -190,6 +243,20 @@ def main():
                 line = line.strip()
                 if line:
                     args.exclude.append(line)
+
+    # Load flags-file entries into a list of (pattern, [flags...]).
+    # Matched against rel_path with the same gitignore-style suffix
+    # logic as excludes.
+    flag_rules = []
+    for ff in args.flags_file:
+        with open(ff) as fh:
+            for line in fh:
+                hash_at = line.find("#")
+                if hash_at >= 0:
+                    line = line[:hash_at]
+                toks = line.split()
+                if len(toks) >= 2:
+                    flag_rules.append((toks[0], toks[1:]))
 
     os.makedirs(args.build_dir, exist_ok=True)
 
@@ -238,8 +305,18 @@ def main():
     print(f"Found {len(test_data)} tests")
     print(f"Running with {args.jobs} parallel jobs at {args.opt}...")
 
+    def match_flags(rel_path):
+        """Collect flags from every flag-rule pattern matching rel_path."""
+        parts = rel_path.split(os.sep)
+        hits = []
+        for pattern, flags in flag_rules:
+            if any(fnmatch.fnmatch(os.sep.join(parts[i:]), pattern)
+                   for i in range(len(parts))):
+                hits.extend(flags)
+        return tuple(hits)
+
     worker_args = [
-        (full_path, args.opt, args.harness_dir, args.build_dir, args.iss, args.cc, args.objcopy, args.bin2hex, args.builtins, args.resource_dir, rel_path)
+        (full_path, args.opt, args.harness_dir, args.build_dir, args.iss, args.cc, args.objcopy, args.bin2hex, args.builtins, args.resource_dir, rel_path, match_flags(rel_path))
         for full_path, rel_path in test_data
     ]
 

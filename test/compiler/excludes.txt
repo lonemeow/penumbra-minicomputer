@@ -272,4 +272,3 @@ builtin-prefetch-1.c # enum { read, write } collides with write()
 pr28865.c            # flexible array member initializer
 pr36093.c            # array of type whose size < alignment
 pr43783.c            # array of type whose size < alignment
-Float/classify.c     # header redefines local `i`

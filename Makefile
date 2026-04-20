@@ -184,6 +184,7 @@ OPT             ?= -O2
 # Exclude patterns live in test/compiler/excludes.txt (organized by
 # category with comments).  See that file for what's excluded and why.
 COMPILER_EXCLUDES_FILE := $(TEST_COMPILER_DIR)/excludes.txt
+COMPILER_TEST_FLAGS_FILE := $(TEST_COMPILER_DIR)/test-flags.txt
 
 # If COMPILER_TESTS is set, run only those specific files.  Otherwise
 # walk the full UnitTests and Regression trees.
@@ -210,6 +211,7 @@ test-compiler: $(ISS)
 		--builtins "$(COMPILER_RT_BUILTINS)" \
 		--resource-dir "$$($(CC) -print-resource-dir)" \
 		--exclude-file "$(COMPILER_EXCLUDES_FILE)" \
+		--flags-file "$(COMPILER_TEST_FLAGS_FILE)" \
 		--report "$(BUILD_DIR)/test-compiler-report.txt" \
 		--jobs $$(nproc)
 

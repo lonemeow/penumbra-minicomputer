@@ -1,0 +1,22 @@
+# Per-test compiler flag overrides for tests that don't specify
+# `{ dg-options "..." }` in their source but still need specific
+# flags to compile or run correctly under our harness.
+#
+# Format: <pattern>  <flags...>
+# Patterns match the same way as excludes.txt (gitignore-style
+# suffix match on the test path).  Flags are appended to the
+# test.c compile command after our base -std=gnu89.
+
+# Multiple for-init declarations in one function collide under
+# gnu89 because clang places extension-accepted for-init vars at
+# function scope.  Under gnu99+ each for-statement has its own
+# scope and they don't collide.
+UnitTests/Float/classify.c          -std=gnu99
+
+# gnu89's integer-constant promotion ladder is {int, long,
+# unsigned long} — no long long.  The expected-value arrays
+# contain decimal constants like 2810079215 that overflow signed
+# long, get typed as unsigned long, and wrap to a positive s64
+# when negated.  The C99+ ladder adds long long so the negation
+# stays negative.
+Regression/C/gcc-c-torture/execute/shiftdi-2.c    -std=gnu99
