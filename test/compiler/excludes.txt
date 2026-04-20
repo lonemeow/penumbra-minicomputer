@@ -40,6 +40,7 @@ nest-*.c
 # Too slow for the ISS to finish within its instruction ceiling.
 Stanford/FloatMM.c
 Stanford/RealMM.c
+uint64_to_float.c  # 4-deep nested loop over 64 bit positions, soft-float bound
 
 # ─── LLVM "Bit Accurate Types" research extension ──────────────
 # __attribute__((bitwidth(N))), __bitwidthof__, __builtin_bit_concat,
@@ -155,6 +156,8 @@ SetjmpLongjmp/C/Looping.c
 SetjmpLongjmp/C/MultipleSetjmp.c
 SetjmpLongjmp/C/SimpleCTest.c
 SetjmpLongjmp/C/WhileLoop.c
+2008-07-13-InlineSetjmp.c   # tests inline-setjmp optimization, not codegen proper
+pr56982.c                   # longjmp from signal handler, setjmp+longjmp plumbing
 
 # ─── Tests that are themselves not-codegen ─────────────────────
 # Each excluded for a test-specific reason.
@@ -227,3 +230,37 @@ user-printf.c
 vfprintf-1.c
 vfprintf-chk-1.c
 printf-2.c
+
+# ─── OS features the bare-metal harness doesn't provide ────────
+# These need signal delivery (SIGFPE from div-by-0 / FP overflow),
+# mmap/fcntl, or full pthreads.  None are codegen concerns; they
+# exercise OS-kernel interfaces that don't exist without NetBSD
+# userland underneath.
+20101011-1.c    # installs SIGFPE handler, expects raise() delivery
+ieee/fp-cmp-1.c # SIGFPE via FP compare with NaN
+ieee/fp-cmp-2.c # SIGFPE via FP compare with NaN
+ieee/fp-cmp-3.c # SIGFPE via FP compare with NaN
+loop-2f.c       # mmap + fcntl
+loop-2g.c       # mmap + fcntl
+Threads/tls.c   # full pthread.h / pthread_create
+
+# ─── Test source invalid under modern clang ────────────────────
+# Pre-C99 K&R idioms that clang-22 rejects: implicit-int arith on
+# pointers, memcmp signature collisions with our size_t, float*/int*
+# conversions without a cast, flexible-array initializers, objects
+# aligned wider than their size, LP64-only `long* = &int`, enum
+# identifiers that collide with harness prototypes.  None of these
+# are codegen bugs — they're test sources written against ancient
+# GCCs that accepted looser C.
+20001111-1.c         # char* = buffer * integer  (implicit-int)
+20050502-2.c         # extern memcmp sig conflicts with size_t
+920302-1.c           # short (*)[5] passed where short * expected
+921007-1.c           # static strcmp() after non-static decl
+alias-1.c            # float * = &int initialization
+pr79043.c            # float * = &int initialization
+globalrefs.c         # long * = &int   (ILP32 mismatch)
+builtin-prefetch-1.c # enum { read, write } collides with write()
+pr28865.c            # flexible array member initializer
+pr36093.c            # array of type whose size < alignment
+pr43783.c            # array of type whose size < alignment
+Float/classify.c     # header redefines local `i`
