@@ -352,105 +352,18 @@ MIPS/68k-style vector dispatch.
   to support card hot-swap.
 
 **LLVM toolchain is end-to-end functional.**
-- Boot ROM compiled from C using clang, linked with lld,
-  runs on the simulated CPU.
-- Full pipeline: `clang -c` → `ld.lld` → `llvm-objcopy`
-  → `bin2hex.py` → simulator.
-- MC-layer assembler produces working ELF objects with
-  22 relocation types including GOT/PLT, TLS, GOT-PCREL, and PC32
-  (for .eh_frame PIC pointers).
-  Relocation names registered in `ELFRelocs/Penumbra.def`
-  for `llvm-readobj`.
-- Disassembler fully functional: `llvm-objdump -d` and
-  `llvm-mc -disassemble` decode all instruction formats.
-  Auto-generated decoder tables with custom decoders for
-  branch targets, signed immediates, and memory offsets.
-  `MCInstrAnalysis` provides branch target `<symbol>` annotations
-  and LLI/LUI pair tracking for address resolution
-  (`// 0xADDR <symbol>` comments on LUI instructions).
-  `EM_PENUMBRA` mapped in `ELFObjectFile.h` for all binary utilities.
-- Assembly pseudo-instructions LI, LA, NOP, RET expand
-  in the AsmParser.
-  Register aliases (pc, sp, lr, zero, tp),
-  SPR names (epc, esr, usp, sr),
-  memory shorthand (`[Rb]`), and expression offsets supported.
-  RDSPR/WRSPR/RDSYS/WRSYS fully encoded.
-- GlobalISel codegen uses a hybrid TableGen + C++ approach:
-  simple patterns (ALU reg-reg/reg-imm, shifts, NOT, constants,
-  all load/store variants) are TableGen `Pat<>` rules in
-  `PenumbraGISel.td`; complex multi-instruction sequences
-  (wide constants, global addresses, frame-index folding,
-  ICMP+BRCOND fold, jump tables, extensions) remain in manual C++.
-- **Codegen covers:** i32 ALU with immediate folding
-  (ADDi/SUBi/ANDi/SHLi/SHRi/SARi),
-  constants (LLI/LLIS/LUI),
-  global addresses (LLI+LUI with lo16/hi16),
-  sub-word load/store (LDB/LDH/LDW, STB/STH/STW
-  with GPRz zero-register substitution),
-  pointer arithmetic,
-  G_FRAME_INDEX (memory folding + LEAfi),
-  jump tables (G_JUMP_TABLE + G_BRJT → BRIND),
-  calling convention (R13/LR callee-saved, i64 return in R1:R2),
-  i64 support (arg/return splitting, bitwise ops, multi-word compare;
-  i64 add/sub via G_UADDO/G_UADDE,
-  zext/sext i32→i64 via narrowScalarIf),
-  control flow, G_SELECT, extensions/truncation,
-  INTTOPTR/PTRTOINT,
-  MUL/DIV/REM via libcalls
-  (s32 with strength reduction: constant power-of-2 MUL→SHL,
-  power-of-2±1 MUL→SHL+ADD/SUB,
-  power-of-2 UDIV→SHR, power-of-2 UREM→AND;
-  s64 via libcalls),
-  G_MEMCPY/G_MEMMOVE/G_MEMSET via libcalls,
-  G_CTTZ/G_CTLZ/G_CTPOP (lowered to shift/logic; s64 narrowed to s32),
-  pointer comparisons, G_FREEZE, G_ABS,
-  varargs (G_VASTART/G_VAARG with R1-R4 register save area),
-  inline assembly (`r`/`i` constraints,
-  `~{cc}`/`~{memory}` clobbers),
-  G_IMPLICIT_DEF,
-  **soft-float** (all FP ops → libcalls: arithmetic, conversions,
-  comparisons; G_FCONSTANT → integer bit pattern materialization),
-  **atomics** (all atomic ops → `__atomic_*` libcalls via
-  AtomicExpandPass; `MaxAtomicInlineWidth=0`,
-  `setMaxAtomicSizeInBitsSupported(0)`),
-  **TLS** (IR pass selects model: General-Dynamic for PIC/shared →
-  `call @__tls_get_addr`; Local-Exec for static → inline
-  `TP + offset` via `mov r,r12` + add; PIC: `%tlsgd_pcrel`
-  with GOT tls_index; static: R_TPREL TP-relative offset),
-  **G_DYN_STACKALLOC** (VLAs/runtime alloca),
-  G_SADDO/G_SSUBO/G_SADDE/G_SSUBE (non-power-of-2 widths handled
-  via widenScalarToNextPow2), G_SMULO/G_UMULO/G_SMULH/G_UMULH,
-  G_FNEG/G_FABS/G_FCOPYSIGN (bit manipulation), G_IS_FPCLASS,
-  G_GET_ROUNDING (const 1), G_BLOCK_ADDR (computed goto),
-  **soft-float trig/math** (G_FSIN/G_FCOS/G_FTAN/G_FASIN/G_FACOS/
-  G_FATAN/G_FATAN2/G_FSINH/G_FCOSH/G_FTANH/G_FLDEXP/G_FMODF/
-  G_FSINCOS/G_FFREXP/G_FCANONICALIZE → libcalls).
-- GOT/PLT: 16-byte PLT entries (LLI+LUI+LDW+JMP R11),
-  `R_PENUMBRA_GLOB_DAT`/`JUMP_SLOT` dynamic relocs.
-  Shared libraries link with `ld.lld` via `toolchains::NetBSD`.
-- `-fPIC`/`-fPIE` supported: GOT-indirect addressing via
-  MOV PC + LLI/LUI `%got_pcrel_lo16`/`%got_pcrel_hi16` + ADD + LDW
-  for globals (5 instructions, full 32-bit reach).
-  TLS GD PIC uses `%tlsgd_got_pcrel_lo16`/`hi16` (4 instructions,
-  no LDW — address of GOT tls_index pair passed to `__tls_get_addr`).
-  EK_LabelDifference32 jump table entries.
-  `needsRelocateWithSymbol` prevents section+offset folding for
-  GOT/TLS relocs.  `MKPIC=yes` in bsd.own.mk, libc.so links.
-- `-O0` works fully (kernel compiles all .o files at `-O0`).
-  `-O1`/`-Os`/`-O2` work: `analyzeBranch`/`insertBranch`/
-  `removeBranch`/`reverseBranchCondition` implemented for
-  branch folding and block placement passes.
-  `G_FENCE` (compiler barrier), `G_BRINDIRECT` (computed goto),
-  sub-word `G_BSWAP` (s16 widened to s32) all handled.
-- **C++ support:** Exception handling via DWARF unwinding
-  (R1=exception pointer, R2=selector registers),
-  `G_TRAP`/`G_DEBUGTRAP` → BREAK instruction,
-  EH pointer encoding (pcrel for PIC, absptr for static),
-  `G_PTRTOINT` s64 narrowing for DWARF evaluator,
-  STT_TLS on extern `__thread` symbol fixups,
-  `__GCC_ATOMIC_*_LOCK_FREE=2` for <=32-bit types,
-  `@llvm.clear_cache` → no-op (ISS; needs syscall for HW).
-  libc++ and libcxxrt build and link as shared libraries.
+- Clang/lld/llvm-mc cover the full pipeline: C → object → ELF.
+  Boot ROM, kernel, and full NetBSD userland all compile and link.
+- GlobalISel codegen (no SelectionDAG), MC-layer assembler and
+  disassembler, 22 relocation types, PIE/GOT/PLT, TLS (GD + LE),
+  soft-float, atomics via `__atomic_*` libcalls, varargs, VLAs,
+  inline asm, C++ EH with DWARF unwinding and libunwind.
+- Branch analysis enables `-O0` through `-O2`.
+- Target triples: `penumbra-unknown-netbsd` (userland/kernel),
+  `penumbra-unknown-none` (bare-metal ROM/hw).
+- See `llvm/llvm/lib/Target/Penumbra/CLAUDE.md` for backend details
+  (file map, legalization, codegen coverage, relocation table,
+  TableGen/C++ split, PIC/TLS implementation notes).
 
 ## Software Tools
 - **Instruction Set Simulator** (`sw/sim/penumbra_iss.cpp`):
@@ -496,187 +409,29 @@ MIPS/68k-style vector dispatch.
 - **ROM page mapping (MMU tests):** TLB_INDEX=16, TLB_VPN=0x0FFFF000, TLB_PTE=0xFFFF00B9.
 
 **NetBSD kernel mounts root filesystem from SD card on the ISS.**
-- Machine headers (39 files), kernel config, MD build system,
-  stub kernel sources, and assembly string functions all present.
-- `config MINIMAL` → `make depend` → `make` produces a ~5 MB
-  ELF kernel binary at `build/netbsd-kernel/MINIMAL/netbsd`
-  (DIAGNOSTIC enabled for development).
-- **locore.S early boot:** PIC bias computation, BSS zero and
-  bootinfo copy in physical mode.  Builds kernel page table
-  (L1 + L2 pre-allocated in BSS), installs real page-table-walking
-  TLB miss handler, pins L1 in TLB slot 1, enables MMU.
-  No bootstrap handler — real handler active from first instruction.
-  Safety check: BREAK trap if kernel exceeds BSS L2 coverage.
-- **Real pmap / TLB handler:** 2-level page table (L1→L2),
-  no direct-map.  All mappings are explicit PTEs.  TLB miss
-  handler walks L1 (pinned slot 1) → L2 (window in slot 2).
-  Scratch window (pinned slot 3) for C code physical page access.
-  Pinned slots: `PTLB_VECTOR`, `PTLB_L1`, `PTLB_L2WIN`,
-  `PTLB_SCRATCH` (sysreg.h).  Page table naming: `PT_L1_*`
-  / `PT_L2_*` (avoids confusion with L1/L2 caches).
-- **pmap_kenter_pa / pmap_kremove:** wired kernel mappings via
-  L1→L2 walk + scratch window.  `PTE_MAKE()` macro builds PTEs
-  from prot/flags/extra.  `pmap_map_device()` for MMIO.
-- **pmap_steal_memory:** steals physical pages, maps at
-  `virtual_avail` via scratch window + page table insertion.
-- **Early console:** 16450 UART, initially pinned via scratch
-  window, permanently remapped by `pmap_map_device()` after
-  `pmap_bootstrap()`.  Stays active for kernel printf throughout
-  boot.  Timer started early (`timer_early_init()`) so `delay()`
-  works before `cpu_initclocks()`.
-- **Console UART (MI com):** uses NetBSD's MI `com(4)` driver
-  (`sys/dev/ic/com.c`) with a thin pbbus attachment
-  (`com_pbbus.c`).  Word-strided 32-bit registers via
-  `com_init_regs_stride_width(shift=2, width=4)`.
-  IRQ-driven: `comintr` registers via `intr_establish_xname()`
-  on the shared /IRQ line; MI com asserts MCR_IENABLE (OUT2)
-  itself to gate the UART output pin.  `comcnattach1()` called
-  from `com_pbbus_attach()` to register as system console —
-  sets up `cn_tab`, `comcons_info` (rate/cflag), and
-  `cn_init_magic`.  `com_attach_subr()` auto-detects
-  `COM_HW_CONSOLE` by matching `cr_iot`/`cr_iobase` against
-  `comcons_info`.  Userland tty I/O is fully IRQ-driven;
-  console `cnputc` path remains polled by MI convention.
-- **Shared-IRQ dispatch (`intr.c`):** Penumbra has no interrupt
-  controller — devices wire-OR their `/IRQ` outputs onto a
-  single CPU input (vector 9).  `intr_establish_xname()` links
-  a handler into a `LIST_HEAD` registry; `intr_dispatch()`
-  (called from `trap.c` EXC_EXT_IRQ with `ci_idepth` bracketing)
-  walks every handler and calls it.  Handler returns 1 if it
-  saw pending work, 0 otherwise.  Walk is unconditional —
-  wire-OR means any non-claimant could still be asserting, so
-  short-circuiting would strand it and produce an IRQ storm.
-  Per-handler `struct evcnt` attached under group
-  `"shared irq"` exposes counts to `vmstat -i` /
-  `kern.intr.intrs`; a separate `spurious` counter records
-  IRQs that nobody claimed.  IPL is binary (SR.I is one bit),
-  so `ih_ipl` is stored but unused in dispatch — every handler
-  effectively runs at IPL_HIGH.
-- **Device autoconfig:** `pbbus` bridge walks `BTINFO_DEVICE`
-  entries from bootinfo, attaches child devices by ACFG_CLASS_*.
-  `bus_space` implemented (map via UVM + pmap_kenter_pa, read/write
-  via volatile pointers).  UART and SD controller enumerated.
-- **SD/MMC host controller (pmci):** polled SPI-mode driver
-  implementing `sdmmc_chip_functions` over the Penumbra SPI v2
-  register interface.  Attaches NetBSD's MI `sdmmc(4)` stack
-  (`pmci → sdmmcbus → sdmmc → ld_sdmmc → ld`), so card discovery,
-  CID/CSD decoding, and block-device framing are all handled by
-  the MI layer.  CMD9/CMD10 payloads get a wire-byte reverse +
-  CRC-slot shift to match the `MMC_RSP_BITS` layout the MI
-  decoder expects.  CMD24 write path uses `pmci_wait_token` to
-  poll for the data-response token (0..8-byte Ncrc gap per SD
-  spec).  No DMA — bus_dma_* are panic stubs since SMC_CAPS_DMA
-  is never set.  Kernel mounts FFS root from `ld0f` rw and
-  reaches single-user shell; read/write both verified.
-- **UVM init:** `uvm_md_init()`, bootinfo-driven
-  `uvm_page_physload()`, `pmap_steal_memory()`.  Full UVM init
-  completes: pool allocator, vmem, kmem, radix trees all
-  operational.  Boots past `main()` into `cpu_startup()` and
-  sysctl setup.
-- **Context switching:** `cpu_switchto` (locore.S) saves/restores
-  callee-saved registers via `pcb_context` (label_t).
-  `cpu_lwp_fork` sets up new LWP kernel stacks with trapframe +
-  pcb_context wired to resume in `lwp_trampoline`.
-  `lwp_trampoline` calls `lwp_startup(prev, newlwp)` before
-  `func(arg)` to finish the context switch (unlock prev LWP,
-  clear LP_RUNNING, reset SPL).
-  `_JB_*` symbolic indices for label_t slots (types.h).
-  `cpu_switchto` includes SP sanity check (BREAK on corrupt
-  pcb_context) for development safety.
-  `pmap_protect`/`pmap_remove`/`pmap_unwire` implemented;
-  `PTE_PROT_BITS()` macro shared with `PTE_MAKE`.
-  Softint threads run successfully; boots to root device prompt.
-- **curlwp:** Defined as `curcpu()->ci_curlwp` macro in cpu.h,
-  ensuring MI code and `cpu_switchto` share the same variable.
-  (Without this, the MI `extern struct lwp *curlwp` global
-  diverges from `ci_curlwp` updated by `cpu_switchto`.)
-- **Boot stack switch:** `penumbra_init()` runs on a 4 KB boot
-  stack and returns the new SP (lwp0 kernel stack, 12 KB).
-  locore.S switches SP before calling `penumbra_main()` → `main()`.
-  ARM-style pattern (init returns new SP to assembly).
-- **Trap handler (Stage 1 + 2):** per-vector entry stubs on the
-  vector page, common trapframe save/restore, C dispatch in
-  `trap()` with all 9 exception vectors.  `_trap_common`
-  snapshots volatile hardware state (ESR, EPC, FAULT_ADDR,
-  FAULT_STATUS) into pinned vector page scratch before any
-  faultable memory access — prevents TLB misses during
-  trapframe allocation from clobbering the original exception
-  context.  TLB miss/prot dispatched to `uvm_fault()` for
-  demand paging; on failure, `pcb_onfault` recovery for
-  copyin/copyout or panic.  `userret()` called on all
-  user-mode returns (RAS restart, AST, signals).
-  Double-fault detection: BREAK on recursive pinned-page faults.
-- **copyin/copyout (copy.S):** assembly with `pcb_onfault`
-  fault recovery.  copyinstr/copyoutstr byte-loop.
-  ufetch/ustore 8/16/32.  User address validation.
-- **pmap_enter / pmap_create:** demand paging for user and
-  kernel pmaps.  `pmap_create` allocates L1, copies kernel half
-  (under splhigh); entries added later propagated lazily by
-  trap.c on TLB miss (kernel L2 never freed invariant).
-  `pmap_activate` re-pins L1 and sets MMUCR.ASID on every
-  context switch.  `pmap_alloc_l2` returns bool (ENOMEM-safe).
-  `pmap_remove_all` walks user page table, removes PV entries,
-  frees L2 pages, and bulk-invalidates TLB by ASID.
-- **ASID management:** generational allocator (1–255, 0=kernel).
-  Each pmap's ASID is tagged with a generation; on activate,
-  stale ASIDs get a fresh allocation.  When 255 exhausted,
-  generation bumps, TLB flushed, allocation restarts.
-  TLB invalidation uses per-pmap ASIDs via `pmap_tlb_invalidate`.
-  G=1 kernel entries always use ASID=0.
-- **PV lists:** per-physical-page SLIST of (pmap, VA) entries
-  tracks all managed mappings.  `pmap_enter`/`pmap_remove`
-  maintain PV lists; `pmap_page_protect` delegates to
-  `pmap_remove`/`pmap_protect` per entry (no code duplication).
-  `pmap_clear_modify` write-protects via PV walk;
-  `pmap_is_modified`/`pmap_is_referenced` check page-level flags.
-- **Exec and return-to-user:** `setregs` initializes user
-  trapframe, `lwp_trampoline` → `trap_return` handles SP banking
-  (USP save/restore) and pinned-scratch ESR/EPC stash to prevent
-  TLB-miss clobbering before eret.  Kernel execs `/sbin/init`
-  and reaches userland.
-- **Syscall dispatch (syscall.c):** `SYSCALL` (vector 5) dispatched
-  via `md_syscall` function pointer.  R11=syscall number (scratch
-  register, set by SYSTRAP), R1–R4=args (4 register args),
-  overflow from user stack via `copyin()`.  Carry-flag error convention
-  (C=0 success, C=1 error).  Two-value return: `rval[0]` in R1,
-  `rval[1]` in R2 (needed by fork/pipe).  `md_child_return` sets
-  R1=0, R2=1 for fork child.  `setregs` passes cleanup=0 in R1,
-  `p_psstrp` in R2 for `___start(cleanup, ps_strings)`.
-  Indirect syscalls (`SYS_syscall`/`SYS___syscall`) rejected with
-  ENOSYS.  Init calls SYS_write + SYS_exit successfully.
-- **Signal delivery working.**  `sendsig_siginfo` builds a signal
-  frame (siginfo + ucontext) on the user stack and redirects the
-  trapframe to the handler; LR set to libc `__sigtramp_siginfo_2`
-  which calls `setcontext()` to restore the interrupted context.
-  `cpu_getmcontext`/`cpu_setmcontext` copy trapframe ↔ mcontext.
-  `cpu_mcontext_validate` rejects kernel addresses and supervisor
-  mode.  `startlwp` applies ucontext for fork'd LWPs.
-  `trap.c` delivers SIGSEGV/SIGBUS/SIGILL/SIGTRAP to user-mode
-  processes instead of panicking; kernel-mode faults still panic.
-  `cpu_lwp_setprivate` writes TP (R12) to trapframe
-  (`__HAVE_CPU_LWP_SETPRIVATE` defined in types.h).
-  `/rescue/init` boots to single-user shell on the ISS.
-  Interactive console I/O works (RX + TX via polled com(4)).
+- Kernel builds as a ~5 MB ELF at `build/netbsd-kernel/MINIMAL/netbsd`
+  (DIAGNOSTIC enabled).
+- Full MD layer: real pmap (2-level page tables, generational ASID,
+  PV lists), page-table-walking TLB miss handler, shared-IRQ
+  dispatch (no intr controller — wire-OR with `LIST_HEAD` walk),
+  context switching, demand paging via `uvm_fault()`,
+  copyin/copyout with `pcb_onfault` recovery, syscall dispatch
+  (carry-flag convention, R11=nr, R1–R4 args), signal delivery
+  (siginfo + ucontext), TLS (R12=TP), RAS-based userland atomics.
+- MI drivers attached via `pbbus` bridge: 16550 UART
+  (`com(4)` IRQ-driven, system console), SD/MMC host controller
+  (`pmci` → `sdmmc` → `ld_sdmmc` → `ld0`).
+- `/rescue/init` reaches interactive single-user shell with FFS
+  root mounted rw on `ld0f`.  Read and write both verified.
+- VM layout: 2G/2G user/kernel split, kernel text at `0x8001_0000`,
+  top 5 pages reserved for pinned TLB slots (vector, L1, L2 window,
+  scratch, guard).  VA 0 unmapped (null guard).
 - Remaining MD stubs: `process_read_regs`, `process_write_regs`,
   `process_set_pc`, `cpu_coredump`, `vmapbuf`/`vunmapbuf`
-  (grep for `TODO(stub)`).
-- Atomics: RAS-based CAS (Restartable Atomic Sequences) for userland,
-  interrupt-disable CAS for kernel.  `__HAVE_RAS` defined,
-  `userret()` checks `ras_lookup()` on every return to user mode.
-  `atomic_cas_32` uses plain load/cmp/store with RAS labels;
-  `.init_array` constructor registers the sequence via `rasctl()`.
-  Generic CAS-based inc/dec/add/and/or, no-op membars.
-- DDB (kernel debugger) disabled for now — needs extensive MD hooks.
-- Virtual memory layout: 2G/2G user/kernel split,
-  kernel text at `0x8001_0000`.  Top 5 pages reserved:
-  guard (0xFFFFF000), L1 pin (0xFFFFE000), L2 window (0xFFFFD000),
-  scratch (0xFFFFC000), vector page (0xFFFFB000).
-  VA 0 is unmapped — null guard page.
-- `pmap.h` uses `_LOCORE` guards for assembly-safe inclusion.
-- Kernel build output in `build/netbsd-kernel/MINIMAL/`
-  (out of source tree).
-- See `netbsd/sys/arch/penumbra/CLAUDE.md` for detailed
-  kernel port context.
+  (grep `TODO(stub)`).  DDB disabled.
+- See `netbsd/sys/arch/penumbra/CLAUDE.md` for detailed kernel
+  port context (directory layout, file map, VM layout details,
+  pinned-slot naming, status checklist).
 
 **Userland cross-build (`build.sh libs`) in progress.**
 - CSU startup files (`crt0.S`, `crti.S`, `crtn.S`, `crtbegin.h`,
