@@ -26,3 +26,12 @@ Regression/C/gcc-c-torture/execute/shiftdi-2.c    -std=gnu99
 # may be INT_MIN, and expects two's-complement wrap.  The test
 # does not declare -fwrapv itself.
 Regression/C/gcc-c-torture/execute/950704-1.c     -fwrapv
+
+# Test is flagged `dg-add-options stack_size` upstream — DejaGnu
+# defines STACK_SIZE based on target memory.  Without it, the test
+# tries to malloc 2 × 128 KB, overflowing our 128 KB bump heap;
+# both pointers come back NULL and the test then scribbles -1 over
+# low memory (starting at address 0), trashing .text and hanging
+# the ISS until +max-insn.  16384 is the conventional small-target
+# value; BLOCK_SIZE becomes 2048, fits comfortably.
+Regression/C/gcc-c-torture/execute/960521-1.c     -DSTACK_SIZE=16384
