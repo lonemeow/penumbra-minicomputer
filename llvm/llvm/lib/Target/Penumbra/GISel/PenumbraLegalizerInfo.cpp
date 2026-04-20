@@ -244,9 +244,13 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   // Multiplication: custom-lower s32 power-of-2 and power-of-2 ± 1 constants
   // to shifts (+ add/sub), fall back to libcall otherwise.
   // s64 goes straight to libcall (__muldi3).
+  // Non-power-of-2 widths (e.g. i33 from SCEV's closed-form sum-of-
+  // arithmetic-progression rewrite at -O2) widen to next pow2 first,
+  // so an s33 MUL lands on s64 and libcalls like any other i64 mul.
   getActionDefinitionsBuilder(G_MUL)
       .customFor({s32})
       .libcallFor({s64})
+      .widenScalarToNextPow2(0, 32)
       .clampScalar(0, s32, s64)
       .scalarize(0);
 
@@ -260,10 +264,14 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
       .legalFor({{s1, s32}, {s8, s32}, {s16, s32}})
       .alwaysLegal();
 
-  // Funnel shifts: used by compiler-rt __udivsi3 and other soft-div code.
-  // Lower to (a << sh) | (b >> (32 - sh)) for G_FSHL, reversed for G_FSHR.
-  getActionDefinitionsBuilder({G_FSHL, G_FSHR})
-      .lowerFor({s32, s64});
+  // Funnel shifts: used by compiler-rt __udivsi3, by -O2 rotate-idiom
+  // recognition on any integer width, and directly by llvm.fshl/fshr.
+  // LegalizerHelper::lowerFunnelShiftAsShifts emits shl/lshr/or at the
+  // *original* width; sub-word widths (s8/s16) get legalized afterward
+  // via our G_SHL/G_LSHR widen rules (ZEXT source, TRUNC result — safe
+  // because lower leaves no high-bit dependencies that would leak
+  // through ANYEXT/ZEXT).
+  getActionDefinitionsBuilder({G_FSHL, G_FSHR}).lower();
 
   // Byte swap: used by SHA1, networking, etc. Lower to shift/mask/OR.
   // Bitreverse: similar, lower to shift/mask sequence.
