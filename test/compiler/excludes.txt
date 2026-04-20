@@ -70,6 +70,16 @@ Integer/test_part_set.c
 Integer/sign.c           # uses __attribute__((bitwidth(24)))
 Integer/sign2.c          # uses __attribute__((bitwidth(24)))
 Integer/general-test.c   # uses __attribute__((bitwidth(N))) extensively
+# These compile (clang drops the attribute) but silently
+# produce wrong numerical output because truncation-at-N-bits
+# is what's being tested.
+Integer/SSAtest.c        # uses __attribute__((bitwidth(4)))
+Integer/convert.c        # uses bitwidth(7/8/15/31) truncation
+Integer/global.c         # uses bitwidth(7/14)
+Integer/offset.c         # uses bitwidth(33) (larger than int)
+Integer/trunc.c          # uses bitwidth(24) truncation
+Integer/union-init.c     # uses bitwidth(33)
+Integer/union2.c         # uses bitwidth(9/31)
 
 # ─── GCC nested functions (trampolines) ────────────────────────
 # clang rejects outright: "function definition is not allowed here".
