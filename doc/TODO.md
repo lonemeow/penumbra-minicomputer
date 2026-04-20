@@ -86,3 +86,28 @@ Two fixes, independent:
    LegalizerInfo with a clear "unsupported" action + diagnostic)
    so `vector_size` attributes produce a compile error naming the
    source file, not a backend crash.
+
+## Compiler: s128 legalization for wide packed bitfields
+
+`#pragma pack(1)` structs whose total bitfield width exceeds 64
+bits (e.g. `long long a:43; b:22;` or `int a:18; b:1; c:24; d:15;
+e:14;`) get lowered by clang to integer-wide load/store on a
+non-power-of-two scalar.  LLVM's legalizer widens to the next
+power of 2 — s128 — which our backend does not handle.
+
+Peer 32-bit GISel ports are in the same state: ARM's GISel
+legalizer has no s128 rules at all, and RV32's is gated behind
+`ST.is64Bit()` with an explicit `FIXME` for libcall return
+handling.  The feature isn't implemented anywhere in the 32-bit
+GISel ecosystem.
+
+Plausible implementation: add
+`.narrowScalarIf(typeIs(0, s128), changeTo(0, s64))` to the
+LOAD/STORE/ZEXTLOAD/SEXTLOAD/SHIFT/ADD-family/TRUNC rule groups,
+so s128 chains through our existing s64→s32 narrowing.  Needs
+care around G_ZEXTLOAD when the memory size equals the narrowed
+scalar size — LegalizerHelper may try to split the memory access
+too, which is not what we want here.
+
+Tracked tests: `testcase-InstCombine-1.c`, `pr57344-3.c`,
+`pr57344-4.c` (excluded in `test/compiler/excludes.txt`).

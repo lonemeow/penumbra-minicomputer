@@ -111,6 +111,16 @@ pr60003.c
 pr64242.c
 pr84521.c
 
+# ─── Packed bitfield aggregates > 64 bits wide (s128 in backend) ─
+# Structs with total bitfield width >64 bits (and #pragma pack(1)
+# so clang lowers struct-assignment to an integer-wide load/store)
+# produce backend s128 via LLVM's "round up to next power of 2"
+# widening.  Our legalizer -- like ARM 32-bit GISel and RV32 --
+# does not implement s128 legalization.  Tracked in doc/TODO.md.
+pr57344-3.c              # long long a:43; b:22;  (65 bits total)
+pr57344-4.c              # long long a:43; b:22;  (65 bits total)
+testcase-InstCombine-1.c # int a:18; b:1; c:24; d:15; e:14; (72 bits)
+
 # ─── Other unsupported extensions (one-offs) ───────────────────
 pr84748.c        # __int128 on a 32-bit target
 pr80692.c        # _Decimal64 ('DD' float suffix)
