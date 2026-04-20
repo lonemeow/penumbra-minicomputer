@@ -111,3 +111,25 @@ too, which is not what we want here.
 
 Tracked tests: `testcase-InstCombine-1.c`, `pr57344-3.c`,
 `pr57344-4.c` (excluded in `test/compiler/excludes.txt`).
+
+## Compiler: struct-by-value varargs stack-overflow ABI
+
+When a variadic call passes an aggregate by value and the slot
+overflows R1-R4 to the stack, `PenumbraCallLowering` is
+inconsistent with how the register slots were lowered.  Clang's
+`DefaultABIInfo` classifies aggregates as `indirect` (caller
+passes a pointer to the struct; callee dereferences).  Our
+caller-side code honors this for register slots but falls back
+to copying the struct bytes to the stack slot instead of a
+pointer.  The callee reads every va_list slot as a pointer and
+dereferences random bytes from stack as an address.
+
+Register-slot-only tests (strct-varg-1, strct-stdarg-1, 931004-*)
+pass fine because they never overflow.
+
+Fix: in `PenumbraCallLowering::lowerCall`, mirror the register-
+slot's `indirect` decision onto the stack slot — spill the struct
+to a temporary and place its address at the stack position, not
+the struct contents.
+
+Tracked test: `920625-1.c` (excluded in `test/compiler/excludes.txt`).

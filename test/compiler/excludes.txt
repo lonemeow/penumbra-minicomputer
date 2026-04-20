@@ -124,6 +124,18 @@ testcase-InstCombine-1.c # int a:18; b:1; c:24; d:15; e:14; (72 bits)
 pr79737-1.c              # same struct as pr79737-2; fails at -O0 only
 pr79737-2.c              # int32_t b:18; c:1; d:24; e:15; f:14; (72 bits) — mid-end emits G_STORE s32 as s64
 
+# ─── Struct-by-value varargs with stack overflow ───────────────
+# `va1(4, pts[0], pts[1], pts[2], pts[3])` with `point={double,
+# double}`: first 3 structs go in R2/R3/R4 as pointers (indirect),
+# but the 4th overflows to the stack — and PenumbraCallLowering
+# copies the struct contents to the stack slot instead of a
+# pointer.  Callee reads all 4 va_list slots as pointers, so
+# slot 4 reads garbage as an address and aborts.
+# Register-slot-only struct-varargs (strct-varg-1, strct-stdarg-1,
+# all 931004-*) pass fine — only the stack-overflow path is broken.
+# Tracked in doc/TODO.md.
+920625-1.c           # 4 × {double,double} structs + stack overflow
+
 # ─── Other unsupported extensions (one-offs) ───────────────────
 pr84748.c        # __int128 on a 32-bit target
 pr80692.c        # _Decimal64 ('DD' float suffix)
@@ -309,6 +321,7 @@ pr65053-1.c              # untranslated `call` instruction at -O0
 # llvm-test-suite already flags medce-1 for this exact reason.
 medce-1.c            # upstream UnsupportedTests: "clang -O0 doesn't DCE"
 ieee/fp-cmp-7.c      # same pattern: `x > +inf` branch contains link_error()
+20020720-1.c         # fabs(x) < 0.0 — needs -fbuiltin fabs to fold
 
 # ─── Upstream clang-wide known failures / unsupported tests ────
 # The llvm-test-suite CMakeLists.txt itself groups these under
