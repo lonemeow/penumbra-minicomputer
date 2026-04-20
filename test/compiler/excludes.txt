@@ -336,6 +336,17 @@ bitfld-5.c           # (s.b - 8) + 8 wraps at 40 bits, not 64
 pr32244-1.c          # x.b << 32 in 40-bit precision
 pr34971.c            # rotate on 40-bit argument
 
+# ─── Tests that require a specific argv[1] (RUN_OPTIONS) ───────
+# llvm-test-suite's CMakeLists.txt in UnitTests/SignlessTypes/ and
+# UnitTests/Integer/ sets `RUN_OPTIONS 31415926` — CMake passes
+# that as argv[1].  Our harness hardcodes argc=1 in crt0.S.  Most
+# sibling tests gate on `if (argc > 1)` and default otherwise, so
+# they pass; these two don't.  Adding per-test run-args support
+# would be ~30 lines of harness plumbing to unlock exactly two
+# tests that add no unique coverage over their siblings.
+SignlessTypes/cast-bug.c   # loop bound `argc+2` returns 18 instead of 35
+SignlessTypes/ccc.c        # `if (argc < 2) exit(1);` — prints & aborts
+
 # ─── Libc-builtin folding tests (hosted-only by design) ────────
 # These tests declare a decoy `llabs`/`sin`/`floor`/... that calls
 # abort(), then check that the compiler replaced the call with a
