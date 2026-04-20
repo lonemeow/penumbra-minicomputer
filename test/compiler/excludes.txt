@@ -272,3 +272,14 @@ builtin-prefetch-1.c # enum { read, write } collides with write()
 pr28865.c            # flexible array member initializer
 pr36093.c            # array of type whose size < alignment
 pr43783.c            # array of type whose size < alignment
+
+# ─── Libc-builtin folding tests (hosted-only by design) ────────
+# These tests declare a decoy `llabs`/`sin`/`floor`/... that calls
+# abort(), then check that the compiler replaced the call with a
+# builtin fold (llvm.abs, constant sin(0)=0, etc.) at compile time.
+# Our harness compiles with -ffreestanding which implies
+# -fno-builtin, so clang honors the decoy and the test aborts.
+# These aren't codegen-correctness tests — they verify a hosted-
+# mode optimization we explicitly opt out of.
+20021127-1.c         # llabs fold -> llvm.abs.i64
+20030125-1.c         # sin/floor fold + sinf/floorf substitution
