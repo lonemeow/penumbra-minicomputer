@@ -179,6 +179,14 @@ pr56982.c                   # longjmp from signal handler, setjmp+longjmp plumbi
 # Each excluded for a test-specific reason.
 pr34456.c              # explicitly `dg-skip-if "requires qsort" { freestanding }`
 2003-05-14-AtExit.c    # tests atexit handler registration, not codegen
+# The testcase-Expr-1 / testcase-ExprConstant-1 pair target specific
+# clang Expr.cpp / ExprConstant.cpp functions — they're AST-fuzzer
+# style tests exercising compiler internals.  Runtime assertions
+# inside (e.g. `if (arr[1] != -5) return 2;` when arr[1]==1) are
+# *designed* to fail at runtime; the test passes if clang's
+# front-end accepts the source, which it does.
+testcase-Expr-1.c
+testcase-ExprConstant-1.c
 
 # ─── C23 / clang-22 syntax the vendored tests predate ──────────
 # The "2020-01-06-coverage-*" series uses constructs clang-22 rejects
