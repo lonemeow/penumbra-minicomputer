@@ -24,9 +24,10 @@ class TestResult:
         self.reason = reason
         self.output = output
 
-# Per-test flags from GCC `{ dg-options "..." }` directives.  We only
-# forward flags that clang understands and that change semantics the
-# test legitimately depends on — wrapping overflow, aliasing model,
+# Per-test flags from GCC `{ dg-options "..." }` and
+# `{ dg-additional-options "..." }` directives.  We only forward
+# flags that clang understands and that change semantics the test
+# legitimately depends on — wrapping overflow, aliasing model,
 # dialect, inline semantics, etc.  GCC-only flags (-ftree-*,
 # -fexpensive-optimizations), target selection (-mno-mmx), and
 # warning flags (redundant with `-w`) are ignored.
@@ -46,11 +47,15 @@ DG_SAFE_FLAGS = {
 }
 DG_SAFE_PREFIXES = ("-fno-builtin", "-std=", "-finput-charset=")
 
-# Match `{ dg-options "..." }` (with optional inner braces) and
-# capture both the flag body and any trailing `{ target ... }`
-# qualifier so we can skip architecture-conditional forms.
+# Match `{ dg-options "..." }` or `{ dg-additional-options "..." }`
+# (with optional inner braces) and capture both the flag body and
+# any trailing `{ target ... }` qualifier so we can skip
+# architecture-conditional forms.  For our harness the two
+# directives behave identically: GCC's dg-options replaces the
+# default set while dg-additional-options appends, but we have no
+# dg-provided default to replace, so both simply append.
 DG_OPTIONS_RE = re.compile(
-    r'\{\s*dg-options\s+(?:\{\s*)?"([^"]*)"(?:\s*\})?\s*(\{[^}]*\})?',
+    r'\{\s*dg-(?:additional-)?options\s+(?:\{\s*)?"([^"]*)"(?:\s*\})?\s*(\{[^}]*\})?',
 )
 
 def extract_dg_options(source_path):
