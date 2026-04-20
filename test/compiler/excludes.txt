@@ -124,18 +124,19 @@ testcase-InstCombine-1.c # int a:18; b:1; c:24; d:15; e:14; (72 bits)
 pr79737-1.c              # same struct as pr79737-2; fails at -O0 only
 pr79737-2.c              # int32_t b:18; c:1; d:24; e:15; f:14; (72 bits) — mid-end emits G_STORE s32 as s64
 
-# ─── Struct-by-value varargs with stack overflow ───────────────
-# `va1(4, pts[0], pts[1], pts[2], pts[3])` with `point={double,
-# double}`: first 3 structs go in R2/R3/R4 as pointers (indirect),
-# but the 4th overflows to the stack — and PenumbraCallLowering
-# copies the struct contents to the stack slot instead of a
-# pointer.  Callee reads all 4 va_list slots as pointers, so
-# slot 4 reads garbage as an address and aborts.
-# Register-slot-only struct-varargs (strct-varg-1, strct-stdarg-1,
-# all 931004-*) pass fine — only the stack-overflow path is broken.
+# ─── Named-arg byval stack slots overlap ───────────────────────
+# Fixed (non-variadic) functions with byval struct args that spill
+# past R1-R4: e.g. `check_float(int a, _Complex float a1..a5)`.
+# CC_Penumbra's CCAssignToStack<4,4> reserves 4 bytes per slot
+# (pointer-sized), but the framework's byval-mem path writes
+# Flags.getByValSize() bytes (8 for _Complex float, 16 for
+# _Complex double) at that offset, so adjacent byval args overlap
+# on the stack.  Needs CCIfByVal<CCPassByVal<4,4>> in
+# PenumbraCallingConv.td so the CC reserves the struct size per
+# slot.  Distinct from the variadic byval bug (fixed in
+# PenumbraCallLowering — see 920625-1 for that path).
 # Tracked in doc/TODO.md.
-920625-1.c           # 4 × {double,double} structs + stack overflow
-complex-7.c          # 5 × _Complex (byval {float,float}) overflows to stack
+complex-7.c          # 5 × _Complex byval args overlap on stack
 
 # ─── Other unsupported extensions (one-offs) ───────────────────
 pr84748.c        # __int128 on a 32-bit target

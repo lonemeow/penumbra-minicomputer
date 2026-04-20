@@ -79,6 +79,43 @@ struct PenumbraCallReturnHandler : public CallLowering::IncomingValueHandler {
 
   MachineInstrBuilder &MIB;
 };
+
+// Force every variadic byval slot to hold a pointer to a private copy,
+// regardless of where the CC parks it.
+//
+// CallLowering's default byval handling memcpy's struct bytes into mem
+// slots — the callee is expected to take the slot's address as the
+// pointer.  Named args get away with this because lowerFormalArguments
+// mirrors the path-dependence, but va_arg reads every slot uniformly
+// as a 4-byte pointer, so mem-slot struct bytes get dereferenced as an
+// address and the callee reads garbage.
+void normalizeVarArgByVal(SmallVectorImpl<CallLowering::ArgInfo> &SplitArgs,
+                          MachineIRBuilder &MIRBuilder) {
+  MachineFunction &MF = MIRBuilder.getMF();
+  for (auto &AInfo : SplitArgs) {
+    auto ArgFlag = AInfo.Flags[0];
+    if (!(ArgFlag.isByVal() && ArgFlag.isVarArg()))
+      continue;
+    auto Size = ArgFlag.getByValSize();
+    auto Align = ArgFlag.getNonZeroByValAlign();
+
+    LLT p0 = LLT::pointer(0, 32);
+    LLT s32 = LLT::scalar(32);
+    int FI = MF.getFrameInfo().CreateStackObject(Size, Align, /*isSS=*/false);
+    auto TempPtr = MIRBuilder.buildFrameIndex(p0, FI);
+    auto *DstMMO =
+        MF.getMachineMemOperand(MachinePointerInfo::getFixedStack(MF, FI),
+                                MachineMemOperand::MOStore, Size, Align);
+    auto *SrcMMO =
+        MF.getMachineMemOperand(MachinePointerInfo(AInfo.OrigValue),
+                                MachineMemOperand::MOLoad, Size, Align);
+    auto SizeReg = MIRBuilder.buildConstant(s32, Size);
+    MIRBuilder.buildMemCpy(TempPtr.getReg(0), AInfo.Regs[0], SizeReg, *DstMMO,
+                           *SrcMMO);
+    AInfo.Regs[0] = TempPtr.getReg(0);
+    AInfo.Flags[0] = ISD::ArgFlagsTy();
+  }
+}
 } // namespace
 
 PenumbraCallLowering::PenumbraCallLowering(const PenumbraISelLowering &TLI)
@@ -230,10 +267,13 @@ bool PenumbraCallLowering::lowerCall(MachineIRBuilder &MIRBuilder,
   MachineInstrBuilder CallSeqStart =
       MIRBuilder.buildInstr(Penumbra::ADJCALLSTACKDOWN);
 
-  // Split outgoing arguments according to the calling convention.
+  // Split outgoing arguments according to the calling convention, then
+  // rewrite variadic byval args into pointer-to-copy form — see
+  // normalizeVarArgByVal above for why.
   SmallVector<ArgInfo, 8> SplitArgs;
   for (auto &AInfo : Info.OrigArgs)
     splitToValueTypes(AInfo, SplitArgs, DL, CC);
+  normalizeVarArgByVal(SplitArgs, MIRBuilder);
 
   // Build the call instruction.
   // Direct calls (symbol target): BL (branch and link, Format B, PC-relative).

@@ -112,24 +112,23 @@ too, which is not what we want here.
 Tracked tests: `testcase-InstCombine-1.c`, `pr57344-3.c`,
 `pr57344-4.c` (excluded in `test/compiler/excludes.txt`).
 
-## Compiler: struct-by-value varargs stack-overflow ABI
+## Compiler: named byval args overlap on stack
 
-When a variadic call passes an aggregate by value and the slot
-overflows R1-R4 to the stack, `PenumbraCallLowering` is
-inconsistent with how the register slots were lowered.  Clang's
-`DefaultABIInfo` classifies aggregates as `indirect` (caller
-passes a pointer to the struct; callee dereferences).  Our
-caller-side code honors this for register slots but falls back
-to copying the struct bytes to the stack slot instead of a
-pointer.  The callee reads every va_list slot as a pointer and
-dereferences random bytes from stack as an address.
+When a fixed (non-variadic) function receives byval struct args
+that spill past R1-R4, adjacent stack slots overlap.  Example:
+`check_float(int a, _Complex float a1, ..., _Complex float a5)`
+— `a4` and `a5` go to stack slots, but CC_Penumbra's
+`CCAssignToStack<4,4>` reserves only the pointer size per slot,
+while the framework's byval-mem path writes
+`Flags.getByValSize()` bytes (8 for `_Complex float`, 16 for
+`_Complex double`) at that offset.
 
-Register-slot-only tests (strct-varg-1, strct-stdarg-1, 931004-*)
-pass fine because they never overflow.
+Fix: add `CCIfByVal<CCPassByVal<4, 4>>` to
+`PenumbraCallingConv.td` before the type-matched rules, so the
+CC reserves `Flags.getByValSize()` bytes per byval slot instead
+of a pointer-sized slot.  Mips/AMDGPU follow the same pattern.
 
-Fix: in `PenumbraCallLowering::lowerCall`, mirror the register-
-slot's `indirect` decision onto the stack slot — spill the struct
-to a temporary and place its address at the stack position, not
-the struct contents.
-
-Tracked test: `920625-1.c` (excluded in `test/compiler/excludes.txt`).
+Tracked test: `complex-7.c` (excluded in `test/compiler/excludes.txt`).
+The variadic-byval stack-overflow bug (920625-1.c) was a
+separate issue, fixed by `normalizeVarArgByVal()` in
+`PenumbraCallLowering.cpp`.
