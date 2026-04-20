@@ -90,8 +90,14 @@ def run_single_test(args):
     hex_file = os.path.join(test_build_dir, "test.hex")
     bin_file = os.path.join(test_build_dir, "test.bin")
     
+    # We use -fhosted (not -ffreestanding) so clang honors C99's
+    # "main falling off end returns 0" semantic — many old GCC
+    # torture tests omit an explicit return and assume this.
+    # -fno-builtin separately disables libc-name folding
+    # (sin(0)=0, strlen of literal, etc.) which our harness
+    # stubs can't be trusted to match exactly.
     common_flags = shlex.split(cc) + [
-        opt, "-ffreestanding", "-nostdlib", "-nostdinc",
+        opt, "-fhosted", "-fno-builtin", "-nostdlib", "-nostdinc",
         "-I", harness_dir, "-w",
         "-std=gnu89",
         "-Wno-implicit-int",
