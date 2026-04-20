@@ -190,15 +190,22 @@ bool PenumbraCallLowering::lowerFormalArguments(
     // stack-passed args at SP+0.  If all named args fit in registers,
     // va_list points into the save area past the last named reg slot.
     // Otherwise, it points past the last stack-passed named arg.
-    // Use ArgAssigner.StackSize (the actual bytes consumed on the
-    // caller's stack by named args) to account for types wider than
-    // 4 bytes (e.g., i64 takes two stack slots but one SplitArg).
+    //
+    // Must be computed from the SplitArg byte sizes — not
+    // SplitArgs.size() * 4 — because a single 8-byte SplitArg
+    // (double, i64) consumes two register slots, not one.
     auto *FuncInfo = MF.getInfo<PenumbraMachineFunctionInfo>();
     int64_t VaOffset;
-    if (ArgAssigner.StackSize == 0)
-      VaOffset = SaveOffset + SplitArgs.size() * 4;
-    else
+    if (ArgAssigner.StackSize == 0) {
+      unsigned NamedRegBytes = 0;
+      for (const auto &A : SplitArgs)
+        NamedRegBytes += alignTo(DL.getTypeStoreSize(A.Ty).getFixedValue(), 4);
+      if (NamedRegBytes > NumArgRegs * 4)
+        NamedRegBytes = NumArgRegs * 4;
+      VaOffset = SaveOffset + NamedRegBytes;
+    } else {
       VaOffset = (int64_t)ArgAssigner.StackSize;
+    }
     int VaFI = MFI.CreateFixedObject(4, VaOffset,
                                      /*IsSpillSlot=*/false);
     FuncInfo->setVarArgsFrameIndex(VaFI);

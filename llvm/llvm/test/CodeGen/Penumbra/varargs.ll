@@ -125,6 +125,38 @@ define i64 @vaarg_i64(i32 %named, ...) {
   ret i64 %arg
 }
 
+; Variadic function with i64 named args that fully consume R1-R4.
+; Two i64 named args take R1:R2 and R3:R4 (16 bytes of register state),
+; so va_start must point past the entire save area to incoming SP+0.
+; A naive implementation using SplitArgs.size() * 4 would give 2*4 = 8
+; bytes of named-reg-width, offsetting va_start by -8 into the save
+; area (middle of the second i64).
+define i32 @wide_named_all_regs(i64 %a, i64 %b, ...) {
+; CHECK-LABEL: wide_named_all_regs:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  // %bb.0:
+; CHECK-NEXT:    sub r14, 20
+; CHECK-NEXT:    stw r1, [r14 + 4]
+; CHECK-NEXT:    stw r2, [r14 + 8]
+; CHECK-NEXT:    stw r3, [r14 + 12]
+; CHECK-NEXT:    stw r4, [r14 + 16]
+; CHECK-NEXT:    mov r1, r14
+; CHECK-NEXT:    add r1, 20
+; CHECK-NEXT:    stw r1, [r14 + 0]
+; CHECK-NEXT:    ldw r2, [r14 + 0]
+; CHECK-NEXT:    ldw r1, [r2 + 0]
+; CHECK-NEXT:    lli r3, 4
+; CHECK-NEXT:    add r2, r3
+; CHECK-NEXT:    stw r2, [r14 + 0]
+; CHECK-NEXT:    add r14, 20
+; CHECK-NEXT:    jmp r13
+  %vl = alloca ptr, align 4
+  call void @llvm.va_start(ptr %vl)
+  %arg = va_arg ptr %vl, i32
+  call void @llvm.va_end(ptr %vl)
+  ret i32 %arg
+}
+
 ; Variadic function with >4 named args including an i64.
 ; The i64 occupies two 4-byte stack slots.  va_start must account
 ; for the actual stack bytes, not just the number of IR arguments.
