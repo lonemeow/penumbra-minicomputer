@@ -273,6 +273,19 @@ pr28865.c            # flexible array member initializer
 pr36093.c            # array of type whose size < alignment
 pr43783.c            # array of type whose size < alignment
 
+# ─── Upstream clang-wide known failures / unsupported tests ────
+# The llvm-test-suite CMakeLists.txt itself groups these under
+# FailingTests or UnsupportedTests for every clang target.  The
+# reasons (listed inline below) are not Penumbra-specific, so we
+# carry the same exclusions here rather than re-investigating.
+921202-1.c           # independent `||` comparisons are each UB
+990208-1.c           # test relies on function being always inlined
+eeprof-1.c           # clang -O0 doesn't honor -finstrument-functions
+noinit-attribute.c   # __attribute__((noinit)) not implemented in clang
+printf-chk-1.c       # expects specific __printf_chk optimizer behavior
+vprintf-chk-1.c      # expects specific __vprintf_chk optimizer behavior
+va-arg-22.c          # front-end / backend crashes on ARM, AArch64, Hexagon
+
 # ─── GCC-specific bitfield arithmetic semantics ────────────────
 # GCC performs arithmetic on wide bitfields (e.g. `unsigned long
 # long b:40`) at the bitfield's declared width — so `b - 8` wraps

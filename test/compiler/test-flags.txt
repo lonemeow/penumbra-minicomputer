@@ -20,3 +20,9 @@ UnitTests/Float/classify.c          -std=gnu99
 # when negated.  The C99+ ladder adds long long so the negation
 # stays negative.
 Regression/C/gcc-c-torture/execute/shiftdi-2.c    -std=gnu99
+
+# llvm-test-suite's CMakeLists.txt groups this under
+# TestRequiresFWrapV: the body is full of `x + y` where one side
+# may be INT_MIN, and expects two's-complement wrap.  The test
+# does not declare -fwrapv itself.
+Regression/C/gcc-c-torture/execute/950704-1.c     -fwrapv
