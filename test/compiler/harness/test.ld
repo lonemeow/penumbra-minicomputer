@@ -29,6 +29,22 @@ SECTIONS
         _fini_array_end = .;
     }
 
+    .tdata : {
+        _tdata_start = .;
+        *(.tdata .tdata.*)
+        _tdata_end = .;
+    }
+
+    /* Single-threaded bare-metal: .tbss lives immediately after
+       .tdata so one contiguous TP-relative block covers both.
+       Zero-init of .tbss is the caller's responsibility — crt0
+       does not currently clear it (no torture test exercises it
+       yet; add a separate clear loop when one does). */
+    .tbss (NOLOAD) : {
+        *(.tbss .tbss.*)
+        _tbss_end = .;
+    }
+
     .data : {
         *(.data .data.*)
     }

@@ -8,6 +8,12 @@ _start:
     lli  r14, #0
     lui  r14, #0x0100
 
+    // TP = &.tdata — static Local-Exec TLS, single-threaded.
+    // Backend emits `TP + tpoff(var)` for __thread accesses;
+    // .tdata's ELF load initializes the values, .tbss is cleared
+    // by the BSS loop below (our .bss range covers .tbss too).
+    la   r12, _tdata_start
+
     // Clear BSS
     la   r1, _bss_start
     la   r2, _bss_end
