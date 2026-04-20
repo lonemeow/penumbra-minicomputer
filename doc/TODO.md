@@ -51,3 +51,38 @@ trapped as illegal instructions and emulated in software
 ### Phase 5: FPU
 
 Add a floating-point unit to the ALU. Currently using soft-float.
+
+## Compiler: graceful-fail on unsupported inline asm and vector IR
+
+Today the GlobalISel IRTranslator crashes (`fatal error: unable to
+translate instruction: call/ret`) when it encounters:
+
+- Inline-asm constraint classes we don't implement -- `"g"` (any
+  register/memory/immediate), `"m"` (memory operand), and tied
+  `"0"` constraints where the tied operands have mismatched
+  widths (e.g. i32 tied to i64).
+- Vector-typed IR values (`__attribute__((vector_size(N)))`).
+  Penumbra is a scalar target and rightly has no vector
+  legalization, but the frontend still accepts vector types from
+  GCC-extension source and hands them to the translator.
+
+Impact is low on real code -- the crashes are reproducible only
+from hand-written GCC-style sources that use these features
+explicitly -- but the *right* behavior is a clean frontend
+diagnostic, not a backend assertion.  Tracked tests are excluded
+in `test/compiler/excludes.txt` under the corresponding sections.
+
+Two fixes, independent:
+
+1. **Inline-asm graceful fail.**  Teach
+   `PenumbraTargetLowering::getConstraintType` to reject
+   unsupported constraints with a diagnostic via
+   `LLVMContext::diagnose` / `report_fatal_error` with the user
+   source location, rather than letting IRTranslator assert.
+   Optional follow-up: implement `"g"` as "treat as `r`" so the
+   optimization-barrier idiom works everywhere.
+
+2. **Vector graceful fail.**  Add a frontend-level check (or
+   LegalizerInfo with a clear "unsupported" action + diagnostic)
+   so `vector_size` attributes produce a compile error naming the
+   source file, not a backend crash.

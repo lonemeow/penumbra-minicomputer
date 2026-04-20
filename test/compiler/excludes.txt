@@ -147,6 +147,38 @@ pr34456.c              # explicitly `dg-skip-if "requires qsort" { freestanding 
 # is 20 — the test isn't portable, not a codegen bug.
 ms_struct-bitfield-1.c
 
+# ─── Scalar target: vector-typed tests ─────────────────────────
+# Tests that declare GCC vector_size attributes and exercise
+# vector arithmetic.  Penumbra is scalar-only; IRTranslator
+# rejects the vector types outright ("unable to translate
+# instruction: ret/call").  Conceptually the same bucket as the
+# Vector/*/SSE/*/NEON/* trees we already exclude -- these are
+# just stragglers living next to the scalar tests.
+pr60960.c     # vector_size(4) divide
+pr70903.c     # vector_size(32) shuffle
+simd-6.c      # vector_size(8) multiply
+
+# ─── Inline asm using "g"/"m"/tied-size constraints ────────────
+# Our inline-asm lowering supports only "r"/"i" plus the "cc"/
+# "memory" clobbers.  These tests reach for "+g" (any register
+# or memory) or "+m" (memory only), or tie an i32 output to an
+# i64 input via "0".  IRTranslator bails ("unable to translate
+# instruction: call") because the constraint class has no GISel
+# equivalent in our backend.
+#
+# None of these are actually *about* inline asm -- they're
+# reproducers for other GCC PRs that happen to use "+g" as an
+# optimization barrier.  Implementing "g" (fallback to "r") and
+# "m" is tracked in doc/TODO.md; excluded until then so the
+# suite reflects real codegen gaps, not asm-constraint parser
+# gaps.
+20030222-1.c  # "=r","0" ties i32 output to i64 input
+pr65053-2.c   # "+g" optimization barrier
+pr65956.c     # "+g" optimization barrier
+pr84524.c     # i16 through "=r","0" (tied)
+pr88904.c     # "+g" optimization barrier x3
+stkalign.c    # "=g","+m" -- real memory operand needed
+
 # ─── Stdio FILE* plumbing (harness-bound, not codegen) ─────────
 # These test fprintf/stdout/stderr/FILE* handling.  Our harness libc
 # is line-buffered stdout with no FILE abstraction, so they fail at
