@@ -35,3 +35,13 @@ Regression/C/gcc-c-torture/execute/950704-1.c     -fwrapv
 # the ISS until +max-insn.  16384 is the conventional small-target
 # value; BLOCK_SIZE becomes 2048, fits comfortably.
 Regression/C/gcc-c-torture/execute/960521-1.c     -DSTACK_SIZE=16384
+
+# Test relies on C99's "main falling off end implies return 0".
+# Under -ffreestanding, main is not special and clang emits
+# `ret i32 undef`; R1 happens to hold val=2 when main returns, so
+# the test exits 2 instead of 0.  -fno-builtin preserves our
+# opt-out of libc-name folding while -fhosted re-enables the
+# main-returns-zero guarantee.
+Regression/C/gcc-c-torture/execute/alias-access-path-1.c  -fhosted -fno-builtin
+Regression/C/gcc-c-torture/execute/strlen-2.c             -fhosted -fno-builtin
+Regression/C/gcc-c-torture/execute/strlen-4.c             -fhosted -fno-builtin
