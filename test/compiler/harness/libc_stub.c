@@ -483,6 +483,22 @@ int abs(int j) {
     return j < 0 ? -j : j;
 }
 
+// Simple linear-congruential PRNG.  The multiplier/increment pair is
+// the one from Numerical Recipes — a common textbook LCG chosen for
+// passing the minimal quality bar at 32 bits while being trivial to
+// implement.  RAND_MAX = 0x7fffffff per stdlib.h.  Default seed is
+// 1, as required by C89.
+static unsigned int rand_state = 1;
+
+int rand(void) {
+    rand_state = rand_state * 1664525u + 1013904223u;
+    return (int)(rand_state & 0x7fffffff);
+}
+
+void srand(unsigned int seed) {
+    rand_state = seed;
+}
+
 int atoi(const char *nptr) {
     int res = 0;
     int sign = 1;
