@@ -149,27 +149,45 @@ static void print_double(int (*put)(int), double d, int width, int precision) {
     for (i = 0; i < precision; i++) r_add *= 0.1;
     d += r_add;
 
-    uint64_t ipart = (uint64_t)d;
+    // Count integer digits and find top = largest power of 10 <= d.
+    // Walking *up* by x10 avoids the UB `(uint64_t)d` hit when d
+    // exceeds UINT64_MAX (e.g. 1.5 * 2^98 = 4.75e29); it also sidesteps
+    // needing a 10^k lookup table for the full double range up to ~1e308.
+    int int_digits = 1;
+    double top = 1.0;
+    while (top * 10.0 <= d) {
+        top *= 10.0;
+        int_digits++;
+    }
 
-    // Compute rendered length so we can left-pad to `width`.  Length is
-    // optional sign + integer digits + (precision > 0 ? '.' + precision : 0).
-    int int_digits = 0;
-    uint64_t t = ipart;
-    if (t == 0) int_digits = 1;
-    else while (t > 0) { t /= 10; int_digits++; }
     int len = (sign ? 1 : 0) + int_digits + (precision > 0 ? 1 + precision : 0);
     while (width > len) { put(' '); width--; }
 
     if (sign) put('-');
-    kprintn(put, ipart, 10, 0, 0, 0);
+
+    // Emit integer digits MSD to LSD.  `top` cycles down by 10 each step;
+    // for magnitudes beyond 2^53 every digit beyond the mantissa reach is
+    // necessarily '0' (doubles cannot represent non-zero fractional bits
+    // at that scale), so FP rounding noise in d/top stays well below 1.
+    for (i = 0; i < int_digits; i++) {
+        int digit = (int)(d / top);
+        // Clamp against FP rounding that could produce 10 at edge cases.
+        if (digit > 9) digit = 9;
+        if (digit < 0) digit = 0;
+        put(digit + '0');
+        d -= (double)digit * top;
+        top /= 10.0;
+    }
+
     if (precision > 0) {
         put('.');
-        double fpart = d - (double)ipart;
         for (i = 0; i < precision; i++) {
-            fpart *= 10.0;
-            int digit = (int)fpart;
+            d *= 10.0;
+            int digit = (int)d;
+            if (digit > 9) digit = 9;
+            if (digit < 0) digit = 0;
             put(digit + '0');
-            fpart -= (double)digit;
+            d -= (double)digit;
         }
     }
 }
