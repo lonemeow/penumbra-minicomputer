@@ -273,6 +273,17 @@ pr28865.c            # flexible array member initializer
 pr36093.c            # array of type whose size < alignment
 pr43783.c            # array of type whose size < alignment
 
+# ─── Optimizer-DCE dependent (link-error stub pattern) ─────────
+# These tests declare `extern void link_error()` and place a call
+# to it down a branch the optimizer is expected to prove dead
+# (e.g. `if (x > __builtin_inf()) link_error();`).  At -O2 the
+# branch is folded and the unresolved reference is dropped; at
+# -O0 the call survives and linking fails with "undefined symbol:
+# link_error".  Not a correctness question — upstream
+# llvm-test-suite already flags medce-1 for this exact reason.
+medce-1.c            # upstream UnsupportedTests: "clang -O0 doesn't DCE"
+ieee/fp-cmp-7.c      # same pattern: `x > +inf` branch contains link_error()
+
 # ─── Upstream clang-wide known failures / unsupported tests ────
 # The llvm-test-suite CMakeLists.txt itself groups these under
 # FailingTests or UnsupportedTests for every clang target.  The
