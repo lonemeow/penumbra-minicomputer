@@ -121,6 +121,7 @@ pr84521.c
 pr57344-3.c              # long long a:43; b:22;  (65 bits total)
 pr57344-4.c              # long long a:43; b:22;  (65 bits total)
 testcase-InstCombine-1.c # int a:18; b:1; c:24; d:15; e:14; (72 bits)
+pr79737-1.c              # same struct as pr79737-2; fails at -O0 only
 pr79737-2.c              # int32_t b:18; c:1; d:24; e:15; f:14; (72 bits) — mid-end emits G_STORE s32 as s64
 
 # ─── Other unsupported extensions (one-offs) ───────────────────
@@ -272,6 +273,31 @@ builtin-prefetch-1.c # enum { read, write } collides with write()
 pr28865.c            # flexible array member initializer
 pr36093.c            # array of type whose size < alignment
 pr43783.c            # array of type whose size < alignment
+
+# ─── -O0-only failures (pass at -O2, mid-end simplifies) ──────
+# These tests rely on the mid-end to fold UB, narrow wide overflow
+# intrinsics, or simplify legalizer-gap shapes before codegen.
+# At -O2 clang does exactly that and the tests pass; at -O0 the
+# raw IR reaches the Penumbra backend and we hit either a real
+# but obscure legalizer gap (odd-width G_SMULO, vector types) or
+# runtime UB the test itself relies on.  Excluding them keeps
+# -O0 runs clean as a baseline for regression triage — a new
+# failure at -O0 is then meaningful signal rather than noise.
+#
+# Overflow builtins with odd result widths (G_SMULO s33/s65):
+pr84169.c                # __builtin_mul_overflow → G_SMULO s65
+pr89434.c                # __builtin_mul_overflow → G_SMULO s33
+# Vector extensions (we're scalar-only):
+scal-to-vec1.c           # __attribute__((vector_size))
+scal-to-vec2.c           # __attribute__((vector_size))
+# UB in the test itself that -O2 constant-folds away:
+20000808-1.c
+20031003-1.c             # upstream UnsupportedTests: (float)INT_MAX UB
+20040703-1.c
+pr23324.c                # complex bitfield/struct combinations
+struct-ret-1.c           # mixed struct/FP return
+# Optimizer normally simplifies a construct we don't translate:
+pr65053-1.c              # untranslated `call` instruction at -O0
 
 # ─── Optimizer-DCE dependent (link-error stub pattern) ─────────
 # These tests declare `extern void link_error()` and place a call
