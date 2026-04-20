@@ -273,6 +273,19 @@ pr28865.c            # flexible array member initializer
 pr36093.c            # array of type whose size < alignment
 pr43783.c            # array of type whose size < alignment
 
+# ─── GCC-specific bitfield arithmetic semantics ────────────────
+# GCC performs arithmetic on wide bitfields (e.g. `unsigned long
+# long b:40`) at the bitfield's declared width — so `b - 8` wraps
+# at 2^40, not 2^64.  Clang always promotes to the underlying
+# type, so the same expression wraps at 2^64.  The divergence is
+# discussed in llvm-test-suite's own CMakeLists.txt (under
+# "FailingTests") with references to llvm-dev 2017-10 and WG14
+# paper n1260; it applies to every clang target, not just ours.
+bitfld-3.c           # u33/u40/u41 mul/add/sub at bitfield width
+bitfld-5.c           # (s.b - 8) + 8 wraps at 40 bits, not 64
+pr32244-1.c          # x.b << 32 in 40-bit precision
+pr34971.c            # rotate on 40-bit argument
+
 # ─── Libc-builtin folding tests (hosted-only by design) ────────
 # These tests declare a decoy `llabs`/`sin`/`floor`/... that calls
 # abort(), then check that the compiler replaced the call with a
