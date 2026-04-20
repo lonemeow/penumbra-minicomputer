@@ -444,6 +444,71 @@ char *strchr(const char *s, int c) {
     return (char *)s;
 }
 
+char *strrchr(const char *s, int c) {
+    char ch = (char)c;
+    const char *last = NULL;
+    for (;;) {
+        if (*s == ch) last = s;
+        if (!*s) break;
+        s++;
+    }
+    return (char *)last;
+}
+
+char *strncpy(char *dest, const char *src, size_t n) {
+    char *d = dest;
+    while (n && *src) { *d++ = *src++; n--; }
+    while (n--) *d++ = '\0';
+    return dest;
+}
+
+void *memchr(const void *s, int c, size_t n) {
+    const unsigned char *p = s;
+    unsigned char uc = (unsigned char)c;
+    while (n--) {
+        if (*p == uc) return (void *)p;
+        p++;
+    }
+    return NULL;
+}
+
+// ctype.h: only isprint() is stubbed; tests that depend on it do
+// not actually exercise locale-aware ctype, just the C locale
+// ASCII ranges.
+int isprint(int c) {
+    return c >= 0x20 && c < 0x7F;
+}
+
+// atof: stubbed as abort() because tests that reference it only
+// do so in argc-guarded paths the harness never triggers (we
+// always run with argc == 1).  Returning 0.0 silently would
+// corrupt test results if that assumption ever broke; abort()
+// converts the silent failure into a hard exit code 127.
+double atof(const char *s) {
+    (void)s;
+    abort();
+}
+
+// fabs: used by tests that exercise the "fabs(x) < 0.0 folds to
+// false" optimization.  If the optimizer folds, this body is dead
+// (linker keeps the symbol, runtime never calls it).  If the
+// optimizer doesn't fold, the runtime call still returns a
+// correct value so assertions that compare fabs against concrete
+// values still behave as expected.
+double fabs(double x) {
+    return x < 0.0 ? -x : x;
+}
+
+// scanf: stubbed as abort() because the tests that reference it
+// do so in code the optimizer constant-folds away at -O2.  If
+// the fold doesn't fire and scanf actually runs, abort() fails
+// loudly rather than silently returning 0 and corrupting the
+// caller's "read N items" expectation.
+int scanf(const char *fmt, ...) {
+    (void)fmt;
+    abort();
+}
+
 /* ── Compiler runtime (math) ───────────────────────────────────────────── */
 
 static inline void __divmodsi4(uint32_t n, uint32_t d,
