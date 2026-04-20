@@ -198,14 +198,22 @@ static void kdoprnt(int (*put)(int), const char *fmt, va_list ap) {
     uint64_t ul;
     int lflag, width, zeropad, precision;
 
+    int hflag, altform;
     for (;;) {
         while ((ch = *fmt++) != '%') {
             if (ch == '\0') return;
             put(ch);
         }
-        lflag = 0; width = 0; zeropad = 0; precision = -1;
+        lflag = 0; width = 0; zeropad = 0; precision = -1; hflag = 0;
+        altform = 0;
     reswitch:
         switch (ch = *fmt++) {
+        case '#':
+            // `%#o` prepends a leading '0', `%#x/%#X` prepend
+            // '0x'/'0X' — but only when the printed value is
+            // nonzero (matches glibc).
+            altform = 1;
+            goto reswitch;
         case '0':
             if (width == 0) {
                 zeropad = 1;
@@ -226,6 +234,12 @@ static void kdoprnt(int (*put)(int), const char *fmt, va_list ap) {
         case 'l':
             lflag++;
             goto reswitch;
+        case 'h':
+            // `%hd` → short, `%hhd` → signed char.  Argument is
+            // still promoted to int through varargs, so we just
+            // mask/sign-extend before the numeric path.
+            hflag++;
+            goto reswitch;
         case 'L':
             // Penumbra long double == double (64-bit), so %Lf behaves
             // like %f.  Swallow L and re-enter the switch.
@@ -242,6 +256,8 @@ static void kdoprnt(int (*put)(int), const char *fmt, va_list ap) {
             if (lflag >= 2) ul = va_arg(ap, long long);
             else if (lflag == 1) ul = va_arg(ap, long);
             else ul = va_arg(ap, int);
+            if (hflag == 1) ul = (int64_t)(int16_t)ul;
+            else if (hflag >= 2) ul = (int64_t)(int8_t)ul;
 
             if ((int64_t)ul < 0) {
                 put('-');
@@ -253,18 +269,26 @@ static void kdoprnt(int (*put)(int), const char *fmt, va_list ap) {
             if (lflag >= 2) ul = va_arg(ap, unsigned long long);
             else if (lflag == 1) ul = va_arg(ap, unsigned long);
             else ul = va_arg(ap, unsigned int);
+            if (hflag == 1) ul = (uint16_t)ul;
+            else if (hflag >= 2) ul = (uint8_t)ul;
             kprintn(put, ul, 10, width, zeropad, 0);
             break;
         case 'o':
             if (lflag >= 2) ul = va_arg(ap, unsigned long long);
             else if (lflag == 1) ul = va_arg(ap, unsigned long);
             else ul = va_arg(ap, unsigned int);
+            if (hflag == 1) ul = (uint16_t)ul;
+            else if (hflag >= 2) ul = (uint8_t)ul;
+            if (altform && ul != 0) put('0');
             kprintn(put, ul, 8, width, zeropad, 0);
             break;
         case 'x': case 'X':
             if (lflag >= 2) ul = va_arg(ap, unsigned long long);
             else if (lflag == 1) ul = va_arg(ap, unsigned long);
             else ul = va_arg(ap, unsigned int);
+            if (hflag == 1) ul = (uint16_t)ul;
+            else if (hflag >= 2) ul = (uint8_t)ul;
+            if (altform && ul != 0) { put('0'); put(ch); }
             kprintn(put, ul, 16, width, zeropad, ch == 'X');
             break;
         case 'p':
@@ -360,17 +384,26 @@ int snprintf(char *buf, size_t size, const char *fmt, ...) {
     return n;
 }
 
+// Printf returns the number of characters written per C11.
+// kdoprnt's put callback isn't plumbed for counting, so wrap
+// putchar in a file-local counter.  Not reentrant, but neither
+// is the rest of libc_stub.
+static int printf_count;
+static int counting_putchar(int c) { printf_count++; return putchar(c); }
+
 int vprintf(const char *fmt, va_list ap) {
-    kdoprnt(putchar, fmt, ap);
-    return 0;
+    printf_count = 0;
+    kdoprnt(counting_putchar, fmt, ap);
+    return printf_count;
 }
 
 int printf(const char *fmt, ...) {
     va_list ap;
+    printf_count = 0;
     va_start(ap, fmt);
-    kdoprnt(putchar, fmt, ap);
+    kdoprnt(counting_putchar, fmt, ap);
     va_end(ap);
-    return 0;
+    return printf_count;
 }
 
 /* ── Memory management ─────────────────────────────────────────────────── */
