@@ -121,6 +121,7 @@ pr84521.c
 pr57344-3.c              # long long a:43; b:22;  (65 bits total)
 pr57344-4.c              # long long a:43; b:22;  (65 bits total)
 testcase-InstCombine-1.c # int a:18; b:1; c:24; d:15; e:14; (72 bits)
+pr79737-2.c              # int32_t b:18; c:1; d:24; e:15; f:14; (72 bits) — mid-end emits G_STORE s32 as s64
 
 # ─── Other unsupported extensions (one-offs) ───────────────────
 pr84748.c        # __int128 on a 32-bit target
