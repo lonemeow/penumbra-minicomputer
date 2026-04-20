@@ -132,6 +132,20 @@ float-floor.c    # floor
 ieee/mzero4.c    # sin/sinf/tan/tanf/atan/atanf
 ieee/20041213-1.c  # sqrt
 
+# ─── setjmp/longjmp libc tests ─────────────────────────────────
+# UnitTests/SetjmpLongjmp/C/* exercise the libc save/restore
+# machinery (cross-frame longjmp, re-setjmp, setjmp in a loop)
+# but do not construct register pressure across the setjmp
+# point, so they don't exercise the codegen-side of returns_twice.
+# The corresponding behaviors are already covered by NetBSD
+# libc's own ATF regression suite; nothing here for the backend
+# to validate.
+SetjmpLongjmp/C/FarJump.c
+SetjmpLongjmp/C/Looping.c
+SetjmpLongjmp/C/MultipleSetjmp.c
+SetjmpLongjmp/C/SimpleCTest.c
+SetjmpLongjmp/C/WhileLoop.c
+
 # ─── Tests that are themselves not-codegen ─────────────────────
 # Each excluded for a test-specific reason.
 pr34456.c              # explicitly `dg-skip-if "requires qsort" { freestanding }`
