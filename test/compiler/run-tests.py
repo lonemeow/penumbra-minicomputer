@@ -162,9 +162,11 @@ def run_single_test(args):
     # Bound execution by instruction count (deterministic failure on
     # runaway loops) and by wall-clock (catches ISS hangs).  Some torture
     # tests iterate 10k+ times over i64 soft-libcalls, which balloons to
-    # ~10k instructions per iteration; 2B gives enough headroom without
-    # letting true infinite loops waste all 120s of wallclock.
-    cmd_iss = [iss_path, hex_file, "+hosted", "+quiet", "+max-insn=2000000000"]
+    # ~10k instructions per iteration.  At -O0 Stanford/Oscar and
+    # Stanford/Puzzle need ~2.7B / ~2.3B instructions respectively
+    # (vs. ~400M at -O2), so 5B gives comfortable -O0 headroom while
+    # still fitting inside the 120s wall clock (~100 Minsn/s on ISS).
+    cmd_iss = [iss_path, hex_file, "+hosted", "+quiet", "+max-insn=5000000000"]
     try:
         proc = subprocess.run(cmd_iss, capture_output=True, text=True, timeout=120)
         actual_output = proc.stdout
