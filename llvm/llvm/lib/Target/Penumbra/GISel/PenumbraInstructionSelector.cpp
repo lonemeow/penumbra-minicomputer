@@ -461,14 +461,40 @@ bool PenumbraInstructionSelector::selectBrCond(MachineInstr &I,
     Register LHS = CondDef->getOperand(2).getReg();
     Register RHS = CondDef->getOperand(3).getReg();
 
+    // Canonicalize: if the LHS is constant and RHS is not, swap operands and
+    // invert the predicate so the constant lands on the RHS where CMPi can
+    // fold it.  Belt-and-braces with the upstream canonicalizer.
+    MachineInstr *LhsDef = MRI.getVRegDef(LHS);
+    MachineInstr *RhsDef = MRI.getVRegDef(RHS);
+    if (LhsDef && LhsDef->getOpcode() == TargetOpcode::G_CONSTANT &&
+        (!RhsDef || RhsDef->getOpcode() != TargetOpcode::G_CONSTANT)) {
+      std::swap(LHS, RHS);
+      std::swap(LhsDef, RhsDef);
+      Pred = CmpInst::getSwappedPredicate(Pred);
+    }
+
     unsigned BrOpc = icmpPredToBranchOpc(Pred);
     if (!BrOpc)
       return false;
 
-    auto CmpMI = BuildMI(MBB, I, DL, TII.get(Penumbra::CMP))
-                     .addReg(LHS)
-                     .addReg(RHS);
-    constrainSelectedInstRegOperands(*CmpMI, TII, TRI, RBI);
+    // If RHS is a constant that fits uimm16, emit CMPi — saves an LLI and a
+    // live register.  Covers the common cases: `x == 0`, `n < 100`, loop
+    // termination checks, etc.
+    if (RhsDef && RhsDef->getOpcode() == TargetOpcode::G_CONSTANT &&
+        isUInt<16>(RhsDef->getOperand(1).getCImm()->getZExtValue())) {
+      int64_t Imm = RhsDef->getOperand(1).getCImm()->getZExtValue();
+      auto CmpMI = BuildMI(MBB, I, DL, TII.get(Penumbra::CMPi))
+                       .addReg(LHS)
+                       .addImm(Imm);
+      constrainSelectedInstRegOperands(*CmpMI, TII, TRI, RBI);
+      if (MRI.use_nodbg_empty(RHS))
+        RhsDef->eraseFromParent();
+    } else {
+      auto CmpMI = BuildMI(MBB, I, DL, TII.get(Penumbra::CMP))
+                       .addReg(LHS)
+                       .addReg(RHS);
+      constrainSelectedInstRegOperands(*CmpMI, TII, TRI, RBI);
+    }
 
     BuildMI(MBB, I, DL, TII.get(BrOpc)).addMBB(TargetMBB);
 

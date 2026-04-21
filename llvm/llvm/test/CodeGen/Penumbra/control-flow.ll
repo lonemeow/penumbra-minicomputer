@@ -86,3 +86,48 @@ loop:
 exit:
   ret i32 %newsum
 }
+
+; LHS-constant canonicalization: the selector swaps operands and inverts the
+; predicate so the constant lands on the RHS, where CMPi can fold it.
+
+define i32 @cmpi_lhs_const_eq(i32 %x) {
+; CHECK-LABEL: cmpi_lhs_const_eq:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  // %bb.0:
+; CHECK-NEXT:    mov r3, r1
+; CHECK-NEXT:    lli r1, 0
+; CHECK-NEXT:    lli r2, 42
+; CHECK-NEXT:    cmp r3, 0
+; CHECK-NEXT:    bne .LBB4_2
+; CHECK-NEXT:  // %bb.1: // %zero
+; CHECK-NEXT:    mov r1, r2
+; CHECK-NEXT:  .LBB4_2: // %nonzero
+; CHECK-NEXT:    jmp r13
+  %c = icmp eq i32 0, %x
+  br i1 %c, label %zero, label %nonzero
+zero:
+  ret i32 42
+nonzero:
+  ret i32 0
+}
+
+define i32 @cmpi_lhs_const_slt(i32 %x) {
+; CHECK-LABEL: cmpi_lhs_const_slt:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  // %bb.0:
+; CHECK-NEXT:    mov r3, r1
+; CHECK-NEXT:    lli r1, 0
+; CHECK-NEXT:    lli r2, 1
+; CHECK-NEXT:    cmp r3, 10
+; CHECK-NEXT:    ble .LBB5_2
+; CHECK-NEXT:  // %bb.1: // %gt
+; CHECK-NEXT:    mov r1, r2
+; CHECK-NEXT:  .LBB5_2: // %le
+; CHECK-NEXT:    jmp r13
+  %c = icmp slt i32 10, %x
+  br i1 %c, label %gt, label %le
+gt:
+  ret i32 1
+le:
+  ret i32 0
+}

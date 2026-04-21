@@ -31,8 +31,7 @@ define i32 @diamond_merge(i32 %a, i32 %b) {
 ; CHECK-LABEL: diamond_merge:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    lli r3, 0
-; CHECK-NEXT:    cmp r1, r3
+; CHECK-NEXT:    cmp r1, 0
 ; CHECK-NEXT:    ble .LBB1_2
 ; CHECK-NEXT:  // %bb.1: // %pos
 ; CHECK-NEXT:    add r1, r2
@@ -87,9 +86,8 @@ define i32 @branch_reversal(i32 %a) {
 ; CHECK-LABEL: branch_reversal:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    lli r3, 0
 ; CHECK-NEXT:    lli r2, 42
-; CHECK-NEXT:    cmp r1, r3
+; CHECK-NEXT:    cmp r1, 0
 ; CHECK-NEXT:    bne .LBB3_1
 ; CHECK-NEXT:  // %bb.2: // %is_zero
 ; CHECK-NEXT:    mov r1, r2
