@@ -118,13 +118,13 @@ define i32 @mul_by_0(i32 %a) {
 ; O0-LABEL: mul_by_0:
 ; O0:         .cfi_startproc
 ; O0-NEXT:  // %bb.1:
-; O0-NEXT:    lli r1, 0
+; O0-NEXT:    mov r1, r0
 ; O0-NEXT:    jmp r13
 ;
 ; O1-LABEL: mul_by_0:
 ; O1:         .cfi_startproc
 ; O1-NEXT:  // %bb.0:
-; O1-NEXT:    lli r1, 0
+; O1-NEXT:    mov r1, r0
 ; O1-NEXT:    jmp r13
   %r = mul i32 %a, 0
   ret i32 %r
@@ -223,13 +223,13 @@ define i32 @urem_by_1(i32 %a) {
 ; O0-LABEL: urem_by_1:
 ; O0:         .cfi_startproc
 ; O0-NEXT:  // %bb.1:
-; O0-NEXT:    lli r1, 0
+; O0-NEXT:    mov r1, r0
 ; O0-NEXT:    jmp r13
 ;
 ; O1-LABEL: urem_by_1:
 ; O1:         .cfi_startproc
 ; O1-NEXT:  // %bb.0:
-; O1-NEXT:    lli r1, 0
+; O1-NEXT:    mov r1, r0
 ; O1-NEXT:    jmp r13
   %r = urem i32 %a, 1
   ret i32 %r

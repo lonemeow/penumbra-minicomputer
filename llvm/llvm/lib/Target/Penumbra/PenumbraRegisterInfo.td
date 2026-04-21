@@ -36,6 +36,9 @@ class PenumbraReg<bits<4> num, string n, list<string> altNames = []>
 class PenumbraGPR<bits<4> num, string n, list<string> altNames = []>
     : PenumbraReg<num, n, altNames>;
 
+// R0 is hardwired to zero — mark isConstant so MachineCopyPropagation will
+// forward it through COPY chains unconditionally (its value never changes).
+let isConstant = true in
 def R0  : PenumbraGPR<0,  "r0", ["zero"]>;
 
 foreach i = 1-11 in {

@@ -37,7 +37,7 @@ define i64 @zextload_i32_to_i64(ptr %p) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    ldw r1, [r1 + 0]
-; CHECK-NEXT:    lli r2, 0
+; CHECK-NEXT:    mov r2, r0
 ; CHECK-NEXT:    jmp r13
   %v = load i32, ptr %p
   %ext = zext i32 %v to i64

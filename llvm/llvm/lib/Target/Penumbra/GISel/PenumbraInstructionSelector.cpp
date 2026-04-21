@@ -167,6 +167,22 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
 
   using namespace TargetOpcode;
 
+  // G_CONSTANT 0 — emit COPY from R0 (hardwired zero) rather than letting the
+  // TableGen uimm16 pattern materialise it as `LLI Rd, 0`.  MachineCopyPropagation
+  // then forwards $r0 into every use slot that accepts GPRz (ALU Rs, compare
+  // operands, store value), dropping the load entirely.  Must run BEFORE
+  // selectImpl so the uimm16 pattern doesn't grab it first.
+  if (I.getOpcode() == G_CONSTANT &&
+      I.getOperand(1).getCImm()->getSExtValue() == 0) {
+    Register DstReg = I.getOperand(0).getReg();
+    BuildMI(MBB, I, I.getDebugLoc(), TII.get(TargetOpcode::COPY))
+        .addDef(DstReg)
+        .addReg(Penumbra::R0);
+    I.eraseFromParent();
+    return RBI.constrainGenericRegister(
+        DstReg, Penumbra::GPR_AllocatableRegClass, MRI);
+  }
+
   // Try TableGen-generated patterns (ALU, shifts, constants, loads/stores).
   // The AddrRegImm ComplexPattern handles all load/store addressing shapes
   // including G_FRAME_INDEX and G_PTR_ADD+const, so there is no pre-selectImpl

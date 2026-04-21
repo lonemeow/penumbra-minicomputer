@@ -13,18 +13,18 @@ define i32 @inst_check_f(i32 %m) {
 ; CHECK-NEXT:    sub r14, 8
 ; CHECK-NEXT:    stw r5, [r14 + 4] // 4-byte Folded Spill
 ; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
-; CHECK-NEXT:    lli r2, 0
+; CHECK-NEXT:    mov r2, r0
 ; CHECK-NEXT:    cmp r1, 0
 ; CHECK-NEXT:    ble .LBB0_2
 ; CHECK-NEXT:  // %bb.1: // %loop
-; CHECK-NEXT:    mov r11, r1
-; CHECK-NEXT:    sub r11, 1
+; CHECK-NEXT:    mov r2, r1
+; CHECK-NEXT:    sub r2, 1
 ; CHECK-NEXT:    mov r3, r1
 ; CHECK-NEXT:    sub r3, 2
-; CHECK-NEXT:    lli r2, 0
-; CHECK-NEXT:    lli r4, 0
+; CHECK-NEXT:    mov r4, r0
 ; CHECK-NEXT:    mov r5, r1
-; CHECK-NEXT:    mov r1, r11
+; CHECK-NEXT:    mov r1, r2
+; CHECK-NEXT:    mov r2, r4
 ; CHECK-NEXT:    bl __muldi3
 ; CHECK-NEXT:    llis r3, -1
 ; CHECK-NEXT:    and r1, r3

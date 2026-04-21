@@ -64,7 +64,7 @@ define i32 @phi_loop(i32 %n) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0: // %entry
 ; CHECK-NEXT:    mov r2, r1
-; CHECK-NEXT:    lli r1, 0
+; CHECK-NEXT:    mov r1, r0
 ; CHECK-NEXT:    mov r3, r1
 ; CHECK-NEXT:  .LBB3_1: // %loop
 ; CHECK-NEXT:    // =>This Inner Loop Header: Depth=1
@@ -94,14 +94,14 @@ define i32 @cmpi_lhs_const_eq(i32 %x) {
 ; CHECK-LABEL: cmpi_lhs_const_eq:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    mov r3, r1
-; CHECK-NEXT:    lli r1, 0
-; CHECK-NEXT:    lli r2, 42
-; CHECK-NEXT:    cmp r3, 0
+; CHECK-NEXT:    mov r2, r1
+; CHECK-NEXT:    lli r1, 42
+; CHECK-NEXT:    cmp r2, 0
 ; CHECK-NEXT:    bne .LBB4_2
 ; CHECK-NEXT:  // %bb.1: // %zero
-; CHECK-NEXT:    mov r1, r2
+; CHECK-NEXT:    jmp r13
 ; CHECK-NEXT:  .LBB4_2: // %nonzero
+; CHECK-NEXT:    mov r1, r0
 ; CHECK-NEXT:    jmp r13
   %c = icmp eq i32 0, %x
   br i1 %c, label %zero, label %nonzero
@@ -115,14 +115,14 @@ define i32 @cmpi_lhs_const_slt(i32 %x) {
 ; CHECK-LABEL: cmpi_lhs_const_slt:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    mov r3, r1
-; CHECK-NEXT:    lli r1, 0
-; CHECK-NEXT:    lli r2, 1
-; CHECK-NEXT:    cmp r3, 10
+; CHECK-NEXT:    mov r2, r1
+; CHECK-NEXT:    lli r1, 1
+; CHECK-NEXT:    cmp r2, 10
 ; CHECK-NEXT:    ble .LBB5_2
 ; CHECK-NEXT:  // %bb.1: // %gt
-; CHECK-NEXT:    mov r1, r2
+; CHECK-NEXT:    jmp r13
 ; CHECK-NEXT:  .LBB5_2: // %le
+; CHECK-NEXT:    mov r1, r0
 ; CHECK-NEXT:    jmp r13
   %c = icmp slt i32 10, %x
   br i1 %c, label %gt, label %le

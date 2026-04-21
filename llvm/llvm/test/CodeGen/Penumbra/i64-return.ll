@@ -8,7 +8,7 @@ define i64 @return_i64_const() {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    lli r1, 42
-; CHECK-NEXT:    lli r2, 0
+; CHECK-NEXT:    mov r2, r0
 ; CHECK-NEXT:    jmp r13
   ret i64 42
 }
@@ -73,20 +73,20 @@ define i1 @cmp_i64_eq(i64 %a, i64 %b) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub r14, 4
-; CHECK-NEXT:    stw r5, [r14 + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r11, r1
-; CHECK-NEXT:    lli r5, 0
+; CHECK-NEXT:    mov r13, r0
 ; CHECK-NEXT:    xor r11, r3
 ; CHECK-NEXT:    xor r2, r4
 ; CHECK-NEXT:    or r11, r2
 ; CHECK-NEXT:    lli r1, 1
 ; CHECK-NEXT:    lli r2, 0
-; CHECK-NEXT:    cmp r11, r5
+; CHECK-NEXT:    cmp r11, r13
 ; CHECK-NEXT:    beq .LBB6_2
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r1, r2
 ; CHECK-NEXT:  .LBB6_2:
-; CHECK-NEXT:    ldw r5, [r14 + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
 ; CHECK-NEXT:    add r14, 4
 ; CHECK-NEXT:    jmp r13
   %cmp = icmp eq i64 %a, %b
@@ -98,7 +98,7 @@ define i64 @zext_i32_to_i64(i32 %x) {
 ; CHECK-LABEL: zext_i32_to_i64:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    lli r2, 0
+; CHECK-NEXT:    mov r2, r0
 ; CHECK-NEXT:    jmp r13
   %ext = zext i32 %x to i64
   ret i64 %ext

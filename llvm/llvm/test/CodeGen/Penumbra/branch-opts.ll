@@ -58,7 +58,7 @@ define i32 @loop_sum(i32 %n) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0: // %entry
 ; CHECK-NEXT:    mov r2, r1
-; CHECK-NEXT:    lli r1, 0
+; CHECK-NEXT:    mov r1, r0
 ; CHECK-NEXT:    mov r3, r1
 ; CHECK-NEXT:  .LBB2_1: // %loop
 ; CHECK-NEXT:    // =>This Inner Loop Header: Depth=1
@@ -111,18 +111,17 @@ define i32 @multi_cond(i32 %a, i32 %b) {
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    mov r3, r1
 ; CHECK-NEXT:    lli r1, 1
-; CHECK-NEXT:    lli r4, 0
-; CHECK-NEXT:    llis r11, -1
+; CHECK-NEXT:    llis r4, -1
 ; CHECK-NEXT:    cmp r3, r2
 ; CHECK-NEXT:    bge .LBB4_1
 ; CHECK-NEXT:  // %bb.4: // %lt
-; CHECK-NEXT:    mov r1, r11
+; CHECK-NEXT:    mov r1, r4
 ; CHECK-NEXT:    jmp r13
 ; CHECK-NEXT:  .LBB4_1: // %ge
 ; CHECK-NEXT:    cmp r3, r2
 ; CHECK-NEXT:    bne .LBB4_3
 ; CHECK-NEXT:  // %bb.2: // %eq
-; CHECK-NEXT:    mov r1, r4
+; CHECK-NEXT:    mov r1, r0
 ; CHECK-NEXT:  .LBB4_3: // %gt
 ; CHECK-NEXT:    jmp r13
   %c1 = icmp slt i32 %a, %b
@@ -144,13 +143,13 @@ define i32 @unsigned_cmp(i32 %a, i32 %b) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    mov r3, r1
-; CHECK-NEXT:    lli r1, 0
-; CHECK-NEXT:    lli r4, 1
+; CHECK-NEXT:    lli r1, 1
 ; CHECK-NEXT:    cmp r3, r2
 ; CHECK-NEXT:    bls .LBB5_2
 ; CHECK-NEXT:  // %bb.1: // %high
-; CHECK-NEXT:    mov r1, r4
+; CHECK-NEXT:    jmp r13
 ; CHECK-NEXT:  .LBB5_2: // %low
+; CHECK-NEXT:    mov r1, r0
 ; CHECK-NEXT:    jmp r13
   %cmp = icmp ugt i32 %a, %b
   br i1 %cmp, label %high, label %low
