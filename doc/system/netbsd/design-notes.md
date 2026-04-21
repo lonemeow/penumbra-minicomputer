@@ -38,6 +38,80 @@ Penumbra-specific -- no `<mips/*.h>` includes.
 0xFFFF_F000              unmapped guard
 ```
 
+## Pinned Vector Page
+
+The vector page is the single physical page at PA 0x0 that holds
+everything exception entry needs to be guaranteed reachable: the
+hardware vector table, all trap trampolines, the TLB miss handler,
+`_trap_common` body, and the scratch cells those handlers use.
+It is mapped at `VECTOR_VA = 0xFFFFB000` and pinned in TLB slot 0
+(`PTLB_VECTOR`) at the very end of `locore.S`, before the MMU is
+enabled.  Pinning means it never TLB-misses, which breaks what
+would otherwise be an infinite "miss handler taking a miss" loop.
+
+### Layout (4 KB)
+
+```
+offset  content                                     symbols
+0x000   exception vector table (9 entries * 4B)     VA handlers at VECTOR_VA+0x80+…
+0x080   real TLB miss handler (page-table walker)   _real_miss_handler
+…       per-vector trap stubs                       _trap_entry_busfault, _timer, _tlbmiss, …
+…       _trap_common (save trapframe, call trap())  _trap_common
+…       trap_return (restore + ERET)                trap_return
+…       trap scratch (R1–R4 save, ESR/EPC/… stash)  _trap_save_r1 … _trap_save_hw_fstat
+…       TLB miss scratch (R1–R4 save, way counter)  _rmh_scratch, _rmh_way_counter
+0xFFF   end                                         _real_handlers_end
+```
+
+All handler code and its scratch region are copied by `locore.S`
+step 7 from the linked kernel image (the sources live in the
+kernel `.text` between `_real_miss_handler` and `_real_handlers_end`)
+to PA `0x0080`.  Because every handler accesses its scratch via
+`[pc + label - .]`, the PC-relative offsets survive the copy
+unchanged — handlers work correctly at either the link-time VA
+(inside kernel .text) or at `VECTOR_VA + 0x80` after copy.
+
+### Why PA 0
+
+Physical address 0 is the architectural exception-vector location.
+Exception entry fetches the handler VA from the vector table with
+the MMU forced off (physical fetch of a 4-byte VA), so the table
+must sit at PA 0 regardless of where the kernel is loaded.  Keeping
+the handler code on the same page lets the trap stubs be reached
+from the vector table with a 32-bit absolute VA stored at PAs
+`0x00..0x20`, and lets TLB-miss recovery use PC-relative scratch
+without needing any other mapping to be resolved.
+
+### Mapping a vector-page PC back to the kernel binary
+
+When an exception fires inside the pinned page you'll see an
+EPC in the `0xFFFFB0xx`..`0xFFFFBFxx` range.  To find the
+corresponding kernel source instruction:
+
+```
+kernel_elf_addr = addr(_real_miss_handler) + (EPC − 0xFFFFB080)
+```
+
+`_real_miss_handler` is the first handler symbol copied to
+`VECTOR_VA + 0x80`.  Example: EPC `0xFFFFB264` with
+`_real_miss_handler` at `0x8001039C` → kernel address
+`0x80010580`.  Disassemble with
+`llvm-objdump -d build/netbsd-kernel/MINIMAL/netbsd` and jump to
+that address.
+
+### When this bites you
+
+Nested exceptions inside the pinned page are caught by
+`_trap_common`'s double-fault detector (`ESR.S` set AND EPC in
+`0xFFFFxxxx`) and halt via BREAK instead of looping.  On BREAK
+the ISS prints R1–R14; the useful fields there are R2 (= EPC of
+the inner trap, saved by `rdspr r2, epc`) and R4 (= inner cause
+number, 0–9 from the vector stub).  R2 is what you feed into the
+formula above.  Typical causes: kernel stack overflow (SP dropped
+below the u-area and the trapframe STW TLB-missed), stale L1 in
+the pinned slot after a botched `pmap_activate`, or a buggy PTE
+install that left the faulting VA unmapped in the current pmap.
+
 ## Page Table Design
 
 Always 2-level: L1 (1024 entries, 4 KB) --> L2 (1024 entries,
