@@ -106,9 +106,7 @@ define i64 @vaarg_i64(i32 %named, ...) {
 ; CHECK-NEXT:    stw r1, [r14 + 0]
 ; CHECK-NEXT:    ldw r3, [r14 + 0]
 ; CHECK-NEXT:    ldw r1, [r3 + 0]
-; CHECK-NEXT:    mov r2, r3
-; CHECK-NEXT:    add r2, 4
-; CHECK-NEXT:    ldw r2, [r2 + 0]
+; CHECK-NEXT:    ldw r2, [r3 + 4]
 ; CHECK-NEXT:    add r3, 8
 ; CHECK-NEXT:    stw r3, [r14 + 0]
 ; CHECK-NEXT:    add r14, 20

@@ -193,6 +193,16 @@ def memoffset16 : Operand<i32> {
 }
 
 //===----------------------------------------------------------------------===//
+// Addressing modes
+//===----------------------------------------------------------------------===//
+//
+// AddrRegImm: decomposes a load/store address into (base_reg, simm16_offset)
+// so GEPs with constant offsets and frame indices fold into the instruction's
+// Rb/offset slots.  Implemented in C++ via SelectAddrRegImm (SDAG name) /
+// selectAddrRegImm (GISel name, wired in PenumbraGISel.td).
+def AddrRegImm : ComplexPattern<iPTR, 2, "SelectAddrRegImm">;
+
+//===----------------------------------------------------------------------===//
 // ALU instructions (Format R, prefix=00, op 0-11)
 //===----------------------------------------------------------------------===//
 

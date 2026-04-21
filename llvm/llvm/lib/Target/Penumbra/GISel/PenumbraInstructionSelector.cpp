@@ -46,11 +46,19 @@ public:
                CodeGenCoverage *CoverageInfo, ProfileSummaryInfo *PSI,
                BlockFrequencyInfo *BFI) override {
     InstructionSelector::setupMF(MF, VT, CoverageInfo, PSI, BFI);
+    MRI = &MF.getRegInfo();
   }
 
 private:
   // TableGen-generated pattern matcher.
   bool selectImpl(MachineInstr &I, CodeGenCoverage &CoverageInfo) const;
+
+  // ComplexPattern entry point for LDW/STW/LDH/STH/LDB/STB address operands.
+  // Decomposes the address into (base, offset16) so TableGen load/store
+  // patterns can fold a constant GEP offset or a frame index into the
+  // instruction's Rb/offset slots.  Bound to the AddrRegImm ComplexPattern
+  // via GIComplexOperandMatcher in PenumbraGISel.td.
+  ComplexRendererFns selectAddrRegImm(MachineOperand &Root) const;
 
   bool selectConstant(MachineInstr &I, MachineBasicBlock &MBB,
                       MachineRegisterInfo &MRI) const;
@@ -97,6 +105,10 @@ private:
 
   // Required by generated selector code (references Subtarget->).
   const PenumbraSubtarget *Subtarget;
+
+  // Populated by setupMF() — needed by ComplexPattern helpers that get only
+  // a MachineOperand and must walk the def graph.
+  MachineRegisterInfo *MRI = nullptr;
 
 #define GET_GLOBALISEL_PREDICATES_DECL
 #include "PenumbraGenGlobalISel.inc"
@@ -274,6 +286,52 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
   default:
     return false;
   }
+}
+
+// ── AddrRegImm ComplexPattern ────────────────────────────────────────────────
+// Decomposes a load/store address into (base, simm16_offset) for the Rb /
+// offset slots of LDW/STW/LDH/STH/LDB/STB.  Bound to the AddrRegImm
+// ComplexPattern via GIComplexOperandMatcher in PenumbraGISel.td.
+InstructionSelector::ComplexRendererFns
+PenumbraInstructionSelector::selectAddrRegImm(MachineOperand &Root) const {
+  // Root must be a vreg — the call to getVRegDef below needs getReg() to be
+  // valid.  A non-register operand here would be unusual (G_LOAD/G_STORE
+  // address operands are always vregs in legalized MIR) but the guard lets
+  // the matcher cleanly skip to the next pattern rather than asserting.
+  if (!Root.isReg())
+    return std::nullopt;
+
+  MachineInstr *RootDef = MRI->getVRegDef(Root.getReg());
+
+  if (RootDef->getOpcode() == TargetOpcode::G_FRAME_INDEX) {
+    return {{
+        [=](MachineInstrBuilder &MIB) { MIB.add(RootDef->getOperand(1)); },
+        [=](MachineInstrBuilder &MIB) { MIB.addImm(0); },
+    }};
+  }
+
+  if (isBaseWithConstantOffset(Root, *MRI)) {
+    MachineOperand &LHS = RootDef->getOperand(1);
+    MachineOperand &RHS = RootDef->getOperand(2);
+    MachineInstr *LHSDef = MRI->getVRegDef(LHS.getReg());
+    MachineInstr *RHSDef = MRI->getVRegDef(RHS.getReg());
+
+    int64_t RHSC = RHSDef->getOperand(1).getCImm()->getSExtValue();
+    if (isInt<16>(RHSC)) {
+      if (LHSDef->getOpcode() == TargetOpcode::G_FRAME_INDEX)
+        return {{
+            [=](MachineInstrBuilder &MIB) { MIB.add(LHSDef->getOperand(1)); },
+            [=](MachineInstrBuilder &MIB) { MIB.addImm(RHSC); },
+        }};
+
+      return {{[=](MachineInstrBuilder &MIB) { MIB.add(LHS); },
+               [=](MachineInstrBuilder &MIB) { MIB.addImm(RHSC); }}};
+    }
+  }
+
+  // Fall back to the fully materialized address with no offset
+  return {{[=](MachineInstrBuilder &MIB) { MIB.addReg(Root.getReg()); },
+           [=](MachineInstrBuilder &MIB) { MIB.addImm(0); }}};
 }
 
 // ── G_CONSTANT (wide only) ───────────────────────────────────────────────────

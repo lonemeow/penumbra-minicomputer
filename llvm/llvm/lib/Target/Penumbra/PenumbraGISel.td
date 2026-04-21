@@ -18,6 +18,19 @@ include "PenumbraCombine.td"
 def PenumbraPtrVT : PtrValueType<i32, 0>;
 
 //===----------------------------------------------------------------------===//
+// ComplexPattern → GISel C++ method equivalences
+//===----------------------------------------------------------------------===//
+//
+// Tell the GISel importer which C++ method implements each SDAG
+// ComplexPattern.  The method is defined on PenumbraInstructionSelector and
+// returns a ComplexRendererFns describing how to populate the matched
+// sub-operands.
+
+def GIAddrRegImm :
+  GIComplexOperandMatcher<s32, "selectAddrRegImm">,
+  GIComplexPatternEquiv<AddrRegImm>;
+
+//===----------------------------------------------------------------------===//
 // ALU register-register patterns
 //===----------------------------------------------------------------------===//
 //
@@ -87,27 +100,41 @@ def : Pat<(i32 simm16neg:$val), (LLIS simm16neg:$val)>;
 // Loads
 //===----------------------------------------------------------------------===//
 //
-// Frame-index-folded and pointer-typed loads are handled manually in
-// selectLoad (routed there before selectImpl).  These patterns handle
-// the common register-base case.
+// AddrRegImm decomposes the address into (base, simm16 offset) so constant
+// GEP offsets and frame indices fold into the Rb/offset slots directly.
+// The fallback case (bare register with no useful offset) still matches with
+// offset=0.
 
-def : Pat<(i32 (load GPR:$base)),             (LDW GPR:$base, 0)>;
-def : Pat<(PenumbraPtrVT (load GPR:$base)),   (LDW GPR:$base, 0)>;
-def : Pat<(i32 (zextloadi16 GPR:$base)), (LDH GPR:$base, 0)>;
-def : Pat<(i32 (sextloadi16 GPR:$base)), (LDHS GPR:$base, 0)>;
-def : Pat<(i32 (extloadi16 GPR:$base)),  (LDH GPR:$base, 0)>;
-def : Pat<(i32 (zextloadi8 GPR:$base)),  (LDB GPR:$base, 0)>;
-def : Pat<(i32 (sextloadi8 GPR:$base)),  (LDBS GPR:$base, 0)>;
-def : Pat<(i32 (extloadi8 GPR:$base)),   (LDB GPR:$base, 0)>;
+def : Pat<(i32 (load (AddrRegImm GPR:$base, memoffset16:$off))),
+          (LDW GPR:$base, memoffset16:$off)>;
+def : Pat<(PenumbraPtrVT (load (AddrRegImm GPR:$base, memoffset16:$off))),
+          (LDW GPR:$base, memoffset16:$off)>;
+def : Pat<(i32 (zextloadi16 (AddrRegImm GPR:$base, memoffset16:$off))),
+          (LDH GPR:$base, memoffset16:$off)>;
+def : Pat<(i32 (sextloadi16 (AddrRegImm GPR:$base, memoffset16:$off))),
+          (LDHS GPR:$base, memoffset16:$off)>;
+def : Pat<(i32 (extloadi16 (AddrRegImm GPR:$base, memoffset16:$off))),
+          (LDH GPR:$base, memoffset16:$off)>;
+def : Pat<(i32 (zextloadi8 (AddrRegImm GPR:$base, memoffset16:$off))),
+          (LDB GPR:$base, memoffset16:$off)>;
+def : Pat<(i32 (sextloadi8 (AddrRegImm GPR:$base, memoffset16:$off))),
+          (LDBS GPR:$base, memoffset16:$off)>;
+def : Pat<(i32 (extloadi8 (AddrRegImm GPR:$base, memoffset16:$off))),
+          (LDB GPR:$base, memoffset16:$off)>;
 
 //===----------------------------------------------------------------------===//
 // Stores
 //===----------------------------------------------------------------------===//
 //
-// Frame-index-folded and store-zero cases are handled manually in
-// selectStore (routed there before selectImpl).
+// Same AddrRegImm address folding as loads.  GPRz on the value operand lets
+// `store 0, addr` substitute R0 (handled by the generated selector via
+// GIZeroRegister on STW/STH/STB).
 
-def : Pat<(store (i32 GPRz:$val), GPR:$base),               (STW GPRz:$val, GPR:$base, 0)>;
-def : Pat<(store (PenumbraPtrVT GPRz:$val), GPR:$base),    (STW GPRz:$val, GPR:$base, 0)>;
-def : Pat<(truncstorei16 (i32 GPRz:$val), GPR:$base),  (STH GPRz:$val, GPR:$base, 0)>;
-def : Pat<(truncstorei8 (i32 GPRz:$val), GPR:$base),   (STB GPRz:$val, GPR:$base, 0)>;
+def : Pat<(store (i32 GPRz:$val), (AddrRegImm GPR:$base, memoffset16:$off)),
+          (STW GPRz:$val, GPR:$base, memoffset16:$off)>;
+def : Pat<(store (PenumbraPtrVT GPRz:$val), (AddrRegImm GPR:$base, memoffset16:$off)),
+          (STW GPRz:$val, GPR:$base, memoffset16:$off)>;
+def : Pat<(truncstorei16 (i32 GPRz:$val), (AddrRegImm GPR:$base, memoffset16:$off)),
+          (STH GPRz:$val, GPR:$base, memoffset16:$off)>;
+def : Pat<(truncstorei8 (i32 GPRz:$val), (AddrRegImm GPR:$base, memoffset16:$off)),
+          (STB GPRz:$val, GPR:$base, memoffset16:$off)>;
