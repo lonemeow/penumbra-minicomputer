@@ -62,10 +62,6 @@ private:
 
   bool selectConstant(MachineInstr &I, MachineBasicBlock &MBB,
                       MachineRegisterInfo &MRI) const;
-  bool selectLoad(MachineInstr &I, MachineBasicBlock &MBB,
-                  MachineRegisterInfo &MRI) const;
-  bool selectStore(MachineInstr &I, MachineBasicBlock &MBB,
-                   MachineRegisterInfo &MRI) const;
   bool selectFrameIndex(MachineInstr &I, MachineBasicBlock &MBB,
                         MachineRegisterInfo &MRI) const;
   bool selectBranch(MachineInstr &I, MachineBasicBlock &MBB) const;
@@ -171,23 +167,10 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
 
   using namespace TargetOpcode;
 
-  // Route loads/stores with frame-index base to manual selection BEFORE
-  // selectImpl — the manual path folds the FI into the memory instruction's
-  // base operand, avoiding a separate LEAfi materialization.
-  // Store-zero (R0 substitution) is handled automatically by the generated
-  // selector via GIZeroRegister on the GPRz store data operand.
-  if (I.getOpcode() == G_LOAD || I.getOpcode() == G_STORE) {
-    Register AddrReg = I.getOperand(1).getReg();
-    MachineInstr *AddrDef = MRI.getVRegDef(AddrReg);
-    if (AddrDef && AddrDef->getOpcode() == G_FRAME_INDEX) {
-      if (I.getOpcode() == G_LOAD)
-        return selectLoad(I, MBB, MRI);
-      else
-        return selectStore(I, MBB, MRI);
-    }
-  }
-
   // Try TableGen-generated patterns (ALU, shifts, constants, loads/stores).
+  // The AddrRegImm ComplexPattern handles all load/store addressing shapes
+  // including G_FRAME_INDEX and G_PTR_ADD+const, so there is no pre-selectImpl
+  // fast path for memory instructions.
   if (selectImpl(I, *CoverageInfo))
     return true;
 
@@ -213,9 +196,9 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
   case G_BLOCK_ADDR:   return selectBlockAddress(I, MBB, MRI);
 
   // ── Memory ────────────────────────────────────────────────────────────────
-  // G_LOAD/G_STORE: handled by pre-check (FI fold / store-zero) or selectImpl.
-  // Only G_LOAD/G_STORE that fall through here are bugs (selectImpl should
-  // have matched them).
+  // G_LOAD/G_STORE go through selectImpl (AddrRegImm ComplexPattern folds FI
+  // and constant offsets into the instruction's Rb/offset slots).  G_LOAD or
+  // G_STORE reaching this switch means selectImpl didn't match — a bug.
   case G_FRAME_INDEX: return selectFrameIndex(I, MBB, MRI);
   case G_JUMP_TABLE:  return selectJumpTable(I, MBB, MRI);
   case G_BRJT:        return selectBrJT(I, MBB, MRI);
@@ -360,91 +343,14 @@ bool PenumbraInstructionSelector::selectConstant(MachineInstr &I,
   return true;
 }
 
-// ── Memory helpers ────────────────────────────────────────────────────────────
+// ── G_FRAME_INDEX (address escape) ────────────────────────────────────────────
 //
-// G_LOAD / G_STORE select into LDW / STW.
-//
-// Frame-index folding: when the address register is defined by G_FRAME_INDEX,
-// we embed the FI directly into the LDW/STW Rb operand instead of materialising
-// it as a separate register.  eliminateFrameIndex then patches the FI → R14 and
-// fills in the real stack offset, matching the (GPR:$Rb, i32imm:$offset) layout
-// of our memory instructions:
-//
-//   LDW:  (outs GPR:$Rd), (ins GPR:$Rb, i32imm:$offset)
-//           operand 0 = dst   operand 1 = Rb (FI here)  operand 2 = offset
-//   STW:  (outs),           (ins GPR:$Rd, GPR:$Rb, i32imm:$offset)
-//           operand 0 = val   operand 1 = Rb (FI here)  operand 2 = offset
-
-bool PenumbraInstructionSelector::selectLoad(MachineInstr &I,
-                                              MachineBasicBlock &MBB,
-                                              MachineRegisterInfo &MRI) const {
-  Register DstReg  = I.getOperand(0).getReg();
-  Register AddrReg = I.getOperand(1).getReg();
-  const DebugLoc &DL = I.getDebugLoc();
-
-  LLT DstTy = MRI.getType(DstReg);
-  if (DstTy != LLT::scalar(32) && DstTy != LLT::pointer(0, 32))
-    return false; // only s32/p0 for now
-
-  // Select LDW/LDH/LDB based on memory operand size.
-  unsigned MemSize = I.memoperands().front()->getSize().getValue();
-  unsigned Opc;
-  switch (MemSize) {
-  case 4: Opc = Penumbra::LDW; break;
-  case 2: Opc = Penumbra::LDH; break;
-  case 1: Opc = Penumbra::LDB; break;
-  default: return false;
-  }
-
-  auto MIB = BuildMI(MBB, I, DL, TII.get(Opc)).addDef(DstReg);
-
-  MachineInstr *AddrDef = MRI.getVRegDef(AddrReg);
-  if (AddrDef && AddrDef->getOpcode() == TargetOpcode::G_FRAME_INDEX)
-    MIB.addFrameIndex(AddrDef->getOperand(1).getIndex());
-  else
-    MIB.addReg(AddrReg);
-  MIB.addImm(0);
-
-  I.eraseFromParent();
-  return constrainSelectedInstRegOperands(*MIB, TII, TRI, RBI);
-}
-
-bool PenumbraInstructionSelector::selectStore(MachineInstr &I,
-                                               MachineBasicBlock &MBB,
-                                               MachineRegisterInfo &MRI) const {
-  Register ValReg  = I.getOperand(0).getReg();
-  Register AddrReg = I.getOperand(1).getReg();
-  const DebugLoc &DL = I.getDebugLoc();
-
-  LLT ValTy = MRI.getType(ValReg);
-  if (ValTy != LLT::scalar(32) && ValTy != LLT::pointer(0, 32))
-    return false;
-
-  // Select STW/STH/STB based on memory operand size.
-  unsigned MemSize = I.memoperands().front()->getSize().getValue();
-  unsigned StOpc;
-  switch (MemSize) {
-  case 4: StOpc = Penumbra::STW; break;
-  case 2: StOpc = Penumbra::STH; break;
-  case 1: StOpc = Penumbra::STB; break;
-  default: return false;
-  }
-
-  // This manual path is only reached for frame-index-folded stores.
-  // Non-FI stores (including store-zero with R0 substitution via GIZeroRegister)
-  // are handled by selectImpl's TableGen patterns.
-  auto MIB = BuildMI(MBB, I, DL, TII.get(StOpc)).addReg(ValReg);
-
-  MachineInstr *AddrDef = MRI.getVRegDef(AddrReg);
-  if (AddrDef && AddrDef->getOpcode() == TargetOpcode::G_FRAME_INDEX)
-    MIB.addFrameIndex(AddrDef->getOperand(1).getIndex());
-  else
-    MIB.addReg(AddrReg);
-  MIB.addImm(0);
-
-  I.eraseFromParent();
-  return constrainSelectedInstRegOperands(*MIB, TII, TRI, RBI);
-}
+// When a frame index's address is actually used as a value (e.g. passed to
+// a function), we materialise SP + offset via the LEAfi pseudo.  Normal
+// load/store uses of a frame index are folded into the memory instruction's
+// Rb/offset slots by the AddrRegImm ComplexPattern, so G_FRAME_INDEX itself
+// has no users left by the time we reach it — the escape path below only
+// fires for the address-taken case.
 
 bool PenumbraInstructionSelector::selectFrameIndex(MachineInstr &I,
                                                     MachineBasicBlock &MBB,
