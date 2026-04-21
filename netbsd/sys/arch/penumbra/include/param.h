@@ -30,8 +30,18 @@
 
 /*
  * u-space (kernel stack + PCB for each LWP).
+ *
+ * 4 pages (16 KB) — sized for -O0 + DIAGNOSTIC builds, where upstream
+ * NetBSD init functions have large unoptimised stack frames
+ * (e.g. sysctl_net_inet_tcp_setup2 at ~7.7 KB, sysctl_kern_setup at
+ * ~5.9 KB).  Most other arches ship with 2 but compile at -O2 without
+ * DIAGNOSTIC; hppa/ia64/newer-powerpc use 4 for similar reasons.
+ *
+ * TODO: add a guard page (cpu_uarea_alloc + pmap_kremove the redzone,
+ * like x86's __HAVE_CPU_UAREA_ROUTINES path) so overflows trap
+ * precisely instead of manifesting as double-faults in _trap_common.
  */
-#define	UPAGES		3		/* pages of u-area */
+#define	UPAGES		4		/* pages of u-area */
 #define	USPACE		(UPAGES * NBPG)	/* total size of u-area */
 
 #ifndef MSGBUFSIZE

@@ -112,6 +112,40 @@ too, which is not what we want here.
 Tracked tests: `testcase-InstCombine-1.c`, `pr57344-3.c`,
 `pr57344-4.c` (excluded in `test/compiler/excludes.txt`).
 
+## Kernel: guard page for kernel stack overflow
+
+The kernel u-area (`UPAGES = 4`, 16 KB) has no guard page, so stack
+overflows corrupt whatever lives immediately below the u-area before
+eventually manifesting as a confusing nested TLB miss inside
+`_trap_common` (and a double-fault BREAK).  We already sized USPACE
+above the worst -O0+DIAGNOSTIC frames, but a silent corruption
+window still exists.
+
+NetBSD supports per-arch opt-in guard pages via the
+`__HAVE_CPU_UAREA_ROUTINES` hook.  See
+`netbsd/sys/arch/x86/x86/vm_machdep.c:cpu_uarea_alloc()`: it
+allocates `USPACE + PAGE_SIZE` from `kernel_map`, then
+`pmap_kremove()`s the redzone page and `uvm_pagefree()`s the backing
+PA so any touch bus-faults immediately.  `cpu_uarea_free()` is the
+inverse.  amd64 uses UPAGES=5 (4 real + 1 redzone); i386 with
+redzone enabled uses 3 (2 + 1); KASAN/KMSAN builds use more.
+
+Implementation sketch for Penumbra:
+1. Define `__HAVE_CPU_UAREA_ROUTINES` in `include/cpu.h`.
+2. Add `cpu_uarea_alloc(bool system)` / `cpu_uarea_free()` to
+   `penumbra/machdep.c`, mirroring the x86 pattern.  We need a
+   leading guard (fault on underflow from the top of stack growing
+   down) — allocate `USPACE + PAGE_SIZE`, strip the *first* page.
+3. Optionally add a trailing guard too — allocate `USPACE + 2*PAGE_SIZE`
+   and strip both.  amd64 does both.
+4. Adjust `penumbra_lwp0_init()` in `startup.c` to use the same
+   layout for lwp0's uarea so the boot stack is guarded from the
+   start, not only from first `fork()`.
+
+After this lands, kernel stack overflow produces a clean bus fault
+with EPC pointing at the offending instruction, not a nested TLB
+miss in the trap handler.
+
 ## Compiler: named byval args overlap on stack
 
 When a fixed (non-variadic) function receives byval struct args
