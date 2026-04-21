@@ -29,10 +29,19 @@ include "GISel/PenumbraRegisterBanks.td"
 //===----------------------------------------------------------------------===//
 
 // The original minicomputer: single-issue, microcoded, no branch prediction.
+//
+// LoadLatency = 1 (not the real ~4 cache-hit cycles) because our execution
+// is microcoded and single-issue — each multi-cycle op stalls the pipeline,
+// so the scheduler cannot actually fill load-delay slots with unrelated
+// work.  Telling the scheduler "load result is available next cycle" stops
+// it from reordering ALU ops ahead of loads/stores, which on its own does
+// nothing useful but does extend live ranges and inflate register pressure.
+// HighLatency = 8 still flags multi-cycle ops (MUL/DIV libcalls) for the
+// "expensive" heuristics used by the allocator.
 def Penumbra1Model : SchedMachineModel {
   let IssueWidth = 1;            // Single-issue, microcoded
   let MicroOpBufferSize = 0;     // In-order: no reorder buffer
-  let LoadLatency = 4;           // Cache hit: ~4 cycles (micro-ops + cache)
+  let LoadLatency = 1;           // Microcoded: no benefit from hiding load latency
   let HighLatency = 8;           // Threshold for "expensive" ops
   let MispredictPenalty = 0;     // No branch predictor
   let CompleteModel = 0;         // Don't require itineraries for every opcode
