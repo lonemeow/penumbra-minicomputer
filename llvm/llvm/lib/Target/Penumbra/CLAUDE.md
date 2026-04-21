@@ -446,10 +446,12 @@ Fixed locally — needed for NetBSD kernel option tracking symbols
   `needsRelocateWithSymbol()` returns true for GOT/TLS relocs
   to prevent section+offset folding (the addend must only
   contain the PC adjustment, not the symbol's section offset).
-  **TLS GD PIC:** Same 4-instruction pattern (no LDW — the GOT
-  tls_index pair ADDRESS is the argument to `__tls_get_addr`,
-  not its contents).  Still uses the legacy MOV-PC anchor shape
-  pending a follow-up commit.
+  **TLS GD PIC:** Same anchor-at-ADD shape but 3 instructions (no
+  LDW — the GOT tls_index pair ADDRESS is the argument to
+  `__tls_get_addr`, not its contents):
+  `LLI Rd, %tlsgd_got_pcrel_lo16(sym-8)` +
+  `LUI Rd, %tlsgd_got_pcrel_hi16(sym-4)` + `ADD Rd, PC`.
+  Plus the subsequent `BL __tls_get_addr` = 4 instructions total.
 - **Jump tables:** Always `EK_LabelDifference32` entries
   (`.word target - JT_base`), regardless of PIC/static mode.
   Placed inline in `.text` via `PenumbraTargetObjectFile`

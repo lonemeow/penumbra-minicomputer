@@ -701,41 +701,40 @@ bool PenumbraInstructionSelector::selectGlobalValue(MachineInstr &I,
   //        provides the TP-relative offset via TLS relocations).
   if (GV->isThreadLocal()) {
     if (TM.getRelocationModel() == Reloc::PIC_) {
-      // PIC TLS GD: compute GOT tls_index pair address via PC-relative
-      // GOT offset.  The 4-instruction pattern (MOV PC + LLI/LUI + ADD)
-      // plus the subsequent BL __tls_get_addr gives a 5-instruction
-      // sequence that lld can relax to inline LE for static linking.
+      // PIC TLS GD: compute the GOT tls_index pair address via PC-relative
+      // GOT offset using the same anchor-at-ADD shape as PIC globals:
+      //
+      //   LLI  OffReg, %tlsgd_got_pcrel_lo16(sym - 8)
+      //   LUI  OffReg, %tlsgd_got_pcrel_hi16(sym - 4)
+      //   ADD  DstReg, OffReg, PC               (DstReg = &GOT[tls_index])
+      //
+      // 3 instructions (down from 4); a single vreg threads through.
+      // The subsequent BL __tls_get_addr makes this 4 instructions total;
+      // lld can still relax the sequence to inline LE for static linking.
       DebugLoc DL = I.getDebugLoc();
       auto InsertPt = I.getIterator();
-      Register PCReg =
-          MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
       Register OffLoReg =
           MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
       Register OffReg =
           MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
 
-      auto MOVInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::MOV))
-          .addDef(PCReg)
-          .addReg(Penumbra::R15);
-      constrainSelectedInstRegOperands(*MOVInst, TII, TRI, RBI);
-
       auto LLIInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::LLI))
           .addDef(OffLoReg)
-          .add(MachineOperand::CreateGA(GV, Offset + 4,
+          .add(MachineOperand::CreateGA(GV, Offset - 8,
                                         Penumbra::S_TLSgd_GOT_PCRel_Lo16));
       constrainSelectedInstRegOperands(*LLIInst, TII, TRI, RBI);
 
       auto LUIInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::LUI))
           .addDef(OffReg)
           .addReg(OffLoReg)
-          .add(MachineOperand::CreateGA(GV, Offset + 8,
+          .add(MachineOperand::CreateGA(GV, Offset - 4,
                                         Penumbra::S_TLSgd_GOT_PCRel_Hi16));
       constrainSelectedInstRegOperands(*LUIInst, TII, TRI, RBI);
 
       auto ADDInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::ADD))
           .addDef(DstReg)
-          .addReg(PCReg)
-          .addReg(OffReg);
+          .addReg(OffReg)
+          .addReg(Penumbra::R15);
       constrainSelectedInstRegOperands(*ADDInst, TII, TRI, RBI);
     } else {
       // Non-PIC TLS: absolute address with TLS GD relocs.
