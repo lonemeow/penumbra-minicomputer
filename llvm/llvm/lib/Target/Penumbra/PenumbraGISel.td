@@ -32,6 +32,14 @@ def : Pat<(i32 (and GPR:$src1, GPR:$src2)), (AND GPR:$src1, GPR:$src2)>;
 def : Pat<(i32 (or  GPR:$src1, GPR:$src2)), (OR  GPR:$src1, GPR:$src2)>;
 def : Pat<(i32 (xor GPR:$src1, GPR:$src2)), (XOR GPR:$src1, GPR:$src2)>;
 
+// Pointer arithmetic: G_PTR_ADD on p0.  Uses the dedicated `ptradd` SDAG
+// node (which the GISel importer maps to G_PTR_ADD), not plain `add` which
+// is reserved for integer-only G_ADD.  Reg-imm variant folds a constant
+// offset into ADDi — critical for GEPs with constant indices (struct
+// field access, p[i] with constant i, p++ in tight loops).
+def : Pat<(ptradd GPR:$src, GPR:$off),    (ADD  GPR:$src, GPR:$off)>;
+def : Pat<(ptradd GPR:$src, uimm16:$imm), (ADDi GPR:$src, uimm16:$imm)>;
+
 //===----------------------------------------------------------------------===//
 // ALU register-immediate patterns
 //===----------------------------------------------------------------------===//

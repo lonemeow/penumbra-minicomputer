@@ -181,16 +181,10 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
 
   switch (I.getOpcode()) {
   // ── Pointer arithmetic ────────────────────────────────────────────────────
-  // These operate on p0 types, which the i32-only TableGen patterns don't match.
-  case G_PTR_ADD: {
-    MachineInstr *NewI =
-        BuildMI(MBB, I, I.getDebugLoc(), TII.get(Penumbra::ADD))
-            .addDef(I.getOperand(0).getReg())
-            .addReg(I.getOperand(1).getReg())
-            .addReg(I.getOperand(2).getReg());
-    I.eraseFromParent();
-    return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
-  }
+  // G_PTR_ADD is handled by TableGen patterns in PenumbraGISel.td (both
+  // reg-reg and reg-imm forms — see the `ptradd` patterns there).
+  // G_PTRMASK stays here because we don't yet have a p0 TableGen equivalent
+  // for SDAG-style (and p0, ...) matching.
   case G_PTRMASK: {
     MachineInstr *NewI =
         BuildMI(MBB, I, I.getDebugLoc(), TII.get(Penumbra::AND))

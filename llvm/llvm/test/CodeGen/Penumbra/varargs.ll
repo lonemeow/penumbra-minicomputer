@@ -22,8 +22,7 @@ define i32 @first_vararg(i32 %named, ...) {
 ; CHECK-NEXT:    stw r1, [r14 + 0]
 ; CHECK-NEXT:    ldw r2, [r14 + 0]
 ; CHECK-NEXT:    ldw r1, [r2 + 0]
-; CHECK-NEXT:    lli r3, 4
-; CHECK-NEXT:    add r2, r3
+; CHECK-NEXT:    add r2, 4
 ; CHECK-NEXT:    stw r2, [r14 + 0]
 ; CHECK-NEXT:    add r14, 20
 ; CHECK-NEXT:    jmp r13
@@ -49,8 +48,7 @@ define i32 @multi_named(i32 %a, i32 %b, i32 %c, ...) {
 ; CHECK-NEXT:    stw r1, [r14 + 0]
 ; CHECK-NEXT:    ldw r2, [r14 + 0]
 ; CHECK-NEXT:    ldw r1, [r2 + 0]
-; CHECK-NEXT:    lli r3, 4
-; CHECK-NEXT:    add r2, r3
+; CHECK-NEXT:    add r2, 4
 ; CHECK-NEXT:    stw r2, [r14 + 0]
 ; CHECK-NEXT:    add r14, 20
 ; CHECK-NEXT:    jmp r13
@@ -79,8 +77,7 @@ define i32 @many_named(i32 %a, i32 %b, i32 %c, i32 %d, i32 %e, i32 %f, ...) {
 ; CHECK-NEXT:    stw r1, [r14 + 0]
 ; CHECK-NEXT:    ldw r2, [r14 + 0]
 ; CHECK-NEXT:    ldw r1, [r2 + 0]
-; CHECK-NEXT:    lli r3, 4
-; CHECK-NEXT:    add r2, r3
+; CHECK-NEXT:    add r2, 4
 ; CHECK-NEXT:    stw r2, [r14 + 0]
 ; CHECK-NEXT:    add r14, 20
 ; CHECK-NEXT:    jmp r13
@@ -109,12 +106,10 @@ define i64 @vaarg_i64(i32 %named, ...) {
 ; CHECK-NEXT:    stw r1, [r14 + 0]
 ; CHECK-NEXT:    ldw r3, [r14 + 0]
 ; CHECK-NEXT:    ldw r1, [r3 + 0]
-; CHECK-NEXT:    lli r2, 4
-; CHECK-NEXT:    mov r4, r3
-; CHECK-NEXT:    add r4, r2
-; CHECK-NEXT:    ldw r2, [r4 + 0]
-; CHECK-NEXT:    lli r4, 8
-; CHECK-NEXT:    add r3, r4
+; CHECK-NEXT:    mov r2, r3
+; CHECK-NEXT:    add r2, 4
+; CHECK-NEXT:    ldw r2, [r2 + 0]
+; CHECK-NEXT:    add r3, 8
 ; CHECK-NEXT:    stw r3, [r14 + 0]
 ; CHECK-NEXT:    add r14, 20
 ; CHECK-NEXT:    jmp r13
@@ -145,8 +140,7 @@ define i32 @wide_named_all_regs(i64 %a, i64 %b, ...) {
 ; CHECK-NEXT:    stw r1, [r14 + 0]
 ; CHECK-NEXT:    ldw r2, [r14 + 0]
 ; CHECK-NEXT:    ldw r1, [r2 + 0]
-; CHECK-NEXT:    lli r3, 4
-; CHECK-NEXT:    add r2, r3
+; CHECK-NEXT:    add r2, 4
 ; CHECK-NEXT:    stw r2, [r14 + 0]
 ; CHECK-NEXT:    add r14, 20
 ; CHECK-NEXT:    jmp r13
@@ -176,8 +170,7 @@ define i32 @many_named_i64(i32 %a, i32 %b, i32 %c, i32 %d, i64 %e, i32 %f, ...) 
 ; CHECK-NEXT:    stw r1, [r14 + 0]
 ; CHECK-NEXT:    ldw r2, [r14 + 0]
 ; CHECK-NEXT:    ldw r1, [r2 + 0]
-; CHECK-NEXT:    lli r3, 4
-; CHECK-NEXT:    add r2, r3
+; CHECK-NEXT:    add r2, 4
 ; CHECK-NEXT:    stw r2, [r14 + 0]
 ; CHECK-NEXT:    add r14, 20
 ; CHECK-NEXT:    jmp r13

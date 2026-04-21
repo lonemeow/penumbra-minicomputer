@@ -56,18 +56,15 @@ define i32 @load_i32_align1(ptr %p) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    ldb r2, [r1 + 0]
-; CHECK-NEXT:    lli r3, 1
-; CHECK-NEXT:    mov r4, r1
-; CHECK-NEXT:    add r4, r3
-; CHECK-NEXT:    ldb r3, [r4 + 0]
+; CHECK-NEXT:    mov r3, r1
+; CHECK-NEXT:    add r3, 1
+; CHECK-NEXT:    ldb r3, [r3 + 0]
 ; CHECK-NEXT:    shl r3, 8
 ; CHECK-NEXT:    or r3, r2
-; CHECK-NEXT:    lli r2, 2
-; CHECK-NEXT:    mov r4, r1
-; CHECK-NEXT:    add r4, r2
-; CHECK-NEXT:    ldb r2, [r4 + 0]
-; CHECK-NEXT:    lli r4, 3
-; CHECK-NEXT:    add r1, r4
+; CHECK-NEXT:    mov r2, r1
+; CHECK-NEXT:    add r2, 2
+; CHECK-NEXT:    ldb r2, [r2 + 0]
+; CHECK-NEXT:    add r1, 3
 ; CHECK-NEXT:    ldb r1, [r1 + 0]
 ; CHECK-NEXT:    shl r1, 8
 ; CHECK-NEXT:    or r1, r2
@@ -83,8 +80,7 @@ define i16 @load_i16_align1(ptr %p) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    ldb r2, [r1 + 0]
-; CHECK-NEXT:    lli r3, 1
-; CHECK-NEXT:    add r1, r3
+; CHECK-NEXT:    add r1, 1
 ; CHECK-NEXT:    ldb r1, [r1 + 0]
 ; CHECK-NEXT:    shl r1, 8
 ; CHECK-NEXT:    or r1, r2
@@ -99,31 +95,26 @@ define void @store_i32_align1(ptr %p, i32 %v) {
 ; CHECK-LABEL: store_i32_align1:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 8
-; CHECK-NEXT:    stw r5, [r14 + 4] // 4-byte Folded Spill
+; CHECK-NEXT:    sub r14, 4
 ; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r3, r2
 ; CHECK-NEXT:    shr r3, 16
-; CHECK-NEXT:    lli r4, 2
-; CHECK-NEXT:    mov r11, r1
-; CHECK-NEXT:    add r11, r4
-; CHECK-NEXT:    mov r4, r2
-; CHECK-NEXT:    and r4, 65535
-; CHECK-NEXT:    shr r4, 8
-; CHECK-NEXT:    lli r5, 1
+; CHECK-NEXT:    mov r4, r1
+; CHECK-NEXT:    add r4, 2
+; CHECK-NEXT:    mov r11, r2
+; CHECK-NEXT:    and r11, 65535
+; CHECK-NEXT:    shr r11, 8
 ; CHECK-NEXT:    mov r13, r1
-; CHECK-NEXT:    add r13, r5
+; CHECK-NEXT:    add r13, 1
 ; CHECK-NEXT:    stb r2, [r1 + 0]
-; CHECK-NEXT:    stb r4, [r13 + 0]
+; CHECK-NEXT:    stb r11, [r13 + 0]
 ; CHECK-NEXT:    mov r2, r3
 ; CHECK-NEXT:    shr r2, 8
-; CHECK-NEXT:    lli r4, 3
-; CHECK-NEXT:    add r1, r4
-; CHECK-NEXT:    stb r3, [r11 + 0]
+; CHECK-NEXT:    add r1, 3
+; CHECK-NEXT:    stb r3, [r4 + 0]
 ; CHECK-NEXT:    stb r2, [r1 + 0]
 ; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r5, [r14 + 4] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 8
+; CHECK-NEXT:    add r14, 4
 ; CHECK-NEXT:    jmp r13
   store i32 %v, ptr %p, align 1
   ret void
@@ -136,11 +127,10 @@ define void @store_i16_align1(ptr %p, i16 %v) {
 ; CHECK-NEXT:    mov r3, r2
 ; CHECK-NEXT:    and r3, 65535
 ; CHECK-NEXT:    shr r3, 8
-; CHECK-NEXT:    lli r4, 1
-; CHECK-NEXT:    mov r11, r1
-; CHECK-NEXT:    add r11, r4
+; CHECK-NEXT:    mov r4, r1
+; CHECK-NEXT:    add r4, 1
 ; CHECK-NEXT:    stb r2, [r1 + 0]
-; CHECK-NEXT:    stb r3, [r11 + 0]
+; CHECK-NEXT:    stb r3, [r4 + 0]
 ; CHECK-NEXT:    jmp r13
   store i16 %v, ptr %p, align 1
   ret void
@@ -153,8 +143,7 @@ define i32 @zextload_i16_align1(ptr %p) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    ldb r2, [r1 + 0]
-; CHECK-NEXT:    lli r3, 1
-; CHECK-NEXT:    add r1, r3
+; CHECK-NEXT:    add r1, 1
 ; CHECK-NEXT:    ldb r1, [r1 + 0]
 ; CHECK-NEXT:    shl r1, 8
 ; CHECK-NEXT:    or r1, r2
@@ -170,8 +159,7 @@ define i32 @sextload_i16_align1(ptr %p) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    ldb r2, [r1 + 0]
-; CHECK-NEXT:    lli r3, 1
-; CHECK-NEXT:    add r1, r3
+; CHECK-NEXT:    add r1, 1
 ; CHECK-NEXT:    ldb r1, [r1 + 0]
 ; CHECK-NEXT:    shl r1, 8
 ; CHECK-NEXT:    or r1, r2
@@ -193,8 +181,7 @@ define i64 @load_i64_align4(ptr %p) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    ldw r3, [r1 + 0]
-; CHECK-NEXT:    lli r2, 4
-; CHECK-NEXT:    add r1, r2
+; CHECK-NEXT:    add r1, 4
 ; CHECK-NEXT:    ldw r2, [r1 + 0]
 ; CHECK-NEXT:    mov r1, r3
 ; CHECK-NEXT:    jmp r13
@@ -207,8 +194,7 @@ define void @store_i64_align4(ptr %p, i64 %v) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    stw r2, [r1 + 0]
-; CHECK-NEXT:    lli r2, 4
-; CHECK-NEXT:    add r1, r2
+; CHECK-NEXT:    add r1, 4
 ; CHECK-NEXT:    stw r3, [r1 + 0]
 ; CHECK-NEXT:    jmp r13
   store i64 %v, ptr %p, align 4
@@ -222,40 +208,33 @@ define i64 @load_i64_align1(ptr %p) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    ldb r2, [r1 + 0]
-; CHECK-NEXT:    lli r3, 1
-; CHECK-NEXT:    mov r4, r1
-; CHECK-NEXT:    add r4, r3
-; CHECK-NEXT:    ldb r4, [r4 + 0]
+; CHECK-NEXT:    mov r3, r1
+; CHECK-NEXT:    add r3, 1
+; CHECK-NEXT:    ldb r4, [r3 + 0]
 ; CHECK-NEXT:    shl r4, 8
 ; CHECK-NEXT:    or r4, r2
-; CHECK-NEXT:    lli r2, 2
+; CHECK-NEXT:    mov r2, r1
+; CHECK-NEXT:    add r2, 2
+; CHECK-NEXT:    ldb r2, [r2 + 0]
 ; CHECK-NEXT:    mov r3, r1
-; CHECK-NEXT:    add r3, r2
-; CHECK-NEXT:    ldb r2, [r3 + 0]
-; CHECK-NEXT:    lli r3, 3
-; CHECK-NEXT:    mov r11, r1
-; CHECK-NEXT:    add r11, r3
-; CHECK-NEXT:    ldb r3, [r11 + 0]
+; CHECK-NEXT:    add r3, 3
+; CHECK-NEXT:    ldb r3, [r3 + 0]
 ; CHECK-NEXT:    shl r3, 8
 ; CHECK-NEXT:    or r3, r2
 ; CHECK-NEXT:    shl r3, 16
 ; CHECK-NEXT:    or r3, r4
-; CHECK-NEXT:    lli r2, 4
+; CHECK-NEXT:    mov r2, r1
+; CHECK-NEXT:    add r2, 4
+; CHECK-NEXT:    ldb r2, [r2 + 0]
 ; CHECK-NEXT:    mov r4, r1
-; CHECK-NEXT:    add r4, r2
-; CHECK-NEXT:    ldb r2, [r4 + 0]
-; CHECK-NEXT:    lli r4, 5
-; CHECK-NEXT:    mov r11, r1
-; CHECK-NEXT:    add r11, r4
-; CHECK-NEXT:    ldb r4, [r11 + 0]
+; CHECK-NEXT:    add r4, 5
+; CHECK-NEXT:    ldb r4, [r4 + 0]
 ; CHECK-NEXT:    shl r4, 8
 ; CHECK-NEXT:    or r4, r2
-; CHECK-NEXT:    lli r2, 6
-; CHECK-NEXT:    mov r11, r1
-; CHECK-NEXT:    add r11, r2
-; CHECK-NEXT:    ldb r11, [r11 + 0]
-; CHECK-NEXT:    lli r2, 7
-; CHECK-NEXT:    add r1, r2
+; CHECK-NEXT:    mov r2, r1
+; CHECK-NEXT:    add r2, 6
+; CHECK-NEXT:    ldb r11, [r2 + 0]
+; CHECK-NEXT:    add r1, 7
 ; CHECK-NEXT:    ldb r2, [r1 + 0]
 ; CHECK-NEXT:    shl r2, 8
 ; CHECK-NEXT:    or r2, r11

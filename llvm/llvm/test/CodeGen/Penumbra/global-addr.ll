@@ -49,8 +49,7 @@ define i32 @load_global_offset() {
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    lli r1, %lo16(array)
 ; CHECK-NEXT:    lui r1, %hi16(array)
-; CHECK-NEXT:    lli r2, 8
-; CHECK-NEXT:    add r1, r2
+; CHECK-NEXT:    add r1, 8
 ; CHECK-NEXT:    ldw r1, [r1 + 0]
 ; CHECK-NEXT:    jmp r13
   %p = getelementptr [4 x i32], ptr @array, i32 0, i32 2
