@@ -25,6 +25,19 @@ include "llvm/Target/GlobalISel/Combine.td"
 def PenumbraPreLegalizerCombiner
     : GICombiner<"PenumbraPreLegalizerCombinerImpl", [copy_prop]>;
 
+// Target-specific: rewrite G_ADD/G_SUB by a negative constant whose negation
+// fits uimm16 to the opposite opcode with the positive constant, e.g.
+// `G_ADD x, -1 → G_SUB x, 1`.  Our ADDi/SUBi take uimm16 (0–65535) and do
+// not sign-extend, so `n--` without this rule falls back to materializing
+// -1 via LLIS + reg-reg ADD.  After the rewrite, our existing
+// (sub GPR, uimm16) → SUBi pattern fires.
+def penumbra_neg_imm_to_opposite_matchdata : GIDefMatchData<"int64_t">;
+def penumbra_neg_imm_to_opposite : GICombineRule<
+  (defs root:$root, penumbra_neg_imm_to_opposite_matchdata:$matchinfo),
+  (match (wip_match_opcode G_ADD, G_SUB):$root,
+         [{ return matchNegImmToOpposite(*${root}, MRI, ${matchinfo}); }]),
+  (apply [{ applyNegImmToOpposite(*${root}, MRI, B, ${matchinfo}); }])>;
+
 // Post-legalizer: optimizations on legalized MIR.  Must preserve instruction
 // legality.
 //
@@ -35,9 +48,12 @@ def PenumbraPreLegalizerCombiner
 //     that will fold constant offsets into LDW/STW.
 //   combines_for_extload    — folds G_ZEXT/G_SEXT of a narrower load into a
 //     single extload, matched by the LDH/LDHS/LDB/LDBS patterns.
+//   penumbra_neg_imm_to_opposite — see above; flips ADD↔SUB when the
+//     constant is negative but -c fits uimm16.
 def PenumbraPostLegalizerCombiner
     : GICombiner<"PenumbraPostLegalizerCombinerImpl", [
       commute_constant_to_rhs,
       ptr_add_immed_chain,
-      combines_for_extload
+      combines_for_extload,
+      penumbra_neg_imm_to_opposite
     ]>;

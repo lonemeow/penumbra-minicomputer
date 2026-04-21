@@ -18,6 +18,7 @@
 #include "llvm/CodeGen/GlobalISel/GIMatchTableExecutorImpl.h"
 #include "llvm/CodeGen/GlobalISel/GISelValueTracking.h"
 #include "llvm/CodeGen/GlobalISel/MachineIRBuilder.h"
+#include "llvm/CodeGen/GlobalISel/Utils.h"
 #include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
@@ -39,6 +40,41 @@ namespace {
 #define GET_GICOMBINER_TYPES
 #include "PenumbraGenPostLegalizeGICombiner.inc"
 #undef GET_GICOMBINER_TYPES
+
+// Match G_ADD / G_SUB whose RHS is a negative G_CONSTANT fitting
+// [-65535, -1].  On success, MatchInfo holds the positive magnitude that
+// the opposite opcode should use.
+bool matchNegImmToOpposite(MachineInstr &MI, MachineRegisterInfo &MRI,
+                           int64_t &MatchInfo) {
+  unsigned Opc = MI.getOpcode();
+  if (Opc != TargetOpcode::G_ADD && Opc != TargetOpcode::G_SUB)
+    return false;
+
+  auto Cst = getIConstantVRegSExtVal(MI.getOperand(2).getReg(), MRI);
+  if (!Cst || *Cst >= 0)
+    return false;
+  int64_t Neg = -*Cst;
+  if (!isUInt<16>(Neg))
+    return false;
+
+  MatchInfo = Neg;
+  return true;
+}
+
+// Rewrite G_ADD→G_SUB / G_SUB→G_ADD with the negated constant.
+void applyNegImmToOpposite(MachineInstr &MI, MachineRegisterInfo &MRI,
+                           MachineIRBuilder &B, int64_t &MatchInfo) {
+  B.setInstrAndDebugLoc(MI);
+  unsigned NewOpc = MI.getOpcode() == TargetOpcode::G_ADD
+                        ? TargetOpcode::G_SUB
+                        : TargetOpcode::G_ADD;
+  Register Dst = MI.getOperand(0).getReg();
+  Register Src = MI.getOperand(1).getReg();
+  LLT Ty = MRI.getType(Dst);
+  auto NewCst = B.buildConstant(Ty, MatchInfo);
+  B.buildInstr(NewOpc, {Dst}, {Src, NewCst.getReg(0)});
+  MI.eraseFromParent();
+}
 
 class PenumbraPostLegalizerCombinerImpl : public Combiner {
 protected:
