@@ -150,13 +150,9 @@ define void @vector_shl(ptr %dst, ptr %a, ptr %b) {
 ; CHECK-NEXT:    lli r9, 6
 ; CHECK-NEXT:    add r3, r9
 ; CHECK-NEXT:    ldh r3, [r3 + 0]
-; CHECK-NEXT:    and r6, 65535
 ; CHECK-NEXT:    shl r5, r6
-; CHECK-NEXT:    and r7, 65535
 ; CHECK-NEXT:    shl r11, r7
-; CHECK-NEXT:    and r8, 65535
 ; CHECK-NEXT:    shl r4, r8
-; CHECK-NEXT:    and r3, 65535
 ; CHECK-NEXT:    shl r2, r3
 ; CHECK-NEXT:    sth r5, [r1 + 0]
 ; CHECK-NEXT:    lli r3, 2

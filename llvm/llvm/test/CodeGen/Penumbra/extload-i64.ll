@@ -13,7 +13,6 @@ define i64 @zextload_i8_to_i64(ptr %p) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    ldb r1, [r1 + 0]
-; CHECK-NEXT:    and r1, 255
 ; CHECK-NEXT:    and r2, 0
 ; CHECK-NEXT:    jmp r13
   %v = load i8, ptr %p
@@ -26,7 +25,6 @@ define i64 @zextload_i16_to_i64(ptr %p) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    ldh r1, [r1 + 0]
-; CHECK-NEXT:    and r1, 65535
 ; CHECK-NEXT:    and r2, 0
 ; CHECK-NEXT:    jmp r13
   %v = load i16, ptr %p
