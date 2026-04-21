@@ -111,29 +111,11 @@ The architecture is fully specified in `doc/`. Key specs:
   if you suspect stale binaries (WSL2 stale mtimes)
 
 ### FPGA Toolchain (OSS CAD Suite)
-FPGA synthesis and place-and-route use the OSS CAD Suite
-(Yosys, nextpnr-ecp5, ecppack, fujprog) via Docker.
-Setup in `hw/tools/oss-cad-suite/`.
-- **Wrapper scripts:** `hw/tools/oss-cad-suite/bin/` contains
-  symlinks (`yosys`, `nextpnr-ecp5`, `ecppack`, `fujprog`)
-  that all point to `docker-wrapper.sh`.
-  The wrapper uses `basename "$0"` (multi-call pattern)
-  to run the correct tool inside the container, mounting
-  the caller's CWD as `/work`.
-- **Add to PATH:** `export PATH="$PWD/hw/tools/oss-cad-suite/bin:$PATH"`
-  then use `yosys`, `nextpnr-ecp5`, etc. as normal commands.
-- **Interactive shell:** `docker compose -f hw/tools/oss-cad-suite/docker-compose.yml run --rm fpga-dev bash`
-- **USB flashing:** `fujprog` needs USB device access;
-  the container runs with `--privileged` and `/dev/bus/usb` mapped.
-- **Adding tools:** `ln -s ../docker-wrapper.sh hw/tools/oss-cad-suite/bin/<toolname>`
-- **sv2v:** SystemVerilog→Verilog-2005 converter (v0.0.13, pinned).
-  Required because Yosys's `read_verilog -sv` doesn't support
-  module-level `import` used throughout the codebase.
-- **Yosys $readmemh bug:** sv2v generates zero-fill for loops before
-  `$readmemh` in initial blocks. Yosys incorrectly prioritizes the
-  for-loop `$meminit` over the `$readmemh`, producing empty ROMs.
-  Fix: `hw/tools/inline_hex.py` strips these zero-fill loops from
-  the sv2v output.  The Makefile runs this automatically.
+FPGA synthesis uses Yosys, nextpnr-ecp5, ecppack, and fujprog via
+Docker.  Wrapper scripts in `hw/tools/oss-cad-suite/bin/` make them
+usable as normal commands:
+`export PATH="$PWD/hw/tools/oss-cad-suite/bin:$PATH"`.
+
 - **FPGA build flow:**
   `make fpga TOP=ulx3s_top` — full build (sv2v → fix → yosys → nextpnr → ecppack)
   `make flash TOP=ulx3s_top` — build + flash to ULX3S via USB
@@ -146,6 +128,10 @@ Setup in `hw/tools/oss-cad-suite/`.
   Boot ROM `boot sd:0,0` loads `PENBOOT.ELF` from FAT32 partition.
   SDRAM controller: CL=2, BL=2, auto-precharge, universal-safe timings
   for all ULX3S SDRAM variants (see `doc/internals/sdram-optimization.md`).
+
+See `hw/CLAUDE.md` for toolchain mechanics (wrapper multi-call
+pattern, sv2v + `$readmemh` workaround, interactive shell,
+USB passthrough, adding new tools).
 
 ### SD Card Image
 Build SD images for `make simulate SDCARD=build/boot.img`:
@@ -167,22 +153,11 @@ arguments) and `/dev/ld0*` nodes via `MAKEDEV -s std ld0`.
 Requires NetBSD cross-tools (`nbfdisk`, `nbmakefs`).
 
 ### LLVM Toolchain Build
-Build dir: `build/llvm/`. Initial cmake (one-time):
-```sh
-cmake -G Ninja -S llvm/llvm -B build/llvm \
-  -DLLVM_TARGETS_TO_BUILD=Penumbra \
-  -DLLVM_ENABLE_PROJECTS="clang;lld" \
-  -DLLVM_USE_SPLIT_DWARF=ON \
-  -DLLVM_INCLUDE_TESTS=ON -DLLVM_BUILD_TESTS=ON \
-  -DLLVM_PARALLEL_LINK_JOBS=2
-```
-Incremental rebuild — **target only what's needed** to avoid
-building all unit tests:
-```sh
-ninja -C build/llvm -j10 llc clang lld \
-  llvm-mc llvm-ar llvm-nm llvm-objcopy llvm-objdump \
-  llvm-readobj llvm-size llvm-strings
-```
+Build dir: `build/llvm/` (override with `LLVM_PREFIX`).
+Initial cmake and incremental `ninja` invocations are documented in
+`llvm/llvm/lib/Target/Penumbra/CLAUDE.md`.  Always target only what
+the project needs (`llc clang lld llvm-mc llvm-ar …`) — a bare
+`ninja -C build/llvm` also builds all upstream unit tests.
 
 ### LLVM Backend Tests
 Regression tests: `llvm/llvm/test/CodeGen/Penumbra/` (Lit + FileCheck).
@@ -190,12 +165,8 @@ Regression tests: `llvm/llvm/test/CodeGen/Penumbra/` (Lit + FileCheck).
 build/llvm/bin/llvm-lit llvm/llvm/test/CodeGen/Penumbra/       # all
 build/llvm/bin/llvm-lit -v llvm/llvm/test/CodeGen/Penumbra/alu.ll  # one
 ```
-Regenerate CHECK lines after codegen changes:
-```sh
-python3 llvm/llvm/utils/update_llc_test_checks.py \
-  --llc-binary build/llvm/bin/llc \
-  llvm/llvm/test/CodeGen/Penumbra/<test>.ll
-```
+Regenerate CHECK lines with `update_llc_test_checks.py` after codegen
+changes (see llvm subtree CLAUDE.md for the full command).
 
 ### Compiler Correctness Tests
 Comprehensive C tests from `llvm-test-suite` (including GCC torture)
@@ -204,30 +175,7 @@ state: 1606/1606 passing at both `-O0` and `-O2`; excluded tests
 (harness-limitation or upstream-known-bad) and deferred backend
 gaps are tracked in `test/compiler/excludes.txt` and `doc/TODO.md`.
 
-Build `compiler-rt` builtins (one-time):
-```sh
-mkdir -p build/compiler-rt-builtins
-cmake -G Ninja -S llvm/compiler-rt/lib/builtins -B build/compiler-rt-builtins \
-  -DCMAKE_C_COMPILER=$PWD/build/llvm/bin/clang \
-  -DCMAKE_CXX_COMPILER=$PWD/build/llvm/bin/clang++ \
-  -DCMAKE_AR=$PWD/build/llvm/bin/llvm-ar \
-  -DCMAKE_NM=$PWD/build/llvm/bin/llvm-nm \
-  -DCMAKE_RANLIB=$PWD/build/llvm/bin/llvm-ranlib \
-  -DCMAKE_C_COMPILER_TARGET=penumbra-unknown-none \
-  -DCMAKE_CXX_COMPILER_TARGET=penumbra-unknown-none \
-  -DCMAKE_ASM_COMPILER_TARGET=penumbra-unknown-none \
-  -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
-  -DCMAKE_C_FLAGS="-ffreestanding -nostdinc -isystem $PWD/build/llvm/lib/clang/22/include" \
-  -DCMAKE_ASM_FLAGS="-ffreestanding -nostdinc -isystem $PWD/build/llvm/lib/clang/22/include" \
-  -DCOMPILER_RT_BAREMETAL_BUILD=ON -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON \
-  -DCOMPILER_RT_INCLUDE_TESTS=OFF -DCOMPILER_RT_USE_LIBCXX=OFF \
-  -DCOMPILER_RT_BUILD_CRT=OFF -DCOMPILER_RT_BUILD_SANITIZERS=OFF \
-  -DCOMPILER_RT_BUILD_XRAY=OFF -DCOMPILER_RT_BUILD_LIBFUZZER=OFF \
-  -DCOMPILER_RT_BUILD_PROFILE=OFF -DCOMPILER_RT_BUILD_MEMPROF=OFF \
-  -DCOMPILER_RT_BUILD_ORC=OFF -DCOMPILER_RT_BUILD_GWP_ASAN=OFF \
-  -DCOMPILER_RT_BUILD_CTX_PROFILE=OFF
-ninja -C build/compiler-rt-builtins
-```
+Build `compiler-rt` builtins (one-time): `sw/tools/setup-compiler-rt.sh`.
 
 Run tests:
 ```sh
@@ -238,28 +186,15 @@ make test-compiler COMPILER_TESTS="path/to/test.c"  # single test
 Full report in `build/test-compiler-report.txt`.
 
 ### NetBSD Kernel Build
-Prerequisites: NetBSD tools built via `build.sh` (one-time, see
-`netbsd/sys/arch/penumbra/CLAUDE.md`).
+Prerequisites: NetBSD tools built via `build.sh` (one-time).
 Build output: `build/netbsd-kernel/MINIMAL/` (out of source tree).
-All commands from project root:
-```sh
-# 1. Generate kernel Makefile (re-run after conf/ changes)
-build/netbsd-tools/bin/nbconfig \
-  -b $PWD/build/netbsd-kernel/MINIMAL \
-  -s $PWD/netbsd/sys \
-  $PWD/netbsd/sys/arch/penumbra/conf/MINIMAL
-
-# 2. Dependencies + build
-build/netbsd-tools/bin/nbmake-penumbra -C build/netbsd-kernel/MINIMAL depend
-build/netbsd-tools/bin/nbmake-penumbra -C build/netbsd-kernel/MINIMAL -j10
-```
+Full command sequence (`nbconfig`, `nbmake-penumbra depend`,
+`nbmake-penumbra`) in `netbsd/sys/arch/penumbra/CLAUDE.md`.
 
 ### Boot ROM Build Pipeline (`make simulate`)
 The boot ROM has its own Makefile (`hw/rom/Makefile`) with automatic
-source discovery (all `*.c` files), pattern rules, and header
-dependency tracking via `-MMD -MP`.
-The main Makefile delegates with `$(MAKE) -C hw/rom`.
-Can also be built standalone: `make -C hw/rom`.
+source discovery and header dependency tracking.  The main Makefile
+delegates with `$(MAKE) -C hw/rom`; can also be built standalone.
 ```
 hw/rom/*.c    →  clang -c  →  *.o  ─┐
 hw/rom/crt0.s →  llvm-mc   →  crt0.o ├→ ld.lld (rom.ld) → boot_rom.elf → objcopy → bin2hex → program.hex
@@ -303,53 +238,23 @@ BREAK, SYSCALL, privilege, illegal) are fully wired with
 MIPS/68k-style vector dispatch.
 
 **Bus autoconfig and SD card boot path working end-to-end.**
-- Bus controller sysreg (`busctl.sv`, device 4),
-  autoconfig wrapper (`autoconfig_dev.sv`),
-  and SPI controller (`sim_spi.sv`) are implemented.
-- Boot ROM runs autoconfig: resets bus, enables config chain,
-  probes devices via bus-fault detection,
-  allocates base addresses, and configures devices.
-  Protocol requires software to toggle CFG_EN between devices
-  (see `doc/system/bus.md`).
-- SPI controller is the first autoconfigured device;
-  reports as `CLASS_SD`, assigned `0xFF001000`.
-- **SPI v2 with hardware FIFO** (`spi.sv`, `sim_spi.sv`):
-  7-register interface (CAP, STATUS, CONTROL, DATA, XFER_COUNT,
-  IRQ_STATUS, IRQ_ENABLE).  16550-style FIFO enable bit — DATA
-  works in single-byte polled mode (ROM) or FIFO burst mode
-  (kernel).  Autonomous transfer engine with stall-on-empty/full
-  (no data loss or corruption).  FAST/SLOW clock select
-  (no CLKDIV register).  Parameterized FIFO depth (512 FPGA,
-  16–32 discrete).  IRQ: latched XFER_DONE (W1C) + live
-  watermarks (RX/TX threshold).  See `doc/system/devices/spi.md`
-  and `doc/hardware/spi-hardware.md`.
-- Testbench SD card emulator (`sd_card_sim.h`) speaks SD-SPI protocol
-  backed by a disk image file (`+sdcard=`).
-- Boot ROM builds a tagged list of boot data at 0x0040
-  (after trap vectors): RAM regions,
-  device list (UART injected + autoconfig), console, boot device.
-- SD cards detected at boot and accessed via monitor commands.
-  MBR partition table parsing implemented:
-  `part sd:<dev>,<cs>` displays partitions,
-  `load sd:<dev>,<cs>[:<part>] <addr> <lba> <count>` reads sectors
-  (raw absolute LBA without `:<part>`,
-  or partition-relative LBA with it).
+- Boot ROM runs bus autoconfig: resets the bus, enables the config
+  chain, probes devices via bus-fault detection, and allocates base
+  addresses.  See `doc/system/bus.md` for the protocol.
+- First autoconfigured device is the SPI controller (`CLASS_SD`,
+  assigned `0xFF001000`).  SPI v2 has a 7-register interface with
+  a 16550-style FIFO enable bit — polled single-byte for ROM,
+  FIFO burst for kernel.  See `doc/system/devices/spi.md`.
 - **ROM FAT32 boot:** `boot sd:<dev>,<cs>[/file]` mounts the first
-  FAT32 partition, loads the named file (default `PENBOOT.ELF`)
-  as a PIE ELF from the root directory.
-  The ROM parses ELF headers, allocates RAM for
-  scratch and load destination via `find_memory_region()`
-  (walks boot data MEMORY devices, avoids reserved areas),
-  copies PT_LOAD segments, and jumps to the entry point
-  with R1=bootdata. No hardcoded load address.
-  FAT32 reader (`fat32.c`) uses a block-read callback for
-  device independence.
+  FAT32 partition and loads the named file (default `PENBOOT.ELF`)
+  as a PIE ELF.  The ROM parses ELF headers, allocates RAM via
+  `find_memory_region()`, copies PT_LOAD segments, and jumps to
+  the entry point with R1=bootdata.  No hardcoded load address.
   Tested end-to-end with `nbmakefs`-generated images.
-- SD naming uses per-class controller index
-  (`sd:0,0` = first SD controller, CS0),
-  not the global device index.
-- All SD state is stateless (init → read → deinit per operation)
-  to support card hot-swap.
+- SD naming uses per-class controller index (`sd:0,0` = first SD
+  controller, CS0), not the global device index.
+- See `hw/CLAUDE.md` for RTL module details (busctl, autoconfig_dev,
+  sim_spi, SD card emulator) and the ROM monitor command reference.
 
 **LLVM toolchain is end-to-end functional.**
 - Clang/lld/llvm-mc cover the full pipeline: C → object → ELF.
@@ -433,90 +338,35 @@ MIPS/68k-style vector dispatch.
   port context (directory layout, file map, VM layout details,
   pinned-slot naming, status checklist).
 
-**Userland cross-build (`build.sh libs`) in progress.**
-- CSU startup files (`crt0.S`, `crti.S`, `crtn.S`, `crtbegin.h`,
-  `crtend.S`) in `lib/csu/arch/penumbra/`.
-  Uses `.init_array`/`.fini_array` (HAVE_INITFINI_ARRAY).
-  `crt0.S` is a single `b ___start` — kernel passes R1=cleanup,
-  R2=ps_strings matching `___start()` signature directly.
-- libc MD files in `lib/libc/arch/penumbra/`:
-  `SYS.h` (SYSTRAP/PSEUDO/RSYSCALL macros, carry-flag convention),
-  `sys/cerror.S` (BCS → errno + return -1),
-  12 custom syscall wrappers (fork, pipe, brk, sbrk, clone, vfork,
-  ptrace, getcontext, shmat, __syscall, syscall).
-  `gen/flt_rounds.c` (soft-float stub),
-  `gen/nanf.c` (IEEE 754 LE quiet NaN),
-  `gdtoa/arith.h` + `gd_qnan.h`,
-  `genassym.cf` (jmp_buf / ucontext offsets).
-- Machine headers: `asm.h` (ENTRY/END/CALLFRAME macros),
-  `fenv.h`, `float.h`, `ieee.h`, `ieeefp.h`, `math.h`,
-  `kcore.h`, updated `setjmp.h` with userland jmp_buf layout.
-  `include/Makefile` installs headers to sysroot.
-- Build system (`bsd.own.mk`): `HAVE_SSP=no` (no stack protector),
-  `HAVE_LIBGCC_EH=yes` (skip libunwind), clang 22 warning
-  suppressions, jemalloc `LG_QUANTUM=3`.
-- **`build.sh libs` fully functional.**
-  `libc.so`, `libm.so`, `libcrypto.so`, `libc++.so`, `libatf-c.so`,
-  and all other shared libraries build and link.
-  Key fixes: softfloat enabled (`MKSOFTFLOAT=yes`), `__mulsi3`
-  (shift-and-add), full atomic suite (CAS-based sub-word ops,
-  load/store, init), signal trampoline stub, TLS inlines in
-  mcontext.h, `__FPE`/`__FEE`/`__FPR`/`__FER`/`__FENV_*` macros,
-  clang driver `-L`/`-lc`/`--undefined-version` fixes.
-  Clang 22 warning suppressions for NetBSD 10 codebase.
-- **C++ enabled (`MKCXX=yes`):** libunwind (Registers_penumbra
-  class + save/restore assembly) built into libc, libc++ and
-  libcxxrt link as shared libraries, libatf-c available for
-  the ATF test suite.  `MKLIBCXX=yes`, `HAVE_LIBGCC_EH=no`,
-  `USE_UNWIND=yes`.  `MKGROFF=no` (link-order bug with lld).
-- Known shortcuts: libpthread is minimal stubs.
-  See memory file `project_userland_shortcuts.md`.
-- **libc additions:** `swapcontext.S` (save/patch/setcontext),
-  `_lwp_makecontext` (LWP creation with R1=arg, R12=TP),
-  `fma`/`fmaf`/`fmal` in libm.
-- **`build.sh distribution` completes successfully.**
-  Full userland builds: all libraries, all programs, system
-  configuration (`etc.penumbra`).
-  Uses stock `toolchains::NetBSD` with Penumbra emulation/flags
-  in `NetBSD.cpp` (no custom toolchain class for NetBSD).
-  `PenumbraToolChain` retained for bare-metal only.
-  Generic and 64-bit `__atomic_*` implementations added
-  (lock-based, asm-label trick to bypass clang builtin check).
-  `makecontext`/`resumecontext` implemented for ucontext support.
-  OpenSSL libcrypto: `ec.inc` excludes 64-bit nist curve
-  optimizations (`OPENSSL_NO_EC_NISTP_64_GCC_128`), default
-  `sha.inc` used (no arch override needed).
-  lld: `-dc`/`-dp` GNU ld compat flags silently ignored.
-  `mcontext.h` corrected: `_REG_PC=15` (R15 is PC),
-  `_NGREG=17`, added `_REG_SP`/`_REG_LR` named constants.
-  `SLOPPY_FLIST=yes` in mk.conf to tolerate missing toolchain
-  binaries in DESTDIR.
-- **Dynamic linker (`ld.elf_so`) ported and fully functional.**
-  `rtld_start.S` (bootstrap + PLT resolver), `mdreloc.c`
-  (RELATIVE, GLOB_DAT, JUMP_SLOT, TLS relocations),
-  `Makefile.inc` in `libexec/ld.elf_so/arch/penumbra/`.
-  Self-relocation via RELA format (`DT_RELA`);
-  `--apply-dynamic-relocs` required for written addends
-  (bias computation reads pre-relocation data).
+**NetBSD userland cross-build fully functional.**
+- `build.sh distribution` completes: all libraries, all programs,
+  and system configuration (`etc.penumbra`).  Uses stock
+  `toolchains::NetBSD` with Penumbra emulation/flags in
+  `NetBSD.cpp` (no custom toolchain class for NetBSD —
+  `PenumbraToolChain` retained for bare-metal only).
+- Penumbra-specific files live under `netbsd/{lib,common,libexec}/**/arch/penumbra/`:
+  CSU (`crt0.S`/`crti.S`/`crtn.S`/`crtbegin.h`/`crtend.S`),
+  libc MD (`SYS.h`, `cerror.S`, syscall wrappers, `genassym.cf`,
+  `swapcontext.S`, `_lwp_makecontext`), machine headers
+  (`asm.h`, `fenv.h`, `ieee.h`, `setjmp.h`, `mcontext.h`, …).
+- C++ enabled (`MKCXX=yes`): libunwind (`Registers_penumbra` + save/
+  restore assembly) built into libc; libc++ and libcxxrt link as
+  shared libraries; libatf-c available for the ATF test suite.
+- **Dynamic linker (`ld.elf_so`) functional**: `rtld_start.S` +
+  `mdreloc.c` in `libexec/ld.elf_so/arch/penumbra/`.  Self-relocation
+  via RELA (needs `--apply-dynamic-relocs` at link time).
   TLS Variant I with `__HAVE___LWP_GETTCB_FAST`; common
-  `__tls_get_addr` (no arch-specific override needed).
-  `_rtld_start` passes cleanup (R1) and ps_strings (R2) to
-  `___start` — matching the 2-argument CRT convention.
-  Dynamically-linked binaries (including `/bin/sh`, `/bin/ls`,
-  `ldd`) load and run end-to-end on the ISS with full userland.
+  `__tls_get_addr`.  Dynamically-linked binaries (`/bin/sh`,
+  `/bin/ls`, `ldd`) load and run end-to-end on the ISS.
+- Known shortcuts (libpthread minimal stubs, etc.) tracked in the
+  `project_userland_shortcuts.md` memory file.
 
 ## Next Steps (in priority order)
-1. **ATF regression tests** — build rootfs with test suite,
-   run `t_swapcontext` and other ATF tests on the ISS.
-2. **Root filesystem** — `build.sh sets` to create installable
-   sets, boot with full userland on the ISS.
-3. **Kernel implementation** — remaining MD stubs as the kernel
-   reaches them (grep `TODO(stub)`): process_read_regs,
-   cpu_coredump, vmapbuf/vunmapbuf.
-4. **SPI FIFO + IRQ-driven pmci** — extend `pmci.c` with
-   the SPI v2 FIFO-burst data path and IRQ wakeups on
-   XFER_DONE / watermark events via `intr_establish_xname()`.
-   Polled baseline + MI sdmmc stack are already in place;
-   this is an additive change inside `pmci_exec_command`.
-   See `doc/TODO.md` Phase 3.5.
-5. **Memory subsystem** — SDRAM controller, bus interface
+1. **ATF regression tests** — build rootfs with test suite, run
+   `t_swapcontext` and other ATF tests on the ISS.
+2. **Root filesystem** — `build.sh sets` to create installable sets,
+   boot with full userland on the ISS.
+3. **Memory subsystem** — SDRAM controller, bus interface.
+
+Kernel-side follow-ups (remaining MD stubs, SPI FIFO + IRQ-driven
+pmci) are tracked in `netbsd/sys/arch/penumbra/CLAUDE.md`.
