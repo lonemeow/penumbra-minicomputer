@@ -168,13 +168,36 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
   using namespace TargetOpcode;
 
   // G_CONSTANT 0 — emit COPY from R0 (hardwired zero) rather than letting the
-  // TableGen uimm16 pattern materialise it as `LLI Rd, 0`.  MachineCopyPropagation
-  // then forwards $r0 into every use slot whose operand class accepts it
-  // (any GPR-class slot), dropping the load entirely.  Must run BEFORE
+  // TableGen uimm16 pattern materialise it as `LLI Rd, 0`.  Must run BEFORE
   // selectImpl so the uimm16 pattern doesn't grab it first.
+  //
+  // As a targeted optimisation (mirroring AArch64's G_STORE zero handling),
+  // patch STW/STH/STB value operands that consume this constant to use $r0
+  // directly, skipping the COPY entirely for the common store-zero case.
+  // Other uses (PHIs, ALU ops, etc.) keep the `COPY $r0`→vreg chain so they
+  // remain legal for later passes that need vreg operands.
   if (I.getOpcode() == G_CONSTANT &&
       I.getOperand(1).getCImm()->getSExtValue() == 0) {
     Register DstReg = I.getOperand(0).getReg();
+
+    for (MachineOperand &MO :
+         llvm::make_early_inc_range(MRI.use_operands(DstReg))) {
+      MachineInstr *UseMI = MO.getParent();
+      unsigned UseOpc = UseMI->getOpcode();
+      if (UseOpc == Penumbra::STW || UseOpc == Penumbra::STH ||
+          UseOpc == Penumbra::STB) {
+        // Stores have their value register as operand 0; only patch the
+        // value slot, never the base (operand 1).
+        if (&MO == &UseMI->getOperand(0))
+          MO.setReg(Penumbra::R0);
+      }
+    }
+
+    if (MRI.use_empty(DstReg)) {
+      I.eraseFromParent();
+      return true;
+    }
+
     BuildMI(MBB, I, I.getDebugLoc(), TII.get(TargetOpcode::COPY))
         .addDef(DstReg)
         .addReg(Penumbra::R0);
