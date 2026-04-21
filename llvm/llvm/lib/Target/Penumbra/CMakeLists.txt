@@ -14,12 +14,18 @@ tablegen(LLVM PenumbraGenRegisterBank.inc -gen-register-bank)
 
 set(LLVM_TARGET_DEFINITIONS PenumbraGISel.td)
 tablegen(LLVM PenumbraGenGlobalISel.inc -gen-global-isel)
+tablegen(LLVM PenumbraGenPreLegalizeGICombiner.inc -gen-global-isel-combiner
+              -combiners="PenumbraPreLegalizerCombiner")
+tablegen(LLVM PenumbraGenPostLegalizeGICombiner.inc -gen-global-isel-combiner
+              -combiners="PenumbraPostLegalizerCombiner")
 
 add_public_tablegen_target(PenumbraCommonTableGen)
 
 add_llvm_target(PenumbraCodeGen
   GISel/PenumbraCallLowering.cpp
   GISel/PenumbraInstructionSelector.cpp
+  GISel/PenumbraPostLegalizerCombiner.cpp
+  GISel/PenumbraPreLegalizerCombiner.cpp
   PenumbraAsmPrinter.cpp
   GISel/PenumbraLegalizerInfo.cpp
   GISel/PenumbraRegisterBankInfo.cpp

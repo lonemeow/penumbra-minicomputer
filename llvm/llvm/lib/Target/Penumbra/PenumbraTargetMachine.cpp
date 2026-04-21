@@ -25,6 +25,17 @@
 
 using namespace llvm;
 
+// Forward declarations for combiner pass factories.  Matches the existing
+// convention in PenumbraSubtarget.cpp for createPenumbraInstructionSelector —
+// no Penumbra.h is provided, so each .cpp file that needs these declares
+// them locally.
+namespace llvm {
+FunctionPass *createPenumbraPreLegalizerCombiner();
+FunctionPass *createPenumbraPostLegalizerCombiner();
+void initializePenumbraPreLegalizerCombinerPass(PassRegistry &);
+void initializePenumbraPostLegalizerCombinerPass(PassRegistry &);
+} // namespace llvm
+
 // ── Target Object File ──────────────────────────────────────────────────────
 // Override one method: place jump tables in the function section so that
 // label-difference entries (.word target - JT_base) can be resolved by
@@ -166,14 +177,24 @@ public:
     TargetPassConfig::addIRPasses();
   }
 
-  // GlobalISel pipeline — four mandatory passes in order.
+  // GlobalISel pipeline.  Mandatory passes (IRTranslator, Legalizer,
+  // RegBankSelect, InstructionSelect) bracket optional combiner passes
+  // that run before legalization and before reg-bank selection.
   bool addIRTranslator() override {
     addPass(new IRTranslator());
     return false;
   }
+  void addPreLegalizeMachineIR() override {
+    if (getOptLevel() != CodeGenOptLevel::None)
+      addPass(createPenumbraPreLegalizerCombiner());
+  }
   bool addLegalizeMachineIR() override {
     addPass(new Legalizer());
     return false;
+  }
+  void addPreRegBankSelect() override {
+    if (getOptLevel() != CodeGenOptLevel::None)
+      addPass(createPenumbraPostLegalizerCombiner());
   }
   bool addRegBankSelect() override {
     addPass(new RegBankSelect());
@@ -212,4 +233,6 @@ LLVMInitializePenumbraTarget() {
   RegisterTargetMachine<PenumbraTargetMachine> X(getThePenumbraTarget());
   PassRegistry *PR = PassRegistry::getPassRegistry();
   initializeGlobalISel(*PR);
+  initializePenumbraPreLegalizerCombinerPass(*PR);
+  initializePenumbraPostLegalizerCombinerPass(*PR);
 }

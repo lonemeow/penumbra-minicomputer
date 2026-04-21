@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 include "Penumbra.td"
+include "PenumbraCombine.td"
 
 // Pointer value type for address space 0 (the only address space).
 def PenumbraPtrVT : PtrValueType<i32, 0>;
