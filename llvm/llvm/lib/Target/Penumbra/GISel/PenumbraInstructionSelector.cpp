@@ -169,8 +169,8 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
 
   // G_CONSTANT 0 — emit COPY from R0 (hardwired zero) rather than letting the
   // TableGen uimm16 pattern materialise it as `LLI Rd, 0`.  MachineCopyPropagation
-  // then forwards $r0 into every use slot that accepts GPRz (ALU Rs, compare
-  // operands, store value), dropping the load entirely.  Must run BEFORE
+  // then forwards $r0 into every use slot whose operand class accepts it
+  // (any GPR-class slot), dropping the load entirely.  Must run BEFORE
   // selectImpl so the uimm16 pattern doesn't grab it first.
   if (I.getOpcode() == G_CONSTANT &&
       I.getOperand(1).getCImm()->getSExtValue() == 0) {

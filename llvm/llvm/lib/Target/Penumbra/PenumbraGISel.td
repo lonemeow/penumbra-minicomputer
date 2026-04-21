@@ -126,15 +126,15 @@ def : Pat<(i32 (extloadi8 (AddrRegImm GPR:$base, memoffset16:$off))),
 // Stores
 //===----------------------------------------------------------------------===//
 //
-// Same AddrRegImm address folding as loads.  GPRz on the value operand lets
-// `store 0, addr` substitute R0 (handled by the generated selector via
-// GIZeroRegister on STW/STH/STB).
+// Same AddrRegImm address folding as loads.  Store-zero falls out of R0
+// being a valid GPR: the selector maps G_CONSTANT 0 to `COPY $r0` and
+// MachineCopyPropagation forwards $r0 into the STW/STH/STB value slot.
 
-def : Pat<(store (i32 GPRz:$val), (AddrRegImm GPR:$base, memoffset16:$off)),
-          (STW GPRz:$val, GPR:$base, memoffset16:$off)>;
-def : Pat<(store (PenumbraPtrVT GPRz:$val), (AddrRegImm GPR:$base, memoffset16:$off)),
-          (STW GPRz:$val, GPR:$base, memoffset16:$off)>;
-def : Pat<(truncstorei16 (i32 GPRz:$val), (AddrRegImm GPR:$base, memoffset16:$off)),
-          (STH GPRz:$val, GPR:$base, memoffset16:$off)>;
-def : Pat<(truncstorei8 (i32 GPRz:$val), (AddrRegImm GPR:$base, memoffset16:$off)),
-          (STB GPRz:$val, GPR:$base, memoffset16:$off)>;
+def : Pat<(store (i32 GPR:$val), (AddrRegImm GPR:$base, memoffset16:$off)),
+          (STW GPR:$val, GPR:$base, memoffset16:$off)>;
+def : Pat<(store (PenumbraPtrVT GPR:$val), (AddrRegImm GPR:$base, memoffset16:$off)),
+          (STW GPR:$val, GPR:$base, memoffset16:$off)>;
+def : Pat<(truncstorei16 (i32 GPR:$val), (AddrRegImm GPR:$base, memoffset16:$off)),
+          (STH GPR:$val, GPR:$base, memoffset16:$off)>;
+def : Pat<(truncstorei8 (i32 GPR:$val), (AddrRegImm GPR:$base, memoffset16:$off)),
+          (STB GPR:$val, GPR:$base, memoffset16:$off)>;

@@ -114,8 +114,8 @@ shifts (SHL/SHR/SAR reg and SHLi/SHRi/SARi with uimm5),
 NOT, simple constants (LLI for uimm16, LLIS for simm16neg),
 all load variants (LDW/LDH/LDHS/LDB/LDBS for i32 and p0,
 s1 widened to s8),
-all store variants (STW/STH/STB with GPRz zero-register
-substitution, s1 widened to s8),
+all store variants (STW/STH/STB; store-zero uses R0 directly
+via MCP forwarding from the selector's `COPY $r0`, s1 widened to s8),
 G_PTR_ADD reg-reg (→ADD) and reg-imm (→ADDi with uimm16 offset,
 critical for GEPs with constant indices: struct fields,
 `p[i]` with constant i, and `p++` in tight loops).
@@ -266,7 +266,7 @@ EM_PENUMBRA (0xF0DA) defined in central `llvm/BinaryFormat/ELF.h`.
 |------|-------------|
 | `Penumbra.td` | Top-level TableGen: includes, ProcessorModel, AsmWriter, Target, pointer remap |
 | `PenumbraRegisterInfo.td` | 16 GPRs (R0=zero, R12=TP, R13=LR, R14=SP, R15=PC), alt names, GPR/GPR\_Allocatable/CCR classes, HWEncoding |
-| `PenumbraInstrInfo.td` | All 4 formats (R/L/M/B) with bit-accurate encoding. Tied-operand constraints for 2-addr ops. ADC/SBC Uses=[SR]. `GPRz` with GIZeroRegister=R0. Pseudos: RET, LEAfi, SELECT\_GPR, SELECT\_CC\_GPR, ADJCALLSTACK. Penumbra1Model sched: IssueWidth=1, MicroOpBufferSize=0, LoadLatency=1 (microcoded single-issue: no benefit from hiding latency) |
+| `PenumbraInstrInfo.td` | All 4 formats (R/L/M/B) with bit-accurate encoding. Tied-operand constraints for 2-addr ops. ADC/SBC Uses=[SR]. All operand slots use `GPR` (full class incl. R0); allocator honours R0's reserved+`isConstant` flags. Pseudos: RET, LEAfi, SELECT\_GPR, SELECT\_CC\_GPR, ADJCALLSTACK. Penumbra1Model sched: IssueWidth=1, MicroOpBufferSize=0, LoadLatency=1 (microcoded single-issue: no benefit from hiding latency) |
 | `PenumbraGISel.td` | TableGen `Pat<>` rules: ALU reg-reg/reg-imm, shifts, NOT, constants (LLI/LLIS), all load/store (i32/p0), `ptradd` reg-reg and reg-imm (uimm16 offset). Includes `PenumbraCombine.td`. ImmLeaf predicates: uimm16, simm16, simm16neg, uimm5 |
 | `PenumbraCombine.td` | GlobalISel combiner rule groups. PreLegalizer: `[copy_prop]` (scaffolding). PostLegalizer: `[commute_constant_to_rhs, ptr_add_immed_chain, combines_for_extload, penumbra_neg_imm_to_opposite]`. Both run only at -O1+. `penumbra_neg_imm_to_opposite` is a custom rule that flips G\_ADD/G\_SUB by a negative constant to the opposite opcode when -c fits uimm16 (C++ match/apply in PenumbraPostLegalizerCombiner.cpp) |
 | `PenumbraCallingConv.td` | CC\_Penumbra (R1-R4 args, stack overflow), RetCC\_Penumbra (R1, R2 for i64), CSR\_Penumbra (R5-R10, R13) |

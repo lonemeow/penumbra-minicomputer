@@ -207,48 +207,50 @@ def AddrRegImm : ComplexPattern<iPTR, 2, "SelectAddrRegImm">;
 //===----------------------------------------------------------------------===//
 
 let Defs = [SR], Constraints = "$Rd = $Rd_in" in {
-  // 2-operand destructive: Rd = Rd op Rs
-  // $Rs uses GPRz: allows R0 (zero substitution) and R15 (PC-relative).
-  def ADD  : FormatR<0b00000, (outs GPR:$Rd), (ins GPR:$Rd_in, GPRz:$Rs),
+  // 2-operand destructive: Rd = Rd op Rs.  All operands use GPR (full
+  // class including R0, R12, R14, R15); the register allocator honours
+  // R0's `isConstant`/reserved status and won't pick it for writable
+  // vregs, while MachineCopyPropagation can forward R0 into $Rs uses.
+  def ADD  : FormatR<0b00000, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
                      "add\t$Rd, $Rs">;
-  def SUB  : FormatR<0b00001, (outs GPR:$Rd), (ins GPR:$Rd_in, GPRz:$Rs),
+  def SUB  : FormatR<0b00001, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
                      "sub\t$Rd, $Rs">;
-  def AND  : FormatR<0b00010, (outs GPR:$Rd), (ins GPR:$Rd_in, GPRz:$Rs),
+  def AND  : FormatR<0b00010, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
                      "and\t$Rd, $Rs">;
-  def OR   : FormatR<0b00011, (outs GPR:$Rd), (ins GPR:$Rd_in, GPRz:$Rs),
+  def OR   : FormatR<0b00011, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
                      "or\t$Rd, $Rs">;
-  def XOR  : FormatR<0b00100, (outs GPR:$Rd), (ins GPR:$Rd_in, GPRz:$Rs),
+  def XOR  : FormatR<0b00100, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
                      "xor\t$Rd, $Rs">;
-  def SHL  : FormatR<0b00101, (outs GPR:$Rd), (ins GPR:$Rd_in, GPRz:$Rs),
+  def SHL  : FormatR<0b00101, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
                      "shl\t$Rd, $Rs">;
-  def SHR  : FormatR<0b00110, (outs GPR:$Rd), (ins GPR:$Rd_in, GPRz:$Rs),
+  def SHR  : FormatR<0b00110, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
                      "shr\t$Rd, $Rs">;
-  def SAR  : FormatR<0b00111, (outs GPR:$Rd), (ins GPR:$Rd_in, GPRz:$Rs),
+  def SAR  : FormatR<0b00111, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
                      "sar\t$Rd, $Rs">;
 }
 
 // MOV doesn't set flags (per ISA doc)
-def MOV  : FormatR<0b01000, (outs GPR:$Rd), (ins GPRz:$Rs),
+def MOV  : FormatR<0b01000, (outs GPR:$Rd), (ins GPR:$Rs),
                    "mov\t$Rd, $Rs">;
 // NOT sets flags (it's a logic ALU operation; microcode has w_flags=1)
 let Defs = [SR] in
-def NOT  : FormatR<0b01001, (outs GPR:$Rd), (ins GPRz:$Rs),
+def NOT  : FormatR<0b01001, (outs GPR:$Rd), (ins GPR:$Rs),
                    "not\t$Rd, $Rs">;
 
 // ADC/SBC: add/subtract with carry from SR.C
 let Defs = [SR], Uses = [SR], Constraints = "$Rd = $Rd_in" in {
-  def ADC  : FormatR<0b01010, (outs GPR:$Rd), (ins GPR:$Rd_in, GPRz:$Rs),
+  def ADC  : FormatR<0b01010, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
                      "adc\t$Rd, $Rs">;
-  def SBC  : FormatR<0b01011, (outs GPR:$Rd), (ins GPR:$Rd_in, GPRz:$Rs),
+  def SBC  : FormatR<0b01011, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
                      "sbc\t$Rd, $Rs">;
 }
 
 // Flag-only variants (F=1): CMP = SUB with F=1, TEST = AND with F=1
 let F = 1 in {
   let Defs = [SR] in {
-    def CMP  : FormatR<0b00001, (outs), (ins GPRz:$Rd, GPRz:$Rs),
+    def CMP  : FormatR<0b00001, (outs), (ins GPR:$Rd, GPR:$Rs),
                        "cmp\t$Rd, $Rs">;
-    def TEST : FormatR<0b00010, (outs), (ins GPRz:$Rd, GPRz:$Rs),
+    def TEST : FormatR<0b00010, (outs), (ins GPR:$Rd, GPR:$Rs),
                        "test\t$Rd, $Rs">;
   }
 }
@@ -296,29 +298,30 @@ let Defs = [SR] in {
 //===----------------------------------------------------------------------===//
 
 // Loads: L=1
-// $Rb uses GPRz: allows R0 as base (zero-base addressing for low memory).
+// $Rb uses GPR: allows R0 as base (zero-base addressing for low memory).
 let mayLoad = 1 in {
-  def LDW  : FormatM<1, 0b10, 0, (outs GPR:$Rd), (ins GPRz:$Rb, memoffset16:$offset),
+  def LDW  : FormatM<1, 0b10, 0, (outs GPR:$Rd), (ins GPR:$Rb, memoffset16:$offset),
                      "ldw\t$Rd, [$Rb + $offset]">;
-  def LDH  : FormatM<1, 0b01, 0, (outs GPR:$Rd), (ins GPRz:$Rb, memoffset16:$offset),
+  def LDH  : FormatM<1, 0b01, 0, (outs GPR:$Rd), (ins GPR:$Rb, memoffset16:$offset),
                      "ldh\t$Rd, [$Rb + $offset]">;
-  def LDHS : FormatM<1, 0b01, 1, (outs GPR:$Rd), (ins GPRz:$Rb, memoffset16:$offset),
+  def LDHS : FormatM<1, 0b01, 1, (outs GPR:$Rd), (ins GPR:$Rb, memoffset16:$offset),
                      "ldhs\t$Rd, [$Rb + $offset]">;
-  def LDB  : FormatM<1, 0b00, 0, (outs GPR:$Rd), (ins GPRz:$Rb, memoffset16:$offset),
+  def LDB  : FormatM<1, 0b00, 0, (outs GPR:$Rd), (ins GPR:$Rb, memoffset16:$offset),
                      "ldb\t$Rd, [$Rb + $offset]">;
-  def LDBS : FormatM<1, 0b00, 1, (outs GPR:$Rd), (ins GPRz:$Rb, memoffset16:$offset),
+  def LDBS : FormatM<1, 0b00, 1, (outs GPR:$Rd), (ins GPR:$Rb, memoffset16:$offset),
                      "ldbs\t$Rd, [$Rb + $offset]">;
 }
 
 // Stores: L=0
-// $Rd (data) uses GPRz: enables R0 zero-register substitution via GIZeroRegister.
-// $Rb (base) uses GPRz: allows R0 as base (zero-base addressing for low memory).
+// Both $Rd (data) and $Rb (base) use GPR: R0 is valid in both slots —
+// store-zero via R0 value is enabled by MachineCopyPropagation forwarding
+// from the `COPY $r0` that the selector emits for G_CONSTANT 0.
 let mayStore = 1 in {
-  def STW  : FormatM<0, 0b10, 0, (outs), (ins GPRz:$Rd, GPRz:$Rb, memoffset16:$offset),
+  def STW  : FormatM<0, 0b10, 0, (outs), (ins GPR:$Rd, GPR:$Rb, memoffset16:$offset),
                      "stw\t$Rd, [$Rb + $offset]">;
-  def STH  : FormatM<0, 0b01, 0, (outs), (ins GPRz:$Rd, GPRz:$Rb, memoffset16:$offset),
+  def STH  : FormatM<0, 0b01, 0, (outs), (ins GPR:$Rd, GPR:$Rb, memoffset16:$offset),
                      "sth\t$Rd, [$Rb + $offset]">;
-  def STB  : FormatM<0, 0b00, 0, (outs), (ins GPRz:$Rd, GPRz:$Rb, memoffset16:$offset),
+  def STB  : FormatM<0, 0b00, 0, (outs), (ins GPR:$Rd, GPR:$Rb, memoffset16:$offset),
                      "stb\t$Rd, [$Rb + $offset]">;
 }
 

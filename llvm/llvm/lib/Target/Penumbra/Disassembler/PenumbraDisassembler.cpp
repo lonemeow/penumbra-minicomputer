@@ -56,13 +56,6 @@ static DecodeStatus DecodeGPRRegisterClass(MCInst &Inst, unsigned RegNo,
   return MCDisassembler::Success;
 }
 
-// GPRz is a RegisterOperand wrapping GPR — same decoder.
-static DecodeStatus DecodeGPRzRegisterClass(MCInst &Inst, unsigned RegNo,
-                                            uint64_t Address,
-                                            const MCDisassembler *Decoder) {
-  return DecodeGPRRegisterClass(Inst, RegNo, Address, Decoder);
-}
-
 //===----------------------------------------------------------------------===//
 // Operand decoders
 //===----------------------------------------------------------------------===//
