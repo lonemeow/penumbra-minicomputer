@@ -75,6 +75,20 @@ The architecture is fully specified in `doc/`. Key specs:
 - **System registers (sysregs)** = device-mapped registers via
   `WRSYS`/`RDSYS` (MMU, TLB, system ID). Belong to peripheral devices.
 
+### Commit Messages
+Use `<subsystem>: <description>` (lowercase subsystem, colon, short
+imperative description). Examples:
+- `llvm: fix PIC TLS GD materialization`
+- `netbsd: bump UPAGES from 3 to 4`
+- `rom: fix detect_page readback across bus-faulted probes`
+- `doc: describe the pinned vector page`
+- `test: catch test_sysid up with CPU_FREQ sysreg`
+
+Common subsystem tags: `llvm`, `netbsd`, `rom`, `hw`, `sw`, `doc`,
+`test`, `benchmark`. Keep the subject under ~70 chars; put detail
+in the body. Don't use bracketed tags (`[LLVM]`) — that's a legacy
+style from earlier in the project.
+
 ## Build System
 - `make simulate` — build boot ROM + ISS, run interactively (fast,
   no Docker). Uses instruction-level simulator (`sw/sim/penumbra_iss.cpp`).
