@@ -429,11 +429,16 @@ Fixed locally — needed for NetBSD kernel option tracking symbols
   for SSA correctness — required for `-O1+` passes
   like OptimizePHIs.
 - **Global address materialization (PIC/PIE):**
-  GOT-indirect with full 32-bit reach:
-  `MOV Rd, PC` + `LLI Rt, %got_pcrel_lo16(sym+4)` +
-  `LUI Rt, %got_pcrel_hi16(sym+8)` + `ADD Rd, Rt` +
+  GOT-indirect with full 32-bit reach, 4 instructions:
+  `LLI Rd, %got_pcrel_lo16(sym-8)` +
+  `LUI Rd, %got_pcrel_hi16(sym-4)` + `ADD Rd, PC` +
   `LDW Rd, [Rd]`.
-  Addends +4/+8 compensate for MOV-to-LLI/LUI distance.
+  The ADD's own PC is the anchor, so addends -8/-4 yield
+  `GOT[sym] - Q` under the linker's `sym + addend - fixup_addr`
+  formula (Q = ADD's address).  Folding PC into the last step
+  drops the leading `MOV Rd, PC` — one fewer instruction AND
+  one fewer live vreg vs the old scheme (single vreg threads
+  through LLI→LUI→ADD→LDW).
   LLI+LUI reconstruct the 32-bit GOT-to-PC offset (unsigned
   lo16 | hi16<<16, no sign-extension issues).
   Works for both PIE (GOT entries get R_RELATIVE) and shared
@@ -441,9 +446,10 @@ Fixed locally — needed for NetBSD kernel option tracking symbols
   `needsRelocateWithSymbol()` returns true for GOT/TLS relocs
   to prevent section+offset folding (the addend must only
   contain the PC adjustment, not the symbol's section offset).
-  **TLS GD PIC:** Same pattern but 4 instructions (no LDW) —
-  the GOT tls_index pair ADDRESS is the argument to
-  `__tls_get_addr`, not its contents.
+  **TLS GD PIC:** Same 4-instruction pattern (no LDW — the GOT
+  tls_index pair ADDRESS is the argument to `__tls_get_addr`,
+  not its contents).  Still uses the legacy MOV-PC anchor shape
+  pending a follow-up commit.
 - **Jump tables:** Always `EK_LabelDifference32` entries
   (`.word target - JT_base`), regardless of PIC/static mode.
   Placed inline in `.text` via `PenumbraTargetObjectFile`

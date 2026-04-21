@@ -147,7 +147,12 @@ public:
     // Ops: [0]=Rd, [1]=Rd_in (tied), [2]=Rs.
     if (Opc == Penumbra::ADD) {
       if (auto DstIdx = regIndex(Inst.getOperand(0).getReg())) {
-        if (auto SrcIdx = regIndex(Inst.getOperand(2).getReg());
+        unsigned SrcReg = Inst.getOperand(2).getReg();
+        if (SrcReg == Penumbra::R15) {
+          // ADD Rd, PC
+          if (GPRValid[*DstIdx])
+            GPRState[*DstIdx] += Addr;
+        } else if (auto SrcIdx = regIndex(SrcReg);
             GPRValid[*DstIdx] && SrcIdx && GPRValid[*SrcIdx])
           GPRState[*DstIdx] += GPRState[*SrcIdx];
         else

@@ -732,19 +732,22 @@ bool PenumbraInstructionSelector::selectGlobalValue(MachineInstr &I,
     // patches them correctly for PIE (bootloader self-relocator).
     // No text relocs needed — code is PC-relative to the GOT entry.
     //
-    //   MOV  PCReg, PC                          (capture PC = addr of MOV, P)
-    //   LLI  OffReg, %got_pcrel_lo16(sym + 4)   (lo16(GOT[sym] - P))
-    //   LUI  OffReg, %got_pcrel_hi16(sym + 8)   (hi16(GOT[sym] - P))
-    //   ADD  PCReg, OffReg                       (PCReg = &GOT[sym])
-    //   LDW  DstReg, [PCReg + 0]                (DstReg = *GOT[sym])
+    //   LLI  GotAddr, %got_pcrel_lo16(sym - 8)  (lo16(GOT[sym] - Q))
+    //   LUI  GotAddr, %got_pcrel_hi16(sym - 4)  (hi16(GOT[sym] - Q))
+    //   ADD  GotAddr, PC                         (Q: GotAddr = &GOT[sym])
+    //   LDW  DstReg,  [GotAddr + 0]              (DstReg = *GOT[sym])
+    //
+    // The ADD's own PC (= Q) is the anchor.  With addends -8 / -4,
+    // the linker's `sym + addend - fixup_addr` formula yields
+    // `GOT[sym] - Q` for both halves of the LLI+LUI composition.
+    // Folding PC into the last step saves the leading `MOV Rd, PC`
+    // and lets a single vreg thread through the whole sequence.
     //
     // Non-zero G_GLOBAL_VALUE offsets (e.g. &array[5]) are applied
     // after the GOT load via ADDi, since the GOT entry stores the
     // base symbol address only.
     DebugLoc DL = I.getDebugLoc();
     auto InsertPt = I.getIterator();
-    Register PCReg =
-        MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
     Register OffLoReg =
         MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
     Register OffReg =
@@ -752,30 +755,24 @@ bool PenumbraInstructionSelector::selectGlobalValue(MachineInstr &I,
     Register GotAddrReg =
         MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
 
-    // MOV PCReg, PC (R15) — capture address of this instruction
-    auto MOVInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::MOV))
-        .addDef(PCReg)
-        .addReg(Penumbra::R15);
-    constrainSelectedInstRegOperands(*MOVInst, TII, TRI, RBI);
-
-    // LLI OffLoReg, %got_pcrel_lo16(sym + 4)
+    // LLI OffLoReg, %got_pcrel_lo16(sym - 8)
     auto LLIInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::LLI))
         .addDef(OffLoReg)
-        .add(MachineOperand::CreateGA(GV, 4, Penumbra::S_GOT_PCRel_Lo16));
+        .add(MachineOperand::CreateGA(GV, -8, Penumbra::S_GOT_PCRel_Lo16));
     constrainSelectedInstRegOperands(*LLIInst, TII, TRI, RBI);
 
-    // LUI OffReg, OffLoReg, %got_pcrel_hi16(sym + 8)
+    // LUI OffReg, OffLoReg, %got_pcrel_hi16(sym - 4)
     auto LUIInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::LUI))
         .addDef(OffReg)
         .addReg(OffLoReg)
-        .add(MachineOperand::CreateGA(GV, 8, Penumbra::S_GOT_PCRel_Hi16));
+        .add(MachineOperand::CreateGA(GV, -4, Penumbra::S_GOT_PCRel_Hi16));
     constrainSelectedInstRegOperands(*LUIInst, TII, TRI, RBI);
 
-    // ADD GotAddrReg, PCReg, OffReg — PCReg + offset = &GOT[sym]
+    // ADD GotAddrReg, OffReg, PC — fold live PC into the offset
     auto ADDInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::ADD))
         .addDef(GotAddrReg)
-        .addReg(PCReg)
-        .addReg(OffReg);
+        .addReg(OffReg)
+        .addReg(Penumbra::R15);
     constrainSelectedInstRegOperands(*ADDInst, TII, TRI, RBI);
 
     // LDW DstReg/TmpReg, [GotAddrReg + 0] — load symbol address from GOT

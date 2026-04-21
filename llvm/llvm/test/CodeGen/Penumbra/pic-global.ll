@@ -5,7 +5,9 @@
 ; RUN:   -verify-machineinstrs < %s | FileCheck %s -check-prefix=STATIC
 
 ; PIC vs static global address materialization.
-; PIC/PIE uses GOT-indirect: MOV PC + LLI/LUI got_pcrel + ADD + LDW from GOT.
+; PIC/PIE uses GOT-indirect: LLI/LUI got_pcrel + ADD Rd, PC + LDW from GOT.
+; The ADD's own PC is the anchor; LLI/LUI carry -8/-4 addends so the
+; linker's sym + addend - fixup_addr formula yields GOT[sym] - Q at each half.
 ; Static uses absolute LLI+LUI.
 ; GOT entries are full data words — R_PENUMBRA_RELATIVE patches them for PIE.
 
@@ -16,10 +18,9 @@ define ptr @get_address() {
 ; PIC-LABEL: get_address:
 ; PIC:         .cfi_startproc
 ; PIC-NEXT:  // %bb.1:
-; PIC-NEXT:    mov r1, r15
-; PIC-NEXT:    lli r2, %got_pcrel_lo16(myvar+4)
-; PIC-NEXT:    lui r2, %got_pcrel_hi16(myvar+8)
-; PIC-NEXT:    add r1, r2
+; PIC-NEXT:    lli r1, %got_pcrel_lo16(myvar-8)
+; PIC-NEXT:    lui r1, %got_pcrel_hi16(myvar-4)
+; PIC-NEXT:    add r1, r15
 ; PIC-NEXT:    ldw r1, [r1 + 0]
 ; PIC-NEXT:    jmp r13
 ;
@@ -36,10 +37,9 @@ define i32 @load_global() {
 ; PIC-LABEL: load_global:
 ; PIC:         .cfi_startproc
 ; PIC-NEXT:  // %bb.1:
-; PIC-NEXT:    mov r1, r15
-; PIC-NEXT:    lli r2, %got_pcrel_lo16(myvar+4)
-; PIC-NEXT:    lui r2, %got_pcrel_hi16(myvar+8)
-; PIC-NEXT:    add r1, r2
+; PIC-NEXT:    lli r1, %got_pcrel_lo16(myvar-8)
+; PIC-NEXT:    lui r1, %got_pcrel_hi16(myvar-4)
+; PIC-NEXT:    add r1, r15
 ; PIC-NEXT:    ldw r1, [r1 + 0]
 ; PIC-NEXT:    ldw r1, [r1 + 0]
 ; PIC-NEXT:    jmp r13
@@ -59,10 +59,9 @@ define void @store_global(i32 %v) {
 ; PIC-LABEL: store_global:
 ; PIC:         .cfi_startproc
 ; PIC-NEXT:  // %bb.1:
-; PIC-NEXT:    mov r2, r15
-; PIC-NEXT:    lli r3, %got_pcrel_lo16(myvar+4)
-; PIC-NEXT:    lui r3, %got_pcrel_hi16(myvar+8)
-; PIC-NEXT:    add r2, r3
+; PIC-NEXT:    lli r2, %got_pcrel_lo16(myvar-8)
+; PIC-NEXT:    lui r2, %got_pcrel_hi16(myvar-4)
+; PIC-NEXT:    add r2, r15
 ; PIC-NEXT:    ldw r2, [r2 + 0]
 ; PIC-NEXT:    stw r1, [r2 + 0]
 ; PIC-NEXT:    jmp r13
@@ -82,12 +81,13 @@ define void @store_global(i32 %v) {
 ; GOT entries are data words — R_RELATIVE patches them for PIE.
 define dso_local ptr @get_pie_address() {
 ; PIC-LABEL: get_pie_address:
-; PIC:         .cfi_startproc
+; PIC:       .Lget_pie_address$local:
+; PIC-NEXT:    .type .Lget_pie_address$local,@function
+; PIC-NEXT:    .cfi_startproc
 ; PIC-NEXT:  // %bb.1:
-; PIC-NEXT:    mov r1, r15
-; PIC-NEXT:    lli r2, %got_pcrel_lo16(pievar+4)
-; PIC-NEXT:    lui r2, %got_pcrel_hi16(pievar+8)
-; PIC-NEXT:    add r1, r2
+; PIC-NEXT:    lli r1, %got_pcrel_lo16(pievar-8)
+; PIC-NEXT:    lui r1, %got_pcrel_hi16(pievar-4)
+; PIC-NEXT:    add r1, r15
 ; PIC-NEXT:    ldw r1, [r1 + 0]
 ; PIC-NEXT:    jmp r13
 ;
