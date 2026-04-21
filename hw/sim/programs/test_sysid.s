@@ -6,7 +6,8 @@
 ;   3. Read CPU_NAME0 (device 1, reg 2) → expect 0x756E6550 ("Penu" LE)
 ;   4. Read CPU_NAME3 (device 1, reg 5) → expect 0 (null padding)
 ;   5. Read MACH_NAME0 (device 1, reg 6) → expect 0x756D6953 ("Simu" LE)
-;   6. Read reserved register (device 1, reg 10) → expect 0
+;   6. Read CPU_FREQ (device 1, reg 10) → expect 25_000_000 (simulated 25 MHz)
+;   7. Read reserved register (device 1, reg 15) → expect 0
 ;
 ; Result: R1=1 PASS, R1=0 FAIL
 
@@ -40,8 +41,14 @@ _start:
     CMP   R2, R3
     BNE   fail
 
-    ; ── Test 6: Reserved register reads as zero ────────────
-    RDSYS R2, #SYS, #10       ; reg 10, reserved
+    ; ── Test 6: CPU_FREQ = 25 MHz (simulated) ──────────────
+    RDSYS R2, #SYS, #CPU_FREQ
+    LI    R3, #25000000
+    CMP   R2, R3
+    BNE   fail
+
+    ; ── Test 7: Reserved register reads as zero ────────────
+    RDSYS R2, #SYS, #15       ; reg 15, reserved
     CMPI R2, #0
     BNE  fail
 

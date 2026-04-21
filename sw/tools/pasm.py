@@ -67,6 +67,7 @@ BUILTIN_CONSTANTS = {
     "MACH_NAME1":   7,
     "MACH_NAME2":   8,
     "MACH_NAME3":   9,
+    "CPU_FREQ":    10,
 
     # Cache device IDs (devices 2 and 3)
     "DCACHE":       2,
