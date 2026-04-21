@@ -90,13 +90,25 @@ extern void _trap_bus_ignore(void);
 /*
  * Probe the last word of a page to test if it is backed by RAM.
  * Write a pattern, read it back — if it matches, the page exists.
- * If not (bus fault), _trap_bus_ignore advances EPC and we return 0.
+ * If not (bus fault), _trap_bus_ignore advances EPC past the faulting
+ * instruction.  We must pre-clear the readback register so that a
+ * skipped LDW leaves a known non-matching value — otherwise it would
+ * retain 0x12345678 from a previous successful probe and the loop
+ * would keep reporting pages present forever.
  */
 static int detect_page(long pagenum) {
     volatile unsigned int *addr =
         (volatile unsigned int *)(((pagenum + 1) << 12) - 4);
-    *addr = 0x12345678;
-    return *addr == 0x12345678;
+    uint32_t val;
+    asm volatile(
+        "stw    %2, [%1 + 0]\n\t"
+        "lli    %0, #0\n\t"
+        "ldw    %0, [%1 + 0]"
+        : "=&r"(val)
+        : "r"(addr), "r"((uint32_t)0x12345678)
+        : "memory"
+    );
+    return val == 0x12345678;
 }
 
 static long detect_ram(void) {
