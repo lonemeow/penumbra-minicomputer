@@ -215,3 +215,51 @@ PenumbraISelLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
   MI.eraseFromParent();
   return TailMBB;
 }
+
+// ── LSR / CodeGenPrepare addressing-mode cost ───────────────────────────────
+//
+// The `AddrMode` struct expresses the address as
+//
+//     BaseGV + BaseOffs + (HasBaseReg ? Reg : 0) + Scale * Index
+//
+// (plus ScalableOffset for vector targets, which we don't have).  We must
+// return true when the entire expression can be encoded as a single
+// load/store operand on Penumbra, false otherwise.
+//
+// Penumbra's M-format load/store encodes exactly `[Rb + simm16_offset]`
+// where the offset is a signed 16-bit immediate (with a size-dependent
+// implicit shift handled at encode time, but for cost-model purposes
+// treat it as a signed 16-bit value).  Anything else — globals folded
+// into the address, scaled or unscaled index registers, displacements
+// outside ±32K — must be materialised separately and is therefore not a
+// "free" addressing mode for LSR's purposes.
+bool PenumbraISelLowering::isLegalAddressingMode(const DataLayout &DL,
+                                                  const AddrMode &AM,
+                                                  Type *Ty, unsigned AS,
+                                                  Instruction *I) const {
+  if (AM.BaseGV != nullptr)
+    return false;
+
+  if (AM.Scale != 0)
+    return false;
+
+  if (AM.ScalableOffset != 0)
+    return false;
+
+  if (!isInt<16>(AM.BaseOffs))
+    return false;
+
+  // No alignment check on Ty: LSR is queried O(formulae × uses × loop)
+  // times during cost-model search, and `DL.getTypeStoreSize(Ty)` hits
+  // `TargetExtType::getLayoutType` for some types — a registry walk that
+  // compounds into a multi-second hang on inputs like gcc-c-torture's
+  // pr65401.c.  LSR derives candidate offsets from valid GEPs, so the
+  // offsets it proposes are already naturally aligned in practice; if
+  // something hand-crafted slips through, the load/store legalizer's
+  // unaligned-access path catches it at codegen time.
+
+  if (!AM.HasBaseReg)
+    return false;
+
+  return true;
+}

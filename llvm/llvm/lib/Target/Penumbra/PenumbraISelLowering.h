@@ -45,6 +45,17 @@ public:
                                StringRef Constraint, MVT VT) const override;
 
   bool isIntDivCheap(EVT VT, AttributeList Attr) const override;
+
+  // LSR / CodeGenPrepare addressing-mode cost: report what addressing
+  // shapes the load/store M-format encoding can express in a single
+  // instruction.  The default in TargetLoweringBase claims a "RISCy r+r
+  // and r+i" model — we only have r+i (HasBaseReg + signed 16-bit
+  // displacement), so reporting the default would let LSR rewrite
+  // pointer-bump loops into base+index form, costing two extra ADDs
+  // per iteration.
+  bool isLegalAddressingMode(const DataLayout &DL, const AddrMode &AM,
+                             Type *Ty, unsigned AS,
+                             Instruction *I) const override;
 };
 
 } // namespace llvm

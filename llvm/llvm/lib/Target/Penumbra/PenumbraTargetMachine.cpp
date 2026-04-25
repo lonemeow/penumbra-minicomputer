@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "PenumbraTargetMachine.h"
+#include "PenumbraTargetTransformInfo.h"
 #include "TargetInfo/PenumbraTargetInfo.h"
 #include "llvm/CodeGen/GlobalISel/IRTranslator.h"
 #include "llvm/CodeGen/GlobalISel/InstructionSelect.h"
@@ -214,6 +215,17 @@ public:
 TargetPassConfig *
 PenumbraTargetMachine::createPassConfig(PassManagerBase &PM) {
   return new PenumbraPassConfig(*this, PM);
+}
+
+// Without this override, TargetMachine::getTargetTransformInfo returns a
+// generic TTI(DataLayout) that doesn't know our TargetLowering exists, so
+// LSR / CodeGenPrepare answer cost-model queries from the upstream
+// "RISCy r+r and r+i" defaults — pessimising pointer-bump loops into
+// base+index form.  Wiring PenumbraTTIImpl in routes those queries
+// through PenumbraTargetLowering::isLegalAddressingMode.
+TargetTransformInfo
+PenumbraTargetMachine::getTargetTransformInfo(const Function &F) const {
+  return TargetTransformInfo(std::make_unique<PenumbraTTIImpl>(this, F));
 }
 
 // ── TargetMachine ─────────────────────────────────────────────────────────────

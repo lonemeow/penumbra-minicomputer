@@ -146,6 +146,121 @@ After this lands, kernel stack overflow produces a clean bus fault
 with EPC pointing at the offending instruction, not a nested TLB
 miss in the trap handler.
 
+## Compiler: support `[R0 + offset]` absolute addressing for low memory
+
+`PenumbraTargetLowering::isLegalAddressingMode` currently rejects
+`AddrMode` queries with `HasBaseReg = false` — that is, it tells
+LSR / CodeGenPrepare that "just an offset" is not a legal address.
+Strictly speaking it *is* legal: R0 is hardwired to zero, so
+`LDW Rd, [R0 + offset]` reaches the low ±32 KB of memory in a
+single instruction.  The kernel uses this for the trap vectors
+(`0xFFFF_0000` is reachable as a negative offset from R0 thanks to
+sign extension), and bare-metal MMIO probes commonly do
+`*(volatile int *)0x100 = ...`.
+
+The codegen pipeline does not currently materialize this form.  A
+`G_LOAD` whose pointer is a small constant address goes through
+the constant-materialization path (LLI / LLIS) and emits a real
+`MOV` of the constant into a base register first.  Selection-side
+work to recognise `(load (constant fits-in-simm16))` → `LDW Rd,
+[R0 + offset]` would close this gap; once it does, drop the
+`HasBaseReg` reject in `isLegalAddressingMode` so LSR knows the
+mode is free.
+
+Low-priority — the only places affected today are kernel
+exception-vector reads and explicit MMIO accesses with very small
+absolute addresses, both of which are written in inline asm or
+hand-tuned C and don't go through optimization-sensitive paths.
+But the discrepancy between "what the hardware can encode" and
+"what the cost model claims" is worth closing for correctness of
+optimization decisions in code we haven't yet seen.
+
+## Compiler: tighten LSR cost model for pointer-bump loops
+
+Tight pointer-bump loops (`strcpy`, `memcpy` shapes) compile to
+9 instructions/iter when the ideal lower bound is 6.  The
+suboptimality has *two distinct causes*; we have a TTI
+override that *correctly describes* our addressing mode but
+neither cause is actually fixed yet — both need a focused
+follow-up.
+
+**Cause 1: LSR rewrites pointer-bump → base+index.**  For
+`*d++ = *s++`, LSR currently chooses to maintain a single
+induction variable `i` and compute `dst+i` and `src+i` per
+iteration with explicit `add`s, instead of bumping two
+pointers separately.  Today's strcpy inner loop:
+
+```
+.loop:                                  ; 9 instructions
+  mov  r4, r2;  add r4, r3              ; r4 = src + i
+  mov  r11, r1; add r11, r3             ; r11 = dst + i
+  ldb  r4, [r4 + 0]
+  stb  r4, [r11 + 0]
+  add  r3, 1                            ; i++
+  cmp  r4, 0
+  bne  .loop
+```
+
+The decision is not driven by `isLegalAddressingMode` — that
+hook only governs whether the address arithmetic *folds into
+the load/store operand*, which is independent of the IV-count
+choice.  The relevant levers are LSR's cost-model fields
+`NumRegs` / `AddRecCost` / `NumBaseAdds` and the optional
+`isLSRCostLess` hook on `TargetTransformInfo`.  Tuning them
+to favor pointer-bump form requires either a custom comparator
+or rebalancing the per-formula bias weights — both are
+non-trivial and want a focused investigation.
+
+**Cause 2: trailing MOVs at the back-edge.**  Even with LSR
+keeping pointer-bump form (verifiable today via `-disable-lsr`
+on a single function), the inner loop still has two extra
+register-to-register MOVs:
+
+```
+.loop:                                  ; 8 instructions
+  add  r3, 1        ; bump src into r3 (a new vreg, %6 in IR)
+  ldb  r2, [r2 + 0] ; load *src — using r2 = OLD src
+  add  r4, 1        ; bump dst into r4 (new vreg, %8 in IR)
+  stb  r2, [r11 + 0]; store via OLD dst
+  cmp  r2, 0
+  mov  r2, r3       ; copy new src into r2 for next iter's PHI
+  mov  r11, r4      ; copy new dst into r11 for next iter's PHI
+  bne  .loop
+```
+
+A hand-coded version would order `ldb`/`stb` *before* the
+`add`, so the destructive 2-operand `add Rd, 1` recycles the
+same register the load read from — no coalescing conflict, no
+trailing MOV.
+
+Root cause: Clang lowers `*d++ = *src++` to `getelementptr`
+*before* `load`/`store` in the IR, and our MI-level pipeline
+doesn't reorder them.  The PHI's "old pointer" vreg and the
+GEP's "new pointer" vreg can't be coalesced because they're
+simultaneously live across the load/store pair.
+
+Possible directions:
+
+1. MI-level sinking pass that moves the GEP/ADDi past the
+   load/store when there's no aliasing concern (the GEP only
+   modifies the pointer; the load/store reads through the
+   *previous* value of the same pointer).
+2. Pre-RA hint to the coalescer that the PHI input and the
+   GEP output should share a physical register, with a
+   reschedule when that's only possible by reordering.
+3. Earlier IR-level fix in CodeGenPrepare to emit the GEP in
+   post-increment position when the pointer's only other use
+   is the immediately-preceding load/store.
+
+Option 1 is cleanest: a local transform with simple safety
+conditions, matching what most RISC backends do implicitly
+via MachineSink.
+
+The two causes compound: fixing only Cause 2 leaves us at 7
+instructions (still has the per-iteration `add r4, r3` from
+the index calc); fixing only Cause 1 leaves us at 8 (still
+has the back-edge MOVs).  Both gone is the path to 6.
+
 ## Compiler: signed sub-word loads through PHIs
 
 Mirror of the zext-load promote rule for the sign-extending case.
