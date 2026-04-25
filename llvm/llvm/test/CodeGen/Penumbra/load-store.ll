@@ -27,9 +27,7 @@ define i32 @load_half_sext(ptr %p) {
 ; CHECK-LABEL: load_half_sext:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    ldh r1, [r1 + 0]
-; CHECK-NEXT:    shl r1, 16
-; CHECK-NEXT:    sar r1, 16
+; CHECK-NEXT:    ldhs r1, [r1 + 0]
 ; CHECK-NEXT:    jmp r13
   %v = load i16, ptr %p
   %ext = sext i16 %v to i32
@@ -51,9 +49,7 @@ define i32 @load_byte_sext(ptr %p) {
 ; CHECK-LABEL: load_byte_sext:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    ldb r1, [r1 + 0]
-; CHECK-NEXT:    shl r1, 24
-; CHECK-NEXT:    sar r1, 24
+; CHECK-NEXT:    ldbs r1, [r1 + 0]
 ; CHECK-NEXT:    jmp r13
   %v = load i8, ptr %p
   %ext = sext i8 %v to i32

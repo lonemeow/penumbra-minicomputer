@@ -9,21 +9,32 @@
 //
 // Both passes run only at -O1+; at -O0 the combiner is skipped entirely.
 //
-// Rules to AVOID for Penumbra:
-//   sub_to_add — turns G_SUB with a constant into G_ADD of a negated
-//     constant.  We have a real SUBi with uimm16; after sub_to_add the
-//     negated constant falls out of uimm16 range and has to be materialized
-//     in a register.  Net regression.
+// Round-trip invariant for ADD/SUB constants:
+//   The upstream `sub_to_add` rule rewrites `G_SUB x, c` → `G_ADD x, -c`.
+//   On targets with sign-extending ALU immediates this is a pure win, but
+//   our ADDi/SUBi take a uimm16 (zero-extended).  Our post-legalizer rule
+//   `penumbra_neg_imm_to_opposite` re-canonicalizes any `G_ADD x, neg_c`
+//   (where -c fits uimm16) back to `G_SUB x, c`, restoring SUBi.  Pre- and
+//   post-legalizer combiners therefore round-trip cleanly: enabling
+//   `all_combines` pre-legalizer is safe.  For constants outside uimm16
+//   the result is neutral (the operation has to be materialized either
+//   way).
 //
 //===----------------------------------------------------------------------===//
 
 include "llvm/Target/GlobalISel/Combine.td"
 
-// Pre-legalizer: canonicalization / DCE on pre-legalized generic MIR.
-// Kept minimal for now; upstream canonicalizations need review against our
-// uimm16-only ALU immediate forms before being enabled here.
+// Pre-legalizer: full upstream canonicalization / DCE on pre-legalized
+// generic MIR, matching AArch64 / RISC-V.  The `*_by_const` magic-multiply
+// rules in `intdiv_combines`/`intrem_combines` are gated by the target's
+// `isIntDivCheap()` hook — see PenumbraISelLowering.cpp, which returns
+// true so the combiner leaves the divide as a libcall (the magic-multiply
+// path goes through G_UMULH → 64-bit `__muldi3`, which is worse than
+// `__udivsi3` on a target with no hardware multiply).  Penumbra-specific
+// fixups for the zero-extending uimm16 form happen in the post-legalizer
+// combiner.
 def PenumbraPreLegalizerCombiner
-    : GICombiner<"PenumbraPreLegalizerCombinerImpl", [copy_prop]>;
+    : GICombiner<"PenumbraPreLegalizerCombinerImpl", [all_combines]>;
 
 // Target-specific: rewrite G_ADD/G_SUB by a negative constant whose negation
 // fits uimm16 to the opposite opcode with the positive constant, e.g.

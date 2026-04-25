@@ -122,17 +122,23 @@ critical for GEPs with constant indices: struct fields,
 
 **GlobalISel combiner pipeline** (at -O1+ only, see
 `PenumbraCombine.td`):
-- Pre-legalizer: `[copy_prop]` only (scaffolding; upstream
-  canonicalizations need review against our uimm16-only ALU
-  immediate forms before being enabled here).
+- Pre-legalizer: `[all_combines]` — the full upstream
+  canonicalization / DCE rule set, matching AArch64 / RISC-V.
+  The `*_by_const` magic-multiply rules in
+  `intdiv_combines`/`intrem_combines` are gated by the target's
+  `isIntDivCheap()` hook (overridden to return true in
+  `PenumbraISelLowering.cpp`); without that override `udiv x, 3`
+  rewrites into a 64-bit `__muldi3` libcall that is heavier than
+  the original `__udivsi3`.  Anything `sub_to_add` flips
+  (`G_SUB x, c` → `G_ADD x, -c`) is re-canonicalized after
+  legalization by our `penumbra_neg_imm_to_opposite` rule when
+  `|-c|` fits uimm16, so the round-trip preserves SUBi selection.
 - Post-legalizer: `[commute_constant_to_rhs, ptr_add_immed_chain,
   combines_for_extload, penumbra_neg_imm_to_opposite]`.
   `penumbra_neg_imm_to_opposite` is target-specific — flips
   G_ADD/G_SUB by a negative constant (c < 0 AND -c fits uimm16)
   to the opposite opcode with the positive magnitude, so `n--`
   selects to SUBi instead of materializing -1 via LLIS.
-- `sub_to_add` is documented as AVOID: negating the constant
-  would push it out of uimm16 range for ADDi (which zero-extends).
 - MIR-level unit tests under `test/CodeGen/Penumbra/GlobalISel/`
   using `-run-pass=penumbra-postlegalizer-combiner` isolate each
   rule; regenerate with `update_mir_test_checks.py`.
@@ -268,11 +274,11 @@ EM_PENUMBRA (0xF0DA) defined in central `llvm/BinaryFormat/ELF.h`.
 | `PenumbraRegisterInfo.td` | 16 GPRs (R0=zero, R12=TP, R13=LR, R14=SP, R15=PC), alt names, GPR/GPR\_Allocatable/CCR classes, HWEncoding |
 | `PenumbraInstrInfo.td` | All 4 formats (R/L/M/B) with bit-accurate encoding. Tied-operand constraints for 2-addr ops. ADC/SBC Uses=[SR]. All operand slots use `GPR` (full class incl. R0); allocator honours R0's reserved+`isConstant` flags. Pseudos: RET, LEAfi, SELECT\_GPR, SELECT\_CC\_GPR, ADJCALLSTACK. Penumbra1Model sched: IssueWidth=1, MicroOpBufferSize=0, LoadLatency=1 (microcoded single-issue: no benefit from hiding latency) |
 | `PenumbraGISel.td` | TableGen `Pat<>` rules: ALU reg-reg/reg-imm, shifts, NOT, constants (LLI/LLIS), all load/store (i32/p0), `ptradd` reg-reg and reg-imm (uimm16 offset). Includes `PenumbraCombine.td`. ImmLeaf predicates: uimm16, simm16, simm16neg, uimm5 |
-| `PenumbraCombine.td` | GlobalISel combiner rule groups. PreLegalizer: `[copy_prop]` (scaffolding). PostLegalizer: `[commute_constant_to_rhs, ptr_add_immed_chain, combines_for_extload, penumbra_neg_imm_to_opposite]`. Both run only at -O1+. `penumbra_neg_imm_to_opposite` is a custom rule that flips G\_ADD/G\_SUB by a negative constant to the opposite opcode when -c fits uimm16 (C++ match/apply in PenumbraPostLegalizerCombiner.cpp) |
+| `PenumbraCombine.td` | GlobalISel combiner rule groups. PreLegalizer: `[all_combines]` (full upstream set; div-by-const magic-multiply gated off via `isIntDivCheap()`). PostLegalizer: `[commute_constant_to_rhs, ptr_add_immed_chain, combines_for_extload, penumbra_neg_imm_to_opposite]`. Both run only at -O1+. `penumbra_neg_imm_to_opposite` is a custom rule that flips G\_ADD/G\_SUB by a negative constant to the opposite opcode when -c fits uimm16 (C++ match/apply in PenumbraPostLegalizerCombiner.cpp) |
 | `PenumbraCallingConv.td` | CC\_Penumbra (R1-R4 args, stack overflow), RetCC\_Penumbra (R1, R2 for i64), CSR\_Penumbra (R5-R10, R13) |
 | `PenumbraRegisterInfo.{h,cpp}` | Reserved regs (R0, R12, R14, R15), callee-saved, getFrameRegister(R14). `eliminateFrameIndex` folds small offsets directly, expands large offsets to `LLI+LUI+ADD` via a fresh virtual register (rewritten later by the scavenger, not a fixed scratch — RA may have live values in any particular reg). `requiresRegisterScavenging`/`requiresFrameIndexScavenging` both true |
 | `PenumbraFrameLowering.{h,cpp}` | StackGrowsDown, Align(4), hasFPImpl()=true when alloca present. `adjustSP` helper used by both prologue (SUB/SUBi) and epilogue (ADD/ADDi): small frames use the 16-bit immediate form, large frames (StackSize > 65535) materialize the size in R11 via LLI+LUI and use the reg-reg form. `processFunctionBeforeFrameFinalized` adds an emergency spill slot for RegScavenger when the estimated frame exceeds 15-bit signed — otherwise leaf functions don't pay for it |
-| `PenumbraISelLowering.{h,cpp}` | TargetLowering: JT encoding (EK\_LabelDifference32), SELECT diamond expansion, inline asm (`r`→GPR\_Allocatable, `{cc}`→SR/CCR), `setStackPointerRegisterToSaveRestore(R14)` |
+| `PenumbraISelLowering.{h,cpp}` | TargetLowering: JT encoding (EK\_LabelDifference32), SELECT diamond expansion, inline asm (`r`→GPR\_Allocatable, `{cc}`→SR/CCR), `setStackPointerRegisterToSaveRestore(R14)`, `isIntDivCheap()`=true (gates off GISel `udiv_by_const` magic-multiply since we have no hardware mulh) |
 | `PenumbraSubtarget.{h,cpp}` | Central hub: owns InstrInfo, FrameLowering, TLInfo, and all GlobalISel objects |
 | `PenumbraTargetMachine.{h,cpp}` | Data layout `e-m:e-p:32:32-i32:32-i64:64-n32-S32`, GlobalISel pipeline, `setGlobalISel(true)`. PIC via `-fPIC`. `PenumbraTargetObjectFile` (local class): always inlines jump tables in `.text`. `PenumbraLowerTLS` IR pass: lowers `@llvm.threadlocal.address` (GD → `__tls_get_addr` call; LE/IE → inline TP+offset) |
 | `PenumbraAsmPrinter.cpp` | MachineInstr → MCInst. Expands RET→JMP R13. Wraps globals/JTI with lo16/hi16/pcrel MCSpecifierExpr. `emitJumpTableEntry` override: always emits label-difference entries. PrintAsmOperand for inline asm |

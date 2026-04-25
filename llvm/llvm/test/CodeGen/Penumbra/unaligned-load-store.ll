@@ -129,7 +129,6 @@ define i32 @zextload_i16_align1(ptr %p) {
 ; CHECK-NEXT:    ldb r1, [r1 + 1]
 ; CHECK-NEXT:    shl r1, 8
 ; CHECK-NEXT:    or r1, r2
-; CHECK-NEXT:    and r1, 65535
 ; CHECK-NEXT:    jmp r13
   %v = load i16, ptr %p, align 1
   %ext = zext i16 %v to i32
@@ -141,11 +140,9 @@ define i32 @sextload_i16_align1(ptr %p) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    ldb r2, [r1 + 0]
-; CHECK-NEXT:    ldb r1, [r1 + 1]
+; CHECK-NEXT:    ldbs r1, [r1 + 1]
 ; CHECK-NEXT:    shl r1, 8
 ; CHECK-NEXT:    or r1, r2
-; CHECK-NEXT:    shl r1, 16
-; CHECK-NEXT:    sar r1, 16
 ; CHECK-NEXT:    jmp r13
   %v = load i16, ptr %p, align 1
   %ext = sext i16 %v to i32

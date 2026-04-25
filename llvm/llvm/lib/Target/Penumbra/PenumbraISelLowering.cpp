@@ -126,6 +126,15 @@ PenumbraISelLowering::getRegForInlineAsmConstraint(
   return TargetLowering::getRegForInlineAsmConstraint(TRI, Constraint, VT);
 }
 
+// Penumbra has no hardware multiply, so the GISel `udiv_by_const` /
+// `sdiv_by_const` rewrite (magic constant + G_UMULH/G_SMULH) lowers to a
+// 64-bit `__muldi3` libcall, which is heavier than just calling
+// `__udivsi3`/`__sdivsi3` directly.  Returning true here makes the
+// combiner leave divide-by-constant as a divide.
+bool PenumbraISelLowering::isIntDivCheap(EVT VT, AttributeList Attr) const {
+  return true;
+}
+
 // Expand SELECT_GPR / SELECT_CC_GPR pseudo into a conditional-branch diamond.
 //
 // After expansion (three blocks):

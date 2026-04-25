@@ -13,7 +13,7 @@ define i64 @zextload_i8_to_i64(ptr %p) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    ldb r1, [r1 + 0]
-; CHECK-NEXT:    and r2, 0
+; CHECK-NEXT:    mov r2, r0
 ; CHECK-NEXT:    jmp r13
   %v = load i8, ptr %p
   %ext = zext i8 %v to i64
@@ -25,7 +25,7 @@ define i64 @zextload_i16_to_i64(ptr %p) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    ldh r1, [r1 + 0]
-; CHECK-NEXT:    and r2, 0
+; CHECK-NEXT:    mov r2, r0
 ; CHECK-NEXT:    jmp r13
   %v = load i16, ptr %p
   %ext = zext i16 %v to i64
@@ -48,10 +48,8 @@ define i64 @sextload_i8_to_i64(ptr %p) {
 ; CHECK-LABEL: sextload_i8_to_i64:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    ldb r2, [r1 + 0]
-; CHECK-NEXT:    shl r2, 24
-; CHECK-NEXT:    mov r1, r2
-; CHECK-NEXT:    sar r1, 24
+; CHECK-NEXT:    ldbs r1, [r1 + 0]
+; CHECK-NEXT:    mov r2, r1
 ; CHECK-NEXT:    sar r2, 31
 ; CHECK-NEXT:    jmp r13
   %v = load i8, ptr %p
@@ -63,10 +61,8 @@ define i64 @sextload_i16_to_i64(ptr %p) {
 ; CHECK-LABEL: sextload_i16_to_i64:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    ldh r2, [r1 + 0]
-; CHECK-NEXT:    shl r2, 16
-; CHECK-NEXT:    mov r1, r2
-; CHECK-NEXT:    sar r1, 16
+; CHECK-NEXT:    ldhs r1, [r1 + 0]
+; CHECK-NEXT:    mov r2, r1
 ; CHECK-NEXT:    sar r2, 31
 ; CHECK-NEXT:    jmp r13
   %v = load i16, ptr %p

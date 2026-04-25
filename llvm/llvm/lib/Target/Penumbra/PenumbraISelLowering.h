@@ -43,6 +43,8 @@ public:
   std::pair<unsigned, const TargetRegisterClass *>
   getRegForInlineAsmConstraint(const TargetRegisterInfo *TRI,
                                StringRef Constraint, MVT VT) const override;
+
+  bool isIntDivCheap(EVT VT, AttributeList Attr) const override;
 };
 
 } // namespace llvm
