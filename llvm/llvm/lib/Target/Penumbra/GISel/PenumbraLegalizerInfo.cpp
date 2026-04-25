@@ -273,6 +273,12 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   // through ANYEXT/ZEXT).
   getActionDefinitionsBuilder({G_FSHL, G_FSHR}).lower();
 
+  // Rotates: synthesized by the pre-legalizer combiner from `(x << n) |
+  // (x >> (W-n))` idioms (funnel_shift_combines).  No hardware rotate, so
+  // lower back to shift/or — same shape we'd have selected from the
+  // original IR if the combiner hadn't recognised the pattern.
+  getActionDefinitionsBuilder({G_ROTL, G_ROTR}).lower();
+
   // Byte swap: used by SHA1, networking, etc. Lower to shift/mask/OR.
   // Bitreverse: similar, lower to shift/mask sequence.
   // Sub-word (s8/s16) widened to s32 first.  s64 narrowed to two s32.
