@@ -195,11 +195,17 @@ PenumbraISelLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
     unsigned BrOpc = MI.getOperand(5).getImm();
     BuildMI(MBB, DL, TII.get(BrOpc)).addMBB(TailMBB);
   } else {
-    // SELECT_GPR: operands are dst, trueval, falseval, cond.
+    // SELECT_GPR: operands are dst, trueval, falseval, cond.  The cond is
+    // an s1 boolean; only bit 0 is meaningful (upper bits of a same-bank
+    // GPR copy are unspecified for `G_TRUNC s32→s1` etc.), so test bit 0
+    // explicitly with TESTi 1 rather than the whole word.  The legalizer's
+    // `G_SELECT legalFor({{s32, s1}, {p0, s1}})` rule guarantees s1 here.
     auto CondReg = MI.getOperand(3).getReg();
-    BuildMI(MBB, DL, TII.get(Penumbra::TEST))
+    assert(MF->getRegInfo().getType(CondReg) == LLT::scalar(1) &&
+           "Penumbra SELECT_GPR condition must be legalized to s1");
+    BuildMI(MBB, DL, TII.get(Penumbra::TESTi))
         .addReg(CondReg)
-        .addReg(CondReg);
+        .addImm(1);
     BuildMI(MBB, DL, TII.get(Penumbra::BNE)).addMBB(TailMBB);
   }
 

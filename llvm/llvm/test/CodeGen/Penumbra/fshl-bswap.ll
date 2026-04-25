@@ -148,13 +148,13 @@ define i64 @fshl_i64(i64 %a, i64 %b, i64 %sh) {
 ; CHECK-NEXT:    shl r2, r7
 ; CHECK-NEXT:    or r11, r2
 ; CHECK-NEXT:    shl r6, r8
-; CHECK-NEXT:    test r13, r13
+; CHECK-NEXT:    test r13, 1
 ; CHECK-NEXT:    bne .LBB4_8
 ; CHECK-NEXT:  // %bb.7:
 ; CHECK-NEXT:    mov r1, r0
 ; CHECK-NEXT:  .LBB4_8:
 ; CHECK-NEXT:    mov r2, r0
-; CHECK-NEXT:    test r13, r13
+; CHECK-NEXT:    test r13, 1
 ; CHECK-NEXT:    bne .LBB4_10
 ; CHECK-NEXT:  // %bb.9:
 ; CHECK-NEXT:    mov r11, r6
@@ -211,13 +211,13 @@ define i64 @fshl_i64(i64 %a, i64 %b, i64 %sh) {
 ; CHECK-NEXT:    shl r3, r8
 ; CHECK-NEXT:    or r2, r3
 ; CHECK-NEXT:    shr r4, r7
-; CHECK-NEXT:    test r11, r11
+; CHECK-NEXT:    test r11, 1
 ; CHECK-NEXT:    beq .LBB4_19
 ; CHECK-NEXT:  // %bb.20:
 ; CHECK-NEXT:    cmp r9, r6
 ; CHECK-NEXT:    bne .LBB4_21
 ; CHECK-NEXT:  .LBB4_22:
-; CHECK-NEXT:    test r11, r11
+; CHECK-NEXT:    test r11, 1
 ; CHECK-NEXT:    bne .LBB4_24
 ; CHECK-NEXT:  .LBB4_23:
 ; CHECK-NEXT:    mov r13, r0
@@ -240,7 +240,7 @@ define i64 @fshl_i64(i64 %a, i64 %b, i64 %sh) {
 ; CHECK-NEXT:    beq .LBB4_22
 ; CHECK-NEXT:  .LBB4_21:
 ; CHECK-NEXT:    mov r10, r2
-; CHECK-NEXT:    test r11, r11
+; CHECK-NEXT:    test r11, 1
 ; CHECK-NEXT:    beq .LBB4_23
 ; CHECK-NEXT:    b .LBB4_24
   %r = call i64 @llvm.fshl.i64(i64 %a, i64 %b, i64 %sh)

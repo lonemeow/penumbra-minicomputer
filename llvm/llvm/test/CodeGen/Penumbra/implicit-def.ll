@@ -43,7 +43,7 @@ define i32 @cond_undef(i1 %c, i32 %a) {
 ; O0-NEXT:    stw r2, [r14 + 4] // 4-byte Folded Spill
 ; O0-NEXT:    lli r2, 1
 ; O0-NEXT:    xor r1, r2
-; O0-NEXT:    test r1, r1
+; O0-NEXT:    test r1, 1
 ; O0-NEXT:    bne .LBB2_3
 ; O0-NEXT:    b .LBB2_2
 ; O0-NEXT:  .LBB2_2: // %then
@@ -63,7 +63,7 @@ define i32 @cond_undef(i1 %c, i32 %a) {
 ; O1-NEXT:  // %bb.0: // %entry
 ; O1-NEXT:    mov r3, r1
 ; O1-NEXT:    mov r1, r2
-; O1-NEXT:    test r3, r3
+; O1-NEXT:    test r3, 1
 ; O1-NEXT:    bne .LBB2_2
 ; O1-NEXT:  // %bb.1: // %else
 ; O1-NEXT:    // implicit-def: $r1

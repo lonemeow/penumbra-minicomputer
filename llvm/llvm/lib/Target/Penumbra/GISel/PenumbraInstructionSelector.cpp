@@ -447,7 +447,8 @@ bool PenumbraInstructionSelector::selectBranch(MachineInstr &I,
 // Folds with the G_ICMP that defines the condition:
 //   G_ICMP s1 %cond = pred, %lhs, %rhs   →   CMP %lhs, %rhs
 //   G_BRCOND %cond, %target               →   Bcc %target
-// If the condition is not from G_ICMP, falls back to TEST + BNE (nonzero).
+// If the condition is not from G_ICMP, falls back to TESTi 1 + BNE — only
+// bit 0 of the s1 boolean is meaningful (see assertion + comment below).
 bool PenumbraInstructionSelector::selectBrCond(MachineInstr &I,
                                                 MachineBasicBlock &MBB,
                                                 MachineRegisterInfo &MRI) const {
@@ -509,10 +510,18 @@ bool PenumbraInstructionSelector::selectBrCond(MachineInstr &I,
     return true;
   }
 
-  // Fallback: condition is a generic s1/s32 value — TEST reg, reg + BNE.
-  auto TestMI = BuildMI(MBB, I, DL, TII.get(Penumbra::TEST))
+  // Fallback: condition is a generic s1 value — only bit 0 is meaningful,
+  // so test bit 0 explicitly with TESTi 1 + BNE.  `TEST reg, reg` would be
+  // wrong for any s1 produced by a non-canonical source (e.g. `G_TRUNC
+  // s32→s1` for `(x & 1)`-style patterns synthesized by
+  // `known_bits_simplifications`): the upper bits of a same-bank GPR copy
+  // are unspecified, so testing the whole word checks the wrong thing.
+  // The legalizer's `G_BRCOND legalFor({s1})` rule guarantees s1 here.
+  assert(MRI.getType(CondReg) == LLT::scalar(1) &&
+         "Penumbra G_BRCOND condition must be legalized to s1");
+  auto TestMI = BuildMI(MBB, I, DL, TII.get(Penumbra::TESTi))
                     .addReg(CondReg)
-                    .addReg(CondReg);
+                    .addImm(1);
   constrainSelectedInstRegOperands(*TestMI, TII, TRI, RBI);
 
   BuildMI(MBB, I, DL, TII.get(Penumbra::BNE)).addMBB(TargetMBB);

@@ -137,16 +137,16 @@ define void @vector_select(ptr %dst, ptr %a, ptr %b, i1 %c) {
 ; CHECK-NEXT:    ldw r8, [r3 + 4]
 ; CHECK-NEXT:    ldw r7, [r3 + 8]
 ; CHECK-NEXT:    ldw r3, [r3 + 12]
-; CHECK-NEXT:    test r4, r4
+; CHECK-NEXT:    test r4, 1
 ; CHECK-NEXT:    beq .LBB3_1
 ; CHECK-NEXT:  // %bb.2:
-; CHECK-NEXT:    test r4, r4
+; CHECK-NEXT:    test r4, 1
 ; CHECK-NEXT:    beq .LBB3_3
 ; CHECK-NEXT:  .LBB3_4:
-; CHECK-NEXT:    test r4, r4
+; CHECK-NEXT:    test r4, 1
 ; CHECK-NEXT:    beq .LBB3_5
 ; CHECK-NEXT:  .LBB3_6:
-; CHECK-NEXT:    test r4, r4
+; CHECK-NEXT:    test r4, 1
 ; CHECK-NEXT:    bne .LBB3_8
 ; CHECK-NEXT:  .LBB3_7:
 ; CHECK-NEXT:    mov r2, r3
@@ -164,15 +164,15 @@ define void @vector_select(ptr %dst, ptr %a, ptr %b, i1 %c) {
 ; CHECK-NEXT:    jmp r13
 ; CHECK-NEXT:  .LBB3_1:
 ; CHECK-NEXT:    mov r11, r9
-; CHECK-NEXT:    test r4, r4
+; CHECK-NEXT:    test r4, 1
 ; CHECK-NEXT:    bne .LBB3_4
 ; CHECK-NEXT:  .LBB3_3:
 ; CHECK-NEXT:    mov r5, r8
-; CHECK-NEXT:    test r4, r4
+; CHECK-NEXT:    test r4, 1
 ; CHECK-NEXT:    bne .LBB3_6
 ; CHECK-NEXT:  .LBB3_5:
 ; CHECK-NEXT:    mov r6, r7
-; CHECK-NEXT:    test r4, r4
+; CHECK-NEXT:    test r4, 1
 ; CHECK-NEXT:    beq .LBB3_7
 ; CHECK-NEXT:    b .LBB3_8
   %va = load <4 x i32>, ptr %a

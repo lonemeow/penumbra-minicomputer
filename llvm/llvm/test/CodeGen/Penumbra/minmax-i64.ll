@@ -28,10 +28,10 @@ define i64 @smax_i64(i64 %a, i64 %b) {
 ; CHECK-NEXT:    cmp r2, r4
 ; CHECK-NEXT:    bne .LBB0_5
 ; CHECK-NEXT:  .LBB0_6:
-; CHECK-NEXT:    test r11, r11
+; CHECK-NEXT:    test r11, 1
 ; CHECK-NEXT:    beq .LBB0_7
 ; CHECK-NEXT:  .LBB0_8:
-; CHECK-NEXT:    test r11, r11
+; CHECK-NEXT:    test r11, 1
 ; CHECK-NEXT:    bne .LBB0_10
 ; CHECK-NEXT:  .LBB0_9:
 ; CHECK-NEXT:    mov r2, r4
@@ -46,11 +46,11 @@ define i64 @smax_i64(i64 %a, i64 %b) {
 ; CHECK-NEXT:    beq .LBB0_6
 ; CHECK-NEXT:  .LBB0_5:
 ; CHECK-NEXT:    mov r11, r13
-; CHECK-NEXT:    test r11, r11
+; CHECK-NEXT:    test r11, 1
 ; CHECK-NEXT:    bne .LBB0_8
 ; CHECK-NEXT:  .LBB0_7:
 ; CHECK-NEXT:    mov r1, r3
-; CHECK-NEXT:    test r11, r11
+; CHECK-NEXT:    test r11, 1
 ; CHECK-NEXT:    beq .LBB0_9
 ; CHECK-NEXT:    b .LBB0_10
   %r = call i64 @llvm.smax.i64(i64 %a, i64 %b)
@@ -80,10 +80,10 @@ define i64 @umin_i64(i64 %a, i64 %b) {
 ; CHECK-NEXT:    cmp r2, r4
 ; CHECK-NEXT:    bne .LBB1_5
 ; CHECK-NEXT:  .LBB1_6:
-; CHECK-NEXT:    test r11, r11
+; CHECK-NEXT:    test r11, 1
 ; CHECK-NEXT:    beq .LBB1_7
 ; CHECK-NEXT:  .LBB1_8:
-; CHECK-NEXT:    test r11, r11
+; CHECK-NEXT:    test r11, 1
 ; CHECK-NEXT:    bne .LBB1_10
 ; CHECK-NEXT:  .LBB1_9:
 ; CHECK-NEXT:    mov r2, r4
@@ -98,11 +98,11 @@ define i64 @umin_i64(i64 %a, i64 %b) {
 ; CHECK-NEXT:    beq .LBB1_6
 ; CHECK-NEXT:  .LBB1_5:
 ; CHECK-NEXT:    mov r11, r13
-; CHECK-NEXT:    test r11, r11
+; CHECK-NEXT:    test r11, 1
 ; CHECK-NEXT:    bne .LBB1_8
 ; CHECK-NEXT:  .LBB1_7:
 ; CHECK-NEXT:    mov r1, r3
-; CHECK-NEXT:    test r11, r11
+; CHECK-NEXT:    test r11, 1
 ; CHECK-NEXT:    beq .LBB1_9
 ; CHECK-NEXT:    b .LBB1_10
   %r = call i64 @llvm.umin.i64(i64 %a, i64 %b)
