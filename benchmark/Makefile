@@ -66,7 +66,7 @@ $(BUILDDIR)/softfloat_stub.o: common/softfloat_stub.c | $(BUILDDIR)
 #
 # Source: https://github.com/Keith-S-Thompson/dhrystone (v2.1/)
 
-DHRYSTONE_ITERATIONS ?= 1000
+DHRYSTONE_ITERATIONS ?= 10000
 
 # Stamp file: forces recompilation when iteration count changes.
 # make doesn't track -D flag changes, so we write the current value

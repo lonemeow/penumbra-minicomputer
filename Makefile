@@ -296,10 +296,13 @@ sdimage-rootfs: rootfs
 #   make benchmark-rtl             — run all benchmarks on Verilator (cycle-accurate)
 #   make benchmark BENCH_ITERS=10  — override iteration count
 BENCH_IMG   := $(BUILD_DIR)/bench.img
-BENCH_ITERS ?= 1000
+BENCH_ITERS ?= 10000
 
+# Always rebuild the benchmark sources: they're small, compile quickly, and
+# `make` can't see when the compiler itself has changed under it.
 .PHONY: sdimage-bench
 sdimage-bench:
+	@$(MAKE) -C benchmark clean
 	@$(MAKE) -C benchmark DHRYSTONE_ITERATIONS=$(BENCH_ITERS) LLVM_PREFIX=$(LLVM_PREFIX)
 	@mkdir -p $(BUILD_DIR)/bench_sd
 	@cp $(BUILD_DIR)/benchmark/*.ELF $(BUILD_DIR)/bench_sd/ 2>/dev/null || true
