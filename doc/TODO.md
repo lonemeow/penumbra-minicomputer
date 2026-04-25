@@ -146,6 +146,36 @@ After this lands, kernel stack overflow produces a clean bus fault
 with EPC pointing at the offending instruction, not a nested TLB
 miss in the trap handler.
 
+## Compiler: signed sub-word loads through PHIs
+
+Mirror of the zext-load promote rule for the sign-extending case.
+
+The post-legalizer rule `penumbra_zextload_promote` rewrites plain
+`G_LOAD :: (load s8/s16) -> s32` into `G_ZEXTLOAD`, communicating
+to known-bits machinery that `LDB`/`LDH` zero-extend in hardware.
+That makes the redundant `G_AND %, 0xFF` masks emitted by the
+legalizer's widening of unsigned/eq/ne `G_ICMP` dissolve via
+`redundant_and`.  The signed analog is still suboptimal: for
+`while (*signed_byte > 0 && *a == *b)` shapes the legalizer widens
+the signed `G_ICMP` with `G_SEXT`, which lowers to `SHL r,24;
+SAR r,24` after the load instead of selecting `LDBS` directly.
+
+Upstream's `extending_loads` combine handles the single-use case
+already (folding `G_SEXT (G_LOAD)` → `G_SEXTLOAD`).  The multi-use
+case (loaded byte flows through a `G_PHI` to both a signed compare
+and another consumer) has the same root cause as the zext case:
+the direct user of the load is a `G_PHI`, not a `G_SEXT`, so the
+combine bails.
+
+Plausible fix: extend the post-legalizer combiner with a sibling
+to `penumbra_zextload_promote` that walks transitively through
+`G_PHI`/`G_COPY`/`G_TRUNC` users, picks the appropriate extension
+opcode (`G_ZEXTLOAD` if no sign-extending user, `G_SEXTLOAD` if a
+sign-extending user dominates), and rewrites the load.  The
+walk has to handle mixed users sensibly — pessimize to no
+promotion if both sext and zext consumers exist, since either
+choice forces a software conversion at the other use site.
+
 ## Compiler: named byval args overlap on stack
 
 When a fixed (non-variadic) function receives byval struct args

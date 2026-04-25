@@ -76,6 +76,54 @@ void applyNegImmToOpposite(MachineInstr &MI, MachineRegisterInfo &MRI,
   MI.eraseFromParent();
 }
 
+// Match a plain `G_LOAD` whose memory size is smaller than its destination
+// size — i.e. an extload — and promote it to `G_ZEXTLOAD`.  Penumbra's LDB
+// and LDH always zero-extend in hardware, so this is a faithful description
+// of the load's actual semantics.  After the promotion, GISelValueTracking
+// reports the high bits as zero, which `redundant_and` then uses to drop
+// the `G_AND %, 0xFF` masks the legalizer emits when widening unsigned /
+// eq / ne `G_ICMP` operands.
+bool matchZextloadPromote(MachineInstr &MI, MachineRegisterInfo &MRI) {
+  // The combine root is matched on opcode by the rule (`G_LOAD`); other
+  // load variants (G_ZEXTLOAD, G_SEXTLOAD) already carry their semantics.
+  assert(MI.getOpcode() == TargetOpcode::G_LOAD);
+
+  MachineMemOperand &MMO = **MI.memoperands_begin();
+  Register DstReg = MI.getOperand(0).getReg();
+  LLT Ty = MRI.getType(DstReg);
+  
+  if (!MMO.isUnordered())
+    return false;
+
+  if (!Ty.isScalar())
+    return false;
+
+  if (Ty.getSizeInBits() <= MMO.getMemoryType().getSizeInBits())
+    return false;
+
+  for (const MachineInstr &Use : MRI.use_nodbg_instructions(DstReg)) {
+    if (Use.getOpcode() == TargetOpcode::G_SEXT ||
+        Use.getOpcode() == TargetOpcode::G_SEXT_INREG)
+      return false;
+  }
+
+  return true;
+}
+
+// Rewrite the matched load with G_ZEXTLOAD, reusing the same destination
+// register, pointer, and memory operand.  The MMO is unchanged because the
+// memory access size and alignment are identical — only the high-bit
+// semantics differ between G_LOAD (anyext) and G_ZEXTLOAD (zero-extend).
+void applyZextloadPromote(MachineInstr &MI, MachineRegisterInfo &MRI,
+                          MachineIRBuilder &B) {
+  B.setInstrAndDebugLoc(MI);
+  Register Dst = MI.getOperand(0).getReg();
+  Register Ptr = MI.getOperand(1).getReg();
+  MachineMemOperand &MMO = **MI.memoperands_begin();
+  B.buildLoadInstr(TargetOpcode::G_ZEXTLOAD, Dst, Ptr, MMO);
+  MI.eraseFromParent();
+}
+
 class PenumbraPostLegalizerCombinerImpl : public Combiner {
 protected:
   const CombinerHelper Helper;

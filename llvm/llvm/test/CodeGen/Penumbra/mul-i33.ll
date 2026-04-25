@@ -26,8 +26,6 @@ define i32 @inst_check_f(i32 %m) {
 ; CHECK-NEXT:    mov r1, r2
 ; CHECK-NEXT:    mov r2, r4
 ; CHECK-NEXT:    bl __muldi3
-; CHECK-NEXT:    llis r3, -1
-; CHECK-NEXT:    and r1, r3
 ; CHECK-NEXT:    and r2, 1
 ; CHECK-NEXT:    shr r1, 1
 ; CHECK-NEXT:    shl r2, 31

@@ -56,6 +56,26 @@ def penumbra_neg_imm_to_opposite : GICombineRule<
          [{ return matchNegImmToOpposite(*${root}, MRI, ${matchinfo}); }]),
   (apply [{ applyNegImmToOpposite(*${root}, MRI, B, ${matchinfo}); }])>;
 
+// Target-specific: rewrite a plain `G_LOAD :: (load sX) -> sY` (sX < sY) into
+// `G_ZEXTLOAD`.  Penumbra's LDB/LDH always zero-extend in hardware, so a
+// sub-word plain load is *already* a zextload semantically; the IR-level
+// extload form just doesn't tell the rest of the pipeline.  After this
+// rewrite the known-bits tracker reports the high bits as zero, which lets
+// `redundant_and` drop the `G_AND %, 0xFF` masks the legalizer emits when
+// widening unsigned / eq / ne `G_ICMP` operands.  In a multi-use loop —
+// e.g. strcmp's loop where the loaded byte flows through a `G_PHI` to both
+// the comparison and a self-feeding edge — the upstream `load_and_mask`
+// combine bails (it requires the AND to be a direct user of a single-use
+// load), so this target rule is what unblocks the optimization.
+//
+// Sign-extending loads (G_SEXTLOAD / `LDBS`) are not handled here; see
+// `doc/TODO.md` ("Compiler: signed sub-word loads through PHIs").
+def penumbra_zextload_promote : GICombineRule<
+  (defs root:$root),
+  (match (wip_match_opcode G_LOAD):$root,
+         [{ return matchZextloadPromote(*${root}, MRI); }]),
+  (apply [{ applyZextloadPromote(*${root}, MRI, B); }])>;
+
 // Post-legalizer: optimizations on legalized MIR.  Must preserve instruction
 // legality.
 //
@@ -66,6 +86,13 @@ def penumbra_neg_imm_to_opposite : GICombineRule<
 //     that will fold constant offsets into LDW/STW.
 //   combines_for_extload    — folds G_ZEXT/G_SEXT of a narrower load into a
 //     single extload, matched by the LDH/LDHS/LDB/LDBS patterns.
+//   penumbra_zextload_promote — target-specific; see rule definition above.
+//   known_bits_simplifications — includes `redundant_and`, which is what
+//     consumes the known-zero high bits introduced by the promote rule
+//     above to drop the legalizer's `G_AND %, 0xFF` masks (also picks up
+//     `redundant_or` / `redundant_sext_inreg` for free).  Required at
+//     post-legalize because pre-legalize MIR doesn't yet have the widened
+//     ICMP shape that produces these masks.
 //   penumbra_neg_imm_to_opposite — see above; flips ADD↔SUB when the
 //     constant is negative but -c fits uimm16.
 def PenumbraPostLegalizerCombiner
@@ -73,5 +100,7 @@ def PenumbraPostLegalizerCombiner
       commute_constant_to_rhs,
       ptr_add_immed_chain,
       combines_for_extload,
+      penumbra_zextload_promote,
+      known_bits_simplifications,
       penumbra_neg_imm_to_opposite
     ]>;

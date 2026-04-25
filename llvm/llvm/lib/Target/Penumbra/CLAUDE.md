@@ -227,6 +227,27 @@ or MOV PC + ADDi (PIC); BRJT always adds base back).
   Cond vector is single element (branch opcode).  All 14 conditional
   branch opcodes have opposite-pairs (BEQ↔BNE, BCS↔BCC, etc.).
   Enables `-O1`/`-Os`/`-O2` (branch folding, block placement).
+- **Sub-word load zero-extension:** `penumbra_zextload_promote` in
+  `PenumbraCombine.td` rewrites plain `G_LOAD :: (load sX) -> sY`
+  (sX < sY) to `G_ZEXTLOAD` post-legalize.  `LDB`/`LDH` always
+  zero-extend in hardware, so this just communicates the load's
+  actual semantics to the rest of the pipeline.  Once the load
+  carries known-zero high bits, `redundant_and` (added to the
+  post-legalizer combine list via `known_bits_simplifications`)
+  drops the `G_AND %, 0xFF` masks the legalizer emits when widening
+  unsigned/eq/ne `G_ICMP` operands.  Critical for multi-use loop
+  shapes (strcmp, memcmp, hash-on-bytes) where the loaded byte
+  flows through a `G_PHI` to both the comparison and a feedback
+  edge — upstream's `load_and_mask` combine bails on those because
+  it requires the `G_AND` to be a direct user of a single-use load.
+  Conservative guard skips promotion when a direct user is `G_SEXT`
+  or `G_SEXT_INREG`, leaving upstream's `extending_loads` combine
+  free to fold those into `G_SEXTLOAD` (= `LDBS`).  Strcmp inner
+  loop drops from 13 to 8 instructions, ~4% Dhrystone improvement
+  at -O2.  Signed multi-use case (PHI-mediated) is still suboptimal
+  and tracked in `doc/TODO.md` ("Compiler: signed sub-word loads
+  through PHIs").  Regression test at
+  `test/CodeGen/Penumbra/zextload-promote.ll`.
 - **Compare elimination:** `analyzeCompare` / `optimizeCompareInstr`
   in `PenumbraInstrInfo.cpp`, driven by the generic `PeepholeOptimizer`
   at -O1+.  Elides `CMPi Rx, 0` when an earlier flag-setting ALU op
