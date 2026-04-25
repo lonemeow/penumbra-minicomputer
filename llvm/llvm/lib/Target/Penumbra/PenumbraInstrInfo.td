@@ -245,8 +245,10 @@ let Defs = [SR], Uses = [SR], Constraints = "$Rd = $Rd_in" in {
                      "sbc\t$Rd, $Rs">;
 }
 
-// Flag-only variants (F=1): CMP = SUB with F=1, TEST = AND with F=1
-let F = 1 in {
+// Flag-only variants (F=1): CMP = SUB with F=1, TEST = AND with F=1.
+// `isCompare = 1` lets the generic PeepholeOptimizer dispatch these to
+// our `analyzeCompare` / `optimizeCompareInstr` hooks for elision.
+let F = 1, isCompare = 1 in {
   let Defs = [SR] in {
     def CMP  : FormatR<0b00001, (outs), (ins GPR:$Rd, GPR:$Rs),
                        "cmp\t$Rd, $Rs">;
@@ -274,11 +276,13 @@ let Defs = [SR] in {
     def SUBi : FormatL<0b0100, (outs GPR:$Rd), (ins GPR:$Rd_in, imm16op:$imm16),
                        "sub\t$Rd, $imm16">;
   }
+  let isCompare = 1 in
   def CMPi : FormatL<0b0101, (outs), (ins GPR:$Rd, imm16op:$imm16),
                      "cmp\t$Rd, $imm16">;
   let Constraints = "$Rd = $Rd_in" in
   def ANDi : FormatL<0b0110, (outs GPR:$Rd), (ins GPR:$Rd_in, imm16op:$imm16),
                      "and\t$Rd, $imm16">;
+  let isCompare = 1 in
   def TESTi : FormatL<0b0111, (outs), (ins GPR:$Rd, imm16op:$imm16),
                       "test\t$Rd, $imm16">;
 

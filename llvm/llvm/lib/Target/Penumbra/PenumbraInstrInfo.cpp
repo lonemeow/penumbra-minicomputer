@@ -270,3 +270,137 @@ bool PenumbraInstrInfo::reverseBranchCondition(
   Cond[0].setImm(getOppositeBranchOpcode(Cond[0].getImm()));
   return false;
 }
+
+//===----------------------------------------------------------------------===//
+// Compare-elimination peephole.
+//
+// Penumbra has flag-setting ALU instructions (Defs = [SR]) and a separate
+// CMP/CMPi/TEST/TESTi family that *only* sets flags.  After GISel folds
+// G_ICMP+G_BRCOND into CMPi+Bcc, code sequences like
+//
+//     SUBi  Rx, 1
+//     CMPi  Rx, 0    ;  redundant — SUBi already set Z/N
+//     BNE   loop
+//
+// are common.  The generic LLVM `PeepholeOptimizer` (added at -O1+ by
+// `addMachineSSAOptimization`) drives compare-elimination via two virtual
+// hooks on `TargetInstrInfo`: `analyzeCompare` (recognise the CMP) and
+// `optimizeCompareInstr` (decide whether to delete it).
+//
+// The minimal pattern handled here:
+//   1. `CMPi Rx, 0` whose only purpose is to set Z/N for a subsequent Bcc.
+//   2. The most recent SR-touching predecessor in the same MBB writes Rx.
+//   3. All SR readers between the CMP and the next SR redefinition use only
+//      Z and N (i.e. BEQ/BNE/BMI/BPL).  C and V differ between
+//      `SUBi Rx, k` and `CMP Rx, 0` whenever k != 0, so flag-readers that
+//      consume C or V must keep the explicit CMP.
+//
+// Future extensions (left as TODOs):
+//   - `CMP Rx, Ry` after `SUB Rx_dst, Ry`.
+//   - `TESTi Rx, mask` after `ANDi Rx, mask`.
+//   - Looking through trivial COPY chains so SUB-then-COPY-then-CMP elides.
+//   - Cross-MBB analysis (currently scoped to one block).
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+// Bitmask of SR flags read by each Bcc opcode.  Bit 0 = Z, 1 = N, 2 = C,
+// 3 = V.  Branches outside this table conservatively report "all flags."
+constexpr unsigned FZ = 0x1;
+constexpr unsigned FN = 0x2;
+constexpr unsigned FC = 0x4;
+constexpr unsigned FV = 0x8;
+
+unsigned getBranchFlagsRead(unsigned Opcode) {
+  switch (Opcode) {
+  case Penumbra::BEQ:
+  case Penumbra::BNE:
+    return FZ;
+  case Penumbra::BMI:
+  case Penumbra::BPL:
+    return FN;
+  case Penumbra::BCS:
+  case Penumbra::BCC:
+    return FC;
+  case Penumbra::BVS:
+  case Penumbra::BVC:
+    return FV;
+  case Penumbra::BHI:
+  case Penumbra::BLS:
+    return FZ | FC;
+  case Penumbra::BGE:
+  case Penumbra::BLT:
+    return FN | FV;
+  case Penumbra::BGT:
+  case Penumbra::BLE:
+    return FZ | FN | FV;
+  default:
+    return FZ | FN | FC | FV;
+  }
+}
+
+} // namespace
+
+bool PenumbraInstrInfo::analyzeCompare(const MachineInstr &MI, Register &SrcReg,
+                                       Register &SrcReg2, int64_t &CmpMask,
+                                       int64_t &CmpValue) const {
+  switch (MI.getOpcode()) {
+  case Penumbra::CMPi:
+    SrcReg = MI.getOperand(0).getReg();
+    SrcReg2 = Register();
+    CmpMask = ~0;
+    CmpValue = MI.getOperand(1).getImm();
+    return true;
+  // TODO: CMP, TESTi, TEST when their elision patterns are added below.
+  default:
+    return false;
+  }
+}
+
+bool PenumbraInstrInfo::optimizeCompareInstr(
+    MachineInstr &CmpInstr, Register SrcReg, Register /*SrcReg2*/,
+    int64_t /*CmpMask*/, int64_t CmpValue,
+    const MachineRegisterInfo * /*MRI*/) const {
+  // Currently we only know how to elide `CMPi Rx, 0`.
+  if (CmpInstr.getOpcode() != Penumbra::CMPi || CmpValue != 0)
+    return false;
+
+  MachineBasicBlock *MBB = CmpInstr.getParent();
+
+  // Walk back to the most recent SR-touching predecessor.  If it defines
+  // SrcReg, its Z/N flags already encode `SrcReg vs 0`.  If it touches SR
+  // but doesn't define SrcReg, SR has been clobbered and we must keep the
+  // CMP.
+  MachineInstr *Producer = nullptr;
+  for (auto It = MachineBasicBlock::iterator(CmpInstr); It != MBB->begin();) {
+    --It;
+    if (It->isDebugInstr())
+      continue;
+    if (!It->modifiesRegister(Penumbra::SR, &getRegisterInfo()))
+      continue;
+    if (It->getNumOperands() > 0 && It->getOperand(0).isReg() &&
+        It->getOperand(0).isDef() && It->getOperand(0).getReg() == SrcReg)
+      Producer = &*It;
+    break;
+  }
+  if (!Producer)
+    return false;
+
+  // Walk forward from the CMP and verify every SR reader consumes only Z
+  // and N before the next SR clobber.
+  for (auto It = std::next(MachineBasicBlock::iterator(CmpInstr));
+       It != MBB->end(); ++It) {
+    if (It->isDebugInstr())
+      continue;
+    if (It->readsRegister(Penumbra::SR, &getRegisterInfo())) {
+      unsigned Flags = getBranchFlagsRead(It->getOpcode());
+      if (Flags & ~(FZ | FN))
+        return false;
+    }
+    if (It->modifiesRegister(Penumbra::SR, &getRegisterInfo()))
+      break;
+  }
+
+  CmpInstr.eraseFromParent();
+  return true;
+}

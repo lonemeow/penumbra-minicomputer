@@ -227,6 +227,15 @@ or MOV PC + ADDi (PIC); BRJT always adds base back).
   Cond vector is single element (branch opcode).  All 14 conditional
   branch opcodes have opposite-pairs (BEQ↔BNE, BCS↔BCC, etc.).
   Enables `-O1`/`-Os`/`-O2` (branch folding, block placement).
+- **Compare elimination:** `analyzeCompare` / `optimizeCompareInstr`
+  in `PenumbraInstrInfo.cpp`, driven by the generic `PeepholeOptimizer`
+  at -O1+.  Currently elides `CMPi Rx, 0` when an immediately
+  preceding flag-setting ALU op already wrote Rx and no intervening
+  instruction reads SR with anything other than Z/N (C/V differ
+  between SUBi-by-nonzero and CMP-against-zero).  Saves the redundant
+  CMP in `while (n--)` / `for (i = N; i; i--)` style loops.  Extension
+  points (CMP Rx,Ry after SUB Rx,Ry; TESTi after ANDi; COPY chains;
+  cross-MBB) noted as TODOs in the source.
 - **G_FENCE:** Legalized as always-legal, selected to `MEMBARRIER`
   pseudo (compiler barrier, no hardware instruction — uniprocessor).
 - **G_BRINDIRECT:** Legalized for p0, selected to BRIND (JMP Rd).

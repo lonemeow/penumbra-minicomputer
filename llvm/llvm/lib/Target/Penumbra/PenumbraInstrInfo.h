@@ -58,6 +58,18 @@ public:
   bool
   reverseBranchCondition(SmallVectorImpl<MachineOperand> &Cond) const override;
 
+  // Compare-elimination peephole hooks (driven by PeepholeOptimizer).  Together
+  // they recognize `CMPi Rx, 0` whose Z/N flags are already produced by an
+  // immediately-preceding flag-setting ALU instruction, and erase the CMP.
+  bool analyzeCompare(const MachineInstr &MI, Register &SrcReg,
+                      Register &SrcReg2, int64_t &CmpMask,
+                      int64_t &CmpValue) const override;
+
+  bool optimizeCompareInstr(MachineInstr &CmpInstr, Register SrcReg,
+                            Register SrcReg2, int64_t CmpMask,
+                            int64_t CmpValue,
+                            const MachineRegisterInfo *MRI) const override;
+
 private:
   static unsigned getOppositeBranchOpcode(unsigned Opc);
 };
