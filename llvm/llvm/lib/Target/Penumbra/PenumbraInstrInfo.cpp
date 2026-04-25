@@ -287,13 +287,22 @@ bool PenumbraInstrInfo::reverseBranchCondition(
 // hooks on `TargetInstrInfo`: `analyzeCompare` (recognise the CMP) and
 // `optimizeCompareInstr` (decide whether to delete it).
 //
-// The minimal pattern handled here:
-//   1. `CMPi Rx, 0` whose only purpose is to set Z/N for a subsequent Bcc.
-//   2. The most recent SR-touching predecessor in the same MBB writes Rx.
-//   3. All SR readers between the CMP and the next SR redefinition use only
-//      Z and N (i.e. BEQ/BNE/BMI/BPL).  C and V differ between
-//      `SUBi Rx, k` and `CMP Rx, 0` whenever k != 0, so flag-readers that
-//      consume C or V must keep the explicit CMP.
+// Pattern handled here: `CMPi Rx, 0` whose Z/N can be supplied by an
+// earlier flag-setting ALU op that writes Rx.  The producer may be
+// separated from the CMP by intervening SR clobbers (e.g. unrelated
+// pointer-increment `ADDi`s in a memcpy loop) — we walk back through
+// them as long as Rx is neither read nor re-defined in the gap.  When
+// the producer is found, we splice it down to be immediately before
+// the CMP and erase the CMP; this re-establishes the producer's flags
+// as the most recent SR write before any subsequent flag reader.  The
+// splice is mandatory: without it, intervening SR-clobbering ALU ops
+// would leave SR holding their flags, not the producer's, and a
+// downstream BNE would branch on the wrong condition.
+//
+// Forward-direction safety: SR readers between the CMP and the next SR
+// redefinition must consume only Z and N (BEQ/BNE/BMI/BPL).  C and V
+// differ between `SUBi Rx, k` and `CMP Rx, 0` whenever k != 0, so any
+// reader of C or V must keep the explicit CMP.
 //
 // Future extensions (left as TODOs):
 //   - `CMP Rx, Ry` after `SUB Rx_dst, Ry`.
@@ -339,6 +348,35 @@ unsigned getBranchFlagsRead(unsigned Opcode) {
   }
 }
 
+// True if `Opcode` is a Penumbra ALU op that sets SR.{Z,N} from the value
+// it writes back into operand 0.  Excludes ADC/SBC because they also *use*
+// SR (carry-in dependency), so relocating them past intervening SR clobbers
+// would change the carry-in they observe.  Also excludes MOV (no flags),
+// LLI/LLIS/LUI (no flags), CMP/TEST family (no GPR result), and any
+// non-arithmetic instruction.
+bool definesFlagsFromResult(unsigned Opcode) {
+  switch (Opcode) {
+  case Penumbra::ADD:
+  case Penumbra::ADDi:
+  case Penumbra::SUB:
+  case Penumbra::SUBi:
+  case Penumbra::AND:
+  case Penumbra::ANDi:
+  case Penumbra::OR:
+  case Penumbra::XOR:
+  case Penumbra::SHL:
+  case Penumbra::SHLi:
+  case Penumbra::SHR:
+  case Penumbra::SHRi:
+  case Penumbra::SAR:
+  case Penumbra::SARi:
+  case Penumbra::NOT:
+    return true;
+  default:
+    return false;
+  }
+}
+
 } // namespace
 
 bool PenumbraInstrInfo::analyzeCompare(const MachineInstr &MI, Register &SrcReg,
@@ -366,40 +404,62 @@ bool PenumbraInstrInfo::optimizeCompareInstr(
     return false;
 
   MachineBasicBlock *MBB = CmpInstr.getParent();
+  const TargetRegisterInfo &TRI = getRegisterInfo();
 
-  // Walk back to the most recent SR-touching predecessor.  If it defines
-  // SrcReg, its Z/N flags already encode `SrcReg vs 0`.  If it touches SR
-  // but doesn't define SrcReg, SR has been clobbered and we must keep the
-  // CMP.
+  // Walk back through unrelated SR clobbers, looking for a flag-setting ALU
+  // op that defines SrcReg.  Bail if SrcReg is read or re-defined by any
+  // intervening instruction, since those would either see the wrong value
+  // after we splice the producer down (read), or shadow it (re-def).
   MachineInstr *Producer = nullptr;
-  for (auto It = MachineBasicBlock::iterator(CmpInstr); It != MBB->begin();) {
+  for (auto It = CmpInstr.getIterator(); It != MBB->begin();) {
     --It;
     if (It->isDebugInstr())
       continue;
-    if (!It->modifiesRegister(Penumbra::SR, &getRegisterInfo()))
-      continue;
-    if (It->getNumOperands() > 0 && It->getOperand(0).isReg() &&
-        It->getOperand(0).isDef() && It->getOperand(0).getReg() == SrcReg)
-      Producer = &*It;
-    break;
+
+    if (It->readsRegister(SrcReg, &TRI))
+      return false;
+
+    if (It->modifiesRegister(SrcReg, &TRI)) {
+      if (definesFlagsFromResult(It->getOpcode()) &&
+          It->getOperand(0).isReg() && It->getOperand(0).isDef() &&
+          It->getOperand(0).getReg() == SrcReg)
+        Producer = &*It;
+      break;
+    }
   }
   if (!Producer)
     return false;
 
   // Walk forward from the CMP and verify every SR reader consumes only Z
-  // and N before the next SR clobber.
-  for (auto It = std::next(MachineBasicBlock::iterator(CmpInstr));
-       It != MBB->end(); ++It) {
+  // and N before the next SR clobber.  C and V differ between the producer
+  // (e.g. `SUBi Rx, k`) and the CMP it replaces (`CMPi Rx, 0`) whenever
+  // k != 0, so a reader of C or V must keep the explicit CMP.
+  for (auto It = std::next(CmpInstr.getIterator()); It != MBB->end(); ++It) {
     if (It->isDebugInstr())
       continue;
-    if (It->readsRegister(Penumbra::SR, &getRegisterInfo())) {
+    if (It->readsRegister(Penumbra::SR, &TRI)) {
       unsigned Flags = getBranchFlagsRead(It->getOpcode());
       if (Flags & ~(FZ | FN))
         return false;
     }
-    if (It->modifiesRegister(Penumbra::SR, &getRegisterInfo()))
+    if (It->modifiesRegister(Penumbra::SR, &TRI))
       break;
   }
+
+  // Splice the producer down to immediately before the CMP, then erase the
+  // CMP.  Producer's SR def becomes the most recent flag write before any
+  // subsequent reader, supplying the Z/N the original CMP would have set.
+  // In pre-RA SSA form, the producer's vreg uses each have a single fixed
+  // definition, so moving the producer later within the MBB cannot change
+  // which value those operands read.
+  if (std::next(Producer->getIterator()) != CmpInstr.getIterator())
+    MBB->splice(CmpInstr.getIterator(), MBB, Producer->getIterator());
+
+  // The producer's `implicit-def $sr` may have been marked dead by earlier
+  // dead-flag analysis because the (now-erased) CMP clobbered SR before
+  // any reader.  After erasure the producer's SR reaches the consuming
+  // Bcc, so clear the dead flag to keep the MIR well-formed.
+  Producer->clearRegisterDeads(Penumbra::SR);
 
   CmpInstr.eraseFromParent();
   return true;

@@ -229,13 +229,23 @@ or MOV PC + ADDi (PIC); BRJT always adds base back).
   Enables `-O1`/`-Os`/`-O2` (branch folding, block placement).
 - **Compare elimination:** `analyzeCompare` / `optimizeCompareInstr`
   in `PenumbraInstrInfo.cpp`, driven by the generic `PeepholeOptimizer`
-  at -O1+.  Currently elides `CMPi Rx, 0` when an immediately
-  preceding flag-setting ALU op already wrote Rx and no intervening
-  instruction reads SR with anything other than Z/N (C/V differ
-  between SUBi-by-nonzero and CMP-against-zero).  Saves the redundant
-  CMP in `while (n--)` / `for (i = N; i; i--)` style loops.  Extension
-  points (CMP Rx,Ry after SUB Rx,Ry; TESTi after ANDi; COPY chains;
-  cross-MBB) noted as TODOs in the source.
+  at -O1+.  Elides `CMPi Rx, 0` when an earlier flag-setting ALU op
+  defines Rx and Rx is neither read nor re-defined in the intervening
+  range.  Walks back through unrelated SR clobbers (e.g. pointer
+  increments in a memcpy loop), splices the producer adjacent to the
+  CMP, and erases the CMP — splice is mandatory because every
+  Penumbra ALU op clobbers SR, so without movement an intervening
+  ADDi would leave its own flags live for the consumer.  Forward
+  walk verifies no SR reader between the CMP and the next SR
+  redefinition consumes C or V (only Z and N are equivalent between
+  SUBi-by-nonzero and CMP-against-zero).  ADC/SBC excluded from the
+  producer allow-list because they USE SR (carry-in) and would see a
+  different carry-in if relocated past intervening SR clobbers.
+  Saves the redundant CMP in `while (n--)` / memcpy-style loops
+  (~6% Dhrystone improvement at -O2).  Extension points (CMP Rx,Ry
+  after SUB Rx,Ry; TESTi after ANDi; COPY chains; cross-MBB) noted
+  as TODOs in the source.  Regression test at
+  `test/CodeGen/Penumbra/compare-elim.ll`.
 - **G_FENCE:** Legalized as always-legal, selected to `MEMBARRIER`
   pseudo (compiler barrier, no hardware instruction — uniprocessor).
 - **G_BRINDIRECT:** Legalized for p0, selected to BRIND (JMP Rd).
