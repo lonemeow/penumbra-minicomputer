@@ -175,46 +175,24 @@ But the discrepancy between "what the hardware can encode" and
 "what the cost model claims" is worth closing for correctness of
 optimization decisions in code we haven't yet seen.
 
-## Compiler: tighten LSR cost model for pointer-bump loops
+## Compiler: trailing MOVs at the back-edge of pointer-bump loops
 
-Tight pointer-bump loops (`strcpy`, `memcpy` shapes) compile to
-9 instructions/iter when the ideal lower bound is 6.  The
-suboptimality has *two distinct causes*; we have a TTI
-override that *correctly describes* our addressing mode but
-neither cause is actually fixed yet — both need a focused
-follow-up.
+Tight pointer-bump loops (`strcpy`, `memcpy` shapes) compile
+to 8 instructions/iter; the ideal lower bound is 6.  The
+remaining 2 are register-to-register MOVs at the back-edge.
 
-**Cause 1: LSR rewrites pointer-bump → base+index.**  For
-`*d++ = *s++`, LSR currently chooses to maintain a single
-induction variable `i` and compute `dst+i` and `src+i` per
-iteration with explicit `add`s, instead of bumping two
-pointers separately.  Today's strcpy inner loop:
+(Historical note: until `isLSRCostLess` was overridden these
+loops compiled to 9 instr/iter because LSR rewrote the two
+pointer PHIs into a single integer IV and materialised
+`base+index` per iteration.  Default `isLSRCostLess` tuple-
+sorts by `NumRegs` first — a register-pressure prior that
+fits 1990s x86 with 8 GPRs and free `[base+index*scale]`
+folded in the addressing mode.  On Penumbra, with 12 free
+GPRs and no scaled addressing, that trade is always worse.
+The override mirrors PowerPC: make `Insns` the primary sort
+key.  Cause 1 is now closed; Cause 2 below is what remains.)
 
-```
-.loop:                                  ; 9 instructions
-  mov  r4, r2;  add r4, r3              ; r4 = src + i
-  mov  r11, r1; add r11, r3             ; r11 = dst + i
-  ldb  r4, [r4 + 0]
-  stb  r4, [r11 + 0]
-  add  r3, 1                            ; i++
-  cmp  r4, 0
-  bne  .loop
-```
-
-The decision is not driven by `isLegalAddressingMode` — that
-hook only governs whether the address arithmetic *folds into
-the load/store operand*, which is independent of the IV-count
-choice.  The relevant levers are LSR's cost-model fields
-`NumRegs` / `AddRecCost` / `NumBaseAdds` and the optional
-`isLSRCostLess` hook on `TargetTransformInfo`.  Tuning them
-to favor pointer-bump form requires either a custom comparator
-or rebalancing the per-formula bias weights — both are
-non-trivial and want a focused investigation.
-
-**Cause 2: trailing MOVs at the back-edge.**  Even with LSR
-keeping pointer-bump form (verifiable today via `-disable-lsr`
-on a single function), the inner loop still has two extra
-register-to-register MOVs:
+Today's strcpy inner loop after the LSR fix:
 
 ```
 .loop:                                  ; 8 instructions
@@ -255,11 +233,6 @@ Possible directions:
 Option 1 is cleanest: a local transform with simple safety
 conditions, matching what most RISC backends do implicitly
 via MachineSink.
-
-The two causes compound: fixing only Cause 2 leaves us at 7
-instructions (still has the per-iteration `add r4, r3` from
-the index calc); fixing only Cause 1 leaves us at 8 (still
-has the back-edge MOVs).  Both gone is the path to 6.
 
 ## Compiler: signed sub-word loads through PHIs
 

@@ -74,6 +74,24 @@ public:
       return 0;
     }
   }
+
+  // Make instruction count the primary LSR sort key.  The default
+  // `isLSRCostLess` tuple-compares with `NumRegs` first — a register-
+  // pressure prior that fits 1990s x86 (8 GPRs, free `[base+index*scale]`
+  // folded into the load) but not Penumbra (12 free GPRs, no scaled
+  // addressing).  Without this override LSR rewrites tight pointer-bump
+  // loops into a single integer IV with `add Rb, Ri` materializing each
+  // base+index per iteration — saves one PHI register at the cost of two
+  // extra ADDs every iteration.  PowerPC, SystemZ, AArch64, X86, AVR, and
+  // Mips all override `isLSRCostLess` for the same reason; we follow the
+  // PowerPC pattern directly.
+  bool isLSRCostLess(const TargetTransformInfo::LSRCost &C1,
+                     const TargetTransformInfo::LSRCost &C2) const override {
+    return std::tie(C1.Insns, C1.NumRegs, C1.AddRecCost, C1.NumIVMuls,
+                    C1.NumBaseAdds, C1.ScaleCost, C1.ImmCost, C1.SetupCost) <
+           std::tie(C2.Insns, C2.NumRegs, C2.AddRecCost, C2.NumIVMuls,
+                    C2.NumBaseAdds, C2.ScaleCost, C2.ImmCost, C2.SetupCost);
+  }
 };
 
 } // namespace llvm
