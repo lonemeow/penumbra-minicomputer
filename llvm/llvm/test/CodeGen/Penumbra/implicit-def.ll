@@ -41,9 +41,11 @@ define i32 @cond_undef(i1 %c, i32 %a) {
 ; O0-NEXT:  // %bb.1: // %entry
 ; O0-NEXT:    sub r14, 8
 ; O0-NEXT:    stw r2, [r14 + 4] // 4-byte Folded Spill
+; O0-NEXT:    lli r2, 1
+; O0-NEXT:    xor r1, r2
 ; O0-NEXT:    test r1, r1
-; O0-NEXT:    bne .LBB2_2
-; O0-NEXT:    b .LBB2_3
+; O0-NEXT:    bne .LBB2_3
+; O0-NEXT:    b .LBB2_2
 ; O0-NEXT:  .LBB2_2: // %then
 ; O0-NEXT:    ldw r1, [r14 + 4] // 4-byte Folded Reload
 ; O0-NEXT:    stw r1, [r14 + 0] // 4-byte Folded Spill

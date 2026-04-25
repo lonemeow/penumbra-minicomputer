@@ -11,20 +11,19 @@ define i32 @switch_static(i32 %x) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.1: // %entry
 ; CHECK-NEXT:    sub r14, 24
-; CHECK-NEXT:    lli r2, 3
-; CHECK-NEXT:    lli r3, 40
-; CHECK-NEXT:    stw r3, [r14 + 0] // 4-byte Folded Spill
-; CHECK-NEXT:    lli r3, 30
-; CHECK-NEXT:    stw r3, [r14 + 4] // 4-byte Folded Spill
-; CHECK-NEXT:    lli r3, 20
-; CHECK-NEXT:    stw r3, [r14 + 8] // 4-byte Folded Spill
-; CHECK-NEXT:    lli r3, 10
-; CHECK-NEXT:    stw r3, [r14 + 12] // 4-byte Folded Spill
-; CHECK-NEXT:    llis r3, -1
-; CHECK-NEXT:    stw r3, [r14 + 16] // 4-byte Folded Spill
-; CHECK-NEXT:    sub r1, 0
+; CHECK-NEXT:    lli r2, 40
+; CHECK-NEXT:    stw r2, [r14 + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    lli r2, 30
+; CHECK-NEXT:    stw r2, [r14 + 4] // 4-byte Folded Spill
+; CHECK-NEXT:    lli r2, 20
+; CHECK-NEXT:    stw r2, [r14 + 8] // 4-byte Folded Spill
+; CHECK-NEXT:    lli r2, 10
+; CHECK-NEXT:    stw r2, [r14 + 12] // 4-byte Folded Spill
+; CHECK-NEXT:    llis r2, -1
+; CHECK-NEXT:    stw r2, [r14 + 16] // 4-byte Folded Spill
+; CHECK-NEXT:    add r1, 0
 ; CHECK-NEXT:    stw r1, [r14 + 20] // 4-byte Folded Spill
-; CHECK-NEXT:    cmp r1, r2
+; CHECK-NEXT:    cmp r1, 3
 ; CHECK-NEXT:    bhi .LBB0_6
 ; CHECK-NEXT:  // %bb.7: // %entry
 ; CHECK-NEXT:    ldw r1, [r14 + 20] // 4-byte Folded Reload

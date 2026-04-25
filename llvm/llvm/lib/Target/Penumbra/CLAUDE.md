@@ -120,9 +120,8 @@ G_PTR_ADD reg-reg (→ADD) and reg-imm (→ADDi with uimm16 offset,
 critical for GEPs with constant indices: struct fields,
 `p[i]` with constant i, and `p++` in tight loops).
 
-**GlobalISel combiner pipeline** (at -O1+ only, see
-`PenumbraCombine.td`):
-- Pre-legalizer: `[all_combines]` — the full upstream
+**GlobalISel combiner pipeline** (see `PenumbraCombine.td`):
+- Pre-legalizer at -O1+: `[all_combines]` — the full upstream
   canonicalization / DCE rule set, matching AArch64 / RISC-V.
   The `*_by_const` magic-multiply rules in
   `intdiv_combines`/`intrem_combines` are gated by the target's
@@ -133,12 +132,19 @@ critical for GEPs with constant indices: struct fields,
   (`G_SUB x, c` → `G_ADD x, -c`) is re-canonicalized after
   legalization by our `penumbra_neg_imm_to_opposite` rule when
   `|-c|` fits uimm16, so the round-trip preserves SUBi selection.
-- Post-legalizer: `[commute_constant_to_rhs, ptr_add_immed_chain,
-  combines_for_extload, penumbra_neg_imm_to_opposite]`.
-  `penumbra_neg_imm_to_opposite` is target-specific — flips
-  G_ADD/G_SUB by a negative constant (c < 0 AND -c fits uimm16)
-  to the opposite opcode with the positive magnitude, so `n--`
-  selects to SUBi instead of materializing -1 via LLIS.
+- Pre-legalizer at -O0: `[optnone_combines]` — a smaller upstream
+  set (`trivial_combines, ptr_add_immed_chain, combines_for_extload,
+  not_cmp_fold, opt_brcond_by_inverting_cond, combine_concat_vector`)
+  that cleans up the most obvious IRTranslator artefacts without
+  paying full canonicalization compile time.  Implemented by a
+  separate pass class `PenumbraO0PreLegalizerCombiner`.
+- Post-legalizer at -O1+ only: `[commute_constant_to_rhs,
+  ptr_add_immed_chain, combines_for_extload,
+  penumbra_neg_imm_to_opposite]`.  `penumbra_neg_imm_to_opposite`
+  is target-specific — flips G_ADD/G_SUB by a negative constant
+  (c < 0 AND -c fits uimm16) to the opposite opcode with the
+  positive magnitude, so `n--` selects to SUBi instead of
+  materializing -1 via LLIS.
 - MIR-level unit tests under `test/CodeGen/Penumbra/GlobalISel/`
   using `-run-pass=penumbra-postlegalizer-combiner` isolate each
   rule; regenerate with `update_mir_test_checks.py`.
@@ -274,7 +280,7 @@ EM_PENUMBRA (0xF0DA) defined in central `llvm/BinaryFormat/ELF.h`.
 | `PenumbraRegisterInfo.td` | 16 GPRs (R0=zero, R12=TP, R13=LR, R14=SP, R15=PC), alt names, GPR/GPR\_Allocatable/CCR classes, HWEncoding |
 | `PenumbraInstrInfo.td` | All 4 formats (R/L/M/B) with bit-accurate encoding. Tied-operand constraints for 2-addr ops. ADC/SBC Uses=[SR]. All operand slots use `GPR` (full class incl. R0); allocator honours R0's reserved+`isConstant` flags. Pseudos: RET, LEAfi, SELECT\_GPR, SELECT\_CC\_GPR, ADJCALLSTACK. Penumbra1Model sched: IssueWidth=1, MicroOpBufferSize=0, LoadLatency=1 (microcoded single-issue: no benefit from hiding latency) |
 | `PenumbraGISel.td` | TableGen `Pat<>` rules: ALU reg-reg/reg-imm, shifts, NOT, constants (LLI/LLIS), all load/store (i32/p0), `ptradd` reg-reg and reg-imm (uimm16 offset). Includes `PenumbraCombine.td`. ImmLeaf predicates: uimm16, simm16, simm16neg, uimm5 |
-| `PenumbraCombine.td` | GlobalISel combiner rule groups. PreLegalizer: `[all_combines]` (full upstream set; div-by-const magic-multiply gated off via `isIntDivCheap()`). PostLegalizer: `[commute_constant_to_rhs, ptr_add_immed_chain, combines_for_extload, penumbra_neg_imm_to_opposite]`. Both run only at -O1+. `penumbra_neg_imm_to_opposite` is a custom rule that flips G\_ADD/G\_SUB by a negative constant to the opposite opcode when -c fits uimm16 (C++ match/apply in PenumbraPostLegalizerCombiner.cpp) |
+| `PenumbraCombine.td` | GlobalISel combiner rule groups. PreLegalizer (-O1+): `[all_combines]` (full upstream set; div-by-const magic-multiply gated off via `isIntDivCheap()`). PreLegalizer (-O0): `[optnone_combines]` (small hand-picked set). PostLegalizer (-O1+): `[commute_constant_to_rhs, ptr_add_immed_chain, combines_for_extload, penumbra_neg_imm_to_opposite]`. `penumbra_neg_imm_to_opposite` is a custom rule that flips G\_ADD/G\_SUB by a negative constant to the opposite opcode when -c fits uimm16 (C++ match/apply in PenumbraPostLegalizerCombiner.cpp) |
 | `PenumbraCallingConv.td` | CC\_Penumbra (R1-R4 args, stack overflow), RetCC\_Penumbra (R1, R2 for i64), CSR\_Penumbra (R5-R10, R13) |
 | `PenumbraRegisterInfo.{h,cpp}` | Reserved regs (R0, R12, R14, R15), callee-saved, getFrameRegister(R14). `eliminateFrameIndex` folds small offsets directly, expands large offsets to `LLI+LUI+ADD` via a fresh virtual register (rewritten later by the scavenger, not a fixed scratch — RA may have live values in any particular reg). `requiresRegisterScavenging`/`requiresFrameIndexScavenging` both true |
 | `PenumbraFrameLowering.{h,cpp}` | StackGrowsDown, Align(4), hasFPImpl()=true when alloca present. `adjustSP` helper used by both prologue (SUB/SUBi) and epilogue (ADD/ADDi): small frames use the 16-bit immediate form, large frames (StackSize > 65535) materialize the size in R11 via LLI+LUI and use the reg-reg form. `processFunctionBeforeFrameFinalized` adds an emergency spill slot for RegScavenger when the estimated frame exceeds 15-bit signed — otherwise leaf functions don't pay for it |
@@ -289,6 +295,7 @@ EM_PENUMBRA (0xF0DA) defined in central `llvm/BinaryFormat/ELF.h`.
 | `GISel/PenumbraRegisterBanks.td` | `def GPRRegBank : RegisterBank<"GPRBank", [GPR]>` |
 | `GISel/PenumbraInstructionSelector.cpp` | Hybrid: `selectImpl()` for TableGen patterns, manual C++ for complex cases. See "Manual C++ handles" above for full list. LLI+LUI pairs use SSA-correct intermediate vregs. G\_BRCOND folds uimm16 constant RHS into CMPi and swaps LHS/RHS when only LHS is constant (via CmpInst::getSwappedPredicate). |
 | `GISel/PenumbraPreLegalizerCombiner.cpp` | Pre-legalizer combiner pass (runs at -O1+). Boilerplate wrapper around `selectImpl` for rules defined in `PenumbraCombine.td` via `-gen-global-isel-combiner` |
+| `GISel/PenumbraO0PreLegalizerCombiner.cpp` | Pre-legalizer combiner pass (runs at -O0). Same boilerplate, smaller `optnone_combines` rule set |
 | `GISel/PenumbraPostLegalizerCombiner.cpp` | Post-legalizer combiner pass (runs at -O1+). Houses C++ match/apply for target-specific rules (currently `matchNegImmToOpposite` / `applyNegImmToOpposite` for G\_ADD↔G\_SUB flipping) |
 | `Disassembler/PenumbraDisassembler.{h,cpp}` | Binary → MCInst. Custom decoders for branch targets (symbolic lookup), signed immediates (LLIS), signed memory offsets |
 | `MCTargetDesc/PenumbraMCTargetDesc.{h,cpp}` | Registers all MC components. `PenumbraMCInstrAnalysis`: branch target evaluation + GPR state tracking for LLI/LUI address annotation |

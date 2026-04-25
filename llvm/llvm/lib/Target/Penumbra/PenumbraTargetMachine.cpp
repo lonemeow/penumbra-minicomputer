@@ -31,8 +31,10 @@ using namespace llvm;
 // them locally.
 namespace llvm {
 FunctionPass *createPenumbraPreLegalizerCombiner();
+FunctionPass *createPenumbraO0PreLegalizerCombiner();
 FunctionPass *createPenumbraPostLegalizerCombiner();
 void initializePenumbraPreLegalizerCombinerPass(PassRegistry &);
+void initializePenumbraO0PreLegalizerCombinerPass(PassRegistry &);
 void initializePenumbraPostLegalizerCombinerPass(PassRegistry &);
 } // namespace llvm
 
@@ -185,7 +187,9 @@ public:
     return false;
   }
   void addPreLegalizeMachineIR() override {
-    if (getOptLevel() != CodeGenOptLevel::None)
+    if (getOptLevel() == CodeGenOptLevel::None)
+      addPass(createPenumbraO0PreLegalizerCombiner());
+    else
       addPass(createPenumbraPreLegalizerCombiner());
   }
   bool addLegalizeMachineIR() override {
@@ -234,5 +238,6 @@ LLVMInitializePenumbraTarget() {
   PassRegistry *PR = PassRegistry::getPassRegistry();
   initializeGlobalISel(*PR);
   initializePenumbraPreLegalizerCombinerPass(*PR);
+  initializePenumbraO0PreLegalizerCombinerPass(*PR);
   initializePenumbraPostLegalizerCombinerPass(*PR);
 }

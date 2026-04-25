@@ -134,6 +134,7 @@ define i32 @mul_by_1(i32 %a) {
 ; O0-LABEL: mul_by_1:
 ; O0:         .cfi_startproc
 ; O0-NEXT:  // %bb.1:
+; O0-NEXT:    shl r1, 0
 ; O0-NEXT:    jmp r13
 ;
 ; O1-LABEL: mul_by_1:

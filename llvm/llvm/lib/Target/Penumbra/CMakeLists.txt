@@ -16,6 +16,8 @@ set(LLVM_TARGET_DEFINITIONS PenumbraGISel.td)
 tablegen(LLVM PenumbraGenGlobalISel.inc -gen-global-isel)
 tablegen(LLVM PenumbraGenPreLegalizeGICombiner.inc -gen-global-isel-combiner
               -combiners="PenumbraPreLegalizerCombiner")
+tablegen(LLVM PenumbraGenO0PreLegalizeGICombiner.inc -gen-global-isel-combiner
+              -combiners="PenumbraO0PreLegalizerCombiner")
 tablegen(LLVM PenumbraGenPostLegalizeGICombiner.inc -gen-global-isel-combiner
               -combiners="PenumbraPostLegalizerCombiner")
 
@@ -24,6 +26,7 @@ add_public_tablegen_target(PenumbraCommonTableGen)
 add_llvm_target(PenumbraCodeGen
   GISel/PenumbraCallLowering.cpp
   GISel/PenumbraInstructionSelector.cpp
+  GISel/PenumbraO0PreLegalizerCombiner.cpp
   GISel/PenumbraPostLegalizerCombiner.cpp
   GISel/PenumbraPreLegalizerCombiner.cpp
   PenumbraAsmPrinter.cpp

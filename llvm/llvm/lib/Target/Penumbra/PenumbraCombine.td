@@ -36,6 +36,13 @@ include "llvm/Target/GlobalISel/Combine.td"
 def PenumbraPreLegalizerCombiner
     : GICombiner<"PenumbraPreLegalizerCombinerImpl", [all_combines]>;
 
+// At -O0, run a small, hand-picked rule set that cleans up the most
+// obvious IRTranslator artefacts (DCE, ptr_add chaining, extload folding,
+// branch inversion) without paying the compile-time cost of full
+// canonicalization.  Matches AArch64 / RISC-V.
+def PenumbraO0PreLegalizerCombiner
+    : GICombiner<"PenumbraO0PreLegalizerCombinerImpl", [optnone_combines]>;
+
 // Target-specific: rewrite G_ADD/G_SUB by a negative constant whose negation
 // fits uimm16 to the opposite opcode with the positive constant, e.g.
 // `G_ADD x, -1 → G_SUB x, 1`.  Our ADDi/SUBi take uimm16 (0–65535) and do

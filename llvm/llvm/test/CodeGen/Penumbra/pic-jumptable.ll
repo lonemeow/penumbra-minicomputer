@@ -9,20 +9,19 @@ define i32 @switch_test(i32 %x) {
 ; PIC:         .cfi_startproc
 ; PIC-NEXT:  // %bb.1: // %entry
 ; PIC-NEXT:    sub r14, 24
-; PIC-NEXT:    lli r2, 3
-; PIC-NEXT:    lli r3, 40
-; PIC-NEXT:    stw r3, [r14 + 0] // 4-byte Folded Spill
-; PIC-NEXT:    lli r3, 30
-; PIC-NEXT:    stw r3, [r14 + 4] // 4-byte Folded Spill
-; PIC-NEXT:    lli r3, 20
-; PIC-NEXT:    stw r3, [r14 + 8] // 4-byte Folded Spill
-; PIC-NEXT:    lli r3, 10
-; PIC-NEXT:    stw r3, [r14 + 12] // 4-byte Folded Spill
-; PIC-NEXT:    llis r3, -1
-; PIC-NEXT:    stw r3, [r14 + 16] // 4-byte Folded Spill
-; PIC-NEXT:    sub r1, 0
+; PIC-NEXT:    lli r2, 40
+; PIC-NEXT:    stw r2, [r14 + 0] // 4-byte Folded Spill
+; PIC-NEXT:    lli r2, 30
+; PIC-NEXT:    stw r2, [r14 + 4] // 4-byte Folded Spill
+; PIC-NEXT:    lli r2, 20
+; PIC-NEXT:    stw r2, [r14 + 8] // 4-byte Folded Spill
+; PIC-NEXT:    lli r2, 10
+; PIC-NEXT:    stw r2, [r14 + 12] // 4-byte Folded Spill
+; PIC-NEXT:    llis r2, -1
+; PIC-NEXT:    stw r2, [r14 + 16] // 4-byte Folded Spill
+; PIC-NEXT:    add r1, 0
 ; PIC-NEXT:    stw r1, [r14 + 20] // 4-byte Folded Spill
-; PIC-NEXT:    cmp r1, r2
+; PIC-NEXT:    cmp r1, 3
 ; PIC-NEXT:    bhi .LBB0_6
 ; PIC-NEXT:  // %bb.7: // %entry
 ; PIC-NEXT:    ldw r1, [r14 + 20] // 4-byte Folded Reload

@@ -12,10 +12,10 @@ define ptr @get_tls_le() {
 ; CHECK-LABEL: get_tls_le:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.1:
-; CHECK-NEXT:    lli r2, %tlsgd_lo16(tls_var)
-; CHECK-NEXT:    lui r2, %tlsgd_hi16(tls_var)
+; CHECK-NEXT:    lli r1, %tlsgd_lo16(tls_var)
+; CHECK-NEXT:    lui r1, %tlsgd_hi16(tls_var)
 ; CHECK-NEXT:    //APP
-; CHECK-NEXT:    mov r1, r12
+; CHECK-NEXT:    mov r2, r12
 ; CHECK-NEXT:    //NO_APP
 ; CHECK-NEXT:    add r1, r2
 ; CHECK-NEXT:    jmp r13

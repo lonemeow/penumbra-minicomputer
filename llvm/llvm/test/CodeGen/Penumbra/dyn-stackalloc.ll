@@ -12,6 +12,7 @@ define ptr @dynamic_alloca(i32 %n) {
 ; CHECK-NEXT:    mov r10, r14
 ; CHECK-NEXT:    stw r10, [r10 + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r2, r1
+; CHECK-NEXT:    shl r2, 0
 ; CHECK-NEXT:    add r2, 3
 ; CHECK-NEXT:    llis r1, -4
 ; CHECK-NEXT:    and r2, r1
