@@ -76,6 +76,34 @@ def penumbra_zextload_promote : GICombineRule<
          [{ return matchZextloadPromote(*${root}, MRI); }]),
   (apply [{ applyZextloadPromote(*${root}, MRI, B); }])>;
 
+// Target-specific: sink a `G_PTR_ADD %new, %old, K` past the immediately-
+// following memory op when that op uses `%old` (the source) and not
+// `%new` (the result).  Penumbra's ALU is destructive 2-operand
+// (`add Rd, imm` writes back to Rd), so a pointer bump that's emitted
+// *before* the load/store of the old pointer keeps both the old and new
+// pointer simultaneously live across the memory op.  TwoAddress then
+// inserts a `COPY old → new` to satisfy the tied-def constraint, and the
+// register coalescer can't eliminate that COPY because the live ranges
+// overlap.  The result is a trailing register-to-register MOV at the
+// loop back-edge that's pure overhead.
+//
+// Sinking the G_PTR_ADD to *after* its source's last use lets the load
+// kill `%old` first, freeing the same physical register for `%new` —
+// which collapses to a destructive `ADDi Rd, 1` in place, and the back-
+// edge MOV vanishes.  For strcpy/memcpy shapes this drops the inner loop
+// from 8 to 6 instructions per iteration.
+//
+// The combine rewrites one pair at a time and the combiner loop handles
+// the cascade: `[GEP_s; GEP_d; LDB; STB]` becomes `[LDB; GEP_s; GEP_d;
+// STB]` after one iteration, then `[LDB; GEP_s; STB; GEP_d]` after the
+// next.  See `doc/TODO.md` for the historical context (Cause 2 of the
+// pointer-bump-loop suboptimality).
+def penumbra_sink_ptr_add_past_use : GICombineRule<
+  (defs root:$root),
+  (match (wip_match_opcode G_PTR_ADD):$root,
+         [{ return matchSinkPtrAddPastUse(*${root}, MRI); }]),
+  (apply [{ applySinkPtrAddPastUse(*${root}, MRI, B); }])>;
+
 // Post-legalizer: optimizations on legalized MIR.  Must preserve instruction
 // legality.
 //
@@ -102,5 +130,6 @@ def PenumbraPostLegalizerCombiner
       combines_for_extload,
       penumbra_zextload_promote,
       known_bits_simplifications,
-      penumbra_neg_imm_to_opposite
+      penumbra_neg_imm_to_opposite,
+      penumbra_sink_ptr_add_past_use
     ]>;

@@ -248,6 +248,25 @@ or MOV PC + ADDi (PIC); BRJT always adds base back).
   and tracked in `doc/TODO.md` ("Compiler: signed sub-word loads
   through PHIs").  Regression test at
   `test/CodeGen/Penumbra/zextload-promote.ll`.
+- **Pointer-bump loop sinking:** `penumbra_sink_ptr_add_past_use`
+  in `PenumbraCombine.td` sinks a `G_PTR_ADD %new, %old, K` past
+  the immediately-following `G_LOAD`/`G_STORE`/`G_{Z,S}EXTLOAD`
+  when that op reads `%old` (the source) and not `%new`.  Penumbra's
+  ALU is destructive 2-operand — `add Rd, 1` writes back into Rd —
+  so a pointer bump emitted *before* the load/store of the old
+  pointer keeps both old and new pointer simultaneously live across
+  the memory op.  TwoAddress then inserts `COPY old → new` to
+  satisfy the tied-def, the register coalescer can't eliminate it
+  (live ranges overlap), and we end up with a trailing register-
+  to-register MOV per pointer per iteration at the back-edge.
+  Sinking the G_PTR_ADD lets the load kill `%old` first, freeing
+  the same physical register for `%new`, which collapses to an
+  in-place `ADDi Rd, 1`.  The combine cascades through the
+  combiner's fixed-point loop: `[GEP_s; GEP_d; LDB; STB]` becomes
+  `[LDB; GEP_s; STB; GEP_d]` over two iterations.  Strcpy/memcpy
+  inner loops drop from 8 to 6 instructions/iter (the hand-coded
+  ideal); +12% on cycle-accurate Dhrystone.  Regression test at
+  `test/CodeGen/Penumbra/lsr-pointer-bump.ll`.
 - **Compare elimination:** `analyzeCompare` / `optimizeCompareInstr`
   in `PenumbraInstrInfo.cpp`, driven by the generic `PeepholeOptimizer`
   at -O1+.  Elides `CMPi Rx, 0` when an earlier flag-setting ALU op
@@ -320,7 +339,7 @@ EM_PENUMBRA (0xF0DA) defined in central `llvm/BinaryFormat/ELF.h`.
 | `PenumbraRegisterInfo.td` | 16 GPRs (R0=zero, R12=TP, R13=LR, R14=SP, R15=PC), alt names, GPR/GPR\_Allocatable/CCR classes, HWEncoding |
 | `PenumbraInstrInfo.td` | All 4 formats (R/L/M/B) with bit-accurate encoding. Tied-operand constraints for 2-addr ops. ADC/SBC Uses=[SR]. All operand slots use `GPR` (full class incl. R0); allocator honours R0's reserved+`isConstant` flags. Pseudos: RET, LEAfi, SELECT\_GPR, SELECT\_CC\_GPR, ADJCALLSTACK. Penumbra1Model sched: IssueWidth=1, MicroOpBufferSize=0, LoadLatency=1 (microcoded single-issue: no benefit from hiding latency) |
 | `PenumbraGISel.td` | TableGen `Pat<>` rules: ALU reg-reg/reg-imm, shifts, NOT, constants (LLI/LLIS), all load/store (i32/p0), `ptradd` reg-reg and reg-imm (uimm16 offset). Includes `PenumbraCombine.td`. ImmLeaf predicates: uimm16, simm16, simm16neg, uimm5 |
-| `PenumbraCombine.td` | GlobalISel combiner rule groups. PreLegalizer (-O1+): `[all_combines]` (full upstream set; div-by-const magic-multiply gated off via `isIntDivCheap()`). PreLegalizer (-O0): `[optnone_combines]` (small hand-picked set). PostLegalizer (-O1+): `[commute_constant_to_rhs, ptr_add_immed_chain, combines_for_extload, penumbra_neg_imm_to_opposite]`. `penumbra_neg_imm_to_opposite` is a custom rule that flips G\_ADD/G\_SUB by a negative constant to the opposite opcode when -c fits uimm16 (C++ match/apply in PenumbraPostLegalizerCombiner.cpp) |
+| `PenumbraCombine.td` | GlobalISel combiner rule groups. PreLegalizer (-O1+): `[all_combines]` (full upstream set; div-by-const magic-multiply gated off via `isIntDivCheap()`). PreLegalizer (-O0): `[optnone_combines]` (small hand-picked set). PostLegalizer (-O1+): `[commute_constant_to_rhs, ptr_add_immed_chain, combines_for_extload, penumbra_zextload_promote, known_bits_simplifications, penumbra_neg_imm_to_opposite, penumbra_sink_ptr_add_past_use]`. Custom rules (C++ match/apply in PenumbraPostLegalizerCombiner.cpp): `penumbra_zextload_promote` (sub-word load → G\_ZEXTLOAD), `penumbra_neg_imm_to_opposite` (flips G\_ADD/G\_SUB by a negative constant when -c fits uimm16), `penumbra_sink_ptr_add_past_use` (sinks G\_PTR\_ADD past the next memory op that reads its source so destructive 2-operand ADDi can recycle the source register) |
 | `PenumbraCallingConv.td` | CC\_Penumbra (R1-R4 args, stack overflow), RetCC\_Penumbra (R1, R2 for i64), CSR\_Penumbra (R5-R10, R13) |
 | `PenumbraRegisterInfo.{h,cpp}` | Reserved regs (R0, R12, R14, R15), callee-saved, getFrameRegister(R14). `eliminateFrameIndex` folds small offsets directly, expands large offsets to `LLI+LUI+ADD` via a fresh virtual register (rewritten later by the scavenger, not a fixed scratch — RA may have live values in any particular reg). `requiresRegisterScavenging`/`requiresFrameIndexScavenging` both true |
 | `PenumbraFrameLowering.{h,cpp}` | StackGrowsDown, Align(4), hasFPImpl()=true when alloca present. `adjustSP` helper used by both prologue (SUB/SUBi) and epilogue (ADD/ADDi): small frames use the 16-bit immediate form, large frames (StackSize > 65535) materialize the size in R11 via LLI+LUI and use the reg-reg form. `processFunctionBeforeFrameFinalized` adds an emergency spill slot for RegScavenger when the estimated frame exceeds 15-bit signed — otherwise leaf functions don't pay for it |

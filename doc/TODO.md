@@ -175,64 +175,28 @@ But the discrepancy between "what the hardware can encode" and
 "what the cost model claims" is worth closing for correctness of
 optimization decisions in code we haven't yet seen.
 
-## Compiler: trailing MOVs at the back-edge of pointer-bump loops
+## Compiler: pointer-bump loops -- DONE
 
-Tight pointer-bump loops (`strcpy`, `memcpy` shapes) compile
-to 8 instructions/iter; the ideal lower bound is 6.  The
-remaining 2 are register-to-register MOVs at the back-edge.
+Tight pointer-bump loops (`strcpy`, `memcpy`) now compile to
+the ideal 6-instruction inner loop: `ldb; add src,1; stb; add
+dst,1; cmp; bne`.  Two cooperating fixes get there:
 
-(Historical note: until `isLSRCostLess` was overridden these
-loops compiled to 9 instr/iter because LSR rewrote the two
-pointer PHIs into a single integer IV and materialised
-`base+index` per iteration.  Default `isLSRCostLess` tuple-
-sorts by `NumRegs` first — a register-pressure prior that
-fits 1990s x86 with 8 GPRs and free `[base+index*scale]`
-folded in the addressing mode.  On Penumbra, with 12 free
-GPRs and no scaled addressing, that trade is always worse.
-The override mirrors PowerPC: make `Insns` the primary sort
-key.  Cause 1 is now closed; Cause 2 below is what remains.)
+1. `PenumbraTTIImpl::isLSRCostLess` makes `Insns` the primary
+   LSR sort key.  Without it, LSR rewrote the natural
+   pointer-bump form into a single integer IV plus two
+   `add Rb, Ri` per iteration, costing 2 extra ADDs/iter.
+2. `penumbra_sink_ptr_add_past_use` post-legalizer combine
+   sinks `G_PTR_ADD %new, %old, K` past the immediately-
+   following memory op that reads `%old`.  Penumbra's
+   destructive 2-operand `add Rd, 1` needs the source
+   register to die before the def — without the sink,
+   `twoaddressinstruction` inserts a COPY that the register
+   coalescer can't eliminate, and the loop ends with one
+   trailing MOV per pointer per iteration.
 
-Today's strcpy inner loop after the LSR fix:
-
-```
-.loop:                                  ; 8 instructions
-  add  r3, 1        ; bump src into r3 (a new vreg, %6 in IR)
-  ldb  r2, [r2 + 0] ; load *src — using r2 = OLD src
-  add  r4, 1        ; bump dst into r4 (new vreg, %8 in IR)
-  stb  r2, [r11 + 0]; store via OLD dst
-  cmp  r2, 0
-  mov  r2, r3       ; copy new src into r2 for next iter's PHI
-  mov  r11, r4      ; copy new dst into r11 for next iter's PHI
-  bne  .loop
-```
-
-A hand-coded version would order `ldb`/`stb` *before* the
-`add`, so the destructive 2-operand `add Rd, 1` recycles the
-same register the load read from — no coalescing conflict, no
-trailing MOV.
-
-Root cause: Clang lowers `*d++ = *src++` to `getelementptr`
-*before* `load`/`store` in the IR, and our MI-level pipeline
-doesn't reorder them.  The PHI's "old pointer" vreg and the
-GEP's "new pointer" vreg can't be coalesced because they're
-simultaneously live across the load/store pair.
-
-Possible directions:
-
-1. MI-level sinking pass that moves the GEP/ADDi past the
-   load/store when there's no aliasing concern (the GEP only
-   modifies the pointer; the load/store reads through the
-   *previous* value of the same pointer).
-2. Pre-RA hint to the coalescer that the PHI input and the
-   GEP output should share a physical register, with a
-   reschedule when that's only possible by reordering.
-3. Earlier IR-level fix in CodeGenPrepare to emit the GEP in
-   post-increment position when the pointer's only other use
-   is the immediately-preceding load/store.
-
-Option 1 is cleanest: a local transform with simple safety
-conditions, matching what most RISC backends do implicitly
-via MachineSink.
+Regression test: `lsr-pointer-bump.ll` asserts the 6-instr
+form.  Cycle-accurate Dhrystone (-O2): 2.16 → 2.58 DMIPS
+through both fixes.
 
 ## Compiler: signed sub-word loads through PHIs
 

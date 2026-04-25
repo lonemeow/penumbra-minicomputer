@@ -2,35 +2,36 @@
 ; RUN: llc -mtriple=penumbra -global-isel -verify-machineinstrs -O2 < %s \
 ; RUN:   | FileCheck %s
 
-; Two-pointer iteration loops (`*d++ = *s++`) must stay in pointer-bump
-; form: each pointer PHI bumped by ADDi 1 directly, no shared integer
-; induction variable that materialises `base + i` per iteration.
+; Two-pointer iteration loops (`*d++ = *s++`) must compile to the ideal
+; 6-instruction inner loop: load, post-bump source, store, post-bump dest,
+; flag-test on the loaded byte, conditional branch.  No base+index
+; rewrite, no trailing register-to-register MOVs at the back-edge.
 ;
-; Without `PenumbraTTIImpl::isLSRCostLess`, LSR's default tuple-compare
-; sorts on `NumRegs` first and rewrites the loop into a single i32 IV
-; plus two `add Rb, Ri` per iteration — saving one PHI register at the
-; cost of two extra ADDs every iteration, which is always a worse trade
-; on Penumbra (12 free GPRs, no scaled addressing mode).
+; This test catches regressions in two cooperating fixes:
 ;
-; Our override makes `Insns` the primary sort key (PowerPC pattern), so
-; LSR keeps the natural form: two pointer PHIs, two ADDi 1 in the inner
-; loop, no per-use base-add.  The remaining 2 trailing MOVs are tracked
-; separately in doc/TODO.md (back-edge coalescing).
+; 1. `PenumbraTTIImpl::isLSRCostLess` makes `Insns` the primary LSR sort
+;    key — without it, LSR rewrites the natural pointer-bump form into a
+;    single integer IV plus two `add Rb, Ri` per iteration (8 → 9 instr).
+;
+; 2. `penumbra_sink_ptr_add_past_use` post-legalizer combine sinks
+;    `G_PTR_ADD %new, %old, K` past the immediately-following memory op
+;    that reads `%old`.  Penumbra's destructive 2-operand `add Rd, 1`
+;    needs the source register to die before its def — without the sink,
+;    twoaddress inserts a COPY that the coalescer can't eliminate, and
+;    we end up with a trailing MOV per pointer per iteration (6 → 8
+;    instr).
 
 define ptr @strcpy_pointer_bump(ptr noundef returned writeonly captures(ret: address, provenance) %0, ptr noundef readonly captures(none) %1) {
 ; CHECK-LABEL: strcpy_pointer_bump:
-; CHECK:       // %bb.0:
-; CHECK-NEXT:    mov r11, r1
-; CHECK-NEXT:    mov r3, r2
-; CHECK-NEXT:    mov r4, r11
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  // %bb.0:
+; CHECK-NEXT:    mov r3, r1
 ; CHECK-NEXT:  .LBB0_1: // =>This Inner Loop Header: Depth=1
+; CHECK-NEXT:    ldb r4, [r2 + 0]
+; CHECK-NEXT:    add r2, 1
+; CHECK-NEXT:    stb r4, [r3 + 0]
 ; CHECK-NEXT:    add r3, 1
-; CHECK-NEXT:    ldb r2, [r2 + 0]
-; CHECK-NEXT:    add r4, 1
-; CHECK-NEXT:    stb r2, [r11 + 0]
-; CHECK-NEXT:    cmp r2, 0
-; CHECK-NEXT:    mov r2, r3
-; CHECK-NEXT:    mov r11, r4
+; CHECK-NEXT:    cmp r4, 0
 ; CHECK-NEXT:    bne .LBB0_1
 ; CHECK-NEXT:  // %bb.2:
 ; CHECK-NEXT:    jmp r13

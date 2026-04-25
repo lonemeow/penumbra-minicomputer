@@ -124,6 +124,92 @@ void applyZextloadPromote(MachineInstr &MI, MachineRegisterInfo &MRI,
   MI.eraseFromParent();
 }
 
+// Skip past debug pseudo-instructions, which have no codegen effect.
+static MachineInstr *skipDebugInstrs(MachineInstr *MI) {
+  while (MI && MI->isDebugInstr())
+    MI = MI->getNextNode();
+  return MI;
+}
+
+// Match `G_PTR_ADD %new, %old, %k` whose immediately-following non-debug
+// instruction is a memory op that reads `%old` (so sinking saves the
+// trailing back-edge MOV) and does *not* read `%new` (otherwise we'd
+// invert def-and-use).  Restricting to G_LOAD/G_STORE/G_{Z,S}EXTLOAD
+// keeps the rule from running on neighboring G_PTR_ADD chains —
+// `ptr_add_immed_chain` is what canonicalizes those.
+bool matchSinkPtrAddPastUse(MachineInstr &MI, MachineRegisterInfo &MRI) {
+  assert(MI.getOpcode() == TargetOpcode::G_PTR_ADD);
+
+  // TODO(human): decide whether to sink this G_PTR_ADD past the next
+  // instruction.  Inputs you have:
+  //   - `MI.getOperand(0).getReg()` — Dst (= %new), must NOT appear in
+  //     the next instruction's uses (would break SSA after move).
+  //   - `MI.getOperand(1).getReg()` — Src (= %old), must appear in the
+  //     next instruction's uses (otherwise the swap is pure churn).
+  //   - The next non-debug instruction (use `skipDebugInstrs`).
+  //
+  // Constraints:
+  //   - Reject if no next instruction (end of basic block).
+  //   - Reject unless the next instruction is one of:
+  //     G_LOAD, G_STORE, G_ZEXTLOAD, G_SEXTLOAD.
+  //   - Reject if the next instruction uses Dst (`%new`).
+  //   - Match only if the next instruction uses Src (`%old`).
+  //
+  // Walk the next instruction's `uses()` once and record both flags.
+
+  MachineInstr *Next = skipDebugInstrs(MI.getNextNode());
+  if (!Next)
+    return false;
+
+  switch (Next->getOpcode()) {
+    case TargetOpcode::G_LOAD:
+    case TargetOpcode::G_STORE:
+    case TargetOpcode::G_ZEXTLOAD:
+    case TargetOpcode::G_SEXTLOAD:
+      break;
+
+    default:
+      return false;
+  }
+
+  Register DstReg = MI.getOperand(0).getReg();
+  Register SrcReg = MI.getOperand(1).getReg();
+
+  bool usesSrc = false;
+  for (auto &Use : Next->uses()) {
+    if (!Use.isReg())
+      continue;
+    if (Use.getReg() == DstReg)
+      return false;
+    if (Use.getReg() == SrcReg) {
+      usesSrc = true;
+    }
+  }
+
+  return usesSrc;
+}
+
+// Rebuild the G_PTR_ADD at a position after the next instruction, reusing
+// its dst register and operands.  Erasing the original definition fixes
+// the brief two-defs-of-Dst window introduced by the build call — the
+// pattern matches `applyZextloadPromote` / `applyNegImmToOpposite`.
+void applySinkPtrAddPastUse(MachineInstr &MI, MachineRegisterInfo &MRI,
+                            MachineIRBuilder &B) {
+  Register Dst = MI.getOperand(0).getReg();
+  Register Src = MI.getOperand(1).getReg();
+  Register Off = MI.getOperand(2).getReg();
+
+  MachineInstr *Next = skipDebugInstrs(MI.getNextNode());
+  assert(Next && "matcher should have rejected when no next instruction");
+
+  // Insert the rebuilt G_PTR_ADD right after Next.
+  B.setInsertPt(*MI.getParent(), std::next(Next->getIterator()));
+  B.setDebugLoc(MI.getDebugLoc());
+  B.buildPtrAdd(Dst, Src, Off);
+
+  MI.eraseFromParent();
+}
+
 class PenumbraPostLegalizerCombinerImpl : public Combiner {
 protected:
   const CombinerHelper Helper;
