@@ -90,9 +90,9 @@ The Penumbra LLVM backend (`llvm/llvm/lib/Target/Penumbra/`) consists of:
 3. **Instruction selection** — GlobalISel with hybrid TableGen patterns (`PenumbraGISel.td`) + manual C++ for complex cases
 4. **Frame lowering** — stack frame layout, prologue/epilogue generation (SUBi/ADDi SP)
 5. **ABI/calling convention** — R1-R4 args, R1 return, R5-R10 callee-saved, R13/LR
-6. **MC layer** — assembly parser, printer, ELF object emission, 7 relocation types
+6. **MC layer** — assembly parser, printer, ELF object emission, 11 fixup types and 21 relocation types
 7. **Immediate materialization** — LLI (uimm16), LLIS (simm16neg) via TableGen; LLI+LUI pair for wide constants in C++
-8. **lld linker support** — `elf32penumbra` emulation, all relocation types
+8. **lld linker support** — `elf32penumbra` emulation, all relocation types including PIE and TLS
 
 ### ISA Characteristics Affecting Codegen
 
@@ -153,12 +153,12 @@ NetBSD uses its own build framework (`build.sh`) which supports cross-compilatio
 |------|--------|-------|
 | ISA assembler (pasm.py) | Done | Two-pass, all formats, labels, .equ constants |
 | Microcode assembler (uasm.py) | Done | Symbolic fields, slot validation |
-| LLVM MC-layer assembler | Done | All 4 formats, 7 fixup/relocation types, ELF object emission, pseudo-instructions (LI/LA/NOP/RET) |
+| LLVM MC-layer assembler | Done | All 4 formats, 11 fixup types, 21 relocation types, ELF object emission, pseudo-instructions (LI/LA/NOP/RET) |
 | ABI specification | Done | ILP32, register convention, calling convention, stack frame, ELF relocations. See `doc/system/abi.md` |
 | bin2hex.py | Done | Flat binary → $readmemh hex (pipeline: llvm-mc → objcopy → bin2hex) |
 | Calling convention | Done | R1–R4 args, R5–R10 callee-saved, R11 scratch, R12 TP, R13 LR. Implemented in `PenumbraCallingConv.td` |
 | LLVM codegen (GlobalISel) | Done | Hybrid TableGen + C++ instruction selection, frame lowering, register allocation. `-O0` through `-O2` working. Boot ROM compiles from C |
-| Linker (lld) | Done | `elf32penumbra` emulation, all 6 relocation types. `EM_PENUMBRA` (0xF0DA) |
+| Linker (lld) | Done | `elf32penumbra` emulation, all 21 relocation types, PIE support. `EM_PENUMBRA` (0xF0DA) |
 | Inline assembly | Done | `r`/`i` constraints, `~{cc}`/`~{memory}` clobbers |
 | NetBSD MD layer | Not started | |
 
@@ -174,6 +174,6 @@ NetBSD uses its own build framework (`build.sh`) which supports cross-compilatio
 
 1. **ELF machine number.** `EM_PENUMBRA = 0xF0DA` (private range). Implemented in PenumbraELFObjectWriter.cpp.
 
-2. **Relocation types.** Implemented: R_PENUMBRA_NONE(0), R_PENUMBRA_32(1), R_PENUMBRA_BRANCH22(2), R_PENUMBRA_IMM16(3), R_PENUMBRA_LO16(4), R_PENUMBRA_HI16(5), R_PENUMBRA_MEMOFFSET16(6). Local fixups resolved by assembler; relocations emitted for external symbols.
+2. **Relocation types.** Implemented: 22 relocation types (R_PENUMBRA_NONE through R_PENUMBRA_TLS_GD_GOT_PCREL_HI16) covering static, PIC/PIE, GOT/PLT, and TLS. Local fixups resolved by assembler; relocations emitted for external symbols.
 
 3. **Alignment.** Implemented: MMU checks alignment for word (addr[1:0]==0), half (addr[0]==0), byte (always OK). Traps to VEC_ALIGN (vector 8). Works in both bypass and MMU-enabled mode.

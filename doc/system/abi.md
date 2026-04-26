@@ -192,18 +192,35 @@ handles this automatically in `PenumbraFrameLowering::adjustSP` and
 
 Penumbra uses **RELA** relocations (explicit addend).
 
-| Number | Name | Field | Calculation | Description |
-|--------|------|-------|-------------|-------------|
-| 0 | `R_PENUMBRA_NONE` | — | — | No relocation |
-| 1 | `R_PENUMBRA_32` | word32 | S + A | Absolute 32-bit |
-| 2 | `R_PENUMBRA_IMM16` | Format L imm16 [15:0] | (S + A) & 0xFFFF | 16-bit immediate (lower half) |
-| 3 | `R_PENUMBRA_IMM16_HI` | Format L imm16 [15:0] | (S + A) >> 16 | 16-bit immediate (upper half, for LUI) |
-| 4 | `R_PENUMBRA_BRANCH22` | Format B offset22 [25:4] | (S + A - P) >> 2 | PC-relative branch, 22-bit signed word offset |
+| Value | Name | Description | Field |
+|-------|------|-------------|-------|
+| 0 | `R_PENUMBRA_NONE` | No relocation | — |
+| 1 | `R_PENUMBRA_32` | Absolute 32-bit (.word symbol) | Full word |
+| 2 | `R_PENUMBRA_BRANCH22` | PC-relative 22-bit word offset | bits [25:4] |
+| 3 | `R_PENUMBRA_IMM16` | 16-bit immediate | bits [15:0] |
+| 4 | `R_PENUMBRA_LO16` | Low 16 bits of absolute address | bits [15:0] |
+| 5 | `R_PENUMBRA_HI16` | High 16 bits of absolute address | bits [15:0] |
+| 6 | `R_PENUMBRA_MEMOFFSET16_PCREL` | PC-relative 16-bit memory offset | bits [17:2] |
+| 7 | `R_PENUMBRA_IMM16_PCREL` | PC-relative 16-bit immediate | bits [15:0] |
+| 8 | `R_PENUMBRA_RELATIVE` | PIE dynamic relocation (bias adjust) | Full word |
+| 9 | `R_PENUMBRA_TLS_GD_LO16` | TLS GD: low 16 bits (static: TP offset) | bits [15:0] |
+| 10 | `R_PENUMBRA_TLS_GD_HI16` | TLS GD: high 16 bits (static: TP offset) | bits [15:0] |
+| 11 | `R_PENUMBRA_GLOB_DAT` | GOT entry (absolute address) | Full word |
+| 12 | `R_PENUMBRA_JUMP_SLOT` | PLT GOT entry | Full word |
+| 13 | `R_PENUMBRA_TLS_TPOFF32` | TLS IE: TP-relative offset in GOT | Full word |
+| 14 | `R_PENUMBRA_TLS_DTPMOD32` | TLS GD: module index in GOT | Full word |
+| 15 | `R_PENUMBRA_TLS_DTPOFF32` | TLS GD: module offset in GOT | Full word |
+| 16 | `R_PENUMBRA_TLS_GD_PCREL` | TLS GD: PC-relative to GOT entry (PIC) | bits [15:0] |
+| 17 | `R_PENUMBRA_PC32` | PC-relative 32-bit (.eh_frame FDE pointers) | Full word |
+| 18 | `R_PENUMBRA_GOT_PCREL_LO16` | GOT PC-relative: low 16 bits | bits [15:0] |
+| 19 | `R_PENUMBRA_GOT_PCREL_HI16` | GOT PC-relative: high 16 bits | bits [15:0] |
+| 20 | `R_PENUMBRA_TLS_GD_GOT_PCREL_LO16` | TLS GD GOT PC-relative: low 16 | bits [15:0] |
+| 21 | `R_PENUMBRA_TLS_GD_GOT_PCREL_HI16` | TLS GD GOT PC-relative: high 16 | bits [15:0] |
 
 Where: S = symbol value, A = addend, P = relocation position.
 
 **LLI+LUI pair (32-bit address materialization):**
-The linker resolves `R_PENUMBRA_IMM16` on LLI and `R_PENUMBRA_IMM16_HI` on LUI to produce the full 32-bit address.
+The linker resolves `R_PENUMBRA_LO16` on LLI and `R_PENUMBRA_HI16` on LUI to produce the full 32-bit address.
 
 ### Sections
 
@@ -266,7 +283,7 @@ my_variadic:
 - The kernel sets R12 on thread creation and context switch.
 - Compiled code must never modify R12.
 - The register allocator must not use R12 for any purpose.
-- TLS access model: **Local Exec** (static linking, single executable). Other models (Initial Exec, General Dynamic) will be added when shared libraries are supported.
+- TLS access model: Uses Variant I (no TCB gap). **Local Exec / Initial Exec** used for static linking (resolved directly to `R_TPREL`). **General Dynamic** is used for PIC/shared code, which replaces accesses with calls to `__tls_get_addr`.
 
 On bare-metal targets (`penumbra-unknown-none`) without an OS thread scheduler, R12 is unused but still reserved for forward compatibility with the NetBSD ABI.
 
@@ -274,7 +291,11 @@ On bare-metal targets (`penumbra-unknown-none`) without an OS thread scheduler, 
 
 ## 8. Position-Independent Code
 
-Not defined in this version. Initial code will be statically linked. PIC/GOT/PLT support will be added when shared libraries are needed for the NetBSD port.
+PIC and PIE are supported.
+
+- **Global Address Materialization (PIC/PIE):** Achieved using GOT-indirect addressing with full 32-bit reach.
+- **Relocations:** Uses `R_PENUMBRA_GOT_PCREL_LO16` and `R_PENUMBRA_GOT_PCREL_HI16` to form a GOT-indirect PC-relative offset to the GOT entry.
+- **Dynamic Linking:** PLT entries are 16 bytes. Shared libraries use `R_PENUMBRA_GLOB_DAT` for GOT and `R_PENUMBRA_JUMP_SLOT` for PLT. PIE relies on `R_PENUMBRA_RELATIVE` for bias adjustment.
 
 ---
 
