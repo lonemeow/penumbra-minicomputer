@@ -58,7 +58,7 @@ The system is fully functional in cycle-accurate and instruction-level simulatio
 
 - **Hardware:** All RTL modules (CPU, MMU, Cache, Bus, UART, SPI) implemented and verified.
 - **Toolchain:** Custom LLVM backend (clang/lld) fully operational.
-- **OS:** NetBSD 10.1 port in progress; kernel compiles and reaches link stage.
+- **OS:** NetBSD 10.1 port boots to interactive single-user shell. Kernel mounts FFS root from SD card; full userland cross-build and dynamic linker (`ld.elf_so`) are functional on the ISS.
 - **Firmware:** C boot ROM with FAT32 support, PIE ELF loading, and monitor commands.
 
 ---

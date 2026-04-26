@@ -186,21 +186,13 @@ kernel, which auto-selects the root device without prompting.
 
 See `doc/TODO.md` for detailed descriptions.
 
-**Userland testing:**
-1. **ISS raw TTY mode** -- pass Ctrl-C/Z through to simulated OS
-   for job control and signal testing.
-2. **Boot arguments** -- ROM->bootloader->kernel argument passing
-   so `boot sd:0,0` reaches single-user with no further prompts.
-3. **SD write support / MI sdmmc** -- replace custom read-only psd
-   driver with NetBSD MI sdmmc stack for read/write and multi-block.
-4. **ATF regression tests** -- build rootfs with test suite, run
-   on ISS.
-
-**Kernel:**
-5. **Remaining MD stubs** -- as the kernel reaches them.
-
-**Hardware:**
-6. **SDRAM controller** -- 32 MB SDRAM for kernel boot on real HW.
-7. **Kernel IRQ dispatch** -- poll device status registers on
-   shared `/IRQ` (replaces current EXC_EXT_IRQ panic).
-8. **ESP32 WiFi NIC** -- SLIP-framed Ethernet bridge over UART.
+1. **ATF regression tests** -- build rootfs with test suite, run
+   `t_swapcontext` and other ATF tests on the ISS.
+2. **Root filesystem** -- `build.sh sets` to create installable sets,
+   boot with full userland on the ISS.
+3. **SPI FIFO + IRQ-driven pmci** -- extend `pmci.c` with
+   FIFO-burst data transfers and `intr_establish_xname()`
+   wakeups.
+4. **Remaining MD stubs** -- fill in `TODO(stub)` functions as
+   the kernel reaches them.
+5. **SDRAM controller** -- 32 MB SDRAM for kernel boot on real HW.
