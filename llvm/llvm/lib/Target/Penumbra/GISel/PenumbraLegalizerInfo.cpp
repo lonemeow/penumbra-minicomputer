@@ -122,25 +122,24 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
 
   // Extending loads: sub-word memory → s32 register is directly supported
   // by LDB/LDBS/LDH/LDHS.  Wider destinations (s64 from optimizer-merged
-  // bitfield loads) are narrowed: the helper emits a s32 load + explicit
-  // G_ZEXT/G_SEXT to s64, and the extension is then split by our G_ZEXT
-  // narrowing rule into two s32 halves (low = loaded value, high = 0 or
-  // SAR).  s128 is not yet supported.  Unaligned extending loads are
-  // split by the helper (same path as the plain G_LOAD rule above).
+  // bitfield loads, s33 from `__builtin_add_overflow` mixed-sign at -O0
+  // before InstCombine has a chance to fold) are clamped to s32 — the
+  // framework then re-extends to the original type via G_ZEXT/G_SEXT,
+  // which our G_ZEXT narrowing rule splits into s32 halves at s64 (low
+  // = loaded value, high = 0 or SAR replication).  Anything left after
+  // clamping that doesn't match the legalFor set (e.g. dst==mem after
+  // clamping a wider dst down to s32 over an s32 load) is lowered to a
+  // plain G_LOAD + extension.  s128 is not yet supported.  Unaligned
+  // extending loads split via the helper, same as G_LOAD.
   getActionDefinitionsBuilder({G_SEXTLOAD, G_ZEXTLOAD})
       .legalForTypesWithMemDesc({
         {s32, p0, s16, 16},
         {s32, p0, s8,   8},
       })
-      // Widen sub-s32 destinations first so lowerLoad's recursive split
-      // (which preserves the destination type) stays within our s32
-      // legal set — otherwise a split G_ZEXTLOAD can surface with e.g.
-      // s16 destination that matches no rule.  minScalar (not
-      // widenScalarToNextPow2) is required because s16 is already a
-      // power of two and the latter would leave it alone.
-      .minScalar(0, s32)
       .lowerIf(isUnaligned)
-      .narrowScalarIf(typeIs(0, s64), changeTo(0, s32));
+      .widenScalarToNextPow2(0, /* MinSize = */ 32)
+      .clampScalar(0, s32, s32)
+      .lower();
 
   getActionDefinitionsBuilder({G_PTR_ADD, G_PTRMASK})
       .legalFor({{p0, s32}});
