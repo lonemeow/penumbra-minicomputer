@@ -24,7 +24,7 @@ DOCKER_RUN   = docker run --rm -u $(shell id -u):$(shell id -g) -v $(CURDIR):/wo
 VERILATOR_FLAGS = --cc --exe --build -Wall \
                   $(if $(VCD),--trace) \
                   -CFLAGS "-std=c++17" \
-                  -Ihw/rtl/core -Ihw/rtl/bus -Ihw/rtl/mmu -Ihw/rtl/io -Ihw/rtl/soc
+                  -Ihw/rtl/core -Ihw/rtl/bus -Ihw/rtl/mmu -Ihw/rtl/io -Ihw/rtl/soc -Ihw/rtl/sim
 
 BUILD_DIR   = build
 WAVE_DIR    = waves
@@ -359,11 +359,8 @@ FPGA_SRC_SIMPLE = $(wildcard $(FPGA_RTL)/*.sv)
 FPGA_SRC_FULL   = hw/rtl/core/penumbra_pkg.sv \
                   $(filter-out %/smoke_adder.sv %/penumbra_pkg.sv, $(wildcard hw/rtl/core/*.sv)) \
                   $(wildcard hw/rtl/mmu/*.sv) \
-                  hw/rtl/soc/bus_devsel.sv hw/rtl/soc/boot_rom.sv \
-                  hw/rtl/soc/cache.sv \
-                  hw/rtl/soc/sysid.sv hw/rtl/soc/busctl.sv hw/rtl/soc/timer.sv \
-                  hw/rtl/soc/autoconfig_dev.sv \
-                  hw/rtl/io/uart.sv hw/rtl/io/spi.sv hw/rtl/io/sdram.sv \
+                  $(wildcard hw/rtl/soc/*.sv) \
+                  $(wildcard hw/rtl/io/*.sv) \
                   $(FPGA_RTL)/fpga_ram.sv $(FPGA_RTL)/ulx3s_top.sv
 
 # ECP5 primitive stubs — for Verilator lint only, not synthesis.

@@ -24,12 +24,12 @@ This file provides detailed hardware context for work under `hw/`. The root `CLA
 | Byte extractor | `rtl/core/byte_ext.sv` | 19/19 | Sub-word load extraction: byte/half from 32-bit word, sign/zero extend |
 | Byte replicator | `rtl/core/byte_rep.sv` | 10/10 | Sub-word store lane positioning: replicate byte/half across all lanes |
 | CPU core | `rtl/core/cpu_core.sv` | 30 progs | Full CPU: datapath + sequencer + ROM + MMU + split I/D cache + memory bus mux + fetch + IRQ + all traps + WRSYS/RDSYS + RDSPR/WRSPR + BL + sub-word loads/stores. Parameterizable RESET_PC (default 0xFFFF\_0000). |
-| Sim machine | `rtl/soc/machine_sim.sv` | (top) | Simulation integration: cpu\_core + boot\_rom + simple\_mem + sim\_uart + sysid + busctl + autoconfig SPI. Shared-bus with `bus_devsel`. UART IRQ wired. |
+| Sim machine | `rtl/sim/machine_sim.sv` | (top) | Simulation integration: cpu\_core + boot\_rom + simple\_mem + sim\_uart + sysid + busctl + autoconfig SPI. Shared-bus with `bus_devsel`. UART IRQ wired. |
 | Bus devsel | `rtl/soc/bus_devsel.sv` | via machine\_sim | Combinational address comparator for device-side bus decode. Parameterized BASE/SIZE. |
 | Bus controller | `rtl/soc/busctl.sv` | 43/43 | Sysreg device 4 (SYSDEV\_BUS). RST (sticky) and CFG\_EN bits for autoconfig. |
 | Autoconfig wrapper | `rtl/soc/autoconfig_dev.sv` | 28/28 | Config space regs, cfg daisy chain with CFG\_EN toggle, dynamic base address decode. |
-| Sim UART | `rtl/soc/sim_uart.sv` | via machine\_sim | 16450-compatible UART (MMIO at 0xFF00\_0000). NetBSD com(4) compatible. |
-| Sim SPI | `rtl/soc/sim_spi.sv` | via machine\_sim | SPI master v2 (CLASS\_SD). 7 regs: CAP, STATUS, CONTROL, DATA, XFER\_COUNT, IRQ\_STATUS, IRQ\_ENABLE. Hardware TX/RX FIFO, transfer engine, IRQ. SD emulator via `+sdcard=`. |
+| Sim UART | `rtl/sim/sim_uart.sv` | via machine\_sim | 16450-compatible UART (MMIO at 0xFF00\_0000). NetBSD com(4) compatible. |
+| Sim SPI | `rtl/sim/sim_spi.sv` | via machine\_sim | SPI master v2 (CLASS\_SD). 7 regs: CAP, STATUS, CONTROL, DATA, XFER\_COUNT, IRQ\_STATUS, IRQ\_ENABLE. Hardware TX/RX FIFO, transfer engine, IRQ. SD emulator via `+sdcard=`. |
 | Real UART | `rtl/io/uart.sv` | via ulx3s\_top | NS16450-compatible UART with real baud rate generator, TX shift register, RX 16x oversampling. CLK\_FREQ/BAUD\_RATE params. |
 | SPI FIFO | `rtl/io/spi_fifo.sv` | via spi | Parameterized synchronous FIFO (power-of-2 depth, 8-bit data). Used for SPI TX/RX paths. |
 | Real SPI | `rtl/io/spi.sv` | 54/54 | SPI master v2 with hardware TX/RX FIFO, autonomous transfer engine (stall-on-empty/full), IRQ output. FIFO\_DEPTH, SLOW\_DIV, FAST\_DIV params. See `doc/system/devices/spi.md`. |
@@ -44,8 +44,8 @@ This file provides detailed hardware context for work under `hw/`. The root `CLA
 | TLB unit | `rtl/mmu/tlb_unit.sv` | — | Wraps main + pinned TLB behind unified lookup + sysreg interface (regs 3-8) |
 | MMU | `rtl/mmu/mmu.sv` | — | Bypass/translate mux, force\_bypass for vector table read, alignment check, sysreg routing (regs 0-2), fault latching |
 | Cache | `rtl/soc/cache.sv` | 42/42 | Parameterized PIPT cache (NUM_SETS, LINE_WORDS, NUM_WAYS). Write-through/write-no-allocate. Burst line fill on read miss. Sysreg interface. |
-| Cache stub | `rtl/soc/cache_stub.sv` | — | Combinational pass-through, retained for reference. Replaced by cache.sv in cpu_core. |
-| Simple memory | `rtl/soc/simple_mem.sv` | — | Parameterizable synchronous SRAM model (default 16 MB), configurable READ_LATENCY/WRITE_LATENCY modeling SDRAM timing. |
+| Cache stub | `rtl/sim/cache_stub.sv` | — | Combinational pass-through, retained for reference. Replaced by cache.sv in cpu_core. |
+| Simple memory | `rtl/sim/simple_mem.sv` | — | Parameterizable synchronous SRAM model (default 16 MB), configurable READ_LATENCY/WRITE_LATENCY modeling SDRAM timing. |
 
 ## Boot ROM and Interactive Simulation
 - **Boot ROM** (`rom/`): Penumbra/1 boot monitor in C.
