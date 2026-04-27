@@ -78,17 +78,23 @@ bool PenumbraRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator MI,
   // When FP is active, use R10 (FP) as the base register for normal frame
   // accesses.  But CSR spill/restore must use SP — they execute *before*
   // FP is set up (and *after* FP is torn down), so R10 doesn't yet (or
-  // anymore) point at the frame.  Detect CSR slots by walking the CSI list.
-  bool IsCSRSlot = false;
+  // anymore) point at the frame.  PEI's assignCalleeSavedSpillSlots
+  // allocates CSRs as a single contiguous batch of stack objects, so the
+  // CSR frame indices form a monotonic range bounded by CSI.front() and
+  // CSI.back() — a single range check identifies them (same trick as
+  // RISCVFrameLowering::getFrameIndexReference).  Empty CSI yields the
+  // dead range [0, -1] so the check correctly fails for every FI.
+  int MinCSFI = 0;
+  int MaxCSFI = -1;
   if (MFI.isCalleeSavedInfoValid()) {
-    int FI = Inst.getOperand(FIOperandNum).getIndex();
-    for (const CalleeSavedInfo &CS : MFI.getCalleeSavedInfo()) {
-      if (CS.getFrameIdx() == FI) {
-        IsCSRSlot = true;
-        break;
-      }
+    const auto &CSI = MFI.getCalleeSavedInfo();
+    if (!CSI.empty()) {
+      MinCSFI = CSI.front().getFrameIdx();
+      MaxCSFI = CSI.back().getFrameIdx();
     }
   }
+  int FI = Inst.getOperand(FIOperandNum).getIndex();
+  bool IsCSRSlot = FI >= MinCSFI && FI <= MaxCSFI;
   Register BaseReg = (TFI->hasFP(MF) && !IsCSRSlot) ? Penumbra::R10
                                                     : Penumbra::R14;
 
