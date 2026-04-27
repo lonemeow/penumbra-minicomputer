@@ -87,14 +87,11 @@ void PenumbraFrameLowering::emitPrologue(MachineFunction &MF,
     adjustSP(MBB, MBBI, DL, TII, StackSize,
              /*ImmOpc=*/Penumbra::SUBi, /*RegOpc=*/Penumbra::SUB);
 
-  if (hasFP(MF)) {
-    // mov r10, r14  — FP = SP after frame allocation
-    // Inserted after SUB SP but before CSR spills (which PEI
-    // places after the prologue).  CSR spills will use [FP+offset]
-    // via eliminateFrameIndex, and FP = SP at that point.
-    BuildMI(MBB, MBBI, DL, TII.get(Penumbra::MOV), FPReg)
-        .addReg(Penumbra::R14);
-  }
+  // FP setup (mov r10, r14) is emitted in spillCalleeSavedRegisters AFTER
+  // all CSR spills have been placed.  Doing it here would clobber the
+  // caller's R10 before PEI's STW R10, [...] runs, so the saved R10 would
+  // be the new value (= SP), not the caller's value, and the function
+  // would return with R10 pointing into its own (now-deallocated) frame.
 }
 
 // Emit the function epilogue: release the stack frame by adding StackSize
@@ -141,6 +138,18 @@ bool PenumbraFrameLowering::spillCalleeSavedRegisters(
     TII.storeRegToStackSlot(MBB, MI, Reg, IsKill, CS.getFrameIdx(),
                              TRI->getMinimalPhysRegClass(Reg),
                              Register());
+  }
+
+  // Set up FP after all CSRs (including R10) are saved.  CSR spills
+  // resolve to SP-relative addresses (see PenumbraRegisterInfo::
+  // eliminateFrameIndex), so the spilled R10 captures the caller's
+  // value before we overwrite it here.
+  if (hasFP(MF)) {
+    DebugLoc DL = MI != MBB.end() ? MI->getDebugLoc() : DebugLoc();
+    const auto &TII2 = *static_cast<const PenumbraInstrInfo *>(
+        MF.getSubtarget().getInstrInfo());
+    BuildMI(MBB, MI, DL, TII2.get(Penumbra::MOV), FPReg)
+        .addReg(Penumbra::R14);
   }
   return true;
 }

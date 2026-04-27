@@ -10,9 +10,13 @@ declare void @use_int(i32)
 define void @locals_with_alloca(i32 %n) {
 ; CHECK-LABEL: locals_with_alloca:
 ;
-; Frame pointer setup: sub SP, mov R10(FP)=SP
+; Frame pointer setup: sub SP, then CSR spills (SP-relative), then mov R10=SP.
+; The R10 CSR spill MUST come before `mov r10, r14` and use [r14+...] —
+; otherwise the saved R10 captures the new FP value (= SP) instead of the
+; caller's value.  See frame-fp-csr-spill-order.ll for the dedicated regression.
 ; CHECK:       sub r14,
-; CHECK-NEXT:  mov r10, r14
+; CHECK:       stw r10, [r14 +
+; CHECK:       mov r10, r14
 ;
 ; Store to local via FP (not SP):
 ; CHECK:       stw {{.*}}, [r10 +
@@ -22,8 +26,9 @@ define void @locals_with_alloca(i32 %n) {
 ; CHECK:       mov r14,
 ; CHECK:       ldw {{.*}}, [r10 +
 ;
-; Epilogue: restore SP from FP
+; Epilogue: restore SP from FP, then SP-relative CSR restore.
 ; CHECK:       mov r14, r10
+; CHECK:       ldw r10, [r14 +
 entry:
   %local = alloca i32
   store i32 42, ptr %local

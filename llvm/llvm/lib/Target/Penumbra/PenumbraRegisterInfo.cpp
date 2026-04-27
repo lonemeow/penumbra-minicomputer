@@ -75,9 +75,22 @@ bool PenumbraRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator MI,
       Inst.getOperand(FIOperandNum + 1).getImm() +
       MFI.getStackSize() + SPAdj;
 
-  // When FP is active, use R10 (FP) as the base register.
-  // FP = SP after frame allocation, so offsets are the same.
-  Register BaseReg = TFI->hasFP(MF) ? Penumbra::R10 : Penumbra::R14;
+  // When FP is active, use R10 (FP) as the base register for normal frame
+  // accesses.  But CSR spill/restore must use SP — they execute *before*
+  // FP is set up (and *after* FP is torn down), so R10 doesn't yet (or
+  // anymore) point at the frame.  Detect CSR slots by walking the CSI list.
+  bool IsCSRSlot = false;
+  if (MFI.isCalleeSavedInfoValid()) {
+    int FI = Inst.getOperand(FIOperandNum).getIndex();
+    for (const CalleeSavedInfo &CS : MFI.getCalleeSavedInfo()) {
+      if (CS.getFrameIdx() == FI) {
+        IsCSRSlot = true;
+        break;
+      }
+    }
+  }
+  Register BaseReg = (TFI->hasFP(MF) && !IsCSRSlot) ? Penumbra::R10
+                                                    : Penumbra::R14;
 
   // Fast path: the 16-bit signed memory-offset field fits.
   if (isInt<16>(Offset)) {
