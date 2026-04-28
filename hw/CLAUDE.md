@@ -68,7 +68,12 @@ This file provides detailed hardware context for work under `hw/`. The root `CLA
   - `libc.c`/`.h` — minimal C library
     (strlen, strcmp, strtoul, snprintf, software mul/div)
   - `uart.c`/`.h` — UART polling driver
-  - `crt0.s` — startup (set SP, call main),
+  - `crt0.s` — startup (preload UART regs, run RAM diag,
+    set SP, call main),
+    `ram_check.s` — pre-stack SDRAM controller diagnostic
+    (round-trip, consecutive multi-word, sub-word integrity)
+    plus the early-print helpers it uses
+    (`_early_putc`, `_early_puts`, `_dump_r5`),
     `trap_entry.s` — exception trampolines,
     `rom.ld` — linker script
   - `fat32.c`/`.h` — minimal read-only FAT32 reader

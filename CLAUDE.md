@@ -211,7 +211,7 @@ source discovery and header dependency tracking.  The main Makefile
 delegates with `$(MAKE) -C hw/rom`; can also be built standalone.
 ```
 hw/rom/*.c    →  clang -c  →  *.o  ─┐
-hw/rom/crt0.s →  llvm-mc   →  crt0.o ├→ ld.lld (rom.ld) → boot_rom.elf → objcopy → bin2hex → program.hex
+hw/rom/*.s    →  llvm-mc   →  *.o   ├→ ld.lld (rom.ld) → boot_rom.elf → objcopy → bin2hex → program.hex
 hw/rom/rom.ld ─────────────────────────┘
 ```
 
