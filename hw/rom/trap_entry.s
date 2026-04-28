@@ -21,7 +21,7 @@
         lli     r1, \num                // R1 = trap number (arg 1)
         li      r14, 0x00FFFC00         // trap stack (1 KB below main stack top)
         bl      unhandled_trap
-        break
+        b       _halt
 .endm
 
         .globl  _trap_bus_fault
@@ -59,6 +59,9 @@ _trap_illegal:
         .globl  _trap_align
 _trap_align:
         TRAP_ENTRY 8
+
+_halt:
+        b _halt
 
 // ── Bus fault ignore handler ────────────────────────────────────────
 // Advances EPC past the faulting instruction and resumes via ERET.
