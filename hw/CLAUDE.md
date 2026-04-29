@@ -33,7 +33,14 @@ This file provides detailed hardware context for work under `hw/`. The root `CLA
 | Real UART | `rtl/io/uart.sv` | via ulx3s\_top | NS16450-compatible UART with real baud rate generator, TX shift register, RX 16x oversampling. CLK\_FREQ/BAUD\_RATE params. |
 | SPI FIFO | `rtl/io/spi_fifo.sv` | via spi | Parameterized synchronous FIFO (power-of-2 depth, 8-bit data). Used for SPI TX/RX paths. |
 | Real SPI | `rtl/io/spi.sv` | 54/54 | SPI master v2 with hardware TX/RX FIFO, autonomous transfer engine (stall-on-empty/full), IRQ output. FIFO\_DEPTH, SLOW\_DIV, FAST\_DIV params. See `doc/system/devices/spi.md`. |
-| SDRAM | `rtl/io/sdram.sv` | via ulx3s\_top | SDR SDRAM controller (32 MB). CL=2, BL=2, auto-precharge. Universal-safe timings for all ULX3S SDRAM variants. Same bus interface as fpga\_ram/simple\_mem. |
+| SDRAM v1 | `rtl/io/sdram.sv` | via ulx3s\_top | Original SDR SDRAM controller (32 MB). CL=2, BL=2, auto-precharge. Universal-safe timings for all ULX3S SDRAM variants. Still wired into the FPGA build until step 3 of the v2 rollout completes. |
+| SDRAM v2 — package | `rtl/io/sdram/sdram_pkg.sv` | — | Command encoding + chip presets (W9825 @ 100 MHz CL2). |
+| SDRAM v2 — controller | `rtl/io/sdram/sdram_ctrl.sv` | unit + machine\_sim | FSM core: init, refresh, ACT/RW/RECOVER. Single-word req/rsp interface. Parameterized geometry/timing. |
+| SDRAM v2 — bus adapter | `rtl/io/sdram/sdram_bus_adapter.sv` | machine\_sim | Sync bus `i_re/i_we/o_busy` ↔ controller req/rsp handshake. Drop-in for simple\_mem. |
+| SDRAM v2 — sim PHY | `rtl/io/sdram/sdram_phy_sim.sv` | unit + machine\_sim | Pass-through PHY for Verilator. Replaced by `sdram_phy_ecp5.sv` in step 3. |
+| SDRAM v2 — chip model | `rtl/sim/sdram_model.sv` | unit + machine\_sim | Behavioral SDR DRAM chip. JEDEC command set, sparse storage, protocol checking. |
+| SDRAM v2 — sim bundle | `rtl/sim/sdram_sim.sv` | machine\_sim | Wraps adapter + ctrl + phy\_sim + model into a simple\_mem-shaped device. |
+| SDRAM v2 — unit wrapper | `rtl/sim/sdram_test.sv` | tb\_sdram\_test | DUT wrapper exposing the controller's req/rsp interface. See `doc/internals/sdram-controller.md`. |
 | UART TX | `rtl/fpga/uart_tx.sv` | via test tops | Standalone UART TX shift register for test designs (ulx3s\_hello, etc.) |
 | FPGA RAM | `rtl/fpga/fpga_ram.sv` | via ulx3s\_top | BRAM-friendly memory: four byte-wide banks with `ram_style` attribute. Address wraps for size probing. |
 | Boot ROM | `rtl/soc/boot_rom.sv` | via machine_sim | Read-only memory (64 KB default), loads program.hex |

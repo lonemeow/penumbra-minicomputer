@@ -170,7 +170,10 @@ module machine_sim
         u_ram_sel (.i_addr(mem_addr), .o_sel(ram_sel));
     always_ff @(posedge i_clk) ram_sel_r <= ram_sel;
 
-    simple_mem #(.MEM_WORDS(RAM_WORDS)) u_ram (
+    // Full v2 SDRAM stack (adapter + controller + sim PHY +
+    // behavioral chip).  Drop-in for simple_mem.  See
+    // doc/internals/sdram-controller.md.
+    sdram_sim u_ram (
         .i_clk     (i_clk),
         .i_rst     (i_rst),
         .i_addr    (mem_addr),

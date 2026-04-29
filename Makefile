@@ -24,7 +24,7 @@ DOCKER_RUN   = docker run --rm -u $(shell id -u):$(shell id -g) -v $(CURDIR):/wo
 VERILATOR_FLAGS = --cc --exe --build -Wall \
                   $(if $(VCD),--trace) \
                   -CFLAGS "-std=c++17" \
-                  -Ihw/rtl/core -Ihw/rtl/bus -Ihw/rtl/mmu -Ihw/rtl/io -Ihw/rtl/soc -Ihw/rtl/sim
+                  -Ihw/rtl/core -Ihw/rtl/bus -Ihw/rtl/mmu -Ihw/rtl/io -Ihw/rtl/io/sdram -Ihw/rtl/soc -Ihw/rtl/sim
 
 BUILD_DIR   = build
 WAVE_DIR    = waves
@@ -49,9 +49,10 @@ MOD  ?=
 PROG ?= test_add
 TB   ?= tb_$(MOD)
 
-# Shared package — always included. --top-module tells Verilator which
-# module is the DUT (otherwise it picks the first file = the package).
-PKG_SV = hw/rtl/core/penumbra_pkg.sv
+# Shared packages — always included. --top-module tells Verilator which
+# module is the DUT (otherwise it picks the first file = a package).
+# Add new packages here as the design grows.
+PKG_SV = hw/rtl/core/penumbra_pkg.sv hw/rtl/io/sdram/sdram_pkg.sv
 
 # ── Assembler tools ──────────────────────────────────────────
 PASM  = python3 sw/tools/pasm.py
