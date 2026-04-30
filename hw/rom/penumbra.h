@@ -50,24 +50,27 @@ typedef unsigned int uint32_t;
  */
 
 #define SYSDEV_MMU    0
-#define SYSDEV_SYSID  1
+#define SYSDEV_CPU    1
+#define SYSDEV_MACH   8
 
 #define MMU_CR           0
 #define MMU_FAULT_ADDR   1
 #define MMU_FAULT_STATUS 2
 
-/* System ID registers (device 1, read-only) */
-#define SYS_CPU_ISA    0
-#define SYS_MACH_FEAT  1
-#define SYS_CPU_NAME0  2
-#define SYS_CPU_NAME1  3
-#define SYS_CPU_NAME2  4
-#define SYS_CPU_NAME3  5
-#define SYS_MACH_NAME0 6
-#define SYS_MACH_NAME1 7
-#define SYS_MACH_NAME2 8
-#define SYS_MACH_NAME3 9
-#define SYS_CPU_FREQ   10
+/* CPU identity registers (device 1, read-only) */
+#define CPU_ISA        0
+#define CPU_NAME0      1
+#define CPU_NAME1      2
+#define CPU_NAME2      3
+#define CPU_NAME3      4
+
+/* Machine identity registers (device 8, read-only) */
+#define MACH_FEAT      0
+#define MACH_NAME0     1
+#define MACH_NAME1     2
+#define MACH_NAME2     3
+#define MACH_NAME3     4
+#define MACH_CPU_FREQ  5
 
 /* CPU_ISA feature flag bit indices */
 #define CPU_FEAT_BIT_HW_MUL  0

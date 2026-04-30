@@ -344,18 +344,26 @@ module machine_sim
     // Sysreg devices (external, dev_id >= 1)
     // ══════════════════════════════════════════════════════════
 
-    // ── System ID (device 1, read-only) ──────────────────────
-    logic [31:0] sysid_rdata;
+    // ── CPU identity (device 1, read-only) ───────────────────
+    logic [31:0] cpuid_rdata;
+
+    cpuid u_cpuid (
+        .i_sys_reg  (sys_reg),
+        .o_sys_rdata(cpuid_rdata)
+    );
+
+    // ── Machine identity (device 8, read-only) ───────────────
+    logic [31:0] machid_rdata;
 
     // Machine name: "Simulator"
-    sysid #(
+    machid #(
         .MACH_NAME0 (32'h756D6953),   // "Simu"
         .MACH_NAME1 (32'h6F74616C),   // "lato"
         .MACH_NAME2 (32'h00000072),   // "r\0\0\0"
         .CPU_FREQ   (32'd25_000_000)  // Simulated at 25 MHz
-    ) u_sysid (
+    ) u_machid (
         .i_sys_reg  (sys_reg),
-        .o_sys_rdata(sysid_rdata)
+        .o_sys_rdata(machid_rdata)
     );
 
     // ── Bus Controller (device 4) ──────────────────────────
@@ -395,9 +403,10 @@ module machine_sim
     // Device 0 (MMU) is handled inside cpu_core.
     always_comb begin
         case (sys_dev)
-            SYSDEV_SYS:   sys_rdata = sysid_rdata;
+            SYSDEV_CPU:   sys_rdata = cpuid_rdata;
             SYSDEV_BUS:   sys_rdata = busctl_rdata;
             SYSDEV_TIMER: sys_rdata = timer_rdata;
+            SYSDEV_MACH:  sys_rdata = machid_rdata;
             default:      sys_rdata = 32'b0;
         endcase
     end

@@ -794,25 +794,25 @@ static void unpack_name_word(char *buf, int pos, uint32_t word) {
 }
 
 /*
- * Read CPU name from sysid regs 2–5 into buf (17 bytes min).
+ * Read CPU name from SYSDEV_CPU regs 1–4 into buf (17 bytes min).
  * Each RDSYS uses a compile-time constant register number.
  */
 static void read_cpu_name(char *buf) {
-    unpack_name_word(buf,  0, penumbra_read_sysreg(SYSDEV_SYSID, SYS_CPU_NAME0));
-    unpack_name_word(buf,  4, penumbra_read_sysreg(SYSDEV_SYSID, SYS_CPU_NAME1));
-    unpack_name_word(buf,  8, penumbra_read_sysreg(SYSDEV_SYSID, SYS_CPU_NAME2));
-    unpack_name_word(buf, 12, penumbra_read_sysreg(SYSDEV_SYSID, SYS_CPU_NAME3));
+    unpack_name_word(buf,  0, penumbra_read_sysreg(SYSDEV_CPU, CPU_NAME0));
+    unpack_name_word(buf,  4, penumbra_read_sysreg(SYSDEV_CPU, CPU_NAME1));
+    unpack_name_word(buf,  8, penumbra_read_sysreg(SYSDEV_CPU, CPU_NAME2));
+    unpack_name_word(buf, 12, penumbra_read_sysreg(SYSDEV_CPU, CPU_NAME3));
     buf[16] = '\0';
 }
 
 /*
- * Read machine name from sysid regs 6–9 into buf (17 bytes min).
+ * Read machine name from SYSDEV_MACH regs 1–4 into buf (17 bytes min).
  */
 static void read_mach_name(char *buf) {
-    unpack_name_word(buf,  0, penumbra_read_sysreg(SYSDEV_SYSID, SYS_MACH_NAME0));
-    unpack_name_word(buf,  4, penumbra_read_sysreg(SYSDEV_SYSID, SYS_MACH_NAME1));
-    unpack_name_word(buf,  8, penumbra_read_sysreg(SYSDEV_SYSID, SYS_MACH_NAME2));
-    unpack_name_word(buf, 12, penumbra_read_sysreg(SYSDEV_SYSID, SYS_MACH_NAME3));
+    unpack_name_word(buf,  0, penumbra_read_sysreg(SYSDEV_MACH, MACH_NAME0));
+    unpack_name_word(buf,  4, penumbra_read_sysreg(SYSDEV_MACH, MACH_NAME1));
+    unpack_name_word(buf,  8, penumbra_read_sysreg(SYSDEV_MACH, MACH_NAME2));
+    unpack_name_word(buf, 12, penumbra_read_sysreg(SYSDEV_MACH, MACH_NAME3));
     buf[16] = '\0';
 }
 
@@ -862,10 +862,10 @@ static void print_banner(void) {
     read_cpu_name(cpu_name);
     read_mach_name(mach_name);
 
-    uint32_t cpu_isa = penumbra_read_sysreg(SYSDEV_SYSID, SYS_CPU_ISA);
+    uint32_t cpu_isa = penumbra_read_sysreg(SYSDEV_CPU, CPU_ISA);
     format_cpu_features(feat_str, sizeof(feat_str), cpu_isa);
 
-    uint32_t cpu_freq = penumbra_read_sysreg(SYSDEV_SYSID, SYS_CPU_FREQ);
+    uint32_t cpu_freq = penumbra_read_sysreg(SYSDEV_MACH, MACH_CPU_FREQ);
 
     console_puts("\r\nPenumbra boot\r\n\r\n");
     console_printf("CPU:      %s (%s)", cpu_name, feat_str);

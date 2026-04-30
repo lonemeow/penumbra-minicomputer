@@ -45,7 +45,8 @@ import re
 BUILTIN_CONSTANTS = {
     # Sysreg device IDs
     "MMU":          0,
-    "SYS":          1,
+    "CPU":          1,
+    "MACH":         8,
 
     # MMU registers (device 0)
     "MMUCR":        0,
@@ -55,19 +56,20 @@ BUILTIN_CONSTANTS = {
     "TLB_PTE":      4,
     "TLB_INDEX":    5,
 
-    # SYS registers (device 1)
-    "MACHINE_ID":   0,  # legacy alias for CPU_ISA
+    # CPU registers (device 1)
     "CPU_ISA":      0,
-    "MACH_FEAT":    1,
-    "CPU_NAME0":    2,
-    "CPU_NAME1":    3,
-    "CPU_NAME2":    4,
-    "CPU_NAME3":    5,
-    "MACH_NAME0":   6,
-    "MACH_NAME1":   7,
-    "MACH_NAME2":   8,
-    "MACH_NAME3":   9,
-    "CPU_FREQ":    10,
+    "CPU_NAME0":    1,
+    "CPU_NAME1":    2,
+    "CPU_NAME2":    3,
+    "CPU_NAME3":    4,
+
+    # MACH registers (device 8)
+    "MACH_FEAT":    0,
+    "MACH_NAME0":   1,
+    "MACH_NAME1":   2,
+    "MACH_NAME2":   3,
+    "MACH_NAME3":   4,
+    "CPU_FREQ":     5,
 
     # Cache device IDs (devices 2 and 3)
     "DCACHE":       2,

@@ -259,8 +259,8 @@ enum { VEC_BUS_FAULT=0, VEC_TIMER=1, VEC_TLB_MISS=2, VEC_TLB_PROT=3,
        VEC_EXT_IRQ=9 };
 
 // Sysreg device IDs
-enum { SYSDEV_MMU=0, SYSDEV_SYS=1, SYSDEV_DCACHE=2, SYSDEV_ICACHE=3, SYSDEV_BUS=4,
-       SYSDEV_TIMER=7, SYSDEV_DEBUG=15 };
+enum { SYSDEV_MMU=0, SYSDEV_CPU=1, SYSDEV_DCACHE=2, SYSDEV_ICACHE=3, SYSDEV_BUS=4,
+       SYSDEV_TIMER=7, SYSDEV_MACH=8, SYSDEV_DEBUG=15 };
 
 // Debug watchpoints — halt on physical memory write to watched addresses
 static constexpr int DBG_MAX_WATCH = 16;
@@ -567,15 +567,21 @@ static struct {
 } mmu;
 
 // --- Sysreg: System ID (device 1, read-only) ---
-static uint32_t sysid_read(int reg) {
+static uint32_t cpuid_read(int reg) {
     static const uint32_t cpu_name[4] = {0x756E6550,0x6172626D,0x0000312F,0};
-    static const uint32_t mach_name[4] = {0x756D6953,0x6F74616C,0x00000072,0};
     switch (reg) {
         case 0: return 1;            // CPU_ISA: version 1
-        case 1: return 0;            // MACH_FEAT
-        case 2: case 3: case 4: case 5: return cpu_name[reg-2];
-        case 6: case 7: case 8: case 9: return mach_name[reg-6];
-        case 10: return 25000000;    // CPU_FREQ: 25 MHz (simulated)
+        case 1: case 2: case 3: case 4: return cpu_name[reg-1];
+        default: return 0;
+    }
+}
+
+static uint32_t machid_read(int reg) {
+    static const uint32_t mach_name[4] = {0x756D6953,0x6F74616C,0x00000072,0};
+    switch (reg) {
+        case 0: return 0;            // MACH_FEAT
+        case 1: case 2: case 3: case 4: return mach_name[reg-1];
+        case 5: return 25000000;     // CPU_FREQ: 25 MHz (simulated)
         default: return 0;
     }
 }
@@ -996,12 +1002,13 @@ static uint32_t sysreg_read(int dev, int reg) {
             case MMU_TLB_IDX: return mmu.tlb_idx;
             default: return 0;
         }
-    case SYSDEV_SYS: return sysid_read(reg);
+    case SYSDEV_CPU: return cpuid_read(reg);
     case SYSDEV_DCACHE: case SYSDEV_ICACHE:
         if (reg == 0) return (0u << 18) | (4 << 12) | (4 << 6) | 4; // fake geometry
         return 0;
     case SYSDEV_BUS: return (reg == 0) ? busctl.reg : 0;
     case SYSDEV_TIMER: return timer.read_reg(reg);
+    case SYSDEV_MACH: return machid_read(reg);
     default: return 0;
     }
 }

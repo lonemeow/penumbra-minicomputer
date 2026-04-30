@@ -72,26 +72,30 @@ package penumbra_pkg;
 
     // ── Sysreg device IDs ──────────────────────────────────────
     localparam logic [3:0] SYSDEV_MMU    = 4'd0;   // MMU (TLB, fault regs)
-    localparam logic [3:0] SYSDEV_SYS    = 4'd1;   // System ID (read-only)
+    localparam logic [3:0] SYSDEV_CPU    = 4'd1;   // CPU identity + perfctrs (read-only id)
     localparam logic [3:0] SYSDEV_DCACHE = 4'd2;   // D-cache control
     localparam logic [3:0] SYSDEV_ICACHE = 4'd3;   // I-cache control
     localparam logic [3:0] SYSDEV_BUS    = 4'd4;   // Bus controller (autoconfig, reset)
     // Devices 5–6 reserved for future cache levels (L2, L3)
     localparam logic [3:0] SYSDEV_TIMER  = 4'd7;   // Programmable interval timer
-    // Devices 8–15 reserved for future expansion
+    localparam logic [3:0] SYSDEV_MACH   = 4'd8;   // Machine identity (board name, CPU clock freq)
+    // Devices 9–15 reserved for future expansion
 
-    // ── SYS sysreg addresses (dev_id = 1) ───────────────────
-    localparam logic [3:0] SYSREG_SYS_CPU_ISA    = 4'd0;   // CPU ISA version + feature flags
-    localparam logic [3:0] SYSREG_SYS_MACH_FEAT  = 4'd1;   // Machine feature flags
-    localparam logic [3:0] SYSREG_SYS_CPU_NAME0  = 4'd2;   // CPU name bytes  0– 3
-    localparam logic [3:0] SYSREG_SYS_CPU_NAME1  = 4'd3;   // CPU name bytes  4– 7
-    localparam logic [3:0] SYSREG_SYS_CPU_NAME2  = 4'd4;   // CPU name bytes  8–11
-    localparam logic [3:0] SYSREG_SYS_CPU_NAME3  = 4'd5;   // CPU name bytes 12–15
-    localparam logic [3:0] SYSREG_SYS_MACH_NAME0 = 4'd6;   // Machine name bytes  0– 3
-    localparam logic [3:0] SYSREG_SYS_MACH_NAME1 = 4'd7;   // Machine name bytes  4– 7
-    localparam logic [3:0] SYSREG_SYS_MACH_NAME2 = 4'd8;   // Machine name bytes  8–11
-    localparam logic [3:0] SYSREG_SYS_MACH_NAME3 = 4'd9;   // Machine name bytes 12–15
-    localparam logic [3:0] SYSREG_SYS_CPU_FREQ   = 4'd10;  // CPU clock frequency in Hz
+    // ── CPU sysreg addresses (dev_id = 1) ───────────────────
+    localparam logic [3:0] SYSREG_CPU_ISA    = 4'd0;   // ISA version + feature flags
+    localparam logic [3:0] SYSREG_CPU_NAME0  = 4'd1;   // CPU name bytes  0– 3
+    localparam logic [3:0] SYSREG_CPU_NAME1  = 4'd2;   // CPU name bytes  4– 7
+    localparam logic [3:0] SYSREG_CPU_NAME2  = 4'd3;   // CPU name bytes  8–11
+    localparam logic [3:0] SYSREG_CPU_NAME3  = 4'd4;   // CPU name bytes 12–15
+    // Regs 5–15 reserved for CPU performance counters (added incrementally)
+
+    // ── MACH sysreg addresses (dev_id = 8) ──────────────────
+    localparam logic [3:0] SYSREG_MACH_FEAT   = 4'd0;  // Machine feature flags
+    localparam logic [3:0] SYSREG_MACH_NAME0  = 4'd1;  // Machine name bytes  0– 3
+    localparam logic [3:0] SYSREG_MACH_NAME1  = 4'd2;  // Machine name bytes  4– 7
+    localparam logic [3:0] SYSREG_MACH_NAME2  = 4'd3;  // Machine name bytes  8–11
+    localparam logic [3:0] SYSREG_MACH_NAME3  = 4'd4;  // Machine name bytes 12–15
+    localparam logic [3:0] SYSREG_MACH_CPU_FREQ = 4'd5; // CPU clock frequency in Hz (board PLL)
 
     // ── Cache sysreg addresses (dev_id = 2 or 3) ────────────────
     localparam logic [3:0] SYSREG_CACHE_INFO  = 4'd0;  // Read-only geometry/type

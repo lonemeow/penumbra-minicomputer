@@ -247,7 +247,7 @@ for context switches (returning to a **different** process than the
 one that was interrupted).
 
 **WRSYS/RDSYS.** Access device-mapped system registers (MMU, TLB,
-sysid, caches, bus controller, timer). See
+CPU/machine identity, caches, bus controller, timer). See
 [sysregs.md](./sysregs.md).
 
 ---

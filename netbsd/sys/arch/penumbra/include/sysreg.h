@@ -15,13 +15,14 @@
 /* ── Device numbers (RDSYS/WRSYS dev field) ─────────────────────────── */
 
 #define SYSDEV_MMU	0	/* MMU / TLB management */
-#define SYSDEV_SYSID	1	/* CPU and machine ID (read-only) */
+#define SYSDEV_CPU	1	/* CPU identity + perfctrs (read-only id) */
 #define SYSDEV_DCACHE	2	/* D-cache control */
 #define SYSDEV_ICACHE	3	/* I-cache control */
 #define SYSDEV_BUS	4	/* Bus controller (autoconfig) */
-/* Devices 5-6 reserved */
+/* Devices 5-6 reserved for future cache levels (L2, L3) */
 #define SYSDEV_TIMER	7	/* Programmable interval timer */
-/* Devices 8-14 reserved */
+#define SYSDEV_MACH	8	/* Machine identity (board name, CPU clock freq) */
+/* Devices 9-14 reserved */
 #define SYSDEV_DEBUG	15	/* ISS-only debug (watchpoint); no-op on hardware */
 
 /* ── Device 15: ISS debug registers (simulator only) ───────────────── */
@@ -69,18 +70,22 @@
 /* TLB_PTE word: (PPN << 12) | (SW << 8) | flags */
 /* Flag and PPN bits defined in <machine/pmap.h> */
 
-/* ── Device 1: System ID registers (read-only) ─────────────────────── */
+/* ── Device 1: CPU identity (read-only) ────────────────────────────── */
 
-#define SYS_CPU_ISA	0
-#define SYS_MACH_FEAT	1
-#define SYS_CPU_NAME0	2
-#define SYS_CPU_NAME1	3
-#define SYS_CPU_NAME2	4
-#define SYS_CPU_NAME3	5
-#define SYS_MACH_NAME0	6
-#define SYS_MACH_NAME1	7
-#define SYS_MACH_NAME2	8
-#define SYS_MACH_NAME3	9
+#define CPU_ISA		0
+#define CPU_NAME0	1
+#define CPU_NAME1	2
+#define CPU_NAME2	3
+#define CPU_NAME3	4
+
+/* ── Device 8: Machine identity (read-only) ────────────────────────── */
+
+#define MACH_FEAT	0
+#define MACH_NAME0	1
+#define MACH_NAME1	2
+#define MACH_NAME2	3
+#define MACH_NAME3	4
+#define MACH_CPU_FREQ	5
 
 /* ── Device 2/3: Cache registers ────────────────────────────────────── */
 

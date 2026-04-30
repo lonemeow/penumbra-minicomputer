@@ -22,13 +22,19 @@ registers.
 | dev  | Name    | Description                                              |
 |:----:|---------|----------------------------------------------------------|
 | 0    | MMU     | TLB management, fault registers, translation control     |
-| 1    | SYS     | CPU and machine identification (read-only)               |
+| 1    | CPU     | CPU identity (read-only); home for CPU performance counters |
 | 2    | DCACHE  | D-cache control, geometry info, invalidation             |
 | 3    | ICACHE  | I-cache control, geometry info, invalidation             |
 | 4    | BUS     | Bus controller (autoconfig, bus reset)                   |
 | 5–6  | —       | Reserved for future cache levels (L2, L3)                |
 | 7    | TIMER   | Programmable interval timer                              |
-| 8–15 | —       | Reserved for future devices (DMA, etc.)                  |
+| 8    | MACH    | Machine/board identity (read-only): name, features, CPU clock |
+| 9–15 | —       | Reserved for future devices (DMA, etc.)                  |
+
+CPU identity (slot 1) and machine identity (slot 8) are deliberately
+separate so the same CPU core can be instantiated on different boards.
+CPU identity is invariant for a given RTL release; machine identity
+varies by integration (board name, PLL frequency, board feature word).
 
 > **Note:** I/O peripherals (UART, SPI, GPIO, Ethernet) are **not** on
 > the sysreg bus. They are memory-mapped at `0xFF00_0000`+ and accessed
@@ -178,20 +184,18 @@ enable procedure.
 
 ---
 
-## Device 1: SYS (System Identification)
+## Device 1: CPU (CPU Identity)
 
-Read-only. Writes are ignored. CPU core and machine/board
-identification are separate so the same core can be instantiated on
-different platforms.
+Read-only. Writes are ignored. Describes the CPU core itself, not the
+board it runs on (board info lives in [Device 8: MACH](#device-8-mach-machine-identity)).
+The same CPU RTL produces the same answers regardless of which board
+instantiates it.
 
-| reg    | Name              | R/W | Description                                      |
-|:------:|-------------------|:---:|--------------------------------------------------|
-| 0      | `CPU_ISA`         | R   | ISA version and CPU feature flags                |
-| 1      | `MACH_FEAT`       | R   | Machine/board feature flags                      |
-| 2–5    | `CPU_NAME0–3`     | R   | CPU name string (16 bytes, packed LE, null-pad)  |
-| 6–9    | `MACH_NAME0–3`    | R   | Machine name (16 bytes, packed LE, null-pad)     |
-| 10     | `CPU_FREQ`        | R   | CPU clock frequency in Hz (0 = unknown)          |
-| 11–15  | —                 | —   | Reserved (reads as 0)                            |
+| reg    | Name           | R/W | Description                                         |
+|:------:|----------------|:---:|-----------------------------------------------------|
+| 0      | `CPU_ISA`      | R   | ISA version and CPU feature flags                   |
+| 1–4    | `CPU_NAME0–3`  | R   | CPU name string (16 bytes, packed LE, null-pad)     |
+| 5–15   | —              | —   | Reserved for CPU performance counters (added incrementally) |
 
 ### CPU_ISA (reg 0)
 
@@ -224,7 +228,7 @@ revision.
 
 ```asm
 ; Boot-time ISA check with optional FPU detection
-RDSYS R1, #1, #0              ; CPU_ISA
+RDSYS R1, #CPU, #CPU_ISA
 ANDI  R2, R1, #0x0F
 CMPI  R2, #1
 BNE   unsupported_isa
@@ -232,7 +236,33 @@ ANDI  R2, R1, #0x40           ; FPU bit
 BNE   has_fpu
 ```
 
-### MACH_FEAT (reg 1)
+### CPU_NAME0–3 (regs 1–4)
+
+A 16-byte null-padded ASCII string packed little-endian into four
+consecutive 32-bit registers. The first character occupies bits
+`[7:0]` of `CPU_NAME0`, the second `[15:8]`, and so on. Software reads
+the regs sequentially and extracts bytes; reading stops at the first
+null. Default value: `"Penumbra/1"`.
+
+The `cpuid` RTL module accepts parameters to override the name for
+forks of the core.
+
+---
+
+## Device 8: MACH (Machine Identity)
+
+Read-only. Writes are ignored. Describes the board / machine the CPU
+is mounted on. Anything whose value would change if the same CPU core
+were dropped onto a different board belongs here.
+
+| reg    | Name             | R/W | Description                                      |
+|:------:|------------------|:---:|--------------------------------------------------|
+| 0      | `MACH_FEAT`      | R   | Machine/board feature flags                      |
+| 1–4    | `MACH_NAME0–3`   | R   | Machine name (16 bytes, packed LE, null-pad)     |
+| 5      | `MACH_CPU_FREQ`  | R   | CPU clock frequency in Hz (board PLL output)     |
+| 6–15   | —                | —   | Reserved (reads as 0)                            |
+
+### MACH_FEAT (reg 0)
 
 | Bit  | Name         | Description                            |
 |:----:|--------------|----------------------------------------|
@@ -240,32 +270,24 @@ BNE   has_fpu
 | 1    | BOOT_DISPLAY | Boot console is display + keyboard     |
 | 2–31 | —            | Reserved (0)                           |
 
-### Name Strings (regs 2–5, 6–9)
+### MACH_NAME0–3 (regs 1–4)
 
-Each name is a 16-byte null-padded ASCII string packed little-endian
-into 4 consecutive 32-bit registers. The first character occupies bits
-`[7:0]` of `NAME0`, the second `[15:8]`, and so on. Software reads the
-regs sequentially and extracts bytes; reading stops at the first null.
+16-byte null-padded ASCII string, packed identically to `CPU_NAME`.
+Default per platform — e.g. `"Simulator"` on the Verilator/ISS sim
+and `"ULX3S"` on the FPGA board. The `machid` RTL module accepts
+parameters to override the name per machine integration.
 
-**Default values:**
+### MACH_CPU_FREQ (reg 5)
 
-| String       | Default        | Description          |
-|--------------|----------------|----------------------|
-| CPU name     | `"Penumbra/1"` | Core type + revision |
-| Machine name | (per platform) | e.g. `"Simulator"`, `"ULX3S"` |
-
-The `sysid` RTL module accepts parameters to override both names per
-machine integration.
-
-### CPU_FREQ (reg 10)
-
-CPU clock frequency in Hz as a plain 32-bit unsigned. Returns 0 if the
-platform does not report a frequency. Useful for boot banner, kernel
-timekeeping calibration, and benchmarks. For the ULX3S at 12.5 MHz:
-reads as `12,500,000`.
+CPU clock frequency in Hz as a plain 32-bit unsigned. The CPU itself
+has no way to know what frequency it's clocked at — that's a property
+of the board's PLL configuration, so the value is supplied by the
+board top-level. Reads as 0 if the platform does not report a
+frequency. Useful for boot banner, kernel timekeeping calibration,
+and benchmarks. For the ULX3S at 12.5 MHz: reads as `12,500,000`.
 
 ```asm
-RDSYS R1, #1, #10              ; R1 = CPU clock frequency in Hz
+RDSYS R1, #MACH, #CPU_FREQ    ; R1 = CPU clock frequency in Hz
 ```
 
 ---

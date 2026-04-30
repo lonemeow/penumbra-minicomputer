@@ -24,7 +24,7 @@ This file provides detailed hardware context for work under `hw/`. The root `CLA
 | Byte extractor | `rtl/core/byte_ext.sv` | 19/19 | Sub-word load extraction: byte/half from 32-bit word, sign/zero extend |
 | Byte replicator | `rtl/core/byte_rep.sv` | 10/10 | Sub-word store lane positioning: replicate byte/half across all lanes |
 | CPU core | `rtl/core/cpu_core.sv` | 30 progs | Full CPU: datapath + sequencer + ROM + MMU + split I/D cache + memory bus mux + fetch + IRQ + all traps + WRSYS/RDSYS + RDSPR/WRSPR + BL + sub-word loads/stores. Parameterizable RESET_PC (default 0xFFFF\_0000). |
-| Sim machine | `rtl/sim/machine_sim.sv` | (top) | Simulation integration: cpu\_core + boot\_rom + simple\_mem + sim\_uart + sysid + busctl + autoconfig SPI. Shared-bus with `bus_devsel`. UART IRQ wired. |
+| Sim machine | `rtl/sim/machine_sim.sv` | (top) | Simulation integration: cpu\_core + boot\_rom + simple\_mem + sim\_uart + cpuid + machid + busctl + autoconfig SPI. Shared-bus with `bus_devsel`. UART IRQ wired. |
 | Bus devsel | `rtl/soc/bus_devsel.sv` | via machine\_sim | Combinational address comparator for device-side bus decode. Parameterized BASE/SIZE. |
 | Bus controller | `rtl/soc/busctl.sv` | 43/43 | Sysreg device 4 (SYSDEV\_BUS). RST (sticky) and CFG\_EN bits for autoconfig. |
 | Autoconfig wrapper | `rtl/soc/autoconfig_dev.sv` | 28/28 | Config space regs, cfg daisy chain with CFG\_EN toggle, dynamic base address decode. |
@@ -46,7 +46,8 @@ This file provides detailed hardware context for work under `hw/`. The root `CLA
 | FPGA RAM | `rtl/fpga/fpga_ram.sv` | via ulx3s\_top | BRAM-friendly memory: four byte-wide banks with `ram_style` attribute. Address wraps for size probing. |
 | Boot ROM | `rtl/soc/boot_rom.sv` | via machine_sim | Read-only memory (64 KB default), loads program.hex |
 | Shared package | `rtl/core/penumbra_pkg.sv` | — | REG\_\*, ALU\_\*, COND\_\*, SR\_\*, VEC\_\*, FAULT\_\*, SYSDEV\_\*, SYSREG\_\*, CACHE\_TYPE\_\*, UART\_\*, SPR\_\*, ACFG\_\* and base address constants |
-| System ID | `rtl/soc/sysid.sv` | via machine_sim | Read-only MACHINE_ID register (Penumbra/1), sysreg device 1 |
+| CPU identity | `rtl/soc/cpuid.sv` | via machine_sim + ulx3s_top | Read-only CPU identity (CPU_ISA + CPU_NAME), sysreg device 1. Future home for CPU performance counters. |
+| Machine identity | `rtl/soc/machid.sv` | via machine_sim + ulx3s_top | Read-only board identity (MACH_FEAT, MACH_NAME, CPU_FREQ), sysreg device 8. |
 | TLB (main) | `rtl/mmu/tlb.sv` | 111/111 | 64-entry 2-way SA, parallel lookup, one-hot permission check, indexed sysreg R/W |
 | TLB (pinned) | `rtl/mmu/tlb_pinned.sv` | via test\_ptlb | 4-entry FA, parallel lookup, pinned-hit-wins priority over main TLB |
 | TLB unit | `rtl/mmu/tlb_unit.sv` | — | Wraps main + pinned TLB behind unified lookup + sysreg interface (regs 3-8) |

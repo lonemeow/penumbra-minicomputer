@@ -633,17 +633,25 @@ module ulx3s_top (
     // Sysreg devices
     // ══════════════════════════════════════════════════════════
 
-    // ── System ID (device 1) ────────────────────────────────
-    logic [31:0] sysid_rdata;
+    // ── CPU identity (device 1) ─────────────────────────────
+    logic [31:0] cpuid_rdata;
 
-    sysid #(
+    cpuid u_cpuid (
+        .i_sys_reg  (sys_reg),
+        .o_sys_rdata(cpuid_rdata)
+    );
+
+    // ── Machine identity (device 8) ─────────────────────────
+    logic [31:0] machid_rdata;
+
+    machid #(
         .MACH_NAME0 (32'h33584C55),   // "ULX3"
         .MACH_NAME1 (32'h00000053),   // "S\0\0\0"
         .MACH_NAME2 (32'h00000000),
         .CPU_FREQ   (CLK_FREQ)
-    ) u_sysid (
+    ) u_machid (
         .i_sys_reg  (sys_reg),
-        .o_sys_rdata(sysid_rdata)
+        .o_sys_rdata(machid_rdata)
     );
 
     // ── Bus Controller (device 4) ───────────────────────────
@@ -684,9 +692,10 @@ module ulx3s_top (
     // ── Sysreg read mux ────────────────────────────────────
     always_comb begin
         case (sys_dev)
-            SYSDEV_SYS:   sys_rdata = sysid_rdata;
+            SYSDEV_CPU:   sys_rdata = cpuid_rdata;
             SYSDEV_BUS:   sys_rdata = busctl_rdata;
             SYSDEV_TIMER: sys_rdata = timer_rdata;
+            SYSDEV_MACH:  sys_rdata = machid_rdata;
             default:      sys_rdata = 32'b0;
         endcase
     end
