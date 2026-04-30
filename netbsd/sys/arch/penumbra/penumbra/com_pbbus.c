@@ -29,10 +29,12 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <dev/ic/comvar.h>
 
 /*
- * Standard 16450 crystal frequency.  Irrelevant for simulation
- * (the ISS ignores baud rate divisors) but the MI com driver
- * needs a frequency to compute divisors during initialization.
- * 1843200 / (16 * 115200) = 1, which is a valid divisor.
+ * UART input clock — fixed at the canonical 16450 crystal frequency.
+ *
+ * The Penumbra UART RTL synthesizes a 1.8432 MHz reference internally
+ * via a fractional divider off whatever the actual system clock is, so
+ * the chip looks identical to a standard PC 16450 from software's
+ * point of view.  divisor=1 → 115200 baud, regardless of board.
  */
 #define COM_PBBUS_FREQ	1843200
 
