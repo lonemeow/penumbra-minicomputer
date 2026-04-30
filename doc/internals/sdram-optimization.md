@@ -1,12 +1,15 @@
 # SDRAM Controller Optimization Notes
 
-The initial SDRAM controller (`hw/rtl/io/sdram.sv`) uses a simple
-close-after-access policy: every 32-bit CPU word access does a full
-ACTIVATE → READ/WRITE (BL=2) with auto-precharge → recovery cycle.
-This is correct and easy to debug, but wastes bandwidth on sequential
-accesses like cache line fills.
+The current SDRAM controller (`hw/rtl/io/sdram/sdram_ctrl.sv`) uses a
+simple close-after-access policy: every 32-bit CPU word access does a
+full ACTIVATE → READ/WRITE (BL=2) with auto-precharge → recovery
+cycle.  This is correct and easy to debug, but wastes bandwidth on
+sequential accesses like cache line fills.  The optimisations below
+plug into the existing FSM via the `OPEN_ROW_TRACKING` and
+`AUTO_PRECHARGE` parameter holes (see the design plan in
+`sdram-controller.md` for the future-proofing scaffolding).
 
-## Current Performance (BL=2, auto-precharge, 12.5 MHz)
+## Current Performance (BL=2, auto-precharge, 100 MHz)
 
 | Operation | Cycles | Breakdown |
 |-----------|--------|-----------|

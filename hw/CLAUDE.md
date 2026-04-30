@@ -33,8 +33,7 @@ This file provides detailed hardware context for work under `hw/`. The root `CLA
 | Real UART | `rtl/io/uart.sv` | via ulx3s\_top | NS16450-compatible UART with real baud rate generator, TX shift register, RX 16x oversampling. CLK\_FREQ/BAUD\_RATE params. |
 | SPI FIFO | `rtl/io/spi_fifo.sv` | via spi | Parameterized synchronous FIFO (power-of-2 depth, 8-bit data). Used for SPI TX/RX paths. |
 | Real SPI | `rtl/io/spi.sv` | 54/54 | SPI master v2 with hardware TX/RX FIFO, autonomous transfer engine (stall-on-empty/full), IRQ output. FIFO\_DEPTH, SLOW\_DIV, FAST\_DIV params. See `doc/system/devices/spi.md`. |
-| SDRAM v1 | `rtl/io/sdram.sv` | (deprecated) | Original SDR SDRAM controller. Replaced by SDRAM v2 in `ulx3s_top` as of step 3. Kept temporarily as a fallback until v2 is verified on hardware; remove once step 3 passes `_ram_check` on a ULX3S board. |
-| SDRAM v2 — package | `rtl/io/sdram/sdram_pkg.sv` | — | Command encoding + chip presets (W9825 @ 100 MHz CL2 and @ 12.5 MHz CL2). |
+| SDRAM v2 — package | `rtl/io/sdram/sdram_pkg.sv` | — | Command encoding + chip presets (W9825 @ 100 MHz CL2). |
 | SDRAM v2 — controller | `rtl/io/sdram/sdram_ctrl.sv` | unit + machine\_sim | FSM core: init, refresh, ACT/RW/RECOVER. Single-word req/rsp interface. Parameterized geometry/timing plus `PHY_OUT_LATENCY` / `PHY_IN_LATENCY` to absorb registering-PHY pipeline. |
 | SDRAM v2 — bus adapter | `rtl/io/sdram/sdram_bus_adapter.sv` | machine\_sim | Sync bus `i_re/i_we/o_busy` ↔ controller req/rsp handshake. Drop-in for simple\_mem. |
 | SDRAM v2 — CDC bridge | `rtl/io/sdram/sdram_cdc.sv` | machine\_sim (single-clock) + ulx3s\_top (dual-clock) | Async req/ack handshake bridging the system-clock bus adapter to the SDRAM-clock controller. Single outstanding request, toggle synchronizers in each direction, quasi-static wide-payload latching (data-before-valid CDC). |

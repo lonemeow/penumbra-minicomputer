@@ -386,16 +386,36 @@ fpga-lint: $(FPGA_SRC_FULL) $(FPGA_LINT_STUBS)
 		$(FPGA_SRC_FULL) $(FPGA_LINT_STUBS) --top ulx3s_top
 
 fpga: $(BUILD_DIR)/$(TOP).bit
-	@echo "Bitstream: $(BUILD_DIR)/$(TOP).bit"
+	@echo "Bitstream: $(BUILD_DIR)/$(TOP).bit (PHASE_DEG=$(PHASE_DEG))"
+
+# ── SDRAM phase sweep knob ──────────────────────────────────────
+# Used by ulx3s_top to set CLKOS2 phase shift (the SDRAM-clock pin
+# clock).  Valid values: 0, 45, 90, 135, 180, 225, 270, 315.
+# Default 270° is the step-4 baseline; the bring-up sweep iterates
+# all 8 to find the centred working window.  See
+# doc/internals/sdram-controller.md § Step-5 phase sweep.
+PHASE_DEG ?= 270
+
+# Stamp file invalidates downstream artefacts when PHASE_DEG changes.
+# We bake the value into the filename, so switching phase makes the
+# previous stamp file vanish from the dep graph and forces a rebuild
+# from sv2v onward.  Old stamps are wiped on each new value so the
+# build dir stays tidy.
+PHASE_STAMP = $(BUILD_DIR)/.phase-$(PHASE_DEG)
+$(PHASE_STAMP):
+	@mkdir -p $(BUILD_DIR)
+	@rm -f $(BUILD_DIR)/.phase-*
+	@touch $@
 
 # Build hex files and convert SV→V before synthesis.
 # sv2v converts full SystemVerilog (module-level imports, packages)
-# to Verilog-2005 that Yosys reads natively.
-$(BUILD_DIR)/$(TOP).json: $(FPGA_SRC)
+# to Verilog-2005 that Yosys reads natively.  -D SDRAM_PHASE_DEG=N
+# overrides the `define inside ulx3s_top.sv for the current build.
+$(BUILD_DIR)/$(TOP).json: $(FPGA_SRC) $(PHASE_STAMP)
 	@mkdir -p $(BUILD_DIR)
 	$(if $(filter ulx3s_top,$(TOP)),$(UASM) hw/microcode/microcode.uasm -o microcode.hex)
 	$(if $(filter ulx3s_top,$(TOP)),$(MAKE) -C hw/rom)
-	$(FPGA_TOOLS)/sv2v $(FPGA_SRC) -w $(BUILD_DIR)/$(TOP)_sv2v.v
+	$(FPGA_TOOLS)/sv2v -D SDRAM_PHASE_DEG=$(PHASE_DEG) $(FPGA_SRC) -w $(BUILD_DIR)/$(TOP)_sv2v.v
 	$(if $(filter ulx3s_top,$(TOP)),python3 hw/tools/inline_hex.py $(BUILD_DIR)/$(TOP)_sv2v.v $(BUILD_DIR)/$(TOP)_sv2v.v)
 	$(FPGA_TOOLS)/yosys -p "read_verilog $(BUILD_DIR)/$(TOP)_sv2v.v; synth_ecp5 -top $(TOP) -json $@"
 

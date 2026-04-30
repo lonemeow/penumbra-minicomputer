@@ -13,6 +13,21 @@
 //
 // For other boards, copy this file and adjust pins/clocking/RAM.
 
+// ── SDRAM clock-out phase shift (CLKOS2) ──────────────────────────
+// The SDRAM-clock pin is forwarded via ODDRX1F clocked from CLKOS2,
+// which is phase-shifted relative to the controller clock so the
+// SDRAM samples our drives near the centre of the data window.  The
+// phase value is empirical — different ULX3S boards / SDRAM variants
+// see slightly different working windows.  The build-time sweep
+// procedure (`make fpga PHASE_DEG=N TOP=ulx3s_top` for each N in 0,
+// 45, 90, …, 315) finds the contiguous arc that boots and passes
+// `_ram_check`; pick its centre.  See doc/internals/sdram-controller.md
+// § Step-5 phase sweep for the canonical procedure and per-board
+// results.
+`ifndef SDRAM_PHASE_DEG
+`define SDRAM_PHASE_DEG 270
+`endif
+
 module ulx3s_top (
     input  logic       clk_25mhz,
     output logic [7:0] led,
@@ -71,13 +86,37 @@ module ulx3s_top (
     //                               Drives sdram_ctrl, sdram_phy_ecp5
     //                               IOB flops, and the SDRAM-side of
     //                               sdram_cdc.
-    // CLKOS2 @ 100 MHz, 270° phase — SDRAM pin clock.  Forwarded out
-    //                               via the PHY's ODDRX1F so the
-    //                               SDRAM samples our drives near the
-    //                               centre of the data window.  270°
-    //                               is the step-4 starting point; the
-    //                               step-5 sweep finds the centred
-    //                               working window for this board.
+    // CLKOS2 @ 100 MHz, SDRAM_PHASE_DEG° — SDRAM pin clock, forwarded
+    //                               via the PHY's ODDRX1F.  Default
+    //                               270° (step-4 baseline); override
+    //                               at build time with
+    //                                 make fpga PHASE_DEG=N TOP=ulx3s_top
+    //                               for the step-5 sweep.
+
+    // ── Phase lookup table for CLKOS2 (CLKOS2_DIV = 6) ──────────────
+    // 8-point sweep grid at every 45°.  CPHASE/FPHASE values were
+    // derived from the convention above.  The 315° entry wraps the
+    // CPHASE around DIV (i.e., 5 + 6/8 of a cycle late = 315° early).
+    localparam int CLKOS2_PHASE_DEG = `SDRAM_PHASE_DEG;
+    localparam int CLKOS2_CPHASE_VAL =
+        (CLKOS2_PHASE_DEG ==   0) ? 5 :
+        (CLKOS2_PHASE_DEG ==  45) ? 4 :
+        (CLKOS2_PHASE_DEG ==  90) ? 3 :
+        (CLKOS2_PHASE_DEG == 135) ? 2 :
+        (CLKOS2_PHASE_DEG == 180) ? 2 :
+        (CLKOS2_PHASE_DEG == 225) ? 1 :
+        (CLKOS2_PHASE_DEG == 270) ? 0 :
+        (CLKOS2_PHASE_DEG == 315) ? 5 : 0;
+    localparam int CLKOS2_FPHASE_VAL =
+        (CLKOS2_PHASE_DEG ==   0) ? 0 :
+        (CLKOS2_PHASE_DEG ==  45) ? 2 :
+        (CLKOS2_PHASE_DEG ==  90) ? 4 :
+        (CLKOS2_PHASE_DEG == 135) ? 6 :
+        (CLKOS2_PHASE_DEG == 180) ? 0 :
+        (CLKOS2_PHASE_DEG == 225) ? 2 :
+        (CLKOS2_PHASE_DEG == 270) ? 4 :
+        (CLKOS2_PHASE_DEG == 315) ? 6 : 0;
+
     logic clk;            // CLKOP — 12.5 MHz system clock
     logic clk_sdram;      // CLKOS — 100 MHz SDRAM fabric clock
     logic clk_sdram_pin;  // CLKOS2 — 100 MHz, phase-shifted, to ODDR
@@ -92,12 +131,12 @@ module ulx3s_top (
         .CLKOP_FPHASE  (0),
         .CLKOS_DIV     (6),
         .CLKOS_ENABLE  ("ENABLED"),
-        .CLKOS_CPHASE  (5),       // 0° phase
+        .CLKOS_CPHASE  (5),                  // 0° phase
         .CLKOS_FPHASE  (0),
         .CLKOS2_DIV    (6),
         .CLKOS2_ENABLE ("ENABLED"),
-        .CLKOS2_CPHASE (0),       // 270° phase (4.5 VCO cycles shift)
-        .CLKOS2_FPHASE (4),
+        .CLKOS2_CPHASE (CLKOS2_CPHASE_VAL),  // SDRAM_PHASE_DEG° phase
+        .CLKOS2_FPHASE (CLKOS2_FPHASE_VAL),
         .FEEDBK_PATH   ("CLKOP")
     ) u_pll (
         .CLKI         (clk_25mhz),

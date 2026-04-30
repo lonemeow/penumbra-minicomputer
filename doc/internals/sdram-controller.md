@@ -1,10 +1,12 @@
 # SDRAM Controller v2 — Design Plan
 
 This document is the canonical design plan for the SDR SDRAM controller
-rewrite (**v2**). The original `hw/rtl/io/sdram.sv` (v1) is being
-replaced because of marginal hardware timing, single-domain coupling
-to the system bus, and a monolithic structure that resisted retargeting
-to other boards/FPGAs/SDRAM chips.
+rewrite (**v2**). The original SDR controller (formerly at
+`hw/rtl/io/sdram.sv`) was replaced because of marginal hardware timing,
+single-domain coupling to the system bus, and a monolithic structure
+that resisted retargeting to other boards/FPGAs/SDRAM chips.  v2 has
+been verified on hardware at 100 MHz CL2 (steps 1–4); v1 has been
+deleted.
 
 `doc/internals/sdram-optimization.md` remains relevant — it captures
 optimization *levels* (open-row, BL=8, critical-word-first) that apply
@@ -15,8 +17,8 @@ adopting so those optimizations can be added incrementally.
 
 | Version | Location | State |
 |---------|----------|-------|
-| v1 | `hw/rtl/io/sdram.sv` | Deprecated. `ulx3s_top` no longer instantiates it; remove once step 3 passes `_ram_check` on a real board. |
-| v2 | `hw/rtl/io/sdram/` + `hw/rtl/sim/sdram_model.sv` + `hw/rtl/io/sdram/sdram_phy_ecp5.sv` + `hw/rtl/io/sdram/sdram_cdc.sv` | Steps 1–4 landed in RTL (sim path + ECP5 PHY + CDC + dual-domain PLL); step 4 awaits hardware verification; steps 5–6 pending. |
+| v1 | (deleted) | Removed once step 4 passed `_ram_check` on hardware. |
+| v2 | `hw/rtl/io/sdram/` + `hw/rtl/sim/sdram_model.sv` | Steps 1–4 verified on hardware (100 MHz CL2); step 5 (phase sweep + bring-up doc) in progress; step 6 (open-row + auto-precharge-off) deferred. |
 
 ## Locked design decisions
 
@@ -31,22 +33,24 @@ any of them later means re-architecting, not patching.
 | 4 | **Per-FPGA-family PHY.** | `sdram_phy_ecp5.sv` is shared across ULX3S and any other ECP5 board. Pin naming lives in the board top, not the PHY. Other FPGA families get their own PHY file. |
 | 5 | **Single-file chip presets** in `sdram_pkg.sv`. | Each new chip / clock combination adds a `localparam` block of timing values. No per-chip include files. |
 
-## Why we're rewriting (not optimizing v1)
+## Why we rewrote (rather than optimizing v1)
+
+Recorded in past tense for posterity — these are the failure modes
+that drove the rewrite, not problems with the current controller.
 
 1. **Direct `assign o_sdram_clk = i_clk` clock forwarding.** No phase
-   compensation, no IOB-routed clock-out. Setup/hold to the SDRAM is
-   placement-dependent. Any unrelated change shifts LUTs and timing
-   collapses (memory: "SDRAM marginal timing", file
-   `hw/rtl/io/sdram.sv` lines 142–143).
-2. **Single clock domain at 12.5 MHz.** Locks SDRAM speed to the
+   compensation, no IOB-routed clock-out. Setup/hold to the SDRAM
+   was placement-dependent — any unrelated change shifted LUTs and
+   timing collapsed (memory: "SDRAM marginal timing").
+2. **Single clock domain at 12.5 MHz.** Locked SDRAM speed to the
    system bus speed; below the recommended floor for some chips.
-3. **Monolithic file.** Mixes timing FSM, I/O cell handling, address
+3. **Monolithic file.** Mixed timing FSM, I/O cell handling, address
    mapping, refresh logic, and bus adapter. Hard to retarget.
-4. **No headroom for bursts.** FSM treats every CPU word as full
-   ACT→RD+AP→RECOVER. Adding open-row tracking requires rewriting
-   the FSM, not extending it.
+4. **No headroom for bursts.** FSM treated every CPU word as full
+   ACT→RD+AP→RECOVER. Adding open-row tracking would have required
+   rewriting the FSM, not extending it.
 5. **No unit test.** `_ram_check` (`hw/rom/ram_check.s`) is a system-
-   level smoke test, but the controller has no isolated correctness
+   level smoke test, but the controller had no isolated correctness
    verification.
 
 ## Architecture
@@ -245,10 +249,10 @@ Three-level test pyramid:
 |------|-------------|--------------|-------|
 | 1 | `sdram_pkg` + behavioral model + `sdram_ctrl` skeleton + sim PHY | Compiles + lints clean; controller unit tests pass | ✅ landed |
 | 2 | Wire into `machine_sim` via sim PHY + bus adapter | `_ram_check` passes in Verilator | ✅ landed |
-| 3 | `sdram_phy_ecp5` (IOB flops + ODDRX1F); single-domain at the system clock (12.5 MHz today, capped by the CPU critical path) | ULX3S boots, `_ram_check` passes | ⚙ RTL landed; awaits hardware verification |
-| 4 | `sdram_cdc` + dual-domain @ 100 MHz CL2 | `_ram_check` + NetBSD boot | ⚙ RTL landed; awaits hardware verification |
-| 5 | Phase-shift sweep build target + bring-up doc | Documented working window | pending |
-| 6 | (Later) open-row + auto-precharge-off → pipelined sequential reads | Re-run validation, measure Dhrystone | pending |
+| 3 | `sdram_phy_ecp5` (IOB flops + ODDRX1F); single-domain at the system clock | ULX3S boots, `_ram_check` passes | ✅ landed (subsumed by step 4 on hardware) |
+| 4 | `sdram_cdc` + dual-domain @ 100 MHz CL2 | `_ram_check` + NetBSD boot | ✅ landed (boots + `_ram_check` passes; PHASE_DEG=270° baseline) |
+| 5 | Phase-shift sweep build target + bring-up doc | Documented working window | ⚙ in progress |
+| 6 | (Later) open-row + auto-precharge-off → pipelined sequential reads | Re-run validation, measure Dhrystone | deferred |
 
 ### Step 4 wiring notes
 
@@ -281,12 +285,82 @@ cycle; phase shift φ from 0° subtracts (φ × DIV / 360°) VCO cycles.
 For DIV = 6 and φ = 270°: shift = 4.5 VCO cycles → CPHASE = 0,
 FPHASE = 4.
 
-The 270° starting point is empirical — the step-5 sweep target will
-build several phase values, find the centre of the working window
-on real hardware, and document it.  In sim (`sdram_sim.sv`) we tie
-both CDC clocks to the same testbench clock; the CDC FSM/handshake
-is exercised end-to-end but actual two-domain skew only happens on
-hardware.
+The 270° starting point was an educated guess that booted on the
+ULX3S used during step 4 bring-up; the step-5 sweep below pins down
+the centred working window for posterity and for any future board
+that ships with a different SDRAM variant.  In sim (`sdram_sim.sv`)
+we tie both CDC clocks to the same testbench clock; the CDC
+FSM/handshake is exercised end-to-end but actual two-domain skew
+only happens on hardware.
+
+### Step-5 phase sweep
+
+The PLL output that drives the SDRAM clock pin (CLKOS2) is phase-
+shifted relative to the controller's IOB-flop clock (CLKOS) so the
+SDRAM samples our drives near the centre of the data window.  The
+shift is empirical: routing delays through the FPGA, board traces,
+and the SDRAM input flops vary across boards, SDRAM variants, and
+even ULX3S revisions.  To pin down the centre rather than guess:
+
+#### Build target
+
+```sh
+make fpga PHASE_DEG=N TOP=ulx3s_top    # build only
+make flash PHASE_DEG=N TOP=ulx3s_top   # build + flash
+```
+
+`PHASE_DEG` accepts the 8 cardinal points: **0, 45, 90, 135, 180,
+225, 270, 315**.  The default is **270°**.  An invalid value silently
+falls back to (CPHASE=0, FPHASE=0); always use one of the listed
+values or extend the lookup table in `ulx3s_top.sv` first.
+
+The phase value is baked into the bitstream — re-flash after every
+phase change.  The Makefile invalidates downstream artefacts via a
+`build/.phase-N` stamp so the right files rebuild automatically; you
+do *not* need `make clean` between sweep iterations.
+
+#### Procedure
+
+For each of the 8 phase values:
+
+1. `make flash PHASE_DEG=N TOP=ulx3s_top`
+2. Power-cycle (or press btn[1]) and capture the ROM monitor output
+   over `/dev/ttyUSB0` at 115200 8N1.
+3. Record the `_ram_check` result and the detected RAM size.
+4. (Optional) `boot sd:0,0/PENBOOT.ELF` and confirm the kernel
+   reaches single-user shell — passes only if the cache-on /
+   burst-fill path works, which is a stronger gate than ROM
+   `_ram_check` alone.
+
+The working phases form a contiguous arc.  Pick its **centre**, not
+an edge — edge-of-window settings are one PVT corner away from
+breaking on a hot day or after a netlist reshuffle.
+
+#### Per-board results
+
+| Board / SDRAM variant            | Working phases  | Chosen phase | Date       |
+|----------------------------------|-----------------|--------------|------------|
+| ULX3S v3.1.8 / Winbond W9825G6KH | TBD (step 5)    | 270° (provisional) | 2026-04-30 |
+
+Add a new row when sweeping a new board/variant.  When changing the
+chosen phase, also change the default in `ulx3s_top.sv`'s
+`` `define SDRAM_PHASE_DEG `` so unflagged builds match.
+
+#### What to do if every phase fails
+
+Every cardinal phase failing means the timing problem is *not* the
+sample-window centre — it's somewhere else.  Look for:
+
+- **Wrong CL parameter** vs. what the chip actually supports
+  (e.g., a -7 grade chip might need CL=3 at 100 MHz).
+- **PHY IOB flops not actually placed in IOB cells** — check the
+  Yosys / nextpnr packing report; the `(* iob = "true", keep *)`
+  attribute is informational, not enforced.
+- **VCO out of range** — re-derive `CLKOP_DIV / CLKOS_DIV /
+  CLKOS2_DIV` if you change the system clock.
+- **Drive strength / slew-rate** on the SDRAM pins — the LPF can
+  pin LVCMOS33 with explicit drive; weak drive at 100 MHz is a
+  classic source of intermittent failures.
 
 ### Step 3 controller wiring notes
 
