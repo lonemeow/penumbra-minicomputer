@@ -25,9 +25,9 @@ BUILDDIR := $(PROJROOT)/build/benchmark
 
 # ── Targets ────────────────────────────────────────────────────
 
-.PHONY: all dhrystone clean
+.PHONY: all dhrystone memtest membench clean
 
-all: dhrystone
+all: dhrystone memtest membench
 
 # ── Common harness objects ─────────────────────────────────────
 
@@ -103,6 +103,46 @@ dhrystone: $(BUILDDIR)/DHRYSTON.ELF
 
 $(BUILDDIR)/DHRYSTON.ELF: $(CRT0_OBJ) $(DHRY_OBJ) $(COMMON_OBJ) common/bench.ld
 	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(DHRY_OBJ) $(COMMON_OBJ) -o $@
+
+# ── memtest ──────────────────────────────────────────────────
+#
+# Memory correctness tester: round-trip / walking-1 / walking-0 /
+# complement / sub-word / address-as-data patterns.  Walks a window
+# of RAM discovered from bootdata.
+#
+# Build: make memtest
+# Output: build/benchmark/MEMTEST.ELF (load via boot sd:0,0/MEMTEST.ELF)
+
+MEMTEST_OBJ := $(BUILDDIR)/memtest_entry.o $(BUILDDIR)/memtest_patterns.o
+
+$(BUILDDIR)/memtest_entry.o: memtest/entry.c memtest/patterns.h common/bench.h | $(BUILDDIR)
+	$(CC) $(CFLAGS) -Imemtest -c $< -o $@
+
+$(BUILDDIR)/memtest_patterns.o: memtest/patterns.c memtest/patterns.h common/bench.h | $(BUILDDIR)
+	$(CC) $(CFLAGS) -Imemtest -c $< -o $@
+
+memtest: $(BUILDDIR)/MEMTEST.ELF
+
+$(BUILDDIR)/MEMTEST.ELF: $(CRT0_OBJ) $(MEMTEST_OBJ) $(COMMON_OBJ) common/bench.ld
+	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(MEMTEST_OBJ) $(COMMON_OBJ) -o $@
+
+# ── membench ─────────────────────────────────────────────────
+#
+# Memory throughput / latency: cached vs uncached × W/H/B × R/W.
+# Useful baseline for measuring step-6 (open-row) impact.
+#
+# Build: make membench
+# Output: build/benchmark/MEMBENCH.ELF (load via boot sd:0,0/MEMBENCH.ELF)
+
+MEMBENCH_OBJ := $(BUILDDIR)/membench_entry.o
+
+$(BUILDDIR)/membench_entry.o: membench/entry.c common/bench.h | $(BUILDDIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+membench: $(BUILDDIR)/MEMBENCH.ELF
+
+$(BUILDDIR)/MEMBENCH.ELF: $(CRT0_OBJ) $(MEMBENCH_OBJ) $(COMMON_OBJ) common/bench.ld
+	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(MEMBENCH_OBJ) $(COMMON_OBJ) -o $@
 
 # ── Cleanup ────────────────────────────────────────────────────
 

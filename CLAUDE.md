@@ -231,6 +231,27 @@ reporting (not in measurement loops).
 Usenet posting.  Adapted via shim headers (`-isystem dhrystone/include`)
 and `-Dmain=dhrystone_main`.
 
+**Memtest** (`benchmark/memtest/`): Memory correctness tester. Walks
+an 8 MiB window of SDRAM (configurable via `MEMTEST_MAX_BYTES`)
+with six patterns — round-trip / walking-1 / walking-0 / complement /
+sub-word / address-as-data — each catching a distinct failure class
+(stuck-at bits, address-line swaps, DQM mask, byte-en pipeline,
+write-disturb).  Loaded as `MEMTEST.ELF`.  Long patterns emit
+liveness dots (~1 Hz on hardware) so a slow run is visibly distinct
+from a hang.
+
+**Membench** (`benchmark/membench/`): Memory throughput / latency
+baseline.  Cached sweep of a 64 KiB working set (defeats the 1 KiB
+cache 64×, exercises burst-fill on every line miss) and uncached
+single-page latency on a `PTE_KERNEL_NC`-pinned page, measured at
+W/H/B sizes for both R and W.  All inner loops are hand-unrolled 8×
+so the per-access loop overhead doesn't drown the actual cache /
+SDRAM cost — needed because volatile loads/stores prevent clang
+from auto-unrolling.  Loaded as `MEMBENCH.ELF`.  Reports MB/s
+(cached, fractional to 3 decimals) and ns/op (uncached).  Designed
+to expose the impact of step 6's open-row optimization
+(`doc/internals/sdram-controller.md`).
+
 Build and run:
 ```sh
 make benchmark                    # ISS (fast, ~seconds)

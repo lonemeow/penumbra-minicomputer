@@ -402,6 +402,23 @@ Step 6 work, all internal to the controller:
 No bus protocol changes. No client-side changes. The cache's existing
 sequential-fill loop becomes pipelined automatically.
 
+### Measuring step 6
+
+`benchmark/membench/` is the canonical before/after probe.  The
+**cached LDW MB/s** number is the most relevant: a 64 KiB working
+set with sequential access produces one cache-line miss every four
+LDWs, and every miss is exactly the "next sequential cache line"
+case that step 6 targets (same bank, same row, ascending column).
+After step 6, those misses should skip `S_ACT` and shave roughly
+`T_RCD + T_RP` cycles per line — a 2-3× speedup at the SDRAM-side
+of the path.  Whether the system-level number moves that much
+depends on how CPU-bound the loop is at the current clock; the
+**uncached LDW ns/op** number isolates the SDRAM round-trip from
+loop overhead and should track the SDRAM-side improvement directly.
+Run `make benchmark` (or flash and load `MEMBENCH.ELF` from SD)
+before and after the step-6 commit and record both numbers in the
+commit message for posterity.
+
 ## Design tradeoffs considered
 
 ### Async clock vs sync multiple

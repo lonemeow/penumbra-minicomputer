@@ -310,8 +310,9 @@ sdimage-bench:
 	@sw/tools/mksdimage.sh -o $(BENCH_IMG) -e $(BUILD_DIR)/bench_sd -v
 	@echo "Benchmark SD image: $(BENCH_IMG)"
 
-# List of benchmark ELF names (FAT32 8.3 format, no path)
-BENCH_ELFS := DHRYSTON.ELF
+# List of benchmark ELF names (FAT32 8.3 format, no path).
+# MEMTEST is a correctness check; MEMBENCH and DHRYSTON are perf measurements.
+BENCH_ELFS := DHRYSTON.ELF MEMTEST.ELF MEMBENCH.ELF
 
 .PHONY: benchmark
 benchmark: sdimage-bench $(ISS)
