@@ -51,28 +51,61 @@ module ulx3s_top (
     // ── ESP32 disable ──────────────────────────────────────────
     assign wifi_en = 1'b0;
 
-    // ── PLL: 25 MHz → 12.5 MHz system clock ──────────────────────
-    // fCLKOP = fCLKI × CLKFB_DIV / CLKI_DIV = 25 × 1 / 2 = 12.5 MHz
-    // fVCO   = fCLKOP × CLKOP_DIV = 12.5 × 48 = 600 MHz (range: 400-800)
-    // Conservative for current CPU critical path (~16 MHz cap).  Once
-    // long-path optimisation lifts the cap, this can rise on its own
-    // schedule — the SDRAM controller's own clock will be decoupled
-    // by the step-4 CDC bridge, so the two no longer move together.
-    logic clk;
+    // ── PLL: 25 MHz → 3 outputs sharing one VCO ──────────────────
+    // fCLKOP  = fCLKI × CLKFB_DIV / CLKI_DIV = 25 × 1 / 2 = 12.5 MHz
+    // fVCO    = fCLKOP × CLKOP_DIV = 12.5 × 48 = 600 MHz (400-800 OK)
+    // fCLKOS  = fVCO / CLKOS_DIV  = 600 / 6  = 100 MHz   (SDRAM fabric)
+    // fCLKOS2 = fVCO / CLKOS2_DIV = 600 / 6  = 100 MHz   (SDRAM pin clock)
+    //
+    // CPHASE/FPHASE convention: 0° = CPHASE = (DIV - 1), FPHASE = 0;
+    // each FPHASE step = 1/8 VCO cycle; CPHASE counts in whole VCO
+    // cycles.  Phase shift φ from 0° subtracts (φ × DIV / 360°) VCO
+    // cycles from CPHASE.  For DIV=6 and φ=270°: shift = 4.5 VCO
+    // cycles → CPHASE=0, FPHASE=4.
+    //
+    // CLKOP @ 12.5 MHz drives the CPU/system bus — capped here by the
+    // current CPU long-path (~16 MHz).  Will rise on its own schedule
+    // once the CPU is optimised; the SDRAM is decoupled via sdram_cdc.
+    //
+    // CLKOS  @ 100 MHz, 0° phase   — SDRAM controller fabric clock.
+    //                               Drives sdram_ctrl, sdram_phy_ecp5
+    //                               IOB flops, and the SDRAM-side of
+    //                               sdram_cdc.
+    // CLKOS2 @ 100 MHz, 270° phase — SDRAM pin clock.  Forwarded out
+    //                               via the PHY's ODDRX1F so the
+    //                               SDRAM samples our drives near the
+    //                               centre of the data window.  270°
+    //                               is the step-4 starting point; the
+    //                               step-5 sweep finds the centred
+    //                               working window for this board.
+    logic clk;            // CLKOP — 12.5 MHz system clock
+    logic clk_sdram;      // CLKOS — 100 MHz SDRAM fabric clock
+    logic clk_sdram_pin;  // CLKOS2 — 100 MHz, phase-shifted, to ODDR
     logic pll_lock;
 
     (* keep *) EHXPLLL #(
-        .CLKI_DIV     (2),
-        .CLKFB_DIV    (1),
-        .CLKOP_DIV    (48),
-        .CLKOP_ENABLE ("ENABLED"),
-        .CLKOP_CPHASE (47),
-        .CLKOP_FPHASE (0),
-        .FEEDBK_PATH  ("CLKOP")
+        .CLKI_DIV      (2),
+        .CLKFB_DIV     (1),
+        .CLKOP_DIV     (48),
+        .CLKOP_ENABLE  ("ENABLED"),
+        .CLKOP_CPHASE  (47),
+        .CLKOP_FPHASE  (0),
+        .CLKOS_DIV     (6),
+        .CLKOS_ENABLE  ("ENABLED"),
+        .CLKOS_CPHASE  (5),       // 0° phase
+        .CLKOS_FPHASE  (0),
+        .CLKOS2_DIV    (6),
+        .CLKOS2_ENABLE ("ENABLED"),
+        .CLKOS2_CPHASE (0),       // 270° phase (4.5 VCO cycles shift)
+        .CLKOS2_FPHASE (4),
+        .FEEDBK_PATH   ("CLKOP")
     ) u_pll (
         .CLKI         (clk_25mhz),
         .CLKFB        (clk),
         .CLKOP        (clk),
+        .CLKOS        (clk_sdram),
+        .CLKOS2       (clk_sdram_pin),
+        .CLKOS3       (),
         .LOCK         (pll_lock),
         .RST          (1'b0),
         .STDBY        (1'b0),
@@ -82,9 +115,9 @@ module ulx3s_top (
         .PHASESTEP    (1'b0),
         .PHASELOADREG (1'b0),
         .PLLWAKESYNC  (1'b0),
-        .ENCLKOP      (1'b1),     // enable primary output
-        .ENCLKOS      (1'b0),
-        .ENCLKOS2     (1'b0),
+        .ENCLKOP      (1'b1),
+        .ENCLKOS      (1'b1),
+        .ENCLKOS2     (1'b1),
         .ENCLKOS3     (1'b0)
     );
 
@@ -109,6 +142,19 @@ module ulx3s_top (
             rst_cnt <= rst_cnt + 1;
     end
     assign rst = !rst_cnt[17];
+
+    // ── SDRAM-domain reset: 2-FF synchronizer of `rst` into clk_sdram.
+    // Both reset edges (assert and deassert) cross the boundary; the
+    // synchronizer turns the deassert into a clean edge on the SDRAM
+    // clock so sdram_ctrl / sdram_phy_ecp5 / sdram_cdc(sdram side) all
+    // come out of reset together.  Asynchronous-assert / synchronous-
+    // deassert is the canonical pattern for cross-domain resets.
+    logic rst_sd_sync1, rst_sd_sync2;
+    always_ff @(posedge clk_sdram) begin
+        rst_sd_sync1 <= rst;
+        rst_sd_sync2 <= rst_sd_sync1;
+    end
+    wire rst_sd = rst_sd_sync2;
 
     // ── Heartbeat / debug LEDs ─────────────────────────────────
     logic [24:0] hb_cnt;
@@ -232,19 +278,22 @@ module ulx3s_top (
         u_ram_sel (.i_addr(mem_addr), .o_sel(ram_sel));
     always_ff @(posedge clk) ram_sel_r <= ram_sel;
 
-    // ── SDRAM v2: bus adapter → controller → ECP5 PHY → pins ───
-    // Single-domain bring-up at 25 MHz (step 3 of the rollout).  The
-    // adapter speaks the project's standard sync bus contract; the
-    // controller runs the SDR command sequence; the ECP5 PHY pins
-    // every signal through IOB flops and forwards the SDRAM clock
-    // via ODDRX1F.  Step 4 will insert sdram_cdc between adapter
-    // and controller and feed phy.i_clk_sdram from a 270°-shifted
-    // PLL output.
-    logic        ram_req_valid, ram_req_we, ram_req_ready;
-    logic [31:0] ram_req_addr,  ram_req_wdata;
-    logic [3:0]  ram_req_byte_en;
-    logic        ram_rsp_valid, ram_rsp_ready, ram_done;
-    logic [31:0] ram_rsp_data;
+    // ── SDRAM v2: bus adapter → CDC → controller → ECP5 PHY → pins ─
+    // Step-4 dual-domain configuration:
+    //   • Bus adapter runs on the system clock (12.5 MHz today).
+    //   • CDC bridge crosses 12.5 MHz ↔ 100 MHz with toggle
+    //     synchronizers and a quasi-static payload.
+    //   • Controller + IOB-flop side of the PHY run on CLKOS @ 100 MHz.
+    //   • SDRAM clock pin is forwarded via ODDRX1F clocked by CLKOS2
+    //     (100 MHz, 270°) so the chip samples our drives near the
+    //     centre of the data window.
+    // Timing parameters come from the W9825_100 preset (CL=2 with the
+    // 2-cycle PHY round-trip absorbed by PHY_OUT/IN_LATENCY).
+    logic        sys_req_valid, sys_req_we, sys_req_ready;
+    logic [31:0] sys_req_addr,  sys_req_wdata;
+    logic [3:0]  sys_req_byte_en;
+    logic        sys_rsp_valid, sys_rsp_ready, sys_done;
+    logic [31:0] sys_rsp_data;
 
     sdram_bus_adapter u_sdram_adp (
         .i_clk         (clk),
@@ -256,56 +305,92 @@ module ulx3s_top (
         .i_re          (mem_re & ram_sel),
         .o_rdata       (ram_rdata_raw),
         .o_busy        (ram_busy_raw),
-        .o_req_valid   (ram_req_valid),
-        .o_req_we      (ram_req_we),
-        .o_req_addr    (ram_req_addr),
-        .o_req_wdata   (ram_req_wdata),
-        .o_req_byte_en (ram_req_byte_en),
-        .i_req_ready   (ram_req_ready),
-        .i_rsp_valid   (ram_rsp_valid),
-        .i_rsp_data    (ram_rsp_data),
-        .o_rsp_ready   (ram_rsp_ready),
-        .i_done        (ram_done)
+        .o_req_valid   (sys_req_valid),
+        .o_req_we      (sys_req_we),
+        .o_req_addr    (sys_req_addr),
+        .o_req_wdata   (sys_req_wdata),
+        .o_req_byte_en (sys_req_byte_en),
+        .i_req_ready   (sys_req_ready),
+        .i_rsp_valid   (sys_rsp_valid),
+        .i_rsp_data    (sys_rsp_data),
+        .o_rsp_ready   (sys_rsp_ready),
+        .i_done        (sys_done)
     );
 
-    logic [3:0]                         sdram_phy_cmd;
-    logic                               sdram_phy_cke;
-    logic [W9825_12P5_ROW_BITS-1:0]     sdram_phy_a;
-    logic [W9825_12P5_BA_BITS-1:0]      sdram_phy_ba;
-    logic [W9825_12P5_DQ_BITS/8-1:0]    sdram_phy_dqm;
-    logic [W9825_12P5_DQ_BITS-1:0]      sdram_phy_dq_out;
-    logic                               sdram_phy_dq_oe;
-    logic [W9825_12P5_DQ_BITS-1:0]      sdram_phy_dq_in;
-    logic                               sdram_init_done;
+    // ── CDC ↔ controller (SDRAM domain) ─────────────────────
+    logic        sd_req_valid, sd_req_we, sd_req_ready;
+    logic [31:0] sd_req_addr,  sd_req_wdata;
+    logic [3:0]  sd_req_byte_en;
+    logic        sd_rsp_valid, sd_rsp_ready, sd_done;
+    logic [31:0] sd_rsp_data;
+
+    sdram_cdc u_sdram_cdc (
+        // Sys side @ 12.5 MHz
+        .i_sys_clk         (clk),
+        .i_sys_rst         (rst),
+        .i_sys_req_valid   (sys_req_valid),
+        .i_sys_req_we      (sys_req_we),
+        .i_sys_req_addr    (sys_req_addr),
+        .i_sys_req_wdata   (sys_req_wdata),
+        .i_sys_req_byte_en (sys_req_byte_en),
+        .o_sys_req_ready   (sys_req_ready),
+        .o_sys_rsp_valid   (sys_rsp_valid),
+        .o_sys_rsp_data    (sys_rsp_data),
+        .i_sys_rsp_ready   (sys_rsp_ready),
+        .o_sys_done        (sys_done),
+        // SDRAM side @ 100 MHz
+        .i_sd_clk          (clk_sdram),
+        .i_sd_rst          (rst_sd),
+        .o_sd_req_valid    (sd_req_valid),
+        .o_sd_req_we       (sd_req_we),
+        .o_sd_req_addr     (sd_req_addr),
+        .o_sd_req_wdata    (sd_req_wdata),
+        .o_sd_req_byte_en  (sd_req_byte_en),
+        .i_sd_req_ready    (sd_req_ready),
+        .i_sd_rsp_valid    (sd_rsp_valid),
+        .i_sd_rsp_data     (sd_rsp_data),
+        .o_sd_rsp_ready    (sd_rsp_ready),
+        .i_sd_done         (sd_done)
+    );
+
+    logic [3:0]                       sdram_phy_cmd;
+    logic                             sdram_phy_cke;
+    logic [W9825_100_ROW_BITS-1:0]    sdram_phy_a;
+    logic [W9825_100_BA_BITS-1:0]     sdram_phy_ba;
+    logic [W9825_100_DQ_BITS/8-1:0]   sdram_phy_dqm;
+    logic [W9825_100_DQ_BITS-1:0]     sdram_phy_dq_out;
+    logic                             sdram_phy_dq_oe;
+    logic [W9825_100_DQ_BITS-1:0]     sdram_phy_dq_in;
+    logic                             sdram_init_done;
 
     sdram_ctrl #(
-        .ROW_BITS        (W9825_12P5_ROW_BITS),
-        .COL_BITS        (W9825_12P5_COL_BITS),
-        .BA_BITS         (W9825_12P5_BA_BITS),
-        .DQ_BITS         (W9825_12P5_DQ_BITS),
-        .T_RCD           (W9825_12P5_T_RCD),
-        .T_RP            (W9825_12P5_T_RP),
-        .T_RFC           (W9825_12P5_T_RFC),
-        .T_WR            (W9825_12P5_T_WR),
-        .T_MRD           (W9825_12P5_T_MRD),
-        .T_REFI          (W9825_12P5_T_REFI),
-        .T_POWERUP       (W9825_12P5_T_POWERUP),
-        .CAS_LATENCY     (W9825_12P5_CAS_LATENCY),
+        .ROW_BITS        (W9825_100_ROW_BITS),
+        .COL_BITS        (W9825_100_COL_BITS),
+        .BA_BITS         (W9825_100_BA_BITS),
+        .DQ_BITS         (W9825_100_DQ_BITS),
+        .T_RCD           (W9825_100_T_RCD),
+        .T_RP            (W9825_100_T_RP),
+        .T_RFC           (W9825_100_T_RFC),
+        .T_WR            (W9825_100_T_WR),
+        .T_MRD           (W9825_100_T_MRD),
+        .T_REFI          (W9825_100_T_REFI),
+        .T_POWERUP       (W9825_100_T_POWERUP),
+        .CAS_LATENCY     (W9825_100_CAS_LATENCY),
         .PHY_OUT_LATENCY (1),
         .PHY_IN_LATENCY  (1)
     ) u_sdram_ctrl (
-        .i_clk           (clk),
-        .i_rst           (rst),
-        .i_req_valid     (ram_req_valid),
-        .i_req_we        (ram_req_we),
-        .i_req_addr      (ram_req_addr),
-        .i_req_wdata     (ram_req_wdata),
-        .i_req_byte_en   (ram_req_byte_en),
-        .o_req_ready     (ram_req_ready),
-        .o_rsp_valid     (ram_rsp_valid),
-        .o_rsp_data      (ram_rsp_data),
-        .i_rsp_ready     (ram_rsp_ready),
-        .o_done          (ram_done),
+        .i_clk           (clk_sdram),
+        .i_rst           (rst_sd),
+        .i_req_valid     (sd_req_valid),
+        .i_req_we        (sd_req_we),
+        .i_req_addr      (sd_req_addr),
+        .i_req_wdata     (sd_req_wdata),
+        .i_req_byte_en   (sd_req_byte_en),
+        .o_req_ready     (sd_req_ready),
+        .o_rsp_valid     (sd_rsp_valid),
+        .o_rsp_data      (sd_rsp_data),
+        .i_rsp_ready     (sd_rsp_ready),
+        .o_done          (sd_done),
         .o_phy_cmd       (sdram_phy_cmd),
         .o_phy_cke       (sdram_phy_cke),
         .o_phy_a         (sdram_phy_a),
@@ -318,13 +403,13 @@ module ulx3s_top (
     );
 
     sdram_phy_ecp5 #(
-        .ROW_BITS (W9825_12P5_ROW_BITS),
-        .BA_BITS  (W9825_12P5_BA_BITS),
-        .DQ_BITS  (W9825_12P5_DQ_BITS)
+        .ROW_BITS (W9825_100_ROW_BITS),
+        .BA_BITS  (W9825_100_BA_BITS),
+        .DQ_BITS  (W9825_100_DQ_BITS)
     ) u_sdram_phy (
-        .i_clk        (clk),
-        .i_clk_sdram  (clk),    // step 4 will replace with phase-shifted CLKOS2
-        .i_rst        (rst),
+        .i_clk        (clk_sdram),       // CLKOS — 100 MHz, 0°, IOB flops
+        .i_clk_sdram  (clk_sdram_pin),   // CLKOS2 — 100 MHz, 270°, ODDR
+        .i_rst        (rst_sd),
         .i_phy_cmd    (sdram_phy_cmd),
         .i_phy_cke    (sdram_phy_cke),
         .i_phy_a      (sdram_phy_a),

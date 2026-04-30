@@ -16,7 +16,7 @@ adopting so those optimizations can be added incrementally.
 | Version | Location | State |
 |---------|----------|-------|
 | v1 | `hw/rtl/io/sdram.sv` | Deprecated. `ulx3s_top` no longer instantiates it; remove once step 3 passes `_ram_check` on a real board. |
-| v2 | `hw/rtl/io/sdram/` + `hw/rtl/sim/sdram_model.sv` + `hw/rtl/io/sdram/sdram_phy_ecp5.sv` | Steps 1–3 landed (sim path + ECP5 PHY); steps 4–6 pending. |
+| v2 | `hw/rtl/io/sdram/` + `hw/rtl/sim/sdram_model.sv` + `hw/rtl/io/sdram/sdram_phy_ecp5.sv` + `hw/rtl/io/sdram/sdram_cdc.sv` | Steps 1–4 landed in RTL (sim path + ECP5 PHY + CDC + dual-domain PLL); step 4 awaits hardware verification; steps 5–6 pending. |
 
 ## Locked design decisions
 
@@ -246,9 +246,47 @@ Three-level test pyramid:
 | 1 | `sdram_pkg` + behavioral model + `sdram_ctrl` skeleton + sim PHY | Compiles + lints clean; controller unit tests pass | ✅ landed |
 | 2 | Wire into `machine_sim` via sim PHY + bus adapter | `_ram_check` passes in Verilator | ✅ landed |
 | 3 | `sdram_phy_ecp5` (IOB flops + ODDRX1F); single-domain at the system clock (12.5 MHz today, capped by the CPU critical path) | ULX3S boots, `_ram_check` passes | ⚙ RTL landed; awaits hardware verification |
-| 4 | `sdram_cdc` + dual-domain @ 100 MHz CL2 | `_ram_check` + NetBSD boot | pending |
+| 4 | `sdram_cdc` + dual-domain @ 100 MHz CL2 | `_ram_check` + NetBSD boot | ⚙ RTL landed; awaits hardware verification |
 | 5 | Phase-shift sweep build target + bring-up doc | Documented working window | pending |
 | 6 | (Later) open-row + auto-precharge-off → pipelined sequential reads | Re-run validation, measure Dhrystone | pending |
+
+### Step 4 wiring notes
+
+The CDC bridge (`sdram_cdc.sv`) is a single-outstanding 4-phase
+handshake using toggle synchronizers in each direction:
+
+- **Sys → SDRAM (request):** the wide payload (we, addr, wdata,
+  byte_en) lives in sys-domain registers held quasi-statically while
+  `sys_busy = 1`.  A 1-bit `req_tog_sys` flips on each launch; the
+  SDRAM side runs a 2-FF synchronizer + edge detect on it.  The wide
+  payload is sampled across the boundary only after the toggle edge
+  is detected, by which time it's been stable long enough to settle.
+- **SDRAM → sys (done/rsp):** the SDRAM side latches `rsp_data_sd`
+  and toggles `done_tog_sd` in the same cycle the controller pulses
+  `i_done`.  The sys side's 2-FF synchronizer + edge detect catches
+  the change ~3 sys cycles later, then samples `rsp_data_sd` (held
+  stable since the SDRAM side stays in `SD_IDLE` until the next
+  request edge arrives).
+
+CDC latency: ~3 SDRAM cycles in the request direction, ~3 sys cycles
+back.  Negligible against `T_RCD + CL + T_RP + 2 burst beats` at
+100 MHz.
+
+The PLL at the board top now exports three outputs from one 600 MHz
+VCO: CLKOP @ 12.5 MHz (system bus), CLKOS @ 100 MHz / 0° (SDRAM
+controller fabric and IOB flops), CLKOS2 @ 100 MHz / 270° (forwarded
+out the SDRAM clock pin via ODDRX1F).  CPHASE/FPHASE convention:
+**0° = CPHASE = (DIV − 1), FPHASE = 0**; each FPHASE step is 1/8 VCO
+cycle; phase shift φ from 0° subtracts (φ × DIV / 360°) VCO cycles.
+For DIV = 6 and φ = 270°: shift = 4.5 VCO cycles → CPHASE = 0,
+FPHASE = 4.
+
+The 270° starting point is empirical — the step-5 sweep target will
+build several phase values, find the centre of the working window
+on real hardware, and document it.  In sim (`sdram_sim.sv`) we tie
+both CDC clocks to the same testbench clock; the CDC FSM/handshake
+is exercised end-to-end but actual two-domain skew only happens on
+hardware.
 
 ### Step 3 controller wiring notes
 

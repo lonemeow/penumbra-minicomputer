@@ -19,12 +19,22 @@ module EHXPLLL #(
     parameter CLKOS_ENABLE  = "DISABLED",
     parameter CLKOS_CPHASE  = 0,
     parameter CLKOS_FPHASE  = 0,
+    parameter CLKOS2_DIV    = 1,
+    parameter CLKOS2_ENABLE = "DISABLED",
+    parameter CLKOS2_CPHASE = 0,
+    parameter CLKOS2_FPHASE = 0,
+    parameter CLKOS3_DIV    = 1,
+    parameter CLKOS3_ENABLE = "DISABLED",
+    parameter CLKOS3_CPHASE = 0,
+    parameter CLKOS3_FPHASE = 0,
     parameter FEEDBK_PATH   = "CLKOP"
 )(
     input  CLKI,
     input  CLKFB,
     output CLKOP,
     output CLKOS,
+    output CLKOS2,
+    output CLKOS3,
     output LOCK,
     input  RST,
     input  STDBY,
@@ -39,10 +49,15 @@ module EHXPLLL #(
     input  ENCLKOS2,
     input  ENCLKOS3
 );
-    // For lint: pretend outputs follow CLKI, LOCK always high
-    assign CLKOP = CLKI;
-    assign CLKOS = CLKI;
-    assign LOCK  = 1'b1;
+    // For lint: pretend outputs follow CLKI, LOCK always high.  The
+    // real Lattice primitive synthesises distinct phase-shifted clocks
+    // here; for Verilator linting we only need outputs to drive
+    // something so downstream logic doesn't see "undriven" warnings.
+    assign CLKOP  = CLKI;
+    assign CLKOS  = CLKI;
+    assign CLKOS2 = CLKI;
+    assign CLKOS3 = CLKI;
+    assign LOCK   = 1'b1;
 endmodule
 
 // ── ODDRX1F: SDR clock-out / data-out from the I/O cell ─────

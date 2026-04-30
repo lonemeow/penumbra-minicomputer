@@ -1,9 +1,18 @@
-// Sim-only SDRAM subsystem: adapter + controller + sim PHY + behavioral chip.
+// Sim-only SDRAM subsystem: adapter + CDC + controller + sim PHY + chip.
 //
 // Bus interface mirrors simple_mem / fpga_ram so machine_sim can swap
 // in this stack at the RAM region without other plumbing changes.
 // Internally instantiates the full v2 SDRAM stack for end-to-end
 // verification of the controller against the behavioral model.
+//
+// As of step 4 the CDC bridge sits between the bus adapter and the
+// controller.  In sim we tie sys_clk == sdram_clk so the CDC paths
+// are exercised end-to-end (toggle launch, 2-FF sync, edge detect,
+// done propagation) but at the same rate — the actual two-domain
+// operation only happens on hardware where the PLL hands the
+// controller its own 100 MHz CLKOS.  Same-rate sim is enough to
+// catch FSM/handshake bugs; metastability behaviour is a hardware
+// concern outside Verilator's model.
 //
 // Uses the W9825-100MHz preset with the small `W9825_SIM_T_POWERUP`
 // so init completes in a few cycles instead of 200 µs of sim time.
@@ -22,12 +31,12 @@ module sdram_sim
     output logic        o_busy
 );
 
-    // ── Adapter ↔ controller ───────────────────────────────
-    logic        req_valid, req_we, req_ready;
-    logic [31:0] req_addr, req_wdata;
-    logic [3:0]  req_byte_en;
-    logic        rsp_valid, rsp_ready, done;
-    logic [31:0] rsp_data;
+    // ── Adapter ↔ CDC (sys side) ───────────────────────────
+    logic        sys_req_valid, sys_req_we, sys_req_ready;
+    logic [31:0] sys_req_addr, sys_req_wdata;
+    logic [3:0]  sys_req_byte_en;
+    logic        sys_rsp_valid, sys_rsp_ready, sys_done;
+    logic [31:0] sys_rsp_data;
 
     sdram_bus_adapter u_adp (
         .i_clk         (i_clk),
@@ -39,16 +48,52 @@ module sdram_sim
         .i_re          (i_re),
         .o_rdata       (o_rdata),
         .o_busy        (o_busy),
-        .o_req_valid   (req_valid),
-        .o_req_we      (req_we),
-        .o_req_addr    (req_addr),
-        .o_req_wdata   (req_wdata),
-        .o_req_byte_en (req_byte_en),
-        .i_req_ready   (req_ready),
-        .i_rsp_valid   (rsp_valid),
-        .i_rsp_data    (rsp_data),
-        .o_rsp_ready   (rsp_ready),
-        .i_done        (done)
+        .o_req_valid   (sys_req_valid),
+        .o_req_we      (sys_req_we),
+        .o_req_addr    (sys_req_addr),
+        .o_req_wdata   (sys_req_wdata),
+        .o_req_byte_en (sys_req_byte_en),
+        .i_req_ready   (sys_req_ready),
+        .i_rsp_valid   (sys_rsp_valid),
+        .i_rsp_data    (sys_rsp_data),
+        .o_rsp_ready   (sys_rsp_ready),
+        .i_done        (sys_done)
+    );
+
+    // ── CDC ↔ controller (sdram side) ───────────────────────
+    logic        req_valid, req_we, req_ready;
+    logic [31:0] req_addr, req_wdata;
+    logic [3:0]  req_byte_en;
+    logic        rsp_valid, rsp_ready, done;
+    logic [31:0] rsp_data;
+
+    sdram_cdc u_cdc (
+        // Sys side (single-clock for sim — same i_clk on both ports)
+        .i_sys_clk         (i_clk),
+        .i_sys_rst         (i_rst),
+        .i_sys_req_valid   (sys_req_valid),
+        .i_sys_req_we      (sys_req_we),
+        .i_sys_req_addr    (sys_req_addr),
+        .i_sys_req_wdata   (sys_req_wdata),
+        .i_sys_req_byte_en (sys_req_byte_en),
+        .o_sys_req_ready   (sys_req_ready),
+        .o_sys_rsp_valid   (sys_rsp_valid),
+        .o_sys_rsp_data    (sys_rsp_data),
+        .i_sys_rsp_ready   (sys_rsp_ready),
+        .o_sys_done        (sys_done),
+        // Sdram side
+        .i_sd_clk          (i_clk),
+        .i_sd_rst          (i_rst),
+        .o_sd_req_valid    (req_valid),
+        .o_sd_req_we       (req_we),
+        .o_sd_req_addr     (req_addr),
+        .o_sd_req_wdata    (req_wdata),
+        .o_sd_req_byte_en  (req_byte_en),
+        .i_sd_req_ready    (req_ready),
+        .i_sd_rsp_valid    (rsp_valid),
+        .i_sd_rsp_data     (rsp_data),
+        .o_sd_rsp_ready    (rsp_ready),
+        .i_sd_done         (done)
     );
 
     // ── Controller ↔ PHY ───────────────────────────────────
