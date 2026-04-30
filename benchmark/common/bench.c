@@ -51,6 +51,12 @@ static uint32_t timer_ticks_per_us; /* freq / 1000000 */
 #define CPU_CYCLES            5
 #define CPU_INSNS_RETIRED     6
 
+/* ── Cache sysregs (devices 2, 3 — identical layout) ───────────── */
+#define SYSDEV_DCACHE         2
+#define SYSDEV_ICACHE         3
+#define CACHE_CTRL            1
+#define CACHE_CTRL_ENABLE     1
+
 /* ── Sysreg access macros ──────────────────────────────────────── */
 #define read_sysreg(dev, reg) ({                                    \
     uint32_t __v;                                                   \
@@ -125,6 +131,18 @@ uint32_t bench_timer_elapsed_us(void) {
 
 uint32_t bench_timer_freq_hz(void) {
     return timer_freq;
+}
+
+/* ── Cache control ─────────────────────────────────────────────── */
+
+void bench_caches_enable(void) {
+    write_sysreg(SYSDEV_DCACHE, CACHE_CTRL, CACHE_CTRL_ENABLE);
+    write_sysreg(SYSDEV_ICACHE, CACHE_CTRL, CACHE_CTRL_ENABLE);
+}
+
+void bench_caches_disable(void) {
+    write_sysreg(SYSDEV_DCACHE, CACHE_CTRL, 0);
+    write_sysreg(SYSDEV_ICACHE, CACHE_CTRL, 0);
 }
 
 /* ── CPU performance counters ──────────────────────────────────── */

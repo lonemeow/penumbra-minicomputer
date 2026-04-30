@@ -18,6 +18,12 @@
  *
  * Bootdata: BTAG_DEVICE entries with cls == ACFG_CLASS_MEMORY carry
  * the discovered RAM region (base, dev_size).  See hw/rom/bootdata.h.
+ *
+ * Cache policy: memtest disables both caches at entry.  crt0.S enables
+ * them by default for performance benchmarks, but a memory *correctness*
+ * tester needs every read to actually round-trip through SDRAM —
+ * otherwise repeat reads within a cache line return cached data and
+ * miss write-disturb errors that occur after first refill.
  */
 
 #include "bench.h"
@@ -124,6 +130,7 @@ void mt_report_fail(const char *pat, uint32_t addr,
 
 void bench_main(uint32_t bootdata) {
     bench_init();
+    bench_caches_disable();   /* see file header — every access must hit SDRAM */
 
     bench_puts("\n=== Penumbra memtest ===\n");
 

@@ -32,6 +32,12 @@
 #define SYSDEV_TIMER        7
 #define TM_STATUS           4
 
+/* ── Cache sysregs (devices 2 + 3, identical layout) ─────────── */
+#define SYSDEV_DCACHE       2
+#define SYSDEV_ICACHE       3
+#define CACHE_CTRL          1
+#define CACHE_CTRL_ENABLE   1
+
 /* ── PTE flags (must match hardware TLB_PTE layout) ───────────── */
 #define PTE_KERNEL          0xBD    /* V|C|R|W|X|G */
 #define PTE_KERNEL_NC       0x99    /* V|R|W|G (uncached, for MMIO) */
@@ -261,6 +267,14 @@ _start:
         /* Enable MMU — identity mapping means we continue here */
         lli     r1, #MMUCR_M
         wrsys   r1, #SYSDEV_MMU, #MMU_MMUCR
+
+        /* Enable both caches.  PTE.C declares pages cacheable but
+         * the cache modules themselves are disabled at reset and
+         * pass everything through to memory until ENABLE is set.
+         * Valid bits are cleared at reset, so no invalidate needed. */
+        lli     r1, #CACHE_CTRL_ENABLE
+        wrsys   r1, #SYSDEV_DCACHE, #CACHE_CTRL
+        wrsys   r1, #SYSDEV_ICACHE, #CACHE_CTRL
 
 /* ═════════════════════════════════════════════════════════════════
  * Phase 5: Set stack + call bench_main

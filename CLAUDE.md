@@ -225,6 +225,13 @@ accumulation, polled UART output, software mul/div (librt.c).
 Compiler runtime and string functions provided (no compiler-rt/libc
 dependency).  Soft-float stubs for benchmarks that use float in
 reporting (not in measurement loops).
+Both caches are enabled in `crt0.S` after MMU bring-up (cache hardware
+is disabled at reset; `PTE.C` declares cacheability per page but the
+master `CACHE_CTRL.ENABLE` must also be set for any caching to occur).
+Per-bench overrides via `bench_caches_disable()`/`bench_caches_enable()`
+in `bench.h`.  Bench-side perfctr snapshot helpers
+(`bench_perf_snapshot()`/`bench_perf_print_delta()`) read the
+`SYSDEV_CPU` cycles/insns_retired counters and print CPI alongside DMIPS.
 
 **Dhrystone 2.1** (`benchmark/dhrystone/`): Original 1988 source files
 (dhry.h, dhry_1.c, dhry_2.c) unmodified from Reinhold P. Weicker's
@@ -238,7 +245,9 @@ sub-word / address-as-data — each catching a distinct failure class
 (stuck-at bits, address-line swaps, DQM mask, byte-en pipeline,
 write-disturb).  Loaded as `MEMTEST.ELF`.  Long patterns emit
 liveness dots (~1 Hz on hardware) so a slow run is visibly distinct
-from a hang.
+from a hang.  Calls `bench_caches_disable()` at entry: every access
+must round-trip through SDRAM or write-disturb errors get hidden by
+cached repeat-reads.
 
 **Membench** (`benchmark/membench/`): Memory throughput / latency
 baseline.  Cached sweep of a 64 KiB working set (defeats the 1 KiB
@@ -260,8 +269,16 @@ make benchmark BENCH_ITERS=100    # override iteration count
 make benchmark COPT="-Os"         # override optimization level
 ```
 
-Baseline results (-O2, no hardware MUL):
-- RTL (cycle-accurate): ~1.8 DMIPS (~3,160 Dhrystones/sec)
+Baseline results (Dhrystone 2.1, -O2, 10000 iters, no hardware MUL,
+caches enabled, 12.5 MHz CPU clock):
+- ULX3S FPGA: 0.88 DMIPS (CPI ≈ 7.10, ~1555 Dhrystones/sec)
+
+CPI sits well above the raw microcode floor (~3.8) because the 1 KiB
+direct-mapped caches thrash on Dhrystone's working set, paying
+SDRAM-refill cost through the CDC bridge on every miss.  Smaller
+contributions from software muldiv (Proc_8 array indexing) and
+taken-branch refill bubbles.  Adding fetch_cycles / stall_cycles
+perfctrs is the next step toward attributing the gap precisely.
 
 ## Current Status
 The CPU is fully functional in simulation: all RTL modules implemented

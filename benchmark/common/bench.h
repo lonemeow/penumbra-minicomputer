@@ -52,6 +52,20 @@ uint32_t bench_timer_elapsed_us(void);
 uint32_t bench_timer_freq_hz(void);
 
 /*
+ * Enable / disable both data and instruction caches.
+ * crt0.S enables them by default after MMU setup.  Memtest and any
+ * other benchmark that needs to bypass the cache and exercise raw
+ * memory should call bench_caches_disable() at entry to bench_main.
+ *
+ * Disabling the caches is a master override: pages mapped with PTE.C
+ * still go through to memory because cache_active = enable & PTE.C.
+ * Per-page uncached mappings (PTE_KERNEL_NC) are the finer-grained
+ * alternative when only part of the address space should bypass.
+ */
+void bench_caches_enable(void);
+void bench_caches_disable(void);
+
+/*
  * CPU performance counter snapshot.
  * Free-running 32-bit counters from SYSDEV_CPU.  Wraps every
  * ~5.7 minutes at 12.5 MHz; benchmarks take seconds, so deltas are safe.
