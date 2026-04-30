@@ -15,8 +15,8 @@ adopting so those optimizations can be added incrementally.
 
 | Version | Location | State |
 |---------|----------|-------|
-| v1 | `hw/rtl/io/sdram.sv` | Will be removed once v2 is on hardware |
-| v2 | `hw/rtl/io/sdram/` (new directory) + `hw/rtl/sim/sdram_model.sv` | Under development |
+| v1 | `hw/rtl/io/sdram.sv` | Deprecated. `ulx3s_top` no longer instantiates it; remove once step 3 passes `_ram_check` on a real board. |
+| v2 | `hw/rtl/io/sdram/` + `hw/rtl/sim/sdram_model.sv` + `hw/rtl/io/sdram/sdram_phy_ecp5.sv` | Steps 1–3 landed (sim path + ECP5 PHY); steps 4–6 pending. |
 
 ## Locked design decisions
 
@@ -109,9 +109,9 @@ hw/rtl/sim/
 PLL plan (proposed, easy to retune):
 
 ```
-25 MHz xtal ─► EHXPLLL ─┬─► CLKOP   (system clock, e.g. 25 MHz)             ──► SoC fabric
-                        ├─► CLKOS   (SDRAM fabric clock, 100 MHz, 0°)       ──► sdram_ctrl
-                        └─► CLKOS2  (SDRAM pin clock,   100 MHz, ~270°)     ──► ODDRX1F ──► sdram_clk pin
+25 MHz xtal ─► EHXPLLL ─┬─► CLKOP   (system clock; today 12.5 MHz, rises with CPU optimisation) ──► SoC fabric
+                        ├─► CLKOS   (SDRAM fabric clock, 100 MHz, 0°)                            ──► sdram_ctrl
+                        └─► CLKOS2  (SDRAM pin clock,   100 MHz, ~270°)                          ──► ODDRX1F ──► sdram_clk pin
 ```
 
 - `CLKOS` clocks controller logic and FPGA-side IOB flops.
@@ -121,6 +121,10 @@ PLL plan (proposed, easy to retune):
   the data-path IOB timing — *not* a placement-dependent fabric route.
 - Phase value is empirical: build for several values, sweep on hardware,
   pick the center of the working window. Don't guess; document the sweep.
+
+In step 3 we don't yet split clocks — `CLKOS`/`CLKOS2` are not enabled
+and `ODDRX1F.SCLK` ties directly to `CLKOP`. Step 4 turns on the
+extra PLL outputs and re-points the PHY's `i_clk_sdram` at `CLKOS2`.
 
 All SDRAM signals (cmd, A, BA, DQM, DQ-out, DQ-in) are placed in IOB
 flops. Without IOB placement, fabric routing delay becomes part of
@@ -237,14 +241,32 @@ Three-level test pyramid:
 
 ## Phased rollout
 
-| Step | Deliverable | Verification |
-|------|-------------|--------------|
-| 1 | `sdram_pkg` + behavioral model + `sdram_ctrl` skeleton + sim PHY | Compiles + lints clean; controller unit tests pass |
-| 2 | Wire into `machine_sim` via sim PHY + bus adapter | `_ram_check` passes in Verilator |
-| 3 | `sdram_phy_ecp5` (IOB flops + ODDRX1F); single-domain @ 25 MHz | ULX3S boots, `_ram_check` passes |
-| 4 | `sdram_cdc` + dual-domain @ 100 MHz CL2 | `_ram_check` + NetBSD boot |
-| 5 | Phase-shift sweep build target + bring-up doc | Documented working window |
-| 6 | (Later) open-row + auto-precharge-off → pipelined sequential reads | Re-run validation, measure Dhrystone |
+| Step | Deliverable | Verification | State |
+|------|-------------|--------------|-------|
+| 1 | `sdram_pkg` + behavioral model + `sdram_ctrl` skeleton + sim PHY | Compiles + lints clean; controller unit tests pass | ✅ landed |
+| 2 | Wire into `machine_sim` via sim PHY + bus adapter | `_ram_check` passes in Verilator | ✅ landed |
+| 3 | `sdram_phy_ecp5` (IOB flops + ODDRX1F); single-domain at the system clock (12.5 MHz today, capped by the CPU critical path) | ULX3S boots, `_ram_check` passes | ⚙ RTL landed; awaits hardware verification |
+| 4 | `sdram_cdc` + dual-domain @ 100 MHz CL2 | `_ram_check` + NetBSD boot | pending |
+| 5 | Phase-shift sweep build target + bring-up doc | Documented working window | pending |
+| 6 | (Later) open-row + auto-precharge-off → pipelined sequential reads | Re-run validation, measure Dhrystone | pending |
+
+### Step 3 controller wiring notes
+
+The ECP5 PHY adds one IOB flop on every output and one IOB flop on
+the DQ input.  The controller absorbs that pipeline through two new
+parameters, `PHY_OUT_LATENCY` and `PHY_IN_LATENCY`, which are summed
+into the read-data sample countdown:
+
+```
+cl_cnt <= 4'(PHY_OUT_LATENCY + CAS_LATENCY + PHY_IN_LATENCY)
+```
+
+Both default to `0`, so the sim PHY (combinational) keeps the
+existing `cl_cnt = CAS_LATENCY` behaviour without code changes.
+The ECP5 PHY sets both to `1` at the instantiation site in
+`ulx3s_top`.  Step 4's CDC bridge will add another two terms to the
+same sum (one synchronizer chain in each direction); no further
+controller surgery should be needed.
 
 Steps 1–2 are pure simulation. Steps 3–4 are the architectural payoff.
 Steps 5–6 are durability + perf.

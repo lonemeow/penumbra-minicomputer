@@ -33,11 +33,12 @@ This file provides detailed hardware context for work under `hw/`. The root `CLA
 | Real UART | `rtl/io/uart.sv` | via ulx3s\_top | NS16450-compatible UART with real baud rate generator, TX shift register, RX 16x oversampling. CLK\_FREQ/BAUD\_RATE params. |
 | SPI FIFO | `rtl/io/spi_fifo.sv` | via spi | Parameterized synchronous FIFO (power-of-2 depth, 8-bit data). Used for SPI TX/RX paths. |
 | Real SPI | `rtl/io/spi.sv` | 54/54 | SPI master v2 with hardware TX/RX FIFO, autonomous transfer engine (stall-on-empty/full), IRQ output. FIFO\_DEPTH, SLOW\_DIV, FAST\_DIV params. See `doc/system/devices/spi.md`. |
-| SDRAM v1 | `rtl/io/sdram.sv` | via ulx3s\_top | Original SDR SDRAM controller (32 MB). CL=2, BL=2, auto-precharge. Universal-safe timings for all ULX3S SDRAM variants. Still wired into the FPGA build until step 3 of the v2 rollout completes. |
-| SDRAM v2 — package | `rtl/io/sdram/sdram_pkg.sv` | — | Command encoding + chip presets (W9825 @ 100 MHz CL2). |
-| SDRAM v2 — controller | `rtl/io/sdram/sdram_ctrl.sv` | unit + machine\_sim | FSM core: init, refresh, ACT/RW/RECOVER. Single-word req/rsp interface. Parameterized geometry/timing. |
+| SDRAM v1 | `rtl/io/sdram.sv` | (deprecated) | Original SDR SDRAM controller. Replaced by SDRAM v2 in `ulx3s_top` as of step 3. Kept temporarily as a fallback until v2 is verified on hardware; remove once step 3 passes `_ram_check` on a ULX3S board. |
+| SDRAM v2 — package | `rtl/io/sdram/sdram_pkg.sv` | — | Command encoding + chip presets (W9825 @ 100 MHz CL2 and @ 12.5 MHz CL2). |
+| SDRAM v2 — controller | `rtl/io/sdram/sdram_ctrl.sv` | unit + machine\_sim | FSM core: init, refresh, ACT/RW/RECOVER. Single-word req/rsp interface. Parameterized geometry/timing plus `PHY_OUT_LATENCY` / `PHY_IN_LATENCY` to absorb registering-PHY pipeline. |
 | SDRAM v2 — bus adapter | `rtl/io/sdram/sdram_bus_adapter.sv` | machine\_sim | Sync bus `i_re/i_we/o_busy` ↔ controller req/rsp handshake. Drop-in for simple\_mem. |
-| SDRAM v2 — sim PHY | `rtl/io/sdram/sdram_phy_sim.sv` | unit + machine\_sim | Pass-through PHY for Verilator. Replaced by `sdram_phy_ecp5.sv` in step 3. |
+| SDRAM v2 — sim PHY | `rtl/io/sdram/sdram_phy_sim.sv` | unit + machine\_sim | Pass-through PHY for Verilator. Used for sim instances; ECP5 boards instantiate `sdram_phy_ecp5` instead. |
+| SDRAM v2 — ECP5 PHY | `rtl/io/sdram/sdram_phy_ecp5.sv` | via ulx3s\_top | IOB-resident flops on every SDRAM signal + ODDRX1F clock forwarding. Adds 1 cycle output / 1 cycle input pipeline (controller's `PHY_OUT_LATENCY` / `PHY_IN_LATENCY` parameters extend `cl_cnt` to compensate). Step 3 ties `i_clk_sdram = i_clk`; step 4 will swap in a phase-shifted CLKOS2. |
 | SDRAM v2 — chip model | `rtl/sim/sdram_model.sv` | unit + machine\_sim | Behavioral SDR DRAM chip. JEDEC command set, sparse storage, protocol checking. |
 | SDRAM v2 — sim bundle | `rtl/sim/sdram_sim.sv` | machine\_sim | Wraps adapter + ctrl + phy\_sim + model into a simple\_mem-shaped device. |
 | SDRAM v2 — unit wrapper | `rtl/sim/sdram_test.sv` | tb\_sdram\_test | DUT wrapper exposing the controller's req/rsp interface. See `doc/internals/sdram-controller.md`. |
