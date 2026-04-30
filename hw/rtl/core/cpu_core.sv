@@ -98,13 +98,36 @@ module cpu_core
     // ── Cache sysreg signals ────────────────────────────────
     logic [31:0] dcache_sys_rdata, icache_sys_rdata;
 
+    // ── CPU identity + performance counters (SYSDEV_CPU) ────
+    // CPU identity (regs 0–4) and perfctrs (regs 5+) are both produced
+    // inside cpu_core.  Outputs are merged by reg-range below.
+    logic [31:0] cpuid_rdata, cpu_perfctr_rdata, cpu_sys_rdata;
+
+    cpuid u_cpuid (
+        .i_sys_reg  (dp_r_sys_reg),
+        .o_sys_rdata(cpuid_rdata)
+    );
+
+    cpu_perfctr u_cpu_perfctr (
+        .i_clk          (i_clk),
+        .i_rst          (i_rst),
+        .i_insn_retired (ir_valid),
+        .i_sys_reg      (dp_r_sys_reg),
+        .o_sys_rdata    (cpu_perfctr_rdata)
+    );
+
+    // Identity occupies regs 0–4; counters live at 5+
+    assign cpu_sys_rdata = (dp_r_sys_reg <= SYSREG_CPU_NAME3)
+                         ? cpuid_rdata : cpu_perfctr_rdata;
+
     // ── Sysreg read mux ────────────────────────────────────
-    // Devices 0 (MMU), 2 (DCACHE), 3 (ICACHE) handled internally;
-    // remaining devices from external bus.
+    // Devices handled internally: 0 (MMU), 1 (CPU), 2 (DCACHE), 3 (ICACHE);
+    // remaining devices from external bus (BUS, TIMER, MACH, ...).
     logic [31:0] sys_rdata;
     always_comb begin
         case (dp_r_sys_dev)
             SYSDEV_MMU:    sys_rdata = mmu_sys_rdata;
+            SYSDEV_CPU:    sys_rdata = cpu_sys_rdata;
             SYSDEV_DCACHE: sys_rdata = dcache_sys_rdata;
             SYSDEV_ICACHE: sys_rdata = icache_sys_rdata;
             default:       sys_rdata = i_sys_rdata;

@@ -57,11 +57,13 @@ BUILTIN_CONSTANTS = {
     "TLB_INDEX":    5,
 
     # CPU registers (device 1)
-    "CPU_ISA":      0,
-    "CPU_NAME0":    1,
-    "CPU_NAME1":    2,
-    "CPU_NAME2":    3,
-    "CPU_NAME3":    4,
+    "CPU_ISA":           0,
+    "CPU_NAME0":         1,
+    "CPU_NAME1":         2,
+    "CPU_NAME2":         3,
+    "CPU_NAME3":         4,
+    "CPU_CYCLES":        5,
+    "CPU_INSNS_RETIRED": 6,
 
     # MACH registers (device 8)
     "MACH_FEAT":    0,

@@ -572,6 +572,13 @@ static uint32_t cpuid_read(int reg) {
     switch (reg) {
         case 0: return 1;            // CPU_ISA: version 1
         case 1: case 2: case 3: case 4: return cpu_name[reg-1];
+        // The ISS is instruction-accurate, not cycle-accurate.  We expose
+        // insn_count for both registers so the bench harness can read
+        // them without special-casing — IPC will always be 1 on the ISS,
+        // which is clearly synthetic.  Real cycle numbers come from RTL
+        // simulation or FPGA execution.
+        case 5: return (uint32_t)cpu.insn_count;  // CPU_CYCLES (synthetic on ISS)
+        case 6: return (uint32_t)cpu.insn_count;  // CPU_INSNS_RETIRED
         default: return 0;
     }
 }

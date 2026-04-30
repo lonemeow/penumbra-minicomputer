@@ -184,18 +184,37 @@ enable procedure.
 
 ---
 
-## Device 1: CPU (CPU Identity)
+## Device 1: CPU (CPU Identity + Performance Counters)
 
 Read-only. Writes are ignored. Describes the CPU core itself, not the
 board it runs on (board info lives in [Device 8: MACH](#device-8-mach-machine-identity)).
 The same CPU RTL produces the same answers regardless of which board
-instantiates it.
+instantiates it. Identity registers (regs 0–4) are pure combinational
+constants; performance counters (regs 5+) are clocked, free-running,
+reset to 0 on system reset.
 
-| reg    | Name           | R/W | Description                                         |
-|:------:|----------------|:---:|-----------------------------------------------------|
-| 0      | `CPU_ISA`      | R   | ISA version and CPU feature flags                   |
-| 1–4    | `CPU_NAME0–3`  | R   | CPU name string (16 bytes, packed LE, null-pad)     |
-| 5–15   | —              | —   | Reserved for CPU performance counters (added incrementally) |
+| reg    | Name                  | R/W | Description                                         |
+|:------:|-----------------------|:---:|-----------------------------------------------------|
+| 0      | `CPU_ISA`             | R   | ISA version and CPU feature flags                   |
+| 1–4    | `CPU_NAME0–3`         | R   | CPU name string (16 bytes, packed LE, null-pad)     |
+| 5      | `CPU_CYCLES`          | R   | Free-running 32-bit CPU clock cycle counter         |
+| 6      | `CPU_INSNS_RETIRED`   | R   | Free-running 32-bit instruction-retired counter     |
+| 7–15   | —                     | —   | Reserved for additional performance counters        |
+
+### Performance Counters (regs 5+)
+
+All counters are 32-bit and free-running. At 12.5 MHz the cycle counter
+wraps every ~5.7 minutes; benchmarks take seconds, so software gets
+reliable deltas by reading once before the measured region and once
+after, then subtracting (modular subtraction handles wrap correctly).
+
+There is **no atomic snapshot** across multiple counters. Reads of
+different counters happen one cycle apart, so a `cycles`/`insns_retired`
+pair reflects state ~1 cycle apart. For benchmark workloads that run
+millions of cycles, the inter-counter skew is negligible. If a
+fully-consistent multi-counter snapshot is ever needed, software can
+sample twice and average, or hardware can be extended with a snapshot
+register later.
 
 ### CPU_ISA (reg 0)
 

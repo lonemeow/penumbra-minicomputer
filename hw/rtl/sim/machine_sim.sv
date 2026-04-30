@@ -344,15 +344,8 @@ module machine_sim
     // Sysreg devices (external, dev_id >= 1)
     // ══════════════════════════════════════════════════════════
 
-    // ── CPU identity (device 1, read-only) ───────────────────
-    logic [31:0] cpuid_rdata;
-
-    cpuid u_cpuid (
-        .i_sys_reg  (sys_reg),
-        .o_sys_rdata(cpuid_rdata)
-    );
-
     // ── Machine identity (device 8, read-only) ───────────────
+    // SYSDEV_CPU (device 1) lives inside cpu_core (CPU identity + perfctrs).
     logic [31:0] machid_rdata;
 
     // Machine name: "Simulator"
@@ -403,7 +396,6 @@ module machine_sim
     // Device 0 (MMU) is handled inside cpu_core.
     always_comb begin
         case (sys_dev)
-            SYSDEV_CPU:   sys_rdata = cpuid_rdata;
             SYSDEV_BUS:   sys_rdata = busctl_rdata;
             SYSDEV_TIMER: sys_rdata = timer_rdata;
             SYSDEV_MACH:  sys_rdata = machid_rdata;

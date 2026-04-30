@@ -51,6 +51,31 @@ uint32_t bench_timer_elapsed_us(void);
  */
 uint32_t bench_timer_freq_hz(void);
 
+/*
+ * CPU performance counter snapshot.
+ * Free-running 32-bit counters from SYSDEV_CPU.  Wraps every
+ * ~5.7 minutes at 12.5 MHz; benchmarks take seconds, so deltas are safe.
+ */
+typedef struct {
+    uint32_t cycles;
+    uint32_t insns_retired;
+} bench_perf_t;
+
+/*
+ * Snapshot the CPU performance counters into `out`.  Two RDSYS
+ * instructions, executed one cycle apart — for normal benchmark
+ * workloads (millions of cycles) the inter-counter skew is negligible.
+ */
+void bench_perf_snapshot(bench_perf_t *out);
+
+/*
+ * Print "<label>: <Δcycles> cycles, <Δinsns> insns, CPI=X.YYY"
+ * to the console.  Computes deltas (after - before) modulo 32-bit wrap.
+ */
+void bench_perf_print_delta(const char *label,
+                            const bench_perf_t *before,
+                            const bench_perf_t *after);
+
 /* Console output (polled UART at 0xFF000000) */
 void bench_putchar(int c);
 void bench_puts(const char *s);

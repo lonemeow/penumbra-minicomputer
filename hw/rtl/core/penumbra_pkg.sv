@@ -82,12 +82,15 @@ package penumbra_pkg;
     // Devices 9–15 reserved for future expansion
 
     // ── CPU sysreg addresses (dev_id = 1) ───────────────────
-    localparam logic [3:0] SYSREG_CPU_ISA    = 4'd0;   // ISA version + feature flags
-    localparam logic [3:0] SYSREG_CPU_NAME0  = 4'd1;   // CPU name bytes  0– 3
-    localparam logic [3:0] SYSREG_CPU_NAME1  = 4'd2;   // CPU name bytes  4– 7
-    localparam logic [3:0] SYSREG_CPU_NAME2  = 4'd3;   // CPU name bytes  8–11
-    localparam logic [3:0] SYSREG_CPU_NAME3  = 4'd4;   // CPU name bytes 12–15
-    // Regs 5–15 reserved for CPU performance counters (added incrementally)
+    localparam logic [3:0] SYSREG_CPU_ISA           = 4'd0;  // ISA version + feature flags
+    localparam logic [3:0] SYSREG_CPU_NAME0         = 4'd1;  // CPU name bytes  0– 3
+    localparam logic [3:0] SYSREG_CPU_NAME1         = 4'd2;  // CPU name bytes  4– 7
+    localparam logic [3:0] SYSREG_CPU_NAME2         = 4'd3;  // CPU name bytes  8–11
+    localparam logic [3:0] SYSREG_CPU_NAME3         = 4'd4;  // CPU name bytes 12–15
+    // Performance counters (free-running, 32-bit, reset on system reset)
+    localparam logic [3:0] SYSREG_CPU_CYCLES        = 4'd5;  // CPU clock cycles
+    localparam logic [3:0] SYSREG_CPU_INSNS_RETIRED = 4'd6;  // Instructions retired
+    // Regs 7–15 reserved for additional CPU performance counters
 
     // ── MACH sysreg addresses (dev_id = 8) ──────────────────
     localparam logic [3:0] SYSREG_MACH_FEAT   = 4'd0;  // Machine feature flags

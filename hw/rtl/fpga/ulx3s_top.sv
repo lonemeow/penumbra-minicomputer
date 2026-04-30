@@ -633,15 +633,8 @@ module ulx3s_top (
     // Sysreg devices
     // ══════════════════════════════════════════════════════════
 
-    // ── CPU identity (device 1) ─────────────────────────────
-    logic [31:0] cpuid_rdata;
-
-    cpuid u_cpuid (
-        .i_sys_reg  (sys_reg),
-        .o_sys_rdata(cpuid_rdata)
-    );
-
     // ── Machine identity (device 8) ─────────────────────────
+    // SYSDEV_CPU (device 1) lives inside cpu_core (CPU identity + perfctrs).
     logic [31:0] machid_rdata;
 
     machid #(
@@ -692,7 +685,6 @@ module ulx3s_top (
     // ── Sysreg read mux ────────────────────────────────────
     always_comb begin
         case (sys_dev)
-            SYSDEV_CPU:   sys_rdata = cpuid_rdata;
             SYSDEV_BUS:   sys_rdata = busctl_rdata;
             SYSDEV_TIMER: sys_rdata = timer_rdata;
             SYSDEV_MACH:  sys_rdata = machid_rdata;

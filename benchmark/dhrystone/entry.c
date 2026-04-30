@@ -22,9 +22,13 @@ extern int dhrystone_main(void);
 void bench_main(uint32_t bootdata) {
     (void)bootdata;
     bench_init();
-    
+
+    bench_perf_t perf_before, perf_after;
+
     bench_timer_start();
+    bench_perf_snapshot(&perf_before);
     dhrystone_main();
+    bench_perf_snapshot(&perf_after);
 
     /* Print real timing from hardware timer */
     uint32_t ticks = bench_timer_elapsed_ticks();
@@ -65,4 +69,6 @@ void bench_main(uint32_t bootdata) {
         bench_print_uint(frac);
         bench_puts("\n");
     }
+
+    bench_perf_print_delta("CPU perfctrs", &perf_before, &perf_after);
 }

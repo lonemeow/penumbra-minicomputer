@@ -46,6 +46,11 @@ static uint32_t timer_ticks_per_us; /* freq / 1000000 */
 #define TMCR_AUTOLOAD  0x04
 #define TMST_UDF       0x01
 
+/* ── CPU perfctr sysregs (device 1) ────────────────────────────── */
+#define SYSDEV_CPU            1
+#define CPU_CYCLES            5
+#define CPU_INSNS_RETIRED     6
+
 /* ── Sysreg access macros ──────────────────────────────────────── */
 #define read_sysreg(dev, reg) ({                                    \
     uint32_t __v;                                                   \
@@ -120,6 +125,52 @@ uint32_t bench_timer_elapsed_us(void) {
 
 uint32_t bench_timer_freq_hz(void) {
     return timer_freq;
+}
+
+/* ── CPU performance counters ──────────────────────────────────── */
+
+void bench_perf_snapshot(bench_perf_t *out) {
+    out->cycles        = read_sysreg(SYSDEV_CPU, CPU_CYCLES);
+    out->insns_retired = read_sysreg(SYSDEV_CPU, CPU_INSNS_RETIRED);
+}
+
+void bench_perf_print_delta(const char *label,
+                            const bench_perf_t *before,
+                            const bench_perf_t *after) {
+    /* 32-bit unsigned subtraction handles the wrap case correctly:
+     * if `after.cycles` wrapped past `before.cycles`, the modular
+     * subtraction still yields the true elapsed count. */
+    uint32_t d_cycles = after->cycles        - before->cycles;
+    uint32_t d_insns  = after->insns_retired - before->insns_retired;
+
+    bench_puts(label);
+    bench_puts(": ");
+    bench_print_uint(d_cycles);
+    bench_puts(" cycles, ");
+    bench_print_uint(d_insns);
+    bench_puts(" insns");
+
+    if (d_insns > 0) {
+        /* CPI = cycles / insns, displayed to 2 decimal places.
+         * Stay in 32-bit: (cycles * 100) overflows if cycles >= 2^25
+         * (~33M), so scale both operands down by the same shift first
+         * to preserve the ratio.  Precision loss is bounded by the
+         * shift count and is tiny relative to a 2-decimal display. */
+        uint32_t c = d_cycles, n = d_insns;
+        while (c > 0x01FFFFFFu) {     /* keep c * 100 < 2^32 */
+            c >>= 1;
+            n >>= 1;
+        }
+        uint32_t cpi_x100 = (n > 0) ? (c * 100) / n : 0;
+
+        bench_puts(", CPI=");
+        bench_print_uint(cpi_x100 / 100);
+        bench_putchar('.');
+        uint32_t frac = cpi_x100 % 100;
+        if (frac < 10) bench_putchar('0');
+        bench_print_uint(frac);
+    }
+    bench_puts("\n");
 }
 
 /* ── Console output ────────────────────────────────────────────── */

@@ -58,11 +58,14 @@ typedef unsigned int uint32_t;
 #define MMU_FAULT_STATUS 2
 
 /* CPU identity registers (device 1, read-only) */
-#define CPU_ISA        0
-#define CPU_NAME0      1
-#define CPU_NAME1      2
-#define CPU_NAME2      3
-#define CPU_NAME3      4
+#define CPU_ISA           0
+#define CPU_NAME0         1
+#define CPU_NAME1         2
+#define CPU_NAME2         3
+#define CPU_NAME3         4
+/* CPU performance counters (free-running, 32-bit) */
+#define CPU_CYCLES        5
+#define CPU_INSNS_RETIRED 6
 
 /* Machine identity registers (device 8, read-only) */
 #define MACH_FEAT      0

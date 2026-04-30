@@ -70,13 +70,15 @@
 /* TLB_PTE word: (PPN << 12) | (SW << 8) | flags */
 /* Flag and PPN bits defined in <machine/pmap.h> */
 
-/* ── Device 1: CPU identity (read-only) ────────────────────────────── */
+/* ── Device 1: CPU identity + performance counters ─────────────────── */
 
-#define CPU_ISA		0
-#define CPU_NAME0	1
-#define CPU_NAME1	2
-#define CPU_NAME2	3
-#define CPU_NAME3	4
+#define CPU_ISA			0
+#define CPU_NAME0		1
+#define CPU_NAME1		2
+#define CPU_NAME2		3
+#define CPU_NAME3		4
+#define CPU_CYCLES		5	/* free-running 32-bit, wraps every ~5.7 min @ 12.5 MHz */
+#define CPU_INSNS_RETIRED	6	/* free-running 32-bit */
 
 /* ── Device 8: Machine identity (read-only) ────────────────────────── */
 
