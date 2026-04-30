@@ -28,7 +28,20 @@ module sdram_ctrl
     parameter int T_MRD       = 2,
     parameter int T_REFI      = 750,
     parameter int T_POWERUP   = 20000,
-    parameter int CAS_LATENCY = 2
+    parameter int CAS_LATENCY = 2,
+
+    // ── PHY round-trip latency ──────────────────────────
+    // Extra cycles introduced by an IOB-registering PHY:
+    //   PHY_OUT_LATENCY = output IOB flop(s) between the controller's
+    //                     o_phy_* register and the SDRAM pin.
+    //   PHY_IN_LATENCY  = input  IOB flop(s) between the SDRAM pin
+    //                     and i_phy_dq_in observed by the controller.
+    // Both are 0 for the combinational sim PHY, 1 for the ECP5 PHY.
+    // The controller uses them to extend the read-data sample
+    // countdown (cl_cnt) so beat 0 is captured on the cycle the
+    // SDRAM-driven data finishes propagating through the input flop.
+    parameter int PHY_OUT_LATENCY = 0,
+    parameter int PHY_IN_LATENCY  = 0
 )(
     input  logic                  i_clk,
     input  logic                  i_rst,
@@ -343,7 +356,7 @@ module sdram_ctrl
                         end else begin
                             o_phy_cmd    <= SDRAM_CMD_READ;
                             o_phy_dqm    <= 2'b00;    // unmask reads
-                            cl_cnt       <= 4'(CAS_LATENCY);
+                            cl_cnt       <= 4'(PHY_OUT_LATENCY+CAS_LATENCY+PHY_IN_LATENCY);
                             state        <= S_RW;
                         end
                     end else begin

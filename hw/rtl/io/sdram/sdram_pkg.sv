@@ -77,5 +77,29 @@ package sdram_pkg;
     // ─────────────────────────────────────────────────────────────
     localparam int W9825_SIM_T_POWERUP   = 8;
 
+    // ─────────────────────────────────────────────────────────
+    // Chip preset: Winbond W9825G6KH @ 12.5 MHz (80 ns period)
+    // Used for step 3 of the v2 rollout: single-domain bring-up at
+    // the system clock the CPU's current critical path supports.
+    // The CDC bridge in step 4 lets the SDRAM jump to its native
+    // 100 MHz independently of the system clock.
+    // Cycle counts are ceil(t_xxx_ns / 80 ns); most fit in 1 cycle.
+    // ─────────────────────────────────────────────────────────
+    localparam int W9825_12P5_ROW_BITS    = 13;
+    localparam int W9825_12P5_COL_BITS    = 9;
+    localparam int W9825_12P5_BA_BITS     = 2;
+    localparam int W9825_12P5_DQ_BITS     = 16;
+
+    localparam int W9825_12P5_T_RCD       = 1;    // 18-21 ns  → 1 cyc @ 80 ns
+    localparam int W9825_12P5_T_RP        = 1;    // 18-21 ns  → 1 cyc
+    localparam int W9825_12P5_T_RC        = 1;    // 60-63 ns  → 1 cyc
+    localparam int W9825_12P5_T_RAS       = 1;    // 42 ns min → 1 cyc
+    localparam int W9825_12P5_T_RFC       = 1;    // 60-66 ns  → 1 cyc (waits 2 cycles total)
+    localparam int W9825_12P5_T_WR        = 2;    // 1 CLK + 7.5 ns
+    localparam int W9825_12P5_T_MRD       = 2;    // 2 CLK
+    localparam int W9825_12P5_T_REFI      = 95;   // 7.81 µs / 80 ns ≈ 97, margin
+    localparam int W9825_12P5_T_POWERUP   = 2500; // 200 µs @ 12.5 MHz
+    localparam int W9825_12P5_CAS_LATENCY = 2;
+
 endpackage
 /* verilator lint_on UNUSEDPARAM */

@@ -358,10 +358,12 @@ TOP ?= ulx3s_hello
 # ulx3s_top needs the full RTL (core, mmu, soc devices, io).
 FPGA_SRC_SIMPLE = $(wildcard $(FPGA_RTL)/*.sv)
 FPGA_SRC_FULL   = hw/rtl/core/penumbra_pkg.sv \
+                  hw/rtl/io/sdram/sdram_pkg.sv \
                   $(filter-out %/smoke_adder.sv %/penumbra_pkg.sv, $(wildcard hw/rtl/core/*.sv)) \
                   $(wildcard hw/rtl/mmu/*.sv) \
                   $(wildcard hw/rtl/soc/*.sv) \
                   $(wildcard hw/rtl/io/*.sv) \
+                  $(filter-out %/sdram_pkg.sv, $(wildcard hw/rtl/io/sdram/*.sv)) \
                   $(FPGA_RTL)/fpga_ram.sv $(FPGA_RTL)/ulx3s_top.sv
 
 # ECP5 primitive stubs — for Verilator lint only, not synthesis.

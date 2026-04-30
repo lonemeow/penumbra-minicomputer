@@ -44,3 +44,20 @@ module EHXPLLL #(
     assign CLKOS = CLKI;
     assign LOCK  = 1'b1;
 endmodule
+
+// ── ODDRX1F: SDR clock-out / data-out from the I/O cell ─────
+// Used by sdram_phy_ecp5 to forward the SDRAM clock through an
+// IOB-resident toggling register.  For lint, model as a simple
+// alternating output driven by SCLK rising/falling.
+module ODDRX1F (
+    input  D0,
+    input  D1,
+    input  SCLK,
+    input  RST,
+    output Q
+);
+    reg q_pos, q_neg;
+    always @(posedge SCLK) q_pos <= D0;
+    always @(negedge SCLK) q_neg <= D1;
+    assign Q = SCLK ? q_pos : q_neg;
+endmodule

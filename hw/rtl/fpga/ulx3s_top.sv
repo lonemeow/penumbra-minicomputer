@@ -41,6 +41,7 @@ module ulx3s_top (
     output logic [1:0]  sdram_dqm
 );
     import penumbra_pkg::*;
+    import sdram_pkg::*;
 
     // ── Board constants ──────────────────────────────────────────
     // Single source of truth for system clock frequency.
@@ -53,8 +54,10 @@ module ulx3s_top (
     // ── PLL: 25 MHz → 12.5 MHz system clock ──────────────────────
     // fCLKOP = fCLKI × CLKFB_DIV / CLKI_DIV = 25 × 1 / 2 = 12.5 MHz
     // fVCO   = fCLKOP × CLKOP_DIV = 12.5 × 48 = 600 MHz (range: 400-800)
-    // Conservative for initial bring-up; increase once critical
-    // path is optimized.
+    // Conservative for current CPU critical path (~16 MHz cap).  Once
+    // long-path optimisation lifts the cap, this can rise on its own
+    // schedule — the SDRAM controller's own clock will be decoupled
+    // by the step-4 CDC bridge, so the two no longer move together.
     logic clk;
     logic pll_lock;
 
@@ -229,16 +232,107 @@ module ulx3s_top (
         u_ram_sel (.i_addr(mem_addr), .o_sel(ram_sel));
     always_ff @(posedge clk) ram_sel_r <= ram_sel;
 
-    sdram u_sdram (
-        .i_clk      (clk),
-        .i_rst      (rst),
-        .i_addr     (mem_addr),
-        .i_wdata    (mem_wdata),
-        .i_byte_en  (mem_byte_en),
-        .i_we       (mem_we & ram_sel),
-        .i_re       (mem_re & ram_sel),
-        .o_rdata    (ram_rdata_raw),
-        .o_busy     (ram_busy_raw),
+    // ── SDRAM v2: bus adapter → controller → ECP5 PHY → pins ───
+    // Single-domain bring-up at 25 MHz (step 3 of the rollout).  The
+    // adapter speaks the project's standard sync bus contract; the
+    // controller runs the SDR command sequence; the ECP5 PHY pins
+    // every signal through IOB flops and forwards the SDRAM clock
+    // via ODDRX1F.  Step 4 will insert sdram_cdc between adapter
+    // and controller and feed phy.i_clk_sdram from a 270°-shifted
+    // PLL output.
+    logic        ram_req_valid, ram_req_we, ram_req_ready;
+    logic [31:0] ram_req_addr,  ram_req_wdata;
+    logic [3:0]  ram_req_byte_en;
+    logic        ram_rsp_valid, ram_rsp_ready, ram_done;
+    logic [31:0] ram_rsp_data;
+
+    sdram_bus_adapter u_sdram_adp (
+        .i_clk         (clk),
+        .i_rst         (rst),
+        .i_addr        (mem_addr),
+        .i_wdata       (mem_wdata),
+        .i_byte_en     (mem_byte_en),
+        .i_we          (mem_we & ram_sel),
+        .i_re          (mem_re & ram_sel),
+        .o_rdata       (ram_rdata_raw),
+        .o_busy        (ram_busy_raw),
+        .o_req_valid   (ram_req_valid),
+        .o_req_we      (ram_req_we),
+        .o_req_addr    (ram_req_addr),
+        .o_req_wdata   (ram_req_wdata),
+        .o_req_byte_en (ram_req_byte_en),
+        .i_req_ready   (ram_req_ready),
+        .i_rsp_valid   (ram_rsp_valid),
+        .i_rsp_data    (ram_rsp_data),
+        .o_rsp_ready   (ram_rsp_ready),
+        .i_done        (ram_done)
+    );
+
+    logic [3:0]                         sdram_phy_cmd;
+    logic                               sdram_phy_cke;
+    logic [W9825_12P5_ROW_BITS-1:0]     sdram_phy_a;
+    logic [W9825_12P5_BA_BITS-1:0]      sdram_phy_ba;
+    logic [W9825_12P5_DQ_BITS/8-1:0]    sdram_phy_dqm;
+    logic [W9825_12P5_DQ_BITS-1:0]      sdram_phy_dq_out;
+    logic                               sdram_phy_dq_oe;
+    logic [W9825_12P5_DQ_BITS-1:0]      sdram_phy_dq_in;
+    logic                               sdram_init_done;
+
+    sdram_ctrl #(
+        .ROW_BITS        (W9825_12P5_ROW_BITS),
+        .COL_BITS        (W9825_12P5_COL_BITS),
+        .BA_BITS         (W9825_12P5_BA_BITS),
+        .DQ_BITS         (W9825_12P5_DQ_BITS),
+        .T_RCD           (W9825_12P5_T_RCD),
+        .T_RP            (W9825_12P5_T_RP),
+        .T_RFC           (W9825_12P5_T_RFC),
+        .T_WR            (W9825_12P5_T_WR),
+        .T_MRD           (W9825_12P5_T_MRD),
+        .T_REFI          (W9825_12P5_T_REFI),
+        .T_POWERUP       (W9825_12P5_T_POWERUP),
+        .CAS_LATENCY     (W9825_12P5_CAS_LATENCY),
+        .PHY_OUT_LATENCY (1),
+        .PHY_IN_LATENCY  (1)
+    ) u_sdram_ctrl (
+        .i_clk           (clk),
+        .i_rst           (rst),
+        .i_req_valid     (ram_req_valid),
+        .i_req_we        (ram_req_we),
+        .i_req_addr      (ram_req_addr),
+        .i_req_wdata     (ram_req_wdata),
+        .i_req_byte_en   (ram_req_byte_en),
+        .o_req_ready     (ram_req_ready),
+        .o_rsp_valid     (ram_rsp_valid),
+        .o_rsp_data      (ram_rsp_data),
+        .i_rsp_ready     (ram_rsp_ready),
+        .o_done          (ram_done),
+        .o_phy_cmd       (sdram_phy_cmd),
+        .o_phy_cke       (sdram_phy_cke),
+        .o_phy_a         (sdram_phy_a),
+        .o_phy_ba        (sdram_phy_ba),
+        .o_phy_dqm       (sdram_phy_dqm),
+        .o_phy_dq_out    (sdram_phy_dq_out),
+        .o_phy_dq_oe     (sdram_phy_dq_oe),
+        .i_phy_dq_in     (sdram_phy_dq_in),
+        .o_dbg_init_done (sdram_init_done)
+    );
+
+    sdram_phy_ecp5 #(
+        .ROW_BITS (W9825_12P5_ROW_BITS),
+        .BA_BITS  (W9825_12P5_BA_BITS),
+        .DQ_BITS  (W9825_12P5_DQ_BITS)
+    ) u_sdram_phy (
+        .i_clk        (clk),
+        .i_clk_sdram  (clk),    // step 4 will replace with phase-shifted CLKOS2
+        .i_rst        (rst),
+        .i_phy_cmd    (sdram_phy_cmd),
+        .i_phy_cke    (sdram_phy_cke),
+        .i_phy_a      (sdram_phy_a),
+        .i_phy_ba     (sdram_phy_ba),
+        .i_phy_dqm    (sdram_phy_dqm),
+        .i_phy_dq_out (sdram_phy_dq_out),
+        .i_phy_dq_oe  (sdram_phy_dq_oe),
+        .o_phy_dq_in  (sdram_phy_dq_in),
         .o_sdram_clk  (sdram_clk),
         .o_sdram_cke  (sdram_cke),
         .o_sdram_csn  (sdram_csn),
@@ -247,11 +341,12 @@ module ulx3s_top (
         .o_sdram_wen  (sdram_wen),
         .o_sdram_a    (sdram_a),
         .o_sdram_ba   (sdram_ba),
-        .io_sdram_d   (sdram_d),
         .o_sdram_dqm  (sdram_dqm),
-        .o_dbg_init_done   (led[6]),
-        .o_dbg_access_done (led[7])
+        .io_sdram_d   (sdram_d)
     );
+
+    assign led[6] = sdram_init_done;
+    assign led[7] = ram_busy_raw;
 
     // ── Boot ROM ────────────────────────────────────────────
     logic        rom_sel, rom_sel_r;
