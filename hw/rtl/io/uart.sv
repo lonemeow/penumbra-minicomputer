@@ -15,17 +15,31 @@
 //   0x018  MSR  (CTS+DSR hardwired asserted)
 //   0x01C  SCR  (scratch register)
 //
-// Baud rate: DLL/DLM initialized from CLK_FREQ/BAUD_RATE at reset
-// so the UART works immediately without software configuration.
-// clks_per_bit = 16 * {DLM, DLL} (standard NS16450 formula).
+// Baud rate generation is two-stage:
+//
+//   Stage 1: a fractional accumulator divides the actual system
+//            clock (CLK_FREQ) down to a fixed REF_FREQ tick stream.
+//            Default REF_FREQ is 1.8432 MHz — the canonical 16450
+//            crystal — so software sees a standard PC UART regardless
+//            of what CLK_FREQ actually is on this board.
+//
+//   Stage 2: the existing software-programmed divisor {DLM, DLL}
+//            divides the REF_FREQ ticks by D, giving a 16x baud
+//            clock at REF_FREQ / D Hz.  Standard NS16450 formula:
+//            baud = REF_FREQ / (16 * D).
+//
+// CLK_FREQ is a hardware-implementation detail — software never
+// sees it.  Drivers configure the UART exactly as if it had a
+// 1.8432 MHz crystal, and divisor=1 produces 115200 baud on every
+// board variant.
 //
 // Compatible with NetBSD com(4): reg-shift=2, reg-io-width=4.
 
 module uart
     import penumbra_pkg::*;
 #(
-    parameter CLK_FREQ  = 25_000_000,
-    parameter BAUD_RATE = 115_200
+    parameter int CLK_FREQ = 25_000_000,
+    parameter int REF_FREQ =  1_843_200    // advertised 16450 crystal
 )(
     input  logic        i_clk,
     input  logic        i_rst,
@@ -46,10 +60,10 @@ module uart
     output logic        o_irq
 );
 
-    // Default divisor: baud = CLK_FREQ / (16 * divisor)
-    // → divisor = CLK_FREQ / (16 * BAUD_RATE)
-    // Round to nearest for best accuracy.
-    localparam int DEFAULT_DIVISOR = (CLK_FREQ + 8 * BAUD_RATE) / (16 * BAUD_RATE);
+    // Default divisor = 1: with REF_FREQ = 1.8432 MHz, this gives
+    // 115200 baud out of reset — the rate the boot ROM and early
+    // kernel console expect, with no software configuration needed.
+    localparam int DEFAULT_DIVISOR = 1;
 
     // ── Register select from word-aligned address ───────────
     logic [2:0] reg_sel;
@@ -71,9 +85,45 @@ module uart
     assign dlab = lcr[7];
 
     // ══════════════════════════════════════════════════════════
-    // Baud rate generator
+    // Baud rate generator — Stage 1: fractional reference clock
     // ══════════════════════════════════════════════════════════
-    // clks_per_bit = 16 * divisor (standard NS16450).
+    // Synthesize a fixed REF_FREQ tick stream from CLK_FREQ using
+    // a DDA-style fractional accumulator.  Each system clock the
+    // accumulator advances by REF_FREQ; whenever it would equal or
+    // exceed CLK_FREQ, a single-cycle ref_tick fires and CLK_FREQ
+    // is subtracted (preserving the fractional remainder so there
+    // is no long-term drift).
+    //
+    // Average ref_tick rate = REF_FREQ Hz, exact within accumulator
+    // precision — orders of magnitude tighter than UART tolerance.
+    //
+    // Accumulator must hold values up to (CLK_FREQ - 1) + REF_FREQ.
+    localparam int ACC_WIDTH = $clog2(CLK_FREQ + REF_FREQ);
+
+    logic [ACC_WIDTH-1:0] ref_acc;
+    logic                 ref_tick;
+
+    always_ff @(posedge i_clk) begin
+        if (i_rst) begin
+            ref_acc  <= '0;
+            ref_tick <= 1'b0;
+        end else begin
+            int tmp = ref_acc + REF_FREQ;
+            if (tmp >= CLK_FREQ) begin
+                ref_acc  <= tmp - CLK_FREQ;
+                ref_tick <= 1'b1;
+            end else begin
+                ref_acc <= tmp;
+                ref_tick <= 1'b0;
+            end
+        end
+    end
+
+    // ══════════════════════════════════════════════════════════
+    // Baud rate generator — Stage 2: software-programmed divisor
+    // ══════════════════════════════════════════════════════════
+    // Standard NS16450: divide REF_FREQ by {DLM, DLL} to get the
+    // 16x baud clock.  baud = REF_FREQ / (16 * divisor).
     // Divisor of 0 is treated as 1 to avoid divide-by-zero lockup.
     logic [15:0] divisor;
     assign divisor = ({dlm, dll} == 16'd0) ? 16'd1 : {dlm, dll};
@@ -85,11 +135,15 @@ module uart
         if (i_rst) begin
             baud_cnt     <= 16'd0;
             baud16x_tick <= 1'b0;
-        end else if (baud_cnt >= divisor - 16'd1) begin
-            baud_cnt     <= 16'd0;
-            baud16x_tick <= 1'b1;
+        end else if (ref_tick) begin
+            if (baud_cnt >= divisor - 16'd1) begin
+                baud_cnt     <= 16'd0;
+                baud16x_tick <= 1'b1;
+            end else begin
+                baud_cnt     <= baud_cnt + 16'd1;
+                baud16x_tick <= 1'b0;
+            end
         end else begin
-            baud_cnt     <= baud_cnt + 16'd1;
             baud16x_tick <= 1'b0;
         end
     end

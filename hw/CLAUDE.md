@@ -30,7 +30,7 @@ This file provides detailed hardware context for work under `hw/`. The root `CLA
 | Autoconfig wrapper | `rtl/soc/autoconfig_dev.sv` | 28/28 | Config space regs, cfg daisy chain with CFG\_EN toggle, dynamic base address decode. |
 | Sim UART | `rtl/sim/sim_uart.sv` | via machine\_sim | 16450-compatible UART (MMIO at 0xFF00\_0000). NetBSD com(4) compatible. |
 | Sim SPI | `rtl/sim/sim_spi.sv` | via machine\_sim | SPI master v2 (CLASS\_SD). 7 regs: CAP, STATUS, CONTROL, DATA, XFER\_COUNT, IRQ\_STATUS, IRQ\_ENABLE. Hardware TX/RX FIFO, transfer engine, IRQ. SD emulator via `+sdcard=`. |
-| Real UART | `rtl/io/uart.sv` | via ulx3s\_top | NS16450-compatible UART with real baud rate generator, TX shift register, RX 16x oversampling. CLK\_FREQ/BAUD\_RATE params. |
+| Real UART | `rtl/io/uart.sv` | via ulx3s\_top | NS16450-compatible UART with two-stage baud rate generator: fractional accumulator synthesizes a fixed 1.8432 MHz reference from CLK\_FREQ, then standard divisor stage produces the 16x baud clock. Software sees a canonical 16450 crystal regardless of board clock. CLK\_FREQ/REF\_FREQ params. |
 | SPI FIFO | `rtl/io/spi_fifo.sv` | via spi | Parameterized synchronous FIFO (power-of-2 depth, 8-bit data). Used for SPI TX/RX paths. |
 | Real SPI | `rtl/io/spi.sv` | 54/54 | SPI master v2 with hardware TX/RX FIFO, autonomous transfer engine (stall-on-empty/full), IRQ output. FIFO\_DEPTH, SLOW\_DIV, FAST\_DIV params. See `doc/system/devices/spi.md`. |
 | SDRAM v2 — package | `rtl/io/sdram/sdram_pkg.sv` | — | Command encoding + chip presets (W9825 @ 100 MHz CL2). |

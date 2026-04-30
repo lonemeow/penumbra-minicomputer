@@ -507,8 +507,9 @@ module ulx3s_top (
     always_ff @(posedge clk) uart_sel_r <= uart_sel;
 
     uart #(
-        .CLK_FREQ  (CLK_FREQ),
-        .BAUD_RATE (115_200)
+        .CLK_FREQ  (CLK_FREQ)
+        // REF_FREQ defaults to 1.8432 MHz (16450 standard crystal),
+        // giving 115200 baud at divisor=1 regardless of CLK_FREQ.
     ) u_uart (
         .i_clk   (clk),
         .i_rst   (rst),
