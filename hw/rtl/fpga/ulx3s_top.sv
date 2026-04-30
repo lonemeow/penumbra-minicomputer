@@ -63,6 +63,13 @@ module ulx3s_top (
     // Update this if PLL parameters change.
     localparam int CLK_FREQ = 12_500_000;   // Hz (derived from PLL below)
 
+    // ── SDRAM chip preset (one-line preset swap) ─────────────────
+    // Change this RHS to switch SDRAM variants — e.g., for a board
+    // with IS42S16160G or AS4C16M16SA, drop in that struct here.
+    // The controller, PHY, and pin-width logic all read SDP.FIELD,
+    // so timings and geometry update in lockstep with the change.
+    localparam sdram_params_t SDP = W9825_100;
+
     // ── ESP32 disable ──────────────────────────────────────────
     assign wifi_en = 1'b0;
 
@@ -392,29 +399,29 @@ module ulx3s_top (
         .i_sd_done         (sd_done)
     );
 
-    logic [3:0]                       sdram_phy_cmd;
-    logic                             sdram_phy_cke;
-    logic [W9825_100_ROW_BITS-1:0]    sdram_phy_a;
-    logic [W9825_100_BA_BITS-1:0]     sdram_phy_ba;
-    logic [W9825_100_DQ_BITS/8-1:0]   sdram_phy_dqm;
-    logic [W9825_100_DQ_BITS-1:0]     sdram_phy_dq_out;
-    logic                             sdram_phy_dq_oe;
-    logic [W9825_100_DQ_BITS-1:0]     sdram_phy_dq_in;
-    logic                             sdram_init_done;
+    logic [3:0]                  sdram_phy_cmd;
+    logic                        sdram_phy_cke;
+    logic [SDP.ROW_BITS-1:0]     sdram_phy_a;
+    logic [SDP.BA_BITS-1:0]      sdram_phy_ba;
+    logic [SDP.DQ_BITS/8-1:0]    sdram_phy_dqm;
+    logic [SDP.DQ_BITS-1:0]      sdram_phy_dq_out;
+    logic                        sdram_phy_dq_oe;
+    logic [SDP.DQ_BITS-1:0]      sdram_phy_dq_in;
+    logic                        sdram_init_done;
 
     sdram_ctrl #(
-        .ROW_BITS        (W9825_100_ROW_BITS),
-        .COL_BITS        (W9825_100_COL_BITS),
-        .BA_BITS         (W9825_100_BA_BITS),
-        .DQ_BITS         (W9825_100_DQ_BITS),
-        .T_RCD           (W9825_100_T_RCD),
-        .T_RP            (W9825_100_T_RP),
-        .T_RFC           (W9825_100_T_RFC),
-        .T_WR            (W9825_100_T_WR),
-        .T_MRD           (W9825_100_T_MRD),
-        .T_REFI          (W9825_100_T_REFI),
-        .T_POWERUP       (W9825_100_T_POWERUP),
-        .CAS_LATENCY     (W9825_100_CAS_LATENCY),
+        .ROW_BITS        (SDP.ROW_BITS),
+        .COL_BITS        (SDP.COL_BITS),
+        .BA_BITS         (SDP.BA_BITS),
+        .DQ_BITS         (SDP.DQ_BITS),
+        .T_RCD           (SDP.T_RCD),
+        .T_RP            (SDP.T_RP),
+        .T_RFC           (SDP.T_RFC),
+        .T_WR            (SDP.T_WR),
+        .T_MRD           (SDP.T_MRD),
+        .T_REFI          (SDP.T_REFI),
+        .T_POWERUP       (SDP.T_POWERUP),
+        .CAS_LATENCY     (SDP.CAS_LATENCY),
         .PHY_OUT_LATENCY (1),
         .PHY_IN_LATENCY  (1)
     ) u_sdram_ctrl (
@@ -442,9 +449,9 @@ module ulx3s_top (
     );
 
     sdram_phy_ecp5 #(
-        .ROW_BITS (W9825_100_ROW_BITS),
-        .BA_BITS  (W9825_100_BA_BITS),
-        .DQ_BITS  (W9825_100_DQ_BITS)
+        .ROW_BITS (SDP.ROW_BITS),
+        .BA_BITS  (SDP.BA_BITS),
+        .DQ_BITS  (SDP.DQ_BITS)
     ) u_sdram_phy (
         .i_clk        (clk_sdram),       // CLKOS — 100 MHz, 0°, IOB flops
         .i_clk_sdram  (clk_sdram_pin),   // CLKOS2 — 100 MHz, 270°, ODDR

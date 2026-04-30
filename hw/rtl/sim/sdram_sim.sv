@@ -31,6 +31,11 @@ module sdram_sim
     output logic        o_busy
 );
 
+    // Chip preset.  Sim sites override only T_POWERUP at the
+    // controller instantiation so unit tests don't wait the full
+    // 200 µs JEDEC power-up sequence.
+    localparam sdram_params_t SDP = W9825_100;
+
     // ── Adapter ↔ CDC (sys side) ───────────────────────────
     logic        sys_req_valid, sys_req_we, sys_req_ready;
     logic [31:0] sys_req_addr, sys_req_wdata;
@@ -97,29 +102,29 @@ module sdram_sim
     );
 
     // ── Controller ↔ PHY ───────────────────────────────────
-    logic [3:0]                       ctrl_cmd;
-    logic                             ctrl_cke;
-    logic [W9825_100_ROW_BITS-1:0]    ctrl_a;
-    logic [W9825_100_BA_BITS-1:0]     ctrl_ba;
-    logic [W9825_100_DQ_BITS/8-1:0]   ctrl_dqm;
-    logic [W9825_100_DQ_BITS-1:0]     ctrl_dq_out;
-    logic                             ctrl_dq_oe;
-    logic [W9825_100_DQ_BITS-1:0]     ctrl_dq_in;
-    logic                             init_done_unused;
+    logic [3:0]                  ctrl_cmd;
+    logic                        ctrl_cke;
+    logic [SDP.ROW_BITS-1:0]     ctrl_a;
+    logic [SDP.BA_BITS-1:0]      ctrl_ba;
+    logic [SDP.DQ_BITS/8-1:0]    ctrl_dqm;
+    logic [SDP.DQ_BITS-1:0]      ctrl_dq_out;
+    logic                        ctrl_dq_oe;
+    logic [SDP.DQ_BITS-1:0]      ctrl_dq_in;
+    logic                        init_done_unused;
 
     sdram_ctrl #(
-        .ROW_BITS    (W9825_100_ROW_BITS),
-        .COL_BITS    (W9825_100_COL_BITS),
-        .BA_BITS     (W9825_100_BA_BITS),
-        .DQ_BITS     (W9825_100_DQ_BITS),
-        .T_RCD       (W9825_100_T_RCD),
-        .T_RP        (W9825_100_T_RP),
-        .T_RFC       (W9825_100_T_RFC),
-        .T_WR        (W9825_100_T_WR),
-        .T_MRD       (W9825_100_T_MRD),
-        .T_REFI      (W9825_100_T_REFI),
-        .T_POWERUP   (W9825_SIM_T_POWERUP),
-        .CAS_LATENCY (W9825_100_CAS_LATENCY)
+        .ROW_BITS    (SDP.ROW_BITS),
+        .COL_BITS    (SDP.COL_BITS),
+        .BA_BITS     (SDP.BA_BITS),
+        .DQ_BITS     (SDP.DQ_BITS),
+        .T_RCD       (SDP.T_RCD),
+        .T_RP        (SDP.T_RP),
+        .T_RFC       (SDP.T_RFC),
+        .T_WR        (SDP.T_WR),
+        .T_MRD       (SDP.T_MRD),
+        .T_REFI      (SDP.T_REFI),
+        .T_POWERUP   (W9825_SIM_T_POWERUP),    // sim override
+        .CAS_LATENCY (SDP.CAS_LATENCY)
     ) u_ctrl (
         .i_clk           (i_clk),
         .i_rst           (i_rst),
@@ -145,16 +150,16 @@ module sdram_sim
     );
 
     // ── PHY → chip pin signals ────────────────────────────
-    logic                              sd_clk, sd_cke, sd_csn, sd_rasn, sd_casn, sd_wen;
-    logic [W9825_100_ROW_BITS-1:0]     sd_a;
-    logic [W9825_100_BA_BITS-1:0]      sd_ba;
-    logic [W9825_100_DQ_BITS/8-1:0]    sd_dqm;
-    wire  [W9825_100_DQ_BITS-1:0]      sd_d;
+    logic                        sd_clk, sd_cke, sd_csn, sd_rasn, sd_casn, sd_wen;
+    logic [SDP.ROW_BITS-1:0]     sd_a;
+    logic [SDP.BA_BITS-1:0]      sd_ba;
+    logic [SDP.DQ_BITS/8-1:0]    sd_dqm;
+    wire  [SDP.DQ_BITS-1:0]      sd_d;
 
     sdram_phy_sim #(
-        .ROW_BITS (W9825_100_ROW_BITS),
-        .BA_BITS  (W9825_100_BA_BITS),
-        .DQ_BITS  (W9825_100_DQ_BITS)
+        .ROW_BITS (SDP.ROW_BITS),
+        .BA_BITS  (SDP.BA_BITS),
+        .DQ_BITS  (SDP.DQ_BITS)
     ) u_phy (
         .i_clk        (i_clk),
         .i_phy_cmd    (ctrl_cmd),
@@ -178,10 +183,10 @@ module sdram_sim
     );
 
     sdram_model #(
-        .ROW_BITS (W9825_100_ROW_BITS),
-        .COL_BITS (W9825_100_COL_BITS),
-        .BA_BITS  (W9825_100_BA_BITS),
-        .DQ_BITS  (W9825_100_DQ_BITS)
+        .ROW_BITS (SDP.ROW_BITS),
+        .COL_BITS (SDP.COL_BITS),
+        .BA_BITS  (SDP.BA_BITS),
+        .DQ_BITS  (SDP.DQ_BITS)
     ) u_model (
         .i_clk  (sd_clk),
         .i_cke  (sd_cke),
