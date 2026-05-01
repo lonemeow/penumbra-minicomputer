@@ -3,9 +3,10 @@
 /*
  * Penumbra bus_space implementation.
  *
- * All I/O is memory-mapped.  bus_space_map() allocates kernel VA
- * via UVM and wires it with pmap_kenter_pa (uncached).
- * Read/write ops are simple volatile pointer dereferences.
+ * Single-value read/write/barrier and write_multi_1 are static inlines
+ * in <machine/bus_funcs.h> — see the rationale there.  This file holds
+ * the out-of-line ops only: map/unmap (which touch UVM + pmap) and the
+ * bus_dma panic stubs (Penumbra has no DMA engine).
  */
 
 #include <sys/cdefs.h>
@@ -57,69 +58,6 @@ bus_space_unmap(bus_space_tag_t t, bus_space_handle_t bsh, bus_size_t size)
 	pmap_kremove(va, sz);
 	pmap_update(pmap_kernel());
 	uvm_km_free(kernel_map, va, sz, UVM_KMF_VAONLY);
-}
-
-uint8_t
-bus_space_read_1(bus_space_tag_t t, bus_space_handle_t h, bus_size_t o)
-{
-
-	return *(volatile uint8_t *)(h + o);
-}
-
-uint16_t
-bus_space_read_2(bus_space_tag_t t, bus_space_handle_t h, bus_size_t o)
-{
-
-	return *(volatile uint16_t *)(h + o);
-}
-
-uint32_t
-bus_space_read_4(bus_space_tag_t t, bus_space_handle_t h, bus_size_t o)
-{
-
-	return *(volatile uint32_t *)(h + o);
-}
-
-void
-bus_space_write_1(bus_space_tag_t t, bus_space_handle_t h, bus_size_t o,
-    uint8_t v)
-{
-
-	*(volatile uint8_t *)(h + o) = v;
-}
-
-void
-bus_space_write_2(bus_space_tag_t t, bus_space_handle_t h, bus_size_t o,
-    uint16_t v)
-{
-
-	*(volatile uint16_t *)(h + o) = v;
-}
-
-void
-bus_space_write_4(bus_space_tag_t t, bus_space_handle_t h, bus_size_t o,
-    uint32_t v)
-{
-
-	*(volatile uint32_t *)(h + o) = v;
-}
-
-void
-bus_space_write_multi_1(bus_space_tag_t t, bus_space_handle_t h,
-    bus_size_t o, const uint8_t *a, bus_size_t c)
-{
-	volatile uint8_t *p = (volatile uint8_t *)(h + o);
-
-	while (c-- > 0)
-		*p = *a++;
-}
-
-void
-bus_space_barrier(bus_space_tag_t t, bus_space_handle_t h,
-    bus_size_t o, bus_size_t l, int flags)
-{
-
-	/* No-op: uniprocessor, memory-mapped, no write buffer */
 }
 
 /*

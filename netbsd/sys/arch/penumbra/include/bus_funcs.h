@@ -4,34 +4,79 @@
 #define _PENUMBRA_BUS_FUNCS_H_
 
 /*
- * Machine-dependent bus_space function prototypes.
- * Penumbra uses memory-mapped I/O — bus_space ops are
- * simple volatile pointer reads/writes.
+ * Machine-dependent bus_space functions.
+ *
+ * Penumbra has a single MMIO bus and a trivial integer tag, so the
+ * single-value read/write/barrier ops collapse to volatile pointer
+ * dereferences with no per-call overhead.  They are defined here as
+ * function-like macros so every caller substitutes the body inline
+ * (one load/store instead of a function call).
+ *
+ * MI <sys/bus_proto.h> declares external prototypes for these names;
+ * <sys/bus.h> includes that header *before* this one, so the
+ * prototypes are parsed normally and our macros take effect at every
+ * subsequent call site.  The orphan prototypes never resolve to a
+ * symbol because every textual call gets macro-expanded — no linker
+ * reference is ever emitted.
+ *
+ * Map/unmap stay out-of-line — they touch UVM and pmap and aren't
+ * on any hot path.  bus_dma_* are declared as panic stubs so MI
+ * drivers behind SMC_CAPS_DMA-gated paths still link.
  */
 
 #ifdef _KERNEL
 
-/* Map/unmap */
+/* Map/unmap (out-of-line, attach-time only) */
 int	bus_space_map(bus_space_tag_t, bus_addr_t, bus_size_t,
 	    int, bus_space_handle_t *);
 void	bus_space_unmap(bus_space_tag_t, bus_space_handle_t, bus_size_t);
 
-/* Read/write single values */
-uint8_t	 bus_space_read_1(bus_space_tag_t, bus_space_handle_t, bus_size_t);
-uint16_t bus_space_read_2(bus_space_tag_t, bus_space_handle_t, bus_size_t);
-uint32_t bus_space_read_4(bus_space_tag_t, bus_space_handle_t, bus_size_t);
+/*
+ * Read/write single values — volatile pointer dereferences.
+ *
+ * Each macro argument is referenced exactly once in its expansion so
+ * caller-side side effects (e.g. h++ or func()) evaluate as expected.
+ * The tag argument is unreferenced — Penumbra's bus_space_tag_t
+ * carries no information.
+ */
+#define	bus_space_read_1(t, h, o)	(*(volatile uint8_t  *)((h) + (o)))
+#define	bus_space_read_2(t, h, o)	(*(volatile uint16_t *)((h) + (o)))
+#define	bus_space_read_4(t, h, o)	(*(volatile uint32_t *)((h) + (o)))
 
-void	bus_space_write_1(bus_space_tag_t, bus_space_handle_t, bus_size_t, uint8_t);
-void	bus_space_write_2(bus_space_tag_t, bus_space_handle_t, bus_size_t, uint16_t);
-void	bus_space_write_4(bus_space_tag_t, bus_space_handle_t, bus_size_t, uint32_t);
+#define	bus_space_write_1(t, h, o, v)	\
+	(*(volatile uint8_t  *)((h) + (o)) = (v))
+#define	bus_space_write_2(t, h, o, v)	\
+	(*(volatile uint16_t *)((h) + (o)) = (v))
+#define	bus_space_write_4(t, h, o, v)	\
+	(*(volatile uint32_t *)((h) + (o)) = (v))
 
-/* Multi write (used by MI com driver for FIFO drain) */
-void	bus_space_write_multi_1(bus_space_tag_t, bus_space_handle_t,
-	    bus_size_t, const uint8_t *, bus_size_t);
+/*
+ * write_multi: same register, many bytes.  Used by the MI com driver
+ * for FIFO drains.  A static inline (under a private name) gives the
+ * compiler the loop body to fold into the caller's register
+ * allocation; the public macro alias resolves before the
+ * <sys/bus_proto.h> prototype is reached at any call site.
+ */
+static inline void
+__penumbra_bus_write_multi_1(bus_space_tag_t t __unused, bus_space_handle_t h,
+    bus_size_t o, const uint8_t *a, bus_size_t c)
+{
+	volatile uint8_t *p = (volatile uint8_t *)(h + o);
 
-/* Barrier (no-op on uniprocessor MMIO) */
-void	bus_space_barrier(bus_space_tag_t, bus_space_handle_t,
-	    bus_size_t, bus_size_t, int);
+	while (c-- > 0)
+		*p = *a++;
+}
+#define	bus_space_write_multi_1(t, h, o, a, c)	\
+	__penumbra_bus_write_multi_1((t), (h), (o), (a), (c))
+
+/*
+ * Barrier: no-op.  Single CPU, no write buffer between core and the
+ * memory bus mux, MMIO pages are uncached, and `volatile` already
+ * forbids the compiler from reordering across the access.  Cast args
+ * to void so any caller-side expressions still type-check.
+ */
+#define	bus_space_barrier(t, h, o, l, f)	\
+	((void)(t), (void)(h), (void)(o), (void)(l), (void)(f))
 
 /* bus_space_is_equal — tag comparison (tags are trivial integers) */
 #define	bus_space_is_equal(t1, t2)	((t1) == (t2))
