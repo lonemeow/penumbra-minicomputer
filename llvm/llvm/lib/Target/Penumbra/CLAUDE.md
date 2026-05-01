@@ -460,6 +460,11 @@ Fixed locally — needed for NetBSD kernel option tracking symbols
     don't lower directly at s64),
   G_UADDO/G_USUBO/G_UADDE/G_USUBE/G_SADDO/G_SSUBO/G_SADDE/G_SSUBE
   (s64 narrowed to s32),
+  G_UADDSAT/G_USUBSAT/G_SADDSAT/G_SSUBSAT (sub-word widened to s32;
+    s64 lowered at native width into G_UMIN/G_SUB or
+    G_USUBO+G_SELECT, then narrowed iteratively by the legalizer —
+    `narrowScalarIf+changeTo` only relabels the type and does not
+    actually split, so `lowerFor({s32, s64})` is the working idiom),
   G_SMIN/G_SMAX/G_UMIN/G_UMAX (any width, lowered to icmp+select),
   G_FNEG/G_FABS/G_FCOPYSIGN (integer bit manipulation, no libcall),
   G_IS_FPCLASS (exponent/mantissa bit inspection).

@@ -66,12 +66,14 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   // add+compare+select expansion (LegalizerHelper picks between the
   // min/max and AddO-based forms depending on legality of the helpers —
   // our G_UADDO/G_USUBO are already lowered, which is what it uses).
-  // Sub-word widened to s32; s64 narrowed to s32 pairs.
+  // Sub-word widened to s32.  s64 is lowered at native width into
+  // G_UMIN/G_SUB (or G_USUBO+G_SELECT); the legalizer's iterative
+  // pass then narrows those to s32 pairs (G_SUB via the G_USUBE
+  // carry chain, G_UMIN via lower → ICMP+SELECT → narrow).
   getActionDefinitionsBuilder({G_UADDSAT, G_USUBSAT, G_SADDSAT, G_SSUBSAT})
-      .lowerFor({s32})
+      .lowerFor({s32, s64})
       .widenScalarToNextPow2(0, 32)
-      .narrowScalarIf(typeIs(0, s64), changeTo(0, s32))
-      .clampScalar(0, s32, s32);
+      .clampScalar(0, s32, s64);
 
   getActionDefinitionsBuilder({G_UMULH, G_SMULH})
       .lowerFor({s32})
