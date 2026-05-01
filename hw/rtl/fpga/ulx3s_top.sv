@@ -209,27 +209,9 @@ module ulx3s_top (
         else     hb_cnt <= hb_cnt + 1;
     end
 
-    logic halted;
-
-    assign led[0] = hb_cnt[24];   // ~0.75 Hz heartbeat
-    assign led[1] = !halted;      // ON while CPU is running
-    assign led[2] = pll_lock;     // DEBUG: PLL locked
-    assign led[3] = rst;          // DEBUG: reset active
-    // led[4] and led[5] assigned below after UART instantiation
-    // led[6] and led[7] assigned below after SDRAM instantiation
-
-    // Debug: toggle on THR write (proves CPU writes to UART)
-    logic dbg_thr_toggle;
-    logic dbg_thr_write;
-    always_ff @(posedge clk) begin
-        if (rst)
-            dbg_thr_toggle <= 1'b0;
-        else if (dbg_thr_write)
-            dbg_thr_toggle <= ~dbg_thr_toggle;
-    end
-    // thr_write = bus write to UART register 0 with DLAB=0
-    // We detect it from the bus signals directly
-    assign dbg_thr_write = mem_we & uart_sel;
+    assign led[0]   = hb_cnt[24]; // ~0.75 Hz heartbeat
+    assign led[1]   = pll_lock;   // PLL locked
+    assign led[7:2] = '0;         // unused
 
     // ══════════════════════════════════════════════════════════
     // CPU ↔ memory bus
@@ -299,7 +281,7 @@ module ulx3s_top (
         .i_irq          (uart_irq | spi_irq),
 
         .o_pc           (),
-        .o_halted       (halted),
+        .o_halted       (),
         .i_dbg_reg_addr (4'd0),
         .o_dbg_reg_data (),
 
@@ -407,7 +389,6 @@ module ulx3s_top (
     logic [SDP.DQ_BITS-1:0]      sdram_phy_dq_out;
     logic                        sdram_phy_dq_oe;
     logic [SDP.DQ_BITS-1:0]      sdram_phy_dq_in;
-    logic                        sdram_init_done;
 
     sdram_ctrl #(
         .ROW_BITS        (SDP.ROW_BITS),
@@ -445,7 +426,7 @@ module ulx3s_top (
         .o_phy_dq_out    (sdram_phy_dq_out),
         .o_phy_dq_oe     (sdram_phy_dq_oe),
         .i_phy_dq_in     (sdram_phy_dq_in),
-        .o_dbg_init_done (sdram_init_done)
+        .o_dbg_init_done ()
     );
 
     sdram_phy_ecp5 #(
@@ -475,9 +456,6 @@ module ulx3s_top (
         .o_sdram_dqm  (sdram_dqm),
         .io_sdram_d   (sdram_d)
     );
-
-    assign led[6] = sdram_init_done;
-    assign led[7] = ram_busy_raw;
 
     // ── Boot ROM ────────────────────────────────────────────
     logic        rom_sel, rom_sel_r;
@@ -523,9 +501,6 @@ module ulx3s_top (
         .i_rx    (ftdi_txd),
         .o_irq   (uart_irq)
     );
-
-    assign led[4] = mem_re;           // any bus read?
-    assign led[5] = mem_we;           // any bus write?
 
     // ══════════════════════════════════════════════════════════
     // Autoconfig device chain
