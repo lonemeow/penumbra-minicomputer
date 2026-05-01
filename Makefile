@@ -422,13 +422,23 @@ $(BUILD_DIR)/$(TOP).json: $(FPGA_SRC) $(PHASE_STAMP)
 
 $(BUILD_DIR)/$(TOP).config: $(BUILD_DIR)/$(TOP).json $(LPF)
 	$(FPGA_TOOLS)/nextpnr-ecp5 --85k --package CABGA381 --speed 6 \
-		--timing-allow-fail --lpf $(LPF) --json $< --textcfg $@
+		--timing-allow-fail --lpf $(LPF) --json $< --textcfg $@ \
+		--report $(BUILD_DIR)/$(TOP)_timing.json --detailed-timing-report
 
 $(BUILD_DIR)/$(TOP).bit: $(BUILD_DIR)/$(TOP).config
 	$(FPGA_TOOLS)/ecppack $< $@
 
 flash: $(BUILD_DIR)/$(TOP).bit
 	$(FPGA_TOOLS)/fujprog $<
+
+# Pretty-print fmax + top critical paths from the nextpnr JSON report
+# produced by the .config rule.  Doesn't trigger a build — operates
+# on whatever the last FPGA build left in $(BUILD_DIR).  Override the
+# path count via TOP_N=10.
+.PHONY: timing
+TOP_N ?= 5
+timing:
+	@hw/tools/timing-report.sh $(BUILD_DIR)/$(TOP)_timing.json $(TOP_N)
 
 # ── Cleanup ────────────────────────────────────────────────────
 .PHONY: clean

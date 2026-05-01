@@ -134,6 +134,8 @@ usable as normal commands:
   `make fpga TOP=ulx3s_top` — full build (sv2v → fix → yosys → nextpnr → ecppack)
   `make flash TOP=ulx3s_top` — build + flash to ULX3S via USB
   `make fpga-lint TOP=ulx3s_top` — Verilator lint check
+  `make timing TOP=ulx3s_top [TOP_N=10]` — pretty-print fmax + top critical
+  paths from the last `make fpga` run (reads `build/<top>_timing.json`)
 - **ULX3S system:** `hw/rtl/fpga/ulx3s_top.sv` — board top-level,
   12.5 MHz PLL (25 MHz crystal), 32 MB SDRAM (W9825G6KH or compatible),
   real UART (TX+RX), real SPI with SD card (autoconfig), boot ROM,
