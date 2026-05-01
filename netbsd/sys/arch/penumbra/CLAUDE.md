@@ -148,7 +148,7 @@ Headers fall into three categories:
 
 | File | Purpose |
 |------|---------|
-| `locore.S` | Entry point, BSS zero (phys mode), bootinfo copy, kernel page table build (L1+L2 in BSS), real TLB miss handler, per-vector trap entry stubs + common trapframe save/restore (with double-fault detection), MMU enable, TLB invalidation, scratch window, cpu_switchto, lwp_trampoline, setjmp/longjmp |
+| `locore.S` | Entry point, BSS zero (phys mode), bootinfo copy, kernel page table build (L1+L2 in BSS), real TLB miss handler, per-vector trap entry stubs + common trapframe save/restore (with double-fault detection), MMU enable, I/D cache enable, TLB invalidation, scratch window, cpu_switchto, lwp_trampoline, setjmp/longjmp |
 | `startup.c` | Early boot: `penumbra_init()` (phase 1 on boot stack — returns new SP), `penumbra_main()` (phase 2 on lwp0 stack — calls main()), bootinfo parsing, early UART console via scratch window, `consinit()`, `penumbra_physmem_init()`, UART remap via `pmap_map_device()` |
 | `machdep.c` | Kernel runtime: `cpu_startup()`, `cpu_reboot()`, `cpu_lwp_fork()` (LWP context setup), `setregs()`, `lwp_trampoline` (extern), remaining LWP/process/signal stubs, `kcopy`, `cpu_idle()` (spl0 for timer interrupts), timer/delay |
 | `mulsi3.c` | Compiler runtime: `__mulsi3` (software 32-bit multiply for LLVM libcalls) |
@@ -188,7 +188,9 @@ Headers fall into three categories:
 - [x] **locore.S early boot** — PIC bias computation, BSS zero
   and bootinfo copy in physical mode, kernel page table build
   (L1+L2 pre-allocated in BSS), real page-table-walking TLB miss
-  handler installed and pinned before MMU enable, virtual jump.
+  handler installed and pinned before MMU enable, I/D caches
+  enabled immediately after MMU bring-up (the master CACHE_CTRL
+  bit, separate from per-page PTE.C), virtual jump.
   No bootstrap handler — real handler active from first instruction.
 - [x] **Real pmap / TLB handler** — 2-level page table (L1→L2)
   walked by TLB miss handler via pinned slots (L1 in slot 1,

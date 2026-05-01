@@ -493,6 +493,19 @@ _start_bias:
 	 * Do NOT use the stack until SP is set to virtual.
 	 */
 
+	/*
+	 * Enable both caches.  PTE_KERNEL pages declare cacheability via
+	 * PTE.C, but cache_active = CACHE_CTRL.ENABLE & PTE.C — without
+	 * the master enable every fetch and load/store passes through to
+	 * SDRAM at full CDC + 100 MHz CL2 latency.  Cache valid bits are
+	 * cleared at reset and the caches were inert until now, so the
+	 * earlier CACHE_INVAL writes (and these enables) take effect on
+	 * a known-clean state — no extra invalidate needed here.
+	 */
+	lli	r1, #CACHE_CTRL_ENABLE
+	wrsys	r1, #SYSDEV_DCACHE, #CACHE_CTRL
+	wrsys	r1, #SYSDEV_ICACHE, #CACHE_CTRL
+
 /* ═══════════════════════════════════════════════════════════════
  * Step 12: Jump to kernel virtual addresses
  * ═══════════════════════════════════════════════════════════════ */
