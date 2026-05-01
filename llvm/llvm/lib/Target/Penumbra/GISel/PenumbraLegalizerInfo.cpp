@@ -242,6 +242,14 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
       .clampScalar(0, s32, s64)
       .scalarize(0);
 
+  // Fused divide+remainder: the pre-legalizer combiner at -O1+ fuses
+  // adjacent G_SDIV/G_SREM (or G_UDIV/G_UREM) on shared operands into
+  // a single G_SDIVREM/G_UDIVREM.  We have no hardware divrem, so
+  // .lower() splits them back into separate G_SDIV + G_SREM, which
+  // then take their existing libcall paths above.
+  getActionDefinitionsBuilder({G_SDIVREM, G_UDIVREM})
+      .lower();
+
   // Multiplication: custom-lower s32 power-of-2 and power-of-2 ± 1 constants
   // to shifts (+ add/sub), fall back to libcall otherwise.
   // s64 goes straight to libcall (__muldi3).

@@ -452,6 +452,10 @@ Fixed locally — needed for NetBSD kernel option tracking symbols
 - **MUL/DIV/REM:** Custom s32 (strength-reduce power-of-2 constants
   to shifts/logic, libcall fallback).
   G_SDIV/G_SREM libcall s32+s64. s64 all via libcalls.
+  G_SDIVREM/G_UDIVREM (the fused form the pre-legalizer combiner
+  emits at -O1+ when adjacent `a/b` and `a%b` share operands)
+  lower to separate G_SDIV+G_SREM / G_UDIV+G_UREM, then take the
+  existing libcall paths.
 - **Lowered:** G_ABS, G_CTTZ/G_CTLZ/G_CTPOP
   (and \_ZERO\_UNDEF variants) to shift/logic,
   G_FSHL/G_FSHR (s32+s64),
