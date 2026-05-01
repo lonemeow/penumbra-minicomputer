@@ -29,7 +29,7 @@ S=		${.CURDIR}/../../../..
 
 CPPFLAGS+=	-nostdinc -D_STANDALONE -D__NetBSD__ -DHEAP_VARIABLE \
 		-DLIBSA_SLOW_TWIDDLE -I${S} -I${.CURDIR}
-CFLAGS+=	-O0 -ffreestanding -fPIE
+CFLAGS+=	-O2 -ffreestanding -fPIE
 CWARNFLAGS+=	-Wno-main
 
 STRIPFLAG=
