@@ -46,30 +46,40 @@ static void wait_init(Vsdram_test* d) {
 }
 
 // Issue one transaction and (for reads) capture the response.
-// Returns rdata for reads; ignored for writes.
+// Returns rdata for reads; ignored for writes.  If `cycles_out` is
+// non-null, fills it with the total cycle count from request assertion
+// to o_rsp_valid (reads) or to req_ready accept (writes) — the user-
+// visible latency.  Useful for hit-vs-miss timing comparisons.
 static uint32_t do_req(Vsdram_test* d, uint32_t addr, bool we,
-                       uint32_t wdata, uint8_t byte_en, const char* label) {
+                       uint32_t wdata, uint8_t byte_en, const char* label,
+                       int* cycles_out = nullptr) {
     d->i_req_valid   = 1;
     d->i_req_we      = we ? 1 : 0;
     d->i_req_addr    = addr;
     d->i_req_wdata   = wdata;
     d->i_req_byte_en = byte_en;
 
+    int total = 0;
+
     // Wait for o_req_ready to pulse (controller accepted it).
     int cyc = 0;
     while (!d->o_req_ready) {
         tick(d);
+        total++;
         if (++cyc > 200) {
             printf("  FAIL: %s addr=0x%08X — no req_ready within 200 cyc\n", label, addr);
             errors++;
             d->i_req_valid = 0;
+            if (cycles_out) *cycles_out = total;
             return 0;
         }
     }
     tick(d);                      // consume the accept cycle
+    total++;
     d->i_req_valid = 0;
 
     if (we) {
+        if (cycles_out) *cycles_out = total;
         // Wait for the FSM to finish RECOVER and return to IDLE.
         for (int i = 0; i < 30; i++) tick(d);
         return 0;
@@ -79,13 +89,16 @@ static uint32_t do_req(Vsdram_test* d, uint32_t addr, bool we,
     cyc = 0;
     while (!d->o_rsp_valid) {
         tick(d);
+        total++;
         if (++cyc > 200) {
             printf("  FAIL: %s addr=0x%08X — no rsp_valid within 200 cyc\n", label, addr);
             errors++;
+            if (cycles_out) *cycles_out = total;
             return 0;
         }
     }
     uint32_t rd = d->o_rsp_data;
+    if (cycles_out) *cycles_out = total;
     tick(d);                      // let recovery proceed
     return rd;
 }
@@ -162,6 +175,39 @@ int main(int argc, char** argv) {
     check(do_req(d, 0x00001000, false, 0, 0xF, "RD  0x1000 after refresh"), 0x55AA55AA, "post-refresh 0x1000");
     check(do_req(d, 0x00002000, false, 0, 0xF, "RD  0x2000 after refresh"), 0xC0DE0000, "post-refresh 0x2000");
     check(do_req(d, 0x00003000, false, 0, 0xF, "RD  0x3000 after refresh"), 0xCAFE1111, "post-refresh 0x3000");
+
+    // ── Test 6: open-row hit timing ──────────────────────────
+    // After a refresh closes any open row, two reads to addresses
+    // in the same bank+row should show the second one (open-row
+    // hit) completing in measurably fewer cycles than the first
+    // (cold ACTIVATE path).  0x6000 and 0x6004 share row+bank
+    // because they differ only in the column field of the address.
+    do_req(d, 0x00006000, true, 0xC0FFEE01, 0xF, "WR  0x6000 prep");
+    do_req(d, 0x00006004, true, 0xC0FFEE02, 0xF, "WR  0x6004 prep");
+    // Idle long enough to force a refresh — closes any open row,
+    // so the next read takes the cold path.
+    for (int i = 0; i < 1500; i++) tick(d);
+    {
+        int c_cold = 0, c_hit = 0;
+        check(do_req(d, 0x00006000, false, 0, 0xF, "RD  0x6000 cold", &c_cold), 0xC0FFEE01, "open-row cold data");
+        check(do_req(d, 0x00006004, false, 0, 0xF, "RD  0x6004 hit",  &c_hit),  0xC0FFEE02, "open-row hit  data");
+        if (c_hit < c_cold) {
+            printf("  PASS: open-row hit faster than cold (%d < %d cycles)\n", c_hit, c_cold);
+        } else {
+            printf("  FAIL: open-row hit not faster (%d >= %d cycles)\n", c_hit, c_cold);
+            errors++;
+        }
+    }
+
+    // ── Test 7: same-bank, different-row (conflict) ──────────
+    // Address 0x6400 differs from 0x6000 only in the row field
+    // (bits 22:10), so they share the bank but require an explicit
+    // PRECHARGE between accesses.  Verify both reads return correct
+    // data — proves the conflict-precharge path is wired correctly.
+    do_req(d, 0x00006400, true, 0x12345678, 0xF, "WR  0x6400 (different row)");
+    check(do_req(d, 0x00006000, false, 0, 0xF, "RD  0x6000 (back to row A)"), 0xC0FFEE01, "row-A after conflict");
+    check(do_req(d, 0x00006400, false, 0, 0xF, "RD  0x6400 (row B again)"),   0x12345678, "row-B after conflict");
+    check(do_req(d, 0x00006004, false, 0, 0xF, "RD  0x6004 (row A again)"),   0xC0FFEE02, "row-A revisit");
 
     // ── Protocol violations from the model ───────────────────
     if (d->o_protocol_errors != 0) {

@@ -154,30 +154,89 @@ One word in, one word out. No `req_len`. No `rsp_last`.
 ### FSM states
 
 ```
-S_INIT_WAIT      Power-up delay (T_POWERUP cycles, 200 µs)
-S_INIT_PRE       PRECHARGE ALL
-S_INIT_REF1      First AUTO REFRESH
-S_INIT_REF2      Second AUTO REFRESH
-S_INIT_MRS       MODE REGISTER SET
-S_IDLE           Ready for requests
-S_REFRESH        Periodic AUTO REFRESH (preempts IDLE)
-S_ACT            ACTIVATE issued, waiting T_RCD
-S_RW             READ/WRITE issued (auto-precharge today)
-S_BURST          Data beats (BL=2)
-S_RECOVER        Wait T_RP / T_WR before next command
+S_INIT_WAIT             Power-up delay (T_POWERUP cycles, 200 µs)
+S_INIT_PRE              PRECHARGE ALL
+S_INIT_REF1             First AUTO REFRESH
+S_INIT_REF2             Second AUTO REFRESH
+S_INIT_MRS              MODE REGISTER SET
+S_IDLE                  Ready for requests
+S_REFRESH               Periodic AUTO REFRESH (preempts IDLE)
+S_ACT                   ACTIVATE issued (or skipped on row hit), waiting T_RCD
+S_RW                    READ/WRITE issued (no auto-precharge — row stays open)
+S_BURST                 Data beats (BL=2)
+S_RECOVER               Wait T_WR after writes (reads return immediately —
+                        row stays open)
+S_PRECHARGE_TO_ACT      PRECHARGE issued for row conflict; will ACTIVATE
+                        the new row when T_RP elapses
+S_PRECHARGE_TO_REFRESH  PRECHARGE issued because refresh is due and a
+                        row is still open; will issue REFRESH when T_RP
+                        elapses
 ```
+
+### Refresh timing guarantee
+
+SDR SDRAM requires every row to be refreshed every `tREF` (typically
+64 ms), which the controller approximates by issuing one AUTO REFRESH
+every `T_REFI` controller cycles (preset at 750 cycles ≈ 7.5 µs at
+100 MHz, slightly faster than the W9825's 7.8125 µs spec, providing
+margin). The FSM must dispatch each AUTO REFRESH within a bounded
+delay of when it becomes due, otherwise the chip's stored data
+decays.
+
+**The mechanism, in three rules:**
+
+1. **The timer never stops** (post-init). `refresh_cnt` increments
+   every cycle in *all* steady-state states — `S_IDLE`, `S_ACT`,
+   `S_RW`, `S_RECOVER`, `S_REFRESH`, `S_PRECHARGE_TO_ACT`,
+   `S_PRECHARGE_TO_REFRESH`. When it reaches `T_REFI` it sets
+   `refresh_pending` and wraps to 0. So even during a long-running
+   request or a refresh itself, the next refresh is being timed.
+2. **Refresh has priority over new requests in `S_IDLE`.** The check
+   for `refresh_pending` is evaluated before `i_req_valid`, so any
+   request arriving while a refresh is due waits one full refresh
+   sequence. Back-to-back masters cannot starve refresh.
+3. **A request in flight always drains to `S_IDLE` in bounded time.**
+   Every non-idle path eventually returns to `S_IDLE` through a
+   single transit through `S_RW` and `S_RECOVER`. There is no loop
+   that re-enters `S_ACT` or `S_RW` without passing through `S_IDLE`,
+   so `refresh_pending` is checked once per request at most.
+
+**Worst-case latency from due-to-issued.** The longest path between
+`refresh_pending` becoming `1` and AUTO REFRESH actually issuing is:
+
+```
+in-flight request drain  ≤ T_RP + T_RCD + max(CL+1, 1+T_WR) cycles
++ S_IDLE check                                          1 cycle
++ S_PRECHARGE_TO_REFRESH (close any open row)           T_RP cycles
+─────────────────────────────────────────────────────────────────
+total                                                  ≈ 2·T_RP + T_RCD + max(CL+1, 1+T_WR) + 1
+```
+
+With the W9825 preset (T_RP=2, T_RCD=2, T_WR=2, CL=2): worst case
+≈ 2·2 + 2 + 3 + 1 = 10 controller cycles ≈ 100 ns at 100 MHz. Out of
+the `tREFI` slack (~7.8 µs between refresh deadlines), that's ~1%.
+Even if a write to one row immediately conflicts with a write to
+another in the same bank (the longest single-request path), and
+refresh becomes due the instant we leave `S_IDLE`, the controller
+issues AUTO REFRESH about two orders of magnitude inside the chip's
+deadline.
+
+**Open-row interaction.** Because `S_RW` no longer auto-precharges,
+a row may still be open when refresh becomes due. AUTO REFRESH
+requires all banks idle, so the FSM detects this in `S_IDLE` (or in
+the path returning to it) and routes through `S_PRECHARGE_TO_REFRESH`
+which issues PRECHARGE-ALL, waits `T_RP`, then issues REFRESH. This
+adds the trailing `T_RP` term in the worst-case bound above. With
+`open_valid = 0` (no row open), the FSM goes straight to `S_REFRESH`
+and skips this step.
 
 ### Future-proofing parameters (shaped holes, not implementations)
 
-| Parameter | v1 value | Future use |
-|-----------|----------|------------|
-| `BURST_LEN` | `2` | BL=8 line buffer (step 6+) |
-| `AUTO_PRECHARGE` | `1` (close on access) | Set `0` once open-row tracking is in |
-| `OPEN_ROW_TRACKING` | `0` | Set `1` to add 4×{row,valid} state and same-row fast path |
-
-These thread through counters and decisions but each is hard-wired to
-its v1 value. Turning them on later is a localized change, not a
-rewrite.
+| Parameter | Today's value | Status / future use |
+|-----------|---------------|---------------------|
+| `BURST_LEN` | `2` | BL=8 line buffer (step 7) |
+| `AUTO_PRECHARGE` | (off) | Removed — open-row tracking always active |
+| `OPEN_ROW_TRACKING` | (single-row, on) | Per-bank tracking would extend `open_valid`/`open_row` to arrays of `2^BA_BITS` |
 
 ## CDC bridge (`sdram_cdc`)
 
