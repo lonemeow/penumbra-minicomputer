@@ -28,6 +28,7 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <sys/signalvar.h>
 #include <sys/ptrace.h>
 #include <sys/timetc.h>
+#include <sys/endian.h>
 
 #include <uvm/uvm_extern.h>
 
@@ -57,13 +58,40 @@ char machine_arch[] = "penumbra";
 /*
  * cpu_startup: called from init_main.c after basic VM is running.
  * Prints startup banner, allocates submap for physio.
+ *
+ * The machine identity is read from SYSDEV_MACH (board-specific:
+ * different RTL on different boards, or sim vs. ULX3S, produces a
+ * different name).  CPU identity is reported separately by cpu_attach
+ * in the autoconf "cpu0 at mainbus0:" line.
  */
 void
 cpu_startup(void)
 {
+	char mach_name[17];
+	uint32_t w0, w1, w2, w3;
 
 	printf("%s%s", copyright, version);
-	printf("Penumbra minicomputer, 32-bit RISC\n");
+
+	__asm __volatile("RDSYS %0, %1, %2"
+	    : "=r"(w0) : "i"(SYSDEV_MACH), "i"(MACH_NAME0));
+	__asm __volatile("RDSYS %0, %1, %2"
+	    : "=r"(w1) : "i"(SYSDEV_MACH), "i"(MACH_NAME1));
+	__asm __volatile("RDSYS %0, %1, %2"
+	    : "=r"(w2) : "i"(SYSDEV_MACH), "i"(MACH_NAME2));
+	__asm __volatile("RDSYS %0, %1, %2"
+	    : "=r"(w3) : "i"(SYSDEV_MACH), "i"(MACH_NAME3));
+	le32enc(mach_name +  0, w0);
+	le32enc(mach_name +  4, w1);
+	le32enc(mach_name +  8, w2);
+	le32enc(mach_name + 12, w3);
+	mach_name[16] = '\0';
+
+	if (mach_name[0] != '\0')
+		cpu_setmodel("Penumbra %s", mach_name);
+	else
+		cpu_setmodel("Penumbra (unknown)");
+
+	printf("%s\n", cpu_getmodel());
 
 	/* TODO: allocate physio submap via uvm_km_suballoc */
 }

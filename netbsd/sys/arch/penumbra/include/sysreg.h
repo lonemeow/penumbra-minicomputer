@@ -80,6 +80,11 @@
 #define CPU_CYCLES		5	/* free-running 32-bit, wraps every ~5.7 min @ 12.5 MHz */
 #define CPU_INSNS_RETIRED	6	/* free-running 32-bit */
 
+/* CPU_ISA layout: bits [3:0] = ISA version, bits [31:4] = feature flags */
+#define CPU_FEAT_BIT_HW_MUL	0	/* Hardware multiply */
+#define CPU_FEAT_BIT_HW_DIV	1	/* Hardware divide */
+#define CPU_FEAT_BIT_FPU	2	/* Floating-point unit */
+
 /* ── Device 8: Machine identity (read-only) ────────────────────────── */
 
 #define MACH_FEAT	0
