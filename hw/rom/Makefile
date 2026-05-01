@@ -34,12 +34,18 @@ ASM_OBJS := $(ASM_SRCS:%.s=$(BUILD)/%.o)
 OBJS     := $(ASM_OBJS) $(C_OBJS)
 
 # ── Targets ───────────────────────────────────────────────────
-.PHONY: all clean
+.PHONY: all clean FORCE
 
 all: $(OUT_HEX)
 
-$(OUT_HEX): $(BUILD)/boot_rom.bin
+# OUT_HEX lives at the project root and is also written by other build
+# targets (pasm.py for hw/sim tests, benchmarks).  Force-regenerate from
+# our bin every invocation so a stale third-party program.hex with a
+# newer mtime can't fool make into skipping the bin2hex step.
+$(OUT_HEX): $(BUILD)/boot_rom.bin FORCE
 	$(BIN2HEX) $< -o $@
+
+FORCE:
 
 $(BUILD)/boot_rom.bin: $(BUILD)/boot_rom.elf
 	$(OBJCOPY) -O binary $< $@
