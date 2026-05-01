@@ -23,9 +23,20 @@
  * controller's burst speedup.  Step 6 won't change the uncached
  * number (each access still pays the full ACT/RW/PRECHARGE cost).
  *
+ * Cache hit/miss microbenchmarks isolate the two endpoints of the
+ * cached-sweep curve:
+ *   • Cache hit: HIT_WORKING_BYTES (512 B) fits inside the 1 KiB
+ *     D-cache, so after the first warmup pass every access hits.
+ *     Reports MB/s — the upper bound of cached throughput.
+ *   • Cache miss: stride MISS_STRIDE_BYTES (64 B) exceeds any
+ *     plausible cacheline, so every access pays a full line-fill.
+ *     Reports ns/miss — isolates SDRAM-roundtrip + bus-traversal
+ *     latency for one cache line.  Direct measurement of the path
+ *     that pipelined SDRAM reads should accelerate.
+ *
  * Each test runs for ~MEAS_TARGET_US of measured time and reports
- * MB/s (cached) or ns/op (uncached) so the numbers are directly
- * comparable across architectures and across step-6 commits.
+ * MB/s (throughput) or ns/op (latency) so the numbers are directly
+ * comparable across architectures and across optimisation commits.
  */
 
 #include "bench.h"
@@ -69,6 +80,8 @@ struct btag_device {
 
 /* ── Test geometry ────────────────────────────────────────────── */
 #define CACHED_WORKING_BYTES    (64u * 1024u)   /* 64× the 1 KiB cache */
+#define HIT_WORKING_BYTES       (512u)          /* fits inside 1 KiB D-cache */
+#define MISS_STRIDE_BYTES       64u             /* > any plausible cacheline */
 #define UNCACHED_PAGE_BYTES     (4u  * 1024u)
 #define UNCACHED_TEST_VA        0x80000000u     /* unused VA range */
 #define MEMTEST_RESERVED_LO     (2u  * 1024u * 1024u)
@@ -222,13 +235,63 @@ static uint32_t sweep_stb(uint32_t base, uint32_t bytes) {
     return 0;
 }
 
-/* ── Run one sweep test, report MB/s ──────────────────────────── */
+/* ── Cache-miss strided read ──────────────────────────────────────
+ * Same overall shape as sweep_ldw, but accesses are spaced by
+ * MISS_STRIDE_BYTES (= 64 B) so each LDW lands in a different
+ * cache line and every access pays a full line-fill.  Working set
+ * (CACHED_WORKING_BYTES = 64 KiB) is many times the cache, so even
+ * after the first pass none of the lines we touch are still resident.
+ *
+ * Number of misses per pass = bytes / MISS_STRIDE_BYTES.
+ */
+static uint32_t sweep_miss_ldw(uint32_t base, uint32_t bytes) {
+    volatile uint32_t *p = (volatile uint32_t *)base;
+    uint32_t n = bytes >> 2;   /* total words in region */
+    uint32_t s = 0;
+    /* Stride is 16 words (= 64 B); 8 accesses per outer iter cover 128 words. */
+    for (uint32_t i = 0; i < n; i += 128) {
+        s ^= p[i +  0]; s ^= p[i + 16]; s ^= p[i + 32]; s ^= p[i + 48];
+        s ^= p[i + 64]; s ^= p[i + 80]; s ^= p[i + 96]; s ^= p[i + 112];
+    }
+    return s;
+}
+
+/* ── Unified perf-line printer ────────────────────────────────────
+ * One report format for every test: "<count> <unit>, <ms> ms, X.YYY
+ * MB/s, <ns> ns/op".  bytes = useful-data total (passes × working
+ * for sweeps, misses × 4 for the miss test, ops × op_size for
+ * uncached); ops = total individual accesses.  Both us×1000 and
+ * passes×working fit in u32 at MEAS_TARGET_US = 0.2 s. */
 static volatile uint32_t bench_sink;
 
+static void print_perf_line(const char *label,
+                            uint32_t count,
+                            const char *count_unit,
+                            uint32_t us,
+                            uint32_t bytes,
+                            uint32_t ops) {
+    uint32_t ns_per_op = (us * 1000u) / ops;
+    bench_puts("  ");
+    bench_puts(label);
+    bench_puts(": ");
+    bench_print_uint(count);
+    bench_putchar(' ');
+    bench_puts(count_unit);
+    bench_puts(", ");
+    bench_print_uint(us / 1000);
+    bench_puts(" ms, ");
+    print_mb_per_s(bytes, us);
+    bench_puts(", ");
+    bench_print_uint(ns_per_op);
+    bench_puts(" ns/op\n");
+}
+
+/* ── Run one sweep test ───────────────────────────────────────── */
 static void run_sweep_test(const char *label,
                            sweep_fn fn,
                            uint32_t base,
-                           uint32_t working) {
+                           uint32_t working,
+                           uint32_t op_size) {
     uint32_t deadline = bench_us_to_ticks(MEAS_TARGET_US);
     uint32_t sink = 0;
     uint32_t passes = 0;
@@ -241,19 +304,35 @@ static void run_sweep_test(const char *label,
     uint32_t us = bench_timer_elapsed_us();
     bench_sink ^= sink;
 
-    /* Range check: passes × working can hit a few hundred million for
-     * fast cached cases, well within u32. */
     uint32_t bytes = passes * working;
+    uint32_t ops   = passes * (working / op_size);
+    print_perf_line(label, passes, "passes", us, bytes, ops);
+}
 
-    bench_puts("  ");
-    bench_puts(label);
-    bench_puts(": ");
-    bench_print_uint(passes);
-    bench_puts(" passes, ");
-    bench_print_uint(us / 1000);
-    bench_puts(" ms, ");
-    print_mb_per_s(bytes, us);
-    bench_puts("\n");
+/* ── Run one cache-miss test ───────────────────────────────────
+ * Same pass-counting harness as run_sweep_test.  Useful-byte total
+ * is misses × 4 (one word per stride), so the MB/s number reads as
+ * "useful data delivered" — directly comparable to hit MB/s. */
+static void run_miss_test(const char *label,
+                          sweep_fn fn,
+                          uint32_t base,
+                          uint32_t working,
+                          uint32_t stride_bytes) {
+    uint32_t deadline = bench_us_to_ticks(MEAS_TARGET_US);
+    uint32_t sink = 0;
+    uint32_t passes = 0;
+
+    bench_timer_start();
+    while (bench_timer_elapsed_ticks() < deadline) {
+        sink ^= fn(base, working);
+        passes++;
+    }
+    uint32_t us = bench_timer_elapsed_us();
+    bench_sink ^= sink;
+
+    uint32_t misses = passes * (working / stride_bytes);
+    uint32_t bytes  = misses * 4u;   /* one word delivered per miss */
+    print_perf_line(label, misses, "misses", us, bytes, misses);
 }
 
 /* ── Uncached fixed-page latency loops ─────────────────────────
@@ -268,18 +347,9 @@ static void run_sweep_test(const char *label,
 
 #define UNCACHED_PASSES 1024u   /* tunable; finishes well within MEAS_TARGET_US */
 
-static void report_uncached(const char *label, uint32_t ops, uint32_t us) {
-    /* us×1000 fits in u32 for us < 4.29 s; MEAS_TARGET_US is 0.2 s. */
-    uint32_t ns_per_op = (us * 1000u) / ops;
-    bench_puts("  ");
-    bench_puts(label);
-    bench_puts(": ");
-    bench_print_uint(ops);
-    bench_puts(" ops, ");
-    bench_print_uint(us / 1000);
-    bench_puts(" ms, ");
-    bench_print_uint(ns_per_op);
-    bench_puts(" ns/op\n");
+static void report_uncached(const char *label, uint32_t ops,
+                            uint32_t op_size, uint32_t us) {
+    print_perf_line(label, ops, "ops", us, ops * op_size, ops);
 }
 
 static void run_uncached_ldw(uint32_t va) {
@@ -295,7 +365,7 @@ static void run_uncached_ldw(uint32_t va) {
     bench_sink ^= s;
 
     uint32_t ops = UNCACHED_PASSES * (UNCACHED_PAGE_BYTES / 4);
-    report_uncached("uncached LDW", ops, us);
+    report_uncached("uncached LDW", ops, 4, us);
 }
 
 static void run_uncached_ldh(uint32_t va) {
@@ -311,7 +381,7 @@ static void run_uncached_ldh(uint32_t va) {
     bench_sink ^= s;
 
     uint32_t ops = UNCACHED_PASSES * (UNCACHED_PAGE_BYTES / 2);
-    report_uncached("uncached LDH", ops, us);
+    report_uncached("uncached LDH", ops, 2, us);
 }
 
 static void run_uncached_ldb(uint32_t va) {
@@ -327,7 +397,7 @@ static void run_uncached_ldb(uint32_t va) {
     bench_sink ^= s;
 
     uint32_t ops = UNCACHED_PASSES * UNCACHED_PAGE_BYTES;
-    report_uncached("uncached LDB", ops, us);
+    report_uncached("uncached LDB", ops, 1, us);
 }
 
 static void run_uncached_stw(uint32_t va) {
@@ -341,7 +411,7 @@ static void run_uncached_stw(uint32_t va) {
     uint32_t us = bench_timer_elapsed_us();
 
     uint32_t ops = UNCACHED_PASSES * (UNCACHED_PAGE_BYTES / 4);
-    report_uncached("uncached STW", ops, us);
+    report_uncached("uncached STW", ops, 4, us);
 }
 
 static void run_uncached_sth(uint32_t va) {
@@ -355,7 +425,7 @@ static void run_uncached_sth(uint32_t va) {
     uint32_t us = bench_timer_elapsed_us();
 
     uint32_t ops = UNCACHED_PASSES * (UNCACHED_PAGE_BYTES / 2);
-    report_uncached("uncached STH", ops, us);
+    report_uncached("uncached STH", ops, 2, us);
 }
 
 static void run_uncached_stb(uint32_t va) {
@@ -369,7 +439,7 @@ static void run_uncached_stb(uint32_t va) {
     uint32_t us = bench_timer_elapsed_us();
 
     uint32_t ops = UNCACHED_PASSES * UNCACHED_PAGE_BYTES;
-    report_uncached("uncached STB", ops, us);
+    report_uncached("uncached STB", ops, 1, us);
 }
 
 /* ── bench_main ───────────────────────────────────────────────── */
@@ -409,13 +479,21 @@ void bench_main(uint32_t bootdata) {
     bench_puts("Timer freq:           ");
     bench_print_uint(bench_timer_freq_hz()); bench_puts(" Hz\n\n");
 
-    bench_puts("-- Cached sweep (64 KiB, sequential) --\n");
-    run_sweep_test("cached LDW", sweep_ldw, cached_base, CACHED_WORKING_BYTES);
-    run_sweep_test("cached LDH", sweep_ldh, cached_base, CACHED_WORKING_BYTES);
-    run_sweep_test("cached LDB", sweep_ldb, cached_base, CACHED_WORKING_BYTES);
-    run_sweep_test("cached STW", sweep_stw, cached_base, CACHED_WORKING_BYTES);
-    run_sweep_test("cached STH", sweep_sth, cached_base, CACHED_WORKING_BYTES);
-    run_sweep_test("cached STB", sweep_stb, cached_base, CACHED_WORKING_BYTES);
+    bench_puts("-- Cache hit (512 B working set, fits in 1 KiB D-cache) --\n");
+    run_sweep_test("hit LDW", sweep_ldw, cached_base, HIT_WORKING_BYTES, 4);
+    run_sweep_test("hit STW", sweep_stw, cached_base, HIT_WORKING_BYTES, 4);
+
+    bench_puts("\n-- Cached sweep (64 KiB, sequential) --\n");
+    run_sweep_test("cached LDW", sweep_ldw, cached_base, CACHED_WORKING_BYTES, 4);
+    run_sweep_test("cached LDH", sweep_ldh, cached_base, CACHED_WORKING_BYTES, 2);
+    run_sweep_test("cached LDB", sweep_ldb, cached_base, CACHED_WORKING_BYTES, 1);
+    run_sweep_test("cached STW", sweep_stw, cached_base, CACHED_WORKING_BYTES, 4);
+    run_sweep_test("cached STH", sweep_sth, cached_base, CACHED_WORKING_BYTES, 2);
+    run_sweep_test("cached STB", sweep_stb, cached_base, CACHED_WORKING_BYTES, 1);
+
+    bench_puts("\n-- Cache miss (64 KiB, stride 64 B, 100% line-fill misses) --\n");
+    run_miss_test("miss LDW", sweep_miss_ldw, cached_base,
+                  CACHED_WORKING_BYTES, MISS_STRIDE_BYTES);
 
     bench_puts("\n-- Uncached single-page latency (4 KiB, pinned NC) --\n");
     run_uncached_ldw(UNCACHED_TEST_VA);
