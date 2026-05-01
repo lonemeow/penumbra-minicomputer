@@ -95,13 +95,6 @@ CWARNFLAGS.clang+=	-Wno-unqualified-std-cast-call
 CWARNFLAGS.clang+=	-Wno-vla-cxx-extension
 CWARNFLAGS.clang+=	-Wno-unused-but-set-parameter
 CWARNFLAGS.clang+=	-Wno-single-bit-bitfield-constant-conversion
-# bsd.sys.mk appends -Wall to CFLAGS after CWARNFLAGS, which re-enables
-# some of the above.  Repeat the -Wall-sensitive ones in COPTS so they
-# appear last in the compile command (bsd.sys.mk compile rule appends
-# COPTS.${file} and COPTS after CFLAGS).
-COPTS+=		-Wno-unused-but-set-variable
-COPTS+=		-Wno-strict-prototypes
-COPTS+=		-Wno-deprecated-non-prototype
 # __NetBSD__ is now defined by clang via the penumbra-unknown-netbsd triple.
 .endif
 
