@@ -21,7 +21,7 @@ DOCKER_RUN   = docker run --rm -u $(shell id -u):$(shell id -g) -v $(CURDIR):/wo
 # Verilator runs inside the container; its entrypoint IS verilator.
 # For commands that aren't verilator (like running the built binary),
 # we override the entrypoint.
-VERILATOR_FLAGS = --cc --exe --build -Wall \
+VERILATOR_FLAGS = --cc --exe --build -Wall --assert \
                   $(if $(VCD),--trace) \
                   -CFLAGS "-std=c++17" \
                   -Ihw/rtl/core -Ihw/rtl/bus -Ihw/rtl/mmu -Ihw/rtl/io -Ihw/rtl/io/sdram -Ihw/rtl/soc -Ihw/rtl/sim

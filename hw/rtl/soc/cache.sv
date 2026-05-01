@@ -301,6 +301,30 @@ module cache
         end
     end
 
+    // ══════════════════════════════════════════════════════════
+    // Combinational hit-path contract (SVA, simulation only)
+    // ══════════════════════════════════════════════════════════
+    // cpu_core relies on the cache producing o_busy=0 and o_rdata
+    // valid in the *same* cycle as i_re for a read hit. A register
+    // stage anywhere on this path would shift the result by one
+    // cycle and break the zero-cycle fetch optimization.
+    //
+    // The strongest detectable transition is S_FILL → S_IDLE: the
+    // cycle a fill completes is by construction the first cycle a
+    // hit is reported. If o_busy were registered, it would still
+    // hold S_FILL's value (1) on that cycle even though hit=1, and
+    // this assertion would fire. Stable-state cases (idle hits) do
+    // not exhibit a transition, so they cannot distinguish a
+    // registered o_busy from a combinational one — but the fill
+    // boundary fires every cache miss, so the property is exercised
+    // on every test program that touches new cache lines.
+    //
+    // Stripped by Yosys synthesis (--assert is a Verilator-only
+    // simulation directive); zero FPGA cost.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (state == S_IDLE && cache_active && i_re && hit) |-> !o_busy)
+        else $error("cache: read hit but o_busy=1 — register stage on hit path?");
+
 endmodule
 
 // verilator lint_on UNUSEDSIGNAL

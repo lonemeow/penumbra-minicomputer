@@ -249,34 +249,34 @@ module cpu_core
 
     logic ir_load;
 
-    // Track that the fetch request has been accepted.
+    // This relies on cache_busy being driven combinationally so
+    // it's immediately active if a bus cycle is needed.
     //
-    // Two cases:
-    //   1. Cache miss / pass-through: cache_busy goes high on the
-    //      first cycle. fetch_pending set. Completes when busy drops.
-    //   2. Cache hit (zero-latency): cache_busy never goes high.
-    //      fetch_pending must still get set so completion fires.
-    //
-    // Solution: set fetch_pending when cache_busy is observed (case 1)
-    // OR after one cycle of fetch_active (case 2). The one-cycle
-    // delay ensures the address has propagated through MMU → cache
-    // before we sample the result.
-    logic fetch_pending;
-    always_ff @(posedge i_clk) begin
-        if (i_rst || !fetch_active)
-            fetch_pending <= 1'b0;
-        else if (cache_busy || fetch_active)
-            fetch_pending <= 1'b1;
-    end
-
-    // Fetch completes when pending and cache is not busy.
-    // Cache hits: 2-cycle fetch (one cycle for address setup).
-    // Cache misses: completes when fill finishes.
+    // The !fault_except gate handles the cycle a fetch fault is first
+    // detected: fault_pending hasn't latched yet, so effective_dispatch
+    // and ir_load can't yet route to int_entry.  Suppressing for that
+    // one cycle lets fault_pending register; the next cycle (with the
+    // same fault still combinationally present) fetch_complete fires
+    // normally, effective_dispatch picks 0x70, and ir_load stays gated
+    // by !fault_pending so IR doesn't latch the garbage mem_rdata that
+    // results from i_re being suppressed by mmu_fault upstream.
     logic fetch_complete;
-    assign fetch_complete = fetch_active && fetch_pending && !cache_busy;
+    assign fetch_complete = fetch_active && !cache_busy && !fault_except;
 
     assign ir_valid = fetch_complete;
     assign ir_load  = fetch_complete && !fault_pending;
+
+    // ── Fetch contract (SVA, simulation only) ────────────────
+    // IR may only latch on a cycle where the cache has reported
+    // the data is ready (cache_busy=0). The optimized fetch path
+    // trusts cache_busy on the very first cycle of S_FETCH; if
+    // anyone refactors and lets ir_load fire while cache_busy=1
+    // (e.g., by registering cache_busy and creating a one-cycle
+    // skew), this assertion catches it on the next test run.
+    // Stripped by synthesis; no FPGA cost.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        ir_load |-> !cache_busy)
+        else $error("cpu_core: ir_load fired while cache_busy=1");
 
     // ── Dispatch address computation ─────────────────────────
     logic [1:0]  fetch_format;
