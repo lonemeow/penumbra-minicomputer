@@ -161,7 +161,7 @@ DDB (kernel debugger) disabled -- needs extensive MD hooks.
 
 ## Kernel Config (MINIMAL)
 
-Built at `-O0` with DIAGNOSTIC.  FFS + MSDOSFS file systems,
+Built at `-O2` with DIAGNOSTIC (NetBSD's stock kernel default).  FFS + MSDOSFS file systems,
 minimal INET networking, com(4) UART, pmci + MI sdmmc (ld0),
 loop/pty/ksyms pseudo-devices.
 

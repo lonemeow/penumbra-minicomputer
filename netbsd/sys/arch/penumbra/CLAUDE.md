@@ -172,7 +172,7 @@ Headers fall into three categories:
 - [x] Machine headers — 39 files, sufficient for kernel compilation
 - [x] Kernel config — `config MINIMAL` generates Makefile successfully
 - [x] `make depend` — passes cleanly
-- [x] `make` — **all .o files compile at `-O0`**
+- [x] `make` — **all .o files compile at `-O2`** (NetBSD's stock kernel default)
 - [x] **Kernel links** — ~5 MB ELF binary at `build/netbsd-kernel/MINIMAL/netbsd`
   (DIAGNOSTIC enabled for development)
 - [x] Atomics — interrupt-disable CAS (`RDSPR SR`/`DI`/op/`WRSPR SR`),
