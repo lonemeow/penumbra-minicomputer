@@ -76,10 +76,14 @@ module machine_sim
     logic combined_irq;
     assign combined_irq = i_irq | uart_irq | spi_irq;
 
-    // ── Timer tick prescaler (CPU clock → 1 MHz) ────────────
-    // Generates a toggle signal at 1 MHz from the CPU clock.
-    // The timer module synchronises and edge-detects internally.
-    localparam int PRESCALE_DIV = 25;   // 25 MHz / 25 = 1 MHz
+    // ── Timer tick prescaler (CLK_FREQ → ~1 MHz toggle) ─────
+    // Tick freq = CLK_FREQ / (2 * PRESCALE_DIV).  The factor of two
+    // comes from edge detection in timer.sv, which fires once per full
+    // toggle period.  Derive everything from CLK_FREQ so a clock bump
+    // does not silently desync the timer from wall time.
+    localparam int CLK_FREQ      = 25_000_000;
+    localparam int PRESCALE_DIV  = (CLK_FREQ + 1_000_000) / 2_000_000;
+    localparam int TICK_FREQ     = CLK_FREQ / (2 * PRESCALE_DIV);
     logic [$clog2(PRESCALE_DIV)-1:0] prescale_cnt;
     logic timer_tick;
 
@@ -87,7 +91,7 @@ module machine_sim
         if (i_rst) begin
             prescale_cnt <= '0;
             timer_tick   <= 1'b0;
-        end else if (prescale_cnt == PRESCALE_DIV[4:0] - 5'd1) begin
+        end else if (prescale_cnt == ($bits(prescale_cnt))'(PRESCALE_DIV - 1)) begin
             prescale_cnt <= '0;
             timer_tick   <= ~timer_tick;  // Toggle for edge detection
         end else begin
@@ -353,7 +357,7 @@ module machine_sim
         .MACH_NAME0 (32'h756D6953),   // "Simu"
         .MACH_NAME1 (32'h6F74616C),   // "lato"
         .MACH_NAME2 (32'h00000072),   // "r\0\0\0"
-        .CPU_FREQ   (32'd25_000_000)  // Simulated at 25 MHz
+        .CPU_FREQ   (CLK_FREQ)
     ) u_machid (
         .i_sys_reg  (sys_reg),
         .o_sys_rdata(machid_rdata)
@@ -379,7 +383,7 @@ module machine_sim
     logic [31:0] timer_rdata;
 
     timer #(
-        .TICK_FREQ_HZ (32'd1_000_000)
+        .TICK_FREQ_HZ (TICK_FREQ)
     ) u_timer (
         .i_clk       (i_clk),
         .i_rst       (i_rst),

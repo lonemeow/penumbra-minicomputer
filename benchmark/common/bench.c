@@ -5,8 +5,10 @@
  * free-running autoload mode with TMRELOAD = 0xFFFE (period = 0xFFFF
  * ticks).  The IRQ handler (installed by crt0.S) accumulates raw
  * ticks at address 0x38 on each underflow (adds 0xFFFF per wrap).
- * The readback function adds the partial count and converts to µs
- * using the actual timer frequency from the TMFREQ register.
+ * The readback function adds the partial count.  Conversion to µs
+ * uses the actual TMFREQ value via a 64-bit-precision (a*b)/d helper,
+ * so the result is exact even when TMFREQ isn't an integer multiple
+ * of 1 MHz (e.g. 1041666 Hz at 12.5 MHz, 961538 Hz at 25 MHz).
  */
 
 #include "bench.h"
@@ -30,9 +32,8 @@
 #define TIMER_RELOAD      0xFFFE
 #define TIMER_PERIOD      0xFFFF    /* reload + 1 */
 
-/* Timer frequency and ticks-per-µs, set by bench_init() */
-static uint32_t timer_freq;         /* Hz, from TMFREQ register */
-static uint32_t timer_ticks_per_us; /* freq / 1000000 */
+/* Timer tick frequency in Hz, latched from TMFREQ at bench_init() */
+static uint32_t timer_freq;
 
 /* ── Timer sysregs (device 7) ──────────────────────────────────── */
 #define SYSDEV_TIMER   7
@@ -84,9 +85,8 @@ static inline void enable_interrupts(void) {
 void bench_init(void) {
     /* Read actual timer tick frequency from hardware */
     timer_freq = read_sysreg(SYSDEV_TIMER, TM_FREQ);
-    timer_ticks_per_us = timer_freq / 1000000;
-    if (timer_ticks_per_us == 0)
-        timer_ticks_per_us = 1;     /* safety floor */
+    if (timer_freq == 0)
+        timer_freq = 1000000;       /* fallback if hardware misreports */
 
     /* Set up timer: free-running countdown, period = 0xFFFF ticks */
     timer_base_ticks = 0;
@@ -121,12 +121,44 @@ uint32_t bench_timer_elapsed_ticks(void) {
     return base + (TIMER_RELOAD - count);
 }
 
+/* Compute (a * b) / d at 64-bit precision using only 32-bit ops.
+ * Caller guarantees the quotient fits in 32 bits and d > 0.
+ * Forms the 64-bit product via four 16x16 multiplies, then long-divides. */
+static uint32_t mul_div_u32(uint32_t a, uint32_t b, uint32_t d) {
+    uint32_t a_hi = a >> 16, a_lo = a & 0xFFFF;
+    uint32_t b_hi = b >> 16, b_lo = b & 0xFFFF;
+
+    uint32_t hh = a_hi * b_hi;
+    uint32_t hl = a_hi * b_lo;
+    uint32_t lh = a_lo * b_hi;
+    uint32_t ll = a_lo * b_lo;
+
+    uint32_t mid     = (hl & 0xFFFF) + (lh & 0xFFFF) + (ll >> 16);
+    uint32_t prod_lo = (mid << 16) | (ll & 0xFFFF);
+    uint32_t prod_hi = hh + (hl >> 16) + (lh >> 16) + (mid >> 16);
+
+    /* Long-divide [prod_hi:prod_lo] by d, MSB-first across 64 bits.
+     * Top 32 bits feed the running remainder; only the low 32 quotient
+     * bits are kept (caller asserts the quotient fits there). */
+    uint32_t q = 0, r = 0;
+    for (int i = 31; i >= 0; i--) {
+        r = (r << 1) | ((prod_hi >> i) & 1);
+        if (r >= d) r -= d;
+    }
+    for (int i = 31; i >= 0; i--) {
+        r = (r << 1) | ((prod_lo >> i) & 1);
+        q <<= 1;
+        if (r >= d) { r -= d; q |= 1; }
+    }
+    return q;
+}
+
 uint32_t bench_us_to_ticks(uint32_t us) {
-    return us * timer_ticks_per_us;
+    return mul_div_u32(us, timer_freq, 1000000u);
 }
 
 uint32_t bench_timer_elapsed_us(void) {
-    return bench_timer_elapsed_ticks() / timer_ticks_per_us;
+    return mul_div_u32(bench_timer_elapsed_ticks(), 1000000u, timer_freq);
 }
 
 uint32_t bench_timer_freq_hz(void) {

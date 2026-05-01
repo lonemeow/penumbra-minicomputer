@@ -264,7 +264,7 @@ module ulx3s_top (
         if (rst) begin
             prescale_cnt <= '0;
             timer_tick   <= 1'b0;
-        end else if (prescale_cnt == PRESCALE_DIV[4:0] - 5'd1) begin
+        end else if (prescale_cnt == ($bits(prescale_cnt))'(PRESCALE_DIV - 1)) begin
             prescale_cnt <= '0;
             timer_tick   <= ~timer_tick;
         end else begin
@@ -667,10 +667,7 @@ module ulx3s_top (
     logic [31:0] timer_rdata;
 
     timer #(
-        // TODO: TICK_FREQ (1041666) triggers marginal SDRAM timing failure
-        // via placement changes.  Use nominal 1 MHz until SDRAM clock
-        // phasing is fixed (see doc/internals/sdram-optimization.md).
-        .TICK_FREQ_HZ (32'd1_000_000)
+        .TICK_FREQ_HZ (TICK_FREQ)
     ) u_timer (
         .i_clk       (clk),
         .i_rst       (rst),
