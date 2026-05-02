@@ -96,11 +96,24 @@
 
 /* ── Device 2/3: Cache registers ────────────────────────────────────── */
 
-#define CACHE_GEOM	0	/* Geometry (read-only) */
+#define CACHE_GEOM	0	/* Geometry (read-only) — alias for CACHE_INFO */
+#define CACHE_INFO	0	/* Geometry/type (read-only) */
 #define CACHE_CTRL	1	/* bit 0 = ENABLE */
 #define CACHE_INVAL	2	/* Write to invalidate all */
 
 #define CACHE_CTRL_ENABLE	0x01
+
+/* CACHE_INFO field layout (matches hw/rtl/soc/cache.sv INFO_VALUE) */
+#define CACHE_INFO_LINE_WORDS(v)	(((v) >>  0) & 0x000Fu)
+#define CACHE_INFO_NUM_SETS(v)		(((v) >>  4) & 0x03FFu)
+#define CACHE_INFO_NUM_WAYS(v)		(((v) >> 14) & 0x000Fu)
+#define CACHE_INFO_TYPE(v)		(((v) >> 18) & 0x0003u)	/* PIPT/VIPT/VIVT */
+#define CACHE_INFO_WRITE_BACK(v)	(((v) >> 20) & 0x0001u)	/* 0=WT, 1=WB */
+#define CACHE_INFO_WRITE_ALLOC(v)	(((v) >> 21) & 0x0001u)	/* 0=WnA, 1=WA */
+
+#define CACHE_TYPE_PIPT		0
+#define CACHE_TYPE_VIPT		1
+#define CACHE_TYPE_VIVT		2
 
 /* ── Device 4: Bus controller ───────────────────────────────────────── */
 

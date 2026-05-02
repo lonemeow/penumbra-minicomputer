@@ -108,12 +108,74 @@ format_cpu_features(char *buf, size_t bufsz, uint32_t isa)
 	}
 }
 
+/*
+ * Decode the 2-bit CACHE_INFO_TYPE field (PIPT/VIPT/VIVT) into a tag.
+ * Mirrors the boot ROM helper of the same name (hw/rom/boot_rom.c).
+ */
+static void
+format_cache_type(char *buf, size_t bufsz, uint32_t type)
+{
+	if (bufsz > 0)
+		buf[0] = '\0';
+
+	switch (type) {
+	case CACHE_TYPE_PIPT: strncat(buf, "PIPT", bufsz); break;
+	case CACHE_TYPE_VIPT: strncat(buf, "VIPT", bufsz); break;
+	case CACHE_TYPE_VIVT: strncat(buf, "VIVT", bufsz); break;
+	default:
+		snprintf(buf, bufsz, "UNK_%u", type);
+		break;
+	}
+}
+
+/*
+ * Format a byte count as "%uB" / "%ukB" / "%uMB", matching the boot ROM's
+ * humanize_size().  Caches are always power-of-2 sizes so integer division
+ * is sufficient.
+ */
+static void
+humanize_size(uint32_t bytes, char *buf, size_t bufsz)
+{
+	if (bytes < 1024u)
+		snprintf(buf, bufsz, "%uB", bytes);
+	else if (bytes < 1024u * 1024u)
+		snprintf(buf, bufsz, "%ukB", bytes / 1024u);
+	else
+		snprintf(buf, bufsz, "%uMB", bytes / (1024u * 1024u));
+}
+
+static void
+print_one_cache(device_t self, const char *label, uint32_t info)
+{
+	uint32_t line_words = CACHE_INFO_LINE_WORDS(info);
+	uint32_t num_sets   = CACHE_INFO_NUM_SETS(info);
+	uint32_t num_ways   = CACHE_INFO_NUM_WAYS(info);
+	uint32_t type       = CACHE_INFO_TYPE(info);
+	uint32_t wb         = CACHE_INFO_WRITE_BACK(info);
+	uint32_t wa         = CACHE_INFO_WRITE_ALLOC(info);
+	uint32_t line_bytes  = line_words * 4u;
+	uint32_t total_bytes = num_sets * num_ways * line_bytes;
+
+	char size_str[12], type_str[16];
+	humanize_size(total_bytes, size_str, sizeof(size_str));
+	format_cache_type(type_str, sizeof(type_str), type);
+
+	aprint_normal_dev(self, "%s: %s (%u x %uB, %u-way) %s (%s, %s)\n",
+	    label,
+	    size_str,
+	    num_sets, line_bytes, num_ways,
+	    type_str,
+	    wb ? "WB" : "WT",
+	    wa ? "WA" : "WnA");
+}
+
 static void
 cpu_attach(device_t parent, device_t self, void *aux)
 {
 	char name[17];
 	char feat[64];
 	uint32_t isa, freq;
+	uint32_t ic_info, dc_info;
 
 	read_cpu_name(name);
 
@@ -121,6 +183,11 @@ cpu_attach(device_t parent, device_t self, void *aux)
 	    : "=r"(isa)  : "i"(SYSDEV_CPU),  "i"(CPU_ISA));
 	__asm __volatile("RDSYS %0, %1, %2"
 	    : "=r"(freq) : "i"(SYSDEV_MACH), "i"(MACH_CPU_FREQ));
+
+	__asm __volatile("RDSYS %0, %1, %2"
+	    : "=r"(ic_info) : "i"(SYSDEV_ICACHE), "i"(CACHE_INFO));
+	__asm __volatile("RDSYS %0, %1, %2"
+	    : "=r"(dc_info) : "i"(SYSDEV_DCACHE), "i"(CACHE_INFO));
 
 	format_cpu_features(feat, sizeof(feat), isa);
 
@@ -136,6 +203,9 @@ cpu_attach(device_t parent, device_t self, void *aux)
 	} else {
 		aprint_normal(": %s, %s\n", name, feat);
 	}
+
+	print_one_cache(self, "L1 icache", ic_info);
+	print_one_cache(self, "L1 dcache", dc_info);
 
 	cpu_info_store.ci_dev = self;
 	cpu_info_store.ci_cpuid = 0;
