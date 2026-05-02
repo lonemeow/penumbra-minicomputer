@@ -1,16 +1,44 @@
-// SDRAM bus adapter — synchronous bus ↔ controller req/rsp.
+// SDRAM bus adapter — speculative-prefetch version (Stage B).
 //
 // Translates the project's standard synchronous device-bus interface
 // (i_re/i_we/o_busy/o_rdata, used by simple_mem, fpga_ram, boot_rom)
 // into the controller's req_valid/req_ready/rsp_valid handshake.
 // Drop-in replacement for `simple_mem` at the SDRAM region.
 //
-// Single-word transactions, but pipelined across cache line fills:
-// when the cache holds `i_re` continuously across a 4-word fill (per
-// doc/hardware/bus-protocol.md § Burst Transfers), the adapter takes
-// the PRESENT → BEGIN fast path instead of cycling back through IDLE.
-// Each fill word still issues its own req/rsp pair to the controller
-// — the win is just one fewer CPU cycle of FSM dwell between words.
+// On every accepted read request, the adapter speculatively pushes a
+// second request for `i_addr + 4` to the CDC.  The depth-2 CDC carries
+// both the real and the speculation in flight simultaneously.  When
+// the cache later asks for that next address (the typical case during
+// a 4-word fill), the speculation buffer satisfies it without a
+// fresh CDC round-trip — hiding most of the bus-traversal latency that
+// dominates miss cost on the current architecture.
+//
+// Speculation policy (simple version):
+//   • Always prefetch addr+4 when a real read is accepted, IF no spec
+//     is already pending/in-flight/buffered.
+//   • Whenever the cache consumes a spec result (buffered hit, or
+//     in-flight hit that ultimately reads from buffer), queue a new
+//     spec for the *next* word — keeps the chain rolling so a single
+//     fill never has to wait for an empty buffer after the first word.
+//   • Reads only.  Writes don't speculate.  Mispredicts (cache asks
+//     for an address that doesn't match the spec) abandon the in-flight
+//     spec — its response is discarded when it arrives — and push the
+//     new real request normally.
+//
+// Response routing — 1-bit tag FIFO (depth 2):
+//   • Each push to the CDC also pushes a tag: 0 = real (for the cache),
+//     1 = spec (for the buffer/discard).
+//   • Each rsp_valid pulse pops the head tag; rsp_data routes accordingly.
+//   • Order is preserved end-to-end because the CDC's SD side processes
+//     requests serially in push order.
+//
+// In-flight hit handling (cache asks for spec_addr while spec is still
+// in flight): adapter just stalls in BEGIN.  When the spec response
+// arrives, the response handler routes it to the buffer.  Next cycle,
+// BEGIN sees `spec_hit_buffered` and presents.  Costs one extra sys
+// cycle vs. forwarding the response combinationally to the cache, but
+// avoids a class of same-cycle race conditions between the BEGIN
+// "claim" and the response handler "buffer" updates.
 //
 // o_busy contract (per `hw/CLAUDE.md` § Memory Access):
 //   • o_busy is high while a request is being served.
@@ -21,26 +49,16 @@
 //
 // State machine:
 //   ADP_IDLE       → no transaction in flight; o_busy = (i_re|i_we)
-//   ADP_BEGIN      → driving req_valid (with request fields routed
-//                    combinationally from i_*, since the cache holds
-//                    them stable while o_busy is high), waiting for
-//                    the controller's req_ready acceptance pulse
-//   ADP_WAIT_DONE  → request accepted (payload latched into req_*_r),
-//                    waiting for the controller's o_done pulse (and
-//                    rsp_valid for reads)
-//   ADP_PRESENT    → drop o_busy, present rdata for one cycle so
-//                    the cache can sample it
+//   ADP_BEGIN      → cache request live; deciding whether to consume
+//                    spec buffer, wait for in-flight spec, or push real
+//   ADP_WAIT_RSP   → real request accepted (payload latched), waiting
+//                    for the controller's response (rsp_valid/done)
+//   ADP_PRESENT    → drop o_busy, present rdata for one cycle so the
+//                    cache can sample it
 //
-// Burst fast path: from ADP_PRESENT, if `i_re` (or `i_we`) is still
-// asserted, jump straight to ADP_BEGIN on the next cycle instead of
-// passing through ADP_IDLE.  By that cycle the cache has already
-// advanced its `fill_count` and `i_addr` is pointing at the next
-// word, so BEGIN can drive `o_req_valid` immediately.  This shaves
-// one CPU cycle per inter-word transition during a cache fill.
-//
-// The PRESENT state still adds one cycle of latency between the
-// controller's o_done and the cache observing !o_busy.  Acceptable
-// overhead and keeps the data path purely registered.
+// Speculation push happens combinationally whenever `spec_pending_push`
+// is set and we're not currently driving a real request — the same
+// `o_req_valid` wires carry either real or spec, gated by state.
 
 module sdram_bus_adapter (
     input  logic        i_clk,
@@ -73,60 +91,124 @@ module sdram_bus_adapter (
     typedef enum logic [1:0] {
         ADP_IDLE,
         ADP_BEGIN,
-        ADP_WAIT_DONE,
+        ADP_WAIT_RSP,
         ADP_PRESENT
     } state_t;
 
     state_t state;
 
-    // Latched payload — captured at BEGIN→WAIT_DONE so the response
-    // phase has stable values once `i_*` is no longer guaranteed
-    // stable (the cache may de-assert i_re after PRESENT).
-    logic        req_we_r;
-    logic [31:0] req_addr_r;
-    logic [31:0] req_wdata_r;
-    logic [3:0]  req_byte_en_r;
+    // Latched real-request bookkeeping.  cache_we_r distinguishes
+    // read/write completion paths in WAIT_RSP.
+    logic        cache_we_r;
     logic [31:0] rdata_latched;
 
-    // Drive request fields directly from the cache's combinational
-    // outputs while in BEGIN — the cache holds them stable as long
-    // as o_busy is high, so this is safe and avoids spending an
-    // extra cycle in IDLE just to latch.  After the controller
-    // accepts (i_req_ready), we latch into req_*_r for the response
-    // phase to use.
-    //
-    // o_req_valid is gated on the cache currently holding `i_re`
-    // (or `i_we`) high.  This matters for the PRESENT→BEGIN shortcut:
-    // PRESENT decides at its edge based on cycle-X's `i_re`, but on
-    // the *last* word of a cache fill the cache de-asserts `o_mem_re`
-    // the next cycle (no more `fill_req` to follow), and we must not
-    // issue a phantom request to the controller in that case.  BEGIN
-    // aborts cleanly back to IDLE below.
-    assign o_req_valid   = (state == ADP_BEGIN) && (i_re || i_we);
-    assign o_req_we      = (state == ADP_BEGIN) ? i_we      : req_we_r;
-    assign o_req_addr    = (state == ADP_BEGIN) ? i_addr    : req_addr_r;
-    assign o_req_wdata   = (state == ADP_BEGIN) ? i_wdata   : req_wdata_r;
-    assign o_req_byte_en = (state == ADP_BEGIN) ? i_byte_en : req_byte_en_r;
-    assign o_rsp_ready   = 1'b1;            // always ready to consume
+    // Speculation state
+    logic        spec_in_flight;     // pushed to CDC, response not yet back
+    logic        spec_buffered;      // response back, in buffer
+    logic [31:0] spec_addr;          // address tracked by the spec (in flight or buffered)
+    logic [31:0] spec_data;          // buffered spec response data
+    logic        spec_abandoned;     // discard the next spec response when it arrives
+
+    logic        spec_pending_push;  // we want to push spec_push_addr to CDC next chance
+    logic [31:0] spec_push_addr;
+
+    // Tag FIFO (depth 2): bit 0 = head (next response routes here),
+    // bit 1 = next in line.  Tag 0 = real, 1 = spec.
+    logic [1:0]  tag_fifo;
+    logic [1:0]  tag_count;
+
+    // ── Hit detection ──
+    wire spec_hit_buffered  = i_re && spec_buffered  && (i_addr == spec_addr);
+    wire spec_hit_in_flight = i_re && spec_in_flight && (i_addr == spec_addr) && !spec_abandoned;
+
+    // ── Combinational request drive ──
+    // Real push: only when we're in BEGIN, the cache is asking, and
+    // we're not waiting on a spec hit (which would mean don't push,
+    // the spec covers it).
+    wire pushing_real =
+        (state == ADP_BEGIN) && (i_re || i_we) &&
+        !spec_hit_buffered && !spec_hit_in_flight;
+
+    // Spec push: combinationally driven whenever a push is queued AND
+    // we're not currently driving a real on the same wires.
+    wire pushing_spec = !pushing_real && spec_pending_push;
+
+    assign o_req_valid   = pushing_real || pushing_spec;
+    assign o_req_we      = pushing_real ? i_we      : 1'b0;
+    assign o_req_addr    = pushing_real ? i_addr    : spec_push_addr;
+    assign o_req_wdata   = pushing_real ? i_wdata   : 32'b0;
+    assign o_req_byte_en = pushing_real ? i_byte_en : 4'hF;
+    assign o_rsp_ready   = 1'b1;
     assign o_rdata       = rdata_latched;
 
-    // o_busy contract: high whenever a transaction is in progress, OR
-    // when the cache is asking but we haven't yet accepted it.  Low
-    // only in PRESENT (data being served) or in IDLE without an
-    // incoming request.
+    // o_busy: high when a transaction is mid-flight or queued for push.
     assign o_busy =
-        (state == ADP_BEGIN) || (state == ADP_WAIT_DONE) ||
+        (state == ADP_BEGIN) || (state == ADP_WAIT_RSP) ||
         ((state == ADP_IDLE) && (i_re || i_we));
+
+    // ── Tag FIFO push/pop signals ──
+    wire pop_event       = (i_rsp_valid || (i_done && !i_rsp_valid)) && (tag_count > 0);
+    wire push_real_event = pushing_real && i_req_ready;
+    wire push_spec_event = pushing_spec && i_req_ready;
+    wire push_event      = push_real_event || push_spec_event;
+    wire next_tag        = push_spec_event;   // 0 = real, 1 = spec
 
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
-            state          <= ADP_IDLE;
-            req_we_r       <= 1'b0;
-            req_addr_r     <= '0;
-            req_wdata_r    <= '0;
-            req_byte_en_r  <= '0;
-            rdata_latched  <= '0;
+            state              <= ADP_IDLE;
+            cache_we_r         <= 1'b0;
+            rdata_latched      <= '0;
+            spec_in_flight     <= 1'b0;
+            spec_buffered      <= 1'b0;
+            spec_addr          <= '0;
+            spec_data          <= '0;
+            spec_abandoned     <= 1'b0;
+            spec_pending_push  <= 1'b0;
+            spec_push_addr     <= '0;
+            tag_fifo           <= '0;
+            tag_count          <= '0;
         end else begin
+            // ── Tag FIFO: combined push/pop in one update ──
+            if (pop_event && push_event) begin
+                // Pop and push same cycle — count stays, head shifts in
+                // tag_fifo[1], new tail is next_tag.
+                tag_fifo[0] <= tag_fifo[1];
+                tag_fifo[1] <= next_tag;
+            end else if (pop_event) begin
+                tag_fifo[0] <= tag_fifo[1];
+                tag_fifo[1] <= 1'b0;
+                tag_count   <= tag_count - 2'd1;
+            end else if (push_event) begin
+                if (tag_count == 2'd0) tag_fifo[0] <= next_tag;
+                else                   tag_fifo[1] <= next_tag;
+                tag_count <= tag_count + 2'd1;
+            end
+
+            // ── Response routing ──
+            if (i_rsp_valid && tag_count > 0) begin
+                if (tag_fifo[0] == 1'b0) begin
+                    // Real (cache-pending) read response
+                    rdata_latched <= i_rsp_data;
+                end else begin
+                    // Spec response — buffer or discard
+                    if (spec_abandoned) begin
+                        spec_abandoned <= 1'b0;
+                    end else begin
+                        spec_data     <= i_rsp_data;
+                        spec_buffered <= 1'b1;
+                    end
+                    spec_in_flight <= 1'b0;
+                end
+            end
+
+            // ── Spec push completion ──
+            if (push_spec_event) begin
+                spec_pending_push <= 1'b0;
+                spec_in_flight    <= 1'b1;
+                spec_addr         <= spec_push_addr;
+            end
+
+            // ── Cache-facing FSM ──
             case (state)
                 ADP_IDLE: begin
                     if (i_re || i_we) state <= ADP_BEGIN;
@@ -134,51 +216,55 @@ module sdram_bus_adapter (
 
                 ADP_BEGIN: begin
                     if (!(i_re || i_we)) begin
-                        // Cache de-asserted re/we before the controller
-                        // accepted the request.  This happens at the
-                        // tail of a cache line fill: PRESENT→BEGIN
-                        // shortcut fired because i_re was high in
-                        // PRESENT, but on the last word the cache
-                        // drops o_mem_re the next cycle.  o_req_valid
-                        // is gated above so the controller never saw
-                        // anything; just go back to IDLE.
+                        // Cache backed off (rare).  Drop back to idle.
                         state <= ADP_IDLE;
-                    end else if (i_req_ready) begin
-                        // Latch the payload now that the controller
-                        // has accepted it.  i_* may stop being
-                        // meaningful after PRESENT, so the response
-                        // phase reads from the latched copies.
-                        req_we_r       <= i_we;
-                        req_addr_r     <= i_addr;
-                        req_wdata_r    <= i_wdata;
-                        req_byte_en_r  <= i_byte_en;
-                        state          <= ADP_WAIT_DONE;
+                    end else if (spec_hit_buffered) begin
+                        // Buffered hit — present immediately and queue
+                        // the next spec to keep the chain rolling.
+                        rdata_latched     <= spec_data;
+                        spec_buffered     <= 1'b0;
+                        spec_pending_push <= 1'b1;
+                        spec_push_addr    <= i_addr + 32'd4;
+                        state             <= ADP_PRESENT;
+                    end else if (spec_hit_in_flight) begin
+                        // Spec is in flight for this exact address.  Stay
+                        // in BEGIN; o_busy stays high.  When the response
+                        // arrives, the response handler buffers it; next
+                        // cycle BEGIN takes the spec_hit_buffered branch.
+                    end else if (push_real_event) begin
+                        // Real push accepted.  Any pending spec is
+                        // unusable for the new request: this branch
+                        // is only reached on (a) the initial miss
+                        // when no spec exists, (b) a mispredicted
+                        // address, or (c) a write that may alias the
+                        // spec read.  Cache fills go through the
+                        // spec_hit branches, never here, so this
+                        // unconditional abandonment costs no chain.
+                        if (spec_in_flight) spec_abandoned <= 1'b1;
+                        if (spec_buffered)  spec_buffered  <= 1'b0;
+                        cache_we_r <= i_we;
+                        if (i_re && !spec_pending_push &&
+                            !spec_in_flight && !spec_buffered) begin
+                            spec_pending_push <= 1'b1;
+                            spec_push_addr    <= i_addr + 32'd4;
+                        end
+                        state <= ADP_WAIT_RSP;
                     end
                 end
 
-                ADP_WAIT_DONE: begin
-                    // For reads, rsp_valid and done coincide.  For
-                    // writes there's no rsp_valid — only done.
-                    if (!req_we_r && i_rsp_valid) begin
-                        rdata_latched <= i_rsp_data;
-                        state         <= ADP_PRESENT;
-                    end else if (req_we_r && i_done) begin
+                ADP_WAIT_RSP: begin
+                    // Wait for the response routed to cache (head tag = 0).
+                    if (!cache_we_r && i_rsp_valid && tag_fifo[0] == 1'b0) begin
+                        state <= ADP_PRESENT;
+                    end else if (cache_we_r && i_done && tag_fifo[0] == 1'b0) begin
                         state <= ADP_PRESENT;
                     end
                 end
 
                 ADP_PRESENT: begin
-                    // PRESENT→BEGIN fast path: when the cache is
-                    // already asking for the next word (i_re held
-                    // across a line fill), skip ADP_IDLE and start
-                    // the new request the very next cycle.  By this
-                    // cycle the cache has advanced fill_count and
-                    // i_addr points at the next word.
-                    if (i_re || i_we) begin
-                        state <= ADP_BEGIN;
-                    end else begin
-                        state <= ADP_IDLE;
-                    end
+                    // PRESENT→BEGIN fast path retained from Stage A.
+                    if (i_re || i_we) state <= ADP_BEGIN;
+                    else              state <= ADP_IDLE;
                 end
 
                 default: state <= ADP_IDLE;
