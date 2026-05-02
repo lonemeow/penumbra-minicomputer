@@ -18,7 +18,7 @@ adopting so those optimizations can be added incrementally.
 | Version | Location | State |
 |---------|----------|-------|
 | v1 | (deleted) | Removed once step 4 passed `_ram_check` on hardware. |
-| v2 | `hw/rtl/io/sdram/` + `hw/rtl/sim/sdram_model.sv` | Steps 1–4 verified on hardware (100 MHz CL2); step 5 (phase sweep + bring-up doc) in progress; step 6 (open-row + auto-precharge-off) deferred. |
+| v2 | `hw/rtl/io/sdram/` + `hw/rtl/sim/sdram_model.sv` | Steps 1–4 verified on hardware (100 MHz CL2); step 5 (phase sweep + bring-up doc) in progress; step 6 (open-row + auto-precharge-off) landed; layer-pipelining follow-on (depth-2 CDC + speculative-prefetch bus adapter) also landed. |
 
 ## Locked design decisions
 
@@ -240,13 +240,21 @@ and skips this step.
 
 ## CDC bridge (`sdram_cdc`)
 
-Simple 4-phase handshake (one outstanding request). Two-flop synchronizers
-on each direction's `valid`. Payload fields held quasi-statically and
-sampled only on the synchronized `valid`.
+Depth-2 async FIFO with 2-bit Gray-coded read/write pointers crossing
+between domains via 2-FF synchronizers. Up to 2 outstanding requests at
+any time; order-preserving so responses arrive in issue order. Per-slot
+wide payloads (we/addr/wdata/byte_en sys→sd, rsp_data sd→sys) are
+written *before* the pointer advance, so the receiving side reads
+already-stable data — the standard data-before-valid discipline, just
+with the "valid" carried by the synchronized Gray pointer instead of a
+hand-rolled toggle.
 
-Async FIFO is overkill until multi-outstanding requests exist (step 6+),
-at which point we revisit. The boundary stays the same shape — just
-deeper.
+Sized for the speculative-prefetch bus adapter, which queues a
+real + speculation pair on every accepted read; depth-2 lets both fly
+concurrently without serializing them through a single CDC slot.
+Latency per transaction is unchanged from the depth-1 predecessor —
+deepening removes the serial dependency between successive
+transactions, not the per-transaction round-trip.
 
 ## PHY
 
@@ -281,9 +289,36 @@ etc., would need their own models).
 ## Bus adapter (`sdram_bus_adapter`)
 
 Maps the existing internal sync bus (`i_re`/`i_we`/`o_busy`) onto the
-controller's `req`/`rsp` interface. Single-word transactions; same
-external contract as `simple_mem`/`fpga_ram`/`boot_rom`. Drop-in
-replacement for the v1 controller in `ulx3s_top` and `machine_sim`.
+controller's `req`/`rsp` interface. Single-word transactions on the bus
+side, same external contract as `simple_mem`/`fpga_ram`/`boot_rom` —
+drop-in replacement at the SDRAM region.
+
+Internally pipelined for cache fills:
+
+- **Speculative prefetch.** On every accepted read the adapter pushes
+  a second request for `addr + 4` to the CDC. The depth-2 CDC carries
+  the real fetch and the speculation in flight simultaneously. When
+  the cache later asks for that next address (the typical case during
+  a 4-word line fill) the speculation buffer satisfies it without a
+  fresh CDC round-trip. Mispredicts abandon the in-flight spec — its
+  response is discarded when it arrives — and push the new real
+  request normally. Reads only; writes don't speculate.
+- **1-bit tag FIFO (depth 2).** Each push to the CDC is paired with a
+  tag (0 = real → cache, 1 = spec → buffer/discard). Each `rsp_valid`
+  pulse pops the head tag and routes `rsp_data` accordingly. Order is
+  preserved end-to-end because the CDC's SD side processes requests
+  serially in push order.
+- **Write-accept release.** Writes don't enter `WAIT_RSP`: once the
+  CDC accepts a write, ordering is locked (FIFO + serial controller),
+  so the bus drops `o_busy` immediately rather than waiting for an
+  rsp that the controller doesn't generate for writes. The CDC also
+  gates `rsp_valid` pulses to reads, so write completion can't
+  spuriously feed the response handler.
+
+The adapter still presents a single-word contract upward, so the cache
+and other masters see no protocol change — burst-fill speedup comes
+entirely from the spec-buffer hits the cache observes as faster
+single-word completions.
 
 ## Validation strategy
 
@@ -311,29 +346,34 @@ Three-level test pyramid:
 | 3 | `sdram_phy_ecp5` (IOB flops + ODDRX1F); single-domain at the system clock | ULX3S boots, `_ram_check` passes | ✅ landed (subsumed by step 4 on hardware) |
 | 4 | `sdram_cdc` + dual-domain @ 100 MHz CL2 | `_ram_check` + NetBSD boot | ✅ landed (boots + `_ram_check` passes; PHASE_DEG=270° baseline) |
 | 5 | Phase-shift sweep build target + bring-up doc | Documented working window | ⚙ in progress |
-| 6 | (Later) open-row + auto-precharge-off → pipelined sequential reads | Re-run validation, measure Dhrystone | deferred |
+| 6 | Open-row tracking + auto-precharge-off (Level 1 of `sdram-optimization.md`) | `tb_sdram_test` cold-vs-hit cycle counts; `_ram_check` + membench unchanged on hardware | ✅ landed |
+| 7 | Layer-pipelining: depth-2 CDC FIFO + speculative `addr+4` prefetch in bus adapter | `tb_sdram_cdc` + `make benchmark-rtl` membench miss-LDW improvement | ✅ landed |
+| 8 | (Later) BL=8 line buffer + critical-word-first (Levels 2–3 of `sdram-optimization.md`) | Re-run validation, measure Dhrystone | deferred |
 
 ### Step 4 wiring notes
 
-The CDC bridge (`sdram_cdc.sv`) is a single-outstanding 4-phase
-handshake using toggle synchronizers in each direction:
+The CDC bridge (`sdram_cdc.sv`) is a depth-2 async FIFO with 2-bit
+Gray-coded read/write pointers crossing between domains via 2-FF
+synchronizers (step 7 deepened this from the original depth-1 toggle
+handshake; the boundary shape is the same):
 
-- **Sys → SDRAM (request):** the wide payload (we, addr, wdata,
-  byte_en) lives in sys-domain registers held quasi-statically while
-  `sys_busy = 1`.  A 1-bit `req_tog_sys` flips on each launch; the
-  SDRAM side runs a 2-FF synchronizer + edge detect on it.  The wide
-  payload is sampled across the boundary only after the toggle edge
-  is detected, by which time it's been stable long enough to settle.
-- **SDRAM → sys (done/rsp):** the SDRAM side latches `rsp_data_sd`
-  and toggles `done_tog_sd` in the same cycle the controller pulses
-  `i_done`.  The sys side's 2-FF synchronizer + edge detect catches
-  the change ~3 sys cycles later, then samples `rsp_data_sd` (held
-  stable since the SDRAM side stays in `SD_IDLE` until the next
-  request edge arrives).
+- **Sys → SDRAM (request):** per-slot wide payload (we, addr, wdata,
+  byte_en) is written into `slot[wptr_bin[0]]` *before* the sys side
+  bumps `wptr_bin`. The Gray-coded pointer crosses to the SDRAM side
+  via the 2-FF synchronizer; once the SDRAM side observes empty=0,
+  it samples the slot — by which time the payload has been stable
+  for many cycles (data-before-valid).
+- **SDRAM → sys (done/rsp):** the SDRAM side writes `rsp_data` into
+  `slot[rptr_bin[0]]` and bumps `rptr_bin`. The sys side's
+  synchronized Gray pointer advances ~3 sys cycles later; on each
+  step of advance the sys side pulses `o_rsp_valid` for the retired
+  slot, in order.
 
 CDC latency: ~3 SDRAM cycles in the request direction, ~3 sys cycles
-back.  Negligible against `T_RCD + CL + T_RP + 2 burst beats` at
-100 MHz.
+back, per transaction.  Negligible against `T_RCD + CL + T_RP + 2
+burst beats` at 100 MHz.  Depth 2 lets the speculative-prefetch bus
+adapter keep both a real fetch and a speculation in flight without
+serializing through a single CDC slot — see "Bus adapter" above.
 
 The PLL at the board top now exports three outputs from one 600 MHz
 VCO: CLKOP @ 12.5 MHz (system bus), CLKOS @ 100 MHz / 0° (SDRAM

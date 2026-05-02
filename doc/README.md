@@ -50,6 +50,7 @@ Detailed design of the CPU core and internal FPGA logic.
 *   **[Datapath Design](./internals/datapath.md)** — The three-bus architecture and signal flow.
 *   **[Microcode Reference](./internals/microcode.md)** — Bit-level micro-word format and routine catalog.
 *   **[Microcode Syntax](./internals/uasm-syntax.md)** — Writing microcode assembly for `uasm.py`.
+*   **[CPU-Internal Bus](./internals/cpu-bus.md)** — Contracts inside `cpu_core` (core ↔ MMU ↔ caches ↔ private sysreg devices).
 *   **[MMU Internals](./internals/mmu-internals.md)** — TLB hardware structure and discrete logic mapping.
 *   **[SDRAM Controller v2](./internals/sdram-controller.md)** — Design plan for the rewrite (composable, dual-domain, 100 MHz CL2).
 *   **[SDRAM Optimization](./internals/sdram-optimization.md)** — Controller strategies for bandwidth improvement.
