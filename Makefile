@@ -440,6 +440,18 @@ TOP_N ?= 5
 timing:
 	@hw/tools/timing-report.sh $(BUILD_DIR)/$(TOP)_timing.json $(TOP_N)
 
+# Pretty-print high-fanout nets from the yosys synth JSON.  Useful for
+# diagnosing nextpnr routing-congestion failures: signals with hundreds
+# to thousands of sinks routed through general fabric (rather than
+# ECP5's dedicated global routing) saturate the router.  Like `timing`,
+# operates on whatever the last FPGA build left behind — no rebuild.
+# Override entry count via FANOUT_N=30, threshold via FANOUT_MIN=20.
+.PHONY: fanout
+FANOUT_N   ?= 25
+FANOUT_MIN ?= 50
+fanout:
+	@python3 hw/tools/list_fanout.py $(BUILD_DIR)/$(TOP).json -n $(FANOUT_N) -m $(FANOUT_MIN)
+
 # ── Cleanup ────────────────────────────────────────────────────
 .PHONY: clean
 clean:
