@@ -190,19 +190,29 @@ static void check_range(const char* name, int got, int min, int max) {
 // ══════════════════════════════════════════════════════════════
 
 static void test_sysreg_info(Vcache_test* d) {
-    // INFO register (reg 0) should report cache geometry
-    // Format: {10'b0, type[3:0], ways[3:0], sets[9:0], line_words[3:0]}
+    // INFO register (reg 0) should report cache geometry.
+    // Format (matches cache.sv INFO_VALUE):
+    //   [3:0]   line_words
+    //   [13:4]  num_sets
+    //   [17:14] num_ways
+    //   [19:18] addressing  (0=PIPT, 1=VIPT, 2=VIVT)
+    //   [20]    write_back  (0=WT, 1=WB)
+    //   [21]    write_alloc (0=WnA, 1=WA)
     uint32_t info = sys_read(d, 0);  // SYSREG_CACHE_INFO = 0
 
     uint32_t line_words = info & 0xF;
     uint32_t num_sets   = (info >> 4) & 0x3FF;
     uint32_t num_ways   = (info >> 14) & 0xF;
-    uint32_t cache_type = (info >> 18) & 0xF;
+    uint32_t addressing = (info >> 18) & 0x3;
+    uint32_t write_back = (info >> 20) & 0x1;
+    uint32_t write_alloc = (info >> 21) & 0x1;
 
-    check("info.line_words", line_words, 4);
-    check("info.num_sets",   num_sets,   16);
-    check("info.num_ways",   num_ways,   1);
-    check("info.cache_type", cache_type, 0);  // WT/WnA
+    check("info.line_words",  line_words, 4);
+    check("info.num_sets",    num_sets,   16);
+    check("info.num_ways",    num_ways,   1);
+    check("info.addressing",  addressing, 0);  // PIPT
+    check("info.write_back",  write_back, 0);  // WT
+    check("info.write_alloc", write_alloc, 0); // WnA
 }
 
 static void test_disabled_passthru(Vcache_test* d) {

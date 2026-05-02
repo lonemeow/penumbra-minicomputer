@@ -105,8 +105,17 @@ package penumbra_pkg;
     localparam logic [3:0] SYSREG_CACHE_CTRL  = 4'd1;  // [0]=enable (0 at reset)
     localparam logic [3:0] SYSREG_CACHE_INVAL = 4'd2;  // Write to invalidate
 
-    // ── Cache type encoding (INFO register bits [21:18]) ──────
-    localparam logic [3:0] CACHE_TYPE_WT_WNA = 4'd0;   // Write-through, write-no-allocate
+    // ── Cache INFO register field encoding ────────────────────
+    //  [3:0]   LINE_WORDS
+    //  [13:4]  NUM_SETS
+    //  [17:14] NUM_WAYS
+    //  [19:18] ADDRESSING (PIPT/VIPT/VIVT)
+    //  [20]    WRITE_BACK   (0=write-through, 1=write-back)
+    //  [21]    WRITE_ALLOC  (0=write-no-allocate, 1=write-allocate)
+    //  [31:22] reserved
+    localparam logic [1:0] CACHE_ADDR_PIPT = 2'd0;
+    localparam logic [1:0] CACHE_ADDR_VIPT = 2'd1;
+    localparam logic [1:0] CACHE_ADDR_VIVT = 2'd2;
 
     // ── MMU sysreg addresses (dev_id = 0) ─────────────────────
     localparam logic [3:0] SYSREG_MMU_CR       = 4'd0;  // MMUCR: [0]=M (enable), [15:8]=ASID

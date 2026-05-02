@@ -25,10 +25,12 @@
 module cache
     import penumbra_pkg::*;
 #(
-    parameter NUM_SETS   = 64,
-    parameter LINE_WORDS = 4,
-    parameter NUM_WAYS   = 1,
-    parameter CACHE_TYPE = CACHE_TYPE_WT_WNA
+    parameter NUM_SETS    = 64,
+    parameter LINE_WORDS  = 4,
+    parameter NUM_WAYS    = 1,
+    parameter ADDRESSING  = CACHE_ADDR_PIPT,
+    parameter WRITE_BACK  = 1'b0,   // 0 = write-through, 1 = write-back
+    parameter WRITE_ALLOC = 1'b0    // 0 = write-no-allocate, 1 = write-allocate
 )
 (
     input  logic        i_clk,
@@ -112,11 +114,13 @@ module cache
     logic inval_req;
 
     localparam logic [31:0] INFO_VALUE = {
-        10'b0,
-        CACHE_TYPE[3:0],
-        NUM_WAYS[3:0],
-        NUM_SETS[9:0],
-        LINE_WORDS[3:0]
+        10'b0,                  // [31:22] reserved
+        WRITE_ALLOC[0:0],       // [21]    write-allocate
+        WRITE_BACK[0:0],        // [20]    write-back
+        ADDRESSING[1:0],        // [19:18] PIPT/VIPT/VIVT
+        NUM_WAYS[3:0],          // [17:14]
+        NUM_SETS[9:0],          // [13:4]
+        LINE_WORDS[3:0]         // [3:0]
     };
 
     always_comb begin
