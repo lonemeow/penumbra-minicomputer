@@ -179,6 +179,7 @@ module ulx3s_top (
     end
 
     logic [17:0] rst_cnt = '0;
+    logic        rst_raw;
     logic        rst;
 
     always_ff @(posedge clk) begin
@@ -187,7 +188,22 @@ module ulx3s_top (
         else if (!rst_cnt[17])
             rst_cnt <= rst_cnt + 1;
     end
-    assign rst = !rst_cnt[17];
+    assign rst_raw = !rst_cnt[17];
+
+    // Promote rst onto a global net via DCCA. With ~5700-way fanout
+    // through general fabric, rst was the dominant routing-congestion
+    // source on this design — verified via hw/tools/list_fanout.py
+    // before this change. ECP5 has 16 global nets; only 3 are in use
+    // (PLL clock outputs), so headroom is ample. CE=1 keeps the buffer
+    // always-on; CLKO is combinationally equal to CLKI. (* keep *)
+    // prevents yosys from optimizing the buffer away on the grounds
+    // that CLKO == CLKI functionally — we *want* the DCCA so PnR
+    // routes the output via global net, not the input.
+    (* keep *) DCCA rst_dcca (
+        .CLKI (rst_raw),
+        .CE   (1'b1),
+        .CLKO (rst)
+    );
 
     // ── SDRAM-domain reset: 2-FF synchronizer of `rst` into clk_sdram.
     // Both reset edges (assert and deassert) cross the boundary; the
