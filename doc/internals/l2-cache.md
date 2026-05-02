@@ -1,0 +1,424 @@
+# L2 Cache — Design Plan
+
+This document specifies the design for an optional L2 cache that sits
+between the CPU's `o_mem_*` port and the system bus.  It is a
+forward-looking plan; nothing under `hw/rtl/` implements it yet.  The
+goal is to capture all decisions and their rationale so a later session
+can pick up implementation work without re-deriving the design.
+
+For protocol context this document depends on — and does not duplicate —
+read [`cpu-bus.md`](cpu-bus.md) (CPU-internal bus contract) and
+[`bus-protocol.md`](../hardware/bus-protocol.md) (Penumbra Bus, the
+contract `o_mem_*` honors in its sync-wrapped form).
+
+## Goals
+
+1. **Reduce average miss penalty.**  L1 misses currently cross the
+   `bus_adapter → CDC → controller` chain to async SDRAM.  Per the
+   `project_memory_layer_costs` finding, that path dominates miss cost
+   (~85 %) regardless of SDRAM controller optimisations.  An L2 hit
+   stays on the system clock domain and never crosses the CDC bridge.
+2. **Absorb L1 D-cache write-through traffic.**  L1-D is write-through
+   write-no-allocate.  Every store currently round-trips to SDRAM.
+   With L2 acting as a write-back layer, stores terminate in BRAM.
+3. **Tolerate multitasking pressure.**  NetBSD context switches and
+   kernel/user code interleaving inflate working sets and conflict
+   miss rates.  The L2 must be sized and associated to absorb this,
+   not just hold one userland's hot loop.
+4. **Stay optional and parameterised.**  The L2 must be removable for
+   smaller FPGA targets and tunable for benchmark sweeps.
+
+Explicitly **not goals** (see also "Future Work" below):
+
+- Multicore / cache-coherent DMA.  Single-core only; DMA coherence is
+  software-managed via cache-maintenance sysregs.
+- Inclusivity guarantees with L1.  Non-inclusive non-exclusive (NINE)
+  is sufficient for single-core and minimises bookkeeping.
+- L3 or further levels.  All BRAM-resident; one cache level past L1
+  exhausts the meaningful latency tiers on the ECP5.
+
+## Placement
+
+L2 sits *outside* `cpu_core`, on the synchronous side of the system
+bus.  It is the first thing `o_mem_*` hits before address decoding.
+
+```
+┌── cpu_core ──────────────────────────────┐
+│ L1-I            L1-D                     │
+│   └────┐    ┌────┘                       │
+│        │    │                            │
+│      memory port mux                     │
+└────────────┬─────────────────────────────┘
+             │  o_mem_* (sync-wrapped Penumbra Bus)
+             │  + new o_mem_cacheable hint
+             ▼
+        ┌─────────────┐
+        │  l2_cache   │  ← new module (this plan)
+        └──────┬──────┘
+               │  same-shape downstream port
+               ▼
+        bus_devsel ──► SDRAM adapter ─► CDC ─► controller ─► SDRAM
+                  ├── boot_rom
+                  ├── UART
+                  ├── SPI
+                  └── …
+```
+
+L2 must precede `bus_devsel` (not sit underneath it) because:
+
+- A dirty L2 line must drain before any MMIO access that races with
+  it.  Sitting in front of the decoder serialises all RAM-bound
+  traffic through the same cache.
+- The address-cacheable decision is per-page (PTE.C), not per-device.
+  A DMA buffer in RAM marked uncacheable must reach the SDRAM
+  controller without L2 caching it.
+
+## Bus Interface
+
+L2 honours the **same protocol on both ports**.  Anything `cpu_core`
+emits, `l2_cache` accepts; anything `l2_cache` emits downstream, the
+SDRAM `bus_adapter` already accepts (it's the same shape currently
+connected to `cpu_core.o_mem_*`).
+
+```
+        ┌───────────────────────────────┐
+        │           l2_cache            │
+in ─────┤ i_paddr, i_wdata, i_byte_en   │
+        │ i_re, i_we                    │
+        │ i_cacheable          (NEW)    │
+        │ o_rdata, o_busy               │
+        │                               │
+        │ o_mem_addr, o_mem_wdata,      │
+        │ o_mem_byte_en, o_mem_we,      │
+        │ o_mem_re                      ├──── out
+        │ i_mem_rdata, i_mem_busy       │
+        │                               │
+        │ i_sys_reg, i_sys_wdata,       │
+        │ i_sys_we, o_sys_rdata         │
+        └───────────────────────────────┘
+```
+
+### Cacheability hint
+
+`cpu_core` gains a new output `o_mem_cacheable` (one bit).  It is the
+L1's forwarded copy of `mmu.o_cacheable` for the access currently on
+the memory port.  L2 honours it as follows:
+
+| `i_cacheable` | L2 behaviour |
+|---|---|
+| 1 | Look up tag.  Hit → serve from BRAM.  Miss → allocate, fill, install. |
+| 0 | Pass through immediately (do not look up, do not install).  Writes do **not** invalidate any L2 line — by convention an uncacheable region must not alias a cacheable one. |
+
+This bit replaces the alternative of compiling cacheable address
+ranges into L2.  Routing the PTE.C decision through the bus keeps L2
+oblivious to the system memory map and consistent with `module_independence`.
+
+### Timing contract
+
+L2 inherits the L1 cache contract from [`cpu-bus.md`](cpu-bus.md):
+
+- **Hit:** `o_busy=0` and valid `o_rdata` in the same cycle as `i_re`.
+  L2 hits are pipelined (≥ 2 cycles BRAM read + tag compare), so this
+  applies after the pipeline has filled — i.e., for streaming hits the
+  contract is "1 hit per cycle, drop = valid", not "0 latency from
+  request to result."  The CPU-internal STALL sequencer already
+  tolerates the latter via `cache_busy`.
+- **Miss:** `o_busy=1` from the same cycle, held until refill
+  completes (line allocated, optionally writeback completed for
+  evicted dirty victim).  On the cycle `o_busy` drops, `o_rdata`
+  carries the requested word.
+- **Pass-through (uncacheable):** `o_busy` mirrors downstream
+  `i_mem_busy`.  L2 introduces no extra cycle vs. the no-L2 build.
+
+## Internal Organisation
+
+### Parameters
+
+All sizes are parameters with the defaults below.  The values were
+chosen for NetBSD-class workloads on ULX3S; benchmark sweeps will
+inform tuning.
+
+| Parameter | Default | Notes |
+|---|---|---|
+| `CACHE_BYTES` | `65536` | 64 KiB.  Sized to absorb kernel + one userland working set across context switches. |
+| `LINE_BYTES` | `16` | Equal to L1 line.  Avoids sub-line tracking. |
+| `NUM_WAYS` | `4` | NetBSD ⇒ multitasking ⇒ conflict-miss pressure. |
+| `NUM_SETS` | `1024` (derived) | `CACHE_BYTES / (LINE_BYTES * NUM_WAYS)` |
+| `HIT_LATENCY` | `2` | BRAM read (1) + tag compare/way mux (1).  Parameter-stub; reduce only after fmax study. |
+| `REPLACEMENT` | `LRU` | True LRU for 4-way fits in 6 bits/set; pseudo-LRU is an option for larger ways. |
+| `WRITE_POLICY` | `WB_WA` | Write-back, write-allocate.  Other values reserved for benchmark experiments. |
+
+`CACHE_BYTES`, `NUM_WAYS`, and `LINE_BYTES` are the primary sweep
+axes.  At default geometry, tag = `32 - log2(NUM_SETS) - log2(LINE_BYTES)`
+= `32 - 10 - 4` = `18` bits.
+
+### Storage
+
+```
+Tag SRAM    : NUM_SETS rows × NUM_WAYS columns × (TAG_BITS + valid + dirty)
+Data SRAM   : NUM_SETS × NUM_WAYS × LINE_BYTES bytes
+LRU SRAM    : NUM_SETS rows × LRU_BITS bits
+```
+
+For the default geometry that is approximately:
+
+- Tag: 1024 × 4 × 20 ≈ 80 Kbit (~5 EBR)
+- Data: 1024 × 4 × 128 = 512 Kbit (~30 EBR)
+- LRU:  1024 × 6     = 6 Kbit  (≪1 EBR)
+
+Total ≈ **35 EBR / 208** on ECP5-85F, leaving ample BRAM for the rest
+of the system.  At 16 KiB total this drops to ~10 EBR and at 8 KiB
+to ~6 EBR — a useful operating point for the smaller ECP5-25F variant.
+
+### Pipeline (default `HIT_LATENCY=2`)
+
+```
+Cycle 0: address in.  BRAM tag read + BRAM data read launched.
+Cycle 1: tag compare.  Way mux.  o_rdata + o_busy=0 on hit.
+         On miss: o_busy held high, allocate state engaged.
+```
+
+If fmax study later shows the tag-compare + way-mux + drive-out path
+is critical, `HIT_LATENCY=3` adds an output flop without changing the
+contract — `cpu_core` already tolerates multi-cycle misses.
+
+### Replacement: 4-way LRU
+
+True LRU for 4 ways needs 6 bits/set encoding the ordering of all
+four ways (`C(4,2) = 6` pairwise relations).  On every access, the
+touched way moves to MRU; updates are derivable in combinational
+logic.  Pseudo-LRU (tree-PLRU, 3 bits/set) is an alternative if 6
+bits per set across 1024 sets becomes a routing concern; it is
+roughly equivalent in miss rate at 4-way.
+
+## Write Policy: Write-Back, Write-Allocate
+
+This is the headline change vs. L1.
+
+- **Write hit:** Update the data array, set `dirty=1`.  No bus
+  traffic.
+- **Write miss:** Allocate (read line from memory), then update the
+  in-cache copy and set `dirty=1`.  This converts a single store into
+  one read-line + dirty-mark, which is more bus traffic up front but
+  amortises across subsequent writes to the same line.
+- **Eviction:** If the victim line has `dirty=1`, write back to memory
+  before installing the new line.  Sequence:
+  1. Begin writeback of victim (16 B = 4 bus words).
+  2. Begin fill of new line.
+  3. Both share the downstream port; serialise (writeback first).
+- **Clean eviction:** Discard.
+
+A small write-back buffer (1–2 lines) decouples the eviction
+writeback from the fill of the incoming line.  Without it, the worst-
+case fill latency is `WB_LATENCY + FILL_LATENCY`; with a 1-deep
+buffer, an immediate fill can start while the writeback drains in
+the background.  Defer the buffer to phase 3 (see Phasing) if the
+naïve serial implementation hits perf targets.
+
+## Sysreg Device
+
+Allocate **`SYSDEV_L2 = 9`** (next free after MACH=8).  Register map:
+
+| Reg | Name | RW | Bits | Purpose |
+|---|---|---|---|---|
+| 0 | `INFO` | R | `{type, ways, sets[15:0], line_words}` | Self-describing geometry; **`0` means "no L2 present"**. |
+| 1 | `CTRL` | RW | `{31'b0, enable}` | Master enable.  Default `0` (disabled at reset, like L1). |
+| 2 | `INVAL_ALL` | W | — | Drop all lines (clean **and** dirty).  Dirty data is lost; caller is responsible. |
+| 3 | `INVAL_LINE` | W | phys addr | Drop one line by physical address.  No writeback. |
+| 4 | `FLUSH_ALL` | W | — | Writeback all dirty lines, retain in cache. |
+| 5 | `FLUSH_LINE` | W | phys addr | Writeback one line by physical address, retain. |
+| 6 | `STATUS` | R | `{busy, …}` | `busy=1` while a multi-cycle INVAL_ALL/FLUSH_ALL is in progress. |
+| 7+ | perfctrs | R | 32-bit free-running | hits, misses, writebacks, evictions (proposed). |
+
+Software-visible packing of `INFO` matches L1's existing layout
+convention so the kernel can reuse the parsing path.  The "0 means
+absent" hook is what lets the kernel and ROM probe presence portably:
+`RDSYS SYSDEV_L2, INFO`; if zero, no L2 — skip cache-maintenance.
+
+The `INVAL`/`FLUSH` distinction follows ARM's c7 ops:
+
+- **Invalidate** = drop without writeback.  Dangerous if dirty.  Use
+  before reading a buffer that DMA just wrote.
+- **Flush** (a.k.a. clean) = writeback dirty, line stays valid.  Use
+  before starting a DMA-out so the device sees current data.
+
+`STATUS.busy` lets the kernel poll completion of bulk ops without
+blocking the sysreg bus.  The sysreg interface itself is single-cycle
+(per `cpu-bus.md`); the cache machinery runs asynchronously to it and
+reports completion through `STATUS`.  This is the same pattern the
+implementer note in `cpu-bus.md` recommends ("if a register read
+genuinely cannot complete in one cycle, expose status separately").
+
+## Cache Maintenance Operations
+
+Software-managed coherence flows from `WRSYS SYSDEV_L2, *`.  Three
+canonical patterns:
+
+**DMA-out (CPU prepares a buffer, device reads RAM):**
+```
+for line in buffer: WRSYS SYSDEV_L2, FLUSH_LINE, line_addr
+WRSYS device, START
+```
+
+**DMA-in (device writes RAM, CPU reads):**
+```
+WRSYS device, START
+… wait completion …
+for line in buffer: WRSYS SYSDEV_L2, INVAL_LINE, line_addr
+read buffer
+```
+
+**I-cache coherence after RAM-loaded code:**
+```
+for line in code: WRSYS SYSDEV_L2, FLUSH_LINE, line_addr
+                  WRSYS SYSDEV_DCACHE, INVAL  (already exists)
+                  WRSYS SYSDEV_ICACHE, INVAL  (already exists)
+```
+
+NetBSD's `pmap` and bus-DMA layer already invoke architecture-
+specific cache hooks; the L2 ops slot in alongside the existing L1
+hooks.
+
+## Optional Bypass (`HAS_L2 = 0`)
+
+Top modules (`machine_sim`, `ulx3s_top`) gate L2 instantiation:
+
+```systemverilog
+generate if (HAS_L2) begin : g_l2
+    l2_cache #(.CACHE_BYTES(L2_BYTES), .NUM_WAYS(L2_WAYS)) u_l2 (...);
+end else begin : g_no_l2
+    /* straight wires from cpu_core.o_mem_* to bus_devsel */
+end endgenerate
+```
+
+When `HAS_L2=0`:
+
+- The L2 sysreg device is not instantiated; the system-level sysreg
+  fan-in returns `0` for ID 9.  Software's `RDSYS SYSDEV_L2, INFO`
+  reads `0` → "absent" → maintenance ops are skipped.
+- The `o_mem_cacheable` bit emitted by `cpu_core` is dropped by the
+  no-L2 wiring.  Downstream devices ignore it (they always have).
+- No kernel changes are required to support both builds.
+
+To make this drop-in clean we should land **`hw/rtl/sim/l2_passthrough.sv`**
+in phase 0 (a literal wire-through with the `i_cacheable` input
+ignored).  This validates the bus shape and exercises the
+`HAS_L2=0` code path *before* the real L2 storage exists, so
+later regressions can be A/B'd against a known-good identity.
+
+## 74xx Discrete Feasibility
+
+The L2 design is feasible in 74xx but is the most BRAM-hungry module
+in the system, and the discrete equivalent maps to off-CPU SRAM
+chips, not internal logic.  Notes for that build:
+
+- **Tag SRAM:** small (~80 Kbit at default geometry) — well within a
+  single SRAM chip.  Tag compare + way mux is a few '85 magnitude
+  comparators and a 4:1 mux per data byte.
+- **Data SRAM:** 64 KiB at default geometry — fits in a single
+  modern asynchronous SRAM, or a pair of 32 KiB chips for 32-bit
+  lanes.
+- **Replacement:** True 4-way LRU with 6 bits/set in a small SRAM is
+  feasible.  Pseudo-LRU is even cheaper (3 bits/set).
+- **Pipelining:** The discrete build can adopt the same `HIT_LATENCY`
+  model — input latch, SRAM access, output latch.  Async SRAM
+  imposes a different timing budget, but the protocol contract
+  (drop = valid) is unchanged.
+- **Write-back machinery:** A small FSM controlling read-modify-
+  writeback on eviction.  No special discrete pitfalls.
+
+The two cost knobs that change in discrete vs. FPGA: SRAM chips are
+cheaper to oversize than EBRs (so a discrete build naturally favours
+larger L2), but write-back FSM gates are more expensive.  Both lean
+toward "keep the controller logic simple, scale capacity."
+
+## Verification Plan
+
+Per project convention every new behaviour is gated on a test
+landing in the same commit.  Plan:
+
+1. **Unit testbench** `tb_l2_cache`:
+   - Read hit / read miss with allocation.
+   - Write hit (dirty bit set, no bus traffic).
+   - Write miss (allocate, dirty bit set).
+   - Dirty eviction triggers writeback before fill.
+   - Invalidate-line drops one set's matching way without writeback.
+   - Invalidate-all clears valid bits across all sets.
+   - Flush-line writes back a dirty line and keeps it valid.
+   - Flush-all walks every set, writing back dirty lines.
+   - Uncacheable access bypasses entirely (no tag lookup, no install).
+2. **Property assertions** on the same lines as `cache.sv`:
+   - Read-hit ⇒ `!o_busy` (single-cycle drop contract).
+   - Writeback-before-fill on dirty eviction (no out-of-order bus
+     accesses that would drop the dirty data).
+3. **Integration tests** via `machine_sim`:
+   - Existing 30-program test suite passes unchanged with `HAS_L2=1`
+     and `HAS_L2=0`.
+   - Add `test_l2_*` programs exercising INVAL/FLUSH from C.
+4. **Performance regressions:**
+   - Dhrystone before/after, expect CPI to drop materially from the
+     current ~7.10 (write-through traffic absorbed).
+   - Membench before/after, expect cached W/H/B sweep MB/s up.
+
+## Phasing
+
+Land in commit-sized increments per `feedback_incremental_commits`:
+
+1. **Phase 0 — bus shape.**  Add `o_mem_cacheable` to `cpu_core`.
+   Land `l2_passthrough.sv` and wire it via `HAS_L2`.  No
+   functional change with default `HAS_L2=0`.  Test: existing suite
+   passes, plus a no-op `HAS_L2=1` sim path.
+2. **Phase 1 — read-only L2.**  Tag/data arrays, hit/miss/allocate,
+   write **pass-through** (no dirty bit, no writeback).  Equivalent
+   to a write-no-allocate read cache on top of L1.  Establishes
+   tag/data infrastructure and `INVAL` ops.  Already worth running
+   benchmarks.
+3. **Phase 2 — write-back.**  Add dirty bit, write-allocate,
+   eviction writeback, `FLUSH` ops.  This is the headline perf
+   commit.
+4. **Phase 3 — write buffer.**  1-deep writeback buffer to overlap
+   eviction and fill.  Skip if phase 2 already meets perf targets.
+5. **Phase 4 — perfctrs.**  Hits, misses, writebacks, evictions on
+   `SYSDEV_L2` regs 7+.  Lets membench compute hit rate directly.
+
+Each phase is an independent commit with its own test addition.
+
+## Open Questions
+
+- **Eviction policy under simultaneous fill+writeback:** strict
+  serial in phase 2; a 1-line buffer in phase 3.  Decide whether the
+  buffer is worth the gates after measuring phase 2.
+- **`INVAL_ALL` vs `FLUSH_ALL` cycle budget:** O(NUM_SETS × NUM_WAYS)
+  internal cycles.  At default geometry that's ~4096 cycles for an
+  invalidate (no bus traffic) and many more for a flush (one
+  writeback per dirty line).  The kernel polls `STATUS.busy` and
+  blocks; document upper bounds in the kernel-side cache-ops doc
+  when implemented.
+- **Snoop port:** if a future DMA engine joins the design and the
+  software-managed approach proves painful, a snoop port could be
+  retrofit.  Not in scope for the initial design but the sysreg
+  layout and bus shape do not preclude it.
+
+## Future Work
+
+- **Larger lines** (32 B) — would require sub-line tracking in L1 or
+  matching L1 line size.  Defer.
+- **Inclusive policy** — only justified if a coherent device cache
+  is added.  Defer.
+- **L1 → L2 victim cache mode** — alternative to inclusive, useful
+  for direct-mapped L1.  Could be a phase-N benchmark target.
+
+## See Also
+
+- [`cpu-bus.md`](cpu-bus.md) — CPU-internal bus contract that
+  `o_mem_*` honors and that L2 transparently extends.
+- [`bus-protocol.md`](../hardware/bus-protocol.md) — Penumbra Bus
+  spec; the L2's downstream port speaks this protocol's sync wrapper.
+- [`sdram-controller.md`](sdram-controller.md) and
+  [`sdram-optimization.md`](sdram-optimization.md) — controller-side
+  optimisations.  L2 reduces frequency of trips to the controller;
+  controller optimisations reduce cost of each remaining trip.  Both
+  axes compose multiplicatively.
+- [`mmu.md`](../system/mmu.md) — origin of the `cacheable` bit (PTE.C).
+- [`sysregs.md`](../system/sysregs.md) — programmer-visible device map
+  the new `SYSDEV_L2` will be added to.
