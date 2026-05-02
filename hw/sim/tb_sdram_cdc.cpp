@@ -8,12 +8,13 @@
 // Reads return a deterministic value derived from the address
 // (addr ^ 0xCAFE0000) so the bridge's response routing can be verified.
 //
-// Test cases (regression for single-outstanding behaviour — must pass
-// against both the current CDC and any deeper future variant):
+// Test cases:
 //   • Single read round-trip
 //   • Single write round-trip (no rsp_data)
 //   • Back-to-back sequential transactions
 //   • Distinct-address reads (response routing integrity)
+//   • Depth-2 in-flight: two requests issued before either completes;
+//     fails on a single-outstanding bridge, passes on a depth-2 one
 //
 // Ends with non-zero exit code on any failure.
 //
@@ -240,6 +241,89 @@ int main(int argc, char** argv) {
             }
         }
         if (ok) printf("  PASS: 8 distinct-address reads\n");
+    }
+
+    // ── Test 5: depth-2 in-flight ────────────────────────────
+    // Push two requests in close succession without waiting for either
+    // to complete.  On a single-outstanding bridge the second
+    // o_sys_req_ready never pulses (sys_busy stays high until the
+    // first done arrives); on a depth-2 bridge both pulses appear
+    // within a few sys cycles.  Then verify both responses come back
+    // in order with correct data — confirms response routing across
+    // the slot pointers.
+    {
+        uint32_t addr_a = 0x00009000u;
+        uint32_t addr_b = 0x00009004u;
+
+        // Submit A
+        d->i_sys_req_valid   = 1;
+        d->i_sys_req_we      = 0;
+        d->i_sys_req_addr    = addr_a;
+        d->i_sys_req_byte_en = 0xF;
+
+        int safety = 200;
+        int last = d->i_sys_clk;
+        while (safety-- > 0) {
+            step_with_ctrl(d);
+            if (d->i_sys_clk == 1 && last == 0 && d->o_sys_req_ready) break;
+            last = d->i_sys_clk;
+        }
+        if (safety <= 0) {
+            printf("  FAIL: depth-2 — first req_ready never pulsed\n");
+            errors++;
+        }
+
+        // Switch fields to B and wait for second accept.  With the
+        // 1-cycle accept deadzone this happens exactly 2 sys cycles
+        // (32 steps at 5 ns) after the first accept — wait several
+        // sys cycles' worth of steps to give a clear pass/fail.
+        d->i_sys_req_addr = addr_b;
+        safety = 200;
+        last = d->i_sys_clk;
+        bool got_b = false;
+        while (safety-- > 0) {
+            step_with_ctrl(d);
+            if (d->i_sys_clk == 1 && last == 0 && d->o_sys_req_ready) {
+                got_b = true;
+                break;
+            }
+            last = d->i_sys_clk;
+        }
+        if (!got_b) {
+            printf("  FAIL: depth-2 — second req_ready did not pulse within 30 sys cycles\n");
+            printf("        (this is the failure mode of a single-outstanding bridge)\n");
+            errors++;
+        } else {
+            printf("  PASS: depth-2 — both reqs accepted while in flight\n");
+        }
+
+        d->i_sys_req_valid = 0;
+
+        uint32_t r_a = 0, r_b = 0;
+        // Wait for first done
+        safety = 8000;
+        last = d->i_sys_clk;
+        while (safety-- > 0) {
+            step_with_ctrl(d);
+            if (d->i_sys_clk == 1 && last == 0 && d->o_sys_done) {
+                r_a = d->o_sys_rsp_data;
+                break;
+            }
+            last = d->i_sys_clk;
+        }
+        // Wait for second done
+        safety = 8000;
+        last = d->i_sys_clk;
+        while (safety-- > 0) {
+            step_with_ctrl(d);
+            if (d->i_sys_clk == 1 && last == 0 && d->o_sys_done) {
+                r_b = d->o_sys_rsp_data;
+                break;
+            }
+            last = d->i_sys_clk;
+        }
+        check(r_a, addr_a ^ 0xCAFE0000u, "depth-2 A response");
+        check(r_b, addr_b ^ 0xCAFE0000u, "depth-2 B response");
     }
 
     delete d;
