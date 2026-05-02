@@ -185,9 +185,14 @@ module sdram_cdc (
             // Wide rsp_data is safe to read because SD wrote it
             // before bumping its rptr (data-before-valid; sync
             // delay > 2 SD cycles ensures stability).
+            //
+            // rsp_valid pulses only for reads — writes report
+            // completion via o_sys_done alone.  Without this gate,
+            // a write retiring while a later read is also in flight
+            // would spuriously latch garbage rdata at the master.
             if (sys_has_retired) begin
                 o_sys_done      <= 1'b1;
-                o_sys_rsp_valid <= 1'b1;
+                o_sys_rsp_valid <= !slot_we[sys_rptr_bin[0]];
                 o_sys_rsp_data  <= rsp_data[sys_rptr_bin[0]];
                 sys_rptr_bin    <= sys_rptr_bin + 2'd1;
             end

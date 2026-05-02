@@ -51,10 +51,18 @@
 //   ADP_IDLE       → no transaction in flight; o_busy = (i_re|i_we)
 //   ADP_BEGIN      → cache request live; deciding whether to consume
 //                    spec buffer, wait for in-flight spec, or push real
-//   ADP_WAIT_RSP   → real request accepted (payload latched), waiting
-//                    for the controller's response (rsp_valid/done)
+//   ADP_WAIT_RSP   → real READ request accepted, waiting for the
+//                    controller's read response (rsp_valid)
 //   ADP_PRESENT    → drop o_busy, present rdata for one cycle so the
 //                    cache can sample it
+//
+// Writes never enter ADP_WAIT_RSP — once the CDC accepts a write into
+// its slot, ordering is locked (CDC FIFO + serial controller), so any
+// later read or write at the same address will land after this write.
+// We can release the cache the moment `req_ready` pulses by going
+// straight from BEGIN to PRESENT.  The eventual `i_done` still pops
+// the tag FIFO via the always-on response-handling logic; the cache-
+// facing FSM doesn't need to be involved.
 //
 // Speculation push happens combinationally whenever `spec_pending_push`
 // is set and we're not currently driving a real request — the same
@@ -97,9 +105,9 @@ module sdram_bus_adapter (
 
     state_t state;
 
-    // Latched real-request bookkeeping.  cache_we_r distinguishes
-    // read/write completion paths in WAIT_RSP.
-    logic        cache_we_r;
+    // Latched read response.  Writes don't need a latched payload
+    // because they're released to the cache the moment the CDC accepts
+    // them — no per-transaction state needed past BEGIN.
     logic [31:0] rdata_latched;
 
     // Speculation state
@@ -156,7 +164,6 @@ module sdram_bus_adapter (
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
             state              <= ADP_IDLE;
-            cache_we_r         <= 1'b0;
             rdata_latched      <= '0;
             spec_in_flight     <= 1'b0;
             spec_buffered      <= 1'b0;
@@ -242,23 +249,24 @@ module sdram_bus_adapter (
                         // unconditional abandonment costs no chain.
                         if (spec_in_flight) spec_abandoned <= 1'b1;
                         if (spec_buffered)  spec_buffered  <= 1'b0;
-                        cache_we_r <= i_we;
                         if (i_re && !spec_pending_push &&
                             !spec_in_flight && !spec_buffered) begin
                             spec_pending_push <= 1'b1;
                             spec_push_addr    <= i_addr + 32'd4;
                         end
-                        state <= ADP_WAIT_RSP;
+                        // Reads wait for response data; writes are
+                        // fire-and-forget through the CDC FIFO since
+                        // ordering is preserved downstream.
+                        state <= i_we ? ADP_PRESENT : ADP_WAIT_RSP;
                     end
                 end
 
                 ADP_WAIT_RSP: begin
-                    // Wait for the response routed to cache (head tag = 0).
-                    if (!cache_we_r && i_rsp_valid && tag_fifo[0] == 1'b0) begin
+                    // Reads only.  Wait for the response routed to
+                    // cache (head tag = 0); writes don't visit this
+                    // state — they go BEGIN→PRESENT directly.
+                    if (i_rsp_valid && tag_fifo[0] == 1'b0)
                         state <= ADP_PRESENT;
-                    end else if (cache_we_r && i_done && tag_fifo[0] == 1'b0) begin
-                        state <= ADP_PRESENT;
-                    end
                 end
 
                 ADP_PRESENT: begin
