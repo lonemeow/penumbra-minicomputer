@@ -507,9 +507,10 @@ module cpu_core
     logic [3:0]  icache_mem_byte_en;
     logic        icache_mem_we, icache_mem_re;
 
-    cache u_icache (
+    cache_vipt u_icache (
         .i_clk        (i_clk),
         .i_rst        (i_rst),
+        .i_vaddr      (mmu_vaddr),
         .i_paddr      (mmu_paddr),
         .i_wdata      (32'b0),
         .i_byte_en    (4'b0),
@@ -537,9 +538,10 @@ module cpu_core
     logic [3:0]  dcache_mem_byte_en;
     logic        dcache_mem_we, dcache_mem_re;
 
-    cache u_dcache (
+    cache_vipt u_dcache (
         .i_clk        (i_clk),
         .i_rst        (i_rst),
+        .i_vaddr      (mmu_vaddr),
         .i_paddr      (mmu_paddr),
         .i_wdata      (dp_mem_wdata),
         .i_byte_en    (byte_en),
