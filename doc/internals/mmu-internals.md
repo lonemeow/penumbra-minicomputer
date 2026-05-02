@@ -35,8 +35,25 @@ Two parallel lookup structures, combined with pinned-hit-wins priority:
 
 ## Cache Hardware
 
-Split I/D direct-mapped PIPT caches:
+Split I/D direct-mapped VIPT caches (1 KiB each, 64 sets × 4-word lines):
+- Index and word offset come from the virtual address (`i_vaddr[9:0]`),
+  so the cache RAM lookup runs in parallel with TLB translation.
+- Tag compare uses the physical address (`i_paddr[31:10]`) once
+  translation completes, gated by valid + permission.
+- Aliasing-free precondition: cache size ≤ page size (1 KiB ≤ 4 KiB),
+  so the index+offset bits live entirely inside the page offset where
+  vaddr and paddr are bit-identical. No synonym/homonym handling, no
+  page coloring, no ASID flushes — VIPT is purely a timing change here.
 - Read miss: burst-fills entire line (4 words) from memory.
 - Write hit: updates cache line (byte-granular) + writes through to memory.
 - Write miss: pass-through (write-no-allocate).
 - Uncacheable (C=0): pass-through to memory.
+
+The cache state machine reacts to its inputs via registered shadow
+flops (`i_re_q`, `i_we_q`, `hit_q`, `i_paddr_q`, …) so a real flop
+boundary sits between the microcode-driven cache inputs and the cache
+state-machine D-cone. The combinational hit path (vaddr → idx ‖ TLB →
+tag compare → o_rdata, o_busy) stays untouched, preserving the
+zero-cycle hit. CPU-visible cost: read-miss fills, write-throughs, and
+invalidates start one cycle later internally; the CPU stalls naturally
+through this via the unchanged `o_busy` contract.

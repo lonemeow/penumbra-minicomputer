@@ -501,9 +501,12 @@ safe.
 ### Uncached Access
 
 MMIO and DMA regions must bypass the cache. Set `C=0` in the TLB entry
-for these pages. Penumbra uses PIPT caches, so the `C` bit is available
-from the TLB lookup before the cache is consulted — the cache checks
-`C` and bypasses itself when `C=0`.
+for these pages. Penumbra uses VIPT caches sized at most one page
+(1 KiB direct-mapped, ≤ 4 KiB page), so the cache RAM index runs in
+parallel with TLB translation. The `C` bit and physical tag arrive
+together at the end of the cycle and gate the hit/commit decision —
+when `C=0` the cache treats the access as pass-through and forwards
+it to memory, regardless of any incidental tag match.
 
 ### I-Cache Coherence
 

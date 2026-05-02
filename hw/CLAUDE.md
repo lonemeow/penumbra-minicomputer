@@ -46,15 +46,16 @@ This file provides detailed hardware context for work under `hw/`. The root `CLA
 | UART TX | `rtl/fpga/uart_tx.sv` | via test tops | Standalone UART TX shift register for test designs (ulx3s\_hello, etc.) |
 | FPGA RAM | `rtl/fpga/fpga_ram.sv` | via ulx3s\_top | BRAM-friendly memory: four byte-wide banks with `ram_style` attribute. Address wraps for size probing. |
 | Boot ROM | `rtl/soc/boot_rom.sv` | via machine_sim | Read-only memory (64 KB default), loads program.hex |
-| Shared package | `rtl/core/penumbra_pkg.sv` | — | REG\_\*, ALU\_\*, COND\_\*, SR\_\*, VEC\_\*, FAULT\_\*, SYSDEV\_\*, SYSREG\_\*, CACHE\_TYPE\_\*, UART\_\*, SPR\_\*, ACFG\_\* and base address constants |
+| Shared package | `rtl/core/penumbra_pkg.sv` | — | REG\_\*, ALU\_\*, COND\_\*, SR\_\*, VEC\_\*, FAULT\_\*, SYSDEV\_\*, SYSREG\_\*, CACHE\_ADDR\_\* (PIPT/VIPT/VIVT), UART\_\*, SPR\_\*, ACFG\_\* and base address constants |
 | CPU identity | `rtl/soc/cpuid.sv` | via cpu_core | Read-only CPU identity (CPU_ISA + CPU_NAME), sysreg device 1 regs 0–4. Instantiated inside cpu_core; merged with cpu_perfctr by reg-range mux. |
 | Machine identity | `rtl/soc/machid.sv` | via machine_sim + ulx3s_top | Read-only board identity (MACH_FEAT, MACH_NAME, CPU_FREQ), sysreg device 8. |
 | TLB (main) | `rtl/mmu/tlb.sv` | 111/111 | 64-entry 2-way SA, parallel lookup, one-hot permission check, indexed sysreg R/W |
 | TLB (pinned) | `rtl/mmu/tlb_pinned.sv` | via test\_ptlb | 4-entry FA, parallel lookup, pinned-hit-wins priority over main TLB |
 | TLB unit | `rtl/mmu/tlb_unit.sv` | — | Wraps main + pinned TLB behind unified lookup + sysreg interface (regs 3-8) |
 | MMU | `rtl/mmu/mmu.sv` | — | Bypass/translate mux, force\_bypass for vector table read, alignment check, sysreg routing (regs 0-2), fault latching |
-| Cache | `rtl/soc/cache.sv` | 42/42 | Parameterized PIPT cache (NUM_SETS, LINE_WORDS, NUM_WAYS). Write-through/write-no-allocate. Burst line fill on read miss. Sysreg interface. |
-| Cache stub | `rtl/sim/cache_stub.sv` | — | Combinational pass-through, retained for reference. Replaced by cache.sv in cpu_core. |
+| Cache (VIPT) | `rtl/soc/cache_vipt.sv` | 42/42 | L1 cache used by `cpu_core` for both I-cache and D-cache. Index/word from vaddr (parallel with TLB), tag compare from paddr (post-translation). Aliasing-free precondition: cache ≤ page size, asserted at sim time. State machine driven by registered shadow flops (`i_re_q`, `i_we_q`, `hit_q`, `i_paddr_q`, …) so the µROM-rooted control path can't propagate combinationally into `valid[i].LSR`. Write-through/write-no-allocate; burst line fill on read miss; sysreg interface. |
+| Cache (PIPT) | `rtl/soc/cache.sv` | 42/42 | Original PIPT cache. Retained for the future L2 cache (`doc/internals/l2-cache.md`), where the index/tag relationship is different (cache larger than a page) and PIPT semantics matter. Not currently instantiated in `cpu_core`. |
+| Cache stub | `rtl/sim/cache_stub.sv` | — | Combinational pass-through, retained for reference. Replaced by `cache_vipt.sv` in cpu_core. |
 | Simple memory | `rtl/sim/simple_mem.sv` | — | Parameterizable synchronous SRAM model (default 16 MB), configurable READ_LATENCY/WRITE_LATENCY modeling SDRAM timing. |
 
 ## Boot ROM and Interactive Simulation

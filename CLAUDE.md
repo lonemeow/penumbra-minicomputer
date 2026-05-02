@@ -36,7 +36,8 @@ The architecture is fully specified in `doc/`. Key specs:
   sysreg sideband
 - **MMU/Cache:** `doc/system/mmu.md` (Software) and `doc/internals/mmu-internals.md` (Hardware) —
   software-managed 64-entry 2-way SA TLB + 4-entry FA pinned TLB,
-  split I/D PIPT cache,
+  split I/D VIPT cache (1 KiB direct-mapped; index from vaddr,
+  tag from paddr — cache size ≤ page size makes it aliasing-free),
   write-through D-cache
 - **Sysregs:** `doc/system/sysregs.md` —
   WRSYS/RDSYS device map, register layouts, TLB packing
