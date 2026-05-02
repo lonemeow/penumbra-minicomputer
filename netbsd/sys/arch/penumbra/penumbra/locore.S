@@ -562,11 +562,15 @@ _real_miss_handler:
 	 * [pc + label - .] computes the PC-relative offset at link time;
 	 * since code + scratch are copied together, the offset is
 	 * preserved at the final runtime address.
+	 *
+	 * Only R1/R2/R3 are saved.  MMU_FAULT_ADDR is latched, so the
+	 * faulting VA can be re-read from the sysreg later if needed —
+	 * that re-read replaces what would otherwise be a fourth scratch
+	 * register.
 	 */
 	stw	r1, [pc + _rmh_save_r1 - .]
 	stw	r2, [pc + _rmh_save_r2 - .]
 	stw	r3, [pc + _rmh_save_r3 - .]
-	stw	r4, [pc + _rmh_save_r4 - .]
 
 	/* Read faulting virtual address */
 	rdsys	r1, #SYSDEV_MMU, #MMU_FAULT_ADDR
@@ -586,8 +590,7 @@ _real_miss_handler:
 	ldw	r3, [r3]		/* R3 = L1E (L2 PA | flags) */
 
 	/* Check L1 entry valid bit */
-	mov	r4, r3
-	and	r4, #PTE_V
+	test	r3, #PTE_V
 	beq	.Lrmh_fault		/* L1E invalid → page fault */
 
 	/* ── Map L2 table into pinned window (slot 2) ──
@@ -602,16 +605,16 @@ _real_miss_handler:
 	shr	r3, #PTE_PPN_SHIFT
 	shl	r3, #PTE_PPN_SHIFT	/* R3 = L2 table PA (aligned) */
 
-	lli	r4, #PTLB_L2WIN
-	wrsys	r4, #SYSDEV_MMU, #MMU_TLB_INDEX
+	lli	r2, #PTLB_L2WIN
+	wrsys	r2, #SYSDEV_MMU, #MMU_TLB_INDEX
 
-	lli	r4, #0xFD00
-	lui	r4, #0x0FFF		/* R4 = 0x0FFFFD00 (TLB_VPN) */
-	wrsys	r4, #SYSDEV_MMU, #MMU_TLB_VPN
+	lli	r2, #0xFD00
+	lui	r2, #0x0FFF		/* R4 = 0x0FFFFD00 (TLB_VPN) */
+	wrsys	r2, #SYSDEV_MMU, #MMU_TLB_VPN
 
-	lli	r4, #0x8D		/* V|C|R|G = 0x01|0x04|0x08|0x80 */
-	or	r4, r3			/* R4 = L2_PA | flags */
-	wrsys	r4, #SYSDEV_MMU, #MMU_TLB_PTE
+	lli	r2, #0x8D		/* V|C|R|G = 0x01|0x04|0x08|0x80 */
+	or	r2, r3			/* R4 = L2_PA | flags */
+	wrsys	r2, #SYSDEV_MMU, #MMU_TLB_PTE
 
 	/* ── L2 table lookup ─────────────────────────
 	 * L2 index = VA[21:12], each entry is 4 bytes.
@@ -627,72 +630,56 @@ _real_miss_handler:
 	add	r3, r2			/* R3 = &L2[index] */
 	ldw	r3, [r3]		/* R3 = PTE value */
 
-	/* Check PTE valid bit */
-	mov	r4, r3
-	and	r4, #PTE_V
+	/* Check PTE valid bit (TEST = AND with F=1, no writeback) */
+	test	r3, #PTE_V
 	beq	.Lrmh_fault		/* PTE invalid → page fault */
 
 	/* ── Load PTE into main TLB ──────────────────
-	 * R1 = faulting VA, R3 = PTE value.
-	 * Build TLB_VPN from faulting VA + current ASID.
-	 * Use alternating way counter for replacement.
+	 *
+	 * Live state at this point:
+	 *   R1 = faulting VA
+	 *   R3 = PTE value (must be preserved for the final wrsys)
+	 *   R2 = scratch (free)
 	 */
 
-	/*
-	 * TLB_VPN = (VPN << 8) | ASID.
-	 * For global (G=1) entries, use ASID=0 so that
-	 * tlb_invalidate_addr(va, 0) can find them regardless
-	 * of which process context installed them.
-	 */
-	mov	r2, r1
-	shr	r2, #12
-	shl	r2, #8			/* R2 = VPN << 8 */
-
-	mov	r4, r3
-	and	r4, #PTE_G
-	bne	.Lrmh_asid_done		/* G=1 → ASID=0, already in R2 */
-	rdsys	r4, #SYSDEV_MMU, #MMU_MMUCR
-	shr	r4, #MMUCR_ASID_SHIFT
-	and	r4, #0xFF		/* R4 = current ASID */
-	or	r2, r4			/* R2 = TLB_VPN with ASID */
-.Lrmh_asid_done:
-
-	/* TLB_INDEX = set | way */
-	mov	r4, r1
-	shr	r4, #12
-	and	r4, #0x1F		/* R4 = set = VPN[4:0] */
-	ldw	r1, [pc + _rmh_way_counter - .]
-	or	r4, r1			/* R4 = TLB_INDEX */
-
-	/* 3-write commit protocol */
-	wrsys	r4, #SYSDEV_MMU, #MMU_TLB_INDEX
-	wrsys	r2, #SYSDEV_MMU, #MMU_TLB_VPN
-	wrsys	r3, #SYSDEV_MMU, #MMU_TLB_PTE
-
-	/* Toggle way counter for next miss */
-	lli	r1, #0x20
+	shr	r1, #12
+	and	r1, #0x1F
 	ldw	r2, [pc + _rmh_way_counter - .]
+	or	r1, r2
+	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_INDEX
+	lli	r1, #0x20
 	xor	r2, r1
 	stw	r2, [pc + _rmh_way_counter - .]
+
+	rdsys	r1, #SYSDEV_MMU, #MMU_FAULT_ADDR
+	shr	r1, #12
+	shl	r1, #8
+	test	r3, #PTE_G
+	bne	.Lrmh_asid_done		/* G=1 → ASID=0, already in R1 */
+	rdsys	r2, #SYSDEV_MMU, #MMU_MMUCR
+	shr	r2, #MMUCR_ASID_SHIFT
+	and	r2, #0xFF
+	or	r1, r2
+.Lrmh_asid_done:
+	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_VPN
+	wrsys	r3, #SYSDEV_MMU, #MMU_TLB_PTE
 
 	/* Restore scratch registers and return */
 	ldw	r1, [pc + _rmh_save_r1 - .]
 	ldw	r2, [pc + _rmh_save_r2 - .]
 	ldw	r3, [pc + _rmh_save_r3 - .]
-	ldw	r4, [pc + _rmh_save_r4 - .]
 	eret
 
 .Lrmh_fault:
 	/*
 	 * TLB miss handler failed to find a mapping.
-	 * R1-R4 were saved to _rmh_save_r{1..4} on handler entry.
+	 * R1-R3 were saved to _rmh_save_r{1..3} on handler entry.
 	 * Restore them and enter the common trap path with cause=2
 	 * (EXC_TLB_MISS).
 	 */
 	ldw	r1, [pc + _rmh_save_r1 - .]
 	ldw	r2, [pc + _rmh_save_r2 - .]
 	ldw	r3, [pc + _rmh_save_r3 - .]
-	ldw	r4, [pc + _rmh_save_r4 - .]
 	/* Fall through to _trap_entry_tlbmiss */
 
 /* ── Per-vector trap entry stubs ─────────────────────────────
@@ -1016,8 +1003,6 @@ _rmh_save_r1:
 _rmh_save_r2:
 	.long	0
 _rmh_save_r3:
-	.long	0
-_rmh_save_r4:
 	.long	0
 _rmh_way_counter:
 	.long	0
