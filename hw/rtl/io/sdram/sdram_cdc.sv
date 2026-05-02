@@ -50,6 +50,10 @@
 // deepening doesn't add latency, it removes the serial dependency
 // between successive transactions when the master pipelines.
 
+// keep_hierarchy: paired with the attribute on sdram_ctrl. Prevents
+// ABC from sharing LUT4s across the controller/CDC boundary. See
+// the rationale comment in sdram_ctrl.sv.
+(* keep_hierarchy = "yes" *)
 module sdram_cdc (
     // ── Sys-domain (adapter side) ────────────────────────────
     input  logic        i_sys_clk,

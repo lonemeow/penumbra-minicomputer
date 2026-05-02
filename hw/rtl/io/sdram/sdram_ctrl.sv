@@ -13,6 +13,15 @@
 //
 // See doc/internals/sdram-controller.md for the design plan.
 
+// keep_hierarchy: prevent yosys from flattening this module into the
+// parent. Combined with the same attribute on sdram_cdc, this stops
+// ABC from sharing LUT4s across the controller / CDC boundary, which
+// keeps nextpnr placing controller cells in a single cluster.
+// Without this, the placer scattered controller logic across the
+// chip and the open_valid → o_phy_a.CE control path failed 100 MHz
+// timing (8.7 ns of routing across 10 hops vs. 2.1 ns of actual
+// logic — verified via make timing TOP=ulx3s_top before this change).
+(* keep_hierarchy = "yes" *)
 module sdram_ctrl
     import sdram_pkg::*;
 #(
