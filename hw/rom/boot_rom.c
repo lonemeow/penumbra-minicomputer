@@ -856,6 +856,66 @@ static void format_cpu_features(char *buf, int bufsz, uint32_t isa_val) {
     }
 }
 
+/*
+ * Decode the 4-bit CACHE_INFO_TYPE field into a short human-readable
+ * tag.  Used for the boot banner so the operator can tell at a glance
+ * which bitstream is loaded (e.g., the PIPT→VIPT switch flips this).
+ *
+ * Type codes are defined in hw/rtl/core/penumbra_pkg.sv (CACHE_TYPE_*).
+ * Today only type 0 (WT/WnA) exists; new entries go here as the RTL
+ * adds them.
+ *
+ * Output:  fills `buf` (size `bufsz`) with a NUL-terminated string.
+ */
+static void format_cache_type(char *buf, int bufsz, uint32_t type) {
+    if (bufsz > 0)
+        buf[0] = '\0';  /* safe default — empty if nobody fills the body in */
+
+    switch (type) {
+        case CACHE_TYPE_PIPT:
+            strncat(buf, "PIPT", bufsz);
+            break;
+        case CACHE_TYPE_VIPT:
+            strncat(buf, "VIPT", bufsz);
+            break;
+        case CACHE_TYPE_VIVT:
+            strncat(buf, "VIVT", bufsz);
+            break;
+        default:
+            snprintf(buf, bufsz, "UNK_%d", type);
+            break;
+    }
+}
+
+/*
+ * Print one cache's geometry from its INFO register.
+ * The read happens at the call site because RDSYS encodes the device
+ * number as an instruction immediate (must be a compile-time constant).
+ */
+static void print_one_cache(const char *label, uint32_t info) {
+    uint32_t line_words = CACHE_INFO_LINE_WORDS(info);
+    uint32_t num_sets   = CACHE_INFO_NUM_SETS(info);
+    uint32_t num_ways   = CACHE_INFO_NUM_WAYS(info);
+    uint32_t type       = CACHE_INFO_TYPE(info);
+    uint32_t wb         = CACHE_INFO_WRITE_BACK(info);
+    uint32_t wa         = CACHE_INFO_WRITE_ALLOC(info);
+
+    uint32_t line_bytes  = line_words * 4u;
+    uint32_t total_bytes = num_sets * num_ways * line_bytes;
+
+    char size_str[12], type_str[16];
+    humanize_size(total_bytes, size_str, sizeof(size_str));
+    format_cache_type(type_str, sizeof(type_str), type);
+
+    console_printf("%s: %s (%d x %dB, %d-way) %s (%s, %s)\r\n",
+        label,
+        size_str,
+        (int)num_sets, (int)line_bytes, (int)num_ways,
+        type_str,
+        wb ? "WB" : "WT",
+        wa ? "WA" : "WnA");
+}
+
 static void print_banner(void) {
     char cpu_name[17], mach_name[17], feat_str[48];
 
@@ -878,7 +938,12 @@ static void print_banner(void) {
             console_printf(" @ %d MHz", (int)mhz);
     }
     console_puts("\r\n");
-    console_printf("Hardware: %s\r\n\r\n", mach_name);
+    console_printf("Hardware: %s\r\n", mach_name);
+    print_one_cache("L1 icache",
+        penumbra_read_sysreg(SYSDEV_ICACHE, CACHE_INFO));
+    print_one_cache("L1 dcache",
+        penumbra_read_sysreg(SYSDEV_DCACHE, CACHE_INFO));
+    console_puts("\r\n");
 }
 
 /* ── Main and boot sequence ───────────────────────────────────────── */

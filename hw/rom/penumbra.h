@@ -51,6 +51,8 @@ typedef unsigned int uint32_t;
 
 #define SYSDEV_MMU    0
 #define SYSDEV_CPU    1
+#define SYSDEV_DCACHE 2
+#define SYSDEV_ICACHE 3
 #define SYSDEV_MACH   8
 
 #define MMU_CR           0
@@ -79,6 +81,25 @@ typedef unsigned int uint32_t;
 #define CPU_FEAT_BIT_HW_MUL  0
 #define CPU_FEAT_BIT_HW_DIV  1
 #define CPU_FEAT_BIT_FPU     2
+
+/* Cache device registers (SYSDEV_ICACHE / SYSDEV_DCACHE) */
+#define CACHE_INFO   0   /* Read-only geometry/type */
+#define CACHE_CTRL   1   /* bit 0 = enable */
+#define CACHE_INVAL  2   /* Write to invalidate all */
+
+#define CACHE_CTRL_ENABLE   0x01
+
+/* CACHE_INFO field layout (matches cache.sv INFO_VALUE) */
+#define CACHE_INFO_LINE_WORDS(v)   (((v) >>  0) & 0x000Fu)
+#define CACHE_INFO_NUM_SETS(v)     (((v) >>  4) & 0x03FFu)
+#define CACHE_INFO_NUM_WAYS(v)     (((v) >> 14) & 0x000Fu)
+#define CACHE_INFO_TYPE(v)         (((v) >> 18) & 0x0003u) /* PIPT/VIPT/VIVT */
+#define CACHE_INFO_WRITE_BACK(v)   (((v) >> 20) & 0x0001u) /* 0=WT, 1=WB */
+#define CACHE_INFO_WRITE_ALLOC(v)  (((v) >> 21) & 0x0001u) /* 0=WnA, 1=WA */
+
+#define CACHE_TYPE_PIPT 0
+#define CACHE_TYPE_VIPT 1
+#define CACHE_TYPE_VIVT 2
 
 /* FAULT_STATUS bit positions */
 #define FSTAT_R    8   /* Faulting access was read */
