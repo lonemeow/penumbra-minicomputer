@@ -1,7 +1,7 @@
 // Penumbra Register File — 16-register, 2-read, 1-write, 32-bit
 //
 // Architecture:
-//   R0:      Hardwired to zero (reads always return 0, writes are ignored)
+//   R0:      Hardwired to zero (reads always return 0, writes ignored)
 //   R1–R13:  General-purpose registers
 //   R14:     Stack pointer, banked: USP (user) or SSP (supervisor)
 //            Selected by i_supervisor — when SR.S=1, R14 reads/writes SSP
@@ -9,14 +9,32 @@
 //            R15 is not stored here — it's a read-only alias
 //
 // Ports:
-//   Two combinational read ports (A, B) — active all the time, no clock needed
-//   One synchronous write port — latches data on rising clock edge
+//   Two combinational read ports (A, B) for the datapath, one
+//   debug read port (also combinational), one synchronous write
+//   port that latches data on rising clock edge.
 //
-// For C/C++ programmers:
-//   Think of this as: uint32_t regs[16] with special cases for indices 0, 14, 15.
-//   Reads are like: return (addr == 0) ? 0 : (addr == 15) ? pc : regs[addr];
-//   Writes are like: if (addr != 0 && clk_edge) regs[addr] = data;
-//   The "two read ports" means two independent lookups happening simultaneously.
+// Storage strategy (distributed-RAM friendly):
+//   R1-R13 live in 16-deep DPRAM banks, replicated per read port
+//   (A, B, debug) so each bank is 1W/1R — the canonical ECP5
+//   SLICEMEM (DPR16X*) shape.  All three banks are written in
+//   lockstep so they always carry identical data.
+//
+//   R0 (hardwired zero), R14 (banked USP/SSP), and R15 (PC alias)
+//   are special-cased by an output mux that overrides the DPRAM
+//   read for those addresses.  Slots 0/14/15 of the DPRAM banks
+//   are written along with everything else but their values are
+//   never read — the override always wins.  Keeping the write
+//   path address-independent avoids extra decode on the storage
+//   write enables.
+//
+//   USP/SSP remain in flops because (a) supervisor banking is a
+//   special-case anyway and (b) keeping SP under sync reset gives
+//   us a clean post-reset stack pointer state.  A 16-bit
+//   `regs_valid` mask in flops preserves reset-to-zero semantics
+//   for R1-R13 without requiring SLICEMEM clear: each bit gates
+//   the DPRAM read for one slot (clear → return 0; first write
+//   sets it).  Costs one LUT4 level on the read path, well worth
+//   it to keep the original "i_rst zeros R1-R13" contract.
 
 module regfile
     import penumbra_pkg::*;
@@ -24,109 +42,109 @@ module regfile
     input  logic        i_clk,
     input  logic        i_rst,
 
-    // Read port A (active-low — i.e., always valid, no enable needed)
-    input  logic [3:0]  i_rd_addr_a,   // 4-bit register address (0-15)
-    output logic [31:0] o_rd_data_a,   // Read data for port A → A-bus
+    // Read port A
+    input  logic [3:0]  i_rd_addr_a,
+    output logic [31:0] o_rd_data_a,
 
     // Read port B
-    input  logic [3:0]  i_rd_addr_b,   // 4-bit register address (0-15)
-    output logic [31:0] o_rd_data_b,   // Read data for port B → B-mux
+    input  logic [3:0]  i_rd_addr_b,
+    output logic [31:0] o_rd_data_b,
 
-    // Write port (synchronous — write happens on rising clock edge)
-    input  logic [3:0]  i_wr_addr,     // 4-bit register address (0-15)
-    input  logic [31:0] i_wr_data,     // Data to write (from W-mux)
-    input  logic        i_wr_en,       // Write enable (from micro-word, F-bit gated)
+    // Write port (synchronous)
+    input  logic [3:0]  i_wr_addr,
+    input  logic [31:0] i_wr_data,
+    input  logic        i_wr_en,
 
     // Special inputs
     input  logic [31:0] i_pc,          // PC value — returned when reading R15
-    input  logic        i_supervisor,  // SR.S bit — selects SSP (1) vs USP (0) for R14
+    input  logic        i_supervisor,  // SR.S — selects SSP (1) vs USP (0) for R14
     input  logic        i_cross_bank,  // Access opposite R14 bank (GETUSP/SETUSP)
 
-    // Debug read port (active all the time, no side effects)
-    input  logic [3:0]  i_dbg_addr,    // Debug register address
-    output logic [31:0] o_dbg_data     // Debug register value
+    // Debug read port
+    input  logic [3:0]  i_dbg_addr,
+    output logic [31:0] o_dbg_data
 );
 
     // ── Storage ─────────────────────────────────────────────────
-    // R0 is not stored (always reads as 0).
-    // R1–R13: 13 general-purpose registers.
-    // R14 is two physical registers: USP and SSP.
-    // R15 is not stored (reads return i_pc).
-    //
-    // In SystemVerilog, `logic [31:0] regs [1:13]` declares an array
-    // of 13 × 32-bit registers, indexed 1 through 13.
-    // This is like: uint32_t regs[14]; // but we only use indices 1-13
+    // Three 16×32 DPRAM banks, one per read port.  Writes fan out
+    // to all three so the banks stay identical.
 
-    logic [31:0] regs [1:13];
-    logic [31:0] usp;          // User stack pointer (R14 when SR.S=0)
-    logic [31:0] ssp;          // Supervisor stack pointer (R14 when SR.S=1)
+    (* ram_style = "distributed" *) logic [31:0] regs_a   [0:15];
+    (* ram_style = "distributed" *) logic [31:0] regs_b   [0:15];
+    (* ram_style = "distributed" *) logic [31:0] regs_dbg [0:15];
 
-    // ── Read logic (combinational) ──────────────────────────────
-    // Both read ports work identically — they're just two independent
-    // multiplexers selecting from the same set of registers.
-    //
-    // This function reads one register given its 4-bit address.
-    // `function` in SystemVerilog is like a C inline function —
-    // it's purely combinational logic, synthesized as a mux tree.
-    //
-    // The read priority is:
-    //   addr == 0  → return 0           (R0 hardwired zero)
-    //   addr == 15 → return i_pc        (R15 is the PC)
-    //   addr == 14 → return ssp or usp  (banked by supervisor mode, XOR cross_bank)
-    //   else       → return regs[addr]  (general-purpose R1-R13)
-    //
-    // cross_bank flips the R14 bank select: in supervisor mode (normal: SSP),
-    // cross_bank=1 reads USP instead. Used by GETUSP/SETUSP microcode.
+    // Per-slot valid bits — flops with sync reset.  Cleared on
+    // i_rst, set on first write to a slot.  Read path returns 0
+    // for slots whose bit is clear, preserving "all zero after
+    // reset" semantics.
+    logic [15:0] regs_valid;
 
-    logic sp_select;  // 1=SSP, 0=USP (after cross_bank XOR)
+    // Banked stack pointer — flops with sync reset.
+    logic [31:0] usp;
+    logic [31:0] ssp;
+
+    // sp_select: 1 = SSP, 0 = USP, after applying cross_bank.
+    logic sp_select;
     assign sp_select = i_supervisor ^ i_cross_bank;
 
-    function automatic logic [31:0] read_reg(input logic [3:0] addr,
-                                             input logic        sp_sel);
-        if (addr == REG_ZERO)
-            read_reg = 32'd0;
-        else if (addr == REG_SP)
-            read_reg = sp_sel ? ssp : usp;
-        else if (addr == REG_PC)
-            read_reg = i_pc;
-        else
-            read_reg = regs[addr];
+    // ── Read logic ──────────────────────────────────────────────
+    // Each port: one SLICEMEM async read in parallel with the
+    // address decode; the override mux picks the right value.
+    //
+    //   addr == 0  → return 0       (R0 hardwired)
+    //   addr == 14 → return banked SP
+    //   addr == 15 → return i_pc
+    //   else       → return DPRAM[addr]
+
+    function automatic logic [31:0] override_read(
+        input logic [3:0]  addr,
+        input logic [31:0] dpram_data,
+        input logic        valid_bit,
+        input logic        sp_sel
+    );
+        case (addr)
+            REG_ZERO: override_read = 32'd0;
+            REG_SP:   override_read = sp_sel ? ssp : usp;
+            REG_PC:   override_read = i_pc;
+            default:  override_read = valid_bit ? dpram_data : 32'd0;
+        endcase
     endfunction
 
-    assign o_rd_data_a = read_reg(i_rd_addr_a, sp_select);
-    assign o_rd_data_b = read_reg(i_rd_addr_b, sp_select);
-    assign o_dbg_data  = read_reg(i_dbg_addr, i_supervisor);
+    assign o_rd_data_a = override_read(i_rd_addr_a, regs_a  [i_rd_addr_a],
+                                       regs_valid[i_rd_addr_a], sp_select);
+    assign o_rd_data_b = override_read(i_rd_addr_b, regs_b  [i_rd_addr_b],
+                                       regs_valid[i_rd_addr_b], sp_select);
+    assign o_dbg_data  = override_read(i_dbg_addr, regs_dbg[i_dbg_addr],
+                                       regs_valid[i_dbg_addr], i_supervisor);
 
-    // ── Write logic (synchronous) ───────────────────────────────
-    // `always_ff @(posedge i_clk)` = "on every rising clock edge, do this"
-    //
-    // Writes to R0 and R15 are silently ignored (R0 is always 0, R15 is PC).
-    // Writes to R14 go to either USP or SSP depending on i_supervisor.
-    // All other writes go to regs[addr].
+    // ── Write logic ─────────────────────────────────────────────
+    // Synchronous write to all three DPRAM banks plus (for R14)
+    // the active SP flop.  Writes to R0 and R15 are stored in
+    // DPRAM but never read out — the override always wins, so
+    // skipping the address compare on the write enable saves
+    // logic and keeps the write-side wiring symmetric.
 
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
-            // Reset: zero all registers
-            // In SystemVerilog, a for loop inside always_ff unrolls into
-            // parallel reset logic — it's not sequential like C.
-            for (int i = 1; i <= 13; i++) begin
-                regs[i] <= 32'd0;
-            end
-            usp <= 32'd0;
-            ssp <= 32'd0;
+            regs_valid <= 16'h0000;
+            usp        <= 32'd0;
+            ssp        <= 32'd0;
         end else if (i_wr_en) begin
-            // Normal write — handle special addresses
-            if (i_wr_addr == REG_ZERO || i_wr_addr == REG_PC) begin
-                // Writes to R0 and R15 are silently discarded
-            end else if (i_wr_addr == REG_SP) begin
-                // R14 writes go to the active bank (cross_bank flips)
+            // R14 → banked SP flop (in addition to DPRAM, which is dead)
+            if (i_wr_addr == REG_SP) begin
                 if (sp_select)
                     ssp <= i_wr_data;
                 else
                     usp <= i_wr_data;
-            end else begin
-                regs[i_wr_addr] <= i_wr_data;
             end
+            // All addresses fan out to the DPRAM banks.  Slots
+            // 0/14/15 are dead but writing them costs nothing.
+            // Setting valid for those slots is harmless — the
+            // override mux ignores the DPRAM read for them.
+            regs_valid[i_wr_addr] <= 1'b1;
+            regs_a    [i_wr_addr] <= i_wr_data;
+            regs_b    [i_wr_addr] <= i_wr_data;
+            regs_dbg  [i_wr_addr] <= i_wr_data;
         end
     end
 
