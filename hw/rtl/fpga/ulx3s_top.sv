@@ -61,7 +61,7 @@ module ulx3s_top (
     // ── Board constants ──────────────────────────────────────────
     // Single source of truth for system clock frequency.
     // Update this if PLL parameters change.
-    localparam int CLK_FREQ = 12_500_000;   // Hz (derived from PLL below)
+    localparam int CLK_FREQ = 25_000_000;   // Hz (derived from PLL below)
 
     // ── SDRAM chip preset (one-line preset swap) ─────────────────
     // Change this RHS to switch SDRAM variants — e.g., for a board
@@ -74,8 +74,8 @@ module ulx3s_top (
     assign wifi_en = 1'b0;
 
     // ── PLL: 25 MHz → 3 outputs sharing one VCO ──────────────────
-    // fCLKOP  = fCLKI × CLKFB_DIV / CLKI_DIV = 25 × 1 / 2 = 12.5 MHz
-    // fVCO    = fCLKOP × CLKOP_DIV = 12.5 × 48 = 600 MHz (400-800 OK)
+    // fCLKOP  = fCLKI × CLKFB_DIV / CLKI_DIV = 25 × 1 / 1 = 25 MHz
+    // fVCO    = fCLKOP × CLKOP_DIV = 25 × 24 = 600 MHz (400-800 OK)
     // fCLKOS  = fVCO / CLKOS_DIV  = 600 / 6  = 100 MHz   (SDRAM fabric)
     // fCLKOS2 = fVCO / CLKOS2_DIV = 600 / 6  = 100 MHz   (SDRAM pin clock)
     //
@@ -85,9 +85,10 @@ module ulx3s_top (
     // cycles from CPHASE.  For DIV=6 and φ=270°: shift = 4.5 VCO
     // cycles → CPHASE=0, FPHASE=4.
     //
-    // CLKOP @ 12.5 MHz drives the CPU/system bus — capped here by the
-    // current CPU long-path (~16 MHz).  Will rise on its own schedule
-    // once the CPU is optimised; the SDRAM is decoupled via sdram_cdc.
+    // CLKOP @ 25 MHz drives the CPU/system bus.  Empirical fmax on
+    // ECP5-85F speed grade 6 is ~28–30 MHz after the TLB and regfile
+    // were moved to distributed RAM; 25 MHz leaves ~14% margin.
+    // The SDRAM is decoupled via sdram_cdc and stays at 100 MHz.
     //
     // CLKOS  @ 100 MHz, 0° phase   — SDRAM controller fabric clock.
     //                               Drives sdram_ctrl, sdram_phy_ecp5
@@ -124,17 +125,17 @@ module ulx3s_top (
         (CLKOS2_PHASE_DEG == 270) ? 4 :
         (CLKOS2_PHASE_DEG == 315) ? 6 : 0;
 
-    logic clk;            // CLKOP — 12.5 MHz system clock
+    logic clk;            // CLKOP — 25 MHz system clock
     logic clk_sdram;      // CLKOS — 100 MHz SDRAM fabric clock
     logic clk_sdram_pin;  // CLKOS2 — 100 MHz, phase-shifted, to ODDR
     logic pll_lock;
 
     (* keep *) EHXPLLL #(
-        .CLKI_DIV      (2),
+        .CLKI_DIV      (1),
         .CLKFB_DIV     (1),
-        .CLKOP_DIV     (48),
+        .CLKOP_DIV     (24),
         .CLKOP_ENABLE  ("ENABLED"),
-        .CLKOP_CPHASE  (47),
+        .CLKOP_CPHASE  (23),
         .CLKOP_FPHASE  (0),
         .CLKOS_DIV     (6),
         .CLKOS_ENABLE  ("ENABLED"),
@@ -168,9 +169,9 @@ module ulx3s_top (
     );
 
     // ── Reset: PLL lock + btn[1] (FIRE1) manual reset ──────────
-    // Hold reset until PLL locks, then count 2^18 clocks.
-    // 2^18 / 12.5 MHz ≈ 21 ms — exceeds 10 ms minimum for
-    // power-on reset (see doc/hardware/bus-protocol.md Reset Timing).
+    // Hold reset until PLL locks, then count 2^19 clocks.
+    // 2^19 / 25 MHz ≈ 21 ms — exceeds 10 ms minimum for power-on
+    // reset (see doc/hardware/bus-protocol.md Reset Timing).
     // Pressing btn[1] reasserts reset (synchronizer for btn input).
     logic btn1_sync1, btn1_sync2;
     always_ff @(posedge clk) begin
@@ -178,17 +179,17 @@ module ulx3s_top (
         btn1_sync2 <= btn1_sync1;
     end
 
-    logic [17:0] rst_cnt = '0;
+    logic [18:0] rst_cnt = '0;
     logic        rst_raw;
     logic        rst;
 
     always_ff @(posedge clk) begin
         if (!pll_lock || btn1_sync2)
             rst_cnt <= '0;
-        else if (!rst_cnt[17])
+        else if (!rst_cnt[18])
             rst_cnt <= rst_cnt + 1;
     end
-    assign rst_raw = !rst_cnt[17];
+    assign rst_raw = !rst_cnt[18];
 
     // Promote rst onto a global net via DCCA. With ~5700-way fanout
     // through general fabric, rst was the dominant routing-congestion
@@ -324,8 +325,8 @@ module ulx3s_top (
 
     // ── SDRAM v2: bus adapter → CDC → controller → ECP5 PHY → pins ─
     // Step-4 dual-domain configuration:
-    //   • Bus adapter runs on the system clock (12.5 MHz today).
-    //   • CDC bridge crosses 12.5 MHz ↔ 100 MHz with toggle
+    //   • Bus adapter runs on the system clock (25 MHz today).
+    //   • CDC bridge crosses 25 MHz ↔ 100 MHz with toggle
     //     synchronizers and a quasi-static payload.
     //   • Controller + IOB-flop side of the PHY run on CLKOS @ 100 MHz.
     //   • SDRAM clock pin is forwarded via ODDRX1F clocked by CLKOS2
@@ -369,7 +370,7 @@ module ulx3s_top (
     logic [31:0] sd_rsp_data;
 
     sdram_cdc u_sdram_cdc (
-        // Sys side @ 12.5 MHz
+        // Sys side @ 25 MHz
         .i_sys_clk         (clk),
         .i_sys_rst         (rst),
         .i_sys_req_valid   (sys_req_valid),
@@ -571,10 +572,10 @@ module ulx3s_top (
 
     spi #(
         .FIFO_DEPTH (512),
-        // 12.5 MHz / (2*(15+1)) ≈ 390 kHz — safe for SD card init (needs <400 kHz)
-        .SLOW_DIV   (16'd15),
-        // 12.5 MHz / (2*(0+1)) = 6.25 MHz — operational speed
-        .FAST_DIV   (16'd0)
+        // 25 MHz / (2*(31+1)) ≈ 391 kHz — safe for SD card init (needs <400 kHz)
+        .SLOW_DIV   (16'd31),
+        // 25 MHz / (2*(1+1)) = 6.25 MHz — operational speed
+        .FAST_DIV   (16'd1)
     ) u_spi (
         .i_clk   (clk),
         .i_rst   (rst),

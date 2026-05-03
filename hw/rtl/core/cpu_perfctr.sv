@@ -2,8 +2,8 @@
 //
 // Lives inside cpu_core, exposes its read interface as part of SYSDEV_CPU
 // (regs 5+).  Free-running 32-bit counters, no atomic snapshot — software
-// reads each register independently.  At 12.5 MHz the cycles counter
-// wraps every ~5.7 minutes, which is fine for benchmark-scoped reads.
+// reads each register independently.  At 25 MHz the cycles counter
+// wraps every ~2.9 minutes, which is fine for benchmark-scoped reads.
 //
 // Each counter increments combinationally from its event signal:
 //   cycles        — every CPU clock except during reset

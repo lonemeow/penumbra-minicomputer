@@ -130,10 +130,10 @@ typedef unsigned int uint32_t;
 
 /* Bus reset pulse minimum: 100 µs (see doc/hardware/bus-protocol.md).
  * Each volatile loop iteration is ~25-30 cycles (load, compare, branch,
- * increment, store).  At 12.5 MHz that's ~2 µs/iteration.
- * 100 iterations ≈ 200 µs — comfortably above the 100 µs spec.
+ * increment, store).  At 25 MHz that's ~1 µs/iteration.
+ * 200 iterations ≈ 200 µs — comfortably above the 100 µs spec.
  * Adjust if system clock changes significantly.                         */
-#define BUS_RESET_DELAY_ITERS  100
+#define BUS_RESET_DELAY_ITERS  200
 
 /* ── Autoconfig config space (0xFE00_0000, active when CFG_EN) ──────── */
 
