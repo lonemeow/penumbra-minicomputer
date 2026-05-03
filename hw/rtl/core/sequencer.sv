@@ -60,6 +60,12 @@ module sequencer
     output logic        o_alu_start,
     output logic        o_pc_load,
 
+    // ── State output ────────────────────────────────────────────
+    // Direct flop output — combinational `state == S_FETCH`.  Driven
+    // out so cpu_top can route mmu_vaddr / cache muxing from it
+    // without depending on the priv-block-gated o_pc_load chain.
+    output logic        o_fetch_active,
+
     // ── Illegal instruction / privilege violation detection ─────
     output logic        o_illegal,        // First micro-op is sentinel (branch=7)
     output logic        o_priv_violation, // First micro-op has priv=1 in user mode
@@ -287,5 +293,10 @@ module sequencer
 
     // ── Privilege violation: priv=1 attempted in user mode ────────
     assign o_priv_violation = priv_block;
+
+    // ── Fetch-state flag: pure flop output, no dependency on
+    //    priv_block/pc_load.  cpu_top uses this to drive mmu_vaddr
+    //    and cache muxing in parallel with the priv check.
+    assign o_fetch_active = (state == S_FETCH);
 
 endmodule

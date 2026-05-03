@@ -228,6 +228,7 @@ module cpu_core
         .o_sys_op        (ctl_sys_op),
         .o_alu_start     (ctl_alu_start),
         .o_pc_load       (ctl_pc_load),
+        .o_fetch_active  (fetch_active),
         .o_illegal       (seq_illegal),
         .o_priv_violation(seq_priv_violation),
         .o_ei_set        (ctl_ei_set),
@@ -246,8 +247,16 @@ module cpu_core
     // the D-cache port by the memory bus mux below.
     // ══════════════════════════════════════════════════════════
 
+    // fetch_active comes directly from the sequencer's state register
+    // (combinational `state == S_FETCH`).  Routing it through `!ctl_pc_load`
+    // would couple the priv-violation check (which gates pc_load) into
+    // every consumer of fetch_active — including mmu_vaddr, the cache
+    // i_re inputs, and the icache/dcache rdata mux — so the priv cone
+    // would land on the critical path before the TLB lookup.  Sourcing
+    // from the state flop keeps the priv check parallel to the address
+    // generation path; only the actual commit (pc_load, write enables)
+    // needs to wait for it.
     logic fetch_active;
-    assign fetch_active = !ctl_pc_load;  // In S_FETCH state
 
     logic ir_load;
 
