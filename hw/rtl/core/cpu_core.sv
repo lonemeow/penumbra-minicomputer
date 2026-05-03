@@ -411,6 +411,41 @@ module cpu_core
     assign except_entry = fault_except | illegal_except | priv_except |
                           (break_taken & ir_valid) | (syscall_taken & ir_valid) |
                           (irq_taken & ir_valid);
+
+    // ── Registered except_entry: slip ESR/EPC writes by one cycle ──
+    // The combinational `except_entry` aggregates exception conditions
+    // that all depend on the freshly-fetched instruction's bytes
+    // (`mem_rdata` → field-extractor → dispatch_addr → break_taken /
+    // syscall_taken / etc.).  Routing that long combinational cone
+    // into status_reg's ESR-load gate makes ESR.LSR setup the
+    // critical path tail (~6 ns on top of fetch-cycle logic).
+    //
+    // Registering the signal moves ESR/EPC writes — and the SR mode
+    // switch (S=1, I=0) — to the cycle AFTER the dispatch cycle.
+    // This is safe in this microarch because:
+    //   - Fetch is hardwired in the sequencer, so no µROM micro-op
+    //     runs during the dispatch cycle and no µ-op-driven SR/PC
+    //     update happens at that clock edge.
+    //   - The dispatched µ-op (cycle N+1) is `int_entry` op 0x70
+    //     which has pc=HOLD and no SR-modifying control bits.
+    //   - PC and SR are therefore stable across the slip cycle, so
+    //     the delayed ESR/EPC capture still records pre-exception
+    //     values.
+    //   - vector_num/dispatch_vector latching, the µPC override
+    //     (effective_dispatch), and vector_read all stay on the
+    //     combinational `except_entry` — only the ESR/EPC path is
+    //     deferred.
+    //
+    // Cost: +1 cycle on every exception entry.  That's 1 cycle on
+    // BREAK/SYSCALL/IRQ/fault dispatch, paid once per exception —
+    // negligible against the fmax win.
+    logic except_entry_q;
+    always_ff @(posedge i_clk) begin
+        if (i_rst)
+            except_entry_q <= 1'b0;
+        else
+            except_entry_q <= except_entry;
+    end
     assign vector_num   = fault_pending    ? fault_vector :
                           illegal_pending  ? VEC_ILLEGAL :
                           priv_pending     ? VEC_PRIV :
@@ -696,7 +731,7 @@ module cpu_core
         .i_spr_write    (spr_write),
 
         // Exception / interrupt entry
-        .i_except_entry (except_entry),
+        .i_except_entry (except_entry_q),
         .i_vector_num   (vector_num),
 
         // EI/DI
