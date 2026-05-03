@@ -14,11 +14,13 @@
 // handled internally. External sysreg devices (sysid, timer, etc.)
 // are wired by the machine-level integration module.
 //
-// Memory bus mux: the I-cache and D-cache each have a memory-side
-// port. Since fetch (S_FETCH) and data access (S_EXEC) are mutually
-// exclusive, only one cache requests memory at a time. A simple
-// priority mux (D-cache priority) merges them to the single external
-// memory port.
+// Bus arbiter: the I-cache and D-cache each have a memory-side port.
+// Since fetch (S_FETCH) and data access (S_EXEC) are mutually
+// exclusive, only one cache requests memory at a time. The internal
+// `cpu_bus_arbiter` (D-cache priority) serializes their requests
+// onto the single external memory port and gives each cache a
+// private busy/rdata net so the two caches never combinationally
+// cross-couple through the shared bus.
 
 // verilator lint_off UNUSEDSIGNAL
 // verilator lint_off UNSIGNED
@@ -420,16 +422,32 @@ module cpu_core
     assign mmu_mem_size    = fetch_active ? 2'b10 : ctl_mem_size;  // fetch is always word
     assign mmu_req         = fetch_active || ctl_mem_read || ctl_mem_write;
 
-    // Gate data access enables with !mmu_fault — a faulting access
-    // must never reach the cache/memory. mmu_fault now covers TLB
-    // faults AND alignment faults (MMU checks alignment internally).
-    assign data_re = ctl_mem_read  && !fetch_active && !mmu_fault;
-    assign data_we = ctl_mem_write && !fetch_active && !mmu_fault;
+    // Cache enables are NOT gated with !mmu_fault.  With VIPT, the
+    // cache RAM lookup (data array, valid bits, tag read) is indexed
+    // by virtual address and so can run in parallel with TLB
+    // translation — gating cache.i_re with mmu_fault would serialize
+    // the cache after the TLB and discard the entire VIPT benefit.
+    //
+    // Cache hit reads have no side effects, so they're safe to run
+    // unconditionally — the CPU takes the exception via fault_except
+    // → except_entry and naturally ignores the returned data.
+    //
+    // Cache STATE side effects (fill entry, write-hit data update)
+    // are inhibited inside the cache via the registered i_fault
+    // shadow flop — see cache_vipt.sv.
+    //
+    // BUS side effects (pass-through writes, uncached MMIO) are
+    // inhibited at the bus arbiter's inputs — i_d_re / i_d_we /
+    // i_i_re are gated with !mmu_fault below, so a faulting access
+    // never gets latched into a real bus cycle.
+    assign data_re = ctl_mem_read  && !fetch_active;
+    assign data_we = ctl_mem_write && !fetch_active;
 
     // Note: with split I/D caches, each cache gets its own read enable:
     //   I-cache: i_re = fetch_active
     //   D-cache: i_re = data_re
-    // No unified mem_re needed — the memory bus mux ORs the outputs.
+    // The bus arbiter (instantiated below) owns the single external
+    // bus port and serializes the two caches' requests onto it.
 
     // ── Byte enable generation ───────────────────────────────
     logic [3:0] byte_en;
@@ -497,15 +515,20 @@ module cpu_core
     // I-cache: serves instruction fetch (read-only)
     // D-cache: serves data loads/stores (read/write)
     //
-    // Each has its own memory-side port, merged by the bus mux
-    // below. Both share the MMU's physical address and cacheable
+    // Each has its own memory-side port, fed into the bus arbiter
+    // below.  Both share the MMU's physical address and cacheable
     // output — safe because fetch and data are mutually exclusive.
+    // The arbiter gives each cache a private busy/rdata pair so the
+    // two caches' bus state never combinationally cross-couples.
     // ══════════════════════════════════════════════════════════
 
-    // ── I-cache memory-side signals ─────────────────────────
+    // ── I-cache memory-side signals (to arbiter) ───────────
     logic [31:0] icache_mem_addr, icache_mem_wdata;
     logic [3:0]  icache_mem_byte_en;
     logic        icache_mem_we, icache_mem_re;
+    // Each cache sees a private busy/rdata pair from the arbiter.
+    logic [31:0] icache_arb_rdata, dcache_arb_rdata;
+    logic        icache_arb_busy,  dcache_arb_busy;
 
     cache_vipt u_icache (
         .i_clk        (i_clk),
@@ -515,8 +538,9 @@ module cpu_core
         .i_wdata      (32'b0),
         .i_byte_en    (4'b0),
         .i_we         (1'b0),
-        .i_re         (fetch_active && !mmu_fault),
+        .i_re         (fetch_active),
         .i_cacheable  (mmu_cacheable),
+        .i_fault      (mmu_fault),
         .o_rdata      (icache_rdata),
         .o_busy       (icache_busy),
         .o_mem_addr   (icache_mem_addr),
@@ -524,8 +548,8 @@ module cpu_core
         .o_mem_byte_en(icache_mem_byte_en),
         .o_mem_we     (icache_mem_we),
         .o_mem_re     (icache_mem_re),
-        .i_mem_rdata  (i_mem_rdata),
-        .i_mem_busy   (i_mem_busy),
+        .i_mem_rdata  (icache_arb_rdata),
+        .i_mem_busy   (icache_arb_busy),
         // Sysreg (device 3 = ICACHE)
         .i_sys_reg    (dp_r_sys_reg),
         .i_sys_wdata  (dp_a_bus),
@@ -533,7 +557,7 @@ module cpu_core
         .o_sys_rdata  (icache_sys_rdata)
     );
 
-    // ── D-cache memory-side signals ─────────────────────────
+    // ── D-cache memory-side signals (to arbiter) ───────────
     logic [31:0] dcache_mem_addr, dcache_mem_wdata;
     logic [3:0]  dcache_mem_byte_en;
     logic        dcache_mem_we, dcache_mem_re;
@@ -548,6 +572,7 @@ module cpu_core
         .i_we         (data_we),
         .i_re         (data_re),
         .i_cacheable  (mmu_cacheable),
+        .i_fault      (mmu_fault),
         .o_rdata      (dcache_rdata),
         .o_busy       (dcache_busy),
         .o_mem_addr   (dcache_mem_addr),
@@ -555,8 +580,8 @@ module cpu_core
         .o_mem_byte_en(dcache_mem_byte_en),
         .o_mem_we     (dcache_mem_we),
         .o_mem_re     (dcache_mem_re),
-        .i_mem_rdata  (i_mem_rdata),
-        .i_mem_busy   (i_mem_busy),
+        .i_mem_rdata  (dcache_arb_rdata),
+        .i_mem_busy   (dcache_arb_busy),
         // Sysreg (device 2 = DCACHE)
         .i_sys_reg    (dp_r_sys_reg),
         .i_sys_wdata  (dp_a_bus),
@@ -564,19 +589,46 @@ module cpu_core
         .o_sys_rdata  (dcache_sys_rdata)
     );
 
-    // ── Memory bus mux ──────────────────────────────────────
-    // D-cache priority. Since fetch and data access are mutually
-    // exclusive (S_FETCH vs S_EXEC), only one cache requests
-    // memory at a time. The mux is a safety net, not a real
-    // arbiter.
-    logic dcache_has_mem;
-    assign dcache_has_mem = dcache_mem_re | dcache_mem_we;
+    // ══════════════════════════════════════════════════════════
+    // Internal bus arbiter — single external bus, two CPU clients
+    //
+    // Replaces the old combinational mux + busy-OR pattern.  The
+    // arbiter registers requests on IDLE→BUSY and responses on
+    // BUSY→DONE, structurally breaking the icache↔dcache cross-
+    // coupling that previously pinned the CPU's critical path.
+    //
+    // mmu_fault is gated at the arbiter inputs so a faulting access
+    // never starts an external bus cycle.  The gate is a single AND
+    // on each port, no worse than the previous bus-output gate.
+    // ══════════════════════════════════════════════════════════
+    cpu_bus_arbiter u_bus_arbiter (
+        .i_clk        (i_clk),
+        .i_rst        (i_rst),
 
-    assign o_mem_addr    = dcache_has_mem ? dcache_mem_addr    : icache_mem_addr;
-    assign o_mem_wdata   = dcache_mem_wdata;    // only D-cache writes
-    assign o_mem_byte_en = dcache_mem_byte_en;
-    assign o_mem_we      = dcache_mem_we;       // only D-cache writes
-    assign o_mem_re      = dcache_mem_re | icache_mem_re;
+        // dcache port (priority)
+        .i_d_addr     (dcache_mem_addr),
+        .i_d_wdata    (dcache_mem_wdata),
+        .i_d_byte_en  (dcache_mem_byte_en),
+        .i_d_we       (dcache_mem_we && !mmu_fault),
+        .i_d_re       (dcache_mem_re && !mmu_fault),
+        .o_d_rdata    (dcache_arb_rdata),
+        .o_d_busy     (dcache_arb_busy),
+
+        // icache port (fetch-only)
+        .i_i_addr     (icache_mem_addr),
+        .i_i_re       (icache_mem_re && !mmu_fault),
+        .o_i_rdata    (icache_arb_rdata),
+        .o_i_busy     (icache_arb_busy),
+
+        // External bus
+        .o_mem_addr   (o_mem_addr),
+        .o_mem_wdata  (o_mem_wdata),
+        .o_mem_byte_en(o_mem_byte_en),
+        .o_mem_we     (o_mem_we),
+        .o_mem_re     (o_mem_re),
+        .i_mem_rdata  (i_mem_rdata),
+        .i_mem_busy   (i_mem_busy)
+    );
 
     // ══════════════════════════════════════════════════════════
     // Sysreg bus — expose to external devices

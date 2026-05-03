@@ -65,6 +65,14 @@ module cache_vipt
     input  logic        i_we,
     input  logic        i_re,
     input  logic        i_cacheable,
+    // i_fault: live MMU fault for the current access.  Used internally
+    // (registered) to suppress side-effecting state changes on faulting
+    // accesses — fill entry and write-hit data updates.  The cache hit
+    // read path itself has no side effects and runs unconditionally,
+    // letting cache RAM lookup and TLB run in parallel (the whole point
+    // of VIPT).  Bus-output suppression for pass-through is enforced
+    // externally by the CPU (gating o_mem_re/we with !mmu_fault).
+    input  logic        i_fault,
     output logic [31:0] o_rdata,
     output logic        o_busy,
 
@@ -196,6 +204,17 @@ module cache_vipt
     logic [31:0] i_wdata_q;
     logic        hit_q;
     logic        state_was_fill;
+    // i_fault_q gates side-effecting state transitions (fill entry,
+    // write-hit data update) so a faulting access never mutates cache
+    // state.  Registered so the FSM next-state logic stays out of the
+    // live mmu_fault → state.D path.
+    logic        i_fault_q;
+    // Note: there are no shadow flops on i_mem_busy / i_mem_rdata.  The
+    // CPU-side bus arbiter (cpu_bus_arbiter) already registers external
+    // bus state in its FSM, so cache.i_mem_busy / cache.i_mem_rdata are
+    // already one register hop away from the live bus signals — the
+    // arbiter's state flop is the boundary that breaks the
+    // `bus_busy → fill_state_logic → valid[i].LSR` chain.
 
     // Registered address fields (derived from i_paddr_q; since
     // page-offset bits agree by precondition, vaddr/paddr give
@@ -254,7 +273,15 @@ module cache_vipt
             S_FILL: begin
                 o_mem_addr = {fill_base_addr[31:WORD_LSB+WORD_BITS],
                               fill_count, {WORD_LSB{1'b0}}};
-                o_mem_re   = fill_req || fill_wait;
+                // Pulse o_mem_re for the request cycle only.  The CPU
+                // bus arbiter latches the request on IDLE→BUSY, after
+                // which the cache no longer needs to drive o_mem_re —
+                // the arbiter holds the latched address/we/re onto the
+                // external bus from its own state until the transaction
+                // completes.  This also keeps `fill_wait && i_mem_busy`
+                // out of o_mem_re, which would otherwise close a
+                // combinational loop through the arbiter's busy mux.
+                o_mem_re   = fill_req;
             end
         endcase
     end
@@ -300,6 +327,7 @@ module cache_vipt
             i_wdata_q      <= 32'b0;
             hit_q          <= 1'b0;
             state_was_fill <= 1'b0;
+            i_fault_q      <= 1'b0;
         end else begin
             i_re_q         <= i_re;
             i_we_q         <= i_we;
@@ -309,11 +337,18 @@ module cache_vipt
             i_wdata_q      <= i_wdata;
             hit_q          <= hit;
             state_was_fill <= (state == S_FILL);
+            i_fault_q      <= i_fault;
         end
     end
 
     // ══════════════════════════════════════════════════════════
-    // State machine and storage updates — driven by shadow flops
+    // State machine and storage updates
+    //
+    // CPU-side inputs (i_re_q, i_we_q, hit_q, i_paddr_q, i_wdata_q,
+    // i_byte_en_q, i_cacheable_q, i_fault_q) come from the registered
+    // shadow flops above — required to break the µROM → state.D path.
+    // Bus-side inputs (i_mem_busy, i_mem_rdata) are consumed live;
+    // the cpu_bus_arbiter's state register is the flop boundary.
     // ══════════════════════════════════════════════════════════
     integer i;
 
@@ -341,7 +376,9 @@ module cache_vipt
                     // after the CPU presented the write. The bus
                     // output mux already sent the write through
                     // to memory in the original cycle.
-                    if (cache_active_q && i_we_q && hit_q) begin
+                    // Gated by !i_fault_q so a faulting write never
+                    // mutates the cache data array.
+                    if (cache_active_q && i_we_q && hit_q && !i_fault_q) begin
                         if (i_byte_en_q[0])
                             data[data_idx(addr_set_q, addr_word_q)][ 7: 0] <= i_wdata_q[ 7: 0];
                         if (i_byte_en_q[1])
@@ -359,7 +396,9 @@ module cache_vipt
                     // `hit` already reflects the just-set valid
                     // bit, so the CPU's read is being served via
                     // the live hit path and we must not re-fill).
-                    if (cache_active_q && i_re_q && !hit_q && !state_was_fill) begin
+                    // !i_fault_q gates fill entry so a faulting miss
+                    // never initiates a bus access with bogus paddr.
+                    if (cache_active_q && i_re_q && !hit_q && !state_was_fill && !i_fault_q) begin
                         fill_base_addr <= i_paddr_q;
                         fill_tag       <= addr_tag_q;
                         fill_set       <= addr_set_q;
