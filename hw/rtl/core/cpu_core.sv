@@ -281,15 +281,27 @@ module cpu_core
         else $error("cpu_core: ir_load fired while cache_busy=1");
 
     // ── Dispatch address computation ─────────────────────────
+    // Source the dispatch decode directly from `icache_rdata`, NOT
+    // from `mem_rdata`.  dispatch_addr only feeds the µPC update mux
+    // when ir_valid=1 (state==S_FETCH), and during fetch the cache
+    // mux always selects icache (mem_rdata == icache_rdata).  Reading
+    // from mem_rdata makes synthesis include the dcache and sysreg
+    // legs of the mux in the dispatch_addr cone — a phantom path that
+    // can never produce a real dispatch but still has to settle each
+    // cycle.  Going direct to icache_rdata cuts ~5 LUT-stages of
+    // dcache/sysreg muxing out of the µPC update critical path.
+    logic [31:0] fetch_rdata;
+    assign fetch_rdata = icache_rdata;
+
     logic [1:0]  fetch_format;
-    assign fetch_format = mem_rdata[31:30];
+    assign fetch_format = fetch_rdata[31:30];
 
     always_comb begin
         case (fetch_format)
-            2'b00:   dispatch_addr = {1'b0, mem_rdata[29], 1'b0, mem_rdata[28:25], 1'b0};
-            2'b01:   dispatch_addr = {1'b0, 2'b01, mem_rdata[29:26], 1'b0};
-            2'b10:   dispatch_addr = {2'b10, mem_rdata[29:26], 2'b00};
-            2'b11:   dispatch_addr = (mem_rdata[29:26] == 4'b1111) ? 8'h62 : 8'h60;
+            2'b00:   dispatch_addr = {1'b0, fetch_rdata[29], 1'b0, fetch_rdata[28:25], 1'b0};
+            2'b01:   dispatch_addr = {1'b0, 2'b01, fetch_rdata[29:26], 1'b0};
+            2'b10:   dispatch_addr = {2'b10, fetch_rdata[29:26], 2'b00};
+            2'b11:   dispatch_addr = (fetch_rdata[29:26] == 4'b1111) ? 8'h62 : 8'h60;
             default: dispatch_addr = 8'h00;
         endcase
     end
