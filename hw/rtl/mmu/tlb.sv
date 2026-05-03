@@ -4,13 +4,30 @@
 // Software manages all entries via indexed read/write through the
 // sysreg interface.
 //
-// Entry format (64 bits, stored as two 32-bit halves):
+// Storage strategy (distributed-RAM friendly):
+//   Storage is split by way (way0/way1, 32 entries each) and
+//   replicated by read port (lookup vs sysreg readback).  Each
+//   resulting bank has exactly one write port and one async read
+//   port — the canonical ECP5 SLICEMEM (DPR16X*) shape.  This
+//   replaces the previous flop-storage + 6:1-mux-tree pattern,
+//   which forced the lookup to traverse ~12 LUT4 levels before
+//   reaching the comparator.  With DPRAM the entry data appears
+//   at the bank output through a single SLICEMEM read (~1.5 ns)
+//   so the comparator runs near-immediately on cycle start.
+//
+// V bits live in a small flop vector with synchronous reset:
+// SLICEMEMs have no async clear, so we can't reset the DPRAM
+// contents themselves on i_rst.  Keeping V in flops preserves the
+// original "all-invalid after reset" invariant — any stale data
+// in the DPRAM is masked by V==0 until software writes a valid PTE.
+//
+// Entry format (64 bits, two 32-bit halves):
 //   VPN word: {4'b0, VPN[19:0], ASID[7:0]}
 //   PTE word: {PPN[19:0], SW[3:0], flags[7:0]}
-//   flags: [7]G [6]U [5]X [4]W [3]R [2]C [1]rsvd [0]V
+//   flags:    [7]G [6]U [5]X [4]W [3]R [2]C [1]rsvd [0]V
 //
-// Lookup: set = vaddr[16:12], compare VPN + ASID on both ways in parallel.
-// Permission check on hit. Miss/fault signalled to MMU.
+// Lookup: set = vaddr[16:12], compare VPN + ASID on both ways in
+// parallel.  Permission check on hit.  Miss/fault signalled to MMU.
 
 // verilator lint_off UNUSEDSIGNAL
 
@@ -44,19 +61,28 @@ module tlb
 );
 
     // ══════════════════════════════════════════════════════════
-    // TLB storage — 32 sets × 2 ways × 64 bits
+    // Storage — split by way, replicated by read port
     // ══════════════════════════════════════════════════════════
-    // Stored as two 32-bit halves per entry for natural sysreg packing.
-    // Upper word = {4'b0, VPN[19:0], ASID[7:0]}
-    // Lower word = {PPN[19:0], SW[7:0], flags[7:0]}
+    // Eight banks total: {way0,way1} × {vpn,pte} × {lookup,sysreg}.
+    // Each bank is 32 entries × 32 bits, 1W/1R, distributed-RAM
+    // mapped via SLICEMEM.  Lookup and sysreg mirrors are written
+    // in lockstep so they always carry identical data.
 
-    logic [31:0] entries_vpn [0:63];    // Upper half (VPN + ASID)
-    logic [31:0] entries_pte [0:63];    // Lower half (PPN + SW + flags)
+    // Lookup banks (read at lookup_set)
+    (* ram_style = "distributed" *) logic [31:0] way0_vpn_lookup [0:31];
+    (* ram_style = "distributed" *) logic [31:0] way1_vpn_lookup [0:31];
+    (* ram_style = "distributed" *) logic [31:0] way0_pte_lookup [0:31];
+    (* ram_style = "distributed" *) logic [31:0] way1_pte_lookup [0:31];
 
-    // ── Entry address from set + way ───────────────────────
-    function logic [5:0] entry_addr(input logic [4:0] set, input logic way);
-        return {way, set};
-    endfunction
+    // Sysreg readback banks (read at i_idx_set)
+    (* ram_style = "distributed" *) logic [31:0] way0_vpn_sysreg [0:31];
+    (* ram_style = "distributed" *) logic [31:0] way1_vpn_sysreg [0:31];
+    (* ram_style = "distributed" *) logic [31:0] way0_pte_sysreg [0:31];
+    (* ram_style = "distributed" *) logic [31:0] way1_pte_sysreg [0:31];
+
+    // V bits — flops with sync reset (one bit per set, per way).
+    logic [31:0] way0_v_vec;
+    logic [31:0] way1_v_vec;
 
     // ══════════════════════════════════════════════════════════
     // Lookup logic (combinational)
@@ -67,49 +93,46 @@ module tlb
     assign lookup_vpn = i_vaddr[31:12];
     assign lookup_set = i_vaddr[16:12];  // Lower 5 bits of VPN
 
-    // Read both ways of the target set
-    logic [5:0] way0_addr, way1_addr;
-    assign way0_addr = entry_addr(lookup_set, 1'b0);
-    assign way1_addr = entry_addr(lookup_set, 1'b1);
-
-    logic [31:0] way0_vpn, way0_pte;
-    logic [31:0] way1_vpn, way1_pte;
-    assign way0_vpn = entries_vpn[way0_addr];
-    assign way0_pte = entries_pte[way0_addr];
-    assign way1_vpn = entries_vpn[way1_addr];
-    assign way1_pte = entries_pte[way1_addr];
+    // Read both ways from lookup banks — single SLICEMEM read each.
+    logic [31:0] way0_vpn_data, way0_pte_data;
+    logic [31:0] way1_vpn_data, way1_pte_data;
+    assign way0_vpn_data = way0_vpn_lookup[lookup_set];
+    assign way0_pte_data = way0_pte_lookup[lookup_set];
+    assign way1_vpn_data = way1_vpn_lookup[lookup_set];
+    assign way1_pte_data = way1_pte_lookup[lookup_set];
 
     // Extract fields from each way
     // VPN word: {4'b0, VPN[19:0], ASID[7:0]}
     logic [19:0] way0_entry_vpn, way1_entry_vpn;
     logic [7:0]  way0_entry_asid, way1_entry_asid;
-    assign way0_entry_vpn  = way0_vpn[27:8];
-    assign way0_entry_asid = way0_vpn[7:0];
-    assign way1_entry_vpn  = way1_vpn[27:8];
-    assign way1_entry_asid = way1_vpn[7:0];
+    assign way0_entry_vpn  = way0_vpn_data[27:8];
+    assign way0_entry_asid = way0_vpn_data[7:0];
+    assign way1_entry_vpn  = way1_vpn_data[27:8];
+    assign way1_entry_asid = way1_vpn_data[7:0];
 
     // PTE word: {PPN[19:0], SW[7:0], flags[7:0]}
+    // V comes from the flop vector (DPRAM copy is stale-after-reset).
     logic [19:0] way0_ppn, way1_ppn;
     logic        way0_v, way0_c, way0_r, way0_w, way0_x, way0_u, way0_g;
     logic        way1_v, way1_c, way1_r, way1_w, way1_x, way1_u, way1_g;
 
-    assign way0_ppn = way0_pte[31:12];
-    assign way0_v   = way0_pte[TLB_V];
-    assign way0_c   = way0_pte[TLB_C];
-    assign way0_r   = way0_pte[TLB_R];
-    assign way0_w   = way0_pte[TLB_W];
-    assign way0_x   = way0_pte[TLB_X];
-    assign way0_u   = way0_pte[TLB_U];
-    assign way0_g   = way0_pte[TLB_G];
+    assign way0_ppn = way0_pte_data[31:12];
+    assign way0_v   = way0_v_vec[lookup_set];
+    assign way0_c   = way0_pte_data[TLB_C];
+    assign way0_r   = way0_pte_data[TLB_R];
+    assign way0_w   = way0_pte_data[TLB_W];
+    assign way0_x   = way0_pte_data[TLB_X];
+    assign way0_u   = way0_pte_data[TLB_U];
+    assign way0_g   = way0_pte_data[TLB_G];
 
-    assign way1_ppn = way1_pte[31:12];
-    assign way1_v   = way1_pte[TLB_V];
-    assign way1_c   = way1_pte[TLB_C];
-    assign way1_r   = way1_pte[TLB_R];
-    assign way1_w   = way1_pte[TLB_W];
-    assign way1_x   = way1_pte[TLB_X];
-    assign way1_u   = way1_pte[TLB_U];
-    assign way1_g   = way1_pte[TLB_G];
+    assign way1_ppn = way1_pte_data[31:12];
+    assign way1_v   = way1_v_vec[lookup_set];
+    assign way1_c   = way1_pte_data[TLB_C];
+    assign way1_r   = way1_pte_data[TLB_R];
+    assign way1_w   = way1_pte_data[TLB_W];
+    assign way1_x   = way1_pte_data[TLB_X];
+    assign way1_u   = way1_pte_data[TLB_U];
+    assign way1_g   = way1_pte_data[TLB_G];
 
     // ── Match logic ────────────────────────────────────────
     // Hit = V && VPN match && (G || ASID match)
@@ -184,27 +207,57 @@ module tlb
     end
 
     // ══════════════════════════════════════════════════════════
-    // Indexed read/write (sysreg access)
+    // Sysreg readback (combinational — addresses i_idx_set)
     // ══════════════════════════════════════════════════════════
+    // Sysreg mirror banks track the lookup banks in lockstep but
+    // are addressed independently, so a sysreg read never contests
+    // the lookup port and stays off the critical path.
 
-    logic [5:0] idx_addr;
-    assign idx_addr = entry_addr(i_idx_set, i_idx_way);
+    logic [31:0] sysreg_vpn_w0, sysreg_vpn_w1;
+    logic [31:0] sysreg_pte_w0, sysreg_pte_w1;
+    assign sysreg_vpn_w0 = way0_vpn_sysreg[i_idx_set];
+    assign sysreg_vpn_w1 = way1_vpn_sysreg[i_idx_set];
+    assign sysreg_pte_w0 = way0_pte_sysreg[i_idx_set];
+    assign sysreg_pte_w1 = way1_pte_sysreg[i_idx_set];
 
-    // Read: always available at idx_addr
-    assign o_read_vpn = entries_vpn[idx_addr];
-    assign o_read_pte = entries_pte[idx_addr];
+    // V bit comes from the flop vector for a consistent post-reset
+    // view — the DPRAM copy may be stale.  Bit 0 of the PTE word
+    // is overridden with v_vec on readback.
+    logic sysreg_v;
+    assign sysreg_v = i_idx_way ? way1_v_vec[i_idx_set]
+                                : way0_v_vec[i_idx_set];
 
-    // Write: on i_write_en, store both halves at idx_addr
-    integer i;
+    logic [31:0] sysreg_pte_raw;
+    assign sysreg_pte_raw = i_idx_way ? sysreg_pte_w1 : sysreg_pte_w0;
+
+    assign o_read_vpn = i_idx_way ? sysreg_vpn_w1 : sysreg_vpn_w0;
+    assign o_read_pte = {sysreg_pte_raw[31:1], sysreg_v};
+
+    // ══════════════════════════════════════════════════════════
+    // Writes — update lookup mirror, sysreg mirror, and V vec
+    // ══════════════════════════════════════════════════════════
+    // Only the addressed bank is written.  V vec is the sole entity
+    // touched by reset (DPRAM has no clear; software invalidates
+    // explicitly before relying on TLB contents).
+
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
-            for (i = 0; i < 64; i++) begin
-                entries_vpn[i] <= 32'b0;
-                entries_pte[i] <= 32'b0;
-            end
+            way0_v_vec <= 32'b0;
+            way1_v_vec <= 32'b0;
         end else if (i_write_en) begin
-            entries_vpn[idx_addr] <= i_write_vpn;
-            entries_pte[idx_addr] <= i_write_pte;
+            if (i_idx_way == 1'b0) begin
+                way0_vpn_lookup[i_idx_set] <= i_write_vpn;
+                way0_pte_lookup[i_idx_set] <= i_write_pte;
+                way0_vpn_sysreg[i_idx_set] <= i_write_vpn;
+                way0_pte_sysreg[i_idx_set] <= i_write_pte;
+                way0_v_vec[i_idx_set]      <= i_write_pte[TLB_V];
+            end else begin
+                way1_vpn_lookup[i_idx_set] <= i_write_vpn;
+                way1_pte_lookup[i_idx_set] <= i_write_pte;
+                way1_vpn_sysreg[i_idx_set] <= i_write_vpn;
+                way1_pte_sysreg[i_idx_set] <= i_write_pte;
+                way1_v_vec[i_idx_set]      <= i_write_pte[TLB_V];
+            end
         end
     end
 
