@@ -443,10 +443,10 @@ module cpu_core
     assign mmu_mem_size    = fetch_active ? 2'b10 : ctl_mem_size;  // fetch is always word
     assign mmu_req         = fetch_active || ctl_mem_read || ctl_mem_write;
 
-    // Cache enables are NOT gated with !mmu_fault.  With VIPT, the
+    // D-cache enables are NOT gated with !mmu_fault.  With VIPT, the
     // cache RAM lookup (data array, valid bits, tag read) is indexed
     // by virtual address and so can run in parallel with TLB
-    // translation — gating cache.i_re with mmu_fault would serialize
+    // translation — gating dcache.i_re with mmu_fault would serialize
     // the cache after the TLB and discard the entire VIPT benefit.
     //
     // Cache hit reads have no side effects, so they're safe to run
@@ -461,11 +461,22 @@ module cpu_core
     // inhibited at the bus arbiter's inputs — i_d_re / i_d_we /
     // i_i_re are gated with !mmu_fault below, so a faulting access
     // never gets latched into a real bus cycle.
+    //
+    // I-cache exception: see icache_re below.  A fetch protection
+    // fault on a cacheable page (X=0, C=1) would otherwise deadlock
+    // because the cache asserts o_busy=1 on the miss but the fill
+    // entry is registered behind i_fault_q — busy-with-no-fill is
+    // a hard hang.  Gating icache.i_re with !mmu_fault keeps the
+    // cache idle on faulting fetches; the icache hit path is on the
+    // same vaddr until IR latches, so the lost VIPT parallelism is
+    // not on any critical path.
     assign data_re = ctl_mem_read  && !fetch_active;
     assign data_we = ctl_mem_write && !fetch_active;
+    logic icache_re;
+    assign icache_re = fetch_active && !mmu_fault;
 
     // Note: with split I/D caches, each cache gets its own read enable:
-    //   I-cache: i_re = fetch_active
+    //   I-cache: i_re = fetch_active && !mmu_fault   (see icache_re above)
     //   D-cache: i_re = data_re
     // The bus arbiter (instantiated below) owns the single external
     // bus port and serializes the two caches' requests onto it.
@@ -559,7 +570,7 @@ module cpu_core
         .i_wdata      (32'b0),
         .i_byte_en    (4'b0),
         .i_we         (1'b0),
-        .i_re         (fetch_active),
+        .i_re         (icache_re),
         .i_cacheable  (mmu_cacheable),
         .i_fault      (mmu_fault),
         .o_rdata      (icache_rdata),
