@@ -18,6 +18,8 @@
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
+#include <string>
+#include <vector>
 #include <unistd.h>
 #include <termios.h>
 #include <poll.h>
@@ -28,6 +30,21 @@ static volatile sig_atomic_t running = 1;
 static struct termios orig_termios;
 static bool term_raw = false;
 static FILE* trace_fp = nullptr;
+
+// Rolling-window trace state. cap=0 means streaming (write each line
+// directly to trace_fp). cap>0 keeps the last `cap` lines in memory
+// and dumps them on exit.
+static std::vector<std::string> trace_ring;
+static size_t trace_ring_cap   = 0;
+static size_t trace_ring_head  = 0;
+static size_t trace_ring_count = 0;
+
+// Halt-on-UART-pattern matcher. When `halt_pattern` is non-null,
+// every UART TX byte is fed through a streaming substring matcher;
+// when the pattern matches, we set running=0 so the main loop exits
+// cleanly (and dumps the ring buffer if one is configured).
+static const char* halt_pattern   = nullptr;
+static size_t      halt_match_pos = 0;
 
 static void sigint_handler(int) { running = 0; }
 
@@ -77,7 +94,7 @@ static const char* get_sdcard_path() {
 int main(int argc, char** argv) {
     Vmachine_sim* cpu = new Vmachine_sim;
 
-    // Check for +sdcard= and +trace= in args (Verilator-style plusargs)
+    // Check for +sdcard=, +trace=, +trace_window=, +halt_on= plusargs
     const char* sd_path = nullptr;
     const char* trace_path = nullptr;
     for (int i = 1; i < argc; i++) {
@@ -85,6 +102,10 @@ int main(int argc, char** argv) {
             sd_path = argv[i] + 8;
         else if (strncmp(argv[i], "+trace=", 7) == 0)
             trace_path = argv[i] + 7;
+        else if (strncmp(argv[i], "+trace_window=", 14) == 0)
+            trace_ring_cap = strtoul(argv[i] + 14, nullptr, 10);
+        else if (strncmp(argv[i], "+halt_on=", 9) == 0)
+            halt_pattern = argv[i] + 9;
     }
     if (!sd_path) sd_path = get_sdcard_path();
 
@@ -92,9 +113,18 @@ int main(int argc, char** argv) {
         trace_fp = fopen(trace_path, "w");
         if (!trace_fp) {
             fprintf(stderr, "[TRACE] cannot open '%s'\n", trace_path);
+        } else if (trace_ring_cap > 0) {
+            trace_ring.resize(trace_ring_cap);
+            fprintf(stderr, "[TRACE] rolling window of %zu lines → '%s'\n",
+                    trace_ring_cap, trace_path);
         } else {
-            fprintf(stderr, "[TRACE] writing to '%s'\n", trace_path);
+            fprintf(stderr, "[TRACE] streaming to '%s'\n", trace_path);
         }
+    }
+    if (halt_pattern && *halt_pattern) {
+        fprintf(stderr, "[HALT_ON] '%s'\n", halt_pattern);
+    } else {
+        halt_pattern = nullptr;
     }
 
     SdCardSim sd(sd_path);
@@ -129,10 +159,12 @@ int main(int argc, char** argv) {
         cycles++;
 
 
-        // ── Instruction trace → file ────────────────────────────
+        // ── Instruction trace → file or ring buffer ─────────────
         if (trace_fp && cpu->o_trace_valid) {
             uint32_t sr = cpu->o_trace_sr;
-            fprintf(trace_fp, "PC=%08x SR=%08x [%c%c%c%c]",
+            char line[512];
+            int off = snprintf(line, sizeof(line),
+                    "PC=%08x SR=%08x [%c%c%c%c]",
                     cpu->o_pc, sr,
                     (sr & 0x80000000) ? 'N' : '-',
                     (sr & 0x40000000) ? 'Z' : '-',
@@ -141,15 +173,40 @@ int main(int argc, char** argv) {
             for (int r = 1; r <= 14; r++) {
                 cpu->i_dbg_reg_addr = r;
                 cpu->eval();
-                fprintf(trace_fp, " R%d=%08x", r, cpu->o_dbg_reg_data);
+                off += snprintf(line + off, sizeof(line) - off,
+                                " R%d=%08x", r, cpu->o_dbg_reg_data);
             }
-            fprintf(trace_fp, "\n");
+            if (off < (int)sizeof(line) - 1) line[off++] = '\n';
+            line[off] = '\0';
+
+            if (trace_ring_cap > 0) {
+                trace_ring[trace_ring_head].assign(line, off);
+                trace_ring_head = (trace_ring_head + 1) % trace_ring_cap;
+                if (trace_ring_count < trace_ring_cap) trace_ring_count++;
+            } else {
+                fputs(line, trace_fp);
+            }
         }
 
-        // ── UART TX → stdout ────────────────────────────────────
+        // ── UART TX → stdout (and halt-on-pattern matcher) ──────
         if (cpu->o_uart_tx_valid) {
-            putchar(cpu->o_uart_tx_data);
+            char c = (char)cpu->o_uart_tx_data;
+            putchar(c);
             fflush(stdout);
+
+            if (halt_pattern) {
+                if (c == halt_pattern[halt_match_pos]) {
+                    halt_match_pos++;
+                    if (halt_pattern[halt_match_pos] == '\0') {
+                        fprintf(stderr,
+                                "\n[HALT_ON matched '%s' after %lu cycles]\n",
+                                halt_pattern, (unsigned long)cycles);
+                        running = 0;
+                    }
+                } else {
+                    halt_match_pos = (c == halt_pattern[0]) ? 1 : 0;
+                }
+            }
         }
 
         // ── RX accepted? ────────────────────────────────────────
@@ -194,6 +251,17 @@ int main(int argc, char** argv) {
     }
 
     if (trace_fp) {
+        if (trace_ring_cap > 0 && trace_ring_count > 0) {
+            // Dump the ring buffer in chronological order. If we wrapped,
+            // the oldest entry lives at trace_ring_head; otherwise we
+            // never wrapped and entries 0..count-1 are in order.
+            size_t start = (trace_ring_count == trace_ring_cap) ? trace_ring_head : 0;
+            for (size_t i = 0; i < trace_ring_count; i++) {
+                fputs(trace_ring[(start + i) % trace_ring_cap].c_str(), trace_fp);
+            }
+            fprintf(stderr, "[TRACE] dumped %zu lines from rolling window\n",
+                    trace_ring_count);
+        }
         fclose(trace_fp);
         fprintf(stderr, "[TRACE] done\n");
     }
