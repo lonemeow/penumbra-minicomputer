@@ -53,7 +53,10 @@ module machine_sim
 
     // ── Instruction trace ────────────────────────────────────
     output logic        o_trace_valid,
-    output logic [31:0] o_trace_sr
+    output logic [31:0] o_trace_sr,
+    output logic        o_trace_except_entry,
+    output logic [3:0]  o_trace_vector,
+    output logic        o_trace_eret
 );
 
     // ── CPU ↔ memory bus (shared, directly from CPU) ────────
@@ -138,8 +141,11 @@ module machine_sim
         .o_dbg_reg_data (o_dbg_reg_data),
 
         // Trace
-        .o_trace_valid  (o_trace_valid),
-        .o_trace_sr     (o_trace_sr)
+        .o_trace_valid        (o_trace_valid),
+        .o_trace_sr           (o_trace_sr),
+        .o_trace_except_entry (o_trace_except_entry),
+        .o_trace_vector       (o_trace_vector),
+        .o_trace_eret         (o_trace_eret)
     );
 
     // ══════════════════════════════════════════════════════════

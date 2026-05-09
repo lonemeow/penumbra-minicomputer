@@ -46,7 +46,55 @@ static size_t trace_ring_count = 0;
 static const char* halt_pattern   = nullptr;
 static size_t      halt_match_pos = 0;
 
+// Trap-marker detection: o_trace_except_entry pulses one cycle BEFORE
+// the *_pending flops latch, so the vector number on o_trace_vector is
+// only valid the cycle after the pulse.  Defer emit by one cycle.
+static bool        trap_emit_pending      = false;
+static unsigned long trap_emit_cycle      = 0;
+static uint32_t    trap_emit_pc           = 0;
+
+// Vector number → human-readable name.  Indexed by 4-bit vector_num.
+// Order mirrors penumbra_pkg.sv (VEC_BUS_FAULT=0 .. VEC_EXT_IRQ=9).
+static const char* const vec_names[16] = {
+    "BUS_FAULT", "TIMER",   "TLB_MISS", "TLB_PROT",
+    "PRIV",      "SYSCALL", "BREAK",    "ILLEGAL",
+    "ALIGN",     "EXT_IRQ", "rsvd10",   "rsvd11",
+    "rsvd12",    "rsvd13",  "rsvd14",   "rsvd15",
+};
+
 static void sigint_handler(int) { running = 0; }
+
+// Append a single line (already \n-terminated) to either the rolling
+// ring buffer or directly to the trace file, depending on configuration.
+// Used by both the per-instruction trace and the trap markers, so they
+// land in the same chronological stream.
+static void trace_write(const char* line, size_t len) {
+    if (!trace_fp) return;
+    if (trace_ring_cap > 0) {
+        trace_ring[trace_ring_head].assign(line, len);
+        trace_ring_head = (trace_ring_head + 1) % trace_ring_cap;
+        if (trace_ring_count < trace_ring_cap) trace_ring_count++;
+    } else {
+        fputs(line, trace_fp);
+    }
+}
+
+// Format a trap-entry or ERET marker line.
+//
+// kind:    "ENTER" (exception/IRQ entry) or "ERET" (bulk SR restore).
+// vector:  meaningful only when kind == "ENTER"; pass -1 for ERET.
+static void emit_trap_marker(const char* kind, unsigned long cycle,
+                             uint32_t pc, uint32_t sr, int vector) {
+    char marker[256];
+    int  off = 0;
+    const char *vec_name = vector != -1 ? vec_names[vector] : "N/A";
+    off = snprintf(marker, sizeof(marker),
+                   "[TRAP %s cyc=%lu pc=%08x vec=%s S=%d I=%d]\n",
+                   kind, cycle, pc, vec_name,
+                   !!(sr & 0x80000000u), !!(sr & 0x40000000u));
+    if (off > 0 && off < (int)sizeof(marker))
+        trace_write(marker, (size_t)off);
+}
 
 static void restore_term() {
     if (term_raw) {
@@ -159,6 +207,18 @@ int main(int argc, char** argv) {
         cycles++;
 
 
+        // ── Trap-marker emit (deferred from previous cycle) ─────
+        // o_trace_except_entry pulses one cycle before vector_num is
+        // valid (the *_pending flops latch on its rising edge).  We
+        // saw the pulse last cycle; emit the marker now using the
+        // newly-valid o_trace_vector.
+        if (trace_fp && trap_emit_pending) {
+            uint32_t sr = cpu->o_trace_sr;
+            int vec = (int)cpu->o_trace_vector & 0xF;
+            emit_trap_marker("ENTER", trap_emit_cycle, trap_emit_pc, sr, vec);
+            trap_emit_pending = false;
+        }
+
         // ── Instruction trace → file or ring buffer ─────────────
         if (trace_fp && cpu->o_trace_valid) {
             uint32_t sr = cpu->o_trace_sr;
@@ -178,14 +238,24 @@ int main(int argc, char** argv) {
             }
             if (off < (int)sizeof(line) - 1) line[off++] = '\n';
             line[off] = '\0';
+            trace_write(line, (size_t)off);
+        }
 
-            if (trace_ring_cap > 0) {
-                trace_ring[trace_ring_head].assign(line, off);
-                trace_ring_head = (trace_ring_head + 1) % trace_ring_cap;
-                if (trace_ring_count < trace_ring_cap) trace_ring_count++;
-            } else {
-                fputs(line, trace_fp);
-            }
+        // ── Trap entry / ERET detection ─────────────────────────
+        // except_entry is a 1-cycle pulse on any of the eight exception
+        // sources (incl. IRQ).  Stash PC/cycle and emit the marker on
+        // the FOLLOWING cycle, when o_trace_vector is valid.
+        if (trace_fp && cpu->o_trace_except_entry) {
+            trap_emit_pending = true;
+            trap_emit_cycle   = (unsigned long)cycles;
+            trap_emit_pc      = cpu->o_pc;
+        }
+        // ctl_sr_load fires on ERET (and rare WRSPR SR).  No deferral
+        // needed — the SR being restored is whatever the µ-op presents
+        // this cycle.
+        if (trace_fp && cpu->o_trace_eret) {
+            emit_trap_marker("ERET", (unsigned long)cycles, cpu->o_pc,
+                             cpu->o_trace_sr, -1);
         }
 
         // ── UART TX → stdout (and halt-on-pattern matcher) ──────

@@ -64,7 +64,17 @@ module cpu_core
 
     // ── Instruction trace ────────────────────────────────────
     output logic        o_trace_valid,
-    output logic [31:0] o_trace_sr
+    output logic [31:0] o_trace_sr,
+    // Trap/IRQ markers — used by the testbench to annotate the
+    // instruction trace.  except_entry pulses for one cycle when any
+    // of the eight exception sources dispatches; trace_vector is the
+    // vector number being taken (valid the cycle AFTER the pulse,
+    // when the *_pending flops have caught up).  trace_eret pulses on
+    // any bulk SR load (ERET, and the rare WRSPR SR — both restore
+    // saved privilege state).
+    output logic        o_trace_except_entry,
+    output logic [3:0]  o_trace_vector,
+    output logic        o_trace_eret
 );
 
     // ══════════════════════════════════════════════════════════
@@ -764,6 +774,15 @@ module cpu_core
 
     // Trace: instruction-valid pulse
     assign o_trace_valid = ir_valid;
+
+    // Trace: trap/IRQ entry pulse, vector number, and ERET pulse.
+    // o_trace_vector is consumed one cycle after o_trace_except_entry
+    // pulses (sample-on-pending — see header comment); the testbench
+    // delays its emit by one cycle to read the latched fault_vector /
+    // dispatch_vector.
+    assign o_trace_except_entry = except_entry;
+    assign o_trace_vector       = vector_num;
+    assign o_trace_eret         = ctl_sr_load;
 
     assign o_pc = pc;
 
