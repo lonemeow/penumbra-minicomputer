@@ -2,14 +2,13 @@
 ;
 ; Why this test exists
 ; ────────────────────
-; doc/bus-arbiter-userspace-bug.md Candidate A: with the bus arbiter
-; commit, `icache.i_re` lost its `!mmu_fault` gate.  On a fetch into
-; a page mapped X=0, C=1, the cache lookup runs unconditionally;
-; tag almost certainly mismatches so the cache asserts `o_busy=1`,
-; but the fill state machine is gated by `!i_fault_q` so it never
-; starts.  Result (per the doc's analysis): `cache_busy=1` forever,
-; sequencer stuck in S_FETCH waiting for an `ir_valid` that never
-; comes.  Hard hang.
+; Regression sentinel for the cached fetch-protection-fault path.
+; Without proper gating of `icache.i_re` against `mmu_fault`, a fetch
+; into a page mapped X=0, C=1 would hang: the cache lookup runs
+; unconditionally, the tag mismatches so `o_busy=1`, but the fill
+; state machine is gated against faulting accesses and never starts —
+; sequencer parked in S_FETCH waiting for an `ir_valid` that never
+; comes.
 ;
 ; This test sets up exactly that configuration:
 ;   • A page mapped R+W but NOT X, with PTE.C=1 (cacheable).
@@ -19,10 +18,6 @@
 ; Pass criterion: handler runs, fault is delivered cleanly, retry
 ; after re-mapping with X works.  Failure criterion: testbench
 ; cycle limit (500000 cycles) hits before BREAK — that's a hang.
-;
-; If this test passes, Candidate A is exonerated — at least for the
-; supervisor-mode fetch case.  (The userspace path adds U-bit checks
-; on top, which would be a follow-up test.)
 ;
 ; Result: R1=1 PASS, R1=0 FAIL
 

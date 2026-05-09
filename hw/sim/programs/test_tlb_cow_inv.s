@@ -16,14 +16,13 @@
 ;
 ;   1. The tactical invalidate ensures we cannot accidentally read a
 ;      cached PPN 1 line via a buggy tag-check.
-;   2. The post-retry refill goes through the same bus path that
-;      Candidate C in doc/bus-arbiter-userspace-bug.md is sensitive to,
-;      but as a *cold* fill rather than a tag-mismatch fill — a
-;      slightly different timing footprint.
+;   2. The post-retry refill is a *cold* fill rather than a tag-mismatch
+;      fill — a slightly different timing footprint through the bus
+;      arbiter and SDRAM.
 ;
 ; If both tests pass, COW correctness is well-established.  If
-; test_tlb_cow.s fails but this one passes, the bug is in the
-; tag-mismatch refill path; if both fail, it's in COW logic.
+; test_tlb_cow.s fails but this one passes, a regression is in the
+; tag-mismatch refill path; if both fail, in COW logic.
 ;
 ; Result: R1=1 PASS, R1=0 FAIL
 

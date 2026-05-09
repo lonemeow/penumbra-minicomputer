@@ -7,8 +7,7 @@
 ; not actually copy.  That misses two things:
 ;
 ;   1. The cached prot-fault path (PTE.C=1, MMU on, D-cache on) —
-;      this is the path that NetBSD userspace fork()/COW takes, and
-;      the candidate-A scenario in doc/bus-arbiter-userspace-bug.md.
+;      this is the path that NetBSD userspace fork()/COW takes.
 ;   2. The COW invariant itself: after a write fault triggers a copy,
 ;      the *original* physical page must remain untouched, because
 ;      other processes are still sharing it.  A handler that only
