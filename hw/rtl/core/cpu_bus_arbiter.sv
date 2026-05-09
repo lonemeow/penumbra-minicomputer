@@ -208,6 +208,55 @@ module cpu_bus_arbiter
     assign o_d_rdata = resp_rdata;
     assign o_i_rdata = resp_rdata;
 
+    // ══════════════════════════════════════════════════════════
+    // Simulation assertions — FSM and handshake invariants
+    //
+    // These pin down the arbiter's contract with both caches and
+    // the external bus.  Stripped by Yosys at synth.
+    // ══════════════════════════════════════════════════════════
+
+    // S_DONE is exactly a 1-cycle cooldown — never held longer.
+    // If this fires, something is keeping us out of S_IDLE (impossible
+    // by next-state logic, but a synthesis-vs-sim divergence sentinel).
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (state == S_DONE) |=> (state == S_IDLE))
+        else $error("cpu_bus_arbiter: S_DONE held for more than one cycle");
+
+    // S_BUSY is only entered from S_IDLE (no S_DONE→S_BUSY shortcut).
+    // The 1-cycle DONE cooldown is what lets the cache observe busy↓
+    // and deassert before we accept new traffic.  Skipping it would
+    // re-latch the same request and run it twice.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (state == S_BUSY) |-> $past(state == S_IDLE || state == S_BUSY))
+        else $error("cpu_bus_arbiter: S_BUSY entered from non-IDLE state");
+
+    // owner is only written at IDLE→BUSY; it must not change while we
+    // hold S_BUSY or S_DONE.  A change mid-transaction means we've
+    // started routing the response to a different cache than the one
+    // we picked — exactly the failure mode the userspace trace hints at.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        ((state == S_BUSY || state == S_DONE) &&
+         $past(state == S_BUSY || state == S_DONE)) |-> $stable(owner))
+        else $error("cpu_bus_arbiter: owner changed mid-transaction");
+
+    // The just-served owner MUST see private busy=0 in S_DONE.  This
+    // is the single cycle in which it captures rdata and exits STALL.
+    // If it sees busy=1, the CPU re-stalls and we lose this response;
+    // the next BUSY cycle re-serves the same word into a stale slot.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (state == S_DONE && owner == 1'b0) |-> (o_d_busy == 1'b0))
+        else $error("cpu_bus_arbiter: D owner saw busy=1 in S_DONE");
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (state == S_DONE && owner == 1'b1) |-> (o_i_busy == 1'b0))
+        else $error("cpu_bus_arbiter: I owner saw busy=1 in S_DONE");
+
+    // External bus drive is only active in S_BUSY.  In S_IDLE/S_DONE
+    // the bus must be quiet so device-side decoders don't double-trigger
+    // (e.g. SDRAM adapter speculation latching off a phantom request).
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (state != S_BUSY) |-> (!o_mem_re && !o_mem_we))
+        else $error("cpu_bus_arbiter: bus driven outside S_BUSY");
+
 endmodule
 
 // verilator lint_on UNUSEDSIGNAL
