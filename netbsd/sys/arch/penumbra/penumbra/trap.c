@@ -25,6 +25,11 @@ __KERNEL_RCSID(0, "$NetBSD$");
 
 #include <uvm/uvm_extern.h>
 
+#ifdef DDB
+#include <machine/db_machdep.h>
+#include <ddb/db_extern.h>
+#endif
+
 /* Exception vector numbers (match hardware vector table at PA 0x00) */
 #define EXC_BUSFAULT	0
 #define EXC_TIMER	1
@@ -196,6 +201,10 @@ trap(struct trapframe *tf)
 			    tf->tf_badvaddr, type, tf);
 			break;
 		}
+#ifdef DDB
+		if (db_recover != NULL)
+			longjmp(db_recover);
+#endif
 		panic("kernel %s fault at va=0x%08x, pc=0x%08x "
 		    "(rv=%d, fstat=0x%x, ftype=0x%x)",
 		    type == EXC_TLB_MISS ? "TLB miss" : "TLB prot",
@@ -210,6 +219,10 @@ trap(struct trapframe *tf)
 			    tf->tf_badvaddr, type, tf);
 			break;
 		}
+#ifdef DDB
+		if (db_recover != NULL)
+			longjmp(db_recover);
+#endif
 		panic("kernel bus fault at va=0x%08x, pc=0x%08x",
 		    tf->tf_badvaddr, tf->tf_epc);
 		break;
@@ -236,7 +249,10 @@ trap(struct trapframe *tf)
 			    tf->tf_epc, type, tf);
 			break;
 		}
-		/* Kernel BREAK — halt (future: DDB entry point) */
+#ifdef DDB
+		if (kdb_trap(type, tf))
+			break;
+#endif
 		panic("BREAK at pc=0x%08x (sr=0x%08x)",
 		    tf->tf_epc, tf->tf_sr);
 		break;

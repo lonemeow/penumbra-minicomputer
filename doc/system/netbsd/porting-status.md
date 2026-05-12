@@ -128,6 +128,28 @@ bootinfo — `boot sd:0,0` reaches single-user with no prompts.
 - **SPL:** Hardware-based, reads SR.I directly (no global
   variable that desyncs on exception entry).
 
+- **DDB (minimal-useful subset):** On-demand entry via serial
+  BREAK (the MI `cn_check_magic` default magic — Ctrl-A B in
+  ISS raw mode delivers the BREAK condition) or automatic
+  entry on `panic`.  Working commands: `ps`, `show lwp`,
+  `show registers`, `bt`, `bt /t <lwp_addr>`, `c`.  The
+  per-LWP backtrace seeds from the LWP's `pcb_context`
+  (saved R13/R14 = LR/SP after `cpu_switchto`); a
+  prologue-scanning unwinder recognizes `SUB r14, #imm` and
+  `STW rN, [r14, #off]` for callee-saved registers and walks
+  frames until it hits an asm boundary
+  (`cpu_switchto`, `lwp_trampoline`, `_trap_common`, the
+  pinned vector page).  Symbol table is shipped by the
+  bootloader via `BTINFO_SYMTAB` (libsa `LOAD_SYM`) and
+  registered with `ksyms_addsyms_elf` in `cpu_startup()`
+  after `pmap_map_kernel_tail` installs PTEs for the
+  post-`_end` symtab region.  Kernel-mode TLB and bus faults
+  during `db_read_bytes` longjmp through `db_recover`, so
+  the debugger can safely probe unmapped VAs without
+  panicking.  **Out of scope** (deliberately, for now):
+  single-step (`s`/`si`/`so`), breakpoint planting (`b`),
+  real disassembler — `x/i` prints raw words.
+
 ### Remaining Stubs
 
 Kernel functions that will panic if reached (grep `TODO(stub)`):
@@ -135,8 +157,6 @@ Kernel functions that will panic if reached (grep `TODO(stub)`):
 - `process_read_regs`, `process_write_regs`, `process_set_pc`
 - `cpu_coredump`
 - `vmapbuf` / `vunmapbuf`
-
-DDB (kernel debugger) disabled -- needs extensive MD hooks.
 
 ## Userland
 

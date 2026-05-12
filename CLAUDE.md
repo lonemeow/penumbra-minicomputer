@@ -417,7 +417,11 @@ MIPS/68k-style vector dispatch.
   scratch, guard).  VA 0 unmapped (null guard).
 - Remaining MD stubs: `process_read_regs`, `process_write_regs`,
   `process_set_pc`, `cpu_coredump`, `vmapbuf`/`vunmapbuf`
-  (grep `TODO(stub)`).  DDB disabled.
+  (grep `TODO(stub)`).
+- Minimal DDB: on-demand entry via serial BREAK (Ctrl-A B on
+  ISS raw mode) or `panic`; `ps`, `show registers`, `bt`, and
+  `bt /t <lwp_addr>` (prologue-scanning unwind from a parked
+  LWP's `pcb_context`).  No single-step or real disassembler.
 - See `netbsd/sys/arch/penumbra/CLAUDE.md` for detailed kernel
   port context (directory layout, file map, VM layout details,
   pinned-slot naming, status checklist).

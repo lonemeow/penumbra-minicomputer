@@ -32,6 +32,7 @@ __KERNEL_RCSID(0, "$NetBSD$");
 
 #include <uvm/uvm_extern.h>
 
+#include <machine/bootinfo.h>
 #include <machine/cpu.h>
 #include <machine/psl.h>
 #include <machine/pcb.h>
@@ -42,6 +43,12 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <machine/sysreg.h>
 #include <machine/mcontext.h>
 #include <machine/userret.h>
+
+#include "ksyms.h"
+
+#if NKSYMS || defined(DDB) || defined(MODULAR)
+#include <sys/ksyms.h>
+#endif
 
 /* Single CPU info structure (uniprocessor) */
 struct cpu_info cpu_info_store = {
@@ -92,6 +99,27 @@ cpu_startup(void)
 		cpu_setmodel("Penumbra (unknown)");
 
 	printf("%s\n", cpu_getmodel());
+
+#if NKSYMS || defined(DDB) || defined(MODULAR)
+	{
+		struct btinfo_symtab *bi_sym;
+
+		/*
+		 * Install PTEs for the post-_end region where the bootloader
+		 * placed the symbol table.  Deferred from pmap_bootstrap()
+		 * to avoid trashing the early UART's pinned scratch slot;
+		 * by the time cpu_startup runs, the UART is on its permanent VA.
+		 */
+		pmap_map_kernel_tail();
+
+		bi_sym = lookup_bootinfo(BTINFO_SYMTAB);
+		if (bi_sym != NULL && bi_sym->ssym != 0 && bi_sym->esym != 0) {
+			ksyms_addsyms_elf(bi_sym->esym - bi_sym->ssym,
+			    (void *)(uintptr_t)bi_sym->ssym,
+			    (void *)(uintptr_t)bi_sym->esym);
+		}
+	}
+#endif
 
 	/* TODO: allocate physio submap via uvm_km_suballoc */
 }

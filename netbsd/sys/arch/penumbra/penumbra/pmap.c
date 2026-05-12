@@ -311,6 +311,50 @@ pv_remove(struct vm_page *pg, struct pmap *pm, vaddr_t va)
 }
 
 
+/*
+ * Install kernel PTEs for the "image tail" — the region between
+ * round_page(_end) and bk->kern_end where the bootloader appends
+ * the symbol table (and any other post-BSS payload).
+ *
+ * locore.S maps only [KERN_TEXT_VA, round_page(_end)) because it
+ * runs before bootinfo is parsed and has no way to know how far
+ * the loader extended the image.  We complete the mapping here.
+ *
+ * Deferred out of pmap_bootstrap because pmap_kenter_pa reloads the
+ * scratch-window pinned TLB slot to access target L2 pages — and
+ * during pmap_bootstrap the same scratch slot is the only mapping
+ * for the early UART.  Once startup.c has remapped the UART through
+ * pmap_map_device, the scratch slot is free for reuse and we can
+ * call this safely.
+ *
+ * The L2 tables for these VAs already exist (BOOT_NL2 in locore.S
+ * covers well past kern_end for any plausible kernel size), so
+ * pmap_kenter_pa just fills in PTEs — no L2 allocation needed.
+ */
+void
+pmap_map_kernel_tail(void)
+{
+	struct btinfo_kernbase *bk;
+	vaddr_t end_va = round_page((vaddr_t)&_end);
+	vaddr_t kern_end_va;
+	paddr_t phys_off;
+
+	bk = lookup_bootinfo(BTINFO_KERNBASE);
+	if (bk == NULL)
+		return;
+
+	kern_end_va = round_page(bk->kern_end);
+	phys_off = bk->kern_start - bk->phys_base;
+
+	/*
+	 * RW because ksyms_addsyms_elf rewrites the ELF header in place
+	 * (ksyms_hdr_init() in kern/kern_ksyms.c) before parsing it.
+	 */
+	for (vaddr_t va = end_va; va < kern_end_va; va += PAGE_SIZE)
+		pmap_kenter_pa(va, va - phys_off,
+		    VM_PROT_READ | VM_PROT_WRITE, 0);
+}
+
 /* ── pmap_bootstrap ───────────────────────────────────────────
  *
  * Called from penumbra_init() after physical memory is registered
@@ -346,11 +390,9 @@ pmap_bootstrap(void)
 	    (unsigned)kernel_pmap_store.pm_l1_pa);
 
 	/*
-	 * virtual_avail: first kernel VA available for dynamic mapping.
-	 * Must be past the entire loaded kernel image including the
-	 * symbol table (which the bootloader places after BSS).
-	 * BTINFO_KERNBASE.kern_end gives the true virtual end.
-	 * Fall back to _end (BSS end) if bootinfo is missing.
+	 * Reserve VA past the loaded kernel tail (symbol table region).
+	 * The actual PTE installation is deferred to pmap_map_kernel_tail()
+	 * called later from cpu_startup() — see that function's comment.
 	 */
 	{
 		struct btinfo_kernbase *bk = lookup_bootinfo(BTINFO_KERNBASE);

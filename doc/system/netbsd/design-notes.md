@@ -190,6 +190,128 @@ ARM-style pattern: `penumbra_init()` runs on a 4 KB boot stack
 `penumbra_main()` --> `main()`.  The 4 KB boot stack overflows
 at `-O0` + DIAGNOSTIC if used for `main()`.
 
+## DDB: Minimal-Useful Subset
+
+DDB on Penumbra is intentionally scoped to **inspect and resume**,
+not single-step or breakpoint-plant.  The headline use case is
+debugging stuck/parked LWPs: drop in via console BREAK or panic,
+run `ps` and `bt /t <lwp>` to see *where* each LWP slept, then
+`c` to continue.
+
+What this gives up — single-step (`s`), breakpoints (`b`),
+mnemonic disassembly — would each require independent work
+(branch-target prediction + double-breakpoint emulation for `s`,
+correct `BKPT_INST` encoding + I-cache flush after
+`db_write_bytes` for `b`, ~200 mnemonics with 4 instruction
+formats for the disassembler).  Skipping them keeps the MD
+surface area at roughly 9 symbols
+(`kdb_trap`, `cpu_Debugger`, `db_read_bytes`,
+`db_write_bytes`, `db_active`, `ddb_regs`, `db_regs[]`/
+`db_eregs`, `db_set_single_step`/`db_clear_single_step` as
+stubs, `db_stack_trace_print`, `db_disasm` as stub).
+
+### Stack unwinder: prologue scanning
+
+Penumbra has no frame-pointer convention (R10 is callee-saved
+but the compiler typically omits using it as FP), so walking
+a stack requires identifying each function's saved-LR slot
+from its prologue.  The scanner reads from
+`db_search_symbol(pc)`'s function start and matches:
+
+- `SUB r14, #imm`  — Format L, fixed bits `0xFFC00000` masked
+  against match `0x41800000`.  Imm gives the frame size.
+- `STW rN, [r14, #off]`  — Format M, fixed bits `0xF83C0000`
+  masked against `0x90380000`.  Rd field gives the saved
+  register; `off` gives its frame slot.  Only N in
+  {5..10, 13} is treated as a prologue store; other
+  registers terminate the scan.
+
+The saved LR offset (N = 13) is the load-bearing one — it's
+where the return address lives.  Without a `SUB r14`
+instruction in the function, the function is a leaf and only
+unwindable as the topmost frame (using the live LR from the
+seed trapframe).
+
+### Per-LWP seed
+
+`bt /t <lwp_addr>` reads the LWP's `pcb_context` (the
+`label_t` saved by `cpu_switchto`):
+
+- `PC` seed  = `pcb_context.val[_JB_R13]` — the saved LR is
+  already the return address into `mi_switch`, so we start
+  "above" the asm boundary with no special case.
+- `SP` seed  = `pcb_context.val[_JB_R14]`.
+- LR is not live (set `lr_live = false`).
+
+This works because `cpu_switchto` is reached via `bl`, which
+writes LR — so its saved LR is a real return address, not a
+synthesized one.  If the kernel ever context-switched via a
+synchronous trap (it doesn't), the seed would need a
+trap-frame special case.
+
+### Termination markers
+
+The unwinder stops with a `<...>` marker when it enters
+hand-written assembly whose prologue this scanner can't
+interpret: `cpu_switchto`, `lwp_trampoline`, `_trap_common`,
+`trap_return`, `setjmp`, `longjmp`, or any PC in the pinned
+vector page region (`0xFFFFxxxx`).  Also stops on bad SP,
+implausible frame size (<4 or >4096 bytes), or after 64
+frames as a safety cap.
+
+### Symtab mapping
+
+Kernel symbols arrive via `BTINFO_SYMTAB` (the bootloader's
+libsa `LOAD_SYM` populates `marks[MARK_SYM..MARK_END]` and
+the bootloader converts to virtual addresses).  But locore.S
+maps only `[KERN_TEXT_VA, round_page(_end))`, leaving the
+post-`_end` symtab region without PTEs.  `pmap_map_kernel_tail`
+installs the missing entries from `cpu_startup`, *after*
+`pmap_map_device` has remapped the UART off the pinned scratch
+slot — otherwise `pmap_kenter_pa`'s scratch-window usage would
+clobber the UART mapping mid-print and the next `printf` would
+hang polling LSR through an L2 PTE.
+
+The symtab region is mapped RW because `ksyms_addsyms_elf`
+rewrites the ELF header in place (`ksyms_hdr_init` in
+`sys/kern/kern_ksyms.c`).
+
+### Fault recovery during debugger probes
+
+DDB needs to read arbitrary kernel VAs, some of which may be
+unmapped.  Rather than guard each `db_read_bytes` with manual
+TLB-probe logic, we hook the kernel-mode fault paths in
+`trap.c`: `EXC_TLB_MISS`, `EXC_TLB_PROT`, and `EXC_BUSFAULT`
+check `db_recover != NULL` (set by the MI command loop via
+`setjmp`) before calling `panic`.  If set, `longjmp` aborts
+the in-progress command and returns to the `db>` prompt.
+
+This is the standard NetBSD pattern (SPARC, MIPS use the same
+approach).  Userland faults are unaffected — they only fall
+into the user-mode signal delivery branch.
+
+### What's left for a "full" DDB
+
+If someone wants to extend this later:
+
+1. **Real `db_disasm`**: ~200 mnemonics across 4 instruction
+   formats.  Could factor from `llvm/lib/Target/Penumbra/
+   Disassembler/` but in-kernel C is cleaner.
+2. **Single-step**: Penumbra has no trace-trap bit, so it
+   would need software emulation — compute next PC
+   (fall-through + taken-branch target) and plant BREAK
+   instructions at both, unplant on re-entry.
+3. **Breakpoint planting**: correct `BKPT_INST` encoding,
+   I-cache flush after `db_write_bytes` (split I/D caches
+   aren't snooped).
+4. **Auto-traceback at panic**: `db_panic` calls
+   `db_stack_trace_print(__builtin_frame_address(0), have_addr=true, "", ...)`
+   — currently `addr` is ignored when there's no `/t`
+   modifier, so the auto-traceback prints "trapframe pc/sp
+   not in kernel range" and gives up.  Adding a seed path
+   for "addr is a stack pointer, find the enclosing
+   function" would make panic-time traceback work.
+
 ## UART Mapping Timing
 
 `pmap_map_device()` for the console UART must run before

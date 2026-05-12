@@ -9,7 +9,8 @@ include		"arch/penumbra/conf/std.penumbra"
 maxusers	2
 
 # Kernel options
-#options	DDB			# kernel debugger (needs MD hooks)
+options		DDB			# kernel debugger
+options		DDB_HISTORY_SIZE=512
 options		DIAGNOSTIC		# enable KASSERT checks
 options		PMAP_STEAL_MEMORY	# early boot page allocation
 

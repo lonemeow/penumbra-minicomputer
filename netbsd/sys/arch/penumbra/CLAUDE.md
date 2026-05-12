@@ -367,10 +367,31 @@ Headers fall into three categories:
   in `vmstat -i` under group `"shared irq"`; spurious counter
   tracks unclaimed IRQs.  `com_pbbus` attaches as first consumer
   (replaces former `sc_poll_ticks=1` callout).
+- [x] **DDB (minimal-useful)** — kernel BREAK dispatches to
+  `kdb_trap` (`trap.c`); MD glue in `db_machdep.c`
+  (`Debugger`/`cpu_Debugger`, `db_read_bytes`/`db_write_bytes`,
+  `db_regs[]`, `db_active`).  Stack unwinder in `db_trace.c`
+  uses prologue scanning (recognizes `SUB r14,#imm` and
+  `STW rN,[r14,#off]` for callee-saved registers) — supports
+  `bt` from the current trapframe and `bt /t <lwp>` for parked
+  LWPs via `pcb_context`.  Termination markers stop the walk
+  at `cpu_switchto`, `lwp_trampoline`, `_trap_common`, and the
+  pinned vector page region.  Stub `db_disasm` prints raw words
+  (no decoded mnemonics).  Kernel-mode TLB/bus faults during
+  `db_read_bytes` longjmp through `db_recover` so the debugger
+  can safely probe unmapped VAs.  Symbol table seeded in
+  `cpu_startup()` via `ksyms_addsyms_elf` after
+  `pmap_map_kernel_tail` installs PTEs for the
+  `[round_page(_end), kern_end)` symtab region — deferred from
+  `pmap_bootstrap` because `pmap_kenter_pa` reloads the same
+  pinned scratch slot the early UART uses.  Console magic char
+  (default: serial BREAK condition) triggers `Debugger()` via
+  the MI `cn_check_magic` infrastructure that `comcnattach1`
+  wires up.  Out of scope: single-step, breakpoint planting,
+  real disassembler.
 - [ ] Kernel port — remaining MD stubs: `process_read_regs`,
   `process_write_regs`, `process_set_pc`, `cpu_coredump`,
   `vmapbuf`/`vunmapbuf` (grep for `TODO(stub)`)
-- [ ] DDB — disabled, needs extensive MD hooks
 
 ## Next Steps
 

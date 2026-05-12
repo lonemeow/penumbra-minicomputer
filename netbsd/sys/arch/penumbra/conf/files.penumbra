@@ -25,6 +25,11 @@ file	arch/penumbra/penumbra/syscall.c
 file	arch/penumbra/penumbra/pmap.c
 file	arch/penumbra/penumbra/copy.S
 
+# Kernel debugger (DDB) machine-dependent support
+file	arch/penumbra/penumbra/db_machdep.c		ddb
+file	arch/penumbra/penumbra/db_trace.c		ddb
+file	arch/penumbra/penumbra/db_disasm.c		ddb
+
 # System bus
 device	mainbus {}
 attach	mainbus at root

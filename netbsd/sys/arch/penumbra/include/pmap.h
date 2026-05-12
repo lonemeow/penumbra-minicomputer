@@ -204,6 +204,7 @@ extern char _boot_l2[];
 
 /* Required pmap interface — implemented in pmap.c */
 void		pmap_bootstrap(void);
+void		pmap_map_kernel_tail(void);
 void		pmap_virtual_space(vaddr_t *, vaddr_t *);
 vaddr_t		pmap_steal_memory(vsize_t, vaddr_t *, vaddr_t *);
 paddr_t		pmap_steal_page(void);
