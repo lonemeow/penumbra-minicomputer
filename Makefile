@@ -148,6 +148,84 @@ test:
 		exit 1; \
 	fi
 
+# ── Run all hardware module unit tests ────────────────────────
+# Each entry is "MOD" when the testbench filename is the default
+# `tb_<MOD>.cpp` and the top module is `<MOD>`.  Use "MOD:TB" when
+# the wrapper module name diverges from the testbench filename
+# (typically because a `<thing>_test.sv` wrapper drives a smaller
+# RTL module — see hw/rtl/sim/).
+#
+# Integration testbenches (tb_cpu_prog, tb_cpu_top, tb_cpu_mem,
+# tb_interactive, tb_smoke_adder) are not listed here — they are
+# covered by `make test`, `make simulate`, etc.
+#
+# Usage: make test-modules
+MODULE_TESTS = \
+    alu \
+    amux \
+    bmux \
+    byte_ext \
+    byte_rep \
+    cond_eval \
+    datapath \
+    field_ext \
+    imm_ext \
+    mar \
+    mdr \
+    pc_mux \
+    pc_reg \
+    regfile \
+    status_reg \
+    wmux \
+    busctl \
+    tlb \
+    slip_rx \
+    slip_tx \
+    timer \
+    sdram_test \
+    sdram_cdc \
+    cache_test:tb_cache \
+    autoconfig_test:tb_autoconfig \
+    spi_test:tb_spi \
+    sdram_adapter_test:tb_sdram_adapter
+
+.PHONY: test-modules
+test-modules:
+	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
+	@pass=0; fail=0; failed=""; \
+	for entry in $(MODULE_TESTS); do \
+		mod=$${entry%%:*}; \
+		tb=$${entry#*:}; \
+		[ "$$tb" = "$$entry" ] && tb=tb_$$mod; \
+		if $(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) \
+			--top-module $$mod \
+			--Mdir $(BUILD_DIR)/$$mod.verilator \
+			-o ../V$$mod \
+			$(PKG_SV) $$(find hw/rtl -name "$$mod.sv") hw/sim/$$tb.cpp \
+			>/dev/null 2>&1 && \
+		   $(DOCKER_RUN) --entrypoint ./$(BUILD_DIR)/V$$mod $(DOCKER_IMAGE) \
+			>/dev/null 2>&1; then \
+			printf "  \033[32mPASS\033[0m  %s\n" "$$mod"; \
+			pass=$$((pass + 1)); \
+		else \
+			printf "  \033[31mFAIL\033[0m  %s\n" "$$mod"; \
+			fail=$$((fail + 1)); \
+			failed="$$failed $$mod"; \
+		fi; \
+	done; \
+	echo ""; \
+	total=$$((pass + fail)); \
+	echo "$$pass/$$total module tests passed"; \
+	if [ $$fail -gt 0 ]; then \
+		echo "  *** $$fail FAILED:$$failed ***"; \
+		exit 1; \
+	fi
+
+# ── Aggregate: program tests + module tests ───────────────────
+# Usage: make test-all
+.PHONY: test-all
+test-all: test test-modules
+
 # ── Run all program tests on ISS (fast, no Docker) ────────────
 # Same test programs as `make test` but runs on the ISS.
 # Usage: make test-iss

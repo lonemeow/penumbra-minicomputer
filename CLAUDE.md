@@ -109,6 +109,15 @@ style from earlier in the project.
 - `make test-iss` — run all `hw/sim/programs/test_*.s` on ISS
   (fast, no Docker); reports pass/fail summary
 - `make test` — run all test programs on RTL sim via Docker
+- `make test-modules` — run all module-level Verilator
+  testbenches (alu, regfile, cache_test, sdram_adapter_test, …)
+  via Docker; reports pass/fail summary.  Module testbench list
+  is the `MODULE_TESTS` variable in the Makefile.  Add entries
+  there when introducing new RTL modules with a `tb_<mod>.cpp`
+  or `<mod>_test.sv` wrapper; integration-level testbenches
+  (tb_cpu_prog, tb_interactive, etc.) are intentionally
+  excluded.
+- `make test-all` — runs `make test` then `make test-modules`.
 - `make test-compiler` — run comprehensive C compiler correctness
   tests from `llvm-test-suite` on ISS in `+hosted` mode.
   See "Compiler Correctness Tests" section below for setup.
