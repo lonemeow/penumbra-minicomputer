@@ -430,6 +430,129 @@ static void test_h_reset_mid_burst(Vsdram_adapter_test* d) {
 }
 
 // ────────────────────────────────────────────────────────────
+// Test (i) — long sustained sequential read.  Pulls 128 words
+// from a single page, which is much more spec-chain churn than
+// the 4-word bursts of tests (b)/(g).  If the spec chain ever
+// loses synchronization with the address stream (e.g. spec_addr
+// drifts ahead of i_addr by some unintended amount), the data
+// correctness check at every word catches it.  Matches the source
+// side of a kernel page-copy memcpy.
+// ────────────────────────────────────────────────────────────
+static void test_i_long_sequential_read(Vsdram_adapter_test* d) {
+    printf("── (i) long sustained sequential read (128 words) ──\n");
+    reset(d);
+    d->i_mock_latency = 4;
+
+    const int N = 128;
+    uint32_t addrs[N];
+    uint32_t got[N];
+    for (int i = 0; i < N; i++) addrs[i] = 0x00100000u + 4u * (uint32_t)i;
+
+    // do_burst_read_gapped's default 500-cycle budget is for short
+    // bursts; 128 gapped words at latency=4 needs ≈ 2000 cycles.
+    if (!do_burst_read_gapped(d, addrs, got, N, "(i) long", 4000)) return;
+    for (int i = 0; i < N; i++) {
+        if (got[i] != expected_data(addrs[i])) {
+            char lab[40];
+            snprintf(lab, sizeof(lab), "(i) word[%d]", i);
+            check_eq(got[i], expected_data(addrs[i]), lab);
+            return;
+        }
+    }
+    printf("  [PASS] (i) 128 sequential words all correct\n");
+}
+
+// ────────────────────────────────────────────────────────────
+// Test (j) — long sustained sequential write.  Mirrors kernel
+// pmap_zero_page: 128 writes to consecutive addresses, no reads,
+// no data verification (the mock doesn't model writes), but any
+// timeout, SVA fire, or tag FIFO desync would surface here.
+// ────────────────────────────────────────────────────────────
+static void test_j_long_sequential_write(Vsdram_adapter_test* d) {
+    printf("── (j) long sustained sequential write (128 words) ──\n");
+    reset(d);
+    d->i_mock_latency = 4;
+
+    for (int i = 0; i < 128; i++) {
+        uint32_t addr = 0x00200000u + 4u * (uint32_t)i;
+        if (!do_write(d, addr, 0xDEADBEEFu, 0xF, "(j) STW")) return;
+    }
+    printf("  [PASS] (j) 128 sequential writes completed\n");
+}
+
+// ────────────────────────────────────────────────────────────
+// Test (k) — interleaved memcpy pattern.  Alternates LDW from
+// page A with STW to page B for many word pairs — the bus traffic
+// shape kernel pmap_copy_page emits during COW.  Each LDW pushes
+// a spec for A+4, each STW abandons any in-flight spec.  The
+// spec_in_flight / spec_buffered / spec_abandoned state churns
+// rapidly; if the abandonment-and-reissue interaction has a
+// residual race (the kind the original bug-repro test (e) caught
+// for a different code path), the LDW data correctness check
+// catches it here.
+// ────────────────────────────────────────────────────────────
+static void test_k_memcpy_interleave(Vsdram_adapter_test* d) {
+    printf("── (k) memcpy LDW/STW interleave (64 pairs) ──\n");
+    reset(d);
+    d->i_mock_latency = 4;
+
+    const int N = 64;
+    const uint32_t SRC = 0x00300000u;
+    const uint32_t DST = 0x00400000u;
+
+    for (int i = 0; i < N; i++) {
+        uint32_t src = SRC + 4u * (uint32_t)i;
+        uint32_t dst = DST + 4u * (uint32_t)i;
+        uint32_t got = do_read(d, src, "(k) LDW src");
+        if (got != expected_data(src)) {
+            char lab[40];
+            snprintf(lab, sizeof(lab), "(k) src[%d]", i);
+            check_eq(got, expected_data(src), lab);
+            return;
+        }
+        if (!do_write(d, dst, got, 0xF, "(k) STW dst")) return;
+    }
+    printf("  [PASS] (k) %d LDW/STW pairs interleaved cleanly\n", N);
+}
+
+// ────────────────────────────────────────────────────────────
+// Test (l) — varying latency under sustained sequential reads.
+// The bug class we keep chasing fires at specific timing
+// alignments; sweeping the mock latency across a sustained read
+// burst exercises the spec chain under every per-request response-
+// arrival phase that a real-system fill would see.  If any
+// latency value desyncs the FIFO or spec state, the per-word check
+// catches it.
+// ────────────────────────────────────────────────────────────
+static void test_l_latency_sweep(Vsdram_adapter_test* d) {
+    printf("── (l) sustained reads under latency sweep ──\n");
+    for (uint8_t lat = 1; lat <= 8; lat++) {
+        reset(d);
+        d->i_mock_latency = lat;
+
+        const int N = 16;
+        uint32_t addrs[N];
+        uint32_t got[N];
+        for (int i = 0; i < N; i++) addrs[i] = 0x00500000u + 0x1000u * lat + 4u * (uint32_t)i;
+
+        bool ok = do_burst_read_gapped(d, addrs, got, N, "(l) sweep");
+        if (!ok) { printf("  [FAIL] (l) timeout at latency=%u\n", lat); continue; }
+
+        bool clean = true;
+        for (int i = 0; i < N; i++) {
+            if (got[i] != expected_data(addrs[i])) {
+                char lab[48];
+                snprintf(lab, sizeof(lab), "(l) lat=%u word[%d]", lat, i);
+                check_eq(got[i], expected_data(addrs[i]), lab);
+                clean = false;
+                break;
+            }
+        }
+        if (clean) printf("  [PASS] (l) latency=%u: %d words clean\n", lat, N);
+    }
+}
+
+// ────────────────────────────────────────────────────────────
 int main(int argc, char** argv) {
     (void)argc; (void)argv;
     Vsdram_adapter_test* d = new Vsdram_adapter_test;
@@ -444,6 +567,10 @@ int main(int argc, char** argv) {
     test_f_in_flight_wait(d);
     test_g_sustained_depth2(d);
     test_h_reset_mid_burst(d);
+    test_i_long_sequential_read(d);
+    test_j_long_sequential_write(d);
+    test_k_memcpy_interleave(d);
+    test_l_latency_sweep(d);
 
     delete d;
 
