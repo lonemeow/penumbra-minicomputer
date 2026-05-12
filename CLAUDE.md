@@ -132,8 +132,18 @@ style from earlier in the project.
   clock ratios.  Same-rate single-clock (tying `i_sdram_clk` to
   `i_clk`) is still a valid configuration if a future testbench
   needs it.
+- **`OPT_BUILD` knob** controls host C++ optimization for the
+  Verilator-generated simulation code.  Default `-O2`
+  (~2-3× runtime vs. Verilator's stock `-Os`).  For long-running
+  simulations (NetBSD boot), `make simulate-rtl OPT_BUILD="-O3
+  -flto -march=native"` trades ~3× slower build for additional
+  ~2× runtime.  Restore Verilator's size-optimized default with
+  `OPT_BUILD="-Os"` when iterating on testbenches (faster
+  rebuilds, slower simulation).
 - **Important:** `rm -rf build/<mod>.verilator build/V<mod>`
-  if you suspect stale binaries (WSL2 stale mtimes)
+  if you suspect stale binaries (WSL2 stale mtimes).  Also
+  required when changing `OPT_BUILD` — Verilator/ccache won't
+  detect the flag change and will reuse stale objects.
 
 ### FPGA Toolchain (OSS CAD Suite)
 FPGA synthesis uses Yosys, nextpnr-ecp5, ecppack, and fujprog via

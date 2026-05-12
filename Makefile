@@ -21,9 +21,19 @@ DOCKER_RUN   = docker run --rm -u $(shell id -u):$(shell id -g) -v $(CURDIR):/wo
 # Verilator runs inside the container; its entrypoint IS verilator.
 # For commands that aren't verilator (like running the built binary),
 # we override the entrypoint.
+#
+# OPT_BUILD overrides the host C++ optimization Verilator uses for
+# generated simulation code.  Verilator's default is -Os (size); we
+# default to -O2 for ~2-3x simulation runtime at modest build-time
+# cost.  Long-running sims (NetBSD boot, etc.) benefit further from
+# OPT_BUILD="-O3 -flto -march=native" — slower to build, faster to
+# run.  Set OPT_BUILD="-Os" to restore the original size-optimized
+# build when iterating on testbenches.
+OPT_BUILD ?= -O2
+
 VERILATOR_FLAGS = --cc --exe --build -Wall --assert \
                   $(if $(VCD),--trace) \
-                  -CFLAGS "-std=c++17" \
+                  -CFLAGS "-std=c++17 $(OPT_BUILD)" \
                   -Ihw/rtl/core -Ihw/rtl/bus -Ihw/rtl/mmu -Ihw/rtl/io -Ihw/rtl/io/sdram -Ihw/rtl/soc -Ihw/rtl/sim
 
 BUILD_DIR   = build
