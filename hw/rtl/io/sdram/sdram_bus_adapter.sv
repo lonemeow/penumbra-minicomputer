@@ -180,7 +180,8 @@ module sdram_bus_adapter (
                 // Concurrent pop + push — count stays the same, but
                 // the update differs by current tag_count because of
                 // the FIFO's "valid entries fill from slot[0] upward"
-                // convention (see push-only branch below):
+                // convention (see push-only branch below and the
+                // tag_fifo invariant SVAs at end-of-module):
                 //
                 //   tag_count == 2: slot[1] holds a valid tag.  Pop
                 //     consumes slot[0]; slot[1] shifts to slot[0] to
@@ -300,5 +301,56 @@ module sdram_bus_adapter (
             endcase
         end
     end
+
+    // ══════════════════════════════════════════════════════════
+    // Simulation assertions — tag FIFO data-correctness invariants
+    //
+    // The FIFO has three valid configurations (0, 1, or 2 entries).
+    // FSM/handshake correctness — push and pop occur only when valid,
+    // count never goes out of range — is straightforward to inspect,
+    // but the *data* contract (which slot is the head, what value
+    // unused slots hold, response routing always sees a valid tag at
+    // the head) is more subtle and easy to violate during refactors
+    // of the pop/push branches.  These assertions encode that contract
+    // so a violation fires at the first failing cycle rather than
+    // surfacing as silent data corruption downstream.  Stripped by
+    // Yosys at synth.
+    // ══════════════════════════════════════════════════════════
+
+    // Count never exceeds the FIFO depth.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (tag_count <= 2'd2))
+        else $error("sdram_bus_adapter: tag_count > 2 (overflow)");
+
+    // Slot-fill convention: entries fill from slot[0] upward.  When
+    // tag_count<2, slot[1] must be cleared (sentinel 0).  When
+    // tag_count==0, slot[0] must also be cleared.  Catches "a valid
+    // entry got stranded above the head" — any pop/push code path
+    // that leaves the FIFO in a state where the head doesn't actually
+    // hold the next-out tag.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (tag_count < 2'd2) |-> (tag_fifo[1] == 1'b0))
+        else $error("sdram_bus_adapter: tag_fifo[1] non-zero with tag_count<2 — head/tail desync");
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (tag_count == 2'd0) |-> (tag_fifo[0] == 1'b0))
+        else $error("sdram_bus_adapter: tag_fifo[0] non-zero with tag_count==0");
+
+    // Responses only arrive against outstanding requests.  A response
+    // with tag_count==0 would route on a stale tag_fifo[0] and silently
+    // corrupt either rdata_latched or spec_data.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        i_rsp_valid |-> (tag_count > 2'd0))
+        else $error("sdram_bus_adapter: response arrived with no outstanding tag");
+
+    // Push never overflows; pop never underflows.  Encoded
+    // combinationally in pop_event/push_event already, but asserting
+    // at the sequential level too prevents a future refactor of those
+    // wires from silently breaking the contract.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        push_event |-> (tag_count < 2'd2 || pop_event))
+        else $error("sdram_bus_adapter: push when tag_count==2 without concurrent pop");
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        pop_event |-> (tag_count > 2'd0))
+        else $error("sdram_bus_adapter: pop when tag_count==0");
 
 endmodule
