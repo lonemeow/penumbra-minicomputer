@@ -81,6 +81,11 @@ enum {
     IRQ_TX_THRESH = 0x04
 };
 
+// XFER_COUNT bits — bits [15:0] are the byte count, bit 16 is START.
+enum {
+    XFER_START = (1 << 16)
+};
+
 static void reg_write(uint32_t offset, uint32_t data) {
     dut->i_addr = offset;
     dut->i_wdata = data;
@@ -243,7 +248,7 @@ static void test_burst_transfer() {
     dut->i_miso = 0;
 
     // Start engine: transfer 5 bytes
-    reg_write(REG_XFER_COUNT, 5 | (1 << 16));
+    reg_write(REG_XFER_COUNT, 5 | XFER_START);
 
     // Wait for engine to finish
     bool done = false;
@@ -287,7 +292,7 @@ static void test_irq_xfer_done() {
 
     // Push one TX byte, then start 1-byte transfer
     reg_write(REG_DATA, 0xFF);
-    reg_write(REG_XFER_COUNT, 1 | (1 << 16));
+    reg_write(REG_XFER_COUNT, 1 | XFER_START);
 
     // Wait for IRQ
     bool irq_fired = false;
@@ -323,7 +328,7 @@ static void test_zero_count() {
     reg_write(REG_IRQ_ENABLE, IRQ_XFER_DONE);
 
     // Start with count=0
-    reg_write(REG_XFER_COUNT, 0 | (1 << 16));
+    reg_write(REG_XFER_COUNT, 0 | XFER_START);
     ticks(4);
 
     uint32_t irqst = reg_read(REG_IRQ_STATUS);
@@ -357,6 +362,106 @@ static void test_watermark_irq() {
 
     irqst = reg_read(REG_IRQ_STATUS);
     CHECK("TX_THRESH cleared in IRQ_STATUS", !(irqst & IRQ_TX_THRESH));
+}
+
+// ── Test: RX_THRESH IRQ — asserts at level >= DEPTH/2 ───────
+//
+// rx_thresh = fifo_en && (rx_level >= DEPTH/2).  With DEPTH=8 the
+// boundary is level 3 (deasserted) ↔ level 4 (asserted).  Drive a
+// 5-byte burst with MISO=1 so the engine fills RX FIFO past the
+// watermark, then drain back below to see the falling edge.
+
+static void test_rx_thresh_watermark() {
+    printf("test_rx_thresh_watermark\n");
+    reset();
+
+    // Enable FIFO + FAST, enable RX_THRESH IRQ (only — leave
+    // XFER_DONE/TX_THRESH masked so they don't drive o_irq).
+    reg_write(REG_CONTROL, CTL_FIFO_EN | CTL_FAST);
+    reg_write(REG_IRQ_ENABLE, IRQ_RX_THRESH);
+
+    // RX empty (level=0 < 4) — RX_THRESH should be deasserted.
+    ticks(2);
+    CHECK("RX_THRESH not asserted when empty", dut->o_irq == 0);
+    uint32_t irqst = reg_read(REG_IRQ_STATUS);
+    CHECK("RX_THRESH clear in IRQ_STATUS when empty",
+          !(irqst & IRQ_RX_THRESH));
+
+    // Push 5 TX bytes; MISO=1 → engine receives 5 × 0xFF into RX.
+    dut->i_miso = 1;
+    for (int i = 0; i < 5; i++)
+        reg_write(REG_DATA, 0x77);
+
+    reg_write(REG_XFER_COUNT, 5 | XFER_START);
+
+    // Watch o_irq go high as the engine pushes the 4th byte.
+    bool irq_fired = false;
+    for (int i = 0; i < 2000; i++) {
+        tick();
+        if (dut->o_irq) { irq_fired = true; break; }
+    }
+    CHECK("RX_THRESH asserts when RX level reaches 4", irq_fired);
+
+    // Let the engine finish all 5 bytes.
+    for (int i = 0; i < 200; i++) tick();
+
+    uint32_t st = reg_read(REG_STATUS);
+    uint32_t rx_level = (st >> 16) & 0xFFF;
+    CHECKV("RX has 5 bytes after burst", rx_level, 5);
+
+    irqst = reg_read(REG_IRQ_STATUS);
+    CHECK("RX_THRESH set in IRQ_STATUS", irqst & IRQ_RX_THRESH);
+
+    // Drain 1 byte → level=4 → still at/above threshold.
+    reg_read(REG_DATA);
+    ticks(2);
+    CHECK("RX_THRESH still asserted at level=4", dut->o_irq == 1);
+
+    // Drain 1 more → level=3 → falls below threshold.
+    reg_read(REG_DATA);
+    ticks(2);
+    CHECK("RX_THRESH deasserts at level=3", dut->o_irq == 0);
+
+    irqst = reg_read(REG_IRQ_STATUS);
+    CHECK("RX_THRESH cleared in IRQ_STATUS at level=3",
+          !(irqst & IRQ_RX_THRESH));
+}
+
+// ── Test: IRQ_ENABLE masking — o_irq gated, IRQ_STATUS not ──
+//
+// Pins down the central IRQ invariant at spi.sv:361-363:
+//     o_irq = OR( condition[i] & irq_enable[i] )
+// IRQ_ENABLE gates the *output*, not the underlying condition.
+// IRQ_STATUS therefore continues to reflect raw conditions even
+// when masked — a polled driver relies on this to peek at
+// pending sources without ever unmasking.
+
+static void test_irq_masking() {
+    printf("test_irq_masking\n");
+    reset();
+
+    // FIFO mode + FAST clock, but all IRQ sources masked off.
+    reg_write(REG_CONTROL, CTL_FIFO_EN | CTL_FAST);
+    reg_write(REG_IRQ_ENABLE, 0);
+
+    reg_write(REG_DATA, 0x5A);
+    reg_write(REG_XFER_COUNT, 1 | XFER_START);
+    ticks(500);
+
+    CHECK("IRQ_STATUS xfer done bit latched", reg_read(REG_IRQ_STATUS) & IRQ_XFER_DONE);
+    CHECK("o_irq not asserted when masked", !dut->o_irq);
+
+    reg_write(REG_IRQ_ENABLE, IRQ_XFER_DONE);
+    ticks(2);
+
+    CHECK("IRQ_STATUS xfer done bit latched after IRQ enable", reg_read(REG_IRQ_STATUS) & IRQ_XFER_DONE);
+    CHECK("o_irq asserted after IRQ enable", dut->o_irq);
+
+    reg_write(REG_IRQ_STATUS, IRQ_XFER_DONE);
+    ticks(2);
+
+    CHECK("o_irq deasserts after W1C", dut->o_irq == 0);
+    CHECK("XFER_DONE cleared by W1C", !(reg_read(REG_IRQ_STATUS) & IRQ_XFER_DONE));
 }
 
 // ── Test: CONTROL register FAST/SLOW bit ────────────────────
@@ -435,7 +540,7 @@ static void test_rx_full_stall() {
     for (int i = 0; i < 8; i++)
         reg_write(REG_DATA, 0x50 + i);
 
-    reg_write(REG_XFER_COUNT, 12 | (1 << 16));
+    reg_write(REG_XFER_COUNT, 12 | XFER_START);
 
     // Run until engine stalls (RX full, no XFER_DONE yet).
     // Give enough cycles for 8 bytes to shift through.
@@ -503,7 +608,7 @@ static void test_tx_empty_stall() {
     reg_write(REG_DATA, 0xAA);
     reg_write(REG_DATA, 0xBB);
 
-    reg_write(REG_XFER_COUNT, 5 | (1 << 16));
+    reg_write(REG_XFER_COUNT, 5 | XFER_START);
 
     // Let the 2 bytes shift through
     for (int i = 0; i < 500; i++)
@@ -560,6 +665,8 @@ int main() {
     test_irq_xfer_done();
     test_zero_count();
     test_watermark_irq();
+    test_rx_thresh_watermark();
+    test_irq_masking();
     test_fast_slow_clock();
     test_mosi_output();
     test_rx_full_stall();
