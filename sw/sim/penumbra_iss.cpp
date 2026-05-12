@@ -14,13 +14,14 @@
 //   PC=XXXXXXXX SR=XXXXXXXX [SVNZCV] R1=... R2=... ... R14=...
 //
 // Usage: penumbra-iss [program.hex] [+sdcard=path] [+trace=path] [+raw]
-//                     [+trap-pc0]
+//                     [+trap-pc0] [+halt-on-break]
 //
 // +raw enables full raw TTY mode: all control characters (Ctrl-C,
 // Ctrl-Z, etc.) pass through to the simulated UART for job control
 // inside the guest OS.  Use Ctrl-A as escape prefix:
 //   Ctrl-A X     — exit simulator
 //   Ctrl-A C     — dump CPU state
+//   Ctrl-A B     — send serial BREAK (triggers DDB if enabled)
 //   Ctrl-A H     — help
 //   Ctrl-A Ctrl-A — send literal Ctrl-A
 
@@ -326,11 +327,15 @@ static uint8_t rom[ROM_SIZE];
 static struct {
     uint8_t rbr, ier, lcr, mcr, scr, dll, dlm;
     bool    rx_ready;
+    bool    rx_break;       // LSR.BI sticky bit; cleared on LSR read
     bool    thre_int;
     int     tx_busy_count;  // counts down per instruction; 0 = ready
     bool    dlab() const { return lcr & 0x80; }
     bool    tx_ready() const { return tx_busy_count == 0; }
-    uint8_t lsr() const { return (uint8_t)((tx_ready()<<6)|(tx_ready()<<5)|rx_ready); }
+    uint8_t lsr() const {
+        return (uint8_t)((tx_ready()<<6)|(tx_ready()<<5)|
+                         (rx_break ? 0x10 : 0)|rx_ready);
+    }
     uint8_t msr() const { return 0x30; } // CTS+DSR hardwired
     uint8_t iir() const {
         if ((ier&1) && rx_ready) return 0x04;
@@ -601,6 +606,7 @@ static volatile sig_atomic_t running = 1;
 static struct termios orig_termios;
 static bool term_raw = false;
 static bool full_raw = false;  // +raw: pass all control chars through
+static bool halt_on_break = false;  // +halt-on-break: BREAK halts (testbench mode)
 static bool hosted_mode = false;  // +hosted: native syscall interception
 static bool quiet_mode = false;   // +quiet: suppress banner/exit messages
 static int  hosted_exit_code = 0; // return code from SYS_exit in hosted mode
@@ -785,7 +791,11 @@ static uint32_t uart_read(uint32_t addr) {
         }
         case 3: return uart.lcr;
         case 4: return uart.mcr;
-        case 5: return uart.lsr();
+        case 5: {
+            uint8_t v = uart.lsr();
+            uart.rx_break = false;  /* LSR.BI clears on LSR read */
+            return v;
+        }
         case 6: return uart.msr();
         case 7: return uart.scr;
     }
@@ -1419,9 +1429,22 @@ static void execute_one() {
                     exception_entry(VEC_SYSCALL);
                 }
                 break;
-            case 26: // BREAK — halt without vectoring (matches RTL testbench:
-                //   o_halted fires at dispatch, before exception entry runs)
-                cpu.halted = true;
+            case 26: // BREAK
+                /*
+                 * Hardware: BREAK enters except_entry → VEC_BREAK.
+                 * RTL testbench samples o_halted at dispatch and exits
+                 * the sim before the trap completes — useful for test
+                 * programs that end with BREAK as a "done" sentinel.
+                 *
+                 * For interactive kernel runs (DDB), we want the trap
+                 * to fire so the kernel handler runs.  +halt-on-break
+                 * restores the testbench-style exit.
+                 */
+                if (halt_on_break) {
+                    cpu.halted = true;
+                } else {
+                    exception_entry(VEC_BREAK);
+                }
                 break;
             case 27: { // ERET
                 uint32_t old_sr = cpu.sr;
@@ -1683,6 +1706,7 @@ static void print_cmd_help() {
     fprintf(stderr, "Ctrl-A H: This help\r\n");
     fprintf(stderr, "Ctrl-A X: Exit simulator\r\n");
     fprintf(stderr, "Ctrl-A C: Dump CPU state\r\n");
+    fprintf(stderr, "Ctrl-A B: Send serial BREAK (triggers DDB)\r\n");
     fprintf(stderr, "\r\n");
 }
 
@@ -1701,6 +1725,18 @@ static bool handle_escape(char c) {
         case 'c':
         case 'C':
             print_cpu_state();
+            break;
+        case 'b':
+        case 'B':
+            /*
+             * Deliver a serial-line BREAK condition.  Sets LSR.BI and
+             * a null byte in RBR; the kernel's com(4) ISR sees BI when
+             * reading LSR, calls cn_check_magic(CNC_BREAK, ...), which
+             * (with the default magic) invokes Debugger() → DDB.
+             */
+            uart.rbr = 0x00;
+            uart.rx_ready = true;
+            uart.rx_break = true;
             break;
     }
     return true;
@@ -1763,11 +1799,12 @@ int main(int argc, char** argv) {
         else if (strcmp(argv[i], "+hosted") == 0) hosted_mode = true;
         else if (strcmp(argv[i], "+quiet") == 0) quiet_mode = true;
         else if (strcmp(argv[i], "+trap-pc0") == 0) trap_user_pc_zero = true;
+        else if (strcmp(argv[i], "+halt-on-break") == 0) halt_on_break = true;
         else hex_path = argv[i];
     }
 
     if (!hex_path) {
-        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+trace=path] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0]\n");
+        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+trace=path] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break]\n");
         return 1;
     }
 

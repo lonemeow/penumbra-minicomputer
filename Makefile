@@ -239,7 +239,7 @@ test-iss: $(ISS)
 			failed="$$failed $$prog"; \
 			continue; \
 		fi; \
-		r1=$$(echo "break" | timeout 5 ./$(ISS) /tmp/$$prog.hex +trace=/tmp/iss_test.log 2>/dev/null; \
+		r1=$$(echo "break" | timeout 5 ./$(ISS) /tmp/$$prog.hex +halt-on-break +trace=/tmp/iss_test.log 2>/dev/null; \
 			tail -1 /tmp/iss_test.log 2>/dev/null | grep -o 'R1=[0-9a-f]*' | head -1); \
 		if echo "$$r1" | grep -q '00000001'; then \
 			printf "  \033[32mPASS\033[0m  %s\n" "$$prog"; \
