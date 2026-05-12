@@ -6,13 +6,15 @@
 // verification of the controller against the behavioral model.
 //
 // As of step 4 the CDC bridge sits between the bus adapter and the
-// controller.  In sim we tie sys_clk == sdram_clk so the CDC paths
-// are exercised end-to-end (toggle launch, 2-FF sync, edge detect,
-// done propagation) but at the same rate — the actual two-domain
-// operation only happens on hardware where the PLL hands the
-// controller its own 100 MHz CLKOS.  Same-rate sim is enough to
-// catch FSM/handshake bugs; metastability behaviour is a hardware
-// concern outside Verilator's model.
+// controller.  The two clocks `i_clk` (system / CPU domain) and
+// `i_sdram_clk` (controller / chip domain) are separate ports — the
+// testbench drives them at the hardware ratio (e.g. 4× SDRAM cycles
+// per CPU cycle to match ULX3S's 25 MHz CPU / 100 MHz SDRAM) so the
+// memory latency observed in CPU cycles matches what hardware sees.
+// A same-rate setup (`i_sdram_clk` tied to `i_clk`) is still valid
+// for unit tests that only care about FSM/handshake correctness;
+// metastability behaviour is a hardware concern outside Verilator's
+// model regardless.
 //
 // Uses the W9825-100MHz preset with the small `W9825_SIM_T_POWERUP`
 // so init completes in a few cycles instead of 200 µs of sim time.
@@ -20,7 +22,8 @@
 module sdram_sim
     import sdram_pkg::*;
 (
-    input  logic        i_clk,
+    input  logic        i_clk,         // system / CPU clock
+    input  logic        i_sdram_clk,   // SDRAM / controller clock (faster)
     input  logic        i_rst,
     input  logic [31:0] i_addr,
     input  logic [31:0] i_wdata,
@@ -86,8 +89,8 @@ module sdram_sim
         .o_sys_rsp_data    (sys_rsp_data),
         .i_sys_rsp_ready   (sys_rsp_ready),
         .o_sys_done        (sys_done),
-        // Sdram side
-        .i_sd_clk          (i_clk),
+        // Sdram side — runs on the (faster) SDRAM clock
+        .i_sd_clk          (i_sdram_clk),
         .i_sd_rst          (i_rst),
         .o_sd_req_valid    (req_valid),
         .o_sd_req_we       (req_we),
@@ -126,7 +129,7 @@ module sdram_sim
         .T_POWERUP   (W9825_SIM_T_POWERUP),    // sim override
         .CAS_LATENCY (SDP.CAS_LATENCY)
     ) u_ctrl (
-        .i_clk           (i_clk),
+        .i_clk           (i_sdram_clk),
         .i_rst           (i_rst),
         .i_req_valid     (req_valid),
         .i_req_we        (req_we),
@@ -161,7 +164,7 @@ module sdram_sim
         .BA_BITS  (SDP.BA_BITS),
         .DQ_BITS  (SDP.DQ_BITS)
     ) u_phy (
-        .i_clk        (i_clk),
+        .i_clk        (i_sdram_clk),
         .i_phy_cmd    (ctrl_cmd),
         .i_phy_cke    (ctrl_cke),
         .i_phy_a      (ctrl_a),

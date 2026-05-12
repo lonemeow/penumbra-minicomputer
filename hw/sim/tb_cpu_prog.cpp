@@ -25,14 +25,32 @@ static uint64_t sim_time = 0;
 #endif
 
 static void tick(Vmachine_sim* d) {
+    // 4 SDRAM half-cycles per CPU half-cycle matches hardware's
+    // 25 MHz CPU / 100 MHz SDRAM ratio.  Each SDRAM toggle gets
+    // its own eval() so the SDRAM-domain RTL (controller, CDC's
+    // sd side, model) advances on its own clock.
     d->i_clk = 0; d->eval();
 #if VM_TRACE
     if (tfp) { tfp->dump(sim_time); sim_time++; }
 #endif
+    for (int s = 0; s < 4; s++) {
+        d->i_sdram_clk = !d->i_sdram_clk;
+        d->eval();
+#if VM_TRACE
+        if (tfp) { tfp->dump(sim_time); sim_time++; }
+#endif
+    }
     d->i_clk = 1; d->eval();
 #if VM_TRACE
     if (tfp) { tfp->dump(sim_time); sim_time++; }
 #endif
+    for (int s = 0; s < 4; s++) {
+        d->i_sdram_clk = !d->i_sdram_clk;
+        d->eval();
+#if VM_TRACE
+        if (tfp) { tfp->dump(sim_time); sim_time++; }
+#endif
+    }
 
     // Check for UART TX output on rising edge
     if (d->o_uart_tx_valid) {
@@ -67,6 +85,7 @@ static void reset(Vmachine_sim* cpu) {
     cpu->i_uart_rx_valid = 0;
     cpu->i_uart_rx_data = 0;
     cpu->i_dbg_reg_addr = 0;
+    cpu->i_sdram_clk = 0;
     tick(cpu);
     tick(cpu);
     cpu->i_rst = 0;

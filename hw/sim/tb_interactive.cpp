@@ -116,19 +116,39 @@ static void raw_mode() {
     term_raw = true;
 }
 
+// Advance simulation by one CPU clock cycle.  Within that CPU cycle
+// the SDRAM clock toggles 8 times (4 full SDRAM cycles), matching
+// the 25 MHz CPU / 100 MHz SDRAM hardware ratio.  Each SDRAM toggle
+// gets its own eval() so the SDRAM-domain RTL (sdram_ctrl, the CDC's
+// SDRAM side, sdram_model) advances independently of the CPU clock.
+static void tick_one_cpu_cycle(Vmachine_sim* cpu) {
+    // 4 SDRAM half-cycles per CPU half-cycle.
+    cpu->i_clk = 0;
+    cpu->eval();
+    for (int s = 0; s < 4; s++) {
+        cpu->i_sdram_clk = !cpu->i_sdram_clk;
+        cpu->eval();
+    }
+    cpu->i_clk = 1;
+    cpu->eval();
+    for (int s = 0; s < 4; s++) {
+        cpu->i_sdram_clk = !cpu->i_sdram_clk;
+        cpu->eval();
+    }
+}
+
 static void reset(Vmachine_sim* cpu) {
     cpu->i_rst = 1;
+    cpu->i_sdram_clk = 0;
     cpu->i_irq = 0;
     cpu->i_uart_rx_valid = 0;
     cpu->i_uart_rx_data = 0;
     cpu->i_spi_resp_valid = 0;
     cpu->i_spi_resp_data = 0xFF;
     cpu->i_dbg_reg_addr = 0;
-    // Two reset cycles
-    cpu->i_clk = 0; cpu->eval();
-    cpu->i_clk = 1; cpu->eval();
-    cpu->i_clk = 0; cpu->eval();
-    cpu->i_clk = 1; cpu->eval();
+    // Two reset cycles (both clocks running during reset)
+    tick_one_cpu_cycle(cpu);
+    tick_one_cpu_cycle(cpu);
     cpu->i_rst = 0;
 }
 
@@ -200,10 +220,20 @@ int main(int argc, char** argv) {
         cpu->i_clk = 0;
         cpu->eval();
         bool rx_ack = cpu->o_uart_rx_ack;
+        // 4 SDRAM half-cycles per CPU half-cycle (matches the
+        // 25 MHz CPU / 100 MHz SDRAM hardware ratio).
+        for (int s = 0; s < 4; s++) {
+            cpu->i_sdram_clk = !cpu->i_sdram_clk;
+            cpu->eval();
+        }
 
         // ── Rising edge — commits state ─────────────────────────
         cpu->i_clk = 1;
         cpu->eval();
+        for (int s = 0; s < 4; s++) {
+            cpu->i_sdram_clk = !cpu->i_sdram_clk;
+            cpu->eval();
+        }
         cycles++;
 
 

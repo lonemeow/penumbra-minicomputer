@@ -122,6 +122,16 @@ style from earlier in the project.
 - RTL simulation runs via Docker — no host install needed.
   ISS compiles natively with g++ (no dependencies).
   Build artifacts in `build/` (gitignored).
+- **Dual-clock sim:** `machine_sim`'s SDRAM subsystem runs on a
+  separate `i_sdram_clk` driven at 4× the CPU clock by both
+  `tb_interactive.cpp` and `tb_cpu_prog.cpp`, matching the
+  ULX3S 25 MHz CPU / 100 MHz SDRAM hardware ratio.  This makes
+  memory-latency-as-measured-in-CPU-cycles match hardware, which
+  matters both for benchmark CPI accuracy and for reproducing
+  timing-sensitive bus races that align differently at different
+  clock ratios.  Same-rate single-clock (tying `i_sdram_clk` to
+  `i_clk`) is still a valid configuration if a future testbench
+  needs it.
 - **Important:** `rm -rf build/<mod>.verilator build/V<mod>`
   if you suspect stale binaries (WSL2 stale mtimes)
 

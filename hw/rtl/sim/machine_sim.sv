@@ -26,6 +26,10 @@ module machine_sim
     import penumbra_pkg::*;
 (
     input  logic        i_clk,
+    // Separate SDRAM clock so the testbench can drive it faster than
+    // i_clk to match hardware's 25 MHz CPU / 100 MHz SDRAM ratio.
+    // Tie to i_clk for a same-rate single-clock setup.
+    input  logic        i_sdram_clk,
     input  logic        i_rst,
 
     // ── External interrupt (directly from testbench) ────────
@@ -184,8 +188,9 @@ module machine_sim
     // behavioral chip).  Drop-in for simple_mem.  See
     // doc/internals/sdram-controller.md.
     sdram_sim u_ram (
-        .i_clk     (i_clk),
-        .i_rst     (i_rst),
+        .i_clk       (i_clk),
+        .i_sdram_clk (i_sdram_clk),
+        .i_rst       (i_rst),
         .i_addr    (mem_addr),
         .i_wdata   (mem_wdata),
         .i_byte_en (mem_byte_en),
