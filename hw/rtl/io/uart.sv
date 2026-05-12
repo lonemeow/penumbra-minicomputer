@@ -11,7 +11,7 @@
 //   0x008  IIR (read)  /  FCR (write, ignored)
 //   0x00C  LCR  (DLAB bit = bit 7)
 //   0x010  MCR  (OUT2 = bit 3 = master IRQ enable)
-//   0x014  LSR  (bit 0=DR, bit 5=THRE, bit 6=TEMT)
+//   0x014  LSR  (bit 0=DR, bit 4=BI, bit 5=THRE, bit 6=TEMT)
 //   0x018  MSR  (CTS+DSR hardwired asserted)
 //   0x01C  SCR  (scratch register)
 //
@@ -45,8 +45,10 @@ module uart
     input  logic        i_rst,
 
     // ── Memory bus interface (same as sim_uart) ─────────────
-    input  logic [31:0] i_addr,
-    input  logic [31:0] i_wdata,
+    /* verilator lint_off UNUSEDSIGNAL */
+    input  logic [31:0] i_addr,   /* only bits [4:2] used (8 word regs) */
+    input  logic [31:0] i_wdata,  /* only bits [7:0] used (8-bit regs)  */
+    /* verilator lint_on UNUSEDSIGNAL */
     input  logic        i_we,
     input  logic        i_re,
     output logic [31:0] o_rdata,
@@ -79,6 +81,7 @@ module uart
     logic [7:0] scr;
     logic [7:0] dll, dlm;
     logic       rx_ready;
+    logic       rx_break;   // LSR.BI sticky bit; clears on LSR read
     logic       thre_int;
 
     logic dlab;
@@ -103,17 +106,26 @@ module uart
     logic [ACC_WIDTH-1:0] ref_acc;
     logic                 ref_tick;
 
+    /*
+     * `tmp' is declared `automatic' so its lifetime matches the
+     * always_ff invocation; without that, `int tmp = expr' inside
+     * an always_ff is treated as a one-time static init and the
+     * accumulator never ticks under Verilator.  Width is ACC_WIDTH+1
+     * to absorb the addition's carry-out cleanly.
+     */
     always_ff @(posedge i_clk) begin
+        automatic logic [ACC_WIDTH:0] tmp;
         if (i_rst) begin
             ref_acc  <= '0;
             ref_tick <= 1'b0;
         end else begin
-            int tmp = ref_acc + REF_FREQ;
-            if (tmp >= CLK_FREQ) begin
-                ref_acc  <= tmp - CLK_FREQ;
+            tmp = {1'b0, ref_acc} + (ACC_WIDTH+1)'(REF_FREQ);
+            if (tmp >= (ACC_WIDTH+1)'(CLK_FREQ)) begin
+                ref_acc  <= tmp[ACC_WIDTH-1:0]
+                          - ACC_WIDTH'(CLK_FREQ);
                 ref_tick <= 1'b1;
             end else begin
-                ref_acc <= tmp;
+                ref_acc  <= tmp[ACC_WIDTH-1:0];
                 ref_tick <= 1'b0;
             end
         end
@@ -231,69 +243,98 @@ module uart
     logic rbr_read;
     assign rbr_read = read_first && !dlab && (reg_sel == 3'd0);
 
+    // LSR read detection (clears the sticky rx_break / LSR.BI bit
+    // per the standard 16450 "read-to-clear" convention).
+    logic lsr_read;
+    assign lsr_read = read_first && (reg_sel == 3'd5);
+
     logic [3:0]  rx_sample_cnt;
     logic [2:0]  rx_bit_idx;
     logic [7:0]  rx_shift;
 
     typedef enum logic [2:0] {IDLE, START, DATA, STOP} state_e_rx;
-    state_e_rx rx_state = IDLE;
+    state_e_rx rx_state;
 
     // RX state machine + RBR delivery
+    //
+    // BREAK detection: per the 16450 spec, LSR.BI is set when the
+    // RX line is held SPACE (logic 0) for longer than one full
+    // character frame.  We detect this in the STOP state: if the
+    // stop bit samples as 0 and every data bit was also 0, the line
+    // has been low for the entire frame — that's a BREAK.  A null
+    // byte (the "break character") is delivered to RBR along the
+    // normal path; software sees DR=1, BI=1, RBR=0x00.
+    //
+    // LSR-read-clears-BI is handled separately, outside the
+    // baud-tick gate, so software can clear the sticky bit on any
+    // cycle.
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
             rbr           <= 8'd0;
             rx_ready      <= 1'b0;
+            rx_break      <= 1'b0;
             rx_state      <= IDLE;
-        end else if (rbr_read) begin
-            rx_ready <= 1'b0;
-        end else if (baud16x_tick) begin
-            case (rx_state)
-                IDLE: begin
-                    if (!rx_sync2) begin
-                        rx_state      <= START;
-                        rx_sample_cnt <= 0;
-                    end
-                end
-                START: begin
-                    rx_sample_cnt <= rx_sample_cnt + 1;
-                    if (rx_sample_cnt == 7) begin
+        end else begin
+            if (rbr_read)
+                rx_ready <= 1'b0;
+            if (lsr_read)
+                rx_break <= 1'b0;
+            if (baud16x_tick) begin
+                case (rx_state)
+                    IDLE: begin
                         if (!rx_sync2) begin
-                            rx_state <= DATA;
+                            rx_state      <= START;
                             rx_sample_cnt <= 0;
-                            rx_bit_idx    <= 0;
-                        end else begin
+                        end
+                    end
+                    START: begin
+                        rx_sample_cnt <= rx_sample_cnt + 1;
+                        if (rx_sample_cnt == 7) begin
+                            if (!rx_sync2) begin
+                                rx_state <= DATA;
+                                rx_sample_cnt <= 0;
+                                rx_bit_idx    <= 0;
+                            end else begin
+                                rx_state <= IDLE;
+                            end
+                        end
+                    end
+                    DATA: begin
+                        rx_sample_cnt <= rx_sample_cnt + 1;
+                        if (rx_sample_cnt == 15) begin
+                            rx_sample_cnt        <= 0;
+                            rx_shift[rx_bit_idx] <= rx_sync2;
+                            rx_bit_idx           <= rx_bit_idx + 1;
+                            if (rx_bit_idx == 7) begin
+                                rx_state <= STOP;
+                            end
+                        end
+                    end
+                    STOP: begin
+                        rx_sample_cnt <= rx_sample_cnt + 1;
+                        if (rx_sample_cnt == 15) begin
                             rx_state <= IDLE;
+                            rbr      <= rx_shift;
+                            rx_ready <= 1'b1;
+                            if (rx_shift == 8'h00 && !rx_sync2)
+                                rx_break <= 1'b1;
                         end
                     end
-                end
-                DATA: begin
-                    rx_sample_cnt <= rx_sample_cnt + 1;
-                    if (rx_sample_cnt == 15) begin
-                        rx_sample_cnt        <= 0;
-                        rx_shift[rx_bit_idx] <= rx_sync2;
-                        rx_bit_idx           <= rx_bit_idx + 1;
-                        if (rx_bit_idx == 7) begin
-                            rx_state <= STOP;
-                        end
-                    end
-                end
-                STOP: begin
-                    rx_sample_cnt <= rx_sample_cnt + 1;
-                    if (rx_sample_cnt == 15) begin
-                        rx_state <= IDLE;
-                        rbr      <= rx_shift;
-                        rx_ready <= 1'b1;
-                    end
-                end
-            endcase
+                    default: rx_state <= IDLE;  /* unreachable; satisfies lint */
+                endcase
+            end
         end
     end
 
     // ══════════════════════════════════════════════════════════
     // LSR — Line Status Register
     // ══════════════════════════════════════════════════════════
+    // bit 6: TEMT  — TX shift register empty (same as THRE for us)
+    // bit 5: THRE  — TX holding register empty
+    // bit 4: BI    — break condition received (sticky, clears on LSR read)
+    // bit 0: DR    — data ready (RBR has a received byte)
     logic [7:0] lsr;
-    assign lsr = {1'b0, tx_ready, tx_ready, 4'b0, rx_ready};
+    assign lsr = {1'b0, tx_ready, tx_ready, rx_break, 3'b0, rx_ready};
 
     // ══════════════════════════════════════════════════════════
     // MSR — Modem Status Register (hardwired)

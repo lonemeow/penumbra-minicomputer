@@ -176,6 +176,7 @@ MODULE_TESTS = \
     pc_reg \
     regfile \
     status_reg \
+    uart \
     wmux \
     busctl \
     tlb \
