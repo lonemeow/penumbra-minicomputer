@@ -177,10 +177,31 @@ module sdram_bus_adapter (
         end else begin
             // ── Tag FIFO: combined push/pop in one update ──
             if (pop_event && push_event) begin
-                // Pop and push same cycle — count stays, head shifts in
-                // tag_fifo[1], new tail is next_tag.
-                tag_fifo[0] <= tag_fifo[1];
-                tag_fifo[1] <= next_tag;
+                // Concurrent pop + push — count stays the same, but
+                // the update differs by current tag_count because of
+                // the FIFO's "valid entries fill from slot[0] upward"
+                // convention (see push-only branch below):
+                //
+                //   tag_count == 2: slot[1] holds a valid tag.  Pop
+                //     consumes slot[0]; slot[1] shifts to slot[0] to
+                //     become the new head; the new push lands at
+                //     slot[1] as the new tail.
+                //
+                //   tag_count == 1: slot[1] is the cleared-to-0
+                //     sentinel from a previous pop, NOT a valid tag.
+                //     Shifting it into slot[0] would zero the new
+                //     head and strand the real entry at slot[1] —
+                //     response routing reads slot[0] and would
+                //     misclassify the next response.  The new push
+                //     must go directly to slot[0] as the new (and
+                //     only) entry.
+                if (tag_count == 2'd1) begin
+                    tag_fifo[0] <= next_tag;
+                    tag_fifo[1] <= 1'b0;
+                end else begin
+                    tag_fifo[0] <= tag_fifo[1];
+                    tag_fifo[1] <= next_tag;
+                end
             end else if (pop_event) begin
                 tag_fifo[0] <= tag_fifo[1];
                 tag_fifo[1] <= 1'b0;
