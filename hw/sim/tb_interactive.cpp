@@ -31,6 +31,16 @@ static struct termios orig_termios;
 static bool term_raw = false;
 static FILE* trace_fp = nullptr;
 
+// Deterministic stdin replay. When +stdin_file=<path> is given, RX bytes
+// are sourced from the file at a fixed cycle cadence (STDIN_FILE_PERIOD)
+// instead of live host stdin. Once the file is exhausted, we fall back
+// to live stdin so the operator can explore after a scripted boot.
+// See discussion: live poll(STDIN_FILENO) timing is the dominant
+// nondeterminism source between RTL boot runs.
+static FILE*   stdin_file_fp     = nullptr;
+static uint64_t stdin_file_next   = 0;       // cycle at which to deliver next byte
+static const uint64_t STDIN_FILE_PERIOD = 100000;  // ~46 char-times at 2170 cyc/char
+
 // Rolling-window trace state. cap=0 means streaming (write each line
 // directly to trace_fp). cap>0 keeps the last `cap` lines in memory
 // and dumps them on exit.
@@ -174,6 +184,15 @@ int main(int argc, char** argv) {
             trace_ring_cap = strtoul(argv[i] + 14, nullptr, 10);
         else if (strncmp(argv[i], "+halt_on=", 9) == 0)
             halt_pattern = argv[i] + 9;
+        else if (strncmp(argv[i], "+stdin_file=", 12) == 0) {
+            const char* path = argv[i] + 12;
+            stdin_file_fp = fopen(path, "rb");
+            if (!stdin_file_fp)
+                fprintf(stderr, "[STDIN_FILE] cannot open '%s'\n", path);
+            else
+                fprintf(stderr, "[STDIN_FILE] replaying '%s' (1 byte every %lu cycles, then live stdin)\n",
+                        path, (unsigned long)STDIN_FILE_PERIOD);
+        }
     }
     if (!sd_path) sd_path = get_sdcard_path();
 
@@ -330,10 +349,33 @@ int main(int argc, char** argv) {
         cpu->i_spi_resp_valid = sd_resp_valid ? 1 : 0;
         cpu->i_spi_resp_data  = sd_resp;
 
-        // ── Poll stdin for new input (every 1024 cycles) ────────
-        // Avoids a syscall per tick while keeping sub-character
-        // latency (UART baud ≈ 2170 cycles/char).
-        if (!rx_pending && (cycles & 0x3FF) == 0) {
+        // ── Deliver next byte from +stdin_file= replay ──────────
+        // Fixed cadence so the kernel sees the same byte at the
+        // same sim cycle every run — eliminates host-scheduler
+        // entropy from the live stdin poll path.
+        if (!rx_pending && stdin_file_fp && cycles >= stdin_file_next) {
+            int c = fgetc(stdin_file_fp);
+            if (c == EOF) {
+                fclose(stdin_file_fp);
+                stdin_file_fp = nullptr;
+                fprintf(stderr, "[STDIN_FILE] exhausted, falling back to live stdin\n");
+            } else {
+                rx_byte = (uint8_t)c;
+                rx_pending = true;
+                stdin_file_next = cycles + STDIN_FILE_PERIOD;
+            }
+        }
+
+        // ── Poll live stdin for new input (every 8192 cycles) ───
+        // Avoids a poll() per tick.  UART baud is ≈ 2170 cycles/char
+        // at 115200 / 25 MHz, so 8192 still gives ~3.8 polls per
+        // char-time — well below the rate at which the kernel can
+        // drain bytes from RBR.  At 1024 cycles this was issuing
+        // ~24 k poll() syscalls per simulated second, an order of
+        // magnitude more than necessary.  Skipped while +stdin_file=
+        // replay is active — see comment above for determinism
+        // rationale.
+        if (!rx_pending && !stdin_file_fp && (cycles & 0x1FFF) == 0) {
             struct pollfd pfd = {STDIN_FILENO, POLLIN, 0};
             if (poll(&pfd, 1, 0) > 0 && (pfd.revents & POLLIN)) {
                 char c;

@@ -331,6 +331,10 @@ $(ISS): sw/sim/penumbra_iss.cpp
 #                                              (rolling last-N-instructions trace)
 #        make simulate-rtl HALT_ON='user signal:'
 #                                              (auto-exit on UART pattern match)
+#        make simulate-rtl STDIN_FILE=boot.txt
+#                                              (deterministic keystroke replay
+#                                               from file at fixed cycle cadence,
+#                                               then falls back to live stdin)
 ifeq ($(INTERACTIVE),0)
 DOCKER_RUN_IT = docker run --rm -u $(shell id -u):$(shell id -g) -i -v $(CURDIR):/work -w /work
 else
@@ -348,7 +352,7 @@ simulate-rtl:
 	@rm -f program.hex
 	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX) CFLAGS=$(CFLAGS)
 	@$(UASM) hw/microcode/microcode.uasm -o microcode.hex
-	@$(DOCKER_RUN_IT) --entrypoint ./$(BUILD_DIR)/Vmachine_sim_interactive $(DOCKER_IMAGE) $(if $(SDCARD),+sdcard=$(SDCARD)) $(if $(TRACE),+trace=$(TRACE)) $(if $(TRACE_WINDOW),+trace_window=$(TRACE_WINDOW)) $(if $(HALT_ON),'+halt_on=$(HALT_ON)')
+	@$(DOCKER_RUN_IT) --entrypoint ./$(BUILD_DIR)/Vmachine_sim_interactive $(DOCKER_IMAGE) $(if $(SDCARD),+sdcard=$(SDCARD)) $(if $(TRACE),+trace=$(TRACE)) $(if $(TRACE_WINDOW),+trace_window=$(TRACE_WINDOW)) $(if $(HALT_ON),'+halt_on=$(HALT_ON)') $(if $(STDIN_FILE),+stdin_file=$(STDIN_FILE))
 
 # ── SD card image ──────────────────────────────────────────────
 # Builds SD image with bootloader, kernel, and optionally a root filesystem.
