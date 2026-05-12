@@ -223,13 +223,19 @@ int main(int argc, char** argv) {
         if (trace_fp && cpu->o_trace_valid) {
             uint32_t sr = cpu->o_trace_sr;
             char line[512];
+            // SR layout (penumbra_pkg.sv): N=bit0, Z=bit1, C=bit2, V=bit3,
+            // I=bit30, S=bit31. Earlier versions of this trace pulled the
+            // condition flags from bits 31:28, which actually decoded
+            // [S, I, x, x] under NZCV labels — fixed.
             int off = snprintf(line, sizeof(line),
-                    "PC=%08x SR=%08x [%c%c%c%c]",
+                    "PC=%08x SR=%08x [%c%c%c%c %c%c]",
                     cpu->o_pc, sr,
-                    (sr & 0x80000000) ? 'N' : '-',
-                    (sr & 0x40000000) ? 'Z' : '-',
-                    (sr & 0x20000000) ? 'C' : '-',
-                    (sr & 0x10000000) ? 'V' : '-');
+                    (sr & (1u <<  0)) ? 'N' : '-',
+                    (sr & (1u <<  1)) ? 'Z' : '-',
+                    (sr & (1u <<  2)) ? 'C' : '-',
+                    (sr & (1u <<  3)) ? 'V' : '-',
+                    (sr & (1u << 31)) ? 'S' : 'u',
+                    (sr & (1u << 30)) ? 'I' : '-');
             for (int r = 1; r <= 14; r++) {
                 cpu->i_dbg_reg_addr = r;
                 cpu->eval();
