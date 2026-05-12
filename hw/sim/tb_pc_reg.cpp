@@ -74,16 +74,18 @@ int main(int argc, char** argv) {
     Vpc_reg* dut = new Vpc_reg;
 
     // ── Reset ──────────────────────────────────────────────────
+    // pc_reg's RESET_PC default is 0xFFFF_0000 (boot ROM base);
+    // pc_plus4 is the combinational +4 of o_pc.
     reset(dut);
-    check("reset_pc",        dut->o_pc,        0x00000000);
-    check("reset_pc_plus4",  dut->o_pc_plus4,  0x00000004);
+    check("reset_pc",        dut->o_pc,        0xFFFF0000);
+    check("reset_pc_plus4",  dut->o_pc_plus4,  0xFFFF0004);
     check("reset_epc", dut->o_epc, 0x00000000);
 
     // ── PC holds when load=0 ───────────────────────────────────
     dut->i_pc_next = 0xDEADBEEF;
     dut->i_pc_load = 0;
     tick(dut);
-    check("hold_pc", dut->o_pc, 0x00000000);
+    check("hold_pc", dut->o_pc, 0xFFFF0000);
 
     // ── PC loads when load=1 ───────────────────────────────────
     load_pc(dut, 0x00001000);

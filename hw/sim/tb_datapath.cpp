@@ -64,6 +64,12 @@ static void clear(Vdatapath* d) {
     d->i_except_entry = 0; d->i_vector_num = 0;
     d->i_ei_set = 0; d->i_di_set = 0; d->i_ei_shadow_clr = 0;
     d->i_ir_load = 0; d->i_mem_rdata = 0;
+    // Word access (2'b10).  Otherwise byte_ext/byte_rep treat loads
+    // and MDR-A-bus stores as byte-sized, masking off the high 24
+    // bits of the value the rest of the test cares about.
+    d->i_mem_size = 0b10;
+    d->i_sign_ext = 0;
+    d->i_spr_write = 0;
 }
 
 static void reset(Vdatapath* d) {
@@ -78,7 +84,8 @@ int main() {
 
     // ── Reset state ────────────────────────────────────────────
     reset(d);
-    check("reset_pc", d->o_pc, 0x00000000);
+    // RESET_PC default is 0xFFFF_0000 (boot ROM base).
+    check("reset_pc", d->o_pc, 0xFFFF0000);
     check1("reset_sr_s", d->o_sr_s, 1);     // Supervisor mode
     check1("reset_sr_i", d->o_sr_i, 0);     // Interrupts disabled
     check1("reset_busy", d->o_alu_busy, 0);
@@ -165,8 +172,8 @@ int main() {
     clear(d);
     check("add_result", d->o_mem_addr, 300);
 
-    // PC should have advanced
-    check("add_pc_advanced", d->o_pc, 0x00000004);
+    // PC should have advanced one word past RESET_PC.
+    check("add_pc_advanced", d->o_pc, 0xFFFF0004);
 
     // ── F-bit gating: CMP R3, R4 (Format R, F=1) ──────────────
     // Same as ADD but with F=1 → reg write suppressed
