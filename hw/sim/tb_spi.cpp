@@ -1,8 +1,10 @@
 // Verilator testbench for Penumbra SPI Master v2
 //
-// Tests the real spi.sv with hardware shift register, FIFOs,
-// transfer engine, and IRQ logic. Uses a small FIFO (8 entries)
-// and fast divider (SLOW_DIV=1, FAST_DIV=0) for quick simulation.
+// Tests the real spi.sv (via the `spi_test` wrapper in
+// hw/rtl/sim/spi_test.sv, which pins FIFO_DEPTH=8, SLOW_DIV=1,
+// FAST_DIV=0 for fast sim and reachable watermark/full edges).
+// Exercises hardware shift register, FIFOs, transfer engine,
+// and IRQ logic.
 //
 // Test groups:
 //   1. CAP register / reset state
@@ -15,15 +17,11 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
-#include "Vspi.h"
+#include "Vspi_test.h"
 
 static int errors = 0, tests = 0;
 
-// DUT with small FIFO for fast tests.
-// Verilator instantiation: spi #(.FIFO_DEPTH(8), .SLOW_DIV(1), .FAST_DIV(0))
-// (Overridden via -GFIFO_DEPTH=8 -GSLOW_DIV=1 -GFAST_DIV=0 on command line)
-
-static Vspi* dut;
+static Vspi_test* dut;
 
 // ── Helpers ────────────────────────────────────────────────
 
@@ -553,7 +551,7 @@ static void test_tx_empty_stall() {
 // ── Main ───────────────────────────────────────────────────
 
 int main() {
-    dut = new Vspi;
+    dut = new Vspi_test;
 
     test_reset_and_cap();
     test_single_byte_polled();
