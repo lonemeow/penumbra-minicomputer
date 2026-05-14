@@ -10,7 +10,18 @@
 //   VPN word: {4'b0, VPN[19:0], ASID[7:0]}
 //   PTE word: {PPN[19:0], SW[3:0], flags[7:0]}
 //
-// Software manages entries via PIN_INDEX/PIN_VPN/PIN_PTE sysregs.
+// Module interface:
+//   Lookup port (i_vaddr/i_access_type/i_user_mode/i_asid/i_lookup_en →
+//   o_paddr/o_cacheable/o_hit/o_fault/o_fault_status) runs fully
+//   combinational and is checked in parallel with the main TLB.  The
+//   wrapper (tlb_unit) selects pinned-vs-main from the o_hit pair.
+//
+//   Indexed read/write port (i_idx/i_write_vpn/i_write_pte/i_write_en
+//   → o_read_vpn/o_read_pte) addresses one of the 4 slots directly.
+//   Software does not see PIN_-prefixed sysregs: tlb_unit reuses the
+//   shared SYSREG_MMU_TLB_VPN/SYSREG_MMU_TLB_PTE/SYSREG_MMU_TLB_IDX
+//   sysregs and drives this port when IDX[6]=1.
+//
 // Entries are never evicted by the main TLB's replacement logic.
 
 // verilator lint_off UNUSEDSIGNAL
