@@ -186,6 +186,7 @@ MODULE_TESTS = \
     cpu_bus_arbiter \
     slip_rx \
     slip_tx \
+    spi_fifo \
     timer \
     sdram_test \
     sdram_cdc \
