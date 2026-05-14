@@ -182,6 +182,7 @@ MODULE_TESTS = \
     tlb \
     tlb_pinned \
     tlb_unit \
+    mmu \
     cpu_bus_arbiter \
     slip_rx \
     slip_tx \
