@@ -181,6 +181,7 @@ MODULE_TESTS = \
     busctl \
     tlb \
     tlb_pinned \
+    tlb_unit \
     slip_rx \
     slip_tx \
     timer \
