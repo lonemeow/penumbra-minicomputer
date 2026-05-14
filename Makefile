@@ -180,6 +180,7 @@ MODULE_TESTS = \
     wmux \
     busctl \
     tlb \
+    tlb_pinned \
     slip_rx \
     slip_tx \
     timer \
