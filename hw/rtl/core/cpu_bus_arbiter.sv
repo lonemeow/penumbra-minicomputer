@@ -38,6 +38,33 @@
 //   - +1 cycle per fill-word completion (≈+3% on a 4-word line fill,
 //     dwarfed by SDRAM+CDC latency).
 //   - Zero cycles on cached hits — they never reach the arbiter.
+//
+// Response-routing contract:
+//   The arbiter latches `owner` at IDLE→BUSY (D=0 with priority on
+//   simultaneous pending) and latches `resp_rdata` at BUSY→DONE.  The
+//   pairing between the latched request and the captured response is
+//   the central correctness property, asserted along two axes:
+//
+//   (a) Owner-pairing.  Once in S_BUSY or S_DONE, `owner` is stable —
+//       see the `$stable(owner)` SVA below.  Hence `resp_rdata`
+//       captured at BUSY→DONE is unambiguously the response to the
+//       request driven from `req_*` during S_BUSY.
+//
+//   (b) Non-owner exclusion.  Both `o_d_rdata` and `o_i_rdata` are
+//       physically wired to `resp_rdata`; the busy mux is what
+//       prevents the non-owner from mis-consuming the response.  In
+//       S_BUSY *and* S_DONE, a non-owner cache that has another
+//       pending request must see `o_*_busy=1` — its private busy
+//       does not drop until the arbiter accepts its request in a
+//       later cycle.  This is asserted by the two `non_owner` SVAs
+//       below, the complement of the existing owner-busy-drops SVAs.
+//
+//   The contract trusts the external bus to honor "`i_mem_rdata` at
+//   the first `i_mem_busy=0` after `o_mem_re`/`o_mem_we` was driven
+//   in S_BUSY is the response to that request."  Violating that on
+//   the device side (spurious data on `i_mem_rdata` while
+//   `i_mem_busy=0` outside the paired window) will be captured and
+//   routed as if it were valid — the arbiter has no separate tag.
 
 // verilator lint_off UNUSEDSIGNAL
 
@@ -256,6 +283,43 @@ module cpu_bus_arbiter
     assert property (@(posedge i_clk) disable iff (i_rst)
         (state != S_BUSY) |-> (!o_mem_re && !o_mem_we))
         else $error("cpu_bus_arbiter: bus driven outside S_BUSY");
+
+    // Non-owner exclusion in S_DONE.  Complements the "owner sees
+    // busy=0" SVAs above: if the non-owner cache also has a pending
+    // request, its private busy must stay 1 so it cannot latch the
+    // owner's resp_rdata as if it were its own.  Both o_d_rdata and
+    // o_i_rdata are physically wired to resp_rdata; busy is the only
+    // qualifier that keeps the response from being consumed by the
+    // wrong client.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (state == S_DONE && owner == 1'b0 && pending_i) |-> o_i_busy)
+        else $error("cpu_bus_arbiter: non-owner I saw busy=0 in S_DONE (would latch D's response)");
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (state == S_DONE && owner == 1'b1 && pending_d) |-> o_d_busy)
+        else $error("cpu_bus_arbiter: non-owner D saw busy=0 in S_DONE (would latch I's response)");
+
+    // Non-owner exclusion in S_BUSY.  Same property earlier in the
+    // transaction: the non-owner with a pending request must see
+    // busy=1 throughout S_BUSY so it can't capture resp_rdata at the
+    // BUSY→DONE edge.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (state == S_BUSY && owner == 1'b0 && pending_i) |-> o_i_busy)
+        else $error("cpu_bus_arbiter: non-owner I saw busy=0 in S_BUSY");
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (state == S_BUSY && owner == 1'b1 && pending_d) |-> o_d_busy)
+        else $error("cpu_bus_arbiter: non-owner D saw busy=0 in S_BUSY");
+
+    // Owner-data pairing: the captured response is presented to the
+    // owner verbatim on its rdata port.  Structurally trivial today
+    // (both ports are wired to resp_rdata), but the SVA pins the
+    // intent so a future refactor that adds per-port routing must
+    // preserve the owner-rdata pairing.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (state == S_DONE && owner == 1'b0) |-> (o_d_rdata == resp_rdata))
+        else $error("cpu_bus_arbiter: D owner not seeing resp_rdata in S_DONE");
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (state == S_DONE && owner == 1'b1) |-> (o_i_rdata == resp_rdata))
+        else $error("cpu_bus_arbiter: I owner not seeing resp_rdata in S_DONE");
 
 endmodule
 
