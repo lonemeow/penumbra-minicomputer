@@ -186,6 +186,7 @@ MODULE_TESTS = \
     sdram_test \
     sdram_cdc \
     cache_test:tb_cache \
+    cache_vipt_test:tb_cache_vipt \
     autoconfig_test:tb_autoconfig \
     spi_test:tb_spi \
     sdram_adapter_test:tb_sdram_adapter
