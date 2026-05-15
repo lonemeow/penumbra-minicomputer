@@ -45,7 +45,7 @@ Penumbra is a modern RISC implementation with a "classic" aesthetic.
 - **ISA:** 4 instruction formats (R/L/M/B), 16 GPRs (R0=zero, R14=SP, R13=LR, R15=PC).
 - **Execution:** 3-bus datapath, 51-bit horizontal microcode, 256-entry ROM.
 - **MMU:** Software-managed 64-entry 2-way SA TLB + 4-entry FA pinned TLB.
-- **Memory:** Split I/D PIPT caches, write-through D-cache.
+- **Memory:** Split I/D VIPT caches (1 KiB direct-mapped, aliasing-free), write-through D-cache.
 - **Bus:** Asynchronous Penumbra Bus with 4-phase handshake and autoconfig.
 
 Detailed specifications are available in the **[Documentation Index](doc/README.md)**.
@@ -70,7 +70,7 @@ The system is fully functional in cycle-accurate and instruction-level simulatio
 - `llvm/` — Penumbra backend for the LLVM compiler infrastructure.
 - `doc/` — Comprehensive architecture and system documentation.
 - `netbsd/` — NetBSD kernel and userland source tree.
-- `benchmark/` — Dhrystone and other bare-metal performance tests.
+- `benchmark/` — Bare-metal benchmarks (Dhrystone, membench, memtest) and the NetBSD-hosted `pbench` microbenchmark suite.
 
 ---
 

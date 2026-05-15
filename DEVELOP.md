@@ -46,31 +46,60 @@ If you want the LLVM build tree elsewhere, pass `LLVM_PREFIX=/other/drive/penumb
 
 ## 2. Hardware Simulation & Verification
 
-### Running all hardware tests
+Penumbra has two simulators: a fast native C++ **ISS** (`sw/sim/penumbra_iss.cpp`, no Docker, no LLVM) and a cycle-accurate **Verilator RTL** simulation (Docker-based). Most workflows use the ISS; reach for RTL when you care about cycle counts, bus timing, or are debugging actual hardware behavior.
 
-Uses `pasm.py` assembler (no LLVM needed):
+### Running tests
 
 ```sh
-make test
+make smoke           # Toolchain smoke test (trivial adder)
+make test-iss        # Run all hw/sim/programs/test_*.s on ISS — fast, no Docker
+make test            # Same suite on RTL via Docker — slow but cycle-accurate
+make test-modules    # Run all module-level Verilator testbenches (alu, regfile, …)
+make test-all        # test + test-modules
 ```
+
+`make test-iss` is the right default during development. Run `make test` (or `make test-all`) before committing RTL changes.
+
+### Interactive simulation
+
+```sh
+make simulate                                # ISS (fast)
+make simulate-rtl                            # Verilator RTL (cycle-accurate)
+```
+
+Both targets accept the same runtime knobs:
+
+| Variable          | Effect                                                                          |
+|-------------------|---------------------------------------------------------------------------------|
+| `SDCARD=img`      | Attach an SD-card image (see § 7).                                              |
+| `TRACE=log`       | Dump per-instruction PC/SR/R1–R14 trace.                                        |
+| `LLVM_PREFIX=…`   | Use a non-default LLVM build tree.                                              |
+
+ISS-only:
+
+| Variable          | Effect                                                                          |
+|-------------------|---------------------------------------------------------------------------------|
+| `RAW=1`           | Raw-TTY mode (job control passes through; Ctrl-A is the escape — Ctrl-A H for help). |
+
+RTL-only:
+
+| Variable          | Effect                                                                          |
+|-------------------|---------------------------------------------------------------------------------|
+| `INTERACTIVE=0`   | Non-interactive mode for piped input (e.g. `echo break \| make simulate-rtl INTERACTIVE=0`). |
+| `TRACE_WINDOW=N`  | Rolling last-N-instruction trace (caps disk use on long boots).                 |
+| `HALT_ON='pat'`   | Auto-exit when UART output matches the pattern.                                 |
+| `STDIN_FILE=f`    | Replay keystrokes from a file at fixed cycle cadence, then fall back to live stdin. |
+
+Type `break` (or `b`) at the ROM monitor to halt the simulator cleanly.
 
 ### Module-specific simulation
 
 ```sh
-make sim MOD=<name>      # Build & run testbench for a module
+make sim MOD=<name>      # Build & run testbench for one module (expects hw/sim/tb_<name>.cpp)
 make wave MOD=<name>     # Open VCD waveform in GTKWave
 ```
 
-### RTL vs ISS Simulation
-
-- **ISS (Instruction Set Simulator):** Fast, instruction-level accuracy. Use for software development.
-  ```sh
-  make simulate
-  ```
-- **RTL (Verilator):** Slow, cycle-accurate. Use for hardware verification.
-  ```sh
-  make simulate-rtl
-  ```
+If you suspect stale Verilator output (WSL2 mtimes), `rm -rf build/<mod>.verilator build/V<mod>` and rebuild.
 
 ---
 
@@ -136,33 +165,13 @@ Penumbra uses a subset of the LLVM `SingleSource` test suite (including GCC C-To
 
 ### Building compiler-rt builtins
 
-The tests require `compiler-rt` to provide soft-float and 64-bit integer operations.
+The tests require `compiler-rt` to provide soft-float and 64-bit integer operations. A helper script handles the cmake invocation:
 
 ```sh
-# One-time build of compiler-rt builtins
-mkdir -p build/compiler-rt-builtins
-cmake -G Ninja -S llvm/compiler-rt/lib/builtins -B build/compiler-rt-builtins \
-  -DCMAKE_C_COMPILER=$PWD/build/llvm/bin/clang \
-  -DCMAKE_CXX_COMPILER=$PWD/build/llvm/bin/clang++ \
-  -DCMAKE_AR=$PWD/build/llvm/bin/llvm-ar \
-  -DCMAKE_NM=$PWD/build/llvm/bin/llvm-nm \
-  -DCMAKE_RANLIB=$PWD/build/llvm/bin/llvm-ranlib \
-  -DCMAKE_C_COMPILER_TARGET=penumbra-unknown-none \
-  -DCMAKE_CXX_COMPILER_TARGET=penumbra-unknown-none \
-  -DCMAKE_ASM_COMPILER_TARGET=penumbra-unknown-none \
-  -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
-  -DCMAKE_C_FLAGS="-ffreestanding -nostdinc -isystem $PWD/build/llvm/lib/clang/22/include" \
-  -DCMAKE_ASM_FLAGS="-ffreestanding -nostdinc -isystem $PWD/build/llvm/lib/clang/22/include" \
-  -DCOMPILER_RT_BAREMETAL_BUILD=ON -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON \
-  -DCOMPILER_RT_INCLUDE_TESTS=OFF -DCOMPILER_RT_USE_LIBCXX=OFF \
-  -DCOMPILER_RT_BUILD_CRT=OFF -DCOMPILER_RT_BUILD_SANITIZERS=OFF \
-  -DCOMPILER_RT_BUILD_XRAY=OFF -DCOMPILER_RT_BUILD_LIBFUZZER=OFF \
-  -DCOMPILER_RT_BUILD_PROFILE=OFF -DCOMPILER_RT_BUILD_MEMPROF=OFF \
-  -DCOMPILER_RT_BUILD_ORC=OFF -DCOMPILER_RT_BUILD_GWP_ASAN=OFF \
-  -DCOMPILER_RT_BUILD_CTX_PROFILE=OFF
-
-ninja -C build/compiler-rt-builtins
+sw/tools/setup-compiler-rt.sh
 ```
+
+Output: `build/compiler-rt-builtins/lib/linux/libclang_rt.builtins-penumbra.a`. Re-run after upgrading clang.
 
 ### Running compiler tests
 
@@ -185,18 +194,31 @@ A full report is written to `build/test-compiler-report.txt`.
 
 ## 6. Benchmarks
 
-Benchmarks are PIE ELFs booted from the ROM.
+Two benchmark families live under `benchmark/`:
+
+**Bare-metal** (PIE ELFs booted from ROM via `boot sd:0,0/<NAME>.ELF`):
+- `DHRYSTON.ELF` — Dhrystone 2.1 (DMIPS / CPI).
+- `MEMBENCH.ELF` — cached + uncached memory throughput / latency at W/H/B sizes.
+- `MEMTEST.ELF` — SDRAM correctness walk (six patterns; round-trip / walking-1 / etc.).
 
 ```sh
-# Quick run on ISS
-make benchmark
-
-# Cycle-accurate run on Verilator
-make benchmark-rtl
-
-# Override iteration count
-make benchmark BENCH_ITERS=10000
+make benchmark                 # ISS (fast, all three benches)
+make benchmark-rtl             # Verilator (cycle-accurate, slower; memtest dominates)
+make benchmark BENCH_ITERS=100 # Override Dhrystone iteration count
+make benchmark COPT="-Os"      # Override benchmark optimization level
 ```
+
+> **Real numbers come from the FPGA**, not the ISS or Verilator. Use the sim runs to validate that benchmarks build and execute correctly; flash to the ULX3S (§ 9) and re-run for the numbers that go in `benchmark/.../BASELINE.md`.
+
+**NetBSD-hosted** (`pbench` — runs under the real userland against libc, dynamic + static):
+
+```sh
+make benchmark-netbsd                              # Build pbench{,-static} for NetBSD
+make sdimage-rootfs ROOTFS_FULL=1                  # Bake into /usr/local/bin/ on rootfs
+make simulate SDCARD=build/boot.img                # Boot, log in, run pbench
+```
+
+Inside the running NetBSD: `pbench list`, `pbench libc memcpy`, etc. Use `pbench -o FILE` to dump machine-readable `RESULT key=value` lines. Baseline numbers in `benchmark/netbsd-bench/BASELINE.md`.
 
 ---
 
@@ -244,3 +266,86 @@ build/netbsd-tools/bin/nbmake-penumbra -C netbsd/sys/arch/penumbra/stand obj
 # Build (output: build/netbsd-obj/sys/arch/penumbra/stand/boot/PENBOOT.ELF)
 build/netbsd-tools/bin/nbmake-penumbra -C netbsd/sys/arch/penumbra/stand/boot
 ```
+
+### Building the Userland
+
+The full distribution (libraries + programs + `etc.penumbra`) builds with stock `build.sh`:
+
+```sh
+cd netbsd
+./build.sh -u -j4 -m penumbra -a penumbra \
+  -V EXTERNAL_TOOLCHAIN=$PWD/../build/llvm \
+  -O ../build/netbsd-obj -T ../build/netbsd-tools -D ../build/netbsd-dest \
+  distribution
+cd ..
+```
+
+`-u` makes the build incremental — only the first run is slow.
+
+---
+
+## 8. SD Card Images and Booting NetBSD
+
+The Penumbra ROM boots from FAT32 on an SD card; the NetBSD kernel mounts an FFS root from a second partition. Image creation is wrapped:
+
+```sh
+make sdimage                          # Boot partition only (FAT32: bootloader + kernel)
+make sdimage-rootfs                   # Boot + minimal FFS root (rescue + lib + etc, ~86 MB)
+make sdimage-rootfs ROOTFS_FULL=1     # Boot + full FFS root from build/netbsd-dest/
+```
+
+Output: `build/boot.img` (two MBR partitions). The rootfs variants pre-write a `boot.cfg` that selects `root=ld0f`, so `boot sd:0,0` reaches single-user shell with no further interaction.
+
+End-to-end recipe (assumes kernel + bootloader + userland already built):
+
+```sh
+make sdimage-rootfs ROOTFS_FULL=1
+make simulate SDCARD=build/boot.img
+```
+
+Image creation requires the NetBSD cross-tools (`nbfdisk`, `nbmakefs`) — i.e. the host-tools step from § 7 must have run.
+
+---
+
+## 9. FPGA Synthesis (ULX3S)
+
+FPGA synthesis uses the OSS CAD Suite (Yosys + nextpnr-ecp5 + ecppack + fujprog) via Docker. The wrappers in `hw/tools/oss-cad-suite/bin/` make them usable as normal commands:
+
+```sh
+export PATH="$PWD/hw/tools/oss-cad-suite/bin:$PATH"
+```
+
+### Build & flash
+
+```sh
+make fpga TOP=ulx3s_top              # Full flow: sv2v → yosys → nextpnr → ecppack
+make flash TOP=ulx3s_top             # Build + flash to ULX3S over USB (fujprog)
+make fpga-lint TOP=ulx3s_top         # Verilator lint check on FPGA sources
+```
+
+`TOP` defaults to `ulx3s_hello` (a minimal smoke top). For the full system, use `TOP=ulx3s_top`. Other tops in `hw/rtl/fpga/`: `ulx3s_regtest`, `ulx3s_utest`.
+
+### Reading the build report
+
+```sh
+make timing TOP=ulx3s_top                  # Pretty-print fmax + top critical paths
+make timing TOP=ulx3s_top TOP_N=10         # ...top 10 instead of 5
+make fanout TOP=ulx3s_top                  # High-fanout nets (router-congestion diagnosis)
+make fanout TOP=ulx3s_top FANOUT_N=30 FANOUT_MIN=20
+```
+
+Both targets read whatever the last `make fpga` left in `build/`; they don't trigger a rebuild.
+
+### SDRAM phase tuning
+
+The SDRAM clock-pin phase is built into the bitstream filename via `PHASE_DEG`:
+
+```sh
+make fpga TOP=ulx3s_top PHASE_DEG=270      # Default — step-4 baseline
+```
+
+Valid values: `0, 45, 90, 135, 180, 225, 270, 315`. See `doc/internals/sdram-controller.md` for the bring-up sweep procedure.
+
+### Serial console
+
+After flashing: `/dev/ttyUSB0` at **115200 8N1**. The boot ROM accepts `boot sd:0,0` to load `PENBOOT.ELF` from FAT32.
