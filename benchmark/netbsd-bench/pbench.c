@@ -1,0 +1,153 @@
+/* pbench.c - Penumbra NetBSD-hosted benchmark suite.
+ *
+ * Usage:
+ *   pbench [-o FILE]                       Run every benchmark.
+ *   pbench [-o FILE] <category>            Run all benchmarks in a category.
+ *   pbench [-o FILE] <category> <name>     Run one benchmark.
+ *   pbench list                            List all registered benchmarks.
+ *   pbench help                            Show help.
+ *
+ * Options:
+ *   -o FILE   Write machine-readable RESULT lines to FILE.  Without this
+ *             flag, only the human-readable table is printed to stdout —
+ *             convenient for pasting into a writeup.
+ *
+ * Categories:
+ *   kernel    Syscall / context-switch / process-creation costs.
+ *   libc      memcpy / memset / strlen / qsort etc., size-swept.
+ */
+
+#include "bench.h"
+
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* --- Benchmark entry-point declarations.  Each benchmark .c defines one
+ *     of these and registers it below. */
+
+extern void bench_kernel_getpid(void);
+extern void bench_kernel_clock_gettime(void);
+extern void bench_kernel_pipe_pingpong(void);
+extern void bench_kernel_fork_exit(void);
+
+extern void bench_libc_memcpy_sweep(void);
+extern void bench_libc_memset_sweep(void);
+extern void bench_libc_strlen_sweep(void);
+/* qsort_int disabled until G_SCMP legalization lands — see doc/TODO.md. */
+/* extern void bench_libc_qsort_int(void); */
+
+/* --- Registry.  Add new benchmarks by appending an entry here. */
+
+static const struct bench_entry registry[] = {
+    /* Kernel benchmarks: cross-cutting cost signals. */
+    { "kernel", "getpid",         bench_kernel_getpid },
+    { "kernel", "clock_gettime",  bench_kernel_clock_gettime },
+    { "kernel", "pipe_pingpong",  bench_kernel_pipe_pingpong },
+    { "kernel", "fork_exit",      bench_kernel_fork_exit },
+
+    /* libc benchmarks: hot routines, size-swept where applicable. */
+    { "libc",   "memcpy",         bench_libc_memcpy_sweep },
+    { "libc",   "memset",         bench_libc_memset_sweep },
+    { "libc",   "strlen",         bench_libc_strlen_sweep },
+    /* { "libc",   "qsort_int",      bench_libc_qsort_int }, */
+};
+
+static const size_t registry_len = sizeof(registry) / sizeof(registry[0]);
+
+/* --- CLI helpers ---------------------------------------------------- */
+
+static void print_help(const char *argv0) {
+    fprintf(stderr,
+        "usage: %s [-o FILE] [help|list|<category> [<name>]]\n"
+        "  no args                  run every benchmark\n"
+        "  <category>               run all benchmarks in category (kernel|libc)\n"
+        "  <category> <name>        run one benchmark\n"
+        "  list                     list registered benchmarks\n"
+        "  help                     show this help\n"
+        "options:\n"
+        "  -o FILE                  also write machine-readable RESULT lines to FILE\n",
+        argv0);
+}
+
+static void list_benchmarks(void) {
+    printf("Registered benchmarks:\n");
+    const char *last_cat = "";
+    for (size_t i = 0; i < registry_len; i++) {
+        if (strcmp(registry[i].category, last_cat) != 0) {
+            printf("\n  %s:\n", registry[i].category);
+            last_cat = registry[i].category;
+        }
+        printf("    %s\n", registry[i].name);
+    }
+}
+
+static void run_one(const struct bench_entry *e) {
+    printf("\n--- %s/%s ---\n", e->category, e->name);
+    fflush(stdout);
+    e->run();
+}
+
+static int run_filtered(const char *category, const char *name) {
+    int matched = 0;
+    for (size_t i = 0; i < registry_len; i++) {
+        if (category && strcmp(category, registry[i].category) != 0) continue;
+        if (name     && strcmp(name,     registry[i].name)     != 0) continue;
+        run_one(&registry[i]);
+        matched++;
+    }
+    if (matched == 0) {
+        fprintf(stderr, "pbench: no benchmark matches");
+        if (category) fprintf(stderr, " category=%s", category);
+        if (name)     fprintf(stderr, " name=%s", name);
+        fprintf(stderr, "\n");
+        return 1;
+    }
+    return 0;
+}
+
+/* --- Main ----------------------------------------------------------- */
+
+int main(int argc, char **argv) {
+    const char *argv0 = argv[0];
+    FILE *result_fp = NULL;
+
+    /* Parse leading -o FILE flag (only flag we accept).  Strip it from
+     * argv before falling through to positional parsing. */
+    if (argc >= 3 && strcmp(argv[1], "-o") == 0) {
+        result_fp = fopen(argv[2], "w");
+        if (!result_fp) {
+            fprintf(stderr, "pbench: cannot open %s for writing: %s\n",
+                    argv[2], strerror(errno));
+            return 2;
+        }
+        bench_set_result_file(result_fp);
+        argv += 2;
+        argc -= 2;
+        argv[0] = (char *)argv0;  /* preserve program name for help */
+    }
+
+    int rc;
+    if (argc == 1) {
+        rc = run_filtered(NULL, NULL);
+    } else if (strcmp(argv[1], "help") == 0 ||
+               strcmp(argv[1], "-h")   == 0 ||
+               strcmp(argv[1], "--help") == 0) {
+        print_help(argv[0]);
+        rc = 0;
+    } else if (strcmp(argv[1], "list") == 0) {
+        list_benchmarks();
+        rc = 0;
+    } else if (argc == 2) {
+        rc = run_filtered(argv[1], NULL);
+    } else if (argc == 3) {
+        rc = run_filtered(argv[1], argv[2]);
+    } else {
+        print_help(argv[0]);
+        rc = 2;
+    }
+
+    if (result_fp) fclose(result_fp);
+    return rc;
+}

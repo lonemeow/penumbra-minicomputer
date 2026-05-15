@@ -312,6 +312,28 @@ contributions from software muldiv (Proc_8 array indexing) and
 taken-branch refill bubbles.  Adding fetch_cycles / stall_cycles
 perfctrs is the next step toward attributing the gap precisely.
 
+**pbench** (`benchmark/netbsd-bench/`): NetBSD-hosted microbenchmark
+suite — kernel costs (getpid, clock_gettime, pipe ping-pong, fork+exit)
+and libc hot routines (memcpy, memset, strlen, size-swept).  Unlike the
+bare-metal benchmarks above, pbench runs under the real NetBSD
+userland against libc (dynamic + static binaries built side by side),
+so it measures the full syscall path, libc implementations, and
+ld.elf_so where relevant.  Single `pbench` binary with subcommands
+(`pbench list`, `pbench libc memcpy`, etc.); use `pbench -o FILE` to
+also dump machine-readable `RESULT key=value` lines.
+
+Build and ship:
+```sh
+make benchmark-netbsd                              # → build/netbsd-bench/pbench{,-static}
+make sdimage-rootfs ROOTFS_FULL=1                  # bundles them into /usr/local/bin/
+make simulate SDCARD=build/boot.img                # boot, log in, run pbench
+```
+
+Current baseline numbers and per-snapshot analysis live in
+`benchmark/netbsd-bench/BASELINE.md`.  Add a new dated section at the
+top when capturing a new run; include the HEAD SHA so `git log
+<old>..<new>` shows what changed between snapshots.
+
 ## Current Status
 The CPU is fully functional in simulation: all RTL modules implemented
 and tested, CPU runs real programs through the full

@@ -381,16 +381,44 @@ sdimage:
 	@sw/tools/mksdimage.sh -o $(SDIMAGE) -2 $(BOOT_ELF) -k $(KERNEL) -v
 	@echo "SD image: $(SDIMAGE)"
 
+# Overlay pbench binaries into /usr/local/bin/ if they've been built.
+# Full-rootfs only — minimal mode (rescue + lib + etc) intentionally
+# excludes userland binaries.
+NETBSD_BENCH_DIR := $(BUILD_DIR)/netbsd-bench
+NETBSD_BENCH_OVERLAYS :=
+ifeq ($(ROOTFS_FULL),1)
+ifneq ($(wildcard $(NETBSD_BENCH_DIR)/pbench),)
+NETBSD_BENCH_OVERLAYS += -i $(NETBSD_BENCH_DIR)/pbench:/usr/local/bin/pbench
+endif
+ifneq ($(wildcard $(NETBSD_BENCH_DIR)/pbench-static),)
+NETBSD_BENCH_OVERLAYS += -i $(NETBSD_BENCH_DIR)/pbench-static:/usr/local/bin/pbench-static
+endif
+endif
+
 .PHONY: rootfs
 rootfs:
 	@sw/tools/mkrootfs.sh -d $(DESTDIR) -o $(ROOTFS_IMG) \
-		-k $(KERNEL) $(if $(ROOTFS_FULL),,-m) -v
+		-k $(KERNEL) $(if $(ROOTFS_FULL),,-m) \
+		$(NETBSD_BENCH_OVERLAYS) -v
 
 .PHONY: sdimage-rootfs
 sdimage-rootfs: rootfs
 	@sw/tools/mksdimage.sh -o $(SDIMAGE) -2 $(BOOT_ELF) -k $(KERNEL) \
 		-r $(ROOTFS_IMG) -v
 	@echo "SD image: $(SDIMAGE) (with FFS root)"
+
+# Cross-built NetBSD-hosted benchmark suite (pbench).  Builds dynamic
+# and static binaries against the NetBSD sysroot.  Combine with
+# `sdimage-rootfs ROOTFS_FULL=1` to overlay them into /usr/local/bin/.
+#
+#   make benchmark-netbsd                       — build both binaries
+#   make benchmark-netbsd sdimage-rootfs ROOTFS_FULL=1
+#                                                — and bake into rootfs
+.PHONY: benchmark-netbsd
+benchmark-netbsd:
+	@$(MAKE) -C benchmark/netbsd-bench LLVM_PREFIX=$(LLVM_PREFIX) \
+		DESTDIR=$(DESTDIR)
+	@echo "pbench binaries: $(NETBSD_BENCH_DIR)/pbench{,-static}"
 
 # ── Benchmark SD image and runners ───────────────────────────
 # Builds benchmark ELFs and creates an SD image containing them.
