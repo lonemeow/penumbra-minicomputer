@@ -35,8 +35,7 @@ extern void bench_kernel_fork_exit(void);
 extern void bench_libc_memcpy_sweep(void);
 extern void bench_libc_memset_sweep(void);
 extern void bench_libc_strlen_sweep(void);
-/* qsort_int disabled until G_SCMP legalization lands — see doc/TODO.md. */
-/* extern void bench_libc_qsort_int(void); */
+extern void bench_libc_qsort_int(void);
 
 /* --- Registry.  Add new benchmarks by appending an entry here. */
 
@@ -51,7 +50,7 @@ static const struct bench_entry registry[] = {
     { "libc",   "memcpy",         bench_libc_memcpy_sweep },
     { "libc",   "memset",         bench_libc_memset_sweep },
     { "libc",   "strlen",         bench_libc_strlen_sweep },
-    /* { "libc",   "qsort_int",      bench_libc_qsort_int }, */
+    { "libc",   "qsort_int",      bench_libc_qsort_int },
 };
 
 static const size_t registry_len = sizeof(registry) / sizeof(registry[0]);

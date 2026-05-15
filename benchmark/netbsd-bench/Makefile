@@ -43,15 +43,11 @@ OBJDIR      := $(BUILDDIR)/obj
 # benchmark by dropping a .c file in the right directory and listing
 # its entry function in pbench.c's registry.
 
-# Note: libc/qsort_int.c is omitted until the GISel G_SCMP legalization
-# gap (see doc/TODO.md) is closed — its int comparator can't be compiled
-# at -O2 today, and rewriting it to dodge the optimizer would just hide
-# the real issue.
 SRCS        := pbench.c bench.c \
                kernel/getpid.c kernel/clock_gettime.c \
                kernel/pipe_pingpong.c kernel/fork_exit.c \
                libc/memcpy_sweep.c libc/memset_sweep.c \
-               libc/strlen_sweep.c
+               libc/strlen_sweep.c libc/qsort_int.c
 
 OBJS        := $(SRCS:%.c=$(OBJDIR)/%.o)
 
