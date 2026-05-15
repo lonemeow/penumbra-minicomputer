@@ -388,3 +388,73 @@ Tracked test: `complex-7.c` (excluded in `test/compiler/excludes.txt`).
 The variadic-byval stack-overflow bug (920625-1.c) was a
 separate issue, fixed by `normalizeVarArgByVal()` in
 `PenumbraCallLowering.cpp`.
+
+## Benchmark: CoreMark-Pro under NetBSD
+
+Dhrystone is the only modern-era integer benchmark in the bare-metal
+harness and is widely understood as unrepresentative of real workloads
+(tiny working set, no float, no state machine, trivial branching).
+CoreMark-Pro is the natural successor: a 9-workload suite covering
+JPEG encode, linear algebra (SP float), 64K-point FFT, SHA, DEFLATE,
+neural-net inference, parser, and a 125 KB-working-set workload that
+meaningfully exercises the TLB.
+
+**Hosting decision: run it under NetBSD, not bare-metal.**
+CoreMark-Pro is licensed Apache 2.0 (compatible with project licensing
+— same model as our LLVM and NetBSD imports).  EEMBC ship a
+Linux/POSIX reference port (`builds/linux/linux32/`) that wires
+`th_malloc`, `th_file_*`, `th_thread_*`, `th_time_*` straight to libc
+and pthreads.  This is the *canonical* port; the bare-metal
+"embedded" port is the lesser-supported one.  Running under NetBSD
+dramatically cuts porting work, and the OS-mediated TLB walking and
+pmap behavior we'd measure is the path real workloads actually see.
+Published industry numbers are almost universally Linux-hosted, so
+our methodology lines up with the field on the comparability axis.
+
+Cost is run-to-run noise from scheduler/interrupt/page-fault jitter,
+but with single-context (`-c1`), single-user mode, and median-of-N
+reporting (the protocol used by pbench in `benchmark/netbsd-bench/`),
+noise floor is a few percent — well below the resolution we care
+about at current CPU speeds.
+
+**Trademark caveat.**  EEMBC owns the *"CoreMark"* mark; Apache covers
+the code, not the name.  Internal scores must be labeled "unverified,
+not an EEMBC-submitted score" in `BASELINE.md` and benchmark output
+to stay clean of trademark misuse.
+
+**Implementation sketch:**
+1. Vendor upstream under `benchmark/coremark-pro/`, preserve LICENSE
+   and NOTICE files verbatim.
+2. Add `builds/penumbra/netbsd32/` as a copy of
+   `builds/linux/linux32/` with cross-compiler invocation tweaked
+   (`clang --target=penumbra-unknown-netbsd --sysroot=…`) and
+   pthreads omitted (default `num_contexts=1`).
+3. Drive EEMBC's Makefile from a new top-level
+   `make benchmark-coremark-pro` target, output into
+   `build/coremark-pro/`.
+4. Extend `mkrootfs.sh` (or wherever the pbench bundling lives) to
+   copy the 9 workload binaries plus their input data files (cjpeg,
+   parser, zip) into `/usr/local/bin/coremark-pro/`.
+5. Capture baseline in `benchmark/coremark-pro/BASELINE.md`, dated
+   snapshot + HEAD SHA, following the pbench precedent.
+
+**Prerequisites / risks:**
+- libpthread is currently minimal stubs.  Need to verify single-
+  context mode links cleanly without pulling in unimplemented
+  thread primitives before committing to the build integration.
+- FP-heavy workloads (`linear_alg`, `loops-all`, `nnet`, `radix2`)
+  will be dominated by soft-float cost on the current CPU.  Numbers
+  are still meaningful as a baseline but the suite gets a lot more
+  interesting after Phase 5 (FPU).
+- `radix2-big-64k` walks ~512 KB of complex floats — blows past our
+  1 KB caches and 64-entry TLB and is the most interesting workload
+  from a memory-hierarchy perspective.
+
+**Related, separate item.**  CoreMark (singular, not -Pro) is a
+better fit for the *bare-metal* harness — single C file, no float,
+no file I/O, drops cleanly alongside dhrystone in `benchmark/`.
+Plausible to land it first as the dhrystone successor in the
+bare-metal tier, then add CoreMark-Pro to the hosted tier on top of
+pbench.  The split gives a clean two-tier story: bare-metal
+benchmarks measure the CPU in isolation, hosted benchmarks measure
+the system.
