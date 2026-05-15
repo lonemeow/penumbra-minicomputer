@@ -158,6 +158,23 @@ cpu_reboot(int howto, char *bootstr)
  * (bumped by reload+1 each interrupt), and add the current sub-tick
  * offset.  The result is a continuous 32-bit value at 1 MHz, wrapping
  * naturally at 2^32 (~71 minutes).
+ *
+ * Monotonicity: hardware autoloads `count` and latches TM_STATUS.UDF
+ * at the underflow cycle, but `timer_tc_base` is only bumped when
+ * the timer ISR actually runs.  Between hardware underflow and ISR
+ * entry — a window widened by any kernel critical section that
+ * masks interrupts — a naive `base + (reload - count)` would return
+ * a value strictly less than the previous reading, violating the
+ * POSIX CLOCK_MONOTONIC contract.
+ *
+ * Defence: read TM_STATUS in addition to count, so the reader can
+ * detect an unprocessed wrap and advance base by one period.  Sample
+ * timer_tc_base and TM_STATUS on both sides of the count read, retry
+ * if either changed.  On a uniprocessor the ISR preempts the reader
+ * and runs to completion atomically, so the only observable stable
+ * states are pre-ISR (UDF=set, base=N) and post-ISR (UDF=clear,
+ * base=N+period); a snapshot that straddles the ISR shows up as
+ * either base_a != base_b or status_a != status_b and is retried.
  */
 static uint32_t timer_reload_val;
 static volatile uint32_t timer_tc_base;	/* accumulated ticks at last interrupt */
@@ -168,13 +185,37 @@ void	timer_early_init(void);	/* called from startup.c before autoconf */
 static u_int
 timer_get_timecount(struct timecounter *tc)
 {
-	uint32_t count;
+	uint32_t base_a, base_b, count, status_a, status_b;
 
-	__asm __volatile(
-	    "RDSYS %0, %1, %2" : "=r"(count)
-	    : "i"(SYSDEV_TIMER), "i"(TM_COUNT)
-	);
-	return timer_tc_base + (timer_reload_val - count);
+	for (;;) {
+		base_a = timer_tc_base;
+		__asm __volatile(
+		    "RDSYS %0, %1, %2" : "=r"(status_a)
+		    : "i"(SYSDEV_TIMER), "i"(TM_STATUS)
+		);
+		__asm __volatile(
+		    "RDSYS %0, %1, %2" : "=r"(count)
+		    : "i"(SYSDEV_TIMER), "i"(TM_COUNT)
+		);
+		__asm __volatile(
+		    "RDSYS %0, %1, %2" : "=r"(status_b)
+		    : "i"(SYSDEV_TIMER), "i"(TM_STATUS)
+		);
+		base_b = timer_tc_base;
+
+		if (base_a == base_b && status_a == status_b)
+			break;
+	}
+
+	/*
+	 * UDF set in the stable snapshot means hardware has wrapped
+	 * past a period boundary that the ISR hasn't yet processed.
+	 * `count` is from the new period; compensate by advancing
+	 * base by one period.
+	 */
+	if (status_a & TMST_UDF)
+		base_a += timer_reload_val + 1;
+	return base_a + (timer_reload_val - count);
 }
 
 /*
