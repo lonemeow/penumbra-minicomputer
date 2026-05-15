@@ -112,6 +112,39 @@ too, which is not what we want here.
 Tracked tests: `testcase-InstCombine-1.c`, `pr57344-3.c`,
 `pr57344-4.c` (excluded in `test/compiler/excludes.txt`).
 
+## Compiler: G_SCMP / G_UCMP three-way compare legalization
+
+Clang at `-O2` recognises the C idiom `(a > b) - (a < b)` (the standard
+qsort-comparator three-way return) and lowers it to LLVM's `G_SCMP` /
+`G_UCMP` GMIR opcodes.  The Penumbra GISel legalizer has no rule for
+either, so the backend aborts with
+
+```
+fatal error: error in backend: unable to legalize instruction:
+  %4:_(s32) = G_SCMP %2:_(s32), %3:_   (in function: cmp_int)
+```
+
+Reproducible on both `s32` and `s64` operand widths.  The crash is
+*post*-optimization — writing the comparator as explicit branches
+(`if (a < b) return -1; if (a > b) return 1; return 0;`) doesn't help
+because the optimizer re-derives the idiom and re-emits G_SCMP.
+`__attribute__((optnone))` on the function compiles, but that's a
+per-callsite hack — every qsort comparator in real-world code would
+need the attribute.
+
+Impact: any qsort/bsearch comparator that returns the canonical
+three-way result compiles cleanly at `-O0` and `-O1`, then breaks at
+`-O2`.  This affects most existing C codebases that use qsort.
+
+Plausible fix: handle G_SCMP/G_UCMP in `PenumbraLegalizerInfo` via
+`LegalizerHelper::lowerThreeWayCompare()` (the standard expansion to
+two compares and a subtract).  RISC-V and AArch64 both use this path.
+
+Encountered in: `benchmark/netbsd-bench/libc/qsort_int.c` — disabled
+in the pbench Makefile and registry until this lands.  Re-enable by
+restoring `qsort_int.c` to `SRCS` in `benchmark/netbsd-bench/Makefile`
+and uncommenting the registry entry in `benchmark/netbsd-bench/pbench.c`.
+
 ## Kernel: guard page for kernel stack overflow
 
 The kernel u-area (`UPAGES = 4`, 16 KB) has no guard page, so stack
