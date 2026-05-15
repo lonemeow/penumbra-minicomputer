@@ -14,6 +14,9 @@
 #   -k KERNEL       Kernel binary to copy to /netbsd (optional)
 #   -s SIZE_MB      Image size in MB (default: auto-fit with 20% slack)
 #   -m              Minimal mode: rescue + etc + lib only (no /usr)
+#   -i SRC:DST      Overlay file SRC at DST inside the image (repeatable).
+#                   DST must be an absolute path; intermediate dirs are
+#                   created automatically.  Mode 0755 for the file.
 #   -T TOOLDIR      NetBSD tools directory (default: auto-detect)
 #   -v              Verbose output
 #
@@ -36,6 +39,7 @@ SIZE_MB=""
 MINIMAL=0
 TOOLDIR=""
 VERBOSE=0
+OVERLAYS=()
 
 # --- Parse arguments --------------------------------------------------------
 
@@ -44,13 +48,14 @@ usage() {
     exit 1
 }
 
-while getopts "d:o:k:s:mT:vh" opt; do
+while getopts "d:o:k:s:mi:T:vh" opt; do
     case $opt in
         d) DESTDIR="$OPTARG" ;;
         o) OUTPUT="$OPTARG" ;;
         k) KERNEL="$OPTARG" ;;
         s) SIZE_MB="$OPTARG" ;;
         m) MINIMAL=1 ;;
+        i) OVERLAYS+=("$OPTARG") ;;
         T) TOOLDIR="$OPTARG" ;;
         v) VERBOSE=1 ;;
         h) usage ;;
@@ -167,6 +172,57 @@ if [ -n "$KERNEL" ]; then
     chmod 644 "$STAGING/netbsd"
 fi
 
+# Apply overlays: -i SRC:DST entries copy SRC into STAGING/DST, creating
+# intermediate directories as needed.  Spec entries are accumulated in
+# OVERLAY_SPEC and appended to the spec file later.
+OVERLAY_SPEC=""
+declare -A OVERLAY_DIRS_SEEN
+for entry in "${OVERLAYS[@]:-}"; do
+    [ -z "$entry" ] && continue
+    src="${entry%%:*}"
+    dst="${entry#*:}"
+    if [ -z "$src" ] || [ -z "$dst" ] || [ "$src" = "$entry" ]; then
+        echo "Error: malformed overlay '$entry' (expected SRC:DST)" >&2
+        exit 1
+    fi
+    case "$dst" in
+        /*) ;;
+        *)  echo "Error: overlay DST must be absolute: $dst" >&2; exit 1 ;;
+    esac
+    if [ ! -f "$src" ]; then
+        echo "Error: overlay source missing: $src" >&2
+        exit 1
+    fi
+    log "Overlay: $src -> $dst"
+
+    # Walk the destination directory components, creating any that don't
+    # exist already in the staging tree.  Emit dir spec entries for the
+    # ones we create that aren't already in METALOG.
+    rel="${dst#/}"
+    dir_rel="$(dirname "$rel")"
+    if [ "$dir_rel" != "." ]; then
+        IFS='/' read -ra parts <<< "$dir_rel"
+        cur=""
+        for p in "${parts[@]}"; do
+            cur="${cur:+$cur/}$p"
+            mkdir -p "$STAGING/$cur"
+            if [ -z "${OVERLAY_DIRS_SEEN[$cur]:-}" ]; then
+                OVERLAY_DIRS_SEEN[$cur]=1
+                # Skip if METALOG already covers it
+                if [ -f "$DESTDIR/METALOG" ] && \
+                   grep -q "^\\./$cur " "$DESTDIR/METALOG"; then
+                    continue
+                fi
+                OVERLAY_SPEC+="./$cur type=dir uname=root gname=wheel mode=0755"$'\n'
+            fi
+        done
+    fi
+
+    cp "$src" "$STAGING/$rel"
+    chmod 0755 "$STAGING/$rel"
+    OVERLAY_SPEC+="./$rel type=file uname=root gname=wheel mode=0755"$'\n'
+done
+
 # Create a minimal /etc/rc that just drops to a shell
 if [ ! -e "$STAGING/etc/rc" ]; then
     cat > "$STAGING/etc/rc" <<'RCEOF'
@@ -282,6 +338,11 @@ if [ "$CREATED_FSTAB" -eq 1 ]; then
     cat >> "$SPECFILE" <<'FSTABSPECEOF'
 ./etc/fstab type=file uname=root gname=wheel mode=0644
 FSTABSPECEOF
+fi
+
+# Append overlay spec entries (-i SRC:DST), if any.
+if [ -n "$OVERLAY_SPEC" ]; then
+    printf '%s' "$OVERLAY_SPEC" >> "$SPECFILE"
 fi
 
 # --- Compute image size -----------------------------------------------------
