@@ -27,7 +27,7 @@ based on the median.
  work (this file is part of the commit that anchors here).  Future
  snapshots should record both the date and the HEAD SHA so a `git
  log <sha>..` shows what changed between snapshots.
-**Platform**: NetBSD on the Penumbra ISS (`make simulate`)
+**Platform**: ULX3S FPGA, 25 MHz CPU clock, running NetBSD off SD card.
 **Binary**: `pbench` (dynamically linked against libc.so)
 **Notes**: First successful run after fixing
  - kernel `CLOCK_MONOTONIC` monotonicity,
@@ -77,11 +77,12 @@ based on the median.
 
 ### System I/O (dd, not pbench)
 
-Throughput probes via `dd(1)` from the single-user shell.  These are
-not part of `pbench` — they're recorded here because the per-syscall
-costs measured above don't capture *streaming* throughput, and a
-"how fast does the disk read?" / "how fast does the kernel copy?"
-number is useful baseline context when judging pbench results.
+Throughput probes via `dd(1)` from the single-user shell, captured
+on the same platform as the pbench results above (ULX3S FPGA,
+25 MHz CPU clock).  These are not part of `pbench` and are recorded
+here because the per-syscall costs measured above don't capture
+*streaming* throughput, and a "how fast does the disk read?" /
+"how fast does the kernel copy?" number is useful baseline context.
 
 ```
 # dd if=/dev/ld0 of=/dev/null bs=32k count=100
@@ -110,9 +111,9 @@ Interpretation:
 ### Reading this snapshot
 
 - **Per-byte throughput (steady state, biggest size)**
-  - `memcpy`  size=65536 ⇒ 28.81 ms / 65536 B ≈ **440 ns/byte** (~5.5 cycles/byte at 12.5 MHz model)
+  - `memcpy`  size=65536 ⇒ 28.81 ms / 65536 B ≈ **440 ns/byte**
   - `memset`  size=65536 ⇒ 15.18 ms / 65536 B ≈ **232 ns/byte** (~half of memcpy — no read traffic, write-through cache)
-  - `strlen`  len=4096   ⇒  2.53 ms /  4096 B ≈ **618 ns/byte** (~7.7 cycles/byte, byte-at-a-time scan)
+  - `strlen`  len=4096   ⇒  2.53 ms /  4096 B ≈ **618 ns/byte** (byte-at-a-time scan)
 - **Per-call floor (smallest size)**
   - `memcpy`  size=1: 5.77 µs — overhead dominates: volatile load + indirect call + clock-syscall pair
   - `getpid`:        2.64 ms — bare syscall round-trip
