@@ -553,6 +553,148 @@ static void test_l_latency_sweep(Vsdram_adapter_test* d) {
 }
 
 // ────────────────────────────────────────────────────────────
+// Test (m) — spec response coincident with push_real_event.
+//
+// Under the synchronous mock's deterministic timing, the spec
+// response after an LDW normally lands while the FSM is in PRESENT
+// (the FSM transitions WAIT_RSP→PRESENT on the real response, and
+// spec response lands one cycle later — never in BEGIN, so
+// push_real_event can't coincide with it in a single LDW).  Real
+// hardware doesn't have this clean serialization: the dual-clock
+// CDC's phase-dependent latency makes the response land in any
+// state the FSM happens to be in.  To exercise the coincident case
+// here, we exploit a different path: an LDW chain leaves a fresh
+// spec for A+8 in flight at the moment `do_read(A+4)` returns —
+// it was pushed on do_read's final tick.  With N=2 that spec's
+// response is exactly one cycle from arriving, so we can time a
+// fresh request from IDLE to land state=BEGIN on the response
+// cycle and trigger the race deterministically.
+//
+// Cycle alignment (relative to mock_cycle right after do_read(A+4)
+// returns; call it K_push):
+//   • slot_q[0]={A+8, ready_at = K_push+N-1}.
+//   • Cycle K_push: state=IDLE, mock_cycle=K_push, complete_now=0.
+//     We assert i_re=1, addr=B (B != A+8) and eval.
+//   • Tick #1 → edge K_push+1: FSM IDLE→BEGIN.  Post-edge:
+//     state=BEGIN, mock_cycle=K_push+1=ready_at, complete_now=1
+//     combinationally.  push_real_event=1 AND spec_arriving_now=1.
+//     This is the race cycle.
+//   • Tick #2 → edge K_push+2: NBAs commit.  Post-fix:
+//     spec_buffered=0 (FSM's unconditional clear wins NBA last-
+//     write-wins).  Pre-fix: spec_buffered=1 with stale data.
+//
+// The SVA at the bottom of sdram_bus_adapter.sv catches the bad
+// state directly; this test additionally proves the testbench
+// reaches the path and that follow-up LDW for B returns fresh data
+// from the mock (not the stale spec data that would have been
+// buffered).
+// ────────────────────────────────────────────────────────────
+static void test_m_resp_arrival_coincident_push(Vsdram_adapter_test* d) {
+    printf("── (m) spec response coincident with push_real_event ──\n");
+    reset(d);
+
+    // N=2 is the only latency where the alignment fits without
+    // padding ticks (response arrives exactly one cycle after
+    // do_read(A+4) returns).  Other latencies would need N-2 pad
+    // ticks between do_read and the i_re assertion.
+    const uint8_t N = 2;
+    d->i_mock_latency = N;
+    d->i_mock_stall = 0;
+
+    const uint32_t A = 0x00900000u;
+    const uint32_t B = 0x00910000u;  // != A+8 (would alias the spec)
+
+    // Prime: LDW A populates spec buffer for A+4.
+    uint32_t r1 = do_read(d, A, "(m) LDW A");
+    check_eq(r1, expected_data(A), "(m) LDW A primary");
+
+    // Consume the buffer with LDW A+4.  This takes the
+    // spec_hit_buffered branch, which queues a new spec for A+8.
+    // do_read's final tick (which drops i_re, transitioning
+    // PRESENT→IDLE) is also the cycle the queued spec push fires
+    // — so when this returns we have:
+    //   state=IDLE, spec_in_flight=1, spec_addr=A+8,
+    //   slot_q[0].ready_at = K_push + N - 1 = K_push + 1 (for N=2)
+    // i.e. the spec response is exactly one tick away.
+    uint32_t r2 = do_read(d, A + 4, "(m) LDW A+4 (consume buffer)");
+    check_eq(r2, expected_data(A + 4), "(m) LDW A+4 hit buffered");
+
+    // Sanity: spec must be in flight (not buffered, not idle) for
+    // the alignment to work.  If it's not in flight, do_read's
+    // timing changed or N is not 2.
+    if (!d->o_dbg_spec_in_flight) {
+        printf("  [FAIL] (m) spec not in flight after do_read(A+4) — "
+               "test prerequisite not met\n");
+        errors++;
+        return;
+    }
+
+    // Assert i_re=1, addr=B before the next edge.  This is the
+    // alignment trigger: at edge K_push+1 the FSM commits
+    // IDLE→BEGIN AND mock_cycle advances to ready_at.  The cycle
+    // after that edge sees state=BEGIN with complete_now=1, which
+    // is the race cycle.
+    d->i_addr = B;
+    d->i_re = 1;
+    d->i_we = 0;
+    d->eval();
+
+    tick(d);  // edge K_push+1: state IDLE→BEGIN, response arrives
+    // Between ticks: this is the race cycle.  push_real_event and
+    // spec_arriving_now must both be high combinationally.  If
+    // either isn't, the alignment is wrong and the test below would
+    // pass for unrelated reasons.
+    bool got_coincidence =
+        d->o_dbg_push_real_event && d->o_dbg_spec_arriving_now;
+    if (!got_coincidence) {
+        printf("  [FAIL] (m) race cycle alignment missed — "
+               "push_real_event=%u spec_arriving_now=%u\n",
+               (unsigned)d->o_dbg_push_real_event,
+               (unsigned)d->o_dbg_spec_arriving_now);
+        errors++;
+        d->i_re = 0;
+        return;
+    }
+    printf("  [PASS] (m) race cycle reached "
+           "(push_real_event && spec_arriving_now both high)\n");
+
+    tick(d);  // edge K_push+2: race NBAs commit
+
+    // The SVA inside sdram_bus_adapter.sv fires if spec_buffered=1
+    // here (post-fix should be 0).  Verilator runs SVAs as $error
+    // and increments its assert count; this is the same path that
+    // the regression sentinel uses.  We also check the debug port
+    // directly so this test prints a recognizable PASS/FAIL line.
+    if (d->o_dbg_spec_buffered) {
+        printf("  [FAIL] (m) spec_buffered=1 after coincident cycle — "
+               "stale spec (addr=0x%08X)\n", d->o_dbg_spec_addr);
+        errors++;
+    } else {
+        printf("  [PASS] (m) spec_buffered cleared at coincident cycle\n");
+    }
+
+    // Drain the LDW B already in progress and verify fresh data.
+    // If the bug were present and B happened to alias spec_addr,
+    // this would return stale spec data instead of MOCK_TAG|B.
+    // With B != A+8 the data check is a sanity check on the
+    // post-race FSM, not the race itself.
+    int waited = 0;
+    while (d->o_busy) {
+        tick(d);
+        if (++waited > 200) {
+            printf("  [FAIL] (m) busy never cleared after race cycle\n");
+            errors++;
+            d->i_re = 0;
+            return;
+        }
+    }
+    uint32_t got_b = d->o_rdata;
+    d->i_re = 0;
+    tick(d);
+    check_eq(got_b, expected_data(B), "(m) LDW B post-coincident-cycle");
+}
+
+// ────────────────────────────────────────────────────────────
 int main(int argc, char** argv) {
     (void)argc; (void)argv;
     Vsdram_adapter_test* d = new Vsdram_adapter_test;
@@ -571,6 +713,7 @@ int main(int argc, char** argv) {
     test_j_long_sequential_write(d);
     test_k_memcpy_interleave(d);
     test_l_latency_sweep(d);
+    test_m_resp_arrival_coincident_push(d);
 
     delete d;
 

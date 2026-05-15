@@ -47,6 +47,13 @@ module sdram_adapter_test (
     output logic        o_dbg_spec_in_flight,
     output logic        o_dbg_spec_buffered,
     output logic [31:0] o_dbg_spec_addr,
+    // Race-detection witnesses: these are combinational signals
+    // inside the adapter that, when both high in the same cycle,
+    // identify the spec-buffered race we hunt in test (m).  Exposed
+    // so the testbench can positively confirm the race cycle is
+    // reached, rather than relying on spec_buffered indirectly.
+    output logic        o_dbg_push_real_event,
+    output logic        o_dbg_spec_arriving_now,
 
     // ── Mock observability ────────────────────────────────────
     output logic        o_mock_slot0_valid,
@@ -100,11 +107,13 @@ module sdram_adapter_test (
     /* verilator lint_on PINCONNECTEMPTY */
 
     // Expose adapter internals for the testbench.
-    assign o_dbg_tag_count      = u_dut.tag_count;
-    assign o_dbg_tag_fifo       = u_dut.tag_fifo;
-    assign o_dbg_spec_in_flight = u_dut.spec_in_flight;
-    assign o_dbg_spec_buffered  = u_dut.spec_buffered;
-    assign o_dbg_spec_addr      = u_dut.spec_addr;
+    assign o_dbg_tag_count        = u_dut.tag_count;
+    assign o_dbg_tag_fifo         = u_dut.tag_fifo;
+    assign o_dbg_spec_in_flight   = u_dut.spec_in_flight;
+    assign o_dbg_spec_buffered    = u_dut.spec_buffered;
+    assign o_dbg_spec_addr        = u_dut.spec_addr;
+    assign o_dbg_push_real_event  = u_dut.push_real_event;
+    assign o_dbg_spec_arriving_now = u_dut.spec_arriving_now;
 
     // ── Behavioral mock memory ────────────────────────────────
     // Two-slot in-order pipeline.  slot[0] is the head (closest to

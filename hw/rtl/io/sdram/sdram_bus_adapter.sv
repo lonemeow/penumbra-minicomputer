@@ -40,6 +40,31 @@
 // avoids a class of same-cycle race conditions between the BEGIN
 // "claim" and the response handler "buffer" updates.
 //
+// Spec-lifecycle states and the response-arrival cycle:
+//   The spec passes through four observable states from the FSM's
+//   perspective:
+//     (1) idle          — no spec; spec_in_flight=0, spec_buffered=0
+//     (2) pending_push  — spec_pending_push=1, queued for CDC
+//     (3) in_flight     — spec_in_flight=1, awaiting response
+//     (4) buffered      — spec_buffered=1, data ready for cache hit
+//   The FSM's `push_real_event` branch reads these flops to decide
+//   whether to abandon a pending/in-flight spec and whether to queue
+//   a new one.  *But* there is a fifth state, invisible at clock-edge
+//   granularity: the **response-arrival cycle**, where i_rsp_valid=1
+//   for the spec tag but the spec_buffered flop has not yet committed
+//   (response routing's NBA fires at the next edge).  During this
+//   cycle, naively reading `spec_in_flight` reports 1 and reading
+//   `spec_buffered` reports 0 — a snapshot view that doesn't reflect
+//   the imminent transition.  `spec_arriving_now` is the named witness
+//   for this transition cycle; the push_real_event branch consults it
+//   to make correct abandonment and re-push decisions.  Without that
+//   signal, a same-cycle collision between push_real_event and the
+//   spec response would leave spec_buffered=1 holding stale data
+//   (the FSM's guarded clear would not fire), and the cache would
+//   later read pre-write contents for any address aliasing spec_addr.
+//   That race manifested as the long-running userspace corruption bug
+//   documented in `doc/bus-arbiter-userspace-bug.md`.
+//
 // o_busy contract (per `hw/CLAUDE.md` § Memory Access):
 //   • o_busy is high while a request is being served.
 //   • o_busy drops on the *same* cycle that o_rdata is valid (reads)
@@ -161,6 +186,16 @@ module sdram_bus_adapter (
     wire push_event      = push_real_event || push_spec_event;
     wire next_tag        = push_spec_event;   // 0 = real, 1 = spec
 
+    // Witness for the spec response-arrival cycle (see the
+    // "Spec-lifecycle states" section in the header).  Used in the
+    // push_real_event branch to distinguish "spec is in flight, will
+    // arrive in a future cycle" from "spec is arriving THIS cycle,
+    // response routing will clear spec_in_flight at the same edge."
+    // Without this distinction, push_real_event would either leave
+    // a stale spec_buffered bit set or arm spec_abandoned with no
+    // pending response — both silent-corruption bugs.
+    wire spec_arriving_now = i_rsp_valid && (tag_count > 0) && (tag_fifo[0] == 1'b1);
+
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
             state              <= ADP_IDLE;
@@ -269,10 +304,58 @@ module sdram_bus_adapter (
                         // spec read.  Cache fills go through the
                         // spec_hit branches, never here, so this
                         // unconditional abandonment costs no chain.
-                        if (spec_in_flight) spec_abandoned <= 1'b1;
-                        if (spec_buffered)  spec_buffered  <= 1'b0;
+                        //
+                        // Three same-cycle interactions to handle,
+                        // each tied to one spec-lifecycle stage:
+                        //
+                        // (a) spec_buffered already 1 (pre-edge):
+                        //     clear it.  The buffered data is for
+                        //     spec_addr; if the new real request is
+                        //     a write aliasing spec_addr, leaving
+                        //     the buffer would cause a subsequent
+                        //     read to return pre-write data.  Even
+                        //     when there's no aliasing, the buffer
+                        //     is now stale relative to the
+                        //     workload; consume the chain by
+                        //     re-queueing below.
+                        //
+                        // (b) spec_in_flight and !spec_arriving_now:
+                        //     the response will arrive in a future
+                        //     cycle.  Set spec_abandoned so the
+                        //     response routing block discards it.
+                        //     Critically, *don't* set spec_abandoned
+                        //     when spec_arriving_now — the response
+                        //     is consumed THIS cycle, there is no
+                        //     future response to discard, and a
+                        //     stale spec_abandoned flag would
+                        //     silently drop the NEXT unrelated spec.
+                        //
+                        // (c) spec_arriving_now: response routing
+                        //     schedules `spec_buffered <= 1` THIS
+                        //     cycle.  Our unconditional
+                        //     `spec_buffered <= 0` below executes
+                        //     LATER in always_ff source order, so
+                        //     NBA last-write-wins makes the clear
+                        //     stick.  This is load-bearing: an
+                        //     `if (spec_buffered)` guard would NOT
+                        //     fire (pre-edge value is 0), leaving
+                        //     spec_buffered=1 with stale data
+                        //     post-edge.  This is exactly the bug
+                        //     fixed in the doc/bus-arbiter-
+                        //     userspace-bug.md investigation.
+                        //     The SVA at end-of-module catches any
+                        //     future regression of this ordering.
+                        spec_buffered <= 1'b0;
+                        if (spec_in_flight && !spec_arriving_now) begin
+                            spec_abandoned <= 1'b1;
+                        end
+                        // New spec push: allowed if no spec is
+                        // currently outstanding OR if the current
+                        // spec is being consumed this cycle (in
+                        // which case spec_in_flight will clear at
+                        // the same edge that this new push lands).
                         if (i_re && !spec_pending_push &&
-                            !spec_in_flight && !spec_buffered) begin
+                            (!spec_in_flight || spec_arriving_now) && !spec_buffered) begin
                             spec_pending_push <= 1'b1;
                             spec_push_addr    <= i_addr + 32'd4;
                         end
@@ -352,5 +435,22 @@ module sdram_bus_adapter (
     assert property (@(posedge i_clk) disable iff (i_rst)
         pop_event |-> (tag_count > 2'd0))
         else $error("sdram_bus_adapter: pop when tag_count==0");
+
+    // Spec-lifecycle race: when the FSM accepts a new real request on
+    // the exact cycle a spec response arrives, the response routing
+    // block schedules `spec_buffered <= 1` while the FSM's same-cycle
+    // logic must override that with `spec_buffered <= 0` (the buffer
+    // would otherwise hold stale data, since the new real request
+    // makes the old spec semantically dead — same-address writes
+    // would silently read pre-write values).  This is enforced by
+    // NBA source-order: the FSM's unconditional clear must execute
+    // *after* the response routing's set.  This assertion catches
+    // any refactor that reverses that order or reintroduces a guard
+    // around the FSM clear.  See the push_real_event branch in the
+    // ADP_BEGIN case and `spec_arriving_now`'s definition for the
+    // detailed reasoning.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (push_real_event && spec_arriving_now) |=> !spec_buffered)
+        else $error("sdram_bus_adapter: spec_buffered=1 after push_real_event coincident with spec response — stale-spec race");
 
 endmodule
