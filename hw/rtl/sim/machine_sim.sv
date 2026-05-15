@@ -170,7 +170,7 @@ module machine_sim
     // ══════════════════════════════════════════════════════════
 
     // ── Device parameters ──────────────────────────────────
-    localparam int RAM_WORDS      = 4 * 1024 * 1024;  // 16 MB
+    localparam int RAM_WORDS      = 8 * 1024 * 1024;  // 32 MB (match ULX3S)
     localparam int ROM_WORDS      = 16384;             // 64 KB
     localparam int UART_PAGE_SIZE = 4096;              // 4 KB
 
