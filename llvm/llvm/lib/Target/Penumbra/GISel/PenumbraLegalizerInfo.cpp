@@ -308,6 +308,16 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   getActionDefinitionsBuilder({G_SMIN, G_SMAX, G_UMIN, G_UMAX})
       .lower();
 
+  // Three-way compare: clang at -O2 recognises the (a>b)-(a<b) qsort
+  // comparator idiom and emits @llvm.scmp / @llvm.ucmp, which the
+  // IRTranslator turns into G_SCMP / G_UCMP.  The result is a small
+  // integer in {-1, 0, +1}; the source operands can be any scalar
+  // width (i32 / i64 in practice).  Lower via the generic helper
+  // LegalizerHelper::lowerThreewayCompare(), which emits two G_ICMPs
+  // plus a subtract — both of which our existing s32/s64 rules
+  // already handle.
+  getActionDefinitionsBuilder({G_SCMP, G_UCMP}).lower();
+
   // G_ABS: the optimizer generates this at -O1+ for signed division.
   // Lower to the generic SELECT expansion (icmp + negate + select).
   getActionDefinitionsBuilder(G_ABS).lower();

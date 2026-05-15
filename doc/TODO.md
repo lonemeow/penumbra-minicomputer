@@ -121,38 +121,21 @@ too, which is not what we want here.
 Tracked tests: `testcase-InstCombine-1.c`, `pr57344-3.c`,
 `pr57344-4.c` (excluded in `test/compiler/excludes.txt`).
 
-## Compiler: G_SCMP / G_UCMP three-way compare legalization
+## Compiler: G_SCMP / G_UCMP three-way compare -- DONE
 
-Clang at `-O2` recognises the C idiom `(a > b) - (a < b)` (the standard
-qsort-comparator three-way return) and lowers it to LLVM's `G_SCMP` /
-`G_UCMP` GMIR opcodes.  The Penumbra GISel legalizer has no rule for
-either, so the backend aborts with
+`G_SCMP`/`G_UCMP` hooked into `PenumbraLegalizerInfo` with `.lower()`,
+which dispatches to `LegalizerHelper::lowerThreewayCompare()`.  The
+helper emits two `G_ICMP`s plus a subtract; both ride our existing
+s32/s64 rules (s64 narrows to multi-word compare via
+`clampScalar(1, s32, s32)` on `G_ICMP`).  Regression test at
+`llvm/llvm/test/CodeGen/Penumbra/threeway-cmp.ll`; `qsort_int` re-enabled
+in `benchmark/netbsd-bench/`.
 
-```
-fatal error: error in backend: unable to legalize instruction:
-  %4:_(s32) = G_SCMP %2:_(s32), %3:_   (in function: cmp_int)
-```
-
-Reproducible on both `s32` and `s64` operand widths.  The crash is
-*post*-optimization — writing the comparator as explicit branches
-(`if (a < b) return -1; if (a > b) return 1; return 0;`) doesn't help
-because the optimizer re-derives the idiom and re-emits G_SCMP.
-`__attribute__((optnone))` on the function compiles, but that's a
-per-callsite hack — every qsort comparator in real-world code would
-need the attribute.
-
-Impact: any qsort/bsearch comparator that returns the canonical
-three-way result compiles cleanly at `-O0` and `-O1`, then breaks at
-`-O2`.  This affects most existing C codebases that use qsort.
-
-Plausible fix: handle G_SCMP/G_UCMP in `PenumbraLegalizerInfo` via
-`LegalizerHelper::lowerThreeWayCompare()` (the standard expansion to
-two compares and a subtract).  RISC-V and AArch64 both use this path.
-
-Encountered in: `benchmark/netbsd-bench/libc/qsort_int.c` — disabled
-in the pbench Makefile and registry until this lands.  Re-enable by
-restoring `qsort_int.c` to `SRCS` in `benchmark/netbsd-bench/Makefile`
-and uncommenting the registry entry in `benchmark/netbsd-bench/pbench.c`.
+The i64 expansion is verbose (16 BBs — two s64 ICMPs each become a
+three-block hi/lo/eq diamond, materialized as four `mov` selects).
+A peephole that shares the hi-word compare across the two ICMPs is
+a plausible follow-up but not on the critical path for qsort's int
+comparator, which is the i32 case.
 
 ## Kernel: guard page for kernel stack overflow
 
