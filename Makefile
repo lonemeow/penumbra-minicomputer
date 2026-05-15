@@ -417,7 +417,7 @@ sdimage-rootfs: rootfs
 .PHONY: benchmark-netbsd
 benchmark-netbsd:
 	@$(MAKE) -C benchmark/netbsd-bench LLVM_PREFIX=$(LLVM_PREFIX) \
-		DESTDIR=$(DESTDIR)
+		DESTDIR=$(abspath $(DESTDIR))
 	@echo "pbench binaries: $(NETBSD_BENCH_DIR)/pbench{,-static}"
 
 # ── Benchmark SD image and runners ───────────────────────────
