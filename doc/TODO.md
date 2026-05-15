@@ -34,13 +34,22 @@ controller driver. Kernel mounts FFS root from `ld0f`.
 
 ## Roadmap
 
-### Phase 3.5: SPI FIFO + IRQ-driven pmci
+### Phase 3.5: SPI FIFO + IRQ-driven pmci  — HIGH PRIORITY
 
-Extend `pmci_exec_command` in `netbsd/sys/arch/penumbra/penumbra/pmci.c`
-to use the SPI v2 FIFO-burst engine for the 512-byte data phase, with
-`intr_establish_xname()` wakeups on XFER_DONE (large-FIFO) or
-TX_THRESH/RX_THRESH (small-FIFO, discrete build). Polled baseline
-remains the reference implementation.
+**Current pain point.**  `dd if=/dev/ld0 of=/dev/null bs=32k count=100`
+reports **61 KB/s** on real hardware (ULX3S FPGA — see
+`benchmark/netbsd-bench/BASELINE.md`).  That's the dominant cost of
+`/etc/rc` and any disk-touching workload; single-user boot is visibly
+slow because of it.  The SPI v2 controller
+has a working FIFO engine in hardware, but `pmci_exec_command` in
+`netbsd/sys/arch/penumbra/penumbra/pmci.c` still does polled single-byte
+transfers for the 512-byte data phase, which is leaving most of the
+controller's throughput on the floor.
+
+Extend `pmci_exec_command` to use the SPI v2 FIFO-burst engine for
+the 512-byte data phase, with `intr_establish_xname()` wakeups on
+XFER_DONE (large-FIFO) or TX_THRESH/RX_THRESH (small-FIFO, discrete
+build).  Polled baseline remains the reference implementation.
 
 ### Phase 4: Hardware MUL/DIV
 
@@ -178,6 +187,121 @@ Implementation sketch for Penumbra:
 After this lands, kernel stack overflow produces a clean bus fault
 with EPC pointing at the offending instruction, not a nested TLB
 miss in the trap handler.
+
+## Kernel: fork() is unreasonably slow
+
+`pbench kernel fork_exit` reports **~600 ms per fork+exit+wait round
+trip** (see `benchmark/netbsd-bench/BASELINE.md`).  That's two orders
+of magnitude beyond what the workload should cost, and it makes the
+system painful to use: `/etc/rc` runs many short commands sequentially,
+single-user boot stalls visibly, and any shell pipeline is sluggish.
+For comparison, `pipe_pingpong` (which exercises 2 context switches +
+4 syscalls per round trip) reports ~19 ms — so context-switch cost
+alone is ~30× cheaper than a fork.  The bulk of the 600 ms is
+fork-specific work, not generic scheduler/syscall overhead.
+
+Likely contributors, in rough order of suspicion:
+- **`pmap_copy` over the parent's full page table.**  Penumbra's pmap
+  copies the parent's L1 + L2 entries on fork rather than relying on
+  COW from `uvm_fork()`.  For a process with even a moderate address
+  space (kernel-faulted vsyscall pages, libc, ld.elf_so, stack, etc.)
+  that's a lot of L2 walking, each touch through cached RAM at L1-miss
+  cost.  RISC-V/ARM ports defer most of this to uvm_fault on first
+  use.
+- **`pmap_create`** allocates a fresh L1 page and zeros it via the L2
+  window pinned-TLB slot.  Per-byte cost is fine, but if `pmap_destroy`
+  on the child's exit is also synchronous and re-walks the L1/L2 to
+  free everything, fork+exit pays twice.
+- **Software TLB miss on first user-mode return.**  Every fault on
+  the child's first instructions traps to the miss handler.  No
+  ASID prefetch / pre-warming exists, so every page is faulted in
+  the slow way.
+- **u-area allocation** (UPAGES=4 = 16 KB) is `uvm_km_alloc(...,
+  UVM_KMF_ZERO)` — synchronous zero of 16 KB through the kernel map.
+  Minor on its own but adds up.
+
+Investigation order: collect cycle counters around `cpu_lwp_fork`,
+`pmap_copy`, and the first user-mode return, then attribute the
+600 ms across them.  Quickest likely win: thin out `pmap_copy` to a
+COW-style "share the parent's PTEs read-only and let uvm_fault clone
+on demand" model, mirroring what other 32-bit GISel ports do.
+
+## Hardware: UART RX FIFO — paste-friendliness
+
+`hw/rtl/io/uart.sv` is NS16450-compatible: no FIFO, single-byte
+RX holding register.  Copy/pasting commands into the serial console
+loses characters whenever the kernel can't service the RX interrupt
+between successive bytes — at 115200 baud, that's a ~86 µs window,
+which is tight on a 25 MHz CPU under any moderate load.  In practice this means test runs require typing
+commands by hand instead of pasting, which is annoying.
+
+Promote to NS16550A semantics: add a small RX FIFO (16 bytes is the
+standard depth and matches what NetBSD's `com(4)` already expects when
+it sees the 16550A signature in IIR).  Specifically:
+
+- Add an RX FIFO (~16 deep) and a TX FIFO (same depth or smaller —
+  TX is less critical since we can poll-wait for THRE).
+- Wire FCR so writes are no longer ignored: FCR[0]=FIFO enable,
+  FCR[1]=RX reset, FCR[2]=TX reset, FCR[7:6]=RX trigger level
+  (1/4/8/14 bytes).
+- Update IIR to report the FIFO-enabled bits (IIR[7:6]=11 when FIFO
+  enabled, 00 otherwise) so `com(4)`'s probe sees the upgrade.
+- Add LSR/IIR semantics for "character timeout" — the 16550A asserts
+  RX-available after 4-character-times of idle even below the trigger
+  threshold, so partial bursts still deliver promptly.
+
+NetBSD-side: `com(4)` autodetects 16550A and turns on FIFO mode if
+IIR reports it — no kernel change should be needed beyond verifying
+the autodetect runs cleanly with the new RTL.
+
+`spi_fifo.sv` already exists for the SPI controller; the same
+ring-buffer pattern should drop into `uart.sv` with minor renaming.
+
+## Hardware: scratch SPRs for fast trap entry
+
+**Proposal.**  Add three new scratch special-purpose registers
+accessible via `WRSPR`/`RDSPR` (current SPR encoding uses `IR[15:12]`
+so there's room — see `doc/system/sysregs.md`).  Name them `SCR0`,
+`SCR1`, `SCR2`.  No semantics beyond "general-purpose 32-bit storage
+the CPU exposes for fast trap-handler scratch use."
+
+**Why.**  Today the trap entry path immediately stores caller
+registers into the kernel scratch page (one of the pinned-TLB slots,
+see `netbsd/sys/arch/penumbra/CLAUDE.md`).  Even with the pinned TLB
+slot the saves are RAM accesses, which on Penumbra means CDC bridge
++ SDRAM latency on every trap.  The TLB miss fast path — the
+hottest trap by far on a software-managed TLB — pays this on every
+miss, ahead of any actual TLB work.
+
+With three scratch SPRs, the entry sequence becomes:
+```
+  WRSPR R1, SCR0       ; save R1 to CPU-internal storage
+  WRSPR R2, SCR1
+  WRSPR R3, SCR2
+  ; ... use R1-R3 freely for PTE walk, vector dispatch, etc.
+  RDSPR R3, SCR2
+  RDSPR R2, SCR1
+  RDSPR R1, SCR0
+  RFE
+```
+No memory traffic on the entry/exit prologues.  The TLB miss handler
+can do its entire walk (compute VPN-indexed L2 slot, load PTE, write
+TLB entry) without ever spilling.
+
+**Cost.**  Three 32-bit registers in the SPR file (effectively three
+flip-flops × 32 = 96 FFs plus mux logic), plus SPR-decode entries
+for SCR0/1/2.  Trivial in both the FPGA and the eventual discrete
+build.  No microcode or ISA encoding changes — `WRSPR`/`RDSPR` already
+exist and decode the SPR number from `IR[15:12]`.
+
+**Expected payoff.**  Largest impact on the TLB miss fast path, which
+runs on essentially every userland page-fault and every cold page
+read.  Order of impact: tens of cycles per trap eliminated.  At a
+25 MHz CPU clock and typical miss rates, that compounds into
+measurable end-to-end gains for memory-touching benchmarks
+(`memcpy`, `strlen`) and especially for fork-heavy workloads (see
+"Kernel: fork() is unreasonably slow" above, where the first
+user-mode return after fork pays a flurry of misses).
 
 ## Compiler: support `[R0 + offset]` absolute addressing for low memory
 
