@@ -109,10 +109,20 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #define SD_CMD8_CRC		0x87	/* CRC7(0x48, 0x1AA) << 1 | 1 */
 
 /*
- * Data-phase start token for single-block read/write.  Multi-block
- * writes use 0xFC/0xFD instead; we do not currently emit those.
+ * Data-phase tokens.
+ *   SD_DATA_TOKEN       : single-block read/write (CMD17, CMD24) and
+ *                         every block of a multi-block READ (CMD18).
+ *   SD_MBW_DATA_TOKEN   : multi-block WRITE (CMD25) — sent before each
+ *                         block within the multi-block envelope.
+ *   SD_MBW_STOP_TOKEN   : multi-block WRITE end-of-stream.  Replaces
+ *                         the data token of the final block to signal
+ *                         "no more blocks coming"; the card flushes and
+ *                         drives busy until the last write commits.
+ *                         No CRC and no data response follow it.
  */
 #define SD_DATA_TOKEN		0xFE
+#define SD_MBW_DATA_TOKEN	0xFC
+#define SD_MBW_STOP_TOKEN	0xFD
 
 /*
  * Write data response, returned one byte after the 16-bit CRC in
@@ -393,6 +403,12 @@ pmci_wait_token(struct pmci_softc *sc, int retries, uint8_t *tok)
  * the internal operation completes.  SD spec Nbr can be ~250 ms
  * worst case; SD_BUSY_RETRIES at ~1 µs/byte gives an ~85 ms envelope,
  * which is adequate for the ISS and typical SDHC cards.
+ *
+ * Returns success on the first 0xFF byte: appropriate for R1b
+ * commands (CMD12, CMD13, CMD7) where the busy period may be
+ * shorter than one byte time on fast operations.  See
+ * pmci_wait_busy_strict() for the multi-block-write variant that
+ * additionally requires having seen busy before exiting.
  */
 static int
 pmci_wait_busy(struct pmci_softc *sc, int retries)
@@ -401,6 +417,39 @@ pmci_wait_busy(struct pmci_softc *sc, int retries)
 
 	for (i = 0; i < retries; i++) {
 		if (pmci_byte(sc, SD_IDLE) == SD_IDLE)
+			return 0;
+	}
+	return ETIMEDOUT;
+}
+
+/*
+ * pmci_wait_busy_strict — wait for busy assertion AND release.
+ *
+ * Between the data-response token and the card's actual busy
+ * assertion, there can be a 1-byte 0xFF gap.  A "wait until first
+ * 0xFF" loop exits at that gap byte, declaring "busy released"
+ * before the card was even busy.  For single-block writes and
+ * generic R1b commands this is harmless — nothing else happens on
+ * the SPI bus afterwards.  For multi-block CMD25 it's a real bug:
+ * the next 0xFC token lands while the card is still programming,
+ * and the card silently misses the block.  Empirically observed as
+ * intermittent "error writing fsbn ..." with successful retry.
+ *
+ * Use only inside the multi-block-write block-step loop and the
+ * trailing 0xFD-stop-tran flush, where the card is guaranteed to
+ * assert busy.
+ */
+static int
+pmci_wait_busy_strict(struct pmci_softc *sc, int retries)
+{
+	bool saw_busy = false;
+	int i;
+
+	for (i = 0; i < retries; i++) {
+		uint8_t b = pmci_byte(sc, SD_IDLE);
+		if (b != SD_IDLE)
+			saw_busy = true;
+		else if (saw_busy)
 			return 0;
 	}
 	return ETIMEDOUT;
@@ -548,99 +597,183 @@ pmci_burst(struct pmci_softc *sc, const uint8_t *tx_buf, uint8_t *rx_buf,
 	return 0;
 }
 
+/*
+ * pmci_read — handle the data phase of a block read.
+ *
+ * Covers both CMD17 (READ_BLOCK_SINGLE, c_opcode == 17, c_datalen == 512)
+ * and CMD18 (READ_BLOCK_MULTIPLE, c_opcode == 18, c_datalen == N × 512).
+ * Per the SD-SPI spec the per-block framing is identical: data token
+ * 0xFE, 512 data bytes, 2 CRC bytes.  In CMD18 the card streams blocks
+ * back-to-back with the next 0xFE token appearing 0..Nac idle bytes
+ * after the previous CRC; the token poll loop handles that gap
+ * naturally.  CMD12 (STOP_TRANSMISSION) is issued by the MI sdmmc
+ * layer as a separate exec_command call after we return.
+ */
 static void
 pmci_read(struct pmci_softc *sc, struct sdmmc_command *cmd)
 {
 	uint8_t *data = cmd->c_data;
 	uint8_t tok;
-	int error, i;
+	int error, i, b, nblocks;
+	const int blklen = cmd->c_blklen;
 
 	/*
-	 * Token poll stays single-byte: SD spec Nac allows up to ~100 ms
-	 * between the R1 response and the data-start token, so we have to
-	 * iterate the polled byte engine until 0xFE appears.  Bursting
-	 * would over-read past the token boundary.
+	 * Contract from sdmmc_mem.c: c_blklen is 512 for the normal
+	 * read/write path (CMD17/18/24/25) and equal to c_datalen for
+	 * SPI-mode CSD/CID/EXT_CSD reads (sdmmc_mem_send_cxd_data,
+	 * blklen = 16 for CSD/CID, 512 for EXT_CSD).  Either way the
+	 * per-block framing on the wire is identical — token + blklen
+	 * bytes + 2 CRC — and c_datalen is always a whole multiple of
+	 * c_blklen.  Assert that invariant directly.
 	 */
-	error = pmci_wait_token(sc, SD_DATA_TOKEN_RETRIES, &tok);
-	if (error) {
-		cmd->c_error = error;
-		return;
-	}
-	if (tok != SD_DATA_TOKEN) {
-		cmd->c_error = EIO;
-		return;
-	}
+	KASSERT(blklen > 0);
+	KASSERT(cmd->c_datalen > 0 && (cmd->c_datalen % blklen) == 0);
 
-	/*
-	 * Bulk payload via FIFO burst when the controller has room.  At
-	 * 512 entries (current ULX3S build) the entire SD block fits in
-	 * one burst.  A smaller-FIFO variant — or a future caller asking
-	 * for an unusually large payload — would fail the size check and
-	 * fall through to the polled byte loop; threshold-IRQ refills
-	 * for that case are a separate Phase 3.5 follow-up.
-	 */
-	if (sc->sc_fifo_depth >= (uint32_t)cmd->c_datalen) {
-		error = pmci_burst(sc, NULL, data, cmd->c_datalen);
+	nblocks = cmd->c_datalen / blklen;
+
+	for (b = 0; b < nblocks; b++) {
+		/*
+		 * Token poll stays single-byte: SD spec Nac allows up to
+		 * ~100 ms between R1 (or the previous block's CRC, for
+		 * CMD18) and the next data-start token.  Bursting would
+		 * over-read past the token boundary.
+		 */
+		error = pmci_wait_token(sc, SD_DATA_TOKEN_RETRIES, &tok);
 		if (error) {
 			cmd->c_error = error;
 			return;
 		}
-	} else {
-		for (i = 0; i < cmd->c_datalen; i++)
-			data[i] = pmci_byte(sc, SD_IDLE);
-	}
+		if (tok != SD_DATA_TOKEN) {
+			cmd->c_error = EIO;
+			return;
+		}
 
-	/* Discard 16-bit CRC. */
-	(void)pmci_byte(sc, SD_IDLE);
-	(void)pmci_byte(sc, SD_IDLE);
+		if (sc->sc_fifo_depth >= (uint32_t)blklen) {
+			error = pmci_burst(sc, NULL, data, blklen);
+			if (error) {
+				cmd->c_error = error;
+				return;
+			}
+		} else {
+			for (i = 0; i < blklen; i++)
+				data[i] = pmci_byte(sc, SD_IDLE);
+		}
+
+		/* Discard 16-bit CRC. */
+		(void)pmci_byte(sc, SD_IDLE);
+		(void)pmci_byte(sc, SD_IDLE);
+
+		data += blklen;
+	}
 }
 
+/*
+ * pmci_write — handle the data phase of a block write.
+ *
+ * CMD24 (single, c_opcode == 24) and CMD25 (multi, c_opcode == 25)
+ * share most of the framing — pad + data token + 512 bytes + CRC +
+ * data-response token + busy-wait per block — but differ in the
+ * token used for each block and in how the transfer is closed:
+ *
+ *   CMD24: data token = 0xFE; after the single block's busy-wait,
+ *          we return and the MI sdmmc layer drives no follow-up.
+ *
+ *   CMD25: data token = 0xFC for every block; after the last block's
+ *          busy-wait, send a pad byte and a 0xFD "stop tran" token
+ *          (no CRC, no response token) and wait for the card's final
+ *          busy to release.  The MI sdmmc layer separately issues
+ *          CMD12 STOP_TRANSMISSION after we return.
+ */
 static void
 pmci_write(struct pmci_softc *sc, struct sdmmc_command *cmd)
 {
 	const uint8_t *data = cmd->c_data;
 	uint8_t resp;
-	int error, i;
+	int error, i, b, nblocks;
+	const int blklen = cmd->c_blklen;
+	const bool multi = (cmd->c_opcode == MMC_WRITE_BLOCK_MULTIPLE);
+	const uint8_t token = multi ? SD_MBW_DATA_TOKEN : SD_DATA_TOKEN;
 
-	/* One pad byte between R1 and the data token (SD spec Nwr >= 1). */
-	(void)pmci_byte(sc, SD_IDLE);
-	(void)pmci_byte(sc, SD_DATA_TOKEN);
+	KASSERT(blklen > 0);
+	KASSERT(cmd->c_datalen > 0 && (cmd->c_datalen % blklen) == 0);
 
-	if (sc->sc_fifo_depth >= (uint32_t)cmd->c_datalen) {
-		error = pmci_burst(sc, data, NULL, cmd->c_datalen);
+	nblocks = cmd->c_datalen / blklen;
+
+	for (b = 0; b < nblocks; b++) {
+		/*
+		 * One pad byte before each data token.  For the first
+		 * block this is Nwr (the SD-spec gap between R1 and the
+		 * first 0xFE/0xFC).  For subsequent blocks in a CMD25
+		 * envelope it gives the card a clock-beat between busy
+		 * release and the next 0xFC — empirically required by
+		 * cards in the wild (intermittent "error writing fsbn"
+		 * + successful retry without it), and matches what
+		 * Linux/U-Boot SPI-mode drivers do.  Harmless on the
+		 * single-block path; the card just clocks an extra
+		 * idle byte.
+		 */
+		(void)pmci_byte(sc, SD_IDLE);
+		(void)pmci_byte(sc, token);
+
+		if (sc->sc_fifo_depth >= (uint32_t)blklen) {
+			error = pmci_burst(sc, data, NULL, blklen);
+			if (error) {
+				cmd->c_error = error;
+				return;
+			}
+		} else {
+			for (i = 0; i < blklen; i++)
+				(void)pmci_byte(sc, data[i]);
+		}
+
+		/* Dummy CRC16 — ignored by the card in SPI mode. */
+		(void)pmci_byte(sc, SD_IDLE);
+		(void)pmci_byte(sc, SD_IDLE);
+
+		/*
+		 * Data-response token: SD spec allows 0..8 byte gap
+		 * (Ncrc) before it appears.  Packed 0bxxx0rrr1; rrr=010
+		 * (0x05 in the low 5 bits) means accepted.
+		 */
+		error = pmci_wait_token(sc, SD_RESP_RETRIES, &resp);
 		if (error) {
 			cmd->c_error = error;
 			return;
 		}
-	} else {
-		for (i = 0; i < cmd->c_datalen; i++)
-			(void)pmci_byte(sc, data[i]);
+		if ((resp & SD_DATA_RESP_MASK) != SD_DATA_RESP_ACCEPTED) {
+			cmd->c_error = EIO;
+			return;
+		}
+
+		/*
+		 * Card drives MISO low while programming; wait for release
+		 * before the next 0xFC token (or the 0xFD stop token).
+		 * Use the strict variant: if the next 0xFC went out
+		 * before the card finished, the card silently misses the
+		 * block — observed as intermittent "error writing fsbn".
+		 */
+		if (pmci_wait_busy_strict(sc, SD_BUSY_RETRIES) != 0) {
+			cmd->c_error = ETIMEDOUT;
+			return;
+		}
+
+		data += blklen;
 	}
 
-	/* Dummy CRC16 — ignored by the card in SPI mode. */
-	(void)pmci_byte(sc, SD_IDLE);
-	(void)pmci_byte(sc, SD_IDLE);
-
-	/*
-	 * Data-response token: the SD spec allows 0..8 bytes (Ncrc)
-	 * of 0xFF gap between the final CRC byte and the token, so
-	 * we must poll rather than read a single byte.  The token
-	 * is packed as 0bxxx0rrr1 where rrr=0b010 means accepted
-	 * (0x05 in the low 5 bits).
-	 */
-	error = pmci_wait_token(sc, SD_RESP_RETRIES, &resp);
-	if (error) {
-		cmd->c_error = error;
-		return;
+	if (multi) {
+		/*
+		 * End-of-stream for CMD25: pad byte + 0xFD stop token.
+		 * No CRC, no data response — the card just enters busy
+		 * until the final block has flushed to flash.  Strict
+		 * busy wait because the card *will* assert busy here,
+		 * and the next exec_command (CMD12 from the MI layer)
+		 * needs the card fully ready.
+		 */
+		(void)pmci_byte(sc, SD_IDLE);
+		(void)pmci_byte(sc, SD_MBW_STOP_TOKEN);
+		if (pmci_wait_busy_strict(sc, SD_BUSY_RETRIES) != 0)
+			cmd->c_error = ETIMEDOUT;
 	}
-	if ((resp & SD_DATA_RESP_MASK) != SD_DATA_RESP_ACCEPTED) {
-		cmd->c_error = EIO;
-		return;
-	}
-
-	/* Card drives MISO low while programming; wait for release. */
-	if (pmci_wait_busy(sc, SD_BUSY_RETRIES) != 0)
-		cmd->c_error = ETIMEDOUT;
 }
 
 /*
@@ -836,8 +969,15 @@ pmci_attach(device_t parent, device_t self, void *aux)
 	 */
 	saa.saa_clkmin = 400;
 	saa.saa_clkmax = 25000;
+	/*
+	 * SMC_CAPS_SINGLE_ONLY is *not* set: pmci_read and pmci_write
+	 * handle CMD18 (READ_BLOCK_MULTIPLE) and CMD25 (WRITE_BLOCK_MULTIPLE)
+	 * natively, so the MI sdmmc layer can amortize its ~3.7 ms/sector
+	 * overhead across a whole syscall.  CMD12 STOP_TRANSMISSION is
+	 * issued by the MI layer as a separate exec_command after the
+	 * data phase (we don't set SMC_CAPS_AUTO_STOP either).
+	 */
 	saa.saa_caps = SMC_CAPS_SPI_MODE
-		     | SMC_CAPS_SINGLE_ONLY
 		     | SMC_CAPS_POLL_CARD_DET;
 
 	sc->sc_sdmmc = config_found(self, &saa, NULL, CFARGS_NONE);

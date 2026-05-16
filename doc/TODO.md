@@ -47,30 +47,44 @@ predicted because the per-sector kernel/sdmmc-layer cost (~3.7 ms) now
 dominates the SD path, not the SPI byte-shifting that this change
 addressed.
 
-### Phase 3.6: CMD18 multi-block reads — HIGH PRIORITY
+### Phase 3.6: CMD18/CMD25 multi-block — DONE
 
-The dominant remaining SD-side cost is the per-sector kernel/sdmmc-layer
-overhead (~3.7 ms per sector, measured by bracketing
-`pmci_exec_command` with cycle counters).  Each `read()` syscall of 32 KB
-becomes 64 individual CMD17 round trips, paying that overhead 64 times.
+`pmci_read` and `pmci_write` handle `MMC_READ_BLOCK_MULTIPLE` /
+`MMC_WRITE_BLOCK_MULTIPLE` natively as a per-block FIFO-burst loop
+inside the single CMD18 / CMD25 envelope.  The MI sdmmc layer issues
+CMD12 (STOP_TRANSMISSION) as a separate exec_command after we return
+(we don't set `SMC_CAPS_AUTO_STOP`).  CMD25 uses the
+0xFC inter-block data token and the 0xFD stop-tran token at the end,
+with a strict busy-wait variant between blocks to avoid catching the
+gap byte between data response and busy assertion.
 
-Switch to CMD18 (READ_MULTIPLE_BLOCK).  Structure as **per-block FIFO
-bursts inside a single CMD18 envelope** terminated by CMD12: each
-512-byte block fits the FIFO exactly, so no IRQ/threshold refill is
-needed mid-burst, and the kernel-layer overhead is paid once per
-syscall instead of once per sector.  Mirror for CMD25
-(WRITE_MULTIPLE_BLOCK) if the MI sdmmc layer issues it.
+### Phase 3.7: block-device reads still go single-block
 
-Implementation touches:
-1. Drop `SMC_CAPS_SINGLE_ONLY` from `saa_caps` in `pmci_attach`.
-2. Handle `MMC_READ_BLOCK_MULTIPLE` / `MMC_WRITE_BLOCK_MULTIPLE` in
-   `pmci_exec_command`: send the CMD, loop over blocks doing
-   `pmci_burst` + CRC + token poll, then issue CMD12.
-3. Verify the MI sdmmc layer actually issues multi-block commands
-   once the cap is dropped.
+`dd if=/dev/ld0 of=/dev/null bs=32k` issues 64 separate 512-byte
+`bread()` calls per syscall (`DEV_BSIZE = 512`), so each turns into
+a single-block read in `sdmmc_mem_read_block_subr`
+(`c_datalen / c_blklen == 1` → `MMC_READ_BLOCK_SINGLE`).  CMD18
+never engages on the block-device path.  This is why
+`dd if=/dev/ld0` shows ~85 KB/s while
+`dd if=/dev/rld0 of=/dev/null bs=32k` and FS-mediated reads see the
+~190 KB/s CMD18 number.
 
-Expected throughput: ~85 KB/s → ~190 KB/s (2.2× — limited by the
-SPI burst floor after kernel overhead is amortized).
+Options if/when this matters:
+1. Teach `ld_sdmmc_dobio` to coalesce adjacent `bread()` requests
+   before forwarding to `sdmmc_mem_read_block`.  Touches the buf
+   queue path; modest complexity.
+2. Bump `DEV_BSIZE` for `ld(4)` so block-device reads come in
+   larger chunks by default.  Affects every consumer of the block
+   interface; broader blast radius.
+3. Convert callers that care to use `/dev/rld0` (raw) instead.
+   No code change, but documentation/convention only — easy to
+   forget.
+
+Most filesystem-mediated I/O already takes the larger-buffer FFS
+path (16 KB FS blocks → 32-sector CMD18/CMD25), so the user-visible
+impact is mostly for raw block-device tools (`dd if=/dev/ld0`,
+`disklabel`, etc.).  Leave the block-device path single-block until
+something on the read path notably matters.
 
 ### IRQ-driven completion deferred
 
@@ -173,6 +187,32 @@ three-block hi/lo/eq diamond, materialized as four `mov` selects).
 A peephole that shares the hi-word compare across the two ICMPs is
 a plausible follow-up but not on the critical path for qsort's int
 comparator, which is the i32 case.
+
+## Kernel: vmapbuf / vunmapbuf for raw device access
+
+`vmapbuf` and `vunmapbuf` in `penumbra/machdep.c` are still
+`TODO(stub)` — calls trap into DDB with `.long 0x6f400000` rather
+than executing.  This blocks every code path that goes through
+`physio()`: the raw character devices (`/dev/rld0`, `/dev/rsd0`,
+etc.), and anything that opens them — `dd if=/dev/rld0`,
+`disklabel`, `fsck` on an unmounted partition, `dump`/`restore`,
+and similar.  Filesystem-mediated I/O is unaffected because it
+goes through the buffer cache without needing user-VA → kernel-VA
+mapping.
+
+`vmapbuf` walks the calling process's pmap to find the physical
+pages backing the user buffer, then maps them into kernel VA so
+the driver can treat `bp->b_data` as a kernel address.
+`vunmapbuf` undoes that mapping after I/O completes.  Both are
+already implemented in every other 32-bit NetBSD port — see e.g.
+`netbsd/sys/arch/mips/mips/vm_machdep.c:vmapbuf()` for the
+canonical pattern: `uvm_km_alloc(kernel_map, len, …)` for a fresh
+kernel VA range, then loop `pmap_extract(curproc's pmap, user va)`
+→ `pmap_kenter_pa(kernel va, paddr, prot)` to populate it.
+
+Surfaced as a wall when validating CMD18 multi-block reads via
+`dd if=/dev/rld0`.  Block-device path (`/dev/ld0`) still works
+because it goes through the buffer cache, not physio.
 
 ## Kernel: guard page for kernel stack overflow
 
