@@ -98,9 +98,13 @@ burst it's waiting for.  See also `pbench pipe_pingpong` (~19 ms for
 Polled busy-wait remains the right primitive for sub-ms device waits
 on the current scheduler.  Revisit once one of:
 - Context switch cost drops to ≪ 1 ms (would benefit fork, pipe, signals
-  too — likely needs cheaper trap entry, e.g. scratch SPRs)
-- CMD18 multi-block (Phase 3.6 above) makes each `pmci_burst` cover
-  N × 660 µs of wire time, large enough to amortize the round-trip
+  too — scratch SPRs landed in 02de545943e7 and shaved a few percent off
+  trap-entry, but the cv_wait round-trip is still ~10 ms; the rest of
+  the gap is trap_common / pmap_activate / copyin)
+- CMD18 multi-block (Phase 3.6 above) — **DONE**.  Each `pmci_burst`
+  now covers up to N × 660 µs of wire time on the FS-mediated path
+  (16 KB FS blocks → 32-sector CMD18), so re-measuring IRQ-driven
+  completion against the new envelope is worth a fresh attempt
 
 ### Phase 4: Hardware MUL/DIV
 
@@ -441,51 +445,80 @@ Worth investigating after the STW asymmetry — the absolute payoff is
 roughly comparable (a couple of ms per syscall freed) and the two
 fixes compound.
 
-## Hardware: scratch SPRs for fast trap entry
+## Hardware: scratch SPRs for fast trap entry — DONE
 
-**Proposal.**  Add three new scratch special-purpose registers
-accessible via `WRSPR`/`RDSPR` (current SPR encoding uses `IR[15:12]`
-so there's room — see `doc/system/sysregs.md`).  Name them `SCR0`,
-`SCR1`, `SCR2`.  No semantics beyond "general-purpose 32-bit storage
-the CPU exposes for fast trap-handler scratch use."
+Implemented SCR0–SCR3 (four 32-bit storage SPRs at indices 4–7,
+supervisor-only, undefined reset values).  Hardware in
+`hw/rtl/core/spr_scratch.sv`, instantiated from `datapath.sv` with
+the SCR readback overlaying amux slot 11 (mutually exclusive with
+vector-addr fetch).  ISS, pasm.py, and the LLVM integrated
+assembler all teach SCR0–3 as SPR names.  Kernel TLB miss fast
+path (`_real_miss_handler`) now uses SCR0..2 instead of
+PC-relative stores into the pinned scratch page; storage symbols
+`_rmh_save_r{1..3}` removed.
 
-**Why.**  Today the trap entry path immediately stores caller
-registers into the kernel scratch page (one of the pinned-TLB slots,
-see `netbsd/sys/arch/penumbra/CLAUDE.md`).  Even with the pinned TLB
-slot the saves are RAM accesses, which on Penumbra means CDC bridge
-+ SDRAM latency on every trap.  The TLB miss fast path — the
-hottest trap by far on a software-managed TLB — pays this on every
-miss, ahead of any actual TLB work.
+Commits: b33891e6d197 (ISA spec + hardware + ISS + test),
+62558fd4c635 (LLVM AsmParser), 02de545943e7 (kernel adoption).
 
-With three scratch SPRs, the entry sequence becomes:
+Measured impact (median-of-min across 2 consecutive runs, ULX3S
+@ 25 MHz, post-pbench harness redesign):
+
 ```
-  WRSPR R1, SCR0       ; save R1 to CPU-internal storage
-  WRSPR R2, SCR1
-  WRSPR R3, SCR2
-  ; ... use R1-R3 freely for PTE walk, vector dispatch, etc.
-  RDSPR R3, SCR2
-  RDSPR R2, SCR1
-  RDSPR R1, SCR0
-  RFE
+  kernel/getpid          565.08 us → 545.80 us  (-3.4%) ★
+  kernel/clock_gettime     1.20 ms →   1.16 ms  (-3.3%)
+  kernel/pipe_pingpong    18.63 ms →  18.09 ms  (-2.9%)
+  kernel/fork_exit       617.01 ms → 604.66 ms  (-2.0%)
 ```
-No memory traffic on the entry/exit prologues.  The TLB miss handler
-can do its entire walk (compute VPN-indexed L2 slot, load PTE, write
-TLB entry) without ever spilling.
 
-**Cost.**  Three 32-bit registers in the SPR file (effectively three
-flip-flops × 32 = 96 FFs plus mux logic), plus SPR-decode entries
-for SCR0/1/2.  Trivial in both the FPGA and the eventual discrete
-build.  No microcode or ISA encoding changes — `WRSPR`/`RDSPR` already
-exist and decode the SPR number from `IR[15:12]`.
+The cleanest signal is on getpid: 17× the within-side noise floor
+(0.02% intra-run variance vs 3.4% delta).  The other three are
+individually marginal but all move in the same direction with
+similar magnitude — consistent with a cache-pollution / footprint
+improvement that leaks beyond the literal TLB miss handler.
 
-**Expected payoff.**  Largest impact on the TLB miss fast path, which
-runs on essentially every userland page-fault and every cold page
-read.  Order of impact: tens of cycles per trap eliminated.  At a
-25 MHz CPU clock and typical miss rates, that compounds into
-measurable end-to-end gains for memory-touching benchmarks
-(`memcpy`, `strlen`) and especially for fork-heavy workloads (see
-"Kernel: fork() is unreasonably slow" above, where the first
-user-mode return after fork pays a flurry of misses).
+Smaller than the original "tens of cycles per trap" projection
+because in steady state the old PC-relative stores were cache hits
+on the pinned scratch page, so the direct per-miss cycle cost was
+already small.  The realized win is mostly second-order: removing
+a per-miss cache-line write reduces eviction pressure on adjacent
+syscall hot paths.
+
+Future "rip out the pinned scratch page entirely" work could
+extend SCR usage to `_trap_entry_*` stubs and `_trap_common`'s
+early state stashing.  Diminishing returns curve is steep and
+not currently a priority.
+
+## Libc: memcpy misses same-offset misaligned shortcut
+
+NetBSD's libc memcpy on Penumbra takes the byte-fallback path for
+*all* misalignment configurations, even the cases where a word-at-
+a-time body would still work.  Measured via `pbench libc memcpy_align`
+at n=256 (commit 3decf13fa4b0):
+
+```
+  aligned (size=256, main sweep):    ~83 us
+  src=1, dst=0:                     ~287 us
+  src=0, dst=1:                     ~287 us
+  src=1, dst=1 (same offset):       ~290 us  ← could be word body
+  src=1, dst=3 (different offsets): ~290 us  ← byte fallback only
+```
+
+When src and dst are misaligned by the same offset, after a 3-byte
+head prologue both pointers reach word boundaries simultaneously
+and the middle can run word-at-a-time.  Current libc misses this
+case and lumps it with the genuinely-impossible different-offset
+case.
+
+Implementation lives in
+`common/lib/libc/arch/penumbra/string/memcpy.S`.  An offset-
+comparison check at the top would let the same-offset case fall
+into the aligned word loop.
+
+Expected win: ~3.4× on same-offset misaligned calls (~290 us → ~85 us
+matching aligned).  Different-offset path is unchanged.  Affects
+roughly half of all "misaligned" memcpy calls in practice (anything
+where src and dst come from the same allocation pool or share a
+base alignment).
 
 ## Compiler: support `[R0 + offset]` absolute addressing for low memory
 
