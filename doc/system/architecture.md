@@ -196,12 +196,17 @@ WRSPR {SPR}, Rd            ; SPR = Rd
 
 SPR encoding in IR[15:12] (same field position as `dev` for WRSYS/RDSYS):
 
-| SPR  | Number | Description                                       |
-|:----:|:------:|---------------------------------------------------|
-| ESR  | 0      | Exception SR — saved at exception entry           |
-| EPC  | 1      | Exception PC — saved at exception entry           |
-| USP  | 2      | User stack pointer — banked-away R14              |
-| SR   | 3      | Current status register (flags + mode bits)       |
+| SPR    | Number | Description                                       |
+|:------:|:------:|---------------------------------------------------|
+| ESR    | 0      | Exception SR — saved at exception entry           |
+| EPC    | 1      | Exception PC — saved at exception entry           |
+| USP    | 2      | User stack pointer — banked-away R14              |
+| SR     | 3      | Current status register (flags + mode bits)       |
+| SCR0   | 4      | Scratch SPR (supervisor-only, 32-bit storage)     |
+| SCR1   | 5      | Scratch SPR (supervisor-only, 32-bit storage)     |
+| SCR2   | 6      | Scratch SPR (supervisor-only, 32-bit storage)     |
+| SCR3   | 7      | Scratch SPR (supervisor-only, 32-bit storage)     |
+| 8–15   | —      | Reserved (future debug/performance SPRs)          |
 
 **Skip-faulting-instruction idiom.** Trap handlers can modify the
 return state before `ERET`:
@@ -216,6 +221,35 @@ ERET
 
 `USP` access is essential for saving/restoring the full user context on
 interrupt entry and process switches.
+
+### Scratch SPRs (SCR0–SCR3)
+
+Four 32-bit storage registers exposed to supervisor code via
+`RDSPR`/`WRSPR`. The hardware contract is **storage cells, nothing
+more**: a write to SCRn stores the value; a read returns the most
+recent value written. Reset values are **undefined** — software must
+write before it reads.
+
+These exist to eliminate RAM accesses from the trap-entry prologue.
+The hottest trap (TLB miss) can park its working set of GPRs without
+touching memory, even before the kernel has saved enough context to
+safely fault.
+
+```asm
+trap_entry:
+    WRSPR SCR0, R1            ; park caller GPRs in CPU-internal storage
+    WRSPR SCR1, R2
+    WRSPR SCR2, R3
+    ; ... use R1-R3 freely (PTE walk, vector dispatch, ...) ...
+    RDSPR R3, SCR2
+    RDSPR R2, SCR1
+    RDSPR R1, SCR0
+    ERET
+```
+
+Like the other SPRs, `RDSPR`/`WRSPR` against SCR0–SCR3 are privileged;
+user-mode access faults with `VEC_PRIV`. The hardware does not assign
+roles to specific SCRn registers — software chooses how to use them.
 
 ---
 

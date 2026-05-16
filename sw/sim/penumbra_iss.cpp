@@ -289,7 +289,8 @@ static inline uint8_t  TLB_VPN_GET_ASID(uint32_t vpn_word) { return vpn_word & 0
 static inline uint32_t TLB_PTE_GET_PPN(uint32_t pte_word)  { return pte_word >> 12; }
 
 // SPR numbers (in IR[15:12])
-enum { SPR_ESR=0, SPR_EPC=1, SPR_USP=2, SPR_SR=3 };
+enum { SPR_ESR=0, SPR_EPC=1, SPR_USP=2, SPR_SR=3, SPR_SCR0=4 };
+constexpr int N_SCR = 4;   // SCR0..SCR(N_SCR-1) at SPR_SCR0..SPR_SCR0+N_SCR-1
 
 // Memory sizes
 static constexpr size_t RAM_SIZE = 16u * 1024 * 1024;  // 16 MB
@@ -309,6 +310,7 @@ struct CPU {
     uint32_t sr;
     uint32_t esr, epc;
     uint32_t usp;       // Banked SP (user SP when in supervisor, supervisor SP when in user)
+    uint32_t scr[N_SCR]; // Scratch SPRs SCR0..SCR(N_SCR-1) — supervisor-only storage
     uint64_t insn_count;
     bool halted;
     bool ei_shadow;     // One-instruction delay after EI
@@ -1472,6 +1474,11 @@ static void execute_one() {
                         bank_sp(old_sr, cpu.sr);
                         break;
                     }
+                    default:
+                        if (spr_num >= SPR_SCR0 && spr_num < SPR_SCR0 + N_SCR) {
+                            cpu.scr[spr_num - SPR_SCR0] = reg_read(rd);
+                        }
+                        break;
                 }
                 break;
             case 31: // RDSPR
@@ -1480,6 +1487,11 @@ static void execute_one() {
                     case SPR_EPC: reg_write(rd, cpu.epc); break;
                     case SPR_USP: reg_write(rd, cpu.usp); break;
                     case SPR_SR:  reg_write(rd, cpu.sr); break;
+                    default:
+                        if (spr_num >= SPR_SCR0 && spr_num < SPR_SCR0 + N_SCR) {
+                            reg_write(rd, cpu.scr[spr_num - SPR_SCR0]);
+                        }
+                        break;
                 }
                 break;
             }

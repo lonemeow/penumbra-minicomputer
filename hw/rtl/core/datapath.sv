@@ -231,17 +231,24 @@ module datapath
     // ── SPR decode logic ─────────────────────────────────────
     // Decodes the SPR field (IR[15:12] = fe_r_sys_dev) for RDSPR/WRSPR.
     //
+    // The SPR encoding is grouped: bits [3:2] select the group, bits
+    // [1:0] index within the group.  Group 00 is the system SPRs
+    // (ESR, EPC, USP, SR); group 01 is the scratch SPRs (SCR0..SCR3).
+    // Groups 10/11 are reserved.
+    //
     // RDSPR (a_src=SPR=4): selects A-bus source based on SPR number.
-    //   SPR 0 (ESR) → amux select = ESR (01)
-    //   SPR 1 (EPC) → amux select = EPC (10)
-    //   SPR 2 (USP) → amux select = REG (00), reg_a override = R14, cross_bank = 1
-    //   SPR 3 (SR)  → amux select = ESR (01), sr_read selected instead of ESR
+    //   SPR 0 (ESR)       → amux select = ESR (01)
+    //   SPR 1 (EPC)       → amux select = EPC (10)
+    //   SPR 2 (USP)       → amux select = REG (00), reg_a override = R14, cross_bank = 1
+    //   SPR 3 (SR)        → amux select = ESR (01), sr_read selected instead of ESR
+    //   SPR 4-7 (SCR0..3) → amux select = 11, scr readback overlays vector_addr
     //
     // WRSPR (spr_write=1): routes R-bus to SPR write target.
-    //   SPR 0 (ESR) → esr_load from w_bus
-    //   SPR 1 (EPC) → epc_load from w_bus
-    //   SPR 2 (USP) → regfile write R14, cross_bank = 1
-    //   SPR 3 (SR)  → sr_load from w_bus (bulk-load entire SR)
+    //   SPR 0 (ESR)       → esr_load from w_bus
+    //   SPR 1 (EPC)       → epc_load from w_bus
+    //   SPR 2 (USP)       → regfile write R14, cross_bank = 1
+    //   SPR 3 (SR)        → sr_load from w_bus (bulk-load entire SR)
+    //   SPR 4-7 (SCR0..3) → spr_scratch encoded write, index = IR[13:12]
 
     logic [1:0]  amux_sel;         // 2-bit select for amux (decoded from 3-bit a_src)
     logic [3:0]  spr_reg_a;        // reg_a override for RDSPR USP
@@ -253,6 +260,15 @@ module datapath
     logic        spr_read_sr;      // RDSPR SR: select sr_read instead of ESR on amux
     logic        spr_w_en;         // WRSPR USP: force regfile write
     logic [3:0]  spr_reg_w;        // WRSPR USP: force write to R14
+    logic        spr_scr_we;       // WRSPR SCR0..3: encoded write to spr_scratch
+    logic [1:0]  spr_scr_wr_sel;   // Which SCR to write (= IR[13:12])
+    logic [1:0]  spr_scr_rd_sel;   // Which SCR to read  (= IR[13:12])
+    logic        spr_scr_overlay;  // RDSPR SCR: route scr_rd_data through amux slot 11
+
+    // Group bit: fe_r_sys_dev[3:2] == 2'b01 selects the scratch group.
+    // Group 00 is system SPRs (ESR/EPC/USP/SR); 10/11 are reserved.
+    logic spr_is_scratch;
+    assign spr_is_scratch = (fe_r_sys_dev[3:2] == 2'b01);
 
     always_comb begin
         // Defaults: pass through, no overrides
@@ -266,40 +282,57 @@ module datapath
         spr_read_sr       = 1'b0;
         spr_w_en          = 1'b0;
         spr_reg_w         = 4'd0;
+        spr_scr_we        = 1'b0;
+        spr_scr_wr_sel    = 2'd0;
+        spr_scr_rd_sel    = 2'd0;
+        spr_scr_overlay   = 1'b0;
 
         // a_src values 0-3 pass through directly to amux
         // a_src = 4 (SPR): decode from IR[15:12]
         if (i_a_src == 3'd4) begin
-            case (fe_r_sys_dev)
-                SPR_ESR: amux_sel = 2'b01;  // ESR
-                SPR_EPC: amux_sel = 2'b10;  // EPC
-                SPR_USP: begin
-                    amux_sel           = 2'b00;  // REG (register file)
-                    spr_reg_a          = REG_SP;
-                    spr_cross_bank     = 1'b1;
-                    spr_reg_a_override = 1'b1;
-                end
-                SPR_SR: begin
-                    amux_sel    = 2'b01;  // ESR slot, sr_read selected
-                    spr_read_sr = 1'b1;
-                end
-                default: amux_sel = 2'b00;
-            endcase
+            if (spr_is_scratch) begin
+                // Scratch group: overlay SCR readback onto vector_addr slot
+                amux_sel        = 2'b11;
+                spr_scr_rd_sel  = fe_r_sys_dev[1:0];
+                spr_scr_overlay = 1'b1;
+            end else begin
+                case (fe_r_sys_dev)
+                    SPR_ESR: amux_sel = 2'b01;  // ESR
+                    SPR_EPC: amux_sel = 2'b10;  // EPC
+                    SPR_USP: begin
+                        amux_sel           = 2'b00;  // REG (register file)
+                        spr_reg_a          = REG_SP;
+                        spr_cross_bank     = 1'b1;
+                        spr_reg_a_override = 1'b1;
+                    end
+                    SPR_SR: begin
+                        amux_sel    = 2'b01;  // ESR slot, sr_read selected
+                        spr_read_sr = 1'b1;
+                    end
+                    default: amux_sel = 2'b00;
+                endcase
+            end
         end
 
         // WRSPR decode: sys_we=1, sys_cycle=0
         if (i_spr_write) begin
-            case (fe_r_sys_dev)
-                SPR_ESR: spr_esr_load = 1'b1;
-                SPR_EPC: spr_epc_load = 1'b1;
-                SPR_USP: begin
-                    spr_w_en       = 1'b1;
-                    spr_reg_w      = REG_SP;
-                    spr_cross_bank = 1'b1;
-                end
-                SPR_SR: spr_sr_load = 1'b1;
-                default: ;
-            endcase
+            if (spr_is_scratch) begin
+                // Scratch group: encoded write to spr_scratch
+                spr_scr_we     = 1'b1;
+                spr_scr_wr_sel = fe_r_sys_dev[1:0];
+            end else begin
+                case (fe_r_sys_dev)
+                    SPR_ESR: spr_esr_load = 1'b1;
+                    SPR_EPC: spr_epc_load = 1'b1;
+                    SPR_USP: begin
+                        spr_w_en       = 1'b1;
+                        spr_reg_w      = REG_SP;
+                        spr_cross_bank = 1'b1;
+                    end
+                    SPR_SR: spr_sr_load = 1'b1;
+                    default: ;
+                endcase
+            end
         end
     end
 
@@ -389,6 +422,13 @@ module datapath
     logic [31:0] amux_esr_or_sr;
     assign amux_esr_or_sr = spr_read_sr ? sr_read : esr;
 
+    // RDSPR SCR0..3: overlay scratch readback onto vector_addr slot 11.
+    // Mutually exclusive with exception-entry vector fetch, so a single
+    // 2:1 mux suffices — no need to widen amux from 4 inputs to 5.
+    logic [31:0] scr_rd_data;
+    logic [31:0] amux_vec_or_scr;
+    assign amux_vec_or_scr = spr_scr_overlay ? scr_rd_data : vector_addr;
+
     // Trace: expose SR for instruction-level dumps
     assign o_trace_sr = sr_read;
 
@@ -396,9 +436,20 @@ module datapath
         .i_reg_a       (reg_a_data),
         .i_esr   (amux_esr_or_sr),
         .i_epc   (epc),
-        .i_vector_addr (vector_addr),
+        .i_vector_addr (amux_vec_or_scr),
         .i_sel         (amux_sel),
         .o_a_bus       (a_bus)
+    );
+
+    // ── Scratch SPRs (SCR0..3) ───────────────────────────────
+    spr_scratch u_spr_scratch (
+        .i_clk     (i_clk),
+        .i_rst     (i_rst),
+        .i_we      (spr_scr_we),
+        .i_wr_sel  (spr_scr_wr_sel),
+        .i_wdata   (w_bus),
+        .i_rd_sel  (spr_scr_rd_sel),
+        .o_rd_data (scr_rd_data)
     );
 
     // ── Immediate source routing ─────────────────────────────

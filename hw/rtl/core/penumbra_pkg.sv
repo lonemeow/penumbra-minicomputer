@@ -191,10 +191,14 @@ package penumbra_pkg;
 
     // ── Special-purpose register (SPR) numbers ───────────────────
     // Used by RDSPR/WRSPR instructions — encoded in IR[15:12]
-    localparam logic [3:0] SPR_ESR = 4'd0;   // Exception SR
-    localparam logic [3:0] SPR_EPC = 4'd1;   // Exception PC
-    localparam logic [3:0] SPR_USP = 4'd2;   // User stack pointer (banked R14)
-    localparam logic [3:0] SPR_SR  = 4'd3;   // Current status register
+    localparam logic [3:0] SPR_ESR  = 4'd0;   // Exception SR
+    localparam logic [3:0] SPR_EPC  = 4'd1;   // Exception PC
+    localparam logic [3:0] SPR_USP  = 4'd2;   // User stack pointer (banked R14)
+    localparam logic [3:0] SPR_SR   = 4'd3;   // Current status register
+    localparam logic [3:0] SPR_SCR0 = 4'd4;   // Scratch SPR 0 (supervisor scratch)
+    localparam logic [3:0] SPR_SCR1 = 4'd5;   // Scratch SPR 1
+    localparam logic [3:0] SPR_SCR2 = 4'd6;   // Scratch SPR 2
+    localparam logic [3:0] SPR_SCR3 = 4'd7;   // Scratch SPR 3
 
     // ── Exception vector numbers ────────────────────────────────
     // Vector address = {26'b0, vector_num, 2'b00} (word-aligned table at 0x00)

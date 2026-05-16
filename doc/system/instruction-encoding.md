@@ -204,7 +204,7 @@ handler for software emulation.
 | JALR                              | Yes         | Indirect call                       |
 | EI, DI                            | Yes         | `ei_shadow`, privilege check        |
 | WRSYS, RDSYS                      | Yes         | Privileged                          |
-| RDSPR, WRSPR                      | Yes         | SPR in IR[15:12]: ESR/EPC/USP/SR    |
+| RDSPR, WRSPR                      | Yes         | SPR in IR[15:12]: ESR/EPC/USP/SR/SCR0–3 |
 | ERET (1- and 2-arg)               | Yes         |                                     |
 | SYSCALL, BREAK                    | Yes         |                                     |
 | NOP, RET, LA, LI (pseudo)         | Yes         |                                     |

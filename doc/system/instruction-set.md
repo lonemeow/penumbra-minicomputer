@@ -20,8 +20,8 @@ most readers will not need.
 | R15 (PC)  | Program counter. Readable (for PC-relative); not writable via normal instructions. |
 
 The assembler accepts `ZERO`, `TP`, `LR`, `SP`, `PC` as register
-aliases. SPR names `ESR`, `EPC`, `USP`, `SR` are accepted by
-`RDSPR`/`WRSPR`.
+aliases. SPR names `ESR`, `EPC`, `USP`, `SR`, `SCR0`, `SCR1`, `SCR2`,
+`SCR3` are accepted by `RDSPR`/`WRSPR`.
 
 ## Condition Codes
 
@@ -227,8 +227,8 @@ my_function:
 | DI          | `DI`                       | `SR.I = 0` (immediate)                   | Yes        |
 | WRSYS       | `WRSYS Rd, #dev, #reg`     | Write sysreg                             | Yes        |
 | RDSYS       | `RDSYS Rd, #dev, #reg`     | Read sysreg                              | Yes        |
-| RDSPR       | `RDSPR Rd, {ESR\|EPC\|USP\|SR}` | Read SPR                            | Yes        |
-| WRSPR       | `WRSPR {ESR\|EPC\|USP\|SR}, Rd` | Write SPR                           | Yes        |
+| RDSPR       | `RDSPR Rd, {ESR\|EPC\|USP\|SR\|SCR0–3}` | Read SPR                    | Yes        |
+| WRSPR       | `WRSPR {ESR\|EPC\|USP\|SR\|SCR0–3}, Rd` | Write SPR                   | Yes        |
 | ERET        | `ERET` **or** `ERET Rd, Rs`| Exception return                         | Yes        |
 | SYSCALL     | `SYSCALL`                  | Trap to `VEC_SYSCALL` (5)                | No         |
 | BREAK       | `BREAK`                    | Trap to `VEC_BREAK` (6)                  | No         |
@@ -326,5 +326,6 @@ LLI  R1, #TLB_V             ; named constant (built-in or .equ)
 - **Architectural context** — [architecture.md](./architecture.md) for
   the register model, SR, privilege, exception model, and vector table.
 - **System registers** — [sysregs.md](./sysregs.md) for device/register
-  numbers used by `WRSYS`/`RDSYS` and SPR numbering for `WRSPR`/`RDSPR`.
+  numbers used by `WRSYS`/`RDSYS`. SPR numbering for `WRSPR`/`RDSPR`
+  lives in [architecture.md](./architecture.md#special-purpose-registers-sprs).
 

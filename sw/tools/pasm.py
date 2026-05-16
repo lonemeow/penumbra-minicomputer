@@ -282,7 +282,10 @@ BRANCH_OPS = {
 }
 
 # SPR name → number mapping (encoded in IR[15:12], same position as sys_dev)
-SPR_NAMES = {"ESR": 0, "EPC": 1, "USP": 2, "SR": 3}
+SPR_NAMES = {
+    "ESR":  0, "EPC":  1, "USP":  2, "SR":   3,
+    "SCR0": 4, "SCR1": 5, "SCR2": 6, "SCR3": 7,
+}
 
 # Pseudo-instructions
 PSEUDO_OPS = {"NOP", "RET", "LA", "LI"}
@@ -398,7 +401,7 @@ def assemble_line(mnemonic, operands, addr, labels, line_num, constants=None):
             raise ValueError(f"bad register '{operands[0]}'")
         spec = operands[1].upper()
         if spec not in SPR_NAMES:
-            raise ValueError(f"RDSPR: unknown SPR '{operands[1]}', expected ESR, EPC, or USP")
+            raise ValueError(f"RDSPR: unknown SPR '{operands[1]}', expected one of {', '.join(SPR_NAMES)}")
         spr_num = SPR_NAMES[spec]
         op = FORMAT_R_OPS["RDSPR"][0]
         spare = spr_num << 12
@@ -414,7 +417,7 @@ def assemble_line(mnemonic, operands, addr, labels, line_num, constants=None):
         if rd is None:
             raise ValueError(f"bad register '{operands[1]}'")
         if spec not in SPR_NAMES:
-            raise ValueError(f"WRSPR: unknown SPR '{operands[0]}', expected ESR, EPC, or USP")
+            raise ValueError(f"WRSPR: unknown SPR '{operands[0]}', expected one of {', '.join(SPR_NAMES)}")
         spr_num = SPR_NAMES[spec]
         op = FORMAT_R_OPS["WRSPR"][0]
         spare = spr_num << 12
