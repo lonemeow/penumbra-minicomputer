@@ -11,12 +11,25 @@
  *
  * Attach path: pbbus -> pmci -> sdmmcbus -> sdmmc -> ld.
  *
- * This first cut is pure polled byte-at-a-time (FIFO_EN stays 0) to
- * keep the wire behaviour simple and well-understood.  A later change
- * adds FIFO bursts for the 512-byte data phase and, eventually,
- * IRQ-driven completion via intr_establish_xname().  Those are
- * additive changes inside exec_command — the vtable shape is
- * unaffected.
+ * Two transfer paths cooperate:
+ *
+ *   pmci_byte()   single-byte polled mode (FIFO_EN=0).  Used for the
+ *                 6-byte command frame, the R1/R3/R7 response gap,
+ *                 data-token polling, padding, CRC bytes, and the
+ *                 post-write busy wait — all places where the byte
+ *                 arrival time is unpredictable or the count is tiny.
+ *
+ *   pmci_burst()  N-byte FIFO-engine transfer.  Used for the bulk
+ *                 c_datalen payload (typically the 512-byte block
+ *                 data phase of CMD17/CMD24).  The hardware shift
+ *                 engine pulls/pushes the FIFOs autonomously between
+ *                 a single START and XFER_DONE, so the per-byte
+ *                 CPU overhead that dominates the single-byte path
+ *                 drops out entirely.
+ *
+ * FIFO bursting is gated on sc_fifo_depth >= len, with a single-byte
+ * fallback if a future small-FIFO controller variant cannot fit the
+ * payload.
  */
 
 #include <sys/cdefs.h>
@@ -57,6 +70,12 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #define SPI_CTL_FIFO_EN		0x00000080
 #define SPI_CTL_FLUSH_TX	0x00004000
 #define SPI_CTL_FLUSH_RX	0x00008000
+
+/* IRQ_STATUS bits.  Bit 0 is latched (W1C); bits 1-2 are live and
+ * gated by fifo_en, so they read 0 when FIFO mode is not active. */
+#define SPI_IRQ_XFER_DONE	0x00000001
+#define SPI_IRQ_RX_THRESH	0x00000002
+#define SPI_IRQ_TX_THRESH	0x00000004
 
 /* Reset default: both CS deasserted, mode 0, slow clock, no FIFO. */
 #define SPI_CTL_RESET	(SPI_CTL_CS0 | SPI_CTL_CS1)
@@ -387,6 +406,148 @@ pmci_wait_busy(struct pmci_softc *sc, int retries)
 	return ETIMEDOUT;
 }
 
+/*
+ * pmci_burst — shift `len` bytes through the SPI v2 FIFO engine.
+ *
+ * Used for the 512-byte data phase of read/write block commands,
+ * where per-byte polled overhead in pmci_byte() dominates wall-clock
+ * cost.  The engine pulls TX bytes / pushes RX bytes autonomously
+ * between a single START write and the XFER_DONE signal — no CPU
+ * involvement in the inner shift, which is the entire point.
+ *
+ *   tx_buf == NULL : drive idle (0xFF) on MOSI; RX bytes land in rx_buf.
+ *   rx_buf == NULL : drive tx_buf on MOSI; received bytes are discarded.
+ *
+ * Preconditions on entry:
+ *   - shift register idle (caller's last pmci_byte() returned, which
+ *     already spun on SPI_STATUS.BUSY)
+ *   - CONTROL holds the SD-protocol state (CS0 asserted, FAST/SLOW
+ *     clock as picked by pmci_bus_clock()).  We preserve and restore
+ *     CONTROL across the burst, so the caller's CS/clock state is
+ *     unchanged on return.
+ *   - `len` <= sc_fifo_depth (caller has already gated on this; the
+ *     transfer engine itself would happily handle longer bursts with
+ *     mid-flight refills, but the polled-completion path here assumes
+ *     "fill TX → START → wait → drain RX" fits in one shot)
+ *
+ * The XFER_DONE poll uses the same retry budget as pmci_wait_busy
+ * (~650 ms envelope at 1 cycle / iteration of SPR-style RD latency).
+ * Wall-clock for a 512-byte burst is ~660 µs at FAST and ~10.5 ms at
+ * SLOW, so the budget covers both with ample margin.
+ *
+ * Returns 0 on success, ETIMEDOUT if XFER_DONE never arrives.  Even
+ * on timeout CONTROL is restored, so the caller's subsequent
+ * pmci_byte() reach the wire on a clean baseline.
+ */
+static int
+pmci_burst(struct pmci_softc *sc, const uint8_t *tx_buf, uint8_t *rx_buf,
+    int len)
+{
+	uint32_t ctl;
+	int i, retries;
+
+	KASSERT((SREG_RD(sc, SPI_STATUS) & SPI_STATUS_BUSY) == 0);
+
+	/*
+	 * Snapshot CONTROL, then flip into FIFO mode while flushing
+	 * both FIFOs in the same write.  CS/FAST/mode bits ride along
+	 * unchanged; FLUSH_TX/FLUSH_RX are write-1-pulse and don't
+	 * persist.  IRQ_ENABLE stays at zero across the burst — at
+	 * current scheduler costs (~10 ms per cv_wait round-trip vs
+	 * a 660 µs burst) sleeping on XFER_DONE costs ~2× more than it
+	 * saves; polled busy-wait remains correct until either context
+	 * switches get cheaper or CMD18 multi-block makes per-burst
+	 * waits long enough to amortize the round-trip.
+	 */
+	ctl = SREG_RD(sc, SPI_CONTROL);
+	SREG_WR(sc, SPI_CONTROL,
+	    ctl | SPI_CTL_FIFO_EN | SPI_CTL_FLUSH_TX | SPI_CTL_FLUSH_RX);
+	SREG_WR(sc, SPI_IRQ_ENABLE, 0);
+
+	/*
+	 * 8×-unrolled to minimise inner-loop control overhead.
+	 * Each unrolled iteration is 8 MMIO writes + 1 increment + 1
+	 * compare + 1 branch = ~11 instructions per 8 writes vs ~6 per
+	 * write naive — a ~4× reduction in non-MMIO instructions, and
+	 * the volatile MMIO write itself blocks the optimiser from
+	 * collapsing them.  SD block size is 512 (divisible by 8) so
+	 * there is no tail loop in practice; the trailing single-byte
+	 * loop is there only to keep the helper correct for callers
+	 * with c_datalen not a multiple of 8.
+	 */
+	if (tx_buf) {
+		for (i = 0; i + 8 <= len; i += 8) {
+			SREG_WR(sc, SPI_DATA, tx_buf[i+0]);
+			SREG_WR(sc, SPI_DATA, tx_buf[i+1]);
+			SREG_WR(sc, SPI_DATA, tx_buf[i+2]);
+			SREG_WR(sc, SPI_DATA, tx_buf[i+3]);
+			SREG_WR(sc, SPI_DATA, tx_buf[i+4]);
+			SREG_WR(sc, SPI_DATA, tx_buf[i+5]);
+			SREG_WR(sc, SPI_DATA, tx_buf[i+6]);
+			SREG_WR(sc, SPI_DATA, tx_buf[i+7]);
+		}
+		for (; i < len; i++)
+			SREG_WR(sc, SPI_DATA, tx_buf[i]);
+	} else {
+		for (i = 0; i + 8 <= len; i += 8) {
+			SREG_WR(sc, SPI_DATA, SD_IDLE);
+			SREG_WR(sc, SPI_DATA, SD_IDLE);
+			SREG_WR(sc, SPI_DATA, SD_IDLE);
+			SREG_WR(sc, SPI_DATA, SD_IDLE);
+			SREG_WR(sc, SPI_DATA, SD_IDLE);
+			SREG_WR(sc, SPI_DATA, SD_IDLE);
+			SREG_WR(sc, SPI_DATA, SD_IDLE);
+			SREG_WR(sc, SPI_DATA, SD_IDLE);
+		}
+		for (; i < len; i++)
+			SREG_WR(sc, SPI_DATA, SD_IDLE);
+	}
+
+	SREG_WR(sc, SPI_XFER_COUNT, ((uint32_t)len & 0xFFFF) | (1U << 16));
+
+	for (retries = SD_BUSY_RETRIES; retries > 0; retries--) {
+		if (SREG_RD(sc, SPI_IRQ_STATUS) & SPI_IRQ_XFER_DONE)
+			break;
+	}
+	if (retries == 0) {
+		SREG_WR(sc, SPI_CONTROL, ctl);
+		return ETIMEDOUT;
+	}
+	SREG_WR(sc, SPI_IRQ_STATUS, SPI_IRQ_XFER_DONE);
+
+	/* 8×-unrolled drain, mirror of the push loop above. */
+	if (rx_buf) {
+		for (i = 0; i + 8 <= len; i += 8) {
+			rx_buf[i+0] = (uint8_t)SREG_RD(sc, SPI_DATA);
+			rx_buf[i+1] = (uint8_t)SREG_RD(sc, SPI_DATA);
+			rx_buf[i+2] = (uint8_t)SREG_RD(sc, SPI_DATA);
+			rx_buf[i+3] = (uint8_t)SREG_RD(sc, SPI_DATA);
+			rx_buf[i+4] = (uint8_t)SREG_RD(sc, SPI_DATA);
+			rx_buf[i+5] = (uint8_t)SREG_RD(sc, SPI_DATA);
+			rx_buf[i+6] = (uint8_t)SREG_RD(sc, SPI_DATA);
+			rx_buf[i+7] = (uint8_t)SREG_RD(sc, SPI_DATA);
+		}
+		for (; i < len; i++)
+			rx_buf[i] = (uint8_t)SREG_RD(sc, SPI_DATA);
+	} else {
+		for (i = 0; i + 8 <= len; i += 8) {
+			(void)SREG_RD(sc, SPI_DATA);
+			(void)SREG_RD(sc, SPI_DATA);
+			(void)SREG_RD(sc, SPI_DATA);
+			(void)SREG_RD(sc, SPI_DATA);
+			(void)SREG_RD(sc, SPI_DATA);
+			(void)SREG_RD(sc, SPI_DATA);
+			(void)SREG_RD(sc, SPI_DATA);
+			(void)SREG_RD(sc, SPI_DATA);
+		}
+		for (; i < len; i++)
+			(void)SREG_RD(sc, SPI_DATA);
+	}
+
+	SREG_WR(sc, SPI_CONTROL, ctl);
+	return 0;
+}
+
 static void
 pmci_read(struct pmci_softc *sc, struct sdmmc_command *cmd)
 {
@@ -394,6 +555,12 @@ pmci_read(struct pmci_softc *sc, struct sdmmc_command *cmd)
 	uint8_t tok;
 	int error, i;
 
+	/*
+	 * Token poll stays single-byte: SD spec Nac allows up to ~100 ms
+	 * between the R1 response and the data-start token, so we have to
+	 * iterate the polled byte engine until 0xFE appears.  Bursting
+	 * would over-read past the token boundary.
+	 */
 	error = pmci_wait_token(sc, SD_DATA_TOKEN_RETRIES, &tok);
 	if (error) {
 		cmd->c_error = error;
@@ -404,8 +571,24 @@ pmci_read(struct pmci_softc *sc, struct sdmmc_command *cmd)
 		return;
 	}
 
-	for (i = 0; i < cmd->c_datalen; i++)
-		data[i] = pmci_byte(sc, SD_IDLE);
+	/*
+	 * Bulk payload via FIFO burst when the controller has room.  At
+	 * 512 entries (current ULX3S build) the entire SD block fits in
+	 * one burst.  A smaller-FIFO variant — or a future caller asking
+	 * for an unusually large payload — would fail the size check and
+	 * fall through to the polled byte loop; threshold-IRQ refills
+	 * for that case are a separate Phase 3.5 follow-up.
+	 */
+	if (sc->sc_fifo_depth >= (uint32_t)cmd->c_datalen) {
+		error = pmci_burst(sc, NULL, data, cmd->c_datalen);
+		if (error) {
+			cmd->c_error = error;
+			return;
+		}
+	} else {
+		for (i = 0; i < cmd->c_datalen; i++)
+			data[i] = pmci_byte(sc, SD_IDLE);
+	}
 
 	/* Discard 16-bit CRC. */
 	(void)pmci_byte(sc, SD_IDLE);
@@ -423,8 +606,16 @@ pmci_write(struct pmci_softc *sc, struct sdmmc_command *cmd)
 	(void)pmci_byte(sc, SD_IDLE);
 	(void)pmci_byte(sc, SD_DATA_TOKEN);
 
-	for (i = 0; i < cmd->c_datalen; i++)
-		(void)pmci_byte(sc, data[i]);
+	if (sc->sc_fifo_depth >= (uint32_t)cmd->c_datalen) {
+		error = pmci_burst(sc, data, NULL, cmd->c_datalen);
+		if (error) {
+			cmd->c_error = error;
+			return;
+		}
+	} else {
+		for (i = 0; i < cmd->c_datalen; i++)
+			(void)pmci_byte(sc, data[i]);
+	}
 
 	/* Dummy CRC16 — ignored by the card in SPI mode. */
 	(void)pmci_byte(sc, SD_IDLE);

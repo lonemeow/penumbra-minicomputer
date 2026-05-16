@@ -34,22 +34,59 @@ controller driver. Kernel mounts FFS root from `ld0f`.
 
 ## Roadmap
 
-### Phase 3.5: SPI FIFO + IRQ-driven pmci  — HIGH PRIORITY
+### Phase 3.5: SPI FIFO data phase — DONE (polled completion)
 
-**Current pain point.**  `dd if=/dev/ld0 of=/dev/null bs=32k count=100`
-reports **61 KB/s** on real hardware (ULX3S FPGA — see
-`benchmark/netbsd-bench/BASELINE.md`).  That's the dominant cost of
-`/etc/rc` and any disk-touching workload; single-user boot is visibly
-slow because of it.  The SPI v2 controller
-has a working FIFO engine in hardware, but `pmci_exec_command` in
-`netbsd/sys/arch/penumbra/penumbra/pmci.c` still does polled single-byte
-transfers for the 512-byte data phase, which is leaving most of the
-controller's throughput on the floor.
+`pmci_burst()` in `netbsd/sys/arch/penumbra/penumbra/pmci.c` shifts
+the 512-byte SD data phase through the SPI v2 FIFO engine.  Both push
+and drain loops are 8×-unrolled.  XFER_DONE is **polled**, not IRQ-
+driven — see "IRQ-driven completion deferred" below.
 
-Extend `pmci_exec_command` to use the SPI v2 FIFO-burst engine for
-the 512-byte data phase, with `intr_establish_xname()` wakeups on
-XFER_DONE (large-FIFO) or TX_THRESH/RX_THRESH (small-FIFO, discrete
-build).  Polled baseline remains the reference implementation.
+Throughput improvement: 61 → 85 KB/s on `dd if=/dev/ld0 of=/dev/null
+bs=32k count=100` (ULX3S FPGA).  Smaller than first-principles modeling
+predicted because the per-sector kernel/sdmmc-layer cost (~3.7 ms) now
+dominates the SD path, not the SPI byte-shifting that this change
+addressed.
+
+### Phase 3.6: CMD18 multi-block reads — HIGH PRIORITY
+
+The dominant remaining SD-side cost is the per-sector kernel/sdmmc-layer
+overhead (~3.7 ms per sector, measured by bracketing
+`pmci_exec_command` with cycle counters).  Each `read()` syscall of 32 KB
+becomes 64 individual CMD17 round trips, paying that overhead 64 times.
+
+Switch to CMD18 (READ_MULTIPLE_BLOCK).  Structure as **per-block FIFO
+bursts inside a single CMD18 envelope** terminated by CMD12: each
+512-byte block fits the FIFO exactly, so no IRQ/threshold refill is
+needed mid-burst, and the kernel-layer overhead is paid once per
+syscall instead of once per sector.  Mirror for CMD25
+(WRITE_MULTIPLE_BLOCK) if the MI sdmmc layer issues it.
+
+Implementation touches:
+1. Drop `SMC_CAPS_SINGLE_ONLY` from `saa_caps` in `pmci_attach`.
+2. Handle `MMC_READ_BLOCK_MULTIPLE` / `MMC_WRITE_BLOCK_MULTIPLE` in
+   `pmci_exec_command`: send the CMD, loop over blocks doing
+   `pmci_burst` + CRC + token poll, then issue CMD12.
+3. Verify the MI sdmmc layer actually issues multi-block commands
+   once the cap is dropped.
+
+Expected throughput: ~85 KB/s → ~190 KB/s (2.2× — limited by the
+SPI burst floor after kernel overhead is amortized).
+
+### IRQ-driven completion deferred
+
+The Phase 3.5 plan originally included `intr_establish_xname()` +
+`cv_wait` on XFER_DONE.  Implemented and benchmarked: **3× slower**
+than polled (85 KB/s → 28 KB/s).  Root cause is the cv_wait → IRQ →
+cv_signal round-trip costing ~12 ms — more than 10× the 660 µs SPI
+burst it's waiting for.  See also `pbench pipe_pingpong` (~19 ms for
+2 context switches + 4 syscalls) and `pbench fork_exit` (~600 ms).
+
+Polled busy-wait remains the right primitive for sub-ms device waits
+on the current scheduler.  Revisit once one of:
+- Context switch cost drops to ≪ 1 ms (would benefit fork, pipe, signals
+  too — likely needs cheaper trap entry, e.g. scratch SPRs)
+- CMD18 multi-block (Phase 3.6 above) makes each `pmci_burst` cover
+  N × 660 µs of wire time, large enough to amortize the round-trip
 
 ### Phase 4: Hardware MUL/DIV
 
@@ -209,36 +246,160 @@ Investigation order: collect cycle counters around `cpu_lwp_fork`,
 COW-style "share the parent's PTEs read-only and let uvm_fault clone
 on demand" model, mirroring what other 32-bit GISel ports do.
 
-## Hardware: UART RX FIFO — paste-friendliness
+## Hardware: UART RX FIFO — paste-friendliness — DONE
 
-`hw/rtl/io/uart.sv` is NS16450-compatible: no FIFO, single-byte
-RX holding register.  Copy/pasting commands into the serial console
-loses characters whenever the kernel can't service the RX interrupt
-between successive bytes — at 115200 baud, that's a ~86 µs window,
-which is tight on a 25 MHz CPU under any moderate load.  In practice this means test runs require typing
-commands by hand instead of pasting, which is annoying.
+`hw/rtl/io/uart.sv` now implements NS16550A semantics with 16-byte
+RX and TX FIFOs (reusing `spi_fifo.sv`).  FCR wired: `[0]` FIFO
+enable (true bypass to 16450 single-byte mode when cleared), `[1]`
+RX reset, `[2]` TX reset, `[7:6]` RX trigger level (1/4/8/14).  IIR
+reports `[7:6]=11` in FIFO mode (com(4) detect signature) and
+priority-encodes RX-above-trigger / character-timeout / THRE.
 
-Promote to NS16550A semantics: add a small RX FIFO (16 bytes is the
-standard depth and matches what NetBSD's `com(4)` already expects when
-it sees the 16550A signature in IIR).  Specifically:
+Character timeout: in FIFO mode and non-empty, an RX interrupt
+fires after 4 character-times of idle (640 baud16x ticks) — partial
+pastes deliver promptly instead of waiting for the trigger
+threshold.  Counter is gated on `baud16x_tick` so the timeout
+window is fixed in baud-clock units regardless of `CLK_FREQ`.
 
-- Add an RX FIFO (~16 deep) and a TX FIFO (same depth or smaller —
-  TX is less critical since we can poll-wait for THRE).
-- Wire FCR so writes are no longer ignored: FCR[0]=FIFO enable,
-  FCR[1]=RX reset, FCR[2]=TX reset, FCR[7:6]=RX trigger level
-  (1/4/8/14 bytes).
-- Update IIR to report the FIFO-enabled bits (IIR[7:6]=11 when FIFO
-  enabled, 00 otherwise) so `com(4)`'s probe sees the upgrade.
-- Add LSR/IIR semantics for "character timeout" — the 16550A asserts
-  RX-available after 4-character-times of idle even below the trigger
-  threshold, so partial bursts still deliver promptly.
+NetBSD `com(4)` autodetects the FIFOs via the IIR signature; no
+kernel-side change required.  Regression coverage in
+`hw/sim/tb_uart.cpp` (37/37 passing), including an explicit
+spurious-IRQ regression for the empty-FIFO timeout case.  Verified
+on the ULX3S — pastes deliver reliably for bursts that fit in the
+FIFO; longer bursts still lose characters (see next entry).
 
-NetBSD-side: `com(4)` autodetects 16550A and turns on FIFO mode if
-IIR reports it — no kernel change should be needed beyond verifying
-the autodetect runs cleanly with the new RTL.
+## Hardware: UART hardware flow control (RTS/CTS)
 
-`spi_fifo.sv` already exists for the SPI controller; the same
-ring-buffer pattern should drop into `uart.sv` with minor renaming.
+With the 16-byte RX FIFO landed, paste loss only happens when an
+inbound burst overruns the FIFO before the kernel can drain it — at
+115200 baud the FIFO holds ~1.4 ms of data, and kernel ISR latency
+tails (TLB miss chains during the paste itself, copyin from a long
+`tty` queue update, etc.) occasionally exceed that on a 25 MHz CPU.
+The proper fix is RTS/CTS hardware flow control: the FPGA tells the
+host "stop sending" before the FIFO overflows.  Verified
+2026-05-15 — the ULX3S board exposes the FTDI's modem-control
+lines, but asymmetrically:
+
+| Signal      | FTDI pin | FPGA pin | Direction         | Status                             |
+|-------------|----------|----------|-------------------|------------------------------------|
+| `ftdi_nrts` | RTS#     | M3       | FPGA reads        | wired, unconditionally available   |
+| `ftdi_ndtr` | DTR#     | N1       | FPGA reads        | wired, unconditionally available   |
+| `ftdi_txden`| TXDEN    | L3       | FPGA reads        | wired (RS-485 TX-enable hint)      |
+| FTDI_nCTS   | CTS#     | V4       | **FPGA drives**   | **shared with JTAG_tdo**           |
+| FTDI_nRI    | RI#      | R5       | FPGA reads        | shared with JTAG_tdi               |
+| FTDI_nDSR   | DSR#     | T5       | FPGA reads        | shared with JTAG_tck               |
+| FTDI_nDCD   | DCD#     | U5       | FPGA reads        | shared with JTAG_tms               |
+
+(See the commented-out `LOCATE` block at the bottom of
+`hw/constraints/ulx3s_v20.lpf` lines 229-232.)
+
+The asymmetry is the critical detail: the half of flow control that
+*matters for paste* — the FPGA telling the host to slow down — needs
+the FPGA to drive `FTDI_nCTS` on pin V4, which doubles as
+`JTAG_tdo`.  Using that pin requires:
+
+1. Configuring the FTDI's MPSSE/D2XX side so the modem-control
+   pins are routed to the UART channel rather than the JTAG channel
+   (`fujprog` and ULX3S board design assume the JTAG mode at boot).
+2. Either accepting that you can't reflash over JTAG while the
+   FPGA is driving CTS (probably fine — `fujprog` resets the FTDI
+   into JTAG mode before each flash), or wiring the pin tristate so
+   the FPGA backs off during JTAG configuration.
+
+The cheaper, JTAG-safe alternatives that *don't* fully solve the
+problem but help:
+
+- Bump `FIFO_DEPTH` from 16 to 64 (parameter is already exposed on
+  `uart.sv`).  Buys 4× more buffering time, ~5.6 ms at 115200 baud
+  — wide enough to absorb most kernel latency tails.  Caveat:
+  com(4) detects the FIFO size from a separate IIR signature
+  (TL16C750/16C950 variants) that we don't currently advertise;
+  com(4) would still believe it's 16 deep and configure trigger=14
+  accordingly.  Useful as breathing room but not a real fix.
+- Lower the trigger threshold in com(4) (FCR[7:6]=00 → trigger=1)
+  so the ISR fires on every byte instead of waiting for 14.
+  Trades IRQ rate for headroom against kernel latency.
+
+Independently of which mitigation lands, the underlying signal is
+"kernel ISR latency tails > 1.4 ms occasionally."  That's worth
+investigating in its own right (most likely a TLB-miss chain
+during the very paste that's filling the FIFO, since the kernel's
+input-processing path touches tty buffers and current LWP state).
+Hardware flow control papers over the symptom but the latency tail
+is its own diagnostic.
+
+## Hardware: uncached MMIO STW is 2.4× slower than LDW
+
+A targeted MMIO microbench in `pmci_attach` (Phase 3.5 diagnostic,
+now removed) measured per-op cost for back-to-back uncached accesses
+to the SPI device on the ULX3S FPGA @ 25 MHz, with `splhigh()`
+disabling interrupts and only the inner instruction varying:
+
+```
+baseline (RDSYS CPU_CYCLES x256):  1837 cyc  =  7.17 cyc/iter
+STW SPI_DATA x256:                 4429 cyc  = 17.3  cyc/iter
+LDW SPI_STATUS x256:               2905 cyc  = 11.3  cyc/iter
+
+per-MMIO-op (baseline subtracted):
+  STW = ~11 cyc = 405 ns/op
+  LDW =  ~5 cyc = 167 ns/op
+```
+
+In the architectural model the costs should be roughly symmetric:
+arbiter `IDLE→BUSY→DONE→IDLE` is ~3 cycles regardless of direction,
+and the SPI device asserts `o_busy` for 1 cycle on reads (the
+`access_pending` pattern) while writes don't stall at all — so writes
+should be *cheaper*, not 2.4× more expensive.  Something in the
+CPU's STW micro-routine, the arbiter's write-side timing, or the
+cache pass-through path is adding cycles that the read path doesn't
+pay.
+
+**Why it matters.**  Every device that talks via word-strided MMIO
+(UART, SPI, future timer, future Ethernet) pays this cost on every
+register access.  At 11 cyc/STW we're spending ~440 ns per single-word
+write — a 512-byte SPI burst push pays ~225 µs of that minimum, before
+any per-byte instruction overhead.  Halving STW cost would buy a few
+percent on every MMIO-heavy workload.
+
+**Investigation order:**
+1. Read the CPU's STW micro-routine in `hw/rom/microcode/` (or wherever
+   the microcode source lives) and count the µ-ops.  CLAUDE.md says
+   "STW (4 µ-ops)" / "LDW (3 µ-ops)" — the 1-µop difference doesn't
+   explain a 6-cycle gap, but a per-µop multi-cycle execution would.
+2. Add a waveform probe on `o_mem_we` and `o_d_busy` during a tight
+   STW loop, count cycles between consecutive `o_mem_we` pulses, and
+   compare to the same with LDW.
+3. Inspect `cache_vipt.sv` write-update path (S_IDLE, `i_we_q && hit_q`
+   branch) — even though it should be a no-op for uncached writes,
+   verify the gating doesn't accidentally pipe-stall the bus.
+
+Headline payoff is modest (~10% of `dd` throughput in isolation),
+but it's a fundamental latency floor on every other future
+microcontroller-class workload.
+
+## Hardware: pmci_burst overshoots microbench prediction by ~3×
+
+On top of the per-MMIO-op floor above, `pmci_burst`'s push and drain
+phases each cost ~815 µs per 512-byte block — ~3× what the microbench
+predicts (`512 × (cached LDB ~3 cyc + uncached STW ~11 cyc)` ≈ 280 µs).
+Most plausible contributors, in rough order of suspicion:
+
+1. **IRQ noise during the burst.**  The microbench runs at `splhigh()`,
+   pmci_burst does not.  With dd actively printing diagnostic lines
+   through an IRQ-driven UART, the COM IRQ fires whenever the TX
+   holding register empties (~87 µs intervals at 115200 baud).  Each
+   IRQ entry/`comintr`/exit costs tens of µs.  Easy to verify: add
+   `splhigh()` around `pmci_burst` and re-measure.
+2. **D-cache misses on `tx_buf`/`rx_buf`.**  512 B buffer, 16 B cache
+   lines, 32 lines total.  First access of each line misses to SDRAM
+   via the CDC bridge — order of microseconds per line.
+3. **TLB churn.**  Other kernel activity between bursts may evict the
+   SPI MMIO TLB entry and the per-buffer TLB entry, so each burst
+   pays a few TLB misses at startup.
+
+Worth investigating after the STW asymmetry — the absolute payoff is
+roughly comparable (a couple of ms per syscall freed) and the two
+fixes compound.
 
 ## Hardware: scratch SPRs for fast trap entry
 
