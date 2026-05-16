@@ -557,20 +557,18 @@ _start_bias:
 	.globl	_real_miss_handler
 	.globl	_real_handlers_end
 _real_miss_handler:
-	/* Save scratch registers via PC-relative addressing.
-	 * The scratch area is at _rmh_scratch, after the handler code.
-	 * [pc + label - .] computes the PC-relative offset at link time;
-	 * since code + scratch are copied together, the offset is
-	 * preserved at the final runtime address.
+	/* Park R1/R2/R3 in the CPU-internal scratch SPRs (SCR0..2).
+	 * These are 32-bit storage cells exposed via WRSPR/RDSPR;
+	 * no memory access, no cache or TLB involvement.  See
+	 * doc/system/architecture.md "Scratch SPRs (SCR0–SCR3)".
 	 *
-	 * Only R1/R2/R3 are saved.  MMU_FAULT_ADDR is latched, so the
-	 * faulting VA can be re-read from the sysreg later if needed —
-	 * that re-read replaces what would otherwise be a fourth scratch
-	 * register.
+	 * MMU_FAULT_ADDR is latched, so the faulting VA can be re-read
+	 * from the sysreg later if needed — that re-read replaces what
+	 * would otherwise be a fourth scratch register.
 	 */
-	stw	r1, [pc + _rmh_save_r1 - .]
-	stw	r2, [pc + _rmh_save_r2 - .]
-	stw	r3, [pc + _rmh_save_r3 - .]
+	wrspr	scr0, r1
+	wrspr	scr1, r2
+	wrspr	scr2, r3
 
 	/* Read faulting virtual address */
 	rdsys	r1, #SYSDEV_MMU, #MMU_FAULT_ADDR
@@ -665,21 +663,21 @@ _real_miss_handler:
 	wrsys	r3, #SYSDEV_MMU, #MMU_TLB_PTE
 
 	/* Restore scratch registers and return */
-	ldw	r1, [pc + _rmh_save_r1 - .]
-	ldw	r2, [pc + _rmh_save_r2 - .]
-	ldw	r3, [pc + _rmh_save_r3 - .]
+	rdspr	r1, scr0
+	rdspr	r2, scr1
+	rdspr	r3, scr2
 	eret
 
 .Lrmh_fault:
 	/*
 	 * TLB miss handler failed to find a mapping.
-	 * R1-R3 were saved to _rmh_save_r{1..3} on handler entry.
+	 * R1-R3 were parked in SCR0..2 on handler entry.
 	 * Restore them and enter the common trap path with cause=2
 	 * (EXC_TLB_MISS).
 	 */
-	ldw	r1, [pc + _rmh_save_r1 - .]
-	ldw	r2, [pc + _rmh_save_r2 - .]
-	ldw	r3, [pc + _rmh_save_r3 - .]
+	rdspr	r1, scr0
+	rdspr	r2, scr1
+	rdspr	r3, scr2
 	/* Fall through to _trap_entry_tlbmiss */
 
 /* ── Per-vector trap entry stubs ─────────────────────────────
@@ -998,12 +996,6 @@ _trap_save_hw_fstat:
  */
 	.balign	4
 _rmh_scratch:
-_rmh_save_r1:
-	.long	0
-_rmh_save_r2:
-	.long	0
-_rmh_save_r3:
-	.long	0
 _rmh_way_counter:
 	.long	0
 _real_handlers_end:
