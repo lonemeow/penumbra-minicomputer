@@ -33,6 +33,7 @@ extern void bench_kernel_pipe_pingpong(void);
 extern void bench_kernel_fork_exit(void);
 
 extern void bench_libc_memcpy_sweep(void);
+extern void bench_libc_memcpy_align(void);
 extern void bench_libc_memset_sweep(void);
 extern void bench_libc_strlen_sweep(void);
 extern void bench_libc_qsort_int(void);
@@ -48,6 +49,7 @@ static const struct bench_entry registry[] = {
 
     /* libc benchmarks: hot routines, size-swept where applicable. */
     { "libc",   "memcpy",         bench_libc_memcpy_sweep },
+    { "libc",   "memcpy_align",   bench_libc_memcpy_align },
     { "libc",   "memset",         bench_libc_memset_sweep },
     { "libc",   "strlen",         bench_libc_strlen_sweep },
     { "libc",   "qsort_int",      bench_libc_qsort_int },

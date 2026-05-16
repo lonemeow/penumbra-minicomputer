@@ -67,3 +67,70 @@ void bench_libc_memcpy_sweep(void) {
     free(src);
     free(dst);
 }
+
+/* --- memcpy alignment / tail-byte regression coverage ----------------
+ *
+ * The main sweep above uses malloc-aligned buffers and power-of-2 sizes,
+ * which hits the fastest path of any word-at-a-time memcpy.  These
+ * cases stress the slower paths:
+ *
+ *   - Misalignment at size=256 (representative non-trivial body):
+ *       src+1/dst+0       — head-byte alignment of src only
+ *       src+0/dst+1       — head-byte alignment of dst only
+ *       src+1/dst+1       — both misaligned, same offset → word body OK
+ *       src+1/dst+3       — both misaligned, different → byte fallback
+ *
+ *   - Odd sizes (aligned), to stress tail handling after the word body:
+ *       7, 31, 127, 255   — sub-word and varying body+tail mixes
+ *
+ * Penumbra is strict-alignment (VEC_ALIGN trap on misaligned word/half
+ * loads), so any byte-at-a-time fallback inside libc memcpy will show
+ * here.  Optimizations that win on the aligned/round-size path but
+ * regress these cases get caught by this benchmark. */
+struct mc_align_case {
+    size_t      n;
+    size_t      src_off;
+    size_t      dst_off;
+    const char *config;
+};
+
+static const struct mc_align_case align_cases[] = {
+    /* Misalignment at a representative non-trivial size. */
+    { 256, 1, 0, "n=256,src=1,dst=0" },
+    { 256, 0, 1, "n=256,src=0,dst=1" },
+    { 256, 1, 1, "n=256,src=1,dst=1" },
+    { 256, 1, 3, "n=256,src=1,dst=3" },
+    /* Aligned but odd-length, to stress tail handling. */
+    { 7,   0, 0, "n=7"               },
+    { 31,  0, 0, "n=31"              },
+    { 127, 0, 0, "n=127"             },
+    { 255, 0, 0, "n=255"             },
+};
+
+void bench_libc_memcpy_align(void) {
+    /* Buffer big enough for the largest case + the largest offset. */
+    size_t max = 0;
+    for (size_t i = 0; i < sizeof(align_cases)/sizeof(align_cases[0]); i++) {
+        size_t need = align_cases[i].n
+                    + (align_cases[i].src_off > align_cases[i].dst_off
+                       ? align_cases[i].src_off : align_cases[i].dst_off);
+        if (need > max) max = need;
+    }
+    char *src = malloc(max);
+    char *dst = malloc(max);
+    if (!src || !dst) { perror("malloc"); return; }
+    for (size_t i = 0; i < max; i++) src[i] = (char)(i & 0xff);
+
+    for (size_t i = 0; i < sizeof(align_cases)/sizeof(align_cases[0]); i++) {
+        const struct mc_align_case *a = &align_cases[i];
+        struct mc_ctx ctx = {
+            .dst = dst + a->dst_off,
+            .src = src + a->src_off,
+            .n   = a->n,
+        };
+        bench_time("libc", "memcpy_align", a->config, run_memcpy, &ctx);
+    }
+
+    free(src);
+    free(dst);
+}
