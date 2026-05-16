@@ -72,7 +72,24 @@ public:
         // but the MI sdmmc layer does, so drop back to IDLE so the
         // new command is recognised.
         if (state_ == S_RECV_DATA && write_pos_ == 0 &&
+            !multi_write_active_ &&
             (mosi & 0xC0) == 0x40) {
+            state_ = S_IDLE;
+        }
+        // Multi-block stream abort.  The host issues CMD12 (or any
+        // other command) to terminate a CMD18 stream — for CMD25 the
+        // host terminates with 0xFD, but it could also send a CMD12
+        // for safety.  Detecting a CMD-frame-start byte while either
+        // stream is active aborts the stream and routes the byte
+        // through normal command receive below.
+        if ((multi_read_active_ || multi_write_active_) &&
+            cmd_pos_ == 0 && (mosi & 0xC0) == 0x40 &&
+            (state_ == S_SEND_DATA || state_ == S_SEND_RESP ||
+             (state_ == S_RECV_DATA && write_pos_ == 0))) {
+            multi_read_active_ = false;
+            multi_write_active_ = false;
+            resp_.clear(); resp_idx_ = 0;
+            write_pos_ = 0;
             state_ = S_IDLE;
         }
         switch (state_) {
@@ -87,13 +104,61 @@ public:
                 uint8_t b = resp_[resp_idx_++];
                 if (resp_idx_ >= resp_.size()) {
                     resp_.clear(); resp_idx_ = 0;
-                    state_ = post_resp_state_;
-                    post_resp_state_ = S_IDLE;
+                    if (multi_read_active_) {
+                        // CMD18 stream: refill with next block (or
+                        // terminate at end-of-device).  State is set
+                        // inside refill_multi_read().
+                        refill_multi_read();
+                    } else {
+                        state_ = post_resp_state_;
+                        post_resp_state_ = S_IDLE;
+                    }
                 }
                 return b;
             }
             state_ = S_IDLE; return 0xFF;
         case S_RECV_DATA:
+            if (multi_write_active_) {
+                // CMD25 multi-block write framing differs from CMD24:
+                //   - pad bytes (0xFF) before each block are skipped
+                //   - 0xFC token: start of a block (vs 0xFE for CMD24)
+                //   - 0xFD token: stop transmission
+                // After each block we queue [0x05 response, 0x00 busy,
+                // 0xFF release] so pmci_wait_busy_strict (which
+                // requires seeing busy before exit) is satisfied.
+                if (write_pos_ == 0) {
+                    if (mosi == 0xFD) {
+                        // Stop tran: brief busy, then idle.
+                        multi_write_active_ = false;
+                        resp_.push_back(0x00);
+                        resp_.push_back(0xFF);
+                        state_ = S_SEND_DATA;
+                        return 0xFF;
+                    }
+                    if (mosi == 0xFC) {
+                        wbuf_[write_pos_++] = mosi;
+                        return 0xFF;
+                    }
+                    return 0xFF;   // pad byte
+                }
+                wbuf_[write_pos_++] = mosi;
+                if (write_pos_ == 515) {
+                    if (img_ && multi_lba_ < total_sectors_) {
+                        fseek(img_, (long)multi_lba_ * 512L, SEEK_SET);
+                        fwrite(&wbuf_[1], 1, 512, img_); fflush(img_);
+                    }
+                    multi_lba_++;
+                    write_pos_ = 0;
+                    resp_.push_back(0x05);   // data accepted
+                    resp_.push_back(0x00);   // brief busy
+                    resp_.push_back(0xFF);   // release
+                    state_ = S_SEND_RESP;
+                    post_resp_state_ = S_RECV_DATA;
+                    return 0xFF;
+                }
+                return 0xFF;
+            }
+            // Single-block CMD24 path:
             // Skip leading 0xFF pad bytes (Nwr gap between R1 and
             // the data token).  Start accumulating once the 0xFE
             // data-start token arrives.
@@ -222,8 +287,77 @@ private:
             // then transition to S_RECV_DATA for the data phase.
             resp_.push_back(0x00); write_lba_=cmd_arg(); write_pos_=0;
             post_resp_state_ = S_RECV_DATA; break;
+        case 12:
+            // STOP_TRANSMISSION.  The host has already aborted the
+            // multi-block stream by sending this CMD frame (which we
+            // detected in the abort path above before re-entering
+            // process_cmd), so all we need to do here is acknowledge.
+            // Cleared streaming flags belong to the abort path, not
+            // here — by the time process_cmd runs, both flags are
+            // already false.
+            resp_.push_back(0x00);
+            break;
+        case 18: {
+            // READ_BLOCK_MULTIPLE.  Stream blocks until the host
+            // sends CMD12.  Pre-load R1 + gap + first block into
+            // resp_; refill_multi_read() refills with subsequent
+            // blocks as resp_ drains.
+            if (!init_) { resp_.push_back(0x05); break; }
+            if (cmd_arg() >= total_sectors_) { resp_.push_back(0x20); break; }
+            resp_.push_back(0x00); resp_.push_back(0xFF);
+            multi_read_active_ = true;
+            multi_lba_ = cmd_arg();
+            push_read_block(multi_lba_++);
+            state_ = S_SEND_DATA;
+            break;
+        }
+        case 23:
+            // ACMD23 (SET_WR_BLK_ERASE_COUNT) or CMD23 (SET_BLOCK_COUNT).
+            // Either is just a hint — we don't track block count.  R1
+            // accept and move on.  The MI sdmmc layer issues ACMD23
+            // before CMD25 in SD mode, and the write would fail
+            // entirely if we returned "illegal command" here.
+            resp_.push_back(init_ ? 0x00 : 0x05);
+            break;
+        case 25:
+            // WRITE_BLOCK_MULTIPLE.  Like CMD24 but in S_RECV_DATA
+            // we accept 0xFC tokens for blocks and 0xFD for stop.
+            if (!init_) { resp_.push_back(0x05); break; }
+            if (cmd_arg() >= total_sectors_) { resp_.push_back(0x20); break; }
+            resp_.push_back(0x00);
+            multi_write_active_ = true;
+            multi_lba_ = cmd_arg();
+            write_pos_ = 0;
+            post_resp_state_ = S_RECV_DATA;
+            break;
         default: resp_.push_back(0x04); break;
         }
+    }
+
+    // Push 0xFE + 512 data bytes + 2 CRC for the given LBA.  Used by
+    // CMD17 (single) initial inline; here as a helper for CMD18 refill.
+    void push_read_block(uint32_t lba) {
+        resp_.push_back(0xFE);
+        uint8_t sec[512]; memset(sec, 0xFF, 512);
+        if (img_ && lba < total_sectors_) {
+            fseek(img_, (long)lba * 512L, SEEK_SET);
+            if (fread(sec, 1, 512, img_) < 512) memset(sec, 0xFF, 512);
+        }
+        for (int i = 0; i < 512; i++) resp_.push_back(sec[i]);
+        resp_.push_back(0); resp_.push_back(0);
+    }
+
+    // Refill resp_ with the next block of a multi-read stream, or
+    // terminate the stream if we've run off the end of the device.
+    void refill_multi_read() {
+        resp_.clear(); resp_idx_ = 0;
+        if (multi_lba_ >= total_sectors_) {
+            multi_read_active_ = false;
+            state_ = S_IDLE;
+            return;
+        }
+        push_read_block(multi_lba_++);
+        state_ = S_SEND_DATA;
     }
     void flush_write() {
         if (img_ && write_lba_ < total_sectors_) {
@@ -239,6 +373,13 @@ private:
     uint8_t cmd_[6]={}; int cmd_pos_=0;
     std::vector<uint8_t> resp_; size_t resp_idx_=0;
     uint8_t wbuf_[515]={}; int write_pos_=0; uint32_t write_lba_=0;
+    /* Multi-block (CMD18 read, CMD25 write) state.  These are set
+     * in process_cmd() and cleared either when the host issues
+     * CMD12 / 0xFD stop-tran, or when the block stream reaches
+     * end-of-device. */
+    bool multi_read_active_ = false;
+    bool multi_write_active_ = false;
+    uint32_t multi_lba_ = 0;
 };
 
 // ═══════════════════════════════════════════════════════════════
