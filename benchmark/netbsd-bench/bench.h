@@ -12,12 +12,25 @@
 #include <stdint.h>
 #include <stddef.h>
 
-/* Auto-calibration target: each trial aims for this wall-clock duration.
- * Big enough that timer overhead is irrelevant; small enough that 5 trials
- * complete in well under a second on the ISS. */
-#define BENCH_TARGET_TRIAL_NS  (50ull * 1000ull * 1000ull)  /* 50 ms */
-#define BENCH_NUM_TRIALS       5
-#define BENCH_WARMUP_ITERS     16
+/* Each trial is one timed call to f(iters).  Calibration picks iters
+ * such that this call takes at least BENCH_TARGET_TRIAL_NS — long
+ * enough that `clock_gettime` overhead (~1–5 ms on Penumbra) is a
+ * small fraction of the trial AND random timer-interrupt jitter
+ * averages out across the trial's iterations. */
+#define BENCH_TARGET_TRIAL_NS    (200ull * 1000ull * 1000ull)            /* 200 ms */
+
+/* Trial loop runs until either MIN trials AND budget exhausted, or
+ * MAX cap hit.  Variable trial count: fast ops fit many trials in the
+ * budget (better statistics); slow ops hit the MIN floor.  No fixed
+ * minimum on iters per trial — slow ops legitimately use iters=1. */
+#define BENCH_TRIALS_BUDGET_NS   (5ull * 1000ull * 1000ull * 1000ull)    /* 5 s   */
+#define BENCH_MIN_TRIALS         5
+#define BENCH_MAX_TRIALS         50
+
+/* Cap on the calibration doubling.  Prevents pathological calibration
+ * runaway if f(iters) somehow always reads as zero (e.g., a benchmark
+ * stub that returns immediately). */
+#define BENCH_MAX_PROBE_ITERS    (1ull << 28)                            /* 256 M */
 
 /* Benchmark work function: called `iters` times in a tight inner loop by
  * the harness, with `ctx` passed unchanged.  Implementations should *not*
@@ -38,9 +51,17 @@ void bench_set_result_file(void *fp);
  *   ctx        opaque pointer passed to f
  *
  * The harness:
- *   1. Calls f(BENCH_WARMUP_ITERS, ctx) once to warm caches/TLB.
- *   2. Calibrates: finds N such that f(N, ctx) takes ~BENCH_TARGET_TRIAL_NS.
- *   3. Runs BENCH_NUM_TRIALS trials of f(N, ctx), recording elapsed ns each.
+ *   1. Calls f(1, ctx) once to prime caches/TLB (untimed throwaway).
+ *   2. Calibrates by doubling: f(1), f(2), f(4), …, stopping as soon
+ *      as a single call takes >= BENCH_TARGET_TRIAL_NS.  Each probe is
+ *      one timed measurement; no clock-bracketed inner loop adds
+ *      overhead to the per-iter estimate.  iters is the probe count
+ *      at exit.
+ *   3. Runs trials of f(iters, ctx), recording elapsed ns each.  Loop
+ *      continues until either BENCH_MAX_TRIALS reached, or
+ *      BENCH_MIN_TRIALS reached AND BENCH_TRIALS_BUDGET_NS exhausted.
+ *      Slow ops (call already >= target) end up at iters=1 with the
+ *      MIN_TRIALS floor; fast ops get many more trials within budget.
  *   4. Reduces to min/median/mean ns-per-iter and emits human + machine lines. */
 int bench_time(const char *category, const char *name, const char *config,
                bench_fn f, void *ctx);
