@@ -238,10 +238,14 @@ bool PenumbraAsmParser::parseOperand(OperandVector &Operands) {
         if (Parser.getTok().is(AsmToken::Identifier)) {
           StringRef Name = Parser.getTok().getIdentifier();
           int SprVal = -1;
-          if (Name.equals_insensitive("esr"))      SprVal = 0;
-          else if (Name.equals_insensitive("epc")) SprVal = 1;
-          else if (Name.equals_insensitive("usp")) SprVal = 2;
-          else if (Name.equals_insensitive("sr"))  SprVal = 3;
+          if (Name.equals_insensitive("esr"))       SprVal = 0;
+          else if (Name.equals_insensitive("epc"))  SprVal = 1;
+          else if (Name.equals_insensitive("usp"))  SprVal = 2;
+          else if (Name.equals_insensitive("sr"))   SprVal = 3;
+          else if (Name.equals_insensitive("scr0")) SprVal = 4;
+          else if (Name.equals_insensitive("scr1")) SprVal = 5;
+          else if (Name.equals_insensitive("scr2")) SprVal = 6;
+          else if (Name.equals_insensitive("scr3")) SprVal = 7;
           if (SprVal >= 0) {
             SMLoc E = Parser.getTok().getEndLoc();
             const MCExpr *Expr = MCConstantExpr::create(SprVal, getContext());
