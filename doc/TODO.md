@@ -254,41 +254,163 @@ miss in the trap handler.
 
 ## Kernel: fork() is unreasonably slow
 
-`pbench kernel fork_exit` reports **~600 ms per fork+exit+wait round
-trip** (see `benchmark/netbsd-bench/BASELINE.md`).  That's two orders
-of magnitude beyond what the workload should cost, and it makes the
-system painful to use: `/etc/rc` runs many short commands sequentially,
-single-user boot stalls visibly, and any shell pipeline is sluggish.
-For comparison, `pipe_pingpong` (which exercises 2 context switches +
-4 syscalls per round trip) reports ~19 ms — so context-switch cost
-alone is ~30× cheaper than a fork.  The bulk of the 600 ms is
+`pbench kernel fork_exit` reports **~670 ms per fork+exit+wait round
+trip** on the ULX3S FPGA at 25 MHz (see
+`benchmark/netbsd-bench/BASELINE.md`).  That's two orders of magnitude
+beyond what the workload should cost, and it makes the system painful
+to use: `/etc/rc` runs many short commands sequentially, single-user
+boot stalls visibly, and any shell pipeline is sluggish.  For
+comparison, `pipe_pingpong` (which exercises 2 context switches + 4
+syscalls per round trip) reports ~19 ms — so context-switch cost
+alone is ~30× cheaper than a fork.  The bulk of the 670 ms is
 fork-specific work, not generic scheduler/syscall overhead.
 
-Likely contributors, in rough order of suspicion:
-- **`pmap_copy` over the parent's full page table.**  Penumbra's pmap
-  copies the parent's L1 + L2 entries on fork rather than relying on
-  COW from `uvm_fork()`.  For a process with even a moderate address
-  space (kernel-faulted vsyscall pages, libc, ld.elf_so, stack, etc.)
-  that's a lot of L2 walking, each touch through cached RAM at L1-miss
-  cost.  RISC-V/ARM ports defer most of this to uvm_fault on first
-  use.
-- **`pmap_create`** allocates a fresh L1 page and zeros it via the L2
-  window pinned-TLB slot.  Per-byte cost is fine, but if `pmap_destroy`
-  on the child's exit is also synchronous and re-walks the L1/L2 to
-  free everything, fork+exit pays twice.
-- **Software TLB miss on first user-mode return.**  Every fault on
-  the child's first instructions traps to the miss handler.  No
-  ASID prefetch / pre-warming exists, so every page is faulted in
-  the slow way.
-- **u-area allocation** (UPAGES=4 = 16 KB) is `uvm_km_alloc(...,
-  UVM_KMF_ZERO)` — synchronous zero of 16 KB through the kernel map.
-  Minor on its own but adds up.
+### Where the time goes — full attribution
 
-Investigation order: collect cycle counters around `cpu_lwp_fork`,
-`pmap_copy`, and the first user-mode return, then attribute the
-600 ms across them.  Quickest likely win: thin out `pmap_copy` to a
-COW-style "share the parent's PTEs read-only and let uvm_fault clone
-on demand" model, mirroring what other 32-bit GISel ports do.
+Nine MD-side phases are instrumented via the `machdep.fork_timing`
+sysctl (`struct fork_timing_snapshot` in `<machine/fork_timing.h>`).
+Two waves of measurement, both on the ULX3S FPGA @ 25 MHz, median
+over 8 trials × 10 forks per trial:
+
+| Phase                  | per-fork    | calls/fork | % of total |
+|------------------------|-------------|-----------:|-----------:|
+| `cpu_lwp_fork`         | 0.11 ms     | 1          | 0.02 %     |
+| `pmap_create`          | 5.74 ms     | 1          | 0.86 %     |
+| `pmap_remove_all`      | 117.4 ms    | 1          | 17.5 %     |
+| `pmap_destroy`         | 4.14 ms     | 1          | 0.62 %     |
+| `pmap_enter` (agg)     | 200.3 ms    | 181        | 29.9 %     |
+| `pmap_protect` (agg)   | 0.86 ms     | 4          | 0.13 %     |
+| `pmap_copy_page` (agg) | 28.0 ms     | 10         | 4.19 %     |
+| `pmap_kenter_pa` (agg) | 0.07 ms     | 1          | 0.01 %     |
+| `uvm_fault` (agg)      | 586.8 ms    | 51         | 87.6 %     |
+
+`uvm_fault` is the *inclusive* outer bracket (the call site in
+`trap.c`).  `pmap_enter` and `pmap_copy_page` are nested inside it.
+Subtracting the nested leaves:
+
+  **`uvm_fault` exclusive (MI internals) = 587 − 200 − 28 = 359 ms.**
+
+That 359 ms is the page-fault machinery `uvm_anon_alloc`,
+`uvm_pagealloc`, `amap_add`, trap-entry/exit overhead — all MI code,
+unreachable from MD without forking the upstream NetBSD tree.
+
+### What lives where
+
+**MD-attributable share — ~54 % of total fork+wait time:**
+
+- `pmap_enter` × 181 calls × ~28 k cyc each (29.9 %)
+- `pmap_remove_all` 117 ms (17.5 %)
+- `pmap_copy_page` 28 ms (4.2 %)
+- `pmap_create` + `pmap_destroy` + others (~1.6 %)
+
+**MI-bound share — ~46 % of total:**
+
+- `uvm_fault` exclusive (359 ms): page-fault dispatch internals
+- Scheduler enqueue, struct proc/lwp setup, filedesc dup, signal
+  machinery, wait reaping — not separately instrumented, but
+  bounded above by `total − sum(MD)` ≈ 670 − 360 = 310 ms.
+
+### What I got wrong on the first wave
+
+- **`pmap_protect` was hypothesised to dominate** as the "COW
+  marking pass."  Measured at 0.86 ms / 4 calls / fork — NetBSD
+  uses *lazy* COW, the protect-on-fork pass doesn't exist.  Dead
+  end; don't optimise `pmap_protect`.
+- **`pmap_kenter_pa` was hypothesised to soak uarea-allocation
+  cost.**  Measured at 66 µs / 1 call / fork.  uarea pool caching
+  is already doing its job; one kenter per fork is the L1 KVA
+  wire from `pmap_create`, not the uarea pages (those are
+  inherited from the pool warm).
+
+### Why `pmap_enter` is so expensive per call
+
+181 calls × ~155 µs each = 28 ms × 51 faults * 3.5 entries/fault
+≈ the observed 200 ms.  Per-call 28 k cycles = 1.1 ms is a lot for
+a single PTE install.  Plausible contributors, in order of suspicion:
+
+1. **`pool_get` for the PV entry.**  Mutex acquisition + freelist
+   walk + occasional pool growth path.  Could be hundreds of cycles
+   even on the warm path.
+2. **`pmap_pte_lookup` scratch-window reload.**  Every call does a
+   WRSYS to remap pinned TLB slot 3 to the L2 page, even when the
+   previous lookup was for the same L2.  At 181 calls/fork with
+   most adjacent VAs sharing an L2, an L2-cache here could fold
+   the WRSYS away on most calls.
+3. **`pmap_tlb_invalidate`** — one WRSYS per call.
+4. **`icache_invalidate`** — full-cache invalidate if the mapping is
+   executable.  Many of the child's mapped pages are executable
+   (libc text), so this could fire on most calls.
+
+A second-stage instrumentation inside `pmap_enter` (bracket the four
+sub-phases above) is the cleanest way to attribute the 1.1 ms.
+
+### Why `pmap_remove_all` is suspiciously large on its own
+
+117 ms ≈ 2.94 M cycles for an init-sized address space (~2000 valid
+pages, sparse over ~10 valid L1 slots).  That works out to ~1500
+cycles per visited *valid* PTE.  Same culprits as `pmap_enter`'s
+per-call cost — per-L2 cached SDRAM walk, `pv_remove` SLIST
+traversal — but here the scratch-window cache would help directly
+since adjacent L2 walks share PA.
+
+### Why `pmap_remove_all` is suspiciously large on its own
+
+118.6 ms ≈ 2.97 M cycles for an init-sized address space (~2000 valid
+pages typical, sparse over ~10 valid L1 slots).  That works out to
+~1500 cycles per visited *valid* PTE, far more than the algorithm
+describes — a load+branch on invalid entries and a PV-list walk +
+stat decrement on valid ones.  Likely culprits: the per-L2 cached
+SDRAM walk over 1024 entries each (256 cache lines × first-touch
+SDRAM latency), and `pv_remove`'s SLIST traversal hitting cold lines.
+Worth a closer look in its own right after the bigger gap is closed.
+
+### Quickest wins, ranked by leverage
+
+Now that attribution is complete, candidates ordered by leverage on
+MD-attributable time:
+
+1. **Attribute `pmap_enter`'s 1.1 ms/call.**  Bracket the four
+   sub-phases (PV pool_get, scratch-window reload, TLB invalidate,
+   icache invalidate) inside `pmap_enter` and re-run the bench.
+   Without that breakdown we don't know which fix lands the biggest
+   share of the 200 ms (~30 % of total).  Cheap follow-up; should be
+   the next move.
+2. **Scratch-window caching across `pmap_l2_map`.**  A one-entry
+   cache that skips `pmap_scratch_map` when the target L2's PA
+   matches the previous lookup.  Applies to `pmap_enter`,
+   `pmap_remove_all`, and `pmap_extract`/`pmap_clear_modify`.
+   Likely worth tens of ms.
+3. **`pmap_remove_all` early-out per L2.**  Stop walking once
+   `pm_stats_resident` reaches zero; most empty L2 slots beyond
+   that point don't need scanning.  Probably a few-ms win.
+4. **Pre-populating the child's pmap with parent's R-O pages.**
+   Would reduce the 51 faults / fork to a handful.  Bigger refactor
+   (shared L2 or eager L1-half copy of R-O entries) and partially
+   requires touching MI assumptions about `pmap_remove_all`.
+5. **`icache_invalidate` granularity.**  We do a full-cache flush
+   per `pmap_enter` on executable pages — if 51 page-faults all do
+   this, it's a sizeable hidden cost.  A line-granularity invalidate
+   would help, but probably needs RTL changes.
+
+Previously listed as suspects but ruled out by measurement (do not
+chase further without new data):
+
+- `pmap_copy` over parent's full page table — already a no-op.
+- `pmap_create` zero/copy cost — measured at 5.74 ms, fine.
+- `cpu_lwp_fork` trapframe setup — 0.11 ms, negligible.
+- `pmap_protect` "COW-marking pass" — 0.86 ms / 4 calls; NetBSD's
+  COW is lazy, this pass doesn't exist.
+- `pmap_kenter_pa` uarea cost — 66 µs / 1 call; uarea pool warms.
+
+### What's not fixable in MD code (~46 % of total fork+wait time)
+
+The `uvm_fault` exclusive bracket (~359 ms / fork) is MI internals:
+`uvm_anon_alloc`, `uvm_pagealloc`, `amap_add`, trap-entry/exit
+overhead, scheduler enqueue, struct proc/lwp setup, filedesc dup,
+signal machinery, wait reaping.  Without forking the upstream
+NetBSD tree, that's the floor we can't drop below.  Even an
+arbitrarily-good MD layer can only halve the 670 ms or so.
+
 
 ## Hardware: UART RX FIFO — paste-friendliness — DONE
 

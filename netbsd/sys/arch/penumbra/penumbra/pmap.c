@@ -664,15 +664,71 @@ pmap_enter(pmap_t pmap, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 	uint32_t extra = is_kernel ? PTE_G : PTE_U;
 	pt_entry_t *l1 = pmap->pm_l1;
 	unsigned int l1_idx = PT_L1_INDEX(va);
-	bool managed = pmap_initialized && uvm_pageismanaged(pa);
+
+	/*
+	 * Single PHYS_TO_VM_PAGE lookup, reused everywhere we'd
+	 * otherwise call uvm_pageismanaged(pa) or PHYS_TO_VM_PAGE(pa).
+	 * Each of those walks the physseg array; one cached lookup
+	 * replaces four function calls per pmap_enter.
+	 */
+	struct vm_page * const pg =
+	    pmap_initialized ? PHYS_TO_VM_PAGE(pa) : NULL;
+	const bool managed = (pg != NULL);
 
 	if (managed)
 		extra |= PTE_SW_MANAGED;
 
+	const pt_entry_t new_pte = PTE_MAKE(pa, prot, flags, extra);
+
 	/*
-	 * Pre-allocate PV entry outside critical section.
-	 * pool_get at splhigh with PR_NOWAIT may fail if the pool
-	 * needs to grow (which requires sleeping allocation).
+	 * Fast path: same-PA remap.  Triggers on NEEDSCOPY
+	 * promote-in-place COW upgrades (the parent's first write to
+	 * a writable post-fork page, when no copy is needed because
+	 * the amap is already exclusively owned) and on wire/protection
+	 * adjustments via mprotect/mlock that don't change the PA.
+	 *
+	 * If the existing PTE already maps `pa`, the PV list is correct
+	 * as-is — we can skip pool_get entirely and just update the PTE
+	 * bits.  Mirrors sh3's __pmap_map_change.
+	 */
+	int s = splhigh();
+	if (l1[l1_idx] & PTE_V) {
+		pt_entry_t *ptep = pmap_pte_lookup(l1, va);
+		pt_entry_t old_pte = *ptep;
+		if ((old_pte & PTE_V) &&
+		    (old_pte & PTE_PPN_MASK) == (pa & PTE_PPN_MASK)) {
+			/*
+			 * Same PA at same VA: permission / flag change only.
+			 * PV list is unchanged.  Resident count is unchanged
+			 * (old PTE was already V).
+			 */
+			*ptep = new_pte;
+
+			if (flags & PMAP_WIRED)
+				pmap->pm_stats_wired++;
+
+			if (managed) {
+				struct vm_page_md *md = VM_PAGE_TO_MD(pg);
+				md->pvh_attrs |= PMAP_MD_REFERENCED;
+				if (prot & VM_PROT_WRITE)
+					md->pvh_attrs |= PMAP_MD_MODIFIED;
+			}
+
+			pmap_tlb_invalidate(pmap, va);
+
+			if (prot & VM_PROT_EXECUTE)
+				icache_invalidate();
+
+			splx(s);
+			return 0;
+		}
+	}
+	splx(s);
+
+	/*
+	 * Slow path: PV list update needed.  Pre-allocate the PV entry
+	 * outside splhigh — pool_get with PR_NOWAIT may fail inside
+	 * splhigh if the pool needs to grow.
 	 */
 	struct pv_entry *new_pv = NULL;
 	if (managed) {
@@ -681,7 +737,7 @@ pmap_enter(pmap_t pmap, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 			return ENOMEM;
 	}
 
-	int s = splhigh();
+	s = splhigh();
 
 	if (!(l1[l1_idx] & PTE_V)) {
 		if (!pmap_alloc_l2(l1, l1_idx)) {
@@ -694,7 +750,7 @@ pmap_enter(pmap_t pmap, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 
 	pt_entry_t *ptep = pmap_pte_lookup(l1, va);
 	pt_entry_t old_pte = *ptep;
-	*ptep = PTE_MAKE(pa, prot, flags, extra);
+	*ptep = new_pte;
 
 	if (!(old_pte & PTE_V))
 		pmap->pm_stats_resident++;
@@ -703,33 +759,29 @@ pmap_enter(pmap_t pmap, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 		pmap->pm_stats_wired++;
 
 	/*
-	 * PV tracking: handle old mapping's PV entry.
-	 * If old PTE was managed and maps a different PA, remove it.
-	 * If same page, the PV entry is already correct.
+	 * PV cleanup for old mapping.  The fast-path same-PA case is
+	 * already handled above, but a race window exists: between
+	 * fast-path's splx and the slow-path's re-acquired splhigh,
+	 * another path could have installed a same-PA mapping.  Detect
+	 * that and put the unused new_pv back, the same way the
+	 * pre-refactor code did.
 	 */
 	if ((old_pte & PTE_V) && (old_pte & PTE_SW_MANAGED)) {
 		paddr_t old_pa = old_pte & PTE_PPN_MASK;
 		if (managed && old_pa == (pa & PTE_PPN_MASK)) {
-			/* Same managed page — PV entry already in list */
 			pool_put(&pv_pool, new_pv);
 			new_pv = NULL;
 		} else {
-			/* Different page — remove stale PV entry */
 			struct vm_page *old_pg = PHYS_TO_VM_PAGE(old_pa);
 			if (old_pg != NULL)
 				pv_remove(old_pg, pmap, va);
 		}
 	}
 
-	/* PV tracking: insert new PV entry for managed page */
-	if (new_pv != NULL) {
-		struct vm_page *pg = PHYS_TO_VM_PAGE(pa);
+	if (new_pv != NULL)
 		pv_enter(pg, new_pv, pmap, va);
-	}
 
-	/* Update page attributes for managed pages */
 	if (managed) {
-		struct vm_page *pg = PHYS_TO_VM_PAGE(pa);
 		struct vm_page_md *md = VM_PAGE_TO_MD(pg);
 		md->pvh_attrs |= PMAP_MD_REFERENCED;
 		if (prot & VM_PROT_WRITE)
@@ -738,9 +790,8 @@ pmap_enter(pmap_t pmap, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 
 	pmap_tlb_invalidate(pmap, va);
 
-	if (prot & VM_PROT_EXECUTE) {
+	if (prot & VM_PROT_EXECUTE)
 		icache_invalidate();
-	}
 
 	splx(s);
 
