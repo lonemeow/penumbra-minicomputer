@@ -76,3 +76,18 @@ module ODDRX1F (
     always @(negedge SCLK) q_neg <= D1;
     assign Q = SCLK ? q_pos : q_neg;
 endmodule
+
+// ── DCCA: Dynamic Clock Buffer, Always-on ───────────────────
+// Used by ulx3s_top to promote high-fanout signals (e.g. rst)
+// onto global clock nets via the ECP5 clock distribution
+// network.  CE=1 keeps the buffer transparent; CLKO is the
+// same logical value as CLKI but routed through a global net
+// rather than general fabric.  For lint, model as a simple
+// CE-gated buffer.
+module DCCA (
+    input  CLKI,
+    input  CE,
+    output CLKO
+);
+    assign CLKO = CE ? CLKI : 1'b0;
+endmodule

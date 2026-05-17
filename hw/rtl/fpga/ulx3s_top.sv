@@ -31,7 +31,11 @@
 module ulx3s_top (
     input  logic       clk_25mhz,
     output logic [7:0] led,
+    // Only btn[1] (FIRE1 = manual reset) is used; other bits are
+    // physical inputs the design doesn't consume.
+    /* verilator lint_off UNUSEDSIGNAL */
     input  logic [6:0] btn,
+    /* verilator lint_on UNUSEDSIGNAL */
     output logic       ftdi_rxd,    // FPGA TX → FTDI RX → host
     input  logic       ftdi_txd,    // host → FTDI TX → FPGA RX
     output logic       wifi_en,     // LOW = hold ESP32 in reset
@@ -179,7 +183,12 @@ module ulx3s_top (
         btn1_sync2 <= btn1_sync1;
     end
 
+    // Init value at sim-time is harmless and ensures rst_cnt
+    // starts at 0 before pll_lock asserts; the always_ff covers
+    // post-reset behaviour.  Suppress the procedural-init warn.
+    /* verilator lint_off PROCASSINIT */
     logic [18:0] rst_cnt = '0;
+    /* verilator lint_on PROCASSINIT */
     logic        rst_raw;
     logic        rst;
 
@@ -530,14 +539,22 @@ module ulx3s_top (
 
     // ── SPI controller (first device in chain) ──────────────
     logic [31:0] spi_dev_addr, spi_dev_wdata;
+    // SPI is byte-oriented; byte_en from the autoconfig wrapper
+    // isn't consumed by the SPI device itself.
+    /* verilator lint_off UNUSEDSIGNAL */
     logic [3:0]  spi_dev_byte_en;
+    /* verilator lint_on UNUSEDSIGNAL */
     logic        spi_dev_we, spi_dev_re;
     logic [31:0] spi_dev_rdata;
     logic        spi_dev_busy;
 
     logic [31:0] ac_spi_rdata;
     logic        ac_spi_busy, ac_spi_sel;
+    // cfg_out is the daisy-chain to the next autoconfig device;
+    // SPI is the last (only) device in the chain so it dangles.
+    /* verilator lint_off UNUSEDSIGNAL */
     logic        ac_spi_cfg_out;
+    /* verilator lint_on UNUSEDSIGNAL */
 
     autoconfig_dev #(
         .DEV_CLASS (ACFG_CLASS_SD),
