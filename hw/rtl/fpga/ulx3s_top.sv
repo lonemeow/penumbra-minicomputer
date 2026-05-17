@@ -29,10 +29,12 @@
 `endif
 
 module ulx3s_top #(
-    // HAS_L2: insert l2_passthrough (phase-0 L2 stub) between
-    // cpu_core's memory port and the shared system bus.  Default
-    // 0 keeps pre-L2 wiring; flip to 1 for an A/B build that
-    // exercises the L2 port shape with no behavioural change.
+    // HAS_L2: insert l2_cache (phase 1: 64 KiB 4-way unified
+    // cache, write-invalidate-on-hit) between cpu_core's memory
+    // port and the shared system bus.  Default 0 keeps pre-L2
+    // wiring; flip to 1 to bring the cache into the build.  L2
+    // boots disabled (CTRL.enable=0), so HAS_L2=1 with no
+    // software bring-up is functionally equivalent to HAS_L2=0.
     parameter bit HAS_L2 = 1'b0
 ) (
     input  logic       clk_25mhz,
@@ -343,12 +345,16 @@ module ulx3s_top #(
     // ══════════════════════════════════════════════════════════
     // L2 layer (HAS_L2 generate)
     //
-    // Phase-0 stub: l2_passthrough is a wire-through.  HAS_L2=0
+    // Phase 1: real l2_cache (64 KiB, 4-way, tree-PLRU, 2-cycle
+    // hit pipeline, write-invalidate-on-hit).  Disabled at reset;
+    // software brings it up via WRSYS SYSDEV_L2 CTRL=1.  HAS_L2=0
     // (default) keeps pre-L2 wiring byte-identical.
     // ══════════════════════════════════════════════════════════
+    logic [31:0] l2_rdata;
+
     generate
         if (HAS_L2) begin : g_l2
-            l2_passthrough u_l2 (
+            l2_cache u_l2 (
                 .i_clk          (clk),
                 .i_rst          (rst),
                 .i_addr         (cpu_mem_addr),
@@ -365,7 +371,11 @@ module ulx3s_top #(
                 .o_mem_we       (mem_we),
                 .o_mem_re       (mem_re),
                 .i_mem_rdata    (mem_rdata),
-                .i_mem_busy     (mem_busy)
+                .i_mem_busy     (mem_busy),
+                .i_sys_reg      (sys_reg),
+                .i_sys_wdata    (sys_wdata),
+                .i_sys_we       (sys_we & sys_cycle & (sys_dev == SYSDEV_L2)),
+                .o_sys_rdata    (l2_rdata)
             );
         end else begin : g_no_l2
             assign mem_addr      = cpu_mem_addr;
@@ -375,6 +385,7 @@ module ulx3s_top #(
             assign mem_re        = cpu_mem_re;
             assign cpu_mem_rdata = mem_rdata;
             assign cpu_mem_busy  = mem_busy;
+            assign l2_rdata      = 32'b0;
         end
     endgenerate
 
@@ -757,6 +768,7 @@ module ulx3s_top #(
             SYSDEV_BUS:   sys_rdata = busctl_rdata;
             SYSDEV_TIMER: sys_rdata = timer_rdata;
             SYSDEV_MACH:  sys_rdata = machid_rdata;
+            SYSDEV_L2:    sys_rdata = l2_rdata;
             default:      sys_rdata = 32'b0;
         endcase
     end

@@ -176,14 +176,21 @@ module machine_sim
     // ══════════════════════════════════════════════════════════
     // L2 layer (HAS_L2 generate)
     //
-    // Phase 0: l2_passthrough is a literal wire-through.  The
-    // generate selection keeps HAS_L2=0 byte-identical to the
-    // pre-L2 build, and HAS_L2=1 exercises the L2's port shape
-    // before real L2 storage exists.
+    // Phase 1: real l2_cache module — 64 KiB, 4-way, tree-PLRU,
+    // 2-cycle hit pipeline, write-invalidate-on-hit.  Disabled
+    // at reset; software must explicitly WRSYS SYSDEV_L2 CTRL=1.
+    // While disabled, every access is uncached pass-through, so
+    // HAS_L2=1 with CTRL.enable=0 is functionally equivalent to
+    // HAS_L2=0 — useful for differential testing.
+    //
+    // l2_rdata declared outside the generate so the sysreg fan-in
+    // below sees a stable name in both branches.
     // ══════════════════════════════════════════════════════════
+    logic [31:0] l2_rdata;
+
     generate
         if (HAS_L2) begin : g_l2
-            l2_passthrough u_l2 (
+            l2_cache u_l2 (
                 .i_clk          (i_clk),
                 .i_rst          (i_rst),
                 .i_addr         (cpu_mem_addr),
@@ -200,7 +207,11 @@ module machine_sim
                 .o_mem_we       (mem_we),
                 .o_mem_re       (mem_re),
                 .i_mem_rdata    (mem_rdata),
-                .i_mem_busy     (mem_busy)
+                .i_mem_busy     (mem_busy),
+                .i_sys_reg      (sys_reg),
+                .i_sys_wdata    (sys_wdata),
+                .i_sys_we       (sys_we & sys_cycle & (sys_dev == SYSDEV_L2)),
+                .o_sys_rdata    (l2_rdata)
             );
         end else begin : g_no_l2
             // Direct wire-through.  cacheable is dropped — current
@@ -212,6 +223,8 @@ module machine_sim
             assign mem_re        = cpu_mem_re;
             assign cpu_mem_rdata = mem_rdata;
             assign cpu_mem_busy  = mem_busy;
+            // No L2 → INFO reads as 0, software treats as absent.
+            assign l2_rdata      = 32'b0;
         end
     endgenerate
 
@@ -477,6 +490,7 @@ module machine_sim
             SYSDEV_BUS:   sys_rdata = busctl_rdata;
             SYSDEV_TIMER: sys_rdata = timer_rdata;
             SYSDEV_MACH:  sys_rdata = machid_rdata;
+            SYSDEV_L2:    sys_rdata = l2_rdata;
             default:      sys_rdata = 32'b0;
         endcase
     end

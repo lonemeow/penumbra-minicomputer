@@ -76,10 +76,11 @@ package penumbra_pkg;
     localparam logic [3:0] SYSDEV_DCACHE = 4'd2;   // D-cache control
     localparam logic [3:0] SYSDEV_ICACHE = 4'd3;   // I-cache control
     localparam logic [3:0] SYSDEV_BUS    = 4'd4;   // Bus controller (autoconfig, reset)
-    // Devices 5–6 reserved for future cache levels (L2, L3)
+    // Devices 5–6 reserved
     localparam logic [3:0] SYSDEV_TIMER  = 4'd7;   // Programmable interval timer
     localparam logic [3:0] SYSDEV_MACH   = 4'd8;   // Machine identity (board name, CPU clock freq)
-    // Devices 9–15 reserved for future expansion
+    localparam logic [3:0] SYSDEV_L2     = 4'd9;   // L2 unified cache (INFO/CTRL/INVAL); INFO=0 ⇒ absent
+    // Devices 10–15 reserved for future expansion
 
     // ── CPU sysreg addresses (dev_id = 1) ───────────────────
     localparam logic [3:0] SYSREG_CPU_ISA           = 4'd0;  // ISA version + feature flags
