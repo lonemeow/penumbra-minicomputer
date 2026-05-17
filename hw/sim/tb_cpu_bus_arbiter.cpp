@@ -52,8 +52,10 @@ static void reset(Vcpu_bus_arbiter* d) {
     d->i_d_byte_en = 0;
     d->i_d_we = 0;
     d->i_d_re = 0;
+    d->i_d_cacheable = 0;
     d->i_i_addr = 0;
     d->i_i_re = 0;
+    d->i_i_cacheable = 0;
     d->i_mem_rdata = 0;
     d->i_mem_busy = 0;
     tick(d);
@@ -432,6 +434,55 @@ static void test_req_accepted_pulse(Vcpu_bus_arbiter* d) {
     tick_with_mem(d, mem, 0, 0);
 }
 
+static void test_cacheable_forwarding(Vcpu_bus_arbiter* d) {
+    printf("── cacheable: per-port bit is latched and forwarded ──\n");
+    reset(d);
+    MemMock mem;
+
+    // D request with cacheable=1 → o_mem_cacheable should be 1
+    // while D is on the bus.
+    d->i_d_addr      = 0x100;
+    d->i_d_cacheable = 1;
+    d->i_d_re        = 1;
+    d->eval();
+    tick_with_mem(d, mem, 2, 0xCAFE0000u);
+    check_bool("cacheable.d_high_in_busy", d->o_mem_cacheable, true);
+
+    int safety = 0;
+    while (d->o_d_busy && safety++ < 20) {
+        check_bool("cacheable.d_stable_during_txn", d->o_mem_cacheable, true);
+        tick_with_mem(d, mem, 2, 0xCAFE0000u);
+    }
+    d->i_d_re = 0;
+    tick_with_mem(d, mem, 0, 0);
+
+    // D request with cacheable=0 (uncached MMIO) → o_mem_cacheable=0
+    d->i_d_addr      = 0xFF000000u;
+    d->i_d_cacheable = 0;
+    d->i_d_re        = 1;
+    d->eval();
+    tick_with_mem(d, mem, 2, 0xDEAD0000u);
+    check_bool("cacheable.d_low_in_busy", d->o_mem_cacheable, false);
+    safety = 0;
+    while (d->o_d_busy && safety++ < 20)
+        tick_with_mem(d, mem, 2, 0xDEAD0000u);
+    d->i_d_re = 0;
+    tick_with_mem(d, mem, 0, 0);
+
+    // I request with cacheable=1 (typical fetch) → o_mem_cacheable=1
+    d->i_i_addr      = 0x200;
+    d->i_i_cacheable = 1;
+    d->i_i_re        = 1;
+    d->eval();
+    tick_with_mem(d, mem, 2, 0xBEEF0000u);
+    check_bool("cacheable.i_high_in_busy", d->o_mem_cacheable, true);
+    safety = 0;
+    while (d->o_i_busy && safety++ < 20)
+        tick_with_mem(d, mem, 2, 0xBEEF0000u);
+    d->i_i_re = 0;
+    tick_with_mem(d, mem, 0, 0);
+}
+
 static void test_back_to_back_zero_dead_cycles(Vcpu_bus_arbiter* d) {
     printf("── Back-to-back D burst: zero idle cycles between transactions ──\n");
     reset(d);
@@ -515,6 +566,7 @@ int main() {
     test_back_to_back_same_port(d);
     test_non_owner_exclusion(d);
     test_req_accepted_pulse(d);
+    test_cacheable_forwarding(d);
     test_back_to_back_zero_dead_cycles(d);
 
     printf("\ncpu_bus_arbiter: %d/%d tests passed\n", tests - errors, tests);

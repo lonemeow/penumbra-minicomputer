@@ -82,6 +82,13 @@ module cache_vipt
     output logic [3:0]  o_mem_byte_en,
     output logic        o_mem_we,
     output logic        o_mem_re,
+    // o_mem_cacheable: per-request cacheability hint forwarded
+    // alongside addr/we/re.  Downstream consumers (L2 once it
+    // exists) use this to decide whether to cache/install.  For
+    // cached burst fills (S_FILL) the bit is always 1; for
+    // pass-through (uncached MMIO or write-through stores) it is
+    // i_cacheable from the MMU.
+    output logic        o_mem_cacheable,
     input  logic [31:0] i_mem_rdata,
     input  logic        i_mem_busy,
     // i_req_accepted: 1-cycle pulse from cpu_bus_arbiter when it
@@ -295,11 +302,17 @@ module cache_vipt
     // Memory bus output mux — always physical
     // ══════════════════════════════════════════════════════════
     always_comb begin
-        o_mem_addr    = i_paddr;
-        o_mem_wdata   = i_wdata;
-        o_mem_byte_en = i_byte_en;
-        o_mem_we      = 1'b0;
-        o_mem_re      = 1'b0;
+        o_mem_addr      = i_paddr;
+        o_mem_wdata     = i_wdata;
+        o_mem_byte_en   = i_byte_en;
+        o_mem_we        = 1'b0;
+        o_mem_re        = 1'b0;
+        // Pass i_cacheable through by default — for the pass-through
+        // path that's the right value (could be 1 for cached
+        // write-through, 0 for uncached MMIO).  S_FILL overrides
+        // below: a fill only happens after a cacheable miss, so
+        // the bit is unconditionally 1 throughout the burst.
+        o_mem_cacheable = i_cacheable;
 
         case (state)
             S_IDLE: begin
@@ -328,10 +341,13 @@ module cache_vipt
                 // when req_idx reaches LINE_WORDS (all requests
                 // issued; any still-outstanding responses drain
                 // through the resp_idx path below).
-                o_mem_addr = {fill_base_addr[31:WORD_LSB+WORD_BITS],
-                              req_idx[WORD_BITS-1:0],
-                              {WORD_LSB{1'b0}}};
-                o_mem_re   = (req_idx < (WORD_BITS+1)'(LINE_WORDS));
+                o_mem_addr      = {fill_base_addr[31:WORD_LSB+WORD_BITS],
+                                   req_idx[WORD_BITS-1:0],
+                                   {WORD_LSB{1'b0}}};
+                o_mem_re        = (req_idx < (WORD_BITS+1)'(LINE_WORDS));
+                // A fill is by definition cacheable — we only
+                // entered S_FILL on a cache_active read miss.
+                o_mem_cacheable = 1'b1;
             end
         endcase
     end

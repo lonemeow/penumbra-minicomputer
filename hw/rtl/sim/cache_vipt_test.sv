@@ -83,6 +83,9 @@ module cache_vipt_test
     logic [31:0] cache_mem_addr, cache_mem_wdata;
     logic [3:0]  cache_mem_byte_en;
     logic        cache_mem_we, cache_mem_re;
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic        cache_mem_cacheable;  // forwarded but arbiter doesn't consume it here
+    /* verilator lint_on UNUSEDSIGNAL */
     logic [31:0] cache_mem_rdata;
     logic        cache_mem_busy;
     logic        cache_req_accepted;
@@ -109,6 +112,7 @@ module cache_vipt_test
         .o_mem_byte_en(cache_mem_byte_en),
         .o_mem_we     (cache_mem_we),
         .o_mem_re     (cache_mem_re),
+        .o_mem_cacheable (cache_mem_cacheable),
         .i_mem_rdata  (cache_mem_rdata),
         .i_mem_busy   (cache_mem_busy),
         .i_req_accepted (cache_req_accepted),
@@ -139,11 +143,13 @@ module cache_vipt_test
         .i_d_byte_en (cache_mem_byte_en),
         .i_d_we      (cache_mem_we),
         .i_d_re      (cache_mem_re),
+        .i_d_cacheable (cache_mem_cacheable),
         .o_d_rdata   (cache_mem_rdata),
         .o_d_busy    (cache_mem_busy),
         // I-port tied off
         .i_i_addr    (32'b0),
         .i_i_re      (1'b0),
+        .i_i_cacheable (1'b0),
         .o_i_rdata   (unused_i_rdata),
         .o_i_busy    (unused_i_busy),
         // D req_accepted drives the cache's burst-fill issue
@@ -151,13 +157,14 @@ module cache_vipt_test
         .o_d_req_accepted (cache_req_accepted),
         .o_i_req_accepted (unused_i_req_accepted),
         // External bus
-        .o_mem_addr   (arb_mem_addr),
-        .o_mem_wdata  (arb_mem_wdata),
-        .o_mem_byte_en(arb_mem_byte_en),
-        .o_mem_we     (arb_mem_we),
-        .o_mem_re     (arb_mem_re),
-        .i_mem_rdata  (arb_mem_rdata),
-        .i_mem_busy   (arb_mem_busy)
+        .o_mem_addr      (arb_mem_addr),
+        .o_mem_wdata     (arb_mem_wdata),
+        .o_mem_byte_en   (arb_mem_byte_en),
+        .o_mem_we        (arb_mem_we),
+        .o_mem_re        (arb_mem_re),
+        .o_mem_cacheable (/* unused — backing simple_mem ignores it */),
+        .i_mem_rdata     (arb_mem_rdata),
+        .i_mem_busy      (arb_mem_busy)
     );
     // verilator lint_on PINCONNECTEMPTY
 

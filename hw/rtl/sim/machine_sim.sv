@@ -24,6 +24,14 @@
 // verilator lint_off UNUSEDSIGNAL
 module machine_sim
     import penumbra_pkg::*;
+#(
+    // HAS_L2: insert the L2 cache (currently `l2_passthrough` as
+    // the phase-0 stub) between cpu_core's memory port and the
+    // shared system bus.  Default 0 keeps the pre-L2 direct
+    // wiring; existing tests run unchanged.  See
+    // `doc/internals/l2-cache.md`.
+    parameter bit HAS_L2 = 1'b0
+)
 (
     input  logic        i_clk,
     // Separate SDRAM clock so the testbench can drive it faster than
@@ -63,7 +71,19 @@ module machine_sim
     output logic        o_trace_eret
 );
 
-    // ── CPU ↔ memory bus (shared, directly from CPU) ────────
+    // ── CPU ↔ memory bus signals ──────────────────────────
+    //
+    // Two segments: cpu_mem_* (cpu_core → L2 or wire), and
+    // mem_* (the shared system bus that all devices decode).
+    // With HAS_L2=0 (default) these are directly wired; with
+    // HAS_L2=1 they go through l2_passthrough (the phase-0 stub).
+    logic [31:0] cpu_mem_addr, cpu_mem_wdata;
+    logic [3:0]  cpu_mem_byte_en;
+    logic        cpu_mem_we, cpu_mem_re;
+    logic        cpu_mem_cacheable;
+    logic [31:0] cpu_mem_rdata;
+    logic        cpu_mem_busy;
+
     logic [31:0] mem_addr, mem_wdata;
     logic [3:0]  mem_byte_en;
     logic        mem_we, mem_re;
@@ -116,14 +136,15 @@ module machine_sim
         .i_clk          (i_clk),
         .i_rst          (i_rst),
 
-        // Memory bus (shared — all devices see these signals)
-        .o_mem_addr     (mem_addr),
-        .o_mem_wdata    (mem_wdata),
-        .o_mem_byte_en  (mem_byte_en),
-        .o_mem_we       (mem_we),
-        .o_mem_re       (mem_re),
-        .i_mem_rdata    (mem_rdata),
-        .i_mem_busy     (mem_busy),
+        // Memory bus (cpu side — goes through L2 layer if HAS_L2)
+        .o_mem_addr     (cpu_mem_addr),
+        .o_mem_wdata    (cpu_mem_wdata),
+        .o_mem_byte_en  (cpu_mem_byte_en),
+        .o_mem_we       (cpu_mem_we),
+        .o_mem_re       (cpu_mem_re),
+        .o_mem_cacheable(cpu_mem_cacheable),
+        .i_mem_rdata    (cpu_mem_rdata),
+        .i_mem_busy     (cpu_mem_busy),
         .i_bus_fault    (bus_fault),
 
         // Sysreg bus (external devices)
@@ -151,6 +172,48 @@ module machine_sim
         .o_trace_vector       (o_trace_vector),
         .o_trace_eret         (o_trace_eret)
     );
+
+    // ══════════════════════════════════════════════════════════
+    // L2 layer (HAS_L2 generate)
+    //
+    // Phase 0: l2_passthrough is a literal wire-through.  The
+    // generate selection keeps HAS_L2=0 byte-identical to the
+    // pre-L2 build, and HAS_L2=1 exercises the L2's port shape
+    // before real L2 storage exists.
+    // ══════════════════════════════════════════════════════════
+    generate
+        if (HAS_L2) begin : g_l2
+            l2_passthrough u_l2 (
+                .i_clk          (i_clk),
+                .i_rst          (i_rst),
+                .i_addr         (cpu_mem_addr),
+                .i_wdata        (cpu_mem_wdata),
+                .i_byte_en      (cpu_mem_byte_en),
+                .i_we           (cpu_mem_we),
+                .i_re           (cpu_mem_re),
+                .i_cacheable    (cpu_mem_cacheable),
+                .o_rdata        (cpu_mem_rdata),
+                .o_busy         (cpu_mem_busy),
+                .o_mem_addr     (mem_addr),
+                .o_mem_wdata    (mem_wdata),
+                .o_mem_byte_en  (mem_byte_en),
+                .o_mem_we       (mem_we),
+                .o_mem_re       (mem_re),
+                .i_mem_rdata    (mem_rdata),
+                .i_mem_busy     (mem_busy)
+            );
+        end else begin : g_no_l2
+            // Direct wire-through.  cacheable is dropped — current
+            // bus devices don't have a cacheable port.
+            assign mem_addr      = cpu_mem_addr;
+            assign mem_wdata     = cpu_mem_wdata;
+            assign mem_byte_en   = cpu_mem_byte_en;
+            assign mem_we        = cpu_mem_we;
+            assign mem_re        = cpu_mem_re;
+            assign cpu_mem_rdata = mem_rdata;
+            assign cpu_mem_busy  = mem_busy;
+        end
+    endgenerate
 
     // ══════════════════════════════════════════════════════════
     // Memory bus — device-side address decode

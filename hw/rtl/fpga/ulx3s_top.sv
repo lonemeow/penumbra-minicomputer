@@ -28,7 +28,13 @@
 `define SDRAM_PHASE_DEG 270
 `endif
 
-module ulx3s_top (
+module ulx3s_top #(
+    // HAS_L2: insert l2_passthrough (phase-0 L2 stub) between
+    // cpu_core's memory port and the shared system bus.  Default
+    // 0 keeps pre-L2 wiring; flip to 1 for an A/B build that
+    // exercises the L2 port shape with no behavioural change.
+    parameter bit HAS_L2 = 1'b0
+) (
     input  logic       clk_25mhz,
     output logic [7:0] led,
     // Only btn[1] (FIRE1 = manual reset) is used; other bits are
@@ -241,7 +247,25 @@ module ulx3s_top (
 
     // ══════════════════════════════════════════════════════════
     // CPU ↔ memory bus
+    //
+    // Two segments: cpu_mem_* (cpu_core → L2 or wire) and mem_*
+    // (the shared system bus that all devices decode).  With
+    // HAS_L2=0 (default) they are directly wired; with HAS_L2=1
+    // they go through l2_passthrough.
     // ══════════════════════════════════════════════════════════
+    logic [31:0] cpu_mem_addr, cpu_mem_wdata;
+    logic [3:0]  cpu_mem_byte_en;
+    logic        cpu_mem_we, cpu_mem_re;
+    // cpu_mem_cacheable is consumed by l2_passthrough when HAS_L2=1
+    // and dropped on the floor when HAS_L2=0 (current devices don't
+    // care).  Suppress the UNUSEDSIGNAL warning for the default
+    // HAS_L2=0 build path.
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic        cpu_mem_cacheable;
+    /* verilator lint_on UNUSEDSIGNAL */
+    logic [31:0] cpu_mem_rdata;
+    logic        cpu_mem_busy;
+
     logic [31:0] mem_addr, mem_wdata;
     logic [3:0]  mem_byte_en;
     logic        mem_we, mem_re;
@@ -287,13 +311,14 @@ module ulx3s_top (
         .i_clk          (clk),
         .i_rst          (rst),
 
-        .o_mem_addr     (mem_addr),
-        .o_mem_wdata    (mem_wdata),
-        .o_mem_byte_en  (mem_byte_en),
-        .o_mem_we       (mem_we),
-        .o_mem_re       (mem_re),
-        .i_mem_rdata    (mem_rdata),
-        .i_mem_busy     (mem_busy),
+        .o_mem_addr     (cpu_mem_addr),
+        .o_mem_wdata    (cpu_mem_wdata),
+        .o_mem_byte_en  (cpu_mem_byte_en),
+        .o_mem_we       (cpu_mem_we),
+        .o_mem_re       (cpu_mem_re),
+        .o_mem_cacheable(cpu_mem_cacheable),
+        .i_mem_rdata    (cpu_mem_rdata),
+        .i_mem_busy     (cpu_mem_busy),
         .i_bus_fault    (bus_fault),
 
         .o_sys_dev      (sys_dev),
@@ -314,6 +339,44 @@ module ulx3s_top (
         .o_trace_valid  (),
         .o_trace_sr     ()
     );
+
+    // ══════════════════════════════════════════════════════════
+    // L2 layer (HAS_L2 generate)
+    //
+    // Phase-0 stub: l2_passthrough is a wire-through.  HAS_L2=0
+    // (default) keeps pre-L2 wiring byte-identical.
+    // ══════════════════════════════════════════════════════════
+    generate
+        if (HAS_L2) begin : g_l2
+            l2_passthrough u_l2 (
+                .i_clk          (clk),
+                .i_rst          (rst),
+                .i_addr         (cpu_mem_addr),
+                .i_wdata        (cpu_mem_wdata),
+                .i_byte_en      (cpu_mem_byte_en),
+                .i_we           (cpu_mem_we),
+                .i_re           (cpu_mem_re),
+                .i_cacheable    (cpu_mem_cacheable),
+                .o_rdata        (cpu_mem_rdata),
+                .o_busy         (cpu_mem_busy),
+                .o_mem_addr     (mem_addr),
+                .o_mem_wdata    (mem_wdata),
+                .o_mem_byte_en  (mem_byte_en),
+                .o_mem_we       (mem_we),
+                .o_mem_re       (mem_re),
+                .i_mem_rdata    (mem_rdata),
+                .i_mem_busy     (mem_busy)
+            );
+        end else begin : g_no_l2
+            assign mem_addr      = cpu_mem_addr;
+            assign mem_wdata     = cpu_mem_wdata;
+            assign mem_byte_en   = cpu_mem_byte_en;
+            assign mem_we        = cpu_mem_we;
+            assign mem_re        = cpu_mem_re;
+            assign cpu_mem_rdata = mem_rdata;
+            assign cpu_mem_busy  = mem_busy;
+        end
+    endgenerate
 
     // ══════════════════════════════════════════════════════════
     // Memory bus — device-side address decode (OR-combine)

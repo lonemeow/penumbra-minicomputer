@@ -40,6 +40,12 @@ module cpu_core
     output logic [3:0]  o_mem_byte_en,
     output logic        o_mem_we,
     output logic        o_mem_re,
+    // o_mem_cacheable: per-request cacheability hint forwarded from
+    // the owner cache's MMU translation, latched by the arbiter
+    // alongside addr.  Downstream consumers (L2 once it exists)
+    // use this to decide whether to cache/install; current external
+    // devices ignore it.
+    output logic        o_mem_cacheable,
     input  logic [31:0] i_mem_rdata,
     input  logic        i_mem_busy,
     input  logic        i_bus_fault,
@@ -568,6 +574,7 @@ module cpu_core
     logic [31:0] icache_mem_addr, icache_mem_wdata;
     logic [3:0]  icache_mem_byte_en;
     logic        icache_mem_we, icache_mem_re;
+    logic        icache_mem_cacheable;
     // Each cache sees a private busy/rdata pair from the arbiter.
     logic [31:0] icache_arb_rdata, dcache_arb_rdata;
     logic        icache_arb_busy,  dcache_arb_busy;
@@ -595,6 +602,7 @@ module cpu_core
         .o_mem_byte_en(icache_mem_byte_en),
         .o_mem_we     (icache_mem_we),
         .o_mem_re     (icache_mem_re),
+        .o_mem_cacheable (icache_mem_cacheable),
         .i_mem_rdata  (icache_arb_rdata),
         .i_mem_busy   (icache_arb_busy),
         .i_req_accepted (arb_i_req_accepted),
@@ -609,6 +617,7 @@ module cpu_core
     logic [31:0] dcache_mem_addr, dcache_mem_wdata;
     logic [3:0]  dcache_mem_byte_en;
     logic        dcache_mem_we, dcache_mem_re;
+    logic        dcache_mem_cacheable;
 
     cache_vipt u_dcache (
         .i_clk        (i_clk),
@@ -628,6 +637,7 @@ module cpu_core
         .o_mem_byte_en(dcache_mem_byte_en),
         .o_mem_we     (dcache_mem_we),
         .o_mem_re     (dcache_mem_re),
+        .o_mem_cacheable (dcache_mem_cacheable),
         .i_mem_rdata  (dcache_arb_rdata),
         .i_mem_busy   (dcache_arb_busy),
         .i_req_accepted (arb_d_req_accepted),
@@ -663,12 +673,14 @@ module cpu_core
         .i_d_byte_en  (dcache_mem_byte_en),
         .i_d_we       (dcache_mem_we && !mmu_fault),
         .i_d_re       (dcache_mem_re && !mmu_fault),
+        .i_d_cacheable(dcache_mem_cacheable),
         .o_d_rdata    (dcache_arb_rdata),
         .o_d_busy     (dcache_arb_busy),
 
         // icache port (fetch-only)
         .i_i_addr     (icache_mem_addr),
         .i_i_re       (icache_mem_re && !mmu_fault),
+        .i_i_cacheable(icache_mem_cacheable),
         .o_i_rdata    (icache_arb_rdata),
         .o_i_busy     (icache_arb_busy),
 
@@ -678,13 +690,14 @@ module cpu_core
         .o_i_req_accepted (arb_i_req_accepted),
 
         // External bus
-        .o_mem_addr   (o_mem_addr),
-        .o_mem_wdata  (o_mem_wdata),
-        .o_mem_byte_en(o_mem_byte_en),
-        .o_mem_we     (o_mem_we),
-        .o_mem_re     (o_mem_re),
-        .i_mem_rdata  (i_mem_rdata),
-        .i_mem_busy   (i_mem_busy)
+        .o_mem_addr      (o_mem_addr),
+        .o_mem_wdata     (o_mem_wdata),
+        .o_mem_byte_en   (o_mem_byte_en),
+        .o_mem_we        (o_mem_we),
+        .o_mem_re        (o_mem_re),
+        .o_mem_cacheable (o_mem_cacheable),
+        .i_mem_rdata     (i_mem_rdata),
+        .i_mem_busy      (i_mem_busy)
     );
 
     // ══════════════════════════════════════════════════════════

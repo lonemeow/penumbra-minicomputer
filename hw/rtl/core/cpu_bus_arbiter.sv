@@ -80,12 +80,14 @@ module cpu_bus_arbiter
     input  logic [3:0]  i_d_byte_en,
     input  logic        i_d_we,
     input  logic        i_d_re,
+    input  logic        i_d_cacheable,
     output logic [31:0] o_d_rdata,
     output logic        o_d_busy,
 
     // ── Port I: icache (read-only fetch) ───────────────────
     input  logic [31:0] i_i_addr,
     input  logic        i_i_re,
+    input  logic        i_i_cacheable,
     output logic [31:0] o_i_rdata,
     output logic        o_i_busy,
 
@@ -107,6 +109,10 @@ module cpu_bus_arbiter
     output logic [3:0]  o_mem_byte_en,
     output logic        o_mem_we,
     output logic        o_mem_re,
+    // o_mem_cacheable: forwarded from whichever cache port is the
+    // current owner.  Drives the future L2's cache/bypass
+    // decision; current external devices ignore it.
+    output logic        o_mem_cacheable,
     input  logic [31:0] i_mem_rdata,
     input  logic        i_mem_busy
 );
@@ -127,6 +133,7 @@ module cpu_bus_arbiter
     logic [3:0]  req_byte_en;
     logic        req_we;
     logic        req_re;
+    logic        req_cacheable;
     logic        owner;        // 0 = D, 1 = I (current owner)
 
     // Pending request flags (combinational; held by cache while
@@ -159,31 +166,34 @@ module cpu_bus_arbiter
     // ── Sequential: state + latched request ─────────────────
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
-            state       <= S_IDLE;
-            req_addr    <= 32'b0;
-            req_wdata   <= 32'b0;
-            req_byte_en <= 4'b0;
-            req_we      <= 1'b0;
-            req_re      <= 1'b0;
-            owner       <= 1'b0;
+            state         <= S_IDLE;
+            req_addr      <= 32'b0;
+            req_wdata     <= 32'b0;
+            req_byte_en   <= 4'b0;
+            req_we        <= 1'b0;
+            req_re        <= 1'b0;
+            req_cacheable <= 1'b0;
+            owner         <= 1'b0;
         end else begin
             state <= state_n;
 
             if (latch_event) begin
                 if (pick_d) begin
-                    req_addr    <= i_d_addr;
-                    req_wdata   <= i_d_wdata;
-                    req_byte_en <= i_d_byte_en;
-                    req_we      <= i_d_we;
-                    req_re      <= i_d_re;
-                    owner       <= 1'b0;
+                    req_addr      <= i_d_addr;
+                    req_wdata     <= i_d_wdata;
+                    req_byte_en   <= i_d_byte_en;
+                    req_we        <= i_d_we;
+                    req_re        <= i_d_re;
+                    req_cacheable <= i_d_cacheable;
+                    owner         <= 1'b0;
                 end else begin
-                    req_addr    <= i_i_addr;
-                    req_wdata   <= 32'b0;
-                    req_byte_en <= 4'b0;
-                    req_we      <= 1'b0;
-                    req_re      <= i_i_re;
-                    owner       <= 1'b1;
+                    req_addr      <= i_i_addr;
+                    req_wdata     <= 32'b0;
+                    req_byte_en   <= 4'b0;
+                    req_we        <= 1'b0;
+                    req_re        <= i_i_re;
+                    req_cacheable <= i_i_cacheable;
+                    owner         <= 1'b1;
                 end
             end
         end
@@ -209,11 +219,12 @@ module cpu_bus_arbiter
     end
 
     // ── External bus drive — only in S_BUSY ────────────────────
-    assign o_mem_addr    = req_addr;
-    assign o_mem_wdata   = req_wdata;
-    assign o_mem_byte_en = req_byte_en;
-    assign o_mem_we      = (state == S_BUSY) && req_we;
-    assign o_mem_re      = (state == S_BUSY) && req_re;
+    assign o_mem_addr      = req_addr;
+    assign o_mem_wdata     = req_wdata;
+    assign o_mem_byte_en   = req_byte_en;
+    assign o_mem_we        = (state == S_BUSY) && req_we;
+    assign o_mem_re        = (state == S_BUSY) && req_re;
+    assign o_mem_cacheable = req_cacheable;
 
     // ── req_accepted pulses ─────────────────────────────────
     assign o_d_req_accepted = latch_event && pick_d;
@@ -329,6 +340,18 @@ module cpu_bus_arbiter
     assert property (@(posedge i_clk) disable iff (i_rst)
         !(o_d_req_accepted && o_i_req_accepted))
         else $error("cpu_bus_arbiter: D and I req_accepted both high in same cycle");
+
+    // ── Cacheable forwarding contract ──
+
+    // Cacheable bit is latched alongside addr/we/re at every
+    // latch_event.  Forward direction: a pulse implies the
+    // upcoming req_cacheable matches the source port's input.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        o_d_req_accepted |=> (req_cacheable == $past(i_d_cacheable)))
+        else $error("cpu_bus_arbiter: D req_accepted but req_cacheable not from i_d_cacheable");
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        o_i_req_accepted |=> (req_cacheable == $past(i_i_cacheable)))
+        else $error("cpu_bus_arbiter: I req_accepted but req_cacheable not from i_i_cacheable");
 
     // ── Busy mux contract ──
 
