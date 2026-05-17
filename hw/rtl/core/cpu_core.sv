@@ -572,11 +572,10 @@ module cpu_core
     logic [31:0] icache_arb_rdata, dcache_arb_rdata;
     logic        icache_arb_busy,  dcache_arb_busy;
 
-    // Arbiter req_accepted pulses — wired in A1 for SVA coverage,
-    // consumed by the cache in A2 to pipeline burst fills.
-    /* verilator lint_off UNUSEDSIGNAL */
-    logic        arb_d_req_accepted_unused, arb_i_req_accepted_unused;
-    /* verilator lint_on UNUSEDSIGNAL */
+    // Arbiter req_accepted pulses — drive the cache's burst-fill
+    // issue counter so it can present the next word's address
+    // without waiting for the previous word's response.
+    logic        arb_d_req_accepted, arb_i_req_accepted;
 
     cache_vipt u_icache (
         .i_clk        (i_clk),
@@ -598,6 +597,7 @@ module cpu_core
         .o_mem_re     (icache_mem_re),
         .i_mem_rdata  (icache_arb_rdata),
         .i_mem_busy   (icache_arb_busy),
+        .i_req_accepted (arb_i_req_accepted),
         // Sysreg (device 3 = ICACHE)
         .i_sys_reg    (dp_r_sys_reg),
         .i_sys_wdata  (dp_a_bus),
@@ -630,6 +630,7 @@ module cpu_core
         .o_mem_re     (dcache_mem_re),
         .i_mem_rdata  (dcache_arb_rdata),
         .i_mem_busy   (dcache_arb_busy),
+        .i_req_accepted (arb_d_req_accepted),
         // Sysreg (device 2 = DCACHE)
         .i_sys_reg    (dp_r_sys_reg),
         .i_sys_wdata  (dp_a_bus),
@@ -641,9 +642,12 @@ module cpu_core
     // Internal bus arbiter — single external bus, two CPU clients
     //
     // Replaces the old combinational mux + busy-OR pattern.  The
-    // arbiter registers requests on IDLE→BUSY and responses on
-    // BUSY→DONE, structurally breaking the icache↔dcache cross-
-    // coupling that previously pinned the CPU's critical path.
+    // arbiter registers requests on every latch event (IDLE→BUSY
+    // or busy-drop BUSY→BUSY back-to-back), and routes per-port
+    // busy from arbiter state — structurally breaking the
+    // icache↔dcache cross-coupling that previously pinned the
+    // CPU's critical path.  Rdata is a combinational pass-through
+    // from i_mem_rdata gated by per-port busy.
     //
     // mmu_fault is gated at the arbiter inputs so a faulting access
     // never starts an external bus cycle.  The gate is a single AND
@@ -668,10 +672,10 @@ module cpu_core
         .o_i_rdata    (icache_arb_rdata),
         .o_i_busy     (icache_arb_busy),
 
-        // Request-accepted pulses — added in A1, consumed in A2
-        // (cache will use them to pipeline burst fills).
-        .o_d_req_accepted (arb_d_req_accepted_unused),
-        .o_i_req_accepted (arb_i_req_accepted_unused),
+        // Request-accepted pulses — drive the caches' burst-fill
+        // pipelining (see cache_vipt.sv S_FILL).
+        .o_d_req_accepted (arb_d_req_accepted),
+        .o_i_req_accepted (arb_i_req_accepted),
 
         // External bus
         .o_mem_addr   (o_mem_addr),

@@ -11,60 +11,61 @@
 //
 // This arbiter eliminates the cross-coupling structurally.  Each cache
 // gets a private (i_re, i_we, addr, wdata) → (busy, rdata) port.  The
-// arbiter holds a small FSM (IDLE/BUSY/DONE) and *registers* both the
-// outgoing request (addr/wdata/we) and the incoming response (rdata)
-// at the FSM transitions.  The path from one cache's request to the
-// other cache's busy/rdata now goes through the arbiter's state flop —
-// the synthesizer cannot retime across that boundary, so each cache
-// sees only its own busy/rdata net.
+// arbiter holds a small FSM (IDLE/BUSY) and *registers* the outgoing
+// request (addr/wdata/we) at the latch event.  Per-port busy is driven
+// from arbiter state plus the relevant cache's pending bit, so each
+// cache sees a busy net that does not depend on the other cache's
+// traffic.
 //
 // Arbitration policy: dcache priority.  Fetch (S_FETCH) and data
 // access (S_EXEC) are mutually exclusive at the CPU level, so the
 // priority is a tiebreaker — only relevant during a corner-case
 // overlap (e.g. a fetch refill straddling a data access).
 //
-// Why three states (IDLE/BUSY/DONE) and not two?
-//   The cache (and CPU pass-through path) holds i_re asserted until
-//   it sees `i_mem_busy` drop — the CPU's STALL exits combinationally
-//   on busy↓.  If the arbiter went BUSY→IDLE directly, in the same
-//   cycle the request signal would still be high (the cache's state
-//   machine hasn't reacted yet) and the arbiter would re-latch and
-//   run the transaction again.  The DONE state is a 1-cycle cooldown
-//   that lets the cache observe busy↓ and deassert before the
-//   arbiter accepts new traffic.
+// FSM: two states, S_IDLE and S_BUSY.  A "latch event" — where the
+// arbiter captures a new request into the bus-side registers — happens
+// on either:
+//   - S_IDLE → S_BUSY: a new owner is being picked (from idle).
+//   - S_BUSY → S_BUSY: the current transaction completed
+//     (i_mem_busy=0) and a request is still pending — could be the
+//     same owner continuing a burst, or the other owner taking over.
+// Latch events drive the `o_*_req_accepted` handshake pulses, which
+// the downstream cache uses to know its address has been captured and
+// can advance to the next address without waiting for busy to drop.
+// This eliminates the dead cycle between back-to-back transactions
+// that earlier versions of this arbiter required (S_DONE cooldown),
+// matching the four-phase handshake's "keep req high across addr
+// changes" pattern in doc/hardware/bus-protocol.md.
 //
 // Costs:
-//   - +1 cycle per uncached MMIO access (registered busy/rdata).
-//   - +1 cycle per fill-word completion (≈+3% on a 4-word line fill,
-//     dwarfed by SDRAM+CDC latency).
+//   - Zero idle bus cycles between back-to-back transactions (same
+//     owner burst or alternating owner handoff).  Per-word cost
+//     equals slave latency.
+//   - Single-cycle pick from IDLE for a new transaction.
 //   - Zero cycles on cached hits — they never reach the arbiter.
 //
 // Response-routing contract:
-//   The arbiter latches `owner` at IDLE→BUSY (D=0 with priority on
-//   simultaneous pending) and latches `resp_rdata` at BUSY→DONE.  The
-//   pairing between the latched request and the captured response is
-//   the central correctness property, asserted along two axes:
+//   The arbiter latches `owner` on every latch event.  Owner is
+//   stable mid-transaction (S_BUSY with i_mem_busy=1).  Owner may
+//   change at a S_BUSY→S_BUSY edge (handoff to other cache, or burst
+//   continuation by same cache).
 //
-//   (a) Owner-pairing.  Once in S_BUSY or S_DONE, `owner` is stable —
-//       see the `$stable(owner)` SVA below.  Hence `resp_rdata`
-//       captured at BUSY→DONE is unambiguously the response to the
-//       request driven from `req_*` during S_BUSY.
+//   Read data is a combinational pass-through: o_d_rdata = o_i_rdata
+//   = i_mem_rdata.  Both caches see the same i_mem_rdata, but each is
+//   gated by its own busy signal — only the current owner sees its
+//   busy drop on the response cycle (the cycle i_mem_busy=0 in
+//   S_BUSY).  The non-owner with a pending request sees busy=1
+//   throughout (driven by its own pending bit), so its cache cannot
+//   mis-capture.  The owner/non-owner SVAs at the bottom of the file
+//   pin this down.
 //
-//   (b) Non-owner exclusion.  Both `o_d_rdata` and `o_i_rdata` are
-//       physically wired to `resp_rdata`; the busy mux is what
-//       prevents the non-owner from mis-consuming the response.  In
-//       S_BUSY *and* S_DONE, a non-owner cache that has another
-//       pending request must see `o_*_busy=1` — its private busy
-//       does not drop until the arbiter accepts its request in a
-//       later cycle.  This is asserted by the two `non_owner` SVAs
-//       below, the complement of the existing owner-busy-drops SVAs.
-//
-//   The contract trusts the external bus to honor "`i_mem_rdata` at
-//   the first `i_mem_busy=0` after `o_mem_re`/`o_mem_we` was driven
+//   The contract trusts the external bus to honour "`i_mem_rdata` on
+//   the cycle `i_mem_busy=0` after `o_mem_re`/`o_mem_we` was driven
 //   in S_BUSY is the response to that request."  Violating that on
 //   the device side (spurious data on `i_mem_rdata` while
-//   `i_mem_busy=0` outside the paired window) will be captured and
-//   routed as if it were valid — the arbiter has no separate tag.
+//   `i_mem_busy=0` outside the paired window) will be captured by
+//   whichever cache is the current owner — the arbiter has no
+//   separate response tag.
 
 // verilator lint_off UNUSEDSIGNAL
 
@@ -90,15 +91,13 @@ module cpu_bus_arbiter
 
     // ── Request-accepted handshake (1-cycle combinational pulse) ──
     // Each pulse fires in the cycle the arbiter is about to latch
-    // that owner's request (S_IDLE with that owner picked).  On the
-    // next clock edge the arbiter transitions to S_BUSY with the
-    // request latched, so the pulse drops naturally.  Downstream
-    // caches use these to know their address has been captured and
-    // can advance to the next address (in a burst fill) or drop
-    // o_mem_re (single-shot) on the next edge, without waiting for
-    // i_mem_busy to drop.  A2 will use these to eliminate the
-    // dead cycles between back-to-back transactions; A1 only adds
-    // and verifies the signal.
+    // that owner's request on the next clock edge — either on entry
+    // to S_BUSY from S_IDLE (new transaction sequence) or on the
+    // busy-drop cycle while already in S_BUSY (back-to-back).
+    // Downstream caches use these to advance to the next address
+    // (in a burst fill) or drop o_mem_re (single-shot) without
+    // waiting for busy to drop.  Mutually exclusive (D wins
+    // simultaneous pending).
     output logic        o_d_req_accepted,
     output logic        o_i_req_accepted,
 
@@ -113,12 +112,11 @@ module cpu_bus_arbiter
 );
 
     // ══════════════════════════════════════════════════════════
-    // FSM — IDLE → BUSY → DONE → IDLE
+    // FSM — IDLE → BUSY (BUSY can loop on back-to-back) → IDLE
     // ══════════════════════════════════════════════════════════
-    typedef enum logic [1:0] {
+    typedef enum logic {
         S_IDLE,
-        S_BUSY,
-        S_DONE
+        S_BUSY
     } state_t;
 
     state_t state, state_n;
@@ -129,12 +127,10 @@ module cpu_bus_arbiter
     logic [3:0]  req_byte_en;
     logic        req_we;
     logic        req_re;
-    logic        owner;        // 0 = D, 1 = I (last/current owner)
+    logic        owner;        // 0 = D, 1 = I (current owner)
 
-    // Latched response — captured on BUSY→DONE, presented in S_DONE.
-    logic [31:0] resp_rdata;
-
-    // Pending request flags (combinational; held by cache while STALLed).
+    // Pending request flags (combinational; held by cache while
+    // STALLed or, during a burst fill, while !fill_done).
     logic pending_d, pending_i;
     assign pending_d = i_d_re | i_d_we;
     assign pending_i = i_i_re;
@@ -144,7 +140,23 @@ module cpu_bus_arbiter
     assign pick_d = pending_d;
     assign pick_i = pending_i & ~pending_d;
 
-    // ── Sequential: state, latched request, latched response ─────
+    // ── Latch event: a new request is being captured this edge ──
+    //
+    // Fires when either:
+    //   (a) state is IDLE and a request is pending (entering S_BUSY)
+    //   (b) state is BUSY and i_mem_busy=0 (current transaction
+    //       completing) and a request is still pending (back-to-back
+    //       continuation, same or different owner).
+    //
+    // Central new-request signal — drives both the o_*_req_accepted
+    // pulses (combinationally) and the request-register load enable
+    // (in the always_ff below).
+    logic latch_event;
+    assign latch_event = (state == S_IDLE && (pending_d | pending_i)) ||
+                         (state == S_BUSY && !i_mem_busy &&
+                          (pending_d | pending_i));
+
+    // ── Sequential: state + latched request ─────────────────
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
             state       <= S_IDLE;
@@ -154,12 +166,10 @@ module cpu_bus_arbiter
             req_we      <= 1'b0;
             req_re      <= 1'b0;
             owner       <= 1'b0;
-            resp_rdata  <= 32'b0;
         end else begin
             state <= state_n;
 
-            // Latch outgoing request on IDLE→BUSY transition.
-            if (state == S_IDLE && (pick_d | pick_i)) begin
+            if (latch_event) begin
                 if (pick_d) begin
                     req_addr    <= i_d_addr;
                     req_wdata   <= i_d_wdata;
@@ -176,10 +186,6 @@ module cpu_bus_arbiter
                     owner       <= 1'b1;
                 end
             end
-
-            // Latch incoming response on BUSY→DONE transition.
-            if (state == S_BUSY && !i_mem_busy)
-                resp_rdata <= i_mem_rdata;
         end
     end
 
@@ -191,10 +197,12 @@ module cpu_bus_arbiter
                 if (pending_d | pending_i)
                     state_n = S_BUSY;
             S_BUSY:
-                if (!i_mem_busy)
-                    state_n = S_DONE;
-            S_DONE:
-                state_n = S_IDLE;
+                if (!i_mem_busy) begin
+                    if (pending_d | pending_i)
+                        state_n = S_BUSY;   // back-to-back
+                    else
+                        state_n = S_IDLE;
+                end
             default:
                 state_n = S_IDLE;
         endcase
@@ -207,37 +215,44 @@ module cpu_bus_arbiter
     assign o_mem_we      = (state == S_BUSY) && req_we;
     assign o_mem_re      = (state == S_BUSY) && req_re;
 
-    // ── Per-cache busy/rdata ────────────────────────────────────
-    // Each cache sees a private busy that depends only on FSM state
-    // (registered) and its own pending bit — never on the other cache's
-    // state.  rdata is always the latched resp_rdata; the cache only
-    // reads it when busy drops, which only happens in S_DONE for the
-    // last owner.
-    always_comb begin
-        o_d_busy = 1'b0;
-        o_i_busy = 1'b0;
+    // ── req_accepted pulses ─────────────────────────────────
+    assign o_d_req_accepted = latch_event && pick_d;
+    assign o_i_req_accepted = latch_event && pick_i;
 
+    // ── Per-cache rdata — combinational pass-through ───────
+    // Both caches see live i_mem_rdata.  Each is gated by its own
+    // busy signal — only the current owner sees its busy drop on
+    // the response cycle.  Non-owner with pending sees busy=1
+    // throughout S_BUSY (driven by its pending bit), so it cannot
+    // mis-capture.
+    assign o_d_rdata = i_mem_rdata;
+    assign o_i_rdata = i_mem_rdata;
+
+    // ══════════════════════════════════════════════════════════
+    // Per-cache busy mux
+    //
+    // In S_IDLE: pick signals "this owner is about to be served on
+    //   the next edge" → busy=1 so the cache's STALL holds across
+    //   the IDLE→BUSY edge.
+    //
+    // In S_BUSY: the owner's busy mirrors i_mem_busy — high while
+    //   the transaction is in flight, low for the single cycle when
+    //   the response arrives (that's when the cache captures rdata).
+    //   The non-owner's busy is high iff it has a pending request
+    //   (its STALL holds until it becomes the owner).
+    //
+    // The owner-busy-drops-on-response and non-owner-stays-busy
+    // contracts are pinned by the SVAs at the bottom of this file.
+    // ══════════════════════════════════════════════════════════
+    always_comb begin
         case (state)
             S_IDLE: begin
-                // About to be picked: drive busy=1 so the cache's
-                // STALL stays asserted across the IDLE→BUSY edge.
                 o_d_busy = pick_d;
                 o_i_busy = pick_i;
             end
             S_BUSY: begin
-                // Owner sees busy=1 for the duration of the bus cycle.
-                // Other cache, if also waiting, sees busy=1 too — its
-                // request will be picked once we return to IDLE.
-                o_d_busy = (owner == 1'b0) || pending_d;
-                o_i_busy = (owner == 1'b1) || pending_i;
-            end
-            S_DONE: begin
-                // Last owner sees busy=0 with rdata valid; this is the
-                // single cycle in which it captures its data and exits
-                // STALL.  The other cache (if waiting) still sees
-                // busy=1 — we haven't accepted its request yet.
-                o_d_busy = (owner == 1'b1) && pending_d;
-                o_i_busy = (owner == 1'b0) && pending_i;
+                o_d_busy = owner == 1'b1 || i_mem_busy;
+                o_i_busy = owner == 1'b0 || i_mem_busy;
             end
             default: begin
                 o_d_busy = 1'b0;
@@ -246,30 +261,6 @@ module cpu_bus_arbiter
         endcase
     end
 
-    assign o_d_rdata = resp_rdata;
-    assign o_i_rdata = resp_rdata;
-
-    // ══════════════════════════════════════════════════════════
-    // Request-accepted pulses
-    //
-    // Combinational signal that fires for exactly one cycle iff
-    // the arbiter is about to latch this owner's request on the
-    // next clock edge.  Contract pinned down by the five SVAs at
-    // the bottom of this file (search "req_accepted").
-    //
-    // The pulse is naturally 1-cycle because after the IDLE→BUSY
-    // edge the FSM is no longer in S_IDLE, so the condition that
-    // drove the pulse high is gone.
-    //
-    // Why combinational and not registered: the cache reacts to
-    // the pulse one clock edge later.  A registered pulse would
-    // add one more cycle of latency on top, defeating the goal of
-    // back-to-back transactions in A2.
-    // ══════════════════════════════════════════════════════════
-
-    assign o_d_req_accepted = pick_d && state == S_IDLE;
-    assign o_i_req_accepted = pick_i && state == S_IDLE;
-
     // ══════════════════════════════════════════════════════════
     // Simulation assertions — FSM and handshake invariants
     //
@@ -277,123 +268,93 @@ module cpu_bus_arbiter
     // the external bus.  Stripped by Yosys at synth.
     // ══════════════════════════════════════════════════════════
 
-    // S_DONE is exactly a 1-cycle cooldown — never held longer.
-    // If this fires, something is keeping us out of S_IDLE (impossible
-    // by next-state logic, but a synthesis-vs-sim divergence sentinel).
-    assert property (@(posedge i_clk) disable iff (i_rst)
-        (state == S_DONE) |=> (state == S_IDLE))
-        else $error("cpu_bus_arbiter: S_DONE held for more than one cycle");
-
-    // S_BUSY is only entered from S_IDLE (no S_DONE→S_BUSY shortcut).
-    // The 1-cycle DONE cooldown is what lets the cache observe busy↓
-    // and deassert before we accept new traffic.  Skipping it would
-    // re-latch the same request and run it twice.
-    assert property (@(posedge i_clk) disable iff (i_rst)
-        (state == S_BUSY) |-> $past(state == S_IDLE || state == S_BUSY))
-        else $error("cpu_bus_arbiter: S_BUSY entered from non-IDLE state");
-
-    // owner is only written at IDLE→BUSY; it must not change while we
-    // hold S_BUSY or S_DONE.  A change mid-transaction means we've
-    // started routing the response to a different cache than the one
-    // we picked — exactly the failure mode the userspace trace hints at.
-    assert property (@(posedge i_clk) disable iff (i_rst)
-        ((state == S_BUSY || state == S_DONE) &&
-         $past(state == S_BUSY || state == S_DONE)) |-> $stable(owner))
-        else $error("cpu_bus_arbiter: owner changed mid-transaction");
-
-    // The just-served owner MUST see private busy=0 in S_DONE.  This
-    // is the single cycle in which it captures rdata and exits STALL.
-    // If it sees busy=1, the CPU re-stalls and we lose this response;
-    // the next BUSY cycle re-serves the same word into a stale slot.
-    assert property (@(posedge i_clk) disable iff (i_rst)
-        (state == S_DONE && owner == 1'b0) |-> (o_d_busy == 1'b0))
-        else $error("cpu_bus_arbiter: D owner saw busy=1 in S_DONE");
-    assert property (@(posedge i_clk) disable iff (i_rst)
-        (state == S_DONE && owner == 1'b1) |-> (o_i_busy == 1'b0))
-        else $error("cpu_bus_arbiter: I owner saw busy=1 in S_DONE");
-
-    // External bus drive is only active in S_BUSY.  In S_IDLE/S_DONE
-    // the bus must be quiet so device-side decoders don't double-trigger
+    // External bus drive is only active in S_BUSY.  In S_IDLE the
+    // bus must be quiet so device-side decoders don't double-trigger
     // (e.g. SDRAM adapter speculation latching off a phantom request).
     assert property (@(posedge i_clk) disable iff (i_rst)
         (state != S_BUSY) |-> (!o_mem_re && !o_mem_we))
         else $error("cpu_bus_arbiter: bus driven outside S_BUSY");
 
-    // Non-owner exclusion in S_DONE.  Complements the "owner sees
-    // busy=0" SVAs above: if the non-owner cache also has a pending
-    // request, its private busy must stay 1 so it cannot latch the
-    // owner's resp_rdata as if it were its own.  Both o_d_rdata and
-    // o_i_rdata are physically wired to resp_rdata; busy is the only
-    // qualifier that keeps the response from being consumed by the
-    // wrong client.
+    // Owner is stable mid-transaction.  Mid-transaction = "in S_BUSY
+    // with i_mem_busy held high last cycle".  Owner may change at a
+    // BUSY→BUSY edge when i_mem_busy dropped (handoff or burst
+    // continuation), so the stability check is gated by
+    // $past(i_mem_busy).
     assert property (@(posedge i_clk) disable iff (i_rst)
-        (state == S_DONE && owner == 1'b0 && pending_i) |-> o_i_busy)
-        else $error("cpu_bus_arbiter: non-owner I saw busy=0 in S_DONE (would latch D's response)");
-    assert property (@(posedge i_clk) disable iff (i_rst)
-        (state == S_DONE && owner == 1'b1 && pending_d) |-> o_d_busy)
-        else $error("cpu_bus_arbiter: non-owner D saw busy=0 in S_DONE (would latch I's response)");
+        (state == S_BUSY && $past(state == S_BUSY) && $past(i_mem_busy))
+            |-> $stable(owner))
+        else $error("cpu_bus_arbiter: owner changed mid-transaction");
 
-    // Non-owner exclusion in S_BUSY.  Same property earlier in the
-    // transaction: the non-owner with a pending request must see
-    // busy=1 throughout S_BUSY so it can't capture resp_rdata at the
-    // BUSY→DONE edge.
-    assert property (@(posedge i_clk) disable iff (i_rst)
-        (state == S_BUSY && owner == 1'b0 && pending_i) |-> o_i_busy)
-        else $error("cpu_bus_arbiter: non-owner I saw busy=0 in S_BUSY");
-    assert property (@(posedge i_clk) disable iff (i_rst)
-        (state == S_BUSY && owner == 1'b1 && pending_d) |-> o_d_busy)
-        else $error("cpu_bus_arbiter: non-owner D saw busy=0 in S_BUSY");
+    // ── req_accepted contract ──
 
-    // Owner-data pairing: the captured response is presented to the
-    // owner verbatim on its rdata port.  Structurally trivial today
-    // (both ports are wired to resp_rdata), but the SVA pins the
-    // intent so a future refactor that adds per-port routing must
-    // preserve the owner-rdata pairing.
+    // (1) D pulse implies the arbiter latches D's address on the
+    //     next edge.
     assert property (@(posedge i_clk) disable iff (i_rst)
-        (state == S_DONE && owner == 1'b0) |-> (o_d_rdata == resp_rdata))
-        else $error("cpu_bus_arbiter: D owner not seeing resp_rdata in S_DONE");
-    assert property (@(posedge i_clk) disable iff (i_rst)
-        (state == S_DONE && owner == 1'b1) |-> (o_i_rdata == resp_rdata))
-        else $error("cpu_bus_arbiter: I owner not seeing resp_rdata in S_DONE");
-
-    // ══════════════════════════════════════════════════════════
-    // req_accepted contract
-    //
-    // The five SVAs below define exactly when the new
-    // o_d_req_accepted / o_i_req_accepted pulses may fire.  Any
-    // implementation that satisfies all five is correct.
-    // ══════════════════════════════════════════════════════════
-
-    // (1) D pulse implies the arbiter latches D on the next edge.
-    assert property (@(posedge i_clk) disable iff (i_rst)
-        o_d_req_accepted |=> (state == S_BUSY && owner == 1'b0))
+        o_d_req_accepted |=> (state == S_BUSY && owner == 1'b0 &&
+                              req_addr == $past(i_d_addr)))
         else $error("cpu_bus_arbiter: o_d_req_accepted high but no D latch on next edge");
 
-    // (2) I pulse implies the arbiter latches I on the next edge.
+    // (2) I pulse implies the arbiter latches I's address on the
+    //     next edge.
     assert property (@(posedge i_clk) disable iff (i_rst)
-        o_i_req_accepted |=> (state == S_BUSY && owner == 1'b1))
+        o_i_req_accepted |=> (state == S_BUSY && owner == 1'b1 &&
+                              req_addr == $past(i_i_addr)))
         else $error("cpu_bus_arbiter: o_i_req_accepted high but no I latch on next edge");
 
-    // (3) Any IDLE→BUSY transition latching D must have been preceded
-    //     by an o_d_req_accepted pulse.  Together with (1) this pins
-    //     down "pulse iff latch".
+    // (3) Reverse direction: any latch event landing in S_BUSY with
+    //     owner=D must have been preceded by an o_d_req_accepted
+    //     pulse.  A latch event is "state is S_BUSY this cycle and
+    //     either $past(state) was IDLE OR $past(state) was S_BUSY
+    //     with $past(!i_mem_busy)".
     assert property (@(posedge i_clk) disable iff (i_rst)
-        ($past(state) == S_IDLE && state == S_BUSY && owner == 1'b0)
+        ((($past(state) == S_IDLE) ||
+          ($past(state) == S_BUSY && !$past(i_mem_busy)))
+         && state == S_BUSY && owner == 1'b0)
             |-> $past(o_d_req_accepted))
         else $error("cpu_bus_arbiter: D latch occurred without prior o_d_req_accepted pulse");
 
-    // (4) Any IDLE→BUSY transition latching I must have been preceded
-    //     by an o_i_req_accepted pulse.
+    // (4) Same reverse-direction guarantee for I.
     assert property (@(posedge i_clk) disable iff (i_rst)
-        ($past(state) == S_IDLE && state == S_BUSY && owner == 1'b1)
+        ((($past(state) == S_IDLE) ||
+          ($past(state) == S_BUSY && !$past(i_mem_busy)))
+         && state == S_BUSY && owner == 1'b1)
             |-> $past(o_i_req_accepted))
         else $error("cpu_bus_arbiter: I latch occurred without prior o_i_req_accepted pulse");
 
-    // (5) D and I pulses are mutually exclusive — at most one owner
-    //     is latched per edge.
+    // (5) D and I pulses are mutually exclusive — at most one
+    //     owner is latched per edge.  Structurally guaranteed by
+    //     pick_i = pending_i & ~pending_d, but asserted explicitly
+    //     so any future refactor that breaks the structural mutex
+    //     trips the SVA.
     assert property (@(posedge i_clk) disable iff (i_rst)
         !(o_d_req_accepted && o_i_req_accepted))
         else $error("cpu_bus_arbiter: D and I req_accepted both high in same cycle");
+
+    // ── Busy mux contract ──
+
+    // (a) Owner sees busy drop on the response cycle: when
+    //     i_mem_busy=0 in S_BUSY, the owner's busy must also be 0
+    //     (that's the single cycle the cache captures rdata).
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (state == S_BUSY && !i_mem_busy && owner == 1'b0)
+            |-> !o_d_busy)
+        else $error("cpu_bus_arbiter: D owner saw busy=1 on response cycle");
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (state == S_BUSY && !i_mem_busy && owner == 1'b1)
+            |-> !o_i_busy)
+        else $error("cpu_bus_arbiter: I owner saw busy=1 on response cycle");
+
+    // (b) Non-owner exclusion: the non-owner with a pending request
+    //     must see busy=1 throughout S_BUSY.  Both o_d_rdata and
+    //     o_i_rdata are physically wired to i_mem_rdata, so busy is
+    //     the only gate that keeps the response from being consumed
+    //     by the wrong client.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (state == S_BUSY && owner == 1'b0 && pending_i) |-> o_i_busy)
+        else $error("cpu_bus_arbiter: non-owner I saw busy=0 in S_BUSY (would latch D's response)");
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (state == S_BUSY && owner == 1'b1 && pending_d) |-> o_d_busy)
+        else $error("cpu_bus_arbiter: non-owner D saw busy=0 in S_BUSY (would latch I's response)");
 
 endmodule
 

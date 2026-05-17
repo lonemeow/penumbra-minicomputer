@@ -84,6 +84,13 @@ module cache_vipt
     output logic        o_mem_re,
     input  logic [31:0] i_mem_rdata,
     input  logic        i_mem_busy,
+    // i_req_accepted: 1-cycle pulse from cpu_bus_arbiter when it
+    // latches the cache's current o_mem_addr/we/re/wdata.  Drives
+    // the burst-fill issue counter so the cache can present the
+    // next word's address without waiting for the previous word's
+    // response — i.e. pipelined back-to-back per
+    // doc/hardware/bus-protocol.md.
+    input  logic        i_req_accepted,
 
     // ── Sysreg interface (one per cache instance) ──────────
     input  logic [3:0]  i_sys_reg,
@@ -209,12 +216,18 @@ module cache_vipt
     // state.  Registered so the FSM next-state logic stays out of the
     // live mmu_fault → state.D path.
     logic        i_fault_q;
-    // Note: there are no shadow flops on i_mem_busy / i_mem_rdata.  The
-    // CPU-side bus arbiter (cpu_bus_arbiter) already registers external
-    // bus state in its FSM, so cache.i_mem_busy / cache.i_mem_rdata are
-    // already one register hop away from the live bus signals — the
-    // arbiter's state flop is the boundary that breaks the
-    // `bus_busy → fill_state_logic → valid[i].LSR` chain.
+    // Note: there are no shadow flops on i_mem_busy / i_mem_rdata.
+    // The cache's own state-machine flops (req_idx, resp_idx, valid)
+    // are the boundary that breaks the
+    // `bus_busy → fill_state_logic → valid[i].LSR` chain — the
+    // combinational path from external bus_busy through the
+    // arbiter's per-port busy mux and into the cache's `if
+    // (!i_mem_busy && resp_idx < req_idx)` predicate terminates at
+    // the cache's flop inputs, not at any sequential element in
+    // between.  If this path becomes the critical one in synthesis,
+    // adding a shadow flop on i_mem_busy is the targeted fix — but
+    // doing so would add one cycle of latency per response, so do
+    // it only after the fmax study points here.
 
     // Registered address fields (derived from i_paddr_q; since
     // page-offset bits agree by precondition, vaddr/paddr give
@@ -243,9 +256,40 @@ module cache_vipt
     logic [31:0]          fill_base_addr;
     logic [TAG_BITS-1:0]  fill_tag;
     logic [SET_BITS-1:0]  fill_set;
-    logic [WORD_BITS-1:0] fill_count;
-    logic                 fill_req;
-    logic                 fill_wait;
+    // Two counters drive a pipelined burst fill:
+    //   req_idx   — index of the word the cache is currently
+    //               requesting (drives o_mem_addr and o_mem_re).
+    //               Advances on i_req_accepted.
+    //   resp_idx  — index of the word the cache is currently
+    //               expecting a response for.  Advances on the
+    //               busy-drop cycle (`!i_mem_busy && resp_idx <
+    //               req_idx`) and captures i_mem_rdata into the
+    //               line's data slot.
+    // Both are WORD_BITS+1 wide so they can take the terminal
+    // value LINE_WORDS (one past the last word) — that's how the
+    // FSM knows the issue side and capture side are each done.
+    logic [WORD_BITS:0]   req_idx;
+    logic [WORD_BITS:0]   resp_idx;
+
+    // Pass-through in-flight gate.
+    //
+    // The arbiter back-to-backs requests by default: if it sees the
+    // cache's `o_mem_re`/`o_mem_we` still high on the busy-drop
+    // cycle, it re-latches.  For burst fills that's the desired
+    // behaviour (cache walks o_mem_addr via req_idx).  For
+    // pass-through (uncached or write) it would double-execute
+    // the CPU's single request, because the CPU's STALL exits
+    // combinationally on busy-drop but its `i_re`/`i_we` outputs
+    // only update on the *next* edge (when the next micro-op
+    // presents its decode).  So on the busy-drop cycle itself,
+    // `i_re` is stale-high.
+    //
+    // pt_in_flight clamps o_mem_re/o_mem_we low between
+    // req_accepted (request latched, no further drive needed) and
+    // the busy-drop cycle (response delivered).  On the cycle
+    // after busy-drop the CPU has presented its next micro-op, so
+    // `i_re` reflects the new (or absent) request honestly.
+    logic                 pt_in_flight;
 
     // ══════════════════════════════════════════════════════════
     // Memory bus output mux — always physical
@@ -264,24 +308,30 @@ module cache_vipt
                 end else if (cache_active && i_re && !hit) begin
                     // Read miss: don't access memory here — S_FILL handles it
                 end else begin
-                    // Pass through: uncacheable, disabled, or any write
-                    o_mem_re = i_re;
-                    o_mem_we = i_we;
+                    // Pass through: uncacheable, disabled, or any
+                    // write.  Gated by !pt_in_flight so a held-high
+                    // i_re/i_we across the busy-drop cycle doesn't
+                    // get re-latched by the arbiter (see
+                    // pt_in_flight declaration above).
+                    o_mem_re = i_re && !pt_in_flight;
+                    o_mem_we = i_we && !pt_in_flight;
                 end
             end
 
             S_FILL: begin
+                // Hold o_mem_re=1 across the entire burst and walk
+                // o_mem_addr with req_idx.  Each cycle the arbiter
+                // pulses i_req_accepted, req_idx advances and the
+                // next word's address is presented — letting the
+                // arbiter latch back-to-back transactions without
+                // an idle cycle in between.  o_mem_re deasserts
+                // when req_idx reaches LINE_WORDS (all requests
+                // issued; any still-outstanding responses drain
+                // through the resp_idx path below).
                 o_mem_addr = {fill_base_addr[31:WORD_LSB+WORD_BITS],
-                              fill_count, {WORD_LSB{1'b0}}};
-                // Pulse o_mem_re for the request cycle only.  The CPU
-                // bus arbiter latches the request on IDLE→BUSY, after
-                // which the cache no longer needs to drive o_mem_re —
-                // the arbiter holds the latched address/we/re onto the
-                // external bus from its own state until the transaction
-                // completes.  This also keeps `fill_wait && i_mem_busy`
-                // out of o_mem_re, which would otherwise close a
-                // combinational loop through the arbiter's busy mux.
-                o_mem_re   = fill_req;
+                              req_idx[WORD_BITS-1:0],
+                              {WORD_LSB{1'b0}}};
+                o_mem_re   = (req_idx < (WORD_BITS+1)'(LINE_WORDS));
             end
         endcase
     end
@@ -347,20 +397,22 @@ module cache_vipt
     // CPU-side inputs (i_re_q, i_we_q, hit_q, i_paddr_q, i_wdata_q,
     // i_byte_en_q, i_cacheable_q, i_fault_q) come from the registered
     // shadow flops above — required to break the µROM → state.D path.
-    // Bus-side inputs (i_mem_busy, i_mem_rdata) are consumed live;
-    // the cpu_bus_arbiter's state register is the flop boundary.
+    // Bus-side inputs (i_mem_busy, i_mem_rdata, i_req_accepted) are
+    // consumed live: the state machine's own flops (state, req_idx,
+    // resp_idx, pt_in_flight, valid) terminate the combinational
+    // path from the external bus.
     // ══════════════════════════════════════════════════════════
     integer i;
 
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
-            state      <= S_IDLE;
-            fill_count <= '0;
-            fill_req   <= 1'b0;
-            fill_wait  <= 1'b0;
+            state          <= S_IDLE;
+            req_idx        <= '0;
+            resp_idx       <= '0;
             fill_base_addr <= 32'b0;
-            fill_tag   <= '0;
-            fill_set   <= '0;
+            fill_tag       <= '0;
+            fill_set       <= '0;
+            pt_in_flight   <= 1'b0;
             for (i = 0; i < NUM_SETS; i++)
                 valid[i] <= 1'b0;
         end else begin
@@ -369,6 +421,17 @@ module cache_vipt
                 for (i = 0; i < NUM_SETS; i++)
                     valid[i] <= 1'b0;
             end
+
+            // Pass-through in-flight tracker.  Set when the arbiter
+            // latches a pass-through request (req_accepted in S_IDLE);
+            // cleared on the response cycle (busy-drop).  S_FILL
+            // bursts have their own req_idx/resp_idx tracking and
+            // don't touch this bit (req_accepted in S_FILL is for
+            // burst-word issue, not a one-shot pass-through).
+            if (state == S_IDLE && i_req_accepted)
+                pt_in_flight <= 1'b1;
+            else if (pt_in_flight && !i_mem_busy)
+                pt_in_flight <= 1'b0;
 
             case (state)
                 S_IDLE: begin
@@ -402,29 +465,33 @@ module cache_vipt
                         fill_base_addr <= i_paddr_q;
                         fill_tag       <= addr_tag_q;
                         fill_set       <= addr_set_q;
-                        fill_count     <= '0;
-                        fill_req       <= 1'b1;
-                        fill_wait      <= 1'b0;
+                        req_idx        <= '0;
+                        resp_idx       <= '0;
                         state          <= S_FILL;
                     end
                 end
 
                 S_FILL: begin
-                    if (fill_req && !fill_wait) begin
-                        fill_wait <= 1'b1;
-                        fill_req  <= 1'b0;
-                    end else if (fill_wait && !i_mem_busy) begin
-                        data[data_idx(fill_set, fill_count)] <= i_mem_rdata;
+                    // Issue side — advance req_idx on req_accepted.
+                    // The arbiter's pulse fires the cycle it latches
+                    // o_mem_addr; we update req_idx at the same edge
+                    // so the next cycle presents the next address.
+                    if (i_req_accepted && req_idx < (WORD_BITS+1)'(LINE_WORDS))
+                        req_idx <= req_idx + 1'b1;
 
-                        if (fill_count == WORD_BITS'(LINE_WORDS - 1)) begin
+                    // Response side — capture each word on the
+                    // arbiter's busy-drop cycle, in issue order.
+                    // resp_idx < req_idx gates against false captures
+                    // when i_mem_busy is low simply because no
+                    // transaction is outstanding (can't happen in
+                    // S_FILL today but keeps the predicate robust).
+                    if (!i_mem_busy && resp_idx < req_idx) begin
+                        data[data_idx(fill_set, resp_idx[WORD_BITS-1:0])] <= i_mem_rdata;
+                        resp_idx <= resp_idx + 1'b1;
+                        if (resp_idx == (WORD_BITS+1)'(LINE_WORDS - 1)) begin
                             tags[fill_set]  <= fill_tag;
                             valid[fill_set] <= 1'b1;
-                            fill_wait       <= 1'b0;
                             state           <= S_IDLE;
-                        end else begin
-                            fill_count <= fill_count + WORD_BITS'(1);
-                            fill_req   <= 1'b1;
-                            fill_wait  <= 1'b0;
                         end
                     end
                 end

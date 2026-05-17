@@ -5,23 +5,26 @@
 // cache and the backing simple_mem.
 //
 // Why the arbiter is needed even for unit testing:
-//   cache_vipt's S_FILL drives o_mem_re for exactly one cycle per
-//   fill word (`o_mem_re = fill_req`) and expects the upstream to
-//   latch and hold the request until the response completes — that
-//   upstream is cpu_bus_arbiter in the real CPU.  simple_mem's
-//   handshake (`o_busy = (i_re||i_we) && !access_complete`) drops
-//   busy as soon as i_re drops, so connecting cache_vipt directly
-//   to simple_mem yields broken handshakes (writes occasionally
-//   skipped, reads serving poisoned data).  The PIPT `cache.sv`
-//   doesn't have this requirement because it uses
-//   `o_mem_re = fill_req || fill_wait` (i_re held).  The arbiter is
-//   therefore part of cache_vipt's defined interface, not a test
-//   convenience.
+//   cache_vipt and cpu_bus_arbiter share a pipelined burst-fill
+//   handshake: during S_FILL, the cache holds o_mem_re high while
+//   walking o_mem_addr, and the arbiter pulses i_req_accepted each
+//   time it latches the cache's current address.  That handshake
+//   is what lets back-to-back fill words skip the idle cycle a
+//   purely busy-driven protocol would require.  simple_mem doesn't
+//   produce req_accepted, doesn't hold a latched request across
+//   re-deassertion, and drops busy as soon as i_re drops — so
+//   wiring cache_vipt directly to simple_mem yields broken
+//   handshakes (writes occasionally skipped, reads serving
+//   poisoned data).  The PIPT `cache.sv` doesn't have this
+//   requirement because it pulls o_mem_re from `fill_req ||
+//   fill_wait` (i_re held throughout, no separate handshake).
+//   The arbiter is therefore part of cache_vipt's defined
+//   interface, not a test convenience.
 //
 // The I-port of the arbiter is tied off (no I-cache in this unit
-// test) so arbitration policy is moot here — the arbiter behaves as
-// a single-port request latcher.  Arbitration-policy testing lives
-// in tb_cpu_bus_arbiter.
+// test) so arbitration policy is moot here — the arbiter behaves
+// as a single-port request latcher.  Arbitration-policy testing
+// lives in tb_cpu_bus_arbiter.
 //
 // Exposes a single `i_addr` port (driving both i_vaddr and i_paddr
 // identically — valid because the VIPT precondition is cache ≤ page
@@ -82,6 +85,7 @@ module cache_vipt_test
     logic        cache_mem_we, cache_mem_re;
     logic [31:0] cache_mem_rdata;
     logic        cache_mem_busy;
+    logic        cache_req_accepted;
 
     cache_vipt #(
         .NUM_SETS   (NUM_SETS),
@@ -107,6 +111,7 @@ module cache_vipt_test
         .o_mem_re     (cache_mem_re),
         .i_mem_rdata  (cache_mem_rdata),
         .i_mem_busy   (cache_mem_busy),
+        .i_req_accepted (cache_req_accepted),
         .i_sys_reg    (i_sys_reg),
         .i_sys_wdata  (i_sys_wdata),
         .i_sys_we     (i_sys_we),
@@ -124,7 +129,7 @@ module cache_vipt_test
     /* verilator lint_off UNUSEDSIGNAL */
     logic [31:0] unused_i_rdata;
     logic        unused_i_busy;
-    logic        unused_d_req_accepted, unused_i_req_accepted;
+    logic        unused_i_req_accepted;
     /* verilator lint_on UNUSEDSIGNAL */
     cpu_bus_arbiter u_arb (
         .i_clk       (i_clk),
@@ -141,8 +146,9 @@ module cache_vipt_test
         .i_i_re      (1'b0),
         .o_i_rdata   (unused_i_rdata),
         .o_i_busy    (unused_i_busy),
-        // Request-accepted pulses — added in A1, ignored here
-        .o_d_req_accepted (unused_d_req_accepted),
+        // D req_accepted drives the cache's burst-fill issue
+        // counter; I tied off (no I-cache in this unit test).
+        .o_d_req_accepted (cache_req_accepted),
         .o_i_req_accepted (unused_i_req_accepted),
         // External bus
         .o_mem_addr   (arb_mem_addr),

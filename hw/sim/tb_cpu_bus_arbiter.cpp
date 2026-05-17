@@ -3,29 +3,34 @@
 // Tests the documented contract (from cpu_bus_arbiter.sv header):
 //   FSM/handshake:
 //     - IDLE → BUSY on either pending; D wins on simultaneous.
-//     - Owner latched at IDLE→BUSY, stable through BUSY/DONE.
-//     - resp_rdata latched at BUSY→DONE.
-//     - S_DONE is exactly one cycle.
+//     - Owner latched at every latch event (IDLE→BUSY or
+//       BUSY→BUSY-with-!i_mem_busy).  Owner stable mid-transaction
+//       (S_BUSY with i_mem_busy=1).
 //     - External bus (o_mem_re/we) is driven only in S_BUSY.
+//     - Zero idle bus cycles between back-to-back transactions —
+//       the headline property of the A2 redesign.
 //
 //   Response routing:
-//     - The owner that was captured at IDLE→BUSY sees o_*_busy=0 in
-//       S_DONE and consumes resp_rdata on that cycle.
-//     - The non-owner, if it has a pending request, sees o_*_busy=1
-//       throughout S_BUSY and S_DONE (so it can't latch resp_rdata
-//       intended for the owner).
+//     - The current owner sees o_*_busy=0 on the cycle i_mem_busy
+//       drops in S_BUSY; that's when the cache captures rdata.
+//     - The non-owner with a pending request sees o_*_busy=1
+//       throughout S_BUSY (driven by its own pending bit), so it
+//       cannot mis-capture the owner's response (both rdata ports
+//       are wired to i_mem_rdata).
 //
 //   Request-accepted handshake:
-//     - o_d_req_accepted / o_i_req_accepted are 1-cycle combinational
-//       pulses that fire iff the arbiter is about to latch that
-//       owner's request on the next clock edge.  Mutually exclusive
-//       (D wins simultaneous pending).  Tested end-to-end via
-//       test_req_accepted_pulse; the in-module SVAs pin the
-//       remaining cases.
+//     - o_d_req_accepted / o_i_req_accepted are 1-cycle
+//       combinational pulses that fire iff the arbiter is about
+//       to latch that owner's request on the next clock edge
+//       (either entering S_BUSY from S_IDLE, or re-latching on
+//       a busy-drop cycle in S_BUSY).  Mutually exclusive (D
+//       wins simultaneous pending).  Tested end-to-end via
+//       test_req_accepted_pulse; the in-module SVAs pin down
+//       the remaining cases.
 //
-// The "external bus" is mocked in C++: we drive i_mem_busy / i_mem_rdata
-// in response to o_mem_re / o_mem_we and verify the arbiter routes the
-// response to the correct port.
+// The "external bus" is mocked in C++: we drive i_mem_busy /
+// i_mem_rdata in response to o_mem_re / o_mem_we and verify the
+// arbiter routes the response to the correct port.
 
 #include <cstdio>
 #include <cstdint>
@@ -255,36 +260,6 @@ static void test_d_write_passes_addr_and_data(Vcpu_bus_arbiter* d) {
     tick_with_mem(d, mem, 0, 0);
 }
 
-static void test_done_is_one_cycle(Vcpu_bus_arbiter* d) {
-    printf("── S_DONE is exactly one cycle ──\n");
-    reset(d);
-    MemMock mem;
-
-    // Single-cycle latency to make the timing observable.
-    d->i_d_addr = 0x500;
-    d->i_d_re   = 1;
-    d->eval();
-
-    // Tick to enter S_BUSY.
-    tick_with_mem(d, mem, 1, 0xBEEF'CAFEu);
-
-    // Tick: mem returns busy=0, BUSY→DONE.  D should see busy=0 on
-    // this cycle (the single DONE cycle).
-    tick_with_mem(d, mem, 1, 0xBEEF'CAFEu);
-    bool done_busy_low = (d->o_d_busy == 0);
-
-    // Drop the request immediately so the next IDLE doesn't re-pick.
-    d->i_d_re = 0;
-    d->eval();
-
-    // Tick once more: should be back in IDLE, no traffic.
-    tick_with_mem(d, mem, 1, 0);
-
-    check_bool("done.d_busy_dropped_at_done", done_busy_low, true);
-    check_bool("done.mem_quiet_in_idle",
-               !(d->o_mem_re || d->o_mem_we), true);
-}
-
 static void test_bus_quiet_outside_busy(Vcpu_bus_arbiter* d) {
     printf("── External bus is quiet outside S_BUSY ──\n");
     reset(d);
@@ -313,11 +288,12 @@ static void test_back_to_back_same_port(Vcpu_bus_arbiter* d) {
     }
     check("b2b.first_rdata", d->o_d_rdata, 0x1111'1111u);
 
-    // Immediately switch addr (keeping i_d_re=1) — second request.
+    // Two independent requests with i_re dropped in between — the
+    // pattern uncached MMIO accesses use.  The pipelined burst path
+    // (cache S_FILL holding i_re=1 across word boundaries) is
+    // exercised by test_back_to_back_zero_dead_cycles.
     d->i_d_addr = 0x20;
     d->eval();
-    // The cache pattern is to release i_re between requests; we mimic
-    // that here so the arbiter recognizes a fresh request.
     d->i_d_re = 0;
     tick_with_mem(d, mem, 0, 0);
     d->i_d_addr = 0x20;
@@ -341,12 +317,19 @@ static void test_non_owner_exclusion(Vcpu_bus_arbiter* d) {
 
     // Start D transaction; partway through, raise an I request.  The
     // I-side should observe busy=1 the entire time D's transaction
-    // is in flight, and only see busy=0 in its own S_DONE.
+    // is in flight, and only see its own busy drop when it becomes
+    // the owner after D completes.
     d->i_d_addr = 0x100;
     d->i_d_re   = 1;
     d->eval();
     tick_with_mem(d, mem, 4, 0xDDDD'DDDDu);
-    // Now in S_BUSY for D.
+    // D is latched and req_re is now held by the arbiter's flop.
+    // Drop the cache-side re so the arbiter doesn't back-to-back
+    // re-latch D when its response arrives (this is the new
+    // arbiter's default behaviour); we want a single D transaction
+    // followed by a handoff to I.
+    d->i_d_re = 0;
+    d->eval();
 
     // Raise I request mid-transaction.
     d->i_i_addr = 0x200;
@@ -361,13 +344,13 @@ static void test_non_owner_exclusion(Vcpu_bus_arbiter* d) {
         tick_with_mem(d, mem, 4, 0xDDDD'DDDDu);
     }
 
-    // D done; rdata is D's response.
+    // D done; rdata is D's response (combinational from i_mem_rdata
+    // on the busy-drop cycle).
     check("non_owner.d_got_DDDD", d->o_d_rdata, 0xDDDD'DDDDu);
 
-    // Drop D request.  Now I gets picked.  Its data must be the
-    // *I*-port response, not the cached resp_rdata from D's run.
-    d->i_d_re = 0;
-
+    // I has been picked at the same edge D's transaction ended (the
+    // arbiter back-to-backs into I via the BUSY→BUSY handoff path).
+    // Drain I; its data must be the *I*-port response.
     safety = 0;
     while (d->o_i_busy && safety++ < 20) {
         tick_with_mem(d, mem, 4, 0xEEEE'EEEEu);
@@ -419,19 +402,26 @@ static void test_req_accepted_pulse(Vcpu_bus_arbiter* d) {
     check_bool("req_acc.simult_d_pulses",  d->o_d_req_accepted, true);
     check_bool("req_acc.simult_i_no_pulse", d->o_i_req_accepted, false);
 
-    // Drain D, with I still pending throughout.
+    // Tick to enter S_BUSY for D; drop D's re so the arbiter
+    // hands off to I on D's busy-drop rather than back-to-backing
+    // into a second D transaction.
+    tick_with_mem(d, mem, 2, 0xAAAA0001u);
+    d->i_d_re = 0;
+    d->eval();
+
+    // Drain D's transaction.  The loop exits on the cycle D's
+    // response arrives.
     int safety2 = 0;
     while (d->o_d_busy && safety2++ < 20) {
         tick_with_mem(d, mem, 2, 0xAAAA0001u);
     }
 
-    // (6) Drop D; once arbiter re-enters S_IDLE with I pending, I's
-    //     pulse fires (combinational from pick_i in S_IDLE).
-    d->i_d_re = 0;
-    d->eval();
-    tick_with_mem(d, mem, 0, 0);    // S_DONE → S_IDLE
-    check_bool("req_acc.i_pulse_after_d_done",   d->o_i_req_accepted, true);
-    check_bool("req_acc.d_quiet_when_i_picks",   d->o_d_req_accepted, false);
+    // (6) Same cycle the loop exits: the arbiter sees !i_mem_busy
+    //     with pending_i (and !pending_d after our re drop), so
+    //     latch_event fires for I — I's pulse is high *this cycle*.
+    //     This is the BUSY→BUSY handoff path (no IDLE in between).
+    check_bool("req_acc.i_pulse_on_handoff",  d->o_i_req_accepted, true);
+    check_bool("req_acc.d_quiet_when_i_picks", d->o_d_req_accepted, false);
 
     // Drain I.
     int safety3 = 0;
@@ -440,6 +430,74 @@ static void test_req_accepted_pulse(Vcpu_bus_arbiter* d) {
     }
     d->i_i_re = 0;
     tick_with_mem(d, mem, 0, 0);
+}
+
+static void test_back_to_back_zero_dead_cycles(Vcpu_bus_arbiter* d) {
+    printf("── Back-to-back D burst: zero idle cycles between transactions ──\n");
+    reset(d);
+    MemMock mem;
+
+    // Mimic the cache's S_FILL burst pattern: hold i_d_re=1, walk
+    // i_d_addr on each req_accepted pulse.  Measure the total cycle
+    // count and verify o_mem_re stays high across word boundaries.
+    const int N_WORDS      = 4;
+    const int MEM_LATENCY  = 2;
+    const uint32_t BASE    = 0x2000;
+
+    d->i_d_addr = BASE;
+    d->i_d_re   = 1;
+    d->eval();
+
+    int req_count       = 0;
+    int resp_count      = 0;
+    int idle_re_cycles  = 0;
+    bool burst_started  = false;
+    int  cycle          = 0;
+
+    while (resp_count < N_WORDS && cycle < 50) {
+        // Cache-side: on every req_accepted, advance to the next addr.
+        // re is dropped only AFTER the tick that latches the final
+        // word, so the latch event for word N-1 isn't dropped by the
+        // re-deassertion racing the edge.
+        if (d->o_d_req_accepted) {
+            req_count++;
+            if (req_count < N_WORDS) {
+                d->i_d_addr = BASE + (uint32_t)req_count * 4;
+                d->eval();
+            }
+        }
+
+        // Response capture: on busy drop with an outstanding request,
+        // count it.
+        if (!d->i_mem_busy && resp_count < req_count)
+            resp_count++;
+
+        // Track: once the burst has started (state has driven the bus
+        // at least once) o_mem_re should remain high until the last
+        // word's response arrives.
+        if (d->o_mem_re)                          burst_started   = true;
+        if (burst_started && resp_count < N_WORDS && !d->o_mem_re)
+            idle_re_cycles++;
+
+        tick_with_mem(d, mem, MEM_LATENCY, 0xCAFE0000u | (uint32_t)resp_count);
+        cycle++;
+
+        // Drop re after the tick that latched the final word.
+        if (req_count == N_WORDS && d->i_d_re) {
+            d->i_d_re = 0;
+            d->eval();
+        }
+    }
+
+    check("b2b.all_words_completed", (uint32_t)resp_count, (uint32_t)N_WORDS);
+    check("b2b.no_idle_re_during_burst", (uint32_t)idle_re_cycles, 0u);
+    // With back-to-back, each word costs MEM_LATENCY+1 cycles after
+    // the initial pick.  Old arbiter (S_DONE + IDLE pick) added 2
+    // dead cycles per word.  4 words at lat=2: new ≤ 12 cycles, old
+    // would need ≥ 17.  10 leaves room for the test wrapping but
+    // still rules out the old behaviour.
+    check_bool("b2b.within_back_to_back_budget", cycle <= 12, true);
+    printf("    [info] 4 back-to-back transactions completed in %d cycles\n", cycle);
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -453,11 +511,11 @@ int main() {
     test_single_i_read(d);
     test_d_priority_on_simultaneous(d);
     test_d_write_passes_addr_and_data(d);
-    test_done_is_one_cycle(d);
     test_bus_quiet_outside_busy(d);
     test_back_to_back_same_port(d);
     test_non_owner_exclusion(d);
     test_req_accepted_pulse(d);
+    test_back_to_back_zero_dead_cycles(d);
 
     printf("\ncpu_bus_arbiter: %d/%d tests passed\n", tests - errors, tests);
     if (errors > 0)
