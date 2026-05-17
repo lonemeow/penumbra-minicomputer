@@ -572,6 +572,12 @@ module cpu_core
     logic [31:0] icache_arb_rdata, dcache_arb_rdata;
     logic        icache_arb_busy,  dcache_arb_busy;
 
+    // Arbiter req_accepted pulses — wired in A1 for SVA coverage,
+    // consumed by the cache in A2 to pipeline burst fills.
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic        arb_d_req_accepted_unused, arb_i_req_accepted_unused;
+    /* verilator lint_on UNUSEDSIGNAL */
+
     cache_vipt u_icache (
         .i_clk        (i_clk),
         .i_rst        (i_rst),
@@ -661,6 +667,11 @@ module cpu_core
         .i_i_re       (icache_mem_re && !mmu_fault),
         .o_i_rdata    (icache_arb_rdata),
         .o_i_busy     (icache_arb_busy),
+
+        // Request-accepted pulses — added in A1, consumed in A2
+        // (cache will use them to pipeline burst fills).
+        .o_d_req_accepted (arb_d_req_accepted_unused),
+        .o_i_req_accepted (arb_i_req_accepted_unused),
 
         // External bus
         .o_mem_addr   (o_mem_addr),

@@ -121,8 +121,11 @@ module cache_vipt_test
     logic        arb_mem_busy;
 
     // verilator lint_off PINCONNECTEMPTY
+    /* verilator lint_off UNUSEDSIGNAL */
     logic [31:0] unused_i_rdata;
     logic        unused_i_busy;
+    logic        unused_d_req_accepted, unused_i_req_accepted;
+    /* verilator lint_on UNUSEDSIGNAL */
     cpu_bus_arbiter u_arb (
         .i_clk       (i_clk),
         .i_rst       (i_rst),
@@ -138,6 +141,9 @@ module cache_vipt_test
         .i_i_re      (1'b0),
         .o_i_rdata   (unused_i_rdata),
         .o_i_busy    (unused_i_busy),
+        // Request-accepted pulses — added in A1, ignored here
+        .o_d_req_accepted (unused_d_req_accepted),
+        .o_i_req_accepted (unused_i_req_accepted),
         // External bus
         .o_mem_addr   (arb_mem_addr),
         .o_mem_wdata  (arb_mem_wdata),

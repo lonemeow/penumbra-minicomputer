@@ -88,6 +88,20 @@ module cpu_bus_arbiter
     output logic [31:0] o_i_rdata,
     output logic        o_i_busy,
 
+    // ── Request-accepted handshake (1-cycle combinational pulse) ──
+    // Each pulse fires in the cycle the arbiter is about to latch
+    // that owner's request (S_IDLE with that owner picked).  On the
+    // next clock edge the arbiter transitions to S_BUSY with the
+    // request latched, so the pulse drops naturally.  Downstream
+    // caches use these to know their address has been captured and
+    // can advance to the next address (in a burst fill) or drop
+    // o_mem_re (single-shot) on the next edge, without waiting for
+    // i_mem_busy to drop.  A2 will use these to eliminate the
+    // dead cycles between back-to-back transactions; A1 only adds
+    // and verifies the signal.
+    output logic        o_d_req_accepted,
+    output logic        o_i_req_accepted,
+
     // ── External bus (single, shared with rest of system) ──
     output logic [31:0] o_mem_addr,
     output logic [31:0] o_mem_wdata,
@@ -236,6 +250,27 @@ module cpu_bus_arbiter
     assign o_i_rdata = resp_rdata;
 
     // ══════════════════════════════════════════════════════════
+    // Request-accepted pulses
+    //
+    // Combinational signal that fires for exactly one cycle iff
+    // the arbiter is about to latch this owner's request on the
+    // next clock edge.  Contract pinned down by the five SVAs at
+    // the bottom of this file (search "req_accepted").
+    //
+    // The pulse is naturally 1-cycle because after the IDLE→BUSY
+    // edge the FSM is no longer in S_IDLE, so the condition that
+    // drove the pulse high is gone.
+    //
+    // Why combinational and not registered: the cache reacts to
+    // the pulse one clock edge later.  A registered pulse would
+    // add one more cycle of latency on top, defeating the goal of
+    // back-to-back transactions in A2.
+    // ══════════════════════════════════════════════════════════
+
+    assign o_d_req_accepted = pick_d && state == S_IDLE;
+    assign o_i_req_accepted = pick_i && state == S_IDLE;
+
+    // ══════════════════════════════════════════════════════════
     // Simulation assertions — FSM and handshake invariants
     //
     // These pin down the arbiter's contract with both caches and
@@ -320,6 +355,45 @@ module cpu_bus_arbiter
     assert property (@(posedge i_clk) disable iff (i_rst)
         (state == S_DONE && owner == 1'b1) |-> (o_i_rdata == resp_rdata))
         else $error("cpu_bus_arbiter: I owner not seeing resp_rdata in S_DONE");
+
+    // ══════════════════════════════════════════════════════════
+    // req_accepted contract
+    //
+    // The five SVAs below define exactly when the new
+    // o_d_req_accepted / o_i_req_accepted pulses may fire.  Any
+    // implementation that satisfies all five is correct.
+    // ══════════════════════════════════════════════════════════
+
+    // (1) D pulse implies the arbiter latches D on the next edge.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        o_d_req_accepted |=> (state == S_BUSY && owner == 1'b0))
+        else $error("cpu_bus_arbiter: o_d_req_accepted high but no D latch on next edge");
+
+    // (2) I pulse implies the arbiter latches I on the next edge.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        o_i_req_accepted |=> (state == S_BUSY && owner == 1'b1))
+        else $error("cpu_bus_arbiter: o_i_req_accepted high but no I latch on next edge");
+
+    // (3) Any IDLE→BUSY transition latching D must have been preceded
+    //     by an o_d_req_accepted pulse.  Together with (1) this pins
+    //     down "pulse iff latch".
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        ($past(state) == S_IDLE && state == S_BUSY && owner == 1'b0)
+            |-> $past(o_d_req_accepted))
+        else $error("cpu_bus_arbiter: D latch occurred without prior o_d_req_accepted pulse");
+
+    // (4) Any IDLE→BUSY transition latching I must have been preceded
+    //     by an o_i_req_accepted pulse.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        ($past(state) == S_IDLE && state == S_BUSY && owner == 1'b1)
+            |-> $past(o_i_req_accepted))
+        else $error("cpu_bus_arbiter: I latch occurred without prior o_i_req_accepted pulse");
+
+    // (5) D and I pulses are mutually exclusive — at most one owner
+    //     is latched per edge.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        !(o_d_req_accepted && o_i_req_accepted))
+        else $error("cpu_bus_arbiter: D and I req_accepted both high in same cycle");
 
 endmodule
 

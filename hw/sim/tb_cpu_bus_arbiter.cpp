@@ -15,6 +15,14 @@
 //       throughout S_BUSY and S_DONE (so it can't latch resp_rdata
 //       intended for the owner).
 //
+//   Request-accepted handshake:
+//     - o_d_req_accepted / o_i_req_accepted are 1-cycle combinational
+//       pulses that fire iff the arbiter is about to latch that
+//       owner's request on the next clock edge.  Mutually exclusive
+//       (D wins simultaneous pending).  Tested end-to-end via
+//       test_req_accepted_pulse; the in-module SVAs pin the
+//       remaining cases.
+//
 // The "external bus" is mocked in C++: we drive i_mem_busy / i_mem_rdata
 // in response to o_mem_re / o_mem_we and verify the arbiter routes the
 // response to the correct port.
@@ -370,6 +378,70 @@ static void test_non_owner_exclusion(Vcpu_bus_arbiter* d) {
     tick_with_mem(d, mem, 0, 0);
 }
 
+static void test_req_accepted_pulse(Vcpu_bus_arbiter* d) {
+    printf("── req_accepted: 1-cycle pulse on each owner latch ──\n");
+    reset(d);
+    MemMock mem;
+
+    // (1) Idle: neither pulse fires.
+    for (int i = 0; i < 3; i++) {
+        check_bool("req_acc.idle_d_low", d->o_d_req_accepted, false);
+        check_bool("req_acc.idle_i_low", d->o_i_req_accepted, false);
+        tick_with_mem(d, mem, 2, 0);
+    }
+
+    // (2) D request: pulse fires combinationally in the same cycle.
+    d->i_d_addr = 0x100;
+    d->i_d_re   = 1;
+    d->eval();
+    check_bool("req_acc.d_pulse_on_request",  d->o_d_req_accepted, true);
+    check_bool("req_acc.i_quiet_when_d_picks", d->o_i_req_accepted, false);
+
+    // (3) After the latching edge the FSM is in S_BUSY — pulse drops.
+    tick_with_mem(d, mem, 3, 0xCAFE0001u);
+    check_bool("req_acc.d_pulse_drops_in_busy", d->o_d_req_accepted, false);
+
+    // (4) Pulse stays low for the rest of the transaction.
+    int safety = 0;
+    while (d->o_d_busy && safety++ < 20) {
+        check_bool("req_acc.d_pulse_low_during_txn", d->o_d_req_accepted, false);
+        tick_with_mem(d, mem, 3, 0xCAFE0001u);
+    }
+    d->i_d_re = 0;
+    tick_with_mem(d, mem, 0, 0);
+
+    // (5) Simultaneous D+I: only D's pulse fires (D wins by priority).
+    d->i_d_addr = 0x400;
+    d->i_d_re   = 1;
+    d->i_i_addr = 0x800;
+    d->i_i_re   = 1;
+    d->eval();
+    check_bool("req_acc.simult_d_pulses",  d->o_d_req_accepted, true);
+    check_bool("req_acc.simult_i_no_pulse", d->o_i_req_accepted, false);
+
+    // Drain D, with I still pending throughout.
+    int safety2 = 0;
+    while (d->o_d_busy && safety2++ < 20) {
+        tick_with_mem(d, mem, 2, 0xAAAA0001u);
+    }
+
+    // (6) Drop D; once arbiter re-enters S_IDLE with I pending, I's
+    //     pulse fires (combinational from pick_i in S_IDLE).
+    d->i_d_re = 0;
+    d->eval();
+    tick_with_mem(d, mem, 0, 0);    // S_DONE → S_IDLE
+    check_bool("req_acc.i_pulse_after_d_done",   d->o_i_req_accepted, true);
+    check_bool("req_acc.d_quiet_when_i_picks",   d->o_d_req_accepted, false);
+
+    // Drain I.
+    int safety3 = 0;
+    while (d->o_i_busy && safety3++ < 20) {
+        tick_with_mem(d, mem, 2, 0xBBBB0001u);
+    }
+    d->i_i_re = 0;
+    tick_with_mem(d, mem, 0, 0);
+}
+
 // ══════════════════════════════════════════════════════════════
 
 int main() {
@@ -385,6 +457,7 @@ int main() {
     test_bus_quiet_outside_busy(d);
     test_back_to_back_same_port(d);
     test_non_owner_exclusion(d);
+    test_req_accepted_pulse(d);
 
     printf("\ncpu_bus_arbiter: %d/%d tests passed\n", tests - errors, tests);
     if (errors > 0)
