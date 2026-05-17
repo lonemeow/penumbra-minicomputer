@@ -41,6 +41,11 @@ extern struct cpu_info cpu_info_store;
 #define	curlwp			(curcpu()->ci_curlwp)
 #define	cpu_number()		0		/* uniprocessor */
 
+/* CPU clock frequency in Hz, populated at cpu_attach time from
+ * SYSDEV_MACH/MACH_CPU_FREQ.  Used by cpu_frequency() and any code
+ * converting cycle counts to wall time. */
+extern uint32_t cpu_clock_freq_hz;
+
 #define cpu_proc_fork(p1, p2)	/* nothing */
 
 void	cpu_startup(void);

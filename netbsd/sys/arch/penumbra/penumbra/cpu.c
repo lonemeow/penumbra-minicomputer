@@ -23,6 +23,10 @@ __KERNEL_RCSID(0, "$NetBSD$");
 static int	cpu_match(device_t, cfdata_t, void *);
 static void	cpu_attach(device_t, device_t, void *);
 
+/* CPU clock frequency in Hz, read from SYSDEV_MACH at cpu_attach time.
+ * Consumed by cpu_frequency() in <machine/cpu_counter.h>. */
+uint32_t cpu_clock_freq_hz;
+
 CFATTACH_DECL_NEW(cpu, 0,
     cpu_match, cpu_attach, NULL, NULL);
 
@@ -183,6 +187,7 @@ cpu_attach(device_t parent, device_t self, void *aux)
 	    : "=r"(isa)  : "i"(SYSDEV_CPU),  "i"(CPU_ISA));
 	__asm __volatile("RDSYS %0, %1, %2"
 	    : "=r"(freq) : "i"(SYSDEV_MACH), "i"(MACH_CPU_FREQ));
+	cpu_clock_freq_hz = freq;
 
 	__asm __volatile("RDSYS %0, %1, %2"
 	    : "=r"(ic_info) : "i"(SYSDEV_ICACHE), "i"(CACHE_INFO));
