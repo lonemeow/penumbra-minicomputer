@@ -1,15 +1,56 @@
 # L2 Cache — Design Plan
 
 This document specifies the design for an optional L2 cache that sits
-between the CPU's `o_mem_*` port and the system bus.  It is a
-forward-looking plan; nothing under `hw/rtl/` implements it yet.  The
-goal is to capture all decisions and their rationale so a later session
-can pick up implementation work without re-deriving the design.
+between the CPU's `o_mem_*` port and the system bus.
 
 For protocol context this document depends on — and does not duplicate —
 read [`cpu-bus.md`](cpu-bus.md) (CPU-internal bus contract) and
 [`bus-protocol.md`](../hardware/bus-protocol.md) (Penumbra Bus, the
 contract `o_mem_*` honors in its sync-wrapped form).
+
+## Implementation Status
+
+| Phase | Description | Status |
+|---|---|---|
+| 0 | Bus shape (`o_mem_cacheable`, `HAS_L2` gate, `l2_passthrough` stub) | **DONE** |
+| 1 | Real L2 cache: read+write-invalidate-on-hit, INVAL_ALL | **DONE** |
+| 2 | Write-back, write-allocate, dirty bit, FLUSH ops | pending |
+| 3 | 1-deep writeback buffer (overlapped fill+writeback) | pending |
+| 4 | Perfctrs (hits/misses/writebacks/evictions on SYSDEV_L2 regs 7+) | pending |
+
+What's wired up today (post phase 1):
+
+- `hw/rtl/soc/l2_cache.sv` — the real module.  64 KiB, 4-way,
+  tree-PLRU, 2-cycle hit pipeline.  Write policy is
+  **write-invalidate-on-hit** rather than the originally-planned
+  write-through-write-no-allocate — see the "Phasing" section
+  below for the rationale.  Disabled at reset; software (kernel
+  or bare-metal harness, not the ROM) brings it up via `WRSYS
+  SYSDEV_L2 CTRL=1`.
+- `hw/rtl/sim/machine_sim.sv` and `hw/rtl/fpga/ulx3s_top.sv`
+  gate L2 instantiation on the `HAS_L2` parameter.  Default
+  `HAS_L2=0` keeps the FPGA bitstream byte-identical to the
+  pre-L2 build.  `HAS_L2=1` instantiates `l2_cache` and routes
+  sysreg device 9 to it.
+- `hw/sim/tb_l2_cache.cpp` — standalone Verilator testbench
+  (18 cases) for the L2 contract: INFO presence, pass-through-
+  when-disabled, miss→hit, write-invalidate, INVAL_ALL walker,
+  uncached pass-through.
+- Boot ROM (`hw/rom/boot_rom.c`) prints `L2 cache: 64kB
+  (1024 x 16B, 4-way) unified` in the banner when `HAS_L2=1`,
+  `L2 cache: absent` otherwise.  The ROM **does not** enable
+  the L2 (or any cache, or the MMU) — that's the OS's job, by
+  long-standing project convention.
+- Benchmark harness (`benchmark/common/crt0.S`) enables the L2
+  if present (`RDSYS SYSDEV_L2 INFO != 0`).
+
+Verification gates that have to stay green on every L2 commit:
+`make sim MOD=l2_cache` (18/18), `make test` (HAS_L2=0, 55/55),
+`make test-modules` (35/35), `make test-iss` (55/55), `make
+fpga-lint TOP=ulx3s_top` (zero warnings), and a manual HAS_L2=1
+cross-section via `verilator -GHAS_L2=1`.  Hardware-side
+benchmark numbers (`feedback_bench_on_hardware` in memory) are
+what tell us whether L2 is actually paying off.
 
 ## Goals
 
@@ -364,22 +405,45 @@ landing in the same commit.  Plan:
 
 Land in commit-sized increments per `feedback_incremental_commits`:
 
-1. **Phase 0 — bus shape.**  Add `o_mem_cacheable` to `cpu_core`.
-   Land `l2_passthrough.sv` and wire it via `HAS_L2`.  No
-   functional change with default `HAS_L2=0`.  Test: existing suite
-   passes, plus a no-op `HAS_L2=1` sim path.
-2. **Phase 1 — read-only L2.**  Tag/data arrays, hit/miss/allocate,
-   write **pass-through** (no dirty bit, no writeback).  Equivalent
-   to a write-no-allocate read cache on top of L1.  Establishes
-   tag/data infrastructure and `INVAL` ops.  Already worth running
-   benchmarks.
-3. **Phase 2 — write-back.**  Add dirty bit, write-allocate,
-   eviction writeback, `FLUSH` ops.  This is the headline perf
-   commit.
-4. **Phase 3 — write buffer.**  1-deep writeback buffer to overlap
-   eviction and fill.  Skip if phase 2 already meets perf targets.
-5. **Phase 4 — perfctrs.**  Hits, misses, writebacks, evictions on
-   `SYSDEV_L2` regs 7+.  Lets membench compute hit rate directly.
+1. **Phase 0 — bus shape.** *(DONE)*  Added `o_mem_cacheable`
+   through cache → arbiter → cpu_core → top, landed
+   `l2_passthrough.sv` and wired via `HAS_L2`.  Default `HAS_L2=0`
+   kept the build byte-identical to pre-L2.  HAS_L2=1 build
+   verified clean via `-GHAS_L2=1` cross-section.
+
+2. **Phase 1 — real read cache.** *(DONE)*  Implemented in
+   `hw/rtl/soc/l2_cache.sv` (64 KiB, 4-way, tree-PLRU, 2-cycle
+   hit pipeline).  Replaced `l2_passthrough` (deleted —
+   `l2_cache` with CTRL.enable=0 covers the same behaviour).
+   Tag/data arrays, hit/miss/allocate, INVAL_ALL walker, sysreg
+   device 9.  18-case `tb_l2_cache.cpp` unit testbench.
+
+   **Delta from original plan:** the original phase 1 spec was
+   "write pass-through (no dirty bit, no writeback)" — but pure
+   pass-through is incorrect because L1's write-through stores
+   would leave the L2 holding stale data.  Two options were on
+   the table to fix that: write-through-write-no-allocate
+   (byte-en update of L2 on write hit) or write-invalidate-on-hit
+   (drop the L2 line on write hit).  We chose **write-invalidate-
+   on-hit** for phase 1 — ~30 fewer RTL lines than WT-WNA, keeps
+   the BRAM data port read-only past initialisation, and is
+   functionally correct.  Upgrade to WT-WNA is a follow-up
+   commit once benchmarks show whether post-write locality is
+   worth the bytes.
+
+3. **Phase 2 — write-back.** *(pending)*  Add dirty bit,
+   write-allocate, eviction writeback, `FLUSH` ops.  This is the
+   headline perf commit — it absorbs L1's write-through traffic
+   entirely instead of just dropping the cached copy on write.
+
+4. **Phase 3 — write buffer.** *(pending)*  1-deep writeback
+   buffer to overlap eviction and fill.  Skip if phase 2 already
+   meets perf targets.
+
+5. **Phase 4 — perfctrs.** *(pending)*  Hits, misses, writebacks,
+   evictions on `SYSDEV_L2` regs 7+.  Lets membench compute hit
+   rate directly.  Most useful immediately after phase 2 lands,
+   to confirm the write-back actually absorbs the traffic.
 
 Each phase is an independent commit with its own test addition.
 

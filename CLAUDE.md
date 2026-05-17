@@ -343,6 +343,25 @@ Eight exception sources (IRQ, MMU faults, alignment, bus fault,
 BREAK, SYSCALL, privilege, illegal) are fully wired with
 MIPS/68k-style vector dispatch.
 
+**L2 cache phase 1 implemented, opt-in via `HAS_L2=1`.**
+- 64 KiB unified, 4-way set-associative, 16-byte lines, tree-PLRU,
+  2-cycle hit pipeline.  Write policy is write-invalidate-on-hit
+  (a step short of the WT-WNA originally planned — chosen for
+  simpler RTL; write-back is phase 2).
+- Disabled at reset; software brings it up via `WRSYS SYSDEV_L2
+  CTRL=1`.  The boot ROM intentionally never enables it (or any
+  cache or the MMU) — same convention as L1.  Benchmark harness
+  (`benchmark/common/crt0.S`) detects via `INFO != 0` and enables.
+- Default `HAS_L2=0` keeps the FPGA bitstream byte-identical to
+  pre-L2 builds.  `HAS_L2=1` is opt-in via a build-time parameter
+  override.
+- Backed by the recent arbiter rework (`req_accepted` handshake
+  + back-to-back BUSY→BUSY transitions) which the L2 path
+  inherits and exercises.
+- See `doc/internals/l2-cache.md` for the full design plan (phase
+  status, deltas-from-plan, geometry rationale) and
+  `hw/rtl/soc/l2_cache.sv` for the implementation.
+
 **Bus autoconfig and SD card boot path working end-to-end.**
 - Boot ROM runs bus autoconfig: resets the bus, enables the config
   chain, probes devices via bus-fault detection, and allocates base
