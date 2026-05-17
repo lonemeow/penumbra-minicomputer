@@ -916,6 +916,41 @@ static void print_one_cache(const char *label, uint32_t info) {
         wa ? "WA" : "WnA");
 }
 
+/*
+ * Print the L2 cache's geometry from its INFO register.  INFO=0
+ * means HAS_L2=0 (no L2 in this build); print "absent" so the
+ * boot banner is unambiguous about which configuration is loaded.
+ *
+ * The L2 INFO layout is intentionally different from L1's (wider
+ * NUM_SETS field, wider TYPE field, no WB/WA bits in phase 1), so
+ * it can't share print_one_cache.  See hw/rtl/soc/l2_cache.sv for
+ * the field decomposition.
+ */
+static void print_l2_cache(void) {
+    uint32_t info = penumbra_read_sysreg(SYSDEV_L2, L2_INFO);
+    if (info == 0) {
+        console_puts("L2 cache: absent\r\n");
+        return;
+    }
+    uint32_t line_words = L2_INFO_LINE_WORDS(info);
+    uint32_t num_sets   = L2_INFO_NUM_SETS(info);
+    uint32_t num_ways   = L2_INFO_NUM_WAYS(info);
+    uint32_t type       = L2_INFO_TYPE(info);
+
+    uint32_t line_bytes  = line_words * 4u;
+    uint32_t total_bytes = num_sets * num_ways * line_bytes;
+
+    char size_str[12];
+    humanize_size(total_bytes, size_str, sizeof(size_str));
+
+    const char *type_str = (type == L2_TYPE_UNIFIED) ? "unified" : "?";
+
+    console_printf("L2 cache: %s (%d x %dB, %d-way) %s\r\n",
+        size_str,
+        (int)num_sets, (int)line_bytes, (int)num_ways,
+        type_str);
+}
+
 static void print_banner(void) {
     char cpu_name[17], mach_name[17], feat_str[48];
 
@@ -943,6 +978,7 @@ static void print_banner(void) {
         penumbra_read_sysreg(SYSDEV_ICACHE, CACHE_INFO));
     print_one_cache("L1 dcache",
         penumbra_read_sysreg(SYSDEV_DCACHE, CACHE_INFO));
+    print_l2_cache();
     console_puts("\r\n");
 }
 

@@ -101,6 +101,30 @@ typedef unsigned int uint32_t;
 #define CACHE_TYPE_VIPT 1
 #define CACHE_TYPE_VIVT 2
 
+/* ── L2 cache (SYSDEV_L2, device 9) ──────────────────────────────────
+ *
+ * INFO=0 means the L2 is not present in this build (HAS_L2=0 at RTL,
+ * or this device id is simply unmapped).  Software detects absence
+ * via that and skips any further L2 ops.  The INFO field layout is
+ * deliberately different from L1's CACHE_INFO (wider NUM_SETS, wider
+ * TYPE, no WB/WA bits in phase 1) — see hw/rtl/soc/l2_cache.sv.
+ */
+#define SYSDEV_L2     9
+#define L2_INFO       0   /* Read-only geometry/type, 0 = absent */
+#define L2_CTRL       1   /* bit 0 = enable; reset value 0 */
+#define L2_INVAL_ALL  2   /* Write any value to trigger walker */
+#define L2_STATUS     6   /* bit 0 = inval-walker busy */
+
+#define L2_CTRL_ENABLE  0x01
+#define L2_STATUS_BUSY  0x01
+
+#define L2_INFO_LINE_WORDS(v)  (((v) >>  0) & 0x000Fu)
+#define L2_INFO_NUM_SETS(v)    (((v) >>  4) & 0xFFFFu)
+#define L2_INFO_NUM_WAYS(v)    (((v) >> 20) & 0x000Fu)
+#define L2_INFO_TYPE(v)        (((v) >> 24) & 0x00FFu)
+
+#define L2_TYPE_UNIFIED 1
+
 /* FAULT_STATUS bit positions */
 #define FSTAT_R    8   /* Faulting access was read */
 #define FSTAT_W    9   /* Faulting access was write */
