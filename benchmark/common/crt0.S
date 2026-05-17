@@ -38,6 +38,16 @@
 #define CACHE_CTRL          1
 #define CACHE_CTRL_ENABLE   1
 
+/* ── L2 cache (device 9) ──────────────────────────────────────
+ *
+ * INFO=0 means HAS_L2=0 (cache not present); skip enabling.
+ * See hw/rtl/soc/l2_cache.sv and hw/rom/penumbra.h.
+ */
+#define SYSDEV_L2           9
+#define L2_INFO             0
+#define L2_CTRL             1
+#define L2_CTRL_ENABLE      1
+
 /* ── PTE flags (must match hardware TLB_PTE layout) ───────────── */
 #define PTE_KERNEL          0xBD    /* V|C|R|W|X|G */
 #define PTE_KERNEL_NC       0x99    /* V|R|W|G (uncached, for MMIO) */
@@ -275,6 +285,17 @@ _start:
         lli     r1, #CACHE_CTRL_ENABLE
         wrsys   r1, #SYSDEV_DCACHE, #CACHE_CTRL
         wrsys   r1, #SYSDEV_ICACHE, #CACHE_CTRL
+
+        /* Enable L2 if present.  L2_INFO=0 means HAS_L2=0 at RTL —
+         * the device id is unmapped so RDSYS returns zero; skip the
+         * enable write.  Software in HAS_L2=1 builds gets the L2's
+         * miss-penalty reduction; HAS_L2=0 builds are unchanged. */
+        rdsys   r2, #SYSDEV_L2, #L2_INFO
+        cmp     r2, r0
+        beq     .Lno_l2
+        lli     r1, #L2_CTRL_ENABLE
+        wrsys   r1, #SYSDEV_L2, #L2_CTRL
+.Lno_l2:
 
 /* ═════════════════════════════════════════════════════════════════
  * Phase 5: Set stack + call bench_main
