@@ -19,6 +19,7 @@
 #define PTE_SW_DIRTY	0x100	/* page has been modified */
 #define PTE_SW_REF	0x200	/* page has been referenced */
 #define PTE_SW_MANAGED	0x400	/* page is managed by UVM */
+#define PTE_SW_WIRED	0x800	/* mapping is wired (no pageout) */
 
 #define PTE_PPN_SHIFT	12
 #define PTE_PPN_MASK	0xFFFFF000

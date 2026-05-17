@@ -674,9 +674,12 @@ pmap_enter(pmap_t pmap, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 	struct vm_page * const pg =
 	    pmap_initialized ? PHYS_TO_VM_PAGE(pa) : NULL;
 	const bool managed = (pg != NULL);
+	const bool new_wired = (flags & PMAP_WIRED) != 0;
 
 	if (managed)
 		extra |= PTE_SW_MANAGED;
+	if (new_wired)
+		extra |= PTE_SW_WIRED;
 
 	const pt_entry_t new_pte = PTE_MAKE(pa, prot, flags, extra);
 
@@ -702,10 +705,18 @@ pmap_enter(pmap_t pmap, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 			 * PV list is unchanged.  Resident count is unchanged
 			 * (old PTE was already V).
 			 */
-			*ptep = new_pte;
-
-			if (flags & PMAP_WIRED)
+			/*
+			 * Wired-count: explicit decrement-old +
+			 * increment-new matches the upstream MI pmap.c
+			 * idiom (sys/uvm/pmap/pmap.c).  Net effect: +1 on
+			 * unwired→wired, −1 on wired→unwired, 0 otherwise.
+			 */
+			if (old_pte & PTE_SW_WIRED)
+				pmap->pm_stats_wired--;
+			if (new_wired)
 				pmap->pm_stats_wired++;
+
+			*ptep = new_pte;
 
 			if (managed) {
 				struct vm_page_md *md = VM_PAGE_TO_MD(pg);
@@ -755,7 +766,14 @@ pmap_enter(pmap_t pmap, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 	if (!(old_pte & PTE_V))
 		pmap->pm_stats_resident++;
 
-	if (flags & PMAP_WIRED)
+	/*
+	 * Wired-count: explicit decrement-old + increment-new (matches
+	 * the upstream MI pmap.c idiom).  An invalid old PTE has no
+	 * PTE_SW_WIRED, so fresh mappings only see the increment.
+	 */
+	if ((old_pte & PTE_V) && (old_pte & PTE_SW_WIRED))
+		pmap->pm_stats_wired--;
+	if (new_wired)
 		pmap->pm_stats_wired++;
 
 	/*
@@ -824,6 +842,8 @@ pmap_remove(pmap_t pm, vaddr_t sva, vaddr_t eva)
 		}
 		*ptep = 0;
 		pm->pm_stats_resident--;
+		if (pte & PTE_SW_WIRED)
+			pm->pm_stats_wired--;
 		pmap_tlb_invalidate(pm, va);
 	}
 	splx(s);
@@ -863,14 +883,24 @@ pmap_protect(pmap_t pm, vaddr_t sva, vaddr_t eva, vm_prot_t prot)
 /*
  * pmap_unwire: clear wired attribute on a mapping.
  *
- * We don't currently track wired state in PTEs (no software
- * wired bit), so this is a no-op.  Wired mappings are managed
- * by UVM's bookkeeping, not by PTE bits.
+ * Clears the PTE_SW_WIRED bit in the PTE and decrements
+ * pm_stats_wired.  No TLB invalidation needed: PTE_SW_WIRED is a
+ * software bit that hardware ignores, so a stale cached TLB entry
+ * with SW_WIRED still set behaves identically.
+ *
+ * Idempotent: if the mapping is already unwired (or the PTE is
+ * invalid), this is a no-op.
  */
 void
 pmap_unwire(pmap_t pm, vaddr_t va)
 {
-	/* nothing — no PTE wired bit to clear */
+	int s = splhigh();
+	pt_entry_t *ptep = pmap_pte_lookup(pm->pm_l1, va);
+	if (ptep != NULL && (*ptep & PTE_V) && (*ptep & PTE_SW_WIRED)) {
+		*ptep &= ~PTE_SW_WIRED;
+		pm->pm_stats_wired--;
+	}
+	splx(s);
 }
 
 /*
@@ -1210,6 +1240,9 @@ pmap_remove_all(struct pmap *pmap)
 			uvm_pagefree(l2pg);
 		l1[i] = 0;
 	}
+
+	/* All user mappings (including wired ones) are now gone. */
+	pmap->pm_stats_wired = 0;
 
 	splx(s);
 	return true;
