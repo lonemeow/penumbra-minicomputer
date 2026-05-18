@@ -334,14 +334,19 @@ after setting up TLB mappings.
 | 0     | `INFO`       | R   | Cache geometry; `0` ⇒ absent                      |
 | 1     | `CTRL`       | R/W | Control register (`[0] = ENABLE`)                 |
 | 2     | `INVAL_ALL`  | W   | Drop all lines (no writeback). Written value ignored. |
-| 3     | `INVAL_LINE` | W   | Drop the line covering a physical address; no-op if absent |
-| 4     | `FLUSH_ALL`  | W   | Writeback all dirty lines, keep valid (WB caches) |
-| 5     | `FLUSH_LINE` | W   | Writeback the line covering a physical address (WB caches) |
+| 3     | `INVAL_LINE` | W   | Drop the line covering a physical address; no-op if absent (*reserved — current RTL does not implement this*) |
+| 4     | `FLUSH_ALL`  | W   | Writeback all dirty lines, keep valid (*reserved — write-back caches only*) |
+| 5     | `FLUSH_LINE` | W   | Writeback the line covering a physical address (*reserved — write-back caches only*) |
 | 6     | `STATUS`     | R   | `[0] = BUSY` (multi-cycle op in progress)         |
 | 7–15  | —            | —   | Reserved (reads as 0; available for perfctrs)     |
 
-`FLUSH_*` are meaningful only on write-back caches; current L1 and
-L2 are both write-through, so writes accept and complete silently.
+`INVAL_LINE`, `FLUSH_ALL`, and `FLUSH_LINE` occupy fixed slots in
+the register map so software written against them stays portable to
+future hardware. They are intentionally not implemented yet: current
+L1/L2 are write-through (no dirty data to flush), and the L1 caches
+are small enough that full-flush cost is negligible (`INVAL_ALL`
+clears all valid bits in a single cycle).  Writes to unimplemented
+registers complete silently.
 
 ### INFO (reg 0)
 

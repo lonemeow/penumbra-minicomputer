@@ -278,6 +278,14 @@ Multi-cycle operations (`INVAL_ALL`, eventually `FLUSH_ALL`) signal
 completion via `STATUS.busy`; the sysreg interface itself stays
 single-cycle.
 
+**`INVAL_LINE` is reserved-not-implemented** in current RTL across
+all cache levels.  Rationale: L1 full-flush is a single-cycle valid-
+bit clear (cache holds 64 lines max, smaller than any realistic
+invalidate range); L2 is PIPT + uncached-MMIO project convention
+means no current code path needs it, and write-invalidate-on-hit
+already handles the JIT case implicitly.  Defer until a workload
+(e.g. a future cached-DMA path) actually wants it.
+
 The `INVAL`/`FLUSH` distinction follows ARM's c7 ops:
 
 - **Invalidate** = drop without writeback.  Dangerous if dirty.  Use
