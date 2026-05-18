@@ -1164,7 +1164,11 @@ static uint32_t sysreg_read(int dev, int reg) {
         }
     case SYSDEV_CPU: return cpuid_read(reg);
     case SYSDEV_DCACHE: case SYSDEV_ICACHE:
-        if (reg == 0) return (0u << 18) | (4 << 12) | (4 << 6) | 4; // fake geometry
+        // Unified CACHE_INFO layout: line_words[5:0]|num_sets[20:6]|
+        // num_ways[25:21]|addressing[27:26]|wb[28]|wa[29].
+        // Report a plausible L1 (16 sets × 1-way × 4 words, PIPT, WT/WnA);
+        // the ISS doesn't model timing so the values are advisory.
+        if (reg == 0) return (0u << 26) | (1u << 21) | (16u << 6) | 4u;
         return 0;
     case SYSDEV_BUS: return (reg == 0) ? busctl.reg : 0;
     case SYSDEV_TIMER: return timer.read_reg(reg);

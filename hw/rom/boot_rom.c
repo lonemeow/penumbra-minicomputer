@@ -857,98 +857,84 @@ static void format_cpu_features(char *buf, int bufsz, uint32_t isa_val) {
 }
 
 /*
- * Decode the 4-bit CACHE_INFO_TYPE field into a short human-readable
- * tag.  Used for the boot banner so the operator can tell at a glance
- * which bitstream is loaded (e.g., the PIPT→VIPT switch flips this).
+ * Decode the 2-bit ADDRESSING field into a short human-readable tag.
+ * Used for the boot banner so the operator can tell at a glance which
+ * bitstream is loaded (e.g., a PIPT→VIPT switch flips this).
  *
- * Type codes are defined in hw/rtl/core/penumbra_pkg.sv (CACHE_TYPE_*).
- * Today only type 0 (WT/WnA) exists; new entries go here as the RTL
- * adds them.
+ * Codes are defined in hw/rtl/core/penumbra_pkg.sv (CACHE_ADDR_*).
  *
  * Output:  fills `buf` (size `bufsz`) with a NUL-terminated string.
  */
-static void format_cache_type(char *buf, int bufsz, uint32_t type) {
+static void format_cache_addressing(char *buf, int bufsz, uint32_t addr) {
     if (bufsz > 0)
-        buf[0] = '\0';  /* safe default — empty if nobody fills the body in */
+        buf[0] = '\0';
 
-    switch (type) {
-        case CACHE_TYPE_PIPT:
+    switch (addr) {
+        case CACHE_ADDR_PIPT:
             strncat(buf, "PIPT", bufsz);
             break;
-        case CACHE_TYPE_VIPT:
+        case CACHE_ADDR_VIPT:
             strncat(buf, "VIPT", bufsz);
             break;
-        case CACHE_TYPE_VIVT:
+        case CACHE_ADDR_VIVT:
             strncat(buf, "VIVT", bufsz);
             break;
         default:
-            snprintf(buf, bufsz, "UNK_%d", type);
+            snprintf(buf, bufsz, "UNK_%d", addr);
             break;
     }
 }
 
 /*
- * Print one cache's geometry from its INFO register.
- * The read happens at the call site because RDSYS encodes the device
- * number as an instruction immediate (must be a compile-time constant).
+ * Print one cache's geometry from its INFO register.  The same
+ * function handles L1 D/I and L2 (and any future L3) because every
+ * cache device uses the unified INFO encoding from penumbra_pkg.sv.
+ *
+ * INFO==0 means the cache is absent in this build (HAS_L2=0, or
+ * the device id is unmapped).  The banner should make this
+ * unambiguous so the operator can spot a missing cache without
+ * having to recall which bitstream is loaded.
+ *
+ * The read happens at the call site because RDSYS encodes the
+ * device number as an instruction immediate (must be a
+ * compile-time constant).
+ *
+ * Formatting goal — one line per cache, matching this shape when
+ * present:
+ *
+ *   L1 icache: 1kB (16 x 64B, 1-way) VIPT (WT, WnA)
+ *   L2 cache : 64kB (1024 x 16B, 4-way) PIPT (WT, WnA)
+ *
+ * For an absent cache, print a single line that says so, e.g.:
+ *
+ *   L2 cache : absent
  */
 static void print_one_cache(const char *label, uint32_t info) {
+    if (info == 0) {
+        console_printf("%s: absent\r\n", label);
+        return;
+    }
+
     uint32_t line_words = CACHE_INFO_LINE_WORDS(info);
     uint32_t num_sets   = CACHE_INFO_NUM_SETS(info);
     uint32_t num_ways   = CACHE_INFO_NUM_WAYS(info);
-    uint32_t type       = CACHE_INFO_TYPE(info);
+    uint32_t addr       = CACHE_INFO_ADDRESSING(info);
     uint32_t wb         = CACHE_INFO_WRITE_BACK(info);
     uint32_t wa         = CACHE_INFO_WRITE_ALLOC(info);
 
     uint32_t line_bytes  = line_words * 4u;
     uint32_t total_bytes = num_sets * num_ways * line_bytes;
 
-    char size_str[12], type_str[16];
+    char size_str[12], addr_str[16];
     humanize_size(total_bytes, size_str, sizeof(size_str));
-    format_cache_type(type_str, sizeof(type_str), type);
+    format_cache_addressing(addr_str, sizeof(addr_str), addr);
 
     console_printf("%s: %s (%d x %dB, %d-way) %s (%s, %s)\r\n",
-        label,
-        size_str,
+        label, size_str,
         (int)num_sets, (int)line_bytes, (int)num_ways,
-        type_str,
+        addr_str,
         wb ? "WB" : "WT",
         wa ? "WA" : "WnA");
-}
-
-/*
- * Print the L2 cache's geometry from its INFO register.  INFO=0
- * means HAS_L2=0 (no L2 in this build); print "absent" so the
- * boot banner is unambiguous about which configuration is loaded.
- *
- * The L2 INFO layout is intentionally different from L1's (wider
- * NUM_SETS field, wider TYPE field, no WB/WA bits in phase 1), so
- * it can't share print_one_cache.  See hw/rtl/soc/l2_cache.sv for
- * the field decomposition.
- */
-static void print_l2_cache(void) {
-    uint32_t info = penumbra_read_sysreg(SYSDEV_L2, L2_INFO);
-    if (info == 0) {
-        console_puts("L2 cache: absent\r\n");
-        return;
-    }
-    uint32_t line_words = L2_INFO_LINE_WORDS(info);
-    uint32_t num_sets   = L2_INFO_NUM_SETS(info);
-    uint32_t num_ways   = L2_INFO_NUM_WAYS(info);
-    uint32_t type       = L2_INFO_TYPE(info);
-
-    uint32_t line_bytes  = line_words * 4u;
-    uint32_t total_bytes = num_sets * num_ways * line_bytes;
-
-    char size_str[12];
-    humanize_size(total_bytes, size_str, sizeof(size_str));
-
-    const char *type_str = (type == L2_TYPE_UNIFIED) ? "unified" : "?";
-
-    console_printf("L2 cache: %s (%d x %dB, %d-way) %s\r\n",
-        size_str,
-        (int)num_sets, (int)line_bytes, (int)num_ways,
-        type_str);
 }
 
 static void print_banner(void) {
@@ -978,7 +964,8 @@ static void print_banner(void) {
         penumbra_read_sysreg(SYSDEV_ICACHE, CACHE_INFO));
     print_one_cache("L1 dcache",
         penumbra_read_sysreg(SYSDEV_DCACHE, CACHE_INFO));
-    print_l2_cache();
+    print_one_cache("L2 cache ",
+        penumbra_read_sysreg(SYSDEV_L2, CACHE_INFO));
     console_puts("\r\n");
 }
 

@@ -110,7 +110,7 @@ static inline void
 icache_invalidate(void)
 {
 	__asm__ volatile("WRSYS %0, %1, %2"
-	    : : "r"(0), "n"(SYSDEV_ICACHE), "n"(CACHE_INVAL)
+	    : : "r"(0), "n"(SYSDEV_ICACHE), "n"(CACHE_INVAL_ALL)
 	    : "memory");
 }
 

@@ -33,9 +33,10 @@ What's wired up today (post phase 1):
   pre-L2 build.  `HAS_L2=1` instantiates `l2_cache` and routes
   sysreg device 9 to it.
 - `hw/sim/tb_l2_cache.cpp` — standalone Verilator testbench
-  (18 cases) for the L2 contract: INFO presence, pass-through-
-  when-disabled, miss→hit, write-invalidate, INVAL_ALL walker,
-  uncached pass-through.
+  (20 cases) for the L2 contract: INFO presence + new unified-
+  layout decode (PIPT/WT/WnA), pass-through-when-disabled,
+  miss→hit, write-invalidate, INVAL_ALL walker, uncached
+  pass-through.
 - Boot ROM (`hw/rom/boot_rom.c`) prints `L2 cache: 64kB
   (1024 x 16B, 4-way) unified` in the banner when `HAS_L2=1`,
   `L2 cache: absent` otherwise.  The ROM **does not** enable
@@ -258,23 +259,24 @@ naïve serial implementation hits perf targets.
 
 ## Sysreg Device
 
-Allocate **`SYSDEV_L2 = 9`** (next free after MACH=8).  Register map:
+L2 uses **`SYSDEV_L2 = 9`** (next free after MACH=8) and exposes the
+**unified cache device register map** documented in
+[`sysregs.md`](../system/sysregs.md#cache-devices-2--dcache-3--icache-9--l2) —
+the same layout as `DCACHE` and `ICACHE`.  Software discovers presence
+by reading `INFO`; `INFO == 0` means no L2 in this build (e.g.
+`HAS_L2=0`).  The kernel can reuse one cache-ops driver across L1 and
+L2 because every register at every offset means the same thing.
 
-| Reg | Name | RW | Bits | Purpose |
-|---|---|---|---|---|
-| 0 | `INFO` | R | `{type, ways, sets[15:0], line_words}` | Self-describing geometry; **`0` means "no L2 present"**. |
-| 1 | `CTRL` | RW | `{31'b0, enable}` | Master enable.  Default `0` (disabled at reset, like L1). |
-| 2 | `INVAL_ALL` | W | — | Drop all lines (clean **and** dirty).  Dirty data is lost; caller is responsible. |
-| 3 | `INVAL_LINE` | W | phys addr | Drop one line by physical address.  No writeback. |
-| 4 | `FLUSH_ALL` | W | — | Writeback all dirty lines, retain in cache. |
-| 5 | `FLUSH_LINE` | W | phys addr | Writeback one line by physical address, retain. |
-| 6 | `STATUS` | R | `{busy, …}` | `busy=1` while a multi-cycle INVAL_ALL/FLUSH_ALL is in progress. |
-| 7+ | perfctrs | R | 32-bit free-running | hits, misses, writebacks, evictions (proposed). |
+Phase-1 specifics (see `INFO` decode):
 
-Software-visible packing of `INFO` matches L1's existing layout
-convention so the kernel can reuse the parsing path.  The "0 means
-absent" hook is what lets the kernel and ROM probe presence portably:
-`RDSYS SYSDEV_L2, INFO`; if zero, no L2 — skip cache-maintenance.
+- `ADDRESSING = PIPT` — L2 sees post-translation addresses.
+- `WRITE_BACK = 0`, `WRITE_ALLOC = 0` — phase 1 is write-invalidate-
+  on-hit, which is software-visibly write-through write-no-allocate.
+- `NUM_SETS = 1024`, `NUM_WAYS = 4`, `LINE_WORDS = 4`.
+
+Multi-cycle operations (`INVAL_ALL`, eventually `FLUSH_ALL`) signal
+completion via `STATUS.busy`; the sysreg interface itself stays
+single-cycle.
 
 The `INVAL`/`FLUSH` distinction follows ARM's c7 ops:
 

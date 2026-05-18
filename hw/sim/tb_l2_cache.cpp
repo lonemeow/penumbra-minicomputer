@@ -126,15 +126,25 @@ static void test_info_register(Vl2_cache* d) {
     printf("── INFO returns geometry, non-zero ──\n");
     reset(d);
     uint32_t info = rdsys(d, 0);
-    // Expected layout: {type[7:0], ways[3:0], sets[15:0], line_words[3:0]}
-    uint8_t  type        = (info >> 24) & 0xFF;
-    uint8_t  ways        = (info >> 20) & 0x0F;
-    uint16_t sets        = (info >> 4)  & 0xFFFF;
-    uint8_t  line_words  =  info        & 0x0F;
-    check("info.type_l2_unified",  type,       1u);
-    check("info.ways_4",           ways,       4u);
-    check("info.sets_1024",        sets,       1024u);
-    check("info.line_words_4",     line_words, 4u);
+    // Unified cache INFO layout (see penumbra_pkg.sv):
+    //   [5:0]   line_words
+    //   [20:6]  num_sets
+    //   [25:21] num_ways
+    //   [27:26] addressing  (PIPT for L2)
+    //   [28]    write_back  (0 — WT/WnA via write-invalidate-on-hit)
+    //   [29]    write_alloc
+    uint8_t  line_words  =  info        & 0x3F;
+    uint16_t sets        = (info >>  6) & 0x7FFF;
+    uint8_t  ways        = (info >> 21) & 0x1F;
+    uint8_t  addressing  = (info >> 26) & 0x03;
+    uint8_t  write_back  = (info >> 28) & 0x01;
+    uint8_t  write_alloc = (info >> 29) & 0x01;
+    check("info.line_words_4",  line_words,  4u);
+    check("info.sets_1024",     sets,        1024u);
+    check("info.ways_4",        ways,        4u);
+    check("info.addressing_pipt", addressing, 0u);
+    check("info.write_back_off",  write_back, 0u);
+    check("info.write_alloc_off", write_alloc, 0u);
 }
 
 static void test_passthrough_when_disabled(Vl2_cache* d) {

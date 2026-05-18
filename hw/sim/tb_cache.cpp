@@ -80,7 +80,7 @@ static void cache_enable(Vcache_test* d) {
 // Invalidate all — needs extra tick for the inval_req pulse to
 // propagate through the always_ff (set on cycle N, clears valid on N+1)
 static void cache_inval(Vcache_test* d) {
-    sys_write(d, 2, 0);  // SYSREG_CACHE_INVAL = 2, value doesn't matter yet
+    sys_write(d, 2, 0);  // SYSREG_CACHE_INVAL_ALL = 2, value doesn't matter yet
     tick(d);              // Let valid bits actually clear
 }
 
@@ -190,22 +190,21 @@ static void check_range(const char* name, int got, int min, int max) {
 // ══════════════════════════════════════════════════════════════
 
 static void test_sysreg_info(Vcache_test* d) {
-    // INFO register (reg 0) should report cache geometry.
-    // Format (matches cache.sv INFO_VALUE):
-    //   [3:0]   line_words
-    //   [13:4]  num_sets
-    //   [17:14] num_ways
-    //   [19:18] addressing  (0=PIPT, 1=VIPT, 2=VIVT)
-    //   [20]    write_back  (0=WT, 1=WB)
-    //   [21]    write_alloc (0=WnA, 1=WA)
+    // Unified cache INFO layout (see penumbra_pkg.sv):
+    //   [5:0]   line_words
+    //   [20:6]  num_sets
+    //   [25:21] num_ways
+    //   [27:26] addressing  (0=PIPT, 1=VIPT, 2=VIVT)
+    //   [28]    write_back  (0=WT, 1=WB)
+    //   [29]    write_alloc (0=WnA, 1=WA)
     uint32_t info = sys_read(d, 0);  // SYSREG_CACHE_INFO = 0
 
-    uint32_t line_words = info & 0xF;
-    uint32_t num_sets   = (info >> 4) & 0x3FF;
-    uint32_t num_ways   = (info >> 14) & 0xF;
-    uint32_t addressing = (info >> 18) & 0x3;
-    uint32_t write_back = (info >> 20) & 0x1;
-    uint32_t write_alloc = (info >> 21) & 0x1;
+    uint32_t line_words = info & 0x3F;
+    uint32_t num_sets   = (info >> 6) & 0x7FFF;
+    uint32_t num_ways   = (info >> 21) & 0x1F;
+    uint32_t addressing = (info >> 26) & 0x3;
+    uint32_t write_back = (info >> 28) & 0x1;
+    uint32_t write_alloc = (info >> 29) & 0x1;
 
     check("info.line_words",  line_words, 4);
     check("info.num_sets",    num_sets,   16);

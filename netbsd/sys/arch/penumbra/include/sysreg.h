@@ -94,26 +94,33 @@
 #define MACH_NAME3	4
 #define MACH_CPU_FREQ	5
 
-/* ── Device 2/3: Cache registers ────────────────────────────────────── */
+/* ── Cache devices (DCACHE=2, ICACHE=3, L2=9) — shared layout ───────── */
 
-#define CACHE_GEOM	0	/* Geometry (read-only) — alias for CACHE_INFO */
-#define CACHE_INFO	0	/* Geometry/type (read-only) */
-#define CACHE_CTRL	1	/* bit 0 = ENABLE */
-#define CACHE_INVAL	2	/* Write to invalidate all */
+#define SYSDEV_L2		9
+
+#define CACHE_INFO		0	/* R  — geometry; 0 = absent */
+#define CACHE_CTRL		1	/* RW — bit 0 = ENABLE */
+#define CACHE_INVAL_ALL		2	/* W  — any value drops all lines */
+#define CACHE_INVAL_LINE	3	/* W  — physical addr; drop matching line */
+#define CACHE_FLUSH_ALL		4	/* W  — writeback dirty (WB caches) */
+#define CACHE_FLUSH_LINE	5	/* W  — writeback one line (WB caches) */
+#define CACHE_STATUS		6	/* R  — bit 0 = multi-cycle op busy */
 
 #define CACHE_CTRL_ENABLE	0x01
+#define CACHE_STATUS_BUSY	0x01
 
-/* CACHE_INFO field layout (matches hw/rtl/soc/cache.sv INFO_VALUE) */
-#define CACHE_INFO_LINE_WORDS(v)	(((v) >>  0) & 0x000Fu)
-#define CACHE_INFO_NUM_SETS(v)		(((v) >>  4) & 0x03FFu)
-#define CACHE_INFO_NUM_WAYS(v)		(((v) >> 14) & 0x000Fu)
-#define CACHE_INFO_TYPE(v)		(((v) >> 18) & 0x0003u)	/* PIPT/VIPT/VIVT */
-#define CACHE_INFO_WRITE_BACK(v)	(((v) >> 20) & 0x0001u)	/* 0=WT, 1=WB */
-#define CACHE_INFO_WRITE_ALLOC(v)	(((v) >> 21) & 0x0001u)	/* 0=WnA, 1=WA */
+/* CACHE_INFO field layout (unified across all cache devices).
+ * See hw/rtl/core/penumbra_pkg.sv for the canonical encoding. */
+#define CACHE_INFO_LINE_WORDS(v)	(((v) >>  0) & 0x003Fu)
+#define CACHE_INFO_NUM_SETS(v)		(((v) >>  6) & 0x7FFFu)
+#define CACHE_INFO_NUM_WAYS(v)		(((v) >> 21) & 0x001Fu)
+#define CACHE_INFO_ADDRESSING(v)	(((v) >> 26) & 0x0003u)
+#define CACHE_INFO_WRITE_BACK(v)	(((v) >> 28) & 0x0001u)
+#define CACHE_INFO_WRITE_ALLOC(v)	(((v) >> 29) & 0x0001u)
 
-#define CACHE_TYPE_PIPT		0
-#define CACHE_TYPE_VIPT		1
-#define CACHE_TYPE_VIVT		2
+#define CACHE_ADDR_PIPT		0
+#define CACHE_ADDR_VIPT		1
+#define CACHE_ADDR_VIVT		2
 
 /* ── Device 4: Bus controller ───────────────────────────────────────── */
 

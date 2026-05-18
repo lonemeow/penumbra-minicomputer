@@ -82,7 +82,7 @@ after_call2:
     BNE  fail
 
     ; ── 7. Invalidate I-cache ─────────────────────────────────
-    WRSYS R0, #ICACHE, #CACHE_INVAL
+    WRSYS R0, #ICACHE, #CACHE_INVAL_ALL
 
     ; ── 8. Call #3: cache cold again → re-fill from RAM ───────
     LLI  R5, #0

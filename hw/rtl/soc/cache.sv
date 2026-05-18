@@ -114,13 +114,13 @@ module cache
     logic inval_req;
 
     localparam logic [31:0] INFO_VALUE = {
-        10'b0,                  // [31:22] reserved
-        WRITE_ALLOC[0:0],       // [21]    write-allocate
-        WRITE_BACK[0:0],        // [20]    write-back
-        ADDRESSING[1:0],        // [19:18] PIPT/VIPT/VIVT
-        NUM_WAYS[3:0],          // [17:14]
-        NUM_SETS[9:0],          // [13:4]
-        LINE_WORDS[3:0]         // [3:0]
+        2'b0,                   // [31:30] reserved
+        WRITE_ALLOC[0:0],       // [29]    write-allocate
+        WRITE_BACK[0:0],        // [28]    write-back
+        ADDRESSING[1:0],        // [27:26] PIPT/VIPT/VIVT
+        5'(NUM_WAYS),           // [25:21] ways (1..31)
+        15'(NUM_SETS),          // [20:6]  sets (1..32767)
+        6'(LINE_WORDS)          // [5:0]   line_words (1..63)
     };
 
     always_comb begin
@@ -139,8 +139,8 @@ module cache
             inval_req <= 1'b0;
             if (i_sys_we) begin
                 case (i_sys_reg)
-                    SYSREG_CACHE_CTRL:  cache_en  <= i_sys_wdata[0];
-                    SYSREG_CACHE_INVAL: inval_req <= 1'b1;
+                    SYSREG_CACHE_CTRL:      cache_en  <= i_sys_wdata[0];
+                    SYSREG_CACHE_INVAL_ALL: inval_req <= 1'b1;
                     default: ;
                 endcase
             end

@@ -54,7 +54,7 @@ Detailed design of the CPU core and internal FPGA logic.
 *   **[MMU Internals](./internals/mmu-internals.md)** — TLB hardware structure and discrete logic mapping.
 *   **[SDRAM Controller v2](./internals/sdram-controller.md)** — Design plan for the rewrite (composable, dual-domain, 100 MHz CL2).
 *   **[SDRAM Optimization](./internals/sdram-optimization.md)** — Controller strategies for bandwidth improvement.
-*   **[L2 Cache](./internals/l2-cache.md)** — Design plan for the optional write-back L2 cache between `cpu_core.o_mem_*` and the system bus.
+*   **[L2 Cache](./internals/l2-cache.md)** — Design plan and phase status for the optional unified L2 cache (currently write-invalidate-on-hit; write-back is a planned phase) between `cpu_core.o_mem_*` and the system bus.
 *   **[Coding Standards](./internals/coding-standards.md)** — RTL naming and style conventions for hardware.
 *   **[Development Setup](./internals/setup.md)** — How to build and simulate the RTL.
 

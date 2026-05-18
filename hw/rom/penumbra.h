@@ -82,48 +82,36 @@ typedef unsigned int uint32_t;
 #define CPU_FEAT_BIT_HW_DIV  1
 #define CPU_FEAT_BIT_FPU     2
 
-/* Cache device registers (SYSDEV_ICACHE / SYSDEV_DCACHE) */
-#define CACHE_INFO   0   /* Read-only geometry/type */
-#define CACHE_CTRL   1   /* bit 0 = enable */
-#define CACHE_INVAL  2   /* Write to invalidate all */
+/* ── Cache devices — shared layout across L1 D/I, L2, future L3 ──── */
+#define SYSDEV_L2     9
+
+/* Register map (same for every cache device).  Reading INFO=0 means
+ * the device is absent (either not instantiated or device id unmapped),
+ * so software probes presence with a single RDSYS. */
+#define CACHE_INFO         0   /* R  — geometry; 0 = absent */
+#define CACHE_CTRL         1   /* RW — bit 0 = enable */
+#define CACHE_INVAL_ALL    2   /* W  — any value drops all lines */
+#define CACHE_INVAL_LINE   3   /* W  — physical addr; drop matching line */
+#define CACHE_FLUSH_ALL    4   /* W  — writeback dirty (WB caches only) */
+#define CACHE_FLUSH_LINE   5   /* W  — writeback one line  (WB caches only) */
+#define CACHE_STATUS       6   /* R  — bit 0 = busy (multi-cycle op in progress) */
 
 #define CACHE_CTRL_ENABLE   0x01
+#define CACHE_STATUS_BUSY   0x01
 
-/* CACHE_INFO field layout (matches cache.sv INFO_VALUE) */
-#define CACHE_INFO_LINE_WORDS(v)   (((v) >>  0) & 0x000Fu)
-#define CACHE_INFO_NUM_SETS(v)     (((v) >>  4) & 0x03FFu)
-#define CACHE_INFO_NUM_WAYS(v)     (((v) >> 14) & 0x000Fu)
-#define CACHE_INFO_TYPE(v)         (((v) >> 18) & 0x0003u) /* PIPT/VIPT/VIVT */
-#define CACHE_INFO_WRITE_BACK(v)   (((v) >> 20) & 0x0001u) /* 0=WT, 1=WB */
-#define CACHE_INFO_WRITE_ALLOC(v)  (((v) >> 21) & 0x0001u) /* 0=WnA, 1=WA */
+/* CACHE_INFO field layout (matches penumbra_pkg.sv unified encoding).
+ * 32-bit register, fields packed LSB-first so adding caches with
+ * different geometry doesn't move the rest. */
+#define CACHE_INFO_LINE_WORDS(v)   (((v) >>  0) & 0x003Fu)  /* 1..63   */
+#define CACHE_INFO_NUM_SETS(v)     (((v) >>  6) & 0x7FFFu)  /* 1..32767 */
+#define CACHE_INFO_NUM_WAYS(v)     (((v) >> 21) & 0x001Fu)  /* 1..31   */
+#define CACHE_INFO_ADDRESSING(v)   (((v) >> 26) & 0x0003u)  /* PIPT/VIPT/VIVT */
+#define CACHE_INFO_WRITE_BACK(v)   (((v) >> 28) & 0x0001u)  /* 0=WT, 1=WB */
+#define CACHE_INFO_WRITE_ALLOC(v)  (((v) >> 29) & 0x0001u)  /* 0=WnA, 1=WA */
 
-#define CACHE_TYPE_PIPT 0
-#define CACHE_TYPE_VIPT 1
-#define CACHE_TYPE_VIVT 2
-
-/* ── L2 cache (SYSDEV_L2, device 9) ──────────────────────────────────
- *
- * INFO=0 means the L2 is not present in this build (HAS_L2=0 at RTL,
- * or this device id is simply unmapped).  Software detects absence
- * via that and skips any further L2 ops.  The INFO field layout is
- * deliberately different from L1's CACHE_INFO (wider NUM_SETS, wider
- * TYPE, no WB/WA bits in phase 1) — see hw/rtl/soc/l2_cache.sv.
- */
-#define SYSDEV_L2     9
-#define L2_INFO       0   /* Read-only geometry/type, 0 = absent */
-#define L2_CTRL       1   /* bit 0 = enable; reset value 0 */
-#define L2_INVAL_ALL  2   /* Write any value to trigger walker */
-#define L2_STATUS     6   /* bit 0 = inval-walker busy */
-
-#define L2_CTRL_ENABLE  0x01
-#define L2_STATUS_BUSY  0x01
-
-#define L2_INFO_LINE_WORDS(v)  (((v) >>  0) & 0x000Fu)
-#define L2_INFO_NUM_SETS(v)    (((v) >>  4) & 0xFFFFu)
-#define L2_INFO_NUM_WAYS(v)    (((v) >> 20) & 0x000Fu)
-#define L2_INFO_TYPE(v)        (((v) >> 24) & 0x00FFu)
-
-#define L2_TYPE_UNIFIED 1
+#define CACHE_ADDR_PIPT 0
+#define CACHE_ADDR_VIPT 1
+#define CACHE_ADDR_VIVT 2
 
 /* FAULT_STATUS bit positions */
 #define FSTAT_R    8   /* Faulting access was read */

@@ -167,10 +167,12 @@ Three invalidation points:
 3. Boot-time `wrsys` in locore.S (after vector page setup)
 
 Hardware currently supports only full I-cache invalidation
-(write to `SYSDEV_ICACHE` / `CACHE_INVAL`).  Write-through
-D-cache means no writeback is needed before the I-cache flush.
-Per-address invalidation can be added to the hardware later
-without changing the hook placement.
+(write to `SYSDEV_ICACHE` / `CACHE_INVAL_ALL`).  The unified
+cache sysreg layout reserves `CACHE_INVAL_LINE` (reg 3) for a
+future per-PA path; once it lands in `cache_vipt.sv`,
+`pmap_procwr()` and exec paths can switch over without
+changing the hook placement.  Write-through D-cache means
+no writeback is needed before the I-cache flush.
 
 ## Trap Handler: Volatile State Stash
 

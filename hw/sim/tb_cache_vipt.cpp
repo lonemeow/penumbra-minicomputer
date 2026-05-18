@@ -86,7 +86,7 @@ static void cache_enable(Vcache_vipt_test* d) {
 }
 
 static void cache_inval(Vcache_vipt_test* d) {
-    sys_write(d, 2, 0);  // SYSREG_CACHE_INVAL = 2
+    sys_write(d, 2, 0);  // SYSREG_CACHE_INVAL_ALL = 2
     // Two ticks: inval_req latches on cycle N, clears valid[] on N+1.
     // A second tick lets the cleared state propagate into combinational
     // hit detection for the next access.
@@ -187,21 +187,21 @@ static void check_bool(const char* name, bool got, bool exp) {
 // ══════════════════════════════════════════════════════════════
 
 static void test_sysreg_info(Vcache_vipt_test* d) {
-    // INFO_VALUE layout (from cache_vipt.sv):
-    //   [3:0]   line_words
-    //   [13:4]  num_sets
-    //   [17:14] num_ways
-    //   [19:18] addressing  (1 = VIPT)
-    //   [20]    write_back  (0 = WT)
-    //   [21]    write_alloc (0 = WnA)
+    // Unified cache INFO layout (see penumbra_pkg.sv):
+    //   [5:0]   line_words
+    //   [20:6]  num_sets
+    //   [25:21] num_ways
+    //   [27:26] addressing  (1 = VIPT)
+    //   [28]    write_back  (0 = WT)
+    //   [29]    write_alloc (0 = WnA)
     uint32_t info = sys_read(d, 0);
 
-    uint32_t line_words = info & 0xF;
-    uint32_t num_sets   = (info >> 4) & 0x3FF;
-    uint32_t num_ways   = (info >> 14) & 0xF;
-    uint32_t addressing = (info >> 18) & 0x3;
-    uint32_t write_back = (info >> 20) & 0x1;
-    uint32_t write_alloc = (info >> 21) & 0x1;
+    uint32_t line_words = info & 0x3F;
+    uint32_t num_sets   = (info >> 6) & 0x7FFF;
+    uint32_t num_ways   = (info >> 21) & 0x1F;
+    uint32_t addressing = (info >> 26) & 0x3;
+    uint32_t write_back = (info >> 28) & 0x1;
+    uint32_t write_alloc = (info >> 29) & 0x1;
 
     check("info.line_words",  line_words, 4);
     check("info.num_sets",    num_sets,   16);

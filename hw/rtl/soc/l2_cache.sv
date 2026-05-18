@@ -32,12 +32,16 @@
 // promises: "L2 introduces no extra cycle vs. the no-L2 build"
 // for pass-through traffic.
 //
-// Sysreg device 9 (SYSDEV_L2):
-//   reg 0 INFO       (R)  {type[7:0], ways[3:0], sets[15:0], line_words[3:0]}
+// Sysreg device 9 (SYSDEV_L2) — same layout as DCACHE/ICACHE:
+//   reg 0 INFO       (R)  unified cache INFO encoding (see penumbra_pkg.sv);
 //                          INFO=0 means "no L2 present" (HAS_L2=0)
 //   reg 1 CTRL       (RW) {31'b0, enable}; reset value 0 (disabled)
 //   reg 2 INVAL_ALL  (W)  write triggers multi-cycle valid-bit walk
 //   reg 6 STATUS     (R)  {31'b0, busy}; busy=1 while INVAL_ALL walks
+//
+// Write-invalidate-on-hit is *write-through* from software's POV
+// (memory is always up-to-date), so INFO advertises WB=0, WA=0.
+// The phase-2 upgrade to true write-back will flip these.
 //
 // See `doc/internals/l2-cache.md` for the full design plan
 // (subsequent phases will add write-back, FLUSH ops, perfctrs).
@@ -118,8 +122,8 @@ module l2_cache
             inval_all_req <= 1'b0;  // 1-cycle pulse
             if (i_sys_we) begin
                 case (i_sys_reg)
-                    4'd1: l2_enable <= i_sys_wdata[0];
-                    4'd2: inval_all_req <= 1'b1;
+                    SYSREG_CACHE_CTRL:      l2_enable     <= i_sys_wdata[0];
+                    SYSREG_CACHE_INVAL_ALL: inval_all_req <= 1'b1;
                     default: ;
                 endcase
             end
@@ -357,16 +361,26 @@ module l2_cache
     // ══════════════════════════════════════════════════════════
     // Sysreg read mux
     // ══════════════════════════════════════════════════════════
+    // Unified cache INFO encoding (matches cache_vipt.sv / cache.sv).
+    // L2 is PIPT (we see post-translation addresses) and currently
+    // write-through, write-no-allocate at the software-visible level.
+    localparam logic [31:0] INFO_VALUE = {
+        2'b0,                       // [31:30] reserved
+        1'b0,                       // [29]    WRITE_ALLOC
+        1'b0,                       // [28]    WRITE_BACK
+        CACHE_ADDR_PIPT,            // [27:26] ADDRESSING
+        5'(NUM_WAYS),               // [25:21] ways
+        15'(NUM_SETS),              // [20:6]  sets
+        6'(LINE_WORDS)              // [5:0]   line_words
+    };
+
     always_comb begin
         o_sys_rdata = 32'b0;
         case (i_sys_reg)
-            4'd0: o_sys_rdata = { 8'd1,                  // type = L2 unified
-                                  4'(NUM_WAYS),
-                                  16'(NUM_SETS),
-                                  4'(LINE_WORDS) };
-            4'd1: o_sys_rdata = {31'b0, l2_enable};
-            4'd6: o_sys_rdata = {31'b0, (state == S_INVAL_ALL)};
-            default: o_sys_rdata = 32'b0;
+            SYSREG_CACHE_INFO:   o_sys_rdata = INFO_VALUE;
+            SYSREG_CACHE_CTRL:   o_sys_rdata = {31'b0, l2_enable};
+            SYSREG_CACHE_STATUS: o_sys_rdata = {31'b0, (state == S_INVAL_ALL)};
+            default:             o_sys_rdata = 32'b0;
         endcase
     end
 

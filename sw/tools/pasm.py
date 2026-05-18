@@ -77,10 +77,14 @@ BUILTIN_CONSTANTS = {
     "DCACHE":       2,
     "ICACHE":       3,
 
-    # Cache registers (shared layout for both D-cache and I-cache)
-    "CACHE_INFO":   0,
-    "CACHE_CTRL":   1,
-    "CACHE_INVAL":  2,
+    # Cache registers (shared layout across DCACHE/ICACHE/L2/L3)
+    "CACHE_INFO":       0,
+    "CACHE_CTRL":       1,
+    "CACHE_INVAL_ALL":  2,
+    "CACHE_INVAL_LINE": 3,
+    "CACHE_FLUSH_ALL":  4,
+    "CACHE_FLUSH_LINE": 5,
+    "CACHE_STATUS":     6,
 
     # TLB PTE flag bits
     "TLB_V":        0x01,

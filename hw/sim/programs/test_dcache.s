@@ -75,7 +75,7 @@ _start:
     BNE  fail
 
     ; ── 7. Invalidate D-cache ─────────────────────────────────
-    WRSYS R0, #DCACHE, #CACHE_INVAL
+    WRSYS R0, #DCACHE, #CACHE_INVAL_ALL
 
     ; ── 8. Load after invalidate (miss → re-fill from RAM) ────
     LDW  R7, [R6]

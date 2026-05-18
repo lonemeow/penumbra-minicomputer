@@ -8,7 +8,7 @@
 ; miss is *what should* drive the post-retry refill from the new
 ; physical page.  That assumes the tag check is correct.
 ;
-; This variant adds a tactical `WRSYS R0, #DCACHE, #CACHE_INVAL` at the
+; This variant adds a tactical `WRSYS R0, #DCACHE, #CACHE_INVAL_ALL` at the
 ; tail of the handler.  Now the cache line is gone outright; the
 ; post-retry STW and the verifying LDW both take *cold* misses and
 ; refill from PPN 2 via the bus arbiter.  Two independent guarantees
@@ -91,7 +91,7 @@ prot_handler:
     ; After this, the cache holds no lines at all; the retried STW
     ; and the verifying LDW both cold-miss and refill from PPN 2
     ; via the bus arbiter.
-    WRSYS R0, #DCACHE, #CACHE_INVAL
+    WRSYS R0, #DCACHE, #CACHE_INVAL_ALL
 
     ERET
 

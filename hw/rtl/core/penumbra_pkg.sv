@@ -101,19 +101,41 @@ package penumbra_pkg;
     localparam logic [3:0] SYSREG_MACH_NAME3  = 4'd4;  // Machine name bytes 12–15
     localparam logic [3:0] SYSREG_MACH_CPU_FREQ = 4'd5; // CPU clock frequency in Hz (board PLL)
 
-    // ── Cache sysreg addresses (dev_id = 2 or 3) ────────────────
-    localparam logic [3:0] SYSREG_CACHE_INFO  = 4'd0;  // Read-only geometry/type
-    localparam logic [3:0] SYSREG_CACHE_CTRL  = 4'd1;  // [0]=enable (0 at reset)
-    localparam logic [3:0] SYSREG_CACHE_INVAL = 4'd2;  // Write to invalidate
+    // ── Cache sysreg addresses (shared across DCACHE/ICACHE/L2/L3) ──
+    //
+    // Every cache device — L1 D/I, L2, future L3 — exposes the same
+    // register map.  Software discovers presence by reading INFO; a
+    // zero result means the cache is absent (no instantiation, or the
+    // device id is unmapped).  Devices that don't need a multi-cycle
+    // op (e.g. L1 inval-all is single-cycle) still respond on STATUS
+    // and just always return busy=0.
+    localparam logic [3:0] SYSREG_CACHE_INFO       = 4'd0;  // R  — geometry; 0 ⇒ absent
+    localparam logic [3:0] SYSREG_CACHE_CTRL       = 4'd1;  // RW — [0]=enable (0 at reset)
+    localparam logic [3:0] SYSREG_CACHE_INVAL_ALL  = 4'd2;  // W  — any value drops all lines
+    localparam logic [3:0] SYSREG_CACHE_INVAL_LINE = 4'd3;  // W  — physical addr, drops matching line
+    localparam logic [3:0] SYSREG_CACHE_FLUSH_ALL  = 4'd4;  // W  — writeback dirty (WB caches only)
+    localparam logic [3:0] SYSREG_CACHE_FLUSH_LINE = 4'd5;  // W  — writeback one line (WB caches only)
+    localparam logic [3:0] SYSREG_CACHE_STATUS     = 4'd6;  // R  — [0]=busy (multi-cycle op pending)
 
     // ── Cache INFO register field encoding ────────────────────
-    //  [3:0]   LINE_WORDS
-    //  [13:4]  NUM_SETS
-    //  [17:14] NUM_WAYS
-    //  [19:18] ADDRESSING (PIPT/VIPT/VIVT)
-    //  [20]    WRITE_BACK   (0=write-through, 1=write-back)
-    //  [21]    WRITE_ALLOC  (0=write-no-allocate, 1=write-allocate)
-    //  [31:22] reserved
+    // Unified across all cache devices so a single decoder serves
+    // L1 D/I, L2 and any future L3.  Geometry covers the full range
+    // we'd plausibly build on FPGA or in discrete logic:
+    //   LINE_WORDS  : 1..63 → up to 252-byte lines
+    //   NUM_SETS    : 1..32767 → up to 32 Ki sets
+    //   NUM_WAYS    : 1..31 → up to 31-way set-associative
+    //
+    //  [5:0]   LINE_WORDS    (6 bits)
+    //  [20:6]  NUM_SETS      (15 bits)
+    //  [25:21] NUM_WAYS      (5 bits)
+    //  [27:26] ADDRESSING    (2 bits: PIPT/VIPT/VIVT)
+    //  [28]    WRITE_BACK    (0=write-through, 1=write-back)
+    //  [29]    WRITE_ALLOC   (0=write-no-allocate, 1=write-allocate)
+    //  [31:30] reserved
+    //
+    // "Unified vs split" is not encoded — for L1 a unified design
+    // simply leaves the ICACHE (or DCACHE) slot reporting INFO=0;
+    // L2+ are always unified in this architecture.
     localparam logic [1:0] CACHE_ADDR_PIPT = 2'd0;
     localparam logic [1:0] CACHE_ADDR_VIPT = 2'd1;
     localparam logic [1:0] CACHE_ADDR_VIVT = 2'd2;

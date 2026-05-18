@@ -95,8 +95,8 @@ iter_loop:
     ; verify_func cold-fills both caches concurrently from SDRAM:
     ; icache fills as we sequence through the function body, and
     ; dcache fills on each LDW at a fresh A[i] line.
-    WRSYS R0, #DCACHE, #CACHE_INVAL
-    WRSYS R0, #ICACHE, #CACHE_INVAL
+    WRSYS R0, #DCACHE, #CACHE_INVAL_ALL
+    WRSYS R0, #ICACHE, #CACHE_INVAL_ALL
 
     ; Call the RAM copy of verify_func.  R13 = return address.
     LLI  R11, #FUNC_DEST

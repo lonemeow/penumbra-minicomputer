@@ -512,9 +512,9 @@ it to memory, regardless of any incidental tag match.
 
 After loading new executable code (e.g., `exec()`), the kernel must
 invalidate the I-cache to prevent stale instruction fetches. Sequence:
-load TLB entries for the new code pages, then write `DCACHE.INVAL` (for
-modified data) followed by `ICACHE.INVAL`. See
-[sysregs.md](./sysregs.md#devices-23-dcache--icache).
+load TLB entries for the new code pages, then write `DCACHE.INVAL_ALL`
+(for modified data) followed by `ICACHE.INVAL_ALL`. See
+[sysregs.md](./sysregs.md#cache-devices-2--dcache-3--icache-9--l2).
 
 ### DMA Coherence
 

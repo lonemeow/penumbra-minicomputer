@@ -23,13 +23,15 @@ registers.
 |:----:|---------|----------------------------------------------------------|
 | 0    | MMU     | TLB management, fault registers, translation control     |
 | 1    | CPU     | CPU identity (read-only); home for CPU performance counters |
-| 2    | DCACHE  | D-cache control, geometry info, invalidation             |
-| 3    | ICACHE  | I-cache control, geometry info, invalidation             |
+| 2    | DCACHE  | L1 D-cache control, geometry info, invalidation          |
+| 3    | ICACHE  | L1 I-cache control, geometry info, invalidation          |
 | 4    | BUS     | Bus controller (autoconfig, bus reset)                   |
-| 5–6  | —       | Reserved for future cache levels (L2, L3)                |
+| 5–6  | —       | Reserved                                                 |
 | 7    | TIMER   | Programmable interval timer                              |
 | 8    | MACH    | Machine/board identity (read-only): name, features, CPU clock |
-| 9–15 | —       | Reserved for future devices (DMA, etc.)                  |
+| 9    | L2      | L2 unified cache (same register layout as DCACHE/ICACHE) |
+| 10–14| —       | Reserved (future cache levels, DMA, etc.)                |
+| 15   | DEBUG   | ISS-only debug aids (watchpoints); unmapped on hardware  |
 
 CPU identity (slot 1) and machine identity (slot 8) are deliberately
 separate so the same CPU core can be instantiated on different boards.
@@ -311,36 +313,59 @@ RDSYS R1, #MACH, #CPU_FREQ    ; R1 = CPU clock frequency in Hz
 
 ---
 
-## Devices 2–3: DCACHE / ICACHE
+## Cache devices (2 = DCACHE, 3 = ICACHE, 9 = L2)
 
-Devices 2 (D-cache) and 3 (I-cache) share the same register layout.
-Each is an independent instance of the parameterized `cache.sv` module.
-**Cache is disabled at reset** — the kernel enables it after setting up
-TLB mappings.
+All cache devices — L1 D-cache, L1 I-cache, L2, and any future L3 —
+expose the **same register layout**. Software detects presence by
+reading `INFO`: a zero result means the cache is absent (either not
+instantiated in this build or the device id is unmapped). This lets
+the kernel run one discovery loop across cache slots without per-level
+code paths.
 
-| reg   | Name    | R/W | Description                                     |
-|:-----:|---------|:---:|-------------------------------------------------|
-| 0     | `INFO`  | R   | Cache geometry and type (compile-time constant) |
-| 1     | `CTRL`  | R/W | Control register                                |
-| 2     | `INVAL` | W   | Invalidation trigger                            |
-| 3–15  | —       | —   | Reserved (reads as 0)                           |
+"Unified vs split" is not encoded explicitly; a unified L1 simply
+leaves one of `DCACHE`/`ICACHE` reporting `INFO = 0`. L2+ are always
+unified in this architecture.
+
+**All caches are disabled at reset** — the kernel enables them
+after setting up TLB mappings.
+
+| reg   | Name         | R/W | Description                                       |
+|:-----:|--------------|:---:|---------------------------------------------------|
+| 0     | `INFO`       | R   | Cache geometry; `0` ⇒ absent                      |
+| 1     | `CTRL`       | R/W | Control register (`[0] = ENABLE`)                 |
+| 2     | `INVAL_ALL`  | W   | Drop all lines (no writeback). Written value ignored. |
+| 3     | `INVAL_LINE` | W   | Drop the line covering a physical address; no-op if absent |
+| 4     | `FLUSH_ALL`  | W   | Writeback all dirty lines, keep valid (WB caches) |
+| 5     | `FLUSH_LINE` | W   | Writeback the line covering a physical address (WB caches) |
+| 6     | `STATUS`     | R   | `[0] = BUSY` (multi-cycle op in progress)         |
+| 7–15  | —            | —   | Reserved (reads as 0; available for perfctrs)     |
+
+`FLUSH_*` are meaningful only on write-back caches; current L1 and
+L2 are both write-through, so writes accept and complete silently.
 
 ### INFO (reg 0)
 
-Packed cache geometry for software discovery:
+Packed cache geometry for software discovery. A present cache always
+has `INFO ≠ 0` because `LINE_WORDS`, `NUM_SETS`, and `NUM_WAYS` are
+each at least 1.
 
-| Bits  | Field       | Description                                      |
-|:-----:|-------------|--------------------------------------------------|
-| 3:0   | LINE_WORDS  | Words per cache line (e.g. 4)                    |
-| 13:4  | NUM_SETS    | Number of sets (e.g. 64)                         |
-| 17:14 | NUM_WAYS    | Associativity (1 = direct-mapped)                |
-| 21:18 | CACHE_TYPE  | 0 = write-through / write-no-allocate            |
-| 31:22 | —           | Reserved (0)                                     |
+| Bits  | Field        | Description                                      |
+|:-----:|--------------|--------------------------------------------------|
+| 5:0   | LINE_WORDS   | Words per cache line (1..63)                     |
+| 20:6  | NUM_SETS     | Number of sets (1..32767)                        |
+| 25:21 | NUM_WAYS     | Associativity (1..31, 1 = direct-mapped)         |
+| 27:26 | ADDRESSING   | 0 = PIPT, 1 = VIPT, 2 = VIVT                     |
+| 28    | WRITE_BACK   | 0 = write-through, 1 = write-back                |
+| 29    | WRITE_ALLOC  | 0 = write-no-allocate, 1 = write-allocate        |
+| 31:30 | —            | Reserved (0)                                     |
 
 ```asm
 ; Discover D-cache line size at boot
 RDSYS R1, #2, #0              ; DCACHE INFO
-ANDI  R1, R1, #0x0F           ; LINE_WORDS
+ANDI  R1, R1, #0x3F           ; LINE_WORDS
+
+; Probe L2 presence
+RDSYS R2, #9, #0              ; L2 INFO  (0 ⇒ no L2)
 ```
 
 ### CTRL (reg 1)
@@ -356,16 +381,24 @@ LLI   R1, #1
 WRSYS R1, #2, #1              ; DCACHE CTRL.ENABLE = 1
 ```
 
-### INVAL (reg 2)
+### INVAL_ALL (reg 2) / INVAL_LINE (reg 3)
 
-Writing any value invalidates **all** cache lines. The written value
-is accepted as an address hint for future per-line invalidate support,
-but the current implementation always invalidates all.
+`INVAL_ALL` drops every line; the written value is ignored.
+`INVAL_LINE` takes a **physical address** — hardware extracts the
+matching set/way from the address, drops the line if present, no-op
+if not.
 
 ```asm
 ; Invalidate I-cache after loading new code
-WRSYS R0, #3, #2              ; ICACHE INVAL
+WRSYS R0, #3, #2              ; ICACHE INVAL_ALL
+
+; Drop the L2 line covering one buffer page
+WRSYS R1, #9, #3              ; L2 INVAL_LINE — R1 = PA
 ```
+
+Multi-cycle ops (e.g. L2's set walker for `INVAL_ALL`) signal
+completion via `STATUS.BUSY`; the sysreg interface itself is
+single-cycle, so the kernel polls without blocking the bus.
 
 **I-cache coherence.** After copying code to RAM (e.g., `exec()`,
 dynamic linking, JIT), the kernel must invalidate the I-cache before
