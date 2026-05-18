@@ -31,11 +31,11 @@ This section defines the programmer-visible behavior of the Penumbra architectur
 ---
 
 ## 🛠️ [Hardware Design](./hardware)
-**Target:** Board designers and external device implementers.
+**Target:** Board designers, external device implementers, and RTL engineers writing bus-protocol-compliant modules.
 
-Specifications for interfacing with the Penumbra async external bus.
+Signal-level specifications for the Penumbra Bus (both sync and async forms) and related hardware interfaces.
 
-*   **[Bus Protocol](./hardware/bus-protocol.md)** — 4-phase handshake and signal timing.
+*   **[Bus Protocol](./hardware/bus-protocol.md)** — Penumbra Bus terminology, async 4-phase handshake, sync-form mapping, signal timing.
 *   **[Autoconfig Hardware](./hardware/autoconfig-hardware.md)** — Electrical implementation of the `cfg` daisy-chain.
 *   **[SPI Hardware](./hardware/spi-hardware.md)** — Internal state machines and 74xx feasibility.
 *   **[WiFi NIC Hardware](./hardware/esp32-nic-hw.md)** — Physical pinouts and UART bridge design.

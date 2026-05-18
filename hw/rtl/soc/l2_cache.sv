@@ -446,12 +446,9 @@ module l2_cache
                 o_mem_addr = {fill_base_addr[31:OFFSET_BITS],
                               fill_word_idx[WORD_BITS-1:0],
                               {WORD_LSB{1'b0}}};
-                // Hold re=1 until we've issued the current word's
-                // request.  Once in_flight, we no longer drive re
-                // (so the slave doesn't re-capture the same addr
-                // while we wait for its response).
-                o_mem_re   = (fill_word_idx < (WORD_BITS+1)'(LINE_WORDS))
-                             && !fill_in_flight;
+                // Bus master must hold re asserted for the entire
+                // fill burst
+                o_mem_re   = 1'b1;
             end
             S_INVAL_ALL: begin
                 // Post-reset auto-INVAL (ready==0): pass-through so

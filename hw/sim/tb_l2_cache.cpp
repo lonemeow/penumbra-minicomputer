@@ -76,12 +76,31 @@ struct MemMock {
     int      busy_remaining = 0;
     uint32_t pending_rdata  = 0;
     bool     have_request   = false;
+    bool     req_was_write  = false;
     uint32_t served_count   = 0;
+    int      violations     = 0;
 
     void clock_edge(Vl2_cache* d, int latency,
                     uint32_t (*rdata_fn)(uint32_t)) {
+        // Contract enforcement: once we've latched a request, the
+        // master must keep re/we asserted until busy drops.  See
+        // doc/hardware/bus-protocol.md "Sync-Bus Mapping".
+        if (have_request && busy_remaining > 0) {
+            bool live = req_was_write ? (bool)d->o_mem_we
+                                      : (bool)d->o_mem_re;
+            if (!live) {
+                fprintf(stderr,
+                        "MemMock: contract violation — master dropped %s "
+                        "mid-access (busy_remaining=%d)\n",
+                        req_was_write ? "o_mem_we" : "o_mem_re",
+                        busy_remaining);
+                violations++;
+                errors++;
+            }
+        }
         if (!have_request && (d->o_mem_re || d->o_mem_we)) {
             have_request   = true;
+            req_was_write  = d->o_mem_we;
             busy_remaining = latency;
             pending_rdata  = rdata_fn(d->o_mem_addr);
         }

@@ -144,6 +144,24 @@ module simple_mem
     assign o_busy          = (i_re || i_we) && !access_complete;
     assign write_commit    = access_complete && is_write;
 
+    // ── Contract enforcement ──────────────────────────────
+    // Per doc/hardware/bus-protocol.md "Sync-Bus Mapping":
+    // the master must hold re/we asserted until the busy-drop
+    // cycle.  simple_mem itself can latch on the first cycle and
+    // run autonomously, but strict slaves (e.g. sdram_bus_adapter)
+    // can't — so let simple_mem mirror the strict contract here.
+    // Without this, contract violations like a master pulsing re
+    // for one cycle pass simple_mem-backed unit tests but fail
+    // against real slaves in integration.
+    always_ff @(posedge i_clk) begin
+        if (!i_rst && in_access && !access_complete) begin
+            assert (is_write ? i_we : i_re)
+                else $error("simple_mem: master dropped %s mid-access at addr 0x%08x",
+                            is_write ? "we" : "re",
+                            {latched_addr, 2'b00});
+        end
+    end
+
 endmodule
 
 // verilator lint_on UNUSEDSIGNAL

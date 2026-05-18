@@ -288,10 +288,12 @@ etc., would need their own models).
 
 ## Bus adapter (`sdram_bus_adapter`)
 
-Maps the existing internal sync bus (`i_re`/`i_we`/`o_busy`) onto the
-controller's `req`/`rsp` interface. Single-word transactions on the bus
-side, same external contract as `simple_mem`/`fpga_ram`/`boot_rom` —
-drop-in replacement at the SDRAM region.
+Maps the system bus (Penumbra Bus
+[sync form](../hardware/bus-protocol.md#sync-bus-mapping):
+`i_re`/`i_we`/`o_busy`) onto the controller's `req`/`rsp` interface.
+Single-word transactions on the bus side, same back-side contract as
+`simple_mem`/`fpga_ram`/`boot_rom` — drop-in replacement at the SDRAM
+region.
 
 Internally pipelined for cache fills:
 

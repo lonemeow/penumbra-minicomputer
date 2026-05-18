@@ -5,8 +5,9 @@ between the CPU's `o_mem_*` port and the system bus.
 
 For protocol context this document depends on — and does not duplicate —
 read [`cpu-bus.md`](cpu-bus.md) (CPU-internal bus contract) and
-[`bus-protocol.md`](../hardware/bus-protocol.md) (Penumbra Bus, the
-contract `o_mem_*` honors in its sync-wrapped form).
+[`bus-protocol.md`](../hardware/bus-protocol.md) (Penumbra Bus — the
+contract the L2's front-side and back-side ports both honor, in the
+[sync form](../hardware/bus-protocol.md#sync-bus-mapping)).
 
 ## Implementation Status
 

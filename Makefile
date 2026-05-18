@@ -100,12 +100,15 @@ OBJCOPY   = $(LLVM_PREFIX)/bin/llvm-objcopy
 BIN2HEX   = python3 sw/tools/bin2hex.py
 
 .PHONY: sim
-sim:
+# Per-module HAS_L2 plumbing: only the top-level integration modules
+# accept the parameter; other targets would error on `-GHAS_L2=...`.
+SIM_MOD_PARAMS = $(if $(filter $(MOD),machine_sim ulx3s_top),$(MACHINE_SIM_PARAMS))
+sim: $(if $(filter $(MOD),machine_sim ulx3s_top),$(SIM_L2_STAMP))
 ifndef MOD
 	$(error Set MOD=<module_name>, e.g. make sim MOD=alu)
 endif
 	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
-	$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) \
+	$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) $(SIM_MOD_PARAMS) \
 		--top-module $(MOD) \
 		--Mdir $(BUILD_DIR)/$(MOD).verilator \
 		-o ../V$(MOD) \
@@ -251,10 +254,20 @@ test-modules:
 		exit 1; \
 	fi
 
-# ── Aggregate: program tests + module tests ───────────────────
+# ── Program tests with L2 enabled ─────────────────────────────
+# Same test discovery as `make test`, but builds machine_sim with
+# HAS_L2=1 so the test_l2_*.s programs (and any L2-aware test)
+# actually exercise the L2 path.  Tests written for L1-only behave
+# identically (the L2 stays disabled until software enables it,
+# which non-L2 tests don't do).
+.PHONY: test-l2
+test-l2:
+	@$(MAKE) test HAS_L2=1
+
+# ── Aggregate: program tests (L1 + L2) + module tests ─────────
 # Usage: make test-all
 .PHONY: test-all
-test-all: test test-modules
+test-all: test test-l2 test-modules
 
 # ── Run all program tests on ISS (fast, no Docker) ────────────
 # Same test programs as `make test` but runs on the ISS.

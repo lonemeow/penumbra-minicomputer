@@ -73,9 +73,10 @@ BUILTIN_CONSTANTS = {
     "MACH_NAME3":   4,
     "CPU_FREQ":     5,
 
-    # Cache device IDs (devices 2 and 3)
+    # Cache device IDs (devices 2, 3, and 9)
     "DCACHE":       2,
     "ICACHE":       3,
+    "L2":           9,
 
     # Cache registers (shared layout across DCACHE/ICACHE/L2/L3)
     "CACHE_INFO":       0,

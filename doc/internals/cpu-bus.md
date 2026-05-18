@@ -16,13 +16,15 @@ the documented effects of `RDSYS`/`WRSYS` and load/store instructions.
   identity/perfctrs, D-cache control, I-cache control.
 
 **Out of scope** (with cross-references):
-- The bus *past the cache memory port* — i.e. anything reachable from
-  `o_mem_*`/`i_mem_*` in `cpu_core.sv`. That is the Penumbra Bus,
-  specified in [`doc/hardware/bus-protocol.md`](../hardware/bus-protocol.md).
-  The on-FPGA implementation happens to be synchronous, but the spec
-  is async-shaped (`req`/`ack`) and a discrete build can implement it
-  literally async. The synchronous wrapper used inside the FPGA is an
-  implementation choice, not a different bus.
+- Anything past the **CPU memory port** (`cpu_core.sv`'s `o_mem_*`
+  / `i_mem_*`).  That's the **system bus**, governed by the
+  **Penumbra Bus** protocol specified in
+  [`doc/hardware/bus-protocol.md`](../hardware/bus-protocol.md).
+  Inside the FPGA the system bus speaks the **sync form**; the
+  **async form** is the future discrete-build target.  Both are the
+  same protocol — see
+  [Sync-Bus Mapping](../hardware/bus-protocol.md#sync-bus-mapping)
+  for the formal correspondence.
 - Sysreg traffic to *external* devices (device IDs ≥ 4: BUS, TIMER,
   MACH, …). Those devices live on the same `o_sys_dev`/`o_sys_reg`
   signal set, but the wires leave the core through the sysreg bus
@@ -134,12 +136,14 @@ property.
    it until line fill completes. On the cycle `o_busy` drops,
    `o_rdata` carries the requested word.
 3. **Pass-through path** (uncacheable, cache disabled, or any write).
-   The cache forwards `i_re`/`i_we` to its memory port and presents
-   `i_mem_busy`/`i_mem_rdata` to the core. The core sees the same
-   contract from above; the *device on the far side of the memory
-   port* must honor the Penumbra Bus protocol so that
-   `i_mem_busy=0` coincides with valid `i_mem_rdata`. This is
-   enforced by the system bus, not by this document.
+   The cache forwards `i_re`/`i_we` to its back-side port and presents
+   `i_mem_busy`/`i_mem_rdata` to the core.  The core sees the same
+   contract from above; the device on the far side of the back-side
+   port honors the Penumbra Bus protocol in its
+   [sync form](../hardware/bus-protocol.md#sync-bus-mapping),
+   which is what makes `i_mem_busy=0` coincide with valid
+   `i_mem_rdata`.  This is enforced by the system bus, not by this
+   document.
 4. **Faults.** A fault on the request (MMU access violation,
    alignment, past-cache `bus_fault`) is signaled out of band through
    the MMU/bus_fault path. The cache does not separately fault.
@@ -263,8 +267,8 @@ contract translates directly to a multi-IC implementation. See
 ## See Also
 
 - [`doc/hardware/bus-protocol.md`](../hardware/bus-protocol.md) —
-  Penumbra Bus (post-cache, off-CPU). Async spec; sync FPGA
-  implementation.
+  Penumbra Bus (system bus past the CPU memory port).  Covers both
+  sync and async forms; the FPGA build uses only the sync form.
 - [`doc/system/sysregs.md`](../system/sysregs.md) — Programmer's view
   of sysregs (device map, register layouts).
 - [`doc/system/mmu.md`](../system/mmu.md) — Programmer's view of the
