@@ -179,7 +179,7 @@ cpu_attach(device_t parent, device_t self, void *aux)
 	char name[17];
 	char feat[64];
 	uint32_t isa, freq;
-	uint32_t ic_info, dc_info;
+	uint32_t ic_info, dc_info, l2_info;
 
 	read_cpu_name(name);
 
@@ -193,6 +193,8 @@ cpu_attach(device_t parent, device_t self, void *aux)
 	    : "=r"(ic_info) : "i"(SYSDEV_ICACHE), "i"(CACHE_INFO));
 	__asm __volatile("RDSYS %0, %1, %2"
 	    : "=r"(dc_info) : "i"(SYSDEV_DCACHE), "i"(CACHE_INFO));
+	__asm __volatile("RDSYS %0, %1, %2"
+	    : "=r"(l2_info) : "i"(SYSDEV_L2),     "i"(CACHE_INFO));
 
 	format_cpu_features(feat, sizeof(feat), isa);
 
@@ -211,6 +213,8 @@ cpu_attach(device_t parent, device_t self, void *aux)
 
 	print_one_cache(self, "L1 icache", ic_info);
 	print_one_cache(self, "L1 dcache", dc_info);
+	if (l2_info != 0)
+		print_one_cache(self, "L2 cache ", l2_info);
 
 	cpu_info_store.ci_dev = self;
 	cpu_info_store.ci_cpuid = 0;

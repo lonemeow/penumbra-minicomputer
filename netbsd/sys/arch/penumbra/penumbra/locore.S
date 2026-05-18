@@ -494,7 +494,7 @@ _start_bias:
 	 */
 
 	/*
-	 * Enable both caches.  PTE_KERNEL pages declare cacheability via
+	 * Enable both L1 caches.  PTE_KERNEL pages declare cacheability via
 	 * PTE.C, but cache_active = CACHE_CTRL.ENABLE & PTE.C — without
 	 * the master enable every fetch and load/store passes through to
 	 * SDRAM at full CDC + 100 MHz CL2 latency.  Cache valid bits are
@@ -505,6 +505,21 @@ _start_bias:
 	lli	r1, #CACHE_CTRL_ENABLE
 	wrsys	r1, #SYSDEV_DCACHE, #CACHE_CTRL
 	wrsys	r1, #SYSDEV_ICACHE, #CACHE_CTRL
+
+	/*
+	 * Enable L2 cache if present.  SYSDEV_L2 is only instantiated in
+	 * HAS_L2=1 builds; on HAS_L2=0 hardware the device id is unmapped
+	 * and RDSYS returns zero, so probing INFO is the runtime-safe way
+	 * to detect presence (no faults, no recompile per bitstream).
+	 * L2 is also disabled at reset and just passes traffic through
+	 * until ENABLE is set.
+	 */
+	rdsys r1, #SYSDEV_L2, #CACHE_INFO
+	cmp   r1, #0
+	beq   .Lno_l2
+	lli   r1, #CACHE_CTRL_ENABLE
+	wrsys r1, #SYSDEV_L2, #CACHE_CTRL
+.Lno_l2:
 
 /* ═══════════════════════════════════════════════════════════════
  * Step 12: Jump to kernel virtual addresses
