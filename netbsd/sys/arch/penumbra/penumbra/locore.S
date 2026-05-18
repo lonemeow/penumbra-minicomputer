@@ -84,7 +84,7 @@ _start_bias:
 	blo	.Lflush_tlb
 
 	/* Invalidate I-cache — stale bootloader code may be cached */
-	wrsys	r0, #SYSDEV_ICACHE, #CACHE_INVAL
+	wrsys	r0, #SYSDEV_ICACHE, #CACHE_INVAL_ALL
 
 /* ═══════════════════════════════════════════════════════════════
  * Step 4: Zero BSS (physical mode)
@@ -313,7 +313,7 @@ _start_bias:
 	blo	.Lcopy_handler
 
 	/* I-cache invalidate after writing code to vector page */
-	wrsys	r0, #SYSDEV_ICACHE, #CACHE_INVAL
+	wrsys	r0, #SYSDEV_ICACHE, #CACHE_INVAL_ALL
 
 /* ═══════════════════════════════════════════════════════════════
  * Step 8: Install exception vectors
@@ -499,7 +499,7 @@ _start_bias:
 	 * the master enable every fetch and load/store passes through to
 	 * SDRAM at full CDC + 100 MHz CL2 latency.  Cache valid bits are
 	 * cleared at reset and the caches were inert until now, so the
-	 * earlier CACHE_INVAL writes (and these enables) take effect on
+	 * earlier CACHE_INVAL_ALL writes (and these enables) take effect on
 	 * a known-clean state — no extra invalidate needed here.
 	 */
 	lli	r1, #CACHE_CTRL_ENABLE

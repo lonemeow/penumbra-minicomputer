@@ -113,21 +113,21 @@ format_cpu_features(char *buf, size_t bufsz, uint32_t isa)
 }
 
 /*
- * Decode the 2-bit CACHE_INFO_TYPE field (PIPT/VIPT/VIVT) into a tag.
- * Mirrors the boot ROM helper of the same name (hw/rom/boot_rom.c).
+ * Decode the 2-bit CACHE_INFO_ADDRESSING field (PIPT/VIPT/VIVT) into a tag.
+ * Mirrors format_cache_addressing() in hw/rom/boot_rom.c.
  */
 static void
-format_cache_type(char *buf, size_t bufsz, uint32_t type)
+format_cache_addressing(char *buf, size_t bufsz, uint32_t addr)
 {
 	if (bufsz > 0)
 		buf[0] = '\0';
 
-	switch (type) {
-	case CACHE_TYPE_PIPT: strncat(buf, "PIPT", bufsz); break;
-	case CACHE_TYPE_VIPT: strncat(buf, "VIPT", bufsz); break;
-	case CACHE_TYPE_VIVT: strncat(buf, "VIVT", bufsz); break;
+	switch (addr) {
+	case CACHE_ADDR_PIPT: strncat(buf, "PIPT", bufsz); break;
+	case CACHE_ADDR_VIPT: strncat(buf, "VIPT", bufsz); break;
+	case CACHE_ADDR_VIVT: strncat(buf, "VIVT", bufsz); break;
 	default:
-		snprintf(buf, bufsz, "UNK_%u", type);
+		snprintf(buf, bufsz, "UNK_%u", addr);
 		break;
 	}
 }
@@ -154,21 +154,21 @@ print_one_cache(device_t self, const char *label, uint32_t info)
 	uint32_t line_words = CACHE_INFO_LINE_WORDS(info);
 	uint32_t num_sets   = CACHE_INFO_NUM_SETS(info);
 	uint32_t num_ways   = CACHE_INFO_NUM_WAYS(info);
-	uint32_t type       = CACHE_INFO_TYPE(info);
+	uint32_t addr       = CACHE_INFO_ADDRESSING(info);
 	uint32_t wb         = CACHE_INFO_WRITE_BACK(info);
 	uint32_t wa         = CACHE_INFO_WRITE_ALLOC(info);
 	uint32_t line_bytes  = line_words * 4u;
 	uint32_t total_bytes = num_sets * num_ways * line_bytes;
 
-	char size_str[12], type_str[16];
+	char size_str[12], addr_str[16];
 	humanize_size(total_bytes, size_str, sizeof(size_str));
-	format_cache_type(type_str, sizeof(type_str), type);
+	format_cache_addressing(addr_str, sizeof(addr_str), addr);
 
 	aprint_normal_dev(self, "%s: %s (%u x %uB, %u-way) %s (%s, %s)\n",
 	    label,
 	    size_str,
 	    num_sets, line_bytes, num_ways,
-	    type_str,
+	    addr_str,
 	    wb ? "WB" : "WT",
 	    wa ? "WA" : "WnA");
 }
