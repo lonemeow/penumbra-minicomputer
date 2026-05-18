@@ -190,11 +190,11 @@ cpu_attach(device_t parent, device_t self, void *aux)
 	cpu_clock_freq_hz = freq;
 
 	__asm __volatile("RDSYS %0, %1, %2"
-	    : "=r"(ic_info) : "i"(SYSDEV_ICACHE), "i"(CACHE_INFO));
+	    : "=r"(ic_info) : "i"(SYSDEV_L1_ICACHE), "i"(CACHE_INFO));
 	__asm __volatile("RDSYS %0, %1, %2"
-	    : "=r"(dc_info) : "i"(SYSDEV_DCACHE), "i"(CACHE_INFO));
+	    : "=r"(dc_info) : "i"(SYSDEV_L1_DCACHE), "i"(CACHE_INFO));
 	__asm __volatile("RDSYS %0, %1, %2"
-	    : "=r"(l2_info) : "i"(SYSDEV_L2),     "i"(CACHE_INFO));
+	    : "=r"(l2_info) : "i"(SYSDEV_L2_CACHE),  "i"(CACHE_INFO));
 
 	format_cpu_features(feat, sizeof(feat), isa);
 

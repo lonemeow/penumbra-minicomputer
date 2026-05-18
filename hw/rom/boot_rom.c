@@ -890,10 +890,10 @@ static void format_cache_addressing(char *buf, int bufsz, uint32_t addr) {
  * function handles L1 D/I and L2 (and any future L3) because every
  * cache device uses the unified INFO encoding from penumbra_pkg.sv.
  *
- * INFO==0 means the cache is absent in this build (HAS_L2=0, or
- * the device id is unmapped).  The banner should make this
- * unambiguous so the operator can spot a missing cache without
- * having to recall which bitstream is loaded.
+ * INFO==0 means the cache is absent in this build (the device id
+ * is unmapped, or a future bitstream variant omits this level).
+ * The banner should make this unambiguous so the operator can spot
+ * a missing cache without having to recall which bitstream is loaded.
  *
  * The read happens at the call site because RDSYS encodes the
  * device number as an instruction immediate (must be a
@@ -961,11 +961,11 @@ static void print_banner(void) {
     console_puts("\r\n");
     console_printf("Hardware: %s\r\n", mach_name);
     print_one_cache("L1 icache",
-        penumbra_read_sysreg(SYSDEV_ICACHE, CACHE_INFO));
+        penumbra_read_sysreg(SYSDEV_L1_ICACHE, CACHE_INFO));
     print_one_cache("L1 dcache",
-        penumbra_read_sysreg(SYSDEV_DCACHE, CACHE_INFO));
+        penumbra_read_sysreg(SYSDEV_L1_DCACHE, CACHE_INFO));
     print_one_cache("L2 cache ",
-        penumbra_read_sysreg(SYSDEV_L2, CACHE_INFO));
+        penumbra_read_sysreg(SYSDEV_L2_CACHE, CACHE_INFO));
     console_puts("\r\n");
 }
 

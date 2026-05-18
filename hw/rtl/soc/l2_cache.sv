@@ -32,7 +32,7 @@
 // promises: "L2 introduces no extra cycle vs. the no-L2 build"
 // for pass-through traffic.
 //
-// Sysreg device 9 (SYSDEV_L2) — same layout as DCACHE/ICACHE:
+// Sysreg device 9 (SYSDEV_L2_CACHE) — same layout as L1_DCACHE/L1_ICACHE:
 //   reg 0 INFO       (R)  unified cache INFO encoding (see penumbra_pkg.sv);
 //                          INFO=0 means "no L2 present" (HAS_L2=0)
 //   reg 1 CTRL       (RW) {31'b0, enable}; reset value 0 (disabled)

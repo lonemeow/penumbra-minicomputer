@@ -39,9 +39,9 @@
  * software detects presence with a single RDSYS and skips ops on
  * absent caches.  See hw/rom/penumbra.h for the full layout.
  */
-#define SYSDEV_DCACHE       2
-#define SYSDEV_ICACHE       3
-#define SYSDEV_L2           9
+#define SYSDEV_L1_DCACHE    2
+#define SYSDEV_L1_ICACHE    3
+#define SYSDEV_L2_CACHE     9
 #define CACHE_INFO          0
 #define CACHE_CTRL          1
 #define CACHE_CTRL_ENABLE   1
@@ -281,18 +281,18 @@ _start:
          * pass everything through to memory until ENABLE is set.
          * Valid bits are cleared at reset, so no invalidate needed. */
         lli     r1, #CACHE_CTRL_ENABLE
-        wrsys   r1, #SYSDEV_DCACHE, #CACHE_CTRL
-        wrsys   r1, #SYSDEV_ICACHE, #CACHE_CTRL
+        wrsys   r1, #SYSDEV_L1_DCACHE, #CACHE_CTRL
+        wrsys   r1, #SYSDEV_L1_ICACHE, #CACHE_CTRL
 
-        /* Enable L2 if present.  INFO=0 means HAS_L2=0 at RTL —
-         * the device id is unmapped so RDSYS returns zero; skip the
-         * enable write.  Software in HAS_L2=1 builds gets the L2's
-         * miss-penalty reduction; HAS_L2=0 builds are unchanged. */
-        rdsys   r2, #SYSDEV_L2, #CACHE_INFO
+        /* Enable L2 if present.  INFO=0 means the device id is
+         * unmapped on this bitstream (RDSYS returns zero); skip the
+         * enable write so this same crt0 handles a possible
+         * L2-less variant without code change. */
+        rdsys   r2, #SYSDEV_L2_CACHE, #CACHE_INFO
         cmp     r2, r0
         beq     .Lno_l2
         lli     r1, #CACHE_CTRL_ENABLE
-        wrsys   r1, #SYSDEV_L2, #CACHE_CTRL
+        wrsys   r1, #SYSDEV_L2_CACHE, #CACHE_CTRL
 .Lno_l2:
 
 /* ═════════════════════════════════════════════════════════════════

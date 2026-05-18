@@ -49,11 +49,11 @@ typedef unsigned int uint32_t;
  * Device 1 = System ID (read-only)
  */
 
-#define SYSDEV_MMU    0
-#define SYSDEV_CPU    1
-#define SYSDEV_DCACHE 2
-#define SYSDEV_ICACHE 3
-#define SYSDEV_MACH   8
+#define SYSDEV_MMU       0
+#define SYSDEV_CPU       1
+#define SYSDEV_L1_DCACHE 2
+#define SYSDEV_L1_ICACHE 3
+#define SYSDEV_MACH      8
 
 #define MMU_CR           0
 #define MMU_FAULT_ADDR   1
@@ -83,7 +83,7 @@ typedef unsigned int uint32_t;
 #define CPU_FEAT_BIT_FPU     2
 
 /* ── Cache devices — shared layout across L1 D/I, L2, future L3 ──── */
-#define SYSDEV_L2     9
+#define SYSDEV_L2_CACHE  9
 
 /* Register map (same for every cache device).  Reading INFO=0 means
  * the device is absent (either not instantiated or device id unmapped),

@@ -84,7 +84,7 @@ _start_bias:
 	blo	.Lflush_tlb
 
 	/* Invalidate I-cache — stale bootloader code may be cached */
-	wrsys	r0, #SYSDEV_ICACHE, #CACHE_INVAL_ALL
+	wrsys	r0, #SYSDEV_L1_ICACHE, #CACHE_INVAL_ALL
 
 /* ═══════════════════════════════════════════════════════════════
  * Step 4: Zero BSS (physical mode)
@@ -313,7 +313,7 @@ _start_bias:
 	blo	.Lcopy_handler
 
 	/* I-cache invalidate after writing code to vector page */
-	wrsys	r0, #SYSDEV_ICACHE, #CACHE_INVAL_ALL
+	wrsys	r0, #SYSDEV_L1_ICACHE, #CACHE_INVAL_ALL
 
 /* ═══════════════════════════════════════════════════════════════
  * Step 8: Install exception vectors
@@ -503,22 +503,21 @@ _start_bias:
 	 * a known-clean state — no extra invalidate needed here.
 	 */
 	lli	r1, #CACHE_CTRL_ENABLE
-	wrsys	r1, #SYSDEV_DCACHE, #CACHE_CTRL
-	wrsys	r1, #SYSDEV_ICACHE, #CACHE_CTRL
+	wrsys	r1, #SYSDEV_L1_DCACHE, #CACHE_CTRL
+	wrsys	r1, #SYSDEV_L1_ICACHE, #CACHE_CTRL
 
 	/*
-	 * Enable L2 cache if present.  SYSDEV_L2 is only instantiated in
-	 * HAS_L2=1 builds; on HAS_L2=0 hardware the device id is unmapped
-	 * and RDSYS returns zero, so probing INFO is the runtime-safe way
-	 * to detect presence (no faults, no recompile per bitstream).
-	 * L2 is also disabled at reset and just passes traffic through
-	 * until ENABLE is set.
+	 * Enable L2 cache if present.  The current bitstream always
+	 * instantiates the L2, but a future variant could omit it; we
+	 * probe SYSDEV_L2_CACHE.INFO and skip the enable when the device
+	 * id is unmapped (RDSYS returns zero).  L2 is disabled at reset
+	 * and passes traffic through until ENABLE is set.
 	 */
-	rdsys r1, #SYSDEV_L2, #CACHE_INFO
+	rdsys r1, #SYSDEV_L2_CACHE, #CACHE_INFO
 	cmp   r1, #0
 	beq   .Lno_l2
 	lli   r1, #CACHE_CTRL_ENABLE
-	wrsys r1, #SYSDEV_L2, #CACHE_CTRL
+	wrsys r1, #SYSDEV_L2_CACHE, #CACHE_CTRL
 .Lno_l2:
 
 /* ═══════════════════════════════════════════════════════════════

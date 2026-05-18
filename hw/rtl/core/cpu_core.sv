@@ -139,16 +139,16 @@ module cpu_core
                          ? cpuid_rdata : cpu_perfctr_rdata;
 
     // ── Sysreg read mux ────────────────────────────────────
-    // Devices handled internally: 0 (MMU), 1 (CPU), 2 (DCACHE), 3 (ICACHE);
+    // Devices handled internally: 0 (MMU), 1 (CPU), 2 (L1_DCACHE), 3 (L1_ICACHE);
     // remaining devices from external bus (BUS, TIMER, MACH, ...).
     logic [31:0] sys_rdata;
     always_comb begin
         case (dp_r_sys_dev)
-            SYSDEV_MMU:    sys_rdata = mmu_sys_rdata;
-            SYSDEV_CPU:    sys_rdata = cpu_sys_rdata;
-            SYSDEV_DCACHE: sys_rdata = dcache_sys_rdata;
-            SYSDEV_ICACHE: sys_rdata = icache_sys_rdata;
-            default:       sys_rdata = i_sys_rdata;
+            SYSDEV_MMU:       sys_rdata = mmu_sys_rdata;
+            SYSDEV_CPU:       sys_rdata = cpu_sys_rdata;
+            SYSDEV_L1_DCACHE: sys_rdata = dcache_sys_rdata;
+            SYSDEV_L1_ICACHE: sys_rdata = icache_sys_rdata;
+            default:          sys_rdata = i_sys_rdata;
         endcase
     end
 
@@ -606,10 +606,10 @@ module cpu_core
         .i_mem_rdata  (icache_arb_rdata),
         .i_mem_busy   (icache_arb_busy),
         .i_req_accepted (arb_i_req_accepted),
-        // Sysreg (device 3 = ICACHE)
+        // Sysreg (device 3 = L1 I-cache)
         .i_sys_reg    (dp_r_sys_reg),
         .i_sys_wdata  (dp_a_bus),
-        .i_sys_we     (ctl_sys_cycle && ctl_sys_we && (dp_r_sys_dev == SYSDEV_ICACHE)),
+        .i_sys_we     (ctl_sys_cycle && ctl_sys_we && (dp_r_sys_dev == SYSDEV_L1_ICACHE)),
         .o_sys_rdata  (icache_sys_rdata)
     );
 
@@ -641,10 +641,10 @@ module cpu_core
         .i_mem_rdata  (dcache_arb_rdata),
         .i_mem_busy   (dcache_arb_busy),
         .i_req_accepted (arb_d_req_accepted),
-        // Sysreg (device 2 = DCACHE)
+        // Sysreg (device 2 = L1 D-cache)
         .i_sys_reg    (dp_r_sys_reg),
         .i_sys_wdata  (dp_a_bus),
-        .i_sys_we     (ctl_sys_cycle && ctl_sys_we && (dp_r_sys_dev == SYSDEV_DCACHE)),
+        .i_sys_we     (ctl_sys_cycle && ctl_sys_we && (dp_r_sys_dev == SYSDEV_L1_DCACHE)),
         .o_sys_rdata  (dcache_sys_rdata)
     );
 

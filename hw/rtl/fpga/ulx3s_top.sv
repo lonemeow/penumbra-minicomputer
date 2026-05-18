@@ -374,7 +374,7 @@ module ulx3s_top #(
                 .i_mem_busy     (mem_busy),
                 .i_sys_reg      (sys_reg),
                 .i_sys_wdata    (sys_wdata),
-                .i_sys_we       (sys_we & sys_cycle & (sys_dev == SYSDEV_L2)),
+                .i_sys_we       (sys_we & sys_cycle & (sys_dev == SYSDEV_L2_CACHE)),
                 .o_sys_rdata    (l2_rdata)
             );
         end else begin : g_no_l2
@@ -768,7 +768,7 @@ module ulx3s_top #(
             SYSDEV_BUS:   sys_rdata = busctl_rdata;
             SYSDEV_TIMER: sys_rdata = timer_rdata;
             SYSDEV_MACH:  sys_rdata = machid_rdata;
-            SYSDEV_L2:    sys_rdata = l2_rdata;
+            SYSDEV_L2_CACHE: sys_rdata = l2_rdata;
             default:      sys_rdata = 32'b0;
         endcase
     end

@@ -401,7 +401,7 @@ enum { VEC_BUS_FAULT=0, VEC_TIMER=1, VEC_TLB_MISS=2, VEC_TLB_PROT=3,
        VEC_EXT_IRQ=9 };
 
 // Sysreg device IDs
-enum { SYSDEV_MMU=0, SYSDEV_CPU=1, SYSDEV_DCACHE=2, SYSDEV_ICACHE=3, SYSDEV_BUS=4,
+enum { SYSDEV_MMU=0, SYSDEV_CPU=1, SYSDEV_L1_DCACHE=2, SYSDEV_L1_ICACHE=3, SYSDEV_BUS=4,
        SYSDEV_TIMER=7, SYSDEV_MACH=8, SYSDEV_DEBUG=15 };
 
 // Debug watchpoints — halt on physical memory write to watched addresses
@@ -1163,7 +1163,7 @@ static uint32_t sysreg_read(int dev, int reg) {
             default: return 0;
         }
     case SYSDEV_CPU: return cpuid_read(reg);
-    case SYSDEV_DCACHE: case SYSDEV_ICACHE:
+    case SYSDEV_L1_DCACHE: case SYSDEV_L1_ICACHE:
         // Unified CACHE_INFO layout: line_words[5:0]|num_sets[20:6]|
         // num_ways[25:21]|addressing[27:26]|wb[28]|wa[29].
         // Report a plausible L1 (16 sets × 1-way × 4 words, PIPT, WT/WnA);
@@ -1223,7 +1223,7 @@ static void sysreg_write(int dev, int reg, uint32_t val) {
             dbg.watch_val = val;
         }
         break;
-    case SYSDEV_DCACHE: case SYSDEV_ICACHE:
+    case SYSDEV_L1_DCACHE: case SYSDEV_L1_ICACHE:
         break; // Cache control: accept and ignore in ISS
     }
 }

@@ -14,16 +14,17 @@
 
 /* ── Device numbers (RDSYS/WRSYS dev field) ─────────────────────────── */
 
-#define SYSDEV_MMU	0	/* MMU / TLB management */
-#define SYSDEV_CPU	1	/* CPU identity + perfctrs (read-only id) */
-#define SYSDEV_DCACHE	2	/* D-cache control */
-#define SYSDEV_ICACHE	3	/* I-cache control */
-#define SYSDEV_BUS	4	/* Bus controller (autoconfig) */
-/* Devices 5-6 reserved for future cache levels (L2, L3) */
-#define SYSDEV_TIMER	7	/* Programmable interval timer */
-#define SYSDEV_MACH	8	/* Machine identity (board name, CPU clock freq) */
-/* Devices 9-14 reserved */
-#define SYSDEV_DEBUG	15	/* ISS-only debug (watchpoint); no-op on hardware */
+#define SYSDEV_MMU		0	/* MMU / TLB management */
+#define SYSDEV_CPU		1	/* CPU identity + perfctrs (read-only id) */
+#define SYSDEV_L1_DCACHE	2	/* L1 D-cache control */
+#define SYSDEV_L1_ICACHE	3	/* L1 I-cache control */
+#define SYSDEV_BUS		4	/* Bus controller (autoconfig) */
+/* Devices 5-6 reserved */
+#define SYSDEV_TIMER		7	/* Programmable interval timer */
+#define SYSDEV_MACH		8	/* Machine identity (board name, CPU clock freq) */
+#define SYSDEV_L2_CACHE		9	/* L2 unified cache control */
+/* Devices 10-14 reserved */
+#define SYSDEV_DEBUG		15	/* ISS-only debug (watchpoint); no-op on hardware */
 
 /* ── Device 15: ISS debug registers (simulator only) ───────────────── */
 
@@ -94,9 +95,7 @@
 #define MACH_NAME3	4
 #define MACH_CPU_FREQ	5
 
-/* ── Cache devices (DCACHE=2, ICACHE=3, L2=9) — shared layout ───────── */
-
-#define SYSDEV_L2		9
+/* ── Cache devices (L1_DCACHE=2, L1_ICACHE=3, L2_CACHE=9) — shared layout ─ */
 
 #define CACHE_INFO		0	/* R  — geometry; 0 = absent */
 #define CACHE_CTRL		1	/* RW — bit 0 = ENABLE */
