@@ -15,6 +15,12 @@
 //     CTRL.enable
 //   - INVAL_ALL drops all valid bits and asserts STATUS.busy
 //     while the walker runs
+//   - After WRSYS CACHE_INVAL_ALL the next memory access (cached
+//     or uncached MMIO) stalls automatically until the walker
+//     finishes — software does not need a STATUS.busy poll loop
+//   - Post-reset auto-INVAL walks all sets to initialise valid
+//     BRAMs (undefined at power-on on real HW); the cache stays
+//     in pass-through mode until `ready` asserts
 //
 // The "memory" mock is the same shape as `tb_cpu_bus_arbiter.cpp`
 // uses: latency-counted busy + last-rdata-presented.
@@ -38,6 +44,13 @@ static void reset(Vl2_cache* d) {
     d->i_sys_reg = 0; d->i_sys_wdata = 0; d->i_sys_we = 0;
     tick(d); tick(d);
     d->i_rst = 0;
+    // Post-reset auto-INVAL walks all NUM_SETS=1024 sets clearing
+    // valid bits in BRAM (which power up undefined on real HW).
+    // Cached operations are gated on STATUS.busy=0 / `ready` flag;
+    // tick past the walk so subsequent tests start with a ready
+    // cache.  Matches what real software does after boot: poll
+    // STATUS.busy before enabling/using L2.
+    for (int i = 0; i < 1100; i++) tick(d);
 }
 
 static void check(const char* name, uint32_t got, uint32_t exp) {
@@ -296,6 +309,51 @@ static void test_inval_all(Vl2_cache* d) {
     d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
 }
 
+static void test_inval_all_implicit_fence(Vl2_cache* d) {
+    printf("── INVAL_ALL implicit fence: next access stalls until done ──\n");
+    reset(d);
+    wrsys(d, 1, 1);  // CTRL.enable = 1
+    MemMock mem;
+
+    // Trigger INVAL_ALL.
+    wrsys(d, 2, 0);
+    tick_with_mem(d, mem, 2, rdata_addr_complement);
+
+    // Immediately issue a cached read — without polling STATUS.busy.
+    // The L2 must hold o_busy high until the walker finishes; the
+    // CPU's stall mechanism then naturally waits.  This is the
+    // "implicit fence" guarantee: software does not need a poll
+    // loop after WRSYS CACHE_INVAL_ALL.
+    d->i_addr      = 0x8000;
+    d->i_cacheable = 1;
+    d->i_re        = 1;
+    d->eval();
+    check_bool("fence.cached_stalls_during_walk", d->o_busy, true);
+
+    // Also verify uncached MMIO would stall (implicit fence covers it).
+    d->i_re = 0;
+    d->i_we = 1;
+    d->i_cacheable = 0;
+    d->i_addr = 0xFF000000;
+    d->eval();
+    check_bool("fence.uncached_stalls_during_walk", d->o_busy, true);
+
+    // Resume the cached read and let the walk finish.
+    d->i_we = 0;
+    d->i_re = 1;
+    d->i_cacheable = 1;
+    d->i_addr = 0x8000;
+    d->eval();
+    int safety = 0;
+    while (d->o_busy && safety++ < 2000)
+        tick_with_mem(d, mem, 2, rdata_addr_complement);
+    check_bool("fence.access_completed_after_walk",
+               (rdsys(d, 6) & 1) == 0, true);
+    check("fence.access_returned_correct_data", d->o_rdata,
+          rdata_addr_complement(0x8000));
+    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+}
+
 static void test_uncached_skips_cache(Vl2_cache* d) {
     printf("── Uncacheable access skips the cache pipeline ──\n");
     reset(d);
@@ -340,6 +398,7 @@ int main() {
     test_cached_read_miss_then_hit(d);
     test_write_invalidate(d);
     test_inval_all(d);
+    test_inval_all_implicit_fence(d);
     test_uncached_skips_cache(d);
 
     printf("\nl2_cache: %d/%d tests passed\n", tests - errors, tests);
