@@ -295,7 +295,7 @@ _start_bias:
  * Vector page layout (PA 0x0, mapped at VECTOR_VA):
  *   0x00-0x1F   Exception vectors (8 × 4-byte addresses)
  *   0x80+       TLB miss handler code
- *   (after code) Scratch data (R1-R4 save, way counter)
+ *   (after code) Trap-entry scratch (R1 save, ESR/EPC/fault snapshot)
  *               Accessed via PC-relative — no VA 0 dependency
  * ═══════════════════════════════════════════════════════════════ */
 
@@ -406,9 +406,6 @@ _start_bias:
 	sub	r1, r5
 	add	r1, r3
 	stw	r1, [r0 + #0x24]
-
-	/* way_counter is part of _rmh_scratch, zeroed by the copy
-	 * (source is in BSS-like .text zero-initialized data) */
 
 /* ═══════════════════════════════════════════════════════════════
  * Step 9: Pin TLB slots
@@ -655,13 +652,17 @@ _real_miss_handler:
 	 */
 
 	shr	r1, #12
-	and	r1, #0x1F
-	ldw	r2, [pc + _rmh_way_counter - .]
-	or	r1, r2
-	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_INDEX
-	lli	r1, #0x20
+	and	r1, #0x1F		/* R1 = set (bits 16:12 of VA) */
+
+	/* Pick a way using the free-running cycle counter.
+	 * XOR with the set bits before masking so adjacent-set
+	 * misses spread across both ways even if cycle bit 5
+	 * happens to be locked by a periodic workload. */
+	rdsys	r2, #SYSDEV_CPU, #CPU_CYCLES
 	xor	r2, r1
-	stw	r2, [pc + _rmh_way_counter - .]
+	and	r2, #0x20		/* isolate the way bit */
+	or	r1, r2			/* R1 = {way, set} */
+	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_INDEX
 
 	rdsys	r1, #SYSDEV_MMU, #MMU_FAULT_ADDR
 	shr	r1, #12
@@ -1004,14 +1005,7 @@ _trap_save_hw_badvaddr:
 _trap_save_hw_fstat:
 	.long	0
 
-/* ── TLB miss handler scratch data ──────────────────────────
- * Accessed via PC-relative addressing from the TLB miss handler.
- * Copied to the vector page together with all handler code.
- */
 	.balign	4
-_rmh_scratch:
-_rmh_way_counter:
-	.long	0
 _real_handlers_end:
 
 
