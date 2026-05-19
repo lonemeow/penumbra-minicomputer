@@ -45,8 +45,9 @@ Penumbra is a modern RISC implementation with a "classic" aesthetic.
 - **ISA:** 4 instruction formats (R/L/M/B), 16 GPRs (R0=zero, R14=SP, R13=LR, R15=PC).
 - **Execution:** 3-bus datapath, 51-bit horizontal microcode, 256-entry ROM.
 - **MMU:** Software-managed 64-entry 2-way SA TLB + 4-entry FA pinned TLB.
-- **Memory:** Split I/D VIPT caches (1 KiB direct-mapped, aliasing-free), write-through D-cache.
-- **Bus:** Asynchronous Penumbra Bus with 4-phase handshake and autoconfig.
+- **Caches:** Split I/D L1 VIPT (1 KiB each, direct-mapped, write-through), plus a 64 KiB unified 4-way L2 with write-invalidate-on-hit.
+- **Memory:** 32 MB SDRAM on the ULX3S target, reached through an async CDC bridge from the CPU clock to the SDRAM clock.
+- **Bus:** Asynchronous Penumbra Bus with 4-phase handshake and Zorro-style autoconfig.
 
 Detailed specifications are available in the **[Documentation Index](doc/README.md)**.
 
@@ -54,12 +55,12 @@ Detailed specifications are available in the **[Documentation Index](doc/README.
 
 ## 📈 Status
 
-The system is fully functional in cycle-accurate and instruction-level simulation.
+The system runs on real hardware (Radiona ULX3S, Lattice ECP5-85F) as well as in cycle-accurate Verilator simulation and a fast instruction-level simulator.
 
-- **Hardware:** All RTL modules (CPU, MMU, Cache, Bus, UART, SPI) implemented and verified.
-- **Toolchain:** Custom LLVM backend (clang/lld) fully operational.
-- **OS:** NetBSD 10.1 port boots to interactive single-user shell. Kernel mounts FFS root from SD card; full userland cross-build and dynamic linker (`ld.elf_so`) are functional on the ISS.
-- **Firmware:** C boot ROM with FAT32 support, PIE ELF loading, and monitor commands.
+- **Hardware:** Full CPU + MMU + split L1 caches + unified L2 cache + async Penumbra Bus with autoconfig + UART + SPI/SD + SDRAM controller, all running on the ULX3S board.
+- **Toolchain:** Custom LLVM backend (clang/lld/llvm-mc) end-to-end; PIE/GOT/PLT, TLS, soft-float, C++ EH with DWARF unwinding.
+- **OS:** NetBSD 10.1 boots to userland on the ULX3S hardware, mounting an FFS root from SD card (read + write). Dynamic linking, fork/exec, pipes, signals, and TLS all functional; the in-tree `pbench` microbenchmark suite exercises kernel syscalls and libc hot paths dynamically linked against `libc.so` on real hardware.
+- **Firmware:** C boot ROM with FAT32 support, PIE ELF loading, bus autoconfig, and an interactive monitor.
 
 ---
 
