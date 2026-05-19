@@ -24,6 +24,7 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
+#include <sys/msgbuf.h>
 #include <sys/reboot.h>
 #include <sys/lwp.h>
 #include <sys/proc.h>
@@ -55,6 +56,17 @@ char bootinfo_store[BOOTINFO_MAXSIZE] __aligned(4);
 
 /* Virtual address of bootinfo_store, set by locore.S */
 uint32_t penumbra_bootinfo;
+
+/*
+ * Kernel message buffer reservation.
+ *
+ * msgbuf_paddr is set by penumbra_physmem_init() after carving
+ * MSGBUFSIZE bytes out of physical RAM (so UVM doesn't hand the
+ * pages out to anyone else).  penumbra_init() then maps it at
+ * msgbuf_vaddr via pmap_map_kernel() and hands it to initmsgbuf().
+ */
+paddr_t msgbuf_paddr;
+vaddr_t msgbuf_vaddr;
 
 
 /* ── Early boot UART console ──────────────────────────────────
@@ -202,6 +214,21 @@ penumbra_physmem_init(void)
 	printf("  kernel PA end: 0x%x\n", (unsigned)kern_pa_end);
 
 	/*
+	 * Reserve MSGBUFSIZE bytes of physical memory for the kernel
+	 * message buffer.  This region must be excluded from UVM's
+	 * free-page list (via the same `kern_pa_end` bump that excludes
+	 * the kernel image) so the page allocator never hands these
+	 * pages out to anyone else.
+	 *
+	 * Result: msgbuf_paddr points at a page-aligned region of size
+	 * round_page(MSGBUFSIZE) immediately after the kernel image, and
+	 * kern_pa_end has been advanced past it.  penumbra_init() will
+	 * later map this region into kernel VA and call initmsgbuf().
+	 */
+	msgbuf_paddr = kern_pa_end;
+	kern_pa_end += round_page(MSGBUFSIZE);
+
+	/*
 	 * Walk all BTINFO_MEMORY entries.
 	 * The bootloader creates one entry per RAM region.
 	 */
@@ -212,6 +239,14 @@ penumbra_physmem_init(void)
 		printf("  RAM: 0x%x - 0x%x (%u KB)\n",
 		    (unsigned)seg_start, (unsigned)seg_end,
 		    (unsigned)(bm->size / 1024));
+
+		/*
+		 * physmem is the count of all physically present pages —
+		 * kernel image and msgbuf included.  Accumulated before
+		 * the kern_pa_end exclusion so it reflects installed RAM,
+		 * not pages handed to UVM.
+		 */
+		physmem += atop(round_page(bm->size));
 
 		/*
 		 * Exclude the kernel's physical footprint (text +
@@ -342,6 +377,18 @@ penumbra_init(void)
 		printf("console: UART PA 0x%x -> VA 0x%x\n",
 		    (unsigned)uart_pa, (unsigned)(vaddr_t)uart_base);
 	}
+
+	/*
+	 * Map the kernel message buffer into kernel VA and hand it to
+	 * the MI msgbuf layer.  From this point on, printf output is
+	 * captured into the ring buffer so dmesg(8) can read it back.
+	 *
+	 * Earlier printf output (before this point) goes only to the
+	 * console — it is not retained.  We do this as early as the
+	 * scratch window is free (after pmap_map_device remapped UART).
+	 */
+	msgbuf_vaddr = pmap_map_kernel(msgbuf_paddr, MSGBUFSIZE);
+	initmsgbuf((void *)msgbuf_vaddr, MSGBUFSIZE);
 
 	/*
 	 * Allocate lwp0's uarea.  Must happen after pmap so

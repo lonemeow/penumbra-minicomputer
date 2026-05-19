@@ -210,6 +210,7 @@ void		pmap_virtual_space(vaddr_t *, vaddr_t *);
 vaddr_t		pmap_steal_memory(vsize_t, vaddr_t *, vaddr_t *);
 paddr_t		pmap_steal_page(void);
 vaddr_t		pmap_map_device(paddr_t, vsize_t);
+vaddr_t		pmap_map_kernel(paddr_t, vsize_t);
 
 /* TLB operations — implemented in locore.S */
 void		tlb_invalidate_all(void);

@@ -75,6 +75,7 @@ void
 cpu_startup(void)
 {
 	char mach_name[17];
+	char pbuf[9];	/* "99999 MB" */
 	uint32_t w0, w1, w2, w3;
 
 	printf("%s%s", copyright, version);
@@ -99,6 +100,12 @@ cpu_startup(void)
 		cpu_setmodel("Penumbra (unknown)");
 
 	printf("%s\n", cpu_getmodel());
+
+	format_bytes(pbuf, sizeof(pbuf), ctob(physmem));
+	printf("total memory = %s\n", pbuf);
+
+	format_bytes(pbuf, sizeof(pbuf), ptoa(uvm_availmem(false)));
+	printf("avail memory = %s\n", pbuf);
 
 #if NKSYMS || defined(DDB) || defined(MODULAR)
 	{

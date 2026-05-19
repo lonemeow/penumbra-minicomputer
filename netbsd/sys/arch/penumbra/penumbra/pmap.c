@@ -435,6 +435,29 @@ pmap_map_device(paddr_t pa, vsize_t size)
 }
 
 /*
+ * pmap_map_kernel: map cached physical pages into kernel VA space.
+ *
+ * Sibling of pmap_map_device, but maps the region cached (no
+ * PMAP_NOCACHE flag).  Used for early-boot allocations of regular
+ * RAM (msgbuf, etc.) that need a fixed kernel VA before UVM is up.
+ */
+vaddr_t
+pmap_map_kernel(paddr_t pa, vsize_t size)
+{
+	vaddr_t va = virtual_avail;
+
+	size = round_page(size);
+	pa = trunc_page(pa);
+	virtual_avail += size;
+
+	for (vsize_t off = 0; off < size; off += PAGE_SIZE)
+		pmap_kenter_pa(va + off, pa + off,
+		    VM_PROT_READ | VM_PROT_WRITE, 0);
+
+	return va;
+}
+
+/*
  * pmap_virtual_space: report available kernel virtual address range.
  * Called by UVM during initialization.
  */
