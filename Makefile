@@ -524,10 +524,10 @@ fpga: $(BUILD_DIR)/$(TOP).bit
 # ── SDRAM phase sweep knob ──────────────────────────────────────
 # Used by ulx3s_top to set CLKOS2 phase shift (the SDRAM-clock pin
 # clock).  Valid values: 0, 45, 90, 135, 180, 225, 270, 315.
-# Default 270° is the step-4 baseline; the bring-up sweep iterates
+# Default 180° is the step-4 baseline; the bring-up sweep iterates
 # all 8 to find the centred working window.  See
 # doc/internals/sdram-controller.md § Step-5 phase sweep.
-PHASE_DEG ?= 270
+PHASE_DEG ?= 180
 
 # Stamp file invalidates downstream artefacts when PHASE_DEG changes.
 # We bake the value into the filename, so switching phase makes the
