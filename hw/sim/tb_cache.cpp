@@ -41,19 +41,21 @@ static void reset(Vcache_test* d) {
 }
 
 // Write a word directly to backing memory (debug port).
-// Must hold write enable long enough for simple_mem's write latency,
-// then drain any stale access state before returning.
+// Per simple_mem's master contract, hold i_dbg_mem_we asserted until
+// busy drops (the write-commit cycle), then release on the cycle
+// where in_access is back to zero.
 static void mem_write(Vcache_test* d, uint32_t addr, uint32_t data) {
     d->i_dbg_mem_addr = addr;
     d->i_dbg_mem_wdata = data;
     d->i_dbg_mem_we = 1;
-    for (int i = 0; i < 10; i++)
+    d->eval();
+    int safety = 0;
+    while (d->o_dbg_mem_busy && safety++ < 100) {
         tick(d);
+        d->eval();
+    }
     d->i_dbg_mem_we = 0;
-    // Drain stale access in simple_mem so the next cache operation
-    // starts cleanly (in_access=0, busy_count=0)
-    for (int i = 0; i < 10; i++)
-        tick(d);
+    tick(d);  // let simple_mem return to idle
 }
 
 // Write a sysreg

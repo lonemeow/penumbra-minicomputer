@@ -42,7 +42,8 @@ module cache_test
     input  logic [31:0] i_dbg_mem_addr,
     input  logic [31:0] i_dbg_mem_wdata,
     input  logic        i_dbg_mem_we,
-    output logic [31:0] o_dbg_mem_rdata
+    output logic [31:0] o_dbg_mem_rdata,
+    output logic        o_dbg_mem_busy
 );
 
     // ── Cache ↔ memory bus ─────────────────────────────────
@@ -118,6 +119,10 @@ module cache_test
 
     // Debug read: always available (simple_mem reads every cycle)
     assign o_dbg_mem_rdata = mem_rdata;
+    // Expose simple_mem's busy so the C++ helper can hold i_dbg_mem_we
+    // until the write commits (per the master-holds-strobes contract
+    // enforced by simple_mem's assertion).
+    assign o_dbg_mem_busy  = mem_busy;
 
 endmodule
 

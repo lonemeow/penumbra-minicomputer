@@ -76,7 +76,8 @@ module cache_vipt_test
     input  logic [31:0] i_dbg_mem_addr,
     input  logic [31:0] i_dbg_mem_wdata,
     input  logic        i_dbg_mem_we,
-    output logic [31:0] o_dbg_mem_rdata
+    output logic [31:0] o_dbg_mem_rdata,
+    output logic        o_dbg_mem_busy
 );
 
     // ── Cache → arbiter (D-port) ───────────────────────────
@@ -206,6 +207,10 @@ module cache_vipt_test
     );
 
     assign o_dbg_mem_rdata = arb_mem_rdata;
+    // Expose simple_mem's busy so the C++ helper can hold i_dbg_mem_we
+    // until the write commits (per the master-holds-strobes contract
+    // enforced by simple_mem's assertion).
+    assign o_dbg_mem_busy  = arb_mem_busy;
 
 endmodule
 

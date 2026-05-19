@@ -56,15 +56,21 @@ static void reset(Vcache_vipt_test* d) {
     d->i_rst = 0;
 }
 
+// Per simple_mem's master contract, hold i_dbg_mem_we asserted until
+// busy drops (the write-commit cycle), then release on the cycle
+// where in_access is back to zero.
 static void mem_write(Vcache_vipt_test* d, uint32_t addr, uint32_t data) {
     d->i_dbg_mem_addr = addr;
     d->i_dbg_mem_wdata = data;
     d->i_dbg_mem_we = 1;
-    for (int i = 0; i < 10; i++)
+    d->eval();
+    int safety = 0;
+    while (d->o_dbg_mem_busy && safety++ < 100) {
         tick(d);
+        d->eval();
+    }
     d->i_dbg_mem_we = 0;
-    for (int i = 0; i < 10; i++)
-        tick(d);
+    tick(d);  // let simple_mem return to idle
 }
 
 static void sys_write(Vcache_vipt_test* d, uint32_t reg, uint32_t data) {
