@@ -301,7 +301,10 @@ _start_bias:
 
 	la	r1, _real_miss_handler
 	add	r1, r6			/* physical source address */
-	lli	r2, #0x80		/* destination in vector page */
+	lli	r2, #0x80		/* destination in vector page —
+					 * MUST be a multiple of the L1 cache
+					 * line size (16) to preserve the
+					 * handler's .balign 16 at runtime */
 	la	r3, _real_handlers_end
 	add	r3, r6			/* physical end of handler code */
 .Lcopy_handler:
@@ -564,7 +567,12 @@ _start_bias:
  * All branches and scratch accesses are PC-relative — works
  * correctly regardless of where the code is mapped.
  * ═══════════════════════════════════════════════════════════════ */
-	.balign	4
+	/* Align to L1 cache line (16 bytes) so the cold-path I-cache
+	 * fill on first miss after a quiet period covers the handler's
+	 * register-park prologue in a single line refill.  The runtime
+	 * copy destination (0x80 within the vector page) also must be
+	 * a multiple of the line size — see the copy at step 7. */
+	.balign	16
 	.globl	_real_miss_handler
 	.globl	_real_handlers_end
 _real_miss_handler:
