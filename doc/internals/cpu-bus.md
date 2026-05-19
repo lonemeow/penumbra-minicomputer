@@ -182,8 +182,8 @@ through `i_sys_rdata`.
 |---|---|---|---|
 | 0 | `SYSDEV_MMU` | `mmu` | TLB, fault regs, MMUCR |
 | 1 | `SYSDEV_CPU` | `cpuid` + `cpu_perfctr` | Identity (regs 0–4) and perfctrs (regs 5+); merged by reg-range |
-| 2 | `SYSDEV_DCACHE` | `cache` (D-side) | Unified cache reg map: INFO, CTRL, INVAL_ALL, INVAL_LINE, FLUSH_*, STATUS |
-| 3 | `SYSDEV_ICACHE` | `cache` (I-side) | Same layout as DCACHE |
+| 2 | `SYSDEV_L1_DCACHE` | `cache` (D-side) | Unified cache reg map: INFO, CTRL, INVAL_ALL, INVAL_LINE, FLUSH_*, STATUS |
+| 3 | `SYSDEV_L1_ICACHE` | `cache` (I-side) | Same layout as L1_DCACHE |
 
 **Contract:**
 

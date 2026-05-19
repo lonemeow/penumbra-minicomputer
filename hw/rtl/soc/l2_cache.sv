@@ -1,11 +1,10 @@
 // Penumbra L2 unified cache — phase 1
 //
-// Sits between cpu_core.o_mem_* and the shared system bus when
-// HAS_L2=1 (the machine_sim / ulx3s_top generate selector).  When
-// CTRL.enable=0 (default at reset) the module is a transparent
-// pass-through; software must explicitly enable L2 after the
-// caches and MMU are configured, matching how the existing L1
-// caches are brought up.
+// Sits between cpu_core.o_mem_* and the shared system bus, always
+// instantiated by machine_sim and ulx3s_top.  When CTRL.enable=0
+// (default at reset) the module is a transparent pass-through;
+// software must explicitly enable L2 after the caches and MMU are
+// configured, matching how the existing L1 caches are brought up.
 //
 // Geometry: 64 KiB, 4-way set-associative, 16-byte lines, PIPT
 // (addresses are already physical past the MMU + L1).  Hits go
@@ -27,14 +26,15 @@
 // per access vs LRU's 6 pairwise relations.
 //
 // Uncacheable accesses (i_cacheable=0) skip the tag/data lookup
-// entirely and are wired straight to the memory bus — same
-// timing as the HAS_L2=0 build.  This is the contract the doc
+// entirely and are wired straight to the memory bus — same timing
+// as the disabled/pass-through path.  This is the contract the doc
 // promises: "L2 introduces no extra cycle vs. the no-L2 build"
 // for pass-through traffic.
 //
 // Sysreg device 9 (SYSDEV_L2_CACHE) — same layout as L1_DCACHE/L1_ICACHE:
 //   reg 0 INFO       (R)  unified cache INFO encoding (see penumbra_pkg.sv);
-//                          INFO=0 means "no L2 present" (HAS_L2=0)
+//                          INFO=0 means "no L2 present" (only a
+//                          future variant that drops this instance)
 //   reg 1 CTRL       (RW) {31'b0, enable}; reset value 0 (disabled)
 //   reg 2 INVAL_ALL  (W)  write triggers multi-cycle valid-bit walk
 //   reg 6 STATUS     (R)  {31'b0, busy}; busy=1 while INVAL_ALL walks
@@ -307,10 +307,10 @@ module l2_cache
     //
     // Breaks the combinational chain `tag_out → way_hit → hit →
     // o_busy → arbiter → cache_vipt's fill_state_logic →
-    // valid[i].LSR` that becomes the critical path when HAS_L2=1
-    // is enabled.  Per doc/internals/l2-cache.md the recommended
-    // fix at this point is HIT_LATENCY=3 (one more pipeline
-    // stage on the output side).
+    // valid[i].LSR` that became the critical path once the L2 was
+    // wired in.  Per doc/internals/l2-cache.md the recommended fix
+    // at this point is HIT_LATENCY=3 (one more pipeline stage on
+    // the output side).
     //
     // We register the *meaning* of stage-1's result (hit,
     // hit_data, plus the s1_* qualifiers needed to mux o_busy/

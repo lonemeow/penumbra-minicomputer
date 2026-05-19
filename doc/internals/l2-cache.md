@@ -13,11 +13,11 @@ contract the L2's front-side and back-side ports both honor, in the
 
 | Phase | Description | Status |
 |---|---|---|
-| 0 | Bus shape (`o_mem_cacheable`, `HAS_L2` gate, `l2_passthrough` stub) | **DONE** |
+| 0 | Bus shape (`o_mem_cacheable`, build-time gate, `l2_passthrough` stub) | **DONE** (gate later removed) |
 | 1 | Real L2 cache: read+write-invalidate-on-hit, INVAL_ALL | **DONE** |
 | 2 | Write-back, write-allocate, dirty bit, FLUSH ops | pending |
 | 3 | 1-deep writeback buffer (overlapped fill+writeback) | pending |
-| 4 | Perfctrs (hits/misses/writebacks/evictions on SYSDEV_L2 regs 7+) | pending |
+| 4 | Perfctrs (hits/misses/writebacks/evictions on SYSDEV_L2_CACHE regs 7+) | pending |
 
 What's wired up today (post phase 1):
 
@@ -27,30 +27,31 @@ What's wired up today (post phase 1):
   write-through-write-no-allocate — see the "Phasing" section
   below for the rationale.  Disabled at reset; software (kernel
   or bare-metal harness, not the ROM) brings it up via `WRSYS
-  SYSDEV_L2 CTRL=1`.
+  SYSDEV_L2_CACHE CTRL=1`.
 - `hw/rtl/sim/machine_sim.sv` and `hw/rtl/fpga/ulx3s_top.sv`
-  gate L2 instantiation on the `HAS_L2` parameter.  Default
-  `HAS_L2=0` keeps the FPGA bitstream byte-identical to the
-  pre-L2 build.  `HAS_L2=1` instantiates `l2_cache` and routes
-  sysreg device 9 to it.
+  always instantiate `l2_cache` directly between the CPU's memory
+  port and the shared bus.  Sysreg device 9 routes to it
+  unconditionally.  Software opt-out is preserved at runtime via
+  `CTRL.enable=0` (the reset state) — while disabled the cache is
+  a combinational pass-through, so `INFO != 0` + `CTRL.enable=0`
+  is functionally indistinguishable from a no-L2 build.
 - `hw/sim/tb_l2_cache.cpp` — standalone Verilator testbench
-  (20 cases) for the L2 contract: INFO presence + new unified-
-  layout decode (PIPT/WT/WnA), pass-through-when-disabled,
-  miss→hit, write-invalidate, INVAL_ALL walker, uncached
-  pass-through.
+  (20 cases) for the L2 contract: INFO presence + unified-layout
+  decode (PIPT/WT/WnA), pass-through-when-disabled, miss→hit,
+  write-invalidate, INVAL_ALL walker, uncached pass-through.
 - Boot ROM (`hw/rom/boot_rom.c`) prints `L2 cache: 64kB
-  (1024 x 16B, 4-way) unified` in the banner when `HAS_L2=1`,
-  `L2 cache: absent` otherwise.  The ROM **does not** enable
-  the L2 (or any cache, or the MMU) — that's the OS's job, by
-  long-standing project convention.
+  (1024 x 16B, 4-way) unified` in the banner.  The ROM **does
+  not** enable the L2 (or any cache, or the MMU) — that's the
+  OS's job, by long-standing project convention.
 - Benchmark harness (`benchmark/common/crt0.S`) enables the L2
-  if present (`RDSYS SYSDEV_L2 INFO != 0`).
+  if present (`RDSYS SYSDEV_L2_CACHE INFO != 0`).  The probe is
+  preserved so this same crt0 still handles a hypothetical
+  future L2-less bitstream variant without code change.
 
 Verification gates that have to stay green on every L2 commit:
-`make sim MOD=l2_cache` (18/18), `make test` (HAS_L2=0, 55/55),
+`make sim MOD=l2_cache` (18/18), `make test` (55/55),
 `make test-modules` (35/35), `make test-iss` (55/55), `make
-fpga-lint TOP=ulx3s_top` (zero warnings), and a manual HAS_L2=1
-cross-section via `verilator -GHAS_L2=1`.  Hardware-side
+fpga-lint TOP=ulx3s_top` (zero warnings).  Hardware-side
 benchmark numbers (`feedback_bench_on_hardware` in memory) are
 what tell us whether L2 is actually paying off.
 
@@ -68,8 +69,11 @@ what tell us whether L2 is actually paying off.
    kernel/user code interleaving inflate working sets and conflict
    miss rates.  The L2 must be sized and associated to absorb this,
    not just hold one userland's hot loop.
-4. **Stay optional and parameterised.**  The L2 must be removable for
-   smaller FPGA targets and tunable for benchmark sweeps.
+4. **Stay tunable.**  Geometry parameters (size, ways, line bytes) live
+   on `l2_cache` so smaller FPGA targets can shrink the BRAM footprint
+   and benchmark sweeps can vary associativity.  Runtime opt-out is
+   the reset state (`CTRL.enable=0`), so any build can boot as
+   "no-L2" without recompilation.
 
 Explicitly **not goals** (see also "Future Work" below):
 
@@ -260,12 +264,13 @@ naïve serial implementation hits perf targets.
 
 ## Sysreg Device
 
-L2 uses **`SYSDEV_L2 = 9`** (next free after MACH=8) and exposes the
+L2 uses **`SYSDEV_L2_CACHE = 9`** (next free after MACH=8) and exposes the
 **unified cache device register map** documented in
-[`sysregs.md`](../system/sysregs.md#cache-devices-2--dcache-3--icache-9--l2) —
-the same layout as `DCACHE` and `ICACHE`.  Software discovers presence
-by reading `INFO`; `INFO == 0` means no L2 in this build (e.g.
-`HAS_L2=0`).  The kernel can reuse one cache-ops driver across L1 and
+[`sysregs.md`](../system/sysregs.md#cache-devices-2--l1_dcache-3--l1_icache-9--l2_cache) —
+the same layout as `L1_DCACHE` and `L1_ICACHE`.  Software discovers
+presence by reading `INFO`; `INFO == 0` means no L2 in this build
+(e.g. a hypothetical future variant that drops the `l2_cache`
+instance).  The kernel can reuse one cache-ops driver across L1 and
 L2 because every register at every offset means the same thing.
 
 Phase-1 specifics (see `INFO` decode):
@@ -303,12 +308,12 @@ genuinely cannot complete in one cycle, expose status separately").
 
 ## Cache Maintenance Operations
 
-Software-managed coherence flows from `WRSYS SYSDEV_L2, *`.  Three
+Software-managed coherence flows from `WRSYS SYSDEV_L2_CACHE, *`.  Three
 canonical patterns:
 
 **DMA-out (CPU prepares a buffer, device reads RAM):**
 ```
-for line in buffer: WRSYS SYSDEV_L2, FLUSH_LINE, line_addr
+for line in buffer: WRSYS SYSDEV_L2_CACHE, FLUSH_LINE, line_addr
 WRSYS device, START
 ```
 
@@ -316,47 +321,53 @@ WRSYS device, START
 ```
 WRSYS device, START
 … wait completion …
-for line in buffer: WRSYS SYSDEV_L2, INVAL_LINE, line_addr
+for line in buffer: WRSYS SYSDEV_L2_CACHE, INVAL_LINE, line_addr
 read buffer
 ```
 
 **I-cache coherence after RAM-loaded code:**
 ```
-for line in code: WRSYS SYSDEV_L2, FLUSH_LINE, line_addr
-                  WRSYS SYSDEV_DCACHE, INVAL  (already exists)
-                  WRSYS SYSDEV_ICACHE, INVAL  (already exists)
+for line in code: WRSYS SYSDEV_L2_CACHE, FLUSH_LINE, line_addr
+                  WRSYS SYSDEV_L1_DCACHE, INVAL  (already exists)
+                  WRSYS SYSDEV_L1_ICACHE, INVAL  (already exists)
 ```
 
 NetBSD's `pmap` and bus-DMA layer already invoke architecture-
 specific cache hooks; the L2 ops slot in alongside the existing L1
 hooks.
 
-## Optional Bypass (`HAS_L2 = 0`)
+## Runtime Bypass
 
-Top modules (`machine_sim`, `ulx3s_top`) gate L2 instantiation:
+The L2 is always instantiated in the current bitstream, but software
+can leave it inert by never setting `CTRL.enable`.  This is the reset
+state — `cpu_core` boots with the L2 acting as a combinational
+pass-through; CPU cycles look identical to a no-L2 build until the
+kernel (or bare-metal harness) explicitly does:
 
-```systemverilog
-generate if (HAS_L2) begin : g_l2
-    l2_cache #(.CACHE_BYTES(L2_BYTES), .NUM_WAYS(L2_WAYS)) u_l2 (...);
-end else begin : g_no_l2
-    /* straight wires from cpu_core.o_mem_* to bus_devsel */
-end endgenerate
+```
+WRSYS r1, SYSDEV_L2_CACHE, CTRL  ; r1.bit[0] = 1
 ```
 
-When `HAS_L2=0`:
+Why this works:
 
-- The L2 sysreg device is not instantiated; the system-level sysreg
-  fan-in returns `0` for ID 9.  Software's `RDSYS SYSDEV_L2, INFO`
-  reads `0` → "absent" → maintenance ops are skipped.
-- The `o_mem_cacheable` bit emitted by `cpu_core` is dropped by the
-  no-L2 wiring.  Downstream devices ignore it (they always have).
-- No kernel changes are required to support both builds.
+- The disabled path mirrors `i_mem_busy` straight through and feeds
+  back-side reads/writes directly onto the shared bus, so latency and
+  bus visibility match the pre-L2 wiring exactly.
+- `o_mem_cacheable` flows into `l2_cache` regardless of enable state;
+  when disabled it's just ignored.
+- `RDSYS SYSDEV_L2_CACHE, INFO` returns the geometry encoding even when
+  disabled — software discovers "L2 is present, currently bypassed" and
+  decides whether to enable.
 
-To make this drop-in clean we should land **`hw/rtl/sim/l2_passthrough.sv`**
-in phase 0 (a literal wire-through with the `i_cacheable` input
-ignored).  This validates the bus shape and exercises the
-`HAS_L2=0` code path *before* the real L2 storage exists, so
-later regressions can be A/B'd against a known-good identity.
+A future FPGA target that needs to reclaim the ~half-BRAM the L2
+occupies can drop the `l2_cache` instance entirely and tie the
+sysreg fan-in for ID 9 to zero; software's `INFO != 0` probe in
+crt0.S / locore.S handles that case unchanged.
+
+**History note.**  An earlier `HAS_L2` build-time parameter and a
+phase-0 `l2_passthrough.sv` stub used to gate this — that scaffolding
+was retired once phase 1 shipped because `CTRL.enable=0` covers the
+same use case at runtime with no Makefile plumbing or stamp files.
 
 ## 74xx Discrete Feasibility
 
@@ -404,9 +415,10 @@ landing in the same commit.  Plan:
    - Writeback-before-fill on dirty eviction (no out-of-order bus
      accesses that would drop the dirty data).
 3. **Integration tests** via `machine_sim`:
-   - Existing 30-program test suite passes unchanged with `HAS_L2=1`
-     and `HAS_L2=0`.
-   - Add `test_l2_*` programs exercising INVAL/FLUSH from C.
+   - Existing program test suite passes unchanged with L2 disabled
+     (reset state, exercised by every test that doesn't touch
+     `SYSDEV_L2_CACHE`) and with L2 enabled (the `test_l2_*` programs).
+   - `test_l2_*` programs exercise INVAL/FLUSH from C.
 4. **Performance regressions:**
    - Dhrystone before/after, expect CPI to drop materially from the
      current ~7.10 (write-through traffic absorbed).
@@ -416,11 +428,14 @@ landing in the same commit.  Plan:
 
 Land in commit-sized increments per `feedback_incremental_commits`:
 
-1. **Phase 0 — bus shape.** *(DONE)*  Added `o_mem_cacheable`
-   through cache → arbiter → cpu_core → top, landed
-   `l2_passthrough.sv` and wired via `HAS_L2`.  Default `HAS_L2=0`
-   kept the build byte-identical to pre-L2.  HAS_L2=1 build
-   verified clean via `-GHAS_L2=1` cross-section.
+1. **Phase 0 — bus shape.** *(DONE; build-time gate later retired)*
+   Added `o_mem_cacheable` through cache → arbiter → cpu_core → top,
+   landed `l2_passthrough.sv` and wired via a `HAS_L2` build
+   parameter that defaulted to off so pre-L2 bitstreams stayed
+   byte-identical.  Once phase 1 shipped, `HAS_L2` and
+   `l2_passthrough.sv` were both removed — the cache is now
+   always instantiated and `CTRL.enable=0` provides the same
+   pass-through behaviour at runtime.
 
 2. **Phase 1 — real read cache.** *(DONE)*  Implemented in
    `hw/rtl/soc/l2_cache.sv` (64 KiB, 4-way, tree-PLRU, 2-cycle
@@ -452,7 +467,7 @@ Land in commit-sized increments per `feedback_incremental_commits`:
    meets perf targets.
 
 5. **Phase 4 — perfctrs.** *(pending)*  Hits, misses, writebacks,
-   evictions on `SYSDEV_L2` regs 7+.  Lets membench compute hit
+   evictions on `SYSDEV_L2_CACHE` regs 7+.  Lets membench compute hit
    rate directly.  Most useful immediately after phase 2 lands,
    to confirm the write-back actually absorbs the traffic.
 
@@ -496,4 +511,4 @@ Each phase is an independent commit with its own test addition.
   axes compose multiplicatively.
 - [`mmu.md`](../system/mmu.md) — origin of the `cacheable` bit (PTE.C).
 - [`sysregs.md`](../system/sysregs.md) — programmer-visible device map
-  the new `SYSDEV_L2` will be added to.
+  the new `SYSDEV_L2_CACHE` will be added to.

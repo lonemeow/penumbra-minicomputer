@@ -23,13 +23,13 @@ registers.
 |:----:|---------|----------------------------------------------------------|
 | 0    | MMU     | TLB management, fault registers, translation control     |
 | 1    | CPU     | CPU identity (read-only); home for CPU performance counters |
-| 2    | DCACHE  | L1 D-cache control, geometry info, invalidation          |
-| 3    | ICACHE  | L1 I-cache control, geometry info, invalidation          |
+| 2    | L1_DCACHE | L1 D-cache control, geometry info, invalidation        |
+| 3    | L1_ICACHE | L1 I-cache control, geometry info, invalidation        |
 | 4    | BUS     | Bus controller (autoconfig, bus reset)                   |
 | 5–6  | —       | Reserved                                                 |
 | 7    | TIMER   | Programmable interval timer                              |
 | 8    | MACH    | Machine/board identity (read-only): name, features, CPU clock |
-| 9    | L2      | L2 unified cache (same register layout as DCACHE/ICACHE) |
+| 9    | L2_CACHE | L2 unified cache (same register layout as L1_*CACHE)    |
 | 10–14| —       | Reserved (future cache levels, DMA, etc.)                |
 | 15   | DEBUG   | ISS-only debug aids (watchpoints); unmapped on hardware  |
 
@@ -313,7 +313,7 @@ RDSYS R1, #MACH, #CPU_FREQ    ; R1 = CPU clock frequency in Hz
 
 ---
 
-## Cache devices (2 = DCACHE, 3 = ICACHE, 9 = L2)
+## Cache devices (2 = L1_DCACHE, 3 = L1_ICACHE, 9 = L2_CACHE)
 
 All cache devices — L1 D-cache, L1 I-cache, L2, and any future L3 —
 expose the **same register layout**. Software detects presence by
@@ -323,8 +323,8 @@ the kernel run one discovery loop across cache slots without per-level
 code paths.
 
 "Unified vs split" is not encoded explicitly; a unified L1 simply
-leaves one of `DCACHE`/`ICACHE` reporting `INFO = 0`. L2+ are always
-unified in this architecture.
+leaves one of `L1_DCACHE`/`L1_ICACHE` reporting `INFO = 0`. L2+ are
+always unified in this architecture.
 
 **All caches are disabled at reset** — the kernel enables them
 after setting up TLB mappings.
@@ -366,11 +366,11 @@ each at least 1.
 
 ```asm
 ; Discover D-cache line size at boot
-RDSYS R1, #2, #0              ; DCACHE INFO
+RDSYS R1, #2, #0              ; L1_DCACHE INFO
 ANDI  R1, R1, #0x3F           ; LINE_WORDS
 
 ; Probe L2 presence
-RDSYS R2, #9, #0              ; L2 INFO  (0 ⇒ no L2)
+RDSYS R2, #9, #0              ; L2_CACHE INFO  (0 ⇒ no L2)
 ```
 
 ### CTRL (reg 1)
@@ -383,7 +383,7 @@ RDSYS R2, #9, #0              ; L2 INFO  (0 ⇒ no L2)
 ```asm
 ; Enable D-cache after TLB setup
 LLI   R1, #1
-WRSYS R1, #2, #1              ; DCACHE CTRL.ENABLE = 1
+WRSYS R1, #2, #1              ; L1_DCACHE CTRL.ENABLE = 1
 ```
 
 ### INVAL_ALL (reg 2) / INVAL_LINE (reg 3)
@@ -395,10 +395,10 @@ if not.
 
 ```asm
 ; Invalidate I-cache after loading new code
-WRSYS R0, #3, #2              ; ICACHE INVAL_ALL
+WRSYS R0, #3, #2              ; L1_ICACHE INVAL_ALL
 
 ; Drop the L2 line covering one buffer page
-WRSYS R1, #9, #3              ; L2 INVAL_LINE — R1 = PA
+WRSYS R1, #9, #3              ; L2_CACHE INVAL_LINE — R1 = PA
 ```
 
 Multi-cycle ops (e.g. L2's set walker for `INVAL_ALL`) signal

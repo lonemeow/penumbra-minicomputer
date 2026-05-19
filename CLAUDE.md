@@ -343,18 +343,20 @@ Eight exception sources (IRQ, MMU faults, alignment, bus fault,
 BREAK, SYSCALL, privilege, illegal) are fully wired with
 MIPS/68k-style vector dispatch.
 
-**L2 cache phase 1 implemented, opt-in via `HAS_L2=1`.**
+**L2 cache phase 1 implemented, always instantiated.**
 - 64 KiB unified, 4-way set-associative, 16-byte lines, tree-PLRU,
   2-cycle hit pipeline.  Write policy is write-invalidate-on-hit
   (a step short of the WT-WNA originally planned — chosen for
   simpler RTL; write-back is phase 2).
-- Disabled at reset; software brings it up via `WRSYS SYSDEV_L2
+- Disabled at reset; software brings it up via `WRSYS SYSDEV_L2_CACHE
   CTRL=1`.  The boot ROM intentionally never enables it (or any
   cache or the MMU) — same convention as L1.  Benchmark harness
-  (`benchmark/common/crt0.S`) detects via `INFO != 0` and enables.
-- Default `HAS_L2=0` keeps the FPGA bitstream byte-identical to
-  pre-L2 builds.  `HAS_L2=1` is opt-in via a build-time parameter
-  override.
+  (`benchmark/common/crt0.S`) detects via `INFO != 0` and enables;
+  NetBSD's locore.S does the same after MMU bring-up.
+- Always present in `machine_sim` and `ulx3s_top`.  Runtime opt-out
+  is the reset state (`CTRL.enable=0`), in which case the cache is
+  a combinational pass-through.  An earlier `HAS_L2` build-time
+  parameter was retired once phase 1 shipped.
 - Backed by the recent arbiter rework (`req_accepted` handshake
   + back-to-back BUSY→BUSY transitions) which the L2 path
   inherits and exercises.

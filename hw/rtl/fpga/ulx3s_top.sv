@@ -28,15 +28,7 @@
 `define SDRAM_PHASE_DEG 270
 `endif
 
-module ulx3s_top #(
-    // HAS_L2: insert l2_cache (phase 1: 64 KiB 4-way unified
-    // cache, write-invalidate-on-hit) between cpu_core's memory
-    // port and the shared system bus.  Default 0 keeps pre-L2
-    // wiring; flip to 1 to bring the cache into the build.  L2
-    // boots disabled (CTRL.enable=0), so HAS_L2=1 with no
-    // software bring-up is functionally equivalent to HAS_L2=0.
-    parameter bit HAS_L2 = 1'b0
-) (
+module ulx3s_top (
     input  logic       clk_25mhz,
     output logic [7:0] led,
     // Only btn[1] (FIRE1 = manual reset) is used; other bits are
@@ -250,21 +242,15 @@ module ulx3s_top #(
     // ══════════════════════════════════════════════════════════
     // CPU ↔ memory bus
     //
-    // Two segments: cpu_mem_* (cpu_core → L2 or wire) and mem_*
-    // (the shared system bus that all devices decode).  With
-    // HAS_L2=0 (default) they are directly wired; with HAS_L2=1
-    // they go through l2_passthrough.
+    // Two segments: cpu_mem_* (cpu_core → L2) and mem_* (the
+    // shared system bus that all devices decode).  The L2 cache
+    // is always instantiated; software opts out by leaving
+    // CTRL.enable=0 (the reset state).
     // ══════════════════════════════════════════════════════════
     logic [31:0] cpu_mem_addr, cpu_mem_wdata;
     logic [3:0]  cpu_mem_byte_en;
     logic        cpu_mem_we, cpu_mem_re;
-    // cpu_mem_cacheable is consumed by l2_passthrough when HAS_L2=1
-    // and dropped on the floor when HAS_L2=0 (current devices don't
-    // care).  Suppress the UNUSEDSIGNAL warning for the default
-    // HAS_L2=0 build path.
-    /* verilator lint_off UNUSEDSIGNAL */
     logic        cpu_mem_cacheable;
-    /* verilator lint_on UNUSEDSIGNAL */
     logic [31:0] cpu_mem_rdata;
     logic        cpu_mem_busy;
 
@@ -343,51 +329,38 @@ module ulx3s_top #(
     );
 
     // ══════════════════════════════════════════════════════════
-    // L2 layer (HAS_L2 generate)
+    // L2 cache — always instantiated
     //
-    // Phase 1: real l2_cache (64 KiB, 4-way, tree-PLRU, 2-cycle
-    // hit pipeline, write-invalidate-on-hit).  Disabled at reset;
-    // software brings it up via WRSYS SYSDEV_L2 CTRL=1.  HAS_L2=0
-    // (default) keeps pre-L2 wiring byte-identical.
+    // 64 KiB, 4-way, tree-PLRU, 2-cycle hit pipeline,
+    // write-invalidate-on-hit.  Disabled at reset; software
+    // brings it up via WRSYS SYSDEV_L2_CACHE CTRL=1.  While
+    // disabled, every access is a combinational pass-through.
     // ══════════════════════════════════════════════════════════
     logic [31:0] l2_rdata;
 
-    generate
-        if (HAS_L2) begin : g_l2
-            l2_cache u_l2 (
-                .i_clk          (clk),
-                .i_rst          (rst),
-                .i_addr         (cpu_mem_addr),
-                .i_wdata        (cpu_mem_wdata),
-                .i_byte_en      (cpu_mem_byte_en),
-                .i_we           (cpu_mem_we),
-                .i_re           (cpu_mem_re),
-                .i_cacheable    (cpu_mem_cacheable),
-                .o_rdata        (cpu_mem_rdata),
-                .o_busy         (cpu_mem_busy),
-                .o_mem_addr     (mem_addr),
-                .o_mem_wdata    (mem_wdata),
-                .o_mem_byte_en  (mem_byte_en),
-                .o_mem_we       (mem_we),
-                .o_mem_re       (mem_re),
-                .i_mem_rdata    (mem_rdata),
-                .i_mem_busy     (mem_busy),
-                .i_sys_reg      (sys_reg),
-                .i_sys_wdata    (sys_wdata),
-                .i_sys_we       (sys_we & sys_cycle & (sys_dev == SYSDEV_L2_CACHE)),
-                .o_sys_rdata    (l2_rdata)
-            );
-        end else begin : g_no_l2
-            assign mem_addr      = cpu_mem_addr;
-            assign mem_wdata     = cpu_mem_wdata;
-            assign mem_byte_en   = cpu_mem_byte_en;
-            assign mem_we        = cpu_mem_we;
-            assign mem_re        = cpu_mem_re;
-            assign cpu_mem_rdata = mem_rdata;
-            assign cpu_mem_busy  = mem_busy;
-            assign l2_rdata      = 32'b0;
-        end
-    endgenerate
+    l2_cache u_l2 (
+        .i_clk          (clk),
+        .i_rst          (rst),
+        .i_addr         (cpu_mem_addr),
+        .i_wdata        (cpu_mem_wdata),
+        .i_byte_en      (cpu_mem_byte_en),
+        .i_we           (cpu_mem_we),
+        .i_re           (cpu_mem_re),
+        .i_cacheable    (cpu_mem_cacheable),
+        .o_rdata        (cpu_mem_rdata),
+        .o_busy         (cpu_mem_busy),
+        .o_mem_addr     (mem_addr),
+        .o_mem_wdata    (mem_wdata),
+        .o_mem_byte_en  (mem_byte_en),
+        .o_mem_we       (mem_we),
+        .o_mem_re       (mem_re),
+        .i_mem_rdata    (mem_rdata),
+        .i_mem_busy     (mem_busy),
+        .i_sys_reg      (sys_reg),
+        .i_sys_wdata    (sys_wdata),
+        .i_sys_we       (sys_we & sys_cycle & (sys_dev == SYSDEV_L2_CACHE)),
+        .o_sys_rdata    (l2_rdata)
+    );
 
     // ══════════════════════════════════════════════════════════
     // Memory bus — device-side address decode (OR-combine)

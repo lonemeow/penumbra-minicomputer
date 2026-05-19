@@ -39,28 +39,6 @@ VERILATOR_FLAGS = --cc --exe --build -Wall --assert \
 BUILD_DIR   = build
 WAVE_DIR    = waves
 
-# HAS_L2 override for top modules that have the parameter
-# (machine_sim, ulx3s_top).  Per-module targets that don't accept
-# this parameter (tb_l2_cache itself, alu, etc.) must NOT use this
-# variable — verilator errors on unknown -G parameters.
-MACHINE_SIM_PARAMS = $(if $(filter 1,$(HAS_L2)),-GHAS_L2=1)
-
-# Stamp file invalidates Verilator sim builds when HAS_L2 changes.
-# Verilator hashes source files, not parameter overrides, so without
-# this a `make benchmark-rtl HAS_L2=1` after a HAS_L2=0 run silently
-# reuses the stale binary.  Same pattern as PHASE_STAMP / HAS_L2_STAMP
-# on the FPGA path.  BUILD_DIR must be defined above this line —
-# the rule target is variable-expanded at parse time.
-SIM_L2_STAMP = $(BUILD_DIR)/.sim_l2-$(HAS_L2)
-$(SIM_L2_STAMP):
-	@mkdir -p $(BUILD_DIR)
-	@if ls $(BUILD_DIR)/.sim_l2-* >/dev/null 2>&1; then \
-		echo "==> HAS_L2 changed; wiping cached Verilator sim builds"; \
-		rm -rf $(BUILD_DIR)/machine_sim*.verilator $(BUILD_DIR)/Vmachine_sim*; \
-	fi
-	@rm -f $(BUILD_DIR)/.sim_l2-*
-	@touch $@
-
 # ── Smoke test ─────────────────────────────────────────────────
 .PHONY: smoke
 smoke: $(BUILD_DIR)/Vsmoke_adder
@@ -100,15 +78,12 @@ OBJCOPY   = $(LLVM_PREFIX)/bin/llvm-objcopy
 BIN2HEX   = python3 sw/tools/bin2hex.py
 
 .PHONY: sim
-# Per-module HAS_L2 plumbing: only the top-level integration modules
-# accept the parameter; other targets would error on `-GHAS_L2=...`.
-SIM_MOD_PARAMS = $(if $(filter $(MOD),machine_sim ulx3s_top),$(MACHINE_SIM_PARAMS))
-sim: $(if $(filter $(MOD),machine_sim ulx3s_top),$(SIM_L2_STAMP))
+sim:
 ifndef MOD
 	$(error Set MOD=<module_name>, e.g. make sim MOD=alu)
 endif
 	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
-	$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) $(SIM_MOD_PARAMS) \
+	$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) \
 		--top-module $(MOD) \
 		--Mdir $(BUILD_DIR)/$(MOD).verilator \
 		-o ../V$(MOD) \
@@ -134,10 +109,10 @@ endif
 TEST_PROGS := $(sort $(basename $(notdir $(wildcard hw/sim/programs/test_*.s))))
 
 .PHONY: test
-test: $(SIM_L2_STAMP)
+test:
 	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
 	@# Build machine_sim + tb_cpu_prog once (reuse for all programs)
-	@$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) $(MACHINE_SIM_PARAMS) \
+	@$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) \
 		--top-module machine_sim \
 		--Mdir $(BUILD_DIR)/machine_sim.verilator \
 		-o ../Vmachine_sim \
@@ -254,20 +229,10 @@ test-modules:
 		exit 1; \
 	fi
 
-# ── Program tests with L2 enabled ─────────────────────────────
-# Same test discovery as `make test`, but builds machine_sim with
-# HAS_L2=1 so the test_l2_*.s programs (and any L2-aware test)
-# actually exercise the L2 path.  Tests written for L1-only behave
-# identically (the L2 stays disabled until software enables it,
-# which non-L2 tests don't do).
-.PHONY: test-l2
-test-l2:
-	@$(MAKE) test HAS_L2=1
-
-# ── Aggregate: program tests (L1 + L2) + module tests ─────────
+# ── Aggregate: program tests + module tests ───────────────────
 # Usage: make test-all
 .PHONY: test-all
-test-all: test test-l2 test-modules
+test-all: test test-modules
 
 # ── Run all program tests on ISS (fast, no Docker) ────────────
 # Same test programs as `make test` but runs on the ISS.
@@ -385,9 +350,9 @@ DOCKER_RUN_IT = docker run --rm -u $(shell id -u):$(shell id -g) -it -v $(CURDIR
 endif
 
 .PHONY: simulate-rtl
-simulate-rtl: $(SIM_L2_STAMP)
+simulate-rtl:
 	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
-	$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) $(MACHINE_SIM_PARAMS) \
+	$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) \
 		--top-module machine_sim \
 		--Mdir $(BUILD_DIR)/machine_sim_interactive.verilator \
 		-o ../Vmachine_sim_interactive \
@@ -492,9 +457,9 @@ benchmark: sdimage-bench $(ISS)
 	done
 
 .PHONY: benchmark-rtl
-benchmark-rtl: sdimage-bench $(SIM_L2_STAMP)
+benchmark-rtl: sdimage-bench
 	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
-	$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) $(MACHINE_SIM_PARAMS) \
+	$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) \
 		--top-module machine_sim \
 		--Mdir $(BUILD_DIR)/machine_sim_interactive.verilator \
 		-o ../Vmachine_sim_interactive \
@@ -554,7 +519,7 @@ fpga-lint: $(FPGA_SRC_FULL) $(FPGA_LINT_STUBS)
 		$(FPGA_SRC_FULL) $(FPGA_LINT_STUBS) --top ulx3s_top
 
 fpga: $(BUILD_DIR)/$(TOP).bit
-	@echo "Bitstream: $(BUILD_DIR)/$(TOP).bit (PHASE_DEG=$(PHASE_DEG), HAS_L2=$(HAS_L2))"
+	@echo "Bitstream: $(BUILD_DIR)/$(TOP).bit (PHASE_DEG=$(PHASE_DEG))"
 
 # ── SDRAM phase sweep knob ──────────────────────────────────────
 # Used by ulx3s_top to set CLKOS2 phase shift (the SDRAM-clock pin
@@ -575,30 +540,17 @@ $(PHASE_STAMP):
 	@rm -f $(BUILD_DIR)/.phase-*
 	@touch $@
 
-# ── L2 cache opt-in ─────────────────────────────────────────────
-# When HAS_L2=1, override the ulx3s_top HAS_L2 parameter via yosys
-# chparam so the bitstream instantiates the L2 cache (64 KiB unified
-# 4-way; see doc/internals/l2-cache.md).  Default 0 keeps the
-# bitstream byte-identical to pre-L2 builds.
-HAS_L2 ?= 0
-
-HAS_L2_STAMP = $(BUILD_DIR)/.has_l2-$(HAS_L2)
-$(HAS_L2_STAMP):
-	@mkdir -p $(BUILD_DIR)
-	@rm -f $(BUILD_DIR)/.has_l2-*
-	@touch $@
-
 # Build hex files and convert SV→V before synthesis.
 # sv2v converts full SystemVerilog (module-level imports, packages)
 # to Verilog-2005 that Yosys reads natively.  -D SDRAM_PHASE_DEG=N
 # overrides the `define inside ulx3s_top.sv for the current build.
-$(BUILD_DIR)/$(TOP).json: $(FPGA_SRC) $(PHASE_STAMP) $(HAS_L2_STAMP)
+$(BUILD_DIR)/$(TOP).json: $(FPGA_SRC) $(PHASE_STAMP)
 	@mkdir -p $(BUILD_DIR)
 	$(if $(filter ulx3s_top,$(TOP)),$(UASM) hw/microcode/microcode.uasm -o microcode.hex)
 	$(if $(filter ulx3s_top,$(TOP)),$(MAKE) -C hw/rom)
 	$(FPGA_TOOLS)/sv2v -D SDRAM_PHASE_DEG=$(PHASE_DEG) $(FPGA_SRC) -w $(BUILD_DIR)/$(TOP)_sv2v.v
 	$(if $(filter ulx3s_top,$(TOP)),python3 hw/tools/inline_hex.py $(BUILD_DIR)/$(TOP)_sv2v.v $(BUILD_DIR)/$(TOP)_sv2v.v)
-	$(FPGA_TOOLS)/yosys -p "read_verilog $(BUILD_DIR)/$(TOP)_sv2v.v; $(if $(filter 1,$(HAS_L2)),chparam -set HAS_L2 1 $(TOP); )synth_ecp5 -top $(TOP) -json $@"
+	$(FPGA_TOOLS)/yosys -p "read_verilog $(BUILD_DIR)/$(TOP)_sv2v.v; synth_ecp5 -top $(TOP) -json $@"
 
 $(BUILD_DIR)/$(TOP).config: $(BUILD_DIR)/$(TOP).json $(LPF)
 	$(FPGA_TOOLS)/nextpnr-ecp5 --85k --package CABGA381 --speed 6 \
