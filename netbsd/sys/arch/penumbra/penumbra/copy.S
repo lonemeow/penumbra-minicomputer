@@ -125,6 +125,80 @@ copyout:
 	add	r14, #12
 	ret
 
+/* ── kcopy(src, dst, len) ──────────────────────────────────────
+ *
+ * Copy len bytes from kernel address src to kernel address dst,
+ * with fault recovery: returns 0 on success, EFAULT if either
+ * src or dst faults (unmapped page, bus error on dereference).
+ *
+ * Calling convention: R1=src, R2=dst, R3=len
+ * memcpy convention:  R1=dst, R2=src, R3=len  (note swap)
+ *
+ * IMPORTANT: kcopy must save and restore the previous pcb_onfault
+ * value rather than just clearing it.  kcopy is called from
+ * uiomove() and other paths that may already be running under
+ * an outer onfault context (e.g. a non-fatal user page fault
+ * being serviced).  Clobbering the outer handler would silently
+ * remove fault protection from the caller.  This is what makes
+ * kcopy structurally different from copyin/copyout (which are
+ * always called as leaves from syscall entry).
+ *
+ * Stack frame: 12 bytes
+ *     +8   saved LR
+ *     +4   saved R5 (callee-saved, holds PCB ptr)
+ *     +0   saved old pcb_onfault
+ *
+ * The fault-recovery pattern silently depends on memcpy being a
+ * leaf function (no SP movement, no callee-saved register use).
+ * If memcpy ever stops being a leaf, the [r14+N] offsets here
+ * would index into memcpy's frame instead of kcopy's, and the
+ * recovery would load garbage.  See memcpy.S.
+ *
+ * Exit paths share a common epilogue at _kcopy_exit, which restores
+ * the saved outer onfault and unwinds the frame.  The success path
+ * falls through into _kcopy_exit with R1 already zero; the fault
+ * path (_kcopy_fault) reloads R5 (memcpy may have clobbered it
+ * mid-call) and branches back.  R5-must-be-PCB is invariant at
+ * _kcopy_exit's entry.
+ */
+	.globl	kcopy
+	.type	kcopy, @function
+kcopy:
+	sub	r14, #12
+	stw	r13, [r14 + 8]
+	stw	r5,  [r14 + 4]
+	GET_PCB(r5)
+	ldw	r11, [r5 + PCB_ONFAULT]
+	stw	r11, [r14 + 0]		/* save outer onfault */
+	la	r11, _kcopy_fault
+	stw	r11, [r5 + PCB_ONFAULT]
+	mov	r11, r1			/* swap args for memcpy(dst, src, len) */
+	mov	r1,  r2
+	mov	r2,  r11
+	bl	memcpy
+	mov	r1,  r0			/* success: R1 = 0 */
+	/* fall through to _kcopy_exit */
+
+_kcopy_exit:
+	ldw	r11, [r14 + 0]		/* restore outer onfault */
+	stw	r11, [r5 + PCB_ONFAULT]
+	ldw	r5,  [r14 + 4]
+	ldw	r13, [r14 + 8]
+	add	r14, #12
+	ret
+
+/* _kcopy_fault — cold-path fault recovery.
+ *
+ * Reached when the trap handler redirects tf_epc here after a fault
+ * inside kcopy's memcpy.  R5 is not guaranteed to hold the PCB
+ * (memcpy may have spilled and overwritten it mid-call), so we
+ * reload it before joining the shared exit.
+ */
+_kcopy_fault:
+	GET_PCB(r5)
+	lli	r1, #EFAULT
+	b	_kcopy_exit
+
 /* ── copyinstr(uaddr, kaddr, maxlen, *done) ────────────────────
  *
  * Copy NUL-terminated string from user to kernel.

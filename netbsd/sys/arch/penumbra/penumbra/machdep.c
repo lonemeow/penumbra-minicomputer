@@ -791,15 +791,12 @@ sys_sysarch(struct lwp *l, const struct sys_sysarch_args *uap,
 }
 
 /*
- * kcopy — kernel-to-kernel copy with fault protection.
+ * kcopy is implemented in copy.S — it shares the pcb_onfault
+ * fault-recovery pattern with copyin/copyout but additionally
+ * saves and restores any pre-existing pcb_onfault, because
+ * uiomove() can invoke kcopy from inside an outer onfault
+ * context.
  */
-int
-kcopy(const void *src, void *dst, size_t len)
-{
-	/* TODO(stub): implement with pcb_onfault recovery */
-	memcpy(dst, src, len);
-	return 0;
-}
 
 /*
  * mm_md_physacc — check physical memory accessibility for /dev/mem.
