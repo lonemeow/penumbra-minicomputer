@@ -27,12 +27,12 @@ The OS target was changed from Minix 2 to NetBSD.
 | TLB protection fault | Done | Vector 3, triggers COW copy in UVM |
 | Exception save/restore | Done | EPC/ESR, ERET, RDSPR, WRSPR |
 | SYSCALL trap | Done | Vector 5, intercepted at dispatch |
-| Timer interrupt | Not yet | Drives hardclock() / scheduler |
-| UART | Done | 16450-compatible, MMIO at 0xFF000000, com(4) compatible |
-| Device IRQ dispatch | Not yet | Shared /IRQ line, software polling per device status |
+| Timer interrupt | Done | `SYSDEV_TIMER` drives NetBSD hardclock |
+| UART | Done | NS16550A-compatible real UART + 16450 sim UART; `com(4)` driver attached |
+| Device IRQ dispatch | Done | Shared wire-OR `/IRQ` line, kernel `intr_dispatch` walks registered handlers (`VEC_EXT_IRQ`) |
 | Sub-word loads/stores | Done | LDH/LDHS/LDB/LDBS/STH/STB with byte_ext/byte_rep |
-| SDRAM controller | Not yet | NetBSD kernel needs 2-4 MB minimum |
-| Real cache | Done | Split I/D VIPT cache (1 KiB, direct-mapped, write-through D-cache) |
+| SDRAM controller | Done | SDRAM v2 controller (`hw/rtl/io/sdram/`) running 32 MB W9825 @ 100 MHz CL2 on ULX3S |
+| Real cache | Done | L1: split I/D VIPT (1 KiB each, direct-mapped, write-through D). L2: 64 KiB 4-way unified, write-invalidate-on-hit (`doc/internals/l2-cache.md`) |
 
 ### Porting Reference
 
@@ -90,7 +90,7 @@ The Penumbra LLVM backend (`llvm/llvm/lib/Target/Penumbra/`) consists of:
 3. **Instruction selection** — GlobalISel with hybrid TableGen patterns (`PenumbraGISel.td`) + manual C++ for complex cases
 4. **Frame lowering** — stack frame layout, prologue/epilogue generation (SUBi/ADDi SP)
 5. **ABI/calling convention** — R1-R4 args, R1 return, R5-R10 callee-saved, R13/LR
-6. **MC layer** — assembly parser, printer, ELF object emission, 11 fixup types and 21 relocation types
+6. **MC layer** — assembly parser, printer, ELF object emission, fixups and relocations (see `doc/system/abi.md` §4 for the full relocation table)
 7. **Immediate materialization** — LLI (uimm16), LLIS (simm16neg) via TableGen; LLI+LUI pair for wide constants in C++
 8. **lld linker support** — `elf32penumbra` emulation, all relocation types including PIE and TLS
 
@@ -105,7 +105,7 @@ The Penumbra LLVM backend (`llvm/llvm/lib/Target/Penumbra/`) consists of:
 | Single link register (R13) | Leaf functions don't need stack frame | Non-leaf must save/restore R13 |
 | No barrel shifter in address calc | Array indexing needs explicit shift+add | Compiler can strength-reduce |
 
-### Calling Convention (Proposed)
+### Calling Convention (Implemented)
 
 ```
 R0        Zero (hardwired)
@@ -153,14 +153,14 @@ NetBSD uses its own build framework (`build.sh`) which supports cross-compilatio
 |------|--------|-------|
 | ISA assembler (pasm.py) | Done | Two-pass, all formats, labels, .equ constants |
 | Microcode assembler (uasm.py) | Done | Symbolic fields, slot validation |
-| LLVM MC-layer assembler | Done | All 4 formats, 11 fixup types, 21 relocation types, ELF object emission, pseudo-instructions (LI/LA/NOP/RET) |
+| LLVM MC-layer assembler | Done | All 4 formats, fixups + ELF relocations (see `doc/system/abi.md` §4), pseudo-instructions (LI/LA/NOP/RET) |
 | ABI specification | Done | ILP32, register convention, calling convention, stack frame, ELF relocations. See `doc/system/abi.md` |
 | bin2hex.py | Done | Flat binary → $readmemh hex (pipeline: llvm-mc → objcopy → bin2hex) |
 | Calling convention | Done | R1–R4 args, R5–R10 callee-saved, R11 scratch, R12 TP, R13 LR. Implemented in `PenumbraCallingConv.td` |
-| LLVM codegen (GlobalISel) | Done | Hybrid TableGen + C++ instruction selection, frame lowering, register allocation. `-O0` through `-O2` working. Boot ROM compiles from C |
-| Linker (lld) | Done | `elf32penumbra` emulation, all 21 relocation types, PIE support. `EM_PENUMBRA` (0xF0DA) |
+| LLVM codegen (GlobalISel) | Done | Hybrid TableGen + C++ instruction selection, frame lowering, register allocation. `-O0` through `-O2` working. Boot ROM, kernel, and NetBSD userland all compile |
+| Linker (lld) | Done | `elf32penumbra` emulation, full Penumbra relocation set (`doc/system/abi.md` §4), PIE + shared library support. `EM_PENUMBRA` (0xF0DA) |
 | Inline assembly | Done | `r`/`i` constraints, `~{cc}`/`~{memory}` clobbers |
-| NetBSD MD layer | Not started | |
+| NetBSD MD layer | Done | Boots to single-user shell with FFS root mounted rw on `ld0f`; full dynamically-linked userland. See `doc/system/netbsd/porting-status.md` |
 
 ---
 
@@ -168,12 +168,12 @@ NetBSD uses its own build framework (`build.sh`) which supports cross-compilatio
 
 1. **Debug info.** DWARF support in the LLVM backend for source-level debugging. Lower priority but valuable.
 
-2. **Floating point.** Initially software-emulated via compiler soft-float. Hardware FPU is a future project (reserved ALU opcodes 0x0B–0x10 for MUL/DIV, further slots for FP).
+2. **Floating point.** Software-emulated via compiler soft-float today. Hardware FPU is a future project — currently the integer multi-cycle ALU ops MUL/MULU/DIV/DIVU/MOD/MODU (Format R opcodes 12–17) trap as illegal and rely on software emulation. See `doc/TODO.md` § Phase 4 (Hardware MUL/DIV) and § Phase 5 (FPU).
 
 ## Resolved Questions
 
 1. **ELF machine number.** `EM_PENUMBRA = 0xF0DA` (private range). Implemented in PenumbraELFObjectWriter.cpp.
 
-2. **Relocation types.** Implemented: 22 relocation types (R_PENUMBRA_NONE through R_PENUMBRA_TLS_GD_GOT_PCREL_HI16) covering static, PIC/PIE, GOT/PLT, and TLS. Local fixups resolved by assembler; relocations emitted for external symbols.
+2. **Relocation types.** Implemented: full Penumbra relocation set covering static, PIC/PIE, GOT/PLT, TLS GD/IE/LE, COPY, and IRELATIVE. Local fixups resolved by assembler; relocations emitted for external symbols. See `doc/system/abi.md` §4 for the authoritative table — that is the single source of truth for type/value/field mappings.
 
 3. **Alignment.** Implemented: MMU checks alignment for word (addr[1:0]==0), half (addr[0]==0), byte (always OK). Traps to VEC_ALIGN (vector 8). Works in both bypass and MMU-enabled mode.
