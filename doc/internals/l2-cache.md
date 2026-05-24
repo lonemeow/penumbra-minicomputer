@@ -36,9 +36,10 @@ What's wired up today (post phase 1):
   a combinational pass-through, so `INFO != 0` + `CTRL.enable=0`
   is functionally indistinguishable from a no-L2 build.
 - `hw/sim/tb_l2_cache.cpp` — standalone Verilator testbench
-  (20 cases) for the L2 contract: INFO presence + unified-layout
+  covering the L2 contract: INFO presence + unified-layout
   decode (PIPT/WT/WnA), pass-through-when-disabled, miss→hit,
-  write-invalidate, INVAL_ALL walker, uncached pass-through.
+  write-invalidate, INVAL_ALL walker + implicit fence,
+  uncached pass-through.
 - Boot ROM (`hw/rom/boot_rom.c`) prints `L2 cache: 64kB
   (1024 x 16B, 4-way) unified` in the banner.  The ROM **does
   not** enable the L2 (or any cache, or the MMU) — that's the
@@ -49,11 +50,11 @@ What's wired up today (post phase 1):
   future L2-less bitstream variant without code change.
 
 Verification gates that have to stay green on every L2 commit:
-`make sim MOD=l2_cache` (18/18), `make test` (55/55),
-`make test-modules` (35/35), `make test-iss` (55/55), `make
-fpga-lint TOP=ulx3s_top` (zero warnings).  Hardware-side
-benchmark numbers (`feedback_bench_on_hardware` in memory) are
-what tell us whether L2 is actually paying off.
+`make sim MOD=l2_cache`, `make test`, `make test-modules`,
+`make test-iss`, and `make fpga-lint TOP=ulx3s_top` (zero
+warnings).  Hardware-side benchmark numbers are what tell us
+whether L2 is actually paying off — quote those from the
+benchmark output, not from this doc.
 
 ## Goals
 
@@ -192,8 +193,8 @@ inform tuning.
 | `NUM_WAYS` | `4` | NetBSD ⇒ multitasking ⇒ conflict-miss pressure. |
 | `NUM_SETS` | `1024` (derived) | `CACHE_BYTES / (LINE_BYTES * NUM_WAYS)` |
 | `HIT_LATENCY` | `2` | BRAM read (1) + tag compare/way mux (1).  Parameter-stub; reduce only after fmax study. |
-| `REPLACEMENT` | `LRU` | True LRU for 4-way fits in 6 bits/set; pseudo-LRU is an option for larger ways. |
-| `WRITE_POLICY` | `WB_WA` | Write-back, write-allocate.  Other values reserved for benchmark experiments. |
+| `REPLACEMENT` | `tree-PLRU` | 3 bits/set.  Miss rate is within noise of true LRU at 4-way (per `l2_cache.sv:24-26`), and the update logic is 3 bit flips per access vs LRU's 6 pairwise relations.  True LRU was the design alternative; deferred because routing cost wasn't worth the miss-rate noise. |
+| `WRITE_POLICY` | `write-invalidate-on-hit` | Phase 1 policy: write hits drop the L2 line and pass the store downstream (`INFO` advertises this as software-visibly WT/WnA).  Write-back / write-allocate is the Phase 2 plan — see the "Write Policy" section below. |
 
 `CACHE_BYTES`, `NUM_WAYS`, and `LINE_BYTES` are the primary sweep
 axes.  At default geometry, tag = `32 - log2(NUM_SETS) - log2(LINE_BYTES)`
@@ -211,7 +212,7 @@ For the default geometry that is approximately:
 
 - Tag: 1024 × 4 × 20 ≈ 80 Kbit (~5 EBR)
 - Data: 1024 × 4 × 128 = 512 Kbit (~30 EBR)
-- LRU:  1024 × 6     = 6 Kbit  (≪1 EBR)
+- PLRU: 1024 × 3     = 3 Kbit  (in flops, not EBR)
 
 Total ≈ **35 EBR / 208** on ECP5-85F, leaving ample BRAM for the rest
 of the system.  At 16 KiB total this drops to ~10 EBR and at 8 KiB
@@ -229,18 +230,37 @@ If fmax study later shows the tag-compare + way-mux + drive-out path
 is critical, `HIT_LATENCY=3` adds an output flop without changing the
 contract — `cpu_core` already tolerates multi-cycle misses.
 
-### Replacement: 4-way LRU
+### Replacement: 4-way tree-PLRU
 
-True LRU for 4 ways needs 6 bits/set encoding the ordering of all
-four ways (`C(4,2) = 6` pairwise relations).  On every access, the
-touched way moves to MRU; updates are derivable in combinational
-logic.  Pseudo-LRU (tree-PLRU, 3 bits/set) is an alternative if 6
-bits per set across 1024 sets becomes a routing concern; it is
-roughly equivalent in miss rate at 4-way.
+Tree-PLRU stores 3 bits per set encoding a binary tree over the 4
+ways: bit 0 picks the LRU pair (ways 0–1 vs. 2–3), bit 1 picks the
+LRU way inside the (0, 1) pair, bit 2 picks the LRU way inside the
+(2, 3) pair.  On every access the touched way becomes MRU and the
+three bits update in combinational logic.  Encoded in flops (not
+EBR) — see `hw/rtl/soc/l2_cache.sv:179` and the bit-meaning comments
+at lines 360–362.
 
-## Write Policy: Write-Back, Write-Allocate
+True LRU was the design alternative — it needs 6 bits/set encoding
+the ordering of all four ways (`C(4,2) = 6` pairwise relations) and
+matches tree-PLRU's miss rate within noise at 4-way.  Tree-PLRU
+was chosen because the update logic is 3 bit flips per access vs.
+LRU's 6 pairwise relations, and the routing on 1024 sets stays
+cheaper.
 
-This is the headline change vs. L1.
+## Write Policy
+
+**Phase 1 (current, shipping): write-invalidate-on-hit.**  Writes
+pass through to the downstream bus.  On a tag hit, the L2 line is
+dropped (valid bit cleared).  No dirty state, no eviction-time
+writebacks.  Software-visibly this is write-through / write-no-
+allocate — which is exactly how `INFO` advertises it
+(`WRITE_BACK=0, WRITE_ALLOC=0`).  L1 D-cache writes are absorbed
+only to the extent that the line stops occupying L2 capacity; the
+SDRAM round-trip on every store is still paid.
+
+**Phase 2 (planned): write-back, write-allocate.**  The headline
+performance commit.  Once phase 2 lands, this section describes
+the runtime behaviour:
 
 - **Write hit:** Update the data array, set `dirty=1`.  No bus
   traffic.
@@ -283,6 +303,17 @@ Phase-1 specifics (see `INFO` decode):
 Multi-cycle operations (`INVAL_ALL`, eventually `FLUSH_ALL`) signal
 completion via `STATUS.busy`; the sysreg interface itself stays
 single-cycle.
+
+**Post-reset auto-INVAL walker.**  BRAM has no clear at reset, so
+`l2_cache` runs an automatic INVAL_ALL walk after `i_rst` deasserts
+to zero every valid bit before any line lookup can hit.  During the
+walk, `STATUS.busy=1` and an internal `ready` flag (`l2_cache.sv:150-163`)
+forces the cache to act as a pass-through regardless of `CTRL.enable`.
+Software bring-up that writes `CTRL.enable=1` immediately after reset
+must therefore poll `STATUS.busy=0` before relying on hit traffic — at
+4096-cycle worst case (`NUM_SETS × NUM_WAYS`) this is rarely a race in
+practice but is worth knowing when writing `crt0.S` / `locore.S`
+sequences that probe the cache right at boot.
 
 **`INVAL_LINE` is reserved-not-implemented** in current RTL across
 all cache levels.  Rationale: L1 full-flush is a single-cycle valid-
@@ -441,8 +472,9 @@ Land in commit-sized increments per `feedback_incremental_commits`:
    `hw/rtl/soc/l2_cache.sv` (64 KiB, 4-way, tree-PLRU, 2-cycle
    hit pipeline).  Replaced `l2_passthrough` (deleted —
    `l2_cache` with CTRL.enable=0 covers the same behaviour).
-   Tag/data arrays, hit/miss/allocate, INVAL_ALL walker, sysreg
-   device 9.  18-case `tb_l2_cache.cpp` unit testbench.
+   Tag/data arrays, hit/miss/allocate, INVAL_ALL walker,
+   post-reset auto-INVAL walker, sysreg device 9.  Unit
+   testbench in `hw/sim/tb_l2_cache.cpp`.
 
    **Delta from original plan:** the original phase 1 spec was
    "write pass-through (no dirty bit, no writeback)" — but pure
