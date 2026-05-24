@@ -2,12 +2,28 @@
 
 The Penumbra microcode is written in a symbolic assembly format and translated into a hexadecimal memory file for the FPGA/Verilator ROM using `hw/tools/uasm.py`.
 
+> **Warning — this document is stale and pending a rewrite.** The field
+> names and symbolic value names listed below are from an earlier
+> proposed syntax and do **not** match what `hw/tools/uasm.py` actually
+> parses. Notable mismatches: `imm` → `imm_mode` (with values
+> `ZERO_EXT`/`SIGN_EXT`/`SHIFT_L16`, not `ZERO`/`SIGN`/`L16`); `mdr_load`
+> → `mdr_load_mem` + `mdr_load_a` (two separate 1-bit fields);
+> `mem` → `mem_read` + `mem_write`; `size` → `mem_size`;
+> `se` → `sign_ext`; `sys` → `sys_op` (with values
+> `NONE`/`SPR_WRITE`/`SYS_READ`/`SYS_WRITE`); `start` → `alu_start`;
+> `skip` → `fwd_offset`; `flags` → `w_flags`; `a_src=VEC` →
+> `a_src=VECTOR`. The privileged-marker bit (`priv`) and the
+> `ei_set`/`di_set` bits are also missing from the field list below.
+> **Authoritative source:** `hw/tools/uasm.py` lines 37–108 (the
+> `FIELDS` table). Use that when writing or reading microcode until
+> this document is rewritten.
+
 ## File Structure
 
 - **Comments:** Lines starting with `#` are comments.
 - **Directives:** `.org <address>` sets the dispatch address for the following micro-routine.
 - **Labels:** `label:` defines a symbolic name for a micro-op (mainly for human reference; the sequencer uses relative offsets).
-- **Micro-ops:** Each line following a label (or on its own) defines one 49-bit micro-word.
+- **Micro-ops:** Each line following a label (or on its own) defines one 51-bit micro-word.
 
 ## Micro-Word Syntax
 

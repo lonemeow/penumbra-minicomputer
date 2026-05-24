@@ -431,6 +431,7 @@ Condition evaluation hardware: each condition is a simple combinational function
 
 | Bits | Field | Width | Description |
 |------|-------|-------|-------------|
+| 50 | `priv` | 1 | Privileged instruction marker — sequencer checks `SR.S` on the first micro-op and traps `VEC_PRIV` if `SR.S=0`. Replaced the old `branch_cond=PRIV` value. |
 | 49:47 | `a_src[2:0]` | 3 | A-bus source: 0=register file, 1=ESR, 2=EPC, 3=vector_addr, 4=SPR (decode IR[15:12]) |
 | 46:43 | `reg_a_sel[3:0]` | 4 | Register file read port A address (used when a_src=00) |
 | 42:39 | `reg_b_sel[3:0]` | 4 | Register file read port B address |
@@ -454,15 +455,18 @@ Condition evaluation hardware: each condition is a simple combinational function
 | 8 | `alu_start` | 1 | Start multi-cycle ALU operation (MUL/DIV/MOD; ignored for single-cycle ops) |
 | 7:5 | `branch_cond[2:0]` | 3 | Micro-sequencer control (see below) |
 | 4:2 | `fwd_offset[2:0]` | 3 | Forward skip offset, 0-7 (used only when branch_cond=SKIP) |
-| 1:0 | (spare) | 2 | Reserved for future use |
+| 1 | `ei_set` | 1 | Set `SR.I=1` with one-instruction delay via `ei_shadow`. Used only by `EI`. |
+| 0 | `di_set` | 1 | Set `SR.I=0` immediately. Used only by `DI`. |
 
-**Total: 48 bits**
+**Total: 51 bits**
+
+See `doc/internals/microcode.md` for the authoritative single-source field reference, value tables, and full micro-routine catalog. The summary above mirrors `hw/rtl/core/sequencer.sv` field extraction at lines 111–136.
 
 The ALU is the unified compute unit. Single-cycle operations (ADD, SUB, AND, OR, XOR, SHL, SHR, SAR, PASS_A, PASS_B, NOT) produce results combinationally — `alu_start` is ignored and `alu_busy` is never asserted. Multi-cycle operations (MUL, DIV, MOD, future FP) require `alu_start=1` in the micro-word to begin; the ALU latches operands, asserts `alu_busy`, and iterates internally. STALL checks a unified busy signal: `cache_busy | alu_busy`.
 
 Future FPU note: floating-point operands live in GPRs (no separate FP register file). FP operations are additional `alu_op` encodings using the same start/busy/result interface. FP compare updates NZCV via `flag_w_en`, so normal Bcc works for FP branches. When FPU hardware is absent, the microcode ROM fills FP opcode entries with illegal-instruction exception micro-ops — zero runtime overhead. MUL/DIV/MOD follow the same pattern: initially trapped to software emulation via the ROM, replaced with ALU hardware as the design matures.
 
-Design history: the original draft specified 52 bits (actually 55 when counted correctly). Microcode validation (`microcode-validation.md`) identified missing signals for exception entry and unnecessary sequencer complexity. The separate long-latency unit (`lu_op[1:0]`) was later folded into the ALU as a unified compute unit, with `alu_op` expanded to 5 bits. Net result: 48-bit micro-word.
+Design history: the original draft specified 52 bits (actually 55 when counted correctly). Microcode validation identified missing signals for exception entry and unnecessary sequencer complexity. The separate long-latency unit (`lu_op[1:0]`) was later folded into the ALU as a unified compute unit, with `alu_op` expanded to 5 bits. The privilege check moved from a microcode branch (old `branch_cond=PRIV`) to a dedicated `priv` bit at [50], and the `ei_set`/`di_set` bits at [1:0] (formerly spare) absorbed the EI/DI side effects. Net result: 51-bit micro-word.
 
 ### Micro-Sequencer
 
@@ -475,13 +479,13 @@ The micro-sequencer uses a micro-PC register to index into the microcode ROM. Se
 | 010 | STALL | busy ? hold : (fault ? exception via fetch unit : micro-PC++) | unconditional |
 | 011 | BRT | hand off to fetch unit | applied if ISA cond true, else forced to PC+4 |
 | 100 | BRF | hand off to fetch unit | applied if ISA cond false, else forced to PC+4 |
-| 101 | PRIV | SR.S=0 ? exception (vector 4, VEC_PRIV) via fetch unit : micro-PC++ | unconditional |
+| 101 | (reserved) | — | — |
 | 110 | SKIP | micro-PC += 1 + fwd_offset | unconditional |
-| 111 | (reserved) | — | — |
+| 111 | ILLEGAL | illegal-instruction sentinel | traps to `VEC_ILLEGAL` |
 
 FETCH, BRT, and BRF all signal "instruction complete" to the fetch unit. The difference is `pc_src` handling: FETCH applies `pc_src` unconditionally; BRT/BRF conditionally gate `pc_src` based on the ISA condition evaluator, enabling single-micro-op conditional branches.
 
-PRIV checks the supervisor bit in SR. If SR.S=1 (supervisor mode), micro-PC increments normally — the privileged instruction executes with 1 micro-op overhead. If SR.S=0 (user mode), the fetch unit is signaled to trigger a privilege violation exception (vector 4, `VEC_PRIV`) using the same hardware pre-actions as interrupt entry. Every privileged instruction's micro-routine begins with `branch_cond=PRIV` as its first micro-op.
+Privilege checking uses the `priv` micro-word bit (bit 50), not a `branch_cond` value. When `priv=1` and `SR.S=0`, the sequencer signals the fetch unit to trigger a privilege violation (vector 4, `VEC_PRIV`) using the same hardware pre-actions as interrupt entry. The old `branch_cond=PRIV` (encoding 101) value was removed when this moved into a per-µ-op bit.
 
 STALL checks a unified busy signal: `cache_busy | alu_busy`. When the operation completes (`busy` deasserts), the sequencer also checks a `fault` signal from the D-cache/MMU. Three-way resolution:
 
@@ -496,15 +500,16 @@ Since memory operations and multi-cycle ALU operations never overlap in the same
 The microcode ROM uses **direct mapping** from instruction bits to micro-PC start address. The fetch unit computes the dispatch address from IR bits:
 
 ```
-Format R: dispatch = {00, op[4:0]}         → entries 0-31
-Format L: dispatch = {01, op[3:0], 0}      → entries 32-62 (×2 spacing)
-Format M: dispatch = {10, L, sz[1:0], SE, 0} → entries 64-95 (×2 spacing)
-Format B: dispatch = {11, 0000000}         → entry 96 (single routine, condition in hardware)
+Format R: dispatch = {0, op[4], 0, op[3:0], 0}   → ALU 0x00–0x1E (op[4]=0), SYS 0x40–0x5E (op[4]=1)
+Format L: dispatch = {01, op[3:0], 0}            → entries 0x20–0x3E (×2 spacing)
+Format M: dispatch = {10, L, sz[1:0], SE, 00}    → entries 0x80–0xBC (×4 spacing)
+Format B: dispatch = (cond==1111) ? 0x62 : 0x60  → Bcc at 0x60, BL at 0x62
+Exception: hardwired                              → entry 0x70
 ```
 
-Multi-micro-op instructions (loads, stores, MUL/DIV) occupy consecutive ROM addresses following their entry point. Entry points are spaced to prevent collisions. Interrupt entry occupies a dedicated ROM region, reached by hardware dispatch (not micro-branch).
+Multi-micro-op instructions (loads, stores, JALR, RDSYS, ERET, BL) occupy consecutive ROM addresses inside their dispatch slot. The microcode assembler validates slot boundaries (see `doc/internals/microcode.md` § ROM Organization for the slot-size table per zone). Interrupt entry (`int_entry`) occupies a dedicated 4-µ-op slot at 0x70, reached by hardware dispatch on `except_entry`.
 
-Microcode ROM size: 256 entries × 49 bits ≈ 12.5 Kbit (1 EBR on ECP5, or 7 byte-wide ROM chips in discrete with 7 spare bits for future expansion).
+Microcode ROM size: 256 entries × 51 bits ≈ 13 Kbit (1 EBR on ECP5, or 7 byte-wide ROM chips in discrete with 5 spare bits for future expansion).
 
 ## Instruction Fetch
 

@@ -286,12 +286,12 @@ Fields are `key=value` pairs separated by spaces. Values are symbolic names (upp
 | Zone | Addresses | Slot Size | Count | Purpose |
 |------|-----------|-----------|-------|---------|
 | R-ALU | 0x00–0x1F | ×2 | 16 | Format R ALU ops (op[4]=0) |
-| Format L | 0x20–0x3F | ×4 | 8 | Immediate operations |
-| R-SYS | 0x40–0x5F | ×2 | 16 | Format R system ops (op[4]=1) |
+| Format L | 0x20–0x3F | ×2 | 16 | Immediate operations (13 used, 3 reserved) |
+| R-SYS | 0x40–0x5F | ×2 | 16 | Format R system ops (op[4]=1; ops 23–31 used) |
 | Format B | 0x60–0x63 | ×2 | 2 | Conditional branch (0x60), BL (0x62) |
 | (gap) | 0x64–0x6F | — | — | Unused |
-| Exception | 0x70 | ×1 | 1 | Interrupt/fault entry |
-| (gap) | 0x71–0x7F | — | — | Unused |
+| Exception | 0x70 | ×4 | 1 | `int_entry` (3 micro-ops) |
+| (gap) | 0x74–0x7F | — | — | Unused |
 | Format M | 0x80–0xBF | ×4 | 16 | Load/store operations |
 | (unused) | 0xC0–0xFF | — | — | Available for future expansion |
 
@@ -302,7 +302,7 @@ Computed by the fetch unit from `mem_rdata` (instruction bits, same cycle as IR 
 | Format | Formula | Range |
 |--------|---------|-------|
 | R (prefix 00) | `{0, op[4], 0, op[3:0], 0}` | 0x00–0x1E (ALU), 0x40–0x5E (SYS) |
-| L (prefix 01) | `{01, op[3:0], 00}` | 0x20–0x3C |
+| L (prefix 01) | `{01, op[3:0], 0}` | 0x20–0x3E |
 | M (prefix 10) | `{10, L, sz[1:0], SE, 00}` | 0x80–0xBC |
 | B (prefix 11) | `cond==1111 ? 0x62 : 0x60` | 0x60 or 0x62 |
 | Exception | Hardwired | 0x70 |
@@ -321,7 +321,8 @@ Some instructions are intercepted at dispatch time in cpu_top and never reach th
 
 | Instruction | Dispatch Addr | Interception | Vector |
 |-------------|--------------|--------------|--------|
-| BREAK | 0x4A | `dispatch_addr == 0x4A` | VEC_BREAK (6) |
+| SYSCALL | 0x52 | `dispatch_addr == 0x52` | VEC_SYSCALL (5) |
+| BREAK | 0x54 | `dispatch_addr == 0x54` | VEC_BREAK (6) |
 | Privileged in user mode | 0x40–0x5E | SYS zone & !exempt & !SR.S | VEC_PRIV (4) |
 
 BREAK and privilege violations trigger `except_entry` (saves EPC/ESR, sets S=1/I=0) and redirect dispatch to 0x70 (int_entry).
@@ -425,9 +426,9 @@ reg_a=IR_RS reg_w=IR_RD w_en=1 alu=NOT wmux=RBUS w_flags=1
 ```
 → Rd = ~Rs, flags updated.
 
-### Format L — Immediate Operations (0x20–0x2E)
+### Format L — Immediate Operations (0x20–0x38)
 
-All single-cycle, single micro-op.
+All single-cycle, single micro-op except JALR (2 micro-ops).
 
 **LLI** (op=0, dispatch=0x20)
 ```
@@ -435,102 +436,134 @@ reg_w=IR_RD w_en=1 alu=PASS_B bmux=IMM wmux=RBUS imm_mode=ZERO_EXT
 ```
 → Rd = zero_extend(imm16).
 
-**LLIS** (op=1, dispatch=0x24)
+**LLIS** (op=1, dispatch=0x22)
 ```
 reg_w=IR_RD w_en=1 alu=PASS_B bmux=IMM wmux=RBUS imm_mode=SIGN_EXT
 ```
 → Rd = sign_extend(imm16).
 
-**LUI** (op=2, dispatch=0x28)
+**LUI** (op=2, dispatch=0x24)
 ```
 reg_a=IR_RD reg_w=IR_RD w_en=1 alu=OR bmux=IMM wmux=RBUS imm_mode=SHIFT_L16
 ```
 → Rd = Rd | (imm16 << 16). Typically preceded by LLI to build a 32-bit constant.
 
-**INC** (op=3, dispatch=0x2C)
+**ADDi (alias `INC`)** (op=3, dispatch=0x26)
 ```
 reg_a=IR_RD reg_w=IR_RD w_en=1 alu=ADD bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
 ```
-→ Rd = Rd + zero_extend(imm16), flags updated.
+→ Rd = Rd + zero_extend(imm16), flags updated. Assembler accepts `ADD Rd, #imm`.
 
-**DEC** (op=4, dispatch=0x30)
+**SUBi (alias `DEC`)** (op=4, dispatch=0x28)
 ```
 reg_a=IR_RD reg_w=IR_RD w_en=1 alu=SUB bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
 ```
-→ Rd = Rd − zero_extend(imm16), flags updated.
+→ Rd = Rd − zero_extend(imm16), flags updated. Assembler accepts `SUB Rd, #imm`.
 
-**CMPI** (op=5, dispatch=0x34)
+**CMPi** (op=5, dispatch=0x2A)
 ```
 reg_a=IR_RD alu=SUB bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
 ```
 → Flags = Rd − zero_extend(imm16). Rd **not** written (no `w_en`).
 
-**ANDI** (op=6, dispatch=0x38)
+**ANDi** (op=6, dispatch=0x2C)
 ```
 reg_a=IR_RD reg_w=IR_RD w_en=1 alu=AND bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
 ```
 → Rd = Rd & zero_extend(imm16), flags updated.
 
-**TESTI** (op=7, dispatch=0x3C)
+**TESTi** (op=7, dispatch=0x2E)
 ```
 reg_a=IR_RD alu=AND bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
 ```
 → Flags = Rd & zero_extend(imm16). Rd **not** written (no `w_en`).
 
-### Format R — System Operations (0x40–0x5E)
+**SHLi** (op=8, dispatch=0x30)
+```
+reg_a=IR_RD reg_w=IR_RD w_en=1 alu=SHL bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
+```
+→ Rd = Rd << imm[4:0], flags updated.
 
-**WRSYS Rd, #dev, #reg** (op=16, dispatch=0x40) — Privileged
+**SHRi** (op=9, dispatch=0x32)
+```
+reg_a=IR_RD reg_w=IR_RD w_en=1 alu=SHR bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
+```
+→ Rd = Rd >> imm[4:0] (logical), flags updated.
+
+**SARi** (op=10, dispatch=0x34)
+```
+reg_a=IR_RD reg_w=IR_RD w_en=1 alu=SAR bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
+```
+→ Rd = Rd >> imm[4:0] (arithmetic), flags updated.
+
+**JMP Rd** (op=11, dispatch=0x36)
+```
+reg_a=IR_RD pc=ABUS
+```
+→ PC = Rd field. (Format L uses the Rd slot, not Rs.) Assembler alias: `RET` = `JMP R13`.
+
+**JALR Rd** (op=12, dispatch=0x38) — 2 micro-ops
+```
+Step 0: reg_a=R15 bmux=CONST4 alu=ADD reg_w=R13 w_en=1 wmux=RBUS pc=HOLD branch=SEQ
+Step 1: reg_a=IR_RD pc=ABUS
+```
+→ R13 = PC + 4 (link), then PC = Rd field. Used for indirect calls (function pointers, vtables).
+
+### Format R — System Operations (op 23–31, 0x4E–0x5E)
+
+Format R SYS ops sit at the high half of the R-zone (dispatch
+`{0, 1, op[3:0], 0}` per `cpu_core.sv:326`). Opcodes 18–22 (0x44–0x4C)
+are reserved and trap as illegal.
+
+**WRSYS Rd, #dev, #reg** (op=23, dispatch=0x4E) — Privileged
 ```
 priv=1 reg_a=IR_RD sys_op=SYS_WRITE
 ```
 → A-bus = Rd → sysreg write bus. Device/register from IR spare fields.
 
-**RDSYS Rd, #dev, #reg** (op=17, dispatch=0x42) — 2 micro-ops, Privileged
+**RDSYS Rd, #dev, #reg** (op=24, dispatch=0x50) — 2 micro-ops, Privileged
 ```
 Step 0: priv=1 sys_op=SYS_READ mdr_load_mem=1 pc=HOLD branch=SEQ
 Step 1: reg_w=IR_RD w_en=1 wmux=MDR
 ```
 → Step 0: sysreg data → mem_rdata bus → MDR. Step 1: MDR → Rd.
 
-**BREAK** (op=21, dispatch=0x4A) — Intercepted at dispatch
-Never reaches ROM. Detected by `dispatch_addr == 0x4A`. Triggers `except_entry` → VEC_BREAK (6) → int_entry at 0x70.
+**SYSCALL** (op=25, dispatch=0x52) — Intercepted at dispatch
+Never reaches ROM. Detected by `dispatch_addr == 0x52`. Triggers `except_entry` → VEC_SYSCALL (5) → `int_entry` at 0x70. Unprivileged. EPC points at the SYSCALL; handler is responsible for advancing EPC+4 before `ERET`.
 
-**ERET** (op=22, dispatch=0x4C) — 2 micro-ops, Privileged
+**BREAK** (op=26, dispatch=0x54) — Intercepted at dispatch
+Never reaches ROM. Detected by `dispatch_addr == 0x54`. Triggers `except_entry` → VEC_BREAK (6) → `int_entry` at 0x70. Unprivileged. `o_halted` pulses for testbench halt.
+
+**ERET** (op=27, dispatch=0x56) — 2 micro-ops, Privileged
 ```
 Step 0: priv=1 a_src=ESR alu=PASS_A sr_load=1 pc=HOLD branch=SEQ
 Step 1: a_src=EPC pc=ABUS
 ```
-→ Step 0: ESR → A-bus → ALU → R-bus → W-bus → SR (restores flags, S, I bits, may trigger SP bank swap). Step 1: EPC → A-bus → PC (resume at saved address).
+→ Step 0: ESR → A-bus → ALU → R-bus → W-bus → SR (restores flags, S, I bits, may trigger SP bank swap). Step 1: EPC → A-bus → PC (resume at saved address). Single-form only — there is no `ERET Rd, Rs` variant; context switches use `WRSPR EPC/ESR; ERET`.
 
-**JMP Rs** (op=24, dispatch=0x50)
+**EI** (op=28, dispatch=0x58) — Privileged
 ```
-reg_a=IR_RS pc=ABUS
+priv=1 ei_set=1
 ```
-→ PC = Rs. Assembler alias: `RET` = `JMP R13`.
+→ SR.I = 1, with one-instruction delay (ei_shadow). User-mode `EI` traps to `VEC_PRIV`.
 
-**EI** (op=25, dispatch=0x52) — Unprivileged
-```
-ei_set=1
-```
-→ SR.I = 1, with one-instruction delay (ei_shadow).
-
-**DI** (op=26, dispatch=0x54) — Privileged
+**DI** (op=29, dispatch=0x5A) — Privileged
 ```
 priv=1 di_set=1
 ```
 → SR.I = 0, immediate effect.
 
-**WRSPR {ESR|EPC|USP|SR}, Rd** (op=27, dispatch=0x56) — Privileged
+**WRSPR {ESR|EPC|USP|SCR0–3}, Rd** (op=30, dispatch=0x5C) — Privileged
 ```
 priv=1 reg_a=IR_RD alu=PASS_A sys_op=SPR_WRITE
 ```
-→ R-bus = Rd value → SPR write target. Hardware decodes IR[15:12]: SPR 0 (ESR) → esr_load, SPR 1 (EPC) → epc_load, SPR 2 (USP) → R14 cross_bank write, SPR 3 (SR) → sr_load.
+→ R-bus = Rd value → SPR write target. Hardware decodes IR[15:12]: SPR 0 (ESR) → `esr_load`, SPR 1 (EPC) → `epc_load`, SPR 2 (USP) → R14 cross-bank write, SPR 4–7 (SCR0–SCR3) → respective scratch storage. SPR 3 (SR) is not writable via WRSPR (use `ERET` or `EI`/`DI`).
 
-**RDSPR Rd, {ESR|EPC|USP|SR}** (op=28, dispatch=0x58) — Privileged
+**RDSPR Rd, {ESR|EPC|USP|SR|SCR0–3}** (op=31, dispatch=0x5E) — Privileged
 ```
 priv=1 a_src=SPR alu=PASS_A reg_w=IR_RD w_en=1 wmux=RBUS
 ```
-→ Rd = SPR value. Hardware decodes IR[15:12]: SPR 0 → A-bus=ESR, SPR 1 → A-bus=EPC, SPR 2 → A-bus=R14 cross_bank read.
+→ Rd = SPR value. Hardware decodes IR[15:12]: SPR 0 → A-bus=ESR, SPR 1 → A-bus=EPC, SPR 2 → A-bus=R14 cross-bank read, SPR 3 → A-bus=SR (current status), SPR 4–7 → SCR0–SCR3 scratch storage.
 
 ### Format B — Branches (0x60, 0x62)
 

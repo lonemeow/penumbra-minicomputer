@@ -223,7 +223,7 @@ my_function:
 
 | Instruction | Syntax                     | Operation                                | Privileged |
 |-------------|----------------------------|------------------------------------------|:----------:|
-| EI          | `EI`                       | `SR.I = 1` (one-instruction delay)       | No         |
+| EI          | `EI`                       | `SR.I = 1` (one-instruction delay)       | Yes        |
 | DI          | `DI`                       | `SR.I = 0` (immediate)                   | Yes        |
 | WRSYS       | `WRSYS Rd, #dev, #reg`     | Write sysreg                             | Yes        |
 | RDSYS       | `RDSYS Rd, #dev, #reg`     | Read sysreg                              | Yes        |

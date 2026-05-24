@@ -171,11 +171,10 @@ halfword to 2-byte). Misaligned accesses trap to `VEC_ALIGN` (vector 8).
 - **User (S=0).** Restricted; cannot execute privileged instructions.
 - **Supervisor (S=1).** Full access.
 
-Privileged instructions: `DI`, `WRSYS`, `RDSYS`, `ERET`, `WRSPR`,
-`RDSPR`. Executing a privileged instruction in user mode raises
-`VEC_PRIV` (vector 4). Note that **`EI` is unprivileged** — user code
-may enable interrupts (the kernel may have disabled them briefly
-before returning via an unusual path).
+Privileged instructions: `EI`, `DI`, `WRSYS`, `RDSYS`, `ERET`,
+`WRSPR`, `RDSPR`. Executing a privileged instruction in user mode
+raises `VEC_PRIV` (vector 4). User code cannot enable interrupts; the
+kernel owns `SR.I` and restores it via `ERET` from `ESR`.
 
 Controlled transitions:
 
@@ -268,7 +267,8 @@ ERET        ; executes in the "shadow" — completes before any IRQ fires
 
 Internally a flip-flop (`ei_shadow`) is set when `EI` executes, causing
 the next instruction fetch to skip the pending-interrupt check. The
-flip-flop clears after one instruction cycle. `EI` is unprivileged.
+flip-flop clears after one instruction cycle. `EI` is privileged; user
+mode attempts trap to `VEC_PRIV`.
 
 ### DI — Disable Interrupts
 
