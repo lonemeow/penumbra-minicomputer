@@ -56,9 +56,29 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
       .narrowScalarIf(typeIs(0, s64), changeTo(0, s32))
       .lower();
 
-  // Multiply with overflow: lower to wide multiply + overflow check.
-  // G_UMULH/G_SMULH (high-half multiply): lower to wide MUL + shift.
-  getActionDefinitionsBuilder({G_SMULO, G_UMULO})
+  // Multiply with overflow.  Asymmetric at s64 — matches SelectionDAG's
+  // ExpandIntRes_XMULO (which inline-expands UMULO i64 and libcalls SMULO i64
+  // to __mulodi4 when available).
+  //
+  // G_UMULO at s32/s64: .lower() expands to G_MUL + G_UMULH + ICMP_NE at the
+  // original width.  At s32 the G_UMULH lowers via widening to s64 (so the
+  // wide G_MUL libcalls __muldi3 once).  At s64 the G_UMULH narrows to s32
+  // partial products via the G_UMULH rule below.  The trailing .lower() is a
+  // safety net for any width that didn't match lowerFor after widening.
+  //
+  // G_SMULO at s32: same .lower() expansion via G_SMULH at s32.
+  // G_SMULO at s64: deliberately unhandled — will hard-error if it ever
+  // appears.  No clean path exists today (narrowScalarMul doesn't handle
+  // G_SMULH, and LegalizerHelper::libcall has no G_SMULO case).  When it
+  // does come up, the fix is a custom legalization that emits a __mulodi4
+  // libcall — mulodi4.c is already linked into NetBSD's libc and our
+  // bare-metal compiler-rt builtins, so the symbol is always available.
+  getActionDefinitionsBuilder(G_UMULO)
+      .lowerFor({{s32, s1}, {s64, s1}})
+      .minScalar(0, s32)
+      .lower();
+
+  getActionDefinitionsBuilder(G_SMULO)
       .lowerFor({{s32, s1}})
       .minScalar(0, s32);
 
@@ -75,7 +95,20 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
       .widenScalarToNextPow2(0, 32)
       .clampScalar(0, s32, s64);
 
-  getActionDefinitionsBuilder({G_UMULH, G_SMULH})
+  // High-half multiply.
+  // - s32: lower (LegalizerHelper::lowerSMULH_UMULH widens to s64 and uses
+  //   G_MUL — our s64 G_MUL libcalls __muldi3 which is fine).
+  // - G_UMULH s64: narrowScalarMul splits into s32 partial products
+  //   (schoolbook multiplication using s32 G_MUL/G_UMULH).  Reached by our
+  //   G_UMULO s64 .lower() path.
+  // - G_SMULH s64: not reachable today (G_SMULO s64 is unhandled).
+  //   narrowScalarMul doesn't support G_SMULH, so we'd need a custom path.
+  getActionDefinitionsBuilder(G_UMULH)
+      .lowerFor({s32})
+      .minScalar(0, s32)
+      .narrowScalarIf(typeIs(0, s64), changeTo(0, s32));
+
+  getActionDefinitionsBuilder(G_SMULH)
       .lowerFor({s32})
       .minScalar(0, s32);
 
