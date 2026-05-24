@@ -1,12 +1,27 @@
 # Penumbra LLVM Backend — Claude Code Context
 
-This file provides LLVM backend context for work under `llvm/`. The root `CLAUDE.md` has project-wide conventions.
+Navigation aid for work under `llvm/`. The root `CLAUDE.md` has
+project-wide conventions; `doc/system/abi.md` is the authoritative
+spec for calling convention, ELF format, and relocation table.
+
+**Read first:**
+- `doc/system/abi.md` — full ABI: registers, calling convention,
+  ELF object format, the complete `R_PENUMBRA_*` relocation table
+  (§4), DWARF mapping, TLS model.
+- `doc/system/architecture.md`, `doc/system/instruction-encoding.md`
+  — ISA-visible behavior and bit-level instruction encoding.
+- `doc/system/toolchain.md` — LLVM backend strategy and rationale.
+
+This file documents what's specific to the *implementation* (where
+code lives, how passes are wired, non-obvious gotchas). Do not look
+here for spec facts — those live in `doc/`.
 
 ## Build
-Source dir: `llvm/llvm/`, build dir: `build/llvm/`
-(overridable via `LLVM_PREFIX` in Makefile).
 
-**Initial cmake (one-time):**
+Source: `llvm/llvm/`. Build: `build/llvm/` (override with
+`LLVM_PREFIX`).
+
+Initial cmake (one-time):
 ```sh
 cmake -G Ninja -S llvm/llvm -B build/llvm \
   -DLLVM_TARGETS_TO_BUILD=Penumbra \
@@ -16,543 +31,266 @@ cmake -G Ninja -S llvm/llvm -B build/llvm \
   -DLLVM_PARALLEL_LINK_JOBS=2
 ```
 
-**Incremental rebuild (target only what's needed):**
+Incremental rebuild — target only what's needed (a bare `ninja -C
+build/llvm` also builds upstream unit tests):
 ```sh
 ninja -C build/llvm -j10 llc clang lld \
   llvm-mc llvm-ar llvm-nm llvm-objcopy llvm-objdump \
   llvm-readobj llvm-size llvm-strings
 ```
-A full `ninja -C build/llvm` builds everything including unit tests —
-much slower; only needed if running `llvm-lit` for the first time.
+`-j10` for compilation, `-j2` link jobs (set in cmake) to keep
+15 GB WSL2 from OOM-ing on the linker steps.
 
-- Uses ccache and Ninja
-- `-j10` for compilation, `-j2` link jobs (set in cmake) to avoid
-  OOM on 15 GB WSL2
-- Target triple: `penumbra-unknown-none` (bare-metal),
-  `penumbra-unknown-netbsd` (NetBSD userland/kernel)
-
-**Tests:**
+Codegen regression tests (Lit + FileCheck):
 ```sh
-build/llvm/bin/llvm-lit llvm/llvm/test/CodeGen/Penumbra/       # all tests
-build/llvm/bin/llvm-lit -v llvm/llvm/test/CodeGen/Penumbra/alu.ll  # one test
+build/llvm/bin/llvm-lit llvm/llvm/test/CodeGen/Penumbra/       # all
+build/llvm/bin/llvm-lit -v llvm/llvm/test/CodeGen/Penumbra/alu.ll  # one
 ```
 
-**Regenerate CHECK lines:**
+Regenerate CHECK lines after a codegen change:
 ```sh
 python3 llvm/llvm/utils/update_llc_test_checks.py \
   --llc-binary build/llvm/bin/llc \
   llvm/llvm/test/CodeGen/Penumbra/<test>.ll
 ```
-- Penumbra registered in `utils/UpdateTestChecks/asm.py`
-  (reuses AVR scrubber/function-RE)
+Penumbra is registered in `utils/UpdateTestChecks/asm.py` (reuses
+AVR's scrubber/function-RE).
 
-**Compiler Correctness Tests (llvm-test-suite):**
-Executes thousands of C tests on ISS in `+hosted` mode.
-Requires `compiler-rt` (see root `CLAUDE.md` for build).
+Compiler-correctness suite (thousands of C tests on ISS in `+hosted`
+mode; requires `compiler-rt` — build via
+`sw/tools/setup-compiler-rt.sh`):
 ```sh
 make test-compiler                # all tests at -O2
 make test-compiler OPT="-Os"      # override optimization
-make test-compiler COMPILER_TESTS="test/compiler/llvm-test-suite/UnitTests/2002-05-02-ArgumentTest.c"
+make test-compiler COMPILER_TESTS="path/to/test.c"
 ```
 
-## Current State
-**End-to-end functional.** C boot ROM compiles with clang,
-links with lld, and runs on the simulated Penumbra CPU
-(prints "Penumbra/1" via UART).
+## File map (`llvm/llvm/lib/Target/Penumbra/`)
 
-**MC-layer assembler:** `llvm-mc -triple=penumbra` encodes all 4
-instruction formats.
-- Eleven fixup/relocation types: branch22, imm16, memoffset16,
-  lo16, hi16, memoffset16_pcrel, imm16_pcrel, 32, none,
-  tls_gd_lo16, tls_gd_hi16.
-- Pseudo-instructions LI, LA, NOP, RET expanded in the AsmParser.
-- `%lo16()`/`%hi16()`/`%pcrel()`/`%tlsgd_lo16()`/`%tlsgd_hi16()`
-  MCSpecifierExpr modifiers parsed and printed
-  (full `clang -S` → `llvm-mc` roundtrip works).
-- Register aliases (pc, sp, lr, zero, tp),
-  SPR names (epc, esr, usp, sr — context-sensitive, sr parsed
-  as SPR index only in RDSPR/WRSPR context since it's also a register),
-  `[Rb]` without offset,
-  and expression offsets (`[pc + label - .]`) all supported.
-- RDSPR/WRSPR/RDSYS/WRSYS instructions fully encoded.
-- Relocation type names registered in `ELFRelocs/Penumbra.def`
-  for `llvm-readobj`/`llvm-objdump`.
+This table is the primary navigation aid for finding code. For *what
+each pass does*, read the source — descriptions here state purpose,
+not behavior.
 
-**Disassembler:** `llvm-mc -disassemble -triple penumbra` and
-`llvm-objdump -d` decode all instruction formats.
-- Auto-generated decoder tables from TableGen `Inst` bit fields.
-- Custom decoders: `decodeBranchTarget` (22-bit signed word offset
-  → absolute address with symbolic lookup),
-  `decodeSimm16` (sign-extended for LLIS),
-  `decodeMemOffset16` (sign-extended for load/store offsets).
-- `ELFObjectFile.h` maps `EM_PENUMBRA` → `elf32-penumbra` / `Triple::penumbra`
-  for all LLVM binary utilities.
-- **MCInstrAnalysis** (in `PenumbraMCTargetDesc.cpp`):
-  `evaluateBranch` resolves direct branch/call targets for
-  `<symbol>` annotations in `llvm-objdump`.
-  `updateState`/`evaluateMemoryOperandAddress` track GPR values
-  across LLI/LUI instruction pairs, annotating LUI with the
-  reconstructed 32-bit address and symbol name (printed as
-  `// 0xADDR <symbol>` comment).  State is invalidated on
-  terminators, calls, and any non-tracked GPR write.
-  Branch targets printed as hex addresses via `printBranchTarget`.
-- Lit tests: `test/MC/Disassembler/Penumbra/penumbra.txt`
-  (vectors from `pasm.py` reference assembler),
-  `test/MC/Penumbra/disasm-annotations.s` (branch target and
-  LLI/LUI address annotations on linked binary, relocation
-  display on .o file, register invalidation).
-
-**GlobalISel codegen (hybrid TableGen + C++):**
-Simple 1:1 patterns are expressed as TableGen `Pat<>` rules in
-`PenumbraGISel.td` and imported via `selectImpl()`.
-Complex multi-instruction sequences remain in manual C++.
-
-**TableGen handles:**
-ALU reg-reg (ADD/SUB/AND/OR/XOR),
-ALU reg-imm (ADDi/SUBi/ANDi with uimm16),
-shifts (SHL/SHR/SAR reg and SHLi/SHRi/SARi with uimm5),
-NOT, simple constants (LLI for uimm16, LLIS for simm16neg),
-all load variants (LDW/LDH/LDHS/LDB/LDBS for i32 and p0,
-s1 widened to s8),
-all store variants (STW/STH/STB; store-zero uses R0 directly
-via MCP forwarding from the selector's `COPY $r0`, s1 widened to s8),
-G_PTR_ADD reg-reg (→ADD) and reg-imm (→ADDi with uimm16 offset,
-critical for GEPs with constant indices: struct fields,
-`p[i]` with constant i, and `p++` in tight loops).
-
-**GlobalISel combiner pipeline** (see `PenumbraCombine.td`):
-- Pre-legalizer at -O1+: `[all_combines]` — the full upstream
-  canonicalization / DCE rule set, matching AArch64 / RISC-V.
-  The `*_by_const` magic-multiply rules in
-  `intdiv_combines`/`intrem_combines` are gated by the target's
-  `isIntDivCheap()` hook (overridden to return true in
-  `PenumbraISelLowering.cpp`); without that override `udiv x, 3`
-  rewrites into a 64-bit `__muldi3` libcall that is heavier than
-  the original `__udivsi3`.  Anything `sub_to_add` flips
-  (`G_SUB x, c` → `G_ADD x, -c`) is re-canonicalized after
-  legalization by our `penumbra_neg_imm_to_opposite` rule when
-  `|-c|` fits uimm16, so the round-trip preserves SUBi selection.
-- Pre-legalizer at -O0: `[optnone_combines]` — a smaller upstream
-  set (`trivial_combines, ptr_add_immed_chain, combines_for_extload,
-  not_cmp_fold, opt_brcond_by_inverting_cond, combine_concat_vector`)
-  that cleans up the most obvious IRTranslator artefacts without
-  paying full canonicalization compile time.  Implemented by a
-  separate pass class `PenumbraO0PreLegalizerCombiner`.
-- Post-legalizer at -O1+ only: `[commute_constant_to_rhs,
-  ptr_add_immed_chain, combines_for_extload,
-  penumbra_neg_imm_to_opposite]`.  `penumbra_neg_imm_to_opposite`
-  is target-specific — flips G_ADD/G_SUB by a negative constant
-  (c < 0 AND -c fits uimm16) to the opposite opcode with the
-  positive magnitude, so `n--` selects to SUBi instead of
-  materializing -1 via LLIS.
-- MIR-level unit tests under `test/CodeGen/Penumbra/GlobalISel/`
-  using `-run-pass=penumbra-postlegalizer-combiner` isolate each
-  rule; regenerate with `update_mir_test_checks.py`.
-
-**Manual C++ handles:**
-wide constants (LLI+LUI),
-global addresses (static: LLI+LUI with lo16/hi16;
-PIC/PIE: GOT-indirect via MOV PC + LLI/LUI got_pcrel + ADD + LDW,
-5 instructions, full 32-bit reach),
-frame-index folding into load/store + LEAfi for escaped addresses,
-G_PTRMASK (→AND),
-G_INTTOPTR/G_PTRTOINT/G_FREEZE (→COPY),
-G_IMPLICIT_DEF (→IMPLICIT_DEF),
-G_ICMP+G_BRCOND fold (CMP+Bcc; folds uimm16 constant RHS into
-CMPi; also swaps LHS/RHS when only LHS is constant via
-CmpInst::getSwappedPredicate so CMPi can still fire),
-G_BR, G_PHI,
-G_SELECT (ICMP fold into SELECT_CC_GPR — does NOT yet fold
-constant RHS into a CMPi variant; follow-up needs a
-SELECT_CCi_GPR pseudo),
-G_ICMP standalone (also uses SELECT_CC_GPR, same limitation),
-G_ZEXT/G_SEXT,
-jump tables (always EK_LabelDifference32 entries placed
-inline in .text; base materialized via LLI+LUI (static)
-or MOV PC + ADDi (PIC); BRJT always adds base back).
-
-**Other features:**
-- Calling convention: R1-R4 args, R1 return / R1:R2 for i64,
-  R13/LR callee-saved.
-- i64 support: return/args split into R1:R2 pairs,
-  bitwise ops narrowed to per-half i32,
-  multi-word compare via XOR+OR,
-  add/sub via G_UADDO/G_UADDE lowering to ADD+CMP carry sequences;
-  hardware ADC/SBC exist but need CCR register bank
-  for GlobalISel to use them;
-  zext/sext i32→i64 via narrowScalarIf splitting.
-- Extensions: G_ANYEXT/G_TRUNC/G_SEXT_INREG.
-- MUL/DIV/REM: s32 strength-reduced when possible
-  (MUL by -1→SUB from zero, constant power-of-2 MUL→SHL,
-  power-of-2±1 MUL→SHL+ADD/SUB with shift < bit_width guard,
-  power-of-2 UDIV→LSHR, power-of-2 UREM→AND),
-  otherwise libcalls;
-  s64 all via libcalls (__muldi3/__udivdi3/__umoddi3/etc.).
-- G_MEMCPY/G_MEMMOVE/G_MEMSET via libcalls.
-- G_PREFETCH: custom-lowered to no-op (erased) —
-  Penumbra has no cache hint instructions.
-- Varargs: G_VASTART custom-lowered, G_VAARG generic lowering
-  (s32/s64/p0), va_copy selected to LDW+STW pair,
-  R1-R4 save area in variadic prologues.
-  va_start offset uses ArgAssigner.StackSize (not SplitArgs.size())
-  so it correctly handles >4 named args and wide types (e.g. i64)
-  that occupy multiple stack slots.
-- G_DYN_STACKALLOC: lowered by framework to SP subtract + alignment
-  (VLAs, runtime-sized `alloca`).
-  `setStackPointerRegisterToSaveRestore(R14)` in ISelLowering.
-- G_STACKSAVE/G_STACKRESTORE: selected to MOV SP (R14).
-- `@llvm.returnaddress(0)` → MOV from a vreg that captures R13 at
-  the top of the entry block.  Reading R13 directly at the use site
-  is wrong in non-leaf functions: every BL/JALR clobbers R13 with
-  its own call-site return address, so the live R13 no longer
-  holds the caller's return address.  The capture is lazy
-  (only materialized when the intrinsic is actually used) and the
-  vreg handle lives in `PenumbraMachineFunctionInfo` so repeated
-  references share one capture.
-  `@llvm.frameaddress(0)` → MOV from R14 (SP).
-- **TLS (thread-local storage):** IR pass (`PenumbraLowerTLS` in
-  `PenumbraTargetMachine.cpp`) checks TLS model via
-  `TargetMachine::getTLSModel()`:
-  **Local-Exec/Initial-Exec** (static binaries): emits inline
-  `mov r,r12` (read TP) + `ptrtoint @tls_var` + `add` —
-  no function call, instruction selector emits LLI+LUI with
-  TLS GD relocs that lld resolves as `R_TPREL`.
-  **General-Dynamic** (PIC/shared): replaces with
-  `call @__tls_get_addr`; `selectGlobalValue` emits LLI+LUI
-  or MOV PC + ADDi with `S_TLSgd_*` target flags.
-  GOT-based dynamic resolution to be added with `ld.elf_so`.
-- No SelectionDAG — GlobalISel only.
-- **Branch analysis:** `analyzeBranch`/`insertBranch`/`removeBranch`/
-  `reverseBranchCondition` implemented in `PenumbraInstrInfo.cpp`.
-  Cond vector is single element (branch opcode).  All 14 conditional
-  branch opcodes have opposite-pairs (BEQ↔BNE, BCS↔BCC, etc.).
-  Enables `-O1`/`-Os`/`-O2` (branch folding, block placement).
-- **Sub-word load zero-extension:** `penumbra_zextload_promote` in
-  `PenumbraCombine.td` rewrites plain `G_LOAD :: (load sX) -> sY`
-  (sX < sY) to `G_ZEXTLOAD` post-legalize.  `LDB`/`LDH` always
-  zero-extend in hardware, so this just communicates the load's
-  actual semantics to the rest of the pipeline.  Once the load
-  carries known-zero high bits, `redundant_and` (added to the
-  post-legalizer combine list via `known_bits_simplifications`)
-  drops the `G_AND %, 0xFF` masks the legalizer emits when widening
-  unsigned/eq/ne `G_ICMP` operands.  Critical for multi-use loop
-  shapes (strcmp, memcmp, hash-on-bytes) where the loaded byte
-  flows through a `G_PHI` to both the comparison and a feedback
-  edge — upstream's `load_and_mask` combine bails on those because
-  it requires the `G_AND` to be a direct user of a single-use load.
-  Conservative guard skips promotion when a direct user is `G_SEXT`
-  or `G_SEXT_INREG`, leaving upstream's `extending_loads` combine
-  free to fold those into `G_SEXTLOAD` (= `LDBS`).  Strcmp inner
-  loop drops from 13 to 8 instructions, ~4% Dhrystone improvement
-  at -O2.  Signed multi-use case (PHI-mediated) is still suboptimal
-  and tracked in `doc/TODO.md` ("Compiler: signed sub-word loads
-  through PHIs").  Regression test at
-  `test/CodeGen/Penumbra/zextload-promote.ll`.
-- **Pointer-bump loop sinking:** `penumbra_sink_ptr_add_past_use`
-  in `PenumbraCombine.td` sinks a `G_PTR_ADD %new, %old, K` past
-  the immediately-following `G_LOAD`/`G_STORE`/`G_{Z,S}EXTLOAD`
-  when that op reads `%old` (the source) and not `%new`.  Penumbra's
-  ALU is destructive 2-operand — `add Rd, 1` writes back into Rd —
-  so a pointer bump emitted *before* the load/store of the old
-  pointer keeps both old and new pointer simultaneously live across
-  the memory op.  TwoAddress then inserts `COPY old → new` to
-  satisfy the tied-def, the register coalescer can't eliminate it
-  (live ranges overlap), and we end up with a trailing register-
-  to-register MOV per pointer per iteration at the back-edge.
-  Sinking the G_PTR_ADD lets the load kill `%old` first, freeing
-  the same physical register for `%new`, which collapses to an
-  in-place `ADDi Rd, 1`.  The combine cascades through the
-  combiner's fixed-point loop: `[GEP_s; GEP_d; LDB; STB]` becomes
-  `[LDB; GEP_s; STB; GEP_d]` over two iterations.  Strcpy/memcpy
-  inner loops drop from 8 to 6 instructions/iter (the hand-coded
-  ideal); +12% on cycle-accurate Dhrystone.  Regression test at
-  `test/CodeGen/Penumbra/lsr-pointer-bump.ll`.
-- **Compare elimination:** `analyzeCompare` / `optimizeCompareInstr`
-  in `PenumbraInstrInfo.cpp`, driven by the generic `PeepholeOptimizer`
-  at -O1+.  Elides `CMPi Rx, 0` when an earlier flag-setting ALU op
-  defines Rx and Rx is neither read nor re-defined in the intervening
-  range.  Walks back through unrelated SR clobbers (e.g. pointer
-  increments in a memcpy loop), splices the producer adjacent to the
-  CMP, and erases the CMP — splice is mandatory because every
-  Penumbra ALU op clobbers SR, so without movement an intervening
-  ADDi would leave its own flags live for the consumer.  Forward
-  walk verifies no SR reader between the CMP and the next SR
-  redefinition consumes C or V (only Z and N are equivalent between
-  SUBi-by-nonzero and CMP-against-zero).  ADC/SBC excluded from the
-  producer allow-list because they USE SR (carry-in) and would see a
-  different carry-in if relocated past intervening SR clobbers.
-  Saves the redundant CMP in `while (n--)` / memcpy-style loops
-  (~6% Dhrystone improvement at -O2).  Extension points (CMP Rx,Ry
-  after SUB Rx,Ry; TESTi after ANDi; COPY chains; cross-MBB) noted
-  as TODOs in the source.  Regression test at
-  `test/CodeGen/Penumbra/compare-elim.ll`.
-- **G_FENCE:** Legalized as always-legal, selected to `MEMBARRIER`
-  pseudo (compiler barrier, no hardware instruction — uniprocessor).
-- **G_BRINDIRECT:** Legalized for p0, selected to BRIND (JMP Rd).
-  Used by computed gotos (Lua VM dispatch).
-
-**Inline assembly:**
-`asm volatile("..." : "=r"(out) : "r"(in) : "cc", "memory")` works.
-Supported constraints: `r` (GPR), `i` (immediate),
-`~{cc}` (condition flags clobber → SR),
-`~{memory}` (compiler memory fence).
-InlineAsmLowering wired into GlobalISel via subtarget.
-
-**Clang:** `clang --target=penumbra-unknown-none -c file.c` works
-at `-O0` through `-O2` (bare-metal).
-`clang --target=penumbra-unknown-netbsd` for NetBSD (defines `__NetBSD__`
-via `NetBSDTargetInfo<>` wrapper).
-Boot ROM compiles and runs correctly at all three levels.
-`-fPIC`/`-fPIE` supported: GOT-indirect addressing for globals
-(MOV PC + LLI/LUI got_pcrel + ADD + LDW from GOT, 32-bit reach).
-TLS GD PIC uses GOT-indirect to tls_index pair
-(MOV PC + LLI/LUI tlsgd_got_pcrel + ADD, 4 instructions).
-Label-difference jump table entries.
-`needsRelocateWithSymbol` prevents section+offset folding for
-GOT/TLS relocs (addend must only contain PC adjustment).
-`PenumbraToolChain` (`clang/lib/Driver/ToolChains/Penumbra.{h,cpp}`)
-is the bare-metal toolchain (ROM, hw tests) — uses `ld.lld` directly.
-For `penumbra-unknown-netbsd`, the stock `toolchains::NetBSD`
-(`clang/lib/Driver/ToolChains/NetBSD.cpp`) is used with Penumbra
-additions: `elf32penumbra` emulation, `useLibgcc=false`,
-`--allow-shlib-undefined`, `--undefined-version`.
-`build.sh distribution` compiles nearly all of NetBSD userland.
-
-**lld:** `ld.lld -T rom.ld` links Penumbra ELF objects.
-Supports all 21 relocation types including GOT/PLT and TLS GD.
-**GOT/PLT:** PLT entries are 16 bytes (LLI+LUI+LDW+JMP using R11
-scratch register).  `R_PENUMBRA_GLOB_DAT` for GOT, `R_PENUMBRA_JUMP_SLOT`
-for PLT.  Shared libraries (`-shared`) work with PIC code.
-**TLS GD:** PIC uses `R_PENUMBRA_TLS_GD_GOT_PCREL_LO16/HI16`
-(GOT-indirect PC-relative to tls_index pair, 32-bit reach);
-lld creates GOT pairs with
-`R_PENUMBRA_TLS_DTPMOD32`/`R_PENUMBRA_TLS_DTPOFF32` dynamic relocs.
-Static uses `R_TPREL` (Variant 1, no TCB gap, like RISC-V).
-`EM_PENUMBRA` to `getTlsTpOffset` mapping in `InputSection.cpp`.
-EM_PENUMBRA (0xF0DA) defined in central `llvm/BinaryFormat/ELF.h`.
-
-## File Map (`llvm/llvm/lib/Target/Penumbra/`)
-
-| File | Description |
-|------|-------------|
+| File | Purpose |
+|------|---------|
 | `Penumbra.td` | Top-level TableGen: includes, ProcessorModel, AsmWriter, Target, pointer remap |
-| `PenumbraRegisterInfo.td` | 16 GPRs (R0=zero, R12=TP, R13=LR, R14=SP, R15=PC), alt names, GPR/GPR\_Allocatable/CCR classes, HWEncoding |
-| `PenumbraInstrInfo.td` | All 4 formats (R/L/M/B) with bit-accurate encoding. Tied-operand constraints for 2-addr ops. ADC/SBC Uses=[SR]. All operand slots use `GPR` (full class incl. R0); allocator honours R0's reserved+`isConstant` flags. Pseudos: RET, LEAfi, SELECT\_GPR, SELECT\_CC\_GPR, ADJCALLSTACK. Penumbra1Model sched: IssueWidth=1, MicroOpBufferSize=0, LoadLatency=1 (microcoded single-issue: no benefit from hiding latency) |
-| `PenumbraGISel.td` | TableGen `Pat<>` rules: ALU reg-reg/reg-imm, shifts, NOT, constants (LLI/LLIS), all load/store (i32/p0), `ptradd` reg-reg and reg-imm (uimm16 offset). Includes `PenumbraCombine.td`. ImmLeaf predicates: uimm16, simm16, simm16neg, uimm5 |
-| `PenumbraCombine.td` | GlobalISel combiner rule groups. PreLegalizer (-O1+): `[all_combines]` (full upstream set; div-by-const magic-multiply gated off via `isIntDivCheap()`). PreLegalizer (-O0): `[optnone_combines]` (small hand-picked set). PostLegalizer (-O1+): `[commute_constant_to_rhs, ptr_add_immed_chain, combines_for_extload, penumbra_zextload_promote, known_bits_simplifications, penumbra_neg_imm_to_opposite, penumbra_sink_ptr_add_past_use]`. Custom rules (C++ match/apply in PenumbraPostLegalizerCombiner.cpp): `penumbra_zextload_promote` (sub-word load → G\_ZEXTLOAD), `penumbra_neg_imm_to_opposite` (flips G\_ADD/G\_SUB by a negative constant when -c fits uimm16), `penumbra_sink_ptr_add_past_use` (sinks G\_PTR\_ADD past the next memory op that reads its source so destructive 2-operand ADDi can recycle the source register) |
-| `PenumbraCallingConv.td` | CC\_Penumbra (R1-R4 args, stack overflow), RetCC\_Penumbra (R1, R2 for i64), CSR\_Penumbra (R5-R10, R13) |
-| `PenumbraRegisterInfo.{h,cpp}` | Reserved regs (R0, R12, R14, R15), callee-saved, getFrameRegister(R14). `eliminateFrameIndex` folds small offsets directly, expands large offsets to `LLI+LUI+ADD` via a fresh virtual register (rewritten later by the scavenger, not a fixed scratch — RA may have live values in any particular reg). `requiresRegisterScavenging`/`requiresFrameIndexScavenging` both true |
-| `PenumbraFrameLowering.{h,cpp}` | StackGrowsDown, Align(4), hasFPImpl()=true when alloca present. `adjustSP` helper used by both prologue (SUB/SUBi) and epilogue (ADD/ADDi): small frames use the 16-bit immediate form, large frames (StackSize > 65535) materialize the size in R11 via LLI+LUI and use the reg-reg form. `processFunctionBeforeFrameFinalized` adds an emergency spill slot for RegScavenger when the estimated frame exceeds 15-bit signed — otherwise leaf functions don't pay for it |
-| `PenumbraISelLowering.{h,cpp}` | TargetLowering: JT encoding (EK\_LabelDifference32), SELECT diamond expansion, inline asm (`r`→GPR\_Allocatable, `{cc}`→SR/CCR), `setStackPointerRegisterToSaveRestore(R14)`, `isIntDivCheap()`=true (gates off GISel `udiv_by_const` magic-multiply since we have no hardware mulh), `isLegalAddressingMode` override (rejects scaled index, BaseGV, and unfit immediates — overrides the default "RISCy r+r and r+i" claim) |
-| `PenumbraTargetTransformInfo.h` | Header-only `PenumbraTTIImpl` subclassing `BasicTTIImplBase<PenumbraTTIImpl>`.  Routes target-aware cost-model queries (LSR's `isLegalAddressingMode` and `isLSRCostLess`) to `PenumbraTargetLowering` / our own override.  `getNumberOfRegisters` returns 12 for `GPRRC` and 0 for `FPRRC`/`VRRC` — explicitly disables loop / SLP vectorizer paths and prevents wasted optimizer work that BasicTTI's "I don't know, assume the worst" defaults would otherwise allow.  `getRegisterClassForType` always returns GPR (Penumbra is integer-only soft-float).  `isLSRCostLess` makes `Insns` the primary sort key (PowerPC pattern) — without this, LSR's default tuple-compare puts `NumRegs` first and rewrites pointer-bump loops (`*d++ = *s++`) into base+index form, costing two extra ADDs per iteration.  No alignment check in `isLegalAddressingMode` — `DL.getTypeStoreSize(Ty)` is O(N) for `TargetExtType` and LSR queries this thousands of times per loop, so the cost-model approximation "trust LSR's offsets to be naturally aligned" is preferable |
-| `PenumbraSubtarget.{h,cpp}` | Central hub: owns InstrInfo, FrameLowering, TLInfo, and all GlobalISel objects |
-| `PenumbraTargetMachine.{h,cpp}` | Data layout `e-m:e-p:32:32-i32:32-i64:64-n32-S32`, GlobalISel pipeline, `setGlobalISel(true)`. PIC via `-fPIC`. `PenumbraTargetObjectFile` (local class): always inlines jump tables in `.text`. `PenumbraLowerTLS` IR pass: lowers `@llvm.threadlocal.address` (GD → `__tls_get_addr` call; LE/IE → inline TP+offset). `getTargetTransformInfo` override constructs `PenumbraTTIImpl` so cost-model queries reach our `TargetLowering` overrides (without it, the default returns a generic `TargetTransformInfo(DataLayout)` that ignores the target) |
-| `PenumbraAsmPrinter.cpp` | MachineInstr → MCInst. Expands RET→JMP R13. Wraps globals/JTI with lo16/hi16/pcrel MCSpecifierExpr. `emitJumpTableEntry` override: always emits label-difference entries. PrintAsmOperand for inline asm |
-| `PenumbraMachineFunctionInfo.h` | Per-function state: VarArgsFrameIndex for variadic R1-R4 save area |
-| `GISel/PenumbraCallLowering.{h,cpp}` | lowerFormalArguments (R1-R4→vregs, variadic save area), lowerReturn (vreg→R1+RET), lowerCall |
-| `GISel/PenumbraLegalizerInfo.{h,cpp}` | See "Legalization" section below |
-| `GISel/PenumbraRegisterBankInfo.{h,cpp}` | Single GPR bank covering all 16 registers. Maps all ops to GPR |
-| `GISel/PenumbraRegisterBanks.td` | `def GPRRegBank : RegisterBank<"GPRBank", [GPR]>` |
-| `GISel/PenumbraInstructionSelector.cpp` | Hybrid: `selectImpl()` for TableGen patterns, manual C++ for complex cases. See "Manual C++ handles" above for full list. LLI+LUI pairs use SSA-correct intermediate vregs. G\_BRCOND folds uimm16 constant RHS into CMPi and swaps LHS/RHS when only LHS is constant (via CmpInst::getSwappedPredicate). |
-| `GISel/PenumbraPreLegalizerCombiner.cpp` | Pre-legalizer combiner pass (runs at -O1+). Boilerplate wrapper around `selectImpl` for rules defined in `PenumbraCombine.td` via `-gen-global-isel-combiner` |
-| `GISel/PenumbraO0PreLegalizerCombiner.cpp` | Pre-legalizer combiner pass (runs at -O0). Same boilerplate, smaller `optnone_combines` rule set |
-| `GISel/PenumbraPostLegalizerCombiner.cpp` | Post-legalizer combiner pass (runs at -O1+). Houses C++ match/apply for target-specific rules (currently `matchNegImmToOpposite` / `applyNegImmToOpposite` for G\_ADD↔G\_SUB flipping) |
-| `Disassembler/PenumbraDisassembler.{h,cpp}` | Binary → MCInst. Custom decoders for branch targets (symbolic lookup), signed immediates (LLIS), signed memory offsets |
-| `MCTargetDesc/PenumbraMCTargetDesc.{h,cpp}` | Registers all MC components. `PenumbraMCInstrAnalysis`: branch target evaluation + GPR state tracking for LLI/LUI address annotation |
+| `PenumbraRegisterInfo.td` | 16 GPRs (R0=zero, R12=TP, R13=LR, R14=SP, R15=PC), GPR/GPR_Allocatable/CCR classes, HWEncoding |
+| `PenumbraInstrInfo.td` | All 4 formats (R/L/M/B) with bit-accurate encoding. Tied-operand constraints for 2-addr ops. ADC/SBC `Uses=[SR]`. All operand slots use full `GPR` (allocator honors R0's reserved+`isConstant`). Pseudos: RET, LEAfi, SELECT_GPR, SELECT_CC_GPR, ADJCALLSTACK. `Penumbra1Model`: IssueWidth=1, MicroOpBufferSize=0, LoadLatency=1 |
+| `PenumbraGISel.td` | TableGen `Pat<>` rules (simple 1:1 selections). Includes `PenumbraCombine.td`. ImmLeaf predicates: uimm16, simm16, simm16neg, uimm5 |
+| `PenumbraCombine.td` | GlobalISel combiner rule groups (pre-/post-/-O0 lists) and custom rule decls. Custom matchers live in `PenumbraPostLegalizerCombiner.cpp` |
+| `PenumbraCallingConv.td` | CC_Penumbra (R1–R4 args, stack overflow), RetCC_Penumbra (R1, R2 for i64), CSR_Penumbra (R5–R10, R13) |
+| `PenumbraRegisterInfo.{h,cpp}` | Reserved regs (R0/R12/R14/R15), callee-saved list, `getFrameRegister(R14)`. `eliminateFrameIndex` folds small offsets directly; large offsets expand to LLI+LUI+ADD via a fresh virtual register (RegScavenger picks the physical reg) |
+| `PenumbraFrameLowering.{h,cpp}` | StackGrowsDown, Align(4), `hasFPImpl()=true` when alloca present. `adjustSP` helper used by both prologue and epilogue (small frames use 16-bit imm, large frames materialize size in R11). `processFunctionBeforeFrameFinalized` adds an emergency spill slot for RegScavenger only when frame > 15-bit signed |
+| `PenumbraISelLowering.{h,cpp}` | TargetLowering: JT encoding (EK_LabelDifference32), SELECT diamond expansion, inline-asm constraint mapping, `setStackPointerRegisterToSaveRestore(R14)`, `isIntDivCheap()=true`, `isLegalAddressingMode` override |
+| `PenumbraTargetTransformInfo.h` | Header-only `PenumbraTTIImpl`. Routes LSR/cost-model queries to our `TargetLowering`. `getNumberOfRegisters` returns 12 for GPRRC, 0 for FPR/VR (disables vectorizers). `isLSRCostLess` makes `Insns` the primary sort key (PowerPC pattern) — without this, LSR rewrites `*d++ = *s++` loops into base+index form |
+| `PenumbraSubtarget.{h,cpp}` | Owns InstrInfo, FrameLowering, TLInfo, all GlobalISel objects |
+| `PenumbraTargetMachine.{h,cpp}` | Data layout `e-m:e-p:32:32-i32:32-i64:64-n32-S32`, GlobalISel pipeline, `setGlobalISel(true)`. `PenumbraTargetObjectFile` (local class): always inlines jump tables in `.text`. `PenumbraLowerTLS` IR pass: lowers `@llvm.threadlocal.address` (GD → `__tls_get_addr`; LE/IE → inline TP+offset) |
+| `PenumbraAsmPrinter.cpp` | MachineInstr → MCInst. Expands RET→JMP R13. Wraps globals/JTI with lo16/hi16/pcrel MCSpecifierExpr. `emitJumpTableEntry`: always label-difference. PrintAsmOperand for inline asm |
+| `PenumbraMachineFunctionInfo.h` | Per-function state (e.g. `VarArgsFrameIndex` for variadic R1–R4 save area) |
+| `GISel/PenumbraCallLowering.{h,cpp}` | lowerFormalArguments (R1–R4 → vregs + variadic save), lowerReturn, lowerCall |
+| `GISel/PenumbraLegalizerInfo.{h,cpp}` | Type/op legality. See "Legalization at a glance" below |
+| `GISel/PenumbraRegisterBankInfo.{h,cpp}` | Single GPR bank covering all 16 registers |
+| `GISel/PenumbraRegisterBanks.td` | `GPRRegBank` definition |
+| `GISel/PenumbraInstructionSelector.cpp` | Hybrid: `selectImpl()` for TableGen patterns, manual C++ for complex cases (LLI+LUI pairs, GOT-PCREL globals, frame-index folding, jump tables, ICMP+BRCOND fold, varargs, return-address capture, …) |
+| `GISel/PenumbraPreLegalizerCombiner.cpp` | Pre-legalizer combiner (-O1+). Boilerplate wrapper around `selectImpl` for rules in `PenumbraCombine.td` |
+| `GISel/PenumbraO0PreLegalizerCombiner.cpp` | Same shape with the smaller `optnone_combines` rule set (-O0 only) |
+| `GISel/PenumbraPostLegalizerCombiner.cpp` | Post-legalizer combiner (-O1+). C++ match/apply for target-specific rules (currently `matchNegImmToOpposite`/`applyNegImmToOpposite`) |
+| `Disassembler/PenumbraDisassembler.{h,cpp}` | Binary → MCInst. Custom decoders for branch targets (symbolic lookup), signed immediates (LLIS), signed mem offsets |
+| `MCTargetDesc/PenumbraMCTargetDesc.{h,cpp}` | Registers all MC components. `PenumbraMCInstrAnalysis`: branch-target evaluation + GPR state tracking for LLI/LUI address annotations |
 | `MCTargetDesc/PenumbraInstPrinter.{h,cpp}` | MCInst → assembly text |
-| `MCTargetDesc/PenumbraMCCodeEmitter.cpp` | MCInst → binary bytes. Custom `encodeBranchTarget` and `encodeImm16` create fixups |
-| `MCTargetDesc/PenumbraAsmBackend.cpp` | Fixup resolution (branch22, imm16, lo16, hi16), `maybeAddReloc` for ELF relocs, NOP = `0x00000000` (ADD R0,R0) |
-| `MCTargetDesc/PenumbraELFObjectWriter.cpp` | ELF relocation mapping. Uses `EM_PENUMBRA` from `llvm/BinaryFormat/ELF.h` |
-| `MCTargetDesc/PenumbraFixupKinds.h` | Fixup kinds (branch22, imm16, memoffset16, lo16, hi16, pcrel variants) and MCSpecifierExpr values (S\_Lo16, S\_Hi16, S\_PCRel) |
-| `MCTargetDesc/PenumbraMCAsmInfo.{h,cpp}` | ELF-based, little-endian, `//` comments, `;` statement separator. `printSpecifierExpr` for `%lo16()`/`%hi16()`/`%pcrel()`/`%tlsgd_lo16()`/`%tlsgd_hi16()` |
-| `AsmParser/PenumbraAsmParser.cpp` | Assembly text → MCInst. Pseudo expansion: LI→LLI/LLIS/LUI, LA→LLI+LUI, NOP→ADD R0,R0, RET→JMP R13. Regs, imms, mem operands |
+| `MCTargetDesc/PenumbraMCCodeEmitter.cpp` | MCInst → binary. Custom `encodeBranchTarget`/`encodeImm16` create fixups |
+| `MCTargetDesc/PenumbraAsmBackend.cpp` | Fixup resolution (branch22, imm16, lo16, hi16). `maybeAddReloc` for ELF relocs. NOP = `0x00000000` (ADD R0,R0) |
+| `MCTargetDesc/PenumbraELFObjectWriter.cpp` | ELF reloc mapping. Uses `EM_PENUMBRA` from `llvm/BinaryFormat/ELF.h` |
+| `MCTargetDesc/PenumbraFixupKinds.h` | Fixup kinds + MCSpecifierExpr values (S_Lo16, S_Hi16, S_PCRel) |
+| `MCTargetDesc/PenumbraMCAsmInfo.{h,cpp}` | ELF, little-endian, `//` comments, `;` statement separator. `printSpecifierExpr` for `%lo16()`/`%hi16()`/`%pcrel()`/`%tlsgd_*()` |
+| `AsmParser/PenumbraAsmParser.cpp` | Assembly text → MCInst. Pseudo expansion (LI/LA/NOP/RET), register/immediate/memory parsing |
 | `TargetInfo/PenumbraTargetInfo.{h,cpp}` | Target registration (`Triple::penumbra`) |
 
-## Triple Integration
-`penumbra` added to `Triple.h` (arch enum), `Triple.cpp`
-(name, prefix, parsing, 32-bit, little-endian, ELF format, DwarfCFI).
-Also in `llvm/llvm/CMakeLists.txt` `LLVM_ALL_TARGETS`.
-Note: `TargetDataLayout.cpp:computeDataLayout()` has a `-Wswitch`
-warning for unhandled `penumbra` — harmless
-(we provide our own data layout).
+## Triple integration (across the tree)
 
-## Hex Output Pipeline
-`llvm-mc` → ELF object → `llvm-objcopy -O binary`
-→ `bin2hex.py` → `$readmemh` hex.
-Same approach as ARM/RISC-V embedded.
-`bin2hex.py` (`sw/tools/bin2hex.py`) reads flat LE binary,
-emits one 32-bit word per line in uppercase hex.
+`penumbra` is registered in upstream LLVM:
+- `Triple.h` (arch enum), `Triple.cpp` (name, prefix, parsing,
+  32-bit, little-endian, ELF, DwarfCFI).
+- `llvm/llvm/CMakeLists.txt` `LLVM_ALL_TARGETS`.
+- `ELFObjectFile.h` maps `EM_PENUMBRA` → `elf32-penumbra` /
+  `Triple::penumbra` for binary utilities.
+- `EM_PENUMBRA` (0xF0DA) defined centrally in
+  `llvm/BinaryFormat/ELF.h`.
+- `utils/UpdateTestChecks/asm.py` (reuses AVR scrubber).
 
-## lld Support (`llvm/lld/ELF/Arch/Penumbra.cpp`)
-ELF linker target with PIE support.
-Handles all 9 relocation types
-(including PC-relative memoffset and imm16 for PIC).
-**RELA format:** `EM_PENUMBRA` is in lld's RELA architecture list
-(`Driver.cpp:getIsRela`), so dynamic relocations use explicit addends
-(12-byte `Elf32_Rela` entries with `DT_RELA`/`DT_RELASZ`).
-Self-relocating PIE code (bootloader, ld.elf_so) needs
-`--apply-dynamic-relocs` so lld writes addends to the data sections
-(the bias computation reads pre-relocation values before the
-relocator runs).
-PIE support: `relativeRel = R_PENUMBRA_RELATIVE`,
-`symbolicRel = R_PENUMBRA_32`, `getDynRel()` maps
-`R_PENUMBRA_32` to dynamic, `getImplicitAddend()` reads
-32-bit values for verification.
-**Negative pcrel fix:** `R_PENUMBRA_IMM16_PCREL` handler
-detects negative offsets and flips ADDi (INC, op=0011) to
-SUBi (DEC, op=0100) with negated value, since ADDi
-zero-extends its immediate.  Same fix in `PenumbraAsmBackend`.
-Registered via `EM_PENUMBRA` (0xF0DA) in `llvm/BinaryFormat/ELF.h`.
-Emulation string `elf32penumbra`, output format `elf32-penumbra`.
-Triple mapping for `Triple::penumbra` in `InputFiles.cpp`.
-**Duplicate absolute symbol fix** (`llvm/lld/ELF/Symbols.cpp`):
-upstream lld's GNU ld compatibility check for duplicate absolute
-symbols accidentally excluded value 0 (C++ truthiness).
-Fixed locally — needed for NetBSD kernel option tracking symbols
-(`_KERNEL_OPT_N*`) which have value 0 for unconfigured devices.
+`TargetDataLayout.cpp:computeDataLayout()` has a `-Wswitch` warning
+for unhandled `penumbra` — harmless (we provide our own data layout
+via `PenumbraTargetMachine`).
 
-## ELF Relocations
-| Type | Value | Description | Field |
-|------|-------|-------------|-------|
-| `R_PENUMBRA_NONE` | 0 | No relocation | — |
-| `R_PENUMBRA_32` | 1 | Absolute 32-bit (.word symbol) | Full word |
-| `R_PENUMBRA_BRANCH22` | 2 | PC-relative 22-bit word offset | bits [25:4] |
-| `R_PENUMBRA_IMM16` | 3 | 16-bit immediate | bits [15:0] |
-| `R_PENUMBRA_LO16` | 4 | Low 16 bits of absolute address | bits [15:0] |
-| `R_PENUMBRA_HI16` | 5 | High 16 bits of absolute address | bits [15:0] |
-| `R_PENUMBRA_MEMOFFSET16_PCREL` | 6 | PC-relative 16-bit memory offset | bits [17:2] |
-| `R_PENUMBRA_IMM16_PCREL` | 7 | PC-relative 16-bit immediate | bits [15:0] |
-| `R_PENUMBRA_RELATIVE` | 8 | PIE dynamic relocation (bias adjust) | Full word |
-| `R_PENUMBRA_TLS_GD_LO16` | 9 | TLS GD: low 16 bits (static: TP offset) | bits [15:0] |
-| `R_PENUMBRA_TLS_GD_HI16` | 10 | TLS GD: high 16 bits (static: TP offset) | bits [15:0] |
-| `R_PENUMBRA_GLOB_DAT` | 11 | GOT entry (absolute address) | Full word |
-| `R_PENUMBRA_JUMP_SLOT` | 12 | PLT GOT entry | Full word |
-| `R_PENUMBRA_TLS_TPOFF32` | 13 | TLS IE: TP-relative offset in GOT | Full word |
-| `R_PENUMBRA_TLS_DTPMOD32` | 14 | TLS GD: module index in GOT | Full word |
-| `R_PENUMBRA_TLS_DTPOFF32` | 15 | TLS GD: module offset in GOT | Full word |
-| `R_PENUMBRA_TLS_GD_PCREL` | 16 | TLS GD: PC-relative to GOT entry (PIC) | bits [15:0] |
-| `R_PENUMBRA_PC32` | 17 | PC-relative 32-bit (.eh_frame FDE pointers) | Full word |
-| `R_PENUMBRA_GOT_PCREL_LO16` | 18 | GOT PC-relative: low 16 bits | bits [15:0] |
-| `R_PENUMBRA_GOT_PCREL_HI16` | 19 | GOT PC-relative: high 16 bits | bits [15:0] |
-| `R_PENUMBRA_TLS_GD_GOT_PCREL_LO16` | 20 | TLS GD GOT PC-relative: low 16 | bits [15:0] |
-| `R_PENUMBRA_TLS_GD_GOT_PCREL_HI16` | 21 | TLS GD GOT PC-relative: high 16 | bits [15:0] |
+## Combiner pipeline (where the codegen tricks live)
 
-## Legalization (`GISel/PenumbraLegalizerInfo.{h,cpp}`)
-- **Legal s32:** G_ADD, G_SUB, G_AND, G_OR, G_XOR,
-  G_SHL/G_LSHR/G_ASHR (both operands clamped to s32),
-  G_LOAD/G_STORE (s32/s16/s8),
-  G_CONSTANT (s32/p0), G_FRAME_INDEX/G_GLOBAL_VALUE (p0),
-  G_PTR_ADD/G_PTRMASK {p0,s32},
-  G_INTTOPTR/G_PTRTOINT {p0,s32} (sub-word widened to s32),
-  G_ICMP {s1,s32}/{s1,p0}, G_SELECT {s32/p0,s1},
-  G_PHI, G_BRCOND, G_FREEZE (no-op).
-- **Extensions:** G_ZEXT/G_SEXT/G_ANYEXT sub-word→s32 legal,
-  s32→s64 via narrowScalarIf. G_TRUNC legal.
-  G_SEXT_INREG lowered.
-- **MUL/DIV/REM:** Custom s32 (strength-reduce power-of-2 constants
-  to shifts/logic, libcall fallback).
-  G_SDIV/G_SREM libcall s32+s64. s64 all via libcalls.
-  G_SDIVREM/G_UDIVREM (the fused form the pre-legalizer combiner
-  emits at -O1+ when adjacent `a/b` and `a%b` share operands)
-  lower to separate G_SDIV+G_SREM / G_UDIV+G_UREM, then take the
-  existing libcall paths.
-- **Lowered:** G_ABS, G_CTTZ/G_CTLZ/G_CTPOP
-  (and \_ZERO\_UNDEF variants) to shift/logic,
-  G_FSHL/G_FSHR (s32+s64),
-  G_BSWAP/G_BITREVERSE (sub-word widened to s32, s64 narrowed to two s32,
-    then lowered at s32; see `doc/llvm-lowerBswap-bug.md` for why we
-    don't lower directly at s64),
-  G_UADDO/G_USUBO/G_UADDE/G_USUBE/G_SADDO/G_SSUBO/G_SADDE/G_SSUBE
-  (s64 narrowed to s32),
-  G_UADDSAT/G_USUBSAT/G_SADDSAT/G_SSUBSAT (sub-word widened to s32;
-    s64 lowered at native width into G_UMIN/G_SUB or
-    G_USUBO+G_SELECT, then narrowed iteratively by the legalizer —
-    `narrowScalarIf+changeTo` only relabels the type and does not
-    actually split, so `lowerFor({s32, s64})` is the working idiom),
-  G_SMIN/G_SMAX/G_UMIN/G_UMAX (any width, lowered to icmp+select),
-  G_FNEG/G_FABS/G_FCOPYSIGN (integer bit manipulation, no libcall),
-  G_IS_FPCLASS (exponent/mantissa bit inspection).
-- **Libcall:** G_MEMCPY/G_MEMMOVE/G_MEMSET.
-- **Legal:** G_STACKSAVE/G_STACKRESTORE (p0),
-  G_FENCE (always legal — compiler barrier only, no hardware instruction),
-  G_BRINDIRECT (p0 — computed goto).
-- **Lowered:** G_DYN_STACKALLOC (framework: SP subtract + alignment).
-- **Custom:** G_VASTART, G_MUL, G_UDIV, G_UREM, G_PREFETCH (no-op),
-  G_GET_ROUNDING (constant 1 = round-to-nearest, no FPU)
-  (via legalizeCustom() override). G_VAARG lowered (s32/s64/p0).
+The pipeline is defined by group lists in `PenumbraCombine.td`:
 
-## Key Implementation Notes
-- **Range-checked encoders.** Both the MC code emitter
-  (`encodeImm16`/`encodeMemOffset16`/`encodeBranchTarget`) and the
-  asm backend `applyFixup` hard-error on out-of-range immediates
-  rather than silently truncating.  Emitter uses
-  `Ctx.reportError(Inst.getLoc(), ...)` (llc/clang exit non-zero
-  without writing an object); backend uses
-  `report_fatal_error` for resolved fixups.  `imm16_pcrel` accepts
-  the symmetric `[-65535, 65535]` range because ADDi↔SUBi flip
-  lets either sign reach the full uimm16.
-- **applyFixup Data pointer:** Pre-positioned at fixup location —
-  do NOT add `Fixup.getOffset()`. Use `Data[i]` directly.
-- **maybeAddReloc:** Must be called at the start of `applyFixup()`
-  to generate ELF relocations for unresolved symbols.
-  Without it, all symbol references silently resolve to zero.
-- **PC-relativity:** Set on `MCFixup` itself
-  (`PCRel=true` in `MCFixup::create`), not in `MCFixupKindInfo`.
-- **Destructive 2-operand ops:** TableGen patterns use
-  tied-operand constraints. Register allocator handles via COPY.
-- **Global address materialization (static):**
-  Instruction selector emits LLI+LUI with target flags
-  (`S_Lo16`/`S_Hi16`).
-  AsmPrinter converts flags to `MCSpecifierExpr` wrappers.
-  MCCodeEmitter maps specifiers to
-  `fixup_penumbra_lo16`/`fixup_penumbra_hi16`.
-  LLI+LUI pairs use an intermediate vreg
-  (`%tmp = LLI lo` → `%dst = LUI %tmp, hi`)
-  for SSA correctness — required for `-O1+` passes
-  like OptimizePHIs.
-- **Global address materialization (PIC/PIE):**
-  GOT-indirect with full 32-bit reach, 4 instructions:
-  `LLI Rd, %got_pcrel_lo16(sym-8)` +
-  `LUI Rd, %got_pcrel_hi16(sym-4)` + `ADD Rd, PC` +
-  `LDW Rd, [Rd]`.
-  The ADD's own PC is the anchor, so addends -8/-4 yield
-  `GOT[sym] - Q` under the linker's `sym + addend - fixup_addr`
-  formula (Q = ADD's address).  Folding PC into the last step
-  drops the leading `MOV Rd, PC` — one fewer instruction AND
-  one fewer live vreg vs the old scheme (single vreg threads
-  through LLI→LUI→ADD→LDW).
-  LLI+LUI reconstruct the 32-bit GOT-to-PC offset (unsigned
-  lo16 | hi16<<16, no sign-extension issues).
-  Works for both PIE (GOT entries get R_RELATIVE) and shared
-  libraries (GOT entries get R_GLOB_DAT).
-  `needsRelocateWithSymbol()` returns true for GOT/TLS relocs
-  to prevent section+offset folding (the addend must only
-  contain the PC adjustment, not the symbol's section offset).
-  **TLS GD PIC:** Same anchor-at-ADD shape but 3 instructions (no
-  LDW — the GOT tls_index pair ADDRESS is the argument to
-  `__tls_get_addr`, not its contents):
-  `LLI Rd, %tlsgd_got_pcrel_lo16(sym-8)` +
-  `LUI Rd, %tlsgd_got_pcrel_hi16(sym-4)` + `ADD Rd, PC`.
-  Plus the subsequent `BL __tls_get_addr` = 4 instructions total.
-- **Jump tables:** Always `EK_LabelDifference32` entries
-  (`.word target - JT_base`), regardless of PIC/static mode.
-  Placed inline in `.text` via `PenumbraTargetObjectFile`
-  (overrides `shouldPutJumpTableInFunctionSection`) so the
-  assembler can resolve the label difference within one
-  section — avoids cross-section relocations that would
-  become absolute + RELATIVE in PIE, breaking the
-  base-addition scheme.
-  BRJT expansion always adds base back:
-  `LDW offset,[entry_addr]` → `ADD offset, base` → `JMP`.
-  JTI operands get +4 addend in AsmPrinter
-  (same MOV+ADDi correction).
-  TODO: optimize to 16-bit entries via EK_Inline
-  when all offsets fit ±32KB.
-- **Assembly text roundtrip:** `%lo16()`/`%hi16()`/`%pcrel()`
-  syntax parsed by AsmParser's operand parser and emitted by
-  `printSpecifierExpr`.
-  Full `clang -S` → `llvm-mc` roundtrip works.
-- **Register class constraining:** All instruction selector helpers
-  must call `constrainSelectedInstRegOperands()` —
-  vregs left with only a bank assignment (no regclass)
-  cause assertions after selection.
+- **Pre-legalizer at -O1+:** `[all_combines]` — the full upstream
+  canonicalization/DCE set, matching AArch64/RISC-V. The
+  `*_by_const` magic-multiply rules (in `intdiv_combines` /
+  `intrem_combines`) are gated off by `isIntDivCheap()=true`
+  in `PenumbraISelLowering.cpp` — without that override
+  `udiv x, 3` rewrites into a 64-bit `__muldi3` libcall heavier
+  than the original `__udivsi3`. `sub_to_add` flips
+  (`G_SUB x, c` → `G_ADD x, -c`) are re-canonicalized after
+  legalization by `penumbra_neg_imm_to_opposite` when `|-c|` fits
+  uimm16.
+- **Pre-legalizer at -O0:** `[optnone_combines]` — small upstream
+  set (`trivial_combines`, `ptr_add_immed_chain`,
+  `combines_for_extload`, `not_cmp_fold`,
+  `opt_brcond_by_inverting_cond`, `combine_concat_vector`).
+  Cleans IRTranslator artefacts without paying full canonicalization
+  cost. Lives in `PenumbraO0PreLegalizerCombiner`.
+- **Post-legalizer at -O1+:** `[commute_constant_to_rhs,
+  ptr_add_immed_chain, combines_for_extload, penumbra_zextload_promote,
+  known_bits_simplifications, penumbra_neg_imm_to_opposite,
+  penumbra_sink_ptr_add_past_use]`.
+
+The three target-specific custom rules
+(`penumbra_zextload_promote`, `penumbra_neg_imm_to_opposite`,
+`penumbra_sink_ptr_add_past_use`) each have rationale comments in
+`PenumbraPostLegalizerCombiner.cpp` and a regression test under
+`test/CodeGen/Penumbra/`. MIR-level unit tests use
+`-run-pass=penumbra-postlegalizer-combiner` to isolate individual
+rules (regenerate via `update_mir_test_checks.py`).
+
+## Legalization at a glance
+
+Full definitions live in `GISel/PenumbraLegalizerInfo.cpp`. Notable
+shapes:
+
+- Legal s32 for the usual integer ops (ADD/SUB/AND/OR/XOR, shifts,
+  loads/stores, ICMP, SELECT, PHI, BRCOND, FREEZE, …).
+- Extensions: G_ZEXT/G_SEXT/G_ANYEXT sub-word→s32 legal; s32→s64 via
+  `narrowScalarIf`. G_TRUNC legal. G_SEXT_INREG lowered.
+- MUL/DIV/REM: s32 strength-reduces power-of-2 constants
+  (MUL by -1→SUB from zero, ×2ⁿ→SHL, ×(2ⁿ±1)→SHL+ADD/SUB with
+  shift<bit-width guard, ÷2ⁿ→LSHR, %2ⁿ→AND); otherwise libcall.
+  s64 always libcall. G_SDIVREM/G_UDIVREM lower to separate
+  div+rem then take the libcall path.
+- Min/max/abs/popcount/ctlz/cttz/bswap/bitreverse: lowered to
+  shift/logic. G_BSWAP at s64 narrows to two s32 first, then
+  lowers — see `doc/llvm-lowerBswap-bug.md` for why we don't lower
+  directly at s64.
+- Add/sub-with-carry: s64 narrowed to s32 then lowered to
+  ADD+CMP-carry sequences. Hardware ADC/SBC exist but need a CCR
+  register bank for GlobalISel to use them.
+- Saturating arithmetic: sub-word widened to s32; s64 lowered at
+  native width via min/sub or USUBO+SELECT, then iteratively
+  narrowed. (`lowerFor({s32, s64})` is the working idiom because
+  `narrowScalarIf+changeTo` only relabels the type.)
+- G_MEMCPY/MEMMOVE/MEMSET via libcalls. G_PREFETCH custom-lowered
+  to no-op. G_FENCE always legal (compiler barrier; no hardware
+  instruction).
+- G_DYN_STACKALLOC lowered by framework. G_STACKSAVE/RESTORE
+  selected to MOV SP. G_BRINDIRECT legal for p0 (computed goto).
+- Custom: G_VASTART, G_MUL/UDIV/UREM, G_PREFETCH, G_GET_ROUNDING
+  (returns constant 1).
+
+## Key implementation notes (gotchas for editors of this code)
+
+- **Range-checked encoders.** Both `PenumbraMCCodeEmitter`
+  (`encodeImm16`/`encodeMemOffset16`/`encodeBranchTarget`) and
+  `PenumbraAsmBackend::applyFixup` hard-error on out-of-range
+  immediates rather than silently truncating. Emitter uses
+  `Ctx.reportError(...)` (llc/clang exit non-zero); backend uses
+  `report_fatal_error`. `imm16_pcrel` accepts symmetric
+  `[-65535, 65535]` because ADDi↔SUBi flip lets either sign reach
+  the full uimm16.
+- **applyFixup Data pointer is pre-positioned at the fixup
+  location** — do *not* add `Fixup.getOffset()`. Use `Data[i]`
+  directly.
+- **`maybeAddReloc` must be called at the start of `applyFixup()`**
+  to generate ELF relocations for unresolved symbols. Without it,
+  symbol references silently resolve to zero.
+- **PC-relativity** is set on the `MCFixup` itself (`PCRel=true` in
+  `MCFixup::create`), not in `MCFixupKindInfo`.
+- **LLI+LUI pairs** use an intermediate vreg
+  (`%tmp = LLI lo` → `%dst = LUI %tmp, hi`) for SSA correctness —
+  required for `-O1+` passes like `OptimizePHIs`.
+- **GOT-indirect PIC** uses the ADD's own PC as anchor so the LLI/LUI
+  addends are -8/-4: `LLI Rd, %got_pcrel_lo16(sym-8)` +
+  `LUI Rd, %got_pcrel_hi16(sym-4)` + `ADD Rd, PC` + `LDW Rd, [Rd]`.
+  This drops a leading `MOV Rd, PC` (one fewer instruction *and* one
+  fewer live vreg vs. the earlier scheme). LLI+LUI reconstruct the
+  unsigned 32-bit GOT-to-PC offset, no sign issues.
+  `needsRelocateWithSymbol()` returns true for GOT/TLS relocs so the
+  addend only carries the PC adjustment, not the symbol's section
+  offset.
+- **TLS GD PIC** uses the same anchor-at-ADD shape but 3
+  instructions (no LDW — the GOT tls_index pair *address* is the
+  argument to `__tls_get_addr`, not its contents):
+  `LLI %tlsgd_got_pcrel_lo16(sym-8)` + `LUI %tlsgd_got_pcrel_hi16(sym-4)`
+  + `ADD Rd, PC` + `BL __tls_get_addr`.
+- **Jump tables** are always `EK_LabelDifference32`
+  (`.word target - JT_base`) placed inline in `.text` via
+  `PenumbraTargetObjectFile::shouldPutJumpTableInFunctionSection`.
+  Cross-section JT entries would become absolute+RELATIVE in PIE,
+  breaking the base-addition scheme. BRJT expansion adds base back:
+  `LDW offset,[entry_addr]` → `ADD offset, base` → `JMP`. JTI
+  operands get +4 addend in AsmPrinter.
+- **Register class constraining.** Every instruction-selector helper
+  must call `constrainSelectedInstRegOperands()` — vregs left with
+  only a bank assignment (no regclass) assert after selection.
+- **Destructive 2-operand ops.** TableGen patterns use tied-operand
+  constraints; RegisterAllocator handles via COPY.
+
+## lld (`llvm/lld/ELF/Arch/Penumbra.cpp`)
+
+ELF linker target with PIE support. Handles every Penumbra
+relocation (full table in `doc/system/abi.md` §4).
+
+- **RELA format.** `EM_PENUMBRA` is in lld's RELA architecture list
+  (`Driver.cpp:getIsRela`), so dynamic relocations use explicit
+  addends (12-byte `Elf32_Rela` entries with `DT_RELA`/`DT_RELASZ`).
+  Self-relocating PIE code (bootloader, `ld.elf_so`) needs
+  `--apply-dynamic-relocs` so lld writes addends to the data
+  sections (the bias computation reads pre-relocation values).
+- **PIE.** `relativeRel = R_PENUMBRA_RELATIVE`,
+  `symbolicRel = R_PENUMBRA_32`. `getDynRel()` maps `R_PENUMBRA_32`
+  to dynamic; `getImplicitAddend()` reads 32-bit values for
+  verification.
+- **GOT/PLT.** PLT entries are 16 bytes (LLI+LUI+LDW+JMP using R11
+  scratch). `R_PENUMBRA_GLOB_DAT` for GOT,
+  `R_PENUMBRA_JUMP_SLOT` for PLT. Shared libraries (`-shared`) work
+  with PIC code.
+- **TLS GD (PIC).** GOT-indirect PC-relative to tls_index pair via
+  `R_PENUMBRA_TLS_GD_GOT_PCREL_LO16/HI16`. lld creates GOT pairs
+  with `R_PENUMBRA_TLS_DTPMOD32` / `R_PENUMBRA_TLS_DTPOFF32`
+  dynamic relocs. Static uses `R_TPREL` (Variant I, no TCB gap,
+  like RISC-V). `EM_PENUMBRA` → `getTlsTpOffset` mapping in
+  `InputSection.cpp`.
+- **Negative pcrel fix.** `R_PENUMBRA_IMM16_PCREL` handler detects
+  negative offsets and flips ADDi (INC, op=0011) to SUBi (DEC,
+  op=0100) with negated value, since ADDi zero-extends its
+  immediate. Same fix in `PenumbraAsmBackend`.
+- **Duplicate absolute symbol fix** (`llvm/lld/ELF/Symbols.cpp`):
+  upstream's GNU ld compatibility check for duplicate absolute
+  symbols excluded value 0 (C++ truthiness bug). Fixed locally —
+  needed for NetBSD kernel option-tracking symbols
+  (`_KERNEL_OPT_N*`) which have value 0 for unconfigured devices.
+- Emulation: `elf32penumbra`. Output format: `elf32-penumbra`.
+  Triple mapping for `Triple::penumbra` in `InputFiles.cpp`.
+
+## Clang driver
+
+- `PenumbraToolChain` (`clang/lib/Driver/ToolChains/Penumbra.{h,cpp}`)
+  is the **bare-metal** toolchain (ROM, hw tests) — uses `ld.lld`
+  directly.
+- For `penumbra-unknown-netbsd`, the stock `toolchains::NetBSD`
+  (`clang/lib/Driver/ToolChains/NetBSD.cpp`) is used with Penumbra
+  additions: `elf32penumbra` emulation, `useLibgcc=false`,
+  `--allow-shlib-undefined`, `--undefined-version`.
+- `__NetBSD__` is auto-defined for the netbsd triple via
+  `NetBSDTargetInfo<>` wrapper.
+- `-fPIC`/`-fPIE` supported. Boot ROM compiles and runs at
+  `-O0`/`-O1`/`-O2`. `build.sh distribution` compiles full NetBSD
+  userland.
+
+## Hex output pipeline (host build → simulator)
+
+`llvm-mc` → ELF object → `llvm-objcopy -O binary` → `bin2hex.py` →
+`$readmemh` hex. Same approach as ARM/RISC-V embedded.
+`bin2hex.py` (`sw/tools/bin2hex.py`) reads flat LE binary, emits one
+32-bit word per line in uppercase hex.

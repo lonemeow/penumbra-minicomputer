@@ -1,274 +1,257 @@
 # Penumbra Hardware — Claude Code Context
 
-This file provides detailed hardware context for work under `hw/`. The root `CLAUDE.md` has project-wide conventions.
+Navigation aid for work under `hw/`. The root `CLAUDE.md` has
+project-wide conventions and pointers to architectural specs.
 
-## Implemented RTL Modules (all tested)
-| Module | File | Tests | Description |
-|--------|------|-------|-------------|
-| ALU | `rtl/core/alu.sv` | 39/39 | Unified compute unit, 11 single-cycle ops, multi-cycle stubs |
-| Register file | `rtl/core/regfile.sv` | 41/41 | 2R/1W, R0=zero, R14 banked USP/SSP, R15→PC, debug port |
-| Condition evaluator | `rtl/core/cond_eval.sv` | 256/256 | 16 ARM-style conditions, exhaustively tested |
-| Immediate extractor | `rtl/core/imm_ext.sv` | 14/14 | Zero/sign-extend, shift-left-16 |
-| Field extractor | `rtl/core/field_ext.sv` | 34/34 | IR → all format fields (R/L/M/B) |
-| B-mux | `rtl/core/bmux.sv` | 4/4 | ALU B input: reg/imm/const4/const8 |
-| W-mux | `rtl/core/wmux.sv` | 2/2 | Write-back: R-bus or MDR |
-| A-bus source mux | `rtl/core/amux.sv` | 4/4 | A-bus: reg/ESR/EPC/vector |
-| PC source mux | `rtl/core/pc_mux.sv` | 6/6 | Next PC: hold/+4/+offset/A-bus/MDR |
-| Status register | `rtl/core/status_reg.sv` | 64/64 | NZCV flags, S/I mode bits, ESR, ei_shadow |
-| PC register | `rtl/core/pc_reg.sv` | 31/31 | PC reg (parameterizable RESET_PC), PC+4 adder, PC+offset adder, EPC |
-| MAR | `rtl/core/mar.sv` | 6/6 | Memory address register, loads from R-bus |
-| MDR | `rtl/core/mdr.sv` | 7/7 | Memory data register, loads from memory or A-bus |
-| Datapath top | `rtl/core/datapath.sv` | 15/15 | Structural wiring of all modules, IR reg, reg addr routing, F-bit gating |
-| Microcode ROM | `rtl/core/ucode_rom.sv` | — | 256×51-bit ROM, $readmemh from microcode.hex |
-| Sequencer | `rtl/core/sequencer.sv` | — | Micro-PC, branch_cond decode, EI/DI tracking, ei_shadow_clr |
-| Byte extractor | `rtl/core/byte_ext.sv` | 19/19 | Sub-word load extraction: byte/half from 32-bit word, sign/zero extend |
-| Byte replicator | `rtl/core/byte_rep.sv` | 10/10 | Sub-word store lane positioning: replicate byte/half across all lanes |
-| CPU core | `rtl/core/cpu_core.sv` | 30 progs | Full CPU: datapath + sequencer + ROM + MMU + split I/D cache + memory bus mux + fetch + IRQ + all traps + WRSYS/RDSYS + RDSPR/WRSPR + BL + sub-word loads/stores + cpuid + cpu_perfctr (SYSDEV_CPU). Parameterizable RESET_PC (default 0xFFFF\_0000). |
-| CPU perfctr | `rtl/core/cpu_perfctr.sv` | via test_cpu_perfctr | Free-running 32-bit performance counters (cycles, insns_retired). Lives inside cpu_core, exposes regs 5+ of SYSDEV_CPU. |
-| CPU bus arbiter | `rtl/core/cpu_bus_arbiter.sv` | 62/62 | Serializes split I/D L1 cache traffic onto the single external bus. 2-state FSM (IDLE/BUSY) — back-to-back BUSY→BUSY re-latches on the busy-drop cycle when a request is still pending, eliminating the dead cycles a DONE-cooldown design would require. D-priority on simultaneous pending. Combinational `o_*_req_accepted` pulse fires the cycle the arbiter latches each owner's request; caches use it to advance burst addresses (cache_vipt's req_idx). Rdata is a combinational pass-through from `i_mem_rdata`; per-port busy mux (`owner==X || i_mem_busy`) gates which cache captures. |
-| Sim machine | `rtl/sim/machine_sim.sv` | (top) | Simulation integration: cpu\_core + boot\_rom + simple\_mem + sim\_uart + machid + busctl + autoconfig SPI. Shared-bus with `bus_devsel`. UART IRQ wired. |
-| Bus devsel | `rtl/soc/bus_devsel.sv` | via machine\_sim | Combinational address comparator for device-side bus decode. Parameterized BASE/SIZE. |
-| Bus controller | `rtl/soc/busctl.sv` | 43/43 | Sysreg device 4 (SYSDEV\_BUS). RST (sticky) and CFG\_EN bits for autoconfig. |
-| Autoconfig wrapper | `rtl/soc/autoconfig_dev.sv` | 28/28 | Config space regs, cfg daisy chain with CFG\_EN toggle, dynamic base address decode. |
-| Sim UART | `rtl/sim/sim_uart.sv` | via machine\_sim | 16450-compatible UART (MMIO at 0xFF00\_0000). NetBSD com(4) compatible. |
-| Sim SPI | `rtl/sim/sim_spi.sv` | via machine\_sim | SPI master v2 (CLASS\_SD). 7 regs: CAP, STATUS, CONTROL, DATA, XFER\_COUNT, IRQ\_STATUS, IRQ\_ENABLE. Hardware TX/RX FIFO, transfer engine, IRQ. SD emulator via `+sdcard=`. |
-| Real UART | `rtl/io/uart.sv` | 37/37 tb\_uart + ulx3s\_top | NS16550A-compatible UART with two-stage baud rate generator: fractional accumulator synthesizes a fixed 1.8432 MHz reference from CLK\_FREQ, then standard divisor stage produces the 16x baud clock. Software sees a canonical 16550 crystal regardless of board clock. CLK\_FREQ/REF\_FREQ/FIFO\_DEPTH params. 16-byte RX/TX FIFOs (via `spi_fifo`) with FCR[0]=1 enable; true bypass to 16450 single-byte mode when FCR[0]=0. RX trigger 1/4/8/14, character-timeout interrupt after 4 char-times idle (baud-clock-gated). RX BREAK detection sets LSR.BI (bit 4); sticky, clears on LSR read. |
-| SPI FIFO | `rtl/io/spi_fifo.sv` | via spi | Parameterized synchronous FIFO (power-of-2 depth, 8-bit data). Used for SPI TX/RX paths. |
-| Real SPI | `rtl/io/spi.sv` | 54/54 | SPI master v2 with hardware TX/RX FIFO, autonomous transfer engine (stall-on-empty/full), IRQ output. FIFO\_DEPTH, SLOW\_DIV, FAST\_DIV params. See `doc/system/devices/spi.md`. |
-| SDRAM v2 — package | `rtl/io/sdram/sdram_pkg.sv` | — | Command encoding + chip presets (W9825 @ 100 MHz CL2). |
-| SDRAM v2 — controller | `rtl/io/sdram/sdram_ctrl.sv` | unit + machine\_sim | FSM core: init, refresh, ACT/RW/RECOVER. Single-word req/rsp interface. Parameterized geometry/timing plus `PHY_OUT_LATENCY` / `PHY_IN_LATENCY` to absorb registering-PHY pipeline. |
-| SDRAM v2 — bus adapter | `rtl/io/sdram/sdram_bus_adapter.sv` | machine\_sim | Sync bus `i_re/i_we/o_busy` ↔ controller req/rsp handshake. Pipelined for cache fills + speculative `addr+4` prefetch on accepted reads (depth-2 CDC carries real + spec in flight); 1-bit tag FIFO routes responses to cache vs. spec buffer. Drop-in for simple\_mem. |
-| SDRAM v2 — CDC bridge | `rtl/io/sdram/sdram_cdc.sv` | tb\_sdram\_cdc + machine\_sim (single-clock) + ulx3s\_top (dual-clock) | Depth-2 async FIFO bridging the system-clock bus adapter to the SDRAM-clock controller. Up to 2 outstanding requests, order-preserving; 2-bit Gray pointers cross via 2-FF synchronizers, per-slot payloads written before pointer advance (data-before-valid CDC). |
-| SDRAM v2 — sim PHY | `rtl/io/sdram/sdram_phy_sim.sv` | unit + machine\_sim | Pass-through PHY for Verilator. Used for sim instances; ECP5 boards instantiate `sdram_phy_ecp5` instead. |
-| SDRAM v2 — ECP5 PHY | `rtl/io/sdram/sdram_phy_ecp5.sv` | via ulx3s\_top | IOB-resident flops on every SDRAM signal + ODDRX1F clock forwarding. Adds 1 cycle output / 1 cycle input pipeline (controller's `PHY_OUT_LATENCY` / `PHY_IN_LATENCY` parameters extend `cl_cnt` to compensate). As of step 4, `i_clk` is CLKOS @ 100 MHz / 0° and `i_clk_sdram` is CLKOS2 @ 100 MHz / 270° (270° is the empirical step-4 starting point; step 5 will sweep). |
-| SDRAM v2 — chip model | `rtl/sim/sdram_model.sv` | unit + machine\_sim | Behavioral SDR DRAM chip. JEDEC command set, sparse storage, protocol checking. |
-| SDRAM v2 — sim bundle | `rtl/sim/sdram_sim.sv` | machine\_sim | Wraps adapter + ctrl + phy\_sim + model into a simple\_mem-shaped device. |
-| SDRAM v2 — unit wrapper | `rtl/sim/sdram_test.sv` | tb\_sdram\_test | DUT wrapper exposing the controller's req/rsp interface. See `doc/internals/sdram-controller.md`. |
-| UART TX | `rtl/fpga/uart_tx.sv` | via test tops | Standalone UART TX shift register for test designs (ulx3s\_hello, etc.) |
-| FPGA RAM | `rtl/fpga/fpga_ram.sv` | via ulx3s\_top | BRAM-friendly memory: four byte-wide banks with `ram_style` attribute. Address wraps for size probing. |
-| Boot ROM | `rtl/soc/boot_rom.sv` | via machine_sim | Read-only memory (64 KB default), loads program.hex |
-| Shared package | `rtl/core/penumbra_pkg.sv` | — | REG\_\*, ALU\_\*, COND\_\*, SR\_\*, VEC\_\*, FAULT\_\*, SYSDEV\_\*, SYSREG\_\*, CACHE\_ADDR\_\* (PIPT/VIPT/VIVT), UART\_\*, SPR\_\*, ACFG\_\* and base address constants |
-| CPU identity | `rtl/soc/cpuid.sv` | via cpu_core | Read-only CPU identity (CPU_ISA + CPU_NAME), sysreg device 1 regs 0–4. Instantiated inside cpu_core; merged with cpu_perfctr by reg-range mux. |
-| Machine identity | `rtl/soc/machid.sv` | via machine_sim + ulx3s_top | Read-only board identity (MACH_FEAT, MACH_NAME, CPU_FREQ), sysreg device 8. |
-| TLB (main) | `rtl/mmu/tlb.sv` | 111/111 | 64-entry 2-way SA, parallel lookup, one-hot permission check, indexed sysreg R/W |
-| TLB (pinned) | `rtl/mmu/tlb_pinned.sv` | via test\_ptlb | 4-entry FA, parallel lookup, pinned-hit-wins priority over main TLB |
-| TLB unit | `rtl/mmu/tlb_unit.sv` | — | Wraps main + pinned TLB behind unified lookup + sysreg interface (regs 3-8) |
-| MMU | `rtl/mmu/mmu.sv` | — | Bypass/translate mux, force\_bypass for vector table read, alignment check, sysreg routing (regs 0-2), fault latching |
-| Cache (VIPT) | `rtl/soc/cache_vipt.sv` | 42/42 | L1 cache used by `cpu_core` for both I-cache and D-cache. Index/word from vaddr (parallel with TLB), tag compare from paddr (post-translation). Aliasing-free precondition: cache ≤ page size, asserted at sim time. State machine driven by registered shadow flops (`i_re_q`, `i_we_q`, `hit_q`, `i_paddr_q`, …) so the µROM-rooted control path can't propagate combinationally into `valid[i].LSR`. Write-through/write-no-allocate; burst line fill on read miss using `req_idx`/`resp_idx` counters that pipeline against the arbiter's `i_req_accepted` handshake — `o_mem_re` holds high across word boundaries so the bus stays driven back-to-back. `pt_in_flight` flop on the pass-through path suppresses spurious re-latch when the CPU's STALL leaves `i_re` stale-high on the busy-drop cycle. Sysreg interface. |
-| Cache (PIPT) | `rtl/soc/cache.sv` | 42/42 | Original PIPT cache. Retained for the future L2 cache (`doc/internals/l2-cache.md`), where the index/tag relationship is different (cache larger than a page) and PIPT semantics matter. Not currently instantiated in `cpu_core`. |
-| Cache stub | `rtl/sim/cache_stub.sv` | — | Combinational pass-through, retained for reference. Replaced by `cache_vipt.sv` in cpu_core. |
-| L2 cache | `rtl/soc/l2_cache.sv` | 18/18 tb_l2_cache + cross-section via machine_sim | Phase-1 L2 unified cache: 64 KiB, 4-way, 16 B lines, tree-PLRU, 2-cycle hit pipeline. Write policy is **write-invalidate-on-hit**: cached writes pass through to memory and drop the L2 copy. Uncacheable accesses skip the pipeline (combinational pass-through, mirror `i_mem_busy`). Always instantiated between `cpu_core.o_mem_*` and the shared bus; disabled at reset, software brings it up via `WRSYS SYSDEV_L2_CACHE CTRL=1`. Sysreg device 9: `INFO` (geometry / 0 if absent), `CTRL.enable`, `INVAL_ALL` (multi-cycle walker), `STATUS.busy`. See `doc/internals/l2-cache.md`. |
-| Simple memory | `rtl/sim/simple_mem.sv` | — | Parameterizable synchronous SRAM model (default 16 MB), configurable READ_LATENCY/WRITE_LATENCY modeling SDRAM timing. |
+**Architectural specs** (read these before assuming RTL behavior):
+- Microcode reference (micro-word format, all fields, full routine
+  catalog, ROM organization, exception integration):
+  `doc/internals/microcode.md`
+- Datapath (three-bus architecture, signal flow): `doc/internals/datapath.md`
+- MMU internals (TLB structure, fault flow): `doc/internals/mmu-internals.md`
+- L2 cache design plan + phase status: `doc/internals/l2-cache.md`
+- SDRAM controller v2 design and optimization:
+  `doc/internals/sdram-{controller,optimization}.md`
+- CPU-internal bus contracts (cpu_core ↔ MMU ↔ caches ↔ private sysregs):
+  `doc/internals/cpu-bus.md`
+- Bus protocol (signal-level handshake, sync/async forms):
+  `doc/hardware/bus-protocol.md`
+- ISA-visible behavior (exception priorities, vector numbers, SR bits):
+  `doc/system/architecture.md`
+- Sysreg device map: `doc/system/sysregs.md`
+- RTL coding standards: `doc/internals/coding-standards.md`
 
-## Boot ROM and Interactive Simulation
-- **Boot ROM** (`rom/`): Penumbra/1 boot monitor in C.
-  No globals — ROM has no writable data section;
-  all state in boot data or on the stack. Source files:
-  - `boot_rom.c` — main(), trap setup, RAM detection,
-    bus autoconfig, monitor command loop
-  - `console.c`/`.h` — line-editing input (`console_gets`),
-    formatted output (`console_printf`, `console_puts`)
-  - `sdcard.c`/`.h` — SD-SPI protocol
-    (init/deinit/read_sector/detect),
-    MBR partition parsing, device probing
-  - `util.c`/`.h` — unaligned LE reads, size formatting
-  - `bootdata.h` — boot data tagged list builder/lookup
-    (inline, header-only)
-  - `spi.h` — low-level SPI register access
-    (inline, header-only)
-  - `penumbra.h` — SPR/sysreg access, system constants
-    (inline, header-only)
-  - `libc.c`/`.h` — minimal C library
-    (strlen, strcmp, strtoul, snprintf, software mul/div)
-  - `uart.c`/`.h` — UART polling driver
-  - `crt0.s` — startup (preload UART regs, run RAM diag,
-    set SP, call main),
-    `ram_check.s` — pre-stack SDRAM controller diagnostic
-    (round-trip, consecutive multi-word, sub-word integrity)
-    plus the early-print helpers it uses
-    (`_early_putc`, `_early_puts`, `_dump_r5`),
-    `trap_entry.s` — exception trampolines,
-    `rom.ld` — linker script
-  - `fat32.c`/`.h` — minimal read-only FAT32 reader
-    (mount, root directory search, file read via cluster chain).
-    Device-independent via `blk_read_fn` callback.
-  - `elf.h` — minimal ELF32 header definitions
-    (Ehdr, Phdr, constants) for PIE loading.
-  - Monitor commands:
-    `boot sd:<dev>,<cs>[/file]` (mount FAT32, load named file
-    or `PENBOOT.ELF` by default as PIE ELF, allocate RAM, copy
-    PT_LOAD segments, jump),
-    `x <addr> [len]` (hex dump),
-    `load sd:<dev>,<cs>[:<part>] <addr> <lba> <count>`
-    (SD read, raw or partition-relative LBA),
-    `part sd:<dev>,<cs>` (display MBR partition table),
-    `go <addr>`/`g <addr>` (jump to address with R1=boot data),
-    `break`/`b` (halt).
-    SD naming: per-class controller index
-    (`sd:0,0` = first SD controller, CS0).
-  - Has its own `rom/Makefile` with automatic `*.c`/`*.s` discovery,
-    header deps, and pattern rules.
-    Built with clang: `clang -c` → `llvm-mc`
-    → `ld.lld` (via `rom/rom.ld`) → `llvm-objcopy` → `bin2hex.py`.
-- **Interactive testbench** (`sim/tb_interactive.cpp`):
-  Bridges host stdin/stdout to UART RX/TX.
-  Raw terminal mode. Polls stdin every 1024 cycles.
-  Exits on BREAK or Ctrl-C.
-  SD card emulation via `+sdcard=disk.img` plusarg
-  (or `SDCARD=` make variable).
-  Instruction trace via `+trace=file.log` plusarg
-  (or `TRACE=` make variable): dumps PC, SR (flags),
-  and R1–R14 for every instruction to the file.
-  Trace ports: `o_trace_valid` (instruction complete),
-  `o_trace_sr` (full SR value) exposed through
-  cpu_core → machine_sim.
+## Directory layout
 
-## Exception and Interrupt Handling
-Eight sources share the same `except_entry` → `int_entry` → vector dispatch path:
+```
+hw/
+├── rtl/
+│   ├── core/    # CPU core: datapath, regfile, ALU, sequencer, microcode ROM, ...
+│   ├── mmu/     # TLB main + pinned, MMU top, alignment/permission checks
+│   ├── soc/     # Bus controller, autoconfig, caches (L1 VIPT, L1 PIPT, L2), boot ROM, cpuid/machid
+│   ├── io/      # Real UART, real SPI, SDRAM v2 controller/adapter/PHY/CDC
+│   ├── sim/     # machine_sim, sim_uart, sim_spi, sdram_sim, simple_mem, sdram chip model
+│   └── fpga/    # ulx3s_top, BRAM helpers, FPGA-only RAM
+├── microcode/   # microcode.uasm (single source — assemble via uasm.py)
+├── rom/         # Boot ROM (C + asm) and its standalone Makefile
+├── sim/         # tb_cpu_prog (program runner), tb_interactive, per-module tbs
+└── tools/       # uasm.py (microcode), oss-cad-suite wrappers
+```
 
-**External IRQ (asynchronous):**
-- Check at dispatch-time (`ir_valid`).
-  `irq_taken = i_irq & sr_i & !ei_shadow`.
-- Override dispatch to 0x70 (int_entry),
-  pulse `except_entry` (saves EPC/ESR, sets S=1/I=0).
-- EI sets sr_i=1 and ei_shadow=1 (cleared after next instruction).
-  DI sets sr_i=0 immediately (privileged).
+## RTL module map (one line per module)
 
-**MMU data fault (synchronous):**
-- Check during STALL on load/store.
-  `data_fault = mmu_fault && !fetch_active`.
-- `fault_except` pulse → `except_entry`.
-  Sequencer aborts STALL, returns to S_FETCH.
-- `fault_pending` overrides next dispatch to int_entry
-  with fault vector. Cleared at `ctl_pc_load`.
-- Priority: fault > illegal > priv > BREAK > SYSCALL > IRQ.
+Find a module by file path. For full module behavior, read the
+source — the source is the authoritative description; this table is
+purely a "where does this thing live?" index.
 
-**MMU instruction fetch fault (synchronous):**
-- Check during S_FETCH. `fetch_fault = mmu_fault && fetch_active`.
-- I-cache gated: `i_re = fetch_active && !mmu_fault`.
-  IR load gated by `!fault_pending`.
-- `break_taken`/`syscall_taken` gated by `!fault_pending`
-  to prevent stale `mem_rdata` dispatch.
+### CPU core (`rtl/core/`)
+- `cpu_core.sv` — full CPU integration: datapath + sequencer + ROM
+  + MMU + split I/D L1 cache + memory bus mux + fetch + IRQ + traps
+  + WRSYS/RDSYS + RDSPR/WRSPR + sub-word loads/stores + perfctr.
+  Parameterizable `RESET_PC` (default `0xFFFF_0000`).
+- `datapath.sv` — structural wiring of all datapath modules.
+- `sequencer.sv` — micro-PC, branch_cond decode, EI/DI tracking.
+- `ucode_rom.sv` — 256×51-bit ROM (`$readmemh` from microcode.hex).
+- `alu.sv` — unified compute (11 single-cycle ops, multi-cycle stubs).
+- `regfile.sv` — 2R/1W, R0=zero, R14 banked USP/SSP, R15→PC, debug port.
+- `cond_eval.sv` — 16 ARM-style condition codes.
+- `imm_ext.sv`, `field_ext.sv` — immediate / IR-field extraction.
+- `bmux.sv`, `wmux.sv`, `amux.sv`, `pc_mux.sv` — datapath muxes.
+- `status_reg.sv`, `pc_reg.sv`, `mar.sv`, `mdr.sv` — core state regs.
+- `byte_ext.sv`, `byte_rep.sv` — sub-word load extraction / store
+  replication (defines byte-order convention).
+- `cpu_perfctr.sv` — cycles + insns_retired counters, exposed via
+  `SYSDEV_CPU` regs 5+.
+- `cpu_bus_arbiter.sv` — serializes split I/D L1 traffic onto the
+  single external bus. 2-state FSM with back-to-back BUSY→BUSY
+  re-latch; combinational `o_*_req_accepted` pulse for burst
+  address advance.
+- `penumbra_pkg.sv` — shared constants (REG_*, ALU_*, COND_*, SR_*,
+  VEC_*, FAULT_*, SYSDEV_*, SYSREG_*, CACHE_ADDR_*, UART_*, SPR_*,
+  ACFG_*, base addresses).
 
-**Alignment fault (synchronous, fetch or data):**
-- MMU checks alignment via `i_mem_size`.
-  Fires even in bypass mode. Checked before TLB lookup.
-- Vector VEC_ALIGN=8. FAULT_STATUS includes access type (code/data).
+### MMU (`rtl/mmu/`)
+- `tlb.sv` — 64-entry 2-way SA main TLB. Parallel lookup, one-hot
+  permission check, indexed sysreg R/W.
+- `tlb_pinned.sv` — 4-entry FA pinned TLB. Pinned-hit-wins priority.
+- `tlb_unit.sv` — unified main + pinned lookup behind one interface.
+- `mmu.sv` — bypass/translate mux, `force_bypass` for vector fetch,
+  alignment check, sysreg routing, fault latching.
 
-**Bus fault (synchronous, fetch or data):**
-- Fires when physical bus request hits no device.
-  Wired from `machine_sim` to `cpu_core.i_bus_fault`.
-- Vector VEC_BUS_FAULT=0. Highest priority in `fault_vector` selection.
-- Use cases: RAM probing at boot,
-  device probing with MMU enabled (NetBSD `bus_space_peek`).
+### SoC and caches (`rtl/soc/`)
+- `cache_vipt.sv` — L1 cache (used for both I and D in `cpu_core`).
+  Index/word from vaddr, tag compare from paddr; aliasing-free by
+  the cache-size ≤ page-size precondition (asserted at sim time).
+  Write-through / write-no-allocate. Burst line fill on read miss
+  uses `req_idx`/`resp_idx` pipelined against the arbiter's
+  `i_req_accepted` handshake.
+- `cache.sv` — original PIPT cache, retained for the L2-style use
+  case (`doc/internals/l2-cache.md`). Not currently instantiated.
+- `l2_cache.sv` — L2 phase 1: 64 KiB, 4-way, 16 B lines, tree-PLRU,
+  2-cycle hit pipeline. Write-invalidate-on-hit (write-back is a
+  planned phase). Disabled at reset; software enables via
+  `WRSYS SYSDEV_L2_CACHE CTRL=1`.
+- `busctl.sv` — SYSDEV_BUS sysreg device: RST (sticky) + CFG_EN for
+  autoconfig.
+- `autoconfig_dev.sv` — config-space regs, cfg daisy chain with
+  CFG_EN toggle, dynamic base-address decode.
+- `bus_devsel.sv` — combinational address comparator (BASE/SIZE
+  parameterized).
+- `boot_rom.sv` — ROM (64 KB default), `$readmemh` from `program.hex`.
+- `cpuid.sv` — read-only CPU identity (sysreg device 1, regs 0–4).
+- `machid.sv` — read-only board identity (sysreg device 8).
 
-**BREAK instruction:** Dispatch-time (`0x4A`),
-vectors to VEC_BREAK (6). `o_halted` pulses for testbench.
+### I/O peripherals (`rtl/io/`)
+- `uart.sv` — NS16550A-compatible. Two-stage baud generator
+  (fractional accumulator synthesizes 1.8432 MHz reference from
+  `CLK_FREQ`, then divisor stage produces 16× baud). 16-byte FIFOs
+  gated by FCR[0]; bypass to 16450 single-byte mode when FCR[0]=0.
+  Trigger 1/4/8/14, character-timeout interrupt, BREAK detection.
+- `spi.sv` — SPI master v2 with hardware TX/RX FIFOs, autonomous
+  transfer engine (stall-on-empty/full), IRQ. See
+  `doc/system/devices/spi.md` for register map and driver flow.
+- `spi_fifo.sv` — parameterized sync FIFO (used by UART + SPI).
+- `sdram/sdram_pkg.sv` — command encoding + chip presets.
+- `sdram/sdram_ctrl.sv` — FSM core: init / refresh / ACT/RW/RECOVER.
+  `PHY_OUT_LATENCY` / `PHY_IN_LATENCY` parameters absorb
+  registering-PHY pipeline.
+- `sdram/sdram_bus_adapter.sv` — sync bus ↔ controller req/rsp;
+  pipelined cache fills + speculative `addr+4` prefetch on accepted
+  reads (depth-2 CDC carries real + spec; 1-bit tag FIFO routes
+  responses).
+- `sdram/sdram_cdc.sv` — depth-2 async FIFO bridge across the
+  CPU↔SDRAM clock domains. Up to 2 outstanding, order-preserving;
+  Gray pointers via 2-FF synchronizers; data-before-valid CDC.
+- `sdram/sdram_phy_sim.sv` — pass-through PHY for Verilator.
+- `sdram/sdram_phy_ecp5.sv` — IOB flops + ODDRX1F clock forward.
+  `i_clk` is CLKOS @ 0°, `i_clk_sdram` is CLKOS2 @ ~270° (see
+  `doc/internals/sdram-controller.md` and `sdram-optimization.md`).
 
-**SYSCALL instruction:** Dispatch-time (`0x48`),
-vectors to VEC_SYSCALL (5).
-EPC points at SYSCALL; handler must advance EPC+4.
+### Simulation glue (`rtl/sim/`)
+- `machine_sim.sv` — `cpu_core` + `boot_rom` + `simple_mem` +
+  `sim_uart` + `machid` + `busctl` + autoconfig SPI. Shared-bus
+  via `bus_devsel`, UART IRQ wired.
+- `sim_uart.sv` — NS16450-compatible UART for sim (no FIFO).
+- `sim_spi.sv` — SPI master + SD card emulator (via `+sdcard=`).
+- `sdram_sim.sv` — wraps adapter + ctrl + `phy_sim` + chip model
+  into a `simple_mem`-shaped device.
+- `sdram_test.sv` — DUT wrapper exposing controller req/rsp for
+  `tb_sdram_test`.
+- `sdram_model.sv` — behavioral SDR DRAM chip (JEDEC command set,
+  sparse storage, protocol checking).
+- `cache_stub.sv` — combinational pass-through; reference only.
+- `simple_mem.sv` — parameterizable sync SRAM model (default 16 MB),
+  configurable READ_LATENCY/WRITE_LATENCY.
 
-**Privilege violation:** First micro-op of S_EXEC checks
-`priv=1 && !sr_s`.
-Suppresses all enables, vectors to VEC_PRIV (4).
+### FPGA top-levels (`rtl/fpga/`)
+- `ulx3s_top.sv` — board top-level. 12.5 MHz PLL (25 MHz crystal),
+  32 MB SDRAM (W9825G6KH or compatible), real UART (TX+RX), real
+  SPI with SD card (autoconfig), boot ROM, `btn[1]` reset.
+- `uart_tx.sv` — standalone TX shift register for test designs.
+- `fpga_ram.sv` — BRAM-friendly memory (4 byte-wide banks with
+  `ram_style` attribute).
 
-**Illegal instruction:** First micro-op detects sentinel
-(`branch==BR_ILLEGAL`). Vectors to VEC_ILLEGAL (7).
+## Boot ROM (`rom/`)
 
-**Vector table (MIPS/68k-style):** Physical 0x00,
-contains handler addresses (not instructions).
-`int_entry` reads handler via MDR, bypasses MMU.
-Vectors: BUS_FAULT=0, IRQ=1, TLB_MISS=2, TLB_PROT=3,
-PRIV=4, SYSCALL=5, BREAK=6, ILLEGAL=7, ALIGN=8.
+Penumbra/1 boot monitor in C. No `.bss`/`.data` — ROM has no writable
+data section; all state lives in boot data or on the stack.
 
-**Reset:** CPU boots at `RESET_PC` (default `0xFFFF_0000`),
-hardwired — not part of vector table.
-
-**Dispatch-time vector latching:**
-`dispatch_pending`/`dispatch_vector` register vector number
-at `ir_valid` because combinational inputs change between
-dispatch and int_entry execution.
-
-## Register Address Routing
-The micro-word's `reg_a_sel`, `reg_b_sel`, `reg_w_sel` fields use a 4-bit encoding:
-- `4'b0000` (IR_RD): format-dependent destination register (R→IR[24:21], L→IR[25:22], M→IR[25:22])
-- `4'b0001` (IR_RS): format-dependent source/base register (R→IR[20:17], M→IR[21:18])
-- `4'b0010–4'b1111`: literal register R2–R15
-
-F-bit write-enable gating only applies when `reg_w_sel = IR_RD` (not for literal addresses).
-
-## Memory Access
-- **STALL-based:** Load/store micro-routines use `branch=STALL`.
-  Same microcode works regardless of memory latency.
-- **Split I/D caches** between CPU and memory.
-  Cache hits: zero latency; misses: burst-fill.
-  Memory bus mux merges both caches
-  (D-cache priority; fetch and data mutually exclusive).
-- **MMU traps:** STALL path checks `i_mem_fault` alongside
-  `i_mem_busy`. On fault, sequencer aborts to S_FETCH.
-- **Dispatch spacing:** Format R: ×2 split by op[4]
-  (ALU 0x00–0x1E, SYS 0x40–0x5E). Format M: ×4 (0x80–0xBF).
-- **IMPORTANT — Device `o_busy` contract:**
-  The CPU's STALL sequencer exits and latches `mem_rdata` on the
-  cycle when `o_busy` drops.
-  Any device with registered read output (1+ cycle latency)
-  **must** assert `o_busy` for at least 1 cycle on reads
-  so the data is valid when busy clears.
-  Use the `access_pending` pattern from `sim_uart.sv`:
-  `o_busy = i_re && !access_pending`.
-  A device that reports `o_busy = 0` immediately but has registered
-  read data will return stale/zero values —
-  this caused a real bug in `sim_spi.sv`.
-
-## Implemented Microcode (43 micro-ops)
-| Category | Instructions | Notes |
-|----------|-------------|-------|
-| ALU (R-ALU, 0x00–0x1E) | ADD, SUB, AND, OR, XOR, SHL, SHR, SAR, MOV, NOT | CMP/TEST via F-bit gating on SUB/AND |
-| Immediate (Format L) | LLI, LLIS, LUI, ADD #imm, SUB #imm, CMP #imm, AND #imm, TEST #imm, SHL #imm, SHR #imm, SAR #imm | 11 of 16 Format L slots used |
-| Memory (Format M) | LDW/LDH/LDHS/LDB/LDBS (3 µ-ops), STW/STH/STB (4 µ-ops) | STALL-based, latency-agnostic |
-| Branch (Format B) | Bcc (all 15 conditions), BL (2 µ-ops) | BL saves PC+4 to R13 |
-| System (R-SYS, 0x40–0x5E) | JMP, EI, DI, WRSYS, RDSYS, ERET, WRSPR, RDSPR, SYSCALL, BREAK | SYSCALL/BREAK intercepted at dispatch |
-| Exception | int_entry (3 µ-ops) | Reads handler from vector table, MMU bypassed |
-
-## UART (Memory-Mapped I/O)
-NS16550A-compatible at `0xFF00_0000` (real `uart.sv`); `sim_uart.sv` remains
-NS16450-only.  Both accessed via LDW/STW (memory bus, not sysreg bus).
-Real UART supports 16-byte RX/TX FIFOs gated by FCR[0]; cleared FCR[0]
-gives true 16450 single-byte behavior.
-
-**Register map** (word-strided, data in bits [7:0]):
-
-| Offset | DLAB=0 R / W | DLAB=1 | Description |
-|--------|-------------|--------|-------------|
-| 0x000 | RBR / THR | DLL | Receive buffer / Transmit holding / Divisor low |
-| 0x004 | IER | DLM | Interrupt enable / Divisor high |
-| 0x008 | IIR / FCR | — | Interrupt ID / FIFO control |
-| 0x00C | LCR | — | Line control (DLAB = bit 7) |
-| 0x010 | MCR | — | Modem control (OUT2 = bit 3 = master IRQ enable) |
-| 0x014 | LSR | — | Line status (bit 0=DR, bit 4=BI, bit 5=THRE, bit 6=TEMT) |
-| 0x018 | MSR | — | Modem status (CTS+DSR hardwired asserted) |
-| 0x01C | SCR | — | Scratch register |
-
-- NetBSD `com(4)` compatible: `reg-shift=2`, `reg-io-width=4`.
-- TX busy simulation: THRE low for `TX_BUSY_CYCLES` (default 2170, ~115200 baud at 25 MHz).
-- Testbench: `o_uart_tx_valid`/`o_uart_tx_data` for TX, `i_uart_rx_valid`/`i_uart_rx_data` + `o_uart_rx_ack` for RX.
-- IRQ: `o_irq` when enabled interrupt + MCR OUT2.
-- Polling: `LDW LSR, TEST THRE, BZ poll, STW THR`.
-
-## FPGA Toolchain (OSS CAD Suite)
-Tools for FPGA synthesis, PnR, bitstream packing, and flashing
-are containerized in `tools/oss-cad-suite/`.
-Docker image based on Ubuntu 22.04 + OSS CAD Suite release.
-
-**Available tools** (via wrapper symlinks in `tools/oss-cad-suite/bin/`):
-| Tool | Purpose |
+| File | Purpose |
 |------|---------|
-| `yosys` | RTL synthesis (SystemVerilog → netlist) |
-| `nextpnr-ecp5` | Place and route for Lattice ECP5 |
-| `ecppack` | Bitstream packing (nextpnr output → `.bit`) |
-| `fujprog` | Flash bitstream to ULX3S via USB/FTDI |
+| `boot_rom.c` | `main()`, trap setup, RAM detection, bus autoconfig, monitor loop |
+| `console.{c,h}` | Line-editing input (`console_gets`), formatted output (`console_printf`, `console_puts`) |
+| `sdcard.{c,h}` | SD-SPI protocol (init/deinit/read_sector/detect), MBR parsing, probing |
+| `fat32.{c,h}` | Minimal read-only FAT32 (mount, root-dir search, cluster-chain read). Device-independent via `blk_read_fn` callback |
+| `elf.h` | Minimal ELF32 header defs (Ehdr/Phdr/constants) for PIE loading |
+| `util.{c,h}` | Unaligned LE reads, size formatting |
+| `bootdata.h` | Boot data tagged list builder/lookup (inline, header-only) |
+| `spi.h`, `penumbra.h` | Inline-only SPR/sysreg/SPI register accessors and constants |
+| `libc.{c,h}` | Minimal C library (strlen, strcmp, strtoul, snprintf, soft mul/div) |
+| `uart.{c,h}` | UART polling driver |
+| `crt0.s` | Startup: preload UART, run RAM diag, set SP, call `main` |
+| `ram_check.s` | Pre-stack SDRAM controller diagnostic + early-print helpers |
+| `trap_entry.s` | Exception trampolines |
+| `rom.ld` | Linker script |
+| `Makefile` | Own build (auto source discovery + header deps). Pipeline: `clang -c` → `llvm-mc` → `ld.lld` → `llvm-objcopy` → `bin2hex.py` |
 
-All symlinks resolve to `docker-wrapper.sh` (multi-call pattern).
-Container runs as host UID to avoid root-owned output files.
-`fujprog` requires USB passthrough (`--privileged`, `/dev/bus/usb`).
+**Monitor commands:** `boot sd:<dev>,<cs>[/file]` (mount FAT32, load
+named file or `PENBOOT.ELF` by default as PIE, allocate RAM, copy
+PT_LOAD, jump), `x <addr> [len]` (hex dump),
+`load sd:<dev>,<cs>[:<part>] <addr> <lba> <count>`,
+`part sd:<dev>,<cs>` (MBR table), `go <addr>` / `g <addr>` (jump
+with R1=boot data), `break` / `b` (halt). SD naming uses per-class
+controller index (`sd:0,0` = first SD controller, CS0).
+
+## Interactive testbench (`sim/tb_interactive.cpp`)
+
+Bridges host stdin/stdout to UART RX/TX. Raw terminal mode, polls
+stdin every 1024 cycles, exits on BREAK or Ctrl-C. Options via
+plusargs (and matching Makefile vars): `+sdcard=disk.img` (SDCARD),
+`+trace=file.log` (TRACE — dumps PC, SR flags, R1–R14 each
+instruction). Trace ports `o_trace_valid`/`o_trace_sr` are exposed
+through `cpu_core → machine_sim`.
+
+## Implementation gotchas
+
+### Device `o_busy` contract (registered-read devices)
+The CPU's STALL sequencer exits and latches `mem_rdata` on the cycle
+when `o_busy` drops. **Any device with registered read output
+(1+ cycle latency) must assert `o_busy` for at least one cycle on
+reads** — otherwise data is not valid when busy clears, and the CPU
+latches stale/zero.
+
+Use the `access_pending` pattern from `sim_uart.sv`:
+`o_busy = i_re && !access_pending`. A device that reports
+`o_busy = 0` immediately while having registered read data caused a
+real bug in `sim_spi.sv`.
+
+### Memory bus
+- STALL-based load/store: same microcode regardless of memory
+  latency. STALL also checks `i_mem_fault` alongside `i_mem_busy`;
+  on fault, sequencer aborts to `S_FETCH`.
+- Split I/D L1 caches share the external bus via `cpu_bus_arbiter`
+  (D-priority on simultaneous pending).
+- See `doc/internals/cpu-bus.md` for the full cpu_core ↔ MMU ↔ cache
+  contract (handshakes, priority, ordering).
+
+### Microcode
+- Field semantics, ROM zone layout, sequencer behavior, exception
+  integration, and the full implemented-instruction catalog all live
+  in `doc/internals/microcode.md`. Do not duplicate any of that here.
+- ALU and SYS-format µ-words share R-format encoding split by op[4]
+  (ALU: 0x00–0x1E; SYS: 0x40–0x5E). Format M uses ×4 slot spacing
+  (0x80–0xBF). Microcode assembler validates slot boundaries.
+
+### Exception flow
+Eight sources share `except_entry → int_entry → vector dispatch`:
+external IRQ (dispatch-time check, gated by SR.I and `ei_shadow`),
+MMU data fault (STALL-time), MMU fetch fault (S_FETCH-time),
+alignment (any access, before TLB lookup), bus fault (no device at
+address — wired from `machine_sim` into `cpu_core.i_bus_fault`),
+BREAK, SYSCALL, privilege violation, illegal instruction.
+
+Priority: `fault > illegal > priv > BREAK > SYSCALL > IRQ`. Vector
+numbers and the dispatch sequence (EPC/ESR save, mode switch, vector
+fetch via MMU bypass) are documented in `doc/internals/microcode.md`
+(§ Exception Integration).
+
+### Register address routing
+Micro-word `reg_a_sel`/`reg_b_sel`/`reg_w_sel` use a 4-bit encoding:
+`4'b0000=IR_RD`, `4'b0001=IR_RS`, `4'b0010-1111=R2-R15`. F-bit
+write-enable gating applies only when `reg_w_sel = IR_RD` (not for
+literal addresses).
+
+## FPGA toolchain (`tools/oss-cad-suite/`)
+
+Tools for synthesis, PnR, bitstream packing, and flashing are
+containerized in `tools/oss-cad-suite/`, Docker image based on
+Ubuntu 22.04 + OSS CAD Suite release.
+
+Wrapper symlinks in `tools/oss-cad-suite/bin/` (all resolve to
+`docker-wrapper.sh` — multi-call pattern): `yosys`, `nextpnr-ecp5`,
+`ecppack`, `fujprog`. Container runs as host UID to avoid root-owned
+output. `fujprog` requires USB passthrough (`--privileged`,
+`/dev/bus/usb`).
+
+Build flow and `make fpga`/`make flash`/`make timing` commands are
+documented in the root `CLAUDE.md`.

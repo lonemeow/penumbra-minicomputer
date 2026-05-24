@@ -724,6 +724,64 @@ walk has to handle mixed users sensibly — pessimize to no
 promotion if both sext and zext consumers exist, since either
 choice forces a software conversion at the other use site.
 
+## Compiler: G_SELECT does not fold constant RHS into CMPi
+
+`G_SELECT` lowering folds an `G_ICMP` feeder into `SELECT_CC_GPR`
+(a CMP+Bcc-style diamond), but does **not** fold a constant RHS
+into a `CMPi` variant the way the `G_ICMP + G_BRCOND` path does.
+Standalone `G_ICMP` has the same limitation — both end up emitting
+a separate LLI/LLIS to materialize the constant before the
+register-register CMP, even when the constant fits uimm16.
+
+The branch path already has the machinery: the selector handles
+`G_BRCOND` by checking the ICMP's RHS for a constant operand and
+also swapping LHS/RHS via `CmpInst::getSwappedPredicate` so a
+constant-LHS still fires CMPi. The select path needs the same
+treatment.
+
+Fix: introduce a `SELECT_CCi_GPR` pseudo (analogous to
+`SELECT_CC_GPR` but with an immediate operand in place of the
+second CMP register), then teach the `G_SELECT` and standalone
+`G_ICMP` selection paths to pick `SELECT_CCi_GPR` when the
+feeder's RHS is a uimm16 (with the same predicate-swap fallback
+for constant-LHS cases). Code lives in
+`llvm/llvm/lib/Target/Penumbra/GISel/PenumbraInstructionSelector.cpp`.
+
+## Compiler: hardware ADC/SBC unused by GlobalISel (no CCR bank)
+
+The ISA has `ADC` and `SBC` (add/sub with carry-in from SR.C),
+encoded in `PenumbraInstrInfo.td` with `Uses=[SR]`. For
+multi-word arithmetic (i64 add/sub) the legalizer currently
+emits an `ADD + CMP + ADC` sequence via `G_UADDO`/`G_UADDE`
+lowering — but the ADC instructions never actually get selected
+because GlobalISel has no register-bank assignment that lets it
+move values through SR.
+
+Fix: introduce a single-bit CCR (carry-flag) register bank that
+covers SR's flag bits as a virtual reg class. Then `G_UADDE`/
+`G_USUBE` etc. can map their carry edges through CCR vregs and
+the selector can pick ADC/SBC. The TableGen scaffolding (regclass
+definition) is in `PenumbraRegisterInfo.td`'s `CCR` class; the
+RegisterBank wiring in `GISel/PenumbraRegisterBanks.td` does not
+yet expose it. Without this, i64 add/sub stays at the current
+"materialize the carry into a GPR via CMP" cost.
+
+## Compiler: 16-bit jump-table entries when offsets fit
+
+`PenumbraAsmPrinter::emitJumpTableEntry` always emits
+`EK_LabelDifference32` entries (`.word target - JT_base`, 4 B
+each). For switch tables whose target span fits in ±32 KB the
+entries could be 16-bit (`.half`), halving table size in `.text`.
+
+Fix: pre-walk the JT in `PenumbraTargetObjectFile` (or in the
+AsmPrinter) computing max signed displacement; switch the entry
+encoding to `EK_Inline` 16-bit when the range fits. The runtime
+BRJT expansion would need a matching sign-extend before the ADD-
+back step (`LDH +SEXT offset,[entry_addr]` → `ADD offset, base`
+→ `JMP`). Low-priority cosmetic win — only matters for code-size-
+sensitive builds and large switches; for now we always pay the
+4 B/entry tax.
+
 ## Compiler: named byval args overlap on stack
 
 When a fixed (non-variadic) function receives byval struct args
