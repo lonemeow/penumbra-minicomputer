@@ -567,12 +567,25 @@ _start_bias:
  * All branches and scratch accesses are PC-relative — works
  * correctly regardless of where the code is mapped.
  * ═══════════════════════════════════════════════════════════════ */
-	/* Align to L1 cache line (16 bytes) so the cold-path I-cache
-	 * fill on first miss after a quiet period covers the handler's
-	 * register-park prologue in a single line refill.  The runtime
-	 * copy destination (0x80 within the vector page) also must be
-	 * a multiple of the line size — see the copy at step 7. */
-	.balign	16
+	/*
+	 * Page-align the trap-handler region so its kernel-text PTE
+	 * can be marked R-only independently of the rest of .text.
+	 * The working copies of these handlers live on the pinned
+	 * vector page; this kernel-text copy must never execute or
+	 * be written to — any such access is a bug (e.g. a stale
+	 * `b trap_return` that resolves to the kernel-text VA).
+	 * pmap_bootstrap() calls pmap_protect(..., VM_PROT_READ) on
+	 * [_real_handlers_page_start, _real_handlers_page_end) so any
+	 * execute or write fault here panics cleanly.  Reads still
+	 * succeed so DDB / ksyms can inspect the page.
+	 *
+	 * The .balign 4096 also satisfies the original cache-line
+	 * alignment requirement (handler prologue covers one L1 line)
+	 * and the step-7 copy destination's multiple-of-16 constraint.
+	 */
+	.balign	4096
+	.globl	_real_handlers_page_start
+_real_handlers_page_start:
 	.globl	_real_miss_handler
 	.globl	_real_handlers_end
 _real_miss_handler:
@@ -1016,6 +1029,11 @@ _trap_save_hw_fstat:
 	.balign	4
 _real_handlers_end:
 
+	/* End of the R-only handler page — see _real_handlers_page_start. */
+	.balign	4096
+	.globl	_real_handlers_page_end
+_real_handlers_page_end:
+
 
 /* ═══════════════════════════════════════════════════════════════
  * TLB invalidation routines — called from C (pmap.c).
@@ -1253,14 +1271,25 @@ lwp_trampoline:
 	/*
 	 * func returned — this is an exec'd or fork'd user process.
 	 * Load the trapframe pointer from curlwp->l_md.md_utf and
-	 * jump to trap_return to restore registers and ERET to user.
-	 * Kernel threads never return from func, so reaching here
-	 * always means "return to userland".
+	 * jump to the vector-page copy of trap_return.
+	 *
+	 * NOTE: a plain `b trap_return` would resolve to the kernel-
+	 * text address, which is mapped R-only (no X) — the working
+	 * copies of the handlers live on the pinned vector page so
+	 * trap_return's PC-relative scratch is always TLB-resident.
+	 * Indirect jump to the vector-page VA, computed at link time:
+	 *   VECTOR_VA + 0x80 + (trap_return - _real_miss_handler)
+	 * Both offsets are link-time constants (same translation unit).
 	 */
 	la	r11, cpu_info_store
 	ldw	r11, [r11 + CI_CURLWP]	/* curlwp */
 	ldw	r14, [r11 + L_MD_UTF]	/* md_utf → trapframe pointer */
-	b	trap_return
+	ldw	r11, [pc + .Lvp_trap_return - .]
+	jmp	r11
+
+	.balign	4
+.Lvp_trap_return:
+	.long	VECTOR_VA + 0x80 + (trap_return - _real_miss_handler)
 
 /*
  * setjmp / longjmp for kernel use (label_t).

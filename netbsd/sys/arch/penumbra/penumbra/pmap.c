@@ -405,6 +405,23 @@ pmap_bootstrap(void)
 
 	printf("pmap: virtual_avail = 0x%x, virtual_end = 0x%x\n",
 	    (unsigned)virtual_avail, (unsigned)virtual_end);
+
+	/*
+	 * Lock the trap-handler page down to R-only.  The kernel-text
+	 * copy must never execute or be written to — the working copies
+	 * live on the pinned vector page.  Any stale reference (e.g. a
+	 * branch whose link-time offset resolves to the kernel-text VA
+	 * instead of the vector-page VA) will now take a TLB protection
+	 * fault and panic cleanly, instead of silently corrupting EPC
+	 * by running the unsafe (non-pinned-scratch) path.
+	 * Reads still succeed so DDB / ksyms can inspect the page.
+	 */
+	extern char _real_handlers_page_start[];
+	extern char _real_handlers_page_end[];
+	pmap_protect(pmap_kernel(),
+	    (vaddr_t)_real_handlers_page_start,
+	    (vaddr_t)_real_handlers_page_end,
+	    VM_PROT_READ);
 }
 
 /*
