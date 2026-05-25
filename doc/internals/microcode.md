@@ -504,10 +504,19 @@ reg_a=IR_RD pc=ABUS
 
 **JALR Rd** (op=12, dispatch=0x38) — 2 micro-ops
 ```
-Step 0: reg_a=R15 bmux=CONST4 alu=ADD reg_w=R13 w_en=1 wmux=RBUS pc=HOLD branch=SEQ
-Step 1: reg_a=IR_RD pc=ABUS
+Step 0: reg_a=IR_RD mdr_load_a=1 pc=HOLD branch=SEQ
+Step 1: reg_a=R15 bmux=CONST4 alu=ADD reg_w=R13 w_en=1 wmux=RBUS pc=MDR
 ```
-→ R13 = PC + 4 (link), then PC = Rd field. Used for indirect calls (function pointers, vtables).
+→ MDR ← old Rd, then R13 = PC + 4 (link) and PC = MDR (= old Rd) in
+the same µ-op (link writeback and PC-source are independent fields).
+Used for indirect calls (function pointers, vtables).
+
+**Why the Rd-first capture matters:** the compiler's canonical
+indirect-call sequence is `ldw r13, [ptr]; jalr r13` — both target
+and link alias the same register. Reading Rd *before* the link write
+ensures `jalr r13` jumps to the original target rather than
+self-clobbering to `PC+4`. A pipelined implementation gets this for
+free by reading operands at issue and writing back later.
 
 ### Format R — System Operations (op 23–31, 0x4E–0x5E)
 

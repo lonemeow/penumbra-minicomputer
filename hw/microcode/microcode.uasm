@@ -179,12 +179,20 @@ jmp:
   reg_a=IR_RD pc=ABUS
 
 # ── JALR Rs (op=12, dispatch=0x38) ───────────────────────────
-# Jump and link register: R13 = PC+4, PC = Rd field.
-# Used for indirect calls (function pointers, vtables).
+# Jump and link register: R13 = PC+4, PC = (old Rd).
+#
+# Rd is *captured before* R13 is written, so `jalr r13` (the
+# canonical indirect-call pattern: ldw r13, [ptr]; jalr r13) jumps
+# to the original target rather than self-clobbering to PC+4.
+#
+# Step 0: latch old Rd into MDR (via mdr_load_a from A-bus).
+# Step 1: write R13 = PC+4 *and* set PC = MDR in the same µ-op —
+# the link writeback and the PC source are independent fields,
+# so they coexist cleanly.
 .org 0x38
 jalr:
-  reg_a=R15 bmux=CONST4 alu=ADD reg_w=R13 w_en=1 wmux=RBUS pc=HOLD branch=SEQ
-  reg_a=IR_RD pc=ABUS
+  reg_a=IR_RD mdr_load_a=1 pc=HOLD branch=SEQ
+  reg_a=R15 bmux=CONST4 alu=ADD reg_w=R13 w_en=1 wmux=RBUS pc=MDR
 
 # ═══════════════════════════════════════════════════════════════
 # Format R — System operations (op 23–31)

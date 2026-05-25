@@ -90,7 +90,7 @@ Opcodes 10010–10110 are reserved for future ALU expansion.
 | 1001 | SHR #imm  | `Rd = Rd >> imm[4:0]` (logical)                    |
 | 1010 | SAR #imm  | `Rd = Rd >> imm[4:0]` (arithmetic)                 |
 | 1011 | JMP       | `PC = Rd` (Rd field carries source register)       |
-| 1100 | JALR      | `R13 = PC+4; PC = Rd` (indirect call)              |
+| 1100 | JALR      | `R13 = PC+4; PC = Rd` (indirect call, Rd captured *before* R13 write) |
 | 1101–1111 | —     | Reserved                                           |
 
 ---
