@@ -148,11 +148,27 @@ BL=8.  No wasted beats, no burst termination logic needed.
 
 ## Clock Speed Considerations
 
-At 12.5 MHz, the CPU is ~2 instructions/cycle (fetch + execute
-pipeline), so SDRAM latency of 6 cycles ≈ 3 instructions.  This
-is tolerable for single accesses but painful for line fills.
+At the current ULX3S operating point (25 MHz CPU, 100 MHz SDRAM)
+the CPU is single-issue microcoded — there is no fetch/execute
+overlap, so a stall on a miss is a stall on the actual machine, not
+a stall absorbed by a pipeline.  The dominant miss-side cost is the
+L1↔SDRAM round-trip through the CDC bridge and bus adapter, not
+the in-SDRAM command overhead (per the layer-cost split: roughly
+85% adapter+CDC vs 15% controller-internal).  That is what motivates
+the already-shipped layer-pipelining work (speculative `addr+4` +
+depth-2 CDC, see § Recommended Path above) and what makes Level 2
+(BL=8 line buffer) the natural next optimisation: it shortens the
+SDRAM-side of the round-trip while the bus-side pipeline keeps the
+CPU from stalling between word completions.
 
-At higher clocks (25-50 MHz), the SDRAM timing parameters grow
-(T_RCD=2-3, T_RP=2-3) but the ratio of useful beats to overhead
-improves with longer bursts.  BL=8 becomes even more attractive
-at higher speeds.
+L2 (64 KiB unified, write-invalidate-on-hit today) further cuts the
+average miss cost by catching the working set entirely within the
+system clock domain, never crossing the CDC bridge.  For specific
+CPI / DMIPS numbers on the current bitstream, run `make benchmark`
+on hardware rather than quoting figures from this doc — measured
+numbers move as cache / compiler / kernel changes land, and any
+specific number here is guaranteed to be stale before long.
+
+At higher CPU clocks (50 MHz+) the SDRAM-side timing budget in ns
+stays roughly constant; the same overhead consumes a larger fraction
+of useful work, making bursts proportionally more valuable.

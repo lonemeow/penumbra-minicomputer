@@ -98,7 +98,10 @@ hw/rtl/io/sdram/
 └── sdram_bus_adapter.sv      Sync bus i_re/i_we/o_busy ↔ controller req/ack
 
 hw/rtl/sim/
-└── sdram_model.sv            Behavioral SDR DRAM chip model (for tests)
+├── sdram_model.sv            Behavioral SDR DRAM chip model (for tests)
+├── sdram_sim.sv              Wraps adapter + ctrl + phy_sim + model into a simple_mem-shaped device for machine_sim
+├── sdram_test.sv             DUT wrapper exposing controller req/rsp for tb_sdram_test
+└── sdram_adapter_test.sv     DUT wrapper for the bus adapter's speculative-prefetch path (tb_sdram_adapter_test)
 ```
 
 | Layer | Cares about | Changes when... |
@@ -113,9 +116,9 @@ hw/rtl/sim/
 PLL plan (proposed, easy to retune):
 
 ```
-25 MHz xtal ─► EHXPLLL ─┬─► CLKOP   (system clock; today 12.5 MHz, rises with CPU optimisation) ──► SoC fabric
-                        ├─► CLKOS   (SDRAM fabric clock, 100 MHz, 0°)                            ──► sdram_ctrl
-                        └─► CLKOS2  (SDRAM pin clock,   100 MHz, ~270°)                          ──► ODDRX1F ──► sdram_clk pin
+25 MHz xtal ─► EHXPLLL ─┬─► CLKOP   (system clock, 25 MHz today)              ──► SoC fabric
+                        ├─► CLKOS   (SDRAM fabric clock, 100 MHz, 0°)         ──► sdram_ctrl
+                        └─► CLKOS2  (SDRAM pin clock,   100 MHz, ~180°)       ──► ODDRX1F ──► sdram_clk pin
 ```
 
 - `CLKOS` clocks controller logic and FPGA-side IOB flops.
@@ -378,9 +381,10 @@ adapter keep both a real fetch and a speculation in flight without
 serializing through a single CDC slot — see "Bus adapter" above.
 
 The PLL at the board top now exports three outputs from one 600 MHz
-VCO: CLKOP @ 12.5 MHz (system bus), CLKOS @ 100 MHz / 0° (SDRAM
-controller fabric and IOB flops), CLKOS2 @ 100 MHz / 270° (forwarded
-out the SDRAM clock pin via ODDRX1F).  CPHASE/FPHASE convention:
+VCO: CLKOP @ 25 MHz (system bus), CLKOS @ 100 MHz / 0° (SDRAM
+controller fabric and IOB flops), CLKOS2 @ 100 MHz at a phase shift
+controlled by the `SDRAM_PHASE_DEG` define (currently 180° by default
+from `Makefile:530`; forwarded out the SDRAM clock pin via ODDRX1F).  CPHASE/FPHASE convention:
 **0° = CPHASE = (DIV − 1), FPHASE = 0**; each FPHASE step is 1/8 VCO
 cycle; phase shift φ from 0° subtracts (φ × DIV / 360°) VCO cycles.
 For DIV = 6 and φ = 270°: shift = 4.5 VCO cycles → CPHASE = 0,
@@ -441,11 +445,21 @@ breaking on a hot day or after a netlist reshuffle.
 
 | Board / SDRAM variant            | Working phases  | Chosen phase | Date       |
 |----------------------------------|-----------------|--------------|------------|
-| ULX3S v3.1.8 / Winbond W9825G6KH | TBD (step 5)    | 270° (provisional) | 2026-04-30 |
+| ULX3S v3.1.8 / Winbond W9825G6KH | TBD (step 5)    | 180°         | 2026-05-19 |
 
 Add a new row when sweeping a new board/variant.  When changing the
-chosen phase, also change the default in `ulx3s_top.sv`'s
-`` `define SDRAM_PHASE_DEG `` so unflagged builds match.
+chosen phase, change `PHASE_DEG ?=` in `Makefile` (the practical
+default for `make fpga`) and the `` `define SDRAM_PHASE_DEG ``
+fallback in `ulx3s_top.sv` together so both the Makefile-driven and
+the unflagged-direct builds agree.
+
+**Gotcha — high-fmax landing.** When the SDRAM clock reaches the high
+end of the ECP5's reach (~140 MHz+ on sg6 -8 silicon), the older
+PHASE_DEG=270° default was observed to fail on the W9825 even at
+operating points where 270° was fine at lower SDRAM frequencies.
+180° was found to be the centred working point and is now the
+shipped default; if a future board / SDRAM variant fails at 180°,
+try 270° first before falling back to a full 8-point sweep.
 
 #### What to do if every phase fails
 
