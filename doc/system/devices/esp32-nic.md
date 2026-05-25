@@ -6,6 +6,12 @@ Bridging Ethernet frames over SLIP-framed UART using the onboard ESP32.
 
 Base address assigned by autoconfig. Word-strided.
 
+**Access restriction.** All registers are 32 bits wide and must be
+accessed with 32-bit aligned loads and stores only (`LDW`/`STW`).
+Sub-word access (`LDB`/`LDH`/`STB`/`STH`) is not supported and yields
+undefined results per the bus protocol's
+[Access Width](../../hardware/bus-protocol.md#access-width) rules.
+
 | Offset | Name | R/W | Description |
 |--------|------|-----|-------------|
 | 0x00 | TX_DATA | W | Write byte to TX FIFO |

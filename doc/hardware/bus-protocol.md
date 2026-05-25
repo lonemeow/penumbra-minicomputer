@@ -92,6 +92,64 @@ data:      ------[W0 ][W1  ][W2  ][W3  ]-----
 ```
 The slave responds to each address independently.
 
+## Access Width
+
+The bus protocol permits sub-word access. A master may drive any
+combination of `byte_en[3:0]` together with a byte-granular `addr`,
+and the slave is expected to act on the indicated byte lanes.
+
+### Default contract
+
+Unless the device's own documentation says otherwise, the following
+apply:
+
+- **Writes.** The slave commits only the byte lanes whose `byte_en`
+  bit is set. Lanes with `byte_en=0` are left unchanged.
+- **Reads.** `byte_en` is advisory; the slave drives all 32 bits of
+  `rdata` with each byte positioned at its natural lane (the byte at
+  byte address `A+N` lives in `rdata[8N+7:8N]`, `N∈{0..3}`). The
+  master extracts the requested lane(s) using `addr[1:0]` and the
+  access size — the slave is not required to repack data based on
+  `addr[1:0]`.
+
+This is the contract that `simple_mem`, `fpga_ram`, the boot ROM and
+the SDRAM stack implement. It is also the contract any general-
+purpose memory-like slave should implement.
+
+### Device-specific restrictions
+
+An individual device's documentation MAY narrow the contract. The
+most common restriction in Penumbra today is *word-strided access
+only* — the device's registers occupy word slots in the address
+map and the device handles only 32-bit transactions. The current
+UART, SPI, ESP32 NIC and autoconfig config-space window are all of
+this kind; see the per-device docs and the autoconfig section of
+[bus.md](../system/bus.md) for the specifics.
+
+When a device documents a restriction, software is responsible for
+following it. The bus itself does not enforce per-device access
+rules — adding runtime checks in every slave is exactly the cost
+this layered contract is designed to avoid.
+
+Violating a device restriction such as doing a full word read across
+multiple sub-word MMIO registers or a sub-word partial read of a larger
+device register results in undefined behavior and must not be relied
+upon when implementing drivers. Devices are allowed to protect against
+such misuse and assert `bus_fault` but that behavior is not required.
+
+### Examples
+
+- `LDW R1, [ram_addr]` against any RAM slave: returns the full word
+  starting at `ram_addr`.
+- `LDB R1, [ram_addr + 2]` against any RAM slave: slave drives the
+  full word at `ram_addr & ~3`; the CPU's `byte_ext` selects
+  `rdata[23:16]`. Correct under the default contract.
+- `LDW R1, [uart_base + 4]` (read of UART register 1): supported,
+  per the UART's word-strided contract.
+- `LDB R1, [uart_base + 5]` (sub-word read of a word-strided
+  register): not supported by the UART; result is governed by the
+  rule defined in the section above.
+
 ## Sync-Bus Mapping
 
 The sync form expresses the same protocol with clock-aligned levels

@@ -21,6 +21,7 @@ This section defines the programmer-visible behavior of the Penumbra architectur
 *   **[Boot Protocol](./system/boot-protocol.md)** — The three-stage ROM → Loader → Kernel handoff.
 
 ### Device Drivers
+*   **[UART](./system/devices/uart.md)** — Word-strided NS16550A console.
 *   **[SPI / SD Card](./system/devices/spi.md)** — Register map and driver flow for storage.
 *   **[ESP32 WiFi NIC](./system/devices/esp32-nic.md)** — Ethernet-over-SLIP network adapter interface.
 

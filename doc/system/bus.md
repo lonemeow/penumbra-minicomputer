@@ -81,7 +81,7 @@ RAM-region space for memory-class devices).
 
 | Base         | Size | Device   | Hardwired / AC | Notes                        |
 |--------------|------|----------|:--------------:|------------------------------|
-| `0xFF00_0000`| 4 KB | UART     | HW             | NS16450 console              |
+| `0xFF00_0000`| 4 KB | UART     | HW             | Console — see [devices/uart.md](./devices/uart.md) |
 | *(assigned)* | 4 KB | SPI      | AC             | SD card, flash               |
 | *(assigned)* |64 KB | Ethernet | AC             | Wiznet / ESP32 NIC           |
 | *(assigned)* | 4 KB | GPIO     | AC             | General-purpose I/O          |

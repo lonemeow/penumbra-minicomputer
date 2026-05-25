@@ -6,6 +6,12 @@ A SPI master peripheral for the Penumbra bus, primarily used for SD card access 
 
 Seven word-strided registers. Base address assigned by autoconfig.
 
+**Access restriction.** All registers are 32 bits wide and must be
+accessed with 32-bit aligned loads and stores only (`LDW`/`STW`).
+Sub-word access (`LDB`/`LDH`/`STB`/`STH`) is not supported by the
+controller and yields undefined results per the bus protocol's
+[Access Width](../../hardware/bus-protocol.md#access-width) rules.
+
 | Offset | Name | R/W | Description |
 |--------|------|-----|-------------|
 | `0x00` | CAP | R | Capability: version, FIFO depth |
