@@ -85,6 +85,18 @@ trap(struct trapframe *tf)
 	int type = tf->tf_cause;
 	int usermode = USERMODE(tf->tf_sr);
 
+	/*
+	 * Hardware masks interrupts on exception entry.  For exceptions
+	 * that may do long-running work (syscall body, uvm_fault, signal
+	 * delivery) re-enable them so the statistics clock can sample
+	 * kernel time and so the work is preemptible.
+	 *
+	 * Timer and external-IRQ paths stay masked: their handlers are
+	 * not re-entrant.
+	 */
+	if (type != EXC_TIMER && type != EXC_EXT_IRQ)
+		__asm __volatile("EI" ::: "memory");
+
 	switch (type) {
 	case EXC_TIMER: {
 		/* Clear timer underflow flag (write-1-to-clear) */
@@ -288,6 +300,15 @@ trap(struct trapframe *tf)
 	 */
 	if (usermode)
 		userret(curlwp, tf);
+
+	/*
+	 * The locore trap epilogue stashes ESR/EPC into pinned scratch
+	 * before WRSPR; a nested exception would clobber those slots
+	 * and corrupt the return.  Mask interrupts now so the epilogue
+	 * runs atomically.  ERET restores the saved SR (including I),
+	 * so userland comes back up with interrupts enabled.
+	 */
+	__asm __volatile("DI" ::: "memory");
 }
 
 /*
