@@ -46,7 +46,14 @@ to the arbiter (which merges the I- and D-cache back-sides into the
 CPU memory port).  L2's front-side talks to the CPU memory port;
 L2's back-side talks to the system bus.
 
-## Bus Signals
+## Bus Signals (async form)
+
+These are the signal names of the async / 4-phase form documented in
+this section.  The sync form uses different names for several of
+them (notably `req`/`ack` → `re`/`busy`, `bus_error` → `bus_fault`)
+plus an additional `req_accepted` handshake pulse; the
+[Sync-Bus Mapping](#sync-bus-mapping) section below has the
+correspondence table.
 
 | Signal | Width | Direction | Description |
 |--------|-------|-----------|-------------|
@@ -54,10 +61,10 @@ L2's back-side talks to the system bus.
 | `data[31:0]` | 32 | Bidirectional | Read/write data |
 | `we` | 1 | Master → Slave | Write enable |
 | `byte_en[3:0]` | 4 | Master → Slave | Byte lane enables |
-| `data_dir` | 1 | Master → all | 0=master drives data, 1=slave drives |
+| `data_dir` | 1 | Master → all | Tri-state turnaround signal: 0=master drives data, 1=slave drives.  Async-form only — the sync form's separate `wdata`/`rdata` ports are inherently directional and need no equivalent. |
 | `req` | 1 | Master → Slave | Request active |
 | `ack` | 1 | Slave → Master | Acknowledge / completion |
-| `bus_error` | 1 | Slave → Master | Access fault |
+| `bus_error` | 1 | Slave → Master | Access fault (sync-form name: `bus_fault`) |
 | `rst` | 1 | Master → Slave | Bus reset |
 
 ## Four-Phase Handshake
@@ -96,8 +103,9 @@ forms.
 |--------------|-------------|-----------|-------|
 | `req` | `re` (read) / `we` (write) | master → slave | Held high while the transaction is in flight |
 | `ack` rising | `busy` falling | slave → master | Slave drops `busy` on the cycle `rdata` is valid |
-| `addr`, `data`, `byte_en` | same names | — | Driven while `re`/`we` is held |
+| `addr`, `data`, `byte_en` | `addr`, `wdata` (master→slave), `rdata` (slave→master), `byte_en` | — | Driven while `re`/`we` is held; sync form's separate wdata/rdata ports remove the need for `data_dir` |
 | `bus_error` | `bus_fault` | slave → master | Same semantics |
+| *(none)* | `req_accepted` | slave (arbiter) → master (cache) | Sync-form-only handshake pulse; see [Back-to-back bursts](#back-to-back-bursts-req_accepted) below |
 
 ### Sync read handshake
 
@@ -131,6 +139,34 @@ discard the request when they observe `re=0` in their processing
 state, just as an async slave would discard a transaction where
 `req` falls before `ack` rises.
 
+### Slave-side obligation (registered-read devices)
+
+**A slave with registered read output must assert `busy` for at
+least one cycle on reads.**  The CPU's STALL sequencer latches
+`rdata` on the cycle `busy` drops; a slave that reports `busy=0`
+combinationally on the same cycle as `re` asserts will return
+stale or zero data because its registered read flop hasn't yet
+captured the requested word.
+
+Slaves with truly combinational read paths (single-cycle BRAM,
+constant ROM regions) can leave `busy=0` permanently — the data
+they drive on the same cycle as `re` is the correct response.
+Slaves with any registered stage on the read path (sysreg-style
+devices with a 1-cycle access pipeline, FIFO-backed peripherals,
+SDRAM controllers) must follow the `access_pending` pattern from
+`hw/rtl/sim/sim_uart.sv`:
+
+```
+o_busy = i_re && !access_pending;
+```
+
+— assert `busy` on the same cycle as `re`, then drop it on the
+cycle the registered read data is actually valid.  A device that
+gets this wrong is invisible in lint and most testbenches; it
+shows up as intermittent stale-data bugs that depend on whether
+the master is currently bursting or single-stepping.  An early
+`sim_spi.sv` bug had exactly this shape.
+
 ### Sync burst
 
 ```
@@ -143,6 +179,44 @@ rdata:              ------[D0]-------[D4]-------
 
 `re` held across word boundaries; `addr` advances on the cycle
 after each busy-drop.  Same shape as the async burst.
+
+### Back-to-back bursts (`req_accepted`)
+
+The diagram above shows a gap of one or more cycles between the
+busy-drop of word *N* and the next `re`-driven request for word
+*N+1*.  That gap exists because a naive master can't tell *when*
+the slave latched its request — and on multi-master fabric (the
+CPU's split I/D L1 caches sharing a single external bus via the
+`cpu_bus_arbiter`) the master needs to know that to time the next
+address.
+
+The sync-form arbiter exposes a combinational `o_*_req_accepted`
+pulse to each master.  It fires for **exactly one cycle** —
+specifically the cycle the arbiter latches that master's
+in-flight request — and lets the master advance its burst pointer
+on the very next cycle without waiting for `busy` to fall.  With
+this handshake, the arbiter supports back-to-back `BUSY → BUSY`
+transitions: as one access completes, the next address is already
+queued, and the bus stays driven word-after-word with no dead
+cycle between successive completions.
+
+```
+              cycle: 0   1   2   3   4   5   6   7
+re:                 ___/‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾\__
+addr:               ---[A+0  ][A+4  ][A+8  ][A+C]---
+req_accepted:       ___/‾\____/‾\____/‾\____/‾\___
+busy:               ___/‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾\__
+rdata:              ------[D0  ][D4  ][D8  ][DC]----
+```
+
+Slaves on a single-master shared bus (i.e. without an arbiter in
+front) don't need to generate `req_accepted` — the contract reads
+as "the master may treat `busy` going low and a fresh `re`
+together as equivalent to the arbiter pulse."  Caches that drive
+the arbiter (`cache_vipt.sv`, by way of `cpu_bus_arbiter.sv`) use
+`i_req_accepted` to advance their `req_idx`/`resp_idx` counters
+during line fills.  See `hw/rtl/core/cpu_bus_arbiter.sv` for the
+RTL.
 
 ## Reset Timing
 
@@ -160,8 +234,10 @@ Two pulse sources drive the same line:
 | Software (`BUSCTL.RST`)| **100 µs**      | Propagation through the async external bus: worst case is 74xx gate delays + backplane trace delays + RC settling. 74HC async clear is <100 ns, but the spec allows for long backplanes and slow LS/ALS parts. |
 
 **Board implementation.** The hardware reset counter width must satisfy
-`2^N / f_clk >= 10 ms`. At 12.5 MHz, `N=17` gives 10.5 ms (the ULX3S
-uses `N=18` for margin). Faster clocks need wider counters.
+`2^N / f_clk >= 10 ms`. At the current ULX3S 25 MHz system clock,
+`N=18` gives ~10.5 ms (just meets the minimum) and the board uses
+`N=19` for ~21 ms of margin (see `ulx3s_top.sv:175-180`). Faster
+clocks need wider counters.
 
 **Software implementation.** The boot ROM delay loop between asserting
 and deasserting `BUSCTL.RST` must hold the pulse for at least 100 µs.
