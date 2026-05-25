@@ -103,14 +103,29 @@ int main() {
     printf("── Program Runner ──\n\n");
     reset(cpu);
 
-    int cycles = run_until_halt(cpu, 500000);
+    int cycles = run_until_halt(cpu, 2000000);
 #if VM_TRACE
     if (tfp) { tfp->close(); delete tfp; tfp = nullptr; }
 #endif
 
     if (cycles < 0) {
         printf("  FAIL: no BREAK within cycle limit\n");
-        printf("  (missing BREAK instruction? infinite loop?)\n\n");
+        printf("  (missing BREAK instruction? infinite loop?)\n");
+        printf("  Final state — PC = 0x%08X\n", cpu->o_pc);
+        printf("  Register dump:\n");
+        for (int i = 0; i < 16; i++) {
+            printf("    R%-2d = 0x%08X\n", i, read_reg(cpu, i));
+        }
+        // Sample PC every ~1k cycles for 20k more cycles so the operator
+        // can tell at a glance whether we're stuck in a tight loop
+        // (PC bouncing in a small range) vs wandering (PC drifting,
+        // e.g. an unhandled trap chain into vector-page data).
+        printf("  PC samples, ~1k cycles apart:\n");
+        for (int s = 0; s < 20; s++) {
+            for (int k = 0; k < 1000; k++) tick(cpu);
+            printf("    cyc+%5d  PC=0x%08X\n", s * 1000, cpu->o_pc);
+        }
+        printf("\n");
         printf("prog: 0/1 tests passed\n");
         printf("  *** 1 FAILED ***\n");
         delete cpu;
