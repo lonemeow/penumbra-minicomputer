@@ -16,8 +16,151 @@ based on the median.
 
 ## Snapshot index
 
+- [2026-05-25 — userland -O2 rebuild](#2026-05-25--userland--o2-rebuild)
 - [2026-05-19 — L2 cache + SPI FIFO + pmap speedups](#2026-05-19--l2-cache--spi-fifo--pmap-speedups)
 - [2026-05-15 — initial baseline](#2026-05-15--initial-baseline)
+
+---
+
+## 2026-05-25 — userland -O2 rebuild
+
+**Captured**: 2026-05-25
+**Repository state**: the commit that anchors this snapshot drops
+ `DBG=-O0` from `minimal-mk.conf`, which lets NetBSD's default
+ `DBG` (`-O2 -g`) take over for the userland build — so libc and
+ `pbench` itself are now -O2 instead of -O0.  That single line
+ removal is the headline change driving the deltas below.  The
+ previous tip was `e61fb9766d21`; `git log d5d929f9d011..e61fb9766d21`
+ covers the rest of the window, mostly compiler/kernel/doc work
+ that should not move these particular benchmarks much:
+ - `llvm: legalize G_UMULO at i64` — unblocks i64 overflow paths.
+ - `netbsd: route lwp_trampoline through the vector-page trap_return`,
+   `netbsd: implement kcopy fault recovery via pcb_onfault`,
+   `netbsd: wire up msgbuf so dmesg(8) works` — correctness/ergonomics.
+ - `netbsd: align TLB miss handler to L1 cache line`,
+   `netbsd: pick TLB way from cycle counter, drop scratch memory` —
+   small TLB-refill polish.
+ - `hw: fix JALR microcode to capture Rd before writing R13` — bug fix
+   for `JALR rd, r13`, not a perf change.
+**Platform**: ULX3S FPGA, 25 MHz CPU clock, running NetBSD off SD card.
+**Binary**: `pbench` (dynamically linked against libc.so), both
+ rebuilt at `-O2`.
+**Notes**: Two back-to-back runs captured.  Numbers below are run 1;
+ run 2 was within ~1–2% on every line *except* `clock_gettime`, whose
+ min wobbled 622 µs → 860 µs (the timecounter read path is still
+ jittery — flagged as an open question below).  No new `dd` numbers
+ captured this round; SD/zero throughput should be unchanged since
+ the storage and uio paths weren't touched.
+
+```
+--- kernel/getpid ---
+  kernel   getpid             -               min=   237.74 us  med=   378.67 us  mean=   328.76 us  iters=1024  trials=15
+
+--- kernel/clock_gettime ---
+  kernel   clock_gettime      -               min=   622.21 us  med=   637.24 us  mean=   649.56 us  iters=512  trials=16
+
+--- kernel/pipe_pingpong ---
+  kernel   pipe_pingpong      1B              min=     9.36 ms  med=     9.59 ms  mean=     9.89 ms  iters=32  trials=16
+
+--- kernel/fork_exit ---
+  kernel   fork_exit          -               min=   384.58 ms  med=   410.47 ms  mean=   410.64 ms  iters=1  trials=13
+
+--- libc/memcpy ---
+  libc     memcpy             size=1          min=     5.17 us  med=     5.27 us  mean=     5.38 us  iters=65536  trials=15
+  libc     memcpy             size=16         min=     8.35 us  med=     9.60 us  mean=    10.17 us  iters=32768  trials=16
+  libc     memcpy             size=64         min=    20.65 us  med=    24.90 us  mean=    26.62 us  iters=8192  trials=23
+  libc     memcpy             size=256        min=    72.83 us  med=    74.87 us  mean=    76.23 us  iters=4096  trials=16
+  libc     memcpy             size=1024       min=   277.70 us  med=   287.37 us  mean=   292.41 us  iters=1024  trials=17
+  libc     memcpy             size=4096       min=     1.24 ms  med=     1.27 ms  mean=     1.28 ms  iters=256  trials=16
+  libc     memcpy             size=16384      min=     4.96 ms  med=     5.02 ms  mean=     5.15 ms  iters=64  trials=16
+  libc     memcpy             size=65536      min=    23.71 ms  med=    24.92 ms  mean=    25.16 ms  iters=16  trials=13
+
+--- libc/memcpy_align ---
+  libc     memcpy_align       n=256,src=1,dst=0  min=   250.54 us  med=   260.24 us  mean=   262.85 us  iters=1024  trials=19
+  libc     memcpy_align       n=256,src=0,dst=1  min=   249.59 us  med=   258.78 us  mean=   263.19 us  iters=1024  trials=19
+  libc     memcpy_align       n=256,src=1,dst=1  min=   249.22 us  med=   258.34 us  mean=   262.23 us  iters=1024  trials=19
+  libc     memcpy_align       n=256,src=1,dst=3  min=   250.27 us  med=   260.10 us  mean=   264.14 us  iters=1024  trials=19
+  libc     memcpy_align       n=7             min=     8.27 us  med=     8.40 us  mean=     8.54 us  iters=32768  trials=18
+  libc     memcpy_align       n=31            min=    14.79 us  med=    14.87 us  mean=    15.15 us  iters=16384  trials=21
+  libc     memcpy_align       n=127           min=    39.88 us  med=    41.08 us  mean=    41.78 us  iters=8192  trials=15
+  libc     memcpy_align       n=255           min=    73.27 us  med=    75.69 us  mean=    77.18 us  iters=4096  trials=16
+
+--- libc/memset ---
+  libc     memset             size=1          min=     6.69 us  med=     6.90 us  mean=     7.03 us  iters=32768  trials=22
+  libc     memset             size=16         min=     9.83 us  med=    10.00 us  mean=    10.24 us  iters=32768  trials=15
+  libc     memset             size=64         min=    19.22 us  med=    19.65 us  mean=    20.04 us  iters=16384  trials=16
+  libc     memset             size=256        min=    56.16 us  med=    57.75 us  mean=    59.32 us  iters=4096  trials=21
+  libc     memset             size=1024       min=   205.93 us  med=   212.72 us  mean=   216.28 us  iters=1024  trials=23
+  libc     memset             size=4096       min=   802.46 us  med=   833.87 us  mean=   845.78 us  iters=256  trials=23
+  libc     memset             size=16384      min=     3.20 ms  med=     3.31 ms  mean=     3.37 ms  iters=64  trials=23
+  libc     memset             size=65536      min=    12.83 ms  med=    13.33 ms  mean=    13.54 ms  iters=16  trials=23
+
+--- libc/strlen ---
+  libc     strlen             len=8           min=     7.65 us  med=     7.88 us  mean=     8.03 us  iters=32768  trials=19
+  libc     strlen             len=64          min=    33.15 us  med=    34.37 us  mean=    34.89 us  iters=8192  trials=18
+  libc     strlen             len=256         min=   121.18 us  med=   126.17 us  mean=   127.98 us  iters=2048  trials=19
+  libc     strlen             len=1024        min=   481.98 us  med=   496.11 us  mean=   503.59 us  iters=512  trials=20
+  libc     strlen             len=4096        min=     2.06 ms  med=     2.09 ms  mean=     2.13 ms  iters=128  trials=19
+
+--- libc/qsort_int ---
+  libc     qsort_int          n=256           min=    16.61 ms  med=    17.40 ms  mean=    17.58 ms  iters=16  trials=18
+  libc     qsort_int          n=4096          min=   342.15 ms  med=   349.27 ms  mean=   355.66 ms  iters=1  trials=15
+```
+
+### Reading this snapshot
+
+Deltas vs. the 2026-05-19 baseline (min trial, lower is better).
+The dominant variable this round is **userland -O2**; kernel was
+already -O2, so the syscall path barely moves.
+
+- **Comparator-heavy code — the big -O2 win**
+  - `qsort_int` n=256:   44.65 ms → **16.61 ms** (~2.69× faster)
+  - `qsort_int` n=4096: 960.03 ms → **342.15 ms** (~2.81× faster)
+  - This is the only line where the optimizer can really stretch its
+    legs: the qsort hot loop is integer compares + small swaps + an
+    indirect call to a tiny comparator.  At -O0 each of those is a
+    spill/reload festival; at -O2 the comparator inlines into the
+    sort and registers stay live.
+- **Syscall path — essentially flat**
+  - `getpid`:        249.25 µs → 237.74 µs (~1.05×)
+  - `clock_gettime`: 626.96 µs → 622.21 µs (run 1; run 2 was 860 µs —
+    treat as noise-dominated rather than a real delta)
+  - `pipe_pingpong`:   9.13 ms →   9.36 ms (within noise)
+  - `fork_exit`:     426.55 ms → 384.58 ms (~1.11×; probably the only
+    real userland benefit — `execve` re-runs the dynamic linker, and
+    `ld.elf_so` at -O2 is meaningfully smaller/faster)
+- **libc bulk routines — mostly bandwidth-bound, small gains only**
+  - `memcpy` size=65536: 25.05 ms → 23.71 ms (~1.06×) ⇒ **362 ns/byte**
+    (was 382)
+  - `memset` size=65536: 12.92 ms → 12.83 ms (essentially flat) ⇒
+    **196 ns/byte** (was 197)
+  - `strlen` len=4096:    2.01 ms →  2.06 ms (within noise)
+  - These loops live at the SDRAM-streaming floor; -O2 can't move
+    physics.  The small `memcpy` improvement is consistent with a
+    tighter prologue, not a faster steady state.
+- **The small-`memset` regression worth investigating**
+  - `memset` size=1:  4.72 µs → **6.69 µs** (~42% *slower*)
+  - `memset` size=16: 7.72 µs → **9.83 µs**
+  - `memset` size=64: 17.26 µs → 19.22 µs
+  - `memcpy` at the same sizes is unchanged, so it isn't a generic
+    per-call overhead bump.  The libc `memset` codegen shape almost
+    certainly changed under -O2 — likely a wider word-at-a-time
+    prologue that pays back at size=256+ but loses on tiny n.  Worth
+    a quick disassembly diff next time we're touching libc.
+- **`memcpy_align` — alignment tax unchanged**
+  - Aligned `n=255`: 73.27 µs.  Misaligned `n=256` any offset: ~250 µs
+    (still the same ~3.4× misalignment penalty as last snapshot).
+    Confirms the tax lives in the cache/SDRAM access pattern, not in
+    code the compiler could fix.
+- **Open questions for next snapshot**
+  - Why `clock_gettime` min wobbles ~620 µs ↔ ~860 µs across runs —
+    timecounter contention with the periodic timer interrupt is the
+    leading hypothesis.
+  - The small-`memset` floor regression — diff the generated libc
+    `memset` between -O0 and -O2 builds.
+  - Once L2 hit/miss counters are wired through, re-run to attribute
+    the `fork_exit` win between dynamic-linker shrinkage and any L2
+    behavior change.
 
 ---
 
