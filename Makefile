@@ -544,7 +544,16 @@ $(PHASE_STAMP):
 # sv2v converts full SystemVerilog (module-level imports, packages)
 # to Verilog-2005 that Yosys reads natively.  -D SDRAM_PHASE_DEG=N
 # overrides the `define inside ulx3s_top.sv for the current build.
-$(BUILD_DIR)/$(TOP).json: $(FPGA_SRC) $(PHASE_STAMP)
+#
+# For ulx3s_top, the microcode source and boot-ROM sources are
+# inlined into the generated Verilog via inline_hex.py, so the json
+# target must rebuild whenever either changes.  Use conditional
+# prerequisites so other TOPs (which don't use these) aren't
+# spuriously rebuilt by unrelated edits.
+UCODE_SRC = hw/microcode/microcode.uasm
+ROM_SRCS  = $(wildcard hw/rom/*.c hw/rom/*.h hw/rom/*.s hw/rom/*.ld hw/rom/Makefile)
+$(BUILD_DIR)/$(TOP).json: $(FPGA_SRC) $(PHASE_STAMP) \
+    $(if $(filter ulx3s_top,$(TOP)),$(UCODE_SRC) $(ROM_SRCS))
 	@mkdir -p $(BUILD_DIR)
 	$(if $(filter ulx3s_top,$(TOP)),$(UASM) hw/microcode/microcode.uasm -o microcode.hex)
 	$(if $(filter ulx3s_top,$(TOP)),$(MAKE) -C hw/rom)
