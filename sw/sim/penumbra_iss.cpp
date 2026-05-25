@@ -4,7 +4,7 @@
 // No Verilator dependency — compiles with just g++ -O2.
 //
 // Matches the RTL machine_sim memory map and device set:
-//   0x00000000 – 0x00FFFFFF  RAM (16 MB)
+//   0x00000000 – 0x01FFFFFF  RAM (32 MB)
 //   0xFE000000 – 0xFE00001F  Autoconfig space (when cfg_en)
 //   0xFF000000 – 0xFF000FFF  UART (16450-compatible)
 //   0xFFFF0000 – 0xFFFFFFFF  Boot ROM (64 KB)
@@ -434,7 +434,7 @@ enum { SPR_ESR=0, SPR_EPC=1, SPR_USP=2, SPR_SR=3, SPR_SCR0=4 };
 constexpr int N_SCR = 4;   // SCR0..SCR(N_SCR-1) at SPR_SCR0..SPR_SCR0+N_SCR-1
 
 // Memory sizes
-static constexpr size_t RAM_SIZE = 16u * 1024 * 1024;  // 16 MB
+static constexpr size_t RAM_SIZE = 32u * 1024 * 1024;  // 32 MB
 static constexpr size_t ROM_SIZE = 64u * 1024;          // 64 KB
 static constexpr uint32_t RAM_BASE  = 0x00000000;
 static constexpr uint32_t UART_BASE = 0xFF000000;
