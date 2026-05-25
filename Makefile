@@ -373,7 +373,7 @@ simulate-rtl:
 #   make sdimage-rootfs ROOTFS_FULL=1 — boot + FFS root (full distribution)
 SDIMAGE    ?= $(BUILD_DIR)/boot.img
 BOOT_ELF   := $(BUILD_DIR)/netbsd-obj/sys/arch/penumbra/stand/boot/PENBOOT.ELF
-KERNEL     := $(BUILD_DIR)/netbsd-kernel/MINIMAL/netbsd
+KERNEL     := $(BUILD_DIR)/netbsd-obj/sys/arch/penumbra/compile/MINIMAL/netbsd
 DESTDIR    := $(BUILD_DIR)/netbsd-dest
 ROOTFS_IMG := $(BUILD_DIR)/rootfs.img
 

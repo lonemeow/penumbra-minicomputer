@@ -49,25 +49,21 @@ cd netbsd
 
 ### Kernel build
 
-Out-of-tree at `build/netbsd-kernel/MINIMAL/`. Re-run step 1 after
-any `conf/` change.
+Driven by stock `build.sh kernel=...`; runs `nbconfig` + `depend` +
+`all` itself. `-U` keeps subsequent runs incremental.
 
 ```sh
-# 1. Generate kernel Makefile from config
-build/netbsd-tools/bin/nbconfig \
-  -b $PWD/build/netbsd-kernel/MINIMAL \
-  -s $PWD/netbsd/sys \
-  $PWD/netbsd/sys/arch/penumbra/conf/MINIMAL
-
-# 2. depend
-build/netbsd-tools/bin/nbmake-penumbra -C build/netbsd-kernel/MINIMAL depend
-
-# 3. Build (-j10 for compilation)
-build/netbsd-tools/bin/nbmake-penumbra -C build/netbsd-kernel/MINIMAL -j10
+cd netbsd
+MAKECONF=${PWD}/../minimal-mk.conf ./build.sh -j10 -U -m penumbra \
+  -O ../build/netbsd-obj -T ../build/netbsd-tools -D ../build/netbsd-dest \
+  -V EXTERNAL_TOOLCHAIN=$PWD/../build/llvm \
+  kernel=MINIMAL
+cd ..
 ```
 
-`build/netbsd-kernel/` is gitignored. The kernel binary lands at
-`build/netbsd-kernel/MINIMAL/netbsd`.
+Kernel lands at `build/netbsd-obj/sys/arch/penumbra/compile/MINIMAL/netbsd`
+(the path is structural — `build.sh` derives it from `KERNOBJDIR` and
+mirrors the `sys/arch/penumbra/compile/` source tree under `-O`).
 
 ### Bootloader build
 

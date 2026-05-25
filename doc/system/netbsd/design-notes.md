@@ -96,7 +96,7 @@ kernel_elf_addr = addr(_real_miss_handler) + (EPC − 0xFFFFB080)
 `VECTOR_VA + 0x80`.  Example: EPC `0xFFFFB264` with
 `_real_miss_handler` at `0x8001039C` → kernel address
 `0x80010580`.  Disassemble with
-`llvm-objdump -d build/netbsd-kernel/MINIMAL/netbsd` and jump to
+`llvm-objdump -d build/netbsd-obj/sys/arch/penumbra/compile/MINIMAL/netbsd` and jump to
 that address.
 
 ### When this bites you

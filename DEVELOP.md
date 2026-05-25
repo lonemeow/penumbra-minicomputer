@@ -243,19 +243,16 @@ cd ..
 
 ### Building the Kernel
 
-Output goes to `build/netbsd-kernel/MINIMAL/`.
-
 ```sh
-# 1. Generate kernel Makefile
-build/netbsd-tools/bin/nbconfig \
-  -b $PWD/build/netbsd-kernel/MINIMAL \
-  -s $PWD/netbsd/sys \
-  $PWD/netbsd/sys/arch/penumbra/conf/MINIMAL
-
-# 2. Dependencies + build
-build/netbsd-tools/bin/nbmake-penumbra -C build/netbsd-kernel/MINIMAL depend
-build/netbsd-tools/bin/nbmake-penumbra -C build/netbsd-kernel/MINIMAL -j10
+cd netbsd
+MAKECONF=${PWD}/../minimal-mk.conf ./build.sh -j10 -U -m penumbra \
+  -O ../build/netbsd-obj -T ../build/netbsd-tools -D ../build/netbsd-dest \
+  -V EXTERNAL_TOOLCHAIN=$PWD/../build/llvm \
+  kernel=MINIMAL
+cd ..
 ```
+
+Output: `build/netbsd-obj/sys/arch/penumbra/compile/MINIMAL/netbsd`. `build.sh kernel=...` runs `nbconfig` + `make depend` + `make` itself; `-U` (MKUPDATE) keeps subsequent runs incremental.
 
 ### Building the Bootloader
 
