@@ -52,11 +52,18 @@ static uint32_t timer_freq;
 #define CPU_CYCLES            5
 #define CPU_INSNS_RETIRED     6
 
-/* ── Cache sysregs (devices 2, 3 — identical layout) ───────────── */
+/* ── Cache sysregs (devices 2, 3, 9 — identical layout) ────────── */
 #define SYSDEV_L1_DCACHE      2
 #define SYSDEV_L1_ICACHE      3
+#define SYSDEV_L2_CACHE       9
 #define CACHE_CTRL            1
 #define CACHE_CTRL_ENABLE     1
+
+/* Perfctr register numbers, identical across every cache device */
+#define CACHE_READ_HITS       10
+#define CACHE_READ_MISSES     11
+#define CACHE_WRITE_HITS      12
+#define CACHE_WRITE_MISSES    13
 
 /* ── Sysreg access macros ──────────────────────────────────────── */
 #define read_sysreg(dev, reg) ({                                    \
@@ -219,6 +226,78 @@ void bench_perf_print_delta(const char *label,
         uint32_t frac = cpi_x100 % 100;
         if (frac < 10) bench_putchar('0');
         bench_print_uint(frac);
+    }
+    bench_puts("\n");
+}
+
+/* ── Cache performance counters ────────────────────────────────── */
+
+void bench_cache_perf_snapshot_l1d(bench_cache_perf_t *out) {
+    out->read_hits    = read_sysreg(SYSDEV_L1_DCACHE, CACHE_READ_HITS);
+    out->read_misses  = read_sysreg(SYSDEV_L1_DCACHE, CACHE_READ_MISSES);
+    out->write_hits   = read_sysreg(SYSDEV_L1_DCACHE, CACHE_WRITE_HITS);
+    out->write_misses = read_sysreg(SYSDEV_L1_DCACHE, CACHE_WRITE_MISSES);
+}
+
+void bench_cache_perf_snapshot_l1i(bench_cache_perf_t *out) {
+    out->read_hits    = read_sysreg(SYSDEV_L1_ICACHE, CACHE_READ_HITS);
+    out->read_misses  = read_sysreg(SYSDEV_L1_ICACHE, CACHE_READ_MISSES);
+    out->write_hits   = read_sysreg(SYSDEV_L1_ICACHE, CACHE_WRITE_HITS);
+    out->write_misses = read_sysreg(SYSDEV_L1_ICACHE, CACHE_WRITE_MISSES);
+}
+
+void bench_cache_perf_snapshot_l2(bench_cache_perf_t *out) {
+    out->read_hits    = read_sysreg(SYSDEV_L2_CACHE, CACHE_READ_HITS);
+    out->read_misses  = read_sysreg(SYSDEV_L2_CACHE, CACHE_READ_MISSES);
+    out->write_hits   = read_sysreg(SYSDEV_L2_CACHE, CACHE_WRITE_HITS);
+    out->write_misses = read_sysreg(SYSDEV_L2_CACHE, CACHE_WRITE_MISSES);
+}
+
+/* Print "<numerator> / <denominator> (<pct>.<frac>%)" where pct is
+ * computed in fixed-point with 1 fractional digit.  Both inputs are
+ * 32-bit unsigned; the intermediate (numerator * 1000) is kept in
+ * 32-bit by pre-scaling if needed.  If denominator is 0, prints
+ * "0 / 0 (n/a)" — no division-by-zero, and the caller can tell at
+ * a glance that the cache didn't see traffic in this category. */
+static void print_hit_rate(uint32_t hits, uint32_t total) {
+    bench_print_uint(hits);
+    bench_puts(" / ");
+    bench_print_uint(total);
+    bench_puts(" (");
+    if (total == 0) {
+        bench_puts("n/a)");
+        return;
+    }
+    /* Compute hit rate * 10 (one fractional digit) in 32-bit.
+     * (hits * 1000) overflows if hits >= 2^22 (~4.2M); scale both
+     * down by the same shift to preserve the ratio. */
+    uint32_t h = hits, t = total;
+    while (h > 0x003FFFFFu) {       /* keep h * 1000 < 2^32 */
+        h >>= 1;
+        t >>= 1;
+    }
+    uint32_t pct_x10 = (t > 0) ? (h * 1000) / t : 0;
+    bench_print_uint(pct_x10 / 10);
+    bench_putchar('.');
+    bench_print_uint(pct_x10 % 10);
+    bench_puts("%)");
+}
+
+void bench_cache_perf_print_delta(const char *label,
+                                  const bench_cache_perf_t *before,
+                                  const bench_cache_perf_t *after) {
+    /* Modular subtraction is wrap-safe across the 32-bit boundary. */
+    uint32_t d_rh = after->read_hits    - before->read_hits;
+    uint32_t d_rm = after->read_misses  - before->read_misses;
+    uint32_t d_wh = after->write_hits   - before->write_hits;
+    uint32_t d_wm = after->write_misses - before->write_misses;
+
+    bench_puts(label);
+    bench_puts(": read ");
+    print_hit_rate(d_rh, d_rh + d_rm);
+    if ((d_wh + d_wm) > 0) {
+        bench_puts(", write ");
+        print_hit_rate(d_wh, d_wh + d_wm);
     }
     bench_puts("\n");
 }

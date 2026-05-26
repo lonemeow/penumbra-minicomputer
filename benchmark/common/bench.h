@@ -90,6 +90,39 @@ void bench_perf_print_delta(const char *label,
                             const bench_perf_t *before,
                             const bench_perf_t *after);
 
+/*
+ * Cache performance counter snapshot.
+ * Free-running 32-bit counters from each cache device's regs 10-13.
+ * Layout is identical for L1-D, L1-I, L2, and any future cache slot;
+ * the parent cache instance is selected by the snapshot function.
+ * Wraps every ~170 s at 25 MHz; benchmarks run in seconds so
+ * deltas are safe.
+ */
+typedef struct {
+    uint32_t read_hits;
+    uint32_t read_misses;
+    uint32_t write_hits;
+    uint32_t write_misses;
+} bench_cache_perf_t;
+
+/*
+ * Snapshot one cache's perfctrs.  RDSYS encodes the device id in
+ * the instruction (no runtime indirection), so we expose a
+ * per-instance function rather than one taking a runtime dev id.
+ */
+void bench_cache_perf_snapshot_l1d(bench_cache_perf_t *out);
+void bench_cache_perf_snapshot_l1i(bench_cache_perf_t *out);
+void bench_cache_perf_snapshot_l2 (bench_cache_perf_t *out);
+
+/*
+ * Print a labeled delta line with the four raw counter deltas plus
+ * computed read- and write-hit-rates.  Skips the write section if
+ * the cache saw zero writes (I-caches never see stores).
+ */
+void bench_cache_perf_print_delta(const char *label,
+                                  const bench_cache_perf_t *before,
+                                  const bench_cache_perf_t *after);
+
 /* Console output (polled UART at 0xFF000000) */
 void bench_putchar(int c);
 void bench_puts(const char *s);

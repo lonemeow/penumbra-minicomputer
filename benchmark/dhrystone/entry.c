@@ -24,10 +24,19 @@ void bench_main(uint32_t bootdata) {
     bench_init();
 
     bench_perf_t perf_before, perf_after;
+    bench_cache_perf_t l1d_before, l1d_after;
+    bench_cache_perf_t l1i_before, l1i_after;
+    bench_cache_perf_t l2_before,  l2_after;
 
     bench_timer_start();
     bench_perf_snapshot(&perf_before);
+    bench_cache_perf_snapshot_l1d(&l1d_before);
+    bench_cache_perf_snapshot_l1i(&l1i_before);
+    bench_cache_perf_snapshot_l2 (&l2_before);
     dhrystone_main();
+    bench_cache_perf_snapshot_l1d(&l1d_after);
+    bench_cache_perf_snapshot_l1i(&l1i_after);
+    bench_cache_perf_snapshot_l2 (&l2_after);
     bench_perf_snapshot(&perf_after);
 
     /* Print real timing from hardware timer */
@@ -71,4 +80,9 @@ void bench_main(uint32_t bootdata) {
     }
 
     bench_perf_print_delta("CPU perfctrs", &perf_before, &perf_after);
+
+    bench_puts("\n--- Cache perfctrs ---\n");
+    bench_cache_perf_print_delta("L1-D", &l1d_before, &l1d_after);
+    bench_cache_perf_print_delta("L1-I", &l1i_before, &l1i_after);
+    bench_cache_perf_print_delta("L2  ", &l2_before,  &l2_after);
 }
