@@ -104,6 +104,12 @@
 #define CACHE_FLUSH_ALL		4	/* W  — writeback dirty (WB caches) */
 #define CACHE_FLUSH_LINE	5	/* W  — writeback one line (WB caches) */
 #define CACHE_STATUS		6	/* R  — bit 0 = multi-cycle op busy */
+/* Regs 7-9 reserved for future control (perfctr CTRL, WB-buffer status, ...) */
+#define CACHE_READ_HITS		10	/* R  — read accesses that hit a valid line */
+#define CACHE_READ_MISSES	11	/* R  — read accesses that missed */
+#define CACHE_WRITE_HITS	12	/* R  — write accesses that hit a valid line */
+#define CACHE_WRITE_MISSES	13	/* R  — write accesses that missed */
+/* Regs 14-15 reserved for future counters (LINE_FILLS, WRITEBACKS, ...) */
 
 #define CACHE_CTRL_ENABLE	0x01
 #define CACHE_STATUS_BUSY	0x01
