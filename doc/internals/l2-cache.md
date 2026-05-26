@@ -14,20 +14,23 @@ contract the L2's front-side and back-side ports both honor, in the
 | Phase | Description | Status |
 |---|---|---|
 | 0 | Bus shape (`o_mem_cacheable`, build-time gate, `l2_passthrough` stub) | **DONE** (gate later removed) |
-| 1 | Real L2 cache: read+write-invalidate-on-hit, INVAL_ALL | **DONE** |
+| 1 | Real L2 cache: read+write-invalidate-on-hit, INVAL_ALL | **DONE** (superseded by 1.5) |
+| 1.5 | Write-through, write-no-allocate (WT-WnA): write hits update the cached line via byte-en instead of dropping it | **design** |
 | 2 | Write-back, write-allocate, dirty bit, FLUSH ops | pending |
 | 3 | 1-deep writeback buffer (overlapped fill+writeback) | pending |
-| 4 | Perfctrs (hits/misses/writebacks/evictions on SYSDEV_L2_CACHE regs 7+) | pending |
+| 4 | Perfctrs (READ_HITS / READ_MISSES / WRITE_HITS / WRITE_MISSES on `SYSDEV_L2_CACHE` regs 10-13) | **DONE** |
 
-What's wired up today (post phase 1):
+What's wired up today:
 
 - `hw/rtl/soc/l2_cache.sv` — the real module.  64 KiB, 4-way,
-  tree-PLRU, 2-cycle hit pipeline.  Write policy is
-  **write-invalidate-on-hit** rather than the originally-planned
-  write-through-write-no-allocate — see the "Phasing" section
-  below for the rationale.  Disabled at reset; software (kernel
-  or bare-metal harness, not the ROM) brings it up via `WRSYS
-  SYSDEV_L2_CACHE CTRL=1`.
+  tree-PLRU, 2-cycle hit pipeline.  Write policy started as
+  **write-invalidate-on-hit** (phase 1) and is being upgraded to
+  **write-through, write-no-allocate** (phase 1.5) — under WT-WnA
+  a write hit updates the cached line's data via byte-en and
+  also forwards the store to memory, instead of dropping the
+  line.  See the "Write Policy" and "Phasing" sections below.
+  Disabled at reset; software (kernel or bare-metal harness, not
+  the ROM) brings it up via `WRSYS SYSDEV_L2_CACHE CTRL=1`.
 - `hw/rtl/sim/machine_sim.sv` and `hw/rtl/fpga/ulx3s_top.sv`
   always instantiate `l2_cache` directly between the CPU's memory
   port and the shared bus.  Sysreg device 9 routes to it
@@ -38,8 +41,9 @@ What's wired up today (post phase 1):
 - `hw/sim/tb_l2_cache.cpp` — standalone Verilator testbench
   covering the L2 contract: INFO presence + unified-layout
   decode (PIPT/WT/WnA), pass-through-when-disabled, miss→hit,
-  write-invalidate, INVAL_ALL walker + implicit fence,
-  uncached pass-through.
+  write-hit data update (under phase 1.5; was write-invalidate
+  in phase 1), INVAL_ALL walker + implicit fence, uncached
+  pass-through, perfctr counts.
 - Boot ROM (`hw/rom/boot_rom.c`) prints `L2 cache: 64kB
   (1024 x 16B, 4-way) unified` in the banner.  The ROM **does
   not** enable the L2 (or any cache, or the MMU) — that's the
@@ -194,7 +198,7 @@ inform tuning.
 | `NUM_SETS` | `1024` (derived) | `CACHE_BYTES / (LINE_BYTES * NUM_WAYS)` |
 | `HIT_LATENCY` | `2` | BRAM read (1) + tag compare/way mux (1).  Parameter-stub; reduce only after fmax study. |
 | `REPLACEMENT` | `tree-PLRU` | 3 bits/set.  Miss rate is within noise of true LRU at 4-way (per `l2_cache.sv:24-26`), and the update logic is 3 bit flips per access vs LRU's 6 pairwise relations.  True LRU was the design alternative; deferred because routing cost wasn't worth the miss-rate noise. |
-| `WRITE_POLICY` | `write-invalidate-on-hit` | Phase 1 policy: write hits drop the L2 line and pass the store downstream (`INFO` advertises this as software-visibly WT/WnA).  Write-back / write-allocate is the Phase 2 plan — see the "Write Policy" section below. |
+| `WRITE_POLICY` | `write-through, write-no-allocate` | Phase 1.5 policy: write hits update the cached line via byte-en and pass the store downstream; write misses pass-through unchanged.  `INFO` advertises WT/WnA (which was already the software-visible policy under the phase-1 write-invalidate-on-hit predecessor).  Write-back / write-allocate is the Phase 2 plan — see the "Write Policy" section below. |
 
 `CACHE_BYTES`, `NUM_WAYS`, and `LINE_BYTES` are the primary sweep
 axes.  At default geometry, tag = `32 - log2(NUM_SETS) - log2(LINE_BYTES)`
@@ -249,14 +253,34 @@ cheaper.
 
 ## Write Policy
 
-**Phase 1 (current, shipping): write-invalidate-on-hit.**  Writes
-pass through to the downstream bus.  On a tag hit, the L2 line is
-dropped (valid bit cleared).  No dirty state, no eviction-time
-writebacks.  Software-visibly this is write-through / write-no-
-allocate — which is exactly how `INFO` advertises it
-(`WRITE_BACK=0, WRITE_ALLOC=0`).  L1 D-cache writes are absorbed
-only to the extent that the line stops occupying L2 capacity; the
-SDRAM round-trip on every store is still paid.
+**Phase 1.5 (design): write-through, write-no-allocate (WT-WnA).**
+Every store is forwarded to the downstream bus.  On a tag hit, the
+L2 also updates the cached line's data in place via byte-enable,
+keeping the line valid for subsequent reads.  On a tag miss, the
+store passes through unchanged — no allocation, no dirty state.
+Software-visibly this is `WRITE_BACK=0, WRITE_ALLOC=0` in `INFO`.
+
+The key behavioural difference vs the phase-1 predecessor: hot
+read-modify-write lines (kernel page-table updates, repeatedly-
+accessed globals, ring-buffer heads/tails) now persist in L2
+across writes.  A subsequent read of the line — including an L1
+read-miss that finds the line in L2 — is a hit instead of a
+write-induced miss.  This is the dominant first-order effect of
+the phase-1 → phase-1.5 upgrade.
+
+L1 D-cache write traffic itself is not absorbed: every store
+still pays an SDRAM round-trip.  Absorbing the store traffic is
+phase 2 (WB+WA).
+
+**Phase 1 (superseded): write-invalidate-on-hit.**  The original
+phase-1 policy passed writes through and *dropped* the L2 line on
+hit (valid bit cleared).  Software-visibly identical to WT-WnA
+(`WRITE_BACK=0, WRITE_ALLOC=0`).  The internal difference made
+WT-WnA workloads — anything with read-after-write locality —
+underperform, because each write evicted its own line from L2 and
+the next read paid an SDRAM trip to refetch it.  The phase-1.5
+upgrade removes this self-eviction without changing any
+software-visible bit.
 
 **Phase 2 (planned): write-back, write-allocate.**  The headline
 performance commit.  Once phase 2 lands, this section describes
@@ -293,11 +317,14 @@ presence by reading `INFO`; `INFO == 0` means no L2 in this build
 instance).  The kernel can reuse one cache-ops driver across L1 and
 L2 because every register at every offset means the same thing.
 
-Phase-1 specifics (see `INFO` decode):
+`INFO` decode under the current policy:
 
 - `ADDRESSING = PIPT` — L2 sees post-translation addresses.
-- `WRITE_BACK = 0`, `WRITE_ALLOC = 0` — phase 1 is write-invalidate-
-  on-hit, which is software-visibly write-through write-no-allocate.
+- `WRITE_BACK = 0`, `WRITE_ALLOC = 0` — software-visibly write-
+  through, write-no-allocate.  True for both phase 1 (write-
+  invalidate-on-hit) and phase 1.5 (true WT-WnA): the difference
+  between those policies is internal cache behaviour, not the
+  software-visible contract.
 - `NUM_SETS = 1024`, `NUM_WAYS = 4`, `LINE_WORDS = 4`.
 
 Multi-cycle operations (`INVAL_ALL`, eventually `FLUSH_ALL`) signal
@@ -319,9 +346,9 @@ sequences that probe the cache right at boot.
 all cache levels.  Rationale: L1 full-flush is a single-cycle valid-
 bit clear (cache holds 64 lines max, smaller than any realistic
 invalidate range); L2 is PIPT + uncached-MMIO project convention
-means no current code path needs it, and write-invalidate-on-hit
-already handles the JIT case implicitly.  Defer until a workload
-(e.g. a future cached-DMA path) actually wants it.
+means no current code path needs it.  Defer until a workload
+(e.g. a future cached-DMA path or a JIT that keeps code lines
+warm in L2) actually wants it.
 
 The `INVAL`/`FLUSH` distinction follows ARM's c7 ops:
 
@@ -451,9 +478,16 @@ landing in the same commit.  Plan:
      `SYSDEV_L2_CACHE`) and with L2 enabled (the `test_l2_*` programs).
    - `test_l2_*` programs exercise INVAL/FLUSH from C.
 4. **Performance regressions:**
-   - Dhrystone before/after, expect CPI to drop materially from the
-     current ~7.10 (write-through traffic absorbed).
+   - Dhrystone before/after, expect CPI to drop (read-after-write
+     locality preserved under phase 1.5; write traffic absorbed
+     under phase 2).
    - Membench before/after, expect cached W/H/B sweep MB/s up.
+   - L2 perfctrs (`SYSDEV_L2_CACHE` regs 10-13) directly show the
+     effect: phase 1.5 should drop `READ_MISSES` and grow
+     `WRITE_HITS` vs phase 1; phase 2 should drop bus-side write
+     traffic without changing the perfctr counts (HIT/MISS is by
+     tag check, policy-invariant).  Quote those from a fresh
+     benchmark run, not from this doc.
 
 ## Phasing
 
@@ -468,12 +502,12 @@ Land in commit-sized increments per `feedback_incremental_commits`:
    always instantiated and `CTRL.enable=0` provides the same
    pass-through behaviour at runtime.
 
-2. **Phase 1 — real read cache.** *(DONE)*  Implemented in
-   `hw/rtl/soc/l2_cache.sv` (64 KiB, 4-way, tree-PLRU, 2-cycle
-   hit pipeline).  Replaced `l2_passthrough` (deleted —
-   `l2_cache` with CTRL.enable=0 covers the same behaviour).
-   Tag/data arrays, hit/miss/allocate, INVAL_ALL walker,
-   post-reset auto-INVAL walker, sysreg device 9.  Unit
+2. **Phase 1 — real read cache.** *(DONE; superseded by 1.5)*
+   Implemented in `hw/rtl/soc/l2_cache.sv` (64 KiB, 4-way,
+   tree-PLRU, 2-cycle hit pipeline).  Replaced `l2_passthrough`
+   (deleted — `l2_cache` with CTRL.enable=0 covers the same
+   behaviour).  Tag/data arrays, hit/miss/allocate, INVAL_ALL
+   walker, post-reset auto-INVAL walker, sysreg device 9.  Unit
    testbench in `hw/sim/tb_l2_cache.cpp`.
 
    **Delta from original plan:** the original phase 1 spec was
@@ -482,26 +516,57 @@ Land in commit-sized increments per `feedback_incremental_commits`:
    would leave the L2 holding stale data.  Two options were on
    the table to fix that: write-through-write-no-allocate
    (byte-en update of L2 on write hit) or write-invalidate-on-hit
-   (drop the L2 line on write hit).  We chose **write-invalidate-
-   on-hit** for phase 1 — ~30 fewer RTL lines than WT-WNA, keeps
-   the BRAM data port read-only past initialisation, and is
-   functionally correct.  Upgrade to WT-WNA is a follow-up
-   commit once benchmarks show whether post-write locality is
-   worth the bytes.
+   (drop the L2 line on write hit).  Phase 1 shipped with
+   **write-invalidate-on-hit** — ~30 fewer RTL lines than WT-WnA,
+   kept the BRAM data port read-only past initialisation, and
+   was functionally correct.  Phase 1.5 (below) is the deferred
+   upgrade to WT-WnA.
 
-3. **Phase 2 — write-back.** *(pending)*  Add dirty bit,
+3. **Phase 1.5 — WT-WnA upgrade.** *(design)*  Replace the
+   write-invalidate-on-hit handling at the stage-1 write-hit
+   site: instead of clearing the victim's valid bit, byte-en
+   update the cached line's data with `s1_wdata`.  Add `s1_wdata`
+   and `s1_byte_en` to the stage-0 latch.  Per-way data BRAM
+   gains a write port active only on stage-1 write hits.
+
+   **What this buys:** kernel and userland read-modify-write
+   patterns (page-table walks, repeatedly-touched globals, ring-
+   buffer head/tail updates, fork's pmap setup) stop self-
+   evicting from L2.  Concretely, every L2 write that was
+   counted as a `WRITE_HIT` under phase 1 (3.2% on Dhrystone,
+   8.8% on a kernel-boot trace) was a line dropped, and most of
+   those were re-read shortly after — turning each into an L2
+   read miss that wouldn't exist under phase 1.5.  The post-1.5
+   counter reading directly answers "how much of the L2 read
+   miss rate was caused by the write policy itself".
+
+   **What this does not buy:** write throughput.  Stores still
+   pay one SDRAM round-trip per store; absorbing the writes
+   themselves is phase 2.
+
+   **Verification:** existing `tb_l2_cache` write-invalidate
+   test flipped to a write-update test (write hit keeps the
+   line + the new bytes); `test_perfctrs` adjusted for the new
+   "write-hit doesn't invalidate" expectation; FPGA re-measure
+   on Dhrystone + pbench fork/pipe trials, expecting L2 read
+   miss rate to drop and L2 `WRITE_HITS` to grow.
+
+4. **Phase 2 — write-back.** *(pending)*  Add dirty bit,
    write-allocate, eviction writeback, `FLUSH` ops.  This is the
    headline perf commit — it absorbs L1's write-through traffic
-   entirely instead of just dropping the cached copy on write.
+   entirely instead of letting it pass through to memory.
 
-4. **Phase 3 — write buffer.** *(pending)*  1-deep writeback
+5. **Phase 3 — write buffer.** *(pending)*  1-deep writeback
    buffer to overlap eviction and fill.  Skip if phase 2 already
    meets perf targets.
 
-5. **Phase 4 — perfctrs.** *(pending)*  Hits, misses, writebacks,
-   evictions on `SYSDEV_L2_CACHE` regs 7+.  Lets membench compute hit
-   rate directly.  Most useful immediately after phase 2 lands,
-   to confirm the write-back actually absorbs the traffic.
+6. **Phase 4 — perfctrs.** *(DONE)*  Four free-running 32-bit
+   counters on `SYSDEV_L2_CACHE` regs 10-13: READ_HITS,
+   READ_MISSES, WRITE_HITS, WRITE_MISSES.  Same layout on the L1
+   caches.  HIT/MISS classification by the tag check at the
+   moment of access — definitions are policy-invariant across
+   all current and planned write policies, so the same counter
+   names carry over through phase 1.5 and phase 2.
 
 Each phase is an independent commit with its own test addition.
 

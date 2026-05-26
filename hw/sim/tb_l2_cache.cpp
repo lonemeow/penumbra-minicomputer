@@ -237,13 +237,15 @@ static void test_cached_read_miss_then_hit(Vl2_cache* d) {
 
 static uint32_t rdata_zero(uint32_t a) { (void)a; return 0; }
 
-static void test_write_invalidate(Vl2_cache* d) {
-    printf("── Cached write hit invalidates L2 line ──\n");
+static void test_write_updates_line(Vl2_cache* d) {
+    printf("── Cached write hit updates L2 line (WT-WnA) ──\n");
     reset(d);
     wrsys(d, 1, 1);
     MemMock mem;
 
-    // Prime the cache with a read to install line 0x5000.
+    // Prime the cache with a read to install line 0x5000.  After
+    // this, L2 holds 0x5000-0x500F with data from
+    // rdata_addr_complement().
     d->i_addr      = 0x5000;
     d->i_cacheable = 1;
     d->i_re        = 1;
@@ -254,8 +256,9 @@ static void test_write_invalidate(Vl2_cache* d) {
     d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
     uint32_t mem_after_install = mem.served_count;
 
-    // Now write to the same line.  Should pass through to memory
-    // AND invalidate L2's copy.
+    // Write to a word inside the cached line.  Under WT-WnA the
+    // store passes through to memory (one downstream access) AND
+    // the cached copy gets updated via byte-en — no invalidation.
     d->i_addr      = 0x5004;
     d->i_wdata     = 0xCAFEBABEu;
     d->i_byte_en   = 0xF;
@@ -268,20 +271,59 @@ static void test_write_invalidate(Vl2_cache* d) {
     while (mem.served_count == served_before_write && safety++ < 20)
         tick_with_mem(d, mem, 2, rdata_zero);
     d->i_we = 0; tick_with_mem(d, mem, 0, rdata_zero);
-    uint32_t mem_after_write = mem.served_count;
-    check("write.one_memory_access", mem_after_write,
+    check("write.one_memory_access", mem.served_count,
           mem_after_install + 1);
 
-    // Now read the same line — should miss (invalidate worked) and
-    // produce a fresh 4-word fill from memory.
-    d->i_addr = 0x5000;
+    // Read the just-written word.  Should hit (line still cached)
+    // and return the value we wrote, NOT the original fill data.
+    d->i_addr = 0x5004;
     d->i_re   = 1;
     d->eval();
     safety = 0;
     while (d->o_busy && safety++ < 100)
         tick_with_mem(d, mem, 2, rdata_addr_complement);
-    check("invalidated.refilled", mem.served_count,
-          mem_after_write + 4);
+    check("write.line_still_cached_no_refill", mem.served_count,
+          mem_after_install + 1);
+    check("write.read_returns_new_value", d->o_rdata, 0xCAFEBABEu);
+    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+
+    // Read an unwritten word in the same line.  Still a hit,
+    // returns the original fill data.
+    d->i_addr = 0x5008;
+    d->i_re   = 1;
+    d->eval();
+    safety = 0;
+    while (d->o_busy && safety++ < 100)
+        tick_with_mem(d, mem, 2, rdata_addr_complement);
+    check("write.other_word_unchanged",
+          d->o_rdata, rdata_addr_complement(0x5008));
+    check("write.still_no_refill", mem.served_count,
+          mem_after_install + 1);
+    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+
+    // Partial-byte write: only one byte enable.  The other bytes
+    // of the word must keep their old values.
+    d->i_addr      = 0x5008;
+    d->i_wdata     = 0xDEAD'BEEFu;
+    d->i_byte_en   = 0x1;          // only byte 0
+    d->i_cacheable = 1;
+    d->i_we        = 1;
+    d->eval();
+    uint32_t served_before_partial = mem.served_count;
+    safety = 0;
+    while (mem.served_count == served_before_partial && safety++ < 20)
+        tick_with_mem(d, mem, 2, rdata_zero);
+    d->i_we = 0; tick_with_mem(d, mem, 0, rdata_zero);
+
+    d->i_addr = 0x5008;
+    d->i_re   = 1;
+    d->eval();
+    safety = 0;
+    while (d->o_busy && safety++ < 100)
+        tick_with_mem(d, mem, 2, rdata_addr_complement);
+    uint32_t orig    = rdata_addr_complement(0x5008);
+    uint32_t expect  = (orig & 0xFFFFFF00u) | (0xDEAD'BEEFu & 0xFFu);
+    check("write.byte_en_partial_update", d->o_rdata, expect);
     d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
 }
 
@@ -516,9 +558,11 @@ static void test_perfctrs(Vl2_cache* d) {
     check("perf.uncached_write_no_event_hits",   rdsys(d, 12), wh_before);
     check("perf.uncached_write_no_event_misses", rdsys(d, 13), wm_before);
 
-    // Re-read line 0x4000 — the write_hit above dropped the cached
-    // copy under write-invalidate-on-hit, so this is a fresh miss.
-    // Counts as miss; the post-fill re-serve must again not double-count.
+    // Re-read line 0x4000 — under WT-WnA the earlier write to
+    // 0x400C left the line resident in L2 (byte-en update, not
+    // invalidation), so this is a HIT, not a refill miss.  This
+    // is exactly the phase-1.5 win the upgrade was designed to
+    // produce.
     uint32_t rm_before2 = rdsys(d, 11);
     uint32_t rh_before2 = rdsys(d, 10);
     d->i_addr      = 0x4000;
@@ -529,10 +573,278 @@ static void test_perfctrs(Vl2_cache* d) {
     while (d->o_busy && safety++ < 100)
         tick_with_mem(d, mem, 2, rdata_addr_complement);
     d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
-    check("perf.refill_after_invalidate_counts_as_miss",
-          rdsys(d, 11), rm_before2 + 1);
-    check("perf.refill_reserve_still_suppressed",
-          rdsys(d, 10), rh_before2);
+    check("perf.write_did_not_evict_l2_line",
+          rdsys(d, 11), rm_before2);
+    check("perf.subsequent_read_hits_under_wtwna",
+          rdsys(d, 10), rh_before2 + 1);
+}
+
+// ══════════════════════════════════════════════════════════════
+// Correctness tests targeting the cache contract under WT-WnA.
+// Focus is contract-observable behaviour — anything where a wrong
+// answer or stale byte would propagate to the CPU.  Eviction
+// policy / hit-rate tuning is deliberately not the target here.
+// ══════════════════════════════════════════════════════════════
+
+static void test_multi_set_independence(Vl2_cache* d) {
+    printf("── Multi-set independence: distinct sets stay distinct ──\n");
+    reset(d);
+    wrsys(d, 1, 1);
+    MemMock mem;
+
+    // With LINE_BYTES=16 and NUM_SETS=1024, addr_set = addr[13:4].
+    // Walk a spread of sets so that bugs in addr_set extraction or
+    // data_idx packing surface as cross-contamination between sets.
+    struct case_t { uint32_t addr; uint32_t value; };
+    case_t cases[] = {
+        {0x0040, 0xAABB'CCDDu},   // set 0x004
+        {0x0050, 0x1122'3344u},   // set 0x005
+        {0x0060, 0xDEAD'BEEFu},   // set 0x006
+        {0x0070, 0xCAFE'BABEu},   // set 0x007
+        {0x1000, 0x5A5A'5A5Au},   // set 0x100
+        {0x4000, 0x5555'AAAAu},   // set 0x400
+        {0x7FF0, 0x0123'4567u},   // set 0x7FF (last set)
+    };
+    int N = sizeof(cases) / sizeof(cases[0]);
+
+    // Prime each line via a read so it lands in L2, then overwrite
+    // with the test value via WT-WnA byte-en update.
+    for (int i = 0; i < N; i++) {
+        d->i_addr = cases[i].addr;
+        d->i_cacheable = 1;
+        d->i_re = 1;
+        d->eval();
+        int safety = 0;
+        while (d->o_busy && safety++ < 100)
+            tick_with_mem(d, mem, 2, rdata_addr_complement);
+        d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+
+        d->i_addr      = cases[i].addr;
+        d->i_wdata     = cases[i].value;
+        d->i_byte_en   = 0xF;
+        d->i_we        = 1;
+        d->eval();
+        uint32_t before = mem.served_count;
+        safety = 0;
+        while (mem.served_count == before && safety++ < 20)
+            tick_with_mem(d, mem, 2, rdata_zero);
+        d->i_we = 0; tick_with_mem(d, mem, 0, rdata_zero);
+    }
+
+    // Read every line back; each must return exactly the value we
+    // wrote, with no influence from any other write.
+    for (int i = 0; i < N; i++) {
+        d->i_addr = cases[i].addr;
+        d->i_cacheable = 1;
+        d->i_re = 1;
+        d->eval();
+        int safety = 0;
+        while (d->o_busy && safety++ < 100)
+            tick_with_mem(d, mem, 2, rdata_addr_complement);
+        char name[64];
+        snprintf(name, sizeof(name),
+                 "multi_set.value_at_0x%04X", cases[i].addr);
+        check(name, d->o_rdata, cases[i].value);
+        d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+    }
+}
+
+static void test_byte_en_accumulation(Vl2_cache* d) {
+    printf("── Byte-en writes accumulate within a cached line ──\n");
+    reset(d);
+    wrsys(d, 1, 1);
+    MemMock mem;
+
+    // Helper to drive one cacheable write and let it drain.
+    auto do_write = [&](uint32_t addr, uint32_t wdata, uint8_t be) {
+        d->i_addr      = addr;
+        d->i_wdata     = wdata;
+        d->i_byte_en   = be;
+        d->i_cacheable = 1;
+        d->i_we        = 1;
+        d->eval();
+        uint32_t before = mem.served_count;
+        int safety = 0;
+        while (mem.served_count == before && safety++ < 20)
+            tick_with_mem(d, mem, 2, rdata_zero);
+        d->i_we = 0; tick_with_mem(d, mem, 0, rdata_zero);
+    };
+    auto do_read = [&](uint32_t addr) -> uint32_t {
+        d->i_addr = addr;
+        d->i_cacheable = 1;
+        d->i_re = 1;
+        d->eval();
+        int safety = 0;
+        while (d->o_busy && safety++ < 100)
+            tick_with_mem(d, mem, 2, rdata_addr_complement);
+        uint32_t val = d->o_rdata;
+        d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+        return val;
+    };
+
+    // Prime line at 0x800.
+    do_read(0x800);
+    uint32_t orig = rdata_addr_complement(0x800);
+
+    // Write byte 0 (LSB).  Other 3 bytes must keep `orig` values.
+    do_write(0x800, 0xDEAD'BEEFu, 0x1);
+    uint32_t step1 = (orig & 0xFFFF'FF00u) | (0xDEAD'BEEFu & 0x0000'00FFu);
+    check("byte_en.lsb_only", do_read(0x800), step1);
+
+    // Write byte 1 next.  Previous byte 0 must persist, bytes 2-3
+    // still untouched.
+    do_write(0x800, 0xCAFE'CAFEu, 0x2);
+    uint32_t step2 = (step1 & 0xFFFF'00FFu) | (0xCAFE'CAFEu & 0x0000'FF00u);
+    check("byte_en.lsb_then_byte1", do_read(0x800), step2);
+
+    // Now the high halfword (bytes 2 and 3 together).  Previous
+    // low-half writes must persist.
+    do_write(0x800, 0xFEED'FACEu, 0xC);
+    uint32_t step3 = (step2 & 0x0000'FFFFu) | (0xFEED'FACEu & 0xFFFF'0000u);
+    check("byte_en.high_halfword", do_read(0x800), step3);
+
+    // Full-word write overrides everything.
+    do_write(0x800, 0x1234'5678u, 0xF);
+    check("byte_en.full_word_override", do_read(0x800), 0x1234'5678u);
+
+    // Low halfword only.  Upper half preserved from the full-word.
+    do_write(0x800, 0xABCD'9876u, 0x3);
+    uint32_t step5 = (0x1234'5678u & 0xFFFF'0000u)
+                   | (0xABCD'9876u & 0x0000'FFFFu);
+    check("byte_en.low_halfword", do_read(0x800), step5);
+
+    // byte_en=0 must be a no-op (no bytes enabled).  Value
+    // unchanged.
+    do_write(0x800, 0xFFFF'FFFFu, 0x0);
+    check("byte_en.zero_mask_is_noop", do_read(0x800), step5);
+}
+
+static void test_perfctrs_inval_all(Vl2_cache* d) {
+    printf("── Perfctrs survive INVAL_ALL (free-running, not reset) ──\n");
+    reset(d);
+    wrsys(d, 1, 1);
+    MemMock mem;
+
+    // Generate some traffic so the counters are non-zero, giving
+    // INVAL_ALL something to potentially clobber if it had a bug.
+    d->i_addr = 0x4000;
+    d->i_cacheable = 1;
+    d->i_re = 1;
+    d->eval();
+    int safety = 0;
+    while (d->o_busy && safety++ < 100)
+        tick_with_mem(d, mem, 2, rdata_addr_complement);
+    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+
+    // Add a hit on the same line so read_hits is also non-zero.
+    d->i_addr = 0x4004; d->i_re = 1; d->eval();
+    safety = 0;
+    while (d->o_busy && safety++ < 20)
+        tick_with_mem(d, mem, 2, rdata_addr_complement);
+    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+
+    uint32_t rh_before = rdsys(d, 10);
+    uint32_t rm_before = rdsys(d, 11);
+    check_bool("inval_all_perf.read_hits_nonzero_pre",
+               rh_before > 0u, true);
+    check_bool("inval_all_perf.read_misses_nonzero_pre",
+               rm_before > 0u, true);
+
+    // Issue INVAL_ALL and wait for the walker to finish.  No
+    // bus traffic to the memory mock is expected during the walk
+    // — invalidation is internal.
+    wrsys(d, 2, 0);
+    tick_with_mem(d, mem, 2, rdata_addr_complement);
+    int walk_cycles = 0;
+    while ((rdsys(d, 6) & 1) && walk_cycles++ < 2000)
+        tick_with_mem(d, mem, 2, rdata_addr_complement);
+    check_bool("inval_all_perf.walker_completed",
+               (rdsys(d, 6) & 1) == 0u, true);
+
+    // Counters must be unchanged — INVAL_ALL is a maintenance op,
+    // not a cache access, and the walker writes valid bits without
+    // going through the stage-1 classification that fires events.
+    check("inval_all_perf.read_hits_preserved",
+          rdsys(d, 10), rh_before);
+    check("inval_all_perf.read_misses_preserved",
+          rdsys(d, 11), rm_before);
+}
+
+static void test_perfctrs_during_post_reset_walk(Vl2_cache* d) {
+    printf("── Perfctrs do not fire during post-reset auto-INVAL ──\n");
+
+    // Manual reset that does *not* skip past the auto-INVAL walk
+    // (the standard reset() helper ticks 1100 cycles, which already
+    // takes us past the walker).  We want to observe behaviour
+    // while the walker is still running.
+    d->i_rst = 1;
+    d->i_addr = 0; d->i_wdata = 0; d->i_byte_en = 0;
+    d->i_re = 0; d->i_we = 0; d->i_cacheable = 0;
+    d->i_mem_rdata = 0; d->i_mem_busy = 0;
+    d->i_sys_reg = 0; d->i_sys_wdata = 0; d->i_sys_we = 0;
+    tick(d); tick(d);
+    d->i_rst = 0;
+    tick(d);
+
+    // Walker should be active, all counters should be zero.
+    check_bool("post_reset.walker_busy",
+               (rdsys(d, 6) & 1) == 1u, true);
+    check("post_reset.read_hits_zero",    rdsys(d, 10), 0u);
+    check("post_reset.read_misses_zero",  rdsys(d, 11), 0u);
+    check("post_reset.write_hits_zero",   rdsys(d, 12), 0u);
+    check("post_reset.write_misses_zero", rdsys(d, 13), 0u);
+
+    // Enable the cache and issue a cacheable access while the
+    // walker is still running.  During the walker `ready=0`, so
+    // `l2_active` returns false regardless of `i_cacheable` — the
+    // access is demoted to pass-through.  It must NOT count as a
+    // cache event because the cache pipeline never sees it.
+    wrsys(d, 1, 1);
+    MemMock mem;
+    d->i_addr = 0x1000;
+    d->i_cacheable = 1;
+    d->i_re = 1;
+    d->eval();
+
+    // Drive the pass-through access to completion while STATUS.busy
+    // is still asserted (the walker is still running).
+    int safety = 0;
+    while (d->o_busy && safety++ < 30)
+        tick_with_mem(d, mem, 2, rdata_addr_complement);
+    check_bool("post_reset.passthrough_satisfied_during_walk",
+               d->o_busy == 0u, true);
+    check_bool("post_reset.walker_still_busy_after_passthrough",
+               (rdsys(d, 6) & 1) == 1u, true);
+    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+
+    // Counters must still be zero — the access went through
+    // pass-through, not the cache pipeline.
+    check("post_reset.read_hits_still_zero",   rdsys(d, 10), 0u);
+    check("post_reset.read_misses_still_zero", rdsys(d, 11), 0u);
+
+    // Let the walker complete.
+    int walk_cycles = 0;
+    while ((rdsys(d, 6) & 1) && walk_cycles++ < 2000)
+        tick_with_mem(d, mem, 2, rdata_addr_complement);
+    check_bool("post_reset.walker_completed",
+               (rdsys(d, 6) & 1) == 0u, true);
+
+    // After the walker is done, ready=1.  A fresh cacheable access
+    // now goes through the cache pipeline and counts as a normal
+    // cache miss.
+    d->i_addr = 0x2000;
+    d->i_cacheable = 1;
+    d->i_re = 1;
+    d->eval();
+    safety = 0;
+    while (d->o_busy && safety++ < 100)
+        tick_with_mem(d, mem, 2, rdata_addr_complement);
+    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+
+    check("post_reset.first_post_walk_access_is_miss",
+          rdsys(d, 11), 1u);
+    check("post_reset.no_phantom_hit_from_walker_period",
+          rdsys(d, 10), 0u);
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -545,11 +857,15 @@ int main() {
     test_info_register(d);
     test_passthrough_when_disabled(d);
     test_cached_read_miss_then_hit(d);
-    test_write_invalidate(d);
+    test_write_updates_line(d);
     test_inval_all(d);
     test_inval_all_implicit_fence(d);
     test_uncached_skips_cache(d);
     test_perfctrs(d);
+    test_multi_set_independence(d);
+    test_byte_en_accumulation(d);
+    test_perfctrs_inval_all(d);
+    test_perfctrs_during_post_reset_walk(d);
 
     printf("\nl2_cache: %d/%d tests passed\n", tests - errors, tests);
     if (errors > 0)

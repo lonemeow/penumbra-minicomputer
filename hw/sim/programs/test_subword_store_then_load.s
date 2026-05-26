@@ -1,9 +1,10 @@
 ; test_subword_store_then_load.s — sub-word write/read coherency
 ;
-; With write-through L1 D-cache and write-invalidate-on-hit L2, a
-; sub-word store must propagate through both cache layers and SDRAM
-; before a subsequent read of the same address can be correct.  The
-; existing sub-word store test does store-then-read on one address;
+; With write-through L1 D-cache and write-through write-no-allocate
+; L2, a sub-word store must propagate correctly through both cache
+; layers (and to SDRAM at L2-write-miss addresses) before a
+; subsequent read of the same address can be correct.  The existing
+; sub-word store test does store-then-read on one address;
 ; this test does it in a tight loop over a 1 KiB region, covering
 ; every halfword and byte offset, and re-reading both as halfword
 ; and as containing-word to catch byte-enable / lane-merge bugs.

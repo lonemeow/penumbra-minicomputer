@@ -13,13 +13,17 @@
 // 1 cycle to every cached access vs L1, which is the price of
 // using EBR-resident storage at 25 MHz.
 //
-// Write policy is **write-invalidate-on-hit**: cached writes are
-// passed through to memory (write-through) and the L2 line is
-// dropped if present.  This keeps the BRAM data port read-only
-// past initialisation, which is materially simpler than full
-// write-through-write-no-allocate's byte-enable update path; a
-// follow-up phase can upgrade to WT-WNA once benchmarks show
-// it's worth the bytes.
+// Write policy is **write-through, write-no-allocate (WT-WnA)**:
+// cached writes are forwarded to memory unconditionally; on a tag
+// hit the cached line's data is also updated in place via
+// byte-enable, keeping the line valid for subsequent reads.  On
+// a tag miss the store passes through unchanged (no allocation).
+// The phase-1 predecessor was write-invalidate-on-hit, which
+// dropped the cached line on write hit — same software-visible
+// contract (memory is always up to date) but caused hot read-
+// modify-write lines to self-evict from L2.  Phase 2 (planned)
+// upgrades to write-back, write-allocate to absorb the writes
+// themselves.
 //
 // Replacement: tree-PLRU, 3 bits/set.  At 4-way the miss rate is
 // within noise of true LRU, and the update logic is 3 bit flips
@@ -39,12 +43,13 @@
 //   reg 2 INVAL_ALL  (W)  write triggers multi-cycle valid-bit walk
 //   reg 6 STATUS     (R)  {31'b0, busy}; busy=1 while INVAL_ALL walks
 //
-// Write-invalidate-on-hit is *write-through* from software's POV
-// (memory is always up-to-date), so INFO advertises WB=0, WA=0.
-// The phase-2 upgrade to true write-back will flip these.
+// WT-WnA is software-visibly write-through, write-no-allocate,
+// so INFO advertises WB=0, WA=0.  The phase-2 upgrade to true
+// write-back will flip these.
 //
 // See `doc/internals/l2-cache.md` for the full design plan
-// (subsequent phases will add write-back, FLUSH ops, perfctrs).
+// (subsequent phases will add write-back, write-allocate,
+// FLUSH ops; perfctrs landed alongside the cache_perfctr module).
 
 // verilator lint_off UNUSEDSIGNAL
 
@@ -213,6 +218,19 @@ module l2_cache
     // their access pattern is symmetric.  Same pattern the TLB
     // uses (way0_*/way1_* in tlb.sv), generalised here.
     // ══════════════════════════════════════════════════════════
+    //
+    // Per-way data BRAM has two write paths:
+    //   1. S_FILL response capture: writes one word per beat of
+    //      the fill burst into (fill_set, fill_word_idx), only on
+    //      the way being filled.
+    //   2. S_IDLE write hit (phase 1.5 WT-WnA): byte-en update of
+    //      the cached line at (s1_addr) on the hit_way.  The store
+    //      itself is already in flight on the downstream bus (the
+    //      output mux drove o_mem_we in cycle 0); this updates the
+    //      cached copy so subsequent reads see the new bytes
+    //      without paying an SDRAM round-trip.  Conditions are
+    //      mutually exclusive (S_FILL vs S_IDLE), so the priority
+    //      encoder collapses.
     generate
         for (genvar gw = 0; gw < NUM_WAYS; gw++) begin : g_data
             (* ram_style = "block" *)
@@ -226,6 +244,24 @@ module l2_cache
                     mem[data_idx(fill_set,
                                  fill_word_idx[WORD_BITS-1:0])]
                         <= i_mem_rdata;
+                end else if (state == S_IDLE && s1_valid && s1_we
+                             && hit && hit_way == WAY_BITS'(gw)) begin
+                    if (s1_byte_en[0])
+                        mem[data_idx(addr_set(s1_addr),
+                                     addr_word(s1_addr))][ 7: 0]
+                            <= s1_wdata[ 7: 0];
+                    if (s1_byte_en[1])
+                        mem[data_idx(addr_set(s1_addr),
+                                     addr_word(s1_addr))][15: 8]
+                            <= s1_wdata[15: 8];
+                    if (s1_byte_en[2])
+                        mem[data_idx(addr_set(s1_addr),
+                                     addr_word(s1_addr))][23:16]
+                            <= s1_wdata[23:16];
+                    if (s1_byte_en[3])
+                        mem[data_idx(addr_set(s1_addr),
+                                     addr_word(s1_addr))][31:24]
+                            <= s1_wdata[31:24];
                 end
             end
         end
@@ -242,9 +278,12 @@ module l2_cache
     //   1. S_INVAL_ALL walker: clear mem[inval_walk_idx] in every way.
     //   2. S_FILL last-word install: set mem[fill_set] in fill_way.
     //   3. S_IDLE miss kickoff: clear the PLRU victim's mem[set].
-    //   4. S_IDLE write hit: clear hit_way's mem[set].
     // Conditions are mutually exclusive (different states; or
-    // s1_re vs s1_we in S_IDLE), so the priority encoder collapses.
+    // different `gw` selection in S_IDLE), so the priority encoder
+    // collapses.  Phase 1.5 dropped the "S_IDLE write hit clears
+    // hit_way's valid bit" path that used to live here — write
+    // hits now update the cached data via g_data (above) and leave
+    // the valid bit alone.
     // ══════════════════════════════════════════════════════════
     generate
         for (genvar gw = 0; gw < NUM_WAYS; gw++) begin : g_valid
@@ -264,9 +303,6 @@ module l2_cache
                              && plru_victim(plru[addr_set(s1_addr)])
                                 == WAY_BITS'(gw)) begin
                     mem[addr_set(s1_addr)] <= 1'b0;
-                end else if (state == S_IDLE && s1_valid && s1_we && hit
-                             && hit_way == WAY_BITS'(gw)) begin
-                    mem[addr_set(s1_addr)] <= 1'b0;
                 end
             end
         end
@@ -276,6 +312,8 @@ module l2_cache
     // Stage-1 registered request
     // ══════════════════════════════════════════════════════════
     logic [31:0]            s1_addr;
+    logic [31:0]            s1_wdata;
+    logic [3:0]             s1_byte_en;
     logic                   s1_re;
     logic                   s1_we;
     logic                   s1_cacheable;
@@ -431,8 +469,9 @@ module l2_cache
                     o_mem_we = i_we;
                 end else if (i_we) begin
                     // Cached write: write-through (memory always sees
-                    // the store; cycle-1 invalidate handles the cached
-                    // copy if it was present).
+                    // the store; if the line is in the cache, the
+                    // cycle-1 byte-en update in g_data refreshes
+                    // the cached copy).
                     o_mem_we = i_we;
                 end
                 // Cached read in S_IDLE: don't drive memory.  Hit
@@ -600,6 +639,8 @@ module l2_cache
         if (i_rst) begin
             s1_valid        <= 1'b0;
             s1_addr         <= 32'b0;
+            s1_wdata        <= 32'b0;
+            s1_byte_en      <= 4'b0;
             s1_re           <= 1'b0;
             s1_we           <= 1'b0;
             s1_cacheable    <= 1'b0;
@@ -632,6 +673,8 @@ module l2_cache
                         && l2_active(i_cacheable) && (i_re || i_we)) begin
                         s1_valid     <= 1'b1;
                         s1_addr      <= i_addr;
+                        s1_wdata     <= i_wdata;
+                        s1_byte_en   <= i_byte_en;
                         s1_re        <= i_re;
                         s1_we        <= i_we;
                         s1_cacheable <= i_cacheable;
@@ -663,11 +706,13 @@ module l2_cache
                             // edge (its miss-kickoff write port
                             // condition mirrors this branch).
                         end else if (s1_we && hit) begin
-                            // Write hit: invalidate the cached copy.
-                            // The memory write is already in flight
-                            // (drove o_mem_we in cycle 0).
-                            // hit_way's valid bit is cleared by the
-                            // g_valid generate block on the same edge.
+                            // Write hit (phase 1.5 WT-WnA): the
+                            // store itself is already in flight on
+                            // the downstream bus (the bus output mux
+                            // drove o_mem_we in cycle 0).  The
+                            // cached copy is updated by g_data's
+                            // byte-en write port on the same edge —
+                            // no FSM state change here.
                         end
                     end
 

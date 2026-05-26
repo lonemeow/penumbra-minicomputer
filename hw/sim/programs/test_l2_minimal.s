@@ -55,8 +55,9 @@ no_l2:
 
     ; ── Single cached store + load ────────────────────────────
     ; STW is write-no-allocate at L1 (goes to memory bus); with
-    ; L2 enabled, L2 sees the write — write-invalidate-on-hit
-    ; means L2 drops any matching line and lets RAM take it.
+    ; L2 enabled, L2 also forwards the store to RAM.  L2 is
+    ; write-through, write-no-allocate too — write misses (no
+    ; cached line at this address) just pass through to RAM.
     LLI  R5, #TEST_VAL
     LLI  R6, #TEST_ADDR
     STW  R5, [R6]
