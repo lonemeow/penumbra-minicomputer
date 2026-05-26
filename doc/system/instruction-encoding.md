@@ -54,8 +54,40 @@ register write is suppressed.
 | 00111 | SAR      | 01111 | DIVU     | 11110 | WRSPR      |
 |       |          | 10000 | MOD      | 11111 | RDSPR      |
 |       |          | 10001 | MODU     |       |            |
+|       |          | 10010 | DIVL     |       |            |
+|       |          | 10011 | DIVLU    |       |            |
 
-Opcodes 10010–10110 are reserved for future ALU expansion.
+Opcodes 10100–10110 are reserved for future ALU expansion.
+
+### Format R sub-encoding for MUL/DIV/DIVL
+
+`MUL`, `MULU`, `DIV`, `DIVU`, `MOD`, `MODU`, `DIVL`, and `DIVLU`
+repurpose part of the spare field to carry a **third register operand**
+`Rdh` (the high-half result register). The F bit is unused for these
+opcodes and must be 0.
+
+```
+31 30  29     25 24   21 20   17 16  15  12 11           0
+[ 00 ][ op (5) ][ Rd (4) ][ Rs (4) ][0][ Rdh (4) ][ spare (12) ]
+```
+
+| Operation     | Behaviour                                                         |
+|---------------|-------------------------------------------------------------------|
+| MUL, MULU     | `Rdh:Rd = Rd × Rs`  (low half → Rd, high half → Rdh)              |
+| DIV, DIVU     | `Rd = Rd / Rs; Rdh = Rd % Rs` (quotient → Rd, remainder → Rdh)    |
+| MOD, MODU     | same as DIV; assembler emits with `Rd = R0` to discard the quotient |
+| DIVL, DIVLU   | `Rd, Rdh = (Rdh:Rd) / Rs, (Rdh:Rd) % Rs` (narrowing 64/32)        |
+
+Writing either result to `R0` discards it. The assembler defaults the
+third operand to `R0` when omitted: `MUL R1, R2` encodes as `MUL R1,
+R2, R0` (low half only). `DIVL` reads `Rdh` as a source (dividend high
+half) and writes it back as the remainder; the unit captures the input
+in a single cycle before iteration starts.
+
+`Rdh[15:12]` reuses the same bit positions that hold the SPR number
+(`RDSPR`/`WRSPR`) and device number (`WRSYS`/`RDSYS`) — the existing
+IR field extractor serves all three roles. Bits `[11:0]` of the
+instruction remain spare.
 
 ---
 
@@ -193,7 +225,9 @@ handler for software emulation.
 | MOV                               | Yes         | No flag update                      |
 | NOT                               | Yes         | Updates flags                       |
 | CMP, TEST                         | Yes         | SUB/AND with F-bit                  |
-| MUL, MULU, DIV, DIVU, MOD, MODU   | Trap        | Illegal-instr trap → SW emulation   |
+| MUL, MULU                         | Trap        | Spec'd (32×32→64 with Rdh); HW pending. Currently illegal-instr trap → SW emulation |
+| DIV, DIVU, MOD, MODU              | Trap        | Spec'd (32/32 → 32q+32r with Rdh); DIV0 → `VEC_ARITH`; HW pending |
+| DIVL, DIVLU                       | Trap        | Spec'd (narrowing 64/32); overflow + DIV0 → `VEC_ARITH`; HW pending |
 | LLI, LLIS, LUI                    | Yes         |                                     |
 | ADD/SUB/CMP/AND/TEST #imm         | Yes         | Format L encoding                   |
 | LDW, STW                          | Yes         | Stall-based, latency-agnostic       |

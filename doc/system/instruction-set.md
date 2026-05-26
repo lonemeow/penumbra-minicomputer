@@ -99,19 +99,67 @@ LLI  LR, #my_label          ; R13 = address of my_label
 | SUB         | `SUB Rd, #imm16`    | `Rd = Rd - zero_extend(imm16)`     | NZCV  |
 | ADC         | `ADC Rd, Rs`        | `Rd = Rd + Rs + C` (add with carry)| NZCV  |
 | SBC         | `SBC Rd, Rs`        | `Rd = Rd - Rs - ~C` (sub w/ borrow)| NZCV  |
-| MUL / MULU  | `MUL Rd, Rs`        | `Rd = Rd * Rs` (signed / unsigned) | NZCV  |
-| DIV / DIVU  | `DIV Rd, Rs`        | `Rd = Rd / Rs` (signed / unsigned) | NZCV  |
-| MOD / MODU  | `MOD Rd, Rs`        | `Rd = Rd % Rs` (signed / unsigned) | NZCV  |
+| MUL / MULU  | `MUL Rd, Rs, Rdh`   | `Rdh:Rd = Rd * Rs` (signed/unsigned 32×32→64) | NZ |
+| DIV / DIVU  | `DIV Rd, Rs, Rdh`   | `Rd = Rd / Rs; Rdh = Rd % Rs` (signed / unsigned) | NZ |
+| MOD / MODU  | `MOD Rd, Rs`        | alias for `DIV R0, Rs, Rd` (remainder-only) | NZ |
+| DIVL / DIVLU| `DIVL Rd, Rs, Rdh`  | `Rd, Rdh = (Rdh:Rd)/Rs, (Rdh:Rd)%Rs` (narrowing 64/32) | NZ |
 
 All ALU arithmetic is **2-operand destructive**: the first operand is
 both a source and the destination. Save values you still need before
 overwriting them.
 
 The assembler automatically picks Format R (register-register) or
-Format L (register-immediate) based on the second operand. `MUL`/`DIV`/
-`MOD` are multi-cycle and stall the pipeline. They are currently
-trapped as illegal instructions for software emulation; hardware
-support will be added incrementally (see `CPU_ISA.HW_MUL`/`HW_DIV`).
+Format L (register-immediate) based on the second operand.
+
+#### MUL/DIV register-pair semantics
+
+`MUL`, `DIV`, and `DIVL` take a **third register operand** `Rdh` that
+receives the high half of the result — the upper 32 bits of the product
+for `MUL`, the remainder for `DIV` and `DIVL`. The encoding repurposes
+bits `[15:12]` of the Format R instruction (see
+[instruction-encoding.md](./instruction-encoding.md#format-r--register-operations-prefix-00)).
+
+The third operand is **optional in assembler syntax** and defaults to
+`R0`, which discards the high half (R0's write port silently drops
+writes). This makes the common cases look exactly like the old
+2-operand form:
+
+```asm
+MUL  R1, R2              ; encoded as MUL R1, R2, R0 — low 32 bits only
+MUL  R1, R2, R3          ; full 64-bit product: R3:R1 = R1 * R2
+DIV  R1, R2              ; quotient only, remainder discarded
+DIV  R1, R2, R3          ; quotient in R1, remainder in R3
+DIVL R1, R2, R3          ; (R3:R1) / R2 → quotient in R1, remainder in R3
+```
+
+`MOD Rd, Rs` is a mnemonic alias for `DIV R0, Rs, Rd` (quotient
+discarded, remainder to `Rd`). The hardware performs the same operation
+either way — the alias exists only to make remainder-only code read
+naturally.
+
+`MUL`/`DIV`/`DIVL` are multi-cycle: they stall the pipeline while the
+divmul unit iterates (~33 cycles per operation). The CPU uses the same
+`alu_start`/`alu_busy` STALL contract as multi-cycle ALU operations —
+see [datapath.md](../internals/datapath.md) and
+[divmul.md](../internals/divmul.md).
+
+#### DIVL precondition and arithmetic faults
+
+`DIVL Rd, Rs, Rdh` divides the 64-bit value `Rdh:Rd` by the 32-bit
+divisor `Rs` and produces a **32-bit quotient**. The quotient must fit
+in 32 bits — equivalently, the dividend high half (input `Rdh`) must
+be strictly less than the divisor `Rs`. Library code that emits `DIVL`
+(notably the inner step of `__udivdi3`) always arranges this
+precondition; user code calling `DIVL` directly must test it explicitly.
+
+Two arithmetic conditions trap to `VEC_ARITH` (vector 10):
+- **Divide by zero** — `DIV`/`DIVU`/`MOD`/`MODU`/`DIVL`/`DIVLU` with
+  `Rs == 0`.
+- **DIVL quotient overflow** — `DIVL`/`DIVLU` with `Rdh >= Rs`.
+
+In both cases `EPC` points at the trapping instruction. The kernel
+handler typically maps `VEC_ARITH` to `SIGFPE` with `si_code =
+FPE_INTDIV` (divide-by-zero) or `FPE_INTOVF` (DIVL overflow).
 
 ### Logic
 

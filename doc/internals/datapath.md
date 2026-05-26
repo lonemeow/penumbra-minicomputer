@@ -117,15 +117,27 @@ The Penumbra CPU uses a three-bus datapath controlled by horizontal microcode. T
           └─────────────────────────────────────────────────┘
 
 
-The ALU is the **unified compute unit** — all operations (arithmetic, logic, shifts,
-and future MUL/DIV/FP) flow through it. Single-cycle ops (ADD, SUB, AND, etc.) complete
-combinationally. Multi-cycle ops (shifts on discrete, MUL/DIV when implemented) use an
-internal state machine and assert `busy` to stall the micro-sequencer via STALL.
+The ALU is **single-cycle only**: arithmetic, logic, shifts, comparisons, and
+PASS-through all complete combinationally; the ALU has no internal state and
+never stalls. Multi-cycle compute lives in **peer units** that sit alongside
+the ALU — the divmul unit handles MUL/DIV/DIVL today (see
+[divmul.md](./divmul.md)), and a future FPU unit will handle floating-point.
+Each peer unit owns its own start/busy/op signals (`divmul_start`,
+`divmul_busy`, `divmul_op`; later `fpu_start`/`fpu_busy`/`fpu_op`) and its
+own internal accumulators and FSM. The micro-sequencer treats them
+identically: pulse the relevant `*_start` in the start micro-op, then a
+STALL micro-op holds micro-PC until the unified busy gate
+(`cache_busy | divmul_busy | …`) clears.
 
-There is no separate long-latency unit. MUL/DIV/MOD opcodes are initially handled as
-illegal instructions via microcode ROM (trapped to software emulation), and replaced
-with hardware implementations inside the ALU as the design matures. FPU operations
-follow the same pattern — future `alu_op` encodings, absent until hardware exists.
+A peer unit's writeback shape can differ from the ALU's. The divmul produces
+two 32-bit halves that drive R-bus on consecutive cycles (low half → `Rd`,
+high half → `Rdh` from IR[15:12]), so its micro-routine has two writeback
+micro-ops, not one. The ALU's own writeback is unchanged — single cycle,
+single register.
+
+MUL/DIV/MOD opcodes still trap to software emulation in the current ROM;
+the divmul unit is specified ([divmul.md](./divmul.md)) but not yet
+implemented. FPU operations follow the same template once their unit exists.
 ```
 
 ## Data Flow by Instruction Type
@@ -379,7 +391,7 @@ Both forms use the same gates when computed on the adder's actual inputs (A and 
 | SHL | result==0 | result[31] | last bit shifted out (msb) | 0 |
 | SHR | result==0 | result[31] | last bit shifted out (lsb) | 0 |
 | SAR | result==0 | result[31] | last bit shifted out (lsb) | 0 |
-| MUL, MULU, DIV, DIVU, MOD, MODU | result==0 | result[31] | 0 | 0 |
+| MUL, MULU, DIV, DIVU, MOD, MODU, DIVL, DIVLU | Rd == 0 (low half / quotient) | Rd[31] | 0 | 0 |
 
 ### Which Instructions Update Flags
 
@@ -462,11 +474,13 @@ Condition evaluation hardware: each condition is a simple combinational function
 
 See `doc/internals/microcode.md` for the authoritative single-source field reference, value tables, and full micro-routine catalog. The summary above mirrors `hw/rtl/core/sequencer.sv` field extraction at lines 111–136.
 
-The ALU is the unified compute unit. Single-cycle operations (ADD, SUB, AND, OR, XOR, SHL, SHR, SAR, PASS_A, PASS_B, NOT) produce results combinationally — `alu_start` is ignored and `alu_busy` is never asserted. Multi-cycle operations (MUL, DIV, MOD, future FP) require `alu_start=1` in the micro-word to begin; the ALU latches operands, asserts `alu_busy`, and iterates internally. STALL checks a unified busy signal: `cache_busy | alu_busy`.
+The ALU is the **single-cycle** compute unit. All ALU operations (ADD, SUB, AND, OR, XOR, SHL, SHR, SAR, PASS_A, PASS_B, NOT) produce results combinationally; the ALU has no internal state and never asserts a busy signal. Multi-cycle compute is delegated to **peer units** alongside the ALU — the divmul unit owns MUL/DIV/DIVL ([divmul.md](./divmul.md)), and a future FPU unit will own floating-point. Each peer has its own `*_start`/`*_busy`/`*_op` signals in the micro-word, its own operand latches and FSM, and joins the unified STALL gate (`cache_busy | divmul_busy | fpu_busy`).
 
-Future FPU note: floating-point operands live in GPRs (no separate FP register file). FP operations are additional `alu_op` encodings using the same start/busy/result interface. FP compare updates NZCV via `flag_w_en`, so normal Bcc works for FP branches. When FPU hardware is absent, the microcode ROM fills FP opcode entries with illegal-instruction exception micro-ops — zero runtime overhead. MUL/DIV/MOD follow the same pattern: initially trapped to software emulation via the ROM, replaced with ALU hardware as the design matures.
+Future FPU note: floating-point operands live in GPRs (no separate FP register file). The FPU will be its own peer unit, structurally identical to the divmul: `fpu_start`/`fpu_busy`/`fpu_op` in the micro-word, its own internal state, joined into the same STALL gate. FP compare updates NZCV via `flag_w_en`, so normal Bcc works for FP branches. When FPU hardware is absent, the microcode ROM fills FP opcode entries with illegal-instruction exception micro-ops — zero runtime overhead, and the FPU unit need not exist in silicon. MUL/DIV/MOD follow exactly the same trajectory: currently trapped to software emulation via the ROM, replaced by the divmul peer unit as the design matures.
 
-Design history: the original draft specified 52 bits (actually 55 when counted correctly). Microcode validation identified missing signals for exception entry and unnecessary sequencer complexity. The separate long-latency unit (`lu_op[1:0]`) was later folded into the ALU as a unified compute unit, with `alu_op` expanded to 5 bits. The privilege check moved from a microcode branch (old `branch_cond=PRIV`) to a dedicated `priv` bit at [50], and the `ei_set`/`di_set` bits at [1:0] (formerly spare) absorbed the EI/DI side effects. Net result: 51-bit micro-word.
+Design history: the original draft specified 52 bits (actually 55 when counted correctly). Microcode validation identified missing signals for exception entry and unnecessary sequencer complexity. The separate long-latency unit (`lu_op[1:0]`) was initially folded into the ALU as a unified compute unit, with `alu_op` expanded to 5 bits. The privilege check moved from a microcode branch (old `branch_cond=PRIV`) to a dedicated `priv` bit at [50], and the `ei_set`/`di_set` bits at [1:0] (formerly spare) absorbed the EI/DI side effects, giving the 51-bit micro-word documented in the table above.
+
+Subsequent design note: when hardware planning for MUL/DIV began, the divmul work re-extracted them as a **peer unit** alongside the ALU — same micro-sequencer protocol (start / busy / STALL), but private `divmul_start`/`divmul_busy`/`divmul_op` signals so divmul's iteration mux does not deepen the ALU's combinational path (the fmax-critical `upc → µROM → ctrl → regfile → ALU → flag_z` chain). The micro-word will grow when divmul lands to carry the new fields; the precise allocation is pinned during RTL implementation (see [divmul.md](./divmul.md) and `microcode.md`). The ISA contract is unchanged — only the implementation moved.
 
 ### Micro-Sequencer
 
@@ -487,13 +501,13 @@ FETCH, BRT, and BRF all signal "instruction complete" to the fetch unit. The dif
 
 Privilege checking uses the `priv` micro-word bit (bit 50), not a `branch_cond` value. When `priv=1` and `SR.S=0`, the sequencer signals the fetch unit to trigger a privilege violation (vector 4, `VEC_PRIV`) using the same hardware pre-actions as interrupt entry. The old `branch_cond=PRIV` (encoding 101) value was removed when this moved into a per-µ-op bit.
 
-STALL checks a unified busy signal: `cache_busy | alu_busy`. When the operation completes (`busy` deasserts), the sequencer also checks a `fault` signal from the D-cache/MMU. Three-way resolution:
+STALL checks a unified busy signal: the OR of every multi-cycle unit's busy line. Today that is `cache_busy | alu_busy` (the `alu_busy` input is currently tied off — the ALU is single-cycle); when divmul lands it becomes `cache_busy | divmul_busy`, and the FPU adds `fpu_busy` later. Adding a peer unit means wiring its busy line into this OR — no other sequencer change. When the operation completes (`busy` deasserts), the sequencer also checks a `fault` signal. Three-way resolution:
 
 - **busy=1:** Hold micro-PC (keep waiting).
 - **busy=0, fault=0:** micro-PC++ (normal completion).
-- **busy=0, fault=1:** Trigger exception. The fault vector is selected by priority: bus fault (0), alignment (8), TLB protection (3), TLB miss (2). Hardware pre-actions fire with `EPC ← PC` (still pointing at the faulting instruction, since `pc_src=001` hasn't executed). The instruction is effectively aborted mid-execution. Bus faults are detected at the physical bus level (no device responded); all other faults are detected by the MMU.
+- **busy=0, fault=1:** Trigger exception. The fault vector is selected by priority: bus fault (0), alignment (8), TLB protection (3), TLB miss (2), then arithmetic fault (10) from divmul (`VEC_ARITH` — DIV0 / DIVL overflow). Hardware pre-actions fire with `EPC ← PC` (still pointing at the faulting instruction, since `pc_src=001` hasn't executed). The instruction is effectively aborted mid-execution. Memory-side faults are detected by the bus/MMU; arithmetic faults come from the divmul unit's combinational `o_fault` (asserted on the start cycle).
 
-Since memory operations and multi-cycle ALU operations never overlap in the same micro-op, a single busy line is sufficient. The fault signal is only meaningful for memory operations (ALU operations cannot fault).
+Different peer units never overlap in the same micro-op (the µ-routine only ever pulses one `*_start` at a time), so a single OR'd busy line and a single OR'd fault line are sufficient — the fault-source priority above tells the sequencer which vector to take.
 
 ### Microcode ROM Organization
 
