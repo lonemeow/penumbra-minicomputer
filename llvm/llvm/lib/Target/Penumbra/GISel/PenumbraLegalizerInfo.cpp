@@ -447,6 +447,19 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   getActionDefinitionsBuilder(G_FPTRUNC)
       .libcallFor({{s32, s64}});
 
+  // lround/llround/lrint/llrint: rounding FP→int per libm semantics
+  // (round-to-nearest-away from 0 for lround/llround, round-to-current-mode
+  // for lrint/llrint).  Distinct from G_FPTOSI because libm fixes the
+  // rounding mode in the call.  No FPU — straight to libcall.
+  //  - G_LROUND/G_INTRINSIC_LRINT: result `long` (s32 on Penumbra).
+  //  - G_LLROUND/G_INTRINSIC_LLRINT: result `long long` (s64).
+  // Source is f32 (s32) or f64 (s64).
+  getActionDefinitionsBuilder({G_LROUND, G_INTRINSIC_LRINT})
+      .libcallFor({{s32, s32}, {s32, s64}});
+
+  getActionDefinitionsBuilder({G_LLROUND, G_INTRINSIC_LLRINT})
+      .libcallFor({{s64, s32}, {s64, s64}});
+
   getActionDefinitionsBuilder(G_FCMP)
       .libcallFor({{s1, s32}, {s1, s64}});
 
