@@ -382,9 +382,9 @@ sdimage:
 	@sw/tools/mksdimage.sh -o $(SDIMAGE) -2 $(BOOT_ELF) -k $(KERNEL) -v
 	@echo "SD image: $(SDIMAGE)"
 
-# Overlay pbench binaries into /usr/local/bin/ if they've been built.
-# Full-rootfs only — minimal mode (rescue + lib + etc) intentionally
-# excludes userland binaries.
+# Overlay pbench + mandelbrot binaries into /usr/local/bin/ if they've
+# been built.  Full-rootfs only — minimal mode (rescue + lib + etc)
+# intentionally excludes userland binaries.
 NETBSD_BENCH_DIR := $(BUILD_DIR)/netbsd-bench
 NETBSD_BENCH_OVERLAYS :=
 ifeq ($(ROOTFS_FULL),1)
@@ -393,6 +393,12 @@ NETBSD_BENCH_OVERLAYS += -i $(NETBSD_BENCH_DIR)/pbench:/usr/local/bin/pbench
 endif
 ifneq ($(wildcard $(NETBSD_BENCH_DIR)/pbench-static),)
 NETBSD_BENCH_OVERLAYS += -i $(NETBSD_BENCH_DIR)/pbench-static:/usr/local/bin/pbench-static
+endif
+ifneq ($(wildcard $(NETBSD_BENCH_DIR)/mandelbrot),)
+NETBSD_BENCH_OVERLAYS += -i $(NETBSD_BENCH_DIR)/mandelbrot:/usr/local/bin/mandelbrot
+endif
+ifneq ($(wildcard $(NETBSD_BENCH_DIR)/mandelbrot-static),)
+NETBSD_BENCH_OVERLAYS += -i $(NETBSD_BENCH_DIR)/mandelbrot-static:/usr/local/bin/mandelbrot-static
 endif
 endif
 
@@ -419,7 +425,8 @@ sdimage-rootfs: rootfs
 benchmark-netbsd:
 	@$(MAKE) -C benchmark/netbsd-bench LLVM_PREFIX=$(LLVM_PREFIX) \
 		DESTDIR=$(abspath $(DESTDIR))
-	@echo "pbench binaries: $(NETBSD_BENCH_DIR)/pbench{,-static}"
+	@echo "pbench binaries:     $(NETBSD_BENCH_DIR)/pbench{,-static}"
+	@echo "mandelbrot binaries: $(NETBSD_BENCH_DIR)/mandelbrot{,-static}"
 
 # ── Benchmark SD image and runners ───────────────────────────
 # Builds benchmark ELFs and creates an SD image containing them.

@@ -1,14 +1,16 @@
 # Makefile - pbench: NetBSD-hosted benchmark suite for Penumbra.
 #
-# Builds two ELFs:
-#   build/netbsd-bench/pbench         - dynamically linked against libc.so
-#   build/netbsd-bench/pbench-static  - statically linked against libc.a
+# Builds:
+#   build/netbsd-bench/pbench             - dynamic pbench (libc.so)
+#   build/netbsd-bench/pbench-static      - static  pbench (libc.a)
+#   build/netbsd-bench/mandelbrot         - dynamic mandelbrot demo
+#   build/netbsd-bench/mandelbrot-static  - static  mandelbrot demo
 #
-# Both run on a Penumbra NetBSD rootfs; mkrootfs.sh -i can overlay them
+# All run on a Penumbra NetBSD rootfs; mkrootfs.sh -i can overlay them
 # into /usr/local/bin/.
 #
 # Usage:
-#   make                   - build both binaries
+#   make                   - build everything (both binaries, both link modes)
 #   make dynamic           - dynamic only
 #   make static            - static only
 #   make clean             - remove build artifacts
@@ -43,13 +45,19 @@ OBJDIR      := $(BUILDDIR)/obj
 # benchmark by dropping a .c file in the right directory and listing
 # its entry function in pbench.c's registry.
 
-SRCS        := pbench.c bench.c \
+PBENCH_SRCS := pbench.c bench.c \
                kernel/getpid.c kernel/clock_gettime.c \
                kernel/pipe_pingpong.c kernel/fork_exit.c \
                libc/memcpy_sweep.c libc/memset_sweep.c \
                libc/strlen_sweep.c libc/qsort_int.c
 
-OBJS        := $(SRCS:%.c=$(OBJDIR)/%.o)
+PBENCH_OBJS := $(PBENCH_SRCS:%.c=$(OBJDIR)/%.o)
+
+# mandelbrot is a standalone single-file program (not part of pbench's
+# registry) — it prints an ASCII Mandelbrot set to stdout, both as an
+# ALU benchmark and as a visual demo.
+MANDEL_SRCS := mandelbrot.c
+MANDEL_OBJS := $(MANDEL_SRCS:%.c=$(OBJDIR)/%.o)
 
 # ── Targets ───────────────────────────────────────────────────
 
@@ -57,8 +65,8 @@ OBJS        := $(SRCS:%.c=$(OBJDIR)/%.o)
 
 all: dynamic static
 
-dynamic: $(BUILDDIR)/pbench
-static:  $(BUILDDIR)/pbench-static
+dynamic: $(BUILDDIR)/pbench       $(BUILDDIR)/mandelbrot
+static:  $(BUILDDIR)/pbench-static $(BUILDDIR)/mandelbrot-static
 
 $(BUILDDIR) $(OBJDIR) $(OBJDIR)/kernel $(OBJDIR)/libc:
 	@mkdir -p $@
@@ -66,11 +74,17 @@ $(BUILDDIR) $(OBJDIR) $(OBJDIR)/kernel $(OBJDIR)/libc:
 $(OBJDIR)/%.o: %.c bench.h | $(OBJDIR) $(OBJDIR)/kernel $(OBJDIR)/libc
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILDDIR)/pbench: $(OBJS) | $(BUILDDIR)
-	$(CC) $(LDFLAGS_DYN) $(OBJS) -o $@
+$(BUILDDIR)/pbench: $(PBENCH_OBJS) | $(BUILDDIR)
+	$(CC) $(LDFLAGS_DYN) $(PBENCH_OBJS) -o $@
 
-$(BUILDDIR)/pbench-static: $(OBJS) | $(BUILDDIR)
-	$(CC) $(LDFLAGS_STA) $(OBJS) -o $@
+$(BUILDDIR)/pbench-static: $(PBENCH_OBJS) | $(BUILDDIR)
+	$(CC) $(LDFLAGS_STA) $(PBENCH_OBJS) -o $@
+
+$(BUILDDIR)/mandelbrot: $(MANDEL_OBJS) | $(BUILDDIR)
+	$(CC) $(LDFLAGS_DYN) $(MANDEL_OBJS) -o $@
+
+$(BUILDDIR)/mandelbrot-static: $(MANDEL_OBJS) | $(BUILDDIR)
+	$(CC) $(LDFLAGS_STA) $(MANDEL_OBJS) -o $@
 
 clean:
 	rm -rf $(BUILDDIR)
