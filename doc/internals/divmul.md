@@ -5,11 +5,19 @@
 The divmul unit implements hardware multiply and divide for the
 Penumbra ISA:
 
-| Instruction | Operation                                              | Cycles (target) |
-|-------------|--------------------------------------------------------|:---------------:|
-| MUL, MULU   | `Rdh:Rd = Rd × Rs` (signed/unsigned 32×32→64)          | ~34             |
-| DIV, DIVU   | `Rd = Rd / Rs; Rdh = Rd % Rs` (signed/unsigned 32/32)  | ~34             |
-| DIVL, DIVLU | `Rd, Rdh = (Rdh:Rd)/Rs, (Rdh:Rd)%Rs` (narrowing 64/32) | ~34             |
+| Instruction | Operation                                                                 | Cycles (target) |
+|-------------|---------------------------------------------------------------------------|:---------------:|
+| MUL, MULU   | `Rdh:Rd = Rd × Rs` (signed/unsigned 32×32→64; `Rdh=R0` → low half only)   | ~34             |
+| DIV, DIVU   | `Rd, Rdh = (Rdh:Rd)/Rs, (Rdh:Rd)%Rs` (`Rdh=R0` → plain 32/32; else 64/32) | ~34             |
+
+The unified `DIV` opcode covers both the common 32/32 case (`Rdh=R0`,
+high half reads as zero) and the narrowing 64/32 case (`Rdh` holds the
+dividend high half). No separate `DIVL` opcode exists — the hardware
+iterates identically; only the initial value of `accum_hi` differs, and
+that comes naturally from reading the `Rdh`-named register. Same
+pattern for `MUL`: when `Rdh=R0` the high half of the product is
+silently dropped, when `Rdh` is a real register both halves are
+captured.
 
 The unit is a **peer to the ALU**, sitting alongside it on the
 register-bus fabric. It uses the same micro-sequencer protocol pattern
@@ -26,20 +34,22 @@ gate sees that there are multiple busy sources to OR together
 
 | Signal              | Direction      | Purpose                                                  |
 |---------------------|----------------|----------------------------------------------------------|
-| `i_a_bus[31:0]`     | CPU → divmul   | First operand: multiplicand / 32-bit dividend / DIVL low |
-| `i_b_bus[31:0]`     | CPU → divmul   | Second operand: multiplier / divisor                     |
-| `i_rdh_bus[31:0]`   | CPU → divmul   | Third operand: DIVL dividend high half                   |
-| `i_op[2:0]`         | CPU → divmul   | MUL, MULU, DIV, DIVU, DIVL, DIVLU                        |
-| `i_start`           | CPU → divmul   | 1-cycle pulse — latch operands, begin iteration          |
-| `o_busy`            | divmul → CPU   | Held high during iteration; falling edge = done          |
-| `o_fault`           | divmul → CPU   | DIV0 or DIVL overflow detected; raises `VEC_ARITH`       |
+| `i_a_bus[31:0]`     | CPU → divmul   | First operand: multiplicand / dividend low half           |
+| `i_b_bus[31:0]`     | CPU → divmul   | Second operand: multiplier / divisor                      |
+| `i_rdh_bus[31:0]`   | CPU → divmul   | Third operand: dividend high half (reads as 0 when Rdh=R0)|
+| `i_op[1:0]`         | CPU → divmul   | MUL (00), MULU (01), DIV (10), DIVU (11)                  |
+| `i_start`           | CPU → divmul   | 1-cycle pulse — latch operands, begin iteration           |
+| `o_busy`            | divmul → CPU   | Held high during iteration; falling edge = done           |
+| `o_fault`           | divmul → CPU   | DIV0 or quotient-overflow detected; raises `VEC_ARITH`    |
 | `o_result_lo[31:0]` | divmul → R-bus | Low half (writeback cycle 1)                             |
 | `o_result_hi[31:0]` | divmul → R-bus | High half (writeback cycle 2)                            |
 | `o_n`, `o_z`        | divmul → SR    | Flag outputs (latched on `flag_w_en` in writeback)       |
 
 Operand latching is single-cycle: the CPU drives `i_a_bus`, `i_b_bus`,
-and (for DIVL) `i_rdh_bus` simultaneously, pulses `i_start`, and the
-unit captures all three. There is no multi-cycle operand-load protocol
+and `i_rdh_bus` simultaneously, pulses `i_start`, and the unit
+captures all three. `i_rdh_bus` reads as zero when the assembler-named
+Rdh is R0 — no special "ignore Rdh" signal is needed; the
+register-file's R0 read port produces the right value automatically. There is no multi-cycle operand-load protocol
 — the 32-bit-wide internal bus carries each operand on its own wire,
 and the divmul's internal 64-bit accumulator is loaded from the
 combination.
@@ -84,10 +94,18 @@ combination.
 
       ┌──────────────────────────────────────────┐
       │  Fault detect (combinational at start):  │
-      │    DIV0    ← (op ∈ DIV family) && (B==0) │
-      │    OVF     ← (op ∈ DIVL family) && (Rdh ≥ B) │
+      │    DIV0    ← (op ∈ DIV/DIVU) && (B==0)   │
+      │    OVF     ← (op ∈ DIV/DIVU) && (Rdh ≥ B)│
       │    o_fault ← DIV0 | OVF                  │
       └──────────────────────────────────────────┘
+
+The OVF check covers the narrowing form: when `Rdh != 0` and
+`Rdh >= divisor`, the 32-bit quotient cannot fit. When `Rdh == 0`
+(the plain 32/32 case), OVF is always false. Both faults are **purely
+defensive** — they indicate caller bugs (compiler emitting wrong code,
+hand-written multi-precision routines violating their own invariant)
+and trap to `VEC_ARITH` for `SIGFPE` delivery, never as part of a
+normal algorithm's control flow.
 ```
 
 `accum_hi:accum_lo` form a 64-bit logical shift register. The same
@@ -101,15 +119,16 @@ bits).
 | Op    | accum_lo ← | accum_hi ← | divisor ← | iter ← |
 |-------|------------|------------|-----------|--------|
 | MUL   | A (multiplier)   | 0     | B (multiplicand) | 32 |
-| MULU  | A          | 0          | B         | 32     |
-| DIV   | A (dividend)     | 0     | B (divisor)      | 32 |
-| DIVU  | A          | 0          | B         | 32     |
-| DIVL  | A (dividend low) | Rdh (dividend high) | B (divisor) | 32 |
-| DIVLU | A          | Rdh        | B         | 32     |
+| MULU  | A                | 0     | B                | 32 |
+| DIV   | A (dividend low) | Rdh   | B (divisor)      | 32 |
+| DIVU  | A                | Rdh   | B                | 32 |
 
-The **only** difference between DIV and DIVL at the hardware level is
-the initial value of `accum_hi` — DIV zeros it; DIVL latches it from
-the `Rdh` operand bus. The iteration loop is identical.
+`accum_hi` always loads from the register named in the `Rdh` field —
+no hardware mux for "zero vs Rdh". The 32/32 case (`Rdh = R0`) gets
+the right behaviour for free because R0 reads as zero. `MUL`'s
+`accum_hi` is forced to zero by the iteration setup, since multiply
+doesn't consume a high half. The iteration loop is identical across
+all four operations once `accum_hi` is initialized.
 
 ## Multiplication — shift-add (unsigned)
 
@@ -160,44 +179,55 @@ operand signs; remainder sign = dividend sign).
 The micro-routine entry points sit at the same offsets the
 illegal-instruction handler currently occupies. Each is 4 micro-ops.
 
-**MUL / MULU:**
+**MUL / MULU / DIV / DIVU** all share the same 4-µ-op shape; the
+divmul unit's behaviour differs internally based on `divmul_op` and
+the `Rdh` operand, but the micro-routine is identical:
+
 ```
-mul-0: reg_a_sel=Rd, reg_b_sel=Rs, b_mux=register, divmul_op=MUL{U},
+op-0:  reg_a_sel=Rd, reg_b_sel=Rs, b_mux=register, divmul_op=MUL|DIV|…,
        divmul_start=1, branch_cond=SEQ
-mul-1: branch_cond=STALL              ; wait for divmul_busy fall (also catches o_fault)
-mul-2: divmul_hi_drive=0 → accum_lo onto R-bus,
+op-1:  branch_cond=STALL              ; wait for divmul_busy fall (also catches o_fault)
+op-2:  divmul_hi_drive=0 → accum_lo onto R-bus,
        reg_w_sel=Rd, reg_w_en=1, flag_w_en=1, branch_cond=SEQ
-mul-3: divmul_hi_drive=1 → accum_hi onto R-bus,
+op-3:  divmul_hi_drive=1 → accum_hi onto R-bus,
        reg_w_sel=IR[15:12] (Rdh), reg_w_en=1, branch_cond=FETCH (pc_src=PC+4)
 ```
 
-**DIV / DIVU / DIVL / DIVLU:** identical structure — the unit is
-configured by `divmul_op` and (for DIVL) the third-operand latch path
-on mul-0. The fault is detected combinationally at start; if `o_fault`
-asserts, the STALL resolution triggers `VEC_ARITH` instead of
+The fault is detected combinationally at start; if `o_fault` asserts,
+the STALL resolution at op-1 triggers `VEC_ARITH` instead of
 proceeding to writeback.
 
-Four new micro-word fields are needed:
+The third-operand read (`Rdh` → `i_rdh_bus`) happens at op-0
+unconditionally — both MUL and DIV read `Rdh` from the register file
+on the start cycle. For MUL it's ignored (the multiplier doesn't need
+a dividend high half); for DIV it loads `accum_hi`. R0 reading as zero
+gives the right behaviour for the 32/32 case automatically.
+
+The writeback at op-3 sends `accum_hi` to the register named in
+`IR[15:12]`. When that's `R0` (the common 2-operand case), the
+register file silently drops the write — no special-case handling
+needed, no microcode branching to "skip writeback if Rdh=R0".
+
+Three new micro-word fields are needed:
 - `divmul_start` (1 bit) — pulse to latch operands and begin iteration
-- `divmul_op` (3 bits) — selects MUL / MULU / DIV / DIVU / DIVL / DIVLU
-  (alternative: omit and decode from `IR[29:25]`, since divmul only
-  ever starts in response to a MUL/DIV opcode — saves 3 µ-word bits at
+- `divmul_op` (2 bits) — selects MUL (00) / MULU (01) / DIV (10) / DIVU (11)
+  (alternative: omit and decode from `IR[26:25]`, since divmul only
+  ever starts in response to a MUL/DIV opcode — saves 2 µ-word bits at
   the cost of a small decode in the unit)
 - `divmul_hi_drive` (1 bit) — selects accum_hi (vs accum_lo) onto R-bus
   during writeback
-- `rdh_read_en` (1 bit) — latches `Rdh` into accum_hi on the start
-  cycle (DIVL only)
 
 The old 2-bit micro-word spare was consumed by the audit that added
 `priv`/`ei_set`/`di_set` (51-bit micro-word). Divmul therefore extends
-the micro-word — by 6 bits if `divmul_op` lives in the µ-word, or 3
-bits if it's IR-decoded. The 7-byte/56-bit discrete-ROM slot has room
-for the IR-decoded variant without adding a chip; the explicit-op
-variant needs an eighth byte. Final bit layout pinned during RTL
-implementation (see `microcode.md`).
+the micro-word — by 4 bits if `divmul_op` lives in the µ-word, or 2
+bits if it's IR-decoded. Either variant fits in the 7-byte/56-bit
+discrete-ROM slot without adding a chip. Final bit layout pinned
+during RTL implementation (see `microcode.md`).
 
-Total microcode footprint: 4 ROM entries × 6 opcodes = 24 entries,
-replacing the 6 illegal-instruction-trap entries currently there.
+Total microcode footprint: 4 ROM entries × 4 opcodes = 16 entries,
+replacing the 4 illegal-instruction-trap entries currently there.
+Dispatch slots are `0x40` (MUL), `0x42` (MULU), `0x44` (DIV),
+`0x46` (DIVU) — in the µROM's SYS-half region.
 
 ## Arithmetic Faults — `VEC_ARITH`
 
@@ -211,10 +241,20 @@ input alongside the existing memory-fault path:
 | `divmul_busy=0`, `o_fault=0`       | micro-PC++ (normal)                         |
 | `divmul_busy=0`, `o_fault=1`       | Trigger exception, `vector_num = VEC_ARITH` |
 
-EPC points at the trapping `DIV`/`DIVL` instruction (since `pc_src=001`
-hasn't executed). The kernel handler can advance EPC to skip the
-instruction after delivering `SIGFPE`, or leave it pointing at the
-trap for a user-mode `SIGFPE` handler to retry.
+EPC points at the trapping `DIV` instruction (since `pc_src=001`
+hasn't executed). The kernel handler delivers `SIGFPE` and leaves
+EPC alone, so a userland `SIGFPE` handler that wants to retry can.
+
+**Defensive only.** Both fault paths (DIV0 and narrowing-DIV quotient
+overflow) indicate caller bugs — compiler emitting wrong code, or
+hand-written multi-precision routines violating their own invariant.
+Correct code, including compiler-rt's `__udivdi3` slow path with
+Knuth Algorithm D, *verifies preconditions in software* before issuing
+each DIV; the hardware fault is a safety net, not a normal control
+signal. Consequently the implementation has no requirement to deliver
+the fault quickly (e.g., as branch input to subsequent code) — it only
+needs to stop the iteration immediately and signal before the next
+instruction commits.
 
 The fault priority ordering on STALL resolution becomes:
 bus_fault (0) > align (8) > tlb_prot (3) > tlb_miss (2) > arith (10).
@@ -226,8 +266,7 @@ a more fundamental problem (no device responded, misalignment).
 | Op family    | Z              | N        | C | V |
 |--------------|----------------|----------|---|---|
 | MUL, MULU    | Rd == 0        | Rd[31]   | 0 | 0 |
-| DIV, DIVU, DIVL, DIVLU | Rd == 0 (quotient) | Rd[31] | 0 | 0 |
-| MOD, MODU    | (same as DIV, since MOD = DIV with quotient → R0) | | | |
+| DIV, DIVU    | Rd == 0 (quotient) | Rd[31] | 0 | 0 |
 
 Z and N reflect the **low half / quotient** (Rd value), not the full
 64-bit result. This matches user expectation for the common 32-bit
@@ -242,31 +281,124 @@ unaffected.
 ## Software Composition — `__udivdi3` worked example
 
 The C operation `uint64_t / uint64_t` always lowers to a libcall to
-compiler-rt's `__udivdi3`. With `DIV` + `DIVL` available, the fast
-path of that routine (divisor fits in 32 bits, ~95% of real calls)
-collapses to just two hardware divides.
+compiler-rt's `__udivdi3`. With the unified `DIV` (which covers both
+32/32 and 64/32 via its optional `Rdh` operand), the fast path is
+**branchy** — most calls dispatch into a single 32/32 divide or a
+single 64/32 narrowing divide; the dual-divide path is reached only
+when the quotient genuinely doesn't fit in 32 bits.
 
-<!-- TODO(human): worked example of __udivdi3 lowering.
+### Algorithm (fast path, `d.hi == 0`)
 
-Fill in this section with:
+```
+uint64_t __udivdi3(uint64_t n, uint64_t d) {
+    uint32_t n_lo = n;            uint32_t n_hi = n >> 32;
+    uint32_t d_lo = d;            uint32_t d_hi = d >> 32;
 
-1. A C-style pseudocode sketch of the __udivdi3 fast path: detect
-   "divisor.hi == 0", then use DIV + DIVL to compute the full 64-bit
-   quotient and 32-bit remainder in two hardware ops.
+    if (d_hi != 0)
+        return __udivdi3_slow(n, d);  // Knuth Algorithm D, out of scope
 
-2. The equivalent Penumbra assembly. Register conventions: arguments
-   in R1–R4 per the ABI (R1 = dividend low, R2 = dividend high,
-   R3 = divisor low, R4 = divisor high). Result returned in R1:R2.
-   Use R5, R6, etc. as scratch.
+    if (d_lo == 0) trap_div0();       // hardware would trap anyway
 
-3. One or two sentences explaining *why* DIV is called first on the
-   dividend high half — i.e., what invariant the second DIVL needs
-   from the first DIV's remainder.
+    if (n_hi == 0)
+        // Plain 32/32 — one DIV with Rdh=R0 (or omitted entirely)
+        return n_lo / d_lo;
 
-Keep it concise (~15-25 lines of asm + ~5 lines of prose). The
-slow path (divisor >= 2^32) is out of scope here — note that it
-exists and uses Knuth Algorithm D with DIVL as the digit estimator,
-but don't expand it.
+    if (n_hi < d_lo) {
+        // Quotient fits in 32 bits → one narrowing DIV (Rdh=n_hi as input)
+        uint32_t q_lo, r;
+        DIV(q_lo, r, /*Rd=*/n_lo, /*Rs=*/d_lo, /*Rdh in=*/n_hi);
+        return q_lo;
+    }
+
+    // n_hi >= d_lo: quotient genuinely exceeds 32 bits → two divides.
+    // Step 1: compute high half of quotient with a plain DIV.
+    uint32_t q_hi, r1;
+    DIV(q_hi, r1, /*Rd=*/n_hi, /*Rs=*/d_lo);  // plain 32/32
+
+    // Step 2: compute low half with a narrowing DIV; r1 < d_lo is
+    // guaranteed by step 1, so the narrowing form's precondition holds.
+    uint32_t q_lo, r2;
+    DIV(q_lo, r2, /*Rd=*/n_lo, /*Rs=*/d_lo, /*Rdh in=*/r1);
+
+    return ((uint64_t)q_hi << 32) | q_lo;
+}
+```
+
+### Penumbra assembly (fast path)
+
+The Penumbra ABI passes 64-bit values in aligned register pairs (low,
+high), so the dividend lands in `R1:R2` (`R1`=`n_lo`, `R2`=`n_hi`) and
+the divisor in `R3:R4`. The return value pair is also `R1:R2`. Leaf
+function — no prologue, no frame, no `R13` spill.
+
+```
+__udivdi3:
+        CMP   R4, R0              ; d_hi == 0?
+        BNE   .Lslow              ; no → Knuth Algorithm D
+
+        CMP   R2, R0              ; n_hi == 0?
+        BEQ   .Lplain_32          ; yes → plain 32/32 divide
+
+        CMP   R2, R3              ; n_hi vs d_lo (unsigned)
+        BHS   .Ldual              ; n_hi >= d_lo → dual-divide path
+
+        ; n_hi < d_lo: quotient fits in 32 bits, single narrowing DIV.
+        ;   R1 = n_lo, R2 = n_hi (dividend hi), R3 = d_lo
+        DIV   R1, R3, R2          ; R1 = (R2:R1)/R3, R2 = remainder
+        MOV   R2, R0              ; quotient hi = 0 (return convention)
+        RET
+
+.Lplain_32:
+        ; n_hi == 0: simplest case, plain 32/32.
+        ;   R1 = n_lo, R3 = d_lo, R2 already 0
+        DIV   R1, R3              ; R1 = R1/R3, remainder discarded
+        RET                       ; R2 stays 0 from the caller's view
+
+.Ldual:
+        ; n_hi >= d_lo: need both halves of quotient.
+        ;   R1 = n_lo, R2 = n_hi, R3 = d_lo
+        DIV   R2, R3, R5          ; R2 = n_hi/d_lo (q_hi), R5 = n_hi%d_lo (r1)
+        DIV   R1, R3, R5          ; R1 = (R5:R1)/d_lo (q_lo), R5 = remainder
+        RET                       ; returns R1:R2 = q_lo:q_hi
+
+.Lslow:
+        ; Knuth Algorithm D — verifies each digit-estimate's invariant
+        ; in software before issuing the narrowing DIV. Out of scope.
+        ...
+```
+
+The three fast-path exits are each a single divide (~34 cycles) plus
+a handful of compares/branches/moves — call it ~40 cycles total. Only
+the dual-divide path (rarely reached in real code) pays ~70 cycles.
+Pure-software shift-subtract emulation on 64-bit operands costs
+roughly 2000 cycles in the same units; the typical real-world speedup
+is therefore ~50× rather than the 30× a uniform two-divide path would
+deliver.
+
+### Why the dual-divide path runs `DIV` twice in that order
+
+<!-- TODO(human): write 2–3 sentences explaining why the `.Ldual` path
+must execute the plain `DIV` (32/32) on the high half *before* the
+narrowing `DIV` on the low half — i.e., what invariant the first
+`DIV`'s remainder establishes that the second `DIV`'s precondition
+requires.
+
+Hints:
+- DIV's remainder semantics: after `DIV R2, R3, R5`, `R5 = R2_original
+  % R3`. By the definition of integer division, what bound does R5
+  have relative to R3?
+- The narrowing-DIV precondition (instruction-set.md § Narrowing-DIV):
+  the dividend high half (input `Rdh`) must be strictly less than the
+  divisor for the 32-bit quotient to fit.
+- The two constraints meet exactly — the first DIV's remainder is
+  *constructed* to be a legal high-half input for the second DIV.
+  This is the same invariant schoolbook long division relies on for
+  "carry down": each digit's partial remainder is bounded below the
+  divisor, so the next digit's quotient always fits.
+
+Keep it 2–3 sentences. The point is to make the dependency between
+the two hardware instructions explicit so a reader knows the order
+is forced, not arbitrary.
 -->
 
 ## Discrete Chip-Count Estimate
@@ -296,8 +428,9 @@ worth it for the first build.
 ## Implementation Status
 
 - **ISA spec:** finalized (this document + `instruction-encoding.md`).
-- **Microcode:** not yet written. Six entries currently dispatch to
-  the illegal-instruction handler.
+- **Microcode:** not yet written. The four divmul dispatch slots
+  (0x40 MUL, 0x42 MULU, 0x44 DIV, 0x46 DIVU) currently route to the
+  illegal-instruction handler.
 - **RTL:** not yet written. The sequencer has an unused `alu_busy`
   input (tied off — the ALU is single-cycle); divmul implementation
   will add the peer unit and rename it to `divmul_busy`, plus add
@@ -309,9 +442,10 @@ worth it for the first build.
 ## See Also
 
 - [`doc/system/instruction-set.md`](../system/instruction-set.md) — programmer-facing
-  MUL/DIV/DIVL reference, assembler syntax, register-pair convention
+  MUL/DIV reference, assembler syntax, register-pair convention, narrowing-DIV
+  precondition
 - [`doc/system/instruction-encoding.md`](../system/instruction-encoding.md) — Format R
-  sub-encoding with `Rdh`
+  opcode partition, sub-encoding with `Rdh`
 - [`doc/internals/datapath.md`](./datapath.md) — ALU vs peer-unit
   partitioning, micro-sequencer STALL behaviour
 - [`doc/system/architecture.md`](../system/architecture.md) — `VEC_ARITH`

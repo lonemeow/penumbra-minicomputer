@@ -75,9 +75,10 @@ to bits within SR itself.
 | 0     | N     | Negative (= `result[31]`)                            |
 
 Flags are updated by ALU arithmetic/logic, `ADD/SUB/CMP/AND/TEST` with
-immediates, `MUL/MULU`, and `DIV/DIVU/MOD/MODU/DIVL/DIVLU`. `MOV`, load
-immediates (LLI/LLIS/LUI), loads, stores, branches, and system
-instructions do **not** affect flags.
+immediates, and `MUL/MULU/DIV/DIVU` (which compute NZ from the low
+half / quotient — C and V are forced to zero). `MOV`, load immediates
+(LLI/LLIS/LUI), loads, stores, branches, and system instructions do
+**not** affect flags.
 
 ### Stack Pointer Banking (B1 model)
 
@@ -347,7 +348,7 @@ needed for the vector page. `vector_addr = vector_number × 4`.
 | 7      | 0x1C | `VEC_ILLEGAL`   | Illegal instruction                 |
 | 8      | 0x20 | `VEC_ALIGN`     | Alignment fault (fetch + data)      |
 | 9      | 0x24 | `VEC_EXT_IRQ`   | External device IRQ (wired-OR)      |
-| 10     | 0x28 | `VEC_ARITH`     | Arithmetic fault (DIV0, DIVL overflow) |
+| 10     | 0x28 | `VEC_ARITH`     | Arithmetic fault (DIV0, narrowing-DIV overflow — defensive) |
 | 11–15  | —    | —               | Reserved (future NMI, etc.)         |
 
 **Reset does not use the vector table.** The CPU boots at `RESET_PC`

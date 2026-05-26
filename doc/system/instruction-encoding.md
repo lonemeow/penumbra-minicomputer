@@ -44,50 +44,88 @@ register write is suppressed.
 
 | op    | Mnemonic | op    | Mnemonic | op    | Mnemonic   |
 |:-----:|----------|:-----:|----------|:-----:|------------|
-| 00000 | ADD      | 01000 | MOV      | 10111 | WRSYS      |
-| 00001 | SUB      | 01001 | NOT      | 11000 | RDSYS      |
-| 00010 | AND      | 01010 | ADC      | 11001 | SYSCALL    |
-| 00011 | OR       | 01011 | SBC      | 11010 | BREAK      |
-| 00100 | XOR      | 01100 | MUL      | 11011 | ERET       |
-| 00101 | SHL      | 01101 | MULU     | 11100 | EI         |
-| 00110 | SHR      | 01110 | DIV      | 11101 | DI         |
-| 00111 | SAR      | 01111 | DIVU     | 11110 | WRSPR      |
-|       |          | 10000 | MOD      | 11111 | RDSPR      |
-|       |          | 10001 | MODU     |       |            |
-|       |          | 10010 | DIVL     |       |            |
-|       |          | 10011 | DIVLU    |       |            |
+| 00000 | ADD      | 01000 | MOV      | 10000 | MUL        |
+| 00001 | SUB      | 01001 | NOT      | 10001 | MULU       |
+| 00010 | AND      | 01010 | ADC      | 10010 | DIV        |
+| 00011 | OR       | 01011 | SBC      | 10011 | DIVU       |
+| 00100 | XOR      |       |          | 10111 | WRSYS      |
+| 00101 | SHL      |       |          | 11000 | RDSYS      |
+| 00110 | SHR      |       |          | 11001 | SYSCALL    |
+| 00111 | SAR      |       |          | 11010 | BREAK      |
+|       |          |       |          | 11011 | ERET       |
+|       |          |       |          | 11100 | EI         |
+|       |          |       |          | 11101 | DI         |
+|       |          |       |          | 11110 | WRSPR      |
+|       |          |       |          | 11111 | RDSPR      |
 
-Opcodes 10100–10110 are reserved for future ALU expansion.
+The op-bit-4 partition is intentional: **op[4]=0** is the **single-cycle
+ALU region** (ADD/SUB/AND/OR/XOR/SHL/SHR/SAR/MOV/NOT/ADC/SBC plus 4
+reserved slots `01100`–`01111` for future single-cycle additions like
+CLZ, CTZ, BSWAP, POPCNT); **op[4]=1** is the **multi-cycle / system
+region**, with peer-unit ops (MUL/MULU/DIV/DIVU) in the low quarter,
+3 reserved slots (`10100`–`10110`) for future peer-unit ops (FPU
+master opcode, crypto accelerator, etc.), and system ops at the top
+(`10111`–`11111`). The micro-sequencer's dispatch formula
+(`{0, op[4], 0, op[3:0], 0}`) inherits this partition directly — see
+[datapath.md](../internals/datapath.md).
 
-### Format R sub-encoding for MUL/DIV/DIVL
+### Format R sub-encoding for MUL/DIV
 
-`MUL`, `MULU`, `DIV`, `DIVU`, `MOD`, `MODU`, `DIVL`, and `DIVLU`
-repurpose part of the spare field to carry a **third register operand**
-`Rdh` (the high-half result register). The F bit is unused for these
-opcodes and must be 0.
+`MUL`, `MULU`, `DIV`, and `DIVU` repurpose part of the spare field to
+carry a **third register operand** `Rdh` (the high-half result
+register, and for `DIV` the dividend high half input). The F bit is
+unused for these opcodes and must be 0.
 
 ```
 31 30  29     25 24   21 20   17 16  15  12 11           0
 [ 00 ][ op (5) ][ Rd (4) ][ Rs (4) ][0][ Rdh (4) ][ spare (12) ]
 ```
 
-| Operation     | Behaviour                                                         |
-|---------------|-------------------------------------------------------------------|
-| MUL, MULU     | `Rdh:Rd = Rd × Rs`  (low half → Rd, high half → Rdh)              |
-| DIV, DIVU     | `Rd = Rd / Rs; Rdh = Rd % Rs` (quotient → Rd, remainder → Rdh)    |
-| MOD, MODU     | same as DIV; assembler emits with `Rd = R0` to discard the quotient |
-| DIVL, DIVLU   | `Rd, Rdh = (Rdh:Rd) / Rs, (Rdh:Rd) % Rs` (narrowing 64/32)        |
+| Operation   | Behaviour                                                              |
+|-------------|------------------------------------------------------------------------|
+| MUL, MULU   | `Rdh:Rd = Rd × Rs`  (low half → Rd, high half → Rdh)                   |
+| DIV, DIVU   | `Rd, Rdh = (Rdh:Rd) / Rs, (Rdh:Rd) % Rs` (quotient → Rd, remainder → Rdh) |
 
-Writing either result to `R0` discards it. The assembler defaults the
-third operand to `R0` when omitted: `MUL R1, R2` encodes as `MUL R1,
-R2, R0` (low half only). `DIVL` reads `Rdh` as a source (dividend high
-half) and writes it back as the remainder; the unit captures the input
-in a single cycle before iteration starts.
+`DIV` reads `Rdh` as a source (dividend high half) and writes it back
+as the remainder; the unit captures the input in a single cycle before
+iteration starts. Setting `Rdh = R0` collapses the operation to a
+plain 32/32 divide — R0 reads as zero (so the dividend high half is
+zero) and writes to R0 are silently dropped (so the remainder is
+discarded). The same `R0` trick collapses `MUL` to "low 32 bits only"
+when the high half is not needed.
+
+The assembler defaults the third operand to `R0` when omitted, so
+the common 32-bit forms look exactly like 2-operand arithmetic:
+
+```asm
+MUL  R1, R2              ; encoded as MUL R1, R2, R0 — low 32 bits only
+MUL  R1, R2, R3          ; full 64-bit product: R3:R1 = R1 × R2
+DIV  R1, R2              ; 32/32: R1 = R1/R2, remainder discarded
+DIV  R1, R2, R3          ; quotient → R1, remainder → R3 (R3 also reads as dividend hi)
+DIV  R1, R2, R3          ; narrowing 64/32 form: (R3:R1)/R2 → R1, remainder → R3
+```
+
+Note the syntactic identity of the last two cases: there is no separate
+"narrowing-DIV" mnemonic. Whether DIV is 32/32 or 64/32 depends entirely
+on whether `Rdh` reads as zero (`R0`) or holds an extended-dividend
+high half. The hardware performs the same iteration either way.
 
 `Rdh[15:12]` reuses the same bit positions that hold the SPR number
 (`RDSPR`/`WRSPR`) and device number (`WRSYS`/`RDSYS`) — the existing
 IR field extractor serves all three roles. Bits `[11:0]` of the
 instruction remain spare.
+
+There is no `MOD` opcode. To compute a remainder, use `DIV` with a
+scratch register as `Rd` (which receives the discarded quotient) and
+the desired remainder destination as `Rdh`:
+
+```asm
+MOV  R5, R1              ; if R1's value must survive
+DIV  R5, R2, R1          ; R5 = R1/R2 (discarded), R1 = R1 % R2
+```
+
+If the dividend register can be clobbered, the `MOV` is unnecessary —
+just pass the dividend as `Rd` and the remainder destination as `Rdh`.
 
 ---
 
@@ -225,9 +263,8 @@ handler for software emulation.
 | MOV                               | Yes         | No flag update                      |
 | NOT                               | Yes         | Updates flags                       |
 | CMP, TEST                         | Yes         | SUB/AND with F-bit                  |
-| MUL, MULU                         | Trap        | Spec'd (32×32→64 with Rdh); HW pending. Currently illegal-instr trap → SW emulation |
-| DIV, DIVU, MOD, MODU              | Trap        | Spec'd (32/32 → 32q+32r with Rdh); DIV0 → `VEC_ARITH`; HW pending |
-| DIVL, DIVLU                       | Trap        | Spec'd (narrowing 64/32); overflow + DIV0 → `VEC_ARITH`; HW pending |
+| MUL, MULU                         | Trap        | Spec'd (32×32→64 via optional `Rdh`); HW pending. Currently illegal-instr trap → SW emulation |
+| DIV, DIVU                         | Trap        | Spec'd (32/32 or 64/32 via optional `Rdh`); DIV0 and quotient-overflow → `VEC_ARITH` (defensive); HW pending |
 | LLI, LLIS, LUI                    | Yes         |                                     |
 | ADD/SUB/CMP/AND/TEST #imm         | Yes         | Format L encoding                   |
 | LDW, STW                          | Yes         | Stall-based, latency-agnostic       |

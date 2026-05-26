@@ -99,10 +99,8 @@ LLI  LR, #my_label          ; R13 = address of my_label
 | SUB         | `SUB Rd, #imm16`    | `Rd = Rd - zero_extend(imm16)`     | NZCV  |
 | ADC         | `ADC Rd, Rs`        | `Rd = Rd + Rs + C` (add with carry)| NZCV  |
 | SBC         | `SBC Rd, Rs`        | `Rd = Rd - Rs - ~C` (sub w/ borrow)| NZCV  |
-| MUL / MULU  | `MUL Rd, Rs, Rdh`   | `Rdh:Rd = Rd * Rs` (signed/unsigned 32×32→64) | NZ |
-| DIV / DIVU  | `DIV Rd, Rs, Rdh`   | `Rd = Rd / Rs; Rdh = Rd % Rs` (signed / unsigned) | NZ |
-| MOD / MODU  | `MOD Rd, Rs`        | alias for `DIV R0, Rs, Rd` (remainder-only) | NZ |
-| DIVL / DIVLU| `DIVL Rd, Rs, Rdh`  | `Rd, Rdh = (Rdh:Rd)/Rs, (Rdh:Rd)%Rs` (narrowing 64/32) | NZ |
+| MUL / MULU  | `MUL Rd, Rs [, Rdh]`| `Rdh:Rd = Rd × Rs` (signed/unsigned 32×32→64; `Rdh` defaults to R0 → low half only) | NZ |
+| DIV / DIVU  | `DIV Rd, Rs [, Rdh]`| `Rd, Rdh = (Rdh:Rd)/Rs, (Rdh:Rd)%Rs` (`Rdh` defaults to R0 → plain 32/32) | NZ |
 
 All ALU arithmetic is **2-operand destructive**: the first operand is
 both a source and the destination. Save values you still need before
@@ -113,53 +111,66 @@ Format L (register-immediate) based on the second operand.
 
 #### MUL/DIV register-pair semantics
 
-`MUL`, `DIV`, and `DIVL` take a **third register operand** `Rdh` that
-receives the high half of the result — the upper 32 bits of the product
-for `MUL`, the remainder for `DIV` and `DIVL`. The encoding repurposes
-bits `[15:12]` of the Format R instruction (see
-[instruction-encoding.md](./instruction-encoding.md#format-r--register-operations-prefix-00)).
+`MUL` and `DIV` take an **optional third register operand** `Rdh` that
+addresses the high half of the result, and for `DIV` also feeds the
+high half of the dividend. The encoding repurposes bits `[15:12]` of
+the Format R instruction (see
+[instruction-encoding.md](./instruction-encoding.md#format-r-sub-encoding-for-muldiv)).
 
-The third operand is **optional in assembler syntax** and defaults to
-`R0`, which discards the high half (R0's write port silently drops
-writes). This makes the common cases look exactly like the old
-2-operand form:
+The third operand is optional in assembler syntax and defaults to
+`R0`, which makes the common 32-bit cases look like ordinary 2-operand
+arithmetic — `R0` reads as zero (so the dividend high half is zero for
+DIV, and the multiplicand of the high half is not consulted for MUL),
+and writes to `R0` are silently dropped (so the high half of the
+result is discarded):
 
 ```asm
-MUL  R1, R2              ; encoded as MUL R1, R2, R0 — low 32 bits only
-MUL  R1, R2, R3          ; full 64-bit product: R3:R1 = R1 * R2
-DIV  R1, R2              ; quotient only, remainder discarded
-DIV  R1, R2, R3          ; quotient in R1, remainder in R3
-DIVL R1, R2, R3          ; (R3:R1) / R2 → quotient in R1, remainder in R3
+MUL  R1, R2              ; encoded as MUL R1, R2, R0 — low 32 bits of product only
+MUL  R1, R2, R3          ; full 64-bit product: R3:R1 = R1 × R2
+DIV  R1, R2              ; encoded as DIV R1, R2, R0 — plain 32/32, R1 = R1/R2
+DIV  R1, R2, R3          ; (R3:R1)/R2 → quotient → R1, remainder → R3
+                         ; If R3 is zero on entry, this is identical to DIV R1, R2.
+                         ; If R3 is nonzero, this is a 64/32 narrowing divide.
 ```
 
-`MOD Rd, Rs` is a mnemonic alias for `DIV R0, Rs, Rd` (quotient
-discarded, remainder to `Rd`). The hardware performs the same operation
-either way — the alias exists only to make remainder-only code read
-naturally.
+There is no separate "narrowing DIV" mnemonic and no `MOD` mnemonic.
+A single `DIV` opcode covers both the 32/32 and 64/32 cases via the
+`Rdh` operand, and remainders are obtained as a side effect of any
+`DIV` whose `Rdh` operand is a real (non-R0) register. To compute
+`Rdest = Ra % Rs` when the dividend must survive:
 
-`MUL`/`DIV`/`DIVL` are multi-cycle: they stall the pipeline while the
-divmul unit iterates (~33 cycles per operation). The CPU uses the same
-`alu_start`/`alu_busy` STALL contract as multi-cycle ALU operations —
-see [datapath.md](../internals/datapath.md) and
-[divmul.md](../internals/divmul.md).
+```asm
+MOV  R5, Ra              ; if Ra needs to survive
+DIV  R5, Rs, Rdest       ; R5 = Ra/Rs (discarded), Rdest = Ra % Rs
+```
 
-#### DIVL precondition and arithmetic faults
+If the dividend can be clobbered, the `MOV` is unnecessary.
 
-`DIVL Rd, Rs, Rdh` divides the 64-bit value `Rdh:Rd` by the 32-bit
-divisor `Rs` and produces a **32-bit quotient**. The quotient must fit
-in 32 bits — equivalently, the dividend high half (input `Rdh`) must
-be strictly less than the divisor `Rs`. Library code that emits `DIVL`
-(notably the inner step of `__udivdi3`) always arranges this
-precondition; user code calling `DIVL` directly must test it explicitly.
+`MUL` and `DIV` are multi-cycle: they stall the pipeline while the
+divmul peer unit iterates (~33 cycles per operation). See
+[datapath.md](../internals/datapath.md) and
+[divmul.md](../internals/divmul.md) for the peer-unit / STALL contract.
+
+#### Narrowing-DIV precondition and arithmetic faults
+
+When `DIV Rd, Rs, Rdh` is used in its 64/32 narrowing form (`Rdh != R0`
+on entry), the 32-bit quotient must fit — equivalently, the dividend
+high half (input `Rdh`) must be strictly less than the divisor `Rs`.
+Multi-precision library code (Knuth Algorithm D in `__udivdi3`'s slow
+path) verifies this invariant in software *before* issuing the
+narrowing DIV; the algorithm structure guarantees it. User code that
+constructs narrowing-DIV operands directly must do the same.
 
 Two arithmetic conditions trap to `VEC_ARITH` (vector 10):
-- **Divide by zero** — `DIV`/`DIVU`/`MOD`/`MODU`/`DIVL`/`DIVLU` with
-  `Rs == 0`.
-- **DIVL quotient overflow** — `DIVL`/`DIVLU` with `Rdh >= Rs`.
+- **Divide by zero** — `DIV`/`DIVU` with `Rs == 0`.
+- **Quotient overflow** — `DIV`/`DIVU` with `Rdh >= Rs` (the
+  narrowing form's precondition violated).
 
-In both cases `EPC` points at the trapping instruction. The kernel
-handler typically maps `VEC_ARITH` to `SIGFPE` with `si_code =
-FPE_INTDIV` (divide-by-zero) or `FPE_INTOVF` (DIVL overflow).
+Both are treated as **hard programmer errors**, not as a normal
+control-flow mechanism. The kernel handler maps `VEC_ARITH` to
+`SIGFPE` with `si_code = FPE_INTDIV` (divide-by-zero) or
+`FPE_INTOVF` (quotient overflow); well-written multi-precision code
+never triggers either case. `EPC` points at the trapping instruction.
 
 ### Logic
 
