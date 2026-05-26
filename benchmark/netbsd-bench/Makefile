@@ -6,6 +6,7 @@
 #   build/netbsd-bench/mandelbrot{,-static} - mandelbrot demo
 #   build/netbsd-bench/julia{,-static}      - julia set demo
 #   build/netbsd-bench/plasma{,-static}     - plasma effect demo (links -lm)
+#   build/netbsd-bench/lorenz{,-static}     - Lorenz attractor demo
 #
 # All run on a Penumbra NetBSD rootfs; mkrootfs.sh -i can overlay them
 # into /usr/local/bin/.
@@ -66,14 +67,17 @@ JULIA_OBJS  := $(JULIA_SRCS:%.c=$(OBJDIR)/%.o)
 PLASMA_SRCS := plasma.c
 PLASMA_OBJS := $(PLASMA_SRCS:%.c=$(OBJDIR)/%.o)
 
+LORENZ_SRCS := lorenz.c
+LORENZ_OBJS := $(LORENZ_SRCS:%.c=$(OBJDIR)/%.o)
+
 # ── Targets ───────────────────────────────────────────────────
 
 .PHONY: all dynamic static clean
 
 all: dynamic static
 
-dynamic: $(BUILDDIR)/pbench        $(BUILDDIR)/mandelbrot        $(BUILDDIR)/julia        $(BUILDDIR)/plasma
-static:  $(BUILDDIR)/pbench-static $(BUILDDIR)/mandelbrot-static $(BUILDDIR)/julia-static $(BUILDDIR)/plasma-static
+dynamic: $(BUILDDIR)/pbench        $(BUILDDIR)/mandelbrot        $(BUILDDIR)/julia        $(BUILDDIR)/plasma        $(BUILDDIR)/lorenz
+static:  $(BUILDDIR)/pbench-static $(BUILDDIR)/mandelbrot-static $(BUILDDIR)/julia-static $(BUILDDIR)/plasma-static $(BUILDDIR)/lorenz-static
 
 $(BUILDDIR) $(OBJDIR) $(OBJDIR)/kernel $(OBJDIR)/libc:
 	@mkdir -p $@
@@ -105,6 +109,12 @@ $(BUILDDIR)/plasma: $(PLASMA_OBJS) | $(BUILDDIR)
 
 $(BUILDDIR)/plasma-static: $(PLASMA_OBJS) | $(BUILDDIR)
 	$(CC) $(LDFLAGS_STA) $(PLASMA_OBJS) -lm -o $@
+
+$(BUILDDIR)/lorenz: $(LORENZ_OBJS) | $(BUILDDIR)
+	$(CC) $(LDFLAGS_DYN) $(LORENZ_OBJS) -o $@
+
+$(BUILDDIR)/lorenz-static: $(LORENZ_OBJS) | $(BUILDDIR)
+	$(CC) $(LDFLAGS_STA) $(LORENZ_OBJS) -o $@
 
 clean:
 	rm -rf $(BUILDDIR)

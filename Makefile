@@ -412,6 +412,12 @@ endif
 ifneq ($(wildcard $(NETBSD_BENCH_DIR)/plasma-static),)
 NETBSD_BENCH_OVERLAYS += -i $(NETBSD_BENCH_DIR)/plasma-static:/usr/local/bin/plasma-static
 endif
+ifneq ($(wildcard $(NETBSD_BENCH_DIR)/lorenz),)
+NETBSD_BENCH_OVERLAYS += -i $(NETBSD_BENCH_DIR)/lorenz:/usr/local/bin/lorenz
+endif
+ifneq ($(wildcard $(NETBSD_BENCH_DIR)/lorenz-static),)
+NETBSD_BENCH_OVERLAYS += -i $(NETBSD_BENCH_DIR)/lorenz-static:/usr/local/bin/lorenz-static
+endif
 endif
 
 .PHONY: rootfs
@@ -441,6 +447,7 @@ benchmark-netbsd:
 	@echo "mandelbrot binaries: $(NETBSD_BENCH_DIR)/mandelbrot{,-static}"
 	@echo "julia binaries:      $(NETBSD_BENCH_DIR)/julia{,-static}"
 	@echo "plasma binaries:     $(NETBSD_BENCH_DIR)/plasma{,-static}"
+	@echo "lorenz binaries:     $(NETBSD_BENCH_DIR)/lorenz{,-static}"
 
 # ── Benchmark SD image and runners ───────────────────────────
 # Builds benchmark ELFs and creates an SD image containing them.
