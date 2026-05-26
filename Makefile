@@ -400,6 +400,12 @@ endif
 ifneq ($(wildcard $(NETBSD_BENCH_DIR)/mandelbrot-static),)
 NETBSD_BENCH_OVERLAYS += -i $(NETBSD_BENCH_DIR)/mandelbrot-static:/usr/local/bin/mandelbrot-static
 endif
+ifneq ($(wildcard $(NETBSD_BENCH_DIR)/julia),)
+NETBSD_BENCH_OVERLAYS += -i $(NETBSD_BENCH_DIR)/julia:/usr/local/bin/julia
+endif
+ifneq ($(wildcard $(NETBSD_BENCH_DIR)/julia-static),)
+NETBSD_BENCH_OVERLAYS += -i $(NETBSD_BENCH_DIR)/julia-static:/usr/local/bin/julia-static
+endif
 endif
 
 .PHONY: rootfs
@@ -427,6 +433,7 @@ benchmark-netbsd:
 		DESTDIR=$(abspath $(DESTDIR))
 	@echo "pbench binaries:     $(NETBSD_BENCH_DIR)/pbench{,-static}"
 	@echo "mandelbrot binaries: $(NETBSD_BENCH_DIR)/mandelbrot{,-static}"
+	@echo "julia binaries:      $(NETBSD_BENCH_DIR)/julia{,-static}"
 
 # ── Benchmark SD image and runners ───────────────────────────
 # Builds benchmark ELFs and creates an SD image containing them.

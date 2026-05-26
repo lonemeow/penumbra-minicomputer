@@ -3,8 +3,8 @@
 # Builds:
 #   build/netbsd-bench/pbench             - dynamic pbench (libc.so)
 #   build/netbsd-bench/pbench-static      - static  pbench (libc.a)
-#   build/netbsd-bench/mandelbrot         - dynamic mandelbrot demo
-#   build/netbsd-bench/mandelbrot-static  - static  mandelbrot demo
+#   build/netbsd-bench/mandelbrot{,-static} - mandelbrot demo
+#   build/netbsd-bench/julia{,-static}      - julia set demo
 #
 # All run on a Penumbra NetBSD rootfs; mkrootfs.sh -i can overlay them
 # into /usr/local/bin/.
@@ -53,11 +53,14 @@ PBENCH_SRCS := pbench.c bench.c \
 
 PBENCH_OBJS := $(PBENCH_SRCS:%.c=$(OBJDIR)/%.o)
 
-# mandelbrot is a standalone single-file program (not part of pbench's
-# registry) — it prints an ASCII Mandelbrot set to stdout, both as an
-# ALU benchmark and as a visual demo.
+# mandelbrot and julia are standalone single-file demo programs (not
+# part of pbench's registry) — they print fixed-point fractals to
+# stdout, doubling as ALU benchmarks and as visual demos.
 MANDEL_SRCS := mandelbrot.c
 MANDEL_OBJS := $(MANDEL_SRCS:%.c=$(OBJDIR)/%.o)
+
+JULIA_SRCS  := julia.c
+JULIA_OBJS  := $(JULIA_SRCS:%.c=$(OBJDIR)/%.o)
 
 # ── Targets ───────────────────────────────────────────────────
 
@@ -65,8 +68,8 @@ MANDEL_OBJS := $(MANDEL_SRCS:%.c=$(OBJDIR)/%.o)
 
 all: dynamic static
 
-dynamic: $(BUILDDIR)/pbench       $(BUILDDIR)/mandelbrot
-static:  $(BUILDDIR)/pbench-static $(BUILDDIR)/mandelbrot-static
+dynamic: $(BUILDDIR)/pbench        $(BUILDDIR)/mandelbrot        $(BUILDDIR)/julia
+static:  $(BUILDDIR)/pbench-static $(BUILDDIR)/mandelbrot-static $(BUILDDIR)/julia-static
 
 $(BUILDDIR) $(OBJDIR) $(OBJDIR)/kernel $(OBJDIR)/libc:
 	@mkdir -p $@
@@ -85,6 +88,12 @@ $(BUILDDIR)/mandelbrot: $(MANDEL_OBJS) | $(BUILDDIR)
 
 $(BUILDDIR)/mandelbrot-static: $(MANDEL_OBJS) | $(BUILDDIR)
 	$(CC) $(LDFLAGS_STA) $(MANDEL_OBJS) -o $@
+
+$(BUILDDIR)/julia: $(JULIA_OBJS) | $(BUILDDIR)
+	$(CC) $(LDFLAGS_DYN) $(JULIA_OBJS) -o $@
+
+$(BUILDDIR)/julia-static: $(JULIA_OBJS) | $(BUILDDIR)
+	$(CC) $(LDFLAGS_STA) $(JULIA_OBJS) -o $@
 
 clean:
 	rm -rf $(BUILDDIR)
