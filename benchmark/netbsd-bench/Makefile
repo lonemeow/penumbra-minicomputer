@@ -5,6 +5,7 @@
 #   build/netbsd-bench/pbench-static      - static  pbench (libc.a)
 #   build/netbsd-bench/mandelbrot{,-static} - mandelbrot demo
 #   build/netbsd-bench/julia{,-static}      - julia set demo
+#   build/netbsd-bench/plasma{,-static}     - plasma effect demo (links -lm)
 #
 # All run on a Penumbra NetBSD rootfs; mkrootfs.sh -i can overlay them
 # into /usr/local/bin/.
@@ -62,14 +63,17 @@ MANDEL_OBJS := $(MANDEL_SRCS:%.c=$(OBJDIR)/%.o)
 JULIA_SRCS  := julia.c
 JULIA_OBJS  := $(JULIA_SRCS:%.c=$(OBJDIR)/%.o)
 
+PLASMA_SRCS := plasma.c
+PLASMA_OBJS := $(PLASMA_SRCS:%.c=$(OBJDIR)/%.o)
+
 # ── Targets ───────────────────────────────────────────────────
 
 .PHONY: all dynamic static clean
 
 all: dynamic static
 
-dynamic: $(BUILDDIR)/pbench        $(BUILDDIR)/mandelbrot        $(BUILDDIR)/julia
-static:  $(BUILDDIR)/pbench-static $(BUILDDIR)/mandelbrot-static $(BUILDDIR)/julia-static
+dynamic: $(BUILDDIR)/pbench        $(BUILDDIR)/mandelbrot        $(BUILDDIR)/julia        $(BUILDDIR)/plasma
+static:  $(BUILDDIR)/pbench-static $(BUILDDIR)/mandelbrot-static $(BUILDDIR)/julia-static $(BUILDDIR)/plasma-static
 
 $(BUILDDIR) $(OBJDIR) $(OBJDIR)/kernel $(OBJDIR)/libc:
 	@mkdir -p $@
@@ -94,6 +98,13 @@ $(BUILDDIR)/julia: $(JULIA_OBJS) | $(BUILDDIR)
 
 $(BUILDDIR)/julia-static: $(JULIA_OBJS) | $(BUILDDIR)
 	$(CC) $(LDFLAGS_STA) $(JULIA_OBJS) -o $@
+
+# plasma needs libm (sin() at startup to build the lookup table).
+$(BUILDDIR)/plasma: $(PLASMA_OBJS) | $(BUILDDIR)
+	$(CC) $(LDFLAGS_DYN) $(PLASMA_OBJS) -lm -o $@
+
+$(BUILDDIR)/plasma-static: $(PLASMA_OBJS) | $(BUILDDIR)
+	$(CC) $(LDFLAGS_STA) $(PLASMA_OBJS) -lm -o $@
 
 clean:
 	rm -rf $(BUILDDIR)
