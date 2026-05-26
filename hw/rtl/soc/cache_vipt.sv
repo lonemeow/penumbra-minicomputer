@@ -166,11 +166,15 @@ module cache_vipt
         6'(LINE_WORDS)          // [5:0]   line_words (1..63)
     };
 
+    // Perfctr read-side fans in below — declared up front so the
+    // sysreg read mux can fall through to it.
+    logic [31:0] perfctr_rdata;
+
     always_comb begin
         case (i_sys_reg)
             SYSREG_CACHE_INFO:  o_sys_rdata = INFO_VALUE;
             SYSREG_CACHE_CTRL:  o_sys_rdata = {31'b0, cache_en};
-            default:            o_sys_rdata = 32'b0;
+            default:            o_sys_rdata = perfctr_rdata;
         endcase
     end
 
@@ -529,6 +533,73 @@ module cache_vipt
     assert property (@(posedge i_clk) disable iff (i_rst)
         (state == S_IDLE && cache_active && i_re && hit) |-> !o_busy)
         else $error("cache_vipt: read hit but o_busy=1 — register stage on hit path?");
+
+    // ══════════════════════════════════════════════════════════
+    // Performance counters
+    // ══════════════════════════════════════════════════════════
+    // Each CPU access must fire exactly one pulse on exactly one
+    // counter.  The CPU's STALL holds i_re/i_we asserted across all
+    // cycles of a multi-cycle access (miss fill, write through
+    // memory), so a naive live-signal predicate would fire every
+    // stall cycle.  Edge-detect on live i_re/i_we instead: fire
+    // only on the cycle the CPU first presents the access.
+    //
+    // This also subsumes the post-fill re-serve suppression that
+    // state_was_fill provides for the FSM.  By the cycle the
+    // combinational hit path serves the just-installed line, prev_re
+    // has been 1 throughout STALL, so new_re=0 and the predicate
+    // is already suppressed — no separate guard needed.
+    //
+    // Real CPU operation has at least one cycle of i_re=0 between
+    // consecutive loads (the microcode's FETCH state for the next
+    // instruction doesn't assert i_re for the D-cache), so the edge
+    // detector sees a clean rising edge per access.  The testbench
+    // helpers must do the same — drop i_re between accesses for
+    // edge-detection to see them.
+    //
+    // For an I-cache instance (NUM_WAYS=1, never written) i_we is
+    // permanently 0 so the WRITE_* counters stay at 0 forever.
+    logic prev_re;
+    logic prev_we;
+    always_ff @(posedge i_clk) begin
+        if (i_rst) begin
+            prev_re <= 1'b0;
+            prev_we <= 1'b0;
+        end else begin
+            prev_re <= i_re;
+            prev_we <= i_we;
+        end
+    end
+
+    logic new_re;
+    logic new_we;
+    assign new_re = i_re && !prev_re;
+    assign new_we = i_we && !prev_we;
+
+    logic event_read_hit;
+    logic event_read_miss;
+    logic event_write_hit;
+    logic event_write_miss;
+
+    assign event_read_hit   = new_re && (state == S_IDLE) && cache_active
+                              && hit && !i_fault;
+    assign event_read_miss  = new_re && (state == S_IDLE) && cache_active
+                              && !hit && !i_fault;
+    assign event_write_hit  = new_we && (state == S_IDLE) && cache_active
+                              && hit && !i_fault;
+    assign event_write_miss = new_we && (state == S_IDLE) && cache_active
+                              && !hit && !i_fault;
+
+    cache_perfctr u_perfctr (
+        .i_clk              (i_clk),
+        .i_rst              (i_rst),
+        .i_event_read_hit   (event_read_hit),
+        .i_event_read_miss  (event_read_miss),
+        .i_event_write_hit  (event_write_hit),
+        .i_event_write_miss (event_write_miss),
+        .i_sys_reg          (i_sys_reg),
+        .o_sys_rdata        (perfctr_rdata)
+    );
 
 endmodule
 

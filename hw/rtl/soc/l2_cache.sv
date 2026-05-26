@@ -571,6 +571,10 @@ module l2_cache
         6'(LINE_WORDS)              // [5:0]   line_words
     };
 
+    // Perfctr read-side fans in below — declared up front so the
+    // sysreg read mux can fall through to it.
+    logic [31:0] perfctr_rdata;
+
     always_comb begin
         o_sys_rdata = 32'b0;
         case (i_sys_reg)
@@ -582,7 +586,7 @@ module l2_cache
             // consult, so report busy in both cases.
             SYSREG_CACHE_STATUS: o_sys_rdata = {31'b0,
                                                 ((state == S_INVAL_ALL) || !ready)};
-            default:             o_sys_rdata = 32'b0;
+            default:             o_sys_rdata = perfctr_rdata;
         endcase
     end
 
@@ -754,6 +758,78 @@ module l2_cache
         (state == S_FILL) |->
             (fill_word_idx <= (WORD_BITS+1)'(LINE_WORDS - 1)))
         else $error("l2_cache: fill_word_idx overran LINE_WORDS");
+
+    // ══════════════════════════════════════════════════════════
+    // Performance counters
+    // ══════════════════════════════════════════════════════════
+    // Pulse derivation for the 2-cycle L2 pipeline.  The signal
+    // landscape worth knowing:
+    //
+    //   * Stage 0 (cycle N) latches a new request into s1_*
+    //     registers (line 627-634).  Latching gate already includes
+    //     l2_active(i_cacheable) — so s1_valid==1 implies the
+    //     access was cacheable and the cache was enabled.
+    //   * Stage 1 (cycle N+1) is where the FSM classifies and
+    //     acts (line 637-668).  `hit` is combinational on stage-1's
+    //     tag/data BRAM outputs.  `s1_re`, `s1_we`, `s1_addr` carry
+    //     the latched request.  s1_valid is cleared on the same
+    //     edge the FSM processes it.
+    //   * After S_FILL completes, the CPU's still-presented i_re=1
+    //     gets re-latched in stage 0 the next time state==S_IDLE,
+    //     and stage 1 then sees `hit=1` on the just-filled line.
+    //     That is a re-classification of an access already counted
+    //     as a miss — for one-event-per-CPU-access semantics, this
+    //     re-serve must NOT count a second time.
+    //
+    // The four event-pulse expressions go here.  See the L2 design
+    // doc and the Learn-by-Doing prompt for context and the
+    // re-serve question.
+    logic event_read_hit;
+    logic event_read_miss;
+    logic event_write_hit;
+    logic event_write_miss;
+
+    // After S_FILL completes, the CPU's still-asserted request (it's
+    // been in STALL the whole time) gets re-latched by stage 0 the
+    // next cycle, and stage 1 then naturally classifies it as a hit
+    // on the just-installed line.  That re-serve was already counted
+    // as a read_miss when the miss was first detected — so we
+    // suppress the spurious second event with a one-shot flag.
+    //
+    // Set at the S_FILL → S_IDLE transition; cleared on the next
+    // stage-1 cycle (which is by construction the re-serve).  Also
+    // cleared on S_INVAL_ALL entry so a kernel-issued INVAL_ALL
+    // between fill completion and re-serve doesn't leave the flag
+    // armed against a later unrelated hit.
+    logic fill_reserve_pending;
+    always_ff @(posedge i_clk) begin
+        if (i_rst) begin
+            fill_reserve_pending <= 1'b0;
+        end else if (state == S_FILL && fill_in_flight && !i_mem_busy
+                     && fill_word_idx == (WORD_BITS+1)'(LINE_WORDS - 1)) begin
+            fill_reserve_pending <= 1'b1;
+        end else if (state == S_INVAL_ALL) begin
+            fill_reserve_pending <= 1'b0;
+        end else if (s1_valid && state == S_IDLE) begin
+            fill_reserve_pending <= 1'b0;
+        end
+    end
+
+    assign event_read_hit   = s1_valid && s1_re && hit && !fill_reserve_pending;
+    assign event_read_miss  = s1_valid && s1_re && !hit;
+    assign event_write_hit  = s1_valid && s1_we && hit;
+    assign event_write_miss = s1_valid && s1_we && !hit;
+
+    cache_perfctr u_perfctr (
+        .i_clk              (i_clk),
+        .i_rst              (i_rst),
+        .i_event_read_hit   (event_read_hit),
+        .i_event_read_miss  (event_read_miss),
+        .i_event_write_hit  (event_write_hit),
+        .i_event_write_miss (event_write_miss),
+        .i_sys_reg          (i_sys_reg),
+        .o_sys_rdata        (perfctr_rdata)
+    );
 
 endmodule
 

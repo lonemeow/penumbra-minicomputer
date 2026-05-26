@@ -405,6 +405,136 @@ static void test_uncached_skips_cache(Vl2_cache* d) {
     d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
 }
 
+static void test_perfctrs(Vl2_cache* d) {
+    printf("── Performance counters (regs 10-13) ──\n");
+    reset(d);
+    wrsys(d, 1, 1);                // CTRL.enable = 1
+    MemMock mem;
+
+    // Counters start at 0 after reset.
+    check("perf.initial_read_hits",    rdsys(d, 10), 0u);
+    check("perf.initial_read_misses",  rdsys(d, 11), 0u);
+    check("perf.initial_write_hits",   rdsys(d, 12), 0u);
+    check("perf.initial_write_misses", rdsys(d, 13), 0u);
+
+    // First access to line 0x4000: miss → fill → re-serve.  Counts
+    // as exactly one read_miss; the post-fill re-serve must NOT
+    // also fire read_hit (that's the fill_reserve_pending suppression).
+    d->i_addr      = 0x4000;
+    d->i_cacheable = 1;
+    d->i_re        = 1;
+    d->eval();
+    int safety = 0;
+    while (d->o_busy && safety++ < 100)
+        tick_with_mem(d, mem, 2, rdata_addr_complement);
+    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+    check("perf.miss_counted_once",      rdsys(d, 11), 1u);
+    check("perf.no_phantom_hit_on_reserve", rdsys(d, 10), 0u);
+
+    // Second access to same line, different word — must count as hit.
+    // This is the case that broke under the content-match approach:
+    // s1_addr matches the most recent fill_tag/fill_set, so naive
+    // content matching would suppress this legitimate hit.
+    d->i_addr = 0x4004;
+    d->i_re   = 1;
+    d->eval();
+    safety = 0;
+    while (d->o_busy && safety++ < 20)
+        tick_with_mem(d, mem, 2, rdata_addr_complement);
+    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+    check("perf.hit_after_fill_counted",   rdsys(d, 10), 1u);
+    check("perf.miss_still_one",           rdsys(d, 11), 1u);
+
+    // Third access to the same line — another hit.
+    d->i_addr = 0x4008;
+    d->i_re   = 1;
+    d->eval();
+    safety = 0;
+    while (d->o_busy && safety++ < 20)
+        tick_with_mem(d, mem, 2, rdata_addr_complement);
+    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+    check("perf.second_hit_counted",       rdsys(d, 10), 2u);
+
+    // Cached write that hits → write_hit counted; the L2 policy
+    // drops the line, but for counter purposes "hit" is determined
+    // by the tag check at the moment of access (the line WAS present).
+    d->i_addr      = 0x400C;
+    d->i_wdata     = 0x12345678u;
+    d->i_byte_en   = 0xF;
+    d->i_cacheable = 1;
+    d->i_we        = 1;
+    d->eval();
+    uint32_t served_before = mem.served_count;
+    safety = 0;
+    while (mem.served_count == served_before && safety++ < 20)
+        tick_with_mem(d, mem, 2, rdata_zero);
+    d->i_we = 0; tick_with_mem(d, mem, 0, rdata_zero);
+    check("perf.write_hit_counted",        rdsys(d, 12), 1u);
+    check("perf.write_miss_still_zero",    rdsys(d, 13), 0u);
+
+    // Cached write to a line that's not cached → write_miss counted.
+    d->i_addr      = 0x9000;
+    d->i_wdata     = 0xAABBCCDDu;
+    d->i_byte_en   = 0xF;
+    d->i_cacheable = 1;
+    d->i_we        = 1;
+    d->eval();
+    served_before = mem.served_count;
+    safety = 0;
+    while (mem.served_count == served_before && safety++ < 20)
+        tick_with_mem(d, mem, 2, rdata_zero);
+    d->i_we = 0; tick_with_mem(d, mem, 0, rdata_zero);
+    check("perf.write_miss_counted",       rdsys(d, 13), 1u);
+
+    // Uncacheable read pass-through → no counter movement.
+    uint32_t rh_before = rdsys(d, 10);
+    uint32_t rm_before = rdsys(d, 11);
+    d->i_addr      = 0xFF001000u;
+    d->i_cacheable = 0;
+    d->i_re        = 1;
+    d->eval();
+    served_before = mem.served_count;
+    safety = 0;
+    while (mem.served_count == served_before && safety++ < 20)
+        tick_with_mem(d, mem, 2, rdata_addr_complement);
+    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+    check("perf.uncached_read_no_event_hits",   rdsys(d, 10), rh_before);
+    check("perf.uncached_read_no_event_misses", rdsys(d, 11), rm_before);
+
+    // Uncacheable write pass-through → no counter movement.
+    uint32_t wh_before = rdsys(d, 12);
+    uint32_t wm_before = rdsys(d, 13);
+    d->i_addr      = 0xFF002000u;
+    d->i_wdata     = 0xDEADBEEFu;
+    d->i_we        = 1;
+    d->eval();
+    served_before = mem.served_count;
+    safety = 0;
+    while (mem.served_count == served_before && safety++ < 20)
+        tick_with_mem(d, mem, 2, rdata_zero);
+    d->i_we = 0; tick_with_mem(d, mem, 0, rdata_zero);
+    check("perf.uncached_write_no_event_hits",   rdsys(d, 12), wh_before);
+    check("perf.uncached_write_no_event_misses", rdsys(d, 13), wm_before);
+
+    // Re-read line 0x4000 — the write_hit above dropped the cached
+    // copy under write-invalidate-on-hit, so this is a fresh miss.
+    // Counts as miss; the post-fill re-serve must again not double-count.
+    uint32_t rm_before2 = rdsys(d, 11);
+    uint32_t rh_before2 = rdsys(d, 10);
+    d->i_addr      = 0x4000;
+    d->i_cacheable = 1;     // previous uncached steps left this at 0
+    d->i_re        = 1;
+    d->eval();
+    safety = 0;
+    while (d->o_busy && safety++ < 100)
+        tick_with_mem(d, mem, 2, rdata_addr_complement);
+    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+    check("perf.refill_after_invalidate_counts_as_miss",
+          rdsys(d, 11), rm_before2 + 1);
+    check("perf.refill_reserve_still_suppressed",
+          rdsys(d, 10), rh_before2);
+}
+
 // ══════════════════════════════════════════════════════════════
 
 int main() {
@@ -419,6 +549,7 @@ int main() {
     test_inval_all(d);
     test_inval_all_implicit_fence(d);
     test_uncached_skips_cache(d);
+    test_perfctrs(d);
 
     printf("\nl2_cache: %d/%d tests passed\n", tests - errors, tests);
     if (errors > 0)

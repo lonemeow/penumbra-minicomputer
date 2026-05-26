@@ -329,24 +329,109 @@ always unified in this architecture.
 **All caches are disabled at reset** — the kernel enables them
 after setting up TLB mappings.
 
-| reg   | Name         | R/W | Description                                       |
-|:-----:|--------------|:---:|---------------------------------------------------|
-| 0     | `INFO`       | R   | Cache geometry; `0` ⇒ absent                      |
-| 1     | `CTRL`       | R/W | Control register (`[0] = ENABLE`)                 |
-| 2     | `INVAL_ALL`  | W   | Drop all lines (no writeback). Written value ignored. |
-| 3     | `INVAL_LINE` | W   | Drop the line covering a physical address; no-op if absent (*reserved — current RTL does not implement this*) |
-| 4     | `FLUSH_ALL`  | W   | Writeback all dirty lines, keep valid (*reserved — write-back caches only*) |
-| 5     | `FLUSH_LINE` | W   | Writeback the line covering a physical address (*reserved — write-back caches only*) |
-| 6     | `STATUS`     | R   | `[0] = BUSY` (multi-cycle op in progress)         |
-| 7–15  | —            | —   | Reserved (reads as 0; available for perfctrs)     |
+| reg   | Name           | R/W | Description                                       |
+|:-----:|----------------|:---:|---------------------------------------------------|
+| 0     | `INFO`         | R   | Cache geometry; `0` ⇒ absent                      |
+| 1     | `CTRL`         | R/W | Control register (`[0] = ENABLE`)                 |
+| 2     | `INVAL_ALL`    | W   | Drop all lines (no writeback). Written value ignored. |
+| 3     | `INVAL_LINE`   | W   | Drop the line covering a physical address; no-op if absent (*reserved — current RTL does not implement this*) |
+| 4     | `FLUSH_ALL`    | W   | Writeback all dirty lines, keep valid (*reserved — write-back caches only*) |
+| 5     | `FLUSH_LINE`   | W   | Writeback the line covering a physical address (*reserved — write-back caches only*) |
+| 6     | `STATUS`       | R   | `[0] = BUSY` (multi-cycle op in progress)         |
+| 7–9   | —              | —   | Reserved (future control: perfctr CTRL, writeback-buffer status, prefetch tuning, ...) |
+| 10    | `READ_HITS`    | R   | Performance counter — read accesses that hit      |
+| 11    | `READ_MISSES`  | R   | Performance counter — read accesses that missed   |
+| 12    | `WRITE_HITS`   | R   | Performance counter — write accesses that hit     |
+| 13    | `WRITE_MISSES` | R   | Performance counter — write accesses that missed  |
+| 14–15 | —              | —   | Reserved (future counters: `LINE_FILLS`, `WRITEBACKS`, `MISS_STALL_CYCLES`, ...) |
 
 `INVAL_LINE`, `FLUSH_ALL`, and `FLUSH_LINE` occupy fixed slots in
-the register map so software written against them stays portable to
-future hardware. They are intentionally not implemented yet: current
-L1/L2 are write-through (no dirty data to flush), and the L1 caches
-are small enough that full-flush cost is negligible (`INVAL_ALL`
-clears all valid bits in a single cycle).  Writes to unimplemented
-registers complete silently.
+the register map so software written against them stays portable
+across cache configurations.  Hardware implementation of each is
+optional: a write-through cache has no dirty data so `FLUSH_*` is a
+no-op, and a cache small enough that full-flush cost is negligible
+can implement `INVAL_ALL` as a single-cycle valid-bit clear and
+omit `INVAL_LINE` entirely.  Writes to unimplemented registers
+complete silently.
+
+The gap at regs 7–9 leaves room for future control registers next to
+the existing control plane so counters stay contiguous in the upper
+half of the register map.  Likely future tenants: a perfctr `CTRL`
+register (clear / freeze bits) once a use case appears for it, a
+writeback-buffer probe once write-back caches land, and prefetch
+tuning hooks if the bus adapter's speculative path becomes runtime-
+configurable.  Slots 14–15 are reserved for counters that share the
+same configuration-independent definition discipline as the four
+counters below: `LINE_FILLS` (lines installed into the cache — equals
+`READ_MISSES` on write-no-allocate caches, equals `READ_MISSES +
+WRITE_MISSES` on write-allocate caches), `WRITEBACKS` (dirty lines
+evicted to memory — always 0 on write-through caches), and
+`MISS_STALL_CYCLES` (cycles the cache held `o_busy=1` due to an
+in-progress fill).
+
+### Performance counters (regs 10–13)
+
+All cache devices expose the same four 32-bit free-running counters,
+reset to 0 on system reset.  Software gets deltas by reading-before /
+reading-after a measured region — the same convention as the
+`SYSDEV_CPU` cycles / insns counters.  At 25 MHz a counter wraps in
+~170 seconds at one event per cycle, comfortable for benchmark-scoped
+deltas.
+
+**Definitions are configuration-independent.**  An *access* is one
+read or write request presented to a cache while `CTRL.ENABLE=1`,
+after cacheability gating (uncacheable pass-through and disabled-
+cache pass-through do not count).  An access is a **HIT** if the
+requested address is currently held in a valid line at the moment of
+tag check; otherwise it is a **MISS**.  HIT/MISS is determined by the
+tag array alone, independent of write policy, allocation policy, or
+any downstream cache behavior.
+
+This means the counter *definitions* stay stable across every
+combination of write-through / write-back, write-no-allocate /
+write-allocate, and write-invalidate-on-hit policies.  Counter
+*values* shift with policy — software reads `INFO` (the `WRITE_BACK`
+and `WRITE_ALLOC` fields) to choose the right interpretation:
+
+| Cache configuration               | `WRITE_HITS` interpretation                                  |
+|-----------------------------------|--------------------------------------------------------------|
+| Write-through, write-no-allocate  | Stores that updated a cached copy (in addition to memory)    |
+| Write-through, write-allocate     | Same as above (allocation only applies on miss)              |
+| Write-back, write-no-allocate     | Stores absorbed into the cache (set dirty, no bus traffic)   |
+| Write-back, write-allocate        | Same as above                                                |
+| Write-invalidate-on-hit           | Stores that dropped a cached line and forwarded to memory    |
+
+The HIT/MISS classification is the same in every case, so the same
+`WRITE_HITS / (WRITE_HITS + WRITE_MISSES)` ratio is comparable across
+policy changes — e.g. swapping a write-invalidate-on-hit cache for a
+write-back one does not change the meaning of the ratio, only the
+cost of each event.
+
+```asm
+; Sample cache stats around a workload
+RDSYS R4, #9, #10             ; L2_CACHE READ_HITS before
+RDSYS R5, #9, #11             ; L2_CACHE READ_MISSES before
+RDSYS R6, #9, #12             ; L2_CACHE WRITE_HITS before
+RDSYS R7, #9, #13             ; L2_CACHE WRITE_MISSES before
+
+; ... measured region ...
+
+RDSYS R8,  #9, #10            ; READ_HITS after
+SUB   R4, R8, R4              ; delta = after - before
+; ... and similarly for the other three counters
+```
+
+**L1 I-cache reports zero on both write counters** because the
+I-cache never sees stores.  This is intentional: the uniform layout
+lets the kernel run one discovery loop across cache slots without
+per-cache code paths, at the cost of two always-zero registers in
+one slot.
+
+**Free-running, not gated.**  The counters do not pause when
+`CTRL.ENABLE=0` because in that state the cache reports zero events
+anyway (every access pass-throughs without touching the tag array).
+A future `PERFCTR_CTRL` register in the reserved 7–9 range can add
+explicit clear / freeze bits if benchmark methodology calls for it.
 
 ### INFO (reg 0)
 

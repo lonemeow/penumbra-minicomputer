@@ -610,6 +610,61 @@ extend SCR usage to `_trap_entry_*` stubs and `_trap_common`'s
 early state stashing.  Diminishing returns curve is steep and
 not currently a priority.
 
+## Hardware: read-miss fills pay 1-2 unnecessary cycles re-classifying
+
+Both L1 (`cache_vipt.sv`) and L2 (`l2_cache.sv`) caches complete a
+read miss by transitioning `S_FILL → S_IDLE` and then waiting for the
+CPU's still-asserted request to be re-latched and re-classified as a
+hit on the just-installed line.  That re-classification costs 1 extra
+cycle at L1 (single-stage classify) and 2 extra cycles at L2
+(stage 0 + stage 1) on every read miss.
+
+Logically the cache could short-circuit this: at the cycle the last
+word of the fill arrives, all words of the line are accessible
+(those captured previously from BRAM, the last one from
+`i_mem_rdata`), and the CPU's requested word offset is known from the
+stalled address.  Driving `o_rdata` from the appropriate source and
+`o_busy=0` on that cycle exits the CPU's STALL one or two cycles
+earlier.
+
+Two layered variants on the same idea:
+
+1. **Skip re-classification.**  Serve the requested word on the
+   last-word-captured cycle.  Saves 1-2 cycles per miss regardless
+   of which word in the line was requested.
+2. **Early restart.**  Serve the requested word the moment *it*
+   arrives during `S_FILL` (not waiting for the rest of the line —
+   the remaining words finish into BRAM in background).  Combined
+   with critical-word-first burst ordering (already listed as
+   Level 3 in `doc/internals/sdram-optimization.md`), the CPU sees
+   just the bus round-trip latency rather than the full burst
+   length.
+
+Per-cycle savings are modest against the ~30-cycle SDRAM round-trip
+on the single-issue microcoded CPU we run today.  For the planned
+pipelined Penumbra/2 each saved cycle is one fewer dependent-chain
+stall, and the higher target clock makes each cycle more expensive
+in wall time, so the optimization is higher-leverage there than the
+bare cycle counts suggest now.
+
+The L1-side win is more impactful than the raw cycle counts imply,
+in a way that scales with L2 hit rate.  An L1 miss that hits in L2
+costs roughly `4 words × ~3 cycles` ≈ 12 cycles of fill + 1 cycle
+of re-classification — so the re-class is around 8% of the miss
+cost on that path.  An L1 miss that *also* misses L2 (full SDRAM
+round-trip) costs ~120+ cycles, and the same 1 cycle is less than
+1% of it.  Hot kernel paths sit on the L1→L2-hit path
+(syscall I-fetch is the canonical case where L2 lands ~2× wins),
+so the bulk of L1 misses in real workloads are exactly where this
+optimization saves the largest fraction.
+
+Side effect on the perfctr work landed alongside this entry: both
+L1's `state_was_fill` guard and L2's `fill_reserve_pending` flop
+exist specifically because the post-fill re-serve generates a
+phantom hit event today.  Once early-restart lands the re-serve
+goes away on both caches and both predicates collapse to
+`<valid> && <s1_re> && hit` with no suppression.
+
 ## Libc: memcpy misses same-offset misaligned shortcut
 
 NetBSD's libc memcpy on Penumbra takes the byte-fallback path for

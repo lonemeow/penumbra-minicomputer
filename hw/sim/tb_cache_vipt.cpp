@@ -500,6 +500,129 @@ static void test_fault_blocks_write_hit_update(Vcache_vipt_test* d) {
 }
 
 // ══════════════════════════════════════════════════════════════
+// Performance counters
+// ══════════════════════════════════════════════════════════════
+// The cache_read / cache_write helpers above drop i_re / i_we
+// BEFORE the trailing tick, which works for the cache-functional
+// tests (the data has already been captured / committed) but misses
+// the perfctr's edge-detect predicates: those need at least one
+// rising edge with the input asserted to see the event.  These
+// helpers tick once with the input asserted, then drop.
+
+static uint32_t perf_read(Vcache_vipt_test* d, uint32_t addr,
+                          bool cacheable) {
+    d->i_addr = addr;
+    d->i_re = 1;
+    d->i_we = 0;
+    d->i_cacheable = cacheable ? 1 : 0;
+    d->i_fault = 0;
+    d->i_byte_en = 0xF;
+    d->eval();
+    // Tick at least once with i_re=1 asserted so the perfctr's
+    // new_re edge detector captures the event.  Continue while busy.
+    int safety = 0;
+    do {
+        tick(d);
+        d->eval();
+        safety++;
+    } while (d->o_busy && safety < 200);
+    uint32_t data = d->o_rdata;
+    d->i_re = 0;
+    tick(d);
+    return data;
+}
+
+static void perf_write(Vcache_vipt_test* d, uint32_t addr,
+                       uint32_t wdata, uint8_t byte_en, bool cacheable) {
+    d->i_addr = addr;
+    d->i_wdata = wdata;
+    d->i_byte_en = byte_en;
+    d->i_we = 1;
+    d->i_re = 0;
+    d->i_cacheable = cacheable ? 1 : 0;
+    d->i_fault = 0;
+    d->eval();
+    int safety = 0;
+    do {
+        tick(d);
+        d->eval();
+        safety++;
+    } while (d->o_busy && safety < 200);
+    d->i_we = 0;
+    tick(d);
+}
+
+static void test_perfctrs(Vcache_vipt_test* d) {
+    printf("── Performance counters (regs 10-13) ──\n");
+    reset(d);
+    cache_enable(d);
+
+    // Counters start at 0.
+    check("perf.initial_read_hits",    sys_read(d, 10), 0u);
+    check("perf.initial_read_misses",  sys_read(d, 11), 0u);
+    check("perf.initial_write_hits",   sys_read(d, 12), 0u);
+    check("perf.initial_write_misses", sys_read(d, 13), 0u);
+
+    // Prime memory with known data so the fill returns specific bytes.
+    mem_write(d, 0x100, 0xA0A0'A0A0);
+    mem_write(d, 0x104, 0xA1A1'A1A1);
+    mem_write(d, 0x108, 0xA2A2'A2A2);
+    mem_write(d, 0x10C, 0xA3A3'A3A3);
+
+    // First access at 0x100: miss → fill → CPU re-served on the
+    // post-fill cycle.  Must count as exactly one read_miss with
+    // no phantom read_hit on the re-serve cycle.
+    perf_read(d, 0x100, true);
+    check("perf.miss_counted_once",         sys_read(d, 11), 1u);
+    check("perf.no_phantom_hit_on_reserve", sys_read(d, 10), 0u);
+
+    // Second access at 0x104 (different word, same line): hit.
+    // This was the case the L2 content-match approach got wrong —
+    // worth checking explicitly on L1 too.
+    perf_read(d, 0x104, true);
+    check("perf.hit_after_fill_counted",    sys_read(d, 10), 1u);
+    check("perf.miss_still_one",            sys_read(d, 11), 1u);
+
+    // Third access at 0x108: another hit.
+    perf_read(d, 0x108, true);
+    check("perf.second_hit_counted",        sys_read(d, 10), 2u);
+
+    // Cached write at 0x10C → write hit (line resident).  L1's
+    // policy is WT/WnA — cached copy is updated, line stays valid.
+    perf_write(d, 0x10C, 0xBBBB'BBBB, 0xF, true);
+    check("perf.write_hit_counted",         sys_read(d, 12), 1u);
+    check("perf.write_miss_still_zero",     sys_read(d, 13), 0u);
+
+    // Cached write at 0x200 (different tag → different set in our
+    // 16-set wrapper, line not resident): write miss.
+    perf_write(d, 0x200, 0xCCCC'CCCC, 0xF, true);
+    check("perf.write_miss_counted",        sys_read(d, 13), 1u);
+
+    // Uncached read pass-through → no event.
+    uint32_t rh_before = sys_read(d, 10);
+    uint32_t rm_before = sys_read(d, 11);
+    perf_read(d, 0x300, false);
+    check("perf.uncached_read_no_event_hits",   sys_read(d, 10), rh_before);
+    check("perf.uncached_read_no_event_misses", sys_read(d, 11), rm_before);
+
+    // Uncached write pass-through → no event.
+    uint32_t wh_before = sys_read(d, 12);
+    uint32_t wm_before = sys_read(d, 13);
+    perf_write(d, 0x400, 0xDDDD'DDDD, 0xF, false);
+    check("perf.uncached_write_no_event_hits",   sys_read(d, 12), wh_before);
+    check("perf.uncached_write_no_event_misses", sys_read(d, 13), wm_before);
+
+    // Re-read line 0x100 — still resident (L1's WT/WnA write-hit
+    // updates the data, doesn't invalidate).  Should hit, counting
+    // upward.  Validates that subsequent hits after intervening
+    // traffic still register correctly.
+    uint32_t rh_before2 = sys_read(d, 10);
+    perf_read(d, 0x100, true);
+    check("perf.subsequent_hit_to_existing_line",
+          sys_read(d, 10), rh_before2 + 1);
+}
+
+// ══════════════════════════════════════════════════════════════
 
 int main() {
     Vcache_vipt_test* d = new Vcache_vipt_test;
@@ -520,6 +643,7 @@ int main() {
     test_byte_write(d);
     test_fault_blocks_fill_on_miss(d);
     test_fault_blocks_write_hit_update(d);
+    test_perfctrs(d);
 
     printf("\ncache_vipt: %d/%d tests passed\n", tests - errors, tests);
     if (errors > 0)

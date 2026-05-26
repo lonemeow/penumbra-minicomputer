@@ -109,13 +109,29 @@ package penumbra_pkg;
     // device id is unmapped).  Devices that don't need a multi-cycle
     // op (e.g. L1 inval-all is single-cycle) still respond on STATUS
     // and just always return busy=0.
-    localparam logic [3:0] SYSREG_CACHE_INFO       = 4'd0;  // R  — geometry; 0 ⇒ absent
-    localparam logic [3:0] SYSREG_CACHE_CTRL       = 4'd1;  // RW — [0]=enable (0 at reset)
-    localparam logic [3:0] SYSREG_CACHE_INVAL_ALL  = 4'd2;  // W  — any value drops all lines
-    localparam logic [3:0] SYSREG_CACHE_INVAL_LINE = 4'd3;  // W  — physical addr, drops matching line
-    localparam logic [3:0] SYSREG_CACHE_FLUSH_ALL  = 4'd4;  // W  — writeback dirty (WB caches only)
-    localparam logic [3:0] SYSREG_CACHE_FLUSH_LINE = 4'd5;  // W  — writeback one line (WB caches only)
-    localparam logic [3:0] SYSREG_CACHE_STATUS     = 4'd6;  // R  — [0]=busy (multi-cycle op pending)
+    localparam logic [3:0] SYSREG_CACHE_INFO         = 4'd0;  // R  — geometry; 0 ⇒ absent
+    localparam logic [3:0] SYSREG_CACHE_CTRL         = 4'd1;  // RW — [0]=enable (0 at reset)
+    localparam logic [3:0] SYSREG_CACHE_INVAL_ALL    = 4'd2;  // W  — any value drops all lines
+    localparam logic [3:0] SYSREG_CACHE_INVAL_LINE   = 4'd3;  // W  — physical addr, drops matching line
+    localparam logic [3:0] SYSREG_CACHE_FLUSH_ALL    = 4'd4;  // W  — writeback dirty (WB caches only)
+    localparam logic [3:0] SYSREG_CACHE_FLUSH_LINE   = 4'd5;  // W  — writeback one line (WB caches only)
+    localparam logic [3:0] SYSREG_CACHE_STATUS       = 4'd6;  // R  — [0]=busy (multi-cycle op pending)
+    // Regs 7-9 reserved for future control (perfctr CTRL, writeback-buffer status, ...)
+    //
+    // Performance counters — same layout on every cache device.  32-bit,
+    // free-running, reset to 0 on system reset.  Software gets deltas by
+    // reading-before / reading-after a measured region (same convention
+    // as SYSDEV_CPU's cycles / insns counters).  HIT/MISS classification
+    // is determined by the tag array alone — definitions are stable
+    // across every WT/WB × WnA/WA × write-invalidate-on-hit combination;
+    // only the per-event downstream cost varies with policy.  See
+    // doc/system/sysregs.md § "Performance counters" for the full
+    // per-configuration interpretation table.
+    localparam logic [3:0] SYSREG_CACHE_READ_HITS    = 4'd10; // R  — read accesses that hit a valid line
+    localparam logic [3:0] SYSREG_CACHE_READ_MISSES  = 4'd11; // R  — read accesses that missed
+    localparam logic [3:0] SYSREG_CACHE_WRITE_HITS   = 4'd12; // R  — write accesses that hit a valid line
+    localparam logic [3:0] SYSREG_CACHE_WRITE_MISSES = 4'd13; // R  — write accesses that missed
+    // Regs 14-15 reserved for future counters (LINE_FILLS, WRITEBACKS, MISS_STALL_CYCLES, ...)
 
     // ── Cache INFO register field encoding ────────────────────
     // Unified across all cache devices so a single decoder serves
