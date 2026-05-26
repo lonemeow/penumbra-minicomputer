@@ -7,6 +7,7 @@
 #   build/netbsd-bench/julia{,-static}      - julia set demo
 #   build/netbsd-bench/plasma{,-static}     - plasma effect demo (links -lm)
 #   build/netbsd-bench/lorenz{,-static}     - Lorenz attractor demo
+#   build/netbsd-bench/shadebobs{,-static}  - shadebobs demo (links -lm)
 #
 # All run on a Penumbra NetBSD rootfs; mkrootfs.sh -i can overlay them
 # into /usr/local/bin/.
@@ -70,14 +71,17 @@ PLASMA_OBJS := $(PLASMA_SRCS:%.c=$(OBJDIR)/%.o)
 LORENZ_SRCS := lorenz.c
 LORENZ_OBJS := $(LORENZ_SRCS:%.c=$(OBJDIR)/%.o)
 
+SHADEBOBS_SRCS := shadebobs.c
+SHADEBOBS_OBJS := $(SHADEBOBS_SRCS:%.c=$(OBJDIR)/%.o)
+
 # ── Targets ───────────────────────────────────────────────────
 
 .PHONY: all dynamic static clean
 
 all: dynamic static
 
-dynamic: $(BUILDDIR)/pbench        $(BUILDDIR)/mandelbrot        $(BUILDDIR)/julia        $(BUILDDIR)/plasma        $(BUILDDIR)/lorenz
-static:  $(BUILDDIR)/pbench-static $(BUILDDIR)/mandelbrot-static $(BUILDDIR)/julia-static $(BUILDDIR)/plasma-static $(BUILDDIR)/lorenz-static
+dynamic: $(BUILDDIR)/pbench        $(BUILDDIR)/mandelbrot        $(BUILDDIR)/julia        $(BUILDDIR)/plasma        $(BUILDDIR)/lorenz        $(BUILDDIR)/shadebobs
+static:  $(BUILDDIR)/pbench-static $(BUILDDIR)/mandelbrot-static $(BUILDDIR)/julia-static $(BUILDDIR)/plasma-static $(BUILDDIR)/lorenz-static $(BUILDDIR)/shadebobs-static
 
 $(BUILDDIR) $(OBJDIR) $(OBJDIR)/kernel $(OBJDIR)/libc:
 	@mkdir -p $@
@@ -115,6 +119,13 @@ $(BUILDDIR)/lorenz: $(LORENZ_OBJS) | $(BUILDDIR)
 
 $(BUILDDIR)/lorenz-static: $(LORENZ_OBJS) | $(BUILDDIR)
 	$(CC) $(LDFLAGS_STA) $(LORENZ_OBJS) -o $@
+
+# shadebobs needs libm (sin() at startup to build the lookup table).
+$(BUILDDIR)/shadebobs: $(SHADEBOBS_OBJS) | $(BUILDDIR)
+	$(CC) $(LDFLAGS_DYN) $(SHADEBOBS_OBJS) -lm -o $@
+
+$(BUILDDIR)/shadebobs-static: $(SHADEBOBS_OBJS) | $(BUILDDIR)
+	$(CC) $(LDFLAGS_STA) $(SHADEBOBS_OBJS) -lm -o $@
 
 clean:
 	rm -rf $(BUILDDIR)
