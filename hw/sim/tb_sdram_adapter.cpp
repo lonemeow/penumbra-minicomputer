@@ -54,9 +54,15 @@ static void reset(Vsdram_adapter_test* d) {
 // Issue a single read.  Holds i_re/i_addr until o_busy clears, samples
 // o_rdata on that cycle, then deasserts i_re for one cycle (so the
 // FSM drops out of PRESENT to IDLE).  Returns 0xFFFFFFFF on timeout.
+//
+// `byte_en` defaults to 0xF (full word).  Override with a sub-word
+// mask to exercise the bus-protocol "byte_en is advisory on reads"
+// contract — see doc/hardware/bus-protocol.md § Access Width.
 static uint32_t do_read(Vsdram_adapter_test* d, uint32_t addr,
-                        const char* label, int timeout_cyc = 200) {
+                        const char* label, uint8_t byte_en = 0xF,
+                        int timeout_cyc = 200) {
     d->i_addr = addr;
+    d->i_byte_en = byte_en;
     d->i_re = 1;
     d->i_we = 0;
     d->eval();
@@ -695,6 +701,93 @@ static void test_m_resp_arrival_coincident_push(Vsdram_adapter_test* d) {
 }
 
 // ────────────────────────────────────────────────────────────
+// Test (n) — byte_en is advisory on reads.
+//
+// Contract from doc/hardware/bus-protocol.md § Access Width:
+// "byte_en is advisory; the slave drives all 32 bits of rdata with
+//  each byte positioned at its natural lane.  The master extracts
+//  the requested lane(s)..."
+//
+// Tests (a)-(m) all read with byte_en=0xF.  A future adapter change
+// that conditionalised the read path on byte_en (e.g. abbreviating
+// the spec push for sub-word reads, or stashing byte_en into the
+// spec lifecycle) would pass every existing test.  This test fails
+// any such change by verifying that the data returned is identical
+// to the byte_en=0xF case across all eight single-lane and adjacent-
+// halfword masks.
+// ────────────────────────────────────────────────────────────
+static void test_n_subword_byte_en_advisory(Vsdram_adapter_test* d) {
+    printf("── (n) sub-word byte_en is advisory on reads ──\n");
+    reset(d);
+    d->i_mock_latency = 4;
+
+    // Each row: misaligned byte address + a plausible single-lane or
+    // halfword mask.  The expected data is always the full word at
+    // (addr & ~3) — i.e. byte_en doesn't change the read result.
+    struct { uint32_t addr; uint8_t byte_en; const char* label; } cases[] = {
+        { 0x000A0000, 0x1, "(n) LB byte0" },
+        { 0x000A0001, 0x2, "(n) LB byte1" },
+        { 0x000A0002, 0x4, "(n) LB byte2" },
+        { 0x000A0003, 0x8, "(n) LB byte3" },
+        { 0x000A0100, 0x3, "(n) LH low half" },
+        { 0x000A0102, 0xC, "(n) LH high half" },
+        { 0x000A0200, 0x0, "(n) byte_en=0 (still returns word)" },
+    };
+    for (size_t i = 0; i < sizeof(cases)/sizeof(cases[0]); i++) {
+        uint32_t got = do_read(d, cases[i].addr, cases[i].label,
+                               cases[i].byte_en);
+        check_eq(got, expected_data(cases[i].addr), cases[i].label);
+    }
+}
+
+// ────────────────────────────────────────────────────────────
+// Test (o) — sub-word consumer of a buffered spec.
+//
+// The spec push is hard-coded to byte_en=0xF (full word), per
+// sdram_bus_adapter.sv:173.  Verify that when a sub-word read
+// consumes the buffered spec via spec_hit_buffered, the adapter
+// delivers the full word (which the CPU's byte_ext then slices) —
+// i.e. the consumer's byte_en does not mask the buffered word.
+//
+// The sequence to exercise:
+//   1. Read at A with a sub-word byte_en — primes spec for A+4.
+//   2. Wait long enough for the spec response to land in the buffer
+//      (use o_dbg_spec_buffered to confirm, or pad with latency).
+//   3. Read at A+4 with a *different* sub-word byte_en — must hit
+//      the buffered spec (verify via o_dbg_spec_buffered going low
+//      on the consume cycle) and return expected_data(A+4).
+//
+// A regression in which the consumer's byte_en somehow masked the
+// buffered data would return only the requested lanes; with the
+// MOCK_TAG bits in the upper word, this would change the value
+// detectably.
+// ────────────────────────────────────────────────────────────
+static void test_o_subword_consumer_of_spec_hit(Vsdram_adapter_test* d) {
+    printf("── (o) sub-word consumer of buffered spec ──\n");
+    reset(d);
+    d->i_mock_latency = 4;
+
+    const uint32_t A = 0x000B0000;
+
+    do_read(d, A, "(o) LB byte0 spec trigger", 0x1);
+    int waited = 0;
+    while (!d->o_dbg_spec_buffered) {
+        tick(d);
+        if (++waited > 200) {
+            printf("  [FAIL] (o) spec never buffered within 200 cyc\n");
+            errors++;
+            return;
+        }
+    }
+    uint32_t got = do_read(d, A+4, "(o) LB byte1 on spec read", 0x2);
+    if (d->o_dbg_spec_buffered) {
+        printf("  [FAIL] (o) read did not consume speculatively buffered word\n");
+        errors++;
+    }
+    check_eq(got, expected_data(A+4), "(o) speculative byte1 read");
+}
+
+// ────────────────────────────────────────────────────────────
 int main(int argc, char** argv) {
     (void)argc; (void)argv;
     Vsdram_adapter_test* d = new Vsdram_adapter_test;
@@ -714,6 +807,8 @@ int main(int argc, char** argv) {
     test_k_memcpy_interleave(d);
     test_l_latency_sweep(d);
     test_m_resp_arrival_coincident_push(d);
+    test_n_subword_byte_en_advisory(d);
+    test_o_subword_consumer_of_spec_hit(d);
 
     delete d;
 
