@@ -8,6 +8,7 @@
 #   build/netbsd-bench/plasma{,-static}     - plasma effect demo (links -lm)
 #   build/netbsd-bench/lorenz{,-static}     - Lorenz attractor demo
 #   build/netbsd-bench/shadebobs{,-static}  - shadebobs demo (links -lm)
+#   build/netbsd-bench/penumbra-text{,-static} - Penumbra logo screensaver (links -lm)
 #
 # All run on a Penumbra NetBSD rootfs; mkrootfs.sh -i can overlay them
 # into /usr/local/bin/.
@@ -74,14 +75,17 @@ LORENZ_OBJS := $(LORENZ_SRCS:%.c=$(OBJDIR)/%.o)
 SHADEBOBS_SRCS := shadebobs.c
 SHADEBOBS_OBJS := $(SHADEBOBS_SRCS:%.c=$(OBJDIR)/%.o)
 
+PTEXT_SRCS := penumbra-text.c
+PTEXT_OBJS := $(PTEXT_SRCS:%.c=$(OBJDIR)/%.o)
+
 # ── Targets ───────────────────────────────────────────────────
 
 .PHONY: all dynamic static clean
 
 all: dynamic static
 
-dynamic: $(BUILDDIR)/pbench        $(BUILDDIR)/mandelbrot        $(BUILDDIR)/julia        $(BUILDDIR)/plasma        $(BUILDDIR)/lorenz        $(BUILDDIR)/shadebobs
-static:  $(BUILDDIR)/pbench-static $(BUILDDIR)/mandelbrot-static $(BUILDDIR)/julia-static $(BUILDDIR)/plasma-static $(BUILDDIR)/lorenz-static $(BUILDDIR)/shadebobs-static
+dynamic: $(BUILDDIR)/pbench        $(BUILDDIR)/mandelbrot        $(BUILDDIR)/julia        $(BUILDDIR)/plasma        $(BUILDDIR)/lorenz        $(BUILDDIR)/shadebobs        $(BUILDDIR)/penumbra-text
+static:  $(BUILDDIR)/pbench-static $(BUILDDIR)/mandelbrot-static $(BUILDDIR)/julia-static $(BUILDDIR)/plasma-static $(BUILDDIR)/lorenz-static $(BUILDDIR)/shadebobs-static $(BUILDDIR)/penumbra-text-static
 
 $(BUILDDIR) $(OBJDIR) $(OBJDIR)/kernel $(OBJDIR)/libc:
 	@mkdir -p $@
@@ -126,6 +130,14 @@ $(BUILDDIR)/shadebobs: $(SHADEBOBS_OBJS) | $(BUILDDIR)
 
 $(BUILDDIR)/shadebobs-static: $(SHADEBOBS_OBJS) | $(BUILDDIR)
 	$(CC) $(LDFLAGS_STA) $(SHADEBOBS_OBJS) -lm -o $@
+
+# penumbra-text needs libm (sin() at startup to build the lookup table
+# used by the 1D plasma underline).
+$(BUILDDIR)/penumbra-text: $(PTEXT_OBJS) | $(BUILDDIR)
+	$(CC) $(LDFLAGS_DYN) $(PTEXT_OBJS) -lm -o $@
+
+$(BUILDDIR)/penumbra-text-static: $(PTEXT_OBJS) | $(BUILDDIR)
+	$(CC) $(LDFLAGS_STA) $(PTEXT_OBJS) -lm -o $@
 
 clean:
 	rm -rf $(BUILDDIR)

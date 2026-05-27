@@ -424,6 +424,12 @@ endif
 ifneq ($(wildcard $(NETBSD_BENCH_DIR)/shadebobs-static),)
 NETBSD_BENCH_OVERLAYS += -i $(NETBSD_BENCH_DIR)/shadebobs-static:/usr/local/bin/shadebobs-static
 endif
+ifneq ($(wildcard $(NETBSD_BENCH_DIR)/penumbra-text),)
+NETBSD_BENCH_OVERLAYS += -i $(NETBSD_BENCH_DIR)/penumbra-text:/usr/local/bin/penumbra-text
+endif
+ifneq ($(wildcard $(NETBSD_BENCH_DIR)/penumbra-text-static),)
+NETBSD_BENCH_OVERLAYS += -i $(NETBSD_BENCH_DIR)/penumbra-text-static:/usr/local/bin/penumbra-text-static
+endif
 endif
 
 .PHONY: rootfs
@@ -455,6 +461,7 @@ benchmark-netbsd:
 	@echo "plasma binaries:     $(NETBSD_BENCH_DIR)/plasma{,-static}"
 	@echo "lorenz binaries:     $(NETBSD_BENCH_DIR)/lorenz{,-static}"
 	@echo "shadebobs binaries:  $(NETBSD_BENCH_DIR)/shadebobs{,-static}"
+	@echo "penumbra-text bins:  $(NETBSD_BENCH_DIR)/penumbra-text{,-static}"
 
 # ── Benchmark SD image and runners ───────────────────────────
 # Builds benchmark ELFs and creates an SD image containing them.
