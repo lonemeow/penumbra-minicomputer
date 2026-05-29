@@ -86,16 +86,26 @@ trap(struct trapframe *tf)
 	int usermode = USERMODE(tf->tf_sr);
 
 	/*
-	 * Hardware masks interrupts on exception entry.  For exceptions
-	 * that may do long-running work (syscall body, uvm_fault, signal
-	 * delivery) re-enable them so the statistics clock can sample
-	 * kernel time and so the work is preemptible.
+	 * Hardware masks interrupts on exception entry.  For long-running
+	 * paths (syscall body, uvm_fault, signal delivery) we re-enable
+	 * them so the statclock can sample kernel time and the work is
+	 * preemptible.
 	 *
-	 * Timer and external-IRQ paths stay masked: their handlers are
-	 * not re-entrant.
+	 * EXC_TIMER and EXC_EXT_IRQ stay masked: Penumbra has no per-
+	 * source interrupt mask (SR.I is one bit), and both sources are
+	 * level-triggered.  EI mid-handler would re-trap immediately —
+	 * on the still-high shared IRQ line, or on the same timer
+	 * underflow before TMST_UDF is cleared.  Multi-IPL ports work
+	 * around this with splraise(handler_ipl)+EI; we can't.
+	 *
+	 * Traps arriving with PSL_I already clear stay masked: the
+	 * caller is in an splhigh critical section whose correctness
+	 * depends on interrupts staying off until splx.
 	 */
-	if (type != EXC_TIMER && type != EXC_EXT_IRQ)
-		__asm __volatile("EI" ::: "memory");
+
+	if (type != EXC_TIMER && type != EXC_EXT_IRQ && (tf->tf_sr & PSL_I) != 0) {
+		__asm __volatile("ei" : : : "memory");
+	}
 
 	switch (type) {
 	case EXC_TIMER: {
