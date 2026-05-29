@@ -1,13 +1,28 @@
 #!/usr/bin/env bash
 # Pretty-print the most useful bits of a nextpnr-ecp5 JSON timing report.
 #
-# Usage: timing-report.sh [report.json] [top_n_paths]
+# Usage: timing-report.sh [--detail] [report.json] [top_n_paths]
 # Defaults: build/ulx3s_top_timing.json, 5 paths.
+#
+# With --detail, each of the top N paths is followed by its per-module
+# rollup (via timing-path.py), so you can see which subsystem owns each
+# critical path without leaving the report.  Hop-level trace is still
+# only available by running timing-path.py directly without --no-hops.
 
 set -euo pipefail
 
-REPORT="${1:-build/ulx3s_top_timing.json}"
-TOP_N="${2:-5}"
+DETAIL=0
+POS=()
+for arg in "$@"; do
+    case "$arg" in
+        --detail) DETAIL=1 ;;
+        *)        POS+=("$arg") ;;
+    esac
+done
+
+REPORT="${POS[0]:-build/ulx3s_top_timing.json}"
+TOP_N="${POS[1]:-5}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [[ ! -f "$REPORT" ]]; then
     echo "error: $REPORT not found — run 'make fpga' first" >&2
@@ -50,6 +65,16 @@ jq -r --argjson n "$TOP_N" '
         ""
     end
 ' "$REPORT"
+
+if [[ "$DETAIL" == "1" ]]; then
+    printf '── per-path module rollups (top %s) ──\n\n' "$TOP_N"
+    # Only iterate as many paths as the report actually contains.
+    available="$(jq '.critical_paths // [] | length' "$REPORT")"
+    last=$(( available < TOP_N ? available : TOP_N ))
+    for i in $(seq 1 "$last"); do
+        python3 "$SCRIPT_DIR/timing-path.py" "$REPORT" "$i" --no-hops
+    done
+fi
 
 printf '── LUT/FF/RAM utilization ──\n'
 jq -r '

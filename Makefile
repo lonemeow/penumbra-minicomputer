@@ -617,11 +617,12 @@ flash: $(BUILD_DIR)/$(TOP).bit
 # Pretty-print fmax + top critical paths from the nextpnr JSON report
 # produced by the .config rule.  Doesn't trigger a build — operates
 # on whatever the last FPGA build left in $(BUILD_DIR).  Override the
-# path count via TOP_N=10.
+# path count via TOP_N=10.  DETAIL=1 adds a per-path module rollup
+# (via timing-path.py) so you can see which subsystem owns each path.
 .PHONY: timing
 TOP_N ?= 5
 timing:
-	@hw/tools/timing-report.sh $(BUILD_DIR)/$(TOP)_timing.json $(TOP_N)
+	@hw/tools/timing-report.sh $(if $(DETAIL),--detail) $(BUILD_DIR)/$(TOP)_timing.json $(TOP_N)
 
 # Pretty-print high-fanout nets from the yosys synth JSON.  Useful for
 # diagnosing nextpnr routing-congestion failures: signals with hundreds
