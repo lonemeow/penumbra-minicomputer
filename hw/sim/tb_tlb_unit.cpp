@@ -7,7 +7,7 @@
 //     SYSREG_MMU_TLB_VPN (3) — shared VPN staging (drives both banks)
 //     SYSREG_MMU_TLB_PTE (4) — write commits to bank selected by IDX[6]
 //     SYSREG_MMU_TLB_IDX (5) — IDX[6]=1 → pinned, IDX[6]=0 → main
-//       (main: {way=IDX[5], set=IDX[4:0]}; pinned: slot=IDX[1:0])
+//       (main: {way=IDX[5], set=IDX[4:0]}; pinned: slot=IDX[clog2(N)-1:0])
 //
 //   Lookup composition:
 //     - Both banks run in parallel.
@@ -28,6 +28,9 @@ enum SysReg {
     SYSREG_MMU_TLB_PTE = 4,
     SYSREG_MMU_TLB_IDX = 5,
 };
+
+// Pinned-bank slot count — must match tlb_unit.sv PINNED_SLOTS.
+constexpr int PINNED_SLOTS = 8;
 
 enum TlbFlags {
     TLB_V = 1 << 0,
@@ -303,6 +306,47 @@ static void test_lookup_miss(Vtlb_unit* d) {
     check_bool("miss.no_fault", r.fault, false);
 }
 
+// Bit-slicing regression: writing the highest pinned slot must reach
+// exactly that slot — not bleed into IDX[5] (main TLB way) or IDX[6]
+// (the pinned/main selector itself).  A wrong index slice would
+// either silently land in the wrong pinned slot, or worse, corrupt
+// the main TLB.
+static void test_pinned_high_slot_no_alias(Vtlb_unit* d) {
+    printf("── Pinned high slot (%d) doesn't alias main TLB ──\n",
+           PINNED_SLOTS - 1);
+    reset(d);
+
+    const uint32_t high = PINNED_SLOTS - 1;
+    const uint32_t idx_high = 0x40u | high;
+
+    write_entry_via_sysreg(d, idx_high, 0x88888, 0x99999, 0x11, 0,
+                           TLB_V | TLB_R | TLB_X | TLB_C);
+
+    // Readback at the same high IDX must reproduce the write.
+    sys_write(d, SYSREG_MMU_TLB_IDX, idx_high);
+    check("high_pin.vpn", sys_read(d, SYSREG_MMU_TLB_VPN),
+          make_vpn_word(0x88888, 0x11));
+    check("high_pin.pte", sys_read(d, SYSREG_MMU_TLB_PTE),
+          make_pte_word(0x99999, 0, TLB_V | TLB_R | TLB_X | TLB_C));
+
+    // Lookup must hit, and via the pinned bank (no main entry exists).
+    LookupResult r = lookup(d, 0x88888'400, ACC_READ, false, 0x11);
+    check_bool("high_pin.lookup_hit", r.hit, true);
+    check("high_pin.lookup_paddr", r.paddr, 0x99999400u);
+
+    // Any main TLB slot whose IDX matches the low bits of `high`
+    // must remain empty.  Probe set = (high & 0x1F), both ways.
+    for (uint32_t way = 0; way < 2; way++) {
+        uint32_t main_idx = (way << 5) | (high & 0x1Fu);
+        sys_write(d, SYSREG_MMU_TLB_IDX, main_idx);
+        uint32_t main_pte = sys_read(d, SYSREG_MMU_TLB_PTE);
+        char name[64];
+        snprintf(name, sizeof(name), "high_pin.main_set%u_way%u_empty",
+                 high & 0x1Fu, way);
+        check(name, main_pte & TLB_V, 0u);
+    }
+}
+
 static void test_fault_from_hit_bank(Vtlb_unit* d) {
     printf("── Lookup: fault status comes from the bank that hit ──\n");
     reset(d);
@@ -339,6 +383,7 @@ int main() {
     test_lookup_pinned_only(d);
     test_lookup_pinned_priority(d);
     test_lookup_miss(d);
+    test_pinned_high_slot_no_alias(d);
     test_fault_from_hit_bank(d);
 
     printf("\ntlb_unit: %d/%d tests passed\n", tests - errors, tests);

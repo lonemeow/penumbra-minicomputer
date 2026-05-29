@@ -1,4 +1,8 @@
-// Penumbra Pinned TLB — 4-entry fully-associative translation buffer
+// Penumbra Pinned TLB — fully-associative translation buffer
+//
+// Slot count is set by NUM_ENTRIES (default 8).  All entries compare
+// in parallel; the priority encoder and output mux are the only
+// structures whose depth grows with NUM_ENTRIES.
 //
 // Holds permanently-mapped entries that must never cause TLB misses
 // (e.g., TLB miss handler code, page global directory).
@@ -29,7 +33,7 @@
 module tlb_pinned
     import penumbra_pkg::*;
 #(
-    parameter NUM_ENTRIES = 4
+    parameter NUM_ENTRIES = 8
 ) (
     input  logic        i_clk,
     input  logic        i_rst,
@@ -48,7 +52,7 @@ module tlb_pinned
     output logic [31:0] o_fault_status,
 
     // ── Indexed read/write (sysreg access) ─────────────────
-    input  logic [1:0]  i_idx,          // Slot 0-3
+    input  logic [$clog2(NUM_ENTRIES)-1:0] i_idx,  // Slot index
     input  logic [31:0] i_write_vpn,
     input  logic [31:0] i_write_pte,
     input  logic        i_write_en,

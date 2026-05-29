@@ -1,15 +1,15 @@
 // Penumbra TLB Unit — unified translation lookup + sysreg interface
 //
-// Wraps the main TLB (64-entry 2-way SA) and pinned TLB (4-entry FA)
-// behind a single interface.  The MMU connects to this module for both
-// address translation and sysreg access to TLB entries.
+// Wraps the main TLB (64-entry 2-way SA) and pinned TLB (PINNED_SLOTS-
+// entry FA) behind a single interface.  The MMU connects to this
+// module for both address translation and sysreg access to TLB entries.
 //
 // Sysreg registers handled here (device 0):
 //   3 = TLB_VPN       VPN staging (shared by both TLBs)
 //   4 = TLB_PTE       PTE commit (routed by TLB_INDEX[6])
 //   5 = TLB_INDEX     Slot selector:
 //                        bit 6 = 0 → main TLB, {way=bit5, set=bits4:0}
-//                        bit 6 = 1 → pinned TLB, slot=bits1:0
+//                        bit 6 = 1 → pinned TLB, slot=bits[PINNED_IDX_W-1:0]
 //
 // Pinned TLB hit takes priority over main TLB on lookup.
 
@@ -40,6 +40,15 @@ module tlb_unit
     input  logic        i_sys_we,
     output logic [31:0] o_sys_rdata
 );
+
+    // ══════════════════════════════════════════════════════════
+    // Pinned TLB geometry — single source of truth
+    // ══════════════════════════════════════════════════════════
+    // tlb_pinned's NUM_ENTRIES is overridden from PINNED_SLOTS so the
+    // index-bit slice below and the storage depth can never drift.
+
+    localparam int PINNED_SLOTS = 8;
+    localparam int PINNED_IDX_W = $clog2(PINNED_SLOTS);
 
     // ══════════════════════════════════════════════════════════
     // Registers
@@ -106,14 +115,16 @@ module tlb_unit
     );
 
     // ══════════════════════════════════════════════════════════
-    // Pinned TLB (4-entry, fully associative)
+    // Pinned TLB (PINNED_SLOTS entries, fully associative)
     // ══════════════════════════════════════════════════════════
 
     logic [31:0] pin_paddr, pin_fault_status;
     logic        pin_cacheable, pin_hit, pin_fault;
     logic [31:0] pin_read_vpn, pin_read_pte;
 
-    tlb_pinned u_pinned (
+    tlb_pinned #(
+        .NUM_ENTRIES (PINNED_SLOTS)
+    ) u_pinned (
         .i_clk          (i_clk),
         .i_rst          (i_rst),
         .i_vaddr        (i_vaddr),
@@ -126,7 +137,7 @@ module tlb_unit
         .o_hit          (pin_hit),
         .o_fault        (pin_fault),
         .o_fault_status (pin_fault_status),
-        .i_idx          (tlb_index_reg[1:0]),
+        .i_idx          (tlb_index_reg[PINNED_IDX_W-1:0]),
         .i_write_vpn    (tlb_vpn_reg),
         .i_write_pte    (i_sys_wdata),
         .i_write_en     (pin_write_en),

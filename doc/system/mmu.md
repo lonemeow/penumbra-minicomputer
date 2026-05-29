@@ -29,7 +29,7 @@ TLB hardware structure (2-way SA main + fully-associative pinned) and
 |----------|-------|
 | Page size | 4 KB (12-bit offset) |
 | Main TLB | 64 slots (0–63), 2-way set-associative; each VPN maps to exactly 2 candidate slots |
-| Pinned TLB | 4 slots, fully associative; pinned hit wins over main TLB hit |
+| Pinned TLB | 8 slots, fully associative; pinned hit wins over main TLB hit |
 | TLB entry width | Two 32-bit sysreg words: `TLB_VPN` and `TLB_PTE` |
 | Exception vectors | `VEC_TLB_MISS` = 2 (0x08), `VEC_TLB_PROT` = 3 (0x0C) |
 | Sysreg device ID | 0 |
@@ -151,7 +151,7 @@ The OS chooses which of the two to use for replacement.
 
 ### Pinned TLB (bit 6 of TLB_INDEX)
 
-A 4-entry fully-associative structure checked in parallel with the main
+An 8-entry fully-associative structure checked in parallel with the main
 TLB. A pinned hit takes priority. No set constraint — any VPN can go in
 any pinned slot.
 

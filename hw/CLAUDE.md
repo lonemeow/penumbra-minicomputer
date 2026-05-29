@@ -73,7 +73,7 @@ purely a "where does this thing live?" index.
 ### MMU (`rtl/mmu/`)
 - `tlb.sv` — 64-entry 2-way SA main TLB. Parallel lookup, one-hot
   permission check, indexed sysreg R/W.
-- `tlb_pinned.sv` — 4-entry FA pinned TLB. Pinned-hit-wins priority.
+- `tlb_pinned.sv` — 8-entry FA pinned TLB. Pinned-hit-wins priority.
 - `tlb_unit.sv` — unified main + pinned lookup behind one interface.
 - `mmu.sv` — bypass/translate mux, `force_bypass` for vector fetch,
   alignment check, sysreg routing, fault latching.

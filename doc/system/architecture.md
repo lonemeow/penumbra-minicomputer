@@ -389,7 +389,7 @@ priority: if both are pending simultaneously, the timer is taken first.
 - Memory protection (R/W/X per page, user/supervisor).
 - Per-page cacheability control (`C` bit in TLB entry) — essential for
   memory-mapped I/O.
-- Software-managed TLB (64-entry 2-way SA + 4-entry FA pinned).
+- Software-managed TLB (64-entry 2-way SA + 8-entry FA pinned).
 
 ### Byte Ordering
 

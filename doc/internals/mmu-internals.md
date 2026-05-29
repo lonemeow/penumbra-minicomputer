@@ -10,9 +10,9 @@ Two parallel lookup structures, combined with pinned-hit-wins priority:
 3. **Permission check:** One-hot access type AND with {X,W,R}, plus U check for user mode.
 4. **Sysreg access:** Indexed read/write via `TLB_INDEX` addressing.
 
-### Pinned TLB (4-entry, fully associative)
-1. **Storage:** 4 × 64-bit register file.
-2. **Lookup:** 4-wide parallel VPN + ASID comparators.
+### Pinned TLB (8-entry, fully associative)
+1. **Storage:** 8 × 64-bit register file.
+2. **Lookup:** 8-wide parallel VPN + ASID comparators.
 3. **Priority:** Pinned hit masks main TLB result.
 
 ## Discrete 74xx Feasibility

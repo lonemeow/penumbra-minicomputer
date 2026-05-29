@@ -1,11 +1,12 @@
 // Verilator testbench for the Penumbra Pinned TLB
 //
-// Tests the 4-entry fully-associative pinned TLB:
+// Tests the fully-associative pinned TLB:
 //   - Indexed write and readback via i_idx / i_write_*
 //   - Reset clears all entries (V=0 everywhere)
 //   - Lookup hit/miss, no-match returns o_hit=0
 //   - VPN + ASID matching with G-bit bypass
-//   - Priority encoder: lowest-numbered matching entry wins
+//   - Priority encoder: lowest-numbered matching entry wins, across
+//     the full slot range
 //   - Permission checks (R/W/X × user/supervisor) match main TLB
 //   - Fault status fields on permission violation
 //
@@ -17,6 +18,11 @@
 #include <cstdio>
 #include <cstdint>
 #include "Vtlb_pinned.h"
+
+// Must match tlb_unit.sv's PINNED_SLOTS / tlb_pinned.sv NUM_ENTRIES.
+// Tests parameterize their loops on this so widening the slot count
+// in RTL only needs this one constant to change.
+constexpr int NUM_ENTRIES = 8;
 
 // TLB flag bits (must match penumbra_pkg.sv TLB_* constants)
 enum TlbFlags {
@@ -144,11 +150,11 @@ static void check_bool(const char* name, bool got, bool exp) {
 // ══════════════════════════════════════════════════════════════
 
 static void test_reset_all_invalid(Vtlb_pinned* d) {
-    printf("── Reset: all 4 slots invalid ──\n");
+    printf("── Reset: all %d slots invalid ──\n", NUM_ENTRIES);
     reset(d);
 
     uint32_t vpn, pte;
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < NUM_ENTRIES; i++) {
         read_entry(d, i, &vpn, &pte);
         check("reset V=0", pte & TLB_V, 0u);
     }
@@ -177,7 +183,7 @@ static void test_write_readback(Vtlb_pinned* d) {
     check("readback.pte", pte_word, make_pte_word(ppn, sw, flags));
 
     // Other slots untouched
-    for (int s = 0; s < 4; s++) {
+    for (int s = 0; s < NUM_ENTRIES; s++) {
         if (s == 2) continue;
         read_entry(d, s, &vpn_word, &pte_word);
         check("other_slot.V=0", pte_word & TLB_V, 0u);
@@ -320,20 +326,21 @@ static void test_lookup_en_gates_output(Vtlb_pinned* d) {
     check_bool("lookup_en=0.o_fault", d->o_fault, false);
 }
 
-static void test_fill_all_four_slots(Vtlb_pinned* d) {
-    printf("── Fill all 4 slots, each translates independently ──\n");
+static void test_fill_all_slots(Vtlb_pinned* d) {
+    printf("── Fill all %d slots, each translates independently ──\n",
+           NUM_ENTRIES);
     reset(d);
 
     // Use uint32_t arithmetic throughout — (0xA0000 + i) * 4096 with
     // int operands overflows signed int (UB).
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < NUM_ENTRIES; i++) {
         uint32_t vpn = 0xA0000u + i;
         uint32_t ppn = 0xB0000u + i;
         write_entry(d, i, vpn, ppn, 0, 0,
                     TLB_V | TLB_R | TLB_X);
     }
 
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < NUM_ENTRIES; i++) {
         uint32_t vpn = 0xA0000u + i;
         uint32_t ppn = 0xB0000u + i;
         uint32_t vaddr = (vpn << 12) | 0x100;
@@ -345,6 +352,38 @@ static void test_fill_all_four_slots(Vtlb_pinned* d) {
         snprintf(name, sizeof(name), "fill_all.slot%d.paddr", i);
         check(name, r.paddr, expected_paddr);
     }
+}
+
+// Priority encoder regression: lowest-index match must win even when
+// the colliding entries are at opposite ends of the slot range.  A
+// truncated index-width bug (e.g., wrapping slot 7 back to slot 3)
+// would let the wrong PPN come out.
+static void test_priority_spans_full_range(Vtlb_pinned* d) {
+    printf("── Priority: lowest wins across full slot range ──\n");
+    reset(d);
+
+    const int high = NUM_ENTRIES - 1;
+    const uint32_t vpn = 0x77777;
+
+    // Populate the highest slot first with PPN distinguishable from slot 0.
+    write_entry(d, high, vpn, 0xEEEEE, 0x20, 0,
+                TLB_V | TLB_R | TLB_X);
+
+    // Lookup with only slot `high` populated — must hit, returning
+    // PPN from slot `high`.  This proves the high slot's storage and
+    // comparator are wired through.
+    LookupResult r_high = lookup(d, vpn << 12, ACC_READ, false, 0x20);
+    check_bool("range.high_alone_hit", r_high.hit, true);
+    check("range.high_alone_paddr", r_high.paddr, 0xEEEEE000u);
+
+    // Now add slot 0 with the same VPN but different PPN — priority
+    // encoder must pick slot 0 over slot `high`.
+    write_entry(d, 0, vpn, 0x11111, 0x20, 0,
+                TLB_V | TLB_R | TLB_X);
+
+    LookupResult r_pri = lookup(d, vpn << 12, ACC_READ, false, 0x20);
+    check_bool("range.priority_hit", r_pri.hit, true);
+    check("range.priority_picks_slot0", r_pri.paddr, 0x11111000u);
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -363,7 +402,8 @@ int main() {
     test_permission_rwx(d);
     test_invalidation(d);
     test_lookup_en_gates_output(d);
-    test_fill_all_four_slots(d);
+    test_fill_all_slots(d);
+    test_priority_spans_full_range(d);
 
     printf("\ntlb_pinned: %d/%d tests passed\n", tests - errors, tests);
     if (errors > 0)

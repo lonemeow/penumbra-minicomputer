@@ -103,21 +103,21 @@ WRSYS R1, #0, #0
 |:----:|------|------------------------------------------------------|
 | 4:0  | set  | Set index (0–31) for main TLB                        |
 | 5    | way  | Way (0 or 1) within set for main TLB                 |
-| 6    | PIN  | 0 = main TLB (way/set); 1 = pinned TLB (slot in bits 1:0) |
+| 6    | PIN  | 0 = main TLB (way/set); 1 = pinned TLB (slot in bits 2:0) |
 
 The hardware requires main TLB entries for VA to live in `set = VA[16:12]`.
 Software chooses the way for replacement.
 
 ### Pinned TLB (TLB_INDEX bit 6)
 
-The pinned TLB is a 4-entry fully-associative structure checked in
+The pinned TLB is an 8-entry fully-associative structure checked in
 parallel with the main TLB. A pinned hit takes priority. Use for
 entries that must never cause TLB misses (miss handler code page,
-PGD). No set constraint applies.
+PGD, kernel UAREA pages). No set constraint applies.
 
 ```
  TLB_INDEX bit 6 = 0:  main TLB     {way=bit5, set=bits4:0}
- TLB_INDEX bit 6 = 1:  pinned TLB   {slot=bits1:0}
+ TLB_INDEX bit 6 = 1:  pinned TLB   {slot=bits2:0}
 ```
 
 ### TLB_VPN (reg 3) and TLB_PTE (reg 4)
