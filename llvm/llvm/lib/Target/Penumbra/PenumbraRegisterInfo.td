@@ -36,8 +36,14 @@ class PenumbraReg<bits<4> num, string n, list<string> altNames = []>
 class PenumbraGPR<bits<4> num, string n, list<string> altNames = []>
     : PenumbraReg<num, n, altNames>;
 
-// R0 is hardwired to zero — mark isConstant so MachineCopyPropagation will
-// forward it through COPY chains unconditionally (its value never changes).
+// R0 is hardwired to zero — mark isConstant so passes that distinguish
+// "always reads as 0" from merely "reserved" (e.g. MCP's check at
+// MachineCopyPropagation.cpp:830) treat $r0 as safe to forward.
+// Caveat: MCP still won't actually forward through `$rN = COPY $r0` in
+// practice because virtregrewriter doesn't mark the destination as
+// renamable when the source is a reserved physreg, and MCP gates
+// forwarding on the renamable flag.  See doc/llvm-mcp-zero-reg-forwarding.md
+// for the full investigation and the resume-here notes.
 let isConstant = true in
 def R0  : PenumbraGPR<0,  "r0", ["zero"]>;
 
