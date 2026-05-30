@@ -697,7 +697,7 @@ static struct {
 } tlb;
 
 // --- Pinned TLB (4 entries, fully associative) ---
-static constexpr int PTLB_ENTRIES = 4;
+static constexpr int PTLB_ENTRIES = 8;
 static struct {
     uint32_t vpn[PTLB_ENTRIES];
     uint32_t pte[PTLB_ENTRIES];
@@ -708,7 +708,7 @@ static struct {
     uint32_t cr;          // [0]=M enable, [15:8]=ASID
     uint32_t fault_addr;
     uint32_t fault_status;
-    uint32_t tlb_idx;     // [6]=pinned, [5]=way, [4:0]=set (or [1:0]=pin slot)
+    uint32_t tlb_idx;     // [6]=pinned, [5]=way, [4:0]=set (or [2:0]=pin slot)
     uint32_t tlb_vpn_reg; // Shared staging register
     bool     enabled() const { return cr & 1; }
     uint8_t  asid()    const { return (cr >> 8) & 0xFF; }
