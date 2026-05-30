@@ -66,6 +66,7 @@ The project's next major **CPU design era transition** — from Penumbra/1's cla
 *   **[Penumbra/2 Overview](./internals/penumbra2/overview.md)** — Start here. Goals, architecture summary, gen2 / gen2.5 / future roadmap, reading guide.
 *   **[Penumbra/2 Design Decisions](./internals/penumbra2/design-decisions.md)** — The 11 architectural decisions, each with full rationale, alternatives considered, and consequences.
 *   **[Penumbra/2 Pipeline Stages](./internals/penumbra2/pipeline-stages.md)** — Per-stage description, inter-stage register layouts, stall/squash semantics, cycle-accurate timing examples.
+*   **[Penumbra/2 Hazard Model](./internals/penumbra2/hazard-model.md)** — The scoreboard: storage, valid-bit lifecycle, stall predicate, ISA→physical register mapping, S/I control-state serialization, flag (NZCV) hazards, and divmul / drain-commit / exception-entry interactions.
 
 ---
 

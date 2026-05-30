@@ -733,10 +733,18 @@ commit cycle.
 | Instruction | Post-commit wait | Why |
 |-------------|------------------|-----|
 | ERET | 0 cycles | SR/PC change is internal to the CPU, observable the same cycle |
+| WRSPR SR | 0 cycles | Changes S/I/NZCV. S/I are consumed by the MMU and IF1 IRQ logic (out-of-pipeline structures a value scoreboard cannot order); serialization is required so no younger insn is in flight under the old mode. Internal effect → no post-commit wait. |
+| EI / DI | 0 cycles | Change the I bit, consumed by IF1 IRQ-acceptance. Serialization makes `DI`'s disable precise (no younger insn interrupted after it) and makes the `EI; DI` window idiom robust (`EI`'s enable is observable to IF1 for a bounded fetch window before `DI` closes it). Internal effect → no post-commit wait. |
 | WRSYS | 1 cycle | Sysreg sideband write must latch in the target device (synchronous, next-clock) before subsequent insns can observe the new state |
 
 The variants share all mechanism; they differ only in a 1-bit
-"post-commit wait" decoder flag.
+"post-commit wait" decoder flag. ERET, WRSPR SR, and EI/DI take
+the 0-cycle variant; WRSYS takes the 1-cycle variant.
+
+The S/I serialization rationale (why these control bits are
+ordered by drain-commit rather than by the hazard scoreboard) is
+developed in
+[hazard-model.md §7](./hazard-model.md#7-control-state-serialization-the-s-and-i-bits).
 
 **Rationale.** The alternative — carrying pending-effect values
 through MEM/WB pipeline registers for drain-commit instructions —
@@ -788,13 +796,20 @@ is much harder to forget.
   instructions provides that guarantee for free; without it, the
   scoreboard would need a more complex re-mapping mechanism.
 
-- **Initial users.** ERET, WRSYS.
+- **Initial users.** ERET, WRSPR SR, EI, DI, WRSYS. (ERET and
+  WRSYS were the original two; WRSPR SR and EI/DI were added when
+  the hazard model established that the S and I bits must be ordered
+  by serialization rather than by the value scoreboard — see
+  [hazard-model.md §7](./hazard-model.md#7-control-state-serialization-the-s-and-i-bits).)
 
 - **Future users.** Any new SYNC/FENCE-style instruction (none
-  planned for gen2, but the mechanism is in place). Potentially WRSPR
-  if SPR ordering ever becomes a concern (currently single-CPU and
-  SPR reads happen via the same EX stage that performs writes, so
-  ordering is naturally serial — not currently needed).
+  planned for gen2, but the mechanism is in place). Note WRSPR to
+  the *other* SPRs (USP, ESR, EPC, SCRn) is deliberately **not**
+  drain-commit — those are ordinary scoreboarded entries, because
+  the TLB miss handler's hot path leans on cheap WRSPR-SCRn spills
+  (see [hazard-model.md §5.2](./hazard-model.md#52-scrn-coverage-rationale)).
+  Only WRSPR SR drain-commits, because only SR carries the
+  out-of-pipeline S/I control bits.
 
 **Alternatives considered.**
 
