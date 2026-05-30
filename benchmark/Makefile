@@ -17,9 +17,19 @@ LD      := $(LLVM_PREFIX)/bin/ld.lld
 
 TARGET  := penumbra-unknown-none
 COPT    ?= -O2
+
+# Default (memtest, membench): PIE so the ROM ELF loader can drop the
+# image at any RAM address and the bench harness self-relocates.
 CFLAGS  := --target=$(TARGET) -fPIE $(COPT) -ffreestanding -nostdlib -I common
 ASFLAGS := --target=$(TARGET) -fPIE -c
 LDFLAGS := --pie --apply-dynamic-relocs --image-base=0 -T common/bench.ld
+
+# Dhrystone-only: static link at fixed VA 0x80000000 so global accesses
+# compile to the classic 2-instruction LUI+LDW sequence (no GOT).
+# Paired with dhry_crt0.S which sets up the VA→PA mapping at boot.
+DHRY_CFLAGS_BASE  := --target=$(TARGET) $(COPT) -ffreestanding -nostdlib -I common
+DHRY_ASFLAGS      := --target=$(TARGET) -c
+DHRY_LDFLAGS      := --image-base=0x80000000 -T dhrystone/dhry.ld
 
 BUILDDIR := $(PROJROOT)/build/benchmark
 
@@ -66,7 +76,7 @@ $(BUILDDIR)/softfloat_stub.o: common/softfloat_stub.c | $(BUILDDIR)
 #
 # Source: https://github.com/Keith-S-Thompson/dhrystone (v2.1/)
 
-DHRYSTONE_ITERATIONS ?= 10000
+DHRYSTONE_ITERATIONS ?= 100000
 
 # Stamp file: forces recompilation when iteration count changes.
 # make doesn't track -D flag changes, so we write the current value
@@ -78,14 +88,41 @@ $(DHRY_STAMP): FORCE | $(BUILDDIR)
 	fi
 FORCE:
 
-DHRY_CFLAGS := $(CFLAGS) -isystem dhrystone/include \
+# Dhrystone uses non-PIE codegen — the same C source files are
+# rebuilt as *.dhry.o so the GOT-free LUI+LDW sequence reaches
+# bench.c / librt.c / string.c too (otherwise common helpers would
+# keep paying GOT indirection for every uart_putchar etc.).
+
+DHRY_CFLAGS := $(DHRY_CFLAGS_BASE) -isystem dhrystone/include \
                -DTIME -Dmain=dhrystone_main \
                -DDHRYSTONE_ITERATIONS=$(DHRYSTONE_ITERATIONS) \
                -Wno-implicit-int -Wno-implicit-function-declaration \
                -Wno-return-type -Wno-deprecated-non-prototype
 
+DHRY_COMMON_CFLAGS := $(DHRY_CFLAGS_BASE)
+
+DHRY_CRT0_OBJ := $(BUILDDIR)/dhry_crt0.o
+
+DHRY_COMMON_OBJ := $(BUILDDIR)/bench.dhry.o $(BUILDDIR)/librt.dhry.o \
+                   $(BUILDDIR)/string.dhry.o $(BUILDDIR)/softfloat_stub.dhry.o
+
 DHRY_OBJ := $(BUILDDIR)/dhry_1.o $(BUILDDIR)/dhry_2.o \
             $(BUILDDIR)/dhry_shim.o $(BUILDDIR)/dhry_entry.o
+
+$(DHRY_CRT0_OBJ): dhrystone/dhry_crt0.S | $(BUILDDIR)
+	$(CC) $(DHRY_ASFLAGS) -x assembler-with-cpp $< -o $@
+
+$(BUILDDIR)/bench.dhry.o: common/bench.c common/bench.h | $(BUILDDIR)
+	$(CC) $(DHRY_COMMON_CFLAGS) -c $< -o $@
+
+$(BUILDDIR)/librt.dhry.o: common/librt.c | $(BUILDDIR)
+	$(CC) $(DHRY_COMMON_CFLAGS) -c $< -o $@
+
+$(BUILDDIR)/string.dhry.o: common/string.c | $(BUILDDIR)
+	$(CC) $(DHRY_COMMON_CFLAGS) -c $< -o $@
+
+$(BUILDDIR)/softfloat_stub.dhry.o: common/softfloat_stub.c | $(BUILDDIR)
+	$(CC) $(DHRY_COMMON_CFLAGS) -c $< -o $@
 
 $(BUILDDIR)/dhry_1.o: dhrystone/dhry_1.c dhrystone/dhry.h $(DHRY_STAMP) | $(BUILDDIR)
 	$(CC) $(DHRY_CFLAGS) -c $< -o $@
@@ -94,15 +131,15 @@ $(BUILDDIR)/dhry_2.o: dhrystone/dhry_2.c dhrystone/dhry.h | $(BUILDDIR)
 	$(CC) $(DHRY_CFLAGS) -c $< -o $@
 
 $(BUILDDIR)/dhry_shim.o: dhrystone/shim.c common/bench.h $(DHRY_STAMP) | $(BUILDDIR)
-	$(CC) $(CFLAGS) -DDHRYSTONE_ITERATIONS=$(DHRYSTONE_ITERATIONS) -c $< -o $@
+	$(CC) $(DHRY_COMMON_CFLAGS) -DDHRYSTONE_ITERATIONS=$(DHRYSTONE_ITERATIONS) -c $< -o $@
 
 $(BUILDDIR)/dhry_entry.o: dhrystone/entry.c common/bench.h $(DHRY_STAMP) | $(BUILDDIR)
-	$(CC) $(CFLAGS) -DDHRYSTONE_ITERATIONS=$(DHRYSTONE_ITERATIONS) -c $< -o $@
+	$(CC) $(DHRY_COMMON_CFLAGS) -DDHRYSTONE_ITERATIONS=$(DHRYSTONE_ITERATIONS) -c $< -o $@
 
 dhrystone: $(BUILDDIR)/DHRYSTON.ELF
 
-$(BUILDDIR)/DHRYSTON.ELF: $(CRT0_OBJ) $(DHRY_OBJ) $(COMMON_OBJ) common/bench.ld
-	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(DHRY_OBJ) $(COMMON_OBJ) -o $@
+$(BUILDDIR)/DHRYSTON.ELF: $(DHRY_CRT0_OBJ) $(DHRY_OBJ) $(DHRY_COMMON_OBJ) dhrystone/dhry.ld
+	$(LD) $(DHRY_LDFLAGS) $(DHRY_CRT0_OBJ) $(DHRY_OBJ) $(DHRY_COMMON_OBJ) -o $@
 
 # ── memtest ──────────────────────────────────────────────────
 #

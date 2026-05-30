@@ -466,19 +466,22 @@ benchmark-netbsd:
 # ── Benchmark SD image and runners ───────────────────────────
 # Builds benchmark ELFs and creates an SD image containing them.
 # Usage:
-#   make sdimage-bench             — build benchmarks + SD image
-#   make benchmark                 — run all benchmarks on ISS (fast)
-#   make benchmark-rtl             — run all benchmarks on Verilator (cycle-accurate)
-#   make benchmark BENCH_ITERS=10  — override iteration count
-BENCH_IMG   := $(BUILD_DIR)/bench.img
-BENCH_ITERS ?= 10000
+#   make sdimage-bench                       — build benchmarks + SD image
+#   make benchmark                           — run all benchmarks on ISS (fast)
+#   make benchmark-rtl                       — run all benchmarks on Verilator (cycle-accurate)
+#   make benchmark BENCH_ITERS=10            — override Dhrystone iteration count
+#
+# BENCH_ITERS is an opt-in passthrough.  The actual default lives in
+# benchmark/Makefile (DHRYSTONE_ITERATIONS) so there's a single source
+# of truth — top-level only forwards when the user supplies a value.
+BENCH_IMG := $(BUILD_DIR)/bench.img
 
 # Always rebuild the benchmark sources: they're small, compile quickly, and
 # `make` can't see when the compiler itself has changed under it.
 .PHONY: sdimage-bench
 sdimage-bench:
 	@$(MAKE) -C benchmark clean
-	@$(MAKE) -C benchmark DHRYSTONE_ITERATIONS=$(BENCH_ITERS) LLVM_PREFIX=$(LLVM_PREFIX)
+	@$(MAKE) -C benchmark $(if $(BENCH_ITERS),DHRYSTONE_ITERATIONS=$(BENCH_ITERS)) LLVM_PREFIX=$(LLVM_PREFIX)
 	@mkdir -p $(BUILD_DIR)/bench_sd
 	@cp $(BUILD_DIR)/benchmark/*.ELF $(BUILD_DIR)/bench_sd/ 2>/dev/null || true
 	@sw/tools/mksdimage.sh -o $(BENCH_IMG) -e $(BUILD_DIR)/bench_sd -v
