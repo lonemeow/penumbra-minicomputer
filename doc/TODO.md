@@ -346,23 +346,16 @@ sub-phases above) is the cleanest way to attribute the 1.1 ms.
 
 ### Why `pmap_remove_all` is suspiciously large on its own
 
-117 ms ≈ 2.94 M cycles for an init-sized address space (~2000 valid
+~118 ms ≈ 2.95 M cycles for an init-sized address space (~2000 valid
 pages, sparse over ~10 valid L1 slots).  That works out to ~1500
-cycles per visited *valid* PTE.  Same culprits as `pmap_enter`'s
-per-call cost — per-L2 cached SDRAM walk, `pv_remove` SLIST
-traversal — but here the scratch-window cache would help directly
-since adjacent L2 walks share PA.
-
-### Why `pmap_remove_all` is suspiciously large on its own
-
-118.6 ms ≈ 2.97 M cycles for an init-sized address space (~2000 valid
-pages typical, sparse over ~10 valid L1 slots).  That works out to
-~1500 cycles per visited *valid* PTE, far more than the algorithm
-describes — a load+branch on invalid entries and a PV-list walk +
-stat decrement on valid ones.  Likely culprits: the per-L2 cached
-SDRAM walk over 1024 entries each (256 cache lines × first-touch
-SDRAM latency), and `pv_remove`'s SLIST traversal hitting cold lines.
-Worth a closer look in its own right after the bigger gap is closed.
+cycles per visited *valid* PTE — far more than the algorithm
+describes (load+branch on invalid entries; PV-list walk + stat
+decrement on valid ones).  Likely culprits: the per-L2 cached SDRAM
+walk over 1024 entries each (256 cache lines × first-touch SDRAM
+latency), and `pv_remove`'s SLIST traversal hitting cold lines.
+Scratch-window cache (item 2 in "Quickest wins" below) would help
+directly since adjacent L2 walks share PA.  Worth a closer look in
+its own right after the bigger gap is closed.
 
 ### Quickest wins, ranked by leverage
 
@@ -609,6 +602,138 @@ Future "rip out the pinned scratch page entirely" work could
 extend SCR usage to `_trap_entry_*` stubs and `_trap_common`'s
 early state stashing.  Diminishing returns curve is steep and
 not currently a priority.
+
+## Hardware/kernel: cache performance counters — DONE
+
+Four free-running 32-bit counters per cache device (regs 10-13 on
+`SYSDEV_L1_DCACHE`, `SYSDEV_L1_ICACHE`, `SYSDEV_L2_CACHE`):
+`READ_HITS`, `READ_MISSES`, `WRITE_HITS`, `WRITE_MISSES`.  HIT/MISS
+classification is by the tag check at the moment of access —
+definitions are policy-invariant across every WT/WB × WnA/WA
+combination, so the counter names carry through future cache
+policy changes without losing meaning.
+
+Three vantage points expose the same counters:
+
+- **RTL**: shared `hw/rtl/soc/cache_perfctr.sv` submodule,
+  instantiated by each cache.  L1 uses edge-detection on live
+  `i_re`/`i_we`; L2 reuses its `s1_valid` one-shot plus a small
+  `fill_reserve_pending` flop to suppress the post-fill re-serve.
+- **Bare-metal**: `bench_cache_perf_snapshot_{l1d,l1i,l2}` and
+  `bench_cache_perf_print_delta` in `benchmark/common/bench.[ch]`;
+  Dhrystone's harness prints deltas alongside the existing CPU
+  perfctrs.
+- **NetBSD**: `machdep.cache.{l1d,l1i,l2}.{read,write}_{hits,misses}`
+  `CTLTYPE_QUAD` sysctls (in
+  `netbsd/sys/arch/penumbra/penumbra/cache_perfctrs.c`).  Read via
+  stock `sysctl(8)` — no custom userland tool needed.
+
+Commits: `95b26c56a8ca` (RTL + tests), `32e262381274` (bare-metal
+harness), `102973802e41` (NetBSD sysctl).
+
+Verified-by-construction: the two cross-layer identities (L1-D
+writes total = L2 writes total, L1 read misses × 4 = L2 reads
+total) hold to the count on Dhrystone — a strong end-to-end
+correctness signal beyond what the unit tests alone would give.
+
+## Hardware: L2 phase 1.5 — WT-WnA — DONE
+
+Replaced the phase-1 write-invalidate-on-hit policy at L2 with
+proper write-through, write-no-allocate.  On a write hit the
+cached line's data is updated in place via byte-en instead of
+dropped; cached read-modify-write lines (kernel page tables,
+globals, ring-buffer state) now persist across writes.
+
+Commit: `42e92324dc0d`.  Measured on FPGA:
+
+- Dhrystone L2 read miss rate: **1.5% → 0.02%** (-98.7%)
+- Dhrystone L2 write hits: 40K → **841K** (×21), confirming the
+  working set is L2-resident under WT-WnA
+- pbench locality-sensitive workloads improve:
+  `clock_gettime` -8.9%, `pipe_pingpong` -5.8%, `qsort_int` -6.4%
+- Streaming workloads (`memcpy`/`memset` 64K) ~flat — bottleneck
+  is SDRAM bandwidth, not L2 policy
+
+Software-visible contract unchanged (INFO still `WB=0, WA=0`).
+Test surface grew from 42 → 76 assertions on `tb_l2_cache`,
+including multi-set independence, byte-en accumulation, and the
+post-reset-walker pass-through demotion contract.
+
+## Hardware: L2 phase 2 — write-back / write-allocate
+
+The headline remaining cache optimization, and the highest-impact
+item left in this section.  Today every L1-D store under WT-WnA
+still pays a full SDRAM round-trip — Dhrystone shows 1.22M writes
+per run, each ~20-30 cycles, ~25-37M cycles of write traffic on a
+45M-cycle run.  Phase 2 absorbs writes into L2 entirely until
+eviction.
+
+Upper-bound win (from current measurements): the 841K Dhrystone
+write hits become zero-bus-traffic dirty marks (~25M cycles saved
+on Dhrystone alone, before counting kernel workload gains).  WA
+additionally captures the 380K cold writes at the cost of one
+read-fill per first-touch line — net positive when intra-line
+write locality is high (stack frames, page zeroing).  pbench data
+shows the workloads WT-WnA didn't help (`fork_exit`, large
+`memset`) are precisely the ones that have heavy cold-write
+traffic, which WB+WA targets.
+
+Implementation outline (full design in
+`doc/internals/l2-cache.md` § Write Policy / Phasing):
+
+- Per-line dirty bit (4096 bits at 64 KB / 16 B lines)
+- Stage-1 write hit sets dirty (no bus traffic)
+- Eviction of dirty line writes back before installing new line
+- `FLUSH_LINE` / `FLUSH_ALL` sysreg ops for software-managed
+  coherence (DMA-out preparation, etc.)
+- WA path: write miss allocates the line, then dirty-marks it
+- Optional phase 3: 1-deep writeback buffer to overlap eviction
+  drain with the new line fill
+
+Estimated complexity: ~250-300 lines of RTL + dirty bit storage,
+plus FLUSH ops and the eviction state machine.  Test surface adds
+write-hit-no-bus-traffic, dirty-eviction-writes-back, and
+flush-then-evict-is-clean assertions.
+
+Forward-looking note on perfctrs: the reserved slots at
+`SYSDEV_*CACHE` regs 14-15 will likely become `LINE_FILLS` and
+`WRITEBACKS` post-phase-2, directly answering "did WA's read-fill
+cost pay back via intra-line locality."
+
+## Hardware: L2 write buffer (latency-hiding alternative)
+
+A smaller, orthogonal option to WB phase 2: a 1-4 word write
+buffer at the L2's downstream port.  Hides write latency (CPU
+stops stalling on the SDRAM round-trip) without reducing SDRAM
+write traffic.
+
+For the current single-master system (no DMA contending for SDRAM
+bandwidth) latency hiding and traffic elimination are nearly
+equivalent in CPU-visible cost.  The write buffer is materially
+cheaper to implement (~30-50 lines vs ~250-300 for WB+WA), and
+the snoop complexity normally associated with write buffers is
+handled for free by WT-WnA's byte-en update — L2's cached copy is
+fresh as soon as the buffer accepts the write, so subsequent
+L1 read-misses to that line return correct data from L2's cache
+without needing to consult the buffer.
+
+When to pick this over phase 2:
+
+- Lower complexity budget / faster-landing intermediate
+- Single-master system stays single-master
+- Want to confirm the CPU-side latency-hiding hypothesis cleanly
+  before committing to the larger WB engineering effort
+
+When phase 2 is required instead:
+
+- Future DMA needs SDRAM bandwidth (writes from CPU starve other
+  masters)
+- Sustained write rate exceeds SDRAM drain rate (buffer fills up,
+  CPU stalls again)
+- Power/thermal sensitivity to SDRAM utilisation
+
+They compose: WB phase 2 + write buffer (= phase 3 in the L2 doc)
+is the maximally aggressive design.
 
 ## Hardware: read-miss fills pay 1-2 unnecessary cycles re-classifying
 
