@@ -362,6 +362,12 @@ module l2_cache
     // The FSM still uses combinational `hit` so miss handling
     // and PLRU updates fire at stage-1 (no extra latency on the
     // critical fill path).
+    //
+    // STATUS: these flops are clocked but currently unused — the
+    // output muxes below read the combinational stage-1 signals
+    // (HIT_LATENCY=2).  They are retained as the seed for the
+    // decoupled+registered read pipeline; wiring them into the
+    // o_rdata/o_busy muxes is the fmax half of that work.
     // ══════════════════════════════════════════════════════════
     logic                hit_q;
     logic [31:0]         hit_data_q;
@@ -520,10 +526,13 @@ module l2_cache
     // S_FILL response stream (cache_vipt above us captures live).
     // ══════════════════════════════════════════════════════════
     always_comb begin
-        // BISECT: s2-q reverted to combinational hit/hit_data path
-        // to test whether the s2-q pipeline is the source of the
-        // dhrystone/memtest immediate-hang bug on RTL sim.  If
-        // dhrystone passes after this, the bug is in s2-q timing.
+        // HIT_LATENCY=2: drive o_rdata from the combinational stage-1
+        // `hit_data`.  The s2-q output flops (hit_q/hit_data_q, see
+        // the "Stage-2 output registers" block above) are built but
+        // deliberately not wired in here — enabling them adds a third
+        // hit-latency cycle to buy ~1.5 MHz of fmax.  Deferred until
+        // the read pipeline is decoupled, so the extra stage doesn't
+        // also serialise per-word fill throughput.
         if (state == S_IDLE && s1_valid && l2_active(s1_cacheable)
             && s1_re && hit)
             o_rdata = hit_data;
@@ -554,7 +563,8 @@ module l2_cache
                 end else if (l2_active(i_cacheable) && i_we) begin
                     o_busy = i_mem_busy;
                 end else if (l2_active(i_cacheable) && i_re) begin
-                    // BISECT: reverted to combinational hit (was s2-q).
+                    // HIT_LATENCY=2 combinational hit (s2-q output
+                    // flops bypassed; see the o_rdata mux above).
                     if (!s1_valid)
                         o_busy = 1'b1;
                     else if (hit)
