@@ -734,7 +734,7 @@ commit cycle.
 |-------------|------------------|-----|
 | ERET | 0 cycles | SR/PC change is internal to the CPU, observable the same cycle |
 | WRSPR SR | 0 cycles | Changes S/I/NZCV. S/I are consumed by the MMU and IF1 IRQ logic (out-of-pipeline structures a value scoreboard cannot order); serialization is required so no younger insn is in flight under the old mode. Internal effect → no post-commit wait. |
-| EI / DI | 0 cycles | Change the I bit, consumed by IF1 IRQ-acceptance. Serialization makes `DI`'s disable precise (no younger insn interrupted after it) and makes the `EI; DI` window idiom robust (`EI`'s enable is observable to IF1 for a bounded fetch window before `DI` closes it). Internal effect → no post-commit wait. |
+| EI / DI | 0 cycles | Change the I bit, consumed by IF1 IRQ-acceptance. Serialization makes `DI`'s disable precise (no younger insn interrupted after it) and keeps `EI`'s ISA-mandated one-instruction enable delay (`ei_shadow`) *architectural* — a single `NOP` cracks one IRQ window regardless of pipeline depth, and `EI; ERET` stays atomic. Internal effect → no post-commit wait. |
 | WRSYS | 1 cycle | Sysreg sideband write must latch in the target device (synchronous, next-clock) before subsequent insns can observe the new state |
 
 The variants share all mechanism; they differ only in a 1-bit

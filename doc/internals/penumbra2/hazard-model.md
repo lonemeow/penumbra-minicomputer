@@ -509,18 +509,22 @@ reasons:
    boundary: `DI` commits, the pipeline is drained, and only then
    do younger instructions fetch under I=0.
 
-2. **The `EI; DI` window idiom.** Kernels crack a brief interrupt
-   window at a safe point with an `EI; DI` pair, expecting a
-   pending IRQ to slip through. This works only if `EI`'s effect
-   is architecturally observable to the IF1 IRQ logic for at least
-   one fetch cycle before `DI` closes it again. Under drain-commit,
-   `EI` commits → I=1 is live → the pipeline fetches `DI` and during
-   those fetch cycles IF1 can sample and accept a pending IRQ →
-   then `DI` commits I=0. The window is real and bounded. A
-   speculative or writeback-delayed `EI` could instead have its
-   I=1 overwritten by `DI` before IF1 ever sampled it, and the
-   interrupt would silently never fire. (This is the same hazard
-   the Z80 avoids by delaying `EI` one instruction.)
+2. **`EI`'s one-instruction shadow must stay *architectural*.** The
+   ISA mandates that `EI` enables interrupts with a one-instruction
+   delay (the `ei_shadow` mechanism), so that `EI; ERET` returns
+   atomically and so that `EI; NOP; DI` cracks exactly one
+   interrupt window at a safe point. "One instruction" has to mean
+   one *architectural* instruction, independent of pipeline depth —
+   otherwise a programmer would have to pad with pipeline-depth-many
+   NOPs and the ISA contract would leak the microarchitecture.
+   Drain-commit guarantees it: because the pipeline is drained when
+   `EI` commits, the shadowed instruction is unambiguously the
+   single next fetch, so one `NOP` suffices on gen2 exactly as on
+   the microcoded gen1. (Note `EI; DI` with *no* instruction
+   between opens no window at all — the shadow covers the `DI`,
+   which re-masks; this is correct delayed-EI behavior, not a bug.
+   Full interrupt-recognition timing is in
+   [exception-flow.md](./exception-flow.md).)
 
 3. **Uniformity and cost.** Making EI/DI drain-commit means *every*
    instruction touching S or I serializes, so the scoreboard owns
@@ -876,7 +880,7 @@ events injected) is also recommended once the directed tests pass.
 - [pipeline-stages.md §Stall sources](./pipeline-stages.md#stall-sources)
   and [§Cycle-accurate timing examples](./pipeline-stages.md#cycle-accurate-timing-examples).
 - [exception-flow.md](./exception-flow.md) — fault commit and
-  save-state's bypass of the scoreboard. *(To be written.)*
+  save-state's bypass of the scoreboard.
 - [control-decode.md](./control-decode.md) — the decoder's
   control-vector layout, including the `phys_src_*`/`phys_dst`
   fields and any `writes_flags`/`reads_flags` bits Section 8
