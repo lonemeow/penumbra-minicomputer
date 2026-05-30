@@ -24,6 +24,7 @@
 #define ELFCLASS32   1
 #define ELFDATA2LSB  1      /* little-endian */
 
+#define ET_EXEC      2      /* statically linked executable (fixed VA) */
 #define ET_DYN       3      /* PIE / shared object */
 #define EM_PENUMBRA  0xF0DA
 
@@ -31,7 +32,7 @@
 
 struct elf32_ehdr {
     unsigned char e_ident[EI_NIDENT];
-    unsigned short e_type;       /* ET_DYN for PIE */
+    unsigned short e_type;       /* ET_DYN (PIE) or ET_EXEC (static) */
     unsigned short e_machine;    /* EM_PENUMBRA */
     uint32_t e_version;
     uint32_t e_entry;            /* entry point (virtual address) */

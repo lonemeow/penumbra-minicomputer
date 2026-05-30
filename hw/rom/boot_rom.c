@@ -479,8 +479,15 @@ static int elf_validate(const struct elf32_ehdr *ehdr) {
                         (unsigned int)ehdr->e_machine);
         return -1;
     }
-    if (ehdr->e_type != ET_DYN) {
-        console_puts("Not a PIE (ET_DYN) ELF\r\n");
+    /* Accept both ET_DYN (PIE — the common case, harness self-relocates)
+     * and ET_EXEC (static link at a fixed VA — used by the static
+     * Dhrystone build whose crt0 maps its link VA to the chosen load
+     * PA via the TLB miss handler).  Both share the same loader path:
+     * we place segments relative to base_vaddr at our chosen load_base
+     * and relocate e_entry by the same delta.  ET_EXEC images are
+     * expected to ship with no dynamic relocations. */
+    if (ehdr->e_type != ET_DYN && ehdr->e_type != ET_EXEC) {
+        console_puts("ELF e_type must be ET_DYN or ET_EXEC\r\n");
         return -1;
     }
     if (ehdr->e_phnum == 0) {
