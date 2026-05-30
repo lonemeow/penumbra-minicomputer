@@ -325,7 +325,7 @@ Written by ID, read by EX.
 | `next_pc` | 32 | `PC + 4` |
 | `op_a` | 32 | Source operand A (regfile or PC for PC-relative) |
 | `op_b` | 32 | Source operand B (regfile or sign/zero-extended immediate) |
-| `op_rdh` | 32 | Third operand for DIVL (`Rdh` for 64-bit dividend high half); unused otherwise |
+| `op_rdh` | 32 | Third operand for DIV (`Rdh` for 64-bit dividend high half); unused otherwise |
 | `phys_dst` | 5 | Physical scoreboard entry to clear on commit |
 | `phys_dst_hi` | 5 | Second physical entry for MUL/DIV high half; unused otherwise |
 | `valid` | 1 | 0 = bubble |

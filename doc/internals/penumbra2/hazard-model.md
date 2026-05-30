@@ -255,9 +255,9 @@ source registers. Multi-source cases the decoder must handle:
 | `WRSPR SPR, Rs` | `{Rs}` (and `D = SPR_phys`). `WRSPR SR` writes NZCV (`D = NZCV`) and is itself drain-commit. |
 | `RDSYS Rd, sysreg_id` | `{}` (sysreg ID is encoded; not a regfile read) |
 | `WRSYS sysreg_id, Rs` | `{Rs}` |
-| MUL/DIV/DIVL/MOD | `{Ra, Rb}` (writes a 2-entry destination, see below) |
+| MUL/DIV | `{Ra, Rb}` (writes a 2-entry destination, see below) |
 
-For MUL/DIV/DIVL/MOD the instruction writes **two** physical
+For MUL/DIV the instruction writes **two** physical
 entries, `Rd` (low/quotient) and `Rdh` (high/remainder). While the
 divmul is in flight it is an in-flight writer of both, so both
 `valid[Rd]` and `valid[Rdh]` read 0 and any *reader* of either
@@ -655,7 +655,7 @@ scoreboard entirely.
 
 ## 10. Interaction with divmul
 
-The MUL/DIV/DIVL/MOD instructions execute as a single µop with a
+The MUL/DIV instructions execute as a single µop with a
 multi-cycle EX iteration (~34 cycles). The divmul unit owns the
 ALU and writes two register results (`Rd` for the low half /
 quotient, `Rdh` for the high half / remainder) via the regfile's
@@ -679,7 +679,7 @@ Scoreboard interaction:
    beyond the scoreboard). The MEM and WB stages see bubbles
    propagated from EX during the divmul iteration.
 
-DIV-by-zero and DIVL-overflow raise `VEC_ARITH` (vector slot 10);
+DIV-by-zero and narrowing-DIV overflow raise `VEC_ARITH` (vector slot 10);
 that fault propagates through the normal precise-exception
 mechanism in [exception-flow.md](./exception-flow.md), squashing
 the divmul's writes by virtue of the WB-stage fault-commit squash

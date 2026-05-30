@@ -89,11 +89,11 @@ for a second-generation core.
   emulation in gen2 would give up substantial real-workload
   performance. The divmul unit writes two GPRs per instruction
   (`Rd` low half + `Rdh` high half for MUL; `Rd` quotient + `Rdh`
-  remainder for DIV; analogous for DIVL/DIVLU) — see
+  remainder for DIV) — see
   [Decision 4](#4-hazard-handling-strategy) for the regfile
   implication.
 - **New ISA exception: `VEC_ARITH`** added at vector slot 10 (currently
-  reserved). Raised by the divmul on DIV-by-zero and DIVL overflow.
+  reserved). Raised by the divmul on DIV-by-zero and narrowing-DIV overflow.
   This is the only ISA-visible addition gen2 makes beyond Penumbra/1's
   current spec; userland is unaffected because the trigger is a
   programmer error.
@@ -543,7 +543,7 @@ clearly against keeping microcode.
   that writes both `Rd` via the main regfile write port and `Rdh`
   via divmul's dedicated second write port (see
   [Decision 4](#4-hazard-handling-strategy)). DIV-by-zero and
-  DIVL overflow raise `VEC_ARITH` (vector 10).
+  narrowing-DIV overflow raise `VEC_ARITH` (vector 10).
 
 **Alternatives considered.** Microcode trap-in for exception entry +
 RTI (rejected: adds infrastructure for one logical operation; the FSM
