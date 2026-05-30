@@ -30,6 +30,7 @@
 #include "assym.h"
 #include <machine/sysreg.h>
 #include <machine/pmap.h>
+#include <machine/param.h>
 
 #define KERN_TEXT_VA	0x80010000	/* KERNEL_TEXT_BASE */
 #define BOOTINFO_MAGIC	0x50454E49	/* "PENI" — must match bootinfo.h */
@@ -413,8 +414,10 @@ _start_bias:
 /* ═══════════════════════════════════════════════════════════════
  * Step 9: Pin TLB slots
  *
- * Slot 0: Vector page — VECTOR_VA (0xFFFFB000) → PA 0x0
- * Slot 1: Kernel L1 — VA 0xFFFFE000 → PA of _boot_l1
+ * Slot 0: Vector page  — VECTOR_VA (0xFFFFB000) → PA 0x0
+ * Slot 1: Kernel L1    — PT_KERN_L1_VA (0xFFFFE000) → PA of _boot_l1
+ * Slot 4: User L1      — PT_USER_L1_VA (0xFFFFA000) → PA of _boot_l1
+ *                        (default; pmap_activate reprograms per LWP)
  * ═══════════════════════════════════════════════════════════════ */
 
 	/* Pin vector page (slot 0): VECTOR_VA (0xFFFFB000) → PA 0
@@ -431,11 +434,14 @@ _start_bias:
 	lli	r1, #PTE_KERNEL		/* V|C|R|W|X|G */
 	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_PTE
 
-	/* Pin kernel L1 (slot 1): VA 0xFFFFE000 → PA of _boot_l1
+	/* Pin kernel L1 (slot 1): VA 0xFFFFE000 → PA of _boot_l1.
+	 * This slot is permanent — the fast walker reads kernel-VA
+	 * page-table entries from here regardless of which user pmap
+	 * is active (SH-4-style split walker).
 	 * VPN = 0xFFFFE → TLB_VPN = 0x0FFFFE00
 	 * PTE = l1_pa | V|C|R|W|G (0x9D)
 	 */
-	lli	r1, #PTLB_L1
+	lli	r1, #PTLB_KERN_L1
 	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_INDEX
 
 	lli	r1, #0xFE00
@@ -444,6 +450,24 @@ _start_bias:
 
 	lli	r1, #0x9D		/* V|C|R|W|G */
 	or	r1, r7			/* R7 = L1 PA (still in reg) */
+	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_PTE
+
+	/* Pin user L1 (slot 4) initially to the kernel L1 too.
+	 * pmap_activate reprograms this slot per LWP; the default
+	 * here means a stray user-VA access in kernel context
+	 * walks kernel L1, finds no entry, and faults cleanly
+	 * instead of recursing on an unmapped PT_USER_L1_VA.
+	 * VPN = 0xFFFFA → TLB_VPN = 0x0FFFFA00.
+	 */
+	lli	r1, #PTLB_USER_L1
+	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_INDEX
+
+	lli	r1, #0xFA00
+	lui	r1, #0x0FFF		/* R1 = 0x0FFFFA00 */
+	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_VPN
+
+	lli	r1, #0x9D		/* V|C|R|W|G */
+	or	r1, r7			/* R7 = kernel L1 PA */
 	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_PTE
 
 /* ═══════════════════════════════════════════════════════════════
@@ -552,12 +576,20 @@ _start_bias:
 
 
 /* ═══════════════════════════════════════════════════════════════
- * Real TLB miss handler — page table walking.
+ * Real TLB miss handler — page table walking (SH-4-style split).
  *
  * Walks a 2-level page table (L1 → L2) using pinned TLB slots:
- *   Slot 0: Vector page at VECTOR_VA (handler code + scratch)
- *   Slot 1: Current L1 table (at fixed VA 0xFFFFE000)
- *   Slot 2: L2 window (at fixed VA 0xFFFFD000, remapped per miss)
+ *   Slot 0: Vector page at VECTOR_VA  (handler code + scratch)
+ *   Slot 1: Kernel L1   at PT_KERN_L1_VA (0xFFFFE000, permanent)
+ *   Slot 2: L2 window   at PT_L2WIN_VA   (0xFFFFD000, remapped per miss)
+ *   Slot 4: User L1     at PT_USER_L1_VA (0xFFFFA000, re-pinned by
+ *                                          pmap_activate per LWP)
+ *
+ * The handler branches on the faulting VA's MSB: kernel VAs
+ * (signed-negative) walk the kernel L1 via slot 1; user VAs walk
+ * the current user L1 via slot 4.  No kernel-half mirroring in
+ * user pmaps is needed — kernel and user L1s are completely
+ * disjoint structures.
  *
  * This code is copied to vector page offset 0x80 by locore.S
  * during early boot (physical mode).  Active from MMU enable.
@@ -605,17 +637,26 @@ _real_miss_handler:
 	/* Read faulting virtual address */
 	rdsys	r1, #SYSDEV_MMU, #MMU_FAULT_ADDR
 
-	/* ── L1 lookup ──────────────────────────────
+	/* ── L1 lookup (SH-4-style split walker) ────
 	 * R1 = faulting VA
-	 * L1 is pinned at VA 0xFFFFE000 (slot 1).
+	 * Branch on VA MSB: kernel VAs (>= 0x80000000, signed < 0)
+	 * walk PT_KERN_L1_VA (slot 1); user VAs walk PT_USER_L1_VA
+	 * (slot 4).  Sign-test via cmp/blt: kernel VAs are signed
+	 * negative, user VAs signed non-negative.
 	 * L1 index = VA[31:22], each entry is 4 bytes.
 	 */
 	mov	r2, r1
 	shr	r2, #PT_L1_SHIFT		/* R2 = L1 index (bits 31:22) */
 	shl	r2, #2			/* R2 = byte offset into L1 */
 
-	lli	r3, #0xE000
-	lui	r3, #0xFFFF		/* R3 = 0xFFFFE000 (PT_L1_VA) */
+	cmp	r1, r0			/* signed compare VA to 0 */
+	blt	.Lrmh_kern_l1		/* VA < 0 (MSB set) → kernel L1 */
+	lli	r3, #0xA000		/* user VA → PT_USER_L1_VA */
+	b	.Lrmh_l1_hi
+.Lrmh_kern_l1:
+	lli	r3, #0xE000		/* kernel VA → PT_KERN_L1_VA */
+.Lrmh_l1_hi:
+	lui	r3, #0xFFFF		/* R3 = 0xFFFF_X000 selected above */
 	add	r3, r2			/* R3 = &L1[index] */
 	ldw	r3, [r3]		/* R3 = L1E (L2 PA | flags) */
 

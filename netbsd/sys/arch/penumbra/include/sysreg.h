@@ -56,14 +56,23 @@
 #define TLB_NSLOTS	64	/* Total main TLB slots */
 #define TLB_NSETS	32	/* Sets (indexed by VPN[4:0]) */
 #define TLB_NWAYS	2	/* Ways per set */
-#define PTLB_NSLOTS	4	/* Pinned TLB slots (fully associative) */
+#define PTLB_NSLOTS	8	/* Pinned TLB slots (fully associative) */
 #define TLB_INDEX_PINNED 0x40	/* Set bit 6 in TLB_INDEX to target pinned TLB */
 
-/* Pinned TLB slot assignments (TLB_INDEX = TLB_INDEX_PINNED | slot) */
+/*
+ * Pinned TLB slot assignments (TLB_INDEX = TLB_INDEX_PINNED | slot).
+ *
+ * The TLB miss walker (in the pinned vector page) branches on the
+ * faulting VA's MSB and uses either KERN_L1 or USER_L1 — SH-4-style
+ * split walker.  KERN_L1 is pinned once at boot and never moves;
+ * USER_L1 is reprogrammed by pmap_activate on every context switch.
+ */
 #define PTLB_VECTOR	(TLB_INDEX_PINNED | 0)	/* vector page (VECTOR_VA) */
-#define PTLB_L1		(TLB_INDEX_PINNED | 1)	/* kernel L1 page table */
+#define PTLB_KERN_L1	(TLB_INDEX_PINNED | 1)	/* kernel L1 (permanent) */
 #define PTLB_L2WIN	(TLB_INDEX_PINNED | 2)	/* L2 window (TLB handler) */
 #define PTLB_SCRATCH	(TLB_INDEX_PINNED | 3)	/* scratch window (C code) */
+#define PTLB_USER_L1	(TLB_INDEX_PINNED | 4)	/* current user L1 (or V=0) */
+/* Slots 5..7 are currently unused. */
 
 /* TLB_VPN word: (VPN << 8) | ASID */
 #define TLB_VPN_SHIFT	8

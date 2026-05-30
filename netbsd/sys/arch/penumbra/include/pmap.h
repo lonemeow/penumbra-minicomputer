@@ -76,11 +76,16 @@
  * Fixed kernel VAs for pinned TLB slots.
  * Last page (0xFFFFF000) is an unmapped guard to catch -1 derefs.
  * VA 0x0 is NOT mapped — it is the user null guard page.
+ *
+ * KERN_L1 and USER_L1 are walked separately by the fast TLB miss
+ * handler: kernel-VA misses use KERN_L1 (permanent pin); user-VA
+ * misses use USER_L1 (re-pinned per pmap_activate).
  */
-#define PT_L1_VA	0xFFFFE000	/* pinned slot 1: current L1 table */
+#define PT_KERN_L1_VA	0xFFFFE000	/* pinned slot 1: kernel L1 (permanent) */
 #define PT_L2WIN_VA	0xFFFFD000	/* pinned slot 2: L2 window (handler) */
 #define SCRATCH_VA	0xFFFFC000	/* pinned slot 3: C scratch window */
 #define VECTOR_VA	0xFFFFB000	/* pinned slot 0: vector/handler page */
+#define PT_USER_L1_VA	0xFFFFA000	/* pinned slot 4: current user L1 */
 
 /*
  * Number of pre-allocated L2 tables in BSS (locore.S).

@@ -10,7 +10,7 @@
  * All kernel pages require TLB entries with G=1 (global).
  *
  * User VA:    0x0000_1000 – 0x7FFF_FFFF  (2 GB - 4K)
- * Kernel VA:  0x8000_0000 – 0xFFFC_FFFF  (2 GB - 12K)
+ * Kernel VA:  0x8000_0000 – 0xFFFF_9FFF  (2 GB - 24K)
  *
  * User layout is compact to optimize TLB usage:
  *   0x0000_0000  unmapped null guard page
@@ -21,12 +21,13 @@
  *                mmap region above 64 MB (for large programs)
  *   0x7FFF_FFFF  end of user VA
  *
- * Top five pages are reserved for the TLB miss handler:
+ * Top six pages are reserved for the TLB miss handler:
  *   0xFFFF_F000  unmapped guard (catches (void *)-1 derefs)
- *   0xFFFF_E000  L1 pinned TLB slot (current page table L1)
- *   0xFFFF_D000  L2 window pinned TLB slot (transient L2 mapping)
- *   0xFFFF_C000  scratch window (pmap C code page access)
- *   0xFFFF_B000  vector page (handler code + scratch data)
+ *   0xFFFF_E000  PT_KERN_L1_VA  (pinned slot 1 — permanent kernel L1)
+ *   0xFFFF_D000  PT_L2WIN_VA    (pinned slot 2 — transient L2 mapping)
+ *   0xFFFF_C000  SCRATCH_VA     (pinned slot 3 — pmap C code page access)
+ *   0xFFFF_B000  VECTOR_VA      (pinned slot 0 — handler code + scratch)
+ *   0xFFFF_A000  PT_USER_L1_VA  (pinned slot 4 — current user L1)
  *
  * Page tables are always 2-level: L1 (1024 entries, 4 KB)
  * → L2 tables (1024 entries each, 4 KB, covering 4 MB per table).
@@ -47,9 +48,16 @@
 #define VM_MAX_ADDRESS		((vaddr_t) 0xFFFFFFFF)
 #define VM_MAXUSER_ADDRESS	((vaddr_t) 0x80000000)
 
-/* Kernel virtual address range (top 5 pages reserved for TLB handler) */
+/* Kernel virtual address range — top 6 pages reserved:
+ *   0xFFFFA000  PT_USER_L1_VA (pinned slot 4)
+ *   0xFFFFB000  VECTOR_VA     (pinned slot 0)
+ *   0xFFFFC000  SCRATCH_VA    (pinned slot 3)
+ *   0xFFFFD000  PT_L2WIN_VA   (pinned slot 2)
+ *   0xFFFFE000  PT_KERN_L1_VA (pinned slot 1)
+ *   0xFFFFF000  unmapped guard
+ */
 #define VM_MIN_KERNEL_ADDRESS	((vaddr_t) 0x80000000)
-#define VM_MAX_KERNEL_ADDRESS	((vaddr_t) 0xFFFFB000)
+#define VM_MAX_KERNEL_ADDRESS	((vaddr_t) 0xFFFFA000)
 
 /*
  * User stack starts at 64 MB — keeps text, heap, and stack

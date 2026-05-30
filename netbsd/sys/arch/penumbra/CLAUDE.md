@@ -92,10 +92,11 @@ efficiency:
                          kernel data / bss / page tables
                          MMIO devices (mapped via pmap_map_device)
                          virtual_avail → kernel VM pool (UVM)
+0xFFFF_A000  PT_USER_L1_VA pinned slot 4: current user L1 (re-pinned per pmap_activate)
 0xFFFF_B000  VECTOR_VA    pinned slot 0: vector page (handler + scratch)
 0xFFFF_C000  SCRATCH_VA   pinned slot 3: scratch window
 0xFFFF_D000  PT_L2WIN_VA  pinned slot 2: L2 page-table window
-0xFFFF_E000  PT_L1_VA     pinned slot 1: current L1 table
+0xFFFF_E000  PT_KERN_L1_VA pinned slot 1: kernel L1 (permanent, pinned at boot)
 0xFFFF_F000              unmapped guard (catches (void*)-1 derefs)
 ```
 
@@ -106,8 +107,12 @@ accessed via the scratch window (pinned slot 3).
 
 Naming: `PT_L1_*` for first level, `PT_L2_*` for second level — keeps
 page-table levels visually distinct from L1/L2 caches. Pinned slot
-names (in `sysreg.h`): `PTLB_VECTOR`, `PTLB_L1`, `PTLB_L2WIN`,
-`PTLB_SCRATCH`.
+names (in `sysreg.h`): `PTLB_VECTOR`, `PTLB_KERN_L1`, `PTLB_L2WIN`,
+`PTLB_SCRATCH`, `PTLB_USER_L1`.  The fast TLB miss handler branches
+on the faulting VA's MSB and walks either kernel L1 (slot 1, never
+reprogrammed after boot) or current user L1 (slot 4, re-pinned per
+`pmap_activate`) — SH-4-style split walker.  User pmaps therefore
+hold *only* user-VA entries; no kernel-half mirroring.
 
 ## Machine headers (`include/`)
 

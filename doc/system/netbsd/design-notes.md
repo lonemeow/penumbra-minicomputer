@@ -15,7 +15,7 @@ Penumbra-specific -- no `<mips/*.h>` includes.
 - ILP32, little-endian, 4 KB pages
 - 16 registers: R0=zero, R12=TP, R13=LR, R14=SP, R15=PC
 - 2G/2G user/kernel VA split (kernel text at `0x8001_0000`)
-- Software-managed TLB: 64-entry 2-way SA + 4-entry FA pinned
+- Software-managed TLB: 64-entry 2-way SA + 8-entry FA pinned
 - Split I/D PIPT caches, write-through D-cache
 - No FPU -- all floating-point via soft-float
 
@@ -31,10 +31,11 @@ Penumbra-specific -- no `<mips/*.h>` includes.
                          kernel data / bss / page tables
                          MMIO devices (pmap_map_device)
                          virtual_avail -> kernel VM pool (UVM)
+0xFFFF_A000  PT_USER_L1_VA pinned slot 4: current user L1
 0xFFFF_B000  VECTOR_VA    pinned slot 0: vector page
 0xFFFF_C000  SCRATCH_VA   pinned slot 3: scratch window
 0xFFFF_D000  PT_L2WIN_VA  pinned slot 2: L2 window (handler)
-0xFFFF_E000  PT_L1_VA     pinned slot 1: current L1 table
+0xFFFF_E000  PT_KERN_L1_VA pinned slot 1: kernel L1 (permanent)
 0xFFFF_F000              unmapped guard
 ```
 

@@ -186,13 +186,11 @@ pmap_scratch_va(void)
  * after pmap_init(), use uvm_pagealloc with UVM_PGA_USERESERVE
  * (L2 allocation is critical — dipping into reserve is justified).
  *
- * INVARIANT: Kernel L2 tables are never freed.  User pmaps get
- * a snapshot of the kernel L1 at pmap_create() time; entries
- * added later are lazily propagated by trap.c on TLB miss.
- * If kernel L2 tables were freed, user pmaps would hold stale
- * L1 entries pointing to recycled pages — silent corruption.
- * To add kernel L2 reclamation, switch to eager propagation
- * (maintain a list of active user pmaps and update all L1s).
+ * With the SH-4-style split walker, the kernel L1 is the single
+ * source of truth for kernel mappings (user pmaps hold only user-VA
+ * entries).  Kernel L2 reclamation is structurally safe — clearing
+ * a kernel L1 entry instantly removes the mapping from every context
+ * because there are no propagated copies to track down.
  */
 static bool
 pmap_alloc_l2(pt_entry_t *l1, unsigned int l1_idx)
@@ -217,8 +215,9 @@ pmap_alloc_l2(pt_entry_t *l1, unsigned int l1_idx)
 /* ── L2 table access helpers ──────────────────────────────────
  *
  * L2 tables are physical pages.  To read/write them from C code,
- * we map them into the scratch window.  The L1 table is always
- * accessible at PT_L1_VA (pinned slot 1).
+ * we map them into the scratch window.  The kernel L1 table is
+ * always accessible at PT_KERN_L1_VA (pinned slot 1); the current
+ * user L1 at PT_USER_L1_VA (pinned slot 4).
  *
  * For pmap_kenter_pa / pmap_kremove (hot path), the L2 table
  * may already be the kernel image's BSS-resident L2, which IS
@@ -600,11 +599,10 @@ pmap_init(void)
 /*
  * pmap_create: create a new user pmap.
  *
- * Allocates a pmap struct and an L1 page table.
- * Copies the kernel half of the L1 (entries covering
- * VM_MIN_KERNEL_ADDRESS and above) so supervisor-mode
- * code can access kernel memory in any address space.
- * The user half is zeroed (no user mappings yet).
+ * Allocates a pmap struct and an L1 page table.  The L1 is left
+ * zero-filled — the SH-4-style split walker reads kernel L1
+ * entries from PTLB_KERN_L1 directly, so user pmaps hold *only*
+ * user-VA entries.  No kernel-half mirroring is needed.
  */
 pmap_t
 pmap_create(void)
@@ -618,10 +616,6 @@ pmap_create(void)
 	pm->pm_asid = 0;
 	pm->pm_asid_gen = 0;	/* force ASID allocation on first activate */
 
-	/*
-	 * Allocate L1 table (one physical page).
-	 * Zero the user half, copy the kernel half from kernel_pmap.
-	 */
 	struct vm_page *pg = uvm_pagealloc(NULL, 0, NULL,
 	    UVM_PGA_USERESERVE | UVM_PGA_ZERO);
 	if (pg == NULL)
@@ -629,8 +623,10 @@ pmap_create(void)
 	pm->pm_l1_pa = VM_PAGE_TO_PHYS(pg);
 
 	/*
-	 * We need a kernel VA to access the new L1.  Use uvm_km_alloc
-	 * to get one page of KVA, then wire it to the L1's PA.
+	 * We need a kernel VA to access the new L1 from C code (the
+	 * fast walker reads it via PT_USER_L1_VA, but C edits go
+	 * through pm->pm_l1).  Use uvm_km_alloc for KVA, wire it to
+	 * the L1's PA.
 	 */
 	vaddr_t va = uvm_km_alloc(kernel_map, PAGE_SIZE, 0,
 	    UVM_KMF_VAONLY | UVM_KMF_WAITVA);
@@ -640,19 +636,6 @@ pmap_create(void)
 	    VM_PROT_READ | VM_PROT_WRITE, 0);
 	pmap_update(pmap_kernel());
 	pm->pm_l1 = (pt_entry_t *)va;
-
-	/*
-	 * Copy kernel L1 entries (upper half: VA >= 0x80000000).
-	 * Entries added after this copy are lazily propagated by
-	 * trap.c on TLB miss (see pmap_alloc_l2 invariant).
-	 * splhigh prevents an interrupt from observing a half-copied L1.
-	 */
-	unsigned int kern_start = PT_L1_INDEX(VM_MIN_KERNEL_ADDRESS);
-	pt_entry_t *kl1 = kernel_pmap_store.pm_l1;
-	int s = splhigh();
-	for (unsigned int i = kern_start; i < PT_L1_NENTRIES; i++)
-		pm->pm_l1[i] = kl1[i];
-	splx(s);
 
 	return pm;
 }
@@ -1028,15 +1011,22 @@ pmap_copy(pmap_t dst, pmap_t src, vaddr_t dstaddr, vsize_t len, vaddr_t srcaddr)
 }
 
 /*
- * Pin an L1 page table in TLB slot 1.
- * PT_L1_VA (0xFFFFE000) always maps the active L1.
- * VPN = 0xFFFFE → TLB_VPN = 0x0FFFFE00.
+ * Pin an L1 page table in the user-L1 pinned slot
+ * (PT_USER_L1_VA → l1_pa).  The fast TLB miss handler uses this
+ * slot when walking *user* VAs.  Kernel VAs go through PTLB_KERN_L1
+ * (slot 1), which is pinned once at boot and never reprogrammed.
+ *
+ * When the current LWP belongs to the kernel pmap, we pin the
+ * kernel L1 here too — that way a stray user-VA access in kernel
+ * context walks kernel L1, finds no user entry, and escalates to
+ * the slow path cleanly (instead of recursing on an unmapped
+ * PT_USER_L1_VA).
  */
 static inline void
-pmap_pin_l1(paddr_t l1_pa)
+pmap_pin_user_l1(paddr_t l1_pa)
 {
-	uint32_t idx = PTLB_L1;
-	uint32_t vpn = 0x0FFFFE00;
+	uint32_t idx = PTLB_USER_L1;
+	uint32_t vpn = (PT_USER_L1_VA >> PGSHIFT) << TLB_VPN_SHIFT;
 	uint32_t pte = (l1_pa & PTE_PPN_MASK) | PTE_KERNEL;
 
 	__asm__ volatile(
@@ -1053,10 +1043,14 @@ pmap_pin_l1(paddr_t l1_pa)
 /*
  * pmap_activate / pmap_deactivate: switch active pmap.
  *
- * Called on every context switch.  Re-pins the L1 page table and
- * sets MMUCR.ASID so the TLB miss handler installs entries tagged
- * with the correct address space.  If the pmap's ASID is stale
- * (generation mismatch), allocates a fresh one first.
+ * Re-pins the user L1 slot (PTLB_USER_L1) and sets MMUCR.ASID.
+ * The kernel L1 slot (PTLB_KERN_L1) is permanent — pinned at boot,
+ * never reprogrammed — so kernel-VA TLB misses always fast-resolve
+ * via the kernel L1 regardless of which user pmap is current
+ * (SH-4-style split walker).
+ *
+ * For kernel pmap, pin slot 4 with kernel L1 too so the fast walker
+ * has a valid table to read for any stray user-VA access.
  */
 void
 pmap_activate(struct lwp *l)
@@ -1065,7 +1059,7 @@ pmap_activate(struct lwp *l)
 	int s = splhigh();
 
 	if (pm == pmap_kernel()) {
-		pmap_pin_l1(pm->pm_l1_pa);
+		pmap_pin_user_l1(pm->pm_l1_pa);
 		pmap_set_mmucr(0);
 		splx(s);
 		return;
@@ -1075,7 +1069,7 @@ pmap_activate(struct lwp *l)
 	if (pm->pm_asid_gen != pmap_asid_generation)
 		pmap_asid_alloc(pm);
 
-	pmap_pin_l1(pm->pm_l1_pa);
+	pmap_pin_user_l1(pm->pm_l1_pa);
 	pmap_set_mmucr(pm->pm_asid);
 	splx(s);
 }

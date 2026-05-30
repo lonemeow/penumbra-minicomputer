@@ -162,32 +162,13 @@ trap(struct trapframe *tf)
 		}
 		if (va >= VM_MIN_KERNEL_ADDRESS) {
 			/*
-			 * Kernel VA TLB miss: check for stale L1.
-			 *
-			 * User pmaps get a snapshot of the kernel L1
-			 * at fork time.  Kernel L2 tables allocated
-			 * after that (by pmap_kenter_pa → pmap_alloc_l2)
-			 * are only in the kernel pmap's L1.  Propagate
-			 * the missing entry lazily on first fault.
-			 *
-			 * This relies on kernel L2 tables never being
-			 * freed — see pmap_alloc_l2().
+			 * Kernel-VA miss: the fast walker resolves whenever
+			 * the kernel L1/L2 have a valid PTE for this VA, so
+			 * reaching trap here means either a real fault or a
+			 * demand-paged kernel mapping that UVM will fill in.
+			 * No lazy L1 propagation is needed — the split walker
+			 * reads PTEs straight out of the kernel L1 via slot 1.
 			 */
-			if (type == EXC_TLB_MISS) {
-				pmap_t active = vs->vm_map.pmap;
-				if (active != pmap_kernel()) {
-					pt_entry_t *kl1 =
-					    kernel_pmap_store.pm_l1;
-					pt_entry_t *ul1 = active->pm_l1;
-					unsigned int idx =
-					    PT_L1_INDEX(va);
-					if (!(ul1[idx] & PTE_V) &&
-					    (kl1[idx] & PTE_V)) {
-						ul1[idx] = kl1[idx];
-						break;
-					}
-				}
-			}
 			map = kernel_map;
 		} else {
 			map = &vs->vm_map;

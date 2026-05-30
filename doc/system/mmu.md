@@ -388,9 +388,11 @@ Virtual address:  [PD index (10)][PT index (10)][Page offset (12)]
 - **Coverage:** one PD entry covers 4 MB; the full 4 GB space needs 1024 PDEs.
 
 The NetBSD port uses `PT_L1_*`/`PT_L2_*` naming to avoid confusion with
-the L1/L2 caches. The kernel half of the PD is shared across all user
-pmaps (copied at `pmap_create`); kernel L2 pages are never freed, so
-late-arriving kernel mappings propagate lazily via TLB miss.
+the L1/L2 caches. Kernel and user PDs are completely disjoint: the
+TLB miss walker branches on the faulting VA's MSB and uses either
+the kernel PD (pinned, permanent) or the current user PD (pinned,
+re-programmed per `pmap_activate`). User PDs hold *only* user-VA
+entries — no kernel-half mirroring, no propagation needed.
 
 ---
 
