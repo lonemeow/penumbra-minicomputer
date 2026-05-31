@@ -357,8 +357,13 @@ __udivdi3:
 .Ldual:
         ; n_hi >= d_lo: need both halves of quotient.
         ;   R1 = n_lo, R2 = n_hi, R3 = d_lo
-        DIV   R2, R3, R5          ; R2 = n_hi/d_lo (q_hi), R5 = n_hi%d_lo (r1)
-        DIV   R1, R3, R5          ; R1 = (R5:R1)/d_lo (q_lo), R5 = remainder
+        ; R11 (t1) is a caller-saved scratch, so this stays a leaf with no
+        ; spill.  Zero it first: the DIV third operand is both the remainder
+        ; output AND the high-half dividend input, so a zeroed R11 makes the
+        ; first DIV a plain 32/32 and captures its remainder for the second.
+        MOV   R11, R0             ; high-half dividend = 0
+        DIV   R2, R3, R11         ; R2 = n_hi/d_lo (q_hi), R11 = n_hi%d_lo (r1)
+        DIV   R1, R3, R11         ; R1 = (R11:R1)/d_lo (q_lo), R11 = remainder (dead)
         RET                       ; returns R1:R2 = q_lo:q_hi
 
 .Lslow:
@@ -377,29 +382,9 @@ deliver.
 
 ### Why the dual-divide path runs `DIV` twice in that order
 
-<!-- TODO(human): write 2–3 sentences explaining why the `.Ldual` path
-must execute the plain `DIV` (32/32) on the high half *before* the
-narrowing `DIV` on the low half — i.e., what invariant the first
-`DIV`'s remainder establishes that the second `DIV`'s precondition
-requires.
-
-Hints:
-- DIV's remainder semantics: after `DIV R2, R3, R5`, `R5 = R2_original
-  % R3`. By the definition of integer division, what bound does R5
-  have relative to R3?
-- The narrowing-DIV precondition (instruction-set.md § Narrowing-DIV):
-  the dividend high half (input `Rdh`) must be strictly less than the
-  divisor for the 32-bit quotient to fit.
-- The two constraints meet exactly — the first DIV's remainder is
-  *constructed* to be a legal high-half input for the second DIV.
-  This is the same invariant schoolbook long division relies on for
-  "carry down": each digit's partial remainder is bounded below the
-  divisor, so the next digit's quotient always fits.
-
-Keep it 2–3 sentences. The point is to make the dependency between
-the two hardware instructions explicit so a reader knows the order
-is forced, not arbitrary.
--->
+The DIV order is critical; the first instruction produces the remainder of
+the high half divide, which the second instruction needs to do the remaining
+work to produce the correct result.
 
 ## Discrete Chip-Count Estimate
 
