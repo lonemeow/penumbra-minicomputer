@@ -150,23 +150,15 @@ define i32 @mul_by_6(i32 %a) {
 ; O0-LABEL: mul_by_6:
 ; O0:         .cfi_startproc
 ; O0-NEXT:  // %bb.1:
-; O0-NEXT:    sub r14, 4
-; O0-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; O0-NEXT:    lli r2, 6
-; O0-NEXT:    bl __mulsi3
-; O0-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; O0-NEXT:    add r14, 4
+; O0-NEXT:    mul r1, r2
 ; O0-NEXT:    jmp r13
 ;
 ; O1-LABEL: mul_by_6:
 ; O1:         .cfi_startproc
 ; O1-NEXT:  // %bb.0:
-; O1-NEXT:    sub r14, 4
-; O1-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; O1-NEXT:    lli r2, 6
-; O1-NEXT:    bl __mulsi3
-; O1-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; O1-NEXT:    add r14, 4
+; O1-NEXT:    mul r1, r2
 ; O1-NEXT:    jmp r13
   %r = mul i32 %a, 6
   ret i32 %r
@@ -241,24 +233,61 @@ define i32 @udiv_by_3(i32 %a) {
 ; O0-LABEL: udiv_by_3:
 ; O0:         .cfi_startproc
 ; O0-NEXT:  // %bb.1:
-; O0-NEXT:    sub r14, 4
-; O0-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; O0-NEXT:    lli r2, 3
-; O0-NEXT:    bl __udivsi3
-; O0-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; O0-NEXT:    add r14, 4
+; O0-NEXT:    divu r1, r2
 ; O0-NEXT:    jmp r13
 ;
 ; O1-LABEL: udiv_by_3:
 ; O1:         .cfi_startproc
 ; O1-NEXT:  // %bb.0:
-; O1-NEXT:    sub r14, 4
-; O1-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; O1-NEXT:    lli r2, 3
-; O1-NEXT:    bl __udivsi3
-; O1-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; O1-NEXT:    add r14, 4
+; O1-NEXT:    divu r1, r2
 ; O1-NEXT:    jmp r13
   %r = udiv i32 %a, 3
+  ret i32 %r
+}
+
+; --- Signed divide/remainder by power-of-2 ---
+; The backend adds no custom signed pow2 lowering, so at -O0 these select the
+; hardware DIV / DIV_P.  At -O1+ the generic combiner strength-reduces the
+; signed divide to a shift sequence; the remainder stays on the hardware divide.
+define i32 @sdiv_by_4(i32 %a) {
+; O0-LABEL: sdiv_by_4:
+; O0:         .cfi_startproc
+; O0-NEXT:  // %bb.1:
+; O0-NEXT:    lli r2, 4
+; O0-NEXT:    div r1, r2
+; O0-NEXT:    jmp r13
+;
+; O1-LABEL: sdiv_by_4:
+; O1:         .cfi_startproc
+; O1-NEXT:  // %bb.0:
+; O1-NEXT:    mov r2, r1
+; O1-NEXT:    sar r2, 31
+; O1-NEXT:    shr r2, 30
+; O1-NEXT:    add r1, r2
+; O1-NEXT:    sar r1, 2
+; O1-NEXT:    jmp r13
+  %r = sdiv i32 %a, 4
+  ret i32 %r
+}
+
+define i32 @srem_by_4(i32 %a) {
+; O0-LABEL: srem_by_4:
+; O0:         .cfi_startproc
+; O0-NEXT:  // %bb.1:
+; O0-NEXT:    mov r2, r1
+; O0-NEXT:    lli r1, 4
+; O0-NEXT:    div r2, r1, r1
+; O0-NEXT:    jmp r13
+;
+; O1-LABEL: srem_by_4:
+; O1:         .cfi_startproc
+; O1-NEXT:  // %bb.0:
+; O1-NEXT:    lli r2, 4
+; O1-NEXT:    div r1, r2, r2
+; O1-NEXT:    mov r1, r2
+; O1-NEXT:    jmp r13
+  %r = srem i32 %a, 4
   ret i32 %r
 }

@@ -95,21 +95,20 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
       .widenScalarToNextPow2(0, 32)
       .clampScalar(0, s32, s64);
 
-  // High-half multiply.
-  // - s32: lower (LegalizerHelper::lowerSMULH_UMULH widens to s64 and uses
-  //   G_MUL — our s64 G_MUL libcalls __muldi3 which is fine).
-  // - G_UMULH s64: narrowScalarMul splits into s32 partial products
-  //   (schoolbook multiplication using s32 G_MUL/G_UMULH).  Reached by our
-  //   G_UMULO s64 .lower() path.
+  // High-half multiply: s32 is legal, selected to the MULU_P/MUL_P pair form
+  // (the unit produces both halves; the selector keeps the high one).  This is
+  // what lets a 32x32->64 widening multiply use the hardware instead of a
+  // __muldi3 libcall.
+  // - G_UMULH s64: narrowScalarMul splits into s32 partial products, now legal
+  //   hardware multiplies.  Reached by the G_UMULO s64 .lower() path.
   // - G_SMULH s64: not reachable today (G_SMULO s64 is unhandled).
-  //   narrowScalarMul doesn't support G_SMULH, so we'd need a custom path.
   getActionDefinitionsBuilder(G_UMULH)
-      .lowerFor({s32})
+      .legalFor({s32})
       .minScalar(0, s32)
       .narrowScalarIf(typeIs(0, s64), changeTo(0, s32));
 
   getActionDefinitionsBuilder(G_SMULH)
-      .lowerFor({s32})
+      .legalFor({s32})
       .minScalar(0, s32);
 
   getActionDefinitionsBuilder(G_CONSTANT)
@@ -259,8 +258,10 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
       .widenScalarToNextPow2(0, 32)
       .narrowScalarIf(typeIs(0, s64), changeTo(0, s32));
 
-  // Division/remainder: custom-lower s32 to catch power-of-2 constants
-  // (SHR for udiv, AND for urem), fall back to libcalls otherwise.
+  // Unsigned division/remainder: custom-lower s32 to catch power-of-2 constants
+  // (SHR for udiv, AND for urem — cheaper than a 34-cycle divide); the custom
+  // handler leaves the variable case in place as a legal s32 op, which the
+  // selector maps onto the hardware DIVU/DIVU_P peer unit.
   // s64 goes straight to libcall (__udivdi3/__umoddi3).
   getActionDefinitionsBuilder({G_UDIV, G_UREM})
       .customFor({s32})
@@ -268,32 +269,41 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
       .clampScalar(0, s32, s64)
       .scalarize(0);
 
-  // Signed division/remainder: always libcall (signed power-of-2 lowering
-  // needs rounding adjustment — not worth the complexity yet).
+  // Signed division/remainder: s32 is legal, selected to the hardware DIV/DIV_P
+  // peer unit.  Unlike the unsigned path we add no custom power-of-2 lowering:
+  // the -O1+ combiner already strength-reduces signed pow2 divides to a shift
+  // sequence, and adding it for -O0 isn't worth the rounding-bias complexity.
+  // s64 libcalls.
   getActionDefinitionsBuilder({G_SDIV, G_SREM})
-      .libcallFor({s32, s64})
+      .legalFor({s32})
+      .libcallFor({s64})
       .clampScalar(0, s32, s64)
       .scalarize(0);
 
-  // Fused divide+remainder: the pre-legalizer combiner at -O1+ fuses
-  // adjacent G_SDIV/G_SREM (or G_UDIV/G_UREM) on shared operands into
-  // a single G_SDIVREM/G_UDIVREM.  We have no hardware divrem, so
-  // .lower() splits them back into separate G_SDIV + G_SREM, which
-  // then take their existing libcall paths above.
+  // Fused divide+remainder: the divmul unit produces quotient and remainder in
+  // one operation, so s32 G_S/UDIVREM is legal and selects to a single
+  // DIV_P/DIVU_P.  The -O1+ combiner fuses adjacent div/rem on shared operands
+  // into this form, making `a/b; a%b` cost one divide.  s64 has no pair form, so
+  // .lower() splits it into separate G_S/UDIV + G_S/UREM, which libcall.
   getActionDefinitionsBuilder({G_SDIVREM, G_UDIVREM})
+      .legalFor({s32})
+      .clampScalar(0, s32, s64)
       .lower();
 
   // Multiplication: custom-lower s32 power-of-2 and power-of-2 ± 1 constants
-  // to shifts (+ add/sub), fall back to libcall otherwise.
-  // s64 goes straight to libcall (__muldi3).
-  // Non-power-of-2 widths (e.g. i33 from SCEV's closed-form sum-of-
-  // arithmetic-progression rewrite at -O2) widen to next pow2 first,
-  // so an s33 MUL lands on s64 and libcalls like any other i64 mul.
+  // to shifts (+ add/sub — cheaper than a 34-cycle multiply); the custom
+  // handler leaves the variable case in place as a legal s32 op, which the
+  // selector maps onto the hardware MUL.
+  // s64 narrows to s32 partial products (schoolbook G_MUL + G_UMULH, both now
+  // legal hardware multiplies) rather than a __muldi3 libcall — this is what
+  // puts a 32x32->64 widening multiply onto the hardware.
+  // Non-power-of-2 widths (e.g. i33 from SCEV's closed-form sum-of-arithmetic-
+  // progression rewrite at -O2) widen to next pow2 first, landing on s64.
   getActionDefinitionsBuilder(G_MUL)
       .customFor({s32})
-      .libcallFor({s64})
       .widenScalarToNextPow2(0, 32)
       .clampScalar(0, s32, s64)
+      .narrowScalarIf(typeIs(0, s64), changeTo(0, s32))
       .scalarize(0);
 
   // SEXT_INREG: lowered by framework to SHL+ASHR (our shift constant folding
@@ -512,11 +522,13 @@ bool PenumbraLegalizerInfo::legalizeCustom(
     LegalizerHelper &Helper, MachineInstr &MI,
     LostDebugLocObserver &LocObserver) const {
   MachineIRBuilder &MIRBuilder = Helper.MIRBuilder;
+  (void)LocObserver;
 
-  // Helper: fall back to a libcall for ops we can't strength-reduce.
-  auto Libcall = [&]() {
-    return Helper.libcall(MI, LocObserver) == LegalizerHelper::Legalized;
-  };
+  // Helper: leave the variable / non-strength-reducible case in place as a legal
+  // s32 op for the selector to map onto the hardware divmul unit.  Returning
+  // Legalized without changing MI is safe — the Legalizer only revisits
+  // instructions an observer reports as changed.
+  auto LeaveForHardware = [&]() { return true; };
 
   // Helper: try to read a constant integer from a vreg (looks through COPYs).
   MachineRegisterInfo &MRI = *MIRBuilder.getMRI();
@@ -533,7 +545,7 @@ bool PenumbraLegalizerInfo::legalizeCustom(
     Register Src = MI.getOperand(1).getReg();
     auto MaybeVal = GetConstant(MI.getOperand(2).getReg());
     if (!MaybeVal)
-      return Libcall();
+      return LeaveForHardware();
 
     uint64_t C = MaybeVal->Value.getZExtValue();
     LLT Ty = MRI.getType(Dst);
@@ -561,7 +573,7 @@ bool PenumbraLegalizerInfo::legalizeCustom(
       auto Shifted = MIRBuilder.buildShl(Ty, Src, ShiftAmt);
       MIRBuilder.buildSub(Dst, Shifted, Src);
     } else {
-      return Libcall();
+      return LeaveForHardware();
     }
 
     MI.eraseFromParent();
@@ -573,11 +585,11 @@ bool PenumbraLegalizerInfo::legalizeCustom(
     Register Src = MI.getOperand(1).getReg();
     auto MaybeVal = GetConstant(MI.getOperand(2).getReg());
     if (!MaybeVal)
-      return Libcall();
+      return LeaveForHardware();
 
     uint64_t C = MaybeVal->Value.getZExtValue();
     if (C == 0 || !isPowerOf2_64(C))
-      return Libcall();
+      return LeaveForHardware();
 
     LLT Ty = MRI.getType(Dst);
     if (C == 1) {
@@ -595,11 +607,11 @@ bool PenumbraLegalizerInfo::legalizeCustom(
     Register Src = MI.getOperand(1).getReg();
     auto MaybeVal = GetConstant(MI.getOperand(2).getReg());
     if (!MaybeVal)
-      return Libcall();
+      return LeaveForHardware();
 
     uint64_t C = MaybeVal->Value.getZExtValue();
     if (C == 0 || !isPowerOf2_64(C))
-      return Libcall();
+      return LeaveForHardware();
 
     LLT Ty = MRI.getType(Dst);
     if (C == 1) {

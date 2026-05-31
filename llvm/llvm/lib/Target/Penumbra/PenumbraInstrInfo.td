@@ -82,6 +82,26 @@ class FormatR_NoReg<bits<5> op, dag outs, dag ins, string asmstr,
   let Inst{15-0}  = 0;
 }
 
+// Format R sub-encoding for MUL/MULU/DIV/DIVU (op 16-19): the spare field
+// carries a third register operand Rdh in [15:12] — the destination for the
+// product high half (MUL/MULU) or the remainder (DIV/DIVU).
+// (See doc/system/instruction-encoding.md.)
+class FormatR_DivMul<bits<5> op, dag outs, dag ins, string asmstr,
+                     list<dag> pattern = []>
+    : PenumbraInst<outs, ins, asmstr, pattern> {
+  bits<4> Rd;
+  bits<4> Rs;
+  bits<4> Rdh;
+
+  let Inst{31-30} = 0b00;
+  let Inst{29-25} = op;
+  let Inst{24-21} = Rd;
+  let Inst{20-17} = Rs;
+  let Inst{16}    = 0;       // F: flag-only bit unused for divmul, must be 0
+  let Inst{15-12} = Rdh;     // third register operand (high half / remainder)
+  let Inst{11-0}  = 0;       // spare
+}
+
 //--- Format L: prefix = 01 ---------------------------------------------------
 // [31:30]=01  [29:26]=op  [25:22]=Rd  [21:16]=spare  [15:0]=imm16
 class FormatL<bits<4> op, dag outs, dag ins, string asmstr,
@@ -254,6 +274,44 @@ let F = 1, isCompare = 1 in {
                        "cmp\t$Rd, $Rs">;
     def TEST : FormatR<0b00010, (outs), (ins GPR:$Rd, GPR:$Rs),
                        "test\t$Rd, $Rs">;
+  }
+}
+
+//===----------------------------------------------------------------------===//
+// Multiply / divide (Format R, op 16-19) — the multi-cycle peer unit
+// (see doc/internals/divmul.md).  Rd carries the multiplicand/dividend and
+// receives the low half / quotient; the write-only Rdh receives the high half /
+// remainder.  All set N/Z from Rd and clear C/V (Defs=[SR]).  Divides are 32/32.
+//
+// Each opcode has two machine-instruction views over one encoding: a single-
+// result form with Rdh fixed to R0 (high half / remainder discarded by the
+// hardware), and a "_P" pair form with an explicit Rdh.  The assembler tells
+// them apart by operand count; the disassembler by Inst[15:12] == 0.
+//===----------------------------------------------------------------------===//
+
+let Defs = [SR], hasSideEffects = 0 in {
+  // Single-result forms: Rdh fixed to R0, low half / quotient only.
+  let Constraints = "$Rd = $Rd_in" in {
+    def MUL  : FormatR_DivMul<0b10000, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
+                              "mul\t$Rd, $Rs">  { let Rdh = 0; }
+    def MULU : FormatR_DivMul<0b10001, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
+                              "mulu\t$Rd, $Rs"> { let Rdh = 0; }
+    def DIV  : FormatR_DivMul<0b10010, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
+                              "div\t$Rd, $Rs">  { let Rdh = 0; }
+    def DIVU : FormatR_DivMul<0b10011, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
+                              "divu\t$Rd, $Rs"> { let Rdh = 0; }
+  }
+
+  // Pair forms: an explicit write-only Rdh captures the high half / remainder.
+  let Constraints = "$Rd = $Rd_in" in {
+    def MUL_P  : FormatR_DivMul<0b10000, (outs GPR:$Rd, GPR:$Rdh),
+                                (ins GPR:$Rd_in, GPR:$Rs), "mul\t$Rd, $Rs, $Rdh">;
+    def MULU_P : FormatR_DivMul<0b10001, (outs GPR:$Rd, GPR:$Rdh),
+                                (ins GPR:$Rd_in, GPR:$Rs), "mulu\t$Rd, $Rs, $Rdh">;
+    def DIV_P  : FormatR_DivMul<0b10010, (outs GPR:$Rd, GPR:$Rdh),
+                                (ins GPR:$Rd_in, GPR:$Rs), "div\t$Rd, $Rs, $Rdh">;
+    def DIVU_P : FormatR_DivMul<0b10011, (outs GPR:$Rd, GPR:$Rdh),
+                                (ins GPR:$Rd_in, GPR:$Rs), "divu\t$Rd, $Rs, $Rdh">;
   }
 }
 

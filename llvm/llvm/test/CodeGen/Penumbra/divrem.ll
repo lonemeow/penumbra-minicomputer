@@ -15,31 +15,9 @@ define void @sdivrem_i32(i32 %a, i32 %b, ptr %dq, ptr %dr) {
 ; CHECK-LABEL: sdivrem_i32:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 24
-; CHECK-NEXT:    stw r5, [r14 + 20] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r6, [r14 + 16] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r7, [r14 + 12] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r8, [r14 + 8] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r9, [r14 + 4] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
-; CHECK-NEXT:    mov r5, r1
-; CHECK-NEXT:    mov r6, r2
-; CHECK-NEXT:    mov r7, r3
-; CHECK-NEXT:    mov r8, r4
-; CHECK-NEXT:    bl __divsi3
-; CHECK-NEXT:    mov r9, r1
-; CHECK-NEXT:    mov r1, r5
-; CHECK-NEXT:    mov r2, r6
-; CHECK-NEXT:    bl __modsi3
-; CHECK-NEXT:    stw r9, [r7 + 0]
-; CHECK-NEXT:    stw r1, [r8 + 0]
-; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r9, [r14 + 4] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r8, [r14 + 8] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r7, [r14 + 12] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r6, [r14 + 16] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r5, [r14 + 20] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 24
+; CHECK-NEXT:    div r1, r2, r2
+; CHECK-NEXT:    stw r1, [r3 + 0]
+; CHECK-NEXT:    stw r2, [r4 + 0]
 ; CHECK-NEXT:    jmp r13
   %d = sdiv i32 %a, %b
   %r = srem i32 %a, %b
@@ -52,31 +30,9 @@ define void @udivrem_i32(i32 %a, i32 %b, ptr %dq, ptr %dr) {
 ; CHECK-LABEL: udivrem_i32:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 24
-; CHECK-NEXT:    stw r5, [r14 + 20] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r6, [r14 + 16] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r7, [r14 + 12] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r8, [r14 + 8] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r9, [r14 + 4] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
-; CHECK-NEXT:    mov r5, r1
-; CHECK-NEXT:    mov r6, r2
-; CHECK-NEXT:    mov r7, r3
-; CHECK-NEXT:    mov r8, r4
-; CHECK-NEXT:    bl __udivsi3
-; CHECK-NEXT:    mov r9, r1
-; CHECK-NEXT:    mov r1, r5
-; CHECK-NEXT:    mov r2, r6
-; CHECK-NEXT:    bl __umodsi3
-; CHECK-NEXT:    stw r9, [r7 + 0]
-; CHECK-NEXT:    stw r1, [r8 + 0]
-; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r9, [r14 + 4] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r8, [r14 + 8] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r7, [r14 + 12] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r6, [r14 + 16] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r5, [r14 + 20] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 24
+; CHECK-NEXT:    divu r1, r2, r2
+; CHECK-NEXT:    stw r1, [r3 + 0]
+; CHECK-NEXT:    stw r2, [r4 + 0]
 ; CHECK-NEXT:    jmp r13
   %d = udiv i32 %a, %b
   %r = urem i32 %a, %b

@@ -4,7 +4,8 @@
 ; RUN: llc -mtriple=penumbra -global-isel -O1 -verify-machineinstrs < %s \
 ; RUN:   | FileCheck %s -check-prefix=O1
 
-; i64 division/remainder/multiply: all go to 64-bit libcalls.
+; i64 division/remainder go to 64-bit libcalls; i64 multiply expands inline to
+; s32 partial products on the hardware multiplier.
 
 define i64 @udiv64(i64 %a, i64 %b) {
 ; O0-LABEL: udiv64:
@@ -108,7 +109,16 @@ define i64 @mul64(i64 %a, i64 %b) {
 ; O0-NEXT:  // %bb.1:
 ; O0-NEXT:    sub r14, 4
 ; O0-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
-; O0-NEXT:    bl __muldi3
+; O0-NEXT:    mov r11, r1
+; O0-NEXT:    mov r13, r4
+; O0-NEXT:    mov r1, r11
+; O0-NEXT:    mul r1, r3
+; O0-NEXT:    mul r2, r3
+; O0-NEXT:    mov r4, r11
+; O0-NEXT:    mul r4, r13
+; O0-NEXT:    mulu r11, r3, r3
+; O0-NEXT:    add r2, r4
+; O0-NEXT:    add r2, r3
 ; O0-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
 ; O0-NEXT:    add r14, 4
 ; O0-NEXT:    jmp r13
@@ -118,7 +128,15 @@ define i64 @mul64(i64 %a, i64 %b) {
 ; O1-NEXT:  // %bb.0:
 ; O1-NEXT:    sub r14, 4
 ; O1-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
-; O1-NEXT:    bl __muldi3
+; O1-NEXT:    mov r11, r1
+; O1-NEXT:    mul r11, r3
+; O1-NEXT:    mul r2, r3
+; O1-NEXT:    mov r13, r1
+; O1-NEXT:    mul r13, r4
+; O1-NEXT:    mulu r1, r3, r3
+; O1-NEXT:    add r2, r13
+; O1-NEXT:    add r2, r3
+; O1-NEXT:    mov r1, r11
 ; O1-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
 ; O1-NEXT:    add r14, 4
 ; O1-NEXT:    jmp r13

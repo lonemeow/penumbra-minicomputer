@@ -10,9 +10,8 @@ define i32 @inst_check_f(i32 %m) {
 ; CHECK-LABEL: inst_check_f:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 8
-; CHECK-NEXT:    stw r5, [r14 + 4] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    sub r14, 4
+; CHECK-NEXT:    stw r5, [r14 + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r2, r0
 ; CHECK-NEXT:    cmp r1, 0
 ; CHECK-NEXT:    ble .LBB0_2
@@ -22,22 +21,23 @@ define i32 @inst_check_f(i32 %m) {
 ; CHECK-NEXT:    mov r3, r1
 ; CHECK-NEXT:    sub r3, 2
 ; CHECK-NEXT:    mov r4, r0
-; CHECK-NEXT:    mov r5, r1
-; CHECK-NEXT:    mov r1, r2
-; CHECK-NEXT:    mov r2, r4
-; CHECK-NEXT:    bl __muldi3
-; CHECK-NEXT:    and r2, 1
-; CHECK-NEXT:    shr r1, 1
-; CHECK-NEXT:    shl r2, 31
-; CHECK-NEXT:    or r1, r2
-; CHECK-NEXT:    add r5, r1
-; CHECK-NEXT:    sub r5, 1
-; CHECK-NEXT:    mov r2, r5
+; CHECK-NEXT:    mov r11, r2
+; CHECK-NEXT:    mul r11, r3
+; CHECK-NEXT:    mulu r2, r3, r5
+; CHECK-NEXT:    mul r3, r4
+; CHECK-NEXT:    add r3, 0
+; CHECK-NEXT:    add r3, r5
+; CHECK-NEXT:    and r3, 1
+; CHECK-NEXT:    shr r11, 1
+; CHECK-NEXT:    shl r3, 31
+; CHECK-NEXT:    or r11, r3
+; CHECK-NEXT:    add r1, r11
+; CHECK-NEXT:    sub r1, 1
+; CHECK-NEXT:    mov r2, r1
 ; CHECK-NEXT:  .LBB0_2: // %done
 ; CHECK-NEXT:    mov r1, r2
-; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r5, [r14 + 4] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 8
+; CHECK-NEXT:    ldw r5, [r14 + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    add r14, 4
 ; CHECK-NEXT:    jmp r13
   %ismt0 = icmp sgt i32 %m, 0
   br i1 %ismt0, label %loop, label %done

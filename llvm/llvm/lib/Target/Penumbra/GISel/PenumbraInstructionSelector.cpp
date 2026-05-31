@@ -75,6 +75,8 @@ private:
                   MachineRegisterInfo &MRI) const;
   bool selectSExt(MachineInstr &I, MachineBasicBlock &MBB,
                   MachineRegisterInfo &MRI) const;
+  bool selectDivMul(MachineInstr &I, MachineBasicBlock &MBB,
+                    MachineRegisterInfo &MRI) const;
   bool selectGlobalValue(MachineInstr &I, MachineBasicBlock &MBB,
                          MachineRegisterInfo &MRI) const;
   bool selectBlockAddress(MachineInstr &I, MachineBasicBlock &MBB,
@@ -280,6 +282,20 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
 
   case G_ZEXT: return selectZExt(I, MBB, MRI);
   case G_SEXT: return selectSExt(I, MBB, MRI);
+
+  // ── Multiply / divide / remainder ───────────────────────────────────────────
+  // Variable-operand s32 ops reach here (constant cases were strength-reduced
+  // in the legalizer).  They map onto the hardware divmul peer unit.
+  case G_MUL:
+  case G_UMULH:
+  case G_SMULH:
+  case G_SDIV:
+  case G_UDIV:
+  case G_SREM:
+  case G_UREM:
+  case G_SDIVREM:
+  case G_UDIVREM:
+    return selectDivMul(I, MBB, MRI);
 
   // ── Compare / Select ────────────────────────────────────────────────────────
   case G_ICMP:   return selectICmp(I, MBB, MRI);
@@ -666,6 +682,103 @@ bool PenumbraInstructionSelector::selectSExt(MachineInstr &I,
           .addDef(DstReg)
           .addReg(TmpReg)
           .addImm(ShAmt);
+
+  I.eraseFromParent();
+  return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
+}
+
+// ── G_MUL / G_SDIV / G_UDIV / G_SREM / G_UREM / G_S|UDIVREM ──────────────────
+// Map the generic integer mul/div/rem ops onto the divmul peer unit, which
+// always produces a pair (low/high or quotient/remainder) with Rdh write-only.
+// Ops needing only the low half / quotient use the single form (Rdh = R0);
+// ops needing the remainder use the pair form.  Signed and unsigned divide
+// select identically — DIVU is 32/32, with no dividend-high input.
+// See doc/internals/divmul.md.
+bool PenumbraInstructionSelector::selectDivMul(MachineInstr &I,
+                                               MachineBasicBlock &MBB,
+                                               MachineRegisterInfo &MRI) const {
+  using namespace TargetOpcode;
+  const DebugLoc &DL = I.getDebugLoc();
+  auto NewVReg = [&]() {
+    return MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
+  };
+
+  MachineInstr *NewI = nullptr;
+  switch (I.getOpcode()) {
+  case G_MUL:
+    // Low 32 bits of the product (identical for signed/unsigned).
+    NewI = BuildMI(MBB, I, DL, TII.get(Penumbra::MUL))
+               .addDef(I.getOperand(0).getReg())
+               .addReg(I.getOperand(1).getReg())
+               .addReg(I.getOperand(2).getReg());
+    break;
+
+  case G_UMULH:
+  case G_SMULH: {
+    // High half of the product; the low half is unwanted but Rd ties to the
+    // multiplicand, so it goes to a dead scratch (like the remainder cases).
+    unsigned Opc = I.getOpcode() == G_SMULH ? Penumbra::MUL_P : Penumbra::MULU_P;
+    NewI = BuildMI(MBB, I, DL, TII.get(Opc))
+               .addDef(NewVReg())                  // low half (dead)
+               .addDef(I.getOperand(0).getReg())   // high half
+               .addReg(I.getOperand(1).getReg())   // multiplicand
+               .addReg(I.getOperand(2).getReg());  // multiplier
+    break;
+  }
+
+  case G_SDIV:
+    NewI = BuildMI(MBB, I, DL, TII.get(Penumbra::DIV))
+               .addDef(I.getOperand(0).getReg())
+               .addReg(I.getOperand(1).getReg())
+               .addReg(I.getOperand(2).getReg());
+    break;
+
+  case G_UDIV:
+    NewI = BuildMI(MBB, I, DL, TII.get(Penumbra::DIVU))
+               .addDef(I.getOperand(0).getReg())
+               .addReg(I.getOperand(1).getReg())
+               .addReg(I.getOperand(2).getReg());
+    break;
+
+  case G_SREM:
+    // The quotient is unwanted, but Rd ties to the dividend so it can't be R0;
+    // it goes to a dead scratch and the remainder is the result.
+    NewI = BuildMI(MBB, I, DL, TII.get(Penumbra::DIV_P))
+               .addDef(NewVReg())                  // quotient (dead)
+               .addDef(I.getOperand(0).getReg())   // remainder
+               .addReg(I.getOperand(1).getReg())   // dividend
+               .addReg(I.getOperand(2).getReg());  // divisor
+    break;
+
+  case G_UREM:
+    NewI = BuildMI(MBB, I, DL, TII.get(Penumbra::DIVU_P))
+               .addDef(NewVReg())                  // quotient (dead)
+               .addDef(I.getOperand(0).getReg())   // remainder
+               .addReg(I.getOperand(1).getReg())   // dividend
+               .addReg(I.getOperand(2).getReg());  // divisor
+    break;
+
+  case G_SDIVREM:
+    // One divide yields both results.
+    NewI = BuildMI(MBB, I, DL, TII.get(Penumbra::DIV_P))
+               .addDef(I.getOperand(0).getReg())   // quotient
+               .addDef(I.getOperand(1).getReg())   // remainder
+               .addReg(I.getOperand(2).getReg())   // dividend
+               .addReg(I.getOperand(3).getReg());  // divisor
+    break;
+
+  case G_UDIVREM:
+    // One divide yields both results.
+    NewI = BuildMI(MBB, I, DL, TII.get(Penumbra::DIVU_P))
+               .addDef(I.getOperand(0).getReg())   // quotient
+               .addDef(I.getOperand(1).getReg())   // remainder
+               .addReg(I.getOperand(2).getReg())   // dividend
+               .addReg(I.getOperand(3).getReg());  // divisor
+    break;
+
+  default:
+    return false;
+  }
 
   I.eraseFromParent();
   return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
