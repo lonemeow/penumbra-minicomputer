@@ -60,7 +60,7 @@ static void clear(Vdatapath* d) {
     d->i_b_mux_sel = 0; d->i_wb_src = 0; d->i_imm_mode = 0;
     d->i_flag_w_en = 0; d->i_sr_load = 0; d->i_mar_load = 0;
     d->i_mdr_load_mem = 0; d->i_mdr_load_a = 0; d->i_pc_src = 0;
-    d->i_alu_start = 0; d->i_pc_load = 0;
+    d->i_divmul_start = 0; d->i_pc_load = 0;
     d->i_except_entry = 0; d->i_vector_num = 0;
     d->i_ei_set = 0; d->i_di_set = 0; d->i_ei_shadow_clr = 0;
     d->i_ir_load = 0; d->i_mem_rdata = 0;
@@ -88,7 +88,7 @@ int main() {
     check("reset_pc", d->o_pc, 0xFFFF0000);
     check1("reset_sr_s", d->o_sr_s, 1);     // Supervisor mode
     check1("reset_sr_i", d->o_sr_i, 0);     // Interrupts disabled
-    check1("reset_busy", d->o_alu_busy, 0);
+    check1("reset_busy", d->o_divmul_busy, 0);
 
     // ── Load IR with a Format R ADD R3, R4 instruction ─────────
     // Format R: [00 | op=00000 | Rd=0011 | Rs=0100 | F=0 | spare...]

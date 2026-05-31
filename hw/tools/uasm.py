@@ -3,7 +3,7 @@
 Penumbra Microcode Assembler (uasm)
 
 Reads a symbolic microcode source file and produces a $readmemh-compatible
-hex file for the 256-entry × 51-bit microcode ROM.
+hex file for the 256-entry × 52-bit microcode ROM.
 
 Usage:
     python3 uasm.py input.uasm -o microcode.hex
@@ -14,8 +14,8 @@ Source format:
 
     add:                # Label (for documentation, not referenced)
       reg_a=IR_RD  reg_b=IR_RS  reg_w=IR_RD  w_en=1
-      alu=ADD  bmux=REG  wmux=RBUS
-      flags=1  pc=PLUS4  branch=FETCH
+      alu=ADD  bmux=REG  wb_src=RBUS
+      w_flags=1  pc=PLUS4  branch=FETCH
 
     # Each non-blank, non-comment, non-directive line after a .org or label
     # is one micro-op (one ROM entry). Fields are space-separated key=value
@@ -99,7 +99,7 @@ FIELDS = [
     ("sys_op", 10, 9, {
         "NONE": 0, "SPR_WRITE": 1, "SYS_READ": 2, "SYS_WRITE": 3,
     }),
-    ("alu_start", 8, 8, {}),
+    ("divmul_start", 8, 8, {}),
     ("branch", 7, 5, {
         "SEQ": 0, "FETCH": 1, "STALL": 2, "BRT": 3, "BRF": 4,
         "SKIP": 6,

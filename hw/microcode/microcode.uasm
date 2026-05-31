@@ -201,7 +201,7 @@ jalr:
 #
 # Three micro-ops. The ×2 dispatch spacing gives only 2 slots, so op-1 SKIPs
 # to a shared high-half tail:
-#   op-0: read Rd→A, Rs→B, set the divmul op + pulse alu_start, then STALL.
+#   op-0: read Rd→A, Rs→B, set the divmul op + pulse divmul_start, then STALL.
 #         divmul asserts busy combinationally on the start edge and holds it
 #         through the ~34-cycle iteration; the STALL releases when it falls.
 #   op-1: write the low half (wb_src=DML_LO: quotient / product low) → Rd,
@@ -216,25 +216,25 @@ jalr:
 # ── MUL (op=16, dispatch=0x40) ────────────────────────────────
 .org 0x40
 mul:
-  reg_a=IR_RD reg_b=IR_RS alu=MUL alu_start=1 bmux=REG pc=HOLD branch=STALL
+  reg_a=IR_RD reg_b=IR_RS alu=MUL divmul_start=1 bmux=REG pc=HOLD branch=STALL
   reg_w=IR_RD w_en=1 wb_src=DML_LO w_flags=1 pc=HOLD branch=SKIP fwd_offset=7
 
 # ── MULU (op=17, dispatch=0x42) ───────────────────────────────
 .org 0x42
 mulu:
-  reg_a=IR_RD reg_b=IR_RS alu=MULU alu_start=1 bmux=REG pc=HOLD branch=STALL
+  reg_a=IR_RD reg_b=IR_RS alu=MULU divmul_start=1 bmux=REG pc=HOLD branch=STALL
   reg_w=IR_RD w_en=1 wb_src=DML_LO w_flags=1 pc=HOLD branch=SKIP fwd_offset=5
 
 # ── DIV (op=18, dispatch=0x44) ────────────────────────────────
 .org 0x44
 div:
-  reg_a=IR_RD reg_b=IR_RS alu=DIV alu_start=1 bmux=REG pc=HOLD branch=STALL
+  reg_a=IR_RD reg_b=IR_RS alu=DIV divmul_start=1 bmux=REG pc=HOLD branch=STALL
   reg_w=IR_RD w_en=1 wb_src=DML_LO w_flags=1 pc=HOLD branch=SKIP fwd_offset=3
 
 # ── DIVU (op=19, dispatch=0x46) ───────────────────────────────
 .org 0x46
 divu:
-  reg_a=IR_RD reg_b=IR_RS alu=DIVU alu_start=1 bmux=REG pc=HOLD branch=STALL
+  reg_a=IR_RD reg_b=IR_RS alu=DIVU divmul_start=1 bmux=REG pc=HOLD branch=STALL
   reg_w=IR_RD w_en=1 wb_src=DML_LO w_flags=1 pc=HOLD branch=SKIP fwd_offset=1
 
 # Shared high-half writeback: Rdh ← divmul_hi (product high / remainder).

@@ -177,7 +177,7 @@ module cpu_core
     logic [7:0]  dispatch_addr;
 
     // Datapath status
-    logic        alu_busy, cond_result, sr_s, sr_i, ei_shadow;
+    logic        divmul_busy, cond_result, sr_s, sr_i, ei_shadow;
     logic        divmul_fault;   // divmul DIV0/overflow → VEC_ARITH
     logic [31:0] pc;
 
@@ -196,7 +196,7 @@ module cpu_core
     logic        ctl_sign_ext;
     logic [2:0]  ctl_pc_src;
     logic [1:0]  ctl_sys_op;
-    logic        ctl_alu_start;
+    logic        ctl_divmul_start;
     logic        ctl_pc_load;
     logic        ctl_ei_set, ctl_di_set, ctl_ei_shadow_clr;
 
@@ -216,7 +216,7 @@ module cpu_core
         .i_ir_valid      (ir_valid),
         .i_dispatch_addr (effective_dispatch),
         .o_fetch_go      (fetch_go),
-        .i_alu_busy      (alu_busy),
+        .i_divmul_busy   (divmul_busy),
         .i_mem_busy      (cache_busy),
         .i_mem_fault     (data_fault),
         .i_arith_fault   (divmul_fault),
@@ -244,7 +244,7 @@ module cpu_core
         .o_sign_ext      (ctl_sign_ext),
         .o_pc_src        (ctl_pc_src),
         .o_sys_op        (ctl_sys_op),
-        .o_alu_start     (ctl_alu_start),
+        .o_divmul_start     (ctl_divmul_start),
         .o_pc_load       (ctl_pc_load),
         .o_fetch_active  (fetch_active),
         .o_illegal       (seq_illegal),
@@ -767,7 +767,7 @@ module cpu_core
         .i_mem_size     (ctl_mem_size),
         .i_sign_ext     (ctl_sign_ext),
         .i_pc_src       (ctl_pc_src),
-        .i_alu_start    (ctl_alu_start),
+        .i_divmul_start    (ctl_divmul_start),
         .i_pc_load      (ctl_pc_load),
         .i_spr_write    (spr_write),
 
@@ -789,7 +789,7 @@ module cpu_core
         .o_mem_wdata    (dp_mem_wdata),
 
         // Status outputs
-        .o_alu_busy     (alu_busy),
+        .o_divmul_busy  (divmul_busy),
         .o_divmul_fault (divmul_fault),
         .o_sr_s         (sr_s),
         .o_sr_i         (sr_i),

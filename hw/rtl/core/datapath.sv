@@ -41,7 +41,7 @@ module datapath
     input  logic [1:0]  i_mem_size,     // Memory access size (from microcode)
     input  logic        i_sign_ext,     // Sign-extend sub-word load (from microcode)
     input  logic [2:0]  i_pc_src,       // PC source mux
-    input  logic        i_alu_start,    // Start multi-cycle ALU op
+    input  logic        i_divmul_start,    // Start divmul op (pulse)
     input  logic        i_pc_load,      // Load PC from pc_mux output
     input  logic        i_spr_write,    // SPR write (WRSPR): sys_we & !sys_cycle
 
@@ -73,7 +73,7 @@ module datapath
     // ══════════════════════════════════════════════════════════════
     // Status outputs (to micro-sequencer / fetch unit)
     // ══════════════════════════════════════════════════════════════
-    output logic        o_alu_busy,     // ALU multi-cycle in progress
+    output logic        o_divmul_busy,     // divmul iteration in progress
     output logic        o_divmul_fault, // divmul DIV0/overflow fault → VEC_ARITH
     output logic        o_sr_s,         // Supervisor bit
     output logic        o_sr_i,         // Interrupt enable bit
@@ -485,17 +485,12 @@ module datapath
     // ── ALU ──────────────────────────────────────────────────
     logic        alu_flag_n, alu_flag_z, alu_flag_c, alu_flag_v;
     logic [31:0] alu_result;
-    logic        alu_busy_int;
 
     alu u_alu (
-        .i_clk      (i_clk),
-        .i_rst      (i_rst),
         .i_a        (a_bus),
         .i_b        (b_bus),
         .i_op       (i_alu_op),
         .i_carry_in (sr_flag_c),
-        .i_start    (i_alu_start),
-        .o_busy     (alu_busy_int),
         .o_result   (alu_result),
         .o_flag_z   (alu_flag_z),
         .o_flag_n   (alu_flag_n),
@@ -521,7 +516,7 @@ module datapath
         .i_b         (b_bus),
         .i_rdh       (32'd0),          // narrowing dividend-high: wired in a later slice
         .i_op        (i_alu_op),
-        .i_start     (i_alu_start),
+        .i_start     (i_divmul_start),
         .o_busy      (divmul_busy),
         .o_fault     (o_divmul_fault),
         .o_result_lo (divmul_lo),
@@ -534,9 +529,8 @@ module datapath
     // W-bus mux (wb_src), not here.
     assign r_bus = alu_result;
 
-    // Multi-cycle busy is the OR of both units (the ALU is single-cycle, so
-    // today this is just the divmul).
-    assign o_alu_busy = alu_busy_int | divmul_busy;
+    // The ALU is purely combinational; only divmul stalls the pipeline.
+    assign o_divmul_busy = divmul_busy;
 
     // Flags follow the writeback source: a divmul writeback (wb_src[1]=1, i.e.
     // DML_LO / DML_HI) latches the divmul's Z/N with C/V cleared; otherwise the

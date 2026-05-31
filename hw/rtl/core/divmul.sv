@@ -4,8 +4,8 @@
 // the register-bus fabric but has its own start/busy handshake, so the ALU
 // stays single-cycle and off this unit's multi-cycle critical path.
 //
-// Protocol (matches the ALU's existing i_start/o_busy multi-cycle contract,
-// so the sequencer drives it through the same alu_start / alu_busy plumbing):
+// Protocol (the sequencer drives the unit via the divmul_start micro-word
+// field and stalls on i_divmul_busy):
 //   - Pulse i_start for one cycle with i_op and operands valid. The unit
 //     latches them and begins iterating; o_busy asserts the next cycle.
 //   - o_busy holds high while iterating; its falling edge means the results

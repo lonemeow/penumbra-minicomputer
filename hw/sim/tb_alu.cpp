@@ -44,7 +44,6 @@ static int run_test(Valu* dut, const TestCase& tc) {
     dut->i_a  = tc.a;
     dut->i_b  = tc.b;
     dut->i_op = tc.op;
-    dut->i_start = 0;
     dut->eval();
 
     int errors = 0;
@@ -161,22 +160,6 @@ int main(int argc, char** argv) {
     printf("alu: %d/%d tests passed\n", pass, total);
     if (fail > 0) {
         printf("  *** %d FAILED ***\n", fail);
-    }
-
-    // Verify o_busy is always 0 for single-cycle ops
-    dut->i_a = 0x12345678;
-    dut->i_b = 0x9ABCDEF0;
-    for (int op = OP_ADD; op <= OP_NOT; op++) {
-        dut->i_op = op;
-        dut->i_start = 0;
-        dut->eval();
-        if (dut->o_busy != 0) {
-            printf("  FAIL: o_busy != 0 for single-cycle op %d\n", op);
-            fail++;
-        }
-    }
-    if (fail == 0) {
-        printf("alu: o_busy confirmed 0 for all single-cycle ops\n");
     }
 
     delete dut;

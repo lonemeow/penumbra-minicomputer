@@ -3,7 +3,7 @@
 //
 // Manages the micro-PC that indexes into the microcode ROM, decodes
 // branch_cond to determine the next micro-PC, and fans out the packed
-// 51-bit micro-word into individual control signals for the datapath.
+// 52-bit micro-word into individual control signals for the datapath.
 //
 // States:
 //   FETCH — waiting for fetch unit to provide a new dispatch address
@@ -24,7 +24,7 @@ module sequencer
     output logic        o_fetch_go,       // Request new instruction fetch
 
     // ── Datapath status inputs ───────────────────────────────
-    input  logic        i_alu_busy,       // ALU multi-cycle in progress
+    input  logic        i_divmul_busy,       // divmul iteration in progress
     input  logic        i_mem_busy,       // Memory/cache busy
     input  logic        i_mem_fault,      // MMU fault (TLB miss / protection)
     input  logic        i_arith_fault,    // divmul DIV0/overflow → VEC_ARITH
@@ -58,7 +58,7 @@ module sequencer
     output logic        o_sign_ext,
     output logic [2:0]  o_pc_src,
     output logic [1:0]  o_sys_op,        // 00=NONE, 01=SPR_WRITE, 10=SYS_READ, 11=SYS_WRITE
-    output logic        o_alu_start,
+    output logic        o_divmul_start,
     output logic        o_pc_load,
 
     // ── State output ────────────────────────────────────────────
@@ -103,7 +103,7 @@ module sequencer
     logic        uw_sign_ext;
     logic [2:0]  uw_pc_src;
     logic [1:0]  uw_sys_op;
-    logic        uw_alu_start;
+    logic        uw_divmul_start;
     logic [2:0]  uw_branch;
     logic [2:0]  uw_fwd_offset;
     logic        uw_ei_set;
@@ -130,7 +130,7 @@ module sequencer
     assign uw_sign_ext     = i_uword[14];
     assign uw_pc_src       = i_uword[13:11];
     assign uw_sys_op       = i_uword[10:9];
-    assign uw_alu_start    = i_uword[8];
+    assign uw_divmul_start    = i_uword[8];
     assign uw_branch       = i_uword[7:5];
     assign uw_fwd_offset   = i_uword[4:2];
     assign uw_ei_set       = i_uword[1];
@@ -148,7 +148,7 @@ module sequencer
 
     // ── Unified busy signal ──────────────────────────────────
     logic busy;
-    assign busy = i_alu_busy | i_mem_busy;
+    assign busy = i_divmul_busy | i_mem_busy;
 
     // ── Branch condition decode ──────────────────────────────
     // Determines: should we go to fetch? should we advance micro-PC?
@@ -266,7 +266,7 @@ module sequencer
     assign o_sign_ext    = exec_en ? uw_sign_ext     : 1'b0;
     assign o_pc_src      = exec_en ? effective_pc_src : 3'b0;
     assign o_sys_op      = exec_en ? uw_sys_op       : 2'b0;
-    assign o_alu_start   = exec_en ? uw_alu_start    : 1'b0;
+    assign o_divmul_start   = exec_en ? uw_divmul_start    : 1'b0;
     assign o_pc_load     = exec_en;   // Suppressed on priv violation (no PC change)
 
     // ── EI/DI decode and ei_shadow_clr tracking ───────────────

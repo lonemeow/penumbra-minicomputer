@@ -1,41 +1,21 @@
-// Penumbra ALU — Unified 32-bit compute unit with ARM-style flag generation
+// Penumbra ALU — Combinational 32-bit compute unit with ARM-style flag generation
 //
-// The ALU is the single compute unit in the Penumbra datapath. It handles:
-//   - Single-cycle ops: arithmetic, logic, shifts, pass-through (combinational)
-//   - Multi-cycle MUL/DIV are handled by the divmul peer unit, not here (the
-//     ALU outputs 0 for those op codes; datapath.sv muxes the divmul in).
+// The ALU is the single-cycle compute unit in the Penumbra datapath. It is
+// purely combinational — no clock, no state. Multi-cycle MUL/DIV live in the
+// divmul peer unit (divmul.sv), not here; their results enter the register
+// file through the wb_src writeback-source mux, not through the R-bus.
 //
 // For C/C++ programmers:
-//   Think of this as a function: result = alu(a, b, op)
-//   Most ops complete instantly (combinational = no clock needed).
-//   Some ops (multiply, divide) take many cycles — like a function that
-//   sets a "busy" flag and you poll it until done.
-//
-//   `always_comb`  = a block that re-evaluates whenever inputs change
-//                    (like a pure function with no side effects)
-//   `always_ff`    = a block that updates only on clock edges
-//                    (like a callback that fires once per tick)
+//   Think of this as a pure function: result = alu(a, b, op).
+//   `always_comb` = a block that re-evaluates whenever inputs change (like a
+//   pure function with no side effects).
 
 module alu (
-    // Clock and reset — only used by multi-cycle ops (not yet implemented).
-    // verilator lint_off UNUSEDSIGNAL
-    input  logic        i_clk,
-    input  logic        i_rst,
-    // verilator lint_on UNUSEDSIGNAL
-
     // Operands and operation select
     input  logic [31:0] i_a,       // A-bus operand
     input  logic [31:0] i_b,       // B-bus operand (from B-mux)
-    input  logic [4:0]  i_op,      // ALU operation select (5-bit, see encoding below)
+    input  logic [4:0]  i_op,      // ALU operation select (see encoding below)
     input  logic        i_carry_in,// Carry flag from SR (used by ADC/SBC)
-
-    // Multi-cycle control
-    // verilator lint_off UNUSEDSIGNAL
-    input  logic        i_start,   // Pulse high for 1 cycle to begin a multi-cycle op
-                                   // (ignored for single-cycle ops)
-    // verilator lint_on UNUSEDSIGNAL
-    output logic        o_busy,    // High while a multi-cycle op is in progress
-                                   // (always 0 for single-cycle ops)
 
     // Result and flags
     output logic [31:0] o_result,  // ALU result → R-bus
@@ -46,12 +26,11 @@ module alu (
 );
 
     // ── Operation codes ─────────────────────────────────────────
-    // 5-bit encoding. Single-cycle ops are 00000–01010.
-    // Multi-cycle ops are 01011–10000 (initially trapped as illegal
-    // instructions via microcode ROM, hardware added later).
-    // 10001–11111 reserved for future FP ops.
+    // 5-bit encoding. The ALU implements the 13 single-cycle ops below; the
+    // remaining encodings either belong to the divmul peer (MUL/MULU/DIV/DIVU,
+    // 5'b01101..10000 — see penumbra_pkg) or are reserved. The ALU drives 0
+    // for those — the writeback mux ignores its R-bus result anyway.
 
-    // Single-cycle operations
     localparam logic [4:0] OP_ADD    = 5'b00000;
     localparam logic [4:0] OP_SUB    = 5'b00001;
     localparam logic [4:0] OP_AND    = 5'b00010;
@@ -65,16 +44,6 @@ module alu (
     localparam logic [4:0] OP_NOT    = 5'b01010;
     localparam logic [4:0] OP_ADC    = 5'b01011;  // add with carry
     localparam logic [4:0] OP_SBC    = 5'b01100;  // subtract with borrow
-
-    // Peer-unit (divmul) op encodings. The ALU produces 0 for these; the
-    // divmul peer reads the same op field and computes the result.
-    // verilator lint_off UNUSEDPARAM
-    localparam logic [4:0] OP_MUL    = 5'b01101;  // signed multiply
-    localparam logic [4:0] OP_MULU   = 5'b01110;  // unsigned multiply
-    localparam logic [4:0] OP_DIV    = 5'b01111;  // signed divide
-    localparam logic [4:0] OP_DIVU   = 5'b10000;  // unsigned divide
-    // verilator lint_on UNUSEDPARAM
-    // 5'b10001–5'b11111: reserved for future ops
 
     // ── Adder with subtract support ─────────────────────────────
     // SUB is implemented as: A + ~B + 1  (two's complement subtraction)
@@ -132,13 +101,14 @@ module alu (
     assign shl_carry = (shamt == 0) ? 1'b0 : i_a[32 - shamt];
     assign shr_carry = (shamt == 0) ? 1'b0 : i_a[shamt - 1];
 
-    // ── Core operation select (single-cycle) ────────────────────
-    // `always_comb` = "re-evaluate this block whenever any input changes"
-    // It's like a C switch statement that the hardware evaluates continuously.
+    // ── Core operation select ───────────────────────────────────
     // `case (i_op)` = multiplexer: select one of N results based on i_op.
+    // Op codes that belong to the divmul peer (MUL/MULU/DIV/DIVU) hit the
+    // default arm — the value is unused because wb_src picks DML_LO / DML_HI
+    // instead of RBUS for those writebacks.
 
-    logic [31:0] result_mux;  // Pre-flag result
-    logic        carry_mux;   // Carry output (operation-dependent)
+    logic [31:0] result_mux;
+    logic        carry_mux;
 
     always_comb begin
         case (i_op)
@@ -201,30 +171,12 @@ module alu (
         endcase
     end
 
-    // ── Multi-cycle result placeholder ──────────────────────────
-    // The ALU is single-cycle. Multi-cycle MUL/DIV are computed by the
-    // divmul peer unit (divmul.sv), which reads the same op field, drives
-    // the multi-cycle busy, and whose result the datapath muxes onto the
-    // R-bus. Here the ALU simply forces its own output to 0 (and o_busy
-    // low) for the peer-unit op codes.
+    // ── Outputs and flags ───────────────────────────────────────
+    assign o_result = result_mux;
 
-    logic        multicycle_busy;
-    logic [31:0] multicycle_result;
-
-    assign multicycle_busy   = 1'b0;  // Stub: never busy (no multi-cycle HW yet)
-    assign multicycle_result = 32'b0; // Stub: no result
-
-    // ── Output mux and flags ────────────────────────────────────
-    // Select between single-cycle (combinational) and multi-cycle results.
-    logic is_multicycle_op;
-    assign is_multicycle_op = (i_op >= OP_MUL);  // MUL (0x0D) and above are multi-cycle
-
-    assign o_result = is_multicycle_op ? multicycle_result : result_mux;
-    assign o_busy   = multicycle_busy;
-
-    assign o_flag_z = (o_result == 32'b0);
+    assign o_flag_z = ~|o_result;
     assign o_flag_n = o_result[31];
-    assign o_flag_c = is_multicycle_op ? 1'b0 : carry_mux;
+    assign o_flag_c = carry_mux;
 
     // V: signed overflow — only meaningful for ADD/SUB.
     // Both operands same sign, but result differs → overflow.
