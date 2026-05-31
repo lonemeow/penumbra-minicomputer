@@ -168,6 +168,7 @@ MODULE_TESTS = \
     byte_rep \
     cond_eval \
     datapath \
+    divmul \
     field_ext \
     imm_ext \
     mar \
