@@ -24,13 +24,14 @@
 #   8=SHLi 9=SHRi 10=SARi 11=JMP 12=JALR 13–15=(reserved)
 #
 # Register address encoding:
-#   IR_RD = format-dependent Rd, IR_RS = format-dependent Rs/Rb
-#   R2–R15 = literal register number
+#   IR_RD = format-dependent Rd, IR_RS = format-dependent Rs/Rb,
+#   IR_RDH = the Rdh field (IR[15:12], MUL/DIV third operand),
+#   R3–R15 = literal register number
 #
 # Assembler defaults (uasm.py applies these when not specified):
 #   pc=NEXT, branch=FETCH
 # All other fields default to 0 (hardware zero):
-#   a_src=REG, alu=ADD, bmux=REG, wmux=RBUS, all enables off.
+#   a_src=REG, alu=ADD, bmux=REG, wb_src=RBUS, all enables off.
 
 # ═══════════════════════════════════════════════════════════════
 # Format R — ALU operations (op 0–11)
@@ -40,66 +41,66 @@
 # ── ADD (op=0, dispatch=0x00) ─────────────────────────────────
 .org 0x00
 add:
-  reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=ADD bmux=REG wmux=RBUS w_flags=1
+  reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=ADD bmux=REG wb_src=RBUS w_flags=1
 
 # ── SUB (op=1, dispatch=0x02) ─────────────────────────────────
 .org 0x02
 sub:
-  reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=SUB bmux=REG wmux=RBUS w_flags=1
+  reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=SUB bmux=REG wb_src=RBUS w_flags=1
 
 # ── AND (op=2, dispatch=0x04) ─────────────────────────────────
 .org 0x04
 and:
-  reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=AND bmux=REG wmux=RBUS w_flags=1
+  reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=AND bmux=REG wb_src=RBUS w_flags=1
 
 # ── OR (op=3, dispatch=0x06) ──────────────────────────────────
 .org 0x06
 or:
-  reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=OR bmux=REG wmux=RBUS w_flags=1
+  reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=OR bmux=REG wb_src=RBUS w_flags=1
 
 # ── XOR (op=4, dispatch=0x08) ─────────────────────────────────
 .org 0x08
 xor:
-  reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=XOR bmux=REG wmux=RBUS w_flags=1
+  reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=XOR bmux=REG wb_src=RBUS w_flags=1
 
 # ── SHL (op=5, dispatch=0x0A) ─────────────────────────────────
 .org 0x0A
 shl:
-  reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=SHL bmux=REG wmux=RBUS w_flags=1
+  reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=SHL bmux=REG wb_src=RBUS w_flags=1
 
 # ── SHR (op=6, dispatch=0x0C) ─────────────────────────────────
 .org 0x0C
 shr:
-  reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=SHR bmux=REG wmux=RBUS w_flags=1
+  reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=SHR bmux=REG wb_src=RBUS w_flags=1
 
 # ── SAR (op=7, dispatch=0x0E) ─────────────────────────────────
 .org 0x0E
 sar:
-  reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=SAR bmux=REG wmux=RBUS w_flags=1
+  reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=SAR bmux=REG wb_src=RBUS w_flags=1
 
 # ── MOV (op=8, dispatch=0x10) ─────────────────────────────────
 # Rd = Rs (pass A-bus through ALU)
 .org 0x10
 mov:
-  reg_a=IR_RS reg_w=IR_RD w_en=1 alu=PASS_A wmux=RBUS
+  reg_a=IR_RS reg_w=IR_RD w_en=1 alu=PASS_A wb_src=RBUS
 
 # ── NOT (op=9, dispatch=0x12) ─────────────────────────────────
 # Rd = ~Rs
 .org 0x12
 not:
-  reg_b=IR_RS reg_w=IR_RD w_en=1 alu=NOT wmux=RBUS w_flags=1
+  reg_b=IR_RS reg_w=IR_RD w_en=1 alu=NOT wb_src=RBUS w_flags=1
 
 # ── ADC (op=10, dispatch=0x14) ────────────────────────────────
 # Rd = Rd + Rs + Carry (add with carry from SR.C)
 .org 0x14
 adc:
-  reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=ADC bmux=REG wmux=RBUS w_flags=1
+  reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=ADC bmux=REG wb_src=RBUS w_flags=1
 
 # ── SBC (op=11, dispatch=0x16) ────────────────────────────────
 # Rd = Rd - Rs - ~Carry (subtract with borrow, ARM convention)
 .org 0x16
 sbc:
-  reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=SBC bmux=REG wmux=RBUS w_flags=1
+  reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=SBC bmux=REG wb_src=RBUS w_flags=1
 
 # ═══════════════════════════════════════════════════════════════
 # Format L — Immediate operations (0x20–0x3E, ×2 spacing)
@@ -110,67 +111,67 @@ sbc:
 # Rd = zero_extend(imm16)
 .org 0x20
 lli:
-  reg_w=IR_RD w_en=1 alu=PASS_B bmux=IMM wmux=RBUS imm_mode=ZERO_EXT
+  reg_w=IR_RD w_en=1 alu=PASS_B bmux=IMM wb_src=RBUS imm_mode=ZERO_EXT
 
 # ── LLIS Rd, #imm16 (op=0001, dispatch=0x22) ─────────────────
 # Rd = sign_extend(imm16)
 .org 0x22
 llis:
-  reg_w=IR_RD w_en=1 alu=PASS_B bmux=IMM wmux=RBUS imm_mode=SIGN_EXT
+  reg_w=IR_RD w_en=1 alu=PASS_B bmux=IMM wb_src=RBUS imm_mode=SIGN_EXT
 
 # ── LUI Rd, #imm16 (op=0010, dispatch=0x24) ──────────────────
 # Rd = Rd | (imm16 << 16)
 .org 0x24
 lui:
-  reg_a=IR_RD reg_w=IR_RD w_en=1 alu=OR bmux=IMM wmux=RBUS imm_mode=SHIFT_L16
+  reg_a=IR_RD reg_w=IR_RD w_en=1 alu=OR bmux=IMM wb_src=RBUS imm_mode=SHIFT_L16
 
 # ── ADD Rd, #imm16 (op=0011, dispatch=0x26) ──────────────────
 # Rd = Rd + zero_extend(imm16)   [assembler: ADD Rd, #imm → Format L]
 .org 0x26
 inc:
-  reg_a=IR_RD reg_w=IR_RD w_en=1 alu=ADD bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
+  reg_a=IR_RD reg_w=IR_RD w_en=1 alu=ADD bmux=IMM wb_src=RBUS imm_mode=ZERO_EXT w_flags=1
 
 # ── SUB Rd, #imm16 (op=0100, dispatch=0x28) ──────────────────
 # Rd = Rd - zero_extend(imm16)   [assembler: SUB Rd, #imm → Format L]
 .org 0x28
 dec:
-  reg_a=IR_RD reg_w=IR_RD w_en=1 alu=SUB bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
+  reg_a=IR_RD reg_w=IR_RD w_en=1 alu=SUB bmux=IMM wb_src=RBUS imm_mode=ZERO_EXT w_flags=1
 
 # ── CMP Rd, #imm16 (op=0101, dispatch=0x2A) ──────────────────
 # Flags = Rd - zero_extend(imm16), Rd not written   [assembler: CMP Rd, #imm → Format L]
 .org 0x2A
 cmpi:
-  reg_a=IR_RD alu=SUB bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
+  reg_a=IR_RD alu=SUB bmux=IMM wb_src=RBUS imm_mode=ZERO_EXT w_flags=1
 
 # ── AND Rd, #imm16 (op=0110, dispatch=0x2C) ──────────────────
 # Rd = Rd & zero_extend(imm16)   [assembler: AND Rd, #imm → Format L]
 .org 0x2C
 andi:
-  reg_a=IR_RD reg_w=IR_RD w_en=1 alu=AND bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
+  reg_a=IR_RD reg_w=IR_RD w_en=1 alu=AND bmux=IMM wb_src=RBUS imm_mode=ZERO_EXT w_flags=1
 
 # ── TEST Rd, #imm16 (op=0111, dispatch=0x2E) ─────────────────
 # Flags = Rd & zero_extend(imm16), Rd not written   [assembler: TEST Rd, #imm → Format L]
 .org 0x2E
 testi:
-  reg_a=IR_RD alu=AND bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
+  reg_a=IR_RD alu=AND bmux=IMM wb_src=RBUS imm_mode=ZERO_EXT w_flags=1
 
 # ── SHL Rd, #imm5 (op=1000, dispatch=0x30) ───────────────────
 # Rd = Rd << imm[4:0]   [assembler: SHL Rd, #imm → Format L]
 .org 0x30
 shli:
-  reg_a=IR_RD reg_w=IR_RD w_en=1 alu=SHL bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
+  reg_a=IR_RD reg_w=IR_RD w_en=1 alu=SHL bmux=IMM wb_src=RBUS imm_mode=ZERO_EXT w_flags=1
 
 # ── SHR Rd, #imm5 (op=1001, dispatch=0x32) ───────────────────
 # Rd = Rd >> imm[4:0] (logical)   [assembler: SHR Rd, #imm → Format L]
 .org 0x32
 shri:
-  reg_a=IR_RD reg_w=IR_RD w_en=1 alu=SHR bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
+  reg_a=IR_RD reg_w=IR_RD w_en=1 alu=SHR bmux=IMM wb_src=RBUS imm_mode=ZERO_EXT w_flags=1
 
 # ── SAR Rd, #imm5 (op=1010, dispatch=0x34) ───────────────────
 # Rd = Rd >> imm[4:0] (arithmetic)   [assembler: SAR Rd, #imm → Format L]
 .org 0x34
 sari:
-  reg_a=IR_RD reg_w=IR_RD w_en=1 alu=SAR bmux=IMM wmux=RBUS imm_mode=ZERO_EXT w_flags=1
+  reg_a=IR_RD reg_w=IR_RD w_en=1 alu=SAR bmux=IMM wb_src=RBUS imm_mode=ZERO_EXT w_flags=1
 
 # ── JMP Rs (op=11, dispatch=0x36) ────────────────────────────
 # PC = Rd field (register indirect jump; RET = JMP R13)
@@ -193,47 +194,56 @@ jmp:
 .org 0x38
 jalr:
   reg_a=IR_RD mdr_load_a=1 pc=HOLD branch=SEQ
-  reg_a=R15 bmux=CONST4 alu=ADD reg_w=R13 w_en=1 wmux=RBUS pc=MDR
+  reg_a=R15 bmux=CONST4 alu=ADD reg_w=R13 w_en=1 wb_src=RBUS pc=MDR
 
 # ═══════════════════════════════════════════════════════════════
 # Format R — hardware MUL/DIV (op 16–19) via the divmul peer unit
 #
-# Two micro-ops fit the ×2 dispatch spacing:
+# Three micro-ops. The ×2 dispatch spacing gives only 2 slots, so op-1 SKIPs
+# to a shared high-half tail:
 #   op-0: read Rd→A, Rs→B, set the divmul op + pulse alu_start, then STALL.
 #         divmul asserts busy combinationally on the start edge and holds it
 #         through the ~34-cycle iteration; the STALL releases when it falls.
-#   op-1: drive divmul's low result onto the R-bus (alu=<op> keeps divmul
-#         selected) and write it to Rd, latching Z/N.
+#   op-1: write the low half (wb_src=DML_LO: quotient / product low) → Rd,
+#         latching Z/N, then SKIP to the shared high-half tail.
+#   tail: write the high half (wb_src=DML_HI: remainder / product high) → Rdh.
 #
-# This is the 2-operand form (low result → Rd: product low / quotient). The
-# high-half writeback to Rdh (product high / remainder), the narrowing
-# dividend-high input, and the o_fault → VEC_ARITH path are a later slice.
-# alu=MUL/DIV are the signed ops; MULU/DIVU are unsigned.
+# alu=MUL/DIV are the signed ops; MULU/DIVU are unsigned. The alu= on op-0
+# only selects the divmul operation and starts it; the writebacks pick the
+# result explicitly via wb_src, so a divmul result never touches the R-bus.
 # ═══════════════════════════════════════════════════════════════
 
 # ── MUL (op=16, dispatch=0x40) ────────────────────────────────
 .org 0x40
 mul:
   reg_a=IR_RD reg_b=IR_RS alu=MUL alu_start=1 bmux=REG pc=HOLD branch=STALL
-  reg_w=IR_RD w_en=1 alu=MUL wmux=RBUS w_flags=1
+  reg_w=IR_RD w_en=1 wb_src=DML_LO w_flags=1 pc=HOLD branch=SKIP fwd_offset=7
 
 # ── MULU (op=17, dispatch=0x42) ───────────────────────────────
 .org 0x42
 mulu:
   reg_a=IR_RD reg_b=IR_RS alu=MULU alu_start=1 bmux=REG pc=HOLD branch=STALL
-  reg_w=IR_RD w_en=1 alu=MULU wmux=RBUS w_flags=1
+  reg_w=IR_RD w_en=1 wb_src=DML_LO w_flags=1 pc=HOLD branch=SKIP fwd_offset=5
 
 # ── DIV (op=18, dispatch=0x44) ────────────────────────────────
 .org 0x44
 div:
   reg_a=IR_RD reg_b=IR_RS alu=DIV alu_start=1 bmux=REG pc=HOLD branch=STALL
-  reg_w=IR_RD w_en=1 alu=DIV wmux=RBUS w_flags=1
+  reg_w=IR_RD w_en=1 wb_src=DML_LO w_flags=1 pc=HOLD branch=SKIP fwd_offset=3
 
 # ── DIVU (op=19, dispatch=0x46) ───────────────────────────────
 .org 0x46
 divu:
   reg_a=IR_RD reg_b=IR_RS alu=DIVU alu_start=1 bmux=REG pc=HOLD branch=STALL
-  reg_w=IR_RD w_en=1 alu=DIVU wmux=RBUS w_flags=1
+  reg_w=IR_RD w_en=1 wb_src=DML_LO w_flags=1 pc=HOLD branch=SKIP fwd_offset=1
+
+# Shared high-half writeback: Rdh ← divmul_hi (product high / remainder).
+# Reached only via the SKIP above. 0x49 is op20's second slot, never a
+# dispatch target (op20 stays an illegal sentinel at 0x48). For the 2-operand
+# form (Rdh=R0) the write is dropped, discarding the high half.
+.org 0x49
+divmul_hi_wb:
+  reg_w=IR_RDH w_en=1 wb_src=DML_HI
 
 # ═══════════════════════════════════════════════════════════════
 # Format R — System operations (op 23–31)
@@ -257,7 +267,7 @@ wrsys:
 .org 0x50
 rdsys:
   priv=1 sys_op=SYS_READ mdr_load_mem=1 pc=HOLD branch=SEQ
-  reg_w=IR_RD w_en=1 wmux=MDR
+  reg_w=IR_RD w_en=1 wb_src=MDR
 
 # ── SYSCALL (op=25, dispatch=0x52) ────────────────────────────
 # System call trap: intercepted at dispatch time by cpu_top.
@@ -315,7 +325,7 @@ wrspr:
 # Source → ALU PASS_A → R-bus → Rd
 .org 0x5E
 rdspr:
-  priv=1 a_src=SPR alu=PASS_A reg_w=IR_RD w_en=1 wmux=RBUS
+  priv=1 a_src=SPR alu=PASS_A reg_w=IR_RD w_en=1 wb_src=RBUS
 
 # ═══════════════════════════════════════════════════════════════
 # Format B — Branches (0x60)
@@ -331,7 +341,7 @@ branch:
 #   Step 1: Branch to PC+offset (unconditionally)
 .org 0x62
 bl:
-  reg_a=R15 bmux=CONST4 alu=ADD reg_w=R13 w_en=1 wmux=RBUS pc=HOLD branch=SEQ
+  reg_a=R15 bmux=CONST4 alu=ADD reg_w=R13 w_en=1 wb_src=RBUS pc=HOLD branch=SEQ
   pc=OFFSET
 
 # ═══════════════════════════════════════════════════════════════
@@ -395,7 +405,7 @@ stw:
 ldb:
   reg_a=IR_RS bmux=IMM imm_mode=SIGN_EXT alu=ADD mar_load=1 pc=HOLD branch=SEQ
   mem_read=1 mem_size=BYTE mdr_load_mem=1 pc=HOLD branch=STALL
-  reg_w=IR_RD w_en=1 wmux=MDR mem_size=BYTE
+  reg_w=IR_RD w_en=1 wb_src=MDR mem_size=BYTE
 
 # ── LDBS Rd, [Rb + #offset] (L=1, sz=00, SE=1, dispatch=0xA4) ─
 # Byte load, sign-extended. byte_ext in datapath handles extraction.
@@ -403,7 +413,7 @@ ldb:
 ldbs:
   reg_a=IR_RS bmux=IMM imm_mode=SIGN_EXT alu=ADD mar_load=1 pc=HOLD branch=SEQ
   mem_read=1 mem_size=BYTE mdr_load_mem=1 pc=HOLD branch=STALL
-  reg_w=IR_RD w_en=1 wmux=MDR mem_size=BYTE sign_ext=1
+  reg_w=IR_RD w_en=1 wb_src=MDR mem_size=BYTE sign_ext=1
 
 # ── LDH Rd, [Rb + #offset] (L=1, sz=01, SE=0, dispatch=0xA8) ─
 # Halfword load, zero-extended. byte_ext in datapath handles extraction.
@@ -411,7 +421,7 @@ ldbs:
 ldh:
   reg_a=IR_RS bmux=IMM imm_mode=SIGN_EXT alu=ADD mar_load=1 pc=HOLD branch=SEQ
   mem_read=1 mem_size=HALF mdr_load_mem=1 pc=HOLD branch=STALL
-  reg_w=IR_RD w_en=1 wmux=MDR mem_size=HALF
+  reg_w=IR_RD w_en=1 wb_src=MDR mem_size=HALF
 
 # ── LDHS Rd, [Rb + #offset] (L=1, sz=01, SE=1, dispatch=0xAC) ─
 # Halfword load, sign-extended. byte_ext in datapath handles extraction.
@@ -419,7 +429,7 @@ ldh:
 ldhs:
   reg_a=IR_RS bmux=IMM imm_mode=SIGN_EXT alu=ADD mar_load=1 pc=HOLD branch=SEQ
   mem_read=1 mem_size=HALF mdr_load_mem=1 pc=HOLD branch=STALL
-  reg_w=IR_RD w_en=1 wmux=MDR mem_size=HALF sign_ext=1
+  reg_w=IR_RD w_en=1 wb_src=MDR mem_size=HALF sign_ext=1
 
 # ── LDW Rd, [Rb + #offset] (L=1, sz=10, SE=0, dispatch=0xB0) ─
 # Word load. byte_ext passes through unchanged (size=WORD).
@@ -427,4 +437,4 @@ ldhs:
 ldw:
   reg_a=IR_RS bmux=IMM imm_mode=SIGN_EXT alu=ADD mar_load=1 pc=HOLD branch=SEQ
   mem_read=1 mem_size=WORD mdr_load_mem=1 pc=HOLD branch=STALL
-  reg_w=IR_RD w_en=1 wmux=MDR
+  reg_w=IR_RD w_en=1 wb_src=MDR

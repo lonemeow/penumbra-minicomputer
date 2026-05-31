@@ -34,7 +34,7 @@ module sequencer
     // ── Microcode ROM interface ──────────────────────────────
     output logic [7:0]  o_upc,            // Micro-PC → ROM address
     // verilator lint_off UNUSEDSIGNAL
-    input  logic [50:0] i_uword,          // Micro-word from ROM
+    input  logic [51:0] i_uword,          // Micro-word from ROM
     // verilator lint_on UNUSEDSIGNAL
 
     // ── Datapath control outputs (decoded micro-word) ────────
@@ -45,7 +45,7 @@ module sequencer
     output logic        o_reg_w_en,
     output logic [4:0]  o_alu_op,
     output logic [1:0]  o_b_mux_sel,
-    output logic        o_w_mux_sel,
+    output logic [1:0]  o_wb_src,        // writeback source: RBUS/MDR/DML_LO/DML_HI
     output logic [1:0]  o_imm_mode,
     output logic        o_flag_w_en,
     output logic        o_sr_load,
@@ -87,14 +87,14 @@ module sequencer
     logic [7:0] upc, next_upc;
 
     // ── Micro-word field extraction ──────────────────────────
-    // Extract from the 51-bit packed word (bits 50:0)
+    // Extract from the 52-bit packed word (bits 51:0)
     logic        uw_priv;
     logic [2:0]  uw_a_src;
     logic [3:0]  uw_reg_a, uw_reg_b, uw_reg_w;
     logic        uw_w_en;
     logic [4:0]  uw_alu_op;
     logic [1:0]  uw_bmux;
-    logic        uw_wmux;
+    logic [1:0]  uw_wb_src;
     logic [1:0]  uw_imm_mode;
     logic        uw_flag_w_en, uw_sr_load;
     logic        uw_mar_load, uw_mdr_load_mem, uw_mdr_load_a;
@@ -109,15 +109,15 @@ module sequencer
     logic        uw_ei_set;
     logic        uw_di_set;
 
-    assign uw_priv         = i_uword[50];
-    assign uw_a_src        = i_uword[49:47];
-    assign uw_reg_a        = i_uword[46:43];
-    assign uw_reg_b        = i_uword[42:39];
-    assign uw_reg_w        = i_uword[38:35];
-    assign uw_w_en         = i_uword[34];
-    assign uw_alu_op       = i_uword[33:29];
-    assign uw_bmux         = i_uword[28:27];
-    assign uw_wmux         = i_uword[26];
+    assign uw_priv         = i_uword[51];
+    assign uw_a_src        = i_uword[50:48];
+    assign uw_reg_a        = i_uword[47:44];
+    assign uw_reg_b        = i_uword[43:40];
+    assign uw_reg_w        = i_uword[39:36];
+    assign uw_w_en         = i_uword[35];
+    assign uw_alu_op       = i_uword[34:30];
+    assign uw_bmux         = i_uword[29:28];
+    assign uw_wb_src       = i_uword[27:26];
     assign uw_imm_mode     = i_uword[25:24];
     assign uw_flag_w_en    = i_uword[23];
     assign uw_sr_load      = i_uword[22];
@@ -253,7 +253,7 @@ module sequencer
     assign o_reg_w_en    = exec_en ? uw_w_en         : 1'b0;
     assign o_alu_op      = exec_en ? uw_alu_op       : 5'b0;
     assign o_b_mux_sel   = exec_en ? uw_bmux         : 2'b0;
-    assign o_w_mux_sel   = uw_wmux;  // Not gated — must be stable at write posedge
+    assign o_wb_src      = uw_wb_src;  // Not gated — must be stable at write posedge
     assign o_imm_mode    = exec_en ? uw_imm_mode     : 2'b0;
     assign o_flag_w_en   = exec_en ? uw_flag_w_en    : 1'b0;
     assign o_sr_load     = exec_en ? uw_sr_load      : 1'b0;

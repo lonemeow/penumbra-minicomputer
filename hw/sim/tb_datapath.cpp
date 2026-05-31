@@ -57,7 +57,7 @@ static const int BMUX_C4    = 0b10;
 static void clear(Vdatapath* d) {
     d->i_a_src = 0; d->i_reg_a_sel = 0; d->i_reg_b_sel = 0;
     d->i_reg_w_sel = 0; d->i_reg_w_en = 0; d->i_alu_op = 0;
-    d->i_b_mux_sel = 0; d->i_w_mux_sel = 0; d->i_imm_mode = 0;
+    d->i_b_mux_sel = 0; d->i_wb_src = 0; d->i_imm_mode = 0;
     d->i_flag_w_en = 0; d->i_sr_load = 0; d->i_mar_load = 0;
     d->i_mdr_load_mem = 0; d->i_mdr_load_a = 0; d->i_pc_src = 0;
     d->i_alu_start = 0; d->i_pc_load = 0;
@@ -118,7 +118,7 @@ int main() {
 
     d->i_reg_w_sel = 3;     // Literal R3
     d->i_reg_w_en = 1;
-    d->i_w_mux_sel = 1;     // MDR
+    d->i_wb_src = 1;     // MDR
     tick(d);
     clear(d);
 
@@ -130,7 +130,7 @@ int main() {
 
     d->i_reg_w_sel = 4;     // Literal R4
     d->i_reg_w_en = 1;
-    d->i_w_mux_sel = 1;     // MDR
+    d->i_wb_src = 1;     // MDR
     tick(d);
     clear(d);
 
@@ -151,7 +151,7 @@ int main() {
     d->i_reg_w_en  = 1;
     d->i_alu_op    = ALU_ADD;
     d->i_b_mux_sel = BMUX_REG;
-    d->i_w_mux_sel = 0;         // R-bus
+    d->i_wb_src = 0;         // R-bus
     d->i_flag_w_en = 1;
     d->i_pc_src    = PC_PLUS4;
     d->i_pc_load   = 1;
@@ -190,7 +190,7 @@ int main() {
     d->i_mdr_load_mem = 0;
     d->i_reg_w_sel = 3;
     d->i_reg_w_en = 1;
-    d->i_w_mux_sel = 1;  // MDR
+    d->i_wb_src = 1;  // MDR
     tick(d);
     clear(d);
 
@@ -208,7 +208,7 @@ int main() {
     d->i_reg_w_en  = 1;        // Micro-word says write...
     d->i_alu_op    = ALU_SUB;
     d->i_b_mux_sel = BMUX_REG;
-    d->i_w_mux_sel = 0;
+    d->i_wb_src = 0;
     d->i_flag_w_en = 1;
     tick(d);
     clear(d);
@@ -232,7 +232,7 @@ int main() {
     clear(d);
     // Step 2: sr_load from W-mux (MDR path)
     d->i_sr_load = 1;
-    d->i_w_mux_sel = 1;  // MDR
+    d->i_wb_src = 1;  // MDR
     tick(d);
     clear(d);
 
@@ -257,7 +257,7 @@ int main() {
     d->i_mdr_load_mem = 0;
     d->i_reg_w_sel = 14;    // Literal R14
     d->i_reg_w_en = 1;
-    d->i_w_mux_sel = 1;     // MDR
+    d->i_wb_src = 1;     // MDR
     tick(d);
     clear(d);
 

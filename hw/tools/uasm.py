@@ -35,44 +35,47 @@ import re
 # Fields are listed MSB-first matching the spec.
 
 FIELDS = [
-    ("priv", 50, 50, {
+    ("priv", 51, 51, {
         # 1-bit: privileged instruction (sequencer checks on first micro-op)
     }),
-    ("a_src", 49, 47, {
+    ("a_src", 50, 48, {
         "REG": 0, "ESR": 1, "EPC": 2, "VECTOR": 3, "SPR": 4,
         # SPR: source determined by IR[15:12] (SPR number).
         # Absorbs old cross_bank bit — a_src=4 (binary 100) maps to
         # the old cross_bank=1,a_src=REG encoding. Hardware decodes
         # SPR field for ESR/EPC/USP selection.
     }),
-    ("reg_a", 46, 43, {
-        "IR_RD": 0, "IR_RS": 1,
-        # Literal registers: R2-R15 (value = register number)
-        **{f"R{i}": i for i in range(2, 16)},
+    ("reg_a", 47, 44, {
+        "IR_RD": 0, "IR_RS": 1, "IR_RDH": 2,
+        # Literal registers: R3-R15 (value = register number).
+        # R2 is not literal-addressable (encoding 2 = IR_RDH, the Rdh field).
+        **{f"R{i}": i for i in range(3, 16)},
     }),
-    ("reg_b", 42, 39, {
-        "IR_RD": 0, "IR_RS": 1,
-        **{f"R{i}": i for i in range(2, 16)},
+    ("reg_b", 43, 40, {
+        "IR_RD": 0, "IR_RS": 1, "IR_RDH": 2,
+        **{f"R{i}": i for i in range(3, 16)},
     }),
-    ("reg_w", 38, 35, {
-        "IR_RD": 0, "IR_RS": 1,
-        **{f"R{i}": i for i in range(2, 16)},
+    ("reg_w", 39, 36, {
+        "IR_RD": 0, "IR_RS": 1, "IR_RDH": 2,
+        **{f"R{i}": i for i in range(3, 16)},
     }),
-    ("w_en", 34, 34, {
+    ("w_en", 35, 35, {
         # 1-bit field: 0 or 1
     }),
-    ("alu", 33, 29, {
+    ("alu", 34, 30, {
         "ADD": 0, "SUB": 1, "AND": 2, "OR": 3, "XOR": 4,
         "SHL": 5, "SHR": 6, "SAR": 7,
         "PASS_A": 8, "PASS_B": 9, "NOT": 10,
         "ADC": 11, "SBC": 12,
         "MUL": 13, "MULU": 14, "DIV": 15, "DIVU": 16,
     }),
-    ("bmux", 28, 27, {
+    ("bmux", 29, 28, {
         "REG": 0, "IMM": 1, "CONST4": 2, "CONST8": 3,
     }),
-    ("wmux", 26, 26, {
-        "RBUS": 0, "MDR": 1,
+    # Writeback source — what drives the W-bus into the register file / SR.
+    # RBUS = ALU result, MDR = load data, DML_LO/DML_HI = divmul low/high half.
+    ("wb_src", 27, 26, {
+        "RBUS": 0, "MDR": 1, "DML_LO": 2, "DML_HI": 3,
     }),
     ("imm_mode", 25, 24, {
         "ZERO_EXT": 0, "SIGN_EXT": 1, "SHIFT_L16": 2,
@@ -112,7 +115,7 @@ for name, hi, lo, syms in FIELDS:
     FIELD_MAP[name] = (hi, lo, syms)
 
 ROM_SIZE = 256
-WORD_BITS = 51  # bits 50:0
+WORD_BITS = 52  # bits 51:0
 
 # ── Dispatch slot layout ─────────────────────────────────────
 # Each zone defines a contiguous range of ROM addresses with a fixed

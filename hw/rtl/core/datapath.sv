@@ -31,7 +31,7 @@ module datapath
     input  logic        i_reg_w_en,     // Register write enable (pre-F-bit gating)
     input  logic [4:0]  i_alu_op,       // ALU operation
     input  logic [1:0]  i_b_mux_sel,    // B-bus source mux
-    input  logic        i_w_mux_sel,    // Write-back source mux
+    input  logic [1:0]  i_wb_src,       // Write-back source: RBUS/MDR/DML_LO/DML_HI
     input  logic [1:0]  i_imm_mode,     // Immediate extension mode
     input  logic        i_flag_w_en,    // Latch NZCV from ALU
     input  logic        i_sr_load,      // Bulk-load SR from W-mux
@@ -113,11 +113,13 @@ module datapath
 
     // ── Register address routing encoding ────────────────────
     // The micro-word's reg_*_sel fields use this encoding:
-    //   4'b0000 = IR_RD: format-dependent destination register
-    //   4'b0001 = IR_RS: format-dependent source/base register
-    //   4'b0010–4'b1111 = literal register R2–R15
-    localparam logic [3:0] REG_SEL_IR_RD = 4'd0;
-    localparam logic [3:0] REG_SEL_IR_RS = 4'd1;
+    //   4'b0000 = IR_RD : format-dependent destination register
+    //   4'b0001 = IR_RS : format-dependent source/base register
+    //   4'b0010 = IR_RDH: the Rdh field (IR[15:12]) — MUL/DIV third operand
+    //   4'b0011–4'b1111 = literal register R3–R15
+    localparam logic [3:0] REG_SEL_IR_RD  = 4'd0;
+    localparam logic [3:0] REG_SEL_IR_RS  = 4'd1;
+    localparam logic [3:0] REG_SEL_IR_RDH = 4'd2;
 
     // ── Internal buses ───────────────────────────────────────
     logic [31:0] a_bus;         // A-bus (from A-mux)
@@ -218,16 +220,20 @@ module datapath
         input logic [3:0] sel;
         input logic [3:0] rd;
         input logic [3:0] rs;
+        input logic [3:0] rdh;
         case (sel)
-            REG_SEL_IR_RD: resolve_reg_sel = rd;
-            REG_SEL_IR_RS: resolve_reg_sel = rs;
-            default:       resolve_reg_sel = sel;  // Literal: value IS the register number
+            REG_SEL_IR_RD:  resolve_reg_sel = rd;
+            REG_SEL_IR_RS:  resolve_reg_sel = rs;
+            REG_SEL_IR_RDH: resolve_reg_sel = rdh;  // IR[15:12] — MUL/DIV high half
+            default:        resolve_reg_sel = sel;  // Literal: value IS the register number
         endcase
     endfunction
 
-    assign resolved_a = resolve_reg_sel(i_reg_a_sel, ir_rd_resolved, ir_rs_resolved);
-    assign resolved_b = resolve_reg_sel(i_reg_b_sel, ir_rd_resolved, ir_rs_resolved);
-    assign resolved_w = resolve_reg_sel(i_reg_w_sel, ir_rd_resolved, ir_rs_resolved);
+    // The Rdh selector resolves to fe_r_sys_dev (IR[15:12]), shared with the
+    // SPR/sysreg device field but addressed here as the MUL/DIV third operand.
+    assign resolved_a = resolve_reg_sel(i_reg_a_sel, ir_rd_resolved, ir_rs_resolved, fe_r_sys_dev);
+    assign resolved_b = resolve_reg_sel(i_reg_b_sel, ir_rd_resolved, ir_rs_resolved, fe_r_sys_dev);
+    assign resolved_w = resolve_reg_sel(i_reg_w_sel, ir_rd_resolved, ir_rs_resolved, fe_r_sys_dev);
 
     // ── SPR decode logic ─────────────────────────────────────
     // Decodes the SPR field (IR[15:12] = fe_r_sys_dev) for RDSPR/WRSPR.
@@ -498,35 +504,22 @@ module datapath
     );
 
     // ── divmul peer unit (hardware MUL/DIV) ───────────────────
-    // A peer on the same A/B buses. It decodes MUL/MULU/DIV/DIVU out of
-    // i_alu_op and shares the ALU's start/busy handshake, so no new
-    // micro-word fields are needed. While a divmul op is active its
-    // result and flags override the ALU's onto the R-bus / flag path
-    // (the ALU produces 0 for those ops anyway); otherwise the ALU
-    // drives exactly as before.
-    //
-    // This slice wires the 2-operand forms (result low → Rd: product
-    // low / quotient). The high-half writeback (Rdh: product high /
-    // remainder), the narrowing dividend-high input, and the
-    // o_fault → VEC_ARITH path land with the microcode + Rdh-addressing
-    // work, where divmul_hi / divmul_fault below get consumed.
-    logic        divmul_active;
+    // A peer on the same A/B buses. It decodes MUL/MULU/DIV/DIVU from i_alu_op
+    // and shares the ALU's start/busy handshake. Its results are *writeback
+    // sources*: they reach the register file through the W-bus mux (wb_src),
+    // alongside the ALU result and load data. divmul does NOT drive the R-bus,
+    // which stays purely the ALU's result bus.
     logic        divmul_busy;
-    logic [31:0] divmul_lo;
+    logic [31:0] divmul_lo;       // product low / quotient
+    logic [31:0] divmul_hi;       // product high / remainder
     logic        divmul_flag_z, divmul_flag_n;
-    // verilator lint_off UNUSEDSIGNAL
-    logic [31:0] divmul_hi;     // high half — used once Rdh writeback lands
-    // verilator lint_on UNUSEDSIGNAL
-
-    assign divmul_active = (i_alu_op == ALU_MUL)  || (i_alu_op == ALU_MULU)
-                        || (i_alu_op == ALU_DIV)  || (i_alu_op == ALU_DIVU);
 
     divmul u_divmul (
         .i_clk       (i_clk),
         .i_rst       (i_rst),
         .i_a         (a_bus),
         .i_b         (b_bus),
-        .i_rdh       (32'd0),          // narrowing dividend-high: wired with microcode
+        .i_rdh       (32'd0),          // narrowing dividend-high: wired in a later slice
         .i_op        (i_alu_op),
         .i_start     (i_alu_start),
         .o_busy      (divmul_busy),
@@ -537,20 +530,22 @@ module datapath
         .o_flag_n    (divmul_flag_n)
     );
 
-    // R-bus: divmul result overrides the ALU result when a divmul op is
-    // in flight.
-    assign r_bus = divmul_active ? divmul_lo : alu_result;
+    // R-bus is purely the ALU result. divmul reaches the register file via the
+    // W-bus mux (wb_src), not here.
+    assign r_bus = alu_result;
 
-    // Multi-cycle busy is the OR of both units (the ALU is single-cycle,
-    // so today this is just the divmul).
+    // Multi-cycle busy is the OR of both units (the ALU is single-cycle, so
+    // today this is just the divmul).
     assign o_alu_busy = alu_busy_int | divmul_busy;
 
-    // Flags: divmul drives Z/N (C/V cleared) when active; else the ALU.
+    // Flags follow the writeback source: a divmul writeback (wb_src[1]=1, i.e.
+    // DML_LO / DML_HI) latches the divmul's Z/N with C/V cleared; otherwise the
+    // ALU's. divmul Z/N reflect the low half (quotient / product low).
     logic flag_n, flag_z, flag_c, flag_v;
-    assign flag_n = divmul_active ? divmul_flag_n : alu_flag_n;
-    assign flag_z = divmul_active ? divmul_flag_z : alu_flag_z;
-    assign flag_c = divmul_active ? 1'b0          : alu_flag_c;
-    assign flag_v = divmul_active ? 1'b0          : alu_flag_v;
+    assign flag_n = i_wb_src[1] ? divmul_flag_n : alu_flag_n;
+    assign flag_z = i_wb_src[1] ? divmul_flag_z : alu_flag_z;
+    assign flag_c = i_wb_src[1] ? 1'b0          : alu_flag_c;
+    assign flag_v = i_wb_src[1] ? 1'b0          : alu_flag_v;
 
     // ── MDR ──────────────────────────────────────────────────
     logic [31:0] mdr_data;
@@ -591,10 +586,12 @@ module datapath
 
     // ── W-bus source mux ─────────────────────────────────────
     wmux u_wmux (
-        .i_r_bus  (r_bus),
-        .i_mdr    (mdr_extracted),
-        .i_sel    (i_w_mux_sel),
-        .o_wr_data(w_bus)
+        .i_r_bus     (r_bus),
+        .i_mdr       (mdr_extracted),
+        .i_divmul_lo (divmul_lo),
+        .i_divmul_hi (divmul_hi),
+        .i_sel       (i_wb_src),
+        .o_wr_data   (w_bus)
     );
 
     // ── MAR ──────────────────────────────────────────────────

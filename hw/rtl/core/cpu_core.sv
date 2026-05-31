@@ -162,7 +162,7 @@ module cpu_core
     // Microcode ROM
     // ══════════════════════════════════════════════════════════
     logic [7:0]  upc;
-    logic [50:0] uword;
+    logic [51:0] uword;
 
     ucode_rom u_ucode_rom (
         .i_addr  (upc),
@@ -187,7 +187,7 @@ module cpu_core
     logic        ctl_w_en;
     logic [4:0]  ctl_alu_op;
     logic [1:0]  ctl_bmux;
-    logic        ctl_wmux;
+    logic [1:0]  ctl_wb_src;
     logic [1:0]  ctl_imm_mode;
     logic        ctl_flag_w_en, ctl_sr_load;
     logic        ctl_mar_load, ctl_mdr_load_mem, ctl_mdr_load_a;
@@ -231,7 +231,7 @@ module cpu_core
         .o_reg_w_en      (ctl_w_en),
         .o_alu_op        (ctl_alu_op),
         .o_b_mux_sel     (ctl_bmux),
-        .o_w_mux_sel     (ctl_wmux),
+        .o_wb_src        (ctl_wb_src),
         .o_imm_mode      (ctl_imm_mode),
         .o_flag_w_en     (ctl_flag_w_en),
         .o_sr_load       (ctl_sr_load),
@@ -757,7 +757,7 @@ module cpu_core
         .i_reg_w_en     (ctl_w_en),
         .i_alu_op       (ctl_alu_op),
         .i_b_mux_sel    (ctl_bmux),
-        .i_w_mux_sel    (ctl_wmux),
+        .i_wb_src       (ctl_wb_src),
         .i_imm_mode     (ctl_imm_mode),
         .i_flag_w_en    (ctl_flag_w_en),
         .i_sr_load      (ctl_sr_load),

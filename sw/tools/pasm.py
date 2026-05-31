@@ -452,6 +452,20 @@ def assemble_line(mnemonic, operands, addr, labels, line_num, constants=None):
             spare = (dev << 12) | (reg << 8)
             return encode_format_r(op, rd, 0, 0, spare)
 
+        # MUL/DIV: optional third operand Rdh (high half / dividend high),
+        # encoded in spare[15:12]. The 2-operand form (Rdh=R0) falls through.
+        if mn in ("MUL", "MULU", "DIV", "DIVU") and len(operands) == 3:
+            rd  = parse_reg(operands[0])
+            rs  = parse_reg(operands[1])
+            rdh = parse_reg(operands[2])
+            if rd is None:
+                raise ValueError(f"bad register '{operands[0]}'")
+            if rs is None:
+                raise ValueError(f"bad register '{operands[1]}'")
+            if rdh is None:
+                raise ValueError(f"bad register '{operands[2]}'")
+            return encode_format_r(op, rd, rs, f_bit, rdh << 12)
+
         # Standard ALU: mnemonic Rd, Rs
         if len(operands) != 2:
             raise ValueError(f"{mn} expects Rd, Rs")
