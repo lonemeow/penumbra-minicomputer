@@ -487,54 +487,46 @@ input-processing path touches tty buffers and current LWP state).
 Hardware flow control papers over the symptom but the latency tail
 is its own diagnostic.
 
-## Hardware: uncached MMIO STW is 2.4× slower than LDW
+## RESOLVED: "uncached MMIO STW 2.4× slower than LDW" was codegen, not hardware
 
 A targeted MMIO microbench in `pmci_attach` (Phase 3.5 diagnostic,
-now removed) measured per-op cost for back-to-back uncached accesses
-to the SPI device on the ULX3S FPGA @ 25 MHz, with `splhigh()`
-disabling interrupts and only the inner instruction varying:
+since removed) measured, on the ULX3S FPGA @ 25 MHz with interrupts
+disabled and only the inner instruction varying:
 
 ```
 baseline (RDSYS CPU_CYCLES x256):  1837 cyc  =  7.17 cyc/iter
-STW SPI_DATA x256:                 4429 cyc  = 17.3  cyc/iter
-LDW SPI_STATUS x256:               2905 cyc  = 11.3  cyc/iter
-
-per-MMIO-op (baseline subtracted):
-  STW = ~11 cyc = 405 ns/op
-  LDW =  ~5 cyc = 167 ns/op
+STW SPI_DATA x256:                 4429 cyc  = 17.3  cyc/iter  (~11 cyc/op)
+LDW SPI_STATUS x256:               2905 cyc  = 11.3  cyc/iter  (~5 cyc/op)
 ```
 
-In the architectural model the costs should be roughly symmetric:
-arbiter `IDLE→BUSY→DONE→IDLE` is ~3 cycles regardless of direction,
-and the SPI device asserts `o_busy` for 1 cycle on reads (the
-`access_pending` pattern) while writes don't stall at all — so writes
-should be *cheaper*, not 2.4× more expensive.  Something in the
-CPU's STW micro-routine, the arbiter's write-side timing, or the
-cache pass-through path is adding cycles that the read path doesn't
-pay.
+This is **not** a hardware write-path asymmetry — the premise that the
+"STW" was a single instruction was wrong.  Root cause:
 
-**Why it matters.**  Every device that talks via word-strided MMIO
-(UART, SPI, future timer, future Ethernet) pays this cost on every
-register access.  At 11 cyc/STW we're spending ~440 ns per single-word
-write — a 512-byte SPI burst push pays ~225 µs of that minimum, before
-any per-byte instruction overhead.  Halving STW cost would buy a few
-percent on every MMIO-heavy workload.
+- **The hardware write path is symmetric.**  An RTL-sim microbench
+  (`hw/sim/programs/test_mmio_stw_timing.s` on `machine_sim`) issuing a
+  *single* STW vs LDW to the same uncached scratch register costs the
+  same ~4 cyc/op.  Microcode, the STALL sequencer, the bus arbiter, and
+  the L1 pass-through path are all symmetric — none favours reads.
+- **The microbench counted instructions, not cycles.**  The driver's
+  open-coded `bus_space_write_4` loop emitted *3* instructions per
+  "STW" — `ldw sc->sc_ioh` + `add` + `stw` — versus *1* for the read;
+  3:1 ≈ the observed 2.4×.
+- **Cause: `-fno-strict-aliasing`** (kernel-wide, `Makefile.kern.inc`).
+  With TBAA off the compiler can't prove the volatile MMIO store
+  doesn't alias the in-memory `bus_space_handle_t sc_ioh`, so it
+  reloads the handle before every write.  Confirmed by disassembly:
+  the loop is clean under `-fstrict-aliasing`, reloads under
+  `-fno-strict-aliasing`.
 
-**Investigation order:**
-1. Read the CPU's STW micro-routine in `hw/rom/microcode/` (or wherever
-   the microcode source lives) and count the µ-ops.  CLAUDE.md says
-   "STW (4 µ-ops)" / "LDW (3 µ-ops)" — the 1-µop difference doesn't
-   explain a 6-cycle gap, but a per-µop multi-cycle execution would.
-2. Add a waveform probe on `o_mem_we` and `o_d_busy` during a tight
-   STW loop, count cycles between consecutive `o_mem_we` pulses, and
-   compare to the same with LDW.
-3. Inspect `cache_vipt.sv` write-update path (S_IDLE, `i_we_q && hit_q`
-   branch) — even though it should be a no-op for uncached writes,
-   verify the gating doesn't accidentally pipe-stall the bus.
-
-Headline payoff is modest (~10% of `dd` throughput in isolation),
-but it's a fundamental latency floor on every other future
-microcontroller-class workload.
+**Fix / status.**  `pmci_burst` was converted from open-coded unrolled
+loops to the canonical `bus_space_{write,read,set}_multi_1` primitives
+(handle passed by value → base pinned in a register, immune to the
+reload).  This is **perf-neutral**, not a speedup: per-byte cost is
+dominated by the MMIO store latency (~4–5 cyc), so dropping the reload
+while rolling the loop is a wash — the idiomatic m68k flat-MMIO ports
+reach the same conclusion (simple rolled `*_multi` loops, no unroll).
+The conversion's value is readability and idiom.  Gated on a real-HW
+correctness check of the word→byte FIFO access width before commit.
 
 ## Hardware: pmci_burst overshoots microbench prediction by ~3×
 
