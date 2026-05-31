@@ -290,20 +290,18 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
       .clampScalar(0, s32, s64)
       .lower();
 
-  // Multiplication: custom-lower s32 power-of-2 and power-of-2 ± 1 constants
-  // to shifts (+ add/sub — cheaper than a 34-cycle multiply); the custom
-  // handler leaves the variable case in place as a legal s32 op, which the
-  // selector maps onto the hardware MUL.
-  // s64 narrows to s32 partial products (schoolbook G_MUL + G_UMULH, both now
-  // legal hardware multiplies) rather than a __muldi3 libcall — this is what
-  // puts a 32x32->64 widening multiply onto the hardware.
+  // Multiplication, custom-lowered at both widths:
+  // - s32: strength-reduce power-of-2 and power-of-2 ± 1 constants to shifts
+  //   (+ add/sub); the variable case stays a legal s32 op selected to MUL.
+  // - s64: a 32x32->64 widening multiply (both operands extended from s32) is
+  //   a single hardware multiply, emitted as a low/high pair (G_MUL +
+  //   G_S/UMULH); any other i64 multiply narrows to the generic schoolbook.
   // Non-power-of-2 widths (e.g. i33 from SCEV's closed-form sum-of-arithmetic-
   // progression rewrite at -O2) widen to next pow2 first, landing on s64.
   getActionDefinitionsBuilder(G_MUL)
-      .customFor({s32})
+      .customFor({s32, s64})
       .widenScalarToNextPow2(0, 32)
       .clampScalar(0, s32, s64)
-      .narrowScalarIf(typeIs(0, s64), changeTo(0, s32))
       .scalarize(0);
 
   // SEXT_INREG: lowered by framework to SHL+ASHR (our shift constant folding
@@ -542,13 +540,48 @@ bool PenumbraLegalizerInfo::legalizeCustom(
 
   case TargetOpcode::G_MUL: {
     Register Dst = MI.getOperand(0).getReg();
+    LLT Ty = MRI.getType(Dst);
+
+    // s64: turn a 32x32->64 widening multiply into one hardware multiply.  When
+    // both operands are the same kind of extension from s32, the full 64-bit
+    // product is {G_MUL(a,b) : G_S/UMULH(a,b)} on the s32 sources (the selector
+    // maps the high half to MUL_P/MULU_P).  Other i64 multiplies fall through to
+    // the generic partial-product schoolbook.
+    if (Ty.getSizeInBits() == 64) {
+      const LLT S32 = LLT::scalar(32);
+      auto ExtSrc = [&](Register R, unsigned ExtOpc) -> Register {
+        MachineInstr *Def = getDefIgnoringCopies(R, MRI);
+        if (Def && Def->getOpcode() == ExtOpc &&
+            MRI.getType(Def->getOperand(1).getReg()) == S32)
+          return Def->getOperand(1).getReg();
+        return Register();
+      };
+      Register LHS = MI.getOperand(1).getReg();
+      Register RHS = MI.getOperand(2).getReg();
+      Register SA = ExtSrc(LHS, TargetOpcode::G_SEXT);
+      Register SB = ExtSrc(RHS, TargetOpcode::G_SEXT);
+      Register ZA = ExtSrc(LHS, TargetOpcode::G_ZEXT);
+      Register ZB = ExtSrc(RHS, TargetOpcode::G_ZEXT);
+      bool Signed = SA.isValid() && SB.isValid();
+      if (Signed || (ZA.isValid() && ZB.isValid())) {
+        Register A = Signed ? SA : ZA;
+        Register B = Signed ? SB : ZB;
+        auto Lo = MIRBuilder.buildMul(S32, A, B);
+        auto Hi = Signed ? MIRBuilder.buildSMulH(S32, A, B)
+                         : MIRBuilder.buildUMulH(S32, A, B);
+        MIRBuilder.buildMergeLikeInstr(Dst, {Lo.getReg(0), Hi.getReg(0)});
+        MI.eraseFromParent();
+        return true;
+      }
+      return Helper.narrowScalar(MI, 0, S32) == LegalizerHelper::Legalized;
+    }
+
     Register Src = MI.getOperand(1).getReg();
     auto MaybeVal = GetConstant(MI.getOperand(2).getReg());
     if (!MaybeVal)
       return LeaveForHardware();
 
     uint64_t C = MaybeVal->Value.getZExtValue();
-    LLT Ty = MRI.getType(Dst);
     unsigned BitWidth = Ty.getSizeInBits();
 
     if (C == 0) {

@@ -56,24 +56,10 @@ define i64 @smul_widen(i32 %a, i32 %b) {
 ; CHECK-LABEL: smul_widen:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 4
-; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r3, r1
-; CHECK-NEXT:    sar r3, 31
-; CHECK-NEXT:    mov r11, r2
-; CHECK-NEXT:    sar r11, 31
-; CHECK-NEXT:    mov r4, r1
-; CHECK-NEXT:    mul r4, r2
 ; CHECK-NEXT:    mul r3, r2
-; CHECK-NEXT:    mov r13, r1
-; CHECK-NEXT:    mul r13, r11
-; CHECK-NEXT:    mulu r1, r2, r2
-; CHECK-NEXT:    add r3, r13
-; CHECK-NEXT:    add r3, r2
-; CHECK-NEXT:    mov r1, r4
-; CHECK-NEXT:    mov r2, r3
-; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 4
+; CHECK-NEXT:    mul r1, r2, r2
+; CHECK-NEXT:    mov r1, r3
 ; CHECK-NEXT:    jmp r13
   %sa = sext i32 %a to i64
   %sb = sext i32 %b to i64
@@ -87,13 +73,9 @@ define i64 @umul_widen(i32 %a, i32 %b) {
 ; CHECK-LABEL: umul_widen:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    mov r4, r0
 ; CHECK-NEXT:    mov r3, r1
 ; CHECK-NEXT:    mul r3, r2
-; CHECK-NEXT:    mulu r1, r2, r11
-; CHECK-NEXT:    mul r2, r4
-; CHECK-NEXT:    add r2, 0
-; CHECK-NEXT:    add r2, r11
+; CHECK-NEXT:    mulu r1, r2, r2
 ; CHECK-NEXT:    mov r1, r3
 ; CHECK-NEXT:    jmp r13
   %za = zext i32 %a to i64
