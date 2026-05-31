@@ -23,9 +23,26 @@
 module spi
     import penumbra_pkg::*;
 #(
-    parameter FIFO_DEPTH   = 512,       // TX and RX FIFO depth (power of 2)
-    parameter SLOW_DIV     = 16'd63,    // ≤400 kHz for SD init (CLK/(2*(63+1)))
-    parameter FAST_DIV     = 16'd0      // Max speed: CLK/2
+    parameter int CLK_FREQ     = 25_000_000, // system clock feeding this block
+    // Target SCLK frequencies — the dividers below are derived so SCLK
+    // lands at or below these for ANY CLK_FREQ, so the SD interface stops
+    // being silently pinned to whatever clock the FPGA closed timing at.
+    // FAST is the board-validated SD operational speed (signal-integrity
+    // limited on the ULX3S, NOT the 25 MHz SD-SPI spec ceiling); SLOW is
+    // the SD init requirement (spec: < 400 kHz).
+    parameter int SCLK_FAST_HZ = 6_250_000,
+    parameter int SCLK_SLOW_HZ = 400_000,
+    parameter     FIFO_DEPTH   = 512,         // TX and RX FIFO depth (pow2)
+
+    // SCLK = CLK_FREQ / (2*(DIV+1)).  Invert it for DIV and round the
+    // DIVISOR *up* (ceil): that yields the smallest DIV with SCLK <=
+    // target.  Rounding the other way would push SCLK *over* target and
+    // overclock the card past spec.  ceil(a/b) = (a + b - 1) / b.
+    // Overridable so the sim testbench can force a fast slow-path.
+    parameter logic [15:0] FAST_DIV =
+        16'(((CLK_FREQ + 2*SCLK_FAST_HZ - 1) / (2*SCLK_FAST_HZ)) - 1),
+    parameter logic [15:0] SLOW_DIV =
+        16'(((CLK_FREQ + 2*SCLK_SLOW_HZ - 1) / (2*SCLK_SLOW_HZ)) - 1)
 )(
     input  logic        i_clk,
     input  logic        i_rst,

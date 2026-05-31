@@ -635,11 +635,13 @@ module ulx3s_top (
     logic spi_cs0;
 
     spi #(
-        .FIFO_DEPTH (512),
-        // 25 MHz / (2*(31+1)) ≈ 391 kHz — safe for SD card init (needs <400 kHz)
-        .SLOW_DIV   (16'd31),
-        // 25 MHz / (2*(1+1)) = 6.25 MHz — operational speed
-        .FAST_DIV   (16'd1)
+        .CLK_FREQ   (CLK_FREQ),
+        .FIFO_DEPTH (512)
+        // SLOW_DIV / FAST_DIV derive from CLK_FREQ + the SCLK targets in
+        // spi.sv.  At 25 MHz that is SLOW=31 (≈391 kHz init) and FAST=1
+        // (6.25 MHz operational) — unchanged from the prior hardcoding,
+        // but now they track CLK_FREQ instead of silently going out of
+        // spec if the system clock is bumped for fmax.
     ) u_spi (
         .i_clk   (clk),
         .i_rst   (rst),
