@@ -954,6 +954,56 @@ RegisterBank wiring in `GISel/PenumbraRegisterBanks.td` does not
 yet expose it. Without this, i64 add/sub stays at the current
 "materialize the carry into a GPR via CMP" cost.
 
+## Compiler: fuse a widening multiply into a single MUL_P
+
+A 32×32→64 widening multiply currently selects to **two** hardware
+multiplies (commit `ba7ef55`): the custom legalization of `G_MUL s64`
+emits `G_MUL(a,b)` for the low word and `G_S/UMULH(a,b)` for the high,
+which select to `MUL`+`MUL_P` (signed) or `MUL`+`MULU_P` (unsigned).
+But `MUL_P`/`MULU_P` already produce **both** halves in one instruction,
+so the separate low `MUL` is redundant — it recomputes the low product
+that `MUL_P` discards into a dead register.  Collapsing the pair to a
+single `MUL_P`/`MULU_P` is the remaining optimization.
+
+**Measured leverage (ULX3S @ 25 MHz, mandelbrot seahorse, µs/sample):**
+56141 (software `__muldi3`) → 4244 (4-mul schoolbook, `beb685b`) →
+2584 (2-mul pair, `ba7ef55`).  Fitting `cost = k·muls + N` to the last
+two points gives `k≈830`, `N≈924`, so a 1-mul form projects to
+**~1750 µs/sample — a further ~1.47×, ~32× over the software baseline.**
+Diminishing: the non-multiply floor (`>>28` realign + escape loop) is
+already ~36% of the sample, so the third multiply matters less than the
+first two did.  Only multiply-bound fixed-point code (this demo) sees
+the full benefit; the kernel and Dhrystone are not multiply-bound.
+
+**Why it's deferred — no clean GISel mechanism exists.**  GISel has no
+two-result multiply op (SelectionDAG's `ISD::SMUL_LOHI`/`UMUL_LOHI` have
+no `G_*` equivalent), so a single instruction producing both halves can't
+be expressed at the generic level.  Prior art doesn't transfer:
+- **ARM** (`SMULL`/`UMULL`, our exact twin) forms it via SelectionDAG's
+  `SMUL_LOHI` — SelectionDAG only.
+- **x86** (`MUL`→`EDX:EAX`) selects each half to a full `MUL` reading the
+  fixed result register, then leans on `MachineCSE` to fold the two
+  identical instructions into one.  Needs **fixed** output registers;
+  our `MUL_P` writes regalloc-chosen vregs, so two `MUL_P`s never CSE.
+- **RISC-V RV32** does the same 2-instruction schoolbook we do now and is
+  content with it — its `mul`/`mulh` are genuinely two instructions, so
+  it has no single-instruction form to fuse toward.
+
+**Implementation routes, both with real cost:**
+1. Selection-time pairing in `selectDivMul`: when selecting `G_S/UMULH`,
+   scan for a sibling `G_MUL` with identical operands, emit one `MUL_P`,
+   route its low output to the `G_MUL` result and erase it.  Order-
+   sensitive (either op may be selected first) — the fiddly part.
+2. Build `MUL_P` directly in the custom legalization (skip the generic
+   pair entirely).  Bypasses the fusion but emits a target instruction
+   pre-RegBankSelect, which is non-idiomatic and needs manual reg-class
+   constraining.
+
+Not worth the complexity until something multiply-bound matters more than
+the ~1.47× on a demo.  Correctness surface if revisited: the same
+signed/unsigned/i64 widening + `smul`/`umul` overflow execution tests used
+for `ba7ef55`.
+
 ## Compiler: 16-bit jump-table entries when offsets fit
 
 `PenumbraAsmPrinter::emitJumpTableEntry` always emits
