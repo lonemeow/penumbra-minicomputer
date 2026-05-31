@@ -69,10 +69,10 @@ static uint64_t smul(uint32_t a, uint32_t b) {
     return (uint64_t)((int64_t)(int32_t)a * (int64_t)(int32_t)b);
 }
 
-// Run one unsigned divide to completion; return quotient (lo) and remainder (hi).
-static void run_divu(Vdivmul* d, uint32_t rdh, uint32_t a, uint32_t b,
-                     uint32_t* lo, uint32_t* hi) {
-    d->i_a = a; d->i_b = b; d->i_rdh = rdh; d->i_op = OP_DIVU; d->i_start = 1;
+// Run one divide to completion; return quotient (lo) and remainder (hi).
+static void run_div(Vdivmul* d, uint8_t op, uint32_t rdh, uint32_t a, uint32_t b,
+                    uint32_t* lo, uint32_t* hi) {
+    d->i_a = a; d->i_b = b; d->i_rdh = rdh; d->i_op = op; d->i_start = 1;
     tick(d);                 // posedge latches operands, state → ITER
     d->i_start = 0;
     int guard = 0;
@@ -91,7 +91,7 @@ static void check_divu(Vdivmul* d, const char* name,
     uint32_t rem = (uint32_t)(n % b);
 
     uint32_t lo, hi;
-    run_divu(d, rdh, a, b, &lo, &hi);
+    run_div(d, OP_DIVU, rdh, a, b, &lo, &hi);
 
     int exp_z = (q == 0) ? 1 : 0;
     int exp_n = (q >> 31) & 1;
@@ -120,11 +120,70 @@ static void check_divu(Vdivmul* d, const char* name,
     if (fail) errors++;
 }
 
+// Check a non-faulting signed divide (32/32, i_rdh ignored). Expected via the
+// C int32 truncating-division reference.
+static void check_sdiv(Vdivmul* d, const char* name, uint32_t a, uint32_t b) {
+    tests++;
+    int32_t  q   = (int32_t)a / (int32_t)b;
+    int32_t  rmd = (int32_t)a % (int32_t)b;
+    uint32_t lo, hi;
+    run_div(d, OP_DIV, 0, a, b, &lo, &hi);
+
+    int exp_z = (q == 0) ? 1 : 0;
+    int exp_n = ((uint32_t)q >> 31) & 1;
+
+    int fail = 0;
+    if (lo != (uint32_t)q) {
+        printf("  FAIL [%s] quotient: got 0x%08X, expected 0x%08X\n", name, lo, (uint32_t)q);
+        fail = 1;
+    }
+    if (hi != (uint32_t)rmd) {
+        printf("  FAIL [%s] remainder: got 0x%08X, expected 0x%08X\n", name, hi, (uint32_t)rmd);
+        fail = 1;
+    }
+    if (d->o_fault != 0) {
+        printf("  FAIL [%s] o_fault asserted on a valid divide\n", name);
+        fail = 1;
+    }
+    if (d->o_flag_z != exp_z) {
+        printf("  FAIL [%s] Z: got %d, expected %d\n", name, d->o_flag_z, exp_z);
+        fail = 1;
+    }
+    if (d->o_flag_n != exp_n) {
+        printf("  FAIL [%s] N: got %d, expected %d\n", name, d->o_flag_n, exp_n);
+        fail = 1;
+    }
+    if (fail) errors++;
+}
+
+// Signed divide with explicit expected values — for INT_MIN / -1, which is UB
+// in C and can't go through the int reference. Hardware must NOT fault here.
+static void check_sdiv_exp(Vdivmul* d, const char* name, uint32_t a, uint32_t b,
+                           uint32_t exp_q, uint32_t exp_r) {
+    tests++;
+    uint32_t lo, hi;
+    run_div(d, OP_DIV, 0, a, b, &lo, &hi);
+    int fail = 0;
+    if (lo != exp_q) {
+        printf("  FAIL [%s] quotient: got 0x%08X, expected 0x%08X\n", name, lo, exp_q);
+        fail = 1;
+    }
+    if (hi != exp_r) {
+        printf("  FAIL [%s] remainder: got 0x%08X, expected 0x%08X\n", name, hi, exp_r);
+        fail = 1;
+    }
+    if (d->o_fault != 0) {
+        printf("  FAIL [%s] o_fault asserted — INT_MIN/-1 must not trap\n", name);
+        fail = 1;
+    }
+    if (fail) errors++;
+}
+
 // Check that a faulting divide asserts o_fault and never iterates (o_busy low).
-static void check_div_fault(Vdivmul* d, const char* name,
+static void check_div_fault(Vdivmul* d, const char* name, uint8_t op,
                             uint32_t rdh, uint32_t a, uint32_t b) {
     tests++;
-    d->i_a = a; d->i_b = b; d->i_rdh = rdh; d->i_op = OP_DIVU; d->i_start = 1;
+    d->i_a = a; d->i_b = b; d->i_rdh = rdh; d->i_op = op; d->i_start = 1;
     tick(d);                 // posedge: faulting div latches fault_q, stays IDLE
     d->i_start = 0;
 
@@ -187,11 +246,38 @@ int main() {
     check_divu(d, "divu_narrow_b",  1, 0xFFFFFFFF, 2);    // 0x1_FFFFFFFF / 2
     check_divu(d, "divu_narrow_max",0xFFFFFFFE, 0xFFFFFFFF, 0xFFFFFFFF); // hi just under divisor
 
+    // ── Signed divide (DIV), 32/32, i_rdh ignored ───────────────
+    check_sdiv(d, "sdiv_pos_pos",   17, 5);               //  3 r  2
+    check_sdiv(d, "sdiv_neg_pos",   (uint32_t)-17, 5);    // -3 r -2
+    check_sdiv(d, "sdiv_pos_neg",   17, (uint32_t)-5);    // -3 r  2
+    check_sdiv(d, "sdiv_neg_neg",   (uint32_t)-17, (uint32_t)-5); // 3 r -2
+    check_sdiv(d, "sdiv_exact_neg", (uint32_t)-100, 10);  // -10 r 0
+    check_sdiv(d, "sdiv_lt",        (uint32_t)-3, 5);     //  0 r -3
+    check_sdiv(d, "sdiv_big",       0x7FFFFFFF, 3);
+    check_sdiv(d, "sdiv_minby2",    0x80000000, 2);       // INT_MIN / 2
+    check_sdiv(d, "sdiv_neg_pos2",  (uint32_t)-100, 7);   // -14 r -2
+
+    // i_rdh must be ignored for signed divide: a nonzero rdh changes nothing.
+    {
+        uint32_t lo, hi;
+        run_div(d, OP_DIV, 0xDEADBEEF, (uint32_t)-17, 5, &lo, &hi);  // -17 / 5 = -3 r -2
+        tests++;
+        if (lo != (uint32_t)-3 || hi != (uint32_t)-2 || d->o_fault != 0) {
+            printf("  FAIL [sdiv_rdh_ignored] got q=0x%08X r=0x%08X fault=%d "
+                   "(rdh must not affect signed divide)\n", lo, hi, (int)d->o_fault);
+            errors++;
+        }
+    }
+
+    // INT_MIN / -1 overflow: UB in C; hardware returns INT_MIN, no trap.
+    check_sdiv_exp(d, "sdiv_intmin_m1", 0x80000000, (uint32_t)-1, 0x80000000, 0);
+
     // ── Divide faults ────────────────────────────────────────────
-    check_div_fault(d, "div0_plain",     0, 42, 0);       // divide by zero
-    check_div_fault(d, "div0_narrow",    1, 0, 0);        // divide by zero (64/32)
-    check_div_fault(d, "ovf_hi_gt",      5, 0, 3);        // rdh > divisor
-    check_div_fault(d, "ovf_hi_eq",      3, 0, 3);        // rdh == divisor (q won't fit)
+    check_div_fault(d, "div0_plain",     OP_DIVU, 0, 42, 0);  // unsigned divide by zero
+    check_div_fault(d, "div0_narrow",    OP_DIVU, 1, 0, 0);   // unsigned divide by zero (64/32)
+    check_div_fault(d, "ovf_hi_gt",      OP_DIVU, 5, 0, 3);   // rdh > divisor
+    check_div_fault(d, "ovf_hi_eq",      OP_DIVU, 3, 0, 3);   // rdh == divisor (q won't fit)
+    check_div_fault(d, "sdiv_div0",      OP_DIV,  0, 42, 0);  // signed divide by zero
 
     printf("divmul: %d/%d tests passed\n", tests - errors, tests);
     if (errors) printf("  *** %d FAILED ***\n", errors);

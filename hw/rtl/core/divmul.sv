@@ -10,30 +10,41 @@
 //     latches them and begins iterating; o_busy asserts the next cycle.
 //   - o_busy holds high while iterating; its falling edge means the results
 //     are valid. The sequencer STALLs on o_busy.
-//   - o_fault asserts on a divide fault (DIV0 or narrowing overflow). The unit
-//     does not iterate; the sequencer raises VEC_ARITH instead of writing back.
+//   - o_fault asserts on a divide fault (DIV0 or unsigned narrowing overflow).
+//     The unit does not iterate; the sequencer raises VEC_ARITH instead of
+//     writing back.
 //
 // Both result halves are exposed continuously once o_busy falls; the datapath
 // muxes which one onto the R-bus during each of the two writeback cycles.
 //
 // Operand roles (per divmul.md):
-//   i_a   = multiplier    (MUL) / dividend low  (DIV)
-//   i_b   = multiplicand  (MUL) / divisor       (DIV)
-//   i_rdh = dividend high (DIV; 0 for plain 32/32). Unused by MUL.
+//   i_a   = multiplier      (MUL) / dividend (DIV)
+//   i_b   = multiplicand    (MUL) / divisor  (DIV)
+//   i_rdh = dividend high   (DIVU 64/32 narrowing only; 0 for plain 32/32).
+//           Unused by MUL and by signed DIV — see below.
+//
+// Signedness is pure sign bookkeeping around one unsigned engine:
+//   - Signed multiply iterates on |a|,|b| and negates the 64-bit product when
+//     the operand signs differ.
+//   - Signed divide is 32/32 only: it iterates on |a|,|b| (dividend high = 0,
+//     i_rdh ignored) and negates quotient and remainder *independently* —
+//     quotient sign = sign(a)^sign(b), remainder sign = sign(a). 64-bit signed
+//     divide is done in software (sign-magnitude over the unsigned path), so
+//     hardware never needs a signed narrowing form.
+//   - The 64/32 narrowing dividend (i_rdh) is therefore unsigned-only.
 //
 // Op encoding reuses the ALU op field (penumbra_pkg::ALU_MUL/MULU/DIV/DIVU),
 // so no new micro-word field is needed.
 //
-// Coverage: signed + unsigned MULTIPLY, and UNSIGNED DIVIDE (DIVU) with DIV0 /
-// narrowing-overflow faults. Signed divide (ALU_DIV) is the next increment —
-// it needs the dividend-sign convention for the plain 32/32 case resolved.
-//
 // The divide uses restoring division with an immediate select (keep the
-// subtract result, or the pre-subtract value, based on a 33-bit compare). Same
+// pre-subtract value, or the subtract result, based on a 33-bit borrow). Same
 // 32-cycle count as non-restoring and no restore penalty — the choice is a
 // combinational mux, not an extra cycle — and it sidesteps the partial-
-// remainder sign bookkeeping that makes non-restoring error-prone. (divmul.md
-// sketches non-restoring; this is the deviation, equivalent in cycles.)
+// remainder sign bookkeeping that makes non-restoring error-prone.
+//
+// INT_MIN / -1 is C undefined behaviour; this unit returns INT_MIN (the
+// unsigned engine yields 0x80000000, which the sign rules leave unnegated) and
+// does not fault. The VEC_ARITH overflow trap is for unsigned narrowing only.
 
 module divmul
     import penumbra_pkg::*;
@@ -42,9 +53,9 @@ module divmul
     input  logic        i_rst,
 
     // ── Operands and operation ───────────────────────────────────
-    input  logic [31:0] i_a,        // multiplier / dividend low
+    input  logic [31:0] i_a,        // multiplier / dividend (low)
     input  logic [31:0] i_b,        // multiplicand / divisor
-    input  logic [31:0] i_rdh,      // dividend high half (DIV; 0 for 32/32)
+    input  logic [31:0] i_rdh,      // dividend high (DIVU narrowing; 0 for 32/32)
     input  logic [4:0]  i_op,       // ALU_MUL / ALU_MULU / ALU_DIV / ALU_DIVU
     input  logic        i_start,    // 1-cycle pulse: latch operands, begin
 
@@ -60,29 +71,32 @@ module divmul
 );
 
     // ── Operation decode (combinational, sampled at i_start) ─────
-    logic is_mul, is_divu, is_signed_mul;
+    logic is_mul, is_divu, is_sdiv, is_div, is_signed;
     always_comb begin
-        is_mul        = (i_op == ALU_MUL) || (i_op == ALU_MULU);
-        is_divu       = (i_op == ALU_DIVU);    // ALU_DIV (signed) → next increment
-        is_signed_mul = (i_op == ALU_MUL);
+        is_mul    = (i_op == ALU_MUL)  || (i_op == ALU_MULU);
+        is_divu   = (i_op == ALU_DIVU);
+        is_sdiv   = (i_op == ALU_DIV);
+        is_div    = is_divu || is_sdiv;
+        is_signed = (i_op == ALU_MUL)  || (i_op == ALU_DIV);
     end
 
     // ── Divide fault detect (combinational, sampled at i_start) ──
-    //   DIV0     : divisor == 0
-    //   overflow : dividend high half >= divisor — the 32-bit quotient won't
-    //              fit. Always false for plain 32/32 (i_rdh == 0, i_b != 0).
+    //   DIV0     : divisor == 0 (signed or unsigned)
+    //   overflow : unsigned narrowing dividend high >= divisor — the 32-bit
+    //              quotient won't fit. Signed divide is 32/32 (i_rdh ignored)
+    //              so it has no narrowing-overflow case.
     logic div_fault;
     always_comb begin
-        div_fault = is_divu && ((i_b == 32'd0) || (i_rdh >= i_b));
+        div_fault = is_div && ((i_b == 32'd0) || (is_divu && (i_rdh >= i_b)));
     end
 
-    // ── Sign-magnitude wrapper for signed multiply (load side) ───
-    // Iterate on absolute values; remember whether the product is negative.
+    // ── Sign-magnitude wrapper (load side) ───────────────────────
+    // Signed multiply and signed divide both iterate on absolute values.
     logic        a_neg, b_neg;
     logic [31:0] a_mag, b_mag;
     always_comb begin
-        a_neg = is_signed_mul && i_a[31];
-        b_neg = is_signed_mul && i_b[31];
+        a_neg = is_signed && i_a[31];
+        b_neg = is_signed && i_b[31];
         a_mag = a_neg ? (~i_a + 32'd1) : i_a;
         b_mag = b_neg ? (~i_b + 32'd1) : i_b;
     end
@@ -95,8 +109,9 @@ module divmul
     logic [63:0] accum;       // {hi, lo}: product (MUL) | {remainder, quotient} (DIV)
     logic [31:0] op_b;        // held: multiplicand magnitude (MUL) | divisor (DIV)
     logic [5:0]  iter;        // down-counter: 32 → 0
-    logic        op_is_div;   // latched: selects the iteration step
-    logic        result_neg;  // latched: negate 64-bit product (signed MUL)
+    logic        op_is_div;   // latched: selects the iteration step + output mode
+    logic        neg_xor;     // latched: sign(a)^sign(b) — product / quotient sign
+    logic        neg_a;       // latched: sign(a)         — remainder sign
     logic        fault_q;     // latched: divide fault, no writeback
 
     // ── Iteration step candidates (combinational) ───────────────
@@ -139,31 +154,33 @@ module divmul
     // ── Sequential core ──────────────────────────────────────────
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
-            state      <= S_IDLE;
-            accum      <= 64'd0;
-            op_b       <= 32'd0;
-            iter       <= 6'd0;
-            op_is_div  <= 1'b0;
-            result_neg <= 1'b0;
-            fault_q    <= 1'b0;
+            state     <= S_IDLE;
+            accum     <= 64'd0;
+            op_b      <= 32'd0;
+            iter      <= 6'd0;
+            op_is_div <= 1'b0;
+            neg_xor   <= 1'b0;
+            neg_a     <= 1'b0;
+            fault_q   <= 1'b0;
         end else begin
             case (state)
                 S_IDLE: begin
-                    if (i_start && (is_mul || is_divu)) begin
-                        if (is_divu && div_fault) begin
+                    if (i_start && (is_mul || is_div)) begin
+                        if (is_div && div_fault) begin
                             // Faulting divide: don't iterate. o_busy stays low,
                             // o_fault asserts → sequencer raises VEC_ARITH.
                             fault_q <= 1'b1;
                         end else begin
-                            fault_q    <= 1'b0;
-                            op_is_div  <= is_divu;
-                            op_b       <= is_divu ? i_b : b_mag;
-                            // MUL: accum_lo = multiplier magnitude, hi = 0.
-                            // DIV: accum = {dividend high, dividend low}.
-                            accum      <= is_divu ? {i_rdh, i_a} : {32'd0, a_mag};
-                            result_neg <= is_divu ? 1'b0 : (a_neg ^ b_neg);
-                            iter       <= 6'd32;
-                            state      <= S_ITER;
+                            fault_q   <= 1'b0;
+                            op_is_div <= is_div;
+                            op_b      <= b_mag;            // == i_b when unsigned
+                            // MUL / signed DIV: accum_lo = |a|, hi = 0.
+                            // DIVU: accum = {dividend high, dividend low}.
+                            accum     <= is_divu ? {i_rdh, i_a} : {32'd0, a_mag};
+                            neg_xor   <= a_neg ^ b_neg;    // product / quotient sign
+                            neg_a     <= a_neg;            // remainder sign
+                            iter      <= 6'd32;
+                            state     <= S_ITER;
                         end
                     end
                 end
@@ -182,15 +199,19 @@ module divmul
     // o_busy falls the cycle after the final step writes accum.
     assign o_busy = (state != S_IDLE);
 
-    // Signed multiply negates the 64-bit product when operand signs differ.
-    // Unsigned multiply and divide leave result_neg == 0.
-    logic [63:0] result;
-    assign result = result_neg ? (~accum + 64'd1) : accum;
+    // Multiply negates the whole 64-bit product (borrow propagates lo→hi).
+    // Signed divide negates quotient and remainder *independently* — they are
+    // two separate numbers, not halves of one. Unsigned ops leave neg_* == 0.
+    logic [63:0] prod;
+    logic [31:0] quo, rem;
+    assign prod = neg_xor ? (~accum + 64'd1)         : accum;
+    assign quo  = neg_xor ? (~accum[31:0]  + 32'd1)  : accum[31:0];
+    assign rem  = neg_a   ? (~accum[63:32] + 32'd1)  : accum[63:32];
 
-    assign o_result_lo = result[31:0];   // product low  / quotient
-    assign o_result_hi = result[63:32];  // product high / remainder
-    assign o_flag_z    = (result[31:0] == 32'd0);
-    assign o_flag_n    = result[31];
+    assign o_result_lo = op_is_div ? quo : prod[31:0];   // quotient / product low
+    assign o_result_hi = op_is_div ? rem : prod[63:32];  // remainder / product high
+    assign o_flag_z    = (o_result_lo == 32'd0);
+    assign o_flag_n    = o_result_lo[31];
 
     assign o_fault = fault_q;
 
