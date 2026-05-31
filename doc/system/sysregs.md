@@ -242,10 +242,8 @@ revision.
 
 | Bit  | Name | Description                 |
 |:----:|------|-----------------------------|
-| 4    | —    | Reserved (0)                |
-| 5    | —    | Reserved (0)                |
-| 6    | FPU  | Floating-point unit present |
-| 7–31 | —    | Reserved (0)                |
+| 4    | FPU  | Floating-point unit present |
+| 5–31 | —    | Reserved (0)                |
 
 `MUL`/`MULU` and `DIV`/`DIVU` are mandatory in ISA v1, so no feature
 bits advertise them.
@@ -256,7 +254,7 @@ RDSYS R1, #CPU, #CPU_ISA
 ANDI  R2, R1, #0x0F
 CMPI  R2, #1
 BNE   unsupported_isa
-ANDI  R2, R1, #0x40           ; FPU bit
+ANDI  R2, R1, #0x10           ; FPU bit
 BNE   has_fpu
 ```
 

@@ -830,7 +830,7 @@ static void read_mach_name(char *buf) {
  * Example outputs:
  *   "ISA v1"                 — base ISA, no optional features set
  *   "ISA v1, FPU"            — floating-point unit present
- *   "ISA v1, FPU, UNK_5"     — unknown future feature bit
+ *   "ISA v1, FPU, UNK_6"     — unknown future feature bit
  */
 static void format_cpu_features(char *buf, int bufsz, uint32_t isa_val) {
     int version = isa_val & 0x0F;

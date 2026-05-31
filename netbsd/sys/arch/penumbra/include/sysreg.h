@@ -92,7 +92,7 @@
 
 /* CPU_ISA layout: bits [3:0] = ISA version, bits [31:4] = feature flags
  * (bit indices below are relative to bit 4 of the register). */
-#define CPU_FEAT_BIT_FPU	2	/* Floating-point unit */
+#define CPU_FEAT_BIT_FPU	0	/* Floating-point unit */
 
 /* ── Device 8: Machine identity (read-only) ────────────────────────── */
 

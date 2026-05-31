@@ -74,7 +74,7 @@ read_cpu_name(char *buf)
  * Target output format (matches the boot ROM banner):
  *   "ISA v1"              — base ISA, no optional features set
  *   "ISA v1, FPU"         — floating-point unit present
- *   "ISA v1, FPU, UNK_5"  — unknown future bit
+ *   "ISA v1, FPU, UNK_6"  — unknown future bit
  */
 static void
 format_cpu_features(char *buf, size_t bufsz, uint32_t isa)
