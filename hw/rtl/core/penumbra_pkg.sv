@@ -34,8 +34,6 @@ package penumbra_pkg;
     localparam logic [4:0] ALU_MULU   = 5'b01110;
     localparam logic [4:0] ALU_DIV    = 5'b01111;
     localparam logic [4:0] ALU_DIVU   = 5'b10000;
-    localparam logic [4:0] ALU_MOD    = 5'b10001;
-    localparam logic [4:0] ALU_MODU   = 5'b10010;
 
     // ── Status register bit positions ───────────────────────────
     // Condition flags in [3:0], system bits in [31:30].

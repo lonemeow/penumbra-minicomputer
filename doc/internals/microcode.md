@@ -94,17 +94,15 @@ F-bit gating only applies when `reg_w = IR_RD`. Literal register addresses (R2-R
 | 10 | `NOT` | ~A | 1 | NZ |
 | 11 | `ADC` | A + B + Cin | 1 | NZCV |
 | 12 | `SBC` | A - B - ~Cin | 1 | NZCV |
-| 13 | `MUL` | A × B (signed) | N | NZCV (stub: asserts busy forever) |
-| 14 | `MULU` | A × B (unsigned) | N | NZCV (stub) |
-| 15 | `DIV` | A / B (signed) | N | NZCV (stub) |
-| 16 | `DIVU` | A / B (unsigned) | N | NZCV (stub) |
-| 17 | `MOD` | A % B (signed) | N | NZCV (stub) |
-| 18 | `MODU` | A % B (unsigned) | N | NZCV (stub) |
-| 19-31 | — | Reserved for future FP ops | — | — |
+| 13 | `MUL` | A × B (signed), low → Rd | N | NZ (divmul peer) |
+| 14 | `MULU` | A × B (unsigned), low → Rd | N | NZ |
+| 15 | `DIV` | A / B (signed) | N | NZ |
+| 16 | `DIVU` | A / B (unsigned) | N | NZ |
+| 17-31 | — | Reserved | — | — |
 
 Flags are only written to SR when `w_flags=1`. The flag column shows what the ALU *computes*, not what gets latched.
 
-Multi-cycle operations require `alu_start=1` on the first micro-op and `branch=STALL` to wait for completion. Currently MUL/DIV/MOD are stubs (assert busy forever = illegal instruction trap via timeout).
+Multi-cycle operations require `alu_start=1` on the first micro-op and `branch=STALL` to wait for completion. MUL/MULU/DIV/DIVU are implemented by the divmul peer unit (`hw/rtl/core/divmul.sv`).
 
 ### B-Bus Source — `bmux` [28:27] (2 bits)
 
@@ -203,7 +201,7 @@ For `SPR_WRITE` (WRSPR), hardware decodes IR[15:12] to select the target: ESR (0
 
 ### ALU Start — `alu_start` [8] (1 bit)
 
-Starts a multi-cycle ALU operation (MUL/DIV/MOD). The ALU latches operands and begins iterating. Ignored for single-cycle operations. Pair with `branch=STALL` on the following micro-op.
+Starts a multi-cycle operation (MUL/DIV) on the divmul peer unit. It latches operands and begins iterating. Ignored for single-cycle operations. Pair with `branch=STALL` on the following micro-op.
 
 ### Branch Condition — `branch` [7:5] (3 bits)
 

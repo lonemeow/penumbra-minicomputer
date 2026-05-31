@@ -2,7 +2,8 @@
 //
 // The ALU is the single compute unit in the Penumbra datapath. It handles:
 //   - Single-cycle ops: arithmetic, logic, shifts, pass-through (combinational)
-//   - Multi-cycle ops:  MUL, DIV, MOD, future FP (sequential, stall via o_busy)
+//   - Multi-cycle MUL/DIV are handled by the divmul peer unit, not here (the
+//     ALU outputs 0 for those op codes; datapath.sv muxes the divmul in).
 //
 // For C/C++ programmers:
 //   Think of this as a function: result = alu(a, b, op)
@@ -65,16 +66,15 @@ module alu (
     localparam logic [4:0] OP_ADC    = 5'b01011;  // add with carry
     localparam logic [4:0] OP_SBC    = 5'b01100;  // subtract with borrow
 
-    // Multi-cycle operations (stubs — not yet implemented in hardware)
+    // Peer-unit (divmul) op encodings. The ALU produces 0 for these; the
+    // divmul peer reads the same op field and computes the result.
     // verilator lint_off UNUSEDPARAM
     localparam logic [4:0] OP_MUL    = 5'b01101;  // signed multiply
     localparam logic [4:0] OP_MULU   = 5'b01110;  // unsigned multiply
     localparam logic [4:0] OP_DIV    = 5'b01111;  // signed divide
     localparam logic [4:0] OP_DIVU   = 5'b10000;  // unsigned divide
-    localparam logic [4:0] OP_MOD    = 5'b10001;  // signed modulo
-    localparam logic [4:0] OP_MODU   = 5'b10010;  // unsigned modulo
     // verilator lint_on UNUSEDPARAM
-    // 5'b10011–5'b11111: reserved for future ops
+    // 5'b10001–5'b11111: reserved for future ops
 
     // ── Adder with subtract support ─────────────────────────────
     // SUB is implemented as: A + ~B + 1  (two's complement subtraction)
@@ -201,22 +201,12 @@ module alu (
         endcase
     end
 
-    // ── Multi-cycle operation state machine ─────────────────────
-    // Skeleton for future MUL/DIV/MOD/FP hardware.
-    //
-    // `always_ff @(posedge i_clk)` = "execute this block on every rising
-    // clock edge" — like a callback that fires once per tick. This is how
-    // you build sequential logic (state machines, counters, registers).
-    //
-    // For now: multi-cycle ops are not implemented in ALU hardware.
-    // The microcode ROM traps them as illegal instructions before the ALU
-    // is ever asked to execute them. o_busy is always 0.
-    //
-    // When MUL/DIV hardware is added, this section will:
-    //   1. On i_start: latch i_a/i_b, begin iterating
-    //   2. Assert o_busy while computing
-    //   3. Drive result onto o_result when done, deassert o_busy
-    //   4. The micro-sequencer's STALL watches o_busy
+    // ── Multi-cycle result placeholder ──────────────────────────
+    // The ALU is single-cycle. Multi-cycle MUL/DIV are computed by the
+    // divmul peer unit (divmul.sv), which reads the same op field, drives
+    // the multi-cycle busy, and whose result the datapath muxes onto the
+    // R-bus. Here the ALU simply forces its own output to 0 (and o_busy
+    // low) for the peer-unit op codes.
 
     logic        multicycle_busy;
     logic [31:0] multicycle_result;
