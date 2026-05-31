@@ -101,6 +101,45 @@ sbc:
   reg_a=IR_RD reg_b=IR_RS reg_w=IR_RD w_en=1 alu=SBC bmux=REG wmux=RBUS w_flags=1
 
 # ═══════════════════════════════════════════════════════════════
+# Format R — hardware MUL/DIV (op 12–15) via the divmul peer unit
+#
+# Two micro-ops fit the ×2 dispatch spacing:
+#   op-0: read Rd→A, Rs→B, set the divmul op + pulse alu_start, then STALL.
+#         divmul asserts busy combinationally on the start edge and holds it
+#         through the ~34-cycle iteration; the STALL releases when it falls.
+#   op-1: drive divmul's low result onto the R-bus (alu=<op> keeps divmul
+#         selected) and write it to Rd, latching Z/N.
+#
+# This is the 2-operand form (low result → Rd: product low / quotient). The
+# high-half writeback to Rdh (product high / remainder), the narrowing
+# dividend-high input, and the o_fault → VEC_ARITH path are a later slice.
+# alu=MUL/DIV are the signed ops; MULU/DIVU are unsigned.
+
+# ── MUL (op=12, dispatch=0x18) ────────────────────────────────
+.org 0x18
+mul:
+  reg_a=IR_RD reg_b=IR_RS alu=MUL alu_start=1 bmux=REG pc=HOLD branch=STALL
+  reg_w=IR_RD w_en=1 alu=MUL wmux=RBUS w_flags=1
+
+# ── MULU (op=13, dispatch=0x1A) ───────────────────────────────
+.org 0x1A
+mulu:
+  reg_a=IR_RD reg_b=IR_RS alu=MULU alu_start=1 bmux=REG pc=HOLD branch=STALL
+  reg_w=IR_RD w_en=1 alu=MULU wmux=RBUS w_flags=1
+
+# ── DIV (op=14, dispatch=0x1C) ────────────────────────────────
+.org 0x1C
+div:
+  reg_a=IR_RD reg_b=IR_RS alu=DIV alu_start=1 bmux=REG pc=HOLD branch=STALL
+  reg_w=IR_RD w_en=1 alu=DIV wmux=RBUS w_flags=1
+
+# ── DIVU (op=15, dispatch=0x1E) ───────────────────────────────
+.org 0x1E
+divu:
+  reg_a=IR_RD reg_b=IR_RS alu=DIVU alu_start=1 bmux=REG pc=HOLD branch=STALL
+  reg_w=IR_RD w_en=1 alu=DIVU wmux=RBUS w_flags=1
+
+# ═══════════════════════════════════════════════════════════════
 # Format L — Immediate operations (0x20–0x3E, ×2 spacing)
 # Dispatch: {01, op[3:0], 0}
 # ═══════════════════════════════════════════════════════════════

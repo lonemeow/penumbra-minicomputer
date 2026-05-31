@@ -384,10 +384,10 @@ module datapath
     status_reg u_status_reg (
         .i_clk          (i_clk),
         .i_rst          (i_rst),
-        .i_alu_flag_n   (alu_flag_n),
-        .i_alu_flag_z   (alu_flag_z),
-        .i_alu_flag_c   (alu_flag_c),
-        .i_alu_flag_v   (alu_flag_v),
+        .i_alu_flag_n   (flag_n),
+        .i_alu_flag_z   (flag_z),
+        .i_alu_flag_c   (flag_c),
+        .i_alu_flag_v   (flag_v),
         .i_flag_w_en    (i_flag_w_en),
         .i_sr_load      (i_sr_load | spr_sr_load),
         .i_wdata        (w_bus),
@@ -477,6 +477,8 @@ module datapath
 
     // ── ALU ──────────────────────────────────────────────────
     logic        alu_flag_n, alu_flag_z, alu_flag_c, alu_flag_v;
+    logic [31:0] alu_result;
+    logic        alu_busy_int;
 
     alu u_alu (
         .i_clk      (i_clk),
@@ -486,13 +488,69 @@ module datapath
         .i_op       (i_alu_op),
         .i_carry_in (sr_flag_c),
         .i_start    (i_alu_start),
-        .o_busy     (o_alu_busy),
-        .o_result   (r_bus),
+        .o_busy     (alu_busy_int),
+        .o_result   (alu_result),
         .o_flag_z   (alu_flag_z),
         .o_flag_n   (alu_flag_n),
         .o_flag_c   (alu_flag_c),
         .o_flag_v   (alu_flag_v)
     );
+
+    // ── divmul peer unit (hardware MUL/DIV) ───────────────────
+    // A peer on the same A/B buses. It decodes MUL/MULU/DIV/DIVU out of
+    // i_alu_op and shares the ALU's start/busy handshake, so no new
+    // micro-word fields are needed. While a divmul op is active its
+    // result and flags override the ALU's onto the R-bus / flag path
+    // (the ALU produces 0 for those ops anyway); otherwise the ALU
+    // drives exactly as before.
+    //
+    // This slice wires the 2-operand forms (result low → Rd: product
+    // low / quotient). The high-half writeback (Rdh: product high /
+    // remainder), the narrowing dividend-high input, and the
+    // o_fault → VEC_ARITH path land with the microcode + Rdh-addressing
+    // work, where divmul_hi / divmul_fault below get consumed.
+    logic        divmul_active;
+    logic        divmul_busy;
+    logic [31:0] divmul_lo;
+    logic        divmul_flag_z, divmul_flag_n;
+    // verilator lint_off UNUSEDSIGNAL
+    logic [31:0] divmul_hi;     // high half — used once Rdh writeback lands
+    logic        divmul_fault;  // → VEC_ARITH once fault routing lands
+    // verilator lint_on UNUSEDSIGNAL
+
+    assign divmul_active = (i_alu_op == ALU_MUL)  || (i_alu_op == ALU_MULU)
+                        || (i_alu_op == ALU_DIV)  || (i_alu_op == ALU_DIVU);
+
+    divmul u_divmul (
+        .i_clk       (i_clk),
+        .i_rst       (i_rst),
+        .i_a         (a_bus),
+        .i_b         (b_bus),
+        .i_rdh       (32'd0),          // narrowing dividend-high: wired with microcode
+        .i_op        (i_alu_op),
+        .i_start     (i_alu_start),
+        .o_busy      (divmul_busy),
+        .o_fault     (divmul_fault),
+        .o_result_lo (divmul_lo),
+        .o_result_hi (divmul_hi),
+        .o_flag_z    (divmul_flag_z),
+        .o_flag_n    (divmul_flag_n)
+    );
+
+    // R-bus: divmul result overrides the ALU result when a divmul op is
+    // in flight.
+    assign r_bus = divmul_active ? divmul_lo : alu_result;
+
+    // Multi-cycle busy is the OR of both units (the ALU is single-cycle,
+    // so today this is just the divmul).
+    assign o_alu_busy = alu_busy_int | divmul_busy;
+
+    // Flags: divmul drives Z/N (C/V cleared) when active; else the ALU.
+    logic flag_n, flag_z, flag_c, flag_v;
+    assign flag_n = divmul_active ? divmul_flag_n : alu_flag_n;
+    assign flag_z = divmul_active ? divmul_flag_z : alu_flag_z;
+    assign flag_c = divmul_active ? 1'b0          : alu_flag_c;
+    assign flag_v = divmul_active ? 1'b0          : alu_flag_v;
 
     // ── MDR ──────────────────────────────────────────────────
     logic [31:0] mdr_data;

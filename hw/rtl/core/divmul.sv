@@ -114,6 +114,14 @@ module divmul
     logic        neg_a;       // latched: sign(a)         — remainder sign
     logic        fault_q;     // latched: divide fault, no writeback
 
+    // Start on the *rising edge* of i_start. The integrated micro-routine holds
+    // i_start high across the whole STALL (it can't pulse for one cycle inside a
+    // stalled micro-op), so edge detection keeps that from re-triggering on the
+    // cycle the unit finishes.
+    logic        i_start_q;
+    logic        start_pulse;
+    assign start_pulse = i_start & ~i_start_q;
+
     // ── Iteration step candidates (combinational) ───────────────
     // Both are computed every cycle; op_is_div selects which feeds accum.
 
@@ -162,10 +170,12 @@ module divmul
             neg_xor   <= 1'b0;
             neg_a     <= 1'b0;
             fault_q   <= 1'b0;
+            i_start_q <= 1'b0;
         end else begin
+            i_start_q <= i_start;
             case (state)
                 S_IDLE: begin
-                    if (i_start && (is_mul || is_div)) begin
+                    if (start_pulse && (is_mul || is_div)) begin
                         if (is_div && div_fault) begin
                             // Faulting divide: don't iterate. o_busy stays low,
                             // o_fault asserts → sequencer raises VEC_ARITH.
@@ -196,8 +206,13 @@ module divmul
     end
 
     // ── Outputs ──────────────────────────────────────────────────
-    // o_busy falls the cycle after the final step writes accum.
-    assign o_busy = (state != S_IDLE);
+    // Busy is combinational on the start cycle (like the cache asserting busy
+    // the moment mem_read goes high), so a combined start+STALL micro-op holds
+    // the very first cycle — before state registers into S_ITER. It falls the
+    // cycle after the final step writes accum. A faulting divide never iterates,
+    // so it stays not-busy and signals via o_fault instead.
+    assign o_busy = (state != S_IDLE)
+                 || (start_pulse && (is_mul || is_div) && !(is_div && div_fault));
 
     // Multiply negates the whole 64-bit product (borrow propagates lo→hi).
     // Signed divide negates quotient and remainder *independently* — they are
