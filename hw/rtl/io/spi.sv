@@ -27,9 +27,14 @@ module spi
     // Target SCLK frequencies — the dividers below are derived so SCLK
     // lands at or below these for ANY CLK_FREQ, so the SD interface stops
     // being silently pinned to whatever clock the FPGA closed timing at.
-    // FAST is the board-validated SD operational speed (signal-integrity
-    // limited on the ULX3S, NOT the 25 MHz SD-SPI spec ceiling); SLOW is
-    // the SD init requirement (spec: < 400 kHz).
+    //
+    // FAST = 6.25 MHz is a CONSERVATIVE data clock, 1/4 of the 25 MHz
+    // SD-SPI spec ceiling — NOT a measured board limit.  It was kept at
+    // 6.25 MHz across the 12.5->25 MHz system-clock bump for stability
+    // margin; 12.5 MHz is believed in-spec but has never been tested on
+    // the ULX3S SD lines.  Raising this toward 12.5/25 MHz is a likely
+    // 2-4x SD throughput win, gated on a real SD read/write check.
+    // SLOW = the SD init clock (spec: < 400 kHz).
     parameter int SCLK_FAST_HZ = 6_250_000,
     parameter int SCLK_SLOW_HZ = 400_000,
     parameter     FIFO_DEPTH   = 512,         // TX and RX FIFO depth (pow2)
