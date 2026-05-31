@@ -240,12 +240,15 @@ revision.
 
 **Feature flags** (bits 31:4, ISA v1):
 
-| Bit  | Name   | Description                        |
-|:----:|--------|------------------------------------|
-| 4    | HW_MUL | Hardware multiply present          |
-| 5    | HW_DIV | Hardware divide present            |
-| 6    | FPU    | Floating-point unit present        |
-| 7–31 | —      | Reserved (0)                       |
+| Bit  | Name | Description                 |
+|:----:|------|-----------------------------|
+| 4    | —    | Reserved (0)                |
+| 5    | —    | Reserved (0)                |
+| 6    | FPU  | Floating-point unit present |
+| 7–31 | —    | Reserved (0)                |
+
+`MUL`/`MULU` and `DIV`/`DIVU` are mandatory in ISA v1, so no feature
+bits advertise them.
 
 ```asm
 ; Boot-time ISA check with optional FPU detection

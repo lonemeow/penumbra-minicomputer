@@ -77,9 +77,7 @@ typedef unsigned int uint32_t;
 #define MACH_NAME3     4
 #define MACH_CPU_FREQ  5
 
-/* CPU_ISA feature flag bit indices */
-#define CPU_FEAT_BIT_HW_MUL  0
-#define CPU_FEAT_BIT_HW_DIV  1
+/* CPU_ISA feature flag bit indices (relative to bit 4 of the register) */
 #define CPU_FEAT_BIT_FPU     2
 
 /* ── Cache devices — shared layout across L1 D/I, L2, future L3 ──── */

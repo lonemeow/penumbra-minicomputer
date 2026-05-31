@@ -72,10 +72,9 @@ read_cpu_name(char *buf)
  *   bits [31:4] optional feature flags (see CPU_FEAT_BIT_* in sysreg.h)
  *
  * Target output format (matches the boot ROM banner):
- *   "ISA v1"                 — base ISA, no optional features
- *   "ISA v1, MUL"            — single feature
- *   "ISA v1, MUL, DIV, FPU"  — multiple features
- *   "ISA v1, MUL, UNK_5"     — unknown future bit
+ *   "ISA v1"              — base ISA, no optional features set
+ *   "ISA v1, FPU"         — floating-point unit present
+ *   "ISA v1, FPU, UNK_5"  — unknown future bit
  */
 static void
 format_cpu_features(char *buf, size_t bufsz, uint32_t isa)
@@ -91,12 +90,6 @@ format_cpu_features(char *buf, size_t bufsz, uint32_t isa)
 		{
 			switch (bit)
 			{
-			case CPU_FEAT_BIT_HW_MUL:
-				strncat(buf, ", MUL", bufsz);
-				break;
-			case CPU_FEAT_BIT_HW_DIV:
-				strncat(buf, ", DIV", bufsz);
-				break;
 			case CPU_FEAT_BIT_FPU:
 				strncat(buf, ", FPU", bufsz);
 				break;

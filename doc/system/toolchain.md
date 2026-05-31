@@ -101,7 +101,7 @@ The Penumbra LLVM backend (`llvm/llvm/lib/Target/Penumbra/`) consists of:
 | 2-operand destructive (`Rd = Rd op Rs`) | Register allocator inserts MOV copies | Normal for x86/Thumb; allocator handles it |
 | No conditional execution | SELECT lowers to branches | Standard for most RISC targets |
 | 16-bit immediates | Generous (RISC-V has 12-bit) | LLI/LUI pair for 32-bit constants |
-| No hardware multiply (initially) | Need libgcc-style emulation | Software `__mulsi3` etc., hardware added later |
+| No hardware FPU | soft-float libgcc-style emulation | All floating-point lowers to `__addsf3`/`__mulsf3`/etc. |
 | Single link register (R13) | Leaf functions don't need stack frame | Non-leaf must save/restore R13 |
 | No barrel shifter in address calc | Array indexing needs explicit shift+add | Compiler can strength-reduce |
 

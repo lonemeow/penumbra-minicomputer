@@ -828,10 +828,9 @@ static void read_mach_name(char *buf) {
  * isa_val has ISA version in bits [3:0] and feature flags in [31:4].
  *
  * Example outputs:
- *   "ISA v1"                    — base ISA, no optional features
- *   "ISA v1, MUL"               — hardware multiply
- *   "ISA v1, MUL, DIV, FPU"    — all features
- *   "ISA v1, MUL, UNK_3"       — unknown future feature bit
+ *   "ISA v1"                 — base ISA, no optional features set
+ *   "ISA v1, FPU"            — floating-point unit present
+ *   "ISA v1, FPU, UNK_5"     — unknown future feature bit
  */
 static void format_cpu_features(char *buf, int bufsz, uint32_t isa_val) {
     int version = isa_val & 0x0F;
@@ -843,12 +842,6 @@ static void format_cpu_features(char *buf, int bufsz, uint32_t isa_val) {
         /* TODO: flag meanings could differ per ISA version */
         if (isa_val & mask) {
             switch (bit) {
-            case CPU_FEAT_BIT_HW_MUL:
-                strncat(buf, ", MUL", bufsz);
-                break;
-            case CPU_FEAT_BIT_HW_DIV:
-                strncat(buf, ", DIV", bufsz);
-                break;
             case CPU_FEAT_BIT_FPU:
                 strncat(buf, ", FPU", bufsz);
                 break;
