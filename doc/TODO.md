@@ -528,29 +528,45 @@ reach the same conclusion (simple rolled `*_multi` loops, no unroll).
 The conversion's value is readability and idiom.  Gated on a real-HW
 correctness check of the word→byte FIFO access width before commit.
 
-## Hardware: pmci_burst overshoots microbench prediction by ~3×
+## Hardware: SD read throughput is bottlenecked by pmci_burst byte-PIO
 
-On top of the per-MMIO-op floor above, `pmci_burst`'s push and drain
-phases each cost ~815 µs per 512-byte block — ~3× what the microbench
-predicts (`512 × (cached LDB ~3 cyc + uncached STW ~11 cyc)` ≈ 280 µs).
-Most plausible contributors, in rough order of suspicion:
+SD reads run at ~190 KB/s through FFS ("loading a binary takes
+seconds").  Root-caused by instrumentation on ULX3S @ 25 MHz CPU /
+12.5 MHz SCLK (`time dd if=/netbsd of=/dev/null bs=32k` → 4.2 MB in
+~22 s).  Per 512-byte block, split into card-wait vs our processing:
 
-1. **IRQ noise during the burst.**  The microbench runs at `splhigh()`,
-   pmci_burst does not.  With dd actively printing diagnostic lines
-   through an IRQ-driven UART, the COM IRQ fires whenever the TX
-   holding register empties (~87 µs intervals at 115200 baud).  Each
-   IRQ entry/`comintr`/exit costs tens of µs.  Easy to verify: add
-   `splhigh()` around `pmci_burst` and re-measure.
-2. **D-cache misses on `tx_buf`/`rx_buf`.**  512 B buffer, 16 B cache
-   lines, 32 lines total.  First access of each line misses to SDRAM
-   via the CDC bridge — order of microseconds per line.
-3. **TLB churn.**  Other kernel activity between bursts may evict the
-   SPI MMIO TLB entry and the per-buffer TLB entry, so each burst
-   pays a few TLB misses at startup.
+```
+token poll (waiting on the card):   ~700 cyc   ~28 µs    ~2%
+pmci_burst (our byte-PIO):        ~31,600 cyc  ~1.26 ms   ~98%
+```
 
-Worth investigating after the STW asymmetry — the absolute payoff is
-roughly comparable (a couple of ms per syscall freed) and the two
-fixes compound.
+`pmci_burst` is ~45× the card wait and ~95% of the kernel `sys` time.
+The ~1.26 ms is: fill 512 idle bytes (~287 µs CPU PIO) + clock 512
+while busy-polling XFER_DONE (~328 µs) + drain 512 (~287 µs CPU PIO)
++ per-block CONTROL save/restore + FIFO flush.  All single-byte MMIO,
+all sequential, bus idle during fill/drain.
+
+**Falsified — do NOT re-investigate these:**
+- the SD card (token-wait is negligible, ~28 µs/block);
+- the SPI clock (wire is ~26% of the burst; the validated 6.25→12.5
+  MHz bump gave only ~6%);
+- transaction granularity (reads ARE coalesced to 64 KB CMD18 =
+  128 blocks/cmd = MAXPHYS; FFS/buffer-cache cluster correctly);
+- IRQ/cache/TLB noise (the earlier guesses here — `sys` is dominated
+  by the byte-PIO, not interrupts).
+
+**Levers, all in our control:**
+1. Word-wide FIFO MMIO (4 B/access) — cuts the ~574 µs fill+drain
+   PIO ~4×.  Needs HW FIFO-width + a CAP-tiered driver (byte path
+   stays the boot/discrete floor; word path gated on a CAP bit).
+2. Auto-idle TX for reads — let the engine clock 0xFF itself instead
+   of the CPU filling 512 idle bytes; drops the ~287 µs fill.
+3. Cross-block streaming — drain block N while the engine clocks
+   N+1.  The 512-deep FIFO (= one block) forces today's stop-start.
+
+Realistic: ~2-3× on the pmci term, ~1.5-2× end-to-end (the kernel
+I/O stack + per-command framing is the other ~half of the run).  A
+real SPI read-path + HW project, not a quick fix; gen2-adjacent.
 
 ## Hardware: scratch SPRs for fast trap entry — DONE
 
