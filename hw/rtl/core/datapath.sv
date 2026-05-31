@@ -388,7 +388,11 @@ module datapath
     logic [31:0] esr;
     logic        ei_shadow_wire;
 
-    status_reg u_status_reg (
+    // keep_hierarchy fences the flag_z 32-bit reduction tree from being
+    // scattered across the chip. Without it, the placer was spreading the
+    // 13-LUT-level reduction over ~11 ns of routing (see task #8 / commit
+    // 067da4c notes). The fence forces local placement of the tree.
+    (* keep_hierarchy *) status_reg u_status_reg (
         .i_clk          (i_clk),
         .i_rst          (i_rst),
         .i_alu_flag_n   (flag_n),
