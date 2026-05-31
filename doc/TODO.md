@@ -106,11 +106,20 @@ on the current scheduler.  Revisit once one of:
   (16 KB FS blocks → 32-sector CMD18), so re-measuring IRQ-driven
   completion against the new envelope is worth a fresh attempt
 
-### Phase 4: Hardware MUL/DIV
+### Phase 4: Hardware MUL/DIV — DONE
 
-Implement hardware multiplier and divider in the ALU. Currently
-trapped as illegal instructions and emulated in software
-(`__mulsi3` in libc).
+Hardware multiply/divide implemented as the **divmul peer unit**
+(`hw/rtl/core/divmul.sv`), reached via Format R opcodes 16-19
+(MUL/MULU/DIV/DIVU) with an explicit `Rdh` high-half/remainder writeback
+and a divide-by-zero fault to `VEC_ARITH`.  See
+[`doc/internals/divmul.md`](internals/divmul.md).
+
+The LLVM backend selects s32 multiply/divide/remainder — and 32×32→64
+widening multiply — to the unit instead of `__mulsi3`/`__udivsi3`/
+`__muldi3` libcalls (commits `beb685b`, `ba7ef55`); the NetBSD kernel
+runs with zero software mul/div fallbacks.  One residual optimization
+(fuse a widening multiply into a single `MUL_P`) is tracked under
+"Compiler: fuse a widening multiply into a single MUL_P".
 
 ### Phase 5: FPU
 
