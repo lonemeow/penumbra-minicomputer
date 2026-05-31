@@ -74,6 +74,7 @@ module datapath
     // Status outputs (to micro-sequencer / fetch unit)
     // ══════════════════════════════════════════════════════════════
     output logic        o_alu_busy,     // ALU multi-cycle in progress
+    output logic        o_divmul_fault, // divmul DIV0/overflow fault → VEC_ARITH
     output logic        o_sr_s,         // Supervisor bit
     output logic        o_sr_i,         // Interrupt enable bit
     output logic        o_ei_shadow,    // EI one-instruction delay active
@@ -515,7 +516,6 @@ module datapath
     logic        divmul_flag_z, divmul_flag_n;
     // verilator lint_off UNUSEDSIGNAL
     logic [31:0] divmul_hi;     // high half — used once Rdh writeback lands
-    logic        divmul_fault;  // → VEC_ARITH once fault routing lands
     // verilator lint_on UNUSEDSIGNAL
 
     assign divmul_active = (i_alu_op == ALU_MUL)  || (i_alu_op == ALU_MULU)
@@ -530,7 +530,7 @@ module datapath
         .i_op        (i_alu_op),
         .i_start     (i_alu_start),
         .o_busy      (divmul_busy),
-        .o_fault     (divmul_fault),
+        .o_fault     (o_divmul_fault),
         .o_result_lo (divmul_lo),
         .o_result_hi (divmul_hi),
         .o_flag_z    (divmul_flag_z),

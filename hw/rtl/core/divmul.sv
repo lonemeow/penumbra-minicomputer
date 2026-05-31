@@ -112,7 +112,6 @@ module divmul
     logic        op_is_div;   // latched: selects the iteration step + output mode
     logic        neg_xor;     // latched: sign(a)^sign(b) — product / quotient sign
     logic        neg_a;       // latched: sign(a)         — remainder sign
-    logic        fault_q;     // latched: divide fault, no writeback
 
     // Start on the *rising edge* of i_start. The integrated micro-routine holds
     // i_start high across the whole STALL (it can't pulse for one cycle inside a
@@ -169,29 +168,23 @@ module divmul
             op_is_div <= 1'b0;
             neg_xor   <= 1'b0;
             neg_a     <= 1'b0;
-            fault_q   <= 1'b0;
             i_start_q <= 1'b0;
         end else begin
             i_start_q <= i_start;
             case (state)
                 S_IDLE: begin
-                    if (start_pulse && (is_mul || is_div)) begin
-                        if (is_div && div_fault) begin
-                            // Faulting divide: don't iterate. o_busy stays low,
-                            // o_fault asserts → sequencer raises VEC_ARITH.
-                            fault_q <= 1'b1;
-                        end else begin
-                            fault_q   <= 1'b0;
-                            op_is_div <= is_div;
-                            op_b      <= b_mag;            // == i_b when unsigned
-                            // MUL / signed DIV: accum_lo = |a|, hi = 0.
-                            // DIVU: accum = {dividend high, dividend low}.
-                            accum     <= is_divu ? {i_rdh, i_a} : {32'd0, a_mag};
-                            neg_xor   <= a_neg ^ b_neg;    // product / quotient sign
-                            neg_a     <= a_neg;            // remainder sign
-                            iter      <= 6'd32;
-                            state     <= S_ITER;
-                        end
+                    // A faulting divide does not iterate (stays IDLE); o_fault
+                    // pulses combinationally so the sequencer aborts to VEC_ARITH.
+                    if (start_pulse && (is_mul || is_div) && !(is_div && div_fault)) begin
+                        op_is_div <= is_div;
+                        op_b      <= b_mag;            // == i_b when unsigned
+                        // MUL / signed DIV: accum_lo = |a|, hi = 0.
+                        // DIVU: accum = {dividend high, dividend low}.
+                        accum     <= is_divu ? {i_rdh, i_a} : {32'd0, a_mag};
+                        neg_xor   <= a_neg ^ b_neg;    // product / quotient sign
+                        neg_a     <= a_neg;            // remainder sign
+                        iter      <= 6'd32;
+                        state     <= S_ITER;
                     end
                 end
                 S_ITER: begin
@@ -228,6 +221,10 @@ module divmul
     assign o_flag_z    = (o_result_lo == 32'd0);
     assign o_flag_n    = o_result_lo[31];
 
-    assign o_fault = fault_q;
+    // One-cycle pulse on the start cycle of a faulting divide. The sequencer's
+    // STALL aborts to VEC_ARITH the same cycle and cpu_core latches it, so the
+    // fault must NOT persist — a held level would re-trigger once the pending
+    // latch clears inside the handler.
+    assign o_fault = start_pulse && is_div && div_fault;
 
 endmodule

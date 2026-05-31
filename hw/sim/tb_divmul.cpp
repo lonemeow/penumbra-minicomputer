@@ -184,21 +184,22 @@ static void check_div_fault(Vdivmul* d, const char* name, uint8_t op,
                             uint32_t rdh, uint32_t a, uint32_t b) {
     tests++;
     d->i_a = a; d->i_b = b; d->i_rdh = rdh; d->i_op = op; d->i_start = 1;
-    tick(d);                 // posedge: faulting div latches fault_q, stays IDLE
-    d->i_start = 0;
+    d->eval();               // o_fault is a combinational pulse on the start edge
 
     int fail = 0;
     if (d->o_fault != 1) {
-        printf("  FAIL [%s] o_fault not asserted\n", name);
+        printf("  FAIL [%s] o_fault not pulsed on faulting start\n", name);
         fail = 1;
     }
     if (d->o_busy != 0) {
         printf("  FAIL [%s] o_busy asserted — faulting divide must not iterate\n", name);
         fail = 1;
     }
+    tick(d);                 // start posedge: faulting divide does not iterate
+    d->i_start = 0;
     tick(d);                 // confirm it stays idle (no spurious iteration)
     if (d->o_busy != 0) {
-        printf("  FAIL [%s] o_busy asserted one cycle later\n", name);
+        printf("  FAIL [%s] o_busy asserted later\n", name);
         fail = 1;
     }
     if (fail) errors++;

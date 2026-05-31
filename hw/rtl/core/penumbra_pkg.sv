@@ -249,6 +249,7 @@ package penumbra_pkg;
     localparam logic [3:0] VEC_ILLEGAL   = 4'd7;   // 0x1C — Illegal instruction
     localparam logic [3:0] VEC_ALIGN     = 4'd8;   // 0x20 — Alignment fault
     localparam logic [3:0] VEC_EXT_IRQ   = 4'd9;   // 0x24 — External device interrupt
+    localparam logic [3:0] VEC_ARITH     = 4'd10;  // 0x28 — Arithmetic fault (DIV0 / overflow)
 
     // ── MMU fault status encoding ─────────────────────────────
     // FAULT_STATUS[3:0] = fault type

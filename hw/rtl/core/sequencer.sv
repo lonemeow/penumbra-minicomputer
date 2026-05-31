@@ -27,6 +27,7 @@ module sequencer
     input  logic        i_alu_busy,       // ALU multi-cycle in progress
     input  logic        i_mem_busy,       // Memory/cache busy
     input  logic        i_mem_fault,      // MMU fault (TLB miss / protection)
+    input  logic        i_arith_fault,    // divmul DIV0/overflow → VEC_ARITH
     input  logic        i_cond_result,    // Condition evaluator output
     input  logic        i_sr_s,           // Supervisor mode (for priv bit check)
 
@@ -162,8 +163,8 @@ module sequencer
             BR_SEQ:   advance = 1'b1;
             BR_FETCH: go_fetch = 1'b1;
             BR_STALL: begin
-                if (i_mem_fault)
-                    go_fetch = 1'b1;  // Abort instruction on MMU fault
+                if (i_mem_fault || i_arith_fault)
+                    go_fetch = 1'b1;  // Abort on MMU or arithmetic (divmul) fault
                 else if (!busy)
                     advance = 1'b1;
                 // busy → hold (neither advance nor fetch)

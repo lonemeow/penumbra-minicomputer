@@ -178,6 +178,7 @@ module cpu_core
 
     // Datapath status
     logic        alu_busy, cond_result, sr_s, sr_i, ei_shadow;
+    logic        divmul_fault;   // divmul DIV0/overflow → VEC_ARITH
     logic [31:0] pc;
 
     // Sequencer → datapath control signals
@@ -218,6 +219,7 @@ module cpu_core
         .i_alu_busy      (alu_busy),
         .i_mem_busy      (cache_busy),
         .i_mem_fault     (data_fault),
+        .i_arith_fault   (divmul_fault),
         .i_cond_result   (cond_result),
         .i_sr_s          (sr_s),
         .o_upc           (upc),
@@ -406,6 +408,21 @@ module cpu_core
             priv_pending <= 1'b0;
     end
 
+    // ── Arithmetic fault detection (from divmul: DIV0 / overflow) ──
+    logic        arith_except;
+    logic        arith_pending;
+
+    assign arith_except = divmul_fault && !arith_pending;
+
+    always_ff @(posedge i_clk) begin
+        if (i_rst)
+            arith_pending <= 1'b0;
+        else if (arith_except)
+            arith_pending <= 1'b1;
+        else if (arith_pending && ctl_pc_load)
+            arith_pending <= 1'b0;
+    end
+
     // Timer IRQ has priority over external IRQ.
     // Both are gated by SR.I (global interrupt enable) and ei_shadow.
     logic        timer_irq_taken;
@@ -433,18 +450,19 @@ module cpu_core
         end
     end
 
-    assign except_entry = fault_except | illegal_except | priv_except |
+    assign except_entry = fault_except | illegal_except | priv_except | arith_except |
                           (break_taken & ir_valid) | (syscall_taken & ir_valid) |
                           (irq_taken & ir_valid);
     assign vector_num   = fault_pending    ? fault_vector :
                           illegal_pending  ? VEC_ILLEGAL :
                           priv_pending     ? VEC_PRIV :
+                          arith_pending    ? VEC_ARITH :
                           dispatch_pending ? dispatch_vector :
                                              VEC_EXT_IRQ;
 
     // Override dispatch address when any exception taken
     logic [7:0] effective_dispatch;
-    assign effective_dispatch = (fault_pending | illegal_pending | priv_pending | dispatch_pending | break_taken | syscall_taken | irq_taken) ? 8'h70 : dispatch_addr;
+    assign effective_dispatch = (fault_pending | illegal_pending | priv_pending | arith_pending | dispatch_pending | break_taken | syscall_taken | irq_taken) ? 8'h70 : dispatch_addr;
 
     // Debug observation: pulses when BREAK dispatches (testbench stop trigger)
     assign o_halted = break_taken & ir_valid;
@@ -772,6 +790,7 @@ module cpu_core
 
         // Status outputs
         .o_alu_busy     (alu_busy),
+        .o_divmul_fault (divmul_fault),
         .o_sr_s         (sr_s),
         .o_sr_i         (sr_i),
         .o_ei_shadow    (ei_shadow),
