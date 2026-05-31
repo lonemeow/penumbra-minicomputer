@@ -21,8 +21,10 @@ _start:
     CMP  R2, #1
     BNE fail
 
-    ; Test 2: MUL R3, R4 — defined in ISA but no microcode (sentinel)
-    MUL R3, R4
+    ; Test 2: another reserved Format R opcode (op=19, in the 18-22 gap).
+    ; MUL/MULU/DIV/DIVU are now implemented, so this uses a reserved slot.
+    ; [00][10011][Rd=0000][Rs=0000][F=0][spare=0] = 0x26000000
+    .word 0x26000000
 
     ; Handler should have incremented R2 to 2
     CMP  R2, #2

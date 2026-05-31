@@ -398,7 +398,7 @@ static constexpr uint32_t SR_FLAGS = SR_N|SR_Z|SR_C|SR_V;
 // Exception vectors
 enum { VEC_BUS_FAULT=0, VEC_TIMER=1, VEC_TLB_MISS=2, VEC_TLB_PROT=3,
        VEC_PRIV=4, VEC_SYSCALL=5, VEC_BREAK=6, VEC_ILLEGAL=7, VEC_ALIGN=8,
-       VEC_EXT_IRQ=9 };
+       VEC_EXT_IRQ=9, VEC_ARITH=10 };
 
 // Sysreg device IDs
 enum { SYSDEV_MMU=0, SYSDEV_CPU=1, SYSDEV_L1_DCACHE=2, SYSDEV_L1_ICACHE=3, SYSDEV_BUS=4,
@@ -1544,12 +1544,61 @@ static void execute_one() {
             // F-bit suppresses register write (CMP = SUB+F, TEST = AND+F)
             if (!f_bit) reg_write(rd, r.val);
 
-        } else if (op <= 17) {
-            // MUL/MULU/DIV/DIVU/MOD/MODU — trap as illegal
-            exception_entry(VEC_ILLEGAL);
+        } else if (op <= 15) {
+            // Hardware MUL/MULU/DIV/DIVU via the divmul peer unit.
+            //   12=MUL (signed)  13=MULU  14=DIV (signed)  15=DIVU
+            // Rdh = IR[15:12] (third operand): the dividend-high *input* for
+            // DIVU's 64/32 narrowing form, and the high-half result
+            // destination (product high / remainder). R0 reads 0 and drops
+            // writes, so the 2-operand forms discard the high half for free.
+            int      rdh = (insn >> 12) & 0xF;
+            uint32_t a   = reg_read(rd);   // multiplier / dividend low
+            uint32_t b   = reg_read(rs);   // multiplicand / divisor
+            uint32_t lo = 0, hi = 0;
+            bool fault = false;
+
+            if (op == 12) {                // signed multiply 32x32 -> 64
+                int64_t p = (int64_t)(int32_t)a * (int64_t)(int32_t)b;
+                lo = (uint32_t)p;
+                hi = (uint32_t)((uint64_t)p >> 32);
+            } else if (op == 13) {         // unsigned multiply 32x32 -> 64
+                uint64_t p = (uint64_t)a * (uint64_t)b;
+                lo = (uint32_t)p;
+                hi = (uint32_t)(p >> 32);
+            } else if (op == 15) {         // DIVU: (Rdh:Rd) / Rs
+                uint32_t dh = reg_read(rdh);
+                if (b == 0 || dh >= b) {   // DIV0 or narrowing quotient overflow
+                    fault = true;
+                } else {
+                    uint64_t n = ((uint64_t)dh << 32) | a;
+                    lo = (uint32_t)(n / b);
+                    hi = (uint32_t)(n % b);
+                }
+            } else {                       // op == 14: signed DIV, 32/32 (Rdh ignored as input)
+                if (b == 0) {
+                    fault = true;          // DIV0
+                } else if (a == 0x80000000u && b == 0xFFFFFFFFu) {
+                    lo = 0x80000000u;      // INT_MIN / -1 (UB): -> INT_MIN, no trap
+                    hi = 0;
+                } else {
+                    lo = (uint32_t)((int32_t)a / (int32_t)b);
+                    hi = (uint32_t)((int32_t)a % (int32_t)b);
+                }
+            }
+
+            if (fault) {
+                exception_entry(VEC_ARITH);
+            } else {
+                // Z/N reflect the low half (Rd value); C/V cleared.
+                cpu.sr = (cpu.sr & ~SR_FLAGS)
+                       | (((lo >> 31) & 1) ? SR_N : 0)
+                       | ((lo == 0) ? SR_Z : 0);
+                reg_write(rd,  lo);        // product low / quotient
+                reg_write(rdh, hi);        // product high / remainder (R0 -> dropped)
+            }
 
         } else if (op <= 22) {
-            // Reserved gap — illegal
+            // op 16-22: reserved Format R opcodes — illegal
             exception_entry(VEC_ILLEGAL);
 
         } else {
