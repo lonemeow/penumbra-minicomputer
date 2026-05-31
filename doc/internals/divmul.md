@@ -116,19 +116,21 @@ bits).
 
 ## Initial Conditions per Operation
 
-| Op    | accum_lo ← | accum_hi ← | divisor ← | iter ← |
-|-------|------------|------------|-----------|--------|
-| MUL   | A (multiplier)   | 0     | B (multiplicand) | 32 |
-| MULU  | A                | 0     | B                | 32 |
-| DIV   | A (dividend low) | Rdh   | B (divisor)      | 32 |
-| DIVU  | A                | Rdh   | B                | 32 |
+| Op    | accum_lo ← | accum_hi ← | op_b ← (mcand / divisor) | iter ← |
+|-------|------------|------------|--------------------------|--------|
+| MUL   | \|A\| (multiplier mag) | 0   | \|B\| (multiplicand mag) | 32 |
+| MULU  | A                      | 0   | B                        | 32 |
+| DIV   | \|A\| (dividend mag)   | 0   | \|B\| (divisor mag)      | 32 |
+| DIVU  | A (dividend low)       | Rdh | B (divisor)              | 32 |
 
-`accum_hi` always loads from the register named in the `Rdh` field —
-no hardware mux for "zero vs Rdh". The 32/32 case (`Rdh = R0`) gets
-the right behaviour for free because R0 reads as zero. `MUL`'s
-`accum_hi` is forced to zero by the iteration setup, since multiply
-doesn't consume a high half. The iteration loop is identical across
-all four operations once `accum_hi` is initialized.
+Only `DIVU` loads `accum_hi` from `Rdh` — the 64/32 narrowing dividend
+high half (`Rdh = R0` reads as zero for the plain 32/32 case). `MUL`,
+`MULU`, and signed `DIV` load `accum_hi = 0`: multiply has no dividend
+high half, and signed `DIV` is 32/32-only (see below), so it never
+consults `Rdh`. Signed `MUL` and signed `DIV` load the *magnitudes* of
+their operands and apply the sign on the output side. The iteration
+loop is identical across all four operations once the registers are
+initialized.
 
 ## Multiplication — shift-add (unsigned)
 
@@ -170,9 +172,18 @@ Non-restoring saves the per-iteration register write that restoring
 division does on every failed subtraction — same iteration count,
 fewer gates in discrete (~3 chips saved vs restoring).
 
-For **signed** DIV: convert dividend and divisor to absolute values,
-divide unsigned, then apply C99 sign rules (quotient sign = XOR of
-operand signs; remainder sign = dividend sign).
+For **signed** DIV: it is a 32/32 operation only — `Rdh` is ignored and
+`accum_hi` starts at 0. Iterate on |dividend|, |divisor|, then apply C99
+sign rules, negating quotient and remainder *independently* (they are
+two separate numbers, not halves of one): quotient sign = XOR of operand
+signs, remainder sign = dividend sign. 64-bit signed division is done in
+software (sign-magnitude over the unsigned 64/32 path), so the hardware
+needs no signed narrowing form.
+
+`INT_MIN / -1` (signed overflow) is C undefined behaviour; the unit
+returns `INT_MIN` (the unsigned engine yields `0x80000000`, which the
+sign rules leave unnegated) and does not fault. The `VEC_ARITH` overflow
+trap is for the unsigned narrowing case only.
 
 ## Microcode Sequences
 
@@ -281,7 +292,7 @@ unaffected.
 ## Software Composition — `__udivdi3` worked example
 
 The C operation `uint64_t / uint64_t` always lowers to a libcall to
-compiler-rt's `__udivdi3`. With the unified `DIV` (which covers both
+compiler-rt's `__udivdi3`. With the unified `DIVU` (which covers both
 32/32 and 64/32 via its optional `Rdh` operand), the fast path is
 **branchy** — most calls dispatch into a single 32/32 divide or a
 single 64/32 narrowing divide; the dual-divide path is reached only
@@ -300,25 +311,25 @@ uint64_t __udivdi3(uint64_t n, uint64_t d) {
     if (d_lo == 0) trap_div0();       // hardware would trap anyway
 
     if (n_hi == 0)
-        // Plain 32/32 — one DIV with Rdh=R0 (or omitted entirely)
+        // Plain 32/32 — one DIVU with Rdh=R0 (or omitted entirely)
         return n_lo / d_lo;
 
     if (n_hi < d_lo) {
-        // Quotient fits in 32 bits → one narrowing DIV (Rdh=n_hi as input)
+        // Quotient fits in 32 bits → one narrowing DIVU (Rdh=n_hi as input)
         uint32_t q_lo, r;
-        DIV(q_lo, r, /*Rd=*/n_lo, /*Rs=*/d_lo, /*Rdh in=*/n_hi);
+        DIVU(q_lo, r, /*Rd=*/n_lo, /*Rs=*/d_lo, /*Rdh in=*/n_hi);
         return q_lo;
     }
 
     // n_hi >= d_lo: quotient genuinely exceeds 32 bits → two divides.
-    // Step 1: compute high half of quotient with a plain DIV.
+    // Step 1: compute high half of quotient with a plain DIVU.
     uint32_t q_hi, r1;
-    DIV(q_hi, r1, /*Rd=*/n_hi, /*Rs=*/d_lo);  // plain 32/32
+    DIVU(q_hi, r1, /*Rd=*/n_hi, /*Rs=*/d_lo);  // plain 32/32
 
-    // Step 2: compute low half with a narrowing DIV; r1 < d_lo is
+    // Step 2: compute low half with a narrowing DIVU; r1 < d_lo is
     // guaranteed by step 1, so the narrowing form's precondition holds.
     uint32_t q_lo, r2;
-    DIV(q_lo, r2, /*Rd=*/n_lo, /*Rs=*/d_lo, /*Rdh in=*/r1);
+    DIVU(q_lo, r2, /*Rd=*/n_lo, /*Rs=*/d_lo, /*Rdh in=*/r1);
 
     return ((uint64_t)q_hi << 32) | q_lo;
 }
@@ -342,33 +353,33 @@ __udivdi3:
         CMP   R2, R3              ; n_hi vs d_lo (unsigned)
         BHS   .Ldual              ; n_hi >= d_lo → dual-divide path
 
-        ; n_hi < d_lo: quotient fits in 32 bits, single narrowing DIV.
+        ; n_hi < d_lo: quotient fits in 32 bits, single narrowing DIVU.
         ;   R1 = n_lo, R2 = n_hi (dividend hi), R3 = d_lo
-        DIV   R1, R3, R2          ; R1 = (R2:R1)/R3, R2 = remainder
+        DIVU  R1, R3, R2          ; R1 = (R2:R1)/R3, R2 = remainder
         MOV   R2, R0              ; quotient hi = 0 (return convention)
         RET
 
 .Lplain_32:
         ; n_hi == 0: simplest case, plain 32/32.
         ;   R1 = n_lo, R3 = d_lo, R2 already 0
-        DIV   R1, R3              ; R1 = R1/R3, remainder discarded
+        DIVU  R1, R3              ; R1 = R1/R3, remainder discarded
         RET                       ; R2 stays 0 from the caller's view
 
 .Ldual:
         ; n_hi >= d_lo: need both halves of quotient.
         ;   R1 = n_lo, R2 = n_hi, R3 = d_lo
         ; R11 (t1) is a caller-saved scratch, so this stays a leaf with no
-        ; spill.  Zero it first: the DIV third operand is both the remainder
+        ; spill.  Zero it first: the DIVU third operand is both the remainder
         ; output AND the high-half dividend input, so a zeroed R11 makes the
-        ; first DIV a plain 32/32 and captures its remainder for the second.
+        ; first DIVU a plain 32/32 and captures its remainder for the second.
         MOV   R11, R0             ; high-half dividend = 0
-        DIV   R2, R3, R11         ; R2 = n_hi/d_lo (q_hi), R11 = n_hi%d_lo (r1)
-        DIV   R1, R3, R11         ; R1 = (R11:R1)/d_lo (q_lo), R11 = remainder (dead)
+        DIVU  R2, R3, R11         ; R2 = n_hi/d_lo (q_hi), R11 = n_hi%d_lo (r1)
+        DIVU  R1, R3, R11         ; R1 = (R11:R1)/d_lo (q_lo), R11 = remainder (dead)
         RET                       ; returns R1:R2 = q_lo:q_hi
 
 .Lslow:
         ; Knuth Algorithm D — verifies each digit-estimate's invariant
-        ; in software before issuing the narrowing DIV. Out of scope.
+        ; in software before issuing the narrowing DIVU. Out of scope.
         ...
 ```
 
@@ -380,9 +391,9 @@ roughly 2000 cycles in the same units; the typical real-world speedup
 is therefore ~50× rather than the 30× a uniform two-divide path would
 deliver.
 
-### Why the dual-divide path runs `DIV` twice in that order
+### Why the dual-divide path runs `DIVU` twice in that order
 
-The DIV order is critical; the first instruction produces the remainder of
+The DIVU order is critical; the first instruction produces the remainder of
 the high half divide, which the second instruction needs to do the remaining
 work to produce the correct result.
 
