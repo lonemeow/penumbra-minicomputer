@@ -237,9 +237,9 @@ FORMAT_R_OPS = {
     "SHR":  (6,  True,  0), "SAR":  (7,  True,  0),
     "MOV":  (8,  True,  0), "NOT":  (9,  True,  0),
     "ADC":  (10, True,  0), "SBC":  (11, True,  0),
-    "MUL":  (12, True,  0), "MULU": (13, True,  0),
-    "DIV":  (14, True,  0), "DIVU": (15, True,  0),
-    "MOD":  (16, True,  0), "MODU": (17, True,  0),
+    # Multi-cycle peer-unit ops live in the op[4]=1 region (16-19).
+    "MUL":  (16, True,  0), "MULU": (17, True,  0),
+    "DIV":  (18, True,  0), "DIVU": (19, True,  0),
     # F=1 aliases (CMP Rd, Rs — register form; CMP Rd, #imm routed to Format L)
     "CMP":  (1,  True,  1), "TEST": (2,  True,  1),
     # System ops (no Rs for most)

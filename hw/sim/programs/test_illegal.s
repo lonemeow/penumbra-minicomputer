@@ -13,18 +13,17 @@ _start:
     LA   R3, #illegal_handler
     STW  R3, [R0 + #0x1C]      ; vector[7] = illegal instruction (VEC_ILLEGAL)
 
-    ; Test 1: undefined Format R op=18 (gap between ALU and system zones)
-    ; Encoding: [00][10010][Rd=0000][Rs=0000][F=0][spare=0x0000] = 0x24000000
-    .word 0x24000000
+    ; Test 1: reserved Format R op=12 (single-cycle ALU gap, op 12-15)
+    ; Encoding: [00][01100][Rd=0000][Rs=0000][F=0][spare=0x0000] = 0x18000000
+    .word 0x18000000
 
     ; Handler should have incremented R2 to 1
     CMP  R2, #1
     BNE fail
 
-    ; Test 2: another reserved Format R opcode (op=19, in the 18-22 gap).
-    ; MUL/MULU/DIV/DIVU are now implemented, so this uses a reserved slot.
-    ; [00][10011][Rd=0000][Rs=0000][F=0][spare=0] = 0x26000000
-    .word 0x26000000
+    ; Test 2: reserved Format R op=20 (peer-unit gap, op 20-22).
+    ; [00][10100][Rd=0000][Rs=0000][F=0][spare=0] = 0x28000000
+    .word 0x28000000
 
     ; Handler should have incremented R2 to 2
     CMP  R2, #2

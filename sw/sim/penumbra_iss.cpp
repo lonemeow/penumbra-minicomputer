@@ -1545,8 +1545,12 @@ static void execute_one() {
             if (!f_bit) reg_write(rd, r.val);
 
         } else if (op <= 15) {
+            // op 12-15: reserved single-cycle ALU slots — illegal
+            exception_entry(VEC_ILLEGAL);
+
+        } else if (op <= 19) {
             // Hardware MUL/MULU/DIV/DIVU via the divmul peer unit.
-            //   12=MUL (signed)  13=MULU  14=DIV (signed)  15=DIVU
+            //   16=MUL (signed)  17=MULU  18=DIV (signed)  19=DIVU
             // Rdh = IR[15:12] (third operand): the dividend-high *input* for
             // DIVU's 64/32 narrowing form, and the high-half result
             // destination (product high / remainder). R0 reads 0 and drops
@@ -1557,15 +1561,15 @@ static void execute_one() {
             uint32_t lo = 0, hi = 0;
             bool fault = false;
 
-            if (op == 12) {                // signed multiply 32x32 -> 64
+            if (op == 16) {                // signed multiply 32x32 -> 64
                 int64_t p = (int64_t)(int32_t)a * (int64_t)(int32_t)b;
                 lo = (uint32_t)p;
                 hi = (uint32_t)((uint64_t)p >> 32);
-            } else if (op == 13) {         // unsigned multiply 32x32 -> 64
+            } else if (op == 17) {         // unsigned multiply 32x32 -> 64
                 uint64_t p = (uint64_t)a * (uint64_t)b;
                 lo = (uint32_t)p;
                 hi = (uint32_t)(p >> 32);
-            } else if (op == 15) {         // DIVU: (Rdh:Rd) / Rs
+            } else if (op == 19) {         // DIVU: (Rdh:Rd) / Rs
                 uint32_t dh = reg_read(rdh);
                 if (b == 0 || dh >= b) {   // DIV0 or narrowing quotient overflow
                     fault = true;
@@ -1574,7 +1578,7 @@ static void execute_one() {
                     lo = (uint32_t)(n / b);
                     hi = (uint32_t)(n % b);
                 }
-            } else {                       // op == 14: signed DIV, 32/32 (Rdh ignored as input)
+            } else {                       // op == 18: signed DIV, 32/32 (Rdh ignored as input)
                 if (b == 0) {
                     fault = true;          // DIV0
                 } else if (a == 0x80000000u && b == 0xFFFFFFFFu) {
@@ -1598,7 +1602,7 @@ static void execute_one() {
             }
 
         } else if (op <= 22) {
-            // op 16-22: reserved Format R opcodes — illegal
+            // op 20-22: reserved Format R opcodes — illegal
             exception_entry(VEC_ILLEGAL);
 
         } else {
