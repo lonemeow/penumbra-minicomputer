@@ -114,36 +114,43 @@ Format L (register-immediate) based on the second operand.
 `MUL` and `DIV` take an **optional third register operand** `Rdh` in
 bits `[15:12]` of the Format R instruction (see
 [instruction-encoding.md](./instruction-encoding.md#format-r-sub-encoding-for-muldiv)).
-Its role depends on the operation:
+It is **always write-only** and always names the high half of the
+result:
 
-- `MUL`/`MULU` — `Rdh` is the **high half of the product** (write-only).
-- `DIVU` — `Rdh` is **both** the high half of the dividend (read, for the
-  64/32 narrowing form) **and** the remainder (write).
-- signed `DIV` — `Rdh` is the **remainder** (write-only). Signed divide
-  is 32/32: the dividend is the 32-bit `Rd` (sign from `Rd[31]`), and
-  `Rdh` is *not* read as a dividend high half. 64-bit signed division is
-  done in software as sign-magnitude over `DIVU`.
+- `MUL`/`MULU` — `Rdh` is the **high half of the product**.
+- `DIV`/`DIVU` — `Rdh` is the **remainder**. The dividend is the 32-bit
+  `Rd` (with sign from `Rd[31]` for `DIV`); there is no high-half
+  dividend input. Divides are always 32/32.
 
 The third operand is optional in assembler syntax and defaults to `R0`,
 which makes the common 32-bit cases look like ordinary 2-operand
-arithmetic — `R0` reads as zero and writes to `R0` are silently dropped
-(so the product high half / remainder is discarded):
+arithmetic — writes to `R0` are silently dropped, so the product high
+half / remainder is discarded:
 
 ```asm
 MUL  R1, R2              ; encoded as MUL R1, R2, R0 — low 32 bits of product only
 MUL  R1, R2, R3          ; full 64-bit product: R3:R1 = R1 × R2
 DIV  R1, R2              ; signed 32/32, R1 = R1/R2 (remainder discarded)
-DIV  R1, R2, R3          ; signed 32/32, R1 = R1/R2, R3 = R1%R2 (R3 not read)
+DIV  R1, R2, R3          ; signed 32/32, R1 = R1/R2, R3 = R1%R2
 DIVU R1, R2              ; unsigned 32/32, R1 = R1/R2
-DIVU R1, R2, R3          ; (R3:R1)/R2 → quotient → R1, remainder → R3
-                         ; R3 == 0: plain 32/32.  R3 nonzero: 64/32 narrowing.
+DIVU R1, R2, R3          ; unsigned 32/32, R1 = R1/R2, R3 = R1%R2
 ```
 
-There is no separate "narrowing" mnemonic and no `MOD` mnemonic.
-`DIVU` covers both the 32/32 and 64/32 cases via its `Rdh` input;
-signed `DIV` is 32/32 only. Remainders are obtained as a side effect of
-any divide whose `Rdh` operand is a real (non-R0) register. To compute
-`Rdest = Ra % Rs` when the dividend must survive:
+This combined quotient+remainder form is the MIPS pattern (HI/LO).
+RISC-V and ARM split the two halves into separate instructions
+(`MUL`/`MULH`, `DIV`/`REM`); Penumbra gives them as one operation
+because the divmul peer computes both halves in the same iteration and
+exposing the high half costs only the µ-op that writes it.
+
+There is **no 64/32 narrowing form** (where the dividend high half is
+supplied as a register). The 68000 shipped this because it lacked a
+32×32→64 multiply; modern small RISCs (MIPS, ARM, RISC-V, SH) do not.
+64-bit divide is software (sign-magnitude over the unsigned engine, with
+a long-division slow path for the wide cases).
+
+There is no separate "modulo" mnemonic. Remainders are obtained as a
+side effect of any divide whose `Rdh` operand is a real (non-R0)
+register. To compute `Rdest = Ra % Rs` when the dividend must survive:
 
 ```asm
 MOV  R5, Ra              ; if Ra needs to survive
@@ -157,32 +164,16 @@ divmul peer unit iterates (~33 cycles per operation). See
 [datapath.md](../internals/datapath.md) and
 [divmul.md](../internals/divmul.md) for the peer-unit / STALL contract.
 
-#### Narrowing-DIVU precondition and arithmetic faults
+#### Arithmetic faults
 
-When `DIVU Rd, Rs, Rdh` is used in its 64/32 narrowing form (`Rdh != R0`
-on entry), the 32-bit quotient must fit — equivalently, the dividend
-high half (input `Rdh`) must be strictly less than the divisor `Rs`.
-Multi-precision library code (Knuth Algorithm D in `__udivdi3`'s slow
-path) verifies this invariant in software *before* issuing the
-narrowing `DIVU`; the algorithm structure guarantees it. User code that
-constructs narrowing-`DIVU` operands directly must do the same. Signed
-`DIV` is 32/32 only, so it has no narrowing precondition.
-
-Two arithmetic conditions trap to `VEC_ARITH` (vector 10):
-- **Divide by zero** — `DIV`/`DIVU` with `Rs == 0`.
-- **Quotient overflow** — `DIVU` with `Rdh >= Rs` (the narrowing
-  precondition violated). Unsigned-only; signed `DIV` has no narrowing
-  form.
+Divide-by-zero traps to `VEC_ARITH` (vector 10): `DIV`/`DIVU` with
+`Rs == 0`.
 
 `INT_MIN / -1` (signed 32/32 overflow) is C undefined behaviour and does
-**not** trap — the result is `INT_MIN` (matches RISC-V). The `VEC_ARITH`
-overflow trap is reserved for the unsigned narrowing case.
+**not** trap — the result is `INT_MIN` (matches RISC-V).
 
-Both are treated as **hard programmer errors**, not as a normal
-control-flow mechanism. The kernel handler maps `VEC_ARITH` to
-`SIGFPE` with `si_code = FPE_INTDIV` (divide-by-zero) or
-`FPE_INTOVF` (quotient overflow); well-written multi-precision code
-never triggers either case. `EPC` points at the trapping instruction.
+The kernel handler maps `VEC_ARITH` to `SIGFPE` with `si_code =
+FPE_INTDIV`. `EPC` points at the trapping instruction.
 
 ### Logic
 

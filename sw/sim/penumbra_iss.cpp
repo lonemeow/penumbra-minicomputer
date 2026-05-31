@@ -1551,12 +1551,13 @@ static void execute_one() {
         } else if (op <= 19) {
             // Hardware MUL/MULU/DIV/DIVU via the divmul peer unit.
             //   16=MUL (signed)  17=MULU  18=DIV (signed)  19=DIVU
-            // Rdh = IR[15:12] (third operand): the dividend-high *input* for
-            // DIVU's 64/32 narrowing form, and the high-half result
-            // destination (product high / remainder). R0 reads 0 and drops
-            // writes, so the 2-operand forms discard the high half for free.
+            // Rdh = IR[15:12] is the write-only third operand for the high
+            // half of the result (product high for MUL/MULU, remainder for
+            // DIV/DIVU). R0 drops writes, so the 2-operand forms discard
+            // the high half for free. Divides are always 32/32 — there is
+            // no high-half dividend input.
             int      rdh = (insn >> 12) & 0xF;
-            uint32_t a   = reg_read(rd);   // multiplier / dividend low
+            uint32_t a   = reg_read(rd);   // multiplier / dividend
             uint32_t b   = reg_read(rs);   // multiplicand / divisor
             uint32_t lo = 0, hi = 0;
             bool fault = false;
@@ -1569,16 +1570,14 @@ static void execute_one() {
                 uint64_t p = (uint64_t)a * (uint64_t)b;
                 lo = (uint32_t)p;
                 hi = (uint32_t)(p >> 32);
-            } else if (op == 19) {         // DIVU: (Rdh:Rd) / Rs
-                uint32_t dh = reg_read(rdh);
-                if (b == 0 || dh >= b) {   // DIV0 or narrowing quotient overflow
-                    fault = true;
+            } else if (op == 19) {         // unsigned DIVU, 32/32
+                if (b == 0) {
+                    fault = true;          // DIV0
                 } else {
-                    uint64_t n = ((uint64_t)dh << 32) | a;
-                    lo = (uint32_t)(n / b);
-                    hi = (uint32_t)(n % b);
+                    lo = a / b;
+                    hi = a % b;
                 }
-            } else {                       // op == 18: signed DIV, 32/32 (Rdh ignored as input)
+            } else {                       // op == 18: signed DIV, 32/32
                 if (b == 0) {
                     fault = true;          // DIV0
                 } else if (a == 0x80000000u && b == 0xFFFFFFFFu) {

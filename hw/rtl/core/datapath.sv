@@ -518,7 +518,6 @@ module datapath
         .i_rst       (i_rst),
         .i_a         (a_bus),
         .i_b         (b_bus),
-        .i_rdh       (32'd0),          // narrowing dividend-high: wired in a later slice
         .i_op        (i_alu_op),
         .i_start     (i_divmul_start),
         .o_busy      (divmul_busy),

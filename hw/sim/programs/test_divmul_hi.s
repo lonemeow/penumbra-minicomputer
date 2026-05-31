@@ -1,14 +1,13 @@
 ; test_divmul_hi.s — high-half writeback (Rdh): remainder and 64-bit product
 ;
 ; Uses the 3-operand form `OP Rd, Rs, Rdh` so the high result (remainder /
-; product high) lands in Rdh. The Rdh register is zeroed before DIVU so the
-; (not-yet-wired) narrowing dividend-high input reads 0 on the ISS too.
+; product high) lands in Rdh. The third operand is write-only; the prior
+; value of the Rdh register doesn't matter.
 ;
 ; Result: R1=1 PASS, R1=0 FAIL
 
 _start:
     ; ── DIVU remainder: 17 / 5 = 3 r 2 ──────────────────────
-    LLI  R4, #0                ; Rdh-input = 0 (plain 32/32)
     LLI  R2, #17
     LLI  R3, #5
     DIVU R2, R3, R4            ; R2 = 3 (quotient), R4 = 2 (remainder)

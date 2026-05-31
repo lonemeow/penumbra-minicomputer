@@ -22,7 +22,7 @@ static void tick(Vdivmul* d) { d->i_clk = 0; d->eval(); d->i_clk = 1; d->eval();
 // Run one multiply to completion; return the 64-bit result via lo/hi.
 static void run_mul(Vdivmul* d, uint8_t op, uint32_t a, uint32_t b,
                     uint32_t* lo, uint32_t* hi) {
-    d->i_a = a; d->i_b = b; d->i_rdh = 0; d->i_op = op; d->i_start = 1;
+    d->i_a = a; d->i_b = b; d->i_op = op; d->i_start = 1;
     tick(d);                 // posedge latches operands, state → ITER
     d->i_start = 0;
     int guard = 0;
@@ -70,9 +70,9 @@ static uint64_t smul(uint32_t a, uint32_t b) {
 }
 
 // Run one divide to completion; return quotient (lo) and remainder (hi).
-static void run_div(Vdivmul* d, uint8_t op, uint32_t rdh, uint32_t a, uint32_t b,
+static void run_div(Vdivmul* d, uint8_t op, uint32_t a, uint32_t b,
                     uint32_t* lo, uint32_t* hi) {
-    d->i_a = a; d->i_b = b; d->i_rdh = rdh; d->i_op = op; d->i_start = 1;
+    d->i_a = a; d->i_b = b; d->i_op = op; d->i_start = 1;
     tick(d);                 // posedge latches operands, state → ITER
     d->i_start = 0;
     int guard = 0;
@@ -81,17 +81,15 @@ static void run_div(Vdivmul* d, uint8_t op, uint32_t rdh, uint32_t a, uint32_t b
     *hi = d->o_result_hi;
 }
 
-// Check a non-faulting unsigned divide. Dividend = {rdh, a}, divisor = b;
-// the C reference computes quotient/remainder (inputs chosen so q fits 32 bits).
+// Check a non-faulting unsigned 32/32 divide.
 static void check_divu(Vdivmul* d, const char* name,
-                       uint32_t rdh, uint32_t a, uint32_t b) {
+                       uint32_t a, uint32_t b) {
     tests++;
-    uint64_t n   = ((uint64_t)rdh << 32) | a;
-    uint32_t q   = (uint32_t)(n / b);
-    uint32_t rem = (uint32_t)(n % b);
+    uint32_t q   = a / b;
+    uint32_t rem = a % b;
 
     uint32_t lo, hi;
-    run_div(d, OP_DIVU, rdh, a, b, &lo, &hi);
+    run_div(d, OP_DIVU, a, b, &lo, &hi);
 
     int exp_z = (q == 0) ? 1 : 0;
     int exp_n = (q >> 31) & 1;
@@ -120,14 +118,14 @@ static void check_divu(Vdivmul* d, const char* name,
     if (fail) errors++;
 }
 
-// Check a non-faulting signed divide (32/32, i_rdh ignored). Expected via the
-// C int32 truncating-division reference.
+// Check a non-faulting signed 32/32 divide. Expected via the C int32
+// truncating-division reference.
 static void check_sdiv(Vdivmul* d, const char* name, uint32_t a, uint32_t b) {
     tests++;
     int32_t  q   = (int32_t)a / (int32_t)b;
     int32_t  rmd = (int32_t)a % (int32_t)b;
     uint32_t lo, hi;
-    run_div(d, OP_DIV, 0, a, b, &lo, &hi);
+    run_div(d, OP_DIV, a, b, &lo, &hi);
 
     int exp_z = (q == 0) ? 1 : 0;
     int exp_n = ((uint32_t)q >> 31) & 1;
@@ -162,7 +160,7 @@ static void check_sdiv_exp(Vdivmul* d, const char* name, uint32_t a, uint32_t b,
                            uint32_t exp_q, uint32_t exp_r) {
     tests++;
     uint32_t lo, hi;
-    run_div(d, OP_DIV, 0, a, b, &lo, &hi);
+    run_div(d, OP_DIV, a, b, &lo, &hi);
     int fail = 0;
     if (lo != exp_q) {
         printf("  FAIL [%s] quotient: got 0x%08X, expected 0x%08X\n", name, lo, exp_q);
@@ -181,9 +179,9 @@ static void check_sdiv_exp(Vdivmul* d, const char* name, uint32_t a, uint32_t b,
 
 // Check that a faulting divide asserts o_fault and never iterates (o_busy low).
 static void check_div_fault(Vdivmul* d, const char* name, uint8_t op,
-                            uint32_t rdh, uint32_t a, uint32_t b) {
+                            uint32_t a, uint32_t b) {
     tests++;
-    d->i_a = a; d->i_b = b; d->i_rdh = rdh; d->i_op = op; d->i_start = 1;
+    d->i_a = a; d->i_b = b; d->i_op = op; d->i_start = 1;
     d->eval();               // o_fault is a combinational pulse on the start edge
 
     int fail = 0;
@@ -209,7 +207,7 @@ int main() {
     Vdivmul* d = new Vdivmul;
 
     // Reset.
-    d->i_rst = 1; d->i_start = 0; d->i_a = 0; d->i_b = 0; d->i_rdh = 0; d->i_op = 0;
+    d->i_rst = 1; d->i_start = 0; d->i_a = 0; d->i_b = 0; d->i_op = 0;
     tick(d);
     d->i_rst = 0;
     tick(d);
@@ -232,22 +230,17 @@ int main() {
     check_mul(d, "mul_intmin_sq",   OP_MUL, 0x80000000, 0x80000000,  smul(0x80000000, 0x80000000));
     check_mul(d, "mul_big_neg",     OP_MUL, 0x80000000, 0x7FFFFFFF,  smul(0x80000000, 0x7FFFFFFF));
 
-    // ── Unsigned divide (DIVU), plain 32/32 (rdh = 0) ────────────
-    check_divu(d, "divu_17_5",      0, 17, 5);            // 3 r 2
-    check_divu(d, "divu_exact",     0, 100, 10);          // 10 r 0
-    check_divu(d, "divu_rem",       0, 7, 3);             // 2 r 1
-    check_divu(d, "divu_zero_num",  0, 0, 7);             // 0 r 0
-    check_divu(d, "divu_by_one",    0, 0xFFFFFFFF, 1);    // max r 0
-    check_divu(d, "divu_max_max",   0, 0xFFFFFFFF, 0xFFFFFFFF); // 1 r 0
-    check_divu(d, "divu_lt_divisor",0, 3, 5);             // 0 r 3 (quotient 0 → Z=1)
-    check_divu(d, "divu_big",       0, 0xDEADBEEF, 0x1234);
+    // ── Unsigned divide (DIVU), 32/32 ────────────────────────────
+    check_divu(d, "divu_17_5",      17, 5);                       // 3 r 2
+    check_divu(d, "divu_exact",     100, 10);                     // 10 r 0
+    check_divu(d, "divu_rem",       7, 3);                        // 2 r 1
+    check_divu(d, "divu_zero_num",  0, 7);                        // 0 r 0
+    check_divu(d, "divu_by_one",    0xFFFFFFFF, 1);               // max r 0
+    check_divu(d, "divu_max_max",   0xFFFFFFFF, 0xFFFFFFFF);      // 1 r 0
+    check_divu(d, "divu_lt_divisor",3, 5);                        // 0 r 3 (quotient 0 → Z=1)
+    check_divu(d, "divu_big",       0xDEADBEEF, 0x1234);
 
-    // ── Unsigned divide (DIVU), narrowing 64/32 (rdh < divisor) ──
-    check_divu(d, "divu_narrow_a",  2, 0x00000000, 3);    // 0x2_00000000 / 3
-    check_divu(d, "divu_narrow_b",  1, 0xFFFFFFFF, 2);    // 0x1_FFFFFFFF / 2
-    check_divu(d, "divu_narrow_max",0xFFFFFFFE, 0xFFFFFFFF, 0xFFFFFFFF); // hi just under divisor
-
-    // ── Signed divide (DIV), 32/32, i_rdh ignored ───────────────
+    // ── Signed divide (DIV), 32/32 ──────────────────────────────
     check_sdiv(d, "sdiv_pos_pos",   17, 5);               //  3 r  2
     check_sdiv(d, "sdiv_neg_pos",   (uint32_t)-17, 5);    // -3 r -2
     check_sdiv(d, "sdiv_pos_neg",   17, (uint32_t)-5);    // -3 r  2
@@ -258,27 +251,12 @@ int main() {
     check_sdiv(d, "sdiv_minby2",    0x80000000, 2);       // INT_MIN / 2
     check_sdiv(d, "sdiv_neg_pos2",  (uint32_t)-100, 7);   // -14 r -2
 
-    // i_rdh must be ignored for signed divide: a nonzero rdh changes nothing.
-    {
-        uint32_t lo, hi;
-        run_div(d, OP_DIV, 0xDEADBEEF, (uint32_t)-17, 5, &lo, &hi);  // -17 / 5 = -3 r -2
-        tests++;
-        if (lo != (uint32_t)-3 || hi != (uint32_t)-2 || d->o_fault != 0) {
-            printf("  FAIL [sdiv_rdh_ignored] got q=0x%08X r=0x%08X fault=%d "
-                   "(rdh must not affect signed divide)\n", lo, hi, (int)d->o_fault);
-            errors++;
-        }
-    }
-
     // INT_MIN / -1 overflow: UB in C; hardware returns INT_MIN, no trap.
     check_sdiv_exp(d, "sdiv_intmin_m1", 0x80000000, (uint32_t)-1, 0x80000000, 0);
 
-    // ── Divide faults ────────────────────────────────────────────
-    check_div_fault(d, "div0_plain",     OP_DIVU, 0, 42, 0);  // unsigned divide by zero
-    check_div_fault(d, "div0_narrow",    OP_DIVU, 1, 0, 0);   // unsigned divide by zero (64/32)
-    check_div_fault(d, "ovf_hi_gt",      OP_DIVU, 5, 0, 3);   // rdh > divisor
-    check_div_fault(d, "ovf_hi_eq",      OP_DIVU, 3, 0, 3);   // rdh == divisor (q won't fit)
-    check_div_fault(d, "sdiv_div0",      OP_DIV,  0, 42, 0);  // signed divide by zero
+    // ── Divide-by-zero traps ────────────────────────────────────
+    check_div_fault(d, "divu_div0",    OP_DIVU, 42, 0);
+    check_div_fault(d, "div_div0",     OP_DIV,  42, 0);
 
     printf("divmul: %d/%d tests passed\n", tests - errors, tests);
     if (errors) printf("  *** %d FAILED ***\n", errors);
