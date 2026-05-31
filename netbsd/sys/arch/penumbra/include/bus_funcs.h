@@ -51,11 +51,11 @@ void	bus_space_unmap(bus_space_tag_t, bus_space_handle_t, bus_size_t);
 	(*(volatile uint32_t *)((h) + (o)) = (v))
 
 /*
- * write_multi: same register, many bytes.  Used by the MI com driver
- * for FIFO drains.  A static inline (under a private name) gives the
- * compiler the loop body to fold into the caller's register
- * allocation; the public macro alias resolves before the
- * <sys/bus_proto.h> prototype is reached at any call site.
+ * write_multi: push many bytes from a buffer into a single (FIFO)
+ * register.  A static inline (under a private name) gives the compiler
+ * the loop body to fold into the caller's register allocation; the
+ * public macro alias resolves before the <sys/bus_proto.h> prototype
+ * is reached at any call site.
  */
 static inline void
 __penumbra_bus_write_multi_1(bus_space_tag_t t __unused, bus_space_handle_t h,
@@ -68,6 +68,41 @@ __penumbra_bus_write_multi_1(bus_space_tag_t t __unused, bus_space_handle_t h,
 }
 #define	bus_space_write_multi_1(t, h, o, a, c)	\
 	__penumbra_bus_write_multi_1((t), (h), (o), (a), (c))
+
+/*
+ * read_multi: pop many bytes from a single (FIFO) register into a
+ * buffer — the mirror of write_multi_1.  Immune to the same
+ * -fno-strict-aliasing per-access reload for the same reason: the
+ * by-value handle makes the base a loop-invariant register value.
+ */
+static inline void
+__penumbra_bus_read_multi_1(bus_space_tag_t t __unused, bus_space_handle_t h,
+    bus_size_t o, uint8_t *a, bus_size_t c)
+{
+	volatile uint8_t *p = (volatile uint8_t *)(h + o);
+
+	while (c-- > 0)
+		*a++ = *p;
+}
+#define	bus_space_read_multi_1(t, h, o, a, c)	\
+	__penumbra_bus_read_multi_1((t), (h), (o), (a), (c))
+
+/*
+ * set_multi: write one constant value to a single (FIFO) register many
+ * times.  Same shape as write_multi_1, but the source is a scalar
+ * (e.g. an idle/fill byte) rather than a buffer.
+ */
+static inline void
+__penumbra_bus_set_multi_1(bus_space_tag_t t __unused, bus_space_handle_t h,
+    bus_size_t o, uint8_t v, bus_size_t c)
+{
+	volatile uint8_t *p = (volatile uint8_t *)(h + o);
+
+	while (c-- > 0)
+		*p = v;
+}
+#define	bus_space_set_multi_1(t, h, o, v, c)	\
+	__penumbra_bus_set_multi_1((t), (h), (o), (v), (c))
 
 /*
  * Barrier: no-op.  Single CPU, no write buffer between core and the

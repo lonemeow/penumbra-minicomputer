@@ -514,43 +514,20 @@ pmci_burst(struct pmci_softc *sc, const uint8_t *tx_buf, uint8_t *rx_buf,
 	SREG_WR(sc, SPI_IRQ_ENABLE, 0);
 
 	/*
-	 * 8×-unrolled to minimise inner-loop control overhead.
-	 * Each unrolled iteration is 8 MMIO writes + 1 increment + 1
-	 * compare + 1 branch = ~11 instructions per 8 writes vs ~6 per
-	 * write naive — a ~4× reduction in non-MMIO instructions, and
-	 * the volatile MMIO write itself blocks the optimiser from
-	 * collapsing them.  SD block size is 512 (divisible by 8) so
-	 * there is no tail loop in practice; the trailing single-byte
-	 * loop is there only to keep the helper correct for callers
-	 * with c_datalen not a multiple of 8.
+	 * Fill the 512-deep TX FIFO via the bus_space "multi" primitives:
+	 * write_multi_1 streams a buffer into the single SPI_DATA
+	 * register; set_multi_1 fills it with a constant idle byte.  Both
+	 * compile to a tight loop with the handle pinned in a register —
+	 * unlike open-coded SREG_WR, which the kernel's
+	 * -fno-strict-aliasing forces to reload sc->sc_ioh before every
+	 * store (the load can't be proven not to alias the MMIO write).
 	 */
-	if (tx_buf) {
-		for (i = 0; i + 8 <= len; i += 8) {
-			SREG_WR(sc, SPI_DATA, tx_buf[i+0]);
-			SREG_WR(sc, SPI_DATA, tx_buf[i+1]);
-			SREG_WR(sc, SPI_DATA, tx_buf[i+2]);
-			SREG_WR(sc, SPI_DATA, tx_buf[i+3]);
-			SREG_WR(sc, SPI_DATA, tx_buf[i+4]);
-			SREG_WR(sc, SPI_DATA, tx_buf[i+5]);
-			SREG_WR(sc, SPI_DATA, tx_buf[i+6]);
-			SREG_WR(sc, SPI_DATA, tx_buf[i+7]);
-		}
-		for (; i < len; i++)
-			SREG_WR(sc, SPI_DATA, tx_buf[i]);
-	} else {
-		for (i = 0; i + 8 <= len; i += 8) {
-			SREG_WR(sc, SPI_DATA, SD_IDLE);
-			SREG_WR(sc, SPI_DATA, SD_IDLE);
-			SREG_WR(sc, SPI_DATA, SD_IDLE);
-			SREG_WR(sc, SPI_DATA, SD_IDLE);
-			SREG_WR(sc, SPI_DATA, SD_IDLE);
-			SREG_WR(sc, SPI_DATA, SD_IDLE);
-			SREG_WR(sc, SPI_DATA, SD_IDLE);
-			SREG_WR(sc, SPI_DATA, SD_IDLE);
-		}
-		for (; i < len; i++)
-			SREG_WR(sc, SPI_DATA, SD_IDLE);
-	}
+	if (tx_buf)
+		bus_space_write_multi_1(sc->sc_iot, sc->sc_ioh, SPI_DATA,
+		    tx_buf, len);
+	else
+		bus_space_set_multi_1(sc->sc_iot, sc->sc_ioh, SPI_DATA,
+		    SD_IDLE, len);
 
 	SREG_WR(sc, SPI_XFER_COUNT, ((uint32_t)len & 0xFFFF) | (1U << 16));
 
@@ -564,20 +541,14 @@ pmci_burst(struct pmci_softc *sc, const uint8_t *tx_buf, uint8_t *rx_buf,
 	}
 	SREG_WR(sc, SPI_IRQ_STATUS, SPI_IRQ_XFER_DONE);
 
-	/* 8×-unrolled drain, mirror of the push loop above. */
+	/*
+	 * Drain the RX FIFO.  read_multi_1 pops the buffered case; the
+	 * discard case has no standard primitive, so it stays open-coded
+	 * (a bare volatile read forces no sc->sc_ioh reload anyway).
+	 */
 	if (rx_buf) {
-		for (i = 0; i + 8 <= len; i += 8) {
-			rx_buf[i+0] = (uint8_t)SREG_RD(sc, SPI_DATA);
-			rx_buf[i+1] = (uint8_t)SREG_RD(sc, SPI_DATA);
-			rx_buf[i+2] = (uint8_t)SREG_RD(sc, SPI_DATA);
-			rx_buf[i+3] = (uint8_t)SREG_RD(sc, SPI_DATA);
-			rx_buf[i+4] = (uint8_t)SREG_RD(sc, SPI_DATA);
-			rx_buf[i+5] = (uint8_t)SREG_RD(sc, SPI_DATA);
-			rx_buf[i+6] = (uint8_t)SREG_RD(sc, SPI_DATA);
-			rx_buf[i+7] = (uint8_t)SREG_RD(sc, SPI_DATA);
-		}
-		for (; i < len; i++)
-			rx_buf[i] = (uint8_t)SREG_RD(sc, SPI_DATA);
+		bus_space_read_multi_1(sc->sc_iot, sc->sc_ioh, SPI_DATA,
+		    rx_buf, len);
 	} else {
 		for (i = 0; i + 8 <= len; i += 8) {
 			(void)SREG_RD(sc, SPI_DATA);
