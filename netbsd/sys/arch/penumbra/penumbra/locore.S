@@ -25,6 +25,7 @@
  *   0x00: bus fault    0x04: IRQ          0x08: TLB miss
  *   0x0C: TLB prot    0x10: privilege     0x14: SYSCALL
  *   0x18: BREAK        0x1C: illegal      0x20: alignment
+ *   0x24: EXT_IRQ      0x28: arith (DIV0)
  */
 
 #include "assym.h"
@@ -341,7 +342,7 @@ _start_bias:
 	 * Vector layout (from architecture spec):
 	 *   0: bus fault  1: IRQ       2: TLB miss  3: TLB prot
 	 *   4: privilege  5: SYSCALL   6: BREAK     7: illegal
-	 *   8: alignment
+	 *   8: alignment  9: EXT_IRQ  10: arith (DIV0)
 	 */
 
 	/* Helper: R3 = base = VECTOR_VA + 0x80 */
@@ -410,6 +411,12 @@ _start_bias:
 	sub	r1, r5
 	add	r1, r3
 	stw	r1, [r0 + #0x24]
+
+	/* Vector 10: arithmetic fault (DIV0) → _trap_entry_arith */
+	la	r1, _trap_entry_arith
+	sub	r1, r5
+	add	r1, r3
+	stw	r1, [r0 + #0x28]
 
 /* ═══════════════════════════════════════════════════════════════
  * Step 9: Pin TLB slots
@@ -819,6 +826,11 @@ _trap_entry_align:	/* vector 8 */
 _trap_entry_extirq:	/* vector 9: external device IRQ */
 	stw	r1, [pc + _trap_save_r1 - .]
 	lli	r1, #9
+	b	_trap_common
+
+_trap_entry_arith:	/* vector 10: arithmetic fault (DIV0) */
+	stw	r1, [pc + _trap_save_r1 - .]
+	lli	r1, #10
 	b	_trap_common
 
 /* ── Common trap entry ───────────────────────────────────────

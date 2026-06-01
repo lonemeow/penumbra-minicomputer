@@ -74,9 +74,10 @@ bootinfo — `boot sd:0,0` reaches single-user with no prompts.
 
 - **Trap handling:** Per-vector entry stubs on the vector page,
   common trapframe save/restore, C dispatch in `trap()`.
-  All 9 exception vectors.  Volatile hardware state (ESR, EPC,
-  FAULT_ADDR, FAULT_STATUS) stashed into pinned scratch before
-  any faultable access.  Double-fault detection.
+  All exception vectors handled, including `VEC_ARITH` (10,
+  divide-by-zero) → `SIGFPE`/`FPE_INTDIV`.  Volatile hardware
+  state (ESR, EPC, FAULT_ADDR, FAULT_STATUS) stashed into pinned
+  scratch before any faultable access.  Double-fault detection.
 
 - **Console UART:** MI `com(4)` driver via `com_pbbus.c`.
   Word-strided 32-bit registers (shift=2, width=4).  IRQ-driven

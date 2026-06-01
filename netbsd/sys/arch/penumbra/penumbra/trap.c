@@ -41,6 +41,7 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #define EXC_ILLEGAL	7
 #define EXC_ALIGN	8
 #define EXC_EXT_IRQ	9
+#define EXC_ARITH	10
 
 /* Forward declarations */
 void	trap(struct trapframe *);
@@ -278,6 +279,16 @@ trap(struct trapframe *tf)
 		}
 		panic("kernel alignment fault at va=0x%08x, pc=0x%08x",
 		    tf->tf_badvaddr, tf->tf_epc);
+		break;
+
+	case EXC_ARITH:
+		if (usermode) {
+			user_trap_signal(SIGFPE, FPE_INTDIV,
+				tf->tf_epc, type, tf);
+			break;
+		}
+		panic("kernel divide by zero at pc=0x%08x",
+		    tf->tf_epc);
 		break;
 
 	default:
