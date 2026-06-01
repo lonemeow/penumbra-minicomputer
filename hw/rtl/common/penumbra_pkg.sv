@@ -16,24 +16,15 @@ package penumbra_pkg;
     localparam logic [3:0] REG_SP   = 4'd14;  // R14: stack pointer (USP/SSP banked)
     localparam logic [3:0] REG_PC   = 4'd15;  // R15: program counter (read-only alias)
 
-    // ── ALU operations ──────────────────────────────────────────
-    localparam logic [4:0] ALU_ADD    = 5'b00000;
-    localparam logic [4:0] ALU_SUB    = 5'b00001;
-    localparam logic [4:0] ALU_AND    = 5'b00010;
-    localparam logic [4:0] ALU_OR     = 5'b00011;
-    localparam logic [4:0] ALU_XOR    = 5'b00100;
-    localparam logic [4:0] ALU_SHL    = 5'b00101;
-    localparam logic [4:0] ALU_SHR    = 5'b00110;
-    localparam logic [4:0] ALU_SAR    = 5'b00111;
-    localparam logic [4:0] ALU_PASS_A = 5'b01000;
-    localparam logic [4:0] ALU_PASS_B = 5'b01001;
-    localparam logic [4:0] ALU_NOT    = 5'b01010;
-    localparam logic [4:0] ALU_ADC    = 5'b01011;  // add with carry
-    localparam logic [4:0] ALU_SBC    = 5'b01100;  // subtract with borrow
-    localparam logic [4:0] ALU_MUL    = 5'b01101;
-    localparam logic [4:0] ALU_MULU   = 5'b01110;
-    localparam logic [4:0] ALU_DIV    = 5'b01111;
-    localparam logic [4:0] ALU_DIVU   = 5'b10000;
+    // NOTE: ALU operation encodings are *not* here. They are a
+    // core-internal decoder→ALU control contract, not part of the
+    // ISA (the R-format `op` field maps through a per-core decode
+    // layer, not directly to an ALU opcode — see
+    // doc/system/instruction-encoding.md). Each core owns its own
+    // encoding: gen1's lives in penumbra1/alu.sv as local OP_*
+    // params; gen2's will live in the gen2 core package. This shared
+    // package holds only the ISA contract and system/peripheral
+    // register maps that both cores and the peripherals depend on.
 
     // ── Status register bit positions ───────────────────────────
     // Condition flags in [3:0], system bits in [31:30].
