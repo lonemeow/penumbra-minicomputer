@@ -70,6 +70,7 @@ The project's next major **CPU design era transition** — from Penumbra/1's cla
 *   **[Penumbra/2 Hazard Model](./internals/penumbra2/hazard-model.md)** — The scoreboard: storage, valid-bit lifecycle, stall predicate, ISA→physical register mapping, S/I control-state serialization, flag (NZCV) hazards, and divmul / drain-commit / exception-entry interactions.
 *   **[Penumbra/2 Exception Flow](./internals/penumbra2/exception-flow.md)** — Taking and returning from exceptions/traps/interrupts in the pipeline: fault detection by stage, precise-exception commit at WB, save-state pulse, vector-fetch FSM, ERET, and interrupt recognition (SR.I, ei_shadow, EI/DI).
 *   **[Penumbra/2 Control Decode](./internals/penumbra2/control-decode.md)** — Turning the instruction word into control: hardwired per-stage decode, the four instruction formats, the ID control bundle, register/immediate extraction, branch-condition evaluation, and the IR[15:12] aliasing hazard.
+*   **[Penumbra/2 Register File](./internals/penumbra2/regfile.md)** — The 2R/1W register file: storage organisation, R0/R15 overrides, R14 (USP/SSP) banking and cross-bank access, and how divmul sequences its two-register result through the single write port.
 
 ---
 

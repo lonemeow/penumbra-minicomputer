@@ -155,16 +155,17 @@ For each physical entry P, the valid bit's logical lifecycle is:
    writers) the earlier writers' WBs do not set it, because they
    are still ahead-of-reader writers until they drain. The bit is
    observable on the next cycle's ID stall predicate evaluation.
-4. **Divmul second write.** When the divmul unit drives its
-   `o_result_hi` write through write-port 2, the corresponding
-   physical entry (`Rdh` in the encoded instruction) also has its
-   valid bit set. This is a separate clear/set pair from `Rd`'s
-   normal lifecycle: divmul clears both `valid[Rd]` and
-   `valid[Rdh]` at issue, and sets each one independently as its
-   write port completes. (In practice both writes happen on the
-   same cycle in gen2's divmul implementation, but the spec
-   permits them to be staggered if a future divmul redesign needs
-   it.)
+4. **Divmul second write.** Divmul writes two physical entries —
+   `Rd` (low/quotient) and `Rdh` (high/remainder, from `IR[15:12]`)
+   — through the **single** write port over two consecutive WB
+   cycles (the register file has no second write port; see
+   [regfile.md §4](./regfile.md#4-write-port-and-divmul-sequencing)).
+   The divmul instruction occupies WB for both cycles and is an
+   in-flight writer of both entries throughout, so under the
+   re-derive model (Section 11) `valid[Rd]` and `valid[Rdh]` are
+   both 0 until it leaves WB, then both return to 1 together. The
+   low-then-high write order is for the shared write port, not for
+   early wakeup — the held extra cycle freezes any consumer anyway.
 
 **Exception entry bypass.** When the hardware exception save-state
 pulse fires (Section 9), the direct flop writes to ESR and EPC
@@ -660,11 +661,12 @@ scoreboard entirely.
 ## 10. Interaction with divmul
 
 The MUL/DIV instructions execute as a single µop with a
-multi-cycle EX iteration (~34 cycles). The divmul unit owns the
-ALU and writes two register results (`Rd` for the low half /
-quotient, `Rdh` for the high half / remainder) via the regfile's
-two write ports. Both results commit in the same cycle in gen2's
-implementation.
+multi-cycle EX iteration (~33 cycles). The divmul unit owns the
+ALU during the iteration and produces two register results — `Rd`
+(low half / quotient) and `Rdh` (high half / remainder) — which are
+written through the regfile's **single** write port at WB over two
+consecutive cycles (see
+[regfile.md §4](./regfile.md#4-write-port-and-divmul-sequencing)).
 
 Scoreboard interaction:
 
@@ -675,13 +677,12 @@ Scoreboard interaction:
    pipeline back-pressures upstream as for any EX stall.
    `valid[Rd]` and `valid[Rdh]` remain 0 throughout the divmul
    iteration.
-3. **At divmul completion** both valid bits are set in the same
-   cycle as the regfile writes commit.
-4. **WB does not run for divmul instructions**, because the divmul
-   commits in EX (similar to drain-commit, but without the drain
-   semantics — divmul has no ordering effect on younger insns
-   beyond the scoreboard). The MEM and WB stages see bubbles
-   propagated from EX during the divmul iteration.
+3. **At writeback** the instruction occupies WB for two consecutive
+   cycles — writing `Rd` (low) then `Rdh` (high) through the single
+   port — holding the pipeline one extra cycle for the second write.
+   It is an in-flight writer of both entries the whole time, so
+   `valid[Rd]` and `valid[Rdh]` both clear at issue and both return
+   to 1 together when it leaves WB (Section 11's re-derive model).
 
 Divide-by-zero (`DIV`/`DIVU` with `Rs = 0`) raises `VEC_ARITH`
 (vector slot 10); that fault propagates through the normal
@@ -820,11 +821,11 @@ GPR-equivalent code.
 ### Example E: Divmul pair-destination stall
 
 ```
-MUL R1, R2, R4       ; (1) writes Rd=R1 (low half), Rdh=R4 (high half); ~34 cycles
+MUL R1, R2, R4       ; (1) writes Rd=R1 (low half), Rdh=R4 (high half); ~33 cycles
 ADD R5, R4, R6       ; (2) RAW on R4 (the high half)
 ```
 
-(2) stalls in ID until the divmul completes ~34 cycles later, when
+(2) stalls in ID until the divmul completes ~33 cycles later, when
 `valid[R4]` is set. (1) clears both `valid[R1]` and `valid[R4]` at
 issue, so any read of either stalls until the divmul EX-completes.
 
@@ -885,7 +886,7 @@ events injected) is also recommended once the directed tests pass.
   control-vector layout, including the `phys_src_*`/`phys_dst`
   fields and the `writes_flags`/`reads_flags` bits Section 8
   introduces.
-- [regfile.md](./regfile.md) — the 2R/2W regfile with R14
+- [regfile.md](./regfile.md) — the 2R/1W regfile with R14
   banking. *(To be written.)*
 - [instruction-set.md](../../system/instruction-set.md) — the
   ISA-level reference for SPR encodings (USP, ESR, EPC, SR,

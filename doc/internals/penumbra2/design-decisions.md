@@ -226,7 +226,7 @@ pipeline depth that a split MEM would cost.
 | ID    | Combinational decoder, regfile read, scoreboard check, stall logic |
 | EX    | ALU compute, flag capture, branch target computation + condition, ERET / WRSYS drain-commit, divmul start/busy |
 | MEM   | D-side BRAM cache access (1-cycle STALL on hit to absorb BRAM output latency; longer on miss), MMU integration, alignment check, sub-word LD extract / ST replicate, sysreg sideband for RDSYS |
-| WB    | Regfile write (2 ports — main + divmul-high), SR/SPR write, scoreboard clear |
+| WB    | Regfile write (single port; divmul sequences its two results over two cycles), SR/SPR write, scoreboard clear |
 
 **Rationale.** Classic 5-stage was the original target, but the
 BRAM-backed cache decision ([Decision 11](#11-bram-backed-caches-with-single-mem-stall))
@@ -370,18 +370,21 @@ reclaim it in gen2.5 without redesigning anything in gen2.
   reclaims this; explicitly deferred to gen2.5 to preserve the
   no-forwarding correctness baseline. (The user pick was to take
   the CPI hit in exchange for cleaner gen2 verification.)
-- The regfile is **2R/2W** in gen2 — two read ports for ID-stage
-  operand reads (unchanged), two write ports because the divmul unit
-  produces two-register results (see
-  [Decision 1](#1-project-goals-and-non-goals)). Write port 1 is the
-  main WB-stage writeback (used by every instruction that writes a
-  GPR); write port 2 is dedicated to the divmul's `o_result_hi`
-  output and is only used at MUL/DIV completion. On ECP5, 2W is
-  implemented by **replicating** the distributed-RAM regfile: two
-  physical 16×32 banks, both written on any write, reads from either
-  bank. ~32 distributed-RAM LUTs of storage cost. Adding WB→ID
-  write-through in gen2.5 is still a small edit (one mux on the read
-  path).
+- The regfile is **2R/1W** in gen2 — two combinational read ports
+  for ID-stage operand reads, and a single write port. The divmul
+  unit produces two-register results (`Rd` low/quotient + `Rdh`
+  high/remainder; see [Decision 1](#1-project-goals-and-non-goals)),
+  but rather than a true second write port — which ECP5 1W/1R
+  distributed RAM cannot provide by replication (replication buys
+  *read* ports, not write ports) — divmul **sequences** its two
+  writes through the single port over two consecutive cycles,
+  stalling the pipeline one extra cycle. It is already stalled for
+  its ~33-cycle iteration, so the cost is negligible and no extra
+  writeback stage is added. On ECP5 the two read ports are provided
+  by **replicating** the distributed RAM (one 1W/1R copy per read
+  port, written in lockstep). Full spec in
+  [regfile.md](./regfile.md). Adding WB→ID write-through in gen2.5
+  is still a small edit (one mux on the read path).
 
 **Alternatives considered.** Scoreboard + WB→ID write-through
 (rejected for gen2: couples regfile timing to control, even though
@@ -469,9 +472,9 @@ benefit from a sequencer.
 - Hardware MUL/DIV (gen2 scope per
   [Decision 1](#1-project-goals-and-non-goals)) is single-µop with
   multi-cycle EX stall. Single instruction issued by ID; the divmul
-  unit iterates for ~34 cycles; then a single WB cycle writes both
-  `Rd` (low half or quotient) and `Rdh` (high half or remainder) via
-  the regfile's two write ports.
+  unit iterates for ~33 cycles; then it writes both `Rd` (low half
+  or quotient) and `Rdh` (high half or remainder) through the
+  regfile's single write port over two consecutive WB cycles.
 
 So the entire ISA is single-µop. The only multi-step event in the
 whole architecture is "one indirect load through a vector table during
@@ -538,11 +541,13 @@ clearly against keeping microcode.
 - **MUL/DIV (gen2 scope per
   [Decision 1](#1-project-goals-and-non-goals))**: multi-cycle EX
   stall on a single µop using the divmul unit (per gen1's
-  `divmul.md` spec). EX holds for ~34 cycles, back-pressuring
-  upstream. At completion, the instruction commits in one WB cycle
-  that writes both `Rd` via the main regfile write port and `Rdh`
-  via divmul's dedicated second write port (see
-  [Decision 4](#4-hazard-handling-strategy)). Divide-by-zero
+  `divmul.md` spec). EX holds for ~33 cycles, back-pressuring
+  upstream. At completion the instruction writes its two results
+  through the single regfile write port over two consecutive cycles
+  — `Rd` (low/quotient) then `Rdh` (high/remainder) — holding the
+  pipeline one extra cycle rather than using a second write port
+  (see [Decision 4](#4-hazard-handling-strategy) and
+  [regfile.md](./regfile.md)). Divide-by-zero
   (`DIV`/`DIVU` with `Rs = 0`) raises `VEC_ARITH` (vector 10);
   signed `INT_MIN / -1` does not trap (returns `INT_MIN`).
 

@@ -33,7 +33,8 @@ The *why* behind the choices recorded here lives in
   [hazard-model.md](./hazard-model.md).
 - Fault detection, fault propagation, save-state pulse details,
   vector-fetch FSM — see [exception-flow.md](./exception-flow.md).
-- Regfile port layout, banking, replication for 2W — see
+- Regfile port layout, banking, read-port replication, divmul
+  write sequencing — see
   [regfile.md](./regfile.md).
 - MMU and cache integration internals — see
   [mmu-internals.md](../mmu-internals.md) and
@@ -197,7 +198,7 @@ regfile read ports.
   [Decision 9](./design-decisions.md#9-drain-commit-primitive)).
 - For MUL/DIV: pulse `divmul.start` with operands; assert
   `divmul_stall` and hold the instruction in EX until
-  `divmul.busy` clears (~34 cycles).
+  `divmul.busy` clears (~33 cycles).
 - For ALU/load/store: latch ALU result, operand values needed
   downstream (e.g., store data for STx), control bundle, and
   this-PC into the EX/MEM register.
@@ -263,9 +264,10 @@ logic; the 1-cycle STALL FSM for D-cache and RDSYS access.
   ESR ← SR, mode-bits update, R14 bank-swap, IF goes into
   vector-fetch mode for `fault_vec`.
 - Clear the scoreboard valid bit for the just-written destination
-  (or two bits for MUL/DIV completion: main write port clears
-  `gpr_dst_lo`, divmul's `o_busy` falling edge clears
-  `gpr_dst_hi`).
+  (for MUL/DIV, both `Rd` and `Rdh` — the divmul occupies WB for
+  two cycles writing low then high through the single port, and both
+  bits return together when it leaves WB; see
+  [hazard-model.md §10](./hazard-model.md#10-interaction-with-divmul)).
 
 **Owns:** regfile main write port; SR write port; SPR file write
 ports; scoreboard set/clear (set on issue, cleared here on commit).
@@ -387,7 +389,7 @@ if the downstream stage's stall logic forces it).
 | Scoreboard pending | ID | Source operand's physical entry valid bit = 0 | [hazard-model.md](./hazard-model.md) |
 | Drain-commit drain | EX | ERET or WRSYS waiting for MEM/WB to drain | [Decision 9](./design-decisions.md#9-drain-commit-primitive) |
 | Drain-commit post-commit wait | EX (1 cycle for WRSYS) | Waiting for sysreg device to latch | [Decision 9](./design-decisions.md#9-drain-commit-primitive) |
-| divmul busy | EX | Multi-cycle MUL/DIV iteration (~34 cycles) | [Decision 1](./design-decisions.md#1-project-goals-and-non-goals) |
+| divmul busy | EX | Multi-cycle MUL/DIV iteration (~33 cycles) | [Decision 1](./design-decisions.md#1-project-goals-and-non-goals) |
 | **D-cache BRAM access (hit)** | MEM | 1-cycle STALL on every load/store to absorb BRAM output latency | [Decision 11](./design-decisions.md#11-bram-backed-caches-with-single-mem-stall) |
 | D-cache miss | MEM | Line fill in flight (continues from BRAM-access STALL) | [Decision 11](./design-decisions.md#11-bram-backed-caches-with-single-mem-stall) |
 | Sysreg sideband wait | MEM | RDSYS waiting one cycle for device's registered response (same STALL mechanism as D-cache hit) | [sysregs.md](../../system/sysregs.md) |
@@ -594,14 +596,20 @@ ADD R5, R1, R6   ; consumer (RAW on R1)
 | 2 | ADD | MUL | — | — | — | — | |
 | 3 | — | ADD | MUL | — | — | — | MUL issued; scoreboard[R1, Rdh] cleared |
 | 4 | — | — | ADD (stall) | MUL (start) | — | — | divmul.start pulsed |
-| 5–37 | — | — | ADD (stall) | MUL (busy) | bubble | bubble | EX held by divmul (~34 cycles) |
+| 5–37 | — | — | ADD (stall) | MUL (busy) | bubble | bubble | EX held by divmul (~33 cycles) |
 | 38 | — | — | ADD (stall) | MUL (done) | bubble | bubble | divmul done; result_lo + result_hi valid |
 | 39 | — | — | ADD (stall) | bubble | MUL | bubble | MUL advances to MEM (pass-through, no STALL — divmul output is not a memory access) |
-| 40 | — | — | ADD (issues) | bubble | bubble | MUL | WB writes Rd via main port + Rdh via divmul port; scoreboard cleared |
-| 41 | — | — | — | ADD | bubble | bubble | |
+| 40 | — | — | ADD (stall) | bubble | bubble | MUL | WB cycle 1: MUL writes Rd (low) via the single write port. Still in WB → `valid[R1]`/`valid[Rdh]` stay 0 |
+| 41 | — | — | ADD (stall) | bubble | bubble | MUL | WB cycle 2: MUL writes Rdh (high) via the same port; pipeline held this extra cycle |
+| 42 | — | — | ADD (issues) | bubble | bubble | — | MUL has left WB → `valid[R1]` and `valid[Rdh]` both set; ADD issues |
 
-Total stall on ADD: ~36 cycles. Cost dominates any sequence that
-issues a MUL or DIV — typical only on math-heavy code paths.
+Total stall on ADD: ~37 cycles (one more than a single-cycle
+divmul writeback would cost). Cost dominates any sequence that
+issues a MUL or DIV — typical only on math-heavy code paths. Both
+valid bits return together when the divmul leaves WB: the held
+extra cycle freezes the consumer too, so a low-half-only consumer
+gains nothing from the writes being ordered low-then-high (the
+ordering is for the single write port, not for early wakeup).
 
 ### Example 6: ERET (drain-commit)
 
@@ -636,7 +644,7 @@ upstream. Per syscall-return / IRQ-return; not hot path.
 - [exception-flow.md](./exception-flow.md) — fault detection,
   propagation, save-state pulse, vector-fetch FSM, IRQ
   drain-and-take, ERET commit.
-- [regfile.md](./regfile.md) — 2R/2W regfile, R14 banking, scoreboard
+- [regfile.md](./regfile.md) — 2R/1W regfile, R14 banking, scoreboard
   storage organization, distributed-RAM replication.
 - [cpu-bus.md](../cpu-bus.md) — CPU ↔ MMU ↔ cache interface
   contracts (shared with Penumbra/1).

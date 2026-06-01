@@ -166,11 +166,15 @@ penalty on taken branches.
   effect ordering w.r.t. younger instructions (e.g., `WRSYS TLB;
   ERET` to user mode). WRSYS additionally waits one cycle
   post-commit for the sysreg device to latch.
-- **2W regfile with divmul co-port.** The Penumbra ISA's MUL/DIV
-  write two GPRs per instruction (`Rd` low half + `Rdh` high
-  half). The regfile is replicated distributed RAM with two write
-  ports: port 1 for normal WB; port 2 dedicated to divmul's high
-  half. Single commit cycle for MUL/DIV completion.
+- **2R/1W regfile with sequenced divmul writeback.** The Penumbra
+  ISA's MUL/DIV write two GPRs per instruction (`Rd` low half +
+  `Rdh` high half). Rather than a true second write port (which
+  ECP5 1W/1R distributed RAM can't provide by replication), divmul
+  sequences its two writes through the single port over two
+  consecutive cycles, holding the pipeline one extra cycle — cheap,
+  since it already stalls ~33 cycles. The two read ports come from
+  replicating the distributed RAM. See
+  [regfile.md](./regfile.md).
 
 **Caches: BRAM-backed VIPT, scalable to 4 KB+.** Tags + data +
 valid arrays in BRAM with registered address (REGMODE_A=NOREG so
@@ -264,8 +268,8 @@ detail:
 - `hazard-model.md` — scoreboard mechanism in detail.
 - `exception-flow.md` — fault propagation, vector-fetch FSM,
   IRQ drain-and-take, ERET cycle-by-cycle.
-- `regfile.md` — 2R/2W replicated DPRAM, R14 banking, scoreboard
-  storage.
+- `regfile.md` — 2R/1W regfile (read-port replication, single-port
+  divmul write sequencing), R14 banking, USP/SSP storage.
 - `cache-bram-vipt.md` — the new BRAM-backed L1 cache module.
 
 ## Status
