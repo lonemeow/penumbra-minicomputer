@@ -1,11 +1,14 @@
 # Penumbra Documentation
 
-Welcome to the Penumbra Minicomputer documentation. This directory is organized by audience and technical domain to ensure information is relevant and easy to find.
+Welcome to the Penumbra Minicomputer documentation. This directory is
+organized by audience and technical domain to ensure information is
+relevant and easy to find.
 
 ## 📚 [System Reference](./system)
 **Target:** Compiler writers, OS porters, and driver developers.
 
-This section defines the programmer-visible behavior of the Penumbra architecture and its standard peripherals.
+This section defines the programmer-visible behavior of the Penumbra
+architecture and its standard peripherals.
 
 ### ISA & Software Environment
 *   **[Architecture Overview](./system/architecture.md)** — Design philosophy, registers, and memory model.
@@ -35,7 +38,8 @@ This section defines the programmer-visible behavior of the Penumbra architectur
 ## 🛠️ [Hardware Design](./hardware)
 **Target:** Board designers, external device implementers, and RTL engineers writing bus-protocol-compliant modules.
 
-Signal-level specifications for the Penumbra Bus (both sync and async forms) and related hardware interfaces.
+Signal-level specifications for the Penumbra Bus (both sync and async
+forms) and related hardware interfaces.
 
 *   **[Bus Protocol](./hardware/bus-protocol.md)** — Penumbra Bus terminology, async 4-phase handshake, sync-form mapping, signal timing.
 *   **[Autoconfig Hardware](./hardware/autoconfig-hardware.md)** — Electrical implementation of the `cfg` daisy-chain.
@@ -75,7 +79,15 @@ subdirectory owns its realization.
 
 ### Penumbra/2 (gen2 — in planning)
 
-The project's next major **CPU design era transition** — from Penumbra/1's classic discrete-logic / microcoded minicomputer style (~1970s-early-80s era) to the **simple pipelined RISC era of the late 1980s** (MIPS R2000/R3000, early SPARC). Same ISA as Penumbra/1, same NetBSD kernel boots on both, almost all of the surrounding system (bus, peripherals, MMU, L2, SDRAM) shared unchanged. The CPU core forks: hardwired control, 6-stage pipeline, BRAM-backed caches. gen2 targets correctness over performance; gen2.5 will add the early-1990s polish (forwarding, branch prediction).
+The project's next major **CPU design era transition** — from
+Penumbra/1's classic discrete-logic / microcoded minicomputer style
+(~1970s-early-80s era) to the **simple pipelined RISC era of the late
+1980s** (MIPS R2000/R3000, early SPARC). Same ISA as Penumbra/1, same
+NetBSD kernel boots on both, almost all of the surrounding system (bus,
+peripherals, MMU, L2, SDRAM) shared unchanged. The CPU core forks:
+hardwired control, 6-stage pipeline, BRAM-backed caches. gen2 targets
+correctness over performance; gen2.5 will add the early-1990s polish
+(forwarding, branch prediction).
 
 *   **[Penumbra/2 Overview](./internals/penumbra2/overview.md)** — Start here. Goals, architecture summary, gen2 / gen2.5 / future roadmap, reading guide.
 *   **[Penumbra/2 Design Decisions](./internals/penumbra2/design-decisions.md)** — The 11 architectural decisions, each with full rationale, alternatives considered, and consequences.
