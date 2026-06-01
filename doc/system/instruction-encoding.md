@@ -72,9 +72,9 @@ master opcode, crypto accelerator, etc.), and system ops at the top
 ### Format R sub-encoding for MUL/DIV
 
 `MUL`, `MULU`, `DIV`, and `DIVU` repurpose part of the spare field to
-carry a **third register operand** `Rdh` (the high-half result
-register, and for `DIV` the dividend high half input). The F bit is
-unused for these opcodes and must be 0.
+carry a **third register operand** `Rdh`, the high-half result
+register. It is **write-only**. The F bit is unused for these opcodes
+and must be 0.
 
 ```
 31 30  29     25 24   21 20   17 16  15  12 11           0
@@ -84,15 +84,13 @@ unused for these opcodes and must be 0.
 | Operation   | Behaviour                                                              |
 |-------------|------------------------------------------------------------------------|
 | MUL, MULU   | `Rdh:Rd = Rd × Rs`  (low half → Rd, high half → Rdh)                   |
-| DIV, DIVU   | `Rd, Rdh = (Rdh:Rd) / Rs, (Rdh:Rd) % Rs` (quotient → Rd, remainder → Rdh) |
+| DIV, DIVU   | `Rd, Rdh = Rd / Rs, Rd % Rs` (32/32: quotient → Rd, remainder → Rdh) |
 
-`DIV` reads `Rdh` as a source (dividend high half) and writes it back
-as the remainder; the unit captures the input in a single cycle before
-iteration starts. Setting `Rdh = R0` collapses the operation to a
-plain 32/32 divide — R0 reads as zero (so the dividend high half is
-zero) and writes to R0 are silently dropped (so the remainder is
-discarded). The same `R0` trick collapses `MUL` to "low 32 bits only"
-when the high half is not needed.
+`Rdh` is write-only for all four opcodes — there is no high-half
+*input*. `DIV`/`DIVU` are always 32/32: the dividend is the 32-bit `Rd`,
+and `Rdh` receives the remainder. Setting `Rdh = R0` discards the
+high-half result — writes to R0 are silently dropped — so the product
+high half (`MUL`) or remainder (`DIV`) simply vanishes when not needed.
 
 The assembler defaults the third operand to `R0` when omitted, so
 the common 32-bit forms look exactly like 2-operand arithmetic:
@@ -101,14 +99,14 @@ the common 32-bit forms look exactly like 2-operand arithmetic:
 MUL  R1, R2              ; encoded as MUL R1, R2, R0 — low 32 bits only
 MUL  R1, R2, R3          ; full 64-bit product: R3:R1 = R1 × R2
 DIV  R1, R2              ; 32/32: R1 = R1/R2, remainder discarded
-DIV  R1, R2, R3          ; quotient → R1, remainder → R3 (R3 also reads as dividend hi)
-DIV  R1, R2, R3          ; narrowing 64/32 form: (R3:R1)/R2 → R1, remainder → R3
+DIV  R1, R2, R3          ; 32/32: quotient → R1, remainder → R3
 ```
 
-Note the syntactic identity of the last two cases: there is no separate
-"narrowing-DIV" mnemonic. Whether DIV is 32/32 or 64/32 depends entirely
-on whether `Rdh` reads as zero (`R0`) or holds an extended-dividend
-high half. The hardware performs the same iteration either way.
+There is no 64/32 narrowing-divide form — no mnemonic carries a
+dividend high half, because the unit has no high-half input. See the
+[instruction set guide](./instruction-set.md#muldiv-register-pair-semantics)
+for the rationale (Penumbra has a real 32×32→64 `MUL`, so it never
+needs a narrowing divide to undo a widening multiply).
 
 `Rdh[15:12]` reuses the same bit positions that hold the SPR number
 (`RDSPR`/`WRSPR`) and device number (`WRSYS`/`RDSYS`) — the existing
@@ -251,9 +249,9 @@ microcode writes PC+4 into R13 before branching.
 
 ## Implementation Status
 
-Instructions marked **Yes** have working microcode and pass simulation
-tests. Instructions marked **Trap** dispatch to the illegal-instruction
-handler for software emulation.
+Instructions marked **Yes** are implemented in hardware and pass
+simulation tests. Opcodes not listed here are unallocated and dispatch
+to the illegal-instruction handler (`VEC_ILLEGAL`).
 
 | Instruction                       | Implemented | Notes                               |
 |-----------------------------------|:-----------:|-------------------------------------|
@@ -263,8 +261,8 @@ handler for software emulation.
 | MOV                               | Yes         | No flag update                      |
 | NOT                               | Yes         | Updates flags                       |
 | CMP, TEST                         | Yes         | SUB/AND with F-bit                  |
-| MUL, MULU                         | Trap        | Spec'd (32×32→64 via optional `Rdh`); HW pending. Currently illegal-instr trap → SW emulation |
-| DIV, DIVU                         | Trap        | Spec'd (32/32 or 64/32 via optional `Rdh`); DIV0 and quotient-overflow → `VEC_ARITH` (defensive); HW pending |
+| MUL, MULU                         | Yes         | Hardware `divmul` peer unit; 32×32→64, high half → optional `Rdh` |
+| DIV, DIVU                         | Yes         | Hardware `divmul` peer unit; 32/32, remainder → optional `Rdh`; DIV0 → `VEC_ARITH` |
 | LLI, LLIS, LUI                    | Yes         |                                     |
 | ADD/SUB/CMP/AND/TEST #imm         | Yes         | Format L encoding                   |
 | LDW, STW                          | Yes         | Stall-based, latency-agnostic       |

@@ -52,8 +52,9 @@ gotchas) for working inside a subtree:
 - **Discrete-logic constraint:** every design decision must be feasible
   in 74xx discrete logic (no FPGA-specific tricks the chip-level rebuild
   could not match).
-- **MUL/DIV/FP:** unified ALU, multi-cycle ops use `alu_start`/`alu_busy`;
-  MUL/DIV currently trap to software emulation; FP is software-only.
+- **MUL/DIV/FP:** MUL/DIV execute in hardware on the `divmul` peer unit
+  (own `start`/`busy` handshake, ~33-cycle iteration); divide-by-zero is
+  detected in hardware and raises `VEC_ARITH`. FP is software-only.
 
 ## Conventions
 
