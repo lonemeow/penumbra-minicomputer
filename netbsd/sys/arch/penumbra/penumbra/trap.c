@@ -53,20 +53,9 @@ void	timer_tc_tick(void);	/* machdep.c — advance timecounter base */
 	| (((s) & (1 << FSTAT_X)) ? VM_PROT_EXECUTE : 0))
 
 static void
-user_trap_signal(int signo, int code, vaddr_t addr, int trap,
-    struct trapframe *tf)
+user_trap_signal(int signo, int code, vaddr_t addr, int trap)
 {
 	ksiginfo_t ksi;
-
-	printf("user signal: pid %d (%s) sig %d code %d "
-	    "addr 0x%08x pc 0x%08x trap %d\n",
-	    curproc->p_pid, curproc->p_comm,
-	    signo, code, (uint32_t)addr, (uint32_t)tf->tf_epc, trap);
-	printf("  LR=0x%08x SP=0x%08x R1=0x%08x R2=0x%08x "
-	    "R11=0x%08x\n",
-	    tf->tf_regs[TF_LR], tf->tf_regs[TF_SP],
-	    tf->tf_regs[TF_R1], tf->tf_regs[TF_R2],
-	    tf->tf_regs[TF_R11]);
 
 	KSI_INIT_TRAP(&ksi);
 	ksi.ksi_signo = signo;
@@ -158,7 +147,7 @@ trap(struct trapframe *tf)
 		 */
 		if (usermode && va >= VM_MIN_KERNEL_ADDRESS) {
 			user_trap_signal(SIGSEGV, SEGV_MAPERR,
-			    tf->tf_badvaddr, type, tf);
+			    tf->tf_badvaddr, type);
 			break;
 		}
 		if (va >= VM_MIN_KERNEL_ADDRESS) {
@@ -202,7 +191,7 @@ trap(struct trapframe *tf)
 		if (usermode) {
 			user_trap_signal(SIGSEGV,
 			    type == EXC_TLB_PROT ? SEGV_ACCERR : SEGV_MAPERR,
-			    tf->tf_badvaddr, type, tf);
+			    tf->tf_badvaddr, type);
 			break;
 		}
 #ifdef DDB
@@ -220,7 +209,7 @@ trap(struct trapframe *tf)
 	case EXC_BUSFAULT:
 		if (usermode) {
 			user_trap_signal(SIGBUS, BUS_ADRERR,
-			    tf->tf_badvaddr, type, tf);
+			    tf->tf_badvaddr, type);
 			break;
 		}
 #ifdef DDB
@@ -234,7 +223,7 @@ trap(struct trapframe *tf)
 	case EXC_PRIV:
 		if (usermode) {
 			user_trap_signal(SIGILL, ILL_PRVOPC,
-			    tf->tf_epc, type, tf);
+			    tf->tf_epc, type);
 			break;
 		}
 		panic("kernel privilege violation at pc=0x%08x",
@@ -250,7 +239,7 @@ trap(struct trapframe *tf)
 	case EXC_BREAK:
 		if (usermode) {
 			user_trap_signal(SIGTRAP, TRAP_BRKPT,
-			    tf->tf_epc, type, tf);
+			    tf->tf_epc, type);
 			break;
 		}
 #ifdef DDB
@@ -264,7 +253,7 @@ trap(struct trapframe *tf)
 	case EXC_ILLEGAL:
 		if (usermode) {
 			user_trap_signal(SIGILL, ILL_ILLOPC,
-			    tf->tf_epc, type, tf);
+			    tf->tf_epc, type);
 			break;
 		}
 		panic("kernel illegal instruction at pc=0x%08x",
@@ -274,7 +263,7 @@ trap(struct trapframe *tf)
 	case EXC_ALIGN:
 		if (usermode) {
 			user_trap_signal(SIGBUS, BUS_ADRALN,
-			    tf->tf_badvaddr, type, tf);
+			    tf->tf_badvaddr, type);
 			break;
 		}
 		panic("kernel alignment fault at va=0x%08x, pc=0x%08x",
@@ -284,7 +273,7 @@ trap(struct trapframe *tf)
 	case EXC_ARITH:
 		if (usermode) {
 			user_trap_signal(SIGFPE, FPE_INTDIV,
-				tf->tf_epc, type, tf);
+				tf->tf_epc, type);
 			break;
 		}
 		panic("kernel divide by zero at pc=0x%08x",
