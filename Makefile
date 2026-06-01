@@ -164,8 +164,9 @@ MODULE_TESTS = \
     pc_reg \
     regfile \
     status_reg \
-    uart \
     wmux \
+    penumbra2_regfile \
+    uart \
     busctl \
     tlb \
     tlb_pinned \
