@@ -348,7 +348,7 @@ needed for the vector page. `vector_addr = vector_number × 4`.
 | 7      | 0x1C | `VEC_ILLEGAL`   | Illegal instruction                 |
 | 8      | 0x20 | `VEC_ALIGN`     | Alignment fault (fetch + data)      |
 | 9      | 0x24 | `VEC_EXT_IRQ`   | External device IRQ (wired-OR)      |
-| 10     | 0x28 | `VEC_ARITH`     | Arithmetic fault (DIV0, narrowing-DIV overflow — defensive) |
+| 10     | 0x28 | `VEC_ARITH`     | Arithmetic fault (DIV0 — defensive) |
 | 11–15  | —    | —               | Reserved (future NMI, etc.)         |
 
 **Reset does not use the vector table.** The CPU boots at `RESET_PC`

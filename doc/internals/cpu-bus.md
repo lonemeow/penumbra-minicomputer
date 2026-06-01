@@ -223,7 +223,7 @@ slower.
   `S_FETCH` with `cache_busy=0`. This requires MMU + cache hit-path
   combinationally present in the same cycle as the registered PC.
 - **STALL-based load/store.** The micro-sequencer holds the micro-PC
-  while `cache_busy | alu_busy` is high and advances exactly on the
+  while `divmul_busy | mem_busy` is high and advances exactly on the
   cycle busy drops. This requires that the drop coincide with valid
   data, not lead it by one cycle.
 - **Exception priority.** Bus fault > alignment > TLB protection >

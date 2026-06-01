@@ -223,7 +223,7 @@ Controls micro-sequencer flow. Determines whether the micro-PC advances, holds, 
 2. `busy` deasserted → advance to next micro-op
 3. `busy` still asserted → hold micro-PC (repeat this micro-word)
 
-The unified busy signal is `cache_busy | alu_busy`. Memory and ALU ops never overlap in the same micro-op.
+The unified busy signal is `divmul_busy | mem_busy`. Memory and divmul ops never overlap in the same micro-op.
 
 **BRT/BRF details:** Both always return to fetch (`go_fetch=1`). The difference is in `pc` override:
 - BRT: if ISA condition **false**, force `pc = NEXT` (fall through)
