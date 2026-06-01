@@ -1,5 +1,7 @@
 # Penumbra/2 — Control Decode
 
+> **Applies to:** Penumbra/2 · pipelined core.
+
 This document specifies how Penumbra/2 turns a 32-bit instruction
 word into the control signals that drive each pipeline stage. It
 covers the decode architecture (hardwired, no microcode), the four

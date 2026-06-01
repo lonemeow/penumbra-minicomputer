@@ -1,5 +1,7 @@
 # SDRAM Controller v2 — Design Plan
 
+> **Applies to:** all generations · shared hardware.
+
 This document is the canonical design plan for the SDR SDRAM controller
 rewrite (**v2**). The original SDR controller (formerly at
 `hw/rtl/io/sdram.sv`) was replaced because of marginal hardware timing,

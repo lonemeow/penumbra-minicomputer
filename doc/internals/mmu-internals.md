@@ -1,5 +1,7 @@
 # Penumbra MMU — Hardware Design
 
+> **Applies to:** all generations · shared hardware.
+
 ## TLB Hardware
 
 Two parallel lookup structures, combined with pinned-hit-wins priority:
@@ -33,27 +35,26 @@ Two parallel lookup structures, combined with pinned-hit-wins priority:
 
 **Total: ~40 ICs for the complete TLB subsystem.**
 
-## Cache Hardware
+## VIPT L1 Cache — Architectural Constraint
 
-Split I/D direct-mapped VIPT caches (1 KiB each, 64 sets × 4-word lines):
-- Index and word offset come from the virtual address (`i_vaddr[9:0]`),
-  so the cache RAM lookup runs in parallel with TLB translation.
-- Tag compare uses the physical address (`i_paddr[31:10]`) once
-  translation completes, gated by valid + permission.
-- Aliasing-free precondition: cache size ≤ page size (1 KiB ≤ 4 KiB),
-  so the index+offset bits live entirely inside the page offset where
-  vaddr and paddr are bit-identical. No synonym/homonym handling, no
-  page coloring, no ASID flushes — VIPT is purely a timing change here.
-- Read miss: burst-fills entire line (4 words) from memory.
-- Write hit: updates cache line (byte-granular) + writes through to memory.
-- Write miss: pass-through (write-no-allocate).
-- Uncacheable (C=0): pass-through to memory.
+The split I/D L1 caches are **virtually-indexed, physically-tagged
+(VIPT)** so the cache RAM lookup overlaps TLB translation: the index
+and word offset come from the virtual address, while the tag compare
+uses the physical address once translation completes.
 
-The cache state machine reacts to its inputs via registered shadow
-flops (`i_re_q`, `i_we_q`, `hit_q`, `i_paddr_q`, …) so a real flop
-boundary sits between the microcode-driven cache inputs and the cache
-state-machine D-cone. The combinational hit path (vaddr → idx ‖ TLB →
-tag compare → o_rdata, o_busy) stays untouched, preserving the
-zero-cycle hit. CPU-visible cost: read-miss fills, write-throughs, and
-invalidates start one cycle later internally; the CPU stalls naturally
-through this via the unchanged `o_busy` contract.
+The load-bearing invariant — true for **any** Penumbra L1, regardless
+of generation — is **cache size ≤ page size**. With a 4 KiB page, an
+L1 way ≤ 4 KiB keeps the index + offset bits entirely inside the page
+offset, where the virtual and physical addresses are bit-identical.
+That makes the cache alias-free for free: no synonym/homonym handling,
+no page colouring, no ASID flushes. VIPT is then purely a timing
+choice, not a correctness one.
+
+This constraint binds the architecture; the *realization* — storage
+type, hit latency, line/set geometry, fill and write policy — is
+per-generation:
+
+- **Penumbra/1** — distributed-RAM, zero-cycle combinational hit. See
+  [`penumbra1/l1-cache.md`](penumbra1/l1-cache.md).
+- **Penumbra/2** — BRAM-backed, registered (one-cycle) hit. Documented
+  under `penumbra2/` once that RTL exists.

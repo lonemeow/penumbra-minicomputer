@@ -1,5 +1,7 @@
 # SDRAM Controller Optimization Notes
 
+> **Applies to:** all generations · shared hardware.
+
 The SDRAM controller (`hw/rtl/io/sdram/sdram_ctrl.sv`) advances through
 a sequence of optimisation levels.  Level 1 (open-row tracking, no
 auto-precharge) is live; Levels 2 and 3 are deferred design plans.

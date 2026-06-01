@@ -67,7 +67,7 @@ region**, with peer-unit ops (MUL/MULU/DIV/DIVU) in the low quarter,
 master opcode, crypto accelerator, etc.), and system ops at the top
 (`10111`–`11111`). The micro-sequencer's dispatch formula
 (`{0, op[4], 0, op[3:0], 0}`) inherits this partition directly — see
-[datapath.md](../internals/datapath.md).
+[datapath.md](../internals/penumbra1/datapath.md).
 
 ### Format R sub-encoding for MUL/DIV
 

@@ -1,5 +1,7 @@
 # Penumbra CPU-Internal Bus
 
+> **Applies to:** all generations · shared hardware.
+
 This document specifies the interfaces *inside* the CPU, between the
 core, the MMU, the caches, and the CPU-private sysreg devices. These
 contracts are private to the core's microarchitecture — no off-chip
@@ -37,6 +39,15 @@ this document applies. If it sits at machine-level (in `machine_sim.sv`
 or `ulx3s_top.sv`), it does not.
 
 ## Topology
+
+The interfaces below — core ↔ MMU, core ↔ split I/D caches, core ↔
+CPU-private sysreg devices — are a **contract that both CPU
+generations satisfy**, not a generation-specific design. The figure
+illustrates it with Penumbra/1's structure (PC/MAR driving addresses
+from the microcoded datapath); Penumbra/2 honours the same boundaries
+from its pipeline stages. Where a signal's timing or sequencing is
+generation-specific, that belongs in the generation's own docs
+(`penumbra1/`, `penumbra2/`), not here.
 
 ```
 ┌──────────────────────────── cpu_core ────────────────────────────┐
@@ -273,7 +284,7 @@ contract translates directly to a multi-IC implementation. See
   of sysregs (device map, register layouts).
 - [`doc/system/mmu.md`](../system/mmu.md) — Programmer's view of the
   MMU.
-- [`doc/internals/datapath.md`](datapath.md) — Datapath and STALL
+- [`doc/internals/penumbra1/datapath.md`](penumbra1/datapath.md) — Datapath and STALL
   semantics.
-- [`doc/internals/microcode.md`](microcode.md) — Sequencer and
+- [`doc/internals/penumbra1/microcode.md`](penumbra1/microcode.md) — Sequencer and
   micro-word format.

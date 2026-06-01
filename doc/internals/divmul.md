@@ -1,5 +1,11 @@
 # Penumbra CPU — MUL/DIV Unit (divmul)
 
+> **Applies to:** all generations · shared peer unit. The algorithm,
+> handshake, and internal datapath are identical on both cores; *how a
+> core drives the unit* — microcode on Penumbra/1, an EX-stage start
+> plus a sequenced two-write commit on Penumbra/2 — lives in that
+> core's docs.
+
 ## Overview
 
 The divmul unit implements hardware multiply and divide for the
@@ -17,16 +23,15 @@ the remainder. Writes to `R0` are silently dropped, which is how the
 32/32; there is no 64/32 narrowing form (see the rationale in
 [instruction-set.md](../system/instruction-set.md)).
 
-The unit is a **peer to the ALU**, sitting alongside it on the
-register-bus fabric. It uses the same micro-sequencer protocol pattern
-the ALU would have used for a multi-cycle op (1-cycle start pulse →
-busy assertion → unified STALL → writeback), but with its **own**
-`divmul_start`/`divmul_busy`/`divmul_op` signals — there is no shared
-ALU FSM, and the ALU itself is single-cycle only (see
-[datapath.md](./datapath.md)). From the micro-sequencer's perspective
-MUL/DIV look like any other busy-asserting operation; only the STALL
-gate sees that there are multiple busy sources to OR together
-(`cache_busy | divmul_busy | …`).
+The unit is a **peer to the ALU**, not part of it: a separate block on
+the register-bus fabric with its own operand latches and FSM, driven
+by a 1-cycle `start` pulse and reporting a `busy` level (the ALU
+itself is single-cycle and never asserts busy). The CPU's control
+logic latches operands, pulses `start`, then holds until `busy` falls
+— looking, from the control side, like any other busy-asserting
+multi-cycle operation that joins the unified busy/STALL gate
+(`cache_busy | divmul_busy | …`). How each generation expresses that
+driving differs — see [Driving the Unit](#driving-the-unit-per-generation).
 
 ## External Interface
 
@@ -168,48 +173,35 @@ signs, remainder sign = dividend sign.
 returns `INT_MIN` (the unsigned engine yields `0x80000000`, which the
 sign rules leave unnegated) and does not fault.
 
-## Microcode Sequences
+## Driving the Unit (per generation)
 
-Each of MUL/MULU/DIV/DIVU is a 3-µop routine. The ×2 dispatch spacing
-gives each opcode two ROM slots; the third µop is a shared high-half
-writeback tail reached via `SKIP`. The dispatch slots are `0x40` (MUL),
-`0x42` (MULU), `0x44` (DIV), `0x46` (DIVU) — at the top of the µROM's
-op[4]=1 region. The shared tail sits at `0x49` (op20's second slot,
-never a dispatch target).
+How a core sequences `start`, the busy-wait, and the two-result commit
+is generation-specific and lives in that core's docs:
 
-```
-op-0:  reg_a=IR_RD reg_b=IR_RS alu=<op> divmul_start=1 STALL
-       ; latches Rd/Rs into divmul, waits for ~33-cycle iteration.
-       ; o_fault is checked at the STALL: if it asserts, the sequencer
-       ; aborts to VEC_ARITH instead of advancing.
+- **Penumbra/1** — a 3-µop microcode routine per opcode (dispatch slots
+  `0x40`–`0x46` with a shared high-half writeback tail). See the
+  *MUL/DIV dispatch routines* in
+  [`penumbra1/microcode.md`](./penumbra1/microcode.md#muldiv-dispatch-routines).
+- **Penumbra/2** — started in EX, with `Rd` and `Rdh` committed across
+  two consecutive writeback cycles through the single write port. See
+  [`penumbra2/regfile.md`](./penumbra2/regfile.md).
 
-op-1:  reg_w=IR_RD w_en=1 wb_src=DML_LO w_flags=1  SKIP→0x49
-       ; writes the low half (quotient / product low) to Rd, latches Z/N.
-
-tail:  reg_w=IR_RDH w_en=1 wb_src=DML_HI
-       ; writes the high half (remainder / product high) to Rdh.
-       ; If Rdh=R0 (2-operand form), the regfile silently drops the
-       ; write — no microcode branch needed.
-```
-
-The divmul op is decoded from `i_alu_op` (which the sequencer already
-emits for ALU ops); no separate `divmul_op` micro-word field is needed.
-The micro-word grew from 51 to 52 bits to add `wb_src` (2 bits,
-RBUS/MDR/DML_LO/DML_HI) in place of the old 1-bit `wmux`; `divmul_start`
-reused the old `alu_start` field bit. Total microcode footprint: 4
-dispatch slots × 2 entries + 1 shared tail = 9 ROM entries.
+The unit itself is unchanged between them: it presents `o_result_lo`
+and `o_result_hi` combinationally once `busy` falls, and the consumer
+commits them per its own writeback policy. Writing the high half to
+`R0` (the 2-operand form) is dropped by the register file with no
+special-casing in either core.
 
 ## Arithmetic Faults — `VEC_ARITH`
 
 `o_fault` is combinational from the start cycle: the unit knows
 immediately whether to fault (divisor is zero). A faulting divide does
-not iterate; the sequencer aborts to `VEC_ARITH` on the same cycle.
-
-| Condition                          | Resolution                                  |
-|------------------------------------|---------------------------------------------|
-| `divmul_busy=1`                    | Hold micro-PC                               |
-| `divmul_busy=0`, `o_fault=0`       | micro-PC++ (normal)                         |
-| `divmul_busy=0`, `o_fault=1`       | Trigger exception, `vector_num = VEC_ARITH` |
+not iterate. The contract to the CPU is generation-neutral: while
+`busy`, hold; when `busy` falls with `o_fault=0`, proceed and commit
+the result; when `busy` falls with `o_fault=1`, raise `VEC_ARITH`
+instead of committing. Because the divisor-zero test is combinational
+at start, a faulting divide can signal on the same cycle without
+iterating.
 
 EPC points at the trapping `DIV` instruction. The kernel handler
 delivers `SIGFPE` and leaves EPC alone, so a userland `SIGFPE` handler
@@ -222,7 +214,8 @@ implementation has no requirement to deliver the fault quickly — it
 only needs to stop the iteration immediately and signal before the next
 instruction commits.
 
-The fault priority ordering on STALL resolution becomes:
+When an arithmetic fault races a memory fault in the same instruction,
+the priority ordering is:
 bus_fault (0) > align (8) > tlb_prot (3) > tlb_miss (2) > arith (10).
 Memory faults strictly outrank arithmetic faults because they indicate
 a more fundamental problem (no device responded, misalignment).
@@ -306,14 +299,15 @@ worth it for the first build.
 
 - **ISA spec:** finalized (this document + `instruction-encoding.md` +
   `instruction-set.md`).
-- **Microcode:** implemented. Dispatch slots 0x40 (MUL), 0x42 (MULU),
-  0x44 (DIV), 0x46 (DIVU) hold the 3-µop routines; the shared high-half
-  writeback tail is at 0x49.
-- **RTL:** implemented (`hw/rtl/penumbra1/divmul.sv`). The sequencer drives
-  the peer unit via `divmul_start` (reusing the old `alu_start` field
-  bit), stalls on `i_divmul_busy`, and aborts on `o_fault → VEC_ARITH`.
-  Results reach the register file via the `wb_src` writeback-source mux
-  (`DML_LO`/`DML_HI`), not through the R-bus.
+- **RTL (unit):** implemented (`hw/rtl/penumbra1/divmul.sv`) — the
+  algorithm, handshake, and datapath described above. Promoted to
+  `hw/rtl/common/` once Penumbra/2 instantiates it.
+- **Penumbra/1 driving:** microcode implemented. Dispatch slots 0x40
+  (MUL), 0x42 (MULU), 0x44 (DIV), 0x46 (DIVU) hold the 3-µop routines
+  with a shared high-half writeback tail at 0x49; the sequencer drives
+  `divmul_start` (reusing the old `alu_start` field bit), stalls on
+  `i_divmul_busy`, aborts on `o_fault → VEC_ARITH`, and routes results
+  through the `wb_src` mux (`DML_LO`/`DML_HI`).
 - **ISS:** implements MUL/MULU/DIV/DIVU end-to-end with both halves and
   `VEC_ARITH` (`sw/sim/penumbra_iss.cpp`).
 - **LLVM backend:** open work (`doc/TODO.md`). Today every 32-bit MUL/
@@ -327,7 +321,7 @@ worth it for the first build.
   MUL/DIV reference, assembler syntax, register-pair convention, DIV0 trap
 - [`doc/system/instruction-encoding.md`](../system/instruction-encoding.md) — Format R
   opcode partition, sub-encoding with `Rdh`
-- [`doc/internals/datapath.md`](./datapath.md) — ALU vs peer-unit
-  partitioning, micro-sequencer STALL behaviour
+- [`doc/internals/penumbra1/datapath.md`](./penumbra1/datapath.md) — ALU vs peer-unit
+  partitioning, Penumbra/1 micro-sequencer STALL behaviour
 - [`doc/system/architecture.md`](../system/architecture.md) — `VEC_ARITH`
   in the exception vector table

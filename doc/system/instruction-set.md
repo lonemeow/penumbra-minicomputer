@@ -161,7 +161,7 @@ If the dividend can be clobbered, the `MOV` is unnecessary.
 
 `MUL` and `DIV` are multi-cycle: they stall the pipeline while the
 divmul peer unit iterates (~33 cycles per operation). See
-[datapath.md](../internals/datapath.md) and
+[datapath.md](../internals/penumbra1/datapath.md) and
 [divmul.md](../internals/divmul.md) for the peer-unit / STALL contract.
 
 #### Arithmetic faults

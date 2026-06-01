@@ -1,5 +1,7 @@
 # Penumbra CPU - Datapath
 
+> **Applies to:** Penumbra/1 · microcoded core.
+
 ## Overview
 
 The Penumbra CPU uses a three-bus datapath controlled by horizontal microcode. The PC is separate from the register file and ALU, with its own dedicated adder for branches. All data operations flow through the ALU; all control flow operations go through the PC unit.
@@ -122,7 +124,7 @@ PASS-through all complete combinationally; the ALU has no internal state and
 never stalls. Multi-cycle compute lives in **peer units** that sit alongside
 the ALU — the divmul unit handles MUL/DIV (32×32→64 multiply, 32/32 divide;
 the optional write-only `Rdh` operand carries the product high half or the
-remainder — see [divmul.md](./divmul.md)), and a
+remainder — see [divmul.md](../divmul.md)), and a
 future FPU unit will handle floating-point.
 Each peer unit owns its own start/busy/op signals (`divmul_start`,
 `divmul_busy`, `divmul_op`; later `fpu_start`/`fpu_busy`/`fpu_op`) and its
@@ -137,7 +139,7 @@ high half → `Rdh` from IR[15:12]), so its micro-routine has two writeback
 micro-ops, not one. The ALU's own writeback is unchanged — single cycle,
 single register.
 
-MUL/DIV execute on the divmul peer unit ([divmul.md](./divmul.md)); the
+MUL/DIV execute on the divmul peer unit ([divmul.md](../divmul.md)); the
 two-writeback micro-routine above is theirs. FPU operations follow the same
 template once their unit exists.
 ```
@@ -474,15 +476,15 @@ Condition evaluation hardware: each condition is a simple combinational function
 
 **Total: 51 bits**
 
-See `doc/internals/microcode.md` for the authoritative single-source field reference, value tables, and full micro-routine catalog. The summary above mirrors `hw/rtl/penumbra1/sequencer.sv` field extraction at lines 111–136.
+See `doc/internals/penumbra1/microcode.md` for the authoritative single-source field reference, value tables, and full micro-routine catalog. The summary above mirrors `hw/rtl/penumbra1/sequencer.sv` field extraction at lines 111–136.
 
-The ALU is the **single-cycle** compute unit. All ALU operations (ADD, SUB, AND, OR, XOR, SHL, SHR, SAR, PASS_A, PASS_B, NOT) produce results combinationally; the ALU has no internal state and never asserts a busy signal. Multi-cycle compute is delegated to **peer units** alongside the ALU — the divmul unit owns MUL/DIV (32×32→64 multiply, 32/32 divide; the optional write-only `Rdh` operand carries the product high half or remainder — see [divmul.md](./divmul.md)), and a future FPU unit will own floating-point. Each peer has its own `*_start`/`*_busy`/`*_op` signals in the micro-word, its own operand latches and FSM, and joins the unified STALL gate (`cache_busy | divmul_busy | fpu_busy`).
+The ALU is the **single-cycle** compute unit. All ALU operations (ADD, SUB, AND, OR, XOR, SHL, SHR, SAR, PASS_A, PASS_B, NOT) produce results combinationally; the ALU has no internal state and never asserts a busy signal. Multi-cycle compute is delegated to **peer units** alongside the ALU — the divmul unit owns MUL/DIV (32×32→64 multiply, 32/32 divide; the optional write-only `Rdh` operand carries the product high half or remainder — see [divmul.md](../divmul.md)), and a future FPU unit will own floating-point. Each peer has its own `*_start`/`*_busy`/`*_op` signals in the micro-word, its own operand latches and FSM, and joins the unified STALL gate (`cache_busy | divmul_busy | fpu_busy`).
 
 Future FPU note: floating-point operands live in GPRs (no separate FP register file). The FPU will be its own peer unit, structurally identical to the divmul: `fpu_start`/`fpu_busy`/`fpu_op` in the micro-word, its own internal state, joined into the same STALL gate. FP compare updates NZCV via `flag_w_en`, so normal Bcc works for FP branches. When FPU hardware is absent, the microcode ROM fills FP opcode entries with illegal-instruction exception micro-ops — zero runtime overhead, and the FPU unit need not exist in silicon. MUL/DIV already took exactly this trajectory: once illegal-instruction traps in the ROM, their opcode entries now dispatch to the divmul peer unit.
 
 Design history: the original draft specified 52 bits (actually 55 when counted correctly). Microcode validation identified missing signals for exception entry and unnecessary sequencer complexity. The separate long-latency unit (`lu_op[1:0]`) was initially folded into the ALU as a unified compute unit, with `alu_op` expanded to 5 bits. The privilege check moved from a microcode branch (old `branch_cond=PRIV`) to a dedicated `priv` bit at [50], and the `ei_set`/`di_set` bits at [1:0] (formerly spare) absorbed the EI/DI side effects, giving the 51-bit micro-word documented in the table above.
 
-Subsequent design note: when hardware planning for MUL/DIV began, the divmul work re-extracted them as a **peer unit** alongside the ALU — same micro-sequencer protocol (start / busy / STALL), but private `divmul_start`/`divmul_busy`/`divmul_op` signals so divmul's iteration mux does not deepen the ALU's combinational path (the fmax-critical `upc → µROM → ctrl → regfile → ALU → flag_z` chain). When divmul landed, `divmul_start` reused the old `alu_start` micro-word bit rather than widening the word (see [divmul.md](./divmul.md) and `microcode.md`). The ISA contract is unchanged — only the implementation moved.
+Subsequent design note: when hardware planning for MUL/DIV began, the divmul work re-extracted them as a **peer unit** alongside the ALU — same micro-sequencer protocol (start / busy / STALL), but private `divmul_start`/`divmul_busy`/`divmul_op` signals so divmul's iteration mux does not deepen the ALU's combinational path (the fmax-critical `upc → µROM → ctrl → regfile → ALU → flag_z` chain). When divmul landed, `divmul_start` reused the old `alu_start` micro-word bit rather than widening the word (see [divmul.md](../divmul.md) and `microcode.md`). The ISA contract is unchanged — only the implementation moved.
 
 ### Micro-Sequencer
 
@@ -523,7 +525,7 @@ Format B: dispatch = (cond==1111) ? 0x62 : 0x60  → Bcc at 0x60, BL at 0x62
 Exception: hardwired                              → entry 0x70
 ```
 
-Multi-micro-op instructions (loads, stores, JALR, RDSYS, ERET, BL) occupy consecutive ROM addresses inside their dispatch slot. The microcode assembler validates slot boundaries (see `doc/internals/microcode.md` § ROM Organization for the slot-size table per zone). Interrupt entry (`int_entry`) occupies a dedicated 4-µ-op slot at 0x70, reached by hardware dispatch on `except_entry`.
+Multi-micro-op instructions (loads, stores, JALR, RDSYS, ERET, BL) occupy consecutive ROM addresses inside their dispatch slot. The microcode assembler validates slot boundaries (see `doc/internals/penumbra1/microcode.md` § ROM Organization for the slot-size table per zone). Interrupt entry (`int_entry`) occupies a dedicated 4-µ-op slot at 0x70, reached by hardware dispatch on `except_entry`.
 
 Microcode ROM size: 256 entries × 51 bits ≈ 13 Kbit (1 EBR on ECP5, or 7 byte-wide ROM chips in discrete with 5 spare bits for future expansion).
 

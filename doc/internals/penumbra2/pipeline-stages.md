@@ -1,5 +1,7 @@
 # Penumbra/2 — Pipeline Stages
 
+> **Applies to:** Penumbra/2 · pipelined core.
+
 This document specifies the **6-stage pipeline structure** of Penumbra/2:
 which work happens in which stage, what state lives in each
 inter-stage pipeline register, and how stalls and squashes propagate

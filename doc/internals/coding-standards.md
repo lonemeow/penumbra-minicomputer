@@ -1,5 +1,7 @@
 # Penumbra Hardware - Coding Standards
 
+> **Applies to:** all generations · shared hardware.
+
 This document defines the RTL coding standards for the Penumbra project. All hardware modules written in SystemVerilog must adhere to these conventions to ensure consistency, maintainability, and compatibility with the toolchain (Verilator, Yosys).
 
 ## 1. Language and Style

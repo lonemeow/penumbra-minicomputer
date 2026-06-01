@@ -1,5 +1,7 @@
 # Penumbra/2 — Register File
 
+> **Applies to:** Penumbra/2 · pipelined core.
+
 This document specifies the Penumbra/2 general-purpose register file:
 its storage organisation, the two read ports, the single write port
 and how divmul's two-destination result is sequenced through it, the

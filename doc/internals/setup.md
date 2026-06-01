@@ -1,5 +1,7 @@
 # Penumbra Development Environment Setup
 
+> **Applies to:** all generations · shared hardware.
+
 ## Platform
 Developed on Ubuntu 22.04 (WSL2). Instructions assume a Debian-based system.
 

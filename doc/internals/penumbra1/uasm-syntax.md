@@ -1,5 +1,7 @@
 # Microcode Assembler (uasm.py) Syntax
 
+> **Applies to:** Penumbra/1 · microcoded core.
+
 The Penumbra microcode is written in a symbolic assembly format and translated into a hexadecimal memory file for the FPGA/Verilator ROM using `hw/tools/uasm.py`.
 
 > **Warning — this document is stale and pending a rewrite.** The field

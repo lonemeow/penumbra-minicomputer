@@ -1,5 +1,7 @@
 # Penumbra/2 — Exception Flow
 
+> **Applies to:** Penumbra/2 · pipelined core.
+
 This document specifies how the Penumbra/2 pipeline takes and
 returns from exceptions, traps, and interrupts: where each fault is
 detected, how precise exceptions are realised in an overlapped
@@ -429,7 +431,7 @@ be chosen. Two independent questions:
   satisfy more than one condition, and an asynchronous IRQ may be
   pending at the same boundary. This needs a defined order. gen1
   resolves it in microcode (`fault > illegal > priv > BREAK >
-  SYSCALL > IRQ`, [microcode.md](../../internals/microcode.md));
+  SYSCALL > IRQ`, [microcode.md](../../internals/penumbra1/microcode.md));
   gen2 reproduces a consistent order.
 
 ### 9.1 Specified total order
@@ -521,7 +523,7 @@ committing fault tag — no extra state.
 **Open trap note.** The gen1 ISA text
 ([architecture.md](../../system/architecture.md) § Entry Sequence)
 says a software trap saves "the next instruction," while the gen1
-microcode ([microcode.md](../../internals/microcode.md)) points EPC
+microcode ([microcode.md](../../internals/penumbra1/microcode.md)) points EPC
 at the `SYSCALL` instruction itself and has the handler advance
 `EPC + 4` before `ERET`. These produce the same return address only
 if the handler's convention matches the hardware's. gen2 must adopt

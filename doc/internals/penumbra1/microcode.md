@@ -1,5 +1,7 @@
 # Penumbra Microcode Reference
 
+> **Applies to:** Penumbra/1 · microcoded core.
+
 The single authoritative reference for the Penumbra microcode system. Covers the micro-word format, all control fields, ROM organization, sequencer behavior, and every implemented micro-routine.
 
 **Source of truth:** If this document disagrees with RTL, the RTL is correct and this document needs updating.
@@ -692,3 +694,36 @@ Key design changes discovered during validation:
 - Exception entry reduced from a 7-micro-op stack-push sequence to a 1-micro-op vector jump, with hardware pre-actions handling EPC/ESR save and mode switch
 - Interrupt entry uses the same unified path as MMU faults, BREAK, and privilege violations
 - `ei_set`/`di_set` occupy bits [1:0] (originally listed as spare in the validation doc)
+
+## MUL/DIV Dispatch Routines
+
+The shared divmul peer unit (algorithm, handshake, and datapath in
+[`../divmul.md`](../divmul.md)) is driven on Penumbra/1 by microcode.
+Each of `MUL`/`MULU`/`DIV`/`DIVU` is a 3-µop routine. The ×2 dispatch
+spacing gives each opcode two ROM slots; the third µop is a shared
+high-half writeback tail reached via `SKIP`. The dispatch slots are
+`0x40` (MUL), `0x42` (MULU), `0x44` (DIV), `0x46` (DIVU) — at the top
+of the µROM's `op[4]=1` region. The shared tail sits at `0x49` (op20's
+second slot, never a dispatch target).
+
+```
+op-0:  reg_a=IR_RD reg_b=IR_RS alu=<op> divmul_start=1 STALL
+       ; latches Rd/Rs into divmul, waits for ~33-cycle iteration.
+       ; o_fault is checked at the STALL: if it asserts, the sequencer
+       ; aborts to VEC_ARITH instead of advancing.
+
+op-1:  reg_w=IR_RD w_en=1 wb_src=DML_LO w_flags=1  SKIP→0x49
+       ; writes the low half (quotient / product low) to Rd, latches Z/N.
+
+tail:  reg_w=IR_RDH w_en=1 wb_src=DML_HI
+       ; writes the high half (remainder / product high) to Rdh.
+       ; If Rdh=R0 (2-operand form), the regfile silently drops the
+       ; write — no microcode branch needed.
+```
+
+The divmul op is decoded from `i_alu_op` (which the sequencer already
+emits for ALU ops); no separate `divmul_op` micro-word field is needed.
+The micro-word grew from 51 to 52 bits to add `wb_src` (2 bits,
+RBUS/MDR/DML_LO/DML_HI) in place of the old 1-bit `wmux`; `divmul_start`
+reused the old `alu_start` field bit. Total microcode footprint: 4
+dispatch slots × 2 entries + 1 shared tail = 9 ROM entries.

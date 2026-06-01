@@ -1,5 +1,7 @@
 # Penumbra/2 — Design Decisions
 
+> **Applies to:** Penumbra/2 · pipelined core.
+
 This document records the architectural and project-level decisions
 made during the design of **Penumbra/2** (gen2) — the second-generation
 Penumbra CPU. Each entry captures the *context* that prompted the

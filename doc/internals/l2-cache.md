@@ -1,5 +1,7 @@
 # L2 Cache — Design Plan
 
+> **Applies to:** all generations · shared hardware.
+
 This document specifies the design for an optional L2 cache that sits
 between the CPU's `o_mem_*` port and the system bus.
 

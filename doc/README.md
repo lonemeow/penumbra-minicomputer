@@ -47,18 +47,31 @@ Signal-level specifications for the Penumbra Bus (both sync and async forms) and
 ## 🔬 [Penumbra Internals](./internals)
 **Target:** RTL/FPGA engineers working on the Penumbra core.
 
-Detailed design of the CPU core and internal FPGA logic.
+Detailed design of the CPU core and internal FPGA logic. These docs
+are organized by **which design they describe**: *shared* internals
+(both generations), *Penumbra/1* (microcoded core), and *Penumbra/2*
+(pipelined core). Every internals doc carries an **Applies to:** banner
+so its scope is clear at a glance. The governing rule: a root doc
+states the architectural invariant or contract; each generation's
+subdirectory owns its realization.
 
-*   **[Datapath Design](./internals/datapath.md)** — The three-bus architecture and signal flow.
-*   **[Microcode Reference](./internals/microcode.md)** — Bit-level micro-word format and routine catalog.
-*   **[Microcode Syntax](./internals/uasm-syntax.md)** — Writing microcode assembly for `uasm.py`.
-*   **[CPU-Internal Bus](./internals/cpu-bus.md)** — Contracts inside `cpu_core` (core ↔ MMU ↔ caches ↔ private sysreg devices).
-*   **[MMU Internals](./internals/mmu-internals.md)** — TLB hardware structure and discrete logic mapping.
+### Shared internals (all generations)
+
+*   **[CPU-Internal Bus](./internals/cpu-bus.md)** — Contracts inside `cpu_core` (core ↔ MMU ↔ caches ↔ private sysreg devices) that both cores satisfy.
+*   **[MMU Internals](./internals/mmu-internals.md)** — TLB hardware structure, discrete-logic mapping, and the VIPT L1 alias-free invariant.
+*   **[MUL/DIV Unit (divmul)](./internals/divmul.md)** — The shared multiply/divide peer unit: algorithm, handshake, datapath, and discrete chip-count.
+*   **[L2 Cache](./internals/l2-cache.md)** — Design plan and phase status for the optional unified L2 cache (currently write-invalidate-on-hit; write-back is a planned phase) between `cpu_core.o_mem_*` and the system bus.
 *   **[SDRAM Controller v2](./internals/sdram-controller.md)** — Design plan for the rewrite (composable, dual-domain, 100 MHz CL2).
 *   **[SDRAM Optimization](./internals/sdram-optimization.md)** — Controller strategies for bandwidth improvement.
-*   **[L2 Cache](./internals/l2-cache.md)** — Design plan and phase status for the optional unified L2 cache (currently write-invalidate-on-hit; write-back is a planned phase) between `cpu_core.o_mem_*` and the system bus.
 *   **[Coding Standards](./internals/coding-standards.md)** — RTL naming and style conventions for hardware.
 *   **[Development Setup](./internals/setup.md)** — How to build and simulate the RTL.
+
+### Penumbra/1 (microcoded core)
+
+*   **[Datapath Design](./internals/penumbra1/datapath.md)** — The three-bus architecture and signal flow.
+*   **[Microcode Reference](./internals/penumbra1/microcode.md)** — Bit-level micro-word format and routine catalog.
+*   **[Microcode Syntax](./internals/penumbra1/uasm-syntax.md)** — Writing microcode assembly for `uasm.py`.
+*   **[L1 Cache](./internals/penumbra1/l1-cache.md)** — The gen1 distributed-RAM VIPT L1: geometry, write policy, and the defining zero-cycle hit.
 
 ### Penumbra/2 (gen2 — in planning)
 

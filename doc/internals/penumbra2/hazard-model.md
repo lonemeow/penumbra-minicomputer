@@ -1,5 +1,7 @@
 # Penumbra/2 — Hazard Model
 
+> **Applies to:** Penumbra/2 · pipelined core.
+
 This document specifies the data-hazard handling mechanism for the
 Penumbra/2 pipeline: the scoreboard, the stall predicate, the
 ISA → physical register mapping, the interaction with flags,

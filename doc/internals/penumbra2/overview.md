@@ -1,5 +1,7 @@
 # Penumbra/2 — Overview
 
+> **Applies to:** Penumbra/2 · pipelined core.
+
 **Penumbra/2** is the second-generation Penumbra CPU. It implements
 the same ISA as Penumbra/1, runs the same NetBSD kernel and
 userland, and shares almost all of the surrounding system (bus,
