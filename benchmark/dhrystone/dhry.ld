@@ -26,14 +26,24 @@ SECTIONS
         *(.handlers .handlers.*)
     }
 
+    /* Page-align read-only and writable data so global addresses depend
+     * only on the page size, never on the (codegen-dependent) size of
+     * .text.  The page size (4096) is a multiple of the 1 KB direct-mapped
+     * D-cache, so every global's cache-set mapping is identical across
+     * builds regardless of code size — this is what keeps Dhrystone from
+     * swinging on pure layout jitter.  Mirrors the page-aligned PT_LOAD
+     * segments NetBSD binaries already get from the default link. */
+    . = ALIGN(4096);
     .rodata : {
         *(.rodata .rodata.*)
     }
 
+    . = ALIGN(4096);
     .data : {
         *(.data .data.*)
     }
 
+    . = ALIGN(4096);
     .bss : {
         *(.bss .bss.*)
         *(COMMON)

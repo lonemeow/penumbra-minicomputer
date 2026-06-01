@@ -21,10 +21,16 @@ SECTIONS
         *(.handlers .handlers.*)
     }
 
+    /* Page-align data so global addresses depend only on the page size,
+     * not the (codegen-dependent) size of .text.  4096 is a multiple of
+     * the 1 KB D-cache, so cache-set mappings stay identical across builds
+     * and benchmarks don't swing on layout jitter.  (See dhry.ld.) */
+    . = ALIGN(4096);
     .rodata : {
         *(.rodata .rodata.*)
     }
 
+    . = ALIGN(4096);
     .data : {
         *(.data .data.*)
     }
@@ -37,6 +43,7 @@ SECTIONS
         *(.rel.dyn)
     }
 
+    . = ALIGN(4096);
     .bss : {
         *(.bss .bss.*)
         *(COMMON)
