@@ -270,9 +270,13 @@ entries and selects operand sources.
 - **R15 / PC** is never a regfile source — when an instruction reads
   R15 the `a_sel`/`b_sel` mux selects the PC value instead of the
   regfile port; R15 is not scoreboarded.
-- **`op_rdh`** (the third operand for DIV — the dividend high half)
-  is sourced from the regfile using `IR[15:12]` *only* when
-  `op_class=divmul` (Section 3).
+- **`Rdh`** (the divmul high-half result — product high half for
+  MUL, remainder for DIV/DIVU) is **write-only**: `IR[15:12]`
+  selects it as the second destination `phys_dst_hi` (Section 4),
+  not as a source. divmul reads only `op_a` (Rd) and `op_b` (Rs) —
+  there is no third *input* operand and no 64/32 narrowing form;
+  divides are always 32/32. `Rdh = R0` discards the high half (the
+  common 32-bit form).
 
 ## 6. Immediate extraction and extension
 

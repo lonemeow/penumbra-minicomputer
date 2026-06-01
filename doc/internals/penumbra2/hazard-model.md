@@ -683,9 +683,10 @@ Scoreboard interaction:
    beyond the scoreboard). The MEM and WB stages see bubbles
    propagated from EX during the divmul iteration.
 
-DIV-by-zero and narrowing-DIV overflow raise `VEC_ARITH` (vector slot 10);
-that fault propagates through the normal precise-exception
-mechanism in [exception-flow.md](./exception-flow.md), squashing
+Divide-by-zero (`DIV`/`DIVU` with `Rs = 0`) raises `VEC_ARITH`
+(vector slot 10); that fault propagates through the normal
+precise-exception mechanism in
+[exception-flow.md](./exception-flow.md), squashing
 the divmul's writes by virtue of the WB-stage fault-commit squash
 rule (rather than by special handling in the scoreboard).
 
@@ -819,8 +820,7 @@ GPR-equivalent code.
 ### Example E: Divmul pair-destination stall
 
 ```
-MUL R1, R2, R3       ; (1) writes Rd=R1, Rdh=R0... no, Rdh=R4 say
-                     ;     writes {R1, R4}; takes ~34 cycles
+MUL R1, R2, R4       ; (1) writes Rd=R1 (low half), Rdh=R4 (high half); ~34 cycles
 ADD R5, R4, R6       ; (2) RAW on R4 (the high half)
 ```
 

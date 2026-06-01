@@ -69,7 +69,7 @@ instruction slot). Vector fetch **bypasses the MMU**
 | 7 | 0x1C | `VEC_ILLEGAL` | fault | Illegal instruction |
 | 8 | 0x20 | `VEC_ALIGN` | fault | Misaligned fetch or data access |
 | 9 | 0x24 | `VEC_EXT_IRQ` | interrupt | External device IRQ (wired-OR) |
-| 10 | 0x28 | `VEC_ARITH` | fault | DIV-by-zero, narrowing-DIV overflow |
+| 10 | 0x28 | `VEC_ARITH` | fault | `DIV`/`DIVU` with `Rs = 0` (divide-by-zero) |
 
 The three **classes** — fault, trap, interrupt — differ only in
 what EPC holds (Section 1.4) and whether the source is synchronous
@@ -145,7 +145,7 @@ exceptions precise.
 | `VEC_BUS_FAULT` (fetch) | IF2 | Fetch access to an unbacked physical address |
 | `VEC_ILLEGAL` | ID / EX | Decoder finds no legal opcode/operand form |
 | `VEC_PRIV` | ID / EX | Privileged op (`RDSPR`/`WRSPR`/`RDSYS`/`WRSYS`/`ERET`/`EI`/`DI`) issued with `SR.S = 0` |
-| `VEC_ARITH` | EX | divmul raises DIV-by-zero or narrowing-DIV overflow |
+| `VEC_ARITH` | EX | divmul raises divide-by-zero (`DIV`/`DIVU` with `Rs = 0`) |
 | `VEC_TLB_MISS`, `VEC_TLB_PROT` (data) | MEM | D-side TLB lookup miss / protection bits on a load/store |
 | `VEC_ALIGN` (data) | MEM | Load/store effective address misaligned for its width |
 | `VEC_BUS_FAULT` (data) | MEM | Load/store to an unbacked physical address |

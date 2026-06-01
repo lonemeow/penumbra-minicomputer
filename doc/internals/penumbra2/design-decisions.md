@@ -93,7 +93,7 @@ for a second-generation core.
   [Decision 4](#4-hazard-handling-strategy) for the regfile
   implication.
 - **New ISA exception: `VEC_ARITH`** added at vector slot 10 (currently
-  reserved). Raised by the divmul on DIV-by-zero and narrowing-DIV overflow.
+  reserved). Raised by the divmul on divide-by-zero (`DIV`/`DIVU` with `Rs = 0`).
   This is the only ISA-visible addition gen2 makes beyond Penumbra/1's
   current spec; userland is unaffected because the trigger is a
   programmer error.
@@ -542,8 +542,9 @@ clearly against keeping microcode.
   upstream. At completion, the instruction commits in one WB cycle
   that writes both `Rd` via the main regfile write port and `Rdh`
   via divmul's dedicated second write port (see
-  [Decision 4](#4-hazard-handling-strategy)). DIV-by-zero and
-  narrowing-DIV overflow raise `VEC_ARITH` (vector 10).
+  [Decision 4](#4-hazard-handling-strategy)). Divide-by-zero
+  (`DIV`/`DIVU` with `Rs = 0`) raises `VEC_ARITH` (vector 10);
+  signed `INT_MIN / -1` does not trap (returns `INT_MIN`).
 
 **Alternatives considered.** Microcode trap-in for exception entry +
 RTI (rejected: adds infrastructure for one logical operation; the FSM

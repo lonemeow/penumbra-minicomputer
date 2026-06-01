@@ -323,16 +323,17 @@ Written by ID, read by EX.
 | `ctrl` | ~30 | Decoded control bundle: alu_op, flag_we, gpr_we, spr_we, mem_op, branch_op, drain_commit_kind, etc. — full layout in [control-decode.md](./control-decode.md) |
 | `pc` | 32 | This insn's PC (propagated for EPC + branch target) |
 | `next_pc` | 32 | `PC + 4` |
-| `op_a` | 32 | Source operand A (regfile or PC for PC-relative) |
-| `op_b` | 32 | Source operand B (regfile or sign/zero-extended immediate) |
-| `op_rdh` | 32 | Third operand for DIV (`Rdh` for 64-bit dividend high half); unused otherwise |
-| `phys_dst` | 5 | Physical scoreboard entry to clear on commit |
-| `phys_dst_hi` | 5 | Second physical entry for MUL/DIV high half; unused otherwise |
+| `op_a` | 32 | Source operand A (regfile Rd, or PC for PC-relative). For MUL/DIV: the multiplicand / 32-bit dividend |
+| `op_b` | 32 | Source operand B (regfile Rs, or sign/zero-extended immediate). For MUL/DIV: the multiplier / divisor |
+| `phys_dst` | 5 | Physical scoreboard entry to clear on commit (Rd) |
+| `phys_dst_hi` | 5 | Second physical entry for the MUL/DIV high-half result (`Rdh`, write-only); unused otherwise |
 | `valid` | 1 | 0 = bubble |
 | `fault_pending` | 1 | Propagated from IF/ID or set in ID (illegal, privilege, BREAK, SYSCALL) |
 | `fault_vec` | 4 | Vector number |
 
-Total: ~175 bits. (The widest pipeline register.)
+Total: ~143 bits. (The widest pipeline register.) Note divmul takes
+only two inputs (`op_a`, `op_b`) — `Rdh` is a write-only result
+register, so there is no third operand value to carry.
 
 ### EX/MEM register
 
