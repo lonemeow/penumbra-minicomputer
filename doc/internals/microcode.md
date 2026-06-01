@@ -102,7 +102,7 @@ F-bit gating only applies when `reg_w = IR_RD`. Literal register addresses (R2-R
 
 Flags are only written to SR when `w_flags=1`. The flag column shows what the ALU *computes*, not what gets latched.
 
-Multi-cycle operations require `alu_start=1` on the first micro-op and `branch=STALL` to wait for completion. MUL/MULU/DIV/DIVU are implemented by the divmul peer unit (`hw/rtl/core/divmul.sv`).
+Multi-cycle operations require `alu_start=1` on the first micro-op and `branch=STALL` to wait for completion. MUL/MULU/DIV/DIVU are implemented by the divmul peer unit (`hw/rtl/penumbra1/divmul.sv`).
 
 ### B-Bus Source — `bmux` [28:27] (2 bits)
 

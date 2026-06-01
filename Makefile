@@ -34,7 +34,7 @@ OPT_BUILD ?= -O2
 VERILATOR_FLAGS = --cc --exe --build -Wall --assert \
                   $(if $(VCD),--trace) \
                   -CFLAGS "-std=c++17 $(OPT_BUILD)" \
-                  -Ihw/rtl/core -Ihw/rtl/bus -Ihw/rtl/mmu -Ihw/rtl/io -Ihw/rtl/io/sdram -Ihw/rtl/soc -Ihw/rtl/sim
+                  -Ihw/rtl/common -Ihw/rtl/penumbra1 -Ihw/rtl/penumbra2 -Ihw/rtl/bus -Ihw/rtl/mmu -Ihw/rtl/io -Ihw/rtl/io/sdram -Ihw/rtl/soc -Ihw/rtl/sim
 
 BUILD_DIR   = build
 WAVE_DIR    = waves
@@ -45,12 +45,12 @@ smoke: $(BUILD_DIR)/Vsmoke_adder
 	@echo "── Running smoke test ──"
 	@$(DOCKER_RUN) --entrypoint ./$(BUILD_DIR)/Vsmoke_adder $(DOCKER_IMAGE)
 
-$(BUILD_DIR)/Vsmoke_adder: hw/rtl/core/smoke_adder.sv hw/sim/tb_smoke_adder.cpp
+$(BUILD_DIR)/Vsmoke_adder: hw/rtl/penumbra1/smoke_adder.sv hw/sim/tb_smoke_adder.cpp
 	@mkdir -p $(BUILD_DIR)
 	$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) \
 		--Mdir $(BUILD_DIR)/smoke_adder.verilator \
 		-o ../Vsmoke_adder \
-		hw/rtl/core/smoke_adder.sv hw/sim/tb_smoke_adder.cpp
+		hw/rtl/penumbra1/smoke_adder.sv hw/sim/tb_smoke_adder.cpp
 
 # ── Generic module simulation ──────────────────────────────────
 # Usage: make sim MOD=alu  (expects hw/rtl/**/alu.sv and hw/sim/tb_alu.cpp)
@@ -62,7 +62,7 @@ TB   ?= tb_$(MOD)
 # Shared packages — always included. --top-module tells Verilator which
 # module is the DUT (otherwise it picks the first file = a package).
 # Add new packages here as the design grows.
-PKG_SV = hw/rtl/core/penumbra_pkg.sv hw/rtl/io/sdram/sdram_pkg.sv
+PKG_SV = hw/rtl/common/penumbra_pkg.sv hw/rtl/io/sdram/sdram_pkg.sv
 
 # ── Assembler tools ──────────────────────────────────────────
 PASM  = python3 sw/tools/pasm.py
@@ -561,9 +561,9 @@ TOP ?= ulx3s_hello
 # Source files: simple test tops use only fpga/*.sv;
 # ulx3s_top needs the full RTL (core, mmu, soc devices, io).
 FPGA_SRC_SIMPLE = $(wildcard $(FPGA_RTL)/*.sv)
-FPGA_SRC_FULL   = hw/rtl/core/penumbra_pkg.sv \
+FPGA_SRC_FULL   = hw/rtl/common/penumbra_pkg.sv \
                   hw/rtl/io/sdram/sdram_pkg.sv \
-                  $(filter-out %/smoke_adder.sv %/penumbra_pkg.sv, $(wildcard hw/rtl/core/*.sv)) \
+                  $(filter-out %/smoke_adder.sv, $(wildcard hw/rtl/penumbra1/*.sv)) \
                   $(wildcard hw/rtl/mmu/*.sv) \
                   $(wildcard hw/rtl/soc/*.sv) \
                   $(wildcard hw/rtl/io/*.sv) \

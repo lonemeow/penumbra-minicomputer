@@ -65,7 +65,7 @@ gotchas) for working inside a subtree:
   active-high reset `i_rst` (held 2 cycles by testbenches).
 - `import penumbra_pkg::*;` *inside* the module declaration, not at
   file scope (Verilator warns about `$unit`-scope wildcard imports).
-- Shared constants live in `hw/rtl/core/penumbra_pkg.sv`.
+- Shared constants live in `hw/rtl/common/penumbra_pkg.sv`.
 - Full RTL style guide: `doc/internals/coding-standards.md`.
 
 ### Naming: hardware vs software terminology

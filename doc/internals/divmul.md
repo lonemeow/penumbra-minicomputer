@@ -309,7 +309,7 @@ worth it for the first build.
 - **Microcode:** implemented. Dispatch slots 0x40 (MUL), 0x42 (MULU),
   0x44 (DIV), 0x46 (DIVU) hold the 3-µop routines; the shared high-half
   writeback tail is at 0x49.
-- **RTL:** implemented (`hw/rtl/core/divmul.sv`). The sequencer drives
+- **RTL:** implemented (`hw/rtl/penumbra1/divmul.sv`). The sequencer drives
   the peer unit via `divmul_start` (reusing the old `alu_start` field
   bit), stalls on `i_divmul_busy`, and aborts on `o_fault → VEC_ARITH`.
   Results reach the register file via the `wb_src` writeback-source mux

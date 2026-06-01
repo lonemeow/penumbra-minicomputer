@@ -38,7 +38,7 @@ Prefix all module ports to distinguish them from internal signals:
 
 ## 4. Packages and Constants
 
-- Common constants (opcodes, register addresses, etc.) live in `hw/rtl/core/penumbra_pkg.sv`.
+- Common constants (opcodes, register addresses, etc.) live in `hw/rtl/common/penumbra_pkg.sv`.
 - **Imports:** Import the package *inside* the module scope to avoid Verilator $unit scope warnings:
   ```systemverilog
   module my_module (

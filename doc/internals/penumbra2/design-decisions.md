@@ -139,6 +139,14 @@ CPU core itself is a hard fork.
 
 **Decision.** Fork only the CPU core; share everything else.
 
+- `hw/rtl/common/` — shared ISA-constants package
+  (`penumbra_pkg.sv`), used by both cores **and** every peripheral.
+  Hoisted out of the old `core/` so the contract that binds the
+  whole system is not trapped in a generation-specific directory.
+  Kept deliberately minimal: only the package today. A module
+  (e.g. `divmul`, the bus arbiter) is promoted here from
+  `penumbra1/` *when* gen2 actually instantiates it and its shared
+  interface is known — not speculatively.
 - `hw/rtl/penumbra1/` — current CPU core (renamed from `hw/rtl/core/`)
 - `hw/rtl/penumbra2/` — new pipelined CPU core
 - `hw/rtl/mmu/`, `hw/rtl/soc/`, `hw/rtl/io/`, `hw/rtl/bus/`, `hw/rtl/sim/`
@@ -153,15 +161,27 @@ CPU core itself is a hard fork.
 Docs follow the same shape:
 
 - `doc/internals/penumbra1/` — gen1-only docs (`datapath.md`,
-  `microcode.md`, `uasm-syntax.md`)
+  `microcode.md`, `uasm-syntax.md`, `l1-cache.md`)
 - `doc/internals/penumbra2/` — gen2 docs (this file,
   `pipeline-stages.md`, `control-decode.md`, `hazard-model.md`,
   `exception-flow.md`, `regfile.md`)
 - `doc/internals/` (root) — shared (`l2-cache.md`,
   `sdram-controller.md`, `sdram-optimization.md`,
-  `coding-standards.md`, `cpu-bus.md`, `mmu-internals.md`, `setup.md`)
+  `coding-standards.md`, `cpu-bus.md`, `mmu-internals.md`,
+  `divmul.md`, `setup.md`)
 - `doc/system/`, `doc/hardware/` — shared, unchanged (ISA, bus
   protocol, device specs)
+
+The governing rule for the split is **root keeps the architectural
+invariant / contract; each generation's subdirectory owns its
+realization.** `divmul.md` documents the peer unit's handshake
+(shared); how a generation drives and commits its two results lives
+in that generation's docs. `cpu-bus.md` is the core-internal contract
+both cores satisfy; `mmu-internals.md` keeps the shared TLB and the
+VIPT alias-free invariant, while the gen1 distributed-RAM L1
+realization lives in `penumbra1/l1-cache.md`. Every internals doc
+carries an **Applies to:** banner (all generations / Penumbra-1 /
+Penumbra-2) so a reader knows in one glance which world it describes.
 
 **Rationale.** "Shared = bus-facing, forked = pipeline-shaped" is the
 clean cut. Peripherals talk the Penumbra bus protocol, which is the
@@ -177,11 +197,20 @@ different architectures in one file).
 
 **Consequences.**
 
-- A reorganization commit will rename `hw/rtl/core/` → `hw/rtl/penumbra1/`
-  and move three docs (`datapath.md`, `microcode.md`,
-  `uasm-syntax.md`) under `doc/internals/penumbra1/`. The rename
-  touches imports in `machine_sim.sv` and `ulx3s_top.sv` and CLAUDE.md
-  paths.
+- The reorganization is done in two commits: an `hw:` commit renames
+  `hw/rtl/core/` → `hw/rtl/penumbra1/`, hoists `penumbra_pkg.sv` to
+  `hw/rtl/common/`, and adds the empty `hw/rtl/penumbra2/`; a `doc:`
+  commit moves the gen1 docs under `doc/internals/penumbra1/`, adds
+  `l1-cache.md`, and applies the banners and tier surgery above.
+  Because `penumbra_pkg` is imported by **package name**
+  (`import penumbra_pkg::*`), not by path, the file move touches only
+  the Makefile source lists (`PKG_SV`, `FPGA_SRC_FULL`, the `-I`
+  search dirs) and the CLAUDE.md / coding-standards path references —
+  **no `.sv` source changes** in `machine_sim.sv`, `ulx3s_top.sv`, or
+  the 40-plus importing modules. Module names stay plain (no
+  `penumbra1_`/`penumbra2_` prefix); collision is avoided by never
+  elaborating both cores in one build, revisited only if a combined
+  flow ever needs it.
 - Any future RTL coding standard, bus protocol clarification, or cache
   policy change must consider both cores. Penumbra/2 is **never**
   allowed to introduce changes to shared modules that break

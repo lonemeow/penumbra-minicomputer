@@ -109,7 +109,7 @@ on the current scheduler.  Revisit once one of:
 ### Phase 4: Hardware MUL/DIV — DONE
 
 Hardware multiply/divide implemented as the **divmul peer unit**
-(`hw/rtl/core/divmul.sv`), reached via Format R opcodes 16-19
+(`hw/rtl/penumbra1/divmul.sv`), reached via Format R opcodes 16-19
 (MUL/MULU/DIV/DIVU) with an explicit `Rdh` high-half/remainder writeback
 and a divide-by-zero fault to `VEC_ARITH`.  See
 [`doc/internals/divmul.md`](internals/divmul.md).
@@ -581,7 +581,7 @@ real SPI read-path + HW project, not a quick fix; gen2-adjacent.
 
 Implemented SCR0–SCR3 (four 32-bit storage SPRs at indices 4–7,
 supervisor-only, undefined reset values).  Hardware in
-`hw/rtl/core/spr_scratch.sv`, instantiated from `datapath.sv` with
+`hw/rtl/penumbra1/spr_scratch.sv`, instantiated from `datapath.sv` with
 the SCR readback overlaying amux slot 11 (mutually exclusive with
 vector-addr fetch).  ISS, pasm.py, and the LLVM integrated
 assembler all teach SCR0–3 as SPR names.  Kernel TLB miss fast

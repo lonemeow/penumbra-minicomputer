@@ -273,7 +273,7 @@ as "the master may treat `busy` going low and a fresh `re`
 together as equivalent to the arbiter pulse."  Caches that drive
 the arbiter (`cache_vipt.sv`, by way of `cpu_bus_arbiter.sv`) use
 `i_req_accepted` to advance their `req_idx`/`resp_idx` counters
-during line fills.  See `hw/rtl/core/cpu_bus_arbiter.sv` for the
+during line fills.  See `hw/rtl/penumbra1/cpu_bus_arbiter.sv` for the
 RTL.
 
 ## Reset Timing

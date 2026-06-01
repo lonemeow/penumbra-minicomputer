@@ -44,7 +44,18 @@ Find a module by file path. For full module behavior, read the
 source — the source is the authoritative description; this table is
 purely a "where does this thing live?" index.
 
-### CPU core (`rtl/core/`)
+### Shared package (`rtl/common/`)
+- `penumbra_pkg.sv` — shared constants (REG_*, ALU_*, COND_*, SR_*,
+  VEC_*, FAULT_*, SYSDEV_*, SYSREG_*, CACHE_ADDR_*, UART_*, SPR_*,
+  ACFG_*, base addresses). Imported by both CPU cores and every
+  peripheral; the ISA contract for the whole system. Kept here, not
+  under a generation directory, so it isn't generation-scoped.
+
+### Penumbra/2 core (`rtl/penumbra2/`)
+- Not yet implemented. The gen2 pipelined core lands here; see
+  `doc/internals/penumbra2/`.
+
+### Penumbra/1 core (`rtl/penumbra1/`)
 - `cpu_core.sv` — full CPU integration: datapath + sequencer + ROM
   + MMU + split I/D L1 cache + memory bus mux + fetch + IRQ + traps
   + WRSYS/RDSYS + RDSPR/WRSPR + sub-word loads/stores + perfctr.
@@ -66,9 +77,6 @@ purely a "where does this thing live?" index.
   single external bus. 2-state FSM with back-to-back BUSY→BUSY
   re-latch; combinational `o_*_req_accepted` pulse for burst
   address advance.
-- `penumbra_pkg.sv` — shared constants (REG_*, ALU_*, COND_*, SR_*,
-  VEC_*, FAULT_*, SYSDEV_*, SYSREG_*, CACHE_ADDR_*, UART_*, SPR_*,
-  ACFG_*, base addresses).
 
 ### MMU (`rtl/mmu/`)
 - `tlb.sv` — 64-entry 2-way SA main TLB. Parallel lookup, one-hot
