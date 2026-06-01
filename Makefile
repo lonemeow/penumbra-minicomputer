@@ -9,7 +9,7 @@
 #   make wave MOD=<name>     — open waveform in GTKWave
 #   make sdimage             — build SD image with bootloader, kernel, rootfs
 #   make fpga-lint [TOP=<m>] — Verilator lint check on FPGA modules
-#   make fpga [TOP=<module>] — synthesize + PnR + bitstream (default: ulx3s_hello)
+#   make fpga TOP=<module> — synthesize + PnR + bitstream
 #   make flash [TOP=<module>]— fpga + flash to ULX3S via USB
 #   make clean               — remove build artifacts
 
@@ -38,19 +38,6 @@ VERILATOR_FLAGS = --cc --exe --build -Wall --assert \
 
 BUILD_DIR   = build
 WAVE_DIR    = waves
-
-# ── Smoke test ─────────────────────────────────────────────────
-.PHONY: smoke
-smoke: $(BUILD_DIR)/Vsmoke_adder
-	@echo "── Running smoke test ──"
-	@$(DOCKER_RUN) --entrypoint ./$(BUILD_DIR)/Vsmoke_adder $(DOCKER_IMAGE)
-
-$(BUILD_DIR)/Vsmoke_adder: hw/rtl/penumbra1/smoke_adder.sv hw/sim/tb_smoke_adder.cpp
-	@mkdir -p $(BUILD_DIR)
-	$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) \
-		--Mdir $(BUILD_DIR)/smoke_adder.verilator \
-		-o ../Vsmoke_adder \
-		hw/rtl/penumbra1/smoke_adder.sv hw/sim/tb_smoke_adder.cpp
 
 # ── Generic module simulation ──────────────────────────────────
 # Usage: make sim MOD=alu  (expects hw/rtl/**/alu.sv and hw/sim/tb_alu.cpp)
@@ -156,8 +143,8 @@ test:
 # RTL module — see hw/rtl/sim/).
 #
 # Integration testbenches (tb_cpu_prog, tb_cpu_top, tb_cpu_mem,
-# tb_interactive, tb_smoke_adder) are not listed here — they are
-# covered by `make test`, `make simulate`, etc.
+# tb_interactive) are not listed here — they are covered by
+# `make test`, `make simulate`, etc.
 #
 # Usage: make test-modules
 MODULE_TESTS = \
@@ -554,16 +541,21 @@ FPGA_RTL   = hw/rtl/fpga
 LPF        = hw/constraints/ulx3s_v20.lpf
 
 # Synthesis + PnR + bitstream for a top-level module.
-# Usage: make fpga TOP=ulx3s_hello   (simple test designs)
-#        make fpga TOP=ulx3s_top     (full CPU system)
-TOP ?= ulx3s_hello
+# Usage: make fpga TOP=ulx3s_top     (full CPU system)
+# TOP has no default on purpose: an explicit choice avoids silently
+# building the wrong design. fpga / flash / timing error out if unset.
+ifneq ($(filter fpga flash timing,$(MAKECMDGOALS)),)
+ifeq ($(strip $(TOP)),)
+$(error TOP is required for '$(MAKECMDGOALS)' — e.g. make fpga TOP=ulx3s_top)
+endif
+endif
 
 # Source files: simple test tops use only fpga/*.sv;
 # ulx3s_top needs the full RTL (core, mmu, soc devices, io).
 FPGA_SRC_SIMPLE = $(wildcard $(FPGA_RTL)/*.sv)
 FPGA_SRC_FULL   = hw/rtl/common/penumbra_pkg.sv \
                   hw/rtl/io/sdram/sdram_pkg.sv \
-                  $(filter-out %/smoke_adder.sv, $(wildcard hw/rtl/penumbra1/*.sv)) \
+                  $(wildcard hw/rtl/penumbra1/*.sv) \
                   $(wildcard hw/rtl/mmu/*.sv) \
                   $(wildcard hw/rtl/soc/*.sv) \
                   $(wildcard hw/rtl/io/*.sv) \

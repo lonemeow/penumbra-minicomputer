@@ -51,7 +51,6 @@ Penumbra has two simulators: a fast native C++ **ISS** (`sw/sim/penumbra_iss.cpp
 ### Running tests
 
 ```sh
-make smoke           # Toolchain smoke test (trivial adder)
 make test-iss        # Run all hw/sim/programs/test_*.s on ISS — fast, no Docker
 make test            # Same suite on RTL via Docker — slow but cycle-accurate
 make test-modules    # Run all module-level Verilator testbenches (alu, regfile, …)
@@ -354,7 +353,10 @@ make flash TOP=ulx3s_top             # Build + flash to ULX3S over USB (fujprog)
 make fpga-lint TOP=ulx3s_top         # Verilator lint check on FPGA sources
 ```
 
-`TOP` defaults to `ulx3s_hello` (a minimal smoke top). For the full system, use `TOP=ulx3s_top`. Other tops in `hw/rtl/fpga/`: `ulx3s_regtest`, `ulx3s_utest`.
+`TOP` has no default — it must be given explicitly (so you never
+silently build the wrong design). For the full system, use
+`TOP=ulx3s_top`; `make fpga`/`flash`/`timing` with `TOP` unset errors
+out. `ulx3s_top` is the only top-level today.
 
 ### Reading the build report
 

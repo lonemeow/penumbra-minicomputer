@@ -115,7 +115,6 @@ Examples: `llvm: fix PIC TLS GD materialization`,
   `make sim MOD=machine_sim TB=<tb> PROG=<prog>` — runs a specific
   testbench with a specific program (auto-assembles `.s`/`.uasm`).
 - `make wave MOD=<name>` — open VCD in GTKWave.
-- `make smoke` — toolchain smoke test (trivial adder).
 
 **Simulation gotchas:**
 - **Dual-clock sim.** `machine_sim`'s SDRAM subsystem runs on a

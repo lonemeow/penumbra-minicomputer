@@ -3,7 +3,7 @@
 // Reusable for both I-cache and D-cache. Direct-mapped (NUM_WAYS=1)
 // with write-through, write-no-allocate policy. Burst-fills entire
 // cache line on read miss. Passes through when disabled (CTRL.enable=0)
-// or uncacheable (i_cacheable=0), identical to cache_stub behavior.
+// or uncacheable (i_cacheable=0).
 //
 // Parameters are exposed via the INFO sysreg so software can discover
 // cache geometry at runtime (line size, sets, ways, type).

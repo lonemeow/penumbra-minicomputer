@@ -147,7 +147,6 @@ purely a "where does this thing live?" index.
   `tb_sdram_test`.
 - `sdram_model.sv` — behavioral SDR DRAM chip (JEDEC command set,
   sparse storage, protocol checking).
-- `cache_stub.sv` — combinational pass-through; reference only.
 - `simple_mem.sv` — parameterizable sync SRAM model (default 16 MB),
   configurable READ_LATENCY/WRITE_LATENCY.
 
@@ -155,7 +154,6 @@ purely a "where does this thing live?" index.
 - `ulx3s_top.sv` — board top-level. 12.5 MHz PLL (25 MHz crystal),
   32 MB SDRAM (W9825G6KH or compatible), real UART (TX+RX), real
   SPI with SD card (autoconfig), boot ROM, `btn[1]` reset.
-- `uart_tx.sv` — standalone TX shift register for test designs.
 - `fpga_ram.sv` — BRAM-friendly memory (4 byte-wide banks with
   `ram_style` attribute).
 

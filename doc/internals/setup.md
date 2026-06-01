@@ -47,11 +47,13 @@ docker pull verilator/verilator:latest
 sudo apt install -y gtkwave
 ```
 
-### 4. Run the smoke test
+### 4. Verify the toolchain
 ```bash
-make smoke
+make test-modules
 ```
-This builds and runs a trivial adder module through Verilator (in Docker) to confirm the toolchain works. Expected output: `smoke_adder: 5/5 tests passed`.
+This builds and runs the module-level Verilator testbenches (alu,
+regfile, cache, …) inside Docker — a real exercise of the toolchain.
+Every module should report `PASS`.
 
 ## How It Works
 The `Makefile` runs Verilator inside Docker, mounting the project directory as `/work`:
