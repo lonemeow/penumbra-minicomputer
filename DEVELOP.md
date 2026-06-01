@@ -214,11 +214,13 @@ make benchmark COPT="-Os"      # Override benchmark optimization level
 
 ```sh
 make benchmark-netbsd                              # Build pbench{,-static} for NetBSD
-make sdimage-rootfs ROOTFS_FULL=1                  # Bake into /usr/local/bin/ on rootfs
+make sdimage-rootfs                                # Stage all custom utilities into the rootfs (§ 8)
 make simulate SDCARD=build/boot.img                # Boot, log in, run pbench
 ```
 
-Inside the running NetBSD: `pbench list`, `pbench libc memcpy`, etc. Use `pbench -o FILE` to dump machine-readable `RESULT key=value` lines. Baseline numbers in `benchmark/netbsd-bench/BASELINE.md`.
+`make sdimage-rootfs` automatically builds and overlays the whole benchmark
+suite into `/usr/local/bin/` (see § 8 — overlays are no longer gated on
+`ROOTFS_FULL`). Inside the running NetBSD: `pbench list`, `pbench libc memcpy`, etc. Use `pbench -o FILE` to dump machine-readable `RESULT key=value` lines. Baseline numbers in `benchmark/netbsd-bench/BASELINE.md`.
 
 ---
 
@@ -301,6 +303,38 @@ make simulate SDCARD=build/boot.img
 ```
 
 Image creation requires the NetBSD cross-tools (`nbfdisk`, `nbmakefs`) — i.e. the host-tools step from § 7 must have run.
+
+### Overlaying custom userland utilities
+
+`make sdimage-rootfs` automatically stages every custom NetBSD-hosted
+utility into the image. Each utility's Makefile exposes an `overlay` target
+that installs its files into a shared fake-root (`build/netbsd-overlay`,
+`$(OVERLAY_ROOT)`); `mkrootfs.sh -O` then copies the whole tree into the
+rootfs, preserving on-target paths and per-file modes (so non-binary data
+like `terminfo.cdb` lands at the right place with the right mode).
+
+```sh
+make netbsd-overlay                    # build + stage all utilities (run automatically by sdimage-rootfs)
+find build/netbsd-overlay -type f      # inspect exactly what will be installed
+```
+
+Staged into the tree: the demo/benchmark suite (`pbench`,
+`mandelbrot`, `julia`, `plasma`, `lorenz`, `shadebobs`, `penumbra-text`) at
+`/usr/local/bin/`, and **`penmon`** — the hardware-counter system monitor
+(see `sw/penmon/README.md`). curses additionally needs the base-system
+`terminfo.cdb`, which is present on a full rootfs (`ROOTFS_FULL=1`); it is
+not overlaid, to avoid colliding with the distribution's own copy.
+
+**To add a new utility:**
+
+1. Give its Makefile an `overlay` target that installs into `$(OVERLAY_ROOT)`,
+   mirroring the on-target layout (e.g. `$(OVERLAY_ROOT)/usr/local/bin/foo`).
+   Accept `OVERLAY_ROOT ?=` so it can be overridden by the top-level build.
+2. In the top-level `Makefile`, add a `foo-overlay` passthrough target that
+   invokes it, and append `foo-overlay` to `NETBSD_OVERLAYS`.
+
+No changes to `mkrootfs.sh` or the image step are needed — the image build
+absorbs whatever the overlay tree contains.
 
 ---
 

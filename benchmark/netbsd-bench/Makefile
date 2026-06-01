@@ -43,6 +43,7 @@ LDFLAGS_STA := --target=$(TARGET) --sysroot=$(DESTDIR) -static
 
 BUILDDIR    := $(PROJROOT)/build/netbsd-bench
 OBJDIR      := $(BUILDDIR)/obj
+OVERLAY_ROOT ?= $(PROJROOT)/build/netbsd-overlay
 
 # ── Sources ───────────────────────────────────────────────────
 # Each benchmark is one .c file under kernel/ or libc/.  Add a new
@@ -80,9 +81,19 @@ PTEXT_OBJS := $(PTEXT_SRCS:%.c=$(OBJDIR)/%.o)
 
 # ── Targets ───────────────────────────────────────────────────
 
-.PHONY: all dynamic static clean
+.PHONY: all dynamic static overlay clean
 
 all: dynamic static
+
+# Install the dynamic binaries into the shared overlay fake-root so the
+# rootfs image (mkrootfs -O) absorbs them.  libc.so is present on-target.
+OVERLAY_PROGS := pbench mandelbrot julia plasma lorenz shadebobs penumbra-text
+overlay: dynamic
+	install -d $(OVERLAY_ROOT)/usr/local/bin
+	@for p in $(OVERLAY_PROGS); do \
+	    echo "  benchmark: overlay $$p"; \
+	    install -m 0755 $(BUILDDIR)/$$p $(OVERLAY_ROOT)/usr/local/bin/$$p; \
+	done
 
 dynamic: $(BUILDDIR)/pbench        $(BUILDDIR)/mandelbrot        $(BUILDDIR)/julia        $(BUILDDIR)/plasma        $(BUILDDIR)/lorenz        $(BUILDDIR)/shadebobs        $(BUILDDIR)/penumbra-text
 static:  $(BUILDDIR)/pbench-static $(BUILDDIR)/mandelbrot-static $(BUILDDIR)/julia-static $(BUILDDIR)/plasma-static $(BUILDDIR)/lorenz-static $(BUILDDIR)/shadebobs-static $(BUILDDIR)/penumbra-text-static

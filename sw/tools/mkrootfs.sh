@@ -17,6 +17,10 @@
 #   -i SRC:DST      Overlay file SRC at DST inside the image (repeatable).
 #                   DST must be an absolute path; intermediate dirs are
 #                   created automatically.  Mode 0755 for the file.
+#   -O DIR          Overlay an entire fake-root tree DIR into the image
+#                   (repeatable).  Files keep their on-disk mode; paths
+#                   mirror their location under DIR (e.g.
+#                   DIR/usr/local/bin/foo -> /usr/local/bin/foo).
 #   -T TOOLDIR      NetBSD tools directory (default: auto-detect)
 #   -v              Verbose output
 #
@@ -40,6 +44,7 @@ MINIMAL=0
 TOOLDIR=""
 VERBOSE=0
 OVERLAYS=()
+OVERLAY_DIRS=()
 
 # --- Parse arguments --------------------------------------------------------
 
@@ -48,7 +53,7 @@ usage() {
     exit 1
 }
 
-while getopts "d:o:k:s:mi:T:vh" opt; do
+while getopts "d:o:k:s:mi:O:T:vh" opt; do
     case $opt in
         d) DESTDIR="$OPTARG" ;;
         o) OUTPUT="$OPTARG" ;;
@@ -56,6 +61,7 @@ while getopts "d:o:k:s:mi:T:vh" opt; do
         s) SIZE_MB="$OPTARG" ;;
         m) MINIMAL=1 ;;
         i) OVERLAYS+=("$OPTARG") ;;
+        O) OVERLAY_DIRS+=("$OPTARG") ;;
         T) TOOLDIR="$OPTARG" ;;
         v) VERBOSE=1 ;;
         h) usage ;;
@@ -221,6 +227,43 @@ for entry in "${OVERLAYS[@]:-}"; do
     cp "$src" "$STAGING/$rel"
     chmod 0755 "$STAGING/$rel"
     OVERLAY_SPEC+="./$rel type=file uname=root gname=wheel mode=0755"$'\n'
+done
+
+# Apply directory-tree overlays (-O DIR): copy each fake-root tree into
+# staging, preserving layout and per-file mode, and emit matching mtree
+# spec entries.  Each custom utility's `overlay' make target populates
+# such a tree (e.g. build/netbsd-overlay/usr/local/bin/penmon).
+for odir in "${OVERLAY_DIRS[@]:-}"; do
+    [ -z "$odir" ] && continue
+    if [ ! -d "$odir" ]; then
+        echo "Error: overlay dir missing: $odir" >&2
+        exit 1
+    fi
+    log "Overlay tree: $odir"
+    while IFS= read -r f; do
+        rel="${f#"$odir"/}"
+        dir_rel="$(dirname "$rel")"
+        if [ "$dir_rel" != "." ]; then
+            IFS='/' read -ra parts <<< "$dir_rel"
+            cur=""
+            for p in "${parts[@]}"; do
+                cur="${cur:+$cur/}$p"
+                mkdir -p "$STAGING/$cur"
+                if [ -z "${OVERLAY_DIRS_SEEN[$cur]:-}" ]; then
+                    OVERLAY_DIRS_SEEN[$cur]=1
+                    if [ -f "$DESTDIR/METALOG" ] && \
+                       grep -q "^\\./$cur " "$DESTDIR/METALOG"; then
+                        continue
+                    fi
+                    OVERLAY_SPEC+="./$cur type=dir uname=root gname=wheel mode=0755"$'\n'
+                fi
+            done
+        fi
+        mode=$(stat -c '%a' "$f")
+        cp "$f" "$STAGING/$rel"
+        chmod "$mode" "$STAGING/$rel"
+        OVERLAY_SPEC+="./$rel type=file uname=root gname=wheel mode=$mode"$'\n'
+    done < <(find "$odir" -type f)
 done
 
 # Create a minimal /etc/rc that just drops to a shell

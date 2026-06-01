@@ -172,7 +172,11 @@ in the LLVM subtree CLAUDE.md).
   distribution). Boot-only images need a kernel at `PENBOOT.ELF`;
   rootfs images include `boot.cfg` with `root=ld0f` so `boot sd:0,0`
   reaches single-user with no prompts. Requires NetBSD cross-tools
-  (`nbfdisk`, `nbmakefs`) built once via `build.sh tools`.
+  (`nbfdisk`, `nbmakefs`) built once via `build.sh tools`. Both rootfs variants auto-overlay the
+  custom userland utilities (benchmark suite + `penmon`) into
+  `/usr/local/bin` via each tool's `overlay` make target staged into
+  `build/netbsd-overlay`, copied in with `mkrootfs.sh -O`; see
+  DEVELOP.md § 8 for the convention and how to add a utility.
 
 ### Boot ROM build
 The ROM has its own `hw/rom/Makefile` (auto source discovery + header
@@ -227,7 +231,8 @@ Bare-metal benchmarks (Dhrystone 2.1, memtest, membench) under
 
 - `make benchmark` — ISS run. `make benchmark-rtl` — Verilator
   (cycle-accurate, slower). `make benchmark-netbsd` — builds `pbench`
-  for `sdimage-rootfs ROOTFS_FULL=1`.
+  which `make sdimage-rootfs` auto-overlays (along with `penmon`) into
+  the rootfs `/usr/local/bin`.
 - Override `BENCH_ITERS=`, `COPT="-Os"`, etc.
 - Latest baseline numbers per snapshot (with HEAD SHA) live in
   `benchmark/netbsd-bench/BASELINE.md` — do not quote DMIPS/CPI/fmax

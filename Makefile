@@ -433,11 +433,36 @@ NETBSD_BENCH_OVERLAYS += -i $(NETBSD_BENCH_DIR)/penumbra-text-static:/usr/local/
 endif
 endif
 
+# ── Custom NetBSD userland overlays ───────────────────────────────
+# Each custom utility installs into a shared overlay fake-root via its
+# own `overlay' target; mkrootfs.sh -O copies the whole tree into the
+# image.  Add a utility by giving it an `overlay' target and adding it
+# to NETBSD_OVERLAYS.  (The NETBSD_BENCH_OVERLAYS -i list above is
+# superseded by this and no longer referenced.)
+OVERLAY_ROOT    := $(BUILD_DIR)/netbsd-overlay
+NETBSD_OVERLAYS := benchmark-overlay penmon-overlay
+
+.PHONY: netbsd-overlay benchmark-overlay penmon-overlay penmon
+netbsd-overlay:
+	rm -rf $(OVERLAY_ROOT)
+	@$(MAKE) $(NETBSD_OVERLAYS)
+
+benchmark-overlay:
+	@$(MAKE) -C benchmark/netbsd-bench LLVM_PREFIX=$(LLVM_PREFIX) \
+		DESTDIR=$(abspath $(DESTDIR)) OVERLAY_ROOT=$(abspath $(OVERLAY_ROOT)) overlay
+
+penmon-overlay:
+	@$(MAKE) -C sw/penmon LLVM_PREFIX=$(LLVM_PREFIX) \
+		DESTDIR=$(abspath $(DESTDIR)) OVERLAY_ROOT=$(abspath $(OVERLAY_ROOT)) overlay
+
+penmon:
+	@$(MAKE) -C sw/penmon LLVM_PREFIX=$(LLVM_PREFIX) DESTDIR=$(abspath $(DESTDIR))
+
 .PHONY: rootfs
-rootfs:
+rootfs: netbsd-overlay
 	@sw/tools/mkrootfs.sh -d $(DESTDIR) -o $(ROOTFS_IMG) \
 		-k $(KERNEL) $(if $(ROOTFS_FULL),,-m) \
-		$(NETBSD_BENCH_OVERLAYS) -v
+		-O $(OVERLAY_ROOT) -v
 
 .PHONY: sdimage-rootfs
 sdimage-rootfs: rootfs
