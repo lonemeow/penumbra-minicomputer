@@ -512,9 +512,9 @@ This is **not** a hardware write-path asymmetry — the premise that the
 "STW" was a single instruction was wrong.  Root cause:
 
 - **The hardware write path is symmetric.**  An RTL-sim microbench
-  (`hw/sim/programs/test_mmio_stw_timing.s` on `machine_sim`) issuing a
-  *single* STW vs LDW to the same uncached scratch register costs the
-  same ~4 cyc/op.  Microcode, the STALL sequencer, the bus arbiter, and
+  (`hw/sim/programs/test_mmio_stw_timing.s`, a since-removed
+  diagnostic, on `machine_sim`) issuing a *single* STW vs LDW to the
+  same uncached scratch register costs the same ~4 cyc/op.  Microcode, the STALL sequencer, the bus arbiter, and
   the L1 pass-through path are all symmetric — none favours reads.
 - **The microbench counted instructions, not cycles.**  The driver's
   open-coded `bus_space_write_4` loop emitted *3* instructions per
