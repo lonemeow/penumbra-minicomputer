@@ -883,8 +883,8 @@ events injected) is also recommended once the directed tests pass.
   save-state's bypass of the scoreboard.
 - [control-decode.md](./control-decode.md) — the decoder's
   control-vector layout, including the `phys_src_*`/`phys_dst`
-  fields and any `writes_flags`/`reads_flags` bits Section 8
-  introduces. *(To be written.)*
+  fields and the `writes_flags`/`reads_flags` bits Section 8
+  introduces.
 - [regfile.md](./regfile.md) — the 2R/2W regfile with R14
   banking. *(To be written.)*
 - [instruction-set.md](../../system/instruction-set.md) — the

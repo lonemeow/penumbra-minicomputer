@@ -18,6 +18,7 @@ This section defines the programmer-visible behavior of the Penumbra architectur
 *   **[MMU & TLB](./system/mmu.md)** — Software-managed translation, protection, and dirty tracking.
 *   **[System Registers](./system/sysregs.md)** — Device-mapped control registers (Device Map).
 *   **[Bus & Address Map](./system/bus.md)** — Physical memory layout and the autoconfig software flow.
+*   **[Device Classes](./system/device-classes.md)** — The autoconfig class contract: what claiming a class *requires*.
 *   **[Boot Protocol](./system/boot-protocol.md)** — The three-stage ROM → Loader → Kernel handoff.
 
 ### Device Drivers
@@ -68,6 +69,7 @@ The project's next major **CPU design era transition** — from Penumbra/1's cla
 *   **[Penumbra/2 Pipeline Stages](./internals/penumbra2/pipeline-stages.md)** — Per-stage description, inter-stage register layouts, stall/squash semantics, cycle-accurate timing examples.
 *   **[Penumbra/2 Hazard Model](./internals/penumbra2/hazard-model.md)** — The scoreboard: storage, valid-bit lifecycle, stall predicate, ISA→physical register mapping, S/I control-state serialization, flag (NZCV) hazards, and divmul / drain-commit / exception-entry interactions.
 *   **[Penumbra/2 Exception Flow](./internals/penumbra2/exception-flow.md)** — Taking and returning from exceptions/traps/interrupts in the pipeline: fault detection by stage, precise-exception commit at WB, save-state pulse, vector-fetch FSM, ERET, and interrupt recognition (SR.I, ei_shadow, EI/DI).
+*   **[Penumbra/2 Control Decode](./internals/penumbra2/control-decode.md)** — Turning the instruction word into control: hardwired per-stage decode, the four instruction formats, the ID control bundle, register/immediate extraction, branch-condition evaluation, and the IR[15:12] aliasing hazard.
 
 ---
 
