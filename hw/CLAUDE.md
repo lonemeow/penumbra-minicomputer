@@ -6,8 +6,8 @@ project-wide conventions and pointers to architectural specs.
 **Architectural specs** (read these before assuming RTL behavior):
 - Microcode reference (micro-word format, all fields, full routine
   catalog, ROM organization, exception integration):
-  `doc/internals/microcode.md`
-- Datapath (three-bus architecture, signal flow): `doc/internals/datapath.md`
+  `doc/internals/penumbra1/microcode.md`
+- Datapath (three-bus architecture, signal flow): `doc/internals/penumbra1/datapath.md`
 - MMU internals (TLB structure, fault flow): `doc/internals/mmu-internals.md`
 - L2 cache design plan + phase status: `doc/internals/l2-cache.md`
 - SDRAM controller v2 design and optimization:
@@ -26,12 +26,14 @@ project-wide conventions and pointers to architectural specs.
 ```
 hw/
 ├── rtl/
-│   ├── core/    # CPU core: datapath, regfile, ALU, sequencer, microcode ROM, ...
-│   ├── mmu/     # TLB main + pinned, MMU top, alignment/permission checks
-│   ├── soc/     # Bus controller, autoconfig, caches (L1 VIPT, L1 PIPT, L2), boot ROM, cpuid/machid
-│   ├── io/      # Real UART, real SPI, SDRAM v2 controller/adapter/PHY/CDC
-│   ├── sim/     # machine_sim, sim_uart, sim_spi, sdram_sim, simple_mem, sdram chip model
-│   └── fpga/    # ulx3s_top, BRAM helpers, FPGA-only RAM
+│   ├── common/    # penumbra_pkg.sv — shared ISA constants (both cores + peripherals)
+│   ├── penumbra1/ # gen1 CPU core: datapath, regfile, ALU, sequencer, microcode ROM, ...
+│   ├── penumbra2/ # gen2 pipelined core (not yet implemented)
+│   ├── mmu/       # TLB main + pinned, MMU top, alignment/permission checks
+│   ├── soc/       # Bus controller, autoconfig, caches (L1 VIPT, L1 PIPT, L2), boot ROM, cpuid/machid
+│   ├── io/        # Real UART, real SPI, SDRAM v2 controller/adapter/PHY/CDC
+│   ├── sim/       # machine_sim, sim_uart, sim_spi, sdram_sim, simple_mem, sdram chip model
+│   └── fpga/      # ulx3s_top, BRAM helpers, FPGA-only RAM
 ├── microcode/   # microcode.uasm (single source — assemble via uasm.py)
 ├── rom/         # Boot ROM (C + asm) and its standalone Makefile
 ├── sim/         # tb_cpu_prog (program runner), tb_interactive, per-module tbs
@@ -223,7 +225,7 @@ real bug in `sim_spi.sv`.
 ### Microcode
 - Field semantics, ROM zone layout, sequencer behavior, exception
   integration, and the full implemented-instruction catalog all live
-  in `doc/internals/microcode.md`. Do not duplicate any of that here.
+  in `doc/internals/penumbra1/microcode.md`. Do not duplicate any of that here.
 - ALU and SYS-format µ-words share R-format encoding split by op[4]
   (ALU: 0x00–0x1E; SYS: 0x40–0x5E). Format M uses ×4 slot spacing
   (0x80–0xBF). Microcode assembler validates slot boundaries.
@@ -238,7 +240,7 @@ BREAK, SYSCALL, privilege violation, illegal instruction.
 
 Priority: `fault > illegal > priv > BREAK > SYSCALL > IRQ`. Vector
 numbers and the dispatch sequence (EPC/ESR save, mode switch, vector
-fetch via MMU bypass) are documented in `doc/internals/microcode.md`
+fetch via MMU bypass) are documented in `doc/internals/penumbra1/microcode.md`
 (§ Exception Integration).
 
 ### Register address routing

@@ -20,7 +20,9 @@ and CLAUDE.md files intentionally do *not* duplicate them.
 | Device register maps (SPI/SD, ESP32 NIC) | `doc/system/devices/` |
 | NetBSD port — current status, kernel design | `doc/system/netbsd/{porting-status,design-notes}.md` |
 | Bus signal-level protocol (hardware) | `doc/hardware/bus-protocol.md` |
-| Datapath, microcode, MMU internals, caches | `doc/internals/{datapath,microcode,mmu-internals,l2-cache}.md` |
+| Penumbra/1 datapath, microcode, L1 cache | `doc/internals/penumbra1/` |
+| MMU internals, L2 cache, CPU-internal bus | `doc/internals/{mmu-internals,l2-cache,cpu-bus}.md` |
+| Penumbra/2 (gen2) pipelined-core design | `doc/internals/penumbra2/` |
 | SDRAM controller / optimization | `doc/internals/sdram-{controller,optimization}.md` |
 | RTL coding standards | `doc/internals/coding-standards.md` |
 | Current TODO / roadmap | `doc/TODO.md` |
