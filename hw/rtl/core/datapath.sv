@@ -74,7 +74,7 @@ module datapath
     // Status outputs (to micro-sequencer / fetch unit)
     // ══════════════════════════════════════════════════════════════
     output logic        o_divmul_busy,     // divmul iteration in progress
-    output logic        o_divmul_fault, // divmul DIV0/overflow fault → VEC_ARITH
+    output logic        o_divmul_fault, // divmul DIV0 fault → VEC_ARITH
     output logic        o_sr_s,         // Supervisor bit
     output logic        o_sr_i,         // Interrupt enable bit
     output logic        o_ei_shadow,    // EI one-instruction delay active

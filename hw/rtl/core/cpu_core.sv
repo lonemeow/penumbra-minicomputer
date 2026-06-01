@@ -178,7 +178,7 @@ module cpu_core
 
     // Datapath status
     logic        divmul_busy, cond_result, sr_s, sr_i, ei_shadow;
-    logic        divmul_fault;   // divmul DIV0/overflow → VEC_ARITH
+    logic        divmul_fault;   // divmul DIV0 → VEC_ARITH
     logic [31:0] pc;
 
     // Sequencer → datapath control signals
@@ -408,7 +408,7 @@ module cpu_core
             priv_pending <= 1'b0;
     end
 
-    // ── Arithmetic fault detection (from divmul: DIV0 / overflow) ──
+    // ── Arithmetic fault detection (from divmul: DIV0 only) ──
     logic        arith_except;
     logic        arith_pending;
 

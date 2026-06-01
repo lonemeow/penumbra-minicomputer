@@ -27,7 +27,7 @@ module sequencer
     input  logic        i_divmul_busy,       // divmul iteration in progress
     input  logic        i_mem_busy,       // Memory/cache busy
     input  logic        i_mem_fault,      // MMU fault (TLB miss / protection)
-    input  logic        i_arith_fault,    // divmul DIV0/overflow → VEC_ARITH
+    input  logic        i_arith_fault,    // divmul DIV0 → VEC_ARITH
     input  logic        i_cond_result,    // Condition evaluator output
     input  logic        i_sr_s,           // Supervisor mode (for priv bit check)
 
