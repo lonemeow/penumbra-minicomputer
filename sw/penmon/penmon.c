@@ -1,0 +1,131 @@
+/*	$NetBSD$	*/
+/*
+ * penmon — Penumbra hardware-counter system monitor (main loop).
+ *
+ * Usage: penmon [-d interval_seconds]
+ *
+ * Each tick: snapshot all counters, derive per-interval rates, sample the
+ * process table + memory, and repaint.  Keys: q quit, space force-refresh,
+ * +/- change the interval.
+ */
+#include "penmon.h"
+
+#include <curses.h>
+#include <locale.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <unistd.h>
+
+static volatile sig_atomic_t want_quit;
+
+static void
+on_signal(int sig)
+{
+	(void)sig;
+	want_quit = 1;
+}
+
+static void
+sleep_ms(long ms)
+{
+	struct timespec ts;
+
+	ts.tv_sec = ms / 1000;
+	ts.tv_nsec = (ms % 1000) * 1000000L;
+	nanosleep(&ts, NULL);
+}
+
+int
+main(int argc, char **argv)
+{
+	struct snapshot prev, cur;
+	struct rates r;
+	struct history hist;
+	struct meminfo mem;
+	struct procinfo procs[PENMON_MAXPROC];
+	uint64_t clk_hz = 0;
+	double interval = 1.0;
+	int ch, nproc;
+	double load[3];
+
+	int c;
+	while ((c = getopt(argc, argv, "d:h")) != -1) {
+		switch (c) {
+		case 'd':
+			interval = atof(optarg);
+			if (interval < 0.2) interval = 0.2;
+			if (interval > 10.0) interval = 10.0;
+			break;
+		case 'h':
+		default:
+			fprintf(stderr, "usage: %s [-d interval]\n", argv[0]);
+			return (c == 'h') ? 0 : 1;
+		}
+	}
+
+	setlocale(LC_ALL, "");
+	signal(SIGINT, on_signal);
+	signal(SIGTERM, on_signal);
+
+	(void)read_cpu_freq(&clk_hz);
+	history_init(&hist);
+
+	/* Prime with a short first interval so the screen isn't blank. */
+	read_snapshot(&prev);
+	sleep_ms(250);
+
+	initscr();
+	cbreak();
+	noecho();
+	curs_set(0);
+	keypad(stdscr, TRUE);
+	timeout((int)(interval * 1000));
+	if (has_colors())
+		render_init();
+
+	for (;;) {
+		read_snapshot(&cur);
+		compute_rates(&prev, &cur, clk_hz, &r);
+		history_push(&hist, &r);
+		read_meminfo(&mem);
+		nproc = read_procs(procs, PENMON_MAXPROC);
+		if (getloadavg(load, 3) < 1)
+			load[0] = 0.0;
+
+		render_frame(&r, &hist, &mem, load[0], read_uptime(),
+		    procs, nproc, interval);
+
+		prev = cur;
+
+		ch = getch();			/* blocks up to `interval` */
+		if (want_quit)
+			break;
+		switch (ch) {
+		case 'q':
+		case 'Q':
+			goto done;
+		case ' ':			/* force an immediate refresh */
+			break;
+		case '+':
+		case '=':
+			if (interval > 0.4) interval -= 0.2;
+			timeout((int)(interval * 1000));
+			break;
+		case '-':
+		case '_':
+			if (interval < 10.0) interval += 0.2;
+			timeout((int)(interval * 1000));
+			break;
+		case KEY_RESIZE:
+			clear();
+			break;
+		default:
+			break;		/* ERR (timeout) included */
+		}
+	}
+done:
+	endwin();
+	return 0;
+}
