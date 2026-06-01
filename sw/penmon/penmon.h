@@ -36,6 +36,11 @@ struct snapshot {
 	uint64_t insns;			/* machdep.cpu.insns_retired */
 	struct cache_ctr l1i, l1d, l2;	/* machdep.cache.* */
 	uint64_t cp_time[5];		/* kern.cp_time: usr,nice,sys,intr,idle */
+	uint64_t faults;		/* vm.uvmexp2.faults — cumulative page faults */
+	uint64_t intrs;			/* vm.uvmexp2.intrs — hardware interrupts */
+	uint64_t syscalls;		/* vm.uvmexp2.syscalls */
+	uint64_t swtch;			/* vm.uvmexp2.swtch — context switches */
+	uint64_t forks;			/* vm.uvmexp2.forks — process creations */
 };
 
 /* Per-cache derived rates for display. */
@@ -51,6 +56,11 @@ struct rates {
 	double mips;			/* million instructions retired / second */
 	double clk_mhz;			/* CPU clock (static, machdep.cpu.freq) */
 	double cpu_pct[5];		/* % of interval in usr,nice,sys,intr,idle */
+	double faults_per_sec;		/* page faults per wall-clock second */
+	double intr_per_sec;		/* hardware interrupts / s */
+	double syscall_per_sec;		/* system calls / s */
+	double csw_per_sec;		/* context switches / s */
+	double fork_per_sec;		/* process creations / s */
 	struct cache_rate l1i, l1d, l2;
 };
 

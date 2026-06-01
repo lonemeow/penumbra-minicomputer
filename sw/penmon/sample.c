@@ -6,6 +6,7 @@
 #include "penmon.h"
 
 #include <sys/sysctl.h>
+#include <uvm/uvm_extern.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -63,6 +64,25 @@ read_snapshot(struct snapshot *s)
 	read_cache("machdep.cache.l1i", &s->l1i);
 	read_cache("machdep.cache.l1d", &s->l1d);
 	read_cache("machdep.cache.l2",  &s->l2);
+
+	/* vm.uvmexp2 — cumulative system-activity counters (page faults,
+	 * interrupts, syscalls, context switches, forks).  One struct read
+	 * feeds several per-interval rates. */
+	{
+		struct uvmexp_sysctl u;
+		size_t ulen = sizeof(u);
+		int vmib[2];
+
+		vmib[0] = CTL_VM;
+		vmib[1] = VM_UVMEXP2;
+		if (sysctl(vmib, 2, &u, &ulen, NULL, 0) == 0) {
+			s->faults   = (uint64_t)u.faults;
+			s->intrs    = (uint64_t)u.intrs;
+			s->syscalls = (uint64_t)u.syscalls;
+			s->swtch    = (uint64_t)u.swtch;
+			s->forks    = (uint64_t)u.forks;
+		}
+	}
 
 	/* kern.cp_time is a fixed 5-entry uint64 array of clock ticks. */
 	mib[0] = CTL_KERN;
@@ -153,4 +173,11 @@ compute_rates(const struct snapshot *prev, const struct snapshot *cur,
 	cache_rate(&prev->l1i, &cur->l1i, dt, &out->l1i);
 	cache_rate(&prev->l1d, &cur->l1d, dt, &out->l1d);
 	cache_rate(&prev->l2,  &cur->l2,  dt, &out->l2);
+
+	/* uvmexp2 activity counters: cumulative 64-bit, no wrap — plain diff. */
+	out->faults_per_sec  = (double)(cur->faults   - prev->faults)   / dt;
+	out->intr_per_sec    = (double)(cur->intrs    - prev->intrs)    / dt;
+	out->syscall_per_sec = (double)(cur->syscalls - prev->syscalls) / dt;
+	out->csw_per_sec     = (double)(cur->swtch    - prev->swtch)    / dt;
+	out->fork_per_sec    = (double)(cur->forks    - prev->forks)    / dt;
 }
