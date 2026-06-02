@@ -49,7 +49,7 @@ TB   ?= tb_$(MOD)
 # Shared packages — always included. --top-module tells Verilator which
 # module is the DUT (otherwise it picks the first file = a package).
 # Add new packages here as the design grows.
-PKG_SV = hw/rtl/common/penumbra_pkg.sv hw/rtl/io/sdram/sdram_pkg.sv
+PKG_SV = hw/rtl/common/penumbra_pkg.sv hw/rtl/penumbra2/penumbra2_pkg.sv hw/rtl/io/sdram/sdram_pkg.sv
 
 # ── Assembler tools ──────────────────────────────────────────
 PASM  = python3 sw/tools/pasm.py
@@ -166,6 +166,7 @@ MODULE_TESTS = \
     status_reg \
     wmux \
     penumbra2_regfile \
+    penumbra2_scoreboard \
     uart \
     busctl \
     tlb \
