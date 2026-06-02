@@ -1,21 +1,26 @@
 // Verilator testbench for penumbra2_regfile.
 //
+// The file is physically indexed (penumbra2_regmap did the ISA->phys
+// mapping), so the testbench drives physical entry indices directly:
+//   0      R0  — reads 0, writes land in a dead slot
+//   1-13   R1-R13 array storage
+//   14     USP flop
+//   15     SSP flop
+//
 // Exercises the contract in doc/internals/penumbra2/regfile.md:
-//   - R0 reads as zero; writes to R0 are discarded (override wins).
-//   - R1-R13 read/write through both ports.
-//   - R15 reads return i_pc; writes to R15 are discarded.
-//   - R14 banking: USP when SR.S=0, SSP when SR.S=1, independent.
-//   - cross_bank: supervisor code (SR.S=1) with cross_bank=1 reaches
-//     USP, the WRSPR/RDSPR USP path (sp_select = SR.S ^ cross_bank).
-//   - No write-through: a read in the same cycle as a write to the
-//     same register returns the old value (regfile.md §7).
-//   - Write-enable gating.
-//   - Reset drives USP and SSP to 0. R1-R13 are NOT reset (the
-//     scoreboard owns liveness), so they are only read after a write.
+//   - entry 0 reads 0 regardless of writes (override wins).
+//   - entries 1-13 read/write through both ports, independently.
+//   - USP (14) and SSP (15) are independent flops.
+//   - no write-through: a read in the same cycle as a write to the
+//     same index returns the old value.
+//   - write-enable gating.
+//   - reset drives USP/SSP to 0 (entries 1-13 are not reset).
 
 #include <cstdio>
 #include <cstdint>
 #include "Vpenumbra2_regfile.h"
+
+enum { SB_USP = 14, SB_SSP = 15 };
 
 static int errors = 0;
 static int tests = 0;
@@ -35,24 +40,16 @@ static void check(const char* name, uint32_t got, uint32_t expected) {
     }
 }
 
-// Drive a write and clock it in. cross_bank only matters for R14.
-static void write_reg(Vpenumbra2_regfile* dut, int addr, uint32_t data,
-                      bool supervisor = false, bool cross_bank = false) {
-    dut->i_wr_addr = addr;
+static void write_reg(Vpenumbra2_regfile* dut, int idx, uint32_t data) {
+    dut->i_wr_idx = idx;
     dut->i_wr_data = data;
     dut->i_wr_en = 1;
-    dut->i_supervisor = supervisor ? 1 : 0;
-    dut->i_cross_bank = cross_bank ? 1 : 0;
     tick(dut);
     dut->i_wr_en = 0;
 }
 
-// Combinational read through port A.
-static uint32_t read_a(Vpenumbra2_regfile* dut, int addr,
-                       bool supervisor = false, bool cross_bank = false) {
-    dut->i_rd_addr_a = addr;
-    dut->i_supervisor = supervisor ? 1 : 0;
-    dut->i_cross_bank = cross_bank ? 1 : 0;
+static uint32_t read_a(Vpenumbra2_regfile* dut, int idx) {
+    dut->i_rd_idx_a = idx;
     dut->eval();
     return dut->o_rd_data_a;
 }
@@ -63,18 +60,15 @@ int main() {
     // ── Reset ────────────────────────────────────────────────────
     dut->i_rst = 1;
     dut->i_wr_en = 0;
-    dut->i_pc = 0;
-    dut->i_supervisor = 0;
-    dut->i_cross_bank = 0;
     tick(dut);
     dut->i_rst = 0;
 
-    // ── R0 always reads zero, writes discarded ───────────────────
+    // ── Entry 0 (R0) always reads zero, writes discarded ─────────
     check("r0_reads_zero", read_a(dut, 0), 0x00000000);
     write_reg(dut, 0, 0xDEADBEEF);
     check("r0_write_discarded", read_a(dut, 0), 0x00000000);
 
-    // ── R1-R13 basic read/write ──────────────────────────────────
+    // ── Entries 1-13 basic read/write ────────────────────────────
     for (int r = 1; r <= 13; r++) {
         uint32_t val = 0x100000 * r + 0x12345;
         write_reg(dut, r, val);
@@ -84,57 +78,32 @@ int main() {
     }
 
     // ── Both read ports are independent ──────────────────────────
-    dut->i_rd_addr_a = 1;
-    dut->i_rd_addr_b = 2;
+    dut->i_rd_idx_a = 1;
+    dut->i_rd_idx_b = 2;
     dut->eval();
     check("port_a_reads_r1", dut->o_rd_data_a, 0x00112345);
     check("port_b_reads_r2", dut->o_rd_data_b, 0x00212345);
 
-    dut->i_rd_addr_a = 5;
-    dut->i_rd_addr_b = 5;
+    dut->i_rd_idx_a = 5;
+    dut->i_rd_idx_b = 5;
     dut->eval();
     check("both_ports_same_reg", dut->o_rd_data_a, dut->o_rd_data_b);
 
-    // ── R15 returns PC; writes discarded ─────────────────────────
-    dut->i_pc = 0x00001000;
-    check("r15_reads_pc", read_a(dut, 15), 0x00001000);
-    dut->i_pc = 0x0000FFFC;
-    check("r15_tracks_pc", read_a(dut, 15), 0x0000FFFC);
-    write_reg(dut, 15, 0xBAAAAAAD);
-    dut->i_pc = 0x00002000;
-    check("r15_write_discarded", read_a(dut, 15), 0x00002000);
-
-    // ── R14 banking (USP/SSP) ────────────────────────────────────
-    write_reg(dut, 14, 0xAAAA0000, /*supervisor=*/false);
-    check("r14_usp_readback", read_a(dut, 14, /*supervisor=*/false), 0xAAAA0000);
-    // SSP is still 0 from reset.
-    check("r14_ssp_after_switch", read_a(dut, 14, /*supervisor=*/true), 0x00000000);
-    write_reg(dut, 14, 0xBBBB0000, /*supervisor=*/true);
-    check("r14_ssp_readback", read_a(dut, 14, /*supervisor=*/true), 0xBBBB0000);
-    check("r14_usp_preserved", read_a(dut, 14, /*supervisor=*/false), 0xAAAA0000);
-
-    // ── Cross-bank (RDSPR/WRSPR USP from supervisor) ─────────────
-    // sp_select = SR.S ^ cross_bank, so supervisor + cross_bank=1
-    // reaches USP while SR.S=1.
-    check("crossbank_read_usp",
-          read_a(dut, 14, /*supervisor=*/true, /*cross_bank=*/true), 0xAAAA0000);
-    // A cross-bank write from supervisor lands in USP, not SSP.
-    write_reg(dut, 14, 0xCCCC0000, /*supervisor=*/true, /*cross_bank=*/true);
-    check("crossbank_write_hits_usp",
-          read_a(dut, 14, /*supervisor=*/false), 0xCCCC0000);
-    check("crossbank_ssp_untouched",
-          read_a(dut, 14, /*supervisor=*/true), 0xBBBB0000);
+    // ── USP (14) and SSP (15) are independent ────────────────────
+    write_reg(dut, SB_USP, 0xAAAA0000);
+    check("usp_readback", read_a(dut, SB_USP), 0xAAAA0000);
+    // SSP still 0 from reset.
+    check("ssp_after_usp_write", read_a(dut, SB_SSP), 0x00000000);
+    write_reg(dut, SB_SSP, 0xBBBB0000);
+    check("ssp_readback", read_a(dut, SB_SSP), 0xBBBB0000);
+    check("usp_preserved", read_a(dut, SB_USP), 0xAAAA0000);
 
     // ── No write-through (regfile.md §7) ─────────────────────────
-    // While a write to R3 is asserted but not yet clocked, a read of
-    // R3 in the same cycle must still return the OLD value.
     uint32_t old_r3 = read_a(dut, 3);
-    dut->i_wr_addr = 3;
+    dut->i_wr_idx = 3;
     dut->i_wr_data = 0x33330000;
     dut->i_wr_en = 1;
-    dut->i_supervisor = 0;
-    dut->i_cross_bank = 0;
-    dut->i_rd_addr_a = 3;
+    dut->i_rd_idx_a = 3;
     dut->eval();                                  // same cycle as the write
     check("no_write_through_old_value", dut->o_rd_data_a, old_r3);
     tick(dut);                                    // clock the write in
@@ -143,7 +112,7 @@ int main() {
 
     // ── Write-enable gating ──────────────────────────────────────
     uint32_t old_r1 = read_a(dut, 1);
-    dut->i_wr_addr = 1;
+    dut->i_wr_idx = 1;
     dut->i_wr_data = 0xFFFFFFFF;
     dut->i_wr_en = 0;
     tick(dut);
@@ -153,8 +122,8 @@ int main() {
     dut->i_rst = 1;
     tick(dut);
     dut->i_rst = 0;
-    check("reset_usp", read_a(dut, 14, /*supervisor=*/false), 0x00000000);
-    check("reset_ssp", read_a(dut, 14, /*supervisor=*/true), 0x00000000);
+    check("reset_usp", read_a(dut, SB_USP), 0x00000000);
+    check("reset_ssp", read_a(dut, SB_SSP), 0x00000000);
 
     // ── Summary ──────────────────────────────────────────────────
     printf("penumbra2_regfile: %d/%d tests passed\n", tests - errors, tests);

@@ -1,125 +1,119 @@
 // penumbra2_regfile — Penumbra/2 register file.
-// 16-register, 2-read, 1-write, 32-bit.
+// 16-entry, 2-read, 1-write, 32-bit, physically indexed.
 //
-// Specified by doc/internals/penumbra2/regfile.md. The ISA-visible
-// register model (R0=zero, R1-R13 general purpose, R14 banked
-// USP/SSP, R15=PC alias) is fixed by doc/system/architecture.md;
-// this module realises it for the pipelined core.
+// Specified by doc/internals/penumbra2/regfile.md. Stores the GPR/SP
+// slice (entries 0-15) of the scoreboard's physical namespace; the
+// SPR entries 16-22 live in other modules. Addressed by physical
+// entry index on both read ports (in ID) and the write port (the
+// phys_dst carried to WB).
 //
-// Storage:
-//   R1-R13 live in 16-deep distributed-RAM banks, replicated once
-//   per read port (A, B) so each bank is 1W/1R — the canonical ECP5
-//   SLICEMEM (DPR16X*) shape. Both banks are written in lockstep so
-//   they hold identical data. Slots 0/14/15 are written too but
-//   never read: the override mux always wins for those addresses.
+// The ISA->physical mapping — R14->USP/SSP by SR.S, the cross-bank
+// RDSPR/WRSPR USP case, R0/R15 — is done once in ID by
+// penumbra2_regmap. By the time an index reaches this file it is a
+// plain physical entry, so the file does no banking conditional and
+// sees no SR.S: index 14 is USP, index 15 is SSP, full stop.
 //
-//   R0 (zero), R14 (banked USP/SSP) and R15 (PC alias) are an output
-//   override on the storage read. USP and SSP are two dedicated
-//   flops, selected by a single XOR (regfile.md §5):
-//       sp_select = SR.S ^ cross_bank      // 0 -> USP, 1 -> SSP
+// Entry layout:
+//   0      R0       — read override forces 0 (array slot 0 is dead)
+//   1-13   R1-R13   — distributed RAM, replicated per read port
+//   14     USP      — dedicated flop
+//   15     SSP      — dedicated flop
 //
-// Register liveness is not tracked here: the scoreboard gates issue
-// on in-flight writers, so the storage reads as undefined until
-// written (boot establishes it).
+// R15 (PC) is not an entry here: R15 reads are resolved by the ID
+// operand mux selecting the PC, and R15 "writes" are branches, so
+// R15 never reaches a regfile port (control-decode.md §5).
 //
 // Reads are asynchronous and writes synchronous, with no
 // write-through: a read in the same cycle a register is written
 // returns the old value, visible on the next cycle (regfile.md §7).
 //
-// A divmul result writes two destinations; the writeback stage
-// drives this single write port on two consecutive cycles (low half
-// then high half). From this module's view that is two ordinary
-// writes (regfile.md §4).
+// A divmul result writes two destinations; the writeback stage drives
+// this single write port on two consecutive cycles (low half then
+// high half). From this module's view that is two ordinary writes
+// (regfile.md §4).
 
 module penumbra2_regfile
     import penumbra_pkg::*;
+    import penumbra2_pkg::*;
 (
-    input  logic        i_clk,
-    input  logic        i_rst,
+    input  logic                  i_clk,
+    input  logic                  i_rst,
 
     // Read port A (combinational — read by ID in the decode cycle)
-    input  logic [3:0]  i_rd_addr_a,
-    output logic [31:0] o_rd_data_a,
+    input  logic [SB_IDX_W-1:0]   i_rd_idx_a,
+    output logic [31:0]           o_rd_data_a,
 
     // Read port B (combinational)
-    input  logic [3:0]  i_rd_addr_b,
-    output logic [31:0] o_rd_data_b,
+    input  logic [SB_IDX_W-1:0]   i_rd_idx_b,
+    output logic [31:0]           o_rd_data_b,
 
     // Write port (synchronous, driven at WB)
-    input  logic [3:0]  i_wr_addr,
-    input  logic [31:0] i_wr_data,
-    input  logic        i_wr_en,
-
-    // Special inputs
-    input  logic [31:0] i_pc,          // PC value — returned when reading R15
-    input  logic        i_supervisor,  // SR.S — selects SSP (1) vs USP (0) for R14
-    input  logic        i_cross_bank   // RDSPR/WRSPR USP from supervisor: flip the bank
+    input  logic [SB_IDX_W-1:0]   i_wr_idx,
+    input  logic [31:0]           i_wr_data,
+    input  logic                  i_wr_en
 );
 
     // ── Storage ─────────────────────────────────────────────────
-    // Two 16x32 distributed-RAM banks, one per read port. Writes
-    // fan out to both so the banks stay identical.
+    // Two 16x32 distributed-RAM banks, one per read port. Writes fan
+    // out to both so the banks stay identical. Slots 0/14/15 are
+    // written too but never read — the override mux wins for them.
     (* ram_style = "distributed" *) logic [31:0] regs_a [0:15];
     (* ram_style = "distributed" *) logic [31:0] regs_b [0:15];
 
-    // Banked stack pointer — flops with sync reset to a defined 0.
+    // Banked stack pointers — flops with sync reset to a defined 0.
     logic [31:0] usp;
     logic [31:0] ssp;
 
-    // sp_select: 1 = SSP, 0 = USP, after applying cross_bank.
-    logic sp_select;
-    assign sp_select = i_supervisor ^ i_cross_bank;
-
     // ── Read logic ──────────────────────────────────────────────
-    // Each port reads its replicated storage copy in parallel with
-    // the address decode; override_read picks the final value:
+    // Each port reads its replicated array copy and override_read
+    // picks the final value by physical index:
     //
-    //   addr == R0  → 0          (hardwired zero)
-    //   addr == R14 → banked SP  (sp_sel ? ssp : usp)
-    //   addr == R15 → i_pc       (PC alias)
-    //   else        → stored value
+    //   idx == 0  → 0    (R0 hardwired zero)
+    //   idx == 14 → USP
+    //   idx == 15 → SSP
+    //   else      → stored value
     //
     function automatic logic [31:0] override_read(
-        input logic [3:0]  addr,
-        input logic [31:0] stored_value,
-        input logic        sp_sel
+        input logic [SB_IDX_W-1:0] idx,
+        input logic [31:0]         stored_value
     );
-        case (addr)
-            REG_ZERO: return 32'd0;
-            REG_SP:   return sp_sel ? ssp : usp;
-            REG_PC:   return i_pc;
-            default:  return stored_value;
+        case (idx)
+            '0:      return 32'd0;
+            SB_USP:  return usp;
+            SB_SSP:  return ssp;
+            default: return stored_value;
         endcase
     endfunction
 
-    assign o_rd_data_a = override_read(i_rd_addr_a, regs_a[i_rd_addr_a], sp_select);
-    assign o_rd_data_b = override_read(i_rd_addr_b, regs_b[i_rd_addr_b], sp_select);
+    assign o_rd_data_a = override_read(i_rd_idx_a, regs_a[i_rd_idx_a[3:0]]);
+    assign o_rd_data_b = override_read(i_rd_idx_b, regs_b[i_rd_idx_b[3:0]]);
 
     // ── Write logic ─────────────────────────────────────────────
-    // Synchronous write to both array banks plus (for R14) the
-    // active SP flop. R0/R15 writes land in the array but are never
-    // read out — the override always wins — so the write enable
-    // skips the address compare and stays decode-free.
+    // Synchronous write to both array banks plus, for index 14/15,
+    // the selected SP flop. The array write is decode-free (every
+    // index writes its slot; 0/14/15 land in dead slots).
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
             usp <= 32'd0;
             ssp <= 32'd0;
         end else if (i_wr_en) begin
-            if (i_wr_addr == REG_SP) begin
-                if (sp_select)
-                    ssp <= i_wr_data;
-                else
-                    usp <= i_wr_data;
-            end
-            regs_a[i_wr_addr] <= i_wr_data;
-            regs_b[i_wr_addr] <= i_wr_data;
+            if (i_wr_idx == SB_USP)
+                usp <= i_wr_data;
+            else if (i_wr_idx == SB_SSP)
+                ssp <= i_wr_data;
+            regs_a[i_wr_idx[3:0]] <= i_wr_data;
+            regs_b[i_wr_idx[3:0]] <= i_wr_data;
         end
     end
 
-    // No assertions here: the file tolerates any 4-bit write address
-    // by design (R0/R15 land in dead slots the read override wins
-    // over), so it has no "can't happen" of its own. The invariant
-    // that R15 is never a GPR write target belongs to the decoder and
-    // is asserted in penumbra2_regmap.
+    // ══════════════════════════════════════════════════════════
+    // Assertions — sim-only (Verilator --assert); stripped at synth.
+    // Only GPR/SP entries (0..15) are written here; an SPR (16..22)
+    // write means an SPR-targeted write was misrouted to the regfile
+    // instead of its owning module.
+    // ══════════════════════════════════════════════════════════
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        !(i_wr_en && i_wr_idx > SB_SSP))
+        else $error("penumbra2_regfile: write index outside GPR/SP range");
 
 endmodule
