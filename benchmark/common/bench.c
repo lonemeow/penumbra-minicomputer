@@ -51,6 +51,10 @@ static uint32_t timer_freq;
 #define SYSDEV_CPU            1
 #define CPU_CYCLES            5
 #define CPU_INSNS_RETIRED     6
+#define CPU_STALL_FUNIT       7
+#define CPU_STALL_IFETCH      8
+#define CPU_STALL_LOAD        9
+#define CPU_STALL_STORE       10
 
 /* ── Cache sysregs (devices 2, 3, 9 — identical layout) ────────── */
 #define SYSDEV_L1_DCACHE      2
@@ -189,6 +193,27 @@ void bench_caches_disable(void) {
 void bench_perf_snapshot(bench_perf_t *out) {
     out->cycles        = read_sysreg(SYSDEV_CPU, CPU_CYCLES);
     out->insns_retired = read_sysreg(SYSDEV_CPU, CPU_INSNS_RETIRED);
+    out->stall_funit   = read_sysreg(SYSDEV_CPU, CPU_STALL_FUNIT);
+    out->stall_ifetch  = read_sysreg(SYSDEV_CPU, CPU_STALL_IFETCH);
+    out->stall_load    = read_sysreg(SYSDEV_CPU, CPU_STALL_LOAD);
+    out->stall_store   = read_sysreg(SYSDEV_CPU, CPU_STALL_STORE);
+}
+
+/* Print "<count> (<pct>.<frac>%)" — `count` and its share of `total`,
+ * one fractional digit, overflow-safe; "(n/a)" when total is 0. */
+static void print_count_pct(uint32_t count, uint32_t total) {
+    bench_print_uint(count);
+    bench_puts(" (");
+    if (total == 0) { bench_puts("n/a)"); return; }
+    /* (count * 1000) overflows if count >= 2^22 (~4.2M); scale both
+     * down by the same shift to preserve the ratio. */
+    uint32_t c = count, t = total;
+    while (c > 0x003FFFFFu) { c >>= 1; t >>= 1; }
+    uint32_t pct_x10 = (t > 0) ? (c * 1000) / t : 0;
+    bench_print_uint(pct_x10 / 10);
+    bench_putchar('.');
+    bench_print_uint(pct_x10 % 10);
+    bench_puts("%)");
 }
 
 void bench_perf_print_delta(const char *label,
@@ -228,6 +253,25 @@ void bench_perf_print_delta(const char *label,
         bench_print_uint(frac);
     }
     bench_puts("\n");
+
+    /* Stall attribution: each bucket's cycles and its share of the
+     * total.  Omitted when all four are zero, so output is unchanged
+     * on the ISS (instruction-accurate, no stalls modeled). */
+    uint32_t d_funit  = after->stall_funit  - before->stall_funit;
+    uint32_t d_ifetch = after->stall_ifetch - before->stall_ifetch;
+    uint32_t d_load   = after->stall_load   - before->stall_load;
+    uint32_t d_store  = after->stall_store  - before->stall_store;
+    if (d_funit | d_ifetch | d_load | d_store) {
+        bench_puts("CPU stalls:   funit ");   /* aligns under CPU perfctrs: */
+        print_count_pct(d_funit, d_cycles);
+        bench_puts(", ifetch ");
+        print_count_pct(d_ifetch, d_cycles);
+        bench_puts(", load ");
+        print_count_pct(d_load, d_cycles);
+        bench_puts(", store ");
+        print_count_pct(d_store, d_cycles);
+        bench_puts("\n");
+    }
 }
 
 /* ── Cache performance counters ────────────────────────────────── */

@@ -73,6 +73,10 @@ void bench_caches_disable(void);
 typedef struct {
     uint32_t cycles;
     uint32_t insns_retired;
+    uint32_t stall_funit;    /* cycles stalled on a multi-cycle exec unit */
+    uint32_t stall_ifetch;   /* cycles stalled on instruction fetch       */
+    uint32_t stall_load;     /* cycles stalled on a data read miss-fill   */
+    uint32_t stall_store;    /* cycles stalled on a data write            */
 } bench_perf_t;
 
 /*
@@ -84,7 +88,12 @@ void bench_perf_snapshot(bench_perf_t *out);
 
 /*
  * Print "<label>: <Δcycles> cycles, <Δinsns> insns, CPI=X.YYY"
- * to the console.  Computes deltas (after - before) modulo 32-bit wrap.
+ * to the console, followed — when any stall was recorded — by a
+ * "  stall: funit=N (P%) ifetch=N (P%) load=N (P%) store=N (P%)" line
+ * giving each stall bucket's cycle count and its share of total cycles.
+ * The stall line is omitted when all buckets are zero (e.g. on the ISS,
+ * which is instruction-accurate and reports no stalls).
+ * Computes deltas (after - before) modulo 32-bit wrap.
  */
 void bench_perf_print_delta(const char *label,
                             const bench_perf_t *before,
