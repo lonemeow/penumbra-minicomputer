@@ -169,6 +169,7 @@ MODULE_TESTS = \
     penumbra2_scoreboard \
     penumbra2_alu \
     penumbra2_regmap \
+    penumbra2_decode \
     uart \
     busctl \
     tlb \

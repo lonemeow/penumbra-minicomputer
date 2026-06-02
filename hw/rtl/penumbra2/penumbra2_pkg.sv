@@ -58,5 +58,45 @@ package penumbra2_pkg;
     localparam logic [ALU_OP_W-1:0] ALU_ADC  = 4'd10;  // add with carry
     localparam logic [ALU_OP_W-1:0] ALU_SBC  = 4'd11;  // subtract with borrow
 
+    // ── ID control-bundle op_class ──────────────────────────────
+    // The coarse instruction class the ID decoder hands downstream
+    // (see doc/internals/penumbra2/control-decode.md). Downstream
+    // stages branch on op_class for *structural* routing — EX pulses
+    // divmul.start on OPC_DIVMUL, enters the drain-commit FSM on the
+    // drain-commit classes, resolves a branch on OPC_BRANCH — while the
+    // finer control bits (alu_op, mem_size, the write-enables) carry
+    // the per-instruction specifics.
+    //
+    // The ALU-result classes the doc lists separately (alu, alu_imm,
+    // move) collapse into one OPC_ALU here: MOV/LLI/LLIS decode to a
+    // PASS through the ALU and LUI to an OR, so the alu_op + operand-mux
+    // fields already distinguish them — a separate class would buy
+    // nothing. This encoding is a core-internal decode→pipeline
+    // contract, so it lives here, not in the shared ISA package.
+    localparam int OPC_W = 4;
+
+    localparam logic [OPC_W-1:0] OPC_ALU     = 4'd0;   // ALU/move → GPR and/or flags
+    localparam logic [OPC_W-1:0] OPC_LOAD    = 4'd1;
+    localparam logic [OPC_W-1:0] OPC_STORE   = 4'd2;
+    localparam logic [OPC_W-1:0] OPC_BRANCH  = 4'd3;   // Format B (incl. BL)
+    localparam logic [OPC_W-1:0] OPC_JMP     = 4'd4;   // Format L JMP/JALR
+    localparam logic [OPC_W-1:0] OPC_DIVMUL  = 4'd5;
+    localparam logic [OPC_W-1:0] OPC_RDSPR   = 4'd6;
+    localparam logic [OPC_W-1:0] OPC_WRSPR   = 4'd7;
+    localparam logic [OPC_W-1:0] OPC_RDSYS   = 4'd8;
+    localparam logic [OPC_W-1:0] OPC_WRSYS   = 4'd9;
+    localparam logic [OPC_W-1:0] OPC_ERET    = 4'd10;
+    localparam logic [OPC_W-1:0] OPC_EI      = 4'd11;
+    localparam logic [OPC_W-1:0] OPC_DI      = 4'd12;
+    localparam logic [OPC_W-1:0] OPC_SYSCALL = 4'd13;
+    localparam logic [OPC_W-1:0] OPC_BREAK   = 4'd14;
+    localparam logic [OPC_W-1:0] OPC_ILLEGAL = 4'd15;  // reserved/undefined opcode
+
+    // ── Memory operation select (ctrl_mem) ──────────────────────
+    localparam int MEM_OP_W = 2;
+    localparam logic [MEM_OP_W-1:0] MEM_NONE  = 2'd0;
+    localparam logic [MEM_OP_W-1:0] MEM_LOAD  = 2'd1;
+    localparam logic [MEM_OP_W-1:0] MEM_STORE = 2'd2;
+
 endpackage
 /* verilator lint_on UNUSEDPARAM */
