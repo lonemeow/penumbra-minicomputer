@@ -10,7 +10,7 @@
 //     an imm op, store data on the raw port-B read)
 //   - a RAW hazard stalls issue (downstream writer, and the producer
 //     this stage just issued into EX — the internal self-feedback)
-//   - a downstream stall holds ID/EX; a squash bubbles it
+//   - a downstream stall holds ID/EX; a flush bubbles it
 //   - a faulted slot issues inert (does not scoreboard-stall)
 
 #include <cstdio>

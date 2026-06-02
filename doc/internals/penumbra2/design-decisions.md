@@ -440,7 +440,7 @@ simpler but wastes more cycles on taken branches.
 **Decision.** **All branches resolve in EX with static-not-taken
 speculation.** IF and ID after a branch are fetched/decoded as if the
 branch is not taken; if EX determines the branch is taken, IF and ID
-are squashed and the pipeline restarts from the branch target. No
+are flushed and the pipeline restarts from the branch target. No
 prediction structure; no early-resolve path.
 
 **Rationale.** Static not-taken in EX is the simplest correct branch
@@ -453,15 +453,15 @@ binding CPI factor for gen2.
 
 **Consequences.**
 
-- Taken-branch flush penalty: **3 bubbles** (squash IF1, IF2, ID).
+- Taken-branch flush penalty: **3 bubbles** (IF1, IF2, ID).
   This grew from the originally-planned 2 bubbles when
   [Decision 3](#3-pipeline-stage-count-and-shape) split IF into
   IF1+IF2 per [Decision 11](#11-bram-backed-caches-with-single-mem-stall).
 - Untaken-branch cost: 0 cycles (speculation matched reality).
-- JMP Rs and RTI are also EX-resolved with squash; same 2-bubble cost.
+- JMP Rs and RTI are also EX-resolved with flush; same 2-bubble cost.
 - No prediction table, no BTB, no branch history register in gen2.
 - Gen2.5 will likely add a small static or bimodal predictor in IF to
-  speculatively fetch the target on backward branches; the squash
+  speculatively fetch the target on backward branches; the flush
   infrastructure built for gen2 is reused as the "mispredict recovery"
   path.
 
@@ -517,7 +517,7 @@ jump.
 hardwired per stage. The frontend gains a tiny vector-fetch FSM
 (~3 states) to drive the indirect vector load during exception entry.
 ERET is a single µop in EX with multi-write enable (writes SR, writes
-PC, squashes IF/ID).
+PC, flushes IF/ID).
 
 **Rationale.** Microcode's job in a single-cycle design is to *be* the
 sequencer. In a pipelined design, the pipeline *is* the sequencer —
@@ -551,7 +551,7 @@ clearly against keeping microcode.
   [Decision 9](#9-drain-commit-primitive)). EX recognizes ERET, stalls
   upstream stages, lets MEM and WB drain (≤2 cycles), then commits
   directly from EX: writes `SR ← ESR` (with bank-swap side effect when
-  `ESR.S=0`), signals frontend `redirect PC ← EPC`, squashes IF/ID.
+  `ESR.S=0`), signals frontend `redirect PC ← EPC`, flushes IF/ID.
   ERET does not advance past EX into MEM/WB — there is no GPR write
   or memory access.
 - **WRSYS handling**: a drain-commit instruction with 1-cycle
@@ -1172,13 +1172,13 @@ be a scoreboard entry.
   consumer that takes the bypassed value. Neither is a scoreboard input.
 - **The architectural SR flag bits remain the committed source of
   truth** and the bypass's lowest-priority input. This is what makes
-  flushes correct with no scoreboard involvement: after a squash or
+  flushes correct with no scoreboard involvement: after a flush or
   drain the pipeline holds no in-flight flag writers, so the consumer
   reads committed SR. A fault snapshots `ESR ← SR` (committed flags) and
-  `ERET` restores `SR ← ESR`, exactly as before. Squash-safety is
-  structural — forwarding flows older→younger while a squash only
-  removes younger instructions, so a squashed producer's readers are
-  younger and squashed too; a stranded forward cannot arise.
+  `ERET` restores `SR ← ESR`, exactly as before. Flush-safety is
+  structural — forwarding flows older→younger while a flush only
+  removes younger instructions, so a flushed producer's readers are
+  younger and flushed too; a stranded forward cannot arise.
 - **S and I are unaffected** — already kept out of the scoreboard and
   serialized by drain-commit
   ([Control-state serialization: the S and I bits](./hazard-model.md#control-state-serialization-the-s-and-i-bits));
@@ -1198,7 +1198,7 @@ it has none of those three properties.
 **Consequences.**
 
 - **The `CMP → Bcc` data stall goes to 0** (the flags forward from
-  MEM/WB). The taken-branch **squash** penalty is unchanged — that is
+  MEM/WB). The taken-branch **flush** penalty is unchanged — that is
   [Decision 5](#5-branch-resolution-policy)'s 3-bubble flush, a control
   hazard the flag bypass does not touch.
 - **`ADC`/`SBC` carry-in is forwarded**, so multi-word arithmetic

@@ -227,7 +227,7 @@ index 14, so they touch the **same** flop under different ISA names —
 and because the *same* `regmap` output drives both this file and the
 scoreboard, the hazard check and the storage can never disagree about
 which flop that is. `SR.S` is stable for the lifetime of an in-flight
-instruction (it changes only at drained/squashed points — ERET,
+instruction (it changes only at drained/flushed points — ERET,
 exception entry), so the index `regmap` computes in ID is still
 correct when the write lands at WB; see
 [SR.S quiescence](./hazard-model.md#srs-quiescence-for-the-decoders-r14-mapping).

@@ -212,7 +212,7 @@ module penumbra2_id_stage
     always_comb begin
         o_stall = i_stall_in || (i_valid && scoreboard_stall);
         if (i_bubble) begin
-            next_valid = 1'b0;          // squash the in-flight insn to a bubble
+            next_valid = 1'b0;          // flush the in-flight insn to a bubble
             issue      = 1'b0;
         end else if (i_stall_in) begin
             next_valid = o_valid;       // hold ID/EX unchanged
@@ -273,7 +273,7 @@ module penumbra2_id_stage
     always_comb begin
         // Issue precondition: an instruction advances into EX only when
         // it is a real, non-RAW-stalled slot and we are neither
-        // squashing it nor back-pressured. A mis-gated advance (issuing
+        // flushing it nor back-pressured. A mis-gated advance (issuing
         // on a stall/bubble, or ignoring the scoreboard) violates this.
         assert (!issue || (i_valid && !scoreboard_stall && !i_bubble && !i_stall_in))
             else $error("penumbra2_id_stage: issue without a clean issue precondition");

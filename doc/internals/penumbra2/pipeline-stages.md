@@ -4,7 +4,7 @@
 
 This document specifies the **6-stage pipeline structure** of Penumbra/2:
 which work happens in which stage, what state lives in each
-inter-stage pipeline register, and how stalls and squashes propagate
+inter-stage pipeline register, and how stalls and flushes propagate
 between stages. It is the foundational gen2 internals document —
 [control-decode.md](./control-decode.md),
 [hazard-model.md](./hazard-model.md),
@@ -25,7 +25,7 @@ The *why* behind the choices recorded here lives in
   EX/MEM, MEM/WB) and their bit-level contents.
 - Stall sources and the rules by which stalls propagate between
   stages.
-- Squash sources and the rules by which squash propagates.
+- Flush sources and the rules by which flush propagates.
 - Cycle-accurate timing examples for common pipeline behaviors.
 
 **Out of scope** (with cross-references):
@@ -44,6 +44,35 @@ The *why* behind the choices recorded here lives in
 - Microarchitectural rationale for the 6-stage shape, hazard
   policy, branch resolution, control architecture, BRAM-backed
   caches — see [design-decisions.md](./design-decisions.md).
+
+## Terminology
+
+These terms are used precisely throughout the Penumbra/2 internals
+docs and RTL; this section is their definition of record. Two
+orthogonal axes describe an instruction's position relative to another:
+
+- **younger / older** — *program order*. An instruction fetched later
+  in the stream is **younger**; one fetched earlier is **older**.
+- **upstream / downstream** — *pipeline direction*. **Upstream** is the
+  IF/ID side, where instructions enter; **downstream** is the MEM/WB
+  side, toward commit. The pipeline completes in order, so **upstream =
+  younger** and **downstream = older** always coincide — a younger
+  instruction is always physically upstream of an older one.
+
+| Term | Meaning |
+|------|---------|
+| **bubble** | An empty pipeline slot — a pipeline register with `valid = 0`. It carries no instruction, performs no architectural write, and never retires (it is not counted in `insns_retired`). A bubble is **not** a NOP: a NOP (e.g. `ADD R0, R0`) is a *real* instruction that is fetched, flows through, and retires. Bubbles are what fill a stage when there is no real instruction to advance into it. |
+| **stall** | Holding one or more stages in place for a cycle: the held instructions do not advance and none is discarded. A stalled stage back-pressures upstream (holds its input register) and lets bubbles fall in downstream. Sources are listed in [Stall sources](#stall-sources). |
+| **drain** | Waiting for the **older / downstream** in-flight instructions to **complete and commit normally**, by ceasing to send real instructions after them so bubbles fill in behind. Nothing is discarded — the draining instructions retire. Used by drain-commit (ERET/WRSYS hold in EX until MEM/WB drain) and by exception entry / IRQ drain-and-take. |
+| **flush** | Discarding the **younger / upstream** in-flight instructions by forcing their pipeline registers to bubbles, paired with a PC redirect. Nothing is rolled back — in-order commit guarantees everything flushed is younger than the redirect point and never committed. Used by a taken branch, ERET's redirect, and fault-commit at WB. Sources are listed in [Flush sources](#flush-sources). The cost of a flush is quoted as its bubble count (an "*N*-bubble flush"). |
+
+**drain and flush are mirror images.** Both manufacture bubbles, but
+drain looks *downstream* and **waits for the older instructions to
+finish** (they commit), while flush looks *upstream* and **discards the
+younger instructions** (they are thrown away). One preserves what is
+ahead; the other destroys what is behind. A **stall** is the third
+sibling: it merely *holds* instructions in place — neither completing
+nor discarding them — and is the mechanism a drain uses while it waits.
 
 ## Pipeline architecture
 
@@ -71,9 +100,9 @@ flowchart LR
 
   PCREG --> IF1 --> IF1IF2 --> IF2 --> IF2ID --> ID --> IDEX --> EX --> EXMEM --> MEM --> MEMWB --> WB
   EX -. taken-branch redirect .-> PCREG
-  EX -. squash IF1/IF2/ID .-> IF1
-  EX -. squash IF1/IF2/ID .-> IF2
-  EX -. squash IF1/IF2/ID .-> ID
+  EX -. flush IF1/IF2/ID .-> IF1
+  EX -. flush IF1/IF2/ID .-> IF2
+  EX -. flush IF1/IF2/ID .-> ID
   WB -. PC redirect on save-state .-> PCREG
 ```
 
@@ -110,11 +139,11 @@ in 1 cycle with no stall. Full rationale in
   MMU bypass, suppress normal PC advance), wait for the loaded
   value at IF2's BRAM output, redirect PC there, return to normal
   fetch.
-- On taken-branch squash signal from EX: invalidate the address
+- On taken-branch flush signal from EX: invalidate the address
   being driven; refetch from the branch target next cycle.
 - Latch into the IF1/IF2 register at end of cycle: PC of this
   fetch, next_PC (`PC + 4`), TLB output (paddr_tag and fault bits),
-  and a `valid` bit (0 if squashed).
+  and a `valid` bit (0 if flushed).
 
 **PC updates:**
 - Default: `PC ← PC + 4` each cycle the fetch advances.
@@ -195,7 +224,7 @@ regfile read ports.
   ([Decision 12](./design-decisions.md#12-nzcv-flag-forwarding),
   [Flag (NZCV) hazard model](./hazard-model.md#flag-nzcv-hazard-model)),
   so a flag reader never stalls on its producer.
-- For taken branches: assert squash to IF and ID; assert PC redirect
+- For taken branches: assert flush to IF and ID; assert PC redirect
   to IF.
 - For drain-commit instructions (ERET, WRSYS): assert
   `dc_stall_id_if` and hold the instruction in EX until MEM and WB
@@ -302,7 +331,7 @@ becomes available during IF2).
 | `tlb_fault` | 1 | TLB miss or protection fault detected in IF1 |
 | `tlb_fault_kind` | 2 | Encodes TLB miss vs protection vs alignment |
 | `vector_fetch_mode` | 1 | 1 = this fetch is a vector-table indirect load (MMU bypassed); affects IF2's downstream handling |
-| `valid` | 1 | 0 = bubble (squashed or never-issued) |
+| `valid` | 1 | 0 = bubble (flushed or never-issued) |
 
 Total: ~89 bits.
 
@@ -316,7 +345,7 @@ the "instruction available for decode" boundary.
 | `ir` | 32 | Instruction word fetched (from BRAM output, gated on cache hit) |
 | `pc` | 32 | This instruction's PC |
 | `next_pc` | 32 | `PC + 4` (used as EPC for SYSCALL/BREAK and IRQ EPC) |
-| `valid` | 1 | 0 = bubble (squashed, cache miss not yet resolved, or never-issued) |
+| `valid` | 1 | 0 = bubble (flushed, cache miss not yet resolved, or never-issued) |
 | `fault_pending` | 1 | Set on IF-stage fault (TLB, bus fault on fetch, alignment) |
 | `fault_vec` | 4 | Vector number when `fault_pending = 1` |
 
@@ -406,19 +435,19 @@ if the downstream stage's stall logic forces it).
 | Sysreg sideband wait | MEM | RDSYS waiting one cycle for device's registered response (same STALL mechanism as D-cache hit) | [sysregs.md](../../system/sysregs.md) |
 | IRQ drain-and-take | IF1 | IF1 stops fetching once IRQ accepted; pipeline drains | [exception-flow.md](./exception-flow.md) |
 
-## Squash sources
+## Flush sources
 
-Squash signals force a pipeline register's *output* (going to the
-next stage) to a bubble for one or more cycles. Squashes do not
+Flush signals force a pipeline register's *output* (going to the
+next stage) to a bubble for one or more cycles. Flushes do not
 roll back already-committed state — they only suppress in-flight
 instructions that haven't yet committed.
 
-| Source | Stage origin | Stages squashed | Reference |
+| Source | Stage origin | Stages flushed | Reference |
 |--------|--------------|-----------------|-----------|
 | Taken branch | EX | IF1, IF2, ID (**3-bubble flush**) | [Decision 5](./design-decisions.md#5-branch-resolution-policy) |
 | ERET drain-commit | EX | IF1, IF2, ID (also commits SR/PC; MEM/WB drained before commit) | [Decision 9](./design-decisions.md#9-drain-commit-primitive) |
 | Fault commit at WB | WB | IF1, IF2, ID, EX, MEM (whatever is still in flight younger than the faulting insn) | [exception-flow.md](./exception-flow.md) |
-| Vector-fetch redirect | IF1 | (no squash — the FSM redirects PC, downstream stages are already empty from the drain) | [exception-flow.md](./exception-flow.md) |
+| Vector-fetch redirect | IF1 | (no flush — the FSM redirects PC, downstream stages are already empty from the drain) | [exception-flow.md](./exception-flow.md) |
 
 ## Stall propagation policy
 
@@ -465,30 +494,30 @@ do. Full rationale and alternatives in
 
 ---
 
-## Squash propagation rules
+## Flush propagation rules
 
-Squash signals are asserted *combinationally* in the source stage
+Flush signals are asserted *combinationally* in the source stage
 and are *registered* alongside the next-cycle pipeline-register
 update. Specifically:
 
-- A squash from EX (taken branch, ERET drain-commit commit) asserts
+- A flush from EX (taken branch, ERET drain-commit commit) asserts
   during cycle T; at the rising edge of cycle T+1 the IF1/IF2,
   IF2/ID, and ID/EX *input* registers (i.e., the IF1, IF2, and ID
   stages' contents) are forced to bubble.
-- A squash from WB (fault commit) asserts during cycle T; at the
+- A flush from WB (fault commit) asserts during cycle T; at the
   rising edge of cycle T+1, IF1/IF2, IF2/ID, ID/EX, and EX/MEM are
   forced to bubble.
 
-Squash always *wins* over normal pipeline advance: if a stage would
+Flush always *wins* over normal pipeline advance: if a stage would
 have produced a real instruction in its output register but is
-being squashed, the output register is set to bubble (`valid = 0`).
+being flushed, the output register is set to bubble (`valid = 0`).
 
 ## Cycle-accurate timing examples
 
 Notation: each table column is one clock cycle. Each row shows the
 contents of one pipeline stage at the start of that cycle (i.e.,
 the instruction that just arrived from the preceding pipeline
-register). Stall and squash effects are annotated.
+register). Stall and flush effects are annotated.
 
 ### Example 1: scoreboard RAW stall on independent ALU pair
 
@@ -527,11 +556,11 @@ BEQ does **not** stall: NZCV is forwarded, not scoreboarded
 issues the cycle after CMP; when BEQ reaches EX the CMP is in MEM, and
 the MEM→EX flag bypass feeds CMP's flags to BEQ's condition check — the
 flag dependency costs 0 cycles. If BEQ resolves taken, the **3-bubble
-flush** (squash IF1/IF2/ID) still applies; that is the branch *control*
+flush** (IF1/IF2/ID) still applies; that is the branch *control*
 hazard ([Decision 5](./design-decisions.md#5-branch-resolution-policy)),
 independent of the now-eliminated flag data hazard.
 
-### Example 3: taken branch with squash
+### Example 3: taken branch with flush
 
 ```
 B  label         ; unconditional branch
@@ -546,13 +575,13 @@ label: ...
 | 1 | B | — | — | — | — | — | |
 | 2 | addX | B | — | — | — | — | |
 | 3 | addY | addX | B | — | — | — | |
-| 4 | addZ | addY | addX | B | — | — | B in EX; computes target, asserts taken + squash to IF1/IF2/ID |
+| 4 | addZ | addY | addX | B | — | — | B in EX; computes target, asserts taken + flush to IF1/IF2/ID |
 | 5 | label[0] | bubble | bubble | bubble | B | — | IF1 redirected; IF2, ID, EX bubbled |
 | 6 | label[1] | label[0] | bubble | bubble | bubble | B | |
 | 7 | label[2] | label[1] | label[0] | bubble | bubble | bubble | |
 
 Taken branch penalty: **3 bubble cycles** (addX, addY, addZ
-squashed in IF2, ID, EX positions). Grew from 2 in the
+flushed in IF2, ID, EX positions). Grew from 2 in the
 originally-planned 5-stage pipeline due to the IF split (Decision 3).
 
 ### Example 4: load with cache-hit STALL, then ALU pass-through
@@ -640,10 +669,10 @@ ERET             ; return
 | 4 | next2 | next | ERET | WRSPR | — | — | ERET issued (decoded as drain-commit) |
 | 5 | (stall) | (stall) | (stall) | ERET (drain) | WRSPR (pass-through) | — | ERET in EX, asserts drain-commit; upstream stalled |
 | 6 | (stall) | (stall) | (stall) | ERET (drain) | bubble | WRSPR | WRSPR commits EPC; scoreboard[EPC] set |
-| 7 | (squash) | (squash) | (squash) | ERET commits | bubble | bubble | MEM/WB drained; ERET commits: SR ← ESR, PC ← EPC, squash IF1/IF2/ID |
+| 7 | (flush) | (flush) | (flush) | ERET commits | bubble | bubble | MEM/WB drained; ERET commits: SR ← ESR, PC ← EPC, flush IF1/IF2/ID |
 | 8 | EPC[0] | bubble | bubble | bubble | bubble | bubble | New fetch at EPC |
 
-Total ERET cost: ~3 cycles in EX (drain + commit), 3 squashed
+Total ERET cost: ~3 cycles in EX (drain + commit), 3 flushed
 upstream. Per syscall-return / IRQ-return; not hot path.
 
 ## Cross-references

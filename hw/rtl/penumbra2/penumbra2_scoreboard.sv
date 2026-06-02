@@ -12,7 +12,7 @@
 // instructions currently in flight: an entry is valid iff no in-flight
 // instruction will write it. This is what makes a chain of writers to
 // one entry behave correctly — the entry stays invalid until its
-// *youngest* writer drains — and what makes the scoreboard squash-safe
+// *youngest* writer drains — and what makes the scoreboard flush-safe
 // (a flushed instruction simply stops contributing its destination
 // next cycle).
 //

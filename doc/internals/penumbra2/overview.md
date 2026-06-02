@@ -266,7 +266,7 @@ If you're new to gen2, read in this order:
    you already accept from this overview.
 3. **[pipeline-stages.md](./pipeline-stages.md)** — the pipeline
    specification proper. Per-stage description, inter-stage
-   register layouts, stall/squash semantics, six cycle-accurate
+   register layouts, stall/flush semantics, six cycle-accurate
    timing examples covering the most common pipeline behaviors.
 
 When the following docs land, they'll fill in the per-area

@@ -38,7 +38,7 @@ Out of scope:
 
 - Scoreboard internals — see
   [hazard-model.md](./hazard-model.md). This doc supplies the three
-  facts that doc forward-references (fault-commit squash, save-state
+  facts that doc forward-references (fault-commit flush, save-state
   scoreboard bypass, vector-fetch stall) and otherwise defers.
 - MMU/TLB translation and the software miss handler's page-table
   walk — see [`mmu.md`](../../system/mmu.md). This doc covers only
@@ -196,7 +196,7 @@ is still in EX/MEM/ID/IF and has not committed.
 
 Taking the fault at WB triggers three things in the same cycle:
 
-1. **Fault-commit squash** of every younger in-flight instruction
+1. **Fault-commit flush** of every younger in-flight instruction
    (those in IF1, IF2, ID, EX, MEM). They are forced to bubble at
    the next clock edge; none of them committed, so nothing is rolled
    back (see [Interaction with exception entry](./hazard-model.md#interaction-with-exception-entry)).
@@ -209,17 +209,17 @@ flowchart TD
     T --> F[Instruction flows downstream, inert<br/>no architectural writes]
     F --> W{Reaches WB?}
     W -- yes --> C[Commit point: take fault]
-    C --> S1[Squash younger in-flight insns]
+    C --> S1[Flush younger in-flight insns]
     C --> S2[Save-state pulse: EPC/ESR/SR/bank]
     C --> S3[Launch vector-fetch FSM]
-    W -- "squashed by an older fault first" --> X[Discarded — older fault wins]
+    W -- "flushed by an older fault first" --> X[Discarded — older fault wins]
 ```
 
 ### Why "oldest faulting instruction wins" is free
 
 Two instructions can carry `fault_valid` at once (e.g., a faulting
 load in MEM behind an illegal instruction in WB). The younger one
-never commits its fault, because the older one's WB-commit squash
+never commits its fault, because the older one's WB-commit flush
 flushes it first. No explicit age comparison is needed — in-order
 commit *is* the age order. This is the single most important
 consequence of the in-order pipeline for the exception path.
@@ -246,7 +246,7 @@ relies on — exception entry's only multi-step part is the vector
 
 **Scoreboard bypass.** The direct writes to ESR and EPC do **not**
 clear or set scoreboard valid bits. This is safe because save-state
-fires only after the fault-commit squash has emptied the pipeline of
+fires only after the fault-commit flush has emptied the pipeline of
 younger instructions, so no in-flight instruction can have ESR or
 EPC as a pending destination at that moment
 ([Valid bit lifecycle](./hazard-model.md#valid-bit-lifecycle)).
@@ -257,7 +257,7 @@ so many cycles later, after the handler has been fetched.
 
 The handler address is an indirect load from the vector table, so
 entry needs one memory access that the normal pipeline is not in a
-position to issue (it has just been squashed). A small FSM in IF
+position to issue (it has just been flushed). A small FSM in IF
 performs it. It is the only sequential ("multi-cycle") part of
 exception entry.
 
@@ -280,12 +280,12 @@ stateDiagram-v2
 - **WAIT** — holds while the memory/cache returns the handler word.
   This is the "Vector-fetch in progress" stall listed in
   [pipeline-stages.md §Stall sources](./pipeline-stages.md#stall-sources);
-  IF1 is held, and because the pipeline downstream was just squashed
+  IF1 is held, and because the pipeline downstream was just flushed
   it is already empty, so nothing else needs to stall.
 - **LOAD** — the handler address arrives; `PC ←` it; the FSM returns
-  to IDLE and normal fetch resumes at the handler. No squash is
+  to IDLE and normal fetch resumes at the handler. No flush is
   needed on this transition — downstream is already empty
-  ([pipeline-stages.md §Squash sources](./pipeline-stages.md#squash-sources),
+  ([pipeline-stages.md §Flush sources](./pipeline-stages.md#flush-sources),
   "Vector-fetch redirect").
 
 The FSM consumes the vector number latched by the save-state pulse.
@@ -313,7 +313,7 @@ Sequence:
    post-`ERET` SR.)
 3. With MEM/WB empty, `ERET` commits **in EX**: `SR ← ESR` (may
    re-bank R14 if S flips), then `PC ← EPC`.
-4. `ERET` squashes IF1/IF2/ID (the speculatively-fetched
+4. `ERET` flushes IF1/IF2/ID (the speculatively-fetched
    fall-through instructions) and redirects fetch to EPC.
 
 `ERET` has **0 cycles** post-commit wait — its effects are internal
@@ -327,14 +327,14 @@ SR-write reaches the NZCV portion (a forwarded flag producer) plus S/I
 ## SR.S quiescence (link to the hazard model)
 
 Exception entry sets `SR.S = 1` and `ERET` restores it; both happen
-at points where the pipeline is drained or squashed of younger
+at points where the pipeline is drained or flushed of younger
 instructions. This is what gives the ID-stage decoder a stable
 `SR.S` to read when mapping architectural R14 to physical USP/SSP.
 The argument is developed in
 [SR.S quiescence for the decoder's R14 mapping](./hazard-model.md#srs-quiescence-for-the-decoders-r14-mapping);
 this doc is the other half of it — the place where S actually
 changes — and confirms that every S-change is fenced by a
-drain (ERET) or a squash-and-drain (exception entry).
+drain (ERET) or a flush-and-drain (exception entry).
 
 ## Interrupts
 
@@ -360,7 +360,7 @@ When IF1 recognises an eligible IRQ:
 2. The instructions already in flight (IF2, ID, EX, MEM, WB) are
    allowed to **drain and commit normally** — the interrupted stream
    completes up to a clean boundary. (Contrast with a fault, which
-   *squashes* younger instructions. An interrupt is not anyone's
+   *flushes* younger instructions. An interrupt is not anyone's
    fault, so nothing is discarded.)
 3. Once the pipeline is empty, the save-state pulse fires with
    `EPC ← next-fetch PC` (the PC of the instruction that would have
@@ -372,7 +372,7 @@ Because the in-flight instructions complete, an interrupt is
 instruction boundary and no instruction is half-executed.
 
 If an in-flight instruction *faults* during the drain, the fault
-takes precedence (it commits at WB and squashes, including
+takes precedence (it commits at WB and flushes, including
 cancelling the pending IRQ acceptance); the IRQ remains pending and
 is recognised after the fault's handler eventually returns. [Exception / trap / interrupt arbitration](#exception--trap--interrupt-arbitration) specifies the arbitration.
 
@@ -424,7 +424,7 @@ be chosen. Two independent questions:
 
 - **Across instructions** — answered by in-order commit
   ([Why "oldest faulting instruction wins" is free](#why-oldest-faulting-instruction-wins-is-free)): the oldest faulting instruction wins automatically,
-  because it commits first and squashes the rest. No comparison
+  because it commits first and flushes the rest. No comparison
   logic.
 - **Within one instruction / boundary** — a single instruction may
   satisfy more than one condition, and an asynchronous IRQ may be
@@ -564,16 +564,16 @@ mechanism:
 This doc supplies the three facts
 [hazard-model.md](./hazard-model.md) forward-references:
 
-1. **Fault-commit squash** ([Commit point: WB](#commit-point-wb)) — the squash of younger
+1. **Fault-commit flush** ([Commit point: WB](#commit-point-wb)) — the flush of younger
    in-flight instructions when a fault commits at WB. The hazard
-   model relies on this for its squash-recovery argument
+   model relies on this for its flush-recovery argument
    ([Interaction with exception entry](./hazard-model.md#interaction-with-exception-entry)):
    because the scoreboard is *re-derived* each cycle from in-flight
-   destinations, the squash automatically restores the valid bits of
+   destinations, the flush automatically restores the valid bits of
    the flushed instructions — there is nothing to roll back.
 2. **Save-state scoreboard bypass** ([The save-state pulse](#the-save-state-pulse)) — the direct ESR/EPC
    flop writes do not touch the scoreboard, which is safe precisely
-   because the squash in (1) has emptied the pipeline of any
+   because the flush in (1) has emptied the pipeline of any
    instruction that could have ESR/EPC pending.
 3. **Vector-fetch stall** ([The vector-fetch FSM](#the-vector-fetch-fsm)) — the IF1 hold while the
    handler address is fetched; one of the stall sources the hazard
@@ -589,18 +589,18 @@ one column per cycle, one row per stage.
 
 ```
 LD  R1, [R2, #0]   ; (1) misses the D-TLB in MEM
-ADD R3, R4, R5     ; (2) younger — must be squashed, not committed
+ADD R3, R4, R5     ; (2) younger — must be flushed, not committed
 ```
 
 | Cycle | IF1 | IF2 | ID | EX | MEM | WB | Notes |
 |-------|-----|-----|----|------|------|------|-------|
 | 4 | … | … | … | ADD | LD | — | LD reaches MEM; D-TLB lookup misses → write `fault_valid, fault_vec=TLB_MISS` into LD's MEM/WB reg. LD becomes inert. FAULT_ADDR/STATUS latched. |
 | 5 | … | … | … | — | ADD | LD | LD (faulting, inert) in WB → **commit point** |
-| 6 | (vec fetch) | — | — | — | — | — | Save-state: EPC←LD.PC, ESR←SR, S=1, I=0, bank→SSP. ADD and everything younger squashed. Vector-fetch FSM → DRIVE/WAIT |
+| 6 | (vec fetch) | — | — | — | — | — | Save-state: EPC←LD.PC, ESR←SR, S=1, I=0, bank→SSP. ADD and everything younger flushed. Vector-fetch FSM → DRIVE/WAIT |
 | 7+ | handler | — | — | — | — | — | Handler word arrives; PC←handler; normal fetch resumes |
 
 ADD never commits — its WB slot is taken by bubbles after the
-squash. After the handler fixes the mapping and `ERET`s, fetch
+flush. After the handler fixes the mapping and `ERET`s, fetch
 resumes at `LD.PC` (EPC) and the load re-executes, now hitting.
 
 ### Example 2: external IRQ (drain-and-take)
@@ -613,7 +613,7 @@ resumes at `LD.PC` (EPC) and the load re-executes, now hitting.
 |-------|-----|-----|----|------|------|------|-------|
 | T | A(fetch stops) | B | C | D | E | F | IF1 recognises IRQ (`SR.I=1`, `ei_shadow=0`); stops fetching |
 | T+1 | — | — | C | D | E | F→commit | in-flight B..F drain and commit normally |
-| … | — | — | — | … | … | … | pipeline empties (no squash — interrupt discards nothing) |
+| … | — | — | — | … | … | … | pipeline empties (no flush — interrupt discards nothing) |
 | T+k | (vec fetch) | — | — | — | — | — | empty → save-state: EPC←next-fetch PC, vec=EXT_IRQ; FSM launches |
 
 Contrast with Example 1: the in-flight instructions **complete**
@@ -658,12 +658,12 @@ restored context.
   MMU-bypass on vector fetch.
 - [sysregs.md](../../system/sysregs.md) — FAULT_ADDR / FAULT_STATUS.
 - [hazard-model.md](./hazard-model.md) — scoreboard; [SR.S quiescence (link to the hazard model)](#srs-quiescence-link-to-the-hazard-model) (S/I
-  serialisation), [Exception / trap / interrupt arbitration](#exception--trap--interrupt-arbitration) (drain-commit), [TLB-miss fast path interaction](#tlb-miss-fast-path-interaction) (squash recovery).
+  serialisation), [Exception / trap / interrupt arbitration](#exception--trap--interrupt-arbitration) (drain-commit), [TLB-miss fast path interaction](#tlb-miss-fast-path-interaction) (flush recovery).
 - [Decision 6](./design-decisions.md#6-control-architecture-pure-hardwired-no-microcode)
   (no microcode — relies on the single-cycle save-state pulse),
   [Decision 9](./design-decisions.md#9-drain-commit-primitive) (drain-commit,
   ERET/EI/DI), [Decision 10](./design-decisions.md#10-stall-propagation-policy-back-pressure)
   (back-pressure → in-order completion → precise exceptions).
 - [pipeline-stages.md](./pipeline-stages.md) § Stall sources,
-  § Squash sources — the vector-fetch and IRQ-drain stalls and the
-  fault-commit squash this doc details.
+  § Flush sources — the vector-fetch and IRQ-drain stalls and the
+  fault-commit flush this doc details.

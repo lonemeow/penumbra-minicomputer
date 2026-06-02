@@ -39,7 +39,7 @@ Out of scope:
   SPR-USP cross-bank) — fully specified in
   [ISA → physical register mapping](./hazard-model.md#isa--physical-register-mapping);
   this doc references it rather than duplicating.
-- Pipeline-register field widths and stall/squash semantics — see
+- Pipeline-register field widths and stall/flush semantics — see
   [pipeline-stages.md](./pipeline-stages.md).
 - The semantics of each instruction — see
   [instruction-set.md](../../system/instruction-set.md).
@@ -338,7 +338,7 @@ a gen2 design point. `cond_eval.sv` is a stateless combinational
 function of `(cond, NZCV)`; whether gen2 instantiates the existing
 module or inlines its body into `decode.sv` is a packaging choice,
 not a redesign. EX evaluates it combinationally and feeds the result
-to the taken-branch squash/redirect.
+to the taken-branch flush/redirect.
 
 The preferred logic shape is **direct (spread) select**: compute
 every condition's predicate from the NZCV flags in parallel and let

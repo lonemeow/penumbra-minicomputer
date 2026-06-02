@@ -18,7 +18,7 @@
 // a reader in EX can never share EX with its producer, so the closest a
 // producer can be is one stage ahead, in MEM. After a flush the
 // pipeline holds no in-flight producers, so the consumer reads
-// committed SR — which is why this needs no scoreboard or squash logic.
+// committed SR — which is why this needs no scoreboard or flush logic.
 //
 // NZCV is four condition flags (N, Z, C, V); the 4-bit bundle's
 // internal packing is the EX ALU's convention and is opaque here — the

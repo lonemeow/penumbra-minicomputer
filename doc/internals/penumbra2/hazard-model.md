@@ -153,7 +153,7 @@ need the latter — which is why NZCV can be forwarded and S/I cannot.
 `valid[P]` is **derived combinationally** each cycle as *"no
 instruction ahead of the ID instruction (in EX, MEM, or WB) has P
 as its destination"* — not latched in a set/clear flip-flop. This
-re-derive form (mandated in [Interaction with exception entry](#interaction-with-exception-entry) for squash-safety) is what
+re-derive form (mandated in [Interaction with exception entry](#interaction-with-exception-entry) for flush-safety) is what
 makes the lifecycle below behave correctly when several writers to
 P are in flight at once: `valid[P]` only returns to 1 once the
 *youngest* such writer has left WB. The set/clear description below
@@ -490,7 +490,7 @@ not by a scoreboard valid bit.
 | ERET | S, I, NZCV | drain-commit |
 | WRSPR SR | S, I, NZCV | drain-commit |
 | `EI` / `DI` | I only | **drain-commit** (see 7.4) |
-| Exception-entry save-state pulse | S=1, I=0 | post-drain (pipeline already squashed) |
+| Exception-entry save-state pulse | S=1, I=0 | post-drain (pipeline already flushed) |
 
 There is no non-serializing writer of S or I. Consequently the
 scoreboard can never reach a state where `valid[S]` or `valid[I]`
@@ -624,8 +624,8 @@ The bypass's lowest-priority input is the architectural SR flag bits,
 written at WB by the youngest committed flag writer. This is what makes
 forwarding correct across flushes, with no scoreboard involvement:
 
-- **After a taken-branch squash**, the surviving older instructions in
-  MEM/WB commit their flags to SR normally; the squashed instructions
+- **After a taken-branch flush**, the surviving older instructions in
+  MEM/WB commit their flags to SR normally; the flushed instructions
   are *younger* and wrote nothing. Refetched instructions forward from
   the draining MEM/WB survivors, or — once drained — from committed SR.
 - **After a fault**, the save-state pulse snapshots `ESR ← SR` (the
@@ -634,9 +634,9 @@ forwarding correct across flushes, with no scoreboard involvement:
 - **After `ERET`**, `SR ← ESR` restores the flags; the drained pipe
   then forwards from committed SR.
 
-**Squash-safety is structural.** Forwarding flows older→younger; a
-squash only removes *younger* instructions. So if a flag producer is
-squashed, every reader of it is younger and squashed too — a stranded
+**Flush-safety is structural.** Forwarding flows older→younger; a
+flush only removes *younger* instructions. So if a flag producer is
+flushed, every reader of it is younger and flushed too — a stranded
 forward (a surviving reader whose producer vanished) cannot arise. The
 scoreboard's re-derive machinery
 ([Interaction with exception entry](#interaction-with-exception-entry))
@@ -666,7 +666,7 @@ BEQ target       ; (2) reads NZCV
 | 5 | — | — | — | BEQ | CMP | — | BEQ in EX, CMP in MEM → MEM→EX bypass feeds CMP's flags to BEQ |
 
 BEQ resolves in EX against the forwarded flags. (If taken, the 3-bubble
-squash still applies — that is the branch *control* hazard
+flush still applies — that is the branch *control* hazard
 ([Decision 5](./design-decisions.md#5-branch-resolution-policy)), not
 the flag *data* hazard, which forwarding has eliminated.)
 
@@ -733,8 +733,8 @@ Scoreboard interaction:
 Divide-by-zero (`DIV`/`DIVU` with `Rs = 0`) raises `VEC_ARITH`
 (vector slot 10); that fault propagates through the normal
 precise-exception mechanism in
-[exception-flow.md](./exception-flow.md), squashing
-the divmul's writes by virtue of the WB-stage fault-commit squash
+[exception-flow.md](./exception-flow.md), flushing
+the divmul's writes by virtue of the WB-stage fault-commit flush
 rule (rather than by special handling in the scoreboard).
 
 ## Interaction with exception entry
@@ -742,7 +742,7 @@ rule (rather than by special handling in the scoreboard).
 When the precise-exception machinery commits a fault at WB
 (see [exception-flow.md](./exception-flow.md)), it triggers:
 
-1. A **fault-commit squash** of every younger in-flight insn
+1. A **fault-commit flush** of every younger in-flight insn
    (IF1, IF2, ID, EX, MEM).
 2. A **one-cycle save-state pulse**: direct flop writes of
    `EPC ← faulting_PC`, `ESR ← SR`, with `SR.S ← 1` and
@@ -752,46 +752,46 @@ When the precise-exception machinery commits a fault at WB
 
 The scoreboard's role across this sequence:
 
-- **Squashed instructions clear nothing.** The fault-commit
-  squash signal forces ID/EX, EX/MEM, MEM/WB to bubble at the
-  next clock edge. Any valid-bit clears those squashed
+- **Flushed instructions clear nothing.** The fault-commit
+  flush signal forces ID/EX, EX/MEM, MEM/WB to bubble at the
+  next clock edge. Any valid-bit clears those flushed
   instructions had performed at their issue cycle are **not
   rolled back** — that is, the scoreboard treats issued
   instructions as having owned their destination valid bit, even
-  after squash.
-- **This is safe** because a squashed instruction's destination
+  after flush.
+- **This is safe** because a flushed instruction's destination
   has not been written and never will be; the valid bit will be
   restored when the *next* instruction to write that destination
   reaches WB. In the meantime no instruction reads the destination
-  (because the trap handler's code runs after the squash and uses
+  (because the trap handler's code runs after the flush and uses
   whatever scoreboard state it inherits).
 - **Wait — is that actually safe?** Consider: an instruction
   issues, clears `valid[R5]`, then a younger instruction faults
-  before the issuing instruction reaches WB. The squash flushes
+  before the issuing instruction reaches WB. The flush discards
   the issuing instruction along with the faulting one. The
   scoreboard now has `valid[R5] = 0` permanently — no one will
   ever set it.
 
   **Resolution:** the scoreboard must restore the valid bits of
-  squashed instructions that have not yet reached WB. The cleanest
+  flushed instructions that have not yet reached WB. The cleanest
   mechanism is to **re-derive the scoreboard state** from the
   set of in-flight instructions at every cycle, rather than
   treating it as flip-flops latched on clear/set events. The
   scoreboard is then a function of "which physical entries are
   destinations of EX/MEM/WB instructions plus the
-  about-to-issue ID instruction." A fault-commit squash
+  about-to-issue ID instruction." A fault-commit flush
   empties those stages, so all valid bits return to 1
   automatically.
 
   Implementation note: gen2's scoreboard is small enough (22 bits)
   that the "re-derive every cycle" form is cheap. The
   `id_stage.sv` design should use that form rather than separate
-  set/clear flip-flops, so that squash handling is implicit.
+  set/clear flip-flops, so that flush handling is implicit.
 
 - **Save-state's direct ESR/EPC writes bypass the scoreboard.**
   No in-flight instruction at the moment of save-state can have
   ESR or EPC pending, because save-state fires only after the
-  fault-commit squash has emptied the pipeline of younger insns
+  fault-commit flush has emptied the pipeline of younger insns
   and the faulting insn has already reached WB. The bypass is
   therefore not a hazard — it is just a state update outside the
   scoreboard's purview.
@@ -878,7 +878,7 @@ issue, so any read of either stalls until the divmul EX-completes.
 ## Verification considerations
 
 The scoreboard's correctness invariants — physical addressing,
-last-writer-wins under in-order completion, squash-aware
+last-writer-wins under in-order completion, flush-aware
 re-derivation, SR.S quiescence — are small in count but easy to get
 wrong individually. Suggested testbench coverage for
 `tb_scoreboard.cpp` (or however the unit test ends up packaged):
@@ -899,7 +899,7 @@ wrong individually. Suggested testbench coverage for
    hazard caught.
 4. **Pair destination.** MUL followed by ADD reading either Rd or
    Rdh; confirm both reader forms stall for the divmul duration.
-5. **Squash recovery.** Issue a producer, follow with a younger
+5. **Flush recovery.** Issue a producer, follow with a younger
    instruction that takes a synthetic fault, confirm the
    producer's destination valid bit is correctly set after the
    exception entry's pipeline drain.
