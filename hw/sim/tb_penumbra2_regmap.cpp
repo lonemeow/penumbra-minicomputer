@@ -1,10 +1,10 @@
 // Verilator testbench for penumbra2_regmap.
 //
-// Exercises the ISA-to-physical mapping in hazard-model.md §5:
+// Exercises the ISA-to-physical mapping (hazard-model.md):
 //   - R0..R13 map straight through.
 //   - R14 banks: USP (user) / SSP (supervisor), with cross_bank low.
 //   - SPR numbers map to their physical entries (ESR/EPC/SR/SCRn/USP).
-//   - The §5.1 aliasing case: WRSPR USP from supervisor maps to USP
+//   - The aliasing case: WRSPR USP from supervisor maps to USP
 //     (not SSP) and raises cross_bank — the whole point of physical
 //     addressing.
 //   - Enables pass through; divmul Rdh maps as a GPR.
@@ -87,7 +87,7 @@ int main() {
     check("rdspr_usp_maps_usp", dut->o_src_a, SB_USP);
     check("rdspr_usp_crossbank", dut->o_cross_bank, 1);
 
-    // ── §5.1: WRSPR USP from supervisor → USP, not SSP ───────────
+    // ── Aliasing: WRSPR USP from supervisor → USP, not SSP ───────
     clear(dut);
     dut->i_supervisor = 1;                       // supervisor mode
     dut->i_dst_is_spr = 1; dut->i_dst_sel = SPR_USP; dut->i_dst_en = 1;

@@ -12,10 +12,10 @@ package penumbra2_pkg;
 
     // ── Scoreboard entries ──────────────────────────────────────
     // The scoreboard is a flat array of physical entries, one valid
-    // bit each (doc/internals/penumbra2/hazard-model.md §2). Entries
+    // bit each (see doc/internals/penumbra2/hazard-model.md). Entries
     // are *physical*, so R14's two banks (USP/SSP) and the SPRs are
     // distinct entries — this is what catches the WRSPR-USP / R14
-    // aliasing hazard (§5.1).
+    // aliasing hazard.
     //
     // Entry 0 (R0) is reserved-unused: the decoder never emits it as
     // a source or destination, so its valid bit is tied 1. Entries
@@ -36,7 +36,7 @@ package penumbra2_pkg;
 
     // ── ALU operation select ────────────────────────────────────
     // The `alu_op` control field the ID decoder hands to the EX-stage
-    // ALU (doc/internals/penumbra2/control-decode.md §4). Twelve
+    // ALU (see doc/internals/penumbra2/control-decode.md). Twelve
     // single-cycle functions; MOV is realised as pass (the operand
     // mux routes the moved value onto B, so pass = pass-B).
     //

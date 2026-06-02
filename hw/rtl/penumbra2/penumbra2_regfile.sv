@@ -21,16 +21,15 @@
 //
 // R15 (PC) is not an entry here: R15 reads are resolved by the ID
 // operand mux selecting the PC, and R15 "writes" are branches, so
-// R15 never reaches a regfile port (control-decode.md §5).
+// R15 never reaches a regfile port.
 //
 // Reads are asynchronous and writes synchronous, with no
 // write-through: a read in the same cycle a register is written
-// returns the old value, visible on the next cycle (regfile.md §7).
+// returns the old value, visible on the next cycle.
 //
 // A divmul result writes two destinations; the writeback stage drives
 // this single write port on two consecutive cycles (low half then
-// high half). From this module's view that is two ordinary writes
-// (regfile.md §4).
+// high half). From this module's view that is two ordinary writes.
 
 module penumbra2_regfile
     import penumbra_pkg::*;

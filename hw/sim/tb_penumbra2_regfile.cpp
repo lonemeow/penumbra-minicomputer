@@ -98,7 +98,7 @@ int main() {
     check("ssp_readback", read_a(dut, SB_SSP), 0xBBBB0000);
     check("usp_preserved", read_a(dut, SB_USP), 0xAAAA0000);
 
-    // ── No write-through (regfile.md §7) ─────────────────────────
+    // ── No write-through ─────────────────────────────────────────
     uint32_t old_r3 = read_a(dut, 3);
     dut->i_wr_idx = 3;
     dut->i_wr_data = 0x33330000;

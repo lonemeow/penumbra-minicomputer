@@ -1,6 +1,6 @@
 // penumbra2_regmap — ISA-to-physical register mapping for the ID stage.
 //
-// Specified by doc/internals/penumbra2/hazard-model.md §5. Translates
+// Specified by doc/internals/penumbra2/hazard-model.md. Translates
 // the architectural register references of an instruction into the
 // physical scoreboard entries the scoreboard and regfile use, and
 // raises cross_bank for the SPR-USP access.
@@ -10,14 +10,14 @@
 // SPR reference, and maps each to its physical entry. Deciding which
 // instruction fields are sources/destinations — which depends on the
 // specific opcode (e.g. MOV reads Rs but not Rd, while LUI reads and
-// writes Rd) — belongs to the ID decoder (control-decode.md §4-§5),
-// which drives this module's inputs.
+// writes Rd) — belongs to the ID decoder, which drives this module's
+// inputs.
 //
 // The mapping is physical, so R14's two banks are distinct entries:
 // R14 maps to USP or SSP by SR.S, while RDSPR/WRSPR USP maps to USP
 // regardless of mode (raising cross_bank). This is what lets the
 // scoreboard catch a supervisor WRSPR-USP aliasing a later user-mode
-// R14 read — both touch physical entry USP (§5.1).
+// R14 read — both touch physical entry USP.
 
 module penumbra2_regmap
     import penumbra_pkg::*;
@@ -58,7 +58,7 @@ module penumbra2_regmap
     // reg_to_phys: an architectural GPR reference (R0-R15) to its
     // physical scoreboard entry. The interesting case is R14, which
     // is physically two entries (USP/SSP) selected by SR.S — the
-    // banking that makes the scoreboard physically addressed (§5).
+    // banking that makes the scoreboard physically addressed.
     function automatic logic [SB_IDX_W-1:0] reg_to_phys(
         input logic [3:0] arch,
         input logic       sup
@@ -118,7 +118,7 @@ module penumbra2_regmap
     // ══════════════════════════════════════════════════════════
     always_comb begin
         // PC (R15) is never a scoreboard entry: it resolves to the PC
-        // value, not a regfile/scoreboard slot (§2/§5). A live GPR
+        // value, not a regfile/scoreboard slot. A live GPR
         // reference to it would silently map to entry 0.
         assert (!(i_src_a_en && !i_src_a_is_spr && i_src_a_sel == REG_PC))
             else $error("penumbra2_regmap: R15/PC as live GPR source A");

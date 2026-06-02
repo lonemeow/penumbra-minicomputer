@@ -4,22 +4,22 @@
 // at ID: it holds the ID instruction whenever a source operand it
 // reads is still being produced by an instruction further down the
 // pipe (EX/MEM/WB). RAW is the only data hazard the gen2 pipeline
-// has — completion is strictly in order, so WAW/WAR cannot arise
-// (§4), and last-writer-wins falls out for free.
+// has — completion is strictly in order, so WAW/WAR cannot arise, and
+// last-writer-wins falls out for free.
 //
 // The valid bits are NOT stored in set/clear flops. They are
 // re-derived combinationally each cycle from the destinations of the
-// instructions currently in flight (§3, §11): an entry is valid iff
-// no in-flight instruction will write it. This is what makes a chain
-// of writers to one entry behave correctly — the entry stays invalid
-// until its *youngest* writer drains — and what makes the scoreboard
-// squash-safe (a flushed instruction simply stops contributing its
-// destination next cycle).
+// instructions currently in flight: an entry is valid iff no in-flight
+// instruction will write it. This is what makes a chain of writers to
+// one entry behave correctly — the entry stays invalid until its
+// *youngest* writer drains — and what makes the scoreboard squash-safe
+// (a flushed instruction simply stops contributing its destination
+// next cycle).
 //
 // Entries are physical, not architectural: USP (14) and SSP (15) are
-// separate, so the WRSPR-USP / user-R14 aliasing hazard is caught
-// (§5.1). The ID->physical mapping that produces these indices lives
-// in the decoder (§5); this module consumes already-mapped indices.
+// separate, so the WRSPR-USP / user-R14 aliasing hazard is caught.
+// The ID->physical mapping that produces these indices lives in the
+// decoder; this module consumes already-mapped indices.
 
 module penumbra2_scoreboard
     import penumbra_pkg::*;
@@ -50,7 +50,7 @@ module penumbra2_scoreboard
     // primary dst of any single stage. The current user is divmul: its
     // second result (Rdh) is an in-flight writer of its own entry for
     // the whole iteration, alongside Rd, so a reader of either stalls
-    // until it drains (regfile.md §4, hazard-model.md §3.4 / §10).
+    // until it drains.
     input  logic [SB_IDX_W-1:0]       i_aux_dst,
     input  logic                      i_aux_dst_en,
 
@@ -65,10 +65,9 @@ module penumbra2_scoreboard
 
     // entry_busy(p): 1 iff some enabled in-flight writer has p as its
     // destination. This is the combinational re-derive at the heart
-    // of the scoreboard (hazard-model.md §3-§4): there is
-    // deliberately no notion of "which stage is older" — in-order
-    // completion (§4) makes that unnecessary, so an entry is simply
-    // busy while ANY in-flight writer targets it.
+    // of the scoreboard: there is deliberately no notion of "which
+    // stage is older" — in-order completion makes that unnecessary, so
+    // an entry is simply busy while ANY in-flight writer targets it.
     function automatic logic entry_busy(input logic [SB_IDX_W-1:0] p);
         return p == i_ex_dst && i_ex_dst_en
             || p == i_mem_dst && i_mem_dst_en
