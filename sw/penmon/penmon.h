@@ -34,6 +34,10 @@ struct snapshot {
 	struct timespec t;		/* CLOCK_MONOTONIC at sample time */
 	uint64_t cycles;		/* machdep.cpu.cycles */
 	uint64_t insns;			/* machdep.cpu.insns_retired */
+	uint64_t stall_funit;		/* machdep.cpu.stall_* — per-cause stall */
+	uint64_t stall_ifetch;
+	uint64_t stall_load;
+	uint64_t stall_store;
 	struct cache_ctr l1i, l1d, l2;	/* machdep.cache.* */
 	uint64_t cp_time[5];		/* kern.cp_time: usr,nice,sys,intr,idle */
 	uint64_t faults;		/* vm.uvmexp2.faults — cumulative page faults */
@@ -54,6 +58,10 @@ struct rates {
 	double dt;			/* interval length in seconds */
 	double cpi;			/* cycles / instructions over interval */
 	double mips;			/* million instructions retired / second */
+	double stall_funit_pct;		/* % of interval cycles stalled, by cause */
+	double stall_ifetch_pct;
+	double stall_load_pct;
+	double stall_store_pct;
 	double clk_mhz;			/* CPU clock (static, machdep.cpu.freq) */
 	double cpu_pct[5];		/* % of interval in usr,nice,sys,intr,idle */
 	double faults_per_sec;		/* page faults per wall-clock second */

@@ -61,6 +61,11 @@ read_snapshot(struct snapshot *s)
 	s->cycles = read_quad("machdep.cpu.cycles");
 	s->insns  = read_quad("machdep.cpu.insns_retired");
 
+	s->stall_funit  = read_quad("machdep.cpu.stall_funit");
+	s->stall_ifetch = read_quad("machdep.cpu.stall_ifetch");
+	s->stall_load   = read_quad("machdep.cpu.stall_load");
+	s->stall_store  = read_quad("machdep.cpu.stall_store");
+
 	read_cache("machdep.cache.l1i", &s->l1i);
 	read_cache("machdep.cache.l1d", &s->l1d);
 	read_cache("machdep.cache.l2",  &s->l2);
@@ -159,6 +164,21 @@ compute_rates(const struct snapshot *prev, const struct snapshot *cur,
 	dins = counter_delta(prev->insns,  cur->insns);
 	out->cpi  = dins ? (double)dcyc / (double)dins : 0.0;
 	out->mips = (double)dins / 1e6 / dt;
+
+	/* Each stall bucket as a percentage of the interval's cycles.
+	 * out is memset to 0 above, so an idle interval (dcyc == 0) leaves
+	 * all four at 0. */
+	if (dcyc) {
+		double dc = (double)dcyc;
+		out->stall_funit_pct  =
+		    100.0 * counter_delta(prev->stall_funit,  cur->stall_funit)  / dc;
+		out->stall_ifetch_pct =
+		    100.0 * counter_delta(prev->stall_ifetch, cur->stall_ifetch) / dc;
+		out->stall_load_pct   =
+		    100.0 * counter_delta(prev->stall_load,   cur->stall_load)   / dc;
+		out->stall_store_pct  =
+		    100.0 * counter_delta(prev->stall_store,  cur->stall_store)  / dc;
+	}
 
 	/* CPU time: cp_time is true 64-bit monotonic ticks (no wrap). */
 	total = 0;

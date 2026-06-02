@@ -276,15 +276,22 @@ render_frame(const struct rates *r, const struct history *h,
 	}
 	mvprintw(y, 36, "MIPS %6.2f", r->mips);
 
-	mvhline(4, 0, ACS_HLINE, COLS);
+	y = 4;
+	mvprintw(y, 1, "STALL");
+	mvprintw(y, 7,
+	    "funit%5.1f%%  ifetch%5.1f%%  load%5.1f%%  store%5.1f%%",
+	    r->stall_funit_pct, r->stall_ifetch_pct,
+	    r->stall_load_pct, r->stall_store_pct);
+
+	mvhline(5, 0, ACS_HLINE, COLS);
 
 	/* ── Cache panel ───────────────────────────────────────── */
-	mvprintw(5, 1, "CACHE      hit%%        (hit bar)      miss/s  history");
-	cache_row(6, "L1I", &r->l1i, h->l1i, h->count, h->head, spark_w);
-	cache_row(7, "L1D", &r->l1d, h->l1d, h->count, h->head, spark_w);
-	cache_row(8, "L2",  &r->l2,  h->l2,  h->count, h->head, spark_w);
+	mvprintw(6, 1, "CACHE      hit%%        (hit bar)      miss/s  history");
+	cache_row(7, "L1I", &r->l1i, h->l1i, h->count, h->head, spark_w);
+	cache_row(8, "L1D", &r->l1d, h->l1d, h->count, h->head, spark_w);
+	cache_row(9, "L2",  &r->l2,  h->l2,  h->count, h->head, spark_w);
 
-	mvhline(9, 0, ACS_HLINE, COLS);
+	mvhline(10, 0, ACS_HLINE, COLS);
 
 	/* ── Memory ────────────────────────────────────────────── */
 	{
@@ -297,38 +304,38 @@ render_frame(const struct rates *r, const struct history *h,
 		human_bytes(mem->total_bytes - mem->free_bytes, lbuf, sizeof(lbuf));
 		human_bytes(mem->total_bytes, rbuf, sizeof(rbuf));
 		human_bytes(mem->free_bytes, fbuf, sizeof(fbuf));
-		mvprintw(10, 1, "MEM");
-		draw_bar(10, 6, 28, used_frac, mc);
-		mvprintw(10, 36, "%s / %s used  (%s free)   flt %.0f/s",
+		mvprintw(11, 1, "MEM");
+		draw_bar(11, 6, 28, used_frac, mc);
+		mvprintw(11, 36, "%s / %s used  (%s free)   flt %.0f/s",
 		    lbuf, rbuf, fbuf, r->faults_per_sec);
 	}
 
 	/* ── Activity (vmstat-style rates from uvmexp2) ────────── */
-	mvprintw(11, 1,
+	mvprintw(12, 1,
 	    "ACT  intr %5.0f/s  syscall %6.0f/s  csw %5.0f/s  fork %4.0f/s",
 	    r->intr_per_sec, r->syscall_per_sec, r->csw_per_sec,
 	    r->fork_per_sec);
 
-	mvhline(12, 0, ACS_HLINE, COLS);
+	mvhline(13, 0, ACS_HLINE, COLS);
 
 	/* ── Process table ─────────────────────────────────────── */
 	attron(COLOR_PAIR(PAIR_HDR) | A_BOLD);
 	for (i = 0; i < COLS; i++)
-		mvaddch(13, i, ' ');
-	mvprintw(13, 1, "%6s %-10s %5s %8s %2s %s",
+		mvaddch(14, i, ' ');
+	mvprintw(14, 1, "%6s %-10s %5s %8s %2s %s",
 	    "PID", "USER", "%CPU", "RSS", "ST", "COMMAND");
 	attroff(COLOR_PAIR(PAIR_HDR) | A_BOLD);
 
-	for (i = 0; i < nproc && (14 + i) < LINES - 1; i++) {
+	for (i = 0; i < nproc && (15 + i) < LINES - 1; i++) {
 		const struct procinfo *p = &procs[i];
 		int pc = metric_color(p->pctcpu, 1.0, 20.0, 1);
 
 		human_bytes(p->rss_bytes, rbuf, sizeof(rbuf));
-		mvprintw(14 + i, 1, "%6d %-10.10s ", p->pid, p->user);
+		mvprintw(15 + i, 1, "%6d %-10.10s ", p->pid, p->user);
 		attron(COLOR_PAIR(pc) | A_BOLD);
-		mvprintw(14 + i, 19, "%5.1f", p->pctcpu);
+		mvprintw(15 + i, 19, "%5.1f", p->pctcpu);
 		attroff(COLOR_PAIR(pc) | A_BOLD);
-		mvprintw(14 + i, 25, " %8s %c  %-.*s",
+		mvprintw(15 + i, 25, " %8s %c  %-.*s",
 		    rbuf, p->state, COLS - 40, p->comm);
 	}
 
