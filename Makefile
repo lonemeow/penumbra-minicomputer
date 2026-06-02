@@ -170,6 +170,7 @@ MODULE_TESTS = \
     penumbra2_alu \
     penumbra2_regmap \
     penumbra2_decode \
+    penumbra2_flag_bypass \
     uart \
     busctl \
     tlb \
