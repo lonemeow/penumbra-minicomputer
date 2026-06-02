@@ -1206,3 +1206,38 @@ bare-metal tier, then add CoreMark-Pro to the hosted tier on top of
 pbench.  The split gives a clean two-tier story: bare-metal
 benchmarks measure the CPU in isolation, hosted benchmarks measure
 the system.
+
+## Tooling: penmon redraw is curses-bound on the serial console
+
+`penmon` repaints painfully slowly over the 115200 serial console: the
+first frame visibly paints character-by-character, and steady-state CPU
+is dominated by terminal output, not by the perfctr reads.
+
+The cause is in NetBSD libcurses, not penmon.  `__cputchar_args`
+(`netbsd/lib/libcurses/putchar.c`) emits each character as
+`putc(ch); fflush(outfd)` — a flush, and therefore a `write(2)`, per
+character.  `refresh.c` drives every cell glyph
+(`__cputchar((int)nsp->ch)`) and every escape byte through that path,
+so one 80x24 colour frame becomes thousands of `write(2)`s.  The
+`_IOFBF` output buffer libcurses allocates (`tty.c`) and the single
+end-of-frame `fflush` in `doupdate` are both defeated by the per-char
+flush.  This looks like deliberate historical behaviour (tputs
+padding/pacing for real serial terminals), not a bug; modifying base
+libcurses is out of scope, so it stays.
+
+It is a syscall-count problem, not a byte-count one: the bare-metal
+demos emit a comparable frame in a single `write(2)` and are far
+faster.  At 25 MHz each syscall (trap -> tty line discipline ->
+comstart -> trap) is expensive, so per-character writes dominate.  The
+bulk perfctr sysctls (`machdep.cpu.all`, `machdep.cache.<dev>.all`) cut
+penmon's read syscalls from 18 to 4 per refresh, but that is under 1 %
+of the per-char write traffic, so it is invisible until the output path
+changes.
+
+Fix: rewrite penmon's renderer to emit ANSI directly and flush one
+whole frame per `write(2)`.  The non-trivial constraint is that it
+cannot blindly repaint every frame — a full colour frame already nears
+the ~11.5 KB/s serial ceiling — so it must keep a model of on-screen
+state and emit only the changed cells.  In short: keep curses' cheap
+half (the virtual-screen diff), drop its expensive half (the per-char
+flush), one write per frame.
