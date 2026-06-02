@@ -5,9 +5,19 @@
 This document specifies the Penumbra/2 general-purpose register file:
 its storage organisation, the two read ports, the single write port
 and how divmul's two-destination result is sequenced through it, the
-banked `R14` (USP/SSP) and cross-bank access, and the no-write-through
-read semantics. It is the reference for implementing `regfile.sv` (or
-`regfile2.sv`) in `hw/rtl/penumbra2/`.
+USP/SSP flop pair, and the no-write-through read semantics. It is the
+reference for implementing `penumbra2_regfile.sv` in `hw/rtl/penumbra2/`.
+
+The register file is **physically indexed**. The ISA→physical mapping
+— R14→USP/SSP by `SR.S`, the SPR-USP cross-bank case, R0/R15 handling
+— is done once in ID by `penumbra2_regmap`
+([hazard-model.md §5](./hazard-model.md#5-isa--physical-register-mapping)),
+and the file is addressed by the resulting physical entry index on
+both its read ports (in ID) and its write port (the `phys_dst` carried
+to WB). The file therefore does **no** banking conditional of its own:
+it neither sees `SR.S` nor recomputes the bank select. Mapping in one
+place keeps the scoreboard and the register file from ever disagreeing
+about which physical entry an access touches.
 
 The ISA-visible register model (16 registers, R0 = zero, R15 = PC,
 R14 banked, SPR overlap of USP) is fixed by the ISA and shared with
@@ -20,70 +30,86 @@ that realises that model; it does not re-decide ISA behavior.
 
 Covered:
 
-- The 16-register model and which registers are live storage vs
-  special-cased overrides.
+- The physical entry layout the file stores and which entries are
+  live storage vs special-cased overrides.
 - Storage organisation (distributed RAM + override mux + banked
   flops) and the ECP5 mapping.
-- The two read ports (combinational) and one write port.
+- The two read ports (combinational) and one write port, both
+  addressed by physical entry index.
 - How divmul's two-destination result is sequenced through the
   single write port.
-- `R14` banking (USP/SSP) and cross-bank `RDSPR/WRSPR USP`.
 - No-write-through read semantics and the gen2.5 upgrade path.
 
 Out of scope:
 
-- The ISA→physical scoreboard *mapping* (R14→USP/SSP by `SR.S`,
-  SPR-USP cross-bank) — specified in
-  [hazard-model.md §5](./hazard-model.md#5-isa--physical-register-mapping);
-  this doc gives the storage that mapping addresses.
+- The ISA→physical mapping itself (R14→USP/SSP by `SR.S`, SPR-USP
+  cross-bank, R0/R15) — done in ID by `penumbra2_regmap` and
+  specified in
+  [hazard-model.md §5](./hazard-model.md#5-isa--physical-register-mapping).
+  This file consumes the physical index that mapping produces.
 - SPRs other than USP/SSP (ESR, EPC, SR, SCR0–3) — they live in
   separate modules, not the register file (Section 6).
 - The divmul unit's internal algorithm — see
   [divmul.md](../../internals/divmul.md).
 
-## 1. Register model
+## 1. Physical entry layout
 
-Sixteen architectural registers, 32 bits each:
+The file stores 16 physical entries, indexed 0–15 — the GPR/SP slice
+of the scoreboard's physical namespace
+([hazard-model.md §2](./hazard-model.md#2-scoreboard-storage)). The
+SPR entries 16–22 (ESR, EPC, SR, SCR0–3) live in other modules, so a
+regfile index is always 0–15:
 
-| Reg | Role | Live storage? |
-|-----|------|---------------|
-| R0 | Hardwired zero (reads 0, writes dropped) | No — read override |
-| R1–R13 | General purpose | Yes — distributed RAM |
-| R14 | Stack pointer, **banked** USP (user) / SSP (supervisor) | Yes — two flops |
-| R15 | PC alias (reads the PC; "writes" are branches) | No — read override |
+| Entry | Role | Live storage? |
+|-------|------|---------------|
+| 0 | R0 — hardwired zero (reads 0, writes dropped) | No — read override |
+| 1–13 | R1–R13, general purpose | Yes — distributed RAM |
+| 14 | USP — `R14` in user mode / `RDSPR/WRSPR USP` in either mode | Yes — flop |
+| 15 | SSP — `R14` in supervisor mode | Yes — flop |
 
-R0 and R15 are not read from the register array: R0 reads force
-`0`, and R15 reads return the current PC value. R14 reads/writes are
-steered to one of two dedicated flop registers (USP or SSP) rather
-than the array. Only R1–R13 are ordinary array storage.
+Entry 0 is not read from the array — reads force `0`. Entries 14/15
+are the two dedicated flops, selected by the index, not by a bank
+conditional in the file: `regmap` has already resolved `R14`+`SR.S`
+(and the cross-bank `RDSPR/WRSPR USP` case) to either 14 or 15. Only
+entries 1–13 are ordinary array storage.
+
+**R15 (PC) is not an entry here.** ISA reads of R15 are resolved by
+the ID operand mux selecting the PC value, never by a regfile read
+([control-decode.md §5](./control-decode.md#5-register-operand-selection)),
+and ISA "writes" to R15 are branches. So R15 never reaches a regfile
+port and the file carries no PC override and no `i_pc` input. (This
+is the one place the register model differs from gen1, whose regfile
+did carry an R15→PC override.)
 
 ## 2. Storage organisation
 
-The file is a hybrid of three storage styles, matching gen1's
-`regfile.sv`:
+The file is a hybrid of three storage styles:
 
-- **R1–R13** live in **distributed RAM**, replicated once per read
-  port (Section 9). The array is physically 16 deep, but slots 0,
-  14, 15 are dead — written along with everything else (to keep the
-  write path address-decode-free) but never read, because the
-  override/bank logic always wins for those addresses.
-- **R0 and R15** are an **output override**: after the array read,
-  a small mux replaces the array data with `0` (R0) or the PC
-  (R15). No storage.
-- **USP and SSP** are **two dedicated 32-bit flop registers**, not
-  array entries. R14 reads/writes are muxed to one of them by the
-  bank select (Section 5).
+- **Entries 1–13** live in **distributed RAM**, replicated once per
+  read port (Section 9). The array is physically 16 deep, but slots
+  0, 14, 15 are dead — written along with everything else (to keep
+  the write path address-decode-free) but never read, because the
+  override logic always wins for those indices.
+- **Entry 0** is an **output override**: after the array read, a
+  small mux forces `0`. No storage.
+- **USP (14) and SSP (15)** are **two dedicated 32-bit flop
+  registers**, not array entries. The override mux selects one of
+  them when the index is 14 or 15. Which one a given `R14` access
+  reaches is already decided upstream — the index *is* 14 or 15.
+
+The override mux keys purely on the physical index (`== 0`, `== 14`,
+`== 15`, else array). There is no `SR.S` or bank-select input: the
+banking choice was made in ID (Section 5).
 
 ```mermaid
 flowchart LR
     subgraph Storage
-      RAM["R1-R13<br/>distributed RAM<br/>(replicated per read port)"]
-      USP["USP flop"]
-      SSP["SSP flop"]
+      RAM["entries 1-13<br/>distributed RAM<br/>(replicated per read port)"]
+      USP["USP flop (14)"]
+      SSP["SSP flop (15)"]
     end
-    RAdv["read addr"] --> RAM
+    IDX["physical index<br/>(from regmap)"] --> RAM
     RAM --> OV{override mux}
-    PC["PC value"] --> OV
     Z["const 0"] --> OV
     USP --> OV
     SSP --> OV
@@ -94,11 +120,19 @@ flowchart LR
 
 Two **combinational** read ports (A and B), read by ID in the same
 cycle it decodes (asynchronous read — no registered output, so the
-operand is available within the ID cycle). Each port:
+operand is available within the ID cycle). Each port takes a physical
+entry index (`phys_src_a`/`phys_src_b` from `regmap`) and:
 
-1. Reads its replicated array copy at the requested address.
-2. Applies the override mux: address R0 → `0`; address R15 → PC;
-   address R14 → USP or SSP per the bank select; else array data.
+1. Reads its replicated array copy at that index.
+2. Applies the override mux: index 0 → `0`; index 14 → USP; index
+   15 → SSP; else array data.
+
+Because the index already encodes the bank (`regmap` resolved
+`R14`+`SR.S` to 14 or 15), the read path is mux-on-index only — it
+does not see `SR.S`. A read whose operand is actually the PC or an
+SPR never reaches these ports: the ID operand mux selects PC for R15
+and the SPR modules supply SPR sources, so the regfile output is used
+only when the operand is a GPR/SP.
 
 There is no third operand read for divmul — it takes only the two
 ports (Rd → port A, Rs → port B); see Section 4. The read ports are
@@ -168,38 +202,34 @@ contend for the register file's single port. **divmul is the only
 instruction that writes two GPR-file destinations**; the implementer
 should not add a second GPR write port for ERET or save-state.
 
-## 5. R14 banking (USP / SSP)
+## 5. USP / SSP storage (the banking lives in regmap)
 
-R14 is physically two flop registers:
-
-- **USP** — user stack pointer, the R14 visible when `SR.S = 0`.
-- **SSP** — supervisor stack pointer, the R14 visible when `SR.S = 1`.
-
-Selection is a single XOR:
+The file holds two stack-pointer flops — **USP** (entry 14) and
+**SSP** (entry 15) — but it does **not** decide which one an `R14`
+access reaches. That decision is `regmap`'s, made once in ID:
 
 ```
-sp_select = SR.S ^ cross_bank      // 0 → USP, 1 → SSP
+phys(R14) = SR.S ? SSP(15) : USP(14)        // normal R14 access
+phys(USP) = USP(14)                          // RDSPR/WRSPR USP, either mode
 ```
 
-- **Normal R14 access** drives `cross_bank = 0`, so `sp_select =
-  SR.S`: user mode reaches USP, supervisor mode reaches SSP.
-- **Cross-bank access** — `RDSPR/WRSPR USP` from supervisor mode —
-  drives `cross_bank = 1`, flipping the select so supervisor code
-  reaches the **user** stack pointer (USP) while `SR.S = 1`. This is
-  the only way the kernel reaches the user SP, and it is why the
-  scoreboard is physically addressed
-  ([hazard-model.md §5.1](./hazard-model.md#51-the-cross-bank-spr-usp-case)):
-  supervisor `WRSPR USP` and a later user-mode `R14` read touch the
-  same physical flop under different ISA names.
+The XOR that used to read `SR.S ^ cross_bank` lives in `regmap`
+([hazard-model.md §5](./hazard-model.md#5-isa--physical-register-mapping)),
+which folds both the mode bank and the cross-bank `RDSPR/WRSPR USP`
+case into the physical index it emits. By the time an index reaches
+this file it is simply 14 or 15, and the override mux selects the
+matching flop — no `SR.S`, no `cross_bank` here.
 
-The decoder produces `cross_bank` (it is the `cross_bank` control
-bit of [control-decode.md §4](./control-decode.md#4-the-id-control-bundle)),
-asserted for `RDSPR/WRSPR USP`. SSP has no cross-bank path: there is
-no instruction that reaches the supervisor SP from user mode.
-
-`SR.S` is stable for the lifetime of any instruction in the pipeline
-(it changes only at drained/squashed points — ERET, exception entry),
-so the bank select is unambiguous; see
+This is why the scoreboard is physically addressed
+([hazard-model.md §5.1](./hazard-model.md#51-the-cross-bank-spr-usp-case)):
+a supervisor `WRSPR USP` and a later user-mode `R14` read both map to
+index 14, so they touch the **same** flop under different ISA names —
+and because the *same* `regmap` output drives both this file and the
+scoreboard, the hazard check and the storage can never disagree about
+which flop that is. `SR.S` is stable for the lifetime of an in-flight
+instruction (it changes only at drained/squashed points — ERET,
+exception entry), so the index `regmap` computes in ID is still
+correct when the write lands at WB; see
 [hazard-model.md §7.3](./hazard-model.md#73-srs-quiescence-for-the-decoders-r14-mapping).
 
 ## 6. USP/SSP and the SPR space
@@ -241,18 +271,19 @@ room for and that does not change the storage.
 
 ## 8. ECP5 mapping and cost
 
-- **R1–R13:** replicated **1W/1R distributed RAM**, one copy per
-  read port (two copies for ports A and B; gen1 carries a third for
-  a debug read). All copies are written in lockstep at the same
-  address/data so they stay coherent — replication provides the two
-  **read** ports. This is the canonical ECP5 SLICEMEM (`DPR16X*`)
-  shape.
-- **USP, SSP:** two 32-bit flop registers (~64 FFs) with the XOR
-  bank select.
-- **R0, R15:** no storage — output-mux overrides (`0`, PC).
+- **Entries 1–13:** replicated **1W/1R distributed RAM**, one copy
+  per read port (two copies, for ports A and B). All copies are
+  written in lockstep at the same index/data so they stay coherent —
+  replication provides the two **read** ports. This is the canonical
+  ECP5 SLICEMEM (`DPR16X*`) shape.
+- **USP (14), SSP (15):** two 32-bit flop registers (~64 FFs),
+  selected by an index compare (`== 14` / `== 15`) — no bank-select
+  XOR in this module; `regmap` did that.
+- **Entry 0 (R0):** no storage — output-mux override to `0`.
 - **Write port:** one, address-decode-free (writes hit every array
-  copy plus, for address R14, the selected SP flop). The single port
-  is what makes the divmul sequencing (Section 4) necessary.
+  copy plus, when the index is 14/15, the selected SP flop). The
+  single port is what makes the divmul sequencing (Section 4)
+  necessary.
 
 Distributed RAM is chosen over block RAM because the read ports are
 combinational on the ID critical path (block RAM's registered output
@@ -278,9 +309,13 @@ no per-register "initialised" tracking is needed in the file itself.
   (staggered divmul writes), [§5](./hazard-model.md#5-isa--physical-register-mapping)
   (ISA→physical mapping the banking serves), [§7.3](./hazard-model.md#73-srs-quiescence-for-the-decoders-r14-mapping)
   (SR.S quiescence for the bank select).
-- [control-decode.md §4–5](./control-decode.md#4-the-id-control-bundle)
-  — the `cross_bank`, `phys_dst`, `phys_dst_hi` control bits that
-  drive this file.
+- [hazard-model.md §5](./hazard-model.md#5-isa--physical-register-mapping)
+  / `penumbra2_regmap` — produces the physical indices (`phys_src_a/b`
+  on reads, `phys_dst`/`phys_dst_hi` on writes) that address this file;
+  the cross-bank case is already folded into those indices.
+- [control-decode.md §5](./control-decode.md#5-register-operand-selection)
+  — the operand mux that resolves R15 to the PC, so R15 never reaches
+  a regfile port.
 - [design-decisions.md §4](./design-decisions.md#4-hazard-handling-strategy)
   — the no-forwarding baseline and the register-file port decision.
 - [divmul.md](../../internals/divmul.md) — the two-result divmul unit
