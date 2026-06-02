@@ -71,19 +71,20 @@ module penumbra2_regmap
     endfunction
 
     // spr_to_phys: an SPR number (RDSPR/WRSPR) to its physical entry.
-    // USP aliases R14's user bank; SR maps to the NZCV flag entry (the
-    // S/I bits it also covers are serialized by drain-commit, not here).
+    // USP aliases R14's user bank. SR has no entry: its NZCV bits are
+    // forwarded and its S/I bits are drain-serialized, so the decoder
+    // never presents SR as an enabled scoreboard reference (asserted
+    // below).
     function automatic logic [SB_IDX_W-1:0] spr_to_phys(input logic [3:0] spr);
         case (spr)
             SPR_USP:  return SB_USP;
             SPR_ESR:  return SB_ESR;
             SPR_EPC:  return SB_EPC;
-            SPR_SR:   return SB_NZCV;
             SPR_SCR0: return SB_SCR0;
             SPR_SCR1: return SB_SCR1;
             SPR_SCR2: return SB_SCR2;
             SPR_SCR3: return SB_SCR3;
-            default:  return '0;
+            default:  return '0;   // includes SR — never a live ref
         endcase
     endfunction
 
@@ -137,6 +138,17 @@ module penumbra2_regmap
             else $error("penumbra2_regmap: invalid SPR number on source B");
         assert (!(i_dst_en && i_dst_is_spr && i_dst_sel > SPR_SCR3))
             else $error("penumbra2_regmap: invalid SPR number on destination");
+
+        // SR is not a scoreboard entry — its NZCV bits are forwarded
+        // and its S/I bits are drain-serialized. A correct decoder
+        // never presents SR as an enabled scoreboard reference; doing
+        // so would fall through spr_to_phys to entry 0.
+        assert (!(i_src_a_en && i_src_a_is_spr && i_src_a_sel == SPR_SR))
+            else $error("penumbra2_regmap: SR as a scoreboard source A");
+        assert (!(i_src_b_en && i_src_b_is_spr && i_src_b_sel == SPR_SR))
+            else $error("penumbra2_regmap: SR as a scoreboard source B");
+        assert (!(i_dst_en && i_dst_is_spr && i_dst_sel == SPR_SR))
+            else $error("penumbra2_regmap: SR as a scoreboard destination");
     end
 
 endmodule

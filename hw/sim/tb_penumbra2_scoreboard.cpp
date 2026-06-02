@@ -17,9 +17,10 @@
 #include <cstdint>
 #include "Vpenumbra2_scoreboard.h"
 
-// Scoreboard entry indices (mirror penumbra2_pkg).
+// Scoreboard entry indices (mirror penumbra2_pkg). NZCV is not an
+// entry — flags are forwarded, not scoreboarded.
 enum { SB_USP = 14, SB_SSP = 15, SB_ESR = 16, SB_EPC = 17,
-       SB_NZCV = 18, SB_SCR0 = 19, SB_SCR1 = 20, SB_SCR2 = 21, SB_SCR3 = 22 };
+       SB_SCR0 = 18, SB_SCR1 = 19, SB_SCR2 = 20, SB_SCR3 = 21 };
 
 static int errors = 0;
 static int tests = 0;
@@ -61,7 +62,7 @@ int main() {
     clear(dut);
     dut->eval();
     int all_valid = 1;
-    for (int p = 1; p < 23; p++) if (!valid_bit(dut, p)) all_valid = 0;
+    for (int p = 1; p < 22; p++) if (!valid_bit(dut, p)) all_valid = 0;
     check("idle_all_valid", all_valid, 1);
     check("idle_no_stall", dut->o_stall, 0);
 
@@ -91,12 +92,12 @@ int main() {
     // ── MEM and WB writers ───────────────────────────────────────
     clear(dut);
     dut->i_mem_dst = 7;       dut->i_mem_dst_en = 1;
-    dut->i_wb_dst  = SB_NZCV; dut->i_wb_dst_en  = 1;
+    dut->i_wb_dst  = SB_SCR0; dut->i_wb_dst_en  = 1;
     dut->eval();
     check("mem_dst7_invalid",   valid_bit(dut, 7), 0);
-    check("wb_nzcv_invalid",    valid_bit(dut, SB_NZCV), 0);
+    check("wb_scr0_invalid",    valid_bit(dut, SB_SCR0), 0);
     check("read_mem_dst_stalls", stall_reading(dut, 7), 1);
-    check("read_wb_dst_stalls",  stall_reading(dut, SB_NZCV), 1);
+    check("read_wb_dst_stalls",  stall_reading(dut, SB_SCR0), 1);
 
     // ── Both sources: stall if either hits ───────────────────────
     clear(dut);

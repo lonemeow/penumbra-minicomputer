@@ -3,7 +3,8 @@
 // Exercises the ISA-to-physical mapping (hazard-model.md):
 //   - R0..R13 map straight through.
 //   - R14 banks: USP (user) / SSP (supervisor), with cross_bank low.
-//   - SPR numbers map to their physical entries (ESR/EPC/SR/SCRn/USP).
+//   - SPR numbers map to their physical entries (ESR/EPC/SCRn/USP); SR
+//     has no scoreboard entry (NZCV forwarded, S/I drain-serialized).
 //   - The aliasing case: WRSPR USP from supervisor maps to USP
 //     (not SSP) and raises cross_bank — the whole point of physical
 //     addressing.
@@ -16,9 +17,9 @@
 // SPR numbers (penumbra_pkg).
 enum { SPR_ESR = 0, SPR_EPC = 1, SPR_USP = 2, SPR_SR = 3,
        SPR_SCR0 = 4, SPR_SCR1 = 5, SPR_SCR2 = 6, SPR_SCR3 = 7 };
-// Physical scoreboard entries (penumbra2_pkg).
+// Physical scoreboard entries (penumbra2_pkg). NZCV is not an entry.
 enum { SB_USP = 14, SB_SSP = 15, SB_ESR = 16, SB_EPC = 17,
-       SB_NZCV = 18, SB_SCR0 = 19, SB_SCR1 = 20, SB_SCR2 = 21, SB_SCR3 = 22 };
+       SB_SCR0 = 18, SB_SCR1 = 19, SB_SCR2 = 20, SB_SCR3 = 21 };
 
 static int errors = 0;
 static int tests = 0;
@@ -73,12 +74,13 @@ int main() {
     check("spr_esr", dut->o_dst, SB_ESR);
     dut->i_dst_sel = SPR_EPC; dut->eval();
     check("spr_epc", dut->o_dst, SB_EPC);
-    dut->i_dst_sel = SPR_SR; dut->eval();
-    check("spr_sr_is_nzcv", dut->o_dst, SB_NZCV);
+    dut->i_dst_sel = SPR_SCR0; dut->eval();
+    check("spr_scr0", dut->o_dst, SB_SCR0);
     dut->i_dst_sel = SPR_SCR3; dut->eval();
     check("spr_scr3", dut->o_dst, SB_SCR3);
-    dut->i_dst_sel = SPR_SR; dut->eval();
-    check("spr_sr_no_crossbank", dut->o_cross_bank, 0);
+    // SR is not scoreboarded — the decoder never drives it as an
+    // enabled SPR reference, so regmap is not exercised with it here
+    // (doing so trips the SR-not-a-scoreboard-ref assertion).
 
     // ── RDSPR USP: source maps to USP, raises cross_bank ─────────
     clear(dut);

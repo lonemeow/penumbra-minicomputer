@@ -199,6 +199,11 @@ module penumbra2_decode
                     end else if (r_op == OP_R_NOT) begin
                         o_src_a_en = 1'b0;
                     end
+                    // ADC/SBC additionally read the carry flag; it
+                    // reaches EX via the flag bypass, not a scoreboard
+                    // source.
+                    if (r_op == OP_R_ADC || r_op == OP_R_SBC)
+                        o_reads_flags = 1'b1;
                     // F bit: CMP (=SUB·F) / TEST (=AND·F) keep the flag
                     // write but drop the GPR write.
                     o_flag_only = r_f;
@@ -258,15 +263,17 @@ module penumbra2_decode
                         o_op_class   = OPC_WRSPR;
                         o_src_b_sel  = r_rs; o_src_b_en = 1'b1;   // value to write
                         o_spr_sel    = field_1512;
-                        o_dst_sel    = field_1512; o_dst_is_spr = 1'b1; o_dst_en = 1'b1;
-                        o_spr_we     = 1'b1;
                         o_priv_fault = ~i_supervisor;
-                        // WRSPR SR also writes NZCV and is drain-commit
-                        // (the S/I bits it writes are serialized by the
-                        // drain; its NZCV commit happens in EX, not WB).
                         if (field_1512 == SPR_SR) begin
+                            // SR is not a scoreboard/SPR-file entry: its
+                            // NZCV bits feed the flag bypass and its S/I
+                            // bits commit via the drain. No scoreboard
+                            // destination, no SPR-file write.
                             o_drain_commit = 1'b1;
                             o_writes_flags = 1'b1;
+                        end else begin
+                            o_dst_sel = field_1512; o_dst_is_spr = 1'b1; o_dst_en = 1'b1;
+                            o_spr_we  = 1'b1;
                         end
                     end
                     OP_R_RDSPR: begin
@@ -274,10 +281,15 @@ module penumbra2_decode
                         o_dst_sel    = r_rd; o_dst_en = 1'b1;
                         o_gpr_we     = 1'b1;
                         o_spr_sel    = field_1512;
-                        o_src_a_sel  = field_1512; o_src_a_is_spr = 1'b1; o_src_a_en = 1'b1;
                         o_priv_fault = ~i_supervisor;
-                        // RDSPR SR returns NZCV among its bits.
-                        if (field_1512 == SPR_SR) o_reads_flags = 1'b1;
+                        if (field_1512 == SPR_SR) begin
+                            // SR's NZCV bits come from the flag bypass
+                            // (reads_flags); its S/I bits from committed
+                            // SR. Not a scoreboard source.
+                            o_reads_flags = 1'b1;
+                        end else begin
+                            o_src_a_sel = field_1512; o_src_a_is_spr = 1'b1; o_src_a_en = 1'b1;
+                        end
                     end
                     default: ;   // 10100-10110 reserved → OPC_ILLEGAL
                 endcase
@@ -415,6 +427,9 @@ module penumbra2_decode
         // A GPR write needs a destination to write.
         assert (!(o_gpr_we && !o_dst_en))
             else $error("penumbra2_decode: gpr_we without a destination");
+        // An SPR-file write likewise needs a destination.
+        assert (!(o_spr_we && !o_dst_en))
+            else $error("penumbra2_decode: spr_we without a destination");
         // illegal and priv_fault are constructed mutually exclusive.
         assert (!(o_illegal && o_priv_fault))
             else $error("penumbra2_decode: illegal and priv_fault both set");

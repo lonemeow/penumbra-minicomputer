@@ -21,18 +21,21 @@ package penumbra2_pkg;
     // a source or destination, so its valid bit is tied 1. Entries
     // 1..13 map directly from architectural R1..R13. The named
     // entries below cover the banked SP and the scoreboarded SPRs.
-    localparam int SB_NUM_ENTRIES = 23;                  // entries 0..22 (22 live)
+    //
+    // No part of SR is a scoreboard entry: the NZCV flags are resolved
+    // by forwarding (MEM/WB->EX), and the S and I bits are serialized
+    // by drain-commit. Neither needs a valid bit.
+    localparam int SB_NUM_ENTRIES = 22;                  // entries 0..21 (21 live)
     localparam int SB_IDX_W       = $clog2(SB_NUM_ENTRIES);
 
     localparam logic [SB_IDX_W-1:0] SB_USP  = 5'd14;  // R14 (user) / RDSPR/WRSPR USP, any mode
     localparam logic [SB_IDX_W-1:0] SB_SSP  = 5'd15;  // R14 (supervisor)
     localparam logic [SB_IDX_W-1:0] SB_ESR  = 5'd16;  // RDSPR/WRSPR ESR
     localparam logic [SB_IDX_W-1:0] SB_EPC  = 5'd17;  // RDSPR/WRSPR EPC
-    localparam logic [SB_IDX_W-1:0] SB_NZCV = 5'd18;  // SR condition flags (only NZCV; not S/I)
-    localparam logic [SB_IDX_W-1:0] SB_SCR0 = 5'd19;  // RDSPR/WRSPR SCR0
-    localparam logic [SB_IDX_W-1:0] SB_SCR1 = 5'd20;  // RDSPR/WRSPR SCR1
-    localparam logic [SB_IDX_W-1:0] SB_SCR2 = 5'd21;  // RDSPR/WRSPR SCR2
-    localparam logic [SB_IDX_W-1:0] SB_SCR3 = 5'd22;  // RDSPR/WRSPR SCR3
+    localparam logic [SB_IDX_W-1:0] SB_SCR0 = 5'd18;  // RDSPR/WRSPR SCR0
+    localparam logic [SB_IDX_W-1:0] SB_SCR1 = 5'd19;  // RDSPR/WRSPR SCR1
+    localparam logic [SB_IDX_W-1:0] SB_SCR2 = 5'd20;  // RDSPR/WRSPR SCR2
+    localparam logic [SB_IDX_W-1:0] SB_SCR3 = 5'd21;  // RDSPR/WRSPR SCR3
 
     // ── ALU operation select ────────────────────────────────────
     // The `alu_op` control field the ID decoder hands to the EX-stage

@@ -31,6 +31,7 @@ enum { ALU_ADD = 0, ALU_SUB = 1, ALU_AND = 2, ALU_OR = 3, ALU_XOR = 4,
 enum { MEM_NONE = 0, MEM_LOAD = 1, MEM_STORE = 2 };
 // Format R opcodes (5-bit)
 enum { OP_R_ADD = 0, OP_R_SUB = 1, OP_R_MOV = 8, OP_R_NOT = 9,
+       OP_R_ADC = 10, OP_R_SBC = 11,
        OP_R_MUL = 16, OP_R_WRSYS = 23, OP_R_RDSYS = 24, OP_R_SYSCALL = 25,
        OP_R_BREAK = 26, OP_R_ERET = 27, OP_R_EI = 28, OP_R_DI = 29,
        OP_R_WRSPR = 30, OP_R_RDSPR = 31 };
@@ -127,6 +128,22 @@ int main() {
     check("not_srcb_en",  dut->o_src_b_en, 1);
     check("not_wflags",   dut->o_writes_flags, 1);
 
+    // ADC R3, R4: Rd + Rs + carry; reads Rd, Rs, and NZCV (carry, via
+    // the flag bypass — reads_flags, not a scoreboard source).
+    decode(dut, enc_r(OP_R_ADC, 3, 4, 0), 0);
+    check("adc_aluop",    dut->o_alu_op, ALU_ADC);
+    check("adc_srca",     dut->o_src_a_sel, 3);
+    check("adc_srca_en",  dut->o_src_a_en, 1);
+    check("adc_srcb_en",  dut->o_src_b_en, 1);
+    check("adc_wflags",   dut->o_writes_flags, 1);
+    check("adc_rflags",   dut->o_reads_flags, 1);
+    decode(dut, enc_r(OP_R_SBC, 3, 4, 0), 0);
+    check("sbc_aluop",    dut->o_alu_op, ALU_SBC);
+    check("sbc_rflags",   dut->o_reads_flags, 1);
+    // A plain ADD does not read flags.
+    decode(dut, enc_r(OP_R_ADD, 1, 2, 0), 0);
+    check("add_no_rflags", dut->o_reads_flags, 0);
+
     // Reserved Format R opcode (01100) → illegal.
     decode(dut, enc_r(12, 1, 2, 0), 0);
     check("rsvd_class",   dut->o_op_class, OPC_ILLEGAL);
@@ -161,10 +178,14 @@ int main() {
     decode(dut, enc_r(OP_R_WRSPR, 0, 4, 0, SPR_ESR), 0);
     check("wrspr_u_priv",  dut->o_priv_fault, 1);
     check("wrspr_u_vec",   dut->o_fault_vec, VEC_PRIV);
-    // WRSPR SR → drain-commit + writes NZCV.
+    // WRSPR SR → drain-commit + flag-bypass producer; SR is not
+    // scoreboarded, so no scoreboard destination and no SPR-file write.
     decode(dut, enc_r(OP_R_WRSPR, 0, 4, 0, SPR_SR), 1);
-    check("wrspr_sr_drain", dut->o_drain_commit, 1);
-    check("wrspr_sr_wflag", dut->o_writes_flags, 1);
+    check("wrspr_sr_drain",  dut->o_drain_commit, 1);
+    check("wrspr_sr_wflag",  dut->o_writes_flags, 1);
+    check("wrspr_sr_dst_en", dut->o_dst_en, 0);
+    check("wrspr_sr_spr_we", dut->o_spr_we, 0);
+    check("wrspr_sr_srcb",   dut->o_src_b_en, 1);   // still reads Rs (the value)
 
     // RDSPR R5, SCR0 (supervisor): GPR dest, SPR source.
     decode(dut, enc_r(OP_R_RDSPR, 5, 0, 0, SPR_SCR0), 1);
@@ -175,9 +196,12 @@ int main() {
     check("rdspr_srca_spr", dut->o_src_a_is_spr, 1);
     check("rdspr_srca_en", dut->o_src_a_en, 1);
     check("rdspr_gpr_we",  dut->o_gpr_we, 1);
-    // RDSPR SR reads flags.
+    // RDSPR SR reads NZCV via the bypass; SR is not a scoreboard
+    // source, but Rd is still a scoreboard destination.
     decode(dut, enc_r(OP_R_RDSPR, 5, 0, 0, SPR_SR), 1);
-    check("rdspr_sr_rflag", dut->o_reads_flags, 1);
+    check("rdspr_sr_rflag",   dut->o_reads_flags, 1);
+    check("rdspr_sr_srca_en", dut->o_src_a_en, 0);
+    check("rdspr_sr_dst_en",  dut->o_dst_en, 1);
 
     // SYSCALL / BREAK: traps, not privileged.
     decode(dut, enc_r(OP_R_SYSCALL, 0, 0, 0), 0);
