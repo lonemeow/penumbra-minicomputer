@@ -34,5 +34,29 @@ package penumbra2_pkg;
     localparam logic [SB_IDX_W-1:0] SB_SCR2 = 5'd21;  // RDSPR/WRSPR SCR2
     localparam logic [SB_IDX_W-1:0] SB_SCR3 = 5'd22;  // RDSPR/WRSPR SCR3
 
+    // ── ALU operation select ────────────────────────────────────
+    // The `alu_op` control field the ID decoder hands to the EX-stage
+    // ALU (doc/internals/penumbra2/control-decode.md §4). Twelve
+    // single-cycle functions; MOV is realised as pass (the operand
+    // mux routes the moved value onto B, so pass = pass-B).
+    //
+    // These values equal the ISA Format R op[3:0] in the single-cycle
+    // (op[4]=0) region, so the decoder forwards op[3:0] directly as
+    // alu_op with no remap.
+    localparam int ALU_OP_W = 4;
+
+    localparam logic [ALU_OP_W-1:0] ALU_ADD  = 4'd0;
+    localparam logic [ALU_OP_W-1:0] ALU_SUB  = 4'd1;
+    localparam logic [ALU_OP_W-1:0] ALU_AND  = 4'd2;
+    localparam logic [ALU_OP_W-1:0] ALU_OR   = 4'd3;
+    localparam logic [ALU_OP_W-1:0] ALU_XOR  = 4'd4;
+    localparam logic [ALU_OP_W-1:0] ALU_SHL  = 4'd5;
+    localparam logic [ALU_OP_W-1:0] ALU_SHR  = 4'd6;
+    localparam logic [ALU_OP_W-1:0] ALU_SAR  = 4'd7;
+    localparam logic [ALU_OP_W-1:0] ALU_PASS = 4'd8;   // MOV: pass operand B
+    localparam logic [ALU_OP_W-1:0] ALU_NOT  = 4'd9;
+    localparam logic [ALU_OP_W-1:0] ALU_ADC  = 4'd10;  // add with carry
+    localparam logic [ALU_OP_W-1:0] ALU_SBC  = 4'd11;  // subtract with borrow
+
 endpackage
 /* verilator lint_on UNUSEDPARAM */

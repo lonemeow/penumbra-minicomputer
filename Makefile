@@ -167,6 +167,7 @@ MODULE_TESTS = \
     wmux \
     penumbra2_regfile \
     penumbra2_scoreboard \
+    penumbra2_alu \
     uart \
     busctl \
     tlb \
