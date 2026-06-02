@@ -11,7 +11,7 @@ reference for implementing `penumbra2_regfile.sv` in `hw/rtl/penumbra2/`.
 The register file is **physically indexed**. The ISA→physical mapping
 — R14→USP/SSP by `SR.S`, the SPR-USP cross-bank case, R0/R15 handling
 — is done once in ID by `penumbra2_regmap`
-([hazard-model.md §5](./hazard-model.md#5-isa--physical-register-mapping)),
+([ISA→physical mapping](./hazard-model.md#5-isa--physical-register-mapping)),
 and the file is addressed by the resulting physical entry index on
 both its read ports (in ID) and its write port (the `phys_dst` carried
 to WB). The file therefore does **no** banking conditional of its own:
@@ -45,7 +45,7 @@ Out of scope:
 - The ISA→physical mapping itself (R14→USP/SSP by `SR.S`, SPR-USP
   cross-bank, R0/R15) — done in ID by `penumbra2_regmap` and
   specified in
-  [hazard-model.md §5](./hazard-model.md#5-isa--physical-register-mapping).
+  [ISA→physical mapping](./hazard-model.md#5-isa--physical-register-mapping).
   This file consumes the physical index that mapping produces.
 - SPRs other than USP/SSP (ESR, EPC, SR, SCR0–3) — they live in
   separate modules, not the register file (Section 6).
@@ -56,7 +56,7 @@ Out of scope:
 
 The file stores 16 physical entries, indexed 0–15 — the GPR/SP slice
 of the scoreboard's physical namespace
-([hazard-model.md §2](./hazard-model.md#2-scoreboard-storage)). The
+([scoreboard storage](./hazard-model.md#2-scoreboard-storage)). The
 SPR entries 16–22 (ESR, EPC, SR, SCR0–3) live in other modules, so a
 regfile index is always 0–15:
 
@@ -75,7 +75,7 @@ entries 1–13 are ordinary array storage.
 
 **R15 (PC) is not an entry here.** ISA reads of R15 are resolved by
 the ID operand mux selecting the PC value, never by a regfile read
-([control-decode.md §5](./control-decode.md#5-register-operand-selection)),
+([register operand selection](./control-decode.md#5-register-operand-selection)),
 and ISA "writes" to R15 are branches. So R15 never reaches a regfile
 port and the file carries no PC override and no `i_pc` input. (This
 is the one place the register model differs from gen1, whose regfile
@@ -99,7 +99,7 @@ The file is a hybrid of three storage styles:
 
 The override mux keys purely on the physical index (`== 0`, `== 14`,
 `== 15`, else array). There is no `SR.S` or bank-select input: the
-banking choice was made in ID (Section 5).
+banking choice was made upstream in ID, by `regmap`.
 
 ```mermaid
 flowchart LR
@@ -153,7 +153,7 @@ MUL/MULU/DIV/DIVU produce two register results — `Rd` (low half /
 quotient) and `Rdh` (high half / remainder). `Rdh` is **write-only**
 and selected from `IR[15:12]`; there is no third *input* operand
 (divides are always 32/32; see
-[control-decode.md §5](./control-decode.md#5-register-operand-selection)).
+[register operand selection](./control-decode.md#5-register-operand-selection)).
 
 It would seem to call for a second write port. It does not, because
 a true second write port on ECP5 distributed RAM (1W/1R) is not free
@@ -175,7 +175,7 @@ The one-cycle cost is negligible against the ~33-cycle iteration.
 This is the same low-then-high order gen1's microcode uses
 (`DML_LO` then `DML_HI`). The divmul instruction occupies WB for
 both cycles, so under the re-derive scoreboard
-([hazard-model.md §3](./hazard-model.md#3-valid-bit-lifecycle))
+([valid-bit lifecycle](./hazard-model.md#3-valid-bit-lifecycle))
 `valid[Rd]` and `valid[Rdh]` both clear at issue and both return
 together when it leaves WB. The low-then-high order exists only to
 share the single port — it gives no early wakeup, since the held
@@ -214,14 +214,14 @@ phys(USP) = USP(14)                          // RDSPR/WRSPR USP, either mode
 ```
 
 The XOR that used to read `SR.S ^ cross_bank` lives in `regmap`
-([hazard-model.md §5](./hazard-model.md#5-isa--physical-register-mapping)),
+([ISA→physical mapping](./hazard-model.md#5-isa--physical-register-mapping)),
 which folds both the mode bank and the cross-bank `RDSPR/WRSPR USP`
 case into the physical index it emits. By the time an index reaches
 this file it is simply 14 or 15, and the override mux selects the
 matching flop — no `SR.S`, no `cross_bank` here.
 
 This is why the scoreboard is physically addressed
-([hazard-model.md §5.1](./hazard-model.md#51-the-cross-bank-spr-usp-case)):
+([cross-bank SPR-USP case](./hazard-model.md#51-the-cross-bank-spr-usp-case)):
 a supervisor `WRSPR USP` and a later user-mode `R14` read both map to
 index 14, so they touch the **same** flop under different ISA names —
 and because the *same* `regmap` output drives both this file and the
@@ -230,7 +230,7 @@ which flop that is. `SR.S` is stable for the lifetime of an in-flight
 instruction (it changes only at drained/squashed points — ERET,
 exception entry), so the index `regmap` computes in ID is still
 correct when the write lands at WB; see
-[hazard-model.md §7.3](./hazard-model.md#73-srs-quiescence-for-the-decoders-r14-mapping).
+[SR.S quiescence](./hazard-model.md#73-srs-quiescence-for-the-decoders-r14-mapping).
 
 ## 6. USP/SSP and the SPR space
 
@@ -262,7 +262,7 @@ deliberate no-forwarding baseline of
 [Decision 4](./design-decisions.md#4-hazard-handling-strategy).
 
 The consequence is the extra ID stall already specified in
-[hazard-model.md §3](./hazard-model.md#3-valid-bit-lifecycle): a
+[valid-bit lifecycle](./hazard-model.md#3-valid-bit-lifecycle): a
 dependent reader cannot issue on the producer's WB cycle (the valid
 bit is set at end of cycle), so it stalls one more cycle. gen2.5
 closes this with a single mux on the read path (WB→ID write-through)
@@ -298,27 +298,29 @@ sequencing.
 On `i_rst`, USP and SSP reset to a defined value (`0`); the R1–R13
 array contents are undefined until written (kernel boot establishes
 them). The scoreboard derives validity from in-flight writers
-([hazard-model.md §3](./hazard-model.md#3-valid-bit-lifecycle)), so
+([valid-bit lifecycle](./hazard-model.md#3-valid-bit-lifecycle)), so
 no per-register "initialised" tracking is needed in the file itself.
 
 ## 10. Cross-references
 
 - [architecture.md](../../system/architecture.md) — the ISA register
   model and R14/USP/SSP banking contract.
-- [hazard-model.md §3](./hazard-model.md#3-valid-bit-lifecycle)
-  (staggered divmul writes), [§5](./hazard-model.md#5-isa--physical-register-mapping)
-  (ISA→physical mapping the banking serves), [§7.3](./hazard-model.md#73-srs-quiescence-for-the-decoders-r14-mapping)
-  (SR.S quiescence for the bank select).
-- [hazard-model.md §5](./hazard-model.md#5-isa--physical-register-mapping)
+- hazard-model.md — the
+  [valid-bit lifecycle](./hazard-model.md#3-valid-bit-lifecycle)
+  (staggered divmul writes), the
+  [ISA→physical mapping](./hazard-model.md#5-isa--physical-register-mapping)
+  the banking serves, and
+  [SR.S quiescence](./hazard-model.md#73-srs-quiescence-for-the-decoders-r14-mapping).
+- [ISA→physical mapping](./hazard-model.md#5-isa--physical-register-mapping)
   / `penumbra2_regmap` — produces the physical indices (`phys_src_a/b`
   on reads, `phys_dst`/`phys_dst_hi` on writes) that address this file;
   the cross-bank case is already folded into those indices.
-- [control-decode.md §5](./control-decode.md#5-register-operand-selection)
+- [register operand selection](./control-decode.md#5-register-operand-selection)
   — the operand mux that resolves R15 to the PC, so R15 never reaches
   a regfile port.
-- [design-decisions.md §4](./design-decisions.md#4-hazard-handling-strategy)
+- [hazard-handling strategy](./design-decisions.md#4-hazard-handling-strategy)
   — the no-forwarding baseline and the register-file port decision.
 - [divmul.md](../../internals/divmul.md) — the two-result divmul unit
   whose writeback this file sequences.
-- [pipeline-stages.md §WB](./pipeline-stages.md#wb--writeback) — the
-  writeback stage that drives the write port.
+- [the writeback stage](./pipeline-stages.md#wb--writeback) — drives
+  the write port.
