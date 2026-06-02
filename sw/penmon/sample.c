@@ -7,6 +7,7 @@
 
 #include <sys/sysctl.h>
 #include <uvm/uvm_extern.h>
+#include <machine/sysreg.h>	/* CPU_PERF_* / CPU_NPERFCTR bulk-read layout */
 #include <stdio.h>
 #include <string.h>
 
@@ -26,7 +27,20 @@ read_quad(const char *name)
 static void
 read_cache(const char *prefix, struct cache_ctr *c)
 {
+	uint64_t v[CACHE_NPERFCTR];
+	size_t len = sizeof(v);
 	char nm[64];
+
+	/* One syscall for all four counters via machdep.cache.<dev>.all;
+	 * fall back to the individual leaves on an older kernel. */
+	snprintf(nm, sizeof(nm), "%s.all", prefix);
+	if (sysctlbyname(nm, v, &len, NULL, 0) == 0 && len == sizeof(v)) {
+		c->read_hits    = v[CACHE_PERF_READ_HITS];
+		c->read_misses  = v[CACHE_PERF_READ_MISSES];
+		c->write_hits   = v[CACHE_PERF_WRITE_HITS];
+		c->write_misses = v[CACHE_PERF_WRITE_MISSES];
+		return;
+	}
 
 	snprintf(nm, sizeof(nm), "%s.read_hits", prefix);
 	c->read_hits = read_quad(nm);
@@ -58,13 +72,30 @@ read_snapshot(struct snapshot *s)
 	memset(s, 0, sizeof(*s));
 	clock_gettime(CLOCK_MONOTONIC, &s->t);
 
-	s->cycles = read_quad("machdep.cpu.cycles");
-	s->insns  = read_quad("machdep.cpu.insns_retired");
+	/* All CPU perfctrs in one syscall (machdep.cpu.all) — one read per
+	 * refresh instead of six.  Fall back to the individual leaves if the
+	 * bulk node is missing (older kernel). */
+	{
+		uint64_t v[CPU_NPERFCTR];
+		size_t len = sizeof(v);
 
-	s->stall_funit  = read_quad("machdep.cpu.stall_funit");
-	s->stall_ifetch = read_quad("machdep.cpu.stall_ifetch");
-	s->stall_load   = read_quad("machdep.cpu.stall_load");
-	s->stall_store  = read_quad("machdep.cpu.stall_store");
+		if (sysctlbyname("machdep.cpu.all", v, &len, NULL, 0) == 0 &&
+		    len == sizeof(v)) {
+			s->cycles       = v[CPU_PERF_CYCLES];
+			s->insns        = v[CPU_PERF_INSNS];
+			s->stall_funit  = v[CPU_PERF_STALL_FUNIT];
+			s->stall_ifetch = v[CPU_PERF_STALL_IFETCH];
+			s->stall_load   = v[CPU_PERF_STALL_LOAD];
+			s->stall_store  = v[CPU_PERF_STALL_STORE];
+		} else {
+			s->cycles       = read_quad("machdep.cpu.cycles");
+			s->insns        = read_quad("machdep.cpu.insns_retired");
+			s->stall_funit  = read_quad("machdep.cpu.stall_funit");
+			s->stall_ifetch = read_quad("machdep.cpu.stall_ifetch");
+			s->stall_load   = read_quad("machdep.cpu.stall_load");
+			s->stall_store  = read_quad("machdep.cpu.stall_store");
+		}
+	}
 
 	read_cache("machdep.cache.l1i", &s->l1i);
 	read_cache("machdep.cache.l1d", &s->l1d);
