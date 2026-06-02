@@ -87,4 +87,26 @@ module penumbra2_scoreboard
     assign o_stall = (i_src_a_en & ~o_valid[i_src_a])
                    | (i_src_b_en & ~o_valid[i_src_b]);
 
+    // ══════════════════════════════════════════════════════════
+    // Assertions — sim-only (Verilator --assert); stripped at synth.
+    // Every live index must address a real entry; an out-of-range
+    // index would read past o_valid (silent garbage), so the decoder
+    // must only ever present mapped entries (0..SB_NUM_ENTRIES-1).
+    // ══════════════════════════════════════════════════════════
+    localparam logic [SB_IDX_W-1:0] SB_MAX_ENTRY = SB_IDX_W'(SB_NUM_ENTRIES - 1);
+    always_comb begin
+        if (i_src_a_en)  assert (i_src_a  <= SB_MAX_ENTRY)
+            else $error("penumbra2_scoreboard: source A index out of range");
+        if (i_src_b_en)  assert (i_src_b  <= SB_MAX_ENTRY)
+            else $error("penumbra2_scoreboard: source B index out of range");
+        if (i_ex_dst_en) assert (i_ex_dst <= SB_MAX_ENTRY)
+            else $error("penumbra2_scoreboard: EX destination index out of range");
+        if (i_mem_dst_en) assert (i_mem_dst <= SB_MAX_ENTRY)
+            else $error("penumbra2_scoreboard: MEM destination index out of range");
+        if (i_wb_dst_en) assert (i_wb_dst <= SB_MAX_ENTRY)
+            else $error("penumbra2_scoreboard: WB destination index out of range");
+        if (i_aux_dst_en) assert (i_aux_dst <= SB_MAX_ENTRY)
+            else $error("penumbra2_scoreboard: aux destination index out of range");
+    end
+
 endmodule

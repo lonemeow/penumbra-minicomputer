@@ -116,4 +116,10 @@ module penumbra2_regfile
         end
     end
 
+    // No assertions here: the file tolerates any 4-bit write address
+    // by design (R0/R15 land in dead slots the read override wins
+    // over), so it has no "can't happen" of its own. The invariant
+    // that R15 is never a GPR write target belongs to the decoder and
+    // is asserted in penumbra2_regmap.
+
 endmodule
