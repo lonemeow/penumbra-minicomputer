@@ -201,7 +201,11 @@ reset to 0 on system reset.
 | 1–4    | `CPU_NAME0–3`         | R   | CPU name string (16 bytes, packed LE, null-pad)     |
 | 5      | `CPU_CYCLES`          | R   | Free-running 32-bit CPU clock cycle counter         |
 | 6      | `CPU_INSNS_RETIRED`   | R   | Free-running 32-bit instruction-retired counter     |
-| 7–15   | —                     | —   | Reserved for additional performance counters        |
+| 7      | `STALL_FUNIT`         | R   | Stall cycles: waiting on a multi-cycle execution unit |
+| 8      | `STALL_IFETCH`        | R   | Stall cycles: instruction fetch awaiting memory     |
+| 9      | `STALL_LOAD`          | R   | Stall cycles: data read awaiting a miss-fill        |
+| 10     | `STALL_STORE`         | R   | Stall cycles: data write awaiting completion        |
+| 11–15  | —                     | —   | Reserved for additional performance counters        |
 
 ### Performance Counters (regs 5+)
 
@@ -217,6 +221,45 @@ millions of cycles, the inter-counter skew is negligible. If a
 fully-consistent multi-counter snapshot is ever needed, software can
 sample twice and average, or hardware can be extended with a snapshot
 register later.
+
+### Stall-attribution counters (regs 7–10)
+
+These four counters measure cycles the core spent unable to make
+forward progress, broken down by cause:
+
+| Counter | Stall cause |
+|---|---|
+| `STALL_FUNIT`  | Waiting on a multi-cycle execution unit. `divmul` is the only such unit at ISA v1; an added FPU or vector unit shares the counter — the name describes the role, not the unit. |
+| `STALL_IFETCH` | Instruction fetch waiting on the memory hierarchy (I-cache miss → L2 → SDRAM). |
+| `STALL_LOAD`   | A data read waiting on a miss-fill. |
+| `STALL_STORE`  | A data write waiting to complete downstream. |
+
+The four are **mutually exclusive** — at most one is active in any
+cycle — so their sum is the total stall:
+
+```
+STALL_total = STALL_FUNIT + STALL_IFETCH + STALL_LOAD + STALL_STORE
+```
+
+`CPU_CYCLES − STALL_total` is the cycles spent on productive
+fetch/execute work, and `CPU_CYCLES / CPU_INSNS_RETIRED` is the
+effective CPI. Note that `CPU_CYCLES − CPU_INSNS_RETIRED` is **not**
+the stall total: a core that needs more than one cycle per instruction
+even when every access hits — separate fetch and execute cycles, or a
+microcoded multi-step datapath — spends those extra cycles on real
+work, not stalls. Separating genuine stalls from that baseline is
+exactly what these counters are for; it cannot be recovered from the
+cycle and instruction counts alone.
+
+`STALL_STORE` and `STALL_FUNIT` have no equivalent among the cache
+devices' counters. A cache's `MISS_STALL_CYCLES` (reserved — see the
+[cache device map](#cache-devices-2--l1_dcache-3--l1_icache-9--l2_cache))
+counts only miss-induced `o_busy`; under write-through, write-no-
+allocate a store never miss-fills, so its stall is invisible there even
+though the core is held for the full write round-trip. The CPU device
+answers "why is the core not making progress"; the cache devices answer
+"why did an access miss." The two views are complementary, not
+redundant.
 
 ### CPU_ISA (reg 0)
 

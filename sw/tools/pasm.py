@@ -64,6 +64,10 @@ BUILTIN_CONSTANTS = {
     "CPU_NAME3":         4,
     "CPU_CYCLES":        5,
     "CPU_INSNS_RETIRED": 6,
+    "STALL_FUNIT":       7,
+    "STALL_IFETCH":      8,
+    "STALL_LOAD":        9,
+    "STALL_STORE":       10,
 
     # MACH registers (device 8)
     "MACH_FEAT":    0,

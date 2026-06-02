@@ -67,6 +67,12 @@ module sequencer
     // without depending on the priv-block-gated o_pc_load chain.
     output logic        o_fetch_active,
 
+    // ── Stall attribution (mutually exclusive; drive CPU perfctrs) ──
+    output logic        o_stall_ifetch,
+    output logic        o_stall_load,
+    output logic        o_stall_store,
+    output logic        o_stall_funit,
+
     // ── Illegal instruction / privilege violation detection ─────
     output logic        o_illegal,        // First micro-op is sentinel (branch=7)
     output logic        o_priv_violation, // First micro-op has priv=1 in user mode
@@ -299,5 +305,38 @@ module sequencer
     //    priv_block/pc_load.  cpu_top uses this to drive mmu_vaddr
     //    and cache muxing in parallel with the priv check.
     assign o_fetch_active = (state == S_FETCH);
+
+    // ── Stall attribution (mutually exclusive; drive the CPU perfctrs) ──
+    // The sequencer owns "why is the core not making forward progress":
+    //   • In S_FETCH it waits for `i_ir_valid` (the fetched instruction
+    //     becoming ready) — every waiting cycle is an instruction-fetch
+    //     stall.
+    //   • In S_EXEC a `BR_STALL` micro-op holds the micro-PC while `busy`
+    //     (`i_divmul_busy | i_mem_busy`) is asserted and no fault aborts
+    //     it.  The held micro-op's own decoded fields say which unit it is
+    //     waiting on:
+    //         load   → uw_mem_read     (a data read)
+    //         store  → uw_mem_write    (a data write)
+    //         divmul → i_divmul_busy   (a multi-cycle execution unit)
+    // A fault (`i_mem_fault` / `i_arith_fault`) aborts the stall to fetch
+    // rather than holding, so a faulting cycle is not a stall.  Helper
+    // signals already in scope: `state`, `i_ir_valid`, `executing`,
+    // `uw_branch`, `busy`, `uw_mem_read`, `uw_mem_write`, `i_divmul_busy`.
+    //
+    // TODO(human): drive the four mutually-exclusive stall-cause outputs.
+
+    logic exec_stalled;
+    assign exec_stalled = executing && (uw_branch == BR_STALL) && busy
+                          && !(i_arith_fault || i_mem_fault);
+
+    assign o_stall_ifetch = (state == S_FETCH) && !i_ir_valid;
+    assign o_stall_load   = exec_stalled && uw_mem_read;
+    assign o_stall_store  = exec_stalled && uw_mem_write;
+    assign o_stall_funit  = exec_stalled && i_divmul_busy;
+
+    // Invariant: at most one stall cause is asserted in any cycle.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        $onehot0({o_stall_ifetch, o_stall_load, o_stall_store, o_stall_funit}))
+        else $error("sequencer: multiple stall causes asserted at once");
 
 endmodule

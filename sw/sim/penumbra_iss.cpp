@@ -727,6 +727,9 @@ static uint32_t cpuid_read(int reg) {
         // simulation or FPGA execution.
         case 5: return (uint32_t)cpu.insn_count;  // CPU_CYCLES (synthetic on ISS)
         case 6: return (uint32_t)cpu.insn_count;  // CPU_INSNS_RETIRED
+        // Stall-attribution counters (regs 7-10) are cycle-accurate by
+        // nature; the ISS does not model stalls, so they read 0.
+        case 7: case 8: case 9: case 10: return 0;
         default: return 0;
     }
 }

@@ -121,6 +121,9 @@ module cpu_core
     // inside cpu_core.  Outputs are merged by reg-range below.
     logic [31:0] cpuid_rdata, cpu_perfctr_rdata, cpu_sys_rdata;
 
+    // Stall-cause events from the sequencer (mutually exclusive).
+    logic stall_funit, stall_ifetch, stall_load, stall_store;
+
     cpuid u_cpuid (
         .i_sys_reg  (dp_r_sys_reg),
         .o_sys_rdata(cpuid_rdata)
@@ -130,6 +133,10 @@ module cpu_core
         .i_clk          (i_clk),
         .i_rst          (i_rst),
         .i_insn_retired (ir_valid),
+        .i_stall_funit  (stall_funit),
+        .i_stall_ifetch (stall_ifetch),
+        .i_stall_load   (stall_load),
+        .i_stall_store  (stall_store),
         .i_sys_reg      (dp_r_sys_reg),
         .o_sys_rdata    (cpu_perfctr_rdata)
     );
@@ -247,6 +254,10 @@ module cpu_core
         .o_divmul_start     (ctl_divmul_start),
         .o_pc_load       (ctl_pc_load),
         .o_fetch_active  (fetch_active),
+        .o_stall_ifetch  (stall_ifetch),
+        .o_stall_load    (stall_load),
+        .o_stall_store   (stall_store),
+        .o_stall_funit   (stall_funit),
         .o_illegal       (seq_illegal),
         .o_priv_violation(seq_priv_violation),
         .o_ei_set        (ctl_ei_set),
