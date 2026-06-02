@@ -173,6 +173,7 @@ MODULE_TESTS = \
     penumbra2_flag_bypass \
     penumbra2_id_stage \
     penumbra2_ex_stage \
+    penumbra2_mem_stage \
     uart \
     busctl \
     tlb \
