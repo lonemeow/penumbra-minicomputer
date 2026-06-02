@@ -31,8 +31,11 @@
 //     sign(a). 64-bit signed divide is software (sign-magnitude over the
 //     unsigned 32-bit path).
 //
-// Op encoding reuses the ALU op field (penumbra_pkg::ALU_MUL/MULU/DIV/DIVU),
-// so no new micro-word field is needed.
+// Op encoding reuses the gen1 core-internal ALU op field — the same
+// MUL/MULU/DIV/DIVU values alu.sv decodes and uasm.py emits — so no
+// new micro-word field is needed.  These are the microcode ALU field,
+// not the ISA R-format opcode, so the constants are defined locally
+// below (mirroring alu.sv's local OP_* params).
 //
 // The divide uses restoring division with an immediate select (keep the
 // pre-subtract value, or the subtract result, based on a 33-bit borrow).
@@ -53,7 +56,7 @@ module divmul
     // ── Operands and operation ───────────────────────────────────
     input  logic [31:0] i_a,        // multiplier / dividend
     input  logic [31:0] i_b,        // multiplicand / divisor
-    input  logic [4:0]  i_op,       // ALU_MUL / ALU_MULU / ALU_DIV / ALU_DIVU
+    input  logic [4:0]  i_op,       // OP_MUL / OP_MULU / OP_DIV / OP_DIVU (ALU field)
     input  logic        i_start,    // 1-cycle pulse: latch operands, begin
 
     // ── Status ───────────────────────────────────────────────────
@@ -67,12 +70,20 @@ module divmul
     output logic        o_flag_n    // low half / quotient [31]
 );
 
+    // ── ALU op-field encodings (gen1 core-internal contract) ─────
+    // Mirror alu.sv's local OP_* params and uasm.py's alu map.  This is
+    // the microcode ALU field, NOT the ISA R-format opcode (OP_R_*).
+    localparam logic [4:0] OP_MUL  = 5'b01101;
+    localparam logic [4:0] OP_MULU = 5'b01110;
+    localparam logic [4:0] OP_DIV  = 5'b01111;
+    localparam logic [4:0] OP_DIVU = 5'b10000;
+
     // ── Operation decode (combinational, sampled at i_start) ─────
     logic is_mul, is_div, is_signed;
     always_comb begin
-        is_mul    = (i_op == ALU_MUL)  || (i_op == ALU_MULU);
-        is_div    = (i_op == ALU_DIV)  || (i_op == ALU_DIVU);
-        is_signed = (i_op == ALU_MUL)  || (i_op == ALU_DIV);
+        is_mul    = (i_op == OP_MUL) || (i_op == OP_MULU);
+        is_div    = (i_op == OP_DIV) || (i_op == OP_DIVU);
+        is_signed = (i_op == OP_MUL) || (i_op == OP_DIV);
     end
 
     // ── Divide fault detect: DIV0 only (no narrowing form) ───────

@@ -28,7 +28,7 @@ module alu (
     // ── Operation codes ─────────────────────────────────────────
     // 5-bit encoding. The ALU implements the 13 single-cycle ops below; the
     // remaining encodings either belong to the divmul peer (MUL/MULU/DIV/DIVU,
-    // 5'b01101..10000 — see penumbra_pkg) or are reserved. The ALU drives 0
+    // 5'b01101..10000 — see divmul.sv) or are reserved. The ALU drives 0
     // for those — the writeback mux ignores its R-bus result anyway.
 
     localparam logic [4:0] OP_ADD    = 5'b00000;
