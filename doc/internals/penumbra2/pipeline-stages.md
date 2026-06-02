@@ -324,24 +324,29 @@ Total: 102 bits.
 
 ### ID/EX register
 
-Written by ID, read by EX.
+Written by ID, read by EX. ID performs the **full** operand select, so
+`op_a`/`op_b` are the *final* ALU inputs — EX feeds them straight to the
+ALU with no further operand mux. The `a_sel`/`b_sel` (PC, immediate)
+controls and the immediate value are consumed in ID and do not ride
+here.
 
 | Field | Bits | Description |
 |-------|------|-------------|
-| `ctrl` | ~30 | Decoded control bundle: alu_op, flag_we, gpr_we, spr_we, mem_op, branch_op, drain_commit_kind, etc. — full layout in [control-decode.md](./control-decode.md) |
+| `ctrl` | ~30 | Decoded control bundle: alu_op, op_class, flag_we, gpr_we, spr_we, mem_op, cond, sysreg/SPR selects, drain_commit, is_trap, etc. — full layout in [control-decode.md](./control-decode.md) |
 | `pc` | 32 | This insn's PC (propagated for EPC + branch target) |
-| `next_pc` | 32 | `PC + 4` |
-| `op_a` | 32 | Source operand A (regfile Rd, or PC for PC-relative). For MUL/DIV: the multiplicand / 32-bit dividend |
-| `op_b` | 32 | Source operand B (regfile Rs, or sign/zero-extended immediate). For MUL/DIV: the multiplier / divisor |
+| `next_pc` | 32 | `PC + 4` (branch/JALR link, SYSCALL/BREAK/IRQ EPC) |
+| `op_a` | 32 | Final ALU operand A: the regfile port-A read, or PC for a branch target. For MUL/DIV: the multiplicand / 32-bit dividend |
+| `op_b` | 32 | Final ALU operand B: the regfile port-B read, or the sign/zero-extended immediate. For MUL/DIV: the multiplier / divisor |
+| `store_data` | 32 | The value a store writes — the raw regfile port-B (`Rs`) read. Kept separate from `op_b` because a store's `op_b` is the address offset, not the stored value. Don't-care for non-stores |
 | `phys_dst` | 5 | Physical scoreboard entry to clear on commit (Rd) |
 | `phys_dst_hi` | 5 | Second physical entry for the MUL/DIV high-half result (`Rdh`, write-only); unused otherwise |
 | `valid` | 1 | 0 = bubble |
-| `fault_pending` | 1 | Propagated from IF/ID or set in ID (illegal, privilege, BREAK, SYSCALL) |
-| `fault_vec` | 4 | Vector number |
+| `fault_pending` | 1 | Propagated from IF/ID, or set in ID (illegal, privilege). SYSCALL/BREAK are *traps*, not faults — they ride `is_trap` in `ctrl` and are taken at EX ([control-decode.md](./control-decode.md)) |
+| `fault_vec` | 4 | Vector number (the IF fault, or the decode-detected illegal/privilege/trap vector) |
 
-Total: ~143 bits. (The widest pipeline register.) Note divmul takes
-only two inputs (`op_a`, `op_b`) — `Rdh` is a write-only result
-register, so there is no third operand value to carry.
+Total: ~206 bits — the widest pipeline register. Note divmul takes only
+two ALU inputs (`op_a`, `op_b`) and writes `Rd`+`Rdh`; `store_data` is
+the store path's value, unrelated to divmul.
 
 ### EX/MEM register
 
