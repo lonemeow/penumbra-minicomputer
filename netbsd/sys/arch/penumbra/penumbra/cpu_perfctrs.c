@@ -3,11 +3,15 @@
 /*
  * CPU performance counter sysctl interface.
  *
- * Exposes the free-running CPU counters (SYSDEV_CPU regs 5-6) and the
+ * Exposes the free-running CPU counters (SYSDEV_CPU regs 5-10) and the
  * static CPU clock frequency under machdep.cpu:
  *
  *	machdep.cpu.cycles		free-running cycle counter (RDSYS)
  *	machdep.cpu.insns_retired	free-running retired-instruction counter
+ *	machdep.cpu.stall_funit		cycles stalled on a multi-cycle exec unit
+ *	machdep.cpu.stall_ifetch	cycles stalled on instruction fetch
+ *	machdep.cpu.stall_load		cycles stalled on a data read miss-fill
+ *	machdep.cpu.stall_store		cycles stalled on a data write
  *	machdep.cpu.freq		CPU clock in Hz (static, latched at boot)
  *
  * cycles/insns_retired each have a custom read handler that issues a
@@ -59,6 +63,10 @@ sysctl_cpu_##name(SYSCTLFN_ARGS)					\
 
 DEFINE_PERFCTR_READ(cycles,        SYSDEV_CPU, CPU_CYCLES)
 DEFINE_PERFCTR_READ(insns_retired, SYSDEV_CPU, CPU_INSNS_RETIRED)
+DEFINE_PERFCTR_READ(stall_funit,   SYSDEV_CPU, CPU_STALL_FUNIT)
+DEFINE_PERFCTR_READ(stall_ifetch,  SYSDEV_CPU, CPU_STALL_IFETCH)
+DEFINE_PERFCTR_READ(stall_load,    SYSDEV_CPU, CPU_STALL_LOAD)
+DEFINE_PERFCTR_READ(stall_store,   SYSDEV_CPU, CPU_STALL_STORE)
 
 #undef DEFINE_PERFCTR_READ
 
@@ -106,6 +114,34 @@ SYSCTL_SETUP(sysctl_cpu_perfctrs_setup,
 	    CTLTYPE_QUAD, "insns_retired",
 	    SYSCTL_DESCR("Free-running retired-instruction counter"),
 	    sysctl_cpu_insns_retired, 0, NULL, 0,
+	    CTL_CREATE, CTL_EOL);
+
+	sysctl_createv(clog, 0, &cpu_node, NULL,
+	    CTLFLAG_PERMANENT,
+	    CTLTYPE_QUAD, "stall_funit",
+	    SYSCTL_DESCR("Cycles stalled on a multi-cycle execution unit"),
+	    sysctl_cpu_stall_funit, 0, NULL, 0,
+	    CTL_CREATE, CTL_EOL);
+
+	sysctl_createv(clog, 0, &cpu_node, NULL,
+	    CTLFLAG_PERMANENT,
+	    CTLTYPE_QUAD, "stall_ifetch",
+	    SYSCTL_DESCR("Cycles stalled on instruction fetch"),
+	    sysctl_cpu_stall_ifetch, 0, NULL, 0,
+	    CTL_CREATE, CTL_EOL);
+
+	sysctl_createv(clog, 0, &cpu_node, NULL,
+	    CTLFLAG_PERMANENT,
+	    CTLTYPE_QUAD, "stall_load",
+	    SYSCTL_DESCR("Cycles stalled on a data read miss-fill"),
+	    sysctl_cpu_stall_load, 0, NULL, 0,
+	    CTL_CREATE, CTL_EOL);
+
+	sysctl_createv(clog, 0, &cpu_node, NULL,
+	    CTLFLAG_PERMANENT,
+	    CTLTYPE_QUAD, "stall_store",
+	    SYSCTL_DESCR("Cycles stalled on a data write"),
+	    sysctl_cpu_stall_store, 0, NULL, 0,
 	    CTL_CREATE, CTL_EOL);
 
 	sysctl_createv(clog, 0, &cpu_node, NULL,

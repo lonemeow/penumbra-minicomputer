@@ -89,6 +89,10 @@
 #define CPU_NAME3		4
 #define CPU_CYCLES		5	/* free-running 32-bit, wraps every ~5.7 min @ 12.5 MHz */
 #define CPU_INSNS_RETIRED	6	/* free-running 32-bit */
+#define CPU_STALL_FUNIT		7	/* free-running 32-bit stall counters */
+#define CPU_STALL_IFETCH	8
+#define CPU_STALL_LOAD		9
+#define CPU_STALL_STORE		10
 
 /* CPU_ISA layout: bits [3:0] = ISA version, bits [31:4] = feature flags
  * (bit indices below are relative to bit 4 of the register). */
