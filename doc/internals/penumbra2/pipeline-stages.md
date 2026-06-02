@@ -269,7 +269,7 @@ logic; the 1-cycle STALL FSM for D-cache and RDSYS access.
   (for MUL/DIV, both `Rd` and `Rdh` — the divmul occupies WB for
   two cycles writing low then high through the single port, and both
   bits return together when it leaves WB; see
-  [hazard-model.md §10](./hazard-model.md#10-interaction-with-divmul)).
+  [Interaction with divmul](./hazard-model.md#interaction-with-divmul)).
 
 **Owns:** regfile main write port; SR write port; SPR file write
 ports; scoreboard set/clear (set on issue, cleared here on commit).

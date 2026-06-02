@@ -781,7 +781,7 @@ the 0-cycle variant; WRSYS takes the 1-cycle variant.
 The S/I serialization rationale (why these control bits are
 ordered by drain-commit rather than by the hazard scoreboard) is
 developed in
-[hazard-model.md §7](./hazard-model.md#7-control-state-serialization-the-s-and-i-bits).
+[Control-state serialization: the S and I bits](./hazard-model.md#control-state-serialization-the-s-and-i-bits).
 
 **Rationale.** The alternative — carrying pending-effect values
 through MEM/WB pipeline registers for drain-commit instructions —
@@ -837,14 +837,14 @@ is much harder to forget.
   WRSYS were the original two; WRSPR SR and EI/DI were added when
   the hazard model established that the S and I bits must be ordered
   by serialization rather than by the value scoreboard — see
-  [hazard-model.md §7](./hazard-model.md#7-control-state-serialization-the-s-and-i-bits).)
+  [Control-state serialization: the S and I bits](./hazard-model.md#control-state-serialization-the-s-and-i-bits).)
 
 - **Future users.** Any new SYNC/FENCE-style instruction (none
   planned for gen2, but the mechanism is in place). Note WRSPR to
   the *other* SPRs (USP, ESR, EPC, SCRn) is deliberately **not**
   drain-commit — those are ordinary scoreboarded entries, because
   the TLB miss handler's hot path leans on cheap WRSPR-SCRn spills
-  (see [hazard-model.md §5.2](./hazard-model.md#52-scrn-coverage-rationale)).
+  (see [SCRn coverage rationale](./hazard-model.md#scrn-coverage-rationale)).
   Only WRSPR SR drain-commits, because only SR carries the
   out-of-pipeline S/I control bits.
 

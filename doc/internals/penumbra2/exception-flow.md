@@ -31,7 +31,7 @@ Covered:
 - `ERET` as a drain-commit instruction.
 - Interrupt recognition: `SR.I`, the `ei_shadow` delay, `EI`/`DI`,
   `EI; ERET` atomicity, the `EI; NOP; DI` window.
-- Exception/trap/IRQ priority arbitration (Section 9 — open point).
+- Exception/trap/IRQ priority arbitration ([Exception / trap / interrupt arbitration](#exception--trap--interrupt-arbitration) — open point).
 - EPC classification (faulting-PC vs next-PC).
 
 Out of scope:
@@ -46,11 +46,11 @@ Out of scope:
 - Per-stage pipeline-register field lists — see
   [pipeline-stages.md](./pipeline-stages.md).
 
-## 1. ISA contract recap (authoritative: gen1 spec)
+## ISA contract recap (authoritative: gen1 spec)
 
 These facts are fixed by the ISA; gen2 reproduces them.
 
-### 1.1 Vector table
+### Vector table
 
 11 vectors (0–10) are defined; 11–15 are reserved. The table is 16
 × 4 bytes at **physical** `0x0000_0000`; each entry is a 32-bit
@@ -74,11 +74,11 @@ instruction slot). Vector fetch **bypasses the MMU**
 | 10 | 0x28 | `VEC_ARITH` | fault | `DIV`/`DIVU` with `Rs = 0` (divide-by-zero) |
 
 The three **classes** — fault, trap, interrupt — differ only in
-what EPC holds (Section 1.4) and whether the source is synchronous
+what EPC holds ([Entry and exit effects](#entry-and-exit-effects)) and whether the source is synchronous
 (faults, traps: tied to a specific instruction) or asynchronous
 (interrupts: tied to a pipeline boundary).
 
-### 1.2 SPRs
+### SPRs
 
 SPR numbers (`RDSPR`/`WRSPR`, encoded in IR[15:12]):
 
@@ -90,7 +90,7 @@ SPR numbers (`RDSPR`/`WRSPR`, encoded in IR[15:12]):
 | 3 | SR | Current status register |
 | 4–7 | SCR0–SCR3 | Supervisor scratch (TLB-miss spill slots) |
 
-### 1.3 SR bit layout
+### SR bit layout
 
 ```
  31  30  29 ............ 4   3   2   1   0
@@ -102,9 +102,9 @@ SPR numbers (`RDSPR`/`WRSPR`, encoded in IR[15:12]):
 S = supervisor (bit 31), I = interrupt-enable (bit 30), then the
 NZCV flags in bits 3:0 (V, C, Z, N). Only the NZCV flags are
 scoreboard-tracked; S and I are serialised by drain-commit — see
-[hazard-model.md §7](./hazard-model.md#7-control-state-serialization-the-s-and-i-bits).
+[Control-state serialization: the S and I bits](./hazard-model.md#control-state-serialization-the-s-and-i-bits).
 
-### 1.4 Entry and exit effects
+### Entry and exit effects
 
 On entry the hardware performs, atomically:
 
@@ -122,7 +122,7 @@ The **saved-PC** depends on class:
   executed (the interrupted instruction stream completed up to a
   boundary).
 - **Traps** (`SYSCALL`/`BREAK`) — see the EPC-classification note in
-  Section 10; the gen1 ISA text and the gen1 microcode differ on
+  [EPC classification (faulting-PC vs next-PC)](#epc-classification-faulting-pc-vs-next-pc); the gen1 ISA text and the gen1 microcode differ on
   whether EPC points at the trap instruction or the one after, and
   gen2 must match whatever the kernel's trap path expects.
 
@@ -131,13 +131,13 @@ changes), then `PC ← EPC`. For a context switch to a *different*
 process the kernel writes EPC/ESR with `WRSPR` first, then `ERET`
 ([architecture.md](../../system/architecture.md) § Exit Sequence).
 
-## 2. Exception sources by detecting stage
+## Exception sources by detecting stage
 
 In a pipeline each exception is detected in the stage that has the
 information to detect it. The detecting stage does **not** act
 immediately; it attaches a fault tag to the instruction's pipeline
 register, and the fault is *taken* only if/when that instruction
-reaches the commit point (Section 3). This is what makes the
+reaches the commit point ([Precise exceptions in the pipeline](#precise-exceptions-in-the-pipeline)). This is what makes the
 exceptions precise.
 
 | Vector | Detected in | How |
@@ -152,7 +152,7 @@ exceptions precise.
 | `VEC_ALIGN` (data) | MEM | Load/store effective address misaligned for its width |
 | `VEC_BUS_FAULT` (data) | MEM | Load/store to an unbacked physical address |
 | `VEC_SYSCALL`, `VEC_BREAK` | EX | The trap instruction reaches EX |
-| `VEC_EXT_IRQ`, `VEC_TIMER` | IF1 | Asynchronous — sampled at the fetch boundary (Section 8) |
+| `VEC_EXT_IRQ`, `VEC_TIMER` | IF1 | Asynchronous — sampled at the fetch boundary ([Interrupts](#interrupts)) |
 
 Note the same vector (`VEC_TLB_MISS`, `VEC_ALIGN`, `VEC_BUS_FAULT`)
 can be raised on either the **instruction** side (IF) or the **data**
@@ -160,21 +160,21 @@ side (MEM). The `FAULT_STATUS` sysreg's R/W/X bits tell the handler
 which ([sysregs.md](../../system/sysregs.md)); the vector is the
 same.
 
-## 3. Precise exceptions in the pipeline
+## Precise exceptions in the pipeline
 
 The central mechanism. Penumbra/2 completes strictly in program
 order (back-pressure holds younger instructions behind older ones;
 see [Decision 10](./design-decisions.md#10-stall-propagation-policy-back-pressure)),
 which is what makes precise exceptions affordable.
 
-### 3.1 Fault tags ride the pipeline registers
+### Fault tags ride the pipeline registers
 
 When a stage detects a synchronous exception, it does not redirect
 control. It writes a **fault tag** into the instruction's outgoing
 pipeline register:
 
 - `fault_valid` — 1 bit, "this instruction has a pending exception."
-- `fault_vec` — the vector number (Section 1.1).
+- `fault_vec` — the vector number ([Vector table](#vector-table)).
 - the instruction's `PC` (already carried for branch/EPC use).
 
 The tagged instruction then flows downstream like any other, except
@@ -182,10 +182,10 @@ that a faulting instruction is **inert**: it performs no
 architectural write (its regfile-write and SR-write enables are
 gated off by `fault_valid`), so it cannot corrupt state on its way
 to commit. A later stage may detect an *additional* condition on the
-same instruction; Section 9 defines how the stage arbitrates which
+same instruction; [Exception / trap / interrupt arbitration](#exception--trap--interrupt-arbitration) defines how the stage arbitrates which
 vector survives.
 
-### 3.2 Commit point: WB
+### Commit point: WB
 
 The fault is **taken at WB** — the commit point — for the oldest
 instruction carrying `fault_valid`. Because completion is in order,
@@ -199,9 +199,9 @@ Taking the fault at WB triggers three things in the same cycle:
 1. **Fault-commit squash** of every younger in-flight instruction
    (those in IF1, IF2, ID, EX, MEM). They are forced to bubble at
    the next clock edge; none of them committed, so nothing is rolled
-   back (see [hazard-model.md §11](./hazard-model.md#11-interaction-with-exception-entry)).
-2. **The save-state pulse** (Section 4): EPC/ESR/SR/bank updates.
-3. **The vector-fetch FSM** (Section 5) is launched in IF.
+   back (see [Interaction with exception entry](./hazard-model.md#interaction-with-exception-entry)).
+2. **The save-state pulse** ([The save-state pulse](#the-save-state-pulse)): EPC/ESR/SR/bank updates.
+3. **The vector-fetch FSM** ([The vector-fetch FSM](#the-vector-fetch-fsm)) is launched in IF.
 
 ```mermaid
 flowchart TD
@@ -215,7 +215,7 @@ flowchart TD
     W -- "squashed by an older fault first" --> X[Discarded — older fault wins]
 ```
 
-### 3.3 Why "oldest faulting instruction wins" is free
+### Why "oldest faulting instruction wins" is free
 
 Two instructions can carry `fault_valid` at once (e.g., a faulting
 load in MEM behind an illegal instruction in WB). The younger one
@@ -224,15 +224,15 @@ flushes it first. No explicit age comparison is needed — in-order
 commit *is* the age order. This is the single most important
 consequence of the in-order pipeline for the exception path.
 
-## 4. The save-state pulse
+## The save-state pulse
 
 Save-state is a **one-cycle parallel write** asserted by the
 commit logic when a fault is taken at WB (or when an IRQ is taken,
-Section 8). In that cycle, by **direct flop writes** (not through
+[Interrupts](#interrupts)). In that cycle, by **direct flop writes** (not through
 the regfile write port, not through the scoreboard):
 
 - `EPC ← saved_PC` (the committing instruction's PC for faults; the
-  next-fetch PC for interrupts — Section 10).
+  next-fetch PC for interrupts — [EPC classification (faulting-PC vs next-PC)](#epc-classification-faulting-pc-vs-next-pc)).
 - `ESR ← SR` (the *pre-entry* SR, capturing flags + S + I as they
   were).
 - `SR.S ← 1`, `SR.I ← 0`.
@@ -249,11 +249,11 @@ clear or set scoreboard valid bits. This is safe because save-state
 fires only after the fault-commit squash has emptied the pipeline of
 younger instructions, so no in-flight instruction can have ESR or
 EPC as a pending destination at that moment
-([hazard-model.md §3, §11](./hazard-model.md#3-valid-bit-lifecycle)).
+([Valid bit lifecycle](./hazard-model.md#valid-bit-lifecycle)).
 The first kernel instruction that *reads* ESR/EPC (via `RDSPR`) does
 so many cycles later, after the handler has been fetched.
 
-## 5. The vector-fetch FSM
+## The vector-fetch FSM
 
 The handler address is an indirect load from the vector table, so
 entry needs one memory access that the normal pipeline is not in a
@@ -294,7 +294,7 @@ masked (`SR.I = 0` was just set), the access is physical (no TLB
 fault), and the vector page is backed (no bus fault) by system
 construction.
 
-## 6. ERET
+## ERET
 
 `ERET` is a **drain-commit** instruction
 ([Decision 9](./design-decisions.md#9-drain-commit-primitive)). It
@@ -322,36 +322,36 @@ to the CPU and observable the same cycle
 variant table). It writes no GPR and no scoreboard entry; the
 SR-write is to the NZCV portion (scoreboard-tracked) plus S/I
 (drain-serialised), consistent with
-[hazard-model.md §9](./hazard-model.md#9-interaction-with-drain-commit).
+[Interaction with drain-commit](./hazard-model.md#interaction-with-drain-commit).
 
-## 7. SR.S quiescence (link to the hazard model)
+## SR.S quiescence (link to the hazard model)
 
 Exception entry sets `SR.S = 1` and `ERET` restores it; both happen
 at points where the pipeline is drained or squashed of younger
 instructions. This is what gives the ID-stage decoder a stable
 `SR.S` to read when mapping architectural R14 to physical USP/SSP.
 The argument is developed in
-[hazard-model.md §7.3](./hazard-model.md#73-srs-quiescence-for-the-decoders-r14-mapping);
+[SR.S quiescence for the decoder's R14 mapping](./hazard-model.md#srs-quiescence-for-the-decoders-r14-mapping);
 this doc is the other half of it — the place where S actually
 changes — and confirms that every S-change is fenced by a
 drain (ERET) or a squash-and-drain (exception entry).
 
-## 8. Interrupts
+## Interrupts
 
 Interrupts (`VEC_TIMER`, `VEC_EXT_IRQ`) are **asynchronous**: not
 tied to any instruction. They are recognised at the fetch boundary
 and taken by *drain-and-take*.
 
-### 8.1 Masking and recognition
+### Masking and recognition
 
 An IRQ is eligible to be recognised when `SR.I = 1` **and**
-`ei_shadow = 0` (Section 8.3). The IF1 stage samples the wired-OR
+`ei_shadow = 0` ([`ei_shadow`, EI, DI](#ei_shadow-ei-di)). The IF1 stage samples the wired-OR
 IRQ inputs each cycle. Timer takes priority over the external IRQ
 line when both are pending
 ([architecture.md](../../system/architecture.md) § Interrupt
 sources).
 
-### 8.2 Drain-and-take
+### Drain-and-take
 
 When IF1 recognises an eligible IRQ:
 
@@ -374,10 +374,9 @@ instruction boundary and no instruction is half-executed.
 If an in-flight instruction *faults* during the drain, the fault
 takes precedence (it commits at WB and squashes, including
 cancelling the pending IRQ acceptance); the IRQ remains pending and
-is recognised after the fault's handler eventually returns. Section
-9 specifies the arbitration.
+is recognised after the fault's handler eventually returns. [Exception / trap / interrupt arbitration](#exception--trap--interrupt-arbitration) specifies the arbitration.
 
-### 8.3 `ei_shadow`, EI, DI
+### `ei_shadow`, EI, DI
 
 The ISA mandates that `EI` enables interrupts with a **one-
 instruction delay**: the instruction immediately after `EI` runs
@@ -385,7 +384,7 @@ with interrupts still masked
 ([architecture.md](../../system/architecture.md) § EI). `DI`
 disables immediately. Both are privileged (user-mode use traps to
 `VEC_PRIV`) and both are **drain-commit**
-([hazard-model.md §7.4](./hazard-model.md#74-why-eidi-are-drain-commit-too)).
+([Why EI/DI are drain-commit too](./hazard-model.md#why-eidi-are-drain-commit-too)).
 
 gen2 implements the delay with an `ei_shadow` flip-flop:
 
@@ -418,13 +417,13 @@ gen2:
 pipeline is drained, and the next fetched instruction sees `SR.I = 0`
 — so no younger instruction can be interrupted after a `DI`.
 
-## 9. Exception / trap / interrupt arbitration
+## Exception / trap / interrupt arbitration
 
 When more than one exception condition is live, a single vector must
 be chosen. Two independent questions:
 
 - **Across instructions** — answered by in-order commit
-  (Section 3.3): the oldest faulting instruction wins automatically,
+  ([Why "oldest faulting instruction wins" is free](#why-oldest-faulting-instruction-wins-is-free)): the oldest faulting instruction wins automatically,
   because it commits first and squashes the rest. No comparison
   logic.
 - **Within one instruction / boundary** — a single instruction may
@@ -434,7 +433,7 @@ be chosen. Two independent questions:
   SYSCALL > IRQ`, [microcode.md](../../internals/penumbra1/microcode.md));
   gen2 reproduces a consistent order.
 
-### 9.1 Specified total order
+### Specified total order
 
 The order in which a single vector is selected:
 
@@ -450,14 +449,14 @@ The order in which a single vector is selected:
 
 This is the *specification* of the result — the vector the kernel
 observes. It is **not** a description of one priority encoder over
-nine conditions; Section 9.2 shows the realisation is mostly
+nine conditions; [How the order is realised: structure first, small muxes second](#how-the-order-is-realised-structure-first-small-muxes-second) shows the realisation is mostly
 structural.
 
-### 9.2 How the order is realised: structure first, small muxes second
+### How the order is realised: structure first, small muxes second
 
 Most of the order falls out of *where and when* each condition is
 detected, not from an encoder at the commit point. Because a fault
-tag makes its instruction **inert** (Section 3.1), an
+tag makes its instruction **inert** ([Fault tags ride the pipeline registers](#fault-tags-ride-the-pipeline-registers)), an
 earlier-detected fault structurally precludes every later one on the
 same instruction — the instruction never reaches the later stage to
 raise them. So the bulk of the ranking costs no logic:
@@ -504,7 +503,7 @@ partition between "vector wired directly from its sole detection
 point" and "vector selected by a local mux" is decided when the
 stages are written, not mandated here.
 
-## 10. EPC classification (faulting-PC vs next-PC)
+## EPC classification (faulting-PC vs next-PC)
 
 Each instruction carries its own PC down the pipeline. At the commit
 point the save-state pulse writes EPC from one of two sources,
@@ -529,10 +528,9 @@ at the `SYSCALL` instruction itself and has the handler advance
 if the handler's convention matches the hardware's. gen2 must adopt
 whichever convention the live NetBSD trap path
 (`netbsd/sys/arch/penumbra/penumbra/trap.c` and the syscall stub)
-actually relies on — this is a verification item, listed in Section
-13, not a free choice.
+actually relies on — this is a verification item, listed in [Worked timing examples](#worked-timing-examples), not a free choice.
 
-## 11. TLB-miss fast path interaction
+## TLB-miss fast path interaction
 
 The data-side and fetch-side TLB-miss faults (`VEC_TLB_MISS`) are
 the hottest exception on a NetBSD workload, so their entry cost is
@@ -544,13 +542,13 @@ mechanism:
   area, and the page-directory pointer live on a pinned-TLB page so
   that taking a TLB miss never recurses into another TLB miss
   ([mmu.md](../../system/mmu.md) pinned-TLB assignment). The
-  vector-fetch FSM's MMU bypass (Section 5) gets the handler
+  vector-fetch FSM's MMU bypass ([The vector-fetch FSM](#the-vector-fetch-fsm)) gets the handler
   *address*; the pinned entry covers the handler *code*.
 - **SCR0–3 spill.** The handler's prologue parks R1–R4 into the
   scratch SPRs (`WRSPR SCR0..SCR3`) with no RAM access. These are
   ordinary scoreboarded entries (not drain-commit), so the spill
   pipelines at GPR speed — see
-  [hazard-model.md §5.2](./hazard-model.md#52-scrn-coverage-rationale).
+  [SCRn coverage rationale](./hazard-model.md#scrn-coverage-rationale).
   This is the design constraint that *forces* SCRn to be cheap:
   draining on each `WRSPR SCRn` would dominate every TLB miss.
 - **FAULT_ADDR / FAULT_STATUS latch.** On a data fault the MEM stage
@@ -561,27 +559,27 @@ mechanism:
   device-side registers, not pipeline state, and are not part of the
   save-state pulse.
 
-## 12. Interaction with the hazard model
+## Interaction with the hazard model
 
 This doc supplies the three facts
 [hazard-model.md](./hazard-model.md) forward-references:
 
-1. **Fault-commit squash** (Section 3.2) — the squash of younger
+1. **Fault-commit squash** ([Commit point: WB](#commit-point-wb)) — the squash of younger
    in-flight instructions when a fault commits at WB. The hazard
    model relies on this for its squash-recovery argument
-   ([hazard-model.md §11](./hazard-model.md#11-interaction-with-exception-entry)):
+   ([Interaction with exception entry](./hazard-model.md#interaction-with-exception-entry)):
    because the scoreboard is *re-derived* each cycle from in-flight
    destinations, the squash automatically restores the valid bits of
    the flushed instructions — there is nothing to roll back.
-2. **Save-state scoreboard bypass** (Section 4) — the direct ESR/EPC
+2. **Save-state scoreboard bypass** ([The save-state pulse](#the-save-state-pulse)) — the direct ESR/EPC
    flop writes do not touch the scoreboard, which is safe precisely
    because the squash in (1) has emptied the pipeline of any
    instruction that could have ESR/EPC pending.
-3. **Vector-fetch stall** (Section 5) — the IF1 hold while the
+3. **Vector-fetch stall** ([The vector-fetch FSM](#the-vector-fetch-fsm)) — the IF1 hold while the
    handler address is fetched; one of the stall sources the hazard
    model defers to this doc.
 
-## 13. Worked timing examples
+## Worked timing examples
 
 Notation as in
 [pipeline-stages.md §Cycle-accurate timing examples](./pipeline-stages.md#cycle-accurate-timing-examples):
@@ -634,12 +632,12 @@ No IRQ can be taken at t+1/t+2 because `ei_shadow` masks it; the
 return completes atomically, then interrupts are live at the
 restored context.
 
-## 14. Open points / verification items
+## Open points / verification items
 
-- **Trap EPC convention** (Section 10): reconcile the ISA-text vs
+- **Trap EPC convention** ([EPC classification (faulting-PC vs next-PC)](#epc-classification-faulting-pc-vs-next-pc)): reconcile the ISA-text vs
   microcode disagreement against the live NetBSD `trap.c`/syscall
   stub before fixing gen2's trap EPC source.
-- **Arbitration realisation** (Section 9.2): the total order is
+- **Arbitration realisation** ([How the order is realised: structure first, small muxes second](#how-the-order-is-realised-structure-first-small-muxes-second)): the total order is
   specified, but the RTL-time partition between vectors wired
   directly from their sole detection point and vectors selected by a
   local priority mux is left to when the stages are written.
@@ -652,19 +650,19 @@ restored context.
   into `VEC_ALIGN`; confirm gen2 keeps a single vector and
   distinguishes via `FAULT_STATUS` rather than splitting.
 
-## 15. Cross-references
+## Cross-references
 
 - [architecture.md](../../system/architecture.md) § Exception Model,
   § Interrupt Control — the authoritative ISA contract.
 - [mmu.md](../../system/mmu.md) — TLB faults, pinned vector page,
   MMU-bypass on vector fetch.
 - [sysregs.md](../../system/sysregs.md) — FAULT_ADDR / FAULT_STATUS.
-- [hazard-model.md](./hazard-model.md) — scoreboard; §7 (S/I
-  serialisation), §9 (drain-commit), §11 (squash recovery).
-- [design-decisions.md §6](./design-decisions.md#6-control-architecture-pure-hardwired-no-microcode)
+- [hazard-model.md](./hazard-model.md) — scoreboard; [SR.S quiescence (link to the hazard model)](#srs-quiescence-link-to-the-hazard-model) (S/I
+  serialisation), [Exception / trap / interrupt arbitration](#exception--trap--interrupt-arbitration) (drain-commit), [TLB-miss fast path interaction](#tlb-miss-fast-path-interaction) (squash recovery).
+- [Decision 6](./design-decisions.md#6-control-architecture-pure-hardwired-no-microcode)
   (no microcode — relies on the single-cycle save-state pulse),
-  [§9](./design-decisions.md#9-drain-commit-primitive) (drain-commit,
-  ERET/EI/DI), [§10](./design-decisions.md#10-stall-propagation-policy-back-pressure)
+  [Decision 9](./design-decisions.md#9-drain-commit-primitive) (drain-commit,
+  ERET/EI/DI), [Decision 10](./design-decisions.md#10-stall-propagation-policy-back-pressure)
   (back-pressure → in-order completion → precise exceptions).
 - [pipeline-stages.md](./pipeline-stages.md) § Stall sources,
   § Squash sources — the vector-fetch and IRQ-drain stalls and the

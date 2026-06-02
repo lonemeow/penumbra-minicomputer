@@ -29,7 +29,7 @@ Covered:
 - The `IR[15:12]` field-aliasing hazard (Rdh vs SPR# vs sysreg dev).
 - The ID control bundle: every signal and how it is derived.
 - Register operand selection and immediate extension.
-- Branch-condition evaluation (Section 7 — open design point).
+- Branch-condition evaluation ([Branch-condition evaluation](#branch-condition-evaluation) — open design point).
 - `writes_flags` / `reads_flags` derivation.
 - The exception-detect signals (illegal, privilege) decode emits.
 
@@ -37,16 +37,16 @@ Out of scope:
 
 - The ISA→physical scoreboard register *mapping* (R14 banking,
   SPR-USP cross-bank) — fully specified in
-  [hazard-model.md §5](./hazard-model.md#5-isa--physical-register-mapping);
+  [ISA → physical register mapping](./hazard-model.md#isa--physical-register-mapping);
   this doc references it rather than duplicating.
 - Pipeline-register field widths and stall/squash semantics — see
   [pipeline-stages.md](./pipeline-stages.md).
 - The semantics of each instruction — see
   [instruction-set.md](../../system/instruction-set.md).
 
-## 1. Decode architecture
+## Decode architecture
 
-### 1.1 Hardwired, no microcode
+### Hardwired, no microcode
 
 Penumbra/2 has no µROM and no sequencer
 ([Decision 6](./design-decisions.md#6-control-architecture-pure-hardwired-no-microcode)).
@@ -57,7 +57,7 @@ state: `SR.S` for privilege/banking, the drain-commit and divmul EX
 FSMs). There is nothing to sequence, so there is no microcode to
 sequence it.
 
-### 1.2 Decode once in ID, narrow downstream
+### Decode once in ID, narrow downstream
 
 The apparent tension in Decision 6 — "each stage has its own
 decoder" — versus pipeline-stages.md — "ID decodes into a control
@@ -82,7 +82,7 @@ So "each stage has its own decoder" means each stage has a small
 instruction-word decoder. The instruction word itself does not ride
 past ID.
 
-### 1.3 Why this partition
+### Why this partition
 
 The alternative — carry the raw 32-bit `IR` to every stage and
 fully re-decode there — trades pipeline-register width for decode
@@ -93,7 +93,7 @@ logic. Penumbra/2 carries the *decoded subset* instead, because:
   are needed exactly once, at issue. Re-deriving them downstream
   would replicate logic for no benefit and would re-introduce the
   `SR.S`-at-the-wrong-time hazard the scoreboard works to avoid
-  ([hazard-model.md §7.3](./hazard-model.md#73-srs-quiescence-for-the-decoders-r14-mapping)).
+  ([SR.S quiescence for the decoder's R14 mapping](./hazard-model.md#srs-quiescence-for-the-decoders-r14-mapping)).
 - The *narrowed* subsets are small (≤12 bits at EX/MEM, ≤10 at
   MEM/WB), so carrying them is cheaper than carrying the 32-bit IR
   plus re-decoders.
@@ -105,7 +105,7 @@ Shared helpers — format detect, immediate extension, opcode-class
 predicates — live in `decode.sv` and are instantiated by ID (and by
 the few stages that need a predicate, e.g. EX's `is_branch`).
 
-## 2. Instruction formats
+## Instruction formats
 
 All instructions are 32 bits. The **format prefix** is `IR[31:30]`:
 
@@ -119,7 +119,7 @@ All instructions are 32 bits. The **format prefix** is `IR[31:30]`:
 Format detection is the first decode step and gates how every other
 field is interpreted.
 
-### 2.1 Format R (`00`)
+### Format R (`00`)
 
 ```
 31 30 29     25 24    21 20    17 16 15            0
@@ -132,14 +132,14 @@ field is interpreted.
 | Rd | 24:21 | Destination **and** first source |
 | Rs | 20:17 | Second source |
 | F | 16 | Flag-only: `0` = write result+flags, `1` = flags only (CMP = SUB·F, TEST = AND·F) |
-| spare | 15:0 | Repurposed by MUL/DIV and the SPR/sysreg ops — see Section 3 |
+| spare | 15:0 | Repurposed by MUL/DIV and the SPR/sysreg ops — see [The `IR[15:12]` aliasing hazard](#the-ir1512-aliasing-hazard) |
 
 Opcode map (`op[4:0]`): `00000`–`01011` single-cycle ALU/move
 (ADD, SUB, AND, OR, XOR, SHL, SHR, SAR, MOV, NOT, ADC, SBC);
 `10000`–`10011` divmul (MUL, MULU, DIV, DIVU); `10111`–`11111`
 system (WRSYS, RDSYS, SYSCALL, BREAK, ERET, EI, DI, WRSPR, RDSPR).
 
-### 2.2 Format L (`01`)
+### Format L (`01`)
 
 ```
 31 30 29   26 25    22 21    16 15          0
@@ -150,13 +150,13 @@ system (WRSYS, RDSYS, SYSCALL, BREAK, ERET, EI, DI, WRSPR, RDSPR).
 |-------|:----:|-------|
 | op | 29:26 | 4-bit opcode (16 ops) |
 | Rd | 25:22 | Destination and (for ALU-imm) first source |
-| imm16 | 15:0 | 16-bit immediate; extension per-opcode (Section 6) |
+| imm16 | 15:0 | 16-bit immediate; extension per-opcode ([Immediate extraction and extension](#immediate-extraction-and-extension)) |
 
 Opcode map: LLI, LLIS, LUI, ADD#, SUB#, CMP#, AND#, TEST#, SHL#,
 SHR#, SAR#, JMP, JALR (rest reserved). JMP/JALR take the target
 register in the `Rd` field.
 
-### 2.3 Format M (`10`)
+### Format M (`10`)
 
 ```
 31 30 29 28 27 26 25    22 21    18 17           2 1 0
@@ -176,7 +176,7 @@ register in the `Rd` field.
 Note the offset occupies `IR[17:2]`, **not** `IR[15:0]`; the
 decoder extracts `IR[17:2]` and sign-extends. Range ±32 KB.
 
-### 2.4 Format B (`11`)
+### Format B (`11`)
 
 ```
 31 30 29   26 25                    4 3   0
@@ -185,7 +185,7 @@ decoder extracts `IR[17:2]` and sign-extends. Range ±32 KB.
 
 | Field | Bits | Notes |
 |-------|:----:|-------|
-| cond | 29:26 | condition code (Section 7) |
+| cond | 29:26 | condition code ([Branch-condition evaluation](#branch-condition-evaluation)) |
 | offset22 | **25:4** | 22-bit **signed word** offset, relative to the **branch itself** |
 | sp | 3:0 | spare |
 
@@ -196,7 +196,7 @@ adder in the discrete build
 ([instruction-encoding.md](../../system/instruction-encoding.md)).
 `cond = 1111` is `BL` (always-taken, links `PC+4 → R13`).
 
-## 3. The `IR[15:12]` aliasing hazard
+## The `IR[15:12]` aliasing hazard
 
 `IR[15:12]` is **context-dependent** on the Format-R opcode and is
 the single most error-prone field for a decoder:
@@ -215,12 +215,12 @@ active; consumers select by the bundle's `op_class`, never by
 reading `IR[15:12]` raw. Treating this field uniformly is a classic
 decode bug — it would, e.g., read a divmul `Rdh` as an SPR number.
 
-## 4. The ID control bundle
+## The ID control bundle
 
 ID emits one bundle per issued instruction. The table is the
 *logical* contents; the physical `ctrl` field packs the subset
 EX needs, and the EX/MEM and MEM/WB registers carry the narrowing
-subsets (Section 1.2).
+subsets ([Decode once in ID, narrow downstream](#decode-once-in-id-narrow-downstream)).
 
 | Signal | Width | Derivation |
 |--------|:-----:|------------|
@@ -228,11 +228,11 @@ subsets (Section 1.2).
 | `alu_op` | ~4 | the ALU function (ADD/SUB/AND/OR/XOR/SHL/SHR/SAR/ADC/SBC/NOT/pass) |
 | `a_sel` | 1–2 | operand-A source: regfile(Rd) / PC (for B-target) |
 | `b_sel` | 1–2 | operand-B source: regfile(Rs) / immediate |
-| `imm` | 32 | sign/zero-extended immediate (Section 6) |
-| `writes_flags` | 1 | this op updates NZCV (Section 8) |
-| `reads_flags` | 1 | this op tests NZCV — Bcc and RDSPR-SR (Section 8) |
+| `imm` | 32 | sign/zero-extended immediate ([Immediate extraction and extension](#immediate-extraction-and-extension)) |
+| `writes_flags` | 1 | this op updates NZCV ([`writes_flags` / `reads_flags` derivation](#writes_flags--reads_flags-derivation)) |
+| `reads_flags` | 1 | this op tests NZCV — Bcc and RDSPR-SR ([`writes_flags` / `reads_flags` derivation](#writes_flags--reads_flags-derivation)) |
 | `flag_only` | 1 | F bit: suppress GPR write, keep flag write (CMP/TEST) |
-| `cond` | 4 | branch condition (Section 7); valid when `op_class=branch` |
+| `cond` | 4 | branch condition ([Branch-condition evaluation](#branch-condition-evaluation)); valid when `op_class=branch` |
 | `mem_op` | 2 | none / load / store |
 | `mem_size` | 2 | byte / half / word |
 | `sign_ext` | 1 | SE bit, for sub-word loads |
@@ -244,15 +244,15 @@ subsets (Section 1.2).
 | `gpr_we` | 1 | writes a GPR at WB |
 | `spr_we` | 1 | writes an SPR at WB |
 | `flag_we` | 1 | writes SR flags at WB (= `writes_flags`) |
-| `phys_src_a/b` | 5 each | physical scoreboard source entries ([hazard-model.md §5](./hazard-model.md#5-isa--physical-register-mapping)) |
+| `phys_src_a/b` | 5 each | physical scoreboard source entries ([ISA → physical register mapping](./hazard-model.md#isa--physical-register-mapping)) |
 | `phys_dst` | 5 | physical destination entry |
 | `phys_dst_hi` | 5 | divmul second destination (`Rdh`) |
-| `cross_bank` | 1 | SPR-USP cross-bank access ([hazard-model.md §5.1](./hazard-model.md#51-the-cross-bank-spr-usp-case)) |
-| `illegal` | 1 | no legal opcode/operand form (Section 9) |
-| `priv_fault` | 1 | privileged op with `SR.S=0` (Section 9) |
+| `cross_bank` | 1 | SPR-USP cross-bank access ([The cross-bank SPR-USP case](./hazard-model.md#the-cross-bank-spr-usp-case)) |
+| `illegal` | 1 | no legal opcode/operand form ([Exception-detect signals from decode](#exception-detect-signals-from-decode)) |
+| `priv_fault` | 1 | privileged op with `SR.S=0` ([Exception-detect signals from decode](#exception-detect-signals-from-decode)) |
 | `is_trap` | 1 | SYSCALL/BREAK (raise the trap vector at EX) |
 
-## 5. Register operand selection
+## Register operand selection
 
 The decoder maps instruction register fields to physical scoreboard
 entries and selects operand sources.
@@ -263,7 +263,7 @@ entries and selects operand sources.
   Format M uses `Rd` (data) and `Rb` (base, =`IR[21:18]`).
 - **ISA→physical mapping** (R14→USP/SSP by `SR.S`; SPR-USP cross-bank;
   R0/R15 exclusion) is specified in
-  [hazard-model.md §5](./hazard-model.md#5-isa--physical-register-mapping)
+  [ISA → physical register mapping](./hazard-model.md#isa--physical-register-mapping)
   and produces `phys_src_a/b`, `phys_dst`, `phys_dst_hi`, `cross_bank`.
   This doc does not restate that mapping.
 - **R0** reads as zero and discards writes; the decoder emits the R0
@@ -274,13 +274,13 @@ entries and selects operand sources.
   regfile port; R15 is not scoreboarded.
 - **`Rdh`** (the divmul high-half result — product high half for
   MUL, remainder for DIV/DIVU) is **write-only**: `IR[15:12]`
-  selects it as the second destination `phys_dst_hi` (Section 4),
+  selects it as the second destination `phys_dst_hi` ([The ID control bundle](#the-id-control-bundle)),
   not as a source. divmul reads only `op_a` (Rd) and `op_b` (Rs) —
   there is no third *input* operand and no 64/32 narrowing form;
   divides are always 32/32. `Rdh = R0` discards the high half (the
   common 32-bit form).
 
-## 6. Immediate extraction and extension
+## Immediate extraction and extension
 
 The immediate's bit position and extension rule are
 format-and-opcode specific:
@@ -299,12 +299,12 @@ and produces the 32-bit `imm`. Note three traps: LLI is *zero*-
 extend while LLIS is *sign*-extend (one opcode bit apart); LUI is an
 **OR-into-Rd**, not a replace (so `LUI` after `LLI` builds a 32-bit
 constant, but `LUI` alone needs Rd pre-cleared); and the M offset is
-*not* in `IR[15:0]` (Section 2.3).
+*not* in `IR[15:0]` ([Format M (`10`)](#format-m-10)).
 
-## 7. Branch-condition evaluation
+## Branch-condition evaluation
 
 A `Bcc` carries a 4-bit `cond` (=`IR[29:26]`) and is resolved in EX
-against the NZCV flags (Section 1 of
+against the NZCV flags ([Decode architecture](#decode-architecture) of
 [pipeline-stages.md](./pipeline-stages.md) places branch resolution
 in EX). The decoder passes `cond` through in the bundle; EX computes
 **taken / not-taken** by evaluating `cond` against the current flags.
@@ -330,7 +330,7 @@ The 16 conditions and their flag tests:
 | 1110 | BLE | Z=1 ∨ N≠V |
 | 1111 | BL | always (links PC+4→R13) |
 
-### 7.1 Evaluation
+### Evaluation
 
 The condition table is fixed by the ISA and is identical to gen1's,
 so gen2 **reuses gen1's `cond_eval` logic unchanged** — this is not
@@ -381,10 +381,10 @@ but the direct form does not *depend* on the tool flattening the
 serial XOR away — which is exactly why gen1 wrote it directly, and
 gen2 keeps it that way.
 
-## 8. `writes_flags` / `reads_flags` derivation
+## `writes_flags` / `reads_flags` derivation
 
 These two bits drive the NZCV scoreboard interaction
-([hazard-model.md §8](./hazard-model.md#8-flag-nzcv-hazard-model)),
+([Flag (NZCV) hazard model](./hazard-model.md#flag-nzcv-hazard-model)),
 so the decoder must produce them precisely.
 
 **`writes_flags` = 1** for: all Format-R and Format-L arithmetic and
@@ -401,16 +401,16 @@ SYSCALL, BREAK, RDSPR, WRSPR, RDSYS, WRSYS). Note `WRSPR SR` and
 `writes_flags`, but because they write the whole SR including its
 flag bits; the decoder marks them as NZCV writers through the
 `op_class`, consistent with
-[hazard-model.md §8](./hazard-model.md#8-flag-nzcv-hazard-model).
+[Flag (NZCV) hazard model](./hazard-model.md#flag-nzcv-hazard-model).
 
 **`reads_flags` = 1** for: every conditional `Bcc` (cond `0001`–
 `1110`), and `RDSPR SR` (returns NZCV among other bits). The
 unconditional `B`/`BL` (cond `0000`/`1111`) do **not** read flags.
 
-## 9. Exception-detect signals from decode
+## Exception-detect signals from decode
 
 Two of the exception sources in
-[exception-flow.md §2](./exception-flow.md#2-exception-sources-by-detecting-stage)
+[Exception sources by detecting stage](./exception-flow.md#exception-sources-by-detecting-stage)
 are produced by the decoder, combinationally in ID:
 
 - **`illegal`** — the instruction word matches no legal
@@ -420,28 +420,28 @@ are produced by the decoder, combinationally in ID:
 - **`priv_fault`** — a privileged op (EI, DI, ERET, RDSPR, WRSPR,
   RDSYS, WRSYS) is decoded with `SR.S = 0`. Raises `VEC_PRIV`.
 
-Per [exception-flow.md §9.2](./exception-flow.md#92-how-the-order-is-realised-structure-first-small-muxes-second),
+Per [How the order is realised: structure first, small muxes second](./exception-flow.md#how-the-order-is-realised-structure-first-small-muxes-second),
 `illegal` outranks `priv_fault` when both are asserted (an undefined
 opcode that would also be privileged decodes as illegal). The
 decoder may emit both bits; the local decode-fault mux picks
 `illegal`. Both set `fault_pending` + `fault_vec` in the ID/EX
 register and make the instruction inert
-([exception-flow.md §3.1](./exception-flow.md#31-fault-tags-ride-the-pipeline-registers)).
+([Fault tags ride the pipeline registers](./exception-flow.md#fault-tags-ride-the-pipeline-registers)).
 
 `SYSCALL` and `BREAK` are not faults — the decoder sets `is_trap`
 and the corresponding vector, taken at EX, with the trap EPC
 convention still to be reconciled
-([exception-flow.md §10](./exception-flow.md#10-epc-classification-faulting-pc-vs-next-pc)).
+([EPC classification (faulting-PC vs next-PC)](./exception-flow.md#epc-classification-faulting-pc-vs-next-pc)).
 
-## 10. Per-stage local decoders
+## Per-stage local decoders
 
 Downstream of ID, each stage consumes named bundle fields; the
 "decoder" in each is a small selector, not an instruction-word
-decoder (Section 1.2):
+decoder ([Decode once in ID, narrow downstream](#decode-once-in-id-narrow-downstream)):
 
 - **EX** — selects `alu_op`; drives the A/B operand muxes from
   `a_sel`/`b_sel`; computes the branch target (PC + `imm`) and
-  evaluates `cond` (Section 7); recognises `drain_commit` to enter
+  evaluates `cond` ([Branch-condition evaluation](#branch-condition-evaluation)); recognises `drain_commit` to enter
   the drain-commit FSM; pulses `divmul.start` when `op_class=divmul`.
 - **MEM** — consumes `ctrl_mem`: `mem_op` (none/load/store),
   `mem_size`, `sign_ext` for sub-word extract; `{sys_dev, sys_reg}`
@@ -451,20 +451,20 @@ decoder (Section 1.2):
   destinations; gated by `~fault_pending`
   ([pipeline-stages.md §WB](./pipeline-stages.md#wb--writeback)).
 
-## 11. Cross-references
+## Cross-references
 
 - [instruction-encoding.md](../../system/instruction-encoding.md),
   [instruction-set.md](../../system/instruction-set.md) — the
   authoritative ISA encoding and semantics.
-- [hazard-model.md §5](./hazard-model.md#5-isa--physical-register-mapping)
+- [ISA → physical register mapping](./hazard-model.md#isa--physical-register-mapping)
   — ISA→physical register mapping (R14 banking, SPR-USP cross-bank);
-  [§8](./hazard-model.md#8-flag-nzcv-hazard-model) — the
+  [Flag (NZCV) hazard model](./hazard-model.md#flag-nzcv-hazard-model) — the
   `writes_flags`/`reads_flags` NZCV interaction.
-- [exception-flow.md §2](./exception-flow.md#2-exception-sources-by-detecting-stage),
-  [§9.2](./exception-flow.md#92-how-the-order-is-realised-structure-first-small-muxes-second)
+- [Exception sources by detecting stage](./exception-flow.md#exception-sources-by-detecting-stage),
+  [How the order is realised: structure first, small muxes second](./exception-flow.md#how-the-order-is-realised-structure-first-small-muxes-second)
   — where decode-produced faults fit the exception path.
 - [pipeline-stages.md](./pipeline-stages.md) § Inter-stage pipeline
   registers — the `ctrl`/`ctrl_mem`/`ctrl_wb` field widths this
   bundle packs into.
-- [design-decisions.md §6](./design-decisions.md#6-control-architecture-pure-hardwired-no-microcode)
+- [Decision 6](./design-decisions.md#6-control-architecture-pure-hardwired-no-microcode)
   — the no-microcode, per-stage-hardwired decision this doc realises.

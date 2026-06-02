@@ -10,7 +10,7 @@ implementing `id_stage.sv` and the standalone `scoreboard.sv` (if
 factored out).
 
 Higher-level design rationale lives in
-[design-decisions.md §4](./design-decisions.md#4-hazard-handling-strategy).
+[Decision 4](./design-decisions.md#4-hazard-handling-strategy).
 This doc is the implementation contract: it states *what the
 scoreboard does*, not *why we picked it over forwarding*.
 
@@ -23,7 +23,7 @@ Covered:
 - The decoder's ISA → physical mapping (including the R14
   banking case and SPR-USP cross-bank access).
 - Interaction with drain-commit, divmul, and exception entry.
-- Flag-hazard (NZCV) semantics (Section 8).
+- Flag-hazard (NZCV) semantics ([Flag (NZCV) hazard model](#flag-nzcv-hazard-model)).
 - Worked examples of every distinct hazard scenario.
 
 Out of scope:
@@ -38,7 +38,7 @@ Out of scope:
 - Forwarding paths — gen2 has none by design; gen2.5 will add
   WB→ID write-through and EX→EX flag forwarding.
 
-## 1. The hazard problem in gen2
+## The hazard problem in gen2
 
 Penumbra/2 overlaps up to six instructions across IF1, IF2, ID, EX,
 MEM, and WB. A naive pipeline that just keeps fetching would let a
@@ -77,10 +77,10 @@ free* by in-order completion: because Penumbra/2 retires strictly
 in program order, the youngest writer always lands last, so
 last-writer-wins holds for every entry with no WAW stall. This is a
 consequence of the in-order pipeline, not a mechanism the
-scoreboard adds — see Section 4. (Penumbra/2 therefore has only RAW
+scoreboard adds — see [Stall predicate](#stall-predicate). (Penumbra/2 therefore has only RAW
 data hazards; WAW and WAR cannot occur.)
 
-## 2. Scoreboard storage
+## Scoreboard storage
 
 The scoreboard is a flat array of single valid bits, one per
 physical scoreboardable entry. `valid = 1` means "no in-flight
@@ -95,7 +95,7 @@ instruction has cleared this entry but has not yet completed WB".
 | 15    | SSP            | `R14` in supervisor mode |
 | 16    | ESR            | `RDSPR/WRSPR ESR`. Exception entry's save-state pulse writes ESR directly and bypasses the scoreboard. |
 | 17    | EPC            | `RDSPR/WRSPR EPC`. Same exception-entry bypass as ESR. |
-| 18    | NZCV           | The condition flags carried in SR. Written by flag-writing ALU ops, `WRSPR SR`, and `ERET`; read by `Bcc` and `RDSPR SR`. **Only the NZCV flags are scoreboard-tracked; the S and I bits of SR are not** — see Section 7. |
+| 18    | NZCV           | The condition flags carried in SR. Written by flag-writing ALU ops, `WRSPR SR`, and `ERET`; read by `Bcc` and `RDSPR SR`. **Only the NZCV flags are scoreboard-tracked; the S and I bits of SR are not** — see [Control-state serialization: the S and I bits](#control-state-serialization-the-s-and-i-bits). |
 | 19    | SCR0           | `RDSPR/WRSPR SCR0` only |
 | 20    | SCR1           | `RDSPR/WRSPR SCR1` only |
 | 21    | SCR2           | `RDSPR/WRSPR SCR2` only |
@@ -123,17 +123,17 @@ drain-commit serialization on every instruction that writes them.
 This is not an optimization — it is a correctness factoring,
 because S and I are consumed by structures *outside* the pipeline's
 dataflow (the MMU and the IF1 IRQ logic) that a regfile-read
-scoreboard cannot protect. Section 7 develops this in full; the
+scoreboard cannot protect. [Control-state serialization: the S and I bits](#control-state-serialization-the-s-and-i-bits) develops this in full; the
 short version is that a scoreboard valid bit answers only "has this
 value reached the regfile yet?", which is the wrong question for
 control state that the MMU samples mid-execution.
 
-## 3. Valid bit lifecycle
+## Valid bit lifecycle
 
 `valid[P]` is **derived combinationally** each cycle as *"no
 instruction ahead of the ID instruction (in EX, MEM, or WB) has P
 as its destination"* — not latched in a set/clear flip-flop. This
-re-derive form (mandated in Section 11 for squash-safety) is what
+re-derive form (mandated in [Interaction with exception entry](#interaction-with-exception-entry) for squash-safety) is what
 makes the lifecycle below behave correctly when several writers to
 P are in flight at once: `valid[P]` only returns to 1 once the
 *youngest* such writer has left WB. The set/clear description below
@@ -161,20 +161,20 @@ For each physical entry P, the valid bit's logical lifecycle is:
    `Rd` (low/quotient) and `Rdh` (high/remainder, from `IR[15:12]`)
    — through the **single** write port over two consecutive WB
    cycles (the register file has no second write port; see
-   [regfile.md §4](./regfile.md#4-write-port-and-divmul-sequencing)).
+   [Write port and divmul sequencing](./regfile.md#write-port-and-divmul-sequencing)).
    The divmul instruction occupies WB for both cycles and is an
    in-flight writer of both entries throughout, so under the
-   re-derive model (Section 11) `valid[Rd]` and `valid[Rdh]` are
+   re-derive model ([Interaction with exception entry](#interaction-with-exception-entry)) `valid[Rd]` and `valid[Rdh]` are
    both 0 until it leaves WB, then both return to 1 together. The
    low-then-high write order is for the shared write port, not for
    early wakeup — the held extra cycle freezes any consumer anyway.
 
 **Exception entry bypass.** When the hardware exception save-state
-pulse fires (Section 9), the direct flop writes to ESR and EPC
+pulse fires ([Interaction with drain-commit](#interaction-with-drain-commit)), the direct flop writes to ESR and EPC
 bypass the scoreboard. The scoreboard is not touched on save-state.
 This is safe because save-state happens during a pipeline drain in
 which no in-flight instruction has ESR or EPC as a destination —
-see Section 9 for the argument.
+see [Interaction with drain-commit](#interaction-with-drain-commit) for the argument.
 
 **No write-through.** A producer's destination is not visible to
 the regfile read port until the WB cycle has retired. Specifically,
@@ -187,7 +187,7 @@ stalls one more cycle. This is the explicit "no write-through"
 trade in [Decision 4](./design-decisions.md#4-hazard-handling-strategy);
 gen2.5 will add a one-mux write-through that closes this cycle.
 
-## 4. Stall predicate
+## Stall predicate
 
 Let `S` be the set of physical source-register indices for the
 instruction currently held in the ID register, and let `D` be its
@@ -221,7 +221,7 @@ single-writer / WAW clause at all.
 
 This correctness depends on `valid[p]` being **derived** from the
 set of in-flight destinations each cycle (the re-derive model of
-[Section 11](#11-interaction-with-exception-entry)), not latched as
+[Interaction with exception entry](#interaction-with-exception-entry)), not latched as
 a single set-on-WB flip-flop. The derived form represents
 arbitrarily many in-flight writers correctly: `valid[p]` returns to
 1 only when the *last* (youngest) writer ahead of the reader has
@@ -230,7 +230,7 @@ naive single flop "set on any WB" would instead be set prematurely
 by an *older* writer's WB while a younger writer to the same entry
 is still in flight — exposing a reader to the stale value. That is
 an implementation defect, not a real hazard, and the re-derive
-model avoids it; see Section 11.
+model avoids it; see [Interaction with exception entry](#interaction-with-exception-entry).
 
 **Structural stalls** (divmul busy in EX, drain-commit drain,
 cache miss) are not part of `stall_id` — they are EX/MEM stalls
@@ -252,9 +252,9 @@ source registers. Multi-source cases the decoder must handle:
 | ALU immediate `OP Rd, Ra, #imm` | `{Ra}` |
 | `LD Rd, [Ra, #off]` | `{Ra}` |
 | `ST Rs, [Ra, #off]` | `{Rs, Ra}` |
-| `Bcc target` | `{NZCV}` (the flag entry, index 18) — see Section 8 |
+| `Bcc target` | `{NZCV}` (the flag entry, index 18) — see [Flag (NZCV) hazard model](#flag-nzcv-hazard-model) |
 | `B[L] Rb` (register branch) | `{Rb}` |
-| `RDSPR Rd, SPR` | `{SPR_phys}` (e.g., USP, ESR, SCR0…). For `RDSPR Rd, SR` the source is `{NZCV}` — the S/I bits it also returns are serialized by drain-commit, not scoreboarded (Section 7). |
+| `RDSPR Rd, SPR` | `{SPR_phys}` (e.g., USP, ESR, SCR0…). For `RDSPR Rd, SR` the source is `{NZCV}` — the S/I bits it also returns are serialized by drain-commit, not scoreboarded ([Control-state serialization: the S and I bits](#control-state-serialization-the-s-and-i-bits)). |
 | `WRSPR SPR, Rs` | `{Rs}` (and `D = SPR_phys`). `WRSPR SR` writes NZCV (`D = NZCV`) and is itself drain-commit. |
 | `RDSYS Rd, sysreg_id` | `{}` (sysreg ID is encoded; not a regfile read) |
 | `WRSYS sysreg_id, Rs` | `{Rs}` |
@@ -267,9 +267,9 @@ divmul is in flight it is an in-flight writer of both, so both
 entry stalls (RAW) until the divmul completes. There is no
 writer-side stall: a later instruction writing `Rd` or `Rdh` cannot
 issue anyway, because the divmul stalls EX and back-pressures it in
-ID (Section 4, structural stalls).
+ID ([Stall predicate](#stall-predicate), structural stalls).
 
-## 5. ISA → physical register mapping
+## ISA → physical register mapping
 
 The decoder produces three physical indices per cycle:
 `phys_src_a`, `phys_src_b`, `phys_dst`. The mapping consumes the
@@ -288,15 +288,15 @@ physical entries 0..13. The non-trivial cases are:
 | `RDSPR/WRSPR USP, …`  | **USP** (14), regardless of mode |
 | `RDSPR/WRSPR ESR, …`  | 16 |
 | `RDSPR/WRSPR EPC, …`  | 17 |
-| `RDSPR/WRSPR SR,  …`  | 18 (NZCV). The flag bits are the scoreboarded part; the S/I bits `RDSPR SR` reads and `WRSPR SR` writes are serialized by drain-commit (Section 7). `WRSPR SR` is drain-commit; `EI`/`DI` are drain-commit and touch only the I bit (no scoreboard entry). |
+| `RDSPR/WRSPR SR,  …`  | 18 (NZCV). The flag bits are the scoreboarded part; the S/I bits `RDSPR SR` reads and `WRSPR SR` writes are serialized by drain-commit ([Control-state serialization: the S and I bits](#control-state-serialization-the-s-and-i-bits)). `WRSPR SR` is drain-commit; `EI`/`DI` are drain-commit and touch only the I bit (no scoreboard entry). |
 | `RDSPR/WRSPR SCRn, …` | 19..22 |
 
 The mapping is **combinational** in the ID stage; it is not
 registered. This is acceptable for fmax because the SR.S bit is
-quiescent (Section 7) — no in-flight instruction can change it
+quiescent ([Control-state serialization: the S and I bits](#control-state-serialization-the-s-and-i-bits)) — no in-flight instruction can change it
 between this cycle's decode and next cycle's issue.
 
-### 5.1 The cross-bank SPR-USP case
+### The cross-bank SPR-USP case
 
 In supervisor mode, `RDSPR/WRSPR USP` is the only way for the
 kernel to access user-mode R14 (e.g., to save user state on
@@ -331,7 +331,7 @@ younger insns. The physical-addressed scoreboard is the
 mechanism that makes the general case (any WRSPR followed by any
 USP-aliasing read, with or without intervening ERET) correct.
 
-### 5.2 SCRn coverage rationale
+### SCRn coverage rationale
 
 `SCR0..SCR3` are general-purpose SPR-scratch registers used heavily
 by the TLB miss handler in
@@ -347,7 +347,7 @@ non-drain-commit. The cost is the four extra scoreboard bits and
 the decoder cycles to compute the index. The benefit is that the
 miss handler's scratch use pipelines normally.
 
-## 6. The WRSPR-USP / R14 aliasing case (worked example)
+## The WRSPR-USP / R14 aliasing case (worked example)
 
 The cleanest illustration of why physical addressing matters.
 Suppose the kernel is preparing to ERET to a user context:
@@ -417,14 +417,14 @@ This is the canonical reason for physical addressing. Even when
 drain-commit hides the hazard in practice, the scoreboard's
 *correctness invariant* must not depend on it.
 
-## 7. Control-state serialization: the S and I bits
+## Control-state serialization: the S and I bits
 
 The supervisor bit `S` and interrupt-enable bit `I` live in SR but
 are **not** scoreboard entries. This section explains why a value
 scoreboard is the wrong mechanism for them, and what orders them
 instead.
 
-### 7.1 Why a scoreboard cannot protect S or I
+### Why a scoreboard cannot protect S or I
 
 A scoreboard valid bit answers exactly one question: *"has this
 value reached the regfile read port yet?"* That is the only hazard
@@ -455,7 +455,7 @@ In both cases the requirement is *serialization*, supplied by the
 ([Decision 9](./design-decisions.md#9-drain-commit-primitive)),
 not by a scoreboard valid bit.
 
-### 7.2 Every writer of S and I is drain-commit
+### Every writer of S and I is drain-commit
 
 | Writer | Writes | Ordering |
 |--------|--------|----------|
@@ -475,12 +475,12 @@ pending. Tracking it would not be incorrect, just inert — and inert
 logic that looks load-bearing obscures the real mechanism, so gen2
 omits it.
 
-### 7.3 SR.S quiescence for the decoder's R14 mapping
+### SR.S quiescence for the decoder's R14 mapping
 
 This is the one place the absence of S-scoreboarding could look
 worrying, so it is worth stating explicitly. The decoder reads
 `SR.S` *combinationally* in ID to map architectural `R14` to
-physical USP or SSP (Section 5). That read is **not** protected by
+physical USP or SSP ([ISA → physical register mapping](#isa--physical-register-mapping)). That read is **not** protected by
 the scoreboard — it reads the architectural SR.S flop directly.
 Its correctness instead rests on `SR.S` being quiescent: no
 in-flight instruction may be *in the process* of changing `SR.S`
@@ -497,7 +497,7 @@ free — and note this is a *second*, independent reason S-changes
 must drain, reinforcing 7.1: it is not only the MMU mid-execution,
 it is also the decoder's own combinational read.
 
-### 7.4 Why EI/DI are drain-commit too
+### Why EI/DI are drain-commit too
 
 `I` does not change instruction execution, so EI/DI could in
 principle be cheap single-cycle ops with the I-bit tracked some
@@ -538,11 +538,11 @@ reasons:
 Reclaiming the EI/DI cost (and the broader cheap-`spl` engineering)
 is a gen2.5 concern, alongside forwarding.
 
-## 8. Flag (NZCV) hazard model
+## Flag (NZCV) hazard model
 
 NZCV is its own scoreboard entry (index 18). It is the *only* part
 of SR the scoreboard tracks — S and I are serialized by
-drain-commit (Section 7), so they never appear here.
+drain-commit ([Control-state serialization: the S and I bits](#control-state-serialization-the-s-and-i-bits)), so they never appear here.
 
 **Producers and consumers of NZCV:**
 
@@ -558,11 +558,11 @@ NZCV obeys the *same* rule as every other scoreboard entry: a
 **reader** stalls in ID until `valid[NZCV] = 1` (no flag writer
 ahead of it remains in EX/MEM/WB), and a **writer never stalls on
 another writer**. This is not a special case for flags — it is the
-universal RAW-only behavior of the in-order scoreboard (Section 4).
+universal RAW-only behavior of the in-order scoreboard ([Stall predicate](#stall-predicate)).
 It simply *matters most* here, because nearly every instruction is
 a flag writer.
 
-### 8.1 Why last-writer-wins is mandatory for NZCV
+### Why last-writer-wins is mandatory for NZCV
 
 If flag writers had to serialize against each other (a WAW stall on
 NZCV), then because almost every ALU op writes NZCV, *every*
@@ -571,7 +571,7 @@ would degenerate to one-instruction-at-a-time — un-pipelined
 execution. Last-writer-wins is therefore not an optimization for
 NZCV; it is required for the pipeline to pipeline at all.
 
-The in-order completion property (Section 4) supplies it directly:
+The in-order completion property ([Stall predicate](#stall-predicate)) supplies it directly:
 multiple flag writers can be in flight at once, they retire in
 program order, and the architectural NZCV ends up holding the
 youngest writer's result. A reader stalls only until the youngest
@@ -580,7 +580,7 @@ stall, no more.
 
 **Decoder bits.** `writes_flags` and `reads_flags` (introduced
 above) are sufficient. No "youngest-writer tag" is needed: the
-re-derive scoreboard (Section 11) computes `valid[NZCV]` as
+re-derive scoreboard ([Interaction with exception entry](#interaction-with-exception-entry)) computes `valid[NZCV]` as
 "no EX/MEM/WB stage currently holds a `writes_flags` instruction,"
 which is true exactly when the youngest in-flight flag writer has
 left WB. The youngest-wins outcome falls out of in-order WB; the
@@ -631,7 +631,7 @@ gen2.5's narrow EX→EX flag-forwarding path, which removes the
 to Bcc's EX). gen2 takes the hit to keep the no-forwarding baseline
 clean.
 
-## 9. Interaction with drain-commit
+## Interaction with drain-commit
 
 Drain-commit instructions (ERET, WRSYS) stall in EX rather than
 issue-stalling in ID. They do not interact with the scoreboard
@@ -649,18 +649,18 @@ beyond the normal source-read clearing rules:
   issue and set on commit (in EX, since the instruction never
   reaches WB). Scoreboard-wise it looks like a normal flag writer
   that also drains the pipeline. The S/I writes it performs are not
-  scoreboarded (Section 7).
+  scoreboarded ([Control-state serialization: the S and I bits](#control-state-serialization-the-s-and-i-bits)).
 - **EI / DI** (also drain-commit) write only the I bit, which is
   not scoreboarded. They clear nothing and set nothing in the
   scoreboard; their effect is ordered entirely by the drain.
 
 Drain-commit's main contribution to the scoreboard is indirect:
-it provides SR.S quiescence (Section 7) by ensuring no
+it provides SR.S quiescence ([Control-state serialization: the S and I bits](#control-state-serialization-the-s-and-i-bits)) by ensuring no
 mode-changing instruction is in flight while a younger instruction
 decodes — and, dually, it is what lets S and I stay out of the
 scoreboard entirely.
 
-## 10. Interaction with divmul
+## Interaction with divmul
 
 The MUL/DIV instructions execute as a single µop with a
 multi-cycle EX iteration (~33 cycles). The divmul unit owns the
@@ -668,12 +668,12 @@ ALU during the iteration and produces two register results — `Rd`
 (low half / quotient) and `Rdh` (high half / remainder) — which are
 written through the regfile's **single** write port at WB over two
 consecutive cycles (see
-[regfile.md §4](./regfile.md#4-write-port-and-divmul-sequencing)).
+[Write port and divmul sequencing](./regfile.md#write-port-and-divmul-sequencing)).
 
 Scoreboard interaction:
 
 1. **At ID issue** the decoder clears `valid[Rd]` *and*
-   `valid[Rdh]` together. Both must be valid pre-issue (Section 4
+   `valid[Rdh]` together. Both must be valid pre-issue ([Stall predicate](#stall-predicate)
    stall predicate, with the pair-destination form).
 2. **During divmul busy** the EX stage holds the instruction; the
    pipeline back-pressures upstream as for any EX stall.
@@ -684,7 +684,7 @@ Scoreboard interaction:
    port — holding the pipeline one extra cycle for the second write.
    It is an in-flight writer of both entries the whole time, so
    `valid[Rd]` and `valid[Rdh]` both clear at issue and both return
-   to 1 together when it leaves WB (Section 11's re-derive model).
+   to 1 together when it leaves WB ([Interaction with exception entry](#interaction-with-exception-entry)'s re-derive model).
 
 Divide-by-zero (`DIV`/`DIVU` with `Rs = 0`) raises `VEC_ARITH`
 (vector slot 10); that fault propagates through the normal
@@ -693,7 +693,7 @@ precise-exception mechanism in
 the divmul's writes by virtue of the WB-stage fault-commit squash
 rule (rather than by special handling in the scoreboard).
 
-## 11. Interaction with exception entry
+## Interaction with exception entry
 
 When the precise-exception machinery commits a fault at WB
 (see [exception-flow.md](./exception-flow.md)), it triggers:
@@ -752,7 +752,7 @@ The scoreboard's role across this sequence:
   therefore not a hazard — it is just a state update outside the
   scoreboard's purview.
 
-## 12. Worked stall examples
+## Worked stall examples
 
 These complement the examples in
 [pipeline-stages.md §Cycle-accurate timing examples](./pipeline-stages.md#cycle-accurate-timing-examples)
@@ -831,7 +831,7 @@ ADD R5, R4, R6       ; (2) RAW on R4 (the high half)
 `valid[R4]` is set. (1) clears both `valid[R1]` and `valid[R4]` at
 issue, so any read of either stalls until the divmul EX-completes.
 
-## 13. Verification considerations
+## Verification considerations
 
 The scoreboard's correctness invariants — physical addressing,
 last-writer-wins under in-order completion, squash-aware
@@ -872,12 +872,12 @@ events injected) is also recommended once the directed tests pass.
 
 ## Cross-references
 
-- [design-decisions.md §4](./design-decisions.md#4-hazard-handling-strategy)
+- [Decision 4](./design-decisions.md#4-hazard-handling-strategy)
   — rationale for pure stall and the unified physical scoreboard.
-- [design-decisions.md §9](./design-decisions.md#9-drain-commit-primitive)
+- [Decision 9](./design-decisions.md#9-drain-commit-primitive)
   — drain-commit, which provides SR.S quiescence for the
   scoreboard.
-- [design-decisions.md §10](./design-decisions.md#10-stall-propagation-policy-back-pressure)
+- [Decision 10](./design-decisions.md#10-stall-propagation-policy-back-pressure)
   — back-pressure stall propagation; what `stall_id` does to
   upstream stages.
 - [pipeline-stages.md §Stall sources](./pipeline-stages.md#stall-sources)
@@ -886,7 +886,7 @@ events injected) is also recommended once the directed tests pass.
   save-state's bypass of the scoreboard.
 - [control-decode.md](./control-decode.md) — the decoder's
   control-vector layout, including the `phys_src_*`/`phys_dst`
-  fields and the `writes_flags`/`reads_flags` bits Section 8
+  fields and the `writes_flags`/`reads_flags` bits [Flag (NZCV) hazard model](#flag-nzcv-hazard-model)
   introduces.
 - [regfile.md](./regfile.md) — the 2R/1W regfile with R14
   banking. *(To be written.)*
