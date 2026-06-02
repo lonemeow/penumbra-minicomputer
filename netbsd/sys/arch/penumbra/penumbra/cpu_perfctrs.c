@@ -13,6 +13,7 @@
  *	machdep.cpu.stall_load		cycles stalled on a data read miss-fill
  *	machdep.cpu.stall_store		cycles stalled on a data write
  *	machdep.cpu.freq		CPU clock in Hz (static, latched at boot)
+ *	machdep.cpu.all			all six counters in one read (bulk, struct)
  *
  * cycles/insns_retired each have a custom read handler that issues a
  * single RDSYS at read time — real-time accurate, no kernel-side
@@ -86,6 +87,38 @@ sysctl_cpu_freq(SYSCTLFN_ARGS)
 	return sysctl_lookup(SYSCTLFN_CALL(&node));
 }
 
+/*
+ * Bulk read: every CPU perfctr in one call.  A poller (e.g. penmon)
+ * reads machdep.cpu.all once per refresh instead of one sysctl per
+ * counter, cutting syscall overhead.  The reads execute back-to-back;
+ * like reading the leaves individually this is not an atomic snapshot,
+ * but it is tighter (no syscall boundaries between counters).
+ */
+static int
+sysctl_cpu_all(SYSCTLFN_ARGS)
+{
+	struct sysctlnode node;
+	uint64_t v[CPU_NPERFCTR];
+
+#define READ_CTR(reg) ({						\
+	uint32_t __raw;							\
+	__asm__ volatile("rdsys %0, %1, %2"				\
+	    : "=r"(__raw) : "i"(SYSDEV_CPU), "i"(reg));			\
+	(uint64_t)__raw; })
+	v[CPU_PERF_CYCLES]       = READ_CTR(CPU_CYCLES);
+	v[CPU_PERF_INSNS]        = READ_CTR(CPU_INSNS_RETIRED);
+	v[CPU_PERF_STALL_FUNIT]  = READ_CTR(CPU_STALL_FUNIT);
+	v[CPU_PERF_STALL_IFETCH] = READ_CTR(CPU_STALL_IFETCH);
+	v[CPU_PERF_STALL_LOAD]   = READ_CTR(CPU_STALL_LOAD);
+	v[CPU_PERF_STALL_STORE]  = READ_CTR(CPU_STALL_STORE);
+#undef READ_CTR
+
+	node = *rnode;
+	node.sysctl_data = v;
+	node.sysctl_size = sizeof(v);
+	return sysctl_lookup(SYSCTLFN_CALL(&node));
+}
+
 SYSCTL_SETUP(sysctl_cpu_perfctrs_setup,
     "machdep.cpu.* — CPU performance counters")
 {
@@ -149,5 +182,12 @@ SYSCTL_SETUP(sysctl_cpu_perfctrs_setup,
 	    CTLTYPE_QUAD, "freq",
 	    SYSCTL_DESCR("CPU clock frequency in Hz"),
 	    sysctl_cpu_freq, 0, NULL, 0,
+	    CTL_CREATE, CTL_EOL);
+
+	sysctl_createv(clog, 0, &cpu_node, NULL,
+	    CTLFLAG_PERMANENT,
+	    CTLTYPE_STRUCT, "all",
+	    SYSCTL_DESCR("All CPU perfctrs in one read: uint64_t[CPU_NPERFCTR]"),
+	    sysctl_cpu_all, 0, NULL, 0,
 	    CTL_CREATE, CTL_EOL);
 }

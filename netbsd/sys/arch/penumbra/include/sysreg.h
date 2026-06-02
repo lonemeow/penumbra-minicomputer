@@ -94,6 +94,19 @@
 #define CPU_STALL_LOAD		9
 #define CPU_STALL_STORE		10
 
+/* Bulk-read contract: the machdep.cpu.all sysctl returns every CPU
+ * perfctr in a single call as uint64_t[CPU_NPERFCTR] (free-running
+ * 32-bit values zero-extended), indexed by CPU_PERF_*.  Lets a poller
+ * read the whole set in one syscall instead of one per counter; the
+ * individual machdep.cpu.<name> leaves remain for ad-hoc sysctl(8) use. */
+#define CPU_PERF_CYCLES		0
+#define CPU_PERF_INSNS		1
+#define CPU_PERF_STALL_FUNIT	2
+#define CPU_PERF_STALL_IFETCH	3
+#define CPU_PERF_STALL_LOAD	4
+#define CPU_PERF_STALL_STORE	5
+#define CPU_NPERFCTR		6
+
 /* CPU_ISA layout: bits [3:0] = ISA version, bits [31:4] = feature flags
  * (bit indices below are relative to bit 4 of the register). */
 #define CPU_FEAT_BIT_FPU	0	/* Floating-point unit */
@@ -122,6 +135,16 @@
 #define CACHE_WRITE_HITS	12	/* R  — write accesses that hit a valid line */
 #define CACHE_WRITE_MISSES	13	/* R  — write accesses that missed */
 /* Regs 14-15 reserved for future counters (LINE_FILLS, WRITEBACKS, ...) */
+
+/* Bulk-read contract: each cache's machdep.cache.<dev>.all sysctl
+ * returns its four counters in one call as uint64_t[CACHE_NPERFCTR],
+ * indexed by CACHE_PERF_*.  The per-counter machdep.cache.<dev>.<name>
+ * leaves remain for ad-hoc sysctl(8) use. */
+#define CACHE_PERF_READ_HITS	0
+#define CACHE_PERF_READ_MISSES	1
+#define CACHE_PERF_WRITE_HITS	2
+#define CACHE_PERF_WRITE_MISSES	3
+#define CACHE_NPERFCTR		4
 
 #define CACHE_CTRL_ENABLE	0x01
 #define CACHE_STATUS_BUSY	0x01
