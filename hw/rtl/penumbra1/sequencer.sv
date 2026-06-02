@@ -322,8 +322,6 @@ module sequencer
     // rather than holding, so a faulting cycle is not a stall.  Helper
     // signals already in scope: `state`, `i_ir_valid`, `executing`,
     // `uw_branch`, `busy`, `uw_mem_read`, `uw_mem_write`, `i_divmul_busy`.
-    //
-    // TODO(human): drive the four mutually-exclusive stall-cause outputs.
 
     logic exec_stalled;
     assign exec_stalled = executing && (uw_branch == BR_STALL) && busy
