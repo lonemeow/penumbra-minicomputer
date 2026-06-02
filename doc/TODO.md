@@ -648,6 +648,93 @@ Three vantage points expose the same counters:
 Commits: `95b26c56a8ca` (RTL + tests), `32e262381274` (bare-metal
 harness), `102973802e41` (NetBSD sysctl).
 
+## Hardware: gen1 CPU fmax — critical-path findings
+
+gen1 targets 25 MHz on the ULX3S (ECP5-85F sg6). It is the single-cycle
+microcoded core, so one combinational cone spans the whole instruction:
+micro-ROM read → control decode → register-address resolution →
+register-file read → ALU → flag update. There is no slack cycle to hide
+any of it in — that cone is the structural fmax floor for this
+generation.
+
+### RDSPR-USP read-address override removed — DONE (`82d758cb4689`)
+
+The register read-address path carried a per-instruction mux that forced
+the A address to R14 at runtime, solely so RDSPR USP could read the
+banked user stack pointer. Its select came from the late micro-ROM
+`a_src` field, so every instruction's read address waited on a decode
+that mattered for one rare op. Moving the R14 selection into the `rdspr`
+micro-word (`reg_a=R14`) makes the address a static literal: the
+register file already maps R14 to the banked SP and `cross_bank` still
+picks USP vs SSP, and the A-mux ignores `reg_a` for the other SPR
+sources, so one literal address is correct for every SPR variant. A
+`datapath.sv` assertion guards the microcode-supplied-address contract.
+
+Measured on ULX3S, single synth run each:
+
+```
+  gen1 CPU fmax:  25.37 MHz → 27.11 MHz   (constraint 25 MHz)
+  critical path:  39.42 ns  → 36.89 ns
+```
+
+### The bottleneck relocated — read the path shape, not the number
+
+The durable lesson. Before, the critical path was the compute cone,
+rooted at the micro-ROM and ending at the `flag_z` register data input.
+After, it is a different net entirely:
+
+```
+  PC reg → MMU → TLB pinned-match (~11 ns) → TLB main → D$ cacheable
+         → I$ tag compare (~4 ns) → read-miss → bus arbiter
+         → sequencer next_upc → flag write-enable (flag_z clock-enable)
+```
+
+i.e. the instruction-fetch / address-translation / hit-miss control
+path. The compute cone dropped clean below a path that had been sitting
+just under it the whole time. Two consequences:
+
+- It proves the change was real signal, not placement noise. Noise
+  jitters the number on the *same* path; it does not relocate the
+  startpoint or move the limiter to another subsystem. A changed path
+  shape is the honest test for "did this optimization do work."
+- Further compute-cone work (the 32-bit `flag_z` zero-detect reduction,
+  the register file, the ALU) now buys **zero** fmax — none of it is on
+  the limiting path. The next gen1 lever would be the TLB pinned-match
+  and I-cache tag compare, which is exactly what the gen2 pipelined
+  fetch restructures, so it is not worth chasing in gen1.
+
+Caveat on the timing tool: the nextpnr per-module rollup attributes
+fused post-flatten LUTs by net-name prefix, not by logical dataflow. The
+two register-file read ports (A/B) are independent parallel reads of
+replicated DPRAM banks, but because they feed a common ALU sink the
+rollup can make them *look* serial. Trust the hop trace and the
+start/end points, not the module labels.
+
+### RTL-cleanup-for-fmax techniques (ref: openiphub UberDDR3 post)
+
+[Pushing UberDDR3 frequency through RTL
+cleanup](https://www.openiphub.com/post/pushing-uberddr3-frequency-through-rtl-cleanup-post-18)
+walks a DDR3 controller from 82 → 132 MHz. The transferable techniques,
+and how they land here:
+
+- **Register control decisions one cycle early; reuse the registered
+  decision instead of recomputing it combinationally.** Their biggest
+  wins. For a single-cycle microcoded core this *is* adding a decode
+  stage — there is no earlier cycle to register into — which is the
+  gen2 premise, not a gen1 tweak.
+- **Don't gate the common path with rare-command logic.** Exactly what
+  the RDSPR-USP override removal did: a rare op sat on every
+  instruction's read address.
+- **Flatten deep control trees; right-size register/counter widths;
+  separate combinational from sequential.** Cheap, local, low-risk — the
+  right tools for buying placement-noise margin rather than raising the
+  ceiling.
+
+The headline: gen1's ceiling is structural (one cycle does fetch +
+decode + read + execute + writeback), so the durable fmax lever is the
+gen2 pipeline. Within gen1, prefer small depth-shaving wins that buy
+safety margin over the 25 MHz target rather than campaigns to raise it.
+
 Verified-by-construction: the two cross-layer identities (L1-D
 writes total = L2 writes total, L1 read misses × 4 = L2 reads
 total) hold to the count on Dhrystone — a strong end-to-end
