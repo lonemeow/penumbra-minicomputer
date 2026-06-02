@@ -50,6 +50,7 @@ section at the bottom of this document for pointers.
 | [9](#9-drain-commit-primitive) | Drain-commit primitive | 2026-05-24 |
 | [10](#10-stall-propagation-policy-back-pressure) | Stall propagation policy (back-pressure) | 2026-05-24 |
 | [11](#11-bram-backed-caches-with-single-mem-stall) | BRAM-backed caches with single-MEM-STALL | 2026-05-24 |
+| [12](#12-nzcv-flag-forwarding) | NZCV flag forwarding (refines Decision 4) | 2026-06-01 |
 
 ---
 
@@ -1117,6 +1118,116 @@ cost where it matters:
   IF* (rejected: needlessly grows IF to 3 stages without benefit —
   the registered-output mode is for closing timing in much larger
   systems; we don't need it).
+
+---
+
+## 12. NZCV flag forwarding (refines Decision 4)
+
+**Date:** 2026-06-01
+
+**Context.** [Decision 4](#4-hazard-handling-strategy) chose pure stall
+for *all* data hazards, flags included, with every form of forwarding
+deferred to gen2.5. Its own Consequences singled out the flag-write
+hazard (`CMP → Bcc`) as "the dominant CPI loss on branch-heavy code in
+gen2." Implementing the scoreboard and ID stage forced a closer look at
+that cost, and three facts reframed it:
+
+1. **Writers never stall on writers.** In-order completion makes
+   last-writer-wins free
+   ([Stall predicate](./hazard-model.md#stall-predicate)), so a stream
+   of flag-writing ALU ops issues at one per cycle — the flag hazard is
+   *entirely* a reader-side cost. The only flag *readers* in the ISA
+   are `Bcc` (conditional branches) and `ADC`/`SBC` (carry-in). So
+   "almost every instruction writes flags" does **not** imply pervasive
+   stalls; only branches and multi-word-arithmetic chains pay.
+2. **Flag forwarding is uniquely cheap.** NZCV is 4 bits with a single
+   consumer site (the EX condition/carry evaluator), unlike 32-bit GPR
+   forwarding that fans out to every ALU operand. And because a reader
+   in EX can never share EX with its producer (one in-order pipe,
+   distinct instructions), the tightest a producer can be is one stage
+   ahead — in MEM. So the bypass is only **MEM→EX and WB→EX**; there is
+   no EX→EX flag path to build.
+3. **Forwarding removes NZCV from the scoreboard.** A reader that is
+   always forwarded never needs a valid bit, so flag forwarding
+   *deletes* the NZCV scoreboard entry (and the `writes_flags` /
+   `reads_flags` scoreboard ports a stalled-flag design would have
+   needed) rather than adding machinery. It is a net simplification of
+   the hazard tracker.
+
+**Decision.** gen2 **forwards NZCV** (MEM→EX and WB→EX, youngest-wins,
+with the architectural SR as the fallback). GPR and SPR operands
+**remain pure-stall** — [Decision 4](#4-hazard-handling-strategy) stands
+for them, and full GPR forwarding is still gen2.5 scope. NZCV ceases to
+be a scoreboard entry.
+
+**Mechanism.**
+
+- **The flag bypass** is a youngest-first mux feeding the EX flag
+  consumer: `flags = MEM.flag_value (if MEM writes_flags) → WB.flag_value
+  (if WB writes_flags) → architectural SR`. The `flag_value` fields
+  already ride the EX/MEM and MEM/WB registers
+  ([pipeline-stages.md](./pipeline-stages.md#inter-stage-pipeline-registers)).
+- **`writes_flags`** marks an in-flight flag producer (its EX-computed
+  NZCV is what the bypass selects); **`reads_flags`** marks the EX
+  consumer that takes the bypassed value. Neither is a scoreboard input.
+- **The architectural SR flag bits remain the committed source of
+  truth** and the bypass's lowest-priority input. This is what makes
+  flushes correct with no scoreboard involvement: after a squash or
+  drain the pipeline holds no in-flight flag writers, so the consumer
+  reads committed SR. A fault snapshots `ESR ← SR` (committed flags) and
+  `ERET` restores `SR ← ESR`, exactly as before. Squash-safety is
+  structural — forwarding flows older→younger while a squash only
+  removes younger instructions, so a squashed producer's readers are
+  younger and squashed too; a stranded forward cannot arise.
+- **S and I are unaffected** — already kept out of the scoreboard and
+  serialized by drain-commit
+  ([Control-state serialization: the S and I bits](./hazard-model.md#control-state-serialization-the-s-and-i-bits));
+  the bypass overlays only the NZCV nibble of SR for in-flight readers.
+
+**Rationale.** Decision 4 deferred *all* forwarding to keep a clean
+no-forwarding baseline, accepting the branch CPI hit as the price. That
+trade is right for GPR forwarding — 32-bit, many consumers, the
+expensive bypass network — but flags are separable and the calculus
+inverts: the flag bypass is small, attacks the single largest gen2 CPI
+source (branches are everywhere), *and* removes state from the
+scoreboard instead of adding it. There is no longer a
+correctness-vs-simplicity tension to defer; doing flags now is both
+faster and simpler. GPR/SPR forwarding stays deferred precisely because
+it has none of those three properties.
+
+**Consequences.**
+
+- **The `CMP → Bcc` data stall goes to 0** (the flags forward from
+  MEM/WB). The taken-branch **squash** penalty is unchanged — that is
+  [Decision 5](#5-branch-resolution-policy)'s 3-bubble flush, a control
+  hazard the flag bypass does not touch.
+- **`ADC`/`SBC` carry-in is forwarded**, so multi-word arithmetic
+  chains no longer stall on the carry. (Their flag-read dependency was
+  under-described in the original hazard model; the same bypass now
+  covers it.)
+- **The scoreboard loses its NZCV entry.** Physical entry layout becomes
+  R0 (0, unused) / R1–R13 (1–13) / USP (14) / SSP (15) / ESR (16) / EPC
+  (17) / SCR0–SCR3 (18–21) — 22 entries, 21 live.
+- **EX gains a 4-bit flag bypass mux.** The EX/MEM and MEM/WB registers
+  already carry `flag_value`, so no new pipeline-register state.
+- **`RDSPR/WRSPR SR` no longer emit a scoreboard reference for the flag
+  part** — `WRSPR SR` is a forwarded flag producer (and stays
+  drain-commit for S/I per [Decision 9](#9-drain-commit-primitive));
+  `RDSPR SR` takes NZCV from the bypass and S/I from committed SR.
+- **[hazard-model.md](./hazard-model.md) is revised** to describe flags
+  as forwarded rather than scoreboarded; this decision is the rationale,
+  that document is the contract.
+
+**Alternatives considered.** Keep Decision 4's pure-stall for flags
+(rejected: leaves the largest gen2 CPI source unaddressed for a fix that
+is cheap *and* simplifying — the original deferral assumed forwarding
+always adds cost, which is false for flags). Full GPR+flag forwarding
+now (rejected: GPR forwarding is the expensive, many-consumer bypass
+Decision 4 rightly deferred; flags are cleanly separable and don't
+justify pulling GPR forwarding forward with them). Model NZCV with a
+dedicated flag-reader stall term in the scoreboard instead of forwarding
+(rejected: it would still cost ~3 cycles per branch — the very loss this
+eliminates — and keeps NZCV state in the scoreboard).
 
 ---
 

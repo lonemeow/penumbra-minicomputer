@@ -100,8 +100,8 @@ SPR numbers (`RDSPR`/`WRSPR`, encoded in IR[15:12]):
 ```
 
 S = supervisor (bit 31), I = interrupt-enable (bit 30), then the
-NZCV flags in bits 3:0 (V, C, Z, N). Only the NZCV flags are
-scoreboard-tracked; S and I are serialised by drain-commit — see
+NZCV flags in bits 3:0 (V, C, Z, N). The NZCV flags are forwarded
+(not scoreboarded); S and I are serialised by drain-commit — see
 [Control-state serialization: the S and I bits](./hazard-model.md#control-state-serialization-the-s-and-i-bits).
 
 ### Entry and exit effects
@@ -319,8 +319,8 @@ Sequence:
 `ERET` has **0 cycles** post-commit wait — its effects are internal
 to the CPU and observable the same cycle
 ([Decision 9](./design-decisions.md#9-drain-commit-primitive)
-variant table). It writes no GPR and no scoreboard entry; the
-SR-write is to the NZCV portion (scoreboard-tracked) plus S/I
+variant table). It writes no GPR and no scoreboard entry; its
+SR-write reaches the NZCV portion (a forwarded flag producer) plus S/I
 (drain-serialised), consistent with
 [Interaction with drain-commit](./hazard-model.md#interaction-with-drain-commit).
 

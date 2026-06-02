@@ -169,7 +169,9 @@ its result combined with TLB output in IF2.
   entries (using current `SR.S` for `R14`); see
   [hazard-model.md](./hazard-model.md).
 - Check scoreboard valid bits for source operands; if any source is
-  pending, stall.
+  pending, stall. (Flag reads do not appear here — NZCV is forwarded in
+  EX, not scoreboard-tracked; see
+  [Flag (NZCV) hazard model](./hazard-model.md#flag-nzcv-hazard-model).)
 - On no stall: read source operands from the regfile (asynchronous
   read), latch the control bundle + operand values + this
   instruction's PC into the ID/EX register, clear destination's
@@ -187,10 +189,12 @@ regfile read ports.
   immediate per the control bundle).
 - Compute flag value (NZCV) from ALU.
 - Resolve branches: compute branch target (PC + sign-extended offset
-  for B-format; operand A for JMP Rs / ERET-via-EPC). Compare
-  condition code against current flag bits (these reads of SR will
-  scoreboard-stall in ID under the strict pure-stall policy of
-  [Decision 4](./design-decisions.md#4-hazard-handling-strategy)).
+  for B-format; operand A for JMP Rs / ERET-via-EPC). Compare the
+  condition code against the **forwarded** NZCV — the flag bypass
+  selects the youngest in-flight flag writer (MEM/WB→EX) or committed SR
+  ([Decision 12](./design-decisions.md#12-nzcv-flag-forwarding),
+  [Flag (NZCV) hazard model](./hazard-model.md#flag-nzcv-hazard-model)),
+  so a flag reader never stalls on its producer.
 - For taken branches: assert squash to IF and ID; assert PC redirect
   to IF.
 - For drain-commit instructions (ERET, WRSYS): assert
@@ -205,8 +209,8 @@ regfile read ports.
   downstream (e.g., store data for STx), control bundle, and
   this-PC into the EX/MEM register.
 
-**Owns:** ALU, branch target adder, drain-commit FSM, divmul
-start/busy control.
+**Owns:** ALU, branch target adder, the NZCV flag bypass (MEM/WB→EX),
+drain-commit FSM, divmul start/busy control.
 
 ### MEM — Memory Access (single stage, STALL on D-cache access)
 
@@ -506,18 +510,21 @@ stage shifts the whole timeline but doesn't change the scoreboard
 stall count). ADD1→ADD2 latency end-to-end: 4 cycles (would be 1
 cycle with EX→EX forwarding).
 
-### Example 2: CMP → BEQ flag-write stall
+### Example 2: CMP → BEQ (flags forwarded, no stall)
 
 ```
 CMP R1, R2       ; writes flags (subset of SR)
 BEQ label        ; reads flags
 ```
 
-Same shape as Example 1 — BEQ stalls 3 cycles in ID until CMP
-commits SR write at WB. With static-not-taken speculation, IF1/IF2
-continue fetching from `BEQ+4` during the stall; on EX deciding
-"taken", those become a **3-bubble flush** *in addition to* the
-3-cycle stall.
+BEQ does **not** stall: NZCV is forwarded, not scoreboarded
+([Decision 12](./design-decisions.md#12-nzcv-flag-forwarding)). BEQ
+issues the cycle after CMP; when BEQ reaches EX the CMP is in MEM, and
+the MEM→EX flag bypass feeds CMP's flags to BEQ's condition check — the
+flag dependency costs 0 cycles. If BEQ resolves taken, the **3-bubble
+flush** (squash IF1/IF2/ID) still applies; that is the branch *control*
+hazard ([Decision 5](./design-decisions.md#5-branch-resolution-policy)),
+independent of the now-eliminated flag data hazard.
 
 ### Example 3: taken branch with squash
 

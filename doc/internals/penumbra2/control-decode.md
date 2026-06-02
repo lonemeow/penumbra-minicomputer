@@ -229,8 +229,8 @@ subsets ([Decode once in ID, narrow downstream](#decode-once-in-id-narrow-downst
 | `a_sel` | 1–2 | operand-A source: regfile(Rd) / PC (for B-target) |
 | `b_sel` | 1–2 | operand-B source: regfile(Rs) / immediate |
 | `imm` | 32 | sign/zero-extended immediate ([Immediate extraction and extension](#immediate-extraction-and-extension)) |
-| `writes_flags` | 1 | this op updates NZCV ([`writes_flags` / `reads_flags` derivation](#writes_flags--reads_flags-derivation)) |
-| `reads_flags` | 1 | this op tests NZCV — Bcc and RDSPR-SR ([`writes_flags` / `reads_flags` derivation](#writes_flags--reads_flags-derivation)) |
+| `writes_flags` | 1 | this op updates NZCV — marks it a flag-bypass producer ([`writes_flags` / `reads_flags` derivation](#writes_flags--reads_flags-derivation)) |
+| `reads_flags` | 1 | this op consumes NZCV — Bcc, ADC/SBC (carry-in), RDSPR-SR; selects the EX flag bypass ([`writes_flags` / `reads_flags` derivation](#writes_flags--reads_flags-derivation)) |
 | `flag_only` | 1 | F bit: suppress GPR write, keep flag write (CMP/TEST) |
 | `cond` | 4 | branch condition ([Branch-condition evaluation](#branch-condition-evaluation)); valid when `op_class=branch` |
 | `mem_op` | 2 | none / load / store |
@@ -383,9 +383,13 @@ gen2 keeps it that way.
 
 ## `writes_flags` / `reads_flags` derivation
 
-These two bits drive the NZCV scoreboard interaction
-([Flag (NZCV) hazard model](./hazard-model.md#flag-nzcv-hazard-model)),
-so the decoder must produce them precisely.
+These two bits wire the **flag bypass**
+([Flag (NZCV) hazard model](./hazard-model.md#flag-nzcv-hazard-model)):
+`writes_flags` marks a NZCV producer (its EX-computed flags ride the
+EX/MEM and MEM/WB registers as a bypass source); `reads_flags` marks the
+EX consumer that takes the youngest forwarded NZCV. NZCV is not
+scoreboarded, so neither bit gates issue — but the decoder must still
+produce them precisely, because they select the bypass.
 
 **`writes_flags` = 1** for: all Format-R and Format-L arithmetic and
 logic ops — ADD, SUB, ADC, SBC, AND, OR, XOR, NOT, SHL, SHR, SAR
@@ -394,18 +398,19 @@ F bit), plus MUL/MULU/DIV/DIVU (which set N,Z and force C=V=0). The
 `flag_only` (F) bit does **not** change `writes_flags` — CMP still
 writes flags; F only suppresses the *GPR* write.
 
+`WRSPR SR` and `ERET` are also `writes_flags` producers: they write the
+whole SR including its flag bits, so their EX-computed NZCV feeds the
+bypass like any other producer (their S/I writes are ordered separately
+by drain-commit).
+
 **`writes_flags` = 0** for: MOV, LLI, LLIS, LUI, all loads/stores,
-all branches/JMP/JALR, and every system instruction (EI, DI, ERET,
-SYSCALL, BREAK, RDSPR, WRSPR, RDSYS, WRSYS). Note `WRSPR SR` and
-`ERET` *do* land in the NZCV scoreboard as writers — not via
-`writes_flags`, but because they write the whole SR including its
-flag bits; the decoder marks them as NZCV writers through the
-`op_class`, consistent with
-[Flag (NZCV) hazard model](./hazard-model.md#flag-nzcv-hazard-model).
+all branches (B/Bcc/BL), JMP/JALR, and the remaining system
+instructions (EI, DI, SYSCALL, BREAK, RDSPR, RDSYS, WRSYS).
 
 **`reads_flags` = 1** for: every conditional `Bcc` (cond `0001`–
-`1110`), and `RDSPR SR` (returns NZCV among other bits). The
-unconditional `B`/`BL` (cond `0000`/`1111`) do **not** read flags.
+`1110`); `ADC` and `SBC` (which take the carry flag as a third input);
+and `RDSPR SR` (returns NZCV among other bits). The unconditional
+`B`/`BL` (cond `0000`/`1111`) do **not** read flags.
 
 ## Exception-detect signals from decode
 
@@ -441,8 +446,12 @@ decoder ([Decode once in ID, narrow downstream](#decode-once-in-id-narrow-downst
 
 - **EX** — selects `alu_op`; drives the A/B operand muxes from
   `a_sel`/`b_sel`; computes the branch target (PC + `imm`) and
-  evaluates `cond` ([Branch-condition evaluation](#branch-condition-evaluation)); recognises `drain_commit` to enter
-  the drain-commit FSM; pulses `divmul.start` when `op_class=divmul`.
+  evaluates `cond` against the forwarded NZCV
+  ([Branch-condition evaluation](#branch-condition-evaluation), with
+  flags from the bypass per
+  [Flag (NZCV) hazard model](./hazard-model.md#flag-nzcv-hazard-model));
+  recognises `drain_commit` to enter the drain-commit FSM; pulses
+  `divmul.start` when `op_class=divmul`.
 - **MEM** — consumes `ctrl_mem`: `mem_op` (none/load/store),
   `mem_size`, `sign_ext` for sub-word extract; `{sys_dev, sys_reg}`
   for the RDSYS sideband; the alignment check is combinational on the

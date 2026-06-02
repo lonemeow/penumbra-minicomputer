@@ -29,7 +29,7 @@ answer.
 | Penumbra | Era it represents | Defining features |
 |----------|-------------------|-------------------|
 | /1 | Classic discrete-logic minicomputer / early-microprocessor era (~1970s through early 1980s) | Microcoded control driving a single-cycle datapath, designed to be feasible in discrete 74xx TTL |
-| **/2 gen2** (this design) | **Simple pipelined RISC era (late 1980s)** — MIPS R2000/R3000, early SPARC, Berkeley/Stanford RISC | **Classic in-order pipeline, hardwired control, BRAM-backed caches, no forwarding or prediction** |
+| **/2 gen2** (this design) | **Simple pipelined RISC era (late 1980s)** — MIPS R2000/R3000, early SPARC, Berkeley/Stanford RISC | **Classic in-order pipeline, hardwired control, BRAM-backed caches, flag-only forwarding, no prediction** |
 | /2.5 (next planned phase) | Early-1990s pipelined-RISC polish — MIPS R3000 → R4000, SPARC v8 → v9 | Result forwarding, regfile write-through, branch prediction |
 | /3 (speculative future) | Mid-to-late-1990s superscalar / out-of-order — Pentium Pro, MIPS R10000, Alpha 21164/21264 | Register renaming, multi-issue, reorder buffer, speculative execution |
 
@@ -70,10 +70,16 @@ keep optimizing it; we don't, because the *learning* lives in the
 transition itself.
 
 The same logic governs the gen2 / gen2.5 split: gen2 deliberately
-ships *without* forwarding or prediction so that the pipelined-but-
-unforwarded design is studyable in its own right, before
-the gen2.5 optimizations obscure it. Building gen2.5 on top of
-gen2 will then teach what each optimization individually buys.
+ships *without* general operand forwarding or prediction so that the
+pipelined-but-unforwarded datapath is studyable in its own right,
+before the gen2.5 optimizations obscure it. The one deliberate
+exception is **NZCV flag forwarding** — pure-stall on flags would make
+every conditional branch pay ~3 cycles and dominate CPI, and the fix is
+both cheap and *simplifying* (it removes NZCV from the scoreboard), so
+gen2 takes it
+([Decision 12](./design-decisions.md#12-nzcv-flag-forwarding)). GPR/SPR
+forwarding stays in gen2.5. Building gen2.5 on top of gen2 will then
+teach what each remaining optimization individually buys.
 
 ## Why a second generation?
 
@@ -150,12 +156,14 @@ combinational decoder. The only stateful sequencer in the entire
 core is a ~3-state vector-fetch FSM in IF1 for exception entry.
 Gen1's microcode infrastructure does not migrate.
 
-**Hazards: pure stall, no forwarding (gen2).** A unified physical-
-addressed scoreboard with ~22 valid bits (R1–R13, USP, SSP, ESR,
-EPC, SR, SCR0–3) gates issue at ID. Dependent instructions stall
-~3 cycles in ID waiting for the producer to commit at WB. The
-physical addressing handles the R14 ↔ USP/SSP banking aliasing
-correctly.
+**Hazards: pure stall for GPR/SPR, forwarding for flags (gen2).** A
+unified physical-addressed scoreboard with ~21 valid bits (R1–R13, USP,
+SSP, ESR, EPC, SCR0–3) gates issue at ID; a dependent instruction stalls
+~3 cycles waiting for the producer to commit at WB. The physical
+addressing handles the R14 ↔ USP/SSP banking aliasing correctly. NZCV is
+*not* in the scoreboard — it is forwarded MEM/WB→EX, so flag readers
+(Bcc, ADC/SBC) never stall
+([Decision 12](./design-decisions.md#12-nzcv-flag-forwarding)).
 
 **Branches: static-not-taken, resolved in EX.** 3-bubble flush
 penalty on taken branches.
@@ -192,7 +200,7 @@ back-pressure cascade holds; downstream drains naturally.
 |--------|-----------|---------------|---------------|-----------|
 | Fmax | ≥25 MHz | ~50-60 MHz (cache no longer in critical path) | ≥50 MHz | gen1 sits at ~30 MHz |
 | CPI on tight loops, cache hit | ~2.0 | ~2.5-3.0 (no forwarding) | ~1.2-1.5 | gen1 is 1.0 at lower clock |
-| CPI on CMP+Bcc heavy code | — | ~3.5-4.0 (flag stall dominates) | ~1.2 (flag forwarding) | — |
+| CPI on CMP+Bcc heavy code | — | ~1.2 (flags forwarded; taken-branch flush remains) | ~1.0-1.1 (+prediction) | — |
 | I-cache size | 4 KB | 4 KB | 8-16 KB | gen1 is 1 KB |
 | Branch flush bubbles | 3 | 3 | 0-1 (with prediction) | — |
 | Load-use stall | 4 | 4 (no forwarding) | 1 (with forwarding) | — |
@@ -205,13 +213,13 @@ forwarding lands and CPI drops toward 1.2.
 ## gen2 / gen2.5 / future roadmap
 
 **gen2 — correctness first.** Ship a working 6-stage pipelined
-Penumbra/2 that boots the same NetBSD kernel as Penumbra/1. No
-forwarding, no prediction, no fancy optimizations. The point is
-to validate that the architecture is correct, that the regfile
-and scoreboard work, that drain-commit handles ERET and WRSYS
-correctly, that exception entry is precise, that MUL/DIV's
-two-write commit is reliable. **CPI will be unimpressive (~3 on
-typical code) but the architecture will be sound.**
+Penumbra/2 that boots the same NetBSD kernel as Penumbra/1. No GPR/SPR
+forwarding, no prediction, no fancy optimizations — only the targeted
+NZCV flag bypass. The point is to validate that the architecture is
+correct, that the regfile and scoreboard work, that drain-commit
+handles ERET and WRSYS correctly, that exception entry is precise, that
+MUL/DIV's two-write commit is reliable. **CPI on GPR-dependent code
+will be unimpressive (~3) but the architecture will be sound.**
 
 **gen2.5 — forwarding and prediction.** With gen2 proven correct,
 add the textbook performance features:
@@ -222,8 +230,6 @@ add the textbook performance features:
   load-use stalls; 1-cycle load-use distance remains).
 - **WB→ID regfile write-through** (eliminates the last RAW
   stall cycle).
-- **EX→EX flag forwarding** (specifically eliminates the
-  CMP→Bcc 3-cycle stall — biggest single CPI win).
 - **SPR scoreboard forwarding** (eliminates RAW stalls between
   WRSPR and immediately-following RDSPR).
 - **Static or bimodal branch prediction** in IF1 (reduces

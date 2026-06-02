@@ -10,9 +10,12 @@ implementing `id_stage.sv` and the standalone `scoreboard.sv` (if
 factored out).
 
 Higher-level design rationale lives in
-[Decision 4](./design-decisions.md#4-hazard-handling-strategy).
-This doc is the implementation contract: it states *what the
-scoreboard does*, not *why we picked it over forwarding*.
+[Decision 4](./design-decisions.md#4-hazard-handling-strategy)
+(GPR/SPR pure-stall) and
+[Decision 12](./design-decisions.md#12-nzcv-flag-forwarding)
+(NZCV forwarding). This doc is the implementation contract: it states
+*what the scoreboard does and how flags are forwarded*, not *why those
+were chosen over the alternatives*.
 
 ## Scope
 
@@ -35,8 +38,12 @@ Out of scope:
 - Cache-miss and sysreg-sideband stall semantics
   (see [Decision 11](./design-decisions.md#11-bram-backed-caches-with-single-mem-stall)
   and [sysregs.md](../../system/sysregs.md)).
-- Forwarding paths — gen2 has none by design; gen2.5 will add
-  WB→ID write-through and EX→EX flag forwarding.
+- The flag-forwarding *datapath* (the bypass-mux wiring in EX) — this
+  doc specifies the *model* (which instructions produce/consume NZCV and
+  the youngest-wins / committed-SR semantics); the EX-stage realization
+  is in [pipeline-stages.md](./pipeline-stages.md). GPR/SPR forwarding
+  does not exist in gen2 — gen2.5 adds WB→ID write-through and EX→EX GPR
+  forwarding.
 
 ## The hazard problem in gen2
 
@@ -46,11 +53,13 @@ younger instruction in ID read a stale register value because the
 older producer has not yet reached WB. This is a classic
 read-after-write (RAW) data hazard.
 
-Penumbra/2's chosen response is **pure stall**: detect the hazard
-in ID, stall the ID stage (and back-pressure IF1/IF2) until the
-producer commits at WB, then issue. No forwarding network exists;
-no regfile write-through exists. The scoreboard is the mechanism
-that lets ID know when to stall and when to release.
+Penumbra/2's chosen response for GPR and SPR operands is **pure
+stall**: detect the hazard in ID, stall the ID stage (and
+back-pressure IF1/IF2) until the producer commits at WB, then issue.
+No operand-forwarding network and no regfile write-through exist for
+them. (NZCV is the one exception — it is forwarded, not stalled; see
+[Flag (NZCV) hazard model](#flag-nzcv-hazard-model).) The scoreboard is
+the mechanism that lets ID know when to stall and when to release.
 
 Three constraints shape the scoreboard's design:
 
@@ -65,11 +74,10 @@ Three constraints shape the scoreboard's design:
    ordinary scoreboardable entries, just like GPRs.
 3. **Multiple in-flight writers must resolve to the youngest.** A
    chain of instructions can have several in-flight writers to the
-   same physical entry at once — most sharply NZCV, which nearly
-   every ALU op writes. The reader of such an entry must observe
-   the *youngest* writer's result, and writers must not have to
-   serialize against each other (serializing NZCV writers would
-   collapse the pipeline, since almost every instruction is one).
+   same physical entry at once (e.g. repeated updates to a loop
+   accumulator). The reader of such an entry must observe the
+   *youngest* writer's result, and writers must not have to serialize
+   against each other.
 
 The first constraint drives **physical-addressed** scoreboarding;
 the second drives the **SPR coverage**. The third is satisfied *for
@@ -95,18 +103,23 @@ instruction has cleared this entry but has not yet completed WB".
 | 15    | SSP            | `R14` in supervisor mode |
 | 16    | ESR            | `RDSPR/WRSPR ESR`. Exception entry's save-state pulse writes ESR directly and bypasses the scoreboard. |
 | 17    | EPC            | `RDSPR/WRSPR EPC`. Same exception-entry bypass as ESR. |
-| 18    | NZCV           | The condition flags carried in SR. Written by flag-writing ALU ops, `WRSPR SR`, and `ERET`; read by `Bcc` and `RDSPR SR`. **Only the NZCV flags are scoreboard-tracked; the S and I bits of SR are not** — see [Control-state serialization: the S and I bits](#control-state-serialization-the-s-and-i-bits). |
-| 19    | SCR0           | `RDSPR/WRSPR SCR0` only |
-| 20    | SCR1           | `RDSPR/WRSPR SCR1` only |
-| 21    | SCR2           | `RDSPR/WRSPR SCR2` only |
-| 22    | SCR3           | `RDSPR/WRSPR SCR3` only |
+| 18    | SCR0           | `RDSPR/WRSPR SCR0` only |
+| 19    | SCR1           | `RDSPR/WRSPR SCR1` only |
+| 20    | SCR2           | `RDSPR/WRSPR SCR2` only |
+| 21    | SCR3           | `RDSPR/WRSPR SCR3` only |
+
+No part of SR appears in this table. The condition flags (NZCV) are
+resolved by **forwarding**, not a stall, so they need no valid bit
+([Flag (NZCV) hazard model](#flag-nzcv-hazard-model)). The S and I bits
+are serialized by drain-commit
+([Control-state serialization: the S and I bits](#control-state-serialization-the-s-and-i-bits)).
 
 R0 (entry 0) is reserved-unused in the array; the decoder never
 produces index 0 as a source or destination, so its valid bit is
 read-don't-care. The implementation may either omit it (entries
-1..22, 22 bits of state) or include it as a tied-1 bit for indexing
-simplicity (23 bits). The implementation choice is a synthesis
-detail; the spec treats the array as having 22 live entries.
+1..21, 21 bits of state) or include it as a tied-1 bit for indexing
+simplicity (22 bits). The implementation choice is a synthesis
+detail; the spec treats the array as having 21 live entries.
 
 R15 (PC) is not in the scoreboard. ISA-level reads of R15 are
 resolved by the decoder to the current PC value (or PC-relative
@@ -115,18 +128,25 @@ constants for `MOV R15, …` immediate forms; see
 the regfile. ISA-level writes to R15 are encoded as branches and
 are not regfile writes. The scoreboard need not represent it.
 
-**SR is deliberately split.** Of the three logical parts of SR —
-the NZCV flags, the supervisor bit S, and the interrupt-enable bit
-I — only NZCV is a scoreboard entry (index 18). The S and I bits
-are **not** value-hazard-tracked; their ordering is provided by
-drain-commit serialization on every instruction that writes them.
-This is not an optimization — it is a correctness factoring,
-because S and I are consumed by structures *outside* the pipeline's
-dataflow (the MMU and the IF1 IRQ logic) that a regfile-read
-scoreboard cannot protect. [Control-state serialization: the S and I bits](#control-state-serialization-the-s-and-i-bits) develops this in full; the
-short version is that a scoreboard valid bit answers only "has this
-value reached the regfile yet?", which is the wrong question for
-control state that the MMU samples mid-execution.
+**SR is handled entirely outside the scoreboard.** Its three logical
+parts each have their own mechanism, and none is a scoreboard entry:
+
+- **NZCV** (the condition flags) is **forwarded** MEM→EX / WB→EX, so a
+  flag reader never stalls and needs no valid bit
+  ([Flag (NZCV) hazard model](#flag-nzcv-hazard-model)).
+- **S and I** are **serialized by drain-commit** on every instruction
+  that writes them. This is a correctness factoring, not an
+  optimization: S and I are consumed by structures *outside* the
+  pipeline's dataflow (the MMU and the IF1 IRQ logic), which a
+  value-hazard mechanism — scoreboard *or* forward — cannot protect.
+  [Control-state serialization: the S and I bits](#control-state-serialization-the-s-and-i-bits)
+  develops this in full.
+
+The two mechanisms are not interchangeable: forwarding answers "what is
+the most recent NZCV value?" for an in-pipeline reader, while drain
+serialization answers "is any younger instruction in flight under the
+old mode?" for out-of-pipeline consumers. NZCV needs the former; S and I
+need the latter — which is why NZCV can be forwarded and S/I cannot.
 
 ## Valid bit lifecycle
 
@@ -153,8 +173,8 @@ For each physical entry P, the valid bit's logical lifecycle is:
    only on the cycle after the *youngest* in-flight writer to P
    leaves WB — at which point the regfile holds that youngest
    value. If a single writer is in flight this is just "set at WB
-   completion"; if several are in flight (e.g., a chain of NZCV
-   writers) the earlier writers' WBs do not set it, because they
+   completion"; if several are in flight (e.g., a chain of writers
+   to a loop accumulator) the earlier writers' WBs do not set it, because they
    are still ahead-of-reader writers until they drain. The bit is
    observable on the next cycle's ID stall predicate evaluation.
 4. **Divmul second write.** Divmul writes two physical entries —
@@ -243,22 +263,27 @@ advance into EX while the divmul occupies it. A *reader* of
 `Rd`/`Rdh` is held by the ordinary RAW clause (their `valid` bits
 stay 0 for the whole divmul iteration).
 
-**Source-set composition.** Most instructions have at most two
-source registers. Multi-source cases the decoder must handle:
+**Source-set composition.** The source set `S` contains only
+scoreboarded (GPR/SPR) operands. Flag reads are **not** in `S` — they
+are served by the bypass
+([Flag (NZCV) hazard model](#flag-nzcv-hazard-model)), so they never
+contribute a scoreboard stall. Multi-source cases the decoder must
+handle:
 
-| Instruction class | Sources contributed to S |
-|-------------------|--------------------------|
-| ALU `OP Rd, Ra, Rb` | `{Ra, Rb}` |
-| ALU immediate `OP Rd, Ra, #imm` | `{Ra}` |
-| `LD Rd, [Ra, #off]` | `{Ra}` |
-| `ST Rs, [Ra, #off]` | `{Rs, Ra}` |
-| `Bcc target` | `{NZCV}` (the flag entry, index 18) — see [Flag (NZCV) hazard model](#flag-nzcv-hazard-model) |
-| `B[L] Rb` (register branch) | `{Rb}` |
-| `RDSPR Rd, SPR` | `{SPR_phys}` (e.g., USP, ESR, SCR0…). For `RDSPR Rd, SR` the source is `{NZCV}` — the S/I bits it also returns are serialized by drain-commit, not scoreboarded ([Control-state serialization: the S and I bits](#control-state-serialization-the-s-and-i-bits)). |
-| `WRSPR SPR, Rs` | `{Rs}` (and `D = SPR_phys`). `WRSPR SR` writes NZCV (`D = NZCV`) and is itself drain-commit. |
-| `RDSYS Rd, sysreg_id` | `{}` (sysreg ID is encoded; not a regfile read) |
-| `WRSYS sysreg_id, Rs` | `{Rs}` |
-| MUL/DIV | `{Ra, Rb}` (writes a 2-entry destination, see below) |
+| Instruction class | Scoreboard sources `S` | Flag read? |
+|-------------------|------------------------|:----------:|
+| ALU `OP Rd, Ra, Rb` | `{Ra, Rb}` | — |
+| `ADC`/`SBC Rd, Ra, Rb` | `{Ra, Rb}` | carry (forwarded) |
+| ALU immediate `OP Rd, Ra, #imm` | `{Ra}` | — |
+| `LD Rd, [Ra, #off]` | `{Ra}` | — |
+| `ST Rs, [Ra, #off]` | `{Rs, Ra}` | — |
+| `Bcc target` | `{}` | NZCV (forwarded) |
+| `B[L] Rb` (register branch) | `{Rb}` | — |
+| `RDSPR Rd, SPR` | `{SPR_phys}` (USP, ESR, EPC, SCRn). For `RDSPR Rd, SR`: `{}` | NZCV (for SR) |
+| `WRSPR SPR, Rs` | `{Rs}` (and `D = SPR_phys`). For `WRSPR SR`: `{Rs}`, no scoreboard `D` (NZCV forwarded, S/I drain-commit). | — |
+| `RDSYS Rd, sysreg_id` | `{}` (sysreg ID is encoded; not a regfile read) | — |
+| `WRSYS sysreg_id, Rs` | `{Rs}` | — |
+| MUL/DIV | `{Ra, Rb}` (writes a 2-entry destination, see below) | — |
 
 For MUL/DIV the instruction writes **two** physical
 entries, `Rd` (low/quotient) and `Rdh` (high/remainder). While the
@@ -288,8 +313,8 @@ physical entries 0..13. The non-trivial cases are:
 | `RDSPR/WRSPR USP, …`  | **USP** (14), regardless of mode |
 | `RDSPR/WRSPR ESR, …`  | 16 |
 | `RDSPR/WRSPR EPC, …`  | 17 |
-| `RDSPR/WRSPR SR,  …`  | 18 (NZCV). The flag bits are the scoreboarded part; the S/I bits `RDSPR SR` reads and `WRSPR SR` writes are serialized by drain-commit ([Control-state serialization: the S and I bits](#control-state-serialization-the-s-and-i-bits)). `WRSPR SR` is drain-commit; `EI`/`DI` are drain-commit and touch only the I bit (no scoreboard entry). |
-| `RDSPR/WRSPR SCRn, …` | 19..22 |
+| `RDSPR/WRSPR SR,  …`  | (not scoreboarded) — NZCV is forwarded ([Flag (NZCV) hazard model](#flag-nzcv-hazard-model)); the S/I bits are serialized by drain-commit ([Control-state serialization: the S and I bits](#control-state-serialization-the-s-and-i-bits)). `WRSPR SR` is drain-commit; `EI`/`DI` are drain-commit and touch only the I bit. |
+| `RDSPR/WRSPR SCRn, …` | 18..21 |
 
 The mapping is **combinational** in the ID stage; it is not
 registered. This is acceptable for fmax because the SR.S bit is
@@ -420,8 +445,11 @@ drain-commit hides the hazard in practice, the scoreboard's
 ## Control-state serialization: the S and I bits
 
 The supervisor bit `S` and interrupt-enable bit `I` live in SR but
-are **not** scoreboard entries. This section explains why a value
-scoreboard is the wrong mechanism for them, and what orders them
+are **not** scoreboard entries. Neither is NZCV — but NZCV is kept out
+of the scoreboard because it is *forwarded*
+([Flag (NZCV) hazard model](#flag-nzcv-hazard-model)), whereas S and I
+are kept out because no value-hazard mechanism — scoreboard *or* forward
+— can order them at all. This section explains why, and what orders them
 instead.
 
 ### Why a scoreboard cannot protect S or I
@@ -540,96 +568,107 @@ is a gen2.5 concern, alongside forwarding.
 
 ## Flag (NZCV) hazard model
 
-NZCV is its own scoreboard entry (index 18). It is the *only* part
-of SR the scoreboard tracks — S and I are serialized by
-drain-commit ([Control-state serialization: the S and I bits](#control-state-serialization-the-s-and-i-bits)), so they never appear here.
+NZCV is **not** a scoreboard entry. The condition flags are resolved by
+**forwarding** rather than by stalling a reader until the producer
+commits ([Decision 12](./design-decisions.md#12-nzcv-flag-forwarding)).
+This is the one place gen2 departs from pure stall; GPR and SPR operands
+remain pure-stall.
 
-**Producers and consumers of NZCV:**
+**Why flags, and only flags, are forwarded.** Nearly every ALU op writes
+NZCV, but a *writer* never stalls ([Stall predicate](#stall-predicate)),
+so a stream of flag-writing ALU ops issues at one per cycle regardless.
+The cost is entirely on the *readers* of NZCV, of which the ISA has
+exactly two kinds:
 
-- **Writers (become an in-flight writer of NZCV at ID issue):**
-  flag-writing ALU ops (most of `ADD/SUB/CMP/AND/…`), `WRSPR SR`,
-  `ERET`. The decoder asserts a `writes_flags` control bit for
-  these.
-- **Readers (place NZCV in their source set `S`):** every `Bcc`,
-  and `RDSPR SR` (which returns NZCV among other bits). The decoder
-  asserts a `reads_flags` control bit for these.
+- **`Bcc`** (conditional branches, cond `0001`–`1110`) — read NZCV to
+  decide taken / not-taken.
+- **`ADC` / `SBC`** — read the carry flag as an input
+  (`Rd + Rs + C` / `Rd − Rs − ~C`).
 
-NZCV obeys the *same* rule as every other scoreboard entry: a
-**reader** stalls in ID until `valid[NZCV] = 1` (no flag writer
-ahead of it remains in EX/MEM/WB), and a **writer never stalls on
-another writer**. This is not a special case for flags — it is the
-universal RAW-only behavior of the in-order scoreboard ([Stall predicate](#stall-predicate)).
-It simply *matters most* here, because nearly every instruction is
-a flag writer.
+A stall would make each of these wait ~3 cycles for the youngest
+in-flight flag writer to commit; because branches are pervasive, that is
+the single largest CPI source pure stall would impose. Forwarding
+removes it, and because NZCV is 4 bits with one EX consumer, the path is
+cheap.
 
-### Why last-writer-wins is mandatory for NZCV
+**Producers and consumers:**
 
-If flag writers had to serialize against each other (a WAW stall on
-NZCV), then because almost every ALU op writes NZCV, *every*
-independent ALU op would stall on its predecessor and the pipeline
-would degenerate to one-instruction-at-a-time — un-pipelined
-execution. Last-writer-wins is therefore not an optimization for
-NZCV; it is required for the pipeline to pipeline at all.
+- **Producers** (decoder asserts `writes_flags`): flag-writing ALU ops
+  (`ADD/SUB/CMP/AND/…`), the immediate ALU ops, `MUL/MULU/DIV/DIVU`
+  (set N,Z; force C=V=0), `WRSPR SR`, and `ERET`. A producer's
+  EX-computed NZCV rides the EX/MEM and MEM/WB pipeline registers in the
+  `flag_value` field.
+- **Consumers** (decoder asserts `reads_flags`): every `Bcc`, every
+  `ADC`/`SBC`, and `RDSPR SR` (which returns NZCV among its bits).
 
-The in-order completion property ([Stall predicate](#stall-predicate)) supplies it directly:
-multiple flag writers can be in flight at once, they retire in
-program order, and the architectural NZCV ends up holding the
-youngest writer's result. A reader stalls only until the youngest
-flag writer *ahead of it* has drained through WB — exactly the RAW
-stall, no more.
+### The flag bypass
 
-**Decoder bits.** `writes_flags` and `reads_flags` (introduced
-above) are sufficient. No "youngest-writer tag" is needed: the
-re-derive scoreboard ([Interaction with exception entry](#interaction-with-exception-entry)) computes `valid[NZCV]` as
-"no EX/MEM/WB stage currently holds a `writes_flags` instruction,"
-which is true exactly when the youngest in-flight flag writer has
-left WB. The youngest-wins outcome falls out of in-order WB; the
-hardware never has to identify *which* writer is youngest.
-
-**Independent ALU ops pipeline (the case Option-A-style WAW would
-have killed):**
+The EX flag consumer selects its NZCV from a youngest-first mux:
 
 ```
-ADD R1, R2, R3   ; (1) writes R1 and NZCV
-ADD R4, R5, R6   ; (2) writes R4 and NZCV — independent of (1)
+flags = MEM.flag_value    if the MEM-stage insn writes_flags
+      → WB.flag_value     else if the WB-stage insn writes_flags
+      → architectural SR   otherwise
 ```
 
-| Cycle | IF1 | IF2 | ID | EX | MEM | WB | Notes |
-|-------|-----|-----|----|------|------|------|-------|
-| 1 | ADD1 | — | — | — | — | — | |
-| 2 | ADD2 | ADD1 | — | — | — | — | |
-| 3 | — | ADD2 | ADD1 | — | — | — | ADD1 issues; an NZCV writer is now in flight |
-| 4 | — | — | ADD2 | ADD1 | — | — | ADD2 issues with **no stall** — it does not wait on ADD1's NZCV |
-| 5 | — | — | — | ADD2 | ADD1 | — | both flowing, 1 insn/cycle |
+There is **no EX→EX leg.** A consumer in EX and its producer can never
+occupy EX in the same cycle (one in-order pipe, distinct instructions),
+so the tightest a producer can be is one stage ahead — in MEM — when the
+consumer is in EX. MEM and WB are therefore the only forwarding sources,
+and a producer's flags are always already computed (it has left EX) by
+the time the consumer needs them, so the bypassed value is always valid.
 
-Both NZCV writers are in flight in cycle 4; neither stalls. (Under
-a WAW-on-NZCV rule, ADD2 would have stalled ~3 cycles here, and so
-would every ALU op after it — the un-pipelining the user's rule
-prevents.)
+### Architectural SR is the committed source of truth
 
-**The dominant real cost: `CMP → Bcc`.**
+The bypass's lowest-priority input is the architectural SR flag bits,
+written at WB by the youngest committed flag writer. This is what makes
+forwarding correct across flushes, with no scoreboard involvement:
+
+- **After a taken-branch squash**, the surviving older instructions in
+  MEM/WB commit their flags to SR normally; the squashed instructions
+  are *younger* and wrote nothing. Refetched instructions forward from
+  the draining MEM/WB survivors, or — once drained — from committed SR.
+- **After a fault**, the save-state pulse snapshots `ESR ← SR` (the
+  committed flags as of the instruction before the fault) and the
+  handler runs with an empty pipe, reading committed SR.
+- **After `ERET`**, `SR ← ESR` restores the flags; the drained pipe
+  then forwards from committed SR.
+
+**Squash-safety is structural.** Forwarding flows older→younger; a
+squash only removes *younger* instructions. So if a flag producer is
+squashed, every reader of it is younger and squashed too — a stranded
+forward (a surviving reader whose producer vanished) cannot arise. The
+scoreboard's re-derive machinery
+([Interaction with exception entry](#interaction-with-exception-entry))
+is not involved, because NZCV is not in the scoreboard.
+
+### Last-writer-wins, without a tag
+
+Multiple flag writers can be in flight at once; they retire in program
+order, so the architectural SR ends up holding the youngest writer's
+result, and the youngest-first bypass selects the youngest *in-flight*
+writer ahead of any reader. The hardware never identifies which writer
+is youngest — priority order (MEM before WB) and in-order commit supply
+it. `writes_flags` and `reads_flags` are the only decoder bits needed.
+
+**A flag reader does not stall on its producer.** `CMP; Bcc` (and
+`ADD; ADC`) costs **zero** flag-hazard cycles:
 
 ```
 CMP R1, R2       ; (1) writes NZCV
-BEQ target       ; (2) reads NZCV (RAW)
+BEQ target       ; (2) reads NZCV
 ```
 
 | Cycle | IF1 | IF2 | ID | EX | MEM | WB | Notes |
 |-------|-----|-----|----|------|------|------|-------|
-| 3 | — | BEQ | CMP | — | — | — | CMP issues; NZCV writer in flight |
-| 4 | — | — | BEQ (stall) | CMP | — | — | BEQ reads NZCV, `valid=0` → stall |
-| 5 | — | — | BEQ (stall) | — | CMP | — | still stalled |
-| 6 | — | — | BEQ (stall) | — | — | CMP | CMP in WB; NZCV becomes architectural at end of cycle |
-| 7 | — | — | BEQ (issue) | — | — | — | `valid[NZCV]=1` → BEQ issues |
+| 3 | — | BEQ | CMP | — | — | — | CMP in ID |
+| 4 | — | — | BEQ | CMP | — | — | BEQ issues with **no stall** |
+| 5 | — | — | — | BEQ | CMP | — | BEQ in EX, CMP in MEM → MEM→EX bypass feeds CMP's flags to BEQ |
 
-`CMP → Bcc` costs **3 stall cycles** — identical to a GPR RAW, and
-the single largest CPI source on branch-heavy code in gen2. A tight
-loop body of `CMP; Bcc` therefore runs ~3 cycles of bubble plus the
-branch flush per iteration. This is the headline target for
-gen2.5's narrow EX→EX flag-forwarding path, which removes the
-3-cycle stall entirely (the flag value is forwarded from CMP's EX
-to Bcc's EX). gen2 takes the hit to keep the no-forwarding baseline
-clean.
+BEQ resolves in EX against the forwarded flags. (If taken, the 3-bubble
+squash still applies — that is the branch *control* hazard
+([Decision 5](./design-decisions.md#5-branch-resolution-policy)), not
+the flag *data* hazard, which forwarding has eliminated.)
 
 ## Interaction with drain-commit
 
@@ -645,11 +684,12 @@ beyond the normal source-read clearing rules:
   scoreboard clears nothing because WRSYS has no scoreboarded
   destination (the sysreg sideband is not in the scoreboard).
 - **WRSPR SR** (also drain-commit) writes the NZCV flags (plus the
-  drain-serialized S/I bits). Its `valid[NZCV]` entry is cleared on
-  issue and set on commit (in EX, since the instruction never
-  reaches WB). Scoreboard-wise it looks like a normal flag writer
-  that also drains the pipeline. The S/I writes it performs are not
-  scoreboarded ([Control-state serialization: the S and I bits](#control-state-serialization-the-s-and-i-bits)).
+  drain-serialized S/I bits). NZCV is a *forwarded* producer, not a
+  scoreboard entry, so `WRSPR SR` contributes its `flag_value` to the
+  bypass like any flag writer and clears/sets nothing in the scoreboard
+  ([Flag (NZCV) hazard model](#flag-nzcv-hazard-model)). The S/I writes
+  are serialized by the drain
+  ([Control-state serialization: the S and I bits](#control-state-serialization-the-s-and-i-bits)).
 - **EI / DI** (also drain-commit) write only the I bit, which is
   not scoreboarded. They clear nothing and set nothing in the
   scoreboard; their effect is ordered entirely by the drain.
@@ -669,6 +709,10 @@ ALU during the iteration and produces two register results — `Rd`
 written through the regfile's **single** write port at WB over two
 consecutive cycles (see
 [Write port and divmul sequencing](./regfile.md#write-port-and-divmul-sequencing)).
+MUL/DIV also set NZCV (N,Z; C=V=0); like every flag producer those flags
+are forwarded, not scoreboarded
+([Flag (NZCV) hazard model](#flag-nzcv-hazard-model)), so only the two
+GPR destinations below concern the scoreboard.
 
 Scoreboard interaction:
 
@@ -840,7 +884,7 @@ wrong individually. Suggested testbench coverage for
 `tb_scoreboard.cpp` (or however the unit test ends up packaged):
 
 1. **Basic RAW.** Sequential ADD producer/consumer for every
-   physical entry (1..22). Confirm 3-cycle stall.
+   physical entry (1..21). Confirm 3-cycle stall.
 2. **Last-writer-wins, no writer stall.** Two writers to the same
    entry with no intervening reader (the second a flag/ALU op);
    confirm the second issues **without stalling** on the first, and
@@ -862,10 +906,13 @@ wrong individually. Suggested testbench coverage for
 6. **SR.S quiescence.** ERET that changes SR.S with an R14-using
    instruction immediately after; confirm the decoder reads the
    post-ERET SR.S.
-7. **NZCV pipelining.** A run of independent flag-writing ALU ops;
-   confirm they issue back-to-back with no inter-writer stall.
-   Then `CMP; Bcc`; confirm the 3-cycle reader stall, and that the
-   Bcc observes the most recent flag writer's result.
+7. **Flags are out of scope for the scoreboard.** NZCV is forwarded,
+   not scoreboarded, so it does not appear in `tb_scoreboard`. Flag
+   forwarding — that `CMP; Bcc` and `ADD; ADC` incur no stall, that the
+   consumer observes the youngest in-flight writer's flags, and that the
+   architectural SR is the post-flush fallback — is verified against the
+   flag bypass and the EX stage
+   ([Flag (NZCV) hazard model](#flag-nzcv-hazard-model)).
 
 A randomized stream test (random GPR/SPR mix with backpressure
 events injected) is also recommended once the directed tests pass.
@@ -873,7 +920,10 @@ events injected) is also recommended once the directed tests pass.
 ## Cross-references
 
 - [Decision 4](./design-decisions.md#4-hazard-handling-strategy)
-  — rationale for pure stall and the unified physical scoreboard.
+  — rationale for pure stall (GPR/SPR) and the unified physical
+  scoreboard.
+- [Decision 12](./design-decisions.md#12-nzcv-flag-forwarding)
+  — rationale for forwarding NZCV instead of scoreboarding it.
 - [Decision 9](./design-decisions.md#9-drain-commit-primitive)
   — drain-commit, which provides SR.S quiescence for the
   scoreboard.
@@ -886,8 +936,8 @@ events injected) is also recommended once the directed tests pass.
   save-state's bypass of the scoreboard.
 - [control-decode.md](./control-decode.md) — the decoder's
   control-vector layout, including the `phys_src_*`/`phys_dst`
-  fields and the `writes_flags`/`reads_flags` bits [Flag (NZCV) hazard model](#flag-nzcv-hazard-model)
-  introduces.
+  fields and the `writes_flags`/`reads_flags` bits that drive the flag
+  bypass ([Flag (NZCV) hazard model](#flag-nzcv-hazard-model)).
 - [regfile.md](./regfile.md) — the 2R/1W regfile with R14
   banking. *(To be written.)*
 - [instruction-set.md](../../system/instruction-set.md) — the
