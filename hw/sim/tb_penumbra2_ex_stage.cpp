@@ -9,7 +9,7 @@
 //   - the control bundle + store data + PC + fault tag pass through
 //   - ADC takes its carry-in from the forwarded NZCV: WB producer, the
 //     committed SR fallback, and the EX/MEM self-feedback (MEM) leg
-//   - a downstream stall holds EX/MEM; a squash bubbles it
+//   - a downstream stall holds EX/MEM; a flush bubbles it
 //
 // NZCV bundle packs as SR[3:0]: N=bit0 Z=bit1 C=bit2 V=bit3.
 
@@ -18,7 +18,8 @@
 #include "Vpenumbra2_ex_stage.h"
 
 // op_class / alu_op / mem_op (penumbra2_pkg)
-enum { OPC_ALU = 0, OPC_LOAD = 1, OPC_STORE = 2, OPC_BRANCH = 3, OPC_JMP = 4 };
+enum { OPC_ALU = 0, OPC_LOAD = 1, OPC_STORE = 2, OPC_BRANCH = 3, OPC_JMP = 4,
+       OPC_WRSYS = 9, OPC_ERET = 10 };
 enum { ALU_ADD = 0, ALU_SUB = 1, ALU_ADC = 10 };
 enum { MEM_NONE = 0, MEM_STORE = 2 };
 // Branch condition codes (penumbra_pkg COND_*)
@@ -41,19 +42,20 @@ static void tick(Vpenumbra2_ex_stage* dut) {
 }
 
 // Reset the per-cycle inputs to a quiet baseline (valid op_class, no
-// memory op, no flags in flight, no stall/squash).
+// memory op, no flags in flight, no stall/flush).
 static void clear(Vpenumbra2_ex_stage* dut) {
     dut->i_op_class = OPC_ALU; dut->i_alu_op = ALU_ADD;
     dut->i_op_a = 0; dut->i_op_b = 0; dut->i_store_data = 0;
     dut->i_cond = COND_AL;
     dut->i_mem_op = MEM_NONE; dut->i_mem_size = 0; dut->i_sign_ext = 0;
     dut->i_sys_dev = 0; dut->i_sys_reg = 0; dut->i_spr_sel = 0;
+    dut->i_drain_commit = 0; dut->i_post_commit_wait = 0;
     dut->i_gpr_we = 0; dut->i_spr_we = 0; dut->i_flag_we = 0;
     dut->i_phys_dst = 0; dut->i_phys_dst_hi = 0; dut->i_phys_dst_hi_en = 0;
     dut->i_pc = 0; dut->i_next_pc = 0; dut->i_valid = 0;
     dut->i_fault_pending = 0; dut->i_fault_vec = 0;
     dut->i_sr_flags = 0; dut->i_wb_flags = 0; dut->i_wb_writes_flags = 0;
-    dut->i_stall_in = 0; dut->i_bubble = 0;
+    dut->i_stall_in = 0; dut->i_wb_active = 0; dut->i_bubble = 0;
 }
 
 // Drive a bubble through EX/MEM so the next test sees no in-flight flag
@@ -182,7 +184,7 @@ int main() {
     check("stall_release_advances_dst",    dut->o_phys_dst, 10);
     check("stall_release_advances_result", dut->o_result, 300);  // 100 + 200
 
-    // ── i_bubble squashes the in-flight slot ─────────────────────
+    // ── i_bubble flushes the in-flight slot ─────────────────────
     clear(dut);
     dut->i_op_a = 1; dut->i_op_b = 2; dut->i_gpr_we = 1; dut->i_valid = 1;
     dut->i_bubble = 1;
@@ -279,7 +281,7 @@ int main() {
     dut->eval();
     check("branch_fault_no_redirect", dut->o_branch_taken, 0);
 
-    // A squashed branch slot does not steer the front-end.
+    // A flushed branch slot does not steer the front-end.
     clear(dut);
     dut->i_op_class = OPC_BRANCH; dut->i_cond = COND_AL;
     dut->i_op_a = 0xFFFF0040; dut->i_op_b = 0x40;
@@ -292,6 +294,89 @@ int main() {
     dut->i_op_class = OPC_ALU; dut->i_op_a = 5; dut->i_op_b = 3; dut->i_valid = 1;
     dut->eval();
     check("alu_no_redirect", dut->o_branch_taken, 0);
+
+    // ════════════════════════════════════════════════════════════
+    // Drain-commit FSM
+    // o_valid (EX's own EX/MEM register) is MEM occupancy; i_wb_active
+    // is driven directly to model the WB stage draining. A held
+    // drain-commit insn is re-driven each cycle (the real pipeline would
+    // hold it in ID/EX via o_stall).
+    // ════════════════════════════════════════════════════════════
+
+    // Helper-free sequence: ERET (post_commit_wait=0) drains MEM then WB,
+    // commits, releases.
+    // Prime: a normal ALU op lands in EX/MEM, so MEM is occupied.
+    clear(dut);
+    dut->i_op_class = OPC_ALU; dut->i_op_a = 1; dut->i_op_b = 2; dut->i_gpr_we = 1;
+    dut->i_valid = 1;
+    dut->eval(); tick(dut); dut->eval();
+    check("dc_prime_mem_full", dut->o_valid, 1);
+
+    // ERET enters EX; MEM (o_valid=1) and WB (i_wb_active=1) both busy →
+    // drain, hold upstream, no commit.
+    clear(dut);
+    dut->i_op_class = OPC_ERET; dut->i_drain_commit = 1; dut->i_valid = 1;
+    dut->i_wb_active = 1;
+    dut->eval();
+    check("eret_draining_stall",    dut->o_stall, 1);
+    check("eret_draining_no_commit", dut->o_dc_commit, 0);
+    tick(dut); dut->eval();
+    check("eret_mem_drained", dut->o_valid, 0);   // bubble pushed into EX/MEM
+
+    // EX/MEM now empty but WB still busy → keep draining.
+    dut->i_op_class = OPC_ERET; dut->i_drain_commit = 1; dut->i_valid = 1;
+    dut->i_wb_active = 1;
+    dut->eval();
+    check("eret_wb_busy_stall",     dut->o_stall, 1);
+    check("eret_wb_busy_no_commit", dut->o_dc_commit, 0);
+    tick(dut); dut->eval();
+
+    // WB drained too → commit this cycle, release upstream (no post-wait).
+    dut->i_op_class = OPC_ERET; dut->i_drain_commit = 1; dut->i_valid = 1;
+    dut->i_wb_active = 0;
+    dut->eval();
+    check("eret_commit",  dut->o_dc_commit, 1);
+    check("eret_release", dut->o_stall, 0);
+
+    // WRSYS (post_commit_wait=1): on the drained cycle it commits but
+    // holds upstream one extra cycle for the device latch.
+    flush_bubble(dut);                              // EX/MEM empty
+    clear(dut);
+    dut->i_op_class = OPC_WRSYS; dut->i_drain_commit = 1; dut->i_post_commit_wait = 1;
+    dut->i_valid = 1; dut->i_wb_active = 0;          // already drained
+    dut->eval();
+    check("wrsys_commit",      dut->o_dc_commit, 1);
+    check("wrsys_commit_hold", dut->o_stall, 1);     // post-commit hold, not release
+    tick(dut); dut->eval();
+    // Post-commit hold cycle: release, and do not re-fire the commit.
+    dut->i_op_class = OPC_WRSYS; dut->i_drain_commit = 1; dut->i_post_commit_wait = 1;
+    dut->i_valid = 1; dut->i_wb_active = 0;
+    dut->eval();
+    check("wrsys_postwait_release",    dut->o_stall, 0);
+    check("wrsys_postwait_no_recommit", dut->o_dc_commit, 0);
+
+    // Drained-on-arrival: a drain-commit insn meeting an empty MEM/WB
+    // commits immediately, no drain cycles.
+    flush_bubble(dut);
+    clear(dut);
+    dut->i_op_class = OPC_ERET; dut->i_drain_commit = 1; dut->i_valid = 1;
+    dut->i_wb_active = 0;
+    dut->eval();
+    check("dc_immediate_commit",  dut->o_dc_commit, 1);
+    check("dc_immediate_release", dut->o_stall, 0);
+
+    // A faulting drain-commit insn does NOT drain-commit: it flows through
+    // inert and faults at WB (a privileged ERET in user mode).
+    flush_bubble(dut);
+    clear(dut);
+    dut->i_op_class = OPC_ERET; dut->i_drain_commit = 1; dut->i_valid = 1;
+    dut->i_fault_pending = 1; dut->i_fault_vec = 4; dut->i_wb_active = 0;
+    dut->eval();
+    check("dc_fault_no_commit", dut->o_dc_commit, 0);
+    check("dc_fault_no_stall",  dut->o_stall, 0);
+    tick(dut); dut->eval();
+    check("dc_fault_advances",     dut->o_valid, 1);          // went to EX/MEM, inert
+    check("dc_fault_pending_rides", dut->o_fault_pending, 1);
 
     // ── Summary ──────────────────────────────────────────────────
     printf("penumbra2_ex_stage: %d/%d tests passed\n", tests - errors, tests);

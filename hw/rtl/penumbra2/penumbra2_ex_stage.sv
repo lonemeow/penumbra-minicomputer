@@ -13,10 +13,11 @@
 //   - narrows the control bundle to the ctrl_mem + ctrl_wb subsets and
 //     latches the EX/MEM register under the back-pressure handshake.
 //
-// The drain-commit FSM (ERET/WRSYS) and the divmul start/busy handshake
-// are not present yet; the ID/EX inputs and EX-internal state they need
-// arrive with them, so the port list is the compute + branch-resolution
-// subset.
+// Drain-commit instructions (ERET / WRSYS / WRSPR-SR / EI / DI) are
+// sequenced here too: EX holds them, drains MEM/WB, and pulses o_dc_commit
+// at the commit point (the architectural SR/PC/sysreg writes are routed by
+// integration from the held ID/EX bundle — EX owns the *when*, not the
+// *what*). The divmul start/busy handshake is the one piece still to come.
 //
 // Flag bypass boundary: the youngest producer ahead of the EX reader is
 // the EX/MEM-stage instruction, which is exactly what this stage latched
@@ -45,6 +46,8 @@ module penumbra2_ex_stage
     input  logic [3:0]            i_sys_dev,
     input  logic [3:0]            i_sys_reg,
     input  logic [3:0]            i_spr_sel,
+    input  logic                  i_drain_commit,     // ERET/WRSYS/WRSPR-SR/EI/DI
+    input  logic                  i_post_commit_wait, // WRSYS: hold 1 cyc for the device latch
     input  logic                  i_gpr_we,
     input  logic                  i_spr_we,
     input  logic                  i_flag_we,
@@ -64,10 +67,12 @@ module penumbra2_ex_stage
 
     // ── Pipeline handshake ───────────────────────────────────────
     input  logic                  i_stall_in,        // MEM cannot accept this cycle
-    input  logic                  i_bubble,          // squash this insn (fault flush)
+    input  logic                  i_wb_active,       // WB holds a live (non-bubble) insn
+    input  logic                  i_bubble,          // force this insn to a bubble (fault flush from WB)
     output logic                  o_stall,           // back-pressure to ID
+    output logic                  o_dc_commit,       // drain-commit insn commits this cycle
 
-    // ── Branch resolution (to IF: redirect + squash IF1/IF2/ID) ──
+    // ── Branch resolution (to IF: redirect + flush IF1/IF2/ID) ──
     output logic                  o_branch_taken,    // redirect the front-end this cycle
     output logic [31:0]           o_branch_target,   // PC to redirect to
 
@@ -184,31 +189,79 @@ module penumbra2_ex_stage
         endcase
     end
 
-    // A taken redirect counts only for a real, non-faulting, un-squashed
+    // A taken redirect counts only for a real, non-faulting, un-flushed
     // branch slot; a bubble or a slot the fault flush is killing must
     // not steer the front-end.
     assign o_branch_taken  = branch_redirect & i_valid & ~i_fault_pending & ~i_bubble;
     assign o_branch_target = branch_target;
 
+    // ── Drain-commit FSM ─────────────────────────────────────────
+    // ERET/WRSYS/WRSPR-SR/EI/DI must order their commit against older
+    // in-flight instructions (which observe the pre-commit SR) and
+    // younger ones (which observe the post-commit state). The insn holds
+    // in EX — it never advances into MEM/WB — while MEM and WB drain;
+    // once drained it commits (o_dc_commit pulse) and, for the WRSYS
+    // variant, EX holds upstream one extra cycle (post_wait_q) so the
+    // sysreg device latches before the next insn can observe it.
+    //
+    // MEM occupancy is EX's own EX/MEM register (o_valid) — MEM holds an
+    // insn by back-pressuring, never by buffering past the register — so
+    // only WB needs an occupancy feedback (i_wb_active).
+    logic dc_here;          // a drain-commit insn occupies EX (held in ID/EX)
+    logic drained;          // MEM and WB hold no live instruction
+    logic dc_commit_now;    // commit fires this cycle
+    logic post_wait_q;      // the WRSYS post-commit extra-hold cycle
+
+    assign dc_here       = i_valid & i_drain_commit & ~i_fault_pending & ~i_bubble;
+    assign drained       = ~o_valid & ~i_wb_active;
+    assign dc_commit_now = dc_here & drained & ~post_wait_q;
+    assign o_dc_commit   = dc_commit_now;
+
+    always_ff @(posedge i_clk) begin
+        if (i_rst) post_wait_q <= 1'b0;
+        else       post_wait_q <= dc_commit_now & i_post_commit_wait;
+    end
+
     // ── Issue / back-pressure control ────────────────────────────
-    // EX accepts a new ID/EX instruction every cycle except when MEM
-    // back-pressures it (i_stall_in) — then it holds its EX/MEM output
-    // and propagates the stall upstream. i_bubble (a fault flush from
-    // WB) squashes the in-flight slot and wins over a hold. The drain-
-    // commit and divmul internal stalls layer onto o_stall later.
+    // EX accepts a new ID/EX instruction every cycle except when it is
+    // back-pressured (MEM via i_stall_in) or busy sequencing a
+    // drain-commit. i_bubble — the fault-flush from WB — forces the
+    // in-flight slot and wins over everything. The divmul internal stall
+    // layers onto o_stall later.
     logic advance, next_valid;
 
     always_comb begin
-        o_stall = i_stall_in;
         if (i_bubble) begin
-            next_valid = 1'b0;
+            next_valid = 1'b0;          // flush wins
             advance    = 1'b0;
+            o_stall    = i_stall_in;
+        end else if (post_wait_q) begin
+            next_valid = 1'b0;          // WRSYS already committed; the insn leaves as a bubble
+            advance    = 1'b0;
+            o_stall    = 1'b0;          // release upstream after the one extra hold
+        end else if (dc_here) begin
+            // Drain-commit insn: never advances into MEM/WB. Inject a
+            // bubble so MEM/WB drain — but only when MEM can accept;
+            // while MEM is mid-access (i_stall_in) hold EX/MEM so its
+            // live work is not clobbered.
+            advance = 1'b0;
+            if (i_stall_in) begin
+                next_valid = o_valid;
+                o_stall    = 1'b1;
+            end else begin
+                next_valid = 1'b0;
+                // Hold upstream until drained; on the drained (commit)
+                // cycle, hold one more only for the WRSYS variant.
+                o_stall = drained ? i_post_commit_wait : 1'b1;
+            end
         end else if (i_stall_in) begin
             next_valid = o_valid;       // hold EX/MEM unchanged
             advance    = 1'b0;
+            o_stall    = 1'b1;
         end else begin
             next_valid = i_valid;       // advance: bubble in if i_valid=0
             advance    = i_valid;
+            o_stall    = 1'b0;
         end
     end
 
@@ -252,18 +305,18 @@ module penumbra2_ex_stage
     always_comb begin
         // Advance precondition: the EX/MEM register latches a real
         // instruction only on a clean accept — a valid input, not
-        // squashed, not back-pressured. A mis-gated latch (advancing
+        // flushed, not back-pressured. A mis-gated latch (advancing
         // on a stall/bubble, or latching a bubble) violates this.
         assert (!advance || (i_valid && !i_bubble && !i_stall_in))
             else $error("penumbra2_ex_stage: advance without a clean precondition");
     end
 
-    // A squash (fault flush from WB) always lands as a bubble in EX/MEM:
+    // A fault-commit flush from WB always lands as a bubble in EX/MEM:
     // a wrong-path or faulting instruction must never slip through to
     // MEM and commit.
     assert property (@(posedge i_clk) disable iff (i_rst)
         i_bubble |=> !o_valid)
-        else $error("penumbra2_ex_stage: i_bubble did not squash the EX/MEM slot");
+        else $error("penumbra2_ex_stage: i_bubble did not flush the EX/MEM slot");
 
     // Back-pressure holds the EX/MEM slot intact: a stalled EX neither
     // drops nor fabricates its valid bit — the classic lost- or
@@ -286,5 +339,26 @@ module penumbra2_ex_stage
                 i_op_class == OPC_BRANCH || i_op_class == OPC_JMP)
             else $error("penumbra2_ex_stage: branch redirect on a non-branch op_class");
     end
+
+    // A drain-commit instruction never advances into MEM/WB — its effect
+    // is the o_dc_commit pulse, not a downstream pipeline-register slot.
+    // If one ever flowed past EX it would double-commit (once via
+    // o_dc_commit, once at WB).
+    always_comb begin
+        assert (!(dc_here && advance))
+            else $error("penumbra2_ex_stage: drain-commit insn advanced into EX/MEM");
+    end
+
+    // The post-commit hold never re-fires the commit (it is the cycle
+    // *after* the WRSYS commit, holding for the device latch).
+    always_comb begin
+        assert (!(post_wait_q && o_dc_commit))
+            else $error("penumbra2_ex_stage: drain-commit re-fired during post-commit hold");
+    end
+
+    // The post-commit hold lasts exactly one cycle — never two in a row.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        post_wait_q |=> !post_wait_q)
+        else $error("penumbra2_ex_stage: post-commit hold exceeded one cycle");
 
 endmodule
