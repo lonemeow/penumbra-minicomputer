@@ -54,6 +54,64 @@ package penumbra_pkg;
     localparam logic [3:0] COND_LE = 4'b1110;  // Signed <=         (Z=1 | N!=V)
     localparam logic [3:0] COND_BL = 4'b1111;  // Branch-and-link   (always, + save LR)
 
+    // ── Instruction format prefixes (IR[31:30]) ─────────────────
+    // The 2-bit prefix that selects how the rest of the word decodes.
+    // Authoritative encoding: doc/system/instruction-encoding.md.
+    localparam logic [1:0] FMT_R = 2'b00;  // register-register ALU + system
+    localparam logic [1:0] FMT_L = 2'b01;  // immediate operations
+    localparam logic [1:0] FMT_M = 2'b10;  // memory load/store
+    localparam logic [1:0] FMT_B = 2'b11;  // branch
+
+    // ── Format R opcodes (IR[29:25], 5-bit) ─────────────────────
+    // op[4]=0 is the single-cycle ALU/move region (ADD..SBC, with
+    // 01100-01111 reserved); op[4]=1 is the multi-cycle/system region:
+    // the divmul peer unit (10000-10011), reserved peer slots
+    // (10100-10110), then the system ops (10111-11111).
+    localparam logic [4:0] OP_R_ADD     = 5'b00000;
+    localparam logic [4:0] OP_R_SUB     = 5'b00001;
+    localparam logic [4:0] OP_R_AND     = 5'b00010;
+    localparam logic [4:0] OP_R_OR      = 5'b00011;
+    localparam logic [4:0] OP_R_XOR     = 5'b00100;
+    localparam logic [4:0] OP_R_SHL     = 5'b00101;
+    localparam logic [4:0] OP_R_SHR     = 5'b00110;
+    localparam logic [4:0] OP_R_SAR     = 5'b00111;
+    localparam logic [4:0] OP_R_MOV     = 5'b01000;
+    localparam logic [4:0] OP_R_NOT     = 5'b01001;
+    localparam logic [4:0] OP_R_ADC     = 5'b01010;
+    localparam logic [4:0] OP_R_SBC     = 5'b01011;
+    localparam logic [4:0] OP_R_MUL     = 5'b10000;
+    localparam logic [4:0] OP_R_MULU    = 5'b10001;
+    localparam logic [4:0] OP_R_DIV     = 5'b10010;
+    localparam logic [4:0] OP_R_DIVU    = 5'b10011;
+    localparam logic [4:0] OP_R_WRSYS   = 5'b10111;
+    localparam logic [4:0] OP_R_RDSYS   = 5'b11000;
+    localparam logic [4:0] OP_R_SYSCALL = 5'b11001;
+    localparam logic [4:0] OP_R_BREAK   = 5'b11010;
+    localparam logic [4:0] OP_R_ERET    = 5'b11011;
+    localparam logic [4:0] OP_R_EI      = 5'b11100;
+    localparam logic [4:0] OP_R_DI      = 5'b11101;
+    localparam logic [4:0] OP_R_WRSPR   = 5'b11110;
+    localparam logic [4:0] OP_R_RDSPR   = 5'b11111;
+
+    // ── Format L opcodes (IR[29:26], 4-bit) ─────────────────────
+    // The "#imm" arithmetic ops carry the same operation as their
+    // Format R cousins but a *different* opcode number, so a decoder
+    // must remap (not slice) them to an ALU function. 1101-1111 are
+    // reserved.
+    localparam logic [3:0] OP_L_LLI   = 4'b0000;  // Rd = zero_ext(imm16)
+    localparam logic [3:0] OP_L_LLIS  = 4'b0001;  // Rd = sign_ext(imm16)
+    localparam logic [3:0] OP_L_LUI   = 4'b0010;  // Rd = Rd | (imm16 << 16)
+    localparam logic [3:0] OP_L_ADDI  = 4'b0011;
+    localparam logic [3:0] OP_L_SUBI  = 4'b0100;
+    localparam logic [3:0] OP_L_CMPI  = 4'b0101;  // SUBI with F (flags only)
+    localparam logic [3:0] OP_L_ANDI  = 4'b0110;
+    localparam logic [3:0] OP_L_TESTI = 4'b0111;  // ANDI with F (flags only)
+    localparam logic [3:0] OP_L_SHLI  = 4'b1000;
+    localparam logic [3:0] OP_L_SHRI  = 4'b1001;
+    localparam logic [3:0] OP_L_SARI  = 4'b1010;
+    localparam logic [3:0] OP_L_JMP   = 4'b1011;  // PC = Rd
+    localparam logic [3:0] OP_L_JALR  = 4'b1100;  // R13 = PC+4; PC = Rd
+
     // ── MMU access types (one-hot, matches R/W/X flag positions) ──
     localparam logic [2:0] ACC_READ  = 3'b001;  // bit 0 = R
     localparam logic [2:0] ACC_WRITE = 3'b010;  // bit 1 = W
