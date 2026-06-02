@@ -361,7 +361,7 @@ here.
 
 | Field | Bits | Description |
 |-------|------|-------------|
-| `ctrl` | ~30 | Decoded control bundle: alu_op, op_class, flag_we, gpr_we, spr_we, mem_op, cond, sysreg/SPR selects, drain_commit, is_trap, etc. — full layout in [control-decode.md](./control-decode.md) |
+| `ctrl` | ~30 | Decoded control bundle: alu_op, op_class, flag_we, gpr_we, spr_we, mem_op, cond, sysreg/SPR selects, divmul_op, drain_commit, is_trap, etc. — full layout in [control-decode.md](./control-decode.md) |
 | `pc` | 32 | This insn's PC (propagated for EPC + branch target) |
 | `next_pc` | 32 | `PC + 4` (branch/JALR link, SYSCALL/BREAK/IRQ EPC) |
 | `op_a` | 32 | Final ALU operand A: the regfile port-A read, or PC for a branch target. For MUL/DIV: the multiplicand / 32-bit dividend |
@@ -386,15 +386,19 @@ Written by EX, read by MEM.
 | `ctrl_mem` | ~12 | Subset of ctrl needed downstream: mem_op (read/write/none), mem_size, sign_ext, sysreg_dev, sysreg_reg, sysreg_op |
 | `ctrl_wb` | ~10 | Subset needed at WB: gpr_we, spr_we, flag_we, gpr_dst, spr_dst |
 | `pc` | 32 | For EPC if fault |
-| `result` | 32 | ALU output (load address for loads, store address for stores, sysreg sideband data for SYS, GPR result for ALU ops) |
-| `store_data` | 32 | Value to store (for STx) or written value (for ALU writeback) |
-| `flag_value` | 4 | NZCV computed by ALU |
-| `phys_dst` | 5 | Physical entry to clear on commit |
+| `result` | 32 | ALU output (load/store effective address, sysreg sideband data, GPR result for ALU ops), or the divmul **low** half (quotient / product low) |
+| `result_hi` | 32 | The divmul **high** half (remainder / product high) — the second GPR write WB sequences through the single port; don't-care for non-divmul |
+| `store_data` | 32 | The value a store writes to memory (STx); don't-care for non-stores |
+| `flag_value` | 4 | NZCV — from the ALU, or from divmul (sets N,Z; forces C=V=0) |
+| `phys_dst` | 5 | Physical entry to clear on commit (Rd) |
+| `phys_dst_hi` | 5 | Second physical entry for the divmul high half (Rdh); unused otherwise |
 | `valid` | 1 | 0 = bubble |
 | `fault_pending` | 1 | |
 | `fault_vec` | 4 | |
 
-Total: ~133 bits.
+Total: ~170 bits. `result` and `result_hi` are the divmul's two writeback
+values — kept as separate fields rather than overloading `store_data`,
+which stays the store path's memory-write value.
 
 ### MEM/WB register
 

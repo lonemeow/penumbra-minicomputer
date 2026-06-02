@@ -17,7 +17,8 @@
 // sequenced here too: EX holds them, drains MEM/WB, and pulses o_dc_commit
 // at the commit point (the architectural SR/PC/sysreg writes are routed by
 // integration from the held ID/EX bundle — EX owns the *when*, not the
-// *what*). The divmul start/busy handshake is the one piece still to come.
+// *what*). MUL/MULU/DIV/DIVU run on the divmul peer unit, holding EX
+// until it reports its two-half result (or a DIV0 fault → VEC_ARITH).
 //
 // Flag bypass boundary: the youngest producer ahead of the EX reader is
 // the EX/MEM-stage instruction, which is exactly what this stage latched
@@ -36,6 +37,7 @@ module penumbra2_ex_stage
     // ── ID/EX input: the issued instruction ──────────────────────
     input  logic [OPC_W-1:0]      i_op_class,
     input  logic [ALU_OP_W-1:0]   i_alu_op,
+    input  logic [1:0]            i_divmul_op,      // divmul variant (ISA op[1:0])
     input  logic [31:0]           i_op_a,
     input  logic [31:0]           i_op_b,
     input  logic [31:0]           i_store_data,
@@ -71,6 +73,7 @@ module penumbra2_ex_stage
     input  logic                  i_bubble,          // force this insn to a bubble (fault flush from WB)
     output logic                  o_stall,           // back-pressure to ID
     output logic                  o_dc_commit,       // drain-commit insn commits this cycle
+    output logic                  o_funit_stall,     // stall cause: waiting on the divmul unit (perfctr)
 
     // ── Branch resolution (to IF: redirect + flush IF1/IF2/ID) ──
     output logic                  o_branch_taken,    // redirect the front-end this cycle
@@ -88,6 +91,7 @@ module penumbra2_ex_stage
     output logic                  o_spr_we,
     output logic                  o_flag_we,
     output logic [31:0]           o_result,
+    output logic [31:0]           o_result_hi,       // divmul high half (Rdh); don't-care otherwise
     output logic [31:0]           o_store_data,
     output logic [3:0]            o_flag_value,      // NZCV, packed as SR[3:0]
     output logic [SB_IDX_W-1:0]   o_phys_dst,
@@ -222,12 +226,63 @@ module penumbra2_ex_stage
         else       post_wait_q <= dc_commit_now & i_post_commit_wait;
     end
 
+    // ── divmul peer unit ─────────────────────────────────────────
+    // MUL/MULU/DIV/DIVU run on the multi-cycle divmul unit (a peer to
+    // the ALU). EX holds i_start high while the divmul is the EX insn —
+    // the unit edge-detects it, so it triggers once — and stalls while
+    // o_busy. The cycle o_busy falls, both result halves are valid to
+    // latch (low → result, high → result_hi). A DIV0 never iterates:
+    // o_fault pulses on the start cycle with o_busy staying low, so it
+    // completes in one cycle carrying VEC_ARITH.
+    //
+    // The unit's 5-bit op is the gen1 core-internal ALU-field encoding,
+    // kept local here (as in divmul.sv / alu.sv) rather than in the
+    // shared ISA package. divmul_op (ISA op[1:0]) selects it.
+    localparam logic [4:0] DM_OP_MUL  = 5'b01101;
+    localparam logic [4:0] DM_OP_MULU = 5'b01110;
+    localparam logic [4:0] DM_OP_DIV  = 5'b01111;
+    localparam logic [4:0] DM_OP_DIVU = 5'b10000;
+
+    logic        is_divmul;
+    logic [4:0]  dm_op;
+    logic        dm_start, dm_busy, dm_fault, dm_z, dm_n;
+    logic [31:0] dm_lo, dm_hi;
+
+    assign is_divmul = (i_op_class == OPC_DIVMUL);
+
+    always_comb begin
+        case (i_divmul_op)
+            2'b00:   dm_op = DM_OP_MUL;
+            2'b01:   dm_op = DM_OP_MULU;
+            2'b10:   dm_op = DM_OP_DIV;
+            default: dm_op = DM_OP_DIVU;
+        endcase
+    end
+
+    // Hold start high while the divmul is the EX insn; the unit triggers
+    // on its rising edge and ignores the held level afterward.
+    assign dm_start = is_divmul & i_valid & ~i_fault_pending & ~i_bubble;
+
+    divmul u_divmul (
+        .i_clk(i_clk), .i_rst(i_rst),
+        .i_a(i_op_a), .i_b(i_op_b),
+        .i_op(dm_op), .i_start(dm_start),
+        .o_busy(dm_busy), .o_fault(dm_fault),
+        .o_result_lo(dm_lo), .o_result_hi(dm_hi),
+        .o_flag_z(dm_z), .o_flag_n(dm_n)
+    );
+
+    // While the unit is busy EX holds the insn; it advances the cycle
+    // the unit is no longer busy (with results, or with a DIV0 fault).
+    logic dm_stall;
+    assign dm_stall  = dm_start & dm_busy;
+    assign o_funit_stall = dm_stall;
+
     // ── Issue / back-pressure control ────────────────────────────
     // EX accepts a new ID/EX instruction every cycle except when it is
-    // back-pressured (MEM via i_stall_in) or busy sequencing a
-    // drain-commit. i_bubble — the fault-flush from WB — forces the
-    // in-flight slot and wins over everything. The divmul internal stall
-    // layers onto o_stall later.
+    // back-pressured (MEM via i_stall_in), sequencing a drain-commit, or
+    // waiting on the divmul unit. i_bubble — the fault-flush from WB —
+    // forces the in-flight slot to a bubble and wins over everything.
     logic advance, next_valid;
 
     always_comb begin
@@ -254,6 +309,12 @@ module penumbra2_ex_stage
                 // cycle, hold one more only for the WRSYS variant.
                 o_stall = drained ? i_post_commit_wait : 1'b1;
             end
+        end else if (dm_stall) begin
+            // divmul busy: hold the insn in EX, bubble EX/MEM downstream,
+            // back-pressure upstream. It advances the cycle busy clears.
+            next_valid = 1'b0;
+            advance    = 1'b0;
+            o_stall    = 1'b1;
         end else if (i_stall_in) begin
             next_valid = o_valid;       // hold EX/MEM unchanged
             advance    = 1'b0;
@@ -282,15 +343,21 @@ module penumbra2_ex_stage
                 o_gpr_we         <= i_gpr_we;
                 o_spr_we         <= i_spr_we;
                 o_flag_we        <= i_flag_we;
-                o_result         <= result_value;
+                // divmul drives both writeback halves and N/Z (C=V=0);
+                // every other op uses the ALU result + flags. A divmul
+                // only ever advances once its results are valid.
+                o_result         <= is_divmul ? dm_lo : result_value;
+                o_result_hi      <= is_divmul ? dm_hi : 32'b0;
                 o_store_data     <= i_store_data;
-                o_flag_value     <= alu_flags;
+                o_flag_value     <= is_divmul ? {2'b00, dm_z, dm_n} : alu_flags;
                 o_phys_dst       <= i_phys_dst;
                 o_phys_dst_hi    <= i_phys_dst_hi;
                 o_phys_dst_hi_en <= i_phys_dst_hi_en;
                 o_pc             <= i_pc;
-                o_fault_pending  <= i_fault_pending;
-                o_fault_vec      <= i_fault_vec;
+                // DIV0 raises VEC_ARITH here (the divmul never set an IF
+                // fault, so it cannot collide with i_fault_pending).
+                o_fault_pending  <= i_fault_pending | (is_divmul & dm_fault);
+                o_fault_vec      <= (is_divmul & dm_fault) ? VEC_ARITH : i_fault_vec;
             end
         end
     end
@@ -360,5 +427,12 @@ module penumbra2_ex_stage
     assert property (@(posedge i_clk) disable iff (i_rst)
         post_wait_q |=> !post_wait_q)
         else $error("penumbra2_ex_stage: post-commit hold exceeded one cycle");
+
+    // A divmul never advances into EX/MEM while the unit is still busy —
+    // it would carry stale/garbage result halves to WB.
+    always_comb begin
+        assert (!(dm_stall && advance))
+            else $error("penumbra2_ex_stage: divmul advanced into EX/MEM while busy");
+    end
 
 endmodule

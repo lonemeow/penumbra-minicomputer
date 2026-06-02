@@ -19,7 +19,10 @@
 
 // op_class / alu_op / mem_op (penumbra2_pkg)
 enum { OPC_ALU = 0, OPC_LOAD = 1, OPC_STORE = 2, OPC_BRANCH = 3, OPC_JMP = 4,
-       OPC_WRSYS = 9, OPC_ERET = 10 };
+       OPC_DIVMUL = 5, OPC_WRSYS = 9, OPC_ERET = 10 };
+// divmul_op (ISA op[1:0]): bit1 = div/mul, bit0 = unsigned/signed
+enum { DM_MUL = 0, DM_MULU = 1, DM_DIV = 2, DM_DIVU = 3 };
+enum { VEC_ARITH = 10 };
 enum { ALU_ADD = 0, ALU_SUB = 1, ALU_ADC = 10 };
 enum { MEM_NONE = 0, MEM_STORE = 2 };
 // Branch condition codes (penumbra_pkg COND_*)
@@ -44,7 +47,7 @@ static void tick(Vpenumbra2_ex_stage* dut) {
 // Reset the per-cycle inputs to a quiet baseline (valid op_class, no
 // memory op, no flags in flight, no stall/flush).
 static void clear(Vpenumbra2_ex_stage* dut) {
-    dut->i_op_class = OPC_ALU; dut->i_alu_op = ALU_ADD;
+    dut->i_op_class = OPC_ALU; dut->i_alu_op = ALU_ADD; dut->i_divmul_op = DM_MUL;
     dut->i_op_a = 0; dut->i_op_b = 0; dut->i_store_data = 0;
     dut->i_cond = COND_AL;
     dut->i_mem_op = MEM_NONE; dut->i_mem_size = 0; dut->i_sign_ext = 0;
@@ -64,6 +67,25 @@ static void clear(Vpenumbra2_ex_stage* dut) {
 static void flush_bubble(Vpenumbra2_ex_stage* dut) {
     clear(dut); dut->i_valid = 0;
     dut->eval(); tick(dut); dut->eval();
+}
+
+// Run a divmul to completion: prime EX/MEM empty, drive the insn (inputs
+// persist across tick(), so set them once), tick until the unit finishes
+// (o_stall drops), then one more tick to latch the EX/MEM register.
+// Returns the iteration-cycle count, or -1 if it never completed.
+static int run_divmul(Vpenumbra2_ex_stage* dut, int op, uint32_t a, uint32_t b) {
+    flush_bubble(dut);
+    dut->i_op_class = OPC_DIVMUL; dut->i_divmul_op = op;
+    dut->i_op_a = a; dut->i_op_b = b;
+    dut->i_gpr_we = 1; dut->i_flag_we = 1;
+    dut->i_phys_dst = 1; dut->i_phys_dst_hi = 2; dut->i_phys_dst_hi_en = 1;
+    dut->i_valid = 1;
+    dut->eval();
+    int guard = 0;
+    while (dut->o_stall && guard < 64) { tick(dut); guard++; }
+    if (dut->o_stall) return -1;        // never finished
+    tick(dut); dut->eval();             // latch results into EX/MEM
+    return guard;
 }
 
 int main() {
@@ -377,6 +399,59 @@ int main() {
     tick(dut); dut->eval();
     check("dc_fault_advances",     dut->o_valid, 1);          // went to EX/MEM, inert
     check("dc_fault_pending_rides", dut->o_fault_pending, 1);
+
+    // ════════════════════════════════════════════════════════════
+    // divmul: multi-cycle hold, two-half writeback, DIV0 fault.
+    // o_result = low half, o_result_hi = high half, flags = {0,0,Z,N}.
+    // ════════════════════════════════════════════════════════════
+
+    // MUL 7 * 6 = 42 — exercise the iteration behaviour inline.
+    flush_bubble(dut);
+    dut->i_op_class = OPC_DIVMUL; dut->i_divmul_op = DM_MUL;
+    dut->i_op_a = 7; dut->i_op_b = 6;
+    dut->i_gpr_we = 1; dut->i_flag_we = 1;
+    dut->i_phys_dst = 1; dut->i_phys_dst_hi = 2; dut->i_phys_dst_hi_en = 1;
+    dut->i_valid = 1;
+    dut->eval();
+    check("mul_iter_stall", dut->o_stall, 1);        // started + iterating
+    check("mul_iter_funit", dut->o_funit_stall, 1);  // stall attributed to the unit
+    tick(dut); dut->eval();
+    check("mul_iter_no_exmem", dut->o_valid, 0);     // EX/MEM bubbled while iterating
+    check("mul_iter_still_busy", dut->o_stall, 1);
+    int guard = 1;
+    while (dut->o_stall && guard < 64) { tick(dut); guard++; }
+    check("mul_completed", (guard < 64), 1);
+    tick(dut); dut->eval();                            // latch into EX/MEM
+    check("mul_valid",        dut->o_valid, 1);
+    check("mul_lo",           dut->o_result, 42);
+    check("mul_hi",           dut->o_result_hi, 0);
+    check("mul_funit_cleared", dut->o_funit_stall, 0);
+    check("mul_phys_dst",     dut->o_phys_dst, 1);
+    check("mul_phys_dst_hi",  dut->o_phys_dst_hi, 2);
+
+    // MUL 0x10000 * 0x10000 = 0x1_0000_0000 — low=0, high=1, Z set.
+    check("mulhi_ran", (run_divmul(dut, DM_MUL, 0x10000, 0x10000) >= 0), 1);
+    check("mulhi_lo",     dut->o_result, 0);
+    check("mulhi_hi",     dut->o_result_hi, 1);
+    check("mulhi_flag_z", (dut->o_flag_value >> FZ) & 1, 1);
+
+    // DIV 20 / 6 → quotient 3 (low), remainder 2 (high).
+    check("div_ran", (run_divmul(dut, DM_DIV, 20, 6) >= 0), 1);
+    check("div_quot", dut->o_result, 3);
+    check("div_rem",  dut->o_result_hi, 2);
+
+    // DIV0: 10 / 0 → VEC_ARITH, no iteration (advances in one cycle).
+    flush_bubble(dut);
+    dut->i_op_class = OPC_DIVMUL; dut->i_divmul_op = DM_DIV;
+    dut->i_op_a = 10; dut->i_op_b = 0;
+    dut->i_gpr_we = 1; dut->i_valid = 1;
+    dut->eval();
+    check("div0_no_stall", dut->o_stall, 0);          // busy never rises
+    check("div0_no_funit", dut->o_funit_stall, 0);
+    tick(dut); dut->eval();
+    check("div0_valid",   dut->o_valid, 1);
+    check("div0_fault",   dut->o_fault_pending, 1);
+    check("div0_vec",     dut->o_fault_vec, VEC_ARITH);
 
     // ── Summary ──────────────────────────────────────────────────
     printf("penumbra2_ex_stage: %d/%d tests passed\n", tests - errors, tests);

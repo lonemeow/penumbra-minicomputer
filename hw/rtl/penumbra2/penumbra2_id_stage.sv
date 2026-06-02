@@ -63,6 +63,7 @@ module penumbra2_id_stage
     // ── ID/EX register (to EX) ───────────────────────────────────
     output logic [OPC_W-1:0]      o_op_class,
     output logic [ALU_OP_W-1:0]   o_alu_op,
+    output logic [1:0]            o_divmul_op,
     output logic [31:0]           o_op_a,
     output logic [31:0]           o_op_b,
     output logic [31:0]           o_store_data,
@@ -99,6 +100,7 @@ module penumbra2_id_stage
     logic                d_src_b_is_spr, d_src_b_en;
     logic                d_dst_is_spr, d_dst_en, d_dst_hi_en;
     logic [ALU_OP_W-1:0] d_alu_op;
+    logic [1:0]          d_divmul_op;
     logic                d_a_from_pc, d_b_from_imm;
     logic [31:0]         d_imm;
     logic [3:0]          d_cond;
@@ -119,7 +121,8 @@ module penumbra2_id_stage
         .o_src_b_sel(d_src_b_sel), .o_src_b_is_spr(d_src_b_is_spr), .o_src_b_en(d_src_b_en),
         .o_dst_sel(d_dst_sel),     .o_dst_is_spr(d_dst_is_spr),     .o_dst_en(d_dst_en),
         .o_dst_hi_sel(d_dst_hi_sel), .o_dst_hi_en(d_dst_hi_en),
-        .o_alu_op(d_alu_op), .o_a_from_pc(d_a_from_pc), .o_b_from_imm(d_b_from_imm),
+        .o_alu_op(d_alu_op), .o_divmul_op(d_divmul_op),
+        .o_a_from_pc(d_a_from_pc), .o_b_from_imm(d_b_from_imm),
         .o_imm(d_imm), .o_cond(d_cond),
         .o_writes_flags(d_writes_flags), .o_reads_flags(d_reads_flags), .o_flag_only(d_flag_only),
         .o_mem_op(d_mem_op), .o_mem_size(d_mem_size), .o_sign_ext(d_sign_ext),
@@ -232,6 +235,7 @@ module penumbra2_id_stage
             if (issue) begin
                 o_op_class         <= d_op_class;
                 o_alu_op           <= d_alu_op;
+                o_divmul_op        <= d_divmul_op;
                 o_op_a             <= op_a_sel;
                 o_op_b             <= op_b_sel;
                 o_store_data       <= store_data_sel;

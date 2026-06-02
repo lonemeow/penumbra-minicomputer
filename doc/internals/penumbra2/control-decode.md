@@ -226,6 +226,7 @@ subsets ([Decode once in ID, narrow downstream](#decode-once-in-id-narrow-downst
 |--------|:-----:|------------|
 | `op_class` | ~4 | format + opcode → {alu, alu_imm, move, load, store, branch, jmp, divmul, rdspr, wrspr, rdsys, wrsys, eret, ei, di, syscall, break} |
 | `alu_op` | ~4 | the ALU function (ADD/SUB/AND/OR/XOR/SHL/SHR/SAR/ADC/SBC/NOT/pass) |
+| `divmul_op` | 2 | which divmul operation, = ISA opcode `[1:0]` (bit1 = div/mul, bit0 = unsigned/signed → MUL/MULU/DIV/DIVU). Valid when `op_class=divmul`; EX maps it to the divmul peer unit's op |
 | `a_sel` | 1–2 | operand-A source: regfile(Rd) / PC (for B-target) |
 | `b_sel` | 1–2 | operand-B source: regfile(Rs) / immediate |
 | `imm` | 32 | sign/zero-extended immediate ([Immediate extraction and extension](#immediate-extraction-and-extension)) |

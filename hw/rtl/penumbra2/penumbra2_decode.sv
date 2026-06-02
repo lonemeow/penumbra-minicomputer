@@ -49,6 +49,7 @@ module penumbra2_decode
 
     // ── EX datapath controls ─────────────────────────────────────
     output logic [ALU_OP_W-1:0]  o_alu_op,
+    output logic [1:0]           o_divmul_op,     // divmul variant: = ISA op[1:0] (bit1 div/mul, bit0 unsigned)
     output logic                 o_a_from_pc,     // ALU operand A: 1=PC, 0=regfile src A
     output logic                 o_b_from_imm,    // ALU operand B: 1=immediate, 0=regfile src B
     output logic [31:0]          o_imm,
@@ -157,6 +158,7 @@ module penumbra2_decode
         o_dst_sel          = 4'd0; o_dst_is_spr   = 1'b0; o_dst_en   = 1'b0;
         o_dst_hi_sel       = 4'd0; o_dst_hi_en    = 1'b0;
         o_alu_op           = ALU_PASS;
+        o_divmul_op        = 2'b00;
         o_a_from_pc        = 1'b0;
         o_b_from_imm       = 1'b0;
         o_cond             = b_cond;
@@ -221,6 +223,7 @@ module penumbra2_decode
                         o_gpr_we     = 1'b1;
                         o_writes_flags = 1'b1;    // sets N,Z; forces C=V=0 in EX
                         o_alu_op     = ALU_PASS;  // the divmul peer unit owns the result
+                        o_divmul_op  = r_op[1:0]; // MUL/MULU/DIV/DIVU select
                     end
                     OP_R_WRSYS: begin
                         o_op_class         = OPC_WRSYS;
