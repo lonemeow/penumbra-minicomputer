@@ -246,7 +246,8 @@ module datapath
     // RDSPR (a_src=SPR=4): selects A-bus source based on SPR number.
     //   SPR 0 (ESR)       → amux select = ESR (01)
     //   SPR 1 (EPC)       → amux select = EPC (10)
-    //   SPR 2 (USP)       → amux select = REG (00), reg_a override = R14, cross_bank = 1
+    //   SPR 2 (USP)       → amux select = REG (00), cross_bank = 1; microcode
+    //                       addresses R14 directly (reg_a=R14)
     //   SPR 3 (SR)        → amux select = ESR (01), sr_read selected instead of ESR
     //   SPR 4-7 (SCR0..3) → amux select = 11, scr readback overlays vector_addr
     //
@@ -258,9 +259,7 @@ module datapath
     //   SPR 4-7 (SCR0..3) → spr_scratch encoded write, index = IR[13:12]
 
     logic [1:0]  amux_sel;         // 2-bit select for amux (decoded from 3-bit a_src)
-    logic [3:0]  spr_reg_a;        // reg_a override for RDSPR USP
-    logic        spr_cross_bank;   // cross_bank for USP access
-    logic        spr_reg_a_override; // 1 when RDSPR USP needs reg_a = R14
+    logic        spr_cross_bank;   // cross_bank for USP access (read + write)
     logic        spr_esr_load;     // WRSPR ESR: write w_bus to ESR
     logic        spr_epc_load;     // WRSPR EPC: write w_bus to EPC
     logic        spr_sr_load;      // WRSPR SR: write w_bus to SR
@@ -280,9 +279,7 @@ module datapath
     always_comb begin
         // Defaults: pass through, no overrides
         amux_sel          = i_a_src[1:0];
-        spr_reg_a         = 4'd0;
         spr_cross_bank    = 1'b0;
-        spr_reg_a_override = 1'b0;
         spr_esr_load      = 1'b0;
         spr_epc_load      = 1'b0;
         spr_sr_load       = 1'b0;
@@ -307,10 +304,11 @@ module datapath
                     SPR_ESR: amux_sel = 2'b01;  // ESR
                     SPR_EPC: amux_sel = 2'b10;  // EPC
                     SPR_USP: begin
-                        amux_sel           = 2'b00;  // REG (register file)
-                        spr_reg_a          = REG_SP;
-                        spr_cross_bank     = 1'b1;
-                        spr_reg_a_override = 1'b1;
+                        // Microcode addresses R14 directly (reg_a=R14); the
+                        // regfile maps R14 to the banked SP, and cross_bank
+                        // flips the bank so the read returns the USP.
+                        amux_sel       = 2'b00;  // REG (register file): R14
+                        spr_cross_bank = 1'b1;
                     end
                     SPR_SR: begin
                         amux_sel    = 2'b01;  // ESR slot, sr_read selected
@@ -343,10 +341,10 @@ module datapath
         end
     end
 
-    // Apply SPR overrides to register addressing
-    logic [3:0] final_reg_a;
-    assign final_reg_a = spr_reg_a_override ? spr_reg_a : resolved_a;
-
+    // WRSPR USP forces the regfile write to R14 (cross-bank). The read side
+    // needs no equivalent override: the RDSPR USP microcode addresses R14
+    // directly, so the A read port is driven by resolved_a unconditionally,
+    // keeping the rare SPR decode off every instruction's read-address path.
     logic [3:0] final_reg_w;
     assign final_reg_w = spr_w_en ? spr_reg_w : resolved_w;
 
@@ -367,7 +365,7 @@ module datapath
     regfile u_regfile (
         .i_clk        (i_clk),
         .i_rst        (i_rst),
-        .i_rd_addr_a  (final_reg_a),
+        .i_rd_addr_a  (resolved_a),
         .o_rd_data_a  (reg_a_data),
         .i_rd_addr_b  (resolved_b),
         .o_rd_data_b  (reg_b_data),
@@ -380,6 +378,15 @@ module datapath
         .i_dbg_addr    (i_dbg_reg_addr),
         .o_dbg_data    (o_dbg_reg_data)
     );
+
+    // Contract guard: with the read-address override removed, RDSPR USP relies
+    // on the microcode addressing R14 (reg_a=R14). If the SPR decode selects
+    // USP, the resolved A-address must be REG_SP, else the banked-SP read of
+    // the user stack pointer silently returns the wrong register.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (i_a_src == 3'd4 && !spr_is_scratch && fe_r_sys_dev == SPR_USP)
+            |-> resolved_a == REG_SP)
+        else $error("RDSPR USP: reg_a must resolve to R14 (got %0d)", resolved_a);
 
     // ── Status register ──────────────────────────────────────
     logic        sr_flag_n, sr_flag_z, sr_flag_c, sr_flag_v;

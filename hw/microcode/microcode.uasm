@@ -321,11 +321,11 @@ wrspr:
 # a_src=SPR: hardware decodes IR[15:12] to select source:
 #   SPR 0 (ESR): A-bus ← ESR latch
 #   SPR 1 (EPC): A-bus ← EPC latch
-#   SPR 2 (USP): A-bus ← R14 cross_bank read
+#   SPR 2 (USP): A-bus ← R14 cross_bank read (reg_a=R14 supplies the address)
 # Source → ALU PASS_A → R-bus → Rd
 .org 0x5E
 rdspr:
-  priv=1 a_src=SPR alu=PASS_A reg_w=IR_RD w_en=1 wb_src=RBUS
+  priv=1 a_src=SPR reg_a=R14 alu=PASS_A reg_w=IR_RD w_en=1 wb_src=RBUS
 
 # ═══════════════════════════════════════════════════════════════
 # Format B — Branches (0x60)
