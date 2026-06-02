@@ -18,9 +18,13 @@
 #include "Vpenumbra2_ex_stage.h"
 
 // op_class / alu_op / mem_op (penumbra2_pkg)
-enum { OPC_ALU = 0, OPC_LOAD = 1, OPC_STORE = 2 };
+enum { OPC_ALU = 0, OPC_LOAD = 1, OPC_STORE = 2, OPC_BRANCH = 3, OPC_JMP = 4 };
 enum { ALU_ADD = 0, ALU_SUB = 1, ALU_ADC = 10 };
 enum { MEM_NONE = 0, MEM_STORE = 2 };
+// Branch condition codes (penumbra_pkg COND_*)
+enum { COND_AL = 0, COND_EQ = 1, COND_BL = 15 };
+// physical scoreboard entry for R13 (the link register)
+enum { PHYS_LR = 13 };
 // NZCV bundle bit positions
 enum { FN = 0, FZ = 1, FC = 2, FV = 3 };
 
@@ -41,14 +45,23 @@ static void tick(Vpenumbra2_ex_stage* dut) {
 static void clear(Vpenumbra2_ex_stage* dut) {
     dut->i_op_class = OPC_ALU; dut->i_alu_op = ALU_ADD;
     dut->i_op_a = 0; dut->i_op_b = 0; dut->i_store_data = 0;
+    dut->i_cond = COND_AL;
     dut->i_mem_op = MEM_NONE; dut->i_mem_size = 0; dut->i_sign_ext = 0;
     dut->i_sys_dev = 0; dut->i_sys_reg = 0; dut->i_spr_sel = 0;
     dut->i_gpr_we = 0; dut->i_spr_we = 0; dut->i_flag_we = 0;
     dut->i_phys_dst = 0; dut->i_phys_dst_hi = 0; dut->i_phys_dst_hi_en = 0;
-    dut->i_pc = 0; dut->i_valid = 0;
+    dut->i_pc = 0; dut->i_next_pc = 0; dut->i_valid = 0;
     dut->i_fault_pending = 0; dut->i_fault_vec = 0;
     dut->i_sr_flags = 0; dut->i_wb_flags = 0; dut->i_wb_writes_flags = 0;
     dut->i_stall_in = 0; dut->i_bubble = 0;
+}
+
+// Drive a bubble through EX/MEM so the next test sees no in-flight flag
+// producer on the self-feedback (MEM) leg — conditional-branch tests can
+// then control the forwarded NZCV through i_sr_flags alone.
+static void flush_bubble(Vpenumbra2_ex_stage* dut) {
+    clear(dut); dut->i_valid = 0;
+    dut->eval(); tick(dut); dut->eval();
 }
 
 int main() {
@@ -184,6 +197,101 @@ int main() {
     check("fault_valid",   dut->o_valid, 1);
     check("fault_pending", dut->o_fault_pending, 1);
     check("fault_vec",     dut->o_fault_vec, 3);
+
+    // ════════════════════════════════════════════════════════════
+    // Branch resolution: taken decision + redirect target.
+    // o_branch_taken / o_branch_target are combinational, so most checks
+    // need no clock edge; the link-value (o_result) checks tick to latch
+    // the EX/MEM register.
+    // ════════════════════════════════════════════════════════════
+
+    // Unconditional B (cond=AL): always redirects to PC + offset, which
+    // the ALU produced as its result.
+    clear(dut);
+    dut->i_op_class = OPC_BRANCH; dut->i_cond = COND_AL; dut->i_alu_op = ALU_ADD;
+    dut->i_op_a = 0xFFFF0040; dut->i_op_b = 0x40;   // target = 0xFFFF0080
+    dut->i_valid = 1;
+    dut->eval();
+    check("b_al_taken",  dut->o_branch_taken, 1);
+    check("b_al_target", dut->o_branch_target, 0xFFFF0080);
+
+    // Conditional BEQ with Z=1 → taken.
+    flush_bubble(dut);
+    clear(dut);
+    dut->i_op_class = OPC_BRANCH; dut->i_cond = COND_EQ; dut->i_alu_op = ALU_ADD;
+    dut->i_op_a = 0xFFFF0100; dut->i_op_b = 0x20;    // target = 0xFFFF0120
+    dut->i_sr_flags = (1 << FZ);                     // Z=1
+    dut->i_valid = 1;
+    dut->eval();
+    check("beq_z1_taken",  dut->o_branch_taken, 1);
+    check("beq_z1_target", dut->o_branch_target, 0xFFFF0120);
+
+    // Conditional BEQ with Z=0 → not taken (no redirect).
+    flush_bubble(dut);
+    clear(dut);
+    dut->i_op_class = OPC_BRANCH; dut->i_cond = COND_EQ; dut->i_alu_op = ALU_ADD;
+    dut->i_op_a = 0xFFFF0100; dut->i_op_b = 0x20;
+    dut->i_sr_flags = 0;                             // Z=0
+    dut->i_valid = 1;
+    dut->eval();
+    check("beq_z0_not_taken", dut->o_branch_taken, 0);
+
+    // JMP: unconditional, target is the register operand (op_a).
+    clear(dut);
+    dut->i_op_class = OPC_JMP; dut->i_op_a = 0x12345678; dut->i_valid = 1;
+    dut->eval();
+    check("jmp_taken",      dut->o_branch_taken, 1);
+    check("jmp_target_reg", dut->o_branch_target, 0x12345678);
+
+    // BL: links PC+4 into R13 (result = next_pc) and redirects to PC+offset.
+    clear(dut);
+    dut->i_op_class = OPC_BRANCH; dut->i_cond = COND_BL; dut->i_alu_op = ALU_ADD;
+    dut->i_op_a = 0xFFFF0200; dut->i_op_b = 0x80;    // target = 0xFFFF0280
+    dut->i_gpr_we = 1; dut->i_phys_dst = PHYS_LR;
+    dut->i_next_pc = 0xFFFF0204;                     // link value
+    dut->i_valid = 1;
+    dut->eval();
+    check("bl_taken",  dut->o_branch_taken, 1);
+    check("bl_target", dut->o_branch_target, 0xFFFF0280);
+    tick(dut); dut->eval();
+    check("bl_links_nextpc", dut->o_result, 0xFFFF0204);
+    check("bl_gpr_we",       dut->o_gpr_we, 1);
+    check("bl_phys_dst",     dut->o_phys_dst, PHYS_LR);
+
+    // JALR: links PC+4 into R13 and redirects to the register operand.
+    clear(dut);
+    dut->i_op_class = OPC_JMP; dut->i_op_a = 0xCAFE0000;
+    dut->i_gpr_we = 1; dut->i_phys_dst = PHYS_LR;
+    dut->i_next_pc = 0xFFFF0304;
+    dut->i_valid = 1;
+    dut->eval();
+    check("jalr_taken",      dut->o_branch_taken, 1);
+    check("jalr_target_reg", dut->o_branch_target, 0xCAFE0000);
+    tick(dut); dut->eval();
+    check("jalr_links_nextpc", dut->o_result, 0xFFFF0304);
+
+    // A faulting branch slot does not steer the front-end (the fault
+    // redirect is taken at WB instead).
+    clear(dut);
+    dut->i_op_class = OPC_BRANCH; dut->i_cond = COND_AL;
+    dut->i_op_a = 0xFFFF0040; dut->i_op_b = 0x40;
+    dut->i_valid = 1; dut->i_fault_pending = 1; dut->i_fault_vec = 2;
+    dut->eval();
+    check("branch_fault_no_redirect", dut->o_branch_taken, 0);
+
+    // A squashed branch slot does not steer the front-end.
+    clear(dut);
+    dut->i_op_class = OPC_BRANCH; dut->i_cond = COND_AL;
+    dut->i_op_a = 0xFFFF0040; dut->i_op_b = 0x40;
+    dut->i_valid = 1; dut->i_bubble = 1;
+    dut->eval();
+    check("branch_bubble_no_redirect", dut->o_branch_taken, 0);
+
+    // A non-control-transfer op never redirects.
+    clear(dut);
+    dut->i_op_class = OPC_ALU; dut->i_op_a = 5; dut->i_op_b = 3; dut->i_valid = 1;
+    dut->eval();
+    check("alu_no_redirect", dut->o_branch_taken, 0);
 
     // ── Summary ──────────────────────────────────────────────────
     printf("penumbra2_ex_stage: %d/%d tests passed\n", tests - errors, tests);

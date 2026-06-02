@@ -1,4 +1,4 @@
-// penumbra2_ex_stage — Penumbra/2 execute stage (straight-line core).
+// penumbra2_ex_stage — Penumbra/2 execute stage.
 //
 // The integration point of the gen2 datapath spine, mirroring how
 // penumbra2_id_stage assembles the front half. Specified by the EX
@@ -7,14 +7,16 @@
 //   - feeds the ID/EX operands to the combinational ALU (penumbra2_alu),
 //   - forwards the youngest in-flight NZCV (penumbra2_flag_bypass) and
 //     hands its carry bit to the ALU for ADC/SBC,
+//   - resolves control transfers — cond_eval against the forwarded NZCV,
+//     branch target from the ALU (PC + offset), JMP target from op_a —
+//     and drives the front-end redirect,
 //   - narrows the control bundle to the ctrl_mem + ctrl_wb subsets and
 //     latches the EX/MEM register under the back-pressure handshake.
 //
-// This is the straight-line slice: it computes, forwards flags, and
-// advances. Branch resolution (target + squash/redirect), the
-// drain-commit FSM, and the divmul start/busy handshake are layered on
-// in later steps; the ID/EX inputs and EX-internal state those need are
-// added with them, so the port list here is the straight-line subset.
+// The drain-commit FSM (ERET/WRSYS) and the divmul start/busy handshake
+// are not present yet; the ID/EX inputs and EX-internal state they need
+// arrive with them, so the port list is the compute + branch-resolution
+// subset.
 //
 // Flag bypass boundary: the youngest producer ahead of the EX reader is
 // the EX/MEM-stage instruction, which is exactly what this stage latched
@@ -36,6 +38,7 @@ module penumbra2_ex_stage
     input  logic [31:0]           i_op_a,
     input  logic [31:0]           i_op_b,
     input  logic [31:0]           i_store_data,
+    input  logic [3:0]            i_cond,           // branch condition (Format B)
     input  logic [MEM_OP_W-1:0]   i_mem_op,
     input  logic [1:0]            i_mem_size,
     input  logic                  i_sign_ext,
@@ -49,6 +52,7 @@ module penumbra2_ex_stage
     input  logic [SB_IDX_W-1:0]   i_phys_dst_hi,
     input  logic                  i_phys_dst_hi_en,
     input  logic [31:0]           i_pc,
+    input  logic [31:0]           i_next_pc,        // PC + 4: BL/JALR link value
     input  logic                  i_valid,          // 0 = bubble in
     input  logic                  i_fault_pending,
     input  logic [3:0]            i_fault_vec,
@@ -62,6 +66,10 @@ module penumbra2_ex_stage
     input  logic                  i_stall_in,        // MEM cannot accept this cycle
     input  logic                  i_bubble,          // squash this insn (fault flush)
     output logic                  o_stall,           // back-pressure to ID
+
+    // ── Branch resolution (to IF: redirect + squash IF1/IF2/ID) ──
+    output logic                  o_branch_taken,    // redirect the front-end this cycle
+    output logic [31:0]           o_branch_target,   // PC to redirect to
 
     // ── EX/MEM register (to MEM) ─────────────────────────────────
     output logic [OPC_W-1:0]      o_op_class,
@@ -90,11 +98,9 @@ module penumbra2_ex_stage
     // The MEM producer is this stage's own registered output: the
     // EX/MEM slot is the instruction now in MEM. A bubble or faulting
     // slot is not a committed flag writer, so it is gated off here.
-    // Only the carry bit feeds the ALU here; the N/Z/V bits feed the
-    // branch-condition evaluation added with branch resolution.
-    /* verilator lint_off UNUSEDSIGNAL */
+    // The carry bit feeds the ALU (ADC/SBC); all four bits feed the
+    // branch-condition evaluation below.
     logic [3:0] fwd_flags;
-    /* verilator lint_on UNUSEDSIGNAL */
     logic       mem_writes_flags;
     assign mem_writes_flags = o_flag_we & o_valid & ~o_fault_pending;
 
@@ -130,6 +136,59 @@ module penumbra2_ex_stage
     );
 
     assign alu_flags = {alu_v, alu_c, alu_z, alu_n};
+
+    // ── Branch resolution ────────────────────────────────────────
+    // EX resolves every control transfer. The condition is evaluated
+    // against the forwarded NZCV by gen1's cond_eval (reused unchanged —
+    // the cond encoding is shared ISA). For Format B the ALU already
+    // computed the target (PC + offset) as its result; JMP/JALR carry
+    // the target register in op_a. BL and JALR additionally link PC+4
+    // into R13 — that link value, not the ALU result, must reach WB.
+    logic cond_taken;
+    cond_eval u_cond_eval (
+        .i_flag_n(fwd_flags[0]),
+        .i_flag_z(fwd_flags[1]),
+        .i_flag_c(fwd_flags[2]),
+        .i_flag_v(fwd_flags[3]),
+        .i_cond(i_cond),
+        .o_taken(cond_taken)
+    );
+
+    // Link-value mux: a linking control transfer (BL / JALR — the only
+    // branch/JMP forms with gpr_we) writes PC+4 to R13, so its EX/MEM
+    // result is next_pc; everything else keeps the ALU result (which is
+    // the load/store EA for memory ops and the value for ALU ops).
+    logic        is_link;
+    logic [31:0] result_value;
+    assign is_link      = (i_op_class == OPC_BRANCH || i_op_class == OPC_JMP) & i_gpr_we;
+    assign result_value = is_link ? i_next_pc : alu_result;
+
+    // branch_redirect / branch_target are the resolution proper.
+    logic        branch_redirect;
+    logic [31:0] branch_target;
+
+    always_comb begin
+        case (i_op_class)
+            OPC_JMP: begin
+                branch_redirect = 1'b1;
+                branch_target   = i_op_a;
+            end
+            OPC_BRANCH: begin
+                branch_redirect = cond_taken;
+                branch_target   = alu_result;
+            end
+            default: begin
+                branch_redirect = 1'b0;
+                branch_target   = 32'b0;
+            end
+        endcase
+    end
+
+    // A taken redirect counts only for a real, non-faulting, un-squashed
+    // branch slot; a bubble or a slot the fault flush is killing must
+    // not steer the front-end.
+    assign o_branch_taken  = branch_redirect & i_valid & ~i_fault_pending & ~i_bubble;
+    assign o_branch_target = branch_target;
 
     // ── Issue / back-pressure control ────────────────────────────
     // EX accepts a new ID/EX instruction every cycle except when MEM
@@ -170,7 +229,7 @@ module penumbra2_ex_stage
                 o_gpr_we         <= i_gpr_we;
                 o_spr_we         <= i_spr_we;
                 o_flag_we        <= i_flag_we;
-                o_result         <= alu_result;
+                o_result         <= result_value;
                 o_store_data     <= i_store_data;
                 o_flag_value     <= alu_flags;
                 o_phys_dst       <= i_phys_dst;
@@ -218,5 +277,14 @@ module penumbra2_ex_stage
     assert property (@(posedge i_clk) disable iff (i_rst)
         (i_stall_in && !i_bubble && o_valid) |=> $stable(o_phys_dst))
         else $error("penumbra2_ex_stage: back-pressure swapped the held EX/MEM slot");
+
+    // EX steers the front-end only for an actual control-transfer
+    // instruction; a redirect resolved from any other op_class is a
+    // branch-resolution bug.
+    always_comb begin
+        assert (!o_branch_taken ||
+                i_op_class == OPC_BRANCH || i_op_class == OPC_JMP)
+            else $error("penumbra2_ex_stage: branch redirect on a non-branch op_class");
+    end
 
 endmodule
