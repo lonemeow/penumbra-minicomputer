@@ -1,0 +1,163 @@
+// penumbra2_wb_stage — Penumbra/2 writeback stage.
+//
+// The pipeline's commit point. Specified by the WB section of
+// doc/internals/penumbra2/pipeline-stages.md plus the writeback rules in
+// regfile.md and hazard-model.md. From the MEM/WB register it:
+//   - drives the single regfile write port (GPR / SP commit),
+//   - sequences a dual-destination write's two registers through that one
+//     port over two consecutive cycles, holding MEM one extra cycle (the
+//     file has no second write port),
+//   - drives the flag (NZCV->SR) and SPR write strobes to their owning
+//     modules,
+//   - exposes its live destinations (o_wb_dst / o_aux_dst) to the ID
+//     re-derive scoreboard, so a dependent reader stalls until the value
+//     has actually landed.
+//
+// The regfile, status_reg (SR/ESR), EPC, and SPR-scratch storage are
+// external modules: WB drives their write strobes, the same split by which
+// ID drives the regfile read ports. There is no write-through — a strobe
+// lands synchronously and a same-cycle ID read still sees the old value
+// (the no-forwarding baseline; the matching extra ID stall is in the
+// scoreboard).
+//
+// Deferred: the fault-commit / save-state path (suppress writes, pulse
+// EPC/ESR/SR/bank, launch the IF vector-fetch FSM) needs the exception
+// unit and IF, which are not wired yet; an assertion fires if a faulting
+// instruction reaches commit here.
+
+module penumbra2_wb_stage
+    import penumbra_pkg::*;
+    import penumbra2_pkg::*;
+(
+    input  logic                  i_clk,
+    input  logic                  i_rst,
+
+    // ── MEM/WB input: the instruction reaching commit ────────────
+    input  logic                  i_gpr_we,
+    input  logic                  i_spr_we,
+    input  logic                  i_flag_we,
+    input  logic [3:0]            i_spr_sel,
+    input  logic [31:0]           i_wb_value,        // GPR/SPR write datum (a dual write's primary value)
+    input  logic [31:0]           i_wb_value_hi,     // a dual write's second (aux) value
+    input  logic [3:0]            i_flag_value,      // NZCV, packed as SR[3:0]
+    input  logic [SB_IDX_W-1:0]   i_phys_dst,
+    input  logic [SB_IDX_W-1:0]   i_phys_dst_hi,
+    input  logic                  i_phys_dst_hi_en,  // set only for a dual-destination write (aux dst present)
+    input  logic                  i_valid,           // 0 = bubble
+    input  logic                  i_fault_pending,   // deferred-fault guard
+
+    // ── Back-pressure (to MEM): the dual-write second-write hold ──
+    output logic                  o_stall,
+
+    // ── Regfile write port (regfile is external) ─────────────────
+    output logic [SB_IDX_W-1:0]   o_wr_idx,
+    output logic [31:0]           o_wr_data,
+    output logic                  o_wr_en,
+
+    // ── Flag + SPR write strobes (status_reg / SPR modules) ──────
+    output logic                  o_flag_we,
+    output logic [3:0]            o_flag_value,
+    output logic                  o_spr_we,
+    output logic [3:0]            o_spr_sel,
+    output logic [31:0]           o_spr_value,
+
+    // ── Scoreboard destination exposure (to ID) ──────────────────
+    output logic [SB_IDX_W-1:0]   o_wb_dst,
+    output logic                  o_wb_dst_en,
+    output logic [SB_IDX_W-1:0]   o_aux_dst,         // the aux dst while a dual write occupies WB
+    output logic                  o_aux_dst_en
+);
+
+    // A dual-destination write — an instruction that commits two registers
+    // through the single write port over two cycles. Its aux-dst enable
+    // marks it (and implies gpr_we); it occupies WB for both cycles.
+    logic wb_dual_write;
+    assign wb_dual_write = i_valid & i_phys_dst_hi_en;
+
+    // ── Flag + SPR write strobes ─────────────────────────────────
+    // Passive strobes to the external SR / SPR storage — no local state.
+    // (a dual write holds flag_we across both its WB cycles, re-writing the
+    // same NZCV; idempotent — and it has spr_we = 0, so the SPR strobe is
+    // quiet across both.)
+    assign o_flag_value = i_flag_value;
+    assign o_flag_we    = i_valid & i_flag_we;
+    assign o_spr_sel    = i_spr_sel;
+    assign o_spr_value  = i_wb_value;
+    assign o_spr_we     = i_valid & i_spr_we;
+
+    // ── Scoreboard destination exposure ──────────────────────────
+    // The ID re-derive hazard check reads WB's live destinations: a GPR
+    // commit exposes the primary dst; a dual write additionally exposes the
+    // aux dst. Both hold across the two WB cycles (MEM is back-pressured, so
+    // the MEM/WB register is unchanged), so the two valid bits return
+    // together only once the instruction leaves WB.
+    assign o_wb_dst     = i_phys_dst;
+    assign o_wb_dst_en  = i_valid & i_gpr_we;
+    assign o_aux_dst    = i_phys_dst_hi;
+    assign o_aux_dst_en = wb_dual_write;
+
+    // ── Regfile write port + dual-write sequencing ───────────────
+    // A normal commit is one GPR write. A dual write replaces it with a
+    // two-cycle primary-then-aux sequence through the same port, holding MEM
+    // one extra cycle. writing_hi is the FF that tells the two cycles apart.
+    logic [SB_IDX_W-1:0] wr_idx;
+    logic [31:0]         wr_data;
+    logic                wr_en;
+    logic                writing_hi;
+    logic                next_writing_hi;
+
+    always_ff @(posedge i_clk) begin
+        if (i_rst) writing_hi <= 1'b0;
+        else       writing_hi <= next_writing_hi;
+    end
+
+    always_comb begin
+        // Normal single GPR commit (also a dual write's first/primary cycle:
+        // its primary dst / value are i_phys_dst / i_wb_value, the defaults
+        // below).
+        if (!writing_hi) begin
+            wr_idx          = i_phys_dst;
+            wr_data         = i_wb_value;
+            wr_en           = i_valid & i_gpr_we;
+            o_stall         = wb_dual_write;
+            next_writing_hi = wb_dual_write;
+        end else begin
+            wr_idx          = i_phys_dst_hi;
+            wr_data         = i_wb_value_hi;
+            wr_en           = i_valid & i_gpr_we;
+            o_stall         = 1'b0;
+            next_writing_hi = 1'b0;
+        end
+    end
+
+    assign o_wr_idx  = wr_idx;
+    assign o_wr_data = wr_data;
+    assign o_wr_en   = wr_en;
+
+    // ══════════════════════════════════════════════════════════
+    // Assertions — sim-only (Verilator --assert); stripped at synth.
+    // ══════════════════════════════════════════════════════════
+
+    // Deferred: a faulting instruction must not retire through the skeleton
+    // — the save-state / vector-fetch path is not wired yet.
+    always_comb begin
+        assert (!(i_valid && i_fault_pending))
+            else $error("penumbra2_wb_stage: faulting instruction reached the skeleton");
+    end
+
+    // o_stall is the dual-write second-write hold only; nothing else back-
+    // pressures MEM from WB.
+    always_comb begin
+        assert (!o_stall || wb_dual_write)
+            else $error("penumbra2_wb_stage: stall asserted outside a dual-destination writeback");
+    end
+
+    // The second-write cycle only happens while a dual write occupies WB; if
+    // MEM were not held, the aux write would land on some other
+    // instruction's destination.
+    always_comb begin
+        assert (!writing_hi || wb_dual_write)
+            else $error("penumbra2_wb_stage: aux write without a dual write in WB");
+    end
+
+endmodule
