@@ -1,15 +1,13 @@
 // Verilator testbench for penumbra2_wb_stage (commit point).
 //
-// Drives the MEM/WB input and checks the architectural write strobes, the
-// scoreboard destination exposure, and the dual-write sequencing against
-// the WB-stage contract in doc/internals/penumbra2/{pipeline-stages,
-// regfile,hazard-model}.md:
+// Drives the MEM/WB input and checks the architectural write strobes and
+// the dual-write sequencing against the WB-stage contract in
+// doc/internals/penumbra2/{pipeline-stages,regfile,hazard-model}.md:
 //   - reset / a bubble drives no writes
-//   - a normal GPR commit drives the regfile write port + exposes its dst
+//   - a normal GPR commit drives the regfile write port
 //   - an SPR / flag-only commit drives only its own strobe
 //   - a dual-destination write sequences primary-then-aux through the one
-//     write port over two cycles, asserts o_stall on the first, and holds
-//     both scoreboard exposures across both cycles (they drop together)
+//     write port over two cycles, asserting o_stall on the first
 //
 // The deferred-fault guard (no faulting instruction may retire here) is an
 // `always_comb assert`; a failed $error aborts the sim (exit 1). Run
@@ -53,8 +51,6 @@ int main(int argc, char** argv) {
     dut->eval();
     check("reset_wr_en",     dut->o_wr_en, 0);
     check("reset_stall",     dut->o_stall, 0);
-    check("reset_wb_dst_en", dut->o_wb_dst_en, 0);
-    check("reset_aux_en",    dut->o_aux_dst_en, 0);
 
     // ── Normal GPR commit: write port + dst exposure, no stall ───
     clear(dut);
@@ -67,9 +63,6 @@ int main(int argc, char** argv) {
     check("gpr_wr_data",   dut->o_wr_data, 0xCAFE0000);
     check("gpr_flag_we",   dut->o_flag_we, 1);
     check("gpr_flag_val",  dut->o_flag_value, 0x5);
-    check("gpr_wb_dst",    dut->o_wb_dst, 7);
-    check("gpr_wb_dst_en", dut->o_wb_dst_en, 1);
-    check("gpr_aux_en",    dut->o_aux_dst_en, 0);
     check("gpr_spr_we",    dut->o_spr_we, 0);
     check("gpr_no_stall",  dut->o_stall, 0);
     // A single write must not arm a phantom second cycle.
@@ -86,7 +79,6 @@ int main(int argc, char** argv) {
     check("spr_sel",    dut->o_spr_sel, 3);
     check("spr_value",  dut->o_spr_value, 0xDEADBEEF);
     check("spr_wr_en",  dut->o_wr_en, 0);
-    check("spr_wb_en",  dut->o_wb_dst_en, 0);
 
     // ── Flag-only commit (e.g. CMP): only the flag strobe ────────
     clear(dut);
@@ -102,7 +94,6 @@ int main(int argc, char** argv) {
     dut->i_valid = 0; dut->i_gpr_we = 1; dut->i_phys_dst = 5; dut->i_flag_we = 1;
     dut->eval();
     check("bubble_wr_en",  dut->o_wr_en, 0);
-    check("bubble_wb_en",  dut->o_wb_dst_en, 0);
     check("bubble_flag_we", dut->o_flag_we, 0);
 
     // ── Dual-destination write: primary→aux over two cycles ──────
@@ -114,29 +105,21 @@ int main(int argc, char** argv) {
     dut->i_phys_dst_aux = 2; dut->i_wb_value_aux = 0x33334444;  // aux (Rdh / high)
     dut->i_phys_dst_aux_en = 1;
     dut->i_flag_we = 1; dut->i_flag_value = 0x3;
-    // Cycle 1 — primary write, hold MEM, both dsts exposed.
+    // Cycle 1 — primary write, hold MEM.
     dut->eval();
     check("dual_lo_wr_en",   dut->o_wr_en, 1);
     check("dual_lo_wr_idx",  dut->o_wr_idx, 1);
     check("dual_lo_wr_data", dut->o_wr_data, 0x11112222);
     check("dual_lo_stall",   dut->o_stall, 1);
-    check("dual_lo_wb_dst",  dut->o_wb_dst, 1);
-    check("dual_lo_wb_en",   dut->o_wb_dst_en, 1);
-    check("dual_lo_aux_dst", dut->o_aux_dst, 2);
-    check("dual_lo_aux_en",  dut->o_aux_dst_en, 1);
-    // Cycle 2 — aux write, release; both dsts still exposed.
+    // Cycle 2 — aux write, release.
     tick(dut); dut->eval();
     check("dual_hi_wr_en",   dut->o_wr_en, 1);
     check("dual_hi_wr_idx",  dut->o_wr_idx, 2);
     check("dual_hi_wr_data", dut->o_wr_data, 0x33334444);
     check("dual_hi_release", dut->o_stall, 0);
-    check("dual_hi_wb_en",   dut->o_wb_dst_en, 1);
-    check("dual_hi_aux_en",  dut->o_aux_dst_en, 1);
-    // Cycle 3 — the dual write leaves WB; both exposures drop together.
+    // Cycle 3 — the dual write leaves WB.
     tick(dut); clear(dut); dut->eval();
     check("dual_done_wr_en", dut->o_wr_en, 0);
-    check("dual_done_wb_en", dut->o_wb_dst_en, 0);
-    check("dual_done_aux_en", dut->o_aux_dst_en, 0);
     check("dual_done_stall", dut->o_stall, 0);
 
     // ── Deferred-fault guard demo (opt-in, aborts the sim) ───────

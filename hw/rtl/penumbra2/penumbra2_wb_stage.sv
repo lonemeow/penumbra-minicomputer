@@ -8,10 +8,11 @@
 //     port over two consecutive cycles, holding MEM one extra cycle (the
 //     file has no second write port),
 //   - drives the flag (NZCV->SR) and SPR write strobes to their owning
-//     modules,
-//   - exposes its live destinations (o_wb_dst / o_aux_dst) to the ID
-//     re-derive scoreboard, so a dependent reader stalls until the value
-//     has actually landed.
+//     modules.
+//
+// WB's pending writeback destinations are observable directly from the
+// MEM/WB register, so the scoreboard's view of them is derived by the
+// integration rather than exported from here.
 //
 // The regfile, status_reg (SR/ESR), EPC, and SPR-scratch storage are
 // external modules: WB drives their write strobes, the same split by which
@@ -59,13 +60,7 @@ module penumbra2_wb_stage
     output logic [3:0]            o_flag_value,
     output logic                  o_spr_we,
     output logic [3:0]            o_spr_sel,
-    output logic [31:0]           o_spr_value,
-
-    // ── Scoreboard destination exposure (to ID) ──────────────────
-    output logic [SB_IDX_W-1:0]   o_wb_dst,
-    output logic                  o_wb_dst_en,
-    output logic [SB_IDX_W-1:0]   o_aux_dst,         // the aux dst while a dual write occupies WB
-    output logic                  o_aux_dst_en
+    output logic [31:0]           o_spr_value
 );
 
     // A dual-destination write — an instruction that commits two registers
@@ -84,17 +79,6 @@ module penumbra2_wb_stage
     assign o_spr_sel    = i_spr_sel;
     assign o_spr_value  = i_wb_value;
     assign o_spr_we     = i_valid & i_spr_we;
-
-    // ── Scoreboard destination exposure ──────────────────────────
-    // The ID re-derive hazard check reads WB's live destinations: a GPR
-    // commit exposes the primary dst; a dual write additionally exposes the
-    // aux dst. Both hold across the two WB cycles (MEM is back-pressured, so
-    // the MEM/WB register is unchanged), so the two valid bits return
-    // together only once the instruction leaves WB.
-    assign o_wb_dst     = i_phys_dst;
-    assign o_wb_dst_en  = i_valid & i_gpr_we;
-    assign o_aux_dst    = i_phys_dst_aux;
-    assign o_aux_dst_en = wb_dual_write;
 
     // ── Regfile write port + dual-write sequencing ───────────────
     // A normal commit is one GPR write. A dual write replaces it with a
