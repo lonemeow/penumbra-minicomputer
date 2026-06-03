@@ -140,23 +140,9 @@ static MachineInstr *skipDebugInstrs(MachineInstr *MI) {
 bool matchSinkPtrAddPastUse(MachineInstr &MI, MachineRegisterInfo &MRI) {
   assert(MI.getOpcode() == TargetOpcode::G_PTR_ADD);
 
-  // TODO(human): decide whether to sink this G_PTR_ADD past the next
-  // instruction.  Inputs you have:
-  //   - `MI.getOperand(0).getReg()` — Dst (= %new), must NOT appear in
-  //     the next instruction's uses (would break SSA after move).
-  //   - `MI.getOperand(1).getReg()` — Src (= %old), must appear in the
-  //     next instruction's uses (otherwise the swap is pure churn).
-  //   - The next non-debug instruction (use `skipDebugInstrs`).
-  //
-  // Constraints:
-  //   - Reject if no next instruction (end of basic block).
-  //   - Reject unless the next instruction is one of:
-  //     G_LOAD, G_STORE, G_ZEXTLOAD, G_SEXTLOAD.
-  //   - Reject if the next instruction uses Dst (`%new`).
-  //   - Match only if the next instruction uses Src (`%old`).
-  //
-  // Walk the next instruction's `uses()` once and record both flags.
-
+  // Match only when the immediately-following non-debug instruction is a
+  // load/store that uses Src (%old) and not Dst (%new); walk its uses once
+  // to record both flags.
   MachineInstr *Next = skipDebugInstrs(MI.getNextNode());
   if (!Next)
     return false;
