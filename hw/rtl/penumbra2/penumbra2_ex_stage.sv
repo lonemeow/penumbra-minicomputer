@@ -54,8 +54,8 @@ module penumbra2_ex_stage
     input  logic                  i_spr_we,
     input  logic                  i_flag_we,
     input  logic [SB_IDX_W-1:0]   i_phys_dst,
-    input  logic [SB_IDX_W-1:0]   i_phys_dst_hi,
-    input  logic                  i_phys_dst_hi_en,
+    input  logic [SB_IDX_W-1:0]   i_phys_dst_aux,
+    input  logic                  i_phys_dst_aux_en,
     input  logic [31:0]           i_pc,
     input  logic [31:0]           i_next_pc,        // PC + 4: BL/JALR link value
     input  logic                  i_valid,          // 0 = bubble in
@@ -91,12 +91,12 @@ module penumbra2_ex_stage
     output logic                  o_spr_we,
     output logic                  o_flag_we,
     output logic [31:0]           o_result,
-    output logic [31:0]           o_result_hi,       // divmul high half (Rdh); don't-care otherwise
+    output logic [31:0]           o_result_aux,      // a dual write's second (aux) result; don't-care otherwise
     output logic [31:0]           o_store_data,
     output logic [3:0]            o_flag_value,      // NZCV, packed as SR[3:0]
     output logic [SB_IDX_W-1:0]   o_phys_dst,
-    output logic [SB_IDX_W-1:0]   o_phys_dst_hi,
-    output logic                  o_phys_dst_hi_en,
+    output logic [SB_IDX_W-1:0]   o_phys_dst_aux,
+    output logic                  o_phys_dst_aux_en,
     output logic [31:0]           o_pc,
     output logic                  o_valid,
     output logic                  o_fault_pending,
@@ -231,7 +231,7 @@ module penumbra2_ex_stage
     // the ALU). EX holds i_start high while the divmul is the EX insn —
     // the unit edge-detects it, so it triggers once — and stalls while
     // o_busy. The cycle o_busy falls, both result halves are valid to
-    // latch (low → result, high → result_hi). A DIV0 never iterates:
+    // latch (low → result, high → result_aux). A DIV0 never iterates:
     // o_fault pulses on the start cycle with o_busy staying low, so it
     // completes in one cycle carrying VEC_ARITH.
     //
@@ -333,31 +333,31 @@ module penumbra2_ex_stage
         end else begin
             o_valid <= next_valid;
             if (advance) begin
-                o_op_class       <= i_op_class;
-                o_mem_op         <= i_mem_op;
-                o_mem_size       <= i_mem_size;
-                o_sign_ext       <= i_sign_ext;
-                o_sys_dev        <= i_sys_dev;
-                o_sys_reg        <= i_sys_reg;
-                o_spr_sel        <= i_spr_sel;
-                o_gpr_we         <= i_gpr_we;
-                o_spr_we         <= i_spr_we;
-                o_flag_we        <= i_flag_we;
+                o_op_class        <= i_op_class;
+                o_mem_op          <= i_mem_op;
+                o_mem_size        <= i_mem_size;
+                o_sign_ext        <= i_sign_ext;
+                o_sys_dev         <= i_sys_dev;
+                o_sys_reg         <= i_sys_reg;
+                o_spr_sel         <= i_spr_sel;
+                o_gpr_we          <= i_gpr_we;
+                o_spr_we          <= i_spr_we;
+                o_flag_we         <= i_flag_we;
                 // divmul drives both writeback halves and N/Z (C=V=0);
                 // every other op uses the ALU result + flags. A divmul
                 // only ever advances once its results are valid.
-                o_result         <= is_divmul ? dm_lo : result_value;
-                o_result_hi      <= is_divmul ? dm_hi : 32'b0;
-                o_store_data     <= i_store_data;
-                o_flag_value     <= is_divmul ? {2'b00, dm_z, dm_n} : alu_flags;
-                o_phys_dst       <= i_phys_dst;
-                o_phys_dst_hi    <= i_phys_dst_hi;
-                o_phys_dst_hi_en <= i_phys_dst_hi_en;
-                o_pc             <= i_pc;
+                o_result          <= is_divmul ? dm_lo : result_value;
+                o_result_aux      <= is_divmul ? dm_hi : 32'b0;
+                o_store_data      <= i_store_data;
+                o_flag_value      <= is_divmul ? {2'b00, dm_z, dm_n} : alu_flags;
+                o_phys_dst        <= i_phys_dst;
+                o_phys_dst_aux    <= i_phys_dst_aux;
+                o_phys_dst_aux_en <= i_phys_dst_aux_en;
+                o_pc              <= i_pc;
                 // DIV0 raises VEC_ARITH here (the divmul never set an IF
                 // fault, so it cannot collide with i_fault_pending).
-                o_fault_pending  <= i_fault_pending | (is_divmul & dm_fault);
-                o_fault_vec      <= (is_divmul & dm_fault) ? VEC_ARITH : i_fault_vec;
+                o_fault_pending   <= i_fault_pending | (is_divmul & dm_fault);
+                o_fault_vec       <= (is_divmul & dm_fault) ? VEC_ARITH : i_fault_vec;
             end
         end
     end
@@ -366,7 +366,7 @@ module penumbra2_ex_stage
     // Assertions — sim-only (Verilator --assert); stripped at synth.
     // EX-owned behavioral invariants the structure does not enforce.
     // Control-bundle consistency (gpr_we needs a dst, is_trap only on
-    // SYSCALL/BREAK, dst_hi only on divmul, …) is owned and asserted in
+    // SYSCALL/BREAK, dst_aux only on a dual-destination op, …) is owned and asserted in
     // penumbra2_decode, so it is not re-checked here.
     // ══════════════════════════════════════════════════════════
     always_comb begin

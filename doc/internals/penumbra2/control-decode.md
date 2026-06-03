@@ -247,7 +247,7 @@ subsets ([Decode once in ID, narrow downstream](#decode-once-in-id-narrow-downst
 | `flag_we` | 1 | writes SR flags at WB (= `writes_flags`) |
 | `phys_src_a/b` | 5 each | physical scoreboard source entries ([ISA → physical register mapping](./hazard-model.md#isa--physical-register-mapping)) |
 | `phys_dst` | 5 | physical destination entry |
-| `phys_dst_hi` | 5 | divmul second destination (`Rdh`) |
+| `phys_dst_aux` | 5 | divmul second destination (`Rdh`) |
 | `cross_bank` | 1 | SPR-USP cross-bank access ([The cross-bank SPR-USP case](./hazard-model.md#the-cross-bank-spr-usp-case)) |
 | `illegal` | 1 | no legal opcode/operand form ([Exception-detect signals from decode](#exception-detect-signals-from-decode)) |
 | `priv_fault` | 1 | privileged op with `SR.S=0` ([Exception-detect signals from decode](#exception-detect-signals-from-decode)) |
@@ -265,7 +265,7 @@ entries and selects operand sources.
 - **ISA→physical mapping** (R14→USP/SSP by `SR.S`; SPR-USP cross-bank;
   R0/R15 exclusion) is specified in
   [ISA → physical register mapping](./hazard-model.md#isa--physical-register-mapping)
-  and produces `phys_src_a/b`, `phys_dst`, `phys_dst_hi`, `cross_bank`.
+  and produces `phys_src_a/b`, `phys_dst`, `phys_dst_aux`, `cross_bank`.
   This doc does not restate that mapping.
 - **R0** reads as zero and discards writes; the decoder emits the R0
   index but downstream the regfile forces 0 on read and drops the
@@ -275,7 +275,7 @@ entries and selects operand sources.
   regfile port; R15 is not scoreboarded.
 - **`Rdh`** (the divmul high-half result — product high half for
   MUL, remainder for DIV/DIVU) is **write-only**: `IR[15:12]`
-  selects it as the second destination `phys_dst_hi` ([The ID control bundle](#the-id-control-bundle)),
+  selects it as the second destination `phys_dst_aux` ([The ID control bundle](#the-id-control-bundle)),
   not as a source. divmul reads only `op_a` (Rd) and `op_b` (Rs) —
   there is no third *input* operand and no 64/32 narrowing form;
   divides are always 32/32. `Rdh = R0` discards the high half (the

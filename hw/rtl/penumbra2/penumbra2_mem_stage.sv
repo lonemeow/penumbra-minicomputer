@@ -14,14 +14,14 @@
 //
 // Handshake mirrors the EX stage: MEM has no stall source of its own yet, so
 // it back-pressures EX only when WB back-pressures it (i_stall_in) — which WB
-// does for the extra cycle a divmul's two-register writeback takes. i_bubble
+// does for the extra cycle a dual-destination writeback takes. i_bubble
 // (the fault-commit flush from WB) forces the MEM/WB slot to a bubble and wins
 // over everything.
 //
 // The writeback value reaching WB is a single datum (o_wb_value): the doc's
 // gpr_value and spr_value collapse here because no instruction both writes a
 // GPR and writes an SPR — WB routes the one value by the (mutually exclusive)
-// gpr_we / spr_we bits. o_wb_value_hi carries the divmul high half (Rdh).
+// gpr_we / spr_we bits. o_wb_value_aux carries a dual write's second value.
 
 module penumbra2_mem_stage
     import penumbra_pkg::*;
@@ -37,12 +37,12 @@ module penumbra2_mem_stage
     input  logic                  i_spr_we,
     input  logic                  i_flag_we,
     input  logic [3:0]            i_spr_sel,
-    input  logic [31:0]           i_result,          // ALU result / link value / divmul low half
-    input  logic [31:0]           i_result_hi,       // divmul high half (Rdh); don't-care otherwise
+    input  logic [31:0]           i_result,          // ALU result / link value / a dual write's primary value
+    input  logic [31:0]           i_result_aux,      // a dual write's second (aux) value; don't-care otherwise
     input  logic [3:0]            i_flag_value,      // NZCV, packed as SR[3:0]
     input  logic [SB_IDX_W-1:0]   i_phys_dst,
-    input  logic [SB_IDX_W-1:0]   i_phys_dst_hi,
-    input  logic                  i_phys_dst_hi_en,
+    input  logic [SB_IDX_W-1:0]   i_phys_dst_aux,
+    input  logic                  i_phys_dst_aux_en,
     input  logic [31:0]           i_pc,
     input  logic                  i_valid,           // 0 = bubble in
     input  logic                  i_fault_pending,
@@ -58,12 +58,12 @@ module penumbra2_mem_stage
     output logic                  o_spr_we,
     output logic                  o_flag_we,
     output logic [3:0]            o_spr_sel,
-    output logic [31:0]           o_wb_value,        // GPR-or-SPR writeback datum (low half for divmul)
-    output logic [31:0]           o_wb_value_hi,     // divmul high half (Rdh); don't-care otherwise
+    output logic [31:0]           o_wb_value,        // GPR-or-SPR writeback datum (a dual write's primary value)
+    output logic [31:0]           o_wb_value_aux,    // a dual write's second (aux) value; don't-care otherwise
     output logic [3:0]            o_flag_value,
     output logic [SB_IDX_W-1:0]   o_phys_dst,
-    output logic [SB_IDX_W-1:0]   o_phys_dst_hi,
-    output logic                  o_phys_dst_hi_en,
+    output logic [SB_IDX_W-1:0]   o_phys_dst_aux,
+    output logic                  o_phys_dst_aux_en,
     output logic [31:0]           o_pc,
     output logic                  o_valid,
     output logic                  o_fault_pending,
@@ -118,19 +118,19 @@ module penumbra2_mem_stage
         end else begin
             o_valid <= next_valid;
             if (advance) begin
-                o_gpr_we         <= i_gpr_we;
-                o_spr_we         <= i_spr_we;
-                o_flag_we        <= i_flag_we;
-                o_spr_sel        <= i_spr_sel;
-                o_wb_value       <= wb_value;
-                o_wb_value_hi    <= i_result_hi;
-                o_flag_value     <= i_flag_value;
-                o_phys_dst       <= i_phys_dst;
-                o_phys_dst_hi    <= i_phys_dst_hi;
-                o_phys_dst_hi_en <= i_phys_dst_hi_en;
-                o_pc             <= i_pc;
-                o_fault_pending  <= i_fault_pending;
-                o_fault_vec      <= i_fault_vec;
+                o_gpr_we          <= i_gpr_we;
+                o_spr_we          <= i_spr_we;
+                o_flag_we         <= i_flag_we;
+                o_spr_sel         <= i_spr_sel;
+                o_wb_value        <= wb_value;
+                o_wb_value_aux    <= i_result_aux;
+                o_flag_value      <= i_flag_value;
+                o_phys_dst        <= i_phys_dst;
+                o_phys_dst_aux    <= i_phys_dst_aux;
+                o_phys_dst_aux_en <= i_phys_dst_aux_en;
+                o_pc              <= i_pc;
+                o_fault_pending   <= i_fault_pending;
+                o_fault_vec       <= i_fault_vec;
             end
         end
     end

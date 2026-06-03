@@ -84,8 +84,8 @@ module penumbra2_id_stage
     output logic                  o_flag_we,
     output logic                  o_is_trap,
     output logic [SB_IDX_W-1:0]   o_phys_dst,
-    output logic [SB_IDX_W-1:0]   o_phys_dst_hi,
-    output logic                  o_phys_dst_hi_en,  // Rdh present (divmul) — drives the scoreboard aux
+    output logic [SB_IDX_W-1:0]   o_phys_dst_aux,
+    output logic                  o_phys_dst_aux_en,  // aux dst present — drives the scoreboard aux
     output logic [31:0]           o_pc,
     output logic [31:0]           o_next_pc,
     output logic                  o_valid,
@@ -95,10 +95,10 @@ module penumbra2_id_stage
 
     // ── Decode (combinational) ───────────────────────────────────
     logic [OPC_W-1:0]    d_op_class;
-    logic [3:0]          d_src_a_sel, d_src_b_sel, d_dst_sel, d_dst_hi_sel;
+    logic [3:0]          d_src_a_sel, d_src_b_sel, d_dst_sel, d_dst_aux_sel;
     logic                d_src_a_is_spr, d_src_a_en;
     logic                d_src_b_is_spr, d_src_b_en;
-    logic                d_dst_is_spr, d_dst_en, d_dst_hi_en;
+    logic                d_dst_is_spr, d_dst_en, d_dst_aux_en;
     logic [ALU_OP_W-1:0] d_alu_op;
     logic [1:0]          d_divmul_op;
     logic                d_a_from_pc, d_b_from_imm;
@@ -120,7 +120,7 @@ module penumbra2_id_stage
         .o_src_a_sel(d_src_a_sel), .o_src_a_is_spr(d_src_a_is_spr), .o_src_a_en(d_src_a_en),
         .o_src_b_sel(d_src_b_sel), .o_src_b_is_spr(d_src_b_is_spr), .o_src_b_en(d_src_b_en),
         .o_dst_sel(d_dst_sel),     .o_dst_is_spr(d_dst_is_spr),     .o_dst_en(d_dst_en),
-        .o_dst_hi_sel(d_dst_hi_sel), .o_dst_hi_en(d_dst_hi_en),
+        .o_dst_aux_sel(d_dst_aux_sel), .o_dst_aux_en(d_dst_aux_en),
         .o_alu_op(d_alu_op), .o_divmul_op(d_divmul_op),
         .o_a_from_pc(d_a_from_pc), .o_b_from_imm(d_b_from_imm),
         .o_imm(d_imm), .o_cond(d_cond),
@@ -134,8 +134,8 @@ module penumbra2_id_stage
     );
 
     // ── ISA→physical register mapping (combinational) ────────────
-    logic [SB_IDX_W-1:0] phys_src_a, phys_src_b, phys_dst, phys_dst_hi;
-    logic                phys_src_a_en, phys_src_b_en, phys_dst_en, phys_dst_hi_en;
+    logic [SB_IDX_W-1:0] phys_src_a, phys_src_b, phys_dst, phys_dst_aux;
+    logic                phys_src_a_en, phys_src_b_en, phys_dst_en, phys_dst_aux_en;
     // cross_bank is informational: physical addressing already maps an
     // SPR-USP access to SB_USP, so no consumer here needs it.
     /* verilator lint_off UNUSEDSIGNAL */
@@ -147,11 +147,11 @@ module penumbra2_id_stage
         .i_src_a_sel(d_src_a_sel), .i_src_a_is_spr(d_src_a_is_spr), .i_src_a_en(d_src_a_en),
         .i_src_b_sel(d_src_b_sel), .i_src_b_is_spr(d_src_b_is_spr), .i_src_b_en(d_src_b_en),
         .i_dst_sel(d_dst_sel),     .i_dst_is_spr(d_dst_is_spr),     .i_dst_en(d_dst_en),
-        .i_dst_hi_sel(d_dst_hi_sel), .i_dst_hi_en(d_dst_hi_en),
+        .i_dst_aux_sel(d_dst_aux_sel), .i_dst_aux_en(d_dst_aux_en),
         .o_src_a(phys_src_a), .o_src_a_en(phys_src_a_en),
         .o_src_b(phys_src_b), .o_src_b_en(phys_src_b_en),
         .o_dst(phys_dst),     .o_dst_en(phys_dst_en),
-        .o_dst_hi(phys_dst_hi), .o_dst_hi_en(phys_dst_hi_en),
+        .o_dst_aux(phys_dst_aux), .o_dst_aux_en(phys_dst_aux_en),
         .o_cross_bank(cross_bank)
     );
 
@@ -259,8 +259,8 @@ module penumbra2_id_stage
                 // could otherwise decode as SYSCALL/BREAK).
                 o_is_trap          <= d_is_trap & ~insn_fault_pending;
                 o_phys_dst         <= phys_dst;
-                o_phys_dst_hi      <= phys_dst_hi;
-                o_phys_dst_hi_en   <= phys_dst_hi_en;
+                o_phys_dst_aux     <= phys_dst_aux;
+                o_phys_dst_aux_en  <= phys_dst_aux_en;
                 o_pc               <= i_pc;
                 o_next_pc          <= i_next_pc;
                 o_fault_pending    <= insn_fault_pending;

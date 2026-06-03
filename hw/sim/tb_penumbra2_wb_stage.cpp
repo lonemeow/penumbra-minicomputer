@@ -37,8 +37,8 @@ static void tick(Vpenumbra2_wb_stage* dut) {
 // Reset the per-cycle inputs to a quiet baseline: a bubble, no writes.
 static void clear(Vpenumbra2_wb_stage* dut) {
     dut->i_gpr_we = 0; dut->i_spr_we = 0; dut->i_flag_we = 0; dut->i_spr_sel = 0;
-    dut->i_wb_value = 0; dut->i_wb_value_hi = 0; dut->i_flag_value = 0;
-    dut->i_phys_dst = 0; dut->i_phys_dst_hi = 0; dut->i_phys_dst_hi_en = 0;
+    dut->i_wb_value = 0; dut->i_wb_value_aux = 0; dut->i_flag_value = 0;
+    dut->i_phys_dst = 0; dut->i_phys_dst_aux = 0; dut->i_phys_dst_aux_en = 0;
     dut->i_valid = 0; dut->i_fault_pending = 0;
 }
 
@@ -111,8 +111,8 @@ int main(int argc, char** argv) {
     clear(dut);
     dut->i_valid = 1; dut->i_gpr_we = 1;
     dut->i_phys_dst = 1;    dut->i_wb_value    = 0x11112222;  // primary (Rd / low)
-    dut->i_phys_dst_hi = 2; dut->i_wb_value_hi = 0x33334444;  // aux (Rdh / high)
-    dut->i_phys_dst_hi_en = 1;
+    dut->i_phys_dst_aux = 2; dut->i_wb_value_aux = 0x33334444;  // aux (Rdh / high)
+    dut->i_phys_dst_aux_en = 1;
     dut->i_flag_we = 1; dut->i_flag_value = 0x3;
     // Cycle 1 — primary write, hold MEM, both dsts exposed.
     dut->eval();

@@ -44,8 +44,8 @@ module penumbra2_decode
     output logic [3:0]           o_dst_sel,
     output logic                 o_dst_is_spr,
     output logic                 o_dst_en,
-    output logic [3:0]           o_dst_hi_sel,    // divmul Rdh (write-only GPR)
-    output logic                 o_dst_hi_en,
+    output logic [3:0]           o_dst_aux_sel,    // second (aux) write-only GPR destination
+    output logic                 o_dst_aux_en,
 
     // ── EX datapath controls ─────────────────────────────────────
     output logic [ALU_OP_W-1:0]  o_alu_op,
@@ -156,7 +156,7 @@ module penumbra2_decode
         o_src_a_sel        = 4'd0; o_src_a_is_spr = 1'b0; o_src_a_en = 1'b0;
         o_src_b_sel        = 4'd0; o_src_b_is_spr = 1'b0; o_src_b_en = 1'b0;
         o_dst_sel          = 4'd0; o_dst_is_spr   = 1'b0; o_dst_en   = 1'b0;
-        o_dst_hi_sel       = 4'd0; o_dst_hi_en    = 1'b0;
+        o_dst_aux_sel      = 4'd0; o_dst_aux_en   = 1'b0;
         o_alu_op           = ALU_PASS;
         o_divmul_op        = 2'b00;
         o_a_from_pc        = 1'b0;
@@ -219,7 +219,7 @@ module penumbra2_decode
                         o_src_a_sel  = r_rd; o_src_a_en = 1'b1;   // dividend / multiplicand
                         o_src_b_sel  = r_rs; o_src_b_en = 1'b1;   // divisor / multiplier
                         o_dst_sel    = r_rd; o_dst_en   = 1'b1;   // low half / quotient
-                        o_dst_hi_sel = field_1512; o_dst_hi_en = 1'b1;  // high half / remainder
+                        o_dst_aux_sel = field_1512; o_dst_aux_en = 1'b1;  // high half / remainder
                         o_gpr_we     = 1'b1;
                         o_writes_flags = 1'b1;    // sets N,Z; forces C=V=0 in EX
                         o_alu_op     = ALU_PASS;  // the divmul peer unit owns the result
@@ -436,9 +436,9 @@ module penumbra2_decode
         // illegal and priv_fault are constructed mutually exclusive.
         assert (!(o_illegal && o_priv_fault))
             else $error("penumbra2_decode: illegal and priv_fault both set");
-        // Only divmul carries a second (high-half) destination.
-        assert (!(o_dst_hi_en && o_op_class != OPC_DIVMUL))
-            else $error("penumbra2_decode: dst_hi outside divmul");
+        // Only a dual-destination opcode carries a second (aux) destination.
+        assert (!(o_dst_aux_en && o_op_class != OPC_DIVMUL))
+            else $error("penumbra2_decode: aux dst enabled outside a dual-destination opcode");
         // is_trap belongs only to SYSCALL/BREAK.
         assert (!(o_is_trap && o_op_class != OPC_SYSCALL && o_op_class != OPC_BREAK))
             else $error("penumbra2_decode: is_trap outside SYSCALL/BREAK");

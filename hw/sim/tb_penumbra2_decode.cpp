@@ -157,8 +157,8 @@ int main() {
     check("mul_srca",      dut->o_src_a_sel, 1);
     check("mul_srcb",      dut->o_src_b_sel, 2);
     check("mul_dst",       dut->o_dst_sel, 1);
-    check("mul_dsthi",     dut->o_dst_hi_sel, 3);
-    check("mul_dsthi_en",  dut->o_dst_hi_en, 1);
+    check("mul_dsthi",     dut->o_dst_aux_sel, 3);
+    check("mul_dsthi_en",  dut->o_dst_aux_en, 1);
     check("mul_gpr_we",    dut->o_gpr_we, 1);
     check("mul_wflags",    dut->o_writes_flags, 1);
 

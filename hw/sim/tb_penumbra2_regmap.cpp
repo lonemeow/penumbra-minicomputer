@@ -37,7 +37,7 @@ static void clear(Vpenumbra2_regmap* dut) {
     dut->i_src_a_sel = 0; dut->i_src_a_is_spr = 0; dut->i_src_a_en = 0;
     dut->i_src_b_sel = 0; dut->i_src_b_is_spr = 0; dut->i_src_b_en = 0;
     dut->i_dst_sel = 0;   dut->i_dst_is_spr = 0;   dut->i_dst_en = 0;
-    dut->i_dst_hi_sel = 0; dut->i_dst_hi_en = 0;
+    dut->i_dst_aux_sel = 0; dut->i_dst_aux_en = 0;
 }
 
 int main() {
@@ -112,10 +112,10 @@ int main() {
 
     // ── Divmul Rdh maps as a GPR ─────────────────────────────────
     clear(dut);
-    dut->i_dst_hi_sel = 9; dut->i_dst_hi_en = 1;
+    dut->i_dst_aux_sel = 9; dut->i_dst_aux_en = 1;
     dut->eval();
-    check("dst_hi_maps_gpr", dut->o_dst_hi, 9);
-    check("dst_hi_en", dut->o_dst_hi_en, 1);
+    check("dst_aux_maps_gpr", dut->o_dst_aux, 9);
+    check("dst_aux_en", dut->o_dst_aux_en, 1);
 
     // ── Summary ──────────────────────────────────────────────────
     printf("penumbra2_regmap: %d/%d tests passed\n", tests - errors, tests);

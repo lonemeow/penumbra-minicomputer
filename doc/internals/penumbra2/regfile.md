@@ -313,7 +313,7 @@ no per-register "initialised" tracking is needed in the file itself.
   [SR.S quiescence](./hazard-model.md#srs-quiescence-for-the-decoders-r14-mapping).
 - [ISA→physical mapping](./hazard-model.md#isa--physical-register-mapping)
   / `penumbra2_regmap` — produces the physical indices (`phys_src_a/b`
-  on reads, `phys_dst`/`phys_dst_hi` on writes) that address this file;
+  on reads, `phys_dst`/`phys_dst_aux` on writes) that address this file;
   the cross-bank case is already folded into those indices.
 - [register operand selection](./control-decode.md#register-operand-selection)
   — the operand mux that resolves R15 to the PC, so R15 never reaches

@@ -37,9 +37,9 @@ module penumbra2_regmap
     input  logic [3:0]            i_dst_sel,
     input  logic                  i_dst_is_spr,
     input  logic                  i_dst_en,
-    // Divmul second destination (Rdh) — always a GPR.
-    input  logic [3:0]            i_dst_hi_sel,
-    input  logic                  i_dst_hi_en,
+    // Second (aux) destination — always a GPR.
+    input  logic [3:0]            i_dst_aux_sel,
+    input  logic                  i_dst_aux_en,
 
     // Physical scoreboard entries + their enables.
     output logic [SB_IDX_W-1:0]   o_src_a,
@@ -48,8 +48,8 @@ module penumbra2_regmap
     output logic                  o_src_b_en,
     output logic [SB_IDX_W-1:0]   o_dst,
     output logic                  o_dst_en,
-    output logic [SB_IDX_W-1:0]   o_dst_hi,
-    output logic                  o_dst_hi_en,
+    output logic [SB_IDX_W-1:0]   o_dst_aux,
+    output logic                  o_dst_aux_en,
 
     // SPR-USP cross-bank access (reaches USP while SR.S=1).
     output logic                  o_cross_bank
@@ -97,14 +97,14 @@ module penumbra2_regmap
         return is_spr ? spr_to_phys(sel) : reg_to_phys(sel, sup);
     endfunction
 
-    assign o_src_a    = map_ref(i_src_a_sel, i_src_a_is_spr, i_supervisor);
-    assign o_src_a_en = i_src_a_en;
-    assign o_src_b    = map_ref(i_src_b_sel, i_src_b_is_spr, i_supervisor);
-    assign o_src_b_en = i_src_b_en;
-    assign o_dst      = map_ref(i_dst_sel, i_dst_is_spr, i_supervisor);
-    assign o_dst_en   = i_dst_en;
-    assign o_dst_hi   = reg_to_phys(i_dst_hi_sel, i_supervisor);
-    assign o_dst_hi_en = i_dst_hi_en;
+    assign o_src_a      = map_ref(i_src_a_sel, i_src_a_is_spr, i_supervisor);
+    assign o_src_a_en   = i_src_a_en;
+    assign o_src_b      = map_ref(i_src_b_sel, i_src_b_is_spr, i_supervisor);
+    assign o_src_b_en   = i_src_b_en;
+    assign o_dst        = map_ref(i_dst_sel, i_dst_is_spr, i_supervisor);
+    assign o_dst_en     = i_dst_en;
+    assign o_dst_aux    = reg_to_phys(i_dst_aux_sel, i_supervisor);
+    assign o_dst_aux_en = i_dst_aux_en;
 
     // cross_bank: a live SPR reference to USP. Only RDSPR/WRSPR USP
     // produce this; normal R14 access (is_spr=0) never does.
@@ -127,8 +127,8 @@ module penumbra2_regmap
             else $error("penumbra2_regmap: R15/PC as live GPR source B");
         assert (!(i_dst_en && !i_dst_is_spr && i_dst_sel == REG_PC))
             else $error("penumbra2_regmap: R15/PC as live GPR destination");
-        assert (!(i_dst_hi_en && i_dst_hi_sel == REG_PC))
-            else $error("penumbra2_regmap: R15/PC as divmul high destination");
+        assert (!(i_dst_aux_en && i_dst_aux_sel == REG_PC))
+            else $error("penumbra2_regmap: R15/PC as a second (aux) destination");
 
         // SPR references must name a real SPR (ESR..SCR3 = 0..7);
         // anything else falls through spr_to_phys to entry 0.

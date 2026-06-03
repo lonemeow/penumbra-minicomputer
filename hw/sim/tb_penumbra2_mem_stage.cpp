@@ -44,8 +44,8 @@ static void tick(Vpenumbra2_mem_stage* dut) {
 static void clear(Vpenumbra2_mem_stage* dut) {
     dut->i_op_class = OPC_ALU; dut->i_mem_op = MEM_NONE;
     dut->i_gpr_we = 0; dut->i_spr_we = 0; dut->i_flag_we = 0; dut->i_spr_sel = 0;
-    dut->i_result = 0; dut->i_result_hi = 0; dut->i_flag_value = 0;
-    dut->i_phys_dst = 0; dut->i_phys_dst_hi = 0; dut->i_phys_dst_hi_en = 0;
+    dut->i_result = 0; dut->i_result_aux = 0; dut->i_flag_value = 0;
+    dut->i_phys_dst = 0; dut->i_phys_dst_aux = 0; dut->i_phys_dst_aux_en = 0;
     dut->i_pc = 0; dut->i_valid = 0; dut->i_fault_pending = 0; dut->i_fault_vec = 0;
     dut->i_stall_in = 0; dut->i_bubble = 0;
 }
@@ -76,22 +76,22 @@ int main(int argc, char** argv) {
     check("alu_wb_value",   dut->o_wb_value, 0xCAFEBABE);
     check("alu_flag_value", dut->o_flag_value, 0x5);
     check("alu_phys_dst",   dut->o_phys_dst, 7);
-    check("alu_dst_hi_en",  dut->o_phys_dst_hi_en, 0);
+    check("alu_dst_aux_en",  dut->o_phys_dst_aux_en, 0);
     check("alu_pc",         dut->o_pc, 0xFFFF0100);
     check("alu_fault",      dut->o_fault_pending, 0);
 
     // ── divmul: both writeback halves + Rd/Rdh pass through ──────
     clear(dut);
     dut->i_gpr_we = 1;
-    dut->i_result = 0x11112222; dut->i_result_hi = 0x33334444;
-    dut->i_phys_dst = 1; dut->i_phys_dst_hi = 2; dut->i_phys_dst_hi_en = 1;
+    dut->i_result = 0x11112222; dut->i_result_aux = 0x33334444;
+    dut->i_phys_dst = 1; dut->i_phys_dst_aux = 2; dut->i_phys_dst_aux_en = 1;
     dut->i_valid = 1;
     dut->eval(); tick(dut); dut->eval();
     check("dm_wb_lo",     dut->o_wb_value, 0x11112222);
-    check("dm_wb_hi",     dut->o_wb_value_hi, 0x33334444);
+    check("dm_wb_hi",     dut->o_wb_value_aux, 0x33334444);
     check("dm_phys_dst",  dut->o_phys_dst, 1);
-    check("dm_dst_hi",    dut->o_phys_dst_hi, 2);
-    check("dm_dst_hi_en", dut->o_phys_dst_hi_en, 1);
+    check("dm_dst_aux",    dut->o_phys_dst_aux, 2);
+    check("dm_dst_aux_en", dut->o_phys_dst_aux_en, 1);
 
     // ── WRSPR: value reaches WB on the shared o_wb_value datum ────
     clear(dut);

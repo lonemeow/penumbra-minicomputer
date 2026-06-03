@@ -38,11 +38,11 @@ module penumbra2_wb_stage
     input  logic                  i_flag_we,
     input  logic [3:0]            i_spr_sel,
     input  logic [31:0]           i_wb_value,        // GPR/SPR write datum (a dual write's primary value)
-    input  logic [31:0]           i_wb_value_hi,     // a dual write's second (aux) value
+    input  logic [31:0]           i_wb_value_aux,    // a dual write's second (aux) value
     input  logic [3:0]            i_flag_value,      // NZCV, packed as SR[3:0]
     input  logic [SB_IDX_W-1:0]   i_phys_dst,
-    input  logic [SB_IDX_W-1:0]   i_phys_dst_hi,
-    input  logic                  i_phys_dst_hi_en,  // set only for a dual-destination write (aux dst present)
+    input  logic [SB_IDX_W-1:0]   i_phys_dst_aux,
+    input  logic                  i_phys_dst_aux_en, // set only for a dual-destination write (aux dst present)
     input  logic                  i_valid,           // 0 = bubble
     input  logic                  i_fault_pending,   // deferred-fault guard
 
@@ -72,7 +72,7 @@ module penumbra2_wb_stage
     // through the single write port over two cycles. Its aux-dst enable
     // marks it (and implies gpr_we); it occupies WB for both cycles.
     logic wb_dual_write;
-    assign wb_dual_write = i_valid & i_phys_dst_hi_en;
+    assign wb_dual_write = i_valid & i_phys_dst_aux_en;
 
     // ── Flag + SPR write strobes ─────────────────────────────────
     // Passive strobes to the external SR / SPR storage — no local state.
@@ -93,40 +93,40 @@ module penumbra2_wb_stage
     // together only once the instruction leaves WB.
     assign o_wb_dst     = i_phys_dst;
     assign o_wb_dst_en  = i_valid & i_gpr_we;
-    assign o_aux_dst    = i_phys_dst_hi;
+    assign o_aux_dst    = i_phys_dst_aux;
     assign o_aux_dst_en = wb_dual_write;
 
     // ── Regfile write port + dual-write sequencing ───────────────
     // A normal commit is one GPR write. A dual write replaces it with a
     // two-cycle primary-then-aux sequence through the same port, holding MEM
-    // one extra cycle. writing_hi is the FF that tells the two cycles apart.
+    // one extra cycle. writing_aux is the FF that tells the two cycles apart.
     logic [SB_IDX_W-1:0] wr_idx;
     logic [31:0]         wr_data;
     logic                wr_en;
-    logic                writing_hi;
-    logic                next_writing_hi;
+    logic                writing_aux;
+    logic                next_writing_aux;
 
     always_ff @(posedge i_clk) begin
-        if (i_rst) writing_hi <= 1'b0;
-        else       writing_hi <= next_writing_hi;
+        if (i_rst) writing_aux <= 1'b0;
+        else       writing_aux <= next_writing_aux;
     end
 
     always_comb begin
         // Normal single GPR commit (also a dual write's first/primary cycle:
         // its primary dst / value are i_phys_dst / i_wb_value, the defaults
         // below).
-        if (!writing_hi) begin
+        if (!writing_aux) begin
             wr_idx          = i_phys_dst;
             wr_data         = i_wb_value;
             wr_en           = i_valid & i_gpr_we;
             o_stall         = wb_dual_write;
-            next_writing_hi = wb_dual_write;
+            next_writing_aux = wb_dual_write;
         end else begin
-            wr_idx          = i_phys_dst_hi;
-            wr_data         = i_wb_value_hi;
+            wr_idx          = i_phys_dst_aux;
+            wr_data         = i_wb_value_aux;
             wr_en           = i_valid & i_gpr_we;
             o_stall         = 1'b0;
-            next_writing_hi = 1'b0;
+            next_writing_aux = 1'b0;
         end
     end
 
@@ -156,7 +156,7 @@ module penumbra2_wb_stage
     // MEM were not held, the aux write would land on some other
     // instruction's destination.
     always_comb begin
-        assert (!writing_hi || wb_dual_write)
+        assert (!writing_aux || wb_dual_write)
             else $error("penumbra2_wb_stage: aux write without a dual write in WB");
     end
 
