@@ -356,7 +356,6 @@ def assemble_line(mnemonic, operands, addr, labels, line_num, constants=None):
             raise ValueError("ERET takes no operands (use WRSPR EPC/ESR to modify return state before ERET)")
 
     # ── Smart mnemonic routing ───────────────────────────────────
-    # TODO(human): implement smart_route_to_format_l()
     # ADD/SUB/CMP with an immediate operand → Format L (INC/DEC/CMPI)
     # This function is called for mnemonics that exist in both Format R
     # (register-register) and have a Format L counterpart (register-immediate).
