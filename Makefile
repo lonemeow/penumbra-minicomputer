@@ -175,6 +175,7 @@ MODULE_TESTS = \
     penumbra2_ex_stage \
     penumbra2_mem_stage \
     penumbra2_wb_stage \
+    penumbra2_spine \
     uart \
     busctl \
     tlb \
