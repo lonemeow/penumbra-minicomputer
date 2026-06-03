@@ -143,8 +143,7 @@ struct history {
 void history_init(struct history *h);
 void history_push(struct history *h, const struct rates *r);
 
-/* curses lifecycle + one full frame. */
-void render_init(void);
+/* Draw one full frame into the screen layer (screen.h) and flush it. */
 void render_frame(const struct rates *r, const struct history *h,
                   const struct meminfo *mem, double load1, long uptime_sec,
                   const struct procinfo *procs, int nproc, double interval);

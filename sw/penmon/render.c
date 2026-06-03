@@ -1,46 +1,57 @@
 /*	$NetBSD$	*/
 /*
- * penmon curses renderer.
+ * penmon renderer — fixed-layout dashboard drawn into the screen layer.
  *
- * Fixed-layout dashboard.  Borders and bars use terminfo ACS line/block
- * glyphs (reliable over serial without a UTF-8 locale); sparklines use a
- * small ASCII intensity ramp.  Colour is threshold-based: green = good,
- * yellow = warning, red = bad — see metric_color().
+ * Borders and bars use Unicode box/block glyphs (emitted as raw UTF-8 by
+ * screen.c — no curses, no locale dependency); sparklines use a Unicode
+ * block-height ramp.  Colour is threshold-based: green = good, yellow =
+ * warning, red = bad — see metric_color().
+ *
+ * The renderer redraws the whole logical frame every tick; the screen
+ * layer's damage diff turns that into only-the-changed-cells on the wire.
  */
 #include "penmon.h"
+#include "screen.h"
 
-#include <curses.h>
 #include <stdio.h>
 #include <string.h>
 
-/* Colour-pair ids. */
+/*
+ * Colour-pair ids.  Kept as an indirection so the threshold helpers stay
+ * colour-agnostic; pair_attr() maps a pair to a screen attribute.
+ */
 enum {
 	PAIR_GREEN = 1,
 	PAIR_YELLOW,
 	PAIR_RED,
 	PAIR_CYAN,
 	PAIR_BLUE,
-	PAIR_HDR,	/* title / table header */
-	PAIR_DIM,	/* bar "track" / empty cells */
+	PAIR_HDR,	/* title / table header: white on blue */
+	PAIR_DIM,	/* bar track / empty cells: grey        */
 };
 
-/* 8-level intensity ramp for sparklines, low -> high. */
-static const char ramp[] = " .:-=+*#";
-#define RAMP_LEVELS ((int)sizeof(ramp) - 1)
+#define A_NORM ATTR(C_DEFAULT, C_DEFAULT, 0)
 
-void
-render_init(void)
+static scr_attr
+pair_attr(int pair)
 {
-	start_color();
-	use_default_colors();		/* lets pair bg -1 mean "terminal default" */
-	init_pair(PAIR_GREEN,  COLOR_GREEN,   -1);
-	init_pair(PAIR_YELLOW, COLOR_YELLOW,  -1);
-	init_pair(PAIR_RED,    COLOR_RED,     -1);
-	init_pair(PAIR_CYAN,   COLOR_CYAN,    -1);
-	init_pair(PAIR_BLUE,   COLOR_BLUE,    -1);
-	init_pair(PAIR_HDR,    COLOR_WHITE,   COLOR_BLUE);
-	init_pair(PAIR_DIM,    COLOR_BLACK,   -1);	/* +A_BOLD = grey */
+	switch (pair) {
+	case PAIR_GREEN:  return ATTR(C_GREEN,  C_DEFAULT, 1);
+	case PAIR_YELLOW: return ATTR(C_YELLOW, C_DEFAULT, 1);
+	case PAIR_RED:    return ATTR(C_RED,    C_DEFAULT, 1);
+	case PAIR_CYAN:   return ATTR(C_CYAN,   C_DEFAULT, 1);
+	case PAIR_BLUE:   return ATTR(C_BLUE,   C_DEFAULT, 1);
+	case PAIR_HDR:    return ATTR(C_WHITE,  C_BLUE,    1);
+	case PAIR_DIM:    return ATTR(C_BLACK,  C_DEFAULT, 1);	/* grey */
+	default:          return A_NORM;
+	}
 }
+
+/* 8-level block-height ramp for sparklines, low -> high (U+2581..U+2588). */
+static const uint32_t ramp[] = {
+	0x2581, 0x2582, 0x2583, 0x2584, 0x2585, 0x2586, 0x2587, 0x2588
+};
+#define RAMP_LEVELS ((int)(sizeof(ramp) / sizeof(ramp[0])))
 
 /*
  * metric_color — map a value to a threshold colour pair.
@@ -124,7 +135,7 @@ history_push(struct history *h, const struct rates *r)
 }
 
 /* Draw a w-cell bar at (y,x) filled to `frac` (0..1) in colour `pair`,
- * with a dim checkerboard track behind the empty part. */
+ * with a dim shaded track behind the empty part. */
 static void
 draw_bar(int y, int x, int w, double frac, int pair)
 {
@@ -136,11 +147,9 @@ draw_bar(int y, int x, int w, double frac, int pair)
 
 	for (i = 0; i < w; i++) {
 		if (i < fill)
-			mvaddch(y, x + i,
-			    ACS_BLOCK | COLOR_PAIR(pair) | A_BOLD);
+			scr_putc(y, x + i, GLYPH_BLOCK, pair_attr(pair));
 		else
-			mvaddch(y, x + i,
-			    ACS_CKBOARD | COLOR_PAIR(PAIR_DIM) | A_BOLD);
+			scr_putc(y, x + i, GLYPH_TRACK, pair_attr(PAIR_DIM));
 	}
 }
 
@@ -148,8 +157,6 @@ draw_bar(int y, int x, int w, double frac, int pair)
 static void
 draw_cpu_bar(int y, int x, int w, const double pct[5])
 {
-	double busy = pct[CP_USER] + pct[CP_NICE] + pct[CP_SYS] +
-	    pct[CP_INTR];
 	int wu, ws, wi, used, i;
 
 	wu = (int)((pct[CP_USER] + pct[CP_NICE]) / 100.0 * w + 0.5);
@@ -158,31 +165,38 @@ draw_cpu_bar(int y, int x, int w, const double pct[5])
 	used = 0;
 
 	for (i = 0; i < wu && used < w; i++, used++)
-		mvaddch(y, x + used, ACS_BLOCK | COLOR_PAIR(PAIR_GREEN) | A_BOLD);
+		scr_putc(y, x + used, GLYPH_BLOCK, pair_attr(PAIR_GREEN));
 	for (i = 0; i < ws && used < w; i++, used++)
-		mvaddch(y, x + used, ACS_BLOCK | COLOR_PAIR(PAIR_CYAN) | A_BOLD);
+		scr_putc(y, x + used, GLYPH_BLOCK, pair_attr(PAIR_CYAN));
 	for (i = 0; i < wi && used < w; i++, used++)
-		mvaddch(y, x + used, ACS_BLOCK | COLOR_PAIR(PAIR_RED) | A_BOLD);
+		scr_putc(y, x + used, GLYPH_BLOCK, pair_attr(PAIR_RED));
 	for (; used < w; used++)
-		mvaddch(y, x + used, ACS_CKBOARD | COLOR_PAIR(PAIR_DIM) | A_BOLD);
-
-	(void)busy;
+		scr_putc(y, x + used, GLYPH_TRACK, pair_attr(PAIR_DIM));
 }
 
-/* Sparkline of the last `w` samples from a history ring. */
+/*
+ * Sparkline of the last `w` samples from a history ring.  The whole strip
+ * takes a single colour — chosen from the most recent sample — so it costs
+ * one SGR run on the wire instead of one per cell; the glyph heights still
+ * carry the history, the colour reads as "current state".
+ */
 static void
 draw_spark(int y, int x, int w, const float *ring, int count, int head,
     double vmax, double good, double warn, int higher_is_better)
 {
+	scr_attr a;
 	int i;
+
+	a = pair_attr(metric_color(count > 0 ? ring[head] : 0.0,
+	    good, warn, higher_is_better));
 
 	for (i = 0; i < w; i++) {
 		int age = w - 1 - i;		/* 0 = newest at right edge */
-		int idx, lvl, pair;
+		int idx, lvl;
 		float v;
 
 		if (age >= count) {		/* no sample yet */
-			mvaddch(y, x + i, ' ');
+			scr_putc(y, x + i, ' ', A_NORM);
 			continue;
 		}
 		idx = (head - age) % HIST_LEN;
@@ -193,10 +207,8 @@ draw_spark(int y, int x, int w, const float *ring, int count, int head,
 		lvl = vmax > 0 ? (int)((double)v / vmax * (RAMP_LEVELS - 1) + 0.5) : 0;
 		if (lvl < 0) lvl = 0;
 		if (lvl >= RAMP_LEVELS) lvl = RAMP_LEVELS - 1;
-		pair = metric_color(v, good, warn, higher_is_better);
 
-		mvaddch(y, x + i,
-		    (chtype)ramp[lvl] | COLOR_PAIR(pair) | A_BOLD);
+		scr_putc(y, x + i, ramp[lvl], a);
 	}
 }
 
@@ -221,12 +233,10 @@ cache_row(int y, const char *label, const struct cache_rate *cr,
 {
 	int c = metric_color(cr->hit_pct, 90.0, 70.0, 1);
 
-	mvprintw(y, 1, "%-4s", label);
-	attron(COLOR_PAIR(c) | A_BOLD);
-	mvprintw(y, 6, "%5.1f%%", cr->hit_pct);
-	attroff(COLOR_PAIR(c) | A_BOLD);
+	scr_printf(y, 1, A_NORM, "%-4s", label);
+	scr_printf(y, 6, pair_attr(c), "%5.1f%%", cr->hit_pct);
 	draw_bar(y, 13, 20, cr->hit_pct / 100.0, c);
-	mvprintw(y, 35, "%7.0f/s", cr->miss_per_sec);
+	scr_printf(y, 35, A_NORM, "%7.0f/s", cr->miss_per_sec);
 	/* hit% sparkline: scale 0..100, good>=90 warn>=70 */
 	draw_spark(y, 47, spark_w, ring, count, head, 100.0, 90.0, 70.0, 1);
 }
@@ -236,29 +246,29 @@ render_frame(const struct rates *r, const struct history *h,
     const struct meminfo *mem, double load1, long uptime_sec,
     const struct procinfo *procs, int nproc, double interval)
 {
-	int y, i, cpi_c, spark_w;
+	int y, i, cpi_c, spark_w, cols, lines;
 	char lbuf[16], rbuf[16];
 	long up = uptime_sec;
 
-	erase();
-	spark_w = COLS - 48;
+	scr_clear();
+	cols = scr_cols();
+	lines = scr_rows();
+	spark_w = cols - 48;
 	if (spark_w < 8) spark_w = 8;
 	if (spark_w > HIST_LEN) spark_w = HIST_LEN;
 
 	/* ── Title bar ─────────────────────────────────────────── */
-	attron(COLOR_PAIR(PAIR_HDR) | A_BOLD);
-	for (i = 0; i < COLS; i++)
-		mvaddch(0, i, ' ');
-	mvprintw(0, 1, "PENUMBRA penmon");
-	mvprintw(0, COLS - 38, "up %ld:%02ld:%02ld  load %.2f  %.1f MHz",
+	scr_fill(0, 0, cols, ' ', pair_attr(PAIR_HDR));
+	scr_printf(0, 1, pair_attr(PAIR_HDR), "PENUMBRA penmon");
+	scr_printf(0, cols - 38, pair_attr(PAIR_HDR),
+	    "up %ld:%02ld:%02ld  load %.2f  %.1f MHz",
 	    up / 3600, (up % 3600) / 60, up % 60, load1, r->clk_mhz);
-	attroff(COLOR_PAIR(PAIR_HDR) | A_BOLD);
 
 	/* ── CPU + CPI ─────────────────────────────────────────── */
 	y = 2;
-	mvprintw(y, 1, "CPU");
+	scr_printf(y, 1, A_NORM, "CPU");
 	draw_cpu_bar(y, 6, 28, r->cpu_pct);
-	mvprintw(y, 36, "us%4.0f%% sy%4.0f%% in%4.0f%% id%4.0f%%",
+	scr_printf(y, 36, A_NORM, "us%4.0f%% sy%4.0f%% in%4.0f%% id%4.0f%%",
 	    r->cpu_pct[CP_USER] + r->cpu_pct[CP_NICE], r->cpu_pct[CP_SYS],
 	    r->cpu_pct[CP_INTR], r->cpu_pct[CP_IDLE]);
 
@@ -268,30 +278,29 @@ render_frame(const struct rates *r, const struct history *h,
 
 		cpi_c = PAIR_GREEN;
 		cpi_quality(r->cpi, &cpi_frac, &cpi_c);
-		mvprintw(y, 1, "CPI");
-		attron(COLOR_PAIR(cpi_c) | A_BOLD);
-		mvprintw(y, 6, "%5.2f", r->cpi);
-		attroff(COLOR_PAIR(cpi_c) | A_BOLD);
+		scr_printf(y, 1, A_NORM, "CPI");
+		scr_printf(y, 6, pair_attr(cpi_c), "%5.2f", r->cpi);
 		draw_bar(y, 13, 20, cpi_frac, cpi_c);
 	}
-	mvprintw(y, 36, "MIPS %6.2f", r->mips);
+	scr_printf(y, 36, A_NORM, "MIPS %6.2f", r->mips);
 
 	y = 4;
-	mvprintw(y, 1, "STALL");
-	mvprintw(y, 7,
+	scr_printf(y, 1, A_NORM, "STALL");
+	scr_printf(y, 7, A_NORM,
 	    "funit%5.1f%%  ifetch%5.1f%%  load%5.1f%%  store%5.1f%%",
 	    r->stall_funit_pct, r->stall_ifetch_pct,
 	    r->stall_load_pct, r->stall_store_pct);
 
-	mvhline(5, 0, ACS_HLINE, COLS);
+	scr_fill(5, 0, cols, GLYPH_HLINE, A_NORM);
 
 	/* ── Cache panel ───────────────────────────────────────── */
-	mvprintw(6, 1, "CACHE      hit%%        (hit bar)      miss/s  history");
+	scr_printf(6, 1, A_NORM,
+	    "CACHE      hit%%        (hit bar)      miss/s  history");
 	cache_row(7, "L1I", &r->l1i, h->l1i, h->count, h->head, spark_w);
 	cache_row(8, "L1D", &r->l1d, h->l1d, h->count, h->head, spark_w);
 	cache_row(9, "L2",  &r->l2,  h->l2,  h->count, h->head, spark_w);
 
-	mvhline(10, 0, ACS_HLINE, COLS);
+	scr_fill(10, 0, cols, GLYPH_HLINE, A_NORM);
 
 	/* ── Memory ────────────────────────────────────────────── */
 	{
@@ -304,46 +313,39 @@ render_frame(const struct rates *r, const struct history *h,
 		human_bytes(mem->total_bytes - mem->free_bytes, lbuf, sizeof(lbuf));
 		human_bytes(mem->total_bytes, rbuf, sizeof(rbuf));
 		human_bytes(mem->free_bytes, fbuf, sizeof(fbuf));
-		mvprintw(11, 1, "MEM");
+		scr_printf(11, 1, A_NORM, "MEM");
 		draw_bar(11, 6, 28, used_frac, mc);
-		mvprintw(11, 36, "%s / %s used  (%s free)   flt %.0f/s",
+		scr_printf(11, 36, A_NORM, "%s / %s used  (%s free)   flt %.0f/s",
 		    lbuf, rbuf, fbuf, r->faults_per_sec);
 	}
 
 	/* ── Activity (vmstat-style rates from uvmexp2) ────────── */
-	mvprintw(12, 1,
+	scr_printf(12, 1, A_NORM,
 	    "ACT  intr %5.0f/s  syscall %6.0f/s  csw %5.0f/s  fork %4.0f/s",
 	    r->intr_per_sec, r->syscall_per_sec, r->csw_per_sec,
 	    r->fork_per_sec);
 
-	mvhline(13, 0, ACS_HLINE, COLS);
+	scr_fill(13, 0, cols, GLYPH_HLINE, A_NORM);
 
 	/* ── Process table ─────────────────────────────────────── */
-	attron(COLOR_PAIR(PAIR_HDR) | A_BOLD);
-	for (i = 0; i < COLS; i++)
-		mvaddch(14, i, ' ');
-	mvprintw(14, 1, "%6s %-10s %5s %8s %2s %s",
+	scr_fill(14, 0, cols, ' ', pair_attr(PAIR_HDR));
+	scr_printf(14, 1, pair_attr(PAIR_HDR), "%6s %-10s %5s %8s %2s %s",
 	    "PID", "USER", "%CPU", "RSS", "ST", "COMMAND");
-	attroff(COLOR_PAIR(PAIR_HDR) | A_BOLD);
 
-	for (i = 0; i < nproc && (15 + i) < LINES - 1; i++) {
+	for (i = 0; i < nproc && (15 + i) < lines - 1; i++) {
 		const struct procinfo *p = &procs[i];
 		int pc = metric_color(p->pctcpu, 1.0, 20.0, 1);
 
 		human_bytes(p->rss_bytes, rbuf, sizeof(rbuf));
-		mvprintw(15 + i, 1, "%6d %-10.10s ", p->pid, p->user);
-		attron(COLOR_PAIR(pc) | A_BOLD);
-		mvprintw(15 + i, 19, "%5.1f", p->pctcpu);
-		attroff(COLOR_PAIR(pc) | A_BOLD);
-		mvprintw(15 + i, 25, " %8s %c  %-.*s",
-		    rbuf, p->state, COLS - 40, p->comm);
+		scr_printf(15 + i, 1, A_NORM, "%6d %-10.10s ", p->pid, p->user);
+		scr_printf(15 + i, 19, pair_attr(pc), "%5.1f", p->pctcpu);
+		scr_printf(15 + i, 25, A_NORM, " %8s %c  %-.*s",
+		    rbuf, p->state, cols - 40, p->comm);
 	}
 
 	/* ── Help line ─────────────────────────────────────────── */
-	attron(COLOR_PAIR(PAIR_DIM) | A_BOLD);
-	mvprintw(LINES - 1, 1,
+	scr_printf(lines - 1, 1, pair_attr(PAIR_DIM),
 	    "q quit   space refresh   +/- interval (%.1fs)", interval);
-	attroff(COLOR_PAIR(PAIR_DIM) | A_BOLD);
 
-	refresh();
+	scr_flush();
 }

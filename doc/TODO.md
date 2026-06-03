@@ -1207,37 +1207,39 @@ pbench.  The split gives a clean two-tier story: bare-metal
 benchmarks measure the CPU in isolation, hosted benchmarks measure
 the system.
 
-## Tooling: penmon redraw is curses-bound on the serial console
+## Tooling: penmon redraw — curses replaced with an ANSI damage diff — DONE
 
-`penmon` repaints painfully slowly over the 115200 serial console: the
-first frame visibly paints character-by-character, and steady-state CPU
-is dominated by terminal output, not by the perfctr reads.
+The problem was in NetBSD libcurses, not penmon: `__cputchar_args`
+(`netbsd/lib/libcurses/putchar.c`) emitted each character as
+`putc(ch); fflush(outfd)` — a flush, hence a `write(2)`, per character —
+so `refresh.c` turned one 80x24 colour frame into thousands of
+`write(2)`s.  It was a syscall-count problem, not a byte-count one: at
+25 MHz each syscall (trap -> tty line discipline -> comstart -> trap) is
+expensive, so per-character writes dominated and the first frame visibly
+painted character-by-character.
 
-The cause is in NetBSD libcurses, not penmon.  `__cputchar_args`
-(`netbsd/lib/libcurses/putchar.c`) emits each character as
-`putc(ch); fflush(outfd)` — a flush, and therefore a `write(2)`, per
-character.  `refresh.c` drives every cell glyph
-(`__cputchar((int)nsp->ch)`) and every escape byte through that path,
-so one 80x24 colour frame becomes thousands of `write(2)`s.  The
-`_IOFBF` output buffer libcurses allocates (`tty.c`) and the single
-end-of-frame `fflush` in `doupdate` are both defeated by the per-char
-flush.  This looks like deliberate historical behaviour (tputs
-padding/pacing for real serial terminals), not a bug; modifying base
-libcurses is out of scope, so it stays.
+Fixed by dropping libcurses for a small virtual-screen layer
+(`sw/penmon/screen.c`).  The renderer redraws the whole logical frame
+into an off-screen cell grid each tick; a damage diff against the
+on-screen grid emits only the changed cells as one ANSI byte stream,
+written with a single `write(2)`.  This keeps curses' cheap half (the
+virtual-screen diff) and drops its expensive half (the per-char flush).
 
-It is a syscall-count problem, not a byte-count one: the bare-metal
-demos emit a comparable frame in a single `write(2)` and are far
-faster.  At 25 MHz each syscall (trap -> tty line discipline ->
-comstart -> trap) is expensive, so per-character writes dominate.  The
-bulk perfctr sysctls (`machdep.cpu.all`, `machdep.cache.<dev>.all`) cut
-penmon's read syscalls from 18 to 4 per refresh, but that is under 1 %
-of the per-char write traffic, so it is invisible until the output path
-changes.
+Consequences:
+- One frame is one syscall.  Steady-state frames are small diffs (a
+  single-cell change is ~17 bytes) — comfortably under the ~11.5 KB/s
+  serial ceiling, even though the renderer still redraws everything and
+  lets the diff collapse it.
+- Glyphs are emitted as raw UTF-8 (Unicode block/line glyphs), so the
+  result no longer depends on the *target's* locale — only on a UTF-8
+  host terminal.  No terminfo database is needed and nothing reads
+  `TERM`, so the static binary runs on a minimal rootfs, not just
+  `ROOTFS_FULL=1`.
+- Each cell is a single 4-byte word (16-bit glyph + 16-bit attr) with no
+  padding, so the per-frame diff scan is ~15 KB of word compares —
+  negligible against the serial transmit it avoids.  Sparklines also
+  take one colour per strip, collapsing each to a single SGR run.
 
-Fix: rewrite penmon's renderer to emit ANSI directly and flush one
-whole frame per `write(2)`.  The non-trivial constraint is that it
-cannot blindly repaint every frame — a full colour frame already nears
-the ~11.5 KB/s serial ceiling — so it must keep a model of on-screen
-state and emit only the changed cells.  In short: keep curses' cheap
-half (the virtual-screen diff), drop its expensive half (the per-char
-flush), one write per frame.
+Verified by a host unit test (`sw/penmon/screen_test.c`, `make -C
+sw/penmon test`) and a target cross-build, and confirmed on the ULX3S
+over the serial console.

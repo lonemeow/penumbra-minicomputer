@@ -1,11 +1,9 @@
 # penmon — Penumbra hardware-counter system monitor
 #
 # Cross-compiles with the in-tree LLVM toolchain against the NetBSD
-# sysroot from build.sh distribution.  Links libcurses + libterminfo.
-#
-# Runtime note: curses needs the compiled terminfo database on the
-# target at /usr/share/misc/terminfo.cdb and TERM set (e.g.
-# xterm-256color).  See the README for deploy details.
+# sysroot from build.sh distribution.  No libcurses/libterminfo: the
+# renderer (screen.c) emits ANSI directly, so the static binary has no
+# terminfo-database dependency on the target.
 #
 # Output: build/penmon/penmon (dynamic), build/penmon/penmon-static
 
@@ -22,31 +20,35 @@ CFLAGS      := --target=$(TARGET) --sysroot=$(DESTDIR) $(COPT) \
                -Wall -Wextra -Wno-unused-parameter \
                -I$(dir $(lastword $(MAKEFILE_LIST)))
 
-LDLIBS      := -lcurses -lterminfo
+LDLIBS      :=
 LDFLAGS_DYN := --target=$(TARGET) --sysroot=$(DESTDIR)
 LDFLAGS_STA := --target=$(TARGET) --sysroot=$(DESTDIR) -static
 
 BUILDDIR    := $(PROJROOT)/build/penmon
 OBJDIR      := $(BUILDDIR)/obj
 
-SRCS        := penmon.c sample.c render.c proc.c
+SRCS        := penmon.c sample.c render.c proc.c screen.c
 OBJS        := $(addprefix $(OBJDIR)/,$(SRCS:.c=.o))
 
-.PHONY: all dynamic static overlay clean
+# Host unit test for the screen damage-diff (no cross-toolchain needed).
+HOSTCC      ?= cc
+
+.PHONY: all dynamic static overlay test clean
 all: dynamic
 dynamic: $(BUILDDIR)/penmon
 static:  $(BUILDDIR)/penmon-static
 
-# Install the static binary (no libcurses/libterminfo needed on the
-# target) into the shared overlay fake-root.  Only a non-base path is
-# touched: the terminfo database curses needs is a base-system file,
-# already present on a full rootfs (ROOTFS_FULL=1) at
-# /usr/share/misc/terminfo.cdb — overlaying it here would collide with
-# the distribution's own METALOG entry.
+# Install the static binary into the shared overlay fake-root.  It is a
+# self-contained ANSI renderer: no libcurses/libterminfo, hence no
+# terminfo-database dependency — it runs on a minimal rootfs too.
 overlay: static
 	install -d $(OVERLAY_ROOT)/usr/local/bin
 	install -m 0755 $(BUILDDIR)/penmon-static \
 	    $(OVERLAY_ROOT)/usr/local/bin/penmon
+
+# Build and run the screen diff test on the host.
+test: $(BUILDDIR)/screen_test
+	$(BUILDDIR)/screen_test
 
 $(BUILDDIR)/penmon: $(OBJS) | $(BUILDDIR)
 	$(CC) $(LDFLAGS_DYN) $(OBJS) $(LDLIBS) -o $@
@@ -54,7 +56,10 @@ $(BUILDDIR)/penmon: $(OBJS) | $(BUILDDIR)
 $(BUILDDIR)/penmon-static: $(OBJS) | $(BUILDDIR)
 	$(CC) $(LDFLAGS_STA) $(OBJS) $(LDLIBS) -o $@
 
-$(OBJDIR)/%.o: %.c penmon.h | $(OBJDIR)
+$(BUILDDIR)/screen_test: screen_test.c screen.c screen.h | $(BUILDDIR)
+	$(HOSTCC) -Wall -Wextra -I. screen_test.c screen.c -o $@
+
+$(OBJDIR)/%.o: %.c penmon.h screen.h | $(OBJDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILDDIR) $(OBJDIR):

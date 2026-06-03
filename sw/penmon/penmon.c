@@ -7,11 +7,13 @@
  * Each tick: snapshot all counters, derive per-interval rates, sample the
  * process table + memory, and repaint.  Keys: q quit, space force-refresh,
  * +/- change the interval.
+ *
+ * The display is driven by the screen layer (screen.h): a virtual-screen
+ * damage diff that emits one write(2) per frame — no curses.
  */
 #include "penmon.h"
+#include "screen.h"
 
-#include <curses.h>
-#include <locale.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -65,7 +67,6 @@ main(int argc, char **argv)
 		}
 	}
 
-	setlocale(LC_ALL, "");
 	signal(SIGINT, on_signal);
 	signal(SIGTERM, on_signal);
 
@@ -76,16 +77,14 @@ main(int argc, char **argv)
 	read_snapshot(&prev);
 	sleep_ms(250);
 
-	initscr();
-	cbreak();
-	noecho();
-	curs_set(0);
-	keypad(stdscr, TRUE);
-	timeout((int)(interval * 1000));
-	if (has_colors())
-		render_init();
+	if (scr_init() < 0) {
+		fprintf(stderr, "penmon: cannot initialise terminal\n");
+		return 1;
+	}
 
 	for (;;) {
+		scr_resize();		/* adopt a new terminal size if it changed */
+
 		read_snapshot(&cur);
 		compute_rates(&prev, &cur, clk_hz, &r);
 		history_push(&hist, &r);
@@ -99,7 +98,7 @@ main(int argc, char **argv)
 
 		prev = cur;
 
-		ch = getch();			/* blocks up to `interval` */
+		ch = scr_getkey((int)(interval * 1000));	/* blocks up to interval */
 		if (want_quit)
 			break;
 		switch (ch) {
@@ -111,21 +110,16 @@ main(int argc, char **argv)
 		case '+':
 		case '=':
 			if (interval > 0.4) interval -= 0.2;
-			timeout((int)(interval * 1000));
 			break;
 		case '-':
 		case '_':
 			if (interval < 10.0) interval += 0.2;
-			timeout((int)(interval * 1000));
-			break;
-		case KEY_RESIZE:
-			clear();
 			break;
 		default:
-			break;		/* ERR (timeout) included */
+			break;			/* -1 (timeout) included */
 		}
 	}
 done:
-	endwin();
+	scr_shutdown();
 	return 0;
 }

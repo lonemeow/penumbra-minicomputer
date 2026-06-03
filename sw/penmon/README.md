@@ -65,11 +65,9 @@ penmon is wired into the build. `make sdimage-rootfs` runs `make netbsd-overlay`
 which builds every custom utility and stages it into a shared overlay
 fake-root (`build/netbsd-overlay`); `mkrootfs.sh -O` then copies the whole
 tree into the image. penmon's `overlay` target installs just the static
-binary at `/usr/local/bin/penmon`. curses also needs the terminfo database
-(`/usr/share/misc/terminfo.cdb`), which is a base-system file already present
-on a full rootfs (`ROOTFS_FULL=1`) — it is deliberately *not* overlaid here
-(that would collide with the distribution's own copy). A minimal image would
-need it added separately.
+binary at `/usr/local/bin/penmon`. The renderer emits ANSI directly (no
+libcurses, no terminfo database), so the binary is self-contained — it runs
+on a minimal rootfs too, not only on a full distribution (`ROOTFS_FULL=1`).
 
 ```sh
 make sdimage-rootfs                 # boot + rootfs, with penmon + demos
@@ -83,22 +81,28 @@ To add another custom utility to the image: give its Makefile an `overlay`
 target that installs into `$(OVERLAY_ROOT)`, then add it to `NETBSD_OVERLAYS`
 in the top-level Makefile.
 
-- **TERM:** set `TERM` to match your terminal, e.g.
-  `TERM=xterm-256color` (curses falls back to monochrome if `TERM` is unset
-  or unknown).
+- **Terminal:** any UTF-8, ANSI-colour terminal (the common case over the
+  serial console). `TERM` is not consulted — penmon emits ANSI escapes
+  directly rather than going through terminfo.
 
 ## Run
 
 ```sh
-TERM=xterm-256color penmon          # 1 s refresh
-TERM=xterm-256color penmon -d 0.5   # faster
+penmon          # 1 s refresh
+penmon -d 0.5   # faster
 ```
 
 Keys: `q` quit · `space` force refresh · `+`/`-` change interval.
 
 ## Display notes
 
-Bars use terminfo `ACS_BLOCK`/`ACS_CKBOARD` glyphs (reliable over serial
-without a UTF-8 locale); sparklines use an ASCII intensity ramp. Once the
-terminal is confirmed UTF-8, the sparkline ramp in `render.c` can
-be swapped to Unicode blocks (`▁▂▃▄▅▆▇█`) for extra polish.
+penmon does its own drawing through a small virtual-screen layer
+(`screen.c`): the renderer redraws the whole frame into an off-screen cell
+grid each tick, and a damage diff emits only the changed cells as one ANSI
+byte stream per `write(2)` — keeping curses' cheap half (the virtual-screen
+diff) while dropping its expensive half (libcurses flushes once per
+character over the serial console). Bars and rules use Unicode block/line
+glyphs (`█ ░ ─`) and sparklines a block-height ramp (`▁▂▃▄▅▆▇█`), emitted as
+raw UTF-8 — so the look depends only on a UTF-8 *host* terminal, not on the
+target's locale. Each sparkline takes a single colour (from its most recent
+sample) so the strip costs one colour run on the wire.
