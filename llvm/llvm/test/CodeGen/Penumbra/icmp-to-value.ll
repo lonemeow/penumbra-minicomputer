@@ -126,6 +126,117 @@ define i32 @nez(i32 %a) {
   ret i32 %z
 }
 
+; Unsigned compares against a uimm16 constant fold into CMPi (no LLI); the
+; "greater" forms use the +1 trick (a > c is a >= c+1) to keep the immediate
+; on the right.
+define i32 @ult_const(i32 %a) {
+; CHECK-LABEL: ult_const:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  // %bb.0:
+; CHECK-NEXT:    cmp r1, 5
+; CHECK-NEXT:    mov r1, r0
+; CHECK-NEXT:    sbc r1, r0
+; CHECK-NEXT:    and r1, 1
+; CHECK-NEXT:    and r1, 1
+; CHECK-NEXT:    jmp r13
+  %c = icmp ult i32 %a, 5
+  %z = zext i1 %c to i32
+  ret i32 %z
+}
+
+define i32 @uge_const(i32 %a) {
+; CHECK-LABEL: uge_const:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  // %bb.0:
+; CHECK-NEXT:    cmp r1, 5
+; CHECK-NEXT:    mov r1, r0
+; CHECK-NEXT:    adc r1, r0
+; CHECK-NEXT:    and r1, 1
+; CHECK-NEXT:    jmp r13
+  %c = icmp uge i32 %a, 5
+  %z = zext i1 %c to i32
+  ret i32 %z
+}
+
+define i32 @ugt_const(i32 %a) {
+; CHECK-LABEL: ugt_const:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  // %bb.0:
+; CHECK-NEXT:    cmp r1, 6
+; CHECK-NEXT:    mov r1, r0
+; CHECK-NEXT:    adc r1, r0
+; CHECK-NEXT:    and r1, 1
+; CHECK-NEXT:    jmp r13
+  %c = icmp ugt i32 %a, 5
+  %z = zext i1 %c to i32
+  ret i32 %z
+}
+
+define i32 @ule_const(i32 %a) {
+; CHECK-LABEL: ule_const:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  // %bb.0:
+; CHECK-NEXT:    cmp r1, 6
+; CHECK-NEXT:    mov r1, r0
+; CHECK-NEXT:    sbc r1, r0
+; CHECK-NEXT:    and r1, 1
+; CHECK-NEXT:    and r1, 1
+; CHECK-NEXT:    jmp r13
+  %c = icmp ule i32 %a, 5
+  %z = zext i1 %c to i32
+  ret i32 %z
+}
+
+; eq/ne against a uimm16 constant folds the diff into SUBi (no LLI).
+define i32 @eq_const(i32 %a) {
+; CHECK-LABEL: eq_const:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  // %bb.0:
+; CHECK-NEXT:    sub r1, 2
+; CHECK-NEXT:    cmp r0, r1
+; CHECK-NEXT:    mov r1, r0
+; CHECK-NEXT:    adc r1, r0
+; CHECK-NEXT:    and r1, 1
+; CHECK-NEXT:    jmp r13
+  %c = icmp eq i32 %a, 2
+  %z = zext i1 %c to i32
+  ret i32 %z
+}
+
+define i32 @ne_const(i32 %a) {
+; CHECK-LABEL: ne_const:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  // %bb.0:
+; CHECK-NEXT:    sub r1, 7
+; CHECK-NEXT:    cmp r0, r1
+; CHECK-NEXT:    mov r1, r0
+; CHECK-NEXT:    sbc r1, r0
+; CHECK-NEXT:    and r1, 1
+; CHECK-NEXT:    and r1, 1
+; CHECK-NEXT:    jmp r13
+  %c = icmp ne i32 %a, 7
+  %z = zext i1 %c to i32
+  ret i32 %z
+}
+
+; A constant too large for uimm16 keeps the register SUB (materialized constant).
+define i32 @eq_bigconst(i32 %a) {
+; CHECK-LABEL: eq_bigconst:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  // %bb.0:
+; CHECK-NEXT:    lli r2, 4464
+; CHECK-NEXT:    lui r2, 1
+; CHECK-NEXT:    sub r1, r2
+; CHECK-NEXT:    cmp r0, r1
+; CHECK-NEXT:    mov r1, r0
+; CHECK-NEXT:    adc r1, r0
+; CHECK-NEXT:    and r1, 1
+; CHECK-NEXT:    jmp r13
+  %c = icmp eq i32 %a, 70000
+  %z = zext i1 %c to i32
+  ret i32 %z
+}
+
 ; Signed compare to a value still uses the branch-based SELECT_CC form.
 define i32 @slt(i32 %a, i32 %b) {
 ; CHECK-LABEL: slt:
@@ -135,10 +246,10 @@ define i32 @slt(i32 %a, i32 %b) {
 ; CHECK-NEXT:    lli r1, 1
 ; CHECK-NEXT:    lli r4, 0
 ; CHECK-NEXT:    cmp r3, r2
-; CHECK-NEXT:    blt .LBB8_2
+; CHECK-NEXT:    blt .LBB15_2
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r1, r4
-; CHECK-NEXT:  .LBB8_2:
+; CHECK-NEXT:  .LBB15_2:
 ; CHECK-NEXT:    and r1, 1
 ; CHECK-NEXT:    jmp r13
   %c = icmp slt i32 %a, %b

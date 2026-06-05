@@ -1030,24 +1030,27 @@ choice forces a software conversion at the other use site.
 
 `G_SELECT` lowering folds an `G_ICMP` feeder into `SELECT_CC_GPR`
 (a CMP+Bcc-style diamond), but does **not** fold a constant RHS
-into a `CMPi` variant the way the `G_ICMP + G_BRCOND` path does.
-Standalone `G_ICMP` has the same limitation — both end up emitting
-a separate LLI/LLIS to materialize the constant before the
-register-register CMP, even when the constant fits uimm16.
+into a `CMPi` variant the way the `G_ICMP + G_BRCOND` and the
+branchless `G_ICMP`-to-value paths already do — so the select path
+still materializes the constant with a separate LLI/LLIS even when
+it fits uimm16.
 
-The branch path already has the machinery: the selector handles
-`G_BRCOND` by checking the ICMP's RHS for a constant operand and
-also swapping LHS/RHS via `CmpInst::getSwappedPredicate` so a
-constant-LHS still fires CMPi. The select path needs the same
-treatment.
+The other two paths have the machinery: `G_BRCOND` checks the ICMP's
+RHS for a constant and swaps via `CmpInst::getSwappedPredicate` for a
+constant-LHS, and `selectICmpToValue` routes every compare through
+`emitCompare` (CMP/CMPi dispatch) with the `a > c` is `a >= c+1`
+increment trick to keep the immediate on the right.
 
-Fix: introduce a `SELECT_CCi_GPR` pseudo (analogous to
-`SELECT_CC_GPR` but with an immediate operand in place of the
-second CMP register), then teach the `G_SELECT` and standalone
-`G_ICMP` selection paths to pick `SELECT_CCi_GPR` when the
-feeder's RHS is a uimm16 (with the same predicate-swap fallback
-for constant-LHS cases). Code lives in
+Fix: introduce a `SELECT_CCi_GPR` pseudo (an immediate in place of the
+second CMP register) and pick it when the feeder's RHS is a uimm16,
+with the constant-LHS predicate-swap fallback. Code lives in
 `llvm/llvm/lib/Target/Penumbra/GISel/PenumbraInstructionSelector.cpp`.
+
+A smaller related gap: `selectAddSubCarry` still hand-emits the
+register `ADD`/`SUB` for the carry chain, so an i64 add/sub by a small
+constant materializes it with an LLI instead of `ADDi`/`SUBi`. Routing
+those through an `emitFoldableALU`-style helper (sharing the uimm16
+fold logic with `emitCompare`) would close it.
 
 ## Compiler: redundant mask on zero-extended comparison results
 

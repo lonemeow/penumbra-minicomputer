@@ -105,16 +105,15 @@ define i64 @fshl_i64(i64 %a, i64 %b, i64 %sh) {
 ; CHECK-NEXT:    and r7, 63
 ; CHECK-NEXT:    not r5, r2
 ; CHECK-NEXT:    and r5, 63
-; CHECK-NEXT:    lli r2, 32
+; CHECK-NEXT:    lli r9, 32
 ; CHECK-NEXT:    mov r8, r7
-; CHECK-NEXT:    sub r8, r2
-; CHECK-NEXT:    mov r10, r2
-; CHECK-NEXT:    sub r10, r7
-; CHECK-NEXT:    cmp r7, r2
+; CHECK-NEXT:    sub r8, r9
+; CHECK-NEXT:    sub r9, r7
+; CHECK-NEXT:    cmp r7, 32
 ; CHECK-NEXT:    mov r6, r13
 ; CHECK-NEXT:    sbc r6, r0
 ; CHECK-NEXT:    and r6, 1
-; CHECK-NEXT:    cmp r13, r13
+; CHECK-NEXT:    cmp r13, 0
 ; CHECK-NEXT:    mov r2, r13
 ; CHECK-NEXT:    sbc r2, r0
 ; CHECK-NEXT:    and r2, 1
@@ -123,15 +122,15 @@ define i64 @fshl_i64(i64 %a, i64 %b, i64 %sh) {
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r6, r2
 ; CHECK-NEXT:  .LBB4_2:
-; CHECK-NEXT:    mov r9, r7
-; CHECK-NEXT:    xor r9, r13
+; CHECK-NEXT:    mov r10, r7
+; CHECK-NEXT:    xor r10, r13
 ; CHECK-NEXT:    mov r3, r1
 ; CHECK-NEXT:    shl r3, r7
 ; CHECK-NEXT:    mov r11, r1
-; CHECK-NEXT:    shr r11, r10
-; CHECK-NEXT:    ldw r10, [r14 + 4] // 4-byte Folded Reload
-; CHECK-NEXT:    shl r10, r7
-; CHECK-NEXT:    or r11, r10
+; CHECK-NEXT:    shr r11, r9
+; CHECK-NEXT:    ldw r9, [r14 + 4] // 4-byte Folded Reload
+; CHECK-NEXT:    shl r9, r7
+; CHECK-NEXT:    or r11, r9
 ; CHECK-NEXT:    shl r1, r8
 ; CHECK-NEXT:    test r6, 1
 ; CHECK-NEXT:    ldw r2, [r14 + 0] // 4-byte Folded Reload
@@ -145,7 +144,7 @@ define i64 @fshl_i64(i64 %a, i64 %b, i64 %sh) {
 ; CHECK-NEXT:  // %bb.5:
 ; CHECK-NEXT:    mov r11, r1
 ; CHECK-NEXT:  .LBB4_6:
-; CHECK-NEXT:    cmp r9, r7
+; CHECK-NEXT:    cmp r10, r7
 ; CHECK-NEXT:    beq .LBB4_8
 ; CHECK-NEXT:  // %bb.7:
 ; CHECK-NEXT:    stw r11, [r14 + 4] // 4-byte Folded Spill
@@ -155,17 +154,16 @@ define i64 @fshl_i64(i64 %a, i64 %b, i64 %sh) {
 ; CHECK-NEXT:    shl r1, 31
 ; CHECK-NEXT:    or r2, r1
 ; CHECK-NEXT:    shr r4, 1
-; CHECK-NEXT:    lli r1, 32
+; CHECK-NEXT:    lli r7, 32
 ; CHECK-NEXT:    mov r8, r0
 ; CHECK-NEXT:    mov r6, r5
-; CHECK-NEXT:    sub r6, r1
-; CHECK-NEXT:    mov r7, r1
+; CHECK-NEXT:    sub r6, r7
 ; CHECK-NEXT:    sub r7, r5
-; CHECK-NEXT:    cmp r5, r1
+; CHECK-NEXT:    cmp r5, 32
 ; CHECK-NEXT:    mov r11, r8
 ; CHECK-NEXT:    sbc r11, r0
 ; CHECK-NEXT:    and r11, 1
-; CHECK-NEXT:    cmp r13, r8
+; CHECK-NEXT:    cmp r13, 0
 ; CHECK-NEXT:    mov r1, r8
 ; CHECK-NEXT:    sbc r1, r0
 ; CHECK-NEXT:    and r1, 1

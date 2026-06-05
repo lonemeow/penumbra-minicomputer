@@ -77,6 +77,12 @@ private:
   bool selectICmpToValue(CmpInst::Predicate Pred, Register DstReg, Register LHS,
                          Register RHS, MachineInstr &I, MachineBasicBlock &MBB,
                          MachineRegisterInfo &MRI) const;
+  // uimm16 value of R if it is a constant small enough to fold as an immediate.
+  std::optional<int64_t> uimm16Of(Register R, MachineRegisterInfo &MRI) const;
+  // Emit CMP/CMPi (SR.C = L >= second operand), folding a uimm16 RHS.
+  bool emitCompare(Register L, Register CmpR, std::optional<int64_t> Imm,
+                   MachineInstr &I, MachineBasicBlock &MBB,
+                   MachineRegisterInfo &MRI) const;
   // G_UADDO/G_UADDE/G_USUBO/G_USUBE → the hardware ADD/ADC, SUB/SBC carry chain.
   bool selectAddSubCarry(MachineInstr &I, MachineBasicBlock &MBB,
                          MachineRegisterInfo &MRI) const;
@@ -670,13 +676,45 @@ bool PenumbraInstructionSelector::selectICmp(MachineInstr &I,
   return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
 }
 
+// The value of R as a uimm16 immediate, if R is a constant that fits the
+// immediate field of an L-format ALU op (so it can be folded instead of
+// materialised with an LLI).
+std::optional<int64_t>
+PenumbraInstructionSelector::uimm16Of(Register R,
+                                      MachineRegisterInfo &MRI) const {
+  if (auto C = getIConstantVRegVal(R, MRI))
+    if (C->getActiveBits() <= 16)
+      return C->getZExtValue();
+  return std::nullopt;
+}
+
+// Emit a flag-only compare leaving SR.C = (L >= second operand) unsigned, with
+// the register-vs-immediate dispatch in one place (cf. AArch64's emitAddSub):
+// an explicit Imm, or a constant CmpR, folds into CMPi; otherwise a register
+// CMP.  This is where the immediate folding for the compare paths lives, so
+// callers never hand-materialise a foldable constant.
+bool PenumbraInstructionSelector::emitCompare(Register L, Register CmpR,
+                                              std::optional<int64_t> Imm,
+                                              MachineInstr &I,
+                                              MachineBasicBlock &MBB,
+                                              MachineRegisterInfo &MRI) const {
+  const DebugLoc &DL = I.getDebugLoc();
+  if (!Imm && CmpR)
+    Imm = uimm16Of(CmpR, MRI);
+  MachineInstr *Cmp =
+      Imm ? BuildMI(MBB, I, DL, TII.get(Penumbra::CMPi)).addReg(L).addImm(*Imm)
+          : BuildMI(MBB, I, DL, TII.get(Penumbra::CMP)).addReg(L).addReg(CmpR);
+  return constrainSelectedInstRegOperands(*Cmp, TII, TRI, RBI);
+}
+
 // Materialise an ICMP result without a branch, for predicates that reduce to a
 // single Penumbra flag.  A flag-only CMP (SUB-with-flags) computes CmpL - CmpR
 // and leaves SR.C = NOT borrow = (CmpL >= CmpR) unsigned.  Each handled
-// predicate boils down to (CmpL, CmpR, InvertCarry): emit one CMP, then read
-// SR.C — inverted or not — into a 0/1 GPR via emitCarryToValue (the same
-// flag->value bridge the carry chain uses).  Signed predicates return false so
-// the caller emits the SELECT_CC branch form.
+// predicate boils down to (CmpL, second operand, InvertCarry): emit one compare
+// (emitCompare folds a uimm16 second operand into CMPi), then read SR.C —
+// inverted or not — into a 0/1 GPR via emitCarryToValue (the same flag->value
+// bridge the carry chain uses).  Signed predicates return false so the caller
+// emits the SELECT_CC branch form.
 bool PenumbraInstructionSelector::selectICmpToValue(
     CmpInst::Predicate Pred, Register DstReg, Register LHS, Register RHS,
     MachineInstr &I, MachineBasicBlock &MBB, MachineRegisterInfo &MRI) const {
@@ -689,47 +727,67 @@ bool PenumbraInstructionSelector::selectICmpToValue(
     return C && C->isZero();
   };
 
-  // Resolve the predicate to the compare operands and the carry polarity.
-  //   InvertCarry == false -> result is SR.C       (CmpL >= CmpR)
-  //   InvertCarry == true  -> result is NOT SR.C   (CmpL <  CmpR)
-  // The "greater" forms reuse the "less" readings with the operands swapped
-  // (a > b is b < a; a <= b is b >= a), so only two flag readings are needed.
+  // Resolve the predicate to a compare and the carry polarity:
+  //   InvertCarry == false -> result is SR.C       (CmpL >= second operand)
+  //   InvertCarry == true  -> result is NOT SR.C   (CmpL <  second operand)
+  // The second operand is CmpImm if set, else the register CmpR.
   Register CmpL, CmpR;
+  std::optional<int64_t> CmpImm;
   bool InvertCarry = false;
   switch (Pred) {
-  case CmpInst::ICMP_ULT: //         a <  b           ->  NOT C
+  case CmpInst::ICMP_ULT: //         a <  b  ->  NOT C
     CmpL = LHS, CmpR = RHS;
     InvertCarry = true;
     break;
-  case CmpInst::ICMP_UGE: //         a >= b           ->  C
+  case CmpInst::ICMP_UGE: //         a >= b  ->  C
     CmpL = LHS, CmpR = RHS;
     break;
-  case CmpInst::ICMP_UGT: //         a >  b = b <  a  ->  NOT C
-    CmpL = RHS, CmpR = LHS;
-    InvertCarry = true;
+  case CmpInst::ICMP_UGT: //         a >  b
+  case CmpInst::ICMP_ULE: { //       a <= b
+    // a > c is a >= c+1 (-> C); a <= c is a < c+1 (-> NOT C).  Using c+1 keeps
+    // the constant on the right so it folds into CMPi (c+1 must still fit
+    // uimm16, i.e. c < 0xFFFF).  Without a foldable constant, fall back to the
+    // swapped register form (a > b is b < a; a <= b is b >= a).
+    bool IsGt = (Pred == CmpInst::ICMP_UGT);
+    if (std::optional<int64_t> C = uimm16Of(RHS, MRI); C && *C < 0xFFFF) {
+      CmpL = LHS, CmpImm = *C + 1;
+      InvertCarry = !IsGt;
+    } else {
+      CmpL = RHS, CmpR = LHS;
+      InvertCarry = IsGt;
+    }
     break;
-  case CmpInst::ICMP_ULE: //         a <= b = b >= a  ->  C
-    CmpL = RHS, CmpR = LHS;
-    break;
+  }
   case CmpInst::ICMP_EQ:
   case CmpInst::ICMP_NE: {
     // Test (lhs - rhs) == 0 via the carry: CMP r0, diff sets SR.C = (diff == 0)
     // because 0 >= diff unsigned only when diff is zero.  A zero operand needs
-    // no subtract.  eq reads SR.C; ne reads its inverse.
+    // no subtract; a uimm16 constant on either side (zero-ness is commutative)
+    // folds into SUBi; otherwise a register SUB.  SUB's tied operand lets the
+    // two-address pass insert the LHS->Diff copy, and defining Diff directly
+    // (not COPY-into-then-SUB-into it) keeps valid SSA.  eq reads SR.C; ne reads
+    // its inverse.
     if (isZero(RHS))
       CmpR = LHS;
     else if (isZero(LHS))
       CmpR = RHS; // (0 - rhs == 0) iff (rhs == 0)
     else {
-      // Diff = LHS - RHS.  SUB's tied operand ($Rd = $Rd_in) lets the
-      // two-address pass insert the LHS->Diff copy; defining Diff directly here
-      // (rather than COPY-into-then-SUB-into the same reg) keeps valid SSA.
       Register Diff =
           MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
-      MachineInstr *Sub = BuildMI(MBB, I, DL, TII.get(Penumbra::SUB))
-                              .addDef(Diff)
-                              .addReg(LHS) // tied to Diff
-                              .addReg(RHS);
+      Register SubReg = LHS;
+      std::optional<int64_t> Imm = uimm16Of(RHS, MRI);
+      if (!Imm)
+        if ((Imm = uimm16Of(LHS, MRI)))
+          SubReg = RHS;
+      MachineInstr *Sub =
+          Imm ? BuildMI(MBB, I, DL, TII.get(Penumbra::SUBi))
+                    .addDef(Diff)
+                    .addReg(SubReg) // tied to Diff
+                    .addImm(*Imm)
+              : BuildMI(MBB, I, DL, TII.get(Penumbra::SUB))
+                    .addDef(Diff)
+                    .addReg(LHS) // tied to Diff
+                    .addReg(RHS);
       if (!constrainSelectedInstRegOperands(*Sub, TII, TRI, RBI))
         return false;
       CmpR = Diff;
@@ -742,10 +800,8 @@ bool PenumbraInstructionSelector::selectICmpToValue(
     return false; // signed predicates use the SELECT_CC branch form
   }
 
-  // Shared tail: one CMP sets SR.C, emitCarryToValue reads it into DstReg.
-  MachineInstr *Cmp =
-      BuildMI(MBB, I, DL, TII.get(Penumbra::CMP)).addReg(CmpL).addReg(CmpR);
-  if (!constrainSelectedInstRegOperands(*Cmp, TII, TRI, RBI))
+  // Shared tail: one compare sets SR.C, emitCarryToValue reads it into DstReg.
+  if (!emitCompare(CmpL, CmpR, CmpImm, I, MBB, MRI))
     return false;
   if (!emitCarryToValue(DstReg, InvertCarry, I, MBB, MRI))
     return false;
