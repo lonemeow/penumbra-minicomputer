@@ -1146,6 +1146,121 @@ word-aligned constant-size struct/array copies — which is the common case.
 Decide via `allowsMisalignedMemoryAccesses` whether to inline unaligned at
 all (probably not).
 
+## Compiler: gen1/gen2 subtarget split — tuning knobs for divergent micro-arch
+
+penumbra1 and penumbra2 are the **same ISA** running the **same binaries**,
+but their micro-architectures pull optimization tradeoffs in opposite
+directions: gen1 is single-issue/microcoded with no branch penalty but a
+tiny L1 I-cache (code density matters), while gen2 is pipelined and resolves
+branches in EX with no predictor (taken branches cost cycles, but the cache
+is larger). The backend needs to know which it targets and skew cost-driven
+choices accordingly — without ever changing what code is *legal*, so one
+object file still runs on both.
+
+**Today.** There is exactly one processor (`Penumbra1Model` +
+`def : ProcessorModel<"penumbra1", Penumbra1Model, []>`, `Penumbra.td:41`),
+no subtarget features, and `PenumbraTargetMachine.cpp:238,242` defaults an
+empty `-mcpu` to `"penumbra1"`. The Subtarget passes CPU as both CPU and
+TuneCPU (`PenumbraSubtarget.cpp:27`), so `-mtune=` is already plumbed. The
+header of `Penumbra.td` already states the intended split: "This file
+defines the ISA — not any specific implementation. CPU models … are defined
+separately per implementation." Adding a second processor is the path the
+target was set up for.
+
+### The invariant that constrains the whole design
+
+The gen knobs are **tuning only**. They may change *which of several correct
+lowerings* the backend picks (branch vs. branchless, inline vs. libcall,
+schedule, unroll factor) but must never change instruction legality or the
+emitted instruction set. Legalization stays identical for both gens; gen
+features are consumed only in cost models, combiner gating, and scheduling.
+This is what guarantees a `.o` built for one gen still executes correctly on
+the other — gen choice is a performance hint, not an ABI or ISA fork.
+Concretely: never branch on a gen feature inside `PenumbraLegalizerInfo`'s
+legality rules.
+
+### Mechanism — three layers, all idiomatic LLVM
+
+1. **Subtarget features named by micro-arch *property*, not CPU identity.**
+   Declare in `Penumbra.td` (or a new `PenumbraFeatures.td`):
+   - `FeatureBranchPenalty` — "taken branches cost pipeline cycles" (gen2).
+   - `FeatureSmallICache` — "I-cache is small; favor code density over
+     speculative code expansion" (gen1).
+   Property-naming (the AArch64/RISC-V `Tune*`/`Feature*` idiom) keeps the
+   codegen sites reading `ST.hasBranchPenalty()` — a capability question —
+   instead of `CPU == penumbra2`, so a future gen3 sharing a property reuses
+   the same path. Start with the two that have concrete consumers; grow on
+   demand (`FeatureSlowTakenBranch`, etc.).
+
+2. **A `SchedMachineModel` per processor.** Add `Penumbra2Model` beside
+   `Penumbra1Model`. gen2 sets a non-zero taken-branch / `MispredictPenalty`
+   cost and any latency differences; gen1 keeps today's numbers. The generic
+   MachineScheduler and several cost heuristics read this automatically.
+
+3. **ProcessorModel definitions wiring features + sched model:**
+   ```
+   def : ProcessorModel<"penumbra1", Penumbra1Model, [FeatureSmallICache]>;
+   def : ProcessorModel<"penumbra2", Penumbra2Model, [FeatureBranchPenalty]>;
+   ```
+   TableGen then auto-generates `bool hasBranchPenalty()` /
+   `hasSmallICache()` predicate accessors on `PenumbraSubtarget`.
+
+### Where the knobs are read (the first two consumers already have entries)
+
+- **Branch-vs-branchless** — the "Compiler: no branch-cost model" entry
+  above is exactly this fork: the `select_constant_cmp` combine and the
+  missing TTI cost hooks. Wire `getCFInstrCost` /
+  `predictableSelectIsExpensive` / `getCmpSelInstrCost` in
+  `PenumbraTargetTransformInfo.h` (it already holds the subtarget) to return
+  branch-favoring costs when `!hasBranchPenalty()` and branchless-favoring
+  costs when `hasBranchPenalty()`, and/or gate the combine on the feature.
+- **Code density** — the "Compiler: inline small constant-size memcpy"
+  entry: gate the inline-expansion thresholds (`MaxStoresPerMem*`, whether
+  to inline at all) on `!hasSmallICache()`, so gen1's tiny L1 keeps the
+  compact `bl memcpy` while gen2 inlines. The same flag could later skew
+  loop unrolling and the 16-bit-jump-table choice.
+
+### Selection and defaults
+
+- `-mcpu=penumbra1|penumbra2` selects the processor; because the *arch*
+  feature set is identical (shared ISA), this is purely a tune selection and
+  is always safe. `-mtune=` already works via the TuneCPU plumbing.
+- The empty-`-mcpu` default lives in one place
+  (`PenumbraTargetMachine.cpp:238,242`). Keep `penumbra1` as the default
+  while gen1 is the shipping silicon; flip to `penumbra2` there — and nowhere
+  else — when gen2 becomes the primary target. Treat that line as the single
+  source of truth for the default-gen policy.
+- Clang: confirm `-mcpu` reaches cc1 `-target-cpu` for both Penumbra
+  toolchains (bare-metal `PenumbraToolChain` and the NetBSD path); the build
+  systems (`hw/rom`, `build.sh`) then pass `-mcpu=penumbra2` once gen2 is
+  real.
+
+### Known limitation (not blocking)
+
+`PenumbraTargetMachine` builds a single `Subtarget` at construction
+(`PenumbraTargetMachine.cpp:242`) rather than the cached per-function
+`SubtargetMap` pattern, so gen selection is **whole-module** — per-function
+`target-cpu` attributes won't re-key the subtarget. That is all we need; if
+mixed-gen-in-one-module tuning is ever wanted, adopt the AArch64/RISC-V
+`getSubtargetImpl(const Function&)` + `SubtargetMap` cache.
+
+### Validation
+
+Lock the knob behavior with lit tests that run the same `.ll` under
+`-mcpu=penumbra1` and `-mcpu=penumbra2` and CHECK the divergence (branch vs.
+branchless select-of-constants; `bl memcpy` vs. inline word stores). The
+*infrastructure* is what this entry covers; the actual cost *numbers* are a
+measure-on-hardware follow-up gated on gen2 silicon (benchmark on the
+ULX3S, not the ISS).
+
+### Open decisions
+
+- Feature granularity: the two properties above now vs. a finer set up
+  front. Recommend two; grow on demand.
+- Whether gen2 also drops `FeatureSmallICache` — depends on the gen2 L1
+  size, still open in the gen2 design.
+- Whether to expose a user-facing `-mtune` story or keep it `-mcpu`-only.
+
 ## Compiler: fuse a widening multiply into a single MUL_P
 
 A 32×32→64 widening multiply currently selects to **two** hardware
