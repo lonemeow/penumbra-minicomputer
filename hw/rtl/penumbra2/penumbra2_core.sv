@@ -8,11 +8,12 @@
 //   - PC -> IF1 -> i-mem -> IF2 -> spine -> commit,
 //   - the back-pressure chain spine(fetch_stall) -> IF2 -> IF1 (hold PC).
 //
-// Scope of this milestone: straight-line ALU/divmul streams ending in BREAK.
-// Not yet wired: the taken-branch redirect (spine.o_branch_* is exposed but
-// the PC redirect into IF1 is deferred to the branch milestone), the I-side
-// fault path (no MMU; IF2 raises no fault), and loads/stores (the MEM data
-// path is still a skeleton). The instruction memory is a flat BRAM stand-in
+// Scope of this milestone: straight-line plus control-flow ALU/divmul streams
+// ending in BREAK. The taken-branch redirect is now closed: EX resolves a
+// branch (spine.o_branch_*), IF1 steers PC to the target, and IF1/IF2/ID bubble
+// the three wrong-path slots (the 3-bubble flush). Still not wired: the I-side
+// fault path (no MMU; IF2 raises no fault) and loads/stores (the MEM data path
+// is still a skeleton). The instruction memory is a flat BRAM stand-in
 // (bram_mem) with the streaming registered-read contract the IF1/IF2 split is
 // built around — a real BRAM-backed I-cache replaces it later, behind the
 // same IF interface.
@@ -53,8 +54,7 @@ module penumbra2_core
     output logic [OPC_W-1:0]      o_retire_op_class
 );
 
-    // IF2's fault outputs and the spine's branch-redirect outputs have no
-    // consumer in this milestone (no MMU, no PC redirect yet).
+    // IF2's fault outputs have no consumer in this milestone (no MMU yet).
     /* verilator lint_off PINCONNECTEMPTY */
 
     // ── Front-end wires ──────────────────────────────────────────
@@ -70,12 +70,17 @@ module penumbra2_core
     logic        if2_stall;     // IF2 -> IF1 back-pressure
     logic        fetch_stall;   // spine (ID) -> IF2 back-pressure
 
+    // ── Taken-branch redirect (EX -> front end) ──────────────────
+    logic        branch_taken;  // flush IF1/IF2 + steer PC this cycle
+    logic [31:0] branch_target; // resolved branch target
+
     // ══════════════════════════════════════════════════════════
     // IF1 — PC + fetch address generation
     // ══════════════════════════════════════════════════════════
     penumbra2_if1_stage #(.RESET_PC(RESET_PC)) u_if1 (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_stall_in(if2_stall),
+        .i_redirect(branch_taken), .i_redirect_pc(branch_target),
         .o_fetch_addr(if1_fetch_addr), .o_fetch_en(if1_fetch_en),
         .o_pc(if1_pc), .o_next_pc(if1_next_pc), .o_valid(if1_valid)
     );
@@ -99,6 +104,7 @@ module penumbra2_core
         .i_pc(if1_pc), .i_next_pc(if1_next_pc), .i_valid(if1_valid),
         .i_ir(imem_rdata),
         .i_stall_in(fetch_stall),
+        .i_flush(branch_taken),
         .o_stall(if2_stall),
         .o_ir(if2_ir), .o_pc(if2_pc), .o_next_pc(if2_next_pc),
         .o_valid(if2_valid),
@@ -117,7 +123,7 @@ module penumbra2_core
         .o_commit_idx(o_commit_idx), .o_commit_data(o_commit_data),
         .o_commit_we(o_commit_we),
         .o_retire_valid(o_retire_valid), .o_retire_op_class(o_retire_op_class),
-        .o_branch_taken(), .o_branch_target()
+        .o_branch_taken(branch_taken), .o_branch_target(branch_target)
     );
 
     /* verilator lint_on PINCONNECTEMPTY */

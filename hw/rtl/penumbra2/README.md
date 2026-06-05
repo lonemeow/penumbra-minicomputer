@@ -19,18 +19,23 @@ The front end is `penumbra2_if1_stage` (PC register + fetch-address
 generation) and `penumbra2_if2_stage` (deliver the fetched word + PC
 to ID). `penumbra2_core` wires the front end onto the datapath:
 `PC → IF1 → instruction memory → IF2 → penumbra2_spine`, closing the
-back-pressure chain up to the PC and halting on a retiring BREAK. The
-instruction memory is `bram_mem` (in `hw/rtl/sim/`), a flat
-registered-read BRAM stand-in with a read clock-enable — the streaming
-contract the IF1/IF2 split is built around, ahead of the real
-BRAM-backed I-cache. `penumbra2_core` runs an assembled program rather
-than a hand-driven stream, so it is exercised by `make test-penumbra2`
-(which loads `hw/sim/programs/penumbra2_smoke.s` into the i-mem) rather
-than `MODULE_TESTS`; IF1/IF2 are covered through it.
+back-pressure chain up to the PC, the taken-branch redirect from EX
+back to the PC, and halting on a retiring BREAK. The instruction memory
+is `bram_mem` (in `hw/rtl/sim/`), a flat registered-read BRAM stand-in
+with a read clock-enable — the streaming contract the IF1/IF2 split is
+built around, ahead of the real BRAM-backed I-cache. `penumbra2_core`
+runs an assembled program rather than a hand-driven stream, so it is
+exercised by `make test-penumbra2` (straight-line + RAW-stall) and
+`make test-penumbra2-branch` (taken/not-taken/unconditional branches +
+a backward loop) rather than `MODULE_TESTS`; IF1/IF2 are covered
+through them.
 
-Not yet wired in the core: the taken-branch PC redirect (resolved in
-EX but not fed back to IF1 yet), the I-side fault path (no MMU), and
-loads/stores (the MEM data path is still a skeleton).
+When EX resolves a branch taken it drives `o_branch_taken` /
+`o_branch_target`; the core steers the PC to the target via
+`if1.i_redirect` and bubbles the three wrong-path slots (IF1/IF2 via
+`i_redirect`/`i_flush`, ID via the spine's `ex_branch_taken` bubble) —
+the 3-bubble flush. Still not wired in the core: the I-side fault path
+(no MMU) and loads/stores (the MEM data path is still a skeleton).
 
 Core-internal microarchitectural constants (scoreboard indices,
 `op_class` / `alu_op` / `mem_op` encodings) live in

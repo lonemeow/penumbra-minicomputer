@@ -13,6 +13,11 @@
 // is raised. IF2's only stall source is back-pressure from ID (i_stall_in);
 // when held, it freezes its output register and back-pressures IF1, which
 // holds the PC and the address so the same word stays presented.
+//
+// A taken branch resolved in EX flushes the front end: IF2 is one of the three
+// wrong-path slots (it holds the branch-shadow fetch). i_flush discards it by
+// forcing the IF2/ID register to a bubble, and wins over back-pressure — the
+// instruction is being thrown away, so holding it makes no sense.
 
 module penumbra2_if2_stage
 (
@@ -29,6 +34,7 @@ module penumbra2_if2_stage
 
     // ── Pipeline handshake ───────────────────────────────────────
     input  logic        i_stall_in,     // ID cannot accept this cycle
+    input  logic        i_flush,        // taken-branch flush: bubble the IF2/ID slot
     output logic        o_stall,         // back-pressure to IF1
 
     // ── IF2/ID register out (to ID) ──────────────────────────────
@@ -42,11 +48,17 @@ module penumbra2_if2_stage
 
     // ── Issue / back-pressure control ────────────────────────────
     // IF2 has no stall source of its own yet (hit-always, no miss path),
-    // so it advances every cycle unless ID back-pressures it.
+    // so it advances every cycle unless ID back-pressures it. A taken-branch
+    // flush wins over back-pressure: the in-flight fetch is wrong-path and
+    // gets discarded, so there is nothing to hold (mirrors MEM's i_bubble).
     logic advance, next_valid;
 
     always_comb begin
-        if (i_stall_in) begin
+        if (i_flush) begin
+            next_valid = 1'b0;          // flush wins: discard the wrong-path fetch
+            advance    = 1'b0;
+            o_stall    = i_stall_in;    // still pass upstream back-pressure through
+        end else if (i_stall_in) begin
             next_valid = o_valid;       // hold IF2/ID unchanged
             advance    = 1'b0;
             o_stall    = 1'b1;
@@ -76,5 +88,12 @@ module penumbra2_if2_stage
     // ID's input, ready for the fault path to drive them later.
     assign o_fault_pending = 1'b0;
     assign o_fault_vec     = 4'd0;
+
+    // ── Assertion (sim-only; stripped at synth) ──────────────────
+    // A taken-branch flush must bubble the IF2/ID slot the next cycle — the
+    // branch-shadow instruction must never reach ID and decode.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        i_flush |=> !o_valid)
+        else $error("penumbra2_if2_stage: flush did not bubble the IF2/ID slot");
 
 endmodule

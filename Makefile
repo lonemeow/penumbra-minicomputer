@@ -246,6 +246,15 @@ test-all: test test-modules
 test-penumbra2:
 	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_smoke TB=tb_penumbra2_core
 
+# ── Penumbra/2 core branch-redirect test ──────────────────────
+# Same core, the branch-redirect milestone program: forward taken/not-taken
+# branches, an unconditional branch, and a backward loop. Self-checks into R1,
+# so it validates the taken-branch PC redirect + 3-bubble front-end flush.
+# Usage: make test-penumbra2-branch
+.PHONY: test-penumbra2-branch
+test-penumbra2-branch:
+	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_branch TB=tb_penumbra2_branch
+
 # ── Run all program tests on ISS (fast, no Docker) ────────────
 # Same test programs as `make test` but runs on the ISS.
 # Usage: make test-iss
