@@ -62,7 +62,7 @@ module penumbra2_decode
 
     // ── MEM controls ─────────────────────────────────────────────
     output logic [MEM_OP_W-1:0]  o_mem_op,
-    output logic [1:0]           o_mem_size,      // 00 byte, 01 half, 10 word
+    output logic [1:0]           o_mem_size,      // MEM_SZ_BYTE / MEM_SZ_HALF / MEM_SZ_WORD
     output logic                 o_sign_ext,      // sub-word load sign-extend
 
     // ── Sysreg / SPR selects ─────────────────────────────────────
@@ -166,7 +166,7 @@ module penumbra2_decode
         o_reads_flags      = 1'b0;
         o_flag_only        = 1'b0;
         o_mem_op           = MEM_NONE;
-        o_mem_size         = 2'b10;          // word
+        o_mem_size         = MEM_SZ_WORD;
         o_sign_ext         = 1'b0;
         o_sys_dev          = field_1512;
         o_sys_reg          = field_118;

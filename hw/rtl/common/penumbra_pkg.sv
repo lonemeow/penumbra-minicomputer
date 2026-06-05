@@ -112,6 +112,15 @@ package penumbra_pkg;
     localparam logic [3:0] OP_L_JMP   = 4'b1011;  // PC = Rd
     localparam logic [3:0] OP_L_JALR  = 4'b1100;  // R13 = PC+4; PC = Rd
 
+    // ── Memory access size (Format M `sz` field, IR[28:27]) ──────
+    // An enum, not a packed bitfield: only these three encodings are
+    // defined. 2'b11 is reserved and never produced by a well-formed
+    // instruction. Drives sub-word extract (loads) and lane-replicate
+    // plus byte-enable (stores).
+    localparam logic [1:0] MEM_SZ_BYTE = 2'b00;  // 8-bit
+    localparam logic [1:0] MEM_SZ_HALF = 2'b01;  // 16-bit
+    localparam logic [1:0] MEM_SZ_WORD = 2'b10;  // 32-bit
+
     // ── MMU access types (one-hot, matches R/W/X flag positions) ──
     localparam logic [2:0] ACC_READ  = 3'b001;  // bit 0 = R
     localparam logic [2:0] ACC_WRITE = 3'b010;  // bit 1 = W
