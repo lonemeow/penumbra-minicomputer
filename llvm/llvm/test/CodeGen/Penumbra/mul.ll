@@ -91,24 +91,18 @@ define i32 @smulo_i32(i32 %a, i32 %b, ptr %ov) {
 ; CHECK-LABEL: smulo_i32:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 4
-; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r4, r1
 ; CHECK-NEXT:    mul r4, r2, r11
 ; CHECK-NEXT:    mul r1, r2
-; CHECK-NEXT:    mov r13, r1
-; CHECK-NEXT:    sar r13, 31
-; CHECK-NEXT:    lli r2, 1
-; CHECK-NEXT:    lli r4, 0
-; CHECK-NEXT:    cmp r11, r13
-; CHECK-NEXT:    bne .LBB5_2
-; CHECK-NEXT:  // %bb.1:
-; CHECK-NEXT:    mov r2, r4
-; CHECK-NEXT:  .LBB5_2:
+; CHECK-NEXT:    mov r2, r1
+; CHECK-NEXT:    sar r2, 31
+; CHECK-NEXT:    sub r11, r2
+; CHECK-NEXT:    cmp r0, r11
+; CHECK-NEXT:    mov r2, r0
+; CHECK-NEXT:    sbc r2, r0
+; CHECK-NEXT:    and r2, 1
 ; CHECK-NEXT:    and r2, 1
 ; CHECK-NEXT:    stb r2, [r3 + 0]
-; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 4
 ; CHECK-NEXT:    jmp r13
   %r = call {i32, i1} @llvm.smul.with.overflow.i32(i32 %a, i32 %b)
   %v = extractvalue {i32, i1} %r, 0

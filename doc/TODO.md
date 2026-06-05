@@ -1031,6 +1031,23 @@ feeder's RHS is a uimm16 (with the same predicate-swap fallback
 for constant-LHS cases). Code lives in
 `llvm/llvm/lib/Target/Penumbra/GISel/PenumbraInstructionSelector.cpp`.
 
+## Compiler: redundant mask on zero-extended comparison results
+
+The branchless `icmp`-to-value path (`selectICmpToValue`) already
+produces a clean 0/1 in a GPR, but when that result is zero-extended
+to i32 — the common `zext i1` consumer — `selectZExt` still emits an
+`ANDi #1`, which is a no-op on an already-0/1 value. The inverted
+predicates (`ult`, `ugt`, `ne`) compound it: `emitCarryToValue`'s own
+`ANDi #1` (masking the SBC's 0/0xFFFFFFFF down to 0/1) is then followed
+by the zext's `ANDi #1`, so the value is masked twice.
+
+Fix: when the s1 source of a `G_ZEXT` is a value already known to be
+0/1 — defined by `G_ICMP` (or, post-selection, our flag-read
+sequence) — emit a `COPY` instead of `ANDi #1`. The cleanest hook is a
+check in `selectZExt` for a `G_ICMP`-defined source; a known-bits-based
+combiner could generalize it. Code lives in
+`llvm/llvm/lib/Target/Penumbra/GISel/PenumbraInstructionSelector.cpp`.
+
 ## Compiler: fuse a widening multiply into a single MUL_P
 
 A 32×32→64 widening multiply currently selects to **two** hardware

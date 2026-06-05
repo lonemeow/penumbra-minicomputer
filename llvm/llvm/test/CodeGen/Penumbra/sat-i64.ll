@@ -190,43 +190,35 @@ define i64 @bavail_i64(i64 %bfree, i64 %bresvd) {
 ; CHECK-LABEL: bavail_i64:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 8
-; CHECK-NEXT:    stw r5, [r14 + 4] // 4-byte Folded Spill
+; CHECK-NEXT:    sub r14, 4
 ; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
-; CHECK-NEXT:    lli r11, 1
-; CHECK-NEXT:    lli r13, 0
-; CHECK-NEXT:    cmp r1, r3
-; CHECK-NEXT:    bhi .LBB5_2
+; CHECK-NEXT:    cmp r3, r1
+; CHECK-NEXT:    mov r13, r0
+; CHECK-NEXT:    mov r11, r13
+; CHECK-NEXT:    sbc r11, r0
+; CHECK-NEXT:    and r11, 1
+; CHECK-NEXT:    cmp r4, r2
+; CHECK-NEXT:    sbc r13, r0
+; CHECK-NEXT:    and r13, 1
+; CHECK-NEXT:    cmp r2, r4
+; CHECK-NEXT:    beq .LBB5_2
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r11, r13
 ; CHECK-NEXT:  .LBB5_2:
-; CHECK-NEXT:    lli r13, 1
-; CHECK-NEXT:    lli r5, 0
-; CHECK-NEXT:    cmp r2, r4
-; CHECK-NEXT:    bhi .LBB5_4
-; CHECK-NEXT:  // %bb.3:
-; CHECK-NEXT:    mov r13, r5
-; CHECK-NEXT:  .LBB5_4:
-; CHECK-NEXT:    cmp r2, r4
-; CHECK-NEXT:    beq .LBB5_6
-; CHECK-NEXT:  // %bb.5:
-; CHECK-NEXT:    mov r11, r13
-; CHECK-NEXT:  .LBB5_6:
 ; CHECK-NEXT:    sub r1, r3
 ; CHECK-NEXT:    sbc r2, r4
 ; CHECK-NEXT:    test r11, 1
-; CHECK-NEXT:    bne .LBB5_8
-; CHECK-NEXT:  // %bb.7:
+; CHECK-NEXT:    bne .LBB5_4
+; CHECK-NEXT:  // %bb.3:
 ; CHECK-NEXT:    mov r1, r0
-; CHECK-NEXT:  .LBB5_8:
+; CHECK-NEXT:  .LBB5_4:
 ; CHECK-NEXT:    test r11, 1
-; CHECK-NEXT:    bne .LBB5_10
-; CHECK-NEXT:  // %bb.9:
+; CHECK-NEXT:    bne .LBB5_6
+; CHECK-NEXT:  // %bb.5:
 ; CHECK-NEXT:    mov r2, r0
-; CHECK-NEXT:  .LBB5_10:
+; CHECK-NEXT:  .LBB5_6:
 ; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r5, [r14 + 4] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 8
+; CHECK-NEXT:    add r14, 4
 ; CHECK-NEXT:    jmp r13
   %cmp = icmp ugt i64 %bfree, %bresvd
   %sub = sub i64 %bfree, %bresvd

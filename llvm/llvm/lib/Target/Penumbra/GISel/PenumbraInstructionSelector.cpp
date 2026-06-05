@@ -71,11 +71,17 @@ private:
                     MachineRegisterInfo &MRI) const;
   bool selectICmp(MachineInstr &I, MachineBasicBlock &MBB,
                   MachineRegisterInfo &MRI) const;
+  // Branchless materialisation of an ICMP value via CMP + a carry read, for the
+  // predicates that map to a single flag.  Returns false (caller falls back to
+  // the SELECT_CC branch form) for predicates it doesn't handle.
+  bool selectICmpToValue(CmpInst::Predicate Pred, Register DstReg, Register LHS,
+                         Register RHS, MachineInstr &I, MachineBasicBlock &MBB,
+                         MachineRegisterInfo &MRI) const;
   // G_UADDO/G_UADDE/G_USUBO/G_USUBE → the hardware ADD/ADC, SUB/SBC carry chain.
   bool selectAddSubCarry(MachineInstr &I, MachineBasicBlock &MBB,
                          MachineRegisterInfo &MRI) const;
-  // Read SR.C back into a 0/1 GPR value (the carry-out / borrow-out result).
-  bool emitCarryToValue(Register OutReg, bool IsSub, MachineInstr &I,
+  // Read SR.C into a 0/1 GPR value; InvertCarry yields NOT C (the borrow).
+  bool emitCarryToValue(Register OutReg, bool InvertCarry, MachineInstr &I,
                         MachineBasicBlock &MBB, MachineRegisterInfo &MRI) const;
   // Place a 0/1 GPR value into SR.C ahead of an ADC/SBC (the carry-in fixup).
   bool emitSetCarryFromValue(Register CarryInReg, bool IsSub, MachineInstr &I,
@@ -635,6 +641,12 @@ bool PenumbraInstructionSelector::selectICmp(MachineInstr &I,
   Register RHS = I.getOperand(3).getReg();
   const DebugLoc &DL = I.getDebugLoc();
 
+  // Fast path: predicates that map to a single Penumbra flag materialise
+  // branchlessly as CMP + a carry read.  Signed predicates fall through to the
+  // SELECT_CC diamond below.
+  if (selectICmpToValue(Pred, DstReg, LHS, RHS, I, MBB, MRI))
+    return true;
+
   unsigned BrOpc = icmpPredToBranchOpc(Pred);
   if (!BrOpc)
     return false;
@@ -656,6 +668,89 @@ bool PenumbraInstructionSelector::selectICmp(MachineInstr &I,
 
   I.eraseFromParent();
   return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
+}
+
+// Materialise an ICMP result without a branch, for predicates that reduce to a
+// single Penumbra flag.  A flag-only CMP (SUB-with-flags) computes CmpL - CmpR
+// and leaves SR.C = NOT borrow = (CmpL >= CmpR) unsigned.  Each handled
+// predicate boils down to (CmpL, CmpR, InvertCarry): emit one CMP, then read
+// SR.C — inverted or not — into a 0/1 GPR via emitCarryToValue (the same
+// flag->value bridge the carry chain uses).  Signed predicates return false so
+// the caller emits the SELECT_CC branch form.
+bool PenumbraInstructionSelector::selectICmpToValue(
+    CmpInst::Predicate Pred, Register DstReg, Register LHS, Register RHS,
+    MachineInstr &I, MachineBasicBlock &MBB, MachineRegisterInfo &MRI) const {
+  const DebugLoc &DL = I.getDebugLoc();
+
+  auto isZero = [&](Register R) {
+    if (R == Penumbra::R0)
+      return true;
+    auto C = getIConstantVRegVal(R, MRI);
+    return C && C->isZero();
+  };
+
+  // Resolve the predicate to the compare operands and the carry polarity.
+  //   InvertCarry == false -> result is SR.C       (CmpL >= CmpR)
+  //   InvertCarry == true  -> result is NOT SR.C   (CmpL <  CmpR)
+  // The "greater" forms reuse the "less" readings with the operands swapped
+  // (a > b is b < a; a <= b is b >= a), so only two flag readings are needed.
+  Register CmpL, CmpR;
+  bool InvertCarry = false;
+  switch (Pred) {
+  case CmpInst::ICMP_ULT: //         a <  b           ->  NOT C
+    CmpL = LHS, CmpR = RHS;
+    InvertCarry = true;
+    break;
+  case CmpInst::ICMP_UGE: //         a >= b           ->  C
+    CmpL = LHS, CmpR = RHS;
+    break;
+  case CmpInst::ICMP_UGT: //         a >  b = b <  a  ->  NOT C
+    CmpL = RHS, CmpR = LHS;
+    InvertCarry = true;
+    break;
+  case CmpInst::ICMP_ULE: //         a <= b = b >= a  ->  C
+    CmpL = RHS, CmpR = LHS;
+    break;
+  case CmpInst::ICMP_EQ:
+  case CmpInst::ICMP_NE: {
+    // Test (lhs - rhs) == 0 via the carry: CMP r0, diff sets SR.C = (diff == 0)
+    // because 0 >= diff unsigned only when diff is zero.  A zero operand needs
+    // no subtract.  eq reads SR.C; ne reads its inverse.
+    if (isZero(RHS))
+      CmpR = LHS;
+    else if (isZero(LHS))
+      CmpR = RHS; // (0 - rhs == 0) iff (rhs == 0)
+    else {
+      // Diff = LHS - RHS.  SUB's tied operand ($Rd = $Rd_in) lets the
+      // two-address pass insert the LHS->Diff copy; defining Diff directly here
+      // (rather than COPY-into-then-SUB-into the same reg) keeps valid SSA.
+      Register Diff =
+          MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
+      MachineInstr *Sub = BuildMI(MBB, I, DL, TII.get(Penumbra::SUB))
+                              .addDef(Diff)
+                              .addReg(LHS) // tied to Diff
+                              .addReg(RHS);
+      if (!constrainSelectedInstRegOperands(*Sub, TII, TRI, RBI))
+        return false;
+      CmpR = Diff;
+    }
+    CmpL = Penumbra::R0;
+    InvertCarry = (Pred == CmpInst::ICMP_NE);
+    break;
+  }
+  default:
+    return false; // signed predicates use the SELECT_CC branch form
+  }
+
+  // Shared tail: one CMP sets SR.C, emitCarryToValue reads it into DstReg.
+  MachineInstr *Cmp =
+      BuildMI(MBB, I, DL, TII.get(Penumbra::CMP)).addReg(CmpL).addReg(CmpR);
+  if (!constrainSelectedInstRegOperands(*Cmp, TII, TRI, RBI))
+    return false;
+  if (!emitCarryToValue(DstReg, InvertCarry, I, MBB, MRI))
+    return false;
+  I.eraseFromParent();
+  return true;
 }
 
 // ── G_UADDO / G_UADDE / G_USUBO / G_USUBE ────────────────────────────────────
@@ -730,45 +825,48 @@ bool PenumbraInstructionSelector::selectAddSubCarry(
   if (!constrainSelectedInstRegOperands(*Arith, TII, TRI, RBI))
     return false;
 
-  // Carry-out: only materialise it if something actually consumes it.
+  // Carry-out: only materialise it if something actually consumes it.  A sub's
+  // carry-out is the borrow (NOT SR.C), so invert there.
   if (!MRI.use_nodbg_empty(CarryOutReg))
-    if (!emitCarryToValue(CarryOutReg, IsSub, I, MBB, MRI))
+    if (!emitCarryToValue(CarryOutReg, /*InvertCarry=*/IsSub, I, MBB, MRI))
       return false;
 
   I.eraseFromParent();
   return true;
 }
 
-// Read SR.C into OutReg as a clean 0/1 value, inserted before I (after the
-// ADD/SUB that set SR.C).  `R0 + R0 + C` via ADC yields exactly the carry bit.
-// After a SUB, SR.C is NOT borrow, so the borrow value is its inverse: SBC of
-// zeros gives -(borrow) (0 or 0xFFFFFFFF), which AND #1 reduces to 0/1.
+// Read SR.C into OutReg as a clean 0/1 value, inserted before I (after whatever
+// flag-setting ALU op produced SR.C).  When InvertCarry is false the result is
+// SR.C itself — `R0 + R0 + C` via ADC yields exactly the carry bit.  When true
+// the result is NOT C: an SBC of zeros gives -(NOT C) (0 or 0xFFFFFFFF), which
+// AND #1 reduces to 0/1.  (For a SUB/CMP, SR.C is NOT borrow, so InvertCarry
+// recovers the borrow; for a less-than compare it flips >= into <.)
 bool PenumbraInstructionSelector::emitCarryToValue(
-    Register OutReg, bool IsSub, MachineInstr &I, MachineBasicBlock &MBB,
+    Register OutReg, bool InvertCarry, MachineInstr &I, MachineBasicBlock &MBB,
     MachineRegisterInfo &MRI) const {
   const DebugLoc &DL = I.getDebugLoc();
 
   // Seed a zero (COPY of the hardwired R0) for the destructive ADC/SBC's tied
-  // input; COPY does not touch SR, so it is safe between the SUB and the read.
+  // input; COPY does not touch SR, so it is safe between the producer and read.
   Register Zero = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
   BuildMI(MBB, I, DL, TII.get(TargetOpcode::COPY)).addDef(Zero).addReg(Penumbra::R0);
   if (!RBI.constrainGenericRegister(Zero, Penumbra::GPR_AllocatableRegClass, MRI))
     return false;
 
-  // Add path: OutReg = 0 + 0 + C = C (0/1).
-  // Sub path: Tmp = 0 - 0 - ~C = -(borrow); mask to 0/1 below.
+  // Direct: OutReg = 0 + 0 + C = C (0/1).
+  // Inverted: Raw = 0 - 0 - ~C = -(NOT C); masked to 0/1 below.
   Register RawReg =
-      IsSub ? MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass)
-            : OutReg;
+      InvertCarry ? MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass)
+                  : OutReg;
   MachineInstr *Raw =
-      BuildMI(MBB, I, DL, TII.get(IsSub ? Penumbra::SBC : Penumbra::ADC))
+      BuildMI(MBB, I, DL, TII.get(InvertCarry ? Penumbra::SBC : Penumbra::ADC))
           .addDef(RawReg)
           .addReg(Zero)          // tied to RawReg
           .addReg(Penumbra::R0);
   if (!constrainSelectedInstRegOperands(*Raw, TII, TRI, RBI))
     return false;
 
-  if (IsSub) {
+  if (InvertCarry) {
     MachineInstr *Mask = BuildMI(MBB, I, DL, TII.get(Penumbra::ANDi))
                              .addDef(OutReg)
                              .addReg(RawReg)

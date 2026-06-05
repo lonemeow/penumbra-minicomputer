@@ -72,22 +72,12 @@ define i1 @cmp_i64_eq(i64 %a, i64 %b) {
 ; CHECK-LABEL: cmp_i64_eq:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 4
-; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
-; CHECK-NEXT:    mov r11, r1
-; CHECK-NEXT:    mov r13, r0
-; CHECK-NEXT:    xor r11, r3
+; CHECK-NEXT:    xor r1, r3
 ; CHECK-NEXT:    xor r2, r4
-; CHECK-NEXT:    or r11, r2
-; CHECK-NEXT:    lli r1, 1
-; CHECK-NEXT:    lli r2, 0
-; CHECK-NEXT:    cmp r11, r13
-; CHECK-NEXT:    beq .LBB6_2
-; CHECK-NEXT:  // %bb.1:
-; CHECK-NEXT:    mov r1, r2
-; CHECK-NEXT:  .LBB6_2:
-; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 4
+; CHECK-NEXT:    or r1, r2
+; CHECK-NEXT:    cmp r0, r1
+; CHECK-NEXT:    mov r1, r0
+; CHECK-NEXT:    adc r1, r0
 ; CHECK-NEXT:    jmp r13
   %cmp = icmp eq i64 %a, %b
   ret i1 %cmp
