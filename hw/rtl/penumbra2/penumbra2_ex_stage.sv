@@ -244,11 +244,18 @@ module penumbra2_ex_stage
     localparam logic [4:0] DM_OP_DIVU = 5'b10000;
 
     logic        is_divmul;
+    logic        divmul_in_ex;   // a valid divmul occupies EX (the level)
+    logic        dm_started;     // the divmul in EX has already been launched
     logic [4:0]  dm_op;
     logic        dm_start, dm_busy, dm_fault, dm_z, dm_n;
     logic [31:0] dm_lo, dm_hi;
 
-    assign is_divmul = (i_op_class == OPC_DIVMUL);
+    // Issue/back-pressure control outputs, declared here because the divmul
+    // launch FF below references `advance`; both are assigned further down.
+    logic        advance, next_valid;
+
+    assign is_divmul    = (i_op_class == OPC_DIVMUL);
+    assign divmul_in_ex = is_divmul & i_valid & ~i_fault_pending & ~i_bubble;
 
     always_comb begin
         case (i_divmul_op)
@@ -259,9 +266,21 @@ module penumbra2_ex_stage
         endcase
     end
 
-    // Hold start high while the divmul is the EX insn; the unit triggers
-    // on its rising edge and ignores the held level afterward.
-    assign dm_start = is_divmul & i_valid & ~i_fault_pending & ~i_bubble;
+    // The unit's protocol wants a one-cycle i_start pulse, and it triggers on
+    // a rising edge. A held level would launch only the FIRST of two adjacent
+    // divmuls — the level never falls between back-to-back divmuls, so the
+    // second's edge is swallowed and it silently reuses the first's result.
+    // So pulse start exactly on a divmul's first EX cycle: dm_started latches
+    // once we launch and holds until the instruction advances out of EX (the
+    // next divmul re-arms). Holding until advance — not until the unit goes
+    // idle — keeps a finished-but-back-pressured divmul from re-launching.
+    assign dm_start = divmul_in_ex & ~dm_started;
+
+    always_ff @(posedge i_clk) begin
+        if (i_rst)         dm_started <= 1'b0;
+        else if (advance)  dm_started <= 1'b0;   // left EX → re-arm for the next divmul
+        else if (dm_start) dm_started <= 1'b1;   // launched this divmul
+    end
 
     divmul u_divmul (
         .i_clk(i_clk), .i_rst(i_rst),
@@ -272,10 +291,12 @@ module penumbra2_ex_stage
         .o_flag_z(dm_z), .o_flag_n(dm_n)
     );
 
-    // While the unit is busy EX holds the insn; it advances the cycle
-    // the unit is no longer busy (with results, or with a DIV0 fault).
+    // While the unit is busy EX holds the insn; it advances the cycle the unit
+    // is no longer busy (with results, or with a DIV0 fault). The hold tracks
+    // the level (divmul-in-EX), not the launch pulse — the pulse is high only
+    // on the first cycle, but the hold must persist for the whole iteration.
     logic dm_stall;
-    assign dm_stall  = dm_start & dm_busy;
+    assign dm_stall  = divmul_in_ex & dm_busy;
     assign o_funit_stall = dm_stall;
 
     // ── Issue / back-pressure control ────────────────────────────
@@ -283,8 +304,7 @@ module penumbra2_ex_stage
     // back-pressured (MEM via i_stall_in), sequencing a drain-commit, or
     // waiting on the divmul unit. i_bubble — the fault-flush from WB —
     // forces the in-flight slot to a bubble and wins over everything.
-    logic advance, next_valid;
-
+    // (advance/next_valid are declared above the divmul block.)
     always_comb begin
         if (i_bubble) begin
             next_valid = 1'b0;          // flush wins

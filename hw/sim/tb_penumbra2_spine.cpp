@@ -14,8 +14,10 @@
 // values therefore prove the RAW stalls (and the divmul dual-write commit)
 // actually fired — no separate cycle-counting needed.
 //
-// Covers: independent ALU flow, a RAW-dependent ADD chain (Example 1), and
-// a MUL whose two results (Rd low, Rdh high) are each consumed (Example 5).
+// Covers: independent ALU flow, a RAW-dependent ADD chain (Example 1), a MUL
+// whose two results (Rd low, Rdh high) are each consumed (Example 5), and
+// back-to-back divmuls with a reader of the older divmul's high half (the
+// two-aux-live window the spine's aux-mutual-exclusion assertion carves out).
 // Straight-line only — no branches/loads/exceptions yet.
 
 #include <cstdio>
@@ -130,6 +132,38 @@ int main() {
         check("mul_r3_hi", sh[3], 0);
         check("mul_r4",    sh[4], 142);
         check("mul_r5",    sh[5], 200);
+    }
+
+    // ── Test 3: back-to-back divmuls + reader of the OLDER divmul's Rdh ──
+    // As divmul A leaves EX for MEM, divmul B enters EX the same cycle, so for
+    // one cycle two aux (Rdh) writers are live — A.Rdh in MEM, B.Rdh in EX.
+    // The scoreboard's single aux port exposes only the youngest (B.Rdh); A.Rd
+    // is still covered by i_mem_dst, but A.Rdh is not. RAW must still hold
+    // because B's ~33-cycle EX stall pins the reader in ID until A commits.
+    //   A: MUL R1,R2 (Rdh=R3): R1=42, R3=0 (overwrites R3's 0xAB sentinel)
+    //   B: MUL R4,R5 (Rdh=R6): R4=12, R6=0
+    //   reader: ADD R7,R3 reads A.Rdh — correct R7=0x100, missed stall=0x1AB
+    // (the sentinel makes a hidden-aux RAW miss observable). Also the live
+    // exercise of the spine's id_stall-carved aux-mutual-exclusion assertion.
+    {
+        const uint32_t prog[] = {
+            enc_l(OP_L_LLI, 3, 0xAB),             // sentinel in A's Rdh dst
+            enc_l(OP_L_LLI, 1, 6),
+            enc_l(OP_L_LLI, 2, 7),
+            enc_l(OP_L_LLI, 4, 3),
+            enc_l(OP_L_LLI, 5, 4),
+            enc_l(OP_L_LLI, 7, 0x100),            // reader accumulator base
+            enc_r(OP_R_MUL, 1, 2, 0, /*Rdh=*/3),  // A: R1=42, R3=0
+            enc_r(OP_R_MUL, 4, 5, 0, /*Rdh=*/6),  // B: R4=12, R6=0
+            enc_r(OP_R_ADD, 7, 3, 0),             // reads A.Rdh (R3)
+        };
+        for (auto& v : sh) v = 0;
+        run(dut, prog, 9, sh, 300);
+        check("b2b_mulA_lo", sh[1], 42);
+        check("b2b_mulA_hi", sh[3], 0);     // sentinel overwritten by A's Rdh
+        check("b2b_mulB_lo", sh[4], 12);
+        check("b2b_mulB_hi", sh[6], 0);
+        check("b2b_raw_rdh", sh[7], 0x100); // 0x1AB would mean a missed aux RAW
     }
 
     printf("%s: %d/%d checks passed\n",

@@ -421,7 +421,11 @@ int main() {
     int guard = 1;
     while (dut->o_stall && guard < 64) { tick(dut); guard++; }
     check("mul_completed", (guard < 64), 1);
-    tick(dut); dut->eval();                            // latch into EX/MEM
+    tick(dut);                                         // advance edge: latch result into EX/MEM
+    dut->i_valid = 0; dut->eval();                     // model the pipeline feeding EX its next slot:
+                                                       //   a real divmul never persists in EX past
+                                                       //   advance (ID drives the next ID/EX slot), so
+                                                       //   the per-instruction start pulse re-arms safely
     check("mul_valid",        dut->o_valid, 1);
     check("mul_lo",           dut->o_result, 42);
     check("mul_hi",           dut->o_result_aux, 0);
