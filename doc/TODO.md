@@ -143,6 +143,25 @@ to watching for the vector fetch / a sentinel, but no RTL change should
 reintroduce a hardware halt. `o_retire_valid` remains the real insns-retired
 perfctr pulse regardless.
 
+## Hardware: Penumbra/2 store commit vs. fault flush (precise-exception gap)
+
+The MEM stage commits a store's cache/memory write only on the cycle the
+store advances out of MEM (`o_dmem_we` gated on `advance`), so a fault flush
+(`i_bubble`) that arrives *before* the store reaches its commit cycle cancels
+it cleanly — the data memory is untouched. The module testbench's
+`bubble_store_mem` check covers exactly this case.
+
+The residual gap: a flush arriving on the store's *second* (commit) MEM cycle,
+after `advance` has already fired, cannot un-write memory. With a precise
+exception model this must never happen — a store may only commit once every
+older instruction has retired and can no longer fault. When the gen2 exception
+unit lands (see "BREAK must become a real EX trap"), the flush path must
+guarantee the store-commit cycle is reached only when the store is the oldest
+in-flight instruction (e.g. drain older slots before releasing the commit, or
+hold the write until WB confirms no older fault). `i_bubble` is tied off in the
+spine today, so the gap is dormant, not live — but it is a hard requirement on
+the exception unit, not an optimization.
+
 ## Compiler: graceful-fail on unsupported inline asm and vector IR
 
 Today the GlobalISel IRTranslator crashes (`fatal error: unable to
