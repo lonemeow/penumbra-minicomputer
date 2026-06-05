@@ -12,13 +12,16 @@
 // streams ending in BREAK. The taken-branch redirect is closed: EX resolves a
 // branch (spine.o_branch_*), IF1 steers PC to the target, and IF1/IF2/ID bubble
 // the three wrong-path slots (the 3-bubble flush). Loads and stores run through
-// the MEM stage against a flat BRAM data-memory stand-in (a second bram_mem,
-// separate from the i-mem because fetch and a data access can occur the same
-// cycle — exactly why real I/D caches are split). Still not wired: the MMU
-// (both fault paths), the real BRAM-backed L1 caches, and RDSYS. Both flat
-// memories are stand-ins with the streaming registered-read contract the
-// IF1/IF2 split and the MEM single-STALL are built around — real BRAM-backed
-// caches replace them later, behind the same IF and dmem interfaces.
+// the MEM stage against the data port of a single unified memory (unified_mem):
+// fetch and data share one address space and one backing array, presented
+// through two ports — the role the real split L1 I/D caches play over unified
+// physical memory. A store is therefore visible to a later fetch, which the
+// exception path needs (the kernel writes the vector table; the vector fetch
+// reads it). Still not wired: the MMU (both fault paths), the real BRAM-backed
+// L1 caches, and RDSYS. unified_mem is a stand-in with the streaming
+// registered-read contract the IF1/IF2 split and the MEM single-STALL are built
+// around — real BRAM-backed caches replace it later behind the IF and dmem
+// interfaces.
 //
 // No halt: a real CPU never stops on an instruction. BREAK is a trap (taken
 // at EX once the exception unit exists), not a halt — gen1 likewise vectors
@@ -35,9 +38,9 @@ module penumbra2_core
     import penumbra_pkg::*;
     import penumbra2_pkg::*;
 #(
-    parameter logic [31:0] RESET_PC   = 32'hFFFF_0000,  // matches the hw-test --org convention
-    parameter int          IMEM_WORDS = 4096,           // 16 KB instruction memory
-    parameter string       INIT_FILE  = "program.hex"   // $readmemh image for the i-mem
+    parameter logic [31:0] RESET_PC         = 32'hFFFF_0000,  // matches the hw-test --org convention
+    parameter int          MEM_REGION_WORDS = 4096,           // words per region (RAM, ROM)
+    parameter string       INIT_FILE        = "program.hex"   // $readmemh image (loaded into ROM region)
 )(
     input  logic                  i_clk,
     input  logic                  i_rst,
@@ -92,16 +95,8 @@ module penumbra2_core
         .o_pc(if1_pc), .o_next_pc(if1_next_pc), .o_valid(if1_valid)
     );
 
-    // ══════════════════════════════════════════════════════════
-    // Instruction memory — flat BRAM stand-in (read-only here)
-    // ══════════════════════════════════════════════════════════
-    bram_mem #(.MEM_WORDS(IMEM_WORDS), .INIT_FILE(INIT_FILE)) u_imem (
-        .i_clk(i_clk),
-        .i_addr(if1_fetch_addr),
-        .i_wdata(32'b0), .i_byte_en(4'b0), .i_we(1'b0),
-        .i_en(if1_fetch_en),
-        .o_rdata(imem_rdata)
-    );
+    // Instruction fetch reads port A of the unified memory (instantiated below,
+    // alongside the data port). The fetched word lands in imem_rdata next cycle.
 
     // ══════════════════════════════════════════════════════════
     // IF2 — deliver fetched word + PC to ID
@@ -137,18 +132,17 @@ module penumbra2_core
     );
 
     // ══════════════════════════════════════════════════════════
-    // Data memory — flat BRAM stand-in (separate port from the i-mem)
+    // Unified memory — one backing array, two ports (fetch + data)
     // ══════════════════════════════════════════════════════════
-    // Initialised from the same image as the i-mem so loads of program data
-    // resolve; stores mutate this copy only (no self-modifying fetch). A real
-    // BRAM-backed L1 D-cache (with MMU translation) replaces it behind MEM's
-    // dmem interface later.
-    bram_mem #(.MEM_WORDS(IMEM_WORDS), .INIT_FILE(INIT_FILE)) u_dmem (
+    // Port A serves IF1's fetch; port B serves MEM's data access. One address
+    // space (ROM region holds the INIT_FILE code at 0xFFFF_0000, RAM region is
+    // low), so a store is visible to a later fetch — the property exception
+    // entry needs to read a software-written vector table.
+    unified_mem #(.REGION_WORDS(MEM_REGION_WORDS), .INIT_FILE(INIT_FILE)) u_mem (
         .i_clk(i_clk),
-        .i_addr(dmem_addr),
-        .i_wdata(dmem_wdata), .i_byte_en(dmem_byte_en), .i_we(dmem_we),
-        .i_en(dmem_en),
-        .o_rdata(dmem_rdata)
+        .i_a_addr(if1_fetch_addr), .i_a_en(if1_fetch_en), .o_a_rdata(imem_rdata),
+        .i_b_addr(dmem_addr), .i_b_wdata(dmem_wdata), .i_b_byte_en(dmem_byte_en),
+        .i_b_we(dmem_we), .i_b_en(dmem_en), .o_b_rdata(dmem_rdata)
     );
 
     // ── Assertion (sim-only; stripped at synth) ──────────────────

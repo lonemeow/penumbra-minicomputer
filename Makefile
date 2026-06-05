@@ -178,6 +178,7 @@ MODULE_TESTS = \
     penumbra2_spr_file \
     penumbra2_spine \
     bram_mem \
+    unified_mem \
     uart \
     busctl \
     tlb \
