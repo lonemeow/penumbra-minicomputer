@@ -255,6 +255,16 @@ test-penumbra2:
 test-penumbra2-branch:
 	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_branch TB=tb_penumbra2_branch
 
+# ── Penumbra/2 core load/store test ───────────────────────────
+# Same core, the MEM-stage data-path milestone program: word/half/byte
+# store-then-load round-trips against the BRAM data memory, sub-word extract,
+# and byte_en lane isolation. Self-checks into R1, reusing the branch tb's
+# PASS-flag check.
+# Usage: make test-penumbra2-loadstore
+.PHONY: test-penumbra2-loadstore
+test-penumbra2-loadstore:
+	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_loadstore TB=tb_penumbra2_branch
+
 # ── Run all program tests on ISS (fast, no Docker) ────────────
 # Same test programs as `make test` but runs on the ISS.
 # Usage: make test-iss

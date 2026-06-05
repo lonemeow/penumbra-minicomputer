@@ -8,15 +8,17 @@
 //   - PC -> IF1 -> i-mem -> IF2 -> spine -> commit,
 //   - the back-pressure chain spine(fetch_stall) -> IF2 -> IF1 (hold PC).
 //
-// Scope of this milestone: straight-line plus control-flow ALU/divmul streams
-// ending in BREAK. The taken-branch redirect is now closed: EX resolves a
+// Scope of this milestone: straight-line, control-flow, and load/store
+// streams ending in BREAK. The taken-branch redirect is closed: EX resolves a
 // branch (spine.o_branch_*), IF1 steers PC to the target, and IF1/IF2/ID bubble
-// the three wrong-path slots (the 3-bubble flush). Still not wired: the I-side
-// fault path (no MMU; IF2 raises no fault) and loads/stores (the MEM data path
-// is still a skeleton). The instruction memory is a flat BRAM stand-in
-// (bram_mem) with the streaming registered-read contract the IF1/IF2 split is
-// built around — a real BRAM-backed I-cache replaces it later, behind the
-// same IF interface.
+// the three wrong-path slots (the 3-bubble flush). Loads and stores run through
+// the MEM stage against a flat BRAM data-memory stand-in (a second bram_mem,
+// separate from the i-mem because fetch and a data access can occur the same
+// cycle — exactly why real I/D caches are split). Still not wired: the MMU
+// (both fault paths), the real BRAM-backed L1 caches, and RDSYS. Both flat
+// memories are stand-ins with the streaming registered-read contract the
+// IF1/IF2 split and the MEM single-STALL are built around — real BRAM-backed
+// caches replace them later, behind the same IF and dmem interfaces.
 //
 // No halt: a real CPU never stops on an instruction. BREAK is a trap (taken
 // at EX once the exception unit exists), not a halt — gen1 likewise vectors
@@ -74,6 +76,11 @@ module penumbra2_core
     logic        branch_taken;  // flush IF1/IF2 + steer PC this cycle
     logic [31:0] branch_target; // resolved branch target
 
+    // ── Data-memory wires (MEM <-> data BRAM stand-in) ───────────
+    logic [31:0] dmem_addr, dmem_wdata, dmem_rdata;
+    logic [3:0]  dmem_byte_en;
+    logic        dmem_we, dmem_en;
+
     // ══════════════════════════════════════════════════════════
     // IF1 — PC + fetch address generation
     // ══════════════════════════════════════════════════════════
@@ -123,7 +130,25 @@ module penumbra2_core
         .o_commit_idx(o_commit_idx), .o_commit_data(o_commit_data),
         .o_commit_we(o_commit_we),
         .o_retire_valid(o_retire_valid), .o_retire_op_class(o_retire_op_class),
-        .o_branch_taken(branch_taken), .o_branch_target(branch_target)
+        .o_branch_taken(branch_taken), .o_branch_target(branch_target),
+        .o_dmem_addr(dmem_addr), .o_dmem_wdata(dmem_wdata),
+        .o_dmem_byte_en(dmem_byte_en), .o_dmem_we(dmem_we), .o_dmem_en(dmem_en),
+        .i_dmem_rdata(dmem_rdata)
+    );
+
+    // ══════════════════════════════════════════════════════════
+    // Data memory — flat BRAM stand-in (separate port from the i-mem)
+    // ══════════════════════════════════════════════════════════
+    // Initialised from the same image as the i-mem so loads of program data
+    // resolve; stores mutate this copy only (no self-modifying fetch). A real
+    // BRAM-backed L1 D-cache (with MMU translation) replaces it behind MEM's
+    // dmem interface later.
+    bram_mem #(.MEM_WORDS(IMEM_WORDS), .INIT_FILE(INIT_FILE)) u_dmem (
+        .i_clk(i_clk),
+        .i_addr(dmem_addr),
+        .i_wdata(dmem_wdata), .i_byte_en(dmem_byte_en), .i_we(dmem_we),
+        .i_en(dmem_en),
+        .o_rdata(dmem_rdata)
     );
 
     // ── Assertion (sim-only; stripped at synth) ──────────────────
