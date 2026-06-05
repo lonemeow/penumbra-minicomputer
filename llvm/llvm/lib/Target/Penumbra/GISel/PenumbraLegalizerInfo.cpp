@@ -44,13 +44,29 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
       .clampScalar(1, s32, s32)
       .scalarize(0);
 
-  // Add/sub with overflow and carry: produced by i64 narrowing.
-  // All lowered to basic ADD/SUB + ICMP sequences. The hardware has ADC/SBC
-  // instructions but using them requires SR flag management that GlobalISel
-  // doesn't handle well at -O0. A future peephole pass can fuse
-  // ADD+compare+ADC chains into ADD+ADC.
-  getActionDefinitionsBuilder({G_UADDO, G_USUBO, G_UADDE, G_USUBE,
-                               G_SADDO, G_SSUBO, G_SADDE, G_SSUBE})
+  // Unsigned add/sub with carry: select straight onto the hardware carry chain
+  // (ADD/ADC, SUB/SBC).  Keeping these legal — rather than lowering them to
+  // ADD/SUB + ICMP — is what lets a narrowed i64 G_ADD/G_SUB become a bare
+  // `add; adc` / `sub; sbc` pair.  The s1 carry threads through SR.C between the
+  // two halves and is never materialised into a GPR for the common case.
+  //
+  // narrowScalarAddSub (LegalizerHelper) splits an i64 G_ADD/G_SUB into a
+  // {G_UADDO, G_UADDE} / {G_USUBO, G_USUBE} chain joined by that s1 carry; we
+  // keep {s32, s1} legal so the chain survives intact to the selector.  Penumbra
+  // uses the ARM carry convention (C = NOT borrow on subtract), so the sub chain
+  // threads through SR.C with no fixup, exactly like the add chain.
+  // Selection lives in selectAddSubCarry (PenumbraInstructionSelector.cpp).
+  getActionDefinitionsBuilder({G_UADDO, G_USUBO, G_UADDE, G_USUBE})
+      .legalFor({{s32, s1}})
+      .minScalar(0, s32)
+      .narrowScalarIf(typeIs(0, s64), changeTo(0, s32));
+
+  // Signed add/sub with overflow: overflow is the V flag, not a value the carry
+  // chain threads, so there is no direct hardware form.  Lower to compare
+  // sequences.  Plain add/sub narrowing never produces these (it always emits
+  // the unsigned carry ops above) — only the signed *.with.overflow intrinsics
+  // do.
+  getActionDefinitionsBuilder({G_SADDO, G_SSUBO, G_SADDE, G_SSUBE})
       .lowerFor({{s32, s1}})
       .minScalar(0, s32)
       .narrowScalarIf(typeIs(0, s64), changeTo(0, s32))
@@ -85,11 +101,11 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   // Saturating add/subtract: no hardware support, lower to the generic
   // add+compare+select expansion (LegalizerHelper picks between the
   // min/max and AddO-based forms depending on legality of the helpers —
-  // our G_UADDO/G_USUBO are already lowered, which is what it uses).
-  // Sub-word widened to s32.  s64 is lowered at native width into
-  // G_UMIN/G_SUB (or G_USUBO+G_SELECT); the legalizer's iterative
-  // pass then narrows those to s32 pairs (G_SUB via the G_USUBE
-  // carry chain, G_UMIN via lower → ICMP+SELECT → narrow).
+  // G_UADDO/G_USUBO are legal, so the AddO-based form is available and the
+  // resulting carry-out feeds a G_SELECT).  Sub-word widened to s32.  s64 is
+  // lowered at native width into G_UMIN/G_SUB (or G_USUBO+G_SELECT); the
+  // legalizer's iterative pass then narrows those to s32 pairs (G_SUB via the
+  // G_USUBE carry chain, G_UMIN via lower → ICMP+SELECT → narrow).
   getActionDefinitionsBuilder({G_UADDSAT, G_USUBSAT, G_SADDSAT, G_SSUBSAT})
       .lowerFor({s32, s64})
       .widenScalarToNextPow2(0, 32)

@@ -107,7 +107,7 @@ define i64 @fshl_i64(i64 %a, i64 %b, i64 %sh) {
 ; CHECK-NEXT:    and r5, 63
 ; CHECK-NEXT:    lli r11, 32
 ; CHECK-NEXT:    mov r8, r7
-; CHECK-NEXT:    sub r8, 32
+; CHECK-NEXT:    sub r8, r11
 ; CHECK-NEXT:    mov r9, r11
 ; CHECK-NEXT:    sub r9, r7
 ; CHECK-NEXT:    lli r6, 1
@@ -165,7 +165,7 @@ define i64 @fshl_i64(i64 %a, i64 %b, i64 %sh) {
 ; CHECK-NEXT:    lli r9, 32
 ; CHECK-NEXT:    mov r1, r0
 ; CHECK-NEXT:    mov r6, r5
-; CHECK-NEXT:    sub r6, 32
+; CHECK-NEXT:    sub r6, r9
 ; CHECK-NEXT:    mov r7, r9
 ; CHECK-NEXT:    sub r7, r5
 ; CHECK-NEXT:    lli r11, 1

@@ -12,58 +12,25 @@ define i64 @usub_sat_i64(i64 %a, i64 %b) {
 ; CHECK-LABEL: usub_sat_i64:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 12
-; CHECK-NEXT:    stw r5, [r14 + 8] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r6, [r14 + 4] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r11, r1
 ; CHECK-NEXT:    sub r11, r3
-; CHECK-NEXT:    lli r13, 1
-; CHECK-NEXT:    lli r5, 0
-; CHECK-NEXT:    cmp r1, r3
-; CHECK-NEXT:    bcc .LBB0_2
-; CHECK-NEXT:  // %bb.1:
-; CHECK-NEXT:    mov r13, r5
-; CHECK-NEXT:  .LBB0_2:
-; CHECK-NEXT:    mov r1, r2
-; CHECK-NEXT:    sub r1, r4
-; CHECK-NEXT:    lli r3, 1
-; CHECK-NEXT:    lli r4, 0
-; CHECK-NEXT:    cmp r1, r2
-; CHECK-NEXT:    bhi .LBB0_4
-; CHECK-NEXT:  // %bb.3:
-; CHECK-NEXT:    mov r3, r4
-; CHECK-NEXT:  .LBB0_4:
-; CHECK-NEXT:    mov r2, r13
-; CHECK-NEXT:    and r2, 1
-; CHECK-NEXT:    mov r4, r1
-; CHECK-NEXT:    sub r4, r2
-; CHECK-NEXT:    mov r6, r0
-; CHECK-NEXT:    lli r2, 1
-; CHECK-NEXT:    lli r5, 0
-; CHECK-NEXT:    cmp r1, r6
-; CHECK-NEXT:    beq .LBB0_6
-; CHECK-NEXT:  // %bb.5:
-; CHECK-NEXT:    mov r2, r5
-; CHECK-NEXT:  .LBB0_6:
-; CHECK-NEXT:    and r2, r13
-; CHECK-NEXT:    or r3, r2
+; CHECK-NEXT:    sbc r2, r4
 ; CHECK-NEXT:    mov r1, r0
-; CHECK-NEXT:    test r3, 1
-; CHECK-NEXT:    bne .LBB0_8
-; CHECK-NEXT:  // %bb.7:
+; CHECK-NEXT:    mov r4, r1
+; CHECK-NEXT:    sbc r4, r0
+; CHECK-NEXT:    and r4, 1
+; CHECK-NEXT:    test r4, 1
+; CHECK-NEXT:    bne .LBB0_2
+; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r1, r11
-; CHECK-NEXT:  .LBB0_8:
-; CHECK-NEXT:    mov r2, r0
-; CHECK-NEXT:    test r3, 1
-; CHECK-NEXT:    bne .LBB0_10
-; CHECK-NEXT:  // %bb.9:
-; CHECK-NEXT:    mov r2, r4
-; CHECK-NEXT:  .LBB0_10:
-; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r6, [r14 + 4] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r5, [r14 + 8] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 12
+; CHECK-NEXT:  .LBB0_2:
+; CHECK-NEXT:    mov r3, r0
+; CHECK-NEXT:    test r4, 1
+; CHECK-NEXT:    bne .LBB0_4
+; CHECK-NEXT:  // %bb.3:
+; CHECK-NEXT:    mov r3, r2
+; CHECK-NEXT:  .LBB0_4:
+; CHECK-NEXT:    mov r2, r3
 ; CHECK-NEXT:    jmp r13
   %r = call i64 @llvm.usub.sat.i64(i64 %a, i64 %b)
   ret i64 %r
@@ -74,55 +41,24 @@ define i64 @uadd_sat_i64(i64 %a, i64 %b) {
 ; CHECK-LABEL: uadd_sat_i64:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 8
-; CHECK-NEXT:    stw r5, [r14 + 4] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    add r1, r3
-; CHECK-NEXT:    lli r13, 1
-; CHECK-NEXT:    lli r11, 0
-; CHECK-NEXT:    cmp r1, r3
-; CHECK-NEXT:    bcc .LBB1_2
-; CHECK-NEXT:  // %bb.1:
-; CHECK-NEXT:    mov r13, r11
-; CHECK-NEXT:  .LBB1_2:
-; CHECK-NEXT:    mov r11, r2
-; CHECK-NEXT:    add r11, r4
-; CHECK-NEXT:    lli r4, 1
-; CHECK-NEXT:    lli r3, 0
-; CHECK-NEXT:    cmp r11, r2
-; CHECK-NEXT:    bcc .LBB1_4
-; CHECK-NEXT:  // %bb.3:
-; CHECK-NEXT:    mov r4, r3
-; CHECK-NEXT:  .LBB1_4:
-; CHECK-NEXT:    mov r2, r13
-; CHECK-NEXT:    and r2, 1
-; CHECK-NEXT:    add r11, r2
-; CHECK-NEXT:    mov r5, r0
-; CHECK-NEXT:    lli r2, 1
-; CHECK-NEXT:    lli r3, 0
-; CHECK-NEXT:    cmp r11, r5
-; CHECK-NEXT:    beq .LBB1_6
-; CHECK-NEXT:  // %bb.5:
-; CHECK-NEXT:    mov r2, r3
-; CHECK-NEXT:  .LBB1_6:
-; CHECK-NEXT:    and r2, r13
-; CHECK-NEXT:    or r4, r2
+; CHECK-NEXT:    adc r2, r4
+; CHECK-NEXT:    mov r11, r0
+; CHECK-NEXT:    adc r11, r0
 ; CHECK-NEXT:    llis r3, -1
-; CHECK-NEXT:    llis r2, -1
-; CHECK-NEXT:    test r4, 1
-; CHECK-NEXT:    bne .LBB1_8
-; CHECK-NEXT:  // %bb.7:
+; CHECK-NEXT:    llis r4, -1
+; CHECK-NEXT:    test r11, 1
+; CHECK-NEXT:    bne .LBB1_2
+; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r3, r1
-; CHECK-NEXT:  .LBB1_8:
-; CHECK-NEXT:    test r4, 1
-; CHECK-NEXT:    bne .LBB1_10
-; CHECK-NEXT:  // %bb.9:
-; CHECK-NEXT:    mov r2, r11
-; CHECK-NEXT:  .LBB1_10:
+; CHECK-NEXT:  .LBB1_2:
+; CHECK-NEXT:    test r11, 1
+; CHECK-NEXT:    bne .LBB1_4
+; CHECK-NEXT:  // %bb.3:
+; CHECK-NEXT:    mov r4, r2
+; CHECK-NEXT:  .LBB1_4:
 ; CHECK-NEXT:    mov r1, r3
-; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r5, [r14 + 4] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 8
+; CHECK-NEXT:    mov r2, r4
 ; CHECK-NEXT:    jmp r13
   %r = call i64 @llvm.uadd.sat.i64(i64 %a, i64 %b)
   ret i64 %r
@@ -133,62 +69,45 @@ define i64 @ssub_sat_i64(i64 %a, i64 %b) {
 ; CHECK-LABEL: ssub_sat_i64:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 16
-; CHECK-NEXT:    stw r5, [r14 + 12] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r6, [r14 + 8] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r7, [r14 + 4] // 4-byte Folded Spill
+; CHECK-NEXT:    sub r14, 8
+; CHECK-NEXT:    stw r5, [r14 + 4] // 4-byte Folded Spill
 ; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
-; CHECK-NEXT:    mov r11, r1
-; CHECK-NEXT:    sub r11, r3
-; CHECK-NEXT:    lli r13, 1
-; CHECK-NEXT:    lli r5, 0
-; CHECK-NEXT:    cmp r1, r3
-; CHECK-NEXT:    bcc .LBB2_2
-; CHECK-NEXT:  // %bb.1:
-; CHECK-NEXT:    mov r13, r5
-; CHECK-NEXT:  .LBB2_2:
-; CHECK-NEXT:    and r13, 1
-; CHECK-NEXT:    mov r1, r4
-; CHECK-NEXT:    add r1, r13
-; CHECK-NEXT:    mov r3, r2
-; CHECK-NEXT:    sub r3, r1
+; CHECK-NEXT:    sub r1, r3
+; CHECK-NEXT:    mov r11, r0
+; CHECK-NEXT:    mov r3, r11
+; CHECK-NEXT:    sbc r3, r0
+; CHECK-NEXT:    and r3, 1
+; CHECK-NEXT:    and r3, 1
+; CHECK-NEXT:    mov r5, r4
+; CHECK-NEXT:    add r5, r3
 ; CHECK-NEXT:    mov r13, r2
-; CHECK-NEXT:    xor r13, r4
-; CHECK-NEXT:    xor r2, r3
-; CHECK-NEXT:    and r13, r2
-; CHECK-NEXT:    mov r4, r0
-; CHECK-NEXT:    mov r1, r3
-; CHECK-NEXT:    sar r1, 31
-; CHECK-NEXT:    mov r2, r3
+; CHECK-NEXT:    sub r13, r5
+; CHECK-NEXT:    mov r5, r2
+; CHECK-NEXT:    xor r5, r4
+; CHECK-NEXT:    xor r2, r13
+; CHECK-NEXT:    and r5, r2
+; CHECK-NEXT:    mov r3, r13
+; CHECK-NEXT:    sar r3, 31
+; CHECK-NEXT:    mov r2, r13
 ; CHECK-NEXT:    sar r2, 31
-; CHECK-NEXT:    lli r5, 0
-; CHECK-NEXT:    lui r5, 32768
-; CHECK-NEXT:    add r1, 0
-; CHECK-NEXT:    lli r6, 1
-; CHECK-NEXT:    lli r7, 0
-; CHECK-NEXT:    cmp r1, r4
-; CHECK-NEXT:    bcc .LBB2_4
+; CHECK-NEXT:    lli r4, 0
+; CHECK-NEXT:    lui r4, 32768
+; CHECK-NEXT:    add r3, r11
+; CHECK-NEXT:    adc r2, r4
+; CHECK-NEXT:    cmp r5, r11
+; CHECK-NEXT:    blt .LBB2_2
+; CHECK-NEXT:  // %bb.1:
+; CHECK-NEXT:    mov r3, r1
+; CHECK-NEXT:  .LBB2_2:
+; CHECK-NEXT:    cmp r5, r11
+; CHECK-NEXT:    blt .LBB2_4
 ; CHECK-NEXT:  // %bb.3:
-; CHECK-NEXT:    mov r6, r7
+; CHECK-NEXT:    mov r2, r13
 ; CHECK-NEXT:  .LBB2_4:
-; CHECK-NEXT:    add r2, r5
-; CHECK-NEXT:    and r6, 1
-; CHECK-NEXT:    add r2, r6
-; CHECK-NEXT:    cmp r13, r4
-; CHECK-NEXT:    blt .LBB2_6
-; CHECK-NEXT:  // %bb.5:
-; CHECK-NEXT:    mov r1, r11
-; CHECK-NEXT:  .LBB2_6:
-; CHECK-NEXT:    cmp r13, r4
-; CHECK-NEXT:    blt .LBB2_8
-; CHECK-NEXT:  // %bb.7:
-; CHECK-NEXT:    mov r2, r3
-; CHECK-NEXT:  .LBB2_8:
+; CHECK-NEXT:    mov r1, r3
 ; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r7, [r14 + 4] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r6, [r14 + 8] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r5, [r14 + 12] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 16
+; CHECK-NEXT:    ldw r5, [r14 + 4] // 4-byte Folded Reload
+; CHECK-NEXT:    add r14, 8
 ; CHECK-NEXT:    jmp r13
   %r = call i64 @llvm.ssub.sat.i64(i64 %a, i64 %b)
   ret i64 %r
@@ -199,62 +118,44 @@ define i64 @sadd_sat_i64(i64 %a, i64 %b) {
 ; CHECK-LABEL: sadd_sat_i64:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 16
-; CHECK-NEXT:    stw r5, [r14 + 12] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r6, [r14 + 8] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r7, [r14 + 4] // 4-byte Folded Spill
+; CHECK-NEXT:    sub r14, 8
+; CHECK-NEXT:    stw r5, [r14 + 4] // 4-byte Folded Spill
 ; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    add r1, r3
-; CHECK-NEXT:    lli r13, 1
-; CHECK-NEXT:    lli r11, 0
-; CHECK-NEXT:    cmp r1, r3
-; CHECK-NEXT:    bcc .LBB3_2
-; CHECK-NEXT:  // %bb.1:
-; CHECK-NEXT:    mov r13, r11
-; CHECK-NEXT:  .LBB3_2:
+; CHECK-NEXT:    mov r13, r0
+; CHECK-NEXT:    mov r3, r13
+; CHECK-NEXT:    adc r3, r0
 ; CHECK-NEXT:    mov r11, r2
 ; CHECK-NEXT:    add r11, r4
-; CHECK-NEXT:    and r13, 1
-; CHECK-NEXT:    add r11, r13
-; CHECK-NEXT:    mov r13, r11
-; CHECK-NEXT:    xor r13, r2
+; CHECK-NEXT:    and r3, 1
+; CHECK-NEXT:    add r11, r3
+; CHECK-NEXT:    mov r5, r11
+; CHECK-NEXT:    xor r5, r2
 ; CHECK-NEXT:    mov r2, r11
 ; CHECK-NEXT:    xor r2, r4
-; CHECK-NEXT:    and r13, r2
-; CHECK-NEXT:    mov r4, r0
+; CHECK-NEXT:    and r5, r2
 ; CHECK-NEXT:    mov r3, r11
 ; CHECK-NEXT:    sar r3, 31
 ; CHECK-NEXT:    mov r2, r11
 ; CHECK-NEXT:    sar r2, 31
-; CHECK-NEXT:    lli r5, 0
-; CHECK-NEXT:    lui r5, 32768
-; CHECK-NEXT:    add r3, 0
-; CHECK-NEXT:    lli r6, 1
-; CHECK-NEXT:    lli r7, 0
-; CHECK-NEXT:    cmp r3, r4
-; CHECK-NEXT:    bcc .LBB3_4
-; CHECK-NEXT:  // %bb.3:
-; CHECK-NEXT:    mov r6, r7
-; CHECK-NEXT:  .LBB3_4:
-; CHECK-NEXT:    add r2, r5
-; CHECK-NEXT:    and r6, 1
-; CHECK-NEXT:    add r2, r6
-; CHECK-NEXT:    cmp r13, r4
-; CHECK-NEXT:    blt .LBB3_6
-; CHECK-NEXT:  // %bb.5:
+; CHECK-NEXT:    lli r4, 0
+; CHECK-NEXT:    lui r4, 32768
+; CHECK-NEXT:    add r3, r13
+; CHECK-NEXT:    adc r2, r4
+; CHECK-NEXT:    cmp r5, r13
+; CHECK-NEXT:    blt .LBB3_2
+; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r3, r1
-; CHECK-NEXT:  .LBB3_6:
-; CHECK-NEXT:    cmp r13, r4
-; CHECK-NEXT:    blt .LBB3_8
-; CHECK-NEXT:  // %bb.7:
+; CHECK-NEXT:  .LBB3_2:
+; CHECK-NEXT:    cmp r5, r13
+; CHECK-NEXT:    blt .LBB3_4
+; CHECK-NEXT:  // %bb.3:
 ; CHECK-NEXT:    mov r2, r11
-; CHECK-NEXT:  .LBB3_8:
+; CHECK-NEXT:  .LBB3_4:
 ; CHECK-NEXT:    mov r1, r3
 ; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r7, [r14 + 4] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r6, [r14 + 8] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r5, [r14 + 12] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 16
+; CHECK-NEXT:    ldw r5, [r14 + 4] // 4-byte Folded Reload
+; CHECK-NEXT:    add r14, 8
 ; CHECK-NEXT:    jmp r13
   %r = call i64 @llvm.sadd.sat.i64(i64 %a, i64 %b)
   ret i64 %r
@@ -265,15 +166,17 @@ define i32 @usub_sat_i32(i32 %a, i32 %b) {
 ; CHECK-LABEL: usub_sat_i32:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    mov r3, r1
-; CHECK-NEXT:    mov r4, r3
-; CHECK-NEXT:    sub r4, r2
-; CHECK-NEXT:    mov r1, r0
-; CHECK-NEXT:    cmp r3, r2
-; CHECK-NEXT:    bcc .LBB4_2
+; CHECK-NEXT:    sub r1, r2
+; CHECK-NEXT:    mov r2, r0
+; CHECK-NEXT:    mov r3, r2
+; CHECK-NEXT:    sbc r3, r0
+; CHECK-NEXT:    and r3, 1
+; CHECK-NEXT:    test r3, 1
+; CHECK-NEXT:    bne .LBB4_2
 ; CHECK-NEXT:  // %bb.1:
-; CHECK-NEXT:    mov r1, r4
+; CHECK-NEXT:    mov r2, r1
 ; CHECK-NEXT:  .LBB4_2:
+; CHECK-NEXT:    mov r1, r2
 ; CHECK-NEXT:    jmp r13
   %r = call i32 @llvm.usub.sat.i32(i32 %a, i32 %b)
   ret i32 %r
@@ -287,56 +190,43 @@ define i64 @bavail_i64(i64 %bfree, i64 %bresvd) {
 ; CHECK-LABEL: bavail_i64:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 12
-; CHECK-NEXT:    stw r5, [r14 + 8] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r6, [r14 + 4] // 4-byte Folded Spill
+; CHECK-NEXT:    sub r14, 8
+; CHECK-NEXT:    stw r5, [r14 + 4] // 4-byte Folded Spill
 ; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
-; CHECK-NEXT:    lli r13, 1
-; CHECK-NEXT:    lli r11, 0
+; CHECK-NEXT:    lli r11, 1
+; CHECK-NEXT:    lli r13, 0
 ; CHECK-NEXT:    cmp r1, r3
 ; CHECK-NEXT:    bhi .LBB5_2
 ; CHECK-NEXT:  // %bb.1:
-; CHECK-NEXT:    mov r13, r11
+; CHECK-NEXT:    mov r11, r13
 ; CHECK-NEXT:  .LBB5_2:
-; CHECK-NEXT:    lli r11, 1
+; CHECK-NEXT:    lli r13, 1
 ; CHECK-NEXT:    lli r5, 0
 ; CHECK-NEXT:    cmp r2, r4
 ; CHECK-NEXT:    bhi .LBB5_4
 ; CHECK-NEXT:  // %bb.3:
-; CHECK-NEXT:    mov r11, r5
+; CHECK-NEXT:    mov r13, r5
 ; CHECK-NEXT:  .LBB5_4:
 ; CHECK-NEXT:    cmp r2, r4
 ; CHECK-NEXT:    beq .LBB5_6
 ; CHECK-NEXT:  // %bb.5:
-; CHECK-NEXT:    mov r13, r11
+; CHECK-NEXT:    mov r11, r13
 ; CHECK-NEXT:  .LBB5_6:
-; CHECK-NEXT:    mov r11, r1
-; CHECK-NEXT:    sub r11, r3
-; CHECK-NEXT:    lli r5, 1
-; CHECK-NEXT:    lli r6, 0
-; CHECK-NEXT:    cmp r1, r3
-; CHECK-NEXT:    bcc .LBB5_8
+; CHECK-NEXT:    sub r1, r3
+; CHECK-NEXT:    sbc r2, r4
+; CHECK-NEXT:    test r11, 1
+; CHECK-NEXT:    bne .LBB5_8
 ; CHECK-NEXT:  // %bb.7:
-; CHECK-NEXT:    mov r5, r6
+; CHECK-NEXT:    mov r1, r0
 ; CHECK-NEXT:  .LBB5_8:
-; CHECK-NEXT:    sub r2, r4
-; CHECK-NEXT:    and r5, 1
-; CHECK-NEXT:    sub r2, r5
-; CHECK-NEXT:    test r13, 1
+; CHECK-NEXT:    test r11, 1
 ; CHECK-NEXT:    bne .LBB5_10
 ; CHECK-NEXT:  // %bb.9:
-; CHECK-NEXT:    mov r11, r0
-; CHECK-NEXT:  .LBB5_10:
-; CHECK-NEXT:    test r13, 1
-; CHECK-NEXT:    bne .LBB5_12
-; CHECK-NEXT:  // %bb.11:
 ; CHECK-NEXT:    mov r2, r0
-; CHECK-NEXT:  .LBB5_12:
-; CHECK-NEXT:    mov r1, r11
+; CHECK-NEXT:  .LBB5_10:
 ; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r6, [r14 + 4] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r5, [r14 + 8] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 12
+; CHECK-NEXT:    ldw r5, [r14 + 4] // 4-byte Folded Reload
+; CHECK-NEXT:    add r14, 8
 ; CHECK-NEXT:    jmp r13
   %cmp = icmp ugt i64 %bfree, %bresvd
   %sub = sub i64 %bfree, %bresvd

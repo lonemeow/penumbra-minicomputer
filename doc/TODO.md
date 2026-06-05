@@ -1031,25 +1031,6 @@ feeder's RHS is a uimm16 (with the same predicate-swap fallback
 for constant-LHS cases). Code lives in
 `llvm/llvm/lib/Target/Penumbra/GISel/PenumbraInstructionSelector.cpp`.
 
-## Compiler: hardware ADC/SBC unused by GlobalISel (no CCR bank)
-
-The ISA has `ADC` and `SBC` (add/sub with carry-in from SR.C),
-encoded in `PenumbraInstrInfo.td` with `Uses=[SR]`. For
-multi-word arithmetic (i64 add/sub) the legalizer currently
-emits an `ADD + CMP + ADC` sequence via `G_UADDO`/`G_UADDE`
-lowering — but the ADC instructions never actually get selected
-because GlobalISel has no register-bank assignment that lets it
-move values through SR.
-
-Fix: introduce a single-bit CCR (carry-flag) register bank that
-covers SR's flag bits as a virtual reg class. Then `G_UADDE`/
-`G_USUBE` etc. can map their carry edges through CCR vregs and
-the selector can pick ADC/SBC. The TableGen scaffolding (regclass
-definition) is in `PenumbraRegisterInfo.td`'s `CCR` class; the
-RegisterBank wiring in `GISel/PenumbraRegisterBanks.td` does not
-yet expose it. Without this, i64 add/sub stays at the current
-"materialize the carry into a GPR via CMP" cost.
-
 ## Compiler: fuse a widening multiply into a single MUL_P
 
 A 32×32→64 widening multiply currently selects to **two** hardware

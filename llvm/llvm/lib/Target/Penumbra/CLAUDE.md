@@ -173,9 +173,11 @@ shapes:
   shift/logic. G_BSWAP at s64 narrows to two s32 first, then
   lowers — see `doc/llvm-lowerBswap-bug.md` for why we don't lower
   directly at s64.
-- Add/sub-with-carry: s64 narrowed to s32 then lowered to
-  ADD+CMP-carry sequences. Hardware ADC/SBC exist but need a CCR
-  register bank for GlobalISel to use them.
+- Add/sub-with-carry: G_UADDO/G_UADDE/G_USUBO/G_USUBE legal at
+  {s32,s1}; s64 add/sub narrows into them and the selector
+  (`selectAddSubCarry`) maps them onto the hardware ADD/ADC,
+  SUB/SBC chain, threading the carry through SR.C (no CCR bank —
+  the flag is physical, carried by the ops' implicit SR operands).
 - Saturating arithmetic: sub-word widened to s32; s64 lowered at
   native width via min/sub or USUBO+SELECT, then iteratively
   narrowed. (`lowerFor({s32, s64})` is the working idiom because

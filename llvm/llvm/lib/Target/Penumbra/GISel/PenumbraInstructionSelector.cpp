@@ -71,6 +71,16 @@ private:
                     MachineRegisterInfo &MRI) const;
   bool selectICmp(MachineInstr &I, MachineBasicBlock &MBB,
                   MachineRegisterInfo &MRI) const;
+  // G_UADDO/G_UADDE/G_USUBO/G_USUBE → the hardware ADD/ADC, SUB/SBC carry chain.
+  bool selectAddSubCarry(MachineInstr &I, MachineBasicBlock &MBB,
+                         MachineRegisterInfo &MRI) const;
+  // Read SR.C back into a 0/1 GPR value (the carry-out / borrow-out result).
+  bool emitCarryToValue(Register OutReg, bool IsSub, MachineInstr &I,
+                        MachineBasicBlock &MBB, MachineRegisterInfo &MRI) const;
+  // Place a 0/1 GPR value into SR.C ahead of an ADC/SBC (the carry-in fixup).
+  bool emitSetCarryFromValue(Register CarryInReg, bool IsSub, MachineInstr &I,
+                             MachineBasicBlock &MBB,
+                             MachineRegisterInfo &MRI) const;
   bool selectZExt(MachineInstr &I, MachineBasicBlock &MBB,
                   MachineRegisterInfo &MRI) const;
   bool selectSExt(MachineInstr &I, MachineBasicBlock &MBB,
@@ -282,6 +292,15 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
 
   case G_ZEXT: return selectZExt(I, MBB, MRI);
   case G_SEXT: return selectSExt(I, MBB, MRI);
+
+  // ── Add/sub with carry ──────────────────────────────────────────────────────
+  // Produced by i64 G_ADD/G_SUB narrowing and the unsigned *.with.overflow
+  // intrinsics; mapped onto ADD/ADC and SUB/SBC threading SR.C.
+  case G_UADDO:
+  case G_UADDE:
+  case G_USUBO:
+  case G_USUBE:
+    return selectAddSubCarry(I, MBB, MRI);
 
   // ── Multiply / divide / remainder ───────────────────────────────────────────
   // Variable-operand s32 ops reach here (constant cases were strength-reduced
@@ -636,6 +655,161 @@ bool PenumbraInstructionSelector::selectICmp(MachineInstr &I,
           .addImm(BrOpc);
 
   I.eraseFromParent();
+  return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
+}
+
+// ── G_UADDO / G_UADDE / G_USUBO / G_USUBE ────────────────────────────────────
+//
+// Map add/sub-with-carry onto the hardware carry chain:
+//
+//   G_UADDO -> ADD   (sets SR.C)          G_USUBO -> SUB   (sets SR.C = NOT borrow)
+//   G_UADDE -> ADC   (uses + sets SR.C)   G_USUBE -> SBC   (uses + sets SR.C)
+//
+// The carry/borrow lives in SR.C.  Two bridges connect it to GPR values:
+//   * carry-IN (the *E ops): a 0/1 value is loaded into SR.C before the ADC/SBC
+//     (emitSetCarryFromValue).  Skipped when the value is already in SR.C —
+//     see carryInAlreadyLive.
+//   * carry-OUT: when the carry/borrow is used as a value it is read back out of
+//     SR.C into a 0/1 GPR (emitCarryToValue).  A dead carry-out — the common
+//     final carry of a narrowed i64 add/sub — needs nothing.
+//
+// The fast path (carry already in SR.C) is what collapses a narrowed i64 add
+// into a bare `add; adc`.
+
+// True when CarryReg's carry/borrow is already live in SR.C: it is defined by
+// the immediately-preceding instruction, that instruction is a carry-producing
+// op of the same family as the consumer (add produces true carry; sub produces
+// NOT borrow), and this is its only use — so the producer will not insert an
+// SR-clobbering carry-extraction between the two.  Selection runs bottom-up, so
+// the producer is still a generic G_*ADD*/G_*SUB* op here.
+static bool carryInAlreadyLive(Register CarryReg, MachineInstr &Consumer,
+                               MachineRegisterInfo &MRI) {
+  using namespace TargetOpcode;
+  if (!MRI.hasOneNonDBGUse(CarryReg))
+    return false;
+  MachineInstr *Def = MRI.getVRegDef(CarryReg);
+  if (!Def || Def != Consumer.getPrevNode())
+    return false;
+  bool ConsumerIsSub = Consumer.getOpcode() == G_USUBO ||
+                       Consumer.getOpcode() == G_USUBE;
+  unsigned D = Def->getOpcode();
+  bool DefIsSub = D == G_USUBO || D == G_USUBE;
+  bool DefIsAdd = D == G_UADDO || D == G_UADDE;
+  return ConsumerIsSub ? DefIsSub : DefIsAdd;
+}
+
+bool PenumbraInstructionSelector::selectAddSubCarry(
+    MachineInstr &I, MachineBasicBlock &MBB, MachineRegisterInfo &MRI) const {
+  using namespace TargetOpcode;
+  unsigned Opc = I.getOpcode();
+  const bool IsSub = Opc == G_USUBO || Opc == G_USUBE;
+  const bool HasCarryIn = Opc == G_UADDE || Opc == G_USUBE;
+
+  Register DstReg = I.getOperand(0).getReg();
+  Register CarryOutReg = I.getOperand(1).getReg();
+  Register LHS = I.getOperand(2).getReg();
+  Register RHS = I.getOperand(3).getReg();
+  const DebugLoc &DL = I.getDebugLoc();
+
+  // Carry-in: ensure SR.C holds the incoming carry/borrow before the ADC/SBC.
+  if (HasCarryIn) {
+    Register CarryInReg = I.getOperand(4).getReg();
+    if (!carryInAlreadyLive(CarryInReg, I, MRI))
+      if (!emitSetCarryFromValue(CarryInReg, IsSub, I, MBB, MRI))
+        return false;
+  }
+
+  // The arithmetic.  ADD/SUB only define SR; ADC/SBC also use it — the implicit
+  // SR operands come from the instruction's Defs/Uses in PenumbraInstrInfo.td.
+  unsigned HwOpc = HasCarryIn ? (IsSub ? Penumbra::SBC : Penumbra::ADC)
+                              : (IsSub ? Penumbra::SUB : Penumbra::ADD);
+  MachineInstr *Arith = BuildMI(MBB, I, DL, TII.get(HwOpc))
+                            .addDef(DstReg)
+                            .addReg(LHS)   // tied to Dst ($Rd = $Rd_in)
+                            .addReg(RHS);
+  if (!constrainSelectedInstRegOperands(*Arith, TII, TRI, RBI))
+    return false;
+
+  // Carry-out: only materialise it if something actually consumes it.
+  if (!MRI.use_nodbg_empty(CarryOutReg))
+    if (!emitCarryToValue(CarryOutReg, IsSub, I, MBB, MRI))
+      return false;
+
+  I.eraseFromParent();
+  return true;
+}
+
+// Read SR.C into OutReg as a clean 0/1 value, inserted before I (after the
+// ADD/SUB that set SR.C).  `R0 + R0 + C` via ADC yields exactly the carry bit.
+// After a SUB, SR.C is NOT borrow, so the borrow value is its inverse: SBC of
+// zeros gives -(borrow) (0 or 0xFFFFFFFF), which AND #1 reduces to 0/1.
+bool PenumbraInstructionSelector::emitCarryToValue(
+    Register OutReg, bool IsSub, MachineInstr &I, MachineBasicBlock &MBB,
+    MachineRegisterInfo &MRI) const {
+  const DebugLoc &DL = I.getDebugLoc();
+
+  // Seed a zero (COPY of the hardwired R0) for the destructive ADC/SBC's tied
+  // input; COPY does not touch SR, so it is safe between the SUB and the read.
+  Register Zero = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
+  BuildMI(MBB, I, DL, TII.get(TargetOpcode::COPY)).addDef(Zero).addReg(Penumbra::R0);
+  if (!RBI.constrainGenericRegister(Zero, Penumbra::GPR_AllocatableRegClass, MRI))
+    return false;
+
+  // Add path: OutReg = 0 + 0 + C = C (0/1).
+  // Sub path: Tmp = 0 - 0 - ~C = -(borrow); mask to 0/1 below.
+  Register RawReg =
+      IsSub ? MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass)
+            : OutReg;
+  MachineInstr *Raw =
+      BuildMI(MBB, I, DL, TII.get(IsSub ? Penumbra::SBC : Penumbra::ADC))
+          .addDef(RawReg)
+          .addReg(Zero)          // tied to RawReg
+          .addReg(Penumbra::R0);
+  if (!constrainSelectedInstRegOperands(*Raw, TII, TRI, RBI))
+    return false;
+
+  if (IsSub) {
+    MachineInstr *Mask = BuildMI(MBB, I, DL, TII.get(Penumbra::ANDi))
+                             .addDef(OutReg)
+                             .addReg(RawReg)
+                             .addImm(1);
+    if (!constrainSelectedInstRegOperands(*Mask, TII, TRI, RBI))
+      return false;
+  }
+  return true;
+}
+
+// Place the 0/1 value in CarryInReg into SR.C, inserted before I (ahead of the
+// ADC/SBC that will consume it).  Only reached when the carry-in is NOT already
+// live in SR.C (carryInAlreadyLive returned false) — e.g. a carry threaded from
+// a non-adjacent producer.
+//
+// CarryInReg holds 0 or 1.  The two families need opposite polarity:
+//   * Add family (IsSub == false): ADC adds +C, so it needs SR.C == bit 0.
+//   * Sub family (IsSub == true): SBC subtracts ~C, so the borrow it removes is
+//     ~C; to subtract CarryInReg's bit it needs SR.C == NOT that bit (Penumbra's
+//     ARM convention, C = NOT borrow).
+//
+// CMP is SUB-with-flags and writes only SR (no GPR result, no scratch needed),
+// leaving SR.C = NOT borrow = (lhs >= rhs) unsigned.  For bit in {0, 1}:
+//   * add: CMPi bit, 1   → SR.C = (bit >= 1) = bit.
+//   * sub: CMP  r0, bit  → SR.C = (0  >= bit) = NOT bit  (r0 is hardwired zero).
+bool PenumbraInstructionSelector::emitSetCarryFromValue(
+    Register CarryInReg, bool IsSub, MachineInstr &I, MachineBasicBlock &MBB,
+    MachineRegisterInfo &MRI) const {
+  const DebugLoc &DL = I.getDebugLoc();
+
+  MachineInstr *NewI;
+  if (!IsSub) {
+    NewI = BuildMI(MBB, I, DL, TII.get(Penumbra::CMPi))
+               .addReg(CarryInReg)
+               .addImm(1);
+  } else {
+    NewI = BuildMI(MBB, I, DL, TII.get(Penumbra::CMP))
+               .addReg(Penumbra::R0)
+               .addReg(CarryInReg);
+  }
+
   return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
 }
 
