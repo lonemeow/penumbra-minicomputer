@@ -296,5 +296,29 @@ module penumbra2_spine
     assign o_retire_valid    = memwb_valid;
     assign o_retire_op_class = memwb_op_class;
 
+    // ════════════════════════════════════════════════════════════
+    // Assertions — sim-only (Verilator --assert); stripped at synth.
+    // ════════════════════════════════════════════════════════════
+
+    // Aux-writer mutual exclusion. The scoreboard has a single aux port, so
+    // sb_aux_dst priority-muxes EX>MEM>WB and exposes only the youngest live
+    // aux destination. That is sound only because at most one aux writer is
+    // live at any moment ID could issue — two live aux would hide the older
+    // one's high-half (Rdh) destination and let a dependent reader issue early
+    // (its primary Rd is still covered by i_mem/wb_dst; only Rdh is at risk).
+    // Two aux can momentarily coexist (back-to-back divmuls: one entering EX as
+    // the other reaches MEM/WB), but only while the younger divmul holds ID via
+    // its ~33-cycle EX stall — so id_stall is the carve-out. If this ever fires
+    // with id_stall low, the priority mux is dropping a real RAW hazard.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        id_stall || $onehot0({idex_aux_live, exmem_aux_live, memwb_aux_live}))
+        else $error("penumbra2_spine: multiple aux writers live while ID can issue");
+
+    // A GPR commit implies a retiring instruction: the regfile write port and
+    // the retire pulse both come from the MEM/WB slot and must not decouple.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        o_commit_we |-> o_retire_valid)
+        else $error("penumbra2_spine: GPR commit without a retiring instruction");
+
     /* verilator lint_on PINCONNECTEMPTY */
 endmodule

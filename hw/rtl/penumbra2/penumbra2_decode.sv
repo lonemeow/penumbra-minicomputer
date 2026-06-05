@@ -433,12 +433,23 @@ module penumbra2_decode
         // An SPR-file write likewise needs a destination.
         assert (!(o_spr_we && !o_dst_en))
             else $error("penumbra2_decode: spr_we without a destination");
+        // GPR and SPR writes are mutually exclusive: MEM collapses the two
+        // writeback data into one o_wb_value and WB routes it by exactly one
+        // of these strobes (the other is quiet). An instruction asserting both
+        // would write a GPR and strobe an SPR with the same datum.
+        assert (!(o_gpr_we && o_spr_we))
+            else $error("penumbra2_decode: gpr_we and spr_we both set");
         // illegal and priv_fault are constructed mutually exclusive.
         assert (!(o_illegal && o_priv_fault))
             else $error("penumbra2_decode: illegal and priv_fault both set");
         // Only a dual-destination opcode carries a second (aux) destination.
         assert (!(o_dst_aux_en && o_op_class != OPC_DIVMUL))
             else $error("penumbra2_decode: aux dst enabled outside a dual-destination opcode");
+        // A dual write's aux (high half) is a GPR, and WB gates its second
+        // write cycle on gpr_we — so an aux destination implies gpr_we, else
+        // the high half is silently dropped while WB still holds MEM a cycle.
+        assert (!(o_dst_aux_en && !o_gpr_we))
+            else $error("penumbra2_decode: aux dst without gpr_we");
         // is_trap belongs only to SYSCALL/BREAK.
         assert (!(o_is_trap && o_op_class != OPC_SYSCALL && o_op_class != OPC_BREAK))
             else $error("penumbra2_decode: is_trap outside SYSCALL/BREAK");

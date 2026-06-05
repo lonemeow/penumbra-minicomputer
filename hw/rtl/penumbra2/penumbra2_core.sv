@@ -126,5 +126,15 @@ module penumbra2_core
         .o_branch_taken(branch_taken), .o_branch_target(branch_target)
     );
 
+    // ── Assertion (sim-only; stripped at synth) ──────────────────
+    // A redirect target is word-aligned. Format-B targets are PC + (off<<2),
+    // structurally aligned; a register-sourced JMP could be misaligned, which
+    // in the full design raises an I-side alignment fault. That path is not
+    // wired yet (no MMU), so a misaligned redirect would silently fetch garbage
+    // from the flat i-mem — this is a bring-up guard until the fault path lands.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        branch_taken |-> branch_target[1:0] == 2'b00)
+        else $error("penumbra2_core: misaligned branch redirect target");
+
     /* verilator lint_on PINCONNECTEMPTY */
 endmodule
