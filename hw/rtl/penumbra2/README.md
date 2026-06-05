@@ -20,14 +20,17 @@ generation) and `penumbra2_if2_stage` (deliver the fetched word + PC
 to ID). `penumbra2_core` wires the front end onto the datapath:
 `PC → IF1 → instruction memory → IF2 → penumbra2_spine`, closing the
 back-pressure chain up to the PC, the taken-branch redirect from EX
-back to the PC, and halting on a retiring BREAK. The instruction memory
-is `bram_mem` (in `hw/rtl/sim/`), a flat registered-read BRAM stand-in
-with a read clock-enable — the streaming contract the IF1/IF2 split is
-built around, ahead of the real BRAM-backed I-cache. `penumbra2_core`
-runs an assembled program rather than a hand-driven stream, so it is
-exercised by `make test-penumbra2` (straight-line + RAW-stall) and
-`make test-penumbra2-branch` (taken/not-taken/unconditional branches +
-a backward loop) rather than `MODULE_TESTS`; IF1/IF2 are covered
+back to the PC, and halting on a retiring BREAK. Fetch and data both go
+through `unified_mem` (in `hw/rtl/sim/`), a dual-port registered-read
+stand-in with a read clock-enable: one backing array, one address space
+(ROM region for the program, RAM region for data), so a store is visible
+to a later fetch — the streaming contract the IF1/IF2 split and the MEM
+single-STALL are built around, ahead of the real BRAM-backed L1 caches.
+`penumbra2_core` runs an assembled program rather than a hand-driven
+stream, so it is exercised by `make test-penumbra2` (straight-line +
+RAW-stall), `make test-penumbra2-branch` (taken/not-taken/unconditional
+branches + a backward loop), and `make test-penumbra2-loadstore`
+(load/store round-trips) rather than `MODULE_TESTS`; IF1/IF2 are covered
 through them.
 
 When EX resolves a branch taken it drives `o_branch_taken` /

@@ -8,10 +8,10 @@
 // play in the real machine. Real BRAM-backed caches replace it later behind
 // the IF and dmem interfaces.
 //
-// Both ports follow the registered-read BRAM contract (see bram_mem.sv): the
-// address is sampled at the clock edge and the addressed word appears
-// combinationally the next cycle; a clock-enable (i_*_en) freezes the output
-// to hold it in lockstep with a stalled stage.
+// Both ports follow the registered-read BRAM contract (the contract the gen2
+// fetch/data sides are built around): the address is sampled at the clock edge
+// and the addressed word appears combinationally the next cycle; a clock-enable
+// (i_*_en) freezes the output to hold it in lockstep with a stalled stage.
 //
 //   - Port A — instruction fetch: read-only.
 //   - Port B — data: byte-enabled write + read, no read/write-through (a read

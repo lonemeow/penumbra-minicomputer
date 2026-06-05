@@ -16,7 +16,7 @@
 //   - downstream stall on a load's data-ready cycle holds the result
 //   - i_bubble cancels an in-flight store (no write) and flushes the slot
 //
-// The data memory mirrors bram_mem.sv: the address is sampled at the clock
+// The data memory mirrors unified_mem.sv: the address is sampled at the clock
 // edge and the word appears the next cycle; o_dmem_en is the read clock-
 // enable; writes are byte-enabled with no read/write-through.
 //
@@ -42,7 +42,7 @@ static void check(const char* n, uint32_t g, uint32_t e) {
     if (g != e) { printf("  FAIL [%s]: got 0x%X, expected 0x%X\n", n, g, e); errors++; }
 }
 
-// ── Behavioral BRAM data memory (mirrors bram_mem.sv) ────────────
+// ── Behavioral BRAM data memory (mirrors unified_mem.sv port B) ──
 // 256 words; word-addressed; registered read (1-cycle latency) gated by
 // o_dmem_en; byte-enabled write; read-before-write (no write-through).
 static uint32_t dmem[256];

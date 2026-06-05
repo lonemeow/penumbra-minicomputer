@@ -68,7 +68,7 @@ module penumbra2_mem_stage
     input  logic [3:0]            i_fault_vec,
 
     // ── Data memory (BRAM-backed; flat stand-in for the L1 D-cache) ──
-    // Registered-read contract (see bram_mem.sv): the address is sampled at
+    // Registered-read contract (see unified_mem.sv): the address is sampled at
     // the clock edge and the addressed word appears combinationally during
     // the next cycle. o_dmem_en is the read clock-enable (holds the output
     // when low, keeping it aligned with a stalled MEM).
