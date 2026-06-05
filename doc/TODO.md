@@ -1066,6 +1066,49 @@ check in `selectZExt` for a `G_ICMP`-defined source; a known-bits-based
 combiner could generalize it. Code lives in
 `llvm/llvm/lib/Target/Penumbra/GISel/PenumbraInstructionSelector.cpp`.
 
+## Compiler: inline small constant-size memcpy/memset/memmove
+
+`G_MEMCPY`/`G_MEMSET`/`G_MEMMOVE` are `.libcall()`'d unconditionally in
+`PenumbraLegalizerInfo.cpp`, so even `memcpy(d, s, 16)` and
+`memset(d, 0, 12)` emit a `bl memcpy`/`bl memset` rather than a few
+inline word stores. Other GISel targets inline the small constant-size
+cases; Penumbra is missing the wiring, not the capability.
+
+The expansion itself is generic: `CombinerHelper::tryCombineMemCpyFamily`
+(and `tryEmitMemcpyInline` for `llvm.memcpy.inline`) turns a constant-size
+op into a load/store sequence bounded by `TargetLowering::MaxStoresPerMem*`
+(base defaults 8, or 4 at `-Os`), shaped by `findOptimalMemOpLowering` ->
+`getOptimalMemOpType` + `allowsMisalignedMemoryAccesses`. It is **not** a
+`Combine.td` rule, so sitting in `all_combines` does not enable it — each
+target hand-wires a dispatch in its pre-legalizer combiner's
+`tryCombineAll` override (see `AArch64PreLegalizerCombiner.cpp` and
+`MipsPreLegalizerCombiner.cpp`). The legalizer `.libcall()` then remains
+the fallback for the variable-size / over-threshold cases. AArch64 also
+forces an inline length of 32 bytes at `-O0` and lowers `memset(...,0,...)`
+to bzero.
+
+Penumbra currently uses the plain generated `tryCombineAll` (no
+`CombineAllMethodName` override, no mem-opcode dispatch) and overrides none
+of the mem-op TLI hooks, so `tryCombineMemCpyFamily` is never reached and
+the default threshold of 8 sits unused.
+
+To enable it:
+- Switch `PenumbraPreLegalizerCombiner` to the `CombineAllMethodName =
+  "tryCombineAllImpl"` pattern and hand-write `tryCombineAll` to dispatch
+  `G_MEMCPY`/`G_MEMSET`/`G_MEMMOVE`/`G_MEMCPY_INLINE` to the helper before
+  falling through to `tryCombineAllImpl`.
+- Override `getOptimalMemOpType` to return `s32` — the base default returns
+  an invalid `LLT`, so `getMemOps` won't pick word stores otherwise.
+- Keep the default `MaxStoresPerMem*` (8 / 4) unless profiling says
+  otherwise.
+
+Caveat: Penumbra lowers unaligned loads/stores to byte ops, so an
+under-aligned copy would expand into more than the threshold's worth of
+byte stores and bounce back to the libcall. The realistic win is therefore
+word-aligned constant-size struct/array copies — which is the common case.
+Decide via `allowsMisalignedMemoryAccesses` whether to inline unaligned at
+all (probably not).
+
 ## Compiler: fuse a widening multiply into a single MUL_P
 
 A 32×32→64 widening multiply currently selects to **two** hardware
