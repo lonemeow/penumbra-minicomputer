@@ -79,6 +79,7 @@ int main(int argc, char** argv) {
     check("alu_dst_aux_en",  dut->o_phys_dst_aux_en, 0);
     check("alu_pc",         dut->o_pc, 0xFFFF0100);
     check("alu_fault",      dut->o_fault_pending, 0);
+    check("alu_op_class",   dut->o_op_class, OPC_ALU);
 
     // ── divmul: both writeback halves + Rd/Rdh pass through ──────
     clear(dut);
@@ -102,6 +103,7 @@ int main(int argc, char** argv) {
     check("wrspr_spr_sel",  dut->o_spr_sel, 3);
     check("wrspr_wb_value", dut->o_wb_value, 0xDEADBEEF);
     check("wrspr_gpr_we",   dut->o_gpr_we, 0);
+    check("wrspr_op_class", dut->o_op_class, OPC_WRSPR);   // op_class carried to retire
 
     // ── Faulting slot advances with its fault tag intact ─────────
     clear(dut);

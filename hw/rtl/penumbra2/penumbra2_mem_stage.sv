@@ -54,6 +54,7 @@ module penumbra2_mem_stage
     output logic                  o_stall,            // back-pressure to EX
 
     // ── MEM/WB register (to WB) ──────────────────────────────────
+    output logic [OPC_W-1:0]      o_op_class,        // carried to the retire point (halt / trap dispatch)
     output logic                  o_gpr_we,
     output logic                  o_spr_we,
     output logic                  o_flag_we,
@@ -118,6 +119,7 @@ module penumbra2_mem_stage
         end else begin
             o_valid <= next_valid;
             if (advance) begin
+                o_op_class        <= i_op_class;
                 o_gpr_we          <= i_gpr_we;
                 o_spr_we          <= i_spr_we;
                 o_flag_we         <= i_flag_we;

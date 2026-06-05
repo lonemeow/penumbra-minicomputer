@@ -125,6 +125,24 @@ runs with zero software mul/div fallbacks.  One residual optimization
 
 Add a floating-point unit to the ALU. Currently using soft-float.
 
+## Hardware: Penumbra/2 BREAK must become a real EX trap
+
+Today `penumbra2_core` has no halt — the testbench detects program end by
+watching the core's retire-observability (`o_retire_valid` +
+`o_retire_op_class`) for a retiring `OPC_BREAK`. That is a *bring-up
+testbench policy*; the synthesized datapath deliberately contains no
+self-halt, because a real CPU never stops on an instruction.
+
+The architectural behavior (per `doc/internals/penumbra2/exception-flow.md`)
+is that BREAK is a *trap taken at EX*: save EPC/ESR, switch mode, vector to
+`VEC_BREAK` — exactly as gen1 vectors BREAK to its monitor. That needs the
+gen2 exception unit (save-state pulse + IF vector-fetch FSM), which is a
+later milestone. When it lands, BREAK stops being special at retire; the
+testbench's "stop on retiring BREAK" can stay as a sim convenience, or move
+to watching for the vector fetch / a sentinel, but no RTL change should
+reintroduce a hardware halt. `o_retire_valid` remains the real insns-retired
+perfctr pulse regardless.
+
 ## Compiler: graceful-fail on unsupported inline asm and vector IR
 
 Today the GlobalISel IRTranslator crashes (`fatal error: unable to

@@ -39,6 +39,13 @@ module penumbra2_spine
     output logic [31:0]           o_commit_data,
     output logic                  o_commit_we,
 
+    // ── Retire observability (the instruction leaving WB) ────────
+    // Every retiring instruction, GPR-writing or not, with its op_class.
+    // The consumer (core) reads this to act on retiring control insns the
+    // commit port can't see — e.g. a BREAK, which writes no register.
+    output logic                  o_retire_valid,
+    output logic [OPC_W-1:0]      o_retire_op_class,
+
     // ── Branch resolution (for a future fetch-redirect model) ────
     output logic                  o_branch_taken,
     output logic [31:0]           o_branch_target
@@ -85,6 +92,7 @@ module penumbra2_spine
     logic [3:0]          exmem_fault_vec;
 
     // MEM/WB
+    logic [OPC_W-1:0]    memwb_op_class;
     logic                memwb_gpr_we, memwb_spr_we, memwb_flag_we;
     logic [3:0]          memwb_spr_sel;
     logic [31:0]         memwb_wb_value, memwb_wb_value_aux;
@@ -214,6 +222,7 @@ module penumbra2_spine
         .i_fault_vec(exmem_fault_vec),
         .i_stall_in(wb_stall), .i_bubble(1'b0),
         .o_stall(mem_stall),
+        .o_op_class(memwb_op_class),
         .o_gpr_we(memwb_gpr_we), .o_spr_we(memwb_spr_we), .o_flag_we(memwb_flag_we),
         .o_spr_sel(memwb_spr_sel),
         .o_wb_value(memwb_wb_value), .o_wb_value_aux(memwb_wb_value_aux),
@@ -282,6 +291,10 @@ module penumbra2_spine
     assign o_commit_idx   = wr_idx;
     assign o_commit_data  = wr_data;
     assign o_commit_we    = wr_en;
+
+    // Retire observability: the MEM/WB slot leaving WB this cycle.
+    assign o_retire_valid    = memwb_valid;
+    assign o_retire_op_class = memwb_op_class;
 
     /* verilator lint_on PINCONNECTEMPTY */
 endmodule

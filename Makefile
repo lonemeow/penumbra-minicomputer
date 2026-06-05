@@ -176,6 +176,7 @@ MODULE_TESTS = \
     penumbra2_mem_stage \
     penumbra2_wb_stage \
     penumbra2_spine \
+    bram_mem \
     uart \
     busctl \
     tlb \
@@ -232,6 +233,18 @@ test-modules:
 # Usage: make test-all
 .PHONY: test-all
 test-all: test test-modules
+
+# ── Penumbra/2 core smoke test ────────────────────────────────
+# Builds penumbra2_core (fetch + spine) with a program assembled into its
+# i-mem and runs it to BREAK. Separate from `test`/`test-modules` because it
+# loads an assembled program (which test-modules does not) and targets the
+# gen2 core rather than gen1 machine_sim.
+# For a different program, use `make sim MOD=penumbra2_core PROG=<prog>
+# TB=tb_penumbra2_core` directly.
+# Usage: make test-penumbra2
+.PHONY: test-penumbra2
+test-penumbra2:
+	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_smoke TB=tb_penumbra2_core
 
 # ── Run all program tests on ISS (fast, no Docker) ────────────
 # Same test programs as `make test` but runs on the ISS.
