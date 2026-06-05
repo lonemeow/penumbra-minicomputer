@@ -1052,22 +1052,56 @@ constant materializes it with an LLI instead of `ADDi`/`SUBi`. Routing
 those through an `emitFoldableALU`-style helper (sharing the uimm16
 fold logic with `emitCompare`) would close it.
 
-## Compiler: redundant mask on zero-extended comparison results
+## Compiler: redundant extension of comparison results
 
 The branchless `icmp`-to-value path (`selectICmpToValue`) already
-produces a clean 0/1 in a GPR, but when that result is zero-extended
-to i32 — the common `zext i1` consumer — `selectZExt` still emits an
-`ANDi #1`, which is a no-op on an already-0/1 value. The inverted
-predicates (`ult`, `ugt`, `ne`) compound it: `emitCarryToValue`'s own
-`ANDi #1` (masking the SBC's 0/0xFFFFFFFF down to 0/1) is then followed
-by the zext's `ANDi #1`, so the value is masked twice.
+produces a clean 0/1 in a GPR, but the extension consumers re-process
+it from scratch:
 
-Fix: when the s1 source of a `G_ZEXT` is a value already known to be
-0/1 — defined by `G_ICMP` (or, post-selection, our flag-read
-sequence) — emit a `COPY` instead of `ANDi #1`. The cleanest hook is a
-check in `selectZExt` for a `G_ICMP`-defined source; a known-bits-based
-combiner could generalize it. Code lives in
+- `zext i1` -> `selectZExt` emits `ANDi #1`, a no-op on an already-0/1
+  value.  The inverted predicates (`ult`, `ugt`, `ne`) compound it:
+  `emitCarryToValue`'s own `ANDi #1` (masking the SBC's 0/0xFFFFFFFF down
+  to 0/1) is then followed by the zext's `ANDi #1`, masking twice.
+- `sext i1` -> `selectSExt` emits `SHLi #31` + `SARi #31` to turn 0/1
+  into 0/-1, when the flag read could have produced the 0/-1 mask
+  directly (a single SBC of zeros after the compare yields -(NOT C);
+  pick the polarity to land 0/-1) and skip the two shifts.
+
+Fix: when the s1 source of a `G_ZEXT`/`G_SEXT` is a value already known
+to be 0/1 — defined by `G_ICMP` (or, post-selection, our flag-read
+sequence) — fold the extension into the flag read: `G_ZEXT` becomes a
+`COPY`, `G_SEXT` reads the flag straight into the 0/-1 mask.  Cleanest
+hook is a check in `selectZExt`/`selectSExt` for a `G_ICMP`-defined
+source; a known-bits combiner could generalize the zext case.  Code in
 `llvm/llvm/lib/Target/Penumbra/GISel/PenumbraInstructionSelector.cpp`.
+
+## Compiler: no branch-cost model — branch-avoidance may be over-eager
+
+Penumbra sets none of the branch/select cost knobs
+(`predictableSelectIsExpensive`, TTI `getCFInstrCost`, etc.), so the
+generic GISel combiners assume branchless code is always cheaper and
+fire unconditionally.  The clearest case: `select(cmp, c1, c2)` with
+small constants is rewritten (by `select_constant_cmp`/`match_selects`
+in `all_combines`) into `sext(cmp) + c2`-style arithmetic, even though
+Penumbra's own `selectSelect` would otherwise emit a CMP+Bcc branch.
+
+The branchless form is not obviously a win here: it must materialize the
+comparison into a 0/1 GPR and then extend it, whereas a branch lets the
+CMP feed Bcc directly and never builds the value.  For Dhrystone's
+`Proc_6`, `*ref = (x==2) ? Ident_3 : Ident_4` becomes ~8 instructions
+(`sub; cmp; mov; adc; shl; sar; add` + the seed mov) versus ~4 for a
+`lli; cmp; bne; lli` branch.  Whether that is faster depends on the
+branch cost: penumbra1 (shallow, no mispredict penalty) likely favors
+the branch; penumbra2 (no predictor, resolves in EX) makes taken
+branches costly and narrows the gap.
+
+This is a measure-on-hardware question, not a guess.  Action: benchmark
+representative code (Dhrystone, kernel hot paths) with the select-of-
+constants combine on vs off, then set the cost knobs (and/or gate the
+combine) to match the measured branch cost.  Note this is orthogonal to
+the branchless `icmp`-to-*value* path, which is a clear win over the old
+`SELECT_CC` form regardless (fewer instructions, no branch, no BB
+split); only the select-of-constants rewrite is in question.
 
 ## Compiler: inline small constant-size memcpy/memset/memmove
 
