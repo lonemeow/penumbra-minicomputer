@@ -21,10 +21,11 @@
 // (the no-forwarding baseline; the matching extra ID stall is in the
 // scoreboard).
 //
-// Deferred: the fault-commit / save-state path (suppress writes, pulse
-// EPC/ESR/SR/bank, launch the IF vector-fetch FSM) needs the exception
-// unit and IF, which are not wired yet; an assertion fires if a faulting
-// instruction reaches commit here.
+// Fault commit: when the instruction reaching commit carries a fault, WB
+// takes it here (the oldest in-flight slot, so precise) — every architectural
+// write is gated off and o_fault_commit pulses, driving the younger-instruction
+// flush and the save-state pulse (EPC/ESR/SR/bank) in the integration. The
+// IF-side vector-fetch FSM that consumes o_fault_commit is a later milestone.
 
 module penumbra2_wb_stage
     import penumbra_pkg::*;
@@ -44,8 +45,10 @@ module penumbra2_wb_stage
     input  logic [SB_IDX_W-1:0]   i_phys_dst,
     input  logic [SB_IDX_W-1:0]   i_phys_dst_aux,
     input  logic                  i_phys_dst_aux_en, // set only for a dual-destination write (aux dst present)
+    input  logic [31:0]           i_pc,              // committing instruction's PC (EPC source on a fault)
     input  logic                  i_valid,           // 0 = bubble
-    input  logic                  i_fault_pending,   // deferred-fault guard
+    input  logic                  i_fault_pending,
+    input  logic [3:0]            i_fault_vec,
 
     // ── Back-pressure (to MEM): the dual-write second-write hold ──
     output logic                  o_stall,
@@ -60,14 +63,34 @@ module penumbra2_wb_stage
     output logic [3:0]            o_flag_value,
     output logic                  o_spr_we,
     output logic [3:0]            o_spr_sel,
-    output logic [31:0]           o_spr_value
+    output logic [31:0]           o_spr_value,
+
+    // ── Fault commit (to the exception unit: flush + save-state) ─
+    output logic                  o_fault_commit,    // a faulting instruction is committing this cycle
+    output logic [3:0]            o_fault_vec,       // its vector number
+    output logic [31:0]           o_fault_pc         // its PC (→ EPC)
 );
+
+    // ── Fault commit: take the fault at the commit point ─────────
+    // WB is the commit point, and in-order completion makes the WB slot the
+    // oldest in flight — so a faulting instruction here is the oldest faulting
+    // one, and taking its fault is automatically precise. The faulting
+    // instruction must be *inert*: every architectural write is gated off, and
+    // o_fault_commit launches the flush + save-state instead. can_commit is the
+    // "this instruction is allowed to write" qualifier the strobes below use.
+    logic can_commit;
+    assign can_commit     = i_valid && !i_fault_pending;
+    assign o_fault_commit = i_valid && i_fault_pending;
+
+    assign o_fault_vec = i_fault_vec;
+    assign o_fault_pc  = i_pc;
 
     // A dual-destination write — an instruction that commits two registers
     // through the single write port over two cycles. Its aux-dst enable
-    // marks it (and implies gpr_we); it occupies WB for both cycles.
+    // marks it (and implies gpr_we); it occupies WB for both cycles. A
+    // faulting slot is inert (can_commit = 0), so it never enters the sequence.
     logic wb_dual_write;
-    assign wb_dual_write = i_valid & i_phys_dst_aux_en;
+    assign wb_dual_write = can_commit & i_phys_dst_aux_en;
 
     // ── Flag + SPR write strobes ─────────────────────────────────
     // Passive strobes to the external SR / SPR storage — no local state.
@@ -75,10 +98,10 @@ module penumbra2_wb_stage
     // same NZCV; idempotent — and it has spr_we = 0, so the SPR strobe is
     // quiet across both.)
     assign o_flag_value = i_flag_value;
-    assign o_flag_we    = i_valid & i_flag_we;
+    assign o_flag_we    = can_commit & i_flag_we;
     assign o_spr_sel    = i_spr_sel;
     assign o_spr_value  = i_wb_value;
-    assign o_spr_we     = i_valid & i_spr_we;
+    assign o_spr_we     = can_commit & i_spr_we;
 
     // ── Regfile write port + dual-write sequencing ───────────────
     // A normal commit is one GPR write. A dual write replaces it with a
@@ -102,13 +125,13 @@ module penumbra2_wb_stage
         if (!writing_aux) begin
             wr_idx          = i_phys_dst;
             wr_data         = i_wb_value;
-            wr_en           = i_valid & i_gpr_we;
+            wr_en           = can_commit & i_gpr_we;
             o_stall         = wb_dual_write;
             next_writing_aux = wb_dual_write;
         end else begin
             wr_idx          = i_phys_dst_aux;
             wr_data         = i_wb_value_aux;
-            wr_en           = i_valid & i_gpr_we;
+            wr_en           = can_commit & i_gpr_we;
             o_stall         = 1'b0;
             next_writing_aux = 1'b0;
         end
@@ -122,11 +145,11 @@ module penumbra2_wb_stage
     // Assertions — sim-only (Verilator --assert); stripped at synth.
     // ══════════════════════════════════════════════════════════
 
-    // Deferred: a faulting instruction must not retire through the skeleton
-    // — the save-state / vector-fetch path is not wired yet.
+    // A faulting commit takes the fault and writes nothing: the fault-commit
+    // pulse and a regfile write are mutually exclusive in the same cycle.
     always_comb begin
-        assert (!(i_valid && i_fault_pending))
-            else $error("penumbra2_wb_stage: faulting instruction reached the skeleton");
+        assert (!(o_fault_commit && o_wr_en))
+            else $error("penumbra2_wb_stage: faulting instruction also wrote a register");
     end
 
     // o_stall is the dual-write second-write hold only; nothing else back-

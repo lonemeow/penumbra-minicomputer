@@ -27,6 +27,8 @@
 // Format R / L opcodes + alu ops (penumbra2_pkg / instruction-encoding.md)
 enum { OP_R_ADD = 0, OP_R_SUB = 1, OP_R_MOV = 8, OP_R_MUL = 16 };
 enum { OP_L_LLI = 0 };
+enum { SZ_BYTE = 0, SZ_HALF = 1, SZ_WORD = 2 };
+enum { VEC_ALIGN = 8 };
 
 static int errors = 0, tests = 0;
 
@@ -47,6 +49,11 @@ static uint32_t enc_r(int op, int rd, int rs, int f, int field1512 = 0) {
 }
 static uint32_t enc_l(int op, int rd, uint16_t imm) {
     return (1u << 30) | ((op & 0xF) << 26) | ((rd & 0xF) << 22) | imm;
+}
+// Format M: [10][L][sz][SE][Rd][Rb][offset16(17:2)][sp]
+static uint32_t enc_m(int load, int sz, int se, int rd, int rb, uint16_t off) {
+    return (2u << 30) | ((load & 1) << 29) | ((sz & 3) << 27) | ((se & 1) << 26)
+         | ((rd & 0xF) << 22) | ((rb & 0xF) << 18) | ((uint32_t)off << 2);
 }
 
 // Run a program through the spine, mirroring WB commits into `shadow`
@@ -164,6 +171,58 @@ int main() {
         check("b2b_mulB_lo", sh[4], 12);
         check("b2b_mulB_hi", sh[6], 0);
         check("b2b_raw_rdh", sh[7], 0x100); // 0x1AB would mean a missed aux RAW
+    }
+
+    // ── Test 4: misaligned load takes a precise alignment fault ──
+    // R1=0x100; LDW R2,[R1+#2] computes EA 0x102 (word-misaligned) → MEM tags
+    // VEC_ALIGN; the load reaches WB inert and the fault commits there. The
+    // older R1 must have committed; the load's R2 and the younger poison R3
+    // must NOT commit (the load is inert; the poison is flushed). EPC must name
+    // the faulting load's PC.
+    {
+        const uint32_t prog[] = {
+            enc_l(OP_L_LLI, 1, 0x100),               // R1 = 0x100
+            enc_m(1, SZ_WORD, 0, 2, 1, 2),           // LDW R2,[R1+#2] → EA 0x102, misaligned
+            enc_l(OP_L_LLI, 3, 0xBB),                // poison: must be flushed
+        };
+        for (auto& v : sh) v = 0;
+        // Reset (held two cycles).
+        dut->i_valid = 0; dut->i_supervisor = 1;
+        dut->i_ir = 0; dut->i_pc = 0; dut->i_next_pc = 0;
+        dut->i_rst = 1; tick(dut); tick(dut); dut->i_rst = 0;
+
+        const uint32_t LOAD_PC = 0x1000 + 4 * 1;
+        bool fault_seen = false;
+        uint32_t fvec = 0xFF, fepc = 0xFFFFFFFF;
+        int fidx = 0;
+        for (int c = 0; c < 64; c++) {
+            if (fidx < 3) {
+                dut->i_ir      = prog[fidx];
+                dut->i_pc      = 0x1000 + 4 * fidx;
+                dut->i_next_pc = 0x1000 + 4 * (fidx + 1);
+                dut->i_valid   = 1;
+            } else {
+                dut->i_ir = 0; dut->i_pc = 0; dut->i_next_pc = 0; dut->i_valid = 0;
+            }
+            dut->eval();
+            bool stall = dut->o_fetch_stall;
+            bool fc    = dut->o_fault_commit;
+            uint32_t fc_vec = dut->o_fault_vec;
+            if (dut->o_commit_we) sh[dut->o_commit_idx] = dut->o_commit_data;
+            if (!stall && fidx < 3) fidx++;
+            tick(dut);
+            dut->eval();
+            if (fc && !fault_seen) {
+                fault_seen = true; fvec = fc_vec; fepc = dut->o_epc;  // EPC latched this edge
+                fidx = 3;                                            // stop feeding (IF would flush)
+            }
+        }
+        check("fault_seen",          fault_seen, 1);
+        check("fault_vec",           fvec, VEC_ALIGN);
+        check("fault_epc",           fepc, LOAD_PC);
+        check("fault_older_commit",  sh[1], 0x100);   // R1 (older) committed
+        check("fault_load_inert",    sh[2], 0);        // load dest never written
+        check("fault_poison_flushed", sh[3], 0);       // younger LLI flushed
     }
 
     printf("%s: %d/%d checks passed\n",

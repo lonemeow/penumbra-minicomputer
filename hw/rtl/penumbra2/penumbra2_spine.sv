@@ -56,7 +56,12 @@ module penumbra2_spine
     output logic [3:0]            o_dmem_byte_en,
     output logic                  o_dmem_we,
     output logic                  o_dmem_en,
-    input  logic [31:0]           i_dmem_rdata
+    input  logic [31:0]           i_dmem_rdata,
+
+    // ── Exception entry (to the core: IF flush + vector-fetch FSM) ──
+    output logic                  o_fault_commit,    // a fault is being taken this cycle
+    output logic [3:0]            o_fault_vec,       // its vector number
+    output logic [31:0]           o_epc              // saved exception PC (ERET / vector-fetch redirect)
 );
 
     // This integration deliberately leaves several sub-module outputs
@@ -110,7 +115,13 @@ module penumbra2_spine
     logic [3:0]          memwb_flag_value;
     logic [SB_IDX_W-1:0] memwb_phys_dst, memwb_phys_dst_aux;
     logic                memwb_phys_dst_aux_en;
+    logic [31:0]         memwb_pc;
     logic                memwb_valid, memwb_fault_pending;
+    logic [3:0]          memwb_fault_vec;
+
+    // Fault commit (WB → exception unit / flush)
+    logic                wb_fault_commit;
+    logic [31:0]         wb_fault_pc;
 
     // Regfile read ports (ID-driven)
     logic [SB_IDX_W-1:0] rd_idx_a, rd_idx_b;
@@ -132,16 +143,25 @@ module penumbra2_spine
     logic                sb_mem_dst_en, sb_wb_dst_en, sb_aux_dst_en;
 
     // ════════════════════════════════════════════════════════════
-    // Committed-SR flag register (minimal stand-in for status_reg)
+    // Privileged save-state registers (SR / ESR / EPC)
     // ════════════════════════════════════════════════════════════
-    // WB commits NZCV here; EX's flag bypass reads it as the committed-SR
-    // fallback when no in-flight producer forwards. (S/I bits are not
-    // modelled yet — drain-commit / exceptions arrive with status_reg.)
-    logic [3:0] sr_flags;
-    always_ff @(posedge i_clk) begin
-        if (i_rst)         sr_flags <= 4'b0;
-        else if (wb_flag_we) sr_flags <= wb_flag_value;
-    end
+    // WB commits NZCV into SR here; EX's flag bypass reads SR's NZCV as the
+    // committed-SR fallback when no in-flight producer forwards. The fault
+    // commit drives the save-state pulse (EPC ← faulting PC, ESR ← SR, S=1,
+    // I=0). ERET / WRSPR-SPR are not wired into the pipeline yet (no RDSPR /
+    // drain-commit-SR path), so those write ports are tied off for now.
+    logic [3:0]  spr_sr_flags;
+    penumbra2_spr_file u_spr (
+        .i_clk(i_clk), .i_rst(i_rst),
+        .i_flag_we(wb_flag_we), .i_flag_value(wb_flag_value),
+        .i_save_state(wb_fault_commit), .i_save_pc(wb_fault_pc),
+        .i_eret(1'b0),
+        .i_spr_we(1'b0), .i_spr_sel(4'd0), .i_spr_value(32'b0),
+        .i_rd_sel(4'd0), .o_rd_value(),
+        .o_sr_flags(spr_sr_flags),
+        .o_sr_s(), .o_sr_i(), .o_sr_read(),
+        .o_epc(o_epc), .o_esr()
+    );
 
     // ════════════════════════════════════════════════════════════
     // Register file (shared: ID reads, WB writes)
@@ -161,7 +181,7 @@ module penumbra2_spine
         .i_ir(i_ir), .i_pc(i_pc), .i_next_pc(i_next_pc),
         .i_valid(i_valid), .i_fault_pending(1'b0), .i_fault_vec(4'd0),
         .i_supervisor(i_supervisor),
-        .i_stall_in(ex_stall), .i_bubble(ex_branch_taken),
+        .i_stall_in(ex_stall), .i_bubble(ex_branch_taken | wb_fault_commit),
         .o_stall(id_stall),
         .o_rd_idx_a(rd_idx_a), .o_rd_idx_b(rd_idx_b),
         .i_rd_data_a(rd_data_a), .i_rd_data_b(rd_data_b),
@@ -199,9 +219,9 @@ module penumbra2_spine
         .i_phys_dst_aux_en(idex_phys_dst_aux_en),
         .i_pc(idex_pc), .i_next_pc(idex_next_pc),
         .i_valid(idex_valid), .i_fault_pending(idex_fault_pending), .i_fault_vec(idex_fault_vec),
-        .i_sr_flags(sr_flags),
+        .i_sr_flags(spr_sr_flags),
         .i_wb_flags(memwb_flag_value), .i_wb_writes_flags(memwb_flag_we & memwb_valid),
-        .i_stall_in(mem_stall), .i_wb_active(memwb_valid), .i_bubble(1'b0),
+        .i_stall_in(mem_stall), .i_wb_active(memwb_valid), .i_bubble(wb_fault_commit),
         .o_stall(ex_stall), .o_dc_commit(), .o_funit_stall(),
         .o_branch_taken(ex_branch_taken), .o_branch_target(o_branch_target),
         .o_op_class(exmem_op_class), .o_mem_op(exmem_mem_op),
@@ -235,7 +255,7 @@ module penumbra2_spine
         .i_pc(exmem_pc),
         .i_valid(exmem_valid), .i_fault_pending(exmem_fault_pending),
         .i_fault_vec(exmem_fault_vec),
-        .i_stall_in(wb_stall), .i_bubble(1'b0),
+        .i_stall_in(wb_stall), .i_bubble(wb_fault_commit),
         .o_stall(mem_stall),
         .o_dmem_addr(o_dmem_addr), .o_dmem_wdata(o_dmem_wdata),
         .o_dmem_byte_en(o_dmem_byte_en), .o_dmem_we(o_dmem_we),
@@ -247,8 +267,9 @@ module penumbra2_spine
         .o_flag_value(memwb_flag_value),
         .o_phys_dst(memwb_phys_dst), .o_phys_dst_aux(memwb_phys_dst_aux),
         .o_phys_dst_aux_en(memwb_phys_dst_aux_en),
-        .o_pc(),
-        .o_valid(memwb_valid), .o_fault_pending(memwb_fault_pending), .o_fault_vec()
+        .o_pc(memwb_pc),
+        .o_valid(memwb_valid), .o_fault_pending(memwb_fault_pending),
+        .o_fault_vec(memwb_fault_vec)
     );
 
     // ════════════════════════════════════════════════════════════
@@ -262,12 +283,19 @@ module penumbra2_spine
         .i_flag_value(memwb_flag_value),
         .i_phys_dst(memwb_phys_dst), .i_phys_dst_aux(memwb_phys_dst_aux),
         .i_phys_dst_aux_en(memwb_phys_dst_aux_en),
+        .i_pc(memwb_pc),
         .i_valid(memwb_valid), .i_fault_pending(memwb_fault_pending),
+        .i_fault_vec(memwb_fault_vec),
         .o_stall(wb_stall),
         .o_wr_idx(wr_idx), .o_wr_data(wr_data), .o_wr_en(wr_en),
         .o_flag_we(wb_flag_we), .o_flag_value(wb_flag_value),
-        .o_spr_we(), .o_spr_sel(), .o_spr_value()
+        .o_spr_we(), .o_spr_sel(), .o_spr_value(),
+        .o_fault_commit(wb_fault_commit), .o_fault_vec(o_fault_vec),
+        .o_fault_pc(wb_fault_pc)
     );
+
+    // The fault-commit pulse is exposed to the core (IF flush + vector-fetch).
+    assign o_fault_commit = wb_fault_commit;
 
     // ════════════════════════════════════════════════════════════
     // Scoreboard's view of the downstream in-flight writers

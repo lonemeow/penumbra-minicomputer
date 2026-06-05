@@ -128,7 +128,9 @@ module penumbra2_core
         .o_branch_taken(branch_taken), .o_branch_target(branch_target),
         .o_dmem_addr(dmem_addr), .o_dmem_wdata(dmem_wdata),
         .o_dmem_byte_en(dmem_byte_en), .o_dmem_we(dmem_we), .o_dmem_en(dmem_en),
-        .i_dmem_rdata(dmem_rdata)
+        .i_dmem_rdata(dmem_rdata),
+        // Exception entry — consumed by the IF flush + vector-fetch FSM (next milestone).
+        .o_fault_commit(), .o_fault_vec(), .o_epc()
     );
 
     // ══════════════════════════════════════════════════════════
