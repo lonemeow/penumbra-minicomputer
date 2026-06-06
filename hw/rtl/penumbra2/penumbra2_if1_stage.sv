@@ -22,6 +22,11 @@
 // (penumbra2_vecfetch) then owns the fetch port for a couple of cycles, during
 // which IF1 is held (i_stall_in), and finally drives i_redirect with the
 // handler address it read from the vector table.
+//
+// Interrupt entry adds i_fetch_stop: while the interrupt unit drains the
+// pipeline it freezes PC at the boundary (so the unit can capture it as EPC)
+// and bubbles the output, without steering — the redirect to the handler
+// arrives later, again through the vector fetch.
 
 module penumbra2_if1_stage #(
     parameter logic [31:0] RESET_PC = 32'h0000_0000
@@ -38,6 +43,9 @@ module penumbra2_if1_stage #(
 
     // ── Fault flush (from exception entry) ───────────────────────
     input  logic        i_flush,       // bubble the in-flight fetch without steering PC
+
+    // ── Interrupt drain (from the interrupt unit) ────────────────
+    input  logic        i_fetch_stop,  // freeze PC at the boundary + bubble, while the pipe drains
 
     // ── I-cache BRAM address (combinational) ─────────────────────
     output logic [31:0] o_fetch_addr,
@@ -71,18 +79,17 @@ module penumbra2_if1_stage #(
     assign o_fetch_en   = redirect | ~hold;
 
     // ── PC register ──────────────────────────────────────────────
-    // TODO(human): drive the next PC. Three mutually-exclusive cases, in
-    // priority order — a taken-branch redirect, a back-pressure hold, and the
-    // default sequential advance. Inputs available: `redirect`, `i_redirect_pc`,
-    // `hold`, `pc`, `pc_plus_4`. (See o_fetch_en above for the redirect-beats-
-    // hold principle, and how ID/MEM order i_bubble ahead of i_stall_in.)
+    // Priority: a redirect (branch / vector-fetch / ERET) steers PC; otherwise
+    // a back-pressure hold or an interrupt-drain fetch-stop freezes it (the
+    // fetch-stop freezes it *at the boundary*, which the interrupt unit captures
+    // as EPC); otherwise advance sequentially.
     always_ff @(posedge i_clk) begin
         if (i_rst)
             pc <= RESET_PC;
         else begin
             if (redirect)
                 pc <= i_redirect_pc;
-            else if (hold)
+            else if (hold || i_fetch_stop)
                 pc <= pc;
             else
                 pc <= pc_plus_4;
@@ -98,8 +105,8 @@ module penumbra2_if1_stage #(
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
             o_valid <= 1'b0;
-        end else if (redirect || i_flush) begin
-            o_valid <= 1'b0;            // discard the wrong-path fetch (branch shadow or fault flush)
+        end else if (redirect || i_flush || i_fetch_stop) begin
+            o_valid <= 1'b0;            // discard the fetch: branch shadow, fault flush, or drain bubble
         end else if (!hold) begin
             o_pc      <= pc;
             o_next_pc <= pc_plus_4;
@@ -112,7 +119,7 @@ module penumbra2_if1_stage #(
     // IF1/IF2 slot is a bubble the next cycle. Guards a future reorder that
     // would let the wrong-path fetch survive the flush and reach IF2.
     assert property (@(posedge i_clk) disable iff (i_rst)
-        (redirect || i_flush) |=> !o_valid)
-        else $error("penumbra2_if1_stage: redirect/flush did not bubble the IF1/IF2 slot");
+        (redirect || i_flush || i_fetch_stop) |=> !o_valid)
+        else $error("penumbra2_if1_stage: redirect/flush/fetch-stop did not bubble the IF1/IF2 slot");
 
 endmodule

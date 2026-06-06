@@ -64,7 +64,15 @@ module penumbra2_spine
     output logic [31:0]           o_epc,             // saved exception PC (ERET / vector-fetch redirect)
 
     // ── ERET return (to the core: flush IF1/IF2 + redirect PC ← EPC) ──
-    output logic                  o_eret_commit      // an ERET is committing this cycle
+    output logic                  o_eret_commit,     // an ERET is committing this cycle
+
+    // ── Interrupt support (to/from the core's interrupt unit) ────
+    output logic                  o_sr_i,            // SR.I (interrupt enable)
+    output logic                  o_ei_commit,       // EI committed this cycle (arm ei_shadow)
+    output logic                  o_dc_commit,       // any drain-commit completed this cycle
+    output logic                  o_pipe_busy,       // an instruction is in flight in ID/EX/MEM/WB
+    input  logic                  i_irq_entry,       // take an interrupt: save-state with the boundary PC
+    input  logic [31:0]           i_irq_epc          // the boundary PC to save (EPC)
 );
 
     // This integration deliberately leaves several sub-module outputs
@@ -163,17 +171,25 @@ module penumbra2_spine
     // commit drives the save-state pulse (EPC ← faulting PC, ESR ← SR, S=1,
     // I=0). ERET / WRSPR-SPR are not wired into the pipeline yet (no RDSPR /
     // drain-commit-SR path), so those write ports are tied off for now.
+    // Save-state fires for a committing fault (EPC ← faulting PC) or an
+    // interrupt entry (EPC ← boundary PC); the two never coincide (a fault
+    // during the interrupt drain preempts the entry).
+    logic        save_state;
+    logic [31:0] save_pc;
+    assign save_state = wb_fault_commit | i_irq_entry;
+    assign save_pc    = wb_fault_commit ? wb_fault_pc : i_irq_epc;
+
     logic [3:0]  spr_sr_flags;
     penumbra2_spr_file u_spr (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_flag_we(wb_flag_we), .i_flag_value(wb_flag_value),
-        .i_save_state(wb_fault_commit), .i_save_pc(wb_fault_pc),
+        .i_save_state(save_state), .i_save_pc(save_pc),
         .i_eret(eret_commit),
         .i_ei(ei_commit), .i_di(di_commit),
         .i_spr_we(1'b0), .i_spr_sel(4'd0), .i_spr_value(32'b0),
         .i_rd_sel(4'd0), .o_rd_value(),
         .o_sr_flags(spr_sr_flags),
-        .o_sr_s(), .o_sr_i(), .o_sr_read(),
+        .o_sr_s(), .o_sr_i(o_sr_i), .o_sr_read(),
         .o_epc(o_epc), .o_esr()
     );
 
@@ -312,6 +328,13 @@ module penumbra2_spine
     // flush + vector-fetch / ERET redirect to EPC).
     assign o_fault_commit = wb_fault_commit;
     assign o_eret_commit  = eret_commit;
+
+    // Interrupt-unit observability: the enable bit, the EI arm pulse, any
+    // drain-commit completion (clears ei_shadow), and whether the ID/EX/MEM/WB
+    // half of the pipeline still holds a live instruction (drain detection).
+    assign o_ei_commit = ei_commit;
+    assign o_dc_commit = ex_dc_commit;
+    assign o_pipe_busy = idex_valid | exmem_valid | memwb_valid;
 
     // ════════════════════════════════════════════════════════════
     // Scoreboard's view of the downstream in-flight writers

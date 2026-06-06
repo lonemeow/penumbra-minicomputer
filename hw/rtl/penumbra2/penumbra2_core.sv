@@ -52,6 +52,10 @@ module penumbra2_core
     input  logic                  i_clk,
     input  logic                  i_rst,
 
+    // ── Interrupt lines (level, wired-OR external + timer) ───────
+    input  logic                  i_irq,
+    input  logic                  i_timer_irq,
+
     // ── Commit observability (WB regfile write port) ─────────────
     output logic [SB_IDX_W-1:0]   o_commit_idx,
     output logic [31:0]           o_commit_data,
@@ -98,6 +102,21 @@ module penumbra2_core
     // ── ERET return (EX drain-commit -> front end) ───────────────
     logic        eret_commit;       // an ERET is committing: redirect PC ← EPC
     logic [31:0] epc;               // saved exception PC
+
+    // ── Interrupt entry (interrupt unit <-> spine + front end) ────
+    logic        sr_i, ei_commit, dc_commit, pipe_busy;   // from spine
+    logic        irq_fetch_stop;    // freeze IF1 at the boundary while draining
+    logic        irq_entry;         // take the interrupt: save-state + vector fetch
+    logic [3:0]  irq_vec;
+    logic [31:0] irq_epc;
+
+    // The vector-fetch FSM is launched by either entry source — a fault commit
+    // (handler from the faulting PC) or an interrupt entry — carrying that
+    // source's vector. They are mutually exclusive (a fault preempts the drain).
+    logic        vecf_launch;
+    logic [3:0]  vecf_launch_vec;
+    assign vecf_launch     = fault_commit | irq_entry;
+    assign vecf_launch_vec = fault_commit ? fault_vec : irq_vec;
 
     // ── Front-end redirect / flush composition + fetch-port mux ──
     // Three control-flow events steer or flush IF: a taken branch, the vector
@@ -160,6 +179,7 @@ module penumbra2_core
         .i_stall_in(if2_stall | vecf_active),     // held while the FSM owns the fetch port
         .i_redirect(if1_redirect), .i_redirect_pc(if1_redirect_pc),
         .i_flush(fault_commit),                    // bubble the wrong-path fetch at the fault
+        .i_fetch_stop(irq_fetch_stop),             // freeze at the boundary while draining for an IRQ
         .o_fetch_addr(if1_fetch_addr), .o_fetch_en(if1_fetch_en),
         .o_pc(if1_pc), .o_next_pc(if1_next_pc), .o_valid(if1_valid)
     );
@@ -201,22 +221,47 @@ module penumbra2_core
         // Exception entry — drives the IF flush + the vector-fetch FSM below.
         // ERET commit redirects PC ← EPC through the same front-end path.
         .o_fault_commit(fault_commit), .o_fault_vec(fault_vec), .o_epc(epc),
-        .o_eret_commit(eret_commit)
+        .o_eret_commit(eret_commit),
+        // Interrupt support — observability out, IRQ save-state in.
+        .o_sr_i(sr_i), .o_ei_commit(ei_commit), .o_dc_commit(dc_commit),
+        .o_pipe_busy(pipe_busy),
+        .i_irq_entry(irq_entry), .i_irq_epc(irq_epc)
     );
 
     // ══════════════════════════════════════════════════════════
     // Vector-fetch FSM — reads the handler address, redirects PC
     // ══════════════════════════════════════════════════════════
-    // On a fault commit it borrows the fetch port (port A, muxed above) to read
-    // vector_table[vec<<2] from the RAM region — the handler address the kernel
-    // stored there — then redirects IF1 to the handler.
+    // On either entry source (a fault commit or an interrupt entry) it borrows
+    // the fetch port (port A, muxed above) to read vector_table[vec<<2] from the
+    // RAM region — the handler address the kernel stored there — then redirects
+    // IF1 to the handler.
     penumbra2_vecfetch u_vecfetch (
         .i_clk(i_clk), .i_rst(i_rst),
-        .i_fault_commit(fault_commit), .i_fault_vec(fault_vec),
+        .i_fault_commit(vecf_launch), .i_fault_vec(vecf_launch_vec),
         .i_mem_rdata(imem_rdata),
         .o_active(vecf_active),
         .o_fetch_addr(vecf_fetch_addr), .o_fetch_en(vecf_fetch_en),
         .o_redirect(vecf_redirect), .o_redirect_pc(vecf_redirect_pc)
+    );
+
+    // ══════════════════════════════════════════════════════════
+    // Interrupt unit — recognition + drain-and-take
+    // ══════════════════════════════════════════════════════════
+    // Recognizes an eligible IRQ, stops the front end at the boundary, drains
+    // the in-flight stream, then pulses irq_entry — which save-states the
+    // boundary PC (into the spine's SPR file) and launches the vector fetch
+    // above. The drained signal spans the whole pipe: IF2 here plus the spine's
+    // ID/EX/MEM/WB (pipe_busy).
+    penumbra2_irq u_irq (
+        .i_clk(i_clk), .i_rst(i_rst),
+        .i_irq(i_irq), .i_timer_irq(i_timer_irq),
+        .i_sr_i(sr_i), .i_ei_commit(ei_commit),
+        .i_retire_valid(o_retire_valid), .i_dc_commit(dc_commit),
+        .i_pipe_busy(if2_valid | pipe_busy),
+        .i_boundary_pc(if1_fetch_addr),
+        .i_fault_commit(fault_commit), .i_vecf_active(vecf_active),
+        .o_fetch_stop(irq_fetch_stop),
+        .o_irq_entry(irq_entry), .o_irq_vec(irq_vec), .o_irq_epc(irq_epc)
     );
 
     // ══════════════════════════════════════════════════════════

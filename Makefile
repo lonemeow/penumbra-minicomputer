@@ -177,6 +177,7 @@ MODULE_TESTS = \
     penumbra2_wb_stage \
     penumbra2_spr_file \
     penumbra2_vecfetch \
+    penumbra2_irq \
     penumbra2_spine \
     unified_mem \
     uart \
@@ -295,6 +296,16 @@ test-penumbra2-eret:
 .PHONY: test-penumbra2-syscall
 test-penumbra2-syscall:
 	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_syscall TB=tb_penumbra2_branch
+
+# ── Penumbra/2 core interrupt test ────────────────────────────
+# Same core, the interrupt milestone program: an external IRQ (held by the
+# testbench) is masked until EI + the one-instruction shadow pass, then
+# recognized at a fetch boundary and vectored (drain-and-take) to a handler.
+# Self-checks into R1; the tb (tb_penumbra2_intr) drives the IRQ line.
+# Usage: make test-penumbra2-intr
+.PHONY: test-penumbra2-intr
+test-penumbra2-intr:
+	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_intr TB=tb_penumbra2_intr
 
 # ── Run all program tests on ISS (fast, no Docker) ────────────
 # Same test programs as `make test` but runs on the ISS.
