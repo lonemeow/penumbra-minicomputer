@@ -61,7 +61,10 @@ module penumbra2_spine
     // ── Exception entry (to the core: IF flush + vector-fetch FSM) ──
     output logic                  o_fault_commit,    // a fault is being taken this cycle
     output logic [3:0]            o_fault_vec,       // its vector number
-    output logic [31:0]           o_epc              // saved exception PC (ERET / vector-fetch redirect)
+    output logic [31:0]           o_epc,             // saved exception PC (ERET / vector-fetch redirect)
+
+    // ── ERET return (to the core: flush IF1/IF2 + redirect PC ← EPC) ──
+    output logic                  o_eret_commit      // an ERET is committing this cycle
 );
 
     // This integration deliberately leaves several sub-module outputs
@@ -130,6 +133,13 @@ module penumbra2_spine
     // Handshake
     logic id_stall, ex_stall, mem_stall, wb_stall;
     logic ex_branch_taken;
+    logic ex_dc_commit;     // EX drain-commit pulse (ERET/WRSYS/WRSPR-SR/EI/DI)
+
+    // An ERET commits this cycle: the drain-commit pulse from EX, gated to the
+    // ERET op held in EX. EX owns the *when* (it sequenced the drain); the
+    // integration owns the *what* — restore SR from ESR and redirect PC to EPC.
+    logic eret_commit;
+    assign eret_commit = ex_dc_commit & (idex_op_class == OPC_ERET);
 
     // WB write port + committed flags
     logic [SB_IDX_W-1:0] wr_idx;
@@ -155,7 +165,7 @@ module penumbra2_spine
         .i_clk(i_clk), .i_rst(i_rst),
         .i_flag_we(wb_flag_we), .i_flag_value(wb_flag_value),
         .i_save_state(wb_fault_commit), .i_save_pc(wb_fault_pc),
-        .i_eret(1'b0),
+        .i_eret(eret_commit),
         .i_spr_we(1'b0), .i_spr_sel(4'd0), .i_spr_value(32'b0),
         .i_rd_sel(4'd0), .o_rd_value(),
         .o_sr_flags(spr_sr_flags),
@@ -181,7 +191,7 @@ module penumbra2_spine
         .i_ir(i_ir), .i_pc(i_pc), .i_next_pc(i_next_pc),
         .i_valid(i_valid), .i_fault_pending(1'b0), .i_fault_vec(4'd0),
         .i_supervisor(i_supervisor),
-        .i_stall_in(ex_stall), .i_bubble(ex_branch_taken | wb_fault_commit),
+        .i_stall_in(ex_stall), .i_bubble(ex_branch_taken | wb_fault_commit | eret_commit),
         .o_stall(id_stall),
         .o_rd_idx_a(rd_idx_a), .o_rd_idx_b(rd_idx_b),
         .i_rd_data_a(rd_data_a), .i_rd_data_b(rd_data_b),
@@ -222,7 +232,7 @@ module penumbra2_spine
         .i_sr_flags(spr_sr_flags),
         .i_wb_flags(memwb_flag_value), .i_wb_writes_flags(memwb_flag_we & memwb_valid),
         .i_stall_in(mem_stall), .i_wb_active(memwb_valid), .i_bubble(wb_fault_commit),
-        .o_stall(ex_stall), .o_dc_commit(), .o_funit_stall(),
+        .o_stall(ex_stall), .o_dc_commit(ex_dc_commit), .o_funit_stall(),
         .o_branch_taken(ex_branch_taken), .o_branch_target(o_branch_target),
         .o_op_class(exmem_op_class), .o_mem_op(exmem_mem_op),
         .o_mem_size(exmem_mem_size), .o_sign_ext(exmem_sign_ext),
@@ -294,8 +304,10 @@ module penumbra2_spine
         .o_fault_pc(wb_fault_pc)
     );
 
-    // The fault-commit pulse is exposed to the core (IF flush + vector-fetch).
+    // The fault-commit and ERET-commit pulses are exposed to the core (IF
+    // flush + vector-fetch / ERET redirect to EPC).
     assign o_fault_commit = wb_fault_commit;
+    assign o_eret_commit  = eret_commit;
 
     // ════════════════════════════════════════════════════════════
     // Scoreboard's view of the downstream in-flight writers

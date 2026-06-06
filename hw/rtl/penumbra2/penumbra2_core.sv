@@ -93,14 +93,55 @@ module penumbra2_core
     logic        vecf_redirect;     // steer PC to the handler
     logic [31:0] vecf_redirect_pc;
 
-    // IF1 redirect / fetch-port muxes (branch vs vector-fetch)
-    logic        if1_redirect;
-    logic [31:0] if1_redirect_pc;
+    // ── ERET return (EX drain-commit -> front end) ───────────────
+    logic        eret_commit;       // an ERET is committing: redirect PC ← EPC
+    logic [31:0] epc;               // saved exception PC
+
+    // ── Front-end redirect / flush composition + fetch-port mux ──
+    // Three control-flow events steer or flush IF: a taken branch, the vector
+    // fetch reaching its handler, and an ERET returning to EPC. They are
+    // mutually exclusive in time.
+    logic        if1_redirect;      // steer PC + bubble IF1's slot
+    logic [31:0] if1_redirect_pc;   // the target for that redirect
+    logic        if2_flush;         // bubble IF2's slot
     logic [31:0] fetch_addr_mux;
     logic        fetch_en_mux;
 
-    assign if1_redirect    = branch_taken | vecf_redirect;
-    assign if1_redirect_pc = vecf_redirect ? vecf_redirect_pc : branch_target;
+    // TODO(human): compose if1_redirect, if1_redirect_pc, and if2_flush from
+    // the control-flow events. Sources:
+    //   branch:       branch_taken     → branch_target
+    //   vector fetch: vecf_redirect    → vecf_redirect_pc
+    //   ERET:         eret_commit      → epc
+    //   fault:        fault_commit     (flushes IF2's wrong-path word now, but
+    //                 does NOT steer PC here — its redirect comes later, via the
+    //                 vector fetch; IF1's fault flush is i_flush, wired below).
+    // if1_redirect steers PC for the three that know their target; if2_flush
+    // bubbles IF2 for any front-end kill including the fault. Pick a priority
+    // for if1_redirect_pc (the steering sources never coincide).
+
+    always_comb begin
+        // Idle defaults — overridden by the events below. Without these the
+        // unassigned paths (fault-only, no-event) would infer latches.
+        if1_redirect    = 1'b0;
+        if1_redirect_pc = branch_target;   // don't-care while if1_redirect=0
+        if2_flush       = 1'b0;
+        if (branch_taken) begin
+            if1_redirect    = 1'b1;
+            if1_redirect_pc = branch_target;
+            if2_flush       = 1'b1;
+        end else if (vecf_redirect) begin
+            if1_redirect    = 1'b1;
+            if1_redirect_pc = vecf_redirect_pc;
+            if2_flush       = 1'b1;
+        end else if (eret_commit) begin
+            if1_redirect    = 1'b1;
+            if1_redirect_pc = epc;
+            if2_flush       = 1'b1;
+        end else if (fault_commit) begin
+            if2_flush       = 1'b1;
+        end
+    end
+
     assign fetch_addr_mux  = vecf_active ? vecf_fetch_addr : if1_fetch_addr;
     assign fetch_en_mux    = vecf_active ? vecf_fetch_en   : if1_fetch_en;
 
@@ -132,7 +173,7 @@ module penumbra2_core
         .i_pc(if1_pc), .i_next_pc(if1_next_pc), .i_valid(if1_valid),
         .i_ir(imem_rdata),
         .i_stall_in(fetch_stall),
-        .i_flush(branch_taken | fault_commit),     // discard the wrong-path word on a fault too
+        .i_flush(if2_flush),
         .o_stall(if2_stall),
         .o_ir(if2_ir), .o_pc(if2_pc), .o_next_pc(if2_next_pc),
         .o_valid(if2_valid),
@@ -156,8 +197,9 @@ module penumbra2_core
         .o_dmem_byte_en(dmem_byte_en), .o_dmem_we(dmem_we), .o_dmem_en(dmem_en),
         .i_dmem_rdata(dmem_rdata),
         // Exception entry — drives the IF flush + the vector-fetch FSM below.
-        // o_epc feeds the ERET redirect, which is a later milestone.
-        .o_fault_commit(fault_commit), .o_fault_vec(fault_vec), .o_epc()
+        // ERET commit redirects PC ← EPC through the same front-end path.
+        .o_fault_commit(fault_commit), .o_fault_vec(fault_vec), .o_epc(epc),
+        .o_eret_commit(eret_commit)
     );
 
     // ══════════════════════════════════════════════════════════

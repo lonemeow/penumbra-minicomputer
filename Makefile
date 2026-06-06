@@ -278,6 +278,15 @@ test-penumbra2-loadstore:
 test-penumbra2-fault:
 	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_fault TB=tb_penumbra2_branch
 
+# ── Penumbra/2 core exception round-trip test ─────────────────
+# Same core, the ERET milestone program: a fault vectors to a handler that
+# fixes the cause and ERETs back to EPC, which re-executes and completes.
+# Exercises SR<-ESR restore + PC<-EPC redirect. Self-checks into R1.
+# Usage: make test-penumbra2-eret
+.PHONY: test-penumbra2-eret
+test-penumbra2-eret:
+	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_eret TB=tb_penumbra2_branch
+
 # ── Run all program tests on ISS (fast, no Docker) ────────────
 # Same test programs as `make test` but runs on the ISS.
 # Usage: make test-iss
