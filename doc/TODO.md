@@ -1575,13 +1575,28 @@ in-tree LLVM source:
   no spill).  So this is a Penumbra-specific *allocator cost* outcome,
   not a missed-feature, and **not** an upstream `PeepholeOptimizer` bug.
 
-Open: the exact Penumbra-vs-RISC-V divergence is not pinned (needs an
-A/B on a tree with both targets built).  Leading candidate — the
-spill-weight helper `VirtRegAuxInfo::isRematerializable` returns false
-when the def traces to a copy from a non-virtual register
-(`if (!Reg.isVirtual()) return false`), so a `COPY $physreg`-defined
-value never gets the `*= 0.5F` remat spill-weight discount.  That is
-generic, though, so it alone can't explain why RISC-V recovers; the next
-check is whether RISC-V's `tp` read is even a plain `COPY` at MIR (vs an
-`ADDI`, which would dodge that bail) or a register-pressure / CSR-cost
-difference in `tryAssign`.
+**Root cause (verified by RISC-V A/B in-tree):** the i32 value register
+class is `GPR_Allocatable`, which *excludes* R12.  The register coalescer
+can fold `%v = COPY $r12` only if R12 is a member of `%v`'s class — the
+gate is `CoalescerPair::setRegisters` (`else if (!SrcRC->contains(Dst))
+return false`).  Since R12 ∉ `GPR_Allocatable`, the copy is declared
+non-coalescable, `joinReservedPhysReg` never runs, and the
+PeepholeOptimizer-fused cross-call value survives to spill.  RISC-V keeps
+its thread pointer (`x4`) *inside* the allocatable `GPR` class and
+excludes it from allocation via `getReservedRegs` instead, so its
+coalescer substitutes `x4` freely and emits optimal `mv a0, tp` per use.
+Confirmed by comparing `-stop-after=register-coalescer` MIR on both
+targets: RISC-V rewrites `$a0 = COPY %v` → `$a0 = COPY $x4` and deletes
+`%v`; Penumbra leaves `%v = COPY $r12` in place.
+
+This was *not* the spiller, `allUsesAvailableAt`, the spill-weight
+helper, or PeepholeOptimizer (all investigated and ruled out) — it is a
+Penumbra register-class design choice, fixable in our backend.
+
+**Fix:** make the i32 value/allocation class *contain* R12 (and ideally
+the other reserved GPRs) while keeping it out of allocation via
+`getReservedRegs` — the standard LLVM idiom (RISC-V's `GPR` lists
+`x0`/`sp`/`gp`/`tp`).  Lowest-risk form: append the reserved registers to
+the end of `GPR_Allocatable`'s member list so the first-12 allocation
+order is byte-identical (no codegen churn in existing tests) but R12
+becomes a class member and coalescing fires.
