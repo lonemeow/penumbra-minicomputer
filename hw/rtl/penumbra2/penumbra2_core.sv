@@ -17,10 +17,15 @@
 // through two ports — the role the real split L1 I/D caches play over unified
 // physical memory. A store is therefore visible to a later fetch, which the
 // exception path needs (the kernel writes the vector table; the vector fetch
-// reads it). Still not wired: the MMU (both fault paths), the real BRAM-backed
-// L1 caches, and RDSYS. unified_mem is a stand-in with the streaming
-// registered-read contract the IF1/IF2 split and the MEM single-STALL are built
-// around — real BRAM-backed caches replace it later behind the IF and dmem
+// reads it). Synchronous faults are taken: a data fault commits at WB, which
+// flushes the pipeline (ID/EX/MEM in the spine; IF1/IF2 here), pulses
+// save-state into the SPR file, and launches penumbra2_vecfetch — which reads
+// the handler address from the vector table over the (muxed) fetch port and
+// redirects PC to it. Still not wired: the MMU (both fault paths), the real
+// BRAM-backed L1 caches, RDSYS, ERET's return redirect, and BREAK/SYSCALL as
+// EX traps. unified_mem is a stand-in with the streaming registered-read
+// contract the IF1/IF2 split and the MEM single-STALL are built around —
+// real BRAM-backed caches replace it later behind the IF and dmem
 // interfaces.
 //
 // No halt: a real CPU never stops on an instruction. BREAK is a trap (taken
@@ -79,7 +84,27 @@ module penumbra2_core
     logic        branch_taken;  // flush IF1/IF2 + steer PC this cycle
     logic [31:0] branch_target; // resolved branch target
 
-    // ── Data-memory wires (MEM <-> data BRAM stand-in) ───────────
+    // ── Exception entry (WB -> front end via the vector-fetch FSM) ─
+    logic        fault_commit;  // a fault is taken this cycle (flush IF1/IF2, launch entry)
+    logic [3:0]  fault_vec;
+    logic        vecf_active;       // FSM owns the fetch port + holds IF1
+    logic [31:0] vecf_fetch_addr;
+    logic        vecf_fetch_en;
+    logic        vecf_redirect;     // steer PC to the handler
+    logic [31:0] vecf_redirect_pc;
+
+    // IF1 redirect / fetch-port muxes (branch vs vector-fetch)
+    logic        if1_redirect;
+    logic [31:0] if1_redirect_pc;
+    logic [31:0] fetch_addr_mux;
+    logic        fetch_en_mux;
+
+    assign if1_redirect    = branch_taken | vecf_redirect;
+    assign if1_redirect_pc = vecf_redirect ? vecf_redirect_pc : branch_target;
+    assign fetch_addr_mux  = vecf_active ? vecf_fetch_addr : if1_fetch_addr;
+    assign fetch_en_mux    = vecf_active ? vecf_fetch_en   : if1_fetch_en;
+
+    // ── Data-memory wires (MEM <-> data port of the unified memory) ─
     logic [31:0] dmem_addr, dmem_wdata, dmem_rdata;
     logic [3:0]  dmem_byte_en;
     logic        dmem_we, dmem_en;
@@ -89,8 +114,9 @@ module penumbra2_core
     // ══════════════════════════════════════════════════════════
     penumbra2_if1_stage #(.RESET_PC(RESET_PC)) u_if1 (
         .i_clk(i_clk), .i_rst(i_rst),
-        .i_stall_in(if2_stall),
-        .i_redirect(branch_taken), .i_redirect_pc(branch_target),
+        .i_stall_in(if2_stall | vecf_active),     // held while the FSM owns the fetch port
+        .i_redirect(if1_redirect), .i_redirect_pc(if1_redirect_pc),
+        .i_flush(fault_commit),                    // bubble the wrong-path fetch at the fault
         .o_fetch_addr(if1_fetch_addr), .o_fetch_en(if1_fetch_en),
         .o_pc(if1_pc), .o_next_pc(if1_next_pc), .o_valid(if1_valid)
     );
@@ -106,7 +132,7 @@ module penumbra2_core
         .i_pc(if1_pc), .i_next_pc(if1_next_pc), .i_valid(if1_valid),
         .i_ir(imem_rdata),
         .i_stall_in(fetch_stall),
-        .i_flush(branch_taken),
+        .i_flush(branch_taken | fault_commit),     // discard the wrong-path word on a fault too
         .o_stall(if2_stall),
         .o_ir(if2_ir), .o_pc(if2_pc), .o_next_pc(if2_next_pc),
         .o_valid(if2_valid),
@@ -129,8 +155,24 @@ module penumbra2_core
         .o_dmem_addr(dmem_addr), .o_dmem_wdata(dmem_wdata),
         .o_dmem_byte_en(dmem_byte_en), .o_dmem_we(dmem_we), .o_dmem_en(dmem_en),
         .i_dmem_rdata(dmem_rdata),
-        // Exception entry — consumed by the IF flush + vector-fetch FSM (next milestone).
-        .o_fault_commit(), .o_fault_vec(), .o_epc()
+        // Exception entry — drives the IF flush + the vector-fetch FSM below.
+        // o_epc feeds the ERET redirect, which is a later milestone.
+        .o_fault_commit(fault_commit), .o_fault_vec(fault_vec), .o_epc()
+    );
+
+    // ══════════════════════════════════════════════════════════
+    // Vector-fetch FSM — reads the handler address, redirects PC
+    // ══════════════════════════════════════════════════════════
+    // On a fault commit it borrows the fetch port (port A, muxed above) to read
+    // vector_table[vec<<2] from the RAM region — the handler address the kernel
+    // stored there — then redirects IF1 to the handler.
+    penumbra2_vecfetch u_vecfetch (
+        .i_clk(i_clk), .i_rst(i_rst),
+        .i_fault_commit(fault_commit), .i_fault_vec(fault_vec),
+        .i_mem_rdata(imem_rdata),
+        .o_active(vecf_active),
+        .o_fetch_addr(vecf_fetch_addr), .o_fetch_en(vecf_fetch_en),
+        .o_redirect(vecf_redirect), .o_redirect_pc(vecf_redirect_pc)
     );
 
     // ══════════════════════════════════════════════════════════
@@ -140,22 +182,25 @@ module penumbra2_core
     // space (ROM region holds the INIT_FILE code at 0xFFFF_0000, RAM region is
     // low), so a store is visible to a later fetch — the property exception
     // entry needs to read a software-written vector table.
+    // Port A's address/enable are muxed (fetch_addr_mux/fetch_en_mux): IF1
+    // drives them normally, the vector-fetch FSM while it owns the port.
     unified_mem #(.REGION_WORDS(MEM_REGION_WORDS), .INIT_FILE(INIT_FILE)) u_mem (
         .i_clk(i_clk),
-        .i_a_addr(if1_fetch_addr), .i_a_en(if1_fetch_en), .o_a_rdata(imem_rdata),
+        .i_a_addr(fetch_addr_mux), .i_a_en(fetch_en_mux), .o_a_rdata(imem_rdata),
         .i_b_addr(dmem_addr), .i_b_wdata(dmem_wdata), .i_b_byte_en(dmem_byte_en),
         .i_b_we(dmem_we), .i_b_en(dmem_en), .o_b_rdata(dmem_rdata)
     );
 
     // ── Assertion (sim-only; stripped at synth) ──────────────────
-    // A redirect target is word-aligned. Format-B targets are PC + (off<<2),
-    // structurally aligned; a register-sourced JMP could be misaligned, which
-    // in the full design raises an I-side alignment fault. That path is not
-    // wired yet (no MMU), so a misaligned redirect would silently fetch garbage
-    // from the flat i-mem — this is a bring-up guard until the fault path lands.
+    // A redirect target is word-aligned — for a branch (PC + off<<2, always
+    // aligned) and for a vector-fetch handler address (a misaligned handler
+    // address in the vector table is a kernel setup bug). A register-sourced
+    // JMP could be misaligned, which the full design raises as an I-side
+    // alignment fault; that I-fetch fault path is not wired yet (no MMU), so
+    // this stays a bring-up guard until it lands.
     assert property (@(posedge i_clk) disable iff (i_rst)
-        branch_taken |-> branch_target[1:0] == 2'b00)
-        else $error("penumbra2_core: misaligned branch redirect target");
+        if1_redirect |-> if1_redirect_pc[1:0] == 2'b00)
+        else $error("penumbra2_core: misaligned redirect target");
 
     /* verilator lint_on PINCONNECTEMPTY */
 endmodule

@@ -176,6 +176,7 @@ MODULE_TESTS = \
     penumbra2_mem_stage \
     penumbra2_wb_stage \
     penumbra2_spr_file \
+    penumbra2_vecfetch \
     penumbra2_spine \
     unified_mem \
     uart \
@@ -265,6 +266,17 @@ test-penumbra2-branch:
 .PHONY: test-penumbra2-loadstore
 test-penumbra2-loadstore:
 	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_loadstore TB=tb_penumbra2_branch
+
+# ── Penumbra/2 core exception-entry test ──────────────────────
+# Same core, the exception-entry milestone program: a misaligned load takes
+# VEC_ALIGN, the pipeline flushes + saves state, and the vector-fetch FSM
+# redirects to a handler (installed in the RAM vector table at run time). The
+# handler sets the PASS flag; the poison between fault and handler must be
+# flushed. Self-checks into R1, reusing the branch tb's PASS-flag check.
+# Usage: make test-penumbra2-fault
+.PHONY: test-penumbra2-fault
+test-penumbra2-fault:
+	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_fault TB=tb_penumbra2_branch
 
 # ── Run all program tests on ISS (fast, no Docker) ────────────
 # Same test programs as `make test` but runs on the ISS.
