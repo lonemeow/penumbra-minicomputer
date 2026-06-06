@@ -977,6 +977,20 @@ bool PenumbraInstructionSelector::selectZExt(MachineInstr &I,
   unsigned SrcBits = MRI.getType(SrcReg).getSizeInBits();
   const DebugLoc &DL = I.getDebugLoc();
 
+  // A comparison already materialises a clean 0/1 in a full GPR (the carry read
+  // in selectICmpToValue, or the select diamond's `lli 1`/`lli 0`), so
+  // zero-extending its s1 result is a no-op — copy instead of masking with
+  // ANDi #1.  Selection runs bottom-up, so the producer is still a generic
+  // G_ICMP here; it fills SrcReg with the 0/1 when it is selected, and the
+  // register coalescer folds this copy away.
+  if (MachineInstr *Src = MRI.getVRegDef(SrcReg);
+      Src && Src->getOpcode() == TargetOpcode::G_ICMP) {
+    BuildMI(MBB, I, DL, TII.get(TargetOpcode::COPY)).addDef(DstReg).addReg(SrcReg);
+    I.eraseFromParent();
+    return RBI.constrainGenericRegister(DstReg, Penumbra::GPR_AllocatableRegClass,
+                                        MRI);
+  }
+
   uint64_t Mask = (1ULL << SrcBits) - 1; // 1, 0xFF, or 0xFFFF
   MachineInstr *NewI =
       BuildMI(MBB, I, DL, TII.get(Penumbra::ANDi))

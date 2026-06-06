@@ -101,7 +101,6 @@ define i32 @smulo_i32(i32 %a, i32 %b, ptr %ov) {
 ; CHECK-NEXT:    mov r2, r0
 ; CHECK-NEXT:    sbc r2, r0
 ; CHECK-NEXT:    and r2, 1
-; CHECK-NEXT:    and r2, 1
 ; CHECK-NEXT:    stb r2, [r3 + 0]
 ; CHECK-NEXT:    jmp r13
   %r = call {i32, i1} @llvm.smul.with.overflow.i32(i32 %a, i32 %b)

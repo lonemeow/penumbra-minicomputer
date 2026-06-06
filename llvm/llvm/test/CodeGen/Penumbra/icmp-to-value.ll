@@ -16,7 +16,6 @@ define i32 @ult(i32 %a, i32 %b) {
 ; CHECK-NEXT:    mov r1, r0
 ; CHECK-NEXT:    sbc r1, r0
 ; CHECK-NEXT:    and r1, 1
-; CHECK-NEXT:    and r1, 1
 ; CHECK-NEXT:    jmp r13
   %c = icmp ult i32 %a, %b
   %z = zext i1 %c to i32
@@ -30,7 +29,6 @@ define i32 @uge(i32 %a, i32 %b) {
 ; CHECK-NEXT:    cmp r1, r2
 ; CHECK-NEXT:    mov r1, r0
 ; CHECK-NEXT:    adc r1, r0
-; CHECK-NEXT:    and r1, 1
 ; CHECK-NEXT:    jmp r13
   %c = icmp uge i32 %a, %b
   %z = zext i1 %c to i32
@@ -45,7 +43,6 @@ define i32 @ugt(i32 %a, i32 %b) {
 ; CHECK-NEXT:    mov r1, r0
 ; CHECK-NEXT:    sbc r1, r0
 ; CHECK-NEXT:    and r1, 1
-; CHECK-NEXT:    and r1, 1
 ; CHECK-NEXT:    jmp r13
   %c = icmp ugt i32 %a, %b
   %z = zext i1 %c to i32
@@ -59,7 +56,6 @@ define i32 @ule(i32 %a, i32 %b) {
 ; CHECK-NEXT:    cmp r2, r1
 ; CHECK-NEXT:    mov r1, r0
 ; CHECK-NEXT:    adc r1, r0
-; CHECK-NEXT:    and r1, 1
 ; CHECK-NEXT:    jmp r13
   %c = icmp ule i32 %a, %b
   %z = zext i1 %c to i32
@@ -74,7 +70,6 @@ define i32 @eq(i32 %a, i32 %b) {
 ; CHECK-NEXT:    cmp r0, r1
 ; CHECK-NEXT:    mov r1, r0
 ; CHECK-NEXT:    adc r1, r0
-; CHECK-NEXT:    and r1, 1
 ; CHECK-NEXT:    jmp r13
   %c = icmp eq i32 %a, %b
   %z = zext i1 %c to i32
@@ -90,7 +85,6 @@ define i32 @ne(i32 %a, i32 %b) {
 ; CHECK-NEXT:    mov r1, r0
 ; CHECK-NEXT:    sbc r1, r0
 ; CHECK-NEXT:    and r1, 1
-; CHECK-NEXT:    and r1, 1
 ; CHECK-NEXT:    jmp r13
   %c = icmp ne i32 %a, %b
   %z = zext i1 %c to i32
@@ -104,7 +98,6 @@ define i32 @eqz(i32 %a) {
 ; CHECK-NEXT:    cmp r0, r1
 ; CHECK-NEXT:    mov r1, r0
 ; CHECK-NEXT:    adc r1, r0
-; CHECK-NEXT:    and r1, 1
 ; CHECK-NEXT:    jmp r13
   %c = icmp eq i32 %a, 0
   %z = zext i1 %c to i32
@@ -118,7 +111,6 @@ define i32 @nez(i32 %a) {
 ; CHECK-NEXT:    cmp r0, r1
 ; CHECK-NEXT:    mov r1, r0
 ; CHECK-NEXT:    sbc r1, r0
-; CHECK-NEXT:    and r1, 1
 ; CHECK-NEXT:    and r1, 1
 ; CHECK-NEXT:    jmp r13
   %c = icmp ne i32 %a, 0
@@ -137,7 +129,6 @@ define i32 @ult_const(i32 %a) {
 ; CHECK-NEXT:    mov r1, r0
 ; CHECK-NEXT:    sbc r1, r0
 ; CHECK-NEXT:    and r1, 1
-; CHECK-NEXT:    and r1, 1
 ; CHECK-NEXT:    jmp r13
   %c = icmp ult i32 %a, 5
   %z = zext i1 %c to i32
@@ -151,7 +142,6 @@ define i32 @uge_const(i32 %a) {
 ; CHECK-NEXT:    cmp r1, 5
 ; CHECK-NEXT:    mov r1, r0
 ; CHECK-NEXT:    adc r1, r0
-; CHECK-NEXT:    and r1, 1
 ; CHECK-NEXT:    jmp r13
   %c = icmp uge i32 %a, 5
   %z = zext i1 %c to i32
@@ -165,7 +155,6 @@ define i32 @ugt_const(i32 %a) {
 ; CHECK-NEXT:    cmp r1, 6
 ; CHECK-NEXT:    mov r1, r0
 ; CHECK-NEXT:    adc r1, r0
-; CHECK-NEXT:    and r1, 1
 ; CHECK-NEXT:    jmp r13
   %c = icmp ugt i32 %a, 5
   %z = zext i1 %c to i32
@@ -179,7 +168,6 @@ define i32 @ule_const(i32 %a) {
 ; CHECK-NEXT:    cmp r1, 6
 ; CHECK-NEXT:    mov r1, r0
 ; CHECK-NEXT:    sbc r1, r0
-; CHECK-NEXT:    and r1, 1
 ; CHECK-NEXT:    and r1, 1
 ; CHECK-NEXT:    jmp r13
   %c = icmp ule i32 %a, 5
@@ -196,7 +184,6 @@ define i32 @eq_const(i32 %a) {
 ; CHECK-NEXT:    cmp r0, r1
 ; CHECK-NEXT:    mov r1, r0
 ; CHECK-NEXT:    adc r1, r0
-; CHECK-NEXT:    and r1, 1
 ; CHECK-NEXT:    jmp r13
   %c = icmp eq i32 %a, 2
   %z = zext i1 %c to i32
@@ -211,7 +198,6 @@ define i32 @ne_const(i32 %a) {
 ; CHECK-NEXT:    cmp r0, r1
 ; CHECK-NEXT:    mov r1, r0
 ; CHECK-NEXT:    sbc r1, r0
-; CHECK-NEXT:    and r1, 1
 ; CHECK-NEXT:    and r1, 1
 ; CHECK-NEXT:    jmp r13
   %c = icmp ne i32 %a, 7
@@ -230,7 +216,6 @@ define i32 @eq_bigconst(i32 %a) {
 ; CHECK-NEXT:    cmp r0, r1
 ; CHECK-NEXT:    mov r1, r0
 ; CHECK-NEXT:    adc r1, r0
-; CHECK-NEXT:    and r1, 1
 ; CHECK-NEXT:    jmp r13
   %c = icmp eq i32 %a, 70000
   %z = zext i1 %c to i32
@@ -250,7 +235,6 @@ define i32 @slt(i32 %a, i32 %b) {
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r1, r4
 ; CHECK-NEXT:  .LBB15_2:
-; CHECK-NEXT:    and r1, 1
 ; CHECK-NEXT:    jmp r13
   %c = icmp slt i32 %a, %b
   %z = zext i1 %c to i32
