@@ -1084,13 +1084,33 @@ it from scratch:
   directly (a single SBC of zeros after the compare yields -(NOT C);
   pick the polarity to land 0/-1) and skip the two shifts.
 
-Fix: when the s1 source of a `G_ZEXT`/`G_SEXT` is a value already known
-to be 0/1 — defined by `G_ICMP` (or, post-selection, our flag-read
-sequence) — fold the extension into the flag read: `G_ZEXT` becomes a
-`COPY`, `G_SEXT` reads the flag straight into the 0/-1 mask.  Cleanest
-hook is a check in `selectZExt`/`selectSExt` for a `G_ICMP`-defined
-source; a known-bits combiner could generalize the zext case.  Code in
+The zext half is done: `selectZExt` emits a `COPY` (which the register
+coalescer folds away) when the `G_ZEXT` source is a `G_ICMP`, dropping the
+redundant mask.  Code in
 `llvm/llvm/lib/Target/Penumbra/GISel/PenumbraInstructionSelector.cpp`.
+
+Two pieces remain, both measured low-value 2026-06-06:
+
+- **zext through a `G_PHI`.**  The `COPY` fold only fires when the icmp is
+  the *direct* def, so `zext(phi(icmp, icmp))` still double-masks — 12
+  cold kernel sites (all `and r,1; and r,1`).  Extending `selectZExt` to
+  walk the PHI would have to prove every incoming value is 0/1, which is
+  awkward at selection.  The idiomatic fix is instead a post-ISel
+  `MachineFunctionPass` collapsing `ANDi x,C1; ANDi x,C2 -> ANDi x,C1&C2`
+  (the redundancy only exists after selection, so a generic combiner
+  cannot see it).  That is the same vehicle `RISCVOptWInstrs` (redundant
+  `sext.w`) and `X86FixupSetCC` (zext-of-setcc) use for
+  selection-introduced redundancy — but those target pervasive patterns;
+  a pass for 12 cold instructions is not justified.  Reach for it if the
+  pattern ever becomes frequent.
+
+- **sext.**  `selectSExt` would have to *consume* the icmp (selection is
+  bottom-up, and with no single-instruction negate, converting a 0/1
+  afterward costs the same `SHLi;SARi` it would replace) and pick the
+  carry polarity per predicate to land 0/-1 — a silent-miscompile
+  surface.  Measured reach: 1 site in Dhrystone, 87 cold sites in the
+  NetBSD kernel (0.23% of comparisons, ~0.02% of code).  Low leverage for
+  the complexity; deferred.
 
 Do **not** try to drive this from `setBooleanContents(ZeroOrOne)`.
 Measured 2026-06-06: the redundant masks are emitted at *selection*,
