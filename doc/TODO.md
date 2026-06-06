@@ -1502,3 +1502,66 @@ Consequences:
 Verified by a host unit test (`sw/penmon/screen_test.c`, `make -C
 sw/penmon test`) and a target cross-build, and confirmed on the ULX3S
 over the serial console.
+
+## Kernel/compiler: dedicate R12 (TP) to curlwp
+
+The ABI reserves R12 as the thread pointer, and the kernel uses no TLS,
+so R12 sits unused in kernel code.  Pinning `curlwp` there — the way the
+NetBSD RISC-V port pins it in `tp` via
+`register struct lwp *riscv_curlwp __asm("tp")` — turns every `curlwp`
+read from a load of `cpu_info_store.ci_curlwp` into a register read.  It
+costs no register pressure: R12 is already reserved, so the allocatable
+set does not change.
+
+### Compiler support — DONE (`ff46f87450d8`)
+
+`register T x __asm("r12")` works end to end: `getRegisterByName`
+resolves the canonical name and the ABI aliases (one TableGen
+`MatchRegisterAltName` table shared with the assembler), the GlobalISel
+legalizer lowers `G_READ_REGISTER` / `G_WRITE_REGISTER` to a COPY
+to/from the physical register, and naming an allocatable or unknown
+register is a fatal error.  Tests:
+`test/CodeGen/Penumbra/named-register{,-errors}.ll`,
+`test/MC/Penumbra/register-aliases.s`.  clang already lists `r12` in
+`GCCRegNames`, so the frontend accepts the declaration — the only
+prerequisite is rebuilding clang to pick up the backend library.
+
+### Kernel wiring (not yet done)
+
+1. `cpu.h`: `register struct lwp *curlwp __asm("r12")`, with the
+   `curlwp` macro reading it; `curcpu()` stays the fixed
+   `&cpu_info_store`.
+2. Initialise R12 = `&lwp0` early in `locore.S`, before the first C call.
+3. `cpu_switchto` already saves/restores R12 via `pcb_context` and
+   writes `ci_curlwp`; additionally set R12 = newlwp.  `cpu_lwp_fork`
+   must seed the new `pcb_context` R12 slot with the lwp pointer.
+4. Trap/syscall entry from userland: the trapframe already saves all 16
+   GPRs (preserving the user TLS pointer); load `curlwp` into R12 after
+   the save, before running C.  Exit restores the user value via the
+   trapframe automatically.
+
+### Measured benefit (single-issue, in-order; instruction counts)
+
+The dominant pattern `curlwp->field` in straight-line code drops from
+`lli`+`lui`+`ldw`(curlwp)+`ldw`(field) = 4 instructions to `mov`+`ldw`
+= 2, and removes a D-cache access.  That is the real, free win, and it
+lands on the lock/scheduler/fault paths that read `curlwp` constantly.
+Across a call the only saving is the dropped address materialisation —
+see the dead end below.
+
+### Dead end: marking R12 call-preserved does NOT help across calls
+
+A `curlwp` value held across a call is never kept in R12 (R12 is
+reserved, so the allocator assigns no vreg to it) — it is copied into a
+callee-saved register (low pressure) or stack-spilled (high pressure).
+Adding R12 to the call-preserved regmask (a `CSR_Penumbra` ∪ R12 mask
+used only by `getCallPreservedMask`, with the callee-saved save list
+left untouched) was prototyped and produced *identical* codegen in both
+cases.  The cause is in the spiller, not the regmask: LLVM will not
+rematerialise a COPY from a *reserved* physreg, because a reserved
+register has no tracked live interval and the spiller cannot prove the
+source is available at the rematerialisation point.  So the across-call
+spill is not reachable from the regmask — do not re-attempt it.  (Each
+*separate* `curlwp` reference still lowers to a fresh `mov rX, r12`; the
+spill only appears when the optimiser CSEs several reads into one
+long-lived value.)
