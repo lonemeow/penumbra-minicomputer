@@ -9,9 +9,11 @@
 #include "PenumbraRegisterInfo.h"
 #include "PenumbraSubtarget.h"
 #include "MCTargetDesc/PenumbraMCTargetDesc.h"
+#include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/CodeGen/TargetLowering.h"
+#include "llvm/Support/ErrorHandling.h"
 
 using namespace llvm;
 
@@ -124,6 +126,45 @@ PenumbraISelLowering::getRegForInlineAsmConstraint(
   }
 
   return TargetLowering::getRegForInlineAsmConstraint(TRI, Constraint, VT);
+}
+
+//===----------------------------------------------------------------------===//
+// Named global register variables
+//===----------------------------------------------------------------------===//
+
+// Pull in the TableGen-generated register matchers: MatchRegisterName
+// (canonical r0–r15, sr) and MatchRegisterAltName (the ABI aliases, emitted
+// because PenumbraAsmParser sets ShouldEmitMatchRegisterAltName).
+#define GET_REGISTER_MATCHER
+#include "PenumbraGenAsmMatcher.inc"
+
+// Resolve a `register T x __asm("name")` global register variable to its
+// physical register.  The kernel pins curlwp in R12 (the thread pointer)
+// this way, mirroring the RISC-V port's `register struct lwp *foo __asm("tp")`.
+Register
+PenumbraISelLowering::getRegisterByName(const char *RegName, LLT /*Ty*/,
+                                        const MachineFunction &MF) const {
+  // Accept the canonical rN spelling and the ABI aliases (the register
+  // AltNames in PenumbraRegisterInfo.td).  Both matchers are TableGen-
+  // generated and shared with the assembler, so the canonical name and its
+  // alias spelling pin the same register.
+  Register Reg = MatchRegisterName(RegName);
+  if (!Reg)
+    Reg = MatchRegisterAltName(RegName);
+  if (!Reg)
+    reportFatalUsageError(Twine("invalid register name \"") + RegName + "\"");
+
+  // A named global register must land on a register the allocator never
+  // touches; otherwise codegen would reuse it and silently clobber the pinned
+  // value.  (This class keeps no Subtarget member — reach the register info
+  // through the MachineFunction.)
+  const TargetRegisterInfo *TRI = MF.getSubtarget().getRegisterInfo();
+  if (!TRI->getReservedRegs(MF).test(Reg))
+    reportFatalUsageError(Twine("named global register \"") + RegName +
+                          "\" is allocatable; only reserved registers may be "
+                          "pinned");
+
+  return Reg;
 }
 
 // Penumbra has no hardware multiply, so the GISel `udiv_by_const` /

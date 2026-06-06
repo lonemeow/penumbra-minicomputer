@@ -44,6 +44,11 @@ public:
   getRegForInlineAsmConstraint(const TargetRegisterInfo *TRI,
                                StringRef Constraint, MVT VT) const override;
 
+  // Named global register variables (`register T x __asm("r12")`).  The
+  // kernel uses this to pin curlwp in the thread-pointer register R12.
+  Register getRegisterByName(const char *RegName, LLT Ty,
+                             const MachineFunction &MF) const override;
+
   bool isIntDivCheap(EVT VT, AttributeList Attr) const override;
 
   // LSR / CodeGenPrepare addressing-mode cost: report what addressing

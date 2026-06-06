@@ -72,6 +72,13 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
       .narrowScalarIf(typeIs(0, s64), changeTo(0, s32))
       .lower();
 
+  // Named global register variables (e.g. `register T x __asm("r12")`).  The
+  // IR translator emits these carrying the register name as metadata; .lower()
+  // resolves the name via getRegisterByName() and rewrites them to a COPY
+  // to/from the physical register.
+  getActionDefinitionsBuilder({G_READ_REGISTER, G_WRITE_REGISTER})
+      .lower();
+
   // Multiply with overflow.  Asymmetric at s64 — matches SelectionDAG's
   // ExpandIntRes_XMULO (which inline-expands UMULO i64 and libcalls SMULO i64
   // to __mulodi4 when available).

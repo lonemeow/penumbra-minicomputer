@@ -58,12 +58,25 @@ def PenumbraInstPrinter : AsmWriter {
 }
 
 //===----------------------------------------------------------------------===//
+// Assembly parser
+//===----------------------------------------------------------------------===//
+
+// Emit MatchRegisterAltName so the ABI register aliases (the AltNames in
+// PenumbraRegisterInfo.td) resolve through one generated table — shared by
+// the assembler and by named-global-register lowering.  Each alias maps to a
+// single register, so duplicate handling is not needed.
+def PenumbraAsmParser : AsmParser {
+  let ShouldEmitMatchRegisterAltName = 1;
+}
+
+//===----------------------------------------------------------------------===//
 // Target declaration
 //===----------------------------------------------------------------------===//
 
 def Penumbra : Target {
   let InstructionSet = PenumbraInstrInfo;
   let AssemblyWriters = [PenumbraInstPrinter];
+  let AssemblyParsers = [PenumbraAsmParser];
 }
 
 // Map LLVM's built-in ptr_rc pseudo-operands to our GPR class.

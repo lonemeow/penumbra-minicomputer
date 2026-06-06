@@ -7,7 +7,6 @@
 #include "MCTargetDesc/PenumbraFixupKinds.h"
 #include "MCTargetDesc/PenumbraMCTargetDesc.h"
 #include "TargetInfo/PenumbraTargetInfo.h"
-#include "llvm/ADT/StringSwitch.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
@@ -27,8 +26,12 @@
 
 using namespace llvm;
 
-// Forward-declare TableGen-generated register matcher (defined at end of file).
+// Forward-declare TableGen-generated register matchers (defined at end of
+// file under GET_REGISTER_MATCHER).  MatchRegisterName resolves canonical rN
+// names; MatchRegisterAltName resolves the ABI aliases (the register AltNames
+// in PenumbraRegisterInfo.td).
 static MCRegister MatchRegisterName(StringRef Name);
+static MCRegister MatchRegisterAltName(StringRef Name);
 
 namespace {
 
@@ -200,17 +203,10 @@ ParseStatus PenumbraAsmParser::tryParseRegister(MCRegister &Reg,
     return ParseStatus::NoMatch;
 
   StringRef Name = Parser.getTok().getIdentifier();
+  // Canonical rN spelling first, then the ABI aliases (AltNames).
   MCRegister RegNo = MatchRegisterName(Name);
-  // Check alternate names: zero=R0, tp=R12, lr=R13, sp=R14, pc=R15
-  if (!RegNo) {
-    RegNo = StringSwitch<MCRegister>(Name.lower())
-        .Case("zero", Penumbra::R0)
-        .Case("tp",   Penumbra::R12)
-        .Case("lr",   Penumbra::R13)
-        .Case("sp",   Penumbra::R14)
-        .Case("pc",   Penumbra::R15)
-        .Default(MCRegister());
-  }
+  if (!RegNo)
+    RegNo = MatchRegisterAltName(Name);
   if (!RegNo)
     return ParseStatus::NoMatch;
 
