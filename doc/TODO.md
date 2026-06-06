@@ -1092,6 +1092,17 @@ hook is a check in `selectZExt`/`selectSExt` for a `G_ICMP`-defined
 source; a known-bits combiner could generalize the zext case.  Code in
 `llvm/llvm/lib/Target/Penumbra/GISel/PenumbraInstructionSelector.cpp`.
 
+Do **not** try to drive this from `setBooleanContents(ZeroOrOne)`.
+Measured 2026-06-06: the redundant masks are emitted at *selection*,
+after the combiners run, so boolean content cannot fold them.  Worse,
+declaring `ZeroOrOne` flips `LegalizerHelper::lowerThreewayCompare` from
+the SELECT-chain expansion to the arithmetic `zext(gt) - zext(lt)` form,
+regressing the qsort i32 comparator (`scmp_i32` 10→15, `ucmp_i32` 10→13
+instructions) while only shrinking the rarely-used i64 three-way compares
+(−4 each); no other CodeGen test moves.  Only revisit `ZeroOrOne`
+alongside a custom `G_SCMP`/`G_UCMP` lowering that keeps the i32
+SELECT-chain.
+
 ## Compiler: no branch-cost model — branch-avoidance may be over-eager
 
 Penumbra sets none of the branch/select cost knobs
