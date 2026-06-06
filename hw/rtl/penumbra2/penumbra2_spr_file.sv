@@ -15,6 +15,9 @@
 //     redirect; this module exposes o_epc for it.
 //   - WRSPR (sel-routed): EPC / ESR / SR. SR is the bulk-load (sanitised to
 //     the live bits); EPC/ESR are plain writes.
+//   - EI / DI (drain-commit, from EX): set / clear SR.I only. EI's
+//     one-instruction enable delay (ei_shadow) lives in the interrupt unit,
+//     not here — this just flips the bit.
 //   - NZCV flag commit (from WB): updates only SR[3:0].
 //
 // These sources are mutually exclusive in time by construction (entry and ERET
@@ -39,6 +42,10 @@ module penumbra2_spr_file
 
     // ── ERET restore (drain-commit, from EX) ─────────────────────
     input  logic        i_eret,            // SR <- ESR (PC <- EPC is the IF redirect)
+
+    // ── EI / DI (drain-commit, from EX) ──────────────────────────
+    input  logic        i_ei,              // enable interrupts: SR.I <- 1
+    input  logic        i_di,              // disable interrupts: SR.I <- 0
 
     // ── WRSPR write (sel-routed) ─────────────────────────────────
     input  logic        i_spr_we,
@@ -125,6 +132,10 @@ module penumbra2_spr_file
                 sr <= esr;
             else if (i_spr_we && i_spr_sel == SPR_SR)
                 sr <= sr_sanitize(i_spr_value);
+            else if (i_ei)
+                sr[SR_I] <= 1'b1;          // EI: enable (the 1-insn delay is ei_shadow, external)
+            else if (i_di)
+                sr[SR_I] <= 1'b0;          // DI: disable immediately
             else if (i_flag_we)
                 sr[3:0] <= i_flag_value;
         end
@@ -134,13 +145,13 @@ module penumbra2_spr_file
     // Assertions — sim-only (Verilator --assert); stripped at synth.
     // ══════════════════════════════════════════════════════════
 
-    // The three bulk SR writers (entry, ERET, WRSPR-SR) are fenced to
-    // drained/flushed points and must never fire together — if they do, the
+    // The SR-control writers (entry, ERET, WRSPR-SR, EI, DI) are each fenced to
+    // a drained/flushed point and must never fire together — if they do, the
     // priority mux is silently dropping one architectural SR update.
     always_comb begin
         assert ($onehot0({i_save_state, i_eret,
-                          i_spr_we && i_spr_sel == SPR_SR}))
-            else $error("penumbra2_spr_file: multiple bulk SR writers in one cycle");
+                          i_spr_we && i_spr_sel == SPR_SR, i_ei, i_di}))
+            else $error("penumbra2_spr_file: multiple SR-control writers in one cycle");
     end
 
     // Exception entry always leaves the CPU in supervisor mode with interrupts

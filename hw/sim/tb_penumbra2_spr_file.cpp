@@ -41,6 +41,7 @@ static void clear(Vpenumbra2_spr_file* dut) {
     dut->i_flag_we = 0; dut->i_flag_value = 0;
     dut->i_save_state = 0; dut->i_save_pc = 0;
     dut->i_eret = 0;
+    dut->i_ei = 0; dut->i_di = 0;
     dut->i_spr_we = 0; dut->i_spr_sel = 0; dut->i_spr_value = 0;
     dut->i_rd_sel = SPR_SR;
 }
@@ -127,6 +128,22 @@ int main(int argc, char** argv) {
     dut->eval(); tick(dut); clear(dut); dut->eval();
     check("prio_entry_nzcv_held", dut->o_sr_flags, 0x3);  // flag commit lost; NZCV preserved
     check("prio_entry_s",         dut->o_sr_s, 1);
+
+    // ── EI / DI flip SR.I only ───────────────────────────────────
+    load_sr(dut, 0x80000000);                      // S=1, I=0, NZCV=0
+    clear(dut);
+    dut->i_ei = 1;
+    dut->eval(); tick(dut); clear(dut); dut->eval();
+    check("ei_sets_i",   dut->o_sr_i, 1);
+    check("ei_keeps_s",  dut->o_sr_s, 1);          // only I changed
+    check("ei_sr_word",  dut->o_sr_read, 0xC0000000);
+
+    clear(dut);
+    dut->i_di = 1;
+    dut->eval(); tick(dut); clear(dut); dut->eval();
+    check("di_clears_i", dut->o_sr_i, 0);
+    check("di_keeps_s",  dut->o_sr_s, 1);
+    check("di_sr_word",  dut->o_sr_read, 0x80000000);
 
     printf("%s: %d/%d checks passed\n",
            errors ? "FAIL" : "PASS", tests - errors, tests);

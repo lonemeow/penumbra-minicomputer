@@ -136,11 +136,13 @@ module penumbra2_spine
     logic ex_branch_taken;
     logic ex_dc_commit;     // EX drain-commit pulse (ERET/WRSYS/WRSPR-SR/EI/DI)
 
-    // An ERET commits this cycle: the drain-commit pulse from EX, gated to the
-    // ERET op held in EX. EX owns the *when* (it sequenced the drain); the
-    // integration owns the *what* — restore SR from ESR and redirect PC to EPC.
-    logic eret_commit;
+    // Drain-commit effects, gated from the single EX commit pulse by the op
+    // held in EX. EX owns the *when* (it sequenced the drain); the integration
+    // owns the *what* — ERET restores SR/redirects PC, EI/DI flip SR.I.
+    logic eret_commit, ei_commit, di_commit;
     assign eret_commit = ex_dc_commit & (idex_op_class == OPC_ERET);
+    assign ei_commit   = ex_dc_commit & (idex_op_class == OPC_EI);
+    assign di_commit   = ex_dc_commit & (idex_op_class == OPC_DI);
 
     // WB write port + committed flags
     logic [SB_IDX_W-1:0] wr_idx;
@@ -167,6 +169,7 @@ module penumbra2_spine
         .i_flag_we(wb_flag_we), .i_flag_value(wb_flag_value),
         .i_save_state(wb_fault_commit), .i_save_pc(wb_fault_pc),
         .i_eret(eret_commit),
+        .i_ei(ei_commit), .i_di(di_commit),
         .i_spr_we(1'b0), .i_spr_sel(4'd0), .i_spr_value(32'b0),
         .i_rd_sel(4'd0), .o_rd_value(),
         .o_sr_flags(spr_sr_flags),
