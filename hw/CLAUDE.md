@@ -28,7 +28,7 @@ hw/
 ├── rtl/
 │   ├── common/    # penumbra_pkg.sv — shared ISA constants (both cores + peripherals)
 │   ├── penumbra1/ # gen1 CPU core: datapath, regfile, ALU, sequencer, microcode ROM, ...
-│   ├── penumbra2/ # gen2 pipelined core (not yet implemented)
+│   ├── penumbra2/ # gen2 6-stage pipelined core (pipeline + exception unit)
 │   ├── mmu/       # TLB main + pinned, MMU top, alignment/permission checks
 │   ├── soc/       # Bus controller, autoconfig, caches (L1 VIPT, L1 PIPT, L2), boot ROM, cpuid/machid
 │   ├── io/        # Real UART, real SPI, SDRAM v2 controller/adapter/PHY/CDC
@@ -54,8 +54,32 @@ purely a "where does this thing live?" index.
   under a generation directory, so it isn't generation-scoped.
 
 ### Penumbra/2 core (`rtl/penumbra2/`)
-- Not yet implemented. The gen2 pipelined core lands here; see
-  `doc/internals/penumbra2/`.
+The gen2 6-stage pipelined core (design in `doc/internals/penumbra2/`).
+Runs straight-line/branch/load-store streams and the full synchronous +
+asynchronous exception lifecycle against a unified-memory stand-in; the
+MMU, real BRAM L1 caches, and RDSYS are not yet wired.
+- `penumbra2_core.sv` — top: front end (IF1/IF2 + unified memory) onto the
+  spine, plus the vector-fetch FSM and interrupt unit.
+- `penumbra2_spine.sv` — ID→EX→MEM→WB integration: stages, regfile,
+  scoreboard, flag bypass, SPR file; fault-commit flush + save-state.
+- `penumbra2_if1_stage.sv` / `penumbra2_if2_stage.sv` — split fetch (PC +
+  BRAM address; deliver word + PC to ID).
+- `penumbra2_id_stage.sv` / `penumbra2_decode.sv` — decode/issue; owns the
+  scoreboard. `penumbra2_regmap.sv` maps arch regs → physical entries.
+- `penumbra2_ex_stage.sv` — ALU + flag bypass + branch resolve + divmul +
+  drain-commit; raises DIV0 / SYSCALL / BREAK.
+- `penumbra2_mem_stage.sv` — alignment, 2-cycle single-STALL data access,
+  sub-word extract/replicate.
+- `penumbra2_wb_stage.sv` — commit point: regfile/SR/SPR writes, takes the
+  fault.
+- `penumbra2_spr_file.sv` — SR / ESR / EPC; save-state, ERET restore, EI/DI.
+- `penumbra2_vecfetch.sv` — exception vector-fetch FSM (handler address →
+  PC redirect).
+- `penumbra2_irq.sv` — interrupt recognition + ei_shadow + drain-and-take.
+- `penumbra2_alu.sv`, `penumbra2_regfile.sv`, `penumbra2_scoreboard.sv`,
+  `penumbra2_flag_bypass.sv` — datapath leaf modules.
+- `penumbra2_pkg.sv` — gen2-internal constants (scoreboard indices, op_class,
+  alu_op, mem_op).
 
 ### Penumbra/1 core (`rtl/penumbra1/`)
 - `cpu_core.sv` — full CPU integration: datapath + sequencer + ROM
