@@ -58,6 +58,7 @@ module penumbra2_ex_stage
     input  logic                  i_phys_dst_aux_en,
     input  logic [31:0]           i_pc,
     input  logic [31:0]           i_next_pc,        // PC + 4: BL/JALR link value
+    input  logic                  i_is_trap,        // SYSCALL/BREAK: raise the trap here
     input  logic                  i_valid,          // 0 = bubble in
     input  logic                  i_fault_pending,
     input  logic [3:0]            i_fault_vec,
@@ -374,9 +375,12 @@ module penumbra2_ex_stage
                 o_phys_dst_aux    <= i_phys_dst_aux;
                 o_phys_dst_aux_en <= i_phys_dst_aux_en;
                 o_pc              <= i_pc;
-                // DIV0 raises VEC_ARITH here (the divmul never set an IF
-                // fault, so it cannot collide with i_fault_pending).
-                o_fault_pending   <= i_fault_pending | (is_divmul & dm_fault);
+                // EX is where two synchronous exceptions are raised: a DIV0
+                // (VEC_ARITH) and a software trap (SYSCALL/BREAK, whose vector
+                // already rides in i_fault_vec from decode). Neither collides
+                // with an incoming IF/ID fault — a faulting slot is inert and
+                // a trap is suppressed under one (decode gates is_trap off).
+                o_fault_pending   <= i_fault_pending | (is_divmul & dm_fault) | i_is_trap;
                 o_fault_vec       <= (is_divmul & dm_fault) ? VEC_ARITH : i_fault_vec;
             end
         end

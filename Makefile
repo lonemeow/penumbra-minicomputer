@@ -287,6 +287,15 @@ test-penumbra2-fault:
 test-penumbra2-eret:
 	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_eret TB=tb_penumbra2_branch
 
+# ── Penumbra/2 core software-trap test ────────────────────────
+# Same core, the SYSCALL milestone program: SYSCALL raises VEC_SYSCALL at EX
+# and vectors to a handler (installed in the RAM table); the poison after it
+# is flushed. Self-checks into R1.
+# Usage: make test-penumbra2-syscall
+.PHONY: test-penumbra2-syscall
+test-penumbra2-syscall:
+	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_syscall TB=tb_penumbra2_branch
+
 # ── Run all program tests on ISS (fast, no Docker) ────────────
 # Same test programs as `make test` but runs on the ISS.
 # Usage: make test-iss

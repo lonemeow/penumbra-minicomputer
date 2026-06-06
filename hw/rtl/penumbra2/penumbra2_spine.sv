@@ -87,6 +87,7 @@ module penumbra2_spine
     logic                idex_sign_ext;
     logic [3:0]          idex_sys_dev, idex_sys_reg, idex_spr_sel;
     logic                idex_drain_commit, idex_post_commit_wait;
+    logic                idex_is_trap;
     logic                idex_gpr_we, idex_spr_we, idex_flag_we;
     logic [SB_IDX_W-1:0] idex_phys_dst, idex_phys_dst_aux;
     logic                idex_phys_dst_aux_en;
@@ -206,7 +207,7 @@ module penumbra2_spine
         .o_sys_dev(idex_sys_dev), .o_sys_reg(idex_sys_reg), .o_spr_sel(idex_spr_sel),
         .o_drain_commit(idex_drain_commit), .o_post_commit_wait(idex_post_commit_wait),
         .o_gpr_we(idex_gpr_we), .o_spr_we(idex_spr_we), .o_flag_we(idex_flag_we),
-        .o_is_trap(),
+        .o_is_trap(idex_is_trap),
         .o_phys_dst(idex_phys_dst), .o_phys_dst_aux(idex_phys_dst_aux),
         .o_phys_dst_aux_en(idex_phys_dst_aux_en),
         .o_pc(idex_pc), .o_next_pc(idex_next_pc),
@@ -227,7 +228,7 @@ module penumbra2_spine
         .i_gpr_we(idex_gpr_we), .i_spr_we(idex_spr_we), .i_flag_we(idex_flag_we),
         .i_phys_dst(idex_phys_dst), .i_phys_dst_aux(idex_phys_dst_aux),
         .i_phys_dst_aux_en(idex_phys_dst_aux_en),
-        .i_pc(idex_pc), .i_next_pc(idex_next_pc),
+        .i_pc(idex_pc), .i_next_pc(idex_next_pc), .i_is_trap(idex_is_trap),
         .i_valid(idex_valid), .i_fault_pending(idex_fault_pending), .i_fault_vec(idex_fault_vec),
         .i_sr_flags(spr_sr_flags),
         .i_wb_flags(memwb_flag_value), .i_wb_writes_flags(memwb_flag_we & memwb_valid),

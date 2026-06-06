@@ -19,10 +19,10 @@
 
 // op_class / alu_op / mem_op (penumbra2_pkg)
 enum { OPC_ALU = 0, OPC_LOAD = 1, OPC_STORE = 2, OPC_BRANCH = 3, OPC_JMP = 4,
-       OPC_DIVMUL = 5, OPC_WRSYS = 9, OPC_ERET = 10 };
+       OPC_DIVMUL = 5, OPC_WRSYS = 9, OPC_ERET = 10, OPC_SYSCALL = 13, OPC_BREAK = 14 };
 // divmul_op (ISA op[1:0]): bit1 = div/mul, bit0 = unsigned/signed
 enum { DM_MUL = 0, DM_MULU = 1, DM_DIV = 2, DM_DIVU = 3 };
-enum { VEC_ARITH = 10 };
+enum { VEC_ARITH = 10, VEC_SYSCALL = 5, VEC_BREAK = 6 };
 enum { ALU_ADD = 0, ALU_SUB = 1, ALU_ADC = 10 };
 enum { MEM_NONE = 0, MEM_STORE = 2 };
 // Branch condition codes (penumbra_pkg COND_*)
@@ -55,7 +55,7 @@ static void clear(Vpenumbra2_ex_stage* dut) {
     dut->i_drain_commit = 0; dut->i_post_commit_wait = 0;
     dut->i_gpr_we = 0; dut->i_spr_we = 0; dut->i_flag_we = 0;
     dut->i_phys_dst = 0; dut->i_phys_dst_aux = 0; dut->i_phys_dst_aux_en = 0;
-    dut->i_pc = 0; dut->i_next_pc = 0; dut->i_valid = 0;
+    dut->i_pc = 0; dut->i_next_pc = 0; dut->i_is_trap = 0; dut->i_valid = 0;
     dut->i_fault_pending = 0; dut->i_fault_vec = 0;
     dut->i_sr_flags = 0; dut->i_wb_flags = 0; dut->i_wb_writes_flags = 0;
     dut->i_stall_in = 0; dut->i_wb_active = 0; dut->i_bubble = 0;
@@ -221,6 +221,30 @@ int main() {
     check("fault_valid",   dut->o_valid, 1);
     check("fault_pending", dut->o_fault_pending, 1);
     check("fault_vec",     dut->o_fault_vec, 3);
+
+    // ── Software trap raises here: is_trap sets fault_pending ────
+    // The vector rides in i_fault_vec from decode (VEC_SYSCALL/VEC_BREAK);
+    // EX turns the trap into a pending fault so it enters the exception path.
+    clear(dut);
+    dut->i_op_class = OPC_SYSCALL; dut->i_is_trap = 1; dut->i_fault_vec = VEC_SYSCALL;
+    dut->i_valid = 1;
+    dut->eval(); tick(dut); dut->eval();
+    check("trap_valid",   dut->o_valid, 1);
+    check("trap_pending", dut->o_fault_pending, 1);
+    check("trap_vec",     dut->o_fault_vec, VEC_SYSCALL);
+
+    clear(dut);                                  // BREAK carries VEC_BREAK
+    dut->i_op_class = OPC_BREAK; dut->i_is_trap = 1; dut->i_fault_vec = VEC_BREAK;
+    dut->i_valid = 1;
+    dut->eval(); tick(dut); dut->eval();
+    check("break_pending", dut->o_fault_pending, 1);
+    check("break_vec",     dut->o_fault_vec, VEC_BREAK);
+
+    clear(dut);                                  // is_trap on a bubble makes no valid slot
+    dut->i_op_class = OPC_BREAK; dut->i_is_trap = 1; dut->i_fault_vec = VEC_BREAK;
+    dut->i_valid = 0;
+    dut->eval(); tick(dut); dut->eval();
+    check("trap_bubble_no_slot", dut->o_valid, 0);   // fault_pending is don't-care while invalid
 
     // ════════════════════════════════════════════════════════════
     // Branch resolution: taken decision + redirect target.
