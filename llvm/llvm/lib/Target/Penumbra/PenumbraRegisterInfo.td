@@ -74,14 +74,21 @@ def SR : PenumbraSR<"sr">;
 def GPR : RegisterClass<"Penumbra", [i32], 32, (add
   (sequence "R%u", 0, 15))>;
 
-// Allocatable subset — used by the register allocator during codegen.
-// Excludes R0 (zero), R12 (thread pointer), R14 (SP), R15 (PC).
-// Caller-saved listed first (preferred), then callee-saved.
+// Value/allocation class for i32.  The register allocator never assigns
+// R0/R12/R14/R15 (held out by getReservedRegs), but R12 is listed as a *member*
+// so the register coalescer can substitute it for a virtual register — e.g.
+// fold `%v = COPY $r12` when curlwp is pinned in R12, the way RISC-V's GPR
+// class contains its reserved thread pointer.  R12 is listed last so the
+// allocation order of the allocatable registers is unchanged.
+// (R0/R14/R15 remain class non-members; add them here too if their reads ever
+// need the same coalescing.)
 def GPR_Allocatable : RegisterClass<"Penumbra", [i32], 32, (add
   // Caller-saved (args + scratch + LR)
   (sequence "R%u", 1, 4), R11, R13,
   // Callee-saved
-  (sequence "R%u", 5, 10))> {
+  (sequence "R%u", 5, 10),
+  // Reserved member (excluded from allocation by getReservedRegs)
+  R12)> {
   let isAllocatable = 1;
 }
 
