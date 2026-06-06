@@ -21,22 +21,24 @@
 // flushes the pipeline (ID/EX/MEM in the spine; IF1/IF2 here), pulses
 // save-state into the SPR file, and launches penumbra2_vecfetch — which reads
 // the handler address from the vector table over the (muxed) fetch port and
-// redirects PC to it. Still not wired: the MMU (both fault paths), the real
-// BRAM-backed L1 caches, RDSYS, ERET's return redirect, and BREAK/SYSCALL as
-// EX traps. unified_mem is a stand-in with the streaming registered-read
+// redirects PC to it. ERET returns (SR←ESR, PC←EPC) and SYSCALL/BREAK raise as
+// traps at EX, both routed through that same entry/redirect path. Still not
+// wired: the MMU (both fault paths), the real BRAM-backed L1 caches, RDSYS, and
+// interrupts. unified_mem is a stand-in with the streaming registered-read
 // contract the IF1/IF2 split and the MEM single-STALL are built around —
 // real BRAM-backed caches replace it later behind the IF and dmem
 // interfaces.
 //
-// No halt: a real CPU never stops on an instruction. BREAK is a trap (taken
-// at EX once the exception unit exists), not a halt — gen1 likewise vectors
-// BREAK to its monitor. So the core has no o_halted. It exposes
-// retire-observability (o_retire_valid + o_retire_op_class) and a testbench
-// decides program end by watching it: a BREAK carries no architectural write,
-// so it is invisible on the commit port, but it is visible here as a retiring
-// OPC_BREAK. In-order commit guarantees every instruction older than the
-// BREAK has already retired by then, so a testbench that stops there sees
-// final architectural state. o_retire_valid doubles as the insns-retired
+// No halt: a real CPU never stops on an instruction. BREAK is a trap, taken at
+// EX and vectored to VEC_BREAK (gen1 likewise vectors BREAK to its monitor),
+// not a halt — so the core has no o_halted. It exposes retire-observability
+// (o_retire_valid + o_retire_op_class) and a testbench decides program end by
+// watching it: a BREAK carries no architectural write, so it is invisible on
+// the commit port, but the cycle it takes its trap it still leaves WB as a
+// valid slot, visible here as a retiring OPC_BREAK. In-order commit guarantees
+// every instruction older than the BREAK has already retired by then, so a
+// testbench that stops there sees final architectural state. o_retire_valid
+// doubles as the insns-retired
 // pulse a perfctr would count on real hardware.
 
 module penumbra2_core

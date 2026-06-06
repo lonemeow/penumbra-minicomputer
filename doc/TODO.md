@@ -125,23 +125,21 @@ runs with zero software mul/div fallbacks.  One residual optimization
 
 Add a floating-point unit to the ALU. Currently using soft-float.
 
-## Hardware: Penumbra/2 BREAK must become a real EX trap
+## Hardware: Penumbra/2 retire pulse counts faulting/trapping slots
 
-Today `penumbra2_core` has no halt — the testbench detects program end by
-watching the core's retire-observability (`o_retire_valid` +
-`o_retire_op_class`) for a retiring `OPC_BREAK`. That is a *bring-up
-testbench policy*; the synthesized datapath deliberately contains no
-self-halt, because a real CPU never stops on an instruction.
+BREAK is now a real EX trap (along with SYSCALL): it sets `fault_pending` in
+EX, commits at WB, and vectors to `VEC_BREAK` through the same entry path as
+every other synchronous exception — there is no hardware halt. The testbench
+still detects program end by watching `o_retire_valid` + `o_retire_op_class`
+for `OPC_BREAK`, which works because a trapping BREAK still leaves WB as a
+valid slot the cycle it takes its trap.
 
-The architectural behavior (per `doc/internals/penumbra2/exception-flow.md`)
-is that BREAK is a *trap taken at EX*: save EPC/ESR, switch mode, vector to
-`VEC_BREAK` — exactly as gen1 vectors BREAK to its monitor. That needs the
-gen2 exception unit (save-state pulse + IF vector-fetch FSM), which is a
-later milestone. When it lands, BREAK stops being special at retire; the
-testbench's "stop on retiring BREAK" can stay as a sim convenience, or move
-to watching for the vector fetch / a sentinel, but no RTL change should
-reintroduce a hardware halt. `o_retire_valid` remains the real insns-retired
-perfctr pulse regardless.
+Residual: `o_retire_valid` is currently `memwb_valid`, so it pulses for
+faulting and trapping slots too (the alignment-fault load, the BREAK/SYSCALL
+trap). As an insns-retired perfctr source that over-counts — a faulting
+instruction is re-executed after the handler, not retired. When a gen2 perfctr
+lands, gate the retired count by `~fault_pending` (the program-end testbench
+use is unaffected — it keys on the op_class, not the count).
 
 ## Hardware: Penumbra/2 store commit vs. fault flush (precise-exception gap)
 
