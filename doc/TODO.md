@@ -1549,19 +1549,39 @@ lands on the lock/scheduler/fault paths that read `curlwp` constantly.
 Across a call the only saving is the dropped address materialisation —
 see the dead end below.
 
-### Dead end: marking R12 call-preserved does NOT help across calls
+### Across-call spill: a Penumbra allocator decision, not a regmask or remat-eligibility gap
 
-A `curlwp` value held across a call is never kept in R12 (R12 is
-reserved, so the allocator assigns no vreg to it) — it is copied into a
-callee-saved register (low pressure) or stack-spilled (high pressure).
-Adding R12 to the call-preserved regmask (a `CSR_Penumbra` ∪ R12 mask
-used only by `getCallPreservedMask`, with the callee-saved save list
-left untouched) was prototyped and produced *identical* codegen in both
-cases.  The cause is in the spiller, not the regmask: LLVM will not
-rematerialise a COPY from a *reserved* physreg, because a reserved
-register has no tracked live interval and the spiller cannot prove the
-source is available at the rematerialisation point.  So the across-call
-spill is not reachable from the regmask — do not re-attempt it.  (Each
-*separate* `curlwp` reference still lowers to a fresh `mov rX, r12`; the
-spill only appears when the optimiser CSEs several reads into one
-long-lived value.)
+When several `curlwp` reads in one block sit around calls,
+`PeepholeOptimizer::foldRedundantCopy` fuses them into one
+`%v = COPY $r12` reused across the calls; Penumbra's allocator then
+copies that into a callee-saved register (low pressure) or stack-spills
+it (high pressure), where the *wanted* result is a fresh `mov rX, r12`
+at each use.
+
+Two earlier diagnoses here were wrong, both corrected against the
+in-tree LLVM source:
+
+- **Marking R12 call-preserved does not help** (still true), but *not*
+  because the regmask gates remat.  `VirtRegAuxInfo::allUsesAvailableAt`
+  short-circuits physreg uses with `isConstantPhysReg(...) → continue`,
+  so the call's regmask is irrelevant to whether the COPY can be
+  rematerialised.  Prototyping `CSR_Penumbra ∪ R12` produced identical
+  codegen for exactly this reason — don't re-attempt it.
+- **It is not "the spiller can't remat a reserved physreg."**
+  `COPY $r12` is fully remat-eligible: `isReMaterializableImpl`
+  (constant-physreg use arm) and `allUsesAvailableAt` both pass.  The
+  generic spiller/coalescer *can* rematerialise it, and on RISC-V the
+  equivalent `tp`=curlwp pattern **does** recover (optimal `mv a0, tp`,
+  no spill).  So this is a Penumbra-specific *allocator cost* outcome,
+  not a missed-feature, and **not** an upstream `PeepholeOptimizer` bug.
+
+Open: the exact Penumbra-vs-RISC-V divergence is not pinned (needs an
+A/B on a tree with both targets built).  Leading candidate — the
+spill-weight helper `VirtRegAuxInfo::isRematerializable` returns false
+when the def traces to a copy from a non-virtual register
+(`if (!Reg.isVirtual()) return false`), so a `COPY $physreg`-defined
+value never gets the `*= 0.5F` remat spill-weight discount.  That is
+generic, though, so it alone can't explain why RISC-V recovers; the next
+check is whether RISC-V's `tp` read is even a plain `COPY` at MIR (vs an
+`ADDI`, which would dodge that bail) or a register-pressure / CSR-cost
+difference in `tryAssign`.
