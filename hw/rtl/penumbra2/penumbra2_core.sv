@@ -22,12 +22,14 @@
 // save-state into the SPR file, and launches penumbra2_vecfetch — which reads
 // the handler address from the vector table over the (muxed) fetch port and
 // redirects PC to it. ERET returns (SR←ESR, PC←EPC) and SYSCALL/BREAK raise as
-// traps at EX, both routed through that same entry/redirect path. Still not
-// wired: the MMU (both fault paths), the real BRAM-backed L1 caches, RDSYS, and
-// interrupts. unified_mem is a stand-in with the streaming registered-read
-// contract the IF1/IF2 split and the MEM single-STALL are built around —
-// real BRAM-backed caches replace it later behind the IF and dmem
-// interfaces.
+// traps at EX, both routed through that same entry/redirect path. External
+// interrupts take the asynchronous route — penumbra2_irq drains the pipeline
+// at a fetch boundary and reuses that same save-state + vector-fetch. Still not
+// wired: the MMU (both fault paths), the real BRAM-backed L1 caches, and RDSYS
+// (the SPR/sysreg read pipeline path). unified_mem is a stand-in with the
+// streaming registered-read contract the IF1/IF2 split and the MEM single-STALL
+// are built around — real BRAM-backed caches replace it later behind the IF and
+// dmem interfaces.
 //
 // No halt: a real CPU never stops on an instruction. BREAK is a trap, taken at
 // EX and vectored to VEC_BREAK (gen1 likewise vectors BREAK to its monitor),
