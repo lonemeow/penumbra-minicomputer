@@ -28,6 +28,7 @@ architecture and its standard peripherals.
 *   **[UART](./system/devices/uart.md)** — Word-strided NS16550A console.
 *   **[SPI / SD Card](./system/devices/spi.md)** — Register map and driver flow for storage.
 *   **[ESP32 WiFi NIC](./system/devices/esp32-nic.md)** — Ethernet-over-SLIP network adapter interface.
+*   **[Text-Video Console](./system/devices/text-video.md)** — Character-cell local console (`CLASS_TEXTVIDEO`).
 
 ### Operating System
 *   **[NetBSD Port Status](./system/netbsd/porting-status.md)** — Current status of the NetBSD 10 port.
