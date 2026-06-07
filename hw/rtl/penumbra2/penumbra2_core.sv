@@ -130,17 +130,16 @@ module penumbra2_core
     logic [31:0] fetch_addr_mux;
     logic        fetch_en_mux;
 
-    // TODO(human): compose if1_redirect, if1_redirect_pc, and if2_flush from
-    // the control-flow events. Sources:
+    // The front-end redirect/flush, composed from the control-flow events:
     //   branch:       branch_taken     → branch_target
     //   vector fetch: vecf_redirect    → vecf_redirect_pc
     //   ERET:         eret_commit      → epc
     //   fault:        fault_commit     (flushes IF2's wrong-path word now, but
     //                 does NOT steer PC here — its redirect comes later, via the
     //                 vector fetch; IF1's fault flush is i_flush, wired below).
-    // if1_redirect steers PC for the three that know their target; if2_flush
-    // bubbles IF2 for any front-end kill including the fault. Pick a priority
-    // for if1_redirect_pc (the steering sources never coincide).
+    // if1_redirect steers PC for the three that know their target (branch, then
+    // vector fetch, then ERET — the order is arbitrary since they never
+    // coincide); if2_flush bubbles IF2 for any front-end kill including the fault.
 
     always_comb begin
         // Idle defaults — overridden by the events below. Without these the

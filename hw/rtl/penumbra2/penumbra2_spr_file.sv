@@ -113,14 +113,15 @@ module penumbra2_spr_file
     end
 
     // ── SR register ──────────────────────────────────────────────
-    // TODO(human): drive the next SR value. Four write sources, highest
-    // priority first, else hold:
+    // The next SR value, by write source in priority order (else hold):
     //   1. i_save_state — exception entry: SR.S <- 1, SR.I <- 0, NZCV and the
     //      reserved bits unchanged. (SR_S / SR_I are the bit indices; sr[3:0]
     //      is NZCV.)
     //   2. i_eret — restore from the snapshot: sr <- esr.
     //   3. i_spr_we && i_spr_sel == SPR_SR — bulk load: sr <- sr_sanitize(i_spr_value).
-    //   4. i_flag_we — update only NZCV: sr[3:0] <- i_flag_value.
+    //   4. i_ei / i_di — flip SR.I only (the 1-instruction EI delay is the
+    //      external ei_shadow).
+    //   5. i_flag_we — update only NZCV: sr[3:0] <- i_flag_value.
     always_ff @(posedge i_clk) begin
         if (i_rst)
             sr <= {1'b1, 31'b0};                // reset: S=1 (supervisor), I=0, NZCV=0

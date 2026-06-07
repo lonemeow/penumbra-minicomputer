@@ -53,15 +53,15 @@ module penumbra2_irq
 
     // ── EI one-instruction shadow ────────────────────────────────
     logic ei_shadow;
-    // TODO(human): drive the ei_shadow flip-flop.
-    //   - set it when i_ei_commit (EI just committed);
-    //   - clear it once the single instruction after EI completes — i.e. the
-    //     next i_retire_valid (normal/trap) or i_dc_commit (a drain-commit
-    //     shadowed instruction like ERET, which never retires at WB);
-    //   - otherwise hold; reset to 0.
-    // The set must win over the clear on EI's own commit cycle (EI's own
-    // drain-commit pulse coincides with i_ei_commit) — order the branches so
-    // the shadow arms rather than immediately clearing.
+    // The shadow flip-flop:
+    //   - sets when i_ei_commit (EI just committed);
+    //   - clears once the single instruction after EI completes — the next
+    //     i_retire_valid (normal/trap) or i_dc_commit (a drain-commit shadowed
+    //     instruction like ERET, which never retires at WB);
+    //   - otherwise holds; resets to 0.
+    // The set wins over the clear on EI's own commit cycle (EI's drain-commit
+    // pulse coincides with i_ei_commit) — the branch order arms the shadow
+    // rather than immediately clearing it.
     always_ff @(posedge i_clk) begin
         if (i_rst)
             ei_shadow <= 1'b0;
