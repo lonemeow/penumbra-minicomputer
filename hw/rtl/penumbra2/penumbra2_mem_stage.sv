@@ -133,8 +133,14 @@ module penumbra2_mem_stage
     // ── 2-cycle access phase ─────────────────────────────────────
     // acc_phase 0 = launch cycle (drive address/read, assert STALL);
     //           1 = data-ready cycle (extract load / commit store, advance).
+    // Gated by ~i_stall_in: an access must not launch while WB back-pressures.
+    // WB asserts i_stall_in only for a dual-write divmul holding MEM/WB across
+    // its second (aux) write cycle; launching then would inject this access's
+    // launch bubble over the held slot and drop the divmul's Rdh write. With
+    // the launch deferred, the i_stall_in hold branch keeps the access waiting
+    // in EX (acc_phase stays 0) until WB accepts, then it launches cleanly.
     logic mem_first;
-    assign mem_first = do_access & ~acc_phase;
+    assign mem_first = do_access & ~acc_phase & ~i_stall_in;
 
     // ── Store path: lane-replication + byte-enable ───────────────
     logic [31:0] store_wdata;
@@ -241,7 +247,10 @@ module penumbra2_mem_stage
             next_valid     = o_valid;       // hold MEM/WB unchanged
             advance        = 1'b0;
             o_stall        = 1'b1;
-            // acc_phase held: a data-ready access waits for WB to accept it
+            // acc_phase held: an access waits for WB to accept it — either a
+            // data-ready one (acc_phase 1) or one not yet launched (acc_phase
+            // 0, mem_first suppressed by ~i_stall_in) deferring behind a
+            // dual-write divmul that holds MEM/WB for its aux write.
         end else begin
             next_valid     = i_valid;       // advance: bubble in if i_valid=0
             advance        = i_valid;

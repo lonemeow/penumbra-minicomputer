@@ -141,7 +141,7 @@ instruction is re-executed after the handler, not retired. When a gen2 perfctr
 lands, gate the retired count by `~fault_pending` (the program-end testbench
 use is unaffected — it keys on the op_class, not the count).
 
-## Hardware: Penumbra/2 store commit vs. fault flush (precise-exception gap)
+## Hardware: Penumbra/2 store commit vs. fault flush (precise-exception gap) — DONE
 
 The MEM stage commits a store's cache/memory write only on the cycle the
 store advances out of MEM (`o_dmem_we` gated on `advance`), so a fault flush
@@ -149,16 +149,35 @@ store advances out of MEM (`o_dmem_we` gated on `advance`), so a fault flush
 it cleanly — the data memory is untouched. The module testbench's
 `bubble_store_mem` check covers exactly this case.
 
-The residual gap: a flush arriving on the store's *second* (commit) MEM cycle,
-after `advance` has already fired, cannot un-write memory. With a precise
-exception model this must never happen — a store may only commit once every
-older instruction has retired and can no longer fault. When the gen2 exception
-unit lands (see "BREAK must become a real EX trap"), the flush path must
-guarantee the store-commit cycle is reached only when the store is the oldest
-in-flight instruction (e.g. drain older slots before releasing the commit, or
-hold the write until WB confirms no older fault). `i_bubble` is tied off in the
-spine today, so the gap is dormant, not live — but it is a hard requirement on
-the exception unit, not an optimization.
+Now that the exception unit has landed, `i_bubble` in the spine is driven by
+`wb_fault_commit` (the fault committing at WB, the oldest in-flight slot). The
+precise-exception requirement is met *structurally*, on two facts:
+
+- `o_dmem_we` is gated on `~i_bubble` (through both `do_access` and `advance`),
+  and `i_bubble = wb_fault_commit` is combinational from WB in the same cycle.
+  So an older instruction faulting at WB cancels a younger store's write in the
+  very same cycle — there is no "write already fired, flush too late" race.
+- A faulting slot is inert, so it never holds WB more than one cycle (WB's only
+  back-pressure, `o_stall`, is the dual-write hold, and a faulting slot is not a
+  dual write). Combined with MEM's launch-cycle bubble injection (a memory
+  op's launch cycle pushes `next_valid=0` into MEM/WB), by a store's *commit*
+  cycle WB holds a bubble — so the only cycle an older fault can coincide with a
+  live store is the store's *launch* cycle, which `i_bubble` cleanly cancels.
+
+Verified by `hw/sim/programs/penumbra2_store_squash.s`
+(`make test-penumbra2-store-squash`): a younger store in the shadow of an
+older misaligned-load fault leaves a pre-seeded sentinel untouched.
+
+**Adjacent hazard found and fixed while verifying this.** A load/store
+immediately behind a dual-write divmul lands fresh in MEM exactly as the
+divmul reaches WB and begins its 2-cycle aux (Rdh) write. The MEM
+back-pressure mux checked `mem_first` before `i_stall_in`, so the memory op's
+launch-cycle bubble overwrote the MEM/WB slot the divmul was occupying,
+dropping the Rdh write (tripping the `wb_stage` `!writing_aux || wb_dual_write`
+assertion). Fixed by gating `mem_first` with `~i_stall_in`: an access does not
+launch while WB back-pressures, so it waits in EX (acc_phase 0) until WB
+accepts the divmul's aux write, then launches cleanly. Regression:
+`hw/sim/programs/penumbra2_divmul_store.s` (`make test-penumbra2-divmul-store`).
 
 ## Compiler: graceful-fail on unsupported inline asm and vector IR
 

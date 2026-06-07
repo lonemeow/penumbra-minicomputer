@@ -14,6 +14,8 @@
 //     correct byte-enable exactly on the advancing cycle
 //   - a misaligned load/store faults (VEC_ALIGN) in 1 cycle, no memory access
 //   - downstream stall on a load's data-ready cycle holds the result
+//   - downstream stall coincident with a fresh access defers the launch
+//     (no premature read) and leaves the held MEM/WB slot intact
 //   - i_bubble cancels an in-flight store (no write) and flushes the slot
 //
 // The data memory mirrors unified_mem.sv: the address is sampled at the clock
@@ -260,6 +262,39 @@ int main(int argc, char** argv) {
     tick(dut); dut->eval();
     check("ldstall_value", dut->o_wb_value, 0x0BADF00D);
     check("ldstall_valid", dut->o_valid, 1);
+
+    // ── Downstream stall while a fresh access tries to launch ────
+    // The mirror, at the unit level, of the divmul-aux-hold hazard: WB holds a
+    // prior slot in MEM/WB (i_stall_in) just as a memory op arrives *fresh*
+    // (acc_phase 0). The launch must be DEFERRED — no premature read, and the
+    // held slot left intact — until WB releases, then the access launches and
+    // completes cleanly. (Before mem_first was gated by ~i_stall_in, the launch
+    // fired into the held slot and clobbered it.)
+    dmem[0x38 >> 2] = 0xD15EA5ED;
+    clear(dut);
+    // Land a prior ALU result in MEM/WB so we can prove the stall holds it.
+    dut->i_op_class = OPC_ALU; dut->i_gpr_we = 1;
+    dut->i_result = 0xA5A5A5A5; dut->i_phys_dst = 5; dut->i_valid = 1;
+    dut->eval();
+    tick(dut);                               // ALU advances into MEM/WB
+    // A fresh load now arrives while WB back-pressures (still holding the ALU).
+    dut->i_op_class = OPC_LOAD; dut->i_mem_op = MEM_LOAD; dut->i_mem_size = SZ_WORD;
+    dut->i_gpr_we = 1; dut->i_result = 0x38; dut->i_phys_dst = 9; dut->i_valid = 1;
+    dut->i_stall_in = 1;                      // WB cannot accept (e.g. divmul aux hold)
+    dut->eval();
+
+    // While i_stall_in is high the launch is deferred: EX is back-pressured,
+    // no read is driven, and the prior ALU slot in MEM/WB is held intact.
+    check("deferlaunch_o_stall",    dut->o_stall, 1);
+    check("deferlaunch_o_dmem_en",  dut->o_dmem_en, 0);
+    check("deferlaunch_o_valid",    dut->o_valid, 1);
+    check("deferlaunch_o_wb_value", dut->o_wb_value, 0xA5A5A5A5);
+
+    dut->i_stall_in = 0;                      // WB accepts; the load may launch now
+    tick(dut); dut->eval();                   // cycle 1: launch (read driven)
+    tick(dut); dut->eval();                   // cycle 2: data-ready, advances
+    check("deferlaunch_value", dut->o_wb_value, 0xD15EA5ED);  // load completed
+    check("deferlaunch_valid", dut->o_valid, 1);
 
     // ── i_bubble cancels an in-flight store (no write) and flushes ──
     dmem[0x4C >> 2] = 0xCAFED00D;

@@ -268,6 +268,25 @@ test-penumbra2-branch:
 test-penumbra2-loadstore:
 	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_loadstore TB=tb_penumbra2_branch
 
+# ── Penumbra/2 core precise-exception store-squash test ───────
+# Same core: a younger store in the shadow of an older fault (misaligned load →
+# VEC_ALIGN) must have its memory write cancelled by the flush. The handler
+# reloads the target and proves a pre-seeded sentinel survived. Validates the
+# "store commit vs. fault flush" precise-exception requirement. Self-checks R1.
+# Usage: make test-penumbra2-store-squash
+.PHONY: test-penumbra2-store-squash
+test-penumbra2-store-squash:
+	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_store_squash TB=tb_penumbra2_branch
+
+# ── Penumbra/2 core divmul + memory-op hazard test ────────────
+# Same core: a load immediately behind a dual-write divmul must not drop the
+# divmul's high-half (Rdh) write. MEM must defer the load's launch while WB
+# back-pressures across the divmul's 2-cycle aux write. Self-checks R1.
+# Usage: make test-penumbra2-divmul-store
+.PHONY: test-penumbra2-divmul-store
+test-penumbra2-divmul-store:
+	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_divmul_store TB=tb_penumbra2_branch
+
 # ── Penumbra/2 core exception-entry test ──────────────────────
 # Same core, the exception-entry milestone program: a misaligned load takes
 # VEC_ALIGN, the pipeline flushes + saves state, and the vector-fetch FSM
