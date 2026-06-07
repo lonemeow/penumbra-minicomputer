@@ -163,9 +163,10 @@ bus fault (timeout). Software uses this to detect the end of the chain.
 
 ### Device Class Codes
 
-The class identifies the **base register protocol** the device
-implements. Generic firmware (ROM, loader) can use any device whose
-class it understands — no device-specific driver needed.
+The class identifies a **family** of similar devices, and — for some
+classes — the base register protocol that family shares. Generic
+firmware (ROM, loader) can use any device whose class defines a base
+protocol it understands, with no device-specific driver needed.
 
 | Value | Name             | Base protocol                  | Notes                             |
 |-------|------------------|--------------------------------|-----------------------------------|
@@ -175,7 +176,10 @@ class it understands — no device-specific driver needed.
 | 3     | `CLASS_SPI`      | Penumbra SPI master            | Generic SPI controller            |
 | 4     | `CLASS_SD`       | Penumbra SPI master, SD wired  | SD card attached via SPI          |
 | 5     | `CLASS_NIC`      | Penumbra NIC protocol          | ESP32 / Wiznet network adapter    |
-| 6–255 | —                | —                              | Reserved for future protocols     |
+| 6     | `CLASS_TEXTVIDEO`   | Penumbra text-video registers  | Character-cell local console   |
+| 7     | `CLASS_FRAMEBUFFER` | Linear pixel framebuffer       | Reserved — protocol defined when a device exists |
+| 8     | `CLASS_USBHC`       | Penumbra USB host-controller   | Local USB host (low / full speed) |
+| 9–255 | —                   | —                              | Reserved for future protocols     |
 
 **Extended devices.** A device with extra capabilities (e.g., an SPI
 controller with a DMA engine) still reports the base class and
@@ -184,6 +188,20 @@ registers. Later, the OS driver reads `CFG_ID` to detect the specific
 variant and enables extended features. Any `CLASS_SPI`/`CLASS_SD`
 device is bootable even if the OS hasn't loaded a variant-specific
 driver yet.
+
+**Minimum protocols are per-class.** A class *may* define a minimum
+register protocol — a base subset a generic consumer can drive without a
+device-specific driver. When a class defines one, every device claiming
+that class **must** implement it after reset, so firmware always finds
+the minimum even if software had switched the device into a richer mode;
+extra capabilities are opt-in behind `CFG_ID` (as with `CLASS_SPI` /
+`CLASS_SD`). Not every class defines a minimum protocol — some families
+(e.g., network adapters) share no subset worth standardizing, and the OS
+matches a specific driver through `CFG_ID`; the class still serves as the
+family identifier. `CLASS_UNKNOWN` is for a device that fits no family at
+all, and a reserved class (e.g., `CLASS_FRAMEBUFFER`) names a future
+family whose minimum protocol, if any, is fixed once a device implements
+it.
 
 ### CFG_EN Toggle Protocol
 
