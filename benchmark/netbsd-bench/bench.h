@@ -12,6 +12,17 @@
 #include <stdint.h>
 #include <stddef.h>
 
+/* Self-exec support for spawn benchmarks.
+ *
+ * fork_exec measures process spawn by re-execing *this same binary* with
+ * a sentinel argument, so it needs no external target and automatically
+ * matches its own link mode (the static pbench execs static, dynamic
+ * execs dynamic).  main() recognizes PBENCH_EXEC_CHILD_ARG as argv[1] and
+ * _exit()s immediately, and records the path to itself in pbench_self_path
+ * for the benchmark to execve(). */
+#define PBENCH_EXEC_CHILD_ARG "__exec_child"
+extern const char *pbench_self_path;
+
 /* Each trial is one timed call to f(iters).  Calibration picks iters
  * such that this call takes at least BENCH_TARGET_TRIAL_NS — long
  * enough that `clock_gettime` overhead (~1–5 ms on Penumbra) is a

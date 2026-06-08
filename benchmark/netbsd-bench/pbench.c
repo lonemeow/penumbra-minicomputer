@@ -23,6 +23,27 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <sys/sysctl.h>
+
+/* Path to this executable, used by self-exec spawn benchmarks
+ * (see bench.h / kernel/fork_exec.c).  Set once at the top of main(). */
+const char *pbench_self_path = NULL;
+
+/* Resolve an absolute, execve()-able path to ourselves.  argv[0] works
+ * when we were invoked with a path; when invoked via PATH (no slash) it
+ * is just "pbench", which execve() cannot use, so fall back to asking the
+ * kernel for our pathname. */
+static const char *resolve_self_path(const char *argv0) {
+    if (argv0 != NULL && strchr(argv0, '/') != NULL)
+        return argv0;
+    static char buf[1024];
+    int mib[4] = { CTL_KERN, KERN_PROC_ARGS, getpid(), KERN_PROC_PATHNAME };
+    size_t len = sizeof(buf);
+    if (sysctl(mib, 4, buf, &len, NULL, 0) == 0 && len > 0)
+        return buf;
+    return argv0;  /* best effort; fork_exec's child-status check catches a bad path */
+}
 
 /* --- Benchmark entry-point declarations.  Each benchmark .c defines one
  *     of these and registers it below. */
@@ -31,6 +52,7 @@ extern void bench_kernel_getpid(void);
 extern void bench_kernel_clock_gettime(void);
 extern void bench_kernel_pipe_pingpong(void);
 extern void bench_kernel_fork_exit(void);
+extern void bench_kernel_fork_exec(void);
 
 extern void bench_libc_memcpy_sweep(void);
 extern void bench_libc_memcpy_align(void);
@@ -46,6 +68,7 @@ static const struct bench_entry registry[] = {
     { "kernel", "clock_gettime",  bench_kernel_clock_gettime },
     { "kernel", "pipe_pingpong",  bench_kernel_pipe_pingpong },
     { "kernel", "fork_exit",      bench_kernel_fork_exit },
+    { "kernel", "fork_exec",      bench_kernel_fork_exec },
 
     /* libc benchmarks: hot routines, size-swept where applicable. */
     { "libc",   "memcpy",         bench_libc_memcpy_sweep },
@@ -111,7 +134,14 @@ static int run_filtered(const char *category, const char *name) {
 /* --- Main ----------------------------------------------------------- */
 
 int main(int argc, char **argv) {
+    /* Self-exec spawn target: fork_exec re-execs us with this sentinel.
+     * Exit immediately and as early as possible so the measured cost is
+     * the spawn (fork+execve+runtime startup+exit), not benchmark work. */
+    if (argc >= 2 && strcmp(argv[1], PBENCH_EXEC_CHILD_ARG) == 0)
+        _exit(0);
+
     const char *argv0 = argv[0];
+    pbench_self_path = resolve_self_path(argv0);
     FILE *result_fp = NULL;
 
     /* Parse leading -o FILE flag (only flag we accept).  Strip it from

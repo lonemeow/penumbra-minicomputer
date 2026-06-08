@@ -52,7 +52,7 @@ OVERLAY_ROOT ?= $(PROJROOT)/build/netbsd-overlay
 
 PBENCH_SRCS := pbench.c bench.c \
                kernel/getpid.c kernel/clock_gettime.c \
-               kernel/pipe_pingpong.c kernel/fork_exit.c \
+               kernel/pipe_pingpong.c kernel/fork_exit.c kernel/fork_exec.c \
                libc/memcpy_sweep.c libc/memset_sweep.c \
                libc/strlen_sweep.c libc/qsort_int.c
 
