@@ -869,6 +869,34 @@ is much harder to forget.
   mechanism repeated for each ordered instruction; primitives are
   cheaper than instances).
 
+**Fetch re-synchronization (WRSYS).** The drain orders WRSYS against
+*older* instructions, and the post-commit wait against the device latch
+— but the *younger* instructions frozen in ID/IF were fetched (and, once
+the MMU is active, translated) under the pre-WRSYS state. A WRSYS that
+changes fetch-affecting state (MMU enable, TLB contents, instruction
+cacheability) must not let those stale fetches execute. So WRSYS, after
+its post-commit wait, additionally **discards the frozen upstream
+instructions and re-fetches** from its sequential successor — reusing the
+same front-end flush/redirect path as a taken branch and ERET. This is
+the younger-side completion of the drain: the drain quiesces the older
+instructions, the re-fetch re-derives the younger ones under the new
+state — making WRSYS the context-synchronizing instruction promised by
+[sysregs.md](../../system/sysregs.md). The redirect fires at the
+post-commit-wait *release*, not the commit cycle, so the device has
+latched and the re-translated fetch sees the new state. (ERET needs no
+separate re-fetch — it already redirects PC to EPC.)
+
+WRSYS synchronizes on *every* execution, including the staging writes of
+a multi-write sequence (`TLB_INDEX`/`TLB_VPN` ahead of the committing
+`TLB_PTE`) that change no fetch-relevant state; the redundant re-fetches
+are the accepted cost of one uniform rule. The TLB-miss fast path pays a
+re-fetch per fill write on top of the handler's terminating ERET — if
+profiling ever shows that dominates, a non-synchronizing staging-write
+mode can remove it without changing the architectural contract,
+deferred until measured. WRSPR SR carries the same fetch-relevant risk
+if `SR.S` gates fetch translation; its write path is not yet wired, so
+re-synchronizing it is left to that milestone.
+
 ---
 
 ## 10. Stall propagation policy (back-pressure)

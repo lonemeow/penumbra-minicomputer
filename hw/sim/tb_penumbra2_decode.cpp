@@ -162,8 +162,9 @@ int main() {
     check("mul_gpr_we",    dut->o_gpr_we, 1);
     check("mul_wflags",    dut->o_writes_flags, 1);
 
-    // WRSPR ESR, R4 (supervisor): SPR dest, GPR source, not drain.
-    decode(dut, enc_r(OP_R_WRSPR, 0, 4, 0, SPR_ESR), 1);
+    // WRSPR ESR, R4 (supervisor): SPR dest, GPR source, not drain. The value
+    // register is the Rd field (as the assembler encodes it), read via src B.
+    decode(dut, enc_r(OP_R_WRSPR, 4, 0, 0, SPR_ESR), 1);
     check("wrspr_class",   dut->o_op_class, OPC_WRSPR);
     check("wrspr_srcb",    dut->o_src_b_sel, 4);
     check("wrspr_srcb_en", dut->o_src_b_en, 1);
@@ -175,12 +176,12 @@ int main() {
     check("wrspr_priv",    dut->o_priv_fault, 0);
     check("wrspr_drain",   dut->o_drain_commit, 0);
     // Same op in user mode → privilege fault.
-    decode(dut, enc_r(OP_R_WRSPR, 0, 4, 0, SPR_ESR), 0);
+    decode(dut, enc_r(OP_R_WRSPR, 4, 0, 0, SPR_ESR), 0);
     check("wrspr_u_priv",  dut->o_priv_fault, 1);
     check("wrspr_u_vec",   dut->o_fault_vec, VEC_PRIV);
     // WRSPR SR → drain-commit + flag-bypass producer; SR is not
     // scoreboarded, so no scoreboard destination and no SPR-file write.
-    decode(dut, enc_r(OP_R_WRSPR, 0, 4, 0, SPR_SR), 1);
+    decode(dut, enc_r(OP_R_WRSPR, 4, 0, 0, SPR_SR), 1);
     check("wrspr_sr_drain",  dut->o_drain_commit, 1);
     check("wrspr_sr_wflag",  dut->o_writes_flags, 1);
     check("wrspr_sr_dst_en", dut->o_dst_en, 0);
@@ -223,8 +224,10 @@ int main() {
     decode(dut, enc_r(OP_R_DI, 0, 0, 0), 0);
     check("di_priv",    dut->o_priv_fault, 1);
 
-    // WRSYS / RDSYS: privileged; WRSYS drains + post-commit waits.
-    decode(dut, enc_r(OP_R_WRSYS, 0, 7, 0), 1);
+    // WRSYS / RDSYS: privileged; WRSYS drains + post-commit waits. WRSYS's
+    // value register is the Rd field (as the assembler encodes it); RDSYS's
+    // destination is likewise the Rd field.
+    decode(dut, enc_r(OP_R_WRSYS, 7, 0, 0), 1);
     check("wrsys_class",  dut->o_op_class, OPC_WRSYS);
     check("wrsys_srcb",   dut->o_src_b_sel, 7);
     check("wrsys_drain",  dut->o_drain_commit, 1);

@@ -64,6 +64,22 @@ module penumbra2_spine
     output logic                  o_sys_re,
     input  logic [31:0]           i_sys_rdata,
 
+    // ── Sysreg write port (WRSYS, driven at the EX drain-commit) ──
+    // WRSYS never advances past EX (drain-commit); the write is composed here
+    // from the held ID/EX fields the cycle EX commits it.
+    output logic [3:0]            o_sys_wr_dev,
+    output logic [3:0]            o_sys_wr_reg,
+    output logic [31:0]           o_sys_wdata,
+    output logic                  o_sys_we,
+
+    // ── WRSYS context-synchronization re-fetch (to the core front end) ──
+    // One cycle after the write strobe (the post-commit-wait cycle, by when the
+    // device has latched), re-fetch the instructions after the WRSYS so they
+    // observe the new state — WRSYS is context-synchronizing (sysregs.md). The
+    // core consumes this as a front-end redirect to o_wrsys_resync_pc.
+    output logic                  o_wrsys_resync,
+    output logic [31:0]           o_wrsys_resync_pc,
+
     // ── Exception entry (to the core: IF flush + vector-fetch FSM) ──
     output logic                  o_fault_commit,    // a fault is being taken this cycle
     output logic [3:0]            o_fault_vec,       // its vector number
@@ -159,6 +175,37 @@ module penumbra2_spine
     assign ei_commit   = ex_dc_commit & (idex_op_class == OPC_EI);
     assign di_commit   = ex_dc_commit & (idex_op_class == OPC_DI);
 
+    // WRSYS sysreg write — composed from the held ID/EX fields at the commit.
+    // WRSYS sysreg write — composed from the held ID/EX fields at the commit.
+    // WRSYS is a drain-commit (like ERET/EI/DI above): it never advances past
+    // EX, so its selectors and value (idex_op_b — read from the Rd field) stay
+    // in the ID/EX register until it commits. The strobe pulses on the WRSYS
+    // commit; the post_commit_wait cycle (sequenced in EX) then holds the next
+    // instruction off long enough for the device to latch. These are the
+    // write-side ports (distinct from the MEM-driven RDSYS read selectors).
+    assign o_sys_wr_dev = idex_sys_dev;
+    assign o_sys_wr_reg = idex_sys_reg;
+    assign o_sys_wdata  = idex_op_b;
+    assign o_sys_we     = ex_dc_commit & (idex_op_class == OPC_WRSYS);
+
+    // WRSYS context-synchronization. The write strobe fires at the commit (T);
+    // the device latches at the T→T+1 edge (the post-commit-wait window). One
+    // cycle later, re-fetch from the WRSYS's successor so the following
+    // instructions are fetched under the new state — flushing the younger
+    // instruction frozen in ID here, and (via o_wrsys_resync) the front end in
+    // the core. The pulse and target are registered at the commit so they
+    // survive the WRSYS leaving EX; firing at T+1 (not T) guarantees the
+    // re-translated fetch sees the latched device state.
+    logic        wrsys_resync;
+    logic [31:0] wrsys_resync_pc;
+    always_ff @(posedge i_clk) begin
+        if (i_rst) wrsys_resync <= 1'b0;
+        else       wrsys_resync <= o_sys_we;
+        if (o_sys_we) wrsys_resync_pc <= idex_next_pc;
+    end
+    assign o_wrsys_resync    = wrsys_resync;
+    assign o_wrsys_resync_pc = wrsys_resync_pc;
+
     // WB write port + committed flags
     logic [SB_IDX_W-1:0] wr_idx;
     logic [31:0]         wr_data;
@@ -218,7 +265,7 @@ module penumbra2_spine
         .i_ir(i_ir), .i_pc(i_pc), .i_next_pc(i_next_pc),
         .i_valid(i_valid), .i_fault_pending(1'b0), .i_fault_vec(4'd0),
         .i_supervisor(i_supervisor),
-        .i_stall_in(ex_stall), .i_bubble(ex_branch_taken | wb_fault_commit | eret_commit),
+        .i_stall_in(ex_stall), .i_bubble(ex_branch_taken | wb_fault_commit | eret_commit | wrsys_resync),
         .o_stall(id_stall),
         .o_rd_idx_a(rd_idx_a), .o_rd_idx_b(rd_idx_b),
         .i_rd_data_a(rd_data_a), .i_rd_data_b(rd_data_b),

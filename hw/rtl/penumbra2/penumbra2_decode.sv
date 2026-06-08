@@ -227,7 +227,7 @@ module penumbra2_decode
                     end
                     OP_R_WRSYS: begin
                         o_op_class         = OPC_WRSYS;
-                        o_src_b_sel        = r_rs; o_src_b_en = 1'b1;   // value to write
+                        o_src_b_sel        = r_rd; o_src_b_en = 1'b1;   // value to write (Rd field)
                         o_drain_commit     = 1'b1;
                         o_post_commit_wait = 1'b1;   // wait one cycle for the device latch
                         o_priv_fault       = ~i_supervisor;
@@ -264,7 +264,7 @@ module penumbra2_decode
                     end
                     OP_R_WRSPR: begin
                         o_op_class   = OPC_WRSPR;
-                        o_src_b_sel  = r_rs; o_src_b_en = 1'b1;   // value to write
+                        o_src_b_sel  = r_rd; o_src_b_en = 1'b1;   // value to write (Rd field)
                         o_spr_sel    = field_1512;
                         o_priv_fault = ~i_supervisor;
                         if (field_1512 == SPR_SR) begin

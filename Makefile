@@ -297,6 +297,24 @@ test-penumbra2-divmul-store:
 test-penumbra2-sysread:
 	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_sysread TB=tb_penumbra2_branch
 
+# ── Penumbra/2 core WRSYS sysreg-write test ───────────────────
+# Same core: WRSYS writes a GPR value to a CPU-internal writable sysreg (the
+# scratch device) at the EX drain-commit, then RDSYS reads it back. Round-trips
+# two values through two registers. Self-checks R1.
+# Usage: make test-penumbra2-syswrite
+.PHONY: test-penumbra2-syswrite
+test-penumbra2-syswrite:
+	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_syswrite TB=tb_penumbra2_branch
+
+# ── Penumbra/2 core WRSYS context-synchronization test ────────
+# Same core: WRSYS is context-synchronizing — it re-fetches its successor after
+# commit. Each WRSYS here precedes an increment; exactly-once execution (R5=3)
+# proves the re-fetch neither duplicates the held copy nor skips it.
+# Usage: make test-penumbra2-resync
+.PHONY: test-penumbra2-resync
+test-penumbra2-resync:
+	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_resync TB=tb_penumbra2_branch
+
 # ── Penumbra/2 core exception-entry test ──────────────────────
 # Same core, the exception-entry milestone program: a misaligned load takes
 # VEC_ALIGN, the pipeline flushes + saves state, and the vector-fetch FSM

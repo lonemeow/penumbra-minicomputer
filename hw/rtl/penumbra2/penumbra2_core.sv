@@ -25,9 +25,9 @@
 // traps at EX, both routed through that same entry/redirect path. External
 // interrupts take the asynchronous route — penumbra2_irq drains the pipeline
 // at a fetch boundary and reuses that same save-state + vector-fetch. RDSYS
-// reads CPU-internal sysreg devices (cpuid/machid) through the MEM sideband.
-// Still not wired: the MMU (both fault paths), the real BRAM-backed L1 caches,
-// and the WRSYS sysreg-write path. unified_mem is a stand-in with the
+// reads CPU-internal sysreg devices through the MEM sideband, and WRSYS writes
+// them at the EX drain-commit. Still not wired: the MMU (both fault paths) and
+// the real BRAM-backed L1 caches. unified_mem is a stand-in with the
 // streaming registered-read contract the IF1/IF2 split and the MEM single-STALL
 // are built around — real BRAM-backed caches replace it later behind the IF and
 // dmem interfaces.
@@ -106,6 +106,10 @@ module penumbra2_core
     logic        eret_commit;       // an ERET is committing: redirect PC ← EPC
     logic [31:0] epc;               // saved exception PC
 
+    // ── WRSYS context-sync re-fetch (EX drain-commit -> front end) ─
+    logic        wrsys_resync;      // re-fetch after a WRSYS (post-commit-wait release)
+    logic [31:0] wrsys_resync_pc;   // its target = the WRSYS's sequential successor
+
     // ── Interrupt entry (interrupt unit <-> spine + front end) ────
     logic        sr_i, ei_commit, dc_commit, pipe_busy;   // from spine
     logic        irq_fetch_stop;    // freeze IF1 at the boundary while draining
@@ -160,6 +164,12 @@ module penumbra2_core
             if1_redirect    = 1'b1;
             if1_redirect_pc = epc;
             if2_flush       = 1'b1;
+        end else if (wrsys_resync) begin
+            // WRSYS is context-synchronizing: re-fetch its successor so the
+            // following instructions observe the new sysreg state.
+            if1_redirect    = 1'b1;
+            if1_redirect_pc = wrsys_resync_pc;
+            if2_flush       = 1'b1;
         end else if (fault_commit) begin
             if2_flush       = 1'b1;
         end
@@ -177,6 +187,11 @@ module penumbra2_core
     logic [3:0]  sys_dev, sys_reg;
     logic        sys_re;
     logic [31:0] sys_rdata;
+
+    // Sysreg write port (WRSYS commit from EX ↔ the device block)
+    logic [3:0]  sys_wr_dev, sys_wr_reg;
+    logic [31:0] sys_wdata;
+    logic        sys_we;
 
     // ══════════════════════════════════════════════════════════
     // IF1 — PC + fetch address generation
@@ -228,6 +243,11 @@ module penumbra2_core
         // Sysreg sideband — MEM's RDSYS read against the device block below.
         .o_sys_dev(sys_dev), .o_sys_reg(sys_reg), .o_sys_re(sys_re),
         .i_sys_rdata(sys_rdata),
+        // Sysreg write port — WRSYS commit from EX into the device block.
+        .o_sys_wr_dev(sys_wr_dev), .o_sys_wr_reg(sys_wr_reg),
+        .o_sys_wdata(sys_wdata), .o_sys_we(sys_we),
+        // WRSYS context-sync — re-fetch the successor under the new state.
+        .o_wrsys_resync(wrsys_resync), .o_wrsys_resync_pc(wrsys_resync_pc),
         // Exception entry — drives the IF flush + the vector-fetch FSM below.
         // ERET commit redirects PC ← EPC through the same front-end path.
         .o_fault_commit(fault_commit), .o_fault_vec(fault_vec), .o_epc(epc),
@@ -291,17 +311,26 @@ module penumbra2_core
     );
 
     // ══════════════════════════════════════════════════════════
-    // Sysreg device block — RDSYS read target (CPU-internal)
+    // Sysreg device block — RDSYS read / WRSYS write targets (CPU-internal)
     // ══════════════════════════════════════════════════════════
     // RDSYS reads a CPU-internal sysreg device through MEM's sideband. The real,
     // generation-agnostic identity devices answer combinationally; gen2
     // registers the selected response so RDSYS runs as a 2-cycle access (the
     // single-MEM-STALL contract, the mirror of unified_mem's registered read).
-    // WRSYS-writable devices (MMU, caches) attach here later behind the same
-    // selectors.
     logic [31:0] cpuid_rdata, machid_rdata;
     cpuid  u_cpuid  (.i_sys_reg(sys_reg), .o_sys_rdata(cpuid_rdata));
     machid u_machid (.i_sys_reg(sys_reg), .o_sys_rdata(machid_rdata));
+
+    // Writable scratch sysreg — a bring-up stand-in for the real WRSYS-writable
+    // devices (MMU / cache control) that attach to this same write port later.
+    // It exercises the full WRSYS-commit → device-write → RDSYS-read-back path.
+    // The write port carries its own dev/reg (driven at the EX commit), distinct
+    // from the read port's dev/reg (driven by MEM) — the two pipeline stages.
+    localparam logic [3:0] SYSDEV_SCRATCH = 4'd6;
+    logic [31:0] scratch_q [0:3];
+    always_ff @(posedge i_clk)
+        if (sys_we && sys_wr_dev == SYSDEV_SCRATCH && sys_wr_reg[3:2] == 2'b00)
+            scratch_q[sys_wr_reg[1:0]] <= sys_wdata;
 
     // The device-selected response (combinational), then registered into
     // sys_rdata on the read strobe — the same read-clock-enable contract as
@@ -310,9 +339,10 @@ module penumbra2_core
     logic [31:0] sys_rdata_sel;
     always_comb begin
         case (sys_dev)
-            SYSDEV_CPU:  sys_rdata_sel = cpuid_rdata;
-            SYSDEV_MACH: sys_rdata_sel = machid_rdata;
-            default:     sys_rdata_sel = 32'b0;
+            SYSDEV_CPU:     sys_rdata_sel = cpuid_rdata;
+            SYSDEV_MACH:    sys_rdata_sel = machid_rdata;
+            SYSDEV_SCRATCH: sys_rdata_sel = scratch_q[sys_reg[1:0]];
+            default:        sys_rdata_sel = 32'b0;
         endcase
     end
 

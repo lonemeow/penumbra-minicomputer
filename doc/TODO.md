@@ -179,6 +179,42 @@ launch while WB back-pressures, so it waits in EX (acc_phase 0) until WB
 accepts the divmul's aux write, then launches cleanly. Regression:
 `hw/sim/programs/penumbra2_divmul_store.s` (`make test-penumbra2-divmul-store`).
 
+## Hardware: Penumbra/2 WRSPR write path still tied off
+
+WRSYS now drives a real sysreg write at the EX drain-commit
+(`make test-penumbra2-syswrite`). Wiring it surfaced a shared decode bug:
+WRSYS *and* WRSPR encode their value register in the Rd field (as the assembler
+emits and gen1 reads), but gen2 decode read it from Rs (i.e. R0). Both were
+corrected to read the Rd field.
+
+WRSYS's fix is exercised by the round-trip test; WRSPR's is dormant because its
+write path is not yet wired: the spine ties off the SPR-file write port
+(`u_spr` `.i_spr_we(1'b0)`, `.i_spr_sel(4'd0)`, `.i_spr_value(32'b0)`), so
+WRSPR to ESR/EPC/USP/SCR cannot land. When the SPR write milestone wires that
+port (driven from the WB/commit path the way WRSYS drives the sysreg write),
+add a WRSPR→RDSPR round-trip test to exercise the now-corrected decode.
+
+## Hardware: Penumbra/2 WRSYS context-sync — positive re-fetch test deferred
+
+WRSYS is now context-synchronizing: after its post-commit-wait it re-fetches its
+successor so following instructions observe the new sysreg state (the contract in
+`doc/system/sysregs.md`; mechanism in the gen2 drain-commit design decision).
+`make test-penumbra2-resync` guards the exactly-once property (the re-fetch must
+neither duplicate the held copy nor skip it), and the syswrite/full suite confirm
+the re-fetch redirects to the correct successor.
+
+What is *not* yet directly tested is that the re-fetch re-derives under *changed*
+state — because with no MMU/I-cache wired in the gen2 core the re-fetch returns
+the identical instruction, so the synchronization is functionally transparent.
+Add the positive test at MMU integration: a WRSYS that remaps the page holding
+the next instruction (or invalidates an I-cache line over modified code), proving
+the successor is fetched under the new translation/contents. Until then the
+mechanism is verified by construction (re-sync fires on every WRSYS commit) plus
+the regression + exactly-once guards.
+
+Also revisit WRSPR SR then: if `SR.S` gates fetch translation, it needs the same
+re-synchronization (its write path is tied off today — see the section above).
+
 ## Compiler: graceful-fail on unsupported inline asm and vector IR
 
 Today the GlobalISel IRTranslator crashes (`fatal error: unable to
@@ -1619,3 +1655,66 @@ the other reserved GPRs) while keeping it out of allocation via
 the end of `GPR_Allocatable`'s member list so the first-12 allocation
 order is byte-identical (no codegen churn in existing tests) but R12
 becomes a class member and coalescing fires.
+
+## Hardware + kernel: local console (HDMI text-video + USB keyboard)
+
+Design complete and committed as docs; implementation not started. The
+goal is a standalone local console — character-cell video out over
+GPDI/HDMI and a USB keyboard in — so the machine needs no host terminal.
+NetBSD is the first consumer (boot may stay on UART initially); a
+boot-ROM local console is a later, well-defined follow-on.
+
+Two new autoconfig device classes plus one reserved
+([`system/bus.md`](system/bus.md)):
+
+- `CLASS_TEXTVIDEO` (6) — character-cell console. Contract
+  [`system/devices/text-video.md`](system/devices/text-video.md),
+  microarchitecture [`internals/text-video.md`](internals/text-video.md).
+- `CLASS_USBHC` (8) — transaction-level USB host. Contract
+  [`system/devices/usb-host.md`](system/devices/usb-host.md),
+  microarchitecture
+  [`internals/usb-host-controller.md`](internals/usb-host-controller.md).
+- `CLASS_FRAMEBUFFER` (7) — reserved; protocol fixed once a device exists.
+
+Decisions already settled (rationale lives in the docs, not here):
+
+- Text cells are 16-bit `{glyph, attribute}` in 32-bit-strided slots;
+  color is optional/discoverable (`CAP.COLOR`); the hardware cursor is
+  mandatory; mode 0 (640×480 / 80×30) is the mandatory power-up mode for
+  monitor compatibility, with extra modes optional via `MODE_SEL`.
+- USB exposes a transaction-level minimum (token / data / handshake); the
+  NetBSD HCD sits under the MI USB stack (`dev/ic/sl811hs.c` as the
+  structural template), which owns enumeration + HID. `ukbd` → `wskbd`
+  and a `pcdisplay`-style `wsdisplay` meet at `wscons`.
+
+Implementation work, by layer:
+
+### Text-video RTL — first cut: mode 0 only
+- Pixel generator: dual-clock char/attr BRAM, 8×16 font ROM
+  (`$readmemh`), scan-out pipeline, mandatory hardware cursor →
+  parallel RGB.
+- Output PHY: TMDS encode ×3 + ODDR 10:1 serialize, dedicated video PLL
+  (fixed 25.175 MHz pixel / ~126 MHz serial).
+- `autoconfig_dev` wrapper (`CLASS_TEXTVIDEO`); `ulx3s_top` wiring to the
+  GPDI pins.
+- Goal (later): PLL dynamic-reconfig FSM + mode 1 (800×600 / 100×37).
+
+### USB host RTL — low + full speed
+- 48 MHz SIE (NRZI, bit-stuffing, CRC5/16, SYNC/EOP), transaction FSM,
+  1 ms frame timer, port/line detect + reset.
+- US2 wiring: RX diff on `usb_fpga_dp/dn`, TX on `usb_fpga_bd_dp/dn`,
+  pulls on `usb_fpga_pu_*`; dual-clock-BRAM + handshake CDC.
+- `autoconfig_dev` wrapper (`CLASS_USBHC`).
+
+### Kernel
+- `CLASS_USBHC` host-controller driver (`usbd_bus_methods` /
+  `usbd_pipe_methods`, software root hub) modeled on `dev/ic/sl811hs.c`;
+  enable the MI USB stack + `uhidev` / `ukbd` in the kernel config.
+- `wsdisplay` back-end for `CLASS_TEXTVIDEO` (`pcdisplay`-style character
+  memory) + `wskbd`; bring up `wscons` as a local console alongside (or
+  in place of) the `com` console.
+
+### Boot ROM — later
+- Per-class console backends (text-cell writes; framebuffer software
+  glyphs once that class lands) and a USB boot-keyboard reader, behind a
+  putc/getc abstraction the monitor selects at autoconfig.

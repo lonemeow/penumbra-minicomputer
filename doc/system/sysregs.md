@@ -8,8 +8,18 @@ RDSYS Rd, #dev, #reg    ; Read  device[dev].register[reg] → Rd
 ```
 
 Both are privileged — executing in user mode triggers a privilege fault.
-`WRSYS` is **serializing**: its effects are visible before the next
-instruction fetch begins.
+
+`WRSYS` is **context-synchronizing**: every instruction after a `WRSYS`
+observes that `WRSYS`'s effects (and those of all prior instructions) in
+full — for its own instruction fetch and for its data accesses alike.
+This explicitly includes state that changes how *later instructions are
+fetched* — MMU enable, TLB contents, instruction cacheability — so
+changing fetch-affecting state with `WRSYS` and continuing in
+straight-line code is well-defined: the following instructions are
+fetched under the new state, with no explicit barrier or intervening
+branch required. `WRSYS` is therefore the synchronization point for
+self-modifying code and for MMU/cache reconfiguration. `RDSYS` is an
+ordinary register read and carries no such guarantee.
 
 The `dev` field (4 bits) selects one of 16 devices; `reg` (4 bits)
 selects one of 16 registers within that device, for 256 total system
