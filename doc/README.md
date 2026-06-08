@@ -70,6 +70,7 @@ subdirectory owns its realization.
 *   **[SDRAM Controller v2](./internals/sdram-controller.md)** — Design plan for the rewrite (composable, dual-domain, 100 MHz CL2).
 *   **[SDRAM Optimization](./internals/sdram-optimization.md)** — Controller strategies for bandwidth improvement.
 *   **[Text-Video Console](./internals/text-video.md)** — FPGA microarchitecture of the `CLASS_TEXTVIDEO` console: pixel generator + TMDS output PHY.
+*   **[USB Host Controller](./internals/usb-host-controller.md)** — FPGA microarchitecture of the `CLASS_USBHC` controller: SIE, transaction FSM, and the NetBSD HCD mapping.
 *   **[Coding Standards](./internals/coding-standards.md)** — RTL naming and style conventions for hardware.
 *   **[Development Setup](./internals/setup.md)** — How to build and simulate the RTL.
 
