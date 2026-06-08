@@ -287,6 +287,16 @@ test-penumbra2-store-squash:
 test-penumbra2-divmul-store:
 	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_divmul_store TB=tb_penumbra2_branch
 
+# ── Penumbra/2 core RDSYS sysreg-read test ────────────────────
+# Same core: RDSYS reads the CPU-internal cpuid/machid identity devices through
+# MEM's sysreg sideband (2-cycle access, registered device response). Checks the
+# cpuid name registers and that the device selector routes by sys_dev.
+# Self-checks R1.
+# Usage: make test-penumbra2-sysread
+.PHONY: test-penumbra2-sysread
+test-penumbra2-sysread:
+	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_sysread TB=tb_penumbra2_branch
+
 # ── Penumbra/2 core exception-entry test ──────────────────────
 # Same core, the exception-entry milestone program: a misaligned load takes
 # VEC_ALIGN, the pipeline flushes + saves state, and the vector-fetch FSM

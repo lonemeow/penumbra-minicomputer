@@ -24,9 +24,10 @@
 // redirects PC to it. ERET returns (SR←ESR, PC←EPC) and SYSCALL/BREAK raise as
 // traps at EX, both routed through that same entry/redirect path. External
 // interrupts take the asynchronous route — penumbra2_irq drains the pipeline
-// at a fetch boundary and reuses that same save-state + vector-fetch. Still not
-// wired: the MMU (both fault paths), the real BRAM-backed L1 caches, and RDSYS
-// (the SPR/sysreg read pipeline path). unified_mem is a stand-in with the
+// at a fetch boundary and reuses that same save-state + vector-fetch. RDSYS
+// reads CPU-internal sysreg devices (cpuid/machid) through the MEM sideband.
+// Still not wired: the MMU (both fault paths), the real BRAM-backed L1 caches,
+// and the WRSYS sysreg-write path. unified_mem is a stand-in with the
 // streaming registered-read contract the IF1/IF2 split and the MEM single-STALL
 // are built around — real BRAM-backed caches replace it later behind the IF and
 // dmem interfaces.
@@ -172,6 +173,11 @@ module penumbra2_core
     logic [3:0]  dmem_byte_en;
     logic        dmem_we, dmem_en;
 
+    // Sysreg sideband (MEM RDSYS read ↔ the CPU-internal device block)
+    logic [3:0]  sys_dev, sys_reg;
+    logic        sys_re;
+    logic [31:0] sys_rdata;
+
     // ══════════════════════════════════════════════════════════
     // IF1 — PC + fetch address generation
     // ══════════════════════════════════════════════════════════
@@ -219,6 +225,9 @@ module penumbra2_core
         .o_dmem_addr(dmem_addr), .o_dmem_wdata(dmem_wdata),
         .o_dmem_byte_en(dmem_byte_en), .o_dmem_we(dmem_we), .o_dmem_en(dmem_en),
         .i_dmem_rdata(dmem_rdata),
+        // Sysreg sideband — MEM's RDSYS read against the device block below.
+        .o_sys_dev(sys_dev), .o_sys_reg(sys_reg), .o_sys_re(sys_re),
+        .i_sys_rdata(sys_rdata),
         // Exception entry — drives the IF flush + the vector-fetch FSM below.
         // ERET commit redirects PC ← EPC through the same front-end path.
         .o_fault_commit(fault_commit), .o_fault_vec(fault_vec), .o_epc(epc),
@@ -280,6 +289,36 @@ module penumbra2_core
         .i_b_addr(dmem_addr), .i_b_wdata(dmem_wdata), .i_b_byte_en(dmem_byte_en),
         .i_b_we(dmem_we), .i_b_en(dmem_en), .o_b_rdata(dmem_rdata)
     );
+
+    // ══════════════════════════════════════════════════════════
+    // Sysreg device block — RDSYS read target (CPU-internal)
+    // ══════════════════════════════════════════════════════════
+    // RDSYS reads a CPU-internal sysreg device through MEM's sideband. The real,
+    // generation-agnostic identity devices answer combinationally; gen2
+    // registers the selected response so RDSYS runs as a 2-cycle access (the
+    // single-MEM-STALL contract, the mirror of unified_mem's registered read).
+    // WRSYS-writable devices (MMU, caches) attach here later behind the same
+    // selectors.
+    logic [31:0] cpuid_rdata, machid_rdata;
+    cpuid  u_cpuid  (.i_sys_reg(sys_reg), .o_sys_rdata(cpuid_rdata));
+    machid u_machid (.i_sys_reg(sys_reg), .o_sys_rdata(machid_rdata));
+
+    // The device-selected response (combinational), then registered into
+    // sys_rdata on the read strobe — the same read-clock-enable contract as
+    // unified_mem's port B (o_dmem_en gates dmem_rdata): capture on the strobe,
+    // hold otherwise, so the value is valid on MEM's data-ready cycle.
+    logic [31:0] sys_rdata_sel;
+    always_comb begin
+        case (sys_dev)
+            SYSDEV_CPU:  sys_rdata_sel = cpuid_rdata;
+            SYSDEV_MACH: sys_rdata_sel = machid_rdata;
+            default:     sys_rdata_sel = 32'b0;
+        endcase
+    end
+
+    always_ff @(posedge i_clk)
+        if (sys_re)
+            sys_rdata <= sys_rdata_sel;
 
     // ── Assertion (sim-only; stripped at synth) ──────────────────
     // A redirect target is word-aligned — for a branch (PC + off<<2, always

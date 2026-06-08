@@ -58,6 +58,12 @@ module penumbra2_spine
     output logic                  o_dmem_en,
     input  logic [31:0]           i_dmem_rdata,
 
+    // ── Sysreg sideband (MEM's RDSYS read port, exposed to the core) ──
+    output logic [3:0]            o_sys_dev,
+    output logic [3:0]            o_sys_reg,
+    output logic                  o_sys_re,
+    input  logic [31:0]           i_sys_rdata,
+
     // ── Exception entry (to the core: IF flush + vector-fetch FSM) ──
     output logic                  o_fault_commit,    // a fault is being taken this cycle
     output logic [3:0]            o_fault_vec,       // its vector number
@@ -111,6 +117,7 @@ module penumbra2_spine
     logic [31:0]         exmem_store_data;
     logic                exmem_gpr_we, exmem_spr_we, exmem_flag_we;
     logic [3:0]          exmem_spr_sel;
+    logic [3:0]          exmem_sys_dev, exmem_sys_reg;   // RDSYS sysreg selectors
     logic [31:0]         exmem_result, exmem_result_aux;
     logic [3:0]          exmem_flag_value;
     logic [SB_IDX_W-1:0] exmem_phys_dst, exmem_phys_dst_aux;
@@ -256,7 +263,7 @@ module penumbra2_spine
         .o_branch_taken(ex_branch_taken), .o_branch_target(o_branch_target),
         .o_op_class(exmem_op_class), .o_mem_op(exmem_mem_op),
         .o_mem_size(exmem_mem_size), .o_sign_ext(exmem_sign_ext),
-        .o_sys_dev(), .o_sys_reg(),
+        .o_sys_dev(exmem_sys_dev), .o_sys_reg(exmem_sys_reg),
         .o_spr_sel(exmem_spr_sel),
         .o_gpr_we(exmem_gpr_we), .o_spr_we(exmem_spr_we), .o_flag_we(exmem_flag_we),
         .o_result(exmem_result), .o_result_aux(exmem_result_aux),
@@ -290,6 +297,9 @@ module penumbra2_spine
         .o_dmem_addr(o_dmem_addr), .o_dmem_wdata(o_dmem_wdata),
         .o_dmem_byte_en(o_dmem_byte_en), .o_dmem_we(o_dmem_we),
         .o_dmem_en(o_dmem_en), .i_dmem_rdata(i_dmem_rdata),
+        .i_sys_dev(exmem_sys_dev), .i_sys_reg(exmem_sys_reg),
+        .o_sys_dev(o_sys_dev), .o_sys_reg(o_sys_reg),
+        .o_sys_re(o_sys_re), .i_sys_rdata(i_sys_rdata),
         .o_op_class(memwb_op_class),
         .o_gpr_we(memwb_gpr_we), .o_spr_we(memwb_spr_we), .o_flag_we(memwb_flag_we),
         .o_spr_sel(memwb_spr_sel),

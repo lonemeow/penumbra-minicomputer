@@ -55,9 +55,10 @@ purely a "where does this thing live?" index.
 
 ### Penumbra/2 core (`rtl/penumbra2/`)
 The gen2 6-stage pipelined core (design in `doc/internals/penumbra2/`).
-Runs straight-line/branch/load-store streams and the full synchronous +
-asynchronous exception lifecycle against a unified-memory stand-in; the
-MMU, real BRAM L1 caches, and RDSYS are not yet wired.
+Runs straight-line/branch/load-store streams, RDSYS reads of CPU-internal
+sysreg devices, and the full synchronous + asynchronous exception lifecycle
+against a unified-memory stand-in; the MMU, real BRAM L1 caches, and the
+WRSYS write path are not yet wired.
 - `penumbra2_core.sv` — top: front end (IF1/IF2 + unified memory) onto the
   spine, plus the vector-fetch FSM and interrupt unit.
 - `penumbra2_spine.sv` — ID→EX→MEM→WB integration: stages, regfile,

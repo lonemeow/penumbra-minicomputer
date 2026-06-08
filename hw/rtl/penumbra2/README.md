@@ -37,8 +37,10 @@ When EX resolves a branch taken it drives `o_branch_taken` /
 `o_branch_target`; the core steers the PC to the target via
 `if1.i_redirect` and bubbles the three wrong-path slots (IF1/IF2 via
 `i_redirect`/`i_flush`, ID via the spine's `ex_branch_taken` bubble) —
-the 3-bubble flush. Still not wired in the core: the I-side fault path
-(no MMU) and loads/stores (the MEM data path is still a skeleton).
+the 3-bubble flush. Loads/stores run through the MEM data path, and RDSYS
+reads CPU-internal sysreg devices (cpuid/machid) through the MEM sideband.
+Still not wired in the core: the I-side fault path (no MMU), the real
+BRAM-backed L1 caches, and the WRSYS sysreg-write path.
 
 Core-internal microarchitectural constants (scoreboard indices,
 `op_class` / `alu_op` / `mem_op` encodings) live in

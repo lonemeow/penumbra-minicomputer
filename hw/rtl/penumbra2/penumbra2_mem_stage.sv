@@ -24,17 +24,20 @@
 // later, behind this same dmem interface — the mirror of how the flat i-mem
 // gives way to the I-cache behind the IF interface.
 //
-// Deferred (still guarded out): RDSYS's sysreg sideband (o_sys_dev/o_sys_reg
-// drive + its own 1-cycle STALL). An assertion catches an RDSYS reaching the
-// stage rather than letting it forward a stale ALU result as sysreg data.
+// RDSYS shares the 2-cycle access FSM via the sysreg sideband: its launch
+// cycle drives o_sys_dev/o_sys_reg + the read strobe o_sys_re, and the device's
+// registered response arrives on i_sys_rdata the data-ready cycle (the same
+// single-STALL timing as a D-cache hit). WRSYS does not reach MEM — it commits
+// in EX as a drain-commit.
 //
-// Handshake: MEM back-pressures EX on (a) the first cycle of a memory access
-// and (b) whenever WB back-pressures it (i_stall_in). i_bubble (the
+// Handshake: MEM back-pressures EX on (a) the first cycle of a memory or sysreg
+// access and (b) whenever WB back-pressures it (i_stall_in). i_bubble (the
 // fault-commit flush from WB) forces the MEM/WB slot to a bubble, wins over
 // everything, and cancels an in-flight access (no store commit).
 //
 // The writeback value reaching WB is a single datum (o_wb_value): for a load
-// it is the extracted memory data, otherwise EX's result (the doc's
+// it is the extracted memory data, for RDSYS the sysreg response, otherwise
+// EX's result (the doc's
 // gpr_value and spr_value collapse here because no instruction both writes a
 // GPR and writes an SPR — WB routes the one value by the mutually exclusive
 // gpr_we / spr_we bits). o_wb_value_aux carries a dual write's second value.
@@ -47,7 +50,7 @@ module penumbra2_mem_stage
     input  logic                  i_rst,
 
     // ── EX/MEM input: the instruction leaving EX ─────────────────
-    input  logic [OPC_W-1:0]      i_op_class,        // for the deferred-path guard (RDSYS)
+    input  logic [OPC_W-1:0]      i_op_class,        // selects the RDSYS sysreg-read path
     input  logic [MEM_OP_W-1:0]   i_mem_op,          // MEM_NONE / MEM_LOAD / MEM_STORE
     input  logic [1:0]            i_mem_size,        // MEM_SZ_BYTE / MEM_SZ_HALF / MEM_SZ_WORD
     input  logic                  i_sign_ext,        // load: 1=sign-extend, 0=zero-extend
@@ -79,6 +82,19 @@ module penumbra2_mem_stage
     output logic                  o_dmem_en,
     input  logic [31:0]           i_dmem_rdata,
 
+    // ── Sysreg sideband (RDSYS read; same registered-response timing) ──
+    // RDSYS reads a CPU-internal sysreg device. MEM drives the device/register
+    // selectors and the read strobe o_sys_re (the launch clock-enable); the
+    // selected device's response is registered by the core and presented on
+    // i_sys_rdata the next cycle — so RDSYS runs as a 2-cycle access exactly
+    // like a D-cache hit. i_sys_dev/i_sys_reg come from the EX/MEM register.
+    input  logic [3:0]            i_sys_dev,
+    input  logic [3:0]            i_sys_reg,
+    output logic [3:0]            o_sys_dev,
+    output logic [3:0]            o_sys_reg,
+    output logic                  o_sys_re,
+    input  logic [31:0]           i_sys_rdata,
+
     // ── Pipeline handshake ───────────────────────────────────────
     input  logic                  i_stall_in,        // WB cannot accept this cycle
     input  logic                  i_bubble,          // force this insn to a bubble (fault flush from WB)
@@ -108,10 +124,14 @@ module penumbra2_mem_stage
     logic acc_phase, acc_phase_next;
 
     // ── Access classification + alignment check ──────────────────
-    logic is_load, is_store, is_mem;
+    logic is_load, is_store, is_mem, is_rdsys;
     assign is_load  = (i_mem_op == MEM_LOAD);
     assign is_store = (i_mem_op == MEM_STORE);
     assign is_mem   = i_valid & (is_load | is_store) & ~i_fault_pending;
+    // RDSYS reads a sysreg via the sideband. It shares the 2-cycle access FSM
+    // (launch drives the selectors + strobe, data-ready latches the registered
+    // response) but touches no data memory and has no alignment concept.
+    assign is_rdsys = i_valid & (i_op_class == OPC_RDSYS) & ~i_fault_pending;
 
     // Alignment: byte always OK; half needs EA[0]==0; word needs EA[1:0]==00.
     logic misaligned;
@@ -126,9 +146,10 @@ module penumbra2_mem_stage
     logic align_fault;
     assign align_fault = is_mem & misaligned;
 
-    // A real (aligned, un-flushed) memory access drives the data memory.
+    // A real, un-flushed access drives the 2-cycle FSM: an aligned memory
+    // access (data memory) or an RDSYS (sysreg sideband).
     logic do_access;
-    assign do_access = is_mem & ~misaligned & ~i_bubble;
+    assign do_access = ((is_mem & ~misaligned) | is_rdsys) & ~i_bubble;
 
     // ── 2-cycle access phase ─────────────────────────────────────
     // acc_phase 0 = launch cycle (drive address/read, assert STALL);
@@ -195,11 +216,23 @@ module penumbra2_mem_stage
     assign o_dmem_en      = is_load  & mem_first;
     assign o_dmem_we      = is_store & do_access & acc_phase & advance;
 
+    // ── Sysreg sideband drive ────────────────────────────────────
+    // Mirrors the load read: o_sys_re is the launch clock-enable that tells the
+    // core to register the selected device's response, valid on i_sys_rdata the
+    // next (data-ready) cycle. The selectors come straight from the EX/MEM
+    // register; they are stable across both cycles because EX is back-pressured.
+    assign o_sys_dev = i_sys_dev;
+    assign o_sys_reg = i_sys_reg;
+    assign o_sys_re  = is_rdsys & mem_first;
+
     // ── Writeback-value select ───────────────────────────────────
-    // A load delivers the extracted memory data; everything else forwards
-    // EX's result (ALU value / link / divmul low half / SPR write datum).
+    // A load delivers the extracted memory data, an RDSYS the registered sysreg
+    // response; everything else forwards EX's result (ALU value / link / divmul
+    // low half / SPR write datum).
     logic [31:0] wb_value;
-    assign wb_value = is_load ? load_data : i_result;
+    assign wb_value = is_load  ? load_data
+                    : is_rdsys ? i_sys_rdata
+                    :            i_result;
 
     // ── Fault merge (alignment) ──────────────────────────────────
     // An incoming fault (from upstream) takes priority over a freshly
@@ -208,15 +241,6 @@ module penumbra2_mem_stage
     logic [3:0] mem_fault_vec;
     assign mem_fault_pending = i_fault_pending | align_fault;
     assign mem_fault_vec     = i_fault_pending ? i_fault_vec : VEC_ALIGN;
-
-    // ── Deferred-path guard ──────────────────────────────────────
-    // RDSYS's sysreg sideband is not wired yet (no o_sys_dev/o_sys_reg drive,
-    // no sysreg-read STALL), so an RDSYS reaching here would forward a stale
-    // ALU result as if it were the sysreg datum. Loads/stores now flow.
-    always_comb begin
-        assert (!i_valid || i_op_class != OPC_RDSYS)
-            else $error("penumbra2_mem_stage: RDSYS reached MEM (sysreg sideband not wired)");
-    end
 
     // A real memory access never carries the reserved size encoding — decode
     // emits only the three defined sizes. If this fires, an illegal Format M
