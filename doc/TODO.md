@@ -853,6 +853,39 @@ Test surface grew from 42 → 76 assertions on `tb_l2_cache`,
 including multi-set independence, byte-en accumulation, and the
 post-reset-walker pass-through demotion contract.
 
+## Hardware: Penumbra/2 L1↔L2 arbiter + fill sequencer + BRAM L1
+
+The gen2 memory subsystem below the pipeline, not yet built: the
+split BRAM-backed L1 caches, the I/D arbiter merging their miss
+streams onto the single L2 port, and the fill sequencer driving the
+L2→L1 line transfer. The gen2 core runs against the dual-port
+`unified_mem` stand-in today. Design is settled — Decision 14 in
+`doc/internals/penumbra2/design-decisions.md`, full spec in
+`doc/internals/penumbra2/memory-interface.md`.
+
+Scope, in dependency order:
+
+- **BRAM-backed L1** (`cache_bram_vipt.sv`, per Decision 11):
+  registered hit, VIPT (≤ page per way), write-through /
+  write-no-allocate. 4-way is the lean, gated on the IF2
+  tag-compare / way-mux critical path at synthesis.
+- **Transactional I/D arbiter**: transaction-granular grant,
+  single-outstanding, D-priority, type-dependent completion (line
+  read → fill-done; single-beat → busy-drop). Replaces — does not
+  reuse — gen1's `cpu_bus_arbiter`.
+- **Fill sequencer**: atomic full-line, no critical-word-first; owns
+  the L2→L1 line read.
+
+The shared L2 stays untouched; its read-pipeline initiation interval
+is the fill-penalty floor, characterised by
+`test_back_to_back_read_throughput` in `hw/sim/tb_l2_cache.cpp`.
+Deferred fill-speed directions (L2 initiation-interval decouple, wide
+datapath, write buffer) are gated on gen2 bottleneck measurements.
+
+Sequence after the in-flight gen2 D-side MMU integration: the L1 sits
+behind translation, so the MMU lands first, then the L1 + arbiter +
+fill sequencer replace the `unified_mem` stand-in.
+
 ## Hardware: L2 phase 2 — write-back / write-allocate
 
 The headline remaining cache optimization, and the highest-impact
@@ -894,6 +927,11 @@ Forward-looking note on perfctrs: the reserved slots at
 `WRITEBACKS` post-phase-2, directly answering "did WA's read-fill
 cost pay back via intra-line locality."
 
+gen2 note: the L1↔L2 interface is designed to not foreclose this — it
+stays neutral about L2's write policy (the arbiter is L1-facing; WB/WA
+are L2-internal and L2↔memory concerns). See the write-policy-neutrality
+section of `doc/internals/penumbra2/memory-interface.md`.
+
 ## Hardware: L2 write buffer (latency-hiding alternative)
 
 A smaller, orthogonal option to WB phase 2: a 1-4 word write
@@ -928,6 +966,12 @@ When phase 2 is required instead:
 
 They compose: WB phase 2 + write buffer (= phase 3 in the L2 doc)
 is the maximally aggressive design.
+
+gen2 note: `doc/internals/penumbra2/memory-interface.md` keeps writes
+a distinct single-beat shape so a buffer drops in cleanly, and leans
+its placement *after* L2 for exactly the byte-en-update reason above;
+it lists the buffer as a deferred fill-speed direction gated on gen2
+measurements.
 
 ## Hardware: read-miss fills pay 1-2 unnecessary cycles re-classifying
 
@@ -965,6 +1009,19 @@ pipelined Penumbra/2 each saved cycle is one fewer dependent-chain
 stall, and the higher target clock makes each cycle more expensive
 in wall time, so the optimization is higher-leverage there than the
 bare cycle counts suggest now.
+
+**Update — Penumbra/2 design settled.** gen2's L1↔L2 interface takes
+an *atomic full-line* fill (Decision 14 in
+`doc/internals/penumbra2/design-decisions.md`; spec in
+`doc/internals/penumbra2/memory-interface.md`), which splits the two
+variants above by gen2-compatibility. **Variant 1 (skip
+re-classification)** keeps the whole line present, so it is compatible
+— gen2 may take it. **Variant 2 (early restart)** is deferred to the
+non-blocking phase: serving a word before the line completes punctures
+the transaction-atomicity invariant the gen2 arbiter and fill path
+rely on (it forces per-word presence, hit-under-fill stalls, and
+fill-vs-store / fill-vs-flush handling). So for gen2, early restart is
+explicitly not the win the preceding paragraph assumed.
 
 The L1-side win is more impactful than the raw cycle counts imply,
 in a way that scales with L2 hit rate.  An L1 miss that hits in L2
