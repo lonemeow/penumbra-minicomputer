@@ -17,6 +17,25 @@ Two parallel lookup structures, combined with pinned-hit-wins priority:
 2. **Lookup:** 8-wide parallel VPN + ASID comparators.
 3. **Priority:** Pinned hit masks main TLB result.
 
+### Indexed readback (TLB enumeration)
+
+The sysreg interface reads entries back by index (`TLB_INDEX` selects a
+{set, way} or pinned slot; `TLB_VPN`/`TLB_PTE` return that slot's
+contents). This read direction is **load-bearing, not diagnostic**: it
+is how software enumerates which slots are resident during selective
+invalidation (TLB shootdown by address or by ASID).
+
+The reason readback cannot be elided: the TLB is the only record of
+*slot occupancy*. The page tables are authoritative for translations
+(VA→PA), but they are keyed by VA, not by hardware slot — and the miss
+handler installs a refilled entry into a hardware-chosen slot without
+the kernel tracking where. So to invalidate "the entry for this VA" or
+"every entry for this ASID," software reads slots back to find the
+matching one(s). Eliminating readback would require a software shadow
+of every slot's contents, updated on the (hot) miss path — a worse
+trade than the (cold) readback probe. Treat readback as a permanent
+part of the sysreg contract.
+
 ## Discrete 74xx Feasibility
 
 ### Main TLB

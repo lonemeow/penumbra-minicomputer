@@ -51,6 +51,7 @@ section at the bottom of this document for pointers.
 | [10](#10-stall-propagation-policy-back-pressure) | Stall propagation policy (back-pressure) | 2026-05-24 |
 | [11](#11-bram-backed-caches-with-single-mem-stall) | BRAM-backed caches with single-MEM-STALL | 2026-05-24 |
 | [12](#12-nzcv-flag-forwarding) | NZCV flag forwarding (refines Decision 4) | 2026-06-01 |
+| [13](#13-gen2-tlb-bram-backed-registered-translation-commit-time-fault-latch) | gen2 TLB: BRAM-backed registered translation, commit-time fault latch (refines Decision 7/11) | 2026-06-08 |
 
 ---
 
@@ -1256,6 +1257,153 @@ justify pulling GPR forwarding forward with them). Model NZCV with a
 dedicated flag-reader stall term in the scoreboard instead of forwarding
 (rejected: it would still cost ~3 cycles per branch — the very loss this
 eliminates — and keeps NZCV state in the scoreboard).
+
+---
+
+## 13. gen2 TLB: BRAM-backed registered translation, commit-time fault latch
+
+**Date:** 2026-06-08
+
+**Refines** [Decision 7](#7-cache-and-mmu-reuse-strategy) and
+[Decision 11](#11-bram-backed-caches-with-single-mem-stall). Those said
+the TLB is "reused unchanged" and "stays distributed-RAM async lookup."
+The sysreg interface, TLB geometry, PTE format, and translation
+semantics *are* reused unchanged — but the storage/timing realization
+of the main TLB is not. Penumbra/2 gets a **new BRAM-backed, registered
+main TLB**, exactly as the L1 cache became a new BRAM module beside the
+single-cycle core's distributed one. This entry records why, and the two
+integration changes that follow.
+
+**Context.** Two pipeline facts and one VIPT observation drive this.
+
+1. **Two concurrent translations.** IF1 translates the PC for the
+   I-cache tag while MEM translates the effective address for the
+   D-cache tag, in the same cycle, for two different instructions. One
+   read port cannot serve both.
+2. **Faults commit out of step with detection.** A fetch fault is
+   detected in IF2 and a data fault in MEM, but either is only *taken*
+   at WB, in program order, and may be squashed first by an older branch
+   or an older fault. `MMU_FADDR`/`MMU_FSTAT` must reflect the fault that
+   actually retires, never a younger one that was detected and flushed.
+3. **VIPT does not need the translation in the addressing cycle.** The
+   L1 cache is *indexed by the virtual address* and only *tag-compared
+   against the physical address*. So the TLB's physical address is not
+   needed when the cache RAM is addressed — only one cycle later, at the
+   tag-compare + permission step (IF2 for fetch, the MEM data-ready cycle
+   for data). The single-cycle core needs a combinational verdict only
+   because it has no later stage to catch a registered one; the pipeline
+   does. The TLB can therefore be a **synchronous (BRAM) lookup**, just
+   like the cache, instead of distributed-RAM async.
+
+**Decision.**
+
+1. **New BRAM-backed, registered main TLB for Penumbra/2** (a new
+   module beside the single-cycle core's distributed `tlb.sv`, which is
+   left untouched). The lookup is pipelined: the query (set index + VPN +
+   ASID + access type) is registered when the address is driven; the
+   BRAM read, way compare, and permission check resolve in the next
+   stage, where the cache tag compare already lives. No extra fetch or
+   data latency — the cycle already exists for the BRAM cache.
+
+2. **The two concurrent translation ports come from ECP5 EBR's native
+   true-dual-port**, from a single copy of storage — no mirroring:
+
+   | EBR port | Use |
+   |----------|-----|
+   | A | **I-side** translate (PC, `ACC_EXEC`) — every fetch |
+   | B | **D-side** translate ∥ sysreg readback ∥ sysreg write |
+
+   Port B's three duties are mutually exclusive in time: a D-side
+   translate (load/store in MEM) and a sysreg readback (RDSYS in MEM)
+   are different instructions; a sysreg write (WRSYS TLB fill) is a
+   drain-commit, so the pipe is empty and no D translate is in flight.
+   One R/W port covers all three with no conflict.
+
+3. **The pinned TLB stays a flop fully-associative array**, compared
+   combinationally in the tag-compare stage, pinned-hit-wins — unchanged.
+   8-entry FA in BRAM would be awkward and buys nothing; flops keep the
+   "pinned never misses" guarantee simple.
+
+4. **A single MMU control block** owns `MMUCR`/ASID, the sysreg read
+   mux, the alignment check, and the fault registers. Fault information
+   (faulting vaddr + access info) rides the EX/MEM and MEM/WB registers
+   alongside the fault vector already carried, and `MMU_FADDR`/`MMU_FSTAT`
+   latch from a commit strobe driven at WB — so a detected-then-squashed
+   younger fault never becomes architectural.
+
+**Rationale.**
+
+- **VIPT decouples index-time from tag-time.** The cache index needs
+  only the vaddr; the paddr is needed a cycle later for the tag compare.
+  That slack is exactly what lets the TLB be a registered RAM at no added
+  latency — the same "stop demanding the answer this cycle, absorb a BRAM
+  register" move the L1 cache made in
+  [Decision 11](#11-bram-backed-caches-with-single-mem-stall).
+- **It shortens the fetch/TLB critical path.** The distributed-RAM TLB
+  put the full read + compare + permission into the addressing cycle
+  (IF1), the limiter the fetch/TLB path has been. Registered-BRAM splits
+  it: IF1 registers indices (trivial); compare + permission move to IF2
+  beside the cache tag compare. Each half is shorter than the combined
+  cone — a likely fmax win, to be confirmed in synthesis rather than
+  assumed.
+- **EBR dual-port gives both translation ports from one storage copy.**
+  The "two concurrent translations" problem is solved by the RAM
+  primitive itself, with no bank mirroring and no read-address muxing.
+- **The D-side costs nothing.** The MEM single-STALL already provides a
+  launch cycle and a data-ready cycle; the TLB BRAM read overlaps the
+  D-cache BRAM read in that same window.
+- **Commit-time latching preserves architectural fault state**, and
+  **readback is retained** because it is the load-bearing TLB-shootdown
+  primitive (the TLB is the only record of slot occupancy — see
+  [mmu-internals.md](../mmu-internals.md)). RDSYS is already a 2-cycle
+  MEM access, so a synchronous-read readback fits with no ISA change.
+- **Consistent with the gen2 premise.** The discrete-74xx constraint
+  that justified distributed/async RAM is abandoned for Penumbra/2 (the
+  premise of [Decision 11](#11-bram-backed-caches-with-single-mem-stall)),
+  so BRAM is in scope here exactly as it is for the cache.
+
+**Consequences.**
+
+- A new BRAM-backed main-TLB module (registered lookup, EBR dual-port)
+  lives in the gen2 tree. The single-cycle core's `tlb.sv` /
+  `tlb_unit.sv` are untouched.
+- `mmu.sv` is parameterized to instantiate either TLB realization (the
+  same way the core selects its cache), and replaces the internal
+  detect-time fault latch with an external commit strobe + fault-info
+  inputs. The single-cycle core drives the strobe at detection;
+  Penumbra/2 drives it at WB.
+- The compare + permission cone moves from the addressing stage to the
+  tag-compare stage (IF2 / MEM data-ready). Synthesis must confirm that
+  stage does not become the new limiter (structurally it is the textbook
+  parallel-VIPT shape).
+- The Penumbra/2 EX/MEM and MEM/WB registers widen by the faulting
+  vaddr + access bits.
+- No change to the sysreg map, TLB geometry, PTE format, or translation
+  semantics — a kernel's MMU code is unaffected. The WRSYS resync /
+  drain-commit context-sync story is unchanged.
+
+**Alternatives considered.**
+
+- *Keep the distributed-RAM combinational TLB and translate in the
+  addressing cycle* (the reuse-the-single-cycle-TLB path; rejected: it
+  forces read + compare + permission into IF1, keeping the fetch/TLB
+  cone long, and a second concurrent port then needs storage mirroring —
+  BRAM + a pipeline register removes both costs for free, since gen2
+  already has the cycle).
+- *Mirror the distributed banks for a second read port and address-mux
+  the sysreg port* (an earlier draft of this decision; rejected: it adds
+  a storage mirror and a muxed-port compare cone to work around a
+  single-read-port limit that EBR's native dual-port does not have).
+- *Two whole MMU/TLB instances fed the same sysreg writes* (rejected:
+  duplicates `MMUCR`, ASID, fault latch, and storage; coherence burden,
+  and two fault registers where the ISA has one).
+- *Separate I-TLB and D-TLB, independently refilled* (rejected for now:
+  more machinery than a shared software-managed TLB needs; revisit if a
+  split buys fmax later).
+- *BRAM-ify the pinned TLB too* (rejected: 8-entry FA in BRAM is awkward
+  and buys nothing).
+- *Detect-time fault latching in Penumbra/2* (rejected: a younger
+  detected-then-squashed fault would corrupt `MMU_FADDR`/`MMU_FSTAT`).
 
 ---
 
