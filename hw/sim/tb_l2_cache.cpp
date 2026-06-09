@@ -848,6 +848,93 @@ static void test_perfctrs_during_post_reset_walk(Vl2_cache* d) {
 }
 
 // ══════════════════════════════════════════════════════════════
+// Throughput characterization: back-to-back cached read hits.
+//
+// HIT_LATENCY=2 is a *latency* property (data lands 2 cycles after
+// a request is accepted).  This test measures *throughput* — the
+// initiation interval (II), i.e. the cycle gap between consecutive
+// accepted read hits when a requester streams addresses instead of
+// waiting for each word's busy to drop.  That streaming pattern is
+// exactly the L2→L1 line-fill access (four consecutive words of one
+// resident line).
+//
+// Every other test here uses the wait-for-busy single-outstanding
+// pattern, which serialises by construction and cannot observe II.
+// This driver advances i_addr on every cycle o_busy is low.
+//
+// The storage path (tag/data/valid BRAM reads off i_addr, launched
+// every cycle — l2_cache.sv:195/240/294) is already II=1-capable;
+// the stage-0 latch gate `!s1_valid` (l2_cache.sv:682) is what
+// holds a new request out of stage 1 for an extra cycle, giving
+// II=2.  This test locks the current II=2 baseline.  When the
+// read-pipeline decouple lands, flip EXPECTED_II to 1 — the test
+// then proves the decouple works and that data stays correct.
+static void test_back_to_back_read_throughput(Vl2_cache* d) {
+    printf("── Back-to-back read-hit throughput (initiation interval) ──\n");
+    reset(d);
+    wrsys(d, 1, 1);            // CTRL.enable = 1
+    MemMock mem;
+
+    const uint32_t base   = 0x4000;
+    const int      NWORDS = 4;
+
+    // Prime the line: first read misses and fills all 4 words.
+    d->i_addr = base; d->i_cacheable = 1; d->i_re = 1; d->eval();
+    int safety = 0;
+    while (d->o_busy && safety++ < 100)
+        tick_with_mem(d, mem, 2, rdata_addr_complement);
+    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+    uint32_t served_after_prime = mem.served_count;
+
+    // Stream the 4 words.  On every cycle o_busy is low, record the
+    // tick index + data for the in-flight word and advance i_addr to
+    // the next word.  o_rdata on a busy-low cycle is the stage-1
+    // (s1) word, not the just-set i_addr — so capture before advancing.
+    int      valid_tick[NWORDS] = {0};
+    uint32_t got[NWORDS]        = {0};
+    int      word = 0;
+    d->i_addr = base; d->i_cacheable = 1; d->i_re = 1; d->eval();
+    int t = 0;
+    safety = 0;
+    while (word < NWORDS && safety++ < 64) {
+        if (!d->o_busy) {
+            valid_tick[word] = t;
+            got[word]        = d->o_rdata;
+            word++;
+            if (word < NWORDS) { d->i_addr = base + 4 * word; d->eval(); }
+        }
+        tick_with_mem(d, mem, 0, rdata_addr_complement);
+        t++;
+    }
+    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+
+    check_bool("throughput.all_four_served", word == NWORDS, true);
+
+    // All four hit — no downstream memory traffic during the stream.
+    check("throughput.no_memory_traffic_on_hits",
+          mem.served_count, served_after_prime);
+
+    // Data correctness across the pipelined stream.
+    for (int i = 0; i < NWORDS; i++) {
+        char name[48];
+        snprintf(name, sizeof(name), "throughput.data_word%d", i);
+        check(name, got[i], rdata_addr_complement(base + 4 * i));
+    }
+
+    // Initiation interval = gap between consecutive data-valid cycles.
+    const int EXPECTED_II = 2;   // II=2 today; → 1 after the decouple.
+    for (int i = 1; i < NWORDS; i++) {
+        int gap = valid_tick[i] - valid_tick[i - 1];
+        char name[48];
+        snprintf(name, sizeof(name), "throughput.ii_word%d_%d", i - 1, i);
+        check(name, (uint32_t)gap, (uint32_t)EXPECTED_II);
+    }
+    printf("   measured II = %d cycle(s)/word (data-valid ticks %d,%d,%d,%d)\n",
+           valid_tick[1] - valid_tick[0],
+           valid_tick[0], valid_tick[1], valid_tick[2], valid_tick[3]);
+}
+
+// ══════════════════════════════════════════════════════════════
 
 int main() {
     Vl2_cache* d = new Vl2_cache;
@@ -866,6 +953,7 @@ int main() {
     test_byte_en_accumulation(d);
     test_perfctrs_inval_all(d);
     test_perfctrs_during_post_reset_walk(d);
+    test_back_to_back_read_throughput(d);
 
     printf("\nl2_cache: %d/%d tests passed\n", tests - errors, tests);
     if (errors > 0)
