@@ -52,6 +52,7 @@ section at the bottom of this document for pointers.
 | [11](#11-bram-backed-caches-with-single-mem-stall) | BRAM-backed caches with single-MEM-STALL | 2026-05-24 |
 | [12](#12-nzcv-flag-forwarding) | NZCV flag forwarding (refines Decision 4) | 2026-06-01 |
 | [13](#13-gen2-tlb-bram-backed-registered-translation-commit-time-fault-latch) | gen2 TLB: BRAM-backed registered translation, commit-time fault latch (refines Decision 7/11) | 2026-06-08 |
+| [14](#14-l1l2-memory-interface-and-id-arbitration) | L1↔L2 memory interface and I/D arbitration (refines 7/11/13) | 2026-06-08 |
 
 ---
 
@@ -1404,6 +1405,112 @@ integration changes that follow.
   and buys nothing).
 - *Detect-time fault latching in Penumbra/2* (rejected: a younger
   detected-then-squashed fault would corrupt `MMU_FADDR`/`MMU_FSTAT`).
+
+---
+
+## 14. L1↔L2 memory interface and I/D arbitration
+
+**Date:** 2026-06-08
+
+*Refines [Decision 7](#7-cache-and-mmu-reuse-strategy),
+[Decision 11](#11-bram-backed-caches-with-single-mem-stall), and
+[Decision 13](#13-gen2-tlb-bram-backed-registered-translation-commit-time-fault-latch).
+The full interface specification — transaction taxonomy, fill path,
+obligation list — lives in
+[memory-interface.md](./memory-interface.md); this entry records the
+decision and its rationale.*
+
+**Context.** gen2's split I/D L1 caches (BRAM-backed, per Decision 11)
+each handle hits internally and present a back-side request on a miss,
+a write, or an uncacheable access. Two L1 masters must serialise onto
+the single CPU-facing port of the shared L2 (Decision 7). gen1 already
+has an arbiter (`hw/rtl/penumbra1/cpu_bus_arbiter.sv`) for exactly this
+merge, so the question is whether to reuse it — and, separately, how
+the L2→L1 fill path should be shaped now that L1 is BRAM-backed.
+
+**Decision.** Do not reuse the gen1 arbiter. The gen2 L1↔L2 interface
+is:
+
+- a **transaction-granular I/D merge plus a dedicated fill sequencer**,
+  replacing `cpu_bus_arbiter`;
+- an **atomic full-line fill**, single-outstanding, **no
+  critical-word-first / early restart**;
+- **neutral about L2's write policy** (write-through today, but the
+  interface does not foreclose a write-back / write-allocate L2).
+
+**Rationale.**
+
+- **The gen1 arbiter's reason for existing does not transfer.** It
+  registers the outgoing request to break a *combinational
+  cross-coupling* between the two L1 ports that pinned gen1's
+  single-cycle critical path. In gen2, L1 hits are registered (BRAM)
+  and off the critical path, so that structural problem does not
+  arise.
+- **Its handshake is the wrong shape.** The gen1 arbiter's per-word
+  `req_accepted` pulse models the L1 *pulling* words through a shared
+  bus. gen2 drives a fill as one line transaction from a sequencer, so
+  the per-word handshake is machinery to discard, not reuse.
+- **The arbiter is not the fill-speed limiter.** The L2 read
+  pipeline's initiation interval sets the fill-penalty floor; reusing
+  the gen1 arbiter would carry a critical-path device for a problem it
+  does not solve.
+- **Pure-stall makes single-outstanding sufficient.** Back-pressure
+  (Decision 10) freezes the pipeline during any miss, bounding
+  concurrent demand to one in-flight I-miss plus one in-flight D-miss
+  — never a queue. Single-outstanding then makes the arbiter tag-free
+  and makes uncacheable, sub-word, and write ordering trivially
+  correct (program order = bus order, no write-during-fill).
+- **Atomic fill, no early restart.** Critical-word-first early restart
+  would puncture the transaction-atomicity invariant the whole
+  interface relies on (it forces per-word presence bits, hit-under-fill
+  stalls, fill-vs-store and fill-vs-flush handling). That is
+  non-blocking-era work; the latency it would save is recoverable later
+  via a wider datapath without the hazard surface.
+- **Write-policy neutrality.** The arbiter is L1-facing; write-back and
+  write-allocate are L2-internal and L2↔memory concerns, so the
+  interface is naturally insulated. Keeping it neutral lets gen2.5
+  revisit L2 write policy from measured gen2 data rather than a guess.
+
+**Consequences.**
+
+- **New gen2 modules:** the I/D transactional arbiter and the fill
+  sequencer (alongside the new BRAM L1 from Decision 11).
+- **L2 (`l2_cache.sv`) is untouched.** Its read-pipeline initiation
+  interval is the fill-penalty floor; a characterisation test
+  (`test_back_to_back_read_throughput` in `hw/sim/tb_l2_cache.cpp`)
+  measures it so any future change is verifiable against a baseline.
+- **The interface obligations** — forward `byte_en` on both reads and
+  writes, gate speculation/line-fill on `cacheable`, type-dependent
+  completion, layer-scoped "single-beat," the write-through cascade,
+  and MMIO read lane-enable preservation — are specified in
+  [memory-interface.md](./memory-interface.md).
+- **Deferred, measurement-gated directions:** the L2 read-pipeline
+  decouple, a wide L1↔L2 datapath, a write buffer, and the L2 write
+  policy itself (write-back / ±write-allocate) are all left to gen2
+  bottleneck data, not committed here.
+
+**Alternatives considered.**
+
+- *Reuse `cpu_bus_arbiter` as-is* (rejected: built to break a gen1
+  critical-path cross-coupling that does not arise in gen2; its
+  per-word handshake is the wrong shape for sequencer-driven line
+  fills).
+- *Dual-ported L2 to avoid an I/D arbiter* (rejected: the system bus is
+  a single resource, so an arbiter is unavoidable somewhere;
+  dual-porting L2 only relocates it to the L2↔memory side while adding
+  L2 lookup/bank-conflict complexity).
+- *Critical-word-first / early restart for lower fill latency*
+  (rejected for gen2: punctures the atomicity invariant — per-word
+  presence, hit-under-fill, fill-vs-store, fill-vs-flush — which is
+  non-blocking-era work; the same latency is recoverable later via a
+  wide datapath without that complexity).
+- *Wide L1↔L2 datapath now* (deferred: needs an L2 storage
+  reorganisation; gen2 keeps L2 unchanged and leaves width to a
+  measured gen2.5/gen3 step).
+- *L2 read-pipeline decouple now* (deferred: modest gain at the current
+  line length, superseded by a future wide datapath, and not worth the
+  verification burden on a proven shared module ahead of gen2
+  bottleneck data).
 
 ---
 

@@ -279,6 +279,9 @@ detail:
 - `regfile.md` — 2R/1W regfile (read-port replication, single-port
   divmul write sequencing), R14 banking, USP/SSP storage.
 - `cache-bram-vipt.md` — the new BRAM-backed L1 cache module.
+- [`memory-interface.md`](./memory-interface.md) — L1↔L2 arbitration,
+  the line fill path, and the transaction taxonomy (uncacheable /
+  sub-word / write handling).
 
 ## Status
 
