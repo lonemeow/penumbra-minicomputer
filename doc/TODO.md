@@ -1256,6 +1256,20 @@ instructions) while only shrinking the rarely-used i64 three-way compares
 alongside a custom `G_SCMP`/`G_UCMP` lowering that keeps the i32
 SELECT-chain.
 
+## Compiler: pr23135.c fails at -O0 (pre-existing, found in opt-level sweep)
+
+The 2026-06-09 full-suite sweep across opt levels (-O0/-O1/-O2 — the
+routine `make test-compiler` gate only runs -O2) found exactly one
+failure: `Regression/C/gcc-c-torture/execute/pr23135.c` (GCC
+generic-vector arithmetic, `vector_size` attribute) exits 127 on the
+ISS at **-O0 only**; -O1 and -O2 pass 1607/1607.  Bisected against the
+Localizer change by rebuilding with the pass disabled — fails
+identically, so it is pre-existing.  Likely an -O0-specific gap in the
+vector scalarization path (the `optnone_combines` set lacks rules the
+-O1+ pipeline has).  Not excluded in `test/compiler/excludes.txt`
+because exclusion is opt-level-blind and would drop the passing -O2
+coverage; expect this one known failure in -O0 sweeps until triaged.
+
 ## Compiler: codegen pass/gate audit — what we leave at the default
 
 Audited 2026-06-09 after the shrink-wrapping discovery: Penumbra
