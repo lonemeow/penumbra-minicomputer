@@ -886,6 +886,22 @@ Sequence after the in-flight gen2 D-side MMU integration: the L1 sits
 behind translation, so the MMU lands first, then the L1 + arbiter +
 fill sequencer replace the `unified_mem` stand-in.
 
+**Valid-bit storage — flops, not BRAM (single-cycle flush + reset).**
+The L1 valid bits must live in a bulk-clearable flop array, not packed
+into the tag/data BRAM. L1-I flush runs on every exec-page load and has
+to be ~1 cycle; a RAM port writes one address per cycle, so BRAM-resident
+valids force an O(lines) clear walk — unacceptable at flush rate. A flop
+array clears every line in one cycle from a single `flush` net, and that
+same flash serves reset, so there is no reset walk for L1 either. Tags
+and data stay in BRAM, never explicitly cleared, masked by `valid=0`.
+The `tlb_bram` valid handling is the template: valid in a flop vector,
+sampled and registered to align with the BRAM output a cycle later. The
+L2 is the opposite corner — large valid array, no runtime-flush caller
+(PIPT) — so its reset clear can be a sequenced multi-cycle walk; that,
+plus uniform hold-core-until-`init_done` bring-up, is what a multi-cycle
+reset sequencer is for (reset axis only, orthogonal to flush; scoped
+with the L2 rework that de-hacks the post-reset-walk-while-live).
+
 ## Hardware: L2 phase 2 — write-back / write-allocate
 
 The headline remaining cache optimization, and the highest-impact
