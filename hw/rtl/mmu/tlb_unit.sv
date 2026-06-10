@@ -122,6 +122,10 @@ module tlb_unit
     logic        pin_cacheable, pin_hit, pin_fault;
     logic [31:0] pin_read_vpn, pin_read_pte;
 
+    // Port B (DUAL_TRANSLATE) is unused in the single-cycle core: tie its
+    // inputs off and leave its outputs open. With DUAL_TRANSLATE=0 the
+    // port-B cone is not generated, so this is purely interface plumbing.
+    /* verilator lint_off PINCONNECTEMPTY */
     tlb_pinned #(
         .NUM_ENTRIES (PINNED_SLOTS)
     ) u_pinned (
@@ -137,6 +141,15 @@ module tlb_unit
         .o_hit          (pin_hit),
         .o_fault        (pin_fault),
         .o_fault_status (pin_fault_status),
+        .i_b_vaddr       (32'b0),
+        .i_b_access_type (3'b0),
+        .i_b_user_mode   (1'b0),
+        .i_b_lookup_en   (1'b0),
+        .o_b_paddr       (),
+        .o_b_cacheable   (),
+        .o_b_hit         (),
+        .o_b_fault       (),
+        .o_b_fault_status(),
         .i_idx          (tlb_index_reg[PINNED_IDX_W-1:0]),
         .i_write_vpn    (tlb_vpn_reg),
         .i_write_pte    (i_sys_wdata),
@@ -144,6 +157,7 @@ module tlb_unit
         .o_read_vpn     (pin_read_vpn),
         .o_read_pte     (pin_read_pte)
     );
+    /* verilator lint_on PINCONNECTEMPTY */
 
     // ══════════════════════════════════════════════════════════
     // Combined lookup: pinned hit takes priority

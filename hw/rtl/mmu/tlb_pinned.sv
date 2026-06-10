@@ -33,12 +33,16 @@
 module tlb_pinned
     import penumbra_pkg::*;
 #(
-    parameter NUM_ENTRIES = 8
+    parameter NUM_ENTRIES = 8,
+    // DUAL_TRANSLATE=1 adds a second concurrent lookup port (B). The entry
+    // flops feed any number of comparators, so port B is a replicated
+    // combinational cone — no second storage. =0 generates none of it.
+    parameter bit DUAL_TRANSLATE = 1'b0
 ) (
     input  logic        i_clk,
     input  logic        i_rst,
 
-    // ── Lookup interface (parallel with main TLB) ─────────
+    // ── Lookup port A (parallel with main TLB) ────────────
     input  logic [31:0] i_vaddr,
     input  logic [2:0]  i_access_type,  // ACC_READ / ACC_WRITE / ACC_EXEC
     input  logic        i_user_mode,
@@ -50,6 +54,17 @@ module tlb_pinned
     output logic        o_hit,
     output logic        o_fault,
     output logic [31:0] o_fault_status,
+
+    // ── Lookup port B (DUAL_TRANSLATE only) — shares i_asid ──
+    input  logic [31:0] i_b_vaddr,
+    input  logic [2:0]  i_b_access_type,
+    input  logic        i_b_user_mode,
+    input  logic        i_b_lookup_en,
+    output logic [31:0] o_b_paddr,
+    output logic        o_b_cacheable,
+    output logic        o_b_hit,
+    output logic        o_b_fault,
+    output logic [31:0] o_b_fault_status,
 
     // ── Indexed read/write (sysreg access) ─────────────────
     input  logic [$clog2(NUM_ENTRIES)-1:0] i_idx,  // Slot index
@@ -154,6 +169,83 @@ module tlb_pinned
             end
         end
     end
+
+    // ══════════════════════════════════════════════════════════
+    // Lookup port B (DUAL_TRANSLATE) — second concurrent reader of the
+    // same entry flops; mirrors the port-A cone above.
+    // ══════════════════════════════════════════════════════════
+    generate
+    if (DUAL_TRANSLATE) begin : gen_port_b
+        logic [19:0] lookup_vpn_b;
+        assign lookup_vpn_b = i_b_vaddr[31:12];
+
+        logic [NUM_ENTRIES-1:0] entry_match_b;
+        for (genvar gb = 0; gb < NUM_ENTRIES; gb++) begin : gen_match_b
+            logic [19:0] eb_vpn;
+            logic [7:0]  eb_asid;
+            logic        eb_v, eb_g;
+            assign eb_vpn  = entries_vpn[gb][27:8];
+            assign eb_asid = entries_vpn[gb][7:0];
+            assign eb_v    = entries_pte[gb][TLB_V];
+            assign eb_g    = entries_pte[gb][TLB_G];
+            assign entry_match_b[gb] = eb_v
+                                    && (eb_vpn == lookup_vpn_b)
+                                    && (eb_g || (eb_asid == i_asid));
+        end
+
+        logic        matched_b, perm_ok_b;
+        logic [19:0] matched_ppn_b;
+        logic        matched_c_b, matched_u_b;
+        logic [2:0]  matched_rwx_b;
+
+        always_comb begin
+            matched_b        = 1'b0;
+            matched_ppn_b    = 20'b0;
+            matched_c_b      = 1'b0;
+            matched_u_b      = 1'b0;
+            matched_rwx_b    = 3'b0;
+            perm_ok_b        = 1'b0;
+            o_b_hit          = 1'b0;
+            o_b_fault        = 1'b0;
+            o_b_fault_status = 32'b0;
+            o_b_paddr        = {20'b0, i_b_vaddr[11:0]};
+            o_b_cacheable    = 1'b0;
+
+            if (i_b_lookup_en) begin
+                for (int i = 0; i < NUM_ENTRIES; i++) begin
+                    if (!matched_b && entry_match_b[i]) begin
+                        matched_b     = 1'b1;
+                        matched_ppn_b = entries_pte[i][31:12];
+                        matched_c_b   = entries_pte[i][TLB_C];
+                        matched_u_b   = entries_pte[i][TLB_U];
+                        matched_rwx_b = {entries_pte[i][TLB_X],
+                                         entries_pte[i][TLB_W],
+                                         entries_pte[i][TLB_R]};
+                    end
+                end
+
+                o_b_hit       = matched_b;
+                o_b_paddr     = {matched_ppn_b, i_b_vaddr[11:0]};
+                o_b_cacheable = matched_c_b;
+
+                perm_ok_b = |(i_b_access_type & matched_rwx_b);
+                if (i_b_user_mode && !matched_u_b)
+                    perm_ok_b = 1'b0;
+
+                if (matched_b && !perm_ok_b) begin
+                    o_b_fault = 1'b1;
+                    o_b_fault_status = {20'b0, i_b_user_mode, i_b_access_type, 4'b0, FAULT_PROT};
+                end
+            end
+        end
+    end else begin : gen_no_port_b
+        assign o_b_paddr        = 32'b0;
+        assign o_b_cacheable    = 1'b0;
+        assign o_b_hit          = 1'b0;
+        assign o_b_fault        = 1'b0;
+        assign o_b_fault_status = 32'b0;
+    end
+    endgenerate
 
     // ══════════════════════════════════════════════════════════
     // Indexed read/write (sysreg access)
