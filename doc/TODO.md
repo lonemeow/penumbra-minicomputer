@@ -1265,7 +1265,15 @@ targets opt into are silently off.  Status per item:
 
 - **GISel Localizer — DONE** (`4c016efc4222`).  Was missing from the
   pipeline entirely; AArch64 runs it at every opt level.  dhry_1.c
-  static: stack refs 260→61, insns 816→670.  HW benchmark pending.
+  static: stack refs 260→61, insns 816→670.  **HW-validated
+  (ULX3S, 100K iterations): DMIPS 3.51→4.03 (+14.8%), CPI 4.29→3.74,
+  at identical instruction count** — pure stall reduction: L1-I
+  misses 77→44 per iteration (ifetch stalls 20.8%→13.6%), D-read
+  misses 200K→597 total (spill reloads were nearly all of the cold
+  D-reads), L2 read traffic −44%.  Post-change stall profile: ifetch
+  13.6% and store 12.4% are the top terms — the store half is the
+  write-through cost (L2 write-back / write-buffer hardware items),
+  not compiler-addressable.
 - **Pre-RA MachineScheduler** (`enableMachineScheduler`, default
   false): with GlobalISel there is *no* scheduling at all without it —
   instruction order is IR order.  GenericScheduler in in-order mode
@@ -1361,6 +1369,8 @@ direct-mapped L1-I, 16 B lines).
   in the same iteration.  A cyclic sweep through that working set
   conflict/capacity-misses nearly every line, every iteration —
   expect L1-I read misses/iteration in the ~70–80 range on hardware.
+  (Confirmed: 77/iteration measured on the ULX3S pre-Localizer;
+  44/iteration after — see the pass/gate audit entry.)
 - Instruction-count micro-optimizations are invisible under this:
   the select-CMPi fold (commit `8a23e2222632`) measured flat on HW
   Dhrystone for exactly this reason.
