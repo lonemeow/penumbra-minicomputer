@@ -96,8 +96,8 @@ def run_single_test(args):
     # -fno-builtin separately disables libc-name folding
     # (sin(0)=0, strlen of literal, etc.) which our harness
     # stubs can't be trusted to match exactly.
-    common_flags = shlex.split(cc) + [
-        opt, "-fhosted", "-fno-builtin", "-nostdlib", "-nostdinc",
+    common_flags = shlex.split(cc) + shlex.split(opt) + [
+        "-fhosted", "-fno-builtin", "-nostdlib", "-nostdinc",
         "-I", harness_dir, "-w",
         "-std=gnu89",
         "-Wno-implicit-int",
