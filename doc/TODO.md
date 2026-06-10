@@ -1256,6 +1256,48 @@ instructions) while only shrinking the rarely-used i64 three-way compares
 alongside a custom `G_SCMP`/`G_UCMP` lowering that keeps the i32
 SELECT-chain.
 
+## Compiler: codegen pass/gate audit — what we leave at the default
+
+Audited 2026-06-09 after the shrink-wrapping discovery: Penumbra
+overrides *no* behavior gates (only accessor plumbing in
+`PenumbraSubtarget.h`), so several generic optimizations that mature
+targets opt into are silently off.  Status per item:
+
+- **GISel Localizer — DONE** (`4c016efc4222`).  Was missing from the
+  pipeline entirely; AArch64 runs it at every opt level.  dhry_1.c
+  static: stack refs 260→61, insns 816→670.  HW benchmark pending.
+- **Pre-RA MachineScheduler** (`enableMachineScheduler`, default
+  false): with GlobalISel there is *no* scheduling at all without it —
+  instruction order is IR order.  GenericScheduler in in-order mode
+  (`MicroOpBufferSize=0`) prioritizes register pressure, which is the
+  spill lever.  Flipping it also flips `enableJoinGlobalCopies`
+  (better cross-block copy coalescing), which defaults to
+  `enableMachineScheduler()`.  Next candidate after Localizer settles.
+- **Tail calls**: `PenumbraCallLowering.cpp` hardcodes
+  `Info.IsTailCall = false` (`// TODO: tail calls`).  Wrapper-heavy
+  kernel code pays a full frame per hop.  Medium GISel project
+  (lowerTailCall + branch-instead-of-BL emission).
+- **`enableSpillageCopyElimination`** (MachineCopyPropagation
+  extension, X86 enables): cheap flip + measure.
+- **MachineOutliner / RISC-V-style save-restore millicode**: nothing
+  implemented (`getOutliningCandidateInfo` etc.).  Code-size tools —
+  attractive under the 1 KB I$ regime (21% of hot text is spill code;
+  identical prologue/epilogue sequences outline well), but each
+  outlined call costs BL+JMP at runtime.  Bigger project; consider
+  RISC-V's `-msave-restore` shape (dedicated prologue/epilogue
+  routines) rather than the general outliner first.
+- **PostRA scheduler** (`Penumbra1Model` doesn't set
+  `PostRAScheduler`): pointless for gen1 (single-cycle, no pipeline);
+  belongs in `Penumbra2Model` with the gen2 subtarget split (hide
+  load-use and divmul latency).
+- **MachineCombiner** (`getMachineCombinerPatterns` + sched model):
+  reassociation for ILP — little to gain at IssueWidth=1; revisit
+  with gen2.
+- Not applicable: EarlyIfConversion (no predicated execution),
+  MachinePipeliner (needs deep sched model, ILP machine),
+  `enableSubRegLiveness` (no subregisters), GISel LoadStoreOpt
+  (no wider load/store ops to merge into).
+
 ## Compiler: enable shrink-wrapping (spill-density lever, part 1)
 
 LLVM's ShrinkWrap pass (runs post-RA, just before PrologEpilogInserter)
