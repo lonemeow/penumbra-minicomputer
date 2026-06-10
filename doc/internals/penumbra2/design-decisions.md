@@ -53,6 +53,7 @@ section at the bottom of this document for pointers.
 | [12](#12-nzcv-flag-forwarding) | NZCV flag forwarding (refines Decision 4) | 2026-06-01 |
 | [13](#13-gen2-tlb-bram-backed-registered-translation-commit-time-fault-latch) | gen2 TLB: BRAM-backed registered translation, commit-time fault latch (refines Decision 7/11) | 2026-06-08 |
 | [14](#14-l1l2-memory-interface-and-id-arbitration) | L1↔L2 memory interface and I/D arbitration (refines 7/11/13) | 2026-06-08 |
+| [15](#15-gen2-mmu-as-a-separate-module-not-a-parameter) | gen2 MMU as a separate module, not a parameter (refines Decision 13) | 2026-06-09 |
 
 ---
 
@@ -1511,6 +1512,50 @@ is:
   line length, superseded by a future wide datapath, and not worth the
   verification burden on a proven shared module ahead of gen2
   bottleneck data).
+
+---
+
+## 15. gen2 MMU as a separate module, not a parameter
+
+**Date:** 2026-06-09
+
+*Refines [Decision 13](#13-gen2-tlb-bram-backed-registered-translation-commit-time-fault-latch),
+whose consequences said `mmu.sv` would be "parameterized to instantiate
+either TLB realization." With the `tlb_unit_bram` interface in hand, a
+parameter is the wrong vehicle.*
+
+**Decision.** Penumbra/2 gets a **new MMU module** (`mmu_bram`, wrapping
+`tlb_unit_bram`) beside the single-cycle core's `mmu.sv`, which is left
+untouched — the same split as `tlb_bram` beside `tlb`.
+
+**Rationale.** The two MMUs differ in *interface shape*, not just
+internals: the single-cycle MMU has one combinational translate port and
+latches faults internally at detection; the gen2 MMU has **two registered
+translate ports** (I and D, valid the cycle after the query) and latches
+`FADDR`/`FSTAT` from an **external commit strobe**. They also wrap
+different TLB submodules (`tlb_unit` vs `tlb_unit_bram`). A single
+parameterized module would have to generate-select the TLB, condition the
+whole datapath on combinational-vs-registered timing, and carry a
+1-vs-2-port interface with the single-cycle core tying off the second —
+heavy branching over a small shared core (just `MMUCR`/ASID, the sysreg
+mux, and the fault registers), and it would force interface changes into
+the shipping single-cycle `cpu_core`. A separate module keeps the gen1
+path bit-identical and the gen2 path clean.
+
+**Consequences.**
+
+- `mmu_bram` owns `MMUCR`/ASID, the sysreg read/write (MMUCR + TLB
+  passthrough, with the registered `i_sys_re` readback strobe), and the
+  commit-latched `FADDR`/`FSTAT`. Per port it applies bypass (identity map
+  when disabled or `force_bypass`) registered to align with the TLB's T+1
+  verdict.
+- **Alignment leaves the MMU.** The gen2 MEM stage already does its own
+  alignment check, and the I-side fault path does its own; the gen2 MMU
+  therefore does not duplicate it (the single-cycle MMU keeps its
+  alignment check, since its core relies on it). Faults of every kind —
+  alignment, protection, miss, bus — are composed and ordered by the core
+  and arrive at `mmu_bram` only as the committed `FADDR`/`FSTAT` write.
+- The single-cycle `mmu.sv`, `tlb.sv`, `tlb_unit.sv` are unchanged.
 
 ---
 
