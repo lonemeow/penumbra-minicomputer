@@ -192,7 +192,8 @@ MachineBasicBlock *
 PenumbraISelLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
                                                    MachineBasicBlock *MBB) const {
   unsigned Opc = MI.getOpcode();
-  assert((Opc == Penumbra::SELECT_GPR || Opc == Penumbra::SELECT_CC_GPR) &&
+  assert((Opc == Penumbra::SELECT_GPR || Opc == Penumbra::SELECT_CC_GPR ||
+          Opc == Penumbra::SELECT_CCi_GPR) &&
          "Unexpected custom inserter instruction");
 
   MachineFunction *MF = MBB->getParent();
@@ -228,11 +229,17 @@ PenumbraISelLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
       .addMBB(FalseMBB);
 
   // Emit the flag-setting instruction + conditional branch in thisMBB.
-  if (Opc == Penumbra::SELECT_CC_GPR) {
-    // SELECT_CC_GPR: operands are dst, trueval, falseval, lhs, rhs, cc.
-    BuildMI(MBB, DL, TII.get(Penumbra::CMP))
-        .addReg(MI.getOperand(3).getReg())
-        .addReg(MI.getOperand(4).getReg());
+  if (Opc == Penumbra::SELECT_CC_GPR || Opc == Penumbra::SELECT_CCi_GPR) {
+    // SELECT_CC_GPR:  operands are dst, trueval, falseval, lhs, rhs, cc.
+    // SELECT_CCi_GPR: operands are dst, trueval, falseval, lhs, imm, cc.
+    if (Opc == Penumbra::SELECT_CC_GPR)
+      BuildMI(MBB, DL, TII.get(Penumbra::CMP))
+          .addReg(MI.getOperand(3).getReg())
+          .addReg(MI.getOperand(4).getReg());
+    else
+      BuildMI(MBB, DL, TII.get(Penumbra::CMPi))
+          .addReg(MI.getOperand(3).getReg())
+          .addImm(MI.getOperand(4).getImm());
     unsigned BrOpc = MI.getOperand(5).getImm();
     BuildMI(MBB, DL, TII.get(BrOpc)).addMBB(TailMBB);
   } else {

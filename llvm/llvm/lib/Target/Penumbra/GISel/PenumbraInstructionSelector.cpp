@@ -79,6 +79,17 @@ private:
                          MachineRegisterInfo &MRI) const;
   // uimm16 value of R if it is a constant small enough to fold as an immediate.
   std::optional<int64_t> uimm16Of(Register R, MachineRegisterInfo &MRI) const;
+  // Canonicalize a constant compare operand to the RHS, swapping the
+  // predicate's operand order to preserve meaning.
+  void canonicalizeCompareOperands(CmpInst::Predicate &Pred, Register &LHS,
+                                   Register &RHS,
+                                   MachineRegisterInfo &MRI) const;
+  // Build the SELECT_CC pseudo for a select on `Pred(LHS, RHS)`, folding a
+  // uimm16 compare operand into the immediate form (SELECT_CCi_GPR).
+  bool emitSelectCC(Register Dst, Register TrueReg, Register FalseReg,
+                    CmpInst::Predicate Pred, Register LHS, Register RHS,
+                    MachineInstr &I, MachineBasicBlock &MBB,
+                    MachineRegisterInfo &MRI) const;
   // Emit CMP/CMPi (SR.C = L >= second operand), folding a uimm16 RHS.
   bool emitCompare(Register L, Register CmpR, std::optional<int64_t> Imm,
                    MachineInstr &I, MachineBasicBlock &MBB,
@@ -512,17 +523,7 @@ bool PenumbraInstructionSelector::selectBrCond(MachineInstr &I,
     Register LHS = CondDef->getOperand(2).getReg();
     Register RHS = CondDef->getOperand(3).getReg();
 
-    // Canonicalize: if the LHS is constant and RHS is not, swap operands and
-    // invert the predicate so the constant lands on the RHS where CMPi can
-    // fold it.  Belt-and-braces with the upstream canonicalizer.
-    MachineInstr *LhsDef = MRI.getVRegDef(LHS);
-    MachineInstr *RhsDef = MRI.getVRegDef(RHS);
-    if (LhsDef && LhsDef->getOpcode() == TargetOpcode::G_CONSTANT &&
-        (!RhsDef || RhsDef->getOpcode() != TargetOpcode::G_CONSTANT)) {
-      std::swap(LHS, RHS);
-      std::swap(LhsDef, RhsDef);
-      Pred = CmpInst::getSwappedPredicate(Pred);
-    }
+    canonicalizeCompareOperands(Pred, LHS, RHS, MRI);
 
     unsigned BrOpc = icmpPredToBranchOpc(Pred);
     if (!BrOpc)
@@ -564,6 +565,55 @@ bool PenumbraInstructionSelector::selectBrCond(MachineInstr &I,
   return true;
 }
 
+// Canonicalize a constant compare operand to the RHS: `Pred(C, x)` becomes
+// `swapped(Pred)(x, C)` so downstream immediate dispatch can fold the
+// constant.  Belt-and-braces with the upstream commute_constant_to_rhs
+// combine, which only runs at -O1+.  A both-constant compare is left as-is.
+void PenumbraInstructionSelector::canonicalizeCompareOperands(
+    CmpInst::Predicate &Pred, Register &LHS, Register &RHS,
+    MachineRegisterInfo &MRI) const {
+  if (getIConstantVRegVal(LHS, MRI) && !getIConstantVRegVal(RHS, MRI)) {
+    std::swap(LHS, RHS);
+    Pred = CmpInst::getSwappedPredicate(Pred);
+  }
+}
+
+// Build the SELECT_CC diamond pseudo for `Dst = Pred(LHS, RHS) ? TrueReg :
+// FalseReg`.  A uimm16-constant compare operand selects the immediate pseudo
+// (SELECT_CCi_GPR — CMPi in the diamond head) so the constant is never
+// materialised with an LLI.  Returns false for predicates with no branch
+// mapping; no instructions are emitted in that case.
+bool PenumbraInstructionSelector::emitSelectCC(
+    Register Dst, Register TrueReg, Register FalseReg, CmpInst::Predicate Pred,
+    Register LHS, Register RHS, MachineInstr &I, MachineBasicBlock &MBB,
+    MachineRegisterInfo &MRI) const {
+  const DebugLoc &DL = I.getDebugLoc();
+
+  canonicalizeCompareOperands(Pred, LHS, RHS, MRI);
+
+  unsigned BrOpc = icmpPredToBranchOpc(Pred);
+  if (!BrOpc)
+    return false;
+
+  std::optional<int64_t> Imm = uimm16Of(RHS, MRI);
+  MachineInstr *NewI =
+      Imm ? BuildMI(MBB, I, DL, TII.get(Penumbra::SELECT_CCi_GPR))
+                .addDef(Dst)
+                .addReg(TrueReg)
+                .addReg(FalseReg)
+                .addReg(LHS)
+                .addImm(*Imm)
+                .addImm(BrOpc)
+          : BuildMI(MBB, I, DL, TII.get(Penumbra::SELECT_CC_GPR))
+                .addDef(Dst)
+                .addReg(TrueReg)
+                .addReg(FalseReg)
+                .addReg(LHS)
+                .addReg(RHS)
+                .addImm(BrOpc);
+  return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
+}
+
 // ── G_SELECT (conditional select) ────────────────────────────────────────────
 // When the condition comes from G_ICMP, fold the comparison into SELECT_CC_GPR
 // (CMP+Bcc in the diamond).  Otherwise fall back to SELECT_GPR (TEST+BNE).
@@ -578,30 +628,21 @@ bool PenumbraInstructionSelector::selectSelect(MachineInstr &I,
 
   MachineInstr *CondDef = MRI.getVRegDef(CondReg);
 
-  // Fold G_ICMP condition into SELECT_CC_GPR: CMP+Bcc instead of TEST+BNE.
+  // Fold G_ICMP condition into a SELECT_CC pseudo: CMP/CMPi+Bcc instead of
+  // TEST+BNE.
   if (CondDef && CondDef->getOpcode() == TargetOpcode::G_ICMP) {
     auto Pred = static_cast<CmpInst::Predicate>(
         CondDef->getOperand(1).getPredicate());
-    unsigned BrOpc = icmpPredToBranchOpc(Pred);
-    if (!BrOpc)
-      return false;
-
     Register LHS = CondDef->getOperand(2).getReg();
     Register RHS = CondDef->getOperand(3).getReg();
 
-    MachineInstr *NewI =
-        BuildMI(MBB, I, DL, TII.get(Penumbra::SELECT_CC_GPR))
-            .addDef(DstReg)
-            .addReg(TrueReg)
-            .addReg(FalseReg)
-            .addReg(LHS)
-            .addReg(RHS)
-            .addImm(BrOpc);
+    if (!emitSelectCC(DstReg, TrueReg, FalseReg, Pred, LHS, RHS, I, MBB, MRI))
+      return false;
 
     I.eraseFromParent();
     if (MRI.use_nodbg_empty(CondDef->getOperand(0).getReg()))
       CondDef->eraseFromParent();
-    return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
+    return true;
   }
 
   // Generic condition: SELECT_GPR with TEST+BNE.
@@ -641,27 +682,17 @@ bool PenumbraInstructionSelector::selectICmp(MachineInstr &I,
   if (selectICmpToValue(Pred, DstReg, LHS, RHS, I, MBB, MRI))
     return true;
 
-  unsigned BrOpc = icmpPredToBranchOpc(Pred);
-  if (!BrOpc)
-    return false;
-
   // Materialize constants 1 (true) and 0 (false).
   Register OneReg = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
   Register ZeroReg = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
   BuildMI(MBB, I, DL, TII.get(Penumbra::LLI)).addDef(OneReg).addImm(1);
   BuildMI(MBB, I, DL, TII.get(Penumbra::LLI)).addDef(ZeroReg).addImm(0);
 
-  MachineInstr *NewI =
-      BuildMI(MBB, I, DL, TII.get(Penumbra::SELECT_CC_GPR))
-          .addDef(DstReg)
-          .addReg(OneReg)
-          .addReg(ZeroReg)
-          .addReg(LHS)
-          .addReg(RHS)
-          .addImm(BrOpc);
+  if (!emitSelectCC(DstReg, OneReg, ZeroReg, Pred, LHS, RHS, I, MBB, MRI))
+    return false;
 
   I.eraseFromParent();
-  return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
+  return true;
 }
 
 // The value of R as a uimm16 immediate, if R is a constant that fits the

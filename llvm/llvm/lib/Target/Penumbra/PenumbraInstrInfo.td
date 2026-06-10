@@ -572,4 +572,14 @@ let isPseudo = 1 in {
   def SELECT_CC_GPR : PenumbraInst<(outs GPR:$dst),
       (ins GPR:$trueval, GPR:$falseval, GPR:$lhs, GPR:$rhs, i32imm:$cc),
       "# SELECT_CC_GPR $dst, $trueval, $falseval, $lhs, $rhs, $cc">;
+
+  // SELECT_CCi_GPR: SELECT_CC_GPR with a uimm16 immediate in place of the
+  // second compare register — the expansion emits CMPi instead of CMP, so a
+  // constant compare operand needs no LLI materialisation.  Operands 0-2
+  // (dst, trueval, falseval) match SELECT_CC_GPR so the inserter's diamond
+  // and PHI construction are shared.
+  let usesCustomInserter = 1, Defs = [SR] in
+  def SELECT_CCi_GPR : PenumbraInst<(outs GPR:$dst),
+      (ins GPR:$trueval, GPR:$falseval, GPR:$lhs, i32imm:$imm, i32imm:$cc),
+      "# SELECT_CCi_GPR $dst, $trueval, $falseval, $lhs, $imm, $cc">;
 }

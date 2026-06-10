@@ -1171,31 +1171,29 @@ walk has to handle mixed users sensibly — pessimize to no
 promotion if both sext and zext consumers exist, since either
 choice forces a software conversion at the other use site.
 
-## Compiler: G_SELECT does not fold constant RHS into CMPi
+## Compiler: G_SELECT does not fold constant RHS into CMPi — DONE
 
-`G_SELECT` lowering folds an `G_ICMP` feeder into `SELECT_CC_GPR`
-(a CMP+Bcc-style diamond), but does **not** fold a constant RHS
-into a `CMPi` variant the way the `G_ICMP + G_BRCOND` and the
-branchless `G_ICMP`-to-value paths already do — so the select path
-still materializes the constant with a separate LLI/LLIS even when
-it fits uimm16.
+Implemented as planned: a `SELECT_CCi_GPR` pseudo (immediate in place
+of the second CMP register, expanded to `CMPi` in the diamond head)
+selected by the shared `emitSelectCC` helper, which both `selectSelect`
+and `selectICmp`'s diamond fallback route through.  Constant-LHS
+compares canonicalize via `canonicalizeCompareOperands`
+(swap + `CmpInst::getSwappedPredicate`), shared with `selectBrCond` —
+all compare-shaped consumers now funnel immediate folding through
+`emitCompare`/`emitSelectCC`.  Regression tests:
+`test/CodeGen/Penumbra/select-imm.ll`,
+`test/CodeGen/Penumbra/GlobalISel/select-select-imm.mir`.
 
-The other two paths have the machinery: `G_BRCOND` checks the ICMP's
-RHS for a constant and swaps via `CmpInst::getSwappedPredicate` for a
-constant-LHS, and `selectICmpToValue` routes every compare through
-`emitCompare` (CMP/CMPi dispatch) with the `a > c` is `a >= c+1`
-increment trick to keep the immediate on the right.
+Side benefit: compares against a register-materialized zero now fold
+to `CMPi rX, 0`, which the post-selection `optimizeCompareInstr`
+zero-compare elision recognizes (it only matches `CMPi`) — in
+umul-overflow-i64.ll one compare disappears outright.
 
-Fix: introduce a `SELECT_CCi_GPR` pseudo (an immediate in place of the
-second CMP register) and pick it when the feeder's RHS is a uimm16,
-with the constant-LHS predicate-swap fallback. Code lives in
-`llvm/llvm/lib/Target/Penumbra/GISel/PenumbraInstructionSelector.cpp`.
-
-A smaller related gap: `selectAddSubCarry` still hand-emits the
-register `ADD`/`SUB` for the carry chain, so an i64 add/sub by a small
-constant materializes it with an LLI instead of `ADDi`/`SUBi`. Routing
-those through an `emitFoldableALU`-style helper (sharing the uimm16
-fold logic with `emitCompare`) would close it.
+A smaller related gap remains open: `selectAddSubCarry` still
+hand-emits the register `ADD`/`SUB` for the carry chain, so an i64
+add/sub by a small constant materializes it with an LLI instead of
+`ADDi`/`SUBi`. Routing those through an `emitFoldableALU`-style helper
+(sharing the uimm16 fold logic with `emitCompare`) would close it.
 
 ## Compiler: redundant extension of comparison results
 
