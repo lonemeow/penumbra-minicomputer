@@ -1145,6 +1145,13 @@ through both fixes.
 
 Mirror of the zext-load promote rule for the sign-extending case.
 
+Confirmed hot 2026-06-09: Dhrystone's main loop carries ~6
+`shl 24; sar 24` sext-of-char chains (`Ch_Index`/`Ch_1_Glob`
+compares), including one site that sign-extends *both* operands of an
+eq compare — for eq/ne any consistent extension works, so a
+consistent-extension combine could drop both without LDBS selection.
+See the Dhrystone hot-path entry below for the surrounding analysis.
+
 The post-legalizer rule `penumbra_zextload_promote` rewrites plain
 `G_LOAD :: (load s8/s16) -> s32` into `G_ZEXTLOAD`, communicating
 to known-bits machinery that `LDB`/`LDH` zero-extend in hardware.
@@ -1249,6 +1256,80 @@ instructions) while only shrinking the rarely-used i64 three-way compares
 alongside a custom `G_SCMP`/`G_UCMP` lowering that keeps the i32
 SELECT-chain.
 
+## Compiler/benchmark: Dhrystone hot-path code shape — where the cycles go
+
+Measured 2026-06-09 (PC-weighted ISS trace histogram over 300 iterations
++ disassembly review; method: `+trace=` through a FIFO into a per-PC
+`awk` histogram, symbolized against the ELF).  Numbers are for the
+`benchmark/` bare-metal Dhrystone at -O2, gen1 geometry (1 KB
+direct-mapped L1-I, 16 B lines).
+
+### The headline: I-footprint, not instruction count
+
+- **928 dynamic instructions per iteration** (ISS, CPI=1 by
+  construction; the ISS-ideal bound is 13.2 DMIPS @ 25 MHz, so
+  HW-DMIPS / 13.2 is the effective stall multiplier).
+- Per-iteration hot text: **81 distinct 16 B lines (1296 B) vs the
+  64-line (1 KB) direct-mapped I$**.  30 of 64 sets hold more than one
+  hot line; ~70 of the 81 lines share a set with another line touched
+  in the same iteration.  A cyclic sweep through that working set
+  conflict/capacity-misses nearly every line, every iteration —
+  expect L1-I read misses/iteration in the ~70–80 range on hardware.
+- Instruction-count micro-optimizations are invisible under this:
+  the select-CMPi fold (commit `8a23e2222632`) measured flat on HW
+  Dhrystone for exactly this reason.
+
+### Dynamic instruction shares (per iteration)
+
+| code | insns/iter | share |
+|------|-----------:|------:|
+| memcpy (2× 48 B struct assign) | 292 | 26% |
+| strcpy | 189 | 17% |
+| strcmp | 165 | 15% |
+| main loop body (Proc_1–5, Func_3 inlined) | 131 | 12% |
+| Proc_8 | 64 | 6% |
+| Proc_6/7, Func_1/2 | ~95 | 9% |
+
+The string routines are 58% of dynamic instructions from only ~10
+I$ lines — they are the cache-*friendly* part (tight pointer-bump
+loops).  The other ~40% sweeps the ~70-line Proc/loop text.
+
+### Findings, ranked by leverage
+
+1. **Spill/reload density is the top compiler lever.**  21% of hot
+   static text is `stw`/`ldw` against `[r14 + N]` (callee-save
+   prologues + locals reloaded across calls), another 14% is `mov`
+   shuffles (two-address tax).  The loop body alone is 39% loads.
+   Examples: `Proc_8` saves 6 callee regs for straight-line address
+   arithmetic; `Proc_1` saves 7.  This matters doubly because spill
+   *stores* are write-through all the way out on gen1 — and gen2
+   keeps write-through L1 at least initially, so spill cost carries
+   forward.  Candidate directions: shrink-wrapping, register-pressure
+   aware address-arithmetic scheduling/CSE, revisiting CSR allocation
+   order.
+2. **Word-wise string routines** (bare-metal `benchmark/common` and
+   NetBSD libc both): rolled byte/word loops cost ~150–200
+   insns/iteration here for ~+10 lines of shared footprint.  Related:
+   the existing "Libc: memcpy misses same-offset misaligned shortcut"
+   entry.
+3. **I$ geometry is a gen2 matter.**  gen1 2-way associativity was
+   tried and **blew timing** (the fetch/TLB path is already the fmax
+   limiter) — treat gen1 I$ improvements as infeasible; gen2's BRAM
+   VIPT 4-way design (Decision 11) is the fix.
+4. **Branchless verbosity is real but small in Dhrystone**: exactly
+   one hot site (Proc_6's 8-insn `sext(eq)+add` select-of-constants
+   chain, see the branch-cost entry below).  Kernel hot paths may
+   differ — measure there before investing.
+5. **Signed sub-word loads confirmed hot**: ~6 `shl 24; sar 24`
+   sext-of-char chains in the loop body (see that entry), including a
+   double-sext feeding an eq compare where *no* extension is needed —
+   a consistent-extension eq/ne combine would drop both.
+6. Minor: `Proc_1`–`Proc_5`/`Func_3` are fully inlined but their
+   out-of-line bodies stay linked (extern linkage) — ~500 B of dead
+   text between hot functions.  Harmless to the cache (never fetched)
+   but skews naive footprint reading; `--gc-sections` +
+   `-ffunction-sections` would drop them.
+
 ## Compiler: no branch-cost model — branch-avoidance may be over-eager
 
 Penumbra sets none of the branch/select cost knobs
@@ -1276,6 +1357,11 @@ combine) to match the measured branch cost.  Note this is orthogonal to
 the branchless `icmp`-to-*value* path, which is a clear win over the old
 `SELECT_CC` form regardless (fewer instructions, no branch, no BB
 split); only the select-of-constants rewrite is in question.
+
+Reach check 2026-06-09: the Proc_6 chain is the *only* such site in
+Dhrystone's hot path (see the Dhrystone hot-path entry above), so
+Dhrystone cannot resolve this question either way — measure on kernel
+hot paths instead.
 
 ## Compiler: inline small constant-size memcpy/memset/memmove
 
