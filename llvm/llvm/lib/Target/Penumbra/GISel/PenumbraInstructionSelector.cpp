@@ -528,24 +528,12 @@ bool PenumbraInstructionSelector::selectBrCond(MachineInstr &I,
     if (!BrOpc)
       return false;
 
-    // If RHS is a constant that fits uimm16, emit CMPi — saves an LLI and a
+    // emitCompare folds a uimm16-constant RHS into CMPi — saves an LLI and a
     // live register.  Covers the common cases: `x == 0`, `n < 100`, loop
-    // termination checks, etc.
-    if (RhsDef && RhsDef->getOpcode() == TargetOpcode::G_CONSTANT &&
-        isUInt<16>(RhsDef->getOperand(1).getCImm()->getZExtValue())) {
-      int64_t Imm = RhsDef->getOperand(1).getCImm()->getZExtValue();
-      auto CmpMI = BuildMI(MBB, I, DL, TII.get(Penumbra::CMPi))
-                       .addReg(LHS)
-                       .addImm(Imm);
-      constrainSelectedInstRegOperands(*CmpMI, TII, TRI, RBI);
-      if (MRI.use_nodbg_empty(RHS))
-        RhsDef->eraseFromParent();
-    } else {
-      auto CmpMI = BuildMI(MBB, I, DL, TII.get(Penumbra::CMP))
-                       .addReg(LHS)
-                       .addReg(RHS);
-      constrainSelectedInstRegOperands(*CmpMI, TII, TRI, RBI);
-    }
+    // termination checks, etc.  An orphaned G_CONSTANT is erased by the
+    // selector's trivially-dead sweep.
+    if (!emitCompare(LHS, RHS, std::nullopt, I, MBB, MRI))
+      return false;
 
     BuildMI(MBB, I, DL, TII.get(BrOpc)).addMBB(TargetMBB);
 
