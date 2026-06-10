@@ -188,6 +188,7 @@ MODULE_TESTS = \
     tlb_bram \
     tlb_unit_bram \
     mmu \
+    mmu_bram \
     cpu_bus_arbiter \
     slip_rx \
     slip_tx \
