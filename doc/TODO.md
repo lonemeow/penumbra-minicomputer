@@ -1256,6 +1256,50 @@ instructions) while only shrinking the rarely-used i64 three-way compares
 alongside a custom `G_SCMP`/`G_UCMP` lowering that keeps the i32
 SELECT-chain.
 
+## Compiler: enable shrink-wrapping (spill-density lever, part 1)
+
+LLVM's ShrinkWrap pass (runs post-RA, just before PrologEpilogInserter)
+computes a save point / restore point pair in `MachineFrameInfo` so PEI
+places the *whole* prologue (CSR saves + stack adjust) at the earliest
+block dominating all frame uses instead of the entry block — early-exit
+paths then run zero frame code.  It is gated per-target on
+`TargetFrameLowering::enableShrinkWrapping` (default false); Penumbra
+does not override it, so the pass currently no-ops.  Every major target
+(AArch64, ARM, LoongArch, Mips, PowerPC, RISC-V, X86) opts in.
+
+Measured 2026-06-09 with the global force flag
+(`-mllvm -enable-shrink-wrap=true`):
+
+- **Mechanically works on Penumbra**: for an `if (!p) return -1;` +
+  calls function whose CSR-live values are born after the branch, the
+  prologue sinks below the early exit as expected.
+- **Correct end-to-end**: `make test-compiler
+  OPT="-O2 -mllvm -enable-shrink-wrap=true"` passes 1607/1607 on ISS.
+- **Dhrystone is unaffected** (zero diff) — its hot functions have no
+  early-exit shape; the payoff target is kernel code (error paths,
+  lock fast paths).  Measure with pbench syscall benches, not DMIPS.
+
+Enablement plan:
+1. Override `enableShrinkWrapping` → true in `PenumbraFrameLowering`,
+   **gated on the frame fitting the SUBi immediate form**: `adjustSP`'s
+   large-frame path clobbers scratch R11 on the documented assumption
+   that R11 is dead at function entry/exit
+   (`PenumbraFrameLowering.cpp`), which a mid-function save point
+   violates.  Either keep large frames un-shrink-wrapped (they are
+   rare) or teach `adjustSP` to scavenge.
+2. Lit test asserting the early-exit prologue sink.
+3. Known reach limit — **regalloc pins the save point for argument
+   values**: an argument live across calls gets its `COPY` into a
+   callee-saved register placed in the *entry* block, which ShrinkWrap
+   counts as a frame use, so such functions never shrink-wrap.  The
+   standard counter is `TargetRegisterInfo::getCSRFirstUseCost`
+   (AArch64 returns 5), which makes greedy RA pre-split cold CSR
+   first-uses — but forcing `-regalloc-csr-first-time-cost` did *not*
+   split the argument shape on Penumbra (the region-split candidate
+   search found nothing under CSRCost).  Needs its own investigation;
+   without it, shrink-wrapping only catches functions whose CSR
+   pressure starts after the early exit.
+
 ## Compiler/benchmark: Dhrystone hot-path code shape — where the cycles go
 
 Measured 2026-06-09 (PC-weighted ISS trace histogram over 300 iterations
