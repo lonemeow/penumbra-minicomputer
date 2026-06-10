@@ -75,13 +75,18 @@ endif
 		--Mdir $(BUILD_DIR)/$(MOD).verilator \
 		-o ../V$(MOD) \
 		$(PKG_SV) $$(find hw/rtl -name '$(MOD).sv') hw/sim/$(TB).cpp
-	@# Assemble program and microcode for $readmemh
-	@rm -f program.hex microcode.hex
-	@if test -f hw/sim/programs/$(PROG).s; then $(PASM) --org 0xFFFF0000 hw/sim/programs/$(PROG).s -o program.hex; \
-	else echo "ERROR: hw/sim/programs/$(PROG).s not found" >&2; exit 1; fi
+	@# Assemble program (per-program hex under build/hex/, passed to the
+	@# RTL via +rom_hex= — the root program.hex belongs to the boot ROM)
+	@# and microcode for $readmemh
+	@mkdir -p $(BUILD_DIR)/hex
+	@if test -n "$(PROG)"; then \
+		if test -f hw/sim/programs/$(PROG).s; then \
+			$(PASM) --org 0xFFFF0000 hw/sim/programs/$(PROG).s -o $(BUILD_DIR)/hex/$(PROG).hex; \
+		else echo "ERROR: hw/sim/programs/$(PROG).s not found" >&2; exit 1; fi; \
+	fi
 	@if test -f hw/microcode/microcode.uasm; then $(UASM) hw/microcode/microcode.uasm -o microcode.hex; fi
 	@echo "── Running $(MOD) testbench ──"
-	@$(DOCKER_RUN) --entrypoint ./$(BUILD_DIR)/V$(MOD) $(DOCKER_IMAGE)
+	@$(DOCKER_RUN) --entrypoint ./$(BUILD_DIR)/V$(MOD) $(DOCKER_IMAGE) $(if $(PROG),+rom_hex=$(BUILD_DIR)/hex/$(PROG).hex)
 
 .PHONY: wave
 wave:
@@ -106,18 +111,17 @@ test:
 		$(PKG_SV) $$(find hw/rtl -name 'machine_sim.sv') hw/sim/tb_cpu_prog.cpp
 	@# Assemble microcode once (shared by all programs)
 	@$(UASM) hw/microcode/microcode.uasm -o microcode.hex
-	@# Remove program.hex so make simulate's ROM build doesn't see stale pasm output
-	@rm -f program.hex
+	@mkdir -p $(BUILD_DIR)/hex
 	@pass=0; fail=0; failed=""; \
 	for prog in $(TEST_PROGS); do \
-		if ! $(PASM) --org 0xFFFF0000 hw/sim/programs/$$prog.s -o program.hex; then \
+		if ! $(PASM) --org 0xFFFF0000 hw/sim/programs/$$prog.s -o $(BUILD_DIR)/hex/$$prog.hex; then \
 			printf "  \033[31mFAIL\033[0m  %s (assembler error)\n" "$$prog"; \
 			fail=$$((fail + 1)); \
 			failed="$$failed $$prog"; \
 			continue; \
 		fi; \
 		if $(DOCKER_RUN) --entrypoint ./$(BUILD_DIR)/Vmachine_sim $(DOCKER_IMAGE) \
-			> /dev/null 2>&1; then \
+			+rom_hex=$(BUILD_DIR)/hex/$$prog.hex > /dev/null 2>&1; then \
 			printf "  \033[32mPASS\033[0m  %s\n" "$$prog"; \
 			pass=$$((pass + 1)); \
 		else \
@@ -129,7 +133,6 @@ test:
 	echo ""; \
 	total=$$((pass + fail)); \
 	echo "$$pass/$$total tests passed"; \
-	rm -f program.hex; \
 	if [ $$fail -gt 0 ]; then \
 		echo "  *** $$fail FAILED:$$failed ***"; \
 		exit 1; \
@@ -480,7 +483,6 @@ simulate-rtl:
 		--Mdir $(BUILD_DIR)/machine_sim_interactive.verilator \
 		-o ../Vmachine_sim_interactive \
 		$(PKG_SV) $$(find hw/rtl -name 'machine_sim.sv') hw/sim/tb_interactive.cpp
-	@rm -f program.hex
 	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX) CFLAGS=$(CFLAGS)
 	@$(UASM) hw/microcode/microcode.uasm -o microcode.hex
 	@$(DOCKER_RUN_IT) --entrypoint ./$(BUILD_DIR)/Vmachine_sim_interactive $(DOCKER_IMAGE) $(if $(SDCARD),+sdcard=$(SDCARD)) $(if $(TRACE),+trace=$(TRACE)) $(if $(TRACE_WINDOW),+trace_window=$(TRACE_WINDOW)) $(if $(HALT_ON),'+halt_on=$(HALT_ON)') $(if $(STDIN_FILE),+stdin_file=$(STDIN_FILE))
@@ -657,7 +659,6 @@ benchmark-rtl: sdimage-bench
 		--Mdir $(BUILD_DIR)/machine_sim_interactive.verilator \
 		-o ../Vmachine_sim_interactive \
 		$(PKG_SV) $$(find hw/rtl -name 'machine_sim.sv') hw/sim/tb_interactive.cpp
-	@rm -f program.hex
 	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX) CFLAGS=$(CFLAGS)
 	@$(UASM) hw/microcode/microcode.uasm -o microcode.hex
 	@for elf in $(BENCH_ELFS); do \

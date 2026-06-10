@@ -132,7 +132,10 @@ BRAM L1 caches are not yet wired.
   CFG_EN toggle, dynamic base-address decode.
 - `bus_devsel.sv` — combinational address comparator (BASE/SIZE
   parameterized).
-- `boot_rom.sv` — ROM (64 KB default), `$readmemh` from `program.hex`.
+- `boot_rom.sv` — ROM (64 KB default), `$readmemh` from `program.hex`
+  (boot ROM owns that root-level name; sims override per program via
+  the `+rom_hex=<path>` plusarg, which the Makefile points at
+  `build/hex/<prog>.hex`).
 - `cpuid.sv` — read-only CPU identity (sysreg device 1, regs 0–4).
 - `machid.sv` — read-only board identity (sysreg device 8).
 

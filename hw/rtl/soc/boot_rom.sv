@@ -27,10 +27,23 @@ module boot_rom
 
     logic [31:0] rom [0:ROM_WORDS-1];
 
+`ifdef VERILATOR
+    // Simulation: +rom_hex=<path> selects the image, so testbench programs
+    // live in per-program files instead of contending for the boot ROM's
+    // program.hex (the synthesis default below).
+    string init_file;
+`endif
+
     initial begin
         for (int i = 0; i < ROM_WORDS; i++)
             rom[i] = 32'b0;
+`ifdef VERILATOR
+        if (!$value$plusargs("rom_hex=%s", init_file))
+            init_file = "program.hex";
+        $readmemh(init_file, rom);
+`else
         $readmemh("program.hex", rom);
+`endif
     end
 
     // Word-addressed (lower bits index into ROM)

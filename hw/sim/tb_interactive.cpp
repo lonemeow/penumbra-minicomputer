@@ -170,6 +170,7 @@ static const char* get_sdcard_path() {
 }
 
 int main(int argc, char** argv) {
+    Verilated::commandArgs(argc, argv);   // expose +rom_hex= etc. to the RTL
     Vmachine_sim* cpu = new Vmachine_sim;
 
     // Check for +sdcard=, +trace=, +trace_window=, +halt_on= plusargs

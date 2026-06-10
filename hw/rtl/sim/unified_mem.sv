@@ -56,11 +56,17 @@ module unified_mem #(
 
     logic [31:0] mem [0:N-1];
 
+    // +rom_hex=<path> overrides INIT_FILE, so per-program testbench images
+    // live under build/ instead of contending for one shared filename.
+    string init_file;
+
     initial begin
         for (int i = 0; i < N; i++)
             mem[i] = 32'b0;
-        if (INIT_FILE != "")
-            $readmemh(INIT_FILE, mem, REGION_WORDS);   // ROM region starts at REGION_WORDS
+        if (!$value$plusargs("rom_hex=%s", init_file))
+            init_file = INIT_FILE;
+        if (init_file != "")
+            $readmemh(init_file, mem, REGION_WORDS);   // ROM region starts at REGION_WORDS
     end
 
     // Region-compressed index: addr[31] picks the half, the low bits index

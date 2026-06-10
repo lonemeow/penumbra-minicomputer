@@ -33,7 +33,8 @@ static void tick(Vpenumbra2_core* dut) {
     dut->i_clk = 1; dut->eval();
 }
 
-int main() {
+int main(int argc, char** argv) {
+    Verilated::commandArgs(argc, argv);   // expose +rom_hex= etc. to the RTL
     Vpenumbra2_core* dut = new Vpenumbra2_core;
     uint32_t shadow[22] = {0};   // committed values, indexed by physical entry
 

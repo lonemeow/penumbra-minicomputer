@@ -91,7 +91,8 @@ static void reset(Vmachine_sim* cpu) {
     cpu->i_rst = 0;
 }
 
-int main() {
+int main(int argc, char** argv) {
+    Verilated::commandArgs(argc, argv);   // expose +rom_hex= etc. to the RTL
     Vmachine_sim* cpu = new Vmachine_sim;
 #if VM_TRACE
     Verilated::traceEverOn(true);
