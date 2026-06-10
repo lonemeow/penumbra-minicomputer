@@ -10,6 +10,7 @@
 #include "llvm/CodeGen/GlobalISel/IRTranslator.h"
 #include "llvm/CodeGen/GlobalISel/InstructionSelect.h"
 #include "llvm/CodeGen/GlobalISel/Legalizer.h"
+#include "llvm/CodeGen/GlobalISel/Localizer.h"
 #include "llvm/CodeGen/GlobalISel/RegBankSelect.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
@@ -192,6 +193,8 @@ public:
       addPass(createPenumbraO0PreLegalizerCombiner());
     else
       addPass(createPenumbraPreLegalizerCombiner());
+    // EXPERIMENT: sink constant/global materialisations to their use blocks
+    addPass(new Localizer());
   }
   bool addLegalizeMachineIR() override {
     addPass(new Legalizer());

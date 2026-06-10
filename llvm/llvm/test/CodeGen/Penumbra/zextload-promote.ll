@@ -19,31 +19,32 @@ define i32 @strcmp_like(ptr %a, ptr %b) {
 ; CHECK-LABEL: strcmp_like:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0: // %entry
-; CHECK-NEXT:    mov r3, r1
-; CHECK-NEXT:    mov r1, r0
-; CHECK-NEXT:    ldb r4, [r3 + 0]
+; CHECK-NEXT:    ldb r4, [r1 + 0]
+; CHECK-NEXT:    mov r3, r0
 ; CHECK-NEXT:    cmp r4, 0
 ; CHECK-NEXT:    beq .LBB0_5
 ; CHECK-NEXT:  // %bb.1: // %loop.preheader
-; CHECK-NEXT:    add r3, 1
+; CHECK-NEXT:    add r1, 1
 ; CHECK-NEXT:  .LBB0_2: // %loop
 ; CHECK-NEXT:    // =>This Inner Loop Header: Depth=1
-; CHECK-NEXT:    ldb r11, [r2 + 0]
-; CHECK-NEXT:    cmp r4, r11
+; CHECK-NEXT:    ldb r3, [r2 + 0]
+; CHECK-NEXT:    cmp r4, r3
 ; CHECK-NEXT:    bne .LBB0_3
 ; CHECK-NEXT:  // %bb.4: // %loop.next
 ; CHECK-NEXT:    // in Loop: Header=BB0_2 Depth=1
 ; CHECK-NEXT:    add r2, 1
-; CHECK-NEXT:    ldb r4, [r3 + 0]
-; CHECK-NEXT:    add r3, 1
+; CHECK-NEXT:    ldb r4, [r1 + 0]
+; CHECK-NEXT:    mov r3, r0
+; CHECK-NEXT:    add r1, 1
 ; CHECK-NEXT:    cmp r4, 0
 ; CHECK-NEXT:    bne .LBB0_2
 ; CHECK-NEXT:    b .LBB0_5
 ; CHECK-NEXT:  .LBB0_3:
-; CHECK-NEXT:    mov r1, r4
+; CHECK-NEXT:    mov r3, r4
 ; CHECK-NEXT:  .LBB0_5: // %exit
-; CHECK-NEXT:    ldb r2, [r2 + 0]
-; CHECK-NEXT:    sub r1, r2
+; CHECK-NEXT:    ldb r1, [r2 + 0]
+; CHECK-NEXT:    sub r3, r1
+; CHECK-NEXT:    mov r1, r3
 ; CHECK-NEXT:    jmp r13
 entry:
   %a0 = load i8, ptr %a

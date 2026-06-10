@@ -13,13 +13,12 @@ define i32 @simple_decr_loop(i32 %n) {
 ; CHECK-LABEL: simple_decr_loop:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0: // %entry
-; CHECK-NEXT:    mov r2, r1
-; CHECK-NEXT:    mov r1, r0
 ; CHECK-NEXT:  .LBB0_1: // %loop
 ; CHECK-NEXT:    // =>This Inner Loop Header: Depth=1
-; CHECK-NEXT:    sub r2, 1
+; CHECK-NEXT:    sub r1, 1
 ; CHECK-NEXT:    bne .LBB0_1
 ; CHECK-NEXT:  // %bb.2: // %exit
+; CHECK-NEXT:    mov r1, r0
 ; CHECK-NEXT:    jmp r13
 entry:
   br label %loop
@@ -78,18 +77,17 @@ define i32 @no_elide_value_used_between(i32 %n, ptr %out) {
 ; CHECK-LABEL: no_elide_value_used_between:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0: // %entry
+; CHECK-NEXT:    sub r1, 1
 ; CHECK-NEXT:    mov r3, r1
-; CHECK-NEXT:    mov r1, r0
-; CHECK-NEXT:    sub r3, 1
-; CHECK-NEXT:    mov r4, r3
 ; CHECK-NEXT:  .LBB2_1: // %loop
 ; CHECK-NEXT:    // =>This Inner Loop Header: Depth=1
-; CHECK-NEXT:    stw r3, [r2 + 0]
-; CHECK-NEXT:    sub r4, 1
-; CHECK-NEXT:    cmp r3, 0
-; CHECK-NEXT:    mov r3, r4
+; CHECK-NEXT:    stw r1, [r2 + 0]
+; CHECK-NEXT:    sub r3, 1
+; CHECK-NEXT:    cmp r1, 0
+; CHECK-NEXT:    mov r1, r3
 ; CHECK-NEXT:    bne .LBB2_1
 ; CHECK-NEXT:  // %bb.2: // %exit
+; CHECK-NEXT:    mov r1, r0
 ; CHECK-NEXT:    jmp r13
 entry:
   br label %loop

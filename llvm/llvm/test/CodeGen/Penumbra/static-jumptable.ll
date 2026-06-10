@@ -10,23 +10,13 @@ define i32 @switch_static(i32 %x) {
 ; CHECK-LABEL: switch_static:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.1: // %entry
-; CHECK-NEXT:    sub r14, 24
-; CHECK-NEXT:    lli r2, 40
-; CHECK-NEXT:    stw r2, [r14 + 0] // 4-byte Folded Spill
-; CHECK-NEXT:    lli r2, 30
-; CHECK-NEXT:    stw r2, [r14 + 4] // 4-byte Folded Spill
-; CHECK-NEXT:    lli r2, 20
-; CHECK-NEXT:    stw r2, [r14 + 8] // 4-byte Folded Spill
-; CHECK-NEXT:    lli r2, 10
-; CHECK-NEXT:    stw r2, [r14 + 12] // 4-byte Folded Spill
-; CHECK-NEXT:    llis r2, -1
-; CHECK-NEXT:    stw r2, [r14 + 16] // 4-byte Folded Spill
+; CHECK-NEXT:    sub r14, 4
 ; CHECK-NEXT:    add r1, 0
-; CHECK-NEXT:    stw r1, [r14 + 20] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r1, [r14 + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    cmp r1, 3
 ; CHECK-NEXT:    bhi .LBB0_6
 ; CHECK-NEXT:  // %bb.7: // %entry
-; CHECK-NEXT:    ldw r1, [r14 + 20] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r1, [r14 + 0] // 4-byte Folded Reload
 ; CHECK-NEXT:    lli r2, %lo16(.LJTI0_0)
 ; CHECK-NEXT:    lui r2, %hi16(.LJTI0_0)
 ; CHECK-NEXT:    shl r1, 2
@@ -35,24 +25,24 @@ define i32 @switch_static(i32 %x) {
 ; CHECK-NEXT:    add r1, r2
 ; CHECK-NEXT:    jmp r1
 ; CHECK-NEXT:  .LBB0_2: // %bb0
-; CHECK-NEXT:    ldw r1, [r14 + 12] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 24
+; CHECK-NEXT:    lli r1, 10
+; CHECK-NEXT:    add r14, 4
 ; CHECK-NEXT:    jmp r13
 ; CHECK-NEXT:  .LBB0_3: // %bb1
-; CHECK-NEXT:    ldw r1, [r14 + 8] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 24
+; CHECK-NEXT:    lli r1, 20
+; CHECK-NEXT:    add r14, 4
 ; CHECK-NEXT:    jmp r13
 ; CHECK-NEXT:  .LBB0_4: // %bb2
-; CHECK-NEXT:    ldw r1, [r14 + 4] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 24
+; CHECK-NEXT:    lli r1, 30
+; CHECK-NEXT:    add r14, 4
 ; CHECK-NEXT:    jmp r13
 ; CHECK-NEXT:  .LBB0_5: // %bb3
-; CHECK-NEXT:    ldw r1, [r14 + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 24
+; CHECK-NEXT:    lli r1, 40
+; CHECK-NEXT:    add r14, 4
 ; CHECK-NEXT:    jmp r13
 ; CHECK-NEXT:  .LBB0_6: // %default
-; CHECK-NEXT:    ldw r1, [r14 + 16] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 24
+; CHECK-NEXT:    llis r1, -1
+; CHECK-NEXT:    add r14, 4
 ; CHECK-NEXT:    jmp r13
 entry:
   switch i32 %x, label %default [

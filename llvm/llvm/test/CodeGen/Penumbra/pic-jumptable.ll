@@ -8,23 +8,13 @@ define i32 @switch_test(i32 %x) {
 ; PIC-LABEL: switch_test:
 ; PIC:         .cfi_startproc
 ; PIC-NEXT:  // %bb.1: // %entry
-; PIC-NEXT:    sub r14, 24
-; PIC-NEXT:    lli r2, 40
-; PIC-NEXT:    stw r2, [r14 + 0] // 4-byte Folded Spill
-; PIC-NEXT:    lli r2, 30
-; PIC-NEXT:    stw r2, [r14 + 4] // 4-byte Folded Spill
-; PIC-NEXT:    lli r2, 20
-; PIC-NEXT:    stw r2, [r14 + 8] // 4-byte Folded Spill
-; PIC-NEXT:    lli r2, 10
-; PIC-NEXT:    stw r2, [r14 + 12] // 4-byte Folded Spill
-; PIC-NEXT:    llis r2, -1
-; PIC-NEXT:    stw r2, [r14 + 16] // 4-byte Folded Spill
+; PIC-NEXT:    sub r14, 4
 ; PIC-NEXT:    add r1, 0
-; PIC-NEXT:    stw r1, [r14 + 20] // 4-byte Folded Spill
+; PIC-NEXT:    stw r1, [r14 + 0] // 4-byte Folded Spill
 ; PIC-NEXT:    cmp r1, 3
 ; PIC-NEXT:    bhi .LBB0_6
 ; PIC-NEXT:  // %bb.7: // %entry
-; PIC-NEXT:    ldw r1, [r14 + 20] // 4-byte Folded Reload
+; PIC-NEXT:    ldw r1, [r14 + 0] // 4-byte Folded Reload
 ; PIC-NEXT:    mov r2, r15
 ; PIC-NEXT:    add r2, %pcrel(.LJTI0_0+4)
 ; PIC-NEXT:    shl r1, 2
@@ -33,24 +23,24 @@ define i32 @switch_test(i32 %x) {
 ; PIC-NEXT:    add r1, r2
 ; PIC-NEXT:    jmp r1
 ; PIC-NEXT:  .LBB0_2: // %bb0
-; PIC-NEXT:    ldw r1, [r14 + 12] // 4-byte Folded Reload
-; PIC-NEXT:    add r14, 24
+; PIC-NEXT:    lli r1, 10
+; PIC-NEXT:    add r14, 4
 ; PIC-NEXT:    jmp r13
 ; PIC-NEXT:  .LBB0_3: // %bb1
-; PIC-NEXT:    ldw r1, [r14 + 8] // 4-byte Folded Reload
-; PIC-NEXT:    add r14, 24
+; PIC-NEXT:    lli r1, 20
+; PIC-NEXT:    add r14, 4
 ; PIC-NEXT:    jmp r13
 ; PIC-NEXT:  .LBB0_4: // %bb2
-; PIC-NEXT:    ldw r1, [r14 + 4] // 4-byte Folded Reload
-; PIC-NEXT:    add r14, 24
+; PIC-NEXT:    lli r1, 30
+; PIC-NEXT:    add r14, 4
 ; PIC-NEXT:    jmp r13
 ; PIC-NEXT:  .LBB0_5: // %bb3
-; PIC-NEXT:    ldw r1, [r14 + 0] // 4-byte Folded Reload
-; PIC-NEXT:    add r14, 24
+; PIC-NEXT:    lli r1, 40
+; PIC-NEXT:    add r14, 4
 ; PIC-NEXT:    jmp r13
 ; PIC-NEXT:  .LBB0_6: // %default
-; PIC-NEXT:    ldw r1, [r14 + 16] // 4-byte Folded Reload
-; PIC-NEXT:    add r14, 24
+; PIC-NEXT:    llis r1, -1
+; PIC-NEXT:    add r14, 4
 ; PIC-NEXT:    jmp r13
 entry:
   switch i32 %x, label %default [

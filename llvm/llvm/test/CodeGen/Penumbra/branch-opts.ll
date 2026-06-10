@@ -86,11 +86,10 @@ define i32 @branch_reversal(i32 %a) {
 ; CHECK-LABEL: branch_reversal:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    lli r2, 42
 ; CHECK-NEXT:    cmp r1, 0
 ; CHECK-NEXT:    bne .LBB3_1
 ; CHECK-NEXT:  // %bb.2: // %is_zero
-; CHECK-NEXT:    mov r1, r2
+; CHECK-NEXT:    lli r1, 42
 ; CHECK-NEXT:    jmp r13
 ; CHECK-NEXT:  .LBB3_1: // %not_zero
 ; CHECK-NEXT:    add r1, 1
@@ -109,20 +108,19 @@ define i32 @multi_cond(i32 %a, i32 %b) {
 ; CHECK-LABEL: multi_cond:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    mov r3, r1
-; CHECK-NEXT:    lli r1, 1
-; CHECK-NEXT:    llis r4, -1
-; CHECK-NEXT:    cmp r3, r2
+; CHECK-NEXT:    cmp r1, r2
 ; CHECK-NEXT:    bge .LBB4_1
-; CHECK-NEXT:  // %bb.4: // %lt
-; CHECK-NEXT:    mov r1, r4
+; CHECK-NEXT:  // %bb.3: // %lt
+; CHECK-NEXT:    llis r1, -1
 ; CHECK-NEXT:    jmp r13
 ; CHECK-NEXT:  .LBB4_1: // %ge
-; CHECK-NEXT:    cmp r3, r2
-; CHECK-NEXT:    bne .LBB4_3
-; CHECK-NEXT:  // %bb.2: // %eq
+; CHECK-NEXT:    cmp r1, r2
+; CHECK-NEXT:    bne .LBB4_2
+; CHECK-NEXT:  // %bb.4: // %eq
 ; CHECK-NEXT:    mov r1, r0
-; CHECK-NEXT:  .LBB4_3: // %gt
+; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:  .LBB4_2: // %gt
+; CHECK-NEXT:    lli r1, 1
 ; CHECK-NEXT:    jmp r13
   %c1 = icmp slt i32 %a, %b
   br i1 %c1, label %lt, label %ge
@@ -142,11 +140,10 @@ define i32 @unsigned_cmp(i32 %a, i32 %b) {
 ; CHECK-LABEL: unsigned_cmp:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    mov r3, r1
-; CHECK-NEXT:    lli r1, 1
-; CHECK-NEXT:    cmp r3, r2
+; CHECK-NEXT:    cmp r1, r2
 ; CHECK-NEXT:    bls .LBB5_2
 ; CHECK-NEXT:  // %bb.1: // %high
+; CHECK-NEXT:    lli r1, 1
 ; CHECK-NEXT:    jmp r13
 ; CHECK-NEXT:  .LBB5_2: // %low
 ; CHECK-NEXT:    mov r1, r0

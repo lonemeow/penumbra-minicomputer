@@ -94,11 +94,10 @@ define i32 @cmpi_lhs_const_eq(i32 %x) {
 ; CHECK-LABEL: cmpi_lhs_const_eq:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    mov r2, r1
-; CHECK-NEXT:    lli r1, 42
-; CHECK-NEXT:    cmp r2, 0
+; CHECK-NEXT:    cmp r1, 0
 ; CHECK-NEXT:    bne .LBB4_2
 ; CHECK-NEXT:  // %bb.1: // %zero
+; CHECK-NEXT:    lli r1, 42
 ; CHECK-NEXT:    jmp r13
 ; CHECK-NEXT:  .LBB4_2: // %nonzero
 ; CHECK-NEXT:    mov r1, r0
@@ -115,11 +114,10 @@ define i32 @cmpi_lhs_const_slt(i32 %x) {
 ; CHECK-LABEL: cmpi_lhs_const_slt:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    mov r2, r1
-; CHECK-NEXT:    lli r1, 1
-; CHECK-NEXT:    cmp r2, 10
+; CHECK-NEXT:    cmp r1, 10
 ; CHECK-NEXT:    ble .LBB5_2
 ; CHECK-NEXT:  // %bb.1: // %gt
+; CHECK-NEXT:    lli r1, 1
 ; CHECK-NEXT:    jmp r13
 ; CHECK-NEXT:  .LBB5_2: // %le
 ; CHECK-NEXT:    mov r1, r0
