@@ -251,6 +251,7 @@ ADD  SP, #4
 | B           | `B target`    | Unconditional branch                          |
 | BL          | `BL target`   | Branch-and-link: `R13 = PC+4`, then branch    |
 | JMP         | `JMP Rs`      | Indirect jump: `PC = Rs`                      |
+| JALR        | `JALR Rs`     | Indirect call: `R13 = PC+4`, then `PC = Rs`   |
 
 Branch range: ±8 MB from the branch instruction. `BL` writes the
 return address to R13 unconditionally — the target register is not
@@ -280,6 +281,29 @@ my_function:
     ADD  SP, #4
     RET
 ```
+
+### Indirect Calls
+
+`BL` reaches a fixed PC-relative target. To call through a **register**
+— a function pointer, a vtable slot, or a callee beyond `BL`'s ±8 MB
+reach — use `JALR`, the register-indirect branch-and-link:
+
+```asm
+    LA   R5, target            ; or: LDW R5, [Rb + #slot]
+    JALR R5                     ; R13 = PC+4, then PC = R5
+```
+
+Like `BL`, `JALR` links unconditionally to R13. It reads its target
+register **before** writing R13, so `JALR R13` jumps to the original
+target rather than self-clobbering to PC+4 — making
+`LDW R13, [ptr]; JALR R13` a safe tail-through-LR sequence.
+
+A compiler will select `JALR` when a function call references a pointer
+loaded from memory, or when the target is outside the immediate range
+`BL` can reach; `JALR` may also be useful for some types of relocated
+function calls — materializing an absolute target with `LLI`+`LUI`
+(the linker fixes up the immediates) and dispatching through the
+register.
 
 ### System Instructions
 
