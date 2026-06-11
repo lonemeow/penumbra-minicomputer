@@ -313,7 +313,8 @@ else
 COMPILER_TEST_ARGS := \
 	--test-dir "$(LLVM_TEST_SUITE)/UnitTests" \
 	--test-dir "$(LLVM_TEST_SUITE)/Regression" \
-	--test-dir "$(LLVM_TEST_SUITE)/Benchmarks/Stanford"
+	--test-dir "$(LLVM_TEST_SUITE)/Benchmarks/Stanford" \
+	--test-dir "$(TEST_COMPILER_DIR)/penumbra-abi"
 endif
 
 .PHONY: test-compiler
