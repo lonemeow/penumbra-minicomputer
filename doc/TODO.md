@@ -1,65 +1,13 @@
 # Penumbra -- TODO
 
-Items needed for improved userland testing and interactive use.
+Outstanding work and roadmap items, plus durable findings from
+completed investigations.
 
-## ISS Raw TTY Mode — DONE
+## Kernel: block-device reads still go single-block
 
-Implemented: `+raw` flag, Ctrl-A escape prefix (X=exit, C=CPU
-state, H=help), `make simulate RAW=1`.
-
-## Boot Arguments — DONE
-
-Implemented: bootloader reads `boot.cfg` from FAT32 via libsa
-`perform_bootcfg()`, `root=ld0f` emits `BTINFO_ROOTDEVICE`,
-kernel `cpu_rootconf()` auto-selects root device.
-`make sdimage-rootfs` includes `boot.cfg` automatically.
-
-## SPI v2 Hardware — DONE
-
-Implemented: `spi.sv` (real) and `sim_spi.sv` (sim) with hardware
-TX/RX FIFO and transfer engine. 7-register interface: CAP, STATUS,
-CONTROL, DATA, XFER_COUNT, IRQ_STATUS, IRQ_ENABLE.
-
-## Kernel IRQ Dispatch — DONE
-
-Implemented: `netbsd/sys/arch/penumbra/penumbra/intr.c` shared-IRQ
-dispatcher. `com(4)` UART is IRQ-driven.
-
-## MI sdmmc Kernel Driver — DONE (polled)
-
-Implemented: `netbsd/sys/arch/penumbra/penumbra/pmci.c` host
-controller driver. Kernel mounts FFS root from `ld0f`.
-
----
-
-## Roadmap
-
-### Phase 3.5: SPI FIFO data phase — DONE (polled completion)
-
-`pmci_burst()` in `netbsd/sys/arch/penumbra/penumbra/pmci.c` shifts
-the 512-byte SD data phase through the SPI v2 FIFO engine.  Both push
-and drain loops are 8×-unrolled.  XFER_DONE is **polled**, not IRQ-
-driven — see "IRQ-driven completion deferred" below.
-
-Throughput improvement: 61 → 85 KB/s on `dd if=/dev/ld0 of=/dev/null
-bs=32k count=100` (ULX3S FPGA).  Smaller than first-principles modeling
-predicted because the per-sector kernel/sdmmc-layer cost (~3.7 ms) now
-dominates the SD path, not the SPI byte-shifting that this change
-addressed.
-
-### Phase 3.6: CMD18/CMD25 multi-block — DONE
-
-`pmci_read` and `pmci_write` handle `MMC_READ_BLOCK_MULTIPLE` /
-`MMC_WRITE_BLOCK_MULTIPLE` natively as a per-block FIFO-burst loop
-inside the single CMD18 / CMD25 envelope.  The MI sdmmc layer issues
-CMD12 (STOP_TRANSMISSION) as a separate exec_command after we return
-(we don't set `SMC_CAPS_AUTO_STOP`).  CMD25 uses the
-0xFC inter-block data token and the 0xFD stop-tran token at the end,
-with a strict busy-wait variant between blocks to avoid catching the
-gap byte between data response and busy assertion.
-
-### Phase 3.7: block-device reads still go single-block
-
+`pmci` handles CMD18/CMD25 multi-block natively (a per-block
+FIFO-burst loop inside a single command envelope), but the block
+device doesn't reach it:
 `dd if=/dev/ld0 of=/dev/null bs=32k` issues 64 separate 512-byte
 `bread()` calls per syscall (`DEV_BSIZE = 512`), so each turns into
 a single-block read in `sdmmc_mem_read_block_subr`
@@ -86,10 +34,11 @@ impact is mostly for raw block-device tools (`dd if=/dev/ld0`,
 `disklabel`, etc.).  Leave the block-device path single-block until
 something on the read path notably matters.
 
-### IRQ-driven completion deferred
+## Kernel: IRQ-driven SPI completion deferred
 
-The Phase 3.5 plan originally included `intr_establish_xname()` +
-`cv_wait` on XFER_DONE.  Implemented and benchmarked: **3× slower**
+The SPI FIFO data-phase plan originally included
+`intr_establish_xname()` + `cv_wait` on XFER_DONE.  Implemented and
+benchmarked: **3× slower**
 than polled (85 KB/s → 28 KB/s).  Root cause is the cv_wait → IRQ →
 cv_signal round-trip costing ~12 ms — more than 10× the 660 µs SPI
 burst it's waiting for.  See also `pbench pipe_pingpong` (~19 ms for
@@ -101,27 +50,12 @@ on the current scheduler.  Revisit once one of:
   too — scratch SPRs landed in 02de545943e7 and shaved a few percent off
   trap-entry, but the cv_wait round-trip is still ~10 ms; the rest of
   the gap is trap_common / pmap_activate / copyin)
-- CMD18 multi-block (Phase 3.6 above) — **DONE**.  Each `pmci_burst`
-  now covers up to N × 660 µs of wire time on the FS-mediated path
-  (16 KB FS blocks → 32-sector CMD18), so re-measuring IRQ-driven
-  completion against the new envelope is worth a fresh attempt
+- CMD18 multi-block — landed.  Each `pmci_burst` now covers up to
+  N × 660 µs of wire time on the FS-mediated path (16 KB FS blocks →
+  32-sector CMD18), so re-measuring IRQ-driven completion against the
+  new envelope is worth a fresh attempt
 
-### Phase 4: Hardware MUL/DIV — DONE
-
-Hardware multiply/divide implemented as the **divmul peer unit**
-(`hw/rtl/penumbra1/divmul.sv`), reached via Format R opcodes 16-19
-(MUL/MULU/DIV/DIVU) with an explicit `Rdh` high-half/remainder writeback
-and a divide-by-zero fault to `VEC_ARITH`.  See
-[`doc/internals/divmul.md`](internals/divmul.md).
-
-The LLVM backend selects s32 multiply/divide/remainder — and 32×32→64
-widening multiply — to the unit instead of `__mulsi3`/`__udivsi3`/
-`__muldi3` libcalls (commits `beb685b`, `ba7ef55`); the NetBSD kernel
-runs with zero software mul/div fallbacks.  One residual optimization
-(fuse a widening multiply into a single `MUL_P`) is tracked under
-"Compiler: fuse a widening multiply into a single MUL_P".
-
-### Phase 5: FPU
+## Hardware: FPU
 
 Add a floating-point unit to the ALU. Currently using soft-float.
 
@@ -140,44 +74,6 @@ trap). As an insns-retired perfctr source that over-counts — a faulting
 instruction is re-executed after the handler, not retired. When a gen2 perfctr
 lands, gate the retired count by `~fault_pending` (the program-end testbench
 use is unaffected — it keys on the op_class, not the count).
-
-## Hardware: Penumbra/2 store commit vs. fault flush (precise-exception gap) — DONE
-
-The MEM stage commits a store's cache/memory write only on the cycle the
-store advances out of MEM (`o_dmem_we` gated on `advance`), so a fault flush
-(`i_bubble`) that arrives *before* the store reaches its commit cycle cancels
-it cleanly — the data memory is untouched. The module testbench's
-`bubble_store_mem` check covers exactly this case.
-
-Now that the exception unit has landed, `i_bubble` in the spine is driven by
-`wb_fault_commit` (the fault committing at WB, the oldest in-flight slot). The
-precise-exception requirement is met *structurally*, on two facts:
-
-- `o_dmem_we` is gated on `~i_bubble` (through both `do_access` and `advance`),
-  and `i_bubble = wb_fault_commit` is combinational from WB in the same cycle.
-  So an older instruction faulting at WB cancels a younger store's write in the
-  very same cycle — there is no "write already fired, flush too late" race.
-- A faulting slot is inert, so it never holds WB more than one cycle (WB's only
-  back-pressure, `o_stall`, is the dual-write hold, and a faulting slot is not a
-  dual write). Combined with MEM's launch-cycle bubble injection (a memory
-  op's launch cycle pushes `next_valid=0` into MEM/WB), by a store's *commit*
-  cycle WB holds a bubble — so the only cycle an older fault can coincide with a
-  live store is the store's *launch* cycle, which `i_bubble` cleanly cancels.
-
-Verified by `hw/sim/programs/penumbra2/test_store_squash.s`
-(`make test-prog CORE=penumbra2 PROG=test_store_squash`): a younger store in the shadow of an
-older misaligned-load fault leaves a pre-seeded sentinel untouched.
-
-**Adjacent hazard found and fixed while verifying this.** A load/store
-immediately behind a dual-write divmul lands fresh in MEM exactly as the
-divmul reaches WB and begins its 2-cycle aux (Rdh) write. The MEM
-back-pressure mux checked `mem_first` before `i_stall_in`, so the memory op's
-launch-cycle bubble overwrote the MEM/WB slot the divmul was occupying,
-dropping the Rdh write (tripping the `wb_stage` `!writing_aux || wb_dual_write`
-assertion). Fixed by gating `mem_first` with `~i_stall_in`: an access does not
-launch while WB back-pressures, so it waits in EX (acc_phase 0) until WB
-accepts the divmul's aux write, then launches cleanly. Regression:
-`hw/sim/programs/penumbra2/test_divmul_store.s` (`make test-prog CORE=penumbra2 PROG=test_divmul_store`).
 
 ## Hardware: Penumbra/2 WRSPR write path still tied off
 
@@ -220,44 +116,30 @@ re-synchronization (its write path is tied off today — see the section above).
 `doc/internals/build-system.md` defines the target structure: the
 four-axis build matrix, the `hw/rtl/machine/` integration layer, the
 `isa/` conformance split for test programs, and the
-`make fpga BOARD=<board> CORE=<generation>` porcelain. Migration, in
-dependency order:
+`make fpga BOARD=<board> CORE=<generation>` porcelain. The
+test-program side of the migration is done: programs live in `isa/` /
+`penumbra1/` / `penumbra2/` with `; RUNNER:` / `; REQUIRES:` tags,
+`hw/tools/run-prog-tests.py` drives `make test CORE=<core>` /
+`make test-prog`, and `tb_penumbra2_prog` is the generic gen2 runner.
+Remaining, in dependency order:
 
-1. **DONE.** Move `hw/sim/programs/*.s` into `isa/` / `penumbra1/` /
-   `penumbra2/` (git mv; all keep the `test_` prefix, so the gen2
-   `penumbra2_*.s` programs are renamed `test_*.s` under their
-   directory). Programs needing bespoke stimulus gain a
-   `; RUNNER:` tag; device-dependent `isa/` programs gain
-   `; REQUIRES:` tags. The pinned-vs-conformance criterion applied:
-   a test goes to `penumbra1/` only if a conforming non-gen1
-   implementation could fail it (timing windows, stall counters,
-   arbiter scenarios) — asserting architectural outcomes through
-   caches/MMU keeps it in `isa/`.
-2. **DONE.** Move the test-run loop into `hw/tools/run-prog-tests.py`
-   (tag scanning, skip reporting, pass/fail summary); collapse the
-   per-test `test-penumbra2-*` phony targets into the glob-driven
-   `make test CORE=penumbra2` plus `make test-prog` porcelain.
-3. **DONE.** Rename `tb_penumbra2_branch` → `tb_penumbra2_prog` — it
-   is the generic gen2 program runner, not a branch test. Also folded
-   `tb_penumbra2_core` (first-light runner with hardcoded smoke
-   expectations) into it by making `test_smoke.s` self-checking.
-4. Makefile source-set matrix (`SRC_CORE_<gen>`, `SRC_BOARD_<board>`,
+1. Makefile source-set matrix (`SRC_CORE_<gen>`, `SRC_BOARD_<board>`,
    `SRC_FABRIC`) + `hw/rtl/fpga/ulx3s/` board directory;
    `ulx3s_top` becomes `ulx3s_penumbra1_top`. `TOP=` stays as the
    low-level escape hatch. Update CLAUDE.md / DEVELOP.md command
    references in the same change.
-5. Add the gen2 bare-core timing probe
+2. Add the gen2 bare-core timing probe
    (`ulx3s_penumbra2_probe_top`, VARIANT=probe): core +
    `unified_mem`, IRQs on buttons, commit/retire reduced onto LEDs so
    synthesis keeps the design. This is where the
    synthesize-after-every-change workflow for gen2 starts — in place
    *before* the BRAM L1 lands, since Decision 11's 4-way-vs-leaner
    choice is gated on the IF2 tag-compare/way-mux path at synthesis.
-6. At gen2 machine assembly (after D-side MMU, BRAM L1, transactional
+3. At gen2 machine assembly (after D-side MMU, BRAM L1, transactional
    arbiter, fill sequencer): `machine_penumbra2` honoring the
    program-end contract; fold the ISA-shaped gen2 programs (smoke,
    branch, loadstore, fault, eret, syscall_trap, intr) into `isa/`.
-7. Opportunistic: extract `machine_penumbra1` from `machine_sim` /
+4. Opportunistic: extract `machine_penumbra1` from `machine_sim` /
    `ulx3s_penumbra1_top` so both wrappers share one integration
    (the sim-vs-FPGA congruence argument in the build-system doc).
 
@@ -321,21 +203,14 @@ too, which is not what we want here.
 Tracked tests: `testcase-InstCombine-1.c`, `pr57344-3.c`,
 `pr57344-4.c` (excluded in `test/compiler/excludes.txt`).
 
-## Compiler: G_SCMP / G_UCMP three-way compare -- DONE
+## Compiler: share the hi-word compare in i64 three-way compares
 
-`G_SCMP`/`G_UCMP` hooked into `PenumbraLegalizerInfo` with `.lower()`,
-which dispatches to `LegalizerHelper::lowerThreewayCompare()`.  The
-helper emits two `G_ICMP`s plus a subtract; both ride our existing
-s32/s64 rules (s64 narrows to multi-word compare via
-`clampScalar(1, s32, s32)` on `G_ICMP`).  Regression test at
-`llvm/llvm/test/CodeGen/Penumbra/threeway-cmp.ll`; `qsort_int` re-enabled
-in `benchmark/netbsd-bench/`.
-
-The i64 expansion is verbose (16 BBs — two s64 ICMPs each become a
-three-block hi/lo/eq diamond, materialized as four `mov` selects).
-A peephole that shares the hi-word compare across the two ICMPs is
-a plausible follow-up but not on the critical path for qsort's int
-comparator, which is the i32 case.
+The `G_SCMP`/`G_UCMP` lowering (`.lower()` →
+`LegalizerHelper::lowerThreewayCompare()`) expands the i64 case
+verbosely: 16 BBs — two s64 ICMPs each become a three-block hi/lo/eq
+diamond, materialized as four `mov` selects.  A peephole that shares
+the hi-word compare across the two ICMPs would shrink it.  Not on any
+hot path (qsort's comparator is the i32 case); low priority.
 
 ## Kernel: vmapbuf / vunmapbuf for raw device access
 
@@ -550,28 +425,6 @@ NetBSD tree, that's the floor we can't drop below.  Even an
 arbitrarily-good MD layer can only halve the 670 ms or so.
 
 
-## Hardware: UART RX FIFO — paste-friendliness — DONE
-
-`hw/rtl/io/uart.sv` now implements NS16550A semantics with 16-byte
-RX and TX FIFOs (reusing `spi_fifo.sv`).  FCR wired: `[0]` FIFO
-enable (true bypass to 16450 single-byte mode when cleared), `[1]`
-RX reset, `[2]` TX reset, `[7:6]` RX trigger level (1/4/8/14).  IIR
-reports `[7:6]=11` in FIFO mode (com(4) detect signature) and
-priority-encodes RX-above-trigger / character-timeout / THRE.
-
-Character timeout: in FIFO mode and non-empty, an RX interrupt
-fires after 4 character-times of idle (640 baud16x ticks) — partial
-pastes deliver promptly instead of waiting for the trigger
-threshold.  Counter is gated on `baud16x_tick` so the timeout
-window is fixed in baud-clock units regardless of `CLK_FREQ`.
-
-NetBSD `com(4)` autodetects the FIFOs via the IIR signature; no
-kernel-side change required.  Regression coverage in
-`hw/sim/tb_uart.cpp` (37/37 passing), including an explicit
-spurious-IRQ regression for the empty-FIFO timeout case.  Verified
-on the ULX3S — pastes deliver reliably for bursts that fit in the
-FIFO; longer bursts still lose characters (see next entry).
-
 ## Hardware: UART hardware flow control (RTS/CTS)
 
 With the 16-byte RX FIFO landed, paste loss only happens when an
@@ -634,44 +487,21 @@ is its own diagnostic.
 
 ## RESOLVED: "uncached MMIO STW 2.4× slower than LDW" was codegen, not hardware
 
-A targeted MMIO microbench in `pmci_attach` (Phase 3.5 diagnostic,
-since removed) measured, on the ULX3S FPGA @ 25 MHz with interrupts
-disabled and only the inner instruction varying:
+The hardware write path is symmetric — RTL-sim microbenches put a
+single uncached STW and LDW at the same ~4 cyc/op.  The observed 2.4×
+came from `-fno-strict-aliasing` (kernel-wide, `Makefile.kern.inc`):
+with TBAA off the compiler can't prove a volatile MMIO store doesn't
+alias the in-memory `bus_space_handle_t sc_ioh`, so it reloaded the
+handle before every write — 3 instructions per "STW" vs 1 per LDW,
+3:1 ≈ the observed 2.4×.  Do not re-investigate as a hardware
+write-path asymmetry.
 
-```
-baseline (RDSYS CPU_CYCLES x256):  1837 cyc  =  7.17 cyc/iter
-STW SPI_DATA x256:                 4429 cyc  = 17.3  cyc/iter  (~11 cyc/op)
-LDW SPI_STATUS x256:               2905 cyc  = 11.3  cyc/iter  (~5 cyc/op)
-```
-
-This is **not** a hardware write-path asymmetry — the premise that the
-"STW" was a single instruction was wrong.  Root cause:
-
-- **The hardware write path is symmetric.**  An RTL-sim microbench
-  (`hw/sim/programs/test_mmio_stw_timing.s`, a since-removed
-  diagnostic, on `machine_sim`) issuing a *single* STW vs LDW to the
-  same uncached scratch register costs the same ~4 cyc/op.  Microcode, the STALL sequencer, the bus arbiter, and
-  the L1 pass-through path are all symmetric — none favours reads.
-- **The microbench counted instructions, not cycles.**  The driver's
-  open-coded `bus_space_write_4` loop emitted *3* instructions per
-  "STW" — `ldw sc->sc_ioh` + `add` + `stw` — versus *1* for the read;
-  3:1 ≈ the observed 2.4×.
-- **Cause: `-fno-strict-aliasing`** (kernel-wide, `Makefile.kern.inc`).
-  With TBAA off the compiler can't prove the volatile MMIO store
-  doesn't alias the in-memory `bus_space_handle_t sc_ioh`, so it
-  reloads the handle before every write.  Confirmed by disassembly:
-  the loop is clean under `-fstrict-aliasing`, reloads under
-  `-fno-strict-aliasing`.
-
-**Fix / status.**  `pmci_burst` was converted from open-coded unrolled
-loops to the canonical `bus_space_{write,read,set}_multi_1` primitives
-(handle passed by value → base pinned in a register, immune to the
-reload).  This is **perf-neutral**, not a speedup: per-byte cost is
-dominated by the MMIO store latency (~4–5 cyc), so dropping the reload
-while rolling the loop is a wash — the idiomatic m68k flat-MMIO ports
-reach the same conclusion (simple rolled `*_multi` loops, no unroll).
-The conversion's value is readability and idiom.  Gated on a real-HW
-correctness check of the word→byte FIFO access width before commit.
+`pmci_burst` now uses the canonical `bus_space_{write,read,set}_multi_1`
+primitives (handle passed by value → base pinned in a register, immune
+to the reload; committed as `9ddfcf4aa941`).  Perf-neutral by design —
+per-byte cost is dominated by the MMIO store latency, and the idiomatic
+m68k flat-MMIO ports reach the same rolled-loop conclusion — the value
+is idiom and immunity to the reload.
 
 ## Hardware: SD read throughput is bottlenecked by pmci_burst byte-PIO
 
@@ -712,77 +542,6 @@ all sequential, bus idle during fill/drain.
 Realistic: ~2-3× on the pmci term, ~1.5-2× end-to-end (the kernel
 I/O stack + per-command framing is the other ~half of the run).  A
 real SPI read-path + HW project, not a quick fix; gen2-adjacent.
-
-## Hardware: scratch SPRs for fast trap entry — DONE
-
-Implemented SCR0–SCR3 (four 32-bit storage SPRs at indices 4–7,
-supervisor-only, undefined reset values).  Hardware in
-`hw/rtl/penumbra1/spr_scratch.sv`, instantiated from `datapath.sv` with
-the SCR readback overlaying amux slot 11 (mutually exclusive with
-vector-addr fetch).  ISS, pasm.py, and the LLVM integrated
-assembler all teach SCR0–3 as SPR names.  Kernel TLB miss fast
-path (`_real_miss_handler`) now uses SCR0..2 instead of
-PC-relative stores into the pinned scratch page; storage symbols
-`_rmh_save_r{1..3}` removed.
-
-Commits: b33891e6d197 (ISA spec + hardware + ISS + test),
-62558fd4c635 (LLVM AsmParser), 02de545943e7 (kernel adoption).
-
-Measured impact (median-of-min across 2 consecutive runs, ULX3S
-@ 25 MHz, post-pbench harness redesign):
-
-```
-  kernel/getpid          565.08 us → 545.80 us  (-3.4%) ★
-  kernel/clock_gettime     1.20 ms →   1.16 ms  (-3.3%)
-  kernel/pipe_pingpong    18.63 ms →  18.09 ms  (-2.9%)
-  kernel/fork_exit       617.01 ms → 604.66 ms  (-2.0%)
-```
-
-The cleanest signal is on getpid: 17× the within-side noise floor
-(0.02% intra-run variance vs 3.4% delta).  The other three are
-individually marginal but all move in the same direction with
-similar magnitude — consistent with a cache-pollution / footprint
-improvement that leaks beyond the literal TLB miss handler.
-
-Smaller than the original "tens of cycles per trap" projection
-because in steady state the old PC-relative stores were cache hits
-on the pinned scratch page, so the direct per-miss cycle cost was
-already small.  The realized win is mostly second-order: removing
-a per-miss cache-line write reduces eviction pressure on adjacent
-syscall hot paths.
-
-Future "rip out the pinned scratch page entirely" work could
-extend SCR usage to `_trap_entry_*` stubs and `_trap_common`'s
-early state stashing.  Diminishing returns curve is steep and
-not currently a priority.
-
-## Hardware/kernel: cache performance counters — DONE
-
-Four free-running 32-bit counters per cache device (regs 10-13 on
-`SYSDEV_L1_DCACHE`, `SYSDEV_L1_ICACHE`, `SYSDEV_L2_CACHE`):
-`READ_HITS`, `READ_MISSES`, `WRITE_HITS`, `WRITE_MISSES`.  HIT/MISS
-classification is by the tag check at the moment of access —
-definitions are policy-invariant across every WT/WB × WnA/WA
-combination, so the counter names carry through future cache
-policy changes without losing meaning.
-
-Three vantage points expose the same counters:
-
-- **RTL**: shared `hw/rtl/soc/cache_perfctr.sv` submodule,
-  instantiated by each cache.  L1 uses edge-detection on live
-  `i_re`/`i_we`; L2 reuses its `s1_valid` one-shot plus a small
-  `fill_reserve_pending` flop to suppress the post-fill re-serve.
-- **Bare-metal**: `bench_cache_perf_snapshot_{l1d,l1i,l2}` and
-  `bench_cache_perf_print_delta` in `benchmark/common/bench.[ch]`;
-  Dhrystone's harness prints deltas alongside the existing CPU
-  perfctrs.
-- **NetBSD**: `machdep.cache.{l1d,l1i,l2}.{read,write}_{hits,misses}`
-  `CTLTYPE_QUAD` sysctls (in
-  `netbsd/sys/arch/penumbra/penumbra/cache_perfctrs.c`).  Read via
-  stock `sysctl(8)` — no custom userland tool needed.
-
-Commits: `95b26c56a8ca` (RTL + tests), `32e262381274` (bare-metal
-harness), `102973802e41` (NetBSD sysctl).
 
 ## Hardware: gen1 CPU fmax — critical-path findings
 
@@ -870,34 +629,6 @@ The headline: gen1's ceiling is structural (one cycle does fetch +
 decode + read + execute + writeback), so the durable fmax lever is the
 gen2 pipeline. Within gen1, prefer small depth-shaving wins that buy
 safety margin over the 25 MHz target rather than campaigns to raise it.
-
-Verified-by-construction: the two cross-layer identities (L1-D
-writes total = L2 writes total, L1 read misses × 4 = L2 reads
-total) hold to the count on Dhrystone — a strong end-to-end
-correctness signal beyond what the unit tests alone would give.
-
-## Hardware: L2 phase 1.5 — WT-WnA — DONE
-
-Replaced the phase-1 write-invalidate-on-hit policy at L2 with
-proper write-through, write-no-allocate.  On a write hit the
-cached line's data is updated in place via byte-en instead of
-dropped; cached read-modify-write lines (kernel page tables,
-globals, ring-buffer state) now persist across writes.
-
-Commit: `42e92324dc0d`.  Measured on FPGA:
-
-- Dhrystone L2 read miss rate: **1.5% → 0.02%** (-98.7%)
-- Dhrystone L2 write hits: 40K → **841K** (×21), confirming the
-  working set is L2-resident under WT-WnA
-- pbench locality-sensitive workloads improve:
-  `clock_gettime` -8.9%, `pipe_pingpong` -5.8%, `qsort_int` -6.4%
-- Streaming workloads (`memcpy`/`memset` 64K) ~flat — bottleneck
-  is SDRAM bandwidth, not L2 policy
-
-Software-visible contract unchanged (INFO still `WB=0, WA=0`).
-Test surface grew from 42 → 76 assertions on `tb_l2_cache`,
-including multi-set independence, byte-en accumulation, and the
-post-reset-walker pass-through demotion contract.
 
 ## Hardware: Penumbra/2 L1↔L2 arbiter + fill sequencer + BRAM L1
 
@@ -1164,29 +895,6 @@ But the discrepancy between "what the hardware can encode" and
 "what the cost model claims" is worth closing for correctness of
 optimization decisions in code we haven't yet seen.
 
-## Compiler: pointer-bump loops -- DONE
-
-Tight pointer-bump loops (`strcpy`, `memcpy`) now compile to
-the ideal 6-instruction inner loop: `ldb; add src,1; stb; add
-dst,1; cmp; bne`.  Two cooperating fixes get there:
-
-1. `PenumbraTTIImpl::isLSRCostLess` makes `Insns` the primary
-   LSR sort key.  Without it, LSR rewrote the natural
-   pointer-bump form into a single integer IV plus two
-   `add Rb, Ri` per iteration, costing 2 extra ADDs/iter.
-2. `penumbra_sink_ptr_add_past_use` post-legalizer combine
-   sinks `G_PTR_ADD %new, %old, K` past the immediately-
-   following memory op that reads `%old`.  Penumbra's
-   destructive 2-operand `add Rd, 1` needs the source
-   register to die before the def — without the sink,
-   `twoaddressinstruction` inserts a COPY that the register
-   coalescer can't eliminate, and the loop ends with one
-   trailing MOV per pointer per iteration.
-
-Regression test: `lsr-pointer-bump.ll` asserts the 6-instr
-form.  Cycle-accurate Dhrystone (-O2): 2.16 → 2.58 DMIPS
-through both fixes.
-
 ## Compiler: signed sub-word loads through PHIs
 
 Mirror of the zext-load promote rule for the sign-extending case.
@@ -1224,29 +932,14 @@ walk has to handle mixed users sensibly — pessimize to no
 promotion if both sext and zext consumers exist, since either
 choice forces a software conversion at the other use site.
 
-## Compiler: G_SELECT does not fold constant RHS into CMPi — DONE
+## Compiler: selectAddSubCarry misses the immediate fold
 
-Implemented as planned: a `SELECT_CCi_GPR` pseudo (immediate in place
-of the second CMP register, expanded to `CMPi` in the diamond head)
-selected by the shared `emitSelectCC` helper, which both `selectSelect`
-and `selectICmp`'s diamond fallback route through.  Constant-LHS
-compares canonicalize via `canonicalizeCompareOperands`
-(swap + `CmpInst::getSwappedPredicate`), shared with `selectBrCond` —
-all compare-shaped consumers now funnel immediate folding through
-`emitCompare`/`emitSelectCC`.  Regression tests:
-`test/CodeGen/Penumbra/select-imm.ll`,
-`test/CodeGen/Penumbra/GlobalISel/select-select-imm.mir`.
-
-Side benefit: compares against a register-materialized zero now fold
-to `CMPi rX, 0`, which the post-selection `optimizeCompareInstr`
-zero-compare elision recognizes (it only matches `CMPi`) — in
-umul-overflow-i64.ll one compare disappears outright.
-
-A smaller related gap remains open: `selectAddSubCarry` still
-hand-emits the register `ADD`/`SUB` for the carry chain, so an i64
-add/sub by a small constant materializes it with an LLI instead of
-`ADDi`/`SUBi`. Routing those through an `emitFoldableALU`-style helper
-(sharing the uimm16 fold logic with `emitCompare`) would close it.
+`selectAddSubCarry` hand-emits the register `ADD`/`SUB` for the i64
+carry chain, so an i64 add/sub by a small constant materializes it
+with an LLI instead of `ADDi`/`SUBi`.  Routing those through an
+`emitFoldableALU`-style helper (sharing the uimm16 fold logic with
+`emitCompare`, the way `emitSelectCC` does for select immediates)
+would close it.
 
 ## Compiler: redundant extension of comparison results
 
@@ -1820,7 +1513,7 @@ to stay clean of trademark misuse.
 - FP-heavy workloads (`linear_alg`, `loops-all`, `nnet`, `radix2`)
   will be dominated by soft-float cost on the current CPU.  Numbers
   are still meaningful as a baseline but the suite gets a lot more
-  interesting after Phase 5 (FPU).
+  interesting once a hardware FPU lands.
 - `radix2-big-64k` walks ~512 KB of complex floats — blows past our
   1 KB caches and 64-entry TLB and is the most interesting workload
   from a memory-hierarchy perspective.
@@ -1834,43 +1527,6 @@ pbench.  The split gives a clean two-tier story: bare-metal
 benchmarks measure the CPU in isolation, hosted benchmarks measure
 the system.
 
-## Tooling: penmon redraw — curses replaced with an ANSI damage diff — DONE
-
-The problem was in NetBSD libcurses, not penmon: `__cputchar_args`
-(`netbsd/lib/libcurses/putchar.c`) emitted each character as
-`putc(ch); fflush(outfd)` — a flush, hence a `write(2)`, per character —
-so `refresh.c` turned one 80x24 colour frame into thousands of
-`write(2)`s.  It was a syscall-count problem, not a byte-count one: at
-25 MHz each syscall (trap -> tty line discipline -> comstart -> trap) is
-expensive, so per-character writes dominated and the first frame visibly
-painted character-by-character.
-
-Fixed by dropping libcurses for a small virtual-screen layer
-(`sw/penmon/screen.c`).  The renderer redraws the whole logical frame
-into an off-screen cell grid each tick; a damage diff against the
-on-screen grid emits only the changed cells as one ANSI byte stream,
-written with a single `write(2)`.  This keeps curses' cheap half (the
-virtual-screen diff) and drops its expensive half (the per-char flush).
-
-Consequences:
-- One frame is one syscall.  Steady-state frames are small diffs (a
-  single-cell change is ~17 bytes) — comfortably under the ~11.5 KB/s
-  serial ceiling, even though the renderer still redraws everything and
-  lets the diff collapse it.
-- Glyphs are emitted as raw UTF-8 (Unicode block/line glyphs), so the
-  result no longer depends on the *target's* locale — only on a UTF-8
-  host terminal.  No terminfo database is needed and nothing reads
-  `TERM`, so the static binary runs on a minimal rootfs, not just
-  `ROOTFS_FULL=1`.
-- Each cell is a single 4-byte word (16-bit glyph + 16-bit attr) with no
-  padding, so the per-frame diff scan is ~15 KB of word compares —
-  negligible against the serial transmit it avoids.  Sparklines also
-  take one colour per strip, collapsing each to a single SGR run.
-
-Verified by a host unit test (`sw/penmon/screen_test.c`, `make -C
-sw/penmon test`) and a target cross-build, and confirmed on the ULX3S
-over the serial console.
-
 ## Kernel/compiler: dedicate R12 (TP) to curlwp
 
 The ABI reserves R12 as the thread pointer, and the kernel uses no TLS,
@@ -1881,18 +1537,22 @@ read from a load of `cpu_info_store.ci_curlwp` into a register read.  It
 costs no register pressure: R12 is already reserved, so the allocatable
 set does not change.
 
-### Compiler support — DONE (`ff46f87450d8`)
+### Compiler support — DONE
 
-`register T x __asm("r12")` works end to end: `getRegisterByName`
-resolves the canonical name and the ABI aliases (one TableGen
-`MatchRegisterAltName` table shared with the assembler), the GlobalISel
-legalizer lowers `G_READ_REGISTER` / `G_WRITE_REGISTER` to a COPY
-to/from the physical register, and naming an allocatable or unknown
-register is a fatal error.  Tests:
-`test/CodeGen/Penumbra/named-register{,-errors}.ll`,
-`test/MC/Penumbra/register-aliases.s`.  clang already lists `r12` in
-`GCCRegNames`, so the frontend accepts the declaration — the only
-prerequisite is rebuilding clang to pick up the backend library.
+Two pieces, both landed:
+
+- `register T x __asm("r12")` works end to end (`ff46f87450d8`):
+  `getRegisterByName` resolves the canonical name and the ABI aliases,
+  the GlobalISel legalizer lowers `G_READ_REGISTER` /
+  `G_WRITE_REGISTER` to a COPY to/from the physical register, and
+  naming an allocatable or unknown register is a fatal error.  clang
+  already lists `r12` in `GCCRegNames`.
+- The across-call spill problem is fixed (`32937b8bf9d7`): R12 is now a
+  *member* of `GPR_Allocatable` (listed last, still excluded from
+  allocation by `getReservedRegs` — the RISC-V `tp` idiom), so the
+  register coalescer substitutes R12 into cross-call `%v = COPY $r12`
+  values and each use gets a fresh `mov rX, r12` instead of a
+  callee-saved copy or stack spill.
 
 ### Kernel wiring (not yet done)
 
@@ -1908,66 +1568,12 @@ prerequisite is rebuilding clang to pick up the backend library.
    the save, before running C.  Exit restores the user value via the
    trapframe automatically.
 
-### Measured benefit (single-issue, in-order; instruction counts)
+### Expected benefit (single-issue, in-order; instruction counts)
 
 The dominant pattern `curlwp->field` in straight-line code drops from
 `lli`+`lui`+`ldw`(curlwp)+`ldw`(field) = 4 instructions to `mov`+`ldw`
-= 2, and removes a D-cache access.  That is the real, free win, and it
-lands on the lock/scheduler/fault paths that read `curlwp` constantly.
-Across a call the only saving is the dropped address materialisation —
-see the dead end below.
-
-### Across-call spill: a Penumbra allocator decision, not a regmask or remat-eligibility gap
-
-When several `curlwp` reads in one block sit around calls,
-`PeepholeOptimizer::foldRedundantCopy` fuses them into one
-`%v = COPY $r12` reused across the calls; Penumbra's allocator then
-copies that into a callee-saved register (low pressure) or stack-spills
-it (high pressure), where the *wanted* result is a fresh `mov rX, r12`
-at each use.
-
-Two earlier diagnoses here were wrong, both corrected against the
-in-tree LLVM source:
-
-- **Marking R12 call-preserved does not help** (still true), but *not*
-  because the regmask gates remat.  `VirtRegAuxInfo::allUsesAvailableAt`
-  short-circuits physreg uses with `isConstantPhysReg(...) → continue`,
-  so the call's regmask is irrelevant to whether the COPY can be
-  rematerialised.  Prototyping `CSR_Penumbra ∪ R12` produced identical
-  codegen for exactly this reason — don't re-attempt it.
-- **It is not "the spiller can't remat a reserved physreg."**
-  `COPY $r12` is fully remat-eligible: `isReMaterializableImpl`
-  (constant-physreg use arm) and `allUsesAvailableAt` both pass.  The
-  generic spiller/coalescer *can* rematerialise it, and on RISC-V the
-  equivalent `tp`=curlwp pattern **does** recover (optimal `mv a0, tp`,
-  no spill).  So this is a Penumbra-specific *allocator cost* outcome,
-  not a missed-feature, and **not** an upstream `PeepholeOptimizer` bug.
-
-**Root cause (verified by RISC-V A/B in-tree):** the i32 value register
-class is `GPR_Allocatable`, which *excludes* R12.  The register coalescer
-can fold `%v = COPY $r12` only if R12 is a member of `%v`'s class — the
-gate is `CoalescerPair::setRegisters` (`else if (!SrcRC->contains(Dst))
-return false`).  Since R12 ∉ `GPR_Allocatable`, the copy is declared
-non-coalescable, `joinReservedPhysReg` never runs, and the
-PeepholeOptimizer-fused cross-call value survives to spill.  RISC-V keeps
-its thread pointer (`x4`) *inside* the allocatable `GPR` class and
-excludes it from allocation via `getReservedRegs` instead, so its
-coalescer substitutes `x4` freely and emits optimal `mv a0, tp` per use.
-Confirmed by comparing `-stop-after=register-coalescer` MIR on both
-targets: RISC-V rewrites `$a0 = COPY %v` → `$a0 = COPY $x4` and deletes
-`%v`; Penumbra leaves `%v = COPY $r12` in place.
-
-This was *not* the spiller, `allUsesAvailableAt`, the spill-weight
-helper, or PeepholeOptimizer (all investigated and ruled out) — it is a
-Penumbra register-class design choice, fixable in our backend.
-
-**Fix:** make the i32 value/allocation class *contain* R12 (and ideally
-the other reserved GPRs) while keeping it out of allocation via
-`getReservedRegs` — the standard LLVM idiom (RISC-V's `GPR` lists
-`x0`/`sp`/`gp`/`tp`).  Lowest-risk form: append the reserved registers to
-the end of `GPR_Allocatable`'s member list so the first-12 allocation
-order is byte-identical (no codegen churn in existing tests) but R12
-becomes a class member and coalescing fires.
+= 2, and removes a D-cache access.  It lands on the
+lock/scheduler/fault paths that read `curlwp` constantly.
 
 ## Hardware + kernel: local console (HDMI text-video + USB keyboard)
 
