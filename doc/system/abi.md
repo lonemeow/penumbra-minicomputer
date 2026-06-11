@@ -93,19 +93,56 @@ The status register flags (N, Z, C, V) are **caller-saved** — they are not pre
 
 ### Argument Passing
 
-1. The first four scalar arguments are passed in **R1, R2, R3, R4** (in order).
-2. Arguments beyond four are passed on the **stack**, pushed right-to-left (C convention), so that argument 5 is at the lowest stack address.
-3. Each stack argument occupies a 4-byte slot (smaller types are widened to 32 bits).
-4. 64-bit arguments (`long long`, `double`): passed in an **aligned register pair** (R1:R2 or R3:R4). If the next available register is odd-numbered (R3 when a 64-bit arg needs passing), the odd register is skipped and the pair starts at the next even register. If no register pair is available, the argument goes on the stack, 4-byte aligned.
-5. Structs and unions ≤ 4 bytes are passed by value in a single register. Structs 5–8 bytes are passed in a register pair (same alignment rules as 64-bit scalars). Structs > 8 bytes are passed by **reference** — the caller allocates a copy on its stack and passes a pointer in the next available register.
+Arguments are assigned, left to right, to a sequence of 4-byte
+**argument slots**. The first four slots are R1, R2, R3, R4; further
+slots are 4-byte stack words at increasing addresses, with slot 5 at
+`[SP + 0]` as seen at the call instruction. A slot is never skipped
+for alignment: every argument occupies the next free slot(s), and a
+two-slot argument may straddle the register/stack boundary (first
+half in R4, second half in the first stack slot).
+
+| Argument type | Slots | Contents |
+|---------------|:-----:|----------|
+| scalar ≤ 4 bytes (integers, pointers, `float`) | 1 | value; sub-word types widened to 32 bits per their signedness |
+| 64-bit scalar (`long long`, `double`, `long double`) | 2 | low word first, high word second |
+| aggregate ≤ 4 bytes | 1 | the aggregate's memory image in the slot's low-order bytes; remaining bytes undefined |
+| aggregate 5–8 bytes | 2 | the aggregate's memory image; first slot = lower-addressed word |
+| aggregate > 8 bytes | 1 | pointer to a caller-owned temporary copy |
+
+Aggregates (structs and unions) are classified by size alone; field
+types and declared alignment do not affect slot assignment.
+Zero-sized aggregates (a GNU C extension) occupy no slot.
+
+For aggregates passed by reference (> 8 bytes), the caller allocates
+a temporary copy of the argument value in its own frame and passes
+the copy's address. The callee may modify the copy freely; the copy
+is dead once the call returns. The temporary carries the alignment
+guarantees of any automatic object of its type. In all size classes,
+by-value semantics hold: **a callee's writes to its parameter are
+never visible in the caller's argument object.**
+
+**Variadic functions.** Anonymous (variadic) arguments use the same
+slot assignment as named arguments. A variadic callee spills R1–R4
+into a save area placed directly below its incoming stack arguments,
+forming one contiguous slot array; `va_list` is a pointer that walks
+this array.
 
 ### Return Values
 
-| Size | Location |
-|------|----------|
-| ≤ 4 bytes | R1 |
-| 5–8 bytes | R1 (low), R2 (high) |
-| > 8 bytes | Caller passes hidden pointer in R1; callee writes to it and returns the pointer in R1 |
+| Returned type | Location |
+|---------------|----------|
+| scalar ≤ 4 bytes | R1 |
+| 64-bit scalar | R1 = low word, R2 = high word |
+| aggregate ≤ 4 bytes | R1 (memory image, as for arguments) |
+| aggregate 5–8 bytes | R1 = first word, R2 = second word |
+| aggregate > 8 bytes | hidden result pointer (see below) |
+
+For aggregate returns larger than 8 bytes, the caller allocates the
+result object and passes its address as a **hidden first argument**
+in R1; all explicit arguments shift one slot. The callee writes the
+result through that pointer. R1–R4 hold no defined values on return
+from such a function — in particular, the callee is **not** required
+to leave the result pointer in R1.
 
 ### Stack Frame
 

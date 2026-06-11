@@ -213,6 +213,51 @@ diamond, materialized as four `mov` selects.  A peephole that shares
 the hi-word compare across the two ICMPs would shrink it.  Not on any
 hot path (qsort's comparator is the i32 case); low priority.
 
+## Compiler: aggregate-ABI rework — small structs in registers
+
+`doc/system/abi.md` ("Argument Passing" / "Return Values") specifies
+the slot-based aggregate convention: aggregates ≤ 4 bytes travel by
+value in one slot, 5–8 bytes in two slots (register/stack straddle
+allowed), > 8 bytes by reference to a caller-owned copy; returns
+≤ 8 bytes come back in R1/R1:R2, larger ones via hidden sret pointer
+with R1–R4 undefined at return.  The implementation is still
+`DefaultABIInfo` (clang/lib/CodeGen/Targets/Penumbra.cpp) — every
+aggregate indirect, every aggregate return sret — with three defects
+the `test/compiler/penumbra-abi/` tests pin down:
+
+- **Missing byval copy for register-slot aggregates.**
+  `PenumbraCallLowering` passes the byval *pointer* in the register
+  slot without materializing the copy, so C pass-by-value is
+  silently pass-by-reference: a callee that writes its parameter
+  mutates the caller's object, and a `.rodata`-sourced argument is
+  exposed to callee writes.  (The variadic path was already fixed —
+  `normalizeVarArgByVal` — the fixed-arg path was not.)
+- **Stack-positioned byval corrupts trailing arguments.**  The
+  caller memcpys the aggregate's bytes into the outgoing area but
+  advances the slot offset by only one slot, so the next argument
+  overwrites the aggregate's tail.  Silent data corruption for any
+  by-value struct that lands in stack slots.
+- **Outgoing stack stores expand byte-by-byte.**  Stack-slot stores
+  are created with align-1 memory operands, so every stack argument
+  (scalars included — e.g. a stack-passed `long long`) lowers to
+  the unaligned byte-store expansion: eight `stb` + shifts instead
+  of two `stw`.
+
+Plan: replace `DefaultABIInfo` with a `PenumbraABIInfo` (RISC-V
+ILP32 pattern): ≤ 4 bytes → Direct(i32), 5–8 → Direct([2 x i32]),
+> 8 → indirect **non-byval** (clang materializes the copy in IR, so
+the backend byval paths go dead and `normalizeVarArgByVal` can
+retire); same classes for returns (`RetCC_Penumbra` already assigns
+i32 to [R1, R2]).  Fix the stack-store alignment in
+`PenumbraCallLowering`, make any remaining byval IR a hard error,
+re-triage the `struct-ret-1.c` exclusion, and add lit shape tests
+for the new convention.
+
+Tracked tests: `test/compiler/penumbra-abi/` —
+`abi-aggregate-{mutate,const,value}.c` fail until this lands;
+`abi-aggregate-{return,varargs,boundary}.c` must stay green
+across it.
+
 ## Kernel: vmapbuf / vunmapbuf for raw device access
 
 `vmapbuf` and `vunmapbuf` in `penumbra/machdep.c` are still
