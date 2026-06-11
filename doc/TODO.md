@@ -164,8 +164,8 @@ precise-exception requirement is met *structurally*, on two facts:
   cycle WB holds a bubble — so the only cycle an older fault can coincide with a
   live store is the store's *launch* cycle, which `i_bubble` cleanly cancels.
 
-Verified by `hw/sim/programs/penumbra2_store_squash.s`
-(`make test-penumbra2-store-squash`): a younger store in the shadow of an
+Verified by `hw/sim/programs/penumbra2/test_store_squash.s`
+(`make test-prog CORE=penumbra2 PROG=test_store_squash`): a younger store in the shadow of an
 older misaligned-load fault leaves a pre-seeded sentinel untouched.
 
 **Adjacent hazard found and fixed while verifying this.** A load/store
@@ -177,12 +177,12 @@ dropping the Rdh write (tripping the `wb_stage` `!writing_aux || wb_dual_write`
 assertion). Fixed by gating `mem_first` with `~i_stall_in`: an access does not
 launch while WB back-pressures, so it waits in EX (acc_phase 0) until WB
 accepts the divmul's aux write, then launches cleanly. Regression:
-`hw/sim/programs/penumbra2_divmul_store.s` (`make test-penumbra2-divmul-store`).
+`hw/sim/programs/penumbra2/test_divmul_store.s` (`make test-prog CORE=penumbra2 PROG=test_divmul_store`).
 
 ## Hardware: Penumbra/2 WRSPR write path still tied off
 
 WRSYS now drives a real sysreg write at the EX drain-commit
-(`make test-penumbra2-syswrite`). Wiring it surfaced a shared decode bug:
+(`make test-prog CORE=penumbra2 PROG=test_syswrite`). Wiring it surfaced a shared decode bug:
 WRSYS *and* WRSPR encode their value register in the Rd field (as the assembler
 emits and gen1 reads), but gen2 decode read it from Rs (i.e. R0). Both were
 corrected to read the Rd field.
@@ -199,7 +199,7 @@ add a WRSPR→RDSPR round-trip test to exercise the now-corrected decode.
 WRSYS is now context-synchronizing: after its post-commit-wait it re-fetches its
 successor so following instructions observe the new sysreg state (the contract in
 `doc/system/sysregs.md`; mechanism in the gen2 drain-commit design decision).
-`make test-penumbra2-resync` guards the exactly-once property (the re-fetch must
+`make test-prog CORE=penumbra2 PROG=test_resync` guards the exactly-once property (the re-fetch must
 neither duplicate the held copy nor skip it), and the syswrite/full suite confirm
 the re-fetch redirects to the correct successor.
 
@@ -214,6 +214,52 @@ the regression + exactly-once guards.
 
 Also revisit WRSPR SR then: if `SR.S` gates fetch translation, it needs the same
 re-synchronization (its write path is tied off today — see the section above).
+
+## Hardware: build/test restructure to the BOARD×CORE matrix
+
+`doc/internals/build-system.md` defines the target structure: the
+four-axis build matrix, the `hw/rtl/machine/` integration layer, the
+`isa/` conformance split for test programs, and the
+`make fpga BOARD=<board> CORE=<generation>` porcelain. Migration, in
+dependency order:
+
+1. **DONE.** Move `hw/sim/programs/*.s` into `isa/` / `penumbra1/` /
+   `penumbra2/` (git mv; all keep the `test_` prefix, so the gen2
+   `penumbra2_*.s` programs are renamed `test_*.s` under their
+   directory). Programs needing bespoke stimulus gain a
+   `; RUNNER:` tag; device-dependent `isa/` programs gain
+   `; REQUIRES:` tags. The pinned-vs-conformance criterion applied:
+   a test goes to `penumbra1/` only if a conforming non-gen1
+   implementation could fail it (timing windows, stall counters,
+   arbiter scenarios) — asserting architectural outcomes through
+   caches/MMU keeps it in `isa/`.
+2. **DONE.** Move the test-run loop into `hw/tools/run-prog-tests.py`
+   (tag scanning, skip reporting, pass/fail summary); collapse the
+   per-test `test-penumbra2-*` phony targets into the glob-driven
+   `make test CORE=penumbra2` plus `make test-prog` porcelain.
+3. **DONE.** Rename `tb_penumbra2_branch` → `tb_penumbra2_prog` — it
+   is the generic gen2 program runner, not a branch test. Also folded
+   `tb_penumbra2_core` (first-light runner with hardcoded smoke
+   expectations) into it by making `test_smoke.s` self-checking.
+4. Makefile source-set matrix (`SRC_CORE_<gen>`, `SRC_BOARD_<board>`,
+   `SRC_FABRIC`) + `hw/rtl/fpga/ulx3s/` board directory;
+   `ulx3s_top` becomes `ulx3s_penumbra1_top`. `TOP=` stays as the
+   low-level escape hatch. Update CLAUDE.md / DEVELOP.md command
+   references in the same change.
+5. Add the gen2 bare-core timing probe
+   (`ulx3s_penumbra2_probe_top`, VARIANT=probe): core +
+   `unified_mem`, IRQs on buttons, commit/retire reduced onto LEDs so
+   synthesis keeps the design. This is where the
+   synthesize-after-every-change workflow for gen2 starts — in place
+   *before* the BRAM L1 lands, since Decision 11's 4-way-vs-leaner
+   choice is gated on the IF2 tag-compare/way-mux path at synthesis.
+6. At gen2 machine assembly (after D-side MMU, BRAM L1, transactional
+   arbiter, fill sequencer): `machine_penumbra2` honoring the
+   program-end contract; fold the ISA-shaped gen2 programs (smoke,
+   branch, loadstore, fault, eret, syscall_trap, intr) into `isa/`.
+7. Opportunistic: extract `machine_penumbra1` from `machine_sim` /
+   `ulx3s_penumbra1_top` so both wrappers share one integration
+   (the sim-vs-FPGA congruence argument in the build-system doc).
 
 ## Compiler: graceful-fail on unsupported inline asm and vector IR
 

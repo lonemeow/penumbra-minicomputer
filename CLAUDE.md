@@ -99,8 +99,14 @@ Examples: `llvm: fix PIC TLS GD materialization`,
 - `make simulate-rtl` — boot ROM + Verilator RTL sim, interactive via
   Docker (`-it`). Cycle-accurate but slow. `INTERACTIVE=0` for piped
   input. Same `SDCARD`/`TRACE` options.
-- `make test-iss` — all `hw/sim/programs/test_*.s` on ISS (no Docker).
-- `make test` — all test programs on RTL sim via Docker.
+- `make test-iss` — the `hw/sim/programs/isa/` conformance suite on
+  the ISS (no Docker).
+- `make test [CORE=penumbra1|penumbra2]` — `isa/` + the core's
+  microarch suite (`hw/sim/programs/<core>/`) on RTL sim via Docker.
+  `make test-prog CORE=<core> PROG=<name>` runs one program. Programs
+  carry lit-style `; RUNNER:` / `; REQUIRES:` header tags (scanned by
+  `hw/tools/run-prog-tests.py`); suite layout and tag semantics in
+  `doc/internals/build-system.md`.
 - `make test-modules` — module-level Verilator testbenches (alu,
   regfile, cache_test, sdram_adapter_test, …). List is `MODULE_TESTS`
   in the Makefile; integration testbenches (`tb_cpu_prog`,
@@ -213,12 +219,16 @@ Hex files are gitignored; the Makefile builds them from sources.
 
 ## Test convention
 
-- **Runner:** `hw/sim/tb_cpu_prog.cpp` runs until BREAK (500000 cycle
-  limit), checks R1 for pass/fail.
+- **Suites:** `hw/sim/programs/isa/` is the conformance suite (must
+  pass on the ISS and every core generation); `hw/sim/programs/<core>/`
+  holds microarch-pinned regressions. Tag semantics and layout:
+  `doc/internals/build-system.md`.
+- **Runners:** gen1 `hw/sim/tb_cpu_prog.cpp` (runs until BREAK halts,
+  500000 cycle limit); gen2 `hw/sim/tb_penumbra2_prog.cpp` (stops on a
+  retiring BREAK — gen2 traps rather than halts). Both check R1.
+  A `; RUNNER: tb_<name>` header tag selects a bespoke testbench.
 - **Convention:** R1 = 1 means PASS, R1 = 0 means FAIL. Tests
-  self-check and set R1.
-- **Halt:** testbench watches `o_halted` pulse. Programs end with
-  `BREAK`.
+  self-check and set R1. Programs end with `BREAK`.
 - **Boot from ROM:** programs assembled with `--org 0xFFFF0000`.
   `_start:` must be first label.
 - **ROM page TLB mapping** (used by MMU tests):

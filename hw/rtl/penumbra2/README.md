@@ -27,11 +27,16 @@ stand-in with a read clock-enable: one backing array, one address space
 to a later fetch — the streaming contract the IF1/IF2 split and the MEM
 single-STALL are built around, ahead of the real BRAM-backed L1 caches.
 `penumbra2_core` runs an assembled program rather than a hand-driven
-stream, so it is exercised by `make test-penumbra2` (straight-line +
-RAW-stall), `make test-penumbra2-branch` (taken/not-taken/unconditional
-branches + a backward loop), and `make test-penumbra2-loadstore`
-(load/store round-trips) rather than `MODULE_TESTS`; IF1/IF2 are covered
-through them.
+stream, so it is exercised by the program suite under
+`hw/sim/programs/penumbra2/` (`make test CORE=penumbra2`; one program
+via `make test-prog CORE=penumbra2 PROG=test_<name>`) rather than
+`MODULE_TESTS`; IF1/IF2 are covered through it. The generic runner is
+`tb_penumbra2_prog` (stop on a retiring BREAK, check R1); programs
+needing bespoke stimulus name their testbench in a `; RUNNER:` header
+tag (`test_intr` → `tb_penumbra2_intr`). Untagged `isa/` conformance
+programs run on this core too — those whose `; REQUIRES:` capabilities
+the bare core cannot provide yet are reported as skipped
+(see `doc/internals/build-system.md`).
 
 When EX resolves a branch taken it drives `o_branch_taken` /
 `o_branch_target`; the core steers the PC to the target via

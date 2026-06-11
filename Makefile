@@ -2,8 +2,9 @@
 # Usage:
 #   make simulate            — build ROM + ISS, run interactively (fast)
 #   make simulate-rtl        — build ROM + Verilator RTL sim (cycle-accurate)
-#   make test-iss            — run all HW tests on ISS (fast, no Docker)
-#   make test                — run all HW tests on RTL sim (slow, Docker)
+#   make test-iss            — ISA conformance tests on the ISS (fast, no Docker)
+#   make test [CORE=<gen>]   — isa/ + <gen>/ tests on RTL sim (slow, Docker)
+#   make test-prog CORE=<gen> PROG=<name> — one program test
 #   make sim MOD=<name>      — build & run testbench for a module
 #   make smoke               — toolchain smoke test
 #   make wave MOD=<name>     — open waveform in GTKWave
@@ -80,9 +81,10 @@ endif
 	@# and microcode for $readmemh
 	@mkdir -p $(BUILD_DIR)/hex
 	@if test -n "$(PROG)"; then \
-		if test -f hw/sim/programs/$(PROG).s; then \
-			$(PASM) --org 0xFFFF0000 hw/sim/programs/$(PROG).s -o $(BUILD_DIR)/hex/$(PROG).hex; \
-		else echo "ERROR: hw/sim/programs/$(PROG).s not found" >&2; exit 1; fi; \
+		src=$$(ls hw/sim/programs/*/$(PROG).s 2>/dev/null | head -1); \
+		if test -n "$$src"; then \
+			$(PASM) --org 0xFFFF0000 $$src -o $(BUILD_DIR)/hex/$(PROG).hex; \
+		else echo "ERROR: $(PROG).s not found under hw/sim/programs/" >&2; exit 1; fi; \
 	fi
 	@if test -f hw/microcode/microcode.uasm; then $(UASM) hw/microcode/microcode.uasm -o microcode.hex; fi
 	@echo "── Running $(MOD) testbench ──"
@@ -95,48 +97,76 @@ ifndef MOD
 endif
 	gtkwave $(WAVE_DIR)/$(MOD).vcd &
 
-# ── Run all program tests ──────────────────────────────────────
-# Discovers all hw/sim/programs/test_*.s files, runs each through
-# tb_cpu_prog on machine_sim, reports pass/fail summary.
-TEST_PROGS := $(sort $(basename $(notdir $(wildcard hw/sim/programs/test_*.s))))
+# ── Program test suites ────────────────────────────────────────
+# Layout per doc/internals/build-system.md: isa/ holds conformance
+# tests (must pass on the ISS and on every core generation's runner);
+# <core>/ holds microarch-pinned regressions. Programs carry lit-style
+# "; RUNNER:" / "; REQUIRES:" header tags; hw/tools/run-prog-tests.py
+# scans them, skips unrunnable programs visibly, and reports.
+CORE ?= penumbra1
 
+PROG_DIR    = hw/sim/programs
+ISA_PROGS  := $(sort $(wildcard $(PROG_DIR)/isa/test_*.s))
+CORE_PROGS := $(sort $(wildcard $(PROG_DIR)/$(CORE)/test_*.s))
+TEST_PROGS := $(ISA_PROGS) $(CORE_PROGS)
+
+# test-prog narrows the suite to a single program.
+ifdef TEST_FILTER
+TEST_PROGS := $(filter %/$(TEST_FILTER).s,$(TEST_PROGS))
+endif
+
+# RTL runner configuration per core generation: the DUT module, the
+# runner testbenches (first entry is the default; the rest are
+# selectable via RUNNER tags), and the capability set the integration
+# provides for REQUIRES tags.
+RUNNER_MOD_penumbra1      = machine_sim
+RUNNER_TBS_penumbra1      = tb_cpu_prog
+RUNNER_PROVIDES_penumbra1 = mmu cache l2 uart spi bus machid perfctr timer irq wrspr
+
+RUNNER_MOD_penumbra2      = penumbra2_core
+RUNNER_TBS_penumbra2      = tb_penumbra2_prog tb_penumbra2_intr
+RUNNER_PROVIDES_penumbra2 =
+
+RUNNER_MOD      = $(RUNNER_MOD_$(CORE))
+RUNNER_TBS      = $(RUNNER_TBS_$(CORE))
+RUNNER_DEFAULT  = $(firstword $(RUNNER_TBS))
+RUNNER_PROVIDES = $(RUNNER_PROVIDES_$(CORE))
+
+# The ISS models the full machine: it provides every capability the
+# gen1 machine does.
+ISS_PROVIDES = $(RUNNER_PROVIDES_penumbra1)
+
+# ── Run the program suites on the RTL sim ──────────────────────
+# Usage: make test [CORE=penumbra2]
 .PHONY: test
 test:
-	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
-	@# Build machine_sim + tb_cpu_prog once (reuse for all programs)
-	@$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) \
-		--top-module machine_sim \
-		--Mdir $(BUILD_DIR)/machine_sim.verilator \
-		-o ../Vmachine_sim \
-		$(PKG_SV) $$(find hw/rtl -name 'machine_sim.sv') hw/sim/tb_cpu_prog.cpp
-	@# Assemble microcode once (shared by all programs)
+	@test -n "$(strip $(RUNNER_MOD))" || \
+		{ echo "ERROR: unknown CORE '$(CORE)' — known cores: penumbra1 penumbra2"; exit 1; }
+	@mkdir -p $(BUILD_DIR) $(WAVE_DIR) $(BUILD_DIR)/hex
+	@# Build each runner testbench once (binaries keyed by testbench name)
+	@for tb in $(RUNNER_TBS); do \
+		$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) \
+			--top-module $(RUNNER_MOD) \
+			--Mdir $(BUILD_DIR)/$$tb.verilator \
+			-o ../V$$tb \
+			$(PKG_SV) $$(find hw/rtl -name '$(RUNNER_MOD).sv') hw/sim/$$tb.cpp \
+			|| exit 1; \
+	done
+	@# Microcode for $$readmemh (gen1's machine; harmless for other cores)
 	@$(UASM) hw/microcode/microcode.uasm -o microcode.hex
-	@mkdir -p $(BUILD_DIR)/hex
-	@pass=0; fail=0; failed=""; \
-	for prog in $(TEST_PROGS); do \
-		if ! $(PASM) --org 0xFFFF0000 hw/sim/programs/$$prog.s -o $(BUILD_DIR)/hex/$$prog.hex; then \
-			printf "  \033[31mFAIL\033[0m  %s (assembler error)\n" "$$prog"; \
-			fail=$$((fail + 1)); \
-			failed="$$failed $$prog"; \
-			continue; \
-		fi; \
-		if $(DOCKER_RUN) --entrypoint ./$(BUILD_DIR)/Vmachine_sim $(DOCKER_IMAGE) \
-			+rom_hex=$(BUILD_DIR)/hex/$$prog.hex > /dev/null 2>&1; then \
-			printf "  \033[32mPASS\033[0m  %s\n" "$$prog"; \
-			pass=$$((pass + 1)); \
-		else \
-			printf "  \033[31mFAIL\033[0m  %s\n" "$$prog"; \
-			fail=$$((fail + 1)); \
-			failed="$$failed $$prog"; \
-		fi; \
-	done; \
-	echo ""; \
-	total=$$((pass + fail)); \
-	echo "$$pass/$$total tests passed"; \
-	if [ $$fail -gt 0 ]; then \
-		echo "  *** $$fail FAILED:$$failed ***"; \
-		exit 1; \
-	fi
+	@python3 hw/tools/run-prog-tests.py --mode rtl \
+		--asm "$(PASM) --org 0xFFFF0000" --hexdir $(BUILD_DIR)/hex \
+		--provides "$(RUNNER_PROVIDES)" --default-runner $(RUNNER_DEFAULT) \
+		$(foreach tb,$(RUNNER_TBS),--bin "$(tb)=$(DOCKER_RUN) --entrypoint ./$(BUILD_DIR)/V$(tb) $(DOCKER_IMAGE)") \
+		$(TEST_PROGS)
+
+# ── One program test (porcelain over the same runner flow) ─────
+# Usage: make test-prog CORE=penumbra2 PROG=test_store_squash
+.PHONY: test-prog
+test-prog:
+	@test -n "$(strip $(filter %/$(PROG).s,$(TEST_PROGS)))" || \
+		{ echo "ERROR: no $(PROG).s under $(PROG_DIR)/{isa,$(CORE)}"; exit 1; }
+	@$(MAKE) --no-print-directory test TEST_FILTER=$(PROG)
 
 # ── Run all hardware module unit tests ────────────────────────
 # Each entry is "MOD" when the testbench filename is the default
@@ -243,154 +273,19 @@ test-modules:
 .PHONY: test-all
 test-all: test test-modules
 
-# ── Penumbra/2 core smoke test ────────────────────────────────
-# Builds penumbra2_core (fetch + spine) with a program assembled into its
-# i-mem and runs it to BREAK. Separate from `test`/`test-modules` because it
-# loads an assembled program (which test-modules does not) and targets the
-# gen2 core rather than gen1 machine_sim.
-# For a different program, use `make sim MOD=penumbra2_core PROG=<prog>
-# TB=tb_penumbra2_core` directly.
-# Usage: make test-penumbra2
-.PHONY: test-penumbra2
-test-penumbra2:
-	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_smoke TB=tb_penumbra2_core
 
-# ── Penumbra/2 core branch-redirect test ──────────────────────
-# Same core, the branch-redirect milestone program: forward taken/not-taken
-# branches, an unconditional branch, and a backward loop. Self-checks into R1,
-# so it validates the taken-branch PC redirect + 3-bubble front-end flush.
-# Usage: make test-penumbra2-branch
-.PHONY: test-penumbra2-branch
-test-penumbra2-branch:
-	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_branch TB=tb_penumbra2_branch
-
-# ── Penumbra/2 core load/store test ───────────────────────────
-# Same core, the MEM-stage data-path milestone program: word/half/byte
-# store-then-load round-trips against the BRAM data memory, sub-word extract,
-# and byte_en lane isolation. Self-checks into R1, reusing the branch tb's
-# PASS-flag check.
-# Usage: make test-penumbra2-loadstore
-.PHONY: test-penumbra2-loadstore
-test-penumbra2-loadstore:
-	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_loadstore TB=tb_penumbra2_branch
-
-# ── Penumbra/2 core precise-exception store-squash test ───────
-# Same core: a younger store in the shadow of an older fault (misaligned load →
-# VEC_ALIGN) must have its memory write cancelled by the flush. The handler
-# reloads the target and proves a pre-seeded sentinel survived. Validates the
-# "store commit vs. fault flush" precise-exception requirement. Self-checks R1.
-# Usage: make test-penumbra2-store-squash
-.PHONY: test-penumbra2-store-squash
-test-penumbra2-store-squash:
-	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_store_squash TB=tb_penumbra2_branch
-
-# ── Penumbra/2 core divmul + memory-op hazard test ────────────
-# Same core: a load immediately behind a dual-write divmul must not drop the
-# divmul's high-half (Rdh) write. MEM must defer the load's launch while WB
-# back-pressures across the divmul's 2-cycle aux write. Self-checks R1.
-# Usage: make test-penumbra2-divmul-store
-.PHONY: test-penumbra2-divmul-store
-test-penumbra2-divmul-store:
-	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_divmul_store TB=tb_penumbra2_branch
-
-# ── Penumbra/2 core RDSYS sysreg-read test ────────────────────
-# Same core: RDSYS reads the CPU-internal cpuid/machid identity devices through
-# MEM's sysreg sideband (2-cycle access, registered device response). Checks the
-# cpuid name registers and that the device selector routes by sys_dev.
-# Self-checks R1.
-# Usage: make test-penumbra2-sysread
-.PHONY: test-penumbra2-sysread
-test-penumbra2-sysread:
-	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_sysread TB=tb_penumbra2_branch
-
-# ── Penumbra/2 core WRSYS sysreg-write test ───────────────────
-# Same core: WRSYS writes a GPR value to a CPU-internal writable sysreg (the
-# scratch device) at the EX drain-commit, then RDSYS reads it back. Round-trips
-# two values through two registers. Self-checks R1.
-# Usage: make test-penumbra2-syswrite
-.PHONY: test-penumbra2-syswrite
-test-penumbra2-syswrite:
-	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_syswrite TB=tb_penumbra2_branch
-
-# ── Penumbra/2 core WRSYS context-synchronization test ────────
-# Same core: WRSYS is context-synchronizing — it re-fetches its successor after
-# commit. Each WRSYS here precedes an increment; exactly-once execution (R5=3)
-# proves the re-fetch neither duplicates the held copy nor skips it.
-# Usage: make test-penumbra2-resync
-.PHONY: test-penumbra2-resync
-test-penumbra2-resync:
-	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_resync TB=tb_penumbra2_branch
-
-# ── Penumbra/2 core exception-entry test ──────────────────────
-# Same core, the exception-entry milestone program: a misaligned load takes
-# VEC_ALIGN, the pipeline flushes + saves state, and the vector-fetch FSM
-# redirects to a handler (installed in the RAM vector table at run time). The
-# handler sets the PASS flag; the poison between fault and handler must be
-# flushed. Self-checks into R1, reusing the branch tb's PASS-flag check.
-# Usage: make test-penumbra2-fault
-.PHONY: test-penumbra2-fault
-test-penumbra2-fault:
-	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_fault TB=tb_penumbra2_branch
-
-# ── Penumbra/2 core exception round-trip test ─────────────────
-# Same core, the ERET milestone program: a fault vectors to a handler that
-# fixes the cause and ERETs back to EPC, which re-executes and completes.
-# Exercises SR<-ESR restore + PC<-EPC redirect. Self-checks into R1.
-# Usage: make test-penumbra2-eret
-.PHONY: test-penumbra2-eret
-test-penumbra2-eret:
-	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_eret TB=tb_penumbra2_branch
-
-# ── Penumbra/2 core software-trap test ────────────────────────
-# Same core, the SYSCALL milestone program: SYSCALL raises VEC_SYSCALL at EX
-# and vectors to a handler (installed in the RAM table); the poison after it
-# is flushed. Self-checks into R1.
-# Usage: make test-penumbra2-syscall
-.PHONY: test-penumbra2-syscall
-test-penumbra2-syscall:
-	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_syscall TB=tb_penumbra2_branch
-
-# ── Penumbra/2 core interrupt test ────────────────────────────
-# Same core, the interrupt milestone program: an external IRQ (held by the
-# testbench) is masked until EI + the one-instruction shadow pass, then
-# recognized at a fetch boundary and vectored (drain-and-take) to a handler.
-# Self-checks into R1; the tb (tb_penumbra2_intr) drives the IRQ line.
-# Usage: make test-penumbra2-intr
-.PHONY: test-penumbra2-intr
-test-penumbra2-intr:
-	@$(MAKE) sim MOD=penumbra2_core PROG=penumbra2_intr TB=tb_penumbra2_intr
-
-# ── Run all program tests on ISS (fast, no Docker) ────────────
-# Same test programs as `make test` but runs on the ISS.
+# ── Run the conformance suite on the ISS (fast, no Docker) ────
+# isa/ only: the ISS is the generation-independent ISA reference, so
+# microarch-pinned suites do not gate it.
 # Usage: make test-iss
 .PHONY: test-iss
 test-iss: $(ISS)
-	@pass=0; fail=0; failed=""; \
-	for prog in $(TEST_PROGS); do \
-		if ! $(PASM) --org 0xFFFF0000 hw/sim/programs/$$prog.s -o /tmp/$$prog.hex 2>/dev/null; then \
-			printf "  \033[31mFAIL\033[0m  %s (assembler error)\n" "$$prog"; \
-			fail=$$((fail + 1)); \
-			failed="$$failed $$prog"; \
-			continue; \
-		fi; \
-		r1=$$(echo "break" | timeout 5 ./$(ISS) /tmp/$$prog.hex +halt-on-break +trace=/tmp/iss_test.log 2>/dev/null; \
-			tail -1 /tmp/iss_test.log 2>/dev/null | grep -o 'R1=[0-9a-f]*' | head -1); \
-		if echo "$$r1" | grep -q '00000001'; then \
-			printf "  \033[32mPASS\033[0m  %s\n" "$$prog"; \
-			pass=$$((pass + 1)); \
-		else \
-			printf "  \033[31mFAIL\033[0m  %s ($$r1)\n" "$$prog"; \
-			fail=$$((fail + 1)); \
-			failed="$$failed $$prog"; \
-		fi; \
-	done; \
-	echo ""; \
-	total=$$((pass + fail)); \
-	echo "$$pass/$$total tests passed"; \
-	if [ $$fail -gt 0 ]; then \
-		echo "  *** $$fail FAILED:$$failed ***"; \
-		exit 1; \
-	fi
+	@mkdir -p $(BUILD_DIR)/hex
+	@python3 hw/tools/run-prog-tests.py --mode iss \
+		--asm "$(PASM) --org 0xFFFF0000" --hexdir $(BUILD_DIR)/hex \
+		--provides "$(ISS_PROVIDES)" --timeout 5 \
+		--bin "iss=./$(ISS)" \
+		$(ISA_PROGS)
 
 # ── Compiler Correctness Tests ─────────────────────────────────
 # Runs curated tests from llvm-test-suite on ISS +hosted mode.

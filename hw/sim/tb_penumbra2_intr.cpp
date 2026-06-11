@@ -1,13 +1,14 @@
 // Verilator testbench for penumbra2_core driving an external interrupt.
 //
-// Like tb_penumbra2_branch (mirror WB commits into a shadow regfile, stop on a
+// Like tb_penumbra2_prog (mirror WB commits into a shadow regfile, stop on a
 // retiring BREAK, check R1), but it holds the external IRQ line asserted from
-// reset. The program (penumbra2_intr.s) must mask it until interrupts are
-// enabled and the EI shadow has passed, then take it and vector to a handler
-// that sets the PASS flag — so R1 == 1 proves recognition, the EI delay, the
-// drain-and-take, and the vector redirect all behaved.
+// reset. The program (test_intr.s, which selects this runner via its
+// "; RUNNER:" tag) must mask it until interrupts are enabled and the EI shadow
+// has passed, then take it and vector to a handler that sets the PASS flag —
+// so R1 == 1 proves recognition, the EI delay, the drain-and-take, and the
+// vector redirect all behaved.
 //
-// Run: make sim MOD=penumbra2_core PROG=penumbra2_intr TB=tb_penumbra2_intr
+// Run: make test-prog CORE=penumbra2 PROG=test_intr
 
 #include <cstdio>
 #include <cstdint>

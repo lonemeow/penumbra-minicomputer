@@ -810,7 +810,9 @@ In `uasm.py`, update `SLOT_ZONES` if the zone boundaries changed:
 
 ### 6. Write a test
 
-Add `sim/programs/test_<name>.s` following the pass/fail convention:
+Add `sim/programs/isa/test_<name>.s` (new instructions are ISA-level —
+they must pass on every core generation) following the pass/fail
+convention:
 - R1 = 1 means PASS, R1 = 0 means FAIL
 - End with `BREAK`
 - Self-checking: test sets R1 and branches to `fail:` on assertion

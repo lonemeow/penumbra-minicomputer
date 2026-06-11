@@ -51,11 +51,16 @@ Penumbra has two simulators: a fast native C++ **ISS** (`sw/sim/penumbra_iss.cpp
 ### Running tests
 
 ```sh
-make test-iss        # Run all hw/sim/programs/test_*.s on ISS — fast, no Docker
-make test            # Same suite on RTL via Docker — slow but cycle-accurate
+make test-iss        # hw/sim/programs/isa/ conformance suite on ISS — fast, no Docker
+make test            # isa/ + per-core suite on RTL via Docker (CORE=penumbra1 default)
+make test CORE=penumbra2          # same, against the gen2 core
+make test-prog CORE=penumbra2 PROG=test_smoke   # one program
 make test-modules    # Run all module-level Verilator testbenches (alu, regfile, …)
 make test-all        # test + test-modules
 ```
+
+Suite layout and the `; RUNNER:` / `; REQUIRES:` program header tags
+are specified in `doc/internals/build-system.md`.
 
 `make test-iss` is the right default during development. Run `make test` (or `make test-all`) before committing RTL changes.
 
