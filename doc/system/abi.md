@@ -19,16 +19,16 @@ Penumbra uses the **ILP32** data model.
 | `short` | 2 | 2 |
 | `int` | 4 | 4 |
 | `long` | 4 | 4 |
-| `long long` | 8 | 4 |
+| `long long` | 8 | 8 |
 | `float` | 4 | 4 |
-| `double` | 8 | 4 |
-| `long double` | 8 | 4 |
+| `double` | 8 | 8 |
+| `long double` | 8 | 8 |
 | pointer | 4 | 4 |
 | `size_t` | 4 | 4 |
 | `ptrdiff_t` | 4 | 4 |
 | `wchar_t` | 4 | 4 |
 
-- `char` is **unsigned** by default (matches ARM convention; avoids sign-extension on byte loads with LDB).
+- `char` is **signed** by default (matches x86, RISC-V, MIPS, and SPARC — the convention most portable software assumes). The ISA provides both zero- and sign-extending byte loads (`LDB`/`LDBS`), so the choice is performance-neutral for loads.
 - Bit-fields are packed LSB-first within their storage unit.
 - `long double` is the same as `double` (no extended precision — no FPU).
 
@@ -41,6 +41,14 @@ Penumbra uses the **ILP32** data model.
 All data types are naturally aligned. The hardware traps on misaligned word and halfword accesses (alignment fault, vector 8). The compiler must ensure correct alignment; there is no software misalignment handler in the default runtime.
 
 Stack pointer must be 4-byte aligned at all times.
+
+The 8-byte alignment of 64-bit types (matching the ARM EABI / RISC-V
+ILP32 convention) governs struct layout and static/heap placement.
+Because the stack guarantees only 4-byte alignment, automatic 64-bit
+objects may in practice be 4-byte aligned. This is harmless: no
+Penumbra memory access is wider than one 32-bit word, so 64-bit types
+are always read and written as two word halves and never require
+8-byte alignment for correctness.
 
 ---
 
