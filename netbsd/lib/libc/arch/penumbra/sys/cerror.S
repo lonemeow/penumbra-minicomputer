@@ -5,7 +5,10 @@
  *
  * Called (via BCS) when a syscall returns with carry set.
  * R1 contains the errno value from the kernel.
- * Stores it in errno (thread-local if _REENTRANT) and returns -1.
+ * Stores it in errno (thread-local if _REENTRANT) and returns -1
+ * in both R1 and R2: 64-bit-returning syscalls (lseek's off_t) read
+ * the R1:R2 pair, which must form (off_t)-1 on error.  R2 is
+ * caller-saved scratch, so 32-bit-returning syscalls ignore it.
  */
 
 #include "SYS.h"
@@ -40,5 +43,6 @@ ENTRY_NP(__cerror)
 	stw	r1, [r2]
 #endif /* _REENTRANT */
 	li	r1, #-1
+	li	r2, #-1
 	ret
 END(__cerror)
