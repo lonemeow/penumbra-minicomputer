@@ -991,6 +991,19 @@ side effect of doing the simpler thing correctly.
 - **CPI impact.** None compared to a hypothetical whole-pipeline
   freeze that wasn't deadlocked — back-pressure is *better* than
   freeze on throughput, not worse.
+- **The stall chain is the core's expected timing floor.** The issue
+  decision is one global combinational computation per cycle —
+  decode → register map → scoreboard → per-stage readiness terms →
+  fetch back-pressure — and its result gates every ID/EX register
+  bit, so it cannot be pipelined without changing stall semantics.
+  Every subsystem that adds a readiness term (cache hit/miss, MMU
+  translation, divmul busy, drain-commit) deepens this same path:
+  synthesis of the bare core already shows it as the critical path
+  before the memory system exists. Track it per change with the
+  timing probe (`make timing BOARD=ulx3s CORE=penumbra2
+  VARIANT=probe`); the remedies — registering the back-pressure, the
+  one-deep bubble slot below — each trade a register and a bubble of
+  latency for cutting the chain, and are gen2.5 scope.
 
 **Alternatives considered.**
 
@@ -1008,7 +1021,9 @@ side effect of doing the simpler thing correctly.
 - *Hybrid: back-pressure with a one-deep bubble slot between
   ID and EX* — discussed during planning; rejected for gen2 as
   more complex than plain back-pressure with no benefit at the
-  gen2 CPI target.
+  gen2 CPI target. The first candidate to revisit for gen2.5 if the
+  timing probe shows the stall chain capping fmax (see the
+  timing-floor consequence above).
 
 ---
 
