@@ -121,25 +121,26 @@ test-program side of the migration is done: programs live in `isa/` /
 `penumbra1/` / `penumbra2/` with `; RUNNER:` / `; REQUIRES:` tags,
 `hw/tools/run-prog-tests.py` drives `make test CORE=<core>` /
 `make test-prog`, and `tb_penumbra2_prog` is the generic gen2 runner.
-Remaining, in dependency order:
+The FPGA side is done too: sources compose from `SRC_CORE_<gen>` /
+`SRC_FABRIC` / `SRC_BOARD_<board>`, board tops live under
+`hw/rtl/fpga/<board>/` (`ulx3s_top` became `ulx3s_penumbra1_top`),
+the Makefile registry (`FPGA_TOPS`, per-top `FPGA_SRC_<top>`,
+`FPGA_ROM_TOPS`/`FPGA_UCODE_TOPS` for hex embedding) hard-errors on
+unknown BOARD/CORE/VARIANT combinations, and `TOP=` remains the
+low-level escape hatch. Remaining, in dependency order:
 
-1. Makefile source-set matrix (`SRC_CORE_<gen>`, `SRC_BOARD_<board>`,
-   `SRC_FABRIC`) + `hw/rtl/fpga/ulx3s/` board directory;
-   `ulx3s_top` becomes `ulx3s_penumbra1_top`. `TOP=` stays as the
-   low-level escape hatch. Update CLAUDE.md / DEVELOP.md command
-   references in the same change.
-2. Add the gen2 bare-core timing probe
+1. Add the gen2 bare-core timing probe
    (`ulx3s_penumbra2_probe_top`, VARIANT=probe): core +
    `unified_mem`, IRQs on buttons, commit/retire reduced onto LEDs so
    synthesis keeps the design. This is where the
    synthesize-after-every-change workflow for gen2 starts — in place
    *before* the BRAM L1 lands, since Decision 11's 4-way-vs-leaner
    choice is gated on the IF2 tag-compare/way-mux path at synthesis.
-3. At gen2 machine assembly (after D-side MMU, BRAM L1, transactional
+2. At gen2 machine assembly (after D-side MMU, BRAM L1, transactional
    arbiter, fill sequencer): `machine_penumbra2` honoring the
    program-end contract; fold the ISA-shaped gen2 programs (smoke,
    branch, loadstore, fault, eret, syscall_trap, intr) into `isa/`.
-4. Opportunistic: extract `machine_penumbra1` from `machine_sim` /
+3. Opportunistic: extract `machine_penumbra1` from `machine_sim` /
    `ulx3s_penumbra1_top` so both wrappers share one integration
    (the sim-vs-FPGA congruence argument in the build-system doc).
 
@@ -1614,7 +1615,7 @@ Implementation work, by layer:
   parallel RGB.
 - Output PHY: TMDS encode ×3 + ODDR 10:1 serialize, dedicated video PLL
   (fixed 25.175 MHz pixel / ~126 MHz serial).
-- `autoconfig_dev` wrapper (`CLASS_TEXTVIDEO`); `ulx3s_top` wiring to the
+- `autoconfig_dev` wrapper (`CLASS_TEXTVIDEO`); `ulx3s_penumbra1_top` wiring to the
   GPDI pins.
 - Goal (later): PLL dynamic-reconfig FSM + mode 1 (800×600 / 100×37).
 

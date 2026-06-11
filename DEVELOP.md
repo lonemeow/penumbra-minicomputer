@@ -353,23 +353,28 @@ export PATH="$PWD/hw/tools/oss-cad-suite/bin:$PATH"
 ### Build & flash
 
 ```sh
-make fpga TOP=ulx3s_top              # Full flow: sv2v → yosys → nextpnr → ecppack
-make flash TOP=ulx3s_top             # Build + flash to ULX3S over USB (fujprog)
-make fpga-lint TOP=ulx3s_top         # Verilator lint check on FPGA sources
+make fpga BOARD=ulx3s CORE=penumbra1   # Full flow: sv2v → yosys → nextpnr → ecppack
+make flash BOARD=ulx3s CORE=penumbra1  # Build + flash to ULX3S over USB (fujprog)
+make fpga-lint                         # Verilator lint check on FPGA sources
 ```
 
-`TOP` has no default — it must be given explicitly (so you never
-silently build the wrong design). For the full system, use
-`TOP=ulx3s_top`; `make fpga`/`flash`/`timing` with `TOP` unset errors
-out. `ulx3s_top` is the only top-level today.
+`BOARD`/`CORE` (plus optional `VARIANT`) expand to a registered top
+module, `<board>_<core>[_<variant>]_top`, whose file lives under
+`hw/rtl/fpga/<board>/`; an unknown combination is a hard error, and
+`make fpga`/`flash`/`timing` with neither `BOARD`/`CORE` nor `TOP`
+errors out (so you never silently build the wrong design).
+`TOP=<module>` remains the low-level escape hatch for bare test tops.
+The registry of valid combinations is `FPGA_TOPS` in the Makefile;
+suite/axis semantics are specified in
+`doc/internals/build-system.md`.
 
 ### Reading the build report
 
 ```sh
-make timing TOP=ulx3s_top                  # Pretty-print fmax + top critical paths
-make timing TOP=ulx3s_top TOP_N=10         # ...top 10 instead of 5
-make fanout TOP=ulx3s_top                  # High-fanout nets (router-congestion diagnosis)
-make fanout TOP=ulx3s_top FANOUT_N=30 FANOUT_MIN=20
+make timing BOARD=ulx3s CORE=penumbra1     # Pretty-print fmax + top critical paths
+make timing BOARD=ulx3s CORE=penumbra1 TOP_N=10   # ...top 10 instead of 5
+make fanout TOP=ulx3s_penumbra1_top        # High-fanout nets (router-congestion diagnosis)
+make fanout TOP=ulx3s_penumbra1_top FANOUT_N=30 FANOUT_MIN=20
 ```
 
 Both targets read whatever the last `make fpga` left in `build/`; they don't trigger a rebuild.
@@ -379,7 +384,7 @@ Both targets read whatever the last `make fpga` left in `build/`; they don't tri
 The SDRAM clock-pin phase is built into the bitstream filename via `PHASE_DEG`:
 
 ```sh
-make fpga TOP=ulx3s_top PHASE_DEG=270      # Default — step-4 baseline
+make fpga BOARD=ulx3s CORE=penumbra1 PHASE_DEG=180   # Default — step-4 baseline
 ```
 
 Valid values: `0, 45, 90, 135, 180, 225, 270, 315`. See `doc/internals/sdram-controller.md` for the bring-up sweep procedure.

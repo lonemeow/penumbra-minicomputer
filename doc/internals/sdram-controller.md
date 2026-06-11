@@ -412,14 +412,14 @@ even ULX3S revisions.  To pin down the centre rather than guess:
 #### Build target
 
 ```sh
-make fpga PHASE_DEG=N TOP=ulx3s_top    # build only
-make flash PHASE_DEG=N TOP=ulx3s_top   # build + flash
+make fpga PHASE_DEG=N BOARD=ulx3s CORE=penumbra1    # build only
+make flash PHASE_DEG=N BOARD=ulx3s CORE=penumbra1   # build + flash
 ```
 
 `PHASE_DEG` accepts the 8 cardinal points: **0, 45, 90, 135, 180,
 225, 270, 315**.  The default is **270°**.  An invalid value silently
 falls back to (CPHASE=0, FPHASE=0); always use one of the listed
-values or extend the lookup table in `ulx3s_top.sv` first.
+values or extend the lookup table in `ulx3s_penumbra1_top.sv` first.
 
 The phase value is baked into the bitstream — re-flash after every
 phase change.  The Makefile invalidates downstream artefacts via a
@@ -430,7 +430,7 @@ do *not* need `make clean` between sweep iterations.
 
 For each of the 8 phase values:
 
-1. `make flash PHASE_DEG=N TOP=ulx3s_top`
+1. `make flash PHASE_DEG=N BOARD=ulx3s CORE=penumbra1`
 2. Power-cycle (or press btn[1]) and capture the ROM monitor output
    over `/dev/ttyUSB0` at 115200 8N1.
 3. Record the `_ram_check` result and the detected RAM size.
@@ -452,7 +452,7 @@ breaking on a hot day or after a netlist reshuffle.
 Add a new row when sweeping a new board/variant.  When changing the
 chosen phase, change `PHASE_DEG ?=` in `Makefile` (the practical
 default for `make fpga`) and the `` `define SDRAM_PHASE_DEG ``
-fallback in `ulx3s_top.sv` together so both the Makefile-driven and
+fallback in `ulx3s_penumbra1_top.sv` together so both the Makefile-driven and
 the unflagged-direct builds agree.
 
 **Gotcha — high-fmax landing.** When the SDRAM clock reaches the high
@@ -493,7 +493,7 @@ cl_cnt <= 4'(PHY_OUT_LATENCY + CAS_LATENCY + PHY_IN_LATENCY)
 Both default to `0`, so the sim PHY (combinational) keeps the
 existing `cl_cnt = CAS_LATENCY` behaviour without code changes.
 The ECP5 PHY sets both to `1` at the instantiation site in
-`ulx3s_top`.  Step 4's CDC bridge will add another two terms to the
+`ulx3s_penumbra1_top`.  Step 4's CDC bridge will add another two terms to the
 same sum (one synchronizer chain in each direction); no further
 controller surgery should be needed.
 

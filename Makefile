@@ -9,9 +9,10 @@
 #   make smoke               — toolchain smoke test
 #   make wave MOD=<name>     — open waveform in GTKWave
 #   make sdimage             — build SD image with bootloader, kernel, rootfs
-#   make fpga-lint [TOP=<m>] — Verilator lint check on FPGA modules
-#   make fpga TOP=<module> — synthesize + PnR + bitstream
-#   make flash [TOP=<module>]— fpga + flash to ULX3S via USB
+#   make fpga-lint           — Verilator lint check on the FPGA system
+#   make fpga BOARD=<b> CORE=<gen> — synthesize + PnR + bitstream
+#                              (TOP=<module> is the low-level escape hatch)
+#   make flash [same vars]   — fpga + flash to the board via USB
 #   make clean               — remove build artifacts
 
 # ── Configuration ──────────────────────────────────────────────
@@ -569,55 +570,88 @@ benchmark-rtl: sdimage-bench
 # ── FPGA build (OSS CAD Suite via Docker wrappers) ────────────
 FPGA_TOOLS = hw/tools/oss-cad-suite/bin
 FPGA_RTL   = hw/rtl/fpga
-LPF        = hw/constraints/ulx3s_v20.lpf
 
-# Synthesis + PnR + bitstream for a top-level module.
-# Usage: make fpga TOP=ulx3s_top     (full CPU system)
-# TOP has no default on purpose: an explicit choice avoids silently
-# building the wrong design. fpga / flash / timing error out if unset.
+# ── FPGA build matrix (doc/internals/build-system.md) ──────────
+# Porcelain: make fpga BOARD=<board> CORE=<generation> [VARIANT=<v>]
+# expands to TOP=<board>_<core>[_<variant>]_top, whose file lives at
+# hw/rtl/fpga/<board>/<top>.sv and whose source set composes from the
+# per-axis variables below. TOP=<module> remains the low-level escape
+# hatch: registry tops get their composed sources, anything else falls
+# back to the bare fpga/*.sv set (simple test tops).
+
+# Per-axis source sets.
+SRC_COMMON = hw/rtl/common/penumbra_pkg.sv
+
+SRC_FABRIC = hw/rtl/io/sdram/sdram_pkg.sv \
+             $(wildcard hw/rtl/mmu/*.sv) \
+             $(wildcard hw/rtl/soc/*.sv) \
+             $(wildcard hw/rtl/io/*.sv) \
+             $(filter-out %/sdram_pkg.sv, $(wildcard hw/rtl/io/sdram/*.sv))
+
+SRC_CORE_penumbra1 = $(wildcard hw/rtl/penumbra1/*.sv)
+SRC_CORE_penumbra2 = hw/rtl/penumbra2/penumbra2_pkg.sv \
+                     $(filter-out %/penumbra2_pkg.sv, $(wildcard hw/rtl/penumbra2/*.sv))
+
+SRC_BOARD_ulx3s = $(FPGA_RTL)/fpga_ram.sv $(wildcard $(FPGA_RTL)/ulx3s/*.sv)
+LPF_ulx3s       = hw/constraints/ulx3s_v20.lpf
+
+# The registry: every valid (board, core[, variant]) top, its composed
+# source set, and which hex images it embeds. Adding a combination
+# means adding its top file under hw/rtl/fpga/<board>/ and its
+# entries here — an unknown combination is a hard error, not a
+# silently empty source list.
+FPGA_TOPS = ulx3s_penumbra1_top
+
+FPGA_SRC_ulx3s_penumbra1_top = $(SRC_COMMON) $(SRC_CORE_penumbra1) \
+                               $(SRC_FABRIC) $(SRC_BOARD_ulx3s)
+
+# Tops that embed the boot ROM and/or microcode: their hex images are
+# generated before synthesis and inlined by inline_hex.py.
+FPGA_ROM_TOPS   = ulx3s_penumbra1_top
+FPGA_UCODE_TOPS = ulx3s_penumbra1_top
+
+# BOARD/CORE porcelain → TOP derivation (CORE defaults to penumbra1
+# in the test-suite section above).
+ifneq ($(strip $(BOARD)),)
+TOP := $(BOARD)_$(CORE)$(if $(VARIANT),_$(VARIANT))_top
+endif
+
 ifneq ($(filter fpga flash timing,$(MAKECMDGOALS)),)
 ifeq ($(strip $(TOP)),)
-$(error TOP is required for '$(MAKECMDGOALS)' — e.g. make fpga TOP=ulx3s_top)
+$(error BOARD/CORE or TOP is required for '$(MAKECMDGOALS)' — e.g. make fpga BOARD=ulx3s CORE=penumbra1)
+endif
+ifneq ($(strip $(BOARD)),)
+ifeq ($(filter $(TOP),$(FPGA_TOPS)),)
+$(error Unknown combination BOARD=$(BOARD) CORE=$(CORE)$(if $(VARIANT), VARIANT=$(VARIANT)) — known tops: $(FPGA_TOPS))
+endif
 endif
 endif
 
-# Source files: simple test tops use only fpga/*.sv;
-# ulx3s_top needs the full RTL (core, mmu, soc devices, io).
+# Source-set and constraints selection. Simple test tops (no registry
+# entry) use only fpga/*.sv; unknown boards fall back to the ULX3S
+# constraints file.
 FPGA_SRC_SIMPLE = $(wildcard $(FPGA_RTL)/*.sv)
-FPGA_SRC_FULL   = hw/rtl/common/penumbra_pkg.sv \
-                  hw/rtl/io/sdram/sdram_pkg.sv \
-                  $(wildcard hw/rtl/penumbra1/*.sv) \
-                  $(wildcard hw/rtl/mmu/*.sv) \
-                  $(wildcard hw/rtl/soc/*.sv) \
-                  $(wildcard hw/rtl/io/*.sv) \
-                  $(filter-out %/sdram_pkg.sv, $(wildcard hw/rtl/io/sdram/*.sv)) \
-                  $(FPGA_RTL)/fpga_ram.sv $(FPGA_RTL)/ulx3s_top.sv
+FPGA_SRC = $(if $(FPGA_SRC_$(TOP)),$(FPGA_SRC_$(TOP)),$(FPGA_SRC_SIMPLE))
+LPF      = $(if $(LPF_$(BOARD)),$(LPF_$(BOARD)),hw/constraints/ulx3s_v20.lpf)
 
 # ECP5 primitive stubs — for Verilator lint only, not synthesis.
 FPGA_LINT_STUBS = $(FPGA_RTL)/ecp5_prim.sv
 
-# Select source set based on TOP module
-ifeq ($(TOP),ulx3s_top)
-FPGA_SRC = $(FPGA_SRC_FULL)
-else
-FPGA_SRC = $(FPGA_SRC_SIMPLE)
-endif
-
 .PHONY: fpga flash fpga-lint
 
-# Lint always targets the full system (ulx3s_top) regardless of TOP.
+# Lint always targets the full gen1 system regardless of TOP.
 # Use Verilator --lint-only with ECP5 primitive stubs.
-fpga-lint: $(FPGA_SRC_FULL) $(FPGA_LINT_STUBS)
+fpga-lint: $(FPGA_SRC_ulx3s_penumbra1_top) $(FPGA_LINT_STUBS)
 	$(DOCKER_RUN) $(DOCKER_IMAGE) --lint-only -Wall -Wno-fatal \
 		-Wno-PINMISSING -Wno-PINCONNECTEMPTY \
-		$(FPGA_SRC_FULL) $(FPGA_LINT_STUBS) --top ulx3s_top
+		$(FPGA_SRC_ulx3s_penumbra1_top) $(FPGA_LINT_STUBS) --top ulx3s_penumbra1_top
 
 fpga: $(BUILD_DIR)/$(TOP).bit
 	@echo "Bitstream: $(BUILD_DIR)/$(TOP).bit (PHASE_DEG=$(PHASE_DEG))"
 
 # ── SDRAM phase sweep knob ──────────────────────────────────────
-# Used by ulx3s_top to set CLKOS2 phase shift (the SDRAM-clock pin
-# clock).  Valid values: 0, 45, 90, 135, 180, 225, 270, 315.
+# Used by the ULX3S board tops to set CLKOS2 phase shift (the
+# SDRAM-clock pin clock).  Valid values: 0, 45, 90, 135, 180, 225, 270, 315.
 # Default 180° is the step-4 baseline; the bring-up sweep iterates
 # all 8 to find the centred working window.  See
 # doc/internals/sdram-controller.md § Step-5 phase sweep.
@@ -637,22 +671,23 @@ $(PHASE_STAMP):
 # Build hex files and convert SV→V before synthesis.
 # sv2v converts full SystemVerilog (module-level imports, packages)
 # to Verilog-2005 that Yosys reads natively.  -D SDRAM_PHASE_DEG=N
-# overrides the `define inside ulx3s_top.sv for the current build.
+# overrides the `define inside the board top for the current build.
 #
-# For ulx3s_top, the microcode source and boot-ROM sources are
-# inlined into the generated Verilog via inline_hex.py, so the json
-# target must rebuild whenever either changes.  Use conditional
-# prerequisites so other TOPs (which don't use these) aren't
-# spuriously rebuilt by unrelated edits.
+# For tops listed in FPGA_ROM_TOPS / FPGA_UCODE_TOPS, the boot-ROM and
+# microcode hex images are inlined into the generated Verilog via
+# inline_hex.py, so the json target must rebuild whenever their
+# sources change.  Conditional prerequisites keep other TOPs from
+# being spuriously rebuilt by unrelated edits.
 UCODE_SRC = hw/microcode/microcode.uasm
 ROM_SRCS  = $(wildcard hw/rom/*.c hw/rom/*.h hw/rom/*.s hw/rom/*.ld hw/rom/Makefile)
 $(BUILD_DIR)/$(TOP).json: $(FPGA_SRC) $(PHASE_STAMP) \
-    $(if $(filter ulx3s_top,$(TOP)),$(UCODE_SRC) $(ROM_SRCS))
+    $(if $(filter $(TOP),$(FPGA_UCODE_TOPS)),$(UCODE_SRC)) \
+    $(if $(filter $(TOP),$(FPGA_ROM_TOPS)),$(ROM_SRCS))
 	@mkdir -p $(BUILD_DIR)
-	$(if $(filter ulx3s_top,$(TOP)),$(UASM) hw/microcode/microcode.uasm -o microcode.hex)
-	$(if $(filter ulx3s_top,$(TOP)),$(MAKE) -C hw/rom)
+	$(if $(filter $(TOP),$(FPGA_UCODE_TOPS)),$(UASM) hw/microcode/microcode.uasm -o microcode.hex)
+	$(if $(filter $(TOP),$(FPGA_ROM_TOPS)),$(MAKE) -C hw/rom)
 	$(FPGA_TOOLS)/sv2v -D SDRAM_PHASE_DEG=$(PHASE_DEG) $(FPGA_SRC) -w $(BUILD_DIR)/$(TOP)_sv2v.v
-	$(if $(filter ulx3s_top,$(TOP)),python3 hw/tools/inline_hex.py $(BUILD_DIR)/$(TOP)_sv2v.v $(BUILD_DIR)/$(TOP)_sv2v.v)
+	$(if $(filter $(TOP),$(FPGA_ROM_TOPS) $(FPGA_UCODE_TOPS)),python3 hw/tools/inline_hex.py $(BUILD_DIR)/$(TOP)_sv2v.v $(BUILD_DIR)/$(TOP)_sv2v.v)
 	$(FPGA_TOOLS)/yosys -p "read_verilog $(BUILD_DIR)/$(TOP)_sv2v.v; synth_ecp5 -top $(TOP) -json $@"
 
 $(BUILD_DIR)/$(TOP).config: $(BUILD_DIR)/$(TOP).json $(LPF)

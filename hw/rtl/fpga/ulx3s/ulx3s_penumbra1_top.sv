@@ -1,4 +1,4 @@
-// ULX3S Board Top — Penumbra CPU on ECP5-85F
+// ULX3S Board Top (Penumbra/1) — gen1 CPU system on ECP5-85F
 //
 // Wires the Penumbra CPU to BRAM (boot ROM + working RAM) and a
 // real NS16450 UART on the FTDI serial port. Runs at 25 MHz from
@@ -19,7 +19,7 @@
 // SDRAM samples our drives near the centre of the data window.  The
 // phase value is empirical — different ULX3S boards / SDRAM variants
 // see slightly different working windows.  The build-time sweep
-// procedure (`make fpga PHASE_DEG=N TOP=ulx3s_top` for each N in 0,
+// procedure (`make fpga PHASE_DEG=N BOARD=ulx3s CORE=penumbra1` for each N in 0,
 // 45, 90, …, 315) finds the contiguous arc that boots and passes
 // `_ram_check`; pick its centre.  See doc/internals/sdram-controller.md
 // § Step-5 phase sweep for the canonical procedure and per-board
@@ -28,7 +28,7 @@
 `define SDRAM_PHASE_DEG 270
 `endif
 
-module ulx3s_top (
+module ulx3s_penumbra1_top (
     input  logic       clk_25mhz,
     output logic [7:0] led,
     // Only btn[1] (FIRE1 = manual reset) is used; other bits are
@@ -102,7 +102,7 @@ module ulx3s_top (
     //                               via the PHY's ODDRX1F.  Default
     //                               270° (step-4 baseline); override
     //                               at build time with
-    //                                 make fpga PHASE_DEG=N TOP=ulx3s_top
+    //                                 make fpga PHASE_DEG=N BOARD=ulx3s CORE=penumbra1
     //                               for the step-5 sweep.
 
     // ── Phase lookup table for CLKOS2 (CLKOS2_DIV = 6) ──────────────

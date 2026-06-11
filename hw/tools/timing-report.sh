@@ -2,7 +2,7 @@
 # Pretty-print the most useful bits of a nextpnr-ecp5 JSON timing report.
 #
 # Usage: timing-report.sh [--detail] [report.json] [top_n_paths]
-# Defaults: build/ulx3s_top_timing.json, 5 paths.
+# Defaults: build/ulx3s_penumbra1_top_timing.json, 5 paths.
 #
 # With --detail, each of the top N paths is followed by its per-module
 # rollup (via timing-path.py), so you can see which subsystem owns each
@@ -20,7 +20,7 @@ for arg in "$@"; do
     esac
 done
 
-REPORT="${POS[0]:-build/ulx3s_top_timing.json}"
+REPORT="${POS[0]:-build/ulx3s_penumbra1_top_timing.json}"
 TOP_N="${POS[1]:-5}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

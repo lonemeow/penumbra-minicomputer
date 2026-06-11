@@ -33,7 +33,7 @@ What's wired up today:
   line.  See the "Write Policy" and "Phasing" sections below.
   Disabled at reset; software (kernel or bare-metal harness, not
   the ROM) brings it up via `WRSYS SYSDEV_L2_CACHE CTRL=1`.
-- `hw/rtl/sim/machine_sim.sv` and `hw/rtl/fpga/ulx3s_top.sv`
+- `hw/rtl/sim/machine_sim.sv` and `hw/rtl/fpga/ulx3s/ulx3s_penumbra1_top.sv`
   always instantiate `l2_cache` directly between the CPU's memory
   port and the shared bus.  Sysreg device 9 routes to it
   unconditionally.  Software opt-out is preserved at runtime via
@@ -57,7 +57,7 @@ What's wired up today:
 
 Verification gates that have to stay green on every L2 commit:
 `make sim MOD=l2_cache`, `make test`, `make test-modules`,
-`make test-iss`, and `make fpga-lint TOP=ulx3s_top` (zero
+`make test-iss`, and `make fpga-lint` (zero
 warnings).  Hardware-side benchmark numbers are what tell us
 whether L2 is actually paying off — quote those from the
 benchmark output, not from this doc.

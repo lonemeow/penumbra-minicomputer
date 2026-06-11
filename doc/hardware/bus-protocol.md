@@ -294,7 +294,7 @@ Two pulse sources drive the same line:
 **Board implementation.** The hardware reset counter width must satisfy
 `2^N / f_clk >= 10 ms`. At the current ULX3S 25 MHz system clock,
 `N=18` gives ~10.5 ms (just meets the minimum) and the board uses
-`N=19` for ~21 ms of margin (see `ulx3s_top.sv:175-180`). Faster
+`N=19` for ~21 ms of margin (see `ulx3s_penumbra1_top.sv:175-180`). Faster
 clocks need wider counters.
 
 **Software implementation.** The boot ROM delay loop between asserting

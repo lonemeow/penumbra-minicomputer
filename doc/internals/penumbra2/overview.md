@@ -125,7 +125,7 @@ pipeline-shaped**.
 | L2 cache | **Shared, unchanged** | `hw/rtl/soc/l2_cache.sv` |
 | L1 cache | **Forked** — new BRAM-backed module | `hw/rtl/penumbra2/cache_bram_vipt.sv` (new) |
 | CPU core | **Hard fork** — pipelined, hardwired | `hw/rtl/penumbra2/` (new) |
-| FPGA top-levels | **Side-by-side** | `hw/rtl/fpga/ulx3s_top_penumbra{1,2}.sv` |
+| FPGA top-levels | **Side-by-side** | `hw/rtl/fpga/ulx3s/ulx3s_penumbra{1,2}_top.sv` |
 | Microcode (gen1) | **gen1-only**, never used by gen2 | `hw/microcode/`, `hw/tools/uasm.py` |
 | NetBSD kernel | **Shared binary** — CPUID-discriminated at boot | `netbsd/sys/arch/penumbra/` |
 

@@ -157,8 +157,8 @@ CPU core itself is a hard fork.
 - `hw/rtl/penumbra2/` — new pipelined CPU core
 - `hw/rtl/mmu/`, `hw/rtl/soc/`, `hw/rtl/io/`, `hw/rtl/bus/`, `hw/rtl/sim/`
   — **shared, unchanged**
-- `hw/rtl/fpga/ulx3s_top_penumbra1.sv` and
-  `hw/rtl/fpga/ulx3s_top_penumbra2.sv` — two top-levels, side by
+- `hw/rtl/fpga/ulx3s/ulx3s_penumbra1_top.sv` and
+  `hw/rtl/fpga/ulx3s/ulx3s_penumbra2_top.sv` — two top-levels, side by
   side, selectable by `make fpga TOP=…`
 - `hw/rtl/sim/machine_sim_penumbra1.sv` and `_penumbra2.sv` — likewise
 - `hw/microcode/` and `hw/tools/uasm.py` — **penumbra1-only**; not
@@ -212,7 +212,7 @@ different architectures in one file).
   (`import penumbra_pkg::*`), not by path, the file move touches only
   the Makefile source lists (`PKG_SV`, `FPGA_SRC_FULL`, the `-I`
   search dirs) and the CLAUDE.md / coding-standards path references —
-  **no `.sv` source changes** in `machine_sim.sv`, `ulx3s_top.sv`, or
+  **no `.sv` source changes** in `machine_sim.sv`, `ulx3s_penumbra1_top.sv`, or
   the 40-plus importing modules. Module names stay plain (no
   `penumbra1_`/`penumbra2_` prefix); collision is avoided by never
   elaborating both cores in one build, revisited only if a combined
@@ -221,7 +221,7 @@ different architectures in one file).
   policy change must consider both cores. Penumbra/2 is **never**
   allowed to introduce changes to shared modules that break
   Penumbra/1.
-- The build system gains parallel paths: `make fpga TOP=ulx3s_top_penumbra2`,
+- The build system gains parallel paths: `make fpga BOARD=ulx3s CORE=penumbra2`,
   `make sim MOD=cpu_penumbra2`, etc.
 
 **Alternatives considered.** Fully parallel `hw/rtl1/`/`hw/rtl2/`
@@ -694,7 +694,7 @@ NetBSD tree).
 **Consequences.**
 
 - `hw/rtl/soc/cpuid.sv` will gain a new MODEL value (2) and be
-  instantiated with that value in `ulx3s_top_penumbra2.sv`.
+  instantiated with that value in `ulx3s_penumbra2_top.sv`.
 - The kernel's MD `cpu_attach()` (or equivalent) gains a `switch
   (cpuid.model)` block for any per-core differences. Until gen2
   finds a genuine difference that the kernel cares about, no

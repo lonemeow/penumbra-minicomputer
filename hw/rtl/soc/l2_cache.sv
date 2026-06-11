@@ -1,7 +1,7 @@
 // Penumbra L2 unified cache — phase 1
 //
 // Sits between cpu_core.o_mem_* and the shared system bus, always
-// instantiated by machine_sim and ulx3s_top.  When CTRL.enable=0
+// instantiated by machine_sim and ulx3s_penumbra1_top.  When CTRL.enable=0
 // (default at reset) the module is a transparent pass-through;
 // software must explicitly enable L2 after the caches and MMU are
 // configured, matching how the existing L1 caches are brought up.

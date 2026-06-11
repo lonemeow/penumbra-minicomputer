@@ -33,7 +33,7 @@ hw/
 │   ├── soc/       # Bus controller, autoconfig, caches (L1 VIPT, L1 PIPT, L2), boot ROM, cpuid/machid
 │   ├── io/        # Real UART, real SPI, SDRAM v2 controller/adapter/PHY/CDC
 │   ├── sim/       # machine_sim, sim_uart, sim_spi, sdram_sim, simple_mem, sdram chip model
-│   └── fpga/      # ulx3s_top, BRAM helpers, FPGA-only RAM
+│   └── fpga/      # FPGA helpers (fpga_ram, lint stubs); board tops under <board>/
 ├── microcode/   # microcode.uasm (single source — assemble via uasm.py)
 ├── rom/         # Boot ROM (C + asm) and its standalone Makefile
 ├── sim/         # tb_cpu_prog (program runner), tb_interactive, per-module tbs
@@ -181,9 +181,14 @@ BRAM L1 caches are not yet wired.
   configurable READ_LATENCY/WRITE_LATENCY.
 
 ### FPGA top-levels (`rtl/fpga/`)
-- `ulx3s_top.sv` — board top-level. 12.5 MHz PLL (25 MHz crystal),
-  32 MB SDRAM (W9825G6KH or compatible), real UART (TX+RX), real
-  SPI with SD card (autoconfig), boot ROM, `btn[1]` reset.
+Board tops live under `rtl/fpga/<board>/`, one file per registered
+(board, core[, variant]) combination — built via
+`make fpga BOARD=<board> CORE=<generation>` (registry: `FPGA_TOPS`
+in the root Makefile; naming spec in `doc/internals/build-system.md`).
+- `ulx3s/ulx3s_penumbra1_top.sv` — gen1 system on the ULX3S.
+  12.5 MHz PLL (25 MHz crystal), 32 MB SDRAM (W9825G6KH or
+  compatible), real UART (TX+RX), real SPI with SD card (autoconfig),
+  boot ROM, `btn[1]` reset.
 - `fpga_ram.sv` — BRAM-friendly memory (4 byte-wide banks with
   `ram_style` attribute).
 

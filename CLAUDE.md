@@ -144,13 +144,17 @@ Wrapper scripts in `hw/tools/oss-cad-suite/bin/` make Yosys,
 nextpnr-ecp5, ecppack, fujprog usable as normal commands:
 `export PATH="$PWD/hw/tools/oss-cad-suite/bin:$PATH"`.
 
-- `make fpga TOP=ulx3s_top` — sv2v → fix → yosys → nextpnr → ecppack.
-- `make flash TOP=ulx3s_top` — build + flash via USB.
-- `make fpga-lint TOP=ulx3s_top` — Verilator lint check.
-- `make timing TOP=ulx3s_top [TOP_N=10]` — pretty-print fmax + top
-  critical paths from `build/<top>_timing.json`.
+- `make fpga BOARD=ulx3s CORE=penumbra1` — sv2v → fix → yosys →
+  nextpnr → ecppack. `BOARD`/`CORE` (+ optional `VARIANT`) expand to a
+  registered top module (`<board>_<core>[_<variant>]_top`, file under
+  `hw/rtl/fpga/<board>/`); an unknown combination is a hard error.
+  `TOP=<module>` stays as the low-level escape hatch.
+- `make flash BOARD=ulx3s CORE=penumbra1` — build + flash via USB.
+- `make fpga-lint` — Verilator lint check (full gen1 system).
+- `make timing BOARD=ulx3s CORE=penumbra1 [TOP_N=10]` — pretty-print
+  fmax + top critical paths from `build/<top>_timing.json`.
 
-Board top-level: `hw/rtl/fpga/ulx3s_top.sv`. Serial 115200 8N1 on
+Board top-level: `hw/rtl/fpga/ulx3s/ulx3s_penumbra1_top.sv`. Serial 115200 8N1 on
 `/dev/ttyUSB0`. SD slot autoconfigured as `CLASS_SD`; `boot sd:0,0`
 loads `PENBOOT.ELF` from FAT32. Toolchain mechanics (wrapper
 multi-call, sv2v + `$readmemh` workaround, USB passthrough) in

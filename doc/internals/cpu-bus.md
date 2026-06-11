@@ -36,7 +36,7 @@ the documented effects of `RDSYS`/`WRSYS` and load/store instructions.
 
 The dividing line: if a module is instantiated *inside* `cpu_core.sv`,
 this document applies. If it sits at machine-level (in `machine_sim.sv`
-or `ulx3s_top.sv`), it does not.
+or `ulx3s_penumbra1_top.sv`), it does not.
 
 ## Topology
 

@@ -8,8 +8,8 @@ congestion cost. Common offenders: synchronous reset, wide CE/enable
 broadcasts, hand-rolled clock-divider outputs.
 
 Usage:
-    list_fanout.py build/ulx3s_top.json
-    list_fanout.py build/ulx3s_top.json -n 30 -m 10
+    list_fanout.py build/ulx3s_penumbra1_top.json
+    list_fanout.py build/ulx3s_penumbra1_top.json -n 30 -m 10
 
 Notes:
     * Only the design top module is analyzed by default (others are
@@ -91,7 +91,7 @@ def analyze_module(mod_name, mod):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('json', help='yosys JSON (e.g. build/ulx3s_top.json)')
+    ap.add_argument('json', help='yosys JSON (e.g. build/ulx3s_penumbra1_top.json)')
     ap.add_argument('-n', '--top', type=int, default=25,
                     help='show top N nets (default 25)')
     ap.add_argument('-m', '--min-fanout', type=int, default=50,

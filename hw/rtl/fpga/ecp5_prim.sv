@@ -78,7 +78,7 @@ module ODDRX1F (
 endmodule
 
 // ── DCCA: Dynamic Clock Buffer, Always-on ───────────────────
-// Used by ulx3s_top to promote high-fanout signals (e.g. rst)
+// Used by ulx3s_penumbra1_top to promote high-fanout signals (e.g. rst)
 // onto global clock nets via the ECP5 clock distribution
 // network.  CE=1 keeps the buffer transparent; CLKO is the
 // same logical value as CLKI but routed through a global net
