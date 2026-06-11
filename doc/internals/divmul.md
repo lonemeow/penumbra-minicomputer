@@ -299,7 +299,7 @@ worth it for the first build.
 
 - **ISA spec:** finalized (this document + `instruction-encoding.md` +
   `instruction-set.md`).
-- **RTL (unit):** implemented (`hw/rtl/penumbra1/divmul.sv`) — the
+- **RTL (unit):** implemented (`hw/rtl/common/divmul.sv`) — the
   algorithm, handshake, and datapath described above. Promoted to
   `hw/rtl/common/` once Penumbra/2 instantiates it.
 - **Penumbra/1 driving:** microcode implemented. Dispatch slots 0x40

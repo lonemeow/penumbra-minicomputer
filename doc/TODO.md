@@ -127,20 +127,22 @@ The FPGA side is done too: sources compose from `SRC_CORE_<gen>` /
 the Makefile registry (`FPGA_TOPS`, per-top `FPGA_SRC_<top>`,
 `FPGA_ROM_TOPS`/`FPGA_UCODE_TOPS` for hex embedding) hard-errors on
 unknown BOARD/CORE/VARIANT combinations, and `TOP=` remains the
-low-level escape hatch. Remaining, in dependency order:
+low-level escape hatch. The gen2 bare-core timing probe
+(`ulx3s_penumbra2_probe_top`, `make fpga/timing BOARD=ulx3s
+CORE=penumbra2 VARIANT=probe`) is in: core + `unified_mem`, IRQs on
+buttons, commit/retire XOR-folded onto the LEDs so synthesis keeps
+the design — the synthesize-after-every-change workflow for gen2,
+in place *before* the BRAM L1 lands (Decision 11's 4-way-vs-leaner
+choice is gated on the IF2 tag-compare/way-mux path at synthesis).
+First build: ~55 MHz achieved on ECP5-85F sg6 (bare core — no
+MMU/caches/fabric), critical path in ID decode toward the
+fault-vector register. Remaining, in dependency order:
 
-1. Add the gen2 bare-core timing probe
-   (`ulx3s_penumbra2_probe_top`, VARIANT=probe): core +
-   `unified_mem`, IRQs on buttons, commit/retire reduced onto LEDs so
-   synthesis keeps the design. This is where the
-   synthesize-after-every-change workflow for gen2 starts — in place
-   *before* the BRAM L1 lands, since Decision 11's 4-way-vs-leaner
-   choice is gated on the IF2 tag-compare/way-mux path at synthesis.
-2. At gen2 machine assembly (after D-side MMU, BRAM L1, transactional
+1. At gen2 machine assembly (after D-side MMU, BRAM L1, transactional
    arbiter, fill sequencer): `machine_penumbra2` honoring the
    program-end contract; fold the ISA-shaped gen2 programs (smoke,
    branch, loadstore, fault, eret, syscall_trap, intr) into `isa/`.
-3. Opportunistic: extract `machine_penumbra1` from `machine_sim` /
+2. Opportunistic: extract `machine_penumbra1` from `machine_sim` /
    `ulx3s_penumbra1_top` so both wrappers share one integration
    (the sim-vs-FPGA congruence argument in the build-system doc).
 

@@ -56,17 +56,25 @@ module unified_mem #(
 
     logic [31:0] mem [0:N-1];
 
-    // +rom_hex=<path> overrides INIT_FILE, so per-program testbench images
-    // live under build/ instead of contending for one shared filename.
+`ifdef VERILATOR
+    // Simulation: +rom_hex=<path> overrides INIT_FILE, so per-program
+    // testbench images live under build/ instead of contending for one
+    // shared filename.
     string init_file;
+`endif
 
+    // Zero-init is common to simulation and synthesis; *loading* an image
+    // is a simulation mechanism (the synthesizable consumer — the gen2
+    // timing probe — runs the core against a zeroed memory).
     initial begin
         for (int i = 0; i < N; i++)
             mem[i] = 32'b0;
+`ifdef VERILATOR
         if (!$value$plusargs("rom_hex=%s", init_file))
             init_file = INIT_FILE;
         if (init_file != "")
             $readmemh(init_file, mem, REGION_WORDS);   // ROM region starts at REGION_WORDS
+`endif
     end
 
     // Region-compressed index: addr[31] picks the half, the low bits index

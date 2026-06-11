@@ -153,6 +153,9 @@ nextpnr-ecp5, ecppack, fujprog usable as normal commands:
 - `make fpga-lint` — Verilator lint check (full gen1 system).
 - `make timing BOARD=ulx3s CORE=penumbra1 [TOP_N=10]` — pretty-print
   fmax + top critical paths from `build/<top>_timing.json`.
+- gen2 timing checks: `make fpga`/`timing` with
+  `BOARD=ulx3s CORE=penumbra2 VARIANT=probe` builds the bare-core
+  probe top — run after gen2 RTL changes to catch fmax movement early.
 
 Board top-level: `hw/rtl/fpga/ulx3s/ulx3s_penumbra1_top.sv`. Serial 115200 8N1 on
 `/dev/ttyUSB0`. SD slot autoconfigured as `CLASS_SD`; `boot sd:0,0`

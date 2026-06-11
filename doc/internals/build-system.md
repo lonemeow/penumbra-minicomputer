@@ -41,7 +41,7 @@ The two integration levels:
 
 ```
 hw/rtl/
-├── common/        ISA constants shared by every module (penumbra_pkg)
+├── common/        ISA constants (penumbra_pkg) + generation-shared modules
 ├── penumbra1/     gen1 core (microcoded)
 ├── penumbra2/     gen2 core (pipelined)
 ├── mmu/ soc/ io/ bus/   generation-neutral fabric and devices

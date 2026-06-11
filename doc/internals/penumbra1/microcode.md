@@ -132,7 +132,7 @@ what the ALU *computes*, not what gets latched.
 
 Multi-cycle operations require `alu_start=1` on the first micro-op and
 `branch=STALL` to wait for completion. MUL/MULU/DIV/DIVU are
-implemented by the divmul peer unit (`hw/rtl/penumbra1/divmul.sv`).
+implemented by the divmul peer unit (`hw/rtl/common/divmul.sv`).
 
 ### B-Bus Source — `bmux` [28:27] (2 bits)
 

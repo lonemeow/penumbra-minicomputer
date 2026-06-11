@@ -46,12 +46,20 @@ Find a module by file path. For full module behavior, read the
 source — the source is the authoritative description; this table is
 purely a "where does this thing live?" index.
 
-### Shared package (`rtl/common/`)
+### Shared package and modules (`rtl/common/`)
+Generation-neutral: everything here is used by both CPU cores. A
+module instantiated by more than one generation lives here, never
+cross-referenced from another generation's directory.
 - `penumbra_pkg.sv` — shared constants (REG_*, ALU_*, COND_*, SR_*,
   VEC_*, FAULT_*, SYSDEV_*, SYSREG_*, CACHE_ADDR_*, UART_*, SPR_*,
   ACFG_*, base addresses). Imported by both CPU cores and every
   peripheral; the ISA contract for the whole system. Kept here, not
   under a generation directory, so it isn't generation-scoped.
+- `cond_eval.sv` — 16 ARM-style condition codes.
+- `byte_ext.sv`, `byte_rep.sv` — sub-word load extraction / store
+  replication (defines byte-order convention).
+- `divmul.sv` — MUL/DIV peer unit (sequential ~32-cycle iteration,
+  own start/busy handshake; see `doc/internals/divmul.md`).
 
 ### Penumbra/2 core (`rtl/penumbra2/`)
 The gen2 6-stage pipelined core (design in `doc/internals/penumbra2/`).
@@ -92,12 +100,9 @@ BRAM L1 caches are not yet wired.
 - `ucode_rom.sv` — 256×51-bit ROM (`$readmemh` from microcode.hex).
 - `alu.sv` — unified compute (11 single-cycle ops, multi-cycle stubs).
 - `regfile.sv` — 2R/1W, R0=zero, R14 banked USP/SSP, R15→PC, debug port.
-- `cond_eval.sv` — 16 ARM-style condition codes.
 - `imm_ext.sv`, `field_ext.sv` — immediate / IR-field extraction.
 - `bmux.sv`, `wmux.sv`, `amux.sv`, `pc_mux.sv` — datapath muxes.
 - `status_reg.sv`, `pc_reg.sv`, `mar.sv`, `mdr.sv` — core state regs.
-- `byte_ext.sv`, `byte_rep.sv` — sub-word load extraction / store
-  replication (defines byte-order convention).
 - `cpu_perfctr.sv` — cycles + insns_retired counters, exposed via
   `SYSDEV_CPU` regs 5+.
 - `cpu_bus_arbiter.sv` — serializes split I/D L1 traffic onto the
@@ -189,6 +194,12 @@ in the root Makefile; naming spec in `doc/internals/build-system.md`).
   12.5 MHz PLL (25 MHz crystal), 32 MB SDRAM (W9825G6KH or
   compatible), real UART (TX+RX), real SPI with SD card (autoconfig),
   boot ROM, `btn[1]` reset.
+- `ulx3s/ulx3s_penumbra2_probe_top.sv` — gen2 bare-core timing probe
+  (`VARIANT=probe`): the pipelined core + `unified_mem` stand-in at
+  25 MHz, core outputs folded onto the LEDs so synthesis keeps the
+  design, IRQ inputs on `btn[2]`/`btn[3]`. A timing instrument
+  (`make timing BOARD=ulx3s CORE=penumbra2 VARIANT=probe`), not a
+  usable machine.
 - `fpga_ram.sv` — BRAM-friendly memory (4 byte-wide banks with
   `ram_style` attribute).
 

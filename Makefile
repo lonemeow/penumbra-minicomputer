@@ -580,8 +580,10 @@ FPGA_RTL   = hw/rtl/fpga
 # hatch: registry tops get their composed sources, anything else falls
 # back to the bare fpga/*.sv set (simple test tops).
 
-# Per-axis source sets.
-SRC_COMMON = hw/rtl/common/penumbra_pkg.sv
+# Per-axis source sets. common/ holds the shared package (must come
+# first) and the generation-shared modules both cores instantiate.
+SRC_COMMON = hw/rtl/common/penumbra_pkg.sv \
+             $(filter-out %/penumbra_pkg.sv, $(wildcard hw/rtl/common/*.sv))
 
 SRC_FABRIC = hw/rtl/io/sdram/sdram_pkg.sv \
              $(wildcard hw/rtl/mmu/*.sv) \
@@ -590,10 +592,16 @@ SRC_FABRIC = hw/rtl/io/sdram/sdram_pkg.sv \
              $(filter-out %/sdram_pkg.sv, $(wildcard hw/rtl/io/sdram/*.sv))
 
 SRC_CORE_penumbra1 = $(wildcard hw/rtl/penumbra1/*.sv)
+# The gen2 core's closure includes the CPU-internal sysreg devices
+# (cpuid/machid on the MEM sideband), housed with the other devices
+# in the shared soc/ directory.
 SRC_CORE_penumbra2 = hw/rtl/penumbra2/penumbra2_pkg.sv \
-                     $(filter-out %/penumbra2_pkg.sv, $(wildcard hw/rtl/penumbra2/*.sv))
+                     $(filter-out %/penumbra2_pkg.sv, $(wildcard hw/rtl/penumbra2/*.sv)) \
+                     hw/rtl/soc/cpuid.sv hw/rtl/soc/machid.sv
 
-SRC_BOARD_ulx3s = $(FPGA_RTL)/fpga_ram.sv $(wildcard $(FPGA_RTL)/ulx3s/*.sv)
+# Board-common helpers only — each registry entry names its own top
+# file, so sibling tops never leak into each other's builds.
+SRC_BOARD_ulx3s = $(FPGA_RTL)/fpga_ram.sv
 LPF_ulx3s       = hw/constraints/ulx3s_v20.lpf
 
 # The registry: every valid (board, core[, variant]) top, its composed
@@ -601,10 +609,18 @@ LPF_ulx3s       = hw/constraints/ulx3s_v20.lpf
 # means adding its top file under hw/rtl/fpga/<board>/ and its
 # entries here — an unknown combination is a hard error, not a
 # silently empty source list.
-FPGA_TOPS = ulx3s_penumbra1_top
+FPGA_TOPS = ulx3s_penumbra1_top ulx3s_penumbra2_probe_top
 
 FPGA_SRC_ulx3s_penumbra1_top = $(SRC_COMMON) $(SRC_CORE_penumbra1) \
-                               $(SRC_FABRIC) $(SRC_BOARD_ulx3s)
+                               $(SRC_FABRIC) $(SRC_BOARD_ulx3s) \
+                               $(FPGA_RTL)/ulx3s/ulx3s_penumbra1_top.sv
+
+# The gen2 probe is a core-level integration (no fabric): the bare
+# pipeline against the unified_mem stand-in, for timing
+# characterization of core logic cones in isolation.
+FPGA_SRC_ulx3s_penumbra2_probe_top = $(SRC_COMMON) $(SRC_CORE_penumbra2) \
+                                     hw/rtl/sim/unified_mem.sv \
+                                     $(FPGA_RTL)/ulx3s/ulx3s_penumbra2_probe_top.sv
 
 # Tops that embed the boot ROM and/or microcode: their hex images are
 # generated before synthesis and inlined by inline_hex.py.
@@ -640,12 +656,15 @@ FPGA_LINT_STUBS = $(FPGA_RTL)/ecp5_prim.sv
 
 .PHONY: fpga flash fpga-lint
 
-# Lint always targets the full gen1 system regardless of TOP.
+# Lint covers every registered top regardless of TOP.
 # Use Verilator --lint-only with ECP5 primitive stubs.
-fpga-lint: $(FPGA_SRC_ulx3s_penumbra1_top) $(FPGA_LINT_STUBS)
+fpga-lint: $(FPGA_SRC_ulx3s_penumbra1_top) $(FPGA_SRC_ulx3s_penumbra2_probe_top) $(FPGA_LINT_STUBS)
 	$(DOCKER_RUN) $(DOCKER_IMAGE) --lint-only -Wall -Wno-fatal \
 		-Wno-PINMISSING -Wno-PINCONNECTEMPTY \
 		$(FPGA_SRC_ulx3s_penumbra1_top) $(FPGA_LINT_STUBS) --top ulx3s_penumbra1_top
+	$(DOCKER_RUN) $(DOCKER_IMAGE) --lint-only -Wall -Wno-fatal \
+		-Wno-PINMISSING -Wno-PINCONNECTEMPTY \
+		$(FPGA_SRC_ulx3s_penumbra2_probe_top) $(FPGA_LINT_STUBS) --top ulx3s_penumbra2_probe_top
 
 fpga: $(BUILD_DIR)/$(TOP).bit
 	@echo "Bitstream: $(BUILD_DIR)/$(TOP).bit (PHASE_DEG=$(PHASE_DEG))"
