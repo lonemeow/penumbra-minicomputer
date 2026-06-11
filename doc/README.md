@@ -72,6 +72,7 @@ subdirectory owns its realization.
 *   **[Text-Video Console](./internals/text-video.md)** — FPGA microarchitecture of the `CLASS_TEXTVIDEO` console: pixel generator + TMDS output PHY.
 *   **[USB Host Controller](./internals/usb-host-controller.md)** — FPGA microarchitecture of the `CLASS_USBHC` controller: SIE, transaction FSM, and the NetBSD HCD mapping.
 *   **[Coding Standards](./internals/coding-standards.md)** — RTL naming and style conventions for hardware.
+*   **[Build & Test Structure](./internals/build-system.md)** — The BOARD×CORE build matrix, the machine integration layer, and the `isa/` conformance split for test programs.
 *   **[Development Setup](./internals/setup.md)** — How to build and simulate the RTL.
 
 ### Penumbra/1 (microcoded core)
