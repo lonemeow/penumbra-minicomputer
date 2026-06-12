@@ -86,15 +86,15 @@ a 1-cycle STALL on hit (only loads/stores pay it).
 ```mermaid
 flowchart LR
   PCREG([PC register])
-  IF1[IF1<br/>Drive cache addr to BRAM<br/>TLB lookup combinational<br/>Vector-fetch FSM]
-  IF1IF2[/IF1/IF2 register<br/>+ TLB output/]
-  IF2[IF2<br/>BRAM output available<br/>Tag compare<br/>Fault detection]
+  IF1[IF1<br/>Drive cache addr to BRAM<br/>Drive TLB port-A query<br/>Vector-fetch FSM]
+  IF1IF2[/IF1/IF2 register/]
+  IF2[IF2<br/>BRAM + TLB outputs available<br/>Tag compare + permission<br/>Fault detection]
   IF2ID[/IF2/ID register/]
   ID[ID<br/>Decoder + scoreboard<br/>Regfile read]
   IDEX[/ID/EX register/]
   EX[EX<br/>ALU + flag compute<br/>Branch resolve<br/>Drain-commit FSM<br/>divmul start/busy]
   EXMEM[/EX/MEM register/]
-  MEM["MEM<br/>D-cache BRAM access<br/>1-cycle STALL on hit<br/>Sub-word extract<br/>Sysreg sideband"]
+  MEM["MEM<br/>D-cache BRAM + TLB port-B access<br/>1-cycle STALL on hit<br/>Sub-word extract<br/>Sysreg sideband"]
   MEMWB[/MEM/WB register/]
   WB[WB<br/>Regfile write 2 ports<br/>SR/SPR write<br/>Scoreboard clear]
 
@@ -131,9 +131,13 @@ in 1 cycle with no stall. Full rationale in
   The cache's BRAM input register samples the address at this
   cycle's clock edge; on the next clock the BRAM output is
   combinational from the registered address.
-- Drive `i_vaddr ← PC` to the TLB combinationally (TLB stays
-  distributed-RAM async lookup, gen1-inherited). TLB output —
-  paddr, fault bits — is available within IF1 cycle.
+- Drive the TLB port-A query (`vaddr ← PC`, `ACC_EXEC`)
+  combinationally. The BRAM-backed TLB registers the query at this
+  cycle's clock edge, exactly like the cache RAM; its verdict —
+  paddr, cacheable, fault bits — resolves during IF2
+  ([Decision 13](./design-decisions.md#13-gen2-tlb-bram-backed-registered-translation-commit-time-fault-latch)).
+  VIPT makes this free: the cache is indexed by the vaddr, so the
+  paddr is not needed until IF2's tag compare.
 - On `vector_fetch_pending` (set by exception entry): switch to
   vector-fetch mode (drive cache address to `vec_num × 4`, signal
   MMU bypass, suppress normal PC advance), wait for the loaded
@@ -142,8 +146,9 @@ in 1 cycle with no stall. Full rationale in
 - On taken-branch flush signal from EX: invalidate the address
   being driven; refetch from the branch target next cycle.
 - Latch into the IF1/IF2 register at end of cycle: PC of this
-  fetch, next_PC (`PC + 4`), TLB output (paddr_tag and fault bits),
-  and a `valid` bit (0 if flushed).
+  fetch, next_PC (`PC + 4`), and a `valid` bit (0 if flushed). The
+  in-flight TLB query needs no field here — the TLB's own BRAM
+  input register carries it across the same edge.
 
 **PC updates:**
 - Default: `PC ← PC + 4` each cycle the fetch advances.
@@ -162,13 +167,14 @@ in 1 cycle with no stall. Full rationale in
   data, and the valid bit for the addressed line. (The address was
   registered into the BRAM at the IF1→IF2 edge; output appears
   during IF2 by REGMODE_A=NOREG semantics.)
-- Receive the registered TLB output from the IF1/IF2 pipeline
-  register: paddr_tag, fault bits.
-- Compare BRAM tag against TLB-provided paddr_tag → hit signal
+- Receive the TLB verdict combinationally during this cycle: paddr,
+  cacheable, fault bits — the registered port-A lookup launched in
+  IF1 resolves here, beside the cache BRAM output it qualifies.
+- Compare BRAM tag against the TLB-provided paddr tag → hit signal
   (combinational, ~2 ns).
 - Mux BRAM data → `ir` (the instruction word) gated on hit.
-- Detect IF-stage faults: TLB miss/protection (from the IF1/IF2
-  register), bus fault (held from cache fill — propagated as a
+- Detect IF-stage faults: TLB miss/protection (from the TLB
+  verdict), bus fault (held from cache fill — propagated as a
   fault from the cache module), alignment (rare on fetch since
   branches target 4-byte-aligned PCs).
 - On cache miss: assert stall, drive the cache to begin a line fill,
@@ -185,9 +191,9 @@ fault aggregation.
 The original "IF" pipeline register (IF/ID) is now the **IF2/ID
 register** — written by IF2 at end of its cycle, read by ID at the
 start of the next. The IF1/IF2 register is new — its purpose is to
-carry PC, next_PC, and TLB output from IF1 to IF2 so the cache
-access (which happens at the IF1→IF2 edge) can complete and have
-its result combined with TLB output in IF2.
+carry PC and next_PC from IF1 to IF2 so the cache and TLB accesses
+(both registered at the IF1→IF2 edge) can resolve and be combined
+in IF2.
 
 ### ID — Instruction Decode
 
@@ -244,23 +250,32 @@ drain-commit FSM, divmul start/busy control.
 ### MEM — Memory Access (single stage, STALL on D-cache access)
 
 **Work performed:**
-- For loads/stores: drive D-side memory request — vaddr from EX/MEM
-  register, MMU/TLB lookup combinationally during this cycle, BRAM
-  D-cache address input at this cycle's clock edge.
+- For loads/stores: drive the D-side request on the launch cycle —
+  vaddr from the EX/MEM register to both the D-cache BRAM address
+  input and the TLB port-B query (`ACC_READ`/`ACC_WRITE`). Both RAMs
+  register the inputs at this cycle's clock edge
+  ([Decision 13](./design-decisions.md#13-gen2-tlb-bram-backed-registered-translation-commit-time-fault-latch)).
 - **Assert 1-cycle STALL on every D-cache access.** This holds the
-  pipeline for one cycle while the BRAM output settles. At the next
-  clock, BRAM output is combinational; tag compare against TLB
-  paddr_tag happens combinationally; hit detected; data extracted
-  or written; STALL deasserts; instruction advances to MEM/WB at the
-  following edge. (Total MEM occupancy for loads/stores: 2 cycles.)
+  pipeline for one cycle while the BRAM outputs settle. At the next
+  clock (the data-ready cycle), the cache output and the TLB verdict
+  are both combinational; tag compare against the TLB paddr happens
+  combinationally; hit detected; data extracted or written; STALL
+  deasserts; instruction advances to MEM/WB at the following edge.
+  (Total MEM occupancy for loads/stores: 2 cycles.)
 - On cache miss: hold STALL until the line fill completes (existing
   cache-miss behavior, many cycles).
 - Alignment check happens combinationally on entry to MEM (before
   driving cache). On misalignment, set fault bit (alignment) in
-  MEM/WB register at end of the 2-cycle MEM occupancy; suppress
-  cache request.
-- On MMU fault (TLB miss / protection on data side): set fault bit
-  in MEM/WB register; suppress cache request and the WB write.
+  MEM/WB register; suppress the cache request and the TLB query
+  (the access never launches).
+- On MMU fault (TLB miss / protection, from the port-B verdict on
+  the data-ready cycle): set fault bit in MEM/WB register; suppress
+  the store commit and the WB write. The faulting vaddr and the
+  composed fault status ride the MEM/WB register alongside the
+  fault vector; the architectural `FAULT_ADDR`/`FAULT_STATUS`
+  registers latch only from WB's commit strobe, so a
+  detected-then-squashed fault never becomes architectural
+  ([Decision 15](./design-decisions.md#15-gen2-mmu-as-a-separate-module-not-a-parameter)).
 - For loads (hit): extract sub-word value (byte / half / word;
   sign-extend or zero-extend per control bundle) combinationally
   from the cache response. Latched into MEM/WB at end of MEM
@@ -297,7 +312,11 @@ logic; the 1-cycle STALL FSM for D-cache and RDSYS access.
   exception save-state pulse (see
   [exception-flow.md](./exception-flow.md)): EPC ← faulting PC,
   ESR ← SR, mode-bits update, R14 bank-swap, IF goes into
-  vector-fetch mode for `fault_vec`.
+  vector-fetch mode for `fault_vec`. For address-carrying faults
+  (alignment, TLB miss/protection, bus), also drive the MMU's
+  fault-commit strobe with the carried vaddr + status, latching
+  `FAULT_ADDR`/`FAULT_STATUS` — traps and decode faults
+  (SYSCALL/BREAK/illegal/privilege/DIV0) leave them untouched.
 - Clear the scoreboard valid bit for the just-written destination
   (for MUL/DIV, both `Rd` and `Rdh` — the divmul occupies WB for
   two cycles writing low then high through the single port, and both
@@ -317,23 +336,21 @@ the register layout for simplicity.
 
 ### IF1/IF2 register
 
-Written by IF1, read by IF2. Carries the in-flight fetch's PC and
-the TLB lookup result (since BRAM access spans the IF1→IF2 edge,
-the TLB output computed combinationally in IF1 must be registered
-here so IF2's tag compare can use it alongside the BRAM output that
-becomes available during IF2).
+Written by IF1, read by IF2. Carries the in-flight fetch's PC. The
+TLB lookup needs no fields here: the query launched in IF1 rides
+the TLB's own BRAM input register across the same edge, and its
+verdict (paddr, fault bits) appears combinationally during IF2 —
+the same registered-RAM contract as the cache it qualifies
+([Decision 13](./design-decisions.md#13-gen2-tlb-bram-backed-registered-translation-commit-time-fault-latch)).
 
 | Field | Bits | Description |
 |-------|------|-------------|
 | `pc` | 32 | This fetch's PC |
 | `next_pc` | 32 | `PC + 4` |
-| `tlb_paddr_tag` | ~20 | TLB-translated physical tag bits (for tag compare in IF2) |
-| `tlb_fault` | 1 | TLB miss or protection fault detected in IF1 |
-| `tlb_fault_kind` | 2 | Encodes TLB miss vs protection vs alignment |
 | `vector_fetch_mode` | 1 | 1 = this fetch is a vector-table indirect load (MMU bypassed); affects IF2's downstream handling |
 | `valid` | 1 | 0 = bubble (flushed or never-issued) |
 
-Total: ~89 bits.
+Total: ~66 bits.
 
 ### IF2/ID register
 
@@ -415,8 +432,11 @@ Written by MEM, read by WB.
 | `valid` | 1 | 0 = bubble |
 | `fault_pending` | 1 | |
 | `fault_vec` | 4 | |
+| `fault_vaddr` | 32 | Faulting data vaddr — the `FAULT_ADDR` commit value; don't-care unless an address-carrying fault |
+| `fault_status` | 32 | Composed fault status (type + access info) — the `FAULT_STATUS` commit value |
+| `fault_info_valid` | 1 | 1 = this fault defines `FAULT_ADDR`/`FAULT_STATUS` (alignment, TLB, bus); 0 = trap/decode fault, the registers stay untouched |
 
-Total: ~121 bits.
+Total: ~186 bits.
 
 ## Stall sources
 
