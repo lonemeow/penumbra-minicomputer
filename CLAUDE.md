@@ -114,8 +114,9 @@ Examples: `llvm: fix PIC TLS GD materialization`,
   introducing modules with a `tb_<mod>.cpp` or `<mod>_test.sv` wrapper.
 - `make test-all` — `make test` then `make test-modules`.
 - `make test-compiler` — `llvm-test-suite` C tests on ISS in `+hosted`
-  mode. Requires `compiler-rt` (build once via
-  `sw/tools/setup-compiler-rt.sh`). Override `OPT=` or
+  mode. Requires `compiler-rt` built per optimization level
+  (`sw/tools/setup-compiler-rt.sh` builds `-O0` and `-O2` archives;
+  the suite links the one matching `OPT`). Override `OPT=` or
   `COMPILER_TESTS=path/to/test.c`. Report in
   `build/test-compiler-report.txt`. Excludes and deferred backend gaps
   in `test/compiler/excludes.txt` and `doc/TODO.md`.

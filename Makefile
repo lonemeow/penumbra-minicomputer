@@ -120,13 +120,16 @@ endif
 # runner testbenches (first entry is the default; the rest are
 # selectable via RUNNER tags), and the capability set the integration
 # provides for REQUIRES tags.
+# mmu-d is the D-side slice of mmu: data translation, TLB miss /
+# protection faults, and the FAULT_ADDR/FAULT_STATUS commit — but no
+# fetch translation. A full-MMU integration provides both.
 RUNNER_MOD_penumbra1      = machine_sim
 RUNNER_TBS_penumbra1      = tb_cpu_prog
-RUNNER_PROVIDES_penumbra1 = mmu cache l2 uart spi bus machid perfctr timer irq wrspr
+RUNNER_PROVIDES_penumbra1 = mmu mmu-d cache l2 uart spi bus machid perfctr timer irq wrspr
 
 RUNNER_MOD_penumbra2      = penumbra2_core
 RUNNER_TBS_penumbra2      = tb_penumbra2_prog tb_penumbra2_intr
-RUNNER_PROVIDES_penumbra2 =
+RUNNER_PROVIDES_penumbra2 = mmu-d
 
 RUNNER_MOD      = $(RUNNER_MOD_$(CORE))
 RUNNER_TBS      = $(RUNNER_TBS_$(CORE))
@@ -294,8 +297,17 @@ test-iss: $(ISS)
 TEST_COMPILER_DIR = test/compiler
 HARNESS_DIR      = $(TEST_COMPILER_DIR)/harness
 LLVM_TEST_SUITE  = $(TEST_COMPILER_DIR)/llvm-test-suite
-COMPILER_RT_BUILTINS = build/compiler-rt-builtins/lib/linux/libclang_rt.builtins-penumbra.a
 OPT             ?= -O2
+
+# Link the compiler-rt archive built at the same optimization level as
+# the tests, so the runtime exercises the same codegen paths the suite
+# is checking (a runtime pinned to one level masks codegen bugs at the
+# others).  Archives are built per level by sw/tools/setup-compiler-rt.sh.
+RT_OPT := $(filter -O%,$(OPT))
+ifeq ($(RT_OPT),)
+RT_OPT := -O2
+endif
+COMPILER_RT_BUILTINS = build/compiler-rt-builtins-$(patsubst -%,%,$(RT_OPT))/lib/linux/libclang_rt.builtins-penumbra.a
 
 # We only run UnitTests and Regression for now
 # to keep the runtime reasonable.
@@ -319,6 +331,10 @@ endif
 
 .PHONY: test-compiler
 test-compiler: $(ISS)
+	@test -f "$(COMPILER_RT_BUILTINS)" || { \
+		echo "error: $(COMPILER_RT_BUILTINS) not found —" \
+		     "build it with: sw/tools/setup-compiler-rt.sh $(RT_OPT)"; \
+		exit 1; }
 	@$(PYTHON) $(TEST_COMPILER_DIR)/run-tests.py \
 		$(COMPILER_TEST_ARGS) \
 		"--opt=$(OPT)" \
@@ -594,10 +610,15 @@ SRC_FABRIC = hw/rtl/io/sdram/sdram_pkg.sv \
 SRC_CORE_penumbra1 = $(wildcard hw/rtl/penumbra1/*.sv)
 # The gen2 core's closure includes the CPU-internal sysreg devices
 # (cpuid/machid on the MEM sideband), housed with the other devices
-# in the shared soc/ directory.
+# in the shared soc/ directory, and the gen2 MMU stack from mmu/
+# (also wildcarded by SRC_FABRIC — a top composing both should $(sort)
+# its source set to dedupe).
 SRC_CORE_penumbra2 = hw/rtl/penumbra2/penumbra2_pkg.sv \
                      $(filter-out %/penumbra2_pkg.sv, $(wildcard hw/rtl/penumbra2/*.sv)) \
-                     hw/rtl/soc/cpuid.sv hw/rtl/soc/machid.sv
+                     hw/rtl/soc/cpuid.sv hw/rtl/soc/machid.sv \
+                     hw/rtl/mmu/mmu_bram.sv hw/rtl/mmu/tlb_unit_bram.sv \
+                     hw/rtl/mmu/tlb_bram.sv hw/rtl/mmu/tlb_pinned.sv \
+                     hw/rtl/mmu/tlb_perm.sv
 
 # Board-common helpers only — each registry entry names its own top
 # file, so sibling tops never leak into each other's builds.
