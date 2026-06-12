@@ -26,8 +26,11 @@ aliases. SPR names `ESR`, `EPC`, `USP`, `SR`, `SCR0`, `SCR1`, `SCR2`,
 ## Condition Codes
 
 Used by all branch instructions. The 16 conditions cover unsigned,
-signed, and flag-based tests. Each condition and its inverse differ
-only in bit 0 — simplifying inversion in hardware and compilers.
+signed, and flag-based tests. Each condition and its inverse are
+numerically **adjacent codes** (1↔2, 3↔4, … 13↔14): to invert
+condition `n` in the 1–14 range, map odd `n` to `n+1` and even `n`
+to `n−1`. (They do **not** differ only in bit 0 — `BEQ`=0001 and
+`BNE`=0010 differ in two bits, so `cond ^ 1` is not an inversion.)
 
 | Code | Mnemonic       | Meaning                 | Test            |
 |:----:|----------------|-------------------------|-----------------|
@@ -100,7 +103,7 @@ LLI  LR, #my_label          ; R13 = address of my_label
 | ADC         | `ADC Rd, Rs`        | `Rd = Rd + Rs + C` (add with carry)| NZCV  |
 | SBC         | `SBC Rd, Rs`        | `Rd = Rd - Rs - ~C` (sub w/ borrow)| NZCV  |
 | MUL / MULU  | `MUL Rd, Rs [, Rdh]`| `Rdh:Rd = Rd × Rs` (signed/unsigned 32×32→64; `Rdh` defaults to R0 → low half only) | NZ |
-| DIV / DIVU  | `DIV Rd, Rs [, Rdh]`| `Rd, Rdh = (Rdh:Rd)/Rs, (Rdh:Rd)%Rs` (`Rdh` defaults to R0 → plain 32/32) | NZ |
+| DIV / DIVU  | `DIV Rd, Rs [, Rdh]`| `Rd = Rd / Rs`, `Rdh = Rd % Rs` (always 32/32; remainder from the original `Rd`; `Rdh` defaults to R0 → quotient only) | NZ |
 
 All ALU arithmetic is **2-operand destructive**: the first operand is
 both a source and the destination. Save values you still need before
@@ -315,7 +318,7 @@ register.
 | RDSYS       | `RDSYS Rd, #dev, #reg`     | Read sysreg                              | Yes        |
 | RDSPR       | `RDSPR Rd, {ESR\|EPC\|USP\|SR\|SCR0–3}` | Read SPR                    | Yes        |
 | WRSPR       | `WRSPR {ESR\|EPC\|USP\|SR\|SCR0–3}, Rd` | Write SPR                   | Yes        |
-| ERET        | `ERET` **or** `ERET Rd, Rs`| Exception return                         | Yes        |
+| ERET        | `ERET`                     | Exception return                         | Yes        |
 | SYSCALL     | `SYSCALL`                  | Trap to `VEC_SYSCALL` (5)                | No         |
 | BREAK       | `BREAK`                    | Trap to `VEC_BREAK` (6)                  | No         |
 
@@ -326,11 +329,11 @@ executes before any pending interrupt is recognised. This enables the
 **DI timing guarantee.** Takes effect immediately. The next instruction
 executes with interrupts disabled.
 
-**ERET forms.** The no-argument form restores SR from `ESR` and PC
-from `EPC` — the normal fault-return path. The two-argument form
-`ERET Rd, Rs` loads SR from `Rd` and PC from `Rs` atomically — used
-for context switches (returning to a **different** process than the
-one that was interrupted).
+**ERET.** Takes no operands: it restores SR from `ESR` and PC from
+`EPC`, atomically. A context switch returns to a different process by
+writing that process's saved state into the SPRs first —
+`WRSPR ESR, Rx; WRSPR EPC, Ry; ERET` — there is no register-operand
+form.
 
 **WRSYS/RDSYS.** Access device-mapped system registers (MMU, TLB,
 CPU/machine identity, caches, bus controller, timer). See

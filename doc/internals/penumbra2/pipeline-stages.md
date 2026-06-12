@@ -361,7 +361,7 @@ the "instruction available for decode" boundary.
 |-------|------|-------------|
 | `ir` | 32 | Instruction word fetched (from BRAM output, gated on cache hit) |
 | `pc` | 32 | This instruction's PC |
-| `next_pc` | 32 | `PC + 4` (used as EPC for SYSCALL/BREAK and IRQ EPC) |
+| `next_pc` | 32 | `PC + 4` (IRQ-boundary EPC; traps save their own `pc` — see WB) |
 | `valid` | 1 | 0 = bubble (flushed, cache miss not yet resolved, or never-issued) |
 | `fault_pending` | 1 | Set on IF-stage fault (TLB, bus fault on fetch, alignment) |
 | `fault_vec` | 4 | Vector number when `fault_pending = 1` |
@@ -380,7 +380,7 @@ here.
 |-------|------|-------------|
 | `ctrl` | ~30 | Decoded control bundle: alu_op, op_class, flag_we, gpr_we, spr_we, mem_op, cond, sysreg/SPR selects, divmul_op, drain_commit, is_trap, etc. — full layout in [control-decode.md](./control-decode.md) |
 | `pc` | 32 | This insn's PC (propagated for EPC + branch target) |
-| `next_pc` | 32 | `PC + 4` (branch/JALR link, SYSCALL/BREAK/IRQ EPC) |
+| `next_pc` | 32 | `PC + 4` (BL/JALR link, IRQ-boundary EPC; SYSCALL/BREAK save their own `pc` as EPC at WB and the handler advances it) |
 | `op_a` | 32 | Final ALU operand A: the regfile port-A read, or PC for a branch target. For MUL/DIV: the multiplicand / 32-bit dividend |
 | `op_b` | 32 | Final ALU operand B: the regfile port-B read, or the sign/zero-extended immediate. For MUL/DIV: the multiplier / divisor |
 | `store_data` | 32 | The value a store writes — the raw regfile port-B (`Rs`) read. Kept separate from `op_b` because a store's `op_b` is the address offset, not the stored value. Don't-care for non-stores |

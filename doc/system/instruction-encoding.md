@@ -240,10 +240,14 @@ extra adder stage in hardware — important for the discrete build.
 | 1110 | `BLE`          | Signed ≤                 | Z=1 \| N≠V         |
 | 1111 | `BL`           | Branch-and-link (always) | — (saves PC+4→R13) |
 
-Conditions `0001`–`1110` are paired: each condition and its inverse
-differ only in bit 0, allowing the condition-evaluation logic to be
-`base_result XOR cond[0]`. `BL` (cond=`1111`) is always taken; the
-microcode writes PC+4 into R13 before branching.
+Conditions `0001`–`1110` are paired: each condition's inverse is the
+numerically **adjacent code** — odd `n` pairs with `n+1` (`BEQ`=0001
+↔ `BNE`=0010, …, `BVS`=0111 ↔ `BVC`=1000). Inverse pairs do *not*
+differ in a single bit, so `cond ^ 1` is not an inversion (it maps
+`BEQ` to `B`); tools derive the inverse with an explicit table or the
+odd/even adjacency rule, and the hardware evaluates conditions as a
+plain 16-way decode. `BL` (cond=`1111`) is always taken and writes
+PC+4 into R13 before branching.
 
 ---
 
@@ -274,6 +278,6 @@ to the illegal-instruction handler (`VEC_ILLEGAL`).
 | EI, DI                            | Yes         | `ei_shadow`, privilege check        |
 | WRSYS, RDSYS                      | Yes         | Privileged                          |
 | RDSPR, WRSPR                      | Yes         | SPR in IR[15:12]: ESR/EPC/USP/SR/SCR0–3 |
-| ERET (1- and 2-arg)               | Yes         |                                     |
+| ERET                              | Yes         | No-operand form only; context switch = `WRSPR EPC/ESR` + `ERET` |
 | SYSCALL, BREAK                    | Yes         |                                     |
 | NOP, RET, LA, LI (pseudo)         | Yes         |                                     |

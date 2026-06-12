@@ -104,16 +104,17 @@ datapath.
   PC-relative addressing for literal-pool constants.
 - **Writes:** R15 cannot be written through the ALU or register-file
   write port. PC is modified only by dedicated control-flow
-  instructions: `B`/`Bcc`/`BL`, `JMP`, `ERET`, and exception entry.
-  This eliminates accidental PC writes and simplifies the datapath.
+  instructions: `B`/`Bcc`/`BL`, `JMP`, `JALR`, `ERET`, and exception
+  entry. This eliminates accidental PC writes and simplifies the
+  datapath.
 
 ### Link Register (R13)
 
-`BL` is the only instruction that writes a return address, and it
-**always** writes to R13 — the target register is hard-coded in the
-microcode, not chosen by a field in the instruction. There is no
-separate hardware LR register; R13 is the single GPR that serves as
-the link register.
+`BL` and `JALR` are the only instructions that write a return
+address, and both **always** write it to R13 — the link target is
+fixed by the architecture, not chosen by a field in the instruction.
+There is no separate hardware LR register; R13 is the single GPR that
+serves as the link register.
 
 Return uses `JMP R13` (assembler alias `RET`). Nested calls must save
 R13 to the stack explicitly before calling further, since the next
@@ -142,7 +143,7 @@ All instructions are 32 bits wide; bits `[31:30]` select the format.
 | `11`   | B      | Branch (conditional, unconditional, branch-and-link)           |
 
 Full bit-level encoding and opcode tables live in
-[instruction-set.md](./instruction-set.md#appendix-a--instruction-encoding).
+[instruction-encoding.md](./instruction-encoding.md).
 
 ---
 
@@ -316,8 +317,10 @@ On any interrupt, exception, or trap the hardware:
   faulting instruction (handler can retry after fixing the cause).
 - **External interrupts:** saved PC is the next instruction
   (the interrupted one completed).
-- **Software traps** (`SYSCALL`, `BREAK`): saved PC is the next
-  instruction.
+- **Software traps** (`SYSCALL`, `BREAK`): saved PC is the trapping
+  instruction itself. The handler advances `EPC` by 4 before `ERET`
+  to resume past the trap; leaving `EPC` untouched restarts the
+  trapping instruction (how the kernel implements syscall restart).
 
 The kernel handler then saves remaining registers (`R1`–`R13`) and
 `USP` in software. `R0` need not be saved — it is always zero.
