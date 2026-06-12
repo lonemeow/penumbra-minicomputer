@@ -140,7 +140,11 @@ carries a single valid bit (no per-word presence tracking).
   the sequencer, not the arbiter, keeping the arbiter generic.
 - **Mode selection.** `cacheable && re` selects the line mode and
   engages the sequencer; every other request takes the direct
-  single-beat path and never touches the sequencer.
+  single-beat path and never touches the sequencer. The L1 guarantees
+  the encoding: a forwarded single-beat read (uncacheable, or the
+  cache disabled) never presents `cacheable=1` — only a line fill
+  does. Writes keep the PTE's cacheable bit, which downstream levels
+  use to decide whether to update their own copy.
 
 ## Interface obligations
 

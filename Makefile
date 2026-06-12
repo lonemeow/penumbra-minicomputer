@@ -218,6 +218,7 @@ MODULE_TESTS = \
     penumbra2_vecfetch \
     penumbra2_irq \
     penumbra2_spine \
+    cache_bram_vipt \
     unified_mem \
     uart \
     busctl \
