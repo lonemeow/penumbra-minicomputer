@@ -143,7 +143,7 @@ exceptions precise.
 | Vector | Detected in | How |
 |--------|-------------|-----|
 | `VEC_TLB_MISS`, `VEC_TLB_PROT` (fetch) | IF2 | I-side TLB verdict (registered lookup launched in IF1) — miss / protection on the fetch translation |
-| `VEC_ALIGN` (fetch) | IF1 | PC not 4-aligned |
+| `VEC_ALIGN` (fetch) | IF2 | PC not 4-aligned (checked beside the TLB verdict; align > TLB per the per-access order) |
 | `VEC_BUS_FAULT` (fetch) | IF2 | Fetch access to an unbacked physical address |
 | `VEC_ILLEGAL` | ID / EX | Decoder finds no legal opcode/operand form |
 | `VEC_PRIV` | ID / EX | Privileged op (`RDSPR`/`WRSPR`/`RDSYS`/`WRSYS`/`ERET`/`EI`/`DI`) issued with `SR.S = 0` |

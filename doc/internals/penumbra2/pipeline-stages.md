@@ -176,7 +176,14 @@ in 1 cycle with no stall. Full rationale in
 - Detect IF-stage faults: TLB miss/protection (from the TLB
   verdict), bus fault (held from cache fill — propagated as a
   fault from the cache module), alignment (rare on fetch since
-  branches target 4-byte-aligned PCs).
+  branches target 4-byte-aligned PCs; a register-sourced `JMP` can
+  deliver one). Per-access priority: align > TLB > bus.
+- Compose the fault payload: the TLB fault status arrives composed
+  from the MMU; IF2 composes alignment itself (it is the detector —
+  [Decision 16](./design-decisions.md#16-fault-status-the-detector-composes-the-status-self-qualifies)).
+  The self-qualifying status (`FAULT_NONE` when no fault) rides the
+  IF2/ID register and onward to commit; the faulting vaddr needs no
+  field of its own — it is the instruction's own `pc`.
 - On cache miss: assert stall, drive the cache to begin a line fill,
   hold the IF1/IF2 register until the fill returns and the next
   tag compare hits.
@@ -366,8 +373,9 @@ the "instruction available for decode" boundary.
 | `valid` | 1 | 0 = bubble (flushed, cache miss not yet resolved, or never-issued) |
 | `fault_pending` | 1 | Set on IF-stage fault (TLB, bus fault on fetch, alignment) |
 | `fault_vec` | 4 | Vector number when `fault_pending = 1` |
+| `fault_status` | 32 | Composed fault status for an IF-stage address fault; `FAULT_NONE` otherwise ([Decision 16](./design-decisions.md#16-fault-status-the-detector-composes-the-status-self-qualifies)) |
 
-Total: 102 bits.
+Total: 134 bits.
 
 ### ID/EX register
 
@@ -390,8 +398,9 @@ here.
 | `valid` | 1 | 0 = bubble |
 | `fault_pending` | 1 | Propagated from IF/ID, or set in ID (illegal, privilege). SYSCALL/BREAK are *traps*, not faults — they ride `is_trap` in `ctrl` and are taken at EX ([control-decode.md](./control-decode.md)) |
 | `fault_vec` | 4 | Vector number (the IF fault, or the decode-detected illegal/privilege/trap vector) |
+| `fault_status` | 32 | Carried IF-fault status; decode faults and traps ride `FAULT_NONE` |
 
-Total: ~206 bits — the widest pipeline register. Note divmul takes only
+Total: ~238 bits — the widest pipeline register. Note divmul takes only
 two ALU inputs (`op_a`, `op_b`) and writes `Rd`+`Rdh`; `store_data` is
 the store path's value, unrelated to divmul.
 
@@ -413,8 +422,9 @@ Written by EX, read by MEM.
 | `valid` | 1 | 0 = bubble |
 | `fault_pending` | 1 | |
 | `fault_vec` | 4 | |
+| `fault_status` | 32 | Carried upstream-fault status (`FAULT_NONE` unless an IF-side address fault) |
 
-Total: ~170 bits. `result` and `result_aux` are the divmul's two writeback
+Total: ~202 bits. `result` and `result_aux` are the divmul's two writeback
 values — kept as separate fields rather than overloading `store_data`,
 which stays the store path's memory-write value.
 
@@ -433,7 +443,7 @@ Written by MEM, read by WB.
 | `valid` | 1 | 0 = bubble |
 | `fault_pending` | 1 | |
 | `fault_vec` | 4 | |
-| `fault_vaddr` | 32 | Faulting data vaddr — the `FAULT_ADDR` commit value; don't-care unless an address-carrying fault |
+| `fault_vaddr` | 32 | The `FAULT_ADDR` commit value — the data EA for a MEM-born fault, the faulting PC for an IF-side fault; don't-care unless an address-carrying fault |
 | `fault_status` | 32 | Composed fault status (type + access info) — the `FAULT_STATUS` commit value. Self-qualifying: type `FAULT_NONE` marks a fault with no data address (trap/decode), which leaves the MMU registers untouched ([Decision 16](./design-decisions.md#16-fault-status-the-detector-composes-the-status-self-qualifies)) |
 
 Total: ~185 bits.
