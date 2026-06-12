@@ -1,10 +1,55 @@
 # `__divdf3` rounds 1 ULP short — investigation notes
 
-**Status: OPEN.** Surfaced 2026-06-11 by the first compiler-rt rebuild
-since the recent codegen campaign. Tracked in `doc/TODO.md`
+**Status: RESOLVED 2026-06-11.** Surfaced by the first compiler-rt
+rebuild since the recent codegen campaign. Tracked in `doc/TODO.md`
 ("Compiler: two scalar miscompiles surfaced by rebuilding
-compiler-rt"); the three affected `make test-compiler` failures are
-deliberately left unexcluded as reminders.
+compiler-rt").
+
+## Resolution
+
+Root cause was **not** the rounding compare/select (and not
+`8a23e2222632`, the prime suspect below — the rounding code was
+correct and even clawed one ULP back). The pre-round quotient itself
+was 2 ULPs short because `wideMultiply` lost a carry:
+
+- In `fp_div_impl.inc` the low half of the 128-bit product (`dummy`)
+  is dead, so the 32-bit sums of the `r1` partial-product row are
+  dead — but their **carry-outs** still feed the high half
+  (`hiWord(r1)`).
+- The selector's carry-in fusion (`carryInAlreadyLive` in
+  `PenumbraInstructionSelector.cpp`) selects a `G_UADDE` to a bare
+  ADC reading SR.C and drops the use of the s1 carry vreg. Bottom-up
+  selection then reaches the producer `G_UADDO`, finds all defs
+  unused, and `InstructionSelect` erases it as trivially dead —
+  deleting the flag-producing ADD and, transitively, the `plolo`
+  multiply cone. The surviving ADCs read stale carries.
+- Fix: reject fusion when the producer's sum register is dead
+  (`MRI.use_nodbg_empty`); the fallback materializes the carry
+  through a GPR, which keeps the producer selectable.
+
+One fix cleared all three known symptom groups: the three -O2
+`print_double` test failures, `__umodXi3` at -O0 (the G_USUBO/G_USUBE
+flavor inside the -O0-compiled division loop), and the previously
+unexplained `pr23135.c` -O0 failure. Full suite: 1613/1613 at -O2.
+Regression test: `test/CodeGen/Penumbra/uaddo-dead-sum.ll` (verified
+to fail against the unfixed selector).
+
+Method note for future miscompile hunts: the localization that
+cracked this was *trace diffing* — instrument a host build of the
+same compiler-rt source with hex prints of every intermediate, run
+the witness vector on the ISS with `+trace=`, and find the first
+host intermediate value that never appears in the trace. That named
+the dead expression (`hiWord(plolo)`) without a single
+recompile-bisect step.
+
+A separate bug found during the investigation (bare mulhi idiom →
+i128 → legalizer ICE) is tracked in `doc/TODO.md` ("Compiler: G_ZEXT
+s128 from the mulhi idiom fails to legalize").
+
+---
+
+Original investigation notes follow (the "Where to look" hypothesis
+was disproven; kept for the record).
 
 ## Symptom
 

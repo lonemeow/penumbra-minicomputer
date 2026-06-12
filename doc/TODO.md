@@ -260,34 +260,59 @@ Tracked tests: `test/compiler/penumbra-abi/` —
 `abi-aggregate-{return,varargs,boundary}.c` must stay green
 across it.
 
-## Compiler: two scalar miscompiles surfaced by rebuilding compiler-rt
+## Compiler: two scalar miscompiles surfaced by rebuilding compiler-rt — RESOLVED
 
-The compiler-rt builtins archive had not been rebuilt since long
-before the recent codegen campaign; rebuilding it with the current
-clang surfaced two backend bugs.  Both reproduce with aggregate-free
-IR, so they are independent of the aggregate-ABI rework.
+Both symptoms (`__divdf3` quotients 1 ULP short at -O2/-O3;
+`__umodXi3` wrong remainders at -O0) plus the previously separate
+`pr23135.c` -O0 failure turned out to be **one bug**: the
+instruction selector's carry-in fusion deleted flag-producing
+ADD/SUBs whose 32-bit sum was dead but whose carry/borrow was live.
+`carryInAlreadyLive` let a `G_UADDE`/`G_USUBE` select to a bare
+ADC/SBC reading SR.C directly, dropping the use of the s1 carry
+vreg; bottom-up selection then reached the producer `G_UADDO`,
+found no remaining def uses, and erased it as trivially dead —
+along with its input cone.  In compiler-rt this hit `wideMultiply`
+whenever the low product half is unused (`fp_div_impl.inc`'s
+`dummy`): the `plolo` multiply and the `r1` carry adds vanished,
+making pre-round quotients 2 ULPs short where the error analysis
+allows at most ~1.5 (the rounding step itself — the original
+suspect — was correct all along, and clawed one ULP back).
 
-- **`__divdf3` rounds 1 ULP short.**  Dividing down a power-of-ten
-  chain shows it: starting from 1e18, `t /= 10.0` is exact for two
-  steps, then every result is one ULP below the representable
-  quotient (`__divdf3(1e16, 10.0)` = `0x430c6bf52633ffff`; exact
-  1e15 is `0x430c6bf526340000`).  Same at -O2 and -O3.  Breaks the
-  harness `print_double` digit loop and with it `casts.c`,
-  `2005-05-12-Int64ToFP.c`, and `2005-07-17-INT-To-FP.c` — the three
-  remaining `make test-compiler` failures.  The regression window is
-  everything since the previous archive build; the rounding step in
-  `fp_div_impl.inc` is a compare+select over i64, so the select-pseudo
-  compare folding (8a23e2222632) is a prime suspect.
-- **`__umodXi3` (int_div_impl.inc) returns wrong results at -O0**
-  (e.g. 100 % 10 nonzero).  The runtime archive now matches the
-  suite's OPT level, so any `OPT=-O0` run exercises this; a full
-  -O0 sweep is blocked until it is fixed.  May share a root cause
-  with the known -O0 failure class (`pr23135.c`).
+Fix: `carryInAlreadyLive` rejects fusion when the producer's sum
+register has no uses (the fallback materializes the carry through a
+GPR, keeping the producer alive).  Regression test
+`test/CodeGen/Penumbra/uaddo-dead-sum.ll` pins all three shapes
+(single carry, chained carries, borrow); full investigation notes in
+`doc/llvm-divdf3-rounding-bug.md`.
 
-Repro for the first: compile `divdf3.c` standalone, link it into a
-hosted test that divides 1e18 down by 10.0 six times and prints bit
-patterns; compare against host Python.  Check whether one fix clears
-both before opening a second investigation.
+Found along the way, still open: the bare 64×64→128 mulhi idiom
+(`wideMultiply` reimplemented as a function returning only the high
+half) is recognized by the IR optimizer into an i128 multiply that
+crashes the legalizer — see "Compiler: G_ZEXT s128 from the mulhi
+idiom fails to legalize" below.
+
+## Compiler: G_ZEXT s128 from the mulhi idiom fails to legalize
+
+A function that computes the high 64 bits of a 64×64 product from
+32-bit partial products and returns only that half (the classic
+mulhi shape) gets idiom-recognized by the IR optimizer into
+`zext i64 → i128; mul i128; lshr 64; trunc`, and the backend dies
+with `unable to legalize instruction: G_ZEXT %x(s64) → s128`.
+Repro: clang -O2 on
+
+```c
+u64 mulhi64(u64 a, u64 b) {
+  /* four 32x32 partials, sum, return hi half only */
+}
+```
+
+(`compiler-rt`'s `wideMultiply` escapes recognition because it
+returns both halves through out-params.)  Options: teach the
+legalizer to narrow s128 multiply/shift/zext/trunc down to s64
+(double narrowing already works s64→s32), or suppress the
+aggressive-mulhi formation via TTI for a type twice the largest
+legal scalar.  Until then any user code spelling out a mulhi is an
+ICE at -O1+.
 
 ## Kernel: vmapbuf / vunmapbuf for raw device access
 
@@ -1076,7 +1101,7 @@ instructions) while only shrinking the rarely-used i64 three-way compares
 alongside a custom `G_SCMP`/`G_UCMP` lowering that keeps the i32
 SELECT-chain.
 
-## Compiler: pr23135.c fails at -O0 (pre-existing, found in opt-level sweep)
+## Compiler: pr23135.c fails at -O0 (pre-existing, found in opt-level sweep) — RESOLVED
 
 The 2026-06-09 full-suite sweep across opt levels (-O0/-O1/-O2 — the
 routine `make test-compiler` gate only runs -O2) found exactly one
@@ -1084,11 +1109,13 @@ failure: `Regression/C/gcc-c-torture/execute/pr23135.c` (GCC
 generic-vector arithmetic, `vector_size` attribute) exits 127 on the
 ISS at **-O0 only**; -O1 and -O2 pass 1607/1607.  Bisected against the
 Localizer change by rebuilding with the pass disabled — fails
-identically, so it is pre-existing.  Likely an -O0-specific gap in the
-vector scalarization path (the `optnone_combines` set lacks rules the
--O1+ pipeline has).  Not excluded in `test/compiler/excludes.txt`
-because exclusion is opt-level-blind and would drop the passing -O2
-coverage; expect this one known failure in -O0 sweeps until triaged.
+identically, so it was pre-existing.  The earlier guess (vector
+scalarization gap in `optnone_combines`) was wrong: it was the
+dead-sum/live-carry selector bug — see "Compiler: two scalar
+miscompiles surfaced by rebuilding compiler-rt — RESOLVED" above.
+At -O0 nothing cleans up dead lo-half sums before selection, so the
+scalarized i64 arithmetic hit the fusion hazard constantly.  Passes
+with the fix.
 
 ## Compiler: codegen pass/gate audit — what we leave at the default
 
