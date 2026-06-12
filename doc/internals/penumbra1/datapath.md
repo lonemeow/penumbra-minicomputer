@@ -14,7 +14,7 @@ ALU; all control flow operations go through the PC unit.
 ```
                          ┌─────────────────────────────────┐
                          │       Instruction Register (IR)  │
-                         │       (32-bit latch from MDR)    │
+                         │   (32-bit latch from read data)  │
                          └───┬──────────┬──────────┬───────┘
                              │          │          │
                         field extract   │    branch offset
@@ -66,12 +66,12 @@ ALU; all control flow operations go through the PC unit.
             │      │                    │         │
       ┌─────┴──────┴──────┐            │         │
       │    MAR register    │            │         │
-      │  ┌──────────────┐ │            │         │
-      │  │ 2:1 mux      │ │            │         │
-      │  │ R-bus / PC ───┤ │            │         │
-      │  └──────┬───────┘ │            │         │
-      │         v         │            │         │
-      │   To MMU / Cache  │            │         │
+      │  (single R-bus     │            │         │
+      │   input — I-cache  │            │         │
+      │   address is wired │            │         │
+      │   straight to PC)  │            │         │
+      │         v          │            │         │
+      │  To MMU / D-cache  │            │         │
       └─────────┬─────────┘            │         │
                 │                      │         │
          ┌──────┴──────┐               │         │
@@ -84,8 +84,8 @@ ALU; all control flow operations go through the PC unit.
        │                 │             │         │
        │  Read data ─────┼──► W-mux in 1         │
        │  Write data ◄───┼── A-bus               │
-       │  Instruction ───┼──► IR load             │
        └─────────────────┘             │         │
+       (IR latches from the same read-data bus)
                                        │         │
           ┌────────────────────────────┼─────────┼──────────┐
           │          PC Unit           │         │          │
@@ -103,20 +103,21 @@ ALU; all control flow operations go through the PC unit.
           │     │   │              │       from IR)         │
           │     │   └──────┬───────┘                        │
           │     │          │                                │
-          │     │    ┌─────┴─────────────┐                  │
-          │     │    │  PC source mux    │                  │
-          │     │    │  00: hold         │                  │
-          │  ┌──┤    │  01: PC + 4       │                  │
-          │  │  │    │  10: PC + offset  │                  │
-          │  │  │    │  11: A-bus (JMP)  │◄── A-bus         │
-          │  │  │    │  MDR (exception)  │◄── MDR           │
-          │  │  │    └──────┬────────────┘                  │
+          │     │    ┌─────┴──────────────┐                 │
+          │     │    │  PC source mux     │                 │
+          │     │    │  000: hold         │                 │
+          │  ┌──┤    │  001: PC + 4       │                 │
+          │  │  │    │  010: PC + offset  │                 │
+          │  │  │    │  011: A-bus (JMP)  │◄── A-bus        │
+          │  │  │    │  100: MDR (JALR,   │◄── MDR          │
+          │  │  │    │       exception)   │                 │
+          │  │  │    └──────┬─────────────┘                 │
           │  │  │           │                               │
           │  │  │    ┌──────┴───────┐                       │
           │  │  └───►│ new PC value │──► PC Register        │
           │  │       └──────────────┘                       │
           │  │                                              │
-          │  └──► MAR (for instruction fetch)               │
+          │  └──► I-cache address (instruction fetch)       │
           │                                                 │
           │  PC+4 ──► Register File Write Port (for BL)     │
           └─────────────────────────────────────────────────┘
@@ -129,18 +130,20 @@ the ALU — the divmul unit handles MUL/DIV (32×32→64 multiply, 32/32 divide;
 the optional write-only `Rdh` operand carries the product high half or the
 remainder — see [divmul.md](../divmul.md)), and a
 future FPU unit will handle floating-point.
-Each peer unit owns its own start/busy/op signals (`divmul_start`,
-`divmul_busy`, `divmul_op`; later `fpu_start`/`fpu_busy`/`fpu_op`) and its
-own internal accumulators and FSM. The micro-sequencer treats them
-identically: pulse the relevant `*_start` in the start micro-op, then a
-STALL micro-op holds micro-PC until the unified busy gate
-(`cache_busy | divmul_busy | …`) clears.
+Each peer unit owns its own start/busy handshake (`divmul_start`,
+`divmul_busy`; later `fpu_start`/`fpu_busy`) and its own internal
+accumulators and FSM; the operation itself is selected by the shared `alu`
+field. The micro-sequencer treats them identically: pulse the relevant
+`*_start` in the start micro-op, which also carries the STALL — the peer
+asserts busy combinationally on the start cycle, holding micro-PC until the
+unified busy gate (`cache_busy | divmul_busy | …`) clears.
 
 A peer unit's writeback shape can differ from the ALU's. The divmul produces
-two 32-bit halves that drive R-bus on consecutive cycles (low half → `Rd`,
-high half → `Rdh` from IR[15:12]), so its micro-routine has two writeback
-micro-ops, not one. The ALU's own writeback is unchanged — single cycle,
-single register.
+two 32-bit halves that enter the register file through the writeback-source
+mux (`wb_src=DML_LO` → `Rd`, then `wb_src=DML_HI` → `Rdh` from IR[15:12]) on
+consecutive writeback micro-ops — divmul never drives the R-bus, which stays
+purely the ALU's result bus. The ALU's own writeback is single cycle, single
+register.
 
 MUL/DIV execute on the divmul peer unit ([divmul.md](../divmul.md)); the
 two-writeback micro-routine above is theirs. FPU operations follow the same
@@ -230,11 +233,19 @@ alu_op = ADD
 R-bus = Rb + offset  → MAR loaded
 ```
 
-Micro-op 1 — drive data and write:
+Micro-op 1 — stage store data:
 ```
 reg_a_sel = Rd       → A-bus = Rd value → MDR loaded from A-bus
+```
+
+Micro-op 2 — write:
+```
 mem_write = 1, mem_size = word
-(stall until cache/bus ready)
+(stall until cache/bus accepts; MDR drives the write data bus)
+```
+
+Micro-op 3 — advance:
+```
 pc_src = PC+4        → advance to next instruction
 ```
 
@@ -252,8 +263,9 @@ with the condition check. The `branch_cond` field (BRT or BRF) gates
 `pc_src`: if the ISA condition is met, `pc_src = PC + offset` takes
 effect; otherwise hardware forces `pc_src = PC + 4`. The
 micro-sequencer hands off to the fetch unit regardless of the
-condition outcome. See `microcode-validation.md` §3 for the detailed
-micro-word.
+condition outcome. See the Bcc entry in the
+[micro-routine catalog](microcode.md#complete-micro-routine-catalog)
+for the exact micro-word.
 
 ### Branch-and-Link (BL offset)
 
@@ -302,20 +314,24 @@ SR.I = 0                   → immediate effect
 → return to fetch
 ```
 
-### RDSPR Rd, {ESR|EPC|USP}
+### RDSPR Rd, {ESR|EPC|USP|SR|SCR0–3}
 
 Single micro-op:
 ```
-a_src = SPR (hardware decodes IR[15:12] to select ESR, EPC, or R14 cross_bank)
+a_src = SPR (hardware decodes IR[15:12]: ESR, EPC, R14 cross_bank (USP),
+             current SR, or scratch SPR; the micro-word also sets
+             reg_a = R14 so the USP case addresses the banked register)
 ALU PASS_A → R-bus → Rd
 ```
 
-### WRSPR {ESR|EPC|USP}, Rd
+### WRSPR {ESR|EPC|USP|SR|SCR0–3}, Rd
 
 Single micro-op:
 ```
 reg_a_sel = Rd       → A-bus = Rd value → ALU PASS_A → R-bus
-sys_op = SPR_WRITE (hardware decodes IR[15:12] to route R-bus to ESR, EPC, or R14 cross_bank write)
+sys_op = SPR_WRITE (hardware decodes IR[15:12] to route R-bus to ESR, EPC,
+                    R14 cross_bank write (USP), a bulk SR load, or a
+                    scratch SPR)
 ```
 
 ### WRSYS Rd, #dev, #reg
@@ -328,11 +344,11 @@ sys_op = SYS_WRITE, sys_dev = IR[15:12], sys_reg = IR[11:8]
 
 ### RDSYS Rd, #dev, #reg
 
-Single micro-op:
+Two micro-ops:
 ```
-sys_op = SYS_READ, sys_dev = IR[15:12], sys_reg = IR[11:8]
-Device drives data bus → MDR
-W-mux selects MDR → register file writes Rd
+Micro-op 0: sys_op = SYS_READ, sys_dev = IR[15:12], sys_reg = IR[11:8]
+            Device drives the sysreg data onto the read-data bus → MDR
+Micro-op 1: W-mux selects MDR → register file writes Rd
 ```
 
 ### Exception / Interrupt Entry
@@ -349,20 +365,23 @@ an interrupt/exception is recognized):
 4. Latch vector number from source (priority encoder for IRQs,
    hardwired per exception type)
 
-**Microcode sequence** (7 micro-ops + stall loops; uses `a_src` for
-exception registers, `b_mux_sel` for constants 4/8):
+Saved state stays in the EPC/ESR special-purpose registers — nothing
+is pushed to memory; the handler spills them itself (via RDSPR) if it
+needs to nest.
+
+**Microcode sequence** (`int_entry` at 0x70, 3 micro-ops): the vector
+table holds handler addresses, so entry is one indirect read:
 ```
-int-0: reg_a=R14(SSP), b_mux=const_4, SUB → MAR = SSP - 4
-int-1: a_src=ESR → MDR, mem_write     (stall loop)
-int-2: reg_a=R14(SSP), b_mux=const_8, SUB → MAR = SSP - 8, also write R14 = SSP - 8
-int-3: a_src=EPC → MDR, mem_write     (stall loop)
-int-4: a_src=vector_addr, PASS_A → MAR      (vec_num × 4, pre-shifted)
-int-5: mem_read                              (stall loop)
-int-6: pc_src=MDR → PC = handler address, hand off to fetch unit
+int-0: a_src=vector_addr, PASS_A → MAR       (vec_num × 4, pre-shifted)
+int-1: mem_read → MDR                        (stall loop; MMU bypassed —
+                                              the table is physical)
+int-2: pc_src=MDR → PC = handler address, hand off to fetch unit
 ```
 
-See `microcode-validation.md` §4 for the full bit-level micro-word
-table and signal trace.
+See the
+[exception integration chapter](microcode.md#exception-integration)
+in the microcode reference for the exact micro-words, the vector
+table, and the MMU-bypass scoping.
 
 ## Condition Flags
 
@@ -391,10 +410,11 @@ Cout of the adder is used directly as C for both ADD and SUB.
 ### Hardware Implementation
 
 ```
-sub_mode = 1 for SUB/CMP/DEC/CMPI, 0 for ADD/INC
+sub_mode = 1 for SUB/SBC (and the SUB forms CMP/DEC/CMPI), 0 for ADD/ADC/INC
 
 B_eff = B XOR {32{sub_mode}}     (invert B for subtraction)
-Cin   = sub_mode                   (add 1 for two's complement)
+Cin   = sub_mode                   (add 1 for two's complement;
+                                    ADC/SBC use SR.C instead)
 
 {Cout, result} = A + B_eff + Cin
 
@@ -418,7 +438,9 @@ inputs (A and B_eff).
 | Operation | Z | N | C | V |
 |-----------|---|---|---|---|
 | ADD, INC | result==0 | result[31] | Cout | signed overflow |
+| ADC | result==0 | result[31] | Cout | signed overflow |
 | SUB, CMP, DEC, CMPI | result==0 | result[31] | Cout (= NOT borrow) | signed overflow |
+| SBC | result==0 | result[31] | Cout (= NOT borrow) | signed overflow |
 | AND, TEST | result==0 | result[31] | 0 | 0 |
 | OR | result==0 | result[31] | 0 | 0 |
 | XOR | result==0 | result[31] | 0 | 0 |
@@ -436,6 +458,7 @@ latched into SR. The microcode sets this per instruction:
 | Instruction | Flags updated | Notes |
 |-------------|--------------|-------|
 | ADD, SUB, AND, OR, XOR, NOT | Yes | Standard ALU operations |
+| ADC, SBC | Yes | Carry-chained arithmetic; consume SR.C, produce full NZCV |
 | SHL, SHR, SAR | Yes | C = last bit shifted out; shift by 0 clears C |
 | CMP (SUB with F=1) | Yes | Flags only, no register write |
 | TEST (AND with F=1) | Yes | Flags only, no register write |
@@ -482,46 +505,32 @@ chips (a few gates plus a 74x150 16:1 mux or equivalent).
 
 ### Fields
 
-| Bits | Field | Width | Description |
-|------|-------|-------|-------------|
-| 50 | `priv` | 1 | Privileged instruction marker — sequencer checks `SR.S` on the first micro-op and traps `VEC_PRIV` if `SR.S=0`. Replaced the old `branch_cond=PRIV` value. |
-| 49:47 | `a_src[2:0]` | 3 | A-bus source: 0=register file, 1=ESR, 2=EPC, 3=vector_addr, 4=SPR (decode IR[15:12]) |
-| 46:43 | `reg_a_sel[3:0]` | 4 | Register file read port A address (used when a_src=00) |
-| 42:39 | `reg_b_sel[3:0]` | 4 | Register file read port B address |
-| 38:35 | `reg_w_sel[3:0]` | 4 | Register file write port address |
-| 34 | `reg_w_en` | 1 | Register file write enable (hardware-gated by Format R F bit: `actual = reg_w_en & ~(format_R & IR[16])`) |
-| 33:29 | `alu_op[4:0]` | 5 | ALU operation (see ALU Op Encoding table) |
-| 28:27 | `b_mux_sel[1:0]` | 2 | B-bus source: 00=register port B, 01=IR immediate, 10=constant 4, 11=constant 8 |
-| 26 | `w_mux_sel` | 1 | Write-back source: 0=R-bus, 1=MDR |
-| 25:24 | `imm_mode[1:0]` | 2 | IR immediate handling: 00=zero-extend, 01=sign-extend, 10=shift-left-16 |
-| 23 | `flag_w_en` | 1 | Update SR condition flags (NZCV) from ALU |
-| 22 | `sr_load` | 1 | Load full SR from W-mux output (for ERET) |
-| 21 | `mar_load` | 1 | Load MAR from R-bus (D-cache/bus address only; I-cache is permanently wired to PC) |
-| 20 | `mdr_load_mem` | 1 | Load MDR from D-cache/memory (read data) |
-| 19 | `mdr_load_a` | 1 | Load MDR from A-bus (for stores) |
-| 18 | `mem_read` | 1 | Initiate D-cache/memory read |
-| 17 | `mem_write` | 1 | Initiate D-cache/memory write |
-| 16:15 | `mem_size[1:0]` | 2 | Access size: 00=byte, 01=half, 10=word |
-| 14 | `sign_ext` | 1 | Sign-extend sub-word load result |
-| 13:11 | `pc_src[2:0]` | 3 | PC source: 000=hold, 001=PC+4, 010=PC+offset, 011=A-bus, 100=MDR |
-| 10:9 | `sys_op[1:0]` | 2 | System/SPR operation: 0=NONE, 1=SPR_WRITE, 2=SYS_READ, 3=SYS_WRITE |
-| 8 | `alu_start` | 1 | Start multi-cycle ALU operation. Currently tied off — the ALU is single-cycle only; divmul implementation will repurpose this bit (or replace it with `divmul_start`) once the peer unit lands. |
-| 7:5 | `branch_cond[2:0]` | 3 | Micro-sequencer control (see below) |
-| 4:2 | `fwd_offset[2:0]` | 3 | Forward skip offset, 0-7 (used only when branch_cond=SKIP) |
-| 1 | `ei_set` | 1 | Set `SR.I=1` with one-instruction delay via `ei_shadow`. Used only by `EI`. |
-| 0 | `di_set` | 1 | Set `SR.I=0` immediately. Used only by `DI`. |
+The micro-word is **52 bits**, numbered [51:0]. The authoritative
+per-field reference (bit positions, value tables, semantics) lives in
+the [microcode reference](microcode.md#micro-word-format-52-bits);
+`python3 hw/tools/uasm.py --dump` prints the same layout straight
+from the assembler, and `hw/rtl/penumbra1/sequencer.sv` extracts the
+fields in the RTL (lines 118–143). The datapath-relevant fields:
 
-**Total: 51 bits**
-
-See `doc/internals/penumbra1/microcode.md` for the authoritative
-single-source field reference, value tables, and full micro-routine
-catalog. The summary above mirrors `hw/rtl/penumbra1/sequencer.sv`
-field extraction at lines 111–136.
+| Bits | Field | Datapath role |
+|------|-------|---------------|
+| [50:48] | `a_src` | A-bus source: 0=register file, 1=ESR, 2=EPC, 3=vector_addr, 4=SPR (decode IR[15:12]) |
+| [47:44] / [43:40] / [39:36] | `reg_a` / `reg_b` / `reg_w` | Register port addresses: 0=IR_RD, 1=IR_RS, 2=IR_RDH, 3–15=literal R3–R15 |
+| [35] | `w_en` | Register write enable (hardware-gated by Format R F bit: `actual = w_en & ~(format_R & IR[16])`) |
+| [34:30] | `alu` | ALU / divmul operation select |
+| [29:28] | `bmux` | B-bus source: 0=register port B, 1=IR immediate, 2=constant 4, 3=constant 8 |
+| [27:26] | `wb_src` | Write-back source: 0=R-bus, 1=MDR, 2=divmul low, 3=divmul high |
+| [21] | `mar_load` | Load MAR from R-bus (D-side address only; the I-cache address is permanently wired to PC) |
+| [20] / [19] | `mdr_load_mem` / `mdr_load_a` | Load MDR from read data / from A-bus (stores) |
+| [13:11] | `pc` | PC source: 0=hold, 1=PC+4, 2=PC+offset, 3=A-bus, 4=MDR |
+| [8] | `divmul_start` | Pulse the divmul peer unit's start; the operation comes from the `alu` field |
+| [7:5] | `branch` | Micro-sequencer control (see below) |
 
 The ALU is the **single-cycle** compute unit. All ALU operations (ADD,
-SUB, AND, OR, XOR, SHL, SHR, SAR, PASS_A, PASS_B, NOT) produce results
-combinationally; the ALU has no internal state and never asserts a
-busy signal. Multi-cycle compute is delegated to **peer units**
+SUB, AND, OR, XOR, SHL, SHR, SAR, PASS_A, PASS_B, NOT, ADC, SBC)
+produce results combinationally; the ALU has no internal state and
+never asserts a busy signal. Multi-cycle compute is delegated to
+**peer units**
 alongside the ALU — the divmul unit owns MUL/DIV (32×32→64 multiply,
 32/32 divide; the optional write-only `Rdh` operand carries the
 product high half or remainder — see [divmul.md](../divmul.md)), and a
@@ -541,26 +550,12 @@ runtime overhead, and the FPU unit need not exist in silicon. MUL/DIV
 already took exactly this trajectory: once illegal-instruction traps
 in the ROM, their opcode entries now dispatch to the divmul peer unit.
 
-Design history: the original draft specified 52 bits (actually 55 when
-counted correctly). Microcode validation identified missing signals
-for exception entry and unnecessary sequencer complexity. The separate
-long-latency unit (`lu_op[1:0]`) was initially folded into the ALU as
-a unified compute unit, with `alu_op` expanded to 5 bits. The
-privilege check moved from a microcode branch (old `branch_cond=PRIV`)
-to a dedicated `priv` bit at [50], and the `ei_set`/`di_set` bits at
-[1:0] (formerly spare) absorbed the EI/DI side effects, giving the
-51-bit micro-word documented in the table above.
-
-Subsequent design note: when hardware planning for MUL/DIV began, the
-divmul work re-extracted them as a **peer unit** alongside the ALU —
-same micro-sequencer protocol (start / busy / STALL), but private
-`divmul_start`/`divmul_busy`/`divmul_op` signals so divmul's iteration
-mux does not deepen the ALU's combinational path (the fmax-critical
-`upc → µROM → ctrl → regfile → ALU → flag_z` chain). When divmul
-landed, `divmul_start` reused the old `alu_start` micro-word bit
-rather than widening the word (see [divmul.md](../divmul.md) and
-`microcode.md`). The ISA contract is unchanged — only the
-implementation moved.
+The peer-unit split keeps the ALU's combinational path shallow:
+divmul's iteration mux and accumulators sit behind their own
+start/busy handshake instead of deepening the fmax-critical
+`upc → µROM → ctrl → regfile → ALU → flag_z` chain (see
+[divmul.md](../divmul.md)). The ISA is agnostic to the split — only
+the implementation is partitioned this way.
 
 ### Micro-Sequencer
 
@@ -585,23 +580,22 @@ unit. The difference is `pc_src` handling: FETCH applies `pc_src`
 unconditionally; BRT/BRF conditionally gate `pc_src` based on the ISA
 condition evaluator, enabling single-micro-op conditional branches.
 
-Privilege checking uses the `priv` micro-word bit (bit 50), not a
-`branch_cond` value. When `priv=1` and `SR.S=0`, the sequencer signals
-the fetch unit to trigger a privilege violation (vector 4, `VEC_PRIV`)
-using the same hardware pre-actions as interrupt entry. The old
-`branch_cond=PRIV` (encoding 101) value was removed when this moved
-into a per-µ-op bit.
+Privilege checking uses the `priv` micro-word bit (bit 51), not a
+`branch_cond` value. When `priv=1` and `SR.S=0`, the sequencer
+suppresses every enable (writes, memory access, PC load), aborts to
+fetch, and signals a privilege violation (vector 4, `VEC_PRIV`),
+which enters through the same hardware pre-actions as interrupt
+entry.
 
 STALL checks a unified busy signal: the OR of every multi-cycle unit's
-busy line. Today that is `divmul_busy | mem_busy` (see
-`sequencer.sv`); the FPU adds `fpu_busy` later. Adding a peer unit
-means wiring its busy line into this OR — no other sequencer change.
-When the operation completes (`busy` deasserts), the sequencer also
-checks a `fault` signal. Three-way resolution:
+busy line — `divmul_busy | mem_busy` (see `sequencer.sv`); an FPU
+would add `fpu_busy`. Adding a peer unit means wiring its busy line
+into this OR — no other sequencer change. The sequencer also checks a
+`fault` signal on every STALL cycle. Three-way resolution, fault
+first:
 
-- **busy=1:** Hold micro-PC (keep waiting).
-- **busy=0, fault=0:** micro-PC++ (normal completion).
-- **busy=0, fault=1:** Trigger exception. The fault vector is selected
+- **fault=1:** Trigger exception (checked before busy — a fault
+  aborts even while busy is asserted). The fault vector is selected
   by priority: bus fault (0), alignment (8), TLB protection (3), TLB
   miss (2), then arithmetic fault (10) from divmul (`VEC_ARITH` —
   DIV0; defensive, never expected on correct code). Hardware
@@ -610,6 +604,8 @@ checks a `fault` signal. Three-way resolution:
   effectively aborted mid-execution. Memory-side faults are detected
   by the bus/MMU; arithmetic faults come from the divmul unit's
   combinational `o_fault` (asserted on the start cycle).
+- **busy=1:** Hold micro-PC (keep waiting).
+- **busy=0:** micro-PC++ (normal completion).
 
 Different peer units never overlap in the same micro-op (the µ-routine
 only ever pulses one `*_start` at a time), so a single OR'd busy line
@@ -630,17 +626,17 @@ Format B: dispatch = (cond==1111) ? 0x62 : 0x60  → Bcc at 0x60, BL at 0x62
 Exception: hardwired                              → entry 0x70
 ```
 
-Multi-micro-op instructions (loads, stores, JALR, RDSYS, ERET, BL)
-occupy consecutive ROM addresses inside their dispatch slot. The
-microcode assembler validates slot boundaries (see
-`doc/internals/penumbra1/microcode.md` § ROM Organization for the
-slot-size table per zone). Interrupt entry (`int_entry`) occupies a
-dedicated 4-µ-op slot at 0x70, reached by hardware dispatch on
-`except_entry`.
+Multi-micro-op instructions (loads, stores, JALR, RDSYS, ERET, BL,
+MUL/DIV) occupy consecutive ROM addresses inside their dispatch slot.
+The microcode assembler validates slot boundaries (see the
+[ROM organization chapter](microcode.md#rom-organization) for the
+slot-size table per zone). Interrupt entry (`int_entry`, 3 micro-ops)
+occupies the dedicated Exception zone starting at 0x70, reached by
+hardware dispatch on `except_entry`.
 
-Microcode ROM size: 256 entries × 51 bits ≈ 13 Kbit (1 EBR on ECP5, or
-7 byte-wide ROM chips in discrete with 5 spare bits for future
-expansion).
+Microcode ROM size: 256 entries × 52 bits = 13,312 bits = 13 Kbit
+(3 EBRs on ECP5, or 7 byte-wide ROM chips in discrete with 4 spare
+bits for future expansion).
 
 ## Instruction Fetch
 
@@ -652,12 +648,12 @@ provides a clean upgrade path to prefetched execution.
 
 | Signal | Direction | Purpose |
 |--------|-----------|---------|
-| `fetch_go` | sequencer → fetch | Triggered when branch_cond ∈ {FETCH, BRT, BRF, PRIV (on fail), STALL (on fault)} |
+| `fetch_go` | sequencer → fetch | Triggered when branch_cond ∈ {FETCH, BRT, BRF, STALL (on fault)} or the `priv` bit blocks a micro-op in user mode |
 | `ir_valid` | fetch → sequencer | Instruction latched in IR, ready for dispatch |
 | `dispatch_addr` | fetch → sequencer | Micro-PC start address for the new instruction |
 | `fetch_invalidate` | datapath → fetch | Discard prefetch on branch taken (phase 2) |
 | `mem_fault` | MMU → sequencer | Fault detected during memory access (checked on STALL resolution) |
-| `fault_vector[3:0]` | cpu_top | Exception vector: VEC_TLB_MISS=2 (`!mmu_hit`), VEC_TLB_PROT=3 (`mmu_hit`) |
+| `fault_vector[3:0]` | cpu_core | Exception vector: VEC_BUS_FAULT=0 (bus fault), VEC_ALIGN=8 (alignment), VEC_TLB_PROT=3 (`mmu_hit`), VEC_TLB_MISS=2 (`!mmu_hit`) |
 
 ### Fetch Unit Behavior
 
@@ -672,21 +668,25 @@ failed, or memory fault detected):
      pre-actions with vector from `fault_vector`, dispatch to
      exception entry. `EPC` = faulting instruction (PC not yet
      advanced).
-   - **Privilege violation:** If triggered by PRIV branch_cond →
-     hardware pre-actions with vector 3, dispatch to exception entry.
-   - **Pending interrupt:** If IRQ pending, SR.I=1, and ei_shadow not
-     set → hardware pre-actions with vector from priority encoder,
-     dispatch to exception entry.
+   - **Privilege violation:** If the `priv` micro-word bit blocked a
+     micro-op in user mode → hardware pre-actions with vector 4
+     (`VEC_PRIV`), dispatch to exception entry.
+   - **Pending interrupt:** If an IRQ is pending, SR.I=1, and
+     ei_shadow not set → hardware pre-actions, dispatch to exception
+     entry. Timer has priority over external: timer takes vector 1
+     (`VEC_TIMER`), external takes vector 9 (`VEC_EXT_IRQ`), and a
+     pending timer masks the external check for that dispatch.
 2. **Instruction fetch:** Read I-cache at current PC (I-cache address
    is permanently wired to PC — split I/D cache). On hit: latch IR,
    compute dispatch address, assert `ir_valid`. On miss: stall until
    ready.
 
-Illegal instruction exceptions (vector 2) are handled by ROM content:
-undefined opcode entries contain exception-triggering micro-ops.
-FPU-absent traps use the same mechanism — the ROM image for systems
-without an FPU fills FP opcode entries with illegal instruction
-exception code.
+Illegal instruction exceptions (vector 7, `VEC_ILLEGAL`) are handled
+by ROM content: the assembler fills undefined opcode entries with the
+illegal sentinel (`branch=7`), which the sequencer detects on the
+first micro-op. FPU-absent traps use the same mechanism — the ROM
+image for systems without an FPU fills FP opcode entries with the
+sentinel.
 
 PC advancement is controlled by `pc_src` in the micro-word, not the
 fetch unit. Non-branch instructions set `pc_src=001` (PC+4) in their
