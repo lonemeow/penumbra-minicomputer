@@ -123,7 +123,7 @@ WORD_BITS = 52  # bits 51:0
 # Entries: (start, end_exclusive, slot_size, zone_name)
 SLOT_ZONES = [
     (0x00, 0x20, 2, "R-ALU"),         # 16 ×2 slots (ALU ops, op[4]=0)
-    (0x20, 0x40, 4, "Format L"),      # 8 ×4 slots
+    (0x20, 0x40, 2, "Format L"),      # 16 ×2 slots (dispatch: 0x20 + op*2)
     (0x40, 0x60, 2, "R-SYS"),         # 16 ×2 slots (system ops, op[4]=1)
     (0x60, 0x64, 2, "Format B"),      # 2 ×2 slots: Bcc (0x60), BL (0x62)
     (0x70, 0x80, 1, "Exception"),     # int_entry (3 micro-ops: MAR, read, PC←MDR)
@@ -135,13 +135,14 @@ def slot_boundary(addr):
     """Return (slot_start, slot_end_exclusive, zone_name) for a ROM address,
     or None if the address is in an unassigned region.
 
-    For zones with slot_size == 1 (Format R, B, Exception), the "slot" is
-    the entire zone — multi-step routines intentionally consume consecutive
-    entries. The real constraint is not crossing into the next zone.
+    For zones with slot_size == 1 (Exception), the "slot" is the entire
+    zone — multi-step routines intentionally consume consecutive entries.
+    The real constraint is not crossing into the next zone.
 
-    For zones with slot_size > 1 (Format L, M with ×4 spacing), the slot
-    boundary is enforced per-slot since the dispatch hardware uses fixed
-    spacing."""
+    For zones with slot_size > 1, the slot boundary is enforced per slot
+    because the dispatch hardware computes targets at fixed spacing:
+    ×2 for Formats R, L, and B, ×4 for Format M (cpu_core.sv dispatch
+    address formulas)."""
     for zone_start, zone_end, slot_size, zone_name in SLOT_ZONES:
         if zone_start <= addr < zone_end:
             if slot_size == 1:
