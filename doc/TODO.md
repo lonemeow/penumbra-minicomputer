@@ -260,6 +260,35 @@ Tracked tests: `test/compiler/penumbra-abi/` —
 `abi-aggregate-{return,varargs,boundary}.c` must stay green
 across it.
 
+## Compiler: two scalar miscompiles surfaced by rebuilding compiler-rt
+
+The compiler-rt builtins archive had not been rebuilt since long
+before the recent codegen campaign; rebuilding it with the current
+clang surfaced two backend bugs.  Both reproduce with aggregate-free
+IR, so they are independent of the aggregate-ABI rework.
+
+- **`__divdf3` rounds 1 ULP short.**  Dividing down a power-of-ten
+  chain shows it: starting from 1e18, `t /= 10.0` is exact for two
+  steps, then every result is one ULP below the representable
+  quotient (`__divdf3(1e16, 10.0)` = `0x430c6bf52633ffff`; exact
+  1e15 is `0x430c6bf526340000`).  Same at -O2 and -O3.  Breaks the
+  harness `print_double` digit loop and with it `casts.c`,
+  `2005-05-12-Int64ToFP.c`, and `2005-07-17-INT-To-FP.c` — the three
+  remaining `make test-compiler` failures.  The regression window is
+  everything since the previous archive build; the rounding step in
+  `fp_div_impl.inc` is a compare+select over i64, so the select-pseudo
+  compare folding (8a23e2222632) is a prime suspect.
+- **`__umodXi3` (int_div_impl.inc) returns wrong results at -O0**
+  (e.g. 100 % 10 nonzero).  The runtime archive now matches the
+  suite's OPT level, so any `OPT=-O0` run exercises this; a full
+  -O0 sweep is blocked until it is fixed.  May share a root cause
+  with the known -O0 failure class (`pr23135.c`).
+
+Repro for the first: compile `divdf3.c` standalone, link it into a
+hosted test that divides 1e18 down by 10.0 six times and prints bit
+patterns; compare against host Python.  Check whether one fix clears
+both before opening a second investigation.
+
 ## Kernel: vmapbuf / vunmapbuf for raw device access
 
 `vmapbuf` and `vunmapbuf` in `penumbra/machdep.c` are still
