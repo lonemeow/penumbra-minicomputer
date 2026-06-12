@@ -1,5 +1,5 @@
 ; test_tlb_prot.s — TLB protection fault: multiple permission scenarios
-; REQUIRES: mmu
+; REQUIRES: mmu-d
 ;
 ; Tests (all in supervisor mode, MMU enabled):
 ;   1. Write to read-only page → prot fault, handler remaps with W, ERET retries

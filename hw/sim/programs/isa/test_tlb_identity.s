@@ -1,5 +1,5 @@
 ; test_tlb_identity.s — TLB identity mapping: read/write with MMU enabled
-; REQUIRES: mmu
+; REQUIRES: mmu-d
 ;
 ; Tests:
 ;   1. Identity-map page 0 (VPN 0 → PPN 0) with R+W+X+G permissions

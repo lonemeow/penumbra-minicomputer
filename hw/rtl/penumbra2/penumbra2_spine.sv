@@ -58,6 +58,23 @@ module penumbra2_spine
     output logic                  o_dmem_en,
     input  logic [31:0]           i_dmem_rdata,
 
+    // ── MMU D-side translate (MEM's port-B query, exposed to the core) ──
+    output logic [31:0]           o_mmu_vaddr,
+    output logic [2:0]            o_mmu_access_type,
+    output logic                  o_mmu_user,        // query privilege (from i_supervisor)
+    output logic                  o_mmu_req,
+    input  logic [31:0]           i_mmu_paddr,
+    input  logic                  i_mmu_fault,
+    input  logic [31:0]           i_mmu_fault_status,
+
+    // ── MMU fault commit (WB → the FAULT_ADDR/FAULT_STATUS latch) ──
+    // Pulses only when the committing fault carries a data address
+    // (alignment / TLB / bus); traps and decode faults leave the MMU's
+    // architectural fault registers untouched.
+    output logic                  o_mmu_fault_commit,
+    output logic [31:0]           o_mmu_fault_vaddr,
+    output logic [31:0]           o_mmu_fault_status,
+
     // ── Sysreg sideband (MEM's RDSYS read port, exposed to the core) ──
     output logic [3:0]            o_sys_dev,
     output logic [3:0]            o_sys_reg,
@@ -153,6 +170,7 @@ module penumbra2_spine
     logic [31:0]         memwb_pc;
     logic                memwb_valid, memwb_fault_pending;
     logic [3:0]          memwb_fault_vec;
+    logic [31:0]         memwb_fault_vaddr, memwb_fault_status;
 
     // Fault commit (WB → exception unit / flush)
     logic                wb_fault_commit;
@@ -344,6 +362,10 @@ module penumbra2_spine
         .o_dmem_addr(o_dmem_addr), .o_dmem_wdata(o_dmem_wdata),
         .o_dmem_byte_en(o_dmem_byte_en), .o_dmem_we(o_dmem_we),
         .o_dmem_en(o_dmem_en), .i_dmem_rdata(i_dmem_rdata),
+        .o_mmu_vaddr(o_mmu_vaddr), .o_mmu_access_type(o_mmu_access_type),
+        .o_mmu_req(o_mmu_req), .i_user_mode(~i_supervisor),
+        .i_mmu_paddr(i_mmu_paddr),
+        .i_mmu_fault(i_mmu_fault), .i_mmu_fault_status(i_mmu_fault_status),
         .i_sys_dev(exmem_sys_dev), .i_sys_reg(exmem_sys_reg),
         .o_sys_dev(o_sys_dev), .o_sys_reg(o_sys_reg),
         .o_sys_re(o_sys_re), .i_sys_rdata(i_sys_rdata),
@@ -356,7 +378,8 @@ module penumbra2_spine
         .o_phys_dst_aux_en(memwb_phys_dst_aux_en),
         .o_pc(memwb_pc),
         .o_valid(memwb_valid), .o_fault_pending(memwb_fault_pending),
-        .o_fault_vec(memwb_fault_vec)
+        .o_fault_vec(memwb_fault_vec),
+        .o_fault_vaddr(memwb_fault_vaddr), .o_fault_status(memwb_fault_status)
     );
 
     // ════════════════════════════════════════════════════════════
@@ -385,6 +408,21 @@ module penumbra2_spine
     // flush + vector-fetch / ERET redirect to EPC).
     assign o_fault_commit = wb_fault_commit;
     assign o_eret_commit  = eret_commit;
+
+    // The MMU query's privilege: the same supervisor state ID uses for
+    // decode-time checks. Mode changes are drain-commits (pipe empty), so the
+    // live value is always the right one for the access in MEM.
+    assign o_mmu_user = ~i_supervisor;
+
+    // MMU fault-register commit: the WB fault-commit pulse, qualified to the
+    // faults that carry a data address — the carried status is
+    // self-qualifying (type FAULT_NONE means none; Decision 16). The payload
+    // rides the MEM/WB register, so the latch captures the fault that
+    // actually retires — a younger detected-then-squashed fault never had a
+    // commit pulse.
+    assign o_mmu_fault_commit = wb_fault_commit & (memwb_fault_status[3:0] != FAULT_NONE);
+    assign o_mmu_fault_vaddr  = memwb_fault_vaddr;
+    assign o_mmu_fault_status = memwb_fault_status;
 
     // Interrupt-unit observability: the enable bit, the EI arm pulse, any
     // drain-commit completion (clears ei_shadow), and whether the ID/EX/MEM/WB

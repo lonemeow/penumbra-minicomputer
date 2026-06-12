@@ -26,11 +26,17 @@
 // interrupts take the asynchronous route — penumbra2_irq drains the pipeline
 // at a fetch boundary and reuses that same save-state + vector-fetch. RDSYS
 // reads CPU-internal sysreg devices through the MEM sideband, and WRSYS writes
-// them at the EX drain-commit. Still not wired: the MMU (both fault paths) and
-// the real BRAM-backed L1 caches. unified_mem is a stand-in with the
-// streaming registered-read contract the IF1/IF2 split and the MEM single-STALL
-// are built around — real BRAM-backed caches replace it later behind the IF and
-// dmem interfaces.
+// them at the EX drain-commit. The MMU (mmu_bram) is wired on the D-side:
+// MEM drives the port-B translate query with each load/store, takes the
+// TLB miss / protection verdict at its data-ready cycle, and WB's qualified
+// fault-commit strobe latches FAULT_ADDR/FAULT_STATUS. The I-side (port A)
+// is tied off — fetches are untranslated until the I-side milestone — and
+// the real BRAM-backed L1 caches are not wired. unified_mem is a stand-in
+// with the streaming registered-read contract the IF1/IF2 split and the MEM
+// single-STALL are built around — real BRAM-backed caches replace it later
+// behind the IF and dmem interfaces. Because the flat stand-in has no paddr
+// tag compare, translated data accesses must be identity-mapped (asserted in
+// the MEM stage) until the VIPT L1 lands.
 //
 // No halt: a real CPU never stops on an instruction. BREAK is a trap, taken at
 // EX and vectored to VEC_BREAK (gen1 likewise vectors BREAK to its monitor),
@@ -183,15 +189,33 @@ module penumbra2_core
     logic [3:0]  dmem_byte_en;
     logic        dmem_we, dmem_en;
 
-    // Sysreg sideband (MEM RDSYS read ↔ the CPU-internal device block)
+    // Sysreg sideband (MEM RDSYS read ↔ the CPU-internal device block).
+    // sys_rdata is the launch-captured combinational-device response;
+    // sys_rdata_rsp is the final response into MEM (MMU muxed in at
+    // data-ready — see the device block below).
     logic [3:0]  sys_dev, sys_reg;
     logic        sys_re;
-    logic [31:0] sys_rdata;
+    logic [31:0] sys_rdata, sys_rdata_rsp;
 
     // Sysreg write port (WRSYS commit from EX ↔ the device block)
     logic [3:0]  sys_wr_dev, sys_wr_reg;
     logic [31:0] sys_wdata;
     logic        sys_we;
+
+    // MMU D-side translate (MEM's port-B query ↔ mmu_bram)
+    logic [31:0] mmu_vaddr, mmu_paddr;
+    logic [2:0]  mmu_access_type;
+    logic        mmu_user, mmu_req, mmu_fault;
+    logic [31:0] mmu_fault_status;
+
+    // MMU fault-register commit (WB's qualified strobe + payload)
+    logic        mmu_fault_commit;
+    logic [31:0] mmu_fault_vaddr, mmu_fault_cstatus;
+
+    // The core runs in supervisor mode; one site feeds both the spine's
+    // decode-time checks and the MMU queries until the SR.S write path lands.
+    logic core_supervisor;
+    assign core_supervisor = 1'b1;
 
     // ══════════════════════════════════════════════════════════
     // IF1 — PC + fetch address generation
@@ -231,7 +255,7 @@ module penumbra2_core
         .i_clk(i_clk), .i_rst(i_rst),
         .i_ir(if2_ir), .i_pc(if2_pc), .i_next_pc(if2_next_pc),
         .i_valid(if2_valid),
-        .i_supervisor(1'b1),                 // out of reset in supervisor mode
+        .i_supervisor(core_supervisor),
         .o_fetch_stall(fetch_stall),
         .o_commit_idx(o_commit_idx), .o_commit_data(o_commit_data),
         .o_commit_we(o_commit_we),
@@ -240,9 +264,18 @@ module penumbra2_core
         .o_dmem_addr(dmem_addr), .o_dmem_wdata(dmem_wdata),
         .o_dmem_byte_en(dmem_byte_en), .o_dmem_we(dmem_we), .o_dmem_en(dmem_en),
         .i_dmem_rdata(dmem_rdata),
+        // MMU D-side translate — MEM's port-B query into mmu_bram below.
+        .o_mmu_vaddr(mmu_vaddr), .o_mmu_access_type(mmu_access_type),
+        .o_mmu_user(mmu_user), .o_mmu_req(mmu_req),
+        .i_mmu_paddr(mmu_paddr),
+        .i_mmu_fault(mmu_fault), .i_mmu_fault_status(mmu_fault_status),
+        // MMU fault-register commit — WB's qualified strobe + payload.
+        .o_mmu_fault_commit(mmu_fault_commit),
+        .o_mmu_fault_vaddr(mmu_fault_vaddr),
+        .o_mmu_fault_status(mmu_fault_cstatus),
         // Sysreg sideband — MEM's RDSYS read against the device block below.
         .o_sys_dev(sys_dev), .o_sys_reg(sys_reg), .o_sys_re(sys_re),
-        .i_sys_rdata(sys_rdata),
+        .i_sys_rdata(sys_rdata_rsp),
         // Sysreg write port — WRSYS commit from EX into the device block.
         .o_sys_wr_dev(sys_wr_dev), .o_sys_wr_reg(sys_wr_reg),
         .o_sys_wdata(sys_wdata), .o_sys_we(sys_we),
@@ -311,6 +344,46 @@ module penumbra2_core
     );
 
     // ══════════════════════════════════════════════════════════
+    // MMU — D-side translation + architectural fault registers
+    // ══════════════════════════════════════════════════════════
+    // Port B serves MEM's load/store translate queries (query at the access
+    // launch, verdict held from the data-ready cycle). Port A is tied off —
+    // fetches run physical until the I-side translation milestone. The
+    // FAULT_ADDR/FAULT_STATUS latch takes WB's qualified commit strobe, so
+    // only a retiring address-carrying fault becomes architectural.
+    //
+    // The MMU's single sysreg register selector serves both the WRSYS write
+    // (EX drain-commit) and the RDSYS read (MEM sideband); the two can never
+    // coincide — WRSYS commits into an empty pipe (asserted below).
+    logic        mmu_sys_we, mmu_sys_re;
+    logic [3:0]  mmu_sys_reg;
+    logic [31:0] mmu_sys_rdata;
+    assign mmu_sys_we  = sys_we && (sys_wr_dev == SYSDEV_MMU);
+    assign mmu_sys_re  = sys_re && (sys_dev == SYSDEV_MMU);
+    assign mmu_sys_reg = mmu_sys_we ? sys_wr_reg : sys_reg;
+
+    mmu_bram u_mmu (
+        .i_clk(i_clk), .i_rst(i_rst),
+        // Port A (I-side) — tied off until fetch translation lands.
+        .i_a_vaddr(32'b0), .i_a_access_type(ACC_EXEC), .i_a_user_mode(1'b0),
+        .i_a_req(1'b0), .i_a_force_bypass(1'b0),
+        .o_a_paddr(), .o_a_cacheable(), .o_a_hit(), .o_a_fault(),
+        .o_a_fault_status(),
+        // Port B (D-side) — MEM's translate query.
+        .i_b_vaddr(mmu_vaddr), .i_b_access_type(mmu_access_type),
+        .i_b_user_mode(mmu_user), .i_b_req(mmu_req), .i_b_force_bypass(1'b0),
+        .o_b_paddr(mmu_paddr), .o_b_cacheable(), .o_b_hit(),
+        .o_b_fault(mmu_fault), .o_b_fault_status(mmu_fault_status),
+        // Commit-time fault latch (WB strobe + payload from the spine).
+        .i_fault_commit(mmu_fault_commit), .i_fault_vaddr(mmu_fault_vaddr),
+        .i_fault_status(mmu_fault_cstatus),
+        // Sysreg (write: WRSYS commit; read: RDSYS launch strobe).
+        .i_sys_reg(mmu_sys_reg), .i_sys_wdata(sys_wdata),
+        .i_sys_we(mmu_sys_we), .i_sys_re(mmu_sys_re),
+        .o_sys_rdata(mmu_sys_rdata)
+    );
+
+    // ══════════════════════════════════════════════════════════
     // Sysreg device block — RDSYS read / WRSYS write targets (CPU-internal)
     // ══════════════════════════════════════════════════════════
     // RDSYS reads a CPU-internal sysreg device through MEM's sideband. The real,
@@ -350,6 +423,19 @@ module penumbra2_core
         if (sys_re)
             sys_rdata <= sys_rdata_sel;
 
+    // The MMU answers on the data-ready cycle, not at the launch: its TLB
+    // readback is itself a registered BRAM read (launched by mmu_sys_re,
+    // output held), so capturing it at the launch edge like the combinational
+    // devices above would latch the *previous* readback. A registered
+    // device-select flag routes the response mux to the MMU's held output
+    // instead; everything else takes the launch-captured sys_rdata.
+    logic mmu_sys_sel_q;
+    always_ff @(posedge i_clk)
+        if (sys_re)
+            mmu_sys_sel_q <= (sys_dev == SYSDEV_MMU);
+
+    assign sys_rdata_rsp = mmu_sys_sel_q ? mmu_sys_rdata : sys_rdata;
+
     // ── Assertion (sim-only; stripped at synth) ──────────────────
     // A redirect target is word-aligned — for a branch (PC + off<<2, always
     // aligned) and for a vector-fetch handler address (a misaligned handler
@@ -360,6 +446,13 @@ module penumbra2_core
     assert property (@(posedge i_clk) disable iff (i_rst)
         if1_redirect |-> if1_redirect_pc[1:0] == 2'b00)
         else $error("penumbra2_core: misaligned redirect target");
+
+    // The MMU's shared sysreg selector relies on the WRSYS write (a
+    // drain-commit into an empty pipe) and the RDSYS read (a MEM access)
+    // being mutually exclusive in time.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        !(mmu_sys_we && mmu_sys_re))
+        else $error("penumbra2_core: MMU sysreg write and read collide");
 
     /* verilator lint_on PINCONNECTEMPTY */
 endmodule

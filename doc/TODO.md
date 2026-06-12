@@ -736,9 +736,13 @@ is the fill-penalty floor, characterised by
 Deferred fill-speed directions (L2 initiation-interval decouple, wide
 datapath, write buffer) are gated on gen2 bottleneck measurements.
 
-Sequence after the in-flight gen2 D-side MMU integration: the L1 sits
-behind translation, so the MMU lands first, then the L1 + arbiter +
-fill sequencer replace the `unified_mem` stand-in.
+The D-side MMU integration is in (mmu_bram on the core, conformance
+TLB tests gated on the `mmu-d` capability), and the L1 sits behind
+translation — so this L1 + arbiter + fill sequencer step is next, and
+it also unlocks the non-identity-mapping tests (`test_tlb_remap`, the
+COW set): the flat `unified_mem` stand-in is vaddr-addressed with no
+paddr tag compare, so the MEM stage asserts identity mapping until the
+VIPT L1's tag compare delivers remapped data.
 
 **Valid-bit storage — flops, not BRAM (single-cycle flush + reset).**
 The L1 valid bits must live in a bulk-clearable flop array, not packed

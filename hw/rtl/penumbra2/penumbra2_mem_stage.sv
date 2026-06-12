@@ -17,12 +17,20 @@
 //     re-commit the slot it just took — and back-pressures EX to hold the
 //     access operands stable.
 //
-// Address note: until the D-side MMU lands, the effective address is used as
-// the physical address directly — the same simplification the gen2 front-end
-// makes on the I-side today. The real BRAM-backed L1 D-cache (with MMU
-// translation and miss handling) replaces the flat data-memory stand-in
-// later, behind this same dmem interface — the mirror of how the flat i-mem
-// gives way to the I-cache behind the IF interface.
+// MMU: the launch cycle also drives the MMU's D-side translate port (port B)
+// with the effective address; the registered verdict (paddr, hit, fault)
+// resolves on the data-ready cycle and holds until the next query — exactly
+// where the VIPT L1's tag compare consumes it. A TLB miss or protection
+// fault tags the slot inert (fault_pending), and the FAULT_ADDR/FAULT_STATUS
+// commit payload (faulting vaddr + composed status) rides MEM/WB so WB can
+// latch the MMU's architectural fault registers from its commit strobe.
+//
+// The flat data-memory stand-in is addressed by the *virtual* address at
+// launch — the role the VIPT L1's vaddr index plays — but it has no paddr
+// tag compare, so it returns vaddr-indexed data unconditionally. Until the
+// real L1 D-cache replaces it behind this same dmem interface, a completing
+// translated access must therefore be identity-mapped (asserted below);
+// non-identity data mappings are the L1's tag compare to deliver.
 //
 // RDSYS shares the 2-cycle access FSM via the sysreg sideband: its launch
 // cycle drives o_sys_dev/o_sys_reg + the read strobe o_sys_re, and the device's
@@ -82,6 +90,19 @@ module penumbra2_mem_stage
     output logic                  o_dmem_en,
     input  logic [31:0]           i_dmem_rdata,
 
+    // ── MMU D-side translate (port B: query at launch, verdict at data-ready) ──
+    // The query is driven on the access launch cycle alongside the data-memory
+    // address; the registered verdict is valid on the data-ready cycle and
+    // holds until the next query (mmu_bram's registered-read contract), so it
+    // is stable on whichever cycle the access advances.
+    output logic [31:0]           o_mmu_vaddr,
+    output logic [2:0]            o_mmu_access_type, // ACC_READ / ACC_WRITE
+    output logic                  o_mmu_req,         // query launch strobe
+    input  logic                  i_user_mode,       // current privilege (query + align status)
+    input  logic [31:0]           i_mmu_paddr,
+    input  logic                  i_mmu_fault,       // any translation fault (miss / protection)
+    input  logic [31:0]           i_mmu_fault_status, // composed by the MMU (Decision 16)
+
     // ── Sysreg sideband (RDSYS read; same registered-response timing) ──
     // RDSYS reads a CPU-internal sysreg device. MEM drives the device/register
     // selectors and the read strobe o_sys_re (the launch clock-enable); the
@@ -115,7 +136,14 @@ module penumbra2_mem_stage
     output logic [31:0]           o_pc,
     output logic                  o_valid,
     output logic                  o_fault_pending,
-    output logic [3:0]            o_fault_vec
+    output logic [3:0]            o_fault_vec,
+    // FAULT_ADDR/FAULT_STATUS commit payload — consumed by WB's commit strobe
+    // into the MMU's architectural fault registers. The status is
+    // self-qualifying: an address-carrying fault born here (alignment / TLB)
+    // carries its composed type; anything else rides FAULT_NONE and leaves
+    // the MMU registers untouched.
+    output logic [31:0]           o_fault_vaddr,
+    output logic [31:0]           o_fault_status
 );
 
     // Control nets assigned in the back-pressure always_comb below, declared
@@ -205,16 +233,35 @@ module penumbra2_mem_stage
         .o_data     (load_data)
     );
 
+    // ── MMU query drive (launch cycle, both loads and stores) ────
+    // A misaligned access never launches (do_access excludes it), so the TLB
+    // is queried only for accesses that can complete. RDSYS is not a memory
+    // access and never translates.
+    assign o_mmu_vaddr       = i_result;
+    assign o_mmu_access_type = is_store ? ACC_WRITE : ACC_READ;
+    assign o_mmu_req         = is_mem & mem_first;
+
+    // ── MMU verdict consumption (data-ready cycle) ───────────────
+    // i_mmu_fault covers every translation fault (miss and protection) with
+    // its status composed by the MMU, and is 0 for a bypassing or idle port —
+    // the only qualification left here is "this slot is a memory access at or
+    // past its data-ready cycle" (a pass-through slot never ran a query).
+    logic tlb_fault;
+    assign tlb_fault = is_mem & acc_phase & i_mmu_fault;
+
     // ── Data-memory drive ────────────────────────────────────────
     // Address is stable across both access cycles (EX is back-pressured), so
-    // it can be driven unconditionally. A load launches its read on cycle 1;
-    // a store commits its write on the advancing (completing) cycle so a
-    // flush or WB back-pressure can still cancel/defer it.
+    // it can be driven unconditionally. A load launches its read on cycle 1
+    // unconditionally — the verdict is not known yet (the VIPT shape: data
+    // read overlaps translation; a fault makes the slot inert so the garbage
+    // data is never committed). A store commits its write on the advancing
+    // (completing) cycle, gated on a clean translation, so a flush, WB
+    // back-pressure, or a TLB fault cancels/defers it.
     assign o_dmem_addr    = i_result;
     assign o_dmem_wdata   = store_wdata;
     assign o_dmem_byte_en = byte_en;
     assign o_dmem_en      = is_load  & mem_first;
-    assign o_dmem_we      = is_store & do_access & acc_phase & advance;
+    assign o_dmem_we      = is_store & do_access & acc_phase & advance & ~tlb_fault;
 
     // ── Sysreg sideband drive ────────────────────────────────────
     // Mirrors the load read: o_sys_re is the launch clock-enable that tells the
@@ -234,13 +281,40 @@ module penumbra2_mem_stage
                     : is_rdsys ? i_sys_rdata
                     :            i_result;
 
-    // ── Fault merge (alignment) ──────────────────────────────────
-    // An incoming fault (from upstream) takes priority over a freshly
-    // detected alignment fault on the same slot.
-    logic       mem_fault_pending;
-    logic [3:0] mem_fault_vec;
-    assign mem_fault_pending = i_fault_pending | align_fault;
-    assign mem_fault_vec     = i_fault_pending ? i_fault_vec : VEC_ALIGN;
+    // ── Fault merge + FAULT_ADDR/FAULT_STATUS composition ────────
+    // Merges the slot's fault sources into the MEM/WB fault tag and the
+    // FAULT_ADDR/FAULT_STATUS commit payload. Sources, in priority order
+    // (exception-flow.md): an upstream fault riding the slot (the
+    // instruction is already inert, no access launched, no address to
+    // report — its status stays FAULT_NONE), then the two address faults
+    // born here — alignment (detected at entry, access never launched) and
+    // TLB (from the held port-B verdict at data-ready). Those two are
+    // structurally exclusive: a misaligned access never queries the TLB.
+    // An address fault's vector derives from its composed status — the
+    // status type is the single classification (Decision 16). MEM composes
+    // only the alignment status; the TLB status arrives composed.
+    logic        mem_fault_pending;
+    logic [3:0]  mem_fault_vec;
+    logic [31:0] mem_fault_vaddr, mem_fault_status;
+
+    always_comb begin
+        mem_fault_pending = 1'b0;
+        mem_fault_vec     = 4'b0;
+        mem_fault_vaddr   = 32'b0;
+        mem_fault_status  = 32'b0;        // FAULT_NONE
+
+        if (i_fault_pending) begin
+            mem_fault_pending = 1'b1;
+            mem_fault_vec     = i_fault_vec;
+        end else if (align_fault | tlb_fault) begin
+            mem_fault_pending = 1'b1;
+            mem_fault_vaddr   = i_result;
+            mem_fault_status  = align_fault
+                ? {20'b0, i_user_mode, o_mmu_access_type, 4'b0, FAULT_ALIGN}
+                : i_mmu_fault_status;
+            mem_fault_vec     = fault_vec_of(mem_fault_status[3:0]);
+        end
+    end
 
     // A real memory access never carries the reserved size encoding — decode
     // emits only the three defined sizes. If this fires, an illegal Format M
@@ -306,6 +380,8 @@ module penumbra2_mem_stage
                 o_pc              <= i_pc;
                 o_fault_pending   <= mem_fault_pending;
                 o_fault_vec       <= mem_fault_vec;
+                o_fault_vaddr     <= mem_fault_vaddr;
+                o_fault_status    <= mem_fault_status;
             end
         end
     end
@@ -339,6 +415,14 @@ module penumbra2_mem_stage
         assert (!o_dmem_we || (advance && acc_phase && !i_bubble))
             else $error("penumbra2_mem_stage: store write outside the commit cycle");
     end
+
+    // The flat data-memory stand-in is vaddr-indexed with no paddr tag
+    // compare (see header): a completing translated access must be
+    // identity-mapped, or the returned/written data is for the wrong
+    // physical location. The real VIPT L1's tag compare lifts this.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (is_mem && acc_phase && advance && !tlb_fault) |-> (i_mmu_paddr == i_result))
+        else $error("penumbra2_mem_stage: non-identity D-mapping over the flat memory stand-in");
 
     // A fault-commit flush from WB always lands as a bubble in MEM/WB: a
     // wrong-path or faulting instruction must never slip through to WB.

@@ -1,5 +1,5 @@
 ; test_tlb_miss.s — TLB miss trap: verify fault handler runs on unmapped access
-; REQUIRES: mmu
+; REQUIRES: mmu-d
 ;
 ; Tests:
 ;   1. Install TLB miss handler in vector table
