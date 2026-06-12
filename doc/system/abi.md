@@ -113,6 +113,11 @@ Aggregates (structs and unions) are classified by size alone; field
 types and declared alignment do not affect slot assignment.
 Zero-sized aggregates (a GNU C extension) occupy no slot.
 
+`_Complex` types classify by their total size under the same table
+as aggregates: `_Complex float` (8 bytes) occupies two slots and
+returns in R1:R2; `_Complex double` (16 bytes) passes by reference
+and returns through the hidden result pointer.
+
 For aggregates passed by reference (> 8 bytes), the caller allocates
 a temporary copy of the argument value in its own frame and passes
 the copy's address. The callee may modify the copy freely; the copy
