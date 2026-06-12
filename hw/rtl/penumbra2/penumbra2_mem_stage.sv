@@ -7,15 +7,21 @@
 // Two paths share the stage:
 //   - Pass-through (ALU / branch / divmul / RDSPR / WRSPR): a single-cycle
 //     register move — EX's result flows straight to WB, no stall.
-//   - Data memory (LDx / STx): a 2-cycle access against the BRAM-backed data
-//     memory. MEM checks alignment combinationally on entry; on a clean
-//     access it drives the memory address and asserts STALL for one cycle
-//     (per Decision 11, single-MEM-STALL). The next cycle the registered
-//     read is valid: a load extracts/extends its sub-word, a store commits
-//     its (lane-replicated) write, and the instruction advances to MEM/WB.
-//     While the access runs MEM injects a bubble into MEM/WB — so WB does not
-//     re-commit the slot it just took — and back-pressures EX to hold the
-//     access operands stable.
+//   - Data memory (LDx / STx): a 2-cycle-minimum access against the D-side
+//     front port (the BRAM-backed L1, or the flat stand-in at core level).
+//     MEM checks alignment combinationally on entry; on a clean access it
+//     launches the lookup (o_dmem_en samples the address — loads and stores
+//     both, the cache's tag compare needs it) and asserts STALL (per
+//     Decision 11, single-MEM-STALL). From the next cycle the request is
+//     presented level (o_dmem_re for a load, o_dmem_we for a store) and the
+//     access completes on the cycle i_dmem_busy is low — immediately for a
+//     hit or the flat stand-in (busy tied 0), after the line fill or the
+//     downstream round trip otherwise (drop-equals-valid: i_dmem_rdata is
+//     valid exactly on the busy-drop cycle). A load then extracts/extends
+//     its sub-word, a store's write has committed downstream, and the
+//     instruction advances to MEM/WB. While the access runs MEM injects a
+//     bubble into MEM/WB — so WB does not re-commit the slot it just took —
+//     and back-pressures EX to hold the access operands stable.
 //
 // MMU: the launch cycle also drives the MMU's D-side translate port (port B)
 // with the effective address; the registered verdict (paddr, hit, fault)
@@ -38,10 +44,16 @@
 // single-STALL timing as a D-cache hit). WRSYS does not reach MEM — it commits
 // in EX as a drain-commit.
 //
-// Handshake: MEM back-pressures EX on (a) the first cycle of a memory or sysreg
-// access and (b) whenever WB back-pressures it (i_stall_in). i_bubble (the
-// fault-commit flush from WB) forces the MEM/WB slot to a bubble, wins over
-// everything, and cancels an in-flight access (no store commit).
+// Handshake: MEM back-pressures EX on (a) every cycle of a memory or sysreg
+// access before its completion (the launch cycle, plus every i_dmem_busy
+// cycle after it) and (b) whenever WB back-pressures it (i_stall_in).
+// i_bubble (the fault-commit flush from WB) forces the MEM/WB slot to a
+// bubble and wins over everything. Neither i_bubble nor i_stall_in can land
+// on a *launched* access: both are acquired the cycle their slot enters WB,
+// which is the cycle this slot enters MEM — before any launch. A bubble
+// therefore only ever suppresses a launch; it never has to cancel a
+// transaction the memory side already accepted (the atomic-fill interface
+// could not cancel one anyway). Both invariants are asserted below.
 //
 // The writeback value reaching WB is a single datum (o_wb_value): for a load
 // it is the extracted memory data, for RDSYS the sysreg response, otherwise
@@ -79,17 +91,23 @@ module penumbra2_mem_stage
     input  logic [3:0]            i_fault_vec,
     input  logic [31:0]           i_fault_status,    // carried payload; FAULT_NONE when none
 
-    // ── Data memory (BRAM-backed; flat stand-in for the L1 D-cache) ──
-    // Registered-read contract (see unified_mem.sv): the address is sampled at
-    // the clock edge and the addressed word appears combinationally during
-    // the next cycle. o_dmem_en is the read clock-enable (holds the output
-    // when low, keeping it aligned with a stalled MEM).
+    // ── Data memory (the D-side front port: BRAM L1 or flat stand-in) ──
+    // Launch/resolve contract (cache_bram_vipt's front side; unified_mem is
+    // the degenerate busy-never case): o_dmem_en samples the address at the
+    // clock edge (the lookup launch — loads and stores both); from the next
+    // cycle the request is presented level on o_dmem_re / o_dmem_we and held
+    // stable until the completion cycle, which is the cycle i_dmem_busy is
+    // low (drop-equals-valid: i_dmem_rdata carries the load data exactly
+    // then). o_dmem_en doubles as the read clock-enable: low holds the
+    // resolved output aligned with a stalled MEM.
     output logic [31:0]           o_dmem_addr,
     output logic [31:0]           o_dmem_wdata,
     output logic [3:0]            o_dmem_byte_en,
+    output logic                  o_dmem_re,
     output logic                  o_dmem_we,
     output logic                  o_dmem_en,
     input  logic [31:0]           i_dmem_rdata,
+    input  logic                  i_dmem_busy,
 
     // ── MMU D-side translate (port B: query at launch, verdict at data-ready) ──
     // The query is driven on the access launch cycle alongside the data-memory
@@ -150,7 +168,7 @@ module penumbra2_mem_stage
     // Control nets assigned in the back-pressure always_comb below, declared
     // up here because the data-memory drive (a continuous assign) reads them.
     logic advance, next_valid;
-    logic acc_phase, acc_phase_next;
+    logic acc_in_flight, acc_in_flight_next;
 
     // ── Access classification + alignment check ──────────────────
     logic is_load, is_store, is_mem, is_rdsys;
@@ -180,17 +198,20 @@ module penumbra2_mem_stage
     logic do_access;
     assign do_access = ((is_mem & ~misaligned) | is_rdsys) & ~i_bubble;
 
-    // ── 2-cycle access phase ─────────────────────────────────────
-    // acc_phase 0 = launch cycle (drive address/read, assert STALL);
-    //           1 = data-ready cycle (extract load / commit store, advance).
-    // Gated by ~i_stall_in: an access must not launch while WB back-pressures.
-    // WB asserts i_stall_in only for a dual-write divmul holding MEM/WB across
-    // its second (aux) write cycle; launching then would inject this access's
-    // launch bubble over the held slot and drop the divmul's Rdh write. With
-    // the launch deferred, the i_stall_in hold branch keeps the access waiting
-    // in EX (acc_phase stays 0) until WB accepts, then it launches cleanly.
+    // ── Access tracking ──────────────────────────────────────────
+    // mem_first marks the launch cycle (drive address/read, assert STALL);
+    // acc_in_flight then marks the access as launched on the data side, from
+    // its data-ready cycle until the completion (busy-drop) cycle — one cycle
+    // exactly when busy never rises, longer across a fill or round trip.
+    // The launch is gated by ~i_stall_in: an access must not launch while WB
+    // back-pressures. WB asserts i_stall_in only for a dual-write divmul
+    // holding MEM/WB across its second (aux) write cycle; launching then
+    // would inject this access's launch bubble over the held slot and drop
+    // the divmul's Rdh write. With the launch deferred, the i_stall_in hold
+    // branch keeps the access waiting in EX (not yet in flight) until WB
+    // accepts, then it launches cleanly.
     logic mem_first;
-    assign mem_first = do_access & ~acc_phase & ~i_stall_in;
+    assign mem_first = do_access & ~acc_in_flight & ~i_stall_in;
 
     // ── Store path: lane-replication + byte-enable ───────────────
     logic [31:0] store_wdata;
@@ -248,21 +269,25 @@ module penumbra2_mem_stage
     // the only qualification left here is "this slot is a memory access at or
     // past its data-ready cycle" (a pass-through slot never ran a query).
     logic tlb_fault;
-    assign tlb_fault = is_mem & acc_phase & i_mmu_fault;
+    assign tlb_fault = is_mem & acc_in_flight & i_mmu_fault;
 
     // ── Data-memory drive ────────────────────────────────────────
-    // Address is stable across both access cycles (EX is back-pressured), so
-    // it can be driven unconditionally. A load launches its read on cycle 1
-    // unconditionally — the verdict is not known yet (the VIPT shape: data
-    // read overlaps translation; a fault makes the slot inert so the garbage
-    // data is never committed). A store commits its write on the advancing
-    // (completing) cycle, gated on a clean translation, so a flush, WB
-    // back-pressure, or a TLB fault cancels/defers it.
+    // Address is stable across all access cycles (EX is back-pressured), so
+    // it can be driven unconditionally. The launch (o_dmem_en) fires for
+    // loads and stores alike — the cache's tag lookup serves both — before
+    // the verdict is known (the VIPT shape: the lookup overlaps translation;
+    // a fault makes the slot inert so nothing is ever committed). From the
+    // data-ready cycle the request is presented level: a load's o_dmem_re
+    // holds until the busy-drop completion, a store's o_dmem_we likewise,
+    // gated on a clean translation so a TLB fault keeps the write from ever
+    // reaching the memory side (the cache's own i_fault gate is the same
+    // verdict — both layers agree the slot is inert).
     assign o_dmem_addr    = i_result;
     assign o_dmem_wdata   = store_wdata;
     assign o_dmem_byte_en = byte_en;
-    assign o_dmem_en      = is_load  & mem_first;
-    assign o_dmem_we      = is_store & do_access & acc_phase & advance & ~tlb_fault;
+    assign o_dmem_en      = is_mem   & mem_first;
+    assign o_dmem_re      = is_load  & do_access & acc_in_flight;
+    assign o_dmem_we      = is_store & do_access & acc_in_flight & ~tlb_fault;
 
     // ── Sysreg sideband drive ────────────────────────────────────
     // Mirrors the load read: o_sys_re is the launch clock-enable that tells the
@@ -332,34 +357,42 @@ module penumbra2_mem_stage
     end
 
     // ── Issue / back-pressure control ────────────────────────────
-    // i_bubble (fault flush) wins over everything. A memory access's first
-    // cycle stalls EX and bubbles MEM/WB; its second cycle advances like a
+    // i_bubble (fault flush) wins over everything — and can only coincide
+    // with a launch it suppresses, never a launched access (asserted below).
+    // A memory access's first cycle stalls EX and bubbles MEM/WB; it then
+    // waits out i_dmem_busy and completes on the busy-drop cycle like a
     // normal op. Downstream back-pressure (i_stall_in) holds MEM/WB intact.
     always_comb begin
-        acc_phase_next = acc_phase;
+        acc_in_flight_next = acc_in_flight;
         if (i_bubble) begin
             next_valid     = 1'b0;          // flush wins
             advance        = 1'b0;
             o_stall        = i_stall_in;
-            acc_phase_next = 1'b0;          // cancel any in-flight access
         end else if (mem_first) begin
             next_valid     = 1'b0;          // bubble into MEM/WB while accessing
             advance        = 1'b0;
             o_stall        = 1'b1;          // hold the access operands in EX/MEM
-            acc_phase_next = 1'b1;          // → data-ready cycle next
+            acc_in_flight_next = 1'b1;          // launched: in flight from next cycle
+        end else if (is_mem && acc_in_flight && i_dmem_busy) begin
+            // Busy-wait: the launched access's data side has not completed
+            // (line fill / downstream round trip). Same posture as the launch
+            // cycle — bubble into MEM/WB, hold the operands in EX — with the
+            // request level held; acc_in_flight stays set (default above).
+            next_valid     = 1'b0;
+            advance        = 1'b0;
+            o_stall        = 1'b1;
         end else if (i_stall_in) begin
             next_valid     = o_valid;       // hold MEM/WB unchanged
             advance        = 1'b0;
             o_stall        = 1'b1;
-            // acc_phase held: an access waits for WB to accept it — either a
-            // data-ready one (acc_phase 1) or one not yet launched (acc_phase
-            // 0, mem_first suppressed by ~i_stall_in) deferring behind a
-            // dual-write divmul that holds MEM/WB for its aux write.
+            // An access not yet launched (mem_first suppressed by
+            // ~i_stall_in) defers behind a dual-write divmul that holds
+            // MEM/WB for its aux write.
         end else begin
             next_valid     = i_valid;       // advance: bubble in if i_valid=0
             advance        = i_valid;
             o_stall        = 1'b0;
-            acc_phase_next = 1'b0;          // access (if any) completes here
+            acc_in_flight_next = 1'b0;          // access (if any) completes here
         end
     end
 
@@ -367,10 +400,10 @@ module penumbra2_mem_stage
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
             o_valid   <= 1'b0;
-            acc_phase <= 1'b0;
+            acc_in_flight <= 1'b0;
         end else begin
             o_valid   <= next_valid;
-            acc_phase <= acc_phase_next;
+            acc_in_flight <= acc_in_flight_next;
             if (advance) begin
                 o_op_class        <= i_op_class;
                 o_gpr_we          <= i_gpr_we;
@@ -400,9 +433,11 @@ module penumbra2_mem_stage
 
     // Advance precondition: the MEM/WB register latches a real instruction
     // only on a clean accept — a valid input, not flushed, not back-pressured,
-    // and not the first (address-launch) cycle of a memory access.
+    // not the first (address-launch) cycle of a memory access, and not while
+    // the data side is still busy with it.
     always_comb begin
-        assert (!advance || (i_valid && !i_bubble && !i_stall_in && !mem_first))
+        assert (!advance || (i_valid && !i_bubble && !i_stall_in && !mem_first
+                             && !(is_mem && acc_in_flight && i_dmem_busy)))
             else $error("penumbra2_mem_stage: advance without a clean precondition");
     end
 
@@ -412,22 +447,44 @@ module penumbra2_mem_stage
         mem_first |-> o_stall)
         else $error("penumbra2_mem_stage: first access cycle did not stall EX");
     assert property (@(posedge i_clk) disable iff (i_rst)
-        mem_first |=> acc_phase)
+        mem_first |=> acc_in_flight)
         else $error("penumbra2_mem_stage: access phase did not advance after launch");
 
-    // A store commits its write only on the cycle it advances out of MEM —
-    // never on the launch cycle, under back-pressure, or on a flushed slot.
+    // A store presents its write request only from its data-ready cycle on —
+    // never on the launch cycle or on a flushed slot. (The request is a level
+    // held until the busy-drop completion; the memory side commits it there.)
     always_comb begin
-        assert (!o_dmem_we || (advance && acc_phase && !i_bubble))
-            else $error("penumbra2_mem_stage: store write outside the commit cycle");
+        assert (!o_dmem_we || (acc_in_flight && !i_bubble))
+            else $error("penumbra2_mem_stage: store write outside the access window");
     end
+
+    // A launch only ever fires into an idle data side — the front-port
+    // contract (never launch a lookup while busy), upheld here because a
+    // slot's predecessor completed its access before advancing out of MEM.
+    always_comb begin
+        assert (!(o_dmem_en && i_dmem_busy))
+            else $error("penumbra2_mem_stage: lookup launched while the data side is busy");
+    end
+
+    // The WB-owned flush and back-pressure are acquired the cycle their slot
+    // enters WB — the cycle this slot enters MEM, before any launch. Neither
+    // can land on a launched access, so a transaction the memory side has
+    // accepted always runs to completion (the atomic-fill interface could
+    // not cancel one). If either fires, the in-order commit timing changed
+    // and this stage's hold logic needs a real cancellation story.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        !(i_bubble && acc_in_flight))
+        else $error("penumbra2_mem_stage: fault flush landed on a launched access");
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        !(i_stall_in && acc_in_flight))
+        else $error("penumbra2_mem_stage: WB back-pressure landed on a launched access");
 
     // The flat data-memory stand-in is vaddr-indexed with no paddr tag
     // compare (see header): a completing translated access must be
     // identity-mapped, or the returned/written data is for the wrong
     // physical location. The real VIPT L1's tag compare lifts this.
     assert property (@(posedge i_clk) disable iff (i_rst)
-        (is_mem && acc_phase && advance && !tlb_fault) |-> (i_mmu_paddr == i_result))
+        (is_mem && acc_in_flight && advance && !tlb_fault) |-> (i_mmu_paddr == i_result))
         else $error("penumbra2_mem_stage: non-identity D-mapping over the flat memory stand-in");
 
     // A fault-commit flush from WB always lands as a bubble in MEM/WB: a

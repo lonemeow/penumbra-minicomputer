@@ -283,8 +283,12 @@ module penumbra2_core
         .o_retire_valid(o_retire_valid), .o_retire_op_class(o_retire_op_class),
         .o_branch_taken(branch_taken), .o_branch_target(branch_target),
         .o_dmem_addr(dmem_addr), .o_dmem_wdata(dmem_wdata),
-        .o_dmem_byte_en(dmem_byte_en), .o_dmem_we(dmem_we), .o_dmem_en(dmem_en),
-        .i_dmem_rdata(dmem_rdata),
+        .o_dmem_byte_en(dmem_byte_en), .o_dmem_re(), .o_dmem_we(dmem_we),
+        .o_dmem_en(dmem_en),
+        // The flat stand-in completes every access in one registered-read
+        // cycle, so the busy-wait path is degenerate here (the real L1's
+        // o_busy drives it in the machine integration).
+        .i_dmem_rdata(dmem_rdata), .i_dmem_busy(1'b0),
         // MMU D-side translate — MEM's port-B query into mmu_bram below.
         .o_mmu_vaddr(mmu_vaddr), .o_mmu_access_type(mmu_access_type),
         .o_mmu_user(mmu_user), .o_mmu_req(mmu_req),

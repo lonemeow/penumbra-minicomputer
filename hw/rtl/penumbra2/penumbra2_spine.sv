@@ -57,9 +57,11 @@ module penumbra2_spine
     output logic [31:0]           o_dmem_addr,
     output logic [31:0]           o_dmem_wdata,
     output logic [3:0]            o_dmem_byte_en,
+    output logic                  o_dmem_re,
     output logic                  o_dmem_we,
     output logic                  o_dmem_en,
     input  logic [31:0]           i_dmem_rdata,
+    input  logic                  i_dmem_busy,
 
     // ── MMU D-side translate (MEM's port-B query, exposed to the core) ──
     output logic [31:0]           o_mmu_vaddr,
@@ -369,8 +371,9 @@ module penumbra2_spine
         .i_stall_in(wb_stall), .i_bubble(wb_fault_commit),
         .o_stall(mem_stall),
         .o_dmem_addr(o_dmem_addr), .o_dmem_wdata(o_dmem_wdata),
-        .o_dmem_byte_en(o_dmem_byte_en), .o_dmem_we(o_dmem_we),
-        .o_dmem_en(o_dmem_en), .i_dmem_rdata(i_dmem_rdata),
+        .o_dmem_byte_en(o_dmem_byte_en), .o_dmem_re(o_dmem_re),
+        .o_dmem_we(o_dmem_we), .o_dmem_en(o_dmem_en),
+        .i_dmem_rdata(i_dmem_rdata), .i_dmem_busy(i_dmem_busy),
         .o_mmu_vaddr(o_mmu_vaddr), .o_mmu_access_type(o_mmu_access_type),
         .o_mmu_req(o_mmu_req), .i_user_mode(~i_supervisor),
         .i_mmu_paddr(i_mmu_paddr),

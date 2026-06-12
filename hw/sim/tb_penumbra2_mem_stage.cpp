@@ -7,20 +7,29 @@
 //   - reset clears valid
 //   - a pass-through op (ALU / divmul / WRSPR) latches in 1 cycle, no stall
 //   - a faulting slot advances with its fault tag intact (WB suppresses)
-//   - a load takes 2 cycles: cycle 1 stalls EX + bubbles MEM/WB, cycle 2
-//     delivers the extracted/extended sub-word and advances
+//   - a load takes 2 cycles when the data side is ready: cycle 1 launches the
+//     lookup + stalls EX + bubbles MEM/WB, cycle 2 presents o_dmem_re and
+//     delivers the extracted/extended sub-word
 //   - byte / half / word loads extract the right lane, sign- or zero-extend
-//   - a store takes 2 cycles and commits its lane-replicated write with the
-//     correct byte-enable exactly on the advancing cycle
+//   - a store launches the lookup too (the cache's tag compare needs it),
+//     presents its lane-replicated write level from the data-ready cycle, and
+//     the write commits with the correct byte-enable at the completion cycle
+//   - a busy data side (i_dmem_busy: line fill / downstream round trip) holds
+//     the slot — stall held, bubbles into MEM/WB, request level held — and the
+//     access completes on the busy-drop cycle (drop-equals-valid read data)
 //   - a misaligned load/store faults (VEC_ALIGN) in 1 cycle, no memory access
-//   - downstream stall on a load's data-ready cycle holds the result
 //   - downstream stall coincident with a fresh access defers the launch
 //     (no premature read) and leaves the held MEM/WB slot intact
-//   - i_bubble cancels an in-flight store (no write) and flushes the slot
+//   - i_bubble coincident with an access's launch suppresses it (no lookup,
+//     no write) and flushes the slot; it can never land on a *launched*
+//     access — the stage asserts that, and the harness never drives it
 //
-// The data memory mirrors unified_mem.sv: the address is sampled at the clock
-// edge and the word appears the next cycle; o_dmem_en is the read clock-
-// enable; writes are byte-enabled with no read/write-through.
+// The data memory mirrors the L1 front side (cache_bram_vipt) with a
+// configurable completion delay: the launch (o_dmem_en) samples the address
+// and arms mem_latency busy cycles; the read is served from the held address
+// so it is valid on the busy-drop cycle; the held write applies exactly once,
+// at the completion cycle's edge. mem_latency = 0 degenerates to
+// unified_mem's hit-always registered read.
 //
 // The MMU port-B verdict is modeled the same way (mmu_bram's registered-read
 // contract): the query launched with o_mmu_req captures o_mmu_vaddr at the
@@ -50,26 +59,33 @@ static void check(const char* n, uint32_t g, uint32_t e) {
     if (g != e) { printf("  FAIL [%s]: got 0x%X, expected 0x%X\n", n, g, e); errors++; }
 }
 
-// ── Behavioral BRAM data memory (mirrors unified_mem.sv port B) ──
-// 256 words; word-addressed; registered read (1-cycle latency) gated by
-// o_dmem_en; byte-enabled write; read-before-write (no write-through).
+// ── Behavioral data memory (mirrors the L1 front side) ──
+// 256 words; word-addressed; the launch (o_dmem_en) samples the address and
+// arms mem_latency busy cycles; reads serve from the held address so the data
+// is valid on the busy-drop cycle; the level-held write applies exactly once,
+// at the completion (busy-low request) cycle's edge; read-before-write.
 static uint32_t dmem[256];
 static uint32_t dmem_rdata_reg;
 static uint32_t mmu_paddr_reg;        // held port-B verdict (identity map)
+static int      mem_latency;          // busy cycles per access (0 = hit timing)
+static int      busy_count;           // countdown for the in-flight access
 
 static void mem_init() {
     for (int i = 0; i < 256; i++) dmem[i] = 0;
     dmem_rdata_reg = 0;
     mmu_paddr_reg = 0;
+    mem_latency = 0;
+    busy_count = 0;
 }
 
 // One clock with the memory model sampled at the rising edge: capture the
 // combinational dmem drive while the clock is low (those outputs feed the
 // upcoming posedge), apply the read/write at the posedge, then present the
-// registered read so it is visible during the next cycle.
+// registered read and the busy level for the next cycle.
 static void tick(Vpenumbra2_mem_stage* dut) {
     dut->i_clk = 0; dut->eval();
-    bool en = dut->o_dmem_en, we = dut->o_dmem_we;
+    bool en = dut->o_dmem_en, we = dut->o_dmem_we, re = dut->o_dmem_re;
+    bool busy = dut->i_dmem_busy;         // as presented during this cycle
     uint32_t widx = (dut->o_dmem_addr >> 2) & 0xFF;
     uint32_t wd = dut->o_dmem_wdata;
     uint8_t  be = dut->o_dmem_byte_en;
@@ -82,8 +98,13 @@ static void tick(Vpenumbra2_mem_stage* dut) {
     dut->i_mmu_paddr = mmu_paddr_reg;
     dut->i_mmu_fault = 0;
 
-    if (en) dmem_rdata_reg = dmem[widx];  // read old value first
-    if (we) {                             // then apply the byte-enabled write
+    if (en) busy_count = mem_latency;     // launch arms the completion delay
+    else if (busy_count > 0) busy_count--;
+
+    // Read serve: continuous from the held address (idempotent — single
+    // master, no concurrent writer), so it is valid whenever busy drops.
+    if (en || re) dmem_rdata_reg = dmem[widx];
+    if (we && !busy) {                    // completion edge: apply the write
         uint32_t w = dmem[widx];
         for (int b = 0; b < 4; b++)
             if (be & (1u << b)) {
@@ -93,6 +114,7 @@ static void tick(Vpenumbra2_mem_stage* dut) {
         dmem[widx] = w;
     }
     dut->i_dmem_rdata = dmem_rdata_reg;
+    dut->i_dmem_busy  = (busy_count > 0);
     dut->eval();
 }
 
@@ -183,10 +205,12 @@ int main(int argc, char** argv) {
     dut->i_gpr_we = 1; dut->i_result = 0x10; dut->i_phys_dst = 4; dut->i_valid = 1;
     dut->eval();
     check("ldw_c1_stall",  dut->o_stall, 1);     // cycle 1 stalls EX
-    check("ldw_c1_dmem_en", dut->o_dmem_en, 1);  // ...and launches the read
+    check("ldw_c1_dmem_en", dut->o_dmem_en, 1);  // ...and launches the lookup
+    check("ldw_c1_no_re",   dut->o_dmem_re, 0);  // request starts at data-ready
     tick(dut); dut->eval();
     check("ldw_c1_no_commit", dut->o_valid, 0);  // MEM/WB bubbled during access
-    check("ldw_c2_release",   dut->o_stall, 0);  // cycle 2 releases
+    check("ldw_c2_re",        dut->o_dmem_re, 1); // read request presented level
+    check("ldw_c2_release",   dut->o_stall, 0);  // cycle 2 releases (busy low)
     tick(dut); dut->eval();
     check("ldw_valid",     dut->o_valid, 1);
     check("ldw_value",     dut->o_wb_value, 0x8899AABB);
@@ -212,9 +236,10 @@ int main(int argc, char** argv) {
     dut->i_result = 0x40; dut->i_store_data = 0x12345678; dut->i_valid = 1;
     dut->eval();
     check("stw_c1_be",   dut->o_dmem_byte_en, 0xF);
-    check("stw_c1_nowe", dut->o_dmem_we, 0);      // no write on the launch cycle
+    check("stw_c1_en",   dut->o_dmem_en, 1);      // a store launches the lookup too
+    check("stw_c1_nowe", dut->o_dmem_we, 0);      // no write request on the launch cycle
     tick(dut); dut->eval();
-    check("stw_c2_we",   dut->o_dmem_we, 1);      // write commits on the advancing cycle
+    check("stw_c2_we",   dut->o_dmem_we, 1);      // write presented from data-ready on
     tick(dut); dut->eval();
     check("stw_mem", dmem[0x40 >> 2], 0x12345678);
 
@@ -259,23 +284,51 @@ int main(int argc, char** argv) {
     check("fault_valid", dut->o_valid, 1);
     check("fault_vec",   dut->o_fault_vec, 10);
 
-    // ── Downstream stall on a load's data-ready cycle holds it ───
+    // ── Busy data side holds a load until the busy-drop completion ──
+    // A 3-cycle completion delay (a short line fill). The stall and the
+    // MEM/WB bubble hold through every busy cycle, the read request stays
+    // presented level, and the value lands on the busy-drop cycle —
+    // drop-equals-valid, no extra cycle after it.
     dmem[0x30 >> 2] = 0x0BADF00D;
+    mem_latency = 3;
     clear(dut);
     dut->i_op_class = OPC_LOAD; dut->i_mem_op = MEM_LOAD; dut->i_mem_size = SZ_WORD;
     dut->i_gpr_we = 1; dut->i_result = 0x30; dut->i_phys_dst = 8; dut->i_valid = 1;
     dut->eval();
-    tick(dut); dut->eval();                 // cycle 1: launch
-    dut->i_stall_in = 1;                     // WB back-pressures the data-ready cycle
-    dut->eval();
-    check("ldstall_hold_stall", dut->o_stall, 1);
+    check("ldbusy_c1_stall", dut->o_stall, 1);      // launch cycle
     tick(dut); dut->eval();
-    check("ldstall_held", dut->o_valid, 0);  // not advanced yet (still bubble)
-    dut->i_stall_in = 0;                      // release
-    dut->eval();
+    for (int w = 0; w < 3; w++) {                    // busy-wait cycles
+        check("ldbusy_wait_busy",  dut->i_dmem_busy, 1);
+        check("ldbusy_wait_stall", dut->o_stall, 1);
+        check("ldbusy_wait_re",    dut->o_dmem_re, 1);   // request held level
+        check("ldbusy_wait_hold",  dut->o_valid, 0);     // still bubbling
+        tick(dut); dut->eval();
+    }
+    check("ldbusy_drop_stall", dut->o_stall, 0);    // completes on the drop cycle
     tick(dut); dut->eval();
-    check("ldstall_value", dut->o_wb_value, 0x0BADF00D);
-    check("ldstall_valid", dut->o_valid, 1);
+    check("ldbusy_value", dut->o_wb_value, 0x0BADF00D);
+    check("ldbusy_valid", dut->o_valid, 1);
+    mem_latency = 0;
+
+    // ── Busy data side holds a store; the write commits exactly once ──
+    dmem[0x50 >> 2] = 0x01020304;
+    mem_latency = 2;
+    clear(dut);
+    dut->i_op_class = OPC_STORE; dut->i_mem_op = MEM_STORE; dut->i_mem_size = SZ_WORD;
+    dut->i_result = 0x50; dut->i_store_data = 0x55AA55AA; dut->i_valid = 1;
+    dut->eval();
+    tick(dut); dut->eval();                          // launch
+    for (int w = 0; w < 2; w++) {                    // busy-wait cycles
+        check("stbusy_wait_we",   dut->o_dmem_we, 1);     // write held level
+        check("stbusy_wait_mem",  dmem[0x50 >> 2], 0x01020304);  // not committed yet
+        check("stbusy_wait_stall", dut->o_stall, 1);
+        tick(dut); dut->eval();
+    }
+    check("stbusy_drop_we", dut->o_dmem_we, 1);      // still presented at completion
+    tick(dut); dut->eval();                          // completion edge commits it
+    check("stbusy_mem",   dmem[0x50 >> 2], 0x55AA55AA);
+    check("stbusy_valid", dut->o_valid, 1);
+    mem_latency = 0;
 
     // ── Downstream stall while a fresh access tries to launch ────
     // The mirror, at the unit level, of the divmul-aux-hold hazard: WB holds a
@@ -310,13 +363,17 @@ int main(int argc, char** argv) {
     check("deferlaunch_value", dut->o_wb_value, 0xD15EA5ED);  // load completed
     check("deferlaunch_valid", dut->o_valid, 1);
 
-    // ── i_bubble cancels an in-flight store (no write) and flushes ──
+    // ── i_bubble at a store's launch suppresses the access entirely ──
+    // The flush can only ever coincide with a launch (WB's fault commit and
+    // this slot's MEM entry are the same cycle — asserted in the stage), so
+    // suppression is the whole story: no lookup, no write, slot flushed.
     dmem[0x4C >> 2] = 0xCAFED00D;
     clear(dut);
     dut->i_op_class = OPC_STORE; dut->i_mem_op = MEM_STORE; dut->i_mem_size = SZ_WORD;
     dut->i_result = 0x4C; dut->i_store_data = 0xFFFFFFFF; dut->i_valid = 1;
     dut->i_bubble = 1;
     dut->eval();
+    check("bubble_store_no_en", dut->o_dmem_en, 0);  // lookup never launches
     check("bubble_store_no_we", dut->o_dmem_we, 0);
     tick(dut); dut->eval();
     check("bubble_flush_valid", dut->o_valid, 0);
