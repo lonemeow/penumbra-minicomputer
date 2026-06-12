@@ -219,6 +219,8 @@ MODULE_TESTS = \
     penumbra2_irq \
     penumbra2_spine \
     cache_bram_vipt \
+    txn_arbiter \
+    fill_sequencer \
     unified_mem \
     uart \
     busctl \
