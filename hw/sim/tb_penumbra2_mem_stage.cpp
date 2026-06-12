@@ -22,6 +22,12 @@
 // edge and the word appears the next cycle; o_dmem_en is the read clock-
 // enable; writes are byte-enabled with no read/write-through.
 //
+// The MMU port-B verdict is modeled the same way (mmu_bram's registered-read
+// contract): the query launched with o_mmu_req captures o_mmu_vaddr at the
+// edge and presents it as an identity, no-fault i_mmu_paddr verdict from the
+// data-ready cycle on, held until the next query. Translation faults are
+// exercised at core level, not here.
+//
 // The deferred-path guard (no RDSYS may reach the stage) is an
 // `always_comb assert`, so a failed `$error` aborts the sim (exit 1). Run
 // `./Vpenumbra2_mem_stage +guard` to drive an RDSYS and watch it abort; the
@@ -49,10 +55,12 @@ static void check(const char* n, uint32_t g, uint32_t e) {
 // o_dmem_en; byte-enabled write; read-before-write (no write-through).
 static uint32_t dmem[256];
 static uint32_t dmem_rdata_reg;
+static uint32_t mmu_paddr_reg;        // held port-B verdict (identity map)
 
 static void mem_init() {
     for (int i = 0; i < 256; i++) dmem[i] = 0;
     dmem_rdata_reg = 0;
+    mmu_paddr_reg = 0;
 }
 
 // One clock with the memory model sampled at the rising edge: capture the
@@ -65,8 +73,14 @@ static void tick(Vpenumbra2_mem_stage* dut) {
     uint32_t widx = (dut->o_dmem_addr >> 2) & 0xFF;
     uint32_t wd = dut->o_dmem_wdata;
     uint8_t  be = dut->o_dmem_byte_en;
+    bool     mmu_q  = dut->o_mmu_req;     // query launched this cycle
+    uint32_t mmu_va = dut->o_mmu_vaddr;
 
     dut->i_clk = 1; dut->eval();          // posedge: DUT registers update
+
+    if (mmu_q) mmu_paddr_reg = mmu_va;    // identity verdict, registered + held
+    dut->i_mmu_paddr = mmu_paddr_reg;
+    dut->i_mmu_fault = 0;
 
     if (en) dmem_rdata_reg = dmem[widx];  // read old value first
     if (we) {                             // then apply the byte-enabled write
