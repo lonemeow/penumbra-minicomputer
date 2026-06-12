@@ -13,13 +13,17 @@
 // and registered under the same strobe, so the identity-map result lands in
 // the same T+1 cycle as the TLB verdict it muxes against and holds with it.
 //
-// Faults. Unlike the single-cycle MMU, this module does not detect faults or
-// check alignment — the gen2 MEM stage and I-side fault path do that, and the
-// core composes and orders every fault (alignment, protection, miss, bus). The
-// MMU only *latches* the committed fault: FADDR/FSTAT are written from an
-// external commit strobe the core drives at WB, so they reflect the fault that
+// Faults. A translate port reports o_*_fault for any translation fault — a
+// TLB miss or a protection denial — with the fully-composed FAULT_STATUS
+// alongside (the detector composes; Decision 16). The composition uses the
+// query's access-type/privilege registered here at the launch, so the status
+// is self-contained at T+1. Idle and bypassing ports are fault=0 by
+// construction: a consumer can never misread a port that ran nothing. The
+// MMU does not check alignment (the gen2 MEM stage owns that, Decision 15),
+// and it does not *take* faults: FADDR/FSTAT latch only from the external
+// commit strobe the core drives at WB, so they reflect the fault that
 // actually retires, never a younger one that was detected and then squashed.
-// See Decisions 13 and 15 in doc/internals/penumbra2/design-decisions.md.
+// See Decisions 13, 15, and 16 in doc/internals/penumbra2/design-decisions.md.
 
 // verilator lint_off UNUSEDSIGNAL
 
@@ -38,8 +42,8 @@ module mmu_bram
     output logic [31:0] o_a_paddr,
     output logic        o_a_cacheable,
     output logic        o_a_hit,
-    output logic        o_a_fault,
-    output logic [31:0] o_a_fault_status,
+    output logic        o_a_fault,           // any translation fault (miss / protection)
+    output logic [31:0] o_a_fault_status,    // composed; FAULT_NONE when no fault
 
     // ── Port B: D-side translate (same registered contract) ──
     input  logic [31:0] i_b_vaddr,
@@ -50,8 +54,8 @@ module mmu_bram
     output logic [31:0] o_b_paddr,
     output logic        o_b_cacheable,
     output logic        o_b_hit,
-    output logic        o_b_fault,
-    output logic [31:0] o_b_fault_status,
+    output logic        o_b_fault,           // any translation fault (miss / protection)
+    output logic [31:0] o_b_fault_status,    // composed; FAULT_NONE when no fault
 
     // ── Commit-time fault latch (core drives at WB) ──
     input  logic        i_fault_commit,     // latch FADDR/FSTAT this cycle
@@ -108,25 +112,47 @@ module mmu_bram
 
     // Captured on the query strobe and held otherwise, matching the TLB's
     // verdict-hold contract — so the muxed port output stays coherent for a
-    // consumer that advances later than T+1.
+    // consumer that advances later than T+1. Besides the bypass decision and
+    // vaddr, the capture keeps the query's access-type/privilege (the status
+    // composition needs them at T+1) and whether a *translate* verdict is
+    // live — the qualifier that keeps idle and bypassing ports at fault=0.
     logic        a_bypass_q, b_bypass_q;
+    logic        a_xlate_q,  b_xlate_q;
     logic [31:0] a_vaddr_q, b_vaddr_q;
+    logic [2:0]  a_acc_q, b_acc_q;
+    logic        a_usr_q, b_usr_q;
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
             a_bypass_q <= 1'b0;
             b_bypass_q <= 1'b0;
+            a_xlate_q  <= 1'b0;
+            b_xlate_q  <= 1'b0;
         end else begin
-            if (i_a_req) a_bypass_q <= a_bypass;
-            if (i_b_req) b_bypass_q <= b_bypass;
+            if (i_a_req) begin
+                a_bypass_q <= a_bypass;
+                a_xlate_q  <= a_translate;
+            end
+            if (i_b_req) begin
+                b_bypass_q <= b_bypass;
+                b_xlate_q  <= b_translate;
+            end
         end
-        if (i_a_req) a_vaddr_q <= i_a_vaddr;
-        if (i_b_req) b_vaddr_q <= i_b_vaddr;
+        if (i_a_req) begin
+            a_vaddr_q <= i_a_vaddr;
+            a_acc_q   <= i_a_access_type;
+            a_usr_q   <= i_a_user_mode;
+        end
+        if (i_b_req) begin
+            b_vaddr_q <= i_b_vaddr;
+            b_acc_q   <= i_b_access_type;
+            b_usr_q   <= i_b_user_mode;
+        end
     end
 
     // ══════════════════════════════════════════════════════════
     // TLB unit (registered, dual-port)
     // ══════════════════════════════════════════════════════════
-    logic [31:0] tlb_a_paddr, tlb_a_fstatus, tlb_b_paddr, tlb_b_fstatus;
+    logic [31:0] tlb_a_paddr, tlb_b_paddr;
     logic        tlb_a_cacheable, tlb_a_hit, tlb_a_fault;
     logic        tlb_b_cacheable, tlb_b_hit, tlb_b_fault;
     logic [31:0] tlb_rdata;
@@ -137,51 +163,40 @@ module mmu_bram
         .i_a_user_mode(i_a_user_mode), .i_a_lookup_en(a_translate),
         .o_a_paddr(tlb_a_paddr), .o_a_cacheable(tlb_a_cacheable),
         .o_a_hit(tlb_a_hit), .o_a_fault(tlb_a_fault),
-        .o_a_fault_status(tlb_a_fstatus),
         .i_b_vaddr(i_b_vaddr), .i_b_access_type(i_b_access_type),
         .i_b_user_mode(i_b_user_mode), .i_b_lookup_en(b_translate),
         .o_b_paddr(tlb_b_paddr), .o_b_cacheable(tlb_b_cacheable),
         .o_b_hit(tlb_b_hit), .o_b_fault(tlb_b_fault),
-        .o_b_fault_status(tlb_b_fstatus),
         .i_sys_reg(i_sys_reg), .i_sys_wdata(i_sys_wdata),
         .i_sys_we(i_sys_we), .i_sys_re(i_sys_re), .o_sys_rdata(tlb_rdata)
     );
 
     // ══════════════════════════════════════════════════════════
-    // Per-port output mux (T+1): bypass identity-maps; else the TLB verdict.
-    // In bypass the page is uncacheable and "hits" with no fault. When a port
-    // did not request, a_bypass_q=0 and the TLB hit is 0 → an idle result.
+    // Per-port verdict (T+1): bypass identity-maps (uncacheable, hits, no
+    // fault); a live translate presents the TLB result with the fault
+    // composed here — covering both the miss (TLB hit=0) and the protection
+    // denial — from the query info captured at the launch. A port with no
+    // live translate (idle, or bypassing) is fault=0 by construction, and
+    // the status is FAULT_NONE whenever there is no fault (self-qualifying).
     // ══════════════════════════════════════════════════════════
     always_comb begin
-        if (a_bypass_q) begin
-            o_a_paddr        = a_vaddr_q;
-            o_a_cacheable    = 1'b0;
-            o_a_hit          = 1'b1;
-            o_a_fault        = 1'b0;
-            o_a_fault_status = 32'b0;
-        end else begin
-            o_a_paddr        = tlb_a_paddr;
-            o_a_cacheable    = tlb_a_cacheable;
-            o_a_hit          = tlb_a_hit;
-            o_a_fault        = tlb_a_fault;
-            o_a_fault_status = tlb_a_fstatus;
-        end
+        o_a_paddr     = a_bypass_q ? a_vaddr_q : tlb_a_paddr;
+        o_a_cacheable = a_bypass_q ? 1'b0      : tlb_a_cacheable;
+        o_a_hit       = a_bypass_q | (a_xlate_q & tlb_a_hit);
+        o_a_fault     = a_xlate_q & (tlb_a_fault | ~tlb_a_hit);
+        o_a_fault_status = o_a_fault
+            ? {20'b0, a_usr_q, a_acc_q, 4'b0, tlb_a_hit ? FAULT_PROT : FAULT_TLB_MISS}
+            : 32'b0;
     end
 
     always_comb begin
-        if (b_bypass_q) begin
-            o_b_paddr        = b_vaddr_q;
-            o_b_cacheable    = 1'b0;
-            o_b_hit          = 1'b1;
-            o_b_fault        = 1'b0;
-            o_b_fault_status = 32'b0;
-        end else begin
-            o_b_paddr        = tlb_b_paddr;
-            o_b_cacheable    = tlb_b_cacheable;
-            o_b_hit          = tlb_b_hit;
-            o_b_fault        = tlb_b_fault;
-            o_b_fault_status = tlb_b_fstatus;
-        end
+        o_b_paddr     = b_bypass_q ? b_vaddr_q : tlb_b_paddr;
+        o_b_cacheable = b_bypass_q ? 1'b0      : tlb_b_cacheable;
+        o_b_hit       = b_bypass_q | (b_xlate_q & tlb_b_hit);
+        o_b_fault     = b_xlate_q & (tlb_b_fault | ~tlb_b_hit);
+        o_b_fault_status = o_b_fault
+            ? {20'b0, b_usr_q, b_acc_q, 4'b0, tlb_b_hit ? FAULT_PROT : FAULT_TLB_MISS}
+            : 32'b0;
     end
 
     // ══════════════════════════════════════════════════════════

@@ -3,7 +3,8 @@
 // Verifies the MMU glue over tlb_unit_bram with its registered timing:
 //   - bypass (identity map) when disabled and on force_bypass
 //   - registered translation when enabled (drive at T, verdict at T+1)
-//   - TLB miss vs protection fault
+//   - TLB miss vs protection fault (both composed by the MMU, Decision 16)
+//   - idle ports never fault
 //   - concurrent A (translate) + B (bypass)
 //   - commit-time FADDR/FSTAT latch (and that it ignores non-commit cycles)
 //   - sysreg: MMUCR read/write, TLB readback passthrough
@@ -14,7 +15,7 @@
 
 enum TlbFlags { TLB_V = 1<<0, TLB_C = 1<<2, TLB_R = 1<<3, TLB_W = 1<<4, TLB_X = 1<<5, TLB_U = 1<<6, TLB_G = 1<<7 };
 enum AccType { ACC_READ = 0b001, ACC_WRITE = 0b010, ACC_EXEC = 0b100 };
-enum FaultType { FAULT_PROT = 0x0002 };
+enum FaultType { FAULT_MISS = 0x0001, FAULT_PROT = 0x0002 };
 enum SysReg { MMU_CR = 0, MMU_FADDR = 1, MMU_FSTAT = 2, MMU_TLB_VPN = 3, MMU_TLB_PTE = 4, MMU_TLB_IDX = 5 };
 
 static int errors = 0, tests = 0;
@@ -99,11 +100,20 @@ int main() {
     Vmmu_bram* d = new Vmmu_bram;
     reset(d);
 
+    // ── Idle ports: no query has run → fault must be 0 by construction ──
+    // (the misuse this contract exists to prevent: an idle port read as a miss)
+    printf("-- idle ports --\n");
+    check_bool("idle A nofault", d->o_a_fault, false);
+    check_bool("idle B nofault", d->o_b_fault, false);
+    check("idle A fstatus none", d->o_a_fault_status, 0);
+    check("idle B fstatus none", d->o_b_fault_status, 0);
+
     // ── Disabled (M=0): identity-map bypass ──
     printf("-- bypass when disabled --\n");
     Verdict r = translate_a(d, 0x12345004, ACC_EXEC, false, true, false);
     check_bool("bypass hit", r.hit, true);
     check_bool("bypass nofault", r.fault, false);
+    check("bypass fstatus none", r.fstatus, 0);
     check("bypass paddr=vaddr", r.paddr, 0x12345004);
     check_bool("bypass uncacheable", r.cacheable, false);
 
@@ -139,18 +149,19 @@ int main() {
     check("conc B paddr (bypass)", d->o_b_paddr, 0x70000040u);
     d->i_a_req = 0; d->i_b_req = 0; d->i_b_force_bypass = 0;
 
-    // ── TLB miss (enabled, unmapped) ──
+    // ── TLB miss (enabled, unmapped): a composed fault ──
     printf("-- miss --\n");
     r = translate_a(d, (0x0001Fu << 12), ACC_EXEC, false, true, false);
     check_bool("miss nohit", r.hit, false);
-    check_bool("miss nofault", r.fault, false);
+    check_bool("miss fault", r.fault, true);
+    check("miss fstatus", r.fstatus, ((uint32_t)ACC_EXEC << 8) | FAULT_MISS);
 
     // ── Protection fault (write to read-only) ──
     printf("-- protection fault --\n");
     write_main(d, 7, 0, 0x00007, 0x0E0, 1, TLB_V | TLB_R);
     r = translate_b(d, (0x00007u << 12), ACC_WRITE, false, true, false);
     check_bool("prot fault", r.fault, true);
-    check("prot fstatus", r.fstatus & 0xF, FAULT_PROT);
+    check("prot fstatus", r.fstatus, ((uint32_t)ACC_WRITE << 8) | FAULT_PROT);
 
     // ── Verdict hold: the T+1 verdict persists across idle cycles ──
     // A stalled consumer (MEM held at its data-ready cycle by WB
@@ -176,7 +187,7 @@ int main() {
         d->i_b_vaddr = 0x5A5A5000;
         tick(d);
         check_bool("hold prot fault", d->o_b_fault, true);
-        check("hold prot fstatus", d->o_b_fault_status & 0xF, FAULT_PROT);
+        check("hold prot fstatus", d->o_b_fault_status, ((uint32_t)ACC_WRITE << 8) | FAULT_PROT);
     }
     // A bypass verdict holds too (the bypass capture gates on the strobe).
     r = translate_b(d, 0x70000040, ACC_READ, false, true, true);

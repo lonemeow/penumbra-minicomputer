@@ -18,7 +18,6 @@ enum TlbFlags {
     TLB_X = 1 << 5, TLB_U = 1 << 6, TLB_G = 1 << 7,
 };
 enum AccType { ACC_READ = 0b001, ACC_WRITE = 0b010, ACC_EXEC = 0b100 };
-enum FaultType { FAULT_PROT = 0x0002 };
 enum SysReg { MMU_TLB_VPN = 3, MMU_TLB_PTE = 4, MMU_TLB_IDX = 5 };
 
 static int errors = 0, tests = 0;
@@ -63,21 +62,21 @@ static void write_pinned(Vtlb_unit_bram* d, int slot, uint32_t vpn,
     wrsys(d, MMU_TLB_PTE, mk_pte(ppn, flags));
 }
 
-struct Verdict { uint32_t paddr; bool hit, fault; uint32_t fstatus; bool cacheable; };
+struct Verdict { uint32_t paddr; bool hit, fault; bool cacheable; };
 
 static Verdict lookup_a(Vtlb_unit_bram* d, uint32_t vaddr, uint8_t acc, bool user, uint8_t asid) {
     idle(d); d->i_asid = asid;
     d->i_a_vaddr = vaddr; d->i_a_access_type = acc; d->i_a_user_mode = user; d->i_a_lookup_en = 1;
     tick(d);
     d->i_a_lookup_en = 0;
-    return { d->o_a_paddr, (bool)d->o_a_hit, (bool)d->o_a_fault, d->o_a_fault_status, (bool)d->o_a_cacheable };
+    return { d->o_a_paddr, (bool)d->o_a_hit, (bool)d->o_a_fault, (bool)d->o_a_cacheable };
 }
 static Verdict lookup_b(Vtlb_unit_bram* d, uint32_t vaddr, uint8_t acc, bool user, uint8_t asid) {
     idle(d); d->i_asid = asid;
     d->i_b_vaddr = vaddr; d->i_b_access_type = acc; d->i_b_user_mode = user; d->i_b_lookup_en = 1;
     tick(d);
     d->i_b_lookup_en = 0;
-    return { d->o_b_paddr, (bool)d->o_b_hit, (bool)d->o_b_fault, d->o_b_fault_status, (bool)d->o_b_cacheable };
+    return { d->o_b_paddr, (bool)d->o_b_hit, (bool)d->o_b_fault, (bool)d->o_b_cacheable };
 }
 // Readback: set TLB_INDEX, then launch the read; main readback lands next cycle.
 static uint32_t readback(Vtlb_unit_bram* d, int index, int reg) {
@@ -148,7 +147,6 @@ int main() {
     printf("-- permission faults --\n");
     r = lookup_a(d, (0x00005u << 12), ACC_WRITE, false, 1);    // pinned RO entry, write
     check_bool("pinned RO write fault", r.fault, true);
-    check("pinned RO fstatus", r.fstatus & 0xF, FAULT_PROT);
     write_main(d, 7, 0, 0x00007, 0x0E0, 1, TLB_V | TLB_R);     // main RO
     r = lookup_a(d, (0x00007u << 12), ACC_WRITE, false, 1);
     check_bool("main RO write fault", r.fault, true);

@@ -3,7 +3,9 @@
 // Pure combinational. Given the two ways of one set (raw VPN/PTE words +
 // the V bit each) and a query (VPN, ASID, access type, user mode, page
 // offset), it produces the translation verdict: paddr, cacheability, hit,
-// and a permission-fault flag + status.
+// and a permission-fault flag. It does not compose FAULT_STATUS — per the
+// detector-composes rule (Decision 16), the MMU wrapper owns that, from its
+// own registered copy of the query.
 //
 // This is the gen2 main TLB's per-lookup cone. The BRAM-backed main TLB
 // (tlb_bram) reads both ways of a set out of dual-port BRAM and feeds them
@@ -41,8 +43,7 @@ module tlb_perm
     output logic [31:0] o_paddr,         // {PPN, page_off} on hit; {0, page_off} otherwise
     output logic        o_cacheable,     // PTE.C of the matching entry
     output logic        o_hit,           // an entry matched
-    output logic        o_fault,         // matched but permission denied
-    output logic [31:0] o_fault_status   // FAULT_PROT + access info (valid when o_fault)
+    output logic        o_fault          // matched but permission denied
 );
 
     // ── Per-way field extraction ───────────────────────────
@@ -79,7 +80,6 @@ module tlb_perm
         o_paddr        = {20'b0, i_page_off};
         o_cacheable    = 1'b0;
         o_fault        = 1'b0;
-        o_fault_status = 32'b0;
 
         if (i_lookup_en) begin
             if (w0_match) begin
@@ -108,10 +108,7 @@ module tlb_perm
             perm_denied = ((matched_rwx & i_access_type) == 3'b0)
                        || (i_user_mode && !matched_u);
 
-            if (matched && perm_denied) begin
-                o_fault        = 1'b1;
-                o_fault_status = {20'b0, i_user_mode, i_access_type, 4'b0, FAULT_PROT};
-            end
+            o_fault = matched && perm_denied;
         end
     end
 

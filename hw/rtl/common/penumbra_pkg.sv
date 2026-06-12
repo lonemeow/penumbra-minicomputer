@@ -318,7 +318,11 @@ package penumbra_pkg;
     localparam logic [3:0] VEC_ARITH     = 4'd10;  // 0x28 — Arithmetic fault (DIV0)
 
     // ── MMU fault status encoding ─────────────────────────────
-    // FAULT_STATUS[3:0] = fault type
+    // FAULT_STATUS[3:0] = fault type. FAULT_NONE makes the status
+    // self-qualifying: a fault that carries no data address (trap, decode
+    // fault) rides the pipeline with FAULT_NONE and leaves the MMU's
+    // FAULT_ADDR/FAULT_STATUS untouched at commit — no side-band valid bit.
+    localparam logic [3:0] FAULT_NONE     = 4'b0000;
     localparam logic [3:0] FAULT_TLB_MISS = 4'b0001;
     localparam logic [3:0] FAULT_PROT     = 4'b0010;
     localparam logic [3:0] FAULT_ALIGN    = 4'b0011;
@@ -329,6 +333,20 @@ package penumbra_pkg;
     localparam int FSTAT_W   = 9;   // Faulting access was write
     localparam int FSTAT_X   = 10;  // Faulting access was execute
     localparam int FSTAT_USR = 11;  // Faulting access was user mode
+
+    // Address-carrying fault types map 1:1 onto exception vectors; the
+    // composed status is the single classification and the vector derives
+    // from it (D-side at MEM, I-side at its fault path). Domain: real fault
+    // types only — there is no "no vector" encoding in 4 bits, so callers
+    // qualify on type != FAULT_NONE before consuming the result.
+    function automatic logic [3:0] fault_vec_of(input logic [3:0] fault_type);
+        case (fault_type)
+            FAULT_TLB_MISS: return VEC_TLB_MISS;
+            FAULT_PROT:     return VEC_TLB_PROT;
+            FAULT_ALIGN:    return VEC_ALIGN;
+            default:        return VEC_BUS_FAULT;  // FAULT_BUS (and out-of-domain)
+        endcase
+    endfunction
 
     // ── TLB entry bit positions (64-bit entry) ────────────────
     // Upper word (TLB_VPN sysreg): {4'b0, VPN[19:0], ASID[7:0]}

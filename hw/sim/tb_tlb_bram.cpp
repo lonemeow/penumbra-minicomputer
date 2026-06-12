@@ -21,7 +21,6 @@ enum TlbFlags {
     TLB_X = 1 << 5, TLB_U = 1 << 6, TLB_G = 1 << 7,
 };
 enum AccType { ACC_READ = 0b001, ACC_WRITE = 0b010, ACC_EXEC = 0b100 };
-enum FaultType { FAULT_PROT = 0x0002 };
 
 static int errors = 0, tests = 0;
 
@@ -67,7 +66,7 @@ static void write_entry(Vtlb_bram* d, int set, int way, uint32_t vpn,
     d->i_write_en = 0;
 }
 
-struct Verdict { uint32_t paddr; bool hit, fault; uint32_t fstatus; bool cacheable; };
+struct Verdict { uint32_t paddr; bool hit, fault; bool cacheable; };
 
 // Port A registered translate.
 static Verdict lookup_a(Vtlb_bram* d, uint32_t vaddr, uint8_t acc,
@@ -79,7 +78,7 @@ static Verdict lookup_a(Vtlb_bram* d, uint32_t vaddr, uint8_t acc,
     tick(d);
     d->i_a_lookup_en = 0;
     return { d->o_a_paddr, (bool)d->o_a_hit, (bool)d->o_a_fault,
-             d->o_a_fault_status, (bool)d->o_a_cacheable };
+             (bool)d->o_a_cacheable };
 }
 
 // Port B registered translate.
@@ -92,7 +91,7 @@ static Verdict lookup_b(Vtlb_bram* d, uint32_t vaddr, uint8_t acc,
     tick(d);
     d->i_b_lookup_en = 0;
     return { d->o_b_paddr, (bool)d->o_b_hit, (bool)d->o_b_fault,
-             d->o_b_fault_status, (bool)d->o_b_cacheable };
+             (bool)d->o_b_cacheable };
 }
 
 // Both ports translate in the same cycle (the dual-port point).
@@ -105,8 +104,8 @@ static void lookup_ab(Vtlb_bram* d, uint32_t va_a, uint32_t va_b, uint8_t asid,
     d->i_a_lookup_en = 1; d->i_b_lookup_en = 1;
     tick(d);
     d->i_a_lookup_en = 0; d->i_b_lookup_en = 0;
-    *ra = { d->o_a_paddr, (bool)d->o_a_hit, (bool)d->o_a_fault, d->o_a_fault_status, (bool)d->o_a_cacheable };
-    *rb = { d->o_b_paddr, (bool)d->o_b_hit, (bool)d->o_b_fault, d->o_b_fault_status, (bool)d->o_b_cacheable };
+    *ra = { d->o_a_paddr, (bool)d->o_a_hit, (bool)d->o_a_fault, (bool)d->o_a_cacheable };
+    *rb = { d->o_b_paddr, (bool)d->o_b_hit, (bool)d->o_b_fault, (bool)d->o_b_cacheable };
 }
 
 // Registered indexed readback — port B only.
@@ -172,7 +171,6 @@ int main() {
     r = lookup_a(d, (0x00007u << 12), ACC_WRITE, false, 1);
     check_bool("RO write hit", r.hit, true);
     check_bool("RO write fault", r.fault, true);
-    check("RO write fstatus", r.fstatus & 0xF, FAULT_PROT);
     r = lookup_a(d, (0x00007u << 12), ACC_READ, false, 1);         // read OK
     check_bool("RO read nofault", r.fault, false);
 

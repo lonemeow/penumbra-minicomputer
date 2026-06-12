@@ -49,7 +49,6 @@ module tlb_bram
     output logic        o_a_cacheable,
     output logic        o_a_hit,
     output logic        o_a_fault,
-    output logic [31:0] o_a_fault_status,
 
     // ── Port B: D-side translate (same registered contract) ──
     input  logic [31:0] i_b_vaddr,
@@ -60,7 +59,6 @@ module tlb_bram
     output logic        o_b_cacheable,
     output logic        o_b_hit,
     output logic        o_b_fault,
-    output logic [31:0] o_b_fault_status,
 
     // ── Indexed write / readback (sysreg, via port B) ──
     input  logic [4:0]  i_idx_set,
@@ -134,8 +132,7 @@ module tlb_bram
         .o_paddr       (o_a_paddr),
         .o_cacheable   (o_a_cacheable),
         .o_hit         (o_a_hit),
-        .o_fault       (o_a_fault),
-        .o_fault_status(o_a_fault_status)
+        .o_fault       (o_a_fault)
     );
 
     // ── Port B address mux + query capture (cycle T) ───────────
@@ -203,8 +200,7 @@ module tlb_bram
         .o_paddr       (o_b_paddr),
         .o_cacheable   (o_b_cacheable),
         .o_hit         (o_b_hit),
-        .o_fault       (o_b_fault),
-        .o_fault_status(o_b_fault_status)
+        .o_fault       (o_b_fault)
     );
 
     // ── Readback select (cycle T+1) — V overridden from the flop vec ──

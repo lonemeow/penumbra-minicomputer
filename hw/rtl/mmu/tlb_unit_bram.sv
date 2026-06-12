@@ -31,6 +31,7 @@
 // readback are combinational off the held index.
 
 // verilator lint_off UNUSEDSIGNAL
+/* verilator lint_off PINCONNECTEMPTY */
 
 module tlb_unit_bram
     import penumbra_pkg::*;
@@ -48,7 +49,6 @@ module tlb_unit_bram
     output logic        o_a_cacheable,
     output logic        o_a_hit,
     output logic        o_a_fault,
-    output logic [31:0] o_a_fault_status,
 
     // ── Port B: D-side translate (same registered contract) ──
     input  logic [31:0] i_b_vaddr,
@@ -59,7 +59,6 @@ module tlb_unit_bram
     output logic        o_b_cacheable,
     output logic        o_b_hit,
     output logic        o_b_fault,
-    output logic [31:0] o_b_fault_status,
 
     // ── Sysreg interface (regs 3-5) ──
     input  logic [3:0]  i_sys_reg,
@@ -106,9 +105,9 @@ module tlb_unit_bram
     // ══════════════════════════════════════════════════════════
     // Main TLB (BRAM, dual-port, registered)
     // ══════════════════════════════════════════════════════════
-    logic [31:0] main_a_paddr, main_a_fstatus;
+    logic [31:0] main_a_paddr;
     logic        main_a_cacheable, main_a_hit, main_a_fault;
-    logic [31:0] main_b_paddr, main_b_fstatus;
+    logic [31:0] main_b_paddr;
     logic        main_b_cacheable, main_b_hit, main_b_fault;
     logic [31:0] main_read_vpn, main_read_pte;
 
@@ -118,12 +117,10 @@ module tlb_unit_bram
         .i_a_user_mode(i_a_user_mode), .i_a_lookup_en(i_a_lookup_en),
         .o_a_paddr(main_a_paddr), .o_a_cacheable(main_a_cacheable),
         .o_a_hit(main_a_hit), .o_a_fault(main_a_fault),
-        .o_a_fault_status(main_a_fstatus),
         .i_b_vaddr(i_b_vaddr), .i_b_access_type(i_b_access_type),
         .i_b_user_mode(i_b_user_mode), .i_b_lookup_en(i_b_lookup_en),
         .o_b_paddr(main_b_paddr), .o_b_cacheable(main_b_cacheable),
         .o_b_hit(main_b_hit), .o_b_fault(main_b_fault),
-        .o_b_fault_status(main_b_fstatus),
         .i_idx_set(tlb_index_reg[4:0]), .i_idx_way(tlb_index_reg[5]),
         .i_write_vpn(tlb_vpn_reg), .i_write_pte(i_sys_wdata),
         .i_write_en(main_write_en), .i_read_en(main_read_en),
@@ -133,9 +130,12 @@ module tlb_unit_bram
     // ══════════════════════════════════════════════════════════
     // Pinned TLB (flops, dual-lookup, combinational)
     // ══════════════════════════════════════════════════════════
-    logic [31:0] pin_a_paddr, pin_a_fstatus;
+    // The shared tlb_pinned composes a fault status for gen1's consumers;
+    // the gen2 path leaves those pins unconnected (the MMU wrapper composes
+    // status itself, per Decision 16).
+    logic [31:0] pin_a_paddr;
     logic        pin_a_cacheable, pin_a_hit, pin_a_fault;
-    logic [31:0] pin_b_paddr, pin_b_fstatus;
+    logic [31:0] pin_b_paddr;
     logic        pin_b_cacheable, pin_b_hit, pin_b_fault;
     logic [31:0] pin_read_vpn, pin_read_pte;
 
@@ -147,11 +147,11 @@ module tlb_unit_bram
         .i_vaddr(i_a_vaddr), .i_access_type(i_a_access_type),
         .i_user_mode(i_a_user_mode), .i_lookup_en(i_a_lookup_en),
         .o_paddr(pin_a_paddr), .o_cacheable(pin_a_cacheable),
-        .o_hit(pin_a_hit), .o_fault(pin_a_fault), .o_fault_status(pin_a_fstatus),
+        .o_hit(pin_a_hit), .o_fault(pin_a_fault), .o_fault_status(),
         .i_b_vaddr(i_b_vaddr), .i_b_access_type(i_b_access_type),
         .i_b_user_mode(i_b_user_mode), .i_b_lookup_en(i_b_lookup_en),
         .o_b_paddr(pin_b_paddr), .o_b_cacheable(pin_b_cacheable),
-        .o_b_hit(pin_b_hit), .o_b_fault(pin_b_fault), .o_b_fault_status(pin_b_fstatus),
+        .o_b_hit(pin_b_hit), .o_b_fault(pin_b_fault), .o_b_fault_status(),
         .i_idx(tlb_index_reg[PINNED_IDX_W-1:0]),
         .i_write_vpn(tlb_vpn_reg), .i_write_pte(i_sys_wdata),
         .i_write_en(pin_write_en),
@@ -164,9 +164,9 @@ module tlb_unit_bram
     // pinned hit is presented before the first real lookup; the data is
     // consumed only when the hit bit is set, so it needs no reset.
     // ══════════════════════════════════════════════════════════
-    logic [31:0] pin_a_paddr_q, pin_a_fstatus_q;
+    logic [31:0] pin_a_paddr_q;
     logic        pin_a_cacheable_q, pin_a_hit_q, pin_a_fault_q;
-    logic [31:0] pin_b_paddr_q, pin_b_fstatus_q;
+    logic [31:0] pin_b_paddr_q;
     logic        pin_b_cacheable_q, pin_b_hit_q, pin_b_fault_q;
 
     // Captured on the lookup strobe and held otherwise, so the combined
@@ -183,13 +183,11 @@ module tlb_unit_bram
             pin_a_paddr_q     <= pin_a_paddr;
             pin_a_cacheable_q <= pin_a_cacheable;
             pin_a_fault_q     <= pin_a_fault;
-            pin_a_fstatus_q   <= pin_a_fstatus;
         end
         if (i_b_lookup_en) begin
             pin_b_paddr_q     <= pin_b_paddr;
             pin_b_cacheable_q <= pin_b_cacheable;
             pin_b_fault_q     <= pin_b_fault;
-            pin_b_fstatus_q   <= pin_b_fstatus;
         end
     end
 
@@ -202,13 +200,11 @@ module tlb_unit_bram
             o_a_cacheable    = pin_a_cacheable_q;
             o_a_hit          = 1'b1;
             o_a_fault        = pin_a_fault_q;
-            o_a_fault_status = pin_a_fstatus_q;
         end else begin
             o_a_paddr        = main_a_paddr;
             o_a_cacheable    = main_a_cacheable;
             o_a_hit          = main_a_hit;
             o_a_fault        = main_a_fault;
-            o_a_fault_status = main_a_fstatus;
         end
     end
 
@@ -218,13 +214,11 @@ module tlb_unit_bram
             o_b_cacheable    = pin_b_cacheable_q;
             o_b_hit          = 1'b1;
             o_b_fault        = pin_b_fault_q;
-            o_b_fault_status = pin_b_fstatus_q;
         end else begin
             o_b_paddr        = main_b_paddr;
             o_b_cacheable    = main_b_cacheable;
             o_b_hit          = main_b_hit;
             o_b_fault        = main_b_fault;
-            o_b_fault_status = main_b_fstatus;
         end
     end
 
@@ -254,4 +248,5 @@ module tlb_unit_bram
 
 endmodule
 
+/* verilator lint_on PINCONNECTEMPTY */
 // verilator lint_on UNUSEDSIGNAL
