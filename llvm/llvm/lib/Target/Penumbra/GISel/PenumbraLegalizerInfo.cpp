@@ -186,7 +186,9 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   // = loaded value, high = 0 or SAR replication).  Anything left after
   // clamping that doesn't match the legalFor set (e.g. dst==mem after
   // clamping a wider dst down to s32 over an s32 load) is lowered to a
-  // plain G_LOAD + extension.  s128 is not yet supported.  Unaligned
+  // plain G_LOAD + extension.  Memory types wider than s32 (e.g. the
+  // G_ZEXTLOAD s128 ← s64 the extload combine forms when a load feeds a
+  // wide-multiply zext) take the explicit lowerIf below instead.  Unaligned
   // extending loads split via the helper, same as G_LOAD.
   getActionDefinitionsBuilder({G_SEXTLOAD, G_ZEXTLOAD})
       .legalForTypesWithMemDesc({
@@ -194,6 +196,14 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
         {s32, p0, s8,   8},
       })
       .lowerIf(isUnaligned)
+      // An extending load whose memory type is wider than register width
+      // can never stay an extending load: the destination cannot be
+      // clamped below the memory size (narrowScalar of such a load fails).
+      // Lower to a plain G_LOAD (narrowed to s32 pieces by its own rule)
+      // plus an extension (narrowed by the extension rules).
+      .lowerIf([](const LegalityQuery &Q) {
+        return Q.MMODescrs[0].MemoryTy.getSizeInBits() > 32;
+      })
       .widenScalarToNextPow2(0, /* MinSize = */ 32)
       .clampScalar(0, s32, s32)
       .lower();
@@ -279,7 +289,7 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   getActionDefinitionsBuilder({G_ZEXT, G_SEXT, G_ANYEXT})
       .legalForCartesianProduct({s8, s16, s32}, {s1, s8, s16})
       .widenScalarToNextPow2(0, 32)
-      .narrowScalarIf(typeIs(0, s64), changeTo(0, s32));
+      .narrowScalarIf(scalarWiderThan(0, 32), changeTo(0, s32));
 
   // Unsigned division/remainder: custom-lower s32 to catch power-of-2 constants
   // (SHR for udiv, AND for urem — cheaper than a 34-cycle divide); the custom

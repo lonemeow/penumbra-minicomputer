@@ -4209,11 +4209,24 @@ LegalizerHelper::LegalizeResult LegalizerHelper::lowerLoad(GAnyLoad &LoadMI) {
   } else {
     // This is already a power of 2, but we still need to split this in half.
     //
-    // Assume we're being asked to decompose an unaligned load.
+    // If the access itself is allowed, we were asked to lower an extending
+    // load whose result type is not legal: emit a memory-width load and a
+    // separate extension instead.  Otherwise assume we're being asked to
+    // decompose an unaligned load.
     // TODO: If this requires multiple splits, handle them all at once.
     auto &Ctx = MF.getFunction().getContext();
-    if (TLI.allowsMemoryAccess(Ctx, MIRBuilder.getDataLayout(), MemTy, MMO))
+    if (TLI.allowsMemoryAccess(Ctx, MIRBuilder.getDataLayout(), MemTy, MMO)) {
+      if (DstTy.getSizeInBits() > MemSizeInBits) {
+        auto NewLoad = MIRBuilder.buildLoad(MemTy, PtrReg, MMO);
+        unsigned ExtOpc = isa<GSExtLoad>(LoadMI)   ? TargetOpcode::G_SEXT
+                          : isa<GZExtLoad>(LoadMI) ? TargetOpcode::G_ZEXT
+                                                   : TargetOpcode::G_ANYEXT;
+        MIRBuilder.buildInstr(ExtOpc, {DstReg}, {NewLoad});
+        LoadMI.eraseFromParent();
+        return Legalized;
+      }
       return UnableToLegalize;
+    }
 
     SmallSplitSize = LargeSplitSize = MemSizeInBits / 2;
   }
