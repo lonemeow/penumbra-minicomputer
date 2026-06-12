@@ -86,19 +86,21 @@ teach what each remaining optimization individually buys.
 Penumbra/1 has reached the natural ceiling of its single-cycle
 microcoded architecture:
 
-- **Fmax** is capped at ~28-30 MHz on the ULX3S (ECP5-85F sg6)
-  because the critical path is the full single-cycle datapath
-  (µROM → decode → regfile → ALU → flag capture, ~33 ns). System
-  clock runs at 25 MHz with ~14% margin. Further gains require
-  *splitting the cycle* — i.e., pipelining.
+- **Fmax** is capped by the full single-cycle datapath
+  (µROM → decode → regfile → ALU → flag capture) forming one
+  combinational cone: RTL work can move the limiter around inside
+  the cone but cannot shorten the cone itself. Further gains
+  require *splitting the cycle* — i.e., pipelining.
 - **L1 cache** is capped at ~1 KB because the distributed-RAM
   storage that lets the gen1 cache hit combinationally doesn't
   scale past that without LUT explosion. Larger caches need BRAM,
   which has registered output and forces multi-cycle access.
 - **CPI** is locked at 1.0 by definition (single-cycle), but the
   achievable clock is so low that the wall-clock performance is
-  modest. A pipelined design with ~2 CPI at 50 MHz wins over
-  single-cycle 1 CPI at 25 MHz by a factor of 1.5×.
+  modest. A pipelined design at ~2 CPI needs ~2× the clock just to
+  break even — the real payoff is the headroom it opens: forwarding
+  and prediction then convert the clock surplus into wall-clock
+  wins the single-cycle design structurally cannot reach.
 
 Penumbra/2 takes the natural next step: pipeline the design, use
 BRAM for caches, drop the discrete-74xx feasibility constraint
@@ -198,7 +200,7 @@ back-pressure cascade holds; downstream drains naturally.
 
 | Metric | gen2 target | gen2 realistic | gen2.5 target | Reference |
 |--------|-----------|---------------|---------------|-----------|
-| Fmax | ≥25 MHz | ~50-60 MHz (cache no longer in critical path) | ≥50 MHz | gen1 sits at ~30 MHz |
+| Fmax | ≥ gen1's clock | ~2× gen1 (cache no longer in critical path) | ≥2× gen1 | gen1's ceiling is the single-cycle cone |
 | CPI on tight loops, cache hit | ~2.0 | ~2.5-3.0 (no forwarding) | ~1.2-1.5 | gen1 is 1.0 at lower clock |
 | CPI on CMP+Bcc heavy code | — | ~1.2 (flags forwarded; taken-branch flush remains) | ~1.0-1.1 (+prediction) | — |
 | I-cache size | 4 KB | 4 KB | 8-16 KB | gen1 is 1 KB |
@@ -206,9 +208,9 @@ back-pressure cascade holds; downstream drains naturally.
 | Load-use stall | 4 | 4 (no forwarding) | 1 (with forwarding) | — |
 
 Wall-clock performance comparison vs gen1 depends entirely on the
-fmax achieved. At 50 MHz with ~2.5 CPI, gen2 ≈ gen1's 25 MHz
-with 1.0 CPI = ~roughly even. The win comes in gen2.5 once
-forwarding lands and CPI drops toward 1.2.
+fmax achieved. At ~2× gen1's clock with ~2.5 CPI, gen2 lands
+roughly even with gen1. The win comes in gen2.5 once forwarding
+lands and CPI drops toward 1.2.
 
 ## gen2 / gen2.5 / future roadmap
 
