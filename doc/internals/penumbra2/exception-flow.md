@@ -142,7 +142,7 @@ exceptions precise.
 
 | Vector | Detected in | How |
 |--------|-------------|-----|
-| `VEC_TLB_MISS`, `VEC_TLB_PROT` (fetch) | IF1/IF2 | I-side TLB lookup miss / protection bits on the fetch translation |
+| `VEC_TLB_MISS`, `VEC_TLB_PROT` (fetch) | IF2 | I-side TLB verdict (registered lookup launched in IF1) — miss / protection on the fetch translation |
 | `VEC_ALIGN` (fetch) | IF1 | PC not 4-aligned |
 | `VEC_BUS_FAULT` (fetch) | IF2 | Fetch access to an unbacked physical address |
 | `VEC_ILLEGAL` | ID / EX | Decoder finds no legal opcode/operand form |
@@ -391,11 +391,16 @@ gen2 implements the delay with an `ei_shadow` flip-flop:
 - `EI` commits (drain-commit): sets `SR.I = 1` **and** `ei_shadow = 1`.
 - While `ei_shadow = 1`, IF1 suppresses IRQ recognition even though
   `SR.I = 1`.
-- `ei_shadow` clears after the next instruction is fetched, so
-  exactly one instruction runs in the shadow.
+- `ei_shadow` clears when the next instruction **completes** — its
+  retirement at WB, or its drain-commit at EX for instructions that
+  never reach WB (`ERET`) — so exactly one instruction runs in the
+  shadow. Clearing on fetch would open the IRQ window while a
+  stalled shadowed instruction (e.g. an `ERET` waiting on a drain)
+  is still in flight, breaking the very atomicity the shadow exists
+  to provide.
 
 Because `EI` drain-commits, the pipeline is empty when it commits,
-so "the next instruction" is unambiguously the single next fetch —
+so "the next instruction" is unambiguously the next one fetched —
 the shadow is **one architectural instruction deep regardless of
 pipeline depth**. This makes two idioms work identically on gen1 and
 gen2:
@@ -513,22 +518,20 @@ selected by the exception class:
 |-------|-----------|-----------|
 | Fault | the committing instruction's PC | Handler fixes the cause and retries the same instruction |
 | Interrupt | the next-fetch PC (boundary) | The interrupted stream completed; resume at the next instruction |
-| Trap (`SYSCALL`/`BREAK`) | **see note** | — |
+| Trap (`SYSCALL`/`BREAK`) | the committing instruction's PC | Handler advances `EPC` by 4 before `ERET`; leaving it restarts the trap (syscall restart) |
 
 The class is a property of the vector, decodable from `fault_vec`,
 so the EPC-source select is a small combinational function of the
 committing fault tag — no extra state.
 
-**Open trap note.** The gen1 ISA text
-([architecture.md](../../system/architecture.md) § Entry Sequence)
-says a software trap saves "the next instruction," while the gen1
-microcode ([microcode.md](../../internals/penumbra1/microcode.md)) points EPC
-at the `SYSCALL` instruction itself and has the handler advance
-`EPC + 4` before `ERET`. These produce the same return address only
-if the handler's convention matches the hardware's. gen2 must adopt
-whichever convention the live NetBSD trap path
-(`netbsd/sys/arch/penumbra/penumbra/trap.c` and the syscall stub)
-actually relies on — this is a verification item, listed in [Worked timing examples](#worked-timing-examples), not a free choice.
+**Trap EPC convention.** Traps follow the fault convention: a trap
+rides its `is_trap` mark out of ID, merges into the fault tag at EX,
+and commits at WB with `EPC` ← the trap instruction's **own** PC.
+The handler advances `EPC` by 4 before `ERET` — exactly what the
+NetBSD syscall path does (`tf_epc += 4`, rewound for `ERESTART`) and
+what the gen1 microcode established. The ISA contract is stated in
+[architecture.md](../../system/architecture.md) (Exception Model,
+entry sequence).
 
 ## TLB-miss fast path interaction
 
@@ -634,18 +637,10 @@ restored context.
 
 ## Open points / verification items
 
-- **Trap EPC convention** ([EPC classification (faulting-PC vs next-PC)](#epc-classification-faulting-pc-vs-next-pc)): reconcile the ISA-text vs
-  microcode disagreement against the live NetBSD `trap.c`/syscall
-  stub before fixing gen2's trap EPC source.
 - **Arbitration realisation** ([How the order is realised: structure first, small muxes second](#how-the-order-is-realised-structure-first-small-muxes-second)): the total order is
   specified, but the RTL-time partition between vectors wired
   directly from their sole detection point and vectors selected by a
   local priority mux is left to when the stages are written.
-- **`ei_shadow` clear timing under back-to-back IF stalls**: confirm
-  the shadow clears after one *fetched* instruction even if that
-  fetch is itself stalled (cache miss on the shadowed instruction) —
-  the shadow should track instruction *retirement of the shadowed
-  fetch*, not raw cycles.
 - **Alignment vs fetch**: gen1 lumps fetch and data misalignment
   into `VEC_ALIGN`; confirm gen2 keeps a single vector and
   distinguishes via `FAULT_STATUS` rather than splitting.

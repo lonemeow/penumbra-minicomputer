@@ -37,17 +37,21 @@ driving differs — see [Driving the Unit](#driving-the-unit-per-generation).
 
 | Signal              | Direction      | Purpose                                                  |
 |---------------------|----------------|----------------------------------------------------------|
-| `i_a_bus[31:0]`     | CPU → divmul   | First operand: multiplier / dividend                      |
-| `i_b_bus[31:0]`     | CPU → divmul   | Second operand: multiplicand / divisor                    |
-| `i_op[1:0]`         | CPU → divmul   | MUL (00), MULU (01), DIV (10), DIVU (11)                  |
+| `i_a[31:0]`         | CPU → divmul   | First operand: multiplier / dividend                      |
+| `i_b[31:0]`         | CPU → divmul   | Second operand: multiplicand / divisor                    |
+| `i_op[4:0]`         | CPU → divmul   | Operation select, in the core-internal ALU-field encoding: MUL `01101`, MULU `01110`, DIV `01111`, DIVU `10000` |
 | `i_start`           | CPU → divmul   | 1-cycle pulse — latch operands, begin iteration           |
 | `o_busy`            | divmul → CPU   | Held high during iteration; falling edge = done           |
 | `o_fault`           | divmul → CPU   | DIV0 detected; raises `VEC_ARITH`                         |
 | `o_result_lo[31:0]` | divmul → W-bus | Low half  (quotient / product low)                        |
 | `o_result_hi[31:0]` | divmul → W-bus | High half (remainder / product high)                      |
-| `o_n`, `o_z`        | divmul → SR    | Flag outputs (latched on `flag_w_en` in writeback)        |
+| `o_flag_n`, `o_flag_z` | divmul → SR | Flag outputs (latched on `flag_w_en` in writeback)        |
 
-Operand latching is single-cycle: the CPU drives `i_a_bus` and `i_b_bus`
+The op encoding is the gen1 microcode ALU field, carried directly by
+the micro-word; gen2's EX stage decodes its 2-bit ISA sub-opcode
+selector into the same 5-bit codes before driving the unit.
+
+Operand latching is single-cycle: the CPU drives `i_a` and `i_b`
 simultaneously, pulses `i_start`, and the unit captures both. Two
 operand reads are all the regfile (2R/1W) can supply in one cycle; the
 third operand `Rdh` names only the *destination* for the high half and
@@ -141,28 +145,28 @@ product if signs differed. Two extra cycles. (Booth's algorithm
 eliminates the negate cycles but adds gates; skip it for the first
 implementation.)
 
-## Division — non-restoring (unsigned)
+## Division — restoring with borrow select (unsigned)
 
 ```
 for iter in 32:
     {accum_hi, accum_lo} ← {accum_hi, accum_lo} << 1
-    if accum_hi[31] == 0:                 ; previous step did not borrow
-        accum_hi ← accum_hi - divisor
-    else:
-        accum_hi ← accum_hi + divisor
-
-    accum_lo[0] ← ~accum_hi[31]           ; quotient bit
-final_correction:
-    if accum_hi[31] == 1:                 ; last step over-subtracted
-        accum_hi ← accum_hi + divisor
+    diff[32:0] ← {1'b0, accum_hi} - {1'b0, divisor}
+    if diff[32] == 0:                     ; no borrow — divisor fits
+        accum_hi ← diff[31:0]
+        accum_lo[0] ← 1                   ; quotient bit
+    else:                                 ; borrow — keep pre-subtract value
+        accum_lo[0] ← 0
 ```
 
-After 32 iterations + final correction, `accum_lo` is the quotient and
-`accum_hi` is the remainder.
+After 32 iterations, `accum_lo` is the quotient and `accum_hi` is the
+remainder — there is no final correction step.
 
-Non-restoring saves the per-iteration register write that restoring
-division does on every failed subtraction — same iteration count,
-fewer gates in discrete (~3 chips saved vs restoring).
+The "restore" costs nothing here: the subtractor's result and the
+pre-subtract value are both present, and the 33-bit borrow simply
+selects which one is registered — one mux, no extra cycle, no second
+adder pass. (Classic non-restoring division avoids the restore by
+alternating add/subtract steps plus a final correction; with the
+borrow-select formulation the restoring form needs neither.)
 
 For **signed** DIV: iterate on |dividend|, |divisor|, then apply C99
 sign rules, negating quotient and remainder *independently* (they are
@@ -194,14 +198,15 @@ special-casing in either core.
 
 ## Arithmetic Faults — `VEC_ARITH`
 
-`o_fault` is combinational from the start cycle: the unit knows
-immediately whether to fault (divisor is zero). A faulting divide does
-not iterate. The contract to the CPU is generation-neutral: while
-`busy`, hold; when `busy` falls with `o_fault=0`, proceed and commit
-the result; when `busy` falls with `o_fault=1`, raise `VEC_ARITH`
-instead of committing. Because the divisor-zero test is combinational
-at start, a faulting divide can signal on the same cycle without
-iterating.
+`o_fault` is a **single-cycle pulse on the start cycle**: the
+divisor-zero test is combinational, so a faulting divide never
+asserts `o_busy` and never iterates. The contract to the CPU is
+generation-neutral: a start that pulses `o_fault` commits nothing and
+raises `VEC_ARITH`; a start without it proceeds normally — hold while
+`busy`, commit the result when `busy` falls. The fault indication
+must be a pulse, not a held level: the CPU latches it at start, and a
+persisting `o_fault` would re-trigger the trap after the pending
+latch clears.
 
 EPC points at the trapping `DIV` instruction. The kernel handler
 delivers `SIGFPE` and leaves EPC alone, so a userland `SIGFPE` handler
@@ -305,15 +310,20 @@ worth it for the first build.
 - **Penumbra/1 driving:** microcode implemented. Dispatch slots 0x40
   (MUL), 0x42 (MULU), 0x44 (DIV), 0x46 (DIVU) hold the 3-µop routines
   with a shared high-half writeback tail at 0x49; the sequencer drives
-  `divmul_start` (reusing the old `alu_start` field bit), stalls on
+  `divmul_start`, stalls on
   `i_divmul_busy`, aborts on `o_fault → VEC_ARITH`, and routes results
   through the `wb_src` mux (`DML_LO`/`DML_HI`).
+- **Penumbra/2 driving:** EX hosts the unit behind the same
+  start/busy handshake, decoding the 2-bit ISA sub-opcode selector
+  into the 5-bit op codes; the two result halves sequence through the
+  single regfile write port at WB.
 - **ISS:** implements MUL/MULU/DIV/DIVU end-to-end with both halves and
   `VEC_ARITH` (`sw/sim/penumbra_iss.cpp`).
-- **LLVM backend:** open work (`doc/TODO.md`). Today every 32-bit MUL/
-  DIV/REM still libcalls — when the backend lowers `G_MUL`/`G_*DIV`/
-  `G_*REM`/`G_*DIVREM` at s32 directly to the new instructions, real C
-  code starts using the hardware unit.
+- **LLVM backend:** lowers s32 multiply/divide to the unit — `G_MUL`
+  selects `MUL`; `G_SDIV`/`G_SREM` select directly; `G_UDIV`/`G_UREM`
+  strength-reduce power-of-two constants and select `DIVU` otherwise;
+  `G_SDIVREM`/`G_UDIVREM` select the paired-destination form. 64-bit
+  operations remain compiler-rt libcalls.
 
 ## See Also
 

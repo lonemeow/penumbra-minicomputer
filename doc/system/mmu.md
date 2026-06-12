@@ -161,7 +161,7 @@ code page, the page directory base, and optionally the kernel stack.
 | `TLB_INDEX` | Selects |
 |-------------|---------|
 | `0x00`–`0x3F` | Main TLB slot 0–63 (bit 6 = 0) |
-| `0x40`–`0x43` | Pinned slot 0–3 (bit 6 = 1, bits 1:0 select slot) |
+| `0x40`–`0x47` | Pinned slot 0–7 (bit 6 = 1, bits 2:0 select slot) |
 
 ### Loading an Entry
 
@@ -299,9 +299,11 @@ live in the pinned TLB:
 | Pinned slot | Maps                        | Purpose                             |
 |:-----------:|-----------------------------|-------------------------------------|
 | 0           | Pinned vector page          | Miss-handler code, scratch save area, PD pointer |
-| 1           | Page global directory       | First-level walk (updated on context switch) |
+| 1           | Kernel page directory       | First-level walk for kernel VAs (pinned once at boot, never changes) |
 | 2           | L2 page-table window        | Scratch window for walking L2 pages |
 | 3           | Kernel stack / reserved     | Port-specific                       |
+| 4           | Current user L1 table       | First-level walk for user VAs (re-pinned on context switch; NetBSD's `PTLB_USER_L1`) |
+| 5–7         | Free                        | Port-specific                       |
 
 The pinned vector page is mapped at a port-chosen virtual address
 (the NetBSD port uses `0xFFFFB000`); it is **not** at virtual 0, and
@@ -339,7 +341,8 @@ decide which pages need writing.
 2. Flush the main TLB (software loop, ~320 instructions).
 3. Stash the new PD base pointer on the pinned vector page (the
    miss handler reads it from there).
-4. Update pinned slot 1 (PGD) to point to the new page directory.
+4. Re-pin the incoming process's user page-table root (slot 4 in
+   the NetBSD layout). The kernel PD pin (slot 1) never changes.
 5. Restore incoming process state.
 6. `ERET` — first fetches TLB-miss and are loaded on demand.
 
@@ -347,7 +350,8 @@ decide which pages need writing.
 
 1. Save outgoing process state.
 2. Set `MMUCR.ASID` to the incoming process's ASID.
-3. Write the new PD base pointer; update pinned slot 1.
+3. Write the new PD base pointer; re-pin the user page-table root
+   (slot 4 in the NetBSD layout — the kernel PD pin is permanent).
 4. Restore incoming state; `ERET`.
 
 No TLB flush needed — entries from different ASIDs coexist. Kernel

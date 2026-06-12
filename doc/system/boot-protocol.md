@@ -21,9 +21,9 @@ early boot firmware.
             │ physical pointer to Boot Data (R1)
  ┌──────────▼────────────┐ 
  │  Stage 2: PENBOOT.ELF │ PIE self-relocation, NetBSD bootinfo setup
- │  (Loader)             │ Load netbsd kernel, Enable MMU
+ │  (Loader)             │ Load netbsd kernel (MMU stays off)
  └──────────┬────────────┘
-            │ virtual pointer to bootinfo (R1)
+            │ physical bootinfo (R1), physical kernel entry (R2)
  ┌──────────▼────────────┐ 
  │  Stage 3: netbsd      │ Early locore.S, pmap/UVM setup
  │  (Kernel)             │ Device attachment, mount /dev/ld0f
@@ -65,8 +65,9 @@ and `go` commands provide raw sector reads and direct address
 jumps.
 
 **Environment:** Physical addressing, supervisor mode, no MMU.
-Stack in low RAM (page 2+).  The boot ROM is OS-agnostic — it
-knows nothing about NetBSD or any other OS.
+Stack top at `0x2000`, growing down into page 1 (pages 0–1 are the
+reserved low-RAM region; general RAM starts at page 2).  The boot
+ROM is OS-agnostic — it knows nothing about NetBSD or any other OS.
 
 **Boot data:** The ROM writes a Penumbra-specific boot data
 structure (see below) to a well-known physical address before
@@ -84,46 +85,32 @@ that processes `R_PENUMBRA_32` relocations via PT_DYNAMIC.
 **Responsibilities:**
 - Load the kernel image from the FAT32 boot partition into RAM
   at whatever physical address is available
-- Enable the MMU and create initial TLB mappings:
-  - Map the kernel's physical load address to its link virtual
-    address (at least enough pages for the kernel to reach its
-    own TLB setup code)
-  - Optionally pre-map additional regions the kernel needs
-    during very early init
 - Translate Penumbra boot data into NetBSD `bootinfo` structures
   (or equivalent for other OSes)
-- Jump to the kernel entry point with MMU enabled,
-  R1 = bootinfo pointer (virtual)
-
-**Why enable MMU here (not in kernel)?**
-NetBSD (like most Unix kernels) is linked to run at a fixed
-virtual address to avoid runtime relocation.  On Penumbra, we
-cannot guarantee that any specific *physical* address range is
-available — the amount of base RAM varies, and future
-configurations may have different memory maps.  By enabling the
-MMU in the bootloader:
-- The kernel can be loaded at whatever physical address is
-  available
-- The bootloader creates a virtual mapping at the kernel's link
+- Jump to the kernel's **physical** entry point with the **MMU
+  off**: R1 = physical bootinfo pointer, R2 = physical entry
   address
-- The kernel starts executing in a known virtual address space
-- No relocation support is needed in the kernel
 
-This matches how MIPS NetBSD boots (firmware sets up initial
-TLB, kernel takes over pmap).
+**Why the kernel enables the MMU itself (not the loader):**
+NetBSD (like most Unix kernels) is linked to run at a fixed
+virtual address, but on Penumbra no specific *physical* address
+range can be guaranteed — the amount of base RAM varies, and
+future configurations may have different memory maps.  The kernel
+therefore begins with a small position-independent stub in
+`locore.S`: running from its physical load address, it builds the
+initial two-level page table in physical mode (mapping the
+kernel's load region to its link address), installs the pinned
+TLB entries, enables the MMU, and jumps to its own virtual
+address.  Unlike MIPS there is no untranslated KSEG window —
+Penumbra's MMU is pure TLB — so this stub is the only code that
+ever runs untranslated.  Keeping the whole MMU bring-up on the
+kernel side gives translation state a single owner: the loader
+never creates mappings the kernel would then have to discover and
+tear down, and the loader stays OS-agnostic.  (See the Resolved
+Decisions list below.)
 
-**Initial TLB setup:** The bootloader must map at least enough
-of the kernel for it to reach its own TLB initialization code
-in `locore.S`.  Unlike MIPS (which has hardwired KSEG0/KSEG1
-segments that bypass TLB), Penumbra's MMU is pure TLB — there
-is no untranslated window.  The kernel's very first instructions
-execute through TLB entries set up by the bootloader.  How many
-pages need pre-mapping depends on how much code runs before the
-kernel establishes its own mappings; this will be determined
-during the port.
-
-**Environment:** Starts in physical mode.  Enables MMU before
-jumping to kernel.  Still supervisor mode.
+**Environment:** Physical addressing throughout — MMU off at
+entry and at the jump to the kernel.  Still supervisor mode.
 
 ## Kernel
 
@@ -142,8 +129,8 @@ jumping to kernel.  Still supervisor mode.
 ### Passing Convention
 
 Boot data and load information are passed through the entire chain via registers:
-- **R1:** Holds a physical pointer to the boot data tagged list in RAM.
-- **R2:** Holds the physical entry point of the loaded binary (Stage 2 or Stage 3).
+- **R1:** Holds a physical pointer to the boot data tagged list in RAM (set at every handoff).
+- **R2:** Holds the physical entry point of the loaded binary. Set only at the loader → kernel handoff; **undefined at loader entry** (the ROM's `boot`/`go` jump passes R1 alone).
 
 Each stage may append entries to the tagged list before passing the pointer in R1 forward.
 
@@ -232,7 +219,14 @@ The boot loader translates Penumbra boot data into NetBSD's
 keeps the firmware chain OS-independent — a different OS or
 bare-metal program can ignore the translation step.
 
-TODO: Map Penumbra boot data fields to NetBSD `bootinfo` tags (`BTINFO_MEMORY`, `BTINFO_CONSOLE`, `BTINFO_BOOTDEV`, etc.).
+The loader maps Penumbra boot data onto NetBSD `bootinfo` tags
+(`BTINFO_MEMORY`, `BTINFO_CONSOLE`, `BTINFO_BOOTPATH`, …) and adds
+loader-generated entries with no BTAG counterpart: `BTINFO_SYMTAB`
+(kernel symbol table, for DDB) and `BTINFO_KERNBASE`.  A `root=`
+line in `boot.cfg` on the boot partition becomes
+`BTINFO_ROOTDEVICE` — how shipped images reach single-user with no
+prompts.  The authoritative tag list is the loader source,
+`netbsd/sys/arch/penumbra/stand/boot/boot.c`.
 
 ## Storage Layout (SD Card)
 
@@ -246,7 +240,7 @@ Target layout for the ULX3S SD card:
 ├─────────────────────────────────────┤
 │ Partition 1: FAT32                  │  Boot loader + kernel image
 │   PENBOOT.ELF                       │  Boot loader (PIE ELF, loaded by ROM)
-│   PENUMBRA                          │  Kernel image (loaded by boot loader)
+│   netbsd [.gz]                      │  Kernel (loader searches netbsd, netbsd.gz)
 ├─────────────────────────────────────┤
 │ Partition 2: UFS/FFS                │  Root filesystem
 │   NetBSD root (/, /etc, /bin, ...)  │
@@ -275,7 +269,7 @@ Target layout for the ULX3S SD card:
 
 6. **SD card naming:** ROM monitor uses `sd:<controller>,<cs>[:<partition>]` syntax. `controller` is the index among SD-class devices (not the global device index), `cs` is the chip-select pin (0 or 1), optional `partition` (1-based) enables partition-relative LBA addressing. The ROM translates the per-class controller index to the global device index for `BTAG_BOOTDEV`.
 
-7. **SD card controller:** SPI master in SPI mode (sim_spi.sv, CLASS_SPI). Byte-at-a-time polled transfers. Autoconfigured. Testbench SD emulator backed by disk image file (`+sdcard=`). See `doc/system/devices/spi.md`.
+7. **SD card controller:** SPI master in SPI mode (`spi.sv`), autoconfigured as `CLASS_SD` — the ROM's boot-device probe matches that class, not `CLASS_SPI`. Polled transfers (single-byte and FIFO burst). Testbench SD emulator backed by disk image file (`+sdcard=`). See `doc/system/devices/spi.md`.
 
 8. **Kernel link address:** The kernel (Stage 3) can be linked at any virtual address. To support loading at an arbitrary physical address, the kernel's early entry code must be position-independent (PIC) so it can execute in physical mode before the MMU is enabled.
 

@@ -258,14 +258,23 @@ transitions: as one access completes, the next address is already
 queued, and the bus stays driven word-after-word with no dead
 cycle between successive completions.
 
-```
-              cycle: 0   1   2   3   4   5   6   7
-re:                 ___/‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾\__
-addr:               ---[A+0  ][A+4  ][A+8  ][A+C]---
-req_accepted:       ___/‾\____/‾\____/‾\____/‾\___
-busy:               ___/‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾\__
-rdata:              ------[D0  ][D4  ][D8  ][DC]----
-```
+A 4-beat fill from a single-cycle slave, cycle by cycle:
+
+| Cycle | `re` | `addr` (master drives) | `busy` | `rdata` | `req_accepted` |
+|------:|:----:|:----------------------:|:------:|:-------:|:--------------:|
+| 0     | 1    | A+0                    | 0      | —       | pulse (A+0 latched) |
+| 1     | 1    | A+4                    | 0      | **D0**  | pulse (A+4 latched) |
+| 2     | 1    | A+8                    | 0      | **D4**  | pulse (A+8 latched) |
+| 3     | 1    | A+C                    | 0      | **D8**  | pulse (A+C latched) |
+| 4     | 0    | —                      | 0      | **DC**  | —              |
+
+A slave that needs wait states raises `busy` between completions,
+but **`busy` must be low on each word's response cycle** — the
+busy-drop *is* the data-valid signal (rule 3 above), and the
+arbiter latches the next in-flight request (the `req_accepted`
+pulse) only on a `busy`-low cycle. A slave holding `busy` high
+across an entire burst would never deliver a word the master can
+latch.
 
 Slaves on a single-master shared bus (i.e. without an arbiter in
 front) don't need to generate `req_accepted` — the contract reads
@@ -292,10 +301,12 @@ Two pulse sources drive the same line:
 | Software (`BUSCTL.RST`)| **100 µs**      | Propagation through the async external bus: worst case is 74xx gate delays + backplane trace delays + RC settling. 74HC async clear is <100 ns, but the spec allows for long backplanes and slow LS/ALS parts. |
 
 **Board implementation.** The hardware reset counter width must satisfy
-`2^N / f_clk >= 10 ms`. At the current ULX3S 25 MHz system clock,
-`N=18` gives ~10.5 ms (just meets the minimum) and the board uses
-`N=19` for ~21 ms of margin (see `ulx3s_penumbra1_top.sv:175-180`). Faster
-clocks need wider counters.
+`2^N / f_clk >= 10 ms` at the board's system clock. The ULX3S top
+holds reset for `2^18` cycles (`ulx3s_penumbra1_top.sv`), which
+satisfies the 10 ms minimum only for clocks up to ≈26 MHz — with
+no margin to spare. Re-verify the inequality whenever the system
+clock changes, and widen the counter rather than shave the
+requirement.
 
 **Software implementation.** The boot ROM delay loop between asserting
 and deasserting `BUSCTL.RST` must hold the pulse for at least 100 µs.
