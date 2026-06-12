@@ -312,11 +312,12 @@ logic; the 1-cycle STALL FSM for D-cache and RDSYS access.
   exception save-state pulse (see
   [exception-flow.md](./exception-flow.md)): EPC ← faulting PC,
   ESR ← SR, mode-bits update, R14 bank-swap, IF goes into
-  vector-fetch mode for `fault_vec`. For address-carrying faults
-  (alignment, TLB miss/protection, bus), also drive the MMU's
-  fault-commit strobe with the carried vaddr + status, latching
-  `FAULT_ADDR`/`FAULT_STATUS` — traps and decode faults
-  (SYSCALL/BREAK/illegal/privilege/DIV0) leave them untouched.
+  vector-fetch mode for `fault_vec`. For address-carrying faults —
+  marked by a carried status type other than `FAULT_NONE` — also
+  drive the MMU's fault-commit strobe with the carried vaddr +
+  status, latching `FAULT_ADDR`/`FAULT_STATUS`; traps and decode
+  faults ride `FAULT_NONE` and leave them untouched
+  ([Decision 16](./design-decisions.md#16-fault-status-the-detector-composes-the-status-self-qualifies)).
 - Clear the scoreboard valid bit for the just-written destination
   (for MUL/DIV, both `Rd` and `Rdh` — the divmul occupies WB for
   two cycles writing low then high through the single port, and both
@@ -433,10 +434,9 @@ Written by MEM, read by WB.
 | `fault_pending` | 1 | |
 | `fault_vec` | 4 | |
 | `fault_vaddr` | 32 | Faulting data vaddr — the `FAULT_ADDR` commit value; don't-care unless an address-carrying fault |
-| `fault_status` | 32 | Composed fault status (type + access info) — the `FAULT_STATUS` commit value |
-| `fault_info_valid` | 1 | 1 = this fault defines `FAULT_ADDR`/`FAULT_STATUS` (alignment, TLB, bus); 0 = trap/decode fault, the registers stay untouched |
+| `fault_status` | 32 | Composed fault status (type + access info) — the `FAULT_STATUS` commit value. Self-qualifying: type `FAULT_NONE` marks a fault with no data address (trap/decode), which leaves the MMU registers untouched ([Decision 16](./design-decisions.md#16-fault-status-the-detector-composes-the-status-self-qualifies)) |
 
-Total: ~186 bits.
+Total: ~185 bits.
 
 ## Stall sources
 

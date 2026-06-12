@@ -54,6 +54,7 @@ section at the bottom of this document for pointers.
 | [13](#13-gen2-tlb-bram-backed-registered-translation-commit-time-fault-latch) | gen2 TLB: BRAM-backed registered translation, commit-time fault latch (refines Decision 7/11) | 2026-06-08 |
 | [14](#14-l1l2-memory-interface-and-id-arbitration) | L1↔L2 memory interface and I/D arbitration (refines 7/11/13) | 2026-06-08 |
 | [15](#15-gen2-mmu-as-a-separate-module-not-a-parameter) | gen2 MMU as a separate module, not a parameter (refines Decision 13) | 2026-06-09 |
+| [16](#16-fault-status-the-detector-composes-the-status-self-qualifies) | Fault status: the detector composes, the status self-qualifies (refines Decision 15) | 2026-06-11 |
 
 ---
 
@@ -1571,6 +1572,71 @@ path bit-identical and the gen2 path clean.
   alignment, protection, miss, bus — are composed and ordered by the core
   and arrive at `mmu_bram` only as the committed `FADDR`/`FSTAT` write.
 - The single-cycle `mmu.sv`, `tlb.sv`, `tlb_unit.sv` are unchanged.
+
+---
+
+## 16. Fault status: the detector composes, the status self-qualifies
+
+**Date:** 2026-06-11
+
+*Refines [Decision 15](#15-gen2-mmu-as-a-separate-module-not-a-parameter).
+The commit-time latch story is unchanged; what this entry settles is who
+composes `FAULT_STATUS` and how the commit strobe is qualified.*
+
+**Context.** The first D-side integration exposed two contract smells.
+The TLB delivered a *pre-composed* status for protection faults but left
+the miss for the consumer to compose from the raw `hit` wire — so the
+pipeline stage had to know the TLB-internal hit/fault split, and a `hit`
+that conflates "translation missed" with "port idle" was promptly
+misread (an idle port's `hit=0` tagged pass-through instructions as TLB
+misses). Separately, an `info_valid` bit rode the pipeline registers to
+tell WB whether the fault carries an address — duplicating a
+classification the status type field already encodes.
+
+**Decision.**
+
+1. **Each fault's detector composes its full `FAULT_STATUS`.** The MMU
+   composes both TLB-fault statuses (miss and protection) — it registers
+   the query's access-type and privilege per port to do so. MEM composes
+   alignment (per [Decision 15](#15-gen2-mmu-as-a-separate-module-not-a-parameter),
+   alignment never reaches the gen2 MMU). A future bus fault is composed
+   where it is detected.
+2. **The MMU translate port reports `fault` only for a real translation
+   fault on a completed query.** Idle and bypass are structurally
+   `fault=0`; a consumer cannot misread an idle port. The raw `hit`
+   leaves the pipeline-facing interface (it stays internal to the
+   MMU/cache pairing, where the future L1 tag compare consumes paddr).
+3. **`FAULT_STATUS` is self-qualifying.** Type `FAULT_NONE = 0` means
+   "no address-carrying fault"; WB's commit strobe into the MMU's fault
+   registers derives from the carried status type — no parallel valid
+   bit to keep in sync.
+4. **The type↔vector mapping is shared.** `fault_vec_of()` in
+   `penumbra_pkg` maps `FAULT_*` to `VEC_*` once, for the D-side now and
+   the I-side fault path later.
+
+**Consequences.**
+
+- `tlb_perm`, `tlb_bram`, `tlb_unit_bram` lose their status outputs
+  (gen2 path); `mmu_bram` owns TLB-status composition. The shared
+  `tlb_pinned` keeps its composed-status ports — gen1's `tlb_unit`
+  consumes them; the gen2 unit leaves them unconnected.
+- The MEM/WB register carries `fault_vaddr` + `fault_status` only; the
+  `fault_info_valid` field is gone (the
+  [pipeline-stages.md](./pipeline-stages.md) tables reflect this).
+- An upstream (non-address) fault rides with `FAULT_NONE`, leaving
+  `FAULT_ADDR`/`FAULT_STATUS` untouched at its commit.
+
+**Alternatives considered.**
+
+- *Keep the side-band `info_valid` bit* (rejected: duplicates the
+  status type field; two classifications drift).
+- *Consumer composes everything, including the miss* (rejected: leaks
+  the TLB-internal hit/fault split across the pipeline interface — the
+  misuse this entry exists to prevent).
+- *MMU composes everything, including alignment* (rejected by
+  [Decision 15](#15-gen2-mmu-as-a-separate-module-not-a-parameter):
+  the gen2 MEM stage owns the alignment check and the fault never
+  enters the MMU).
 
 ---
 
