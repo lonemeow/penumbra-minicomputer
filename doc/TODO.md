@@ -129,10 +129,11 @@ First build: ~55 MHz achieved on ECP5-85F sg6 (bare core — no
 MMU/caches/fabric), critical path in ID decode toward the
 fault-vector register. Remaining, in dependency order:
 
-1. At gen2 machine assembly (after D-side MMU, BRAM L1, transactional
-   arbiter, fill sequencer): `machine_penumbra2` honoring the
-   program-end contract; fold the ISA-shaped gen2 programs (smoke,
-   branch, loadstore, fault, eret, syscall_trap, intr) into `isa/`.
+1. At gen2 machine assembly — now unblocked (D-side MMU, BRAM L1,
+   transactional arbiter, and fill sequencer are all in):
+   `machine_penumbra2` honoring the program-end contract; fold the
+   ISA-shaped gen2 programs (smoke, branch, loadstore, fault, eret,
+   syscall_trap, intr) into `isa/`.
 2. Opportunistic: extract `machine_penumbra1` from `machine_sim` /
    `ulx3s_penumbra1_top` so both wrappers share one integration
    (the sim-vs-FPGA congruence argument in the build-system doc).
@@ -731,28 +732,38 @@ decode + read + execute + writeback), so the durable fmax lever is the
 gen2 pipeline. Within gen1, prefer small depth-shaving wins that buy
 safety margin over the 25 MHz target rather than campaigns to raise it.
 
-## Hardware: Penumbra/2 L1↔L2 arbiter + fill sequencer + BRAM L1
+## Hardware: Penumbra/2 machine assembly over the L1↔L2 subsystem
 
-The gen2 memory subsystem below the pipeline, not yet built: the
-split BRAM-backed L1 caches, the I/D arbiter merging their miss
-streams onto the single L2 port, and the fill sequencer driving the
-L2→L1 line transfer. The gen2 core runs against the dual-port
-`unified_mem` stand-in today. Design is settled — Decision 14 in
-`doc/internals/penumbra2/design-decisions.md`, full spec in
+The gen2 memory-subsystem modules below the pipeline are all built,
+each with a module testbench: the BRAM-backed VIPT L1
+(`hw/rtl/penumbra2/cache_bram_vipt.sv` — registered launch/resolve
+hit, 4-way with invalid-first tree-PLRU, write-through /
+write-no-allocate, flop valid bits with single-cycle INVAL_ALL), the
+transactional I/D arbiter (`txn_arbiter.sv` — transaction-granular
+grant, single-outstanding, D-priority, type-dependent completion),
+and the fill sequencer (`fill_sequencer.sv` — atomic full-line,
+registered word advance at the L2's natural initiation interval).
+Design record: Decision 14 in
+`doc/internals/penumbra2/design-decisions.md`; interface spec in
 `doc/internals/penumbra2/memory-interface.md`.
 
-Scope, in dependency order:
+The core still runs against the dual-port `unified_mem` stand-in.
+What remains is the integration — the gen2 machine assembly item in
+the build/test restructure section above — whose memory-subsystem
+side is:
 
-- **BRAM-backed L1** (`cache_bram_vipt.sv`, per Decision 11):
-  registered hit, VIPT (≤ page per way), write-through /
-  write-no-allocate. 4-way is the lean, gated on the IF2
-  tag-compare / way-mux critical path at synthesis.
-- **Transactional I/D arbiter**: transaction-granular grant,
-  single-outstanding, D-priority, type-dependent completion (line
-  read → fill-done; single-beat → busy-drop). Replaces — does not
-  reuse — gen1's `cpu_bus_arbiter`.
-- **Fill sequencer**: atomic full-line, no critical-word-first; owns
-  the L2→L1 line read.
+- Wire two `cache_bram_vipt` instances + arbiter + sequencer + the
+  shared L2 behind the core's fetch/dmem interfaces; give IF2 and
+  MEM their miss-stall inputs (including holding a redirect-target
+  launch until an in-flight I-miss completes) and lift their
+  identity-mapping assertions — which unlocks the
+  non-identity-mapping tests (`test_tlb_remap`, the COW set).
+- Wire SYSDEV_L1_DCACHE / SYSDEV_L1_ICACHE through the WRSYS commit
+  and RDSYS sideband paths.
+- Put the L1 in front of synthesis: the probe top with the cache
+  wired is the first time the IF2 tag-compare / way-mux path is
+  visible to nextpnr. 4-way is the lean; fall back to 2-way (a
+  parameter) if it caps fmax.
 
 The shared L2 stays untouched; its read-pipeline initiation interval
 is the fill-penalty floor, characterised by
@@ -760,29 +771,14 @@ is the fill-penalty floor, characterised by
 Deferred fill-speed directions (L2 initiation-interval decouple, wide
 datapath, write buffer) are gated on gen2 bottleneck measurements.
 
-The D-side MMU integration is in (mmu_bram on the core, conformance
-TLB tests gated on the `mmu-d` capability), and the L1 sits behind
-translation — so this L1 + arbiter + fill sequencer step is next, and
-it also unlocks the non-identity-mapping tests (`test_tlb_remap`, the
-COW set): the flat `unified_mem` stand-in is vaddr-addressed with no
-paddr tag compare, so the MEM stage asserts identity mapping until the
-VIPT L1's tag compare delivers remapped data.
-
-**Valid-bit storage — flops, not BRAM (single-cycle flush + reset).**
-The L1 valid bits must live in a bulk-clearable flop array, not packed
-into the tag/data BRAM. L1-I flush runs on every exec-page load and has
-to be ~1 cycle; a RAM port writes one address per cycle, so BRAM-resident
-valids force an O(lines) clear walk — unacceptable at flush rate. A flop
-array clears every line in one cycle from a single `flush` net, and that
-same flash serves reset, so there is no reset walk for L1 either. Tags
-and data stay in BRAM, never explicitly cleared, masked by `valid=0`.
-The `tlb_bram` valid handling is the template: valid in a flop vector,
-sampled and registered to align with the BRAM output a cycle later. The
-L2 is the opposite corner — large valid array, no runtime-flush caller
-(PIPT) — so its reset clear can be a sequenced multi-cycle walk; that,
-plus uniform hold-core-until-`init_done` bring-up, is what a multi-cycle
-reset sequencer is for (reset axis only, orthogonal to flush; scoped
-with the L2 rework that de-hacks the post-reset-walk-while-live).
+L2-side residue of the valid-bit storage design (the L1 half — flop
+valids, single-cycle flush — is implemented in `cache_bram_vipt.sv`):
+the L2 is the opposite corner — large valid array, no runtime-flush
+caller (PIPT) — so its reset clear can stay a sequenced multi-cycle
+walk; that, plus uniform hold-core-until-`init_done` bring-up, is
+what a multi-cycle reset sequencer is for (reset axis only,
+orthogonal to flush; scoped with the L2 rework that de-hacks the
+post-reset-walk-while-live).
 
 ## Hardware: L2 phase 2 — write-back / write-allocate
 
