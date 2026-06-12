@@ -152,6 +152,43 @@ int main() {
     check_bool("prot fault", r.fault, true);
     check("prot fstatus", r.fstatus & 0xF, FAULT_PROT);
 
+    // ── Verdict hold: the T+1 verdict persists across idle cycles ──
+    // A stalled consumer (MEM held at its data-ready cycle by WB
+    // back-pressure) reads the verdict later than T+1; the port must hold it
+    // until the next query, insensitive to input wiggle while idle.
+    printf("-- verdict hold --\n");
+    r = translate_b(d, (0x00010u << 12) | 0x00C, ACC_READ, false, true, false);
+    check("hold T+1 paddr", r.paddr, (0x000A0u << 12) | 0x00C);
+    for (int i = 0; i < 3; i++) {
+        idle(d);
+        d->i_b_vaddr = 0x5A5A5000;             // wiggle: must not disturb the held verdict
+        tick(d);
+        check("hold paddr", d->o_b_paddr, (0x000A0u << 12) | 0x00C);
+        check_bool("hold hit", d->o_b_hit, true);
+        check_bool("hold nofault", d->o_b_fault, false);
+    }
+    // A protection-fault verdict holds the same way (the store-commit gate
+    // samples o_b_fault on the consumer's advance cycle, not at T+1).
+    r = translate_b(d, (0x00007u << 12), ACC_WRITE, false, true, false);
+    check_bool("hold prot T+1 fault", r.fault, true);
+    for (int i = 0; i < 3; i++) {
+        idle(d);
+        d->i_b_vaddr = 0x5A5A5000;
+        tick(d);
+        check_bool("hold prot fault", d->o_b_fault, true);
+        check("hold prot fstatus", d->o_b_fault_status & 0xF, FAULT_PROT);
+    }
+    // A bypass verdict holds too (the bypass capture gates on the strobe).
+    r = translate_b(d, 0x70000040, ACC_READ, false, true, true);
+    check("hold bypass T+1 paddr", r.paddr, 0x70000040u);
+    for (int i = 0; i < 3; i++) {
+        idle(d);
+        d->i_b_vaddr = 0x5A5A5000;
+        tick(d);
+        check("hold bypass paddr", d->o_b_paddr, 0x70000040u);
+        check_bool("hold bypass hit", d->o_b_hit, true);
+    }
+
     // ── Commit-time fault latch ──
     printf("-- commit fault latch --\n");
     commit_fault(d, 0x0BAD1000, 0x00000123);

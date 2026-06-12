@@ -5,7 +5,10 @@
 // read: drive the query at cycle T, the verdict is valid at T+1 — the same
 // contract the BRAM L1 cache uses, so the TLB result lands in the tag-compare
 // stage (IF2 for fetch, the MEM data-ready cycle for data) with no extra
-// pipeline latency.
+// pipeline latency. The verdict then *holds* until the port's next operation
+// launches (capture on the strobe, hold otherwise — the registered-read
+// contract every RAM-shaped module here follows): a consumer stalled at its
+// tag-compare cycle reads the same verdict on whichever cycle it advances.
 //
 // Two concurrent translations come from EBR's two ports, one copy of storage:
 //   Port A — I-side translate (read-only, every fetch).
@@ -94,19 +97,25 @@ module tlb_bram
     logic        a_usr_q, a_le_q;
     logic        a_v0_q, a_v1_q;
 
+    // The query capture shares the RAM read's clock-enable so the verdict
+    // holds between lookups; a_le_q is sticky once the first verdict exists
+    // (it only masks post-reset garbage, port A has no other duty).
     always_ff @(posedge i_clk) begin
         if (i_a_lookup_en) begin
             way0_a  <= way0_mem[a_set];
             way1_a  <= way1_mem[a_set];
             a_v0_q  <= way0_v_vec[a_set];
             a_v1_q  <= way1_v_vec[a_set];
+            a_vpn_q  <= i_a_vaddr[31:12];
+            a_page_q <= i_a_vaddr[11:0];
+            a_asid_q <= i_asid;
+            a_acc_q  <= i_a_access_type;
+            a_usr_q  <= i_a_user_mode;
         end
-        a_vpn_q  <= i_a_vaddr[31:12];
-        a_page_q <= i_a_vaddr[11:0];
-        a_asid_q <= i_asid;
-        a_acc_q  <= i_a_access_type;
-        a_usr_q  <= i_a_user_mode;
-        a_le_q   <= i_a_lookup_en;
+        if (i_rst)
+            a_le_q <= 1'b0;
+        else if (i_a_lookup_en)
+            a_le_q <= 1'b1;
     end
 
     tlb_perm u_perm_a (
@@ -147,6 +156,12 @@ module tlb_bram
     // Readback capture
     logic        b_read_q, b_idx_way_q, b_rb_v_q;
 
+    // Same hold rule as port A, per duty: the translate-query capture gates
+    // on the lookup, the readback capture on the readback launch, and the
+    // shared way/V regs on either (b_ren). b_le_q updates on any port-B
+    // operation — a translate verdict holds across idle cycles but is
+    // superseded by a readback, which reloads the shared way regs (the two
+    // never overlap within one in-flight MEM instruction).
     always_ff @(posedge i_clk) begin
         if (b_ren) begin
             way0_b <= way0_mem[b_rd_set];
@@ -154,15 +169,22 @@ module tlb_bram
             b_v0_q <= way0_v_vec[b_rd_set];
             b_v1_q <= way1_v_vec[b_rd_set];
         end
-        b_vpn_q     <= i_b_vaddr[31:12];
-        b_page_q    <= i_b_vaddr[11:0];
-        b_asid_q    <= i_asid;
-        b_acc_q     <= i_b_access_type;
-        b_usr_q     <= i_b_user_mode;
-        b_le_q      <= i_b_lookup_en;
-        b_read_q    <= i_read_en;
-        b_idx_way_q <= i_idx_way;
-        b_rb_v_q    <= i_idx_way ? way1_v_vec[i_idx_set] : way0_v_vec[i_idx_set];
+        if (i_b_lookup_en) begin
+            b_vpn_q  <= i_b_vaddr[31:12];
+            b_page_q <= i_b_vaddr[11:0];
+            b_asid_q <= i_asid;
+            b_acc_q  <= i_b_access_type;
+            b_usr_q  <= i_b_user_mode;
+        end
+        if (i_rst)
+            b_le_q <= 1'b0;
+        else if (b_ren)
+            b_le_q <= i_b_lookup_en;
+        b_read_q <= i_read_en;
+        if (i_read_en) begin
+            b_idx_way_q <= i_idx_way;
+            b_rb_v_q    <= i_idx_way ? way1_v_vec[i_idx_set] : way0_v_vec[i_idx_set];
+        end
     end
 
     tlb_perm u_perm_b (

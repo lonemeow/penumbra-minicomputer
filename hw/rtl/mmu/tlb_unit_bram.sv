@@ -13,7 +13,16 @@
 // the main TLB's verdict for that same query — rather than reading the pinned
 // combinationally at T+1, which on the I-side would answer for the next fetch's
 // PC (the I-side query advances every cycle). Both ports register the pinned
-// verdict uniformly; the D-side holds its query under the MEM stall anyway.
+// verdict uniformly.
+//
+// The combined verdict holds from T+1 until the port's *next lookup* (capture
+// on the strobe, hold otherwise — the registered-read contract, see tlb_bram).
+// A stalled consumer therefore reads the same verdict on whichever cycle it
+// advances. On port B the hold is really "until the port's next *operation*":
+// a sysreg readback reloads tlb_bram's shared port-B way registers and
+// supersedes a main-won verdict — but a readback comes from a later RDSYS in
+// MEM, which can only launch after the translate's own instruction has
+// advanced out of MEM, its verdict consumed.
 //
 // Sysreg readback is the easy case: RDSYS back-pressures MEM, so TLB_INDEX and
 // the selected register are held stable across the two access cycles, so the
@@ -160,22 +169,28 @@ module tlb_unit_bram
     logic [31:0] pin_b_paddr_q, pin_b_fstatus_q;
     logic        pin_b_cacheable_q, pin_b_hit_q, pin_b_fault_q;
 
+    // Captured on the lookup strobe and held otherwise, so the combined
+    // verdict obeys the registered-read hold contract (see tlb_bram header).
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
             pin_a_hit_q <= 1'b0;
             pin_b_hit_q <= 1'b0;
         end else begin
-            pin_a_hit_q <= pin_a_hit;
-            pin_b_hit_q <= pin_b_hit;
+            if (i_a_lookup_en) pin_a_hit_q <= pin_a_hit;
+            if (i_b_lookup_en) pin_b_hit_q <= pin_b_hit;
         end
-        pin_a_paddr_q     <= pin_a_paddr;
-        pin_a_cacheable_q <= pin_a_cacheable;
-        pin_a_fault_q     <= pin_a_fault;
-        pin_a_fstatus_q   <= pin_a_fstatus;
-        pin_b_paddr_q     <= pin_b_paddr;
-        pin_b_cacheable_q <= pin_b_cacheable;
-        pin_b_fault_q     <= pin_b_fault;
-        pin_b_fstatus_q   <= pin_b_fstatus;
+        if (i_a_lookup_en) begin
+            pin_a_paddr_q     <= pin_a_paddr;
+            pin_a_cacheable_q <= pin_a_cacheable;
+            pin_a_fault_q     <= pin_a_fault;
+            pin_a_fstatus_q   <= pin_a_fstatus;
+        end
+        if (i_b_lookup_en) begin
+            pin_b_paddr_q     <= pin_b_paddr;
+            pin_b_cacheable_q <= pin_b_cacheable;
+            pin_b_fault_q     <= pin_b_fault;
+            pin_b_fstatus_q   <= pin_b_fstatus;
+        end
     end
 
     // ══════════════════════════════════════════════════════════

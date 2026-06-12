@@ -7,9 +7,11 @@
 // set, e.g. a vector fetch), and the architectural fault registers.
 //
 // Timing. Translation is registered: drive a port's query at cycle T, its
-// verdict is valid at T+1 (the TLB's BRAM read). The bypass decision is made
-// on the same T inputs and registered so the identity-map result lands in the
-// same T+1 cycle as the TLB verdict it muxes against.
+// verdict is valid at T+1 (the TLB's BRAM read) and holds until the port's
+// next query (capture on the strobe, hold otherwise — the registered-read
+// contract; see tlb_bram). The bypass decision is made on the same T inputs
+// and registered under the same strobe, so the identity-map result lands in
+// the same T+1 cycle as the TLB verdict it muxes against and holds with it.
 //
 // Faults. Unlike the single-cycle MMU, this module does not detect faults or
 // check alignment — the gen2 MEM stage and I-side fault path do that, and the
@@ -104,6 +106,9 @@ module mmu_bram
     assign a_bypass    = i_a_req && (i_a_force_bypass || !mmu_enabled);
     assign b_bypass    = i_b_req && (i_b_force_bypass || !mmu_enabled);
 
+    // Captured on the query strobe and held otherwise, matching the TLB's
+    // verdict-hold contract — so the muxed port output stays coherent for a
+    // consumer that advances later than T+1.
     logic        a_bypass_q, b_bypass_q;
     logic [31:0] a_vaddr_q, b_vaddr_q;
     always_ff @(posedge i_clk) begin
@@ -111,11 +116,11 @@ module mmu_bram
             a_bypass_q <= 1'b0;
             b_bypass_q <= 1'b0;
         end else begin
-            a_bypass_q <= a_bypass;
-            b_bypass_q <= b_bypass;
+            if (i_a_req) a_bypass_q <= a_bypass;
+            if (i_b_req) b_bypass_q <= b_bypass;
         end
-        a_vaddr_q <= i_a_vaddr;
-        b_vaddr_q <= i_b_vaddr;
+        if (i_a_req) a_vaddr_q <= i_a_vaddr;
+        if (i_b_req) b_vaddr_q <= i_b_vaddr;
     end
 
     // ══════════════════════════════════════════════════════════
