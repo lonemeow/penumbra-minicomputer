@@ -1,5 +1,5 @@
 ; test_tlb_ifetch.s — Instruction fetch TLB miss: verify fault on unmapped code
-; REQUIRES: mmu
+; REQUIRES: mmu-d mmu-i
 ;
 ; Tests:
 ;   1. Copy target code from ROM to RAM at page 2 (0x2000)

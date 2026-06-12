@@ -90,26 +90,17 @@ WRSPR to ESR/EPC/USP/SCR cannot land. When the SPR write milestone wires that
 port (driven from the WB/commit path the way WRSYS drives the sysreg write),
 add a WRSPR→RDSPR round-trip test to exercise the now-corrected decode.
 
-## Hardware: Penumbra/2 WRSYS context-sync — positive re-fetch test deferred
+## Hardware: Penumbra/2 WRSPR-SR context-sync — pending with the SPR write path
 
-WRSYS is now context-synchronizing: after its post-commit-wait it re-fetches its
-successor so following instructions observe the new sysreg state (the contract in
-`doc/system/sysregs.md`; mechanism in the gen2 drain-commit design decision).
-`make test-prog CORE=penumbra2 PROG=test_resync` guards the exactly-once property (the re-fetch must
-neither duplicate the held copy nor skip it), and the syswrite/full suite confirm
-the re-fetch redirects to the correct successor.
+WRSYS context-synchronization is positively verified: `test_tlb_resync`
+(isa/, `REQUIRES: mmu-d mmu-i`) unmaps the page holding the WRSYS's own
+successor and proves the re-fetch derives under the post-commit
+translation on every target; the exactly-once guard remains
+`make test-prog CORE=penumbra2 PROG=test_resync`.
 
-What is *not* yet directly tested is that the re-fetch re-derives under *changed*
-state — because with no MMU/I-cache wired in the gen2 core the re-fetch returns
-the identical instruction, so the synchronization is functionally transparent.
-Add the positive test at MMU integration: a WRSYS that remaps the page holding
-the next instruction (or invalidates an I-cache line over modified code), proving
-the successor is fetched under the new translation/contents. Until then the
-mechanism is verified by construction (re-sync fires on every WRSYS commit) plus
-the regression + exactly-once guards.
-
-Also revisit WRSPR SR then: if `SR.S` gates fetch translation, it needs the same
-re-synchronization (its write path is tied off today — see the section above).
+Still open: WRSPR SR. `SR.S` gates fetch-translation privilege, so the SR
+write needs the same re-synchronization when its write path lands (it is
+tied off today — see the SPR write milestone above).
 
 ## Hardware: build/test restructure to the BOARD×CORE matrix
 

@@ -120,16 +120,18 @@ endif
 # runner testbenches (first entry is the default; the rest are
 # selectable via RUNNER tags), and the capability set the integration
 # provides for REQUIRES tags.
-# mmu-d is the D-side slice of mmu: data translation, TLB miss /
-# protection faults, and the FAULT_ADDR/FAULT_STATUS commit — but no
-# fetch translation. A full-MMU integration provides both.
+# mmu-d / mmu-i are the per-side slices of mmu: data / fetch
+# translation with TLB miss + protection faults and the
+# FAULT_ADDR/FAULT_STATUS commit. Plain mmu is the full MMU including
+# non-identity mappings (the gen2 flat memory stand-in is
+# vaddr-addressed, so gen2 earns mmu with the VIPT L1's tag compare).
 RUNNER_MOD_penumbra1      = machine_sim
 RUNNER_TBS_penumbra1      = tb_cpu_prog
-RUNNER_PROVIDES_penumbra1 = mmu mmu-d cache l2 uart spi bus machid perfctr timer irq wrspr
+RUNNER_PROVIDES_penumbra1 = mmu mmu-d mmu-i cache l2 uart spi bus machid perfctr timer irq wrspr
 
 RUNNER_MOD_penumbra2      = penumbra2_core
 RUNNER_TBS_penumbra2      = tb_penumbra2_prog tb_penumbra2_intr
-RUNNER_PROVIDES_penumbra2 = mmu-d
+RUNNER_PROVIDES_penumbra2 = mmu-d mmu-i
 
 RUNNER_MOD      = $(RUNNER_MOD_$(CORE))
 RUNNER_TBS      = $(RUNNER_TBS_$(CORE))

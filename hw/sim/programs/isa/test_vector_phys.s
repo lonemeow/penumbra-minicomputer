@@ -1,5 +1,5 @@
 ; test_vector_phys.s — Verify vector table is read from physical addresses
-; REQUIRES: mmu
+; REQUIRES: mmu-d mmu-i
 ;
 ; Proves the vector table read bypasses the MMU by:
 ;   1. Writing a TLB miss handler address to vector[2] in RAM
