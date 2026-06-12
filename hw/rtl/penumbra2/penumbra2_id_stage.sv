@@ -38,6 +38,7 @@ module penumbra2_id_stage
     input  logic                  i_valid,          // 0 = bubble in
     input  logic                  i_fault_pending,  // IF-stage fault
     input  logic [3:0]            i_fault_vec,
+    input  logic [31:0]           i_fault_status,   // its composed payload; FAULT_NONE when none
 
     input  logic                  i_supervisor,     // SR.S
 
@@ -90,7 +91,8 @@ module penumbra2_id_stage
     output logic [31:0]           o_next_pc,
     output logic                  o_valid,
     output logic                  o_fault_pending,
-    output logic [3:0]            o_fault_vec
+    output logic [3:0]            o_fault_vec,
+    output logic [31:0]           o_fault_status
 );
 
     // ── Decode (combinational) ───────────────────────────────────
@@ -265,6 +267,11 @@ module penumbra2_id_stage
                 o_next_pc          <= i_next_pc;
                 o_fault_pending    <= insn_fault_pending;
                 o_fault_vec        <= insn_fault_vec;
+                // The carried payload is self-qualifying: an IF address fault
+                // arrives with its composed status, and i_fault_status is
+                // FAULT_NONE otherwise — so a decode fault raised here rides
+                // FAULT_NONE with no mux.
+                o_fault_status     <= i_fault_status;
                 ex_dst_en_r        <= phys_dst_en;
             end
         end

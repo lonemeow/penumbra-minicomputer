@@ -62,6 +62,7 @@ module penumbra2_ex_stage
     input  logic                  i_valid,          // 0 = bubble in
     input  logic                  i_fault_pending,
     input  logic [3:0]            i_fault_vec,
+    input  logic [31:0]           i_fault_status,   // carried payload; FAULT_NONE when none
 
     // ── Flag bypass external sources (MEM producer is internal) ──
     input  logic [3:0]            i_sr_flags,        // committed SR NZCV
@@ -101,7 +102,8 @@ module penumbra2_ex_stage
     output logic [31:0]           o_pc,
     output logic                  o_valid,
     output logic                  o_fault_pending,
-    output logic [3:0]            o_fault_vec
+    output logic [3:0]            o_fault_vec,
+    output logic [31:0]           o_fault_status
 );
 
     // ── Flag bypass: youngest in-flight NZCV for the EX reader ───
@@ -382,6 +384,9 @@ module penumbra2_ex_stage
                 // a trap is suppressed under one (decode gates is_trap off).
                 o_fault_pending   <= i_fault_pending | (is_divmul & dm_fault) | i_is_trap;
                 o_fault_vec       <= (is_divmul & dm_fault) ? VEC_ARITH : i_fault_vec;
+                // DIV0 and traps carry no data address; i_fault_status is
+                // FAULT_NONE for them already (self-qualifying carry).
+                o_fault_status    <= i_fault_status;
             end
         end
     end

@@ -26,17 +26,20 @@
 // interrupts take the asynchronous route — penumbra2_irq drains the pipeline
 // at a fetch boundary and reuses that same save-state + vector-fetch. RDSYS
 // reads CPU-internal sysreg devices through the MEM sideband, and WRSYS writes
-// them at the EX drain-commit. The MMU (mmu_bram) is wired on the D-side:
-// MEM drives the port-B translate query with each load/store, takes the
-// TLB miss / protection verdict at its data-ready cycle, and WB's qualified
-// fault-commit strobe latches FAULT_ADDR/FAULT_STATUS. The I-side (port A)
-// is tied off — fetches are untranslated until the I-side milestone — and
-// the real BRAM-backed L1 caches are not wired. unified_mem is a stand-in
-// with the streaming registered-read contract the IF1/IF2 split and the MEM
-// single-STALL are built around — real BRAM-backed caches replace it later
-// behind the IF and dmem interfaces. Because the flat stand-in has no paddr
-// tag compare, translated data accesses must be identity-mapped (asserted in
-// the MEM stage) until the VIPT L1 lands.
+// them at the EX drain-commit. The MMU (mmu_bram) is wired on both sides:
+// IF1's fetch drives the port-A translate query (the vector-fetch FSM owns
+// the port with force_bypass while it reads the table — vector reads are
+// physical), IF2 consumes the verdict and raises fetch-side alignment / TLB
+// faults whose composed status rides the pipe to commit; MEM drives the
+// port-B query with each load/store and takes its verdict at data-ready.
+// WB's qualified fault-commit strobe latches FAULT_ADDR/FAULT_STATUS for
+// address-carrying faults of either side. The real BRAM-backed L1 caches
+// are not wired: unified_mem is a stand-in with the streaming
+// registered-read contract the IF1/IF2 split and the MEM single-STALL are
+// built around — real BRAM-backed caches replace it later behind the IF and
+// dmem interfaces. Because the flat stand-in has no paddr tag compare,
+// translated accesses on both sides must be identity-mapped (asserted in
+// IF2 and MEM) until the VIPT L1 lands.
 //
 // No halt: a real CPU never stops on an instruction. BREAK is a trap, taken at
 // EX and vectored to VEC_BREAK (gen1 likewise vectors BREAK to its monitor),
@@ -79,7 +82,9 @@ module penumbra2_core
     output logic [OPC_W-1:0]      o_retire_op_class
 );
 
-    // IF2's fault outputs have no consumer in this milestone (no MMU yet).
+    // Unconnected pins below are intentional: MMU verdict fields the flat
+    // memory stand-in cannot consume yet (cacheable, hit — the BRAM L1's
+    // tag compare takes those).
     /* verilator lint_off PINCONNECTEMPTY */
 
     // ── Front-end wires ──────────────────────────────────────────
@@ -90,6 +95,9 @@ module penumbra2_core
     logic [31:0] imem_rdata;
     logic [31:0] if2_ir, if2_pc, if2_next_pc;
     logic        if2_valid;
+    logic        if2_fault_pending;
+    logic [3:0]  if2_fault_vec;
+    logic [31:0] if2_fault_status;
 
     // ── Handshake wires ──────────────────────────────────────────
     logic        if2_stall;     // IF2 -> IF1 back-pressure
@@ -208,6 +216,11 @@ module penumbra2_core
     logic        mmu_user, mmu_req, mmu_fault;
     logic [31:0] mmu_fault_status;
 
+    // MMU I-side translate (the muxed fetch ↔ port A; verdict into IF2)
+    logic [31:0] mmu_a_paddr;
+    logic        mmu_a_fault;
+    logic [31:0] mmu_a_fstatus;
+
     // MMU fault-register commit (WB's qualified strobe + payload)
     logic        mmu_fault_commit;
     logic [31:0] mmu_fault_vaddr, mmu_fault_cstatus;
@@ -240,12 +253,18 @@ module penumbra2_core
         .i_clk(i_clk), .i_rst(i_rst),
         .i_pc(if1_pc), .i_next_pc(if1_next_pc), .i_valid(if1_valid),
         .i_ir(imem_rdata),
+        // I-side MMU verdict — port A's registered, held result for the
+        // fetch IF1 launched (paired by the shared launch strobe).
+        .i_user_mode(~core_supervisor),
+        .i_mmu_paddr(mmu_a_paddr), .i_mmu_fault(mmu_a_fault),
+        .i_mmu_fault_status(mmu_a_fstatus),
         .i_stall_in(fetch_stall),
         .i_flush(if2_flush),
         .o_stall(if2_stall),
         .o_ir(if2_ir), .o_pc(if2_pc), .o_next_pc(if2_next_pc),
         .o_valid(if2_valid),
-        .o_fault_pending(), .o_fault_vec()
+        .o_fault_pending(if2_fault_pending), .o_fault_vec(if2_fault_vec),
+        .o_fault_status(if2_fault_status)
     );
 
     // ══════════════════════════════════════════════════════════
@@ -255,6 +274,8 @@ module penumbra2_core
         .i_clk(i_clk), .i_rst(i_rst),
         .i_ir(if2_ir), .i_pc(if2_pc), .i_next_pc(if2_next_pc),
         .i_valid(if2_valid),
+        .i_fault_pending(if2_fault_pending), .i_fault_vec(if2_fault_vec),
+        .i_fault_status(if2_fault_status),
         .i_supervisor(core_supervisor),
         .o_fetch_stall(fetch_stall),
         .o_commit_idx(o_commit_idx), .o_commit_data(o_commit_data),
@@ -364,11 +385,16 @@ module penumbra2_core
 
     mmu_bram u_mmu (
         .i_clk(i_clk), .i_rst(i_rst),
-        // Port A (I-side) — tied off until fetch translation lands.
-        .i_a_vaddr(32'b0), .i_a_access_type(ACC_EXEC), .i_a_user_mode(1'b0),
-        .i_a_req(1'b0), .i_a_force_bypass(1'b0),
-        .o_a_paddr(), .o_a_cacheable(), .o_a_hit(), .o_a_fault(),
-        .o_a_fault_status(),
+        // Port A (I-side) — the query follows the muxed fetch port: IF1's
+        // fetch normally (its enable gates the query, so a held fetch keeps
+        // its held verdict), the vector-fetch FSM while it owns the port —
+        // bypassed, because vector reads are physical (boot-protocol
+        // contract; test_vector_phys pins it).
+        .i_a_vaddr(fetch_addr_mux), .i_a_access_type(ACC_EXEC),
+        .i_a_user_mode(~core_supervisor),
+        .i_a_req(fetch_en_mux), .i_a_force_bypass(vecf_active),
+        .o_a_paddr(mmu_a_paddr), .o_a_cacheable(), .o_a_hit(),
+        .o_a_fault(mmu_a_fault), .o_a_fault_status(mmu_a_fstatus),
         // Port B (D-side) — MEM's translate query.
         .i_b_vaddr(mmu_vaddr), .i_b_access_type(mmu_access_type),
         .i_b_user_mode(mmu_user), .i_b_req(mmu_req), .i_b_force_bypass(1'b0),
@@ -436,16 +462,9 @@ module penumbra2_core
 
     assign sys_rdata_rsp = mmu_sys_sel_q ? mmu_sys_rdata : sys_rdata;
 
-    // ── Assertion (sim-only; stripped at synth) ──────────────────
-    // A redirect target is word-aligned — for a branch (PC + off<<2, always
-    // aligned) and for a vector-fetch handler address (a misaligned handler
-    // address in the vector table is a kernel setup bug). A register-sourced
-    // JMP could be misaligned, which the full design raises as an I-side
-    // alignment fault; that I-fetch fault path is not wired yet (no MMU), so
-    // this stays a bring-up guard until it lands.
-    assert property (@(posedge i_clk) disable iff (i_rst)
-        if1_redirect |-> if1_redirect_pc[1:0] == 2'b00)
-        else $error("penumbra2_core: misaligned redirect target");
+    // A misaligned redirect target (register-sourced JMP, or a bad handler
+    // address in the vector table) is architecturally handled now: the fetch
+    // raises the I-side alignment fault at IF2. No bring-up guard needed.
 
     // The MMU's shared sysreg selector relies on the WRSYS write (a
     // drain-commit into an empty pipe) and the RDSYS read (a MEM access)

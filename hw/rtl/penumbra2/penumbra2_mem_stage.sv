@@ -77,6 +77,7 @@ module penumbra2_mem_stage
     input  logic                  i_valid,           // 0 = bubble in
     input  logic                  i_fault_pending,
     input  logic [3:0]            i_fault_vec,
+    input  logic [31:0]           i_fault_status,    // carried payload; FAULT_NONE when none
 
     // ── Data memory (BRAM-backed; flat stand-in for the L1 D-cache) ──
     // Registered-read contract (see unified_mem.sv): the address is sampled at
@@ -306,6 +307,11 @@ module penumbra2_mem_stage
         if (i_fault_pending) begin
             mem_fault_pending = 1'b1;
             mem_fault_vec     = i_fault_vec;
+            // An IF-side address fault's FAULT_ADDR is its own PC; the
+            // composed status rode the pipe (FAULT_NONE for decode faults
+            // and traps, which leave the MMU registers untouched).
+            mem_fault_vaddr   = i_pc;
+            mem_fault_status  = i_fault_status;
         end else if (align_fault | tlb_fault) begin
             mem_fault_pending = 1'b1;
             mem_fault_vaddr   = i_result;

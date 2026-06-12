@@ -26,11 +26,14 @@ module penumbra2_spine
     input  logic                  i_clk,
     input  logic                  i_rst,
 
-    // ── Fetch stream in (driven by the testbench; IF lands here later) ──
+    // ── Fetch stream in (from IF2: word + PC + the IF-side fault tag) ──
     input  logic [31:0]           i_ir,
     input  logic [31:0]           i_pc,
     input  logic [31:0]           i_next_pc,
     input  logic                  i_valid,
+    input  logic                  i_fault_pending,   // IF-side fault rides the slot
+    input  logic [3:0]            i_fault_vec,
+    input  logic [31:0]           i_fault_status,    // composed payload; FAULT_NONE when none
     input  logic                  i_supervisor,
     output logic                  o_fetch_stall,     // hold the fetch stream this cycle
 
@@ -141,6 +144,7 @@ module penumbra2_spine
     logic [31:0]         idex_pc, idex_next_pc;
     logic                idex_valid, idex_fault_pending;
     logic [3:0]          idex_fault_vec;
+    logic [31:0]         idex_fault_status;
 
     // EX/MEM
     logic [OPC_W-1:0]    exmem_op_class;
@@ -158,6 +162,7 @@ module penumbra2_spine
     logic [31:0]         exmem_pc;
     logic                exmem_valid, exmem_fault_pending;
     logic [3:0]          exmem_fault_vec;
+    logic [31:0]         exmem_fault_status;
 
     // MEM/WB
     logic [OPC_W-1:0]    memwb_op_class;
@@ -281,7 +286,8 @@ module penumbra2_spine
     penumbra2_id_stage u_id (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_ir(i_ir), .i_pc(i_pc), .i_next_pc(i_next_pc),
-        .i_valid(i_valid), .i_fault_pending(1'b0), .i_fault_vec(4'd0),
+        .i_valid(i_valid), .i_fault_pending(i_fault_pending),
+        .i_fault_vec(i_fault_vec), .i_fault_status(i_fault_status),
         .i_supervisor(i_supervisor),
         .i_stall_in(ex_stall), .i_bubble(ex_branch_taken | wb_fault_commit | eret_commit | wrsys_resync),
         .o_stall(id_stall),
@@ -302,7 +308,8 @@ module penumbra2_spine
         .o_phys_dst(idex_phys_dst), .o_phys_dst_aux(idex_phys_dst_aux),
         .o_phys_dst_aux_en(idex_phys_dst_aux_en),
         .o_pc(idex_pc), .o_next_pc(idex_next_pc),
-        .o_valid(idex_valid), .o_fault_pending(idex_fault_pending), .o_fault_vec(idex_fault_vec)
+        .o_valid(idex_valid), .o_fault_pending(idex_fault_pending),
+        .o_fault_vec(idex_fault_vec), .o_fault_status(idex_fault_status)
     );
 
     // ════════════════════════════════════════════════════════════
@@ -320,7 +327,8 @@ module penumbra2_spine
         .i_phys_dst(idex_phys_dst), .i_phys_dst_aux(idex_phys_dst_aux),
         .i_phys_dst_aux_en(idex_phys_dst_aux_en),
         .i_pc(idex_pc), .i_next_pc(idex_next_pc), .i_is_trap(idex_is_trap),
-        .i_valid(idex_valid), .i_fault_pending(idex_fault_pending), .i_fault_vec(idex_fault_vec),
+        .i_valid(idex_valid), .i_fault_pending(idex_fault_pending),
+        .i_fault_vec(idex_fault_vec), .i_fault_status(idex_fault_status),
         .i_sr_flags(spr_sr_flags),
         .i_wb_flags(memwb_flag_value), .i_wb_writes_flags(memwb_flag_we & memwb_valid),
         .i_stall_in(mem_stall), .i_wb_active(memwb_valid), .i_bubble(wb_fault_commit),
@@ -337,7 +345,8 @@ module penumbra2_spine
         .o_phys_dst(exmem_phys_dst), .o_phys_dst_aux(exmem_phys_dst_aux),
         .o_phys_dst_aux_en(exmem_phys_dst_aux_en),
         .o_pc(exmem_pc),
-        .o_valid(exmem_valid), .o_fault_pending(exmem_fault_pending), .o_fault_vec(exmem_fault_vec)
+        .o_valid(exmem_valid), .o_fault_pending(exmem_fault_pending),
+        .o_fault_vec(exmem_fault_vec), .o_fault_status(exmem_fault_status)
     );
 
     // ════════════════════════════════════════════════════════════
@@ -356,7 +365,7 @@ module penumbra2_spine
         .i_phys_dst_aux_en(exmem_phys_dst_aux_en),
         .i_pc(exmem_pc),
         .i_valid(exmem_valid), .i_fault_pending(exmem_fault_pending),
-        .i_fault_vec(exmem_fault_vec),
+        .i_fault_vec(exmem_fault_vec), .i_fault_status(exmem_fault_status),
         .i_stall_in(wb_stall), .i_bubble(wb_fault_commit),
         .o_stall(mem_stall),
         .o_dmem_addr(o_dmem_addr), .o_dmem_wdata(o_dmem_wdata),
