@@ -860,6 +860,13 @@ static bool carryInAlreadyLive(Register CarryReg, MachineInstr &Consumer,
   MachineInstr *Def = MRI.getVRegDef(CarryReg);
   if (!Def || Def != Consumer.getPrevNode())
     return false;
+  // Fusing makes the consumer read SR.C directly, dropping its use of
+  // CarryReg — after that, no MIR operand records that the producer's
+  // implicit SR def is still needed.  Selection visits the producer after
+  // the consumer (bottom-up) and erases it as trivially dead if none of its
+  // defs has a remaining use, silently breaking the carry chain.
+  if (MRI.use_nodbg_empty(Def->getOperand(0).getReg()))
+    return false;
   bool ConsumerIsSub = Consumer.getOpcode() == G_USUBO ||
                        Consumer.getOpcode() == G_USUBE;
   unsigned D = Def->getOpcode();
