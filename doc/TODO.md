@@ -282,28 +282,36 @@ half) is recognized by the IR optimizer into an i128 multiply that
 crashes the legalizer — see "Compiler: G_ZEXT s128 from the mulhi
 idiom fails to legalize" below.
 
-## Compiler: G_ZEXT s128 from the mulhi idiom fails to legalize
+## Compiler: G_ZEXT s128 from the mulhi idiom fails to legalize — RESOLVED
 
 A function that computes the high 64 bits of a 64×64 product from
 32-bit partial products and returns only that half (the classic
-mulhi shape) gets idiom-recognized by the IR optimizer into
-`zext i64 → i128; mul i128; lshr 64; trunc`, and the backend dies
-with `unable to legalize instruction: G_ZEXT %x(s64) → s128`.
-Repro: clang -O2 on
+mulhi shape) gets idiom-recognized by AggressiveInstCombine's
+ungated `foldMulHigh` into `zext i64 → i128; mul i128; lshr 64;
+trunc`, which ICEd the legalizer.  C23 `_BitInt(128)` reached the
+same gap directly.  (`compiler-rt`'s `wideMultiply` escapes
+recognition because it returns both halves through out-params; the
+32→64 flavor of the same transform is a win for us — a hand-written
+`mulhi32` becomes a single MULU.)
 
-```c
-u64 mulhi64(u64 a, u64 b) {
-  /* four 32x32 partials, sum, return hi half only */
-}
-```
+Fixed in three parts, no actual i128 support needed (GISel narrows
+iteratively s128 → s64 → s32 through the same paths s64 uses):
+extension narrowing widened from `typeIs(s64)` to
+`scalarWiderThan(32)`; extending loads with memory wider than
+register width (`G_ZEXTLOAD s128 ← s64`, formed when a load feeds
+the zext) lowered to plain load + extension; and the missing
+aligned-pow-2 case added to the generic
+`LegalizerHelper::lowerLoad` (it previously assumed lower() on an
+extload always meant an unaligned split).  Test:
+`test/CodeGen/Penumbra/i128-mulhi.ll`.
 
-(`compiler-rt`'s `wideMultiply` escapes recognition because it
-returns both halves through out-params.)  Options: teach the
-legalizer to narrow s128 multiply/shift/zext/trunc down to s64
-(double narrowing already works s64→s32), or suppress the
-aggressive-mulhi formation via TTI for a type twice the largest
-legal scalar.  Until then any user code spelling out a mulhi is an
-ICE at -O1+.
+**Upstream-worthy:** the `lowerLoad` gap is generic — riscv32
+GlobalISel ICEs on the identical `G_ZEXTLOAD s128 ← s64` from the
+same IR (verified against an in-tree RISCV llc build), via the
+sibling `// FIXME: Need to split the load.` hole in
+`narrowScalar`'s extload case.  Full upstream-facing analysis,
+reproducers, target survey, and proposed two-part patch:
+`doc/llvm-gisel-wide-extload-legalization.md`.
 
 ## Kernel: vmapbuf / vunmapbuf for raw device access
 
