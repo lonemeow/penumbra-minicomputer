@@ -497,6 +497,13 @@ module datapath
     logic        alu_flag_n, alu_flag_z, alu_flag_c, alu_flag_v;
     logic [31:0] alu_result;
 
+    // keep_hierarchy keeps the ALU compute + the `o_flag_z = ~|o_result`
+    // zero-detect placed as one local block.  Flattened, the placer is free to
+    // scatter the 32-bit reduction across the fabric — a routing-bound cone
+    // that surfaces as the critical path when nearby logic changes shift its
+    // cells.  This is the upstream companion to the fence on u_status_reg,
+    // which already pins the downstream half of the same flag path.
+    (* keep_hierarchy *)
     alu u_alu (
         .i_a        (a_bus),
         .i_b        (b_bus),
