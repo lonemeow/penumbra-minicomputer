@@ -34,7 +34,7 @@
 //
 // Not yet plumbed: a bus-fault return path through L2/arbiter/L1 (gen1
 // reports no-device-at-address into the core; gen2's path carries no fault
-// signal yet), and the SYSDEV_BUS / SYSDEV_TIMER devices.
+// signal yet), and the SYSDEV_BUS device.
 
 module machine_penumbra2
     import penumbra_pkg::*;
@@ -119,12 +119,17 @@ module machine_penumbra2
     // from EX, not WB); see the core's o_insn_retired.
     logic        insn_retired;
 
+    // Core's timer-IRQ line: the internal programmable timer, OR the external
+    // i_timer_irq input (kept for direct injection; the internal timer is the
+    // normal source). Assigned with the timer device below.
+    logic        core_timer_irq;
+
     // ══════════════════════════════════════════════════════════
     // The core
     // ══════════════════════════════════════════════════════════
     penumbra2_core #(.RESET_PC(RESET_PC)) u_core (
         .i_clk(i_clk), .i_rst(i_rst),
-        .i_irq(i_irq), .i_timer_irq(i_timer_irq),
+        .i_irq(i_irq), .i_timer_irq(core_timer_irq),
         .o_fetch_addr(fetch_addr), .o_fetch_en(fetch_en),
         .o_fetch_re(fetch_re),
         .i_fetch_rdata(fetch_rdata), .i_fetch_busy(fetch_busy),
@@ -378,6 +383,48 @@ module machine_penumbra2
         endcase
     end
 
+    // ── Programmable interval timer (SYSDEV_TIMER) ───────────────
+    // Self-contained: a prescaler divides the CPU clock to a ~1 MHz reference
+    // (toggled, since timer.sv edge-detects the tick), and the device raises
+    // o_irq once software programs it and the counter underflows. CPU_FREQ is
+    // board-supplied; the CPU_FREQ=0 default (the bare timing probe) keeps the
+    // prescaler legal but leaves the timer unused — it is never programmed there.
+    localparam int TICK_TARGET_HZ = 1_000_000;
+    localparam int PRESCALE_RAW   = (CPU_FREQ + TICK_TARGET_HZ) / (2 * TICK_TARGET_HZ);
+    localparam int PRESCALE_DIV   = (PRESCALE_RAW >= 2) ? PRESCALE_RAW : 2;
+    localparam int TIMER_TICK_HZ  = CPU_FREQ / (2 * PRESCALE_DIV);
+
+    logic [$clog2(PRESCALE_DIV)-1:0] prescale_cnt;
+    logic timer_tick;
+    always_ff @(posedge i_clk) begin
+        if (i_rst) begin
+            prescale_cnt <= '0;
+            timer_tick   <= 1'b0;
+        end else if (prescale_cnt == ($bits(prescale_cnt))'(PRESCALE_DIV - 1)) begin
+            prescale_cnt <= '0;
+            timer_tick   <= ~timer_tick;   // toggle: one edge per full period
+        end else begin
+            prescale_cnt <= prescale_cnt + 1'b1;
+        end
+    end
+
+    logic [3:0]  timer_sys_reg;
+    logic        timer_sys_we;
+    logic [31:0] timer_rdata;
+    logic        timer_o_irq;
+    assign timer_sys_we  = sys_we && (sys_wr_dev == SYSDEV_TIMER);
+    assign timer_sys_reg = timer_sys_we ? sys_wr_reg : sys_reg;
+
+    timer #(.TICK_FREQ_HZ(TIMER_TICK_HZ)) u_timer (
+        .i_clk(i_clk), .i_rst(i_rst),
+        .i_tick(timer_tick),
+        .i_sys_reg(timer_sys_reg), .i_sys_wdata(sys_wdata),
+        .i_sys_we(timer_sys_we), .o_sys_rdata(timer_rdata),
+        .o_irq(timer_o_irq)
+    );
+
+    assign core_timer_irq = timer_o_irq | i_timer_irq;
+
     // Writable scratch sysreg (4 words) — exercises the full WRSYS-commit →
     // device-write → RDSYS-read-back path with no side effects, which no
     // real device offers (their writes enable MMUs and flash caches).
@@ -404,6 +451,7 @@ module machine_penumbra2
             SYSDEV_L1_ICACHE: sys_rdata_sel = icache_sys_rdata;
             SYSDEV_L2_CACHE:  sys_rdata_sel = l2_sys_rdata;
             SYSDEV_MACH:      sys_rdata_sel = machid_rdata;
+            SYSDEV_TIMER:     sys_rdata_sel = timer_rdata;
             SYSDEV_SCRATCH:   sys_rdata_sel = scratch_q[sys_reg[1:0]];
             default:          sys_rdata_sel = 32'b0;
         endcase
