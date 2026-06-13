@@ -15,6 +15,14 @@
 	.text
 	.globl	memcpy
 	.type	memcpy, @function
+	/*
+	 * Align the entry and the hot loops to the 16-byte (4-word) L1
+	 * I-cache line.  The L1 is direct-mapped, so a loop straddling a
+	 * line boundary always costs an extra fetch and worsens set
+	 * contention.  .p2align 4 pads with NOPs (ADD R0,R0 = 0x00000000),
+	 * which are safe to execute on the fall-through into each loop.
+	 */
+	.p2align 4
 memcpy:
 	mov	r4, r1		/* save original dst */
 	test	r3, r3
@@ -27,6 +35,7 @@ memcpy:
 
 	cmp	r3, #4
 	blo	.Ltail
+	.p2align 4		/* word-copy bulk loop */
 .Lword:
 	ldw	r11, [r2]
 	stw	r11, [r1]
@@ -38,6 +47,7 @@ memcpy:
 .Ltail:
 	test	r3, r3
 	beq	.Ldone
+	.p2align 4		/* byte loop: the whole copy when misaligned, so hot */
 .Lbyte:
 	ldb	r11, [r2]
 	stb	r11, [r1]
