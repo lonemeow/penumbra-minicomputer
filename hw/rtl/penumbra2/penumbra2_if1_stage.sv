@@ -24,9 +24,13 @@
 // handler address it read from the vector table.
 //
 // Interrupt entry adds i_fetch_stop: while the interrupt unit drains the
-// pipeline it freezes PC at the boundary (so the unit can capture it as EPC)
-// and bubbles the output, without steering — the redirect to the handler
-// arrives later, again through the vector fetch.
+// pipeline it freezes PC at the boundary (so the unit can capture it as EPC),
+// without steering — the redirect to the handler arrives later, through the
+// vector fetch. It bubbles the IF1/IF2 output only when the fetch is
+// *advancing*; if the front end is stalled with a valid, un-consumed fetch in
+// that register, the register holds so the drain consumes it rather than
+// dropping it. EPC is the next-fetch PC (one past the held fetch), so a dropped
+// held instruction would be lost — never executed and skipped by the resume.
 //
 // i_mem_busy is the I-side front port's transaction-in-flight signal (the
 // L1's o_busy; tied low against the flat stand-in). While it is high no new
@@ -121,21 +125,35 @@ module penumbra2_if1_stage #(
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
             o_valid <= 1'b0;
-        end else if (redirect || i_flush || i_fetch_stop) begin
-            o_valid <= 1'b0;            // discard the fetch: branch shadow, fault flush, or drain bubble
+        end else if (redirect || i_flush) begin
+            o_valid <= 1'b0;            // discard the in-flight fetch: branch shadow or fault flush
         end else if (!hold) begin
-            o_pc      <= pc;
-            o_next_pc <= pc_plus_4;
-            o_valid   <= 1'b1;
+            if (i_fetch_stop) begin
+                o_valid <= 1'b0;        // interrupt-drain bubble — only when advancing, so a
+                                        // held (stalled) valid fetch is consumed first, not dropped
+            end else begin
+                o_pc      <= pc;
+                o_next_pc <= pc_plus_4;
+                o_valid   <= 1'b1;
+            end
         end
+        // else (hold, no redirect/flush): the IF1/IF2 register holds — a fetch
+        // stalled here stays valid so an interrupt drain drains it rather than
+        // dropping it (EPC points one past it, so a dropped fetch is lost).
     end
 
-    // ── Assertion (sim-only; stripped at synth) ──────────────────
-    // A redirect must discard the in-flight (branch-shadow) fetch: the
-    // IF1/IF2 slot is a bubble the next cycle. Guards a future reorder that
-    // would let the wrong-path fetch survive the flush and reach IF2.
+    // ── Assertions (sim-only; stripped at synth) ─────────────────
+    // A redirect or fault flush discards the in-flight fetch unconditionally —
+    // the IF1/IF2 slot is a bubble the next cycle. Guards a future reorder that
+    // would let a wrong-path fetch survive the flush and reach IF2.
     assert property (@(posedge i_clk) disable iff (i_rst)
-        (redirect || i_flush || i_fetch_stop) |=> !o_valid)
-        else $error("penumbra2_if1_stage: redirect/flush/fetch-stop did not bubble the IF1/IF2 slot");
+        (redirect || i_flush) |=> !o_valid)
+        else $error("penumbra2_if1_stage: redirect/flush did not bubble the IF1/IF2 slot");
+    // An interrupt-drain fetch-stop bubbles the slot only when it is advancing
+    // (~hold); under back-pressure the slot holds so its valid instruction is
+    // drained, not dropped (the interrupt unit's drain waits for it).
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (i_fetch_stop && !hold) |=> !o_valid)
+        else $error("penumbra2_if1_stage: advancing fetch-stop did not bubble the IF1/IF2 slot");
 
 endmodule

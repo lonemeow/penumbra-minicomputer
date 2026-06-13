@@ -347,14 +347,16 @@ module penumbra2_core
     // Recognizes an eligible IRQ, stops the front end at the boundary, drains
     // the in-flight stream, then pulses irq_entry — which save-states the
     // boundary PC (into the spine's SPR file) and launches the vector fetch
-    // above. The drained signal spans the whole pipe: IF2 here plus the spine's
-    // ID/EX/MEM/WB (pipe_busy).
+    // above. The drained signal spans the whole pipe: the IF1/IF2 register
+    // (if1_valid) and IF2 (if2_valid) here, plus the spine's ID/EX/MEM/WB
+    // (pipe_busy). if1_valid matters because a fetch can sit valid-but-unconsumed
+    // in that register under a stall — the drain must outlast it, not skip it.
     penumbra2_irq u_irq (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_irq(i_irq), .i_timer_irq(i_timer_irq),
         .i_sr_i(sr_i), .i_ei_commit(ei_commit),
         .i_retire_valid(o_retire_valid), .i_dc_commit(dc_commit),
-        .i_pipe_busy(if2_valid | pipe_busy),
+        .i_pipe_busy(if1_valid | if2_valid | pipe_busy),
         .i_boundary_pc(if1_fetch_addr),
         .i_fault_commit(fault_commit), .i_vecf_active(vecf_active),
         .o_fetch_stop(irq_fetch_stop),
