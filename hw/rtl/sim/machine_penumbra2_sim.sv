@@ -34,7 +34,15 @@ module machine_penumbra2_sim
     logic [3:0]  bus_byte_en;
     logic        bus_re, bus_we, bus_busy;
 
-    machine_penumbra2 #(.RESET_PC(RESET_PC)) u_machine (
+    machine_penumbra2 #(
+        .RESET_PC(RESET_PC),
+        // Sim machine identity: name "Simulator", 25 MHz — matches the
+        // runners' clock and what isa/test_machid checks.
+        .MACH_NAME0(32'h756D6953),   // "Simu"
+        .MACH_NAME1(32'h6F74616C),   // "lato"
+        .MACH_NAME2(32'h00000072),   // "r\0\0\0"
+        .CPU_FREQ  (32'd25_000_000)
+    ) u_machine (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_irq(i_irq), .i_timer_irq(i_timer_irq),
         .o_bus_addr(bus_addr), .o_bus_wdata(bus_wdata),

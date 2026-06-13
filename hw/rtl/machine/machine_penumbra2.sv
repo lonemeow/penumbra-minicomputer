@@ -34,7 +34,7 @@
 //
 // Not yet plumbed: a bus-fault return path through L2/arbiter/L1 (gen1
 // reports no-device-at-address into the core; gen2's path carries no fault
-// signal yet), and the SYSDEV_BUS / SYSDEV_MACH / SYSDEV_TIMER devices.
+// signal yet), and the SYSDEV_BUS / SYSDEV_TIMER devices.
 
 module machine_penumbra2
     import penumbra_pkg::*;
@@ -44,7 +44,16 @@ module machine_penumbra2
     parameter int          ICACHE_BYTES = 4096,
     parameter int          DCACHE_BYTES = 4096,
     parameter int          LINE_BYTES   = 16,
-    parameter int          NUM_WAYS     = 4
+    parameter int          NUM_WAYS     = 4,
+
+    // Machine identity (SYSDEV_MACH) — board-supplied. The wrapper / board top
+    // sets these; the defaults describe an unnamed machine at unknown clock.
+    parameter logic [31:0] MACH_FEAT_VALUE = 32'd0,
+    parameter logic [31:0] MACH_NAME0      = 32'h00000000,
+    parameter logic [31:0] MACH_NAME1      = 32'h00000000,
+    parameter logic [31:0] MACH_NAME2      = 32'h00000000,
+    parameter logic [31:0] MACH_NAME3      = 32'h00000000,
+    parameter logic [31:0] CPU_FREQ        = 32'd0
 )(
     input  logic                  i_clk,
     input  logic                  i_rst,
@@ -328,6 +337,17 @@ module machine_penumbra2
         .i_sys_reg(sys_reg), .o_sys_rdata(cpuid_rdata)
     );
 
+    // Machine identity (read-only, combinational) — board-supplied constants.
+    logic [31:0] machid_rdata;
+    machid #(
+        .MACH_FEAT_VALUE(MACH_FEAT_VALUE),
+        .MACH_NAME0(MACH_NAME0), .MACH_NAME1(MACH_NAME1),
+        .MACH_NAME2(MACH_NAME2), .MACH_NAME3(MACH_NAME3),
+        .CPU_FREQ(CPU_FREQ)
+    ) u_machid (
+        .i_sys_reg(sys_reg), .o_sys_rdata(machid_rdata)
+    );
+
     // Writable scratch sysreg (4 words) — exercises the full WRSYS-commit →
     // device-write → RDSYS-read-back path with no side effects, which no
     // real device offers (their writes enable MMUs and flash caches).
@@ -352,6 +372,7 @@ module machine_penumbra2
             SYSDEV_L1_DCACHE: sys_rdata_sel = dcache_sys_rdata;
             SYSDEV_L1_ICACHE: sys_rdata_sel = icache_sys_rdata;
             SYSDEV_L2_CACHE:  sys_rdata_sel = l2_sys_rdata;
+            SYSDEV_MACH:      sys_rdata_sel = machid_rdata;
             SYSDEV_SCRATCH:   sys_rdata_sel = scratch_q[sys_reg[1:0]];
             default:          sys_rdata_sel = 32'b0;
         endcase

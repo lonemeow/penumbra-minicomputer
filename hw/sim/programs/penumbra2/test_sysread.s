@@ -7,12 +7,13 @@
 ;
 ; The core wires the real cpuid (device 1) and machid (device 8) identity
 ; devices behind the sideband. cpuid carries the CPU name ("Penumbra"); machid
-; is unnamed (zeros) in this bring-up harness. The reads check:
+; carries the machine name ("Simulator" in this sim harness). The reads check:
 ;   - cpuid NAME0 → "Penu" and NAME1 → "mbra": the read path works, the
 ;     register selector discriminates, and the registered response updates per
 ;     access (no staleness across the two reads);
-;   - machid NAME0 (device 8) → 0: the device selector routes by sys_dev — a mux
-;     that ignored it would return cpuid's "Penu" here.
+;   - machid NAME0 (device 8) → "Simu": the device selector routes by sys_dev —
+;     a mux that ignored it would return cpuid's "Penu" here. Two distinct
+;     non-zero names prove the discrimination more strongly than a zero would.
 ; Each RDSYS feeds a dependent CMP, so the scoreboard must also track the
 ; RDSYS destination through the new 2-cycle sysreg path.
 ;
@@ -35,9 +36,10 @@ _start:
     CMP  R3, R7
     BNE  fail
 
-    ; ── machid NAME0 (dev 8, reg 1) → 0 (unnamed); proves dev-select ──
+    ; ── machid NAME0 (dev 8, reg 1) → "Simu" = 0x756D6953; proves dev-select ──
     RDSYS R4, #8, #1
-    LLI  R8, #0
+    LLI  R8, #0x6953
+    LUI  R8, #0x756D           ; R8 = 0x756D6953
     CMP  R4, R8
     BNE  fail
 
