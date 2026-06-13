@@ -285,50 +285,47 @@ diamond, materialized as four `mov` selects.  A peephole that shares
 the hi-word compare across the two ICMPs would shrink it.  Not on any
 hot path (qsort's comparator is the i32 case); low priority.
 
-## Compiler: aggregate-ABI rework — small structs in registers
+## Compiler: aggregate-ABI rework — small structs in registers — RESOLVED
 
 `doc/system/abi.md` ("Argument Passing" / "Return Values") specifies
 the slot-based aggregate convention: aggregates ≤ 4 bytes travel by
 value in one slot, 5–8 bytes in two slots (register/stack straddle
 allowed), > 8 bytes by reference to a caller-owned copy; returns
 ≤ 8 bytes come back in R1/R1:R2, larger ones via hidden sret pointer
-with R1–R4 undefined at return.  The implementation is still
-`DefaultABIInfo` (clang/lib/CodeGen/Targets/Penumbra.cpp) — every
-aggregate indirect, every aggregate return sret — with three defects
-the `test/compiler/penumbra-abi/` tests pin down:
+with R1–R4 undefined at return.
 
-- **Missing byval copy for register-slot aggregates.**
-  `PenumbraCallLowering` passes the byval *pointer* in the register
-  slot without materializing the copy, so C pass-by-value is
-  silently pass-by-reference: a callee that writes its parameter
-  mutates the caller's object, and a `.rodata`-sourced argument is
-  exposed to callee writes.  (The variadic path was already fixed —
-  `normalizeVarArgByVal` — the fixed-arg path was not.)
-- **Stack-positioned byval corrupts trailing arguments.**  The
-  caller memcpys the aggregate's bytes into the outgoing area but
-  advances the slot offset by only one slot, so the next argument
-  overwrites the aggregate's tail.  Silent data corruption for any
-  by-value struct that lands in stack slots.
-- **Outgoing stack stores expand byte-by-byte.**  Stack-slot stores
-  are created with align-1 memory operands, so every stack argument
-  (scalars included — e.g. a stack-passed `long long`) lowers to
-  the unaligned byte-store expansion: eight `stb` + shifts instead
-  of two `stw`.
+Implemented in clang as `PenumbraABIInfo`
+(clang/lib/CodeGen/Targets/Penumbra.cpp, commit `8fb7d7dc`), replacing
+the earlier `DefaultABIInfo` that made every aggregate indirect and
+every aggregate return sret.  The classes follow the RISC-V ILP32
+pattern: ≤ 4 bytes → Direct(i32), 5–8 → Direct([2 x i32]), > 8 →
+indirect **non-byval**, with the same classes for returns
+(`RetCC_Penumbra` assigns i32 to [R1, R2]).  Making the indirect class
+non-byval is the keystone: clang materializes the by-value copy in IR
+and the backend only ever sees a plain pointer, so the two byval-path
+defects below cannot arise from clang-emitted code (`normalizeVarArgByVal`
+and the framework byval handling are now dead for it).
 
-Plan: replace `DefaultABIInfo` with a `PenumbraABIInfo` (RISC-V
-ILP32 pattern): ≤ 4 bytes → Direct(i32), 5–8 → Direct([2 x i32]),
-> 8 → indirect **non-byval** (clang materializes the copy in IR, so
-the backend byval paths go dead and `normalizeVarArgByVal` can
-retire); same classes for returns (`RetCC_Penumbra` already assigns
-i32 to [R1, R2]).  Fix the stack-store alignment in
-`PenumbraCallLowering`, make any remaining byval IR a hard error,
-re-triage the `struct-ret-1.c` exclusion, and add lit shape tests
-for the new convention.
+The three defects the `test/compiler/penumbra-abi/` tests pinned down:
 
-Tracked tests: `test/compiler/penumbra-abi/` —
-`abi-aggregate-{mutate,const,value}.c` fail until this lands;
-`abi-aggregate-{return,varargs,boundary}.c` must stay green
-across it.
+- **Missing byval copy for register-slot aggregates** (C pass-by-value
+  silently became pass-by-reference) — gone with the non-byval
+  classification; `abi-aggregate-{mutate,const,value}.c` pass.
+- **Stack-positioned byval corrupts trailing arguments** — same root
+  cause, gone; `abi-aggregate-boundary.c` (the stack straddle) passes.
+- **Outgoing stack stores expand byte-by-byte** — independent backend
+  bug: `PenumbraOutgoingValueHandler` tagged the slot with a bare
+  `MachinePointerInfo::getStack()`, so `inferAlignFromPtrInfo` returned
+  Align(1) and every stack argument (scalars included) lowered to the
+  byte-store expansion.  Fixed in `bbd64bffed05` by deriving the
+  alignment from the Align(4) SP and the 4-aligned slot offset
+  (`commonAlignment`).
+
+Coverage: execution tests `test/compiler/penumbra-abi/*.c`; shape
+tests `clang/test/CodeGen/Penumbra/aggregate-abi.c` (frontend
+coercion) and `test/CodeGen/Penumbra/{aggregate-args,outgoing-stack-arg-align}.ll`
+(backend register placement + stack-store width).  The `struct-ret-1.c`
+exclusion was re-triaged and removed — it passes at every opt level.
 
 ## Compiler: two scalar miscompiles surfaced by rebuilding compiler-rt — RESOLVED
 
@@ -1783,26 +1780,23 @@ back step (`LDH +SEXT offset,[entry_addr]` → `ADD offset, base`
 sensitive builds and large switches; for now we always pay the
 4 B/entry tax.
 
-## Compiler: named byval args overlap on stack
+## Compiler: named byval args overlap on stack — RESOLVED
 
-When a fixed (non-variadic) function receives byval struct args
-that spill past R1-R4, adjacent stack slots overlap.  Example:
-`check_float(int a, _Complex float a1, ..., _Complex float a5)`
-— `a4` and `a5` go to stack slots, but CC_Penumbra's
-`CCAssignToStack<4,4>` reserves only the pointer size per slot,
-while the framework's byval-mem path writes
-`Flags.getByValSize()` bytes (8 for `_Complex float`, 16 for
-`_Complex double`) at that offset.
+When a fixed (non-variadic) function received byval struct args
+that spilled past R1-R4, adjacent stack slots overlapped: CC_Penumbra's
+`CCAssignToStack<4,4>` reserved only a pointer-sized slot while the
+framework's byval-mem path wrote `Flags.getByValSize()` bytes (8 for
+`_Complex float`, 16 for `_Complex double`) at that offset.
 
-Fix: add `CCIfByVal<CCPassByVal<4, 4>>` to
-`PenumbraCallingConv.td` before the type-matched rules, so the
-CC reserves `Flags.getByValSize()` bytes per byval slot instead
-of a pointer-sized slot.  Mips/AMDGPU follow the same pattern.
-
-Tracked test: `complex-7.c` (excluded in `test/compiler/excludes.txt`).
-The variadic-byval stack-overflow bug (920625-1.c) was a
-separate issue, fixed by `normalizeVarArgByVal()` in
-`PenumbraCallLowering.cpp`.
+Resolved by the aggregate-ABI rework above: the `PenumbraABIInfo`
+classes route these types so the byval-on-stack path is never taken —
+a 5–8 byte aggregate (`_Complex float`) goes Direct([2 x i32]) and a
+> 8 byte one (`_Complex double`) goes indirect non-byval with a
+clang-materialized copy.  The once-proposed `CCIfByVal<CCPassByVal<4,4>>`
+CC change is moot for clang-emitted code.  `complex-7.c` passes and its
+exclusion is removed.  The variadic-byval stack-overflow bug
+(920625-1.c) was a separate issue, fixed earlier by
+`normalizeVarArgByVal()` in `PenumbraCallLowering.cpp`.
 
 ## Benchmark: CoreMark-Pro under NetBSD
 
