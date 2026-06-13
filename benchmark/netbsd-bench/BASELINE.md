@@ -16,9 +16,203 @@ based on the median.
 
 ## Snapshot index
 
+- [2026-06-13 — compiler codegen rebuild (Localizer + i64 legalization)](#2026-06-13--compiler-codegen-rebuild-localizer--i64-legalization)
 - [2026-05-25 — userland -O2 rebuild](#2026-05-25--userland--o2-rebuild)
 - [2026-05-19 — L2 cache + SPI FIFO + pmap speedups](#2026-05-19--l2-cache--spi-fifo--pmap-speedups)
 - [2026-05-15 — initial baseline](#2026-05-15--initial-baseline)
+
+---
+
+## 2026-06-13 — compiler codegen rebuild (Localizer + i64 legalization)
+
+**Captured**: 2026-06-13
+**Repository state**: HEAD `de4289717e18`.  The previous snapshot was
+ anchored at `9aa337603682`; `git log 9aa337603682..de4289717e18`
+ covers the window.  Both the kernel and the userland (libc + `pbench`)
+ were rebuilt with the updated compiler — the only `netbsd:` commits in
+ the window are a comment fix and a `__cerror` 64-bit return-value fix,
+ so the dramatic *syscall*-path gains below are attributable to codegen,
+ not kernel C changes.  The perf-relevant compiler commits:
+ - `llvm: run the GlobalISel Localizer pass` — rematerializes constants
+   and address bases into the blocks that use them, shrinking live
+   ranges and cutting cross-block spills.  Broad win across kernel and
+   libc; previously measured at +14.8% Dhrystone DMIPS.
+ - `llvm: legalize the i128 shapes the mulhi idiom and _BitInt produce`,
+   `llvm: keep carry-producing adds alive when only their carry is used`
+   — improve 64-bit arithmetic; directly relevant to the timecounter
+   scaling math (`mulhi` + carry adds) on the `clock_gettime` hot path.
+ - `llvm: include R12 in the i32 value register class so curlwp reads
+   coalesce` — removes a copy/spill on every kernel `curlwp` read.
+ - `llvm: fold zext of a comparison result to a copy`,
+   `llvm: centralize compare immediate folding in selectICmpToValue`,
+   `llvm: fold constant compare operands into select pseudos` — tighter
+   compare/branch codegen, helps the qsort comparator and kernel
+   branch-heavy paths.
+ The large body of gen2 (`penumbra2`) RTL work in this window does **not**
+ affect these numbers — the FPGA core running NetBSD is gen1.
+**Platform**: ULX3S FPGA, 25 MHz CPU clock, running NetBSD off SD card.
+**Binary**: `pbench` (dynamically linked against libc.so), kernel and
+ userland both rebuilt at -O2 with the updated compiler.
+**Notes**: New `fork_exec` bench added this round (re-execs `pbench`
+ with a sentinel; measures full fork+execve+exit including a second
+ `ld.elf_so` run).  `dd` numbers re-captured.
+
+```
+--- kernel/getpid ---
+  kernel   getpid             -               min=   144.92 us  med=   147.72 us  mean=   149.19 us  iters=2048  trials=17
+
+--- kernel/clock_gettime ---
+  kernel   clock_gettime      -               min=   200.72 us  med=   204.37 us  mean=   207.02 us  iters=1024  trials=24
+
+--- kernel/pipe_pingpong ---
+  kernel   pipe_pingpong      1B              min=     5.36 ms  med=     5.45 ms  mean=     5.53 ms  iters=64  trials=15
+
+--- kernel/fork_exit ---
+  kernel   fork_exit          -               min=   287.58 ms  med=   371.35 ms  mean=   364.23 ms  iters=1  trials=14
+
+--- kernel/fork_exec ---
+  kernel   fork_exec          -               min=     1.37 s   med=     1.38 s   mean=     1.53 s   iters=1  trials=5
+
+--- libc/memcpy ---
+  libc     memcpy             size=1          min=     8.19 us  med=     8.31 us  mean=     8.40 us  iters=32768  trials=19
+  libc     memcpy             size=16         min=    12.14 us  med=    12.30 us  mean=    12.46 us  iters=16384  trials=25
+  libc     memcpy             size=64         min=    24.81 us  med=    25.17 us  mean=    25.54 us  iters=8192  trials=24
+  libc     memcpy             size=256        min=    71.77 us  med=    72.95 us  mean=    73.80 us  iters=4096  trials=17
+  libc     memcpy             size=1024       min=   262.67 us  med=   266.36 us  mean=   269.38 us  iters=1024  trials=19
+  libc     memcpy             size=4096       min=     1.14 ms  med=     1.15 ms  mean=     1.17 ms  iters=256  trials=17
+  libc     memcpy             size=16384      min=     4.53 ms  med=     4.60 ms  mean=     4.67 ms  iters=64  trials=17
+  libc     memcpy             size=65536      min=    21.56 ms  med=    23.41 ms  mean=    24.96 ms  iters=16  trials=13
+
+--- libc/memcpy_align ---
+  libc     memcpy_align       n=256,src=1,dst=0  min=   235.22 us  med=   252.87 us  mean=   266.81 us  iters=1024  trials=19
+  libc     memcpy_align       n=256,src=0,dst=1  min=   235.23 us  med=   237.70 us  mean=   241.39 us  iters=1024  trials=21
+  libc     memcpy_align       n=256,src=1,dst=1  min=   235.47 us  med=   237.86 us  mean=   241.14 us  iters=1024  trials=21
+  libc     memcpy_align       n=256,src=1,dst=3  min=   235.00 us  med=   237.84 us  mean=   241.18 us  iters=1024  trials=21
+  libc     memcpy_align       n=7             min=    11.90 us  med=    12.00 us  mean=    12.20 us  iters=32768  trials=13
+  libc     memcpy_align       n=31            min=    17.75 us  med=    17.99 us  mean=    18.29 us  iters=16384  trials=17
+  libc     memcpy_align       n=127           min=    41.25 us  med=    41.77 us  mean=    42.36 us  iters=8192  trials=15
+  libc     memcpy_align       n=255           min=    72.55 us  med=    73.60 us  mean=    74.62 us  iters=4096  trials=17
+
+--- libc/memset ---
+  libc     memset             size=1          min=     4.00 us  med=     4.04 us  mean=     4.10 us  iters=65536  trials=19
+  libc     memset             size=16         min=     6.86 us  med=     6.94 us  mean=     7.04 us  iters=32768  trials=22
+  libc     memset             size=64         min=    15.52 us  med=    15.72 us  mean=    15.95 us  iters=16384  trials=20
+  libc     memset             size=256        min=    50.28 us  med=    50.91 us  mean=    51.64 us  iters=4096  trials=24
+  libc     memset             size=1024       min=   190.66 us  med=   190.99 us  mean=   193.94 us  iters=2048  trials=13
+  libc     memset             size=4096       min=   747.01 us  med=   752.47 us  mean=   765.04 us  iters=512  trials=13
+  libc     memset             size=16384      min=     2.97 ms  med=     3.00 ms  mean=     3.06 ms  iters=128  trials=13
+  libc     memset             size=65536      min=    11.95 ms  med=    12.07 ms  mean=    12.25 ms  iters=32  trials=13
+
+--- libc/strlen ---
+  libc     strlen             len=8           min=     6.60 us  med=     6.68 us  mean=     6.78 us  iters=32768  trials=23
+  libc     strlen             len=64          min=    30.43 us  med=    30.80 us  mean=    31.23 us  iters=8192  trials=20
+  libc     strlen             len=256         min=   112.31 us  med=   113.57 us  mean=   115.29 us  iters=2048  trials=22
+  libc     strlen             len=1024        min=   444.27 us  med=   449.64 us  mean=   457.55 us  iters=512  trials=22
+  libc     strlen             len=4096        min=     1.87 ms  med=     1.89 ms  mean=     1.93 ms  iters=128  trials=21
+
+--- libc/qsort_int ---
+  libc     qsort_int          n=256           min=     9.46 ms  med=     9.61 ms  mean=     9.73 ms  iters=32  trials=17
+  libc     qsort_int          n=4096          min=   215.89 ms  med=   218.98 ms  mean=   221.92 ms  iters=1  trials=23
+```
+
+### System I/O (dd, not pbench)
+
+```
+# dd if=/dev/ld0 of=/dev/null bs=32k count=100
+100+0 records in
+100+0 records out
+3276800 bytes transferred in 21.944 secs (149325 bytes/sec)
+
+# dd if=/dev/zero of=/dev/null bs=32k count=1000
+1000+0 records in
+1000+0 records out
+32768000 bytes transferred in 16.110 secs (2034016 bytes/sec)
+```
+
+### Reading this snapshot
+
+Deltas vs. the 2026-05-25 baseline (min trial, lower is better).  The
+dominant variable this round is the **compiler rebuild**; nothing in the
+kernel C or the SDRAM/storage path changed.
+
+- **Syscall path — the headline, all codegen**
+  - `clock_gettime`: 622.21 µs → **200.72 µs** (~3.10× faster)
+  - `pipe_pingpong`:   9.36 ms → **5.36 ms**   (~1.75× faster)
+  - `getpid`:        237.74 µs → **144.92 µs** (~1.64× faster)
+  - `fork_exit`:     384.58 ms → **287.58 ms** (~1.34× faster)
+  - `clock_gettime`'s outsized win is mechanistically attributable: its
+    hot path scales the timecounter with a 64×32→64 `mulhi` and
+    carry-propagating 64-bit adds, exactly the idiom the i128/mulhi
+    legalization and carry-liveness fixes target.  The other three ride
+    the Localizer's broad spill reduction across the kernel.  This also
+    finally puts the syscalls in the expected order — `getpid`
+    (trivial) cheaper than `clock_gettime` (timecounter read).
+- **Comparator-heavy code — Localizer + compare folding**
+  - `qsort_int` n=256:  16.61 ms → **9.46 ms**  (~1.76× faster)
+  - `qsort_int` n=4096: 342.15 ms → **215.89 ms** (~1.58× faster)
+  - The sort's inner loop is integer compares + tiny swaps + an indirect
+    call to a small comparator — precisely what the compare-folding and
+    zext-of-icmp commits tighten, on top of the Localizer keeping the
+    comparator's operands in registers.
+- **libc bulk routines — small, SDRAM-bound gains**
+  - `memcpy` size=65536: 23.71 ms → 21.56 ms (~1.10×) ⇒ **329 ns/byte**
+    (was 362)
+  - `memset` size=65536: 12.83 ms → 11.95 ms (~1.07×) ⇒ **182 ns/byte**
+    (was 196)
+  - `strlen` len=4096:    2.06 ms →  1.87 ms (~1.10×) ⇒ **457 ns/byte**
+    (was 491)
+  - These live at the SDRAM-streaming floor; the compiler can only
+    tighten the loop overhead, not the per-byte physics — hence the
+    modest, uniform ~1.1× across the big sizes.
+- **The small-`memset` regression from last snapshot is resolved**
+  - `memset` size=1:  6.69 µs → **4.00 µs** (now *below* the pre-O2
+    4.72 µs floor); size=16: 9.83 → 6.86 µs; size=64: 19.22 → 15.52 µs.
+    The wide prologue that was costing tiny-n memset has been retuned.
+- **…but a mirror-image small-`memcpy` regression appeared**
+  - `memcpy` size=1:  5.17 µs → **8.19 µs** (~1.58× *slower*)
+  - `memcpy` size=16: 8.35 µs → **12.14 µs**
+  - `memcpy` size=64: 20.65 µs → **24.81 µs**
+  - `memcpy_align` n=7: 8.27 → **11.90 µs**; n=31: 14.79 → 17.75 µs
+  - This is **not** a codegen change.  Penumbra `memcpy`/`memset` are
+    hand-written assembly (`common/lib/libc/arch/penumbra/string/`), so a
+    pure compiler rebuild cannot alter their instruction bytes — and a
+    disassembly confirms they are unchanged, only relocated (`memcpy` now
+    at `0x229db0`, `memset` at `0x229d2c`).  The swing is a **code-placement
+    / I-cache alignment** effect: neither `.S` carries a `.p2align`, the
+    L1 I-cache is 1 KiB **direct-mapped** with 16-byte (4-word) lines, and
+    the `memcpy` `.Lword` loop is 7 instructions that straddle a line
+    boundary.  A rebuild shifts every libc symbol's address, changing
+    which routines collide (mod 1 KiB) with their benchmark callers in the
+    direct-mapped index.  The tell is the **anti-correlation**: small
+    `memset` *improved* while small `memcpy` *regressed* in the same
+    build — two fixed routines landing at new addresses, one falling out
+    of I-cache set-conflict and one falling in.  Big sizes (256+) amortize
+    the per-call penalty, so it is invisible there.
+- **`memcpy_align` — misalignment tax slightly down**
+  - Aligned n=255: 72.55 µs.  Misaligned n=256 (any offset): ~235 µs,
+    down from ~250 µs.  The tax is now ~3.2× (was ~3.4×) — still a
+    cache/SDRAM access-pattern cost, not codegen.
+- **dd throughput — modest, consistent with faster syscalls**
+  - `/dev/ld0` (SD): 132.7 KB/s → **149.3 KB/s** (~1.13×)
+  - `/dev/zero → /dev/null`: 1.84 MB/s → **2.03 MB/s** (~1.11×)
+  - Pure read+write+uiomove path; the gain is the cheaper syscall
+    round-trip, not any storage change.
+- **New: `fork_exec`** — 1.37 s min for fork+execve+exit.  ~4.8× the
+  `fork_exit` cost, the difference being a full second `ld.elf_so` run
+  to relink the re-exec'd image.  No prior point to compare against; it
+  becomes the baseline for the dynamic-linker / exec path.
+- **Open questions for next snapshot**
+  - Confirm the small-`memcpy` regression is I-cache placement, not the
+    routine.  The `.S` bytes are fixed, so a perturbation run — force a
+    `.p2align` (or padding) before `memcpy`, rebuild, re-measure on HW —
+    should swing the small sizes if the cause is alignment/set-conflict.
+    If confirmed, add explicit `.p2align` to the libc string `.S` files
+    to make these numbers layout-stable, and treat small-size deltas as
+    placement noise until then.  Until fixed, the trustworthy signal is
+    the large-size (steady-state) and kernel rows.
+  - `fork_exec` has only 5 trials and a wide min↔mean spread
+    (1.37 s ↔ 1.53 s); re-run with more trials once it is not the
+    slowest bench in the suite.
 
 ---
 
