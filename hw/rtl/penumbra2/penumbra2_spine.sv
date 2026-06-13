@@ -269,6 +269,14 @@ module penumbra2_spine
     logic        spr_file_we;
     assign spr_file_we = wb_spr_we & (wb_spr_sel == SPR_EPC | wb_spr_sel == SPR_ESR);
 
+    // WRSPR USP writes the regfile R14 (user) bank. The regmap already put
+    // SB_USP=14 in the WB's o_wr_idx and the value in o_wr_data; only the
+    // write enable needs the SPR strobe, since the WB's GPR enable excludes
+    // spr_we. RDSPR USP needs nothing here — it reads entry 14 through the
+    // ordinary operand-B regfile read (cross_bank, any mode).
+    logic        usp_we;
+    assign usp_we = wb_spr_we & (wb_spr_sel == SPR_USP);
+
     logic [3:0]  spr_sr_flags;
     logic [31:0] sr_committed;     // committed SR word (RDSPR SR reads S/I here)
     penumbra2_spr_file u_spr (
@@ -284,12 +292,13 @@ module penumbra2_spine
         .o_epc(o_epc), .o_esr()
     );
 
-    // WRSPR to USP/SCRn is decoded but its backend is not routed yet (USP →
-    // regfile R14 bank, SCRn → scratch file). Catch it loudly rather than
-    // silently dropping the write until those milestones land.
+    // WRSPR to SCRn is decoded but its scratch-file backend is not routed
+    // yet. Catch it loudly rather than silently dropping the write until that
+    // milestone lands. (EPC/ESR → SPR file; USP → regfile R14 bank.)
     assert property (@(posedge i_clk) disable iff (i_rst)
-        wb_spr_we |-> (wb_spr_sel == SPR_EPC || wb_spr_sel == SPR_ESR))
-        else $error("penumbra2_spine: WRSPR to an unrouted SPR backend (USP/SCRn)");
+        wb_spr_we |-> (wb_spr_sel == SPR_EPC || wb_spr_sel == SPR_ESR
+                       || wb_spr_sel == SPR_USP))
+        else $error("penumbra2_spine: WRSPR to an unrouted SPR backend (SCRn)");
 
     // ════════════════════════════════════════════════════════════
     // Register file (shared: ID reads, WB writes)
@@ -298,7 +307,7 @@ module penumbra2_spine
         .i_clk(i_clk), .i_rst(i_rst),
         .i_rd_idx_a(rd_idx_a), .o_rd_data_a(rd_data_a),
         .i_rd_idx_b(rd_idx_b), .o_rd_data_b(rd_data_b),
-        .i_wr_idx(wr_idx), .i_wr_data(wr_data), .i_wr_en(wr_en)
+        .i_wr_idx(wr_idx), .i_wr_data(wr_data), .i_wr_en(wr_en | usp_we)
     );
 
     // ════════════════════════════════════════════════════════════
