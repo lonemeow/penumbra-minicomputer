@@ -125,16 +125,21 @@ buttons, commit/retire XOR-folded onto the LEDs so synthesis keeps
 the design — the synthesize-after-every-change workflow for gen2,
 in place *before* the BRAM L1 lands (Decision 11's 4-way-vs-leaner
 choice is gated on the IF2 tag-compare/way-mux path at synthesis).
-First build: ~55 MHz achieved on ECP5-85F sg6 (bare core — no
-MMU/caches/fabric), critical path in ID decode toward the
-fault-vector register. Remaining, in dependency order:
+First bare-core build: ~55 MHz achieved on ECP5-85F sg6, critical
+path in ID decode toward the fault-vector register.
 
-1. At gen2 machine assembly — now unblocked (D-side MMU, BRAM L1,
-   transactional arbiter, and fill sequencer are all in):
-   `machine_penumbra2` honoring the program-end contract; fold the
-   ISA-shaped gen2 programs (smoke, branch, loadstore, fault, eret,
-   syscall_trap, intr) into `isa/`.
-2. Opportunistic: extract `machine_penumbra1` from `machine_sim` /
+The gen2 machine assembly is done: `machine_penumbra2` under
+`hw/rtl/machine/` honors the program-end contract, the runners build
+`machine_penumbra2_sim` (machine + `unified_bus_mem`), the probe
+variant wraps the machine — the IF2 tag-compare/way-mux path and the
+L1↔L2 layer are in front of nextpnr; the first `make timing` run of
+that configuration is pending — and the ISA-shaped gen2 programs
+(smoke, branch, loadstore, fault, eret, syscall_trap) moved into
+`isa/`. `test_intr` stays generation-pinned: its RUNNER tag selects
+the IRQ-driving testbench, which is implementation-pinned by
+definition. Remaining:
+
+1. Opportunistic: extract `machine_penumbra1` from `machine_sim` /
    `ulx3s_penumbra1_top` so both wrappers share one integration
    (the sim-vs-FPGA congruence argument in the build-system doc).
 
@@ -732,38 +737,55 @@ decode + read + execute + writeback), so the durable fmax lever is the
 gen2 pipeline. Within gen1, prefer small depth-shaving wins that buy
 safety margin over the 25 MHz target rather than campaigns to raise it.
 
-## Hardware: Penumbra/2 machine assembly over the L1↔L2 subsystem
+## Hardware: Penumbra/2 machine assembly — done; findings + residue
 
-The gen2 memory-subsystem modules below the pipeline are all built,
-each with a module testbench: the BRAM-backed VIPT L1
-(`hw/rtl/penumbra2/cache_bram_vipt.sv` — registered launch/resolve
-hit, 4-way with invalid-first tree-PLRU, write-through /
-write-no-allocate, flop valid bits with single-cycle INVAL_ALL), the
-transactional I/D arbiter (`txn_arbiter.sv` — transaction-granular
-grant, single-outstanding, D-priority, type-dependent completion),
-and the fill sequencer (`fill_sequencer.sv` — atomic full-line,
-registered word advance at the L2's natural initiation interval).
-Design record: Decision 14 in
-`doc/internals/penumbra2/design-decisions.md`; interface spec in
-`doc/internals/penumbra2/memory-interface.md`.
+The gen2 machine is assembled (`hw/rtl/machine/machine_penumbra2.sv`):
+both VIPT L1s, the transactional I/D arbiter, the fill sequencer, and
+the shared L2 sit behind the core's fetch/dmem front ports; IF2 and
+MEM carry their miss-stall handshakes (level-held request, busy-drop
+completion, a one-entry IF2 skid for completion-under-ID-stall, and a
+redirect-target launch held out of an in-flight I-transaction); the
+identity-mapping assertions are gone and the non-identity tests
+(`test_tlb_remap`, the COW set) pass; SYSDEV_L1_DCACHE/ICACHE are
+wired through the WRSYS commit and RDSYS sideband. The conformance
+suite runs end-to-end on `machine_penumbra2_sim`.
 
-The core still runs against the dual-port `unified_mem` stand-in.
-What remains is the integration — the gen2 machine assembly item in
-the build/test restructure section above — whose memory-subsystem
-side is:
+Two durable findings from the integration, both instances of one
+invariant — *a presented transaction never vanishes mid-flight*:
 
-- Wire two `cache_bram_vipt` instances + arbiter + sequencer + the
-  shared L2 behind the core's fetch/dmem interfaces; give IF2 and
-  MEM their miss-stall inputs (including holding a redirect-target
-  launch until an in-flight I-miss completes) and lift their
-  identity-mapping assertions — which unlocks the
-  non-identity-mapping tests (`test_tlb_remap`, the COW set).
-- Wire SYSDEV_L1_DCACHE / SYSDEV_L1_ICACHE through the WRSYS commit
-  and RDSYS sideband paths.
-- Put the L1 in front of synthesis: the probe top with the cache
-  wired is the first time the IF2 tag-compare / way-mux path is
-  visible to nextpnr. 4-way is the lean; fall back to 2-way (a
-  parameter) if it caps fmax.
+- **The request/busy mesh must be structurally acyclic.** Every
+  memory layer's busy combinationally follows its consumer's request
+  (the sync-bus contract), so no request — and nothing a request is
+  gated on, like the front-end flush — may combinationally depend on
+  any busy, or Verilator (rightly) reports the mesh as a
+  combinational cycle. This is why the vector-fetch redirect is a
+  registered pulse (captured handler word, one cycle after the read
+  completes, `o_active` covering the redirect cycle) and why
+  `o_fetch_re` is a pure function of FSM state.
+- **Pass-through transactions need an owner, like fills have.** A
+  flushed fetch whose pass-through read the arbiter had already
+  granted-and-locked would withdraw the back-side request
+  mid-transaction and wedge the arbiter's completion condition
+  forever (line fills were immune — the cache FSM owns them; the
+  window needs a D-access parking the fetch first, which is why plain
+  branch tests never hit it). The L1's S_PT state captures an
+  accepted-but-busy pass-through read and holds it to completion,
+  serving a withdrawn consumer into the void. Front-side consumers
+  may therefore walk away from *reads*; writes have no kill source.
+
+Remaining in the gen2 machine, roughly in order:
+
+- First `make timing BOARD=ulx3s CORE=penumbra2 VARIANT=probe` run of
+  the machine-shaped probe (Decision 11's 4-way-vs-2-way L1 choice is
+  gated on the IF2 tag-compare/way-mux path it exposes; 2-way is a
+  parameter fallback).
+- A bus-fault return path through L2/sequencer/arbiter/L1 — gen1
+  wires no-device-at-address into the core; the gen2 path carries no
+  fault signal yet (blocks `test_bus_fault*` and, later, bus
+  autoconfig RAM probing).
+- The remaining capability gaps vs gen1's runner: wrspr (the SPR
+  write port milestone above), timer/uart devices on the external
+  bus, machid/busctl via a machine sysreg expansion port.
 
 The shared L2 stays untouched; its read-pipeline initiation interval
 is the fill-penalty floor, characterised by

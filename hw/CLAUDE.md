@@ -28,11 +28,12 @@ hw/
 ├── rtl/
 │   ├── common/    # penumbra_pkg.sv — shared ISA constants (both cores + peripherals)
 │   ├── penumbra1/ # gen1 CPU core: datapath, regfile, ALU, sequencer, microcode ROM, ...
-│   ├── penumbra2/ # gen2 6-stage pipelined core (pipeline + exception unit)
+│   ├── penumbra2/ # gen2 6-stage pipelined core + its L1/arbiter/fill modules
+│   ├── machine/   # machine integrations (machine_<generation>.sv)
 │   ├── mmu/       # TLB main + pinned, MMU top, alignment/permission checks
 │   ├── soc/       # Bus controller, autoconfig, caches (L1 VIPT, L1 PIPT, L2), boot ROM, cpuid/machid
 │   ├── io/        # Real UART, real SPI, SDRAM v2 controller/adapter/PHY/CDC
-│   ├── sim/       # machine_sim, sim_uart, sim_spi, sdram_sim, simple_mem, sdram chip model
+│   ├── sim/       # machine_sim + machine_penumbra2_sim, sim devices, memory models
 │   └── fpga/      # FPGA helpers (fpga_ram, lint stubs); board tops under <board>/
 ├── microcode/   # microcode.uasm (single source — assemble via uasm.py)
 ├── rom/         # Boot ROM (C + asm) and its standalone Makefile
@@ -62,13 +63,16 @@ cross-referenced from another generation's directory.
   own start/busy handshake; see `doc/internals/divmul.md`).
 
 ### Penumbra/2 core (`rtl/penumbra2/`)
-The gen2 6-stage pipelined core (design in `doc/internals/penumbra2/`).
-Runs straight-line/branch/load-store streams, RDSYS/WRSYS sysreg reads and
-writes against CPU-internal devices, and the full synchronous + asynchronous
-exception lifecycle against a unified-memory stand-in; the MMU and the real
-BRAM L1 caches are not yet wired.
-- `penumbra2_core.sv` — top: front end (IF1/IF2 + unified memory) onto the
-  spine, plus the vector-fetch FSM and interrupt unit.
+The gen2 6-stage pipelined core (design in `doc/internals/penumbra2/`)
+and its generation-bound memory-system modules. The bare core exposes
+fetch/dmem front ports (launch / level-held request / busy-drop
+completion), MMU query/verdict ports, and the sysreg sideband; the
+machine integration (`rtl/machine/machine_penumbra2.sv`) binds them to
+the MMU, the split VIPT L1s, the I/D arbiter + fill sequencer, and the
+shared L2.
+- `penumbra2_core.sv` — the bare core: front end (IF1/IF2) onto the
+  spine, the vector-fetch FSM muxed onto the fetch port, the interrupt
+  unit, and the memory/sysreg port groups.
 - `penumbra2_spine.sv` — ID→EX→MEM→WB integration: stages, regfile,
   scoreboard, flag bypass, SPR file; fault-commit flush + save-state.
 - `penumbra2_if1_stage.sv` / `penumbra2_if2_stage.sv` — split fetch (PC +
@@ -77,18 +81,36 @@ BRAM L1 caches are not yet wired.
   scoreboard. `penumbra2_regmap.sv` maps arch regs → physical entries.
 - `penumbra2_ex_stage.sv` — ALU + flag bypass + branch resolve + divmul +
   drain-commit; raises DIV0 / SYSCALL / BREAK.
-- `penumbra2_mem_stage.sv` — alignment, 2-cycle single-STALL data access,
-  sub-word extract/replicate.
+- `penumbra2_mem_stage.sv` — alignment, single-STALL data access held
+  through i_dmem_busy (hit: 2 cycles; miss/uncached: busy-drop
+  completion), sub-word extract/replicate.
 - `penumbra2_wb_stage.sv` — commit point: regfile/SR/SPR writes, takes the
   fault.
 - `penumbra2_spr_file.sv` — SR / ESR / EPC; save-state, ERET restore, EI/DI.
 - `penumbra2_vecfetch.sv` — exception vector-fetch FSM (handler address →
-  PC redirect).
+  registered PC redirect; waits out a busy fetch port on both ends).
 - `penumbra2_irq.sv` — interrupt recognition + ei_shadow + drain-and-take.
 - `penumbra2_alu.sv`, `penumbra2_regfile.sv`, `penumbra2_scoreboard.sv`,
   `penumbra2_flag_bypass.sv` — datapath leaf modules.
 - `penumbra2_pkg.sv` — gen2-internal constants (scoreboard indices, op_class,
   alu_op, mem_op).
+- `cache_bram_vipt.sv` — BRAM-backed VIPT L1 (launch/resolve front,
+  4-way tree-PLRU, WT/WnA, atomic line fill, S_PT pass-through hold).
+- `txn_arbiter.sv` — transaction-granular I/D arbiter (D-priority,
+  single-outstanding, type-dependent completion).
+- `fill_sequencer.sv` — atomic full-line fill walker between the
+  arbiter and the shared L2.
+
+### Machine integrations (`rtl/machine/`)
+One module per generation: the board-independent computer
+(`doc/internals/build-system.md`). Devices attach outside, on the
+exposed external bus.
+- `machine_penumbra2.sv` — gen2 core + mmu_bram + 2× cache_bram_vipt +
+  txn_arbiter + fill_sequencer + l2_cache + the sysreg device complex
+  (MMU, both L1s, L2, cpuid, scratch); exposes the external bus, IRQs,
+  commit/retire, and the program-end pulse (a retiring BREAK).
+  `machine_penumbra1` (extraction from `machine_sim` /
+  `ulx3s_penumbra1_top`) is still to come.
 
 ### Penumbra/1 core (`rtl/penumbra1/`)
 - `cpu_core.sv` — full CPU integration: datapath + sequencer + ROM
@@ -171,6 +193,12 @@ BRAM L1 caches are not yet wired.
   `doc/internals/sdram-controller.md` and `sdram-optimization.md`).
 
 ### Simulation glue (`rtl/sim/`)
+- `machine_penumbra2_sim.sv` — `machine_penumbra2` + `unified_bus_mem`:
+  the gen2 program-runner wrapper (`make test CORE=penumbra2`).
+- `unified_bus_mem.sv` — bus-shaped unified ROM/RAM device (region-
+  compressed map, registered read with 1-cycle busy, `+rom_hex=`).
+- `unified_mem.sv` — dual-port flat stand-in for core-level bring-up
+  (registered read, no busy; the machine made it spare).
 - `machine_sim.sv` — `cpu_core` + `boot_rom` + `simple_mem` +
   `sim_uart` + `machid` + `busctl` + autoconfig SPI. Shared-bus
   via `bus_devsel`, UART IRQ wired.
@@ -194,10 +222,11 @@ in the root Makefile; naming spec in `doc/internals/build-system.md`).
   12.5 MHz PLL (25 MHz crystal), 32 MB SDRAM (W9825G6KH or
   compatible), real UART (TX+RX), real SPI with SD card (autoconfig),
   boot ROM, `btn[1]` reset.
-- `ulx3s/ulx3s_penumbra2_probe_top.sv` — gen2 bare-core timing probe
-  (`VARIANT=probe`): the pipelined core + `unified_mem` stand-in at
-  25 MHz, core outputs folded onto the LEDs so synthesis keeps the
-  design, IRQ inputs on `btn[2]`/`btn[3]`. A timing instrument
+- `ulx3s/ulx3s_penumbra2_probe_top.sv` — gen2 machine timing probe
+  (`VARIANT=probe`): `machine_penumbra2` + a BRAM bus memory at
+  25 MHz, terminal outputs folded onto the LEDs so synthesis keeps the
+  design, IRQ inputs on `btn[2]`/`btn[3]`. The first build with the
+  IF2 tag-compare/way-mux path and the L1↔L2 layer in front of nextpnr
   (`make timing BOARD=ulx3s CORE=penumbra2 VARIANT=probe`), not a
   usable machine.
 - `fpga_ram.sv` — BRAM-friendly memory (4 byte-wide banks with
