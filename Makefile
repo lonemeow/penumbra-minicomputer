@@ -210,6 +210,8 @@ MODULE_TESTS = \
     penumbra2_regmap \
     penumbra2_decode \
     penumbra2_flag_bypass \
+    penumbra2_if1_stage \
+    penumbra2_if2_stage \
     penumbra2_id_stage \
     penumbra2_ex_stage \
     penumbra2_mem_stage \

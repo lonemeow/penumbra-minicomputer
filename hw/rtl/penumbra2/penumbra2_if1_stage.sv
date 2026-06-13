@@ -27,6 +27,13 @@
 // pipeline it freezes PC at the boundary (so the unit can capture it as EPC)
 // and bubbles the output, without steering — the redirect to the handler
 // arrives later, again through the vector fetch.
+//
+// i_mem_busy is the I-side front port's transaction-in-flight signal (the
+// L1's o_busy; tied low against the flat stand-in). While it is high no new
+// lookup may launch — o_fetch_en is gated and PC holds — including for a
+// redirect target: the PC steers immediately, but its launch waits for the
+// busy drop. The in-flight (now wrong-path) fill completes into the void;
+// IF2 discards it.
 
 module penumbra2_if1_stage #(
     parameter logic [31:0] RESET_PC = 32'h0000_0000
@@ -36,6 +43,7 @@ module penumbra2_if1_stage #(
 
     // ── Pipeline handshake ───────────────────────────────────────
     input  logic        i_stall_in,    // IF2 cannot accept (hold PC + IF1/IF2)
+    input  logic        i_mem_busy,    // I-side front port mid-transaction: no launch
 
     // ── Taken-branch / vector-fetch redirect ─────────────────────
     input  logic        i_redirect,    // steer PC to the target + bubble this fetch
@@ -58,15 +66,18 @@ module penumbra2_if1_stage #(
 );
 
     // The fetch holds — PC unchanged, IF1/IF2 register frozen — whenever IF2
-    // back-pressures; otherwise it advances by one instruction. A redirect is
-    // the third actor: it wins over both hold and sequential advance.
+    // back-pressures or the front port is mid-transaction; otherwise it
+    // advances by one instruction. A redirect is the third actor: it wins
+    // over both hold and sequential advance. Busy folds into hold here, not
+    // only into the enable gate: advancing PC past a fetch whose launch was
+    // suppressed would silently drop that instruction.
     logic [31:0] pc;
     logic [31:0] pc_plus_4;
     logic        hold;
     logic        redirect;
 
     assign pc_plus_4 = pc + 32'd4;
-    assign hold      = i_stall_in;
+    assign hold      = i_stall_in | i_mem_busy;
     assign redirect  = i_redirect;
 
     // Drive the current PC to the I-cache BRAM every cycle. The BRAM read
@@ -75,8 +86,13 @@ module penumbra2_if1_stage #(
     // in-flight read would land against the held PC and drop an instruction.
     // A redirect must let the read advance even under back-pressure: the PC is
     // being steered to the target this edge, and the next fetch has to read it.
+    // i_mem_busy outranks even the redirect: the front port is mid-transaction
+    // (a line fill that must run to completion), so no lookup may launch. The
+    // redirect still steers PC below — the target's launch is simply held
+    // until the busy drop, when IF2's stall (which tracks busy) releases and
+    // the launch fires from the steered PC.
     assign o_fetch_addr = pc;
-    assign o_fetch_en   = redirect | ~hold;
+    assign o_fetch_en   = (redirect | ~hold) & ~i_mem_busy;
 
     // ── PC register ──────────────────────────────────────────────
     // Priority: a redirect (branch / vector-fetch / ERET) steers PC; otherwise

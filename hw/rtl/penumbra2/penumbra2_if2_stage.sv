@@ -14,13 +14,26 @@
 // TLB verdict (per-access order in exception-flow.md) and is composed here —
 // IF2 is its detector — while a TLB fault arrives composed from the MMU
 // (Decision 16). The faulting vaddr needs no field of its own: it is the
-// slot's own pc. The cache tag compare and the miss stall arrive with the
-// BRAM L1; fetch is hit-always against the flat vaddr-addressed stand-in, so
-// a completing translated fetch must be identity-mapped (asserted below)
-// until the VIPT I-cache's tag compare delivers remapped words. IF2's only
-// stall source is back-pressure from ID (i_stall_in); when held, it freezes
-// its output register and back-pressures IF1, which holds the PC and the
-// address so the same word stays presented.
+// slot's own pc.
+//
+// IF2 owns the front side of the fetch request: a valid, un-faulted slot
+// asserts o_fetch_re on its resolve cycle and holds it level until the word
+// completes — the cycle i_mem_busy is low (drop-equals-valid: a hit completes
+// on the resolve cycle itself; a miss or pass-through completes at the busy
+// drop, possibly many cycles later). While waiting, IF2 back-pressures IF1
+// (whose launch gate and PC hold track the same busy) and lets bubbles fall
+// into ID. A faulted slot raises no request — its launch already happened
+// (the VIPT overlap), but nothing may complete or fill on its behalf; it
+// advances carrying only its fault tag. Against the flat hit-always stand-in
+// (busy tied low) every fetch completes on its resolve cycle, so a completing
+// translated fetch must be identity-mapped (asserted below) until the VIPT
+// I-cache's tag compare delivers remapped words.
+//
+// The completed word is consumed the cycle busy drops — a fill serves it for
+// exactly that one cycle. If ID is stalled just then (scoreboard RAW, divmul,
+// a D-side access in MEM), the word parks in a one-entry skid register and is
+// delivered when ID accepts; the request deasserts once the skid is full, so
+// the front port sees the completion consumed either way.
 //
 // A taken branch resolved in EX flushes the front end: IF2 is one of the three
 // wrong-path slots (it holds the branch-shadow fetch). i_flush discards it by
@@ -38,8 +51,13 @@ module penumbra2_if2_stage
     input  logic [31:0] i_next_pc,
     input  logic        i_valid,        // 0 = bubble in
 
-    // ── Instruction word from the I-cache BRAM ───────────────────
+    // ── I-side front port (the L1's front side, or the flat stand-in) ──
+    // i_ir is the word for the launch IF1 drove last cycle, valid on the
+    // completion cycle (i_mem_busy low); o_fetch_re is this stage's request,
+    // held level from the resolve cycle until the completion is consumed.
     input  logic [31:0] i_ir,
+    input  logic        i_mem_busy,
+    output logic        o_fetch_re,
 
     // ── MMU I-side verdict (port A; query launched with IF1's fetch) ──
     input  logic        i_user_mode,        // fetch privilege (alignment status info)
@@ -62,29 +80,6 @@ module penumbra2_if2_stage
     output logic [31:0] o_fault_status      // composed payload; FAULT_NONE when no fault
 );
 
-    // ── Issue / back-pressure control ────────────────────────────
-    // IF2 has no stall source of its own yet (hit-always, no miss path),
-    // so it advances every cycle unless ID back-pressures it. A taken-branch
-    // flush wins over back-pressure: the in-flight fetch is wrong-path and
-    // gets discarded, so there is nothing to hold (mirrors MEM's i_bubble).
-    logic advance, next_valid;
-
-    always_comb begin
-        if (i_flush) begin
-            next_valid = 1'b0;          // flush wins: discard the wrong-path fetch
-            advance    = 1'b0;
-            o_stall    = i_stall_in;    // still pass upstream back-pressure through
-        end else if (i_stall_in) begin
-            next_valid = o_valid;       // hold IF2/ID unchanged
-            advance    = 1'b0;
-            o_stall    = 1'b1;
-        end else begin
-            next_valid = i_valid;       // advance: bubble in if i_valid=0
-            advance    = i_valid;
-            o_stall    = 1'b0;
-        end
-    end
-
     // ── IF-stage fault detect + payload composition ──────────────
     // Only a real fetch consumes the verdict (a bubble's query is never
     // read). Alignment outranks the TLB verdict — a misaligned address
@@ -99,6 +94,84 @@ module penumbra2_if2_stage
                          : tlb_fault   ? i_mmu_fault_status
                          :               32'b0;   // FAULT_NONE
 
+    // ── Fetch request ────────────────────────────────────────────
+    // A valid, un-faulted slot whose word is not already parked in the skid
+    // requests it, level, from its resolve cycle until the completion is
+    // consumed. A faulted slot raises no request: its launch happened (the
+    // VIPT overlap) but nothing may complete — or engage a fill — on its
+    // behalf; alignment in particular is invisible to the cache's own
+    // i_fault gate, so the suppression has to live here. The ~i_flush term
+    // skips the fill a wrong-path fetch would engage on a coincident
+    // flush + miss resolve; a flush landing mid-fill drops the request and
+    // the engaged fill completes into the void on the cache's own state —
+    // the one consumer obligation that always survives the kill is "no new
+    // launch while busy", and IF1's gate holds that.
+    logic        skid_full;
+    logic [31:0] skid_ir;
+    assign o_fetch_re = i_valid & ~fault_pending & ~skid_full & ~i_flush;
+
+    // The slot can leave this cycle: its word is available (skid, or the
+    // port completing — for a hit, the resolve cycle itself), or it carries
+    // only its fault tag and never waits on the port.
+    logic word_avail;
+    assign word_avail = fault_pending | skid_full | ~i_mem_busy;
+
+    // ── Issue / back-pressure control ────────────────────────────
+    // A taken-branch flush wins over back-pressure: the in-flight fetch is
+    // wrong-path and gets discarded, so there is nothing to hold (mirrors
+    // MEM's i_bubble). An un-completed word (i_mem_busy with no skid) holds
+    // IF1 and lets bubbles fall into ID — the I-side miss stall.
+    logic advance, next_valid;
+
+    always_comb begin
+        if (i_flush) begin
+            next_valid = 1'b0;          // flush wins: discard the wrong-path fetch
+            advance    = 1'b0;
+            o_stall    = i_stall_in | i_mem_busy;
+        end else if (i_stall_in) begin
+            next_valid = o_valid;       // hold IF2/ID unchanged
+            advance    = 1'b0;
+            o_stall    = 1'b1;
+        end else begin
+            next_valid = i_valid & word_avail;
+            advance    = i_valid & word_avail;
+            o_stall    = i_mem_busy;    // waiting word: hold IF1, bubble into ID
+        end
+    end
+
+    // ── Word skid ────────────────────────────────────────────────
+    // One entry, the completion-under-back-pressure parking spot: a fill
+    // serves its word for exactly one cycle (drop-equals-valid), so a word
+    // completing while ID back-pressures must be captured or lost. Owns
+    // skid_full / skid_ir.
+
+    // The requested word completes this cycle (busy low while the request
+    // is up) but ID cannot accept it — park it.
+    logic skid_capture;
+    assign skid_capture = o_fetch_re & ~i_mem_busy & i_stall_in;
+
+    // The parked word is done with: delivered to ID (advance muxes it into
+    // the IF2/ID register), or its slot vanished without delivery (the
+    // interrupt unit's fetch-stop bubbled IF1/IF2 — a stale skid would
+    // otherwise poison the next slot).
+    logic skid_release;
+    assign skid_release = advance | ~i_valid;
+
+    always_ff @(posedge i_clk) begin
+        if (i_rst) begin
+            skid_full <= 1'b0;
+        end else begin
+            if (i_flush) begin              // wrong-path word: drop it
+                skid_full <= 1'b0;
+            end else if (skid_capture) begin
+                skid_ir   <= i_ir;
+                skid_full <= 1'b1;
+            end else if (skid_release) begin
+                skid_full <= 1'b0;
+            end
+        end
+    end
+
     // ── IF2/ID register ──────────────────────────────────────────
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
@@ -106,7 +179,7 @@ module penumbra2_if2_stage
         end else begin
             o_valid <= next_valid;
             if (advance) begin
-                o_ir            <= i_ir;
+                o_ir            <= skid_full ? skid_ir : i_ir;
                 o_pc            <= i_pc;
                 o_next_pc       <= i_next_pc;
                 o_fault_pending <= fault_pending;
@@ -130,5 +203,12 @@ module penumbra2_if2_stage
     assert property (@(posedge i_clk) disable iff (i_rst)
         i_flush |=> !o_valid)
         else $error("penumbra2_if2_stage: flush did not bubble the IF2/ID slot");
+
+    // The skid never coexists with an in-flight transaction: it is captured
+    // only under ID back-pressure (IF1 held, no launch), and delivering it
+    // is what releases IF1 — busy can rise again only after the skid drains.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        !(skid_full && i_mem_busy))
+        else $error("penumbra2_if2_stage: skid held across a new transaction");
 
 endmodule

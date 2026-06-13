@@ -236,6 +236,7 @@ module penumbra2_core
     penumbra2_if1_stage #(.RESET_PC(RESET_PC)) u_if1 (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_stall_in(if2_stall | vecf_active),     // held while the FSM owns the fetch port
+        .i_mem_busy(1'b0),                         // flat stand-in: never mid-transaction
         .i_redirect(if1_redirect), .i_redirect_pc(if1_redirect_pc),
         .i_flush(fault_commit),                    // bubble the wrong-path fetch at the fault
         .i_fetch_stop(irq_fetch_stop),             // freeze at the boundary while draining for an IRQ
@@ -253,6 +254,7 @@ module penumbra2_core
         .i_clk(i_clk), .i_rst(i_rst),
         .i_pc(if1_pc), .i_next_pc(if1_next_pc), .i_valid(if1_valid),
         .i_ir(imem_rdata),
+        .i_mem_busy(1'b0), .o_fetch_re(),          // flat stand-in: hit-always
         // I-side MMU verdict — port A's registered, held result for the
         // fetch IF1 launched (paired by the shared launch strobe).
         .i_user_mode(~core_supervisor),
