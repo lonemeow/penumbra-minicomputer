@@ -1,8 +1,9 @@
 // Penumbra Pinned TLB — fully-associative translation buffer
 //
 // Slot count is set by NUM_ENTRIES (default 8).  All entries compare
-// in parallel; the priority encoder and output mux are the only
-// structures whose depth grows with NUM_ENTRIES.
+// in parallel; the lowest-index match is isolated as a one-hot mask
+// and its fields selected by a balanced AND-OR mux, so lookup depth
+// grows as log2(NUM_ENTRIES) rather than linearly with entry count.
 //
 // Holds permanently-mapped entries that must never cause TLB misses
 // (e.g., TLB miss handler code, page global directory).
@@ -121,7 +122,15 @@ module tlb_pinned
         end
     endgenerate
 
-    // ── Priority encoder: lowest-numbered matching entry wins ──
+    // ── Priority resolution: lowest-numbered matching entry wins ──
+    // entry_match & (-entry_match) isolates the lowest set bit, producing a
+    // one-hot "winner" mask in parallel (the negate maps to the carry chain),
+    // so the winning entry's fields are selected by a balanced AND-OR mux.
+    // This replaces a first-match ripple whose depth — and the FA-array
+    // routes it dragged onto the fault path — grew linearly with NUM_ENTRIES.
+
+    logic [NUM_ENTRIES-1:0] match_onehot;
+    assign match_onehot = entry_match & (~entry_match + 1'b1);
 
     logic        matched;
     logic [19:0] matched_ppn;
@@ -130,11 +139,19 @@ module tlb_pinned
     logic        perm_ok;
 
     always_comb begin
-        matched     = 1'b0;
+        // One-hot select of the winning entry's fields (OR-reduction tree).
         matched_ppn = 20'b0;
         matched_c   = 1'b0;
         matched_u   = 1'b0;
         matched_rwx = 3'b0;
+        for (int i = 0; i < NUM_ENTRIES; i++) begin
+            matched_ppn |= {20{match_onehot[i]}} & entry_ppn[i];
+            matched_c   |= match_onehot[i] & entry_c[i];
+            matched_u   |= match_onehot[i] & entry_u[i];
+            matched_rwx |= {3{match_onehot[i]}} & entry_rwx[i];
+        end
+        matched = |entry_match;
+
         o_hit       = 1'b0;
         o_fault     = 1'b0;
         o_fault_status = 32'b0;
@@ -143,17 +160,6 @@ module tlb_pinned
         perm_ok     = 1'b0;
 
         if (i_lookup_en) begin
-            // Find first matching entry (lowest index wins)
-            for (int i = 0; i < NUM_ENTRIES; i++) begin
-                if (!matched && entry_match[i]) begin
-                    matched     = 1'b1;
-                    matched_ppn = entry_ppn[i];
-                    matched_c   = entry_c[i];
-                    matched_u   = entry_u[i];
-                    matched_rwx = entry_rwx[i];
-                end
-            end
-
             o_hit   = matched;
             o_paddr = {matched_ppn, i_vaddr[11:0]};
             o_cacheable = matched_c;
@@ -193,17 +199,30 @@ module tlb_pinned
                                     && (eb_g || (eb_asid == i_asid));
         end
 
+        // Same one-hot priority resolve as port A (see comment there).
+        logic [NUM_ENTRIES-1:0] match_onehot_b;
+        assign match_onehot_b = entry_match_b & (~entry_match_b + 1'b1);
+
         logic        matched_b, perm_ok_b;
         logic [19:0] matched_ppn_b;
         logic        matched_c_b, matched_u_b;
         logic [2:0]  matched_rwx_b;
 
         always_comb begin
-            matched_b        = 1'b0;
-            matched_ppn_b    = 20'b0;
-            matched_c_b      = 1'b0;
-            matched_u_b      = 1'b0;
-            matched_rwx_b    = 3'b0;
+            matched_ppn_b = 20'b0;
+            matched_c_b   = 1'b0;
+            matched_u_b   = 1'b0;
+            matched_rwx_b = 3'b0;
+            for (int i = 0; i < NUM_ENTRIES; i++) begin
+                matched_ppn_b |= {20{match_onehot_b[i]}} & entries_pte[i][31:12];
+                matched_c_b   |= match_onehot_b[i] & entries_pte[i][TLB_C];
+                matched_u_b   |= match_onehot_b[i] & entries_pte[i][TLB_U];
+                matched_rwx_b |= {3{match_onehot_b[i]}} & {entries_pte[i][TLB_X],
+                                                           entries_pte[i][TLB_W],
+                                                           entries_pte[i][TLB_R]};
+            end
+            matched_b = |entry_match_b;
+
             perm_ok_b        = 1'b0;
             o_b_hit          = 1'b0;
             o_b_fault        = 1'b0;
@@ -212,18 +231,6 @@ module tlb_pinned
             o_b_cacheable    = 1'b0;
 
             if (i_b_lookup_en) begin
-                for (int i = 0; i < NUM_ENTRIES; i++) begin
-                    if (!matched_b && entry_match_b[i]) begin
-                        matched_b     = 1'b1;
-                        matched_ppn_b = entries_pte[i][31:12];
-                        matched_c_b   = entries_pte[i][TLB_C];
-                        matched_u_b   = entries_pte[i][TLB_U];
-                        matched_rwx_b = {entries_pte[i][TLB_X],
-                                         entries_pte[i][TLB_W],
-                                         entries_pte[i][TLB_R]};
-                    end
-                end
-
                 o_b_hit       = matched_b;
                 o_b_paddr     = {matched_ppn_b, i_b_vaddr[11:0]};
                 o_b_cacheable = matched_c_b;
