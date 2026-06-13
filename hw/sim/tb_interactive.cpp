@@ -306,9 +306,8 @@ int main(int argc, char** argv) {
             trap_emit_cycle   = (unsigned long)cycles;
             trap_emit_pc      = cpu->o_pc;
         }
-        // ctl_sr_load fires on ERET (and rare WRSPR SR).  No deferral
-        // needed — the SR being restored is whatever the µ-op presents
-        // this cycle.
+        // ctl_sr_load fires only on ERET.  No deferral needed — the SR
+        // being restored is whatever the µ-op presents this cycle.
         if (trace_fp && cpu->o_trace_eret) {
             emit_trap_marker("ERET", (unsigned long)cycles, cpu->o_pc,
                              cpu->o_trace_sr, -1);

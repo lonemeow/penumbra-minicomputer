@@ -76,8 +76,8 @@ module cpu_core
     // of the eight exception sources dispatches; trace_vector is the
     // vector number being taken (valid the cycle AFTER the pulse,
     // when the *_pending flops have caught up).  trace_eret pulses on
-    // any bulk SR load (ERET, and the rare WRSPR SR — both restore
-    // saved privilege state).
+    // a bulk SR load, which only ERET performs (it restores the saved
+    // privilege state from ESR).
     output logic        o_trace_except_entry,
     output logic [3:0]  o_trace_vector,
     output logic        o_trace_eret
@@ -334,9 +334,23 @@ module cpu_core
     logic [1:0]  fetch_format;
     assign fetch_format = fetch_rdata[31:30];
 
+    // Reserved sub-encoding: WRSPR SR (Format R op 11110, SPR field [15:12]==SR)
+    // has no SR write path.  Redirect its dispatch to an unallocated ROM slot
+    // (0x18, the op-12 reserved slot, which uasm fills with the illegal
+    // sentinel) so it raises seq_illegal through the normal path.  Doing the
+    // redirect here — instead of feeding a fetch-decoded term into
+    // illegal_except / except_entry — keeps the exception-entry cone (the gen1
+    // critical path to the ESR flop) free of this check; only dispatch_addr,
+    // which has timing slack, examines the SPR field.
+    localparam logic [7:0] DISPATCH_WRSPR_SR = 8'h18;
+
     always_comb begin
         case (fetch_format)
-            2'b00:   dispatch_addr = {1'b0, fetch_rdata[29], 1'b0, fetch_rdata[28:25], 1'b0};
+            2'b00: begin
+                dispatch_addr = {1'b0, fetch_rdata[29], 1'b0, fetch_rdata[28:25], 1'b0};
+                if (fetch_rdata[29:25] == 5'b11110 && fetch_rdata[15:12] == SPR_SR)
+                    dispatch_addr = DISPATCH_WRSPR_SR;
+            end
             2'b01:   dispatch_addr = {1'b0, 2'b01, fetch_rdata[29:26], 1'b0};
             2'b10:   dispatch_addr = {2'b10, fetch_rdata[29:26], 2'b00};
             2'b11:   dispatch_addr = (fetch_rdata[29:26] == 4'b1111) ? 8'h62 : 8'h60;
@@ -380,6 +394,11 @@ module cpu_core
     end
 
     // ── Illegal instruction detection (from sequencer) ───────
+    // seq_illegal is raised in S_EXEC when the dispatched microcode slot holds
+    // the illegal sentinel (uw_branch == BR_ILLEGAL).  Unallocated opcodes land
+    // on such a slot naturally; WRSPR SR (a reserved encoding) is redirected to
+    // one by the dispatch decode above, so it joins this path without adding any
+    // fetch-decoded term to the exception-entry cone.
     logic        illegal_except;
     logic        illegal_pending;
 

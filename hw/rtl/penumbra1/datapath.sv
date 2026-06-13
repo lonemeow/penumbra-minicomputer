@@ -255,14 +255,14 @@ module datapath
     //   SPR 0 (ESR)       → esr_load from w_bus
     //   SPR 1 (EPC)       → epc_load from w_bus
     //   SPR 2 (USP)       → regfile write R14, cross_bank = 1
-    //   SPR 3 (SR)        → sr_load from w_bus (bulk-load entire SR)
+    //   SPR 3 (SR)        → reserved: cpu_core traps WRSPR SR as illegal at
+    //                       dispatch, so this write path is never reached
     //   SPR 4-7 (SCR0..3) → spr_scratch encoded write, index = IR[13:12]
 
     logic [1:0]  amux_sel;         // 2-bit select for amux (decoded from 3-bit a_src)
     logic        spr_cross_bank;   // cross_bank for USP access (read + write)
     logic        spr_esr_load;     // WRSPR ESR: write w_bus to ESR
     logic        spr_epc_load;     // WRSPR EPC: write w_bus to EPC
-    logic        spr_sr_load;      // WRSPR SR: write w_bus to SR
     logic        spr_read_sr;      // RDSPR SR: select sr_read instead of ESR on amux
     logic        spr_w_en;         // WRSPR USP: force regfile write
     logic [3:0]  spr_reg_w;        // WRSPR USP: force write to R14
@@ -282,7 +282,6 @@ module datapath
         spr_cross_bank    = 1'b0;
         spr_esr_load      = 1'b0;
         spr_epc_load      = 1'b0;
-        spr_sr_load       = 1'b0;
         spr_read_sr       = 1'b0;
         spr_w_en          = 1'b0;
         spr_reg_w         = 4'd0;
@@ -334,7 +333,8 @@ module datapath
                         spr_reg_w      = REG_SP;
                         spr_cross_bank = 1'b1;
                     end
-                    SPR_SR: spr_sr_load = 1'b1;
+                    // SPR_SR is reserved (WRSPR SR traps illegal in cpu_core
+                    // before this microcode runs), so it has no write arm.
                     default: ;
                 endcase
             end
@@ -388,6 +388,14 @@ module datapath
             |-> resolved_a == REG_SP)
         else $error("RDSPR USP: reg_a must resolve to R14 (got %0d)", resolved_a);
 
+    // Contract guard: WRSPR SR is reserved — cpu_core traps it to VEC_ILLEGAL
+    // at dispatch, so the SPR_WRITE microcode must never run with the SR
+    // number.  The datapath has no SR write path; firing here means the
+    // cpu_core illegal trap is broken.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        !(i_spr_write && !spr_is_scratch && fe_r_sys_dev == SPR_SR))
+        else $error("WRSPR SR reached the datapath: cpu_core must trap it illegal");
+
     // ── Status register ──────────────────────────────────────
     logic        sr_flag_n, sr_flag_z, sr_flag_c, sr_flag_v;
     logic        sr_s_wire, sr_i_wire;
@@ -407,7 +415,7 @@ module datapath
         .i_alu_flag_c   (flag_c),
         .i_alu_flag_v   (flag_v),
         .i_flag_w_en    (i_flag_w_en),
-        .i_sr_load      (i_sr_load | spr_sr_load),
+        .i_sr_load      (i_sr_load),
         .i_wdata        (w_bus),
         .i_except_entry (i_except_entry),
         .i_esr_load     (spr_esr_load),

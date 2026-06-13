@@ -1668,12 +1668,13 @@ static void execute_one() {
                     case SPR_ESR: cpu.esr = reg_read(rd); break;
                     case SPR_EPC: cpu.epc = reg_read(rd); break;
                     case SPR_USP: cpu.usp = reg_read(rd); break;
-                    case SPR_SR: {
-                        uint32_t old_sr = cpu.sr;
-                        cpu.sr = reg_read(rd);
-                        bank_sp(old_sr, cpu.sr);
+                    case SPR_SR:
+                        // WRSPR SR is reserved: SR.S/SR.I change via
+                        // exception entry / ERET / EI / DI and NZCV via
+                        // flag-writing ALU ops, so a direct SR write is
+                        // never needed.  Trap as illegal.
+                        exception_entry(VEC_ILLEGAL);
                         break;
-                    }
                     default:
                         if (spr_num >= SPR_SCR0 && spr_num < SPR_SCR0 + N_SCR) {
                             cpu.scr[spr_num - SPR_SCR0] = reg_read(rd);
