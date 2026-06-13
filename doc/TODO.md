@@ -1374,10 +1374,27 @@ targets opt into are silently off.  Status per item:
 - **Pre-RA MachineScheduler** (`enableMachineScheduler`, default
   false): with GlobalISel there is *no* scheduling at all without it —
   instruction order is IR order.  GenericScheduler in in-order mode
-  (`MicroOpBufferSize=0`) prioritizes register pressure, which is the
-  spill lever.  Flipping it also flips `enableJoinGlobalCopies`
-  (better cross-block copy coalescing), which defaults to
-  `enableMachineScheduler()`.  Next candidate after Localizer settles.
+  (`MicroOpBufferSize=0`) prioritizes register pressure; flipping the
+  hook also flips `enableJoinGlobalCopies` (cross-block copy
+  coalescing), which defaults to `enableMachineScheduler()`.
+  **Measured 2026-06-13, not pursued for gen1.**  Enablement is a
+  one-line `enableMachineScheduler()` override (verified live: the pass
+  enters the pipeline and the build is byte-identical to
+  `-enable-misched=true`), but a static A/B is flat on gen1: `dhry_1`
+  stays at 670 insns / 61 `[r14]` spill refs (≈40 lines merely
+  reordered), and a deliberately high-pressure probe — 12 values live
+  across a call — is unchanged at 56 insns / 26 spill refs.  No spill,
+  instruction, or copy reduction.  Reason: on a single-issue, in-order,
+  microcoded core there is no pipeline to schedule for, so the latency
+  payoff is moot (`LoadLatency=1` is set precisely so the scheduler
+  won't reorder ALU ahead of loads), leaving only register-pressure
+  reduction — which the Localizer already captured on Dhrystone and
+  which reordering cannot manufacture when spills are forced across a
+  call.  The scheduler's real home is pipelined gen2; gate the
+  enablement on the gen1/gen2 subtarget split (the
+  SchedMachineModel-per-processor mechanism in that entry below) rather
+  than turning it on target-wide.  Revisit for gen1 only if a kernel
+  pbench A/B surfaces reducible pressure that Dhrystone lacks.
 - **Tail calls**: `PenumbraCallLowering.cpp` hardcodes
   `Info.IsTailCall = false` (`// TODO: tail calls`).  Wrapper-heavy
   kernel code pays a full frame per hop.  Medium GISel project
