@@ -149,7 +149,7 @@ module penumbra2_core
     logic [31:0] wrsys_resync_pc;   // its target = the WRSYS's sequential successor
 
     // ── Interrupt entry (interrupt unit <-> spine + front end) ────
-    logic        sr_i, ei_commit, dc_commit, pipe_busy;   // from spine
+    logic        sr_s, sr_i, ei_commit, dc_commit, pipe_busy;   // from spine
     logic        irq_fetch_stop;    // freeze IF1 at the boundary while draining
     logic        irq_entry;         // take the interrupt: save-state + vector fetch
     logic [3:0]  irq_vec;
@@ -219,10 +219,13 @@ module penumbra2_core
     assign o_fetch_re     = vecf_active ? vecf_fetch_re   : if2_fetch_re;
     assign o_fetch_bypass = vecf_active;
 
-    // The core runs in supervisor mode; one site feeds the spine's
-    // decode-time checks and both MMU queries until the SR.S write path lands.
+    // The committed SR.S (from the spine's SPR file) is the privilege source:
+    // one site feeds the spine's decode-time checks and both MMU queries, plus
+    // the fetch-side user bit. Privilege changes only via drain-commit ops
+    // (exception entry / ERET), which flush younger instructions, so every
+    // in-flight instruction shares this one committed value.
     logic core_supervisor;
-    assign core_supervisor = 1'b1;
+    assign core_supervisor = sr_s;
     assign o_fetch_user    = ~core_supervisor;
 
     // ══════════════════════════════════════════════════════════
@@ -301,7 +304,7 @@ module penumbra2_core
         .o_fault_commit(fault_commit), .o_fault_vec(fault_vec), .o_epc(epc),
         .o_eret_commit(eret_commit),
         // Interrupt support — observability out, IRQ save-state in.
-        .o_sr_i(sr_i), .o_ei_commit(ei_commit), .o_dc_commit(dc_commit),
+        .o_sr_s(sr_s), .o_sr_i(sr_i), .o_ei_commit(ei_commit), .o_dc_commit(dc_commit),
         .o_pipe_busy(pipe_busy),
         .i_irq_entry(irq_entry), .i_irq_epc(irq_epc)
     );

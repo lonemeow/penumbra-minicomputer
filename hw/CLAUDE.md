@@ -87,6 +87,8 @@ shared L2.
 - `penumbra2_wb_stage.sv` — commit point: regfile/SR/SPR writes, takes the
   fault.
 - `penumbra2_spr_file.sv` — SR / ESR / EPC; save-state, ERET restore, EI/DI.
+- `penumbra2_scratch_file.sv` — SCR0..3 scratch SPRs (outside the regfile);
+  one WB write port, one combinational ID read port.
 - `penumbra2_vecfetch.sv` — exception vector-fetch FSM (handler address →
   registered PC redirect; waits out a busy fetch port on both ends).
 - `penumbra2_irq.sv` — interrupt recognition + ei_shadow + drain-and-take.

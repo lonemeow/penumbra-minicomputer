@@ -75,15 +75,15 @@ instruction is re-executed after the handler, not retired. When a gen2 perfctr
 lands, gate the retired count by `~fault_pending` (the program-end testbench
 use is unaffected — it keys on the op_class, not the count).
 
-## Hardware: Penumbra/2 WRSPR write path still tied off
+## Hardware: Penumbra/2 SPR access path — complete
 
-WRSYS now drives a real sysreg write at the EX drain-commit
+WRSYS drives a real sysreg write at the EX drain-commit
 (`make test-prog CORE=penumbra2 PROG=test_syswrite`). Wiring it surfaced a shared decode bug:
 WRSYS *and* WRSPR encode their value register in the Rd field (as the assembler
 emits and gen1 reads), but gen2 decode read it from Rs (i.e. R0). Both were
 corrected to read the Rd field.
 
-The SPR access path is being wired in backend-ordered pieces:
+The SPR access path is fully wired, in backend-ordered pieces:
 
 - **1a (done):** RDSPR/WRSPR EPC/ESR + RDSPR SR. EPC/ESR are SPR-file-backed
   (not regfile entries) and commit at WB like any register write — the value
@@ -92,12 +92,40 @@ The SPR access path is being wired in backend-ordered pieces:
   operand B; the scoreboard downstream-writer predicate now counts `spr_we`.
   RDSPR SR composes {committed S/I, flag-bypassed NZCV} in EX. WRSPR is **not**
   a drain-commit — value SPRs are plain stores, unlike WRSYS. Tests:
-  `isa/test_wrspr_epc`, `isa/test_rdspr_sr` (pass on ISS/gen1/gen2). A spine
-  assertion fires if a WRSPR targets USP/SCRn before 1b/1c.
-- **1b:** WRSPR/RDSPR USP — routes to the regfile R14 bank (entry 14, the
-  `cross_bank` any-mode access the regmap already raises).
-- **1c:** WRSPR/RDSPR SCRn — needs the scratch register file (the TLB-miss
-  fast path's save area); unblocks `test_scratch_sprs`.
+  `isa/test_wrspr_epc`, `isa/test_rdspr_sr` (pass on ISS/gen1/gen2).
+- **1b (done):** WRSPR/RDSPR USP — routes to the regfile R14 bank (entry 14,
+  the `cross_bank` any-mode access the regmap already raises). RDSPR USP worked
+  after 1a (ordinary operand-B regfile read); 1b ORed the USP SPR strobe into
+  the regfile write enable. Test: `isa/test_wrspr_usp`.
+- **1c (done):** WRSPR/RDSPR SCRn — `penumbra2_scratch_file` (4×32, one WB
+  write port, one combinational ID read port) backs the four scratch SPRs,
+  which fall outside the 16-entry regfile so they need storage of their own.
+  The spine gates the write to the SCRn range and muxes the readback onto the
+  operand-B SPR path; the ID stage routes SCRn reads through that path (USP
+  stays on the regfile read). Test: `isa/test_scratch_sprs`.
+
+With all value-SPR writes wired, gen2 advertises the `wrspr` capability
+(`RUNNER_PROVIDES_penumbra2`), which pulled the previously-skipped `wrspr`-
+tagged conformance tests into the gen2 suite. Two then failed — `test_priv`
+(user-mode privilege trap) and `test_usp` (user-mode USP banking) — because
+`penumbra2_core` hardwired `core_supervisor = 1'b1`, a bring-up stub deferred
+"until the SR.S write path lands." With ESR/ERET restore real, that landed: the
+spine exports the committed `SR.S` (`o_sr_s`, mirroring `o_sr_i`) and the core
+sources its single `core_supervisor` site from it, so decode-time privilege
+checks, both MMU user bits, regfile USP/SSP banking, and the fetch-side user
+bit all see real privilege. Using the committed value is safe for every stage
+because privilege changes only via drain-commit ops (exception entry / ERET),
+which flush younger instructions. Full gen2 conformance suite green (72/72, 10
+skipped on absent peripherals: bus/irq/timer/machid/perfctr/uart).
+
+The privilege threading places the committed `SR.S` flop on the fetch/MMU path
+(the gen2 fmax-sensitive cone). First `make timing` of the full
+`machine_penumbra2` probe (`BOARD=ulx3s CORE=penumbra2 VARIANT=probe`) with the
+change in: **30.18 MHz, PASS at the 25 MHz target** on ECP5-85F sg6 — within
+the typical 29–30 MHz band, above the 27 MHz floor, so no fmax regression from
+the SR.S threading. This is also the establishing operating point for the full
+gen2 machine probe (the bare-core probe was ~55 MHz; the cache/MMU/arbiter
+layers are the limiter, not the compute cone).
 
 ## Hardware: WRSPR-SR dropped ISA-wide (RESOLVED)
 

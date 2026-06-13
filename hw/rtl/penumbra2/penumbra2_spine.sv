@@ -110,6 +110,7 @@ module penumbra2_spine
     output logic                  o_eret_commit,     // an ERET is committing this cycle
 
     // ── Interrupt support (to/from the core's interrupt unit) ────
+    output logic                  o_sr_s,            // SR.S (supervisor) — privilege source
     output logic                  o_sr_i,            // SR.I (interrupt enable)
     output logic                  o_ei_commit,       // EI committed this cycle (arm ei_shadow)
     output logic                  o_dc_commit,       // any drain-commit completed this cycle
@@ -259,13 +260,15 @@ module penumbra2_spine
     // EPC/ESR are SPR-file-backed (not regfile entries). WRSPR commits the
     // Rd value at WB like any register write — the WB SPR strobe drives the
     // SPR-file write, gated to EPC/ESR (USP routes to the regfile R14 bank,
-    // SCRn to the scratch file — wired in later milestones). RDSPR reads the
-    // SPR file combinationally at ID via id_spr_rd_sel / spr_rd_value.
+    // SCRn to the scratch file). RDSPR reads the SPR file or the scratch file
+    // combinationally at ID via id_spr_rd_sel, muxed onto the operand-B path.
     logic        wb_spr_we;
     logic [3:0]  wb_spr_sel;
     logic [31:0] wb_spr_value;
     logic [3:0]  id_spr_rd_sel;
-    logic [31:0] spr_rd_value;
+    logic [31:0] spr_rd_value;        // SPR-file readback (EPC/ESR/SR)
+    logic [31:0] scr_rd_value;        // scratch-file readback (SCRn)
+    logic [31:0] spr_operand_value;   // muxed value driven onto operand B
     logic        spr_file_we;
     assign spr_file_we = wb_spr_we & (wb_spr_sel == SPR_EPC | wb_spr_sel == SPR_ESR);
 
@@ -288,17 +291,38 @@ module penumbra2_spine
         .i_spr_we(spr_file_we), .i_spr_sel(wb_spr_sel), .i_spr_value(wb_spr_value),
         .i_rd_sel(id_spr_rd_sel), .o_rd_value(spr_rd_value),
         .o_sr_flags(spr_sr_flags),
-        .o_sr_s(), .o_sr_i(o_sr_i), .o_sr_read(sr_committed),
+        .o_sr_s(o_sr_s), .o_sr_i(o_sr_i), .o_sr_read(sr_committed),
         .o_epc(o_epc), .o_esr()
     );
 
-    // WRSPR to SCRn is decoded but its scratch-file backend is not routed
-    // yet. Catch it loudly rather than silently dropping the write until that
-    // milestone lands. (EPC/ESR → SPR file; USP → regfile R14 bank.)
+    // WRSPR SCRn writes the scratch file (EPC/ESR → SPR file; USP → regfile
+    // R14 bank). The write enable is gated to the SCRn SPR range; the scratch
+    // file derives its own array index from the SPR number.
+    logic        scr_we;
+    assign scr_we = wb_spr_we & (wb_spr_sel >= SPR_SCR0) & (wb_spr_sel <= SPR_SCR3);
+
+    penumbra2_scratch_file u_scr (
+        .i_clk(i_clk), .i_rst(i_rst),
+        .i_we(scr_we), .i_w_sel(wb_spr_sel), .i_w_value(wb_spr_value),
+        .i_rd_sel(id_spr_rd_sel), .o_rd_value(scr_rd_value)
+    );
+
+    // Operand-B SPR readback: SCRn come from the scratch file, every other
+    // SPR-file-backed read (EPC/ESR) from the SPR file. The ID stage only
+    // consumes this for an actual SPR read, so a coincidental SCRn-range sel on
+    // a plain register read is harmless (the regfile value is selected there).
+    logic        id_rd_is_scr;
+    assign id_rd_is_scr      = (id_spr_rd_sel >= SPR_SCR0) & (id_spr_rd_sel <= SPR_SCR3);
+    assign spr_operand_value = id_rd_is_scr ? scr_rd_value : spr_rd_value;
+
+    // Every WRSPR backend is now routed (EPC/ESR → SPR file, USP → regfile R14,
+    // SCRn → scratch file); SR is reserved and traps illegal in decode, so it
+    // must never reach WB. Catch an out-of-set SPR write loudly.
     assert property (@(posedge i_clk) disable iff (i_rst)
         wb_spr_we |-> (wb_spr_sel == SPR_EPC || wb_spr_sel == SPR_ESR
-                       || wb_spr_sel == SPR_USP))
-        else $error("penumbra2_spine: WRSPR to an unrouted SPR backend (SCRn)");
+                       || wb_spr_sel == SPR_USP
+                       || (wb_spr_sel >= SPR_SCR0 && wb_spr_sel <= SPR_SCR3)))
+        else $error("penumbra2_spine: WRSPR to an out-of-set SPR backend");
 
     // ════════════════════════════════════════════════════════════
     // Register file (shared: ID reads, WB writes)
@@ -323,7 +347,7 @@ module penumbra2_spine
         .o_stall(id_stall),
         .o_rd_idx_a(rd_idx_a), .o_rd_idx_b(rd_idx_b),
         .i_rd_data_a(rd_data_a), .i_rd_data_b(rd_data_b),
-        .o_spr_rd_sel(id_spr_rd_sel), .i_spr_src_value(spr_rd_value),
+        .o_spr_rd_sel(id_spr_rd_sel), .i_spr_src_value(spr_operand_value),
         .i_mem_dst(sb_mem_dst), .i_mem_dst_en(sb_mem_dst_en),
         .i_wb_dst(sb_wb_dst),   .i_wb_dst_en(sb_wb_dst_en),
         .i_aux_dst(sb_aux_dst), .i_aux_dst_en(sb_aux_dst_en),

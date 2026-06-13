@@ -168,16 +168,17 @@ module penumbra2_id_stage
     assign o_rd_idx_a = phys_src_a;
     assign o_rd_idx_b = phys_src_b;
 
-    // ── SPR-file-backed source B (EPC/ESR) ───────────────────────
-    // ESR/EPC are not regfile entries (the 16-entry regfile returns 0 for
-    // their scoreboard indices) — their data lives in the SPR file. A
-    // RDSPR of either reads the SPR as operand B (so ALU_PASS carries it),
-    // taking its value from i_spr_src_value. USP reads the regfile R14 bank
-    // normally (not SPR-file-backed); SCRn read the scratch file (wired with
-    // the TLB-miss fast path).
+    // ── SPR-source-backed operand B (EPC/ESR/SCRn) ───────────────
+    // ESR/EPC and the SCRn scratch SPRs are not regfile entries (the 16-entry
+    // regfile returns 0 for their scoreboard indices) — their data comes from
+    // the SPR file / scratch file. A RDSPR of any of them reads the SPR as
+    // operand B (so ALU_PASS carries it), taking its value from
+    // i_spr_src_value, which the spine muxes between the two files. USP reads
+    // the regfile R14 bank normally (not SPR-source-backed).
     logic src_b_spr_file;
     assign src_b_spr_file = d_src_b_is_spr
-                          & (d_src_b_sel == SPR_EPC | d_src_b_sel == SPR_ESR);
+                          & (d_src_b_sel == SPR_EPC | d_src_b_sel == SPR_ESR
+                             | (d_src_b_sel >= SPR_SCR0 & d_src_b_sel <= SPR_SCR3));
     assign o_spr_rd_sel   = d_src_b_sel;
 
     // ── Operand select: ID produces the final ALU operands ───────
