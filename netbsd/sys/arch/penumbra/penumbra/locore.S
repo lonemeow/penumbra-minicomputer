@@ -10,7 +10,7 @@
  * address and jumps with:
  *   R1  = bootinfo physical address
  *   R2  = kernel physical entry point
- *   SR.S = 1 (supervisor), SR.M = 0 (MMU off), SR.I = 0 (irqs off)
+ *   SR.S = 1 (supervisor), SR.I = 0 (irqs off); MMU off (MMUCR.M = 0)
  *
  * The kernel is linked at KERNEL_TEXT_BASE (0x8001_0000).
  * locore.S must: compute virt-to-phys bias, set up the kernel
@@ -46,7 +46,7 @@
  * Called by bootloader with:
  *   R1 = bootinfo physical address
  *   R2 = kernel physical entry point
- *   SR.S = 1 (supervisor), SR.M = 0 (MMU off), SR.I = 0 (irqs off)
+ *   SR.S = 1 (supervisor), SR.I = 0 (irqs off); MMU off (MMUCR.M = 0)
  *
  * Register allocation for early boot:
  *   R5 = saved bootinfo physical address
