@@ -2,9 +2,10 @@
 //
 // The Verilator wrapper of machine_penumbra2 (the sim-wrapper role in
 // doc/internals/build-system.md): the board-independent machine plus the
-// devices a program run needs — today just unified_bus_mem on the external
-// bus (ROM region holds the +rom_hex program at 0xFFFF_0000, RAM low, so
-// the vector table at 0x0 and the reset code never alias). The program
+// devices a program run needs: unified_bus_mem (ROM region holds the +rom_hex
+// program at 0xFFFF_0000, RAM low, so the vector table at 0x0 and the reset
+// code never alias) plus a fixed-address sim UART decoded off the same bus,
+// its IRQ ORed into the machine's external interrupt line. The program
 // runners (tb_penumbra2_prog, tb_penumbra2_intr) drive clock/reset/IRQs and
 // key on the machine's program-end pulse and commit port — the runner
 // contract — so they carry no knowledge of what is inside.
@@ -34,6 +35,11 @@ module machine_penumbra2_sim
     logic [3:0]  bus_byte_en;
     logic        bus_re, bus_we, bus_busy;
 
+    // External-bus fabric (memory + UART) and the combined external IRQ.
+    logic [31:0] mem_rdata, uart_rdata;
+    logic        mem_busy, uart_busy, uart_irq;
+    logic        uart_sel, uart_sel_r, irq_combined;
+
     machine_penumbra2 #(
         .RESET_PC(RESET_PC),
         // Sim machine identity: name "Simulator", 25 MHz — matches the
@@ -44,7 +50,7 @@ module machine_penumbra2_sim
         .CPU_FREQ  (32'd25_000_000)
     ) u_machine (
         .i_clk(i_clk), .i_rst(i_rst),
-        .i_irq(i_irq), .i_timer_irq(i_timer_irq),
+        .i_irq(irq_combined), .i_timer_irq(i_timer_irq),
         .o_bus_addr(bus_addr), .o_bus_wdata(bus_wdata),
         .o_bus_byte_en(bus_byte_en),
         .o_bus_re(bus_re), .o_bus_we(bus_we),
@@ -56,13 +62,44 @@ module machine_penumbra2_sim
         .o_prog_end(o_prog_end)
     );
 
+    // ── Bus fabric: memory + a fixed-address UART ────────────────
+    // The UART decodes a 4 KB page at UART_BASE; every other address is the
+    // unified memory. Only the selected device sees the access. busy follows
+    // the live select (asserted the access cycle); read data follows the
+    // registered select (valid on the busy-drop cycle, the registered-read
+    // contract). The UART IRQ joins the machine's external i_irq line.
+    localparam int UART_PAGE_SIZE = 4096;
+
+    bus_devsel #(.BASE(UART_BASE), .SIZE(32'(UART_PAGE_SIZE)))
+        u_uart_sel (.i_addr(bus_addr), .o_sel(uart_sel));
+    always_ff @(posedge i_clk) uart_sel_r <= uart_sel;
+
+    assign bus_busy     = uart_sel   ? uart_busy  : mem_busy;
+    assign bus_rdata    = uart_sel_r ? uart_rdata : mem_rdata;
+    assign irq_combined = i_irq | uart_irq;
+
     unified_bus_mem #(
         .REGION_WORDS(MEM_REGION_WORDS), .INIT_FILE(INIT_FILE)
     ) u_mem (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_addr(bus_addr), .i_wdata(bus_wdata), .i_byte_en(bus_byte_en),
-        .i_re(bus_re), .i_we(bus_we),
-        .o_rdata(bus_rdata), .o_busy(bus_busy)
+        .i_re(bus_re & ~uart_sel), .i_we(bus_we & ~uart_sel),
+        .o_rdata(mem_rdata), .o_busy(mem_busy)
     );
+
+    // Sim UART (NS16450, no FIFO). TX/RX are observe-only here — the
+    // conformance program only exercises the register file and TX-busy timing
+    // — so the TX outputs and RX-ack are open and RX is idle.
+    /* verilator lint_off PINCONNECTEMPTY */
+    sim_uart u_uart (
+        .i_clk(i_clk), .i_rst(i_rst),
+        .i_addr(bus_addr), .i_wdata(bus_wdata),
+        .i_we(bus_we & uart_sel), .i_re(bus_re & uart_sel),
+        .o_rdata(uart_rdata), .o_busy(uart_busy),
+        .o_tx_valid(), .o_tx_data(),
+        .i_rx_valid(1'b0), .i_rx_data(8'b0), .o_rx_ack(),
+        .o_irq(uart_irq)
+    );
+    /* verilator lint_on PINCONNECTEMPTY */
 
 endmodule

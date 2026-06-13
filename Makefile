@@ -131,7 +131,7 @@ RUNNER_PROVIDES_penumbra1 = mmu mmu-d mmu-i cache l2 uart spi bus machid perfctr
 
 RUNNER_MOD_penumbra2      = machine_penumbra2_sim
 RUNNER_TBS_penumbra2      = tb_penumbra2_prog tb_penumbra2_intr
-RUNNER_PROVIDES_penumbra2 = mmu mmu-d mmu-i cache l2 wrspr machid perfctr timer irq
+RUNNER_PROVIDES_penumbra2 = mmu mmu-d mmu-i cache l2 wrspr machid perfctr timer irq uart
 
 RUNNER_MOD      = $(RUNNER_MOD_$(CORE))
 RUNNER_TBS      = $(RUNNER_TBS_$(CORE))
