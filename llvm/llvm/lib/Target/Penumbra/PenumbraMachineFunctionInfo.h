@@ -30,6 +30,12 @@ class PenumbraMachineFunctionInfo : public MachineFunctionInfo {
   /// reused for any subsequent references in the same function.
   Register ReturnAddressVReg;
 
+  /// Next unique id for PC-anchor labels (.LPC<function>_<id>).  Each
+  /// PC-anchored address sequence allocates one id at selection time to
+  /// pair its immediate-carrying instructions with its anchor; the
+  /// AsmPrinter materializes the label when lowering the pseudos.
+  unsigned PICLabelUId = 0;
+
 public:
   PenumbraMachineFunctionInfo(const Function &F,
                               const TargetSubtargetInfo *STI) {}
@@ -39,6 +45,8 @@ public:
 
   Register getReturnAddressVReg() const { return ReturnAddressVReg; }
   void setReturnAddressVReg(Register R) { ReturnAddressVReg = R; }
+
+  unsigned createPICLabelUId() { return PICLabelUId++; }
 };
 
 } // namespace llvm

@@ -13,8 +13,9 @@ define ptr @get_tls_addr() {
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    sub r14, 4
 ; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
-; CHECK-NEXT:    lli r1, %tlsgd_got_pcrel_lo16(tls_var-8)
-; CHECK-NEXT:    lui r1, %tlsgd_got_pcrel_hi16(tls_var-4)
+; CHECK-NEXT:    lli r1, %tlsgd_got_pcrel_lo16(tls_var-.LPC0_0)
+; CHECK-NEXT:    lui r1, %tlsgd_got_pcrel_hi16(tls_var-.LPC0_0)
+; CHECK-NEXT:  .LPC0_0:
 ; CHECK-NEXT:    add r1, r15
 ; CHECK-NEXT:    bl __tls_get_addr
 ; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload

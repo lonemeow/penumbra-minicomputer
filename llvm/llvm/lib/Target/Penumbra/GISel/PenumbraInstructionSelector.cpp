@@ -1194,37 +1194,44 @@ bool PenumbraInstructionSelector::selectGlobalValue(MachineInstr &I,
       // PIC TLS GD: compute the GOT tls_index pair address via PC-relative
       // GOT offset using the same anchor-at-ADD shape as PIC globals:
       //
-      //   LLI  OffReg, %tlsgd_got_pcrel_lo16(sym - 8)
-      //   LUI  OffReg, %tlsgd_got_pcrel_hi16(sym - 4)
-      //   ADD  DstReg, OffReg, PC               (DstReg = &GOT[tls_index])
+      //         PICLLI   Off, sym, id   →  LLI  Off, %tlsgd_got_pcrel_lo16(sym - .LPC)
+      //         PICLUI   Off, sym, id   →  LUI  Off, %tlsgd_got_pcrel_hi16(sym - .LPC)
+      //         PICADDPC Dst, Off, id   →  .LPC: ADD Dst, PC   (Dst = &GOT[tls_index])
       //
-      // 3 instructions (down from 4); a single vreg threads through.
+      // The pclabel id pairs the immediate carriers with their anchor;
+      // the AsmPrinter emits the label and label-difference operands per
+      // the PC-anchored relocation pair convention (doc/system/abi.md).
       // The subsequent BL __tls_get_addr makes this 4 instructions total;
       // lld can still relax the sequence to inline LE for static linking.
       DebugLoc DL = I.getDebugLoc();
       auto InsertPt = I.getIterator();
+      unsigned PCLabelId =
+          MBB.getParent()->getInfo<PenumbraMachineFunctionInfo>()
+              ->createPICLabelUId();
       Register OffLoReg =
           MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
       Register OffReg =
           MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
 
-      auto LLIInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::LLI))
+      auto LLIInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::PICLLI))
           .addDef(OffLoReg)
-          .add(MachineOperand::CreateGA(GV, Offset - 8,
-                                        Penumbra::S_TLSgd_GOT_PCRel_Lo16));
+          .add(MachineOperand::CreateGA(GV, Offset,
+                                        Penumbra::S_TLSgd_GOT_PCRel_Lo16))
+          .addImm(PCLabelId);
       constrainSelectedInstRegOperands(*LLIInst, TII, TRI, RBI);
 
-      auto LUIInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::LUI))
+      auto LUIInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::PICLUI))
           .addDef(OffReg)
           .addReg(OffLoReg)
-          .add(MachineOperand::CreateGA(GV, Offset - 4,
-                                        Penumbra::S_TLSgd_GOT_PCRel_Hi16));
+          .add(MachineOperand::CreateGA(GV, Offset,
+                                        Penumbra::S_TLSgd_GOT_PCRel_Hi16))
+          .addImm(PCLabelId);
       constrainSelectedInstRegOperands(*LUIInst, TII, TRI, RBI);
 
-      auto ADDInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::ADD))
+      auto ADDInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::PICADDPC))
           .addDef(DstReg)
           .addReg(OffReg)
-          .addReg(Penumbra::R15);
+          .addImm(PCLabelId);
       constrainSelectedInstRegOperands(*ADDInst, TII, TRI, RBI);
     } else {
       // Non-PIC TLS: absolute address with TLS GD relocs.
@@ -1244,22 +1251,27 @@ bool PenumbraInstructionSelector::selectGlobalValue(MachineInstr &I,
     // patches them correctly for PIE (bootloader self-relocator).
     // No text relocs needed — code is PC-relative to the GOT entry.
     //
-    //   LLI  GotAddr, %got_pcrel_lo16(sym - 8)  (lo16(GOT[sym] - Q))
-    //   LUI  GotAddr, %got_pcrel_hi16(sym - 4)  (hi16(GOT[sym] - Q))
-    //   ADD  GotAddr, PC                         (Q: GotAddr = &GOT[sym])
-    //   LDW  DstReg,  [GotAddr + 0]              (DstReg = *GOT[sym])
+    //         PICLLI   Got, sym, id  →  LLI  Got, %got_pcrel_lo16(sym - .LPC)
+    //         PICLUI   Got, sym, id  →  LUI  Got, %got_pcrel_hi16(sym - .LPC)
+    //         PICADDPC Got, id       →  .LPC: ADD Got, PC  (Got = &GOT[sym])
+    //         LDW  Dst, [Got + 0]                          (Dst = *GOT[sym])
     //
-    // The ADD's own PC (= Q) is the anchor.  With addends -8 / -4,
-    // the linker's `sym + addend - fixup_addr` formula yields
-    // `GOT[sym] - Q` for both halves of the LLI+LUI composition.
-    // Folding PC into the last step saves the leading `MOV Rd, PC`
-    // and lets a single vreg thread through the whole sequence.
+    // The anchor ADD's own PC is what the LLI+LUI offset is relative
+    // to.  The pclabel id pairs the immediate carriers with their
+    // anchor; the AsmPrinter emits the label and label-difference
+    // operands per the PC-anchored relocation pair convention
+    // (doc/system/abi.md), so the relocation addends name the anchor
+    // that actually executes no matter how later passes place the
+    // individual instructions.
     //
     // Non-zero G_GLOBAL_VALUE offsets (e.g. &array[5]) are applied
     // after the GOT load via ADDi, since the GOT entry stores the
     // base symbol address only.
     DebugLoc DL = I.getDebugLoc();
     auto InsertPt = I.getIterator();
+    unsigned PCLabelId =
+        MBB.getParent()->getInfo<PenumbraMachineFunctionInfo>()
+            ->createPICLabelUId();
     Register OffLoReg =
         MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
     Register OffReg =
@@ -1267,24 +1279,23 @@ bool PenumbraInstructionSelector::selectGlobalValue(MachineInstr &I,
     Register GotAddrReg =
         MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
 
-    // LLI OffLoReg, %got_pcrel_lo16(sym - 8)
-    auto LLIInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::LLI))
+    auto LLIInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::PICLLI))
         .addDef(OffLoReg)
-        .add(MachineOperand::CreateGA(GV, -8, Penumbra::S_GOT_PCRel_Lo16));
+        .add(MachineOperand::CreateGA(GV, 0, Penumbra::S_GOT_PCRel_Lo16))
+        .addImm(PCLabelId);
     constrainSelectedInstRegOperands(*LLIInst, TII, TRI, RBI);
 
-    // LUI OffReg, OffLoReg, %got_pcrel_hi16(sym - 4)
-    auto LUIInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::LUI))
+    auto LUIInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::PICLUI))
         .addDef(OffReg)
         .addReg(OffLoReg)
-        .add(MachineOperand::CreateGA(GV, -4, Penumbra::S_GOT_PCRel_Hi16));
+        .add(MachineOperand::CreateGA(GV, 0, Penumbra::S_GOT_PCRel_Hi16))
+        .addImm(PCLabelId);
     constrainSelectedInstRegOperands(*LUIInst, TII, TRI, RBI);
 
-    // ADD GotAddrReg, OffReg, PC — fold live PC into the offset
-    auto ADDInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::ADD))
+    auto ADDInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::PICADDPC))
         .addDef(GotAddrReg)
         .addReg(OffReg)
-        .addReg(Penumbra::R15);
+        .addImm(PCLabelId);
     constrainSelectedInstRegOperands(*ADDInst, TII, TRI, RBI);
 
     // LDW DstReg/TmpReg, [GotAddrReg + 0] — load symbol address from GOT
@@ -1328,18 +1339,24 @@ bool PenumbraInstructionSelector::selectBlockAddress(MachineInstr &I,
   int64_t Offset = I.getOperand(1).getOffset();
 
   if (TM.getRelocationModel() == Reloc::PIC_) {
+    // PICMOVPC Tmp, id   →  .LPC: MOV Tmp, PC   (anchor)
+    // PICADDi  Dst, Tmp, &&label, id  →  ADD Dst, %pcrel(&&label - .LPC)
     DebugLoc DL = I.getDebugLoc();
     auto InsertPt = I.getIterator();
+    unsigned PCLabelId =
+        MBB.getParent()->getInfo<PenumbraMachineFunctionInfo>()
+            ->createPICLabelUId();
     Register TmpReg =
         MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
-    auto MOVInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::MOV))
+    auto MOVInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::PICMOVPC))
         .addDef(TmpReg)
-        .addReg(Penumbra::R15);
+        .addImm(PCLabelId);
     constrainSelectedInstRegOperands(*MOVInst, TII, TRI, RBI);
-    auto ADDiInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::ADDi))
+    auto ADDiInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::PICADDi))
         .addDef(DstReg)
         .addReg(TmpReg)
-        .add(MachineOperand::CreateBA(BA, Offset + 4, Penumbra::S_PCRel));
+        .add(MachineOperand::CreateBA(BA, Offset, Penumbra::S_PCRel))
+        .addImm(PCLabelId);
     constrainSelectedInstRegOperands(*ADDiInst, TII, TRI, RBI);
   } else {
     emitLoadSymbolAddr(
@@ -1361,20 +1378,26 @@ bool PenumbraInstructionSelector::selectJumpTable(MachineInstr &I,
 
   if (TM.getRelocationModel() == Reloc::PIC_) {
     // PIC: materialise JT base as PC + pcrel offset.
+    // PICMOVPC Tmp, id  →  .LPC: MOV Tmp, PC   (anchor)
+    // PICADDi  Dst, Tmp, JTI, id  →  ADD Dst, %pcrel(JTI - .LPC)
     DebugLoc DL = I.getDebugLoc();
     auto InsertPt = I.getIterator();
+    unsigned PCLabelId =
+        MBB.getParent()->getInfo<PenumbraMachineFunctionInfo>()
+            ->createPICLabelUId();
     Register TmpReg =
         MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
 
-    auto MOVInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::MOV))
+    auto MOVInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::PICMOVPC))
         .addDef(TmpReg)
-        .addReg(Penumbra::R15);
+        .addImm(PCLabelId);
     constrainSelectedInstRegOperands(*MOVInst, TII, TRI, RBI);
 
-    auto ADDiInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::ADDi))
+    auto ADDiInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::PICADDi))
         .addDef(DstReg)
         .addReg(TmpReg)
-        .add(MachineOperand::CreateJTI(JTI, Penumbra::S_PCRel));
+        .add(MachineOperand::CreateJTI(JTI, Penumbra::S_PCRel))
+        .addImm(PCLabelId);
     constrainSelectedInstRegOperands(*ADDiInst, TII, TRI, RBI);
   } else {
     // Static: absolute address via LLI+LUI.

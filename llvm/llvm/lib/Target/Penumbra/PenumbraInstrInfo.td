@@ -582,4 +582,35 @@ let isPseudo = 1 in {
   def SELECT_CCi_GPR : PenumbraInst<(outs GPR:$dst),
       (ins GPR:$trueval, GPR:$falseval, GPR:$lhs, i32imm:$imm, i32imm:$cc),
       "# SELECT_CCi_GPR $dst, $trueval, $falseval, $lhs, $imm, $cc">;
+
+  // PC-anchored PIC address sequences (see "PC-Anchored Relocation
+  // Pairs" in doc/system/abi.md).  Each sequence pairs immediate-
+  // carrying instructions (PICLLI/PICLUI/PICADDi, $sym slot holds a
+  // global/JTI/blockaddress operand with a PC-relative target flag)
+  // with one PC-reading anchor (PICADDPC/PICMOVPC) through a shared
+  // per-function $pclabel id.  The AsmPrinter places .LPC<f>_<id> at
+  // the anchor and lowers each $sym operand to a label-difference
+  // expression (sym - .LPC<f>_<id>), so the relocation addend names
+  // the anchor that actually executes regardless of code motion
+  // between selection and emission.  The immediate carriers may be
+  // moved, cloned, or merged freely; the anchors are isNotDuplicable
+  // because a second copy would redefine the label.
+  def PICLLI : PenumbraInst<(outs GPR:$Rd), (ins i32imm:$sym, i32imm:$pclabel),
+                            "# PICLLI $Rd, $sym, $pclabel">;
+  let Constraints = "$Rd = $Rd_in" in
+  def PICLUI : PenumbraInst<(outs GPR:$Rd),
+                            (ins GPR:$Rd_in, i32imm:$sym, i32imm:$pclabel),
+                            "# PICLUI $Rd, $sym, $pclabel">;
+  let Defs = [SR], Constraints = "$Rd = $Rd_in" in
+  def PICADDi : PenumbraInst<(outs GPR:$Rd),
+                             (ins GPR:$Rd_in, i32imm:$sym, i32imm:$pclabel),
+                             "# PICADDi $Rd, $sym, $pclabel">;
+  let isNotDuplicable = 1 in {
+    let Defs = [SR], Constraints = "$Rd = $Rd_in" in
+    def PICADDPC : PenumbraInst<(outs GPR:$Rd),
+                                (ins GPR:$Rd_in, i32imm:$pclabel),
+                                "# PICADDPC $Rd, $pclabel">;
+    def PICMOVPC : PenumbraInst<(outs GPR:$Rd), (ins i32imm:$pclabel),
+                                "# PICMOVPC $Rd, $pclabel">;
+  }
 }

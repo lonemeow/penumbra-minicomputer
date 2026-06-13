@@ -7,6 +7,7 @@
 #include "PenumbraMCAsmInfo.h"
 #include "PenumbraFixupKinds.h"
 #include "llvm/MC/MCExpr.h"
+#include "llvm/MC/MCValue.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
@@ -70,4 +71,46 @@ void PenumbraMCAsmInfo::printSpecifierExpr(raw_ostream &OS,
   }
   printExpr(OS, *Expr.getSubExpr());
   OS << ')';
+}
+
+bool PenumbraMCAsmInfo::evaluateAsRelocatableImpl(const MCSpecifierExpr &Expr,
+                                                  MCValue &Res,
+                                                  const MCAssembler *Asm) const {
+  // PC-anchored specifiers take a label-difference operand naming the
+  // sequence's anchor instruction: %got_pcrel_lo16(sym - .LPC0).  The
+  // subtracted label is local and same-section, so the ELF writer folds
+  // it into the addend (A = P - Q per the PC-anchored relocation pair
+  // convention in doc/system/abi.md).  All other specifiers keep the
+  // generic rule: no subtracted symbol under a specifier.
+  bool AllowSubSym;
+  const MCAssembler *EvalAsm = Asm;
+  switch (Expr.getSpecifier()) {
+  case Penumbra::S_GOT_PCRel_Lo16:
+  case Penumbra::S_GOT_PCRel_Hi16:
+  case Penumbra::S_TLSgd_PCRel:
+  case Penumbra::S_TLSgd_GOT_PCRel_Lo16:
+  case Penumbra::S_TLSgd_GOT_PCRel_Hi16:
+    // GOT-indirect operands must reach the object writer as symbol
+    // references even when the target symbol is defined in the same
+    // section (e.g. a static function) — the GOT slot is a link-time
+    // entity.  Evaluate without layout so the anchor difference is
+    // never folded to a constant.
+    EvalAsm = nullptr;
+    AllowSubSym = true;
+    break;
+  case Penumbra::S_PCRel:
+    // Anchor differences against same-section symbols (jump table and
+    // block-address bases) may fold to an assembly-time constant —
+    // that is the resolved no-relocation case.
+    AllowSubSym = true;
+    break;
+  default:
+    AllowSubSym = false;
+    break;
+  }
+
+  if (!Expr.getSubExpr()->evaluateAsRelocatable(Res, EvalAsm))
+    return false;
+  Res.setSpecifier(Expr.getSpecifier());
+  return AllowSubSym || !Res.getSubSym();
 }

@@ -211,20 +211,28 @@ shapes:
 - **LLI+LUI pairs** use an intermediate vreg
   (`%tmp = LLI lo` → `%dst = LUI %tmp, hi`) for SSA correctness —
   required for `-O1+` passes like `OptimizePHIs`.
-- **GOT-indirect PIC** uses the ADD's own PC as anchor so the LLI/LUI
-  addends are -8/-4: `LLI Rd, %got_pcrel_lo16(sym-8)` +
-  `LUI Rd, %got_pcrel_hi16(sym-4)` + `ADD Rd, PC` + `LDW Rd, [Rd]`.
-  This drops a leading `MOV Rd, PC` (one fewer instruction *and* one
-  fewer live vreg vs. the earlier scheme). LLI+LUI reconstruct the
-  unsigned 32-bit GOT-to-PC offset, no sign issues.
+- **GOT-indirect PIC** uses the ADD's own PC as anchor:
+  `LLI Rd, %got_pcrel_lo16(sym-.LPC0_0)` +
+  `LUI Rd, %got_pcrel_hi16(sym-.LPC0_0)` + `.LPC0_0: ADD Rd, PC` +
+  `LDW Rd, [Rd]`.  The sequence is selected as PICLLI/PICLUI/PICADDPC
+  pseudos sharing a per-function pclabel id
+  (`PenumbraMachineFunctionInfo::createPICLabelUId`); the AsmPrinter
+  emits the `.LPC` label at the anchor and label-difference operands on
+  the carriers, so relocation addends stay correct under any code
+  motion — tail merging once fused the anchor ADDs of different switch
+  cases and shifted two of three GOT reads onto wrong slots
+  (`pic-anchor-tail-merge.ll`).  Anchor pseudos are `isNotDuplicable`
+  (a clone would redefine the label).  LLI+LUI reconstruct the unsigned
+  32-bit GOT-to-PC offset, no sign issues.
   `needsRelocateWithSymbol()` returns true for GOT/TLS relocs so the
   addend only carries the PC adjustment, not the symbol's section
-  offset.
-- **TLS GD PIC** uses the same anchor-at-ADD shape but 3
-  instructions (no LDW — the GOT tls_index pair *address* is the
-  argument to `__tls_get_addr`, not its contents):
-  `LLI %tlsgd_got_pcrel_lo16(sym-8)` + `LUI %tlsgd_got_pcrel_hi16(sym-4)`
-  + `ADD Rd, PC` + `BL __tls_get_addr`.
+  offset.  GOT fixups are *not* PCRel at the MC layer: their relocation
+  types carry the `-P`, and the backend's `evaluateFixup` forces a
+  relocation so same-section locals still get GOT slots.
+- **TLS GD PIC** uses the same anchored pseudo shape but no LDW — the
+  GOT tls_index pair *address* is the argument to `__tls_get_addr`,
+  not its contents: PICLLI/PICLUI (`%tlsgd_got_pcrel_*`) + PICADDPC +
+  `BL __tls_get_addr`.
 - **Jump tables** are always `EK_LabelDifference32`
   (`.word target - JT_base`) placed inline in `.text` via
   `PenumbraTargetObjectFile::shouldPutJumpTableInFunctionSection`.

@@ -15,8 +15,9 @@ define i32 @switch_test(i32 %x) {
 ; PIC-NEXT:    bhi .LBB0_6
 ; PIC-NEXT:  // %bb.7: // %entry
 ; PIC-NEXT:    ldw r1, [r14 + 0] // 4-byte Folded Reload
+; PIC-NEXT:  .LPC0_0:
 ; PIC-NEXT:    mov r2, r15
-; PIC-NEXT:    add r2, %pcrel(.LJTI0_0+4)
+; PIC-NEXT:    add r2, %pcrel(.LJTI0_0-.LPC0_0)
 ; PIC-NEXT:    shl r1, 2
 ; PIC-NEXT:    add r1, r2
 ; PIC-NEXT:    ldw r1, [r1 + 0]

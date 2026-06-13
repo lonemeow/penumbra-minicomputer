@@ -319,6 +319,56 @@ sibling `// FIXME: Need to split the load.` hole in
 reproducers, target survey, and proposed two-part patch:
 `doc/llvm-gisel-wide-extload-legalization.md`.
 
+## Compiler: PIC GOT anchor was position-dependent under code motion — RESOLVED
+
+Dynamic NetBSD died at boot: init took a SIGBUS storm
+(`Process (pid 1) got sig 10`, no progress) the instant it started.
+Bisected to userland (old kernel + new userland reproduced; new
+kernel + old userland booted), then to libc's `dl_iterate_phdr`
+parsing the auxv — its switch cases stored auxv values through the
+wrong GOT slots.
+
+Root cause was the PIC GOT materialization
+`LLI %got_pcrel_lo16(sym-8); LUI %got_pcrel_hi16(sym-4); ADD Rd, PC`,
+where the `ADD`'s own PC is the relocation anchor and the **-8/-4
+addends hard-coded the assumption that the ADD sits 8 bytes after the
+LLI**.  Nothing enforced that adjacency.  The new GlobalISel
+Localizer pass (`4c016efc4222`) clones `G_GLOBAL_VALUE` into each
+using block, so switch cases storing through different globals ended
+in identical `ADD/LDW/STW` tails — which BranchFolder tail-merged,
+fusing the anchor `ADD`s of separate cases and leaving two of three
+`LLI/LUI` pairs measuring against a PC 8 bytes off.  Each computed a
+neighboring GOT slot; the dereferenced "address" was an unrelated
+rodata pointer, and the store faulted.  Pre-Localizer, GISel CSE
+materialized each global once, so duplicate triples never existed for
+tail-merging to find — the latent bug had no trigger.
+
+Fixed by making the sequence position-independent the way ARM32
+(`PICADD` + `.LPC` labels) and RISC-V (`%pcrel_lo(.Lpcrel_hi)`) do:
+the addend now names the anchor via label arithmetic
+(`%got_pcrel_lo16(sym - .LPC0_0)` with `.LPC0_0:` on the ADD) instead
+of a fixed constant.  Selection emits paired pseudos
+(`PICLLI`/`PICLUI`/`PICADDi` carriers + `PICADDPC`/`PICMOVPC` anchors,
+`isNotDuplicable`) sharing a per-function pclabel id; the AsmPrinter
+places the label and lowers the label-difference operand, which the
+assembler folds into the relocation addend (`A = P - Q`).  The linker
+formula `S + A - P` is unchanged — no lld or relocation-table change.
+Covers the GOT-global, TLS-GD, block-address, and jump-table PIC
+paths.  Spec: `doc/system/abi.md` "PC-Anchored Relocation Pairs".
+Tests: `test/CodeGen/Penumbra/pic-anchor-tail-merge.ll` (the
+switch/tail-merge shape) and `test/MC/Penumbra/got-pcrel-label-anchor.s`
+(addend folding across adjacent, branched, and same-section-local
+layouts).  Validated by booting dynamic NetBSD to the single-user
+shell (init/`/bin/sh`/`sysctl` all run, zero faults).
+
+**Test-coverage gap, still open:** `make test-compiler` runs
+`penumbra-unknown-none` bare-metal, non-PIC — it never exercises GOT
+materialization, which is why a PIC-only miscompile reached a libc
+this fundamental before anything caught it.  Worth a PIC/PIE leg in
+the compiler-correctness suite (build a handful of `-fPIC` cases,
+link with lld, run on the ISS) so GOT/TLS codegen regressions surface
+without a full userland rebuild + boot.
+
 ## Kernel: vmapbuf / vunmapbuf for raw device access
 
 `vmapbuf` and `vunmapbuf` in `penumbra/machdep.c` are still

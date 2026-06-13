@@ -272,6 +272,48 @@ Where: S = symbol value, A = addend, P = relocation position.
 **LLI+LUI pair (32-bit address materialization):**
 The linker resolves `R_PENUMBRA_LO16` on LLI and `R_PENUMBRA_HI16` on LUI to produce the full 32-bit address.
 
+#### PC-Anchored Relocation Pairs
+
+The PC-relative pair relocations (`R_PENUMBRA_GOT_PCREL_LO16`/`HI16`,
+`R_PENUMBRA_TLS_GD_GOT_PCREL_LO16`/`HI16`, `R_PENUMBRA_IMM16_PCREL`)
+patch immediate fields of `LLI`/`LUI`/`ADDi` instructions that feed a
+separate PC-reading instruction (`ADD Rd, PC` or `MOV Rd, PC`) — the
+sequence's **anchor**. The value the sequence computes is relative to
+the anchor's address Q, not to the relocation site P:
+
+```
+        lli     r3, %got_pcrel_lo16(sym - .LPC0)    ; reloc at P
+        lui     r3, %got_pcrel_hi16(sym - .LPC0)    ; reloc at P+4
+.LPC0:  add     r3, pc                              ; anchor, address Q
+        ldw     r3, [r3 + 0]                        ; r3 = *GOT[sym]
+```
+
+These relocations compute the standard RELA `S + A − P`. Because the
+linker subtracts P but the program needs the result relative to Q, the
+**producer must fold the anchor distance into the addend**:
+`A = D + (P − Q)`, where D is the logical displacement (normally 0).
+Assembly source expresses this with label arithmetic as above: a local
+label defined at the anchor instruction, subtracted inside the operand.
+The assembler folds the same-section label into the addend, so the
+emitted relocation carries only the symbol and `A = P − Q`.
+
+When the anchor directly follows the LUI, the addends are −8 on the
+LLI and −4 on the LUI; the constant shorthand
+`%got_pcrel_lo16(sym - 8)` / `%got_pcrel_hi16(sym - 4)` is equivalent
+to the label form for exactly that adjacent layout and no other.
+
+Consequences:
+
+- The linker needs no knowledge of anchors or instruction sequences;
+  the addend fully encodes the displacement. Any code layout —
+  including an anchor block shared by several LLI/LUI pairs from
+  different basic blocks — relocates correctly, as long as each pair's
+  addend names the anchor that actually executes with it.
+- The byte distance between a relocation site and its anchor must be
+  final at assembly time. A linker may rewrite instructions in place
+  (e.g. TLS relaxation) but must never insert or delete bytes inside a
+  section, or anchored addends across the edit would be invalidated.
+
 ### Sections
 
 Standard ELF sections. The linker script defines the memory map:
@@ -343,8 +385,8 @@ On bare-metal targets (`penumbra-unknown-none`) without an OS thread scheduler, 
 
 PIC and PIE are supported.
 
-- **Global Address Materialization (PIC/PIE):** Achieved using GOT-indirect addressing with full 32-bit reach.
-- **Relocations:** Uses `R_PENUMBRA_GOT_PCREL_LO16` and `R_PENUMBRA_GOT_PCREL_HI16` to form a GOT-indirect PC-relative offset to the GOT entry.
+- **Global Address Materialization (PIC/PIE):** Achieved using GOT-indirect addressing with full 32-bit reach. The materialization sequence is `LLI`+`LUI` loading a PC-relative GOT offset, a PC-reading `ADD` as the anchor, and a `LDW` fetching the symbol address from the GOT (see [PC-Anchored Relocation Pairs](#pc-anchored-relocation-pairs)).
+- **Relocations:** Uses `R_PENUMBRA_GOT_PCREL_LO16` and `R_PENUMBRA_GOT_PCREL_HI16` to form a GOT-indirect PC-relative offset to the GOT entry, with the anchor distance carried in the addend.
 - **Dynamic Linking:** PLT entries are 16 bytes. Shared libraries use `R_PENUMBRA_GLOB_DAT` for GOT and `R_PENUMBRA_JUMP_SLOT` for PLT. PIE relies on `R_PENUMBRA_RELATIVE` for bias adjustment.
 
 ---

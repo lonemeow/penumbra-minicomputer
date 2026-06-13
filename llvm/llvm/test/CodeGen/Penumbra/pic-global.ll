@@ -18,8 +18,9 @@ define ptr @get_address() {
 ; PIC-LABEL: get_address:
 ; PIC:         .cfi_startproc
 ; PIC-NEXT:  // %bb.1:
-; PIC-NEXT:    lli r1, %got_pcrel_lo16(myvar-8)
-; PIC-NEXT:    lui r1, %got_pcrel_hi16(myvar-4)
+; PIC-NEXT:    lli r1, %got_pcrel_lo16(myvar-.LPC0_0)
+; PIC-NEXT:    lui r1, %got_pcrel_hi16(myvar-.LPC0_0)
+; PIC-NEXT:  .LPC0_0:
 ; PIC-NEXT:    add r1, r15
 ; PIC-NEXT:    ldw r1, [r1 + 0]
 ; PIC-NEXT:    jmp r13
@@ -37,8 +38,9 @@ define i32 @load_global() {
 ; PIC-LABEL: load_global:
 ; PIC:         .cfi_startproc
 ; PIC-NEXT:  // %bb.1:
-; PIC-NEXT:    lli r1, %got_pcrel_lo16(myvar-8)
-; PIC-NEXT:    lui r1, %got_pcrel_hi16(myvar-4)
+; PIC-NEXT:    lli r1, %got_pcrel_lo16(myvar-.LPC1_0)
+; PIC-NEXT:    lui r1, %got_pcrel_hi16(myvar-.LPC1_0)
+; PIC-NEXT:  .LPC1_0:
 ; PIC-NEXT:    add r1, r15
 ; PIC-NEXT:    ldw r1, [r1 + 0]
 ; PIC-NEXT:    ldw r1, [r1 + 0]
@@ -59,8 +61,9 @@ define void @store_global(i32 %v) {
 ; PIC-LABEL: store_global:
 ; PIC:         .cfi_startproc
 ; PIC-NEXT:  // %bb.1:
-; PIC-NEXT:    lli r2, %got_pcrel_lo16(myvar-8)
-; PIC-NEXT:    lui r2, %got_pcrel_hi16(myvar-4)
+; PIC-NEXT:    lli r2, %got_pcrel_lo16(myvar-.LPC2_0)
+; PIC-NEXT:    lui r2, %got_pcrel_hi16(myvar-.LPC2_0)
+; PIC-NEXT:  .LPC2_0:
 ; PIC-NEXT:    add r2, r15
 ; PIC-NEXT:    ldw r2, [r2 + 0]
 ; PIC-NEXT:    stw r1, [r2 + 0]
@@ -85,8 +88,9 @@ define dso_local ptr @get_pie_address() {
 ; PIC-NEXT:    .type .Lget_pie_address$local,@function
 ; PIC-NEXT:    .cfi_startproc
 ; PIC-NEXT:  // %bb.1:
-; PIC-NEXT:    lli r1, %got_pcrel_lo16(pievar-8)
-; PIC-NEXT:    lui r1, %got_pcrel_hi16(pievar-4)
+; PIC-NEXT:    lli r1, %got_pcrel_lo16(pievar-.LPC3_0)
+; PIC-NEXT:    lui r1, %got_pcrel_hi16(pievar-.LPC3_0)
+; PIC-NEXT:  .LPC3_0:
 ; PIC-NEXT:    add r1, r15
 ; PIC-NEXT:    ldw r1, [r1 + 0]
 ; PIC-NEXT:    jmp r13

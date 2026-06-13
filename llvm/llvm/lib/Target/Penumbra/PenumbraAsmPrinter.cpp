@@ -13,6 +13,8 @@
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/MC/MCAsmInfo.h"
+#include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCStreamer.h"
@@ -45,6 +47,14 @@ public:
                        const char *ExtraCode, raw_ostream &OS) override;
   bool PrintAsmMemoryOperand(const MachineInstr *MI, unsigned OpNo,
                              const char *ExtraCode, raw_ostream &OS) override;
+
+  /// The PC-anchor label .LPC<function>_<id> pairing a PC-anchored
+  /// address sequence's immediate carriers with its anchor instruction.
+  MCSymbol *getPICLabel(unsigned Id) const {
+    return OutContext.getOrCreateSymbol(Twine(MAI->getPrivateLabelPrefix()) +
+                                        "PC" + Twine(getFunctionNumber()) +
+                                        "_" + Twine(Id));
+  }
 };
 
 } // end anonymous namespace
@@ -71,15 +81,7 @@ static bool lowerOperand(const MachineOperand &MO, MCOperand &MCOp,
     const MCExpr *Expr =
         MCSymbolRefExpr::create(AP.GetJTISymbol(MO.getIndex()), AP.OutContext);
     unsigned TF = MO.getTargetFlags();
-    if (TF == Penumbra::S_PCRel) {
-      // Add +4 to compensate for MOV+ADDi sequence: the MOV captures PC
-      // of itself (4 bytes before ADDi), so the pcrel relocation on ADDi
-      // needs +4 to produce the correct address.
-      Expr = MCBinaryExpr::createAdd(
-          Expr, MCConstantExpr::create(4, AP.OutContext), AP.OutContext);
-    }
-    if (TF == Penumbra::S_Lo16 || TF == Penumbra::S_Hi16 ||
-        TF == Penumbra::S_PCRel)
+    if (TF == Penumbra::S_Lo16 || TF == Penumbra::S_Hi16)
       Expr = MCSpecifierExpr::create(Expr, TF, AP.OutContext);
     MCOp = MCOperand::createExpr(Expr);
     return true;
@@ -120,10 +122,81 @@ static bool lowerOperand(const MachineOperand &MO, MCOperand &MCOp,
   }
 }
 
+// Lower the symbol operand of a PC-anchored pseudo to
+// %specifier((sym + offset) - .LPC<f>_<id>).  The subtracted anchor label
+// is local and same-section, so the assembler folds it into the
+// relocation addend (A = P - Q per the PC-anchored relocation pair
+// convention in doc/system/abi.md).
+static MCOperand lowerAnchoredOperand(const MachineOperand &MO,
+                                      MCSymbol *PICLabel, AsmPrinter &AP) {
+  const MCExpr *Expr;
+  switch (MO.getType()) {
+  case MachineOperand::MO_GlobalAddress:
+    Expr = MCSymbolRefExpr::create(AP.getSymbol(MO.getGlobal()),
+                                   AP.OutContext);
+    break;
+  case MachineOperand::MO_JumpTableIndex:
+    Expr = MCSymbolRefExpr::create(AP.GetJTISymbol(MO.getIndex()),
+                                   AP.OutContext);
+    break;
+  case MachineOperand::MO_BlockAddress:
+    Expr = MCSymbolRefExpr::create(
+        AP.GetBlockAddressSymbol(MO.getBlockAddress()), AP.OutContext);
+    break;
+  default:
+    llvm_unreachable("unexpected symbol operand on PC-anchored pseudo");
+  }
+  if (MO.getOffset())
+    Expr = MCBinaryExpr::createAdd(
+        Expr, MCConstantExpr::create(MO.getOffset(), AP.OutContext),
+        AP.OutContext);
+  Expr = MCBinaryExpr::createSub(
+      Expr, MCSymbolRefExpr::create(PICLabel, AP.OutContext), AP.OutContext);
+  Expr = MCSpecifierExpr::create(Expr, MO.getTargetFlags(), AP.OutContext);
+  return MCOperand::createExpr(Expr);
+}
+
 void PenumbraAsmPrinter::emitInstruction(const MachineInstr *MI) {
   unsigned Opc = MI->getOpcode();
 
   // ── Pseudo instructions ──────────────────────────────────────────────────
+
+  // PC-anchored PIC address sequences: the anchor pseudos define the
+  // .LPC label at the PC-reading instruction; the immediate carriers
+  // reference it through label-difference operands.
+  if (Opc == Penumbra::PICADDPC || Opc == Penumbra::PICMOVPC) {
+    bool IsAdd = (Opc == Penumbra::PICADDPC);
+    unsigned IdOpNo = IsAdd ? 2 : 1;
+    OutStreamer->emitLabel(getPICLabel(MI->getOperand(IdOpNo).getImm()));
+    MCInst Inst;
+    Inst.setOpcode(IsAdd ? Penumbra::ADD : Penumbra::MOV);
+    Inst.addOperand(MCOperand::createReg(MI->getOperand(0).getReg()));
+    if (IsAdd)
+      Inst.addOperand(MCOperand::createReg(MI->getOperand(1).getReg()));
+    Inst.addOperand(MCOperand::createReg(Penumbra::R15));
+    EmitToStreamer(*OutStreamer, Inst);
+    return;
+  }
+  if (Opc == Penumbra::PICLLI) {
+    MCInst Inst;
+    Inst.setOpcode(Penumbra::LLI);
+    Inst.addOperand(MCOperand::createReg(MI->getOperand(0).getReg()));
+    Inst.addOperand(lowerAnchoredOperand(
+        MI->getOperand(1), getPICLabel(MI->getOperand(2).getImm()), *this));
+    EmitToStreamer(*OutStreamer, Inst);
+    return;
+  }
+  if (Opc == Penumbra::PICLUI || Opc == Penumbra::PICADDi) {
+    MCInst Inst;
+    Inst.setOpcode(Opc == Penumbra::PICLUI ? Penumbra::LUI : Penumbra::ADDi);
+    Inst.addOperand(MCOperand::createReg(MI->getOperand(0).getReg()));
+    Inst.addOperand(MCOperand::createReg(MI->getOperand(1).getReg()));
+    Inst.addOperand(lowerAnchoredOperand(
+        MI->getOperand(2), getPICLabel(MI->getOperand(3).getImm()), *this));
+    EmitToStreamer(*OutStreamer, Inst);
+    return;
+  }
+
   if (Opc == Penumbra::RET) {
     // RET pseudo → JMP R13 (return via link register)
     MCInst JMPInst;

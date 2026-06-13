@@ -15,6 +15,7 @@
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/MC/MCValue.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/EndianStream.h"
 #include "llvm/Support/raw_ostream.h"
@@ -176,27 +177,34 @@ unsigned PenumbraMCCodeEmitter::encodeImm16(
       break;
     case Penumbra::S_TLSgd_PCRel:
       Kind = static_cast<MCFixupKind>(Penumbra::fixup_penumbra_tls_gd_pcrel);
-      PCRel = true;
       break;
-    case Penumbra::S_PCRel:
+    case Penumbra::S_PCRel: {
       Kind = static_cast<MCFixupKind>(Penumbra::fixup_penumbra_imm16_pcrel);
-      PCRel = true;
+      // Anchor-labeled operands (%pcrel(sym - .LPC)) carry their PC
+      // reference point explicitly; subtracting P again through a
+      // PC-relative fixup would double-count it.  Bare-symbol operands
+      // keep the implied anchor-at-P semantics.
+      MCValue V;
+      PCRel = !(SE->getSubExpr()->evaluateAsRelocatable(V, nullptr) &&
+                V.getSubSym());
       break;
+    }
+    // The GOT-indirect fixups resolve only through their relocation
+    // types, which are PC-relative by definition (S + A - P); the
+    // assembler never resolves them in place, so the fixup itself is
+    // not marked PC-relative.  This also lets the writer fold an
+    // anchor-label difference into the addend.
     case Penumbra::S_GOT_PCRel_Lo16:
       Kind = static_cast<MCFixupKind>(Penumbra::fixup_penumbra_got_pcrel_lo16);
-      PCRel = true;
       break;
     case Penumbra::S_GOT_PCRel_Hi16:
       Kind = static_cast<MCFixupKind>(Penumbra::fixup_penumbra_got_pcrel_hi16);
-      PCRel = true;
       break;
     case Penumbra::S_TLSgd_GOT_PCRel_Lo16:
       Kind = static_cast<MCFixupKind>(Penumbra::fixup_penumbra_tls_gd_got_pcrel_lo16);
-      PCRel = true;
       break;
     case Penumbra::S_TLSgd_GOT_PCRel_Hi16:
       Kind = static_cast<MCFixupKind>(Penumbra::fixup_penumbra_tls_gd_got_pcrel_hi16);
-      PCRel = true;
       break;
     default:
       break;

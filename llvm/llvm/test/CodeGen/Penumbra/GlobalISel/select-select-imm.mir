@@ -35,7 +35,7 @@ body: |
     ; CHECK-NEXT: [[COPY:%[0-9]+]]:gpr_allocatable = COPY $r1
     ; CHECK-NEXT: [[COPY1:%[0-9]+]]:gpr_allocatable = COPY $r2
     ; CHECK-NEXT: [[COPY2:%[0-9]+]]:gpr_allocatable = COPY $r3
-    ; CHECK-NEXT: [[SELECT_CCi_GPR:%[0-9]+]]:gpr = SELECT_CCi_GPR [[COPY1]], [[COPY2]], [[COPY]], 100, 345, implicit-def $sr
+    ; CHECK-NEXT: [[SELECT_CCi_GPR:%[0-9]+]]:gpr = SELECT_CCi_GPR [[COPY1]], [[COPY2]], [[COPY]], 100, 350, implicit-def $sr
     ; CHECK-NEXT: $r1 = COPY [[SELECT_CCi_GPR]]
     ; CHECK-NEXT: RET implicit $r1
     %0:gprbank(s32) = COPY $r1
@@ -66,7 +66,7 @@ body: |
     ; CHECK-NEXT: [[COPY:%[0-9]+]]:gpr_allocatable = COPY $r1
     ; CHECK-NEXT: [[COPY1:%[0-9]+]]:gpr_allocatable = COPY $r2
     ; CHECK-NEXT: [[COPY2:%[0-9]+]]:gpr_allocatable = COPY $r3
-    ; CHECK-NEXT: [[SELECT_CCi_GPR:%[0-9]+]]:gpr = SELECT_CCi_GPR [[COPY1]], [[COPY2]], [[COPY]], 100, 340, implicit-def $sr
+    ; CHECK-NEXT: [[SELECT_CCi_GPR:%[0-9]+]]:gpr = SELECT_CCi_GPR [[COPY1]], [[COPY2]], [[COPY]], 100, 345, implicit-def $sr
     ; CHECK-NEXT: $r1 = COPY [[SELECT_CCi_GPR]]
     ; CHECK-NEXT: RET implicit $r1
     %0:gprbank(s32) = COPY $r1
@@ -96,7 +96,7 @@ body: |
     ; CHECK-NEXT: [[COPY2:%[0-9]+]]:gpr_allocatable = COPY $r3
     ; CHECK-NEXT: [[LLI:%[0-9]+]]:gpr_allocatable = LLI 4464
     ; CHECK-NEXT: [[LUI:%[0-9]+]]:gpr = LUI [[LLI]], 1
-    ; CHECK-NEXT: [[SELECT_CC_GPR:%[0-9]+]]:gpr = SELECT_CC_GPR [[COPY1]], [[COPY2]], [[COPY]], [[LUI]], 345, implicit-def $sr
+    ; CHECK-NEXT: [[SELECT_CC_GPR:%[0-9]+]]:gpr = SELECT_CC_GPR [[COPY1]], [[COPY2]], [[COPY]], [[LUI]], 350, implicit-def $sr
     ; CHECK-NEXT: $r1 = COPY [[SELECT_CC_GPR]]
     ; CHECK-NEXT: RET implicit $r1
     %0:gprbank(s32) = COPY $r1
