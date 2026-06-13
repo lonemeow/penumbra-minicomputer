@@ -1160,20 +1160,56 @@ congruent mod 1 KiB in the direct-mapped index), which `.p2align` pins
 only the low 4 bits and so cannot touch — only associativity can (the
 4-way L2, the gen2 cache direction).
 
-Follow-up — the *compiler* has the same gap.  The Penumbra LLVM backend
-sets no `setMinFunctionAlignment`, `setPrefFunctionAlignment`, or
-`setPrefLoopAlignment` (all default to Align(1)): compiler-generated
-functions are only implicitly 4-byte aligned (fixed 4-byte insns) and
-hot loops are never line-aligned — the same straddle problem, but across
-all compiled code.  Every peer sets min function alignment to the insn
-width (RISC-V/Mips/ARM/AArch64/Sparc = 4, AVR = 2); the perf-tuned ports
-set `setPrefLoopAlignment` (PowerPC = 16; RISC-V/ARM/AArch64
-subtarget-driven).  Two actions: (a) add `setMinFunctionAlignment(Align(4))`
-to match every peer and make the implicit 4-byte alignment intentional —
-zero cost; (b) evaluate `setPrefLoopAlignment(Align(16))` as the
-codegen-wide analog of this libc fix (kernel syscall loops, qsort), but
-measure it — alignment padding inflates code size, and on a 1 KiB
-direct-mapped I-cache the added footprint can offset the gain.
+Follow-up — the *compiler* has the same gap for compiler-generated code;
+see "Compiler: align functions and hot loops in codegen" below.
+
+## Compiler: align functions and hot loops in codegen
+
+The Penumbra backend sets no `setMinFunctionAlignment`,
+`setPrefFunctionAlignment`, or `setPrefLoopAlignment` (all default to
+Align(1)), and nothing in MCAsmInfo.  Compiler-generated functions are
+only *implicitly* 4-byte aligned (every instruction is 4 bytes); hot
+loops are never aligned to the 16-byte (4-word) L1 I-cache line.  This is
+the same straddle/placement problem fixed by hand for the libc string
+routines (see "Libc: cache-line-align the memcpy/memset hot loops"), but
+latent across all compiled code — kernel syscall loops, the qsort
+comparator, etc.  Every comparable port sets min function alignment to
+the instruction width (RISC-V/Mips/ARM/AArch64/Sparc = 4, AVR = 2); the
+perf-tuned ones also set loop alignment (PowerPC = 16; RISC-V/ARM/AArch64
+subtarget-driven).  Penumbra is the outlier that sets neither.
+
+(a) `setMinFunctionAlignment(Align(4))` — hygiene, not perf.  Functions
+are already 4-byte aligned because all instructions are 4 bytes, so this
+emits a `.p2align 2` that produces no padding and leaves the binary
+unchanged.  Worth doing only to make the intent explicit and match every
+peer.
+
+(b) `setPrefLoopAlignment(Align(16))` — the real lever, the codegen-wide
+analog of the libc fix.  Notes from reading the LLVM machinery
+(`MachineBlockPlacement::alignBlocks`):
+  - Not blanket.  Only loop backedge destinations that the block-frequency
+    model rates hot (≥ ~20% of entry frequency, and ≥ ~20% of their own
+    loop header) are aligned; cold loops and optsize/minsize functions are
+    skipped.
+  - Smarter than the hand-written `.p2align`: it fills with NOPs but only
+    aligns a loop when the padding lands off the hot path — in a dead gap
+    after an unconditional-branch predecessor, or on a cold fall-through
+    edge (loop rotation arranges most loops so this holds).  The libc `.S`
+    routines bypass this path entirely, which is why they needed the blunt
+    hand-pad and why this knob does not help them.
+  - `MaxBytesForAlignment` defaults to 0 = *no cap*, so by default every
+    qualifying loop pads to the full 16 bytes regardless of cost.  On the
+    1 KiB **direct-mapped** I-cache (64 lines) that unbounded footprint can
+    lose more to capacity/conflict misses than the straddle fix saves.
+    Pair the knob with an override of `getMaxPermittedBytesForAlignment()`
+    returning a small bound (≈4–8) so the assembler skips alignments that
+    would need too much padding — align loops already nearly aligned,
+    don't pay 15 bytes to move one.
+
+Measure on hardware, do not assume: A/B with `qsort_int` and the kernel
+syscall benches (the hot-loop-bound rows).  As with the libc fix, this
+only addresses the intra-loop straddle; the cross-routine set-conflict
+residual needs associativity.
 
 ## Compiler: support `[R0 + offset]` absolute addressing for low memory
 
