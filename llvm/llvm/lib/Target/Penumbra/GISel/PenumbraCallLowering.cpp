@@ -34,8 +34,16 @@ struct PenumbraOutgoingValueHandler : public CallLowering::OutgoingValueHandler 
                             const MachinePointerInfo &MPO,
                             const CCValAssign &VA) override {
     MachineFunction &MF = MIRBuilder.getMF();
+    // Outgoing arguments live in the call frame anchored at the
+    // stack-aligned SP, so the real store alignment is the stack
+    // alignment narrowed by the slot offset.  inferAlignFromPtrInfo
+    // cannot see the SP base through the generic stack
+    // MachinePointerInfo and would return Align(1), forcing every stack
+    // argument through the unaligned byte-store expansion.
+    Align StackAlign = MF.getSubtarget().getFrameLowering()->getStackAlign();
+    Align Alignment = commonAlignment(StackAlign, VA.getLocMemOffset());
     auto *MMO = MF.getMachineMemOperand(MPO, MachineMemOperand::MOStore, MemTy,
-                                        inferAlignFromPtrInfo(MF, MPO));
+                                        Alignment);
     Register ExtReg = extendRegister(ValVReg, VA);
     MIRBuilder.buildStore(ExtReg, Addr, *MMO);
   }
