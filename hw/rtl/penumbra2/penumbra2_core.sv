@@ -37,7 +37,9 @@
 // the commit port, but the cycle it takes its trap it still leaves WB as a
 // valid slot, visible here as a retiring OPC_BREAK. In-order commit guarantees
 // every instruction older than the BREAK has already retired by then.
-// o_retire_valid doubles as the insns-retired pulse a perfctr would count.
+// A perfctr counts o_insn_retired (a WB retirement OR a drain-commit, which
+// commits from EX and never reaches WB), not o_retire_valid alone — the latter
+// would miss every ERET/WRSYS/EI/DI.
 
 module penumbra2_core
     import penumbra_pkg::*;
@@ -107,7 +109,8 @@ module penumbra2_core
 
     // ── Retire observability (the instruction leaving WB) ────────
     output logic                  o_retire_valid,
-    output logic [OPC_W-1:0]      o_retire_op_class
+    output logic [OPC_W-1:0]      o_retire_op_class,
+    output logic                  o_insn_retired     // retire pulse incl. drain-commit (perfctr)
 );
 
     // ── Front-end wires ──────────────────────────────────────────
@@ -308,6 +311,17 @@ module penumbra2_core
         .o_pipe_busy(pipe_busy),
         .i_irq_entry(irq_entry), .i_irq_epc(irq_epc)
     );
+
+    // Instructions retired: a normal WB retirement OR a drain-commit — which
+    // commits from EX and never enters WB, so o_retire_valid alone would miss
+    // every ERET/WRSYS/EI/DI. The two sources are mutually exclusive per cycle
+    // (a drain-commit only fires once MEM/WB are drained, i.e. o_retire_valid is
+    // 0), so the OR counts each retiring instruction exactly once.
+    assign o_insn_retired = o_retire_valid | dc_commit;
+
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        !(o_retire_valid && dc_commit))
+        else $error("penumbra2_core: WB retire and drain-commit collided (double-count)");
 
     // ══════════════════════════════════════════════════════════
     // Vector-fetch FSM — reads the handler address, redirects PC

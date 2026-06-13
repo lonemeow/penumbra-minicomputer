@@ -115,6 +115,10 @@ module machine_penumbra2
     logic        sys_re, sys_we;
     logic [31:0] sys_wdata, sys_rdata_rsp;
 
+    // Retire pulse for the perfctr — includes drain-commit ops (which retire
+    // from EX, not WB); see the core's o_insn_retired.
+    logic        insn_retired;
+
     // ══════════════════════════════════════════════════════════
     // The core
     // ══════════════════════════════════════════════════════════
@@ -143,7 +147,8 @@ module machine_penumbra2
         .o_sys_wdata(sys_wdata), .o_sys_we(sys_we),
         .o_commit_idx(o_commit_idx), .o_commit_data(o_commit_data),
         .o_commit_we(o_commit_we),
-        .o_retire_valid(o_retire_valid), .o_retire_op_class(o_retire_op_class)
+        .o_retire_valid(o_retire_valid), .o_retire_op_class(o_retire_op_class),
+        .o_insn_retired(insn_retired)
     );
 
     // The program-end pulse: a retiring BREAK (see the core header — BREAK
@@ -348,6 +353,31 @@ module machine_penumbra2
         .i_sys_reg(sys_reg), .o_sys_rdata(machid_rdata)
     );
 
+    // CPU performance counters (SYSDEV_CPU regs 5+): free-running cycle and
+    // retired-instruction counts, reset to 0. insn_retired includes drain-commit
+    // ops, so CPI stays >= 1. The gen1 stall counters (regs 7-10) are tied to a
+    // microarchitecture-specific stall taxonomy and are not modeled here; those
+    // registers read 0 (no events) until a gen2 stall breakdown is defined.
+    logic [31:0] perfctr_cycles, perfctr_insns;
+    always_ff @(posedge i_clk) begin
+        if (i_rst) begin
+            perfctr_cycles <= 32'b0;
+            perfctr_insns  <= 32'b0;
+        end else begin
+            perfctr_cycles <= perfctr_cycles + 32'd1;
+            if (insn_retired) perfctr_insns <= perfctr_insns + 32'd1;
+        end
+    end
+
+    logic [31:0] perfctr_rdata;
+    always_comb begin
+        case (sys_reg)
+            SYSREG_CPU_CYCLES:        perfctr_rdata = perfctr_cycles;
+            SYSREG_CPU_INSNS_RETIRED: perfctr_rdata = perfctr_insns;
+            default:                  perfctr_rdata = 32'b0;
+        endcase
+    end
+
     // Writable scratch sysreg (4 words) — exercises the full WRSYS-commit →
     // device-write → RDSYS-read-back path with no side effects, which no
     // real device offers (their writes enable MMUs and flash caches).
@@ -368,7 +398,8 @@ module machine_penumbra2
 
     always_comb begin
         case (sys_dev)
-            SYSDEV_CPU:       sys_rdata_sel = cpuid_rdata;
+            SYSDEV_CPU:       sys_rdata_sel = (sys_reg <= SYSREG_CPU_NAME3)
+                                              ? cpuid_rdata : perfctr_rdata;
             SYSDEV_L1_DCACHE: sys_rdata_sel = dcache_sys_rdata;
             SYSDEV_L1_ICACHE: sys_rdata_sel = icache_sys_rdata;
             SYSDEV_L2_CACHE:  sys_rdata_sel = l2_sys_rdata;

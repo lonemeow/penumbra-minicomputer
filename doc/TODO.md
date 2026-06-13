@@ -156,6 +156,25 @@ write would feed the MMU and IF1 IRQ logic out of pipeline exactly as ERET's
 does, so it would need the same serialization and fetch re-sync, and reserving
 it removes that case rather than building it.
 
+## Hardware: Penumbra/2 perfctr stall counters not modeled
+
+`machine_penumbra2` implements the two architecturally-portable SYSDEV_CPU
+performance counters — `CYCLES` (free-running) and `INSNS_RETIRED` (counts the
+core's `o_insn_retired`, which includes the drain-commit ops that retire from
+EX, not WB). The four gen1 stall counters — `STALL_FUNIT` / `STALL_IFETCH` /
+`STALL_LOAD` / `STALL_STORE` (SYSDEV_CPU regs 7–10) — read 0 on gen2.
+
+gen1's stall taxonomy is its microcoded sequencer's: one stall point with four
+mutually-exclusive causes, so `cycles − Σstall` is exactly productive work. gen2
+is pipelined and stalls differently — ID scoreboard RAW stalls, IF-side miss
+stalls, MEM data-access busy, the divmul EX stall, and drain-commit drain
+cycles — and these are neither single-point nor cleanly mutually exclusive (the
+gen2 stall-propagation policy lets several stages stall in the same cycle).
+Defining a gen2 stall breakdown — which events, where sampled, and whether to
+keep them non-overlapping or accept overlap and report it — is the open work;
+until then those registers read 0. The `perfctr` capability covers only the two
+portable counters (what `isa/test_cpu_perfctr` checks) on every generation.
+
 ## Hardware: build/test restructure to the BOARD×CORE matrix
 
 `doc/internals/build-system.md` defines the target structure: the
