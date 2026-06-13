@@ -1118,6 +1118,63 @@ roughly half of all "misaligned" memcpy calls in practice (anything
 where src and dst come from the same allocation pool or share a
 base alignment).
 
+## Libc: cache-line-align the memcpy/memset hot loops
+
+The 2026-06-13 pbench snapshot showed the small-size `memcpy` rows
+(size=1/16/64, and `memcpy_align` n=7/31) regressing while small-size
+`memset` *improved* — across a pure compiler rebuild that touched no
+libc source.  Diagnosis: the routines are hand-written assembly
+(`common/lib/libc/arch/penumbra/string/{memcpy,memset}.S`), so their
+instruction bytes are fixed; only their *placement* moved.  The L1
+I-cache is 1 KiB **direct-mapped** with 16-byte (4-word) lines, and
+neither `.S` carried any `.p2align` — so a rebuild relocates the fixed
+routine bytes and the hot loops land at new, arbitrary offsets relative
+to the line grid (and to whatever caller they share a set with).  The
+memset-up / memcpy-down anti-correlation is the layout-roulette
+signature.
+
+Cross-arch check: penumbra was the *only* port declaring these routines
+with bare `.globl`/`.type`, bypassing its own `ENTRY()` macro.  Peers get
+at least the macro's entry alignment, and the hand-tuned ports (sparc64,
+aarch64, sh3) explicitly `.p2align` their inner loops — sparc64 literally
+comments `.align 32  ! ICache align.`.
+
+Fixed in commit f0a9e9e0ec9a: `.p2align 4` on the function entries and
+the hot loops — memcpy `.Lword` + `.Lbyte` (the byte loop is the whole
+copy when operands are misaligned, so it is hot), memset `.Lword` only
+(its `.Lhead`/`.Ltail_loop` run ≤3 times).  The loops now land on
+16-byte boundaries at every build, so hot-loop placement is
+deterministic and the small-size rows stop swinging on unrelated
+code-size changes — consistency was the goal, restoring the benchmark's
+power to detect real libc regressions.
+
+HW result (min trial, vs the regressed 06-13 baseline): the fix recovers
+the iteration-scaling part of the regression, and recovers *more* the
+more the loop iterates — memcpy size=1 8.19→7.50 us (~23%), size=16
+12.14→10.52 (~43%), memcpy_align n=7 11.90→10.51 (~38%), n=31
+17.75→16.40 (~46%), n=127 41.25→39.95 (~full).  memset unchanged.  This
+is the predicted split: `.p2align` removes the per-iteration line
+straddle (so the win grows with trip count); the residual small-size
+floor is the per-call **cross-routine set conflict** (routine vs. caller
+congruent mod 1 KiB in the direct-mapped index), which `.p2align` pins
+only the low 4 bits and so cannot touch — only associativity can (the
+4-way L2, the gen2 cache direction).
+
+Follow-up — the *compiler* has the same gap.  The Penumbra LLVM backend
+sets no `setMinFunctionAlignment`, `setPrefFunctionAlignment`, or
+`setPrefLoopAlignment` (all default to Align(1)): compiler-generated
+functions are only implicitly 4-byte aligned (fixed 4-byte insns) and
+hot loops are never line-aligned — the same straddle problem, but across
+all compiled code.  Every peer sets min function alignment to the insn
+width (RISC-V/Mips/ARM/AArch64/Sparc = 4, AVR = 2); the perf-tuned ports
+set `setPrefLoopAlignment` (PowerPC = 16; RISC-V/ARM/AArch64
+subtarget-driven).  Two actions: (a) add `setMinFunctionAlignment(Align(4))`
+to match every peer and make the implicit 4-byte alignment intentional —
+zero cost; (b) evaluate `setPrefLoopAlignment(Align(16))` as the
+codegen-wide analog of this libc fix (kernel syscall loops, qsort), but
+measure it — alignment padding inflates code size, and on a 1 KiB
+direct-mapped I-cache the added footprint can offset the gain.
+
 ## Compiler: support `[R0 + offset]` absolute addressing for low memory
 
 `PenumbraTargetLowering::isLegalAddressingMode` currently rejects

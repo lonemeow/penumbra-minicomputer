@@ -202,14 +202,14 @@ kernel C or the SDRAM/storage path changed.
   to relink the re-exec'd image.  No prior point to compare against; it
   becomes the baseline for the dynamic-linker / exec path.
 - **Open questions for next snapshot**
-  - Confirm the small-`memcpy` regression is I-cache placement, not the
-    routine.  The `.S` bytes are fixed, so a perturbation run — force a
-    `.p2align` (or padding) before `memcpy`, rebuild, re-measure on HW —
-    should swing the small sizes if the cause is alignment/set-conflict.
-    If confirmed, add explicit `.p2align` to the libc string `.S` files
-    to make these numbers layout-stable, and treat small-size deltas as
-    placement noise until then.  Until fixed, the trustworthy signal is
-    the large-size (steady-state) and kernel rows.
+  - **[Confirmed + fixed]** The small-`memcpy` regression was I-cache
+    placement, not the routine.  `.p2align 4` on the hot loops recovered
+    the iteration-scaling part of the regression (~23% at size=1 rising
+    to ~full at n=127) and makes the hot-loop placement deterministic
+    across rebuilds.  The residual small-size floor is cross-routine set
+    conflict, which only associativity can fix.  See the doc/TODO.md
+    entry on cache-line-aligning the libc memcpy/memset hot loops (and
+    the matching backend `setPrefLoopAlignment` follow-up).
   - `fork_exec` has only 5 trials and a wide min↔mean spread
     (1.37 s ↔ 1.53 s); re-run with more trials once it is not the
     slowest bench in the suite.
