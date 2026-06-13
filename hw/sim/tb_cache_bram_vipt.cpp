@@ -453,13 +453,19 @@ int main(int argc, char** argv) {
     check("last_word_capture", read_at(0x720C), 0x44440000 | 0x720C);
     exp_rmiss++;
 
-    // ── Zero-latency single beat: completion on the resolve cycle ──
+    // ── Zero-latency single beat: registered completion costs 2 cycles ──
+    // Even a downstream that is ready the instant the beat is launched is
+    // held through the registered S_BEAT → S_SERVE path (engage cycle +
+    // serve cycle), so o_busy is never combinational from i_mem_busy. This
+    // is the structural floor for a downstream beat; the realistic case
+    // (sb_lat >= 1) is one cycle more. A cacheable read hit, which never
+    // leaves the module, still completes the same cycle (covered above).
     sb_lat = 0;
     check("lat0_unc_read", read_at(0x8000, false), 0x55AA55AA);
-    check("lat0_unc_wait", wait_cycles, 0);
-    write_at(0x710C, 0xFEEDFACE, 0xF);             // hit; wr_done at resolve
+    check("lat0_unc_wait", wait_cycles, 2);
+    write_at(0x710C, 0xFEEDFACE, 0xF);             // hit; local copy updated at resolve
     exp_whit++;
-    check("lat0_wr_wait", wait_cycles, 0);
+    check("lat0_wr_wait", wait_cycles, 2);
     check("lat0_wr_local", read_at(0x710C), 0xFEEDFACE);
     exp_rhit++;
     sb_lat = 1;
@@ -471,7 +477,7 @@ int main(int argc, char** argv) {
     check("redisabled_sb", sb_reads, sb_r + 1);
     sys_write(REG_CTRL, 1);
 
-    // ── Withdrawn pass-through read: the S_PT hold completes it ──
+    // ── Withdrawn pass-through read: the S_BEAT hold completes it ──
     // The consumer (a flushed IF2, or the fetch-port handover to the
     // vector-fetch FSM) walks away one cycle into a busy pass-through
     // read. The back-side request must stay presented until the

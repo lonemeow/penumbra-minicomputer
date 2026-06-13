@@ -24,15 +24,22 @@
 //   under the same convention) and the consumer asserts its request,
 //   i_re or i_we (with i_wdata / i_byte_en). The registered tags compare
 //   against the physical tag and the access completes or stalls:
-//     - cacheable read hit:   o_busy=0 with o_rdata valid, this cycle;
+//     - cacheable read hit:   o_busy=0 with o_rdata valid, this cycle —
+//       the only single-cycle completion (it never leaves the module);
 //     - cacheable read miss:  o_busy=1 from this cycle; a line request
 //       goes out the back side, and o_busy drops with o_rdata valid on
 //       the same cycle (drop-equals-valid) once the fill completes;
-//     - any write:            write-through — o_busy follows the
-//       downstream busy handshake; a tag hit also byte-updates the local
-//       copy (write-no-allocate: a miss changes nothing locally);
-//     - uncacheable/disabled: pass-through single beat; o_busy follows
-//       downstream and o_rdata presents the downstream read data;
+//     - any downstream single beat (write-through store, uncacheable or
+//       cache-disabled read/write): o_busy=1 from this cycle; the beat
+//       is launched and then held to completion in a registered state
+//       (S_BEAT), and o_busy drops — with o_rdata valid for a read — one
+//       cycle after the downstream busy-drop, off a flop. The registered
+//       completion is deliberate: it keeps the downstream busy (and the
+//       L2 tag cone behind it) off the consumer's stall chain, at the
+//       cost of one extra cycle on these slow beats only — cacheable
+//       read hits and the fill path are untouched. A write-through store
+//       additionally byte-updates the local copy at resolve on a tag hit
+//       (write-no-allocate: a miss changes nothing locally);
 //     - i_fault=1:            the slot is inert — o_busy=0, nothing
 //       reaches the back side, no cache state mutates (the consumer
 //       takes the fault instead of the data).
@@ -43,13 +50,13 @@
 //   Exception: a consumer whose slot is killed (a front-end flush, or the
 //   fetch-port handover to the vector-fetch FSM) may withdraw a *read*
 //   request mid-transaction — the cache owns transaction atomicity on the
-//   back side (S_FILL for a line, S_PT for an accepted pass-through
-//   beat), completes the in-flight transfer on its own state, and serves
-//   the result into the void. A write request has no kill source and must
-//   be held to completion. A WRSYS that rewrites cache state under an
-//   in-flight lookup (INVAL_ALL, CTRL) leaves that lookup its pre-write
-//   verdict — benign, because WRSYS is context-synchronizing and the
-//   post-commit re-fetch discards the in-flight word.
+//   back side (S_FILL for a line, S_BEAT for an accepted single beat),
+//   completes the in-flight transfer on its own captured state, and
+//   serves the result into the void. A write request has no kill source
+//   and must be held to completion. A WRSYS that rewrites cache state
+//   under an in-flight lookup (INVAL_ALL, CTRL) leaves that lookup its
+//   pre-write verdict — benign, because WRSYS is context-synchronizing
+//   and the post-commit re-fetch discards the in-flight word.
 //
 // Back-side contract (doc/internals/penumbra2/memory-interface.md):
 //   - A cacheable read miss raises one line request: o_mem_re=1 with
@@ -59,14 +66,15 @@
 //     writing the data array directly; the cache captures the requested
 //     word in flight and serves it the cycle after i_fill_done. A fill
 //     runs to completion once requested — transactions are atomic.
-//   - Everything else is a single beat forwarded with its full shape
-//     ({addr, wdata, byte_en, re, we, cacheable}); completion is the
-//     downstream busy-drop, the same handshake as the gen1 memory port.
-//     A pass-through read the downstream holds busy is latched into the
-//     S_PT hold (address + lane enables captured), so the back-side
-//     request stays presented to completion even if the front consumer
-//     withdraws — a presented transaction never vanishes mid-flight from
-//     the arbiter's or a bus device's point of view.
+//   - Everything else is a single beat. It is captured into the S_BEAT
+//     hold at engage (the full shape {addr, wdata, byte_en, re, we,
+//     cacheable}) and the back side drives that held shape until the
+//     downstream busy-drop — the same handshake as the gen1 memory port.
+//     The hold serves two ends at once: it keeps a presented transaction
+//     from vanishing mid-flight if the front consumer withdraws (the
+//     arbiter's grant lock and a bus device both rely on that), and it
+//     is the register boundary that keeps the downstream busy — and the
+//     L2 tag cone behind it — off the core's stall chain.
 //
 // Storage:
 //   - Tags and data are per-way BRAMs (separate generate-scoped
@@ -345,69 +353,60 @@ module cache_bram_vipt
     end
 
     // A faulting slot is inert: it raises no request anywhere.
-    logic rd_req, wr_req, cache_active, cached_rd, cached_wr, pt_read;
+    logic rd_req, wr_req, cache_active, cached_rd, cached_wr, down_beat;
     assign rd_req       = i_re && !i_fault;
     assign wr_req       = i_we && !i_fault;
     assign cache_active = cache_en && i_cacheable;
     assign cached_rd    = cache_active && rd_req;
     assign cached_wr    = cache_active && wr_req;
-    assign pt_read      = rd_req && !cache_active;
+    // A downstream single beat is any requesting access that is not a
+    // cacheable read: a write-through store (cached or not) and a
+    // pass-through read (uncacheable, or the cache disabled). A cacheable
+    // read completes locally (hit) or via the fill path (miss) and never
+    // takes this leg.
+    assign down_beat    = (rd_req || wr_req) && !cached_rd;
 
-    // ── Resolved-verdict hold for the write path ──────────────────
-    // A write outlives its resolve cycle (it waits on the downstream
-    // busy handshake), so the hit verdict is registered at resolve and
-    // the effective verdict muxes live-vs-held — the same value either
-    // way, on whichever cycle the write completes.
-    logic                hit_q;
-    logic [WAY_BITS-1:0] hit_way_q;
-    always_ff @(posedge i_clk) begin
-        if (i_rst) begin
-            hit_q     <= 1'b0;
-            hit_way_q <= '0;
-        end else if (lookup_q) begin
-            hit_q     <= hit;
-            hit_way_q <= hit_way;
-        end
-    end
-
-    logic                eff_hit;
-    logic [WAY_BITS-1:0] eff_way;
-    assign eff_hit = lookup_q ? hit     : hit_q;
-    assign eff_way = lookup_q ? hit_way : hit_way_q;
+    // Hit verdict is consumed only at resolve: a cacheable read hit serves
+    // its word that cycle (o_busy=0); a write byte-updates the local copy
+    // and touches PLRU that cycle too. A downstream beat then waits out
+    // its completion in S_BEAT with no further need of the verdict, so no
+    // held-verdict register is required.
 
     // ══════════════════════════════════════════════════════════
     // Access FSM — IDLE resolves, FILL streams, SERVE delivers
     // ══════════════════════════════════════════════════════════
     typedef enum logic [1:0] {
-        S_IDLE,                 // resolve hits/writes/pass-through; detect misses
+        S_IDLE,                 // resolve hits/writes; detect misses; engage beats
         S_FILL,                 // line request out; sequencer streams the line in
-        S_SERVE,                // deliver the captured word (busy-drop cycle)
-        S_PT                    // accepted pass-through read held to completion
+        S_SERVE,                // deliver the served word (busy-drop cycle)
+        S_BEAT                  // single downstream beat held to registered completion
     } state_t;
 
     state_t state;
 
-    // S_PT capture: the accepted pass-through read's address and lane
-    // enables, so the back side keeps presenting them even if the front
-    // consumer withdraws (the lane enables matter — an MMIO device may
-    // honour read byte-enables).
-    logic [31:0] pt_addr_q;
-    logic [3:0]  pt_byte_en_q;
+    // S_BEAT capture: the accepted beat's full request shape, latched at
+    // engage so the back side keeps presenting it to completion even if
+    // the front consumer withdraws, and so o_busy comes off state rather
+    // than combinationally tracking the downstream.
+    logic [31:0] beat_addr_q, beat_wdata_q;
+    logic [3:0]  beat_byte_en_q;
+    logic        beat_re_q, beat_we_q, beat_cacheable_q;
 
     logic [31:OFFSET_BITS] fill_base;       // line-aligned physical address
     logic [TAG_BITS-1:0]   fill_tag;
     logic [SET_BITS-1:0]   fill_set;
     logic [WORD_BITS-1:0]  fill_word_req;   // the word the stalled access wants
     logic [WAY_BITS-1:0]   fill_way;
-    logic [31:0]           fill_rdata_q;    // requested word, captured in flight
+    logic [31:0]           serve_rdata_q;   // word presented in S_SERVE (fill or beat)
     logic                  got_word;        // capture happened (assertion fodder)
 
-    logic miss_resolve, rd_hit_resolve, wr_done;
+    logic miss_resolve, rd_hit_resolve, down_engage, wr_hit_resolve;
     assign miss_resolve   = lookup_q && (state == S_IDLE) && cached_rd && !hit;
     assign rd_hit_resolve = lookup_q && (state == S_IDLE) && cached_rd && hit;
-    // The write's completion cycle: the downstream busy-drop (which can
-    // be the resolve cycle itself for an immediately-ready device).
-    assign wr_done        = (state == S_IDLE) && cached_wr && !i_mem_busy;
+    // A downstream beat engages S_BEAT on its resolve cycle. A store that
+    // hits also commits its local copy + PLRU touch that same cycle.
+    assign down_engage    = lookup_q && (state == S_IDLE) && down_beat;
+    assign wr_hit_resolve = down_engage && cached_wr && hit;
 
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
@@ -424,25 +423,35 @@ module cache_bram_vipt
                         fill_word_req <= word_q;
                         fill_way      <= WAY_BITS'(victim_way(valid_q, plru[set_q]));
                         got_word      <= 1'b0;
-                    end else if (pt_read && i_mem_busy) begin
-                        // The downstream accepted but did not complete the
-                        // pass-through read this cycle: hold it to
-                        // completion on our own state, kill-proof.
-                        state        <= S_PT;
-                        pt_addr_q    <= i_paddr;
-                        pt_byte_en_q <= i_byte_en;
+                    end else if (down_engage) begin
+                        // Launch the single beat and hold it to completion
+                        // on our own captured state — registered, so the
+                        // downstream busy never reaches o_busy combinationally.
+                        state            <= S_BEAT;
+                        beat_addr_q      <= i_paddr;
+                        beat_wdata_q     <= i_wdata;
+                        beat_byte_en_q   <= i_byte_en;
+                        beat_re_q        <= rd_req;
+                        beat_we_q        <= wr_req;
+                        beat_cacheable_q <= i_cacheable;
                     end
                 end
                 S_FILL: begin
                     if (i_fill_we && (i_fill_word == fill_word_req)) begin
-                        fill_rdata_q <= i_fill_wdata;
-                        got_word     <= 1'b1;
+                        serve_rdata_q <= i_fill_wdata;
+                        got_word      <= 1'b1;
                     end
                     if (i_fill_done)
                         state <= S_SERVE;
                 end
+                // The beat completes on the downstream busy-drop: capture the
+                // read word (don't-care for a write) and hand to S_SERVE,
+                // which presents it with o_busy=0 one cycle later.
+                S_BEAT: if (!i_mem_busy) begin
+                    serve_rdata_q <= i_mem_rdata;
+                    state         <= S_SERVE;
+                end
                 S_SERVE: state <= S_IDLE;
-                S_PT:    if (!i_mem_busy) state <= S_IDLE;
                 default: state <= S_IDLE;
             endcase
         end
@@ -476,8 +485,8 @@ module cache_bram_vipt
             plru[fill_set] <= plru_update(plru[fill_set], 2'(fill_way));
         end else if (rd_hit_resolve) begin
             plru[set_q] <= plru_update(plru[set_q], 2'(hit_way));
-        end else if (wr_done && eff_hit) begin
-            plru[set_q] <= plru_update(plru[set_q], 2'(eff_way));
+        end else if (wr_hit_resolve) begin
+            plru[set_q] <= plru_update(plru[set_q], 2'(hit_way));
         end
     end
 
@@ -505,13 +514,14 @@ module cache_bram_vipt
                     tag_mem[fill_set] <= fill_tag;
             end
 
-            // Data writes: fill-stream beats, or the write-hit local
-            // update on the write's completion cycle. Mutually exclusive
-            // by state, so they share the one write port.
+            // Data writes: fill-stream beats, or the store-hit local update
+            // at resolve (the L1 copy mirrors the write-through immediately;
+            // it need not wait on the downstream). The two sites are in
+            // different states, so they share the one write port.
             logic dwr_fill, dwr_hit;
             assign dwr_fill = (state == S_FILL) && i_fill_we
                               && (fill_way == WAY_BITS'(gw));
-            assign dwr_hit  = wr_done && eff_hit && (eff_way == WAY_BITS'(gw));
+            assign dwr_hit  = wr_hit_resolve && (hit_way == WAY_BITS'(gw));
 
             always_ff @(posedge i_clk) begin
                 if (dwr_fill) begin
@@ -529,27 +539,31 @@ module cache_bram_vipt
     // ══════════════════════════════════════════════════════════
     // Front-side outputs
     // ══════════════════════════════════════════════════════════
+    // o_busy is a pure function of state and the registered resolve verdict
+    // — never of i_mem_busy. A cacheable read hit completes in S_IDLE
+    // (~hit=0); a miss (~hit=1) heads to S_FILL; a downstream beat asserts
+    // busy at engage and holds it through S_BEAT, dropping in S_SERVE. This
+    // is the cut: the downstream busy reaches only the state flop (S_BEAT's
+    // exit), never o_busy and the core's stall chain.
     always_comb begin
         unique case (state)
             S_IDLE: begin
-                if (cached_rd)               o_busy = ~hit;
-                else if (rd_req || wr_req)   o_busy = i_mem_busy;
-                else                         o_busy = 1'b0;
+                if (cached_rd)   o_busy = ~hit;
+                else             o_busy = down_beat;   // 1 for a beat, 0 when idle
             end
             S_FILL:  o_busy = 1'b1;
+            S_BEAT:  o_busy = 1'b1;
             S_SERVE: o_busy = 1'b0;
-            S_PT:    o_busy = i_mem_busy;   // drops at the completion cycle
             default: o_busy = 1'b0;
         endcase
     end
 
-    // Hit data routes through the held verdict (eff_way) so a stalled
-    // consumer keeps reading the same word; pass-through reads present
-    // the downstream data (held by the device per the sync-bus contract).
+    // A cacheable read hit serves its word from the indexed way this cycle;
+    // every other delivered word (a completed fill, a completed pass-through
+    // read) is presented from the serve register in S_SERVE.
     always_comb begin
-        if (state == S_SERVE)               o_rdata = fill_rdata_q;
-        else if (state == S_PT || pt_read)  o_rdata = i_mem_rdata;
-        else                                o_rdata = data_out[eff_way];
+        if (state == S_SERVE) o_rdata = serve_rdata_q;
+        else                  o_rdata = data_out[hit_way];
     end
 
     // ══════════════════════════════════════════════════════════
@@ -564,16 +578,16 @@ module cache_bram_vipt
         o_mem_cacheable = i_cacheable;
         unique case (state)
             S_IDLE: begin
-                // A cacheable read never raises a single beat — it is
-                // served locally or by the fill path. Everything else
-                // that requests goes downstream: write-through stores,
-                // uncacheable and disabled accesses. A forwarded read is
-                // single-beat by construction, so it must not present
-                // cacheable=1 — that is the arbiter's line-mode select
-                // (`cacheable && re` engages the fill sequencer). A
-                // disabled cache therefore forwards its reads as
-                // uncacheable at this layer; writes keep the PTE bit.
-                if (!cached_rd) begin
+                // The engage cycle launches the beat downstream. A cacheable
+                // read never raises a single beat — it is served locally or
+                // by the fill path. Everything else that requests goes
+                // downstream: write-through stores, uncacheable and disabled
+                // accesses. A forwarded read is single-beat by construction,
+                // so it must not present cacheable=1 — that is the arbiter's
+                // line-mode select (`cacheable && re` engages the fill
+                // sequencer). A disabled cache therefore forwards its reads
+                // as uncacheable at this layer; writes keep the PTE bit.
+                if (down_beat) begin
                     o_mem_re = rd_req;
                     o_mem_we = wr_req;
                     if (rd_req)
@@ -585,13 +599,16 @@ module cache_bram_vipt
                 o_mem_re        = 1'b1;
                 o_mem_cacheable = 1'b1;
             end
-            S_PT: begin
-                // The accepted pass-through read, held from the capture so
-                // it survives a withdrawn front request.
-                o_mem_addr      = pt_addr_q;
-                o_mem_byte_en   = pt_byte_en_q;
-                o_mem_re        = 1'b1;
-                o_mem_cacheable = 1'b0;
+            S_BEAT: begin
+                // The accepted beat, held from the capture so it survives a
+                // withdrawn front request and presents a stable transaction
+                // to the downstream until completion.
+                o_mem_addr      = beat_addr_q;
+                o_mem_wdata     = beat_wdata_q;
+                o_mem_byte_en   = beat_byte_en_q;
+                o_mem_re        = beat_re_q;
+                o_mem_we        = beat_we_q;
+                o_mem_cacheable = beat_we_q & beat_cacheable_q;   // read→0, write→PTE
             end
             S_SERVE: ;
             default: ;
@@ -646,12 +663,20 @@ module cache_bram_vipt
 
     // One access at a time: reads and writes never co-assert, and a
     // store can never overlap a fill (the missing read owns the core).
+    // A store *does* hold i_we across its own S_BEAT, so the no-write
+    // guard is scoped to a fill, the only foreign in-flight transaction.
     assert property (@(posedge i_clk) disable iff (i_rst)
         !(i_re && i_we))
         else $error("cache_bram_vipt: simultaneous read and write request");
     assert property (@(posedge i_clk) disable iff (i_rst)
-        (state != S_IDLE) |-> !i_we)
+        (state == S_FILL) |-> !i_we)
         else $error("cache_bram_vipt: write request during a fill");
+
+    // A held beat carries exactly one direction — the captured shape is a
+    // single read or single write, never both and never neither.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (state == S_BEAT) |-> (beat_re_q ^ beat_we_q))
+        else $error("cache_bram_vipt: S_BEAT holds a malformed beat shape");
 
     // A miss is only ever observed on its resolve cycle — one cycle
     // later it lives in S_FILL. A held miss in S_IDLE is a lost fill.
