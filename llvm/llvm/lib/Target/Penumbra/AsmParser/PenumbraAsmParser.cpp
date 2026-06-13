@@ -422,6 +422,16 @@ bool PenumbraAsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
   MCInst Inst;
   switch (MatchInstructionImpl(Operands, Inst, ErrorInfo, MatchingInlineAsm)) {
   case Match_Success:
+    // WRSPR SR (SPR number 3) is a reserved encoding that traps to
+    // VEC_ILLEGAL: SR is read-only via RDSPR, and software changes it through
+    // EI/DI/ERET/exception entry, never a direct write.  Reject it here so the
+    // assembler never emits the illegal opcode — this catches both the named
+    // form ("wrspr sr", mapped to 3 in parseOperand) and the numeric form
+    // ("wrspr 3").  RDSPR SR and WRSPR to the value SPRs are unaffected.
+    if (Inst.getOpcode() == Penumbra::WRSPR && Inst.getOperand(0).isImm() &&
+        Inst.getOperand(0).getImm() == 3)
+      return Error(IDLoc, "WRSPR SR is reserved: SR is read-only "
+                          "(change it via EI/DI/ERET or exception entry)");
     Inst.setLoc(IDLoc);
     Out.emitInstruction(Inst, getSTI());
     return false;
