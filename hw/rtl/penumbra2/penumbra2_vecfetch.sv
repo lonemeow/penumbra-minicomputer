@@ -14,14 +14,21 @@
 // address) reads the handler word the kernel stored there earlier; in the real
 // machine the same physical access goes through the cache hierarchy.
 //
-// Timing tracks the registered-read fetch contract: drive the address one
-// cycle (the read launches at that edge), then the handler word is valid the
-// next cycle and the redirect fires. No flush is needed on the redirect — the
+// Timing tracks the front port's launch/resolve contract: launch the read
+// into an idle port (the fault may have killed a fetch whose fill is still
+// draining — no lookup may launch while the port is busy), then hold the
+// read request until the completion cycle — i_mem_busy low, drop-equals-
+// valid. Against the flat stand-in (busy tied low) that is one cycle each,
+// the original 2-cycle entry; in the machine the vector read is a bypass-
+// translated (hence uncacheable) pass-through, so the completion waits out
+// the downstream round trip. No flush is needed on the redirect — the
 // pipeline downstream was already emptied by the fault-commit flush.
 //
 //   IDLE  — dormant; the fetch port belongs to IF1.
-//   DRIVE — own the port, drive vec<<2 + read-enable (launch the read).
-//   WAIT  — the handler word is on i_mem_rdata; redirect PC to it, return.
+//   DRIVE — own the port; once it is idle, drive vec<<2 + read-enable
+//           (launch the read).
+//   WAIT  — hold the read request; at the completion cycle the handler
+//           word is on i_mem_rdata: redirect PC to it, return.
 
 module penumbra2_vecfetch (
     input  logic        i_clk,
@@ -31,13 +38,15 @@ module penumbra2_vecfetch (
     input  logic        i_fault_commit,    // a fault was taken this cycle
     input  logic [3:0]  i_fault_vec,        // its vector number
 
-    // ── Fetched word (port-A read data, shared with IF2) ─────────
-    input  logic [31:0] i_mem_rdata,        // handler address, valid in WAIT
+    // ── Front port (shared with IF2; muxed onto port A in the core) ──
+    input  logic [31:0] i_mem_rdata,        // handler address, valid at completion
+    input  logic        i_mem_busy,         // port mid-transaction: no launch / not done
 
-    // ── Fetch-port ownership (muxed onto port A in the core) ─────
+    // ── Fetch-port ownership ─────────────────────────────────────
     output logic        o_active,           // FSM owns the fetch port + holds IF1
     output logic [31:0] o_fetch_addr,       // vector_table[vec<<2], physical
     output logic        o_fetch_en,         // launch the table read
+    output logic        o_fetch_re,         // the read request, held until completion
 
     // ── PC redirect to the handler ───────────────────────────────
     output logic        o_redirect,
@@ -69,6 +78,7 @@ module penumbra2_vecfetch (
     always_comb begin
         next_state = state;
         o_fetch_en = 1'b0;
+        o_fetch_re = 1'b0;
         o_redirect = 1'b0;
         case (state)
             S_IDLE: begin
@@ -76,19 +86,27 @@ module penumbra2_vecfetch (
                 if (i_fault_commit) next_state = S_DRIVE;
             end
             S_DRIVE: begin
-                // Launch the vector-table read. It is a 1-cycle registered read,
-                // so the word is guaranteed valid next cycle — hence the
-                // unconditional advance, no ready handshake (the same contract
-                // the IF1/IF2 fetch split relies on).
-                o_fetch_en = 1'b1;
-                next_state = S_WAIT;
+                // Launch the vector-table read — into an idle port only. The
+                // fault may have killed a fetch whose fill is still draining;
+                // that transaction completes into the void first (no lookup
+                // may launch while the port is busy), then the launch fires.
+                if (!i_mem_busy) begin
+                    o_fetch_en = 1'b1;
+                    next_state = S_WAIT;
+                end
             end
             S_WAIT: begin
-                // The handler word the read launched in DRIVE is on i_mem_rdata
-                // now, so redirect PC to it and finish — downstream was already
-                // flushed at the fault commit, so no flush is needed here.
-                o_redirect = 1'b1;
-                next_state = S_IDLE;
+                // The read launched in DRIVE resolves here. Hold the request
+                // level until the completion cycle (busy low, drop-equals-
+                // valid — the first WAIT cycle against the flat stand-in; the
+                // busy drop of the pass-through round trip in the machine),
+                // then redirect PC to the handler word and finish — downstream
+                // was already flushed at the fault commit, no flush needed.
+                o_fetch_re = 1'b1;
+                if (!i_mem_busy) begin
+                    o_redirect = 1'b1;
+                    next_state = S_IDLE;
+                end
             end
             default: next_state = S_IDLE;
         endcase
@@ -97,7 +115,7 @@ module penumbra2_vecfetch (
     // ── Data outputs (function of the latched vector / the read data) ─
     assign o_active      = (state != S_IDLE);
     assign o_fetch_addr  = {26'b0, vec_q, 2'b00};   // vec<<2, physical (RAM region: bit31=0)
-    assign o_redirect_pc = i_mem_rdata;             // handler word, valid in WAIT
+    assign o_redirect_pc = i_mem_rdata;             // handler word, valid at completion
 
     // ══════════════════════════════════════════════════════════
     // Assertions — sim-only (Verilator --assert); stripped at synth.

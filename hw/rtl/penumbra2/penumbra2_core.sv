@@ -329,8 +329,10 @@ module penumbra2_core
         .i_clk(i_clk), .i_rst(i_rst),
         .i_fault_commit(vecf_launch), .i_fault_vec(vecf_launch_vec),
         .i_mem_rdata(imem_rdata),
+        .i_mem_busy(1'b0),                         // flat stand-in: port never busy
         .o_active(vecf_active),
         .o_fetch_addr(vecf_fetch_addr), .o_fetch_en(vecf_fetch_en),
+        .o_fetch_re(),
         .o_redirect(vecf_redirect), .o_redirect_pc(vecf_redirect_pc)
     );
 

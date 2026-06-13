@@ -87,6 +87,48 @@ int main(int argc, char** argv) {
     // Two entries back-to-back: the FSM must be ready again immediately.
     run_entry(dut, 6, 0xCAFE0000, "again");
 
+    // ── Launch waits for an idle port ────────────────────────────
+    // A fault can commit while a killed fetch's fill is still draining;
+    // DRIVE must hold the launch (no lookup while busy) until the drop.
+    clear(dut);
+    dut->i_fault_commit = 1; dut->i_fault_vec = 5;
+    dut->i_mem_busy = 1; dut->eval();
+    tick(dut);                                   // → DRIVE (port busy)
+    clear(dut); dut->i_mem_busy = 1; dut->eval();
+    check("lw_active",    dut->o_active, 1);
+    check("lw_hold_en",   dut->o_fetch_en, 0);   // launch held
+    tick(dut); dut->eval();
+    check("lw_hold_en2",  dut->o_fetch_en, 0);   // still draining
+    dut->i_mem_busy = 0; dut->eval();
+    check("lw_drop_en",   dut->o_fetch_en, 1);   // fires at the drop
+    check("lw_addr",      dut->o_fetch_addr, 5 << 2);
+    tick(dut);                                   // → WAIT
+    dut->i_mem_rdata = 0xAB000000; dut->eval();
+    check("lw_redirect",  dut->o_redirect, 1);
+    tick(dut);
+
+    // ── Completion waits for the busy drop ───────────────────────
+    // In the machine the vector read is an uncacheable pass-through; WAIT
+    // holds the request level and redirects on the drop cycle's data.
+    clear(dut);
+    dut->i_fault_commit = 1; dut->i_fault_vec = 3; dut->eval();
+    tick(dut);                                   // → DRIVE (port idle)
+    clear(dut); dut->eval();
+    check("cw_drive_en",  dut->o_fetch_en, 1);
+    tick(dut);                                   // → WAIT
+    clear(dut); dut->i_mem_busy = 1; dut->i_mem_rdata = 0xBADBADBA; dut->eval();
+    check("cw_wait_re",   dut->o_fetch_re, 1);   // request held level
+    check("cw_no_redir",  dut->o_redirect, 0);   // not complete yet
+    tick(dut); dut->eval();
+    check("cw_wait_re2",  dut->o_fetch_re, 1);
+    check("cw_no_redir2", dut->o_redirect, 0);
+    dut->i_mem_busy = 0; dut->i_mem_rdata = 0xFFFF0300; dut->eval();
+    check("cw_redirect",  dut->o_redirect, 1);   // drop-equals-valid
+    check("cw_pc",        dut->o_redirect_pc, 0xFFFF0300);
+    tick(dut);
+    clear(dut); dut->eval();
+    check("cw_back_idle", dut->o_active, 0);
+
     printf("%s: %d/%d checks passed\n",
            errors ? "FAIL" : "PASS", tests - errors, tests);
     delete dut;
