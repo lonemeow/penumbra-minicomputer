@@ -332,7 +332,7 @@ valid bits, one per scoreboardable physical storage element:
 | **SSP** | `R14` in supervisor mode |
 | ESR | `RDSPR/WRSPR ESR`; hardware exception entry (direct flop write, bypasses scoreboard) |
 | EPC | `RDSPR/WRSPR EPC`; hardware exception entry (direct flop write, bypasses scoreboard) |
-| SR | `RDSPR/WRSPR SR`; `EI`/`DI`; flag-writing ALU ops (write side); Bcc (read side) |
+| SR | `RDSPR SR`; `EI`/`DI`; flag-writing ALU ops (write side); Bcc (read side) (`WRSPR SR` reserved) |
 | SCR0–SCR3 (4) | `RDSPR/WRSPR SCRn` only |
 
 R0 and R15 are excluded (R0 reads always zero; R15 reads come from
@@ -370,7 +370,7 @@ addressing makes the aliasing visible to the scoreboard.
 if no in-flight instruction is in the process of changing `SR.S`
 between an instruction's decode and its commit. This is guaranteed
 because every mode-changing operation either drain-commits (ERET,
-WRSPR SR — both per [Decision 9](#9-drain-commit-primitive)) or
+per [Decision 9](#9-drain-commit-primitive)) or
 fires after pipeline drain (exception entry save-state pulse,
 IRQ drain-and-take). So when an instruction is decoded in ID, the
 `SR.S` value it sees is stable for the duration of that instruction's
@@ -775,12 +775,11 @@ commit cycle.
 | Instruction | Post-commit wait | Why |
 |-------------|------------------|-----|
 | ERET | 0 cycles | SR/PC change is internal to the CPU, observable the same cycle |
-| WRSPR SR | 0 cycles | Changes S/I/NZCV. S/I are consumed by the MMU and IF1 IRQ logic (out-of-pipeline structures a value scoreboard cannot order); serialization is required so no younger insn is in flight under the old mode. Internal effect → no post-commit wait. |
 | EI / DI | 0 cycles | Change the I bit, consumed by IF1 IRQ-acceptance. Serialization makes `DI`'s disable precise (no younger insn interrupted after it) and keeps `EI`'s ISA-mandated one-instruction enable delay (`ei_shadow`) *architectural* — a single `NOP` cracks one IRQ window regardless of pipeline depth, and `EI; ERET` stays atomic. Internal effect → no post-commit wait. |
 | WRSYS | 1 cycle | Sysreg sideband write must latch in the target device (synchronous, next-clock) before subsequent insns can observe the new state |
 
 The variants share all mechanism; they differ only in a 1-bit
-"post-commit wait" decoder flag. ERET, WRSPR SR, and EI/DI take
+"post-commit wait" decoder flag. ERET and EI/DI take
 the 0-cycle variant; WRSYS takes the 1-cycle variant.
 
 The S/I serialization rationale (why these control bits are
@@ -827,8 +826,9 @@ is much harder to forget.
   principle), but neither gen2 user does — ERET writes SR + PC,
   WRSYS writes sysreg-sideband. So the scoreboard is unaffected by
   drain-commit in gen2.
-- **SR.S quiescence for the scoreboard.** ERET and WRSPR SR are both
-  drain-commit, which means no in-flight instruction can be in the
+- **SR.S quiescence for the scoreboard.** Every `SR.S` writer either
+  drain-commits (ERET) or fires after the pipeline is already drained
+  (exception entry), which means no in-flight instruction can be in the
   process of changing `SR.S` while a later instruction is being
   decoded. This is load-bearing for the unified physical scoreboard
   in [Decision 4](#4-hazard-handling-strategy): the decoder
@@ -838,20 +838,28 @@ is much harder to forget.
   instructions provides that guarantee for free; without it, the
   scoreboard would need a more complex re-mapping mechanism.
 
-- **Initial users.** ERET, WRSPR SR, EI, DI, WRSYS. (ERET and
-  WRSYS were the original two; WRSPR SR and EI/DI were added when
-  the hazard model established that the S and I bits must be ordered
-  by serialization rather than by the value scoreboard — see
+- **Users.** ERET, EI, DI, WRSYS. (ERET and WRSYS were the original
+  two; EI/DI were added when the hazard model established that the S and
+  I bits must be ordered by serialization rather than by the value
+  scoreboard — see
   [Control-state serialization: the S and I bits](./hazard-model.md#control-state-serialization-the-s-and-i-bits).)
+
+- **The reserved case — `WRSPR SR`.** A direct status-register write
+  would be a drain-commit user too: a direct `SR.S` write feeds the MMU
+  and the IF1 IRQ logic out of pipeline exactly as ERET's does, so it
+  would need the same serialization (and the same fetch
+  re-synchronization, per *Fetch re-synchronization* below). gen2
+  **reserves** the encoding rather than implementing it — software
+  changes S/I only via exception entry, ERET, and EI/DI, and NZCV via
+  flag-writing ALU ops, so a direct SR write is never needed. Reserving
+  it removes the case instead of building the serialization for it.
 
 - **Future users.** Any new SYNC/FENCE-style instruction (none
   planned for gen2, but the mechanism is in place). Note WRSPR to
-  the *other* SPRs (USP, ESR, EPC, SCRn) is deliberately **not**
+  the value SPRs (USP, ESR, EPC, SCRn) is deliberately **not**
   drain-commit — those are ordinary scoreboarded entries, because
   the TLB miss handler's hot path leans on cheap WRSPR-SCRn spills
   (see [SCRn coverage rationale](./hazard-model.md#scrn-coverage-rationale)).
-  Only WRSPR SR drain-commits, because only SR carries the
-  out-of-pipeline S/I control bits.
 
 **Alternatives considered.**
 
@@ -897,9 +905,11 @@ are the accepted cost of one uniform rule. The TLB-miss fast path pays a
 re-fetch per fill write on top of the handler's terminating ERET — if
 profiling ever shows that dominates, a non-synchronizing staging-write
 mode can remove it without changing the architectural contract,
-deferred until measured. WRSPR SR carries the same fetch-relevant risk
-if `SR.S` gates fetch translation; its write path is not yet wired, so
-re-synchronizing it is left to that milestone.
+deferred until measured. A direct `SR.S` write would carry the same
+fetch-relevant risk, since `SR.S` gates fetch translation — one reason
+the `WRSPR SR` encoding is reserved rather than implemented (see *Users*
+above); the live `SR.S` changers (ERET, exception entry) redirect fetch
+already.
 
 ---
 
@@ -1257,10 +1267,10 @@ it has none of those three properties.
   (17) / SCR0–SCR3 (18–21) — 22 entries, 21 live.
 - **EX gains a 4-bit flag bypass mux.** The EX/MEM and MEM/WB registers
   already carry `flag_value`, so no new pipeline-register state.
-- **`RDSPR/WRSPR SR` no longer emit a scoreboard reference for the flag
-  part** — `WRSPR SR` is a forwarded flag producer (and stays
-  drain-commit for S/I per [Decision 9](#9-drain-commit-primitive));
-  `RDSPR SR` takes NZCV from the bypass and S/I from committed SR.
+- **`RDSPR SR` no longer emits a scoreboard reference for the flag
+  part** — it takes NZCV from the bypass and S/I from committed SR.
+  (`WRSPR SR` is reserved; the live S/I writers stay drain-commit per
+  [Decision 9](#9-drain-commit-primitive).)
 - **[hazard-model.md](./hazard-model.md) is revised** to describe flags
   as forwarded rather than scoreboarded; this decision is the rationale,
   that document is the contract.

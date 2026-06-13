@@ -280,7 +280,7 @@ handle:
 | `Bcc target` | `{}` | NZCV (forwarded) |
 | `B[L] Rb` (register branch) | `{Rb}` | — |
 | `RDSPR Rd, SPR` | `{SPR_phys}` (USP, ESR, EPC, SCRn). For `RDSPR Rd, SR`: `{}` | NZCV (for SR) |
-| `WRSPR SPR, Rs` | `{Rs}` (and `D = SPR_phys`). For `WRSPR SR`: `{Rs}`, no scoreboard `D` (NZCV forwarded, S/I drain-commit). | — |
+| `WRSPR SPR, Rs` | `{Rs}` (and `D = SPR_phys`; `SPR` ∈ USP, ESR, EPC, SCRn — `WRSPR SR` is reserved) | — |
 | `RDSYS Rd, sysreg_id` | `{}` (sysreg ID is encoded; not a regfile read) | — |
 | `WRSYS sysreg_id, Rs` | `{Rs}` | — |
 | MUL/DIV | `{Ra, Rb}` (writes a 2-entry destination, see below) | — |
@@ -313,7 +313,7 @@ physical entries 0..13. The non-trivial cases are:
 | `RDSPR/WRSPR USP, …`  | **USP** (14), regardless of mode |
 | `RDSPR/WRSPR ESR, …`  | 16 |
 | `RDSPR/WRSPR EPC, …`  | 17 |
-| `RDSPR/WRSPR SR,  …`  | (not scoreboarded) — NZCV is forwarded ([Flag (NZCV) hazard model](#flag-nzcv-hazard-model)); the S/I bits are serialized by drain-commit ([Control-state serialization: the S and I bits](#control-state-serialization-the-s-and-i-bits)). `WRSPR SR` is drain-commit; `EI`/`DI` are drain-commit and touch only the I bit. |
+| `RDSPR SR`  | (not scoreboarded) — NZCV is forwarded ([Flag (NZCV) hazard model](#flag-nzcv-hazard-model)); the S/I bits are read from committed SR. (`WRSPR SR` is reserved; the live S/I writers — `ERET`, `EI`/`DI` — serialize by drain-commit, see [Control-state serialization: the S and I bits](#control-state-serialization-the-s-and-i-bits).) |
 | `RDSPR/WRSPR SCRn, …` | 18..21 |
 
 The mapping is **combinational** in the ID stage; it is not
@@ -488,7 +488,6 @@ not by a scoreboard valid bit.
 | Writer | Writes | Ordering |
 |--------|--------|----------|
 | ERET | S, I, NZCV | drain-commit |
-| WRSPR SR | S, I, NZCV | drain-commit |
 | `EI` / `DI` | I only | **drain-commit** (see 7.4) |
 | Exception-entry save-state pulse | S=1, I=0 | post-drain (pipeline already flushed) |
 
@@ -503,6 +502,15 @@ pending. Tracking it would not be incorrect, just inert — and inert
 logic that looks load-bearing obscures the real mechanism, so gen2
 omits it.
 
+A *direct* status-register write (`WRSPR SR`) would be a fourth writer
+in that table and would need the same drain-commit ordering — a direct
+`SR.S` write feeds the MMU and the IF1 IRQ logic out of pipeline exactly
+as ERET's does. gen2 **reserves** the `WRSPR SR` encoding rather than
+implementing it: software changes S/I only via exception entry, ERET, and
+`EI`/`DI`, and NZCV via flag-writing ALU ops, so a direct SR write is
+never needed. Reserving the encoding removes the case instead of building
+the serialization for it.
+
 ### SR.S quiescence for the decoder's R14 mapping
 
 This is the one place the absence of S-scoreboarding could look
@@ -514,8 +522,8 @@ Its correctness instead rests on `SR.S` being quiescent: no
 in-flight instruction may be *in the process* of changing `SR.S`
 between cycle T (decode) and cycle T+1 (issue).
 
-Drain-commit on every S-writer provides exactly that. Because ERET,
-WRSPR SR, and exception entry all drain (or post-drain), the
+Drain-commit on every S-writer provides exactly that. Because ERET
+and exception entry all drain (or post-drain), the
 moment any instruction sits in ID the SR.S it reads is stable for
 that instruction's entire pipeline residence. Without drain-commit
 on the mode-changers, the decoder would need a re-mapping mechanism
@@ -595,7 +603,7 @@ cheap.
 
 - **Producers** (decoder asserts `writes_flags`): flag-writing ALU ops
   (`ADD/SUB/CMP/AND/…`), the immediate ALU ops, `MUL/MULU/DIV/DIVU`
-  (set N,Z; force C=V=0), `WRSPR SR`, and `ERET`. A producer's
+  (set N,Z; force C=V=0), and `ERET`. A producer's
   EX-computed NZCV rides the EX/MEM and MEM/WB pipeline registers in the
   `flag_value` field.
 - **Consumers** (decoder asserts `reads_flags`): every `Bcc`, every
@@ -683,13 +691,6 @@ beyond the normal source-read clearing rules:
   sysreg). The decoder treats it as a normal RAW source; the
   scoreboard clears nothing because WRSYS has no scoreboarded
   destination (the sysreg sideband is not in the scoreboard).
-- **WRSPR SR** (also drain-commit) writes the NZCV flags (plus the
-  drain-serialized S/I bits). NZCV is a *forwarded* producer, not a
-  scoreboard entry, so `WRSPR SR` contributes its `flag_value` to the
-  bypass like any flag writer and clears/sets nothing in the scoreboard
-  ([Flag (NZCV) hazard model](#flag-nzcv-hazard-model)). The S/I writes
-  are serialized by the drain
-  ([Control-state serialization: the S and I bits](#control-state-serialization-the-s-and-i-bits)).
 - **EI / DI** (also drain-commit) write only the I bit, which is
   not scoreboarded. They clear nothing and set nothing in the
   scoreboard; their effect is ordered entirely by the drain.

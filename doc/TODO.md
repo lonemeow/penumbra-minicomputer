@@ -148,10 +148,13 @@ which is what lets piece 1c advertise `wrspr` on gen2 once the SCRn scratch
 file lands.
 
 The gen2 *rationale* docs (`penumbra2/{design-decisions,hazard-model,
-control-decode}.md`) still describe `WRSPR SR` as a live drain-commit
-producer — stale since piece 1a illegalised it in `penumbra2_decode`. Worth a
-follow-up pass to reframe them as "why SR would have needed drain-commit, and
-why we reserved the encoding instead."
+control-decode}.md`) were reframed to match: `WRSPR SR` is no longer listed as
+a live drain-commit / flag producer (ERET, EI/DI, WRSYS remain). The drain-
+commit and S/I-serialization analysis that `WRSPR SR` used to motivate is
+preserved as the *justification for reserving the encoding* — a direct `SR.S`
+write would feed the MMU and IF1 IRQ logic out of pipeline exactly as ERET's
+does, so it would need the same serialization and fetch re-sync, and reserving
+it removes that case rather than building it.
 
 ## Hardware: build/test restructure to the BOARD×CORE matrix
 

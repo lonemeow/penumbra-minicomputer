@@ -240,7 +240,7 @@ subsets ([Decode once in ID, narrow downstream](#decode-once-in-id-narrow-downst
 | `sys_dev` | 4 | sysreg device (RDSYS/WRSYS) |
 | `sys_reg` | 4 | sysreg register (RDSYS/WRSYS) |
 | `spr_sel` | 4 | SPR number (RDSPR/WRSPR) |
-| `drain_commit` | 1 | ERET, WRSYS, WRSPR-SR, EI, DI ([Decision 9](./design-decisions.md#9-drain-commit-primitive)) |
+| `drain_commit` | 1 | ERET, WRSYS, EI, DI ([Decision 9](./design-decisions.md#9-drain-commit-primitive)) |
 | `post_commit_wait` | 1 | 1 only for WRSYS (Section in exception-flow / Decision 9) |
 | `gpr_we` | 1 | writes a GPR at WB |
 | `spr_we` | 1 | writes an SPR at WB |
@@ -399,10 +399,11 @@ F bit), plus MUL/MULU/DIV/DIVU (which set N,Z and force C=V=0). The
 `flag_only` (F) bit does **not** change `writes_flags` — CMP still
 writes flags; F only suppresses the *GPR* write.
 
-`WRSPR SR` and `ERET` are also `writes_flags` producers: they write the
-whole SR including its flag bits, so their EX-computed NZCV feeds the
-bypass like any other producer (their S/I writes are ordered separately
-by drain-commit).
+`ERET` is also a `writes_flags` producer: it writes the whole SR
+including its flag bits, so its EX-computed NZCV feeds the bypass like
+any other producer (its S/I write is ordered separately by drain-commit).
+(`WRSPR SR` would have been such a producer too, but the encoding is
+reserved — see [Decision 9](./design-decisions.md#9-drain-commit-primitive).)
 
 **`writes_flags` = 0** for: MOV, LLI, LLIS, LUI, all loads/stores,
 all branches (B/Bcc/BL), JMP/JALR, and the remaining system
