@@ -7,12 +7,29 @@
 // single-outstanding, D-priority on simultaneous pending, full-shape
 // forwarding ({addr, wdata, byte_en, re, we, cacheable}).
 //
+// **Registered downstream request.** The granted request is presented to
+// the downstream from a register (mq_*), not combinationally. A master's
+// request → downstream chain would otherwise concatenate the L1's resolve
+// cone (TLB translate + tag compare + miss/uncached classify) with the
+// whole L2 read pipeline in one cycle — the cone that capped the machine's
+// fmax. The launch register is the cut: the request reaches the downstream
+// one cycle after grant, so the front cone (master → mq_*) and the back
+// cone (mq_* → L2 → completion) become two flop-bounded paths instead of
+// one. The cost is one cycle per *transaction* — a line fill engages one
+// cycle later, an uncacheable beat completes one cycle later — and zero on
+// the fill's per-word streaming (the sequencer walks words downstream of
+// this register) and zero on L1 hits (which never reach the arbiter). This
+// re-introduces the registered-request structure the gen1 arbiter had and
+// an earlier gen2 draft dropped; the draft's premise (registered L1 hits
+// keep the master→downstream path short) holds for hits but not for the
+// miss/uncached request, which carries the resolve cone.
+//
 // Completion is type-dependent: a line read (re && cacheable) releases on
 // the fill sequencer's fill_done; every single-beat op releases on the
 // downstream busy-drop. Those two events are all the arbiter follows — it
 // never sees words and carries no line-size knowledge. The fill bundle is
 // routed through opaquely: word/wdata broadcast to both sides, the we/done
-// strobes gated to the owner.
+// strobes gated to the in-flight owner.
 //
 // The non-owner port sees o_busy=1, so its level-held request keeps
 // waiting; pure-stall bounds demand to at most one pending request per
@@ -21,15 +38,11 @@
 // must drain through MEM/WB before the next D-transaction can launch, and
 // the I-side's held request wins the grant in that gap.
 //
-// Masters must present a completed request deasserted during the cycle
-// after its completion — the L1 satisfies this combinationally, its
-// request dropping with the state change at the completion edge — so a
-// released grant re-arbitrates over honestly-new requests only (a
-// residual line request would otherwise engage a phantom second fill in
-// the sequencer). The grant select is combinational: a fresh
-// request reaches the downstream port on its first cycle, and an
-// immediately-ready downstream (busy already low) completes a single beat
-// in that same cycle without ever taking the lock.
+// Back-to-back launch without an idle gap is preserved through the launch
+// eligibility: on a completion cycle the completing owner is still holding
+// its (now stale) request — it drops the next cycle — so a fresh launch may
+// pick only the *other* side, never re-launching the just-completed owner
+// into a phantom second transaction.
 
 module txn_arbiter #(
     parameter int FILL_WORD_W = 2   // routed fill word-index width (opaque payload)
@@ -85,83 +98,86 @@ module txn_arbiter #(
     assign i_req = i_i_re | i_i_we;
     assign d_req = i_d_re | i_d_we;
 
-    // ── Grant state ───────────────────────────────────────────────
-    // Encoded owner + active lock: owner_q names the side, active_q says
-    // a transaction is in flight and the select below must hold it.
-    logic owner_q;                  // 0 = port I, 1 = port D
-    logic active_q;
+    // ── Registered downstream request (the launch register) ───────
+    // mq_valid says a transaction is presented downstream this cycle;
+    // mq_owner names the side; mq_{addr,…} hold its captured shape. The
+    // downstream port is driven purely from these flops — the cut.
+    logic        mq_valid, mq_owner;     // owner: 0 = port I, 1 = port D
+    logic [31:0] mq_addr, mq_wdata;
+    logic [3:0]  mq_byte_en;
+    logic        mq_re, mq_we, mq_cacheable;
 
-    // The side driven downstream this cycle. Locked to the owner while a
-    // transaction is active; otherwise a new request claims it with
-    // D-priority. Combinational, so a fresh request forwards on its
-    // first cycle.
-    logic grant_valid, grant_d;
-    assign grant_valid = active_q | i_req | d_req;
-    assign grant_d     = active_q ? owner_q : d_req;
+    // ── In-flight completion ──────────────────────────────────────
+    // A line read completes on the sequencer's fill_done; a single beat
+    // completes on the downstream busy-drop. Both qualify on mq_valid, so
+    // an idle arbiter never spuriously completes.
+    logic is_line, complete;
+    assign is_line  = mq_re & mq_cacheable;
+    assign complete = mq_valid & (is_line ? i_fill_done
+                                          : ((mq_re | mq_we) & ~i_m_busy));
 
-    // ── Full-shape forward mux ────────────────────────────────────
+    // ── Launch select ─────────────────────────────────────────────
+    // A fresh transaction launches when the register is free (idle, or the
+    // in-flight one completes this cycle for a back-to-back hand-off),
+    // D-priority. On a completion cycle the completing owner is excluded:
+    // it is still asserting its now-stale request (it drops next cycle), so
+    // re-launching it would present a phantom second transaction.
+    logic i_elig, d_elig;
     always_comb begin
-        if (grant_valid && grant_d) begin
-            o_m_addr      = i_d_addr;
-            o_m_wdata     = i_d_wdata;
-            o_m_byte_en   = i_d_byte_en;
-            o_m_re        = i_d_re;
-            o_m_we        = i_d_we;
-            o_m_cacheable = i_d_cacheable;
-        end else if (grant_valid) begin
-            o_m_addr      = i_i_addr;
-            o_m_wdata     = i_i_wdata;
-            o_m_byte_en   = i_i_byte_en;
-            o_m_re        = i_i_re;
-            o_m_we        = i_i_we;
-            o_m_cacheable = i_i_cacheable;
-        end else begin
-            o_m_addr      = 32'b0;
-            o_m_wdata     = 32'b0;
-            o_m_byte_en   = 4'b0;
-            o_m_re        = 1'b0;
-            o_m_we        = 1'b0;
-            o_m_cacheable = 1'b0;
+        i_elig = i_req;
+        d_elig = d_req;
+        if (mq_valid && complete) begin
+            if (mq_owner == 1'b0) i_elig = 1'b0;
+            else                  d_elig = 1'b0;
         end
     end
 
-    // ── Transaction type + completion event ───────────────────────
-    // A line read completes on fill_done; a single beat completes on the
-    // downstream busy-drop (which can be the transaction's first cycle).
-    logic is_line, complete;
-    assign is_line  = o_m_re & o_m_cacheable;
-    assign complete = grant_valid
-                    & (is_line ? i_fill_done
-                               : ((o_m_re | o_m_we) & ~i_m_busy));
+    logic launch, launch_d;
+    assign launch   = (!mq_valid | complete) & (i_elig | d_elig);
+    assign launch_d = d_elig;            // D-priority among the eligible
 
-    // ── Grant lock update ─────────────────────────────────────────
-    // Owns owner_q/active_q. The contract the assertions below pin:
-    // a granted transaction that does not complete this cycle is locked
-    // to its owner from the next cycle; completion releases the lock at
-    // the edge (the combinational select re-arbitrates the following
-    // cycle); a same-cycle start-and-complete never takes the lock; the
-    // owner never changes while the lock is held.
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
-            active_q <= 1'b0;
-        end else if (grant_valid && !complete) begin
-            active_q <= 1'b1;
-            owner_q  <= grant_d;
+            mq_valid <= 1'b0;
+        end else if (launch) begin
+            mq_valid     <= 1'b1;
+            mq_owner     <= launch_d;
+            mq_addr      <= launch_d ? i_d_addr      : i_i_addr;
+            mq_wdata     <= launch_d ? i_d_wdata     : i_i_wdata;
+            mq_byte_en   <= launch_d ? i_d_byte_en   : i_i_byte_en;
+            mq_re        <= launch_d ? i_d_re        : i_i_re;
+            mq_we        <= launch_d ? i_d_we        : i_i_we;
+            mq_cacheable <= launch_d ? i_d_cacheable : i_i_cacheable;
         end else if (complete) begin
-            active_q <= 1'b0;
+            mq_valid <= 1'b0;
         end
     end
 
-    // ── Responses: data broadcast, busy and fill strobes by owner ──
+    // ── Downstream request — purely registered (the cut) ──────────
+    assign o_m_addr      = mq_addr;
+    assign o_m_wdata     = mq_wdata;
+    assign o_m_byte_en   = mq_byte_en;
+    assign o_m_re        = mq_valid & mq_re;
+    assign o_m_we        = mq_valid & mq_we;
+    assign o_m_cacheable = mq_cacheable;
+
+    // ── Responses: data broadcast, busy + fill strobes by owner ───
+    // A requesting master is busy until its own transaction completes; the
+    // completing owner drops to 0 on the completion cycle so its L1 sees the
+    // busy-drop. A non-requesting master reads 0 (its L1 won't sample it).
+    logic i_owns, d_owns;
+    assign i_owns = mq_valid & (mq_owner == 1'b0);
+    assign d_owns = mq_valid & (mq_owner == 1'b1);
+
     assign o_i_rdata = i_m_rdata;
     assign o_d_rdata = i_m_rdata;
-    assign o_i_busy  = (grant_valid && !grant_d) ? i_m_busy : 1'b1;
-    assign o_d_busy  = (grant_valid &&  grant_d) ? i_m_busy : 1'b1;
+    assign o_i_busy  = (i_owns & complete) ? 1'b0 : i_req;
+    assign o_d_busy  = (d_owns & complete) ? 1'b0 : d_req;
 
-    assign o_i_fill_we    = i_fill_we   & grant_valid & ~grant_d;
-    assign o_i_fill_done  = i_fill_done & grant_valid & ~grant_d;
-    assign o_d_fill_we    = i_fill_we   & grant_valid &  grant_d;
-    assign o_d_fill_done  = i_fill_done & grant_valid &  grant_d;
+    assign o_i_fill_we    = i_fill_we   & i_owns;
+    assign o_i_fill_done  = i_fill_done & i_owns;
+    assign o_d_fill_we    = i_fill_we   & d_owns;
+    assign o_d_fill_done  = i_fill_done & d_owns;
     assign o_i_fill_word  = i_fill_word;
     assign o_d_fill_word  = i_fill_word;
     assign o_i_fill_wdata = i_fill_wdata;
@@ -169,33 +185,31 @@ module txn_arbiter #(
 
     // ══════════════════════════════════════════════════════════
     // Assertions — sim-only (Verilator --assert); stripped at synth.
-    // The first three pin the grant-lock contract; the rest guard the
-    // interface obligations.
     // ══════════════════════════════════════════════════════════
 
-    // A transaction that does not complete this cycle is locked next cycle.
+    // A launch presents the transaction downstream next cycle.
     assert property (@(posedge i_clk) disable iff (i_rst)
-        (grant_valid && !complete) |=> active_q)
-        else $error("txn_arbiter: in-flight transaction not locked");
+        launch |=> mq_valid)
+        else $error("txn_arbiter: launched transaction not registered");
 
-    // Completion releases the lock.
+    // A completion with no back-to-back launch frees the register.
     assert property (@(posedge i_clk) disable iff (i_rst)
-        complete |=> !active_q)
-        else $error("txn_arbiter: completed transaction left the lock held");
+        (complete && !launch) |=> !mq_valid)
+        else $error("txn_arbiter: completed transaction left the register valid");
 
-    // The owner never changes while the lock is held.
+    // The owner never changes while a transaction is in flight.
     assert property (@(posedge i_clk) disable iff (i_rst)
-        (active_q && !complete) |=> $stable(owner_q))
+        (mq_valid && !complete) |=> $stable(mq_owner))
         else $error("txn_arbiter: owner changed mid-transaction");
 
-    // Fill activity only belongs to an active line transaction.
+    // Fill activity only belongs to an in-flight line transaction.
     assert property (@(posedge i_clk) disable iff (i_rst)
-        (i_fill_we || i_fill_done) |-> (grant_valid && is_line))
+        (i_fill_we || i_fill_done) |-> (mq_valid && is_line))
         else $error("txn_arbiter: fill activity outside a line transaction");
 
-    // The granted request has a sane single shape.
+    // The presented request has a sane single shape.
     assert property (@(posedge i_clk) disable iff (i_rst)
         !(o_m_re && o_m_we))
-        else $error("txn_arbiter: granted request asserts read and write");
+        else $error("txn_arbiter: presented request asserts read and write");
 
 endmodule

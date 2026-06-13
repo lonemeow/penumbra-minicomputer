@@ -8,14 +8,21 @@
 // an injectable one-cycle busy-low glitch mid-stream to prove completion
 // is type-dependent, not busy-driven.
 //
+// The request is presented downstream from a register, so a master's
+// request appears on o_m_* the cycle *after* it is asserted (the launch
+// register that keeps the resolve cone off the L2 read path). The checks
+// account for that one-cycle launch latency.
+//
 // Checks:
 //   - idle: nothing forwarded
 //   - D-priority on simultaneous pending; the loser waits behind busy=1
-//     and is granted the cycle after the winner completes (no dead cycle)
-//   - the grant locks across a multi-cycle single beat: a request arriving
+//     and is granted the cycle the winner completes (no dead cycle —
+//     back-to-back hand-off preserved across the launch register)
+//   - the grant holds across a multi-cycle single beat: a request arriving
 //     mid-transaction cannot steal the port
-//   - a single beat that completes on its first cycle never takes the
-//     lock (a dangling lock would deadlock the next grant)
+//   - the registered floor: even a zero-latency downstream completes one
+//     cycle after launch, and the register frees cleanly (a stuck register
+//     would deadlock the next grant)
 //   - line transactions: fill strobes reach only the owner, word/wdata
 //     broadcast, the non-owner waits, and a mid-stream busy-drop does NOT
 //     release the grant — only fill_done does
@@ -155,71 +162,91 @@ int main(int argc, char** argv) {
     clock_edge();
 
     // ── D-priority tiebreak + no-dead-cycle handover ─────────────
+    // Both assert; at the accept cycle both read busy (requests captured,
+    // nothing on o_m_* yet). The launch edge presents D the next cycle.
     dut->i_i_addr = 0x1000; dut->i_i_re = 1;     // uncacheable read
     dut->i_d_addr = 0x2000; dut->i_d_re = 1;
     cycle_eval();
+    check("tie_i_accepted", dut->o_i_busy, 1);
+    check("tie_d_accepted", dut->o_d_busy, 1);
+    clock_edge();                                 // launch D (D-priority)
+    cycle_eval();
     check("tie_d_wins_addr", dut->o_m_addr, 0x2000);
-    check("tie_i_waits", dut->o_i_busy, 1);
-    check("tie_d_busy_mirrors", dut->o_d_busy, dut->i_m_busy);
-    clock_edge();
     // D's wait: run until its busy drops, then D deasserts.
-    for (int i = 0; i < 10; i++) {
-        cycle_eval();
+    for (int i = 0; i < 12; i++) {
         if (!dut->o_d_busy) break;
         check("tie_fwd_stays_d", dut->o_m_addr, 0x2000);
+        check("tie_i_waits", dut->o_i_busy, 1);
         clock_edge();
+        cycle_eval();
     }
     check("tie_d_data", dut->o_d_rdata, 0x2000 ^ 0xFFFFFFFFu);
-    clock_edge();
-    clear_d();
-    // Very next cycle: the waiting I side owns the port.
+    clock_edge();                                 // completion edge: launch waiting I
+    clear_d();                                    // D deasserts the next cycle
     cycle_eval();
     check("tie_handover_to_i", dut->o_m_addr, 0x1000);
-    check("tie_i_busy_mirrors", dut->o_i_busy, dut->i_m_busy);
-    for (int i = 0; i < 10 && (cycle_eval(), dut->o_i_busy); i++) clock_edge();
+    check("tie_i_inflight", dut->o_i_busy, 1);
+    for (int i = 0; i < 12; i++) {
+        if (!dut->o_i_busy) break;
+        clock_edge();
+        cycle_eval();
+    }
     check("tie_i_data", dut->o_i_rdata, 0x1000 ^ 0xFFFFFFFFu);
     clock_edge();
     clear_i(); idle_cycle();
 
-    // ── Lock across a multi-cycle write: no mid-transaction steal ──
+    // ── Grant holds across a multi-cycle write: no mid-transaction steal ──
     m_lat = 3;
     dut->i_d_addr = 0x3000; dut->i_d_wdata = 0xC001D00D;
     dut->i_d_byte_en = 0x3; dut->i_d_we = 1; dut->i_d_cacheable = 1;
     cycle_eval();
+    clock_edge();                                 // launch D
+    cycle_eval();
     check("lock_d_first", dut->o_m_addr, 0x3000);
-    clock_edge();
-    dut->i_i_addr = 0x1100; dut->i_i_re = 1;     // arrives mid-transaction
-    for (int i = 0; i < 10; i++) {
-        cycle_eval();
+    dut->i_i_addr = 0x1100; dut->i_i_re = 1;      // arrives mid-transaction
+    cycle_eval();                                 // re-evaluate with I now asserted
+    for (int i = 0; i < 12; i++) {
         if (!dut->o_d_busy) break;
         check("lock_no_steal", dut->o_m_addr, 0x3000);
         check("lock_i_waits", dut->o_i_busy, 1);
         clock_edge();
+        cycle_eval();
     }
     check("lock_wr_wdata", last_wdata, 0xC001D00D);
     check("lock_wr_be", last_be, 0x3);
     check("lock_wr_cacheable", last_cacheable, 1);
-    clock_edge();
+    clock_edge();                                 // completion edge: launch waiting I
     clear_d();
     cycle_eval();
     check("lock_then_i", dut->o_m_addr, 0x1100);
-    for (int i = 0; i < 10 && (cycle_eval(), dut->o_i_busy); i++) clock_edge();
+    for (int i = 0; i < 12; i++) {
+        if (!dut->o_i_busy) break;
+        clock_edge();
+        cycle_eval();
+    }
     clock_edge();
     clear_i(); idle_cycle();
 
-    // ── Same-cycle completion never takes the lock ───────────────
+    // ── Registered floor: zero-latency downstream still costs a launch ──
+    // A min-latency beat completes the cycle after launch (never the accept
+    // cycle), and the register frees so the next grant proceeds.
     m_lat = 0;
     dut->i_i_addr = 0x1200; dut->i_i_re = 1;
     cycle_eval();
-    check("instant_i_done", dut->o_i_busy, 0);
-    check("instant_i_data", dut->o_i_rdata, 0x1200 ^ 0xFFFFFFFFu);
+    check("beat_min_accept_busy", dut->o_i_busy, 1);   // accept cycle: still busy
+    clock_edge();                                       // launch I
+    cycle_eval();
+    check("beat_min_done", dut->o_i_busy, 0);          // completes one cycle after launch
+    check("beat_min_data", dut->o_i_rdata, 0x1200 ^ 0xFFFFFFFFu);
     clock_edge();
     clear_i(); idle_cycle();
-    // If the lock dangled to I, this D request would never be forwarded.
+    // If the register stuck to I, this D request would never be forwarded.
     dut->i_d_addr = 0x3300; dut->i_d_re = 1;
     cycle_eval();
-    check("instant_no_dangle", dut->o_m_addr, 0x3300);
-    check("instant_d_done", dut->o_d_busy, 0);
+    clock_edge();                                       // launch D
+    cycle_eval();
+    check("beat_no_dangle", dut->o_m_addr, 0x3300);
+    check("beat_d_done", dut->o_d_busy, 0);
     clock_edge();
     clear_d(); idle_cycle();
     m_lat = 1;
@@ -227,6 +254,8 @@ int main(int argc, char** argv) {
     // ── Line transaction on I: routing, isolation, type-dependent
     //    completion (a mid-stream busy-drop must not release) ─────
     dut->i_i_addr = 0x4D40; dut->i_i_re = 1; dut->i_i_cacheable = 1;
+    cycle_eval();
+    clock_edge();                                 // launch the line on I
     int i_beats = 0, d_beats = 0;
     bool done_i = false, glitched = false;
     for (int c = 0; c < 60 && !done_i; c++) {
