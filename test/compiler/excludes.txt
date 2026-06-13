@@ -124,20 +124,6 @@ testcase-InstCombine-1.c # int a:18; b:1; c:24; d:15; e:14; (72 bits)
 pr79737-1.c              # same struct as pr79737-2; fails at -O0 only
 pr79737-2.c              # int32_t b:18; c:1; d:24; e:15; f:14; (72 bits) — mid-end emits G_STORE s32 as s64
 
-# ─── Named-arg byval stack slots overlap ───────────────────────
-# Fixed (non-variadic) functions with byval struct args that spill
-# past R1-R4: e.g. `check_float(int a, _Complex float a1..a5)`.
-# CC_Penumbra's CCAssignToStack<4,4> reserves 4 bytes per slot
-# (pointer-sized), but the framework's byval-mem path writes
-# Flags.getByValSize() bytes (8 for _Complex float, 16 for
-# _Complex double) at that offset, so adjacent byval args overlap
-# on the stack.  Needs CCIfByVal<CCPassByVal<4,4>> in
-# PenumbraCallingConv.td so the CC reserves the struct size per
-# slot.  Distinct from the variadic byval bug (fixed in
-# PenumbraCallLowering — see 920625-1 for that path).
-# Tracked in doc/TODO.md.
-complex-7.c          # 5 × _Complex byval args overlap on stack
-
 # ─── Other unsupported extensions (one-offs) ───────────────────
 pr84748.c        # __int128 on a 32-bit target
 pr80692.c        # _Decimal64 ('DD' float suffix)
@@ -318,7 +304,6 @@ scal-to-vec2.c           # __attribute__((vector_size))
 20031003-1.c             # upstream UnsupportedTests: (float)INT_MAX UB
 20040703-1.c
 pr23324.c                # complex bitfield/struct combinations
-struct-ret-1.c           # mixed struct/FP return
 # Optimizer normally simplifies a construct we don't translate:
 pr65053-1.c              # untranslated `call` instruction at -O0
 
