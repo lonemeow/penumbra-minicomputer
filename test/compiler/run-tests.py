@@ -75,7 +75,7 @@ def extract_dg_options(source_path):
     return flags
 
 def run_single_test(args):
-    test_path, opt, harness_dir, build_dir, iss_path, cc, objcopy, bin2hex, builtins, resource_dir, display_name, override_flags = args
+    test_path, opt, harness_dir, build_dir, iss_path, cc, objcopy, bin2hex, builtins, resource_dir, display_name, override_flags, pic = args
     # Use a sanitized name for filesystem paths
     name = display_name.replace("/", "_").replace(".", "_")
     
@@ -127,13 +127,18 @@ def run_single_test(args):
     # tests that need flags their source doesn't declare, e.g. -std=gnu99
     # for tests that rely on C99 constant promotion or scoping).
     # Appended after common_flags so they override defaults.
+    # The PIC leg adds -fPIC to the test only: it exercises GOT-indirect
+    # global/jump-table materialization.  crt0/libc_stub stay non-PIC —
+    # they link statically into a fixed-address executable where lld
+    # resolves the GOT at link time, so no runtime relocator is needed.
+    pic_flags = ["-fPIC"] if pic else []
     dg_flags = extract_dg_options(test_path)
     cmd_test = common_flags + [
         "-include", "stdlib.h",
         "-include", "stdio.h",
         "-include", "string.h",
         "-include", "alloca.h",
-    ] + dg_flags + list(override_flags) + [
+    ] + pic_flags + dg_flags + list(override_flags) + [
         "-c", test_path, "-o", obj_test
     ]
     try:
@@ -142,10 +147,14 @@ def run_single_test(args):
         return TestResult(name, display_name, False, "compile error", e.stderr)
 
     # 4. Link
+    # The PIC leg uses a linker script with an explicit .got section so
+    # the statically-resolved GOT has a deterministic home; otherwise
+    # the layout is identical to the static script.
+    link_script = "test-pic.ld" if pic else "test.ld"
     cmd_link = shlex.split(cc) + [
         "-target", "penumbra-unknown-none", # Ensure target is passed for linking
         "-ffreestanding", "-nostdlib",
-        "-T", os.path.join(harness_dir, "test.ld"),
+        "-T", os.path.join(harness_dir, link_script),
         obj_crt0, obj_libc, obj_test
     ]
     if builtins:
@@ -223,6 +232,7 @@ def main():
     parser.add_argument("--test-dir", action="append", default=[], help="Directory containing tests")
     parser.add_argument("--test-file", action="append", default=[], help="Specific test file (repeatable). When set, skips --test-dir walking.")
     parser.add_argument("--opt", default="-O2", help="Optimization level")
+    parser.add_argument("--pic", action="store_true", help="Compile tests -fPIC and link with the .got-bearing script (exercises GOT-indirect codegen)")
     parser.add_argument("--harness-dir", required=True, help="Harness directory")
     parser.add_argument("--build-dir", required=True, help="Build directory")
     parser.add_argument("--iss", required=True, help="Path to penumbra-iss")
@@ -329,7 +339,7 @@ def main():
         return tuple(hits)
 
     worker_args = [
-        (full_path, args.opt, args.harness_dir, args.build_dir, args.iss, args.cc, args.objcopy, args.bin2hex, args.builtins, args.resource_dir, rel_path, match_flags(rel_path))
+        (full_path, args.opt, args.harness_dir, args.build_dir, args.iss, args.cc, args.objcopy, args.bin2hex, args.builtins, args.resource_dir, rel_path, match_flags(rel_path), args.pic)
         for full_path, rel_path in test_data
     ]
 
@@ -358,6 +368,7 @@ def main():
         f.write(f"=============================\n")
         f.write(f"Date: {time.ctime()}\n")
         f.write(f"Opt level: {args.opt}\n")
+        f.write(f"Code model: {'PIC' if args.pic else 'static'}\n")
         f.write(f"Duration: {duration:.2f}s\n")
         f.write(f"Total: {len(results)}, Passed: {passed}, Failed: {failed}\n")
         f.write(f"Status: {'PASS' if failed == 0 else 'FAIL'}\n\n")

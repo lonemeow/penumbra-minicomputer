@@ -361,13 +361,19 @@ switch/tail-merge shape) and `test/MC/Penumbra/got-pcrel-label-anchor.s`
 layouts).  Validated by booting dynamic NetBSD to the single-user
 shell (init/`/bin/sh`/`sysctl` all run, zero faults).
 
-**Test-coverage gap, still open:** `make test-compiler` runs
-`penumbra-unknown-none` bare-metal, non-PIC — it never exercises GOT
-materialization, which is why a PIC-only miscompile reached a libc
-this fundamental before anything caught it.  Worth a PIC/PIE leg in
-the compiler-correctness suite (build a handful of `-fPIC` cases,
-link with lld, run on the ISS) so GOT/TLS codegen regressions surface
-without a full userland rebuild + boot.
+**Test-coverage gap — addressed:** `make test-compiler` runs
+`penumbra-unknown-none` bare-metal, non-PIC, so it never exercised GOT
+materialization — which is why a PIC-only miscompile reached a libc
+this fundamental before anything caught it.  `make test-compiler-pic`
+now runs a curated `-fPIC` set (`test/compiler/penumbra-pic/`) through
+the same harness, linked static at a fixed address so lld resolves the
+GOT at link time (no runtime relocator needed for the flat ISS image)
+while the GOT-indirect codegen is still exercised.  The tests are
+self-checking and were confirmed to fail when the anchor pairing is
+deliberately broken (each catches a value landing in the wrong
+GOT-loaded global / jump-table target).  Still open: a true dynamic
+PIE leg (with `__tls_get_addr` and runtime relocation) would also cover
+TLS-GD, which the static-link approach cannot reach.
 
 ## Kernel: vmapbuf / vunmapbuf for raw device access
 

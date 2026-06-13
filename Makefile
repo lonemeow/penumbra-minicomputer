@@ -358,6 +358,35 @@ test-compiler: $(ISS)
 		--report "$(BUILD_DIR)/test-compiler-report.txt" \
 		--jobs $$(nproc)
 
+# PIC leg: same harness, tests compiled -fPIC and linked static at a
+# fixed address (lld resolves the GOT at link time — no runtime
+# relocator), so GOT-indirect global/jump-table/block-address codegen
+# is exercised that the default static suite never reaches.  Curated
+# tests live in test/compiler/penumbra-pic/.  Disjoint from the main
+# suite — its excludes/flags files don't apply.
+COMPILER_PIC_DIR := $(TEST_COMPILER_DIR)/penumbra-pic
+
+.PHONY: test-compiler-pic
+test-compiler-pic: $(ISS)
+	@test -f "$(COMPILER_RT_BUILTINS)" || { \
+		echo "error: $(COMPILER_RT_BUILTINS) not found —" \
+		     "build it with: sw/tools/setup-compiler-rt.sh $(RT_OPT)"; \
+		exit 1; }
+	@$(PYTHON) $(TEST_COMPILER_DIR)/run-tests.py \
+		--test-dir "$(COMPILER_PIC_DIR)" \
+		"--opt=$(OPT)" \
+		--pic \
+		--harness-dir "$(HARNESS_DIR)" \
+		--build-dir "$(BUILD_DIR)/test-compiler-pic" \
+		--iss "./$(ISS)" \
+		--cc "$(CC)" \
+		--objcopy "$(OBJCOPY)" \
+		--bin2hex "sw/tools/bin2hex.py" \
+		--builtins "$(COMPILER_RT_BUILTINS)" \
+		--resource-dir "$$($(CC) -print-resource-dir)" \
+		--report "$(BUILD_DIR)/test-compiler-pic-report.txt" \
+		--jobs $$(nproc)
+
 # ── Interactive simulation (ISS — fast, instruction-level) ─────
 # Builds boot ROM and runs through the ISS. No Docker needed.
 # Usage: make simulate                    (interactive, default)

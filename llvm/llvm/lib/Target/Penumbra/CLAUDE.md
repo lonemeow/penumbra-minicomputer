@@ -65,6 +65,13 @@ make test-compiler OPT="-Os"      # override optimization
 make test-compiler COMPILER_TESTS="path/to/test.c"
 ```
 
+The default suite is bare-metal non-PIC, so it never exercises
+GOT-indirect codegen.  `make test-compiler-pic` runs a separate
+curated set (`test/compiler/penumbra-pic/`) compiled `-fPIC` and linked
+static at a fixed address (lld resolves the GOT at link time — no
+runtime relocator), covering the GOT global / jump-table / block-address
+materialization paths.  Disjoint from the main suite.
+
 ## File map (`llvm/llvm/lib/Target/Penumbra/`)
 
 This table is the primary navigation aid for finding code. For *what
