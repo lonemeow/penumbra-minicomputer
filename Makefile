@@ -131,7 +131,7 @@ RUNNER_PROVIDES_penumbra1 = mmu mmu-d mmu-i cache l2 uart spi bus machid perfctr
 
 RUNNER_MOD_penumbra2      = machine_penumbra2_sim
 RUNNER_TBS_penumbra2      = tb_penumbra2_prog tb_penumbra2_intr
-RUNNER_PROVIDES_penumbra2 = mmu mmu-d mmu-i cache l2
+RUNNER_PROVIDES_penumbra2 = mmu mmu-d mmu-i cache l2 wrspr
 
 RUNNER_MOD      = $(RUNNER_MOD_$(CORE))
 RUNNER_TBS      = $(RUNNER_TBS_$(CORE))
@@ -786,12 +786,14 @@ flash: $(BUILD_DIR)/$(TOP).bit
 # Pretty-print fmax + top critical paths from the nextpnr JSON report
 # produced by the .config rule.  Doesn't trigger a build — operates
 # on whatever the last FPGA build left in $(BUILD_DIR).  Override the
-# path count via TOP_N=10.  DETAIL=1 adds a per-path module rollup
-# (via timing-path.py) so you can see which subsystem owns each path.
+# path count via TOP_N=10.  DETAIL=rollup adds a per-path module rollup
+# (which subsystem owns each path); DETAIL=full prints the full hop-by-hop
+# trace (every LUT and route).  Default DETAIL=none.
 .PHONY: timing
 TOP_N ?= 5
+DETAIL ?= none
 timing:
-	@hw/tools/timing-report.sh $(if $(DETAIL),--detail) $(BUILD_DIR)/$(TOP)_timing.json $(TOP_N)
+	@hw/tools/timing-report.sh --detail=$(DETAIL) $(BUILD_DIR)/$(TOP)_timing.json $(TOP_N)
 
 # Pretty-print high-fanout nets from the yosys synth JSON.  Useful for
 # diagnosing nextpnr routing-congestion failures: signals with hundreds

@@ -1,24 +1,36 @@
 #!/usr/bin/env bash
 # Pretty-print the most useful bits of a nextpnr-ecp5 JSON timing report.
 #
-# Usage: timing-report.sh [--detail] [report.json] [top_n_paths]
-# Defaults: build/ulx3s_penumbra1_top_timing.json, 5 paths.
+# Usage: timing-report.sh [--detail=none|rollup|full] [report.json] [top_n_paths]
+# Defaults: --detail=none, build/ulx3s_penumbra1_top_timing.json, 5 paths.
 #
-# With --detail, each of the top N paths is followed by its per-module
-# rollup (via timing-path.py), so you can see which subsystem owns each
-# critical path without leaving the report.  Hop-level trace is still
-# only available by running timing-path.py directly without --no-hops.
+# --detail controls per-path expansion of the top N paths (via timing-path.py):
+#   none   — path endpoints only (default)
+#   rollup — per-module rollup, so you can see which subsystem owns each path
+#   full   — full hop-by-hop trace (every LUT and route on the path)
+# Bare --detail is an alias for rollup; legacy 0/1 map to none/rollup.
 
 set -euo pipefail
 
-DETAIL=0
+DETAIL=none
 POS=()
 for arg in "$@"; do
     case "$arg" in
-        --detail) DETAIL=1 ;;
-        *)        POS+=("$arg") ;;
+        --detail)   DETAIL=rollup ;;            # bare flag = rollup (back-compat)
+        --detail=*) DETAIL="${arg#--detail=}" ;;
+        *)          POS+=("$arg") ;;
     esac
 done
+
+# Accept legacy numeric forms: 0=none, 1=rollup.
+case "$DETAIL" in
+    0) DETAIL=none ;;
+    1) DETAIL=rollup ;;
+esac
+case "$DETAIL" in
+    none|rollup|full) ;;
+    *) echo "error: --detail must be none, rollup, or full (got '$DETAIL')" >&2; exit 1 ;;
+esac
 
 REPORT="${POS[0]:-build/ulx3s_penumbra1_top_timing.json}"
 TOP_N="${POS[1]:-5}"
@@ -66,13 +78,19 @@ jq -r --argjson n "$TOP_N" '
     end
 ' "$REPORT"
 
-if [[ "$DETAIL" == "1" ]]; then
-    printf '── per-path module rollups (top %s) ──\n\n' "$TOP_N"
+if [[ "$DETAIL" != "none" ]]; then
+    if [[ "$DETAIL" == "full" ]]; then
+        hops_arg=""        # full hop-by-hop trace
+        printf '── per-path full hop traces (top %s) ──\n\n' "$TOP_N"
+    else
+        hops_arg="--no-hops"   # module rollup only
+        printf '── per-path module rollups (top %s) ──\n\n' "$TOP_N"
+    fi
     # Only iterate as many paths as the report actually contains.
     available="$(jq '.critical_paths // [] | length' "$REPORT")"
     last=$(( available < TOP_N ? available : TOP_N ))
     for i in $(seq 1 "$last"); do
-        python3 "$SCRIPT_DIR/timing-path.py" "$REPORT" "$i" --no-hops
+        python3 "$SCRIPT_DIR/timing-path.py" "$REPORT" "$i" $hops_arg
     done
 fi
 
