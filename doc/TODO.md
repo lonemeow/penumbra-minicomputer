@@ -99,19 +99,31 @@ The SPR access path is being wired in backend-ordered pieces:
 - **1c:** WRSPR/RDSPR SCRn — needs the scratch register file (the TLB-miss
   fast path's save area); unblocks `test_scratch_sprs`.
 
-## Hardware: Penumbra/2 WRSPR-SR dropped (RESOLVED)
+## Hardware: WRSPR-SR dropped ISA-wide (RESOLVED)
 
-WRSPR SR is reserved (illegal) on gen2: the kernel changes `SR.S`/`SR.I` via
-exception entry / ERET / EI / DI and NZCV via flag-writing ALU ops, never a
-direct SR write — and a direct `SR.S` write is the only SPR write that would
-need WRSYS-style context-synchronization (`SR.S` gates fetch-translation
-privilege). Dropping it removes that complexity entirely; the value SPRs need
-no context-sync. RDSPR SR stays (NetBSD spl/status reads it).
+WRSPR SR is reserved (illegal) on every generation: the kernel changes
+`SR.S`/`SR.I` via exception entry / ERET / EI / DI and NZCV via flag-writing
+ALU ops, never a direct SR write — and a direct `SR.S` write is the only SPR
+write that would need WRSYS-style context-synchronization (`SR.S` gates
+fetch-translation privilege). Dropping it removes that complexity entirely;
+the value SPRs need no context-sync. RDSPR SR stays (NetBSD spl/status reads
+it).
 
-gen1 and the ISS still accept WRSPR SR. Whether to drop it ISA-wide — make it
-illegal there too, update the ISA doc, and rewrite `isa/test_spr_sr` to
-manipulate `SR.I` with EI/DI instead of WRSPR SR — is a follow-up; that test
-is `REQUIRES: wrspr`, so it stays skipped on gen2 regardless.
+gen2 made it illegal first (piece 1a); gen1 (`cpu_core` traps `WRSPR SR` to
+`VEC_ILLEGAL` at dispatch; `datapath` no longer asserts `spr_sr_load` for SPR
+3) and the ISS (`WRSPR SR` raises `VEC_ILLEGAL`) now match, and the ISA docs
+mark the encoding reserved. `isa/test_spr_sr` (its only purpose was `WRSPR
+SR`) is removed; `isa/test_rdspr_sr` covers `RDSPR SR` + EI/DI and
+`isa/test_wrspr_sr_illegal` checks the trap, both on every generation. The
+`wrspr` capability tag now means exactly "value-SPR writes work" everywhere —
+which is what lets piece 1c advertise `wrspr` on gen2 once the SCRn scratch
+file lands.
+
+The gen2 *rationale* docs (`penumbra2/{design-decisions,hazard-model,
+control-decode}.md`) still describe `WRSPR SR` as a live drain-commit
+producer — stale since piece 1a illegalised it in `penumbra2_decode`. Worth a
+follow-up pass to reframe them as "why SR would have needed drain-commit, and
+why we reserved the encoding instead."
 
 ## Hardware: build/test restructure to the BOARD×CORE matrix
 

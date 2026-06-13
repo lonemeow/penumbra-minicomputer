@@ -69,6 +69,12 @@ master opcode, crypto accelerator, etc.), and system ops at the top
 (`{0, op[4], 0, op[3:0], 0}`) inherits this partition directly — see
 [datapath.md](../internals/penumbra1/datapath.md).
 
+**Reserved sub-encoding: `WRSPR SR`.** `WRSPR` (op `11110`) with SPR
+number `0011` (SR) in `[15:12]` is reserved and traps to `VEC_ILLEGAL`;
+there is no direct SR write. `RDSPR SR` (op `11111`, same SPR field) is
+valid — it reads the status register. The other SPR numbers
+(`ESR`/`EPC`/`USP`/`SCR0–3`) are writable via `WRSPR`.
+
 ### Format R sub-encoding for MUL/DIV
 
 `MUL`, `MULU`, `DIV`, and `DIVU` repurpose part of the spare field to
@@ -277,7 +283,8 @@ to the illegal-instruction handler (`VEC_ILLEGAL`).
 | JALR                              | Yes         | Indirect call                       |
 | EI, DI                            | Yes         | `ei_shadow`, privilege check        |
 | WRSYS, RDSYS                      | Yes         | Privileged                          |
-| RDSPR, WRSPR                      | Yes         | SPR in IR[15:12]: ESR/EPC/USP/SR/SCR0–3 |
+| RDSPR                             | Yes         | SPR in IR[15:12]: ESR/EPC/USP/SR/SCR0–3 |
+| WRSPR                             | Yes         | SPR in IR[15:12]: ESR/EPC/USP/SCR0–3. `WRSPR SR` (SPR 3) reserved → `VEC_ILLEGAL` |
 | ERET                              | Yes         | No-operand form only; context switch = `WRSPR EPC/ESR` + `ERET` |
 | SYSCALL, BREAK                    | Yes         |                                     |
 | NOP, RET, LA, LI (pseudo)         | Yes         |                                     |

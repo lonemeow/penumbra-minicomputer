@@ -222,8 +222,8 @@ instructions.
 
 Bulk-loads the entire status register from the W-bus. Used by ERET
 (restore SR from ESR). Overwrites N, Z, C, V, S, and I bits
-simultaneously. (WRSPR SR reaches the same bulk-load path through the
-hardware SPR decode rather than this bit.)
+simultaneously. ERET is the sole user — `WRSPR SR` is reserved (trapped
+illegal at dispatch), so no software path bulk-loads SR.
 
 ### MAR Load — `mar_load` [21] (1 bit)
 
@@ -828,16 +828,18 @@ priv=1 di_set=1
 ```
 → SR.I = 0, immediate effect.
 
-**WRSPR {ESR|EPC|USP|SR|SCR0–3}, Rd** (op=30, dispatch=0x5C) —
+**WRSPR {ESR|EPC|USP|SCR0–3}, Rd** (op=30, dispatch=0x5C) —
 Privileged
 ```
 priv=1 reg_a=IR_RD alu=PASS_A sys_op=SPR_WRITE
 ```
 → R-bus = Rd value → SPR write target. Hardware decodes IR[15:12]: SPR
 0 (ESR) → `esr_load`, SPR 1 (EPC) → `epc_load`, SPR 2 (USP) → R14
-cross-bank write, SPR 3 (SR) → bulk-load of the entire SR (flags, S,
-I — same path ERET's `sr_load` uses; this is how a context switch
-installs a new SR), SPR 4–7 (SCR0–SCR3) → respective scratch storage.
+cross-bank write, SPR 4–7 (SCR0–SCR3) → respective scratch storage. SPR
+3 (SR) is reserved: `cpu_core` traps `WRSPR SR` to `VEC_ILLEGAL` at
+dispatch, so the micro-op above never runs for it and no software path
+bulk-loads SR — a context switch installs a new SR by writing `ESR`
+then `ERET`-ing.
 
 **RDSPR Rd, {ESR|EPC|USP|SR|SCR0–3}** (op=31, dispatch=0x5E) —
 Privileged

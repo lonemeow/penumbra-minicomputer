@@ -343,8 +343,9 @@ gets R1=0, R2=1) and pipe (two fds).
   labels; `.init_array` constructor registers the sequence via
   `rasctl()`.  `userret()` checks `ras_lookup()` on every
   return to user mode.
-- **Kernel:** interrupt-disable CAS (`RDSPR SR` / `DI` / op /
-  `WRSPR SR`).  Safe on uniprocessor.
+- **Kernel:** interrupt-disable CAS (`RDSPR SR` to sample the prior
+  state / `DI` / op / `EI` to restore).  No `WRSPR SR` — it is reserved;
+  the `I` bit moves only via `EI`/`DI`.  Safe on uniprocessor.
 
 Generic CAS-based inc/dec/add/and/or built on top.  No-op
 memory barriers (uniprocessor, no store buffer reordering).

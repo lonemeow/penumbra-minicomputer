@@ -52,7 +52,9 @@ provides useful pseudo-instructions:
 ### Status Register (SR)
 
 The status register is **not** part of the 16-register GPR file. It is a
-separate CPU-internal register, accessed as SPR 3 via `RDSPR`/`WRSPR`.
+separate CPU-internal register, read as SPR 3 via `RDSPR SR`. There is
+no direct SR *write* — `WRSPR SR` is reserved (traps to `VEC_ILLEGAL`);
+the SR fields change through dedicated paths instead (see below).
 Condition flags (Z, N, C, V), supervisor (S), and interrupt-enable (I)
 live here. The previous mode on exception entry is saved to `ESR`, not
 to bits within SR itself.
@@ -202,7 +204,7 @@ SPR encoding in IR[15:12] (same field position as `dev` for WRSYS/RDSYS):
 | ESR    | 0      | Exception SR — saved at exception entry           |
 | EPC    | 1      | Exception PC — saved at exception entry           |
 | USP    | 2      | User stack pointer — banked-away R14              |
-| SR     | 3      | Current status register (flags + mode bits)       |
+| SR     | 3      | Current status register. `RDSPR` only; `WRSPR SR` reserved (→ `VEC_ILLEGAL`) |
 | SCR0   | 4      | Scratch SPR (supervisor-only, 32-bit storage)     |
 | SCR1   | 5      | Scratch SPR (supervisor-only, 32-bit storage)     |
 | SCR2   | 6      | Scratch SPR (supervisor-only, 32-bit storage)     |
@@ -280,19 +282,29 @@ privileged.
 
 ### Why Dedicated EI/DI
 
-Interrupt enable/disable must be atomic single instructions to avoid
-race conditions:
+Interrupt enable/disable are dedicated atomic instructions (`EI`/`DI`)
+rather than a read-modify-write of SR. This is also why there is no
+direct SR write at all — `WRSPR SR` is reserved:
 
-- **Read-modify-write race.** `RDSPR SR` → `OR` → `WRSPR SR` to set `I=1`
-  can be interrupted between read and write; a handler's SR changes
-  would be overwritten by the stale WRSPR value.
+- **Read-modify-write race.** `RDSPR SR` → `OR` → SR-write to set `I=1`
+  could be interrupted between the read and the write, and a handler's
+  SR changes would be overwritten by the stale value. `EI`/`DI` flip
+  the `I` bit atomically.
 - **Pending-interrupt timing.** The one-instruction delay on `EI` is
   specific to the `I` bit and cannot be expressed through a general
-  `WRSPR SR`.
+  SR write.
+- **Privilege synchronization.** `SR.S` gates fetch-translation
+  privilege, so a direct `SR.S` write would be the only SPR write
+  needing synchronization against in-flight instructions. Reserving the
+  encoding removes that complexity.
 
-`RDSPR/WRSPR SR` remain useful for saving/restoring the full SR state
-(e.g., atomic sections that need to preserve the caller's interrupt
-state) but **must not** substitute for `EI`/`DI`.
+The SR fields therefore change only through dedicated paths: `SR.S` and
+`SR.I` via exception entry, `ERET`, `EI`, and `DI`; the `NZCV` flags via
+flag-writing ALU ops. Saving and restoring the full SR across a trap
+goes through `ESR` — exception entry copies `SR`→`ESR` and `ERET`
+restores it, so a context switch installs a new process's SR by writing
+`ESR` then `ERET`-ing. `RDSPR SR` reads the live status word for
+inspection (for example, deriving the current interrupt-priority level).
 
 ---
 

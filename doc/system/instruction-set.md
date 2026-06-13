@@ -317,7 +317,7 @@ register.
 | WRSYS       | `WRSYS Rd, #dev, #reg`     | Write sysreg                             | Yes        |
 | RDSYS       | `RDSYS Rd, #dev, #reg`     | Read sysreg                              | Yes        |
 | RDSPR       | `RDSPR Rd, {ESR\|EPC\|USP\|SR\|SCR0–3}` | Read SPR                    | Yes        |
-| WRSPR       | `WRSPR {ESR\|EPC\|USP\|SR\|SCR0–3}, Rd` | Write SPR                   | Yes        |
+| WRSPR       | `WRSPR {ESR\|EPC\|USP\|SCR0–3}, Rd` | Write SPR (not SR — reserved) | Yes        |
 | ERET        | `ERET`                     | Exception return                         | Yes        |
 | SYSCALL     | `SYSCALL`                  | Trap to `VEC_SYSCALL` (5)                | No         |
 | BREAK       | `BREAK`                    | Trap to `VEC_BREAK` (6)                  | No         |
@@ -334,6 +334,13 @@ executes with interrupts disabled.
 writing that process's saved state into the SPRs first —
 `WRSPR ESR, Rx; WRSPR EPC, Ry; ERET` — there is no register-operand
 form.
+
+**WRSPR SR is reserved.** `RDSPR SR` reads the status register, but the
+SR write encoding (`WRSPR SR`, SPR number 3) is **reserved** and traps
+to `VEC_ILLEGAL`. There is no direct SR write: `SR.S`/`SR.I` change via
+exception entry, `ERET`, `EI`, and `DI`, and the `NZCV` flags via
+flag-writing ALU ops — so software never needs one. The other SPR
+writes (`ESR`/`EPC`/`USP`/`SCR0–3`) are unaffected.
 
 **WRSYS/RDSYS.** Access device-mapped system registers (MMU, TLB,
 CPU/machine identity, caches, bus controller, timer). See

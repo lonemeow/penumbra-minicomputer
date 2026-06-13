@@ -324,15 +324,18 @@ a_src = SPR (hardware decodes IR[15:12]: ESR, EPC, R14 cross_bank (USP),
 ALU PASS_A → R-bus → Rd
 ```
 
-### WRSPR {ESR|EPC|USP|SR|SCR0–3}, Rd
+### WRSPR {ESR|EPC|USP|SCR0–3}, Rd
 
 Single micro-op:
 ```
 reg_a_sel = Rd       → A-bus = Rd value → ALU PASS_A → R-bus
 sys_op = SPR_WRITE (hardware decodes IR[15:12] to route R-bus to ESR, EPC,
-                    R14 cross_bank write (USP), a bulk SR load, or a
-                    scratch SPR)
+                    R14 cross_bank write (USP), or a scratch SPR)
 ```
+
+`WRSPR SR` (SPR 3) is reserved: `cpu_core` detects it at dispatch and
+redirects to the illegal-instruction entry (`VEC_ILLEGAL`) before this
+micro-op runs, so there is no SR write path. `RDSPR SR` still reads SR.
 
 ### WRSYS Rd, #dev, #reg
 
