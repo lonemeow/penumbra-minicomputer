@@ -53,6 +53,13 @@ module penumbra2_id_stage
     input  logic [31:0]           i_rd_data_a,
     input  logic [31:0]           i_rd_data_b,
 
+    // ── SPR-file source read (EPC/ESR have no regfile entry) ─────
+    // A RDSPR of an SPR-file-backed SPR (EPC/ESR) reads its value here
+    // instead of the regfile: o_spr_rd_sel selects it, i_spr_src_value
+    // returns it (combinational, same cycle as the regfile read).
+    output logic [3:0]            o_spr_rd_sel,
+    input  logic [31:0]           i_spr_src_value,
+
     // ── Scoreboard: in-flight writers downstream of EX ───────────
     input  logic [SB_IDX_W-1:0]   i_mem_dst,
     input  logic                  i_mem_dst_en,
@@ -161,12 +168,26 @@ module penumbra2_id_stage
     assign o_rd_idx_a = phys_src_a;
     assign o_rd_idx_b = phys_src_b;
 
+    // ── SPR-file-backed source B (EPC/ESR) ───────────────────────
+    // ESR/EPC are not regfile entries (the 16-entry regfile returns 0 for
+    // their scoreboard indices) — their data lives in the SPR file. A
+    // RDSPR of either reads the SPR as operand B (so ALU_PASS carries it),
+    // taking its value from i_spr_src_value. USP reads the regfile R14 bank
+    // normally (not SPR-file-backed); SCRn read the scratch file (wired with
+    // the TLB-miss fast path).
+    logic src_b_spr_file;
+    assign src_b_spr_file = d_src_b_is_spr
+                          & (d_src_b_sel == SPR_EPC | d_src_b_sel == SPR_ESR);
+    assign o_spr_rd_sel   = d_src_b_sel;
+
     // ── Operand select: ID produces the final ALU operands ───────
     // op_a/op_b are what EX feeds the ALU directly; store_data is the
     // raw port-B read (the value a store writes).
     logic [31:0] op_a_sel, op_b_sel, store_data_sel;
     assign op_a_sel       = d_a_from_pc  ? i_pc  : i_rd_data_a;
-    assign op_b_sel       = d_b_from_imm ? d_imm : i_rd_data_b;
+    assign op_b_sel       = d_b_from_imm   ? d_imm
+                          : src_b_spr_file ? i_spr_src_value
+                          :                  i_rd_data_b;
     assign store_data_sel = i_rd_data_b;
 
     // ── Fault tag for the decoded instruction ────────────────────

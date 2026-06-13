@@ -247,9 +247,7 @@ module penumbra2_spine
     // WB commits NZCV into SR here; EX's flag bypass reads SR's NZCV as the
     // committed-SR fallback when no in-flight producer forwards. The fault
     // commit drives the save-state pulse (EPC ← faulting PC, ESR ← SR, S=1,
-    // I=0). ERET / WRSPR-SPR are not wired into the pipeline yet (no RDSPR /
-    // drain-commit-SR path), so those write ports are tied off for now.
-    // Save-state fires for a committing fault (EPC ← faulting PC) or an
+    // I=0). Save-state fires for a committing fault (EPC ← faulting PC) or an
     // interrupt entry (EPC ← boundary PC); the two never coincide (a fault
     // during the interrupt drain preempts the entry).
     logic        save_state;
@@ -257,19 +255,41 @@ module penumbra2_spine
     assign save_state = wb_fault_commit | i_irq_entry;
     assign save_pc    = wb_fault_commit ? wb_fault_pc : i_irq_epc;
 
+    // ── SPR-file software access (RDSPR/WRSPR EPC/ESR) ────────────
+    // EPC/ESR are SPR-file-backed (not regfile entries). WRSPR commits the
+    // Rd value at WB like any register write — the WB SPR strobe drives the
+    // SPR-file write, gated to EPC/ESR (USP routes to the regfile R14 bank,
+    // SCRn to the scratch file — wired in later milestones). RDSPR reads the
+    // SPR file combinationally at ID via id_spr_rd_sel / spr_rd_value.
+    logic        wb_spr_we;
+    logic [3:0]  wb_spr_sel;
+    logic [31:0] wb_spr_value;
+    logic [3:0]  id_spr_rd_sel;
+    logic [31:0] spr_rd_value;
+    logic        spr_file_we;
+    assign spr_file_we = wb_spr_we & (wb_spr_sel == SPR_EPC | wb_spr_sel == SPR_ESR);
+
     logic [3:0]  spr_sr_flags;
+    logic [31:0] sr_committed;     // committed SR word (RDSPR SR reads S/I here)
     penumbra2_spr_file u_spr (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_flag_we(wb_flag_we), .i_flag_value(wb_flag_value),
         .i_save_state(save_state), .i_save_pc(save_pc),
         .i_eret(eret_commit),
         .i_ei(ei_commit), .i_di(di_commit),
-        .i_spr_we(1'b0), .i_spr_sel(4'd0), .i_spr_value(32'b0),
-        .i_rd_sel(4'd0), .o_rd_value(),
+        .i_spr_we(spr_file_we), .i_spr_sel(wb_spr_sel), .i_spr_value(wb_spr_value),
+        .i_rd_sel(id_spr_rd_sel), .o_rd_value(spr_rd_value),
         .o_sr_flags(spr_sr_flags),
-        .o_sr_s(), .o_sr_i(o_sr_i), .o_sr_read(),
+        .o_sr_s(), .o_sr_i(o_sr_i), .o_sr_read(sr_committed),
         .o_epc(o_epc), .o_esr()
     );
+
+    // WRSPR to USP/SCRn is decoded but its backend is not routed yet (USP →
+    // regfile R14 bank, SCRn → scratch file). Catch it loudly rather than
+    // silently dropping the write until those milestones land.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        wb_spr_we |-> (wb_spr_sel == SPR_EPC || wb_spr_sel == SPR_ESR))
+        else $error("penumbra2_spine: WRSPR to an unrouted SPR backend (USP/SCRn)");
 
     // ════════════════════════════════════════════════════════════
     // Register file (shared: ID reads, WB writes)
@@ -294,6 +314,7 @@ module penumbra2_spine
         .o_stall(id_stall),
         .o_rd_idx_a(rd_idx_a), .o_rd_idx_b(rd_idx_b),
         .i_rd_data_a(rd_data_a), .i_rd_data_b(rd_data_b),
+        .o_spr_rd_sel(id_spr_rd_sel), .i_spr_src_value(spr_rd_value),
         .i_mem_dst(sb_mem_dst), .i_mem_dst_en(sb_mem_dst_en),
         .i_wb_dst(sb_wb_dst),   .i_wb_dst_en(sb_wb_dst_en),
         .i_aux_dst(sb_aux_dst), .i_aux_dst_en(sb_aux_dst_en),
@@ -330,7 +351,7 @@ module penumbra2_spine
         .i_pc(idex_pc), .i_next_pc(idex_next_pc), .i_is_trap(idex_is_trap),
         .i_valid(idex_valid), .i_fault_pending(idex_fault_pending),
         .i_fault_vec(idex_fault_vec), .i_fault_status(idex_fault_status),
-        .i_sr_flags(spr_sr_flags),
+        .i_sr_flags(spr_sr_flags), .i_sr_committed(sr_committed),
         .i_wb_flags(memwb_flag_value), .i_wb_writes_flags(memwb_flag_we & memwb_valid),
         .i_stall_in(mem_stall), .i_wb_active(memwb_valid), .i_bubble(wb_fault_commit),
         .o_stall(ex_stall), .o_dc_commit(ex_dc_commit), .o_funit_stall(),
@@ -409,7 +430,7 @@ module penumbra2_spine
         .o_stall(wb_stall),
         .o_wr_idx(wr_idx), .o_wr_data(wr_data), .o_wr_en(wr_en),
         .o_flag_we(wb_flag_we), .o_flag_value(wb_flag_value),
-        .o_spr_we(), .o_spr_sel(), .o_spr_value(),
+        .o_spr_we(wb_spr_we), .o_spr_sel(wb_spr_sel), .o_spr_value(wb_spr_value),
         .o_fault_commit(wb_fault_commit), .o_fault_vec(o_fault_vec),
         .o_fault_pc(wb_fault_pc)
     );
@@ -446,15 +467,19 @@ module penumbra2_spine
     // ════════════════════════════════════════════════════════════
     // Every downstream writer is derived here, uniformly, from the
     // inter-stage register fields with one predicate: a stage holds a
-    // pending GPR writer iff its instruction has a GPR destination, is a
-    // live slot, and is not faulting. One place owning the predicate keeps
-    // it from drifting, and is where the gen2.5 forwarding network — which
-    // needs these same tags next to the result values — will later attach.
-    // EX/MEM register -> the writer "in MEM"; MEM/WB register -> "in WB".
-    // (The EX writer is ID's own registered output, fed back inside ID.)
+    // pending scoreboard writer iff its instruction has a scoreboard
+    // destination, is a live slot, and is not faulting. A scoreboard
+    // destination is a GPR write (gpr_we) or a WRSPR to a scoreboard-mapped
+    // SPR (spr_we → SB_EPC/ESR/USP/SCRn) — both occupy a physical entry a
+    // later reader can depend on, so both must stay visible as the writer
+    // flows down. One place owning the predicate keeps it from drifting, and
+    // is where the gen2.5 forwarding network — which needs these same tags
+    // next to the result values — will later attach. EX/MEM register -> the
+    // writer "in MEM"; MEM/WB register -> "in WB". (The EX writer is ID's own
+    // registered output, fed back inside ID.)
     logic mem_writer, wb_writer;
-    assign mem_writer = exmem_gpr_we & exmem_valid & ~exmem_fault_pending;
-    assign wb_writer  = memwb_gpr_we & memwb_valid & ~memwb_fault_pending;
+    assign mem_writer = (exmem_gpr_we | exmem_spr_we) & exmem_valid & ~exmem_fault_pending;
+    assign wb_writer  = (memwb_gpr_we | memwb_spr_we) & memwb_valid & ~memwb_fault_pending;
 
     assign sb_mem_dst    = exmem_phys_dst;
     assign sb_mem_dst_en = mem_writer;

@@ -69,6 +69,13 @@ module penumbra2_ex_stage
     input  logic [3:0]            i_wb_flags,        // MEM/WB in-flight producer
     input  logic                  i_wb_writes_flags,
 
+    // ── Committed SR word (RDSPR SR returns S/I from here + bypassed NZCV) ──
+    // Only [31:4] (S/I/reserved) is consumed; [3:0] (committed NZCV) is
+    // replaced by the flag bypass, so the low nibble is intentionally unused.
+    /* verilator lint_off UNUSEDSIGNAL */
+    input  logic [31:0]           i_sr_committed,
+    /* verilator lint_on UNUSEDSIGNAL */
+
     // ── Pipeline handshake ───────────────────────────────────────
     input  logic                  i_stall_in,        // MEM cannot accept this cycle
     input  logic                  i_wb_active,       // WB holds a live (non-bubble) insn
@@ -173,7 +180,19 @@ module penumbra2_ex_stage
     logic        is_link;
     logic [31:0] result_value;
     assign is_link      = (i_op_class == OPC_BRANCH || i_op_class == OPC_JMP) & i_gpr_we;
-    assign result_value = is_link ? i_next_pc : alu_result;
+
+    // RDSPR SR composes the live status word: committed S/I (and reserved)
+    // from i_sr_committed, NZCV from the flag bypass (the youngest in-flight
+    // writer) so it reads identically to any other flag reader. SR has no
+    // scoreboard entry, so it cannot ride the operand-B SPR path the value
+    // SPRs use — it is built here instead. i_spr_sel distinguishes it from a
+    // value-SPR RDSPR (whose result is ALU_PASS of the operand-B read).
+    logic is_rdspr_sr;
+    assign is_rdspr_sr  = (i_op_class == OPC_RDSPR) & (i_spr_sel == SPR_SR);
+
+    assign result_value = is_link     ? i_next_pc
+                        : is_rdspr_sr ? {i_sr_committed[31:4], fwd_flags}
+                        :               alu_result;
 
     // branch_redirect / branch_target are the resolution proper.
     logic        branch_redirect;

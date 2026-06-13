@@ -179,29 +179,31 @@ int main() {
     decode(dut, enc_r(OP_R_WRSPR, 4, 0, 0, SPR_ESR), 0);
     check("wrspr_u_priv",  dut->o_priv_fault, 1);
     check("wrspr_u_vec",   dut->o_fault_vec, VEC_PRIV);
-    // WRSPR SR → drain-commit + flag-bypass producer; SR is not
-    // scoreboarded, so no scoreboard destination and no SPR-file write.
+    // WRSPR SR → reserved (illegal): SR is not WRSPR-writable (S/I change via
+    // exception entry / ERET, NZCV via flag ops), so it decodes to
+    // OPC_ILLEGAL with no destination, value source, or SPR-file write.
     decode(dut, enc_r(OP_R_WRSPR, 4, 0, 0, SPR_SR), 1);
-    check("wrspr_sr_drain",  dut->o_drain_commit, 1);
-    check("wrspr_sr_wflag",  dut->o_writes_flags, 1);
-    check("wrspr_sr_dst_en", dut->o_dst_en, 0);
-    check("wrspr_sr_spr_we", dut->o_spr_we, 0);
-    check("wrspr_sr_srcb",   dut->o_src_b_en, 1);   // still reads Rs (the value)
+    check("wrspr_sr_illegal", dut->o_op_class, OPC_ILLEGAL);
+    check("wrspr_sr_drain",   dut->o_drain_commit, 0);
+    check("wrspr_sr_dst_en",  dut->o_dst_en, 0);
+    check("wrspr_sr_spr_we",  dut->o_spr_we, 0);
 
-    // RDSPR R5, SCR0 (supervisor): GPR dest, SPR source.
+    // RDSPR R5, SCR0 (supervisor): GPR dest; the SPR value reads as operand B
+    // (so ALU_PASS, which passes B, carries it to the result).
     decode(dut, enc_r(OP_R_RDSPR, 5, 0, 0, SPR_SCR0), 1);
     check("rdspr_class",   dut->o_op_class, OPC_RDSPR);
     check("rdspr_dst",     dut->o_dst_sel, 5);
     check("rdspr_dst_en",  dut->o_dst_en, 1);
-    check("rdspr_srca",    dut->o_src_a_sel, SPR_SCR0);
-    check("rdspr_srca_spr", dut->o_src_a_is_spr, 1);
-    check("rdspr_srca_en", dut->o_src_a_en, 1);
+    check("rdspr_srcb",    dut->o_src_b_sel, SPR_SCR0);
+    check("rdspr_srcb_spr", dut->o_src_b_is_spr, 1);
+    check("rdspr_srcb_en", dut->o_src_b_en, 1);
     check("rdspr_gpr_we",  dut->o_gpr_we, 1);
-    // RDSPR SR reads NZCV via the bypass; SR is not a scoreboard
-    // source, but Rd is still a scoreboard destination.
+    // RDSPR SR reads NZCV via the bypass + S/I from committed SR (composed in
+    // EX); SR is not a scoreboard source, so neither operand reads it.
     decode(dut, enc_r(OP_R_RDSPR, 5, 0, 0, SPR_SR), 1);
     check("rdspr_sr_rflag",   dut->o_reads_flags, 1);
     check("rdspr_sr_srca_en", dut->o_src_a_en, 0);
+    check("rdspr_sr_srcb_en", dut->o_src_b_en, 0);
     check("rdspr_sr_dst_en",  dut->o_dst_en, 1);
 
     // SYSCALL / BREAK: traps, not privileged.

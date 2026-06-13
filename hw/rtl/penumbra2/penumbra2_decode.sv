@@ -263,35 +263,42 @@ module penumbra2_decode
                         o_priv_fault   = ~i_supervisor;
                     end
                     OP_R_WRSPR: begin
-                        o_op_class   = OPC_WRSPR;
-                        o_src_b_sel  = r_rd; o_src_b_en = 1'b1;   // value to write (Rd field)
-                        o_spr_sel    = field_1512;
-                        o_priv_fault = ~i_supervisor;
-                        if (field_1512 == SPR_SR) begin
-                            // SR is not a scoreboard/SPR-file entry: its
-                            // NZCV bits feed the flag bypass and its S/I
-                            // bits commit via the drain. No scoreboard
-                            // destination, no SPR-file write.
-                            o_drain_commit = 1'b1;
-                            o_writes_flags = 1'b1;
-                        end else begin
-                            o_dst_sel = field_1512; o_dst_is_spr = 1'b1; o_dst_en = 1'b1;
-                            o_spr_we  = 1'b1;
+                        // SR is reserved for WRSPR (op_class stays the
+                        // OPC_ILLEGAL default): the S/I bits change only via
+                        // exception entry and ERET, NZCV only via flag-writing
+                        // ALU ops, so software never needs WRSPR SR — and a
+                        // direct SR.S write would need a context-sync the
+                        // value SPRs don't. The value SPRs (EPC/ESR/USP/SCRn)
+                        // are plain stores: they commit at WB like any
+                        // register write (ALU_PASS of the Rd value into the
+                        // SPR destination), no drain-commit.
+                        if (field_1512 != SPR_SR) begin
+                            o_op_class   = OPC_WRSPR;
+                            o_src_b_sel  = r_rd; o_src_b_en = 1'b1;   // value to write (Rd field)
+                            o_spr_sel    = field_1512;
+                            o_priv_fault = ~i_supervisor;
+                            o_dst_sel    = field_1512; o_dst_is_spr = 1'b1; o_dst_en = 1'b1;
+                            o_spr_we     = 1'b1;
                         end
                     end
                     OP_R_RDSPR: begin
+                        // RDSPR is readable for every SPR including SR (only
+                        // WRSPR SR is reserved). SR is special — it has no
+                        // scoreboard entry, so its value is composed in EX
+                        // from the committed S/I and the flag-bypassed NZCV
+                        // (reads_flags marks it). The value SPRs read their
+                        // backend as operand B so ALU_PASS carries the value
+                        // to the result — the same datapath WRSPR's value
+                        // takes.
                         o_op_class   = OPC_RDSPR;
                         o_dst_sel    = r_rd; o_dst_en = 1'b1;
                         o_gpr_we     = 1'b1;
                         o_spr_sel    = field_1512;
                         o_priv_fault = ~i_supervisor;
                         if (field_1512 == SPR_SR) begin
-                            // SR's NZCV bits come from the flag bypass
-                            // (reads_flags); its S/I bits from committed
-                            // SR. Not a scoreboard source.
                             o_reads_flags = 1'b1;
                         end else begin
-                            o_src_a_sel = field_1512; o_src_a_is_spr = 1'b1; o_src_a_en = 1'b1;
+                            o_src_b_sel = field_1512; o_src_b_is_spr = 1'b1; o_src_b_en = 1'b1;
                         end
                     end
                     default: ;   // 10100-10110 reserved → OPC_ILLEGAL
