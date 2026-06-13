@@ -1,14 +1,18 @@
-// Verilator testbench for penumbra2_core — the generic gen2 program runner.
+// Verilator testbench for machine_penumbra2_sim — the generic gen2 program
+// runner.
 //
-// Loads a self-checking program (+rom_hex=), runs it until a BREAK retires,
-// and checks the repo-wide hw-test convention: R1 == 1 is PASS. The WB commit
-// port (o_commit_*) is mirrored into a shadow register file so the final
-// architectural state is visible without a debug port.
+// Loads a self-checking program (+rom_hex=), runs the gen2 machine until its
+// program-end pulse fires, and checks the repo-wide hw-test convention:
+// R1 == 1 is PASS. The WB commit port (o_commit_*) is mirrored into a shadow
+// register file so the final architectural state is visible without a debug
+// port.
 //
-// "Stop on BREAK" is testbench policy, not core behavior (BREAK is a trap on
-// real hardware). A flushed BREAK is a bubble and never retires, so only a
-// BREAK the program really reaches trips the halt — a leaked wrong-path BREAK
-// failing here is part of what the front-end flush has to get right.
+// The runner keys only on the program-end contract (build-system.md): clock,
+// reset, o_prog_end, R1 readback. o_prog_end is the machine's "a BREAK is
+// retiring" pulse — BREAK is a trap on real hardware, not a halt; a flushed
+// wrong-path BREAK is a bubble and never retires, so a leaked one failing
+// here is part of what the front-end flush has to get right. In-order commit
+// guarantees the shadow regfile holds final state at the pulse.
 //
 // Programs that need bespoke stimulus (e.g. driving the IRQ line) name their
 // runner with a "; RUNNER: tb_<name>" header tag instead of this default.
@@ -17,9 +21,7 @@
 
 #include <cstdio>
 #include <cstdint>
-#include "Vpenumbra2_core.h"
-
-enum { OPC_BREAK = 14 };   // penumbra2_pkg OPC_BREAK
+#include "Vmachine_penumbra2_sim.h"
 
 static int errors = 0, tests = 0;
 
@@ -28,33 +30,43 @@ static void check(const char* n, uint32_t g, uint32_t e) {
     if (g != e) { printf("  FAIL [%s]: got 0x%X, expected 0x%X\n", n, g, e); errors++; }
 }
 
-static void tick(Vpenumbra2_core* dut) {
+static void tick(Vmachine_penumbra2_sim* dut) {
     dut->i_clk = 0; dut->eval();
     dut->i_clk = 1; dut->eval();
 }
 
 int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);   // expose +rom_hex= etc. to the RTL
-    Vpenumbra2_core* dut = new Vpenumbra2_core;
+    Vmachine_penumbra2_sim* dut = new Vmachine_penumbra2_sim;
     uint32_t shadow[22] = {0};   // committed values, indexed by physical entry
 
     // Reset, held two cycles (testbench convention). IRQ lines idle.
     dut->i_irq = 0; dut->i_timer_irq = 0;
     dut->i_rst = 1; tick(dut); tick(dut); dut->i_rst = 0;
 
-    // Run until the core halts on a *retiring* BREAK, with a safety cap
-    // generous enough for flush bubbles, scoreboard RAW stalls, and
-    // multi-cycle divmul iterations.
-    const int CYCLE_CAP = 4000;
-    bool halted = false;
-    for (int c = 0; c < CYCLE_CAP && !halted; c++) {
+    // Run until the machine pulses program end, with a safety cap generous
+    // enough for uncached boot-mode fetches through the L1/arbiter/L2 path,
+    // line fills, flush bubbles, multi-cycle divmul iterations, and the
+    // page-walking MMU tests (the same envelope as the gen1 runner).
+    const int CYCLE_CAP = 500000;
+    bool ended = false;
+    long retires = 0, last_retire = -1;
+    for (int c = 0; c < CYCLE_CAP && !ended; c++) {
         dut->eval();
         if (dut->o_commit_we) shadow[dut->o_commit_idx] = dut->o_commit_data;
-        halted = dut->o_retire_valid && (dut->o_retire_op_class == OPC_BREAK);
+        if (dut->o_retire_valid) { retires++; last_retire = c; }
+        ended = dut->o_prog_end;
         tick(dut);
     }
 
-    if (!halted) { printf("  FAIL: core did not halt within %d cycles\n", CYCLE_CAP); errors++; tests++; }
+    // On a timeout, distinguish a wedged pipeline (retires stopped long ago)
+    // from a program that is merely slow or spinning (still retiring).
+    if (!ended) {
+        printf("  FAIL: no program end within %d cycles"
+               " (%ld retires, last at cycle %ld)\n",
+               CYCLE_CAP, retires, last_retire);
+        errors++; tests++;
+    }
 
     // R1 == 1 is reachable only if every branch redirect and flush behaved.
     check("R1 (PASS flag)", shadow[1], 1);

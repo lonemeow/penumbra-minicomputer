@@ -24,10 +24,12 @@
 // (whose launch gate and PC hold track the same busy) and lets bubbles fall
 // into ID. A faulted slot raises no request — its launch already happened
 // (the VIPT overlap), but nothing may complete or fill on its behalf; it
-// advances carrying only its fault tag. Against the flat hit-always stand-in
-// (busy tied low) every fetch completes on its resolve cycle, so a completing
-// translated fetch must be identity-mapped (asserted below) until the VIPT
-// I-cache's tag compare delivers remapped words.
+// advances carrying only its fault tag. The VIPT I-cache behind the port
+// indexes by this vaddr and tag-compares against the verdict's paddr, so
+// non-identity translations deliver correctly; a flat stand-in (busy tied
+// low, no tag compare) completes every fetch on its resolve cycle and is
+// only correct under identity mapping — its integration's constraint, not
+// this stage's.
 //
 // The completed word is consumed the cycle busy drops — a fill serves it for
 // exactly that one cycle. If ID is stalled just then (scoreboard RAW, divmul,
@@ -60,8 +62,9 @@ module penumbra2_if2_stage
     output logic        o_fetch_re,
 
     // ── MMU I-side verdict (port A; query launched with IF1's fetch) ──
+    // The paddr leg of the verdict goes to the I-cache's tag compare, not
+    // here — this stage consumes only the fault verdict.
     input  logic        i_user_mode,        // fetch privilege (alignment status info)
-    input  logic [31:0] i_mmu_paddr,
     input  logic        i_mmu_fault,        // any translation fault (miss / protection)
     input  logic [31:0] i_mmu_fault_status, // composed by the MMU (Decision 16)
 
@@ -190,14 +193,6 @@ module penumbra2_if2_stage
     end
 
     // ── Assertions (sim-only; stripped at synth) ─────────────────
-    // The flat fetch stand-in is vaddr-indexed with no paddr tag compare: a
-    // completing translated fetch must be identity-mapped until the VIPT
-    // I-cache's tag compare delivers remapped words (mirror of the MEM-side
-    // data assertion).
-    assert property (@(posedge i_clk) disable iff (i_rst)
-        (advance && !fault_pending) |-> (i_mmu_paddr == i_pc))
-        else $error("penumbra2_if2_stage: non-identity I-mapping over the flat fetch stand-in");
-
     // A taken-branch flush must bubble the IF2/ID slot the next cycle — the
     // branch-shadow instruction must never reach ID and decode.
     assert property (@(posedge i_clk) disable iff (i_rst)

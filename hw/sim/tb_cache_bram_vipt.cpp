@@ -471,6 +471,37 @@ int main(int argc, char** argv) {
     check("redisabled_sb", sb_reads, sb_r + 1);
     sys_write(REG_CTRL, 1);
 
+    // ── Withdrawn pass-through read: the S_PT hold completes it ──
+    // The consumer (a flushed IF2, or the fetch-port handover to the
+    // vector-fetch FSM) walks away one cycle into a busy pass-through
+    // read. The back-side request must stay presented until the
+    // downstream completes — a presented transaction never vanishes
+    // mid-flight (the txn_arbiter's lock would wedge otherwise, and a
+    // bus device is entitled to a held request).
+    mem[0x9000 >> 2] = 0x0DDB1755;
+    sb_lat = 3;
+    sb_r = sb_reads;
+    dut->i_vaddr = 0x9000; dut->i_en = 1; dut->i_re = 0; dut->i_we = 0;
+    idle_cycle();
+    dut->i_en = 0;
+    dut->i_paddr = 0x9000; dut->i_cacheable = 0; dut->i_fault = 0;
+    dut->i_re = 1;
+    cycle_eval();                       // request presented, downstream busy
+    check("ptkill_busy", dut->o_busy, 1);
+    clock_edge();                       // → the S_PT hold engages
+    front_clear();                      // the kill: front request withdrawn
+    for (int i = 0; i < 8 && sb_reads == sb_r; i++) {
+        cycle_eval();
+        check("ptkill_req_held", dut->o_mem_re, 1);   // survives the kill
+        clock_edge();
+    }
+    check("ptkill_completed", sb_reads, sb_r + 1);    // served into the void
+    idle_cycle();
+    check("ptkill_req_dropped", dut->o_mem_re, 0);    // and cleanly released
+    sb_lat = 1;
+    // The cache is healthy afterwards: a fresh access works end to end.
+    check("ptkill_recovers", read_at(0x9000, false), 0x0DDB1755);
+
     // ── Perfctrs vs the hand tally ──────────────────────────────
     check("perf_read_hits",    sys_read(REG_READ_HITS),    exp_rhit);
     check("perf_read_misses",  sys_read(REG_READ_MISSES),  exp_rmiss);

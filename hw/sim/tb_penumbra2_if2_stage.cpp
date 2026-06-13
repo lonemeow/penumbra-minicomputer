@@ -19,9 +19,6 @@
 //   - a misaligned PC faults without raising a request; a TLB-faulted
 //     fetch advances with the MMU's composed status, no request
 //
-// The MMU verdict is modeled as identity (i_mmu_paddr = i_pc), matching the
-// flat stand-in's constraint that the stage asserts.
-
 #include <cstdio>
 #include <cstdint>
 #include "Vpenumbra2_if2_stage.h"
@@ -45,13 +42,13 @@ static void tick(Vpenumbra2_if2_stage* dut) {
 static void slot(Vpenumbra2_if2_stage* dut, uint32_t pc, uint32_t ir) {
     dut->i_pc = pc; dut->i_next_pc = pc + 4; dut->i_valid = 1;
     dut->i_ir = ir;
-    dut->i_mmu_paddr = pc; dut->i_mmu_fault = 0; dut->i_mmu_fault_status = 0;
+    dut->i_mmu_fault = 0; dut->i_mmu_fault_status = 0;
 }
 
 static void clear(Vpenumbra2_if2_stage* dut) {
     dut->i_pc = 0; dut->i_next_pc = 4; dut->i_valid = 0; dut->i_ir = 0;
     dut->i_mem_busy = 0; dut->i_user_mode = 0;
-    dut->i_mmu_paddr = 0; dut->i_mmu_fault = 0; dut->i_mmu_fault_status = 0;
+    dut->i_mmu_fault = 0; dut->i_mmu_fault_status = 0;
     dut->i_stall_in = 0; dut->i_flush = 0;
 }
 

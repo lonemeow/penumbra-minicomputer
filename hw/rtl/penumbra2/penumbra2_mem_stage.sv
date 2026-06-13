@@ -31,13 +31,6 @@
 // commit payload (faulting vaddr + composed status) rides MEM/WB so WB can
 // latch the MMU's architectural fault registers from its commit strobe.
 //
-// The flat data-memory stand-in is addressed by the *virtual* address at
-// launch — the role the VIPT L1's vaddr index plays — but it has no paddr
-// tag compare, so it returns vaddr-indexed data unconditionally. Until the
-// real L1 D-cache replaces it behind this same dmem interface, a completing
-// translated access must therefore be identity-mapped (asserted below);
-// non-identity data mappings are the L1's tag compare to deliver.
-//
 // RDSYS shares the 2-cycle access FSM via the sysreg sideband: its launch
 // cycle drives o_sys_dev/o_sys_reg + the read strobe o_sys_re, and the device's
 // registered response arrives on i_sys_rdata the data-ready cycle (the same
@@ -113,12 +106,13 @@ module penumbra2_mem_stage
     // The query is driven on the access launch cycle alongside the data-memory
     // address; the registered verdict is valid on the data-ready cycle and
     // holds until the next query (mmu_bram's registered-read contract), so it
-    // is stable on whichever cycle the access advances.
+    // is stable on whichever cycle the access advances. The paddr leg of the
+    // verdict goes to the D-cache's tag compare, not here — this stage
+    // consumes only the fault verdict.
     output logic [31:0]           o_mmu_vaddr,
     output logic [2:0]            o_mmu_access_type, // ACC_READ / ACC_WRITE
     output logic                  o_mmu_req,         // query launch strobe
     input  logic                  i_user_mode,       // current privilege (query + align status)
-    input  logic [31:0]           i_mmu_paddr,
     input  logic                  i_mmu_fault,       // any translation fault (miss / protection)
     input  logic [31:0]           i_mmu_fault_status, // composed by the MMU (Decision 16)
 
@@ -478,14 +472,6 @@ module penumbra2_mem_stage
     assert property (@(posedge i_clk) disable iff (i_rst)
         !(i_stall_in && acc_in_flight))
         else $error("penumbra2_mem_stage: WB back-pressure landed on a launched access");
-
-    // The flat data-memory stand-in is vaddr-indexed with no paddr tag
-    // compare (see header): a completing translated access must be
-    // identity-mapped, or the returned/written data is for the wrong
-    // physical location. The real VIPT L1's tag compare lifts this.
-    assert property (@(posedge i_clk) disable iff (i_rst)
-        (is_mem && acc_in_flight && advance && !tlb_fault) |-> (i_mmu_paddr == i_result))
-        else $error("penumbra2_mem_stage: non-identity D-mapping over the flat memory stand-in");
 
     // A fault-commit flush from WB always lands as a bubble in MEM/WB: a
     // wrong-path or faulting instruction must never slip through to WB.

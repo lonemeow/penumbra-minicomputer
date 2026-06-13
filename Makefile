@@ -36,7 +36,7 @@ OPT_BUILD ?= -O2
 VERILATOR_FLAGS = --cc --exe --build -Wall --assert \
                   $(if $(VCD),--trace) \
                   -CFLAGS "-std=c++17 $(OPT_BUILD)" \
-                  -Ihw/rtl/common -Ihw/rtl/penumbra1 -Ihw/rtl/penumbra2 -Ihw/rtl/bus -Ihw/rtl/mmu -Ihw/rtl/io -Ihw/rtl/io/sdram -Ihw/rtl/soc -Ihw/rtl/sim
+                  -Ihw/rtl/common -Ihw/rtl/penumbra1 -Ihw/rtl/penumbra2 -Ihw/rtl/machine -Ihw/rtl/bus -Ihw/rtl/mmu -Ihw/rtl/io -Ihw/rtl/io/sdram -Ihw/rtl/soc -Ihw/rtl/sim
 
 BUILD_DIR   = build
 WAVE_DIR    = waves
@@ -129,9 +129,9 @@ RUNNER_MOD_penumbra1      = machine_sim
 RUNNER_TBS_penumbra1      = tb_cpu_prog
 RUNNER_PROVIDES_penumbra1 = mmu mmu-d mmu-i cache l2 uart spi bus machid perfctr timer irq wrspr
 
-RUNNER_MOD_penumbra2      = penumbra2_core
+RUNNER_MOD_penumbra2      = machine_penumbra2_sim
 RUNNER_TBS_penumbra2      = tb_penumbra2_prog tb_penumbra2_intr
-RUNNER_PROVIDES_penumbra2 = mmu-d mmu-i
+RUNNER_PROVIDES_penumbra2 = mmu mmu-d mmu-i cache l2
 
 RUNNER_MOD      = $(RUNNER_MOD_$(CORE))
 RUNNER_TBS      = $(RUNNER_TBS_$(CORE))
@@ -615,17 +615,20 @@ SRC_FABRIC = hw/rtl/io/sdram/sdram_pkg.sv \
              $(filter-out %/sdram_pkg.sv, $(wildcard hw/rtl/io/sdram/*.sv))
 
 SRC_CORE_penumbra1 = $(wildcard hw/rtl/penumbra1/*.sv)
-# The gen2 core's closure includes the CPU-internal sysreg devices
-# (cpuid/machid on the MEM sideband), housed with the other devices
-# in the shared soc/ directory, and the gen2 MMU stack from mmu/
-# (also wildcarded by SRC_FABRIC — a top composing both should $(sort)
-# its source set to dedupe).
 SRC_CORE_penumbra2 = hw/rtl/penumbra2/penumbra2_pkg.sv \
-                     $(filter-out %/penumbra2_pkg.sv, $(wildcard hw/rtl/penumbra2/*.sv)) \
-                     hw/rtl/soc/cpuid.sv hw/rtl/soc/machid.sv \
-                     hw/rtl/mmu/mmu_bram.sv hw/rtl/mmu/tlb_unit_bram.sv \
-                     hw/rtl/mmu/tlb_bram.sv hw/rtl/mmu/tlb_pinned.sv \
-                     hw/rtl/mmu/tlb_perm.sv
+                     $(filter-out %/penumbra2_pkg.sv, $(wildcard hw/rtl/penumbra2/*.sv))
+
+# The gen2 machine's closure: the integration module plus everything it
+# binds beyond the core — the gen2 MMU stack from mmu/, and the sysreg
+# devices + L2 from the shared soc/ directory (also wildcarded by
+# SRC_FABRIC — a top composing both should $(sort) its source set to
+# dedupe).
+SRC_MACHINE_penumbra2 = hw/rtl/machine/machine_penumbra2.sv \
+                        hw/rtl/mmu/mmu_bram.sv hw/rtl/mmu/tlb_unit_bram.sv \
+                        hw/rtl/mmu/tlb_bram.sv hw/rtl/mmu/tlb_pinned.sv \
+                        hw/rtl/mmu/tlb_perm.sv \
+                        hw/rtl/soc/cpuid.sv hw/rtl/soc/l2_cache.sv \
+                        hw/rtl/soc/cache_perfctr.sv
 
 # Board-common helpers only — each registry entry names its own top
 # file, so sibling tops never leak into each other's builds.
@@ -643,11 +646,13 @@ FPGA_SRC_ulx3s_penumbra1_top = $(SRC_COMMON) $(SRC_CORE_penumbra1) \
                                $(SRC_FABRIC) $(SRC_BOARD_ulx3s) \
                                $(FPGA_RTL)/ulx3s/ulx3s_penumbra1_top.sv
 
-# The gen2 probe is a core-level integration (no fabric): the bare
-# pipeline against the unified_mem stand-in, for timing
-# characterization of core logic cones in isolation.
+# The gen2 probe is the machine (core + MMU + VIPT L1s + arbiter +
+# fill sequencer + L2) against a small BRAM bus memory — the timing
+# instrument that puts the IF2 tag-compare / way-mux path and the rest
+# of the memory system in front of nextpnr (no board fabric/devices).
 FPGA_SRC_ulx3s_penumbra2_probe_top = $(SRC_COMMON) $(SRC_CORE_penumbra2) \
-                                     hw/rtl/sim/unified_mem.sv \
+                                     $(SRC_MACHINE_penumbra2) \
+                                     hw/rtl/sim/unified_bus_mem.sv \
                                      $(FPGA_RTL)/ulx3s/ulx3s_penumbra2_probe_top.sv
 
 # Tops that embed the boot ROM and/or microcode: their hex images are

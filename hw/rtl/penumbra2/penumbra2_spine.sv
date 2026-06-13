@@ -68,7 +68,6 @@ module penumbra2_spine
     output logic [2:0]            o_mmu_access_type,
     output logic                  o_mmu_user,        // query privilege (from i_supervisor)
     output logic                  o_mmu_req,
-    input  logic [31:0]           i_mmu_paddr,
     input  logic                  i_mmu_fault,
     input  logic [31:0]           i_mmu_fault_status,
 
@@ -376,7 +375,6 @@ module penumbra2_spine
         .i_dmem_rdata(i_dmem_rdata), .i_dmem_busy(i_dmem_busy),
         .o_mmu_vaddr(o_mmu_vaddr), .o_mmu_access_type(o_mmu_access_type),
         .o_mmu_req(o_mmu_req), .i_user_mode(~i_supervisor),
-        .i_mmu_paddr(i_mmu_paddr),
         .i_mmu_fault(i_mmu_fault), .i_mmu_fault_status(i_mmu_fault_status),
         .i_sys_dev(exmem_sys_dev), .i_sys_reg(exmem_sys_reg),
         .o_sys_dev(o_sys_dev), .o_sys_reg(o_sys_reg),

@@ -1,19 +1,23 @@
-// ULX3S Board Top (Penumbra/2 probe) — bare gen2 core timing probe.
+// ULX3S Board Top (Penumbra/2 probe) — gen2 machine timing probe.
 //
-// A synthesis instrument, not a usable machine: the pipelined core and
-// its unified_mem stand-in behind the board pins, so any gen2 RTL
-// change can be checked for fmax movement
-// (make timing BOARD=ulx3s CORE=penumbra2 VARIANT=probe) before the
-// real memory subsystem exists. Static timing analysis is the product;
-// runtime behavior is not — the memory is zero-initialized
-// (INIT_FILE=""), so from reset the core free-runs on whatever an
-// all-zero instruction word decodes to.
+// A synthesis instrument, not a usable machine: machine_penumbra2 (core +
+// MMU + VIPT L1 I/D caches + I/D arbiter + fill sequencer + L2) with a
+// small BRAM bus memory behind the board pins, so any gen2 RTL change can
+// be checked for fmax movement
+// (make timing BOARD=ulx3s CORE=penumbra2 VARIANT=probe) before the real
+// board fabric exists. This is the first build that puts the IF2
+// tag-compare / way-mux path and the L1<->L2 layer in front of nextpnr —
+// the timing data Decision 11's 4-way-vs-2-way choice is gated on. Static
+// timing analysis is the product; runtime behavior is not — the memory is
+// zero-initialized (INIT_FILE=""), so from reset the machine free-runs on
+// whatever an all-zero instruction word decodes to.
 //
-// The LED reduction at the bottom is load-bearing: it is the only
-// consumer of the core's outputs, so without it synthesis would prune
-// the entire core and the timing report would measure an empty design.
-// The buttons drive the IRQ inputs for the same reason — they keep the
-// interrupt-recognition logic in the timing cone.
+// The LED reduction at the bottom is load-bearing: it is the only consumer
+// of the machine's terminal outputs, so without it synthesis would prune
+// the design and the timing report would measure nothing. The buttons
+// drive the IRQ inputs for the same reason — they keep the
+// interrupt-recognition logic in the timing cone. The bus loop
+// (machine -> BRAM memory -> machine) keeps the whole memory system alive.
 //
 // Clocking is the 25 MHz crystal directly (no PLL): one clean clock
 // domain, directly comparable fmax numbers from build to build.
@@ -62,29 +66,52 @@ module ulx3s_penumbra2_probe_top (
         irq_sync2 <= irq_sync1;
     end
 
-    // ── The DUT: bare gen2 core (+ unified_mem inside) ───────────
+    // ── The DUT: the gen2 machine + a BRAM bus memory ────────────
     logic [SB_IDX_W-1:0] commit_idx;
     logic [31:0]         commit_data;
     logic                commit_we;
     logic                retire_valid;
     logic [OPC_W-1:0]    retire_op_class;
+    logic                prog_end;
 
-    penumbra2_core #(
-        .INIT_FILE ("")
-    ) u_core (
+    logic [31:0] bus_addr, bus_wdata, bus_rdata;
+    logic [3:0]  bus_byte_en;
+    logic        bus_re, bus_we, bus_busy;
+
+    machine_penumbra2 u_machine (
         .i_clk             (clk_25mhz),
         .i_rst             (rst),
         .i_irq             (irq_sync2[0]),
         .i_timer_irq       (irq_sync2[1]),
+        .o_bus_addr        (bus_addr),
+        .o_bus_wdata       (bus_wdata),
+        .o_bus_byte_en     (bus_byte_en),
+        .o_bus_re          (bus_re),
+        .o_bus_we          (bus_we),
+        .i_bus_rdata       (bus_rdata),
+        .i_bus_busy        (bus_busy),
         .o_commit_idx      (commit_idx),
         .o_commit_data     (commit_data),
         .o_commit_we       (commit_we),
         .o_retire_valid    (retire_valid),
-        .o_retire_op_class (retire_op_class)
+        .o_retire_op_class (retire_op_class),
+        .o_prog_end        (prog_end)
     );
 
-    // ── Keep-alive: fold the core's outputs onto the LEDs ────────
-    // Every core output must feed this register so no part of the
+    unified_bus_mem #(.INIT_FILE("")) u_mem (
+        .i_clk     (clk_25mhz),
+        .i_rst     (rst),
+        .i_addr    (bus_addr),
+        .i_wdata   (bus_wdata),
+        .i_byte_en (bus_byte_en),
+        .i_re      (bus_re),
+        .i_we      (bus_we),
+        .o_rdata   (bus_rdata),
+        .o_busy    (bus_busy)
+    );
+
+    // ── Keep-alive: fold the machine's outputs onto the LEDs ─────
+    // Every terminal output must feed this register so no part of the
     // commit/retire cone is dead at synthesis.
     logic [7:0] led_r;
     always_ff @(posedge clk_25mhz) begin
@@ -93,7 +120,8 @@ module ulx3s_penumbra2_probe_top (
                   ^ (^commit_data)
                   ^ commit_we
                   ^ retire_valid
-                  ^ (^retire_op_class)};
+                  ^ (^retire_op_class)
+                  ^ prog_end};
     end
     assign led = led_r;
 

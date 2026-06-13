@@ -31,11 +31,10 @@
 // at the completion cycle's edge. mem_latency = 0 degenerates to
 // unified_mem's hit-always registered read.
 //
-// The MMU port-B verdict is modeled the same way (mmu_bram's registered-read
-// contract): the query launched with o_mmu_req captures o_mmu_vaddr at the
-// edge and presents it as an identity, no-fault i_mmu_paddr verdict from the
-// data-ready cycle on, held until the next query. Translation faults are
-// exercised at core level, not here.
+// The MMU port-B verdict is modeled as permanently clean (i_mmu_fault low —
+// the stage consumes only the fault leg; the paddr goes to the cache's tag
+// compare, outside this stage). Translation faults are exercised at machine
+// level, not here.
 //
 // The deferred-path guard (no RDSYS may reach the stage) is an
 // `always_comb assert`, so a failed `$error` aborts the sim (exit 1). Run
@@ -66,14 +65,12 @@ static void check(const char* n, uint32_t g, uint32_t e) {
 // at the completion (busy-low request) cycle's edge; read-before-write.
 static uint32_t dmem[256];
 static uint32_t dmem_rdata_reg;
-static uint32_t mmu_paddr_reg;        // held port-B verdict (identity map)
 static int      mem_latency;          // busy cycles per access (0 = hit timing)
 static int      busy_count;           // countdown for the in-flight access
 
 static void mem_init() {
     for (int i = 0; i < 256; i++) dmem[i] = 0;
     dmem_rdata_reg = 0;
-    mmu_paddr_reg = 0;
     mem_latency = 0;
     busy_count = 0;
 }
@@ -89,14 +86,9 @@ static void tick(Vpenumbra2_mem_stage* dut) {
     uint32_t widx = (dut->o_dmem_addr >> 2) & 0xFF;
     uint32_t wd = dut->o_dmem_wdata;
     uint8_t  be = dut->o_dmem_byte_en;
-    bool     mmu_q  = dut->o_mmu_req;     // query launched this cycle
-    uint32_t mmu_va = dut->o_mmu_vaddr;
-
     dut->i_clk = 1; dut->eval();          // posedge: DUT registers update
 
-    if (mmu_q) mmu_paddr_reg = mmu_va;    // identity verdict, registered + held
-    dut->i_mmu_paddr = mmu_paddr_reg;
-    dut->i_mmu_fault = 0;
+    dut->i_mmu_fault = 0;                 // port-B verdict: always clean here
 
     if (en) busy_count = mem_latency;     // launch arms the completion delay
     else if (busy_count > 0) busy_count--;

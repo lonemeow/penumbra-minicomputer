@@ -3,8 +3,13 @@
 // Drives the launch pulse and the fetched word across clock edges, checking
 // the vector-fetch FSM's sequence against exception-flow.md:
 //   - dormant in IDLE; a fault commit launches entry
-//   - DRIVE owns the port and drives vector_table[vec<<2] with read-enable
-//   - WAIT redirects PC to the handler word on i_mem_rdata, then returns
+//   - DRIVE owns the port and drives vector_table[vec<<2] with read-enable,
+//     holding the launch while the port is still busy (a killed fetch's
+//     fill draining out)
+//   - WAIT holds the read request until the completion (busy-drop) cycle
+//     and captures the handler word there
+//   - the redirect fires one cycle after the completion, from the captured
+//     word, with the port still owned (o_active) through that cycle
 //   - the address is vec<<2 for several vectors
 //
 // The FSM's --assert invariants (no nested launch mid-fetch; redirect only in
@@ -29,6 +34,7 @@ static void tick(Vpenumbra2_vecfetch* dut) {
 
 static void clear(Vpenumbra2_vecfetch* dut) {
     dut->i_fault_commit = 0; dut->i_fault_vec = 0; dut->i_mem_rdata = 0;
+    dut->i_mem_busy = 0;
 }
 
 // Run one full entry for vector `vec` returning handler word `handler`; check
@@ -52,15 +58,25 @@ static void run_entry(Vpenumbra2_vecfetch* dut, int vec, uint32_t handler,
     snprintf(nm, sizeof nm, "%s_drive_no_redir", tag); check(nm, dut->o_redirect, 0);
     tick(dut);                                   // → WAIT
 
-    // WAIT: handler word arrives, redirect fires
+    // WAIT: handler word arrives (port done), captured at this edge — no
+    // redirect yet
     clear(dut);
     dut->i_mem_rdata = handler;
     dut->eval();
     snprintf(nm, sizeof nm, "%s_wait_active",   tag); check(nm, dut->o_active, 1);
-    snprintf(nm, sizeof nm, "%s_wait_redirect", tag); check(nm, dut->o_redirect, 1);
-    snprintf(nm, sizeof nm, "%s_wait_pc",       tag); check(nm, dut->o_redirect_pc, handler);
+    snprintf(nm, sizeof nm, "%s_wait_re",       tag); check(nm, dut->o_fetch_re, 1);
+    snprintf(nm, sizeof nm, "%s_wait_no_redir", tag); check(nm, dut->o_redirect, 0);
     snprintf(nm, sizeof nm, "%s_wait_no_fetch", tag); check(nm, dut->o_fetch_en, 0);
-    tick(dut);                                   // → IDLE
+    tick(dut);                                   // capture → redirect cycle
+
+    // Redirect cycle: the captured word steers PC; the port is still owned
+    clear(dut);
+    dut->i_mem_rdata = 0xBADBADBA;               // stale port data must not matter
+    dut->eval();
+    snprintf(nm, sizeof nm, "%s_redir_active", tag); check(nm, dut->o_active, 1);
+    snprintf(nm, sizeof nm, "%s_redirect",     tag); check(nm, dut->o_redirect, 1);
+    snprintf(nm, sizeof nm, "%s_redir_pc",     tag); check(nm, dut->o_redirect_pc, handler);
+    tick(dut);                                   // → fully idle
 
     // IDLE again
     clear(dut);
@@ -104,7 +120,10 @@ int main(int argc, char** argv) {
     check("lw_addr",      dut->o_fetch_addr, 5 << 2);
     tick(dut);                                   // → WAIT
     dut->i_mem_rdata = 0xAB000000; dut->eval();
+    check("lw_no_redir",  dut->o_redirect, 0);   // captured this edge
+    tick(dut); dut->eval();
     check("lw_redirect",  dut->o_redirect, 1);
+    check("lw_pc",        dut->o_redirect_pc, 0xAB000000);
     tick(dut);
 
     // ── Completion waits for the busy drop ───────────────────────
@@ -123,8 +142,12 @@ int main(int argc, char** argv) {
     check("cw_wait_re2",  dut->o_fetch_re, 1);
     check("cw_no_redir2", dut->o_redirect, 0);
     dut->i_mem_busy = 0; dut->i_mem_rdata = 0xFFFF0300; dut->eval();
-    check("cw_redirect",  dut->o_redirect, 1);   // drop-equals-valid
+    check("cw_done_no_redir", dut->o_redirect, 0);   // capture edge
+    tick(dut);
+    clear(dut); dut->i_mem_rdata = 0xBADBADBA; dut->eval();
+    check("cw_redirect",  dut->o_redirect, 1);       // from the captured word
     check("cw_pc",        dut->o_redirect_pc, 0xFFFF0300);
+    check("cw_active",    dut->o_active, 1);         // owned through the redirect
     tick(dut);
     clear(dut); dut->eval();
     check("cw_back_idle", dut->o_active, 0);

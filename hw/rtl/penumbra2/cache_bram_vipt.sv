@@ -39,11 +39,17 @@
 //
 //   Consumer obligations: hold the address/request inputs stable from
 //   launch to the completion cycle; never launch a new lookup (i_en)
-//   while o_busy=1; deassert the request the cycle after completion. A
-//   WRSYS that rewrites cache state under an in-flight lookup (INVAL_ALL,
-//   CTRL) leaves that lookup its pre-write verdict — benign, because
-//   WRSYS is context-synchronizing and the post-commit re-fetch discards
-//   the in-flight word.
+//   while o_busy=1; deassert the request the cycle after completion.
+//   Exception: a consumer whose slot is killed (a front-end flush, or the
+//   fetch-port handover to the vector-fetch FSM) may withdraw a *read*
+//   request mid-transaction — the cache owns transaction atomicity on the
+//   back side (S_FILL for a line, S_PT for an accepted pass-through
+//   beat), completes the in-flight transfer on its own state, and serves
+//   the result into the void. A write request has no kill source and must
+//   be held to completion. A WRSYS that rewrites cache state under an
+//   in-flight lookup (INVAL_ALL, CTRL) leaves that lookup its pre-write
+//   verdict — benign, because WRSYS is context-synchronizing and the
+//   post-commit re-fetch discards the in-flight word.
 //
 // Back-side contract (doc/internals/penumbra2/memory-interface.md):
 //   - A cacheable read miss raises one line request: o_mem_re=1 with
@@ -56,6 +62,11 @@
 //   - Everything else is a single beat forwarded with its full shape
 //     ({addr, wdata, byte_en, re, we, cacheable}); completion is the
 //     downstream busy-drop, the same handshake as the gen1 memory port.
+//     A pass-through read the downstream holds busy is latched into the
+//     S_PT hold (address + lane enables captured), so the back-side
+//     request stays presented to completion even if the front consumer
+//     withdraws — a presented transaction never vanishes mid-flight from
+//     the arbiter's or a bus device's point of view.
 //
 // Storage:
 //   - Tags and data are per-way BRAMs (separate generate-scoped
@@ -370,10 +381,18 @@ module cache_bram_vipt
     typedef enum logic [1:0] {
         S_IDLE,                 // resolve hits/writes/pass-through; detect misses
         S_FILL,                 // line request out; sequencer streams the line in
-        S_SERVE                 // deliver the captured word (busy-drop cycle)
+        S_SERVE,                // deliver the captured word (busy-drop cycle)
+        S_PT                    // accepted pass-through read held to completion
     } state_t;
 
     state_t state;
+
+    // S_PT capture: the accepted pass-through read's address and lane
+    // enables, so the back side keeps presenting them even if the front
+    // consumer withdraws (the lane enables matter — an MMIO device may
+    // honour read byte-enables).
+    logic [31:0] pt_addr_q;
+    logic [3:0]  pt_byte_en_q;
 
     logic [31:OFFSET_BITS] fill_base;       // line-aligned physical address
     logic [TAG_BITS-1:0]   fill_tag;
@@ -405,6 +424,13 @@ module cache_bram_vipt
                         fill_word_req <= word_q;
                         fill_way      <= WAY_BITS'(victim_way(valid_q, plru[set_q]));
                         got_word      <= 1'b0;
+                    end else if (pt_read && i_mem_busy) begin
+                        // The downstream accepted but did not complete the
+                        // pass-through read this cycle: hold it to
+                        // completion on our own state, kill-proof.
+                        state        <= S_PT;
+                        pt_addr_q    <= i_paddr;
+                        pt_byte_en_q <= i_byte_en;
                     end
                 end
                 S_FILL: begin
@@ -416,6 +442,7 @@ module cache_bram_vipt
                         state <= S_SERVE;
                 end
                 S_SERVE: state <= S_IDLE;
+                S_PT:    if (!i_mem_busy) state <= S_IDLE;
                 default: state <= S_IDLE;
             endcase
         end
@@ -511,6 +538,7 @@ module cache_bram_vipt
             end
             S_FILL:  o_busy = 1'b1;
             S_SERVE: o_busy = 1'b0;
+            S_PT:    o_busy = i_mem_busy;   // drops at the completion cycle
             default: o_busy = 1'b0;
         endcase
     end
@@ -519,9 +547,9 @@ module cache_bram_vipt
     // consumer keeps reading the same word; pass-through reads present
     // the downstream data (held by the device per the sync-bus contract).
     always_comb begin
-        if (state == S_SERVE) o_rdata = fill_rdata_q;
-        else if (pt_read)     o_rdata = i_mem_rdata;
-        else                  o_rdata = data_out[eff_way];
+        if (state == S_SERVE)               o_rdata = fill_rdata_q;
+        else if (state == S_PT || pt_read)  o_rdata = i_mem_rdata;
+        else                                o_rdata = data_out[eff_way];
     end
 
     // ══════════════════════════════════════════════════════════
@@ -556,6 +584,14 @@ module cache_bram_vipt
                 o_mem_addr      = {fill_base, {OFFSET_BITS{1'b0}}};
                 o_mem_re        = 1'b1;
                 o_mem_cacheable = 1'b1;
+            end
+            S_PT: begin
+                // The accepted pass-through read, held from the capture so
+                // it survives a withdrawn front request.
+                o_mem_addr      = pt_addr_q;
+                o_mem_byte_en   = pt_byte_en_q;
+                o_mem_re        = 1'b1;
+                o_mem_cacheable = 1'b0;
             end
             S_SERVE: ;
             default: ;

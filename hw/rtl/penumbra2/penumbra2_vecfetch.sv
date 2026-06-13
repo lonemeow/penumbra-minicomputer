@@ -27,8 +27,17 @@
 //   IDLE  — dormant; the fetch port belongs to IF1.
 //   DRIVE — own the port; once it is idle, drive vec<<2 + read-enable
 //           (launch the read).
-//   WAIT  — hold the read request; at the completion cycle the handler
-//           word is on i_mem_rdata: redirect PC to it, return.
+//   WAIT  — hold the read request; at the completion cycle capture the
+//           handler word from i_mem_rdata and return.
+//
+// The redirect fires from a register, one cycle after the completion, with
+// the captured handler word — not combinationally at the busy drop. The
+// request/busy mesh demands it: every memory layer's busy combinationally
+// follows its consumer's request (the sync-bus contract), so no request —
+// and nothing a request is gated on, like the front-end flush this redirect
+// drives — may combinationally depend on a busy, or the mesh closes into a
+// false combinational loop. o_active covers the redirect cycle, so the FSM
+// owns the port until its redirect has fired.
 
 module penumbra2_vecfetch (
     input  logic        i_clk,
@@ -75,47 +84,56 @@ module penumbra2_vecfetch (
     // Per-state work + transition, together so each state reads as "do this,
     // therefore advance". o_fetch_en and o_redirect are the control strobes
     // (the actual work); the data outputs below are state-independent muxes.
+    // The table read completes this cycle: the request is up and the port
+    // reports done (busy low, drop-equals-valid — the first WAIT cycle
+    // against the flat stand-in; the busy drop of the pass-through round
+    // trip in the machine).
+    logic read_done;
+    assign read_done = (state == S_WAIT) && !i_mem_busy;
+
     always_comb begin
         next_state = state;
-        o_fetch_en = 1'b0;
-        o_fetch_re = 1'b0;
-        o_redirect = 1'b0;
         case (state)
             S_IDLE: begin
                 // Dormant; launch entry when the commit point takes a fault.
                 if (i_fault_commit) next_state = S_DRIVE;
             end
             S_DRIVE: begin
-                // Launch the vector-table read — into an idle port only. The
-                // fault may have killed a fetch whose fill is still draining;
-                // that transaction completes into the void first (no lookup
-                // may launch while the port is busy), then the launch fires.
-                if (!i_mem_busy) begin
-                    o_fetch_en = 1'b1;
-                    next_state = S_WAIT;
-                end
+                // Hold until the port is idle: the fault may have killed a
+                // fetch whose fill is still draining, and no lookup may
+                // launch while it is busy. The launch (o_fetch_en below)
+                // fires with this transition.
+                if (!i_mem_busy) next_state = S_WAIT;
             end
             S_WAIT: begin
-                // The read launched in DRIVE resolves here. Hold the request
-                // level until the completion cycle (busy low, drop-equals-
-                // valid — the first WAIT cycle against the flat stand-in; the
-                // busy drop of the pass-through round trip in the machine),
-                // then redirect PC to the handler word and finish — downstream
-                // was already flushed at the fault commit, no flush needed.
-                o_fetch_re = 1'b1;
-                if (!i_mem_busy) begin
-                    o_redirect = 1'b1;
-                    next_state = S_IDLE;
-                end
+                if (read_done) next_state = S_IDLE;
             end
             default: next_state = S_IDLE;
         endcase
     end
 
-    // ── Data outputs (function of the latched vector / the read data) ─
-    assign o_active      = (state != S_IDLE);
+    // The launch fires on DRIVE's exit; the request holds through WAIT. The
+    // enable's busy gate is safe (a launch clock-enable feeds no busy), but
+    // the request must be busy-independent — see the header.
+    assign o_fetch_en = (state == S_DRIVE) && !i_mem_busy;
+    assign o_fetch_re = (state == S_WAIT);
+
+    // ── Registered redirect: captured word, next-cycle pulse ─────
+    logic        redirect_q;
+    logic [31:0] handler_q;
+    always_ff @(posedge i_clk) begin
+        if (i_rst) redirect_q <= 1'b0;
+        else       redirect_q <= read_done;
+        if (read_done) handler_q <= i_mem_rdata;
+    end
+    assign o_redirect = redirect_q;
+
+    // ── Data outputs (function of the latched vector / captured word) ─
+    // Ownership covers the redirect cycle: the port stays the FSM's until
+    // the redirect has fired, so IF1 cannot slip a launch in between.
+    assign o_active      = (state != S_IDLE) || redirect_q;
     assign o_fetch_addr  = {26'b0, vec_q, 2'b00};   // vec<<2, physical (RAM region: bit31=0)
-    assign o_redirect_pc = i_mem_rdata;             // handler word, valid at completion
+    assign o_redirect_pc = handler_q;               // captured at the completion
 
     // ══════════════════════════════════════════════════════════
     // Assertions — sim-only (Verilator --assert); stripped at synth.
@@ -123,17 +141,18 @@ module penumbra2_vecfetch (
 
     // No nested entry during a vector fetch: interrupts are masked and the
     // access is to a backed physical page, so a second fault cannot arrive
-    // while the FSM is mid-fetch. Sampled at the clock edge — fault_commit and
-    // state are both registered, so the check is on their edge-aligned values,
-    // not on combinational settling within the cycle.
+    // while the FSM is mid-fetch (including the trailing redirect cycle).
+    // Sampled at the clock edge — fault_commit and state are both
+    // registered, so the check is on their edge-aligned values, not on
+    // combinational settling within the cycle.
     assert property (@(posedge i_clk) disable iff (i_rst)
-        i_fault_commit |-> state == S_IDLE)
+        i_fault_commit |-> !o_active)
         else $error("penumbra2_vecfetch: fault commit during an in-progress vector fetch");
 
-    // The redirect fires only from WAIT, when the handler word is valid.
-    always_comb begin
-        assert (!o_redirect || state == S_WAIT)
-            else $error("penumbra2_vecfetch: redirect outside the WAIT state");
-    end
+    // The redirect fires exactly one cycle after the read completes — the
+    // FSM is back in IDLE, still owning the port through o_active.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        o_redirect |-> state == S_IDLE)
+        else $error("penumbra2_vecfetch: redirect outside the post-completion cycle");
 
 endmodule
