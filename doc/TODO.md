@@ -83,24 +83,35 @@ WRSYS *and* WRSPR encode their value register in the Rd field (as the assembler
 emits and gen1 reads), but gen2 decode read it from Rs (i.e. R0). Both were
 corrected to read the Rd field.
 
-WRSYS's fix is exercised by the round-trip test; WRSPR's is dormant because its
-write path is not yet wired: the spine ties off the SPR-file write port
-(`u_spr` `.i_spr_we(1'b0)`, `.i_spr_sel(4'd0)`, `.i_spr_value(32'b0)`), so
-WRSPR to ESR/EPC/USP/SCR cannot land. When the SPR write milestone wires that
-port (driven from the WB/commit path the way WRSYS drives the sysreg write),
-add a WRSPR→RDSPR round-trip test to exercise the now-corrected decode.
+The SPR access path is being wired in backend-ordered pieces:
 
-## Hardware: Penumbra/2 WRSPR-SR context-sync — pending with the SPR write path
+- **1a (done):** RDSPR/WRSPR EPC/ESR + RDSPR SR. EPC/ESR are SPR-file-backed
+  (not regfile entries) and commit at WB like any register write — the value
+  rides ALU_PASS to wb_value and the WB SPR strobe (previously tied off in the
+  spine) drives the SPR-file write, gated to EPC/ESR. RDSPR reads them as
+  operand B; the scoreboard downstream-writer predicate now counts `spr_we`.
+  RDSPR SR composes {committed S/I, flag-bypassed NZCV} in EX. WRSPR is **not**
+  a drain-commit — value SPRs are plain stores, unlike WRSYS. Tests:
+  `isa/test_wrspr_epc`, `isa/test_rdspr_sr` (pass on ISS/gen1/gen2). A spine
+  assertion fires if a WRSPR targets USP/SCRn before 1b/1c.
+- **1b:** WRSPR/RDSPR USP — routes to the regfile R14 bank (entry 14, the
+  `cross_bank` any-mode access the regmap already raises).
+- **1c:** WRSPR/RDSPR SCRn — needs the scratch register file (the TLB-miss
+  fast path's save area); unblocks `test_scratch_sprs`.
 
-WRSYS context-synchronization is positively verified: `test_tlb_resync`
-(isa/, `REQUIRES: mmu-d mmu-i`) unmaps the page holding the WRSYS's own
-successor and proves the re-fetch derives under the post-commit
-translation on every target; the exactly-once guard remains
-`make test-prog CORE=penumbra2 PROG=test_resync`.
+## Hardware: Penumbra/2 WRSPR-SR dropped (RESOLVED)
 
-Still open: WRSPR SR. `SR.S` gates fetch-translation privilege, so the SR
-write needs the same re-synchronization when its write path lands (it is
-tied off today — see the SPR write milestone above).
+WRSPR SR is reserved (illegal) on gen2: the kernel changes `SR.S`/`SR.I` via
+exception entry / ERET / EI / DI and NZCV via flag-writing ALU ops, never a
+direct SR write — and a direct `SR.S` write is the only SPR write that would
+need WRSYS-style context-synchronization (`SR.S` gates fetch-translation
+privilege). Dropping it removes that complexity entirely; the value SPRs need
+no context-sync. RDSPR SR stays (NetBSD spl/status reads it).
+
+gen1 and the ISS still accept WRSPR SR. Whether to drop it ISA-wide — make it
+illegal there too, update the ISA doc, and rewrite `isa/test_spr_sr` to
+manipulate `SR.I` with EI/DI instead of WRSPR SR — is a follow-up; that test
+is `REQUIRES: wrspr`, so it stays skipped on gen2 regardless.
 
 ## Hardware: build/test restructure to the BOARD×CORE matrix
 
