@@ -8,6 +8,8 @@
 
 package video_pkg;
 
+/* verilator lint_off UNUSEDPARAM */
+
     // Mode 0 — VESA 640x480 @ 60 Hz.
     localparam int H_ACTIVE = 640;
     localparam int H_FRONT  = 16;
@@ -22,5 +24,7 @@ package video_pkg;
     // (active-low on both axes for this mode).
     localparam bit H_SYNC_POL = 1'b0;
     localparam bit V_SYNC_POL = 1'b0;
+
+/* verilator lint_on UNUSEDPARAM */
 
 endpackage
