@@ -27,6 +27,15 @@ module machine_penumbra2_sim
     input  logic                  i_irq,
     input  logic                  i_timer_irq,
 
+    // UART byte stream (sim_uart's TX/RX), bridged to a host terminal by the
+    // interactive testbench. The program runner leaves the RX inputs unset
+    // (default 0 → idle) and ignores the TX outputs.
+    output logic                  o_uart_tx_valid,
+    output logic [7:0]            o_uart_tx_data,
+    input  logic                  i_uart_rx_valid,
+    input  logic [7:0]            i_uart_rx_data,
+    output logic                  o_uart_rx_ack,
+
     output logic [SB_IDX_W-1:0]   o_commit_idx,
     output logic [31:0]           o_commit_data,
     output logic                  o_commit_we,
@@ -104,19 +113,19 @@ module machine_penumbra2_sim
         .o_rdata(mem_rdata), .o_busy(mem_busy), .o_claimed(mem_claimed)
     );
 
-    // Sim UART (NS16450, no FIFO). TX/RX are observe-only here — the
-    // conformance program only exercises the register file and TX-busy timing
-    // — so the TX outputs and RX-ack are open and RX is idle.
-    /* verilator lint_off PINCONNECTEMPTY */
+    // Sim UART (NS16450, no FIFO). Its TX/RX byte stream is brought to the top
+    // so the interactive testbench can bridge it to a host terminal; the
+    // program runner leaves the RX inputs at their default (idle) and ignores
+    // the TX outputs.
     sim_uart u_uart (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_addr(bus_addr), .i_wdata(bus_wdata),
         .i_we(bus_we & uart_sel), .i_re(bus_re & uart_sel),
         .o_rdata(uart_rdata), .o_busy(uart_busy),
-        .o_tx_valid(), .o_tx_data(),
-        .i_rx_valid(1'b0), .i_rx_data(8'b0), .o_rx_ack(),
+        .o_tx_valid(o_uart_tx_valid), .o_tx_data(o_uart_tx_data),
+        .i_rx_valid(i_uart_rx_valid), .i_rx_data(i_uart_rx_data),
+        .o_rx_ack(o_uart_rx_ack),
         .o_irq(uart_irq)
     );
-    /* verilator lint_on PINCONNECTEMPTY */
 
 endmodule

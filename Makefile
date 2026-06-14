@@ -430,17 +430,35 @@ else
 DOCKER_RUN_IT = docker run --rm -u $(shell id -u):$(shell id -g) -it -v $(CURDIR):/work -w /work
 endif
 
+# simulate-rtl is CORE-aware: gen1 uses machine_sim + tb_interactive and needs
+# microcode.hex; gen2 uses machine_penumbra2_sim + tb_penumbra2_interactive and
+# has no microcode (CORE defaults to penumbra1, set above). Both wrappers load
+# the boot ROM from program.hex (their INIT_FILE default), built by hw/rom.
+ifeq ($(CORE),penumbra2)
+SIMRTL_TOP   := machine_penumbra2_sim
+SIMRTL_OUT   := Vmachine_penumbra2_sim_interactive
+SIMRTL_TOPSV := hw/rtl/sim/machine_penumbra2_sim.sv
+SIMRTL_TB    := hw/sim/tb_penumbra2_interactive.cpp
+else
+SIMRTL_TOP   := machine_sim
+SIMRTL_OUT   := Vmachine_sim_interactive
+SIMRTL_TOPSV := hw/rtl/sim/machine_sim.sv
+SIMRTL_TB    := hw/sim/tb_interactive.cpp
+endif
+
 .PHONY: simulate-rtl
 simulate-rtl:
 	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
 	$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) \
-		--top-module machine_sim \
-		--Mdir $(BUILD_DIR)/machine_sim_interactive.verilator \
-		-o ../Vmachine_sim_interactive \
-		$(PKG_SV) $$(find hw/rtl -name 'machine_sim.sv') hw/sim/tb_interactive.cpp
+		--top-module $(SIMRTL_TOP) \
+		--Mdir $(BUILD_DIR)/$(SIMRTL_TOP)_interactive.verilator \
+		-o ../$(SIMRTL_OUT) \
+		$(PKG_SV) $(SIMRTL_TOPSV) $(SIMRTL_TB)
 	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX) CFLAGS=$(CFLAGS)
+ifneq ($(CORE),penumbra2)
 	@$(UASM) hw/microcode/microcode.uasm -o microcode.hex
-	@$(DOCKER_RUN_IT) --entrypoint ./$(BUILD_DIR)/Vmachine_sim_interactive $(DOCKER_IMAGE) $(if $(SDCARD),+sdcard=$(SDCARD)) $(if $(TRACE),+trace=$(TRACE)) $(if $(TRACE_WINDOW),+trace_window=$(TRACE_WINDOW)) $(if $(HALT_ON),'+halt_on=$(HALT_ON)') $(if $(STDIN_FILE),+stdin_file=$(STDIN_FILE))
+endif
+	@$(DOCKER_RUN_IT) --entrypoint ./$(BUILD_DIR)/$(SIMRTL_OUT) $(DOCKER_IMAGE) $(if $(SDCARD),+sdcard=$(SDCARD)) $(if $(TRACE),+trace=$(TRACE)) $(if $(TRACE_WINDOW),+trace_window=$(TRACE_WINDOW)) $(if $(HALT_ON),'+halt_on=$(HALT_ON)') $(if $(STDIN_FILE),+stdin_file=$(STDIN_FILE))
 
 # ── SD card image ──────────────────────────────────────────────
 # Builds SD image with bootloader, kernel, and optionally a root filesystem.
