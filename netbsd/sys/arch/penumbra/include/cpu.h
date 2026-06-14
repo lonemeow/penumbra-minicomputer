@@ -38,7 +38,21 @@ struct cpu_info {
 
 extern struct cpu_info cpu_info_store;
 #define	curcpu()		(&cpu_info_store)
-#define	curlwp			(curcpu()->ci_curlwp)
+#ifdef _KERNEL
+/*
+ * curlwp is pinned in R12, the ABI thread-pointer register.  The kernel has
+ * no TLS, so R12 is otherwise unused: reading curlwp becomes a register access
+ * instead of a load of cpu_info_store.ci_curlwp, and the value survives calls
+ * for free because R12 is reserved (never allocated by the compiler).
+ * cpu_info_store.ci_curlwp stays the canonical copy — cpu_switchto keeps both
+ * in sync, and the trap entry path reloads R12 from it on kernel entry (a
+ * userland trap arrives with R12 holding the user's TLS pointer instead).
+ */
+register struct lwp *__curlwp __asm("r12");
+#define	curlwp			__curlwp
+#else
+#define	curlwp			(curcpu()->ci_curlwp)	/* _KMEMUSER: no reg binding */
+#endif
 #define	cpu_number()		0		/* uniprocessor */
 
 /* CPU clock frequency in Hz, populated at cpu_attach time from

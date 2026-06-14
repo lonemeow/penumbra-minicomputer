@@ -500,10 +500,16 @@ cpu_lwp_fork(struct lwp *l1, struct lwp *l2, void *stack, size_t stacksize,
 	/*
 	 * Set up pcb_context so cpu_switchto resumes into lwp_trampoline.
 	 * lwp_trampoline expects: R5=func, R6=arg, R7=newlwp.
+	 *
+	 * R12 (curlwp) must be seeded explicitly: the *pcb2 = *pcb1 copy above
+	 * left the parent's R12 in the child's context, and cpu_switchto
+	 * restores R12 from pcb_context, so without this the child would resume
+	 * with the parent as curlwp.
 	 */
 	pcb2->pcb_context.val[_JB_R5]  = (register_t)func;
 	pcb2->pcb_context.val[_JB_R6]  = (register_t)arg;
 	pcb2->pcb_context.val[_JB_R7]  = (register_t)l2;
+	pcb2->pcb_context.val[_JB_R12] = (register_t)l2;	/* curlwp */
 	pcb2->pcb_context.val[_JB_R13] = (register_t)lwp_trampoline;
 	pcb2->pcb_context.val[_JB_R14] = (register_t)tf2;
 }

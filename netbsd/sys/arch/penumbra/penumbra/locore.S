@@ -569,6 +569,12 @@ _start_bias:
 	la	sp, _boot_stack_top
 
 	/*
+	 * Pin curlwp in R12 (the kernel thread-pointer register) before any
+	 * C code runs.  curlwp == &lwp0 until the first context switch.
+	 */
+	la	r12, lwp0
+
+	/*
 	 * Phase 1: early init on boot stack.
 	 * penumbra_init() returns the new SP (lwp0 kernel stack top)
 	 * in R1.  Must switch to it before calling main(), since
@@ -969,6 +975,17 @@ _trap_common:
 	stw	r1, [r14 + TF_BADVADDR]
 	ldw	r1, [pc + _trap_save_hw_fstat - .]
 	stw	r1, [r14 + TF_FAULT_STATUS]
+
+	/*
+	 * Establish curlwp in R12 for the kernel C code about to run.  On
+	 * entry from user mode R12 held the user's TLS pointer (already saved
+	 * to the trapframe above); on entry from kernel mode it already held
+	 * curlwp.  Reload unconditionally from the canonical copy — a register
+	 * load is cheaper than branching on the entry mode and is correct
+	 * either way.  (CI_CURLWP is offset 0: ci_curlwp is first in cpu_info.)
+	 */
+	la	r12, cpu_info_store
+	ldw	r12, [r12 + CI_CURLWP]
 
 	/* Call trap(tf) — R1 = pointer to trapframe */
 	mov	r1, r14
