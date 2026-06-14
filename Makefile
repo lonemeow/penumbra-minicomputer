@@ -432,27 +432,33 @@ else
 DOCKER_RUN_IT = docker run --rm -u $(shell id -u):$(shell id -g) -it -v $(CURDIR):/work -w /work
 endif
 
-# simulate-rtl is CORE-aware: both cores share the sim_console.cpp frontend
-# behind a per-core shim. gen1 uses machine_sim + tb_penumbra1_interactive and
-# needs microcode.hex; gen2 uses machine_penumbra2_sim + tb_penumbra2_interactive
-# and has no microcode (CORE defaults to penumbra1, set above). Both wrappers
-# load the boot ROM from program.hex (their INIT_FILE default), built by hw/rom.
+# simulate-rtl and benchmark-rtl are CORE-aware: both cores share the
+# sim_console.cpp frontend behind a per-core shim. gen1 uses machine_sim +
+# tb_penumbra1_interactive and needs microcode.hex; gen2 uses
+# machine_penumbra2_sim + tb_penumbra2_interactive and has no microcode (CORE
+# defaults to penumbra1, set above). Both wrappers load the boot ROM from
+# program.hex (their INIT_FILE default), built by hw/rom.
 ifeq ($(CORE),penumbra2)
-SIMRTL_TOP   := machine_penumbra2_sim
-SIMRTL_OUT   := Vmachine_penumbra2_sim_interactive
-SIMRTL_TOPSV := hw/rtl/sim/machine_penumbra2_sim.sv
-SIMRTL_TB    := hw/sim/tb_penumbra2_interactive.cpp
+SIMRTL_TOP    := machine_penumbra2_sim
+SIMRTL_OUT    := Vmachine_penumbra2_sim_interactive
+SIMRTL_TOPSV  := hw/rtl/sim/machine_penumbra2_sim.sv
+SIMRTL_TB     := hw/sim/tb_penumbra2_interactive.cpp
+# gen2's unified_bus_mem defaults to 64 KB (sized for conformance); enlarge the
+# RAM region for the interactive/benchmark builds so a real boot image fits.
+# gen1's machine_sim already carries a large simple_mem, so it needs no override.
+SIMRTL_GFLAGS := -GMEM_REGION_WORDS=2097152   # 8 MB RAM region
 else
-SIMRTL_TOP   := machine_sim
-SIMRTL_OUT   := Vmachine_sim_interactive
-SIMRTL_TOPSV := hw/rtl/sim/machine_sim.sv
-SIMRTL_TB    := hw/sim/tb_penumbra1_interactive.cpp
+SIMRTL_TOP    := machine_sim
+SIMRTL_OUT    := Vmachine_sim_interactive
+SIMRTL_TOPSV  := hw/rtl/sim/machine_sim.sv
+SIMRTL_TB     := hw/sim/tb_penumbra1_interactive.cpp
+SIMRTL_GFLAGS :=
 endif
 
 .PHONY: simulate-rtl
 simulate-rtl:
 	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
-	$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) \
+	$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) $(SIMRTL_GFLAGS) \
 		--top-module $(SIMRTL_TOP) \
 		--Mdir $(BUILD_DIR)/$(SIMRTL_TOP)_interactive.verilator \
 		-o ../$(SIMRTL_OUT) \
@@ -630,18 +636,20 @@ benchmark: sdimage-bench $(ISS)
 .PHONY: benchmark-rtl
 benchmark-rtl: sdimage-bench
 	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
-	$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) \
-		--top-module machine_sim \
-		--Mdir $(BUILD_DIR)/machine_sim_interactive.verilator \
-		-o ../Vmachine_sim_interactive \
-		$(PKG_SV) $$(find hw/rtl -name 'machine_sim.sv') hw/sim/tb_penumbra1_interactive.cpp hw/sim/sim_console.cpp
+	$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) $(SIMRTL_GFLAGS) \
+		--top-module $(SIMRTL_TOP) \
+		--Mdir $(BUILD_DIR)/$(SIMRTL_TOP)_interactive.verilator \
+		-o ../$(SIMRTL_OUT) \
+		$(PKG_SV) $(SIMRTL_TOPSV) $(SIMRTL_TB) hw/sim/sim_console.cpp
 	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX) CFLAGS=$(CFLAGS)
+ifneq ($(CORE),penumbra2)
 	@$(UASM) hw/microcode/microcode.uasm -o microcode.hex
+endif
 	@for elf in $(BENCH_ELFS); do \
 		echo "═══ Running $$elf on RTL sim ═══"; \
 		echo "boot sd:0,0/$$elf" | \
 			docker run --rm -u $(shell id -u):$(shell id -g) -i -v $(CURDIR):/work -w /work \
-			--entrypoint ./$(BUILD_DIR)/Vmachine_sim_interactive \
+			--entrypoint ./$(BUILD_DIR)/$(SIMRTL_OUT) \
 			$(DOCKER_IMAGE) +sdcard=$(BENCH_IMG) \
 			|| echo "*** $$elf FAILED ***"; \
 		echo ""; \
