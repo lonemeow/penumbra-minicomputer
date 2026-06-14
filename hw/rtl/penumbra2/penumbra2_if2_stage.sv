@@ -59,6 +59,7 @@ module penumbra2_if2_stage
     // held level from the resolve cycle until the completion is consumed.
     input  logic [31:0] i_ir,
     input  logic        i_mem_busy,
+    input  logic        i_mem_fault,    // bus fault on the fetch, at the i_mem_busy drop
     output logic        o_fetch_re,
 
     // ── MMU I-side verdict (port A; query launched with IF1's fetch) ──
@@ -85,17 +86,24 @@ module penumbra2_if2_stage
 
     // ── IF-stage fault detect + payload composition ──────────────
     // Only a real fetch consumes the verdict (a bubble's query is never
-    // read). Alignment outranks the TLB verdict — a misaligned address
-    // cannot be meaningfully translated; the vector derives from the
-    // composed status type, the single classification.
-    logic        align_fault, tlb_fault, fault_pending;
-    logic [31:0] fault_status;
-    assign align_fault   = i_valid & (i_pc[1:0] != 2'b00);
-    assign tlb_fault     = i_valid & i_mmu_fault & ~align_fault;
-    assign fault_pending = align_fault | tlb_fault;
-    assign fault_status  = align_fault ? {20'b0, i_user_mode, ACC_EXEC, 4'b0, FAULT_ALIGN}
-                         : tlb_fault   ? i_mmu_fault_status
-                         :               32'b0;   // FAULT_NONE
+    // read). Faults split by when they are known:
+    //   * Early faults — alignment (from the PC) and TLB (from the held
+    //     verdict) — are known at resolve, before the fetch issues. The slot
+    //     raises no request and advances carrying only its tag. Alignment
+    //     outranks the TLB verdict: a misaligned address cannot be
+    //     meaningfully translated.
+    //   * A bus fault is late: it is only known when the requested word
+    //     comes back faulted (i_mem_fault at the completion). So a bus-
+    //     faulting slot *does* issue, waits out the port, and learns its
+    //     fault on the busy-drop cycle (carried by the skid if ID is stalled
+    //     just then). Composed below at the register where the word lands.
+    // Every IF-side fault's FAULT_ADDR is the slot's own pc (set by MEM), and
+    // its vector derives from the composed status type — the single
+    // classification.
+    logic        align_fault, tlb_fault, early_fault;
+    assign align_fault = i_valid & (i_pc[1:0] != 2'b00);
+    assign tlb_fault   = i_valid & i_mmu_fault & ~align_fault;
+    assign early_fault = align_fault | tlb_fault;
 
     // ── Fetch request ────────────────────────────────────────────
     // A valid, un-faulted slot whose word is not already parked in the skid
@@ -109,15 +117,34 @@ module penumbra2_if2_stage
     // the engaged fill completes into the void on the cache's own state —
     // the one consumer obligation that always survives the kill is "no new
     // launch while busy", and IF1's gate holds that.
-    logic        skid_full;
+    logic        skid_full, skid_fault;
     logic [31:0] skid_ir;
-    assign o_fetch_re = i_valid & ~fault_pending & ~skid_full & ~i_flush;
+    assign o_fetch_re = i_valid & ~early_fault & ~skid_full & ~i_flush;
 
     // The slot can leave this cycle: its word is available (skid, or the
     // port completing — for a hit, the resolve cycle itself), or it carries
-    // only its fault tag and never waits on the port.
+    // only an early-fault tag and never waits on the port.
     logic word_avail;
-    assign word_avail = fault_pending | skid_full | ~i_mem_busy;
+    assign word_avail = early_fault | skid_full | ~i_mem_busy;
+
+    // ── Late bus fault + outgoing fault composition ──────────────
+    // The requested word completes faulted (i_mem_fault on the busy-drop), or
+    // a faulted completion was parked in the skid. Either way the slot leaves
+    // carrying FAULT_BUS instead of its (garbage) word; a coincident flush
+    // drops the request, so a wrong-path fetch never takes the fault.
+    logic        bus_fault_deliver, out_fault_pending;
+    logic [31:0] out_fault_status;
+    assign bus_fault_deliver = skid_full ? skid_fault
+                                         : (o_fetch_re & ~i_mem_busy & i_mem_fault);
+    assign out_fault_pending = early_fault | bus_fault_deliver;
+    // Status by source — a fetch is always an execute access (ACC_EXEC):
+    // alignment and bus compose here, the TLB status arrives composed.
+    always_comb begin
+        if      (align_fault)       out_fault_status = compose_fault_status(i_user_mode, ACC_EXEC, FAULT_ALIGN);
+        else if (tlb_fault)         out_fault_status = i_mmu_fault_status;
+        else if (bus_fault_deliver) out_fault_status = compose_fault_status(i_user_mode, ACC_EXEC, FAULT_BUS);
+        else                        out_fault_status = 32'b0;   // FAULT_NONE
+    end
 
     // ── Issue / back-pressure control ────────────────────────────
     // A taken-branch flush wins over back-pressure: the in-flight fetch is
@@ -167,8 +194,9 @@ module penumbra2_if2_stage
             if (i_flush) begin              // wrong-path word: drop it
                 skid_full <= 1'b0;
             end else if (skid_capture) begin
-                skid_ir   <= i_ir;
-                skid_full <= 1'b1;
+                skid_ir    <= i_ir;
+                skid_fault <= i_mem_fault;   // carry a faulted completion across the park
+                skid_full  <= 1'b1;
             end else if (skid_release) begin
                 skid_full <= 1'b0;
             end
@@ -185,9 +213,9 @@ module penumbra2_if2_stage
                 o_ir            <= skid_full ? skid_ir : i_ir;
                 o_pc            <= i_pc;
                 o_next_pc       <= i_next_pc;
-                o_fault_pending <= fault_pending;
-                o_fault_vec     <= fault_pending ? fault_vec_of(fault_status[3:0]) : 4'd0;
-                o_fault_status  <= fault_status;
+                o_fault_pending <= out_fault_pending;
+                o_fault_vec     <= out_fault_pending ? fault_vec_of(out_fault_status[3:0]) : 4'd0;
+                o_fault_status  <= out_fault_status;
             end
         end
     end

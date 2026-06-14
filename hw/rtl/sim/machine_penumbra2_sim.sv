@@ -15,7 +15,11 @@ module machine_penumbra2_sim
     import penumbra2_pkg::*;
 #(
     parameter logic [31:0] RESET_PC         = 32'hFFFF_0000,
-    parameter int          MEM_REGION_WORDS = 4096,
+    // Sim RAM/ROM region size. Big enough that conformance programs' data and
+    // stacks fit without an unbacked (faulting) access — the widest gen2 test
+    // walks four pages up to 0x5000. The bus-fault tests pick 0x0200_0000 as
+    // their "no device" address precisely because it is far above this.
+    parameter int          MEM_REGION_WORDS = 16384,   // 64 KiB per region
     parameter string       INIT_FILE        = "program.hex"
 )(
     input  logic                  i_clk,
@@ -33,11 +37,11 @@ module machine_penumbra2_sim
 
     logic [31:0] bus_addr, bus_wdata, bus_rdata;
     logic [3:0]  bus_byte_en;
-    logic        bus_re, bus_we, bus_busy;
+    logic        bus_re, bus_we, bus_busy, bus_fault;
 
     // External-bus fabric (memory + UART) and the combined external IRQ.
     logic [31:0] mem_rdata, uart_rdata;
-    logic        mem_busy, uart_busy, uart_irq;
+    logic        mem_busy, uart_busy, uart_irq, mem_claimed;
     logic        uart_sel, uart_sel_r, irq_combined;
 
     machine_penumbra2 #(
@@ -55,6 +59,7 @@ module machine_penumbra2_sim
         .o_bus_byte_en(bus_byte_en),
         .o_bus_re(bus_re), .o_bus_we(bus_we),
         .i_bus_rdata(bus_rdata), .i_bus_busy(bus_busy),
+        .i_bus_fault(bus_fault),
         .o_commit_idx(o_commit_idx), .o_commit_data(o_commit_data),
         .o_commit_we(o_commit_we),
         .o_retire_valid(o_retire_valid),
@@ -63,11 +68,15 @@ module machine_penumbra2_sim
     );
 
     // ── Bus fabric: memory + a fixed-address UART ────────────────
-    // The UART decodes a 4 KB page at UART_BASE; every other address is the
-    // unified memory. Only the selected device sees the access. busy follows
-    // the live select (asserted the access cycle); read data follows the
-    // registered select (valid on the busy-drop cycle, the registered-read
-    // contract). The UART IRQ joins the machine's external i_irq line.
+    // Each slave owns its own address decode: the UART claims a 4 KB page at
+    // UART_BASE (its register window), the memory claims the RAM/ROM addresses
+    // it actually backs (o_claimed, from its own size). No fabric-side address
+    // map — on the external async bus what is mapped is discovered at boot, so
+    // a no-device access is detected as the *absence of any slave's claim*
+    // (the canonical no-device fault — see bus-protocol.md), not by a master
+    // that pretends to know the layout. busy follows the live select; read
+    // data follows the registered select (the registered-read contract). The
+    // UART IRQ joins the machine's external i_irq line.
     localparam int UART_PAGE_SIZE = 4096;
 
     bus_devsel #(.BASE(UART_BASE), .SIZE(32'(UART_PAGE_SIZE)))
@@ -76,6 +85,7 @@ module machine_penumbra2_sim
 
     assign bus_busy     = uart_sel   ? uart_busy  : mem_busy;
     assign bus_rdata    = uart_sel_r ? uart_rdata : mem_rdata;
+    assign bus_fault    = (bus_re | bus_we) & ~(uart_sel | mem_claimed);
     assign irq_combined = i_irq | uart_irq;
 
     unified_bus_mem #(
@@ -83,8 +93,8 @@ module machine_penumbra2_sim
     ) u_mem (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_addr(bus_addr), .i_wdata(bus_wdata), .i_byte_en(bus_byte_en),
-        .i_re(bus_re & ~uart_sel), .i_we(bus_we & ~uart_sel),
-        .o_rdata(mem_rdata), .o_busy(mem_busy)
+        .i_re(bus_re), .i_we(bus_we),
+        .o_rdata(mem_rdata), .o_busy(mem_busy), .o_claimed(mem_claimed)
     );
 
     // Sim UART (NS16450, no FIFO). TX/RX are observe-only here — the

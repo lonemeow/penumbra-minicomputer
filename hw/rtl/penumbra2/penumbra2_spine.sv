@@ -62,6 +62,7 @@ module penumbra2_spine
     output logic                  o_dmem_en,
     input  logic [31:0]           i_dmem_rdata,
     input  logic                  i_dmem_busy,
+    input  logic                  i_dmem_fault,    // bus fault on the data access, at i_dmem_busy drop
 
     // ── MMU D-side translate (MEM's port-B query, exposed to the core) ──
     output logic [31:0]           o_mmu_vaddr,
@@ -427,6 +428,7 @@ module penumbra2_spine
         .o_dmem_byte_en(o_dmem_byte_en), .o_dmem_re(o_dmem_re),
         .o_dmem_we(o_dmem_we), .o_dmem_en(o_dmem_en),
         .i_dmem_rdata(i_dmem_rdata), .i_dmem_busy(i_dmem_busy),
+        .i_dmem_fault(i_dmem_fault),
         .o_mmu_vaddr(o_mmu_vaddr), .o_mmu_access_type(o_mmu_access_type),
         .o_mmu_req(o_mmu_req), .i_user_mode(~i_supervisor),
         .i_mmu_fault(i_mmu_fault), .i_mmu_fault_status(i_mmu_fault_status),

@@ -59,10 +59,12 @@ module txn_arbiter #(
     input  logic        i_i_cacheable,
     output logic [31:0] o_i_rdata,
     output logic        o_i_busy,
+    output logic                   o_i_fault,       // beat fault (rides o_i_busy drop)
     output logic                   o_i_fill_we,
     output logic [FILL_WORD_W-1:0] o_i_fill_word,
     output logic [31:0]            o_i_fill_wdata,
     output logic                   o_i_fill_done,
+    output logic                   o_i_fill_fault,  // line aborted by a faulting beat
 
     // ── Port D: data L1 back side ──────────────────────────────────
     input  logic [31:0] i_d_addr,
@@ -73,10 +75,12 @@ module txn_arbiter #(
     input  logic        i_d_cacheable,
     output logic [31:0] o_d_rdata,
     output logic        o_d_busy,
+    output logic                   o_d_fault,       // beat fault (rides o_d_busy drop)
     output logic                   o_d_fill_we,
     output logic [FILL_WORD_W-1:0] o_d_fill_word,
     output logic [31:0]            o_d_fill_wdata,
     output logic                   o_d_fill_done,
+    output logic                   o_d_fill_fault,  // line aborted by a faulting beat
 
     // ── Downstream: the fill sequencer's upstream port ─────────────
     output logic [31:0] o_m_addr,
@@ -87,10 +91,12 @@ module txn_arbiter #(
     output logic        o_m_cacheable,
     input  logic [31:0] i_m_rdata,
     input  logic        i_m_busy,
+    input  logic        i_m_fault,        // beat fault (rides i_m_busy drop)
     input  logic                   i_fill_we,
     input  logic [FILL_WORD_W-1:0] i_fill_word,
     input  logic [31:0]            i_fill_wdata,
-    input  logic                   i_fill_done
+    input  logic                   i_fill_done,
+    input  logic                   i_fill_fault      // line aborted by a faulting beat
 );
 
     // ── Pending requests, this cycle ──────────────────────────────
@@ -113,7 +119,10 @@ module txn_arbiter #(
     // an idle arbiter never spuriously completes.
     logic is_line, complete;
     assign is_line  = mq_re & mq_cacheable;
-    assign complete = mq_valid & (is_line ? i_fill_done
+    // A line completes on the sequencer's fill_done, or aborts on its
+    // fill_fault (a faulting beat); a single beat completes on the busy-drop,
+    // fault or not. Both are completion events that free the register.
+    assign complete = mq_valid & (is_line ? (i_fill_done | i_fill_fault)
                                           : ((mq_re | mq_we) & ~i_m_busy));
 
     // ── Launch select ─────────────────────────────────────────────
@@ -174,10 +183,18 @@ module txn_arbiter #(
     assign o_i_busy  = (i_owns & complete) ? 1'b0 : i_req;
     assign o_d_busy  = (d_owns & complete) ? 1'b0 : d_req;
 
-    assign o_i_fill_we    = i_fill_we   & i_owns;
-    assign o_i_fill_done  = i_fill_done & i_owns;
-    assign o_d_fill_we    = i_fill_we   & d_owns;
-    assign o_d_fill_done  = i_fill_done & d_owns;
+    // Beat fault rides the owner's busy-drop (single-beat completion only —
+    // a line's fault travels on the fill-fault strobe). Line fault routes
+    // like fill_done: to the owning side alone.
+    assign o_i_fault = i_owns & complete & ~is_line & i_m_fault;
+    assign o_d_fault = d_owns & complete & ~is_line & i_m_fault;
+
+    assign o_i_fill_we    = i_fill_we    & i_owns;
+    assign o_i_fill_done  = i_fill_done  & i_owns;
+    assign o_i_fill_fault = i_fill_fault & i_owns;
+    assign o_d_fill_we    = i_fill_we    & d_owns;
+    assign o_d_fill_done  = i_fill_done  & d_owns;
+    assign o_d_fill_fault = i_fill_fault & d_owns;
     assign o_i_fill_word  = i_fill_word;
     assign o_d_fill_word  = i_fill_word;
     assign o_i_fill_wdata = i_fill_wdata;
@@ -204,7 +221,7 @@ module txn_arbiter #(
 
     // Fill activity only belongs to an in-flight line transaction.
     assert property (@(posedge i_clk) disable iff (i_rst)
-        (i_fill_we || i_fill_done) |-> (mq_valid && is_line))
+        (i_fill_we || i_fill_done || i_fill_fault) |-> (mq_valid && is_line))
         else $error("txn_arbiter: fill activity outside a line transaction");
 
     // The presented request has a sane single shape.

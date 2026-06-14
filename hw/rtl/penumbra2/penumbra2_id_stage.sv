@@ -257,7 +257,12 @@ module penumbra2_id_stage
         end else begin
             o_valid <= next_valid;
             if (issue) begin
-                o_op_class         <= d_op_class;
+                // A faulting slot is inert, so it must not report a real op
+                // class downstream: an IF-faulted word's garbage decode could
+                // otherwise read as BREAK/SYSCALL at the retire port and (e.g.)
+                // trip the program-end pulse. Neutralise it to a benign ALU
+                // class — the same reason o_is_trap is gated below.
+                o_op_class         <= insn_fault_pending ? OPC_ALU : d_op_class;
                 o_alu_op           <= d_alu_op;
                 o_divmul_op        <= d_divmul_op;
                 o_op_a             <= op_a_sel;

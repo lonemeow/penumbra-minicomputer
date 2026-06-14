@@ -76,7 +76,7 @@ module ulx3s_penumbra2_probe_top (
 
     logic [31:0] bus_addr, bus_wdata, bus_rdata;
     logic [3:0]  bus_byte_en;
-    logic        bus_re, bus_we, bus_busy;
+    logic        bus_re, bus_we, bus_busy, mem_claimed;
 
     machine_penumbra2 u_machine (
         .i_clk             (clk_25mhz),
@@ -90,6 +90,9 @@ module ulx3s_penumbra2_probe_top (
         .o_bus_we          (bus_we),
         .i_bus_rdata       (bus_rdata),
         .i_bus_busy        (bus_busy),
+        // No-device fault = the memory declined to claim the address (its own
+        // decode). Keeps the fault path live through synthesis for timing.
+        .i_bus_fault       ((bus_re | bus_we) & ~mem_claimed),
         .o_commit_idx      (commit_idx),
         .o_commit_data     (commit_data),
         .o_commit_we       (commit_we),
@@ -107,7 +110,8 @@ module ulx3s_penumbra2_probe_top (
         .i_re      (bus_re),
         .i_we      (bus_we),
         .o_rdata   (bus_rdata),
-        .o_busy    (bus_busy)
+        .o_busy    (bus_busy),
+        .o_claimed (mem_claimed)
     );
 
     // ── Keep-alive: fold the machine's outputs onto the LEDs ─────

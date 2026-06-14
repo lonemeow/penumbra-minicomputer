@@ -32,9 +32,13 @@
 // retiring BREAK — gen2 traps rather than halts, and in-order commit
 // guarantees architectural state is final when the pulse fires.
 //
-// Not yet plumbed: a bus-fault return path through L2/arbiter/L1 (gen1
-// reports no-device-at-address into the core; gen2's path carries no fault
-// signal yet), and the SYSDEV_BUS device.
+// A bus fault (no device at the address, or a slave rejecting an access)
+// returns inward as a completion companion: i_bus_fault rides the external
+// busy-drop, L2/sequencer/arbiter/L1 each carry it alongside the completion
+// they already forward (a faulting line beat aborts the fill), and it enters
+// the core as a fetch- or data-side fault, vectoring to VEC_BUS_FAULT with
+// the faulting vaddr in FAULT_ADDR. Deferred: a fault on L2's own line fill
+// while L2 is enabled (asserted in l2_cache); the SYSDEV_BUS device.
 
 module machine_penumbra2
     import penumbra_pkg::*;
@@ -70,6 +74,7 @@ module machine_penumbra2
     output logic                  o_bus_we,
     input  logic [31:0]           i_bus_rdata,
     input  logic                  i_bus_busy,
+    input  logic                  i_bus_fault,   // no-device / slave access fault, at the busy-drop
 
     // ── Commit / retire observability ────────────────────────────
     output logic [SB_IDX_W-1:0]   o_commit_idx,
@@ -90,10 +95,11 @@ module machine_penumbra2
     // ── Core <-> memory-system wires ─────────────────────────────
     logic [31:0] fetch_addr;
     logic        fetch_en, fetch_re, fetch_busy, fetch_bypass, fetch_user;
+    logic        fetch_fault;
     logic [31:0] fetch_rdata;
     logic [31:0] dmem_addr, dmem_wdata, dmem_rdata;
     logic [3:0]  dmem_byte_en;
-    logic        dmem_re, dmem_we, dmem_en, dmem_busy;
+    logic        dmem_re, dmem_we, dmem_en, dmem_busy, dmem_fault;
 
     // MMU verdicts (port A = fetch, port B = data)
     logic [31:0] mmu_a_paddr, mmu_b_paddr;
@@ -133,6 +139,7 @@ module machine_penumbra2
         .o_fetch_addr(fetch_addr), .o_fetch_en(fetch_en),
         .o_fetch_re(fetch_re),
         .i_fetch_rdata(fetch_rdata), .i_fetch_busy(fetch_busy),
+        .i_fetch_fault(fetch_fault),
         .o_fetch_bypass(fetch_bypass), .o_fetch_user(fetch_user),
         .i_fetch_mmu_fault(mmu_a_fault),
         .i_fetch_mmu_fault_status(mmu_a_fstatus),
@@ -140,6 +147,7 @@ module machine_penumbra2
         .o_dmem_byte_en(dmem_byte_en), .o_dmem_re(dmem_re),
         .o_dmem_we(dmem_we), .o_dmem_en(dmem_en),
         .i_dmem_rdata(dmem_rdata), .i_dmem_busy(dmem_busy),
+        .i_dmem_fault(dmem_fault),
         .o_mmu_vaddr(mmu_vaddr), .o_mmu_access_type(mmu_access_type),
         .o_mmu_user(mmu_user), .o_mmu_req(mmu_req),
         .i_mmu_fault(mmu_b_fault), .i_mmu_fault_status(mmu_b_fstatus),
@@ -200,8 +208,9 @@ module machine_penumbra2
     logic        l1i_mem_re, l1i_mem_we, l1i_mem_cacheable;
     logic        l1d_mem_re, l1d_mem_we, l1d_mem_cacheable;
     logic [31:0] l1i_mem_rdata, l1d_mem_rdata;
-    logic        l1i_mem_busy, l1d_mem_busy;
+    logic        l1i_mem_busy, l1d_mem_busy, l1i_mem_fault, l1d_mem_fault;
     logic        l1i_fill_we, l1d_fill_we, l1i_fill_done, l1d_fill_done;
+    logic        l1i_fill_fault, l1d_fill_fault;
     logic [FILL_WORD_W-1:0] l1i_fill_word, l1d_fill_word;
     logic [31:0] l1i_fill_wdata, l1d_fill_wdata;
 
@@ -220,14 +229,16 @@ module machine_penumbra2
         .i_fault(mmu_a_fault),
         .i_re(fetch_re), .i_we(1'b0),
         .i_wdata(32'b0), .i_byte_en(4'b1111),
-        .o_rdata(fetch_rdata), .o_busy(fetch_busy),
+        .o_rdata(fetch_rdata), .o_busy(fetch_busy), .o_fault(fetch_fault),
         .o_mem_addr(l1i_mem_addr), .o_mem_wdata(l1i_mem_wdata),
         .o_mem_byte_en(l1i_mem_byte_en),
         .o_mem_re(l1i_mem_re), .o_mem_we(l1i_mem_we),
         .o_mem_cacheable(l1i_mem_cacheable),
         .i_mem_rdata(l1i_mem_rdata), .i_mem_busy(l1i_mem_busy),
+        .i_mem_fault(l1i_mem_fault),
         .i_fill_we(l1i_fill_we), .i_fill_word(l1i_fill_word),
         .i_fill_wdata(l1i_fill_wdata), .i_fill_done(l1i_fill_done),
+        .i_fill_fault(l1i_fill_fault),
         .i_sys_reg(icache_sys_reg), .i_sys_wdata(sys_wdata),
         .i_sys_we(icache_sys_we), .o_sys_rdata(icache_sys_rdata)
     );
@@ -242,14 +253,16 @@ module machine_penumbra2
         .i_fault(mmu_b_fault),
         .i_re(dmem_re), .i_we(dmem_we),
         .i_wdata(dmem_wdata), .i_byte_en(dmem_byte_en),
-        .o_rdata(dmem_rdata), .o_busy(dmem_busy),
+        .o_rdata(dmem_rdata), .o_busy(dmem_busy), .o_fault(dmem_fault),
         .o_mem_addr(l1d_mem_addr), .o_mem_wdata(l1d_mem_wdata),
         .o_mem_byte_en(l1d_mem_byte_en),
         .o_mem_re(l1d_mem_re), .o_mem_we(l1d_mem_we),
         .o_mem_cacheable(l1d_mem_cacheable),
         .i_mem_rdata(l1d_mem_rdata), .i_mem_busy(l1d_mem_busy),
+        .i_mem_fault(l1d_mem_fault),
         .i_fill_we(l1d_fill_we), .i_fill_word(l1d_fill_word),
         .i_fill_wdata(l1d_fill_wdata), .i_fill_done(l1d_fill_done),
+        .i_fill_fault(l1d_fill_fault),
         .i_sys_reg(dcache_sys_reg), .i_sys_wdata(sys_wdata),
         .i_sys_we(dcache_sys_we), .o_sys_rdata(dcache_sys_rdata)
     );
@@ -259,8 +272,8 @@ module machine_penumbra2
     // ══════════════════════════════════════════════════════════
     logic [31:0] arb_addr, arb_wdata, arb_rdata;
     logic [3:0]  arb_byte_en;
-    logic        arb_re, arb_we, arb_cacheable, arb_busy;
-    logic        seq_fill_we, seq_fill_done;
+    logic        arb_re, arb_we, arb_cacheable, arb_busy, arb_fault;
+    logic        seq_fill_we, seq_fill_done, seq_fill_fault;
     logic [FILL_WORD_W-1:0] seq_fill_word;
     logic [31:0] seq_fill_wdata;
 
@@ -271,37 +284,43 @@ module machine_penumbra2
         .i_i_re(l1i_mem_re), .i_i_we(l1i_mem_we),
         .i_i_cacheable(l1i_mem_cacheable),
         .o_i_rdata(l1i_mem_rdata), .o_i_busy(l1i_mem_busy),
+        .o_i_fault(l1i_mem_fault),
         .o_i_fill_we(l1i_fill_we), .o_i_fill_word(l1i_fill_word),
         .o_i_fill_wdata(l1i_fill_wdata), .o_i_fill_done(l1i_fill_done),
+        .o_i_fill_fault(l1i_fill_fault),
         .i_d_addr(l1d_mem_addr), .i_d_wdata(l1d_mem_wdata),
         .i_d_byte_en(l1d_mem_byte_en),
         .i_d_re(l1d_mem_re), .i_d_we(l1d_mem_we),
         .i_d_cacheable(l1d_mem_cacheable),
         .o_d_rdata(l1d_mem_rdata), .o_d_busy(l1d_mem_busy),
+        .o_d_fault(l1d_mem_fault),
         .o_d_fill_we(l1d_fill_we), .o_d_fill_word(l1d_fill_word),
         .o_d_fill_wdata(l1d_fill_wdata), .o_d_fill_done(l1d_fill_done),
+        .o_d_fill_fault(l1d_fill_fault),
         .o_m_addr(arb_addr), .o_m_wdata(arb_wdata),
         .o_m_byte_en(arb_byte_en),
         .o_m_re(arb_re), .o_m_we(arb_we), .o_m_cacheable(arb_cacheable),
-        .i_m_rdata(arb_rdata), .i_m_busy(arb_busy),
+        .i_m_rdata(arb_rdata), .i_m_busy(arb_busy), .i_m_fault(arb_fault),
         .i_fill_we(seq_fill_we), .i_fill_word(seq_fill_word),
-        .i_fill_wdata(seq_fill_wdata), .i_fill_done(seq_fill_done)
+        .i_fill_wdata(seq_fill_wdata), .i_fill_done(seq_fill_done),
+        .i_fill_fault(seq_fill_fault)
     );
 
     logic [31:0] l2_addr, l2_wdata, l2_rdata;
     logic [3:0]  l2_byte_en;
-    logic        l2_re, l2_we, l2_cacheable, l2_busy;
+    logic        l2_re, l2_we, l2_cacheable, l2_busy, l2_fault;
 
     fill_sequencer #(.LINE_BYTES(LINE_BYTES)) u_fillseq (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_addr(arb_addr), .i_wdata(arb_wdata), .i_byte_en(arb_byte_en),
         .i_re(arb_re), .i_we(arb_we), .i_cacheable(arb_cacheable),
-        .o_rdata(arb_rdata), .o_busy(arb_busy),
+        .o_rdata(arb_rdata), .o_busy(arb_busy), .o_fault(arb_fault),
         .o_fill_we(seq_fill_we), .o_fill_word(seq_fill_word),
         .o_fill_wdata(seq_fill_wdata), .o_fill_done(seq_fill_done),
+        .o_fill_fault(seq_fill_fault),
         .o_l2_addr(l2_addr), .o_l2_wdata(l2_wdata), .o_l2_byte_en(l2_byte_en),
         .o_l2_re(l2_re), .o_l2_we(l2_we), .o_l2_cacheable(l2_cacheable),
-        .i_l2_rdata(l2_rdata), .i_l2_busy(l2_busy)
+        .i_l2_rdata(l2_rdata), .i_l2_busy(l2_busy), .i_l2_fault(l2_fault)
     );
 
     logic [3:0]  l2_sys_reg;
@@ -312,11 +331,12 @@ module machine_penumbra2
         .i_clk(i_clk), .i_rst(i_rst),
         .i_addr(l2_addr), .i_wdata(l2_wdata), .i_byte_en(l2_byte_en),
         .i_we(l2_we), .i_re(l2_re), .i_cacheable(l2_cacheable),
-        .o_rdata(l2_rdata), .o_busy(l2_busy),
+        .o_rdata(l2_rdata), .o_busy(l2_busy), .o_fault(l2_fault),
         .o_mem_addr(o_bus_addr), .o_mem_wdata(o_bus_wdata),
         .o_mem_byte_en(o_bus_byte_en),
         .o_mem_we(o_bus_we), .o_mem_re(o_bus_re),
         .i_mem_rdata(i_bus_rdata), .i_mem_busy(i_bus_busy),
+        .i_mem_fault(i_bus_fault),
         .i_sys_reg(l2_sys_reg), .i_sys_wdata(sys_wdata),
         .i_sys_we(l2_sys_we), .o_sys_rdata(l2_sys_rdata)
     );

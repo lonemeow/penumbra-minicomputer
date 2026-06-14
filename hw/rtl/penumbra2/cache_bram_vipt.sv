@@ -124,6 +124,7 @@ module cache_bram_vipt
     input  logic [3:0]  i_byte_en,
     output logic [31:0] o_rdata,
     output logic        o_busy,
+    output logic        o_fault,        // access fault, coincident with the completion (o_busy drop)
 
     // ── Back side: request port (toward the I/D arbiter) ─────────
     output logic [31:0] o_mem_addr,
@@ -134,12 +135,14 @@ module cache_bram_vipt
     output logic        o_mem_cacheable,
     input  logic [31:0] i_mem_rdata,
     input  logic        i_mem_busy,
+    input  logic        i_mem_fault,    // bus-side beat fault, coincident with i_mem_busy drop
 
     // ── Back side: fill port (driven by the fill sequencer) ──────
     input  logic                              i_fill_we,
     input  logic [$clog2(LINE_BYTES/4)-1:0]   i_fill_word,
     input  logic [31:0]                       i_fill_wdata,
     input  logic                              i_fill_done,
+    input  logic                              i_fill_fault,  // line aborted by a faulting beat
 
     // ── Sysreg interface (one per cache instance) ────────────────
     input  logic [3:0]  i_sys_reg,
@@ -398,6 +401,7 @@ module cache_bram_vipt
     logic [WORD_BITS-1:0]  fill_word_req;   // the word the stalled access wants
     logic [WAY_BITS-1:0]   fill_way;
     logic [31:0]           serve_rdata_q;   // word presented in S_SERVE (fill or beat)
+    logic                  serve_fault_q;   // S_SERVE delivers a fault, not a word
     logic                  got_word;        // capture happened (assertion fodder)
 
     logic miss_resolve, rd_hit_resolve, down_engage, wr_hit_resolve;
@@ -441,14 +445,24 @@ module cache_bram_vipt
                         serve_rdata_q <= i_fill_wdata;
                         got_word      <= 1'b1;
                     end
-                    if (i_fill_done)
-                        state <= S_SERVE;
+                    // A faulting beat aborts the line: serve a fault and
+                    // install nothing (the tag/valid writes gate on i_fill_done,
+                    // which a fault never raises). Normal done serves the word.
+                    if (i_fill_fault) begin
+                        serve_fault_q <= 1'b1;
+                        state         <= S_SERVE;
+                    end else if (i_fill_done) begin
+                        serve_fault_q <= 1'b0;
+                        state         <= S_SERVE;
+                    end
                 end
                 // The beat completes on the downstream busy-drop: capture the
-                // read word (don't-care for a write) and hand to S_SERVE,
-                // which presents it with o_busy=0 one cycle later.
+                // read word (don't-care for a write) and the fault flag, and
+                // hand to S_SERVE, which presents them with o_busy=0 one cycle
+                // later.
                 S_BEAT: if (!i_mem_busy) begin
                     serve_rdata_q <= i_mem_rdata;
+                    serve_fault_q <= i_mem_fault;
                     state         <= S_SERVE;
                 end
                 S_SERVE: state <= S_IDLE;
@@ -566,6 +580,11 @@ module cache_bram_vipt
         else                  o_rdata = data_out[hit_way];
     end
 
+    // A completion delivered from S_SERVE (a finished beat or fill) carries
+    // its fault flag; a local read hit (served in S_IDLE) accesses no bus and
+    // can never fault.
+    assign o_fault = (state == S_SERVE) && serve_fault_q;
+
     // ══════════════════════════════════════════════════════════
     // Back-side request port
     // ══════════════════════════════════════════════════════════
@@ -651,7 +670,7 @@ module cache_bram_vipt
 
     // The fill port belongs to the in-flight fill alone.
     assert property (@(posedge i_clk) disable iff (i_rst)
-        (i_fill_we || i_fill_done) |-> (state == S_FILL))
+        (i_fill_we || i_fill_done || i_fill_fault) |-> (state == S_FILL))
         else $error("cache_bram_vipt: fill-port activity outside a fill");
 
     // By fill-done the sequencer must have delivered the requested word

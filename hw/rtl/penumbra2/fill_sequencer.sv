@@ -43,12 +43,14 @@ module fill_sequencer #(
     input  logic        i_cacheable,
     output logic [31:0] o_rdata,
     output logic        o_busy,
+    output logic        o_fault,    // pass-through access fault (rides the busy-drop)
 
     // ── Fill stream to the granted L1 (routed by the arbiter) ────
     output logic                              o_fill_we,
     output logic [$clog2(LINE_BYTES/4)-1:0]   o_fill_word,
     output logic [31:0]                       o_fill_wdata,
     output logic                              o_fill_done,
+    output logic                              o_fill_fault,  // line aborted: a beat faulted
 
     // ── Downstream: the shared L2's CPU-facing port ───────────────
     output logic [31:0] o_l2_addr,
@@ -58,7 +60,8 @@ module fill_sequencer #(
     output logic        o_l2_we,
     output logic        o_l2_cacheable,
     input  logic [31:0] i_l2_rdata,
-    input  logic        i_l2_busy
+    input  logic        i_l2_busy,
+    input  logic        i_l2_fault    // bus-side access fault (rides the busy-drop)
 );
 
     localparam int LINE_WORDS  = LINE_BYTES / 4;
@@ -83,9 +86,12 @@ module fill_sequencer #(
     logic [WORD_BITS-1:0]  word_q;      // word currently requested
 
     // One word completes downstream this cycle (data valid on i_l2_rdata).
-    logic beat, last_word;
-    assign beat      = (state == S_STREAM) && !i_l2_busy;
-    assign last_word = (word_q == WORD_BITS'(LINE_WORDS - 1));
+    logic beat, last_word, beat_fault;
+    assign beat       = (state == S_STREAM) && !i_l2_busy;
+    assign last_word  = (word_q == WORD_BITS'(LINE_WORDS - 1));
+    // A faulting beat aborts the whole line: no more words are requested and
+    // the L1 is told to drop the fill (o_fill_fault) instead of installing it.
+    assign beat_fault = beat && i_l2_fault;
 
     // ── Engage / walk ─────────────────────────────────────────────
     always_ff @(posedge i_clk) begin
@@ -99,8 +105,10 @@ module fill_sequencer #(
                     word_q <= '0;
                 end
                 S_STREAM: if (beat) begin
-                    if (last_word) state  <= S_IDLE;
-                    else           word_q <= word_q + 1'b1;
+                    // A fault aborts exactly like reaching the last word —
+                    // the transaction ends and the port returns to idle.
+                    if (beat_fault || last_word) state  <= S_IDLE;
+                    else                         word_q <= word_q + 1'b1;
                 end
             endcase
         end
@@ -127,13 +135,19 @@ module fill_sequencer #(
     end
 
     // ── Fill stream + upstream response ───────────────────────────
-    assign o_fill_we    = beat;
+    // A faulting beat carries no data into the line and ends the transfer
+    // via o_fill_fault, not o_fill_done — the L1 aborts the fill on it.
+    assign o_fill_we    = beat && !beat_fault;
     assign o_fill_word  = word_q;
     assign o_fill_wdata = i_l2_rdata;
-    assign o_fill_done  = beat && last_word;
+    assign o_fill_done  = beat && last_word && !beat_fault;
+    assign o_fill_fault = beat_fault;
 
     assign o_rdata = i_l2_rdata;
     assign o_busy  = (state == S_STREAM) || line_req || i_l2_busy;
+    // Pass-through fault only: a line's fault leaves via o_fill_fault, so the
+    // beat-completion fault is reported solely on the single-beat path.
+    assign o_fault = i_l2_fault && (state == S_IDLE) && !line_req;
 
     // ══════════════════════════════════════════════════════════
     // Assertions — sim-only (Verilator --assert); stripped at synth.

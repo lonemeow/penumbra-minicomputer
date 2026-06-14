@@ -72,8 +72,16 @@ Residual: `o_retire_valid` is currently `memwb_valid`, so it pulses for
 faulting and trapping slots too (the alignment-fault load, the BREAK/SYSCALL
 trap). As an insns-retired perfctr source that over-counts — a faulting
 instruction is re-executed after the handler, not retired. When a gen2 perfctr
-lands, gate the retired count by `~fault_pending` (the program-end testbench
-use is unaffected — it keys on the op_class, not the count).
+lands, gate the retired count by `~fault_pending`.
+
+The program-end testbench keys on `o_retire_op_class == OPC_BREAK`, and that
+*was* spuriously trippable: an IF-faulted slot carries a garbage instruction
+word whose decode can be `OPC_BREAK`. A fetch bus fault whose stale read
+happened to decode as BREAK ended the run before the handler dispatched (found
+via `isa/test_bus_fault_fetch`). Fixed: `penumbra2_id_stage` neutralises a
+faulting slot's `o_op_class` to `OPC_ALU` (the same reason `o_is_trap` is gated
+there), so an inert slot never reports a real op class at retire. The remaining
+`o_retire_valid` over-count is the perfctr-only item above.
 
 ## Hardware: Penumbra/2 SPR access path — complete
 
@@ -905,13 +913,32 @@ Remaining in the gen2 machine, roughly in order:
   the machine-shaped probe (Decision 11's 4-way-vs-2-way L1 choice is
   gated on the IF2 tag-compare/way-mux path it exposes; 2-way is a
   parameter fallback).
-- A bus-fault return path through L2/sequencer/arbiter/L1 — gen1
-  wires no-device-at-address into the core; the gen2 path carries no
-  fault signal yet (blocks `test_bus_fault*` and, later, bus
-  autoconfig RAM probing).
-- The remaining capability gaps vs gen1's runner: wrspr (the SPR
-  write port milestone above), timer/uart devices on the external
-  bus, machid/busctl via a machine sysreg expansion port.
+- A bus-fault return path through L2/sequencer/arbiter/L1 — **done.**
+  Unlike gen1 (no-device wired straight into the core as a sideband),
+  the gen2 core is decoupled from the bus by the arbiter's registered
+  request and the L1's S_BEAT capture, so the fault must ride each
+  layer's completion inward: a `fault` companion travels with the
+  busy-drop of a single beat and with the fill-done of a line transfer
+  (a faulting beat mid-line aborts the fill). It enters the core on
+  both the data (MEM) and fetch (IF2) paths and vectors to
+  `VEC_BUS_FAULT` with the faulting vaddr in FAULT_ADDR. The no-device
+  fault is the *absence of any slave's claim*, not a fabric-side map:
+  the sim memory (`unified_bus_mem`) claims only the addresses it
+  actually backs (`o_claimed`, from its own size), and the fabric
+  faults an access nothing claims — matching how the external async
+  bus works (ranges are autoconfig-discovered, so no master/fabric can
+  hold a static map). An unclaimed address traps rather than alias-
+  responding. Tests: `isa/test_bus_fault`, `test_bus_fault_mmu`,
+  `test_bus_ignore`, `test_bus_fault_fetch`. The `bus` capability split
+  into `bus-fault` (the fault path, now on gen2) and `bus` (the
+  SYSDEV_BUS device, gen1-only). Deferred: a fault on L2's *own* line
+  fill while L2 is enabled — the only unhandled corner, asserted loud
+  in `l2_cache.sv` (reachable only with L2 enabled AND a cacheable
+  mapping to an unclaimed address; pass-through faults are the live
+  path and abort correctly).
+- The remaining capability gaps vs gen1's runner: wrspr, timer, uart,
+  machid — all done. Remaining: `busctl` / the SYSDEV_BUS device +
+  bus autoconfig (RAM probing now unblocked by the bus-fault path).
 
 The shared L2 stays untouched; its read-pipeline initiation interval
 is the fill-penalty floor, characterised by

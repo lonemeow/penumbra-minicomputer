@@ -80,6 +80,7 @@ module l2_cache
     input  logic        i_cacheable,
     output logic [31:0] o_rdata,
     output logic        o_busy,
+    output logic        o_fault,    // access fault, coincident with the front-side completion
 
     // ── Bus side (downstream — to bus_devsel / devices) ─────
     output logic [31:0] o_mem_addr,
@@ -89,6 +90,7 @@ module l2_cache
     output logic        o_mem_re,
     input  logic [31:0] i_mem_rdata,
     input  logic        i_mem_busy,
+    input  logic        i_mem_fault,    // bus-side access fault, coincident with i_mem_busy drop
 
     // ── Sysreg device 9 ────────────────────────────────────
     input  logic [3:0]  i_sys_reg,
@@ -605,6 +607,20 @@ module l2_cache
     end
 
     // ══════════════════════════════════════════════════════════
+    // Output fault
+    //
+    // A bus-side fault rides the front-side completion only on the
+    // pass-through path: an uncached/disabled access or a cached
+    // write-through forwards the beat to the bus, so its fault forwards
+    // the same cycle (o_busy == i_mem_busy there).  A cached read hit
+    // completes locally with no bus access, so it can never fault.  A
+    // fault on L2's own line fill from the bus (S_FILL) is a separate
+    // abort case — not yet handled (see the assertion below) — so the
+    // fill state is excluded here rather than mis-forwarded as a beat.
+    // ══════════════════════════════════════════════════════════
+    assign o_fault = i_mem_fault & (state != S_FILL);
+
+    // ══════════════════════════════════════════════════════════
     // Sysreg read mux
     // ══════════════════════════════════════════════════════════
     // Unified cache INFO encoding (matches cache_vipt.sv / cache.sv).
@@ -813,6 +829,15 @@ module l2_cache
         (state == S_FILL) |->
             (fill_word_idx <= (WORD_BITS+1)'(LINE_WORDS - 1)))
         else $error("l2_cache: fill_word_idx overran LINE_WORDS");
+
+    // Deferred: a bus fault during L2's own line fill (cacheable miss while
+    // L2 is enabled) is not yet aborted/propagated — it would install a
+    // garbage line.  Reachable only with L2 enabled AND a cacheable mapping
+    // to an unclaimed address; pass-through faults (the live path) never
+    // enter S_FILL.  Fail loudly here until the L2 fill-abort lands.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (state == S_FILL) |-> !i_mem_fault)
+        else $error("l2_cache: bus fault during line fill — L2 fill-abort not implemented");
 
     // ══════════════════════════════════════════════════════════
     // Performance counters

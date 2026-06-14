@@ -60,6 +60,7 @@ module penumbra2_core
     output logic                  o_fetch_re,      // word request, held until completion
     input  logic [31:0]           i_fetch_rdata,   // valid when i_fetch_busy low
     input  logic                  i_fetch_busy,
+    input  logic                  i_fetch_fault,   // bus fault on the fetch, at i_fetch_busy drop
 
     // ── Fetch translation context + MMU port-A verdict ───────────
     output logic                  o_fetch_bypass,  // vector-fetch owns the port: physical read
@@ -76,6 +77,7 @@ module penumbra2_core
     output logic                  o_dmem_en,
     input  logic [31:0]           i_dmem_rdata,
     input  logic                  i_dmem_busy,
+    input  logic                  i_dmem_fault,    // bus fault on the data access, at i_dmem_busy drop
 
     // ── MMU D-side translate (port B: query at launch, verdict at data-ready) ──
     output logic [31:0]           o_mmu_vaddr,
@@ -252,7 +254,8 @@ module penumbra2_core
         .i_clk(i_clk), .i_rst(i_rst),
         .i_pc(if1_pc), .i_next_pc(if1_next_pc), .i_valid(if1_valid),
         .i_ir(i_fetch_rdata),
-        .i_mem_busy(i_fetch_busy), .o_fetch_re(if2_fetch_re),
+        .i_mem_busy(i_fetch_busy), .i_mem_fault(i_fetch_fault),
+        .o_fetch_re(if2_fetch_re),
         // I-side MMU verdict — port A's registered, held result for the
         // fetch IF1 launched (paired by the shared launch strobe).
         .i_user_mode(o_fetch_user),
@@ -286,6 +289,7 @@ module penumbra2_core
         .o_dmem_byte_en(o_dmem_byte_en), .o_dmem_re(o_dmem_re),
         .o_dmem_we(o_dmem_we), .o_dmem_en(o_dmem_en),
         .i_dmem_rdata(i_dmem_rdata), .i_dmem_busy(i_dmem_busy),
+        .i_dmem_fault(i_dmem_fault),
         // MMU D-side translate — MEM's port-B query, verdict at data-ready.
         .o_mmu_vaddr(o_mmu_vaddr), .o_mmu_access_type(o_mmu_access_type),
         .o_mmu_user(o_mmu_user), .o_mmu_req(o_mmu_req),

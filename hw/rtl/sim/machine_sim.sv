@@ -188,6 +188,11 @@ module machine_sim
         .i_cacheable    (cpu_mem_cacheable),
         .o_rdata        (cpu_mem_rdata),
         .o_busy         (cpu_mem_busy),
+        // gen1 carries the no-device fault to the core as a sideband, not
+        // through L2 — so L2 sees no bus fault and its fault output is unused.
+        /* verilator lint_off PINCONNECTEMPTY */
+        .o_fault        (),
+        /* verilator lint_on PINCONNECTEMPTY */
         .o_mem_addr     (mem_addr),
         .o_mem_wdata    (mem_wdata),
         .o_mem_byte_en  (mem_byte_en),
@@ -195,6 +200,7 @@ module machine_sim
         .o_mem_re       (mem_re),
         .i_mem_rdata    (mem_rdata),
         .i_mem_busy     (mem_busy),
+        .i_mem_fault    (1'b0),
         .i_sys_reg      (sys_reg),
         .i_sys_wdata    (sys_wdata),
         .i_sys_we       (sys_we & sys_cycle & (sys_dev == SYSDEV_L2_CACHE)),

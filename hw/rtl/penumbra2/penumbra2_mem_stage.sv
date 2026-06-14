@@ -101,6 +101,7 @@ module penumbra2_mem_stage
     output logic                  o_dmem_en,
     input  logic [31:0]           i_dmem_rdata,
     input  logic                  i_dmem_busy,
+    input  logic                  i_dmem_fault,      // bus fault on the access (rides the busy-drop)
 
     // ── MMU D-side translate (port B: query at launch, verdict at data-ready) ──
     // The query is driven on the access launch cycle alongside the data-memory
@@ -265,6 +266,15 @@ module penumbra2_mem_stage
     logic tlb_fault;
     assign tlb_fault = is_mem & acc_in_flight & i_mmu_fault;
 
+    // ── Bus fault (late: reported at the access's completion) ────
+    // The data side drops busy (the access completed) with i_dmem_fault set —
+    // no device claimed the physical address, or a slave rejected it. Born at
+    // the same point a clean completion would advance, and structurally
+    // exclusive with both faults above: a TLB fault makes the slot inert (no
+    // bus access launches) and a misaligned access never launches either.
+    logic bus_fault;
+    assign bus_fault = is_mem & acc_in_flight & ~i_dmem_busy & i_dmem_fault;
+
     // ── Data-memory drive ────────────────────────────────────────
     // Address is stable across all access cycles (EX is back-pressured), so
     // it can be driven unconditionally. The launch (o_dmem_en) fires for
@@ -306,13 +316,15 @@ module penumbra2_mem_stage
     // FAULT_ADDR/FAULT_STATUS commit payload. Sources, in priority order
     // (exception-flow.md): an upstream fault riding the slot (the
     // instruction is already inert, no access launched, no address to
-    // report — its status stays FAULT_NONE), then the two address faults
-    // born here — alignment (detected at entry, access never launched) and
-    // TLB (from the held port-B verdict at data-ready). Those two are
-    // structurally exclusive: a misaligned access never queries the TLB.
-    // An address fault's vector derives from its composed status — the
-    // status type is the single classification (Decision 16). MEM composes
-    // only the alignment status; the TLB status arrives composed.
+    // report — its status stays FAULT_NONE), then the three address faults
+    // born here — alignment (detected at entry, access never launched), TLB
+    // (from the held port-B verdict at data-ready), and bus (the access
+    // completed reporting a no-device/slave fault). All three are
+    // structurally exclusive: a misaligned access never queries the TLB, and
+    // a bus fault implies a clean translation that launched a real access.
+    // Each reports the faulting virtual address; the vector derives from the
+    // composed status type — the single classification (Decision 16). The TLB
+    // status arrives composed; MEM composes the alignment and bus statuses.
     logic        mem_fault_pending;
     logic [3:0]  mem_fault_vec;
     logic [31:0] mem_fault_vaddr, mem_fault_status;
@@ -331,12 +343,19 @@ module penumbra2_mem_stage
             // and traps, which leave the MMU registers untouched).
             mem_fault_vaddr   = i_pc;
             mem_fault_status  = i_fault_status;
-        end else if (align_fault | tlb_fault) begin
+        end else if (align_fault | tlb_fault | bus_fault) begin
+            // The three address faults born in MEM share FAULT_ADDR (the EA)
+            // and differ only in their status word. They are mutually
+            // exclusive: a misaligned access never launches a TLB query, and a
+            // bus fault implies a clean translation that reached the bus.
             mem_fault_pending = 1'b1;
             mem_fault_vaddr   = i_result;
-            mem_fault_status  = align_fault
-                ? {20'b0, i_user_mode, o_mmu_access_type, 4'b0, FAULT_ALIGN}
-                : i_mmu_fault_status;
+            // Status by source — alignment composes locally (MEM detects it),
+            // the TLB status arrives composed from the MMU, the bus fault
+            // composes here (the bus carries no status of its own):
+            if      (align_fault) mem_fault_status = compose_fault_status(i_user_mode, o_mmu_access_type, FAULT_ALIGN);
+            else if (tlb_fault)   mem_fault_status = i_mmu_fault_status;
+            else if (bus_fault)   mem_fault_status = compose_fault_status(i_user_mode, o_mmu_access_type, FAULT_BUS);
             mem_fault_vec     = fault_vec_of(mem_fault_status[3:0]);
         end
     end
