@@ -1885,7 +1885,7 @@ pbench.  The split gives a clean two-tier story: bare-metal
 benchmarks measure the CPU in isolation, hosted benchmarks measure
 the system.
 
-## Kernel/compiler: dedicate R12 (TP) to curlwp
+## Kernel/compiler: dedicate R12 (TP) to curlwp — DONE
 
 The ABI reserves R12 as the thread pointer, and the kernel uses no TLS,
 so R12 sits unused in kernel code.  Pinning `curlwp` there — the way the
@@ -1912,26 +1912,41 @@ Two pieces, both landed:
   values and each use gets a fresh `mov rX, r12` instead of a
   callee-saved copy or stack spill.
 
-### Kernel wiring (not yet done)
+### Kernel wiring — DONE (`b625d49e43af`)
 
-1. `cpu.h`: `register struct lwp *curlwp __asm("r12")`, with the
-   `curlwp` macro reading it; `curcpu()` stays the fixed
-   `&cpu_info_store`.
-2. Initialise R12 = `&lwp0` early in `locore.S`, before the first C call.
-3. `cpu_switchto` already saves/restores R12 via `pcb_context` and
-   writes `ci_curlwp`; additionally set R12 = newlwp.  `cpu_lwp_fork`
-   must seed the new `pcb_context` R12 slot with the lwp pointer.
-4. Trap/syscall entry from userland: the trapframe already saves all 16
-   GPRs (preserving the user TLS pointer); load `curlwp` into R12 after
-   the save, before running C.  Exit restores the user value via the
-   trapframe automatically.
+curlwp is read from R12, scoped to `_KERNEL` in `cpu.h` (`_KMEMUSER`
+keeps the memory-load macro so libkvm consumers are unaffected).  Four
+boundaries keep R12 == curlwp whenever kernel C runs:
 
-### Expected benefit (single-issue, in-order; instruction counts)
+1. `locore.S` sets R12 = `&lwp0` before the first C call at boot.
+2. `cpu_switchto` already saved/restored R12 via `pcb_context` (like
+   SP/LR), so it threads across voluntary switches unchanged; it also
+   already writes `ci_curlwp`.  No change was needed there — the
+   originally-planned "additionally set R12 = newlwp" is redundant.
+3. `cpu_lwp_fork` seeds the child's `pcb_context` R12 slot — the
+   `*pcb2 = *pcb1` copy would otherwise leave the parent lwp there.
+4. `_trap_common` reloads R12 from `cpu_info_store` after the trapframe
+   save, before running C.  A userland trap arrives with R12 holding the
+   user TLS pointer, which the trapframe save/restore preserves; the
+   reload is unconditional (correct from both entry modes, cheaper than
+   branching).
 
-The dominant pattern `curlwp->field` in straight-line code drops from
-`lli`+`lui`+`ldw`(curlwp)+`ldw`(field) = 4 instructions to `mov`+`ldw`
-= 2, and removes a D-cache access.  It lands on the
-lock/scheduler/fault paths that read `curlwp` constantly.
+`cpu_info_store.ci_curlwp` stays the canonical copy — the trap-entry
+reload and any cross-lwp reads still consult it.
+
+### Measured benefit
+
+A `curlwp->field` access drops from `lli`+`lui`+`ldw`+`ldw` (4) to a
+single `ldw [r12+off]` — the load takes R12 as its base directly, so it
+is 4→1, better than the 4→2 originally estimated — and survives calls
+for free (R12 reserved).  Same-session pbench A/B on the ULX3S (min;
+identical clang and rootfs, only the kernel source differing, libc rows
+flat to confirm isolation): `getpid` 122.49→118.53 µs (−3.2%),
+`clock_gettime` 227.33→197.90 µs (−12.9%, with much lower variance).
+fork/`pipe_pingpong` are within noise — curlwp is a negligible fraction
+of their millisecond-scale cost, and their swings track 1 KB
+direct-mapped I-cache layout (the kernel is 8 KB smaller), not this
+change.
 
 ## Hardware + kernel: local console (HDMI text-video + USB keyboard)
 
