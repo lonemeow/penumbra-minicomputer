@@ -150,6 +150,48 @@ such misuse and assert `bus_fault` but that behavior is not required.
   register): not supported by the UART; result is governed by the
   rule defined in the section above.
 
+### Access faults (`bus_fault`)
+
+`bus_fault` (async `bus_error`) signals that an access did not
+complete normally.  It has two sources:
+
+- **No device at the address — the canonical source, and today the
+  only triggerable one.**  The fault is the *absence of any slave's
+  response*, not a verdict from a central decoder.  Each slave knows
+  only its own range — it claims (acknowledges) the addresses it backs
+  and is silent otherwise — and the bus raises `bus_fault` when an
+  access goes unclaimed.  This matters because on the external async
+  bus the address layout is discovered at boot (autoconfig assigns
+  device ranges), so no master- or fabric-side decoder can hold a
+  static map of "what is where": the no-device fault is a bus-protocol
+  property — a watchdog / no-acknowledge timeout in the async form.
+  Nothing drives `busy` (no slave responds), so the access completes
+  the cycle it is presented — `busy=0` with `bus_fault=1` alongside.
+  This is what makes RAM sizing and optional-device probing work:
+  software touches an address and catches the fault when nothing
+  answers.  In the sync form, "unclaimed" is the OR-complement of the
+  slaves' own selects — gen1 wires it as
+  `bus_fault = (re|we) & ~(OR of each slave's select)`; a slave's
+  select is its *own* decode (RAM sized to its DRAM, a device its
+  register window), never a separate map the master keeps.
+
+- **A slave rejecting an access it does claim** (optional, per the
+  device restrictions above).  The responding slave asserts
+  `bus_fault` coincident with its own `busy` drop.
+
+Either way the rule is the same: `bus_fault` rides the access's
+**completion** — the busy-drop cycle, which for an unclaimed address
+is the presentation cycle itself.  On a faulting completion `rdata` is
+undefined and the master commits no architectural effect.
+
+A master separated from the responder by intermediate layers (caches,
+an arbiter, a fill sequencer) cannot sample the fault as a sideband —
+the faulting cycle has passed by the time the master's own access
+completes — so each layer carries the fault inward as a companion to
+the completion it already forwards: the busy-drop of a single beat, or
+the fill-done of a line transfer it was unrolling (a faulting beat
+mid-line aborts the line and forwards the fault on its done event).
+
 ## Sync-Bus Mapping
 
 The sync form expresses the same protocol with clock-aligned levels
@@ -162,7 +204,7 @@ forms.
 | `req` | `re` (read) / `we` (write) | master → slave | Held high while the transaction is in flight |
 | `ack` rising | `busy` falling | slave → master | Slave drops `busy` on the cycle `rdata` is valid |
 | `addr`, `data`, `byte_en` | `addr`, `wdata` (master→slave), `rdata` (slave→master), `byte_en` | — | Driven while `re`/`we` is held; sync form's separate wdata/rdata ports remove the need for `data_dir` |
-| `bus_error` | `bus_fault` | slave → master | Same semantics |
+| `bus_error` | `bus_fault` | responder → master | Same semantics; for an unclaimed address the bus fabric asserts it (no slave responds). See [Access faults](#access-faults-bus_fault). |
 | *(none)* | `req_accepted` | slave (arbiter) → master (cache) | Sync-form-only handshake pulse; see [Back-to-back bursts](#back-to-back-bursts-req_accepted) below |
 
 ### Sync read handshake
