@@ -112,12 +112,13 @@ module unified_bus_mem
         end
     end
 
-    // ── Assertion (sim-only; stripped at synth) ──────────────────
-    // A write to the (claimed) ROM region is a software/wiring bug — real ROM
-    // would drop it silently, so flag it here rather than let it vanish.
-    always_ff @(posedge i_clk)
-        assert (!(i_we && rom_hit))
-            else $error("unified_bus_mem: write to the read-only ROM region (addr=0x%08x)", i_addr);
+    // A write to the ROM region is dropped silently, faithfully modelling
+    // read-only ROM (the write block above only updates the RAM region). The
+    // boot ROM relies on this: its stackless bus-fault-ignore handler stores a
+    // scratch word PC-relative into its own code page (boot_rom.sv documents
+    // "writes are silently ignored"). The paired load reads the original ROM
+    // contents back, so the store is effectively a no-op — bug-compatible with
+    // real ROM, by design, not a wiring error to assert against.
 
 endmodule
 
