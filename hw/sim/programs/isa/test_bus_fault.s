@@ -1,5 +1,5 @@
 ; test_bus_fault.s — Bus fault: verify exception on unmapped address
-; REQUIRES: mmu bus wrspr
+; REQUIRES: mmu bus-fault wrspr
 ;
 ; Tests:
 ;   1. Install bus fault handler at vector 0 (VEC_BUS_FAULT)

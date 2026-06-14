@@ -1,5 +1,5 @@
 ; test_bus_fault_mmu.s — Bus fault with MMU enabled (device probing pattern)
-; REQUIRES: mmu bus wrspr
+; REQUIRES: mmu bus-fault wrspr
 ;
 ; Simulates the NetBSD bus_space_peek pattern: map a virtual page to
 ; an unmapped physical address (potential device MMIO), attempt a read,

@@ -1,5 +1,5 @@
 ; test_bus_ignore.s — Minimal bus fault + ERET test
-; REQUIRES: bus wrspr
+; REQUIRES: bus-fault wrspr
 ;
 ; Install ERET-only handler, trigger one bus fault on a store,
 ; then BREAK immediately. If the CPU hangs after ERET, the
