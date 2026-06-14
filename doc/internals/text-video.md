@@ -28,6 +28,8 @@ flowchart LR
   subgraph CPUDOM["CPU clock domain"]
     BUS["bus interface\n+ register file"] --> CRAMW["char/attr RAM\nwrite port"]
     BUS --> REGS["CTRL / CURSOR /\nMODE / INFO / CAP"]
+    BUS --> SFW["soft-font RAM\nwrite port (opt)"]
+    BUS --> PALW["custom palette RAM\nwrite port (opt)"]
   end
   VCLK["video clock unit\nPLL (+ reconfig)"]
   subgraph PIX["Pixel clock domain"]
@@ -45,6 +47,8 @@ flowchart LR
   end
   REGS -. "2-FF sync (quasi-static)" .-> PIX
   CRAMW -. "dual-clock BRAM" .-> CRAMR
+  SFW -. "dual-clock BRAM" .-> FETCH
+  PALW -. "dual-clock BRAM" .-> PAL
   VCLK --> PIX
   VCLK --> SER
 ```
@@ -76,12 +80,30 @@ that reads the cell — there is no coherency handshake, and a text console
 needs none. Each cell is 16 bits (`{glyph, attribute}`); the array is
 sized for the largest supported mode's `COLUMNS × ROWS`.
 
-## Font ROM
+## Font Memory
 
-A single-port block RAM, 256 glyphs × 16 rows × 8 bits = 4 KiB,
-initialized at synthesis via `$readmemh` from a VGA-style 8×16 glyph
-table. Addressed by `{glyph, glyph_row}`, it returns one 8-pixel row,
-from which `glyph_col` selects a single foreground/background bit.
+The built-in font is a block RAM, 256 glyphs × 16 rows × 8 bits = 4 KiB,
+initialized at synthesis via `$readmemh` from the IBM CP437 8×16 glyph
+table — so this device sets `CAP.EXTGLYPHS`. Addressed by
+`{glyph, glyph_row}`, it returns one 8-pixel row, from which `glyph_col`
+selects a single foreground/background bit (bit 7 = leftmost column).
+
+A second, identically-sized **soft font** is a dual-clock RAM (CPU-side
+write port behind the `FONT` aperture, pixel-side read port in the fetch
+pipeline) — the same structure as the char/attr RAM. `CTRL.FONT_SEL`
+muxes which font the fetch stage reads; the built-in font is never
+written, so it is always a valid fallback. The soft font adds one EBR
+pair and sets `CAP.SOFTFONT`.
+
+## Palette
+
+A 16 × 24-bit lookup feeds stage 4 of the scan-out pipeline. The
+built-in default is the CGA/ANSI palette. An optional custom palette is
+a small dual-clock RAM (CPU write port behind the `PALETTE` aperture,
+pixel read port at the LUT), and `CTRL.PAL_SEL` muxes which one the LUT
+reads. The built-in palette is never written, so clearing `PAL_SEL`
+restores it with no reload. A device with the custom palette sets
+`CAP.PALETTE`.
 
 ## Scan-out Pipeline
 
@@ -93,8 +115,10 @@ the `/8` and `/16` are just bit slices, since the cell is a power of two:
 - `char_col = x[..3]`, `glyph_col = x[2:0]`; `char_row = y[..4]`, `glyph_row = y[3:0]`
 - **Stage 1** — read char/attr RAM at `char_row × COLUMNS + char_col`
 - **Stage 2** — read font ROM at `{glyph, glyph_row}`
-- **Stage 3** — select font bit `[glyph_col]` → pick the `FG` or `BG` nibble
-- **Stage 4** — palette LUT (16 × 24-bit) → R/G/B
+- **Stage 3** — select font bit `[7 - glyph_col]` (bit 7 = leftmost) →
+  pick the `FG` or `BG` nibble
+- **Stage 4** — palette LUT (16 × 24-bit), built-in or custom per
+  `PAL_SEL` → R/G/B
 
 `hsync`/`vsync`/`de` pass through matching delay registers so they line up
 with the pixel they describe. The cursor unit compares `(char_col,
@@ -172,6 +196,11 @@ discrete-feasible while a peripheral's high-speed PHY need not be.
   mode 0 remaining the power-up mode. The contract and driver are
   unchanged between the two; only the device's mode table and the clock
   unit grow.
+- **Expressivity caps (`EXTGLYPHS`, `PALETTE`, `SOFTFONT`)** — the CP437
+  built-in font, the custom palette, and the soft font are pure
+  pixel-generator features: each is one dual-clock RAM plus a select mux,
+  all upstream of the TMDS PHY and fully exercisable in simulation. They
+  are independent of the mode/PLL work and can land alongside target A.
 - Not yet implemented.
 
 ## See Also
