@@ -128,13 +128,16 @@ endif
 RUNNER_MOD_penumbra1      = machine_sim
 RUNNER_TBS_penumbra1      = tb_cpu_prog
 # bus-fault = the no-device access-fault return path (an unclaimed address
-# traps to VEC_BUS_FAULT). bus = the SYSDEV_BUS controller device + autoconfig.
-# gen1 has both; gen2 has the fault path but not the device yet.
+# traps to VEC_BUS_FAULT). bus = the SYSDEV_BUS controller device, whose
+# RST/CFG_EN register test_busctl probes. The autoconfig daisy chain those
+# bits drive is a wrapper/board concern that no conformance test exercises:
+# gen1's machine_sim wires a chain; gen2's sim wrapper leaves busctl's
+# outputs open until the device-discovery / SD path consumes them.
 RUNNER_PROVIDES_penumbra1 = mmu mmu-d mmu-i cache l2 uart spi bus bus-fault machid perfctr timer irq wrspr
 
 RUNNER_MOD_penumbra2      = machine_penumbra2_sim
 RUNNER_TBS_penumbra2      = tb_penumbra2_prog tb_penumbra2_intr
-RUNNER_PROVIDES_penumbra2 = mmu mmu-d mmu-i cache l2 wrspr machid perfctr timer irq uart bus-fault
+RUNNER_PROVIDES_penumbra2 = mmu mmu-d mmu-i cache l2 wrspr machid perfctr timer irq uart bus bus-fault
 
 RUNNER_MOD      = $(RUNNER_MOD_$(CORE))
 RUNNER_TBS      = $(RUNNER_TBS_$(CORE))

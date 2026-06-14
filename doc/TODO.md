@@ -937,8 +937,13 @@ Remaining in the gen2 machine, roughly in order:
   mapping to an unclaimed address; pass-through faults are the live
   path and abort correctly).
 - The remaining capability gaps vs gen1's runner: wrspr, timer, uart,
-  machid — all done. Remaining: `busctl` / the SYSDEV_BUS device +
-  bus autoconfig (RAM probing now unblocked by the bus-fault path).
+  machid, `busctl` / the SYSDEV_BUS device — all done (the device lives
+  in `machine_penumbra2`, exposing `o_bus_rst` / `o_bus_cfg_en`; gen2
+  advertises the `bus` capability and `test_busctl` passes). Remaining:
+  the autoconfig daisy chain those bits drive — no conformance test
+  exercises it, so it lands with the wrapper-level device-discovery / SD
+  path, where `machine_penumbra2_sim` grows an `autoconfig_dev` chain off
+  `o_bus_cfg_en`. RAM probing is unblocked by the bus-fault path.
 
 The shared L2 stays untouched; its read-pipeline initiation interval
 is the fill-penalty floor, characterised by

@@ -60,6 +60,13 @@ module machine_penumbra2_sim
         .o_bus_re(bus_re), .o_bus_we(bus_we),
         .i_bus_rdata(bus_rdata), .i_bus_busy(bus_busy),
         .i_bus_fault(bus_fault),
+        // Bus autoconfig control: no autoconfig chain on this wrapper yet, so
+        // busctl's outputs are observed nowhere (the conformance suite never
+        // drives SYSDEV_BUS). Left open until the chain + a discoverable
+        // device are wired here.
+        /* verilator lint_off PINCONNECTEMPTY */
+        .o_bus_rst(), .o_bus_cfg_en(),
+        /* verilator lint_on PINCONNECTEMPTY */
         .o_commit_idx(o_commit_idx), .o_commit_data(o_commit_data),
         .o_commit_we(o_commit_we),
         .o_retire_valid(o_retire_valid),

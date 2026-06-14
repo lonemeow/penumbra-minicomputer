@@ -15,7 +15,10 @@
 //
 // Memory devices and peripherals live outside, on the bus a wrapper attaches
 // them to (machine_penumbra2_sim for Verilator, a board top for FPGA) — what
-// simulates is what synthesizes. The L1s resolve against the MMU verdicts
+// simulates is what synthesizes. The bus controller (SYSDEV_BUS) is the one
+// device that straddles that boundary: a sysreg device inside the machine,
+// but its autoconfig outputs (o_bus_rst / o_bus_cfg_en) drive the daisy chain
+// those external devices sit on. The L1s resolve against the MMU verdicts
 // (VIPT: vaddr indexes, paddr tags), so non-identity translations are fully
 // supported; vector-table reads are bypass-translated, which the MMU reports
 // uncacheable, so they pass through the I-L1 uncached and always observe the
@@ -38,7 +41,7 @@
 // they already forward (a faulting line beat aborts the fill), and it enters
 // the core as a fetch- or data-side fault, vectoring to VEC_BUS_FAULT with
 // the faulting vaddr in FAULT_ADDR. Deferred: a fault on L2's own line fill
-// while L2 is enabled (asserted in l2_cache); the SYSDEV_BUS device.
+// while L2 is enabled (asserted in l2_cache).
 
 module machine_penumbra2
     import penumbra_pkg::*;
@@ -75,6 +78,10 @@ module machine_penumbra2
     input  logic [31:0]           i_bus_rdata,
     input  logic                  i_bus_busy,
     input  logic                  i_bus_fault,   // no-device / slave access fault, at the busy-drop
+
+    // ── Bus autoconfig control (to the wrapper's autoconfig chain) ─
+    output logic                  o_bus_rst,     // software-timed bus reset (BUSCTL.RST)
+    output logic                  o_bus_cfg_en,  // config window + daisy-chain enable (BUSCTL.CFG_EN)
 
     // ── Commit / retire observability ────────────────────────────
     output logic [SB_IDX_W-1:0]   o_commit_idx,
@@ -120,6 +127,7 @@ module machine_penumbra2
     logic [3:0]  sys_dev, sys_reg, sys_wr_dev, sys_wr_reg;
     logic        sys_re, sys_we;
     logic [31:0] sys_wdata, sys_rdata_rsp;
+    logic [3:0]  sys_reg_sel;   // shared WRSYS-write / RDSYS-read register index
 
     // Retire pulse for the perfctr — includes drain-commit ops (which retire
     // from EX, not WB); see the core's o_insn_retired.
@@ -176,7 +184,6 @@ module machine_penumbra2
     // vector-fetch FSM's ownership forces bypass — vector reads are physical
     // (boot-protocol contract) and thereby uncacheable.
     logic        mmu_sys_we, mmu_sys_re;
-    logic [3:0]  mmu_sys_reg;
     logic [31:0] mmu_sys_rdata;
 
     mmu_bram u_mmu (
@@ -194,7 +201,7 @@ module machine_penumbra2
         .o_b_fault(mmu_b_fault), .o_b_fault_status(mmu_b_fstatus),
         .i_fault_commit(mmu_fault_commit), .i_fault_vaddr(mmu_fault_vaddr),
         .i_fault_status(mmu_fault_cstatus),
-        .i_sys_reg(mmu_sys_reg), .i_sys_wdata(sys_wdata),
+        .i_sys_reg(sys_reg_sel), .i_sys_wdata(sys_wdata),
         .i_sys_we(mmu_sys_we), .i_sys_re(mmu_sys_re),
         .o_sys_rdata(mmu_sys_rdata)
     );
@@ -214,7 +221,6 @@ module machine_penumbra2
     logic [FILL_WORD_W-1:0] l1i_fill_word, l1d_fill_word;
     logic [31:0] l1i_fill_wdata, l1d_fill_wdata;
 
-    logic [3:0]  icache_sys_reg, dcache_sys_reg;
     logic        icache_sys_we, dcache_sys_we;
     logic [31:0] icache_sys_rdata, dcache_sys_rdata;
 
@@ -239,7 +245,7 @@ module machine_penumbra2
         .i_fill_we(l1i_fill_we), .i_fill_word(l1i_fill_word),
         .i_fill_wdata(l1i_fill_wdata), .i_fill_done(l1i_fill_done),
         .i_fill_fault(l1i_fill_fault),
-        .i_sys_reg(icache_sys_reg), .i_sys_wdata(sys_wdata),
+        .i_sys_reg(sys_reg_sel), .i_sys_wdata(sys_wdata),
         .i_sys_we(icache_sys_we), .o_sys_rdata(icache_sys_rdata)
     );
 
@@ -263,7 +269,7 @@ module machine_penumbra2
         .i_fill_we(l1d_fill_we), .i_fill_word(l1d_fill_word),
         .i_fill_wdata(l1d_fill_wdata), .i_fill_done(l1d_fill_done),
         .i_fill_fault(l1d_fill_fault),
-        .i_sys_reg(dcache_sys_reg), .i_sys_wdata(sys_wdata),
+        .i_sys_reg(sys_reg_sel), .i_sys_wdata(sys_wdata),
         .i_sys_we(dcache_sys_we), .o_sys_rdata(dcache_sys_rdata)
     );
 
@@ -323,7 +329,6 @@ module machine_penumbra2
         .i_l2_rdata(l2_rdata), .i_l2_busy(l2_busy), .i_l2_fault(l2_fault)
     );
 
-    logic [3:0]  l2_sys_reg;
     logic        l2_sys_we;
     logic [31:0] l2_sys_rdata;
 
@@ -337,7 +342,7 @@ module machine_penumbra2
         .o_mem_we(o_bus_we), .o_mem_re(o_bus_re),
         .i_mem_rdata(i_bus_rdata), .i_mem_busy(i_bus_busy),
         .i_mem_fault(i_bus_fault),
-        .i_sys_reg(l2_sys_reg), .i_sys_wdata(sys_wdata),
+        .i_sys_reg(sys_reg_sel), .i_sys_wdata(sys_wdata),
         .i_sys_we(l2_sys_we), .o_sys_rdata(l2_sys_rdata)
     );
 
@@ -351,13 +356,13 @@ module machine_penumbra2
     assign l2_sys_we     = sys_we && (sys_wr_dev == SYSDEV_L2_CACHE);
     assign mmu_sys_re    = sys_re && (sys_dev == SYSDEV_MMU);
 
-    // Each device's single register selector serves the WRSYS write (EX
-    // drain-commit) and the RDSYS read (MEM sideband); the two can never
-    // coincide — WRSYS commits into an empty pipe (asserted below).
-    assign mmu_sys_reg    = mmu_sys_we    ? sys_wr_reg : sys_reg;
-    assign dcache_sys_reg = dcache_sys_we ? sys_wr_reg : sys_reg;
-    assign icache_sys_reg = icache_sys_we ? sys_wr_reg : sys_reg;
-    assign l2_sys_reg     = l2_sys_we     ? sys_wr_reg : sys_reg;
+    // One register selector for every device: a WRSYS commit presents its
+    // register on sys_wr_reg, an RDSYS read presents on sys_reg, and the two
+    // never coincide (asserted below) — so a single mux serves all devices. A
+    // device not selected this cycle sees a don't-care index: its own write
+    // strobe (above) gates whether it latches, and the read mux downstream
+    // picks whose response is returned.
+    assign sys_reg_sel = sys_we ? sys_wr_reg : sys_reg;
 
     // CPU identity (read-only, combinational).
     logic [31:0] cpuid_rdata;
@@ -428,22 +433,35 @@ module machine_penumbra2
         end
     end
 
-    logic [3:0]  timer_sys_reg;
     logic        timer_sys_we;
     logic [31:0] timer_rdata;
     logic        timer_o_irq;
-    assign timer_sys_we  = sys_we && (sys_wr_dev == SYSDEV_TIMER);
-    assign timer_sys_reg = timer_sys_we ? sys_wr_reg : sys_reg;
+    assign timer_sys_we = sys_we && (sys_wr_dev == SYSDEV_TIMER);
 
     timer #(.TICK_FREQ_HZ(TIMER_TICK_HZ)) u_timer (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_tick(timer_tick),
-        .i_sys_reg(timer_sys_reg), .i_sys_wdata(sys_wdata),
+        .i_sys_reg(sys_reg_sel), .i_sys_wdata(sys_wdata),
         .i_sys_we(timer_sys_we), .o_sys_rdata(timer_rdata),
         .o_irq(timer_o_irq)
     );
 
     assign core_timer_irq = timer_o_irq | i_timer_irq;
+
+    // ── Bus controller (SYSDEV_BUS) — autoconfig + bus reset ─────
+    // Two flops the ROM's autoconfig loop drives: o_cfg_en gates the config
+    // address window and daisy chain, o_bus_rst is the software-timed bus
+    // reset. Both leave the machine to the wrapper's autoconfig_dev chain.
+    logic        busctl_sys_we;
+    logic [31:0] busctl_rdata;
+    assign busctl_sys_we = sys_we && (sys_wr_dev == SYSDEV_BUS);
+
+    busctl u_busctl (
+        .i_clk(i_clk), .i_rst(i_rst),
+        .i_sys_reg(sys_reg_sel), .i_sys_wdata(sys_wdata),
+        .i_sys_we(busctl_sys_we), .o_sys_rdata(busctl_rdata),
+        .o_bus_rst(o_bus_rst), .o_cfg_en(o_bus_cfg_en)
+    );
 
     // Writable scratch sysreg (4 words) — exercises the full WRSYS-commit →
     // device-write → RDSYS-read-back path with no side effects, which no
@@ -469,6 +487,7 @@ module machine_penumbra2
                                               ? cpuid_rdata : perfctr_rdata;
             SYSDEV_L1_DCACHE: sys_rdata_sel = dcache_sys_rdata;
             SYSDEV_L1_ICACHE: sys_rdata_sel = icache_sys_rdata;
+            SYSDEV_BUS:       sys_rdata_sel = busctl_rdata;
             SYSDEV_L2_CACHE:  sys_rdata_sel = l2_sys_rdata;
             SYSDEV_MACH:      sys_rdata_sel = machid_rdata;
             SYSDEV_TIMER:     sys_rdata_sel = timer_rdata;
