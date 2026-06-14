@@ -243,6 +243,7 @@ MODULE_TESTS = \
     slip_rx \
     slip_tx \
     spi_fifo \
+    video_timing \
     timer \
     sdram_test \
     sdram_cdc \
