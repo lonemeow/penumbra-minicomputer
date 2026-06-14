@@ -37,7 +37,7 @@ hw/
 │   └── fpga/      # FPGA helpers (fpga_ram, lint stubs); board tops under <board>/
 ├── microcode/   # microcode.uasm (single source — assemble via uasm.py)
 ├── rom/         # Boot ROM (C + asm) and its standalone Makefile
-├── sim/         # tb_cpu_prog (program runner), tb_interactive, per-module tbs
+├── sim/         # tb_cpu_prog (program runner), sim_console + per-core shims, per-module tbs
 └── tools/       # uasm.py (microcode), oss-cad-suite wrappers
 ```
 
@@ -265,14 +265,21 @@ PT_LOAD, jump), `x <addr> [len]` (hex dump),
 with R1=boot data), `break` / `b` (halt). SD naming uses per-class
 controller index (`sd:0,0` = first SD controller, CS0).
 
-## Interactive testbench (`sim/tb_interactive.cpp`)
+## Interactive console (`sim/sim_console.cpp` + per-core shims)
 
-Bridges host stdin/stdout to UART RX/TX. Raw terminal mode, polls
-stdin every 1024 cycles, exits on BREAK or Ctrl-C. Options via
-plusargs (and matching Makefile vars): `+sdcard=disk.img` (SDCARD),
-`+trace=file.log` (TRACE — dumps PC, SR flags, R1–R14 each
-instruction). Trace ports `o_trace_valid`/`o_trace_sr` are exposed
-through `cpu_core → machine_sim`.
+`sim_console.cpp` is the generation-independent frontend: raw terminal
+mode, the UART hold-until-ack RX feed, TX→stdout + the `+halt_on=`
+matcher, the SD↔`SdCardSim` bridge, `+stdin_file=` replay + a throttled
+stdin poll, trace-file management, and the main loop. It includes no
+Verilated header — it drives a `SimCore` (`sim_console.h`). Each
+generation supplies a thin shim that owns the DUT: `tb_penumbra1_interactive.cpp`
+(`Vmachine_sim`, 4:1 SDRAM clock, full `o_trace_*` + `o_dbg_reg`
+instruction trace) and `tb_penumbra2_interactive.cpp`
+(`Vmachine_penumbra2_sim`, single clock, BREAK via `o_prog_end`; no
+trace ports yet, so `+trace=` is ignored). Both are built by
+`make simulate-rtl [CORE=…]`. Plusargs: `+sdcard=disk.img` (SDCARD),
+`+trace=file.log` (TRACE), `+trace_window=N`, `+halt_on=str`,
+`+stdin_file=path`.
 
 ## Implementation gotchas
 
