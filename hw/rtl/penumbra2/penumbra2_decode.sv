@@ -52,6 +52,8 @@ module penumbra2_decode
     output logic [1:0]           o_divmul_op,     // divmul variant: = ISA op[1:0] (bit1 div/mul, bit0 unsigned)
     output logic                 o_a_from_pc,     // ALU operand A: 1=PC, 0=regfile src A
     output logic                 o_b_from_imm,    // ALU operand B: 1=immediate, 0=regfile src B
+    output logic                 o_src_a_is_pc,   // src A names R15/PC: ID substitutes the live PC
+    output logic                 o_src_b_is_pc,   // src B names R15/PC: ID substitutes the live PC
     output logic [31:0]          o_imm,
     output logic [3:0]           o_cond,          // branch condition (Format B)
 
@@ -414,6 +416,18 @@ module penumbra2_decode
             end
         end
         endcase
+
+        // R15/PC as a source operand resolves to the current PC, not a
+        // regfile/scoreboard slot (control-decode.md). Convert a live R15
+        // source into a PC-operand flag and drop its GPR enable: it then
+        // creates no scoreboard dependency, the ID stage substitutes the live
+        // PC for the read value, and the live-source invariants below hold.
+        // (o_a_from_pc stays the branch-target path; these flags add the
+        // explicit-source path the ID operand mux also honors.)
+        o_src_a_is_pc = o_src_a_en & ~o_src_a_is_spr & (o_src_a_sel == REG_PC);
+        o_src_b_is_pc = o_src_b_en & ~o_src_b_is_spr & (o_src_b_sel == REG_PC);
+        if (o_src_a_is_pc) o_src_a_en = 1'b0;
+        if (o_src_b_is_pc) o_src_b_en = 1'b0;
     end
 
     // illegal = no legal opcode/operand form decoded. flag_we tracks

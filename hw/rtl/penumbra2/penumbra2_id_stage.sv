@@ -111,6 +111,7 @@ module penumbra2_id_stage
     logic [ALU_OP_W-1:0] d_alu_op;
     logic [1:0]          d_divmul_op;
     logic                d_a_from_pc, d_b_from_imm;
+    logic                d_src_a_is_pc, d_src_b_is_pc;
     logic [31:0]         d_imm;
     logic [3:0]          d_cond;
     logic                d_writes_flags, d_reads_flags, d_flag_only;
@@ -132,6 +133,7 @@ module penumbra2_id_stage
         .o_dst_aux_sel(d_dst_aux_sel), .o_dst_aux_en(d_dst_aux_en),
         .o_alu_op(d_alu_op), .o_divmul_op(d_divmul_op),
         .o_a_from_pc(d_a_from_pc), .o_b_from_imm(d_b_from_imm),
+        .o_src_a_is_pc(d_src_a_is_pc), .o_src_b_is_pc(d_src_b_is_pc),
         .o_imm(d_imm), .o_cond(d_cond),
         .o_writes_flags(d_writes_flags), .o_reads_flags(d_reads_flags), .o_flag_only(d_flag_only),
         .o_mem_op(d_mem_op), .o_mem_size(d_mem_size), .o_sign_ext(d_sign_ext),
@@ -184,12 +186,27 @@ module penumbra2_id_stage
     // ── Operand select: ID produces the final ALU operands ───────
     // op_a/op_b are what EX feeds the ALU directly; store_data is the
     // raw port-B read (the value a store writes).
+    // A register source reads as the live PC when the decoder flagged it
+    // R15/PC (architecture.md: reading R15 yields the current PC). Folding that
+    // in once, here at the port read, keeps the operand muxes below a plain
+    // priority select and mirrors gen1, where the regfile itself returned PC
+    // for an R15 read.
+    logic [31:0] src_a_val, src_b_val;
+    assign src_a_val = d_src_a_is_pc ? i_pc : i_rd_data_a;
+    assign src_b_val = d_src_b_is_pc ? i_pc : i_rd_data_b;
+
+    // op_a: d_a_from_pc is the branch-target path (PC + offset); otherwise the
+    // source-A value. op_b is a priority select — an immediate or an SPR-file
+    // source outranks the register read, so a store of PC (`stw pc, [b+off]`)
+    // keeps its offset on op_b while the PC flows to store_data.
     logic [31:0] op_a_sel, op_b_sel, store_data_sel;
-    assign op_a_sel       = d_a_from_pc  ? i_pc  : i_rd_data_a;
-    assign op_b_sel       = d_b_from_imm   ? d_imm
-                          : src_b_spr_file ? i_spr_src_value
-                          :                  i_rd_data_b;
-    assign store_data_sel = i_rd_data_b;
+    assign op_a_sel = d_a_from_pc ? i_pc : src_a_val;
+    always_comb begin
+        if      (d_b_from_imm)   op_b_sel = d_imm;
+        else if (src_b_spr_file) op_b_sel = i_spr_src_value;
+        else                     op_b_sel = src_b_val;
+    end
+    assign store_data_sel = src_b_val;
 
     // ── Fault tag for the decoded instruction ────────────────────
     // An IF-stage fault outranks decode faults; SYSCALL/BREAK are
