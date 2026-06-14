@@ -22,20 +22,19 @@
 // pulse, THEN back porch — the sync window does not begin at H_ACTIVE.
 
 module video_timing #(
-    // Horizontal timing, in pixel-clock cycles.
-    parameter int H_ACTIVE   = 640,
-    parameter int H_FRONT    = 16,
-    parameter int H_SYNC     = 96,
-    parameter int H_BACK     = 48,
-    // Vertical timing, in whole lines.
-    parameter int V_ACTIVE   = 480,
-    parameter int V_FRONT    = 10,
-    parameter int V_SYNC     = 2,
-    parameter int V_BACK     = 33,
+    // Display geometry; defaults are console mode 0 (see video_pkg).
+    // Horizontal values are pixel-clock cycles, vertical are whole lines.
+    parameter int H_ACTIVE   = video_pkg::H_ACTIVE,
+    parameter int H_FRONT    = video_pkg::H_FRONT,
+    parameter int H_SYNC     = video_pkg::H_SYNC,
+    parameter int H_BACK     = video_pkg::H_BACK,
+    parameter int V_ACTIVE   = video_pkg::V_ACTIVE,
+    parameter int V_FRONT    = video_pkg::V_FRONT,
+    parameter int V_SYNC     = video_pkg::V_SYNC,
+    parameter int V_BACK     = video_pkg::V_BACK,
     // Sync polarity: the level driven while a sync pulse is asserted.
-    // 0 = active-low (the 640x480 @ 60 convention on both axes).
-    parameter bit H_SYNC_POL = 1'b0,
-    parameter bit V_SYNC_POL = 1'b0
+    parameter bit H_SYNC_POL = video_pkg::H_SYNC_POL,
+    parameter bit V_SYNC_POL = video_pkg::V_SYNC_POL
 ) (
     input  logic        i_clk,    // pixel clock
     input  logic        i_rst,    // synchronous, active-high

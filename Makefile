@@ -36,7 +36,7 @@ OPT_BUILD ?= -O2
 VERILATOR_FLAGS = --cc --exe --build -Wall --assert \
                   $(if $(VCD),--trace) \
                   -CFLAGS "-std=c++17 $(OPT_BUILD)" \
-                  -Ihw/rtl/common -Ihw/rtl/penumbra1 -Ihw/rtl/penumbra2 -Ihw/rtl/machine -Ihw/rtl/bus -Ihw/rtl/mmu -Ihw/rtl/io -Ihw/rtl/io/sdram -Ihw/rtl/soc -Ihw/rtl/sim
+                  -Ihw/rtl/common -Ihw/rtl/penumbra1 -Ihw/rtl/penumbra2 -Ihw/rtl/machine -Ihw/rtl/bus -Ihw/rtl/mmu -Ihw/rtl/io -Ihw/rtl/io/sdram -Ihw/rtl/io/video -Ihw/rtl/soc -Ihw/rtl/sim
 
 BUILD_DIR   = build
 WAVE_DIR    = waves
@@ -51,7 +51,7 @@ TB   ?= tb_$(MOD)
 # Shared packages — always included. --top-module tells Verilator which
 # module is the DUT (otherwise it picks the first file = a package).
 # Add new packages here as the design grows.
-PKG_SV = hw/rtl/common/penumbra_pkg.sv hw/rtl/penumbra2/penumbra2_pkg.sv hw/rtl/io/sdram/sdram_pkg.sv
+PKG_SV = hw/rtl/common/penumbra_pkg.sv hw/rtl/penumbra2/penumbra2_pkg.sv hw/rtl/io/sdram/sdram_pkg.sv hw/rtl/io/video/video_pkg.sv
 
 # ── Assembler tools ──────────────────────────────────────────
 PASM  = python3 sw/tools/pasm.py
@@ -252,7 +252,8 @@ MODULE_TESTS = \
     l2_cache \
     autoconfig_test:tb_autoconfig \
     spi_test:tb_spi \
-    sdram_adapter_test:tb_sdram_adapter
+    sdram_adapter_test:tb_sdram_adapter \
+    video_pattern_test
 
 .PHONY: test-modules
 test-modules:
