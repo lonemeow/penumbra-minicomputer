@@ -98,16 +98,16 @@ module mmu
             // fault info from the original exception.
             if (i_req && !i_force_bypass && misaligned) begin
                 fault_addr   <= i_vaddr;
-                fault_status <= {20'b0, i_user_mode, i_access_type, 4'b0, FAULT_ALIGN};
+                fault_status <= compose_fault_status(i_user_mode, i_access_type, FAULT_ALIGN);
             end else if (mmu_enabled && i_req && !i_force_bypass && tlb_fault) begin
                 fault_addr   <= i_vaddr;
                 fault_status <= tlb_fault_status;
             end else if (mmu_enabled && i_req && !i_force_bypass && !tlb_hit) begin
                 fault_addr   <= i_vaddr;
-                fault_status <= {20'b0, i_user_mode, i_access_type, 4'b0, FAULT_TLB_MISS};
+                fault_status <= compose_fault_status(i_user_mode, i_access_type, FAULT_TLB_MISS);
             end else if (i_bus_fault && !i_force_bypass) begin
                 fault_addr   <= i_vaddr;
-                fault_status <= {20'b0, i_user_mode, i_access_type, 4'b0, FAULT_BUS};
+                fault_status <= compose_fault_status(i_user_mode, i_access_type, FAULT_BUS);
             end
 
             // MMUCR write

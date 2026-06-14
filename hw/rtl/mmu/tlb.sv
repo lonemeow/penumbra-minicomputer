@@ -201,7 +201,7 @@ module tlb
 
             if (matched && !perm_ok) begin
                 o_fault = 1'b1;
-                o_fault_status = {20'b0, i_user_mode, i_access_type, 4'b0, FAULT_PROT};
+                o_fault_status = compose_fault_status(i_user_mode, i_access_type, FAULT_PROT);
             end
         end
     end

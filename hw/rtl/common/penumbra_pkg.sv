@@ -334,6 +334,25 @@ package penumbra_pkg;
     localparam int FSTAT_X   = 10;  // Faulting access was execute
     localparam int FSTAT_USR = 11;  // Faulting access was user mode
 
+    // Compose the architectural FAULT_STATUS word from its fields. This is the
+    // single definition of the layout — fault type in [3:0], the faulting
+    // access (one-hot ACC_*) at [FSTAT_R +: 3], user-mode at FSTAT_USR — so the
+    // bit positions live here, not re-spelled at every fault site (the MMU
+    // stack, the gen2 IF and MEM stages). access_type one-hot maps a read to
+    // FSTAT_R, a write to FSTAT_W, an execute to FSTAT_X by construction.
+    function automatic logic [31:0] compose_fault_status(
+        input logic       user_mode,
+        input logic [2:0] access_type,   // ACC_READ / ACC_WRITE / ACC_EXEC
+        input logic [3:0] fault_type     // FAULT_*
+    );
+        logic [31:0] s;
+        s               = 32'b0;
+        s[3:0]          = fault_type;
+        s[FSTAT_R +: 3] = access_type;   // FSTAT_R/W/X are contiguous from bit 8
+        s[FSTAT_USR]    = user_mode;
+        return s;
+    endfunction
+
     // Address-carrying fault types map 1:1 onto exception vectors; the
     // composed status is the single classification and the vector derives
     // from it (D-side at MEM, I-side at its fault path). Domain: real fault

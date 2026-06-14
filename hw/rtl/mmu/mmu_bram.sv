@@ -185,7 +185,7 @@ module mmu_bram
         o_a_hit       = a_bypass_q | (a_xlate_q & tlb_a_hit);
         o_a_fault     = a_xlate_q & (tlb_a_fault | ~tlb_a_hit);
         o_a_fault_status = o_a_fault
-            ? {20'b0, a_usr_q, a_acc_q, 4'b0, tlb_a_hit ? FAULT_PROT : FAULT_TLB_MISS}
+            ? compose_fault_status(a_usr_q, a_acc_q, tlb_a_hit ? FAULT_PROT : FAULT_TLB_MISS)
             : 32'b0;
     end
 
@@ -195,7 +195,7 @@ module mmu_bram
         o_b_hit       = b_bypass_q | (b_xlate_q & tlb_b_hit);
         o_b_fault     = b_xlate_q & (tlb_b_fault | ~tlb_b_hit);
         o_b_fault_status = o_b_fault
-            ? {20'b0, b_usr_q, b_acc_q, 4'b0, tlb_b_hit ? FAULT_PROT : FAULT_TLB_MISS}
+            ? compose_fault_status(b_usr_q, b_acc_q, tlb_b_hit ? FAULT_PROT : FAULT_TLB_MISS)
             : 32'b0;
     end
 
