@@ -80,11 +80,16 @@ module unified_bus_mem
     assign rom_hit   = (i_addr - ROM_BASE) < REGION_BYTES;
     assign o_claimed = ram_hit | rom_hit;
 
-    // Region select + word index. RAM_BASE/ROM_BASE differ in bit 31, so it
-    // selects the region; the low bits index within (offset/4). Valid only for
-    // a claimed access — an unclaimed one neither reads nor writes.
+    // Region select + word index. Bit 31 selects the region (RAM low / ROM
+    // high). The index is the offset from that region's base divided by 4 —
+    // NOT raw address bits: ROM_BASE (0xFFFF_0000) only has zero low bits up to
+    // bit 15, so for a region larger than 64 KiB (IDX_W > 14) raw bits would
+    // fold the base's high ones into the index and mis-address the ROM. Valid
+    // only for a claimed access — an unclaimed one neither reads nor writes.
+    logic [31:0]    offset;
     logic [IDX_W:0] idx;
-    assign idx = {i_addr[31], i_addr[IDX_W+1:2]};
+    assign offset = i_addr - (i_addr[31] ? ROM_BASE : RAM_BASE);
+    assign idx    = {i_addr[31], offset[IDX_W+1:2]};
 
     // ── Read: registered, 1-cycle busy (access_pending pattern) ──
     // Only a claimed read responds; an unclaimed read leaves o_busy low and
