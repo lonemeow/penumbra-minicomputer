@@ -252,7 +252,7 @@ path in ID decode toward the fault-vector register.
 
 The gen2 machine assembly is done: `machine_penumbra2` under
 `hw/rtl/machine/` honors the program-end contract, the runners build
-`machine_penumbra2_sim` (machine + `unified_bus_mem`), the probe
+`machine_penumbra2_sim` (machine + `boot_rom` + the full SDRAM stack), the probe
 variant wraps the machine — the IF2 tag-compare/way-mux path and the
 L1↔L2 layer are in front of nextpnr; the first `make timing` run of
 that configuration is pending — and the ISA-shaped gen2 programs
@@ -964,8 +964,8 @@ Remaining in the gen2 machine, roughly in order:
   both the data (MEM) and fetch (IF2) paths and vectors to
   `VEC_BUS_FAULT` with the faulting vaddr in FAULT_ADDR. The no-device
   fault is the *absence of any slave's claim*, not a fabric-side map:
-  the sim memory (`unified_bus_mem`) claims only the addresses it
-  actually backs (`o_claimed`, from its own size), and the fabric
+  each sim slave (`boot_rom` over ROM, `sdram_sim` over RAM) claims only
+  the addresses it backs via its own `bus_devsel`, and the fabric
   faults an access nothing claims — matching how the external async
   bus works (ranges are autoconfig-discovered, so no master/fabric can
   hold a static map). An unclaimed address traps rather than alias-
@@ -1000,6 +1000,57 @@ walk; that, plus uniform hold-core-until-`init_done` bring-up, is
 what a multi-cycle reset sequencer is for (reset axis only,
 orthogonal to flush; scoped with the L2 rework that de-hacks the
 post-reset-walk-while-live).
+
+## Hardware: Penumbra/2 SDRAM-backed sim + EX-frontier interrupts — done; future work
+
+The gen2 RTL sim now drives the **full SDRAM stack** (`boot_rom` over
+the ROM region; `sdram_sim` — adapter + CDC + controller + sim PHY +
+behavioral W9825 — over RAM, decoded by `bus_devsel`), dual-clocked at
+the 4:1 ratio, instead of the never-stall `unified_bus_mem` (89b7ca7;
+`unified_bus_mem` survives only in the FPGA timing-probe top). The
+conformance suite runs against realistic variable-latency stalls, which
+is the point: it immediately surfaced a real interrupt bug a 1-cycle
+memory could not.
+
+That bug and its fix (a775e4f): gen2 recognized interrupts at the fetch
+boundary and captured EPC from the *speculative* front-end PC, so a
+timer IRQ during a cache fill saved a wrong-path EPC and an interrupted
+loop resumed past its branch. The interrupt is now a **synthetic fault
+the EX stage tags onto its instruction** — it rides the precise-fault
+path (EPC ← its own resolved PC, access suppressed in MEM, register
+write dropped at WB, re-execute after ERET); the drain FSM, the
+fetch-stop, and the boundary-PC capture are gone. The structural payoff:
+the EX/MEM boundary *is* the issued/not-issued line for a memory access,
+so cutting the interrupt there makes a non-idempotent access
+non-speculative for free — no L1 gate, no store buffer. Regressions:
+`test_cache_memcpy_irq` (cacheable fill) and `test_uncached_memcpy_irq`
+(uncacheable access).
+
+Future work this opened up:
+
+- **External bus bridge + async no-device watchdog.** The combinational
+  `(re|we) & ~(OR of selects)` no-device fault is only the *sync* on-chip
+  form. A real external/discrete bus has no central decoder, so its
+  no-device fault is a no-acknowledge timeout in a bridge — itself an
+  autoconfig device fronting a secondary bus. The model is specified in
+  [`bus-protocol.md`](../hardware/bus-protocol.md) (e65a1d9); the bridge
+  and watchdog themselves are unbuilt.
+- **PTE `S` (speculatable) bit — finalize semantics.** Bit 1 (`0x02`) is
+  reserved and earmarked (11dfdc8) for an uncacheable-but-idempotent
+  override (the boot ROM is the motivating case), with semantics left
+  open until the speculation model settles. Not load-bearing today — the
+  EX/MEM boundary provides the temporal non-speculation; `S` is a future
+  perf lever (it would also ungate the SDRAM adapter's `addr+N` prefetch
+  for such regions).
+- **CPU-side store buffer (perf, not correctness).** gen2 writes stores
+  through in MEM; the EX-frontier cut keeps that correct (cacheable
+  replay is idempotent, uncacheable is non-speculative). A store buffer
+  would decouple stores from MEM and enable write coalescing — a
+  throughput win, deferred. Distinct from the L2 write buffer below.
+- **gen2-on-FPGA validation.** The interrupt and SDRAM-sim RTL is
+  validated on the sim suite only; there is no gen2 board bring-up yet,
+  so it has had no real-hardware validation. Carry that caveat until a
+  gen2 FPGA path exists.
 
 ## Hardware: L2 phase 2 — write-back / write-allocate
 
