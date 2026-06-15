@@ -15,10 +15,12 @@
 // actually fired — no separate cycle-counting needed.
 //
 // Covers: independent ALU flow, a RAW-dependent ADD chain (Example 1), a MUL
-// whose two results (Rd low, Rdh high) are each consumed (Example 5), and
+// whose two results (Rd low, Rdh high) are each consumed (Example 5),
 // back-to-back divmuls with a reader of the older divmul's high half (the
-// two-aux-live window the spine's aux-mutual-exclusion assertion carves out).
-// Straight-line only — no branches/loads/exceptions yet.
+// two-aux-live window the spine's aux-mutual-exclusion assertion carves out),
+// a misaligned load taking a precise alignment fault, and a taken branch that
+// must keep its link write while pinned in EX by an older load stalling MEM
+// (the multi-cycle back-pressure a cache miss produces — run_mem / tick_mem).
 
 #include <cstdio>
 #include <cstdint>
@@ -55,6 +57,12 @@ static uint32_t enc_m(int load, int sz, int se, int rd, int rb, uint16_t off) {
     return (2u << 30) | ((load & 1) << 29) | ((sz & 3) << 27) | ((se & 1) << 26)
          | ((rd & 0xF) << 22) | ((rb & 0xF) << 18) | ((uint32_t)off << 2);
 }
+// Format B: [11][cond(29:26)][offset>>2 (25:4)][-]. COND_BL is always taken
+// and links PC+4 → R13 (the gen2 link register).
+enum { COND_BL = 0xF };
+static uint32_t enc_b(int cond, int32_t off) {
+    return (3u << 30) | ((cond & 0xF) << 26) | ((((uint32_t)(off >> 2)) & 0x3FFFFF) << 4);
+}
 
 // Run a program through the spine, mirroring WB commits into `shadow`
 // (indexed by physical register entry). Drains for `cycles` total.
@@ -79,6 +87,68 @@ static void run(Vpenumbra2_spine* dut, const uint32_t* prog, int n,
         bool stall = dut->o_fetch_stall;
         if (dut->o_commit_we) shadow[dut->o_commit_idx] = dut->o_commit_data;
         tick(dut);
+        if (!stall && fidx < n) fidx++;
+    }
+}
+
+// ── Behavioral data memory for stall tests (same model as
+// tb_penumbra2_mem_stage): the launch (o_dmem_en) arms `mem_latency` busy
+// cycles; the read serves from the held address so it is valid on the
+// busy-drop cycle. Lets a spine test exercise the multi-cycle MEM back-pressure
+// a cache miss / line fill produces — which the straight-line runs never do.
+static uint32_t s_dmem[256];
+static uint32_t s_dmem_rdata;
+static int      s_mem_latency;
+static int      s_busy_count;
+
+static void tick_mem(Vpenumbra2_spine* dut) {
+    dut->i_clk = 0; dut->eval();
+    bool en = dut->o_dmem_en, we = dut->o_dmem_we, re = dut->o_dmem_re;
+    uint32_t widx = (dut->o_dmem_addr >> 2) & 0xFF;
+    uint32_t wd   = dut->o_dmem_wdata;
+    uint8_t  be   = dut->o_dmem_byte_en;
+    bool     busy = dut->i_dmem_busy;
+    dut->i_clk = 1; dut->eval();              // posedge: DUT registers update
+    dut->i_mmu_fault = 0;                     // port-B verdict: always clean here
+    if (en)                    s_busy_count = s_mem_latency;   // launch arms the delay
+    else if (s_busy_count > 0) s_busy_count--;
+    if (en || re) s_dmem_rdata = s_dmem[widx];
+    if (we && !busy) {                        // completion edge: apply the write
+        uint32_t w = s_dmem[widx];
+        for (int b = 0; b < 4; b++)
+            if (be & (1u << b)) { w &= ~(0xFFu << (8*b)); w |= (wd & (0xFFu << (8*b))); }
+        s_dmem[widx] = w;
+    }
+    dut->i_dmem_rdata = s_dmem_rdata;
+    dut->i_dmem_busy  = (s_busy_count > 0);
+    dut->eval();
+}
+
+// run() with the stalling memory model: every data access holds MEM busy for
+// `latency` cycles, so an older load can pin a younger branch resolved in EX.
+static void run_mem(Vpenumbra2_spine* dut, const uint32_t* prog, int n,
+                    uint32_t* shadow, int cycles, int latency) {
+    for (auto& w : s_dmem) w = 0;
+    s_dmem_rdata = 0; s_mem_latency = latency; s_busy_count = 0;
+    dut->i_valid = 0; dut->i_supervisor = 1;
+    dut->i_ir = 0; dut->i_pc = 0; dut->i_next_pc = 0;
+    dut->i_dmem_busy = 0; dut->i_dmem_rdata = 0; dut->i_mmu_fault = 0;
+    dut->i_rst = 1; tick_mem(dut); tick_mem(dut); dut->i_rst = 0;
+
+    int fidx = 0;
+    for (int c = 0; c < cycles; c++) {
+        if (fidx < n) {
+            dut->i_ir      = prog[fidx];
+            dut->i_pc      = 0x1000 + 4 * fidx;
+            dut->i_next_pc = 0x1000 + 4 * (fidx + 1);
+            dut->i_valid   = 1;
+        } else {
+            dut->i_ir = 0; dut->i_pc = 0; dut->i_next_pc = 0; dut->i_valid = 0;
+        }
+        dut->eval();
+        bool stall = dut->o_fetch_stall;
+        if (dut->o_commit_we) shadow[dut->o_commit_idx] = dut->o_commit_data;
+        tick_mem(dut);
         if (!stall && fidx < n) fidx++;
     }
 }
@@ -223,6 +293,28 @@ int main() {
         check("fault_older_commit",  sh[1], 0x100);   // R1 (older) committed
         check("fault_load_inert",    sh[2], 0);        // load dest never written
         check("fault_poison_flushed", sh[3], 0);       // younger LLI flushed
+    }
+
+    // ── Test 5: a BL must keep its link write when an older load stalls MEM ──
+    // The Dhrystone-on-gen2 bug. A load holds MEM busy (the back-pressure a
+    // cache-miss / line fill produces), pinning the following BL resolved in
+    // EX. The ID/EX bubble that kills a taken branch's wrong-path successor
+    // (ex_branch_taken) outranks the stall-hold (penumbra2_id_stage), so it
+    // discards the held BL itself — its R13 link write is lost. With latency=4
+    // the load pins the BL; a correct spine still commits R13 = link (PC+4).
+    // The successor LLI must be flushed by the redirect in both cases.
+    {
+        const uint32_t prog[] = {
+            enc_l(OP_L_LLI, 5, 0x40),            // R5 = 0x40 (load addr; word-aligned)
+            enc_l(OP_L_LLI, 13, 0xBAD),          // R13 = 0xBAD — link sentinel (poison)
+            enc_m(1, SZ_WORD, 0, 7, 5, 0),       // LDW R7,[R5] — stalls MEM `latency` cycles
+            enc_b(COND_BL, 0),                   // BL @ PC 0x100C → links PC+4 = 0x1010 → R13
+            enc_l(OP_L_LLI, 1, 0xDEAD),          // wrong-path successor: must be bubbled
+        };
+        for (auto& v : sh) v = 0;
+        run_mem(dut, prog, 5, sh, 64, /*latency=*/4);
+        check("stall_bl_link",      sh[13], 0x1010);   // BL retired → link written (FAILS on the bug)
+        check("stall_bl_successor", sh[1],  0);         // redirect killed the wrong-path LLI
     }
 
     printf("%s: %d/%d checks passed\n",
