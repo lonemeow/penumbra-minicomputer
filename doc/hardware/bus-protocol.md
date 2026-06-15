@@ -155,10 +155,10 @@ such misuse and assert `bus_fault` but that behavior is not required.
 `bus_fault` (async `bus_error`) signals that an access did not
 complete normally.  It has two sources:
 
-- **No device at the address — the canonical source, and today the
-  only triggerable one.**  The fault is the *absence of any slave's
-  response*, not a verdict from a central decoder.  Each slave knows
-  only its own range — it claims (acknowledges) the addresses it backs
+- **No device at the address — the canonical source.**  The fault is
+  the *absence of any slave's response*, not a verdict from a central
+  decoder.  Each slave knows only its own range — it claims
+  (acknowledges) the addresses it backs
   and is silent otherwise — and the bus raises `bus_fault` when an
   access goes unclaimed.  This matters because on the external async
   bus the address layout is discovered at boot (autoconfig assigns
@@ -177,7 +177,9 @@ complete normally.  It has two sources:
 
 - **A slave rejecting an access it does claim** (optional, per the
   device restrictions above).  The responding slave asserts
-  `bus_fault` coincident with its own `busy` drop.
+  `bus_fault` coincident with its own `busy` drop.  A nested bridge is
+  the structural instance of this form — see
+  [No-device faults and nested bridges](#no-device-faults-and-nested-bridges).
 
 Either way the rule is the same: `bus_fault` rides the access's
 **completion** — the busy-drop cycle, which for an unclaimed address
@@ -191,6 +193,80 @@ completes — so each layer carries the fault inward as a companion to
 the completion it already forwards: the busy-drop of a single beat, or
 the fill-done of a line transfer it was unrolling (a faulting beat
 mid-line aborts the line and forwards the fault on its done event).
+
+### No-device faults and nested bridges
+
+The top-level system bus is the **async bus** itself.  In the discrete
+build essentially every device sits on it directly, and they *must*
+appear in the top-level autoconfig pass — otherwise the boot ROM can't
+find the RAM and console it needs to come up.  Nothing enumerable
+stands in front of them, and there is no aperture: the whole address
+space is autoconfig space, and the no-device fault is the async
+watchdog from the [first form above](#access-faults-bus_fault), run by
+the bus master.  (In an FPGA realization the transparent sync→async
+adapter at the chip edge is that master and hosts the watchdog; it is
+plumbing, not an autoconfig device.)
+
+A **nested bridge** is the one place the aperture model applies.  It
+sits on the async bus *as a device* — autoconfig enumerates it and
+assigns it a *base* for a fixed-size aperture `[base, base+size)` — and
+fronts a secondary bus of its own.
+
+```mermaid
+graph LR
+    M["bus master<br/>(watchdog)"] -->|async| RAM["RAM"]
+    M -->|async| UART["UART"]
+    M -->|async| BR["nested bridge<br/>(autoconfig device, aperture)<br/>+ watchdog"]
+    BR -->|secondary bus| C1["nested device"]
+    BR -->|secondary bus| C2["nested device"]
+```
+
+Making the nested bridge an ordinary autoconfig device is what lets it
+coexist with software-assigned, topology-blind base addresses:
+
+- Autoconfig reserves the bridge's whole window as one device-sized
+  allocation, so the free-pointer steps over it.  A top-level device is
+  never handed an address inside the aperture, and the bridge never
+  shadows one — the "device inside the window" hazard cannot arise.
+- Devices *behind* the bridge are not seen by the top-level pass —
+  autoconfig enumerates the bridge, not what is past it.  Discovering
+  them and assigning their bases *within* the aperture is bridge-aware
+  software's job, out of band for the bus protocol.  Because that
+  allocation draws from the aperture, a nested device is never placed
+  outside the window that reaches it.
+
+The bridge resolves accesses to its window the way the top-level master
+resolves the async bus: it claims the address, holds `busy` across its
+secondary-bus round-trip, and on a no-acknowledge timeout drops `busy`
+with `bus_fault` asserted — surfacing an empty nested slot to its parent
+as the [claimed-slave-reject form](#access-faults-bus_fault).  The
+watchdog deadline is the bridge's own parameter.
+
+```
+busy:    ___/‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾\___
+rdata:   -----------------------------------------[D]---   ← secondary-bus ack
+fault:   _________________________________________/‾‾\___   ← watchdog expired
+         |  present  |     secondary round-trip     | drop
+```
+
+The master is unaffected by the depth: its contract is unchanged —
+`bus_fault` rides the completion at the busy-drop — so a fault from two
+buses down is sampled the same way a top-level watchdog fault is.
+
+Where a segment's *set* of devices is fixed — an on-chip sync fabric —
+the no-claim fault collapses from a watchdog to the combinational
+OR-complement of the slaves' selects, and any slave that can reject an
+access it claims (a nested bridge, a device guarding its registers) is
+OR'd in alongside it:
+
+```
+bus_fault = ((re|we) & ~(OR of selects)) | (OR of slaves' bus_fault)
+```
+
+Several bridges compose with no added machinery — each is just another
+autoconfig device with its own aperture.  The price is that discovering
+the devices nested behind each is the software's responsibility, not an
+automatic recursive enumeration.
 
 ## Sync-Bus Mapping
 
