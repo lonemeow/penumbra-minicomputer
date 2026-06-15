@@ -112,7 +112,37 @@ module penumbra2_core
     // ── Retire observability (the instruction leaving WB) ────────
     output logic                  o_retire_valid,
     output logic [OPC_W-1:0]      o_retire_op_class,
-    output logic                  o_insn_retired     // retire pulse incl. drain-commit (perfctr)
+    output logic                  o_insn_retired,    // retire pulse incl. drain-commit (perfctr)
+    output logic [31:0]           o_retire_pc,       // the retiring instruction's PC (trace)
+    output logic [31:0]           o_retire_sr,       // architectural SR as the instruction commits
+
+    // ── Exception observability (trace markers) ──────────────────
+    // The same fault/ERET commit pulses the front end already acts on,
+    // surfaced for the trace stream so a consumer can annotate traps.
+    output logic                  o_fault_commit,    // a fault is taken this cycle
+    output logic [3:0]            o_fault_vec,       // its vector number
+    output logic                  o_eret_commit,     // an ERET is committing this cycle
+
+    // ── Drain-commit observability (EI/DI/WRSYS/ERET retire from EX) ──
+    // These never reach WB, so they are absent from o_retire_*; surfaced
+    // separately so the trace stream has no gaps over sysreg/mode code.
+    output logic                  o_dc_commit,
+    output logic [31:0]           o_dc_commit_pc,
+    output logic [OPC_W-1:0]      o_dc_commit_op_class,
+
+    // ── Branch-resolution observability (trace) ──────────────────
+    // The EX branch resolve that steers the front end — surfaced so a
+    // resolved-but-flushed branch (one that redirects fetch yet never
+    // retires) is visible, which a retire-only trace cannot show.
+    output logic                  o_branch_taken,
+    output logic [31:0]           o_branch_target,
+    output logic [31:0]           o_branch_pc,
+
+    // ── Pipeline occupancy (trace): instruction in EX / MEM (WB = retire) ──
+    output logic [31:0]           o_ex_pc,
+    output logic                  o_ex_valid,
+    output logic [31:0]           o_mem_pc,
+    output logic                  o_mem_valid
 );
 
     // ── Front-end wires ──────────────────────────────────────────
@@ -284,7 +314,11 @@ module penumbra2_core
         .o_commit_idx(o_commit_idx), .o_commit_data(o_commit_data),
         .o_commit_we(o_commit_we),
         .o_retire_valid(o_retire_valid), .o_retire_op_class(o_retire_op_class),
+        .o_retire_pc(o_retire_pc), .o_retire_sr(o_retire_sr),
         .o_branch_taken(branch_taken), .o_branch_target(branch_target),
+        .o_branch_pc(o_branch_pc),
+        .o_ex_pc(o_ex_pc), .o_ex_valid(o_ex_valid),
+        .o_mem_pc(o_mem_pc), .o_mem_valid(o_mem_valid),
         .o_dmem_addr(o_dmem_addr), .o_dmem_wdata(o_dmem_wdata),
         .o_dmem_byte_en(o_dmem_byte_en), .o_dmem_re(o_dmem_re),
         .o_dmem_we(o_dmem_we), .o_dmem_en(o_dmem_en),
@@ -312,6 +346,7 @@ module penumbra2_core
         .o_eret_commit(eret_commit),
         // Interrupt support — observability out, IRQ save-state in.
         .o_sr_s(sr_s), .o_sr_i(sr_i), .o_ei_commit(ei_commit), .o_dc_commit(dc_commit),
+        .o_dc_commit_pc(o_dc_commit_pc), .o_dc_commit_op_class(o_dc_commit_op_class),
         .o_pipe_busy(pipe_busy),
         .i_irq_entry(irq_entry), .i_irq_epc(irq_epc)
     );
@@ -322,6 +357,15 @@ module penumbra2_core
     // (a drain-commit only fires once MEM/WB are drained, i.e. o_retire_valid is
     // 0), so the OR counts each retiring instruction exactly once.
     assign o_insn_retired = o_retire_valid | dc_commit;
+
+    // Trace observability: the same commit pulses the front end consumes for
+    // its flush / vector-fetch / ERET redirects, surfaced as ports.
+    assign o_fault_commit = fault_commit;
+    assign o_fault_vec    = fault_vec;
+    assign o_eret_commit  = eret_commit;
+    assign o_dc_commit    = dc_commit;
+    assign o_branch_taken  = branch_taken;
+    assign o_branch_target = branch_target;
 
     assert property (@(posedge i_clk) disable iff (i_rst)
         !(o_retire_valid && dc_commit))

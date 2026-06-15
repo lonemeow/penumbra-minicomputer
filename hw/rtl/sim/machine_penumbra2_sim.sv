@@ -53,6 +53,21 @@ module machine_penumbra2_sim
     output logic                  o_commit_we,
     output logic                  o_retire_valid,
     output logic [OPC_W-1:0]      o_retire_op_class,
+    output logic [31:0]           o_retire_pc,       // retiring instruction's PC (trace)
+    output logic [31:0]           o_retire_sr,       // its architectural SR (trace)
+    output logic                  o_fault_commit,    // a fault is taken this cycle (trace marker)
+    output logic [3:0]            o_fault_vec,       // its vector number
+    output logic                  o_eret_commit,     // an ERET is committing (trace marker)
+    output logic                  o_dc_commit,       // a drain-commit (EI/DI/WRSYS/ERET) retires (trace)
+    output logic [31:0]           o_dc_commit_pc,    // its PC
+    output logic [OPC_W-1:0]      o_dc_commit_op_class, // its op_class
+    output logic                  o_branch_taken,    // EX branch resolve (trace)
+    output logic [31:0]           o_branch_target,   // its target
+    output logic [31:0]           o_branch_pc,       // the branch's own PC
+    output logic [31:0]           o_ex_pc,           // pipeline occupancy: EX slot (trace)
+    output logic                  o_ex_valid,
+    output logic [31:0]           o_mem_pc,          // MEM slot
+    output logic                  o_mem_valid,
     output logic                  o_prog_end
 );
 
@@ -99,6 +114,15 @@ module machine_penumbra2_sim
         .o_commit_we(o_commit_we),
         .o_retire_valid(o_retire_valid),
         .o_retire_op_class(o_retire_op_class),
+        .o_retire_pc(o_retire_pc), .o_retire_sr(o_retire_sr),
+        .o_fault_commit(o_fault_commit), .o_fault_vec(o_fault_vec),
+        .o_eret_commit(o_eret_commit),
+        .o_dc_commit(o_dc_commit), .o_dc_commit_pc(o_dc_commit_pc),
+        .o_dc_commit_op_class(o_dc_commit_op_class),
+        .o_branch_taken(o_branch_taken), .o_branch_target(o_branch_target),
+        .o_branch_pc(o_branch_pc),
+        .o_ex_pc(o_ex_pc), .o_ex_valid(o_ex_valid),
+        .o_mem_pc(o_mem_pc), .o_mem_valid(o_mem_valid),
         .o_prog_end(o_prog_end)
     );
 

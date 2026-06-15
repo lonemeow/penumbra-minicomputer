@@ -48,10 +48,22 @@ module penumbra2_spine
     // commit port can't see — e.g. a BREAK, which writes no register.
     output logic                  o_retire_valid,
     output logic [OPC_W-1:0]      o_retire_op_class,
+    output logic [31:0]           o_retire_pc,       // the retiring instruction's PC (trace)
+    output logic [31:0]           o_retire_sr,       // architectural SR as the instruction commits
 
     // ── Branch resolution (for a future fetch-redirect model) ────
     output logic                  o_branch_taken,
     output logic [31:0]           o_branch_target,
+    output logic [31:0]           o_branch_pc,       // PC of the branch resolving in EX (trace)
+
+    // ── Pipeline occupancy (trace) — the instruction in each stage ──
+    // EX = idex slot, MEM = exmem slot; WB rides o_retire_pc/o_retire_valid.
+    // Lets a trace follow an instruction stage-by-stage and see exactly
+    // where a slot is dropped (e.g. a resolved branch that never retires).
+    output logic [31:0]           o_ex_pc,
+    output logic                  o_ex_valid,
+    output logic [31:0]           o_mem_pc,
+    output logic                  o_mem_valid,
 
     // ── Data memory (MEM's BRAM data-side port, exposed to the core) ──
     output logic [31:0]           o_dmem_addr,
@@ -115,6 +127,8 @@ module penumbra2_spine
     output logic                  o_sr_i,            // SR.I (interrupt enable)
     output logic                  o_ei_commit,       // EI committed this cycle (arm ei_shadow)
     output logic                  o_dc_commit,       // any drain-commit completed this cycle
+    output logic [31:0]           o_dc_commit_pc,    // the drain-commit instruction's PC (trace)
+    output logic [OPC_W-1:0]      o_dc_commit_op_class, // its op_class (EI/DI/WRSYS/ERET)
     output logic                  o_pipe_busy,       // an instruction is in flight in ID/EX/MEM/WB
     input  logic                  i_irq_entry,       // take an interrupt: save-state with the boundary PC
     input  logic [31:0]           i_irq_epc          // the boundary PC to save (EPC)
@@ -495,6 +509,10 @@ module penumbra2_spine
     // half of the pipeline still holds a live instruction (drain detection).
     assign o_ei_commit = ei_commit;
     assign o_dc_commit = ex_dc_commit;
+    // A drain-commit retires from EX (it never enters WB), so its PC and class
+    // ride the EX/idex slot it is held in — surfaced for a gap-free trace.
+    assign o_dc_commit_pc       = idex_pc;
+    assign o_dc_commit_op_class = idex_op_class;
     assign o_pipe_busy = idex_valid | exmem_valid | memwb_valid;
 
     // ════════════════════════════════════════════════════════════
@@ -538,13 +556,23 @@ module penumbra2_spine
     // ── Fetch back-pressure + commit observability ───────────────
     assign o_fetch_stall  = id_stall;
     assign o_branch_taken = ex_branch_taken;
+    assign o_branch_pc    = idex_pc;   // the branch resolves in EX, holding idex_pc
+    assign o_ex_pc        = idex_pc;
+    assign o_ex_valid     = idex_valid;
+    assign o_mem_pc       = exmem_pc;
+    assign o_mem_valid    = exmem_valid;
     assign o_commit_idx   = wr_idx;
     assign o_commit_data  = wr_data;
     assign o_commit_we    = wr_en;
 
-    // Retire observability: the MEM/WB slot leaving WB this cycle.
+    // Retire observability: the MEM/WB slot leaving WB this cycle. The PC and
+    // SR ride alongside the pulse for the trace stream — memwb_pc is the slot's
+    // own PC (also the EPC source on a fault); sr_committed is the registered SR
+    // the instruction saw, before this cycle's own flag write commits.
     assign o_retire_valid    = memwb_valid;
     assign o_retire_op_class = memwb_op_class;
+    assign o_retire_pc       = memwb_pc;
+    assign o_retire_sr       = sr_committed;
 
     // ════════════════════════════════════════════════════════════
     // Assertions — sim-only (Verilator --assert); stripped at synth.
