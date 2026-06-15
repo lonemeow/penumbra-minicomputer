@@ -112,6 +112,7 @@ Accessed via `WRSYS`/`RDSYS` with device ID 0.
 | W    | TLB_PTE  | 4     | 0x10 | Write permission. |
 | R    | TLB_PTE  | 3     | 0x08 | Read permission. |
 | C    | TLB_PTE  | 2     | 0x04 | Cacheable. 0 = bypass cache (MMIO, DMA buffers). |
+| —    | TLB_PTE  | 1     | 0x02 | Reserved; software writes 0. Tentatively earmarked for a future *speculatable* attribute — see [Reserved bits](#reserved-bits). |
 | V    | TLB_PTE  | 0     | 0x01 | Valid. Entry participates in lookup only when `V=1`. |
 
 ### Permission Check Rules
@@ -513,6 +514,18 @@ parallel with TLB translation. The `C` bit and physical tag arrive
 together at the end of the cycle and gate the hit/commit decision —
 when `C=0` the cache treats the access as pass-through and forwards
 it to memory, regardless of any incidental tag match.
+
+### Reserved bits
+
+`TLB_PTE` bit 1 (`0x02`) is reserved; software writes 0. It is
+tentatively earmarked — not yet finalized — for a *speculatable* (or
+idempotent) attribute: a future control by which an uncacheable page
+(`C=0`) could advertise that its accesses are side-effect-free, so a
+core that issues memory accesses speculatively may treat them as it
+would cacheable memory. The motivating case is the boot ROM, which is
+uncacheable yet idempotent. The encoding is held here so it is not spent
+elsewhere; its exact semantics are left open until the speculation model
+is settled.
 
 ### I-Cache Coherence
 
