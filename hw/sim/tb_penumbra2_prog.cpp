@@ -80,6 +80,14 @@ int main(int argc, char** argv) {
     // R1 == 1 is reachable only if every branch redirect and flush behaved.
     check("R1 (PASS flag)", shadow[1], 1);
 
+    // On failure, dump the architectural GPRs (physical entries 0..13 map to
+    // R0..R13) so a self-checking program's diagnostic registers are visible.
+    if (errors) {
+        printf("  shadow GPRs at BREAK:\n");
+        for (int i = 0; i < 14; i++)
+            printf("    R%-2d = 0x%08X\n", i, shadow[i]);
+    }
+
     printf("%s: %d/%d checks passed\n",
            errors ? "FAIL" : "PASS", tests - errors, tests);
     delete dut;

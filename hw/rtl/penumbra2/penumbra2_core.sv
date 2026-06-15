@@ -183,20 +183,19 @@ module penumbra2_core
     logic        wrsys_resync;      // re-fetch after a WRSYS (post-commit-wait release)
     logic [31:0] wrsys_resync_pc;   // its target = the WRSYS's sequential successor
 
-    // ── Interrupt entry (interrupt unit <-> spine + front end) ────
-    logic        sr_s, sr_i, ei_commit, dc_commit, pipe_busy;   // from spine
-    logic        irq_fetch_stop;    // freeze IF1 at the boundary while draining
-    logic        irq_entry;         // take the interrupt: save-state + vector fetch
+    // ── Interrupt support (interrupt unit <-> spine + front end) ──
+    logic        sr_s, sr_i, ei_commit, dc_commit, ex_stall;   // from spine
+    logic        irq_inject;        // take the interrupt: tag the EX instruction (a synthetic fault)
     logic [3:0]  irq_vec;
-    logic [31:0] irq_epc;
 
-    // The vector-fetch FSM is launched by either entry source — a fault commit
-    // (handler from the faulting PC) or an interrupt entry — carrying that
-    // source's vector. They are mutually exclusive (a fault preempts the drain).
+    // The vector-fetch FSM is launched by a fault commit at WB. An interrupt is
+    // one such commit now — the EX stage tags its instruction as a synthetic
+    // fault — so fault_commit / fault_vec carry the interrupt's entry and vector
+    // too, with no separate launch source.
     logic        vecf_launch;
     logic [3:0]  vecf_launch_vec;
-    assign vecf_launch     = fault_commit | irq_entry;
-    assign vecf_launch_vec = fault_commit ? fault_vec : irq_vec;
+    assign vecf_launch     = fault_commit;
+    assign vecf_launch_vec = fault_vec;
 
     // ── Front-end redirect / flush composition + fetch-port mux ──
     // Three control-flow events steer or flush IF: a taken branch, the vector
@@ -272,7 +271,7 @@ module penumbra2_core
         .i_mem_busy(i_fetch_busy),
         .i_redirect(if1_redirect), .i_redirect_pc(if1_redirect_pc),
         .i_flush(fault_commit),                    // bubble the wrong-path fetch at the fault
-        .i_fetch_stop(irq_fetch_stop),             // freeze at the boundary while draining for an IRQ
+        .i_fetch_stop(1'b0),                       // unused: the interrupt no longer drains at fetch
         .o_fetch_addr(if1_fetch_addr), .o_fetch_en(if1_fetch_en),
         .o_pc(if1_pc), .o_next_pc(if1_next_pc), .o_valid(if1_valid)
     );
@@ -347,8 +346,8 @@ module penumbra2_core
         // Interrupt support — observability out, IRQ save-state in.
         .o_sr_s(sr_s), .o_sr_i(sr_i), .o_ei_commit(ei_commit), .o_dc_commit(dc_commit),
         .o_dc_commit_pc(o_dc_commit_pc), .o_dc_commit_op_class(o_dc_commit_op_class),
-        .o_pipe_busy(pipe_busy),
-        .i_irq_entry(irq_entry), .i_irq_epc(irq_epc)
+        .o_ex_stall(ex_stall),
+        .i_irq_inject(irq_inject), .i_irq_vec(irq_vec)
     );
 
     // Instructions retired: a normal WB retirement OR a drain-commit — which
@@ -390,25 +389,22 @@ module penumbra2_core
     );
 
     // ══════════════════════════════════════════════════════════
-    // Interrupt unit — recognition + drain-and-take
+    // Interrupt unit — recognition + EX-frontier injection
     // ══════════════════════════════════════════════════════════
-    // Recognizes an eligible IRQ, stops the front end at the boundary, drains
-    // the in-flight stream, then pulses irq_entry — which save-states the
-    // boundary PC (into the spine's SPR file) and launches the vector fetch
-    // above. The drained signal spans the whole pipe: the IF1/IF2 register
-    // (if1_valid) and IF2 (if2_valid) here, plus the spine's ID/EX/MEM/WB
-    // (pipe_busy). if1_valid matters because a fetch can sit valid-but-unconsumed
-    // in that register under a stall — the drain must outlast it, not skip it.
+    // Recognizes an eligible IRQ and, when the EX slot is a clean committable
+    // boundary, pulses irq_inject — which tags the EX instruction as a synthetic
+    // fault (penumbra2_ex_stage). It then rides the fault path: save-state
+    // EPC ← its own PC, squash younger, vector fetch. The clean-boundary gate is
+    // ~ex_stall (no older access still in flight) so EPC and the saved SR land
+    // on a clean boundary — "don't take an interrupt while stalled", structural.
     penumbra2_irq u_irq (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_irq(i_irq), .i_timer_irq(i_timer_irq),
         .i_sr_i(sr_i), .i_ei_commit(ei_commit),
         .i_retire_valid(o_retire_valid), .i_dc_commit(dc_commit),
-        .i_pipe_busy(if1_valid | if2_valid | pipe_busy),
-        .i_boundary_pc(if1_fetch_addr),
+        .i_ex_valid(o_ex_valid), .i_ex_stall(ex_stall),
         .i_fault_commit(fault_commit), .i_vecf_active(vecf_active),
-        .o_fetch_stop(irq_fetch_stop),
-        .o_irq_entry(irq_entry), .o_irq_vec(irq_vec), .o_irq_epc(irq_epc)
+        .o_irq_inject(irq_inject), .o_irq_vec(irq_vec)
     );
 
 endmodule

@@ -129,9 +129,9 @@ module penumbra2_spine
     output logic                  o_dc_commit,       // any drain-commit completed this cycle
     output logic [31:0]           o_dc_commit_pc,    // the drain-commit instruction's PC (trace)
     output logic [OPC_W-1:0]      o_dc_commit_op_class, // its op_class (EI/DI/WRSYS/ERET)
-    output logic                  o_pipe_busy,       // an instruction is in flight in ID/EX/MEM/WB
-    input  logic                  i_irq_entry,       // take an interrupt: save-state with the boundary PC
-    input  logic [31:0]           i_irq_epc          // the boundary PC to save (EPC)
+    output logic                  o_ex_stall,        // EX back-pressure (the irq unit's clean-boundary gate)
+    input  logic                  i_irq_inject,      // take an interrupt: tag the EX instruction as a fault
+    input  logic [3:0]            i_irq_vec          // its vector (VEC_TIMER / VEC_EXT_IRQ)
 );
 
     // This integration deliberately leaves several sub-module outputs
@@ -263,13 +263,14 @@ module penumbra2_spine
     // WB commits NZCV into SR here; EX's flag bypass reads SR's NZCV as the
     // committed-SR fallback when no in-flight producer forwards. The fault
     // commit drives the save-state pulse (EPC ← faulting PC, ESR ← SR, S=1,
-    // I=0). Save-state fires for a committing fault (EPC ← faulting PC) or an
-    // interrupt entry (EPC ← boundary PC); the two never coincide (a fault
-    // during the interrupt drain preempts the entry).
+    // I=0). An interrupt rides the same path: the EX stage tags its instruction
+    // as a synthetic fault (driven by i_irq_inject), so wb_fault_commit covers
+    // both a real fault and an interrupt entry, and save_pc is the committing
+    // slot's own PC either way.
     logic        save_state;
     logic [31:0] save_pc;
-    assign save_state = wb_fault_commit | i_irq_entry;
-    assign save_pc    = wb_fault_commit ? wb_fault_pc : i_irq_epc;
+    assign save_state = wb_fault_commit;
+    assign save_pc    = wb_fault_pc;
 
     // ── SPR-file software access (RDSPR/WRSPR EPC/ESR) ────────────
     // EPC/ESR are SPR-file-backed (not regfile entries). WRSPR commits the
@@ -409,6 +410,7 @@ module penumbra2_spine
         .i_pc(idex_pc), .i_next_pc(idex_next_pc), .i_is_trap(idex_is_trap),
         .i_valid(idex_valid), .i_fault_pending(idex_fault_pending),
         .i_fault_vec(idex_fault_vec), .i_fault_status(idex_fault_status),
+        .i_irq_inject(i_irq_inject), .i_irq_vec(i_irq_vec),
         .i_sr_flags(spr_sr_flags), .i_sr_committed(sr_committed),
         .i_wb_flags(memwb_flag_value), .i_wb_writes_flags(memwb_flag_we & memwb_valid),
         .i_stall_in(mem_stall), .i_wb_active(memwb_valid), .i_bubble(wb_fault_commit),
@@ -523,7 +525,7 @@ module penumbra2_spine
     // ride the EX/idex slot it is held in — surfaced for a gap-free trace.
     assign o_dc_commit_pc       = idex_pc;
     assign o_dc_commit_op_class = idex_op_class;
-    assign o_pipe_busy = idex_valid | exmem_valid | memwb_valid;
+    assign o_ex_stall = ex_stall;
 
     // ════════════════════════════════════════════════════════════
     // Scoreboard's view of the downstream in-flight writers

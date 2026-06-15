@@ -64,6 +64,17 @@ module penumbra2_ex_stage
     input  logic [3:0]            i_fault_vec,
     input  logic [31:0]           i_fault_status,   // carried payload; FAULT_NONE when none
 
+    // ── Interrupt injection (from the interrupt unit) ────────────
+    // An eligible interrupt is taken by tagging this instruction as a synthetic
+    // fault here, so it rides the precise-fault path: its access is suppressed
+    // in MEM (~i_fault_pending), its register write is dropped at WB, and the
+    // save-state captures EPC ← its own PC after the older in-flight slots
+    // commit ahead of it. The instruction is inert and re-executes after ERET.
+    // Its own exception (upstream fault / DIV0 / trap) outranks the interrupt,
+    // leaving the IRQ pending to retake after that handler.
+    input  logic                  i_irq_inject,
+    input  logic [3:0]            i_irq_vec,
+
     // ── Flag bypass external sources (MEM producer is internal) ──
     input  logic [3:0]            i_sr_flags,        // committed SR NZCV
     input  logic [3:0]            i_wb_flags,        // MEM/WB in-flight producer
@@ -396,15 +407,21 @@ module penumbra2_ex_stage
                 o_phys_dst_aux    <= i_phys_dst_aux;
                 o_phys_dst_aux_en <= i_phys_dst_aux_en;
                 o_pc              <= i_pc;
-                // EX is where two synchronous exceptions are raised: a DIV0
-                // (VEC_ARITH) and a software trap (SYSCALL/BREAK, whose vector
-                // already rides in i_fault_vec from decode). Neither collides
-                // with an incoming IF/ID fault — a faulting slot is inert and
-                // a trap is suppressed under one (decode gates is_trap off).
-                o_fault_pending   <= i_fault_pending | (is_divmul & dm_fault) | i_is_trap;
-                o_fault_vec       <= (is_divmul & dm_fault) ? VEC_ARITH : i_fault_vec;
-                // DIV0 and traps carry no data address; i_fault_status is
-                // FAULT_NONE for them already (self-qualifying carry).
+                // EX raises two synchronous exceptions — a DIV0 (VEC_ARITH) and
+                // a software trap (SYSCALL/BREAK, vector from decode) — and is
+                // also where an eligible interrupt is injected as a synthetic
+                // fault on this instruction. The slot's own exception outranks
+                // the interrupt: an upstream fault, DIV0, or trap keeps its
+                // vector, so the IRQ stays pending and retakes after that
+                // handler. The interrupt's vector applies only on an otherwise
+                // clean slot.
+                o_fault_pending   <= i_fault_pending | (is_divmul & dm_fault) | i_is_trap | i_irq_inject;
+                o_fault_vec       <= (is_divmul & dm_fault)         ? VEC_ARITH
+                                   : (i_fault_pending | i_is_trap)  ? i_fault_vec
+                                   : i_irq_inject                   ? i_irq_vec
+                                   :                                  i_fault_vec;
+                // DIV0, traps, and the injected interrupt carry no data address;
+                // i_fault_status is FAULT_NONE for all of them (self-qualifying).
                 o_fault_status    <= i_fault_status;
             end
         end
