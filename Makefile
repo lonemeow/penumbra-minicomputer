@@ -443,10 +443,10 @@ SIMRTL_TOP    := machine_penumbra2_sim
 SIMRTL_OUT    := Vmachine_penumbra2_sim_interactive
 SIMRTL_TOPSV  := hw/rtl/sim/machine_penumbra2_sim.sv
 SIMRTL_TB     := hw/sim/tb_penumbra2_interactive.cpp
-# gen2's unified_bus_mem defaults to 64 KB (sized for conformance); enlarge the
-# RAM region for the interactive/benchmark builds so a real boot image fits.
-# gen1's machine_sim already carries a large simple_mem, so it needs no override.
-SIMRTL_GFLAGS := -GMEM_REGION_WORDS=2097152   # 8 MB RAM region
+# gen2's machine_penumbra2_sim backs RAM with the full sdram_sim stack (32 MB),
+# so a real boot image fits with no parameter override — as with gen1's
+# simple_mem.
+SIMRTL_GFLAGS :=
 else
 SIMRTL_TOP    := machine_sim
 SIMRTL_OUT    := Vmachine_sim_interactive
