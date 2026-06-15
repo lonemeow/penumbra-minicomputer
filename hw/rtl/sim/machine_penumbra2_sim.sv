@@ -3,8 +3,11 @@
 // The Verilator wrapper of machine_penumbra2 (the sim-wrapper role in
 // doc/internals/build-system.md): the board-independent machine plus the
 // devices a program run needs:
-//   - unified_bus_mem — ROM region holds the +rom_hex program at 0xFFFF_0000,
-//     RAM low, so the vector table at 0x0 and the reset code never alias;
+//   - boot_rom — the ROM region at 0xFFFF_0000 holds the +rom_hex program;
+//   - sdram_sim — the full v2 SDRAM stack (adapter + CDC + controller + sim
+//     PHY + behavioral chip) backs the RAM region low, so the same
+//     variable-latency memory model gen1's RTL sim uses now also exercises the
+//     gen2 cache hierarchy. It runs on i_sdram_clk, driven faster than i_clk;
 //   - a fixed-address sim UART (NS16450); and
 //   - an autoconfig SD/SPI controller (sim_spi behind autoconfig_dev) on the
 //     cfg daisy chain the machine's bus controller drives.
@@ -18,15 +21,21 @@ module machine_penumbra2_sim
     import penumbra_pkg::*;
     import penumbra2_pkg::*;
 #(
-    parameter logic [31:0] RESET_PC         = 32'hFFFF_0000,
-    // Sim RAM/ROM region size. Big enough that conformance programs' data and
-    // stacks fit without an unbacked (faulting) access — the widest gen2 test
-    // walks four pages up to 0x5000. The bus-fault tests pick 0x0200_0000 as
-    // their "no device" address precisely because it is far above this.
-    parameter int          MEM_REGION_WORDS = 16384,   // 64 KiB per region
-    parameter string       INIT_FILE        = "program.hex"
+    parameter logic [31:0] RESET_PC  = 32'hFFFF_0000,
+    parameter int          ROM_WORDS = 16384,            // 64 KiB boot ROM
+    // 32 MiB SDRAM region (matches the ULX3S W9825 part the sim models). Big
+    // enough that conformance programs' data and stacks never fault — the
+    // widest gen2 test walks four pages up to 0x5000. The bus-fault tests pick
+    // 0x0200_0000 as their "no device" address precisely because it sits just
+    // past this region.
+    parameter int          RAM_WORDS = 8 * 1024 * 1024
 )(
     input  logic                  i_clk,
+    // Separate SDRAM clock, driven faster than i_clk by the testbench to match
+    // hardware's 25 MHz CPU / 100 MHz SDRAM ratio (hw/CLAUDE.md dual-clock sim),
+    // so memory latency in CPU cycles tracks the FPGA. Tie to i_clk for a
+    // same-rate setup.
+    input  logic                  i_sdram_clk,
     input  logic                  i_rst,
     input  logic                  i_irq,
     input  logic                  i_timer_irq,
@@ -75,10 +84,14 @@ module machine_penumbra2_sim
     logic [3:0]  bus_byte_en;
     logic        bus_re, bus_we, bus_busy, bus_fault;
 
-    // External-bus fabric and the combined external IRQ.
-    logic [31:0] mem_rdata, uart_rdata;
-    logic        mem_busy, uart_busy, uart_irq, mem_claimed;
-    logic        uart_sel, uart_sel_r, mem_claimed_r, irq_combined;
+    // Per-slave read data / busy and address selects. The RAM region is backed
+    // by the full v2 SDRAM stack (sdram_sim) and the ROM region by boot_rom, so
+    // — unlike the old single compressed memory — each owns its own decode.
+    logic [31:0] ram_rdata, rom_rdata, uart_rdata;
+    logic        ram_busy, rom_busy, uart_busy, uart_irq;
+    logic        ram_sel, rom_sel, uart_sel;
+    logic        ram_sel_r, rom_sel_r, uart_sel_r;
+    logic        irq_combined;
 
     // Bus-controller outputs (autoconfig cfg-enable / reset) from the machine.
     logic        bus_rst, bus_cfg_en;
@@ -127,42 +140,76 @@ module machine_penumbra2_sim
     );
 
     // ── Bus fabric ───────────────────────────────────────────────
-    // Each slave owns its address decode: the UART claims a 4 KB page at
-    // UART_BASE, the memory claims the RAM/ROM it backs (o_claimed), and the
-    // autoconfig device claims config space (while cfg-enabled) then its
-    // assigned base. No fabric-side map — what is mapped is discovered at boot,
-    // so a no-device access is the absence of any claim (bus-protocol.md).
+    // Each slave owns its address decode: the SDRAM-backed RAM region at
+    // RAM_BASE, the boot ROM at ROM_BASE, the UART's 4 KB page at UART_BASE,
+    // and the autoconfig device (config space while cfg-enabled, then its
+    // assigned base). No fabric-side map — what is mapped is discovered at
+    // boot, so a no-device access is the absence of any claim (bus-protocol.md).
     localparam int UART_PAGE_SIZE = 4096;
 
+    bus_devsel #(.BASE(RAM_BASE),  .SIZE(32'(RAM_WORDS * 4)))
+        u_ram_sel  (.i_addr(bus_addr), .o_sel(ram_sel));
+    bus_devsel #(.BASE(ROM_BASE),  .SIZE(32'(ROM_WORDS * 4)))
+        u_rom_sel  (.i_addr(bus_addr), .o_sel(rom_sel));
     bus_devsel #(.BASE(UART_BASE), .SIZE(32'(UART_PAGE_SIZE)))
         u_uart_sel (.i_addr(bus_addr), .o_sel(uart_sel));
 
-    // Registered selects align the read-data mux with the slaves' 1-cycle
-    // registered read; busy and fault stay combinational (current cycle).
+    // Registered selects align the read-data mux with the slaves' registered
+    // read latency; busy and fault stay combinational (current cycle). A held
+    // SDRAM transaction keeps its select asserted through the busy-drop cycle,
+    // so the one registered mux serves both the fixed-latency ROM/UART and the
+    // variable-latency SDRAM.
     always_ff @(posedge i_clk) begin
-        uart_sel_r    <= uart_sel;
-        acfg_sel_r    <= ac_spi_sel;
-        mem_claimed_r <= mem_claimed;
+        ram_sel_r  <= ram_sel;
+        rom_sel_r  <= rom_sel;
+        uart_sel_r <= uart_sel;
+        acfg_sel_r <= ac_spi_sel;
     end
 
-    // OR-combine: each slave masks its contribution by its own select, so
-    // exactly one drives the bus; an access no slave claims faults.
-    assign bus_rdata    = (uart_sel_r    ? uart_rdata : 32'b0)
-                        | (acfg_sel_r    ? acfg_rdata : 32'b0)
-                        | (mem_claimed_r ? mem_rdata  : 32'b0);
-    assign bus_busy     = (uart_sel    ? uart_busy   : 1'b0)
-                        | (ac_spi_sel  ? ac_spi_busy : 1'b0)
-                        | (mem_claimed ? mem_busy    : 1'b0);
-    assign bus_fault    = (bus_re | bus_we) & ~(uart_sel | ac_spi_sel | mem_claimed);
     assign irq_combined = i_irq | uart_irq | spi_irq;
 
-    unified_bus_mem #(
-        .REGION_WORDS(MEM_REGION_WORDS), .INIT_FILE(INIT_FILE)
-    ) u_mem (
-        .i_clk(i_clk), .i_rst(i_rst),
+    // TODO(human): OR-combine the slave responses onto the external bus.
+    // Drive three signals from the per-slave outputs declared/wired above:
+    //   bus_rdata — read-data mux. Each slave masks its rdata by its select so
+    //               exactly one drives; use the *registered* selects
+    //               (ram_sel_r / rom_sel_r / uart_sel_r / acfg_sel_r) so the
+    //               mux lands on the cycle the slave's registered read is valid.
+    //               Slaves: ram_rdata, rom_rdata, uart_rdata, acfg_rdata.
+    //   bus_busy  — OR of each selected slave's busy, using the *combinational*
+    //               selects (ram_sel / rom_sel / uart_sel / ac_spi_sel) so the
+    //               core stalls the same cycle the slave needs time. Slaves:
+    //               ram_busy, rom_busy, uart_busy, ac_spi_busy.
+    //   bus_fault — an active access (bus_re | bus_we) that no slave claims.
+    // See machine_sim.sv's "Bus response OR-combine" for the gen1 form this
+    // mirrors (acfg_busy there is just ac_spi_busy, as it is here).
+
+    always_comb begin
+        if (ram_sel_r)       bus_rdata = ram_rdata;
+        else if (rom_sel_r)  bus_rdata = rom_rdata;
+        else if (uart_sel_r) bus_rdata = uart_rdata;
+        else if (acfg_sel_r) bus_rdata = acfg_rdata;
+        else                 bus_rdata = 32'b0;
+    end
+    assign bus_busy  = (ram_sel    ? ram_busy    : 1'b0)
+                     | (rom_sel    ? rom_busy    : 1'b0)
+                     | (uart_sel   ? uart_busy   : 1'b0)
+                     | (ac_spi_sel ? ac_spi_busy : 1'b0);
+    assign bus_fault = (bus_re | bus_we) & !(ram_sel | rom_sel | uart_sel | ac_spi_sel);
+
+    // ── RAM: full v2 SDRAM stack (adapter + CDC + controller + sim PHY +
+    // behavioral W9825 chip). Drop-in bus shape; needs the faster i_sdram_clk.
+    sdram_sim u_ram (
+        .i_clk(i_clk), .i_sdram_clk(i_sdram_clk), .i_rst(i_rst),
         .i_addr(bus_addr), .i_wdata(bus_wdata), .i_byte_en(bus_byte_en),
-        .i_re(bus_re), .i_we(bus_we),
-        .o_rdata(mem_rdata), .o_busy(mem_busy), .o_claimed(mem_claimed)
+        .i_we(bus_we & ram_sel), .i_re(bus_re & ram_sel),
+        .o_rdata(ram_rdata), .o_busy(ram_busy)
+    );
+
+    // ── Boot ROM: holds the +rom_hex program at ROM_BASE (0xFFFF_0000).
+    boot_rom #(.ROM_WORDS(ROM_WORDS)) u_rom (
+        .i_clk(i_clk), .i_rst(i_rst),
+        .i_addr(bus_addr), .i_re(bus_re & rom_sel),
+        .o_rdata(rom_rdata), .o_busy(rom_busy)
     );
 
     // Sim UART (NS16450, no FIFO). Its TX/RX byte stream is brought to the top.

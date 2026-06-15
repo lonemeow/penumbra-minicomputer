@@ -1,7 +1,7 @@
 // tb_penumbra2_interactive.cpp — Penumbra/2 shim for the shared sim console.
 //
-// Wraps Vmachine_penumbra2_sim behind the SimCore interface: a single CPU
-// clock (no separate SDRAM domain) and BREAK observed via o_prog_end (gen2
+// Wraps Vmachine_penumbra2_sim behind the SimCore interface: a CPU clock plus a
+// faster i_sdram_clk for the full SDRAM model, and BREAK observed via o_prog_end (gen2
 // traps a retiring BREAK rather than driving an o_halted line). It reconstructs
 // an instruction trace from the machine's commit/retire observability ports —
 // gen2 is a pipeline with a 2R/1W regfile and no spare debug read port, so
@@ -41,7 +41,7 @@ static const char* const vec_names[16] = {
     "rsvd12",    "rsvd13",  "rsvd14",   "rsvd15",
 };
 
-// TODO(human): phys_reg_name — label a physical scoreboard entry for the trace.
+// phys_reg_name — label a physical scoreboard entry for the trace.
 //
 // The gen2 regfile is *physically* addressed (penumbra2_regmap.sv): the commit
 // port's o_commit_idx is a scoreboard entry, not an architectural register
@@ -123,19 +123,24 @@ struct Penumbra2Core : SimCore {
         dut->i_uart_rx_data = 0;
         dut->i_spi_resp_valid = 0;
         dut->i_spi_resp_data = 0xFF;
+        dut->i_sdram_clk = 0;
         tick();   // two reset cycles
         tick();
         dut->i_rst = 0;
     }
 
-    // One CPU cycle: a falling then a rising edge. o_uart_rx_ack is sampled at
-    // the falling edge, where the sim UART's combinational ack is valid.
+    // One CPU cycle with the dual SDRAM clock: 4 SDRAM half-cycles per CPU
+    // half-cycle (hardware's 25 MHz CPU / 100 MHz SDRAM ratio). o_uart_rx_ack is
+    // sampled at the falling edge, where the sim UART's combinational ack is
+    // valid, before the SDRAM toggles.
     void tick() override {
         dut->i_clk = 0;
         dut->eval();
         rx_ack_latched = dut->o_uart_rx_ack;
+        for (int s = 0; s < 4; s++) { dut->i_sdram_clk = !dut->i_sdram_clk; dut->eval(); }
         dut->i_clk = 1;
         dut->eval();
+        for (int s = 0; s < 4; s++) { dut->i_sdram_clk = !dut->i_sdram_clk; dut->eval(); }
     }
 
     void uart_rx(bool v, uint8_t d) override { dut->i_uart_rx_valid = v; dut->i_uart_rx_data = d; }

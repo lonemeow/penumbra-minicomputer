@@ -23,8 +23,11 @@ static void check(const char* n, uint32_t g, uint32_t e) {
 }
 
 static void tick(Vmachine_penumbra2_sim* dut) {
+    // Dual clock: 4 SDRAM half-cycles per CPU half-cycle (see tb_penumbra2_prog).
     dut->i_clk = 0; dut->eval();
+    for (int s = 0; s < 4; s++) { dut->i_sdram_clk = !dut->i_sdram_clk; dut->eval(); }
     dut->i_clk = 1; dut->eval();
+    for (int s = 0; s < 4; s++) { dut->i_sdram_clk = !dut->i_sdram_clk; dut->eval(); }
 }
 
 int main(int argc, char** argv) {
@@ -32,14 +35,15 @@ int main(int argc, char** argv) {
     Vmachine_penumbra2_sim* dut = new Vmachine_penumbra2_sim;
     uint32_t shadow[22] = {0};
 
-    dut->i_irq = 0; dut->i_timer_irq = 0;
+    dut->i_irq = 0; dut->i_timer_irq = 0; dut->i_sdram_clk = 0;
     dut->i_rst = 1; tick(dut); tick(dut); dut->i_rst = 0;
 
     // Hold the external IRQ asserted for the rest of the run; the program is
     // responsible for masking it until it is ready to take it.
     dut->i_irq = 1;
 
-    const int CYCLE_CAP = 500000;
+    // Matches tb_penumbra2_prog: generous for the full SDRAM model's fills.
+    const int CYCLE_CAP = 2000000;
     bool ended = false;
     for (int c = 0; c < CYCLE_CAP && !ended; c++) {
         dut->eval();

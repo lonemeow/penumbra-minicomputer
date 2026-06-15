@@ -31,8 +31,14 @@ static void check(const char* n, uint32_t g, uint32_t e) {
 }
 
 static void tick(Vmachine_penumbra2_sim* dut) {
+    // Dual clock: 4 SDRAM half-cycles per CPU half-cycle, matching hardware's
+    // 25 MHz CPU / 100 MHz SDRAM ratio so memory latency in CPU cycles tracks
+    // the FPGA. Each SDRAM toggle gets its own eval() so the SDRAM-domain RTL
+    // (controller, CDC's sd side, chip model) advances on its own clock.
     dut->i_clk = 0; dut->eval();
+    for (int s = 0; s < 4; s++) { dut->i_sdram_clk = !dut->i_sdram_clk; dut->eval(); }
     dut->i_clk = 1; dut->eval();
+    for (int s = 0; s < 4; s++) { dut->i_sdram_clk = !dut->i_sdram_clk; dut->eval(); }
 }
 
 int main(int argc, char** argv) {
@@ -41,14 +47,17 @@ int main(int argc, char** argv) {
     uint32_t shadow[22] = {0};   // committed values, indexed by physical entry
 
     // Reset, held two cycles (testbench convention). IRQ lines idle.
-    dut->i_irq = 0; dut->i_timer_irq = 0;
+    dut->i_irq = 0; dut->i_timer_irq = 0; dut->i_sdram_clk = 0;
     dut->i_rst = 1; tick(dut); tick(dut); dut->i_rst = 0;
 
     // Run until the machine pulses program end, with a safety cap generous
     // enough for uncached boot-mode fetches through the L1/arbiter/L2 path,
     // line fills, flush bubbles, multi-cycle divmul iterations, and the
-    // page-walking MMU tests (the same envelope as the gen1 runner).
-    const int CYCLE_CAP = 500000;
+    // page-walking MMU tests. Matches the gen1 runner's cap: both drive the
+    // full SDRAM model, whose multi-cycle line fills dominate any test whose
+    // working set thrashes the L1 (a 16 KiB walk needs well over the 500k that
+    // sufficed under the old 1-cycle memory model).
+    const int CYCLE_CAP = 2000000;
     bool ended = false;
     long retires = 0, last_retire = -1;
     for (int c = 0; c < CYCLE_CAP && !ended; c++) {
