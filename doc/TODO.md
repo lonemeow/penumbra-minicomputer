@@ -83,6 +83,47 @@ faulting slot's `o_op_class` to `OPC_ALU` (the same reason `o_is_trap` is gated
 there), so an inert slot never reports a real op class at retire. The remaining
 `o_retire_valid` over-count is the perfctr-only item above.
 
+## Hardware: Penumbra/2 taken branch under a MEM stall lost its link write (RESOLVED)
+
+A `BL`/`JMP` resolving in EX while an older memory op stalled MEM was discarded
+instead of committing — its link write (`R13`) was lost. Surfaced as Dhrystone
+on the gen2 RTL "crashing": `bench_main`'s prologue (a run of write-through
+stores hitting cold lines) stalled MEM with `bl bench_init` right behind it; the
+BL took its branch (front end redirected to `bench_init`) but never retired, so
+`R13` kept `bench_main`'s caller link. `bench_init`'s closing `jmp r13` returned
+straight to `_start`'s program-end `break`, skipping the benchmark — Dhrystone
+printed nothing and BREAK'd at the *normal* end PC, which is why it read as a
+crash rather than a hang.
+
+Root cause: `penumbra2_id_stage`'s ID/EX register ranked `i_bubble` above
+`i_stall_in`. `ex_branch_taken` rides `i_bubble` to kill a taken branch's
+wrong-path *successor* — correct only once the branch advances out of EX. Under
+MEM back-pressure (`ex_stall`) the branch is pinned in EX, so the ID/EX register
+still holds the branch itself, and the bubble cleared it. Fix: gate that one
+term — `i_bubble = (ex_branch_taken & ~ex_stall) | wb_fault_commit | … ` — in
+`penumbra2_spine`. `wb_fault_commit` stays ungated (a fault must kill younger
+slots regardless of back-pressure); `eret_commit`/`wrsys_resync` fire only with
+the pipe drained, so they never coincide with a stall.
+
+Diagnosed with the gen2 RTL trace (now implemented in
+`tb_penumbra2_interactive`: retire stream, drain-commit lines, branch-resolve
+markers, and an opt-in per-cycle EX/MEM/WB occupancy window via
+`+pipe_lo=/+pipe_hi=`). The occupancy view was decisive — it showed the BL in EX
+with the older store still occupying MEM, then gone the next cycle without MEM
+advancing: a resolve-then-squash a retire-only trace cannot show.
+
+Coverage gap this exposed: leaf testbenches drive their own stalls
+(`tb_penumbra2_mem_stage` richly, `ex_stage`/`id_stage`/`if*` lightly), but the
+*integration* (`tb_penumbra2_spine`) drove `i_dmem_busy = 0` always — zero
+coverage of a stall *interacting across stage boundaries*, which is the only
+place this bug is visible. Closed by the `run_mem`/`tick_mem` model (a
+configurable multi-cycle MEM latency, borrowed from `tb_penumbra2_mem_stage`)
+and Test 5 (a BL pinned in EX by a stalling load). Still worth adding on the
+same harness: drain-commit under a MEM stall, a RAW consumer waiting on a
+producer stalled in MEM, a fault committing while a younger branch is resolved
+under stall (verifies the `wb_fault_commit` override — the opposite of this
+fix), and a divmul immediately followed by a branch.
+
 ## Hardware: Penumbra/2 SPR access path — complete
 
 WRSYS drives a real sysreg write at the EX drain-commit

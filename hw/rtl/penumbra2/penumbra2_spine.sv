@@ -358,7 +358,17 @@ module penumbra2_spine
         .i_valid(i_valid), .i_fault_pending(i_fault_pending),
         .i_fault_vec(i_fault_vec), .i_fault_status(i_fault_status),
         .i_supervisor(i_supervisor),
-        .i_stall_in(ex_stall), .i_bubble(ex_branch_taken | wb_fault_commit | eret_commit | wrsys_resync),
+        // ex_branch_taken bubbles the ID/EX register to kill a taken branch's
+        // wrong-path successor — but only once the branch *advances* out of EX.
+        // While EX is stalled (ex_stall, e.g. an older load holding MEM busy)
+        // the ID/EX register still holds the branch itself, so gating with
+        // ~ex_stall keeps the bubble from discarding the held branch (which
+        // would lose its link write). A fault flush (wb_fault_commit) is NOT
+        // gated: it must kill every younger slot regardless of back-pressure.
+        // eret_commit / wrsys_resync fire only with the pipe drained, so they
+        // never coincide with a MEM stall.
+        .i_stall_in(ex_stall),
+        .i_bubble((ex_branch_taken & ~ex_stall) | wb_fault_commit | eret_commit | wrsys_resync),
         .o_stall(id_stall),
         .o_rd_idx_a(rd_idx_a), .o_rd_idx_b(rd_idx_b),
         .i_rd_data_a(rd_data_a), .i_rd_data_b(rd_data_b),
