@@ -55,6 +55,8 @@ static uint32_t timer_freq;
 #define CPU_STALL_IFETCH      8
 #define CPU_STALL_LOAD        9
 #define CPU_STALL_STORE       10
+#define CPU_STALL_HAZARD      11
+#define CPU_STALL_FLUSH       12
 
 /* ── Cache sysregs (devices 2, 3, 9 — identical layout) ────────── */
 #define SYSDEV_L1_DCACHE      2
@@ -197,6 +199,8 @@ void bench_perf_snapshot(bench_perf_t *out) {
     out->stall_ifetch  = read_sysreg(SYSDEV_CPU, CPU_STALL_IFETCH);
     out->stall_load    = read_sysreg(SYSDEV_CPU, CPU_STALL_LOAD);
     out->stall_store   = read_sysreg(SYSDEV_CPU, CPU_STALL_STORE);
+    out->stall_hazard  = read_sysreg(SYSDEV_CPU, CPU_STALL_HAZARD);
+    out->stall_flush   = read_sysreg(SYSDEV_CPU, CPU_STALL_FLUSH);
 }
 
 /* Print "<count> (<pct>.<frac>%)" — `count` and its share of `total`,
@@ -261,7 +265,9 @@ void bench_perf_print_delta(const char *label,
     uint32_t d_ifetch = after->stall_ifetch - before->stall_ifetch;
     uint32_t d_load   = after->stall_load   - before->stall_load;
     uint32_t d_store  = after->stall_store  - before->stall_store;
-    if (d_funit | d_ifetch | d_load | d_store) {
+    uint32_t d_hazard = after->stall_hazard - before->stall_hazard;
+    uint32_t d_flush  = after->stall_flush  - before->stall_flush;
+    if (d_funit | d_ifetch | d_load | d_store | d_hazard | d_flush) {
         bench_puts("CPU stalls:   funit ");   /* aligns under CPU perfctrs: */
         print_count_pct(d_funit, d_cycles);
         bench_puts(", ifetch ");
@@ -270,6 +276,14 @@ void bench_perf_print_delta(const char *label,
         print_count_pct(d_load, d_cycles);
         bench_puts(", store ");
         print_count_pct(d_store, d_cycles);
+        bench_puts("\n");
+        /* Second line — the pipeline stalls — indented to align under
+         * "funit" (the "CPU stalls:   " prefix is 14 columns). Full counts
+         * make six buckets on one line far too wide for an 80-column term. */
+        bench_puts("              hazard ");
+        print_count_pct(d_hazard, d_cycles);
+        bench_puts(", flush ");
+        print_count_pct(d_flush, d_cycles);
         bench_puts("\n");
     }
 }

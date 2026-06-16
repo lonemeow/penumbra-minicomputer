@@ -77,6 +77,8 @@ typedef struct {
     uint32_t stall_ifetch;   /* cycles stalled on instruction fetch       */
     uint32_t stall_load;     /* cycles stalled on a data read miss-fill   */
     uint32_t stall_store;    /* cycles stalled on a data write            */
+    uint32_t stall_hazard;   /* cycles stalled by a pipeline interlock    */
+    uint32_t stall_flush;    /* cycles lost to a front-end redirect/fill  */
 } bench_perf_t;
 
 /*
@@ -88,11 +90,11 @@ void bench_perf_snapshot(bench_perf_t *out);
 
 /*
  * Print "<label>: <Δcycles> cycles, <Δinsns> insns, CPI=X.YYY"
- * to the console, followed — when any stall was recorded — by a
- * "  stall: funit=N (P%) ifetch=N (P%) load=N (P%) store=N (P%)" line
- * giving each stall bucket's cycle count and its share of total cycles.
- * The stall line is omitted when all buckets are zero (e.g. on the ISS,
- * which is instruction-accurate and reports no stalls).
+ * to the console, followed — when any stall was recorded — by the
+ * six-bucket stall breakdown (funit/ifetch/load/store on one line,
+ * hazard/flush on a second), each bucket's cycle count and its share of
+ * total cycles. The breakdown is omitted when all buckets are zero (e.g.
+ * on the ISS, which is instruction-accurate and reports no stalls).
  * Computes deltas (after - before) modulo 32-bit wrap.
  */
 void bench_perf_print_delta(const char *label,
