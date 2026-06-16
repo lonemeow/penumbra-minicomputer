@@ -342,6 +342,10 @@ exception entry, `ERET`, `EI`, and `DI`, and the `NZCV` flags via
 flag-writing ALU ops — so software never needs one. The other SPR
 writes (`ESR`/`EPC`/`USP`/`SCR0–3`) are unaffected.
 
+An `RDSPR`/`WRSPR` that names an **undefined SPR number** (outside
+`ESR`/`EPC`/`USP`/`SR`/`SCR0–3`) is likewise an invalid encoding and
+traps to `VEC_ILLEGAL`.
+
 **WRSYS/RDSYS.** Access device-mapped system registers (MMU, TLB,
 CPU/machine identity, caches, bus controller, timer). See
 [sysregs.md](./sysregs.md).

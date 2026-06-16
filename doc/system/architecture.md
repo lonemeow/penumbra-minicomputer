@@ -107,8 +107,10 @@ datapath.
 - **Writes:** R15 cannot be written through the ALU or register-file
   write port. PC is modified only by dedicated control-flow
   instructions: `B`/`Bcc`/`BL`, `JMP`, `JALR`, `ERET`, and exception
-  entry. This eliminates accidental PC writes and simplifies the
-  datapath.
+  entry. An instruction that names R15/PC as a destination is not a PC
+  write but an invalid encoding: it raises `VEC_ILLEGAL`, the same as
+  any other malformed instruction. This eliminates accidental PC writes
+  and simplifies the datapath.
 
 ### Link Register (R13)
 
