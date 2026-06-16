@@ -116,6 +116,14 @@ module penumbra2_core
     output logic [31:0]           o_retire_pc,       // the retiring instruction's PC (trace)
     output logic [31:0]           o_retire_sr,       // architectural SR as the instruction commits
 
+    // ── Stall-attribution observability (perfctr) ────────────────
+    // Per-cause stall signals, surfaced for the machine's CPU performance
+    // counters. They can overlap; the perfctr resolves them by head-of-line
+    // priority. Pure observation — they drive no pipeline logic.
+    output logic                  o_stall_funit,     // EX waiting on the divmul unit
+    output logic                  o_stall_load,      // MEM holding for a load access
+    output logic                  o_stall_store,     // MEM holding for a store access
+
     // ── Exception observability (trace markers) ──────────────────
     // The same fault/ERET commit pulses the front end already acts on,
     // surfaced for the trace stream so a consumer can annotate traps.
@@ -343,6 +351,9 @@ module penumbra2_core
         // ERET commit redirects PC ← EPC through the same front-end path.
         .o_fault_commit(fault_commit), .o_fault_vec(fault_vec), .o_epc(epc),
         .o_eret_commit(eret_commit),
+        // Stall-attribution observability — straight through to the machine perfctr.
+        .o_stall_funit(o_stall_funit), .o_stall_load(o_stall_load),
+        .o_stall_store(o_stall_store),
         // Interrupt support — observability out, IRQ save-state in.
         .o_sr_s(sr_s), .o_sr_i(sr_i), .o_ei_commit(ei_commit), .o_dc_commit(dc_commit),
         .o_dc_commit_pc(o_dc_commit_pc), .o_dc_commit_op_class(o_dc_commit_op_class),

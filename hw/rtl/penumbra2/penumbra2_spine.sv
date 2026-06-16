@@ -122,6 +122,14 @@ module penumbra2_spine
     // ── ERET return (to the core: flush IF1/IF2 + redirect PC ← EPC) ──
     output logic                  o_eret_commit,     // an ERET is committing this cycle
 
+    // ── Stall-attribution observability (perfctr) ────────────────
+    // Per-cause stall signals from the stages, surfaced for the CPU
+    // performance counters. They can overlap (head-of-line attribution
+    // resolves them downstream); here they are the raw per-stage causes.
+    output logic                  o_stall_funit,     // EX waiting on the divmul unit
+    output logic                  o_stall_load,      // MEM holding for a load access
+    output logic                  o_stall_store,     // MEM holding for a store access
+
     // ── Interrupt support (to/from the core's interrupt unit) ────
     output logic                  o_sr_s,            // SR.S (supervisor) — privilege source
     output logic                  o_sr_i,            // SR.I (interrupt enable)
@@ -414,7 +422,7 @@ module penumbra2_spine
         .i_sr_flags(spr_sr_flags), .i_sr_committed(sr_committed),
         .i_wb_flags(memwb_flag_value), .i_wb_writes_flags(memwb_flag_we & memwb_valid),
         .i_stall_in(mem_stall), .i_wb_active(memwb_valid), .i_bubble(wb_fault_commit),
-        .o_stall(ex_stall), .o_dc_commit(ex_dc_commit), .o_funit_stall(),
+        .o_stall(ex_stall), .o_dc_commit(ex_dc_commit), .o_funit_stall(o_stall_funit),
         .o_branch_taken(ex_branch_taken), .o_branch_target(o_branch_target),
         .o_op_class(exmem_op_class), .o_mem_op(exmem_mem_op),
         .o_mem_size(exmem_mem_size), .o_sign_ext(exmem_sign_ext),
@@ -450,6 +458,7 @@ module penumbra2_spine
         .i_fault_vec(exmem_fault_vec), .i_fault_status(exmem_fault_status),
         .i_stall_in(wb_stall), .i_bubble(wb_fault_commit),
         .o_stall(mem_stall),
+        .o_stall_load(o_stall_load), .o_stall_store(o_stall_store),
         .o_dmem_addr(o_dmem_addr), .o_dmem_wdata(o_dmem_wdata),
         .o_dmem_byte_en(o_dmem_byte_en), .o_dmem_re(o_dmem_re),
         .o_dmem_we(o_dmem_we), .o_dmem_en(o_dmem_en),

@@ -134,6 +134,8 @@ module penumbra2_mem_stage
     input  logic                  i_stall_in,        // WB cannot accept this cycle
     input  logic                  i_bubble,          // force this insn to a bubble (fault flush from WB)
     output logic                  o_stall,           // back-pressure to EX
+    output logic                  o_stall_load,      // stall cause: a load access holds the pipe (perfctr)
+    output logic                  o_stall_store,     // stall cause: a store access holds the pipe (perfctr)
 
     // ── MEM/WB register (to WB) ──────────────────────────────────
     output logic [OPC_W-1:0]      o_op_class,        // carried to the retire point (halt / trap dispatch)
@@ -301,6 +303,19 @@ module penumbra2_mem_stage
     assign o_sys_dev = i_sys_dev;
     assign o_sys_reg = i_sys_reg;
     assign o_sys_re  = is_rdsys & mem_first;
+
+    // ── Per-cause stall observability (perfctr) ──────────────────
+    // A data access holds the pipeline this cycle — its launch cycle
+    // (mem_first) or a busy-wait (acc_in_flight & i_dmem_busy) — split by
+    // direction for the stall counters. RDSYS shares the access FSM but is not
+    // a memory stall (is_mem gates it out), and a misaligned access never
+    // launches (do_access, hence mem_first, excludes it), so neither pollutes
+    // these. The completion cycle (busy drops, the slot advances) is productive
+    // and not counted here.
+    logic mem_data_stall;
+    assign mem_data_stall = is_mem & (mem_first | (acc_in_flight & i_dmem_busy));
+    assign o_stall_load   = mem_data_stall & is_load;
+    assign o_stall_store  = mem_data_stall & is_store;
 
     // ── Writeback-value select ───────────────────────────────────
     // A load delivers the extracted memory data, an RDSYS the registered sysreg

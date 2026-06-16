@@ -263,24 +263,30 @@ write would feed the MMU and IF1 IRQ logic out of pipeline exactly as ERET's
 does, so it would need the same serialization and fetch re-sync, and reserving
 it removes that case rather than building it.
 
-## Hardware: Penumbra/2 perfctr stall counters not modeled
+## Hardware: Penumbra/2 perfctr — STALL_HAZARD / STALL_FLUSH counters
 
-`machine_penumbra2` implements the two architecturally-portable SYSDEV_CPU
-performance counters — `CYCLES` (free-running) and `INSNS_RETIRED` (counts the
-core's `o_insn_retired`, which includes the drain-commit ops that retire from
-EX, not WB). The four gen1 stall counters — `STALL_FUNIT` / `STALL_IFETCH` /
-`STALL_LOAD` / `STALL_STORE` (SYSDEV_CPU regs 7–10) — read 0 on gen2.
+`machine_penumbra2` (via `penumbra2_perfctr`) implements all six defined
+SYSDEV_CPU counters: `CYCLES`, `INSNS_RETIRED`, and the four stall counters
+`STALL_FUNIT` / `STALL_IFETCH` / `STALL_LOAD` / `STALL_STORE` (regs 7–10).
 
-gen1's stall taxonomy is its microcoded sequencer's: one stall point with four
-mutually-exclusive causes, so `cycles − Σstall` is exactly productive work. gen2
-is pipelined and stalls differently — ID scoreboard RAW stalls, IF-side miss
-stalls, MEM data-access busy, the divmul EX stall, and drain-commit drain
-cycles — and these are neither single-point nor cleanly mutually exclusive (the
-gen2 stall-propagation policy lets several stages stall in the same cycle).
-Defining a gen2 stall breakdown — which events, where sampled, and whether to
-keep them non-overlapping or accept overlap and report it — is the open work;
-until then those registers read 0. The `perfctr` capability covers only the two
-portable counters (what `isa/test_cpu_perfctr` checks) on every generation.
+The gen2 stall breakdown uses head-of-line (next-to-complete) attribution: a
+non-retiring cycle is charged to the blocker of the oldest un-retired
+instruction, which in an in-order pipeline is the most-downstream stalling
+stage. The per-cause stall signals can overlap (an older load filling in MEM
+while a younger divmul iterates in EX), so a downstream-first priority
+(MEM load/store > EX divmul > IF fetch) resolves each cycle to one bucket,
+keeping the four mutually exclusive — the same shape as IBM POWER's CPI-stack
+counters. This reaches the gen1 "one cause per stall cycle" contract without a
+gen1-style single stall point.
+
+Two stall classes are not yet bucketed and currently fall into an unaccounted
+residual: an ID scoreboard RAW hazard (the no-forwarding load-use / dependency
+penalty) and a front-end-redirect bubble (branch / vector-fetch / ERET /
+drain-commit serialization). Adding `STALL_HAZARD` and `STALL_FLUSH`
+(regs 11–12, reserved) would split that residual and close the accounting
+identity `CYCLES = INSNS_RETIRED + Σstall`. `STALL_HAZARD` in particular
+isolates the dependency-stall cost that is the signature tax of the
+no-forwarding pipeline, so it is the higher-value of the two.
 
 ## Hardware: build/test restructure to the BOARD×CORE matrix
 

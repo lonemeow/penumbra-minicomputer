@@ -148,6 +148,9 @@ module machine_penumbra2
     // from EX, not WB); see the core's o_insn_retired.
     logic        insn_retired;
 
+    // Per-cause stall signals for the perfctr (head-of-line attribution).
+    logic        stall_funit, stall_load, stall_store;
+
     // Core's timer-IRQ line: the internal programmable timer, OR the external
     // i_timer_irq input (kept for direct injection; the internal timer is the
     // normal source). Assigned with the timer device below.
@@ -185,6 +188,8 @@ module machine_penumbra2
         .o_commit_we(o_commit_we),
         .o_retire_valid(o_retire_valid), .o_retire_op_class(o_retire_op_class),
         .o_insn_retired(insn_retired),
+        .o_stall_funit(stall_funit), .o_stall_load(stall_load),
+        .o_stall_store(stall_store),
         .o_retire_pc(o_retire_pc), .o_retire_sr(o_retire_sr),
         .o_fault_commit(o_fault_commit), .o_fault_vec(o_fault_vec),
         .o_eret_commit(o_eret_commit),
@@ -407,30 +412,19 @@ module machine_penumbra2
         .i_sys_reg(sys_reg), .o_sys_rdata(machid_rdata)
     );
 
-    // CPU performance counters (SYSDEV_CPU regs 5+): free-running cycle and
-    // retired-instruction counts, reset to 0. insn_retired includes drain-commit
-    // ops, so CPI stays >= 1. The gen1 stall counters (regs 7-10) are tied to a
-    // microarchitecture-specific stall taxonomy and are not modeled here; those
-    // registers read 0 (no events) until a gen2 stall breakdown is defined.
-    logic [31:0] perfctr_cycles, perfctr_insns;
-    always_ff @(posedge i_clk) begin
-        if (i_rst) begin
-            perfctr_cycles <= 32'b0;
-            perfctr_insns  <= 32'b0;
-        end else begin
-            perfctr_cycles <= perfctr_cycles + 32'd1;
-            if (insn_retired) perfctr_insns <= perfctr_insns + 32'd1;
-        end
-    end
-
+    // CPU performance counters (SYSDEV_CPU regs 5–10): free-running cycle and
+    // retired-instruction counts plus the head-of-line stall breakdown. The
+    // fetch-side miss stall is the I-cache busy line (fetch_busy); MEM and EX
+    // surface their own per-cause stalls. insn_retired includes drain-commit
+    // ops (which retire from EX, not WB), so CPI stays >= 1.
     logic [31:0] perfctr_rdata;
-    always_comb begin
-        case (sys_reg)
-            SYSREG_CPU_CYCLES:        perfctr_rdata = perfctr_cycles;
-            SYSREG_CPU_INSNS_RETIRED: perfctr_rdata = perfctr_insns;
-            default:                  perfctr_rdata = 32'b0;
-        endcase
-    end
+    penumbra2_perfctr u_perfctr (
+        .i_clk(i_clk), .i_rst(i_rst),
+        .i_insn_retired(insn_retired),
+        .i_stall_load(stall_load), .i_stall_store(stall_store),
+        .i_stall_funit(stall_funit), .i_stall_ifetch(fetch_busy),
+        .i_sys_reg(sys_reg), .o_sys_rdata(perfctr_rdata)
+    );
 
     // ── Programmable interval timer (SYSDEV_TIMER) ───────────────
     // Self-contained: a prescaler divides the CPU clock to a ~1 MHz reference
