@@ -349,13 +349,18 @@ module sdram_bus_adapter (
                         if (spec_in_flight && !spec_arriving_now) begin
                             spec_abandoned <= 1'b1;
                         end
-                        // New spec push: allowed if no spec is
-                        // currently outstanding OR if the current
-                        // spec is being consumed this cycle (in
-                        // which case spec_in_flight will clear at
-                        // the same edge that this new push lands).
-                        if (i_re && !spec_pending_push &&
-                            (!spec_in_flight || spec_arriving_now) && !spec_buffered) begin
+                        // Re-arm the prefetch chain at this read's addr+4.
+                        // Reached only on the mispredict path, where any
+                        // queued spec belongs to the chain the cache just
+                        // walked away from; replace it so the prefetch
+                        // tracks the new access stream instead of trailing
+                        // the dead chain's far address behind the real
+                        // request.  The in-flight spec, if any, is abandoned
+                        // above; this one pushes once a CDC slot frees.
+                        // Prefetch policy, not correctness: skipping it would
+                        // only leave the chain dormant until the next
+                        // buffered hit re-arms it.
+                        if (i_re) begin
                             spec_pending_push <= 1'b1;
                             spec_push_addr    <= i_addr + 32'd4;
                         end
