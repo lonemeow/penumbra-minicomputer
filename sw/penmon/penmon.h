@@ -38,6 +38,8 @@ struct snapshot {
 	uint64_t stall_ifetch;
 	uint64_t stall_load;
 	uint64_t stall_store;
+	uint64_t stall_hazard;		/* pipeline interlock (hazard) */
+	uint64_t stall_flush;		/* front-end redirect / fill bubble */
 	struct cache_ctr l1i, l1d, l2;	/* machdep.cache.* */
 	uint64_t cp_time[5];		/* kern.cp_time: usr,nice,sys,intr,idle */
 	uint64_t faults;		/* vm.uvmexp2.faults — cumulative page faults */
@@ -62,6 +64,8 @@ struct rates {
 	double stall_ifetch_pct;
 	double stall_load_pct;
 	double stall_store_pct;
+	double stall_hazard_pct;
+	double stall_flush_pct;
 	double clk_mhz;			/* CPU clock (static, machdep.cpu.freq) */
 	double cpu_pct[5];		/* % of interval in usr,nice,sys,intr,idle */
 	double faults_per_sec;		/* page faults per wall-clock second */

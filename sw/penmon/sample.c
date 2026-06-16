@@ -87,6 +87,8 @@ read_snapshot(struct snapshot *s)
 			s->stall_ifetch = v[CPU_PERF_STALL_IFETCH];
 			s->stall_load   = v[CPU_PERF_STALL_LOAD];
 			s->stall_store  = v[CPU_PERF_STALL_STORE];
+			s->stall_hazard = v[CPU_PERF_STALL_HAZARD];
+			s->stall_flush  = v[CPU_PERF_STALL_FLUSH];
 		} else {
 			s->cycles       = read_quad("machdep.cpu.cycles");
 			s->insns        = read_quad("machdep.cpu.insns_retired");
@@ -94,6 +96,8 @@ read_snapshot(struct snapshot *s)
 			s->stall_ifetch = read_quad("machdep.cpu.stall_ifetch");
 			s->stall_load   = read_quad("machdep.cpu.stall_load");
 			s->stall_store  = read_quad("machdep.cpu.stall_store");
+			s->stall_hazard = read_quad("machdep.cpu.stall_hazard");
+			s->stall_flush  = read_quad("machdep.cpu.stall_flush");
 		}
 	}
 
@@ -209,6 +213,10 @@ compute_rates(const struct snapshot *prev, const struct snapshot *cur,
 		    100.0 * counter_delta(prev->stall_load,   cur->stall_load)   / dc;
 		out->stall_store_pct  =
 		    100.0 * counter_delta(prev->stall_store,  cur->stall_store)  / dc;
+		out->stall_hazard_pct =
+		    100.0 * counter_delta(prev->stall_hazard, cur->stall_hazard) / dc;
+		out->stall_flush_pct  =
+		    100.0 * counter_delta(prev->stall_flush,  cur->stall_flush)  / dc;
 	}
 
 	/* CPU time: cp_time is true 64-bit monotonic ticks (no wrap). */

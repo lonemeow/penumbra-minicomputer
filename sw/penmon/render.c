@@ -287,9 +287,10 @@ render_frame(const struct rates *r, const struct history *h,
 	y = 4;
 	scr_printf(y, 1, A_NORM, "STALL");
 	scr_printf(y, 7, A_NORM,
-	    "funit%5.1f%%  ifetch%5.1f%%  load%5.1f%%  store%5.1f%%",
+	    "funit%5.1f%% ifetch%5.1f%% load%5.1f%% store%5.1f%% hazard%5.1f%% flush%5.1f%%",
 	    r->stall_funit_pct, r->stall_ifetch_pct,
-	    r->stall_load_pct, r->stall_store_pct);
+	    r->stall_load_pct, r->stall_store_pct,
+	    r->stall_hazard_pct, r->stall_flush_pct);
 
 	scr_fill(5, 0, cols, GLYPH_HLINE, A_NORM);
 
