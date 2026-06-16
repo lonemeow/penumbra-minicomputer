@@ -1456,6 +1456,40 @@ static bool handle_hosted_syscall() {
 // Instruction Execute
 // ═══════════════════════════════════════════════════════════════
 
+// True if the instruction names R15/PC as a GPR destination. PC is not
+// register-file writable (only control flow updates it), so such an encoding
+// is invalid and traps to VEC_ILLEGAL — matching the hardware decoder.
+// Checked before any effects are applied, so the instruction is inert.
+static bool writes_r15_gpr_dst(uint32_t insn) {
+    int fmt = (insn >> 30) & 3;
+    switch (fmt) {
+        case 0: {  // Format R
+            int op = (insn >> 25) & 0x1F;
+            int rd = (insn >> 21) & 0xF;
+            bool f = (insn >> 16) & 1;
+            if (rd != 15) return false;
+            if (op <= 11)              return !f;    // ALU writes rd unless F (CMP/TEST)
+            if (op >= 16 && op <= 19)  return true;  // MUL/MULU/DIV/DIVU
+            if (op == 24 || op == 31)  return true;  // RDSYS / RDSPR write rd
+            return false;                            // WRSYS/WRSPR/SYSCALL/.../reserved
+        }
+        case 1: {  // Format L
+            int op = (insn >> 26) & 0xF;
+            int rd = (insn >> 22) & 0xF;
+            if (rd != 15) return false;
+            switch (op) {  // GPR-writing L ops (not CMPI/TESTI/JMP/JALR)
+                case 0: case 1: case 2: case 3: case 4:
+                case 6: case 8: case 9: case 10: return true;
+                default: return false;
+            }
+        }
+        case 2:    // Format M: a load writes rd (a store does not)
+            return ((insn >> 29) & 1) && (((insn >> 22) & 0xF) == 15);
+        default:   // Format B: BL writes R13, never rd
+            return false;
+    }
+}
+
 static void execute_one() {
     // Step timer (one instruction = one prescaler step)
     timer.step();
@@ -1512,6 +1546,14 @@ static void execute_one() {
 
     pc_written = false;
     int fmt = (insn >> 30) & 3;
+
+    // R15/PC as a GPR destination is an invalid encoding → illegal instruction
+    // (before any effects, and ahead of any privilege check, so illegal outranks
+    // priv as the architecture specifies).
+    if (writes_r15_gpr_dst(insn)) {
+        exception_entry(VEC_ILLEGAL);
+        return;
+    }
 
     switch (fmt) {
     // ── Format R: Register operations ────────────────────────
@@ -1678,6 +1720,8 @@ static void execute_one() {
                     default:
                         if (spr_num >= SPR_SCR0 && spr_num < SPR_SCR0 + N_SCR) {
                             cpu.scr[spr_num - SPR_SCR0] = reg_read(rd);
+                        } else {
+                            exception_entry(VEC_ILLEGAL);  // undefined SPR number
                         }
                         break;
                 }
@@ -1691,6 +1735,8 @@ static void execute_one() {
                     default:
                         if (spr_num >= SPR_SCR0 && spr_num < SPR_SCR0 + N_SCR) {
                             reg_write(rd, cpu.scr[spr_num - SPR_SCR0]);
+                        } else {
+                            exception_entry(VEC_ILLEGAL);  // undefined SPR number
                         }
                         break;
                 }
