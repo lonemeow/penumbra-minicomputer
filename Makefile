@@ -762,6 +762,25 @@ FPGA_SRC_SIMPLE = $(wildcard $(FPGA_RTL)/*.sv)
 FPGA_SRC = $(if $(FPGA_SRC_$(TOP)),$(FPGA_SRC_$(TOP)),$(FPGA_SRC_SIMPLE))
 LPF      = $(if $(LPF_$(BOARD)),$(LPF_$(BOARD)),hw/constraints/ulx3s_v20.lpf)
 
+# Optional per-top design-constraint overlay (floorplan / timing tuning),
+# layered on top of the vendor board LPF via a second --lpf. The vendor LPF
+# stays board truth and is never edited; the overlay holds only design intent
+# (REGION / UGROUP / FREQUENCY NET) and never pin LOCATEs or IOBUFs — a file
+# that can't speak that vocabulary can't misclaim a pin. Keyed per-top so a
+# floorplan travels with its registry entry, like its source set; tops with
+# no entry get a byte-identical nextpnr command line.
+LPF_DESIGN_ulx3s_penumbra2_top = hw/constraints/ulx3s_penumbra2_design.lpf
+LPF_DESIGN = $(LPF_DESIGN_$(TOP))
+
+# Optional per-top pre-pack floorplan (nextpnr Python API). Region/placement
+# constraints cannot be expressed in nextpnr's LPF — it only supports
+# LOCATE COMP (exact per-cell sites), not LOCATE UGROUP / REGION — so a
+# floorplan lives in a design-owned Python script run via --pre-pack: a
+# separate file and mechanism from the vendor LPF, so it cannot misstate a
+# board fact. Keyed per-top, like the source set and the LPF overlay.
+PREPACK_ulx3s_penumbra2_top = hw/constraints/ulx3s_penumbra2_floorplan.py
+PREPACK = $(PREPACK_$(TOP))
+
 # ECP5 primitive stubs — for Verilator lint only, not synthesis.
 FPGA_LINT_STUBS = $(FPGA_RTL)/ecp5_prim.sv
 
@@ -824,9 +843,14 @@ $(BUILD_DIR)/$(TOP).json: $(FPGA_SRC) $(PHASE_STAMP) \
 	$(if $(filter $(TOP),$(FPGA_ROM_TOPS) $(FPGA_UCODE_TOPS)),python3 hw/tools/inline_hex.py $(BUILD_DIR)/$(TOP)_sv2v.v $(BUILD_DIR)/$(TOP)_sv2v.v)
 	$(FPGA_TOOLS)/yosys -p "read_verilog $(BUILD_DIR)/$(TOP)_sv2v.v; synth_ecp5 -top $(TOP) -json $@"
 
-$(BUILD_DIR)/$(TOP).config: $(BUILD_DIR)/$(TOP).json $(LPF)
+$(BUILD_DIR)/$(TOP).config: $(BUILD_DIR)/$(TOP).json $(LPF) $(LPF_DESIGN) $(PREPACK)
 	$(FPGA_TOOLS)/nextpnr-ecp5 --85k --package CABGA381 --speed 6 \
-		--timing-allow-fail --lpf $(LPF) --json $< --textcfg $@ \
+		--timing-allow-fail --lpf $(LPF) \
+		$(if $(LPF_DESIGN),--lpf $(LPF_DESIGN)) \
+		$(if $(PREPACK),--pre-pack $(PREPACK)) \
+		$(if $(NEXTPNR_SEED),--seed $(NEXTPNR_SEED)) \
+		--json $< --textcfg $@ \
+		--write $(BUILD_DIR)/$(TOP)_routed.json \
 		--report $(BUILD_DIR)/$(TOP)_timing.json --detailed-timing-report
 
 $(BUILD_DIR)/$(TOP).bit: $(BUILD_DIR)/$(TOP).config

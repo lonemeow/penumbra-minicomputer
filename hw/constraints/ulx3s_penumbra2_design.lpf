@@ -1,0 +1,29 @@
+# Design-intent constraints for ulx3s_penumbra2_top.
+#
+# Layered on top of the vendor board file (hw/constraints/ulx3s_v20.lpf) as a
+# second --lpf; nextpnr merges both. This file holds ONLY design intent —
+# floorplan regions and timing targets. It must never contain pin LOCATEs or
+# IOBUFs: those are facts about the physical board and live solely in the
+# vendor file, which is never edited. Keeping the two apart means a mistake
+# here can degrade timing but cannot misclaim a pin or an I/O standard.
+
+# ── SDRAM clock-domain over-constraint (tried — no effect) ───────────
+# Asking for 130 MHz on clk_sdram registered correctly (the report read
+# "FAIL at 130.01 MHz", so the net name matched) but the achieved fmax did
+# not move: byte-identical 101.54 MHz. nextpnr's analytical placer does not
+# ease off once a target is met — it always minimizes its cost — so an
+# over-constraint only helps a path that is being UNDER-prioritized relative
+# to its peers. This path is already the worst in its clock domain and thus
+# already carries maximum criticality; a tighter target only relabels
+# PASS->FAIL without changing the placement. The limiter is the global
+# wirelength tradeoff against the dense core, not the target, so the fix is a
+# hard locality constraint (the region below), not a number. Left disabled:
+#   FREQUENCY NET "clk_sdram" 130 MHZ;
+
+# ── Floorplan region → lives in the pre-pack Python script ───────────
+# The SDRAM floorplan is NOT here: nextpnr's LPF parser only supports
+# LOCATE COMP (exact per-cell sites), not LOCATE UGROUP / REGION, so a region
+# constraint cannot be written in an LPF. It lives in a design-owned pre-pack
+# script instead — hw/constraints/ulx3s_penumbra2_floorplan.py, wired via
+# --pre-pack — which confines the SDRAM control logic to a compact region in
+# the corridor between the core and the SDRAM pads.
