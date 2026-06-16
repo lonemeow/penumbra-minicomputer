@@ -345,6 +345,46 @@ int main() {
     decode(dut, enc_b(0, 0x3FFFFF), 0);
     check("imm_b_sext",    dut->o_imm, 0xFFFFFFFC);
 
+    // ── Invalid operand forms decode to an illegal instruction ───
+    // PC (R15) named as a destination, or an undefined SPR number, is not a
+    // legal encoding. The decoder raises it as OPC_ILLEGAL (→ VEC_ILLEGAL) with
+    // every write/source enable cleared, so a committed one faults to software
+    // and a speculative wrong-path one is flushed. (R15 as a *source* is legal —
+    // it reads the PC — and is handled elsewhere, not made illegal.)
+    // MOV R15, R6: R15 destination.
+    decode(dut, enc_r(OP_R_MOV, 15, 6, 0), 0);
+    check("mov_r15_illegal", dut->o_op_class, OPC_ILLEGAL);
+    check("mov_r15_vec",     dut->o_fault_vec, VEC_ILLEGAL);
+    check("mov_r15_dst_en",  dut->o_dst_en, 0);
+    check("mov_r15_gpr_we",  dut->o_gpr_we, 0);
+    // ADD R15, R6: R15 destination → illegal, no flag write either.
+    decode(dut, enc_r(OP_R_ADD, 15, 6, 0), 0);
+    check("add_r15_illegal", dut->o_op_class, OPC_ILLEGAL);
+    check("add_r15_gpr_we",  dut->o_gpr_we, 0);
+    check("add_r15_flag_we", dut->o_flag_we, 0);
+    // LDW R15, [R2+0]: load into R15 → illegal.
+    decode(dut, enc_m(/*L*/1, /*sz=word*/2, /*se*/0, /*rd*/15, /*rb*/2, 0), 0);
+    check("ldw_r15_illegal", dut->o_op_class, OPC_ILLEGAL);
+    check("ldw_r15_gpr_we",  dut->o_gpr_we, 0);
+    // MUL R1, R2 with Rdh=R15: the aux (high-half) destination is R15 → illegal.
+    decode(dut, enc_r(OP_R_MUL, 1, 2, 0, /*field1512=Rdh*/15), 0);
+    check("mul_r15aux_illegal", dut->o_op_class, OPC_ILLEGAL);
+    check("mul_r15aux_aux_en",  dut->o_dst_aux_en, 0);
+    // WRSPR with an undefined SPR number (9) → illegal.
+    decode(dut, enc_r(OP_R_WRSPR, /*rd*/5, 0, 0, /*field1512=SPR*/9), 1);
+    check("wrspr_badspr_illegal", dut->o_op_class, OPC_ILLEGAL);
+    check("wrspr_badspr_spr_we",  dut->o_spr_we, 0);
+    check("wrspr_badspr_dst_en",  dut->o_dst_en, 0);
+    // RDSPR with an undefined SPR number (9) → illegal.
+    decode(dut, enc_r(OP_R_RDSPR, /*rd*/5, 0, 0, /*field1512=SPR*/9), 1);
+    check("rdspr_badspr_illegal", dut->o_op_class, OPC_ILLEGAL);
+    check("rdspr_badspr_gpr_we",  dut->o_gpr_we, 0);
+    check("rdspr_badspr_srcb_en", dut->o_src_b_en, 0);
+    // A valid SPR (SCR0 = 7? no, SCR3 = 7) still decodes normally — guard the
+    // boundary: RDSPR SCR3 (number 7) is the last valid number, not illegal.
+    decode(dut, enc_r(OP_R_RDSPR, /*rd*/5, 0, 0, /*field1512=SPR_SCR3*/7), 1);
+    check("rdspr_scr3_ok", dut->o_op_class, OPC_RDSPR);
+
     // ── Summary ──────────────────────────────────────────────────
     printf("penumbra2_decode: %d/%d tests passed\n", tests - errors, tests);
     if (errors > 0)

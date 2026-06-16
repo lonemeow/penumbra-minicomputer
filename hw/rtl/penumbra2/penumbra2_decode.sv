@@ -428,6 +428,37 @@ module penumbra2_decode
         o_src_b_is_pc = o_src_b_en & ~o_src_b_is_spr & (o_src_b_sel == REG_PC);
         if (o_src_a_is_pc) o_src_a_en = 1'b0;
         if (o_src_b_is_pc) o_src_b_en = 1'b0;
+
+        // Operand-validity check. The front end speculatively decodes
+        // wrong-path bytes (valid in ID until a redirect flushes them), so the
+        // decoder must yield a clean bundle for any 32-bit input. An operand
+        // form no legal instruction can name is raised as an illegal
+        // instruction — not silently sanitized — so a committed one faults to
+        // software (VEC_ILLEGAL) and a wrong-path one is flushed before it
+        // commits. The cases:
+        //   - R15/PC named as a written destination (primary or aux). PC is not
+        //     register-file writable; only control flow updates it. R15 as a
+        //     *source* is legal (it reads the PC) and was handled above.
+        //   - an undefined SPR number on a scoreboard reference. The defined
+        //     SPRs are ESR/EPC/USP/SCR0-3; SR has no scoreboard entry and is
+        //     handled by the RDSPR/WRSPR opcode decode, so it never reaches here.
+        if ((o_dst_en     & ~o_dst_is_spr & (o_dst_sel     == REG_PC))
+         || (o_dst_aux_en &                 (o_dst_aux_sel == REG_PC))
+         || (o_src_a_en   & o_src_a_is_spr & (o_src_a_sel   > SPR_SCR3))
+         || (o_src_b_en   & o_src_b_is_spr & (o_src_b_sel   > SPR_SCR3))
+         || (o_dst_en     & o_dst_is_spr   & (o_dst_sel     > SPR_SCR3))) begin
+            o_op_class     = OPC_ILLEGAL;
+            o_src_a_en     = 1'b0;  o_src_a_is_pc = 1'b0;
+            o_src_b_en     = 1'b0;  o_src_b_is_pc = 1'b0;
+            o_dst_en       = 1'b0;
+            o_dst_aux_en   = 1'b0;
+            o_gpr_we       = 1'b0;
+            o_spr_we       = 1'b0;
+            o_writes_flags = 1'b0;
+            o_is_trap      = 1'b0;
+            o_drain_commit = 1'b0;
+            o_priv_fault   = 1'b0;
+        end
     end
 
     // illegal = no legal opcode/operand form decoded. flag_we tracks
