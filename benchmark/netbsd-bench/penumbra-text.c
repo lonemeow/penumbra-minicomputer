@@ -41,6 +41,8 @@
 #include <errno.h>
 #include <termios.h>
 
+#include "perfctr.h"
+
 /* ── Heated-metal palette ───────────────────────────────────────────
  *
  * Black → dark red → red → orange → gold → yellow → white.  Linear
@@ -592,6 +594,7 @@ int main(int argc, char **argv) {
     pass_num = 0;
 
     uint64_t t_start = now_ns();
+    perf_demo_track();          /* snapshot perfctrs; dump breakdown at exit */
     uint64_t rendered = 0;
     while (!stop_flag && (frames == 0 || (int)rendered < frames)) {
         /* Reset dirty tracking for this frame. */

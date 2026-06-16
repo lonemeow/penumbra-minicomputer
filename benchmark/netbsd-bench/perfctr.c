@@ -8,6 +8,7 @@
 
 #include <sys/sysctl.h>
 #include <stdio.h>
+#include <stdlib.h>		/* atexit */
 
 int bench_perfctr_enabled = 0;
 
@@ -66,10 +67,15 @@ void perf_report(const struct perf_snapshot *before,
     uint64_t cyc = cdelta(before->cpu[CPU_PERF_CYCLES], after->cpu[CPU_PERF_CYCLES]);
     uint64_t ins = cdelta(before->cpu[CPU_PERF_INSNS],  after->cpu[CPU_PERF_INSNS]);
 
-    printf("      perfctr: CPI %.2f, %llu cyc/op  (%llu cyc / %llu insn)\n",
-           ins ? (double)cyc / (double)ins : 0.0,
-           (unsigned long long)(iters ? cyc / iters : 0),
-           (unsigned long long)cyc, (unsigned long long)ins);
+    if (iters)
+        printf("      perfctr: CPI %.2f, %llu cyc/op  (%llu cyc / %llu insn)\n",
+               ins ? (double)cyc / (double)ins : 0.0,
+               (unsigned long long)(cyc / iters),
+               (unsigned long long)cyc, (unsigned long long)ins);
+    else
+        printf("      perfctr: CPI %.2f  (%llu cyc / %llu insn)\n",
+               ins ? (double)cyc / (double)ins : 0.0,
+               (unsigned long long)cyc, (unsigned long long)ins);
 
     /* Two lines so six buckets fit 80 columns: memory/exec, then pipeline. */
     printf("      stalls   funit %4.1f%% ifetch %4.1f%% load %4.1f%% store %4.1f%%\n",
@@ -86,4 +92,28 @@ void perf_report(const struct perf_snapshot *before,
     cache_hit("L1D", before->l1d, after->l1d);
     cache_hit("L2",  before->l2,  after->l2);
     printf("\n");
+}
+
+/* --- Demo exit dump ------------------------------------------------- */
+/* A standalone compute demo can't call bench_time(); instead it snapshots
+ * at its render-start and prints the breakdown at exit, after its own
+ * framerate stats.  Used by the graphics demos to show where a CPU-heavy,
+ * OS-light workload spends its cycles. */
+
+static struct perf_snapshot perf_demo_s0;
+
+static void
+perf_demo_atexit(void)
+{
+    struct perf_snapshot s1;
+    perf_snapshot_take(&s1);
+    putchar('\n');
+    perf_report(&perf_demo_s0, &s1, 0);
+}
+
+void
+perf_demo_track(void)
+{
+    perf_snapshot_take(&perf_demo_s0);
+    atexit(perf_demo_atexit);
 }

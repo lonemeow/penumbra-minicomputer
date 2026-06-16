@@ -35,6 +35,8 @@
 #include <errno.h>
 #include <termios.h>
 
+#include "perfctr.h"
+
 /* ── Sin lookup table (built from libm at startup) ──────────────────── */
 
 static int8_t sin_lut[256];
@@ -414,6 +416,7 @@ int main(int argc, char **argv) {
     }
 
     uint64_t t_start = now_ns();
+    perf_demo_track();          /* snapshot perfctrs; dump breakdown at exit */
     int t = 0;
     uint64_t rendered = 0;
     while (!stop_flag && (frames == 0 || (int)rendered < frames)) {

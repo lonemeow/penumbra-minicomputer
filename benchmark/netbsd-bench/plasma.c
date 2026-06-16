@@ -44,6 +44,8 @@
 #include <errno.h>
 #include <termios.h>     /* non-canonical stdin for exit-on-keypress */
 
+#include "perfctr.h"
+
 /* ── Sin lookup table ────────────────────────────────────────────────
  *
  * 256 entries of sin(2π·i/256), scaled to int8_t range [-127, 127].
@@ -415,6 +417,7 @@ int main(int argc, char **argv) {
     }
 
     uint64_t t_start = now_ns();
+    perf_demo_track();          /* snapshot perfctrs; dump breakdown at exit */
     int t = 0;
     uint64_t rendered = 0;
     while (!stop_flag && (frames == 0 || (int)rendered < frames)) {

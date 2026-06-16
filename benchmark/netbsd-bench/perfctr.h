@@ -37,4 +37,9 @@ void perf_snapshot_take(struct perf_snapshot *s);
 void perf_report(const struct perf_snapshot *before,
                  const struct perf_snapshot *after, uint64_t iters);
 
+/* For standalone compute demos: snapshot the counters now (call at the
+ * demo's render-start, after setup) and print the CPU/cache breakdown at
+ * program exit via atexit(), after the demo's own framerate stats. */
+void perf_demo_track(void);
+
 #endif /* PBENCH_PERFCTR_H */

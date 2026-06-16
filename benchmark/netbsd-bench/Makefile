@@ -62,22 +62,22 @@ PBENCH_OBJS := $(PBENCH_SRCS:%.c=$(OBJDIR)/%.o)
 # part of pbench's registry) — they print fixed-point fractals to
 # stdout, doubling as ALU benchmarks and as visual demos.
 MANDEL_SRCS := mandelbrot.c
-MANDEL_OBJS := $(MANDEL_SRCS:%.c=$(OBJDIR)/%.o)
+MANDEL_OBJS := $(MANDEL_SRCS:%.c=$(OBJDIR)/%.o) $(OBJDIR)/perfctr.o
 
 JULIA_SRCS  := julia.c
-JULIA_OBJS  := $(JULIA_SRCS:%.c=$(OBJDIR)/%.o)
+JULIA_OBJS  := $(JULIA_SRCS:%.c=$(OBJDIR)/%.o) $(OBJDIR)/perfctr.o
 
 PLASMA_SRCS := plasma.c
-PLASMA_OBJS := $(PLASMA_SRCS:%.c=$(OBJDIR)/%.o)
+PLASMA_OBJS := $(PLASMA_SRCS:%.c=$(OBJDIR)/%.o) $(OBJDIR)/perfctr.o
 
 LORENZ_SRCS := lorenz.c
-LORENZ_OBJS := $(LORENZ_SRCS:%.c=$(OBJDIR)/%.o)
+LORENZ_OBJS := $(LORENZ_SRCS:%.c=$(OBJDIR)/%.o) $(OBJDIR)/perfctr.o
 
 SHADEBOBS_SRCS := shadebobs.c
-SHADEBOBS_OBJS := $(SHADEBOBS_SRCS:%.c=$(OBJDIR)/%.o)
+SHADEBOBS_OBJS := $(SHADEBOBS_SRCS:%.c=$(OBJDIR)/%.o) $(OBJDIR)/perfctr.o
 
 PTEXT_SRCS := penumbra-text.c
-PTEXT_OBJS := $(PTEXT_SRCS:%.c=$(OBJDIR)/%.o)
+PTEXT_OBJS := $(PTEXT_SRCS:%.c=$(OBJDIR)/%.o) $(OBJDIR)/perfctr.o
 
 # ── Targets ───────────────────────────────────────────────────
 

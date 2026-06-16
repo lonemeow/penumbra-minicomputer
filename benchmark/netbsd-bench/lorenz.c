@@ -41,6 +41,8 @@
 #include <errno.h>
 #include <termios.h>
 
+#include "perfctr.h"
+
 /* ── Q12.20 fixed-point helpers ─────────────────────────────────────── */
 
 typedef int32_t q_t;
@@ -474,6 +476,7 @@ int main(int argc, char **argv) {
     struct lorenz_state s = { Q_INT(1), Q_INT(1), Q_INT(1) };
 
     uint64_t t_start = now_ns();
+    perf_demo_track();          /* snapshot perfctrs; dump breakdown at exit */
     uint64_t step = 0;
     /* Previous-point state for line drawing.  prev_valid stays 0 on
      * the very first iteration (no line to draw yet) and stays 0

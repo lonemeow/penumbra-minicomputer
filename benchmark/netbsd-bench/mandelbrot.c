@@ -51,6 +51,8 @@
 #include <string.h>
 #include <unistd.h>     /* isatty() for color auto-detect */
 
+#include "perfctr.h"
+
 /* ── Q4.28 fixed-point helpers ───────────────────────────────────────── */
 
 typedef int32_t q_t;            /* Q4.28 fixed-point */
@@ -412,6 +414,7 @@ int main(int argc, char **argv) {
     fflush(stdout);
 
     uint64_t t0 = now_ns();
+    perf_demo_track();          /* snapshot perfctrs; dump breakdown at exit */
     render(p, width, height, max_iter, mode);
     uint64_t t1 = now_ns();
 
