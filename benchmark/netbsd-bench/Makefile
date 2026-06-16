@@ -50,7 +50,7 @@ OVERLAY_ROOT ?= $(PROJROOT)/build/netbsd-overlay
 # benchmark by dropping a .c file in the right directory and listing
 # its entry function in pbench.c's registry.
 
-PBENCH_SRCS := pbench.c bench.c \
+PBENCH_SRCS := pbench.c bench.c perfctr.c \
                kernel/getpid.c kernel/clock_gettime.c \
                kernel/pipe_pingpong.c kernel/fork_exit.c kernel/fork_exec.c \
                libc/memcpy_sweep.c libc/memset_sweep.c \

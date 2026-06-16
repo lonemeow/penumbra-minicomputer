@@ -12,6 +12,7 @@
  */
 
 #include "bench.h"
+#include "perfctr.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -160,5 +161,20 @@ int bench_time(const char *category, const char *name, const char *config,
     }
 
     fflush(stdout);
+
+    /* Optional: one extra f(iters) batch bracketed by a perfctr snapshot
+     * pair, so a -p run shows where this benchmark's cycles went.  Kept out
+     * of the timed trials above so it never perturbs the reported ns/op. */
+    if (bench_perfctr_enabled) {
+        struct perf_snapshot pb, pa;
+        bench_compiler_barrier();
+        perf_snapshot_take(&pb);
+        f(iters, ctx);
+        perf_snapshot_take(&pa);
+        bench_compiler_barrier();
+        perf_report(&pb, &pa, iters);
+        fflush(stdout);
+    }
+
     return 0;
 }

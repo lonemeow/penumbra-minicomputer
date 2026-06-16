@@ -11,6 +11,12 @@
  *   -o FILE   Write machine-readable RESULT lines to FILE.  Without this
  *             flag, only the human-readable table is printed to stdout —
  *             convenient for pasting into a writeup.
+ *   -p        Also dump CPU + cache performance counters (stall breakdown,
+ *             cache hit rates) under each benchmark.  Off by default; adds
+ *             one extra measured batch per benchmark.
+ *
+ * Every run starts with a "# pbench on <CPU> @ <clock>" header so saved
+ * outputs are self-describing when comparing files.
  *
  * Categories:
  *   kernel    Syscall / context-switch / process-creation costs.
@@ -18,6 +24,7 @@
  */
 
 #include "bench.h"
+#include "perfctr.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -91,8 +98,33 @@ static void print_help(const char *argv0) {
         "  list                     list registered benchmarks\n"
         "  help                     show this help\n"
         "options:\n"
-        "  -o FILE                  also write machine-readable RESULT lines to FILE\n",
+        "  -o FILE                  also write machine-readable RESULT lines to FILE\n"
+        "  -p                       dump CPU + cache perfctrs per benchmark (slower)\n",
         argv0);
+}
+
+/* Emit a one-line header naming the CPU model and clock, so a saved run is
+ * self-describing when comparing result files.  Reads the kernel's hw.model
+ * and machdep.cpu.freq; degrades gracefully if either is missing. */
+static void print_system_header(FILE *out) {
+    char model[64];
+    size_t len = sizeof(model);
+    /* machdep.cpu.model is the CPU identity ("Penumbra/2"); hw.model names
+     * the board.  The CPU is what matters for performance comparison. */
+    if (sysctlbyname("machdep.cpu.model", model, &len, NULL, 0) != 0)
+        strlcpy(model, "unknown CPU", sizeof(model));
+
+    uint64_t freq = 0;
+    len = sizeof(freq);
+    (void)sysctlbyname("machdep.cpu.freq", &freq, &len, NULL, 0);
+
+    fprintf(out, "# pbench on %s", model);
+    if (freq)
+        fprintf(out, " @ %llu.%03llu MHz",
+                (unsigned long long)(freq / 1000000ull),
+                (unsigned long long)((freq % 1000000ull) / 1000ull));
+    fprintf(out, "\n");
+    fflush(out);
 }
 
 static void list_benchmarks(void) {
@@ -144,39 +176,47 @@ int main(int argc, char **argv) {
     pbench_self_path = resolve_self_path(argv0);
     FILE *result_fp = NULL;
 
-    /* Parse leading -o FILE flag (only flag we accept).  Strip it from
-     * argv before falling through to positional parsing. */
-    if (argc >= 3 && strcmp(argv[1], "-o") == 0) {
-        result_fp = fopen(argv[2], "w");
-        if (!result_fp) {
-            fprintf(stderr, "pbench: cannot open %s for writing: %s\n",
-                    argv[2], strerror(errno));
-            return 2;
+    /* Parse leading option flags (-o FILE, -p) before positional args. */
+    while (argc >= 2 && argv[1][0] == '-') {
+        if (strcmp(argv[1], "-o") == 0 && argc >= 3) {
+            result_fp = fopen(argv[2], "w");
+            if (!result_fp) {
+                fprintf(stderr, "pbench: cannot open %s for writing: %s\n",
+                        argv[2], strerror(errno));
+                return 2;
+            }
+            bench_set_result_file(result_fp);
+            argv += 2;
+            argc -= 2;
+        } else if (strcmp(argv[1], "-p") == 0) {
+            bench_perfctr_enabled = 1;
+            argv += 1;
+            argc -= 1;
+        } else {
+            break;  /* -h / --help / unknown — handled in positional parsing */
         }
-        bench_set_result_file(result_fp);
-        argv += 2;
-        argc -= 2;
         argv[0] = (char *)argv0;  /* preserve program name for help */
     }
 
     int rc;
-    if (argc == 1) {
-        rc = run_filtered(NULL, NULL);
-    } else if (strcmp(argv[1], "help") == 0 ||
-               strcmp(argv[1], "-h")   == 0 ||
-               strcmp(argv[1], "--help") == 0) {
+    if (argc >= 2 && (strcmp(argv[1], "help") == 0 ||
+                      strcmp(argv[1], "-h")   == 0 ||
+                      strcmp(argv[1], "--help") == 0)) {
         print_help(argv[0]);
         rc = 0;
-    } else if (strcmp(argv[1], "list") == 0) {
+    } else if (argc >= 2 && strcmp(argv[1], "list") == 0) {
         list_benchmarks();
         rc = 0;
-    } else if (argc == 2) {
-        rc = run_filtered(argv[1], NULL);
-    } else if (argc == 3) {
-        rc = run_filtered(argv[1], argv[2]);
     } else {
-        print_help(argv[0]);
-        rc = 2;
+        /* A benchmark run: emit the system header first (stdout, and the
+         * result file if one was opened) so outputs are self-describing. */
+        print_system_header(stdout);
+        if (result_fp) print_system_header(result_fp);
+
+        if (argc == 1)      rc = run_filtered(NULL, NULL);
+        else if (argc == 2) rc = run_filtered(argv[1], NULL);
+        else if (argc == 3) rc = run_filtered(argv[1], argv[2]);
+        else { print_help(argv[0]); rc = 2; }
     }
 
     if (result_fp) fclose(result_fp);
