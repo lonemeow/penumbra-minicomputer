@@ -50,6 +50,7 @@ module penumbra2_spine
     output logic [OPC_W-1:0]      o_retire_op_class,
     output logic [31:0]           o_retire_pc,       // the retiring instruction's PC (trace)
     output logic [31:0]           o_retire_sr,       // architectural SR as the instruction commits
+    output logic                  o_insn_committed,  // a distinct instruction commits this cycle (perfctr count)
 
     // ── Branch resolution (for a future fetch-redirect model) ────
     output logic                  o_branch_taken,
@@ -498,6 +499,7 @@ module penumbra2_spine
         .i_valid(memwb_valid), .i_fault_pending(memwb_fault_pending),
         .i_fault_vec(memwb_fault_vec),
         .o_stall(wb_stall),
+        .o_insn_committed(o_insn_committed),
         .o_wr_idx(wr_idx), .o_wr_data(wr_data), .o_wr_en(wr_en),
         .o_flag_we(wb_flag_we), .o_flag_value(wb_flag_value),
         .o_spr_we(wb_spr_we), .o_spr_sel(wb_spr_sel), .o_spr_value(wb_spr_value),

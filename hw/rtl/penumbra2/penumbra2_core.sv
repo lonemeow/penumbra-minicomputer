@@ -37,9 +37,11 @@
 // the commit port, but the cycle it takes its trap it still leaves WB as a
 // valid slot, visible here as a retiring OPC_BREAK. In-order commit guarantees
 // every instruction older than the BREAK has already retired by then.
-// A perfctr counts o_insn_retired (a WB retirement OR a drain-commit, which
-// commits from EX and never reaches WB), not o_retire_valid alone — the latter
-// would miss every ERET/WRSYS/EI/DI.
+// A perfctr counts o_insn_retired: a distinct WB instruction commit
+// (o_insn_committed — once per instruction, so a dual-write's second register
+// cycle is not recounted) OR a drain-commit, which commits from EX and never
+// reaches WB. o_retire_valid alone is wrong on both counts — it would miss
+// every ERET/WRSYS/EI/DI and double-count a dual write.
 
 module penumbra2_core
     import penumbra_pkg::*;
@@ -193,6 +195,7 @@ module penumbra2_core
 
     // ── Interrupt support (interrupt unit <-> spine + front end) ──
     logic        sr_s, sr_i, ei_commit, dc_commit, ex_stall;   // from spine
+    logic        insn_committed;   // distinct-instruction commit pulse (from spine, perfctr)
     logic        irq_inject;        // take the interrupt: tag the EX instruction (a synthetic fault)
     logic [3:0]  irq_vec;
 
@@ -322,6 +325,7 @@ module penumbra2_core
         .o_commit_we(o_commit_we),
         .o_retire_valid(o_retire_valid), .o_retire_op_class(o_retire_op_class),
         .o_retire_pc(o_retire_pc), .o_retire_sr(o_retire_sr),
+        .o_insn_committed(insn_committed),
         .o_branch_taken(branch_taken), .o_branch_target(branch_target),
         .o_branch_pc(o_branch_pc),
         .o_ex_pc(o_ex_pc), .o_ex_valid(o_ex_valid),
@@ -361,12 +365,13 @@ module penumbra2_core
         .i_irq_inject(irq_inject), .i_irq_vec(irq_vec)
     );
 
-    // Instructions retired: a normal WB retirement OR a drain-commit — which
-    // commits from EX and never enters WB, so o_retire_valid alone would miss
-    // every ERET/WRSYS/EI/DI. The two sources are mutually exclusive per cycle
-    // (a drain-commit only fires once MEM/WB are drained, i.e. o_retire_valid is
-    // 0), so the OR counts each retiring instruction exactly once.
-    assign o_insn_retired = o_retire_valid | dc_commit;
+    // Instructions retired: a distinct WB instruction commit (o_insn_committed,
+    // pulsed once per instruction — a dual-write's second register cycle holds a
+    // valid slot but commits no new instruction, so it is excluded) OR a
+    // drain-commit, which commits from EX and never enters WB. The two sources
+    // are mutually exclusive per cycle (a drain-commit only fires once MEM/WB
+    // are drained), so the OR counts each retiring instruction exactly once.
+    assign o_insn_retired = insn_committed | dc_commit;
 
     // Trace observability: the same commit pulses the front end consumes for
     // its flush / vector-fetch / ERET redirects, surfaced as ports.

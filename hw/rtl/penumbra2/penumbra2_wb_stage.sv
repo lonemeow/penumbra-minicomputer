@@ -53,6 +53,14 @@ module penumbra2_wb_stage
     // ── Back-pressure (to MEM): the dual-write second-write hold ──
     output logic                  o_stall,
 
+    // ── Retire pulse (perfctr): one per distinct instruction ─────
+    // High when an instruction reaches its commit this cycle, counted exactly
+    // once. Distinct from "a valid slot occupies WB" (o_retire_valid): a dual
+    // write's second (aux) cycle holds the same slot but commits no new
+    // instruction — it was already pulsed on its primary cycle — so it is
+    // excluded here.
+    output logic                  o_insn_committed,
+
     // ── Regfile write port (regfile is external) ─────────────────
     output logic [SB_IDX_W-1:0]   o_wr_idx,
     output logic [31:0]           o_wr_data,
@@ -140,6 +148,12 @@ module penumbra2_wb_stage
     assign o_wr_idx  = wr_idx;
     assign o_wr_data = wr_data;
     assign o_wr_en   = wr_en;
+
+    // A distinct instruction commits when a valid slot is at WB and this is not
+    // the dual-write continuation (writing_aux) — the second register write of
+    // an instruction already counted on its primary cycle. Faulting slots still
+    // count (they complete via the fault path and never dual-write).
+    assign o_insn_committed = i_valid & ~writing_aux;
 
     // ══════════════════════════════════════════════════════════
     // Assertions — sim-only (Verilator --assert); stripped at synth.
