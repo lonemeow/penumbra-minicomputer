@@ -27,6 +27,10 @@ static void	cpu_attach(device_t, device_t, void *);
  * Consumed by cpu_frequency() in <machine/cpu_counter.h>. */
 uint32_t cpu_clock_freq_hz;
 
+/* CPU name string (e.g. "Penumbra/2"), read once at attach and exposed to
+ * userland via the machdep.cpu.model sysctl.  16 chars + NUL. */
+char cpu_model_name[17];
+
 CFATTACH_DECL_NEW(cpu, 0,
     cpu_match, cpu_attach, NULL, NULL);
 
@@ -175,6 +179,7 @@ cpu_attach(device_t parent, device_t self, void *aux)
 	uint32_t ic_info, dc_info, l2_info;
 
 	read_cpu_name(name);
+	strlcpy(cpu_model_name, name, sizeof(cpu_model_name));
 
 	__asm __volatile("RDSYS %0, %1, %2"
 	    : "=r"(isa)  : "i"(SYSDEV_CPU),  "i"(CPU_ISA));

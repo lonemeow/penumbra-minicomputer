@@ -6,6 +6,7 @@
  * Exposes the free-running CPU counters (SYSDEV_CPU regs 5-12) and the
  * static CPU clock frequency under machdep.cpu:
  *
+ *	machdep.cpu.model		CPU name string (e.g. "Penumbra/2")
  *	machdep.cpu.cycles		free-running cycle counter (RDSYS)
  *	machdep.cpu.insns_retired	free-running retired-instruction counter
  *	machdep.cpu.stall_funit		cycles stalled on a multi-cycle exec unit
@@ -140,6 +141,13 @@ SYSCTL_SETUP(sysctl_cpu_perfctrs_setup,
 	    SYSCTL_DESCR("CPU performance counters"),
 	    NULL, 0, NULL, 0,
 	    CTL_MACHDEP, CTL_CREATE, CTL_EOL);
+
+	sysctl_createv(clog, 0, &cpu_node, NULL,
+	    CTLFLAG_PERMANENT,
+	    CTLTYPE_STRING, "model",
+	    SYSCTL_DESCR("CPU model name (SYSDEV_CPU identity, e.g. Penumbra/2)"),
+	    NULL, 0, cpu_model_name, 0,
+	    CTL_CREATE, CTL_EOL);
 
 	sysctl_createv(clog, 0, &cpu_node, NULL,
 	    CTLFLAG_PERMANENT,

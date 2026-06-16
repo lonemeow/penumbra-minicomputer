@@ -60,6 +60,11 @@ register struct lwp *__curlwp __asm("r12");
  * converting cycle counts to wall time. */
 extern uint32_t cpu_clock_freq_hz;
 
+/* CPU name string (e.g. "Penumbra/2"), read from SYSDEV_CPU at cpu_attach.
+ * Exposed to userland via the machdep.cpu.model sysctl — distinct from
+ * hw.model, which names the board. */
+extern char cpu_model_name[17];
+
 #define cpu_proc_fork(p1, p2)	/* nothing */
 
 void	cpu_startup(void);
