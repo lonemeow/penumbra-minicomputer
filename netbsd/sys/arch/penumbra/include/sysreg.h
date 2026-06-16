@@ -93,6 +93,8 @@
 #define CPU_STALL_IFETCH	8
 #define CPU_STALL_LOAD		9
 #define CPU_STALL_STORE		10
+#define CPU_STALL_HAZARD	11
+#define CPU_STALL_FLUSH		12
 
 /* Bulk-read contract: the machdep.cpu.all sysctl returns every CPU
  * perfctr in a single call as uint64_t[CPU_NPERFCTR] (free-running
@@ -105,7 +107,9 @@
 #define CPU_PERF_STALL_IFETCH	3
 #define CPU_PERF_STALL_LOAD	4
 #define CPU_PERF_STALL_STORE	5
-#define CPU_NPERFCTR		6
+#define CPU_PERF_STALL_HAZARD	6
+#define CPU_PERF_STALL_FLUSH	7
+#define CPU_NPERFCTR		8
 
 /* CPU_ISA layout: bits [3:0] = ISA version, bits [31:4] = feature flags
  * (bit indices below are relative to bit 4 of the register). */

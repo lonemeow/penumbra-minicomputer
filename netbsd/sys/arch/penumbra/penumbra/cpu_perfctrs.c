@@ -3,7 +3,7 @@
 /*
  * CPU performance counter sysctl interface.
  *
- * Exposes the free-running CPU counters (SYSDEV_CPU regs 5-10) and the
+ * Exposes the free-running CPU counters (SYSDEV_CPU regs 5-12) and the
  * static CPU clock frequency under machdep.cpu:
  *
  *	machdep.cpu.cycles		free-running cycle counter (RDSYS)
@@ -12,8 +12,10 @@
  *	machdep.cpu.stall_ifetch	cycles stalled on instruction fetch
  *	machdep.cpu.stall_load		cycles stalled on a data read miss-fill
  *	machdep.cpu.stall_store		cycles stalled on a data write
+ *	machdep.cpu.stall_hazard	cycles stalled by a pipeline interlock
+ *	machdep.cpu.stall_flush		cycles lost to a front-end redirect/fill
  *	machdep.cpu.freq		CPU clock in Hz (static, latched at boot)
- *	machdep.cpu.all			all six counters in one read (bulk, struct)
+ *	machdep.cpu.all			all eight counters in one read (bulk, struct)
  *
  * cycles/insns_retired each have a custom read handler that issues a
  * single RDSYS at read time — real-time accurate, no kernel-side
@@ -68,6 +70,8 @@ DEFINE_PERFCTR_READ(stall_funit,   SYSDEV_CPU, CPU_STALL_FUNIT)
 DEFINE_PERFCTR_READ(stall_ifetch,  SYSDEV_CPU, CPU_STALL_IFETCH)
 DEFINE_PERFCTR_READ(stall_load,    SYSDEV_CPU, CPU_STALL_LOAD)
 DEFINE_PERFCTR_READ(stall_store,   SYSDEV_CPU, CPU_STALL_STORE)
+DEFINE_PERFCTR_READ(stall_hazard,  SYSDEV_CPU, CPU_STALL_HAZARD)
+DEFINE_PERFCTR_READ(stall_flush,   SYSDEV_CPU, CPU_STALL_FLUSH)
 
 #undef DEFINE_PERFCTR_READ
 
@@ -111,6 +115,8 @@ sysctl_cpu_all(SYSCTLFN_ARGS)
 	v[CPU_PERF_STALL_IFETCH] = READ_CTR(CPU_STALL_IFETCH);
 	v[CPU_PERF_STALL_LOAD]   = READ_CTR(CPU_STALL_LOAD);
 	v[CPU_PERF_STALL_STORE]  = READ_CTR(CPU_STALL_STORE);
+	v[CPU_PERF_STALL_HAZARD] = READ_CTR(CPU_STALL_HAZARD);
+	v[CPU_PERF_STALL_FLUSH]  = READ_CTR(CPU_STALL_FLUSH);
 #undef READ_CTR
 
 	node = *rnode;
@@ -175,6 +181,20 @@ SYSCTL_SETUP(sysctl_cpu_perfctrs_setup,
 	    CTLTYPE_QUAD, "stall_store",
 	    SYSCTL_DESCR("Cycles stalled on a data write"),
 	    sysctl_cpu_stall_store, 0, NULL, 0,
+	    CTL_CREATE, CTL_EOL);
+
+	sysctl_createv(clog, 0, &cpu_node, NULL,
+	    CTLFLAG_PERMANENT,
+	    CTLTYPE_QUAD, "stall_hazard",
+	    SYSCTL_DESCR("Cycles stalled by a pipeline interlock (hazard)"),
+	    sysctl_cpu_stall_hazard, 0, NULL, 0,
+	    CTL_CREATE, CTL_EOL);
+
+	sysctl_createv(clog, 0, &cpu_node, NULL,
+	    CTLFLAG_PERMANENT,
+	    CTLTYPE_QUAD, "stall_flush",
+	    SYSCTL_DESCR("Cycles lost to a front-end redirect or fill bubble"),
+	    sysctl_cpu_stall_flush, 0, NULL, 0,
 	    CTL_CREATE, CTL_EOL);
 
 	sysctl_createv(clog, 0, &cpu_node, NULL,
