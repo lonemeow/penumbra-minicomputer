@@ -707,7 +707,7 @@ LPF_ulx3s       = hw/constraints/ulx3s_v20.lpf
 # means adding its top file under hw/rtl/fpga/<board>/ and its
 # entries here — an unknown combination is a hard error, not a
 # silently empty source list.
-FPGA_TOPS = ulx3s_penumbra1_top ulx3s_penumbra2_probe_top
+FPGA_TOPS = ulx3s_penumbra1_top ulx3s_penumbra2_probe_top ulx3s_penumbra2_top
 
 FPGA_SRC_ulx3s_penumbra1_top = $(SRC_COMMON) $(SRC_CORE_penumbra1) \
                                $(SRC_FABRIC) $(SRC_BOARD_ulx3s) \
@@ -722,9 +722,20 @@ FPGA_SRC_ulx3s_penumbra2_probe_top = $(SRC_COMMON) $(SRC_CORE_penumbra2) \
                                      hw/rtl/sim/unified_bus_mem.sv \
                                      $(FPGA_RTL)/ulx3s/ulx3s_penumbra2_probe_top.sv
 
+# The gen2 full board system: machine_penumbra2 wired to real board fabric
+# (SDRAM v2 stack + boot ROM + UART + SPI/autoconfig). SRC_FABRIC already
+# wildcards mmu/ + soc/ + io/, so it covers the machine's whole closure and
+# the peripherals; only machine_penumbra2.sv itself is added on top. No
+# $(sort) needed — the per-axis sets keep their package files first.
+FPGA_SRC_ulx3s_penumbra2_top = $(SRC_COMMON) $(SRC_CORE_penumbra2) \
+                               $(SRC_FABRIC) $(SRC_BOARD_ulx3s) \
+                               hw/rtl/machine/machine_penumbra2.sv \
+                               $(FPGA_RTL)/ulx3s/ulx3s_penumbra2_top.sv
+
 # Tops that embed the boot ROM and/or microcode: their hex images are
 # generated before synthesis and inlined by inline_hex.py.
-FPGA_ROM_TOPS   = ulx3s_penumbra1_top
+# gen2 embeds the boot ROM (no microcode — the gen2 core is hardwired).
+FPGA_ROM_TOPS   = ulx3s_penumbra1_top ulx3s_penumbra2_top
 FPGA_UCODE_TOPS = ulx3s_penumbra1_top
 
 # BOARD/CORE porcelain → TOP derivation (CORE defaults to penumbra1
@@ -758,13 +769,16 @@ FPGA_LINT_STUBS = $(FPGA_RTL)/ecp5_prim.sv
 
 # Lint covers every registered top regardless of TOP.
 # Use Verilator --lint-only with ECP5 primitive stubs.
-fpga-lint: $(FPGA_SRC_ulx3s_penumbra1_top) $(FPGA_SRC_ulx3s_penumbra2_probe_top) $(FPGA_LINT_STUBS)
+fpga-lint: $(FPGA_SRC_ulx3s_penumbra1_top) $(FPGA_SRC_ulx3s_penumbra2_probe_top) $(FPGA_SRC_ulx3s_penumbra2_top) $(FPGA_LINT_STUBS)
 	$(DOCKER_RUN) $(DOCKER_IMAGE) --lint-only -Wall -Wno-fatal \
 		-Wno-PINMISSING -Wno-PINCONNECTEMPTY \
 		$(FPGA_SRC_ulx3s_penumbra1_top) $(FPGA_LINT_STUBS) --top ulx3s_penumbra1_top
 	$(DOCKER_RUN) $(DOCKER_IMAGE) --lint-only -Wall -Wno-fatal \
 		-Wno-PINMISSING -Wno-PINCONNECTEMPTY \
 		$(FPGA_SRC_ulx3s_penumbra2_probe_top) $(FPGA_LINT_STUBS) --top ulx3s_penumbra2_probe_top
+	$(DOCKER_RUN) $(DOCKER_IMAGE) --lint-only -Wall -Wno-fatal \
+		-Wno-PINMISSING -Wno-PINCONNECTEMPTY \
+		$(FPGA_SRC_ulx3s_penumbra2_top) $(FPGA_LINT_STUBS) --top ulx3s_penumbra2_top
 
 fpga: $(BUILD_DIR)/$(TOP).bit
 	@echo "Bitstream: $(BUILD_DIR)/$(TOP).bit (PHASE_DEG=$(PHASE_DEG))"
