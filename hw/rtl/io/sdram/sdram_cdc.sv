@@ -30,10 +30,21 @@
 //     extra delay register on the sys side enables edge detection
 //     (used to step the local rptr forward).
 //
+// Request acceptance is a single-cycle valid/ready transfer:
+// `o_sys_req_ready` is combinational (`!sys_full`), so on any cycle the
+// master drives a valid request with room available, the slot latch and
+// the ready acknowledgment happen on the SAME edge.  The master must
+// therefore observe ready and drop/advance its request the next cycle
+// (standard handshake).  Latching and acknowledging atomically is
+// load-bearing: the speculative master can change what it drives every
+// cycle (a spec push one cycle, a real push the next on a mispredict),
+// so a registered/delayed ready would let the master attribute an
+// acknowledgment to a different request than the one actually latched.
+//
 //   sys side                                        sdram side
 //   ────────                                        ──────────
 //   adapter ─req──► [if !full: latch slot[wptr[0]],   [sync wptr_gray;
-//                    bump wptr_bin, pulse req_ready]   when not empty,
+//                    bump wptr_bin, ready=!full]       when not empty,
 //                                                      drive ctrl req
 //                                                      from slot[rptr[0]]]
 //                                          │
@@ -65,7 +76,7 @@ module sdram_cdc (
     input  logic [31:0] i_sys_req_addr,
     input  logic [31:0] i_sys_req_wdata,
     input  logic [3:0]  i_sys_req_byte_en,
-    output logic        o_sys_req_ready,    // one-cycle pulse
+    output logic        o_sys_req_ready,    // combinational: high when a slot is free
 
     // Response to adapter
     output logic        o_sys_rsp_valid,    // one-cycle pulse (reads)
@@ -103,16 +114,6 @@ module sdram_cdc (
     logic [1:0] sys_wptr_bin;
     logic [1:0] sys_rptr_bin;       // local: how many slots have retired
     logic [1:0] sd_rptr_gray_s1, sd_rptr_gray_s2;
-
-    // 1-cycle accept-deadzone.  The master combinationally drives
-    // i_sys_req_valid for the cycle in which it observes the registered
-    // o_sys_req_ready pulse; without this gate, the bridge would
-    // re-accept the same request the next cycle (depth-2 makes
-    // !sys_full remain true after one accept).  The deadzone forces
-    // the master to drop and re-assert valid between requests, same
-    // discipline as the depth-1 sys_busy gate but per-cycle instead
-    // of per-transaction.
-    logic       just_accepted;
 
     // Per-slot payload — written by sys, read by SD
     logic        slot_we      [0:1];
@@ -152,10 +153,27 @@ module sdram_cdc (
         sys_wptr_gray_s2[1] ^ sys_wptr_gray_s2[0]
     };
 
-    // Outstanding count (mod 4); full at depth 2.
-    wire [1:0] outstanding_sys = sys_wptr_bin - sd_rptr_bin_synced;
+    // Outstanding requests (mod 4): accepted by the sys side but not yet
+    // retired to the master (response delivered).  Full at depth 2.
+    //
+    // This bounds the whole request->response pipeline using the
+    // sys-local retire pointer, NOT the SD read pointer.  A slot frees
+    // for SD reuse the moment the SD side reads it (sd_rptr), but the
+    // master's matching depth-2 response/tag tracking only drains when
+    // the response is delivered (sys_rptr, which lags sd_rptr).  Gating
+    // accept on sd_rptr would let the master issue a third request into
+    // its depth-2 tracking during that lag.  Counting against sys_rptr
+    // keeps accept in one clock domain and exactly aligned with response
+    // delivery, so the bridge and master never disagree on occupancy.
+    wire [1:0] outstanding_sys = sys_wptr_bin - sys_rptr_bin;
     wire       sys_full        = (outstanding_sys == 2'd2);
     wire       sd_empty        = (sd_rptr_bin == sys_wptr_bin_synced);
+
+    // Combinational accept: a free slot can take a request this cycle.
+    // Ready and the slot latch share this condition on the same edge, so
+    // the master's accepted-this-cycle view always matches what is
+    // latched (see the request-acceptance note in the header).
+    assign o_sys_req_ready = !sys_full;
 
     // Sys-side retirement detector: local rptr lags synced SD rptr.
     wire sys_has_retired = (sys_rptr_bin != sd_rptr_bin_synced);
@@ -169,8 +187,6 @@ module sdram_cdc (
             sys_rptr_bin     <= '0;
             sd_rptr_gray_s1  <= '0;
             sd_rptr_gray_s2  <= '0;
-            just_accepted    <= 1'b0;
-            o_sys_req_ready  <= 1'b0;
             o_sys_done       <= 1'b0;
             o_sys_rsp_valid  <= 1'b0;
             o_sys_rsp_data   <= '0;
@@ -179,11 +195,9 @@ module sdram_cdc (
             sd_rptr_gray_s1 <= sd_rptr_gray;
             sd_rptr_gray_s2 <= sd_rptr_gray_s1;
 
-            // Defaults: clear one-cycle pulses and the deadzone
-            o_sys_req_ready <= 1'b0;
+            // Defaults: clear one-cycle pulses
             o_sys_done      <= 1'b0;
             o_sys_rsp_valid <= 1'b0;
-            just_accepted   <= 1'b0;
 
             // Retire one slot per cycle while SD's rptr is ahead.
             // Wide rsp_data is safe to read because SD wrote it
@@ -201,17 +215,19 @@ module sdram_cdc (
                 sys_rptr_bin    <= sys_rptr_bin + 2'd1;
             end
 
-            // Accept a new request if there's room and we didn't
-            // accept one last cycle (forces master to drop valid
-            // before next request — see comment on `just_accepted`).
-            if (!sys_full && i_sys_req_valid && !just_accepted) begin
+            // Accept a new request whenever a slot is free and the
+            // master is presenting one.  This is the same condition as
+            // the combinational o_sys_req_ready, so the latch and the
+            // acknowledgment are one atomic event — the master's
+            // accepted-this-cycle bookkeeping always names the request
+            // actually stored here.  The master drops/advances its
+            // request the next cycle, so a free slot is not re-latched.
+            if (o_sys_req_ready && i_sys_req_valid) begin
                 slot_we     [sys_wptr_bin[0]] <= i_sys_req_we;
                 slot_addr   [sys_wptr_bin[0]] <= i_sys_req_addr;
                 slot_wdata  [sys_wptr_bin[0]] <= i_sys_req_wdata;
                 slot_byte_en[sys_wptr_bin[0]] <= i_sys_req_byte_en;
                 sys_wptr_bin    <= sys_wptr_bin + 2'd1;
-                o_sys_req_ready <= 1'b1;
-                just_accepted   <= 1'b1;
             end
         end
     end
@@ -276,5 +292,15 @@ module sdram_cdc (
             endcase
         end
     end
+
+    // ── Invariant (sim/synth-stripped) ───────────────────────────
+    // The sys-side outstanding count never exceeds the depth-2 FIFO.
+    // A value of 3 would mean a slot was latched while full — the
+    // failure mode if the master ever re-presents an already-accepted
+    // request without the combinational ready dropping, or if the
+    // wptr/rptr bookkeeping desyncs after a refactor.
+    assert property (@(posedge i_sys_clk) disable iff (i_sys_rst)
+        (outstanding_sys <= 2'd2))
+        else $error("sdram_cdc: outstanding_sys > 2 — slot FIFO overflow");
 
 endmodule

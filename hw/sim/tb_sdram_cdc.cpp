@@ -97,6 +97,25 @@ static void step_with_ctrl(Vsdram_cdc* d) {
     ctrl.tick(d);
 }
 
+// Step until a sys posedge accepts the currently-driven request.
+// o_sys_req_ready is combinational (!sys_full), so the transfer is the
+// posedge where valid & ready are both high.  An accept that fills the
+// FIFO clears ready on that same edge, so the ready value to test is the
+// one present in the low phase *preceding* the posedge (what the flop
+// samples) — not the post-edge value.  Returns true on accept, leaving
+// the clock just past the accepting posedge; false on timeout.
+static bool wait_sys_accept(Vsdram_cdc* d, int max_steps) {
+    int  last_sys  = d->i_sys_clk;
+    bool ready_pre = false;
+    while (max_steps-- > 0) {
+        if (d->i_sys_clk == 0) ready_pre = d->o_sys_req_ready;
+        step_with_ctrl(d);
+        if (d->i_sys_clk == 1 && last_sys == 0 && ready_pre) return true;
+        last_sys = d->i_sys_clk;
+    }
+    return false;
+}
+
 static void reset(Vsdram_cdc* d) {
     d->i_sys_clk = 0;
     d->i_sd_clk  = 0;
@@ -128,34 +147,22 @@ static uint32_t do_sys_req(Vsdram_cdc* d, uint32_t addr, bool we, uint32_t wdata
     d->i_sys_req_wdata   = wdata;
     d->i_sys_req_byte_en = byte_en;
 
-    // Wait for o_sys_req_ready pulse (rising sys edge).
-    int safety = 4000;
-    int last_sys_clk = d->i_sys_clk;
-    while (safety-- > 0) {
-        step_with_ctrl(d);
-        if (d->i_sys_clk == 1 && last_sys_clk == 0 && d->o_sys_req_ready) break;
-        last_sys_clk = d->i_sys_clk;
-    }
-    if (safety <= 0) {
-        printf("  FAIL: %s — req_ready never pulsed\n", label);
+    // Accept is one atomic posedge (combinational ready).  Drop valid
+    // right after so the still-free sibling slot isn't fed a duplicate of
+    // this same request on the next edge.
+    if (!wait_sys_accept(d, 4000)) {
+        printf("  FAIL: %s — req_ready never asserted\n", label);
         errors++;
         return 0;
     }
-    // Advance to next sys edge before dropping valid (so the bridge
-    // sees the pulse latched).
-    last_sys_clk = d->i_sys_clk;
-    while (true) {
-        step_with_ctrl(d);
-        if (d->i_sys_clk == 1 && last_sys_clk == 0) break;
-        last_sys_clk = d->i_sys_clk;
-    }
     d->i_sys_req_valid = 0;
+    d->eval();
 
     // Wait for o_sys_done pulse.
-    safety = 8000;
+    int safety = 8000;
     uint32_t got = 0;
     bool got_done = false;
-    last_sys_clk = d->i_sys_clk;
+    int last_sys_clk = d->i_sys_clk;
     while (safety-- > 0) {
         step_with_ctrl(d);
         if (d->i_sys_clk == 1 && last_sys_clk == 0) {
@@ -244,13 +251,13 @@ int main(int argc, char** argv) {
     }
 
     // ── Test 5: depth-2 in-flight ────────────────────────────
-    // Push two requests in close succession without waiting for either
-    // to complete.  On a single-outstanding bridge the second
-    // o_sys_req_ready never pulses (sys_busy stays high until the
-    // first done arrives); on a depth-2 bridge both pulses appear
-    // within a few sys cycles.  Then verify both responses come back
-    // in order with correct data — confirms response routing across
-    // the slot pointers.
+    // Push two requests back-to-back without waiting for either to
+    // complete: A is accepted, then — without dropping valid — the
+    // address is switched to B and B is accepted on the very next sys
+    // edge (the free second slot).  On a single-outstanding bridge ready
+    // would stay low until A's done, so the second accept never appears.
+    // Then verify both responses come back in order with correct data —
+    // confirms response routing across the slot pointers.
     {
         uint32_t addr_a = 0x00009000u;
         uint32_t addr_b = 0x00009004u;
@@ -261,36 +268,17 @@ int main(int argc, char** argv) {
         d->i_sys_req_addr    = addr_a;
         d->i_sys_req_byte_en = 0xF;
 
-        int safety = 200;
-        int last = d->i_sys_clk;
-        while (safety-- > 0) {
-            step_with_ctrl(d);
-            if (d->i_sys_clk == 1 && last == 0 && d->o_sys_req_ready) break;
-            last = d->i_sys_clk;
-        }
-        if (safety <= 0) {
-            printf("  FAIL: depth-2 — first req_ready never pulsed\n");
+        if (!wait_sys_accept(d, 200)) {
+            printf("  FAIL: depth-2 — first request never accepted\n");
             errors++;
         }
 
-        // Switch fields to B and wait for second accept.  With the
-        // 1-cycle accept deadzone this happens exactly 2 sys cycles
-        // (32 steps at 5 ns) after the first accept — wait several
-        // sys cycles' worth of steps to give a clear pass/fail.
+        // Switch to B without dropping valid; the second slot accepts it
+        // on the next edge while A is still in flight.
         d->i_sys_req_addr = addr_b;
-        safety = 200;
-        last = d->i_sys_clk;
-        bool got_b = false;
-        while (safety-- > 0) {
-            step_with_ctrl(d);
-            if (d->i_sys_clk == 1 && last == 0 && d->o_sys_req_ready) {
-                got_b = true;
-                break;
-            }
-            last = d->i_sys_clk;
-        }
+        bool got_b = wait_sys_accept(d, 200);
         if (!got_b) {
-            printf("  FAIL: depth-2 — second req_ready did not pulse within 30 sys cycles\n");
+            printf("  FAIL: depth-2 — second request not accepted within 25 sys cycles\n");
             printf("        (this is the failure mode of a single-outstanding bridge)\n");
             errors++;
         } else {
@@ -298,11 +286,12 @@ int main(int argc, char** argv) {
         }
 
         d->i_sys_req_valid = 0;
+        d->eval();
 
         uint32_t r_a = 0, r_b = 0;
         // Wait for first done
-        safety = 8000;
-        last = d->i_sys_clk;
+        int safety = 8000;
+        int last = d->i_sys_clk;
         while (safety-- > 0) {
             step_with_ctrl(d);
             if (d->i_sys_clk == 1 && last == 0 && d->o_sys_done) {

@@ -253,6 +253,7 @@ MODULE_TESTS = \
     autoconfig_test:tb_autoconfig \
     spi_test:tb_spi \
     sdram_adapter_test:tb_sdram_adapter \
+    sdram_sim:tb_sdram_sim \
     video_pattern_test
 
 .PHONY: test-modules

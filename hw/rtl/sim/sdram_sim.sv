@@ -203,4 +203,76 @@ module sdram_sim
         .io_d   (sd_d)
     );
 
+    // ══════════════════════════════════════════════════════════
+    // Read-after-write consistency checker (sim-only, always on)
+    //
+    // The one invariant the whole memory stack must hold: a read
+    // returns the value most recently written to that address.  This
+    // shadows every committed write (per byte) and checks every read's
+    // o_rdata against it, firing on the FIRST violation.  It is the net
+    // that catches stale/transposed reads from the speculative-prefetch
+    // path — the class of bug that otherwise only surfaces as a far-
+    // downstream hang.  It runs under every sim that instantiates this
+    // module (gen2 conformance, benchmarks, interactive), so a
+    // regression is reported at the cycle it happens, with the address
+    // and the expected/got words, instead of being chased by hand.
+    //
+    // Windowed to the low region (where vectors, handlers, kernel and
+    // benchmark code/data/stack live) to keep the shadow light; the
+    // per-byte written mask means never-written bytes are not compared.
+    // The transaction address is captured while o_busy is high so the
+    // adapter's PRESENT->BEGIN address change cannot misattribute a
+    // completion.
+    // ══════════════════════════════════════════════════════════
+    localparam int CHK_WORDS = 512*1024;             // low 2 MiB
+
+    logic [31:0] chk_shadow [CHK_WORDS];
+    logic [3:0]  chk_wmask  [CHK_WORDS];
+    logic [31:0] cap_addr, cap_wdata;
+    logic [3:0]  cap_byte_en;
+    logic        cap_we, cap_re, busy_q;
+
+    wire         cap_inrange = (cap_addr < (CHK_WORDS*4));
+    wire [18:0]  cap_word    = cap_addr[20:2];
+    wire         cap_done    = busy_q && !o_busy;     // busy 1->0 = this txn completed
+
+    // Free-running cycle counter — only to locate a violation in the log.
+    logic [31:0] cyc_count;
+
+    integer chk_i;
+    initial begin
+        for (chk_i = 0; chk_i < CHK_WORDS; chk_i = chk_i + 1) chk_wmask[chk_i] = 4'b0;
+        cyc_count = 32'd0;
+    end
+
+    always_ff @(posedge i_clk) begin
+        cyc_count <= cyc_count + 1;
+        busy_q    <= o_busy;
+        if (o_busy) begin
+            cap_addr    <= i_addr;
+            cap_wdata   <= i_wdata;
+            cap_byte_en <= i_byte_en;
+            cap_we      <= i_we;
+            cap_re      <= i_re;
+        end
+
+        if (!i_rst && cap_done && cap_inrange) begin
+            if (cap_we) begin
+                if (cap_byte_en[0]) chk_shadow[cap_word][ 7: 0] <= cap_wdata[ 7: 0];
+                if (cap_byte_en[1]) chk_shadow[cap_word][15: 8] <= cap_wdata[15: 8];
+                if (cap_byte_en[2]) chk_shadow[cap_word][23:16] <= cap_wdata[23:16];
+                if (cap_byte_en[3]) chk_shadow[cap_word][31:24] <= cap_wdata[31:24];
+                chk_wmask[cap_word] <= chk_wmask[cap_word] | cap_byte_en;
+            end else if (cap_re) begin
+                for (int b = 0; b < 4; b = b + 1)
+                    if (chk_wmask[cap_word][b] &&
+                        (o_rdata[b*8 +: 8] !== chk_shadow[cap_word][b*8 +: 8])) begin
+                        $display("=== SDRAM STALE READ @0x%08x exp 0x%08x got 0x%08x (byte %0d, cyc %0d) ===",
+                                 cap_addr, chk_shadow[cap_word], o_rdata, b, cyc_count);
+                        $fatal(1, "sdram_sim: stale read");
+                    end
+            end
+        end
+    end
+
 endmodule

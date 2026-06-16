@@ -3,6 +3,64 @@
 Outstanding work and roadmap items, plus durable findings from
 completed investigations.
 
+## Hardware: gen2 SDRAM CDC request-handshake skew (RESOLVED)
+
+gen2 Dhrystone hung silently before printing. The proximate symptom was
+an uncached read returning a stale word — a vector-table fetch dispatched
+to an unmapped ROM page and re-faulted into the same vector forever. Made
+deterministic by a read-after-write checker in `sdram_sim`, which caught
+a read of `0xd000` returning `memory[0x8114]` instead of the installed
+value.
+
+Root cause in `sdram_cdc`: request acceptance used a *registered*
+`o_sys_req_ready`. The slot was latched on cycle T (when `!sys_full &&
+i_sys_req_valid`), but ready pulsed on T+1, with a `just_accepted`
+deadzone suppressing a re-latch. The speculative adapter drives its
+request combinationally and treats `i_req_ready` as "my current request
+was accepted." When the master changes what it drives across that
+one-cycle gap — a speculative `addr+4` push one cycle, then a real
+(mispredicted) push the next — the T+1 acknowledgment is for the T latch
+(the spec), but the adapter attributes it to the real push. The spec is
+physically stored yet tagged REAL, so its response (the open-row word at
+the spec address) is delivered to the real read, and the real address is
+never latched into any slot at all. gen1's sequential fills never change
+the driven request across the gap, so they never trip it; gen2's
+mispredicting uncached/jump traffic does.
+
+Fix: make acceptance a single-cycle valid/ready transfer.
+`o_sys_req_ready` is combinational (`!sys_full`), the slot latches on the
+same edge, and the deadzone is gone. Latch and acknowledgment are one
+atomic event, so the master's per-accept bookkeeping always names the
+request actually stored. Speculation stays enabled (no latency-hiding
+lost); removing the per-accept deadzone is in fact slightly faster.
+
+Removing the deadzone exposed a second issue: `sys_full` counted slot
+occupancy via the SD read pointer (`sd_rptr_bin_synced`, freed when the
+SD side reads a slot), but the master's depth-2 response/tag tracking
+drains only at response delivery (`sys_rptr_bin`, which lags) — so the
+master could issue a third request into its depth-2 tracking. `sys_full`
+now counts `sys_wptr_bin - sys_rptr_bin` (sys-local, matching the tag
+lifetime); an `outstanding_sys <= 2` assertion guards it.
+
+Regression net:
+- A permanent, always-on read-after-write consistency checker in
+  `sdram_sim.sv` (windowed to the low 2 MiB) `$fatal`s at the cycle and
+  address of any stale read under every gen2 sim, so this class of bug
+  reports itself instead of being chased.
+- `tb_sdram_cdc` pins the handshake contract directly (single,
+  back-to-back, distinct-address, depth-2-in-flight), driven to the
+  combinational valid/ready protocol.
+- `tb_sdram_sim` (new full-stack stress) drives gapless fills + gapped
+  jumps with its own shadow check. It exercises the whole stack but did
+  *not* deterministically reproduce this phase-sensitive case; the
+  permanent checker is the actual regression net.
+- `isa/test_trap_store` was added along the way (a memory store inside a
+  fault handler — a conformance gap nothing else covered).
+
+gen1 note: `sdram_cdc` ships in the gen1 ULX3S bitstream. The handshake
+path is entirely on the 25 MHz sys clock (not the fmax-critical fetch/TLB
+cone), and gen1 was confirmed to synthesize and run with the change.
+
 ## Kernel: block-device reads still go single-block
 
 `pmci` handles CMD18/CMD25 multi-block natively (a per-block
