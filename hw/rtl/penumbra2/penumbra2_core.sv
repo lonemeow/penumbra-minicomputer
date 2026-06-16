@@ -125,6 +125,7 @@ module penumbra2_core
     output logic                  o_stall_funit,     // EX waiting on the divmul unit
     output logic                  o_stall_load,      // MEM holding for a load access
     output logic                  o_stall_store,     // MEM holding for a store access
+    output logic                  o_stall_hazard,    // ID blocked by a pipeline interlock (hazard)
 
     // ── Exception observability (trace markers) ──────────────────
     // The same fault/ERET commit pulses the front end already acts on,
@@ -357,7 +358,7 @@ module penumbra2_core
         .o_eret_commit(eret_commit),
         // Stall-attribution observability — straight through to the machine perfctr.
         .o_stall_funit(o_stall_funit), .o_stall_load(o_stall_load),
-        .o_stall_store(o_stall_store),
+        .o_stall_store(o_stall_store), .o_stall_hazard(o_stall_hazard),
         // Interrupt support — observability out, IRQ save-state in.
         .o_sr_s(sr_s), .o_sr_i(sr_i), .o_ei_commit(ei_commit), .o_dc_commit(dc_commit),
         .o_dc_commit_pc(o_dc_commit_pc), .o_dc_commit_op_class(o_dc_commit_op_class),

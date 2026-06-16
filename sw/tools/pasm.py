@@ -68,6 +68,8 @@ BUILTIN_CONSTANTS = {
     "STALL_IFETCH":      8,
     "STALL_LOAD":        9,
     "STALL_STORE":       10,
+    "STALL_HAZARD":      11,
+    "STALL_FLUSH":       12,
 
     # MACH registers (device 8)
     "MACH_FEAT":    0,

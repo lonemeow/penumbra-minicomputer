@@ -215,7 +215,9 @@ reset to 0 on system reset.
 | 8      | `STALL_IFETCH`        | R   | Stall cycles: instruction fetch awaiting memory     |
 | 9      | `STALL_LOAD`          | R   | Stall cycles: data read awaiting a miss-fill        |
 | 10     | `STALL_STORE`         | R   | Stall cycles: data write awaiting completion        |
-| 11–15  | —                     | —   | Reserved for additional performance counters        |
+| 11     | `STALL_HAZARD`        | R   | Stall cycles: issue blocked by a pipeline interlock (hazard) |
+| 12     | `STALL_FLUSH`         | R   | Stall cycles: front-end redirect / pipeline-fill bubble |
+| 13–15  | —                     | —   | Reserved for additional performance counters        |
 
 ### Performance Counters (regs 5+)
 
@@ -233,10 +235,10 @@ fully-consistent multi-counter snapshot is ever needed, software can
 sample twice and average, or hardware can be extended with a snapshot
 register later.
 
-### Stall-attribution counters (regs 7–10)
+### Stall-attribution counters (regs 7–12)
 
-These four counters measure cycles the core spent unable to make
-forward progress, broken down by cause:
+These counters measure cycles the core spent unable to make forward
+progress, broken down by cause:
 
 | Counter | Stall cause |
 |---|---|
@@ -244,23 +246,28 @@ forward progress, broken down by cause:
 | `STALL_IFETCH` | Instruction fetch waiting on the memory hierarchy (I-cache miss → L2 → SDRAM). |
 | `STALL_LOAD`   | A data read waiting on a miss-fill. |
 | `STALL_STORE`  | A data write waiting to complete downstream. |
+| `STALL_HAZARD` | Issue held in decode by a pipeline interlock — a register data hazard (a source operand has an in-flight writer) or a structural hazard. The general issue-stall bucket: further interlock sources accrue here rather than each claiming a counter. |
+| `STALL_FLUSH`  | A front-end redirect (taken branch, exception entry/return, serialization) or pipeline-fill bubble — no instruction was available to retire and no execution-side stall applied. |
 
-The four are **mutually exclusive** — at most one is active in any
-cycle — so their sum is the total stall:
+These counters are **mutually exclusive** — at most one advances in any
+cycle. When more than one stall condition holds at once, the cycle is
+charged to the cause blocking the *oldest un-retired instruction* (the
+one due to retire next), so a younger instruction's stall never masks an
+older one's. Their sum is the total stall:
 
 ```
 STALL_total = STALL_FUNIT + STALL_IFETCH + STALL_LOAD + STALL_STORE
+            + STALL_HAZARD + STALL_FLUSH
 ```
 
-`CPU_CYCLES − STALL_total` is the cycles spent on productive
-fetch/execute work, and `CPU_CYCLES / CPU_INSNS_RETIRED` is the
-effective CPI. Note that `CPU_CYCLES − CPU_INSNS_RETIRED` is **not**
-the stall total: a core that needs more than one cycle per instruction
-even when every access hits — separate fetch and execute cycles, or a
-microcoded multi-step datapath — spends those extra cycles on real
-work, not stalls. Separating genuine stalls from that baseline is
-exactly what these counters are for; it cannot be recovered from the
-cycle and instruction counts alone.
+`CPU_CYCLES − STALL_total` is the cycles spent retiring instructions,
+and `CPU_CYCLES / CPU_INSNS_RETIRED` is the effective CPI. An
+implementation may also spend cycles that are neither a retirement nor a
+counted stall — e.g. a microcoded multi-step datapath's extra execute
+cycles — so in general `CPU_CYCLES − CPU_INSNS_RETIRED` is an upper
+bound on `STALL_total`. The two are equal only when every non-retiring
+cycle is attributed to a stall counter, in which case the breakdown
+accounts for every lost cycle.
 
 `STALL_STORE` and `STALL_FUNIT` have no equivalent among the cache
 devices' counters. A cache's `MISS_STALL_CYCLES` (reserved — see the

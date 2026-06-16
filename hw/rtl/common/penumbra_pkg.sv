@@ -147,15 +147,18 @@ package penumbra_pkg;
     // Performance counters (free-running, 32-bit, reset on system reset)
     localparam logic [3:0] SYSREG_CPU_CYCLES        = 4'd5;  // CPU clock cycles
     localparam logic [3:0] SYSREG_CPU_INSNS_RETIRED = 4'd6;  // Instructions retired
-    // Stall-attribution counters: cycles lost to stalls, by cause.
-    // Mutually exclusive, so their sum is the total stall.  FUNIT counts
-    // cycles waiting on a multi-cycle execution unit (e.g. divmul); the
-    // other three count memory stalls.
+    // Stall-attribution counters: cycles lost to stalls, by cause, mutually
+    // exclusive so their sum is the total stall. FUNIT waits on a multi-cycle
+    // execution unit (e.g. divmul); IFETCH/LOAD/STORE are memory stalls;
+    // HAZARD is a pipeline interlock (a data or structural hazard blocking
+    // issue); FLUSH is a front-end redirect or pipeline-fill bubble.
     localparam logic [3:0] SYSREG_CPU_STALL_FUNIT   = 4'd7;  // Stall: multi-cycle execution unit
     localparam logic [3:0] SYSREG_CPU_STALL_IFETCH  = 4'd8;  // Stall: instruction-fetch memory
     localparam logic [3:0] SYSREG_CPU_STALL_LOAD    = 4'd9;  // Stall: data read miss-fill
     localparam logic [3:0] SYSREG_CPU_STALL_STORE   = 4'd10; // Stall: data write round-trip
-    // Regs 11–15 reserved for additional CPU performance counters
+    localparam logic [3:0] SYSREG_CPU_STALL_HAZARD  = 4'd11; // Stall: pipeline interlock (issue hazard)
+    localparam logic [3:0] SYSREG_CPU_STALL_FLUSH   = 4'd12; // Stall: front-end redirect / fill bubble
+    // Regs 13–15 reserved for additional CPU performance counters
 
     // ── MACH sysreg addresses (dev_id = 8) ──────────────────
     localparam logic [3:0] SYSREG_MACH_FEAT   = 4'd0;  // Machine feature flags

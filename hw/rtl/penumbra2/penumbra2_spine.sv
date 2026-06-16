@@ -130,6 +130,7 @@ module penumbra2_spine
     output logic                  o_stall_funit,     // EX waiting on the divmul unit
     output logic                  o_stall_load,      // MEM holding for a load access
     output logic                  o_stall_store,     // MEM holding for a store access
+    output logic                  o_stall_hazard,    // ID blocked by a pipeline interlock (hazard)
 
     // ── Interrupt support (to/from the core's interrupt unit) ────
     output logic                  o_sr_s,            // SR.S (supervisor) — privilege source
@@ -380,6 +381,7 @@ module penumbra2_spine
         .i_stall_in(ex_stall),
         .i_bubble((ex_branch_taken & ~ex_stall) | wb_fault_commit | eret_commit | wrsys_resync),
         .o_stall(id_stall),
+        .o_hazard_stall(o_stall_hazard),
         .o_rd_idx_a(rd_idx_a), .o_rd_idx_b(rd_idx_b),
         .i_rd_data_a(rd_data_a), .i_rd_data_b(rd_data_b),
         .o_spr_rd_sel(id_spr_rd_sel), .i_spr_src_value(spr_operand_value),

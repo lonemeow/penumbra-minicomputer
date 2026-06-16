@@ -149,7 +149,7 @@ module machine_penumbra2
     logic        insn_retired;
 
     // Per-cause stall signals for the perfctr (head-of-line attribution).
-    logic        stall_funit, stall_load, stall_store;
+    logic        stall_funit, stall_load, stall_store, stall_hazard;
 
     // Core's timer-IRQ line: the internal programmable timer, OR the external
     // i_timer_irq input (kept for direct injection; the internal timer is the
@@ -189,7 +189,7 @@ module machine_penumbra2
         .o_retire_valid(o_retire_valid), .o_retire_op_class(o_retire_op_class),
         .o_insn_retired(insn_retired),
         .o_stall_funit(stall_funit), .o_stall_load(stall_load),
-        .o_stall_store(stall_store),
+        .o_stall_store(stall_store), .o_stall_hazard(stall_hazard),
         .o_retire_pc(o_retire_pc), .o_retire_sr(o_retire_sr),
         .o_fault_commit(o_fault_commit), .o_fault_vec(o_fault_vec),
         .o_eret_commit(o_eret_commit),
@@ -423,6 +423,7 @@ module machine_penumbra2
         .i_insn_retired(insn_retired),
         .i_stall_load(stall_load), .i_stall_store(stall_store),
         .i_stall_funit(stall_funit), .i_stall_ifetch(fetch_busy),
+        .i_stall_hazard(stall_hazard),
         .i_sys_reg(sys_reg), .o_sys_rdata(perfctr_rdata)
     );
 

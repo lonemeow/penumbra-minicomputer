@@ -1,10 +1,10 @@
 // penumbra2_perfctr — Penumbra/2 CPU performance counters (SYSDEV_CPU regs 5+).
 //
-// Six free-running 32-bit counters, read back through the sysreg sideband:
+// Eight free-running 32-bit counters, read back through the sysreg sideband:
 //   CYCLES / INSNS_RETIRED — the two architecturally-portable counters, plus
-//   STALL_FUNIT / STALL_IFETCH / STALL_LOAD / STALL_STORE — the stall
-//   breakdown. Counter layout and read semantics are the contract in
-//   doc/system/sysregs.md (Device 1: CPU).
+//   the stall breakdown STALL_FUNIT / STALL_IFETCH / STALL_LOAD / STALL_STORE /
+//   STALL_HAZARD / STALL_FLUSH. Counter layout and read semantics are the
+//   contract in doc/system/sysregs.md (Device 1: CPU).
 //
 // Stall attribution is head-of-line: a cycle that retires no instruction is
 // charged to the blocker of the *oldest* un-retired instruction — which, in an
@@ -14,9 +14,11 @@
 // downstream-first priority: clearing an upstream stall cannot let the cycle
 // retire while a downstream one still holds, so the downstream stall is the one
 // that actually bound progress. A retiring instruction means the cycle was
-// productive and is charged to nothing. The four stall counters are therefore
-// mutually exclusive — at most one advances per cycle (asserted below) — so
-// their sum is the stall total, the basis for a CPI breakdown.
+// productive and is charged to nothing; a non-retiring cycle matching no stage
+// stall is a front-end redirect or fill bubble (STALL_FLUSH, the residual). The
+// six stall counters are therefore mutually exclusive, and exactly one of
+// {retire, the six} advances each cycle (asserted below) — so the breakdown
+// closes CYCLES = INSNS_RETIRED + Sum(stall), accounting for every cycle.
 //
 // The block is observational: its inputs are stall signals each stage already
 // generates, and its outputs feed only counter flops and the read mux. It never
@@ -39,6 +41,7 @@ module penumbra2_perfctr
     input  logic        i_stall_store,    // MEM holds the pipe for a store access
     input  logic        i_stall_funit,    // EX waits on the multi-cycle execution unit (divmul)
     input  logic        i_stall_ifetch,   // IF waits on the instruction-fetch memory
+    input  logic        i_stall_hazard,   // ID issue blocked by a pipeline interlock (hazard)
 
     // ── Sysreg read sideband (combinational; device complex captures it) ──
     input  logic [3:0]  i_sys_reg,
@@ -49,28 +52,31 @@ module penumbra2_perfctr
     // Resolved from the (possibly overlapping) per-cause stall inputs by
     // head-of-line priority — see the module header. At most one is set per
     // cycle, and none is set on a retiring cycle (the assertion checks both).
-    logic inc_funit, inc_ifetch, inc_load, inc_store;
+    logic inc_funit, inc_ifetch, inc_load, inc_store, inc_hazard, inc_flush;
 
     always_comb begin
         inc_load   = 1'b0;
         inc_store  = 1'b0;
         inc_funit  = 1'b0;
+        inc_hazard = 1'b0;
         inc_ifetch = 1'b0;
+        inc_flush  = 1'b0;
 
+        // Downstream-first priority (MEM > EX > ID > IF); a non-retiring cycle
+        // matching no stage stall is the front-end-redirect / fill residual.
         if (!i_insn_retired) begin
-            if (i_stall_load)       inc_load    = 1'b1;
-            else if (i_stall_store) inc_store   = 1'b1;
-            else if (i_stall_funit) inc_funit   = 1'b1;
+            if      (i_stall_load)   inc_load   = 1'b1;
+            else if (i_stall_store)  inc_store  = 1'b1;
+            else if (i_stall_funit)  inc_funit  = 1'b1;
+            else if (i_stall_hazard) inc_hazard = 1'b1;
             else if (i_stall_ifetch) inc_ifetch = 1'b1;
+            else                     inc_flush  = 1'b1;
         end
-        // A cycle matching none — a RAW hazard or a front-end-redirect bubble —
-        // is a residual that charges nothing, awaiting the STALL_HAZARD /
-        // STALL_FLUSH buckets.
     end
 
     // ── Counters ──────────────────────────────────────────────────
     logic [31:0] cnt_cycles, cnt_insns;
-    logic [31:0] cnt_funit, cnt_ifetch, cnt_load, cnt_store;
+    logic [31:0] cnt_funit, cnt_ifetch, cnt_load, cnt_store, cnt_hazard, cnt_flush;
 
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
@@ -80,6 +86,8 @@ module penumbra2_perfctr
             cnt_ifetch <= 32'b0;
             cnt_load   <= 32'b0;
             cnt_store  <= 32'b0;
+            cnt_hazard <= 32'b0;
+            cnt_flush  <= 32'b0;
         end else begin
             cnt_cycles <= cnt_cycles + 32'd1;
             if (i_insn_retired) cnt_insns  <= cnt_insns  + 32'd1;
@@ -87,10 +95,12 @@ module penumbra2_perfctr
             if (inc_ifetch)     cnt_ifetch <= cnt_ifetch + 32'd1;
             if (inc_load)       cnt_load   <= cnt_load   + 32'd1;
             if (inc_store)      cnt_store  <= cnt_store  + 32'd1;
+            if (inc_hazard)     cnt_hazard <= cnt_hazard + 32'd1;
+            if (inc_flush)      cnt_flush  <= cnt_flush  + 32'd1;
         end
     end
 
-    // ── Read mux (regs 5–10; other regs read 0 — cpuid serves 0–4) ──
+    // ── Read mux (regs 5–12; other regs read 0 — cpuid serves 0–4) ──
     always_comb begin
         case (i_sys_reg)
             SYSREG_CPU_CYCLES:        o_sys_rdata = cnt_cycles;
@@ -99,6 +109,8 @@ module penumbra2_perfctr
             SYSREG_CPU_STALL_IFETCH:  o_sys_rdata = cnt_ifetch;
             SYSREG_CPU_STALL_LOAD:    o_sys_rdata = cnt_load;
             SYSREG_CPU_STALL_STORE:   o_sys_rdata = cnt_store;
+            SYSREG_CPU_STALL_HAZARD:  o_sys_rdata = cnt_hazard;
+            SYSREG_CPU_STALL_FLUSH:   o_sys_rdata = cnt_flush;
             default:                  o_sys_rdata = 32'b0;
         endcase
     end
@@ -107,13 +119,15 @@ module penumbra2_perfctr
     // Assertions — sim-only (Verilator --assert); stripped at synth.
     // ══════════════════════════════════════════════════════════
 
-    // Head-of-line attribution charges each cycle to at most one outcome: a
-    // retirement or exactly one stall bucket (sysregs.md — the stall counters
-    // are mutually exclusive). A residual cycle (RAW hazard / redirect bubble)
-    // charges none, which is still onehot0. If this fires, the priority logic
-    // let two buckets — or a bucket and a retirement — claim the same cycle.
+    // Every cycle is charged to exactly one outcome: a retirement or one stall
+    // bucket. With STALL_FLUSH as the residual catch-all, the six buckets plus
+    // the retire pulse partition all cycles (sysregs.md — the stall counters are
+    // mutually exclusive), so exactly one of the seven is high. If this fires,
+    // the priority chain is not exhaustive-and-exclusive — two outcomes, or
+    // none, claimed the cycle.
     assert property (@(posedge i_clk) disable iff (i_rst)
-        $onehot0({i_insn_retired, inc_funit, inc_ifetch, inc_load, inc_store}))
-        else $error("penumbra2_perfctr: cycle charged to multiple counters");
+        $onehot({i_insn_retired, inc_funit, inc_ifetch, inc_load, inc_store,
+                 inc_hazard, inc_flush}))
+        else $error("penumbra2_perfctr: cycle not charged to exactly one counter");
 
 endmodule

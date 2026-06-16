@@ -46,6 +46,7 @@ module penumbra2_id_stage
     input  logic                  i_stall_in,       // EX cannot accept this cycle
     input  logic                  i_bubble,         // force a bubble this edge (taken-branch redirect / fault flush)
     output logic                  o_stall,          // back-pressure to IF
+    output logic                  o_hazard_stall,   // stall cause: ID interlock — scoreboard hazard (perfctr)
 
     // ── Regfile read interface (regfile is external) ─────────────
     output logic [SB_IDX_W-1:0]   o_rd_idx_a,
@@ -240,6 +241,11 @@ module penumbra2_id_stage
         .o_valid(sb_valid),
         .o_stall(scoreboard_stall)
     );
+
+    // The hazard-interlock component of o_stall — the local scoreboard stall,
+    // before downstream back-pressure (i_stall_in) is folded in below —
+    // surfaced for the perfctr's stall attribution.
+    assign o_hazard_stall = i_valid & scoreboard_stall;
 
     // ── Issue / back-pressure control ────────────────────────────
     // can_issue : the ID instruction is eligible to advance into EX —
