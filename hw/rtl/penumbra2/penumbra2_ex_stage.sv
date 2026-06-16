@@ -363,11 +363,20 @@ module penumbra2_ex_stage
                 o_stall = drained ? i_post_commit_wait : 1'b1;
             end
         end else if (dm_stall) begin
-            // divmul busy: hold the insn in EX, bubble EX/MEM downstream,
-            // back-pressure upstream. It advances the cycle busy clears.
-            next_valid = 1'b0;
-            advance    = 1'b0;
-            o_stall    = 1'b1;
+            // divmul busy: hold the insn in EX, back-pressure upstream; it
+            // advances the cycle busy clears.
+            advance = 1'b0;
+            o_stall = 1'b1;
+            // The divmul held in EX produces nothing this cycle, so EX/MEM
+            // drains to a bubble — except when MEM is back-pressuring EX
+            // (i_stall_in): the slot EX/MEM holds is then a live instruction
+            // MEM has not accepted yet and must be preserved intact (the same
+            // i_stall_in split the drain-commit branch above makes).
+            if (i_stall_in) begin
+                next_valid = o_valid;   // hold the un-accepted EX/MEM slot
+            end else begin
+                next_valid = 1'b0;      // drain: the divmul has produced nothing
+            end
         end else if (i_stall_in) begin
             next_valid = o_valid;       // hold EX/MEM unchanged
             advance    = 1'b0;

@@ -206,6 +206,48 @@ int main() {
     check("stall_release_advances_dst",    dut->o_phys_dst, 10);
     check("stall_release_advances_result", dut->o_result, 300);  // 100 + 200
 
+    // ── A divmul knocking under back-pressure must not drop the held slot ──
+    // Regression for the EX divmul-busy stall vs. MEM back-pressure race: an
+    // older op holds EX/MEM while MEM back-pressures EX (i_stall_in — e.g. a WB
+    // dual-write hold propagating up), and a divmul arrives at EX's input. The
+    // divmul asserts o_busy combinationally on its first cycle, so EX takes its
+    // divmul-busy stall branch — which must still honour the back-pressure and
+    // HOLD the EX/MEM slot, exactly like the plain i_stall_in branch above. The
+    // pipeline interlocks make this adjacency rare (only a cache-state-dependent
+    // timing reaches it), so it is forced directly here.
+    flush_bubble(dut);
+    clear(dut);
+    dut->i_op_a = 11; dut->i_op_b = 22; dut->i_alu_op = ALU_ADD;
+    dut->i_gpr_we = 1; dut->i_phys_dst = 12; dut->i_valid = 1;
+    dut->eval(); tick(dut); dut->eval();
+    check("dmstall_held_issued", dut->o_valid, 1);
+    check("dmstall_held_result", dut->o_result, 33);     // 11 + 22
+    // Downstream back-pressure asserts, and a divmul knocks at EX's input.
+    dut->i_stall_in = 1;
+    dut->i_op_class = OPC_DIVMUL; dut->i_divmul_op = DM_MUL;
+    dut->i_op_a = 7; dut->i_op_b = 6;
+    dut->i_gpr_we = 1; dut->i_flag_we = 1;
+    dut->i_phys_dst = 1; dut->i_phys_dst_aux = 2; dut->i_phys_dst_aux_en = 1;
+    dut->i_valid = 1;
+    dut->eval();
+    check("dmstall_backpressure", dut->o_stall, 1);
+    tick(dut); dut->eval();
+    check("dmstall_holds_valid",  dut->o_valid, 1);       // held, NOT dropped
+    check("dmstall_holds_result", dut->o_result, 33);
+    check("dmstall_holds_dst",    dut->o_phys_dst, 12);
+    // Hold a second cycle (a multi-cycle downstream stall) — still intact.
+    tick(dut); dut->eval();
+    check("dmstall_holds_valid2", dut->o_valid, 1);
+    check("dmstall_holds_dst2",   dut->o_phys_dst, 12);
+    // Release: the held op drains and the divmul iterates to completion.
+    dut->i_stall_in = 0;
+    dut->eval();
+    int dmg = 0;
+    while (dut->o_stall && dmg < 64) { tick(dut); dmg++; }
+    check("dmstall_divmul_completed", (dmg < 64), 1);
+    tick(dut); dut->i_valid = 0; dut->eval();             // latch divmul result
+    check("dmstall_divmul_lo", dut->o_result, 42);        // 7 * 6 survived the hold
+
     // ── i_bubble flushes the in-flight slot ─────────────────────
     clear(dut);
     dut->i_op_a = 1; dut->i_op_b = 2; dut->i_gpr_we = 1; dut->i_valid = 1;
