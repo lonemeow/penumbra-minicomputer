@@ -1797,6 +1797,105 @@ loops).  The other ~40% sweeps the ~70-line Proc/loop text.
    but skews naive footprint reading; `--gc-sections` +
    `-ffunction-sections` would drop them.
 
+## Compiler: G_GLOBAL_VALUE materialization defeats CSE and rematerialization
+
+`PenumbraInstructionSelector` lowers `G_GLOBAL_VALUE` (and the
+`@sym + offset` form) unconditionally to a raw `LLI rd, %lo ; LUI rd,
+%hi` pair at selection time. That eager two-instruction expansion is a
+*double* defeat:
+
+- **CSE can't see a shared base.** Each pair materializes the full
+  `sym+offset`, so two references to the same symbol at different
+  offsets — or two globals the linker happens to place near each other —
+  look like unrelated constants. MachineCSE has nothing to share.
+- **Rematerialization can't fire.** An address is the textbook remat
+  candidate (cheap to recompute, no inputs), but remat works on a single
+  def, not a two-instruction dependent chain. So when an address must
+  survive a call, the allocator's only options are spill/reload or
+  burning a callee-saved register — never "recompute it after the call,"
+  which is usually cheapest.
+
+A representative kernel sequence (hot path) materializes four addresses
+that are all `copyright + constant` through four independent pairs — two
+of them 11 bytes apart:
+
+```
+lli r1, 0xF1DD ; lui r1, 0x8027   ; copyright+0x13dc3
+lli r2, 0x6D84 ; lui r2, 0x8028   ; copyright+0x1b96a
+lli r3, 0x0A7E ; lui r3, 0x8027   ; copyright+0x5664
+lli r4, 0x0A89 ; lui r4, 0x8027   ; copyright+0x566f  (11 B past r3)
+```
+
+Dynamic share on Dhrystone (new ISS `+opstats` instruction-class
+histogram): explicit `LLI/LUI` is ~5% of executed instructions, but the
+absence of base-sharing also inflates the immediate-ALU bucket (~30% —
+offset arithmetic that would otherwise fold into a load) and, in
+disassembly, the pattern is pervasive on hot paths.
+
+### Why this is not an "instruction-count is invisible" micro-opt
+
+The "Dhrystone hot-path code shape" entry above established that
+I-footprint, not dynamic instruction count, gates HW Dhrystone —
+count-*neutral* folds (the select-CMPi fold) measured flat because they
+don't change which cache lines are touched. Address-materialization CSE
+is the opposite kind of change: it *removes* instructions, which
+*shrinks* the hot-text footprint, attacking the I-miss bottleneck
+directly. It is also the concrete mechanism behind that entry's finding
+#1 ("register-pressure-aware address-arithmetic CSE"). So unlike the
+micro-opts, this is expected to show on hardware.
+
+### Fix — three layers, the first carries most of the win
+
+1. **Rematerializable materialization pseudo.** Stop emitting `LLI+LUI`
+   at selection; lower the static/absolute `G_GLOBAL_VALUE` to a single
+   `PseudoMOVADDR rd, @sym` (`isReMaterializable`, `isPseudo`,
+   `Size = 8`), expanded to `LLI+LUI` in a *post-RA*
+   `PenumbraExpandPseudoInsts`. Now it is one SSA def: MachineCSE shares
+   identical bases pre-RA, and the allocator owns the cross-call
+   keep-vs-recompute decision via remat — exactly how AArch64 never
+   "carries" a base over a call (its `ADRP` is a rematerializable single
+   instruction it just recomputes after the call). This one change fixes
+   the kernel example and the cross-call carrying; the rest is gravy.
+2. **Fold `%lo` into the load offset.** Make the pseudo materialize the
+   `%hi` base and fold the low bits into the consuming load/store's
+   16-bit offset field via a `%lo`-style relocation (`LUI + LD %lo`
+   instead of `LLI+LUI+LD`). Needs `%hi`/`%lo` relocations and an
+   `isLegalAddressingMode` that advertises base+simm16 — same
+   `isLegalAddressingMode` gap as the "[R0 + offset] absolute
+   addressing" entry; close them together.
+3. **Merge residual constant offsets** into the pseudo's symbol operand
+   (`%hi(sym+o)`) and into memory ops, modeled on RISC-V's
+   `RISCVMergeBaseOffset` — for offsets that can't fold into a load
+   (out of range, or an address materialized into a register, e.g. a
+   pointer argument as in the kernel example).
+
+Note the cross-call case is **not** a job for a greedy merge pass — it
+is a register-allocation cost decision (remat vs CSR vs spill), and the
+pseudo is precisely what hands it to the allocator. Don't hand-roll
+cross-call liveness in a MIR pass.
+
+### TLS and PIC are orthogonal
+
+Only the static/absolute path changes. PIC (`G_GLOBAL_VALUE` → GOT load)
+is a *load*, not a materialization — CSE-able but **not** rematerializable
+(it touches memory), so it gets its own pseudo with different properties.
+TLS (GD/LD/IE/LE) is model-specific (thread pointer, possibly a
+`__tls_get_addr` call) and stays its own path. The pseudo model actually
+*simplifies* the current selector tangle: emit a distinct pseudo per
+relocation/TLS model and move the byte sequences into the post-RA
+expander, the way RISC-V's `PseudoLA` / `PseudoLA_TLS_*` family does.
+
+### Templates and tooling
+
+- RISC-V: `PseudoLLA`/`PseudoLA`/`PseudoLA_TLS_*` in `RISCVInstrInfo.td`,
+  the post-RA `RISCVExpandPseudoInsts.cpp`, and `RISCVMergeBaseOffset.cpp`
+  are near-direct templates (Penumbra's static expansion is absolute
+  `LLI+LUI` where RISC-V's is PC-relative `auipc+addi`).
+- ISS diagnosis tooling added this round: `+opstats` (instruction-class
+  histogram), `+branchstats` (branch-direction histogram), and
+  `sw/tools/branch_ceiling.py`. Re-run Dhrystone with `+opstats` after
+  layer 1 to confirm the immediate-ALU / `LLI`+`LUI` buckets drop.
+
 ## Compiler: no branch-cost model — branch-avoidance may be over-eager
 
 Penumbra sets none of the branch/select cost knobs
