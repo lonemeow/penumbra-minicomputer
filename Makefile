@@ -226,6 +226,7 @@ MODULE_TESTS = \
     penumbra2_vecfetch \
     penumbra2_irq \
     penumbra2_spine \
+    penumbra2_fetch_buffer \
     cache_bram_vipt \
     txn_arbiter \
     fill_sequencer \

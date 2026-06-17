@@ -302,7 +302,7 @@ module penumbra2_core
         .i_user_mode(o_fetch_user),
         .i_mmu_fault(i_fetch_mmu_fault),
         .i_mmu_fault_status(i_fetch_mmu_fault_status),
-        .i_stall_in(fetch_stall),
+        .i_stall_in(~fbuf_enq_ready),       // back-pressure on the buffer being full
         .i_flush(if2_flush),
         .o_stall(if2_stall),
         .o_ir(if2_ir), .o_pc(if2_pc), .o_next_pc(if2_next_pc),
@@ -312,14 +312,47 @@ module penumbra2_core
     );
 
     // ══════════════════════════════════════════════════════════
+    // Fetch buffer — elastic IF2 -> ID decoupling (breaks the stall path)
+    // ══════════════════════════════════════════════════════════
+    // The back-end stall (fetch_stall = spine.o_fetch_stall = id_stall) now
+    // reaches only the buffer's dequeue side. IF2 back-pressures on the buffer's
+    // registered o_enq_ready instead, so i_dmem_busy no longer reaches
+    // o_fetch_en combinationally. Cost: one IF2->ID cycle — an extra wrong-path
+    // slot, flushed with the rest of the front end.
+    localparam int FBUF_W = 133;   // {ir, pc, next_pc, fault_status, fault_vec, fault_pending}
+
+    logic              fbuf_enq_ready, fbuf_deq_valid;
+    logic [FBUF_W-1:0] fbuf_deq_data;
+
+    logic [31:0] id_ir, id_pc, id_next_pc, id_fault_status;
+    logic [3:0]  id_fault_vec;
+    logic        id_fault_pending;
+    assign {id_ir, id_pc, id_next_pc, id_fault_status, id_fault_vec, id_fault_pending}
+             = fbuf_deq_data;
+
+    penumbra2_fetch_buffer #(.PAYLOAD_W(FBUF_W), .DEPTH(2)) u_fbuf (
+        .i_clk(i_clk), .i_rst(i_rst),
+        // Same front-end kill as IF2: the buffer is younger than IF2's
+        // consumer, so it dies on exactly the events that bubble IF2's slot.
+        .i_flush(if2_flush),
+        .i_enq_valid(if2_valid),
+        .i_enq_data({if2_ir, if2_pc, if2_next_pc,
+                     if2_fault_status, if2_fault_vec, if2_fault_pending}),
+        .o_enq_ready(fbuf_enq_ready),
+        .o_deq_valid(fbuf_deq_valid),
+        .o_deq_data(fbuf_deq_data),
+        .i_deq_ready(~fetch_stall)          // the spine accepts when ID is not stalling
+    );
+
+    // ══════════════════════════════════════════════════════════
     // Datapath spine — ID -> EX -> MEM -> WB
     // ══════════════════════════════════════════════════════════
     penumbra2_spine u_spine (
         .i_clk(i_clk), .i_rst(i_rst),
-        .i_ir(if2_ir), .i_pc(if2_pc), .i_next_pc(if2_next_pc),
-        .i_valid(if2_valid),
-        .i_fault_pending(if2_fault_pending), .i_fault_vec(if2_fault_vec),
-        .i_fault_status(if2_fault_status),
+        .i_ir(id_ir), .i_pc(id_pc), .i_next_pc(id_next_pc),
+        .i_valid(fbuf_deq_valid),
+        .i_fault_pending(id_fault_pending), .i_fault_vec(id_fault_vec),
+        .i_fault_status(id_fault_status),
         .i_supervisor(core_supervisor),
         .o_fetch_stall(fetch_stall),
         .o_commit_idx(o_commit_idx), .o_commit_data(o_commit_data),
