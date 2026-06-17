@@ -1086,10 +1086,104 @@ Future work this opened up:
   replay is idempotent, uncacheable is non-speculative). A store buffer
   would decouple stores from MEM and enable write coalescing — a
   throughput win, deferred. Distinct from the L2 write buffer below.
-- **gen2-on-FPGA validation.** The interrupt and SDRAM-sim RTL is
-  validated on the sim suite only; there is no gen2 board bring-up yet,
-  so it has had no real-hardware validation. Carry that caveat until a
-  gen2 FPGA path exists.
+- **gen2-on-FPGA validation — done.** The gen2 board top
+  (`ulx3s_penumbra2_top`) synthesizes, flashes, and runs Dhrystone on the
+  ULX3S; both clock domains close timing. fmax findings below.
+
+## Hardware: Penumbra/2 CPU fmax — critical-path findings
+
+gen2 targets 25 MHz CPU / 100 MHz SDRAM on the ULX3S (ECP5-85F sg6).
+Unlike gen1's single full-instruction cone, the pipelined core's fmax
+floor is the single-cycle **memory-hit cone**: TLB translate (the 2-way
+associative match in `tlb_perm`) feeding the VIPT L1 tag compare, once on
+the fetch side (port A) and once on the data side (port B). Restructuring
+that cone is the gen2 fmax story. Operating point after the work below:
+~32 MHz CPU, ~117 MHz SDRAM (single-synth snapshots; they jitter
+run-to-run).
+
+### SDRAM domain: floorplanned to recover margin — DONE (`08cbd63`)
+
+The SDRAM controller closed only ~101 MHz (1.5 % over its 100 MHz target)
+where the identical RTL reaches ~140 MHz on gen1. The cause was
+geometric, not logical: the denser gen2 core fills the central fabric and
+crowds the controller into a thin 4-column sliver against the right-edge
+SDRAM pads, so its internal routes stretch. A nextpnr `--pre-pack` region
+floorplan (`ulx3s_penumbra2_floorplan.py`) corrals `u_sdram_ctrl` +
+`u_sdram_cdc` into a compact block by the pads → ~117–127 MHz.
+
+Two non-results, recorded so they are not re-tried:
+- **Over-constraining** `clk_sdram` via `FREQUENCY NET` did nothing.
+  nextpnr's analytical placer always minimizes its cost — it does not ease
+  off a met target, so a tighter number only relabels PASS→FAIL.
+  Over-constraining helps a path that is *under-prioritized*, not one
+  already getting full attention.
+- Regions are not expressible in nextpnr's LPF (`LOCATE COMP` only), so
+  floorplans are Python `--pre-pack` scripts. Design-intent constraints
+  live in a layered overlay (`ulx3s_penumbra2_design.lpf` + the pre-pack
+  script), never the vendor board LPF — a file that can only speak
+  REGION/FREQUENCY cannot misclaim a pin.
+
+`keep_hierarchy` on the TLB cone + pipeline stages (`245aff2`) both made
+timing reports legible (real net names, not post-flatten gibberish) and
+recovered placement the dense core had scattered.
+
+### CPU domain: the stall ripple, decoupled — DONE (`b5cb675`)
+
+The CPU critical path was a **combinational stall ripple** spanning the
+whole pipe: a load/store's TLB + D-cache hit check drives `i_dmem_busy`,
+which propagates `mem_stall → ex_stall → id_stall` back to the fetch
+enable in a single cycle (pure-stall back-pressure). About half of it was
+routing — the stall wire physically crossing the die from MEM to IF1.
+
+Fix: a 2-entry elastic FIFO (`penumbra2_fetch_buffer`) at the IF2→ID seam.
+IF2 now back-pressures on the buffer's *registered* `o_enq_ready` instead
+of `id_stall`, so the back-end stall no longer reaches `o_fetch_en`
+combinationally. Cost: one IF2→ID cycle — an extra wrong-path slot,
+flushed with the front end on the shared `if2_flush`. The buffer is
+generic + unit-tested; the integration passes the gen2 conformance suite.
+Sim + synthesis only — not yet flashed-and-run on the board.
+
+### Standing lever: the I-side PLRU update sits on the hit path
+
+After the buffer, the limiter relocated to the symmetric *fetch-side*
+cone — proof the buffer did real work, not placement noise. The path
+(31.29 ns, `a_asid_q → … → u_icache.plru[*].CE`):
+
+```
+  TLB port-A match cone (u_perm_a)     9.3 ns
+  TLB → MMU paddr                       1.7 ns
+  I-cache tag compare + way-mux         7.4 ns
+  PLRU replacement-bit update          12.4 ns   ← 40 %
+```
+
+The surprise: the **PLRU update is 40 % of the path**. In
+`cache_bram_vipt`, the per-set tree-PLRU is touched on a read/write hit in
+the *same cycle* as the hit, so `rd_hit_resolve` (= the deep `hit` signal)
+gates the write-enable of the per-set replacement registers and fans the
+hit cone across all 64 sets. But PLRU bits are metadata consumed only on
+the *next miss* (victim pick), and PLRU is approximate — they have no
+business in the hit cycle.
+
+**Lever (next, isolated change):** defer the touch. Register
+`{touched, set, way}` at the hit; apply
+`plru[set] <= plru_update(plru[set], way)` the next cycle against the
+*live* PLRU array. Design points to get right:
+- back-to-back touches to the same set must compose (apply against live
+  `plru[set]`, not a snapshot — then the second update sees the first);
+- a fill-completion vs deferred-touch collision at the apply cycle needs a
+  priority rule;
+- cost is one access of staleness on a victim pick — invisible in hit
+  rate, since PLRU is already approximate.
+
+It lives in the shared `cache_bram_vipt`, so it helps the D-side cone too.
+Projected ~31 → ~19 ns (toward ~50 MHz), pending the usual
+relocate-and-remeasure — the next limiter is likely the bare TLB +
+tag-compare cone (the structural floor this generation was built to hit).
+
+Caveat on the rollup, same as gen1: nextpnr attributes fused
+post-flatten LUTs by net-name prefix, not dataflow, so per-module labels
+can mislead (the I/D `tlb_perm` instances especially). Trust the hop trace
+and the start/end points.
 
 ## Hardware: L2 phase 2 — write-back / write-allocate
 
