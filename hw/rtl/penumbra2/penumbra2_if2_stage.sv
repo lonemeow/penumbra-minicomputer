@@ -42,6 +42,11 @@
 // forcing the IF2/ID register to a bubble, and wins over back-pressure — the
 // instruction is being thrown away, so holding it makes no sense.
 
+// keep_hierarchy: hold this stage boundary through synth_ecp5 so the backward
+// stall path (mem_stall -> ex_stall -> fetch_en) places compactly instead of
+// smearing across the die, and reads with real names in timing reports.
+// Paired across the pipeline stages (if1 / if2 / spine / mem_stage).
+(* keep_hierarchy = "yes" *)
 module penumbra2_if2_stage
     import penumbra_pkg::*;
 (

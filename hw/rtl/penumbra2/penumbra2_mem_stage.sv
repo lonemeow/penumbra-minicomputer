@@ -55,6 +55,11 @@
 // GPR and writes an SPR — WB routes the one value by the mutually exclusive
 // gpr_we / spr_we bits). o_wb_value_aux carries a dual write's second value.
 
+// keep_hierarchy: hold this stage boundary through synth_ecp5 so the backward
+// stall path (mem_stall -> ex_stall -> fetch_en) places compactly instead of
+// smearing across the die, and reads with real names in timing reports.
+// Paired across the pipeline stages (if1 / if2 / spine / mem_stage).
+(* keep_hierarchy = "yes" *)
 module penumbra2_mem_stage
     import penumbra_pkg::*;
     import penumbra2_pkg::*;

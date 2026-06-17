@@ -33,6 +33,11 @@
 // verilator lint_off UNUSEDSIGNAL
 /* verilator lint_off PINCONNECTEMPTY */
 
+// keep_hierarchy: hold this boundary through synth_ecp5 so the translate
+// verdict cone reads with real signal names in timing reports and places as
+// a unit. Paired across the TLB cone modules (mmu_bram / tlb_unit_bram /
+// tlb_bram / tlb_perm).
+(* keep_hierarchy = "yes" *)
 module tlb_unit_bram
     import penumbra_pkg::*;
 (

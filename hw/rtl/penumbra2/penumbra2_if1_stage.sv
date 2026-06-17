@@ -39,6 +39,11 @@
 // busy drop. The in-flight (now wrong-path) fill completes into the void;
 // IF2 discards it.
 
+// keep_hierarchy: hold this stage boundary through synth_ecp5 so the backward
+// stall path (mem_stall -> ex_stall -> fetch_en) places compactly instead of
+// smearing across the die, and reads with real names in timing reports.
+// Paired across the pipeline stages (if1 / if2 / spine / mem_stage).
+(* keep_hierarchy = "yes" *)
 module penumbra2_if1_stage #(
     parameter logic [31:0] RESET_PC = 32'h0000_0000
 )(
