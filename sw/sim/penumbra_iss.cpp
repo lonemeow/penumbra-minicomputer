@@ -1263,6 +1263,117 @@ static void exception_entry(int vector) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// Branch statistics (+branchstats)
+// ═══════════════════════════════════════════════════════════════
+//
+// Tallies executed control transfers by their architectural shape —
+// conditional vs. unconditional, forward vs. backward displacement, taken
+// vs. not-taken, PC-relative vs. register-indirect. These are functions of
+// the instruction stream alone, so the ISS reports them exactly. It models no
+// pipeline or predictor: turning these counts into a prediction-recovery or
+// flush estimate is a microarchitecture question for an off-line consumer.
+static bool branchstats_enabled = false;
+
+struct BranchStats {
+    // Conditional PC-relative (Bcc, cond 1..14), by displacement sign + outcome.
+    uint64_t bcond_bwd_taken    = 0;  // backward & taken
+    uint64_t bcond_bwd_nottaken = 0;  // backward & not-taken
+    uint64_t bcond_fwd_taken    = 0;  // forward  & taken
+    uint64_t bcond_fwd_nottaken = 0;  // forward  & not-taken
+    // Unconditional PC-relative (B with cond=AL, BL): always taken, target known.
+    uint64_t buncond            = 0;
+    // Register/indirect (JMP/JALR): always taken, target not statically known.
+    uint64_t breg               = 0;
+};
+static BranchStats bstats;
+
+// Record one PC-relative branch outcome. backward = displacement < 0.
+static void record_pcrel_branch(bool conditional, bool backward, bool taken) {
+    if (!conditional)            bstats.buncond++;
+    else if (backward &&  taken) bstats.bcond_bwd_taken++;
+    else if (backward && !taken) bstats.bcond_bwd_nottaken++;
+    else if (taken)              bstats.bcond_fwd_taken++;
+    else                         bstats.bcond_fwd_nottaken++;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Instruction-class histogram (+opstats)
+// ═══════════════════════════════════════════════════════════════
+//
+// Buckets every executed instruction by class, so a dynamic instruction-count
+// breakdown is legible the way the perfctr stall breakdown is. Architectural
+// (depends only on the instruction stream), so the ISS reports it exactly; the
+// diagnostic buckets are stack traffic (spills/locals), reg-reg moves
+// (codegen redundancy), constant/address materialization, and flag-only
+// compares (the flag-ISA tax).
+static bool opstats_enabled = false;
+
+struct OpStats {
+    uint64_t alu_rr = 0;    // Format R ALU reg-reg, writes a result
+    uint64_t alu_imm = 0;   // Format L ALU with immediate
+    uint64_t mov_rr = 0;    // Format R MOV Rd,Rs (reg-reg copy)
+    uint64_t cmp_test = 0;  // flag-only ops (CMP/TEST, CMP #imm)
+    uint64_t imm_mat = 0;   // LLI/LLIS/LUI — constant / address materialization
+    uint64_t lui = 0;       // LUI subset (≈ count of 32-bit constants/addresses)
+    uint64_t muldiv = 0;    // MUL/MULU/DIV/DIVU
+    uint64_t ld_stack = 0;  // load,  base = R14 (spill / local)
+    uint64_t ld_other = 0;  // load,  base ≠ R14
+    uint64_t st_stack = 0;  // store, base = R14 (spill / local)
+    uint64_t st_other = 0;  // store, base ≠ R14
+    uint64_t br_cond = 0;   // conditional / unconditional PC-relative branch
+    uint64_t call = 0;      // BL + JALR
+    uint64_t ret_jmp = 0;   // JMP Rd (return / indirect)
+    uint64_t sys_spr = 0;   // RDSPR/WRSPR/RDSYS/WRSYS
+    uint64_t other = 0;     // reserved / unclassified
+};
+static OpStats opstats;
+
+static void opstats_record(uint32_t insn) {
+    int fmt = (insn >> 30) & 3;
+    switch (fmt) {
+    case 0: {  // Format R
+        int  op    = (insn >> 25) & 0x1F;
+        bool f_bit = (insn >> 16) & 1;
+        if (op <= 11) {
+            if      (op == 8) opstats.mov_rr++;     // MOV Rd, Rs
+            else if (f_bit)   opstats.cmp_test++;   // CMP / TEST (flag-only)
+            else              opstats.alu_rr++;
+        } else if (op >= 16 && op <= 19) {
+            opstats.muldiv++;
+        } else if (op >= 24) {
+            opstats.sys_spr++;
+        } else {
+            opstats.other++;
+        }
+        break;
+    }
+    case 1: {  // Format L
+        int op = (insn >> 26) & 0xF;
+        if      (op == 0 || op == 1) opstats.imm_mat++;
+        else if (op == 2)          { opstats.imm_mat++; opstats.lui++; }  // LUI
+        else if (op == 5)            opstats.cmp_test++;                  // CMP #imm
+        else if (op == 11)           opstats.ret_jmp++;                   // JMP Rd
+        else if (op == 12)           opstats.call++;                      // JALR Rd
+        else if (op >= 3 && op <= 10) opstats.alu_imm++;
+        else                         opstats.other++;
+        break;
+    }
+    case 2: {  // Format M (load / store)
+        bool is_load = (insn >> 29) & 1;
+        bool stack   = ((insn >> 18) & 0xF) == 14;  // base = R14 (SP)
+        if (is_load) { if (stack) opstats.ld_stack++; else opstats.ld_other++; }
+        else         { if (stack) opstats.st_stack++; else opstats.st_other++; }
+        break;
+    }
+    case 3: {  // Format B
+        if (((insn >> 26) & 0xF) == 15) opstats.call++;   // BL
+        else                            opstats.br_cond++;
+        break;
+    }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Condition Evaluator
 // ═══════════════════════════════════════════════════════════════
 
@@ -1546,6 +1657,7 @@ static void execute_one() {
 
     pc_written = false;
     int fmt = (insn >> 30) & 3;
+    if (opstats_enabled) opstats_record(insn);
 
     // R15/PC as a GPR destination is an invalid encoding → illegal instruction
     // (before any effects, and ahead of any privilege check, so illegal outranks
@@ -1799,11 +1911,13 @@ static void execute_one() {
         case 11: // JMP Rd (PC = Rd)
             cpu.pc = rd_val;
             pc_written = true;
+            if (branchstats_enabled) bstats.breg++;
             break;
         case 12: // JALR Rd (R13 = PC+4, PC = Rd)
             reg_write(13, cpu.pc + 4);
             cpu.pc = rd_val;
             pc_written = true;
+            if (branchstats_enabled) bstats.breg++;
             break;
         default:
             exception_entry(VEC_ILLEGAL);
@@ -1840,15 +1954,17 @@ static void execute_one() {
         if (offset22 & 0x200000) offset22 |= (int32_t)0xFFC00000;
         uint32_t target = cpu.pc + (uint32_t)(offset22 * 4);
 
-        if (cond == 15) {
-            // BL: save return address, then branch (always taken)
-            reg_write(13, cpu.pc + 4);
-            cpu.pc = target;
-            pc_written = true;
-        } else if (eval_cond(cond)) {
+        // cond 15 = BL (link + always taken); cond 0 = AL (always taken).
+        bool taken = (cond == 15) || eval_cond(cond);
+        if (cond == 15) reg_write(13, cpu.pc + 4);  // BL links the return address
+        if (taken) {
             cpu.pc = target;
             pc_written = true;
         }
+
+        if (branchstats_enabled)
+            record_pcrel_branch(/*conditional=*/(cond != 0 && cond != 15),
+                                /*backward=*/(offset22 < 0), taken);
         break;
     }
     } // switch(fmt)
@@ -2045,6 +2161,81 @@ static void cpu_reset() {
 // Main
 // ═══════════════════════════════════════════════════════════════
 
+static double bs_pct(uint64_t a, uint64_t b) {
+    return b ? 100.0 * (double)a / (double)b : 0.0;
+}
+
+// Dump the +opstats instruction-class histogram to stderr.
+static void print_opstats() {
+    if (!opstats_enabled) return;
+    OpStats &o = opstats;
+    uint64_t total = o.alu_rr + o.alu_imm + o.mov_rr + o.cmp_test + o.imm_mat
+                   + o.muldiv + o.ld_stack + o.ld_other + o.st_stack + o.st_other
+                   + o.br_cond + o.call + o.ret_jmp + o.sys_spr + o.other;
+    if (!total) return;
+
+    auto row = [&](const char *name, uint64_t n, const char *note) {
+        fprintf(stderr, "  %-22s %12llu  %5.1f%%%s\n",
+                name, (unsigned long long)n, bs_pct(n, total), note);
+    };
+
+    fprintf(stderr, "\n── instruction class histogram (+opstats) ──\n");
+    fprintf(stderr, "  total executed         %12llu\n", (unsigned long long)total);
+    row("ALU reg-reg",        o.alu_rr,   "");
+    row("ALU immediate",      o.alu_imm,  "");
+    row("MOV reg-reg",        o.mov_rr,   "   <- redundant-move signal");
+    row("CMP/TEST flag-only", o.cmp_test, "   <- flag-ISA tax");
+    row("const materialize",  o.imm_mat,  "");
+    row("MUL/DIV",            o.muldiv,   "");
+    row("load  stack(R14)",   o.ld_stack, "   <- spill/local signal");
+    row("load  other",        o.ld_other, "");
+    row("store stack(R14)",   o.st_stack, "   <- spill/local signal");
+    row("store other",        o.st_other, "");
+    row("branch",             o.br_cond,  "");
+    row("call (BL/JALR)",     o.call,     "");
+    row("return/jmp",         o.ret_jmp,  "");
+    if (o.sys_spr) row("sys/spr", o.sys_spr, "");
+    if (o.other)   row("other",   o.other,   "");
+
+    fprintf(stderr, "  ── derived ──\n");
+    fprintf(stderr, "  stack traffic (spill+local)  %5.1f%%   (LUI=%llu, ≈ 32-bit consts/addrs)\n",
+            bs_pct(o.ld_stack + o.st_stack, total), (unsigned long long)o.lui);
+    fprintf(stderr, "  control (branch+call+ret)    %5.1f%%\n",
+            bs_pct(o.br_cond + o.call + o.ret_jmp, total));
+    fprintf(stderr, "  flag-compare + const-mat     %5.1f%%\n",
+            bs_pct(o.cmp_test + o.imm_mat, total));
+}
+
+// Dump the +branchstats histogram to stderr. Raw architectural counts only —
+// no predictor or pipeline model (see the struct header).
+static void print_branch_stats() {
+    if (!branchstats_enabled) return;
+
+    uint64_t bcond_taken    = bstats.bcond_bwd_taken + bstats.bcond_fwd_taken;
+    uint64_t bcond_nottaken = bstats.bcond_bwd_nottaken + bstats.bcond_fwd_nottaken;
+    uint64_t bcond_total    = bcond_taken + bcond_nottaken;
+    uint64_t total_taken    = bcond_taken + bstats.buncond + bstats.breg;
+    uint64_t total_branches = bcond_total + bstats.buncond + bstats.breg;
+
+    fprintf(stderr, "\n── branch statistics (+branchstats) ──\n");
+    fprintf(stderr, "  instructions retired  %llu\n",
+            (unsigned long long)cpu.insn_count);
+    fprintf(stderr, "  total branches        %llu  (%.1f%% of insns)\n",
+            (unsigned long long)total_branches, bs_pct(total_branches, cpu.insn_count));
+    fprintf(stderr, "  total taken           %llu  (%.1f%% of branches)\n",
+            (unsigned long long)total_taken, bs_pct(total_taken, total_branches));
+    fprintf(stderr, "  cond backward  T/NT   %llu / %llu\n",
+            (unsigned long long)bstats.bcond_bwd_taken,
+            (unsigned long long)bstats.bcond_bwd_nottaken);
+    fprintf(stderr, "  cond forward   T/NT   %llu / %llu\n",
+            (unsigned long long)bstats.bcond_fwd_taken,
+            (unsigned long long)bstats.bcond_fwd_nottaken);
+    fprintf(stderr, "  uncond PC-rel (B/BL)  %llu\n",
+            (unsigned long long)bstats.buncond);
+    fprintf(stderr, "  register/indirect     %llu\n",
+            (unsigned long long)bstats.breg);
+}
+
 int main(int argc, char** argv) {
     const char* hex_path = nullptr;
     const char* sd_path = nullptr;
@@ -2059,11 +2250,13 @@ int main(int argc, char** argv) {
         else if (strcmp(argv[i], "+quiet") == 0) quiet_mode = true;
         else if (strcmp(argv[i], "+trap-pc0") == 0) trap_user_pc_zero = true;
         else if (strcmp(argv[i], "+halt-on-break") == 0) halt_on_break = true;
+        else if (strcmp(argv[i], "+branchstats") == 0) branchstats_enabled = true;
+        else if (strcmp(argv[i], "+opstats") == 0) opstats_enabled = true;
         else hex_path = argv[i];
     }
 
     if (!hex_path) {
-        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+trace=path] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break]\n");
+        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+trace=path] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats]\n");
         return 1;
     }
 
@@ -2122,6 +2315,9 @@ int main(int argc, char** argv) {
 
     // Restore terminal before printing exit summary so \n works normally
     restore_term();
+
+    print_branch_stats();  // no-op unless +branchstats
+    print_opstats();       // no-op unless +opstats
 
     if (!quiet_mode) {
         if (cpu.halted) {
