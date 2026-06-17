@@ -65,7 +65,15 @@ module l2_cache
 #(
     parameter int CACHE_BYTES = 65536,
     parameter int LINE_BYTES  = 16,
-    parameter int NUM_WAYS    = 4
+    parameter int NUM_WAYS    = 4,
+    // Read-hit latency. 2: the hit resolves combinationally at stage 1 (busy
+    // and rdata come off the live tag compare) — one fewer cycle, but the hit
+    // verdict crosses combinationally into the consumer's fill/install logic.
+    // 3: the verdict is registered at stage 2 before it leaves the cache,
+    // breaking that chain at the cost of one cycle and back-to-back read
+    // throughput (II 2→3). Set 3 where the L2→L1 hit chain is the fmax limiter
+    // (gen2); keep 2 where the limiter is elsewhere (gen1's own core).
+    parameter int HIT_LATENCY = 2
 )
 (
     input  logic        i_clk,
@@ -363,13 +371,16 @@ module l2_cache
     //
     // The FSM still uses combinational `hit` so miss handling
     // and PLRU updates fire at stage-1 (no extra latency on the
-    // critical fill path).
+    // critical fill path); only the read-hit *output* is registered.
     //
-    // STATUS: these flops are clocked but currently unused — the
-    // output muxes below read the combinational stage-1 signals
-    // (HIT_LATENCY=2).  They are retained as the seed for the
-    // decoupled+registered read pipeline; wiring them into the
-    // o_rdata/o_busy muxes is the fmax half of that work.
+    // When HIT_LATENCY=3 these flops drive the o_rdata/o_busy muxes: the
+    // read verdict is registered before it crosses into the arbiter and
+    // the L1 fill install, breaking the tag_out→hit→…→valid[i] chain that
+    // was the gen2 critical path. Cost: a read hit takes one more cycle,
+    // and — until the read pipeline is decoupled — back-to-back L2 reads
+    // serialise (a fill-throughput hit on L1 misses), traded for fmax. At
+    // HIT_LATENCY=2 (the default) the muxes read the live stage-1 verdict
+    // and these flops are pruned.
     // ══════════════════════════════════════════════════════════
     logic                hit_q;
     logic [31:0]         hit_data_q;
@@ -527,17 +538,34 @@ module l2_cache
     // return (always i_mem_rdata, even though unused), and the
     // S_FILL response stream (cache_vipt above us captures live).
     // ══════════════════════════════════════════════════════════
+    // Hit-resolution signals selected by latency: HIT_LATENCY>=3 reads the
+    // registered stage-2 verdict (off the L2→L1 chain); 2 the live stage-1
+    // signals. The unused set is pruned at elaboration.
+    logic        rsv_valid, rsv_re, rsv_cacheable, rsv_hit;
+    logic [31:0] rsv_data;
     always_comb begin
-        // HIT_LATENCY=2: drive o_rdata from the combinational stage-1
-        // `hit_data`.  The s2-q output flops (hit_q/hit_data_q, see
-        // the "Stage-2 output registers" block above) are built but
-        // deliberately not wired in here — enabling them adds a third
-        // hit-latency cycle to buy ~1.5 MHz of fmax.  Deferred until
-        // the read pipeline is decoupled, so the extra stage doesn't
-        // also serialise per-word fill throughput.
-        if (state == S_IDLE && s1_valid && l2_active(s1_cacheable)
-            && s1_re && hit)
-            o_rdata = hit_data;
+        if (HIT_LATENCY >= 3) begin
+            rsv_valid     = s1_valid_q;
+            rsv_re        = s1_re_q;
+            rsv_cacheable = s1_cacheable_q;
+            rsv_hit       = hit_q;
+            rsv_data      = hit_data_q;
+        end else begin
+            rsv_valid     = s1_valid;
+            rsv_re        = s1_re;
+            rsv_cacheable = s1_cacheable;
+            rsv_hit       = hit;
+            rsv_data      = hit_data;
+        end
+    end
+
+    always_comb begin
+        // Drive o_rdata from the (latency-selected) resolved read hit; at
+        // HIT_LATENCY=3 that is the flopped stage-2 verdict, so the read
+        // result leaves the cache registered.
+        if (state == S_IDLE && rsv_valid && l2_active(rsv_cacheable)
+            && rsv_re && rsv_hit)
+            o_rdata = rsv_data;
         else
             o_rdata = i_mem_rdata;
     end
@@ -565,14 +593,13 @@ module l2_cache
                 end else if (l2_active(i_cacheable) && i_we) begin
                     o_busy = i_mem_busy;
                 end else if (l2_active(i_cacheable) && i_re) begin
-                    // HIT_LATENCY=2 combinational hit (s2-q output
-                    // flops bypassed; see the o_rdata mux above).
-                    if (!s1_valid)
-                        o_busy = 1'b1;
-                    else if (hit)
-                        o_busy = 1'b0;
-                    else
-                        o_busy = 1'b1;
+                    // Cached read: busy until the hit resolves. The resolve
+                    // signals (rsv_*) are the live stage-1 verdict at
+                    // HIT_LATENCY=2 and the registered stage-2 verdict at 3 —
+                    // so at 3 the hit cone ends in a flop and never reaches
+                    // o_busy. A miss leaves for S_FILL, so a resolved in-S_IDLE
+                    // read is always the hit.
+                    o_busy = !(rsv_valid && rsv_re && rsv_hit);
                 end else begin
                     o_busy = 1'b0;
                 end
@@ -695,7 +722,13 @@ module l2_cache
                     // memory port is idle (so we don't re-latch the
                     // same in-flight cached write across multiple
                     // cycles while memory chews on it).
-                    if (!s1_valid && !i_mem_busy
+                    // At HIT_LATENCY=3 also gate on !s1_valid_q: don't re-latch
+                    // the still-held request while its stage-2 verdict is being
+                    // presented (that would issue a phantom second access of
+                    // the same line). At 2 there is no stage-2 hold, so
+                    // s1_valid alone suffices (and II stays 2).
+                    if (!s1_valid && (HIT_LATENCY < 3 || !s1_valid_q)
+                        && !i_mem_busy
                         && l2_active(i_cacheable) && (i_re || i_we)) begin
                         s1_valid     <= 1'b1;
                         s1_addr      <= i_addr;

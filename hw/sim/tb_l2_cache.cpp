@@ -863,12 +863,13 @@ static void test_perfctrs_during_post_reset_walk(Vl2_cache* d) {
 // This driver advances i_addr on every cycle o_busy is low.
 //
 // The storage path (tag/data/valid BRAM reads off i_addr, launched
-// every cycle — l2_cache.sv:195/240/294) is already II=1-capable;
-// the stage-0 latch gate `!s1_valid` (l2_cache.sv:682) is what
-// holds a new request out of stage 1 for an extra cycle, giving
-// II=2.  This test locks the current II=2 baseline.  When the
-// read-pipeline decouple lands, flip EXPECTED_II to 1 — the test
-// then proves the decouple works and that data stays correct.
+// every cycle) is already II=1-capable; the stage-0 latch gate is what
+// holds a new request out for extra cycles.  This DUT uses the default
+// HIT_LATENCY=2, where the gate is `!s1_valid` → II=2.  At HIT_LATENCY=3
+// (the gen2 machine's config) the gate also waits on `!s1_valid_q` while
+// the registered stage-2 verdict presents → II=3; that path is exercised
+// in the gen2 conformance suite, not here.  When the read-pipeline
+// decouple lands, II drops back toward 1 — flip EXPECTED_II then.
 static void test_back_to_back_read_throughput(Vl2_cache* d) {
     printf("── Back-to-back read-hit throughput (initiation interval) ──\n");
     reset(d);
@@ -922,7 +923,7 @@ static void test_back_to_back_read_throughput(Vl2_cache* d) {
     }
 
     // Initiation interval = gap between consecutive data-valid cycles.
-    const int EXPECTED_II = 2;   // II=2 today; → 1 after the decouple.
+    const int EXPECTED_II = 2;   // II=2 at the default HIT_LATENCY=2 (this DUT); HL=3 gives 3; → 1 after the decouple.
     for (int i = 1; i < NWORDS; i++) {
         int gap = valid_tick[i] - valid_tick[i - 1];
         char name[48];
