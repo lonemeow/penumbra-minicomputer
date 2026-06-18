@@ -111,7 +111,7 @@ module penumbra2_mem_stage
     // ── MMU D-side translate (port B: query at launch, verdict at data-ready) ──
     // The query is driven on the access launch cycle alongside the data-memory
     // address; the registered verdict is valid on the data-ready cycle and
-    // holds until the next query (mmu_bram's registered-read contract), so it
+    // holds until the next query (penumbra2_mmu's registered-read contract), so it
     // is stable on whichever cycle the access advances. The paddr leg of the
     // verdict goes to the D-cache's tag compare, not here — this stage
     // consumes only the fault verdict.

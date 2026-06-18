@@ -8,7 +8,7 @@
 // own registered copy of the query.
 //
 // This is the gen2 main TLB's per-lookup cone. The BRAM-backed main TLB
-// (tlb_bram) reads both ways of a set out of dual-port BRAM and feeds them
+// (penumbra2_tlb) reads both ways of a set out of dual-port BRAM and feeds them
 // here once per translation port — so the same cone serves the I-side
 // (port A) and D-side (port B) translations from one piece of RTL.
 //
@@ -22,10 +22,10 @@
 
 // keep_hierarchy: hold this boundary through synth_ecp5 so the translate
 // verdict cone reads with real signal names in timing reports and places as
-// a unit. Paired across the TLB cone modules (mmu_bram / tlb_unit_bram /
-// tlb_bram / tlb_perm).
+// a unit. Paired across the TLB cone modules (penumbra2_mmu / penumbra2_tlb_unit /
+// penumbra2_tlb / penumbra2_tlb_perm).
 (* keep_hierarchy = "yes" *)
-module tlb_perm
+module penumbra2_tlb_perm
     import penumbra_pkg::*;
 (
     // ── Query ──────────────────────────────────────────────
@@ -138,7 +138,7 @@ module tlb_perm
     // non-one-hot value on an enabled lookup is a hardware bug.
     always_comb begin
         assert (!i_lookup_en || $onehot(i_access_type))
-            else $error("tlb_perm: access type not one-hot on an enabled lookup");
+            else $error("penumbra2_tlb_perm: access type not one-hot on an enabled lookup");
     end
 
     // A protection fault implies a hit — this module sets o_fault only from a
@@ -147,7 +147,7 @@ module tlb_perm
     // self-check on the logic above.
     always_comb begin
         assert (!o_fault || o_hit)
-            else $error("tlb_perm: fault asserted without a hit");
+            else $error("penumbra2_tlb_perm: fault asserted without a hit");
     end
 
 endmodule

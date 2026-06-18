@@ -1,4 +1,4 @@
-// Verilator testbench for the gen2 TLB unit (tlb_unit_bram)
+// Verilator testbench for the gen2 TLB unit (penumbra2_tlb_unit)
 //
 // Verifies the BRAM-main + flop-pinned combine and its registered timing:
 //   - registered translation on both ports (drive at T, verdict at T+1)
@@ -11,7 +11,7 @@
 
 #include <cstdio>
 #include <cstdint>
-#include "Vtlb_unit_bram.h"
+#include "Vpenumbra2_tlb_unit.h"
 
 enum TlbFlags {
     TLB_V = 1 << 0, TLB_C = 1 << 2, TLB_R = 1 << 3, TLB_W = 1 << 4,
@@ -22,15 +22,15 @@ enum SysReg { MMU_TLB_VPN = 3, MMU_TLB_PTE = 4, MMU_TLB_IDX = 5 };
 
 static int errors = 0, tests = 0;
 
-static void tick(Vtlb_unit_bram* d) {
+static void tick(Vpenumbra2_tlb_unit* d) {
     d->i_clk = 0; d->eval();
     d->i_clk = 1; d->eval();
 }
-static void idle(Vtlb_unit_bram* d) {
+static void idle(Vpenumbra2_tlb_unit* d) {
     d->i_a_lookup_en = 0; d->i_b_lookup_en = 0;
     d->i_sys_we = 0; d->i_sys_re = 0;
 }
-static void reset(Vtlb_unit_bram* d) {
+static void reset(Vpenumbra2_tlb_unit* d) {
     d->i_rst = 1; d->i_asid = 0;
     d->i_a_vaddr = 0; d->i_a_access_type = ACC_READ; d->i_a_user_mode = 0;
     d->i_b_vaddr = 0; d->i_b_access_type = ACC_READ; d->i_b_user_mode = 0;
@@ -43,19 +43,19 @@ static void reset(Vtlb_unit_bram* d) {
 static uint32_t mk_vpn(uint32_t vpn, uint8_t asid) { return ((vpn & 0xFFFFF) << 8) | asid; }
 static uint32_t mk_pte(uint32_t ppn, uint8_t flags) { return ((ppn & 0xFFFFF) << 12) | (flags & 0xFF); }
 
-static void wrsys(Vtlb_unit_bram* d, int reg, uint32_t data) {
+static void wrsys(Vpenumbra2_tlb_unit* d, int reg, uint32_t data) {
     idle(d);
     d->i_sys_reg = reg; d->i_sys_wdata = data; d->i_sys_we = 1;
     tick(d);
     d->i_sys_we = 0;
 }
-static void write_main(Vtlb_unit_bram* d, int set, int way, uint32_t vpn,
+static void write_main(Vpenumbra2_tlb_unit* d, int set, int way, uint32_t vpn,
                        uint32_t ppn, uint8_t asid, uint8_t flags) {
     wrsys(d, MMU_TLB_IDX, ((way & 1) << 5) | (set & 0x1F));   // bit6=0 → main
     wrsys(d, MMU_TLB_VPN, mk_vpn(vpn, asid));
     wrsys(d, MMU_TLB_PTE, mk_pte(ppn, flags));               // PTE write commits
 }
-static void write_pinned(Vtlb_unit_bram* d, int slot, uint32_t vpn,
+static void write_pinned(Vpenumbra2_tlb_unit* d, int slot, uint32_t vpn,
                          uint32_t ppn, uint8_t asid, uint8_t flags) {
     wrsys(d, MMU_TLB_IDX, 0x40 | (slot & 0x7));               // bit6=1 → pinned
     wrsys(d, MMU_TLB_VPN, mk_vpn(vpn, asid));
@@ -64,14 +64,14 @@ static void write_pinned(Vtlb_unit_bram* d, int slot, uint32_t vpn,
 
 struct Verdict { uint32_t paddr; bool hit, fault; bool cacheable; };
 
-static Verdict lookup_a(Vtlb_unit_bram* d, uint32_t vaddr, uint8_t acc, bool user, uint8_t asid) {
+static Verdict lookup_a(Vpenumbra2_tlb_unit* d, uint32_t vaddr, uint8_t acc, bool user, uint8_t asid) {
     idle(d); d->i_asid = asid;
     d->i_a_vaddr = vaddr; d->i_a_access_type = acc; d->i_a_user_mode = user; d->i_a_lookup_en = 1;
     tick(d);
     d->i_a_lookup_en = 0;
     return { d->o_a_paddr, (bool)d->o_a_hit, (bool)d->o_a_fault, (bool)d->o_a_cacheable };
 }
-static Verdict lookup_b(Vtlb_unit_bram* d, uint32_t vaddr, uint8_t acc, bool user, uint8_t asid) {
+static Verdict lookup_b(Vpenumbra2_tlb_unit* d, uint32_t vaddr, uint8_t acc, bool user, uint8_t asid) {
     idle(d); d->i_asid = asid;
     d->i_b_vaddr = vaddr; d->i_b_access_type = acc; d->i_b_user_mode = user; d->i_b_lookup_en = 1;
     tick(d);
@@ -79,7 +79,7 @@ static Verdict lookup_b(Vtlb_unit_bram* d, uint32_t vaddr, uint8_t acc, bool use
     return { d->o_b_paddr, (bool)d->o_b_hit, (bool)d->o_b_fault, (bool)d->o_b_cacheable };
 }
 // Readback: set TLB_INDEX, then launch the read; main readback lands next cycle.
-static uint32_t readback(Vtlb_unit_bram* d, int index, int reg) {
+static uint32_t readback(Vpenumbra2_tlb_unit* d, int index, int reg) {
     wrsys(d, MMU_TLB_IDX, index);
     idle(d);
     d->i_sys_reg = reg; d->i_sys_re = 1;
@@ -99,7 +99,7 @@ static void check_bool(const char* n, bool got, bool exp) {
 }
 
 int main() {
-    Vtlb_unit_bram* d = new Vtlb_unit_bram;
+    Vpenumbra2_tlb_unit* d = new Vpenumbra2_tlb_unit;
     reset(d);
 
     // ── Main TLB translate (port A) ──

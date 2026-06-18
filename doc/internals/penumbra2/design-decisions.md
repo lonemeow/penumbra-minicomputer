@@ -1547,19 +1547,19 @@ is:
 
 *Refines [Decision 13](#13-gen2-tlb-bram-backed-registered-translation-commit-time-fault-latch),
 whose consequences said `mmu.sv` would be "parameterized to instantiate
-either TLB realization." With the `tlb_unit_bram` interface in hand, a
+either TLB realization." With the `penumbra2_tlb_unit` interface in hand, a
 parameter is the wrong vehicle.*
 
-**Decision.** Penumbra/2 gets a **new MMU module** (`mmu_bram`, wrapping
-`tlb_unit_bram`) beside the single-cycle core's `mmu.sv`, which is left
-untouched — the same split as `tlb_bram` beside `tlb`.
+**Decision.** Penumbra/2 gets a **new MMU module** (`penumbra2_mmu`, wrapping
+`penumbra2_tlb_unit`) beside the single-cycle core's `mmu.sv`, which is left
+untouched — the same split as `penumbra2_tlb` beside `tlb`.
 
 **Rationale.** The two MMUs differ in *interface shape*, not just
 internals: the single-cycle MMU has one combinational translate port and
 latches faults internally at detection; the gen2 MMU has **two registered
 translate ports** (I and D, valid the cycle after the query) and latches
 `FADDR`/`FSTAT` from an **external commit strobe**. They also wrap
-different TLB submodules (`tlb_unit` vs `tlb_unit_bram`). A single
+different TLB submodules (`tlb_unit` vs `penumbra2_tlb_unit`). A single
 parameterized module would have to generate-select the TLB, condition the
 whole datapath on combinational-vs-registered timing, and carry a
 1-vs-2-port interface with the single-cycle core tying off the second —
@@ -1570,7 +1570,7 @@ path bit-identical and the gen2 path clean.
 
 **Consequences.**
 
-- `mmu_bram` owns `MMUCR`/ASID, the sysreg read/write (MMUCR + TLB
+- `penumbra2_mmu` owns `MMUCR`/ASID, the sysreg read/write (MMUCR + TLB
   passthrough, with the registered `i_sys_re` readback strobe), and the
   commit-latched `FADDR`/`FSTAT`. Per port it applies bypass (identity map
   when disabled or `force_bypass`) registered to align with the TLB's T+1
@@ -1580,7 +1580,7 @@ path bit-identical and the gen2 path clean.
   therefore does not duplicate it (the single-cycle MMU keeps its
   alignment check, since its core relies on it). Faults of every kind —
   alignment, protection, miss, bus — are composed and ordered by the core
-  and arrive at `mmu_bram` only as the committed `FADDR`/`FSTAT` write.
+  and arrive at `penumbra2_mmu` only as the committed `FADDR`/`FSTAT` write.
 - The single-cycle `mmu.sv`, `tlb.sv`, `tlb_unit.sv` are unchanged.
 
 ---
@@ -1626,8 +1626,8 @@ classification the status type field already encodes.
 
 **Consequences.**
 
-- `tlb_perm`, `tlb_bram`, `tlb_unit_bram` lose their status outputs
-  (gen2 path); `mmu_bram` owns TLB-status composition. The shared
+- `penumbra2_tlb_perm`, `penumbra2_tlb`, `penumbra2_tlb_unit` lose their status outputs
+  (gen2 path); `penumbra2_mmu` owns TLB-status composition. The shared
   `tlb_pinned` keeps its composed-status ports — gen1's `tlb_unit`
   consumes them; the gen2 unit leaves them unconnected.
 - The MEM/WB register carries `fault_vaddr` + `fault_status` only; the

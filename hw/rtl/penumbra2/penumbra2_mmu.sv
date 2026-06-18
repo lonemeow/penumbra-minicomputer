@@ -1,13 +1,14 @@
 // Penumbra gen2 MMU — two registered translate ports, commit-time faults
 //
-// The gen2 counterpart of mmu.sv. It wraps tlb_unit_bram (BRAM main + flop
-// pinned, two registered translation ports) and adds the MMU control the TLB
+// The gen2 counterpart of mmu.sv. It wraps penumbra2_tlb_unit (async-LUTRAM
+// main + flop pinned, registered-verdict translation ports) and adds the MMU
+// control the TLB
 // does not own: MMUCR (enable + ASID), the sysreg read/write for MMUCR, the
 // per-port bypass (identity map when the MMU is disabled or force_bypass is
 // set, e.g. a vector fetch), and the architectural fault registers.
 //
 // Timing. Translation is registered at the verdict: the async TLB
-// (tlb_unit_bram → tlb_bram, LUTRAM) resolves the query combinationally in the
+// (penumbra2_tlb_unit → penumbra2_tlb, LUTRAM) resolves the query combinationally in the
 // access launch cycle T, the bypass mux and fault composition run on the same
 // live T inputs, and the whole verdict is captured in one output register on
 // the port's request strobe — valid at T+1 and held until the next query
@@ -31,10 +32,10 @@
 
 // keep_hierarchy: hold this boundary through synth_ecp5 so the translate
 // verdict cone reads with real signal names in timing reports and places as
-// a unit. Paired across the TLB cone modules (mmu_bram / tlb_unit_bram /
-// tlb_bram / tlb_perm).
+// a unit. Paired across the TLB cone modules (penumbra2_mmu / penumbra2_tlb_unit /
+// penumbra2_tlb / penumbra2_tlb_perm).
 (* keep_hierarchy = "yes" *)
-module mmu_bram
+module penumbra2_mmu
     import penumbra_pkg::*;
 (
     input  logic        i_clk,
@@ -120,7 +121,7 @@ module mmu_bram
     //
     // Port B (D-side) keeps i_b_req: its lookup enable doubles as the port-B
     // read-address select (D-translate vaddr vs the sysreg readback index, in
-    // tlb_bram) and backs the port-B contention guard, so it must mean "a
+    // penumbra2_tlb) and backs the port-B contention guard, so it must mean "a
     // D-translate is happening this cycle", not just the mode. The D-side
     // request is not the critical late signal anyway — its EA comes from a
     // registered EX result — so leaving it gated costs nothing.
@@ -139,7 +140,7 @@ module mmu_bram
     logic        tlb_b_cacheable, tlb_b_hit, tlb_b_fault;
     logic [31:0] tlb_rdata;
 
-    tlb_unit_bram u_tlb (
+    penumbra2_tlb_unit u_tlb (
         .i_clk(i_clk), .i_rst(i_rst), .i_asid(current_asid),
         .i_a_vaddr(i_a_vaddr), .i_a_access_type(i_a_access_type),
         .i_a_user_mode(i_a_user_mode), .i_a_lookup_en(a_translate),
@@ -241,7 +242,7 @@ module mmu_bram
     // force_bypass / enable from the same request.
     assert property (@(posedge i_clk) disable iff (i_rst)
         !(a_translate && a_bypass) && !(b_translate && b_bypass))
-        else $error("mmu_bram: a port both translates and bypasses");
+        else $error("penumbra2_mmu: a port both translates and bypasses");
 
 endmodule
 

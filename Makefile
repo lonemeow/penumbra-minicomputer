@@ -236,10 +236,10 @@ MODULE_TESTS = \
     tlb \
     tlb_pinned \
     tlb_unit \
-    tlb_bram \
-    tlb_unit_bram \
+    penumbra2_tlb \
+    penumbra2_tlb_unit \
     mmu \
-    mmu_bram \
+    penumbra2_mmu \
     cpu_bus_arbiter \
     slip_rx \
     slip_tx \
@@ -685,14 +685,11 @@ SRC_CORE_penumbra2 = hw/rtl/penumbra2/penumbra2_pkg.sv \
                      $(filter-out %/penumbra2_pkg.sv, $(wildcard hw/rtl/penumbra2/*.sv))
 
 # The gen2 machine's closure: the integration module plus everything it
-# binds beyond the core — the gen2 MMU stack from mmu/, and the sysreg
-# devices + L2 from the shared soc/ directory (also wildcarded by
-# SRC_FABRIC — a top composing both should $(sort) its source set to
-# dedupe).
+# binds beyond the core — the sysreg devices + L2 from the shared soc/
+# directory (also wildcarded by SRC_FABRIC — a top composing both should
+# $(sort) its source set to dedupe). The gen2 MMU stack now lives in
+# penumbra2/ (covered by SRC_CORE_penumbra2), so it is not listed here.
 SRC_MACHINE_penumbra2 = hw/rtl/machine/machine_penumbra2.sv \
-                        hw/rtl/mmu/mmu_bram.sv hw/rtl/mmu/tlb_unit_bram.sv \
-                        hw/rtl/mmu/tlb_bram.sv \
-                        hw/rtl/mmu/tlb_perm.sv \
                         hw/rtl/soc/cpuid.sv hw/rtl/soc/machid.sv \
                         hw/rtl/soc/timer.sv hw/rtl/soc/busctl.sv \
                         hw/rtl/soc/l2_cache.sv \

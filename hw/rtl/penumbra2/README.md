@@ -27,7 +27,7 @@ MMU query/verdict ports for both sides, and the sysreg sideband.
 
 The *machine* binds those ports to the real memory system:
 [`hw/rtl/machine/machine_penumbra2.sv`](../machine/machine_penumbra2.sv)
-instantiates the core, `mmu_bram`, two `cache_bram_vipt` instances
+instantiates the core, `penumbra2_mmu`, two `cache_bram_vipt` instances
 (VIPT, vaddr-indexed, paddr-tagged — non-identity translations work),
 the transactional I/D arbiter (`txn_arbiter`), the line-fill
 sequencer (`fill_sequencer`), and the shared L2, and exposes the

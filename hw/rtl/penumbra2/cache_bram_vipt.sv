@@ -9,7 +9,7 @@
 // serves both sides (an I-side instance ties the write inputs off).
 //
 // Front-side contract (the registered-read convention every RAM-shaped
-// gen2 module follows — unified_mem, tlb_bram, mmu_bram):
+// gen2 module follows — unified_mem, penumbra2_tlb, penumbra2_mmu):
 //
 //   Launch (cycle T): i_en samples i_vaddr at the clock edge; the indexed
 //   tag/data/valid of every way are read and registered, available the
@@ -85,7 +85,7 @@
 //     I-side runs it on every exec-page load) and reset must clear every
 //     line in one cycle from a single net, where a RAM port clears one
 //     address per cycle. They are sampled at launch and registered to
-//     stay aligned with the BRAM outputs (the tlb_bram valid template).
+//     stay aligned with the BRAM outputs (the penumbra2_tlb valid template).
 //     Tags and data are never cleared; valid=0 masks stale contents.
 //   - Replacement state is tree-PLRU in flops, 3 bits per set at 4 ways
 //     (the l2_cache.sv scheme); a 2-way build uses bit 0 as the LRU

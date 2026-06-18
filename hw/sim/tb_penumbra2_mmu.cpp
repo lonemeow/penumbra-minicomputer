@@ -1,6 +1,6 @@
-// Verilator testbench for the gen2 MMU (mmu_bram)
+// Verilator testbench for the gen2 MMU (penumbra2_mmu)
 //
-// Verifies the MMU glue over tlb_unit_bram with its registered timing:
+// Verifies the MMU glue over penumbra2_tlb_unit with its registered timing:
 //   - bypass (identity map) when disabled and on force_bypass
 //   - registered translation when enabled (drive at T, verdict at T+1)
 //   - TLB miss vs protection fault (both composed by the MMU, Decision 16)
@@ -11,7 +11,7 @@
 
 #include <cstdio>
 #include <cstdint>
-#include "Vmmu_bram.h"
+#include "Vpenumbra2_mmu.h"
 
 enum TlbFlags { TLB_V = 1<<0, TLB_C = 1<<2, TLB_R = 1<<3, TLB_W = 1<<4, TLB_X = 1<<5, TLB_U = 1<<6, TLB_G = 1<<7 };
 enum AccType { ACC_READ = 0b001, ACC_WRITE = 0b010, ACC_EXEC = 0b100 };
@@ -20,12 +20,12 @@ enum SysReg { MMU_CR = 0, MMU_FADDR = 1, MMU_FSTAT = 2, MMU_TLB_VPN = 3, MMU_TLB
 
 static int errors = 0, tests = 0;
 
-static void tick(Vmmu_bram* d) { d->i_clk = 0; d->eval(); d->i_clk = 1; d->eval(); }
-static void idle(Vmmu_bram* d) {
+static void tick(Vpenumbra2_mmu* d) { d->i_clk = 0; d->eval(); d->i_clk = 1; d->eval(); }
+static void idle(Vpenumbra2_mmu* d) {
     d->i_a_req = 0; d->i_b_req = 0; d->i_a_force_bypass = 0; d->i_b_force_bypass = 0;
     d->i_sys_we = 0; d->i_sys_re = 0; d->i_fault_commit = 0;
 }
-static void reset(Vmmu_bram* d) {
+static void reset(Vpenumbra2_mmu* d) {
     d->i_rst = 1;
     d->i_a_vaddr = 0; d->i_a_access_type = ACC_EXEC; d->i_a_user_mode = 0;
     d->i_b_vaddr = 0; d->i_b_access_type = ACC_READ; d->i_b_user_mode = 0;
@@ -39,16 +39,16 @@ static void reset(Vmmu_bram* d) {
 static uint32_t mk_vpn(uint32_t vpn, uint8_t asid) { return ((vpn & 0xFFFFF) << 8) | asid; }
 static uint32_t mk_pte(uint32_t ppn, uint8_t flags) { return ((ppn & 0xFFFFF) << 12) | (flags & 0xFF); }
 
-static void wrsys(Vmmu_bram* d, int reg, uint32_t data) {
+static void wrsys(Vpenumbra2_mmu* d, int reg, uint32_t data) {
     idle(d);
     d->i_sys_reg = reg; d->i_sys_wdata = data; d->i_sys_we = 1;
     tick(d);
     d->i_sys_we = 0;
 }
-static void set_mmucr(Vmmu_bram* d, uint8_t asid, bool en) {
+static void set_mmucr(Vpenumbra2_mmu* d, uint8_t asid, bool en) {
     wrsys(d, MMU_CR, ((uint32_t)asid << 8) | (en ? 1 : 0));
 }
-static void write_main(Vmmu_bram* d, int set, int way, uint32_t vpn, uint32_t ppn, uint8_t asid, uint8_t flags) {
+static void write_main(Vpenumbra2_mmu* d, int set, int way, uint32_t vpn, uint32_t ppn, uint8_t asid, uint8_t flags) {
     wrsys(d, MMU_TLB_IDX, ((way & 1) << 5) | (set & 0x1F));
     wrsys(d, MMU_TLB_VPN, mk_vpn(vpn, asid));
     wrsys(d, MMU_TLB_PTE, mk_pte(ppn, flags));
@@ -56,7 +56,7 @@ static void write_main(Vmmu_bram* d, int set, int way, uint32_t vpn, uint32_t pp
 
 struct Verdict { uint32_t paddr; bool hit, fault; uint32_t fstatus; bool cacheable; };
 
-static Verdict translate_a(Vmmu_bram* d, uint32_t vaddr, uint8_t acc, bool user, bool req, bool fb) {
+static Verdict translate_a(Vpenumbra2_mmu* d, uint32_t vaddr, uint8_t acc, bool user, bool req, bool fb) {
     idle(d);
     d->i_a_vaddr = vaddr; d->i_a_access_type = acc; d->i_a_user_mode = user;
     d->i_a_req = req; d->i_a_force_bypass = fb;
@@ -64,7 +64,7 @@ static Verdict translate_a(Vmmu_bram* d, uint32_t vaddr, uint8_t acc, bool user,
     d->i_a_req = 0; d->i_a_force_bypass = 0;
     return { d->o_a_paddr, (bool)d->o_a_hit, (bool)d->o_a_fault, d->o_a_fault_status, (bool)d->o_a_cacheable };
 }
-static Verdict translate_b(Vmmu_bram* d, uint32_t vaddr, uint8_t acc, bool user, bool req, bool fb) {
+static Verdict translate_b(Vpenumbra2_mmu* d, uint32_t vaddr, uint8_t acc, bool user, bool req, bool fb) {
     idle(d);
     d->i_b_vaddr = vaddr; d->i_b_access_type = acc; d->i_b_user_mode = user;
     d->i_b_req = req; d->i_b_force_bypass = fb;
@@ -72,13 +72,13 @@ static Verdict translate_b(Vmmu_bram* d, uint32_t vaddr, uint8_t acc, bool user,
     d->i_b_req = 0; d->i_b_force_bypass = 0;
     return { d->o_b_paddr, (bool)d->o_b_hit, (bool)d->o_b_fault, d->o_b_fault_status, (bool)d->o_b_cacheable };
 }
-static void commit_fault(Vmmu_bram* d, uint32_t vaddr, uint32_t status) {
+static void commit_fault(Vpenumbra2_mmu* d, uint32_t vaddr, uint32_t status) {
     idle(d);
     d->i_fault_commit = 1; d->i_fault_vaddr = vaddr; d->i_fault_status = status;
     tick(d);
     d->i_fault_commit = 0;
 }
-static uint32_t readback(Vmmu_bram* d, int reg) {
+static uint32_t readback(Vpenumbra2_mmu* d, int reg) {
     idle(d);
     d->i_sys_reg = reg; d->i_sys_re = 1;
     tick(d);
@@ -97,7 +97,7 @@ static void check_bool(const char* n, bool got, bool exp) {
 }
 
 int main() {
-    Vmmu_bram* d = new Vmmu_bram;
+    Vpenumbra2_mmu* d = new Vpenumbra2_mmu;
     reset(d);
 
     // ── Idle ports: no query has run → fault must be 0 by construction ──

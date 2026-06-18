@@ -1,14 +1,14 @@
 // Penumbra gen2 TLB unit — async-LUTRAM main + flop pinned, two translate ports
 //
 // The gen2 equivalent of tlb_unit: it pairs the LUTRAM-backed main TLB
-// (tlb_bram) with the fully-associative flop pinned TLB (tlb_pinned), and
+// (penumbra2_tlb) with the fully-associative flop pinned TLB (tlb_pinned), and
 // presents two translation ports (A = I-side, B = D-side) plus the indexed
 // sysreg interface. Pinned-hit-wins.
 //
 // Timing. Both TLBs read combinationally — the main from async distributed RAM,
 // the pinned from flops — so each answers the query presented this cycle, in
 // the access launch cycle. They are combined combinationally (pinned-hit-wins)
-// and the combined verdict is registered once downstream (mmu_bram), which owns
+// and the combined verdict is registered once downstream (penumbra2_mmu), which owns
 // the registered-read hold contract (capture on the strobe, hold otherwise) so
 // a stalled consumer reads the same verdict on whichever cycle it advances.
 //
@@ -22,10 +22,10 @@
 
 // keep_hierarchy: hold this boundary through synth_ecp5 so the translate
 // verdict cone reads with real signal names in timing reports and places as
-// a unit. Paired across the TLB cone modules (mmu_bram / tlb_unit_bram /
-// tlb_bram / tlb_perm).
+// a unit. Paired across the TLB cone modules (penumbra2_mmu / penumbra2_tlb_unit /
+// penumbra2_tlb / penumbra2_tlb_perm).
 (* keep_hierarchy = "yes" *)
-module tlb_unit_bram
+module penumbra2_tlb_unit
     import penumbra_pkg::*;
 (
     input  logic        i_clk,
@@ -103,7 +103,7 @@ module tlb_unit_bram
     logic        main_b_cacheable, main_b_hit, main_b_fault;
     logic [31:0] main_read_vpn, main_read_pte;
 
-    tlb_bram u_main (
+    penumbra2_tlb u_main (
         .i_clk(i_clk), .i_rst(i_rst), .i_asid(i_asid),
         .i_a_vaddr(i_a_vaddr), .i_a_access_type(i_a_access_type),
         .i_a_user_mode(i_a_user_mode), .i_a_lookup_en(i_a_lookup_en),
@@ -156,7 +156,7 @@ module tlb_unit_bram
     // Main and pinned are both combinational now (the main TLB reads async
     // LUTRAM), so both answer the query presented this cycle and need no
     // alignment register — the combined verdict is registered once downstream
-    // (mmu_bram), where the registered-read hold contract is enforced.
+    // (penumbra2_mmu), where the registered-read hold contract is enforced.
     always_comb begin
         if (pin_a_hit) begin
             o_a_paddr        = pin_a_paddr;
@@ -207,7 +207,7 @@ module tlb_unit_bram
     // future refactor of the routing trips the SVA.
     assert property (@(posedge i_clk) disable iff (i_rst)
         !(main_write_en && pin_write_en))
-        else $error("tlb_unit_bram: main and pinned write enables both asserted");
+        else $error("penumbra2_tlb_unit: main and pinned write enables both asserted");
 
 endmodule
 

@@ -3,16 +3,13 @@
 // 64-entry 2-way set-associative translation cache for the pipelined core.
 // Storage is distributed RAM (LUTRAM) with a *combinational* read, so a lookup
 // resolves the same cycle its query is presented: the translate verdict is
-// produced in the access launch cycle and registered downstream (mmu_bram),
+// produced in the access launch cycle and registered downstream (penumbra2_mmu),
 // rather than waiting a cycle for a synchronous (BRAM) read to land before the
 // match cone can run. This reclaims the launch cycle — otherwise idle — for the
 // translate cone, balancing it against the tag-compare cycle it feeds. The
 // storage recipe (banks split by way, replicated per read port, V bits in a
 // flop vector, lockstep writes) follows the gen1 main TLB (tlb.sv); the match
-// cone is the shared tlb_perm, one instance per port.
-//
-// (Name kept for now though storage is no longer BRAM — rename deferred until
-// the async TLB is proven on hardware.)
+// cone is the shared penumbra2_tlb_perm, one instance per port.
 //
 // Two concurrent translations (port A I-side, port B D-side) each need an
 // independent read address, and a 1W/1R distributed-RAM bank serves only one
@@ -33,10 +30,10 @@
 
 // keep_hierarchy: hold this boundary through synth_ecp5 so the translate
 // verdict cone reads with real signal names in timing reports and places as
-// a unit. Paired across the TLB cone modules (mmu_bram / tlb_unit_bram /
-// tlb_bram / tlb_perm).
+// a unit. Paired across the TLB cone modules (penumbra2_mmu / penumbra2_tlb_unit /
+// penumbra2_tlb / penumbra2_tlb_perm).
 (* keep_hierarchy = "yes" *)
-module tlb_bram
+module penumbra2_tlb
     import penumbra_pkg::*;
 (
     input  logic        i_clk,
@@ -96,7 +93,7 @@ module tlb_bram
     assign way0_a = way0_a_mem[a_set];
     assign way1_a = way1_a_mem[a_set];
 
-    tlb_perm u_perm_a (
+    penumbra2_tlb_perm u_perm_a (
         .i_lookup_en   (i_a_lookup_en),
         .i_vpn         (i_a_vaddr[31:12]),
         .i_asid        (i_asid),
@@ -123,7 +120,7 @@ module tlb_bram
     assign way0_b   = way0_b_mem[b_rd_set];
     assign way1_b   = way1_b_mem[b_rd_set];
 
-    tlb_perm u_perm_b (
+    penumbra2_tlb_perm u_perm_b (
         .i_lookup_en   (i_b_lookup_en),
         .i_vpn         (i_b_vaddr[31:12]),
         .i_asid        (i_asid),
@@ -178,14 +175,14 @@ module tlb_bram
     // address mux and the single write port assume mutual exclusion.
     assert property (@(posedge i_clk) disable iff (i_rst)
         $countones({i_write_en, i_b_lookup_en, i_read_en}) <= 1)
-        else $error("tlb_bram: port-B contention (write/D-translate/readback overlap)");
+        else $error("penumbra2_tlb: port-B contention (write/D-translate/readback overlap)");
 
     // Reset must establish the all-invalid invariant: the V flop vector is the
     // only thing masking stale RAM after reset, so if reset failed to clear it,
     // stale entries would read as live hits.
     assert property (@(posedge i_clk)
         i_rst |=> (way0_v_vec == '0 && way1_v_vec == '0))
-        else $error("tlb_bram: reset did not clear the V vectors");
+        else $error("penumbra2_tlb: reset did not clear the V vectors");
 
 endmodule
 

@@ -8,7 +8,7 @@
 //                        (VIPT)      ├──> I/D txn arbiter ─> fill sequencer
 //   core dmem port ───> L1 D-cache ──┘                            │
 //                        (VIPT)                                   v
-//   core MMU ports ───> mmu_bram (port A fetch / port B data)   L2 cache
+//   core MMU ports ───> penumbra2_mmu (port A fetch / port B data)   L2 cache
 //   core sysreg side ─> device complex (MMU, caches, L2, CPU id) │
 //                                                                v
 //                                                       external bus (o_bus_*)
@@ -215,7 +215,7 @@ module machine_penumbra2
     logic        mmu_sys_we, mmu_sys_re;
     logic [31:0] mmu_sys_rdata;
 
-    mmu_bram u_mmu (
+    penumbra2_mmu u_mmu (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_a_vaddr(fetch_addr), .i_a_access_type(ACC_EXEC),
         .i_a_user_mode(fetch_user),

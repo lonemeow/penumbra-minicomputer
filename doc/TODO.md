@@ -1095,7 +1095,7 @@ Future work this opened up:
 gen2 targets 25 MHz CPU / 100 MHz SDRAM on the ULX3S (ECP5-85F sg6).
 Unlike gen1's single full-instruction cone, the pipelined core's fmax
 floor is the single-cycle **memory-hit cone**: TLB translate (the 2-way
-associative match in `tlb_perm`) feeding the VIPT L1 tag compare, once on
+associative match in `penumbra2_tlb_perm`) feeding the VIPT L1 tag compare, once on
 the fetch side (port A) and once on the data side (port B). Restructuring
 that cone is the gen2 fmax story. Operating point after the work below:
 ~34 MHz CPU (the D-side memory-hit cone is the structural floor — see
@@ -1183,7 +1183,7 @@ at ~29 ns / ~34 MHz. See "Campaign outcome" below for the full arc.
 
 Caveat on the rollup, same as gen1: nextpnr attributes fused
 post-flatten LUTs by net-name prefix, not dataflow, so per-module labels
-can mislead (the I/D `tlb_perm` instances especially). Trust the hop trace
+can mislead (the I/D `penumbra2_tlb_perm` instances especially). Trust the hop trace
 and the start/end points.
 
 ### Campaign outcome: the D-side memory-hit cone is the floor (~34 MHz)
@@ -1197,9 +1197,10 @@ gen2 conformance-clean, sim + synth):
   distributed-RAM storage (the gen1 `tlb.sv` recipe) runs it
   combinationally in the launch cycle, verdict registered once at the MMU
   output. Collapsed three register sets (BRAM read, pinned alignment,
-  query capture) into one. CPI-neutral (same 2-cycle contract). The module
-  name `tlb_bram` is kept though storage is no longer BRAM — rename
-  deferred.
+  query capture) into one. CPI-neutral (same 2-cycle contract). The gen2
+  MMU stack was subsequently renamed off the misleading `_bram` suffix and
+  moved to `penumbra2/` (`penumbra2_mmu` / `_tlb` / `_tlb_unit` /
+  `_tlb_perm`).
 - **L1 fill install deferred** (`cb6a4452`): tag/valid/PLRU install moved
   off the L2-hit-driven `i_fill_done` into the already-existing S_SERVE
   cycle. Zero-cost — nothing in S_SERVE reads the freshly-installed line.

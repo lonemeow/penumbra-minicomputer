@@ -1,6 +1,6 @@
-// Verilator testbench for the gen2 BRAM-backed main TLB (tlb_bram)
+// Verilator testbench for the gen2 BRAM-backed main TLB (penumbra2_tlb)
 //
-// Unlike the combinational gen1 TLB, tlb_bram is a registered (BRAM) lookup:
+// Unlike the combinational gen1 TLB, penumbra2_tlb is a registered (BRAM) lookup:
 // drive the query at cycle T, the verdict is valid at T+1. Every lookup /
 // readback helper here therefore drives inputs and then ticks one edge before
 // sampling outputs.
@@ -14,7 +14,7 @@
 
 #include <cstdio>
 #include <cstdint>
-#include "Vtlb_bram.h"
+#include "Vpenumbra2_tlb.h"
 
 enum TlbFlags {
     TLB_V = 1 << 0, TLB_C = 1 << 2, TLB_R = 1 << 3, TLB_W = 1 << 4,
@@ -24,19 +24,19 @@ enum AccType { ACC_READ = 0b001, ACC_WRITE = 0b010, ACC_EXEC = 0b100 };
 
 static int errors = 0, tests = 0;
 
-static void tick(Vtlb_bram* d) {
+static void tick(Vpenumbra2_tlb* d) {
     d->i_clk = 0; d->eval();
     d->i_clk = 1; d->eval();
 }
 
-static void idle(Vtlb_bram* d) {
+static void idle(Vpenumbra2_tlb* d) {
     d->i_a_lookup_en = 0;
     d->i_b_lookup_en = 0;
     d->i_write_en = 0;
     d->i_read_en = 0;
 }
 
-static void reset(Vtlb_bram* d) {
+static void reset(Vpenumbra2_tlb* d) {
     d->i_rst = 1;
     d->i_asid = 0;
     d->i_a_vaddr = 0; d->i_a_access_type = ACC_READ; d->i_a_user_mode = 0;
@@ -55,7 +55,7 @@ static uint32_t make_pte_word(uint32_t ppn, uint8_t sw, uint8_t flags) {
 }
 
 // Indexed write — port B only, so no concurrent B-read/readback.
-static void write_entry(Vtlb_bram* d, int set, int way, uint32_t vpn,
+static void write_entry(Vpenumbra2_tlb* d, int set, int way, uint32_t vpn,
                         uint32_t ppn, uint8_t asid, uint8_t flags) {
     idle(d);
     d->i_idx_set = set; d->i_idx_way = way;
@@ -69,7 +69,7 @@ static void write_entry(Vtlb_bram* d, int set, int way, uint32_t vpn,
 struct Verdict { uint32_t paddr; bool hit, fault; bool cacheable; };
 
 // Port A registered translate.
-static Verdict lookup_a(Vtlb_bram* d, uint32_t vaddr, uint8_t acc,
+static Verdict lookup_a(Vpenumbra2_tlb* d, uint32_t vaddr, uint8_t acc,
                         bool user, uint8_t asid) {
     idle(d);
     d->i_asid = asid;
@@ -82,7 +82,7 @@ static Verdict lookup_a(Vtlb_bram* d, uint32_t vaddr, uint8_t acc,
 }
 
 // Port B registered translate.
-static Verdict lookup_b(Vtlb_bram* d, uint32_t vaddr, uint8_t acc,
+static Verdict lookup_b(Vpenumbra2_tlb* d, uint32_t vaddr, uint8_t acc,
                         bool user, uint8_t asid) {
     idle(d);
     d->i_asid = asid;
@@ -95,7 +95,7 @@ static Verdict lookup_b(Vtlb_bram* d, uint32_t vaddr, uint8_t acc,
 }
 
 // Both ports translate in the same cycle (the dual-port point).
-static void lookup_ab(Vtlb_bram* d, uint32_t va_a, uint32_t va_b, uint8_t asid,
+static void lookup_ab(Vpenumbra2_tlb* d, uint32_t va_a, uint32_t va_b, uint8_t asid,
                       Verdict* ra, Verdict* rb) {
     idle(d);
     d->i_asid = asid;
@@ -109,7 +109,7 @@ static void lookup_ab(Vtlb_bram* d, uint32_t va_a, uint32_t va_b, uint8_t asid,
 }
 
 // Registered indexed readback — port B only.
-static void readback(Vtlb_bram* d, int set, int way, uint32_t* vpn, uint32_t* pte) {
+static void readback(Vpenumbra2_tlb* d, int set, int way, uint32_t* vpn, uint32_t* pte) {
     idle(d);
     d->i_idx_set = set; d->i_idx_way = way;
     d->i_read_en = 1;
@@ -129,7 +129,7 @@ static void check_bool(const char* n, bool got, bool exp) {
 }
 
 int main() {
-    Vtlb_bram* d = new Vtlb_bram;
+    Vpenumbra2_tlb* d = new Vpenumbra2_tlb;
     reset(d);
 
     // ── Reset leaves entries invalid (V from flop vec = 0) ──
