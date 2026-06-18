@@ -1,34 +1,21 @@
-// Penumbra gen2 TLB unit — BRAM main + flop pinned, two registered ports
+// Penumbra gen2 TLB unit — async-LUTRAM main + flop pinned, two translate ports
 //
-// The gen2 equivalent of tlb_unit: it pairs the BRAM-backed main TLB
+// The gen2 equivalent of tlb_unit: it pairs the LUTRAM-backed main TLB
 // (tlb_bram) with the fully-associative flop pinned TLB (tlb_pinned), and
-// presents two registered translation ports (A = I-side, B = D-side) plus the
-// indexed sysreg interface. Pinned-hit-wins, as in the single-cycle unit.
+// presents two translation ports (A = I-side, B = D-side) plus the indexed
+// sysreg interface. Pinned-hit-wins.
 //
-// Timing — the one subtlety. The main TLB is a registered (BRAM) lookup: drive
-// the query at cycle T, its verdict is valid at T+1. The pinned TLB is
-// combinational: its verdict for the query presented *this* cycle is available
-// the same cycle. To combine them for one instruction, the pinned verdict is
-// captured at the launch edge (registered here) so it rides to T+1 alongside
-// the main TLB's verdict for that same query — rather than reading the pinned
-// combinationally at T+1, which on the I-side would answer for the next fetch's
-// PC (the I-side query advances every cycle). Both ports register the pinned
-// verdict uniformly.
+// Timing. Both TLBs read combinationally — the main from async distributed RAM,
+// the pinned from flops — so each answers the query presented this cycle, in
+// the access launch cycle. They are combined combinationally (pinned-hit-wins)
+// and the combined verdict is registered once downstream (mmu_bram), which owns
+// the registered-read hold contract (capture on the strobe, hold otherwise) so
+// a stalled consumer reads the same verdict on whichever cycle it advances.
 //
-// The combined verdict holds from T+1 until the port's *next lookup* (capture
-// on the strobe, hold otherwise — the registered-read contract, see tlb_bram).
-// A stalled consumer therefore reads the same verdict on whichever cycle it
-// advances. On port B the hold is really "until the port's next *operation*":
-// a sysreg readback reloads tlb_bram's shared port-B way registers and
-// supersedes a main-won verdict — but a readback comes from a later RDSYS in
-// MEM, which can only launch after the translate's own instruction has
-// advanced out of MEM, its verdict consumed.
-//
-// Sysreg readback is the easy case: RDSYS back-pressures MEM, so TLB_INDEX and
-// the selected register are held stable across the two access cycles, so the
-// readback mux stays combinational — the main TLB's VPN/PTE come from
-// tlb_bram's registered readback (launched by i_sys_re), pinned and index
-// readback are combinational off the held index.
+// Sysreg readback: RDSYS back-pressures MEM, so TLB_INDEX and the selected
+// register are held stable across the two access cycles; the readback mux is
+// combinational off the held index, and the consuming core registers the
+// response.
 
 // verilator lint_off UNUSEDSIGNAL
 /* verilator lint_off PINCONNECTEMPTY */
@@ -108,7 +95,7 @@ module tlb_unit_bram
     end
 
     // ══════════════════════════════════════════════════════════
-    // Main TLB (BRAM, dual-port, registered)
+    // Main TLB (async LUTRAM, dual read port, combinational)
     // ══════════════════════════════════════════════════════════
     logic [31:0] main_a_paddr;
     logic        main_a_cacheable, main_a_hit, main_a_fault;
@@ -164,47 +151,18 @@ module tlb_unit_bram
     );
 
     // ══════════════════════════════════════════════════════════
-    // Register the pinned verdict to align it with the main TLB's
-    // registered verdict (see header). Hit bits reset so no spurious
-    // pinned hit is presented before the first real lookup; the data is
-    // consumed only when the hit bit is set, so it needs no reset.
+    // Combine — pinned-hit-wins, combinational
     // ══════════════════════════════════════════════════════════
-    logic [31:0] pin_a_paddr_q;
-    logic        pin_a_cacheable_q, pin_a_hit_q, pin_a_fault_q;
-    logic [31:0] pin_b_paddr_q;
-    logic        pin_b_cacheable_q, pin_b_hit_q, pin_b_fault_q;
-
-    // Captured on the lookup strobe and held otherwise, so the combined
-    // verdict obeys the registered-read hold contract (see tlb_bram header).
-    always_ff @(posedge i_clk) begin
-        if (i_rst) begin
-            pin_a_hit_q <= 1'b0;
-            pin_b_hit_q <= 1'b0;
-        end else begin
-            if (i_a_lookup_en) pin_a_hit_q <= pin_a_hit;
-            if (i_b_lookup_en) pin_b_hit_q <= pin_b_hit;
-        end
-        if (i_a_lookup_en) begin
-            pin_a_paddr_q     <= pin_a_paddr;
-            pin_a_cacheable_q <= pin_a_cacheable;
-            pin_a_fault_q     <= pin_a_fault;
-        end
-        if (i_b_lookup_en) begin
-            pin_b_paddr_q     <= pin_b_paddr;
-            pin_b_cacheable_q <= pin_b_cacheable;
-            pin_b_fault_q     <= pin_b_fault;
-        end
-    end
-
-    // ══════════════════════════════════════════════════════════
-    // Combine — pinned-hit-wins, at T+1
-    // ══════════════════════════════════════════════════════════
+    // Main and pinned are both combinational now (the main TLB reads async
+    // LUTRAM), so both answer the query presented this cycle and need no
+    // alignment register — the combined verdict is registered once downstream
+    // (mmu_bram), where the registered-read hold contract is enforced.
     always_comb begin
-        if (pin_a_hit_q) begin
-            o_a_paddr        = pin_a_paddr_q;
-            o_a_cacheable    = pin_a_cacheable_q;
+        if (pin_a_hit) begin
+            o_a_paddr        = pin_a_paddr;
+            o_a_cacheable    = pin_a_cacheable;
             o_a_hit          = 1'b1;
-            o_a_fault        = pin_a_fault_q;
+            o_a_fault        = pin_a_fault;
         end else begin
             o_a_paddr        = main_a_paddr;
             o_a_cacheable    = main_a_cacheable;
@@ -214,11 +172,11 @@ module tlb_unit_bram
     end
 
     always_comb begin
-        if (pin_b_hit_q) begin
-            o_b_paddr        = pin_b_paddr_q;
-            o_b_cacheable    = pin_b_cacheable_q;
+        if (pin_b_hit) begin
+            o_b_paddr        = pin_b_paddr;
+            o_b_cacheable    = pin_b_cacheable;
             o_b_hit          = 1'b1;
-            o_b_fault        = pin_b_fault_q;
+            o_b_fault        = pin_b_fault;
         end else begin
             o_b_paddr        = main_b_paddr;
             o_b_cacheable    = main_b_cacheable;
@@ -228,9 +186,9 @@ module tlb_unit_bram
     end
 
     // ══════════════════════════════════════════════════════════
-    // Sysreg read mux (combinational; inputs held by MEM across the
-    // two access cycles, so valid at T+1 — the main TLB VPN/PTE come
-    // from tlb_bram's registered readback, pinned/index off held inputs)
+    // Sysreg read mux (combinational; inputs held by MEM across the two
+    // access cycles — main TLB VPN/PTE, pinned, and index all read
+    // combinationally off the held index; the core registers the response)
     // ══════════════════════════════════════════════════════════
     always_comb begin
         case (i_sys_reg)
