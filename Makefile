@@ -36,7 +36,7 @@ OPT_BUILD ?= -O2
 VERILATOR_FLAGS = --cc --exe --build -Wall --assert \
                   $(if $(VCD),--trace) \
                   -CFLAGS "-std=c++17 $(OPT_BUILD)" \
-                  -Ihw/rtl/common -Ihw/rtl/penumbra1 -Ihw/rtl/penumbra2 -Ihw/rtl/machine -Ihw/rtl/bus -Ihw/rtl/mmu -Ihw/rtl/io -Ihw/rtl/io/sdram -Ihw/rtl/io/video -Ihw/rtl/soc -Ihw/rtl/sim
+                  -Ihw/rtl/common -Ihw/rtl/penumbra1 -Ihw/rtl/penumbra2 -Ihw/rtl/machine -Ihw/rtl/bus -Ihw/rtl/io -Ihw/rtl/io/sdram -Ihw/rtl/io/video -Ihw/rtl/soc -Ihw/rtl/sim
 
 BUILD_DIR   = build
 WAVE_DIR    = waves
@@ -675,7 +675,6 @@ SRC_COMMON = hw/rtl/common/penumbra_pkg.sv \
              $(filter-out %/penumbra_pkg.sv, $(wildcard hw/rtl/common/*.sv))
 
 SRC_FABRIC = hw/rtl/io/sdram/sdram_pkg.sv \
-             $(wildcard hw/rtl/mmu/*.sv) \
              $(wildcard hw/rtl/soc/*.sv) \
              $(wildcard hw/rtl/io/*.sv) \
              $(filter-out %/sdram_pkg.sv, $(wildcard hw/rtl/io/sdram/*.sv))

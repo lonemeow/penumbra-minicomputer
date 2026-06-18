@@ -26,11 +26,10 @@ project-wide conventions and pointers to architectural specs.
 ```
 hw/
 ├── rtl/
-│   ├── common/    # penumbra_pkg.sv — shared ISA constants (both cores + peripherals)
-│   ├── penumbra1/ # gen1 CPU core: datapath, regfile, ALU, sequencer, microcode ROM, ...
-│   ├── penumbra2/ # gen2 6-stage pipelined core + its L1/arbiter/fill modules
+│   ├── common/    # penumbra_pkg.sv + shared cells (tlb_pinned, ...) — both cores
+│   ├── penumbra1/ # gen1 CPU core: datapath, regfile, ALU, sequencer, ROM, MMU, ...
+│   ├── penumbra2/ # gen2 6-stage pipelined core + its MMU / L1 / arbiter / fill modules
 │   ├── machine/   # machine integrations (machine_<generation>.sv)
-│   ├── mmu/       # TLB main + pinned, MMU top, alignment/permission checks
 │   ├── soc/       # Bus controller, autoconfig, caches (L1 VIPT, L1 PIPT, L2), boot ROM, cpuid/machid
 │   ├── io/        # Real UART, real SPI, SDRAM v2 controller/adapter/PHY/CDC
 │   ├── sim/       # machine_sim + machine_penumbra2_sim, sim devices, memory models
@@ -61,6 +60,8 @@ cross-referenced from another generation's directory.
   replication (defines byte-order convention).
 - `divmul.sv` — MUL/DIV peer unit (sequential ~32-cycle iteration,
   own start/busy handshake; see `doc/internals/divmul.md`).
+- `tlb_pinned.sv` — 8-entry FA pinned TLB, pinned-hit-wins. Parameterized
+  for one or two translate ports (`DUAL_TRANSLATE`); both cores use it.
 
 ### Penumbra/2 core (`rtl/penumbra2/`)
 The gen2 6-stage pipelined core (design in `doc/internals/penumbra2/`)
@@ -102,12 +103,20 @@ shared L2.
   single-outstanding, type-dependent completion).
 - `fill_sequencer.sv` — atomic full-line fill walker between the
   arbiter and the shared L2.
+- `penumbra2_mmu.sv` — gen2 MMU: MMUCR, per-port bypass, fault registers;
+  registers the translation verdict at its output.
+- `penumbra2_tlb_unit.sv` — combines the async-LUTRAM main TLB with the
+  shared flop `tlb_pinned` (pinned-hit-wins).
+- `penumbra2_tlb.sv` — async-LUTRAM main TLB (64-entry 2-way SA,
+  combinational read; the verdict resolves in the access launch cycle).
+- `penumbra2_tlb_perm.sv` — the 2-way match + permission verdict cone, one
+  instance per translate port.
 
 ### Machine integrations (`rtl/machine/`)
 One module per generation: the board-independent computer
 (`doc/internals/build-system.md`). Devices attach outside, on the
 exposed external bus.
-- `machine_penumbra2.sv` — gen2 core + mmu_bram + 2× cache_bram_vipt +
+- `machine_penumbra2.sv` — gen2 core + penumbra2_mmu + 2× cache_bram_vipt +
   txn_arbiter + fill_sequencer + l2_cache + the sysreg device complex
   (MMU, both L1s, L2, cpuid, scratch); exposes the external bus, IRQs,
   commit/retire, and the program-end pulse (a retiring BREAK).
@@ -133,14 +142,11 @@ exposed external bus.
   single external bus. 2-state FSM with back-to-back BUSY→BUSY
   re-latch; combinational `o_*_req_accepted` pulse for burst
   address advance.
-
-### MMU (`rtl/mmu/`)
-- `tlb.sv` — 64-entry 2-way SA main TLB. Parallel lookup, one-hot
-  permission check, indexed sysreg R/W.
-- `tlb_pinned.sv` — 8-entry FA pinned TLB. Pinned-hit-wins priority.
-- `tlb_unit.sv` — unified main + pinned lookup behind one interface.
-- `mmu.sv` — bypass/translate mux, `force_bypass` for vector fetch,
-  alignment check, sysreg routing, fault latching.
+- `mmu.sv` — gen1 MMU: bypass/translate mux, `force_bypass` for vector
+  fetch, alignment check, sysreg routing, fault latching.
+- `tlb_unit.sv` — gen1 unified main + pinned lookup behind one interface.
+- `tlb.sv` — gen1 64-entry 2-way SA main TLB (distributed-RAM, parallel
+  combinational lookup, one-hot permission check, indexed sysreg R/W).
 
 ### SoC and caches (`rtl/soc/`)
 - `cache_vipt.sv` — L1 cache (used for both I and D in `cpu_core`).
