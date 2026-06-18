@@ -69,40 +69,46 @@ module tlb_perm
     // ── Way select (way 0 wins ties; a correctly-managed TLB never
     //    holds the same VPN/ASID in both ways of a set) + permission ──
     logic        matched;
-    logic [19:0] matched_ppn;
     logic        matched_c, matched_u;
     logic [2:0]  matched_rwx;   // {X, W, R} of the winning entry
     logic        perm_denied;   // matched entry forbids this access
 
+    // o_paddr's PPN is hoisted out of the hit/miss verdict below: it resolves
+    // from w0_match alone (way-0-priority 2:1) instead of the full o_hit
+    // reduction, so the physical address — and the L1 tag compare it feeds —
+    // settles a LUT level earlier. On a no-match o_hit is 0 and the consumer
+    // drops the access on the resulting fault (the L1 gates its request on the
+    // fault verdict), so the else leg picking way 1's PPN is a don't-care, not
+    // a tie-break. Cacheability and permission stay in the verdict block —
+    // they are not on the address-to-tag-compare critical path.
+    logic [19:0] sel_ppn;
+    assign sel_ppn = w0_match ? i_w0_pte_word[31:12] : i_w1_pte_word[31:12];
+    assign o_paddr = i_lookup_en ? {sel_ppn, i_page_off} : {20'b0, i_page_off};
+
     always_comb begin
         matched        = 1'b0;
-        matched_ppn    = 20'b0;
         matched_c      = 1'b0;
         matched_u      = 1'b0;
         matched_rwx    = 3'b0;
         perm_denied    = 1'b0;
         o_hit          = 1'b0;
-        o_paddr        = {20'b0, i_page_off};
         o_cacheable    = 1'b0;
         o_fault        = 1'b0;
 
         if (i_lookup_en) begin
             if (w0_match) begin
                 matched     = 1'b1;
-                matched_ppn = i_w0_pte_word[31:12];
                 matched_c   = i_w0_pte_word[TLB_C];
                 matched_u   = i_w0_pte_word[TLB_U];
                 matched_rwx = {i_w0_pte_word[TLB_X], i_w0_pte_word[TLB_W], i_w0_pte_word[TLB_R]};
             end else if (w1_match) begin
                 matched     = 1'b1;
-                matched_ppn = i_w1_pte_word[31:12];
                 matched_c   = i_w1_pte_word[TLB_C];
                 matched_u   = i_w1_pte_word[TLB_U];
                 matched_rwx = {i_w1_pte_word[TLB_X], i_w1_pte_word[TLB_W], i_w1_pte_word[TLB_R]};
             end
 
             o_hit       = matched;
-            o_paddr     = {matched_ppn, i_page_off};
             o_cacheable = matched_c;
 
             // Permission verdict: a matched entry must permit *this* access.
