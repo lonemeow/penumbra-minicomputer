@@ -25,7 +25,7 @@
 // § Step-5 phase sweep for the canonical procedure and per-board
 // results.
 `ifndef SDRAM_PHASE_DEG
-`define SDRAM_PHASE_DEG 270
+`define SDRAM_PHASE_DEG 180
 `endif
 
 module ulx3s_penumbra1_top (
