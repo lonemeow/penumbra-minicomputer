@@ -345,3 +345,6 @@ The per-area specs go deeper:
 - [`memory-interface.md`](./memory-interface.md) — L1↔L2 arbitration,
   the line fill path, and the transaction taxonomy (uncacheable /
   sub-word / write handling).
+- [`fpu.md`](./fpu.md) — forward-looking ISA design for a hardware
+  FPU (GPR-resident floats, IEEE-754 correctness-first); floating
+  point stays software-emulated until such a unit is built.
