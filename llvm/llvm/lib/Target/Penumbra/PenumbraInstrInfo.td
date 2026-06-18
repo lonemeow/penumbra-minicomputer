@@ -613,4 +613,27 @@ let isPseudo = 1 in {
     def PICMOVPC : PenumbraInst<(outs GPR:$Rd), (ins i32imm:$pclabel),
                                 "# PICMOVPC $Rd, $pclabel">;
   }
+
+  // PseudoMOVADDR: static/absolute symbol-address materialisation, kept as a
+  // single SSA def through register allocation so MachineCSE can share
+  // identical bases pre-RA and the allocator can rematerialise the address
+  // across a call instead of spilling it.  The $sym slot carries a
+  // GlobalAddress operand (residual offset baked in); expandPostRAPseudo
+  // lowers it to LLI :lo16: + LUI :hi16: after RA, where SSA no longer applies
+  // so both halves target $Rd directly.
+  //
+  // The remat/cost attributes are a per-microarchitecture *policy* decision
+  // (gen1's 1 KB direct-mapped I$ vs gen2's 4 KB 4-way), not part of the
+  // structural definition — see doc/TODO.md "Remat aggressiveness is
+  // per-microarchitecture, not a pseudo flag".
+  // TODO(human): wrap the def below in the `let ... in` attribute clause that
+  // sets the remat/cost policy (see the Learn by Doing request).
+  let isReMaterializable = 1,
+      hasSideEffects = 0,
+      mayLoad = 0,
+      mayStore = 0,
+      Size = 8 in {
+    def PseudoMOVADDR : PenumbraInst<(outs GPR:$Rd), (ins i32imm:$sym),
+                                     "# PseudoMOVADDR $Rd, $sym">;
+  }
 }

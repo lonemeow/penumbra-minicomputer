@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "PenumbraInstrInfo.h"
+#include "MCTargetDesc/PenumbraFixupKinds.h"
 #include "MCTargetDesc/PenumbraMCTargetDesc.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -31,27 +32,54 @@ void PenumbraInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
 }
 
 bool PenumbraInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
-  if (MI.getOpcode() != Penumbra::LEAfi)
-    return false;
-
-  // LEAfi Rd, R14, #offset  →  MOV Rd, R14  [+ ADDi Rd, #offset if nonzero]
   MachineBasicBlock &MBB = *MI.getParent();
   const DebugLoc &DL = MI.getDebugLoc();
-  Register DstReg = MI.getOperand(0).getReg();
-  Register BaseReg = MI.getOperand(1).getReg();
-  int64_t Offset = MI.getOperand(2).getImm();
 
-  BuildMI(MBB, MI, DL, get(Penumbra::MOV), DstReg)
-      .addReg(BaseReg);
+  switch (MI.getOpcode()) {
+  default:
+    return false;
 
-  if (Offset != 0) {
-    BuildMI(MBB, MI, DL, get(Penumbra::ADDi), DstReg)
-        .addReg(DstReg)
-        .addImm(Offset);
+  case Penumbra::LEAfi: {
+    // LEAfi Rd, R14, #offset  →  MOV Rd, R14  [+ ADDi Rd, #offset if nonzero]
+    Register DstReg = MI.getOperand(0).getReg();
+    Register BaseReg = MI.getOperand(1).getReg();
+    int64_t Offset = MI.getOperand(2).getImm();
+
+    BuildMI(MBB, MI, DL, get(Penumbra::MOV), DstReg)
+        .addReg(BaseReg);
+
+    if (Offset != 0) {
+      BuildMI(MBB, MI, DL, get(Penumbra::ADDi), DstReg)
+          .addReg(DstReg)
+          .addImm(Offset);
+    }
+
+    MI.eraseFromParent();
+    return true;
   }
 
-  MI.eraseFromParent();
-  return true;
+  case Penumbra::PseudoMOVADDR: {
+    // PseudoMOVADDR Rd, @sym+off  →  LLI Rd, :lo16:  ;  LUI Rd, Rd, :hi16:
+    // Runs after register allocation, so SSA no longer applies: LLI may write
+    // Rd directly and LUI's tied $Rd_in/$Rd reuse it — the fresh-temp vreg the
+    // selector needs (PenumbraInstructionSelector::emitLoadSymbolAddr) is
+    // unnecessary here.  The pseudo carries one GlobalAddress operand with the
+    // residual offset baked in; the lo16/hi16 relocation split is applied now.
+    const MachineOperand &Sym = MI.getOperand(1);
+    assert(Sym.isGlobal() &&
+           "PseudoMOVADDR expects a GlobalAddress symbol operand");
+    Register DstReg = MI.getOperand(0).getReg();
+
+    BuildMI(MBB, MI, DL, get(Penumbra::LLI), DstReg)
+        .addGlobalAddress(Sym.getGlobal(), Sym.getOffset(), Penumbra::S_Lo16);
+    BuildMI(MBB, MI, DL, get(Penumbra::LUI), DstReg)
+        .addReg(DstReg)
+        .addGlobalAddress(Sym.getGlobal(), Sym.getOffset(), Penumbra::S_Hi16);
+
+    MI.eraseFromParent();
+    return true;
+  }
+  }
 }
 
 void PenumbraInstrInfo::storeRegToStackSlot(

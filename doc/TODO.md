@@ -1886,8 +1886,9 @@ loops).  The other ~40% sweeps the ~70-line Proc/loop text.
 
 `PenumbraInstructionSelector` lowers `G_GLOBAL_VALUE` (and the
 `@sym + offset` form) unconditionally to a raw `LLI rd, %lo ; LUI rd,
-%hi` pair at selection time. That eager two-instruction expansion is a
-*double* defeat:
+%hi` pair at selection time, in `emitLoadSymbolAddr` (the static/absolute
+path; PIC takes the GOT path below). That eager two-instruction
+expansion is a *double* defeat:
 
 - **CSE can't see a shared base.** Each pair materializes the full
   `sym+offset`, so two references to the same symbol at different
@@ -1917,19 +1918,42 @@ absence of base-sharing also inflates the immediate-ALU bucket (~30% —
 offset arithmetic that would otherwise fold into a load) and, in
 disassembly, the pattern is pervasive on hot paths.
 
-### Why this is not an "instruction-count is invisible" micro-opt
+### Instruction-count vs footprint: which layer moves which
 
 The "Dhrystone hot-path code shape" entry above established that
 I-footprint, not dynamic instruction count, gates HW Dhrystone —
 count-*neutral* folds (the select-CMPi fold) measured flat because they
-don't change which cache lines are touched. Address-materialization CSE
-is the opposite kind of change: it *removes* instructions, which
-*shrinks* the hot-text footprint, attacking the I-miss bottleneck
-directly. It is also the concrete mechanism behind that entry's finding
-#1 ("register-pressure-aware address-arithmetic CSE"). So unlike the
-micro-opts, this is expected to show on hardware.
+don't change which cache lines are touched. Be precise about which layer
+of this fix is count-neutral and which actually removes instructions:
 
-### Fix — three layers, the first carries most of the win
+- **Layer 1 is count-neutral by construction.** `PseudoMOVADDR` expands
+  back to the identical `LLI+LUI`, so the static instruction stream is
+  unchanged unless CSE or remat fires. MachineCSE already deduped eager
+  `LLI+LUI` pairs in straight-line code, so layer 1 adds little there;
+  its real win is *rematerialization* — trading a spill/reload (or a
+  burned callee-saved register) for a recompute when an address is live
+  across a call under register pressure. That is a register-allocation
+  *quality* win, not a footprint win, and it only engages where those
+  cross-call-live address sites exist. It is the concrete mechanism
+  behind that entry's finding #1 ("register-pressure-aware
+  address-arithmetic CSE").
+- **Layers 2-3 remove instructions.** Folding `%lo` into the load
+  (`LLI+LUI+LD` → `LUI+LD`) drops one instruction per global memory
+  access — pervasive on hot paths, Dhrystone included — and base-sharing
+  collapses redundant materializations. This is the footprint reduction
+  that attacks the I-miss bottleneck directly.
+
+**Measured 2026-06-18 (HW): layer 1 alone is flat on Dhrystone** — as
+expected from the above. Dhrystone accesses its globals near their use,
+not held across calls, so remat has nothing to engage and CSE already
+captured the straight-line case. Layer 1's value is the *enabler*
+(single SSA def that layers 2-3 and the allocator build on) plus
+RA-quality on cross-call, register-pressure-bound code — kernel-shaped,
+not Dhrystone-shaped. To see layer 1 move a number, measure a workload
+with cross-call address liveness (kernel syscall / fork+exec benches);
+to shrink Dhrystone footprint, land layer 2.
+
+### Fix — three layers (layer 1 enables; layer 2 carries the static-footprint win)
 
 1. **Rematerializable materialization pseudo.** Stop emitting `LLI+LUI`
    at selection; lower the static/absolute `G_GLOBAL_VALUE` to a single
@@ -1941,13 +1965,28 @@ micro-opts, this is expected to show on hardware.
    "carries" a base over a call (its `ADRP` is a rematerializable single
    instruction it just recomputes after the call). This one change fixes
    the kernel example and the cross-call carrying; the rest is gravy.
+   Expand it in a *post-RA* pass (a new `PenumbraExpandPseudoInsts`, or
+   the `PenumbraInstrInfo::expandPostRAPseudo` hook) — **not** at
+   AsmPrinter time: the pseudo must survive register allocation as one
+   `MachineInstr` for the allocator's `reMaterialize` to copy it. Note
+   the existing PIC carriers (`PICLLI`/`PICLUI`/`PICADDPC`) expand inside
+   `PenumbraAsmPrinter` because their operands are label-difference,
+   MC-level expressions — that is the right idiom for *PIC*, the wrong
+   one for this expansion site. RISC-V's `PseudoLLA` + post-RA
+   `RISCVExpandPseudoInsts` is the matching template.
 2. **Fold `%lo` into the load offset.** Make the pseudo materialize the
    `%hi` base and fold the low bits into the consuming load/store's
    16-bit offset field via a `%lo`-style relocation (`LUI + LD %lo`
-   instead of `LLI+LUI+LD`). Needs `%hi`/`%lo` relocations and an
-   `isLegalAddressingMode` that advertises base+simm16 — same
-   `isLegalAddressingMode` gap as the "[R0 + offset] absolute
-   addressing" entry; close them together.
+   instead of `LLI+LUI+LD`). The `%hi`/`%lo` fixups already exist
+   (`fixup_penumbra_lo16`/`_hi16`, lowered in `PenumbraAsmPrinter`), and
+   `selectAddrRegImm` already folds a *resolved* base+simm16 into the
+   Format-M offset field for frame indices and constant GEPs — so the
+   residual gaps are narrower than a from-scratch relocation: (a) confirm
+   the Format-M memory-offset operand can carry a *symbolic* `%lo`
+   relocation (the Format-L `imm16` path does, via `encodeImm16`; the
+   offset field is unverified), and (b) the `isLegalAddressingMode`
+   base+simm16 advertisement — the same `isLegalAddressingMode` gap as
+   the "[R0 + offset] absolute addressing" entry; close them together.
 3. **Merge residual constant offsets** into the pseudo's symbol operand
    (`%hi(sym+o)`) and into memory ops, modeled on RISC-V's
    `RISCVMergeBaseOffset` — for offsets that can't fold into a load
@@ -1958,6 +1997,27 @@ Note the cross-call case is **not** a job for a greedy merge pass — it
 is a register-allocation cost decision (remat vs CSR vs spill), and the
 pseudo is precisely what hands it to the allocator. Don't hand-roll
 cross-call liveness in a MIR pass.
+
+### Remat aggressiveness is per-microarchitecture, not a pseudo flag
+
+Split *capability* from *policy*. The pseudo's capability attributes
+(`isReMaterializable`, `Size = 8`, `hasSideEffects = 0`) are
+generation-neutral and stay unconditional in TableGen — every Penumbra
+core can recompute an absolute address. How *aggressively* the allocator
+should exploit that is microarch-specific: remat duplicates the 8-byte
+sequence, which is cheap to hide in gen2's 4 KB 4-way L1 but can evict a
+hot line in gen1's 1 KB direct-mapped I$. That tuning is policy, so it
+belongs in the per-subtarget scheduling/cost model (today a single
+`penumbra1` `ProcessorModel`; `-mcpu` already selects it, default
+`penumbra1`), gated behind a `SubtargetFeature` when a `penumbra2` model
+lands — never baked into the pseudo's static flags. For the first cut:
+enable remat, leave `isAsCheapAsAMove` *off* (it tells the sinker the
+sequence is free and invites per-use-site duplication), and tune
+conservatively for gen1; flip the policy via a feature bit when the
+genN subtargets split. The same per-subtarget seam will host any later
+cost-model divergence (branch cost, alignment padding, LSR weights), so
+when `penumbra2` is added, audit these together rather than one flag at
+a time.
 
 ### TLS and PIC are orthogonal
 

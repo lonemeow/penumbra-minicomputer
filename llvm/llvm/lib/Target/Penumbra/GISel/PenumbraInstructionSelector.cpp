@@ -1317,11 +1317,19 @@ bool PenumbraInstructionSelector::selectGlobalValue(MachineInstr &I,
       constrainSelectedInstRegOperands(*ADDiInst, TII, TRI, RBI);
     }
   } else {
-    // Static: absolute address via LLI+LUI.
-    emitLoadSymbolAddr(
-        DstReg, I.getDebugLoc(), MBB, I.getIterator(),
-        MachineOperand::CreateGA(GV, Offset, Penumbra::S_Lo16),
-        MachineOperand::CreateGA(GV, Offset, Penumbra::S_Hi16));
+    // Static: absolute address materialised by a single rematerialisable
+    // pseudo.  Keeping it as one SSA def (instead of eagerly emitting the
+    // LLI+LUI pair here) lets MachineCSE share identical bases pre-RA and
+    // lets the allocator recompute the address across a call rather than
+    // spill it.  PenumbraInstrInfo::expandPostRAPseudo lowers it to the
+    // LLI :lo16: / LUI :hi16: pair after register allocation, so the pseudo
+    // carries a single GlobalAddress operand (residual offset baked in, no
+    // relocation specifier — the expander applies the lo16/hi16 split).
+    auto MovAddr = BuildMI(MBB, I.getIterator(), I.getDebugLoc(),
+                           TII.get(Penumbra::PseudoMOVADDR))
+        .addDef(DstReg)
+        .add(MachineOperand::CreateGA(GV, Offset, /*TargetFlags=*/0));
+    constrainSelectedInstRegOperands(*MovAddr, TII, TRI, RBI);
   }
 
   I.eraseFromParent();
