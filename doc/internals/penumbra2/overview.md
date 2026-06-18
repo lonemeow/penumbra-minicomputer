@@ -321,7 +321,7 @@ mechanics live in the [test-suite conventions](../build-system.md).
 If you're new to gen2, read in this order:
 
 1. **This document** — overview (you are here).
-2. **[design-decisions.md](./design-decisions.md)** — the 11
+2. **[design-decisions.md](./design-decisions.md)** — the
    architectural decisions with full rationale, alternatives
    considered, and consequences. Read in order; each one builds
    on earlier ones. Skim or skip the decisions whose conclusions
@@ -331,34 +331,17 @@ If you're new to gen2, read in this order:
    register layouts, stall/flush semantics, six cycle-accurate
    timing examples covering the most common pipeline behaviors.
 
-When the following docs land, they'll fill in the per-area
-detail:
+The per-area specs go deeper:
 
-- `control-decode.md` — per-format decoder, IR → control bundle.
-- `hazard-model.md` — scoreboard mechanism in detail.
-- `exception-flow.md` — fault propagation, vector-fetch FSM,
-  IRQ drain-and-take, ERET cycle-by-cycle.
-- `regfile.md` — 2R/1W regfile (read-port replication, single-port
-  divmul write sequencing), R14 banking, USP/SSP storage.
-- `cache-bram-vipt.md` — the new BRAM-backed L1 cache module.
+- [`control-decode.md`](./control-decode.md) — per-format decoder,
+  IR → control bundle.
+- [`hazard-model.md`](./hazard-model.md) — scoreboard mechanism in
+  detail.
+- [`exception-flow.md`](./exception-flow.md) — fault propagation,
+  vector-fetch FSM, IRQ drain-and-take, ERET cycle-by-cycle.
+- [`regfile.md`](./regfile.md) — 2R/1W regfile (read-port
+  replication, single-port divmul write sequencing), R14 banking,
+  USP/SSP storage.
 - [`memory-interface.md`](./memory-interface.md) — L1↔L2 arbitration,
   the line fill path, and the transaction taxonomy (uncacheable /
   sub-word / write handling).
-
-## Status
-
-**Planning phase.** No RTL exists yet. The design has been
-specified through the documents above; implementation begins
-once the gen1 → `penumbra1` rename lands and the per-area specs
-(hazard-model, exception-flow, regfile, control-decode,
-cache-bram-vipt) are written.
-
-The implementation plan is staged: IF1/IF2 skeleton → ID +
-regfile + scoreboard → EX + ALU + branches → MEM + cache → WB →
-exception handling → SPR + sysreg → MMU integration → SoC
-integration → NetBSD bring-up.
-
-Wall-clock estimate is meaningless at this stage — depends
-heavily on how much time gets spent on Penumbra/2 vs concurrent
-Penumbra/1 enhancements (hardware MUL/DIV being the largest
-expected gen1 prerequisite per Decision 1).
