@@ -115,34 +115,45 @@ module txn_arbiter #(
 
     // ── In-flight completion ──────────────────────────────────────
     // A line read completes on the sequencer's fill_done; a single beat
-    // completes on the downstream busy-drop. Both qualify on mq_valid, so
-    // an idle arbiter never spuriously completes.
-    logic is_line, complete;
-    assign is_line  = mq_re & mq_cacheable;
-    // A line completes on the sequencer's fill_done, or aborts on its
-    // fill_fault (a faulting beat); a single beat completes on the busy-drop,
-    // fault or not. Both are completion events that free the register.
-    assign complete = mq_valid & (is_line ? (i_fill_done | i_fill_fault)
-                                          : ((mq_re | mq_we) & ~i_m_busy));
+    // completes on the downstream busy-drop. Both qualify on mq_valid, so an
+    // idle arbiter never spuriously completes. The two are split because they
+    // arrive on very different paths: a beat's busy-drop (i_m_busy) is a short
+    // downstream-bus signal, while a line's fill_done (i_fill_done) rides the
+    // deep L2 tag/hit cone. Only the beat completion is fast enough to gate a
+    // same-cycle back-to-back launch; the line completion is held a cycle (see
+    // launch) to keep that cone off the launch/mq-load critical path.
+    logic is_line, line_complete, beat_complete, complete;
+    assign is_line       = mq_re & mq_cacheable;
+    // A line completes on fill_done (or aborts on fill_fault — a faulting beat);
+    // a single beat completes on the busy-drop, fault or not.
+    assign line_complete = mq_valid &  is_line & (i_fill_done | i_fill_fault);
+    assign beat_complete = mq_valid & ~is_line & (mq_re | mq_we) & ~i_m_busy;
+    assign complete      = line_complete | beat_complete;   // frees the register, drives busy
 
     // ── Launch select ─────────────────────────────────────────────
-    // A fresh transaction launches when the register is free (idle, or the
-    // in-flight one completes this cycle for a back-to-back hand-off),
-    // D-priority. On a completion cycle the completing owner is excluded:
-    // it is still asserting its now-stale request (it drops next cycle), so
-    // re-launching it would present a phantom second transaction.
+    // A fresh transaction launches when the register is free — either idle, or
+    // a *beat* completes this cycle for a zero-bubble hand-off, D-priority. A
+    // line completion does NOT hand off back-to-back: its fill_done is the
+    // L2-cone critical signal, so re-granting on it would drag that cone onto
+    // the mq-load path. A line instead frees the register this cycle (complete
+    // clears mq_valid) and the next transaction launches the following cycle —
+    // one bubble per line fill, none per beat. On a beat hand-off the
+    // completing owner is excluded: it still asserts its now-stale request (it
+    // drops next cycle), so re-launching it would present a phantom second
+    // transaction. A line's owner needs no exclusion — by its launch cycle (a
+    // cycle later) it has already dropped its request.
     logic i_elig, d_elig;
     always_comb begin
         i_elig = i_req;
         d_elig = d_req;
-        if (mq_valid && complete) begin
+        if (mq_valid && beat_complete) begin
             if (mq_owner == 1'b0) i_elig = 1'b0;
             else                  d_elig = 1'b0;
         end
     end
 
     logic launch, launch_d;
-    assign launch   = (!mq_valid | complete) & (i_elig | d_elig);
+    assign launch   = (!mq_valid | beat_complete) & (i_elig | d_elig);
     assign launch_d = d_elig;            // D-priority among the eligible
 
     always_ff @(posedge i_clk) begin
