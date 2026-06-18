@@ -691,7 +691,7 @@ SRC_CORE_penumbra2 = hw/rtl/penumbra2/penumbra2_pkg.sv \
 # dedupe).
 SRC_MACHINE_penumbra2 = hw/rtl/machine/machine_penumbra2.sv \
                         hw/rtl/mmu/mmu_bram.sv hw/rtl/mmu/tlb_unit_bram.sv \
-                        hw/rtl/mmu/tlb_bram.sv hw/rtl/mmu/tlb_pinned.sv \
+                        hw/rtl/mmu/tlb_bram.sv \
                         hw/rtl/mmu/tlb_perm.sv \
                         hw/rtl/soc/cpuid.sv hw/rtl/soc/machid.sv \
                         hw/rtl/soc/timer.sv hw/rtl/soc/busctl.sv \
