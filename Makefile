@@ -51,7 +51,7 @@ TB   ?= tb_$(MOD)
 # Shared packages — always included. --top-module tells Verilator which
 # module is the DUT (otherwise it picks the first file = a package).
 # Add new packages here as the design grows.
-PKG_SV = hw/rtl/common/penumbra_pkg.sv hw/rtl/penumbra2/penumbra2_pkg.sv hw/rtl/io/sdram/sdram_pkg.sv hw/rtl/io/video/video_pkg.sv
+PKG_SV = hw/rtl/common/penumbra_pkg.sv hw/rtl/penumbra2/penumbra2_pkg.sv hw/rtl/io/sdram/sdram_pkg.sv hw/rtl/io/video/video_pkg.sv hw/rtl/fpga/ecp5_pll_pkg.sv
 
 # ── Assembler tools ──────────────────────────────────────────
 PASM  = python3 sw/tools/pasm.py
@@ -230,6 +230,7 @@ MODULE_TESTS = \
     cache_bram_vipt \
     txn_arbiter \
     fill_sequencer \
+    ecp5_pll_test \
     unified_mem \
     uart \
     busctl \
@@ -695,8 +696,10 @@ SRC_MACHINE_penumbra2 = hw/rtl/machine/machine_penumbra2.sv \
                         hw/rtl/soc/cache_perfctr.sv
 
 # Board-common helpers only — each registry entry names its own top
-# file, so sibling tops never leak into each other's builds.
-SRC_BOARD_ulx3s = $(FPGA_RTL)/fpga_ram.sv
+# file, so sibling tops never leak into each other's builds. The PLL
+# config package comes first (both ULX3S tops import it to derive the
+# EHXPLLL dividers from their clock targets).
+SRC_BOARD_ulx3s = $(FPGA_RTL)/ecp5_pll_pkg.sv $(FPGA_RTL)/fpga_ram.sv
 LPF_ulx3s       = hw/constraints/ulx3s_v20.lpf
 
 # The registry: every valid (board, core[, variant]) top, its composed

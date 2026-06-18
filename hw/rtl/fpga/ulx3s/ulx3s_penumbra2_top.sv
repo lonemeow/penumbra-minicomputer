@@ -62,9 +62,17 @@ module ulx3s_penumbra2_top (
 );
     import penumbra_pkg::*;
     import sdram_pkg::*;
+    import ecp5_pll_pkg::*;
 
-    // ── Board constants ──────────────────────────────────────────
-    localparam int CLK_FREQ = 25_000_000;   // Hz (derived from PLL below)
+    // ── Clock targets → PLL config (computed, not hand-picked) ────
+    // Change CPU_HZ to retarget the CPU/system clock; ecp5_pll_compute derives
+    // the EHXPLLL dividers and CLK_FREQ together off the same struct, so they
+    // cannot drift. The SDRAM stays at 100 MHz — the W9825_100 preset and the
+    // CLKOS2 phase table below assume CLKOS_DIV==6, asserted after the PLL.
+    localparam longint CPU_HZ   = 25_000_000;
+    localparam longint SDRAM_HZ = 100_000_000;
+    localparam ecp5_pll_cfg_t PLL = ecp5_pll_compute(25_000_000, CPU_HZ, SDRAM_HZ);
+    localparam int CLK_FREQ = int'(PLL.clk_hz);   // derived from the PLL config
 
     // ── SDRAM chip preset (one-line preset swap) ─────────────────
     localparam sdram_params_t SDP = W9825_100;
@@ -72,10 +80,10 @@ module ulx3s_penumbra2_top (
     // ── ESP32 disable ──────────────────────────────────────────
     assign wifi_en = 1'b0;
 
-    // ── PLL: 25 MHz → 25 MHz (CPU) + 2× 100 MHz (SDRAM) ──────────
-    // fCLKOP  = 25 MHz   — CPU / system bus
-    // fCLKOS  = 100 MHz, 0°               — SDRAM controller fabric
-    // fCLKOS2 = 100 MHz, SDRAM_PHASE_DEG° — SDRAM pin clock (ODDR forward)
+    // ── PLL: 25 MHz crystal → CPU_HZ (CLKOP) + 2× SDRAM_HZ ───────
+    // fCLKOP  = CPU_HZ            — CPU / system bus
+    // fCLKOS  = SDRAM_HZ, 0°               — SDRAM controller fabric
+    // fCLKOS2 = SDRAM_HZ, SDRAM_PHASE_DEG° — SDRAM pin clock (ODDR forward)
     // Phase convention and per-board sweep results live in
     // doc/internals/sdram-controller.md.
     localparam int CLKOS2_PHASE_DEG = `SDRAM_PHASE_DEG;
@@ -98,23 +106,23 @@ module ulx3s_penumbra2_top (
         (CLKOS2_PHASE_DEG == 270) ? 4 :
         (CLKOS2_PHASE_DEG == 315) ? 6 : 0;
 
-    logic clk;            // CLKOP — 25 MHz system clock
-    logic clk_sdram;      // CLKOS — 100 MHz SDRAM fabric clock
-    logic clk_sdram_pin;  // CLKOS2 — 100 MHz, phase-shifted, to ODDR
+    logic clk;            // CLKOP — CPU_HZ system clock
+    logic clk_sdram;      // CLKOS — SDRAM_HZ fabric clock
+    logic clk_sdram_pin;  // CLKOS2 — SDRAM_HZ, phase-shifted, to ODDR
     logic pll_lock;
 
     (* keep *) EHXPLLL #(
-        .CLKI_DIV      (1),
-        .CLKFB_DIV     (1),
-        .CLKOP_DIV     (24),
+        .CLKI_DIV      (PLL.clki_div),
+        .CLKFB_DIV     (PLL.clkfb_div),
+        .CLKOP_DIV     (PLL.clkop_div),
         .CLKOP_ENABLE  ("ENABLED"),
-        .CLKOP_CPHASE  (23),
+        .CLKOP_CPHASE  (PLL.clkop_cphase),
         .CLKOP_FPHASE  (0),
-        .CLKOS_DIV     (6),
+        .CLKOS_DIV     (PLL.clkos_div),
         .CLKOS_ENABLE  ("ENABLED"),
-        .CLKOS_CPHASE  (5),                  // 0° phase
+        .CLKOS_CPHASE  (PLL.clkos_cphase),   // 0° phase
         .CLKOS_FPHASE  (0),
-        .CLKOS2_DIV    (6),
+        .CLKOS2_DIV    (PLL.clkos_div),      // same freq as CLKOS
         .CLKOS2_ENABLE ("ENABLED"),
         .CLKOS2_CPHASE (CLKOS2_CPHASE_VAL),  // SDRAM_PHASE_DEG° phase
         .CLKOS2_FPHASE (CLKOS2_FPHASE_VAL),
@@ -140,6 +148,18 @@ module ulx3s_penumbra2_top (
         .ENCLKOS2     (1'b1),
         .ENCLKOS3     (1'b0)
     );
+
+    // The CLKOS2 phase table above is calibrated for CLKOS_DIV==6 (the SDRAM
+    // at fVCO/6). ecp5_pll_compute is free to pick a different SDRAM divider
+    // for some target; if it does, those phase constants no longer apply, so
+    // refuse to build rather than forward a wrong SDRAM pin clock.
+    initial begin
+        assert (PLL.valid)
+            else $fatal(1, "ecp5_pll: no legal PLL config for CPU_HZ=%0d", CPU_HZ);
+        assert (PLL.clkos_div == 6)
+            else $fatal(1, "ecp5_pll: CLKOS_DIV=%0d != 6; SDRAM phase table invalid",
+                        PLL.clkos_div);
+    end
 
     // ── Reset: PLL lock + btn[1] (FIRE1) manual reset ──────────
     // Hold reset until PLL locks, then count 2^19 clocks (~21 ms at

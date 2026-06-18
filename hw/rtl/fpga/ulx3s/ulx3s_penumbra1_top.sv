@@ -61,11 +61,17 @@ module ulx3s_penumbra1_top (
 );
     import penumbra_pkg::*;
     import sdram_pkg::*;
+    import ecp5_pll_pkg::*;
 
-    // ── Board constants ──────────────────────────────────────────
-    // Single source of truth for system clock frequency.
-    // Update this if PLL parameters change.
-    localparam int CLK_FREQ = 25_000_000;   // Hz (derived from PLL below)
+    // ── Clock targets → PLL config (computed, not hand-picked) ────
+    // Change CPU_HZ to retarget the CPU/system clock; ecp5_pll_compute derives
+    // the EHXPLLL dividers and CLK_FREQ together off the same struct, so they
+    // cannot drift. The SDRAM stays at 100 MHz — the W9825_100 preset and the
+    // CLKOS2 phase table below assume CLKOS_DIV==6, asserted after the PLL.
+    localparam longint CPU_HZ   = 25_000_000;
+    localparam longint SDRAM_HZ = 100_000_000;
+    localparam ecp5_pll_cfg_t PLL = ecp5_pll_compute(25_000_000, CPU_HZ, SDRAM_HZ);
+    localparam int CLK_FREQ = int'(PLL.clk_hz);   // derived from the PLL config
 
     // ── SDRAM chip preset (one-line preset swap) ─────────────────
     // Change this RHS to switch SDRAM variants — e.g., for a board
@@ -77,7 +83,10 @@ module ulx3s_penumbra1_top (
     // ── ESP32 disable ──────────────────────────────────────────
     assign wifi_en = 1'b0;
 
-    // ── PLL: 25 MHz → 3 outputs sharing one VCO ──────────────────
+    // ── PLL: 25 MHz crystal → 3 outputs sharing one VCO ──────────
+    // Dividers are computed by ecp5_pll_compute from CPU_HZ / SDRAM_HZ
+    // above; at 25 MHz CPU / 100 MHz SDRAM they resolve to the historical
+    // {CLKI 1, CLKFB 1, CLKOP 24, CLKOS 6} on a 600 MHz VCO:
     // fCLKOP  = fCLKI × CLKFB_DIV / CLKI_DIV = 25 × 1 / 1 = 25 MHz
     // fVCO    = fCLKOP × CLKOP_DIV = 25 × 24 = 600 MHz (400-800 OK)
     // fCLKOS  = fVCO / CLKOS_DIV  = 600 / 6  = 100 MHz   (SDRAM fabric)
@@ -135,17 +144,17 @@ module ulx3s_penumbra1_top (
     logic pll_lock;
 
     (* keep *) EHXPLLL #(
-        .CLKI_DIV      (1),
-        .CLKFB_DIV     (1),
-        .CLKOP_DIV     (24),
+        .CLKI_DIV      (PLL.clki_div),
+        .CLKFB_DIV     (PLL.clkfb_div),
+        .CLKOP_DIV     (PLL.clkop_div),
         .CLKOP_ENABLE  ("ENABLED"),
-        .CLKOP_CPHASE  (23),
+        .CLKOP_CPHASE  (PLL.clkop_cphase),
         .CLKOP_FPHASE  (0),
-        .CLKOS_DIV     (6),
+        .CLKOS_DIV     (PLL.clkos_div),
         .CLKOS_ENABLE  ("ENABLED"),
-        .CLKOS_CPHASE  (5),                  // 0° phase
+        .CLKOS_CPHASE  (PLL.clkos_cphase),   // 0° phase
         .CLKOS_FPHASE  (0),
-        .CLKOS2_DIV    (6),
+        .CLKOS2_DIV    (PLL.clkos_div),      // same freq as CLKOS
         .CLKOS2_ENABLE ("ENABLED"),
         .CLKOS2_CPHASE (CLKOS2_CPHASE_VAL),  // SDRAM_PHASE_DEG° phase
         .CLKOS2_FPHASE (CLKOS2_FPHASE_VAL),
@@ -171,6 +180,18 @@ module ulx3s_penumbra1_top (
         .ENCLKOS2     (1'b1),
         .ENCLKOS3     (1'b0)
     );
+
+    // The CLKOS2 phase table above is calibrated for CLKOS_DIV==6 (the SDRAM
+    // at fVCO/6). ecp5_pll_compute is free to pick a different SDRAM divider
+    // for some target; if it does, those phase constants no longer apply, so
+    // refuse to build rather than forward a wrong SDRAM pin clock.
+    initial begin
+        assert (PLL.valid)
+            else $fatal(1, "ecp5_pll: no legal PLL config for CPU_HZ=%0d", CPU_HZ);
+        assert (PLL.clkos_div == 6)
+            else $fatal(1, "ecp5_pll: CLKOS_DIV=%0d != 6; SDRAM phase table invalid",
+                        PLL.clkos_div);
+    end
 
     // ── Reset: PLL lock + btn[1] (FIRE1) manual reset ──────────
     // Hold reset until PLL locks, then count 2^19 clocks.
