@@ -19,9 +19,9 @@
 // Loads/stores (MEM guard), RDSYS, and drain-commit (no SR/SPR/EPC yet)
 // stay out of the first stream.
 
-// keep_hierarchy: hold this stage boundary through synth_ecp5 so the backward
-// stall path (mem_stall -> ex_stall -> fetch_en) places compactly instead of
-// smearing across the die, and reads with real names in timing reports.
+// keep_hierarchy: hold this stage boundary through synth_ecp5 so the stage
+// places compactly instead of smearing across the die, and reads with real
+// names in timing reports.
 // Paired across the pipeline stages (if1 / if2 / spine / mem_stage).
 (* keep_hierarchy = "yes" *)
 module penumbra2_spine
@@ -217,8 +217,34 @@ module penumbra2_spine
     logic [SB_IDX_W-1:0] rd_idx_a, rd_idx_b;
     logic [31:0]         rd_data_a, rd_data_b;
 
-    // Handshake
-    logic id_stall, ex_stall, mem_stall, wb_stall;
+    // Handshake — flat stall composition.
+    // Each stage exposes only its downstream-independent local stall; the
+    // back-pressure into a stage is the OR of every strictly-downstream stage's
+    // local (a suffix-OR over the WB → MEM → EX → ID → IF order). Computing it
+    // flat here — rather than rippling o_stall stage-to-stage through the
+    // keep_hierarchy boundaries — keeps the late D-cache-busy term carried in
+    // mem_local_stall off a multi-stage serial path: it reaches the front end
+    // through one OR level instead of three module-boundary hops.
+    logic wb_local_stall, mem_local_stall, ex_local_stall, id_local_stall;
+    logic mem_downstream_stall, ex_downstream_stall, id_downstream_stall;
+    logic ex_stall, id_stall;   // inclusive: this stage's local | its downstream
+
+    // Each stage's strictly-downstream stall is the flat OR of all locals below
+    // it in the WB → MEM → EX → ID → IF order (WB is downstream-most, so it has
+    // no entry — its local is wb_local_stall). Each feeds the matching stage's
+    // i_stall_in; id_downstream_stall, with id_local_stall, also forms the IF
+    // freeze. Flat ORs — not chained downstream-to-downstream — keep the late
+    // mem_local_stall term one OR level from every consumer.
+    assign mem_downstream_stall = wb_local_stall;
+    assign ex_downstream_stall  = wb_local_stall | mem_local_stall;
+    assign id_downstream_stall  = wb_local_stall | mem_local_stall | ex_local_stall;
+
+    // Inclusive combined stalls, derived from the suffix-OR above — used by the
+    // consumers that need "is this stage stalled at all" (o_ex_stall, the IF
+    // freeze o_fetch_stall, and the ID taken-branch bubble gate).
+    assign ex_stall = ex_local_stall | ex_downstream_stall;
+    assign id_stall = id_local_stall | id_downstream_stall;
+
     logic ex_branch_taken;
     logic ex_dc_commit;     // EX drain-commit pulse (ERET/WRSYS/WRSPR-SR/EI/DI)
 
@@ -383,10 +409,9 @@ module penumbra2_spine
         // gated: it must kill every younger slot regardless of back-pressure.
         // eret_commit / wrsys_resync fire only with the pipe drained, so they
         // never coincide with a MEM stall.
-        .i_stall_in(ex_stall),
+        .i_stall_in(id_downstream_stall),
         .i_bubble((ex_branch_taken & ~ex_stall) | wb_fault_commit | eret_commit | wrsys_resync),
-        .o_stall(id_stall),
-        .o_hazard_stall(o_stall_hazard),
+        .o_local_stall(id_local_stall),
         .o_rd_idx_a(rd_idx_a), .o_rd_idx_b(rd_idx_b),
         .i_rd_data_a(rd_data_a), .i_rd_data_b(rd_data_b),
         .o_spr_rd_sel(id_spr_rd_sel), .i_spr_src_value(spr_operand_value),
@@ -429,8 +454,8 @@ module penumbra2_spine
         .i_irq_inject(i_irq_inject), .i_irq_vec(i_irq_vec),
         .i_sr_flags(spr_sr_flags), .i_sr_committed(sr_committed),
         .i_wb_flags(memwb_flag_value), .i_wb_writes_flags(memwb_flag_we & memwb_valid),
-        .i_stall_in(mem_stall), .i_wb_active(memwb_valid), .i_bubble(wb_fault_commit),
-        .o_stall(ex_stall), .o_dc_commit(ex_dc_commit), .o_funit_stall(o_stall_funit),
+        .i_stall_in(ex_downstream_stall), .i_wb_active(memwb_valid), .i_bubble(wb_fault_commit),
+        .o_local_stall(ex_local_stall), .o_dc_commit(ex_dc_commit), .o_funit_stall(o_stall_funit),
         .o_branch_taken(ex_branch_taken), .o_branch_target(o_branch_target),
         .o_op_class(exmem_op_class), .o_mem_op(exmem_mem_op),
         .o_mem_size(exmem_mem_size), .o_sign_ext(exmem_sign_ext),
@@ -464,8 +489,8 @@ module penumbra2_spine
         .i_pc(exmem_pc),
         .i_valid(exmem_valid), .i_fault_pending(exmem_fault_pending),
         .i_fault_vec(exmem_fault_vec), .i_fault_status(exmem_fault_status),
-        .i_stall_in(wb_stall), .i_bubble(wb_fault_commit),
-        .o_stall(mem_stall),
+        .i_stall_in(mem_downstream_stall), .i_bubble(wb_fault_commit),
+        .o_local_stall(mem_local_stall),
         .o_stall_load(o_stall_load), .o_stall_store(o_stall_store),
         .o_dmem_addr(o_dmem_addr), .o_dmem_wdata(o_dmem_wdata),
         .o_dmem_byte_en(o_dmem_byte_en), .o_dmem_re(o_dmem_re),
@@ -505,7 +530,7 @@ module penumbra2_spine
         .i_pc(memwb_pc),
         .i_valid(memwb_valid), .i_fault_pending(memwb_fault_pending),
         .i_fault_vec(memwb_fault_vec),
-        .o_stall(wb_stall),
+        .o_local_stall(wb_local_stall),
         .o_insn_committed(o_insn_committed),
         .o_wr_idx(wr_idx), .o_wr_data(wr_data), .o_wr_en(wr_en),
         .o_flag_we(wb_flag_we), .o_flag_value(wb_flag_value),
@@ -544,6 +569,9 @@ module penumbra2_spine
     assign o_dc_commit_pc       = idex_pc;
     assign o_dc_commit_op_class = idex_op_class;
     assign o_ex_stall = ex_stall;
+    // ID's local stall is exactly the scoreboard hazard interlock — surface it
+    // as the perfctr's hazard-stall cause.
+    assign o_stall_hazard = id_local_stall;
 
     // ════════════════════════════════════════════════════════════
     // Scoreboard's view of the downstream in-flight writers

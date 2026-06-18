@@ -45,8 +45,7 @@ module penumbra2_id_stage
     // ── Pipeline handshake ───────────────────────────────────────
     input  logic                  i_stall_in,       // EX cannot accept this cycle
     input  logic                  i_bubble,         // force a bubble this edge (taken-branch redirect / fault flush)
-    output logic                  o_stall,          // back-pressure to IF
-    output logic                  o_hazard_stall,   // stall cause: ID interlock — scoreboard hazard (perfctr)
+    output logic                  o_local_stall,    // back-pressure (downstream-independent): the scoreboard interlock — also the perfctr hazard-stall cause
 
     // ── Regfile read interface (regfile is external) ─────────────
     output logic [SB_IDX_W-1:0]   o_rd_idx_a,
@@ -242,10 +241,11 @@ module penumbra2_id_stage
         .o_stall(scoreboard_stall)
     );
 
-    // The hazard-interlock component of o_stall — the local scoreboard stall,
-    // before downstream back-pressure (i_stall_in) is folded in below —
-    // surfaced for the perfctr's stall attribution.
-    assign o_hazard_stall = i_valid & scoreboard_stall;
+    // ID's local stall — the scoreboard interlock, downstream-independent (it
+    // does not fold in i_stall_in). The spine ORs it with the downstream
+    // stalls to form the back-pressure to IF, and surfaces it as the perfctr's
+    // hazard-stall cause. The pre-refactor o_stall was o_local_stall | i_stall_in.
+    assign o_local_stall = i_valid & scoreboard_stall;
 
     // ── Issue / back-pressure control ────────────────────────────
     // can_issue : the ID instruction is eligible to advance into EX —
@@ -255,12 +255,12 @@ module penumbra2_id_stage
     // issue     : it actually advances into EX this edge — latch the
     //             decoded bundle + operands into ID/EX.
     // next_valid: the ID/EX valid bit after this edge.
-    // o_stall   : back-pressure to IF (hold the IF2/ID input).
+    // (Back-pressure to IF is composed in the spine from o_local_stall and the
+    // downstream stalls; i_stall_in here is that composed downstream stall.)
     logic can_issue, issue, next_valid;
     assign can_issue = i_valid & ~scoreboard_stall;
 
     always_comb begin
-        o_stall = i_stall_in || (i_valid && scoreboard_stall);
         if (i_bubble) begin
             next_valid = 1'b0;          // flush the in-flight insn to a bubble
             issue      = 1'b0;

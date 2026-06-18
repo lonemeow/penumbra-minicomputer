@@ -51,7 +51,8 @@ module penumbra2_wb_stage
     input  logic [3:0]            i_fault_vec,
 
     // ── Back-pressure (to MEM): the dual-write second-write hold ──
-    output logic                  o_stall,
+    // WB is the downstream-most stage, so its local stall is its whole stall.
+    output logic                  o_local_stall,
 
     // ── Retire pulse (perfctr): one per distinct instruction ─────
     // High when an instruction reaches its commit this cycle, counted exactly
@@ -134,13 +135,13 @@ module penumbra2_wb_stage
             wr_idx          = i_phys_dst;
             wr_data         = i_wb_value;
             wr_en           = can_commit & i_gpr_we;
-            o_stall         = wb_dual_write;
+            o_local_stall   = wb_dual_write;
             next_writing_aux = wb_dual_write;
         end else begin
             wr_idx          = i_phys_dst_aux;
             wr_data         = i_wb_value_aux;
             wr_en           = can_commit & i_gpr_we;
-            o_stall         = 1'b0;
+            o_local_stall   = 1'b0;
             next_writing_aux = 1'b0;
         end
     end
@@ -166,10 +167,10 @@ module penumbra2_wb_stage
             else $error("penumbra2_wb_stage: faulting instruction also wrote a register");
     end
 
-    // o_stall is the dual-write second-write hold only; nothing else back-
-    // pressures MEM from WB.
+    // o_local_stall is the dual-write second-write hold only; nothing else
+    // back-pressures MEM from WB.
     always_comb begin
-        assert (!o_stall || wb_dual_write)
+        assert (!o_local_stall || wb_dual_write)
             else $error("penumbra2_wb_stage: stall asserted outside a dual-destination writeback");
     end
 

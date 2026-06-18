@@ -91,7 +91,7 @@ module penumbra2_ex_stage
     input  logic                  i_stall_in,        // MEM cannot accept this cycle
     input  logic                  i_wb_active,       // WB holds a live (non-bubble) insn
     input  logic                  i_bubble,          // force this insn to a bubble (fault flush from WB)
-    output logic                  o_stall,           // back-pressure to ID
+    output logic                  o_local_stall,     // back-pressure to ID (downstream-independent)
     output logic                  o_dc_commit,       // drain-commit insn commits this cycle
     output logic                  o_funit_stall,     // stall cause: waiting on the divmul unit (perfctr)
 
@@ -342,51 +342,53 @@ module penumbra2_ex_stage
         if (i_bubble) begin
             next_valid = 1'b0;          // flush wins
             advance    = 1'b0;
-            o_stall    = i_stall_in;
         end else if (post_wait_q) begin
             next_valid = 1'b0;          // WRSYS already committed; the insn leaves as a bubble
             advance    = 1'b0;
-            o_stall    = 1'b0;          // release upstream after the one extra hold
         end else if (dc_here) begin
             // Drain-commit insn: never advances into MEM/WB. Inject a
             // bubble so MEM/WB drain — but only when MEM can accept;
             // while MEM is mid-access (i_stall_in) hold EX/MEM so its
             // live work is not clobbered.
             advance = 1'b0;
-            if (i_stall_in) begin
-                next_valid = o_valid;
-                o_stall    = 1'b1;
-            end else begin
-                next_valid = 1'b0;
-                // Hold upstream until drained; on the drained (commit)
-                // cycle, hold one more only for the WRSYS variant.
-                o_stall = drained ? i_post_commit_wait : 1'b1;
-            end
+            if (i_stall_in) next_valid = o_valid;
+            else            next_valid = 1'b0;
         end else if (dm_stall) begin
-            // divmul busy: hold the insn in EX, back-pressure upstream; it
-            // advances the cycle busy clears.
+            // divmul busy: hold the insn in EX; it advances the cycle busy
+            // clears. The held EX/MEM slot drains to a bubble — except when
+            // MEM is back-pressuring EX (i_stall_in): the slot is then a live
+            // instruction MEM has not accepted yet and must be preserved
+            // intact (the same i_stall_in split the drain-commit branch makes).
             advance = 1'b0;
-            o_stall = 1'b1;
-            // The divmul held in EX produces nothing this cycle, so EX/MEM
-            // drains to a bubble — except when MEM is back-pressuring EX
-            // (i_stall_in): the slot EX/MEM holds is then a live instruction
-            // MEM has not accepted yet and must be preserved intact (the same
-            // i_stall_in split the drain-commit branch above makes).
-            if (i_stall_in) begin
-                next_valid = o_valid;   // hold the un-accepted EX/MEM slot
-            end else begin
-                next_valid = 1'b0;      // drain: the divmul has produced nothing
-            end
+            if (i_stall_in) next_valid = o_valid;   // hold the un-accepted EX/MEM slot
+            else            next_valid = 1'b0;       // drain: the divmul produced nothing
         end else if (i_stall_in) begin
             next_valid = o_valid;       // hold EX/MEM unchanged
             advance    = 1'b0;
-            o_stall    = 1'b1;
         end else begin
             next_valid = i_valid;       // advance: bubble in if i_valid=0
             advance    = i_valid;
-            o_stall    = 1'b0;
         end
     end
+
+    // ── EX local back-pressure (downstream-independent) ──────────
+    // EX holds upstream for its own reasons: sequencing a drain-commit (held
+    // until MEM/WB drain; the WRSYS variant holds one extra cycle for the
+    // device latch) or waiting on the divmul unit. A fault flush (i_bubble)
+    // and the post-commit-wait cycle release upstream — the latter only ever
+    // occurs with the pipe already drained (asserted below), so the downstream
+    // stall it would otherwise mask is guaranteed absent. The spine ORs this
+    // with the downstream stalls; the pre-refactor o_stall was exactly
+    // ex_local_stall | i_stall_in.
+    logic ex_local_stall;
+    always_comb begin
+        if      (i_bubble)    ex_local_stall = 1'b0;
+        else if (post_wait_q) ex_local_stall = 1'b0;
+        else if (dc_here)     ex_local_stall = drained ? i_post_commit_wait : 1'b1;
+        else if (dm_stall)    ex_local_stall = 1'b1;
+        else                  ex_local_stall = 1'b0;
+    end
+    assign o_local_stall = ex_local_stall;
 
     // ── EX/MEM register ──────────────────────────────────────────
     always_ff @(posedge i_clk) begin
@@ -501,6 +503,15 @@ module penumbra2_ex_stage
     assert property (@(posedge i_clk) disable iff (i_rst)
         post_wait_q |=> !post_wait_q)
         else $error("penumbra2_ex_stage: post-commit hold exceeded one cycle");
+
+    // The local-stall split (the spine ORs ex_local_stall with the downstream stalls,
+    // reconstructing the old o_stall = ex_local_stall | i_stall_in) relies on
+    // post_wait_q never coinciding with downstream back-pressure: post_wait_q
+    // follows a drained commit, so MEM/WB hold nothing and i_stall_in is 0.
+    // If this fires, ex_local_stall=0 here would wrongly drop a real downstream stall.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        post_wait_q |-> !i_stall_in)
+        else $error("penumbra2_ex_stage: post-commit-wait coincided with downstream back-pressure");
 
     // A divmul never advances into EX/MEM while the unit is still busy —
     // it would carry stale/garbage result halves to WB.

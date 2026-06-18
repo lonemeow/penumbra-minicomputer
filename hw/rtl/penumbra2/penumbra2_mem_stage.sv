@@ -55,9 +55,9 @@
 // GPR and writes an SPR — WB routes the one value by the mutually exclusive
 // gpr_we / spr_we bits). o_wb_value_aux carries a dual write's second value.
 
-// keep_hierarchy: hold this stage boundary through synth_ecp5 so the backward
-// stall path (mem_stall -> ex_stall -> fetch_en) places compactly instead of
-// smearing across the die, and reads with real names in timing reports.
+// keep_hierarchy: hold this stage boundary through synth_ecp5 so the stage
+// places compactly instead of smearing across the die, and reads with real
+// names in timing reports.
 // Paired across the pipeline stages (if1 / if2 / spine / mem_stage).
 (* keep_hierarchy = "yes" *)
 module penumbra2_mem_stage
@@ -138,7 +138,7 @@ module penumbra2_mem_stage
     // ── Pipeline handshake ───────────────────────────────────────
     input  logic                  i_stall_in,        // WB cannot accept this cycle
     input  logic                  i_bubble,          // force this insn to a bubble (fault flush from WB)
-    output logic                  o_stall,           // back-pressure to EX
+    output logic                  o_local_stall,     // back-pressure to EX (downstream-independent)
     output logic                  o_stall_load,      // stall cause: a load access holds the pipe (perfctr)
     output logic                  o_stall_store,     // stall cause: a store access holds the pipe (perfctr)
 
@@ -212,8 +212,22 @@ module penumbra2_mem_stage
     // the divmul's Rdh write. With the launch deferred, the i_stall_in hold
     // branch keeps the access waiting in EX (not yet in flight) until WB
     // accepts, then it launches cleanly.
-    logic mem_first;
-    assign mem_first = do_access & ~acc_in_flight & ~i_stall_in;
+    // want_launch is the ungated launch *intent* (a clean access ready to
+    // start a lookup); mem_first is the gated launch *action*, deferred while
+    // WB back-pressures. They split so the stall need does not depend on the
+    // downstream stall: MEM holds the pipe whenever it wants to launch, even
+    // on the cycle the launch itself waits for WB.
+    logic want_launch, mem_first;
+    assign want_launch = do_access & ~acc_in_flight;
+    assign mem_first   = want_launch & ~i_stall_in;
+
+    // mem_local — MEM's downstream-independent back-pressure: it holds upstream
+    // whenever it wants to launch (want_launch) or is waiting out a launched
+    // access's data side (mem_busywait). The spine ORs this with the downstream
+    // stalls; the pre-refactor o_stall was exactly mem_local | i_stall_in.
+    logic mem_busywait;
+    assign mem_busywait  = is_mem & acc_in_flight & i_dmem_busy;
+    assign o_local_stall = want_launch | mem_busywait;
 
     // ── Store path: lane-replication + byte-enable ───────────────
     logic [31:0] store_wdata;
@@ -400,12 +414,10 @@ module penumbra2_mem_stage
         if (i_bubble) begin
             next_valid     = 1'b0;          // flush wins
             advance        = 1'b0;
-            o_stall        = i_stall_in;
         end else if (mem_first) begin
             next_valid     = 1'b0;          // bubble into MEM/WB while accessing
             advance        = 1'b0;
-            o_stall        = 1'b1;          // hold the access operands in EX/MEM
-            acc_in_flight_next = 1'b1;          // launched: in flight from next cycle
+            acc_in_flight_next = 1'b1;       // launched: in flight from next cycle
         end else if (is_mem && acc_in_flight && i_dmem_busy) begin
             // Busy-wait: the launched access's data side has not completed
             // (line fill / downstream round trip). Same posture as the launch
@@ -413,19 +425,16 @@ module penumbra2_mem_stage
             // request level held; acc_in_flight stays set (default above).
             next_valid     = 1'b0;
             advance        = 1'b0;
-            o_stall        = 1'b1;
         end else if (i_stall_in) begin
             next_valid     = o_valid;       // hold MEM/WB unchanged
             advance        = 1'b0;
-            o_stall        = 1'b1;
             // An access not yet launched (mem_first suppressed by
             // ~i_stall_in) defers behind a dual-write divmul that holds
             // MEM/WB for its aux write.
         end else begin
             next_valid     = i_valid;       // advance: bubble in if i_valid=0
             advance        = i_valid;
-            o_stall        = 1'b0;
-            acc_in_flight_next = 1'b0;          // access (if any) completes here
+            acc_in_flight_next = 1'b0;       // access (if any) completes here
         end
     end
 
@@ -477,7 +486,7 @@ module penumbra2_mem_stage
     // The first cycle of a memory access always back-pressures EX (the BRAM
     // read/write is still settling), and always moves the phase forward.
     assert property (@(posedge i_clk) disable iff (i_rst)
-        mem_first |-> o_stall)
+        mem_first |-> o_local_stall)
         else $error("penumbra2_mem_stage: first access cycle did not stall EX");
     assert property (@(posedge i_clk) disable iff (i_rst)
         mem_first |=> acc_in_flight)
