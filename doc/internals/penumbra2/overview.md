@@ -241,7 +241,10 @@ add the textbook performance features:
 These are well-trodden mechanisms — the gen2 pipeline-register
 layout is already forward-compatible with adding them. Most of
 gen2.5 is hardware changes inside the existing stages, not
-structural pipeline changes.
+structural pipeline changes. How this maps onto the source tree —
+one directory, one variant parameter, not a fork — is covered in
+[gen2.5 organization](#gen25-organization-one-tree-two-variants)
+below.
 
 **gen3 (speculative — not yet planned).** Possibilities include:
 
@@ -255,6 +258,63 @@ structural pipeline changes.
 - Out-of-order completion (probably never — too complex for the
   intended scale).
 - Hardware FPU (currently software-emulated, same as gen1).
+
+## gen2.5 organization: one tree, two variants
+
+gen2.5 is **not a fork**. It is the `penumbra2/` source tree built
+with a different value of a single core parameter, so the baseline
+(unforwarded) gen2 and the optimized gen2.5 are both buildable at any
+time from the same tree. That sameness is the point: a CPI or DMIPS
+delta between the two reflects *only* the optimizations, because every
+other variable — caches, MMU, and the compiler that produced the test
+binary — is held identical. A git-tagged snapshot of the old RTL could
+not give an honest comparison: it would be measured against whatever
+the backend looked like at tag time, and the backend is itself still
+improving.
+
+This works only because of what gen2.5 *is*. Forwarding, regfile
+write-through, and branch prediction are all **additive within the
+existing structure** — none changes a module interface or the
+pipeline-register layout. That is exactly the condition under which one
+parameterized tree stays honest where two diverging copies would not.
+The inverse — a change that reshapes an interface, such as a
+line-granular L1↔L2 protocol or a split MEM stage — is what *would*
+force a separate tree, and is gen3 material for precisely this reason.
+
+**RTL.** A single core parameter selects the variant. New behavior
+lands as new modules — a forwarding network, a branch predictor —
+instantiated only in the optimized variant; the unavoidable in-stage
+edits (operand-source muxes, the hazard conditions a forward now
+relaxes) are confined to single named decision points gated on that
+parameter, never scattered through the control logic. The baseline leg
+asserts that no hazard is silently suppressed, which keeps the
+unforwarded datapath studyable in its own right — the reason gen2 ships
+without forwarding at all — and makes that a machine-checked invariant
+rather than a documentation promise.
+
+**Build.** A `CORE=penumbra<n>_<sub>` selector (for example
+`penumbra2_5`) splits into a base and a suffix. The base (`penumbra2`)
+chooses the RTL fileset and runner configuration, which the variant
+inherits unchanged; the suffix chooses the elaboration parameter. Only
+two facts are genuinely per-variant, each stated once: which parameter
+the suffix maps to, and the capability delta below. Everything bulky
+derives from the base, so a variant cannot drift from the base's
+configuration.
+
+**Test.** A variant inherits the base's entire program suite. Almost
+all of it passes unchanged, because the optimizations preserve
+architectural semantics and change only timing. The exceptions are
+tests that assert an exact cycle or stall count, which forwarding
+legitimately alters; these carry a `pinned-stalls` capability tag that
+the baseline provides and the optimized variant does not, so the runner
+skips them visibly rather than reporting a false failure. Identifying
+them is not upfront work — it is the failure set from running the
+inherited suite against the optimized build during bring-up: a failure
+on a *result* is a forwarding bug to fix, a failure on a *cycle count*
+is a timing-pinned test to tag. Inheriting everything is what makes a
+mis-wired forward surface as an immediate, localized failure in a test
+that would otherwise never have exercised the new variant. Tag
+mechanics live in the [test-suite conventions](../build-system.md).
 
 ## Reading guide
 
