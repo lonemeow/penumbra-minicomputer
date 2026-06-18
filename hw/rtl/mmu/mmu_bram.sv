@@ -105,18 +105,30 @@ module mmu_bram
     end
 
     // ══════════════════════════════════════════════════════════
-    // Per-port translate enable + bypass (combinational, this cycle)
+    // Per-port translate-mode + bypass (combinational)
     // ══════════════════════════════════════════════════════════
-    // A port translates through the TLB when the MMU is on and bypass is not
-    // forced; otherwise it identity-maps (bypass). With the async TLB these
-    // drive the combinational lookup in the access launch cycle, and the whole
-    // verdict is composed combinationally below before the single output
-    // register — no query-capture register is needed.
+    // The port MODE: translate through the TLB when the MMU is on and bypass is
+    // not forced, else identity-map (bypass).
+    //
+    // Port A (I-side) drops the per-request gate. It has no sysreg duty, so its
+    // TLB read address is always the fetch PC, and the verdict register's
+    // capture enable (i_a_req, below) is what holds an idle/stalled cycle's
+    // verdict rather than latching a spurious one. Dropping i_a_req from the
+    // mode keeps it off the combinational verdict cone — and so off the late
+    // fetch-request path that carries the IF2->IF1 back-pressure from a busy
+    // I-cache; i_a_req then gates only the register CE.
+    //
+    // Port B (D-side) keeps i_b_req: its lookup enable doubles as the port-B
+    // read-address select (D-translate vaddr vs the sysreg readback index, in
+    // tlb_bram) and backs the port-B contention guard, so it must mean "a
+    // D-translate is happening this cycle", not just the mode. The D-side
+    // request is not the critical late signal anyway — its EA comes from a
+    // registered EX result — so leaving it gated costs nothing.
     logic a_translate, b_translate;
     logic a_bypass, b_bypass;
-    assign a_translate = i_a_req && mmu_enabled && !i_a_force_bypass;
+    assign a_translate = mmu_enabled && !i_a_force_bypass;
     assign b_translate = i_b_req && mmu_enabled && !i_b_force_bypass;
-    assign a_bypass    = i_a_req && (i_a_force_bypass || !mmu_enabled);
+    assign a_bypass    = i_a_force_bypass || !mmu_enabled;
     assign b_bypass    = i_b_req && (i_b_force_bypass || !mmu_enabled);
 
     // ══════════════════════════════════════════════════════════
@@ -144,10 +156,11 @@ module mmu_bram
     // ══════════════════════════════════════════════════════════
     // Per-port verdict — composed combinationally this cycle (the launch
     // cycle), then registered once below. Bypass identity-maps (uncacheable,
-    // hits, no fault); a live translate presents the TLB result with the fault
+    // hits, no fault); a translate presents the TLB result with the fault
     // composed here — miss (TLB hit=0) or protection denial — from the live
-    // query. A port with no live translate (idle, or bypassing) is fault=0 by
-    // construction, and the status is FAULT_NONE whenever there is no fault.
+    // query. A bypassing port is fault=0 by construction; an idle or stalled
+    // port simply holds its prior verdict, since the register captures only on
+    // i_*_req. The status is FAULT_NONE whenever there is no fault.
     // ══════════════════════════════════════════════════════════
     logic [31:0] a_paddr_n, b_paddr_n;
     logic        a_cacheable_n, a_hit_n, a_fault_n;
