@@ -1098,8 +1098,9 @@ floor is the single-cycle **memory-hit cone**: TLB translate (the 2-way
 associative match in `tlb_perm`) feeding the VIPT L1 tag compare, once on
 the fetch side (port A) and once on the data side (port B). Restructuring
 that cone is the gen2 fmax story. Operating point after the work below:
-~32 MHz CPU, ~117 MHz SDRAM (single-synth snapshots; they jitter
-run-to-run).
+~34 MHz CPU (the D-side memory-hit cone is the structural floor — see
+"Campaign outcome" below), ~117–123 MHz SDRAM (single-synth snapshots;
+they jitter run-to-run).
 
 ### SDRAM domain: floorplanned to recover margin — DONE (`08cbd63`)
 
@@ -1164,7 +1165,7 @@ hit cone across all 64 sets. But PLRU bits are metadata consumed only on
 the *next miss* (victim pick), and PLRU is approximate — they have no
 business in the hit cycle.
 
-**Lever (next, isolated change):** defer the touch. Register
+**Lever — defer the touch (DONE, `e9ad4b6f37b5`).** Register
 `{touched, set, way}` at the hit; apply
 `plru[set] <= plru_update(plru[set], way)` the next cycle against the
 *live* PLRU array. Design points to get right:
@@ -1176,14 +1177,97 @@ business in the hit cycle.
   rate, since PLRU is already approximate.
 
 It lives in the shared `cache_bram_vipt`, so it helps the D-side cone too.
-Projected ~31 → ~19 ns (toward ~50 MHz), pending the usual
-relocate-and-remeasure — the next limiter is likely the bare TLB +
-tag-compare cone (the structural floor this generation was built to hit).
+The ~19 ns / ~50 MHz projection did **not** hold: the defer worked but
+exposed co-equal masking paths, and the real floor is the D-hit stall cone
+at ~29 ns / ~34 MHz. See "Campaign outcome" below for the full arc.
 
 Caveat on the rollup, same as gen1: nextpnr attributes fused
 post-flatten LUTs by net-name prefix, not dataflow, so per-module labels
 can mislead (the I/D `tlb_perm` instances especially). Trust the hop trace
 and the start/end points.
+
+### Campaign outcome: the D-side memory-hit cone is the floor (~34 MHz)
+
+Past the stall-ripple and PLRU work above, the limiter walked through the
+rest of the memory subsystem; the deferrals/retimings that landed (all
+gen2 conformance-clean, sim + synth):
+
+- **Main TLB → async LUTRAM + verdict register** (`c7d7d7e0`): the BRAM
+  TLB forced the whole translate cone into the resolve cycle; async
+  distributed-RAM storage (the gen1 `tlb.sv` recipe) runs it
+  combinationally in the launch cycle, verdict registered once at the MMU
+  output. Collapsed three register sets (BRAM read, pinned alignment,
+  query capture) into one. CPI-neutral (same 2-cycle contract). The module
+  name `tlb_bram` is kept though storage is no longer BRAM — rename
+  deferred.
+- **L1 fill install deferred** (`cb6a4452`): tag/valid/PLRU install moved
+  off the L2-hit-driven `i_fill_done` into the already-existing S_SERVE
+  cycle. Zero-cost — nothing in S_SERVE reads the freshly-installed line.
+- **MMU port-A translate degated** (`f1203d58`): after the async TLB,
+  port A's lookup-enable (`i_a_req && mode`) put the late I-side fetch
+  request — carrying the IF2→IF1 back-pressure off a busy I-cache — on the
+  verdict cone. The per-request gate was redundant with the verdict
+  register CE, so dropped for port A (no sysreg duty; read address is
+  always the PC). Port B keeps it: `i_b_lookup_en` also selects the
+  port-B readback address and backs the contention guard. CPI-neutral.
+- **Arbiter transaction-aware completion** (`aa55a768`): defer only the
+  line-fill re-grant (beats stay back-to-back), keeping the L2 hit verdict
+  (`i_fill_done`) off the arbiter's same-cycle re-grant path. Cost: +1
+  cycle per back-to-back line fill (≈0 compute-bound, ~7–10 % pure
+  streaming; recoverable later by a wider L1↔L2 datapath). Worth ~1.9 MHz
+  at the final config — without it the L2→arbiter path caps fmax at
+  32.35 MHz. (It was briefly reverted on the mistaken read that it bought
+  nothing — see the first lesson below.)
+
+Net fmax: ~33.5 → ~34.2 MHz (≈ +2 %). The headline barely moved; the big
+intermediate swings (down to ~31.5, back up) were mostly the placer
+redistributing near the wall. The durable value is the structural cleanup
+and knowing where the floor is.
+
+**The floor** is the D-side memory-hit cone — D-cache 4-way tag compare →
+`dmem_busy` → stall network → ID `drain_commit`, ~29 ns — in two halves,
+both fundamental:
+- cache hit determination ~10 ns: BRAM tag clk-to-Q + the 4-way compare,
+  routing-bound across the per-way BRAMs;
+- stall→commit tail ~12 ns: pure-stall requires the hit verdict to gate
+  commit the *same* cycle; the flatten removed the ripple, but the signal
+  still crosses MEM→spine→ID.
+
+Reaching this floor needs the arbiter change above; it is otherwise not
+deferrable — the compare is a BRAM read (L1-D tags ~5.5 Kb could go async
+LUTRAM, but the compare is bounded by the registered paddr arriving at
+resolve, so it would not help), and the stall→commit gate is the in-order
+pure-stall tax.
+
+**Lessons (do not re-run this campaign blindly):**
+- Re-measure a change's fmax value at the *final* config, not by its
+  mid-campaign delta. The arbiter measured as "noise" (33.87→33.44) while
+  a co-equal path masked it, but became worth ~1.9 MHz once port-A cleared
+  that path — which is why reverting it dropped fmax to 32.35, not the
+  ~33.9 the stale delta implied. A fix is worth the gap to the *next*
+  path, and that gap grows as you clear the ones above it.
+- Performance is fmax × IPC; ceiling you don't clock into is worthless —
+  fix the operating clock first, then judge CPI-for-fmax trades against
+  it. The arbiter's +1/fill is worth it *here* only because headroom is
+  the goal; at a clock far below the ceiling it would be pure loss.
+- The deferrals cleared *masking paths* — incidental cones near the floor
+  that retime away. The D-hit cone was always there; it surfaces once the
+  masks are gone. Targeted fixes converging on a path present from the
+  start = the floor, not another obstacle.
+- Deeper fmax needs a microarch change (forwarding / non-blocking loads;
+  OoO), not more single-cycle deferrals. Forwarding + branch prediction
+  will reshape the EX/MEM/stall/commit region — exactly the floor — so
+  budget those designs timing-aware here; don't pre-optimize the stall
+  tail, it will be rewritten.
+- nextpnr labels fused LUTs by net-name prefix, not dataflow: "the path
+  goes through X" repeatedly meant a LUT *named* X (`wrsys_resync`,
+  `ac_spi_sel` were registered/unrelated signals), not X's logic. Confirm
+  against the RTL before trusting a per-module label.
+
+Operating-clock note: the campaign cleared headroom to bump the CPU PLL
+from 25 → 30 MHz (≈ 14 % margin under the ~34 MHz floor, room for the
+forwarding/BP logic to eat into). That PLL change + a flash-and-run on the
+board is the remaining step.
 
 ## Hardware: L2 phase 2 — write-back / write-allocate
 
