@@ -488,21 +488,50 @@ module cache_bram_vipt
         end
     end
 
-    // ── PLRU: touch on read hit, completed write hit, fill install ──
-    // The three sites are mutually exclusive (one access in flight, and
-    // fills only end in S_FILL).
+    // ── PLRU: deferred touch on read/write hit, fill install ────────
+    // The tree-PLRU touch on a hit is split off the resolve cycle. It is the
+    // last consumer of the late tag-compare verdict (hit / hit_way), and the
+    // read-modify-write of plru[set] sat on the cache's critical path. But
+    // PLRU bits are approximate replacement metadata, consumed only at the
+    // next miss (victim_way) — a one-cycle-late update has no correctness
+    // impact, at most a marginally-different eviction. So the resolve cycle
+    // only *captures* the touch (set + way + valid) into flops; the
+    // read-modify-write happens the next cycle, against the *live* plru array
+    // so a back-to-back touch to the same set composes onto the prior update.
+    logic                 plru_touch_valid;
+    logic [SET_BITS-1:0]  plru_touch_set;
+    logic [WAY_BITS-1:0]  plru_touch_way;
+    always_ff @(posedge i_clk) begin
+        if (i_rst) plru_touch_valid <= 1'b0;
+        else begin
+            plru_touch_valid <= rd_hit_resolve | wr_hit_resolve;
+            plru_touch_set   <= set_q;
+            plru_touch_way   <= hit_way;
+        end
+    end
+
+    // A fill install touches plru the cycle the fill completes (already off the
+    // hit path); the deferred hit-touch touches it the cycle after a hit. The
+    // two never coincide — a hit resolves only in S_IDLE, a fill completes only
+    // in S_FILL, and single-outstanding serializes the accesses — so the
+    // priority is moot (asserted below); fill is listed first.
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
             for (int s = 0; s < NUM_SETS; s++)
                 plru[s] <= 3'b000;
         end else if (state == S_FILL && i_fill_done) begin
             plru[fill_set] <= plru_update(plru[fill_set], 2'(fill_way));
-        end else if (rd_hit_resolve) begin
-            plru[set_q] <= plru_update(plru[set_q], 2'(hit_way));
-        end else if (wr_hit_resolve) begin
-            plru[set_q] <= plru_update(plru[set_q], 2'(hit_way));
+        end else if (plru_touch_valid) begin
+            plru[plru_touch_set] <= plru_update(plru[plru_touch_set], 2'(plru_touch_way));
         end
     end
+
+    // The fill install and the deferred hit-touch must never target plru in the
+    // same cycle: the else-if above would silently drop the touch (benign for
+    // approximate PLRU, but a sign the access-serialization assumption broke).
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        !((state == S_FILL && i_fill_done) && plru_touch_valid))
+        else $error("cache_bram_vipt: fill install and deferred PLRU touch collided");
 
     // ══════════════════════════════════════════════════════════
     // Per-way BRAM storage — tags + data
