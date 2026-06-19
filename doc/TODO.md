@@ -2059,6 +2059,163 @@ expander, the way RISC-V's `PseudoLA` / `PseudoLA_TLS_*` family does.
   `sw/tools/branch_ceiling.py`. Re-run Dhrystone with `+opstats` after
   layer 1 to confirm the immediate-ALU / `LLI`+`LUI` buckets drop.
 
+### 2026-06-19 empirical re-measurement — Layer 2 doesn't translate; base-sharing is the static lever
+
+A disassembly study of the just-built binaries (kernel `MINIMAL`, an
+`ET_EXEC` executable, libc.so) reshaped the plan above. Method:
+`llvm-objdump -d` annotates every `lui` with its resolved 32-bit value
+(the disassembler tracks GPR state), so address-forming `lli+lui` pairs
+can be bucketed by target. Filtering the kernel to values that land
+inside the kernel image (`0x80010000`–`0x802c0000`) drops 32-bit
+*constant* materialisations and leaves **41,590 true absolute address
+materialisations**. Findings:
+
+- **Same-symbol multi-offset is already optimal.** Struct-field and
+  array-element accesses (`s.a/s.b/s.d`, `g[2]/g[5]`) already materialise
+  the base once and fold each offset into the load
+  (`selectAddrRegImm`): `2 + N`, not `3N`. Layer 1's CSE-able pseudo plus
+  the existing constant-offset fold delivers the base-amortisation win
+  Layer 2 was reaching for — and the base is the *exact* `&s`, so the
+  hardware's signed-offset add is correct with no carry handling.
+- **Layer 2's per-access `LLI+LUI+LD → LUI+LD` win cannot exist here.**
+  That reduction assumes a one-instruction high-only base. RISC-V's `lui`
+  *replaces* the low bits; Penumbra's `LUI` **ORs** (`Rd = Rd |
+  (imm16<<16)`, encoding-table opcode `0010`, tied `$Rd=$Rd_in`), so a
+  clean `hi<<16` base needs `LLI rd,#0; LUI rd,%hi` — two instructions —
+  and folding `%lo` into the load buys nothing. Layer 2 ports the RISC-V
+  *mechanism* but not its *benefit*. **Treat Layer 2 (the `%lo`-into-
+  offset fold) as not applicable; do not implement it as written.**
+- **A "load-upper-and-clear" (`LUIC`) opcode is a minor lever, not the
+  fix.** It would enable `LUIC %hi_carry; LD %lo` (3→2), but only **11.2%**
+  of kernel address materialisations feed a single direct `[Rd+0]`
+  load/store where the fold applies (~4,654 sites, ~18 KB `.text`); the
+  other ~62% use the address as a pointer/base, where `LUIC %hi; ADDi
+  %lo` = 2 = the existing `LLI;LUI`, no gain. It also does **not** merge
+  unrelated-but-close symbols (different symbols → different `%hi_carry`
+  relocations that don't CSE at compile time). Encoding space exists
+  (Format-L opcodes `1101/1110/1111` reserved); RTL is trivial and
+  actually drops the `Rd` read/tied operand vs OR-`LUI`. But it must be
+  *additive* — the `LLI;LUI` 32-bit-constant idiom needs OR semantics, so
+  `LUIC` cannot replace `LUI` — and it needs a carry-adjusted `%hi`
+  relocation. Verdict: defer; sequence after base-sharing (which already
+  converts many `[Rd+0]` loads to `[base+off]`, overlapping its win) and
+  re-measure.
+- **Base-sharing of unrelated-but-close absolute addresses is the real
+  static lever** — the `copyright+const` shape, e.g. `phys_bias`
+  (`0x80297000`), `bootinfo_store` (`0x80297020`), `penumbra_bootinfo`
+  (`0x8029802c`) each rebuilt from scratch in the same `lui 32809` page.
+  Of the 41,590 materialisations, **40.9% are shareable under a
+  conservative model** (cluster targets within 60 KB inside a straight-
+  line run split on calls), 78.1% function-wide. This is an *upper
+  bound*: holding a base live across a call-free region still competes
+  for one of ~12 allocatable registers in a 2-operand ISA, so the
+  realisable share is lower; the clean first cut is call-free,
+  same-section clusters.
+- **The transform is layout-neutral, no ISA change needed.** For two
+  *local same-section* symbols `A`,`B`, the distance `B-A` is an
+  assembly-time label difference (the assembler folds it — no
+  relocation, no carry, and the data never moves). So a cluster of K
+  references becomes `LLI %lo(A); LUI %hi(A)` (exact `&A`) + K loads at
+  `[&A + (sym_i - A)]` = `2 + K` vs `3K`. This is GlobalMerge's win
+  *without* GlobalMerge's data-relocation cache penalty — GlobalMerge
+  physically coalesces globals into one struct, which measured −2.4%
+  DMIPS on gen1 Dhrystone (fewer instructions but more misses in the
+  1 KB direct-mapped L1 from the relocated data). Label-difference
+  base-sharing moves no data, so that penalty never arises, on either
+  generation. (Whether the original GlobalMerge penalty still holds on
+  gen2's 4 KB 4-way L1 is untested and moot for this approach.)
+  Cross-section clusters need a link-time relocation but stay
+  layout-neutral.
+- **Implementation shape:** a target MIR pass over the `PseudoMOVADDR`
+  defs (Layer 1 already gives CSE-able single-def bases), modelled on
+  `RISCVMergeBaseOffset` but extended from same-symbol to same-section
+  cross-symbol. Open scope decision: same-section-local only
+  (assembly-time diffs, zero new relocations — recommended first cut) vs
+  also cross-section (needs a base-relative `R_PENUMBRA_*` and the
+  linker). The register-pressure call belongs in the allocator, not a
+  greedy merge — same caution as the cross-call remat note above.
+
+`fold_classify`/clustering scripts used for these numbers are throwaway
+disassembly miners (not committed); the durable artifacts are the
+numbers and conclusions here.
+
+## Compiler: PIC/GOT global access — userspace's dominant addressing cost
+
+Userspace spends most of its cycles inside the shared libraries, and the
+shared libraries pay a GOT indirection on nearly every global access that
+does not need one. This is plausibly the highest-leverage addressing fix
+in the whole toolchain, because it speeds up code every process runs.
+
+**The addressing workloads split by ELF type (measured 2026-06-19):**
+
+- **Executables are `ET_EXEC` (position-dependent).** `bin/cat` reaches
+  its own globals with ~100 absolute `lli+lui` and only ~30 GOT anchors;
+  `bin/sh` likewise. So an executable's *own* code is the same
+  absolute-addressing problem as the kernel (base-sharing applies),
+  *not* a GOT problem — calls into libc go through the PLT
+  (`JUMP_SLOT`), imported data uses `COPY` relocs.
+- **The GOT cost lives in the `ET_DYN` shared libraries.** libc.so has
+  **~10,135** GOT-indirect code sites of the shape `lli; lui; add
+  rX,r15(PC); ldw(GOT); ldw(deref)` = **5 instructions to read one
+  global** (the PC anchor makes each site's immediates unique, which
+  also defeats CSE across sites — PC-relative addressing is anti-CSE by
+  construction).
+
+**The decisive omission:** the selector's PIC path
+(`PenumbraInstructionSelector::selectGlobalValue`) checks only
+`RelocationModel == PIC_` and sends **every** global through the GOT —
+there is no `shouldAssumeDSOLocal`/preemptibility check. An `llc` test
+confirms `external`, `internal`, `hidden`, and `dso_local` globals all
+emit `%got_pcrel`. But libc.so's dynamic relocations are **5,028
+`R_PENUMBRA_RELATIVE` vs 237 `GLOB_DAT`** (~20:1) — RELATIVE means the
+GOT slot was bound to a *locally-defined* symbol, i.e. the large
+majority of GOT-bound symbols are non-preemptible and never needed a GOT
+slot at all.
+
+**Levers, by leverage:**
+
+1. **PC-relative-direct addressing for non-preemptible symbols — the big
+   one.** For a `shouldAssumeDSOLocal` symbol (local/hidden/`dso_local`,
+   or defined-and-non-preemptible in this DSO), emit `%pcrel` materialise
+   + a single deref instead of the GOT path:
+   ```
+   lli  tmp, %pcrel_lo16(sym-.LPC)
+   lui  tmp, %pcrel_hi16(sym-.LPC)
+   .LPC: add addr, pc            ; addr = &sym directly — no GOT slot
+   ldw  val, [addr + 0]
+   ```
+   Per access this removes one instruction, **one dependent memory load**
+   (the GOT load is on the critical path — the deref can't issue until it
+   returns; the latency win exceeds the count win on an in-order core),
+   one GOT entry, and one startup `RELATIVE` reloc. At the ~9.5 K
+   non-preemptible sites that is roughly −38 KB of libc `.text`, a much
+   smaller GOT, and faster process startup — which also chips at the
+   fork+exec cost tracked under "fork() is unreasonably slow". **Low
+   risk: the machinery already exists** — `selectBlockAddress` already
+   does PC-relative-direct via `PICMOVPC`/`PICADDi %pcrel`, and the GOT
+   path's `PICLLI/PICLUI/PICADDPC` pseudos just need `%pcrel_lo16`/
+   `%pcrel_hi16` specifiers mirroring the existing `%got_pcrel_lo16/hi16`
+   (the linker math `S+A-P` is *simpler* than the GOT case, no slot).
+2. **PC-anchor sharing — the PIC twin of absolute base-sharing.** Even
+   after lever 1, the `lli;lui;add pc` triple is anchored to each site's
+   own PC, so repeats don't CSE. Sharing one PC-derived anchor per region
+   (`mov anchor,pc` once, then `anchor + (sym-.Lanchor)` offsets)
+   collapses them — the *same* transform as the static base-sharing,
+   differing only in base kind (PC-derived vs absolute). One
+   parameterised pass could serve both axes. Same register-pressure
+   tradeoff.
+3. **A GOT/GP base register** for the genuine-preemptible remainder (the
+   237 `GLOB_DAT`). Given how few remain after lever 1, probably not
+   worth the reserved register — and the 2-operand ISA makes a pinned GP
+   costly in register pressure.
+
+**Priority across the whole addressing investigation, by leverage:**
+(1) PIC PC-relative-direct for non-preemptible symbols (broadest reach,
+lowest risk, helps startup); (2) absolute base-sharing for the
+kernel + executables' own globals (layout-neutral label-difference
+offsets, ~41% of kernel materialisations); (3) `LUIC` and PC-anchor
+sharing as secondary folds that compose with 1–2.
+
 ## Compiler: no branch-cost model — branch-avoidance may be over-eager
 
 Penumbra sets none of the branch/select cost knobs
