@@ -2,8 +2,9 @@
 
 A 32-bit RISC minicomputer designed from scratch and implemented on FPGA.
 Inspired by classic machines like the Data General Eclipse and DEC VAX, but
-with a clean load-store ISA. The eventual goal is to run NetBSD and later
-build the design from discrete 74xx logic chips.
+with a clean load-store ISA. It boots NetBSD 10.1 to a full userland on real
+hardware; the longer-term goal is to rebuild the design from discrete 74xx
+logic chips.
 
 ---
 
@@ -39,13 +40,22 @@ make simulate
 
 ## 🏗️ Architecture Summary
 
-Penumbra is a modern RISC implementation with a "classic" aesthetic.
+Penumbra is a modern RISC implementation with a "classic" aesthetic. The same
+ISA is realized by two interchangeable CPU cores:
+
+- **Penumbra/1** — a single-cycle microcoded core (3-bus datapath, 51-bit
+  horizontal microcode, 256-entry control ROM). Deliberately simple enough to
+  rebuild in 74xx discrete logic.
+- **Penumbra/2** — a 6-stage hardwired pipeline (IF1 / IF2 / ID / EX / MEM /
+  WB) with scoreboard-based hazard tracking, NZCV flag forwarding, and branch
+  resolution in EX. No microcode.
+
+Shared across both cores:
 
 - **Word size:** 32-bit, little-endian.
 - **ISA:** 4 instruction formats (R/L/M/B), 16 GPRs (R0=zero, R14=SP, R13=LR, R15=PC).
-- **Execution:** 3-bus datapath, 51-bit horizontal microcode, 256-entry ROM.
 - **MMU:** Software-managed 64-entry 2-way SA TLB + 4-entry FA pinned TLB.
-- **Caches:** Split I/D L1 VIPT (1 KiB each, direct-mapped, write-through), plus a 64 KiB unified 4-way L2 with write-invalidate-on-hit.
+- **Caches:** VIPT split I/D L1, write-through, backed by a 64 KiB unified 4-way L2 with write-invalidate-on-hit. The L1 geometry is per-core — gen1 is 1 KiB direct-mapped, gen2 is 4 KiB 4-way (BRAM-backed).
 - **Memory:** 32 MB SDRAM on the ULX3S target, reached through an async CDC bridge from the CPU clock to the SDRAM clock.
 - **Bus:** Asynchronous Penumbra Bus with 4-phase handshake and Zorro-style autoconfig.
 
@@ -57,9 +67,10 @@ Detailed specifications are available in the **[Documentation Index](doc/README.
 
 The system runs on real hardware (Radiona ULX3S, Lattice ECP5-85F) as well as in cycle-accurate Verilator simulation and a fast instruction-level simulator.
 
+- **CPU cores:** Two complete, interchangeable implementations of the ISA. Penumbra/1 (microcoded) is the default; Penumbra/2 (6-stage pipelined) passes the full ISA conformance suite (72/72). Both synthesize to the ULX3S, close timing at the 25 MHz CPU target on the ECP5-85F, and boot NetBSD to userland. Select the gen2 core with `CORE=penumbra2` on `make` targets.
 - **Hardware:** Full CPU + MMU + split L1 caches + unified L2 cache + async Penumbra Bus with autoconfig + UART + SPI/SD + SDRAM controller, all running on the ULX3S board.
 - **Toolchain:** Custom LLVM backend (clang/lld/llvm-mc) end-to-end; PIE/GOT/PLT, TLS, soft-float, C++ EH with DWARF unwinding.
-- **OS:** NetBSD 10.1 boots to userland on the ULX3S hardware, mounting an FFS root from SD card (read + write). Dynamic linking, fork/exec, pipes, signals, and TLS all functional; the in-tree `pbench` microbenchmark suite exercises kernel syscalls and libc hot paths dynamically linked against `libc.so` on real hardware.
+- **OS:** NetBSD 10.1 boots to userland on the ULX3S hardware (on either CPU core), mounting an FFS root from SD card (read + write). Dynamic linking, fork/exec, pipes, signals, and TLS all functional; the in-tree `pbench` microbenchmark suite exercises kernel syscalls and libc hot paths dynamically linked against `libc.so` on real hardware.
 - **Firmware:** C boot ROM with FAT32 support, PIE ELF loading, bus autoconfig, and an interactive monitor.
 
 ---

@@ -354,9 +354,18 @@ export PATH="$PWD/hw/tools/oss-cad-suite/bin:$PATH"
 
 ```sh
 make fpga BOARD=ulx3s CORE=penumbra1   # Full flow: sv2v → yosys → nextpnr → ecppack
+make fpga BOARD=ulx3s CORE=penumbra2   # Same flow for the gen2 pipelined core
 make flash BOARD=ulx3s CORE=penumbra1  # Build + flash to ULX3S over USB (fujprog)
 make fpga-lint                         # Verilator lint check on FPGA sources
 ```
+
+Both cores are complete and bootable: `CORE=penumbra1` builds the single-cycle
+microcoded core (the default), `CORE=penumbra2` the 6-stage pipelined core. Each
+synthesizes to the ULX3S, closes timing at the 25 MHz CPU target, and boots
+NetBSD to userland off the SD card. For a fast gen2 timing check during RTL
+iteration, add `VARIANT=probe` to build the bare-core probe top — but read the
+real fmax from the full `ulx3s_penumbra2_top` (the probe omits the cache/MMU/
+arbiter layers and reports an optimistic number).
 
 `BOARD`/`CORE` (plus optional `VARIANT`) expand to a registered top
 module, `<board>_<core>[_<variant>]_top`, whose file lives under

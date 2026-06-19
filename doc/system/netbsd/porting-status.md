@@ -6,9 +6,10 @@ from `netbsd-10` in `netbsd/`. MD code in `sys/arch/penumbra/`.
 ## Current State
 
 **Boots to single-user shell with full dynamically-linked userland
-on the ISS.**  ROM autoconfig --> bootloader --> kernel --> device
-drivers --> FFS root mount --> exec `/sbin/init` --> interactive
-shell with console I/O.
+on real ULX3S hardware --- on either the Penumbra/1 or Penumbra/2 CPU
+core --- and on the ISS.**  ROM autoconfig --> bootloader --> kernel
+--> device drivers --> FFS root mount --> exec `/sbin/init` -->
+interactive shell with console I/O.
 
 `build.sh distribution` completes -- full userland cross-builds.
 Both statically-linked rescue binaries and dynamically-linked
@@ -174,7 +175,8 @@ Kernel functions that will panic if reached (grep `TODO(stub)`):
   `rtld_start.S`, `mdreloc.c`, RELA relocations, eager PLT
   binding, JUMP_SLOT, TLS Variant I (`__HAVE___LWP_GETTCB_FAST`).
   Dynamically-linked binaries (including `/bin/sh`, `/bin/ls`,
-  `ldd`) load and run end-to-end on the ISS with full userland.
+  `ldd`) load and run end-to-end with full userland, on real
+  hardware and on the ISS.
 - **C++ / ATF:** `MKCXX=yes`, `MKLIBCXX=yes`.  libunwind ported
   (in-tree, built into libc).  libc++ and libcxxrt link as shared
   libraries.  libatf-c available for the ATF test suite.
@@ -216,4 +218,3 @@ See `doc/TODO.md` for detailed descriptions.
    wakeups.
 4. **Remaining MD stubs** -- fill in `TODO(stub)` functions as
    the kernel reaches them.
-5. **SDRAM controller** -- 32 MB SDRAM for kernel boot on real HW.
