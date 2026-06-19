@@ -80,9 +80,9 @@ not behavior.
 
 | File | Purpose |
 |------|---------|
-| `Penumbra.td` | Top-level TableGen: includes, ProcessorModel, AsmWriter, Target, pointer remap |
+| `Penumbra.td` | Top-level TableGen: includes, `Penumbra1Model` ProcessorModel (IssueWidth=1, MicroOpBufferSize=0, LoadLatency=1), AsmWriter, Target, pointer remap |
 | `PenumbraRegisterInfo.td` | 16 GPRs (R0=zero, R12=TP, R13=LR, R14=SP, R15=PC), GPR/GPR_Allocatable/CCR classes, HWEncoding |
-| `PenumbraInstrInfo.td` | All 4 formats (R/L/M/B) with bit-accurate encoding. Tied-operand constraints for 2-addr ops. ADC/SBC `Uses=[SR]`. All operand slots use full `GPR` (allocator honors R0's reserved+`isConstant`). Pseudos: RET, LEAfi, SELECT_GPR, SELECT_CC_GPR, ADJCALLSTACK. `Penumbra1Model`: IssueWidth=1, MicroOpBufferSize=0, LoadLatency=1 |
+| `PenumbraInstrInfo.td` | All 4 formats (R/L/M/B) with bit-accurate encoding. Tied-operand constraints for 2-addr ops. ADC/SBC `Uses=[SR]`. All operand slots use full `GPR` (allocator honors R0's reserved+`isConstant`). Pseudos: RET, LEAfi, SELECT_GPR, SELECT_CC_GPR, ADJCALLSTACK. |
 | `PenumbraGISel.td` | TableGen `Pat<>` rules (simple 1:1 selections). Includes `PenumbraCombine.td`. ImmLeaf predicates: uimm16, simm16, simm16neg, uimm5 |
 | `PenumbraCombine.td` | GlobalISel combiner rule groups (pre-/post-/-O0 lists) and custom rule decls. Custom matchers live in `PenumbraPostLegalizerCombiner.cpp` |
 | `PenumbraCallingConv.td` | CC_Penumbra (R1–R4 args, stack overflow), RetCC_Penumbra (R1, R2 for i64), CSR_Penumbra (R5–R10, R13) |
@@ -125,9 +125,8 @@ not behavior.
   `llvm/BinaryFormat/ELF.h`.
 - `utils/UpdateTestChecks/asm.py` (reuses AVR scrubber).
 
-`TargetDataLayout.cpp:computeDataLayout()` has a `-Wswitch` warning
-for unhandled `penumbra` — harmless (we provide our own data layout
-via `PenumbraTargetMachine`).
+The `penumbra` triple's data layout is set in
+`TargetDataLayout.cpp:computeDataLayout()` (`case Triple::penumbra`).
 
 ## Combiner pipeline (where the codegen tricks live)
 

@@ -27,7 +27,7 @@ pages — same shape as MIPS o32 in little-endian mode, so
 
 ```
 sys/arch/penumbra/
-├── include/           # <machine/*.h> headers (~39 files)
+├── include/           # <machine/*.h> headers (~51 files)
 ├── conf/              # Kernel config: std, MINIMAL, Makefile, files, majors, ldscript
 ├── penumbra/          # MD kernel code: locore, machdep, pmap, trap, autoconf, ...
 └── stand/
@@ -165,6 +165,9 @@ Three categories of headers:
 | `copy.S` | Assembly copyin/copyout/copyinstr/copyoutstr with `pcb_onfault` fault recovery, ufetch/ustore (8/16/32), user-address validation |
 | `db_machdep.c` | DDB MD glue — `Debugger`/`cpu_Debugger`, `db_read_bytes`/`db_write_bytes`, `db_regs[]`, `db_active` |
 | `db_trace.c` | Prologue-scanning stack unwinder — recognizes `SUB r14,#imm` and `STW rN,[r14,#off]` for callee-saved. Termination markers stop the walk at asm boundaries (`cpu_switchto`, `lwp_trampoline`, `_trap_common`, pinned vector page) |
+| `db_disasm.c` | Stub DDB disassembler — `x/i` prints raw 32-bit words, no instruction decode (minimal-useful DDB scope) |
+| `cache_perfctrs.c` | Cache perfctr sysctl interface — L1d/L1i/L2 hit/miss counters under `machdep.cache.*`, read live via `RDSYS` |
+| `cpu_perfctrs.c` | CPU perfctr sysctl interface — cycles, retired insns, and exec/fetch/load stall counters under `machdep.cpu.*` |
 | `genassym.cf` | Struct offset definitions for assembly code |
 
 ## Notable implementation choices

@@ -2,8 +2,9 @@
 
 Penumbra is a 32-bit RISC-like minicomputer designed from scratch and
 implemented on a Radiona ULX3S (Lattice ECP5) FPGA — CPU, MMU, DMA, I/O,
-and system bus. Long-term goal: port NetBSD, then re-implement the
-design in discrete 74xx logic.
+and system bus. It boots NetBSD to userland on the FPGA today; the
+remaining long-term goal is to re-implement the design in discrete 74xx
+logic.
 
 ## Where to find things
 
@@ -158,7 +159,8 @@ nextpnr-ecp5, ecppack, fujprog usable as normal commands:
   `BOARD=ulx3s CORE=penumbra2 VARIANT=probe` builds the bare-core
   probe top — run after gen2 RTL changes to catch fmax movement early.
 
-Board top-level: `hw/rtl/fpga/ulx3s/ulx3s_penumbra1_top.sv`. Serial 115200 8N1 on
+Board top-levels under `hw/rtl/fpga/ulx3s/`: `ulx3s_penumbra2_top.sv`
+(the default core) and `ulx3s_penumbra1_top.sv`. Serial 115200 8N1 on
 `/dev/ttyUSB0`. SD slot autoconfigured as `CLASS_SD`; `boot sd:0,0`
 loads `PENBOOT.ELF` from FAT32. Toolchain mechanics (wrapper
 multi-call, sv2v + `$readmemh` workaround, USB passthrough) in
