@@ -52,8 +52,8 @@ Penumbra has two simulators: a fast native C++ **ISS** (`sw/sim/penumbra_iss.cpp
 
 ```sh
 make test-iss        # hw/sim/programs/isa/ conformance suite on ISS — fast, no Docker
-make test            # isa/ + per-core suite on RTL via Docker (CORE=penumbra1 default)
-make test CORE=penumbra2          # same, against the gen2 core
+make test            # isa/ + per-core suite on RTL via Docker (CORE=penumbra2 default)
+make test CORE=penumbra1          # same, against the gen1 microcoded core
 make test-prog CORE=penumbra2 PROG=test_smoke   # one program
 make test-modules    # Run all module-level Verilator testbenches (alu, regfile, …)
 make test-all        # test + test-modules
@@ -359,10 +359,10 @@ make flash BOARD=ulx3s CORE=penumbra1  # Build + flash to ULX3S over USB (fujpro
 make fpga-lint                         # Verilator lint check on FPGA sources
 ```
 
-Both cores are complete and bootable: `CORE=penumbra1` builds the single-cycle
-microcoded core (the default), `CORE=penumbra2` the 6-stage pipelined core. Each
-synthesizes to the ULX3S, closes timing at the 25 MHz CPU target, and boots
-NetBSD to userland off the SD card. For a fast gen2 timing check during RTL
+Both cores are complete and bootable: `CORE=penumbra2` builds the 6-stage
+pipelined core (the default), `CORE=penumbra1` the single-cycle microcoded
+core. Each synthesizes to the ULX3S, closes timing at the 25 MHz CPU target,
+and boots NetBSD to userland off the SD card. For a fast gen2 timing check during RTL
 iteration, add `VARIANT=probe` to build the bare-core probe top — but read the
 real fmax from the full `ulx3s_penumbra2_top` (the probe omits the cache/MMU/
 arbiter layers and reports an optimistic number).

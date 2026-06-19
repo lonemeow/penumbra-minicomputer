@@ -104,7 +104,7 @@ endif
 # <core>/ holds microarch-pinned regressions. Programs carry lit-style
 # "; RUNNER:" / "; REQUIRES:" header tags; hw/tools/run-prog-tests.py
 # scans them, skips unrunnable programs visibly, and reports.
-CORE ?= penumbra1
+CORE ?= penumbra2
 
 PROG_DIR    = hw/sim/programs
 ISA_PROGS  := $(sort $(wildcard $(PROG_DIR)/isa/test_*.s))
@@ -440,7 +440,7 @@ endif
 # sim_console.cpp frontend behind a per-core shim. gen1 uses machine_sim +
 # tb_penumbra1_interactive and needs microcode.hex; gen2 uses
 # machine_penumbra2_sim + tb_penumbra2_interactive and has no microcode (CORE
-# defaults to penumbra1, set above). Both wrappers load the boot ROM from
+# defaults to penumbra2, set above). Both wrappers load the boot ROM from
 # program.hex (their INIT_FILE default), built by hw/rom.
 ifeq ($(CORE),penumbra2)
 SIMRTL_TOP    := machine_penumbra2_sim
@@ -739,7 +739,7 @@ FPGA_SRC_ulx3s_penumbra2_top = $(SRC_COMMON) $(SRC_CORE_penumbra2) \
 FPGA_ROM_TOPS   = ulx3s_penumbra1_top ulx3s_penumbra2_top
 FPGA_UCODE_TOPS = ulx3s_penumbra1_top
 
-# BOARD/CORE porcelain → TOP derivation (CORE defaults to penumbra1
+# BOARD/CORE porcelain → TOP derivation (CORE defaults to penumbra2
 # in the test-suite section above).
 ifneq ($(strip $(BOARD)),)
 TOP := $(BOARD)_$(CORE)$(if $(VARIANT),_$(VARIANT))_top

@@ -139,7 +139,7 @@ in the header comment as lit-style tags the test driver scans:
 
 | Target | Meaning |
 |--------|---------|
-| `make test [CORE=<generation>]` | `isa/` + `<generation>/` programs on that generation's RTL runner (default `CORE=penumbra1`) |
+| `make test [CORE=<generation>]` | `isa/` + `<generation>/` programs on that generation's RTL runner (default `CORE=penumbra2`) |
 | `make test-iss` | `isa/` on the ISS — the generation-independent ISA reference |
 | `make test-prog CORE=<generation> PROG=<name>` | one program, porcelain for iteration |
 | `make test-modules` | per-module Verilator testbenches (all generations registered in `MODULE_TESTS`) |
