@@ -17,6 +17,10 @@
 // emulator; the program runners (tb_penumbra2_prog, tb_penumbra2_intr) leave
 // those idle and key only on the program-end pulse and commit port.
 
+`ifndef PENUMBRA_CPU_VARIANT
+`define PENUMBRA_CPU_VARIANT 0    // 0 = gen2 baseline, 1 = gen2.5
+`endif
+
 module machine_penumbra2_sim
     import penumbra_pkg::*;
     import penumbra2_pkg::*;
@@ -108,6 +112,7 @@ module machine_penumbra2_sim
 
     machine_penumbra2 #(
         .RESET_PC(RESET_PC),
+        .CPU_VARIANT(`PENUMBRA_CPU_VARIANT),
         // Sim machine identity: name "Simulator", 25 MHz — matches the
         // runners' clock and what isa/test_machid checks.
         .MACH_NAME0(32'h756D6953),   // "Simu"

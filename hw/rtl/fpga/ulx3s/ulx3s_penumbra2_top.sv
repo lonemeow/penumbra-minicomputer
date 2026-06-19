@@ -29,6 +29,13 @@
 `define SDRAM_PHASE_DEG 180
 `endif
 
+// CPU microarchitecture variant: 0 = gen2 baseline, 1 = gen2.5
+// (forwarding/prediction). Set by the build (sv2v -D) per CORE; the
+// gen2.5 artifact synthesizes this same module with the bit flipped.
+`ifndef PENUMBRA_CPU_VARIANT
+`define PENUMBRA_CPU_VARIANT 0
+`endif
+
 module ulx3s_penumbra2_top (
     input  logic       clk_25mhz,
     output logic [7:0] led,
@@ -244,6 +251,7 @@ module ulx3s_penumbra2_top (
     // The machine: core + MMU + L1s + arbiter + fill + L2 + sysregs
     // ══════════════════════════════════════════════════════════
     machine_penumbra2 #(
+        .CPU_VARIANT(`PENUMBRA_CPU_VARIANT),
         .MACH_NAME0 (32'h33584C55),   // "ULX3"
         .MACH_NAME1 (32'h00000053),   // "S\0\0\0"
         .CPU_FREQ   (CLK_FREQ)

@@ -60,7 +60,12 @@ module machine_penumbra2
     parameter logic [31:0] MACH_NAME1      = 32'h00000000,
     parameter logic [31:0] MACH_NAME2      = 32'h00000000,
     parameter logic [31:0] MACH_NAME3      = 32'h00000000,
-    parameter logic [31:0] CPU_FREQ        = 32'd0
+    parameter logic [31:0] CPU_FREQ        = 32'd0,
+
+    // 0 = gen2 baseline, 1 = gen2.5 (forwarding/prediction). Selects the
+    // cpuid implementation name only; the ISA is identical across the
+    // family. Routed to penumbra2_core when a variant gates features.
+    parameter int          CPU_VARIANT     = 0
 )(
     input  logic                  i_clk,
     input  logic                  i_rst,
@@ -393,10 +398,16 @@ module machine_penumbra2
     // picks whose response is returned.
     assign sys_reg_sel = sys_we ? sys_wr_reg : sys_reg;
 
-    // CPU identity (read-only, combinational).
+    // CPU identity (read-only, combinational). The name's third word tags
+    // the implementation — "/2" for the gen2 baseline, "/2.5" for the
+    // forwarding/prediction variant. The ISA (reg 0) is identical across
+    // the family, so only the name distinguishes the two.
     logic [31:0] cpuid_rdata;
+    localparam logic [31:0] CPUID_NAME2 = (CPU_VARIANT == 0)
+                                        ? 32'h0000322F    // "/2\0\0"
+                                        : 32'h352E322F;   // "/2.5"
     cpuid #(
-        .CPU_NAME2(32'h0000322F)   // "/2\0\0" — same ISA, second implementation
+        .CPU_NAME2(CPUID_NAME2)
     ) u_cpuid (
         .i_sys_reg(sys_reg), .o_sys_rdata(cpuid_rdata)
     );

@@ -329,8 +329,13 @@ consecutive 32-bit registers. The first character occupies bits
 the regs sequentially and extracts bytes; reading stops at the first
 null. Default value: `"Penumbra/1"`.
 
-The `cpuid` RTL module accepts parameters to override the name for
-forks of the core.
+The `cpuid` RTL module takes the name as parameters, so it identifies
+the *implementation*, not just the ISA. Distinct implementations of one
+ISA report distinct names — e.g. `"Penumbra/2"` for the gen2 pipeline
+and `"Penumbra/2.5"` for its forwarding/prediction variant. `CPU_ISA`
+(reg 0) stays identical across such a family, so software identifies the
+core by reading the name, and ISA-conformance code never special-cases
+a variant.
 
 ---
 

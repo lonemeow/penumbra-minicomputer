@@ -158,8 +158,7 @@ and the pass/fail report.
 ## FPGA top naming and source composition
 
 `BOARD` and `CORE` (plus optional `VARIANT`) expand mechanically to a
-top module — one file per combination, no preprocessor-selected
-instantiation:
+top:
 
 ```
 TOP = <board>_<core>[_<variant>]_top      e.g. ulx3s_penumbra2_top
@@ -167,13 +166,29 @@ file: hw/rtl/fpga/<board>/<top>.sv
 ```
 
 Each top file is thin: it instantiates the board shell (pins, PLL,
-PHYs — shared per board) and one machine plus its devices. Variants
-cover non-default integration levels — e.g. a `probe` variant wraps
-the bare core for timing characterization without the fabric.
-Explicit per-combination files keep every buildable configuration
-greppable as a real module, and keep the RTL free of build-flag
-conditionals — consistent with the discrete-logic principle that
-"which machine this is" should be a schematic fact, not a flag.
+PHYs — shared per board) and one machine plus its devices. Two kinds
+of variant exist, and they compose differently:
+
+- **Integration variants** change the board wiring — e.g. a `probe`
+  variant wraps the bare core for timing work without the fabric.
+  These are genuinely different schematics, so each is its own
+  greppable top file with its own module, keeping "which machine this
+  is" a schematic fact rather than a flag (the discrete-logic
+  principle).
+
+- **Microarchitecture sub-variants** name a `penumbra<n>_<sub>` core
+  (e.g. `penumbra2_5`): the *same* board wiring and machine, built with
+  one core parameter set. A separate top file would mean duplicating
+  the board's whole pin map to flip one parameter, so the sub-variant
+  reuses its base top as a parameterized module instead. `TOP` then
+  names the **artifact** — every `make fpga` / `make timing` output
+  (`.bit`, `.json`, `_timing.json`, …) is `TOP`-keyed, so sub-variants
+  never share a bitstream or report — while `TOP_MODULE`
+  (`<board>_<core-base>[_<variant>]_top`) names the module yosys
+  synthesizes. The parameter enters via a build-time define (sv2v
+  `-D PENUMBRA_CPU_VARIANT=…`, the same mechanism as `SDRAM_PHASE_DEG`);
+  fixed at build time, it still collapses to one definite schematic in
+  a discrete rebuild.
 
 The source set composes from per-axis variables; computed variable
 names keep it table-driven:
@@ -182,8 +197,9 @@ names keep it table-driven:
 FPGA_SRC = $(SRC_COMMON) $(SRC_CORE_$(CORE)) $(SRC_FABRIC) $(SRC_BOARD_$(BOARD))
 ```
 
-A variant may override the composition (the probe variant drops
-`$(SRC_FABRIC)` and adds the memory stand-in). The Makefile carries
-one registry table mapping each valid (board, core, variant) tuple to
-its top and any source-set override; an invalid tuple is a hard
-error, not a silently empty source list.
+An integration variant may override the composition (the probe variant
+drops `$(SRC_FABRIC)` and adds the memory stand-in); a microarch
+sub-variant has no source set of its own and falls back to its base
+module's. The Makefile carries one registry table (`FPGA_TOPS`) of
+every valid artifact — sub-variant artifacts included — so an invalid
+tuple is a hard error, not a silently empty source list.

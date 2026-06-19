@@ -114,6 +114,12 @@ CORE ?= penumbra2
 CORE_BASE := $(word 1,$(subst _, ,$(CORE)))
 CORE_SUB  := $(word 2,$(subst _, ,$(CORE)))
 
+# The one genuinely per-variant fact: which value the variant parameter
+# takes. Stated once per variant; bare cores get the baseline (0). Fed to
+# both the sim (-D) and fpga (sv2v -D) builds as PENUMBRA_CPU_VARIANT.
+CPU_VARIANT_penumbra2_5 := 1
+CPU_VARIANT := $(or $(CPU_VARIANT_$(CORE)),0)
+
 PROG_DIR    = hw/sim/programs
 ISA_PROGS  := $(sort $(wildcard $(PROG_DIR)/isa/test_*.s))
 # A variant inherits its base's programs and adds any of its own; the
@@ -170,12 +176,14 @@ test:
 	@test -n "$(strip $(RUNNER_MOD))" || \
 		{ echo "ERROR: unknown CORE '$(CORE)' — known bases: penumbra1 penumbra2 (+ variants, e.g. penumbra2_5)"; exit 1; }
 	@mkdir -p $(BUILD_DIR) $(WAVE_DIR) $(BUILD_DIR)/hex
-	@# Build each runner testbench once (binaries keyed by testbench name)
+	@# Build each runner testbench once (binaries keyed by core + testbench:
+	@# a variant sets a different PENUMBRA_CPU_VARIANT, so it needs its own)
 	@for tb in $(RUNNER_TBS); do \
 		$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) \
+			-DPENUMBRA_CPU_VARIANT=$(CPU_VARIANT) \
 			--top-module $(RUNNER_MOD) \
-			--Mdir $(BUILD_DIR)/$$tb.verilator \
-			-o ../V$$tb \
+			--Mdir $(BUILD_DIR)/$(CORE)_$$tb.verilator \
+			-o ../V$(CORE)_$$tb \
 			$(PKG_SV) $$(find hw/rtl -name '$(RUNNER_MOD).sv') hw/sim/$$tb.cpp \
 			|| exit 1; \
 	done
@@ -184,7 +192,7 @@ test:
 	@python3 hw/tools/run-prog-tests.py --mode rtl \
 		--asm "$(PASM) --org 0xFFFF0000" --hexdir $(BUILD_DIR)/hex \
 		--provides "$(RUNNER_PROVIDES)" --default-runner $(RUNNER_DEFAULT) \
-		$(foreach tb,$(RUNNER_TBS),--bin "$(tb)=$(DOCKER_RUN) --entrypoint ./$(BUILD_DIR)/V$(tb) $(DOCKER_IMAGE)") \
+		$(foreach tb,$(RUNNER_TBS),--bin "$(tb)=$(DOCKER_RUN) --entrypoint ./$(BUILD_DIR)/V$(CORE)_$(tb) $(DOCKER_IMAGE)") \
 		$(TEST_PROGS)
 
 # ── One program test (porcelain over the same runner flow) ─────
@@ -459,16 +467,17 @@ endif
 # program.hex (their INIT_FILE default), built by hw/rom.
 ifeq ($(CORE_BASE),penumbra2)
 SIMRTL_TOP    := machine_penumbra2_sim
-SIMRTL_OUT    := Vmachine_penumbra2_sim_interactive
+SIMRTL_OUT    := V$(CORE)_machine_penumbra2_sim_interactive
 SIMRTL_TOPSV  := hw/rtl/sim/machine_penumbra2_sim.sv
 SIMRTL_TB     := hw/sim/tb_penumbra2_interactive.cpp
 # gen2's machine_penumbra2_sim backs RAM with the full sdram_sim stack (32 MB),
-# so a real boot image fits with no parameter override — as with gen1's
-# simple_mem.
-SIMRTL_GFLAGS :=
+# so a real boot image fits with no RAM parameter override. The CPU variant
+# flows in via the same -D as the test/fpga builds, so penumbra2_5 reports
+# "Penumbra/2.5" in the ROM banner here too.
+SIMRTL_GFLAGS := -DPENUMBRA_CPU_VARIANT=$(CPU_VARIANT)
 else
 SIMRTL_TOP    := machine_sim
-SIMRTL_OUT    := Vmachine_sim_interactive
+SIMRTL_OUT    := V$(CORE)_machine_sim_interactive
 SIMRTL_TOPSV  := hw/rtl/sim/machine_sim.sv
 SIMRTL_TB     := hw/sim/tb_penumbra1_interactive.cpp
 SIMRTL_GFLAGS :=
@@ -479,7 +488,7 @@ simulate-rtl:
 	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
 	$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) $(SIMRTL_GFLAGS) \
 		--top-module $(SIMRTL_TOP) \
-		--Mdir $(BUILD_DIR)/$(SIMRTL_TOP)_interactive.verilator \
+		--Mdir $(BUILD_DIR)/$(CORE)_$(SIMRTL_TOP)_interactive.verilator \
 		-o ../$(SIMRTL_OUT) \
 		$(PKG_SV) $(SIMRTL_TOPSV) $(SIMRTL_TB) hw/sim/sim_console.cpp
 	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX) CFLAGS=$(CFLAGS)
@@ -657,7 +666,7 @@ benchmark-rtl: sdimage-bench
 	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
 	$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) $(SIMRTL_GFLAGS) \
 		--top-module $(SIMRTL_TOP) \
-		--Mdir $(BUILD_DIR)/$(SIMRTL_TOP)_interactive.verilator \
+		--Mdir $(BUILD_DIR)/$(CORE)_$(SIMRTL_TOP)_interactive.verilator \
 		-o ../$(SIMRTL_OUT) \
 		$(PKG_SV) $(SIMRTL_TOPSV) $(SIMRTL_TB) hw/sim/sim_console.cpp
 	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX) CFLAGS=$(CFLAGS)
@@ -723,7 +732,8 @@ LPF_ulx3s       = hw/constraints/ulx3s_v20.lpf
 # means adding its top file under hw/rtl/fpga/<board>/ and its
 # entries here — an unknown combination is a hard error, not a
 # silently empty source list.
-FPGA_TOPS = ulx3s_penumbra1_top ulx3s_penumbra2_probe_top ulx3s_penumbra2_top
+FPGA_TOPS = ulx3s_penumbra1_top ulx3s_penumbra2_probe_top ulx3s_penumbra2_top \
+            ulx3s_penumbra2_5_top
 
 FPGA_SRC_ulx3s_penumbra1_top = $(SRC_COMMON) $(SRC_CORE_penumbra1) \
                                $(SRC_FABRIC) $(SRC_BOARD_ulx3s) \
@@ -751,14 +761,21 @@ FPGA_SRC_ulx3s_penumbra2_top = $(SRC_COMMON) $(SRC_CORE_penumbra2) \
 # Tops that embed the boot ROM and/or microcode: their hex images are
 # generated before synthesis and inlined by inline_hex.py.
 # gen2 embeds the boot ROM (no microcode — the gen2 core is hardwired).
-FPGA_ROM_TOPS   = ulx3s_penumbra1_top ulx3s_penumbra2_top
+FPGA_ROM_TOPS   = ulx3s_penumbra1_top ulx3s_penumbra2_top ulx3s_penumbra2_5_top
 FPGA_UCODE_TOPS = ulx3s_penumbra1_top
 
 # BOARD/CORE porcelain → TOP derivation (CORE defaults to penumbra2
 # in the test-suite section above).
 ifneq ($(strip $(BOARD)),)
 TOP := $(BOARD)_$(CORE)$(if $(VARIANT),_$(VARIANT))_top
+# A microarch variant (e.g. penumbra2_5) is the SAME RTL top as its base,
+# built with the variant parameter set. TOP names the artifact (.bit /
+# .json); TOP_MODULE names the module yosys actually synthesizes.
+TOP_MODULE := $(BOARD)_$(CORE_BASE)$(if $(VARIANT),_$(VARIANT))_top
 endif
+
+# Escape hatch (TOP=<module> directly): the artifact is its own module.
+TOP_MODULE := $(if $(strip $(TOP_MODULE)),$(TOP_MODULE),$(TOP))
 
 ifneq ($(filter fpga flash timing,$(MAKECMDGOALS)),)
 ifeq ($(strip $(TOP)),)
@@ -775,7 +792,9 @@ endif
 # entry) use only fpga/*.sv; unknown boards fall back to the ULX3S
 # constraints file.
 FPGA_SRC_SIMPLE = $(wildcard $(FPGA_RTL)/*.sv)
-FPGA_SRC = $(if $(FPGA_SRC_$(TOP)),$(FPGA_SRC_$(TOP)),$(FPGA_SRC_SIMPLE))
+# A variant artifact has no source set of its own — it falls back to its
+# base module's (TOP_MODULE), so the gen2.5 top reuses gen2's file list.
+FPGA_SRC = $(if $(FPGA_SRC_$(TOP)),$(FPGA_SRC_$(TOP)),$(if $(FPGA_SRC_$(TOP_MODULE)),$(FPGA_SRC_$(TOP_MODULE)),$(FPGA_SRC_SIMPLE)))
 LPF      = $(if $(LPF_$(BOARD)),$(LPF_$(BOARD)),hw/constraints/ulx3s_v20.lpf)
 
 # Optional per-top design-constraint overlay (floorplan / timing tuning),
@@ -786,7 +805,7 @@ LPF      = $(if $(LPF_$(BOARD)),$(LPF_$(BOARD)),hw/constraints/ulx3s_v20.lpf)
 # floorplan travels with its registry entry, like its source set; tops with
 # no entry get a byte-identical nextpnr command line.
 LPF_DESIGN_ulx3s_penumbra2_top = hw/constraints/ulx3s_penumbra2_design.lpf
-LPF_DESIGN = $(LPF_DESIGN_$(TOP))
+LPF_DESIGN = $(if $(LPF_DESIGN_$(TOP)),$(LPF_DESIGN_$(TOP)),$(LPF_DESIGN_$(TOP_MODULE)))
 
 # Optional per-top pre-pack floorplan (nextpnr Python API). Region/placement
 # constraints cannot be expressed in nextpnr's LPF — it only supports
@@ -795,7 +814,7 @@ LPF_DESIGN = $(LPF_DESIGN_$(TOP))
 # separate file and mechanism from the vendor LPF, so it cannot misstate a
 # board fact. Keyed per-top, like the source set and the LPF overlay.
 PREPACK_ulx3s_penumbra2_top = hw/constraints/ulx3s_penumbra2_floorplan.py
-PREPACK = $(PREPACK_$(TOP))
+PREPACK = $(if $(PREPACK_$(TOP)),$(PREPACK_$(TOP)),$(PREPACK_$(TOP_MODULE)))
 
 # ECP5 primitive stubs — for Verilator lint only, not synthesis.
 FPGA_LINT_STUBS = $(FPGA_RTL)/ecp5_prim.sv
@@ -855,9 +874,9 @@ $(BUILD_DIR)/$(TOP).json: $(FPGA_SRC) $(PHASE_STAMP) \
 	@mkdir -p $(BUILD_DIR)
 	$(if $(filter $(TOP),$(FPGA_UCODE_TOPS)),$(UASM) hw/microcode/microcode.uasm -o microcode.hex)
 	$(if $(filter $(TOP),$(FPGA_ROM_TOPS)),$(MAKE) -C hw/rom)
-	$(FPGA_TOOLS)/sv2v -D SDRAM_PHASE_DEG=$(PHASE_DEG) $(FPGA_SRC) -w $(BUILD_DIR)/$(TOP)_sv2v.v
+	$(FPGA_TOOLS)/sv2v -D SDRAM_PHASE_DEG=$(PHASE_DEG) -D PENUMBRA_CPU_VARIANT=$(CPU_VARIANT) $(FPGA_SRC) -w $(BUILD_DIR)/$(TOP)_sv2v.v
 	$(if $(filter $(TOP),$(FPGA_ROM_TOPS) $(FPGA_UCODE_TOPS)),python3 hw/tools/inline_hex.py $(BUILD_DIR)/$(TOP)_sv2v.v $(BUILD_DIR)/$(TOP)_sv2v.v)
-	$(FPGA_TOOLS)/yosys -p "read_verilog $(BUILD_DIR)/$(TOP)_sv2v.v; synth_ecp5 -top $(TOP) -json $@"
+	$(FPGA_TOOLS)/yosys -p "read_verilog $(BUILD_DIR)/$(TOP)_sv2v.v; synth_ecp5 -top $(TOP_MODULE) -json $@"
 
 $(BUILD_DIR)/$(TOP).config: $(BUILD_DIR)/$(TOP).json $(LPF) $(LPF_DESIGN) $(PREPACK)
 	$(FPGA_TOOLS)/nextpnr-ecp5 --85k --package CABGA381 --speed 6 \
