@@ -403,6 +403,7 @@ test-compiler-pic: $(ISS)
 # Usage: make simulate                    (interactive, default)
 #        make simulate SDCARD=build/boot.img
 #        make simulate TRACE=build/trace.log
+#        make simulate TRACE=build/t.log TRACE_WINDOW=1000000 HALT_ON=DBLFLT
 #        make simulate RAW=1                  (full raw TTY for job control)
 #        make simulate LLVM_PREFIX=/other/llvm/build
 ISS = sw/sim/penumbra-iss
@@ -410,7 +411,7 @@ ISS = sw/sim/penumbra-iss
 .PHONY: simulate
 simulate: $(ISS)
 	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX) CFLAGS=$(CFLAGS)
-	@$(ISS) program.hex $(if $(SDCARD),+sdcard=$(SDCARD)) $(if $(TRACE),+trace=$(TRACE)) $(if $(RAW),+raw)
+	@$(ISS) program.hex $(if $(SDCARD),+sdcard=$(SDCARD)) $(if $(TRACE),+trace=$(TRACE)) $(if $(TRACE_WINDOW),+trace_window=$(TRACE_WINDOW)) $(if $(HALT_ON),'+halt_on=$(HALT_ON)') $(if $(RAW),+raw)
 
 $(ISS): sw/sim/penumbra_iss.cpp
 	@$(MAKE) -C sw/sim

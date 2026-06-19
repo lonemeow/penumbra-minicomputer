@@ -760,6 +760,38 @@ static uint64_t max_insns = 0;    // +max-insn=N: halt after N instructions
 static bool trap_user_pc_zero = false;  // +trap-pc0: abort on user-mode PC=0
 static FILE* trace_fp = nullptr;
 
+// +halt_on=STR — stop the sim the moment STR appears in the UART output
+// stream.  Mirrors the RTL console's +halt_on so the same marker (e.g. a
+// panic banner) halts both simulators identically.
+static const char* halt_on_str = nullptr;
+static size_t      halt_on_len = 0;
+static char        halt_on_buf[256];   // rolling tail of emitted UART bytes
+static size_t      halt_on_pos = 0;
+static bool        halt_on_hit = false;
+
+static void halt_on_feed(char c) {
+    if (!halt_on_str || halt_on_hit) return;
+    if (halt_on_pos < halt_on_len) {
+        halt_on_buf[halt_on_pos++] = c;
+    } else {
+        memmove(halt_on_buf, halt_on_buf + 1, halt_on_len - 1);
+        halt_on_buf[halt_on_len - 1] = c;
+    }
+    if (halt_on_pos == halt_on_len &&
+        memcmp(halt_on_buf, halt_on_str, halt_on_len) == 0)
+        halt_on_hit = true;
+}
+
+// +trace_window=N — keep only the last N traced instructions in a ring buffer
+// and flush them on exit, instead of streaming every line to disk.  Makes it
+// feasible to trace a multi-billion-instruction run down to just the window
+// before a halt (e.g. +halt_on=DBLFLT), without filling the disk.
+struct TraceRec { uint32_t pc, sr, r[15]; };  // r[1..14] used
+static size_t trace_window = 0;
+static std::vector<TraceRec> trace_ring;
+static size_t trace_ring_head = 0;
+static size_t trace_ring_fill = 0;
+
 static void sigint_handler(int) { running = 0; }
 static void restore_term() {
     if (term_raw) { tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios); term_raw = false; }
@@ -955,7 +987,7 @@ static void uart_write(uint32_t addr, uint32_t data) {
     switch (reg) {
         case 0:
             if (uart.dlab()) { uart.dll = val; }
-            else { putchar(val); fflush(stdout); uart.thre_int = false; uart.tx_busy_count = 2; }
+            else { putchar(val); fflush(stdout); uart.thre_int = false; uart.tx_busy_count = 2; halt_on_feed((char)val); }
             break;
         case 1: if (uart.dlab()) uart.dlm = val; else uart.ier = val; break;
         case 2: break; // FCR: ignored
@@ -1982,18 +2014,42 @@ static void execute_one() {
 // Trace Output
 // ═══════════════════════════════════════════════════════════════
 
-static void trace_insn() {
-    if (!trace_fp) return;
-    uint32_t sr = cpu.sr;
-    fprintf(trace_fp, "PC=%08x SR=%08x [%c%c%c%c]",
-            cpu.pc, sr,
+static void trace_emit(FILE* fp, uint32_t pc, uint32_t sr, const uint32_t* r) {
+    fprintf(fp, "PC=%08x SR=%08x [%c%c%c%c]",
+            pc, sr,
             (sr & SR_N) ? 'N' : '-',
             (sr & SR_Z) ? 'Z' : '-',
             (sr & SR_C) ? 'C' : '-',
             (sr & SR_V) ? 'V' : '-');
-    for (int r = 1; r <= 14; r++)
-        fprintf(trace_fp, " R%d=%08x", r, cpu.r[r]);
-    fprintf(trace_fp, "\n");
+    for (int i = 1; i <= 14; i++)
+        fprintf(fp, " R%d=%08x", i, r[i]);
+    fprintf(fp, "\n");
+}
+
+static void trace_insn() {
+    if (!trace_fp) return;
+    if (trace_window > 0) {
+        // Windowed: stash a compact record (no per-instruction formatting,
+        // which would be far too slow over billions of instructions).
+        TraceRec& t = trace_ring[trace_ring_head];
+        t.pc = cpu.pc;
+        t.sr = cpu.sr;
+        for (int r = 1; r <= 14; r++) t.r[r] = cpu.r[r];
+        trace_ring_head = (trace_ring_head + 1) % trace_window;
+        if (trace_ring_fill < trace_window) trace_ring_fill++;
+        return;
+    }
+    trace_emit(trace_fp, cpu.pc, cpu.sr, cpu.r);
+}
+
+// Flush the windowed ring (oldest-first) to the trace file on exit.
+static void trace_flush_window() {
+    if (!trace_fp || trace_window == 0) return;
+    size_t start = (trace_ring_fill < trace_window) ? 0 : trace_ring_head;
+    for (size_t i = 0; i < trace_ring_fill; i++) {
+        const TraceRec& t = trace_ring[(start + i) % trace_window];
+        trace_emit(trace_fp, t.pc, t.sr, t.r);
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2252,11 +2308,18 @@ int main(int argc, char** argv) {
         else if (strcmp(argv[i], "+halt-on-break") == 0) halt_on_break = true;
         else if (strcmp(argv[i], "+branchstats") == 0) branchstats_enabled = true;
         else if (strcmp(argv[i], "+opstats") == 0) opstats_enabled = true;
+        else if (strncmp(argv[i], "+halt_on=", 9) == 0) {
+            halt_on_str = argv[i] + 9;
+            halt_on_len = strlen(halt_on_str);
+            if (halt_on_len > sizeof(halt_on_buf)) halt_on_len = sizeof(halt_on_buf);
+        }
+        else if (strncmp(argv[i], "+trace_window=", 14) == 0)
+            trace_window = (size_t)strtoull(argv[i] + 14, nullptr, 0);
         else hex_path = argv[i];
     }
 
     if (!hex_path) {
-        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+trace=path] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats]\n");
+        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats]\n");
         return 1;
     }
 
@@ -2280,6 +2343,16 @@ int main(int argc, char** argv) {
         trace_fp = fopen(trace_path, "w");
         if (trace_fp) fprintf(stderr, "[TRACE] writing to '%s'\n", trace_path);
         else fprintf(stderr, "[TRACE] cannot open '%s'\n", trace_path);
+    }
+
+    if (trace_window > 0) {
+        if (trace_fp) {
+            trace_ring.resize(trace_window);
+            fprintf(stderr, "[TRACE] windowed: keeping last %zu instructions\n", trace_window);
+        } else {
+            fprintf(stderr, "[TRACE] +trace_window ignored (needs +trace=path)\n");
+            trace_window = 0;
+        }
     }
 
     if (!full_raw)
@@ -2308,6 +2381,15 @@ int main(int argc, char** argv) {
         // UART TX busy countdown (models baud delay)
         if (uart.tx_busy_count > 0 && --uart.tx_busy_count == 0)
             uart.thre_int = true;
+
+        // +halt_on: the marker just finished printing — stop here so the
+        // (windowed) trace ends right at it.
+        if (halt_on_hit) {
+            fprintf(stderr, "\n[HALT_ON] matched \"%s\" after %lu instructions, PC=0x%08X\n",
+                    halt_on_str, (unsigned long)cpu.insn_count, cpu.pc);
+            cpu.halted = true;
+            break;
+        }
 
         // Poll stdin periodically for UART RX
         if ((cpu.insn_count & 0xFF) == 0) poll_uart_rx();
@@ -2344,6 +2426,10 @@ int main(int argc, char** argv) {
         fprintf(stderr, "\n");
     }
 
-    if (trace_fp) { fclose(trace_fp); fprintf(stderr, "[TRACE] done\n"); }
+    if (trace_fp) {
+        trace_flush_window();   // no-op unless +trace_window was set
+        fclose(trace_fp);
+        fprintf(stderr, "[TRACE] done\n");
+    }
     return hosted_mode ? hosted_exit_code : 0;
 }
