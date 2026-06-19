@@ -908,7 +908,17 @@ _trap_common:
 	and	r1, r3			/* R1 = EPC & 0xFFFF0000 */
 	cmp	r1, r3			/* EPC in 0xFFFFxxxx range? */
 	bne	.Lnot_double_fault
-	break				/* double fault — halt CPU */
+	/*
+	 * Double fault confirmed.  On gen2 BREAK is a trapping
+	 * exception, not a halt: a BREAK here re-enters _trap_common,
+	 * re-trips this same test (its own EPC is supervisor and on the
+	 * vector page), and storms forever — overwriting the saved fault
+	 * snapshot on every pass.  Branch instead to _dfault_print, which
+	 * prints the still-intact ESR/EPC/fault state out the hardwired
+	 * console UART and then spins.  No faultable memory is touched,
+	 * so the evidence survives.
+	 */
+	b	_dfault_print
 .Lnot_double_fault:
 
 	/* Allocate trapframe on kernel stack */
@@ -1095,6 +1105,132 @@ _trap_save_hw_badvaddr:
 	.long	0
 _trap_save_hw_fstat:
 	.long	0
+
+/* ═══════════════════════════════════════════════════════════════
+ * _dfault_print — last-gasp fault dump for the double-fault path
+ *
+ * Reached by BRANCH (never call) from _trap_common when a fault is
+ * taken inside an exception handler.  Lives on the pinned vector page,
+ * so every branch and scratch reference is PC-relative and no
+ * faultable memory is touched — it cannot itself fault.
+ *
+ * Prints the saved hardware fault state (ESR / EPC / fault address /
+ * fault status) out the console UART, then spins.  Those words were
+ * snapshotted into PC-relative scratch by _trap_common *before* the
+ * double-fault test, so they describe the ORIGINAL fault, not this
+ * dump.
+ *
+ * The UART is the architecturally fixed console at 0xFF000000 — the
+ * only hardwired I/O address (doc/system/bus.md).  We reach it
+ * without trusting the kernel's discovered uart_base (potentially the
+ * corrupt thing) by re-pinning the scratch TLB slot to it.  All
+ * registers are clobbered; this never returns.
+ * ═══════════════════════════════════════════════════════════════ */
+	.balign	4
+	.globl	_dfault_print
+_dfault_print:
+	/* Re-pin scratch slot → UART physical page, uncached.  WRSYS
+	 * only; no memory access, so it cannot fault. */
+	li	r1, #PTLB_SCRATCH
+	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_INDEX
+	li	r1, #0x0FFFFC00			/* VPN of SCRATCH_VA (0xFFFFC000), ASID 0 */
+	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_VPN
+	li	r1, #0xFF000000			/* hardwired console UART page (bus.md) */
+	lli	r3, #PTE_KERNEL_NC		/* uncached kernel R/W */
+	or	r1, r3
+	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_PTE	/* commit pin */
+
+	/* Banner: "\r\nDBLFLT\r\n" */
+	lli	r2, #13;	bl _df_putc
+	lli	r2, #10;	bl _df_putc
+	lli	r2, #'D';	bl _df_putc
+	lli	r2, #'B';	bl _df_putc
+	lli	r2, #'L';	bl _df_putc
+	lli	r2, #'F';	bl _df_putc
+	lli	r2, #'L';	bl _df_putc
+	lli	r2, #'T';	bl _df_putc
+	lli	r2, #13;	bl _df_putc
+	lli	r2, #10;	bl _df_putc
+
+	/* ESR=<hex> */
+	lli	r2, #'E';	bl _df_putc
+	lli	r2, #'S';	bl _df_putc
+	lli	r2, #'R';	bl _df_putc
+	lli	r2, #'=';	bl _df_putc
+	ldw	r4, [pc + _trap_save_hw_esr - .]
+	bl	_df_puthex
+	lli	r2, #13;	bl _df_putc
+	lli	r2, #10;	bl _df_putc
+
+	/* EPC=<hex>  (faulting PC) */
+	lli	r2, #'E';	bl _df_putc
+	lli	r2, #'P';	bl _df_putc
+	lli	r2, #'C';	bl _df_putc
+	lli	r2, #'=';	bl _df_putc
+	ldw	r4, [pc + _trap_save_hw_epc - .]
+	bl	_df_puthex
+	lli	r2, #13;	bl _df_putc
+	lli	r2, #10;	bl _df_putc
+
+	/* VA=<hex>   (faulting virtual address) */
+	lli	r2, #'V';	bl _df_putc
+	lli	r2, #'A';	bl _df_putc
+	lli	r2, #'=';	bl _df_putc
+	ldw	r4, [pc + _trap_save_hw_badvaddr - .]
+	bl	_df_puthex
+	lli	r2, #13;	bl _df_putc
+	lli	r2, #10;	bl _df_putc
+
+	/* FST=<hex>  (fault status) */
+	lli	r2, #'F';	bl _df_putc
+	lli	r2, #'S';	bl _df_putc
+	lli	r2, #'T';	bl _df_putc
+	lli	r2, #'=';	bl _df_putc
+	ldw	r4, [pc + _trap_save_hw_fstat - .]
+	bl	_df_puthex
+	lli	r2, #13;	bl _df_putc
+	lli	r2, #10;	bl _df_putc
+
+	/* Quiet halt.  IRQs masked, no faultable memory touched, so the
+	 * saved state stays intact and the spin PC is stable (readable on
+	 * the debug LEDs / in the ISS). */
+.Ldf_spin:
+	b	.Ldf_spin
+
+/* _df_putc — poll-write one byte (R2) to the console UART via the
+ * re-pinned scratch window.  Clobbers R1, R3.  Returns via R13. */
+_df_putc:
+	li	r3, #SCRATCH_VA			/* UART aliased here */
+.Ldf_pc_wait:
+	ldw	r1, [r3 + #0x14]		/* UART LSR */
+	test	r1, #0x20			/* TX holding empty? */
+	beq	.Ldf_pc_wait
+	stw	r2, [r3 + #0x00]		/* UART THR */
+	ret
+
+/* _df_puthex — print R4 as 8 hex digits, MSB first.  Clobbers
+ * R1,R2,R3,R6,R7; saves the return LR in R10 across the putc calls. */
+_df_puthex:
+	mov	r10, r13			/* save LR (putc clobbers R13) */
+	mov	r6, r4				/* working copy */
+	lli	r7, #8				/* nibble count */
+.Ldf_hx_loop:
+	mov	r1, r6
+	shr	r1, #28				/* top nibble → R1[3:0] */
+	and	r1, #0xF
+	mov	r2, r1
+	add	r2, #0x30			/* '0' + nibble */
+	cmp	r1, #10
+	blt	.Ldf_hx_emit
+	add	r2, #7				/* bump '0'+10.. to 'A'..'F' */
+.Ldf_hx_emit:
+	bl	_df_putc
+	shl	r6, #4				/* next nibble up */
+	sub	r7, #1
+	cmp	r7, #0
+	bne	.Ldf_hx_loop
+	mov	r13, r10
+	ret
 
 	.balign	4
 _real_handlers_end:
