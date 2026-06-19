@@ -471,37 +471,16 @@ module cache_bram_vipt
         end
     end
 
-    // ── Deferred fill install ───────────────────────────────────────
-    // A line fill installs its tag, valid bit, and PLRU touch one cycle after
-    // the last word lands — in S_SERVE — rather than on the i_fill_done cycle.
-    // i_fill_done is driven combinationally by the L2 hit verdict, so gating
-    // the installs on it directly stacked the whole L1<->L2 fill cone (L2 tag
-    // read -> L2 hit -> install) into a single cycle. This flop cuts that cone:
-    // the install fires off registered fill_set/way/tag, not the live
-    // i_fill_done. It costs nothing — the S_SERVE serve presents a captured
-    // word and never reads the freshly-installed line, and single-outstanding
-    // means the next lookup cannot race the install (the line is valid before
-    // the cache returns to S_IDLE).
-    logic fill_install;
-    always_ff @(posedge i_clk) begin
-        if (i_rst)
-            fill_install <= 1'b0;
-        else if (state == S_FILL && i_fill_done)
-            fill_install <= 1'b1;
-        else
-            fill_install <= 1'b0;
-    end
-
-    // ── Valid bits: install in S_SERVE (via fill_install), flash-clear on
-    //    INVAL/reset. The clear is last so it wins over a same-cycle install:
-    //    software asked for an empty cache, and the in-flight line's consumer
-    //    is wrong-path by the WRSYS resync argument anyway.
+    // ── Valid bits: install at fill-done, flash-clear on INVAL/reset ──
+    // The clear is last so it wins over a same-cycle install: software
+    // asked for an empty cache, and the in-flight line's consumer is
+    // wrong-path by the WRSYS resync argument anyway.
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
             for (int w = 0; w < NUM_WAYS; w++)
                 valid_vec[w] <= '0;
         end else begin
-            if (fill_install)
+            if (state == S_FILL && i_fill_done)
                 valid_vec[fill_way][fill_set] <= 1'b1;
             if (inval_req)
                 for (int w = 0; w < NUM_WAYS; w++)
@@ -531,16 +510,16 @@ module cache_bram_vipt
         end
     end
 
-    // A fill install touches plru in S_SERVE (one cycle after fill-done, via
-    // fill_install); the deferred hit-touch touches it the cycle after a hit.
-    // The two never coincide — a hit resolves only in S_IDLE, a fill runs
-    // S_FILL->S_SERVE, and single-outstanding serializes the accesses — so the
+    // A fill install touches plru the cycle the fill completes (already off the
+    // hit path); the deferred hit-touch touches it the cycle after a hit. The
+    // two never coincide — a hit resolves only in S_IDLE, a fill completes only
+    // in S_FILL, and single-outstanding serializes the accesses — so the
     // priority is moot (asserted below); fill is listed first.
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
             for (int s = 0; s < NUM_SETS; s++)
                 plru[s] <= 3'b000;
-        end else if (fill_install) begin
+        end else if (state == S_FILL && i_fill_done) begin
             plru[fill_set] <= plru_update(plru[fill_set], 2'(fill_way));
         end else if (plru_touch_valid) begin
             plru[plru_touch_set] <= plru_update(plru[plru_touch_set], 2'(plru_touch_way));
@@ -551,7 +530,7 @@ module cache_bram_vipt
     // same cycle: the else-if above would silently drop the touch (benign for
     // approximate PLRU, but a sign the access-serialization assumption broke).
     assert property (@(posedge i_clk) disable iff (i_rst)
-        !(fill_install && plru_touch_valid))
+        !((state == S_FILL && i_fill_done) && plru_touch_valid))
         else $error("cache_bram_vipt: fill install and deferred PLRU touch collided");
 
     // ══════════════════════════════════════════════════════════
@@ -572,9 +551,9 @@ module cache_bram_vipt
                 end
             end
 
-            // Tag install — once per fill, in S_SERVE (via fill_install).
+            // Tag install — once per fill, at fill-done.
             always_ff @(posedge i_clk) begin
-                if (fill_install && (fill_way == WAY_BITS'(gw)))
+                if (state == S_FILL && i_fill_done && (fill_way == WAY_BITS'(gw)))
                     tag_mem[fill_set] <= fill_tag;
             end
 
