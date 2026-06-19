@@ -106,9 +106,20 @@ endif
 # scans them, skips unrunnable programs visibly, and reports.
 CORE ?= penumbra2
 
+# A CORE may name a microarch variant of a base generation as
+# penumbra<n>_<sub> (e.g. penumbra2_5 = gen2.5): the same RTL fileset and
+# runner config as the base, distinguished only by a build-time core
+# parameter wired in below. Split CORE into base + suffix once here; a
+# bare core name (penumbra1, penumbra2) is its own base, empty suffix.
+CORE_BASE := $(word 1,$(subst _, ,$(CORE)))
+CORE_SUB  := $(word 2,$(subst _, ,$(CORE)))
+
 PROG_DIR    = hw/sim/programs
 ISA_PROGS  := $(sort $(wildcard $(PROG_DIR)/isa/test_*.s))
-CORE_PROGS := $(sort $(wildcard $(PROG_DIR)/$(CORE)/test_*.s))
+# A variant inherits its base's programs and adds any of its own; the
+# REQUIRES/PROVIDES tags skip base tests a variant cannot satisfy.
+CORE_PROGS := $(sort $(wildcard $(PROG_DIR)/$(CORE_BASE)/test_*.s) \
+                     $(wildcard $(PROG_DIR)/$(CORE)/test_*.s))
 TEST_PROGS := $(ISA_PROGS) $(CORE_PROGS)
 
 # test-prog narrows the suite to a single program.
@@ -139,10 +150,14 @@ RUNNER_MOD_penumbra2      = machine_penumbra2_sim
 RUNNER_TBS_penumbra2      = tb_penumbra2_prog tb_penumbra2_intr
 RUNNER_PROVIDES_penumbra2 = mmu mmu-d mmu-i cache l2 wrspr machid perfctr timer irq uart bus bus-fault
 
-RUNNER_MOD      = $(RUNNER_MOD_$(CORE))
-RUNNER_TBS      = $(RUNNER_TBS_$(CORE))
+# Runner config keys on the base generation, so a variant inherits the
+# DUT wrapper, testbenches, and capability set unchanged. A variant whose
+# behavior diverges from its base attaches its capability delta here
+# (e.g. dropping a capability whose tests it can no longer satisfy).
+RUNNER_MOD      = $(RUNNER_MOD_$(CORE_BASE))
+RUNNER_TBS      = $(RUNNER_TBS_$(CORE_BASE))
 RUNNER_DEFAULT  = $(firstword $(RUNNER_TBS))
-RUNNER_PROVIDES = $(RUNNER_PROVIDES_$(CORE))
+RUNNER_PROVIDES = $(RUNNER_PROVIDES_$(CORE_BASE))
 
 # The ISS models the full machine: it provides every capability the
 # gen1 machine does.
@@ -153,7 +168,7 @@ ISS_PROVIDES = $(RUNNER_PROVIDES_penumbra1)
 .PHONY: test
 test:
 	@test -n "$(strip $(RUNNER_MOD))" || \
-		{ echo "ERROR: unknown CORE '$(CORE)' — known cores: penumbra1 penumbra2"; exit 1; }
+		{ echo "ERROR: unknown CORE '$(CORE)' — known bases: penumbra1 penumbra2 (+ variants, e.g. penumbra2_5)"; exit 1; }
 	@mkdir -p $(BUILD_DIR) $(WAVE_DIR) $(BUILD_DIR)/hex
 	@# Build each runner testbench once (binaries keyed by testbench name)
 	@for tb in $(RUNNER_TBS); do \
@@ -442,7 +457,7 @@ endif
 # machine_penumbra2_sim + tb_penumbra2_interactive and has no microcode (CORE
 # defaults to penumbra2, set above). Both wrappers load the boot ROM from
 # program.hex (their INIT_FILE default), built by hw/rom.
-ifeq ($(CORE),penumbra2)
+ifeq ($(CORE_BASE),penumbra2)
 SIMRTL_TOP    := machine_penumbra2_sim
 SIMRTL_OUT    := Vmachine_penumbra2_sim_interactive
 SIMRTL_TOPSV  := hw/rtl/sim/machine_penumbra2_sim.sv
@@ -468,7 +483,7 @@ simulate-rtl:
 		-o ../$(SIMRTL_OUT) \
 		$(PKG_SV) $(SIMRTL_TOPSV) $(SIMRTL_TB) hw/sim/sim_console.cpp
 	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX) CFLAGS=$(CFLAGS)
-ifneq ($(CORE),penumbra2)
+ifneq ($(CORE_BASE),penumbra2)
 	@$(UASM) hw/microcode/microcode.uasm -o microcode.hex
 endif
 	@$(DOCKER_RUN_IT) --entrypoint ./$(BUILD_DIR)/$(SIMRTL_OUT) $(DOCKER_IMAGE) $(if $(SDCARD),+sdcard=$(SDCARD)) $(if $(TRACE),+trace=$(TRACE)) $(if $(TRACE_WINDOW),+trace_window=$(TRACE_WINDOW)) $(if $(HALT_ON),'+halt_on=$(HALT_ON)') $(if $(STDIN_FILE),+stdin_file=$(STDIN_FILE)) $(if $(PIPE_LO),+pipe_lo=$(PIPE_LO)) $(if $(PIPE_HI),+pipe_hi=$(PIPE_HI))
@@ -646,7 +661,7 @@ benchmark-rtl: sdimage-bench
 		-o ../$(SIMRTL_OUT) \
 		$(PKG_SV) $(SIMRTL_TOPSV) $(SIMRTL_TB) hw/sim/sim_console.cpp
 	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX) CFLAGS=$(CFLAGS)
-ifneq ($(CORE),penumbra2)
+ifneq ($(CORE_BASE),penumbra2)
 	@$(UASM) hw/microcode/microcode.uasm -o microcode.hex
 endif
 	@for elf in $(BENCH_ELFS); do \
