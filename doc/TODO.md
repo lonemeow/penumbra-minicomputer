@@ -304,6 +304,24 @@ definition. Remaining:
    `ulx3s_penumbra1_top` so both wrappers share one integration
    (the sim-vs-FPGA congruence argument in the build-system doc).
 
+The microarchitecture sub-variant axis is in: `CORE=penumbra<n>_<sub>`
+(first instance `penumbra2_5`) builds its base generation's RTL with the
+`CPU_VARIANT` core parameter set (entered as the `PENUMBRA_CPU_VARIANT`
+define), across `make test` / `simulate-rtl` / `benchmark-rtl` / `fpga`.
+`CORE_BASE`/`CORE_SUB` split the name; the variant inherits the base's
+runner, capabilities, and program suite plus its own
+`hw/sim/programs/penumbra2_5/`, and for fpga `TOP` names the per-variant
+artifact while `TOP_MODULE` names the shared synth module (no duplicate
+board top). Identity-only so far — `penumbra2_5` reports cpuid name
+"Penumbra/2.5" and is otherwise behaviorally identical to `penumbra2`.
+Next is the gen2.5 microarchitecture itself (forwarding, regfile
+write-through, branch prediction), gated on `CPU_VARIANT` from the
+`penumbra2_core` instantiation in `machine_penumbra2.sv`, with a
+`pinned-stalls` capability the baseline provides and the variant drops
+so cycle-exact gen2 tests skip on the forwarding build. Mechanism:
+`doc/internals/penumbra2/overview.md` (gen2.5 organization) and
+`doc/internals/build-system.md` (variant naming).
+
 ## Compiler: graceful-fail on unsupported inline asm and vector IR
 
 Today the GlobalISel IRTranslator crashes (`fatal error: unable to

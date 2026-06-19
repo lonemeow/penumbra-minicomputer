@@ -104,6 +104,9 @@ Examples: `llvm: fix PIC TLS GD materialization`,
   the ISS (no Docker).
 - `make test [CORE=penumbra1|penumbra2]` — `isa/` + the core's
   microarch suite (`hw/sim/programs/<core>/`) on RTL sim via Docker.
+  `CORE` also takes a microarch sub-variant (`penumbra<n>_<sub>`, e.g.
+  `penumbra2_5`): the base generation built with one core parameter set,
+  inheriting its suite (mechanism in `doc/internals/build-system.md`).
   `make test-prog CORE=<core> PROG=<name>` runs one program. Programs
   carry lit-style `; RUNNER:` / `; REQUIRES:` header tags (scanned by
   `hw/tools/run-prog-tests.py`); suite layout and tag semantics in
@@ -150,6 +153,9 @@ nextpnr-ecp5, ecppack, fujprog usable as normal commands:
   nextpnr → ecppack. `BOARD`/`CORE` (+ optional `VARIANT`) expand to a
   registered top module (`<board>_<core>[_<variant>]_top`, file under
   `hw/rtl/fpga/<board>/`); an unknown combination is a hard error.
+  A microarch sub-variant `CORE` (e.g. `penumbra2_5`) reuses its base
+  board top parameterized — `TOP` names the per-variant artifact,
+  `TOP_MODULE` the shared synth module (`doc/internals/build-system.md`).
   `TOP=<module>` stays as the low-level escape hatch.
 - `make flash BOARD=ulx3s CORE=penumbra1` — build + flash via USB.
 - `make fpga-lint` — Verilator lint check (full gen1 system).

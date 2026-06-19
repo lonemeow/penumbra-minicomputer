@@ -135,6 +135,14 @@ in the header comment as lit-style tags the test driver scans:
   program whose requirements aren't met is reported as skipped, never
   silently dropped. Programs with no tag need only CPU + memory.
 
+A microarchitecture sub-variant (`CORE=penumbra<n>_<sub>`, e.g.
+`penumbra2_5`) runs on its base generation's runner and inherits the
+base's program suite plus any programs in its own `<core>/` directory.
+When the variant changes behavior a base program pins — e.g. an exact
+stall count a forwarding variant no longer incurs — that program guards
+with a capability the base provides and the variant drops (such as
+`pinned-stalls`), so it skips on the variant instead of failing.
+
 ## Make targets
 
 | Target | Meaning |

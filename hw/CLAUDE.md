@@ -226,6 +226,10 @@ Board tops live under `rtl/fpga/<board>/`, one file per registered
 (board, core[, variant]) combination — built via
 `make fpga BOARD=<board> CORE=<generation>` (registry: `FPGA_TOPS`
 in the root Makefile; naming spec in `doc/internals/build-system.md`).
+A microarch sub-variant (e.g. `CORE=penumbra2_5`) is registered too but
+has no file of its own: it reuses its base board top synthesized with
+one core parameter set, so `TOP` names the artifact and `TOP_MODULE`
+the shared module.
 - `ulx3s/ulx3s_penumbra1_top.sv` — gen1 system on the ULX3S.
   12.5 MHz PLL (25 MHz crystal), 32 MB SDRAM (W9825G6KH or
   compatible), real UART (TX+RX), real SPI with SD card (autoconfig),
