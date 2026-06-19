@@ -1021,6 +1021,15 @@ _trap_common:
 	 */
 	.globl	trap_return
 trap_return:
+	/*
+	 * Interrupts MUST already be masked on entry here (see the DI in
+	 * trap() for the C-handler door and in lwp_trampoline for the
+	 * fork/exec door).  The masking cannot be done here: this code
+	 * runs on the pinned vector page, so an IRQ taken on a DI placed
+	 * here would have EPC in the 0xFFFFxxxx range and trip the
+	 * double-fault guard.  Each kernel-text caller masks before
+	 * transferring control into this epilogue.
+	 */
 
 	/* If returning to user mode, set USP from trapframe */
 	ldw	r1, [r14 + TF_SR]
@@ -1491,6 +1500,19 @@ lwp_trampoline:
 	ldw	r11, [r11 + CI_CURLWP]	/* curlwp */
 	ldw	r14, [r11 + L_MD_UTF]	/* md_utf → trapframe pointer */
 	ldw	r11, [pc + .Lvp_trap_return - .]
+	/*
+	 * Mask interrupts before crossing into the vector-page trap
+	 * epilogue (it writes the single EPC/ESR SPRs and must run
+	 * uninterrupted).  Like trap()'s DI on the C-handler return path,
+	 * this MUST happen here in kernel text: an IRQ taken on this di
+	 * has EPC in kernel text and nests recoverably, whereas a di
+	 * inside the epilogue would take the IRQ with EPC on the vector
+	 * page and trip the double-fault guard.  The guard stays a cheap,
+	 * strict, no-special-case assertion precisely because every door
+	 * into the epilogue masks first — and it is the fail-loud backstop
+	 * for any future door that forgets to.
+	 */
+	di
 	jmp	r11
 
 	.balign	4

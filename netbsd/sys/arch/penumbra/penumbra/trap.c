@@ -293,11 +293,16 @@ trap(struct trapframe *tf)
 		userret(curlwp, tf);
 
 	/*
-	 * The locore trap epilogue stashes ESR/EPC into pinned scratch
-	 * before WRSPR; a nested exception would clobber those slots
-	 * and corrupt the return.  Mask interrupts now so the epilogue
-	 * runs atomically.  ERET restores the saved SR (including I),
-	 * so userland comes back up with interrupts enabled.
+	 * Mask interrupts before returning into the vector-page trap
+	 * epilogue, which writes the single EPC/ESR SPRs and must run
+	 * uninterrupted.  This DI deliberately lives in kernel text, not
+	 * in the epilogue itself: a pending IRQ taken on this DI lands
+	 * with EPC in kernel text and is handled and resumed normally,
+	 * whereas an IRQ taken on a DI inside the vector-page epilogue
+	 * would have EPC in 0xFFFFxxxx and trip the double-fault guard.
+	 * The fork/exec door (lwp_trampoline) masks the same way before
+	 * its jump.  ERET restores the saved SR (incl. I), so userland
+	 * comes back up with interrupts enabled.
 	 */
 	__asm __volatile("DI" ::: "memory");
 }
