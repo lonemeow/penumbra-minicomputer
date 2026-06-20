@@ -5,11 +5,14 @@
 ; RUN:   -verify-machineinstrs < %s | FileCheck %s -check-prefix=STATIC
 
 ; PIC vs static global address materialization.
-; PIC/PIE uses GOT-indirect: LLI/LUI got_pcrel + ADD Rd, PC + LDW from GOT.
+; In the PIC model, a *preemptible* global (default visibility) uses
+; GOT-indirect: LLI/LUI got_pcrel + ADD Rd, PC + LDW from GOT.  A
+; *non-preemptible* global (dso_local) uses PC-relative-direct: the same
+; LLI/LUI + ADD Rd, PC anchor but with %pcrel relocations, so the ADD
+; already yields &sym and there is no GOT load.
 ; The ADD's own PC is the anchor; LLI/LUI carry -8/-4 addends so the
-; linker's sym + addend - fixup_addr formula yields GOT[sym] - Q at each half.
-; Static uses absolute LLI+LUI.
-; GOT entries are full data words — R_PENUMBRA_RELATIVE patches them for PIE.
+; linker's sym + addend - fixup_addr formula yields (GOT[sym] or sym) - Q
+; at each half.  Static uses absolute LLI+LUI.
 
 @myvar = global i32 42
 @pievar = dso_local global i32 99
@@ -80,19 +83,18 @@ define void @store_global(i32 %v) {
   ret void
 }
 
-; PIE test: dso_local globals also use GOT in PIC model.
-; GOT entries are data words — R_RELATIVE patches them for PIE.
+; PIE test: a dso_local global is non-preemptible, so the PIC model uses
+; PC-relative-direct (%pcrel) — no GOT slot, no GOT load, no startup reloc.
 define dso_local ptr @get_pie_address() {
 ; PIC-LABEL: get_pie_address:
 ; PIC:       .Lget_pie_address$local:
 ; PIC-NEXT:    .type .Lget_pie_address$local,@function
 ; PIC-NEXT:    .cfi_startproc
 ; PIC-NEXT:  // %bb.1:
-; PIC-NEXT:    lli r1, %got_pcrel_lo16(pievar-.LPC3_0)
-; PIC-NEXT:    lui r1, %got_pcrel_hi16(pievar-.LPC3_0)
+; PIC-NEXT:    lli r1, %pcrel_lo16(pievar-.LPC3_0)
+; PIC-NEXT:    lui r1, %pcrel_hi16(pievar-.LPC3_0)
 ; PIC-NEXT:  .LPC3_0:
 ; PIC-NEXT:    add r1, r15
-; PIC-NEXT:    ldw r1, [r1 + 0]
 ; PIC-NEXT:    jmp r13
 ;
 ; STATIC-LABEL: get_pie_address:

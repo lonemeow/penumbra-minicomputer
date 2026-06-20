@@ -65,6 +65,12 @@ void PenumbraMCAsmInfo::printSpecifierExpr(raw_ostream &OS,
   case Penumbra::S_TLSgd_GOT_PCRel_Hi16:
     OS << "%tlsgd_got_pcrel_hi16(";
     break;
+  case Penumbra::S_PCRel_Lo16:
+    OS << "%pcrel_lo16(";
+    break;
+  case Penumbra::S_PCRel_Hi16:
+    OS << "%pcrel_hi16(";
+    break;
   default:
     OS << "%unknown(";
     break;
@@ -99,9 +105,13 @@ bool PenumbraMCAsmInfo::evaluateAsRelocatableImpl(const MCSpecifierExpr &Expr,
     AllowSubSym = true;
     break;
   case Penumbra::S_PCRel:
+  case Penumbra::S_PCRel_Lo16:
+  case Penumbra::S_PCRel_Hi16:
     // Anchor differences against same-section symbols (jump table and
-    // block-address bases) may fold to an assembly-time constant —
-    // that is the resolved no-relocation case.
+    // block-address bases, and PC-relative-direct globals) may fold to an
+    // assembly-time constant — that is the resolved no-relocation case.
+    // Unlike the GOT specifiers, EvalAsm is kept so same-section symbols
+    // resolve in place; cross-section references emit a relocation.
     AllowSubSym = true;
     break;
   default:

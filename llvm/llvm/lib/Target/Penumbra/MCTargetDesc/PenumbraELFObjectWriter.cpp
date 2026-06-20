@@ -42,6 +42,8 @@ enum {
   R_PENUMBRA_TLS_GD_GOT_PCREL_HI16 = 21, // TLS GD GOT PC-relative: high 16
   R_PENUMBRA_COPY = 22,                   // Copy relocation
   R_PENUMBRA_IRELATIVE = 23,              // Indirect function (IFUNC)
+  R_PENUMBRA_PCREL_LO16 = 24,             // PC-relative to symbol: low 16 bits
+  R_PENUMBRA_PCREL_HI16 = 25,             // PC-relative to symbol: high 16 bits
 };
 
 class PenumbraELFObjectWriter : public MCELFObjectTargetWriter {
@@ -101,6 +103,10 @@ unsigned PenumbraELFObjectWriter::getRelocType(const MCFixup &Fixup,
     return R_PENUMBRA_TLS_GD_GOT_PCREL_LO16;
   if (Kind == Penumbra::fixup_penumbra_tls_gd_got_pcrel_hi16)
     return R_PENUMBRA_TLS_GD_GOT_PCREL_HI16;
+  if (Kind == Penumbra::fixup_penumbra_pcrel_lo16)
+    return R_PENUMBRA_PCREL_LO16;
+  if (Kind == Penumbra::fixup_penumbra_pcrel_hi16)
+    return R_PENUMBRA_PCREL_HI16;
   // Standard data fixups (FK_Data_4 from .word directives).
   if (Kind == FK_Data_4)
     return IsPCRel ? R_PENUMBRA_PC32 : R_PENUMBRA_32;

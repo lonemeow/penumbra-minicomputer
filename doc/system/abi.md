@@ -266,8 +266,19 @@ Penumbra uses **RELA** relocations (explicit addend).
 | 19 | `R_PENUMBRA_GOT_PCREL_HI16` | GOT PC-relative: high 16 bits | bits [15:0] |
 | 20 | `R_PENUMBRA_TLS_GD_GOT_PCREL_LO16` | TLS GD GOT PC-relative: low 16 | bits [15:0] |
 | 21 | `R_PENUMBRA_TLS_GD_GOT_PCREL_HI16` | TLS GD GOT PC-relative: high 16 | bits [15:0] |
+| 22 | `R_PENUMBRA_COPY` | Copy relocation (imported data in executable) | Full word |
+| 23 | `R_PENUMBRA_IRELATIVE` | Indirect function (IFUNC resolver) | Full word |
+| 24 | `R_PENUMBRA_PCREL_LO16` | PC-relative to symbol: low 16 bits | bits [15:0] |
+| 25 | `R_PENUMBRA_PCREL_HI16` | PC-relative to symbol: high 16 bits | bits [15:0] |
 
 Where: S = symbol value, A = addend, P = relocation position.
+
+`R_PENUMBRA_PCREL_LO16`/`HI16` are the GOT-free counterparts of
+`R_PENUMBRA_GOT_PCREL_LO16`/`HI16`: identical PC-anchored form, but the
+linker resolves them to the symbol's own address (`S + A − P`) rather
+than to its GOT entry. They materialize the address of a
+**non-preemptible** symbol directly, with no GOT slot, no GOT load, and
+no dynamic relocation — see [Position-Independent Code](#8-position-independent-code).
 
 **LLI+LUI pair (32-bit address materialization):**
 The linker resolves `R_PENUMBRA_LO16` on LLI and `R_PENUMBRA_HI16` on LUI to produce the full 32-bit address.
@@ -275,6 +286,7 @@ The linker resolves `R_PENUMBRA_LO16` on LLI and `R_PENUMBRA_HI16` on LUI to pro
 #### PC-Anchored Relocation Pairs
 
 The PC-relative pair relocations (`R_PENUMBRA_GOT_PCREL_LO16`/`HI16`,
+`R_PENUMBRA_PCREL_LO16`/`HI16`,
 `R_PENUMBRA_TLS_GD_GOT_PCREL_LO16`/`HI16`, `R_PENUMBRA_IMM16_PCREL`)
 patch immediate fields of `LLI`/`LUI`/`ADDi` instructions that feed a
 separate PC-reading instruction (`ADD Rd, PC` or `MOV Rd, PC`) — the
@@ -286,6 +298,16 @@ the anchor's address Q, not to the relocation site P:
         lui     r3, %got_pcrel_hi16(sym - .LPC0)    ; reloc at P+4
 .LPC0:  add     r3, pc                              ; anchor, address Q
         ldw     r3, [r3 + 0]                        ; r3 = *GOT[sym]
+```
+
+The GOT-free form for a non-preemptible symbol is identical except the
+`%pcrel` specifier resolves to the symbol address, so the anchor `ADD`
+already yields `&sym` and there is no `LDW`:
+
+```
+        lli     r3, %pcrel_lo16(sym - .LPC1)        ; reloc at P
+        lui     r3, %pcrel_hi16(sym - .LPC1)        ; reloc at P+4
+.LPC1:  add     r3, pc                              ; r3 = &sym  (one fewer insn)
 ```
 
 These relocations compute the standard RELA `S + A − P`. Because the
@@ -385,8 +407,10 @@ On bare-metal targets (`penumbra-unknown-none`) without an OS thread scheduler, 
 
 PIC and PIE are supported.
 
-- **Global Address Materialization (PIC/PIE):** Achieved using GOT-indirect addressing with full 32-bit reach. The materialization sequence is `LLI`+`LUI` loading a PC-relative GOT offset, a PC-reading `ADD` as the anchor, and a `LDW` fetching the symbol address from the GOT (see [PC-Anchored Relocation Pairs](#pc-anchored-relocation-pairs)).
-- **Relocations:** Uses `R_PENUMBRA_GOT_PCREL_LO16` and `R_PENUMBRA_GOT_PCREL_HI16` to form a GOT-indirect PC-relative offset to the GOT entry, with the anchor distance carried in the addend.
+- **Global Address Materialization (PIC/PIE):** The materialization sequence depends on whether the symbol can be preempted at load time.
+  - **Preemptible symbols** (default-visibility globals in a shared object, undefined externals) use GOT-indirect addressing with full 32-bit reach: `LLI`+`LUI` loading a PC-relative GOT offset, a PC-reading `ADD` as the anchor, and a `LDW` fetching the symbol address from the GOT (see [PC-Anchored Relocation Pairs](#pc-anchored-relocation-pairs)).
+  - **Non-preemptible symbols** (local/hidden/protected, or any symbol the relocation model binds locally) use the GOT-free PC-relative-direct sequence: the same `LLI`+`LUI`+anchor `ADD`, but with `%pcrel` relocations so the anchor yields `&sym` directly — no GOT slot, no GOT load, no startup relocation. One fewer instruction and one fewer dependent load per access.
+- **Relocations:** Preemptible references use `R_PENUMBRA_GOT_PCREL_LO16`/`HI16` (PC-relative offset to the GOT entry); non-preemptible references use `R_PENUMBRA_PCREL_LO16`/`HI16` (PC-relative offset to the symbol). Both carry the anchor distance in the addend.
 - **Dynamic Linking:** PLT entries are 16 bytes. Shared libraries use `R_PENUMBRA_GLOB_DAT` for GOT and `R_PENUMBRA_JUMP_SLOT` for PLT. PIE relies on `R_PENUMBRA_RELATIVE` for bias adjustment.
 
 ---

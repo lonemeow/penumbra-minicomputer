@@ -110,6 +110,10 @@ PenumbraAsmBackend::getFixupKindInfo(MCFixupKind Kind) const {
       {"fixup_penumbra_tls_gd_got_pcrel_lo16", 0, 16, 0},
       // tls_gd_got_pcrel_hi16: TLS GD GOT PC-relative high 16, into bits [15:0]
       {"fixup_penumbra_tls_gd_got_pcrel_hi16", 0, 16, 0},
+      // pcrel_lo16: PC-relative-to-symbol low 16, into bits [15:0]
+      {"fixup_penumbra_pcrel_lo16", 0, 16, 0},
+      // pcrel_hi16: PC-relative-to-symbol high 16, into bits [15:0]
+      {"fixup_penumbra_pcrel_hi16", 0, 16, 0},
   };
 
   if (Kind < FirstTargetFixupKind)
@@ -284,6 +288,27 @@ void PenumbraAsmBackend::applyFixup(const MCFragment &F, const MCFixup &Fixup,
           static_cast<MCFixupKind>(Penumbra::fixup_penumbra_tls_gd_got_pcrel_lo16)) {
     // TLS GD GOT PC-relative low 16 bits, into bits [15:0].
     uint32_t Encoded = static_cast<uint32_t>(Value) & 0xFFFF;
+    support::endian::write32le(
+        Data, (support::endian::read32le(Data) & 0xFFFF0000) | Encoded);
+    return;
+  }
+
+  if (Kind ==
+          static_cast<MCFixupKind>(Penumbra::fixup_penumbra_pcrel_lo16)) {
+    // PC-relative-to-symbol low 16 bits, into bits [15:0].  Value is the
+    // unsigned 32-bit (sym - anchor) offset (LLI zero-extends, LUI ORs the
+    // high half — no carry split).  Resolved in place for a same-section
+    // symbol; a relocation otherwise.
+    uint32_t Encoded = static_cast<uint32_t>(Value) & 0xFFFF;
+    support::endian::write32le(
+        Data, (support::endian::read32le(Data) & 0xFFFF0000) | Encoded);
+    return;
+  }
+
+  if (Kind ==
+          static_cast<MCFixupKind>(Penumbra::fixup_penumbra_pcrel_hi16)) {
+    // PC-relative-to-symbol high 16 bits, into bits [15:0].
+    uint32_t Encoded = (static_cast<uint32_t>(Value) >> 16) & 0xFFFF;
     support::endian::write32le(
         Data, (support::endian::read32le(Data) & 0xFFFF0000) | Encoded);
     return;

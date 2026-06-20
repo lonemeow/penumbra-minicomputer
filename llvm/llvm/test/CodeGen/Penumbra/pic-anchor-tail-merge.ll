@@ -13,11 +13,18 @@
 ;
 ; Each lli/lui pair below must reference the .LPC label of the add that
 ; actually executes with it.
+;
+; The globals are deliberately preemptible (default visibility), so they
+; take the GOT path whose deref forms the mergeable common tail this test
+; exists to guard.  A non-preemptible (internal/hidden) global would use
+; PC-relative-direct (%pcrel), whose shorter add/stw tail does not merge
+; into a shared anchor-absorbing block — see pic-dso-local.ll for that
+; selection.
 
-@dlpi_addr = internal global i32 0, align 4
-@dlpi_phdr = internal global ptr null, align 4
-@dlpi_phnum = internal global i16 0, align 2
-@dlpi_name = internal global ptr null, align 4
+@dlpi_addr = global i32 0, align 4
+@dlpi_phdr = global ptr null, align 4
+@dlpi_phnum = global i16 0, align 2
+@dlpi_name = global ptr null, align 4
 
 define void @setup(ptr %aux) {
 ; CHECK-LABEL: setup:
@@ -136,7 +143,7 @@ done:
   ret void
 }
 
-; Readers keep the internal globals alive through -O2 pipelines that
+; Readers keep the globals alive through -O2 pipelines that
 ; would otherwise drop the stores.
 define ptr @peek(i32 %i) {
 ; CHECK-LABEL: peek:

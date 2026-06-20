@@ -309,6 +309,10 @@ bool PenumbraAsmParser::parseOperand(OperandVector &Operands) {
       Spec = Penumbra::S_Hi16;
     else if (Name == "pcrel")
       Spec = Penumbra::S_PCRel;
+    else if (Name == "pcrel_lo16")
+      Spec = Penumbra::S_PCRel_Lo16;
+    else if (Name == "pcrel_hi16")
+      Spec = Penumbra::S_PCRel_Hi16;
     else if (Name == "tlsgd_lo16")
       Spec = Penumbra::S_TLSgd_Lo16;
     else if (Name == "tlsgd_hi16")

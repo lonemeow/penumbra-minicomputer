@@ -1246,7 +1246,60 @@ bool PenumbraInstructionSelector::selectGlobalValue(MachineInstr &I,
   }
 
   if (TM.getRelocationModel() == Reloc::PIC_) {
-    // PIC/PIE: all globals go through the GOT.
+    // Non-preemptible symbols (local/hidden, or anything the relocation
+    // model binds locally) have a link-time-fixed PC-relative distance, so
+    // their address can be materialised directly with %pcrel relocations —
+    // skipping the GOT slot, the GOT load, and the startup relocation that
+    // the preemptible GOT path below requires.  The sequence is the GOT
+    // path minus the trailing LDW, and the residual offset folds straight
+    // into the %pcrel symbol operand (the address is exact, unlike a GOT
+    // entry which holds only the base symbol):
+    //
+    //     PICLLI   Off, sym, id  →  LLI  Off, %pcrel_lo16(sym+off - .LPC)
+    //     PICLUI   Off, sym, id  →  LUI  Off, %pcrel_hi16(sym+off - .LPC)
+    //     PICADDPC Dst, id       →  .LPC: ADD Dst, PC   (Dst = &(sym+off))
+    //
+    // Take the direct path only when the symbol is non-preemptible
+    // (isDSOLocal): its address is then fixed at link time, so the
+    // PC-relative distance resolves with no GOT.  An undefined extern_weak
+    // is excluded even when isDSOLocal would otherwise hold — it may resolve
+    // to 0, which a %pcrel anchor cannot encode, so it stays GOT-indirect.
+    bool UsePCRelDirect = !GV->hasExternalWeakLinkage() && GV->isDSOLocal();
+    if (UsePCRelDirect) {
+      DebugLoc DL = I.getDebugLoc();
+      auto InsertPt = I.getIterator();
+      unsigned PCLabelId =
+          MBB.getParent()->getInfo<PenumbraMachineFunctionInfo>()
+              ->createPICLabelUId();
+      Register OffLoReg =
+          MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
+      Register OffReg =
+          MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
+
+      auto LLIInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::PICLLI))
+          .addDef(OffLoReg)
+          .add(MachineOperand::CreateGA(GV, Offset, Penumbra::S_PCRel_Lo16))
+          .addImm(PCLabelId);
+      constrainSelectedInstRegOperands(*LLIInst, TII, TRI, RBI);
+
+      auto LUIInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::PICLUI))
+          .addDef(OffReg)
+          .addReg(OffLoReg)
+          .add(MachineOperand::CreateGA(GV, Offset, Penumbra::S_PCRel_Hi16))
+          .addImm(PCLabelId);
+      constrainSelectedInstRegOperands(*LUIInst, TII, TRI, RBI);
+
+      auto ADDInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::PICADDPC))
+          .addDef(DstReg)
+          .addReg(OffReg)
+          .addImm(PCLabelId);
+      constrainSelectedInstRegOperands(*ADDInst, TII, TRI, RBI);
+
+      I.eraseFromParent();
+      return true;
+    }
+
+    // PIC/PIE: preemptible globals go through the GOT.
     // GOT entries are full 32-bit data words — R_PENUMBRA_RELATIVE
     // patches them correctly for PIE (bootloader self-relocator).
     // No text relocs needed — code is PC-relative to the GOT entry.

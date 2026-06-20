@@ -48,6 +48,12 @@ enum Fixups {
   // TLS GD GOT PC-relative: high 16 bits of (GOT_tls_pair - P + A).
   // Used in LUI for PIC TLS General-Dynamic access via GOT.
   fixup_penumbra_tls_gd_got_pcrel_hi16,
+  // PC-relative to symbol: low 16 bits of (sym - P + A).
+  // Used in LLI for PC-relative-direct addressing of non-preemptible globals.
+  fixup_penumbra_pcrel_lo16,
+  // PC-relative to symbol: high 16 bits of (sym - P + A).
+  // Used in LUI for PC-relative-direct addressing of non-preemptible globals.
+  fixup_penumbra_pcrel_hi16,
 
   // Marker
   NumTargetFixupKinds
@@ -67,6 +73,8 @@ enum Specifier {
   S_GOT_PCRel_Hi16, // %got_pcrel_hi16() — GOT entry, PC-relative, high 16
   S_TLSgd_GOT_PCRel_Lo16, // %tlsgd_got_pcrel_lo16() — TLS GD GOT, PC-rel, lo16
   S_TLSgd_GOT_PCRel_Hi16, // %tlsgd_got_pcrel_hi16() — TLS GD GOT, PC-rel, hi16
+  S_PCRel_Lo16, // %pcrel_lo16() — PC-relative to symbol, low 16 bits
+  S_PCRel_Hi16, // %pcrel_hi16() — PC-relative to symbol, high 16 bits
 };
 
 } // namespace llvm::Penumbra

@@ -626,8 +626,6 @@ let isPseudo = 1 in {
   // (gen1's 1 KB direct-mapped I$ vs gen2's 4 KB 4-way), not part of the
   // structural definition — see doc/TODO.md "Remat aggressiveness is
   // per-microarchitecture, not a pseudo flag".
-  // TODO(human): wrap the def below in the `let ... in` attribute clause that
-  // sets the remat/cost policy (see the Learn by Doing request).
   let isReMaterializable = 1,
       hasSideEffects = 0,
       mayLoad = 0,
