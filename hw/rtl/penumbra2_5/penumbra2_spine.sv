@@ -1,0 +1,660 @@
+// penumbra2_spine — Penumbra/2 ID->EX->MEM->WB datapath integration.
+//
+// The first time the gen2 stages run as a *pipeline* rather than in
+// isolation. It wires the four datapath stages (penumbra2_id_stage,
+// _ex_stage, _mem_stage, _wb_stage) around the shared register file and
+// closes the loops between them:
+//   - the inter-stage registers (ID/EX, EX/MEM, MEM/WB) producer->consumer,
+//   - the back-pressure chain WB->MEM->EX->ID->fetch,
+//   - the scoreboard's view of the downstream in-flight writers (the loop
+//     that makes RAW hazard detection span the whole pipe),
+//   - the NZCV flag bypass: a minimal committed-SR flag register feeds EX,
+//     alongside the MEM/WB in-flight producer.
+//
+// There is no instruction fetch yet: the IF2/ID inputs (i_ir/i_pc/...) are
+// driven by a testbench acting as the fetch stream, back-pressured by
+// o_fetch_stall. Branch redirect and the fault-commit flush are exposed
+// (o_branch_*) / tied off — straight-line and divmul streams exercise the
+// scoreboard, the dual-write commit, and the handshake without them.
+// Loads/stores (MEM guard), RDSYS, and drain-commit (no SR/SPR/EPC yet)
+// stay out of the first stream.
+
+// keep_hierarchy: hold this stage boundary through synth_ecp5 so the stage
+// places compactly instead of smearing across the die, and reads with real
+// names in timing reports.
+// Paired across the pipeline stages (if1 / if2 / spine / mem_stage).
+(* keep_hierarchy = "yes" *)
+module penumbra2_spine
+    import penumbra_pkg::*;
+    import penumbra2_pkg::*;
+(
+    input  logic                  i_clk,
+    input  logic                  i_rst,
+
+    // ── Fetch stream in (from IF2: word + PC + the IF-side fault tag) ──
+    input  logic [31:0]           i_ir,
+    input  logic [31:0]           i_pc,
+    input  logic [31:0]           i_next_pc,
+    input  logic                  i_valid,
+    input  logic                  i_fault_pending,   // IF-side fault rides the slot
+    input  logic [3:0]            i_fault_vec,
+    input  logic [31:0]           i_fault_status,    // composed payload; FAULT_NONE when none
+    input  logic                  i_supervisor,
+    output logic                  o_fetch_stall,     // hold the fetch stream this cycle
+
+    // ── Commit observability (WB regfile write port) ─────────────
+    output logic [SB_IDX_W-1:0]   o_commit_idx,
+    output logic [31:0]           o_commit_data,
+    output logic                  o_commit_we,
+
+    // ── Retire observability (the instruction leaving WB) ────────
+    // Every retiring instruction, GPR-writing or not, with its op_class.
+    // The consumer (core) reads this to act on retiring control insns the
+    // commit port can't see — e.g. a BREAK, which writes no register.
+    output logic                  o_retire_valid,
+    output logic [OPC_W-1:0]      o_retire_op_class,
+    output logic [31:0]           o_retire_pc,       // the retiring instruction's PC (trace)
+    output logic [31:0]           o_retire_sr,       // architectural SR as the instruction commits
+    output logic                  o_insn_committed,  // a distinct instruction commits this cycle (perfctr count)
+
+    // ── Branch resolution (for a future fetch-redirect model) ────
+    output logic                  o_branch_taken,
+    output logic [31:0]           o_branch_target,
+    output logic [31:0]           o_branch_pc,       // PC of the branch resolving in EX (trace)
+
+    // ── Pipeline occupancy (trace) — the instruction in each stage ──
+    // EX = idex slot, MEM = exmem slot; WB rides o_retire_pc/o_retire_valid.
+    // Lets a trace follow an instruction stage-by-stage and see exactly
+    // where a slot is dropped (e.g. a resolved branch that never retires).
+    output logic [31:0]           o_ex_pc,
+    output logic                  o_ex_valid,
+    output logic [31:0]           o_mem_pc,
+    output logic                  o_mem_valid,
+
+    // ── Data memory (MEM's BRAM data-side port, exposed to the core) ──
+    output logic [31:0]           o_dmem_addr,
+    output logic [31:0]           o_dmem_wdata,
+    output logic [3:0]            o_dmem_byte_en,
+    output logic                  o_dmem_re,
+    output logic                  o_dmem_we,
+    output logic                  o_dmem_en,
+    input  logic [31:0]           i_dmem_rdata,
+    input  logic                  i_dmem_busy,
+    input  logic                  i_dmem_fault,    // bus fault on the data access, at i_dmem_busy drop
+
+    // ── MMU D-side translate (MEM's port-B query, exposed to the core) ──
+    output logic [31:0]           o_mmu_vaddr,
+    output logic [2:0]            o_mmu_access_type,
+    output logic                  o_mmu_user,        // query privilege (from i_supervisor)
+    output logic                  o_mmu_req,
+    input  logic                  i_mmu_fault,
+    input  logic [31:0]           i_mmu_fault_status,
+
+    // ── MMU fault commit (WB → the FAULT_ADDR/FAULT_STATUS latch) ──
+    // Pulses only when the committing fault carries a data address
+    // (alignment / TLB / bus); traps and decode faults leave the MMU's
+    // architectural fault registers untouched.
+    output logic                  o_mmu_fault_commit,
+    output logic [31:0]           o_mmu_fault_vaddr,
+    output logic [31:0]           o_mmu_fault_status,
+
+    // ── Sysreg sideband (MEM's RDSYS read port, exposed to the core) ──
+    output logic [3:0]            o_sys_dev,
+    output logic [3:0]            o_sys_reg,
+    output logic                  o_sys_re,
+    input  logic [31:0]           i_sys_rdata,
+
+    // ── Sysreg write port (WRSYS, driven at the EX drain-commit) ──
+    // WRSYS never advances past EX (drain-commit); the write is composed here
+    // from the held ID/EX fields the cycle EX commits it.
+    output logic [3:0]            o_sys_wr_dev,
+    output logic [3:0]            o_sys_wr_reg,
+    output logic [31:0]           o_sys_wdata,
+    output logic                  o_sys_we,
+
+    // ── WRSYS context-synchronization re-fetch (to the core front end) ──
+    // One cycle after the write strobe (the post-commit-wait cycle, by when the
+    // device has latched), re-fetch the instructions after the WRSYS so they
+    // observe the new state — WRSYS is context-synchronizing (sysregs.md). The
+    // core consumes this as a front-end redirect to o_wrsys_resync_pc.
+    output logic                  o_wrsys_resync,
+    output logic [31:0]           o_wrsys_resync_pc,
+
+    // ── Exception entry (to the core: IF flush + vector-fetch FSM) ──
+    output logic                  o_fault_commit,    // a fault is being taken this cycle
+    output logic [3:0]            o_fault_vec,       // its vector number
+    output logic [31:0]           o_epc,             // saved exception PC (ERET / vector-fetch redirect)
+
+    // ── ERET return (to the core: flush IF1/IF2 + redirect PC ← EPC) ──
+    output logic                  o_eret_commit,     // an ERET is committing this cycle
+
+    // ── Stall-attribution observability (perfctr) ────────────────
+    // Per-cause stall signals from the stages, surfaced for the CPU
+    // performance counters. They can overlap (head-of-line attribution
+    // resolves them downstream); here they are the raw per-stage causes.
+    output logic                  o_stall_funit,     // EX waiting on the divmul unit
+    output logic                  o_stall_load,      // MEM holding for a load access
+    output logic                  o_stall_store,     // MEM holding for a store access
+    output logic                  o_stall_hazard,    // ID blocked by a pipeline interlock (hazard)
+
+    // ── Interrupt support (to/from the core's interrupt unit) ────
+    output logic                  o_sr_s,            // SR.S (supervisor) — privilege source
+    output logic                  o_sr_i,            // SR.I (interrupt enable)
+    output logic                  o_ei_commit,       // EI committed this cycle (arm ei_shadow)
+    output logic                  o_dc_commit,       // any drain-commit completed this cycle
+    output logic [31:0]           o_dc_commit_pc,    // the drain-commit instruction's PC (trace)
+    output logic [OPC_W-1:0]      o_dc_commit_op_class, // its op_class (EI/DI/WRSYS/ERET)
+    output logic                  o_ex_stall,        // EX back-pressure (the irq unit's clean-boundary gate)
+    input  logic                  i_irq_inject,      // take an interrupt: tag the EX instruction as a fault
+    input  logic [3:0]            i_irq_vec          // its vector (VEC_TIMER / VEC_EXT_IRQ)
+);
+
+    // This integration deliberately leaves several sub-module outputs
+    // unconnected: ID/EX control fields EX does not consume, the deferred
+    // MEM load/sysreg path, and the drain-commit / SPR-write strobes with
+    // no consumer yet. The empty pin connections below are intentional.
+    /* verilator lint_off PINCONNECTEMPTY */
+
+    // ════════════════════════════════════════════════════════════
+    // Inter-stage wires (named by the register they carry)
+    // ════════════════════════════════════════════════════════════
+    // ID/EX
+    logic [OPC_W-1:0]    idex_op_class;
+    logic [ALU_OP_W-1:0] idex_alu_op;
+    logic [1:0]          idex_divmul_op;
+    logic [31:0]         idex_op_a, idex_op_b, idex_store_data;
+    logic [3:0]          idex_cond;
+    logic [MEM_OP_W-1:0] idex_mem_op;
+    logic [1:0]          idex_mem_size;
+    logic                idex_sign_ext;
+    logic [3:0]          idex_sys_dev, idex_sys_reg, idex_spr_sel;
+    logic                idex_drain_commit, idex_post_commit_wait;
+    logic                idex_is_trap;
+    logic                idex_gpr_we, idex_spr_we, idex_flag_we;
+    logic [SB_IDX_W-1:0] idex_phys_dst, idex_phys_dst_aux;
+    logic                idex_phys_dst_aux_en;
+    logic [31:0]         idex_pc, idex_next_pc;
+    logic                idex_valid, idex_fault_pending;
+    logic [3:0]          idex_fault_vec;
+    logic [31:0]         idex_fault_status;
+
+    // EX/MEM
+    logic [OPC_W-1:0]    exmem_op_class;
+    logic [MEM_OP_W-1:0] exmem_mem_op;
+    logic [1:0]          exmem_mem_size;
+    logic                exmem_sign_ext;
+    logic [31:0]         exmem_store_data;
+    logic                exmem_gpr_we, exmem_spr_we, exmem_flag_we;
+    logic [3:0]          exmem_spr_sel;
+    logic [3:0]          exmem_sys_dev, exmem_sys_reg;   // RDSYS sysreg selectors
+    logic [31:0]         exmem_result, exmem_result_aux;
+    logic [3:0]          exmem_flag_value;
+    logic [SB_IDX_W-1:0] exmem_phys_dst, exmem_phys_dst_aux;
+    logic                exmem_phys_dst_aux_en;
+    logic [31:0]         exmem_pc;
+    logic                exmem_valid, exmem_fault_pending;
+    logic [3:0]          exmem_fault_vec;
+    logic [31:0]         exmem_fault_status;
+
+    // MEM/WB
+    logic [OPC_W-1:0]    memwb_op_class;
+    logic                memwb_gpr_we, memwb_spr_we, memwb_flag_we;
+    logic [3:0]          memwb_spr_sel;
+    logic [31:0]         memwb_wb_value, memwb_wb_value_aux;
+    logic [3:0]          memwb_flag_value;
+    logic [SB_IDX_W-1:0] memwb_phys_dst, memwb_phys_dst_aux;
+    logic                memwb_phys_dst_aux_en;
+    logic [31:0]         memwb_pc;
+    logic                memwb_valid, memwb_fault_pending;
+    logic [3:0]          memwb_fault_vec;
+    logic [31:0]         memwb_fault_vaddr, memwb_fault_status;
+
+    // Fault commit (WB → exception unit / flush)
+    logic                wb_fault_commit;
+    logic [31:0]         wb_fault_pc;
+
+    // Regfile read ports (ID-driven)
+    logic [SB_IDX_W-1:0] rd_idx_a, rd_idx_b;
+    logic [31:0]         rd_data_a, rd_data_b;
+
+    // Handshake — flat stall composition.
+    // Each stage exposes only its downstream-independent local stall; the
+    // back-pressure into a stage is the OR of every strictly-downstream stage's
+    // local (a suffix-OR over the WB → MEM → EX → ID → IF order). Computing it
+    // flat here — rather than rippling o_stall stage-to-stage through the
+    // keep_hierarchy boundaries — keeps the late D-cache-busy term carried in
+    // mem_local_stall off a multi-stage serial path: it reaches the front end
+    // through one OR level instead of three module-boundary hops.
+    logic wb_local_stall, mem_local_stall, ex_local_stall, id_local_stall;
+    logic mem_downstream_stall, ex_downstream_stall, id_downstream_stall;
+    logic ex_stall, id_stall;   // inclusive: this stage's local | its downstream
+
+    // Each stage's strictly-downstream stall is the flat OR of all locals below
+    // it in the WB → MEM → EX → ID → IF order (WB is downstream-most, so it has
+    // no entry — its local is wb_local_stall). Each feeds the matching stage's
+    // i_stall_in; id_downstream_stall, with id_local_stall, also forms the IF
+    // freeze. Flat ORs — not chained downstream-to-downstream — keep the late
+    // mem_local_stall term one OR level from every consumer.
+    assign mem_downstream_stall = wb_local_stall;
+    assign ex_downstream_stall  = wb_local_stall | mem_local_stall;
+    assign id_downstream_stall  = wb_local_stall | mem_local_stall | ex_local_stall;
+
+    // Inclusive combined stalls, derived from the suffix-OR above — used by the
+    // consumers that need "is this stage stalled at all" (o_ex_stall, the IF
+    // freeze o_fetch_stall, and the ID taken-branch bubble gate).
+    assign ex_stall = ex_local_stall | ex_downstream_stall;
+    assign id_stall = id_local_stall | id_downstream_stall;
+
+    logic ex_branch_taken;
+    logic ex_dc_commit;     // EX drain-commit pulse (ERET/WRSYS/WRSPR-SR/EI/DI)
+
+    // Drain-commit effects, gated from the single EX commit pulse by the op
+    // held in EX. EX owns the *when* (it sequenced the drain); the integration
+    // owns the *what* — ERET restores SR/redirects PC, EI/DI flip SR.I.
+    logic eret_commit, ei_commit, di_commit;
+    assign eret_commit = ex_dc_commit & (idex_op_class == OPC_ERET);
+    assign ei_commit   = ex_dc_commit & (idex_op_class == OPC_EI);
+    assign di_commit   = ex_dc_commit & (idex_op_class == OPC_DI);
+
+    // WRSYS sysreg write — composed from the held ID/EX fields at the commit.
+    // WRSYS sysreg write — composed from the held ID/EX fields at the commit.
+    // WRSYS is a drain-commit (like ERET/EI/DI above): it never advances past
+    // EX, so its selectors and value (idex_op_b — read from the Rd field) stay
+    // in the ID/EX register until it commits. The strobe pulses on the WRSYS
+    // commit; the post_commit_wait cycle (sequenced in EX) then holds the next
+    // instruction off long enough for the device to latch. These are the
+    // write-side ports (distinct from the MEM-driven RDSYS read selectors).
+    assign o_sys_wr_dev = idex_sys_dev;
+    assign o_sys_wr_reg = idex_sys_reg;
+    assign o_sys_wdata  = idex_op_b;
+    assign o_sys_we     = ex_dc_commit & (idex_op_class == OPC_WRSYS);
+
+    // WRSYS context-synchronization. The write strobe fires at the commit (T);
+    // the device latches at the T→T+1 edge (the post-commit-wait window). One
+    // cycle later, re-fetch from the WRSYS's successor so the following
+    // instructions are fetched under the new state — flushing the younger
+    // instruction frozen in ID here, and (via o_wrsys_resync) the front end in
+    // the core. The pulse and target are registered at the commit so they
+    // survive the WRSYS leaving EX; firing at T+1 (not T) guarantees the
+    // re-translated fetch sees the latched device state.
+    logic        wrsys_resync;
+    logic [31:0] wrsys_resync_pc;
+    always_ff @(posedge i_clk) begin
+        if (i_rst) wrsys_resync <= 1'b0;
+        else       wrsys_resync <= o_sys_we;
+        if (o_sys_we) wrsys_resync_pc <= idex_next_pc;
+    end
+    assign o_wrsys_resync    = wrsys_resync;
+    assign o_wrsys_resync_pc = wrsys_resync_pc;
+
+    // WB write port + committed flags
+    logic [SB_IDX_W-1:0] wr_idx;
+    logic [31:0]         wr_data;
+    logic                wr_en;
+    logic [3:0]          wb_flag_value;
+    logic                wb_flag_we;
+
+    // Scoreboard downstream-writer signals (fed to ID)
+    logic [SB_IDX_W-1:0] sb_mem_dst, sb_wb_dst, sb_aux_dst;
+    logic                sb_mem_dst_en, sb_wb_dst_en, sb_aux_dst_en;
+
+    // ════════════════════════════════════════════════════════════
+    // Privileged save-state registers (SR / ESR / EPC)
+    // ════════════════════════════════════════════════════════════
+    // WB commits NZCV into SR here; EX's flag bypass reads SR's NZCV as the
+    // committed-SR fallback when no in-flight producer forwards. The fault
+    // commit drives the save-state pulse (EPC ← faulting PC, ESR ← SR, S=1,
+    // I=0). An interrupt rides the same path: the EX stage tags its instruction
+    // as a synthetic fault (driven by i_irq_inject), so wb_fault_commit covers
+    // both a real fault and an interrupt entry, and save_pc is the committing
+    // slot's own PC either way.
+    logic        save_state;
+    logic [31:0] save_pc;
+    assign save_state = wb_fault_commit;
+    assign save_pc    = wb_fault_pc;
+
+    // ── SPR-file software access (RDSPR/WRSPR EPC/ESR) ────────────
+    // EPC/ESR are SPR-file-backed (not regfile entries). WRSPR commits the
+    // Rd value at WB like any register write — the WB SPR strobe drives the
+    // SPR-file write, gated to EPC/ESR (USP routes to the regfile R14 bank,
+    // SCRn to the scratch file). RDSPR reads the SPR file or the scratch file
+    // combinationally at ID via id_spr_rd_sel, muxed onto the operand-B path.
+    logic        wb_spr_we;
+    logic [3:0]  wb_spr_sel;
+    logic [31:0] wb_spr_value;
+    logic [3:0]  id_spr_rd_sel;
+    logic [31:0] spr_rd_value;        // SPR-file readback (EPC/ESR/SR)
+    logic [31:0] scr_rd_value;        // scratch-file readback (SCRn)
+    logic [31:0] spr_operand_value;   // muxed value driven onto operand B
+    logic        spr_file_we;
+    assign spr_file_we = wb_spr_we & (wb_spr_sel == SPR_EPC | wb_spr_sel == SPR_ESR);
+
+    // WRSPR USP writes the regfile R14 (user) bank. The regmap already put
+    // SB_USP=14 in the WB's o_wr_idx and the value in o_wr_data; only the
+    // write enable needs the SPR strobe, since the WB's GPR enable excludes
+    // spr_we. RDSPR USP needs nothing here — it reads entry 14 through the
+    // ordinary operand-B regfile read (cross_bank, any mode).
+    logic        usp_we;
+    assign usp_we = wb_spr_we & (wb_spr_sel == SPR_USP);
+
+    logic [3:0]  spr_sr_flags;
+    logic [31:0] sr_committed;     // committed SR word (RDSPR SR reads S/I here)
+    penumbra2_spr_file u_spr (
+        .i_clk(i_clk), .i_rst(i_rst),
+        .i_flag_we(wb_flag_we), .i_flag_value(wb_flag_value),
+        .i_save_state(save_state), .i_save_pc(save_pc),
+        .i_eret(eret_commit),
+        .i_ei(ei_commit), .i_di(di_commit),
+        .i_spr_we(spr_file_we), .i_spr_sel(wb_spr_sel), .i_spr_value(wb_spr_value),
+        .i_rd_sel(id_spr_rd_sel), .o_rd_value(spr_rd_value),
+        .o_sr_flags(spr_sr_flags),
+        .o_sr_s(o_sr_s), .o_sr_i(o_sr_i), .o_sr_read(sr_committed),
+        .o_epc(o_epc), .o_esr()
+    );
+
+    // WRSPR SCRn writes the scratch file (EPC/ESR → SPR file; USP → regfile
+    // R14 bank). The write enable is gated to the SCRn SPR range; the scratch
+    // file derives its own array index from the SPR number.
+    logic        scr_we;
+    assign scr_we = wb_spr_we & (wb_spr_sel >= SPR_SCR0) & (wb_spr_sel <= SPR_SCR3);
+
+    penumbra2_scratch_file u_scr (
+        .i_clk(i_clk), .i_rst(i_rst),
+        .i_we(scr_we), .i_w_sel(wb_spr_sel), .i_w_value(wb_spr_value),
+        .i_rd_sel(id_spr_rd_sel), .o_rd_value(scr_rd_value)
+    );
+
+    // Operand-B SPR readback: SCRn come from the scratch file, every other
+    // SPR-file-backed read (EPC/ESR) from the SPR file. The ID stage only
+    // consumes this for an actual SPR read, so a coincidental SCRn-range sel on
+    // a plain register read is harmless (the regfile value is selected there).
+    logic        id_rd_is_scr;
+    assign id_rd_is_scr      = (id_spr_rd_sel >= SPR_SCR0) & (id_spr_rd_sel <= SPR_SCR3);
+    assign spr_operand_value = id_rd_is_scr ? scr_rd_value : spr_rd_value;
+
+    // Every WRSPR backend is now routed (EPC/ESR → SPR file, USP → regfile R14,
+    // SCRn → scratch file); SR is reserved and traps illegal in decode, so it
+    // must never reach WB. Catch an out-of-set SPR write loudly.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        wb_spr_we |-> (wb_spr_sel == SPR_EPC || wb_spr_sel == SPR_ESR
+                       || wb_spr_sel == SPR_USP
+                       || (wb_spr_sel >= SPR_SCR0 && wb_spr_sel <= SPR_SCR3)))
+        else $error("penumbra2_spine: WRSPR to an out-of-set SPR backend");
+
+    // ════════════════════════════════════════════════════════════
+    // Register file (shared: ID reads, WB writes)
+    // ════════════════════════════════════════════════════════════
+    penumbra2_regfile u_regfile (
+        .i_clk(i_clk), .i_rst(i_rst),
+        .i_rd_idx_a(rd_idx_a), .o_rd_data_a(rd_data_a),
+        .i_rd_idx_b(rd_idx_b), .o_rd_data_b(rd_data_b),
+        .i_wr_idx(wr_idx), .i_wr_data(wr_data), .i_wr_en(wr_en | usp_we)
+    );
+
+    // ════════════════════════════════════════════════════════════
+    // ID — decode / issue (owns the scoreboard)
+    // ════════════════════════════════════════════════════════════
+    penumbra2_id_stage u_id (
+        .i_clk(i_clk), .i_rst(i_rst),
+        .i_ir(i_ir), .i_pc(i_pc), .i_next_pc(i_next_pc),
+        .i_valid(i_valid), .i_fault_pending(i_fault_pending),
+        .i_fault_vec(i_fault_vec), .i_fault_status(i_fault_status),
+        .i_supervisor(i_supervisor),
+        // ex_branch_taken bubbles the ID/EX register to kill a taken branch's
+        // wrong-path successor — but only once the branch *advances* out of EX.
+        // While EX is stalled (ex_stall, e.g. an older load holding MEM busy)
+        // the ID/EX register still holds the branch itself, so gating with
+        // ~ex_stall keeps the bubble from discarding the held branch (which
+        // would lose its link write). A fault flush (wb_fault_commit) is NOT
+        // gated: it must kill every younger slot regardless of back-pressure.
+        // eret_commit / wrsys_resync fire only with the pipe drained, so they
+        // never coincide with a MEM stall.
+        .i_stall_in(id_downstream_stall),
+        .i_bubble((ex_branch_taken & ~ex_stall) | wb_fault_commit | eret_commit | wrsys_resync),
+        .o_local_stall(id_local_stall),
+        .o_rd_idx_a(rd_idx_a), .o_rd_idx_b(rd_idx_b),
+        .i_rd_data_a(rd_data_a), .i_rd_data_b(rd_data_b),
+        .o_spr_rd_sel(id_spr_rd_sel), .i_spr_src_value(spr_operand_value),
+        .i_mem_dst(sb_mem_dst), .i_mem_dst_en(sb_mem_dst_en),
+        .i_wb_dst(sb_wb_dst),   .i_wb_dst_en(sb_wb_dst_en),
+        .i_aux_dst(sb_aux_dst), .i_aux_dst_en(sb_aux_dst_en),
+        .o_op_class(idex_op_class), .o_alu_op(idex_alu_op), .o_divmul_op(idex_divmul_op),
+        .o_op_a(idex_op_a), .o_op_b(idex_op_b), .o_store_data(idex_store_data),
+        .o_cond(idex_cond),
+        .o_writes_flags(), .o_reads_flags(), .o_flag_only(),
+        .o_mem_op(idex_mem_op), .o_mem_size(idex_mem_size), .o_sign_ext(idex_sign_ext),
+        .o_sys_dev(idex_sys_dev), .o_sys_reg(idex_sys_reg), .o_spr_sel(idex_spr_sel),
+        .o_drain_commit(idex_drain_commit), .o_post_commit_wait(idex_post_commit_wait),
+        .o_gpr_we(idex_gpr_we), .o_spr_we(idex_spr_we), .o_flag_we(idex_flag_we),
+        .o_is_trap(idex_is_trap),
+        .o_phys_dst(idex_phys_dst), .o_phys_dst_aux(idex_phys_dst_aux),
+        .o_phys_dst_aux_en(idex_phys_dst_aux_en),
+        .o_pc(idex_pc), .o_next_pc(idex_next_pc),
+        .o_valid(idex_valid), .o_fault_pending(idex_fault_pending),
+        .o_fault_vec(idex_fault_vec), .o_fault_status(idex_fault_status)
+    );
+
+    // ════════════════════════════════════════════════════════════
+    // EX — execute (ALU, flag bypass, branch, divmul, drain-commit)
+    // ════════════════════════════════════════════════════════════
+    penumbra2_ex_stage u_ex (
+        .i_clk(i_clk), .i_rst(i_rst),
+        .i_op_class(idex_op_class), .i_alu_op(idex_alu_op), .i_divmul_op(idex_divmul_op),
+        .i_op_a(idex_op_a), .i_op_b(idex_op_b), .i_store_data(idex_store_data),
+        .i_cond(idex_cond),
+        .i_mem_op(idex_mem_op), .i_mem_size(idex_mem_size), .i_sign_ext(idex_sign_ext),
+        .i_sys_dev(idex_sys_dev), .i_sys_reg(idex_sys_reg), .i_spr_sel(idex_spr_sel),
+        .i_drain_commit(idex_drain_commit), .i_post_commit_wait(idex_post_commit_wait),
+        .i_gpr_we(idex_gpr_we), .i_spr_we(idex_spr_we), .i_flag_we(idex_flag_we),
+        .i_phys_dst(idex_phys_dst), .i_phys_dst_aux(idex_phys_dst_aux),
+        .i_phys_dst_aux_en(idex_phys_dst_aux_en),
+        .i_pc(idex_pc), .i_next_pc(idex_next_pc), .i_is_trap(idex_is_trap),
+        .i_valid(idex_valid), .i_fault_pending(idex_fault_pending),
+        .i_fault_vec(idex_fault_vec), .i_fault_status(idex_fault_status),
+        .i_irq_inject(i_irq_inject), .i_irq_vec(i_irq_vec),
+        .i_sr_flags(spr_sr_flags), .i_sr_committed(sr_committed),
+        .i_wb_flags(memwb_flag_value), .i_wb_writes_flags(memwb_flag_we & memwb_valid),
+        .i_stall_in(ex_downstream_stall), .i_wb_active(memwb_valid), .i_bubble(wb_fault_commit),
+        .o_local_stall(ex_local_stall), .o_dc_commit(ex_dc_commit), .o_funit_stall(o_stall_funit),
+        .o_branch_taken(ex_branch_taken), .o_branch_target(o_branch_target),
+        .o_op_class(exmem_op_class), .o_mem_op(exmem_mem_op),
+        .o_mem_size(exmem_mem_size), .o_sign_ext(exmem_sign_ext),
+        .o_sys_dev(exmem_sys_dev), .o_sys_reg(exmem_sys_reg),
+        .o_spr_sel(exmem_spr_sel),
+        .o_gpr_we(exmem_gpr_we), .o_spr_we(exmem_spr_we), .o_flag_we(exmem_flag_we),
+        .o_result(exmem_result), .o_result_aux(exmem_result_aux),
+        .o_store_data(exmem_store_data),
+        .o_flag_value(exmem_flag_value),
+        .o_phys_dst(exmem_phys_dst), .o_phys_dst_aux(exmem_phys_dst_aux),
+        .o_phys_dst_aux_en(exmem_phys_dst_aux_en),
+        .o_pc(exmem_pc),
+        .o_valid(exmem_valid), .o_fault_pending(exmem_fault_pending),
+        .o_fault_vec(exmem_fault_vec), .o_fault_status(exmem_fault_status)
+    );
+
+    // ════════════════════════════════════════════════════════════
+    // MEM — memory access (pass-through skeleton)
+    // ════════════════════════════════════════════════════════════
+    penumbra2_mem_stage u_mem (
+        .i_clk(i_clk), .i_rst(i_rst),
+        .i_op_class(exmem_op_class), .i_mem_op(exmem_mem_op),
+        .i_mem_size(exmem_mem_size), .i_sign_ext(exmem_sign_ext),
+        .i_gpr_we(exmem_gpr_we), .i_spr_we(exmem_spr_we), .i_flag_we(exmem_flag_we),
+        .i_spr_sel(exmem_spr_sel),
+        .i_result(exmem_result), .i_result_aux(exmem_result_aux),
+        .i_store_data(exmem_store_data),
+        .i_flag_value(exmem_flag_value),
+        .i_phys_dst(exmem_phys_dst), .i_phys_dst_aux(exmem_phys_dst_aux),
+        .i_phys_dst_aux_en(exmem_phys_dst_aux_en),
+        .i_pc(exmem_pc),
+        .i_valid(exmem_valid), .i_fault_pending(exmem_fault_pending),
+        .i_fault_vec(exmem_fault_vec), .i_fault_status(exmem_fault_status),
+        .i_stall_in(mem_downstream_stall), .i_bubble(wb_fault_commit),
+        .o_local_stall(mem_local_stall),
+        .o_stall_load(o_stall_load), .o_stall_store(o_stall_store),
+        .o_dmem_addr(o_dmem_addr), .o_dmem_wdata(o_dmem_wdata),
+        .o_dmem_byte_en(o_dmem_byte_en), .o_dmem_re(o_dmem_re),
+        .o_dmem_we(o_dmem_we), .o_dmem_en(o_dmem_en),
+        .i_dmem_rdata(i_dmem_rdata), .i_dmem_busy(i_dmem_busy),
+        .i_dmem_fault(i_dmem_fault),
+        .o_mmu_vaddr(o_mmu_vaddr), .o_mmu_access_type(o_mmu_access_type),
+        .o_mmu_req(o_mmu_req), .i_user_mode(~i_supervisor),
+        .i_mmu_fault(i_mmu_fault), .i_mmu_fault_status(i_mmu_fault_status),
+        .i_sys_dev(exmem_sys_dev), .i_sys_reg(exmem_sys_reg),
+        .o_sys_dev(o_sys_dev), .o_sys_reg(o_sys_reg),
+        .o_sys_re(o_sys_re), .i_sys_rdata(i_sys_rdata),
+        .o_op_class(memwb_op_class),
+        .o_gpr_we(memwb_gpr_we), .o_spr_we(memwb_spr_we), .o_flag_we(memwb_flag_we),
+        .o_spr_sel(memwb_spr_sel),
+        .o_wb_value(memwb_wb_value), .o_wb_value_aux(memwb_wb_value_aux),
+        .o_flag_value(memwb_flag_value),
+        .o_phys_dst(memwb_phys_dst), .o_phys_dst_aux(memwb_phys_dst_aux),
+        .o_phys_dst_aux_en(memwb_phys_dst_aux_en),
+        .o_pc(memwb_pc),
+        .o_valid(memwb_valid), .o_fault_pending(memwb_fault_pending),
+        .o_fault_vec(memwb_fault_vec),
+        .o_fault_vaddr(memwb_fault_vaddr), .o_fault_status(memwb_fault_status)
+    );
+
+    // ════════════════════════════════════════════════════════════
+    // WB — writeback / commit
+    // ════════════════════════════════════════════════════════════
+    penumbra2_wb_stage u_wb (
+        .i_clk(i_clk), .i_rst(i_rst),
+        .i_gpr_we(memwb_gpr_we), .i_spr_we(memwb_spr_we), .i_flag_we(memwb_flag_we),
+        .i_spr_sel(memwb_spr_sel),
+        .i_wb_value(memwb_wb_value), .i_wb_value_aux(memwb_wb_value_aux),
+        .i_flag_value(memwb_flag_value),
+        .i_phys_dst(memwb_phys_dst), .i_phys_dst_aux(memwb_phys_dst_aux),
+        .i_phys_dst_aux_en(memwb_phys_dst_aux_en),
+        .i_pc(memwb_pc),
+        .i_valid(memwb_valid), .i_fault_pending(memwb_fault_pending),
+        .i_fault_vec(memwb_fault_vec),
+        .o_local_stall(wb_local_stall),
+        .o_insn_committed(o_insn_committed),
+        .o_wr_idx(wr_idx), .o_wr_data(wr_data), .o_wr_en(wr_en),
+        .o_flag_we(wb_flag_we), .o_flag_value(wb_flag_value),
+        .o_spr_we(wb_spr_we), .o_spr_sel(wb_spr_sel), .o_spr_value(wb_spr_value),
+        .o_fault_commit(wb_fault_commit), .o_fault_vec(o_fault_vec),
+        .o_fault_pc(wb_fault_pc)
+    );
+
+    // The fault-commit and ERET-commit pulses are exposed to the core (IF
+    // flush + vector-fetch / ERET redirect to EPC).
+    assign o_fault_commit = wb_fault_commit;
+    assign o_eret_commit  = eret_commit;
+
+    // The MMU query's privilege: the same supervisor state ID uses for
+    // decode-time checks. Mode changes are drain-commits (pipe empty), so the
+    // live value is always the right one for the access in MEM.
+    assign o_mmu_user = ~i_supervisor;
+
+    // MMU fault-register commit: the WB fault-commit pulse, qualified to the
+    // faults that carry a data address — the carried status is
+    // self-qualifying (type FAULT_NONE means none; Decision 16). The payload
+    // rides the MEM/WB register, so the latch captures the fault that
+    // actually retires — a younger detected-then-squashed fault never had a
+    // commit pulse.
+    assign o_mmu_fault_commit = wb_fault_commit & (memwb_fault_status[3:0] != FAULT_NONE);
+    assign o_mmu_fault_vaddr  = memwb_fault_vaddr;
+    assign o_mmu_fault_status = memwb_fault_status;
+
+    // Interrupt-unit observability: the enable bit, the EI arm pulse, any
+    // drain-commit completion (clears ei_shadow), and whether the ID/EX/MEM/WB
+    // half of the pipeline still holds a live instruction (drain detection).
+    assign o_ei_commit = ei_commit;
+    assign o_dc_commit = ex_dc_commit;
+    // A drain-commit retires from EX (it never enters WB), so its PC and class
+    // ride the EX/idex slot it is held in — surfaced for a gap-free trace.
+    assign o_dc_commit_pc       = idex_pc;
+    assign o_dc_commit_op_class = idex_op_class;
+    assign o_ex_stall = ex_stall;
+    // ID's local stall is exactly the scoreboard hazard interlock — surface it
+    // as the perfctr's hazard-stall cause.
+    assign o_stall_hazard = id_local_stall;
+
+    // ════════════════════════════════════════════════════════════
+    // Scoreboard's view of the downstream in-flight writers
+    // ════════════════════════════════════════════════════════════
+    // Every downstream writer is derived here, uniformly, from the
+    // inter-stage register fields with one predicate: a stage holds a
+    // pending scoreboard writer iff its instruction has a scoreboard
+    // destination, is a live slot, and is not faulting. A scoreboard
+    // destination is a GPR write (gpr_we) or a WRSPR to a scoreboard-mapped
+    // SPR (spr_we → SB_EPC/ESR/USP/SCRn) — both occupy a physical entry a
+    // later reader can depend on, so both must stay visible as the writer
+    // flows down. One place owning the predicate keeps it from drifting, and
+    // is where the gen2.5 forwarding network — which needs these same tags
+    // next to the result values — will later attach. EX/MEM register -> the
+    // writer "in MEM"; MEM/WB register -> "in WB". (The EX writer is ID's own
+    // registered output, fed back inside ID.)
+    logic mem_writer, wb_writer;
+    assign mem_writer = (exmem_gpr_we | exmem_spr_we) & exmem_valid & ~exmem_fault_pending;
+    assign wb_writer  = (memwb_gpr_we | memwb_spr_we) & memwb_valid & ~memwb_fault_pending;
+
+    assign sb_mem_dst    = exmem_phys_dst;
+    assign sb_mem_dst_en = mem_writer;
+    assign sb_wb_dst     = memwb_phys_dst;
+    assign sb_wb_dst_en  = wb_writer;
+
+    // The aux (divmul Rdh) is tracked wherever the dual-write instruction
+    // sits — EX, MEM, or WB — each leg gated like the primaries. Priority
+    // EX > MEM > WB; at most one is live at a moment ID can issue (an older
+    // divmul in EX back-pressures the reader until the younger one drains).
+    logic idex_aux_live, exmem_aux_live, memwb_aux_live;
+    assign idex_aux_live  = idex_phys_dst_aux_en  & idex_valid  & ~idex_fault_pending;
+    assign exmem_aux_live = exmem_phys_dst_aux_en & exmem_valid & ~exmem_fault_pending;
+    assign memwb_aux_live = memwb_phys_dst_aux_en & memwb_valid & ~memwb_fault_pending;
+    assign sb_aux_dst =
+          idex_aux_live  ? idex_phys_dst_aux
+        : exmem_aux_live ? exmem_phys_dst_aux
+        :                  memwb_phys_dst_aux;
+    assign sb_aux_dst_en = idex_aux_live | exmem_aux_live | memwb_aux_live;
+
+    // ── Fetch back-pressure + commit observability ───────────────
+    assign o_fetch_stall  = id_stall;
+    assign o_branch_taken = ex_branch_taken;
+    assign o_branch_pc    = idex_pc;   // the branch resolves in EX, holding idex_pc
+    assign o_ex_pc        = idex_pc;
+    assign o_ex_valid     = idex_valid;
+    assign o_mem_pc       = exmem_pc;
+    assign o_mem_valid    = exmem_valid;
+    assign o_commit_idx   = wr_idx;
+    assign o_commit_data  = wr_data;
+    assign o_commit_we    = wr_en;
+
+    // Retire observability: the MEM/WB slot leaving WB this cycle. The PC and
+    // SR ride alongside the pulse for the trace stream — memwb_pc is the slot's
+    // own PC (also the EPC source on a fault); sr_committed is the registered SR
+    // the instruction saw, before this cycle's own flag write commits.
+    assign o_retire_valid    = memwb_valid;
+    assign o_retire_op_class = memwb_op_class;
+    assign o_retire_pc       = memwb_pc;
+    assign o_retire_sr       = sr_committed;
+
+    // ════════════════════════════════════════════════════════════
+    // Assertions — sim-only (Verilator --assert); stripped at synth.
+    // ════════════════════════════════════════════════════════════
+
+    // Aux-writer mutual exclusion. The scoreboard has a single aux port, so
+    // sb_aux_dst priority-muxes EX>MEM>WB and exposes only the youngest live
+    // aux destination. That is sound only because at most one aux writer is
+    // live at any moment ID could issue — two live aux would hide the older
+    // one's high-half (Rdh) destination and let a dependent reader issue early
+    // (its primary Rd is still covered by i_mem/wb_dst; only Rdh is at risk).
+    // Two aux can momentarily coexist (back-to-back divmuls: one entering EX as
+    // the other reaches MEM/WB), but only while the younger divmul holds ID via
+    // its ~33-cycle EX stall — so id_stall is the carve-out. If this ever fires
+    // with id_stall low, the priority mux is dropping a real RAW hazard.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        id_stall || $onehot0({idex_aux_live, exmem_aux_live, memwb_aux_live}))
+        else $error("penumbra2_spine: multiple aux writers live while ID can issue");
+
+    // A GPR commit implies a retiring instruction: the regfile write port and
+    // the retire pulse both come from the MEM/WB slot and must not decouple.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        o_commit_we |-> o_retire_valid)
+        else $error("penumbra2_spine: GPR commit without a retiring instruction");
+
+    /* verilator lint_on PINCONNECTEMPTY */
+endmodule

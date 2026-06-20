@@ -36,7 +36,7 @@ OPT_BUILD ?= -O2
 VERILATOR_FLAGS = --cc --exe --build -Wall --assert \
                   $(if $(VCD),--trace) \
                   -CFLAGS "-std=c++17 $(OPT_BUILD)" \
-                  -Ihw/rtl/common -Ihw/rtl/penumbra1 -Ihw/rtl/penumbra2 -Ihw/rtl/machine -Ihw/rtl/bus -Ihw/rtl/io -Ihw/rtl/io/sdram -Ihw/rtl/io/video -Ihw/rtl/soc -Ihw/rtl/sim
+                  $(if $(CORE_SUB),-Ihw/rtl/$(CORE) )-Ihw/rtl/common -Ihw/rtl/penumbra1 -Ihw/rtl/penumbra2 -Ihw/rtl/machine -Ihw/rtl/bus -Ihw/rtl/io -Ihw/rtl/io/sdram -Ihw/rtl/io/video -Ihw/rtl/soc -Ihw/rtl/sim
 
 BUILD_DIR   = build
 WAVE_DIR    = waves
@@ -709,6 +709,21 @@ SRC_CORE_penumbra1 = $(wildcard hw/rtl/penumbra1/*.sv)
 SRC_CORE_penumbra2 = hw/rtl/penumbra2/penumbra2_pkg.sv \
                      $(filter-out %/penumbra2_pkg.sv, $(wildcard hw/rtl/penumbra2/*.sv))
 
+# gen2.5 (penumbra2_5): composition over gen2 — share gen2's leaf cells and
+# fork only the integration chain into penumbra2_5/. PENUMBRA2_FORKED is the
+# single list naming which gen2 files the variant overrides; the filter-out
+# drops them from the gen2 set so the variant's same-named copies are the only
+# definitions (a missing entry surfaces as a loud duplicate-module error).
+PENUMBRA2_FORKED := penumbra2_core penumbra2_spine penumbra2_id_stage penumbra2_ex_stage
+SRC_CORE_penumbra2_5 = $(filter-out $(PENUMBRA2_FORKED:%=hw/rtl/penumbra2/%.sv),$(SRC_CORE_penumbra2)) \
+                       $(wildcard hw/rtl/penumbra2_5/*.sv)
+
+# CORE-aware core fileset for the fpga tops: a sub-variant overrides, a bare
+# core falls back to its base set. (The sim build resolves modules from the -I
+# library path instead, with the variant dir prepended above, so penumbra2_5/
+# shadows penumbra2/ there without any list.)
+SRC_CORE = $(or $(SRC_CORE_$(CORE)),$(SRC_CORE_$(CORE_BASE)))
+
 # The gen2 machine's closure: the integration module plus everything it
 # binds beyond the core — the sysreg devices + L2 from the shared soc/
 # directory (also wildcarded by SRC_FABRIC — a top composing both should
@@ -743,7 +758,7 @@ FPGA_SRC_ulx3s_penumbra1_top = $(SRC_COMMON) $(SRC_CORE_penumbra1) \
 # fill sequencer + L2) against a small BRAM bus memory — the timing
 # instrument that puts the IF2 tag-compare / way-mux path and the rest
 # of the memory system in front of nextpnr (no board fabric/devices).
-FPGA_SRC_ulx3s_penumbra2_probe_top = $(SRC_COMMON) $(SRC_CORE_penumbra2) \
+FPGA_SRC_ulx3s_penumbra2_probe_top = $(SRC_COMMON) $(SRC_CORE) \
                                      $(SRC_MACHINE_penumbra2) \
                                      hw/rtl/sim/unified_bus_mem.sv \
                                      $(FPGA_RTL)/ulx3s/ulx3s_penumbra2_probe_top.sv
@@ -753,7 +768,7 @@ FPGA_SRC_ulx3s_penumbra2_probe_top = $(SRC_COMMON) $(SRC_CORE_penumbra2) \
 # wildcards mmu/ + soc/ + io/, so it covers the machine's whole closure and
 # the peripherals; only machine_penumbra2.sv itself is added on top. No
 # $(sort) needed — the per-axis sets keep their package files first.
-FPGA_SRC_ulx3s_penumbra2_top = $(SRC_COMMON) $(SRC_CORE_penumbra2) \
+FPGA_SRC_ulx3s_penumbra2_top = $(SRC_COMMON) $(SRC_CORE) \
                                $(SRC_FABRIC) $(SRC_BOARD_ulx3s) \
                                hw/rtl/machine/machine_penumbra2.sv \
                                $(FPGA_RTL)/ulx3s/ulx3s_penumbra2_top.sv
