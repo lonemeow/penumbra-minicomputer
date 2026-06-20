@@ -314,13 +314,125 @@ runner, capabilities, and program suite plus its own
 artifact while `TOP_MODULE` names the shared synth module (no duplicate
 board top). Identity-only so far — `penumbra2_5` reports cpuid name
 "Penumbra/2.5" and is otherwise behaviorally identical to `penumbra2`.
-Next is the gen2.5 microarchitecture itself (forwarding, regfile
-write-through, branch prediction), gated on `CPU_VARIANT` from the
-`penumbra2_core` instantiation in `machine_penumbra2.sv`, with a
-`pinned-stalls` capability the baseline provides and the variant drops
-so cycle-exact gen2 tests skip on the forwarding build. Mechanism:
+Next is the gen2.5 microarchitecture itself (branch prediction first,
+then forwarding + regfile write-through, then the store buffer), built
+by **composition**: gen2's leaf cells (ALU, regfile, scoreboard,
+decoder, the MMU/TLB/cache stack, ...) are shared unchanged, and only
+the integration chain (machine / core / spine / ID + EX assemblies) is
+forked — so gen2 stays byte-frozen and never reads as a gen2.5 with its
+optimizations switched off. The committed sub-variant plumbing above was
+shaped for an in-place `CPU_VARIANT` parameter; it needs adjusting so
+`CORE=penumbra2_5` selects the gen2.5 fileset (shared leaves + forked
+integration) rather than re-elaborating the base RTL. A `pinned-stalls`
+capability that gen2 provides and gen2.5 drops keeps cycle-exact gen2
+tests from failing on the gen2.5 build. Mechanism:
 `doc/internals/penumbra2/overview.md` (gen2.5 organization) and
 `doc/internals/build-system.md` (variant naming).
+
+### gen2.5 priority is ranked from the stall profile — real workload first
+
+The build order below is **data-driven from the gen2 stall profile**, not the
+feature-list order in `overview.md`. Two measurements, the representative
+workload first (a micro-benchmark lies about ratios; the real workload sets the
+priority):
+
+- **NetBSD, `penmon` idle-ish (2026-06-19):** CPI 3.68. Stalls (% of cycles):
+  flush 34.7, store 14.2, hazard 13.9, ifetch 5.3, load 3.9, funit 0.9.
+  L1I 98.2% / L1D 98.7% / L2 82.1% hit (L2 ~258k miss/s — a real working set).
+- **Dhrystone on gen2 (2026-06-19):** CPI 3.03. Stalls: flush 30.4, store 19.2,
+  hazard 10.7, load 4.2, funit 2.3, ifetch ~0. L2 nearly idle.
+
+Non-stall cycles equal insns retired (the core never overlaps a stall with
+useful work), so a class's cyc/insn is its cycle-share x CPI and the ranking is
+exact. On the real workload: flush 1.28, store 0.52, hazard 0.51, ifetch 0.20,
+load 0.14 cyc/insn.
+
+Where the two workloads agree and disagree:
+
+- **flush is #1 on both, and *larger* on real code (34.7 vs 30.4) — 2.5x the
+  next lever.** Branch prediction is unambiguously first.
+- **store and hazard are co-#2 on real code (14.2 / 13.9).** Dhrystone
+  overstated store (19.2) and understated hazard (10.7) — its hot 1 KB loop
+  hammers a few store addresses and has shallow dependency chains. So
+  **forwarding is worth more on real workloads than Dhrystone implied**; it
+  stays second, now better justified.
+- **ifetch (5.3) and L2 (82% hit, ~258k miss/s) are real-workload costs gen2.5
+  does *not* address.** Dhrystone's tiny footprint hid them. These are
+  I-cache-sizing / L2 concerns (gen3), so they set the real-world CPI floor
+  gen2.5 cannot cross. gen2.5 targets flush+store+hazard+load (~67% of
+  real-world cycles), not the memory system — do not expect it to fix
+  real-world CPI outright.
+
+Decisions taken from this:
+
+- **Store buffer is in gen2.5 scope** (beyond `overview.md`'s original
+  forwarding+prediction list) — co-second cost, and the lever that reaches the
+  CPI target on store-heavy code. The uncached/MMIO hazard is resolved by a
+  **cacheable-only** buffer: an uncacheable store drains it to completion
+  before issuing. That single rule gives MMIO program-order, DMA-kickoff
+  visibility (the MMIO write that starts a transfer drains all prior cacheable
+  stores first), and trivial load disambiguation (only cacheable loads consult
+  the buffer; an MMIO read is a different PTE.C and never aliases a buffered
+  entry). It attaches to the existing write-through path — distinct from, and
+  lighter than, the gen3 write-back L2 reshape.
+
+- **Build order: prediction -> forwarding -> store buffer.** Prediction first
+  because its blast radius is perf-only (EX stays the branch authority, so a
+  misprediction is an extra flush, never a wrong result) and it reuses
+  machinery that already exists — the IF1 `i_redirect` mux and the EX
+  taken-branch flush. Forwarding second, once the variant framework is proven:
+  it is the most result-checkable feature (it changes timing not results, so
+  the optimized variant must produce bit-identical output to the baseline
+  across the inherited suite — any divergence is a localized forwarding bug).
+  Store buffer last (most structural — the load-disambiguation path).
+
+- **Measure each feature's delta as it lands.** Features enter the gen2.5
+  fork one at a time (prediction, then forwarding, then the store buffer);
+  each one's isolated CPI delta is gen2 vs. the gen2.5 fork at that milestone,
+  read off the hardware perfctrs. Composition has no shared file to gate, so
+  there are no per-feature compile switches — the milestone is the isolation.
+
+- **Test-signature asymmetry.** Prediction is validated by perfctr deltas
+  (flush cycles must drop — its bugs are silent perf); forwarding by
+  result-equivalence (its bugs are wrong answers). Running gen2's suite
+  against the gen2.5 fork supplies both instruments.
+
+**First cut — ID-stage BTFN + unconditional-direct fold.** Backward-taken/
+forward-not-taken on conditional branches, plus always-redirect on
+unconditional direct `B`/`BL`. Prediction is at **ID**, not at fetch: the
+decoder already produces `OPC_BRANCH` / `cond` / `imm`, so there is no
+duplicated pre-decode, and the redirect (`id_pc + imm` -> IF1 PC) runs in a
+fresh cycle on registered inputs, off the icache/TLB critical path — it is a
+strictly shorter sibling of the existing EX->IF1 taken-branch redirect that
+already closes timing, so it cannot become the new limiter. The new pieces are
+the direction policy (`penumbra2_predict`), a 1-bit predicted-taken tag ID->EX,
+and generalizing EX's redirect from "redirect-on-taken" to
+"redirect-on-mispredict". These land in the forked gen2.5 integration files
+(the ID/EX assemblies) plus the new `penumbra2_predict` leaf; gen2's own stages
+keep resolving on taken, untouched. A correctly-predicted-taken branch costs
+3->2 bubbles.
+
+Fetch-time prediction (IF2) was rejected on timing: the target add would sit in
+series with the icache hit / way-mux tail, the current fmax limiter. The
+real-CPU way to redirect at fetch is a **BTB** — a small RAM, indexed by fetch
+PC, returning the target in parallel with the icache (no decode, no add in the
+fetch loop) — which is the documented evolution: it buys the last bubble
+(3->1/0), keeps fetch-time prediction timing-safe, and (with a RAS) captures
+the `JMP R13` returns the real-workload data weights heavily. Start simple at
+ID, measure, then add the BTB.
+
+The compiler already emits BTFN-shaped code, so a static predictor hits:
+MachineBlockPlacement + the backend's branch-reversal place the likely path as
+fall-through and loop back-edges as backward-taken branches — no forward-taken
+hot paths, no branch-probability hints (`PenumbraInstrInfo.cpp`
+analyze/insert/reverseBranch; `branch-opts.ll`; `Penumbra.td` even sets
+`MispredictPenalty = 0`). Direct transfers (`B`/`Bcc`/`BL`) are
+foldable/predictable; indirect ones (`JMP` — incl. `RET` = `JMP R13` —,
+`JALR`, `BRIND`) need a RAS/BTB. Real NetBSD code has higher call/return
+density than Dhrystone (printf/format-heavy call graphs), so the `JMP R13`
+return slice of flush is larger there — **the return-address-stack follow-on
+likely matters more on real workloads than Dhrystone implies, and should not be
+deferred far behind the BTFN first cut.**
 
 ## Compiler: graceful-fail on unsupported inline asm and vector IR
 

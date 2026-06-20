@@ -223,8 +223,8 @@ handles ERET and WRSYS correctly, that exception entry is precise, that
 MUL/DIV's two-write commit is reliable. **CPI on GPR-dependent code
 will be unimpressive (~3) but the architecture will be sound.**
 
-**gen2.5 — forwarding and prediction.** With gen2 proven correct,
-add the textbook performance features:
+**gen2.5 — forwarding, prediction, and store buffering.** With gen2
+proven correct, add the textbook performance features:
 
 - **EX→EX forwarding** for ALU results (eliminates most RAW
   stalls).
@@ -237,14 +237,23 @@ add the textbook performance features:
 - **Static or bimodal branch prediction** in IF1 (reduces
   taken-branch flush from 3 bubbles to 0 on correctly-predicted
   branches, ~80-90% of taken branches in typical code).
+- **A cacheable-only store buffer** that decouples a store's commit
+  from its write-through to L2, so a store no longer stalls the
+  pipeline for the L2 write latency. Uncacheable stores drain the
+  buffer and issue synchronously, which keeps MMIO writes in program
+  order, makes every prior cacheable store visible before a DMA
+  kickoff, and keeps load disambiguation simple (only cacheable loads
+  consult the buffer; an MMIO read is a different cacheability and
+  never aliases a buffered entry). It sits on the existing
+  write-through path — distinct from, and lighter than, the gen3
+  write-back L2 protocol reshape.
 
 These are well-trodden mechanisms — the gen2 pipeline-register
-layout is already forward-compatible with adding them. Most of
-gen2.5 is hardware changes inside the existing stages, not
-structural pipeline changes. How this maps onto the source tree —
-one directory, one variant parameter, not a fork — is covered in
-[gen2.5 organization](#gen25-organization-one-tree-two-variants)
-below.
+layout is already forward-compatible with adding them, and each
+gen2.5 addition is a new leaf module plus the integration wiring
+that connects it. How this maps onto the source tree — gen2's cells
+shared unchanged, only the integration chain forked — is covered in
+[gen2.5 organization](#gen25-organization-composition) below.
 
 **gen3 (speculative — not yet planned).** Possibilities include:
 
@@ -259,47 +268,63 @@ below.
   intended scale).
 - Hardware FPU (currently software-emulated, same as gen1).
 
-## gen2.5 organization: one tree, two variants
+## gen2.5 organization: composition
 
-gen2.5 is **not a fork**. It is the `penumbra2/` source tree built
-with a different value of a single core parameter, so the baseline
-(unforwarded) gen2 and the optimized gen2.5 are both buildable at any
-time from the same tree. That sameness is the point: a CPI or DMIPS
-delta between the two reflects *only* the optimizations, because every
-other variable — caches, MMU, and the compiler that produced the test
-binary — is held identical. A git-tagged snapshot of the old RTL could
-not give an honest comparison: it would be measured against whatever
-the backend looked like at tag time, and the backend is itself still
-improving.
+gen2.5 is built by **composition**, not by parameterizing gen2. gen2
+must remain readable as the machine it is — a pipelined core with no
+notion of forwarding, prediction, or a store buffer. A design that
+carried those mechanisms with their controls strapped to a default
+would no longer *be* gen2; it would be gen2.5 with the optimizations
+switched off, a different artifact. For a project whose deliverable is
+the sequence of generations themselves, that distinction is the point.
 
-This works only because of what gen2.5 *is*. Forwarding, regfile
-write-through, and branch prediction are all **additive within the
-existing structure** — none changes a module interface or the
-pipeline-register layout. That is exactly the condition under which one
-parameterized tree stays honest where two diverging copies would not.
-The inverse — a change that reshapes an interface, such as a
-line-granular L1↔L2 protocol or a split MEM stage — is what *would*
-force a separate tree, and is gen3 material for precisely this reason.
+So the split is by role. **Leaf cells are shared, unchanged**: the
+ALU, regfile, scoreboard, flag bypass, decoder, register map, the
+per-stage datapath cells, and the entire MMU / TLB / cache / arbiter
+stack have no generation-specific behavior, so gen2.5 instantiates the
+exact same modules. They hold the bulk of the correctness-critical
+logic and stay single-source — a fix lands once and serves both
+generations. **The integration chain is forked**: the files that wire
+those cells into a pipeline — machine, core, spine, and the ID/EX
+stage assemblies — are where a microarchitecture's identity lives and
+where gen2.5 differs (a predictor wired in, a prediction tag riding the
+ID/EX register, EX resolving on misprediction). gen2.5 gets its own
+copies; gen2's stay byte-frozen. New gen2.5-only behavior lands as new
+leaf modules — a predictor, a forwarding network, a store buffer —
+that the forked integration files instantiate.
 
-**RTL.** A single core parameter selects the variant. New behavior
-lands as new modules — a forwarding network, a branch predictor —
-instantiated only in the optimized variant; the unavoidable in-stage
-edits (operand-source muxes, the hazard conditions a forward now
-relaxes) are confined to single named decision points gated on that
-parameter, never scattered through the control logic. The baseline leg
-asserts that no hazard is silently suppressed, which keeps the
-unforwarded datapath studyable in its own right — the reason gen2 ships
-without forwarding at all — and makes that a machine-checked invariant
-rather than a documentation promise.
+This still gives the honest comparison that motivated sharing: gen2 and
+gen2.5 build from the *same live* leaf library and the *same current*
+compiler, so a CPI or DMIPS delta isolates the optimization — without
+freezing gen2 in time (a tagged snapshot would be measured against
+whatever the backend looked like at tag time) and without contaminating
+gen2's structure (a parameterized tree would). The cost, stated
+honestly: the forked integration files are mostly shared-but-not-leaf
+logic — the drain-commit FSM, fault flush, the back-pressure
+handshakes — so an integration-level fix applies to both copies.
+Composition *bounds* that dual-fix surface to the integration chain
+(the leaf cells never duplicate) but does not erase it there; the
+discipline that keeps it tractable is to hold each forked file a
+*minimal diff* against its gen2 original, so porting a shared fix is a
+small, reviewable change.
+
+**RTL.** The gen2.5 behavior lives in new leaf modules — a forwarding
+network, a branch predictor, a store buffer — plus the forked
+integration files that wire them in (operand-source muxes, the relaxed
+hazard conditions a forward now permits, the misprediction redirect).
+Because gen2's own stage files are untouched, "the unforwarded datapath
+is studyable in its own right" is not a gated leg that has to be
+asserted clean — it is simply what gen2's files *are*. That is the
+reason for composition over an in-place parameter: gen2's structure
+states the absence of these mechanisms by construction.
 
 **Build.** A `CORE=penumbra<n>_<sub>` selector (for example
-`penumbra2_5`) splits into a base and a suffix. The base (`penumbra2`)
-chooses the RTL fileset and runner configuration, which the variant
-inherits unchanged; the suffix chooses the elaboration parameter. Only
-two facts are genuinely per-variant, each stated once: which parameter
-the suffix maps to, and the capability delta below. Everything bulky
-derives from the base, so a variant cannot drift from the base's
-configuration.
+`penumbra2_5`) selects the gen2.5 fileset: the shared leaf cells plus
+the forked integration chain, in place of gen2's integration files. The
+runner configuration and the program suite come from the base
+generation, so a sub-variant cannot drift from the base's test setup;
+the genuinely per-variant facts are which integration files it forks
+and the capability delta below.
 
 **Test.** A variant inherits the base's entire program suite. Almost
 all of it passes unchanged, because the optimizations preserve
