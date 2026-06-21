@@ -14,6 +14,7 @@ LLVM_PREFIX ?= $(PROJROOT)/build/llvm
 
 CC      := $(LLVM_PREFIX)/bin/clang
 LD      := $(LLVM_PREFIX)/bin/ld.lld
+AR      := $(LLVM_PREFIX)/bin/llvm-ar
 
 TARGET  := penumbra-unknown-none
 COPT    ?= -O2
@@ -43,7 +44,7 @@ all: dhrystone memtest membench
 
 CRT0_OBJ   := $(BUILDDIR)/crt0.o
 COMMON_OBJ := $(BUILDDIR)/bench.o $(BUILDDIR)/librt.o \
-              $(BUILDDIR)/string.o $(BUILDDIR)/softfloat_stub.o
+              $(BUILDDIR)/softfloat_stub.o
 
 $(BUILDDIR):
 	mkdir -p $(BUILDDIR)
@@ -57,11 +58,46 @@ $(BUILDDIR)/bench.o: common/bench.c common/bench.h | $(BUILDDIR)
 $(BUILDDIR)/librt.o: common/librt.c | $(BUILDDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILDDIR)/string.o: common/string.c | $(BUILDDIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
 $(BUILDDIR)/softfloat_stub.o: common/softfloat_stub.c | $(BUILDDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
+
+# ── Optimized string/memory routines (shared with NetBSD) ──────
+#
+# Rather than maintain byte-loop fallbacks here, assemble the
+# hand-optimized .S routines straight out of the NetBSD source tree —
+# common/lib/libc, the copy already shared between the kernel and
+# userland.  Referencing them in place (never copying) means any future
+# tuning of those routines lands in the benchmarks automatically, with
+# no duplicate to drift out of sync.
+#
+# The routines are position-independent leaf code (registers + relative
+# branches, no global references), so one archive serves both the PIE
+# benchmarks and the static-linked Dhrystone build — the "rebuild as
+# .dhry.o for GOT-free codegen" dance below does not apply to them.
+# Linking an archive (not a fixed object list) pulls in only the
+# routines actually referenced, and a wildcard absorbs any new .S that
+# NetBSD adds to the directory without touching this Makefile.
+
+NETBSD_STRING_DIR  := $(PROJROOT)/netbsd/common/lib/libc/arch/penumbra/string
+NETBSD_STRING_SRCS := $(wildcard $(NETBSD_STRING_DIR)/*.S)
+NETBSD_STRING_OBJS := $(patsubst $(NETBSD_STRING_DIR)/%.S,\
+                                 $(BUILDDIR)/penstring/%.o,$(NETBSD_STRING_SRCS))
+
+# Pure assembly: no -fPIE needed (it changes no emitted bytes for these
+# relocation-free leaf routines), so a single flag set covers both models.
+STRING_ASFLAGS := --target=$(TARGET) -c
+
+PENSTRING_LIB := $(BUILDDIR)/libpenstring.a
+
+$(BUILDDIR)/penstring:
+	mkdir -p $@
+
+$(BUILDDIR)/penstring/%.o: $(NETBSD_STRING_DIR)/%.S | $(BUILDDIR)/penstring
+	$(CC) $(STRING_ASFLAGS) -x assembler-with-cpp $< -o $@
+
+$(PENSTRING_LIB): $(NETBSD_STRING_OBJS)
+	rm -f $@
+	$(AR) rcs $@ $^
 
 # ── Dhrystone 2.1 ─────────────────────────────────────────────
 #
@@ -90,8 +126,10 @@ FORCE:
 
 # Dhrystone uses non-PIE codegen — the same C source files are
 # rebuilt as *.dhry.o so the GOT-free LUI+LDW sequence reaches
-# bench.c / librt.c / string.c too (otherwise common helpers would
-# keep paying GOT indirection for every uart_putchar etc.).
+# bench.c / librt.c too (otherwise common helpers would keep paying
+# GOT indirection for every uart_putchar etc.).  The string routines
+# need no .dhry.o variant: they reference no globals, so the shared
+# $(PENSTRING_LIB) archive links cleanly at either image base.
 
 DHRY_CFLAGS := $(DHRY_CFLAGS_BASE) -isystem dhrystone/include \
                -DTIME -Dmain=dhrystone_main \
@@ -104,7 +142,7 @@ DHRY_COMMON_CFLAGS := $(DHRY_CFLAGS_BASE)
 DHRY_CRT0_OBJ := $(BUILDDIR)/dhry_crt0.o
 
 DHRY_COMMON_OBJ := $(BUILDDIR)/bench.dhry.o $(BUILDDIR)/librt.dhry.o \
-                   $(BUILDDIR)/string.dhry.o $(BUILDDIR)/softfloat_stub.dhry.o
+                   $(BUILDDIR)/softfloat_stub.dhry.o
 
 DHRY_OBJ := $(BUILDDIR)/dhry_1.o $(BUILDDIR)/dhry_2.o \
             $(BUILDDIR)/dhry_shim.o $(BUILDDIR)/dhry_entry.o
@@ -116,9 +154,6 @@ $(BUILDDIR)/bench.dhry.o: common/bench.c common/bench.h | $(BUILDDIR)
 	$(CC) $(DHRY_COMMON_CFLAGS) -c $< -o $@
 
 $(BUILDDIR)/librt.dhry.o: common/librt.c | $(BUILDDIR)
-	$(CC) $(DHRY_COMMON_CFLAGS) -c $< -o $@
-
-$(BUILDDIR)/string.dhry.o: common/string.c | $(BUILDDIR)
 	$(CC) $(DHRY_COMMON_CFLAGS) -c $< -o $@
 
 $(BUILDDIR)/softfloat_stub.dhry.o: common/softfloat_stub.c | $(BUILDDIR)
@@ -138,8 +173,8 @@ $(BUILDDIR)/dhry_entry.o: dhrystone/entry.c common/bench.h $(DHRY_STAMP) | $(BUI
 
 dhrystone: $(BUILDDIR)/DHRYSTON.ELF
 
-$(BUILDDIR)/DHRYSTON.ELF: $(DHRY_CRT0_OBJ) $(DHRY_OBJ) $(DHRY_COMMON_OBJ) dhrystone/dhry.ld
-	$(LD) $(DHRY_LDFLAGS) $(DHRY_CRT0_OBJ) $(DHRY_OBJ) $(DHRY_COMMON_OBJ) -o $@
+$(BUILDDIR)/DHRYSTON.ELF: $(DHRY_CRT0_OBJ) $(DHRY_OBJ) $(DHRY_COMMON_OBJ) $(PENSTRING_LIB) dhrystone/dhry.ld
+	$(LD) $(DHRY_LDFLAGS) $(DHRY_CRT0_OBJ) $(DHRY_OBJ) $(DHRY_COMMON_OBJ) $(PENSTRING_LIB) -o $@
 
 # ── memtest ──────────────────────────────────────────────────
 #
@@ -160,8 +195,8 @@ $(BUILDDIR)/memtest_patterns.o: memtest/patterns.c memtest/patterns.h common/ben
 
 memtest: $(BUILDDIR)/MEMTEST.ELF
 
-$(BUILDDIR)/MEMTEST.ELF: $(CRT0_OBJ) $(MEMTEST_OBJ) $(COMMON_OBJ) common/bench.ld
-	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(MEMTEST_OBJ) $(COMMON_OBJ) -o $@
+$(BUILDDIR)/MEMTEST.ELF: $(CRT0_OBJ) $(MEMTEST_OBJ) $(COMMON_OBJ) $(PENSTRING_LIB) common/bench.ld
+	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(MEMTEST_OBJ) $(COMMON_OBJ) $(PENSTRING_LIB) -o $@
 
 # ── membench ─────────────────────────────────────────────────
 #
@@ -178,8 +213,8 @@ $(BUILDDIR)/membench_entry.o: membench/entry.c common/bench.h | $(BUILDDIR)
 
 membench: $(BUILDDIR)/MEMBENCH.ELF
 
-$(BUILDDIR)/MEMBENCH.ELF: $(CRT0_OBJ) $(MEMBENCH_OBJ) $(COMMON_OBJ) common/bench.ld
-	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(MEMBENCH_OBJ) $(COMMON_OBJ) -o $@
+$(BUILDDIR)/MEMBENCH.ELF: $(CRT0_OBJ) $(MEMBENCH_OBJ) $(COMMON_OBJ) $(PENSTRING_LIB) common/bench.ld
+	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(MEMBENCH_OBJ) $(COMMON_OBJ) $(PENSTRING_LIB) -o $@
 
 # ── Cleanup ────────────────────────────────────────────────────
 
