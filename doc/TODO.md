@@ -1600,6 +1600,83 @@ phantom hit event today.  Once early-restart lands the re-serve
 goes away on both caches and both predicates collapse to
 `<valid> && <s1_re> && hit` with no suppression.
 
+## Libc: byte-at-a-time strcpy/strcmp dominate Dhrystone — go word-at-a-time
+
+The shared string routines in
+`common/lib/libc/arch/penumbra/string/{strcpy,strcmp,strlen,memcmp}.S`
+are byte-at-a-time.  On Dhrystone they are not a minor cost — they are
+most of the program.
+
+Wiring the bare-metal benchmarks to these routines (replacing hand-rolled
+byte-loop `string.c` helpers) moved gen2 HW Dhrystone 5.03 → 6.32 DMIPS,
+entirely from fewer retired instructions — CPI was flat (3.03 → 3.06).
+That win was the word-at-a-time `memcpy` alone: Dhrystone copies one
+~48-byte `Rec_Type` per iteration as a `bl memcpy`, and byte → word
+fill cut it ~288 → ~93 insns.  The L1-D store delta confirms it
+(0.75 × 48 × iters of stores removed).  But the *remaining* per-iteration
+count stayed high, which prompted a full attribution.
+
+Instruction-count profile — deterministic, ISS-traced over 100
+steady-state iterations (architectural counts, not timing): **727
+insns/iter.**  Method is reusable and noted at the end.
+
+| function                          | insns/iter | share |
+|-----------------------------------|-----------:|------:|
+| strcpy (byte loop, 6 insns/byte)  |      189.0 | 26.0% |
+| strcmp (byte loop, 9 insns/byte)  |      178.0 | 24.5% |
+| dhrystone_main (incl. inlined Proc_1–5) | 138.0 | 19.0% |
+| memcpy (word loop, *called* from Proc_1/3) | 100.0 | 13.8% |
+| Proc_8 (2-D array index)          |       62.0 |  8.5% |
+| Proc_6                            |       22.0 |  3.0% |
+| Func_2 / Proc_7 / Func_1          |       38.0 |  5.2% |
+
+The three mem/string library routines are **64%** of every iteration;
+`strcpy`+`strcmp` alone are **51%**.
+
+The dynamic opcode mix shows the shape: `add` 157/iter (22%, mostly
+pointer bumps — Penumbra has no post-increment addressing, so every
+copy/compare step needs an explicit `add`); `ldb`+`stb` 109 (15%, byte
+traffic); compare+branch (`test`/`cmp`/`bne`/`beq`/`b`) ~200 (28%, the
+byte-loop control).  The genuinely ISA-structural tax these loops get
+blamed on — 2-operand `mov` (49/iter) plus address materialization
+`lli`+`lui` (40/iter, no gp-relative addressing) — is only ~12%, not the
+main cost.
+
+Reference point: a typical RV32 Dhrystone runs ~331 insns/iter, but it
+links a libc whose strcpy/strcmp/memcpy are word-at-a-time and inlines
+the small constant-size memcpy.  Most of the 2.2× gap is library
+algorithm, wearing the costume of an ISA gap.
+
+Actions, ranked by leverage:
+
+1. **Word-at-a-time `strcpy`/`strcmp`/`strlen`.**  Null-byte detection
+   via `(w - 0x01010101) & ~w & 0x80808080`, with an alignment prologue
+   and no read past a page the caller did not own.  ~2–2.5 insns/byte
+   instead of 6–9.  Estimated 727 → ~450 insns/iter.  These live in
+   `common/lib/libc`, so the NetBSD kernel and userland get the same
+   speedup — the reason the benchmarks reference them in place.
+
+2. **Free micro-fix:** `strcmp.S`'s loop ends with a redundant
+   unconditional `b .Lloop`.  Rotating it (conditional branch at the
+   bottom) is 9 → 8 insns/byte, ~19 insns/iter, a two-line change even
+   before going word-wide.
+
+3. **Inline constant-size `memcpy`** in the backend.  The 48-byte struct
+   copy lowers to `bl memcpy` (~100/iter incl. call + prologue); inlining
+   ~12 word load/stores drops it to ~25.  Complements the word-fast
+   routine, which still serves the variable-size case.
+
+Profiling method (reusable): trace a short run with `+trace`, find a
+loop-carried PC in the measurement function (exactly one hit per
+iteration), then bucket trace PCs by symbol address-range between two
+mid-run occurrences of that marker.  This isolates steady-state from
+one-time setup/reporting and yields exact per-function and per-opcode
+instruction attribution.
+
+Related: "Libc: memcpy misses same-offset misaligned shortcut" and
+"Libc: cache-line-align the memcpy/memset hot loops" tune the same
+routine directory along the variable-size and code-placement axes.
+
 ## Libc: memcpy misses same-offset misaligned shortcut
 
 NetBSD's libc memcpy on Penumbra takes the byte-fallback path for
