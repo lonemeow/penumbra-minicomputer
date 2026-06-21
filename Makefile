@@ -675,9 +675,12 @@ BENCH_ELFS := DHRYSTON.ELF MEMTEST.ELF MEMBENCH.ELF
 .PHONY: benchmark
 benchmark: sdimage-bench $(ISS)
 	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX) CFLAGS=$(CFLAGS)
+	@# +halt-on-break: each benchmark ends with a BREAK "done" sentinel.
+	@# Without it the interactive ISS traps that BREAK into the ROM monitor
+	@# and blocks on stdin, so the loop would never reach the next ELF.
 	@for elf in $(BENCH_ELFS); do \
 		echo "═══ Running $$elf on ISS ═══"; \
-		echo "boot sd:0,0/$$elf" | $(ISS) program.hex +sdcard=$(BENCH_IMG) \
+		echo "boot sd:0,0/$$elf" | $(ISS) program.hex +sdcard=$(BENCH_IMG) +halt-on-break \
 			|| echo "*** $$elf FAILED ***"; \
 		echo ""; \
 	done
