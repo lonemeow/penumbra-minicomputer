@@ -312,22 +312,19 @@ define), across `make test` / `simulate-rtl` / `benchmark-rtl` / `fpga`.
 runner, capabilities, and program suite plus its own
 `hw/sim/programs/penumbra2_5/`, and for fpga `TOP` names the per-variant
 artifact while `TOP_MODULE` names the shared synth module (no duplicate
-board top). Identity-only so far — `penumbra2_5` reports cpuid name
-"Penumbra/2.5" and is otherwise behaviorally identical to `penumbra2`.
-Next is the gen2.5 microarchitecture itself (branch prediction first,
-then forwarding + regfile write-through, then the store buffer), built
-by **composition**: gen2's leaf cells (ALU, regfile, scoreboard,
-decoder, the MMU/TLB/cache stack, ...) are shared unchanged, and only
-the integration chain (machine / core / spine / ID + EX assemblies) is
-forked — so gen2 stays byte-frozen and never reads as a gen2.5 with its
-optimizations switched off. The committed sub-variant plumbing above was
-shaped for an in-place `CPU_VARIANT` parameter; it needs adjusting so
-`CORE=penumbra2_5` selects the gen2.5 fileset (shared leaves + forked
-integration) rather than re-elaborating the base RTL. A `pinned-stalls`
-capability that gen2 provides and gen2.5 drops keeps cycle-exact gen2
-tests from failing on the gen2.5 build. Mechanism:
-`doc/internals/penumbra2/overview.md` (gen2.5 organization) and
-`doc/internals/build-system.md` (variant naming).
+board top). The gen2.5 microarchitecture is built by **composition**:
+`CORE=penumbra2_5` selects the gen2.5 fileset — gen2's leaf cells (ALU,
+regfile, scoreboard, decoder, the MMU/TLB/cache stack, ...) shared
+unchanged, plus the forked integration chain (machine shared; core /
+spine / ID + EX assemblies forked into `hw/rtl/penumbra2_5/`) — so gen2
+stays byte-frozen and never reads as a gen2.5 with its optimizations
+switched off. The sim build resolves the forks via a variant `-I`
+prepend, the fpga build via `SRC_CORE_penumbra2_5`; the cpuid name
+("Penumbra/2.5") still rides the `PENUMBRA_CPU_VARIANT` define, and
+cycle-exact tests gate on a `pinned-stalls` capability gen2 provides and
+gen2.5 drops. Mechanism: `doc/internals/penumbra2/overview.md` (gen2.5
+organization) and `doc/internals/build-system.md` (variant naming).
+gen2.5 is no longer identity-only — see the feature status below.
 
 ### gen2.5 priority is ranked from the stall profile — real workload first
 
@@ -397,7 +394,7 @@ Decisions taken from this:
   result-equivalence (its bugs are wrong answers). Running gen2's suite
   against the gen2.5 fork supplies both instruments.
 
-**First cut — ID-stage BTFN + unconditional-direct fold.** Backward-taken/
+**First cut — ID-stage BTFN + unconditional-direct fold (landed).** Backward-taken/
 forward-not-taken on conditional branches, plus always-redirect on
 unconditional direct `B`/`BL`. Prediction is at **ID**, not at fetch: the
 decoder already produces `OPC_BRANCH` / `cond` / `imm`, so there is no
@@ -433,6 +430,54 @@ density than Dhrystone (printf/format-heavy call graphs), so the `JMP R13`
 return slice of flush is larger there — **the return-address-stack follow-on
 likely matters more on real workloads than Dhrystone implies, and should not be
 deferred far behind the BTFN first cut.**
+
+### gen2.5 status: BTFN landed (first feature)
+
+ID-stage BTFN branch prediction is implemented and committed — the
+`penumbra2_predict` leaf, the integration-fork wiring (ID-stage redirect
++ predicted-taken tag; core/spine routing; EX resolve-on-mispredict), and
+its unit (`tb_penumbra2_5_ex_stage`) and integration (`test_btfn.s`)
+tests. First of the gen2.5 features; gen2 untouched.
+
+**Measured (gen2 vs gen2.5, both at 25 MHz).** Dhrystone CPI 3.03 -> 2.92,
+DMIPS 5.03 -> 5.22 (+3.8%), from ~12% fewer flush cycles (85.98M ->
+75.76M). The NetBSD pbench kernel microbenchmarks (getpid, clock_gettime,
+pipe_pingpong) are ~flat: their flush is return-dominated (`JMP R13`),
+which static BTFN cannot predict. This confirms the `penmon`-profile read
+above — real-workload flush is call/return-heavy.
+
+**Next, re-ranked by that result:** a **return-address stack** is the
+highest-value remaining flush lever (it claims the kernel returns BTFN
+leaves on the table) and completes "prediction" before forwarding —
+likely hosted by a fetch-time BTB, the timing-safe way to also reach
+3->1/0 on direct branches. Then forwarding + WB->ID write-through
+(hazard, co-#2 on real code), then the store buffer.
+
+**fmax margin — floorplan deferred on purpose.** BTFN costs ~3.5 MHz:
+gen2 synthesizes ~30 MHz, gen2.5 ~26-27.5 across seeds. Confirmed
+structural by an A/B — forcing the predictor's two front-end outputs to 0
+on the *same* gen2.5 build recovers ~29-31 across seeds, so it is the
+BTFN logic, not the build setup. The limiter is unchanged shared logic
+(the cache->MMU cone) that merely *places* worse once the BTFN cells +
+the ID->fetch redirect bus crowd the memory cluster (utilization ~24%, so
+placement, not fullness). gen2.5 still meets the 25 MHz constraint, with
+thin margin. A gen2.5 floorplan (`PREPACK_ulx3s_penumbra2_5_top`,
+per-TOP, gen2 untouched) is the recovery lever, **deferred until gen2.5
+either starts failing timing or has all its features landed** — each
+remaining feature loads the same cluster, so floorplanning now would be
+redone after each; do it once.
+
+**Tooling / pre-existing.** `NEXTPNR_SEED` is not in the build dependency
+graph, so a seed sweep needs `rm build/<top>.config` before each
+`make fpga` (synth stays cached). `make test-modules` resolution now
+prunes variant-fork dirs (a fork shares the base module name); the gen2.5
+EX unit test rides `VARIANT_MODULE_TESTS` with an explicit source path.
+Separately, `make test-modules` has pre-existing bitrot unrelated to
+gen2.5: `tb_penumbra2_{id,ex,mem,wb}_stage` reference the `o_stall` port
+renamed in `dc5dd5c` (to `o_local_stall` / `o_stall_{load,store}` /
+`o_funit_stall`), and `tb_penumbra2_irq` / `tb_txn_arbiter` /
+`tb_penumbra2_tlb_unit` fail on other committed port drift — fix is
+per-testbench reconciliation.
 
 ## Compiler: graceful-fail on unsupported inline asm and vector IR
 

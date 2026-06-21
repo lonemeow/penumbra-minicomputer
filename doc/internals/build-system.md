@@ -185,18 +185,21 @@ of variant exist, and they compose differently:
   principle).
 
 - **Microarchitecture sub-variants** name a `penumbra<n>_<sub>` core
-  (e.g. `penumbra2_5`): the *same* board wiring and machine, built with
-  one core parameter set. A separate top file would mean duplicating
-  the board's whole pin map to flip one parameter, so the sub-variant
-  reuses its base top as a parameterized module instead. `TOP` then
-  names the **artifact** — every `make fpga` / `make timing` output
-  (`.bit`, `.json`, `_timing.json`, …) is `TOP`-keyed, so sub-variants
-  never share a bitstream or report — while `TOP_MODULE`
-  (`<board>_<core-base>[_<variant>]_top`) names the module yosys
-  synthesizes. The parameter enters via a build-time define (sv2v
-  `-D PENUMBRA_CPU_VARIANT=…`, the same mechanism as `SDRAM_PHASE_DEG`);
-  fixed at build time, it still collapses to one definite schematic in
-  a discrete rebuild.
+  (e.g. `penumbra2_5`): the *same* board top and machine as the base, but
+  a different core fileset built by **composition** (see gen2.5
+  organization in `penumbra2/overview.md`) — the base's shared leaf cells
+  plus a forked integration chain, not a parameterized re-elaboration of
+  the base RTL. A separate board top would mean duplicating the pin map,
+  so the sub-variant reuses its base top; `TOP` then names the
+  **artifact** — every `make fpga` / `make timing` output (`.bit`,
+  `.json`, `_timing.json`, …) is `TOP`-keyed, so sub-variants never share
+  a bitstream or report — while `TOP_MODULE`
+  (`<board>_<core-base>[_<variant>]_top`) names the shared module yosys
+  synthesizes. The `PENUMBRA_CPU_VARIANT` build-time define (sv2v `-D`,
+  the same mechanism as `SDRAM_PHASE_DEG`) now selects only **identity**
+  (the cpuid name); the microarchitecture comes from the forked fileset,
+  not the parameter. Each choice is fixed at build time, so it still
+  collapses to one definite schematic in a discrete rebuild.
 
 The source set composes from per-axis variables; computed variable
 names keep it table-driven:
@@ -206,8 +209,15 @@ FPGA_SRC = $(SRC_COMMON) $(SRC_CORE_$(CORE)) $(SRC_FABRIC) $(SRC_BOARD_$(BOARD))
 ```
 
 An integration variant may override the composition (the probe variant
-drops `$(SRC_FABRIC)` and adds the memory stand-in); a microarch
-sub-variant has no source set of its own and falls back to its base
-module's. The Makefile carries one registry table (`FPGA_TOPS`) of
+drops `$(SRC_FABRIC)` and adds the memory stand-in). A microarch
+sub-variant supplies its **own** core set, `SRC_CORE_<sub>` — its base's
+leaf cells minus the forked integration files, plus the sub-variant's
+fork directory (e.g. `SRC_CORE_penumbra2_5` = `SRC_CORE_penumbra2` with
+`core`/`spine`/`id_stage`/`ex_stage` filtered out, plus
+`hw/rtl/penumbra2_5/`). The fpga build selects this via a `CORE`-aware
+`SRC_CORE` that prefers `SRC_CORE_<sub>` and falls back to the base; the
+sim build instead resolves modules from the `-I` library path with the
+variant directory prepended, so the forks shadow their base namesakes by
+search order. The Makefile carries one registry table (`FPGA_TOPS`) of
 every valid artifact — sub-variant artifacts included — so an invalid
 tuple is a hard error, not a silently empty source list.
