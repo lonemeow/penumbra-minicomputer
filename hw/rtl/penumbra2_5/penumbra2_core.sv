@@ -176,6 +176,10 @@ module penumbra2_core
     logic        branch_taken;  // flush IF1/IF2 + steer PC this cycle
     logic [31:0] branch_target; // resolved branch target
 
+    // ── ID-stage static branch prediction (gen2.5) ───────────────
+    logic        predict_redirect; // speculative: steer fetch to a predicted-taken target
+    logic [31:0] predict_target;
+
     // ── Exception entry (WB -> front end via the vector-fetch FSM) ─
     logic        fault_commit;  // a fault is taken this cycle (flush IF1/IF2, launch entry)
     logic [3:0]  fault_vec;
@@ -253,6 +257,16 @@ module penumbra2_core
             if1_redirect_pc = wrsys_resync_pc;
             if2_flush       = 1'b1;
         end else if (fault_commit) begin
+            if2_flush       = 1'b1;
+        end else if (predict_redirect) begin
+            // Speculative ID-stage BTFN redirect to a predicted-taken branch's
+            // target. Lowest priority: every event above is an older /
+            // authoritative redirect that also flushes this younger ID branch,
+            // so they never coincide. It bubbles IF1 + IF2 (the two wrong-path
+            // slots behind the branch); the branch itself stays live and is
+            // confirmed in EX.
+            if1_redirect    = 1'b1;
+            if1_redirect_pc = predict_target;
             if2_flush       = 1'b1;
         end
     end
@@ -362,6 +376,7 @@ module penumbra2_core
         .o_insn_committed(insn_committed),
         .o_branch_taken(branch_taken), .o_branch_target(branch_target),
         .o_branch_pc(o_branch_pc),
+        .o_predict_redirect(predict_redirect), .o_predict_target(predict_target),
         .o_ex_pc(o_ex_pc), .o_ex_valid(o_ex_valid),
         .o_mem_pc(o_mem_pc), .o_mem_valid(o_mem_valid),
         .o_dmem_addr(o_dmem_addr), .o_dmem_wdata(o_dmem_wdata),

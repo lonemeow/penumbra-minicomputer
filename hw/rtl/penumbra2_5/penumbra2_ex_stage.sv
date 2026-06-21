@@ -42,6 +42,7 @@ module penumbra2_ex_stage
     input  logic [31:0]           i_op_b,
     input  logic [31:0]           i_store_data,
     input  logic [3:0]            i_cond,           // branch condition (Format B)
+    input  logic                  i_predicted_taken,// ID's BTFN guess for this branch
     input  logic [MEM_OP_W-1:0]   i_mem_op,
     input  logic [1:0]            i_mem_size,
     input  logic                  i_sign_ext,
@@ -226,11 +227,21 @@ module penumbra2_ex_stage
         endcase
     end
 
+    // EX is the branch authority: it confirms or corrects the ID-stage
+    // prediction. It redirects only on a *misprediction* — its resolution
+    // disagreeing with the ID guess — so a correctly-predicted branch leaves
+    // the speculative stream already in flight untouched. The fall-through on
+    // a not-taken misprediction is i_next_pc.
+    logic        mispredict;
+    logic [31:0] redirect_target;
+    assign mispredict      = branch_redirect ^ i_predicted_taken;
+    assign redirect_target = branch_redirect ? branch_target : i_next_pc;
+
     // A taken redirect counts only for a real, non-faulting, un-flushed
     // branch slot; a bubble or a slot the fault flush is killing must
     // not steer the front-end.
-    assign o_branch_taken  = branch_redirect & i_valid & ~i_fault_pending & ~i_bubble;
-    assign o_branch_target = branch_target;
+    assign o_branch_taken  = mispredict & i_valid & ~i_fault_pending & ~i_bubble;
+    assign o_branch_target = redirect_target;
 
     // ── Drain-commit FSM ─────────────────────────────────────────
     // ERET/WRSYS/WRSPR-SR/EI/DI must order their commit against older

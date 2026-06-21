@@ -99,7 +99,12 @@ module penumbra2_id_stage
     output logic                  o_valid,
     output logic                  o_fault_pending,
     output logic [3:0]            o_fault_vec,
-    output logic [31:0]           o_fault_status
+    output logic [31:0]           o_fault_status,
+
+    // ── ID-stage static branch prediction (gen2.5) ───────────────
+    output logic                  o_predict_redirect, // steer fetch to the predicted target this cycle
+    output logic [31:0]           o_predict_target,
+    output logic                  o_predicted_taken   // the guess, registered into ID/EX for EX to confirm
 );
 
     // ── Decode (combinational) ───────────────────────────────────
@@ -273,6 +278,26 @@ module penumbra2_id_stage
         end
     end
 
+    // ── ID-stage static branch prediction (BTFN) ─────────────────
+    // The predictor runs on the combinational decode of the instruction in
+    // ID. The redirect fires only when the slot actually issues (advances
+    // into EX); predicted_taken rides the ID/EX register so EX can confirm or
+    // correct the guess. (gen2 has no analogue — this is the gen2.5 fork.)
+    logic        pred_taken;
+    logic [31:0] pred_target;
+    penumbra2_predict u_predict (
+        .i_is_branch(d_op_class == OPC_BRANCH),
+        .i_cond(d_cond),
+        .i_pc(i_pc),
+        .i_imm(d_imm),
+        .o_predict_taken(pred_taken),
+        .o_predict_target(pred_target)
+    );
+    // A stalled or bubbled (wrong-path / faulting) branch must never steer
+    // fetch; issue is 0 in both those cases, so this gates with no extra terms.
+    assign o_predict_redirect = pred_taken & issue;
+    assign o_predict_target   = pred_target;
+
     // ── ID/EX register ───────────────────────────────────────────
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
@@ -292,6 +317,7 @@ module penumbra2_id_stage
                 o_op_b             <= op_b_sel;
                 o_store_data       <= store_data_sel;
                 o_cond             <= d_cond;
+                o_predicted_taken  <= pred_taken;
                 o_writes_flags     <= d_writes_flags;
                 o_reads_flags      <= d_reads_flags;
                 o_flag_only        <= d_flag_only;
