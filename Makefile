@@ -53,6 +53,12 @@ TB   ?= tb_$(MOD)
 # Add new packages here as the design grows.
 PKG_SV = hw/rtl/common/penumbra_pkg.sv hw/rtl/penumbra2/penumbra2_pkg.sv hw/rtl/io/sdram/sdram_pkg.sv hw/rtl/io/video/video_pkg.sv hw/rtl/fpga/ecp5_pll_pkg.sv
 
+# Resolving a module by name (module sims, test-modules) must not pick up a
+# variant fork, which redefines a base module under the same name in its own
+# directory (e.g. penumbra2_5/). Module tests target the base modules; the
+# variant forks are exercised through the full-machine sim (CORE=penumbra2_5).
+MOD_FIND_PRUNE = -not -path '*/penumbra2_5/*'
+
 # ── Assembler tools ──────────────────────────────────────────
 PASM  = python3 sw/tools/pasm.py
 UASM  = python3 hw/tools/uasm.py
@@ -76,7 +82,7 @@ endif
 		--top-module $(MOD) \
 		--Mdir $(BUILD_DIR)/$(MOD).verilator \
 		-o ../V$(MOD) \
-		$(PKG_SV) $$(find hw/rtl -name '$(MOD).sv') hw/sim/$(TB).cpp
+		$(PKG_SV) $$(find hw/rtl -name '$(MOD).sv' $(MOD_FIND_PRUNE)) hw/sim/$(TB).cpp
 	@# Assemble program (per-program hex under build/hex/, passed to the
 	@# RTL via +rom_hex= — the root program.hex belongs to the boot ROM)
 	@# and microcode for $readmemh
@@ -281,8 +287,14 @@ MODULE_TESTS = \
     sdram_sim:tb_sdram_sim \
     video_pattern_test
 
-.PHONY: test-modules
-test-modules:
+# Variant-fork unit tests: a fork (penumbra2_5/) shares its base module's name,
+# so the name-based search in test-modules resolves to the base. Name the source
+# explicitly here. Fields: top-module : testbench : source.sv
+VARIANT_MODULE_TESTS = \
+    penumbra2_ex_stage:tb_penumbra2_5_ex_stage:hw/rtl/penumbra2_5/penumbra2_ex_stage.sv
+
+.PHONY: test-modules test-modules-variant
+test-modules: test-modules-variant
 	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
 	@pass=0; fail=0; failed=""; \
 	for entry in $(MODULE_TESTS); do \
@@ -293,7 +305,7 @@ test-modules:
 			--top-module $$mod \
 			--Mdir $(BUILD_DIR)/$$mod.verilator \
 			-o ../V$$mod \
-			$(PKG_SV) $$(find hw/rtl -name "$$mod.sv") hw/sim/$$tb.cpp \
+			$(PKG_SV) $$(find hw/rtl -name "$$mod.sv" $(MOD_FIND_PRUNE)) hw/sim/$$tb.cpp \
 			>/dev/null 2>&1 && \
 		   $(DOCKER_RUN) --entrypoint ./$(BUILD_DIR)/V$$mod $(DOCKER_IMAGE) \
 			>/dev/null 2>&1; then \
@@ -312,6 +324,15 @@ test-modules:
 		echo "  *** $$fail FAILED:$$failed ***"; \
 		exit 1; \
 	fi
+
+# ── Variant-fork unit tests (explicit source — see VARIANT_MODULE_TESTS) ──
+test-modules-variant:
+	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
+	@for e in $(VARIANT_MODULE_TESTS); do \
+		m=$${e%%:*}; r=$${e#*:}; tb=$${r%%:*}; s=$${r#*:}; \
+		$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) --top-module $$m --Mdir $(BUILD_DIR)/$$tb.verilator -o ../V$$tb $(PKG_SV) $$s hw/sim/$$tb.cpp >/dev/null 2>&1 || { printf "  \033[31mBUILD FAIL\033[0m  %s\n" "$$tb"; exit 1; }; \
+		$(DOCKER_RUN) --entrypoint ./$(BUILD_DIR)/V$$tb $(DOCKER_IMAGE) || exit 1; \
+	done
 
 # ── Aggregate: program tests + module tests ───────────────────
 # Usage: make test-all
