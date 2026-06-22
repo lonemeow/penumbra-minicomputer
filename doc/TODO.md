@@ -2364,11 +2364,26 @@ of this fix is count-neutral and which actually removes instructions:
   cross-call-live address sites exist. It is the concrete mechanism
   behind that entry's finding #1 ("register-pressure-aware
   address-arithmetic CSE").
-- **Layers 2-3 remove instructions.** Folding `%lo` into the load
-  (`LLI+LUI+LD` → `LUI+LD`) drops one instruction per global memory
-  access — pervasive on hot paths, Dhrystone included — and base-sharing
-  collapses redundant materializations. This is the footprint reduction
-  that attacks the I-miss bottleneck directly.
+- **Layer 2 is infeasible on Penumbra; layer 3 still removes
+  instructions (corrected 2026-06-22).** The textbook RISC-V fold —
+  materialize a `%hi` base and let the load carry `%lo` in its offset
+  field (`LUI + LD %lo`, 2 insns) — does **not** apply: Penumbra's `LUI`
+  *ORs* the high half in (`Rd = Rd | (imm16<<16)`,
+  `instruction-set.md`; ISS `case 2`), it does **not** clear the low 16
+  bits, so a `%hi`-only base would first need `MOV rd,R0` — `MOV+LUI+LD`
+  is three instructions, identical to `LLI+LUI+LD`. A single isolated
+  global load is therefore structurally **3 instructions** with no
+  compiler fold to 2 (closing that would need a clear-low load-upper
+  instruction — an ISA change, weighed against the discrete-logic
+  constraint; the OR-`LUI` exists to make the `LLI`-then-`LUI` idiom
+  work without a separate combine). What *does* remove instructions is
+  **base-sharing**: with the layer-1 pseudo, MachineCSE materializes a
+  reused base once and each access folds its *residual constant offset*
+  into the load's simm16 field when it fits ±32 KB (the layer-3
+  mechanism), collapsing redundant `LLI+LUI` pairs and offset `ADD`s.
+  That helps clustered/reused globals, not the isolated single-access
+  case — which is most of Dhrystone's near-use globals, consistent with
+  the measured-flat result below.
 
 **Measured 2026-06-18 (HW): layer 1 alone is flat on Dhrystone** — as
 expected from the above. Dhrystone accesses its globals near their use,
@@ -2377,10 +2392,14 @@ captured the straight-line case. Layer 1's value is the *enabler*
 (single SSA def that layers 2-3 and the allocator build on) plus
 RA-quality on cross-call, register-pressure-bound code — kernel-shaped,
 not Dhrystone-shaped. To see layer 1 move a number, measure a workload
-with cross-call address liveness (kernel syscall / fork+exec benches);
-to shrink Dhrystone footprint, land layer 2.
+with cross-call address liveness (kernel syscall / fork+exec benches).
+Footprint only shrinks where a base is *reused* (base-sharing collapses
+the redundant `LLI+LUI`) or carries an offset that fits the load's
+simm16; Dhrystone's isolated near-use globals largely lack that shape,
+so even the full fix may stay flat there. The per-load `%lo`-into-load
+shrink once hoped for here is infeasible (OR-`LUI`, above).
 
-### Fix — three layers (layer 1 enables; layer 2 carries the static-footprint win)
+### Fix — three layers (layer 1 enables; base-sharing + layer-3 offset-merge carry the footprint win; the RISC-V `%lo`-into-load fold is infeasible)
 
 1. **Rematerializable materialization pseudo.** Stop emitting `LLI+LUI`
    at selection; lower the static/absolute `G_GLOBAL_VALUE` to a single
@@ -2401,19 +2420,26 @@ to shrink Dhrystone footprint, land layer 2.
    MC-level expressions — that is the right idiom for *PIC*, the wrong
    one for this expansion site. RISC-V's `PseudoLLA` + post-RA
    `RISCVExpandPseudoInsts` is the matching template.
-2. **Fold `%lo` into the load offset.** Make the pseudo materialize the
-   `%hi` base and fold the low bits into the consuming load/store's
-   16-bit offset field via a `%lo`-style relocation (`LUI + LD %lo`
-   instead of `LLI+LUI+LD`). The `%hi`/`%lo` fixups already exist
-   (`fixup_penumbra_lo16`/`_hi16`, lowered in `PenumbraAsmPrinter`), and
-   `selectAddrRegImm` already folds a *resolved* base+simm16 into the
-   Format-M offset field for frame indices and constant GEPs — so the
-   residual gaps are narrower than a from-scratch relocation: (a) confirm
-   the Format-M memory-offset operand can carry a *symbolic* `%lo`
-   relocation (the Format-L `imm16` path does, via `encodeImm16`; the
-   offset field is unverified), and (b) the `isLegalAddressingMode`
-   base+simm16 advertisement — the same `isLegalAddressingMode` gap as
-   the "[R0 + offset] absolute addressing" entry; close them together.
+2. **~~Fold `%lo` into the load offset~~ — infeasible on Penumbra
+   (corrected 2026-06-22).** The RISC-V form (`LUI + LD %lo`) assumes a
+   clear-low `LUI`; Penumbra's `LUI` ORs the high half without clearing
+   the low 16 (`Rd = Rd | (imm16<<16)`, `instruction-set.md`; ISS
+   `case 2`), so a `%hi`-only base cannot be built in one instruction and
+   the fold saves nothing — there is no symbol-`%lo`-into-load
+   instruction-count win (see "which layer moves which" above). The
+   surviving instruction-removal is the **constant-offset** fold under
+   layer 3, *not* the symbol-`%lo` fold: after base-sharing materializes
+   a base once, fold a residual constant offset that fits the load's
+   simm16 field directly into the memory op (`LDW [base + off]`), else
+   keep the `ADD`. The `isLegalAddressingMode` base+simm16 advertisement
+   is still worth fixing for that — the same gap as the "[R0 + offset]
+   absolute addressing" entry, which remains independently valid (R0 is
+   hardwired zero, so a small absolute address rides the load's offset
+   with no `%hi` at all). `selectAddrRegImm` already folds a *resolved*
+   base+simm16 into the Format-M offset field for frame indices and
+   constant GEPs; (a) confirm the Format-M memory-offset operand can
+   carry a *symbolic* relocation for the offset-merge case, and (b) drop
+   the `HasBaseReg`/base+simm16 reject in `isLegalAddressingMode`.
 3. **Merge residual constant offsets** into the pseudo's symbol operand
    (`%hi(sym+o)`) and into memory ops, modeled on RISC-V's
    `RISCVMergeBaseOffset` — for offsets that can't fold into a load
