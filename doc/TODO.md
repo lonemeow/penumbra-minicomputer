@@ -2075,8 +2075,10 @@ targets opt into are silently off.  Status per item:
   pbench A/B surfaces reducible pressure that Dhrystone lacks.
 - **Tail calls**: `PenumbraCallLowering.cpp` hardcodes
   `Info.IsTailCall = false` (`// TODO: tail calls`).  Wrapper-heavy
-  kernel code pays a full frame per hop.  Medium GISel project
-  (lowerTailCall + branch-instead-of-BL emission).
+  kernel code pays a full frame per hop.  Measured opportunity and a
+  small first-cut plan are in the dedicated "Compiler: tail-call
+  optimization" entry below — ~5% of static call sites, a footprint +
+  call-overhead win (not a spill win), ≈0 on Dhrystone.
 - **`enableSpillageCopyElimination`** (MachineCopyPropagation
   extension, X86 enables): cheap flip + measure.
 - **MachineOutliner / RISC-V-style save-restore millicode**: nothing
@@ -2141,6 +2143,95 @@ Enablement plan:
    search found nothing under CSRCost).  Needs its own investigation;
    without it, shrink-wrapping only catches functions whose CSR
    pressure starts after the early exit.
+
+## Compiler: tail-call optimization — measured opportunity
+
+`PenumbraCallLowering::lowerCall` hardcodes `Info.IsTailCall = false`
+(`// TODO: tail calls`), so every call — including a pure forwarding
+wrapper `return bar(args)` — emits a full `BL`/`JALR`, a frame, and a
+`jmp lr` return hop.  Every major GISel target lowers tail calls;
+Penumbra is missing the wiring, not the capability.
+
+### Static opportunity (measured 2026-06-22)
+
+Method: static scan of `llvm-objdump -d` over the real built binaries.
+A *tail-position call* is a `bl`/`jalr` whose only successors before the
+function's terminal `jmp lr` are frame teardown — a `ldw` of a
+callee-saved reg or `lr` from `[sp+N]`, plus the `sp` adjust — so the
+result in r1/r2 passes through untouched.  Restricting teardown-loads to
+callee-saved targets (excluding a `ldw r1,[sp]`, which would mean a
+reloaded local rather than the call result) moved every count by <2%, so
+the heuristic is tight.
+
+| binary | total calls | tail-position | % | free-frame wrappers |
+|--------|------------:|--------------:|--:|--------------------:|
+| kernel (MINIMAL) | 37,267 | 2,027 (1,869 `bl` + 158 `jalr`) | 5.4% | 531 (28% of direct) |
+| libc.so.12       | 20,113 |   937 (875 + 62)                | 4.6% | 476 (54% of direct) |
+| bin/sh           |  2,986 |   105                           | 3.5% |  23 |
+| bin/cat          |     62 |     2                           |   —  |   2 |
+
+So ~4–5% of all call sites already compile to a tail-position call.  The
+"free-frame wrapper" column is the subset whose stack frame exists
+*solely* to save `lr` across the call; libc's forwarders (`__foo`→`foo`
+weak aliases) make it over half of libc's tail sites.
+
+### Per-site savings — two tiers
+
+- **Plain tail call**: −1 static instruction (the trailing `jmp lr`
+  disappears; `bl`→`b`, `jalr`→`jmp`), and −1 dynamic taken
+  control-transfer — the callee returns straight to our caller instead
+  of bouncing back through our frame.
+- **Free-frame wrapper**: the whole prologue/epilogue collapses to a
+  single `b target`, removing a **write-through `stw lr`** + its reload
+  *per dynamic execution*.  Given gen1 store-stalls are ~12% of cycles
+  (see the "Dhrystone hot-path code shape" entry below), that is real on
+  a hot wrapper, not cosmetic.
+
+### Expected leverage — footprint + call-overhead, not spill
+
+Workload-shaped, unlike the broad spill win the Localizer captured:
+
+- **Dhrystone / compute kernels: ≈0.**  Their hot loops carry no tail
+  calls — the same structural reason shrink-wrapping measured flat.  Do
+  not expect DMIPS to move.
+- **Wrapper-heavy paths: modest but real.**  Kernel syscall dispatch,
+  VFS/VOP indirect dispatch (the 158 `jalr`-tail sites are `VOP_*`-
+  shaped), libc forwarders, and process startup (ties into the "fork()
+  is unreasonably slow" entry).  Estimate: low single-digit % on
+  call-overhead-bound benches (pbench syscall rows), not a
+  Localizer-sized number.
+- **Code size: ~−2K kernel instructions at the −1/site floor,
+  ~−15–18 KB once free-wrapper frame removal counts** — helps the 1 KB
+  direct-mapped gen1 I$ only where the wrapper text is hot.
+
+A hard percentage needs a **dynamic** call-site histogram: run a
+wrapper-heavy workload (kernel pbench syscalls / fork+exec) under the ISS
+with call tracing and weight these static sites by execution frequency.
+Dhrystone provably cannot resolve this — measure on the syscall/startup
+benches.
+
+### Implementation — a small first cut exists
+
+The audit's "medium GISel project" framing is the *fully general*
+version; a useful first cut is small:
+
+- **First cut**: tail-call only when there are **no outgoing stack args**
+  (≤4 register-arg-words) and the calling conventions match.  Reuse the
+  existing `PenumbraOutgoingValueHandler`; emit a `TAILBL`/`TAILJMP`
+  terminator pseudo instead of `BL`/`JALR`; let PEI sink the epilogue
+  before it.  Penumbra's caller-pop ABI means no callee-cleanup
+  mismatch — a real simplifier.  The tail branch stays in the same
+  privilege level (SSP/USP banking untouched), R12/curlwp is reserved,
+  and `lr` is restored before the branch so the callee returns to our
+  caller.  This already catches most free wrappers, which are typically
+  ≤4 args.
+- **The medium tail**: outgoing stack args overlapping the incoming arg
+  area (ordering-sensitive copy), `sret`, varargs, and the
+  eligibility-predicate corners.  A minority of the opportunity.
+
+RISC-V's `lowerTailCall` + `PseudoTAIL`/indirect-tail pseudo is the
+matching template; AArch64's `isEligibleForTailCallOptimization` is the
+eligibility-check reference.
 
 ## Compiler/benchmark: Dhrystone hot-path code shape — where the cycles go
 
