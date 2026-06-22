@@ -446,12 +446,9 @@ pipe_pingpong) are ~flat: their flush is return-dominated (`JMP R13`),
 which static BTFN cannot predict. This confirms the `penmon`-profile read
 above — real-workload flush is call/return-heavy.
 
-**Next, re-ranked by that result:** a **return-address stack** is the
-highest-value remaining flush lever (it claims the kernel returns BTFN
-leaves on the table) and completes "prediction" before forwarding —
-likely hosted by a fetch-time BTB, the timing-safe way to also reach
-3->1/0 on direct branches. Then forwarding + WB->ID write-through
-(hazard, co-#2 on real code), then the store buffer.
+**Next (chosen from that result):** a **return-address stack** to claim the
+kernel returns BTFN leaves on the table — now landed; see the RAS status
+below.
 
 **fmax margin — floorplan deferred on purpose.** BTFN costs ~3.5 MHz:
 gen2 synthesizes ~30 MHz, gen2.5 ~26-27.5 across seeds. Confirmed
@@ -478,6 +475,55 @@ renamed in `dc5dd5c` (to `o_local_stall` / `o_stall_{load,store}` /
 `o_funit_stall`), and `tb_penumbra2_irq` / `tb_txn_arbiter` /
 `tb_penumbra2_tlb_unit` fail on other committed port drift — fix is
 per-testbench reconciliation.
+
+### gen2.5 status: RAS landed (second feature)
+
+A **return-address stack** is implemented and committed — the
+`penumbra2_ras` leaf (circular, overwrite-oldest on overflow, DEPTH=8), the
+ID-stage call/return detection (a call is any GPR-writing branch/jump —
+`BL`/`JALR`; a return is `JMP R13` that is not a call) with issue-gated
+push/pop, the predicted-target carry ID->EX, and EX's indirect-target
+verification — a return's RAS-predicted target is checked against the
+resolved `R13`, sourcing the jump target directly (`i_op_a`, not
+`branch_target`) so the added 32-bit compare stays off the ALU-result path.
+Returns now redirect at ID over the existing BTFN path (3->2 bubbles)
+instead of always mispredicting in EX. Unit test `tb_penumbra2_5_ras`
+(LIFO / exact-full / overflow past a full revolution / underflow) and
+integration `test_ras.s` (a clobbered-return case exercising the EX target
+check); gen2 untouched.
+
+**Fault-shadow drift, accepted.** The stack mutates only on issuing,
+non-faulting slots, so a branch mispredict (1-cycle EX resolve) and the
+drain-commit redirects (ERET/WRSYS, pipe drained) never corrupt it. A
+precise fault is the exception: it commits at WB and squashes an
+already-issued shadow of up to two younger slots that may have moved the
+stack; those re-run after the handler, leaving a bounded, self-healing
+pointer drift. EX corrects every misprediction, so this is perf-only, never
+a wrong target — accepted rather than adding a committed-shadow repair
+(faults are rare per instruction; the repair would recover noise).
+
+**Measured (RAS off vs on, same gen2.5 build, fmax 27.4 MHz — RAS costs
+~0).** Dhrystone DMIPS 7.20 -> 7.29 (+1.25%), CPI 3.09 -> 3.05, from ~1.6M
+fewer flush cycles — about one bubble saved per return across ~1.6M returns
+(~100% return coverage). NetBSD pbench kernel paths, where BTFN was flat:
+getpid and pipe_pingpong -2.8%, clock_gettime -1.6% cyc/op (fork_* too noisy
+at iters=1 to read). The RAS reaches the returns BTFN left on the table, as
+predicted.
+
+**The flush bucket is taken-branch-bound, not return-bound — BTB is next.**
+The RAS captured its entire reachable slice and flush still sits at 23-42% of
+cycles everywhere, including call-free libc loops (memcpy/memset/strlen at
+size=1 run 37-42% flush). That residual is the 2-bubble front-end fill of
+every taken conditional branch, which ID-stage prediction (BTFN or RAS)
+structurally cannot remove — only a fetch-time **BTB** (target RAM read in
+parallel with the icache, 2->0/1 bubbles) reaches it. The RAS result is the
+empirical case for the BTB: it pays off across every taken branch in libc,
+kernel, and Dhrystone, not just returns. A BTB subsumes the ID redirect for
+direct branches while the RAS keeps supplying indirect-return targets.
+
+**Re-ranked remaining work:** BTB (the dominant flush lever, now empirically
+justified) -> EX/MEM forwarding + WB->ID write-through (hazard, co-#2 on real
+code) -> cacheable store buffer (store, co-#2).
 
 ## Compiler: graceful-fail on unsupported inline asm and vector IR
 
