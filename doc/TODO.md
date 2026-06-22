@@ -1915,42 +1915,36 @@ But the discrepancy between "what the hardware can encode" and
 "what the cost model claims" is worth closing for correctness of
 optimization decisions in code we haven't yet seen.
 
-## Compiler: signed sub-word loads through PHIs
+## Compiler: signed sub-word loads in relational compares miss LDBS/LDHS
 
-Mirror of the zext-load promote rule for the sign-extending case.
+Re-measured and re-scoped 2026-06-22. The original framing (sext through
+a `G_PHI`, mirroring `penumbra_zextload_promote`) is **superseded**:
+upstream's `combines_for_extload` (in the post-legalizer list) now folds
+`G_SEXT(G_LOAD)` → `G_SEXTLOAD` for the single-use, through-`G_PHI`
+(including divergent-merge), and mixed sext+zext-consumer cases — all
+verified emitting `LDBS`/`LDHS` (or `LDB` + a single mask) via `llc`. The
+eq/ne char compares that were most of the 2026-06-09 Dhrystone finding
+fold to plain `LDB`, so the Dhrystone binary now carries **zero** adjacent
+sext chains.
 
-Confirmed hot 2026-06-09: Dhrystone's main loop carries ~6
-`shl 24; sar 24` sext-of-char chains (`Ch_Index`/`Ch_1_Glob`
-compares), including one site that sign-extends *both* operands of an
-eq compare — for eq/ne any consistent extension works, so a
-consistent-extension combine could drop both without LDBS selection.
-See the Dhrystone hot-path entry below for the surrounding analysis.
+The residual gap is narrower: a **signed relational** compare of a
+sub-word load inside a loop. The canonical
+`while (*p > 0 && *a == *b)` still emits `LDB; SHL r,24; SAR r,24` for the
+`*p > 0` test (the `*a == *b` eq part folds to `LDB`) — the legalizer
+widens the signed `G_ICMP` with `G_SEXT` and `combines_for_extload` does
+not fold it to `G_SEXTLOAD` in that loop-carried shape, where the
+isolated shapes do fold. Why the in-loop relational case bails when the
+isolated cases fold is the thing to diagnose before writing any rule.
 
-The post-legalizer rule `penumbra_zextload_promote` rewrites plain
-`G_LOAD :: (load s8/s16) -> s32` into `G_ZEXTLOAD`, communicating
-to known-bits machinery that `LDB`/`LDH` zero-extend in hardware.
-That makes the redundant `G_AND %, 0xFF` masks emitted by the
-legalizer's widening of unsigned/eq/ne `G_ICMP` dissolve via
-`redundant_and`.  The signed analog is still suboptimal: for
-`while (*signed_byte > 0 && *a == *b)` shapes the legalizer widens
-the signed `G_ICMP` with `G_SEXT`, which lowers to `SHL r,24;
-SAR r,24` after the load instead of selecting `LDBS` directly.
-
-Upstream's `extending_loads` combine handles the single-use case
-already (folding `G_SEXT (G_LOAD)` → `G_SEXTLOAD`).  The multi-use
-case (loaded byte flows through a `G_PHI` to both a signed compare
-and another consumer) has the same root cause as the zext case:
-the direct user of the load is a `G_PHI`, not a `G_SEXT`, so the
-combine bails.
-
-Plausible fix: extend the post-legalizer combiner with a sibling
-to `penumbra_zextload_promote` that walks transitively through
-`G_PHI`/`G_COPY`/`G_TRUNC` users, picks the appropriate extension
-opcode (`G_ZEXTLOAD` if no sign-extending user, `G_SEXTLOAD` if a
-sign-extending user dominates), and rewrites the load.  The
-walk has to handle mixed users sensibly — pessimize to no
-promotion if both sext and zext consumers exist, since either
-choice forces a software conversion at the other use site.
+**Measured opportunity (static, register-checked: a `ldb`/`ldh`
+immediately followed by a width-matched `shl;sar` on the same reg, which
+`LDBS`/`LDHS` collapses 3→1):** kernel 41 (3 byte + 38 half), libc.so 20
+(all byte), `sh` 0, Dhrystone 1. A lower bound (non-adjacent foldable
+sites exist), but the immediately-adjacent count is small and ~2
+instructions each — **low value**, consistent with the original "low
+priority" tag. Not a hot-path lever; pick it up only if the relational
+diagnosis turns out cheap, or if a kernel bench surfaces one of these in
+a hot loop.
 
 ## Compiler: selectAddSubCarry misses the immediate fold
 
@@ -2299,10 +2293,15 @@ loops).  The other ~40% sweeps the ~70-line Proc/loop text.
    one hot site (Proc_6's 8-insn `sext(eq)+add` select-of-constants
    chain, see the branch-cost entry below).  Kernel hot paths may
    differ — measure there before investing.
-5. **Signed sub-word loads confirmed hot**: ~6 `shl 24; sar 24`
-   sext-of-char chains in the loop body (see that entry), including a
-   double-sext feeding an eq compare where *no* extension is needed —
-   a consistent-extension eq/ne combine would drop both.
+5. **Signed sub-word loads — the Dhrystone instance is now gone
+   (re-measured 2026-06-22).** The 2026-06-09 profile saw ~6
+   `shl 24; sar 24` sext-of-char chains in the loop body; the eq/ne
+   char-compare cases since fold to plain `LDB` and the rest to `LDBS`,
+   so the Dhrystone binary now carries **zero** adjacent sext chains
+   (1 `ldb+shl24+sar24` site total, not on the hot path). The remaining
+   gap is the *signed-relational* shape (`while (*p > 0)`), not eq/ne —
+   see the "signed sub-word loads in relational compares" entry, now
+   re-scoped and measured small.
 6. Minor: `Proc_1`–`Proc_5`/`Func_3` are fully inlined but their
    out-of-line bodies stay linked (extern linkage) — ~500 B of dead
    text between hot functions.  Harmless to the cache (never fetched)
