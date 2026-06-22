@@ -169,6 +169,7 @@ module penumbra2_spine
     logic [31:0]         idex_op_a, idex_op_b, idex_store_data;
     logic [3:0]          idex_cond;
     logic                idex_predicted_taken;
+    logic [31:0]         idex_predicted_target;
     logic [MEM_OP_W-1:0] idex_mem_op;
     logic [1:0]          idex_mem_size;
     logic                idex_sign_ext;
@@ -438,7 +439,7 @@ module penumbra2_spine
         .o_valid(idex_valid), .o_fault_pending(idex_fault_pending),
         .o_fault_vec(idex_fault_vec), .o_fault_status(idex_fault_status),
         .o_predict_redirect(o_predict_redirect), .o_predict_target(o_predict_target),
-        .o_predicted_taken(idex_predicted_taken)
+        .o_predicted_taken(idex_predicted_taken), .o_predicted_target(idex_predicted_target)
     );
 
     // ════════════════════════════════════════════════════════════
@@ -449,7 +450,7 @@ module penumbra2_spine
         .i_op_class(idex_op_class), .i_alu_op(idex_alu_op), .i_divmul_op(idex_divmul_op),
         .i_op_a(idex_op_a), .i_op_b(idex_op_b), .i_store_data(idex_store_data),
         .i_cond(idex_cond),
-        .i_predicted_taken(idex_predicted_taken),
+        .i_predicted_taken(idex_predicted_taken), .i_predicted_target(idex_predicted_target),
         .i_mem_op(idex_mem_op), .i_mem_size(idex_mem_size), .i_sign_ext(idex_sign_ext),
         .i_sys_dev(idex_sys_dev), .i_sys_reg(idex_sys_reg), .i_spr_sel(idex_spr_sel),
         .i_drain_commit(idex_drain_commit), .i_post_commit_wait(idex_post_commit_wait),

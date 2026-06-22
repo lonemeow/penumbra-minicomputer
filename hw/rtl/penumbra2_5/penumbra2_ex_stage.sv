@@ -42,7 +42,8 @@ module penumbra2_ex_stage
     input  logic [31:0]           i_op_b,
     input  logic [31:0]           i_store_data,
     input  logic [3:0]            i_cond,           // branch condition (Format B)
-    input  logic                  i_predicted_taken,// ID's BTFN guess for this branch
+    input  logic                  i_predicted_taken,// ID's direction guess (BTFN or RAS)
+    input  logic [31:0]           i_predicted_target,// the predicted target (RAS-predicted returns; verified here)
     input  logic [MEM_OP_W-1:0]   i_mem_op,
     input  logic [1:0]            i_mem_size,
     input  logic                  i_sign_ext,
@@ -232,9 +233,24 @@ module penumbra2_ex_stage
     // disagreeing with the ID guess — so a correctly-predicted branch leaves
     // the speculative stream already in flight untouched. The fall-through on
     // a not-taken misprediction is i_next_pc.
+    //
+    // Two ways the guess can be wrong. Direction: EX's taken/not-taken
+    // resolution disagrees with the ID guess — the only failure mode for a
+    // direct branch, since EX recomputes its identical PC+imm target. Target:
+    // an *indirect* prediction (a RAS-predicted return) can match in direction
+    // yet jump elsewhere, so its resolved target must be checked too.
     logic        mispredict;
+    logic        direction_wrong;
+    logic        target_wrong;
     logic [31:0] redirect_target;
-    assign mispredict      = branch_redirect ^ i_predicted_taken;
+    assign direction_wrong = branch_redirect ^ i_predicted_taken;
+    // A return (the only RAS-predicted kind) can resolve to a target other than
+    // the RAS guess. Sourcing the jump target as i_op_a — not branch_target —
+    // keeps this 32-bit compare off the ALU-result path. i_predicted_taken drops
+    // an unpredicted JMP (direction_wrong already covers it); the OPC_JMP gate
+    // keeps a direct branch from ever tripping this.
+    assign target_wrong    = (i_op_class == OPC_JMP) & i_predicted_taken & (i_op_a != i_predicted_target);
+    assign mispredict      = direction_wrong | target_wrong;
     assign redirect_target = branch_redirect ? branch_target : i_next_pc;
 
     // A taken redirect counts only for a real, non-faulting, un-flushed

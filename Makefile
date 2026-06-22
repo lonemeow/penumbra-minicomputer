@@ -291,7 +291,8 @@ MODULE_TESTS = \
 # so the name-based search in test-modules resolves to the base. Name the source
 # explicitly here. Fields: top-module : testbench : source.sv
 VARIANT_MODULE_TESTS = \
-    penumbra2_ex_stage:tb_penumbra2_5_ex_stage:hw/rtl/penumbra2_5/penumbra2_ex_stage.sv
+    penumbra2_ex_stage:tb_penumbra2_5_ex_stage:hw/rtl/penumbra2_5/penumbra2_ex_stage.sv \
+    penumbra2_ras:tb_penumbra2_5_ras:hw/rtl/penumbra2_5/penumbra2_ras.sv
 
 .PHONY: test-modules test-modules-variant
 test-modules: test-modules-variant

@@ -101,10 +101,11 @@ module penumbra2_id_stage
     output logic [3:0]            o_fault_vec,
     output logic [31:0]           o_fault_status,
 
-    // ── ID-stage static branch prediction (gen2.5) ───────────────
+    // ── ID-stage branch prediction (gen2.5: BTFN + RAS) ──────────
     output logic                  o_predict_redirect, // steer fetch to the predicted target this cycle
-    output logic [31:0]           o_predict_target,
-    output logic                  o_predicted_taken   // the guess, registered into ID/EX for EX to confirm
+    output logic [31:0]           o_predict_target,   // that target (fetch-side, combinational)
+    output logic                  o_predicted_taken,  // direction guess, registered into ID/EX
+    output logic [31:0]           o_predicted_target  // target guess, registered into ID/EX for EX to confirm
 );
 
     // ── Decode (combinational) ───────────────────────────────────
@@ -278,23 +279,81 @@ module penumbra2_id_stage
         end
     end
 
-    // ── ID-stage static branch prediction (BTFN) ─────────────────
-    // The predictor runs on the combinational decode of the instruction in
-    // ID. The redirect fires only when the slot actually issues (advances
-    // into EX); predicted_taken rides the ID/EX register so EX can confirm or
-    // correct the guess. (gen2 has no analogue — this is the gen2.5 fork.)
-    logic        pred_taken;
-    logic [31:0] pred_target;
+    // ── ID-stage branch prediction (gen2.5: BTFN + RAS) ──────────
+    // Two predictors share one ID-stage redirect, split by branch kind and
+    // never overlapping on a single instruction:
+    //   - BTFN (penumbra2_predict) guesses a *direct* branch's direction and
+    //     reconstructs its PC-relative target.
+    //   - the RAS (penumbra2_ras) supplies a function return's *indirect* target
+    //     (JMP R13) from the call/return stack — the case BTFN cannot reach, and
+    //     the one that dominates real-code front-end flush.
+    // Both act only when the slot issues; the guess (direction + target) rides
+    // the ID/EX register so EX confirms or corrects it. (gen2 has neither — this
+    // is the gen2.5 fork.)
+    logic        btfn_taken;
+    logic [31:0] btfn_target;
     penumbra2_predict u_predict (
         .i_is_branch(d_op_class == OPC_BRANCH),
         .i_cond(d_cond),
         .i_pc(i_pc),
         .i_imm(d_imm),
-        .o_predict_taken(pred_taken),
-        .o_predict_target(pred_target)
+        .o_predict_taken(btfn_taken),
+        .o_predict_target(btfn_target)
     );
-    // A stalled or bubbled (wrong-path / faulting) branch must never steer
-    // fetch; issue is 0 in both those cases, so this gates with no extra terms.
+
+    // Call / return recognition for the RAS, derived from the decode. The test
+    // looks like magic only until you name the ISA invariant it rests on: among
+    // branches and jumps, the *only* forms that write a GPR are the linking ones
+    // — BL (OPC_BRANCH) and JALR (OPC_JMP) — and both link into R13. So "a
+    // branch or jump that writes a GPR" is exactly "a call" — the same fact EX
+    // uses for is_link. The assertion below pins the invariant so a future
+    // GPR-writing control transfer can't silently misread as a call.
+    logic is_call, is_return;
+    assign is_call   = (d_op_class == OPC_BRANCH || d_op_class == OPC_JMP) && d_gpr_we;
+    // A return is a plain JMP back through R13 — a JMP-through-LR that is *not* a
+    // linking call. Defining it as "...and not a call" makes the two
+    // structurally exclusive: jalr r13 links *and* targets R13, so it lands as a
+    // call, never a return, and the RAS push/pop assertion can never fire.
+    assign is_return = (d_op_class == OPC_JMP) && (d_src_a_sel == REG_LR) && ~is_call;
+
+    // The call invariant, checked: every GPR-writing branch/jump links into R13.
+    // If a future instruction writes some other register from a branch or jump,
+    // is_call would misfire — fail loudly here rather than corrupt the RAS.
+    always_comb
+        if (is_call)
+            assert (d_dst_sel == REG_LR)
+                else $error("penumbra2_id_stage: a linking branch/jump targets a GPR other than R13");
+
+    // The stack updates only for a real, non-faulting, issuing call/return. A
+    // faulting slot can still "issue" (it faults at WB), but its decode may be
+    // garbage, so it must never move the stack.
+    logic ras_update;
+    assign ras_update = issue & ~insn_fault_pending;
+
+    logic        ras_valid;
+    logic [31:0] ras_target;
+    penumbra2_ras u_ras (
+        .i_clk(i_clk), .i_rst(i_rst),
+        .i_push(is_call  & ras_update),
+        .i_link_addr(i_next_pc),
+        .i_pop(is_return & ras_update),
+        .o_valid(ras_valid),
+        .o_target(ras_target)
+    );
+
+    // Fold the two predictors. A return predicts only when the RAS holds an
+    // entry (else it falls through to the EX redirect — the unpredicted-JMP
+    // status quo). btfn_taken is 0 for a JMP and ras_taken is 0 for a branch, so
+    // the OR and the target select never collide.
+    logic        ras_taken;
+    logic        pred_taken;
+    logic [31:0] pred_target;
+    assign ras_taken   = is_return & ras_valid;
+    assign pred_taken  = btfn_taken | ras_taken;
+    assign pred_target = ras_taken ? ras_target : btfn_target;
+
+    // A stalled or bubbled (wrong-path / faulting) slot must never steer fetch;
+    // issue is 0 in those cases, so this gates with no extra terms.
     assign o_predict_redirect = pred_taken & issue;
     assign o_predict_target   = pred_target;
 
@@ -318,6 +377,7 @@ module penumbra2_id_stage
                 o_store_data       <= store_data_sel;
                 o_cond             <= d_cond;
                 o_predicted_taken  <= pred_taken;
+                o_predicted_target <= pred_target;
                 o_writes_flags     <= d_writes_flags;
                 o_reads_flags      <= d_reads_flags;
                 o_flag_only        <= d_flag_only;
