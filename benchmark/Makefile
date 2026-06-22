@@ -36,7 +36,7 @@ BUILDDIR := $(PROJROOT)/build/benchmark
 
 # ── Targets ────────────────────────────────────────────────────
 
-.PHONY: all dhrystone memtest membench clean
+.PHONY: all dhrystone memtest membench strtest clean
 
 all: dhrystone memtest membench
 
@@ -215,6 +215,26 @@ membench: $(BUILDDIR)/MEMBENCH.ELF
 
 $(BUILDDIR)/MEMBENCH.ELF: $(CRT0_OBJ) $(MEMBENCH_OBJ) $(COMMON_OBJ) $(PENSTRING_LIB) common/bench.ld
 	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(MEMBENCH_OBJ) $(COMMON_OBJ) $(PENSTRING_LIB) -o $@
+
+# ── strtest ──────────────────────────────────────────────────
+#
+# Correctness test (not a benchmark) for the shared common/lib/libc
+# string routines pulled from libpenstring.a.  Exercises strlen/strcmp/
+# strcpy across every start alignment and length.  -fno-builtin forces
+# real calls into the routines instead of clang-expanded builtins.
+#
+# Not in `all` / BENCH_ELFS — run on its own:
+#   make strtest && boot sd:0,0/STRTEST.ELF   (with +halt-on-break on ISS)
+
+STRTEST_OBJ := $(BUILDDIR)/strtest_entry.o
+
+$(BUILDDIR)/strtest_entry.o: strtest/entry.c common/bench.h | $(BUILDDIR)
+	$(CC) $(CFLAGS) -fno-builtin -c $< -o $@
+
+strtest: $(BUILDDIR)/STRTEST.ELF
+
+$(BUILDDIR)/STRTEST.ELF: $(CRT0_OBJ) $(STRTEST_OBJ) $(COMMON_OBJ) $(PENSTRING_LIB) common/bench.ld
+	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(STRTEST_OBJ) $(COMMON_OBJ) $(PENSTRING_LIB) -o $@
 
 # ── Cleanup ────────────────────────────────────────────────────
 
