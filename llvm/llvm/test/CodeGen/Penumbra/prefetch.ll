@@ -10,7 +10,7 @@ define void @prefetch_read(ptr %p) {
 ; CHECK-LABEL: prefetch_read:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   call void @llvm.prefetch.p0(ptr %p, i32 0, i32 3, i32 1)
   ret void
 }
@@ -19,7 +19,7 @@ define void @prefetch_write(ptr %p) {
 ; CHECK-LABEL: prefetch_write:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   call void @llvm.prefetch.p0(ptr %p, i32 1, i32 3, i32 1)
   ret void
 }

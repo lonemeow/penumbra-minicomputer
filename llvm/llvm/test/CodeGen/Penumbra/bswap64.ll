@@ -42,7 +42,7 @@ define i64 @bswap_i64(i64 %x) {
 ; CHECK-NEXT:    and r1, 65280
 ; CHECK-NEXT:    or r2, r1
 ; CHECK-NEXT:    mov r1, r3
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %r = call i64 @llvm.bswap.i64(i64 %x)
   ret i64 %r
 }

@@ -23,7 +23,7 @@ define void @store_sel(i32 %sel, i32 %v) {
 ; CHECK-NEXT:    bhi .LBB0_7
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:  .LPC0_4:
-; CHECK-NEXT:    mov r3, r15
+; CHECK-NEXT:    mov r3, pc
 ; CHECK-NEXT:    add r3, %pcrel(.LJTI0_0-.LPC0_4)
 ; CHECK-NEXT:    shl r1, 2
 ; CHECK-NEXT:    add r1, r3
@@ -34,29 +34,29 @@ define void @store_sel(i32 %sel, i32 %v) {
 ; CHECK-NEXT:    lli r1, %pcrel_lo16(a-.LPC0_0)
 ; CHECK-NEXT:    lui r1, %pcrel_hi16(a-.LPC0_0)
 ; CHECK-NEXT:  .LPC0_0:
-; CHECK-NEXT:    add r1, r15
+; CHECK-NEXT:    add r1, pc
 ; CHECK-NEXT:    b .LBB0_6
 ; CHECK-NEXT:  .LBB0_4: // %sc
 ; CHECK-NEXT:    lli r1, %pcrel_lo16(c-.LPC0_2)
 ; CHECK-NEXT:    lui r1, %pcrel_hi16(c-.LPC0_2)
 ; CHECK-NEXT:  .LPC0_2:
-; CHECK-NEXT:    add r1, r15
+; CHECK-NEXT:    add r1, pc
 ; CHECK-NEXT:    b .LBB0_6
 ; CHECK-NEXT:  .LBB0_5: // %sd
 ; CHECK-NEXT:    lli r1, %pcrel_lo16(d-.LPC0_3)
 ; CHECK-NEXT:    lui r1, %pcrel_hi16(d-.LPC0_3)
 ; CHECK-NEXT:  .LPC0_3:
-; CHECK-NEXT:    add r1, r15
+; CHECK-NEXT:    add r1, pc
 ; CHECK-NEXT:    b .LBB0_6
 ; CHECK-NEXT:  .LBB0_3: // %sb
 ; CHECK-NEXT:    lli r1, %pcrel_lo16(b-.LPC0_1)
 ; CHECK-NEXT:    lui r1, %pcrel_hi16(b-.LPC0_1)
 ; CHECK-NEXT:  .LPC0_1:
-; CHECK-NEXT:    add r1, r15
+; CHECK-NEXT:    add r1, pc
 ; CHECK-NEXT:  .LBB0_6: // %done
 ; CHECK-NEXT:    stw r2, [r1 + 0]
 ; CHECK-NEXT:  .LBB0_7: // %done
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   switch i32 %sel, label %done [
     i32 0, label %sa
     i32 1, label %sb
@@ -89,8 +89,8 @@ define ptr @addr_sel(i32 %sel) {
 ; CHECK-NEXT:    lli r1, %pcrel_lo16(b-.LPC1_0)
 ; CHECK-NEXT:    lui r1, %pcrel_hi16(b-.LPC1_0)
 ; CHECK-NEXT:  .LPC1_0:
-; CHECK-NEXT:    add r1, r15
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    add r1, pc
+; CHECK-NEXT:    jmp lr
 ; CHECK-NEXT:  .LBB1_1:
 ; CHECK-NEXT:    cmp r1, 2
 ; CHECK-NEXT:    bne .LBB1_2
@@ -98,8 +98,8 @@ define ptr @addr_sel(i32 %sel) {
 ; CHECK-NEXT:    lli r1, %pcrel_lo16(c-.LPC1_1)
 ; CHECK-NEXT:    lui r1, %pcrel_hi16(c-.LPC1_1)
 ; CHECK-NEXT:  .LPC1_1:
-; CHECK-NEXT:    add r1, r15
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    add r1, pc
+; CHECK-NEXT:    jmp lr
 ; CHECK-NEXT:  .LBB1_2:
 ; CHECK-NEXT:    cmp r1, 3
 ; CHECK-NEXT:    bne .LBB1_3
@@ -107,14 +107,14 @@ define ptr @addr_sel(i32 %sel) {
 ; CHECK-NEXT:    lli r1, %pcrel_lo16(d-.LPC1_2)
 ; CHECK-NEXT:    lui r1, %pcrel_hi16(d-.LPC1_2)
 ; CHECK-NEXT:  .LPC1_2:
-; CHECK-NEXT:    add r1, r15
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    add r1, pc
+; CHECK-NEXT:    jmp lr
 ; CHECK-NEXT:  .LBB1_3: // %ra
 ; CHECK-NEXT:    lli r1, %pcrel_lo16(a-.LPC1_3)
 ; CHECK-NEXT:    lui r1, %pcrel_hi16(a-.LPC1_3)
 ; CHECK-NEXT:  .LPC1_3:
-; CHECK-NEXT:    add r1, r15
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    add r1, pc
+; CHECK-NEXT:    jmp lr
   switch i32 %sel, label %ra [
     i32 1, label %rb
     i32 2, label %rc

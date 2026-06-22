@@ -24,16 +24,16 @@ define ptr @get_address() {
 ; PIC-NEXT:    lli r1, %got_pcrel_lo16(myvar-.LPC0_0)
 ; PIC-NEXT:    lui r1, %got_pcrel_hi16(myvar-.LPC0_0)
 ; PIC-NEXT:  .LPC0_0:
-; PIC-NEXT:    add r1, r15
+; PIC-NEXT:    add r1, pc
 ; PIC-NEXT:    ldw r1, [r1 + 0]
-; PIC-NEXT:    jmp r13
+; PIC-NEXT:    jmp lr
 ;
 ; STATIC-LABEL: get_address:
 ; STATIC:         .cfi_startproc
 ; STATIC-NEXT:  // %bb.1:
 ; STATIC-NEXT:    lli r1, %lo16(myvar)
 ; STATIC-NEXT:    lui r1, %hi16(myvar)
-; STATIC-NEXT:    jmp r13
+; STATIC-NEXT:    jmp lr
   ret ptr @myvar
 }
 
@@ -44,10 +44,10 @@ define i32 @load_global() {
 ; PIC-NEXT:    lli r1, %got_pcrel_lo16(myvar-.LPC1_0)
 ; PIC-NEXT:    lui r1, %got_pcrel_hi16(myvar-.LPC1_0)
 ; PIC-NEXT:  .LPC1_0:
-; PIC-NEXT:    add r1, r15
+; PIC-NEXT:    add r1, pc
 ; PIC-NEXT:    ldw r1, [r1 + 0]
 ; PIC-NEXT:    ldw r1, [r1 + 0]
-; PIC-NEXT:    jmp r13
+; PIC-NEXT:    jmp lr
 ;
 ; STATIC-LABEL: load_global:
 ; STATIC:         .cfi_startproc
@@ -55,7 +55,7 @@ define i32 @load_global() {
 ; STATIC-NEXT:    lli r1, %lo16(myvar)
 ; STATIC-NEXT:    lui r1, %hi16(myvar)
 ; STATIC-NEXT:    ldw r1, [r1 + 0]
-; STATIC-NEXT:    jmp r13
+; STATIC-NEXT:    jmp lr
   %v = load i32, ptr @myvar
   ret i32 %v
 }
@@ -67,10 +67,10 @@ define void @store_global(i32 %v) {
 ; PIC-NEXT:    lli r2, %got_pcrel_lo16(myvar-.LPC2_0)
 ; PIC-NEXT:    lui r2, %got_pcrel_hi16(myvar-.LPC2_0)
 ; PIC-NEXT:  .LPC2_0:
-; PIC-NEXT:    add r2, r15
+; PIC-NEXT:    add r2, pc
 ; PIC-NEXT:    ldw r2, [r2 + 0]
 ; PIC-NEXT:    stw r1, [r2 + 0]
-; PIC-NEXT:    jmp r13
+; PIC-NEXT:    jmp lr
 ;
 ; STATIC-LABEL: store_global:
 ; STATIC:         .cfi_startproc
@@ -78,7 +78,7 @@ define void @store_global(i32 %v) {
 ; STATIC-NEXT:    lli r2, %lo16(myvar)
 ; STATIC-NEXT:    lui r2, %hi16(myvar)
 ; STATIC-NEXT:    stw r1, [r2 + 0]
-; STATIC-NEXT:    jmp r13
+; STATIC-NEXT:    jmp lr
   store i32 %v, ptr @myvar
   ret void
 }
@@ -94,14 +94,14 @@ define dso_local ptr @get_pie_address() {
 ; PIC-NEXT:    lli r1, %pcrel_lo16(pievar-.LPC3_0)
 ; PIC-NEXT:    lui r1, %pcrel_hi16(pievar-.LPC3_0)
 ; PIC-NEXT:  .LPC3_0:
-; PIC-NEXT:    add r1, r15
-; PIC-NEXT:    jmp r13
+; PIC-NEXT:    add r1, pc
+; PIC-NEXT:    jmp lr
 ;
 ; STATIC-LABEL: get_pie_address:
 ; STATIC:         .cfi_startproc
 ; STATIC-NEXT:  // %bb.1:
 ; STATIC-NEXT:    lli r1, %lo16(pievar)
 ; STATIC-NEXT:    lui r1, %hi16(pievar)
-; STATIC-NEXT:    jmp r13
+; STATIC-NEXT:    jmp lr
   ret ptr @pievar
 }

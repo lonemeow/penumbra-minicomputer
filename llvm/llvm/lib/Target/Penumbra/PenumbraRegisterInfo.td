@@ -20,6 +20,17 @@
 //===----------------------------------------------------------------------===//
 
 //===----------------------------------------------------------------------===//
+// Alternate-name index
+//===----------------------------------------------------------------------===//
+
+// Semantic names for the special-purpose registers (zero, tp, lr, sp, pc).
+// Registers with no semantic name fall back to their physical r<N> name via
+// NoRegAltName, so only the five special registers need an alias entry.
+def SemanticRegName : RegAltNameIndex {
+  let FallbackRegAltNameIndex = NoRegAltName;
+}
+
+//===----------------------------------------------------------------------===//
 // Register definitions
 //===----------------------------------------------------------------------===//
 
@@ -31,6 +42,11 @@ class PenumbraReg<bits<4> num, string n, list<string> altNames = []>
   let Namespace = "Penumbra";
   // DWARF register numbers match hardware encoding (0–15).
   let DwarfNumbers = [num];
+  // A register given a semantic alias advertises it under SemanticRegName; the
+  // rest carry no index and fall back to r<N>.  Deriving this from altNames
+  // keeps the two lists in parity (one alias <-> one index).
+  let RegAltNameIndices = !if(!empty(altNames), []<RegAltNameIndex>,
+                              [SemanticRegName]);
 }
 
 class PenumbraGPR<bits<4> num, string n, list<string> altNames = []>

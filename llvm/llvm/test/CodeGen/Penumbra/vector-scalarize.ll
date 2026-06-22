@@ -11,11 +11,11 @@ define void @vector_add(ptr %dst, ptr %a, ptr %b) {
 ; CHECK-LABEL: vector_add:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 16
-; CHECK-NEXT:    stw r5, [r14 + 12] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r6, [r14 + 8] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r7, [r14 + 4] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r8, [r14 + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    sub sp, 16
+; CHECK-NEXT:    stw r5, [sp + 12] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r6, [sp + 8] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r7, [sp + 4] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r8, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    ldw r4, [r2 + 0]
 ; CHECK-NEXT:    ldw r11, [r2 + 4]
 ; CHECK-NEXT:    ldw r5, [r2 + 8]
@@ -32,12 +32,12 @@ define void @vector_add(ptr %dst, ptr %a, ptr %b) {
 ; CHECK-NEXT:    stw r11, [r1 + 4]
 ; CHECK-NEXT:    stw r5, [r1 + 8]
 ; CHECK-NEXT:    stw r2, [r1 + 12]
-; CHECK-NEXT:    ldw r8, [r14 + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r7, [r14 + 4] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r6, [r14 + 8] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r5, [r14 + 12] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 16
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    ldw r8, [sp + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r7, [sp + 4] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r6, [sp + 8] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r5, [sp + 12] // 4-byte Folded Reload
+; CHECK-NEXT:    add sp, 16
+; CHECK-NEXT:    jmp lr
   %va = load <4 x i32>, ptr %a
   %vb = load <4 x i32>, ptr %b
   %sum = add <4 x i32> %va, %vb
@@ -57,7 +57,7 @@ define void @vector_mul(ptr %dst, ptr %a, ptr %b) {
 ; CHECK-NEXT:    mul r2, r3
 ; CHECK-NEXT:    stw r4, [r1 + 0]
 ; CHECK-NEXT:    stw r2, [r1 + 4]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %va = load <2 x i32>, ptr %a
   %vb = load <2 x i32>, ptr %b
   %prod = mul <2 x i32> %va, %vb
@@ -69,11 +69,11 @@ define void @vector_shl(ptr %dst, ptr %a, ptr %b) {
 ; CHECK-LABEL: vector_shl:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 16
-; CHECK-NEXT:    stw r5, [r14 + 12] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r6, [r14 + 8] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r7, [r14 + 4] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r8, [r14 + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    sub sp, 16
+; CHECK-NEXT:    stw r5, [sp + 12] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r6, [sp + 8] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r7, [sp + 4] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r8, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    ldh r4, [r2 + 0]
 ; CHECK-NEXT:    ldh r11, [r2 + 2]
 ; CHECK-NEXT:    ldh r5, [r2 + 4]
@@ -90,12 +90,12 @@ define void @vector_shl(ptr %dst, ptr %a, ptr %b) {
 ; CHECK-NEXT:    sth r11, [r1 + 2]
 ; CHECK-NEXT:    sth r5, [r1 + 4]
 ; CHECK-NEXT:    sth r2, [r1 + 6]
-; CHECK-NEXT:    ldw r8, [r14 + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r7, [r14 + 4] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r6, [r14 + 8] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r5, [r14 + 12] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 16
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    ldw r8, [sp + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r7, [sp + 4] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r6, [sp + 8] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r5, [sp + 12] // 4-byte Folded Reload
+; CHECK-NEXT:    add sp, 16
+; CHECK-NEXT:    jmp lr
   %va = load <4 x i16>, ptr %a
   %vb = load <4 x i16>, ptr %b
   %shifted = shl <4 x i16> %va, %vb
@@ -107,12 +107,12 @@ define void @vector_select(ptr %dst, ptr %a, ptr %b, i1 %c) {
 ; CHECK-LABEL: vector_select:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 20
-; CHECK-NEXT:    stw r5, [r14 + 16] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r6, [r14 + 12] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r7, [r14 + 8] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r8, [r14 + 4] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r9, [r14 + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    sub sp, 20
+; CHECK-NEXT:    stw r5, [sp + 16] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r6, [sp + 12] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r7, [sp + 8] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r8, [sp + 4] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r9, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    ldw r11, [r2 + 0]
 ; CHECK-NEXT:    ldw r5, [r2 + 4]
 ; CHECK-NEXT:    ldw r6, [r2 + 8]
@@ -139,13 +139,13 @@ define void @vector_select(ptr %dst, ptr %a, ptr %b, i1 %c) {
 ; CHECK-NEXT:    stw r5, [r1 + 4]
 ; CHECK-NEXT:    stw r6, [r1 + 8]
 ; CHECK-NEXT:    stw r2, [r1 + 12]
-; CHECK-NEXT:    ldw r9, [r14 + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r8, [r14 + 4] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r7, [r14 + 8] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r6, [r14 + 12] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r5, [r14 + 16] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 20
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    ldw r9, [sp + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r8, [sp + 4] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r7, [sp + 8] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r6, [sp + 12] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r5, [sp + 16] // 4-byte Folded Reload
+; CHECK-NEXT:    add sp, 20
+; CHECK-NEXT:    jmp lr
 ; CHECK-NEXT:  .LBB3_1:
 ; CHECK-NEXT:    mov r11, r9
 ; CHECK-NEXT:    test r4, 1

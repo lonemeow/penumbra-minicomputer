@@ -11,12 +11,12 @@ define i32 @return_undef() {
 ; O0:         .cfi_startproc
 ; O0-NEXT:  // %bb.1:
 ; O0-NEXT:    // implicit-def: $r1
-; O0-NEXT:    jmp r13
+; O0-NEXT:    jmp lr
 ;
 ; O1-LABEL: return_undef:
 ; O1:         .cfi_startproc
 ; O1-NEXT:  // %bb.0:
-; O1-NEXT:    jmp r13
+; O1-NEXT:    jmp lr
   ret i32 undef
 }
 
@@ -25,12 +25,12 @@ define ptr @return_undef_ptr() {
 ; O0:         .cfi_startproc
 ; O0-NEXT:  // %bb.1:
 ; O0-NEXT:    // implicit-def: $r1
-; O0-NEXT:    jmp r13
+; O0-NEXT:    jmp lr
 ;
 ; O1-LABEL: return_undef_ptr:
 ; O1:         .cfi_startproc
 ; O1-NEXT:  // %bb.0:
-; O1-NEXT:    jmp r13
+; O1-NEXT:    jmp lr
   ret ptr undef
 }
 
@@ -39,24 +39,24 @@ define i32 @cond_undef(i1 %c, i32 %a) {
 ; O0-LABEL: cond_undef:
 ; O0:         .cfi_startproc
 ; O0-NEXT:  // %bb.1: // %entry
-; O0-NEXT:    sub r14, 8
-; O0-NEXT:    stw r2, [r14 + 4] // 4-byte Folded Spill
+; O0-NEXT:    sub sp, 8
+; O0-NEXT:    stw r2, [sp + 4] // 4-byte Folded Spill
 ; O0-NEXT:    lli r2, 1
 ; O0-NEXT:    xor r1, r2
 ; O0-NEXT:    test r1, 1
 ; O0-NEXT:    bne .LBB2_3
 ; O0-NEXT:    b .LBB2_2
 ; O0-NEXT:  .LBB2_2: // %then
-; O0-NEXT:    ldw r1, [r14 + 4] // 4-byte Folded Reload
-; O0-NEXT:    stw r1, [r14 + 0] // 4-byte Folded Spill
+; O0-NEXT:    ldw r1, [sp + 4] // 4-byte Folded Reload
+; O0-NEXT:    stw r1, [sp + 0] // 4-byte Folded Spill
 ; O0-NEXT:    b .LBB2_4
 ; O0-NEXT:  .LBB2_3: // %else
 ; O0-NEXT:    // implicit-def: $r1
 ; O0-NEXT:    b .LBB2_4
 ; O0-NEXT:  .LBB2_4: // %join
-; O0-NEXT:    ldw r1, [r14 + 0] // 4-byte Folded Reload
-; O0-NEXT:    add r14, 8
-; O0-NEXT:    jmp r13
+; O0-NEXT:    ldw r1, [sp + 0] // 4-byte Folded Reload
+; O0-NEXT:    add sp, 8
+; O0-NEXT:    jmp lr
 ;
 ; O1-LABEL: cond_undef:
 ; O1:         .cfi_startproc
@@ -68,7 +68,7 @@ define i32 @cond_undef(i1 %c, i32 %a) {
 ; O1-NEXT:  // %bb.1: // %else
 ; O1-NEXT:    // implicit-def: $r1
 ; O1-NEXT:  .LBB2_2: // %join
-; O1-NEXT:    jmp r13
+; O1-NEXT:    jmp lr
 entry:
   br i1 %c, label %then, label %else
 then:

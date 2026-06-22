@@ -15,10 +15,10 @@ define ptr @get_tls_le() {
 ; CHECK-NEXT:    lli r1, %tlsgd_lo16(tls_var)
 ; CHECK-NEXT:    lui r1, %tlsgd_hi16(tls_var)
 ; CHECK-NEXT:    //APP
-; CHECK-NEXT:    mov r2, r12
+; CHECK-NEXT:    mov r2, tp
 ; CHECK-NEXT:    //NO_APP
 ; CHECK-NEXT:    add r1, r2
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %p = call ptr @llvm.threadlocal.address(ptr @tls_var)
   ret ptr %p
 }

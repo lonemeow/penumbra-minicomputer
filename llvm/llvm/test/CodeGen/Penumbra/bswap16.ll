@@ -24,7 +24,7 @@ define i16 @bswap16(i16 %x) {
 ; CHECK-NEXT:    or r2, r1
 ; CHECK-NEXT:    shr r2, 16
 ; CHECK-NEXT:    mov r1, r2
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %r = call i16 @llvm.bswap.i16(i16 %x)
   ret i16 %r
 }

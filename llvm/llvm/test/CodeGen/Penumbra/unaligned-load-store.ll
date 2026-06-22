@@ -24,7 +24,7 @@ define i32 @load_i32_aligned(ptr %p) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    ldw r1, [r1 + 0]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %v = load i32, ptr %p, align 4
   ret i32 %v
 }
@@ -34,7 +34,7 @@ define i16 @load_i16_aligned(ptr %p) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    ldh r1, [r1 + 0]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %v = load i16, ptr %p, align 2
   ret i16 %v
 }
@@ -44,7 +44,7 @@ define void @store_i32_aligned(ptr %p, i32 %v) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    stw r2, [r1 + 0]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   store i32 %v, ptr %p, align 4
   ret void
 }
@@ -65,7 +65,7 @@ define i32 @load_i32_align1(ptr %p) {
 ; CHECK-NEXT:    or r1, r2
 ; CHECK-NEXT:    shl r1, 16
 ; CHECK-NEXT:    or r1, r3
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %v = load i32, ptr %p, align 1
   ret i32 %v
 }
@@ -78,7 +78,7 @@ define i16 @load_i16_align1(ptr %p) {
 ; CHECK-NEXT:    ldb r1, [r1 + 1]
 ; CHECK-NEXT:    shl r1, 8
 ; CHECK-NEXT:    or r1, r2
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %v = load i16, ptr %p, align 1
   ret i16 %v
 }
@@ -100,7 +100,7 @@ define void @store_i32_align1(ptr %p, i32 %v) {
 ; CHECK-NEXT:    shr r2, 8
 ; CHECK-NEXT:    stb r3, [r1 + 2]
 ; CHECK-NEXT:    stb r2, [r1 + 3]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   store i32 %v, ptr %p, align 1
   ret void
 }
@@ -114,7 +114,7 @@ define void @store_i16_align1(ptr %p, i16 %v) {
 ; CHECK-NEXT:    shr r3, 8
 ; CHECK-NEXT:    stb r2, [r1 + 0]
 ; CHECK-NEXT:    stb r3, [r1 + 1]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   store i16 %v, ptr %p, align 1
   ret void
 }
@@ -129,7 +129,7 @@ define i32 @zextload_i16_align1(ptr %p) {
 ; CHECK-NEXT:    ldb r1, [r1 + 1]
 ; CHECK-NEXT:    shl r1, 8
 ; CHECK-NEXT:    or r1, r2
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %v = load i16, ptr %p, align 1
   %ext = zext i16 %v to i32
   ret i32 %ext
@@ -143,7 +143,7 @@ define i32 @sextload_i16_align1(ptr %p) {
 ; CHECK-NEXT:    ldbs r1, [r1 + 1]
 ; CHECK-NEXT:    shl r1, 8
 ; CHECK-NEXT:    or r1, r2
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %v = load i16, ptr %p, align 1
   %ext = sext i16 %v to i32
   ret i32 %ext
@@ -161,7 +161,7 @@ define i64 @load_i64_align4(ptr %p) {
 ; CHECK-NEXT:    ldw r3, [r1 + 0]
 ; CHECK-NEXT:    ldw r2, [r1 + 4]
 ; CHECK-NEXT:    mov r1, r3
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %v = load i64, ptr %p, align 4
   ret i64 %v
 }
@@ -172,7 +172,7 @@ define void @store_i64_align4(ptr %p, i64 %v) {
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    stw r2, [r1 + 0]
 ; CHECK-NEXT:    stw r3, [r1 + 4]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   store i64 %v, ptr %p, align 4
   ret void
 }
@@ -204,7 +204,7 @@ define i64 @load_i64_align1(ptr %p) {
 ; CHECK-NEXT:    or r2, r3
 ; CHECK-NEXT:    shl r2, 16
 ; CHECK-NEXT:    or r2, r4
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %v = load i64, ptr %p, align 1
   ret i64 %v
 }

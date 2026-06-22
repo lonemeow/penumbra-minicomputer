@@ -13,10 +13,10 @@ define i32 @ult(i32 %a, i32 %b) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    cmp r1, r2
-; CHECK-NEXT:    mov r1, r0
-; CHECK-NEXT:    sbc r1, r0
+; CHECK-NEXT:    mov r1, zero
+; CHECK-NEXT:    sbc r1, zero
 ; CHECK-NEXT:    and r1, 1
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %c = icmp ult i32 %a, %b
   %z = zext i1 %c to i32
   ret i32 %z
@@ -27,9 +27,9 @@ define i32 @uge(i32 %a, i32 %b) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    cmp r1, r2
-; CHECK-NEXT:    mov r1, r0
-; CHECK-NEXT:    adc r1, r0
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    mov r1, zero
+; CHECK-NEXT:    adc r1, zero
+; CHECK-NEXT:    jmp lr
   %c = icmp uge i32 %a, %b
   %z = zext i1 %c to i32
   ret i32 %z
@@ -40,10 +40,10 @@ define i32 @ugt(i32 %a, i32 %b) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    cmp r2, r1
-; CHECK-NEXT:    mov r1, r0
-; CHECK-NEXT:    sbc r1, r0
+; CHECK-NEXT:    mov r1, zero
+; CHECK-NEXT:    sbc r1, zero
 ; CHECK-NEXT:    and r1, 1
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %c = icmp ugt i32 %a, %b
   %z = zext i1 %c to i32
   ret i32 %z
@@ -54,9 +54,9 @@ define i32 @ule(i32 %a, i32 %b) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    cmp r2, r1
-; CHECK-NEXT:    mov r1, r0
-; CHECK-NEXT:    adc r1, r0
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    mov r1, zero
+; CHECK-NEXT:    adc r1, zero
+; CHECK-NEXT:    jmp lr
   %c = icmp ule i32 %a, %b
   %z = zext i1 %c to i32
   ret i32 %z
@@ -67,10 +67,10 @@ define i32 @eq(i32 %a, i32 %b) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub r1, r2
-; CHECK-NEXT:    cmp r0, r1
-; CHECK-NEXT:    mov r1, r0
-; CHECK-NEXT:    adc r1, r0
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    cmp zero, r1
+; CHECK-NEXT:    mov r1, zero
+; CHECK-NEXT:    adc r1, zero
+; CHECK-NEXT:    jmp lr
   %c = icmp eq i32 %a, %b
   %z = zext i1 %c to i32
   ret i32 %z
@@ -81,11 +81,11 @@ define i32 @ne(i32 %a, i32 %b) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub r1, r2
-; CHECK-NEXT:    cmp r0, r1
-; CHECK-NEXT:    mov r1, r0
-; CHECK-NEXT:    sbc r1, r0
+; CHECK-NEXT:    cmp zero, r1
+; CHECK-NEXT:    mov r1, zero
+; CHECK-NEXT:    sbc r1, zero
 ; CHECK-NEXT:    and r1, 1
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %c = icmp ne i32 %a, %b
   %z = zext i1 %c to i32
   ret i32 %z
@@ -95,10 +95,10 @@ define i32 @eqz(i32 %a) {
 ; CHECK-LABEL: eqz:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    cmp r0, r1
-; CHECK-NEXT:    mov r1, r0
-; CHECK-NEXT:    adc r1, r0
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    cmp zero, r1
+; CHECK-NEXT:    mov r1, zero
+; CHECK-NEXT:    adc r1, zero
+; CHECK-NEXT:    jmp lr
   %c = icmp eq i32 %a, 0
   %z = zext i1 %c to i32
   ret i32 %z
@@ -108,11 +108,11 @@ define i32 @nez(i32 %a) {
 ; CHECK-LABEL: nez:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    cmp r0, r1
-; CHECK-NEXT:    mov r1, r0
-; CHECK-NEXT:    sbc r1, r0
+; CHECK-NEXT:    cmp zero, r1
+; CHECK-NEXT:    mov r1, zero
+; CHECK-NEXT:    sbc r1, zero
 ; CHECK-NEXT:    and r1, 1
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %c = icmp ne i32 %a, 0
   %z = zext i1 %c to i32
   ret i32 %z
@@ -126,10 +126,10 @@ define i32 @ult_const(i32 %a) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    cmp r1, 5
-; CHECK-NEXT:    mov r1, r0
-; CHECK-NEXT:    sbc r1, r0
+; CHECK-NEXT:    mov r1, zero
+; CHECK-NEXT:    sbc r1, zero
 ; CHECK-NEXT:    and r1, 1
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %c = icmp ult i32 %a, 5
   %z = zext i1 %c to i32
   ret i32 %z
@@ -140,9 +140,9 @@ define i32 @uge_const(i32 %a) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    cmp r1, 5
-; CHECK-NEXT:    mov r1, r0
-; CHECK-NEXT:    adc r1, r0
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    mov r1, zero
+; CHECK-NEXT:    adc r1, zero
+; CHECK-NEXT:    jmp lr
   %c = icmp uge i32 %a, 5
   %z = zext i1 %c to i32
   ret i32 %z
@@ -153,9 +153,9 @@ define i32 @ugt_const(i32 %a) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    cmp r1, 6
-; CHECK-NEXT:    mov r1, r0
-; CHECK-NEXT:    adc r1, r0
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    mov r1, zero
+; CHECK-NEXT:    adc r1, zero
+; CHECK-NEXT:    jmp lr
   %c = icmp ugt i32 %a, 5
   %z = zext i1 %c to i32
   ret i32 %z
@@ -166,10 +166,10 @@ define i32 @ule_const(i32 %a) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    cmp r1, 6
-; CHECK-NEXT:    mov r1, r0
-; CHECK-NEXT:    sbc r1, r0
+; CHECK-NEXT:    mov r1, zero
+; CHECK-NEXT:    sbc r1, zero
 ; CHECK-NEXT:    and r1, 1
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %c = icmp ule i32 %a, 5
   %z = zext i1 %c to i32
   ret i32 %z
@@ -181,10 +181,10 @@ define i32 @eq_const(i32 %a) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub r1, 2
-; CHECK-NEXT:    cmp r0, r1
-; CHECK-NEXT:    mov r1, r0
-; CHECK-NEXT:    adc r1, r0
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    cmp zero, r1
+; CHECK-NEXT:    mov r1, zero
+; CHECK-NEXT:    adc r1, zero
+; CHECK-NEXT:    jmp lr
   %c = icmp eq i32 %a, 2
   %z = zext i1 %c to i32
   ret i32 %z
@@ -195,11 +195,11 @@ define i32 @ne_const(i32 %a) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub r1, 7
-; CHECK-NEXT:    cmp r0, r1
-; CHECK-NEXT:    mov r1, r0
-; CHECK-NEXT:    sbc r1, r0
+; CHECK-NEXT:    cmp zero, r1
+; CHECK-NEXT:    mov r1, zero
+; CHECK-NEXT:    sbc r1, zero
 ; CHECK-NEXT:    and r1, 1
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %c = icmp ne i32 %a, 7
   %z = zext i1 %c to i32
   ret i32 %z
@@ -213,10 +213,10 @@ define i32 @eq_bigconst(i32 %a) {
 ; CHECK-NEXT:    lli r2, 4464
 ; CHECK-NEXT:    lui r2, 1
 ; CHECK-NEXT:    sub r1, r2
-; CHECK-NEXT:    cmp r0, r1
-; CHECK-NEXT:    mov r1, r0
-; CHECK-NEXT:    adc r1, r0
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    cmp zero, r1
+; CHECK-NEXT:    mov r1, zero
+; CHECK-NEXT:    adc r1, zero
+; CHECK-NEXT:    jmp lr
   %c = icmp eq i32 %a, 70000
   %z = zext i1 %c to i32
   ret i32 %z
@@ -235,7 +235,7 @@ define i32 @slt(i32 %a, i32 %b) {
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r1, r4
 ; CHECK-NEXT:  .LBB15_2:
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %c = icmp slt i32 %a, %b
   %z = zext i1 %c to i32
   ret i32 %z

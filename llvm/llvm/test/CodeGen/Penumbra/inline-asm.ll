@@ -8,9 +8,9 @@ define i32 @reg_output() {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    //APP
-; CHECK-NEXT:    mov r1, r0
+; CHECK-NEXT:    mov r1, zero
 ; CHECK-NEXT:    //NO_APP
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %val = call i32 asm "mov $0, r0", "=r"()
   ret i32 %val
 }
@@ -23,7 +23,7 @@ define void @reg_input(i32 %val) {
 ; CHECK-NEXT:    //APP
 ; CHECK-NEXT:    test r1, r1
 ; CHECK-NEXT:    //NO_APP
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   call void asm sideeffect "test $0, $0", "r"(i32 %val)
   ret void
 }
@@ -36,7 +36,7 @@ define void @imm_input() {
 ; CHECK-NEXT:    //APP
 ; CHECK-NEXT:    add r1, 42
 ; CHECK-NEXT:    //NO_APP
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   call void asm sideeffect "add r1, $0", "i"(i32 42)
   ret void
 }
@@ -49,7 +49,7 @@ define void @cc_clobber(i32 %a) {
 ; CHECK-NEXT:    //APP
 ; CHECK-NEXT:    test r1, r1
 ; CHECK-NEXT:    //NO_APP
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   call void asm sideeffect "test $0, $0", "r,~{cc}"(i32 %a)
   ret void
 }
@@ -62,7 +62,7 @@ define void @memory_fence() {
 ; CHECK-NEXT:    //APP
 ; CHECK-NEXT:    di
 ; CHECK-NEXT:    //NO_APP
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   call void asm sideeffect "di", "~{memory}"()
   ret void
 }
@@ -75,7 +75,7 @@ define i32 @input_output(i32 %in) {
 ; CHECK-NEXT:    //APP
 ; CHECK-NEXT:    mov r1, r1
 ; CHECK-NEXT:    //NO_APP
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %out = call i32 asm "mov $0, $1", "=r,r"(i32 %in)
   ret i32 %out
 }

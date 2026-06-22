@@ -33,11 +33,11 @@ helper:
   // Conditional branch back to _start.
   beq _start
   // Indirect return — no annotation.
-  jmp r13
+  jmp lr
 
 // LINKED-LABEL: <helper>:
 // LINKED:       beq {{.*}} <_start>
-// LINKED:       jmp r13
+// LINKED:       jmp lr
 // LINKED-NOT:   <
 
 // --- Register invalidation (no false annotations) ------------------------
@@ -49,14 +49,14 @@ no_annotate:
   lli r1, %lo16(mydata)
   sub r1, 1
   lui r1, %hi16(mydata)
-  jmp r13
+  jmp lr
 
 // LINKED-LABEL: <no_annotate>:
 // LINKED:       lli r1,
 // LINKED-NEXT:  sub r1, 1
 // LINKED-NEXT:  lui r1,
 // LINKED-NOT:   mydata
-// LINKED:       jmp r13
+// LINKED:       jmp lr
 
 // --- Relocation display in object file -----------------------------------
 

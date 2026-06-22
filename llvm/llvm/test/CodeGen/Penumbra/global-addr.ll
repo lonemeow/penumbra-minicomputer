@@ -14,7 +14,7 @@ define i32 @load_global() {
 ; CHECK-NEXT:    lli r1, %lo16(gvar)
 ; CHECK-NEXT:    lui r1, %hi16(gvar)
 ; CHECK-NEXT:    ldw r1, [r1 + 0]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %v = load i32, ptr @gvar
   ret i32 %v
 }
@@ -26,7 +26,7 @@ define void @store_global(i32 %v) {
 ; CHECK-NEXT:    lli r2, %lo16(gvar)
 ; CHECK-NEXT:    lui r2, %hi16(gvar)
 ; CHECK-NEXT:    stw r1, [r2 + 0]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   store i32 %v, ptr @gvar
   ret void
 }
@@ -37,7 +37,7 @@ define ptr @addr_global() {
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    lli r1, %lo16(gvar)
 ; CHECK-NEXT:    lui r1, %hi16(gvar)
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   ret ptr @gvar
 }
 
@@ -50,7 +50,7 @@ define i32 @load_global_offset() {
 ; CHECK-NEXT:    lli r1, %lo16(array)
 ; CHECK-NEXT:    lui r1, %hi16(array)
 ; CHECK-NEXT:    ldw r1, [r1 + 8]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %p = getelementptr [4 x i32], ptr @array, i32 0, i32 2
   %v = load i32, ptr %p
   ret i32 %v

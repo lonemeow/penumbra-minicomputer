@@ -13,8 +13,8 @@
 
 define i32 @sumsize(i32 %a, i32 %b) {
 ; CHECK-LABEL: sumsize:
-; CHECK:       ldw {{r[0-9]+}}, [r14
-; CHECK:       ldw {{r[0-9]+}}, [r14
+; CHECK:       ldw {{r[0-9]+}}, [sp
+; CHECK:       ldw {{r[0-9]+}}, [sp
   %a.addr = alloca i32, align 4
   %b.addr = alloca i32, align 4
   store i32 %a, ptr %a.addr, align 4

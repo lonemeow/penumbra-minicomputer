@@ -7,8 +7,8 @@ define void @store_zero_word(ptr %p) {
 ; CHECK-LABEL: store_zero_word:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    stw r0, [r1 + 0]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    stw zero, [r1 + 0]
+; CHECK-NEXT:    jmp lr
   store i32 0, ptr %p, align 4
   ret void
 }
@@ -17,8 +17,8 @@ define void @store_zero_byte(ptr %p) {
 ; CHECK-LABEL: store_zero_byte:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    stb r0, [r1 + 0]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    stb zero, [r1 + 0]
+; CHECK-NEXT:    jmp lr
   store i8 0, ptr %p, align 1
   ret void
 }
@@ -27,8 +27,8 @@ define void @store_zero_half(ptr %p) {
 ; CHECK-LABEL: store_zero_half:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sth r0, [r1 + 0]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    sth zero, [r1 + 0]
+; CHECK-NEXT:    jmp lr
   store i16 0, ptr %p, align 2
   ret void
 }
@@ -40,7 +40,7 @@ define void @store_nonzero(ptr %p) {
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    lli r2, 42
 ; CHECK-NEXT:    stw r2, [r1 + 0]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   store i32 42, ptr %p, align 4
   ret void
 }

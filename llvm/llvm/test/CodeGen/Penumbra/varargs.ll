@@ -12,20 +12,20 @@ define i32 @first_vararg(i32 %named, ...) {
 ; CHECK-LABEL: first_vararg:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 20
-; CHECK-NEXT:    stw r1, [r14 + 4]
-; CHECK-NEXT:    stw r2, [r14 + 8]
-; CHECK-NEXT:    stw r3, [r14 + 12]
-; CHECK-NEXT:    stw r4, [r14 + 16]
-; CHECK-NEXT:    mov r1, r14
+; CHECK-NEXT:    sub sp, 20
+; CHECK-NEXT:    stw r1, [sp + 4]
+; CHECK-NEXT:    stw r2, [sp + 8]
+; CHECK-NEXT:    stw r3, [sp + 12]
+; CHECK-NEXT:    stw r4, [sp + 16]
+; CHECK-NEXT:    mov r1, sp
 ; CHECK-NEXT:    add r1, 8
-; CHECK-NEXT:    stw r1, [r14 + 0]
-; CHECK-NEXT:    ldw r2, [r14 + 0]
+; CHECK-NEXT:    stw r1, [sp + 0]
+; CHECK-NEXT:    ldw r2, [sp + 0]
 ; CHECK-NEXT:    ldw r1, [r2 + 0]
 ; CHECK-NEXT:    add r2, 4
-; CHECK-NEXT:    stw r2, [r14 + 0]
-; CHECK-NEXT:    add r14, 20
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    stw r2, [sp + 0]
+; CHECK-NEXT:    add sp, 20
+; CHECK-NEXT:    jmp lr
   %vl = alloca ptr, align 4
   call void @llvm.va_start(ptr %vl)
   %arg = va_arg ptr %vl, i32
@@ -38,20 +38,20 @@ define i32 @multi_named(i32 %a, i32 %b, i32 %c, ...) {
 ; CHECK-LABEL: multi_named:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 20
-; CHECK-NEXT:    stw r1, [r14 + 4]
-; CHECK-NEXT:    stw r2, [r14 + 8]
-; CHECK-NEXT:    stw r3, [r14 + 12]
-; CHECK-NEXT:    stw r4, [r14 + 16]
-; CHECK-NEXT:    mov r1, r14
+; CHECK-NEXT:    sub sp, 20
+; CHECK-NEXT:    stw r1, [sp + 4]
+; CHECK-NEXT:    stw r2, [sp + 8]
+; CHECK-NEXT:    stw r3, [sp + 12]
+; CHECK-NEXT:    stw r4, [sp + 16]
+; CHECK-NEXT:    mov r1, sp
 ; CHECK-NEXT:    add r1, 16
-; CHECK-NEXT:    stw r1, [r14 + 0]
-; CHECK-NEXT:    ldw r2, [r14 + 0]
+; CHECK-NEXT:    stw r1, [sp + 0]
+; CHECK-NEXT:    ldw r2, [sp + 0]
 ; CHECK-NEXT:    ldw r1, [r2 + 0]
 ; CHECK-NEXT:    add r2, 4
-; CHECK-NEXT:    stw r2, [r14 + 0]
-; CHECK-NEXT:    add r14, 20
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    stw r2, [sp + 0]
+; CHECK-NEXT:    add sp, 20
+; CHECK-NEXT:    jmp lr
   %vl = alloca ptr, align 4
   call void @llvm.va_start(ptr %vl)
   %arg = va_arg ptr %vl, i32
@@ -67,20 +67,20 @@ define i32 @many_named(i32 %a, i32 %b, i32 %c, i32 %d, i32 %e, i32 %f, ...) {
 ; CHECK-LABEL: many_named:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 20
-; CHECK-NEXT:    stw r1, [r14 + 4]
-; CHECK-NEXT:    stw r2, [r14 + 8]
-; CHECK-NEXT:    stw r3, [r14 + 12]
-; CHECK-NEXT:    stw r4, [r14 + 16]
-; CHECK-NEXT:    mov r1, r14
+; CHECK-NEXT:    sub sp, 20
+; CHECK-NEXT:    stw r1, [sp + 4]
+; CHECK-NEXT:    stw r2, [sp + 8]
+; CHECK-NEXT:    stw r3, [sp + 12]
+; CHECK-NEXT:    stw r4, [sp + 16]
+; CHECK-NEXT:    mov r1, sp
 ; CHECK-NEXT:    add r1, 28
-; CHECK-NEXT:    stw r1, [r14 + 0]
-; CHECK-NEXT:    ldw r2, [r14 + 0]
+; CHECK-NEXT:    stw r1, [sp + 0]
+; CHECK-NEXT:    ldw r2, [sp + 0]
 ; CHECK-NEXT:    ldw r1, [r2 + 0]
 ; CHECK-NEXT:    add r2, 4
-; CHECK-NEXT:    stw r2, [r14 + 0]
-; CHECK-NEXT:    add r14, 20
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    stw r2, [sp + 0]
+; CHECK-NEXT:    add sp, 20
+; CHECK-NEXT:    jmp lr
   %vl = alloca ptr, align 4
   call void @llvm.va_start(ptr %vl)
   %arg = va_arg ptr %vl, i32
@@ -96,21 +96,21 @@ define i64 @vaarg_i64(i32 %named, ...) {
 ; CHECK-LABEL: vaarg_i64:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 20
-; CHECK-NEXT:    stw r1, [r14 + 4]
-; CHECK-NEXT:    stw r2, [r14 + 8]
-; CHECK-NEXT:    stw r3, [r14 + 12]
-; CHECK-NEXT:    stw r4, [r14 + 16]
-; CHECK-NEXT:    mov r1, r14
+; CHECK-NEXT:    sub sp, 20
+; CHECK-NEXT:    stw r1, [sp + 4]
+; CHECK-NEXT:    stw r2, [sp + 8]
+; CHECK-NEXT:    stw r3, [sp + 12]
+; CHECK-NEXT:    stw r4, [sp + 16]
+; CHECK-NEXT:    mov r1, sp
 ; CHECK-NEXT:    add r1, 8
-; CHECK-NEXT:    stw r1, [r14 + 0]
-; CHECK-NEXT:    ldw r3, [r14 + 0]
+; CHECK-NEXT:    stw r1, [sp + 0]
+; CHECK-NEXT:    ldw r3, [sp + 0]
 ; CHECK-NEXT:    ldw r1, [r3 + 0]
 ; CHECK-NEXT:    ldw r2, [r3 + 4]
 ; CHECK-NEXT:    add r3, 8
-; CHECK-NEXT:    stw r3, [r14 + 0]
-; CHECK-NEXT:    add r14, 20
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    stw r3, [sp + 0]
+; CHECK-NEXT:    add sp, 20
+; CHECK-NEXT:    jmp lr
   %vl = alloca ptr, align 4
   call void @llvm.va_start(ptr %vl)
   %arg = va_arg ptr %vl, i64
@@ -128,20 +128,20 @@ define i32 @wide_named_all_regs(i64 %a, i64 %b, ...) {
 ; CHECK-LABEL: wide_named_all_regs:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 20
-; CHECK-NEXT:    stw r1, [r14 + 4]
-; CHECK-NEXT:    stw r2, [r14 + 8]
-; CHECK-NEXT:    stw r3, [r14 + 12]
-; CHECK-NEXT:    stw r4, [r14 + 16]
-; CHECK-NEXT:    mov r1, r14
+; CHECK-NEXT:    sub sp, 20
+; CHECK-NEXT:    stw r1, [sp + 4]
+; CHECK-NEXT:    stw r2, [sp + 8]
+; CHECK-NEXT:    stw r3, [sp + 12]
+; CHECK-NEXT:    stw r4, [sp + 16]
+; CHECK-NEXT:    mov r1, sp
 ; CHECK-NEXT:    add r1, 20
-; CHECK-NEXT:    stw r1, [r14 + 0]
-; CHECK-NEXT:    ldw r2, [r14 + 0]
+; CHECK-NEXT:    stw r1, [sp + 0]
+; CHECK-NEXT:    ldw r2, [sp + 0]
 ; CHECK-NEXT:    ldw r1, [r2 + 0]
 ; CHECK-NEXT:    add r2, 4
-; CHECK-NEXT:    stw r2, [r14 + 0]
-; CHECK-NEXT:    add r14, 20
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    stw r2, [sp + 0]
+; CHECK-NEXT:    add sp, 20
+; CHECK-NEXT:    jmp lr
   %vl = alloca ptr, align 4
   call void @llvm.va_start(ptr %vl)
   %arg = va_arg ptr %vl, i32
@@ -158,20 +158,20 @@ define i32 @many_named_i64(i32 %a, i32 %b, i32 %c, i32 %d, i64 %e, i32 %f, ...) 
 ; CHECK-LABEL: many_named_i64:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 20
-; CHECK-NEXT:    stw r1, [r14 + 4]
-; CHECK-NEXT:    stw r2, [r14 + 8]
-; CHECK-NEXT:    stw r3, [r14 + 12]
-; CHECK-NEXT:    stw r4, [r14 + 16]
-; CHECK-NEXT:    mov r1, r14
+; CHECK-NEXT:    sub sp, 20
+; CHECK-NEXT:    stw r1, [sp + 4]
+; CHECK-NEXT:    stw r2, [sp + 8]
+; CHECK-NEXT:    stw r3, [sp + 12]
+; CHECK-NEXT:    stw r4, [sp + 16]
+; CHECK-NEXT:    mov r1, sp
 ; CHECK-NEXT:    add r1, 32
-; CHECK-NEXT:    stw r1, [r14 + 0]
-; CHECK-NEXT:    ldw r2, [r14 + 0]
+; CHECK-NEXT:    stw r1, [sp + 0]
+; CHECK-NEXT:    ldw r2, [sp + 0]
 ; CHECK-NEXT:    ldw r1, [r2 + 0]
 ; CHECK-NEXT:    add r2, 4
-; CHECK-NEXT:    stw r2, [r14 + 0]
-; CHECK-NEXT:    add r14, 20
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    stw r2, [sp + 0]
+; CHECK-NEXT:    add sp, 20
+; CHECK-NEXT:    jmp lr
   %vl = alloca ptr, align 4
   call void @llvm.va_start(ptr %vl)
   %arg = va_arg ptr %vl, i32

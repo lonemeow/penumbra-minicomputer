@@ -11,13 +11,13 @@ define i32 @udiv(i32 %a, i32 %b) {
 ; O0:         .cfi_startproc
 ; O0-NEXT:  // %bb.1:
 ; O0-NEXT:    divu r1, r2
-; O0-NEXT:    jmp r13
+; O0-NEXT:    jmp lr
 ;
 ; O1-LABEL: udiv:
 ; O1:         .cfi_startproc
 ; O1-NEXT:  // %bb.0:
 ; O1-NEXT:    divu r1, r2
-; O1-NEXT:    jmp r13
+; O1-NEXT:    jmp lr
   %result = udiv i32 %a, %b
   ret i32 %result
 }
@@ -27,13 +27,13 @@ define i32 @sdiv(i32 %a, i32 %b) {
 ; O0:         .cfi_startproc
 ; O0-NEXT:  // %bb.1:
 ; O0-NEXT:    div r1, r2
-; O0-NEXT:    jmp r13
+; O0-NEXT:    jmp lr
 ;
 ; O1-LABEL: sdiv:
 ; O1:         .cfi_startproc
 ; O1-NEXT:  // %bb.0:
 ; O1-NEXT:    div r1, r2
-; O1-NEXT:    jmp r13
+; O1-NEXT:    jmp lr
   %result = sdiv i32 %a, %b
   ret i32 %result
 }
@@ -42,20 +42,20 @@ define i32 @urem(i32 %a, i32 %b) {
 ; O0-LABEL: urem:
 ; O0:         .cfi_startproc
 ; O0-NEXT:  // %bb.1:
-; O0-NEXT:    sub r14, 4
-; O0-NEXT:    stw r1, [r14 + 0] // 4-byte Folded Spill
+; O0-NEXT:    sub sp, 4
+; O0-NEXT:    stw r1, [sp + 0] // 4-byte Folded Spill
 ; O0-NEXT:    mov r1, r2
-; O0-NEXT:    ldw r2, [r14 + 0] // 4-byte Folded Reload
+; O0-NEXT:    ldw r2, [sp + 0] // 4-byte Folded Reload
 ; O0-NEXT:    divu r2, r1, r1
-; O0-NEXT:    add r14, 4
-; O0-NEXT:    jmp r13
+; O0-NEXT:    add sp, 4
+; O0-NEXT:    jmp lr
 ;
 ; O1-LABEL: urem:
 ; O1:         .cfi_startproc
 ; O1-NEXT:  // %bb.0:
 ; O1-NEXT:    divu r1, r2, r2
 ; O1-NEXT:    mov r1, r2
-; O1-NEXT:    jmp r13
+; O1-NEXT:    jmp lr
   %result = urem i32 %a, %b
   ret i32 %result
 }
@@ -64,20 +64,20 @@ define i32 @srem(i32 %a, i32 %b) {
 ; O0-LABEL: srem:
 ; O0:         .cfi_startproc
 ; O0-NEXT:  // %bb.1:
-; O0-NEXT:    sub r14, 4
-; O0-NEXT:    stw r1, [r14 + 0] // 4-byte Folded Spill
+; O0-NEXT:    sub sp, 4
+; O0-NEXT:    stw r1, [sp + 0] // 4-byte Folded Spill
 ; O0-NEXT:    mov r1, r2
-; O0-NEXT:    ldw r2, [r14 + 0] // 4-byte Folded Reload
+; O0-NEXT:    ldw r2, [sp + 0] // 4-byte Folded Reload
 ; O0-NEXT:    div r2, r1, r1
-; O0-NEXT:    add r14, 4
-; O0-NEXT:    jmp r13
+; O0-NEXT:    add sp, 4
+; O0-NEXT:    jmp lr
 ;
 ; O1-LABEL: srem:
 ; O1:         .cfi_startproc
 ; O1-NEXT:  // %bb.0:
 ; O1-NEXT:    div r1, r2, r2
 ; O1-NEXT:    mov r1, r2
-; O1-NEXT:    jmp r13
+; O1-NEXT:    jmp lr
   %result = srem i32 %a, %b
   ret i32 %result
 }

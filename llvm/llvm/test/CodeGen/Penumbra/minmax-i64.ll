@@ -10,14 +10,14 @@ define i64 @smax_i64(i64 %a, i64 %b) {
 ; CHECK-LABEL: smax_i64:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 8
-; CHECK-NEXT:    stw r5, [r14 + 4] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    sub sp, 8
+; CHECK-NEXT:    stw r5, [sp + 4] // 4-byte Folded Spill
+; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    cmp r3, r1
-; CHECK-NEXT:    mov r11, r0
-; CHECK-NEXT:    sbc r11, r0
+; CHECK-NEXT:    mov r11, zero
+; CHECK-NEXT:    sbc r11, zero
 ; CHECK-NEXT:    and r11, 1
-; CHECK-NEXT:    lli r13, 1
+; CHECK-NEXT:    lli lr, 1
 ; CHECK-NEXT:    lli r5, 0
 ; CHECK-NEXT:    cmp r2, r4
 ; CHECK-NEXT:    ble .LBB0_1
@@ -33,16 +33,16 @@ define i64 @smax_i64(i64 %a, i64 %b) {
 ; CHECK-NEXT:  .LBB0_7:
 ; CHECK-NEXT:    mov r2, r4
 ; CHECK-NEXT:  .LBB0_8:
-; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r5, [r14 + 4] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 8
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r5, [sp + 4] // 4-byte Folded Reload
+; CHECK-NEXT:    add sp, 8
+; CHECK-NEXT:    jmp lr
 ; CHECK-NEXT:  .LBB0_1:
-; CHECK-NEXT:    mov r13, r5
+; CHECK-NEXT:    mov lr, r5
 ; CHECK-NEXT:    cmp r2, r4
 ; CHECK-NEXT:    beq .LBB0_4
 ; CHECK-NEXT:  .LBB0_3:
-; CHECK-NEXT:    mov r11, r13
+; CHECK-NEXT:    mov r11, lr
 ; CHECK-NEXT:    test r11, 1
 ; CHECK-NEXT:    bne .LBB0_6
 ; CHECK-NEXT:  .LBB0_5:
@@ -59,16 +59,16 @@ define i64 @umin_i64(i64 %a, i64 %b) {
 ; CHECK-LABEL: umin_i64:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 4
-; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    sub sp, 4
+; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    cmp r1, r3
-; CHECK-NEXT:    mov r13, r0
-; CHECK-NEXT:    mov r11, r13
-; CHECK-NEXT:    sbc r11, r0
+; CHECK-NEXT:    mov lr, zero
+; CHECK-NEXT:    mov r11, lr
+; CHECK-NEXT:    sbc r11, zero
 ; CHECK-NEXT:    and r11, 1
 ; CHECK-NEXT:    cmp r2, r4
-; CHECK-NEXT:    sbc r13, r0
-; CHECK-NEXT:    and r13, 1
+; CHECK-NEXT:    sbc lr, zero
+; CHECK-NEXT:    and lr, 1
 ; CHECK-NEXT:    cmp r2, r4
 ; CHECK-NEXT:    bne .LBB1_1
 ; CHECK-NEXT:  // %bb.2:
@@ -80,11 +80,11 @@ define i64 @umin_i64(i64 %a, i64 %b) {
 ; CHECK-NEXT:  .LBB1_5:
 ; CHECK-NEXT:    mov r2, r4
 ; CHECK-NEXT:  .LBB1_6:
-; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 4
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    add sp, 4
+; CHECK-NEXT:    jmp lr
 ; CHECK-NEXT:  .LBB1_1:
-; CHECK-NEXT:    mov r11, r13
+; CHECK-NEXT:    mov r11, lr
 ; CHECK-NEXT:    test r11, 1
 ; CHECK-NEXT:    bne .LBB1_4
 ; CHECK-NEXT:  .LBB1_3:

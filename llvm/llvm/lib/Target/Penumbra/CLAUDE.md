@@ -104,7 +104,7 @@ not behavior.
 | `GISel/PenumbraPostLegalizerCombiner.cpp` | Post-legalizer combiner (-O1+). C++ match/apply for target-specific rules (currently `matchNegImmToOpposite`/`applyNegImmToOpposite`) |
 | `Disassembler/PenumbraDisassembler.{h,cpp}` | Binary → MCInst. Custom decoders for branch targets (symbolic lookup), signed immediates (LLIS), signed mem offsets |
 | `MCTargetDesc/PenumbraMCTargetDesc.{h,cpp}` | Registers all MC components. `PenumbraMCInstrAnalysis`: branch-target evaluation + GPR state tracking for LLI/LUI address annotations |
-| `MCTargetDesc/PenumbraInstPrinter.{h,cpp}` | MCInst → assembly text |
+| `MCTargetDesc/PenumbraInstPrinter.{h,cpp}` | MCInst → assembly text. Prints the semantic aliases (zero/tp/lr/sp/pc) by default via the `SemanticRegName` alt-name index; `-penumbra-numeric-reg-names` (llc/llvm-mc) or `llvm-objdump -M numeric` forces physical r<N> names |
 | `MCTargetDesc/PenumbraMCCodeEmitter.cpp` | MCInst → binary. Custom `encodeBranchTarget`/`encodeImm16` create fixups |
 | `MCTargetDesc/PenumbraAsmBackend.cpp` | Fixup resolution (branch22, imm16, lo16, hi16). `maybeAddReloc` for ELF relocs. NOP = `0x00000000` (ADD R0,R0) |
 | `MCTargetDesc/PenumbraELFObjectWriter.cpp` | ELF reloc mapping. Uses `EM_PENUMBRA` from `llvm/BinaryFormat/ELF.h` |

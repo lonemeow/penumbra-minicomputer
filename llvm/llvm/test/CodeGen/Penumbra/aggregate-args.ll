@@ -18,7 +18,7 @@ define void @take_pair([2 x i32] %s, ptr %out) {
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    stw r1, [r3 + 0]
 ; CHECK-NEXT:    stw r2, [r3 + 4]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %lo = extractvalue [2 x i32] %s, 0
   %hi = extractvalue [2 x i32] %s, 1
   store i32 %lo, ptr %out
@@ -32,7 +32,7 @@ define [2 x i32] @ret_pair(i32 %a, i32 %b) {
 ; CHECK-LABEL: ret_pair:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %agg0 = insertvalue [2 x i32] poison, i32 %a, 0
   %agg1 = insertvalue [2 x i32] %agg0, i32 %b, 1
   ret [2 x i32] %agg1
@@ -45,7 +45,7 @@ define void @ret_sret(ptr sret(%struct.S16) %agg) {
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    lli r2, 1
 ; CHECK-NEXT:    stw r2, [r1 + 0]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   store i32 1, ptr %agg
   ret void
 }
@@ -55,15 +55,15 @@ define void @call_pair(ptr %out) {
 ; CHECK-LABEL: call_pair:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 4
-; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    sub sp, 4
+; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r3, r1
 ; CHECK-NEXT:    lli r1, 7
 ; CHECK-NEXT:    lli r2, 8
 ; CHECK-NEXT:    bl take_pair
-; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 4
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    add sp, 4
+; CHECK-NEXT:    jmp lr
   call void @take_pair([2 x i32] [i32 7, i32 8], ptr %out)
   ret void
 }

@@ -14,10 +14,10 @@ define i32 @branch_simple(i32 %a, i32 %b, i32 %x, i32 %y) {
 ; CHECK-NEXT:    bne .LBB0_2
 ; CHECK-NEXT:  // %bb.1: // %if.then
 ; CHECK-NEXT:    mov r1, r3
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
 ; CHECK-NEXT:  .LBB0_2: // %if.else
 ; CHECK-NEXT:    mov r1, r4
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %cmp = icmp eq i32 %a, %b
   br i1 %cmp, label %if.then, label %if.else
 if.then:
@@ -35,10 +35,10 @@ define i32 @diamond_merge(i32 %a, i32 %b) {
 ; CHECK-NEXT:    ble .LBB1_2
 ; CHECK-NEXT:  // %bb.1: // %pos
 ; CHECK-NEXT:    add r1, r2
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
 ; CHECK-NEXT:  .LBB1_2: // %neg
 ; CHECK-NEXT:    sub r1, r2
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %cmp = icmp sgt i32 %a, 0
   br i1 %cmp, label %pos, label %neg
 pos:
@@ -58,7 +58,7 @@ define i32 @loop_sum(i32 %n) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0: // %entry
 ; CHECK-NEXT:    mov r2, r1
-; CHECK-NEXT:    mov r1, r0
+; CHECK-NEXT:    mov r1, zero
 ; CHECK-NEXT:    mov r3, r1
 ; CHECK-NEXT:  .LBB2_1: // %loop
 ; CHECK-NEXT:    // =>This Inner Loop Header: Depth=1
@@ -67,7 +67,7 @@ define i32 @loop_sum(i32 %n) {
 ; CHECK-NEXT:    cmp r3, r2
 ; CHECK-NEXT:    blt .LBB2_1
 ; CHECK-NEXT:  // %bb.2: // %exit
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
 entry:
   br label %loop
 loop:
@@ -90,10 +90,10 @@ define i32 @branch_reversal(i32 %a) {
 ; CHECK-NEXT:    bne .LBB3_1
 ; CHECK-NEXT:  // %bb.2: // %is_zero
 ; CHECK-NEXT:    lli r1, 42
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
 ; CHECK-NEXT:  .LBB3_1: // %not_zero
 ; CHECK-NEXT:    add r1, 1
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %cmp = icmp eq i32 %a, 0
   br i1 %cmp, label %is_zero, label %not_zero
 not_zero:
@@ -112,16 +112,16 @@ define i32 @multi_cond(i32 %a, i32 %b) {
 ; CHECK-NEXT:    bge .LBB4_1
 ; CHECK-NEXT:  // %bb.3: // %lt
 ; CHECK-NEXT:    llis r1, -1
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
 ; CHECK-NEXT:  .LBB4_1: // %ge
 ; CHECK-NEXT:    cmp r1, r2
 ; CHECK-NEXT:    bne .LBB4_2
 ; CHECK-NEXT:  // %bb.4: // %eq
-; CHECK-NEXT:    mov r1, r0
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    mov r1, zero
+; CHECK-NEXT:    jmp lr
 ; CHECK-NEXT:  .LBB4_2: // %gt
 ; CHECK-NEXT:    lli r1, 1
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %c1 = icmp slt i32 %a, %b
   br i1 %c1, label %lt, label %ge
 lt:
@@ -144,10 +144,10 @@ define i32 @unsigned_cmp(i32 %a, i32 %b) {
 ; CHECK-NEXT:    bls .LBB5_2
 ; CHECK-NEXT:  // %bb.1: // %high
 ; CHECK-NEXT:    lli r1, 1
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
 ; CHECK-NEXT:  .LBB5_2: // %low
-; CHECK-NEXT:    mov r1, r0
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    mov r1, zero
+; CHECK-NEXT:    jmp lr
   %cmp = icmp ugt i32 %a, %b
   br i1 %cmp, label %high, label %low
 high:

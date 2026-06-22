@@ -42,7 +42,7 @@ define i32 @test_cttz(i32 %a) {
 ; O0-NEXT:    lui r2, 257
 ; O0-NEXT:    mul r1, r2
 ; O0-NEXT:    shr r1, 24
-; O0-NEXT:    jmp r13
+; O0-NEXT:    jmp lr
 ;
 ; O1-LABEL: test_cttz:
 ; O1:         .cfi_startproc
@@ -73,7 +73,7 @@ define i32 @test_cttz(i32 %a) {
 ; O1-NEXT:    lui r2, 257
 ; O1-NEXT:    mul r1, r2
 ; O1-NEXT:    shr r1, 24
-; O1-NEXT:    jmp r13
+; O1-NEXT:    jmp lr
   %r = call i32 @llvm.cttz.i32(i32 %a, i1 true)
   ret i32 %r
 }
@@ -123,7 +123,7 @@ define i32 @test_ctlz(i32 %a) {
 ; O0-NEXT:    shr r2, 24
 ; O0-NEXT:    lli r1, 32
 ; O0-NEXT:    sub r1, r2
-; O0-NEXT:    jmp r13
+; O0-NEXT:    jmp lr
 ;
 ; O1-LABEL: test_ctlz:
 ; O1:         .cfi_startproc
@@ -168,7 +168,7 @@ define i32 @test_ctlz(i32 %a) {
 ; O1-NEXT:    shr r3, 24
 ; O1-NEXT:    lli r1, 32
 ; O1-NEXT:    sub r1, r3
-; O1-NEXT:    jmp r13
+; O1-NEXT:    jmp lr
   %r = call i32 @llvm.ctlz.i32(i32 %a, i1 true)
   ret i32 %r
 }
@@ -200,7 +200,7 @@ define i32 @test_ctpop(i32 %a) {
 ; O0-NEXT:    lui r2, 257
 ; O0-NEXT:    mul r1, r2
 ; O0-NEXT:    shr r1, 24
-; O0-NEXT:    jmp r13
+; O0-NEXT:    jmp lr
 ;
 ; O1-LABEL: test_ctpop:
 ; O1:         .cfi_startproc
@@ -228,7 +228,7 @@ define i32 @test_ctpop(i32 %a) {
 ; O1-NEXT:    lui r2, 257
 ; O1-NEXT:    mul r1, r2
 ; O1-NEXT:    shr r1, 24
-; O1-NEXT:    jmp r13
+; O1-NEXT:    jmp lr
   %r = call i32 @llvm.ctpop.i32(i32 %a)
   ret i32 %r
 }

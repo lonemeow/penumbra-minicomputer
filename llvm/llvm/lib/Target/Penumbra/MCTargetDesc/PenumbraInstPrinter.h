@@ -7,6 +7,7 @@
 #ifndef LLVM_LIB_TARGET_PENUMBRA_MCTARGETDESC_PENUMBRAINSTPRINTER_H
 #define LLVM_LIB_TARGET_PENUMBRA_MCTARGETDESC_PENUMBRAINSTPRINTER_H
 
+#include "PenumbraMCTargetDesc.h" // for the Penumbra:: register/alt-name enums
 #include "llvm/MC/MCInstPrinter.h"
 
 namespace llvm {
@@ -17,6 +18,7 @@ public:
                       const MCRegisterInfo &MRI)
       : MCInstPrinter(MAI, MII, MRI) {}
 
+  bool applyTargetSpecificCLOption(StringRef Option) override;
   void printInst(const MCInst *MI, uint64_t Address, StringRef Annot,
                  const MCSubtargetInfo &STI, raw_ostream &O) override;
   void printRegName(raw_ostream &OS, MCRegister Reg) override;
@@ -31,7 +33,10 @@ public:
   void printCustomAliasOperand(const MCInst *MI, uint64_t Address,
                                unsigned OpIdx, unsigned PrintMethodIdx,
                                raw_ostream &O);
+  // Convenience wrapper that selects the alt-name index; forwards to the
+  // TableGen-generated two-argument form.
   static const char *getRegisterName(MCRegister Reg);
+  static const char *getRegisterName(MCRegister Reg, unsigned AltIdx);
 };
 
 } // namespace llvm

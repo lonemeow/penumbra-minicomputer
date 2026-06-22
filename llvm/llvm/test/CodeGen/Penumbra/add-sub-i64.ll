@@ -12,7 +12,7 @@ define i64 @add_i64(i64 %a, i64 %b) {
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    add r1, r3
 ; CHECK-NEXT:    adc r2, r4
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %r = add i64 %a, %b
   ret i64 %r
 }
@@ -23,7 +23,7 @@ define i64 @sub_i64(i64 %a, i64 %b) {
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub r1, r3
 ; CHECK-NEXT:    sbc r2, r4
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %r = sub i64 %a, %b
   ret i64 %r
 }
@@ -34,16 +34,16 @@ define void @add_i128(ptr %p, i128 %a, i128 %b) {
 ; CHECK-LABEL: add_i128:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 16
-; CHECK-NEXT:    stw r5, [r14 + 12] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r6, [r14 + 8] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r7, [r14 + 4] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r8, [r14 + 0] // 4-byte Folded Spill
-; CHECK-NEXT:    ldw r11, [r14 + 16]
-; CHECK-NEXT:    ldw r5, [r14 + 20]
-; CHECK-NEXT:    ldw r6, [r14 + 24]
-; CHECK-NEXT:    ldw r7, [r14 + 28]
-; CHECK-NEXT:    ldw r8, [r14 + 32]
+; CHECK-NEXT:    sub sp, 16
+; CHECK-NEXT:    stw r5, [sp + 12] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r6, [sp + 8] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r7, [sp + 4] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r8, [sp + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    ldw r11, [sp + 16]
+; CHECK-NEXT:    ldw r5, [sp + 20]
+; CHECK-NEXT:    ldw r6, [sp + 24]
+; CHECK-NEXT:    ldw r7, [sp + 28]
+; CHECK-NEXT:    ldw r8, [sp + 32]
 ; CHECK-NEXT:    add r2, r5
 ; CHECK-NEXT:    adc r3, r6
 ; CHECK-NEXT:    adc r4, r7
@@ -52,12 +52,12 @@ define void @add_i128(ptr %p, i128 %a, i128 %b) {
 ; CHECK-NEXT:    stw r3, [r1 + 4]
 ; CHECK-NEXT:    stw r4, [r1 + 8]
 ; CHECK-NEXT:    stw r11, [r1 + 12]
-; CHECK-NEXT:    ldw r8, [r14 + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r7, [r14 + 4] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r6, [r14 + 8] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r5, [r14 + 12] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 16
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    ldw r8, [sp + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r7, [sp + 4] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r6, [sp + 8] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r5, [sp + 12] // 4-byte Folded Reload
+; CHECK-NEXT:    add sp, 16
+; CHECK-NEXT:    jmp lr
   %r = add i128 %a, %b
   store i128 %r, ptr %p
   ret void

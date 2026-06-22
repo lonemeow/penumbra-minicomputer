@@ -12,7 +12,7 @@ define i32 @umin_i32(i32 %a, i32 %b) {
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r1, r2
 ; CHECK-NEXT:  .LBB0_2:
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %r = call i32 @llvm.umin.i32(i32 %a, i32 %b)
   ret i32 %r
 }
@@ -27,7 +27,7 @@ define i32 @umax_i32(i32 %a, i32 %b) {
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r1, r2
 ; CHECK-NEXT:  .LBB1_2:
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %r = call i32 @llvm.umax.i32(i32 %a, i32 %b)
   ret i32 %r
 }
@@ -42,7 +42,7 @@ define i32 @smin_i32(i32 %a, i32 %b) {
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r1, r2
 ; CHECK-NEXT:  .LBB2_2:
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %r = call i32 @llvm.smin.i32(i32 %a, i32 %b)
   ret i32 %r
 }
@@ -57,7 +57,7 @@ define i32 @smax_i32(i32 %a, i32 %b) {
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r1, r2
 ; CHECK-NEXT:  .LBB3_2:
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %r = call i32 @llvm.smax.i32(i32 %a, i32 %b)
   ret i32 %r
 }

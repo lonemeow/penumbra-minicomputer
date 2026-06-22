@@ -8,7 +8,7 @@
 define i32 @negate_mul(i32 %x) {
 ; CHECK-LABEL: negate_mul:
 ; CHECK-NOT:   lli{{.*}}, 32
-; CHECK:       jmp r13
+; CHECK:       jmp lr
   %neg = mul i32 %x, -1
   ret i32 %neg
 }
@@ -16,7 +16,7 @@ define i32 @negate_mul(i32 %x) {
 define i32 @negate_sub(i32 %x) {
 ; CHECK-LABEL: negate_sub:
 ; CHECK-NOT:   lli{{.*}}, 32
-; CHECK:       jmp r13
+; CHECK:       jmp lr
   %neg = sub i32 0, %x
   ret i32 %neg
 }
@@ -24,7 +24,7 @@ define i32 @negate_sub(i32 %x) {
 define i32 @negate_expr(i32 %x) {
 ; CHECK-LABEL: negate_expr:
 ; CHECK-NOT:   lli{{.*}}, 32
-; CHECK:       jmp r13
+; CHECK:       jmp lr
   %inc = add i32 %x, 1
   %neg = mul i32 %inc, -1
   ret i32 %neg
@@ -34,7 +34,7 @@ define i32 @negate_expr(i32 %x) {
 define i32 @mul_pow2_31_plus1(i32 %x) {
 ; CHECK-LABEL: mul_pow2_31_plus1:
 ; CHECK:       shl{{.*}}, 31
-; CHECK:       jmp r13
+; CHECK:       jmp lr
   %r = mul i32 %x, -2147483647  ; 2^31 + 1 (unsigned 0x80000001)
   ret i32 %r
 }
@@ -44,7 +44,7 @@ define i32 @mul_pow2_31_minus1(i32 %x) {
 ; CHECK-LABEL: mul_pow2_31_minus1:
 ; CHECK:       shl{{.*}}, 31
 ; CHECK-NOT:   lli{{.*}}, 32
-; CHECK:       jmp r13
+; CHECK:       jmp lr
   %r = mul i32 %x, 2147483647  ; 2^31 - 1 (0x7FFFFFFF)
   ret i32 %r
 }

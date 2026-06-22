@@ -15,9 +15,9 @@ define ptr @ret_addr_leaf() {
 ; CHECK-LABEL: ret_addr_leaf:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    mov r1, r13
+; CHECK-NEXT:    mov r1, lr
 ; CHECK-NEXT:    mov r1, r1
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %r = call ptr @llvm.returnaddress(i32 0)
   ret ptr %r
 }
@@ -29,16 +29,16 @@ define ptr @ret_addr_nonleaf() {
 ; CHECK-LABEL: ret_addr_nonleaf:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 8
-; CHECK-NEXT:    stw r5, [r14 + 4] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
-; CHECK-NEXT:    mov r5, r13
+; CHECK-NEXT:    sub sp, 8
+; CHECK-NEXT:    stw r5, [sp + 4] // 4-byte Folded Spill
+; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    mov r5, lr
 ; CHECK-NEXT:    bl ext_fn
 ; CHECK-NEXT:    mov r1, r5
-; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r5, [r14 + 4] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 8
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r5, [sp + 4] // 4-byte Folded Reload
+; CHECK-NEXT:    add sp, 8
+; CHECK-NEXT:    jmp lr
   call void @ext_fn()
   %r = call ptr @llvm.returnaddress(i32 0)
   ret ptr %r
@@ -50,8 +50,8 @@ define ptr @frame_addr() {
 ; CHECK-LABEL: frame_addr:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    mov r1, r14
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    mov r1, sp
+; CHECK-NEXT:    jmp lr
   %r = call ptr @llvm.frameaddress(i32 0)
   ret ptr %r
 }
@@ -63,9 +63,9 @@ define void @stack_save_restore() {
 ; CHECK-LABEL: stack_save_restore:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    mov r1, r14
-; CHECK-NEXT:    mov r14, r1
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    mov r1, sp
+; CHECK-NEXT:    mov sp, r1
+; CHECK-NEXT:    jmp lr
   %sp = call ptr @llvm.stacksave()
   call void @llvm.stackrestore(ptr %sp)
   ret void

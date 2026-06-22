@@ -13,17 +13,17 @@ define void @curlwp_across_calls() {
 ; CHECK-LABEL: curlwp_across_calls:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 4
-; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
-; CHECK-NEXT:    mov r1, r12
+; CHECK-NEXT:    sub sp, 4
+; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    mov r1, tp
 ; CHECK-NEXT:    bl use
-; CHECK-NEXT:    mov r1, r12
+; CHECK-NEXT:    mov r1, tp
 ; CHECK-NEXT:    bl use
-; CHECK-NEXT:    mov r1, r12
+; CHECK-NEXT:    mov r1, tp
 ; CHECK-NEXT:    bl use
-; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 4
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    add sp, 4
+; CHECK-NEXT:    jmp lr
   %a = call i32 @llvm.read_register.i32(metadata !0)
   call void @use(i32 %a)
   %b = call i32 @llvm.read_register.i32(metadata !0)
@@ -39,13 +39,13 @@ define i32 @curlwp_field_after_call(i32 %off) {
 ; CHECK-LABEL: curlwp_field_after_call:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 4
-; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    sub sp, 4
+; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    bl barrier
-; CHECK-NEXT:    ldw r1, [r12 + 8]
-; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 4
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    ldw r1, [tp + 8]
+; CHECK-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    add sp, 4
+; CHECK-NEXT:    jmp lr
   %l = call i32 @llvm.read_register.i32(metadata !0)
   call void @barrier()
   %p = inttoptr i32 %l to ptr

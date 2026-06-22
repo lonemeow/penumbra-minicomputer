@@ -10,10 +10,10 @@ define i32 @branch_eq(i32 %a, i32 %b, i32 %x, i32 %y) {
 ; CHECK-NEXT:    bne .LBB0_2
 ; CHECK-NEXT:  // %bb.1: // %if.then
 ; CHECK-NEXT:    mov r1, r3
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
 ; CHECK-NEXT:  .LBB0_2: // %if.else
 ; CHECK-NEXT:    mov r1, r4
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %cmp = icmp eq i32 %a, %b
   br i1 %cmp, label %if.then, label %if.else
 if.then:
@@ -30,10 +30,10 @@ define i32 @branch_slt(i32 %a, i32 %b, i32 %x, i32 %y) {
 ; CHECK-NEXT:    bge .LBB1_2
 ; CHECK-NEXT:  // %bb.1: // %if.then
 ; CHECK-NEXT:    mov r1, r3
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
 ; CHECK-NEXT:  .LBB1_2: // %if.else
 ; CHECK-NEXT:    mov r1, r4
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %cmp = icmp slt i32 %a, %b
   br i1 %cmp, label %if.then, label %if.else
 if.then:
@@ -53,7 +53,7 @@ define i32 @select_eq(i32 %a, i32 %b, i32 %x, i32 %y) {
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r1, r4
 ; CHECK-NEXT:  .LBB2_2:
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %cmp = icmp eq i32 %a, %b
   %result = select i1 %cmp, i32 %x, i32 %y
   ret i32 %result
@@ -64,7 +64,7 @@ define i32 @phi_loop(i32 %n) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0: // %entry
 ; CHECK-NEXT:    mov r2, r1
-; CHECK-NEXT:    mov r1, r0
+; CHECK-NEXT:    mov r1, zero
 ; CHECK-NEXT:    mov r3, r1
 ; CHECK-NEXT:  .LBB3_1: // %loop
 ; CHECK-NEXT:    // =>This Inner Loop Header: Depth=1
@@ -73,7 +73,7 @@ define i32 @phi_loop(i32 %n) {
 ; CHECK-NEXT:    cmp r3, r2
 ; CHECK-NEXT:    blt .LBB3_1
 ; CHECK-NEXT:  // %bb.2: // %exit
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
 entry:
   br label %loop
 loop:
@@ -98,10 +98,10 @@ define i32 @cmpi_lhs_const_eq(i32 %x) {
 ; CHECK-NEXT:    bne .LBB4_2
 ; CHECK-NEXT:  // %bb.1: // %zero
 ; CHECK-NEXT:    lli r1, 42
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
 ; CHECK-NEXT:  .LBB4_2: // %nonzero
-; CHECK-NEXT:    mov r1, r0
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    mov r1, zero
+; CHECK-NEXT:    jmp lr
   %c = icmp eq i32 0, %x
   br i1 %c, label %zero, label %nonzero
 zero:
@@ -118,10 +118,10 @@ define i32 @cmpi_lhs_const_slt(i32 %x) {
 ; CHECK-NEXT:    ble .LBB5_2
 ; CHECK-NEXT:  // %bb.1: // %gt
 ; CHECK-NEXT:    lli r1, 1
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
 ; CHECK-NEXT:  .LBB5_2: // %le
-; CHECK-NEXT:    mov r1, r0
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    mov r1, zero
+; CHECK-NEXT:    jmp lr
   %c = icmp slt i32 10, %x
   br i1 %c, label %gt, label %le
 gt:

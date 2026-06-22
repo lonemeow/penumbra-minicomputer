@@ -8,8 +8,8 @@ define i64 @return_i64_const() {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    lli r1, 42
-; CHECK-NEXT:    mov r2, r0
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    mov r2, zero
+; CHECK-NEXT:    jmp lr
   ret i64 42
 }
 
@@ -20,7 +20,7 @@ define i64 @return_neg1() {
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    llis r1, -1
 ; CHECK-NEXT:    llis r2, -1
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   ret i64 -1
 }
 
@@ -29,7 +29,7 @@ define i64 @passthrough_i64(i64 %x) {
 ; CHECK-LABEL: passthrough_i64:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   ret i64 %x
 }
 
@@ -38,7 +38,7 @@ define i32 @trunc_i64(i64 %x) {
 ; CHECK-LABEL: trunc_i64:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %val = trunc i64 %x to i32
   ret i32 %val
 }
@@ -49,7 +49,7 @@ define i32 @high_half(i64 %x) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    mov r1, r2
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %shifted = lshr i64 %x, 32
   %hi = trunc i64 %shifted to i32
   ret i32 %hi
@@ -62,7 +62,7 @@ define i64 @and_i64(i64 %a, i64 %b) {
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    and r1, r3
 ; CHECK-NEXT:    and r2, r4
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %r = and i64 %a, %b
   ret i64 %r
 }
@@ -75,10 +75,10 @@ define i1 @cmp_i64_eq(i64 %a, i64 %b) {
 ; CHECK-NEXT:    xor r1, r3
 ; CHECK-NEXT:    xor r2, r4
 ; CHECK-NEXT:    or r1, r2
-; CHECK-NEXT:    cmp r0, r1
-; CHECK-NEXT:    mov r1, r0
-; CHECK-NEXT:    adc r1, r0
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    cmp zero, r1
+; CHECK-NEXT:    mov r1, zero
+; CHECK-NEXT:    adc r1, zero
+; CHECK-NEXT:    jmp lr
   %cmp = icmp eq i64 %a, %b
   ret i1 %cmp
 }
@@ -88,8 +88,8 @@ define i64 @zext_i32_to_i64(i32 %x) {
 ; CHECK-LABEL: zext_i32_to_i64:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    mov r2, r0
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    mov r2, zero
+; CHECK-NEXT:    jmp lr
   %ext = zext i32 %x to i64
   ret i64 %ext
 }
@@ -101,7 +101,7 @@ define i64 @sext_i32_to_i64(i32 %x) {
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    mov r2, r1
 ; CHECK-NEXT:    sar r2, 31
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %ext = sext i32 %x to i64
   ret i64 %ext
 }
@@ -113,6 +113,6 @@ define i64 @mixed_args(i32 %x, i64 %y) {
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    mov r1, r2
 ; CHECK-NEXT:    mov r2, r3
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   ret i64 %y
 }

@@ -11,22 +11,22 @@ define i64 @udiv64(i64 %a, i64 %b) {
 ; O0-LABEL: udiv64:
 ; O0:         .cfi_startproc
 ; O0-NEXT:  // %bb.1:
-; O0-NEXT:    sub r14, 4
-; O0-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
+; O0-NEXT:    sub sp, 4
+; O0-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; O0-NEXT:    bl __udivdi3
-; O0-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; O0-NEXT:    add r14, 4
-; O0-NEXT:    jmp r13
+; O0-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; O0-NEXT:    add sp, 4
+; O0-NEXT:    jmp lr
 ;
 ; O1-LABEL: udiv64:
 ; O1:         .cfi_startproc
 ; O1-NEXT:  // %bb.0:
-; O1-NEXT:    sub r14, 4
-; O1-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
+; O1-NEXT:    sub sp, 4
+; O1-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; O1-NEXT:    bl __udivdi3
-; O1-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; O1-NEXT:    add r14, 4
-; O1-NEXT:    jmp r13
+; O1-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; O1-NEXT:    add sp, 4
+; O1-NEXT:    jmp lr
   %r = udiv i64 %a, %b
   ret i64 %r
 }
@@ -35,22 +35,22 @@ define i64 @sdiv64(i64 %a, i64 %b) {
 ; O0-LABEL: sdiv64:
 ; O0:         .cfi_startproc
 ; O0-NEXT:  // %bb.1:
-; O0-NEXT:    sub r14, 4
-; O0-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
+; O0-NEXT:    sub sp, 4
+; O0-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; O0-NEXT:    bl __divdi3
-; O0-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; O0-NEXT:    add r14, 4
-; O0-NEXT:    jmp r13
+; O0-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; O0-NEXT:    add sp, 4
+; O0-NEXT:    jmp lr
 ;
 ; O1-LABEL: sdiv64:
 ; O1:         .cfi_startproc
 ; O1-NEXT:  // %bb.0:
-; O1-NEXT:    sub r14, 4
-; O1-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
+; O1-NEXT:    sub sp, 4
+; O1-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; O1-NEXT:    bl __divdi3
-; O1-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; O1-NEXT:    add r14, 4
-; O1-NEXT:    jmp r13
+; O1-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; O1-NEXT:    add sp, 4
+; O1-NEXT:    jmp lr
   %r = sdiv i64 %a, %b
   ret i64 %r
 }
@@ -59,22 +59,22 @@ define i64 @urem64(i64 %a, i64 %b) {
 ; O0-LABEL: urem64:
 ; O0:         .cfi_startproc
 ; O0-NEXT:  // %bb.1:
-; O0-NEXT:    sub r14, 4
-; O0-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
+; O0-NEXT:    sub sp, 4
+; O0-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; O0-NEXT:    bl __umoddi3
-; O0-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; O0-NEXT:    add r14, 4
-; O0-NEXT:    jmp r13
+; O0-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; O0-NEXT:    add sp, 4
+; O0-NEXT:    jmp lr
 ;
 ; O1-LABEL: urem64:
 ; O1:         .cfi_startproc
 ; O1-NEXT:  // %bb.0:
-; O1-NEXT:    sub r14, 4
-; O1-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
+; O1-NEXT:    sub sp, 4
+; O1-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; O1-NEXT:    bl __umoddi3
-; O1-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; O1-NEXT:    add r14, 4
-; O1-NEXT:    jmp r13
+; O1-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; O1-NEXT:    add sp, 4
+; O1-NEXT:    jmp lr
   %r = urem i64 %a, %b
   ret i64 %r
 }
@@ -83,22 +83,22 @@ define i64 @srem64(i64 %a, i64 %b) {
 ; O0-LABEL: srem64:
 ; O0:         .cfi_startproc
 ; O0-NEXT:  // %bb.1:
-; O0-NEXT:    sub r14, 4
-; O0-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
+; O0-NEXT:    sub sp, 4
+; O0-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; O0-NEXT:    bl __moddi3
-; O0-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; O0-NEXT:    add r14, 4
-; O0-NEXT:    jmp r13
+; O0-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; O0-NEXT:    add sp, 4
+; O0-NEXT:    jmp lr
 ;
 ; O1-LABEL: srem64:
 ; O1:         .cfi_startproc
 ; O1-NEXT:  // %bb.0:
-; O1-NEXT:    sub r14, 4
-; O1-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
+; O1-NEXT:    sub sp, 4
+; O1-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; O1-NEXT:    bl __moddi3
-; O1-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; O1-NEXT:    add r14, 4
-; O1-NEXT:    jmp r13
+; O1-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; O1-NEXT:    add sp, 4
+; O1-NEXT:    jmp lr
   %r = srem i64 %a, %b
   ret i64 %r
 }
@@ -107,39 +107,39 @@ define i64 @mul64(i64 %a, i64 %b) {
 ; O0-LABEL: mul64:
 ; O0:         .cfi_startproc
 ; O0-NEXT:  // %bb.1:
-; O0-NEXT:    sub r14, 4
-; O0-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
+; O0-NEXT:    sub sp, 4
+; O0-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; O0-NEXT:    mov r11, r1
-; O0-NEXT:    mov r13, r4
+; O0-NEXT:    mov lr, r4
 ; O0-NEXT:    mov r1, r11
 ; O0-NEXT:    mul r1, r3
 ; O0-NEXT:    mul r2, r3
 ; O0-NEXT:    mov r4, r11
-; O0-NEXT:    mul r4, r13
+; O0-NEXT:    mul r4, lr
 ; O0-NEXT:    mulu r11, r3, r3
 ; O0-NEXT:    add r2, r4
 ; O0-NEXT:    add r2, r3
-; O0-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; O0-NEXT:    add r14, 4
-; O0-NEXT:    jmp r13
+; O0-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; O0-NEXT:    add sp, 4
+; O0-NEXT:    jmp lr
 ;
 ; O1-LABEL: mul64:
 ; O1:         .cfi_startproc
 ; O1-NEXT:  // %bb.0:
-; O1-NEXT:    sub r14, 4
-; O1-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
+; O1-NEXT:    sub sp, 4
+; O1-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; O1-NEXT:    mov r11, r1
 ; O1-NEXT:    mul r11, r3
 ; O1-NEXT:    mul r2, r3
-; O1-NEXT:    mov r13, r1
-; O1-NEXT:    mul r13, r4
+; O1-NEXT:    mov lr, r1
+; O1-NEXT:    mul lr, r4
 ; O1-NEXT:    mulu r1, r3, r3
-; O1-NEXT:    add r2, r13
+; O1-NEXT:    add r2, lr
 ; O1-NEXT:    add r2, r3
 ; O1-NEXT:    mov r1, r11
-; O1-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; O1-NEXT:    add r14, 4
-; O1-NEXT:    jmp r13
+; O1-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; O1-NEXT:    add sp, 4
+; O1-NEXT:    jmp lr
   %r = mul i64 %a, %b
   ret i64 %r
 }

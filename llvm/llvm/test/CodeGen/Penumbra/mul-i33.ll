@@ -10,9 +10,9 @@ define i32 @inst_check_f(i32 %m) {
 ; CHECK-LABEL: inst_check_f:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 4
-; CHECK-NEXT:    stw r5, [r14 + 0] // 4-byte Folded Spill
-; CHECK-NEXT:    mov r2, r0
+; CHECK-NEXT:    sub sp, 4
+; CHECK-NEXT:    stw r5, [sp + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    mov r2, zero
 ; CHECK-NEXT:    cmp r1, 0
 ; CHECK-NEXT:    ble .LBB0_2
 ; CHECK-NEXT:  // %bb.1: // %loop
@@ -20,7 +20,7 @@ define i32 @inst_check_f(i32 %m) {
 ; CHECK-NEXT:    sub r2, 1
 ; CHECK-NEXT:    mov r3, r1
 ; CHECK-NEXT:    sub r3, 2
-; CHECK-NEXT:    mov r4, r0
+; CHECK-NEXT:    mov r4, zero
 ; CHECK-NEXT:    mov r11, r2
 ; CHECK-NEXT:    mul r11, r3
 ; CHECK-NEXT:    mulu r2, r3, r5
@@ -36,9 +36,9 @@ define i32 @inst_check_f(i32 %m) {
 ; CHECK-NEXT:    mov r2, r1
 ; CHECK-NEXT:  .LBB0_2: // %done
 ; CHECK-NEXT:    mov r1, r2
-; CHECK-NEXT:    ldw r5, [r14 + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 4
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    ldw r5, [sp + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    add sp, 4
+; CHECK-NEXT:    jmp lr
   %ismt0 = icmp sgt i32 %m, 0
   br i1 %ismt0, label %loop, label %done
 

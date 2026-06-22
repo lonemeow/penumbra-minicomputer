@@ -20,7 +20,7 @@ define i32 @strcmp_like(ptr %a, ptr %b) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0: // %entry
 ; CHECK-NEXT:    ldb r4, [r1 + 0]
-; CHECK-NEXT:    mov r3, r0
+; CHECK-NEXT:    mov r3, zero
 ; CHECK-NEXT:    cmp r4, 0
 ; CHECK-NEXT:    beq .LBB0_5
 ; CHECK-NEXT:  // %bb.1: // %loop.preheader
@@ -34,7 +34,7 @@ define i32 @strcmp_like(ptr %a, ptr %b) {
 ; CHECK-NEXT:    // in Loop: Header=BB0_2 Depth=1
 ; CHECK-NEXT:    add r2, 1
 ; CHECK-NEXT:    ldb r4, [r1 + 0]
-; CHECK-NEXT:    mov r3, r0
+; CHECK-NEXT:    mov r3, zero
 ; CHECK-NEXT:    add r1, 1
 ; CHECK-NEXT:    cmp r4, 0
 ; CHECK-NEXT:    bne .LBB0_2
@@ -45,7 +45,7 @@ define i32 @strcmp_like(ptr %a, ptr %b) {
 ; CHECK-NEXT:    ldb r1, [r2 + 0]
 ; CHECK-NEXT:    sub r3, r1
 ; CHECK-NEXT:    mov r1, r3
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
 entry:
   %a0 = load i8, ptr %a
   %a0z = zext i8 %a0 to i32
@@ -86,7 +86,7 @@ define i32 @signed_byte(ptr %p) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    ldbs r1, [r1 + 0]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %v = load i8, ptr %p
   %z = sext i8 %v to i32
   ret i32 %z

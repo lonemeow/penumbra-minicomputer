@@ -7,7 +7,7 @@ define i32 @load_word(ptr %p) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    ldw r1, [r1 + 0]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %v = load i32, ptr %p
   ret i32 %v
 }
@@ -17,7 +17,7 @@ define i32 @load_half_zext(ptr %p) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    ldh r1, [r1 + 0]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %v = load i16, ptr %p
   %ext = zext i16 %v to i32
   ret i32 %ext
@@ -28,7 +28,7 @@ define i32 @load_half_sext(ptr %p) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    ldhs r1, [r1 + 0]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %v = load i16, ptr %p
   %ext = sext i16 %v to i32
   ret i32 %ext
@@ -39,7 +39,7 @@ define i32 @load_byte_zext(ptr %p) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    ldb r1, [r1 + 0]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %v = load i8, ptr %p
   %ext = zext i8 %v to i32
   ret i32 %ext
@@ -50,7 +50,7 @@ define i32 @load_byte_sext(ptr %p) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    ldbs r1, [r1 + 0]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %v = load i8, ptr %p
   %ext = sext i8 %v to i32
   ret i32 %ext
@@ -61,7 +61,7 @@ define void @store_word(ptr %p, i32 %v) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    stw r2, [r1 + 0]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   store i32 %v, ptr %p
   ret void
 }
@@ -71,7 +71,7 @@ define void @store_half(ptr %p, i32 %v) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sth r2, [r1 + 0]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %trunc = trunc i32 %v to i16
   store i16 %trunc, ptr %p
   ret void
@@ -82,7 +82,7 @@ define void @store_byte(ptr %p, i32 %v) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    stb r2, [r1 + 0]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %trunc = trunc i32 %v to i8
   store i8 %trunc, ptr %p
   ret void
@@ -96,7 +96,7 @@ define i32 @load_bool(ptr %p) {
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    ldb r1, [r1 + 0]
 ; CHECK-NEXT:    and r1, 1
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %v = load i1, ptr %p
   %ext = zext i1 %v to i32
   ret i32 %ext
@@ -108,7 +108,7 @@ define void @store_bool(ptr %p, i1 %v) {
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    and r2, 1
 ; CHECK-NEXT:    stb r2, [r1 + 0]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   store i1 %v, ptr %p
   ret void
 }

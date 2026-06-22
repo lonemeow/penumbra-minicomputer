@@ -11,16 +11,16 @@ define ptr @get_tls_addr() {
 ; CHECK-LABEL: get_tls_addr:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.1:
-; CHECK-NEXT:    sub r14, 4
-; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    sub sp, 4
+; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    lli r1, %tlsgd_got_pcrel_lo16(tls_var-.LPC0_0)
 ; CHECK-NEXT:    lui r1, %tlsgd_got_pcrel_hi16(tls_var-.LPC0_0)
 ; CHECK-NEXT:  .LPC0_0:
-; CHECK-NEXT:    add r1, r15
+; CHECK-NEXT:    add r1, pc
 ; CHECK-NEXT:    bl __tls_get_addr
-; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 4
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    add sp, 4
+; CHECK-NEXT:    jmp lr
   %p = call ptr @llvm.threadlocal.address(ptr @tls_var)
   ret ptr %p
 }

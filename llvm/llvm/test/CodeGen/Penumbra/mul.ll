@@ -13,7 +13,7 @@ define i32 @mul_rr(i32 %a, i32 %b) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    mul r1, r2
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %r = mul i32 %a, %b
   ret i32 %r
 }
@@ -23,7 +23,7 @@ define i32 @mul_pow2(i32 %a) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    shl r1, 4
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %r = mul i32 %a, 16
   ret i32 %r
 }
@@ -32,20 +32,20 @@ define i64 @mul_i64(i64 %a, i64 %b) {
 ; CHECK-LABEL: mul_i64:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 4
-; CHECK-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    sub sp, 4
+; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r11, r1
 ; CHECK-NEXT:    mul r11, r3
 ; CHECK-NEXT:    mul r2, r3
-; CHECK-NEXT:    mov r13, r1
-; CHECK-NEXT:    mul r13, r4
+; CHECK-NEXT:    mov lr, r1
+; CHECK-NEXT:    mul lr, r4
 ; CHECK-NEXT:    mulu r1, r3, r3
-; CHECK-NEXT:    add r2, r13
+; CHECK-NEXT:    add r2, lr
 ; CHECK-NEXT:    add r2, r3
 ; CHECK-NEXT:    mov r1, r11
-; CHECK-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 4
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    add sp, 4
+; CHECK-NEXT:    jmp lr
   %r = mul i64 %a, %b
   ret i64 %r
 }
@@ -60,7 +60,7 @@ define i64 @smul_widen(i32 %a, i32 %b) {
 ; CHECK-NEXT:    mul r3, r2
 ; CHECK-NEXT:    mul r1, r2, r2
 ; CHECK-NEXT:    mov r1, r3
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %sa = sext i32 %a to i64
   %sb = sext i32 %b to i64
   %r = mul i64 %sa, %sb
@@ -77,7 +77,7 @@ define i64 @umul_widen(i32 %a, i32 %b) {
 ; CHECK-NEXT:    mul r3, r2
 ; CHECK-NEXT:    mulu r1, r2, r2
 ; CHECK-NEXT:    mov r1, r3
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %za = zext i32 %a to i64
   %zb = zext i32 %b to i64
   %r = mul i64 %za, %zb
@@ -97,12 +97,12 @@ define i32 @smulo_i32(i32 %a, i32 %b, ptr %ov) {
 ; CHECK-NEXT:    mov r2, r1
 ; CHECK-NEXT:    sar r2, 31
 ; CHECK-NEXT:    sub r11, r2
-; CHECK-NEXT:    cmp r0, r11
-; CHECK-NEXT:    mov r2, r0
-; CHECK-NEXT:    sbc r2, r0
+; CHECK-NEXT:    cmp zero, r11
+; CHECK-NEXT:    mov r2, zero
+; CHECK-NEXT:    sbc r2, zero
 ; CHECK-NEXT:    and r2, 1
 ; CHECK-NEXT:    stb r2, [r3 + 0]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %r = call {i32, i1} @llvm.smul.with.overflow.i32(i32 %a, i32 %b)
   %v = extractvalue {i32, i1} %r, 0
   %o = extractvalue {i32, i1} %r, 1

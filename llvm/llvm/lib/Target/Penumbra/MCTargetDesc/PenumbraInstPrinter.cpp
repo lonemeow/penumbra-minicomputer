@@ -9,12 +9,39 @@
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 
 #define PRINT_ALIAS_INSTR
 #include "PenumbraGenAsmWriter.inc"
+
+// Print physical r<N> register names instead of the semantic aliases
+// (zero/tp/lr/sp/pc).  Off by default — semantic names make disassembly far
+// easier to read.  Reachable from llc/llvm-mc as -penumbra-numeric-reg-names,
+// and from llvm-objdump as `-M numeric` (routed via applyTargetSpecificCLOption,
+// matching GNU objdump's -M convention).
+static cl::opt<bool> NumericRegNames(
+    "penumbra-numeric-reg-names",
+    cl::desc("Print physical r<N> register names instead of semantic aliases"),
+    cl::init(false), cl::Hidden);
+
+bool PenumbraInstPrinter::applyTargetSpecificCLOption(StringRef Option) {
+  if (Option == "numeric") {
+    NumericRegNames = true;
+    return true;
+  }
+  return false;
+}
+
+const char *PenumbraInstPrinter::getRegisterName(MCRegister Reg) {
+  // Default to the semantic aliases (zero/tp/lr/sp/pc); SemanticRegName falls
+  // back to the physical r<N> name for every other register.  NumericRegNames
+  // forces the physical names everywhere.
+  return getRegisterName(Reg, NumericRegNames ? Penumbra::NoRegAltName
+                                              : Penumbra::SemanticRegName);
+}
 
 void PenumbraInstPrinter::printRegName(raw_ostream &OS, MCRegister Reg) {
   OS << getRegisterName(Reg);

@@ -18,7 +18,7 @@ define i32 @sel_slt_imm(i32 %a, i32 %x, i32 %y) {
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r1, r3
 ; CHECK-NEXT:  .LBB0_2:
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %c = icmp slt i32 %a, 100
   %r = select i1 %c, i32 %x, i32 %y
   ret i32 %r
@@ -36,7 +36,7 @@ define i32 @sel_ult_imm(i32 %a, i32 %x, i32 %y) {
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r1, r3
 ; CHECK-NEXT:  .LBB1_2:
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %c = icmp ult i32 %a, 7
   %r = select i1 %c, i32 %x, i32 %y
   ret i32 %r
@@ -54,7 +54,7 @@ define i32 @sel_eq_imm(i32 %a, i32 %x, i32 %y) {
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r1, r3
 ; CHECK-NEXT:  .LBB2_2:
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %c = icmp eq i32 %a, 42
   %r = select i1 %c, i32 %x, i32 %y
   ret i32 %r
@@ -74,7 +74,7 @@ define i32 @sel_slt_imm_lhs(i32 %a, i32 %x, i32 %y) {
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r1, r3
 ; CHECK-NEXT:  .LBB3_2:
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %c = icmp slt i32 100, %a
   %r = select i1 %c, i32 %x, i32 %y
   ret i32 %r
@@ -94,7 +94,7 @@ define i32 @sel_big_imm(i32 %a, i32 %x, i32 %y) {
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r1, r3
 ; CHECK-NEXT:  .LBB4_2:
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %c = icmp slt i32 %a, 70000
   %r = select i1 %c, i32 %x, i32 %y
   ret i32 %r
@@ -113,7 +113,7 @@ define i32 @sel_neg_imm(i32 %a, i32 %x, i32 %y) {
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r1, r3
 ; CHECK-NEXT:  .LBB5_2:
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %c = icmp slt i32 %a, -5
   %r = select i1 %c, i32 %x, i32 %y
   ret i32 %r
@@ -133,7 +133,7 @@ define i32 @signed_icmp_value(i32 %a) {
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r1, r3
 ; CHECK-NEXT:  .LBB6_2:
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %c = icmp slt i32 %a, 5
   %r = zext i1 %c to i32
   ret i32 %r
@@ -151,7 +151,7 @@ define i32 @sel_ptr_null(ptr %p, i32 %x, i32 %y) {
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r1, r3
 ; CHECK-NEXT:  .LBB7_2:
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %c = icmp eq ptr %p, null
   %r = select i1 %c, i32 %x, i32 %y
   ret i32 %r

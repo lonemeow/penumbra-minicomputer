@@ -14,22 +14,22 @@ define void @test_memcpy(ptr %dst, ptr %src, i32 %len) {
 ; O0-LABEL: test_memcpy:
 ; O0:         .cfi_startproc
 ; O0-NEXT:  // %bb.1:
-; O0-NEXT:    sub r14, 4
-; O0-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
+; O0-NEXT:    sub sp, 4
+; O0-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; O0-NEXT:    bl memcpy
-; O0-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; O0-NEXT:    add r14, 4
-; O0-NEXT:    jmp r13
+; O0-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; O0-NEXT:    add sp, 4
+; O0-NEXT:    jmp lr
 ;
 ; O1-LABEL: test_memcpy:
 ; O1:         .cfi_startproc
 ; O1-NEXT:  // %bb.0:
-; O1-NEXT:    sub r14, 4
-; O1-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
+; O1-NEXT:    sub sp, 4
+; O1-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; O1-NEXT:    bl memcpy
-; O1-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; O1-NEXT:    add r14, 4
-; O1-NEXT:    jmp r13
+; O1-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; O1-NEXT:    add sp, 4
+; O1-NEXT:    jmp lr
   call void @llvm.memcpy.p0.p0.i32(ptr %dst, ptr %src, i32 %len, i1 false)
   ret void
 }
@@ -38,22 +38,22 @@ define void @test_memmove(ptr %dst, ptr %src, i32 %len) {
 ; O0-LABEL: test_memmove:
 ; O0:         .cfi_startproc
 ; O0-NEXT:  // %bb.1:
-; O0-NEXT:    sub r14, 4
-; O0-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
+; O0-NEXT:    sub sp, 4
+; O0-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; O0-NEXT:    bl memmove
-; O0-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; O0-NEXT:    add r14, 4
-; O0-NEXT:    jmp r13
+; O0-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; O0-NEXT:    add sp, 4
+; O0-NEXT:    jmp lr
 ;
 ; O1-LABEL: test_memmove:
 ; O1:         .cfi_startproc
 ; O1-NEXT:  // %bb.0:
-; O1-NEXT:    sub r14, 4
-; O1-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
+; O1-NEXT:    sub sp, 4
+; O1-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; O1-NEXT:    bl memmove
-; O1-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; O1-NEXT:    add r14, 4
-; O1-NEXT:    jmp r13
+; O1-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; O1-NEXT:    add sp, 4
+; O1-NEXT:    jmp lr
   call void @llvm.memmove.p0.p0.i32(ptr %dst, ptr %src, i32 %len, i1 false)
   ret void
 }
@@ -62,22 +62,22 @@ define void @test_memset(ptr %dst, i8 %val, i32 %len) {
 ; O0-LABEL: test_memset:
 ; O0:         .cfi_startproc
 ; O0-NEXT:  // %bb.1:
-; O0-NEXT:    sub r14, 4
-; O0-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
+; O0-NEXT:    sub sp, 4
+; O0-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; O0-NEXT:    bl memset
-; O0-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; O0-NEXT:    add r14, 4
-; O0-NEXT:    jmp r13
+; O0-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; O0-NEXT:    add sp, 4
+; O0-NEXT:    jmp lr
 ;
 ; O1-LABEL: test_memset:
 ; O1:         .cfi_startproc
 ; O1-NEXT:  // %bb.0:
-; O1-NEXT:    sub r14, 4
-; O1-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
+; O1-NEXT:    sub sp, 4
+; O1-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; O1-NEXT:    bl memset
-; O1-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; O1-NEXT:    add r14, 4
-; O1-NEXT:    jmp r13
+; O1-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; O1-NEXT:    add sp, 4
+; O1-NEXT:    jmp lr
   call void @llvm.memset.p0.i32(ptr %dst, i8 %val, i32 %len, i1 false)
   ret void
 }
@@ -87,24 +87,24 @@ define void @test_memcpy_small(ptr %dst, ptr %src) {
 ; O0-LABEL: test_memcpy_small:
 ; O0:         .cfi_startproc
 ; O0-NEXT:  // %bb.1:
-; O0-NEXT:    sub r14, 4
-; O0-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
+; O0-NEXT:    sub sp, 4
+; O0-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; O0-NEXT:    lli r3, 8
 ; O0-NEXT:    bl memcpy
-; O0-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; O0-NEXT:    add r14, 4
-; O0-NEXT:    jmp r13
+; O0-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; O0-NEXT:    add sp, 4
+; O0-NEXT:    jmp lr
 ;
 ; O1-LABEL: test_memcpy_small:
 ; O1:         .cfi_startproc
 ; O1-NEXT:  // %bb.0:
-; O1-NEXT:    sub r14, 4
-; O1-NEXT:    stw r13, [r14 + 0] // 4-byte Folded Spill
+; O1-NEXT:    sub sp, 4
+; O1-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; O1-NEXT:    lli r3, 8
 ; O1-NEXT:    bl memcpy
-; O1-NEXT:    ldw r13, [r14 + 0] // 4-byte Folded Reload
-; O1-NEXT:    add r14, 4
-; O1-NEXT:    jmp r13
+; O1-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; O1-NEXT:    add sp, 4
+; O1-NEXT:    jmp lr
   call void @llvm.memcpy.p0.p0.i32(ptr %dst, ptr %src, i32 8, i1 false)
   ret void
 }

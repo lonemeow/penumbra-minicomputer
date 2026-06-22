@@ -34,7 +34,7 @@ define ptr @strcpy_pointer_bump(ptr noundef returned writeonly captures(ret: add
 ; CHECK-NEXT:    cmp r4, 0
 ; CHECK-NEXT:    bne .LBB0_1
 ; CHECK-NEXT:  // %bb.2:
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   br label %3
 
 3:

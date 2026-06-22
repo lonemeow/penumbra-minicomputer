@@ -25,10 +25,10 @@ define i32 @read_preempt() {
 ; CHECK-NEXT:    lli r1, %got_pcrel_lo16(preempt-.LPC0_0)
 ; CHECK-NEXT:    lui r1, %got_pcrel_hi16(preempt-.LPC0_0)
 ; CHECK-NEXT:  .LPC0_0:
-; CHECK-NEXT:    add r1, r15
+; CHECK-NEXT:    add r1, pc
 ; CHECK-NEXT:    ldw r1, [r1 + 0]
 ; CHECK-NEXT:    ldw r1, [r1 + 0]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %v = load i32, ptr @preempt
   ret i32 %v
 }
@@ -41,9 +41,9 @@ define i32 @read_local() {
 ; CHECK-NEXT:    lli r1, %pcrel_lo16(local-.LPC1_0)
 ; CHECK-NEXT:    lui r1, %pcrel_hi16(local-.LPC1_0)
 ; CHECK-NEXT:  .LPC1_0:
-; CHECK-NEXT:    add r1, r15
+; CHECK-NEXT:    add r1, pc
 ; CHECK-NEXT:    ldw r1, [r1 + 0]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %v = load i32, ptr @local
   ret i32 %v
 }
@@ -56,9 +56,9 @@ define i32 @read_hidden() {
 ; CHECK-NEXT:    lli r1, %pcrel_lo16(hidden-.LPC2_0)
 ; CHECK-NEXT:    lui r1, %pcrel_hi16(hidden-.LPC2_0)
 ; CHECK-NEXT:  .LPC2_0:
-; CHECK-NEXT:    add r1, r15
+; CHECK-NEXT:    add r1, pc
 ; CHECK-NEXT:    ldw r1, [r1 + 0]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %v = load i32, ptr @hidden
   ret i32 %v
 }
@@ -71,9 +71,9 @@ define i32 @read_dsolocal() {
 ; CHECK-NEXT:    lli r1, %pcrel_lo16(dsolocal-.LPC3_0)
 ; CHECK-NEXT:    lui r1, %pcrel_hi16(dsolocal-.LPC3_0)
 ; CHECK-NEXT:  .LPC3_0:
-; CHECK-NEXT:    add r1, r15
+; CHECK-NEXT:    add r1, pc
 ; CHECK-NEXT:    ldw r1, [r1 + 0]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %v = load i32, ptr @dsolocal
   ret i32 %v
 }
@@ -87,10 +87,10 @@ define i32 @read_weak() {
 ; CHECK-NEXT:    lli r1, %got_pcrel_lo16(weakhid-.LPC4_0)
 ; CHECK-NEXT:    lui r1, %got_pcrel_hi16(weakhid-.LPC4_0)
 ; CHECK-NEXT:  .LPC4_0:
-; CHECK-NEXT:    add r1, r15
+; CHECK-NEXT:    add r1, pc
 ; CHECK-NEXT:    ldw r1, [r1 + 0]
 ; CHECK-NEXT:    ldw r1, [r1 + 0]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %v = load i32, ptr @weakhid
   ret i32 %v
 }
@@ -106,8 +106,8 @@ define ptr @addr_arr_elem() {
 ; CHECK-NEXT:    lli r1, %pcrel_lo16(arr-.LPC5_0)
 ; CHECK-NEXT:    lui r1, %pcrel_hi16(arr-.LPC5_0)
 ; CHECK-NEXT:  .LPC5_0:
-; CHECK-NEXT:    add r1, r15
+; CHECK-NEXT:    add r1, pc
 ; CHECK-NEXT:    add r1, 20
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   ret ptr getelementptr inbounds ([8 x i32], ptr @arr, i32 0, i32 5)
 }

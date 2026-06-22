@@ -18,9 +18,9 @@ define void @call6() {
 ; CHECK-LABEL: call6:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 12
-; CHECK-NEXT:    stw r13, [r14 + 8] // 4-byte Folded Spill
-; CHECK-NEXT:    mov r1, r14
+; CHECK-NEXT:    sub sp, 12
+; CHECK-NEXT:    stw lr, [sp + 8] // 4-byte Folded Spill
+; CHECK-NEXT:    mov r1, sp
 ; CHECK-NEXT:    lli r2, 5
 ; CHECK-NEXT:    stw r2, [r1 + 0]
 ; CHECK-NEXT:    lli r2, 6
@@ -30,9 +30,9 @@ define void @call6() {
 ; CHECK-NEXT:    lli r3, 3
 ; CHECK-NEXT:    lli r4, 4
 ; CHECK-NEXT:    bl take6
-; CHECK-NEXT:    ldw r13, [r14 + 8] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 12
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    ldw lr, [sp + 8] // 4-byte Folded Reload
+; CHECK-NEXT:    add sp, 12
+; CHECK-NEXT:    jmp lr
   call void @take6(i32 1, i32 2, i32 3, i32 4, i32 5, i32 6)
   ret void
 }
@@ -42,9 +42,9 @@ define void @call_ll(i64 %v) {
 ; CHECK-LABEL: call_ll:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 12
-; CHECK-NEXT:    stw r13, [r14 + 8] // 4-byte Folded Spill
-; CHECK-NEXT:    mov r3, r14
+; CHECK-NEXT:    sub sp, 12
+; CHECK-NEXT:    stw lr, [sp + 8] // 4-byte Folded Spill
+; CHECK-NEXT:    mov r3, sp
 ; CHECK-NEXT:    stw r1, [r3 + 0]
 ; CHECK-NEXT:    stw r2, [r3 + 4]
 ; CHECK-NEXT:    lli r1, 1
@@ -52,9 +52,9 @@ define void @call_ll(i64 %v) {
 ; CHECK-NEXT:    lli r3, 3
 ; CHECK-NEXT:    lli r4, 4
 ; CHECK-NEXT:    bl take_ll
-; CHECK-NEXT:    ldw r13, [r14 + 8] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 12
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    ldw lr, [sp + 8] // 4-byte Folded Reload
+; CHECK-NEXT:    add sp, 12
+; CHECK-NEXT:    jmp lr
   call void @take_ll(i32 1, i32 2, i32 3, i32 4, i64 %v)
   ret void
 }

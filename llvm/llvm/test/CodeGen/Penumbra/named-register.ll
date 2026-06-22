@@ -10,8 +10,8 @@ define i32 @read_curlwp_r12() {
 ; CHECK-LABEL: read_curlwp_r12:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    mov r1, r12
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    mov r1, tp
+; CHECK-NEXT:    jmp lr
   %v = call i32 @llvm.read_register.i32(metadata !0)
   ret i32 %v
 }
@@ -20,8 +20,8 @@ define i32 @read_curlwp_tp() {
 ; CHECK-LABEL: read_curlwp_tp:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    mov r1, r12
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    mov r1, tp
+; CHECK-NEXT:    jmp lr
   %v = call i32 @llvm.read_register.i32(metadata !1)
   ret i32 %v
 }
@@ -30,8 +30,8 @@ define void @set_curlwp_tp(i32 %l) {
 ; CHECK-LABEL: set_curlwp_tp:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    mov r12, r1
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    mov tp, r1
+; CHECK-NEXT:    jmp lr
   call void @llvm.write_register.i32(metadata !1, i32 %l)
   ret void
 }

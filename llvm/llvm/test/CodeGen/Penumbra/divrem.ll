@@ -18,7 +18,7 @@ define void @sdivrem_i32(i32 %a, i32 %b, ptr %dq, ptr %dr) {
 ; CHECK-NEXT:    div r1, r2, r2
 ; CHECK-NEXT:    stw r1, [r3 + 0]
 ; CHECK-NEXT:    stw r2, [r4 + 0]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %d = sdiv i32 %a, %b
   %r = srem i32 %a, %b
   store i32 %d, ptr %dq
@@ -33,7 +33,7 @@ define void @udivrem_i32(i32 %a, i32 %b, ptr %dq, ptr %dr) {
 ; CHECK-NEXT:    divu r1, r2, r2
 ; CHECK-NEXT:    stw r1, [r3 + 0]
 ; CHECK-NEXT:    stw r2, [r4 + 0]
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %d = udiv i32 %a, %b
   %r = urem i32 %a, %b
   store i32 %d, ptr %dq
@@ -45,43 +45,43 @@ define void @sdivrem_i64(i64 %a, i64 %b, ptr %dq, ptr %dr) {
 ; CHECK-LABEL: sdivrem_i64:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 36
-; CHECK-NEXT:    stw r5, [r14 + 32] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r6, [r14 + 28] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r7, [r14 + 24] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r8, [r14 + 20] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r9, [r14 + 16] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r10, [r14 + 12] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r13, [r14 + 8] // 4-byte Folded Spill
+; CHECK-NEXT:    sub sp, 36
+; CHECK-NEXT:    stw r5, [sp + 32] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r6, [sp + 28] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r7, [sp + 24] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r8, [sp + 20] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r9, [sp + 16] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r10, [sp + 12] // 4-byte Folded Spill
+; CHECK-NEXT:    stw lr, [sp + 8] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r5, r1
 ; CHECK-NEXT:    mov r6, r2
 ; CHECK-NEXT:    mov r7, r3
 ; CHECK-NEXT:    mov r8, r4
-; CHECK-NEXT:    ldw r9, [r14 + 36]
-; CHECK-NEXT:    ldw r10, [r14 + 40]
+; CHECK-NEXT:    ldw r9, [sp + 36]
+; CHECK-NEXT:    ldw r10, [sp + 40]
 ; CHECK-NEXT:    bl __divdi3
-; CHECK-NEXT:    stw r1, [r14 + 4] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r2, [r14 + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r1, [sp + 4] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r2, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r1, r5
 ; CHECK-NEXT:    mov r2, r6
 ; CHECK-NEXT:    mov r3, r7
 ; CHECK-NEXT:    mov r4, r8
 ; CHECK-NEXT:    bl __moddi3
-; CHECK-NEXT:    ldw r3, [r14 + 4] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r3, [sp + 4] // 4-byte Folded Reload
 ; CHECK-NEXT:    stw r3, [r9 + 0]
-; CHECK-NEXT:    ldw r3, [r14 + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r3, [sp + 0] // 4-byte Folded Reload
 ; CHECK-NEXT:    stw r3, [r9 + 4]
 ; CHECK-NEXT:    stw r1, [r10 + 0]
 ; CHECK-NEXT:    stw r2, [r10 + 4]
-; CHECK-NEXT:    ldw r13, [r14 + 8] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r10, [r14 + 12] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r9, [r14 + 16] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r8, [r14 + 20] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r7, [r14 + 24] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r6, [r14 + 28] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r5, [r14 + 32] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 36
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    ldw lr, [sp + 8] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r10, [sp + 12] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r9, [sp + 16] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r8, [sp + 20] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r7, [sp + 24] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r6, [sp + 28] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r5, [sp + 32] // 4-byte Folded Reload
+; CHECK-NEXT:    add sp, 36
+; CHECK-NEXT:    jmp lr
   %d = sdiv i64 %a, %b
   %r = srem i64 %a, %b
   store i64 %d, ptr %dq
@@ -93,43 +93,43 @@ define void @udivrem_i64(i64 %a, i64 %b, ptr %dq, ptr %dr) {
 ; CHECK-LABEL: udivrem_i64:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub r14, 36
-; CHECK-NEXT:    stw r5, [r14 + 32] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r6, [r14 + 28] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r7, [r14 + 24] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r8, [r14 + 20] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r9, [r14 + 16] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r10, [r14 + 12] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r13, [r14 + 8] // 4-byte Folded Spill
+; CHECK-NEXT:    sub sp, 36
+; CHECK-NEXT:    stw r5, [sp + 32] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r6, [sp + 28] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r7, [sp + 24] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r8, [sp + 20] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r9, [sp + 16] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r10, [sp + 12] // 4-byte Folded Spill
+; CHECK-NEXT:    stw lr, [sp + 8] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r5, r1
 ; CHECK-NEXT:    mov r6, r2
 ; CHECK-NEXT:    mov r7, r3
 ; CHECK-NEXT:    mov r8, r4
-; CHECK-NEXT:    ldw r9, [r14 + 36]
-; CHECK-NEXT:    ldw r10, [r14 + 40]
+; CHECK-NEXT:    ldw r9, [sp + 36]
+; CHECK-NEXT:    ldw r10, [sp + 40]
 ; CHECK-NEXT:    bl __udivdi3
-; CHECK-NEXT:    stw r1, [r14 + 4] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r2, [r14 + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r1, [sp + 4] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r2, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r1, r5
 ; CHECK-NEXT:    mov r2, r6
 ; CHECK-NEXT:    mov r3, r7
 ; CHECK-NEXT:    mov r4, r8
 ; CHECK-NEXT:    bl __umoddi3
-; CHECK-NEXT:    ldw r3, [r14 + 4] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r3, [sp + 4] // 4-byte Folded Reload
 ; CHECK-NEXT:    stw r3, [r9 + 0]
-; CHECK-NEXT:    ldw r3, [r14 + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r3, [sp + 0] // 4-byte Folded Reload
 ; CHECK-NEXT:    stw r3, [r9 + 4]
 ; CHECK-NEXT:    stw r1, [r10 + 0]
 ; CHECK-NEXT:    stw r2, [r10 + 4]
-; CHECK-NEXT:    ldw r13, [r14 + 8] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r10, [r14 + 12] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r9, [r14 + 16] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r8, [r14 + 20] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r7, [r14 + 24] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r6, [r14 + 28] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r5, [r14 + 32] // 4-byte Folded Reload
-; CHECK-NEXT:    add r14, 36
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    ldw lr, [sp + 8] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r10, [sp + 12] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r9, [sp + 16] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r8, [sp + 20] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r7, [sp + 24] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r6, [sp + 28] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r5, [sp + 32] // 4-byte Folded Reload
+; CHECK-NEXT:    add sp, 36
+; CHECK-NEXT:    jmp lr
   %d = udiv i64 %a, %b
   %r = urem i64 %a, %b
   store i64 %d, ptr %dq

@@ -8,7 +8,7 @@
   .text
   .globl test_pcrel_load
 test_pcrel_load:
-// ENC: ldw r1, [r15 + %pcrel(myvar)]
+// ENC: ldw r1, [pc + %pcrel(myvar)]
 // ENC: fixup {{.*}} kind: fixup_penumbra_memoffset16_pcrel
   ldw r1, [pc + %pcrel(myvar)]
 

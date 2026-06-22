@@ -18,8 +18,8 @@ define i32 @simple_decr_loop(i32 %n) {
 ; CHECK-NEXT:    sub r1, 1
 ; CHECK-NEXT:    bne .LBB0_1
 ; CHECK-NEXT:  // %bb.2: // %exit
-; CHECK-NEXT:    mov r1, r0
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    mov r1, zero
+; CHECK-NEXT:    jmp lr
 entry:
   br label %loop
 loop:
@@ -51,7 +51,7 @@ define void @memcpy_decr_loop(ptr %dst, ptr %src, i32 %n) {
 ; CHECK-NEXT:    sub r3, 1
 ; CHECK-NEXT:    bne .LBB1_1
 ; CHECK-NEXT:  .LBB1_2: // %exit
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
 entry:
   %z = icmp eq i32 %n, 0
   br i1 %z, label %exit, label %loop
@@ -87,8 +87,8 @@ define i32 @no_elide_value_used_between(i32 %n, ptr %out) {
 ; CHECK-NEXT:    mov r1, r3
 ; CHECK-NEXT:    bne .LBB2_1
 ; CHECK-NEXT:  // %bb.2: // %exit
-; CHECK-NEXT:    mov r1, r0
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    mov r1, zero
+; CHECK-NEXT:    jmp lr
 entry:
   br label %loop
 loop:

@@ -16,12 +16,12 @@ define i32 @uaddo_dead_sum(i64 %a, i64 %b) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    add r1, r3
-; CHECK-NEXT:    mov r1, r0
-; CHECK-NEXT:    adc r1, r0
+; CHECK-NEXT:    mov r1, zero
+; CHECK-NEXT:    adc r1, zero
 ; CHECK-NEXT:    cmp r1, 1
 ; CHECK-NEXT:    adc r2, r4
 ; CHECK-NEXT:    mov r1, r2
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %sum = add i64 %a, %b
   %hi = lshr i64 %sum, 32
   %t = trunc i64 %hi to i32
@@ -34,17 +34,17 @@ define i32 @uaddo_dead_sum_chain(i32 %x, i32 %y, i32 %z) {
 ; CHECK-LABEL: uaddo_dead_sum_chain:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    mov r4, r0
+; CHECK-NEXT:    mov r4, zero
 ; CHECK-NEXT:    add r1, r2
 ; CHECK-NEXT:    mov r2, r4
 ; CHECK-NEXT:    adc r2, r2
 ; CHECK-NEXT:    add r1, r3
 ; CHECK-NEXT:    mov r1, r4
-; CHECK-NEXT:    adc r1, r0
+; CHECK-NEXT:    adc r1, zero
 ; CHECK-NEXT:    cmp r1, 1
 ; CHECK-NEXT:    adc r2, r4
 ; CHECK-NEXT:    mov r1, r2
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %xe = zext i32 %x to i64
   %ye = zext i32 %y to i64
   %ze = zext i32 %z to i64
@@ -62,13 +62,13 @@ define i32 @usubo_dead_diff(i64 %a, i64 %b) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub r1, r3
-; CHECK-NEXT:    mov r1, r0
-; CHECK-NEXT:    sbc r1, r0
+; CHECK-NEXT:    mov r1, zero
+; CHECK-NEXT:    sbc r1, zero
 ; CHECK-NEXT:    and r1, 1
-; CHECK-NEXT:    cmp r0, r1
+; CHECK-NEXT:    cmp zero, r1
 ; CHECK-NEXT:    sbc r2, r4
 ; CHECK-NEXT:    mov r1, r2
-; CHECK-NEXT:    jmp r13
+; CHECK-NEXT:    jmp lr
   %diff = sub i64 %a, %b
   %hi = lshr i64 %diff, 32
   %t = trunc i64 %hi to i32
