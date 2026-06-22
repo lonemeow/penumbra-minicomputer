@@ -1600,7 +1600,7 @@ phantom hit event today.  Once early-restart lands the re-serve
 goes away on both caches and both predicates collapse to
 `<valid> && <s1_re> && hit` with no suppression.
 
-## Libc: byte-at-a-time strcpy/strcmp dominate Dhrystone — go word-at-a-time
+## Libc: string-routine optimization — strlen word-at-a-time, strcmp/strcpy unrolled (DONE)
 
 The shared string routines in
 `common/lib/libc/arch/penumbra/string/{strcpy,strcmp,strlen,memcmp}.S`
@@ -1647,24 +1647,62 @@ links a libc whose strcpy/strcmp/memcpy are word-at-a-time and inlines
 the small constant-size memcpy.  Most of the 2.2× gap is library
 algorithm, wearing the costume of an ISA gap.
 
-Actions, ranked by leverage:
+Outcome (HW-validated):
 
-1. **Word-at-a-time `strcpy`/`strcmp`/`strlen`.**  Null-byte detection
-   via `(w - 0x01010101) & ~w & 0x80808080`, with an alignment prologue
-   and no read past a page the caller did not own.  ~2–2.5 insns/byte
-   instead of 6–9.  Estimated 727 → ~450 insns/iter.  These live in
-   `common/lib/libc`, so the NetBSD kernel and userland get the same
-   speedup — the reason the benchmarks reference them in place.
+Word-at-a-time was tried for all three routines, then kept only for
+`strlen`.  For `strcmp`/`strcpy` it *regressed* Dhrystone (750 vs 736
+insns/iter): Penumbra has no unaligned access, so the word path needs
+both operands co-aligned, and Dhrystone's are not — `strcmp(Str_1_Loc,
+Str_2_Loc)` compares two adjacent `char[31]` stack arrays the compiler
+packs at byte alignment, so the word path never triggers and the
+routine just paid its setup (align prologue + two `LLI`+`LUI` constants
++ callee-saved spills) for a byte fallback.
 
-2. **Free micro-fix:** `strcmp.S`'s loop ends with a redundant
-   unconditional `b .Lloop`.  Rotating it (conditional branch at the
-   bottom) is 9 → 8 insns/byte, ~19 insns/iter, a two-line change even
-   before going word-wide.
+Cross-platform practice settles it: the strict-alignment arches (mips,
+m68k, sparc32) keep `strcmp`/`strcpy` as byte loops; only x86 word-
+optimizes them, and only because cheap unaligned access lets it align
+just one side.  Penumbra is in the strict-alignment camp.  `strlen`,
+with one pointer and always-reachable alignment, is word-at-a-time on
+nearly every optimized arch.
 
-3. **Inline constant-size `memcpy`** in the backend.  The 48-byte struct
-   copy lowers to `bl memcpy` (~100/iter incl. call + prologue); inlining
-   ~12 word load/stores drops it to ~25.  Complements the word-fast
-   routine, which still serves the variable-size case.
+Resolution:
+- `strlen` — word-at-a-time, frame deferred past the align prologue so
+  a head-NUL returns without spilling.  Zero-byte lane located by
+  shifting the detector mask's 0x80 to the sign bit (Penumbra has no
+  CLZ; cf. sparc64's byte-wise mask scan).
+- `strcmp`/`strcpy` — byte loops, unrolled 4× with offset addressing
+  (m68k precedent), redundant trailing branch removed.
+
+Real-HW results (gen2 FPGA):
+- Dhrystone: 6.32 → 7.11 DMIPS (+12.5%), −242 cycles/iter, from the
+  `strcmp`/`strcpy` unroll.
+- `strlen` length sweep (pbench): +11% on len-8 (setup cost), but −30%
+  at 64 B and −41% at 4 KiB.  Crossover ~len 12–16.
+
+The instruction saving (−94/iter) and cycle saving (−242/iter) are
+consistent across ISS, RTL sim, and HW; only the baseline differs.
+Caution learned the hard way: the prebuilt RTL sim was stale (an older,
+slower gen2 whose retire counter over-counts flushed slots, reading
+~4× the instructions), and under-reported the win as −2.4% where HW
+showed −10.7%.  Treat a sim as ground truth only if it is current; the
+FPGA always is.
+
+These optimizations *appreciate* on gen2.5.  The cycle saving is a
+roughly fixed amount of removed work; gen2.5's lower flush/hazard
+stalls shrink the baseline it is measured against, so the same saving
+is a larger fraction.  `strlen`'s word loop is itself hazard-bound
+today — the `haszero` chain (`sub`→`and`→`and`) is a dependent ALU
+sequence an in-order scalar core cannot overlap, so it runs ~1.7×, not
+the 4× the stride implies; that gap closes as gen2.5 hides hazards.
+
+Correctness for all three is covered by a bare-metal test
+(`benchmark/strtest`) over every start alignment × length.
+
+Still open: inline constant-size `memcpy` in the backend.  Dhrystone's
+48-byte `Rec_Type` copy lowers to `bl memcpy` (~100 insns/iter incl.
+call + prologue); inlining ~12 word load/stores would drop it to ~25.
+Complements the word-fast routine, which still serves the variable-size
+case.
 
 Profiling method (reusable): trace a short run with `+trace`, find a
 loop-carried PC in the measurement function (exactly one hit per
