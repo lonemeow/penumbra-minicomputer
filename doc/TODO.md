@@ -420,11 +420,26 @@ leaking into `flush` — and the corrected profile re-ranks the levers.
   flush 9.2, load 6.1, funit 3.4, ifetch ~0 — *same back end*; `flush` falls
   ~2.4pp from the predictors (and ~1.7M fewer wrong-path I-fetches), which is the
   entire gen2→gen2.5 gain (DMIPS 7.11 → 7.29, +2.5%).
-- **NetBSD `penmon` profile: pre-fix, pending re-measurement.** The earlier
-  figure (flush 34.7, store 14.2, hazard 13.9, ifetch 5.3, load 3.9, funit 0.9)
-  came from the mislabeled counters — do not rank real-workload levers off it
-  until it is re-measured. `ifetch` and L2 misses there are real and
-  gen2.5-untouched regardless (they were never back-end tails).
+- **NetBSD pbench profile (HW, 25 MHz, corrected counters) — the real-workload
+  re-measurement, now in.** Kernel-path stall % of cycles, current gen2.5 core
+  (BTFN+RAS in):
+
+  | bench         | CPI  | hazard | ifetch | store | flush | load | funit |
+  |---------------|------|--------|--------|-------|-------|------|-------|
+  | getpid        | 4.12 |  22.2  |   8.1  |  22.5 |  13.1 |  7.6 |  2.1  |
+  | clock_gettime | 4.65 |  18.8  |  16.0  |  20.2 |  11.7 |  5.6 |  6.2  |
+  | pipe_pingpong | 4.63 |  22.1  |  19.3  |  12.1 |  17.3 |  7.0 |  0.6  |
+  | fork_exit     | 4.94 |  21.0  |  19.7  |  11.4 |  14.3 | 12.1 |  1.2  |
+  | fork_exec     | 4.41 |  22.6  |  16.0  |  12.0 |  13.5 | 11.6 |  1.6  |
+
+  The pre-fix placeholder (flush 34.7, store 14.2, hazard 13.9, ifetch 5.3)
+  inverts under the corrected counters. **hazard (~21%) is #1 here too** —
+  forwarding leads on real code, not just Dhrystone. **`ifetch` is now
+  first-class (16-20%) and on the representative fork/exec/pipe paths it is the
+  #2 lever, ahead of flush and store** — genuine I-cache/L2 footprint (L1I
+  88-94% hit vs Dhrystone's 99.9%), and untouched by any planned gen2.5 feature.
+  store swings by workload (22% getpid, ~12% fork/pipe); flush (12-17%) is the
+  real BTB target but no longer the headline.
 
 Non-stall cycles equal insns retired (the core never overlaps a stall with
 useful work), so a class's cyc/insn is its cycle-share x CPI and the ranking is
@@ -601,20 +616,39 @@ getpid and pipe_pingpong -2.8%, clock_gettime -1.6% cyc/op (fork_* too noisy
 at iters=1 to read). The RAS reaches the returns BTFN left on the table, as
 predicted.
 
-**The flush bucket is taken-branch-bound, not return-bound — BTB is next.**
-The RAS captured its entire reachable slice and flush still sits at 23-42% of
-cycles everywhere, including call-free libc loops (memcpy/memset/strlen at
-size=1 run 37-42% flush). That residual is the 2-bubble front-end fill of
-every taken conditional branch, which ID-stage prediction (BTFN or RAS)
-structurally cannot remove — only a fetch-time **BTB** (target RAM read in
-parallel with the icache, 2->0/1 bubbles) reaches it. The RAS result is the
-empirical case for the BTB: it pays off across every taken branch in libc,
-kernel, and Dhrystone, not just returns. A BTB subsumes the ID redirect for
-direct branches while the RAS keeps supplying indirect-return targets.
+**The flush bucket is real front-end fill, but the corrected counters halve it
+and demote it.** This section originally read flush at 37-42% on libc size=1
+loops and called the BTB the dominant remaining lever. The carried-cause
+counters (see the RESOLVED finding above) put those same loops at ~17-26%
+(memcpy/memset/strlen size=1) and kernel paths at 12-18%; the missing ~half was
+back-end latency tails, now correctly in load/store/hazard. What flush measures
+now is genuine — the 2-bubble front-end fill of every taken conditional branch,
+which ID-stage prediction (BTFN/RAS) structurally cannot remove and only a
+fetch-time **BTB** (target RAM read in parallel with the icache, 2->0/1 bubbles)
+reaches. So the BTB stays a real lever; it is just no longer the #1 it appeared
+to be, and on the representative fork/exec/pipe paths `ifetch` (the I-cache it
+cannot touch) is the larger front-end cost.
 
-**Re-ranked remaining work:** BTB (the dominant flush lever, now empirically
-justified) -> EX/MEM forwarding + WB->ID write-through (hazard, co-#2 on real
-code) -> cacheable store buffer (store, co-#2).
+**Re-ranked remaining work (corrected counters, real-workload weighted):**
+
+1. **EX/MEM forwarding + WB->ID write-through** — hazard is #1 on every
+   workload (Dhrystone 28.6%, kernel ~21%): the single biggest CPI lever. Build
+   next, as the top-of-section ranking already concluded.
+2. Co-second tier — tighter and more workload-swung than the old ranking, no
+   single dominant follow-on:
+   - **I-cache / L1<->L2 path.** `ifetch` is ~0 on Dhrystone but #2 on the
+     fork/exec/pipe paths (16-20%, ahead of flush and store). This is the new
+     read from the corrected real-workload profile and is **not on the current
+     gen2.5 feature list** — the levers are the overview's 8-16 KB I-cache
+     target and/or the full-line L1<->L2 transfer reshape (which also cuts the
+     load/store miss tails, so it is the broadest single move).
+   - **Cacheable store buffer.** store is 18-22% on Dhrystone/getpid but ~12%
+     on fork/pipe — high-value on store-heavy, syscall-light code.
+   - **BTB.** flush 12-18%, genuine front-end but co-third, not dominant;
+     reuses the prediction framework so it stays the lowest-risk of the three.
+   Order this tier by which real workloads matter most: I-cache for
+   fork/exec-heavy use, store buffer for store-heavy use, BTB as the safe
+   incremental that finishes the prediction story.
 
 ## Compiler: graceful-fail on unsupported inline asm and vector IR
 
