@@ -629,11 +629,43 @@ reaches. So the BTB stays a real lever; it is just no longer the #1 it appeared
 to be, and on the representative fork/exec/pipe paths `ifetch` (the I-cache it
 cannot touch) is the larger front-end cost.
 
+### gen2.5 status: BTB landed (third feature)
+
+A **fetch-time branch target buffer** is implemented and committed — the
+`penumbra2_btb` leaf (PC-indexed tagged target RAM, default 32 entries,
+allocate-on-taken / tag-checked-invalidate-on-not-taken), the forked
+integration (core lookup + redirect, `if2_stage` predicted-taken tag carried to
+EX, spine training wiring, EX train/verify), unit test `tb_penumbra2_5_btb`, and
+integration `test_btb.s`; gen2 untouched. A correctly-predicted taken direct
+branch (B/Bcc/BL) is steered at fetch, turning its last front-end bubble into
+none — below what ID-stage BTFN/RAS reach. EX stays the authority, so a stale or
+aliased prediction costs at most an extra flush, never a wrong result.
+
+**Measured (BTB off vs on, same gen2.5 build, both @ 25 MHz HW).** Dhrystone
+DMIPS 7.29 -> 7.48 (+2.6%), CPI 3.05 -> 2.96, flush 9.2% -> 6.1% (-6.6M flush
+cycles, -5.0M wrong-path I-fetches). The +2.6% roughly matches the whole
+BTFN+RAS step (+2.5%), so the BTB doubles the prediction stack's Dhrystone gain
+(7.11 -> 7.48, +5.2% total). The win is workload-concentrated: the hot libc
+routines move 3-16% cyc/op (memset/256 -15.7%, memcpy/256 -6.2%, strlen/256
+-3.4%), while the kernel syscall paths barely move (getpid -1.9%,
+clock_gettime -1.8%, pipe_pingpong flat) — their flush is return/ifetch-bound,
+not taken-branch-bound.
+
+**Kept, but on probation against forwarding.** Both builds PASS at 25 MHz, so
+the cycle win is banked; the BTB's cost is timing margin, thinned to ~25.11 MHz
+on the default seed (placement noise on the shared dcache->MMU cone, recoverable
+by the end-of-features floorplan — not chased per-feature). The standing risk is
+that **forwarding — the #1 lever, loading the same cluster — may not close
+25 MHz on top of the margin the BTB already spent.** If it cannot and the
+floorplan cannot recover it, the BTB drops first: forwarding outranks it on
+every workload. So retention is conditional on forwarding fitting beside it.
+
 **Re-ranked remaining work (corrected counters, real-workload weighted):**
 
 1. **EX/MEM forwarding + WB->ID write-through** — hazard is #1 on every
-   workload (Dhrystone 28.6%, kernel ~21%): the single biggest CPI lever. Build
-   next, as the top-of-section ranking already concluded.
+   workload (Dhrystone 28.6%, kernel ~21%): the single biggest CPI lever, and
+   the gate on whether the landed BTB stays (see its probation note above).
+   Build next.
 2. Co-second tier — tighter and more workload-swung than the old ranking, no
    single dominant follow-on:
    - **I-cache / L1<->L2 path.** `ifetch` is ~0 on Dhrystone but #2 on the
@@ -644,11 +676,8 @@ cannot touch) is the larger front-end cost.
      load/store miss tails, so it is the broadest single move).
    - **Cacheable store buffer.** store is 18-22% on Dhrystone/getpid but ~12%
      on fork/pipe — high-value on store-heavy, syscall-light code.
-   - **BTB.** flush 12-18%, genuine front-end but co-third, not dominant;
-     reuses the prediction framework so it stays the lowest-risk of the three.
    Order this tier by which real workloads matter most: I-cache for
-   fork/exec-heavy use, store buffer for store-heavy use, BTB as the safe
-   incremental that finishes the prediction story.
+   fork/exec-heavy use, store buffer for store-heavy use.
 
 ## Compiler: graceful-fail on unsupported inline asm and vector IR
 
