@@ -141,6 +141,64 @@ faulting slot's `o_op_class` to `OPC_ALU` (the same reason `o_is_trap` is gated
 there), so an inert slot never reports a real op class at retire. The remaining
 `o_retire_valid` over-count is the perfctr-only item above.
 
+## Hardware: Penumbra/2 perfctr stall attribution is mis-timed — STALL_FLUSH over-counts
+
+The CPU stall-attribution counters charge a non-retiring cycle by the stall
+signals asserted *that same cycle* (head-of-line, evaluated at the retire
+point). But the bubble that blocks retirement at WB was injected upstream,
+roughly a pipeline-depth of cycles earlier, by a stall that may already have
+cleared. So the attribution is mis-timed: a stall shorter than the pipeline
+depth is *fully* mis-attributed (its bubbles reach WB after its signal
+deasserts), and a long stall loses its tail. The orphaned cycles fall into
+`STALL_FLUSH`, which is the residual catch-all — "non-retiring, and no stall
+signal asserted." So `STALL_FLUSH` is **not** a front-end / branch-flush
+counter; it is inflated by the latency tails of every short back-end stall.
+
+Measured with an RTL-sim probe (a temporary per-cycle classifier in the gen2.5
+core that buckets every non-retiring cycle by pipeline state, alongside a
+replica of the perfctr's residual logic), on the representative regime —
+cached-fetch + cached-data `memcpy` through the MMU, the same access pattern
+real `memcpy`/`pmap_copy_page` hits:
+
+- Of ~18.5k cycles the perfctr called `flush`, only ~5.2k were genuine
+  front-end fill (pipe empty: no instruction anywhere in EX/MEM/WB). The other
+  ~16k were back-end-stall latency tails — an instruction sitting in MEM with a
+  bubble passing through WB and no stall asserted that cycle.
+- Cross-checks pinning the cause: *no* flush cycle had a live data request
+  (`o_dmem_re`/`o_dmem_we` both low), so it is not a current memory access;
+  flush *persisted* with cached fetch, so it is not fetch-stall drain; and an
+  A/B with the `ldw`→`stw` dependency broken (identical memory traffic, no
+  load-use hazard) left the residual essentially unchanged, so it is **not**
+  load-use hazard (only ~256 cyc were — those correctly land in `STALL_HAZARD`).
+  It is memory-access latency tails surfacing late.
+- A memory-free, hazard-free, BTB-predicted loop showed pipe-empty ≈ 0, ruling
+  out any structural front-end-throughput bubble.
+
+Implication for the gen2.5 roadmap: the priority ordering ("flush is #1, ~2.5×
+the next lever") was read off a mislabeled bucket. The genuine,
+prediction-addressable front-end flush is small (~5k on `memcpy`), which is
+exactly why BTFN, the RAS, and the BTB each moved `STALL_FLUSH` only a little —
+the predictors work as designed; the counter misled. The dominant real-workload
+CPI lever is the **back end** — operand forwarding (which removes the load-use
+stall *and* its latency tail, the bulk of the bogus "flush") and the memory
+system — not further branch prediction.
+
+Fix: tag each pipeline bubble with the cause that injected it, carry the tag
+*with the bubble* to WB, and charge the non-retiring cycle to the carried cause
+— so attribution no longer depends on how far upstream, or how many cycles
+earlier, the stall was. Back-end causes (load / store / funit / hazard) ride
+bubble tokens that flow ID→EX→MEM→WB, so they tag cleanly; this is the dominant
+measured mis-attribution and the right first increment. Front-end causes
+(ifetch / flush) are decoupled by the elastic fetch buffer, which drops bubble
+tokens — an empty buffer *is* the front-end bubble, with no token to carry a
+cause — so attributing those correctly needs the buffer to carry tagged
+bubbles, a larger fetch-path change; defer it behind the back-end chain. The
+change is perfctr-observability-only (no pipeline-behaviour risk) and
+discrete-logic-friendly (a few flops + muxes per stage). The diagnosis and the
+encoding sketch (a `BCAUSE_*` field) were worked out but not landed; the BTB
+that prompted this investigation sits on the `gen2.5-btb` branch, separate from
+this fix.
+
 ## Hardware: Penumbra/2 taken branch under a MEM stall lost its link write (RESOLVED)
 
 A `BL`/`JMP` resolving in EX while an older memory op stalled MEM was discarded
