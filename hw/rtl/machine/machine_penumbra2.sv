@@ -153,8 +153,9 @@ module machine_penumbra2
     // from EX, not WB); see the core's o_insn_retired.
     logic        insn_retired;
 
-    // Per-cause stall signals for the perfctr (head-of-line attribution).
-    logic        stall_funit, stall_load, stall_store, stall_hazard;
+    // Carried stall cause for the perfctr: the cause of the bubble at the
+    // commit point, charged when a cycle retires nothing (see penumbra2_perfctr).
+    logic [BCAUSE_W-1:0] cpu_bcause;
 
     // Core's timer-IRQ line: the internal programmable timer, OR the external
     // i_timer_irq input (kept for direct injection; the internal timer is the
@@ -193,8 +194,7 @@ module machine_penumbra2
         .o_commit_we(o_commit_we),
         .o_retire_valid(o_retire_valid), .o_retire_op_class(o_retire_op_class),
         .o_insn_retired(insn_retired),
-        .o_stall_funit(stall_funit), .o_stall_load(stall_load),
-        .o_stall_store(stall_store), .o_stall_hazard(stall_hazard),
+        .o_bcause(cpu_bcause),
         .o_retire_pc(o_retire_pc), .o_retire_sr(o_retire_sr),
         .o_fault_commit(o_fault_commit), .o_fault_vec(o_fault_vec),
         .o_eret_commit(o_eret_commit),
@@ -424,17 +424,15 @@ module machine_penumbra2
     );
 
     // CPU performance counters (SYSDEV_CPU regs 5–10): free-running cycle and
-    // retired-instruction counts plus the head-of-line stall breakdown. The
-    // fetch-side miss stall is the I-cache busy line (fetch_busy); MEM and EX
-    // surface their own per-cause stalls. insn_retired includes drain-commit
-    // ops (which retire from EX, not WB), so CPI stays >= 1.
+    // retired-instruction counts plus the stall breakdown. The core resolves one
+    // carried cause per cycle (cpu_bcause) at the commit point; the perfctr
+    // charges it whenever a cycle retires nothing. insn_retired includes
+    // drain-commit ops (which retire from EX, not WB), so CPI stays >= 1.
     logic [31:0] perfctr_rdata;
     penumbra2_perfctr u_perfctr (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_insn_retired(insn_retired),
-        .i_stall_load(stall_load), .i_stall_store(stall_store),
-        .i_stall_funit(stall_funit), .i_stall_ifetch(fetch_busy),
-        .i_stall_hazard(stall_hazard),
+        .i_bcause(cpu_bcause),
         .i_sys_reg(sys_reg), .o_sys_rdata(perfctr_rdata)
     );
 

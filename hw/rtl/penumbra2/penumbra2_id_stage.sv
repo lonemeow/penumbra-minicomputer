@@ -45,7 +45,9 @@ module penumbra2_id_stage
     // ── Pipeline handshake ───────────────────────────────────────
     input  logic                  i_stall_in,       // EX cannot accept this cycle
     input  logic                  i_bubble,         // force a bubble this edge (taken-branch redirect / fault flush)
+    input  logic                  i_fetch_busy,     // front end is waiting on the memory hierarchy (classifies an empty-fetch bubble)
     output logic                  o_local_stall,    // back-pressure (downstream-independent): the scoreboard interlock — also the perfctr hazard-stall cause
+    output logic [BCAUSE_W-1:0]   o_bcause,         // stall cause carried by the ID/EX slot when it is a bubble
 
     // ── Regfile read interface (regfile is external) ─────────────
     output logic [SB_IDX_W-1:0]   o_rd_idx_a,
@@ -273,12 +275,34 @@ module penumbra2_id_stage
         end
     end
 
+    // ── ID/EX bubble cause ────────────────────────────────────────
+    // Mirrors the next_valid priority above: the cause stamped on the ID/EX
+    // slot whenever ID injects a bubble (a valid issue is charged to nothing).
+    // ID is the head of the datapath, so it does not forward an upstream cause;
+    // it classifies the two front-end bubble kinds here. A redirect kill
+    // (i_bubble) and a cold/refill gap are front-end flush (FLUSH); an empty
+    // fetch slot while the front end is memory-bound is IFETCH — the split is
+    // by i_fetch_busy at the starved cycle, which is exactly the doc's
+    // IFETCH-vs-FLUSH boundary (memory wait vs refill). A live slot that cannot
+    // issue is a scoreboard interlock (HAZARD). An issuing slot is valid, so its
+    // cause is moot (NONE).
+    logic [BCAUSE_W-1:0] next_bcause;
+    always_comb begin
+        if      (i_bubble)         next_bcause = BCAUSE_FLUSH;
+        else if (i_stall_in)       next_bcause = o_bcause;   // hold the carried cause
+        else if (~i_valid)         next_bcause = i_fetch_busy ? BCAUSE_IFETCH : BCAUSE_FLUSH;
+        else if (scoreboard_stall) next_bcause = BCAUSE_HAZARD;
+        else                       next_bcause = BCAUSE_NONE; // issuing: a valid slot, charged to nothing
+    end
+
     // ── ID/EX register ───────────────────────────────────────────
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
-            o_valid <= 1'b0;
+            o_valid  <= 1'b0;
+            o_bcause <= BCAUSE_FLUSH;       // cold pipe: the fill bubbles are front-end
         end else begin
-            o_valid <= next_valid;
+            o_valid  <= next_valid;
+            o_bcause <= next_bcause;        // travels with the slot, valid or bubble
             if (issue) begin
                 // A faulting slot is inert, so it must not report a real op
                 // class downstream: an IF-faulted word's garbage decode could
@@ -346,5 +370,12 @@ module penumbra2_id_stage
     assert property (@(posedge i_clk) disable iff (i_rst)
         o_valid |-> !(o_fault_pending && o_is_trap))
         else $error("penumbra2_id_stage: ID/EX slot is both faulting and trapping");
+
+    // Every ID/EX bubble carries a real cause — the commit point charges the
+    // non-retiring cycle to it, so a NONE tag on a bubble would leave a cycle
+    // unaccounted.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        o_valid || o_bcause != BCAUSE_NONE)
+        else $error("penumbra2_id_stage: ID/EX bubble with no stall cause");
 
 endmodule

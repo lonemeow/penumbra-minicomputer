@@ -138,6 +138,7 @@ module penumbra2_mem_stage
     // ── Pipeline handshake ───────────────────────────────────────
     input  logic                  i_stall_in,        // WB cannot accept this cycle
     input  logic                  i_bubble,          // force this insn to a bubble (fault flush from WB)
+    input  logic [BCAUSE_W-1:0]   i_bcause,          // cause carried by an incoming EX/MEM bubble
     output logic                  o_local_stall,     // back-pressure to EX (downstream-independent)
     output logic                  o_stall_load,      // stall cause: a load access holds the pipe (perfctr)
     output logic                  o_stall_store,     // stall cause: a store access holds the pipe (perfctr)
@@ -156,6 +157,7 @@ module penumbra2_mem_stage
     output logic                  o_phys_dst_aux_en,
     output logic [31:0]           o_pc,
     output logic                  o_valid,
+    output logic [BCAUSE_W-1:0]   o_bcause,          // stall cause carried by this slot when it is a bubble
     output logic                  o_fault_pending,
     output logic [3:0]            o_fault_vec,
     // FAULT_ADDR/FAULT_STATUS commit payload — consumed by WB's commit strobe
@@ -170,6 +172,7 @@ module penumbra2_mem_stage
     // Control nets assigned in the back-pressure always_comb below, declared
     // up here because the data-memory drive (a continuous assign) reads them.
     logic advance, next_valid;
+    logic [BCAUSE_W-1:0] next_bcause;   // cause tag for the MEM/WB slot next edge
     logic acc_in_flight, acc_in_flight_next;
 
     // ── Access classification + alignment check ──────────────────
@@ -409,15 +412,28 @@ module penumbra2_mem_stage
     // A memory access's first cycle stalls EX and bubbles MEM/WB; it then
     // waits out i_dmem_busy and completes on the busy-drop cycle like a
     // normal op. Downstream back-pressure (i_stall_in) holds MEM/WB intact.
+    // The MEM/WB bubble's cause for an access that holds the pipe. Data loads
+    // and stores get their own precise bucket. An RDSYS shares this FSM but is
+    // not data memory; it goes to the front-end residual (FLUSH), deliberately
+    // not LOAD/STORE — reading the counters is itself an RDSYS, so charging it
+    // to a precise back-end bucket would let the instrument perturb the bucket
+    // it measures. Meaningful only on the bubble the access injects.
+    logic [BCAUSE_W-1:0] access_bcause;
+    assign access_bcause = is_store ? BCAUSE_STORE
+                         : is_load  ? BCAUSE_LOAD
+                         :            BCAUSE_FLUSH;   // RDSYS: residual, not a memory stall
+
     always_comb begin
         acc_in_flight_next = acc_in_flight;
         if (i_bubble) begin
             next_valid     = 1'b0;          // flush wins
             advance        = 1'b0;
+            next_bcause    = BCAUSE_FLUSH;   // fault-commit flush from WB
         end else if (mem_first) begin
             next_valid     = 1'b0;          // bubble into MEM/WB while accessing
             advance        = 1'b0;
             acc_in_flight_next = 1'b1;       // launched: in flight from next cycle
+            next_bcause    = access_bcause;
         end else if (is_mem && acc_in_flight && i_dmem_busy) begin
             // Busy-wait: the launched access's data side has not completed
             // (line fill / downstream round trip). Same posture as the launch
@@ -425,9 +441,11 @@ module penumbra2_mem_stage
             // request level held; acc_in_flight stays set (default above).
             next_valid     = 1'b0;
             advance        = 1'b0;
+            next_bcause    = access_bcause;
         end else if (i_stall_in) begin
             next_valid     = o_valid;       // hold MEM/WB unchanged
             advance        = 1'b0;
+            next_bcause    = o_bcause;       // hold the carried cause with the slot
             // An access not yet launched (mem_first suppressed by
             // ~i_stall_in) defers behind a dual-write divmul that holds
             // MEM/WB for its aux write.
@@ -435,6 +453,7 @@ module penumbra2_mem_stage
             next_valid     = i_valid;       // advance: bubble in if i_valid=0
             advance        = i_valid;
             acc_in_flight_next = 1'b0;       // access (if any) completes here
+            next_bcause    = i_bcause;       // propagate an incoming EX/MEM bubble's cause
         end
     end
 
@@ -442,9 +461,11 @@ module penumbra2_mem_stage
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
             o_valid   <= 1'b0;
+            o_bcause  <= BCAUSE_FLUSH;       // cold pipe: the fill bubbles are front-end
             acc_in_flight <= 1'b0;
         end else begin
             o_valid   <= next_valid;
+            o_bcause  <= next_bcause;        // travels with the slot, valid or bubble
             acc_in_flight <= acc_in_flight_next;
             if (advance) begin
                 o_op_class        <= i_op_class;

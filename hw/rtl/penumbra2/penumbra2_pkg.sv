@@ -101,5 +101,29 @@ package penumbra2_pkg;
     localparam logic [MEM_OP_W-1:0] MEM_LOAD  = 2'd1;
     localparam logic [MEM_OP_W-1:0] MEM_STORE = 2'd2;
 
+    // ── Bubble cause tag (perfctr stall attribution) ────────────
+    // Each pipeline bubble carries the cause that injected it, set where the
+    // bubble is born and propagated unchanged as the bubble flows to the commit
+    // point — so a non-retiring cycle is charged to its true cause regardless of
+    // how far upstream, or how many cycles earlier, the originating stall was
+    // (the live-stall-signal attribution it replaces mis-timed short stalls and
+    // the latency tails of long ones into the front-end residual). Meaningful
+    // only on a bubble (a valid slot retires and is charged to nothing); the
+    // commit point decodes it into the SYSREG_CPU_STALL_* counters. One tag per
+    // counter — see the stall-attribution contract in doc/system/sysregs.md.
+    //
+    // Back-end causes (LOAD/STORE/FUNIT/HAZARD) ride the bubble token through
+    // ID→EX→MEM→WB. Front-end causes are split where the front-end bubble enters
+    // ID: a redirect kill or cold/refill gap is FLUSH; an empty fetch while a
+    // fetch is outstanding to memory is IFETCH.
+    localparam int BCAUSE_W = 3;
+    localparam logic [BCAUSE_W-1:0] BCAUSE_NONE   = 3'd0;  // a retiring slot — charged to nothing
+    localparam logic [BCAUSE_W-1:0] BCAUSE_FLUSH  = 3'd1;  // front-end redirect / fill, not memory-bound
+    localparam logic [BCAUSE_W-1:0] BCAUSE_IFETCH = 3'd2;  // front-end starved on a memory-bound fetch
+    localparam logic [BCAUSE_W-1:0] BCAUSE_LOAD   = 3'd3;  // MEM holding for a load access
+    localparam logic [BCAUSE_W-1:0] BCAUSE_STORE  = 3'd4;  // MEM holding for a store access
+    localparam logic [BCAUSE_W-1:0] BCAUSE_FUNIT  = 3'd5;  // EX waiting on the multi-cycle unit (divmul)
+    localparam logic [BCAUSE_W-1:0] BCAUSE_HAZARD = 3'd6;  // ID issue blocked by a pipeline interlock
+
 endpackage
 /* verilator lint_on UNUSEDPARAM */

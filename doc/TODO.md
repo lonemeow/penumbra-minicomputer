@@ -141,7 +141,26 @@ faulting slot's `o_op_class` to `OPC_ALU` (the same reason `o_is_trap` is gated
 there), so an inert slot never reports a real op class at retire. The remaining
 `o_retire_valid` over-count is the perfctr-only item above.
 
-## Hardware: Penumbra/2 perfctr stall attribution is mis-timed — STALL_FLUSH over-counts
+## Hardware: Penumbra/2 perfctr stall attribution is mis-timed — STALL_FLUSH over-counts (RESOLVED)
+
+Resolved by the bubble-cause-tag scheme on both gen2 and gen2.5. Each pipeline
+bubble carries a `BCAUSE_*` tag set where it is injected and propagated ID→EX→MEM
+→WB; the perfctr charges a non-retiring cycle to the carried tag at the commit
+point instead of to the live per-stage stall signals, so a short stall (whose
+bubble outlives its signal) and a long stall's latency tail land in their true
+back-end bucket (LOAD/STORE/FUNIT/HAZARD) rather than the front-end residual. The
+front-end split was *not* deferred after all: the "larger fetch-path change" the
+diagnosis feared (threading tags through the elastic buffer) proved unnecessary —
+an empty fetch slot is classified at the starved cycle by `i_fetch_busy`
+(memory-bound → IFETCH, else FLUSH), which is correct by the counters' own
+definitions since the buffer absorbs fetch bubbles and the right question is the
+front end's live state, not a carried token. RDSYS (the read path for the
+counters themselves) is charged to the residual, never a precise back-end bucket,
+so the instrument cannot perturb what it measures. Verified by
+`test_cpu_stall_hit_load` (a cache-hit load burst now moves STALL_LOAD ≥ N and
+does not leak to FLUSH — the old code scored ~0) plus a per-cycle one-hot
+partition assertion that runs through the whole conformance suite on both cores.
+The original diagnosis is kept below for context.
 
 The CPU stall-attribution counters charge a non-retiring cycle by the stall
 signals asserted *that same cycle* (head-of-line, evaluated at the retire
@@ -386,37 +405,47 @@ gen2.5 is no longer identity-only — see the feature status below.
 
 ### gen2.5 priority is ranked from the stall profile — real workload first
 
-The build order below is **data-driven from the gen2 stall profile**, not the
-feature-list order in `overview.md`. Two measurements, the representative
-workload first (a micro-benchmark lies about ratios; the real workload sets the
-priority):
+The build order below is **data-driven from the gen2 stall profile**,
+re-measured on hardware after the perfctr stall-attribution fix (the
+carried-cause counters — see the RESOLVED finding above). The pre-fix profile
+that originally set this ranking was read off the mislabeled residual: it
+reported `flush` as the dominant stall (~30% on Dhrystone, ~35% on NetBSD) and
+put branch prediction first. That was an artifact — back-end latency tails
+leaking into `flush` — and the corrected profile re-ranks the levers.
 
-- **NetBSD, `penmon` idle-ish (2026-06-19):** CPI 3.68. Stalls (% of cycles):
-  flush 34.7, store 14.2, hazard 13.9, ifetch 5.3, load 3.9, funit 0.9.
-  L1I 98.2% / L1D 98.7% / L2 82.1% hit (L2 ~258k miss/s — a real working set).
-- **Dhrystone on gen2 (2026-06-19):** CPI 3.03. Stalls: flush 30.4, store 19.2,
-  hazard 10.7, load 4.2, funit 2.3, ifetch ~0. L2 nearly idle.
+- **Dhrystone on gen2 (HW, 25 MHz):** CPI 3.13. Stalls (% of cycles):
+  hazard 28.6, store 18.3, flush 11.6, load 6.0, funit 3.3, ifetch ~0.
+  L1I/L1D ~99.9% hit, L2 nearly idle.
+- **Dhrystone on gen2.5 (HW, 25 MHz):** CPI 3.05. hazard 29.4, store 18.8,
+  flush 9.2, load 6.1, funit 3.4, ifetch ~0 — *same back end*; `flush` falls
+  ~2.4pp from the predictors (and ~1.7M fewer wrong-path I-fetches), which is the
+  entire gen2→gen2.5 gain (DMIPS 7.11 → 7.29, +2.5%).
+- **NetBSD `penmon` profile: pre-fix, pending re-measurement.** The earlier
+  figure (flush 34.7, store 14.2, hazard 13.9, ifetch 5.3, load 3.9, funit 0.9)
+  came from the mislabeled counters — do not rank real-workload levers off it
+  until it is re-measured. `ifetch` and L2 misses there are real and
+  gen2.5-untouched regardless (they were never back-end tails).
 
 Non-stall cycles equal insns retired (the core never overlaps a stall with
 useful work), so a class's cyc/insn is its cycle-share x CPI and the ranking is
-exact. On the real workload: flush 1.28, store 0.52, hazard 0.51, ifetch 0.20,
-load 0.14 cyc/insn.
+exact. On Dhrystone gen2: hazard 0.90, store 0.57, flush 0.36, load 0.19,
+funit 0.10 cyc/insn.
 
-Where the two workloads agree and disagree:
+What the corrected profile says:
 
-- **flush is #1 on both, and *larger* on real code (34.7 vs 30.4) — 2.5x the
-  next lever.** Branch prediction is unambiguously first.
-- **store and hazard are co-#2 on real code (14.2 / 13.9).** Dhrystone
-  overstated store (19.2) and understated hazard (10.7) — its hot 1 KB loop
-  hammers a few store addresses and has shallow dependency chains. So
-  **forwarding is worth more on real workloads than Dhrystone implied**; it
-  stays second, now better justified.
-- **ifetch (5.3) and L2 (82% hit, ~258k miss/s) are real-workload costs gen2.5
-  does *not* address.** Dhrystone's tiny footprint hid them. These are
-  I-cache-sizing / L2 concerns (gen3), so they set the real-world CPI floor
-  gen2.5 cannot cross. gen2.5 targets flush+store+hazard+load (~67% of
-  real-world cycles), not the memory system — do not expect it to fix
-  real-world CPI outright.
+- **hazard is #1 — by a wide margin (28.6%, ~0.90 cyc/insn).** It is RAW
+  interlock with no operand forwarding: every dependent instruction waits for
+  its producer to reach WB. **Forwarding is the top CPI lever**, not prediction.
+- **store is #2 (18.3%, ~0.57).** Write-through round-trips — every store
+  reaches L2 (L1-D/L2 write ~88% hit). The store buffer / write-back path is
+  the lever here.
+- **flush is #3 and genuinely front-end now (11.6%).** Prediction (gen2.5)
+  already attacks it and delivers the measured +2.5%; real, but the smallest of
+  the three big levers — exactly why BTFN/RAS/BTB moved CPI only modestly (the
+  predictors work; the old counter had inflated their apparent target).
+- **ifetch ~0, load 6.0, funit 3.3** are minor on this footprint; `ifetch` ~0
+  confirms the I-cache (99.9% hit) is not the bottleneck. Re-measure on NetBSD
+  before assuming the same — its larger footprint pays real `ifetch` and L2.
 
 Decisions taken from this:
 
@@ -431,11 +460,15 @@ Decisions taken from this:
   entry). It attaches to the existing write-through path — distinct from, and
   lighter than, the gen3 write-back L2 reshape.
 
-- **Build order: prediction -> forwarding -> store buffer.** Prediction first
-  because its blast radius is perf-only (EX stays the branch authority, so a
-  misprediction is an extra flush, never a wrong result) and it reuses
-  machinery that already exists — the IF1 `i_redirect` mux and the EX
-  taken-branch flush. Forwarding second, once the variant framework is proven:
+- **Build order: prediction -> forwarding -> store buffer.** This is a
+  *risk* ordering, not a magnitude one — the corrected profile puts forwarding
+  (hazard, #1) and the store buffer (#2) ahead of prediction (flush, #3) in
+  payoff. Prediction went first anyway because its blast radius is perf-only
+  (EX stays the branch authority, so a misprediction is an extra flush, never a
+  wrong result) and it reuses machinery that already exists — the IF1
+  `i_redirect` mux and the EX taken-branch flush — making it the safe way to
+  prove the variant framework. It has landed (+2.5% DMIPS); **forwarding is now
+  the live priority and the biggest remaining lever.** Forwarding second, once the variant framework is proven:
   it is the most result-checkable feature (it changes timing not results, so
   the optimized variant must produce bit-identical output to the baseline
   across the inherited suite — any divergence is a localized forwarding bug).

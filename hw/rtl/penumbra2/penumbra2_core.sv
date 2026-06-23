@@ -118,14 +118,11 @@ module penumbra2_core
     output logic [31:0]           o_retire_pc,       // the retiring instruction's PC (trace)
     output logic [31:0]           o_retire_sr,       // architectural SR as the instruction commits
 
-    // ── Stall-attribution observability (perfctr) ────────────────
-    // Per-cause stall signals, surfaced for the machine's CPU performance
-    // counters. They can overlap; the perfctr resolves them by head-of-line
-    // priority. Pure observation — they drive no pipeline logic.
-    output logic                  o_stall_funit,     // EX waiting on the divmul unit
-    output logic                  o_stall_load,      // MEM holding for a load access
-    output logic                  o_stall_store,     // MEM holding for a store access
-    output logic                  o_stall_hazard,    // ID blocked by a pipeline interlock (hazard)
+    // ── Stall-attribution (perfctr) ──────────────────────────────
+    // The cause charged for a non-retiring cycle, resolved at the commit point
+    // and carried with the bubble it blocked. Pure observation — drives no
+    // pipeline logic. The machine perfctr decodes it under o_insn_retired.
+    output logic [BCAUSE_W-1:0]   o_bcause,
 
     // ── Exception observability (trace markers) ──────────────────
     // The same fault/ERET commit pulses the front end already acts on,
@@ -355,6 +352,7 @@ module penumbra2_core
         .i_fault_status(id_fault_status),
         .i_supervisor(core_supervisor),
         .o_fetch_stall(fetch_stall),
+        .i_fetch_busy(i_fetch_busy),
         .o_commit_idx(o_commit_idx), .o_commit_data(o_commit_data),
         .o_commit_we(o_commit_we),
         .o_retire_valid(o_retire_valid), .o_retire_op_class(o_retire_op_class),
@@ -389,9 +387,8 @@ module penumbra2_core
         // ERET commit redirects PC ← EPC through the same front-end path.
         .o_fault_commit(fault_commit), .o_fault_vec(fault_vec), .o_epc(epc),
         .o_eret_commit(eret_commit),
-        // Stall-attribution observability — straight through to the machine perfctr.
-        .o_stall_funit(o_stall_funit), .o_stall_load(o_stall_load),
-        .o_stall_store(o_stall_store), .o_stall_hazard(o_stall_hazard),
+        // Stall-attribution — the carried bubble cause, resolved at WB.
+        .o_bcause(o_bcause),
         // Interrupt support — observability out, IRQ save-state in.
         .o_sr_s(sr_s), .o_sr_i(sr_i), .o_ei_commit(ei_commit), .o_dc_commit(dc_commit),
         .o_dc_commit_pc(o_dc_commit_pc), .o_dc_commit_op_class(o_dc_commit_op_class),

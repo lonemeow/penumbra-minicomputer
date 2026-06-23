@@ -47,6 +47,7 @@ module penumbra2_wb_stage
     input  logic                  i_phys_dst_aux_en, // set only for a dual-destination write (aux dst present)
     input  logic [31:0]           i_pc,              // committing instruction's PC (EPC source on a fault)
     input  logic                  i_valid,           // 0 = bubble
+    input  logic [BCAUSE_W-1:0]   i_bcause,          // stall cause carried by a bubble in this slot
     input  logic                  i_fault_pending,
     input  logic [3:0]            i_fault_vec,
 
@@ -61,6 +62,14 @@ module penumbra2_wb_stage
     // instruction — it was already pulsed on its primary cycle — so it is
     // excluded here.
     output logic                  o_insn_committed,
+
+    // ── Stall cause for a non-retiring cycle (perfctr) ───────────
+    // The cause the commit point charges whenever this cycle retires nothing.
+    // A bubble forwards its carried cause; the one non-bubble that does not
+    // retire — a dual write's aux (second-register) cycle — is the divmul's
+    // extra writeback, charged to the execution unit. The perfctr consumes
+    // this only on a non-retiring cycle, so a committing slot's value is moot.
+    output logic [BCAUSE_W-1:0]   o_bcause,
 
     // ── Regfile write port (regfile is external) ─────────────────
     output logic [SB_IDX_W-1:0]   o_wr_idx,
@@ -155,6 +164,13 @@ module penumbra2_wb_stage
     // an instruction already counted on its primary cycle. Faulting slots still
     // count (they complete via the fault path and never dual-write).
     assign o_insn_committed = i_valid & ~writing_aux;
+
+    // Cause charged on a non-retiring cycle. The aux cycle is the only valid
+    // slot that does not retire (it occupies WB but commits no new instruction
+    // — counted on its primary cycle), and it is the divmul's second register
+    // write, so it is charged to the execution unit. Every other non-retiring
+    // cycle is a bubble forwarding its carried cause.
+    assign o_bcause = writing_aux ? BCAUSE_FUNIT : i_bcause;
 
     // ══════════════════════════════════════════════════════════
     // Assertions — sim-only (Verilator --assert); stripped at synth.

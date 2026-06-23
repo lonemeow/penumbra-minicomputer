@@ -6,42 +6,39 @@
 //   STALL_HAZARD / STALL_FLUSH. Counter layout and read semantics are the
 //   contract in doc/system/sysregs.md (Device 1: CPU).
 //
-// Stall attribution is head-of-line: a cycle that retires no instruction is
-// charged to the blocker of the *oldest* un-retired instruction — which, in an
-// in-order pipeline, is the most-downstream stalling stage. The per-cause stall
-// inputs can be asserted together (an older load filling in MEM while a younger
-// divmul iterates in EX), so a single cycle is resolved to one bucket by a
-// downstream-first priority: clearing an upstream stall cannot let the cycle
-// retire while a downstream one still holds, so the downstream stall is the one
-// that actually bound progress. A retiring instruction means the cycle was
-// productive and is charged to nothing; a non-retiring cycle matching no stage
-// stall is a front-end redirect or fill bubble (STALL_FLUSH, the residual). The
-// six stall counters are therefore mutually exclusive, and exactly one of
+// Stall attribution is by carried cause. The core hands this block one cause
+// tag per cycle — i_bcause, the cause of the bubble (or aux slot) occupying the
+// commit point — alongside the retire pulse. A retiring cycle is productive and
+// charged to nothing; a non-retiring cycle advances the one counter its carried
+// cause selects. Because the cause was stamped where the bubble was injected and
+// rode the bubble to the commit point, the charge does not depend on how far
+// upstream, or how many cycles earlier, the originating stall was — so a short
+// back-end stall (whose bubble outlives its stall signal) and the latency tail
+// of a long one are charged to their true cause rather than leaking into the
+// front-end residual, which the prior live-stall-signal attribution mis-timed.
+// The six stall counters are therefore mutually exclusive, and exactly one of
 // {retire, the six} advances each cycle (asserted below) — so the breakdown
 // closes CYCLES = INSNS_RETIRED + Sum(stall), accounting for every cycle.
 //
-// The block is observational: its inputs are stall signals each stage already
-// generates, and its outputs feed only counter flops and the read mux. It never
-// drives the pipeline, so it adds no register-to-register path through the core.
-// keep_hierarchy keeps the placer from scattering the counters into the
-// pipeline logic; and because software reads counter *deltas* over long
-// regions, a constant counting latency is invisible — the attribution can be
-// registered to retime off a critical path with no semantic change.
+// The block is observational: its input is a cause the core already resolves at
+// the commit point, and its outputs feed only counter flops and the read mux. It
+// never drives the pipeline, so it adds no register-to-register path through the
+// core. keep_hierarchy keeps the placer from scattering the counters into the
+// pipeline logic; and because software reads counter *deltas* over long regions,
+// a constant counting latency is invisible — the decode can be registered to
+// retime off a critical path with no semantic change.
 
 (* keep_hierarchy = "yes" *)
 module penumbra2_perfctr
     import penumbra_pkg::*;
+    import penumbra2_pkg::*;
 (
     input  logic        i_clk,
     input  logic        i_rst,
 
-    // ── Per-cycle event + stall inputs (head-of-line attribution) ─
+    // ── Per-cycle retire + carried-cause inputs ──────────────────
     input  logic        i_insn_retired,   // a productive cycle: an instruction retired
-    input  logic        i_stall_load,     // MEM holds the pipe for a load access
-    input  logic        i_stall_store,    // MEM holds the pipe for a store access
-    input  logic        i_stall_funit,    // EX waits on the multi-cycle execution unit (divmul)
-    input  logic        i_stall_ifetch,   // IF waits on the instruction-fetch memory
-    input  logic        i_stall_hazard,   // ID issue blocked by a pipeline interlock (hazard)
+    input  logic [BCAUSE_W-1:0] i_bcause, // cause charged on a non-retiring cycle (carried with the blocking bubble)
 
     // ── Sysreg read sideband (combinational; device complex captures it) ──
     input  logic [3:0]  i_sys_reg,
@@ -49,9 +46,10 @@ module penumbra2_perfctr
 );
 
     // ── Stall-bucket increment enables ───────────────────────────
-    // Resolved from the (possibly overlapping) per-cause stall inputs by
-    // head-of-line priority — see the module header. At most one is set per
-    // cycle, and none is set on a retiring cycle (the assertion checks both).
+    // A non-retiring cycle advances exactly the one bucket its carried cause
+    // selects; a retiring cycle advances none (the assertion checks both). The
+    // decode is exhaustive and one-hot by construction — i_bcause is a single
+    // value — so it cannot double-charge a cycle.
     logic inc_funit, inc_ifetch, inc_load, inc_store, inc_hazard, inc_flush;
 
     always_comb begin
@@ -62,15 +60,18 @@ module penumbra2_perfctr
         inc_ifetch = 1'b0;
         inc_flush  = 1'b0;
 
-        // Downstream-first priority (MEM > EX > ID > IF); a non-retiring cycle
-        // matching no stage stall is the front-end-redirect / fill residual.
         if (!i_insn_retired) begin
-            if      (i_stall_load)   inc_load   = 1'b1;
-            else if (i_stall_store)  inc_store  = 1'b1;
-            else if (i_stall_funit)  inc_funit  = 1'b1;
-            else if (i_stall_hazard) inc_hazard = 1'b1;
-            else if (i_stall_ifetch) inc_ifetch = 1'b1;
-            else                     inc_flush  = 1'b1;
+            unique case (i_bcause)
+                BCAUSE_LOAD:   inc_load   = 1'b1;
+                BCAUSE_STORE:  inc_store  = 1'b1;
+                BCAUSE_FUNIT:  inc_funit  = 1'b1;
+                BCAUSE_HAZARD: inc_hazard = 1'b1;
+                BCAUSE_IFETCH: inc_ifetch = 1'b1;
+                // BCAUSE_FLUSH (front-end redirect / fill) is the residual; a
+                // BCAUSE_NONE on a non-retiring cycle is a tagging bug (a bubble
+                // reached the commit point untagged) — caught by the assertion.
+                default:       inc_flush  = 1'b1;
+            endcase
         end
     end
 
@@ -123,11 +124,18 @@ module penumbra2_perfctr
     // bucket. With STALL_FLUSH as the residual catch-all, the six buckets plus
     // the retire pulse partition all cycles (sysregs.md — the stall counters are
     // mutually exclusive), so exactly one of the seven is high. If this fires,
-    // the priority chain is not exhaustive-and-exclusive — two outcomes, or
-    // none, claimed the cycle.
+    // the decode is not exhaustive-and-exclusive — two outcomes, or none,
+    // claimed the cycle.
     assert property (@(posedge i_clk) disable iff (i_rst)
         $onehot({i_insn_retired, inc_funit, inc_ifetch, inc_load, inc_store,
                  inc_hazard, inc_flush}))
         else $error("penumbra2_perfctr: cycle not charged to exactly one counter");
+
+    // A non-retiring cycle always carries a real cause. A NONE tag here means a
+    // bubble reached the commit point untagged — the carried-cause chain has a
+    // gap upstream — and would be silently miscounted as FLUSH above.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        i_insn_retired || i_bcause != BCAUSE_NONE)
+        else $error("penumbra2_perfctr: non-retiring cycle with no carried cause");
 
 endmodule

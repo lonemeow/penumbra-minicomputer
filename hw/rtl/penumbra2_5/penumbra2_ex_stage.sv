@@ -93,6 +93,7 @@ module penumbra2_ex_stage
     input  logic                  i_stall_in,        // MEM cannot accept this cycle
     input  logic                  i_wb_active,       // WB holds a live (non-bubble) insn
     input  logic                  i_bubble,          // force this insn to a bubble (fault flush from WB)
+    input  logic [BCAUSE_W-1:0]   i_bcause,          // cause carried by an incoming ID/EX bubble
     output logic                  o_local_stall,     // back-pressure to ID (downstream-independent)
     output logic                  o_dc_commit,       // drain-commit insn commits this cycle
     output logic                  o_funit_stall,     // stall cause: waiting on the divmul unit (perfctr)
@@ -121,6 +122,7 @@ module penumbra2_ex_stage
     output logic                  o_phys_dst_aux_en,
     output logic [31:0]           o_pc,
     output logic                  o_valid,
+    output logic [BCAUSE_W-1:0]   o_bcause,          // stall cause carried by this slot when it is a bubble
     output logic                  o_fault_pending,
     output logic [3:0]            o_fault_vec,
     output logic [31:0]           o_fault_status
@@ -313,6 +315,7 @@ module penumbra2_ex_stage
     // Issue/back-pressure control outputs, declared here because the divmul
     // launch FF below references `advance`; both are assigned further down.
     logic        advance, next_valid;
+    logic [BCAUSE_W-1:0] next_bcause;   // cause tag for the EX/MEM slot next edge
 
     assign is_divmul    = (i_op_class == OPC_DIVMUL);
     assign divmul_in_ex = is_divmul & i_valid & ~i_fault_pending & ~i_bubble;
@@ -417,12 +420,31 @@ module penumbra2_ex_stage
     end
     assign o_local_stall = ex_local_stall;
 
+    // ── EX/MEM bubble cause ───────────────────────────────────────
+    // Mirrors the next_valid priority above (same idiom as ex_local_stall): the
+    // cause stamped on the EX/MEM slot whenever EX injects or forwards a bubble.
+    // A fault flush, the WRSYS post-commit hold, and a drain-commit drain are
+    // front-end serialization (FLUSH); a divmul busy-wait is the execution unit
+    // (FUNIT). When EX instead holds the slot under MEM back-pressure the carried
+    // cause persists; on a clean advance it forwards the incoming ID/EX cause
+    // (meaningful only if that slot is itself a bubble).
+    always_comb begin
+        if      (i_bubble)    next_bcause = BCAUSE_FLUSH;
+        else if (post_wait_q) next_bcause = BCAUSE_FLUSH;
+        else if (dc_here)     next_bcause = i_stall_in ? o_bcause : BCAUSE_FLUSH;
+        else if (dm_stall)    next_bcause = i_stall_in ? o_bcause : BCAUSE_FUNIT;
+        else if (i_stall_in)  next_bcause = o_bcause;
+        else                  next_bcause = i_bcause;
+    end
+
     // ── EX/MEM register ──────────────────────────────────────────
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
-            o_valid <= 1'b0;
+            o_valid  <= 1'b0;
+            o_bcause <= BCAUSE_FLUSH;       // cold pipe: the fill bubbles are front-end
         end else begin
-            o_valid <= next_valid;
+            o_valid  <= next_valid;
+            o_bcause <= next_bcause;        // travels with the slot, valid or bubble
             if (advance) begin
                 o_op_class        <= i_op_class;
                 o_mem_op          <= i_mem_op;

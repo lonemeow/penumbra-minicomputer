@@ -41,6 +41,7 @@ module penumbra2_spine
     input  logic [31:0]           i_fault_status,    // composed payload; FAULT_NONE when none
     input  logic                  i_supervisor,
     output logic                  o_fetch_stall,     // hold the fetch stream this cycle
+    input  logic                  i_fetch_busy,      // front end waiting on memory (classifies the empty-fetch bubble)
 
     // ── Commit observability (WB regfile write port) ─────────────
     output logic [SB_IDX_W-1:0]   o_commit_idx,
@@ -128,14 +129,13 @@ module penumbra2_spine
     // ── ERET return (to the core: flush IF1/IF2 + redirect PC ← EPC) ──
     output logic                  o_eret_commit,     // an ERET is committing this cycle
 
-    // ── Stall-attribution observability (perfctr) ────────────────
-    // Per-cause stall signals from the stages, surfaced for the CPU
-    // performance counters. They can overlap (head-of-line attribution
-    // resolves them downstream); here they are the raw per-stage causes.
-    output logic                  o_stall_funit,     // EX waiting on the divmul unit
-    output logic                  o_stall_load,      // MEM holding for a load access
-    output logic                  o_stall_store,     // MEM holding for a store access
-    output logic                  o_stall_hazard,    // ID blocked by a pipeline interlock (hazard)
+    // ── Stall-attribution (perfctr) ──────────────────────────────
+    // The cause charged for a non-retiring cycle: the carried tag of the bubble
+    // at the commit point (or FUNIT on the divmul dual-write's aux cycle).
+    // Resolved at WB and meaningful only when the core's retire pulse is low —
+    // the carried tag re-couples the cause to the bubble it actually blocked,
+    // replacing the live per-stage stall signals that mis-timed attribution.
+    output logic [BCAUSE_W-1:0]   o_bcause,
 
     // ── Interrupt support (to/from the core's interrupt unit) ────
     output logic                  o_sr_s,            // SR.S (supervisor) — privilege source
@@ -177,6 +177,7 @@ module penumbra2_spine
     logic                idex_valid, idex_fault_pending;
     logic [3:0]          idex_fault_vec;
     logic [31:0]         idex_fault_status;
+    logic [BCAUSE_W-1:0] idex_bcause;       // stall cause when idex_valid=0
 
     // EX/MEM
     logic [OPC_W-1:0]    exmem_op_class;
@@ -195,6 +196,7 @@ module penumbra2_spine
     logic                exmem_valid, exmem_fault_pending;
     logic [3:0]          exmem_fault_vec;
     logic [31:0]         exmem_fault_status;
+    logic [BCAUSE_W-1:0] exmem_bcause;      // stall cause when exmem_valid=0
 
     // MEM/WB
     logic [OPC_W-1:0]    memwb_op_class;
@@ -208,6 +210,7 @@ module penumbra2_spine
     logic                memwb_valid, memwb_fault_pending;
     logic [3:0]          memwb_fault_vec;
     logic [31:0]         memwb_fault_vaddr, memwb_fault_status;
+    logic [BCAUSE_W-1:0] memwb_bcause;      // stall cause when memwb_valid=0
 
     // Fault commit (WB → exception unit / flush)
     logic                wb_fault_commit;
@@ -411,7 +414,9 @@ module penumbra2_spine
         // never coincide with a MEM stall.
         .i_stall_in(id_downstream_stall),
         .i_bubble((ex_branch_taken & ~ex_stall) | wb_fault_commit | eret_commit | wrsys_resync),
+        .i_fetch_busy(i_fetch_busy),
         .o_local_stall(id_local_stall),
+        .o_bcause(idex_bcause),
         .o_rd_idx_a(rd_idx_a), .o_rd_idx_b(rd_idx_b),
         .i_rd_data_a(rd_data_a), .i_rd_data_b(rd_data_b),
         .o_spr_rd_sel(id_spr_rd_sel), .i_spr_src_value(spr_operand_value),
@@ -455,7 +460,9 @@ module penumbra2_spine
         .i_sr_flags(spr_sr_flags), .i_sr_committed(sr_committed),
         .i_wb_flags(memwb_flag_value), .i_wb_writes_flags(memwb_flag_we & memwb_valid),
         .i_stall_in(ex_downstream_stall), .i_wb_active(memwb_valid), .i_bubble(wb_fault_commit),
-        .o_local_stall(ex_local_stall), .o_dc_commit(ex_dc_commit), .o_funit_stall(o_stall_funit),
+        .i_bcause(idex_bcause),
+        .o_local_stall(ex_local_stall), .o_dc_commit(ex_dc_commit), .o_funit_stall(),
+        .o_bcause(exmem_bcause),
         .o_branch_taken(ex_branch_taken), .o_branch_target(o_branch_target),
         .o_op_class(exmem_op_class), .o_mem_op(exmem_mem_op),
         .o_mem_size(exmem_mem_size), .o_sign_ext(exmem_sign_ext),
@@ -490,8 +497,10 @@ module penumbra2_spine
         .i_valid(exmem_valid), .i_fault_pending(exmem_fault_pending),
         .i_fault_vec(exmem_fault_vec), .i_fault_status(exmem_fault_status),
         .i_stall_in(mem_downstream_stall), .i_bubble(wb_fault_commit),
+        .i_bcause(exmem_bcause),
         .o_local_stall(mem_local_stall),
-        .o_stall_load(o_stall_load), .o_stall_store(o_stall_store),
+        .o_stall_load(), .o_stall_store(),
+        .o_bcause(memwb_bcause),
         .o_dmem_addr(o_dmem_addr), .o_dmem_wdata(o_dmem_wdata),
         .o_dmem_byte_en(o_dmem_byte_en), .o_dmem_re(o_dmem_re),
         .o_dmem_we(o_dmem_we), .o_dmem_en(o_dmem_en),
@@ -529,9 +538,11 @@ module penumbra2_spine
         .i_phys_dst_aux_en(memwb_phys_dst_aux_en),
         .i_pc(memwb_pc),
         .i_valid(memwb_valid), .i_fault_pending(memwb_fault_pending),
+        .i_bcause(memwb_bcause),
         .i_fault_vec(memwb_fault_vec),
         .o_local_stall(wb_local_stall),
         .o_insn_committed(o_insn_committed),
+        .o_bcause(o_bcause),
         .o_wr_idx(wr_idx), .o_wr_data(wr_data), .o_wr_en(wr_en),
         .o_flag_we(wb_flag_we), .o_flag_value(wb_flag_value),
         .o_spr_we(wb_spr_we), .o_spr_sel(wb_spr_sel), .o_spr_value(wb_spr_value),
@@ -569,9 +580,6 @@ module penumbra2_spine
     assign o_dc_commit_pc       = idex_pc;
     assign o_dc_commit_op_class = idex_op_class;
     assign o_ex_stall = ex_stall;
-    // ID's local stall is exactly the scoreboard hazard interlock — surface it
-    // as the perfctr's hazard-stall cause.
-    assign o_stall_hazard = id_local_stall;
 
     // ════════════════════════════════════════════════════════════
     // Scoreboard's view of the downstream in-flight writers
@@ -655,6 +663,14 @@ module penumbra2_spine
     assert property (@(posedge i_clk) disable iff (i_rst)
         o_commit_we |-> o_retire_valid)
         else $error("penumbra2_spine: GPR commit without a retiring instruction");
+
+    // The carried-cause chain delivers a tagged bubble to the commit point: a
+    // MEM/WB bubble always carries a real cause (ID tags every bubble it makes,
+    // EX/MEM forward it). A NONE here means a stage dropped the tag — the cycle
+    // would be miscounted as the FLUSH residual at the perfctr.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        memwb_valid || memwb_bcause != BCAUSE_NONE)
+        else $error("penumbra2_spine: MEM/WB bubble reached the commit point untagged");
 
     /* verilator lint_on PINCONNECTEMPTY */
 endmodule

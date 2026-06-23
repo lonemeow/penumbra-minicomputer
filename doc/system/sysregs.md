@@ -243,17 +243,21 @@ progress, broken down by cause:
 | Counter | Stall cause |
 |---|---|
 | `STALL_FUNIT`  | Waiting on a multi-cycle execution unit. `divmul` is the only such unit at ISA v1; an added FPU or vector unit shares the counter — the name describes the role, not the unit. |
-| `STALL_IFETCH` | Instruction fetch waiting on the memory hierarchy (I-cache miss → L2 → SDRAM). |
+| `STALL_IFETCH` | The front end is starved while a fetch is outstanding to the memory hierarchy (I-cache miss → L2 → SDRAM): no instruction reached the commit point and the reason a word could not be delivered was a memory wait. |
 | `STALL_LOAD`   | A data read waiting on a miss-fill. |
 | `STALL_STORE`  | A data write waiting to complete downstream. |
 | `STALL_HAZARD` | Issue held in decode by a pipeline interlock — a register data hazard (a source operand has an in-flight writer) or a structural hazard. The general issue-stall bucket: further interlock sources accrue here rather than each claiming a counter. |
-| `STALL_FLUSH`  | A front-end redirect (taken branch, exception entry/return, serialization) or pipeline-fill bubble — no instruction was available to retire and no execution-side stall applied. |
+| `STALL_FLUSH`  | The front end is refilling but *not* waiting on memory: a redirect (taken branch, exception entry/return, serialization) discarded the speculative stream, or the pipeline is filling from cold — the words are on their way (fetch hits) but have not yet reached the commit point. Distinct from `STALL_IFETCH`, which is the memory-wait portion of front-end starvation. |
 
 These counters are **mutually exclusive** — at most one advances in any
-cycle. When more than one stall condition holds at once, the cycle is
-charged to the cause blocking the *oldest un-retired instruction* (the
-one due to retire next), so a younger instruction's stall never masks an
-older one's. Their sum is the total stall:
+cycle. A non-retiring cycle is charged to the single cause that kept the
+commit point from retiring *that* cycle — the cause of the bubble
+occupying the commit slot, determined where that bubble was injected and
+carried with it to the commit point, so the charge does not depend on
+how many cycles earlier or how far upstream the originating stall was. A
+short stall whose bubble outlives its stall signal, and the latency tail
+of a long one, are therefore charged to their true cause rather than
+leaking into the front-end buckets. Their sum is the total stall:
 
 ```
 STALL_total = STALL_FUNIT + STALL_IFETCH + STALL_LOAD + STALL_STORE
