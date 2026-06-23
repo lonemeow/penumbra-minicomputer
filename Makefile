@@ -292,7 +292,8 @@ MODULE_TESTS = \
 # explicitly here. Fields: top-module : testbench : source.sv
 VARIANT_MODULE_TESTS = \
     penumbra2_ex_stage:tb_penumbra2_5_ex_stage:hw/rtl/penumbra2_5/penumbra2_ex_stage.sv \
-    penumbra2_ras:tb_penumbra2_5_ras:hw/rtl/penumbra2_5/penumbra2_ras.sv
+    penumbra2_ras:tb_penumbra2_5_ras:hw/rtl/penumbra2_5/penumbra2_ras.sv \
+    penumbra2_btb:tb_penumbra2_5_btb:hw/rtl/penumbra2_5/penumbra2_btb.sv
 
 .PHONY: test-modules test-modules-variant
 test-modules: test-modules-variant
@@ -704,7 +705,7 @@ SRC_CORE_penumbra2 = hw/rtl/penumbra2/penumbra2_pkg.sv \
 # single list naming which gen2 files the variant overrides; the filter-out
 # drops them from the gen2 set so the variant's same-named copies are the only
 # definitions (a missing entry surfaces as a loud duplicate-module error).
-PENUMBRA2_FORKED := penumbra2_core penumbra2_spine penumbra2_id_stage penumbra2_ex_stage
+PENUMBRA2_FORKED := penumbra2_core penumbra2_spine penumbra2_id_stage penumbra2_ex_stage penumbra2_if2_stage
 SRC_CORE_penumbra2_5 = $(filter-out $(PENUMBRA2_FORKED:%=hw/rtl/penumbra2/%.sv),$(SRC_CORE_penumbra2)) \
                        $(wildcard hw/rtl/penumbra2_5/*.sv)
 

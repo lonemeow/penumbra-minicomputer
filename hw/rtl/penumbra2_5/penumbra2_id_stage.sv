@@ -36,6 +36,7 @@ module penumbra2_id_stage
     input  logic [31:0]           i_pc,
     input  logic [31:0]           i_next_pc,
     input  logic                  i_valid,          // 0 = bubble in
+    input  logic                  i_btb_predicted,  // gen2.5: slot already BTB-predicted taken at fetch
     input  logic                  i_fault_pending,  // IF-stage fault
     input  logic [3:0]            i_fault_vec,
     input  logic [31:0]           i_fault_status,   // its composed payload; FAULT_NONE when none
@@ -363,20 +364,35 @@ module penumbra2_id_stage
         .o_target(ras_target)
     );
 
-    // Fold the two predictors. A return predicts only when the RAS holds an
-    // entry (else it falls through to the EX redirect — the unpredicted-JMP
-    // status quo). btfn_taken is 0 for a JMP and ras_taken is 0 for a branch, so
-    // the OR and the target select never collide.
+    // Fold the predictors. Three sources, mutually exclusive on a single slot:
+    //   - i_btb_predicted: a *direct* branch the fetch-time BTB already hit and
+    //     redirected (gen2.5 core fork). The slot arrives pre-steered.
+    //   - BTFN: a direct branch the BTB missed (cold / evicted) — ID redirects
+    //     here (the 2-bubble path), and EX resolution then trains the BTB.
+    //   - RAS: a function return (JMP R13) — ID redirects to the popped target.
+    // btfn_taken is 0 for a JMP, ras_taken is 0 for a branch, and a tagged BTB
+    // hit only ever lands on the direct branch that trained it, so the three
+    // never overlap.
     logic        ras_taken;
-    logic        pred_taken;
+    logic        pred_taken;     // the ID-stage (BTFN | RAS) guess
     logic [31:0] pred_target;
     assign ras_taken   = is_return & ras_valid;
     assign pred_taken  = btfn_taken | ras_taken;
     assign pred_target = ras_taken ? ras_target : btfn_target;
 
-    // A stalled or bubbled (wrong-path / faulting) slot must never steer fetch;
-    // issue is 0 in those cases, so this gates with no extra terms.
-    assign o_predict_redirect = pred_taken & issue;
+    // Direction tag carried to EX: includes the fetch-time BTB hit so EX can
+    // confirm the already-steered branch. The *target* tag stays pred_target —
+    // btfn_target is the correct PC+imm for any direct branch, so a BTB-hit
+    // branch carries the right target too, and EX never target-checks an
+    // OPC_BRANCH anyway (the tagged-BTB guarantee).
+    logic        pred_taken_tag;
+    assign pred_taken_tag = i_btb_predicted | pred_taken;
+
+    // ID steers fetch only for a BTB *miss* it can still predict (BTFN or RAS):
+    // a BTB hit already redirected at fetch, so re-firing here would double-
+    // redirect to the same target. A stalled / bubbled / faulting slot has
+    // issue=0, which gates the rest.
+    assign o_predict_redirect = pred_taken & issue & ~i_btb_predicted;
     assign o_predict_target   = pred_target;
 
     // ── ID/EX register ───────────────────────────────────────────
@@ -400,7 +416,7 @@ module penumbra2_id_stage
                 o_op_b             <= op_b_sel;
                 o_store_data       <= store_data_sel;
                 o_cond             <= d_cond;
-                o_predicted_taken  <= pred_taken;
+                o_predicted_taken  <= pred_taken_tag;
                 o_predicted_target <= pred_target;
                 o_writes_flags     <= d_writes_flags;
                 o_reads_flags      <= d_reads_flags;

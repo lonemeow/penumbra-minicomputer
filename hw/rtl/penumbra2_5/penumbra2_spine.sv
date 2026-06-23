@@ -36,6 +36,7 @@ module penumbra2_spine
     input  logic [31:0]           i_pc,
     input  logic [31:0]           i_next_pc,
     input  logic                  i_valid,
+    input  logic                  i_btb_predicted,   // gen2.5: slot was BTB-predicted taken at fetch
     input  logic                  i_fault_pending,   // IF-side fault rides the slot
     input  logic [3:0]            i_fault_vec,
     input  logic [31:0]           i_fault_status,    // composed payload; FAULT_NONE when none
@@ -66,6 +67,12 @@ module penumbra2_spine
     // ── ID-stage static branch prediction (gen2.5) ───────────────
     output logic                  o_predict_redirect, // steer fetch to the predicted target this cycle
     output logic [31:0]           o_predict_target,
+
+    // ── BTB training (gen2.5: EX resolution → fetch-time BTB write) ──
+    output logic                  o_btb_update,
+    output logic [31:0]           o_btb_update_pc,
+    output logic [31:0]           o_btb_update_target,
+    output logic                  o_btb_update_taken,
 
     // ── Pipeline occupancy (trace) — the instruction in each stage ──
     // EX = idex slot, MEM = exmem slot; WB rides o_retire_pc/o_retire_valid.
@@ -406,7 +413,8 @@ module penumbra2_spine
     penumbra2_id_stage u_id (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_ir(i_ir), .i_pc(i_pc), .i_next_pc(i_next_pc),
-        .i_valid(i_valid), .i_fault_pending(i_fault_pending),
+        .i_valid(i_valid), .i_btb_predicted(i_btb_predicted),
+        .i_fault_pending(i_fault_pending),
         .i_fault_vec(i_fault_vec), .i_fault_status(i_fault_status),
         .i_supervisor(i_supervisor),
         // ex_branch_taken bubbles the ID/EX register to kill a taken branch's
@@ -473,6 +481,8 @@ module penumbra2_spine
         .o_local_stall(ex_local_stall), .o_dc_commit(ex_dc_commit), .o_funit_stall(),
         .o_bcause(exmem_bcause),
         .o_branch_taken(ex_branch_taken), .o_branch_target(o_branch_target),
+        .o_btb_update(o_btb_update), .o_btb_update_pc(o_btb_update_pc),
+        .o_btb_update_target(o_btb_update_target), .o_btb_update_taken(o_btb_update_taken),
         .o_op_class(exmem_op_class), .o_mem_op(exmem_mem_op),
         .o_mem_size(exmem_mem_size), .o_sign_ext(exmem_sign_ext),
         .o_sys_dev(exmem_sys_dev), .o_sys_reg(exmem_sys_reg),

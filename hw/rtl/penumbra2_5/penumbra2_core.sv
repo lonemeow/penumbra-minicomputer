@@ -177,6 +177,17 @@ module penumbra2_core
     logic        predict_redirect; // speculative: steer fetch to a predicted-taken target
     logic [31:0] predict_target;
 
+    // ── Fetch-time BTB (gen2.5) ──────────────────────────────────
+    logic        btb_hit;          // BTB has a target for the slot entering IF2
+    logic [31:0] btb_target;       // that target
+    logic        btb_predict;      // btb_hit qualified by a valid IF1/IF2 slot
+    logic        fetch_advancing;  // the IF1/IF2 register advances this cycle (slot → IF2)
+    logic        if2_btb_predicted;// the tag carried out of IF2 (with the slot)
+    logic        id_btb_predicted; // ...dequeued from the fetch buffer, to ID
+    logic        btb_update;       // EX trains the BTB this cycle
+    logic [31:0] btb_update_pc, btb_update_target;
+    logic        btb_update_taken;
+
     // ── Exception entry (WB -> front end via the vector-fetch FSM) ─
     logic        fault_commit;  // a fault is taken this cycle (flush IF1/IF2, launch entry)
     logic [3:0]  fault_vec;
@@ -256,15 +267,24 @@ module penumbra2_core
         end else if (fault_commit) begin
             if2_flush       = 1'b1;
         end else if (predict_redirect) begin
-            // Speculative ID-stage BTFN redirect to a predicted-taken branch's
-            // target. Lowest priority: every event above is an older /
-            // authoritative redirect that also flushes this younger ID branch,
-            // so they never coincide. It bubbles IF1 + IF2 (the two wrong-path
-            // slots behind the branch); the branch itself stays live and is
-            // confirmed in EX.
+            // Speculative ID-stage BTFN/RAS redirect — the fallback for a branch
+            // the fetch-time BTB missed, plus all RAS-predicted returns. Above
+            // the BTB redirect because its branch is older: this redirect flushes
+            // the younger IF2 slot the BTB would otherwise steer. It bubbles
+            // IF1 + IF2 (the two wrong-path slots behind the ID branch); the
+            // branch itself stays live and is confirmed in EX.
             if1_redirect    = 1'b1;
             if1_redirect_pc = predict_target;
             if2_flush       = 1'b1;
+        end else if (btb_predict & fetch_advancing) begin
+            // gen2.5 fetch-time BTB hit on the slot entering IF2: steer PC to the
+            // cached target and kill only the sequential shadow in IF1. if2_flush
+            // stays 0 — the branch in the IF1/IF2 register is correct-path and
+            // advances into IF2 carrying its predicted-taken tag, and the fetch
+            // buffer holds only older (correct-path) slots. Lowest priority: any
+            // redirect above flushes this younger slot anyway, and EX confirms it.
+            if1_redirect    = 1'b1;
+            if1_redirect_pc = btb_target;
         end
     end
 
@@ -305,6 +325,7 @@ module penumbra2_core
     penumbra2_if2_stage u_if2 (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_pc(if1_pc), .i_next_pc(if1_next_pc), .i_valid(if1_valid),
+        .i_btb_predicted(btb_predict),
         .i_ir(i_fetch_rdata),
         .i_mem_busy(i_fetch_busy), .i_mem_fault(i_fetch_fault),
         .o_fetch_re(if2_fetch_re),
@@ -317,7 +338,7 @@ module penumbra2_core
         .i_flush(if2_flush),
         .o_stall(if2_stall),
         .o_ir(if2_ir), .o_pc(if2_pc), .o_next_pc(if2_next_pc),
-        .o_valid(if2_valid),
+        .o_valid(if2_valid), .o_btb_predicted(if2_btb_predicted),
         .o_fault_pending(if2_fault_pending), .o_fault_vec(if2_fault_vec),
         .o_fault_status(if2_fault_status)
     );
@@ -330,7 +351,7 @@ module penumbra2_core
     // registered o_enq_ready instead, so i_dmem_busy no longer reaches
     // o_fetch_en combinationally. Cost: one IF2->ID cycle — an extra wrong-path
     // slot, flushed with the rest of the front end.
-    localparam int FBUF_W = 133;   // {ir, pc, next_pc, fault_status, fault_vec, fault_pending}
+    localparam int FBUF_W = 134;   // {btb_predicted, ir, pc, next_pc, fault_status, fault_vec, fault_pending}
 
     logic              fbuf_enq_ready, fbuf_deq_valid;
     logic [FBUF_W-1:0] fbuf_deq_data;
@@ -338,7 +359,7 @@ module penumbra2_core
     logic [31:0] id_ir, id_pc, id_next_pc, id_fault_status;
     logic [3:0]  id_fault_vec;
     logic        id_fault_pending;
-    assign {id_ir, id_pc, id_next_pc, id_fault_status, id_fault_vec, id_fault_pending}
+    assign {id_btb_predicted, id_ir, id_pc, id_next_pc, id_fault_status, id_fault_vec, id_fault_pending}
              = fbuf_deq_data;
 
     penumbra2_fetch_buffer #(.PAYLOAD_W(FBUF_W), .DEPTH(2)) u_fbuf (
@@ -347,7 +368,7 @@ module penumbra2_core
         // consumer, so it dies on exactly the events that bubble IF2's slot.
         .i_flush(if2_flush),
         .i_enq_valid(if2_valid),
-        .i_enq_data({if2_ir, if2_pc, if2_next_pc,
+        .i_enq_data({if2_btb_predicted, if2_ir, if2_pc, if2_next_pc,
                      if2_fault_status, if2_fault_vec, if2_fault_pending}),
         .o_enq_ready(fbuf_enq_ready),
         .o_deq_valid(fbuf_deq_valid),
@@ -361,7 +382,7 @@ module penumbra2_core
     penumbra2_spine u_spine (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_ir(id_ir), .i_pc(id_pc), .i_next_pc(id_next_pc),
-        .i_valid(fbuf_deq_valid),
+        .i_valid(fbuf_deq_valid), .i_btb_predicted(id_btb_predicted),
         .i_fault_pending(id_fault_pending), .i_fault_vec(id_fault_vec),
         .i_fault_status(id_fault_status),
         .i_supervisor(core_supervisor),
@@ -375,6 +396,8 @@ module penumbra2_core
         .o_branch_taken(branch_taken), .o_branch_target(branch_target),
         .o_branch_pc(o_branch_pc),
         .o_predict_redirect(predict_redirect), .o_predict_target(predict_target),
+        .o_btb_update(btb_update), .o_btb_update_pc(btb_update_pc),
+        .o_btb_update_target(btb_update_target), .o_btb_update_taken(btb_update_taken),
         .o_ex_pc(o_ex_pc), .o_ex_valid(o_ex_valid),
         .o_mem_pc(o_mem_pc), .o_mem_valid(o_mem_valid),
         .o_dmem_addr(o_dmem_addr), .o_dmem_wdata(o_dmem_wdata),
@@ -409,6 +432,28 @@ module penumbra2_core
         .o_dc_commit_pc(o_dc_commit_pc), .o_dc_commit_op_class(o_dc_commit_op_class),
         .o_ex_stall(ex_stall),
         .i_irq_inject(irq_inject), .i_irq_vec(irq_vec)
+    );
+
+    // ══════════════════════════════════════════════════════════
+    // Fetch-time branch target buffer (gen2.5)
+    // ══════════════════════════════════════════════════════════
+    // Looked up every fetch in parallel with the icache — same address and
+    // enable as IF1's launch — so a hit steers the next fetch with no decode and
+    // no add in the fetch loop. btb_predict qualifies a hit with a valid slot in
+    // the IF1/IF2 register; fetch_advancing is true the cycle that slot moves
+    // into IF2, so the redirect (composed in the front-end mux above) kills the
+    // sequential shadow, not the branch. The same btb_predict bit rides into IF2
+    // so the slot reaches EX tagged. EX trains the BTB on every resolved direct
+    // branch (o_btb_update*).
+    assign btb_predict     = btb_hit & if1_valid;
+    assign fetch_advancing = ~(if2_stall | vecf_active | i_fetch_busy);
+
+    penumbra2_btb u_btb (
+        .i_clk(i_clk), .i_rst(i_rst),
+        .i_lookup_en(if1_fetch_en), .i_lookup_pc(if1_fetch_addr),
+        .o_hit(btb_hit), .o_target(btb_target),
+        .i_update(btb_update), .i_update_pc(btb_update_pc),
+        .i_update_target(btb_update_target), .i_update_taken(btb_update_taken)
     );
 
     // Instructions retired: a distinct WB instruction commit (o_insn_committed,

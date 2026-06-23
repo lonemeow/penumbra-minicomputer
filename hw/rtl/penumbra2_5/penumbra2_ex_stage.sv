@@ -102,6 +102,12 @@ module penumbra2_ex_stage
     output logic                  o_branch_taken,    // redirect the front-end this cycle
     output logic [31:0]           o_branch_target,   // PC to redirect to
 
+    // ── BTB training (gen2.5: a resolved direct branch trains the BTB) ──
+    output logic                  o_btb_update,      // train the fetch-time BTB this cycle
+    output logic [31:0]           o_btb_update_pc,   // the resolving branch's PC
+    output logic [31:0]           o_btb_update_target,// its resolved target (PC + imm)
+    output logic                  o_btb_update_taken, // taken → allocate, not-taken → invalidate
+
     // ── EX/MEM register (to MEM) ─────────────────────────────────
     output logic [OPC_W-1:0]      o_op_class,
     output logic [MEM_OP_W-1:0]   o_mem_op,
@@ -260,6 +266,22 @@ module penumbra2_ex_stage
     // not steer the front-end.
     assign o_branch_taken  = mispredict & i_valid & ~i_fault_pending & ~i_bubble;
     assign o_branch_target = redirect_target;
+
+    // ── BTB training feed (gen2.5) ───────────────────────────────
+    // A resolved direct branch (OPC_BRANCH — B / Bcc / BL) trains the fetch-time
+    // BTB: a taken resolve allocates {pc → target}, a not-taken resolve
+    // invalidates the entry. Gated on `advance` (assigned below) so it trains
+    // exactly once, the cycle the branch leaves EX — not every cycle it is held
+    // — and on ~i_fault_pending so an inert/faulting slot never trains. The
+    // target is alu_result (= PC + imm) and the direction is cond_taken, both
+    // already resolved above as branch_target / branch_redirect. Indirect jumps
+    // (OPC_JMP, including returns) are out of BTB scope — the RAS owns returns —
+    // so they never train it, which keeps a tagged hit's target guaranteed
+    // equal to PC+imm (the basis for EX's target-compare-free branch check).
+    assign o_btb_update        = advance & (i_op_class == OPC_BRANCH) & ~i_fault_pending;
+    assign o_btb_update_pc     = i_pc;
+    assign o_btb_update_target = branch_target;
+    assign o_btb_update_taken  = branch_redirect;
 
     // ── Drain-commit FSM ─────────────────────────────────────────
     // ERET/WRSYS/WRSPR-SR/EI/DI must order their commit against older

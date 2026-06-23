@@ -14,8 +14,9 @@ This directory holds **only what differs from gen2** — the forked
 integration files and the gen2.5-only leaf modules:
 
 - `penumbra2_core.sv`, `penumbra2_spine.sv`, `penumbra2_id_stage.sv`,
-  `penumbra2_ex_stage.sv` — forks of the same-named files in
-  `hw/rtl/penumbra2/`. They keep the same module names and the same
+  `penumbra2_ex_stage.sv`, `penumbra2_if2_stage.sv` — forks of the
+  same-named files in `hw/rtl/penumbra2/`. They keep the same module names
+  and the same
   sub-instantiation names as their gen2 originals, so they differ only by
   the gen2.5 wiring. **`diff hw/rtl/penumbra2/<f>.sv hw/rtl/penumbra2_5/<f>.sv`
   shows exactly the gen2.5 delta** — keep that diff minimal so a shared
