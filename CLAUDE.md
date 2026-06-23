@@ -3,8 +3,8 @@
 Penumbra is a 32-bit RISC-like minicomputer designed from scratch and
 implemented on a Radiona ULX3S (Lattice ECP5) FPGA — CPU, MMU, DMA, I/O,
 and system bus. It boots NetBSD to userland on the FPGA today; the
-remaining long-term goal is to re-implement the design in discrete 74xx
-logic.
+remaining long-term goal is to re-implement the gen1 design (and the ISA
+it proves) in discrete 74xx logic.
 
 ## Where to find things
 
@@ -52,9 +52,15 @@ gotchas) for working inside a subtree:
   (bare-metal ROM and hw tests).
 - **OS target:** NetBSD — drives privilege, interrupt, and MMU design.
 - **Byte order:** little-endian. `addr[1:0]=00` maps to bits `[7:0]`.
-- **Discrete-logic constraint:** every design decision must be feasible
-  in 74xx discrete logic (no FPGA-specific tricks the chip-level rebuild
-  could not match).
+- **Discrete-logic constraint (ISA + gen1 only):** the ISA design and
+  **gen1 (penumbra1)** must be feasible in 74xx discrete logic — no
+  FPGA-specific tricks the chip-level rebuild could not match; there,
+  favor mux-/register-/bus-minimal options. **gen2 / gen2.5 / gen3 are
+  FPGA-only** (pipelined, BRAM caches, wide bypass) and will *not* be
+  rebuilt in discrete logic, so never weigh their microarchitecture by
+  74xx feasibility or chip count. What every generation still honors is
+  the externally-visible ISA contracts (bus protocol, autoconfig, device
+  sysreg interface) — those are ISA-level, not microarchitecture.
 - **MUL/DIV/FP:** MUL/DIV execute in hardware on the `divmul` peer unit
   (own `start`/`busy` handshake, ~33-cycle iteration); divide-by-zero is
   detected in hardware and raises `VEC_ARITH`. FP is software-only.
