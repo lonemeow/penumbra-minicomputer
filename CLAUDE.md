@@ -192,13 +192,15 @@ in the LLVM subtree CLAUDE.md).
   at `build/netbsd-obj/sys/arch/penumbra/compile/MINIMAL/netbsd`. Full
   sequence in `DEVELOP.md` § 7.
 - SD images: `make sdimage` (boot only), `make sdimage-rootfs`
-  (boot + FFS rescue), `make sdimage-rootfs ROOTFS_FULL=1` (full
-  distribution). Boot-only images need a kernel at `PENBOOT.ELF`;
-  rootfs images include `boot.cfg` with `root=ld0f` so `boot sd:0,0`
-  reaches single-user with no prompts. Requires NetBSD cross-tools
-  (`nbfdisk`, `nbmakefs`) built once via `build.sh tools`. Both rootfs variants auto-overlay the
-  custom userland utilities (benchmark suite + `penmon`) into
-  `/usr/local/bin` via each tool's `overlay` make target staged into
+  (boot + full FFS distribution). Boot-only images need a kernel at
+  `PENBOOT.ELF`; rootfs images include `boot.cfg` with `root=ld0f` so
+  `boot sd:0,0` reaches single-user with no prompts. `sdimage-rootfs`
+  also drops the bare-metal benchmark ELFs onto the FAT32 boot
+  partition, so `boot sd:0,0/DHRYSTON.ELF` runs a benchmark from the
+  same card. Requires NetBSD cross-tools (`nbfdisk`, `nbmakefs`) built
+  once via `build.sh tools`. `sdimage-rootfs` auto-overlays the custom
+  userland utilities (benchmark suite + `penmon`) into `/usr/local/bin`
+  via each tool's `overlay` make target staged into
   `build/netbsd-overlay`, copied in with `mkrootfs.sh -O`; see
   DEVELOP.md § 8 for the convention and how to add a utility.
 

@@ -223,8 +223,7 @@ make simulate SDCARD=build/boot.img                # Boot, log in, run pbench
 ```
 
 `make sdimage-rootfs` automatically builds and overlays the whole benchmark
-suite into `/usr/local/bin/` (see § 8 — overlays are no longer gated on
-`ROOTFS_FULL`). Inside the running NetBSD: `pbench list`, `pbench libc memcpy`, etc. Use `pbench -o FILE` to dump machine-readable `RESULT key=value` lines. Baseline numbers in `benchmark/netbsd-bench/BASELINE.md`.
+suite into `/usr/local/bin/` (see § 8). Inside the running NetBSD: `pbench list`, `pbench libc memcpy`, etc. Use `pbench -o FILE` to dump machine-readable `RESULT key=value` lines. Baseline numbers in `benchmark/netbsd-bench/BASELINE.md`.
 
 ---
 
@@ -293,16 +292,15 @@ The Penumbra ROM boots from FAT32 on an SD card; the NetBSD kernel mounts an FFS
 
 ```sh
 make sdimage                          # Boot partition only (FAT32: bootloader + kernel)
-make sdimage-rootfs                   # Boot + minimal FFS root (rescue + lib + etc, ~86 MB)
-make sdimage-rootfs ROOTFS_FULL=1     # Boot + full FFS root from build/netbsd-dest/
+make sdimage-rootfs                   # Boot + full FFS root from build/netbsd-dest/
 ```
 
-Output: `build/boot.img` (two MBR partitions). The rootfs variants pre-write a `boot.cfg` that selects `root=ld0f`, so `boot sd:0,0` reaches single-user shell with no further interaction.
+Output: `build/boot.img` (two MBR partitions). The rootfs image pre-writes a `boot.cfg` that selects `root=ld0f`, so `boot sd:0,0` reaches single-user shell with no further interaction. `sdimage-rootfs` also copies the bare-metal benchmark ELFs (`DHRYSTON.ELF`, `MEMTEST.ELF`, `MEMBENCH.ELF`) onto the FAT32 boot partition, so `boot sd:0,0/DHRYSTON.ELF` runs a benchmark straight from ROM on the same card.
 
 End-to-end recipe (assumes kernel + bootloader + userland already built):
 
 ```sh
-make sdimage-rootfs ROOTFS_FULL=1
+make sdimage-rootfs
 make simulate SDCARD=build/boot.img
 ```
 
@@ -326,8 +324,8 @@ Staged into the tree: the demo/benchmark suite (`pbench`,
 `mandelbrot`, `julia`, `plasma`, `lorenz`, `shadebobs`, `penumbra-text`) at
 `/usr/local/bin/`, and **`penmon`** — the hardware-counter system monitor
 (see `sw/penmon/README.md`). curses additionally needs the base-system
-`terminfo.cdb`, which is present on a full rootfs (`ROOTFS_FULL=1`); it is
-not overlaid, to avoid colliding with the distribution's own copy.
+`terminfo.cdb`, which the full rootfs already includes; it is not overlaid,
+to avoid colliding with the distribution's own copy.
 
 **To add a new utility:**
 

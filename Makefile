@@ -525,9 +525,8 @@ endif
 # For rootfs: run `build.sh distribution` first.
 #
 # Usage:
-#   make sdimage                      — boot partition only (FAT32)
-#   make sdimage-rootfs               — boot + FFS root (minimal rescue)
-#   make sdimage-rootfs ROOTFS_FULL=1 — boot + FFS root (full distribution)
+#   make sdimage          — boot partition only (FAT32)
+#   make sdimage-rootfs   — boot + full FFS root + benchmark ELFs on FAT32
 SDIMAGE    ?= $(BUILD_DIR)/boot.img
 BOOT_ELF   := $(BUILD_DIR)/netbsd-obj/sys/arch/penumbra/stand/boot/PENBOOT.ELF
 KERNEL     := $(BUILD_DIR)/netbsd-obj/sys/arch/penumbra/compile/MINIMAL/netbsd
@@ -539,62 +538,15 @@ sdimage:
 	@sw/tools/mksdimage.sh -o $(SDIMAGE) -2 $(BOOT_ELF) -k $(KERNEL) -v
 	@echo "SD image: $(SDIMAGE)"
 
-# Overlay pbench + mandelbrot binaries into /usr/local/bin/ if they've
-# been built.  Full-rootfs only — minimal mode (rescue + lib + etc)
-# intentionally excludes userland binaries.
+# Location of the cross-built NetBSD-hosted benchmark binaries (pbench +
+# graphical demos).  Staged into the rootfs via the overlay step below.
 NETBSD_BENCH_DIR := $(BUILD_DIR)/netbsd-bench
-NETBSD_BENCH_OVERLAYS :=
-ifeq ($(ROOTFS_FULL),1)
-ifneq ($(wildcard $(NETBSD_BENCH_DIR)/pbench),)
-NETBSD_BENCH_OVERLAYS += -i $(NETBSD_BENCH_DIR)/pbench:/usr/local/bin/pbench
-endif
-ifneq ($(wildcard $(NETBSD_BENCH_DIR)/pbench-static),)
-NETBSD_BENCH_OVERLAYS += -i $(NETBSD_BENCH_DIR)/pbench-static:/usr/local/bin/pbench-static
-endif
-ifneq ($(wildcard $(NETBSD_BENCH_DIR)/mandelbrot),)
-NETBSD_BENCH_OVERLAYS += -i $(NETBSD_BENCH_DIR)/mandelbrot:/usr/local/bin/mandelbrot
-endif
-ifneq ($(wildcard $(NETBSD_BENCH_DIR)/mandelbrot-static),)
-NETBSD_BENCH_OVERLAYS += -i $(NETBSD_BENCH_DIR)/mandelbrot-static:/usr/local/bin/mandelbrot-static
-endif
-ifneq ($(wildcard $(NETBSD_BENCH_DIR)/julia),)
-NETBSD_BENCH_OVERLAYS += -i $(NETBSD_BENCH_DIR)/julia:/usr/local/bin/julia
-endif
-ifneq ($(wildcard $(NETBSD_BENCH_DIR)/julia-static),)
-NETBSD_BENCH_OVERLAYS += -i $(NETBSD_BENCH_DIR)/julia-static:/usr/local/bin/julia-static
-endif
-ifneq ($(wildcard $(NETBSD_BENCH_DIR)/plasma),)
-NETBSD_BENCH_OVERLAYS += -i $(NETBSD_BENCH_DIR)/plasma:/usr/local/bin/plasma
-endif
-ifneq ($(wildcard $(NETBSD_BENCH_DIR)/plasma-static),)
-NETBSD_BENCH_OVERLAYS += -i $(NETBSD_BENCH_DIR)/plasma-static:/usr/local/bin/plasma-static
-endif
-ifneq ($(wildcard $(NETBSD_BENCH_DIR)/lorenz),)
-NETBSD_BENCH_OVERLAYS += -i $(NETBSD_BENCH_DIR)/lorenz:/usr/local/bin/lorenz
-endif
-ifneq ($(wildcard $(NETBSD_BENCH_DIR)/lorenz-static),)
-NETBSD_BENCH_OVERLAYS += -i $(NETBSD_BENCH_DIR)/lorenz-static:/usr/local/bin/lorenz-static
-endif
-ifneq ($(wildcard $(NETBSD_BENCH_DIR)/shadebobs),)
-NETBSD_BENCH_OVERLAYS += -i $(NETBSD_BENCH_DIR)/shadebobs:/usr/local/bin/shadebobs
-endif
-ifneq ($(wildcard $(NETBSD_BENCH_DIR)/shadebobs-static),)
-NETBSD_BENCH_OVERLAYS += -i $(NETBSD_BENCH_DIR)/shadebobs-static:/usr/local/bin/shadebobs-static
-endif
-ifneq ($(wildcard $(NETBSD_BENCH_DIR)/penumbra-text),)
-NETBSD_BENCH_OVERLAYS += -i $(NETBSD_BENCH_DIR)/penumbra-text:/usr/local/bin/penumbra-text
-endif
-ifneq ($(wildcard $(NETBSD_BENCH_DIR)/penumbra-text-static),)
-NETBSD_BENCH_OVERLAYS += -i $(NETBSD_BENCH_DIR)/penumbra-text-static:/usr/local/bin/penumbra-text-static
-endif
-endif
 
 # ── Custom NetBSD userland overlays ───────────────────────────────
 # Each custom utility installs into a shared overlay fake-root via its
 # own `overlay' target; mkrootfs.sh -O copies the whole tree into the
 # image.  Add a utility by giving it an `overlay' target and adding it
-# to NETBSD_OVERLAYS.  (The NETBSD_BENCH_OVERLAYS -i list above is
-# superseded by this and no longer referenced.)
+# to NETBSD_OVERLAYS.
 OVERLAY_ROOT    := $(BUILD_DIR)/netbsd-overlay
 NETBSD_OVERLAYS := benchmark-overlay penmon-overlay
 
@@ -617,22 +569,28 @@ penmon:
 .PHONY: rootfs
 rootfs: netbsd-overlay
 	@sw/tools/mkrootfs.sh -d $(DESTDIR) -o $(ROOTFS_IMG) \
-		-k $(KERNEL) $(if $(ROOTFS_FULL),,-m) \
+		-k $(KERNEL) \
 		-O $(OVERLAY_ROOT) -v
 
 .PHONY: sdimage-rootfs
-sdimage-rootfs: rootfs
-	@sw/tools/mksdimage.sh -o $(SDIMAGE) -2 $(BOOT_ELF) -k $(KERNEL) \
-		-r $(ROOTFS_IMG) -v
-	@echo "SD image: $(SDIMAGE) (with FFS root)"
+# Boot + full FFS root, with the bare-metal benchmark ELFs overlaid onto the
+# FAT32 boot partition (-e) alongside PENBOOT.ELF — `boot sd:0,0` loads the
+# bootloader by default, `boot sd:0,0/DHRYSTON.ELF` runs a benchmark.
+sdimage-rootfs: rootfs bench-elfs
+	@sw/tools/mksdimage.sh -o $(SDIMAGE) \
+		-2 $(BOOT_ELF) \
+		-k $(KERNEL) \
+		-r $(ROOTFS_IMG) \
+		-e $(BENCH_SD_DIR) -v
+	@echo "SD image: $(SDIMAGE) (with FFS root + benchmark ELFs)"
 
-# Cross-built NetBSD-hosted benchmark suite (pbench).  Builds dynamic
-# and static binaries against the NetBSD sysroot.  Combine with
-# `sdimage-rootfs ROOTFS_FULL=1` to overlay them into /usr/local/bin/.
+# Cross-built NetBSD-hosted benchmark suite (pbench + graphical demos).
+# Builds dynamic and static binaries against the NetBSD sysroot.
+# `make sdimage-rootfs` already overlays the dynamic binaries into
+# /usr/local/bin via the netbsd-overlay step; run this target on its own
+# only to build/measure the binaries standalone.
 #
-#   make benchmark-netbsd                       — build both binaries
-#   make benchmark-netbsd sdimage-rootfs ROOTFS_FULL=1
-#                                                — and bake into rootfs
+#   make benchmark-netbsd   — build dynamic + static binaries
 .PHONY: benchmark-netbsd
 benchmark-netbsd:
 	@$(MAKE) -C benchmark/netbsd-bench LLVM_PREFIX=$(LLVM_PREFIX) \
@@ -656,17 +614,24 @@ benchmark-netbsd:
 # BENCH_ITERS is an opt-in passthrough.  The actual default lives in
 # benchmark/Makefile (DHRYSTONE_ITERATIONS) so there's a single source
 # of truth — top-level only forwards when the user supplies a value.
-BENCH_IMG := $(BUILD_DIR)/bench.img
+BENCH_IMG    := $(BUILD_DIR)/bench.img
+BENCH_SD_DIR := $(BUILD_DIR)/bench_sd
 
-# Always rebuild the benchmark sources: they're small, compile quickly, and
-# `make` can't see when the compiler itself has changed under it.
-.PHONY: sdimage-bench
-sdimage-bench:
+# Build the bare-metal benchmark ELFs and stage them in BENCH_SD_DIR, ready
+# to drop onto a FAT32 root — either the standalone bench image
+# (sdimage-bench) or the NetBSD image's boot partition (sdimage-rootfs).
+# Always rebuilds: the sources are small, compile quickly, and `make` can't
+# see when the compiler itself has changed under it.
+.PHONY: bench-elfs
+bench-elfs:
 	@$(MAKE) -C benchmark clean
 	@$(MAKE) -C benchmark $(if $(BENCH_ITERS),DHRYSTONE_ITERATIONS=$(BENCH_ITERS)) LLVM_PREFIX=$(LLVM_PREFIX)
-	@mkdir -p $(BUILD_DIR)/bench_sd
-	@cp $(BUILD_DIR)/benchmark/*.ELF $(BUILD_DIR)/bench_sd/ 2>/dev/null || true
-	@sw/tools/mksdimage.sh -o $(BENCH_IMG) -e $(BUILD_DIR)/bench_sd -v
+	@mkdir -p $(BENCH_SD_DIR)
+	@cp $(BUILD_DIR)/benchmark/*.ELF $(BENCH_SD_DIR)/ 2>/dev/null || true
+
+.PHONY: sdimage-bench
+sdimage-bench: bench-elfs
+	@sw/tools/mksdimage.sh -o $(BENCH_IMG) -e $(BENCH_SD_DIR) -v
 	@echo "Benchmark SD image: $(BENCH_IMG)"
 
 # List of benchmark ELF names (FAT32 8.3 format, no path).
