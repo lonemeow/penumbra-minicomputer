@@ -42,8 +42,9 @@ Out of scope:
   doc specifies the *model* (which instructions produce/consume NZCV and
   the youngest-wins / committed-SR semantics); the EX-stage realization
   is in [pipeline-stages.md](./pipeline-stages.md). GPR/SPR forwarding
-  does not exist in gen2 — gen2.5 adds WB→ID write-through and EX→EX GPR
-  forwarding.
+  does not exist in gen2 — gen2.5 adds it (the forward network, the
+  write-through, and the relaxed stall predicate are specified in
+  [gen2.5 GPR forwarding and regfile write-through](#gen25-gpr-forwarding-and-regfile-write-through)).
 
 ## The hazard problem in gen2
 
@@ -205,7 +206,9 @@ its source's valid bit be 1, which it is not on the WB cycle (the
 set fires at end-of-cycle). The younger instruction therefore
 stalls one more cycle. This is the explicit "no write-through"
 trade in [Decision 4](./design-decisions.md#4-hazard-handling-strategy);
-gen2.5 will add a one-mux write-through that closes this cycle.
+gen2.5 adds a one-mux write-through that closes this cycle, alongside the
+operand-forwarding network — see
+[gen2.5 GPR forwarding and regfile write-through](#gen25-gpr-forwarding-and-regfile-write-through).
 
 ## Stall predicate
 
@@ -875,6 +878,168 @@ ADD R5, R4, R6       ; (2) RAW on R4 (the high half)
 (2) stalls in ID until the divmul completes ~33 cycles later, when
 `valid[R4]` is set. (1) clears both `valid[R1]` and `valid[R4]` at
 issue, so any read of either stalls until the divmul EX-completes.
+
+## gen2.5 GPR forwarding and regfile write-through
+
+> **Applies to:** Penumbra/2.5 only. gen2 keeps the pure-stall model
+> above unchanged; this section is the gen2.5 delta.
+
+gen2 resolves every GPR/SPR RAW hazard by stalling the reader in ID until
+its producer commits at WB ([Stall predicate](#stall-predicate)). gen2.5
+keeps the scoreboard but adds an operand-forwarding network and a regfile
+write-through, so a reader issues as soon as its producer's value is
+*reachable*, not when it is *committed*. The `valid` vector is unchanged;
+what changes is that `valid[p] = 0` no longer forces a stall when the value
+can be forwarded.
+
+NZCV is already forwarded in gen2
+([Flag (NZCV) hazard model](#flag-nzcv-hazard-model)); this is the same
+mechanism widened to 32-bit GPR operands. The asymmetry that makes it more
+than a copy of the flag bypass is the **read stage**: flags are read in EX,
+GPR operands in ID — a stage earlier — so a GPR dependency spans one extra
+hop and needs three coverage points instead of two.
+
+### Coverage by producer distance
+
+A consumer reads its operands in ID and uses them in EX one cycle later.
+For a producer `d` instructions ahead (in-order, no intervening stall):
+
+| `d` | Producer stage when consumer is in EX | Mechanism | Source register |
+|----:|---------------------------------------|-----------|-----------------|
+| 1 | MEM | EX→EX forward (ALU/link result) | EX/MEM |
+| 2 | WB | MEM→EX forward (loaded / older result) | MEM/WB |
+| 3 | retiring as the consumer reads in ID | WB→ID write-through | regfile write port |
+| ≥4 | retired | committed regfile read | regfile |
+
+The two forwards feed the EX operand inputs from a youngest-first mux
+(EX/MEM beats MEM/WB), exactly like the flag bypass. The write-through is a
+mux on the regfile read port: a read of the entry being written this cycle
+returns the write data, gated off entry 0 (R0 reads zero).
+
+### What still stalls — load-use and RDSYS
+
+A load and an RDSYS produce their value in **MEM**, not EX, so the value is
+absent from the EX/MEM register and present only once the producer reaches
+MEM/WB. A consumer one instruction behind such a producer (the producer in
+EX, the consumer about to enter EX) therefore cannot be served by the `d=1`
+forward. It stalls one cycle in ID — the **load-use interlock** — after
+which the producer is in MEM/WB and the `d=2` forward delivers the value.
+This is the single residual data stall: **1-cycle load-use distance**, loads
+and RDSYS alike. (The MEM back-pressure already holds the consumer for the
+producer's own multi-cycle MEM access; the interlock adds only the one
+alignment cycle.)
+
+### Relaxed stall predicate
+
+A read source `p` (enabled) stalls iff it has an in-flight writer the
+forwarding network cannot reach:
+
+```
+stall(p) = reads(p) & ~valid[p] & ~forwardable(p)
+
+forwardable(p) = ~(p is the EX-stage writer, and that writer is a load/RDSYS)  // load-use
+               & ~(p is a divmul aux (Rdh) destination)                        // deferred
+               & ~(p is an SPR-file source: EPC / ESR / SCRn)                   // deferred
+               & ~(the instruction is WRSYS and p is its value operand)         // bypasses the network
+```
+
+Everything `valid` would otherwise stall on — an EX-stage ALU producer
+(`d=1`), any MEM-stage producer (`d=2`), any WB-stage producer (`d=3`) — is
+now reachable, so `forwardable(p)` is true and the reader issues. The
+relaxed predicate is a strict subset of the gen2 predicate: forwarding only
+*removes* stalls, never adds one — a worthwhile assertion, with one care: the
+destination-match legs (load-use, divmul-aux) must skip **entry 0 (R0)**.
+R0 is never a real producer (writes discarded, reads zero), and the scoreboard
+ties `valid[R0]=1`; a divmul that discards its high half targets `Rdh = R0`, so
+without the guard the aux leg would match every R0 reader and stall it where the
+scoreboard does not — breaking the subset and over-stalling.
+
+**WRSYS is the fourth deferred case, and for a different reason than the SPR-file
+reads.** A WRSYS composes its sysreg-write datum in the integration from the
+*registered* ID/EX operand (`o_sys_wdata = idex_op_b`), which never passes
+through the EX forward muxes. So its value operand cannot be forwarded at all;
+it keeps the conservative stall so the registered operand holds the committed
+value by the time WRSYS drain-commits. (Without this, a WRSYS of a
+freshly-computed value — e.g. the TLB miss handler installing a just-built PTE
+in hot code — writes stale data and the handler re-faults forever.)
+
+### Forward-source gating
+
+- **EX/MEM source** (the slot in MEM): contributes only when it is a valid,
+  non-faulting GPR writer **whose result is in the register** — i.e. not a
+  load or RDSYS (those carry an address/EA there, not the value). This is the
+  same condition the load-use interlock checks one stage earlier.
+- **MEM/WB source** (the slot in WB): contributes when it is a valid,
+  non-faulting GPR writer; loads and RDSYS qualify here, because MEM has
+  produced the value into the MEM/WB register.
+
+USP (entry 14) is regfile-backed, so it forwards and write-throughs like any
+GPR. The SPR-file/scratch-file sources (EPC/ESR/SCRn) read through a separate
+path and keep the conservative stall; widening forwarding to them is deferred
+(it needs a write-through on each of the three SPR backends). The divmul aux
+(Rdh) keeps its scoreboard stall — negligible after a ~33-cycle op.
+
+### Operand capture across an EX hold
+
+The forward is combinational and re-evaluated every cycle, and it is live only
+while the producer sits in MEM/WB. The textbook lockstep — consumer in EX
+exactly when the producer is one or two stages ahead — guarantees that on the
+consumer's *first* EX cycle. But a consumer can be **held in EX longer than that
+window** by a *downstream* MEM stall it did not cause: a function prologue's
+store burst (`sub sp; stw …; stw …`), or a slow load sitting ahead of it. While
+the consumer waits, the older producer keeps advancing and **retires from WB**.
+A naively re-evaluated forward then misses (the producer is gone) and reverts to
+the stale registered ID operand, which is latched when the consumer finally
+advances — a wrong result, on common code, that the single-memory-op test
+(`memcpy`) never triggers.
+
+EX therefore **captures** each forwarded operand instead of re-deriving it: the
+forward's fallback is the freshly-read ID operand on the slot's first EX cycle
+(flagged by the registered ID-issue signal) and the previously-resolved operand
+on every later, held cycle. Because the retained register tracks the forward, a
+value captured while the producer was in MEM/WB persists after it drains. A
+store's `op_b` is its immediate offset, which never drains, so only the port-B
+*register* (the stored datum) is captured alongside `op_a`.
+
+### Store data and the operand-B register
+
+The regfile port-B read feeds `op_b` for register/register ALU ops and
+`store_data` for stores (a store's `op_b` is its immediate offset).
+Forwarding follows the *value*, not the port: the forwarded port-B register
+lands on `op_b` for non-stores and on `store_data` for stores, so a store of
+a just-produced value (`ADD R1,…; STW R1,[R2]`) forwards correctly while the
+store's immediate offset is left intact.
+
+### Worked examples
+
+**Back-to-back ALU — zero stall (`d=1`, EX→EX).**
+
+```
+ADD R1, R2, R3       ; (1) producer
+ADD R4, R1, R5       ; (2) consumer (RAW on R1)
+```
+
+| Cycle | ID | EX | MEM | WB | Notes |
+|-------|----|----|-----|----|-------|
+| 3 | (2) | (1) | — | — | (1) in EX; (2) reads R1 — `valid[R1]=0` |
+| 4 | — | (2) | (1) | — | (1) in MEM; EX/MEM→EX forward feeds (1)'s result to (2). No stall. |
+
+In gen2 this pair costs 3 stall cycles ([Example A](#example-a-pure-raw-already-in-pipeline-stagesmd-summarized)); in gen2.5 it costs zero.
+
+**Load-use — one stall (`d=1` load, then `d=2` MEM→EX).**
+
+```
+LDW R1, [R2, #0]     ; (1) load
+ADD R3, R1, R4       ; (2) consumer (RAW on R1)
+```
+
+| Cycle | ID | EX | MEM | WB | Notes |
+|-------|----|----|-----|----|-------|
+| 3 | (2) | (1) | — | — | (1) is a load in EX → load-use interlock stalls (2) |
+| 4 | (2) | — | (1) | — | (1) launches its access (MEM back-pressures; (2) held) |
+| 5 | — | (2) | — | (1) | (1) reaches WB; MEM/WB→EX forward feeds the loaded value to (2) |
+
+The net cost over an independent successor is the one interlock cycle.
 
 ## Verification considerations
 

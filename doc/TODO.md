@@ -660,24 +660,75 @@ that **forwarding — the #1 lever, loading the same cluster — may not close
 floorplan cannot recover it, the BTB drops first: forwarding outranks it on
 every workload. So retention is conditional on forwarding fitting beside it.
 
-**Re-ranked remaining work (corrected counters, real-workload weighted):**
+### gen2.5 status: forwarding landed (fourth feature)
 
-1. **EX/MEM forwarding + WB->ID write-through** — hazard is #1 on every
-   workload (Dhrystone 28.6%, kernel ~21%): the single biggest CPI lever, and
-   the gate on whether the landed BTB stays (see its probation note above).
-   Build next.
-2. Co-second tier — tighter and more workload-swung than the old ranking, no
-   single dominant follow-on:
-   - **I-cache / L1<->L2 path.** `ifetch` is ~0 on Dhrystone but #2 on the
-     fork/exec/pipe paths (16-20%, ahead of flush and store). This is the new
-     read from the corrected real-workload profile and is **not on the current
-     gen2.5 feature list** — the levers are the overview's 8-16 KB I-cache
-     target and/or the full-line L1<->L2 transfer reshape (which also cuts the
-     load/store miss tails, so it is the broadest single move).
-   - **Cacheable store buffer.** store is 18-22% on Dhrystone/getpid but ~12%
-     on fork/pipe — high-value on store-heavy, syscall-light code.
-   Order this tier by which real workloads matter most: I-cache for
-   fork/exec-heavy use, store buffer for store-heavy use.
+Operand **forwarding + regfile write-through** is implemented and committed — the
+`penumbra2_forward` leaf (youngest-first EX/MEM-then-MEM/WB select, the GPR
+analogue of `penumbra2_flag_bypass`); the forked integration (ID carries
+per-operand source tags + the relaxed issue interlock; EX instantiates the
+forward network for both operands and *captures* the resolved value across an EX
+hold; spine adds the WB->ID write-through mux and the MEM/WB forward source); the
+cache-hot result-equivalence tests; and the `pinned-stalls` capability that skips
+the gen2 cycle-exact perfctr tests on the variant. gen2 untouched. A reader now
+issues as soon as its operand is *reachable* (EX/MEM at d=1, MEM/WB at d=2,
+write-through at d=3) rather than stalling to WB; only the irreducible 1-cycle
+load-use, plus the deferred SPR-file and divmul-aux cases, still stall. Mechanism
+in `doc/internals/penumbra2/hazard-model.md` (gen2.5 forwarding section).
+
+**Measured (forwarding off vs on, gen2.5, HW @ 25 MHz).** Dhrystone DMIPS
+7.48 -> 10.16 (**+35.8%**), CPI 2.96 -> 2.17, hazard 30.6% -> 5.6% — the hazard
+stall collapsed 7.3x (58.5M -> 8.0M cycles), exactly the #1 lever the corrected
+profile named. By far the largest single-feature gain (the whole BTFN+RAS+BTB
+prediction stack was +5.2%); total gen2 -> gen2.5 is now +43% (7.11 -> 10.16).
+
+**BTB probation lifted.** Forwarding closes 25 MHz beside the BTB, so the BTB
+stays — but timing is thin (a few `NEXTPNR_SEED` values needed to hit 25 MHz; the
+capture adds two EX operand latches + an `i_fresh` mux on the operand path). The
+end-of-features floorplan is the margin-recovery lever, still deferred until the
+store buffer also lands.
+
+**Three bugs, all hidden by an unrepresentative suite — the durable lesson.**
+Forwarding only fires cache-hot (uncached fetch spaces instructions past the
+pipeline depth, so the regfile always serves the operand), and the one cached
+test, `memcpy`, has a single memory op per iteration. So a green suite hid:
+1. **WRSYS value bypassed the forward network** — its sysreg-write datum is read
+   from the registered `idex_op_b` in the spine, never the EX muxes; a relaxed
+   WRSYS wrote stale data and the TLB miss handler re-faulted forever. Fix: the
+   WRSYS value operand keeps the conservative stall.
+2. **Operand lost when held in EX past the producer's drain** — a consumer held
+   by a downstream MEM stall (store burst / slow load) past its producer's WB
+   retirement reverted to the stale registered operand. Fix: EX captures the
+   forwarded value and retains it across the hold (seeded on the slot's first EX
+   cycle from the registered ID-issue signal).
+3. **divmul-aux = R0 over-match** — a divmul discarding its high half (Rdh = R0)
+   made the aux-match leg stall every R0 reader, which the scoreboard ties valid;
+   caught by the subset assertion (relaxed stall must imply the scoreboard
+   stall). Fix: the destination-match legs skip R0.
+Coverage is now cache-hot, warm-loop result-equivalence tests
+(`hw/sim/programs/penumbra2/test_forward_*`, `isa/test_forward*`) spanning
+ALU/load/store/divmul/SPR/sysreg producers x op_a/op_b/store-base/store-data/
+indirect-target/SPR-read consumers x d=1/2/3 x held-across-drain. Takeaway for any
+future bypass work: **test it cache-hot, with the shapes real compilers emit**
+(varargs prologues, store bursts, switch jump tables, stack-reloaded returns) — a
+cold-fetch suite does not exercise forwarding at all.
+
+**Deferred (intentional).** SPR-file forwarding (ESR/EPC/SCRn — needs a
+write-through on each backend) and divmul-aux (Rdh) forwarding keep the
+conservative stall; cost is negligible (SPR-scratch is the TLB-miss spill path,
+divmul is ~33 cycles).
+
+**Re-ranked remaining work (post-forwarding, HW-measured):**
+
+1. **Cacheable store buffer** — with hazard crushed, **store is now the #1 stall**
+   (Dhrystone 26.1%, ~37M cycles — essentially unchanged in absolute terms, just
+   the largest share of a smaller pie; getpid ~22%). The write-through round-trip
+   to L2 is the lever. Build next on store-heavy / syscall-light workloads.
+2. **I-cache / L1<->L2 path** — `ifetch` is ~0 on Dhrystone but #1-2 on the
+   fork/exec/pipe paths (16-20%), untouched by any landed feature. The levers are
+   the overview's 8-16 KB I-cache target and/or the full-line L1<->L2 transfer
+   reshape (which also cuts the load/store miss tails). Build next on
+   fork/exec-heavy workloads.
+   Order the two by which real workloads matter most.
 
 ## Compiler: graceful-fail on unsupported inline asm and vector IR
 
