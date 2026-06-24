@@ -1,5 +1,5 @@
 ; test_cpu_stall_hazard.s — gen2 STALL_HAZARD / STALL_FLUSH counters
-; REQUIRES: mmu cache
+; REQUIRES: mmu cache pinned-stalls
 ;
 ; Both counters only register with a cache-hot front end. A RAW hazard forms
 ; only when the consumer reaches ID while its producer is still in EX/MEM/WB —

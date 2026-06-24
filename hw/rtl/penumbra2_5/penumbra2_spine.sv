@@ -177,6 +177,9 @@ module penumbra2_spine
     logic [3:0]          idex_cond;
     logic                idex_predicted_taken;
     logic [31:0]         idex_predicted_target;
+    logic [SB_IDX_W-1:0] idex_phys_src_a, idex_phys_src_b;   // gen2.5: forward source tags
+    logic                idex_fwd_a_en, idex_fwd_b_en;       // gen2.5: per-operand forwardable
+    logic                id_issue;                           // gen2.5: ID issued a new slot (EX capture seed)
     logic [MEM_OP_W-1:0] idex_mem_op;
     logic [1:0]          idex_mem_size;
     logic                idex_sign_ext;
@@ -407,6 +410,20 @@ module penumbra2_spine
         .i_wr_idx(wr_idx), .i_wr_data(wr_data), .i_wr_en(wr_en | usp_we)
     );
 
+    // ── WB→ID regfile write-through (gen2.5) ─────────────────────
+    // The shared regfile has no write-through: a read sees the old value the
+    // cycle a register is written. gen2.5 closes that last RAW cycle here — a
+    // read of the entry being written this edge returns the write data — so
+    // the shared cell stays byte-frozen for gen2. Qualified by the regfile's
+    // actual write enable (the GPR strobe plus the USP-bank write) and gated
+    // off entry 0 (R0 always reads zero). USP (entry 14) is regfile-backed, so
+    // it write-throughs too; the SPR-file SPRs read elsewhere and are unaffected.
+    logic        wt_en;
+    logic [31:0] rd_data_a_wt, rd_data_b_wt;
+    assign wt_en        = wr_en | usp_we;
+    assign rd_data_a_wt = (wt_en & (rd_idx_a == wr_idx) & (rd_idx_a != '0)) ? wr_data : rd_data_a;
+    assign rd_data_b_wt = (wt_en & (rd_idx_b == wr_idx) & (rd_idx_b != '0)) ? wr_data : rd_data_b;
+
     // ════════════════════════════════════════════════════════════
     // ID — decode / issue (owns the scoreboard)
     // ════════════════════════════════════════════════════════════
@@ -432,7 +449,7 @@ module penumbra2_spine
         .o_local_stall(id_local_stall),
         .o_bcause(idex_bcause),
         .o_rd_idx_a(rd_idx_a), .o_rd_idx_b(rd_idx_b),
-        .i_rd_data_a(rd_data_a), .i_rd_data_b(rd_data_b),
+        .i_rd_data_a(rd_data_a_wt), .i_rd_data_b(rd_data_b_wt),
         .o_spr_rd_sel(id_spr_rd_sel), .i_spr_src_value(spr_operand_value),
         .i_mem_dst(sb_mem_dst), .i_mem_dst_en(sb_mem_dst_en),
         .i_wb_dst(sb_wb_dst),   .i_wb_dst_en(sb_wb_dst_en),
@@ -452,8 +469,35 @@ module penumbra2_spine
         .o_valid(idex_valid), .o_fault_pending(idex_fault_pending),
         .o_fault_vec(idex_fault_vec), .o_fault_status(idex_fault_status),
         .o_predict_redirect(o_predict_redirect), .o_predict_target(o_predict_target),
-        .o_predicted_taken(idex_predicted_taken), .o_predicted_target(idex_predicted_target)
+        .o_predicted_taken(idex_predicted_taken), .o_predicted_target(idex_predicted_target),
+        .o_phys_src_a(idex_phys_src_a), .o_fwd_a_en(idex_fwd_a_en),
+        .o_phys_src_b(idex_phys_src_b), .o_fwd_b_en(idex_fwd_b_en),
+        .o_issue(id_issue)
     );
+
+    // High on the ID/EX slot's first EX cycle (the edge after ID issues it). EX
+    // uses it to seed its operand-capture latch from the just-read ID operand,
+    // then retain the forwarded value across any EX hold.
+    logic idex_first_cycle;
+    always_ff @(posedge i_clk) begin
+        if (i_rst) idex_first_cycle <= 1'b0;
+        else       idex_first_cycle <= id_issue;
+    end
+
+    // ── MEM/WB GPR forward source (gen2.5) ───────────────────────
+    // The slot in WB, offered to EX's forward network as the d=2 (MEM→EX)
+    // source. Regfile-backed writers only (GPR, or WRSPR-USP — phys_dst ≤
+    // SB_SSP); the SPR-file SPRs (EPC/ESR/SCRn) read through a separate path
+    // and are not forwarded in this cut. The WB value is final (a load's data
+    // is already extracted), so loads/RDSYS qualify here — unlike the EX/MEM
+    // source, which EX gates against them itself.
+    logic [SB_IDX_W-1:0] wb_fwd_dst;
+    logic [31:0]         wb_fwd_value;
+    logic                wb_fwd_valid;
+    assign wb_fwd_dst   = memwb_phys_dst;
+    assign wb_fwd_value = memwb_wb_value;
+    assign wb_fwd_valid = (memwb_gpr_we | memwb_spr_we) & (memwb_phys_dst <= SB_SSP)
+                        & memwb_valid & ~memwb_fault_pending;
 
     // ════════════════════════════════════════════════════════════
     // EX — execute (ALU, flag bypass, branch, divmul, drain-commit)
@@ -464,6 +508,10 @@ module penumbra2_spine
         .i_op_a(idex_op_a), .i_op_b(idex_op_b), .i_store_data(idex_store_data),
         .i_cond(idex_cond),
         .i_predicted_taken(idex_predicted_taken), .i_predicted_target(idex_predicted_target),
+        .i_phys_src_a(idex_phys_src_a), .i_fwd_a_en(idex_fwd_a_en),
+        .i_phys_src_b(idex_phys_src_b), .i_fwd_b_en(idex_fwd_b_en),
+        .i_first_cycle(idex_first_cycle),
+        .i_wb_fwd_dst(wb_fwd_dst), .i_wb_fwd_value(wb_fwd_value), .i_wb_fwd_valid(wb_fwd_valid),
         .i_mem_op(idex_mem_op), .i_mem_size(idex_mem_size), .i_sign_ext(idex_sign_ext),
         .i_sys_dev(idex_sys_dev), .i_sys_reg(idex_sys_reg), .i_spr_sel(idex_spr_sel),
         .i_drain_commit(idex_drain_commit), .i_post_commit_wait(idex_post_commit_wait),

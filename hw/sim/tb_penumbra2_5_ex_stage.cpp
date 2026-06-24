@@ -35,6 +35,15 @@ static void tick(Vpenumbra2_ex_stage* dut) {
 static void clear(Vpenumbra2_ex_stage* dut) {
     dut->i_op_class = OPC_ALU; dut->i_alu_op = ALU_ADD; dut->i_divmul_op = 0;
     dut->i_op_a = 0; dut->i_op_b = 0; dut->i_store_data = 0;
+    // GPR forwarding tied off: this tb drives EX in isolation, where the EX/MEM
+    // forward source is the stage's own multi-cycle self-feedback. Forwarding is
+    // covered end-to-end at integration (isa/test_forward.s); here it stays
+    // inert so the branch-resolution checks below match the gen2 baseline.
+    dut->i_phys_src_a = 0; dut->i_fwd_a_en = 0;
+    dut->i_phys_src_b = 0; dut->i_fwd_b_en = 0;
+    dut->i_first_cycle = 1; // each driven slot is on its first EX cycle, so the
+                            // (tied-off) forward fallback tracks the driven operand
+    dut->i_wb_fwd_dst = 0; dut->i_wb_fwd_value = 0; dut->i_wb_fwd_valid = 0;
     dut->i_cond = COND_AL; dut->i_predicted_taken = 0;
     dut->i_mem_op = MEM_NONE; dut->i_mem_size = 0; dut->i_sign_ext = 0;
     dut->i_sys_dev = 0; dut->i_sys_reg = 0; dut->i_spr_sel = 0;

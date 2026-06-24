@@ -44,6 +44,21 @@ module penumbra2_ex_stage
     input  logic [3:0]            i_cond,           // branch condition (Format B)
     input  logic                  i_predicted_taken,// ID's direction guess (BTFN or RAS)
     input  logic [31:0]           i_predicted_target,// the predicted target (RAS-predicted returns; verified here)
+
+    // ── GPR operand forwarding (gen2.5) ──────────────────────────
+    // Per-operand ID/EX source tags: the physical entry each operand reads
+    // and whether it is a forwardable register source (not imm / PC /
+    // SPR-file). The EX/MEM forward source is this stage's own registered
+    // output (the slot now in MEM); only the MEM/WB source arrives as ports,
+    // exactly as the flag bypass takes its WB producer.
+    input  logic [SB_IDX_W-1:0]   i_phys_src_a,
+    input  logic                  i_fwd_a_en,
+    input  logic [SB_IDX_W-1:0]   i_phys_src_b,
+    input  logic                  i_fwd_b_en,
+    input  logic                  i_first_cycle,          // this ID/EX slot is on its first EX cycle (capture seed)
+    input  logic [SB_IDX_W-1:0]   i_wb_fwd_dst,     // MEM/WB-stage producer entry
+    input  logic [31:0]           i_wb_fwd_value,   // its writeback value (load data included)
+    input  logic                  i_wb_fwd_valid,   // gated: regfile-backed writer, valid, non-faulting
     input  logic [MEM_OP_W-1:0]   i_mem_op,
     input  logic [1:0]            i_mem_size,
     input  logic                  i_sign_ext,
@@ -153,6 +168,80 @@ module penumbra2_ex_stage
         .o_flags(fwd_flags)
     );
 
+    // ── GPR operand forwarding (gen2.5) ──────────────────────────
+    // Override the registered operands with the youngest in-flight value of
+    // their source register, so a reader need not have stalled for its
+    // producer to commit. Mirrors the flag bypass: the EX/MEM source is this
+    // stage's own registered output (the instruction now in MEM), the MEM/WB
+    // source arrives as ports.
+    //
+    // The EX/MEM source contributes only when its result is in the register:
+    // a regfile-backed writer (GPR, or WRSPR-USP — entries ≤ SB_SSP) that is
+    // valid, non-faulting, and not a load/RDSYS. A load/RDSYS carries an
+    // address/EA in o_result, not the value, so it is excluded here and
+    // reached one stage later through the MEM/WB source — the 1-cycle
+    // load-use distance the ID interlock leaves.
+    logic mem_loadlike;
+    logic mem_fwd_valid;
+    assign mem_loadlike  = (o_op_class == OPC_LOAD) | (o_op_class == OPC_RDSYS);
+    assign mem_fwd_valid = (o_gpr_we | o_spr_we) & (o_phys_dst <= SB_SSP)
+                         & o_valid & ~o_fault_pending & ~mem_loadlike;
+
+    // store_data carries the port-B register for a store (whose op_b is the
+    // immediate offset); for every other op the port-B register is op_b. So
+    // one forward instance feeds the port-B register, and it routes to
+    // store_data on a store and to op_b otherwise.
+    logic is_store;
+    assign is_store = (i_op_class == OPC_STORE);
+
+    // ── Operand capture across an EX hold (gen2.5) ───────────────
+    // The forward is live only while the producer sits in MEM/WB. If this slot
+    // is held in EX by a *downstream* MEM stall — a store burst, or a slow load
+    // ahead of it — past the producer's WB retirement, a re-evaluated forward
+    // would revert to the stale ID operand and latch it when the slot finally
+    // advances. So retain the value: the forward's fallback is the freshly-read
+    // ID operand on the slot's first EX cycle (i_first_cycle), and the previously
+    // resolved operand (op_*_keep) on every later, held cycle. Since op_*_keep
+    // tracks the forward, once it hits the captured value persists after the
+    // producer drains. (A store's op_b is the immediate offset, which never
+    // drains, so only the port-B *register* — store_data — is captured.)
+    logic [31:0] op_a_keep, srcb_keep;
+    logic [31:0] op_a_fb, srcb_fb;
+    assign op_a_fb = i_first_cycle ? i_op_a : op_a_keep;
+    assign srcb_fb = i_first_cycle ? (is_store ? i_store_data : i_op_b) : srcb_keep;
+
+    logic [31:0] fwd_op_a, fwd_srcb;
+    penumbra2_forward u_fwd_a (
+        .i_phys_src(i_phys_src_a), .i_fwd_en(i_fwd_a_en), .i_fallback(op_a_fb),
+        .i_mem_dst(o_phys_dst),  .i_mem_value(o_result), .i_mem_valid(mem_fwd_valid),
+        .i_wb_dst(i_wb_fwd_dst), .i_wb_value(i_wb_fwd_value), .i_wb_valid(i_wb_fwd_valid),
+        .o_value(fwd_op_a)
+    );
+    penumbra2_forward u_fwd_b (
+        .i_phys_src(i_phys_src_b), .i_fwd_en(i_fwd_b_en), .i_fallback(srcb_fb),
+        .i_mem_dst(o_phys_dst),  .i_mem_value(o_result), .i_mem_valid(mem_fwd_valid),
+        .i_wb_dst(i_wb_fwd_dst), .i_wb_value(i_wb_fwd_value), .i_wb_valid(i_wb_fwd_valid),
+        .o_value(fwd_srcb)
+    );
+
+    always_ff @(posedge i_clk) begin
+        if (i_rst) begin
+            op_a_keep <= 32'b0;
+            srcb_keep <= 32'b0;
+        end else begin
+            op_a_keep <= fwd_op_a;   // retain the resolved operand for any held cycle
+            srcb_keep <= fwd_srcb;
+        end
+    end
+
+    // The forwarded operands EX uses everywhere it would have used the
+    // registered i_op_a / i_op_b / i_store_data (ALU, divmul, JMP target, the
+    // RAS target check, and the stored datum).
+    logic [31:0] op_a, op_b, store_data;
+    assign op_a       = fwd_op_a;
+    assign op_b       = is_store ? i_op_b   : fwd_srcb;   // a store's op_b stays the immediate
+    assign store_data = is_store ? fwd_srcb : i_store_data;
+
     // ── ALU compute ──────────────────────────────────────────────
     // NZCV bundle packs as SR[3:0]: N=0 Z=1 C=2 V=3. ADC/SBC take the
     // forwarded carry (bundle bit 2); other ops ignore the carry-in.
@@ -164,8 +253,8 @@ module penumbra2_ex_stage
     assign carry_in = fwd_flags[2];
 
     penumbra2_alu u_alu (
-        .i_a(i_op_a),
-        .i_b(i_op_b),
+        .i_a(op_a),
+        .i_b(op_b),
         .i_op(i_alu_op),
         .i_carry_in(carry_in),
         .o_result(alu_result),
@@ -223,7 +312,7 @@ module penumbra2_ex_stage
         case (i_op_class)
             OPC_JMP: begin
                 branch_redirect = 1'b1;
-                branch_target   = i_op_a;
+                branch_target   = op_a;
             end
             OPC_BRANCH: begin
                 branch_redirect = cond_taken;
@@ -253,11 +342,11 @@ module penumbra2_ex_stage
     logic [31:0] redirect_target;
     assign direction_wrong = branch_redirect ^ i_predicted_taken;
     // A return (the only RAS-predicted kind) can resolve to a target other than
-    // the RAS guess. Sourcing the jump target as i_op_a — not branch_target —
-    // keeps this 32-bit compare off the ALU-result path. i_predicted_taken drops
-    // an unpredicted JMP (direction_wrong already covers it); the OPC_JMP gate
-    // keeps a direct branch from ever tripping this.
-    assign target_wrong    = (i_op_class == OPC_JMP) & i_predicted_taken & (i_op_a != i_predicted_target);
+    // the RAS guess. Sourcing the jump target as op_a (the forwarded operand) —
+    // not branch_target — keeps this 32-bit compare off the ALU-result path.
+    // i_predicted_taken drops an unpredicted JMP (direction_wrong already covers
+    // it); the OPC_JMP gate keeps a direct branch from ever tripping this.
+    assign target_wrong    = (i_op_class == OPC_JMP) & i_predicted_taken & (op_a != i_predicted_target);
     assign mispredict      = direction_wrong | target_wrong;
     assign redirect_target = branch_redirect ? branch_target : i_next_pc;
 
@@ -369,7 +458,7 @@ module penumbra2_ex_stage
 
     divmul u_divmul (
         .i_clk(i_clk), .i_rst(i_rst),
-        .i_a(i_op_a), .i_b(i_op_b),
+        .i_a(op_a), .i_b(op_b),
         .i_op(dm_op), .i_start(dm_start),
         .o_busy(dm_busy), .o_fault(dm_fault),
         .o_result_lo(dm_lo), .o_result_hi(dm_hi),
@@ -483,7 +572,7 @@ module penumbra2_ex_stage
                 // only ever advances once its results are valid.
                 o_result          <= is_divmul ? dm_lo : result_value;
                 o_result_aux      <= is_divmul ? dm_hi : 32'b0;
-                o_store_data      <= i_store_data;
+                o_store_data      <= store_data;
                 o_flag_value      <= is_divmul ? {2'b00, dm_z, dm_n} : alu_flags;
                 o_phys_dst        <= i_phys_dst;
                 o_phys_dst_aux    <= i_phys_dst_aux;

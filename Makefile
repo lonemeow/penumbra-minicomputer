@@ -160,7 +160,9 @@ RUNNER_PROVIDES_penumbra1 = mmu mmu-d mmu-i cache l2 uart spi bus bus-fault mach
 
 RUNNER_MOD_penumbra2      = machine_penumbra2_sim
 RUNNER_TBS_penumbra2      = tb_penumbra2_prog tb_penumbra2_intr
-RUNNER_PROVIDES_penumbra2 = mmu mmu-d mmu-i cache l2 wrspr machid perfctr timer irq uart bus bus-fault
+# pinned-stalls: the exact cycle/stall-attribution counts the gen2 perfctr tests
+# assert. A forwarding/predicting variant changes them, so it drops it (below).
+RUNNER_PROVIDES_penumbra2 = mmu mmu-d mmu-i cache l2 wrspr machid perfctr timer irq uart bus bus-fault pinned-stalls
 
 # Runner config keys on the base generation, so a variant inherits the
 # DUT wrapper, testbenches, and capability set unchanged. A variant whose
@@ -169,7 +171,11 @@ RUNNER_PROVIDES_penumbra2 = mmu mmu-d mmu-i cache l2 wrspr machid perfctr timer 
 RUNNER_MOD      = $(RUNNER_MOD_$(CORE_BASE))
 RUNNER_TBS      = $(RUNNER_TBS_$(CORE_BASE))
 RUNNER_DEFAULT  = $(firstword $(RUNNER_TBS))
-RUNNER_PROVIDES = $(RUNNER_PROVIDES_$(CORE_BASE))
+RUNNER_PROVIDES = $(filter-out $(RUNNER_DROPS_$(CORE)),$(RUNNER_PROVIDES_$(CORE_BASE)))
+
+# Per-variant capability delta, filtered from the inherited set above (unset for
+# a base core). gen2.5 forwards/predicts → cycle counts move, so it drops pinned-stalls.
+RUNNER_DROPS_penumbra2_5 = pinned-stalls
 
 # The ISS models the full machine: it provides every capability the
 # gen1 machine does.
@@ -332,7 +338,7 @@ test-modules-variant:
 	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
 	@for e in $(VARIANT_MODULE_TESTS); do \
 		m=$${e%%:*}; r=$${e#*:}; tb=$${r%%:*}; s=$${r#*:}; \
-		$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) --top-module $$m --Mdir $(BUILD_DIR)/$$tb.verilator -o ../V$$tb $(PKG_SV) $$s hw/sim/$$tb.cpp >/dev/null 2>&1 || { printf "  \033[31mBUILD FAIL\033[0m  %s\n" "$$tb"; exit 1; }; \
+		$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) -Ihw/rtl/penumbra2_5 --top-module $$m --Mdir $(BUILD_DIR)/$$tb.verilator -o ../V$$tb $(PKG_SV) $$s hw/sim/$$tb.cpp >/dev/null 2>&1 || { printf "  \033[31mBUILD FAIL\033[0m  %s\n" "$$tb"; exit 1; }; \
 		$(DOCKER_RUN) --entrypoint ./$(BUILD_DIR)/V$$tb $(DOCKER_IMAGE) || exit 1; \
 	done
 

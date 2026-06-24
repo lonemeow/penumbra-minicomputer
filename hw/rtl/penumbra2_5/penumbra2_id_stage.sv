@@ -108,7 +108,17 @@ module penumbra2_id_stage
     output logic                  o_predict_redirect, // steer fetch to the predicted target this cycle
     output logic [31:0]           o_predict_target,   // that target (fetch-side, combinational)
     output logic                  o_predicted_taken,  // direction guess, registered into ID/EX
-    output logic [31:0]           o_predicted_target  // target guess, registered into ID/EX for EX to confirm
+    output logic [31:0]           o_predicted_target, // target guess, registered into ID/EX for EX to confirm
+
+    // ── GPR operand forwarding tags (gen2.5: to EX) ──────────────
+    // The physical entry each operand reads and whether it is a forwardable
+    // register source (not imm / PC / SPR-file). EX matches these against its
+    // in-flight producers; they ride the ID/EX register alongside the operands.
+    output logic [SB_IDX_W-1:0]   o_phys_src_a,
+    output logic                  o_fwd_a_en,
+    output logic [SB_IDX_W-1:0]   o_phys_src_b,
+    output logic                  o_fwd_b_en,
+    output logic                  o_issue             // a new instruction enters ID/EX this edge (EX operand-capture timing)
 );
 
     // ── Decode (combinational) ───────────────────────────────────
@@ -234,15 +244,27 @@ module penumbra2_id_stage
     // EX). ex_dst_en_r is its scoreboard-destination enable, registered
     // alongside the bundle and gated by validity / non-fault below.
     logic ex_dst_en_r;
-    logic scoreboard_stall;
-    /* verilator lint_off UNUSEDSIGNAL */
+    logic scoreboard_stall;             // conservative gen2 stall (kept for the subset assertion)
     logic [SB_NUM_ENTRIES-1:0] sb_valid;
+
+    // The EX-stage writer (the slot ID latched last cycle), used by the
+    // scoreboard and the load-use leg of the relaxed predicate.
+    logic ex_writer_en;
+    assign ex_writer_en = ex_dst_en_r & o_valid & ~o_fault_pending;
+
+    // Whether that EX writer is a load/RDSYS — the producer kind whose value is
+    // not yet at EX/MEM, so a consumer of it takes the 1-cycle load-use stall.
+    // Consumed by the relaxed predicate (the TODO(human) below); the placeholder
+    // does not read it yet.
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic ex_loadlike;
     /* verilator lint_on UNUSEDSIGNAL */
+    assign ex_loadlike = (o_op_class == OPC_LOAD) | (o_op_class == OPC_RDSYS);
 
     penumbra2_scoreboard u_scoreboard (
         .i_src_a(phys_src_a), .i_src_a_en(phys_src_a_en & sb_eligible),
         .i_src_b(phys_src_b), .i_src_b_en(phys_src_b_en & sb_eligible),
-        .i_ex_dst(o_phys_dst),  .i_ex_dst_en(ex_dst_en_r & o_valid & ~o_fault_pending),
+        .i_ex_dst(o_phys_dst),  .i_ex_dst_en(ex_writer_en),
         .i_mem_dst(i_mem_dst),  .i_mem_dst_en(i_mem_dst_en),
         .i_wb_dst(i_wb_dst),    .i_wb_dst_en(i_wb_dst_en),
         .i_aux_dst(i_aux_dst),  .i_aux_dst_en(i_aux_dst_en),
@@ -250,11 +272,88 @@ module penumbra2_id_stage
         .o_stall(scoreboard_stall)
     );
 
-    // ID's local stall — the scoreboard interlock, downstream-independent (it
-    // does not fold in i_stall_in). The spine ORs it with the downstream
-    // stalls to form the back-pressure to IF, and surfaces it as the perfctr's
-    // hazard-stall cause. The pre-refactor o_stall was o_local_stall | i_stall_in.
-    assign o_local_stall = i_valid & scoreboard_stall;
+    // ── Operand forwardability (gen2.5: tags to EX) ──────────────
+    // Whether each operand is a register read EX may override with a forwarded
+    // value: not the PC / branch-target path, and not an SPR-file source
+    // (EPC/ESR/SCRn — deferred). The port-B register feeds op_b for a reg/reg
+    // op and store_data for a store, so its forwardability does not depend on
+    // d_b_from_imm — EX routes it by op_class.
+    logic fwd_a_en, fwd_b_en;
+    assign fwd_a_en = phys_src_a_en & ~d_a_from_pc   & ~d_src_a_is_pc;
+    assign fwd_b_en = phys_src_b_en & ~d_src_b_is_pc & ~src_b_spr_file;
+
+    // Source-read participation — the same gate the scoreboard applies, so a
+    // faulting or bubble slot never contributes a hazard stall.
+    logic src_a_used, src_b_used;
+    assign src_a_used = phys_src_a_en & sb_eligible;
+    assign src_b_used = phys_src_b_en & sb_eligible;
+
+    // ── Relaxed issue interlock (gen2.5 forwarding) ──────────────
+    // gen2 stalls a reader whenever a source has any in-flight writer
+    // (scoreboard_stall). gen2.5 forwards most of those, so a reader stalls
+    // only when its source's youngest writer is one the forward network /
+    // write-through cannot reach. Per the hazard-model "Relaxed stall
+    // predicate", the residual cases keep a stall:
+    //   - load-use: the source matches the EX-stage writer and that writer is
+    //     a load/RDSYS (ex_writer_en & ex_loadlike, dst = o_phys_dst);
+    //   - divmul aux: the source matches the in-flight Rdh (i_aux_dst /
+    //     i_aux_dst_en) — aux forwarding is deferred;
+    //   - SPR-file source: src_b_spr_file (EPC/ESR/SCRn) with a writer
+    //     (~sb_valid) — SPR forwarding is deferred;
+    //   - WRSYS value: its sysreg write datum bypasses the EX forward network
+    //     (the spine reads idex_op_b), so its op_b cannot be forwarded.
+    // Everything else a writer would have stalled (EX-stage ALU, any MEM- or
+    // WB-stage producer) is reachable, so it must NOT stall here.
+    //
+    // Primitives available: src_a_used / src_b_used, sb_valid[<entry>],
+    // phys_src_a / phys_src_b, o_phys_dst + ex_writer_en + ex_loadlike,
+    // i_aux_dst + i_aux_dst_en, src_b_spr_file.
+    // "Does either read source name this physical entry?" — the shared shape
+    // of the load-use and divmul-aux legs, each gated by the fault/bubble-safe
+    // participation bit so an inert slot never matches.
+    //
+    // Entry 0 (R0) is never a real producer: writes to it are discarded and it
+    // reads as zero, so a destination of R0 must not stall a reader. This bites
+    // the divmul-aux leg in particular — a divmul that discards its high half
+    // targets Rdh=R0, making i_aux_dst=0, which would otherwise match every R0
+    // reader. The scoreboard ties valid[R0]=1 for the same reason; this direct
+    // match path needs the guard too (without it, hazard_stall can assert where
+    // scoreboard_stall does not).
+    function automatic logic src_reads(input logic [SB_IDX_W-1:0] entry);
+        return (entry != '0)
+            & ( (src_a_used & (phys_src_a == entry))
+              | (src_b_used & (phys_src_b == entry)) );
+    endfunction
+
+    // Load-use: a reader of the EX-stage writer when that writer is a real
+    // load/RDSYS — its value reaches the forward network one stage later, at
+    // MEM/WB, so the reader takes one bubble. ex_writer_en qualifies the EX
+    // slot as live (a bubble keeps a stale op_class, so ex_loadlike alone is
+    // not enough).
+    logic load_use_stall, divmul_aux_stall, spr_read_stall, wrsys_value_stall;
+    assign load_use_stall   = ex_writer_en & ex_loadlike & src_reads(o_phys_dst);
+    // Divmul aux: a reader of the in-flight Rdh — aux forwarding is deferred.
+    assign divmul_aux_stall = i_aux_dst_en & src_reads(i_aux_dst);
+    // SPR-file read (EPC/ESR/SCRn, operand B only) with a writer in flight —
+    // SPR forwarding is deferred, so any writer keeps the conservative stall.
+    assign spr_read_stall   = src_b_used & src_b_spr_file & ~sb_valid[phys_src_b];
+    // WRSYS composes its sysreg write value from the registered ID/EX operand
+    // in the spine (o_sys_wdata = idex_op_b), which bypasses the EX forward
+    // network entirely — so that value cannot be forwarded. Keep the
+    // conservative stall (like the SPR-file reads) so idex_op_b holds the
+    // committed value by the time WRSYS drain-commits. Without this a WRSYS of
+    // a just-computed value writes stale data — e.g. the TLB miss handler
+    // installs a wrong PTE and re-faults forever.
+    assign wrsys_value_stall = (d_op_class == OPC_WRSYS) & src_b_used & ~sb_valid[phys_src_b];
+
+    logic hazard_stall;
+    assign hazard_stall = load_use_stall | divmul_aux_stall | spr_read_stall | wrsys_value_stall;
+
+    // ID's local stall — the issue interlock, downstream-independent (it does
+    // not fold in i_stall_in). The spine ORs it with the downstream stalls to
+    // form the back-pressure to IF, and surfaces it as the perfctr's hazard
+    // cause. The pre-refactor o_stall was o_local_stall | i_stall_in.
+    assign o_local_stall = i_valid & hazard_stall;
 
     // ── Issue / back-pressure control ────────────────────────────
     // can_issue : the ID instruction is eligible to advance into EX —
@@ -267,7 +366,11 @@ module penumbra2_id_stage
     // (Back-pressure to IF is composed in the spine from o_local_stall and the
     // downstream stalls; i_stall_in here is that composed downstream stall.)
     logic can_issue, issue, next_valid;
-    assign can_issue = i_valid & ~scoreboard_stall;
+    assign can_issue = i_valid & ~hazard_stall;
+    // issue is high on every cycle a new slot is latched into ID/EX — including
+    // back-to-back issues, so it is a per-cycle level, not a one-shot pulse. The
+    // spine registers it into idex_first_cycle to seed EX's operand-capture latch.
+    assign o_issue = issue;
 
     always_comb begin
         if (i_bubble) begin
@@ -298,7 +401,7 @@ module penumbra2_id_stage
         if      (i_bubble)         next_bcause = BCAUSE_FLUSH;
         else if (i_stall_in)       next_bcause = o_bcause;   // hold the carried cause
         else if (~i_valid)         next_bcause = i_fetch_busy ? BCAUSE_IFETCH : BCAUSE_FLUSH;
-        else if (scoreboard_stall) next_bcause = BCAUSE_HAZARD;
+        else if (hazard_stall)     next_bcause = BCAUSE_HAZARD;
         else                       next_bcause = BCAUSE_NONE; // issuing: a valid slot, charged to nothing
     end
 
@@ -418,6 +521,10 @@ module penumbra2_id_stage
                 o_cond             <= d_cond;
                 o_predicted_taken  <= pred_taken_tag;
                 o_predicted_target <= pred_target;
+                o_phys_src_a       <= phys_src_a;
+                o_fwd_a_en         <= fwd_a_en;
+                o_phys_src_b       <= phys_src_b;
+                o_fwd_b_en         <= fwd_b_en;
                 o_writes_flags     <= d_writes_flags;
                 o_reads_flags      <= d_reads_flags;
                 o_flag_only        <= d_flag_only;
@@ -459,10 +566,13 @@ module penumbra2_id_stage
     // ══════════════════════════════════════════════════════════
     always_comb begin
         // Issue precondition: an instruction advances into EX only when
-        // it is a real, non-RAW-stalled slot and we are neither
-        // flushing it nor back-pressured. A mis-gated advance (issuing
-        // on a stall/bubble, or ignoring the scoreboard) violates this.
-        assert (!issue || (i_valid && !scoreboard_stall && !i_bubble && !i_stall_in))
+        // it is a real, non-hazard-stalled slot and we are neither
+        // flushing it nor back-pressured. The gate is hazard_stall — the
+        // relaxed interlock that actually blocks issue — not the raw
+        // scoreboard_stall (gen2.5 forwarding lets a reader issue past a
+        // scoreboard stall by design; the subset assertion below proves
+        // hazard_stall never exceeds scoreboard_stall).
+        assert (!issue || (i_valid && !hazard_stall && !i_bubble && !i_stall_in))
             else $error("penumbra2_id_stage: issue without a clean issue precondition");
     end
 
@@ -479,5 +589,15 @@ module penumbra2_id_stage
     assert property (@(posedge i_clk) disable iff (i_rst)
         o_valid || o_bcause != BCAUSE_NONE)
         else $error("penumbra2_id_stage: ID/EX bubble with no stall cause");
+
+    // Forwarding only ever removes stalls: the relaxed interlock must be a
+    // subset of the conservative scoreboard stall. If hazard_stall asserts
+    // where scoreboard_stall does not, the relaxed predicate is stalling a
+    // source with no in-flight writer — an over-stall logic error. It cannot
+    // catch over-relaxation (issuing when it should stall); the gen2.5
+    // result-equivalence suite is the net for that.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        hazard_stall |-> scoreboard_stall)
+        else $error("penumbra2_id_stage: relaxed interlock stalls outside the scoreboard stall");
 
 endmodule

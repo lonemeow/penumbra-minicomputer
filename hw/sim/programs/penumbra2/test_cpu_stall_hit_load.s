@@ -1,5 +1,5 @@
 ; test_cpu_stall_hit_load.s — gen2 cache-hit load attribution (SYSDEV_CPU STALL_LOAD)
-; REQUIRES: mmu cache
+; REQUIRES: mmu cache pinned-stalls
 ;
 ; Regression for the perfctr stall-attribution fix. A D-cache *hit* load pays a
 ; single MEM launch-cycle stall, and the bubble it injects reaches the commit
