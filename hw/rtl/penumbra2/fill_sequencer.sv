@@ -72,9 +72,10 @@ module fill_sequencer #(
         $error("fill_sequencer: line must be a power-of-two number of words, at least 2");
     end
 
-    typedef enum logic {
+    typedef enum logic [1:0] {
         S_IDLE,                 // pass-through; a line request engages
-        S_STREAM                // walking the line against the L2 handshake
+        S_STREAM,               // walking the line against the L2 handshake
+        S_DRAIN                 // last registered beat draining to the L1
     } state_t;
 
     state_t state;
@@ -105,11 +106,16 @@ module fill_sequencer #(
                     word_q <= '0;
                 end
                 S_STREAM: if (beat) begin
-                    // A fault aborts exactly like reaching the last word —
-                    // the transaction ends and the port returns to idle.
-                    if (beat_fault || last_word) state  <= S_IDLE;
+                    // A fault aborts exactly like reaching the last word — the
+                    // transaction ends. The fill outputs are registered (below),
+                    // so the last word reaches the L1 one cycle after its beat;
+                    // the port drains through S_DRAIN before idling, staying busy
+                    // so the still-asserted line request cannot re-engage.
+                    if (beat_fault || last_word) state  <= S_DRAIN;
                     else                         word_q <= word_q + 1'b1;
                 end
+                S_DRAIN: state <= S_IDLE;
+                default: state <= S_IDLE;
             endcase
         end
     end
@@ -135,16 +141,33 @@ module fill_sequencer #(
     end
 
     // ── Fill stream + upstream response ───────────────────────────
-    // A faulting beat carries no data into the line and ends the transfer
-    // via o_fill_fault, not o_fill_done — the L1 aborts the fill on it.
-    assign o_fill_we    = beat && !beat_fault;
-    assign o_fill_word  = word_q;
-    assign o_fill_wdata = i_l2_rdata;
-    assign o_fill_done  = beat && last_word && !beat_fault;
-    assign o_fill_fault = beat_fault;
+    // The fill stream to the L1 is registered: each beat's {we, word, wdata,
+    // done, fault} lands at the L1 one cycle after the beat. This is the timing
+    // cut. i_l2_busy is combinational off the L2 tag compare; it gated o_fill_*
+    // every beat, and o_fill_done/o_fill_we gated the L1's valid-bit and array
+    // writes — so the L2 verdict reached the L1 write enables across the whole
+    // fill layer. Registering ends that path at these flops; the L1 writes from
+    // registered inputs. Cost: +1 cycle per line fill, pipelined — the per-beat
+    // rate and throughput are unchanged. A faulting beat carries no data and
+    // ends the transfer via o_fill_fault, not o_fill_done — the L1 aborts on it.
+    always_ff @(posedge i_clk) begin
+        if (i_rst) begin
+            o_fill_we    <= 1'b0;
+            o_fill_done  <= 1'b0;
+            o_fill_fault <= 1'b0;
+        end else begin
+            o_fill_we    <= beat && !beat_fault;
+            o_fill_word  <= word_q;
+            o_fill_wdata <= i_l2_rdata;
+            o_fill_done  <= beat && last_word && !beat_fault;
+            o_fill_fault <= beat_fault;
+        end
+    end
 
     assign o_rdata = i_l2_rdata;
-    assign o_busy  = (state == S_STREAM) || line_req || i_l2_busy;
+    // Busy holds through S_DRAIN so the registered last word reaches the L1
+    // before the still-asserted line request can re-engage a new stream.
+    assign o_busy  = (state == S_STREAM) || (state == S_DRAIN) || line_req || i_l2_busy;
     // Pass-through fault only: a line's fault leaves via o_fill_fault, so the
     // beat-completion fault is reported solely on the single-beat path.
     assign o_fault = i_l2_fault && (state == S_IDLE) && !line_req;
@@ -154,9 +177,10 @@ module fill_sequencer #(
     // ══════════════════════════════════════════════════════════
 
     // The line request is held level for the whole transaction — the
-    // atomicity invariant every layer of this interface relies on.
+    // atomicity invariant every layer of this interface relies on. It must
+    // still be asserted through S_DRAIN, when the registered last word lands.
     assert property (@(posedge i_clk) disable iff (i_rst)
-        (state == S_STREAM) |-> (i_re && i_cacheable))
+        (state == S_STREAM || state == S_DRAIN) |-> (i_re && i_cacheable))
         else $error("fill_sequencer: line request released mid-stream");
 
     // Back-to-back beats are impossible with the registered advance: the
