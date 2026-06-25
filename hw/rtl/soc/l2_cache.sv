@@ -464,6 +464,13 @@ module l2_cache
     logic [SET_BITS-1:0]    fill_set;
     logic [WAY_BITS-1:0]    fill_way;
     logic [WORD_BITS:0]     fill_word_idx;
+    // Deferred read-hit PLRU touch: a read hit captures its set + way here and
+    // the plru read-modify-write applies one cycle later, off the combinational
+    // hit / hit_way path. A read hit never changes state, so the apply always
+    // lands back in S_IDLE.
+    logic                   rdhit_touch;
+    logic [SET_BITS-1:0]    rdhit_set;
+    logic [WAY_BITS-1:0]    rdhit_way;
     logic                   fill_in_flight;
 
     // INVAL_ALL walker
@@ -703,6 +710,7 @@ module l2_cache
             fill_way        <= '0;
             fill_word_idx   <= '0;
             fill_in_flight  <= 1'b0;
+            rdhit_touch     <= 1'b0;
             inval_walk_idx  <= '0;
             inval_walk_wrap <= 1'b0;
             // valid BRAMs come up undefined on real HW.  Enter
@@ -717,6 +725,15 @@ module l2_cache
         end else begin
             case (state)
                 S_IDLE: begin
+                    // Apply a read-hit PLRU touch captured last cycle. A read
+                    // hit never changes state, so its deferred touch always
+                    // lands back here; this is a one-cycle pulse. Keeping the
+                    // read-modify-write off the combinational hit path is the
+                    // cut that closes the L2's read-hit timing.
+                    rdhit_touch <= 1'b0;
+                    if (rdhit_touch)
+                        plru[rdhit_set] <= plru_update(plru[rdhit_set], rdhit_way);
+
                     // ── Stage 0: latch a new cached request ──
                     // Only if not already holding stage 1, and the
                     // memory port is idle (so we don't re-latch the
@@ -743,11 +760,13 @@ module l2_cache
                     if (s1_valid) begin
                         s1_valid <= 1'b0;
                         if (s1_re && hit) begin
-                            // Read hit: PLRU update; busy/rdata
-                            // already driven combinationally above.
-                            plru[addr_set(s1_addr)] <=
-                                plru_update(plru[addr_set(s1_addr)],
-                                            hit_way);
+                            // Read hit: capture the PLRU touch (set + way) and
+                            // apply it next cycle (above), off the combinational
+                            // hit / hit_way path. busy/rdata already driven
+                            // combinationally above.
+                            rdhit_touch <= 1'b1;
+                            rdhit_set   <= addr_set(s1_addr);
+                            rdhit_way   <= hit_way;
                         end else if (s1_re && !hit) begin
                             // Read miss → start fill.  Pick victim
                             // via PLRU.  fill_* takes over from s1;
