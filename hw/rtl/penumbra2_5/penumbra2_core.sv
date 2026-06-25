@@ -187,6 +187,9 @@ module penumbra2_core
     logic        btb_update;       // EX trains the BTB this cycle
     logic [31:0] btb_update_pc, btb_update_target;
     logic        btb_update_taken;
+    logic        btb_update_q;     // training registered one cycle off the EX stall cone
+    logic [31:0] btb_update_pc_q, btb_update_target_q;
+    logic        btb_update_taken_q;
 
     // ── Exception entry (WB -> front end via the vector-fetch FSM) ─
     logic        fault_commit;  // a fault is taken this cycle (flush IF1/IF2, launch entry)
@@ -448,12 +451,26 @@ module penumbra2_core
     assign btb_predict     = btb_hit & if1_valid;
     assign fetch_advancing = ~(if2_stall | vecf_active | i_fetch_busy);
 
+    // The EX training strobe folds in the MEM stall (a branch trains only once
+    // it commits), so o_btb_update carries the dcache hit / dmem_busy cone. The
+    // BTB is a prediction hint — training a cycle late never affects correctness
+    // or IPC — so register the strobe and its payload here and write the BTB
+    // from the registered copy, ending that cone at these flops rather than the
+    // BTB write enable.
+    always_ff @(posedge i_clk) begin
+        if (i_rst) btb_update_q <= 1'b0;
+        else       btb_update_q <= btb_update;
+        btb_update_pc_q     <= btb_update_pc;
+        btb_update_target_q <= btb_update_target;
+        btb_update_taken_q  <= btb_update_taken;
+    end
+
     penumbra2_btb u_btb (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_lookup_en(if1_fetch_en), .i_lookup_pc(if1_fetch_addr),
         .o_hit(btb_hit), .o_target(btb_target),
-        .i_update(btb_update), .i_update_pc(btb_update_pc),
-        .i_update_target(btb_update_target), .i_update_taken(btb_update_taken)
+        .i_update(btb_update_q), .i_update_pc(btb_update_pc_q),
+        .i_update_target(btb_update_target_q), .i_update_taken(btb_update_taken_q)
     );
 
     // Instructions retired: a distinct WB instruction commit (o_insn_committed,
