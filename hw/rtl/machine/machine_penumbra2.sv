@@ -366,7 +366,11 @@ module machine_penumbra2
     logic        l2_sys_we;
     logic [31:0] l2_sys_rdata;
 
-    l2_cache u_l2 (
+    // HIT_LATENCY=3: register the L2 read verdict at stage 2 so it does not
+    // cross combinationally into the L1 fill/install and arbiter logic — that
+    // L2->L1 hit chain is the fmax limiter for this machine. Costs one cycle of
+    // read-hit latency and drops back-to-back read throughput (II 2->3).
+    l2_cache #(.HIT_LATENCY(3)) u_l2 (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_addr(l2_addr), .i_wdata(l2_wdata), .i_byte_en(l2_byte_en),
         .i_we(l2_we), .i_re(l2_re), .i_cacheable(l2_cacheable),
