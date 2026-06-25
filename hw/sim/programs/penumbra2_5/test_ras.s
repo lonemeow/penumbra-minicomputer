@@ -1,10 +1,9 @@
-; test_ras.s — gen2.5 return-address-stack (RAS) integration test.
+; test_ras.s — gen2.5 call/return correctness test.
 ;
-; Exercises the RAS end-to-end through ID (call/return detect, push/pop, return
-; redirect) -> spine -> EX (indirect-target verify) -> core redirect — wiring the
-; penumbra2_ras unit test cannot reach. The RAS is a performance hint guarded by
-; EX, so every check is result-based: a prediction never changes the
-; architectural outcome, and a wrong hint must be corrected by EX.
+; Returns (JMP R13) are not predicted; they resolve in EX, which redirects to
+; the real target. This exercises call/return end-to-end through
+; ID -> spine -> EX -> core. Every check is result-based: control flow must land
+; correctly, and EX must redirect to the actual R13 target on every return.
 ;
 ; Cases:
 ;   1. nested calls/returns — main -> f1 -> f2 (leaf), f1 saving its link across

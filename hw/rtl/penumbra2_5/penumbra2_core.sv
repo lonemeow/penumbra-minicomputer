@@ -173,10 +173,6 @@ module penumbra2_core
     logic        branch_taken;  // flush IF1/IF2 + steer PC this cycle
     logic [31:0] branch_target; // resolved branch target
 
-    // ── ID-stage static branch prediction (gen2.5) ───────────────
-    logic        predict_redirect; // speculative: steer fetch to a predicted-taken target
-    logic [31:0] predict_target;
-
     // ── Fetch-time BTB (gen2.5) ──────────────────────────────────
     logic        btb_hit;          // BTB has a target for the slot entering IF2
     logic [31:0] btb_target;       // that target
@@ -268,16 +264,6 @@ module penumbra2_core
             if1_redirect_pc = wrsys_resync_pc;
             if2_flush       = 1'b1;
         end else if (fault_commit) begin
-            if2_flush       = 1'b1;
-        end else if (predict_redirect) begin
-            // Speculative ID-stage BTFN/RAS redirect — the fallback for a branch
-            // the fetch-time BTB missed, plus all RAS-predicted returns. Above
-            // the BTB redirect because its branch is older: this redirect flushes
-            // the younger IF2 slot the BTB would otherwise steer. It bubbles
-            // IF1 + IF2 (the two wrong-path slots behind the ID branch); the
-            // branch itself stays live and is confirmed in EX.
-            if1_redirect    = 1'b1;
-            if1_redirect_pc = predict_target;
             if2_flush       = 1'b1;
         end else if (btb_predict & fetch_advancing) begin
             // gen2.5 fetch-time BTB hit on the slot entering IF2: steer PC to the
@@ -398,7 +384,6 @@ module penumbra2_core
         .o_insn_committed(insn_committed),
         .o_branch_taken(branch_taken), .o_branch_target(branch_target),
         .o_branch_pc(o_branch_pc),
-        .o_predict_redirect(predict_redirect), .o_predict_target(predict_target),
         .o_btb_update(btb_update), .o_btb_update_pc(btb_update_pc),
         .o_btb_update_target(btb_update_target), .o_btb_update_taken(btb_update_taken),
         .o_ex_pc(o_ex_pc), .o_ex_valid(o_ex_valid),

@@ -42,8 +42,7 @@ module penumbra2_ex_stage
     input  logic [31:0]           i_op_b,
     input  logic [31:0]           i_store_data,
     input  logic [3:0]            i_cond,           // branch condition (Format B)
-    input  logic                  i_predicted_taken,// ID's direction guess (BTFN or RAS)
-    input  logic [31:0]           i_predicted_target,// the predicted target (RAS-predicted returns; verified here)
+    input  logic                  i_predicted_taken,// BTB direction tag, verified here
 
     // ── GPR operand forwarding (gen2.5) ──────────────────────────
     // Per-operand ID/EX source tags: the physical entry each operand reads
@@ -325,29 +324,22 @@ module penumbra2_ex_stage
         endcase
     end
 
-    // EX is the branch authority: it confirms or corrects the ID-stage
+    // EX is the branch authority: it confirms or corrects the fetch-time BTB
     // prediction. It redirects only on a *misprediction* — its resolution
-    // disagreeing with the ID guess — so a correctly-predicted branch leaves
-    // the speculative stream already in flight untouched. The fall-through on
-    // a not-taken misprediction is i_next_pc.
+    // disagreeing with the predicted direction — so a correctly-predicted
+    // branch leaves the speculative stream already in flight untouched. The
+    // fall-through on a not-taken misprediction is i_next_pc.
     //
-    // Two ways the guess can be wrong. Direction: EX's taken/not-taken
-    // resolution disagrees with the ID guess — the only failure mode for a
-    // direct branch, since EX recomputes its identical PC+imm target. Target:
-    // an *indirect* prediction (a RAS-predicted return) can match in direction
-    // yet jump elsewhere, so its resolved target must be checked too.
+    // The BTB predicts only direct branches and EX recomputes their identical
+    // PC+imm target, so direction is the only failure mode — no target check is
+    // needed. A direct branch the BTB missed, and every indirect jump / return,
+    // arrives predicted-not-taken (i_predicted_taken=0); if it resolves taken,
+    // direction_wrong fires and EX redirects to the resolved branch_target.
     logic        mispredict;
     logic        direction_wrong;
-    logic        target_wrong;
     logic [31:0] redirect_target;
     assign direction_wrong = branch_redirect ^ i_predicted_taken;
-    // A return (the only RAS-predicted kind) can resolve to a target other than
-    // the RAS guess. Sourcing the jump target as op_a (the forwarded operand) —
-    // not branch_target — keeps this 32-bit compare off the ALU-result path.
-    // i_predicted_taken drops an unpredicted JMP (direction_wrong already covers
-    // it); the OPC_JMP gate keeps a direct branch from ever tripping this.
-    assign target_wrong    = (i_op_class == OPC_JMP) & i_predicted_taken & (op_a != i_predicted_target);
-    assign mispredict      = direction_wrong | target_wrong;
+    assign mispredict      = direction_wrong;
     assign redirect_target = branch_redirect ? branch_target : i_next_pc;
 
     // A taken redirect counts only for a real, non-faulting, un-flushed

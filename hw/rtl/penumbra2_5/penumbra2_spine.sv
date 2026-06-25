@@ -64,10 +64,6 @@ module penumbra2_spine
     output logic [31:0]           o_branch_target,
     output logic [31:0]           o_branch_pc,       // PC of the branch resolving in EX (trace)
 
-    // ── ID-stage static branch prediction (gen2.5) ───────────────
-    output logic                  o_predict_redirect, // steer fetch to the predicted target this cycle
-    output logic [31:0]           o_predict_target,
-
     // ── BTB training (gen2.5: EX resolution → fetch-time BTB write) ──
     output logic                  o_btb_update,
     output logic [31:0]           o_btb_update_pc,
@@ -176,7 +172,6 @@ module penumbra2_spine
     logic [31:0]         idex_op_a, idex_op_b, idex_store_data;
     logic [3:0]          idex_cond;
     logic                idex_predicted_taken;
-    logic [31:0]         idex_predicted_target;
     logic [SB_IDX_W-1:0] idex_phys_src_a, idex_phys_src_b;   // gen2.5: forward source tags
     logic                idex_fwd_a_en, idex_fwd_b_en;       // gen2.5: per-operand forwardable
     logic                id_issue;                           // gen2.5: ID issued a new slot (EX capture seed)
@@ -468,8 +463,7 @@ module penumbra2_spine
         .o_pc(idex_pc), .o_next_pc(idex_next_pc),
         .o_valid(idex_valid), .o_fault_pending(idex_fault_pending),
         .o_fault_vec(idex_fault_vec), .o_fault_status(idex_fault_status),
-        .o_predict_redirect(o_predict_redirect), .o_predict_target(o_predict_target),
-        .o_predicted_taken(idex_predicted_taken), .o_predicted_target(idex_predicted_target),
+        .o_predicted_taken(idex_predicted_taken),
         .o_phys_src_a(idex_phys_src_a), .o_fwd_a_en(idex_fwd_a_en),
         .o_phys_src_b(idex_phys_src_b), .o_fwd_b_en(idex_fwd_b_en),
         .o_issue(id_issue)
@@ -507,7 +501,7 @@ module penumbra2_spine
         .i_op_class(idex_op_class), .i_alu_op(idex_alu_op), .i_divmul_op(idex_divmul_op),
         .i_op_a(idex_op_a), .i_op_b(idex_op_b), .i_store_data(idex_store_data),
         .i_cond(idex_cond),
-        .i_predicted_taken(idex_predicted_taken), .i_predicted_target(idex_predicted_target),
+        .i_predicted_taken(idex_predicted_taken),
         .i_phys_src_a(idex_phys_src_a), .i_fwd_a_en(idex_fwd_a_en),
         .i_phys_src_b(idex_phys_src_b), .i_fwd_b_en(idex_fwd_b_en),
         .i_first_cycle(idex_first_cycle),

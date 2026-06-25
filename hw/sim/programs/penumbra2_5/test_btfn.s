@@ -1,11 +1,11 @@
-; test_btfn.s — gen2.5 BTFN branch-prediction integration test.
+; test_btfn.s — gen2.5 direct-branch direction-correctness test.
 ;
-; Exercises the ID-stage static predictor end-to-end (ID predict + redirect,
-; the predicted-taken tag, EX confirm/correct) through the real
-; ID->spine->EX->core path — catching wiring errors the EX unit test cannot,
-; since that drives the stage in isolation. Architectural results are identical
-; with or without prediction, so every check below is result-based: a
-; prediction/recovery bug shows up as a wrong value or a retired poison BREAK.
+; Direct branches are predicted at fetch by the BTB and confirmed or corrected
+; in EX. This exercises that path end-to-end through ID->spine->EX->core —
+; catching wiring errors the EX unit test cannot, since that drives the stage
+; in isolation. Architectural results are identical with or without prediction,
+; so every check below is result-based: a recovery bug shows up as a wrong
+; value or a retired poison BREAK.
 ;
 ; Cases:
 ;   1. backward loop  — predicted taken ×4 (correct), then a predicted-taken/
