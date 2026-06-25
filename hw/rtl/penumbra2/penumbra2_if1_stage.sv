@@ -13,8 +13,9 @@
 // i_redirect with the target on i_redirect_pc; IF1 is the deepest of the three
 // wrong-path slots a taken branch flushes, so the redirect both (a) steers PC
 // to the target and (b) bubbles the IF1/IF2 register to discard the in-flight
-// fetch. The redirect overrides back-pressure: even if IF2 is holding us, the
-// target must be steered in so the next fetch reads it.
+// fetch. The PC steer overrides back-pressure — the target is captured even
+// if IF2 is holding us — while its launch follows the normal hold gate: the
+// read fires the cycle the fetch is no longer held, from the steered PC.
 //
 // Exception entry splits those two effects across two cycles. At the fault
 // commit, i_flush bubbles the in-flight (wrong-path) fetch *without* steering
@@ -93,15 +94,19 @@ module penumbra2_if1_stage #(
     // advances only when the fetch does, so under stall the registered output
     // freezes in lockstep with the IF1/IF2 register below — without this the
     // in-flight read would land against the held PC and drop an instruction.
-    // A redirect must let the read advance even under back-pressure: the PC is
-    // being steered to the target this edge, and the next fetch has to read it.
-    // i_mem_busy outranks even the redirect: the front port is mid-transaction
-    // (a line fill that must run to completion), so no lookup may launch. The
-    // redirect still steers PC below — the target's launch is simply held
-    // until the busy drop, when IF2's stall (which tracks busy) releases and
-    // the launch fires from the steered PC.
+    //
+    // The launch gate is purely ~hold: no new lookup while IF2 back-pressures
+    // (i_stall_in) or the front port is mid-transaction (i_mem_busy) — both
+    // fold into hold, so this enable never reaches the front port mid-fill. A
+    // redirect does not force its own launch; it only steers PC (below). The
+    // redirect cycle's read would be the wrong-path word anyway — the IF1/IF2
+    // slot is bubbled below — so suppressing it under hold loses nothing: the
+    // target launches next cycle from the steered PC, once the fetch is unheld.
+    // Keeping every redirect source out of this enable holds the fetch address
+    // off the back end's stall cone — the timing reason it is gated by ~hold
+    // alone, never by the redirect.
     assign o_fetch_addr = pc;
-    assign o_fetch_en   = (redirect | ~hold) & ~i_mem_busy;
+    assign o_fetch_en   = ~hold;
 
     // ── PC register ──────────────────────────────────────────────
     // Priority: a redirect (branch / vector-fetch / ERET) steers PC; otherwise
@@ -160,5 +165,12 @@ module penumbra2_if1_stage #(
     assert property (@(posedge i_clk) disable iff (i_rst)
         (i_fetch_stop && !hold) |=> !o_valid)
         else $error("penumbra2_if1_stage: advancing fetch-stop did not bubble the IF1/IF2 slot");
+    // The launch gate folds i_mem_busy into hold, so no lookup ever launches
+    // while the front port is mid-transaction — the "no new launch while busy"
+    // obligation IF2's skid and fill logic both rely on. Guards a future
+    // refactor that redefines hold or the enable and reopens that window.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        !(o_fetch_en && i_mem_busy))
+        else $error("penumbra2_if1_stage: launch asserted while front port busy");
 
 endmodule
