@@ -125,15 +125,20 @@ module penumbra2_if2_stage
     // consumed. A faulted slot raises no request: its launch happened (the
     // VIPT overlap) but nothing may complete — or engage a fill — on its
     // behalf; alignment in particular is invisible to the cache's own
-    // i_fault gate, so the suppression has to live here. The ~i_flush term
-    // skips the fill a wrong-path fetch would engage on a coincident
-    // flush + miss resolve; a flush landing mid-fill drops the request and
-    // the engaged fill completes into the void on the cache's own state —
-    // the one consumer obligation that always survives the kill is "no new
-    // launch while busy", and IF1's gate holds that.
+    // i_fault gate, so the suppression has to live here.
+    //
+    // The request does not gate on i_flush. A flush coincident with a miss
+    // resolve therefore lets a wrong-path fetch engage a fill; that fill
+    // completes into the void on the cache's own state — the withdrawn slot
+    // consumes nothing, and the skid only captures a requested word. The one
+    // consumer obligation that survives the kill, "no new launch while busy",
+    // is held by IF1's gate, so the corrected re-fetch serializes behind the
+    // wasted fill rather than racing it. Keeping i_flush off this request cuts
+    // the flush-to-fetch_busy edge out of the front-end redirect cone; the
+    // cost is a possible wasted fill, never a correctness hazard.
     logic        skid_full, skid_fault;
     logic [31:0] skid_ir;
-    assign o_fetch_re = i_valid & ~early_fault & ~skid_full & ~i_flush;
+    assign o_fetch_re = i_valid & ~early_fault & ~skid_full;
 
     // The slot can leave this cycle: its word is available (skid, or the
     // port completing — for a hit, the resolve cycle itself), or it carries
@@ -145,7 +150,8 @@ module penumbra2_if2_stage
     // The requested word completes faulted (i_mem_fault on the busy-drop), or
     // a faulted completion was parked in the skid. Either way the slot leaves
     // carrying FAULT_BUS instead of its (garbage) word; a coincident flush
-    // drops the request, so a wrong-path fetch never takes the fault.
+    // forces advance=0 (below), so the composed fault is never written into
+    // the IF2/ID register — a wrong-path fetch never takes it.
     logic        bus_fault_deliver, out_fault_pending;
     logic [31:0] out_fault_status;
     assign bus_fault_deliver = skid_full ? skid_fault
