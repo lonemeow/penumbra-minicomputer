@@ -61,6 +61,39 @@ gen1 note: `sdram_cdc` ships in the gen1 ULX3S bitstream. The handshake
 path is entirely on the 25 MHz sys clock (not the fmax-critical fetch/TLB
 cone), and gen1 was confirmed to synthesize and run with the change.
 
+## Hardware: SDRAM adapter may deadlock on a non-back-to-back read stream (suspected)
+
+Found while probing the gen2 path toward 50 MHz. A single-outstanding
+register slice inserted on the L2 <-> external-bus boundary (in
+`machine_penumbra2`, to cut the combinational `L2-addr -> bus-decode ->
+busy -> L2` round-trip that limits gen2.5) turns the L2 line fill into four
+*gapped* single reads — `re` drops between words, +2 cycles each. With that
+slice in place execution ran ~174 instructions and then wedged:
+`test_l2_ifetch` hung at cycle 1448 ("no program end within 2000000
+cycles"). Single bypassed reads (boot, MMU off) and the normal
+back-to-back fill both work fine — only the gapped-mid-fill stream
+deadlocked.
+
+Suspected cause in `sdram_bus_adapter.sv`'s speculative-prefetch FSM. Its
+own header says a mispredict (next read != the speculated `addr+4`) is
+handled by abandoning the in-flight spec and discarding its response — so a
+*deadlock* on a gap is a robustness bug, not an inherent limit. Likely
+culprits: the "in-flight hit, stall in BEGIN" case never getting its
+consume when `re` goes low mid-spec, or the 1-bit tag FIFO desyncing when a
+spec response is orphaned by the gap. This is the same family as the
+RESOLVED CDC handshake-skew bug above (speculation interacting badly with a
+changed/interrupted request stream), so the spec state machine deserves a
+hard look for any remaining "assumes the master streams back-to-back"
+assumption — the master is not obligated to.
+
+Not currently triggered: the live design never gaps mid-fill (the L2 holds
+`re` and advances the address word-to-word). But it blocks registering the
+L2 <-> bus boundary, which is the lever for pushing the gen2 memory system
+past its ~36 MHz floor toward 50. The *correct* register there is a
+pipelined multi-outstanding L2 bus master (one that keeps the back-to-back
+stream so the prefetch still fires), not the throwaway single-outstanding
+slice that surfaced this. File: `hw/rtl/io/sdram/sdram_bus_adapter.sv`.
+
 ## Kernel: block-device reads still go single-block
 
 `pmci` handles CMD18/CMD25 multi-block natively (a per-block
