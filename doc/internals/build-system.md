@@ -221,3 +221,23 @@ variant directory prepended, so the forks shadow their base namesakes by
 search order. The Makefile carries one registry table (`FPGA_TOPS`) of
 every valid artifact — sub-variant artifacts included — so an invalid
 tuple is a hard error, not a silently empty source list.
+
+### Pinning a default placement seed
+
+A board/core/variant combination that only closes timing on a particular
+nextpnr placement seed can pin it as `DEFAULT_SEED_<top>` next to the other
+per-top metadata (keyed by the artifact `TOP` name, like `FPGA_ROM_TOPS`):
+
+```make
+DEFAULT_SEED_ulx3s_penumbra2_top := <good seed>
+```
+
+A plain `make fpga BOARD=… CORE=…` then reproduces that placement with no
+one having to remember the number, and the resolved seed is echoed at the
+start of place-and-route. The effective seed is `NEXTPNR_SEED ?=
+$(DEFAULT_SEED_$(TOP))`, so an explicit `NEXTPNR_SEED=<n>` on the command
+line or in the environment still wins, `NEXTPNR_SEED=` forces a random
+placement, and a top with no pinned default behaves as before (no `--seed`
+passed). Keying by `TOP` lets a microarch variant pin a seed distinct from
+its base. (Seed is still outside the build dependency graph — a sweep that
+changes only the seed needs `rm build/<top>.config` first.)

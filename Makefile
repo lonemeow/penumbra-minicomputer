@@ -775,6 +775,20 @@ FPGA_SRC_ulx3s_penumbra2_top = $(SRC_COMMON) $(SRC_CORE) \
 FPGA_ROM_TOPS   = ulx3s_penumbra1_top ulx3s_penumbra2_top ulx3s_penumbra2_5_top
 FPGA_UCODE_TOPS = ulx3s_penumbra1_top
 
+# Per-top default nextpnr placement seed. Some board/core[/variant]
+# combinations only close timing on a particular seed; pin it here so a
+# plain `make fpga BOARD=… CORE=…` reproduces the good placement without
+# anyone having to remember the number. Keyed by the artifact TOP name
+# (like FPGA_ROM_TOPS), so a microarch variant can pin its own seed
+# distinct from its base. Resolution (NEXTPNR_SEED ?= …, below the TOP
+# derivation): an explicit NEXTPNR_SEED on the command line or environment
+# always wins; `NEXTPNR_SEED=` forces a random placement; a top with no
+# entry here behaves as before (no --seed passed). gen1 needs none — it
+# runs at a lower clock where fmax is not the binding constraint.
+DEFAULT_SEED_ulx3s_penumbra2_top   := 7
+DEFAULT_SEED_ulx3s_penumbra2_5_top := 2
+
+
 # BOARD/CORE porcelain → TOP derivation (CORE defaults to penumbra2
 # in the test-suite section above).
 ifneq ($(strip $(BOARD)),)
@@ -787,6 +801,11 @@ endif
 
 # Escape hatch (TOP=<module> directly): the artifact is its own module.
 TOP_MODULE := $(if $(strip $(TOP_MODULE)),$(TOP_MODULE),$(TOP))
+
+# Effective PnR seed: an explicit NEXTPNR_SEED (command line / environment)
+# wins via ?=; otherwise fall back to this top's pinned default, if any
+# (empty default ⇒ no --seed, the historical behavior).
+NEXTPNR_SEED ?= $(DEFAULT_SEED_$(TOP))
 
 ifneq ($(filter fpga flash timing,$(MAKECMDGOALS)),)
 ifeq ($(strip $(TOP)),)
@@ -890,6 +909,7 @@ $(BUILD_DIR)/$(TOP).json: $(FPGA_SRC) $(PHASE_STAMP) \
 	$(FPGA_TOOLS)/yosys -p "read_verilog $(BUILD_DIR)/$(TOP)_sv2v.v; synth_ecp5 -top $(TOP_MODULE) -json $@"
 
 $(BUILD_DIR)/$(TOP).config: $(BUILD_DIR)/$(TOP).json $(LPF) $(LPF_DESIGN) $(PREPACK)
+	@echo "[fpga] PnR seed: $(if $(strip $(NEXTPNR_SEED)),$(NEXTPNR_SEED)$(if $(filter $(NEXTPNR_SEED),$(DEFAULT_SEED_$(TOP))), (pinned default for $(TOP))),random — no --seed)"
 	$(FPGA_TOOLS)/nextpnr-ecp5 --85k --package CABGA381 --speed 6 \
 		--timing-allow-fail --lpf $(LPF) \
 		$(if $(LPF_DESIGN),--lpf $(LPF_DESIGN)) \
