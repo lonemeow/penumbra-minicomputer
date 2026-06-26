@@ -2,6 +2,25 @@
 
 > **Applies to:** Penumbra/2 · pipelined core.
 
+> **⚠️ ABANDONED — superseded by gen3.**
+>
+> Penumbra/2 and /2.5 are abandoned. gen2 can *just barely* reach
+> **37.5 MHz** on the ULX3S ECP5-85F — the only clock step the PLL allows
+> above its 25 MHz starting point — and only after the fmax-closure round
+> stripped it back (L1 to 2-way, the L2 read verdict and the line-fill
+> stream registered, the gen2.5 ID-stage predictor removed). That leaves
+> **no headroom** for the remaining gen2.5 optimizations (the store buffer,
+> a wider L1↔L2 datapath, return prediction) or for any further growth: the
+> in-order pure-stall memory-hit cone is a fundamental architectural floor,
+> not a placement problem. Rather than keep paying into a design that cannot
+> grow, the project **starts gen3 from a fresh design** to fix those
+> limitations at the root.
+>
+> This document and the rest of `doc/internals/penumbra2/` are retained as
+> the **historical record** of the gen2/2.5 design — what was built, why,
+> and where it topped out. Nothing here is live or planned work; future-
+> tense framing below describes the design as it was being developed.
+
 **Penumbra/2** is the second-generation Penumbra CPU. It implements
 the same ISA as Penumbra/1, runs the same NetBSD kernel and
 userland, and shares almost all of the surrounding system (bus,
@@ -30,8 +49,8 @@ answer.
 |----------|-------------------|-------------------|
 | /1 | Classic discrete-logic minicomputer / early-microprocessor era (~1970s through early 1980s) | Microcoded control driving a single-cycle datapath, designed to be feasible in discrete 74xx TTL |
 | **/2 gen2** (this design) | **Simple pipelined RISC era (late 1980s)** — MIPS R2000/R3000, early SPARC, Berkeley/Stanford RISC | **Classic in-order pipeline, hardwired control, BRAM-backed caches, flag-only forwarding, no prediction** |
-| /2.5 (next planned phase) | Early-1990s pipelined-RISC polish — MIPS R3000 → R4000, SPARC v8 → v9 | Result forwarding, regfile write-through, branch prediction |
-| /3 (speculative future) | Mid-to-late-1990s superscalar / out-of-order — Pentium Pro, MIPS R10000, Alpha 21164/21264 | Register renaming, multi-issue, reorder buffer, speculative execution |
+| /2.5 (built, then abandoned) | Early-1990s pipelined-RISC polish — MIPS R3000 → R4000, SPARC v8 → v9 | Result forwarding, regfile write-through, branch prediction |
+| /3 (the fresh-start successor) | Same in-order pipelined-RISC era as /2, re-architected for timing | A clean redo of the gen2 pipeline that clears the fmax floor (37.5–50 MHz) with headroom to add back forwarding, prediction, and a store buffer — *not* superscalar or out-of-order |
 
 Penumbra/2 is the project's next major **era transition**, not just
 an incremental performance upgrade. Building it forces confrontation
@@ -198,6 +217,12 @@ back-pressure cascade holds; downstream drains naturally.
 
 ## Performance targets
 
+*The original target set, retained for the record. Outcome: gen2 reached
+37.5 MHz but with no margin left — NZCV/operand forwarding and the
+fetch-time BTB landed, while the store buffer and the larger I-cache could
+not fit and there was no room to grow. That ceiling is why gen2/2.5 was
+abandoned (see the banner at the top).*
+
 | Metric | gen2 target | gen2 realistic | gen2.5 target | Reference |
 |--------|-----------|---------------|---------------|-----------|
 | Fmax | ≥ gen1's clock | ~2× gen1 (cache no longer in critical path) | ≥2× gen1 | gen1's ceiling is the single-cycle cone |
@@ -213,6 +238,11 @@ roughly even with gen1. The win comes in gen2.5 once forwarding
 lands and CPI drops toward 1.2.
 
 ## gen2 / gen2.5 / future roadmap
+
+*Recorded as planned during development; gen2/2.5 is abandoned (see the
+banner at the top). What actually landed, and where it stopped, is in
+[doc/TODO.md](../../TODO.md) — the gen2.5 status entries and the
+fmax-closure round.*
 
 **gen2 — correctness first.** Ship a working 6-stage pipelined
 Penumbra/2 that boots the same NetBSD kernel as Penumbra/1. No GPR/SPR
@@ -234,9 +264,17 @@ proven correct, add the textbook performance features:
   stall cycle).
 - **SPR scoreboard forwarding** (eliminates RAW stalls between
   WRSPR and immediately-following RDSPR).
-- **Static or bimodal branch prediction** in IF1 (reduces
-  taken-branch flush from 3 bubbles to 0 on correctly-predicted
-  branches, ~80-90% of taken branches in typical code).
+- **A fetch-time branch target buffer (BTB)** for direct branches
+  (B/Bcc/BL): a PC-indexed tagged target RAM, read in parallel with
+  the I-cache, steers fetch to the cached target — cutting a
+  correctly-predicted taken direct branch's flush from 3 bubbles to 0.
+  Indirect jumps and returns are not BTB-predicted; they resolve in
+  EX, which remains the branch authority (a stale or aliased
+  prediction costs at most an extra flush, never a wrong result). (An
+  earlier ID-stage predictor — backward-taken/forward-not-taken plus a
+  return stack — was built and measured, then removed when its redirect
+  back into fetch became the fmax limiter; see
+  [Decision 5](./design-decisions.md#5-branch-resolution-policy).)
 - **A cacheable-only store buffer** that decouples a store's commit
   from its write-through to L2, so a store no longer stalls the
   pipeline for the L2 write latency. Uncacheable stores drain the
@@ -255,18 +293,25 @@ that connects it. How this maps onto the source tree — gen2's cells
 shared unchanged, only the integration chain forked — is covered in
 [gen2.5 organization](#gen25-organization-composition) below.
 
-**gen3 (speculative — not yet planned).** Possibilities include:
+**gen3 (now the active successor).** gen3 is a fresh redo of the gen2
+*in-order pipeline* — **not** a superscalar or out-of-order machine —
+re-architected to clear the timing floor that capped gen2 (targeting
+37.5–50 MHz) with the headroom gen2 lacked to add back forwarding,
+prediction, and a store buffer. gen2 was abandoned precisely because that
+floor cannot be reached by extending its pipeline. Directions gen3 carries
+forward as motivation:
 
+- A memory-hit path that is not a cross-module combinational cone — the
+  fundamental limitation that capped gen2.
 - Larger / more associative L1 caches.
 - Split MEM (MEM1/MEM2) if memcpy/memset throughput becomes the
   binding bottleneck.
 - L2 cache protocol upgrade to line-granular transfers (already
   noted as gen2's natural follow-on).
-- Superscalar issue (probably not — single-issue keeps the
-  design within the project's scope).
-- Out-of-order completion (probably never — too complex for the
-  intended scale).
 - Hardware FPU (currently software-emulated, same as gen1).
+
+Superscalar issue and out-of-order completion stay out of scope — gen3
+keeps single-issue in-order, same as gen2.
 
 ## gen2.5 organization: composition
 
@@ -287,9 +332,9 @@ logic and stay single-source — a fix lands once and serves both
 generations. **The integration chain is forked**: the files that wire
 those cells into a pipeline — machine, core, spine, and the ID/EX
 stage assemblies — are where a microarchitecture's identity lives and
-where gen2.5 differs (a predictor wired in, a prediction tag riding the
-ID/EX register, EX resolving on misprediction). gen2.5 gets its own
-copies; gen2's stay byte-frozen. New gen2.5-only behavior lands as new
+where gen2.5 differs (a predictor wired into the front end, its
+predicted-taken tag carried down the pipeline to EX, EX resolving on
+misprediction). gen2.5 gets its own copies; gen2's stay byte-frozen. New gen2.5-only behavior lands as new
 leaf modules — a predictor, a forwarding network, a store buffer —
 that the forked integration files instantiate.
 

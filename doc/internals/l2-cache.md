@@ -25,7 +25,9 @@ contract the L2's front-side and back-side ports both honor, in the
 What's wired up today:
 
 - `hw/rtl/soc/l2_cache.sv` — the real module.  64 KiB, 4-way,
-  tree-PLRU, 2-cycle hit pipeline.  Write policy started as
+  tree-PLRU, `HIT_LATENCY`-cycle hit pipeline (2 by default; the gen2
+  machine instantiates it at 3 — see the `HIT_LATENCY` note below).
+  Write policy started as
   **write-invalidate-on-hit** (phase 1) and is being upgraded to
   **write-through, write-no-allocate** (phase 1.5) — under WT-WnA
   a write hit updates the cached line's data via byte-en and
@@ -198,7 +200,7 @@ inform tuning.
 | `LINE_BYTES` | `16` | Equal to L1 line.  Avoids sub-line tracking. |
 | `NUM_WAYS` | `4` | NetBSD ⇒ multitasking ⇒ conflict-miss pressure. |
 | `NUM_SETS` | `1024` (derived) | `CACHE_BYTES / (LINE_BYTES * NUM_WAYS)` |
-| `HIT_LATENCY` | `2` | BRAM read (1) + tag compare/way mux (1).  Parameter-stub; reduce only after fmax study. |
+| `HIT_LATENCY` | `2`; gen2 machine sets `3` | `2` = BRAM read (1) + tag compare/way mux (1).  The gen2 machine sets `3`: an extra output flop registers the read verdict before it crosses into the L1 fill / I-D arbiter cone (the fmax limiter there).  Costs +1 read-hit cycle and serialises back-to-back reads — see the pipeline note below. |
 | `REPLACEMENT` | `tree-PLRU` | 3 bits/set.  Miss rate is within noise of true LRU at 4-way (per `l2_cache.sv:24-26`), and the update logic is 3 bit flips per access vs LRU's 6 pairwise relations.  True LRU was the design alternative; deferred because routing cost wasn't worth the miss-rate noise. |
 | `WRITE_POLICY` | `write-through, write-no-allocate` | Phase 1.5 policy: write hits update the cached line via byte-en and pass the store downstream; write misses pass-through unchanged.  `INFO` advertises WT/WnA (which was already the software-visible policy under the phase-1 write-invalidate-on-hit predecessor).  Write-back / write-allocate is the Phase 2 plan — see the "Write Policy" section below. |
 
@@ -224,7 +226,7 @@ Total ≈ **35 EBR / 208** on ECP5-85F, leaving ample BRAM for the rest
 of the system.  At 16 KiB total this drops to ~10 EBR and at 8 KiB
 to ~6 EBR — a useful operating point for the smaller ECP5-25F variant.
 
-### Pipeline (default `HIT_LATENCY=2`)
+### Pipeline (`HIT_LATENCY=2`, the default)
 
 ```
 Cycle 0: address in.  BRAM tag read + BRAM data read launched.
@@ -232,9 +234,28 @@ Cycle 1: tag compare.  Way mux.  o_rdata + o_busy=0 on hit.
          On miss: o_busy held high, allocate state engaged.
 ```
 
-If fmax study later shows the tag-compare + way-mux + drive-out path
-is critical, `HIT_LATENCY=3` adds an output flop without changing the
-contract — `cpu_core` already tolerates multi-cycle misses.
+### Pipeline (`HIT_LATENCY=3`, the gen2 machine)
+
+```
+Cycle 0: address in.  BRAM tag read + BRAM data read launched.
+Cycle 1: tag compare.  Way mux.  Hit verdict + data registered.
+         On miss: o_busy held high, allocate state engaged (stage 1).
+Cycle 2: registered o_rdata + o_busy=0 on hit.
+```
+
+The gen2 machine sets `HIT_LATENCY=3`.  The combinational stage-1 hit
+verdict (`tag_out → way_hit → o_busy/o_rdata`) crossed straight into
+the L1 fill install and the I/D arbiter, forming a cross-module path
+(`L2 → fill_sequencer → arbiter → L1`) that was the fmax limiter for
+the gen2 family; an output flop registers that verdict before it leaves
+the L2, breaking the path.  The contract is unchanged — the CPU already
+tolerates multi-cycle reads — at a cost of +1 read-hit cycle and
+back-to-back reads serialising (a fill-throughput cost on L1 misses; the
+miss FSM still runs combinationally off stage 1, so the fill path itself
+takes no extra latency).  Recovering the throughput is the L2
+read-pipeline decouple noted in
+[the gen2 memory interface](penumbra2/memory-interface.md#deferred-fill-speed-directions).
+gen1's L2 instances keep `HIT_LATENCY=2` — their limiter is elsewhere.
 
 ### Replacement: 4-way tree-PLRU
 

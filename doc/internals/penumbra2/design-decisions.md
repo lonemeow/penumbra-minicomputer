@@ -2,6 +2,14 @@
 
 > **Applies to:** Penumbra/2 · pipelined core.
 
+> **⚠️ ABANDONED — superseded by gen3.** gen2/2.5 reached only 37.5 MHz with
+> no headroom for the remaining gen2.5 features; the in-order pure-stall
+> memory-hit cone is a fundamental floor, not a placement problem. The line
+> was abandoned and gen3 is a fresh redo of the *same* in-order pipeline
+> aimed at clearing that floor (37.5–50 MHz with room to add the features
+> back). These decisions are retained as the historical record of the
+> gen2/2.5 design. See [the gen2 overview](./overview.md) for the full note.
+
 This document records the architectural and project-level decisions
 made during the design of **Penumbra/2** (gen2) — the second-generation
 Penumbra CPU. Each entry captures the *context* that prompted the
@@ -464,10 +472,21 @@ binding CPI factor for gen2.
 - Untaken-branch cost: 0 cycles (speculation matched reality).
 - JMP Rs and RTI are also EX-resolved with flush; same 2-bubble cost.
 - No prediction table, no BTB, no branch history register in gen2.
-- Gen2.5 will likely add a small static or bimodal predictor in IF to
-  speculatively fetch the target on backward branches; the flush
-  infrastructure built for gen2 is reused as the "mispredict recovery"
-  path.
+- Gen2.5 adds a **fetch-time branch target buffer (BTB)**: a PC-indexed
+  tagged target RAM, read in parallel with the I-cache, that steers
+  fetch to the cached target on a correctly-predicted taken direct
+  branch (`B`/`Bcc`/`BL`), cutting its flush to zero bubbles. The flush
+  infrastructure built for gen2 is reused as the mispredict-recovery
+  path — EX stays the branch authority, so a stale or aliased BTB entry
+  costs at most an extra flush, never a wrong result, and the table
+  needs no checkpoint/restore. Indirect jumps and returns are not
+  BTB-predicted and resolve in EX. (An earlier ID-stage predictor —
+  backward-taken/forward-not-taken plus a return stack — was built and
+  measured, then removed: its redirect reached back from ID into the
+  fetch path and became the fmax limiter, and registering it to break
+  that path would have fired it the same cycle EX already resolves the
+  branch, saving zero cycles. The gen2.5 landing history and
+  per-feature measurements live in [doc/TODO.md](../../TODO.md).)
 
 **Alternatives considered.** B-format early-resolve in ID (rejected
 for gen2: requires a 1-bit flag-forwarding path from EX, which violates

@@ -82,17 +82,24 @@ subdirectory owns its realization.
 *   **[Microcode Syntax](./internals/penumbra1/uasm-syntax.md)** — Writing microcode assembly for `uasm.py`.
 *   **[L1 Cache](./internals/penumbra1/l1-cache.md)** — The gen1 distributed-RAM VIPT L1: geometry, write policy, and the defining zero-cycle hit.
 
-### Penumbra/2 (gen2 — in planning)
+### Penumbra/2 (gen2 / gen2.5 — abandoned; superseded by gen3)
 
-The project's next major **CPU design era transition** — from
+> **⚠️ Abandoned.** gen2/2.5 was built and boots NetBSD, but tops out at
+> 37.5 MHz with no headroom for the remaining gen2.5 features — a
+> fundamental in-order pure-stall floor. The docs below are retained as the
+> **historical record**; gen3 is a fresh redo of the same in-order pipeline
+> to clear that floor. See the abandonment note in
+> [the gen2 overview](./internals/penumbra2/overview.md).
+
+The project's first major **CPU design era transition** — from
 Penumbra/1's classic discrete-logic / microcoded minicomputer style
 (~1970s-early-80s era) to the **simple pipelined RISC era of the late
 1980s** (MIPS R2000/R3000, early SPARC). Same ISA as Penumbra/1, same
 NetBSD kernel boots on both, almost all of the surrounding system (bus,
 peripherals, MMU, L2, SDRAM) shared unchanged. The CPU core forks:
-hardwired control, 6-stage pipeline, BRAM-backed caches. gen2 targets
-correctness over performance; gen2.5 will add the early-1990s polish
-(forwarding, branch prediction).
+hardwired control, 6-stage pipeline, BRAM-backed caches. gen2 targeted
+correctness over performance; gen2.5 added the early-1990s polish
+(forwarding, fetch-time branch prediction).
 
 *   **[Penumbra/2 Overview](./internals/penumbra2/overview.md)** — Start here. Goals, architecture summary, gen2 / gen2.5 / future roadmap, reading guide.
 *   **[Penumbra/2 Design Decisions](./internals/penumbra2/design-decisions.md)** — The 11 architectural decisions, each with full rationale, alternatives considered, and consequences.

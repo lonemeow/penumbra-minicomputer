@@ -454,8 +454,10 @@ leaking into `flush` — and the corrected profile re-ranks the levers.
   ~2.4pp from the predictors (and ~1.7M fewer wrong-path I-fetches), which is the
   entire gen2→gen2.5 gain (DMIPS 7.11 → 7.29, +2.5%).
 - **NetBSD pbench profile (HW, 25 MHz, corrected counters) — the real-workload
-  re-measurement, now in.** Kernel-path stall % of cycles, current gen2.5 core
-  (BTFN+RAS in):
+  re-measurement, now in.** Kernel-path stall % of cycles, gen2.5 core at the
+  BTFN+RAS milestone (both predictors later removed in
+  [the fmax-closure round](#gen25-status-fmax-closure-round-375-mhz); the
+  surviving predictor is the fetch-time BTB):
 
   | bench         | CPI  | hazard | ifetch | store | flush | load | funit |
   |---------------|------|--------|--------|-------|-------|------|-------|
@@ -572,6 +574,14 @@ deferred far behind the BTFN first cut.**
 
 ### gen2.5 status: BTFN landed (first feature)
 
+> **Removed in the fmax-closure round**
+> ([gen2.5 status: fmax-closure round](#gen25-status-fmax-closure-round-375-mhz)):
+> the ID-stage BTFN predictor's redirect reached back into the fetch path and
+> became the fmax limiter, and registering it bought zero cycles (it would fire
+> the same cycle EX already resolves the branch). It was removed; the
+> fetch-time BTB is the surviving direct-branch predictor. The measurements
+> below are retained as the record of what ID-stage BTFN bought.
+
 ID-stage BTFN branch prediction is implemented and committed — the
 `penumbra2_predict` leaf, the integration-fork wiring (ID-stage redirect
 + predicted-taken tag; core/spine routing; EX resolve-on-mispredict), and
@@ -616,6 +626,12 @@ renamed in `dc5dd5c` (to `o_local_stall` / `o_stall_{load,store}` /
 per-testbench reconciliation.
 
 ### gen2.5 status: RAS landed (second feature)
+
+> **Removed in the fmax-closure round**
+> ([gen2.5 status: fmax-closure round](#gen25-status-fmax-closure-round-375-mhz)):
+> the RAS rode the same ID-stage redirect that BTFN did, so it left with BTFN.
+> Returns now take the full EX-resolve penalty. The measurements below are
+> retained as the record of what ID-stage return prediction bought.
 
 A **return-address stack** is implemented and committed — the
 `penumbra2_ras` leaf (circular, overwrite-oldest on overflow, DEPTH=8), the
@@ -750,18 +766,105 @@ write-through on each backend) and divmul-aux (Rdh) forwarding keep the
 conservative stall; cost is negligible (SPR-scratch is the TLB-miss spill path,
 divmul is ~33 cycles).
 
-**Re-ranked remaining work (post-forwarding, HW-measured):**
+**Where the work stood when gen2/2.5 was abandoned (post-forwarding,
+HW-measured).** These were the next levers; none will be built — gen2/2.5 is
+abandoned (see the fmax-closure round below) and gen3 picks up the same
+problems from a fresh design. Retained as the record of where the profile
+pointed:
 
-1. **Cacheable store buffer** — with hazard crushed, **store is now the #1 stall**
+1. **Cacheable store buffer** — with hazard crushed, store was the #1 stall
    (Dhrystone 26.1%, ~37M cycles — essentially unchanged in absolute terms, just
    the largest share of a smaller pie; getpid ~22%). The write-through round-trip
-   to L2 is the lever. Build next on store-heavy / syscall-light workloads.
+   to L2 was the lever — but it could not fit in gen2's remaining fmax margin.
 2. **I-cache / L1<->L2 path** — `ifetch` is ~0 on Dhrystone but #1-2 on the
-   fork/exec/pipe paths (16-20%), untouched by any landed feature. The levers are
-   the overview's 8-16 KB I-cache target and/or the full-line L1<->L2 transfer
-   reshape (which also cuts the load/store miss tails). Build next on
-   fork/exec-heavy workloads.
-   Order the two by which real workloads matter most.
+   fork/exec/pipe paths (16-20%), untouched by any landed feature. The levers
+   were the overview's 8-16 KB I-cache target and/or the full-line L1<->L2
+   transfer reshape (which also cuts the load/store miss tails).
+
+### gen2.5 status: fmax-closure round (37.5 MHz)
+
+A timing-closure round took the gen2 *family* to a **37.5 MHz** operating
+point (up from 25 MHz). The ULX3S top's `CPU_HZ` makes the 25 → 37.5 MHz
+flip these changes were buying; the flip itself lands once per-board
+placement seeds are pinned. The limiter the round attacked was the floor
+recorded above — the D-side memory-hit cone plus the cross-module
+`L2 → fill_sequencer → arbiter → L1` chain — which a same-cycle
+combinational verdict spread across the die; floorplanning cannot fix a
+cross-module combinational path, so the fix is to register the boundaries
+and shorten the cones.
+
+**Shared-machine changes (gen2 and gen2.5 both).**
+
+- **Fetch enable off the redirect cone.** `o_fetch_en` (→ MMU `i_a_req`,
+  → I-L1 `i_en`) gated on `~hold` alone, with the `~i_flush` term dropped
+  from IF2's `o_fetch_re`. This severs every redirect source from the
+  fetch/MMU launch path; the redirect still writes the registered PC, so a
+  redirect target launches one cycle later only when it coincides with a
+  hold. CPI-neutral in practice.
+- **L1 PLRU touched at fill engage**, off the L2-verdict path (the touch no
+  longer waits on `i_l2_busy`). Approximate replacement metadata, so a
+  one-cycle-different touch is at most a marginally-different eviction.
+- **Fill-sequencer output stream registered.** The L2's per-beat
+  data/busy fed the L1 array write + valid set combinationally; registering
+  `{o_fill_we, o_fill_word, o_fill_wdata, o_fill_done, o_fill_fault}`
+  breaks that cross-module path. Cost: +1 cycle latency per line fill,
+  pipelined (throughput unchanged; ~1–2 % of instructions are fills).
+- **L2 read verdict registered (`HIT_LATENCY=3`)** on `machine_penumbra2`
+  (gen1's L2 instances keep 2). The combinational stage-1 hit verdict
+  crossed into the L1 fill install + arbiter; an output flop registers it
+  before it leaves the L2. Cost: +1 read-hit cycle and back-to-back L2
+  reads serialise (fill-throughput hit on L1 misses, recoverable by the L2
+  read-pipeline decouple). Detail in
+  [the L2 cache design](internals/l2-cache.md#pipeline-hit_latency3-the-gen2-machine)
+  and [the gen2 memory interface](internals/penumbra2/memory-interface.md#deferred-fill-speed-directions).
+- **L2 read-hit PLRU touch deferred** one cycle (captured at the hit,
+  applied against the live array next cycle), off the L2 tag-compare path.
+  A read hit never changes state, so the deferred apply always lands back
+  in `S_IDLE`; no correctness impact.
+- **L1 associativity 4-way → 2-way** on the gen2 machine
+  (`machine_penumbra2.sv` `NUM_WAYS=2`; `cache_bram_vipt` still supports
+  {2,4} and defaults 4). The parallel per-way tag compares + way-mux were a
+  larger share of the hit-verdict cone than expected; halving them shortens
+  it and relieves per-way-BRAM routing congestion. Cost: more conflict
+  misses (a 2-way index holds half as many lines) — the higher clock more
+  than offsets it on Dhrystone.
+
+**gen2.5-only changes.**
+
+- **BTB training write registered.** `o_btb_update` + payload {pc, target,
+  taken} were combinationally gated by the dcache hit (via the MEM stall) —
+  the same pattern as the old `predict_redirect`. BTB training is
+  speculative bookkeeping, so it registers in EX/spine and writes the BTB
+  next cycle. No correctness or IPC cost.
+- **ID-stage predictor (BTFN + RAS) removed.** `penumbra2_predict` and
+  `penumbra2_ras` and their ID→EX redirect/tag ports are gone. The
+  predictor's redirect folded in the MEM stall, putting
+  `dcache tag → dmem_busy → id_issue → predict_redirect → if2_flush` on the
+  gen2.5 critical path. Lifting it off the stall by registering it would
+  fire it the cycle the branch is already in EX — the same edge EX resolves
+  it — so a registered ID prediction is redundant with EX's own redirect:
+  zero cycles saved. Direct branches stay predicted at fetch by the BTB;
+  everything the BTB misses (cold direct branches, every indirect jump /
+  return) resolves in EX. Result-based `test_btfn` / `test_ras` pass
+  unchanged (EX confirmed everything anyway). Cost: returns lose their
+  one-cycle prediction and take the full EX-resolve penalty — the accepted
+  tradeoff to clear the path. The BTFN/RAS landing measurements are
+  retained above under their status entries.
+
+**Open at abandonment.** Recorded only as where the design was left when work
+stopped — not as planned work; gen2/2.5 is abandoned:
+
+- Registering the L2↔external-bus boundary (the next fmax step) was blocked by
+  a suspected SDRAM-adapter deadlock on gapped reads: a register slice there
+  turns a line fill into gapped single reads, and the adapter's
+  speculative-prefetch FSM deadlocks on that stream (`test_l2_ifetch` hangs).
+- The `HIT_LATENCY=3` register cost back-to-back L2 read throughput; an L2
+  read-pipeline decouple would have recovered it.
+- Removing the RAS gave up return prediction; only a fetch-domain return
+  stack (predicting in the fetch domain, never reaching back from ID) could
+  have restored it timing-safely.
+
+**The design is a failure and abandoned.** None of the above will be pursued.
 
 ## Compiler: graceful-fail on unsupported inline asm and vector IR
 
@@ -1449,9 +1552,10 @@ invariant — *a presented transaction never vanishes mid-flight*:
 Remaining in the gen2 machine, roughly in order:
 
 - First `make timing BOARD=ulx3s CORE=penumbra2 VARIANT=probe` run of
-  the machine-shaped probe (Decision 11's 4-way-vs-2-way L1 choice is
-  gated on the IF2 tag-compare/way-mux path it exposes; 2-way is a
-  parameter fallback).
+  the machine-shaped probe (it exposes the IF2 tag-compare/way-mux path
+  that gated Decision 11's L1-associativity choice; the fmax-closure
+  round resolved it to 2-way — see
+  [gen2.5 status: fmax-closure round](#gen25-status-fmax-closure-round-375-mhz)).
 - A bus-fault return path through L2/sequencer/arbiter/L1 — **done.**
   Unlike gen1 (no-device wired straight into the core as a sideband),
   the gen2 core is decoupled from the bus by the arbiter's registered
@@ -1683,6 +1787,15 @@ Net fmax: ~33.5 → ~34.2 MHz (≈ +2 %). The headline barely moved; the big
 intermediate swings (down to ~31.5, back up) were mostly the placer
 redistributing near the wall. The durable value is the structural cleanup
 and knowing where the floor is.
+
+> **Superseded by the fmax-closure round**
+> ([gen2.5 status: fmax-closure round](#gen25-status-fmax-closure-round-375-mhz)):
+> the floor below was measured with a 4-way L1 and the L2 read verdict
+> combinational. Halving L1 associativity to 2-way shortened the tag-compare
+> leg, and registering the L2 read verdict + the fill stream lifted the
+> cross-module limiter off this cone — the gen2 family then closed 37.5 MHz.
+> The two-halves analysis still describes the *shape* of the residual D-side
+> cone; the absolute numbers predate those changes.
 
 **The floor** is the D-side memory-hit cone — D-cache 4-way tag compare →
 `dmem_busy` → stall network → ID `drain_commit`, ~29 ns — in two halves,
@@ -2695,7 +2808,7 @@ Split *capability* from *policy*. The pseudo's capability attributes
 generation-neutral and stay unconditional in TableGen — every Penumbra
 core can recompute an absolute address. How *aggressively* the allocator
 should exploit that is microarch-specific: remat duplicates the 8-byte
-sequence, which is cheap to hide in gen2's 4 KB 4-way L1 but can evict a
+sequence, which is cheap to hide in gen2's 4 KB 2-way L1 but can evict a
 hot line in gen1's 1 KB direct-mapped I$. That tuning is policy, so it
 belongs in the per-subtarget scheduling/cost model (today a single
 `penumbra1` `ProcessorModel`; `-mcpu` already selects it, default
@@ -2795,7 +2908,7 @@ materialisations**. Findings:
   1 KB direct-mapped L1 from the relocated data). Label-difference
   base-sharing moves no data, so that penalty never arises, on either
   generation. (Whether the original GlobalMerge penalty still holds on
-  gen2's 4 KB 4-way L1 is untested and moot for this approach.)
+  gen2's 4 KB 2-way L1 is untested and moot for this approach.)
   Cross-section clusters need a link-time relocation but stay
   layout-neutral.
 - **Implementation shape:** a target MIR pass over the `PseudoMOVADDR`

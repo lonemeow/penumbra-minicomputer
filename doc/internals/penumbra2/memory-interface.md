@@ -269,9 +269,15 @@ L2 untouched.
 | Write buffer | a store retires without waiting on the L2→memory write | new buffer at a chosen layer |
 
 - **L2 initiation interval.** The L2 read pipeline admits one request
-  every two cycles because its stage-0 latch fires only while stage-1
-  is free; the storage path itself reads a fresh address each cycle
-  and is not the limiter. A characterisation test
+  only every few cycles because its stage-0 latch fires only while the
+  downstream stage is free; the storage path itself reads a fresh
+  address each cycle and is not the limiter. The interval tracks the
+  L2's `HIT_LATENCY`: the gen2 machine registers the read verdict at an
+  extra stage (`HIT_LATENCY=3`, a fetch-cone fmax fix — see
+  [the L2 cache design](../l2-cache.md#pipeline-hit_latency3-the-gen2-machine)),
+  which lengthens the interval by a cycle and so serialises a line
+  fill's back-to-back reads more. That makes this decouple the most
+  concrete fill-speed lever for gen2. A characterisation test
   (`test_back_to_back_read_throughput` in `hw/sim/tb_l2_cache.cpp`)
   measures the interval, so any future decouple is verifiable against
   a baseline.
