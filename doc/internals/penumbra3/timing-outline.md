@@ -126,6 +126,12 @@ compare, and the issue decision are one combinational cone off the raw FIFO word
     reads a registered pre-decoded slot. ID's cone now *starts* from registered fields.
     Zero extra latency — no change to mispredict penalty or load-use distance; decode
     rides the FIFO cycle already paid. Wider FIFO (store bundle, drop the raw word).
+  - **Write the decode parallel-then-select, not select-then-decode.** gen2.5 saw ID
+    become a cone because the four instruction formats decoded serially — resolve the
+    format, *then* decode by it. Decode all four formats off the raw word in parallel
+    and mux the result on the format bits, so the only serial step is the final select.
+    The format bits sit at the top of the word, so detection can move to the front
+    (IF2 / enqueue). Applies wherever decode runs; on the enqueue side it has the slack.
   - **Keep regmap *in* ID** — do NOT pre-map at enqueue. It is a shallow index mux and
     it depends on live `i_supervisor` (USP/SPR banking); pre-mapping at fetch would use
     a stale mode if a mode-change is in flight ahead of the slot. Only the
