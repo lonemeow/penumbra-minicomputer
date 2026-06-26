@@ -86,13 +86,19 @@ changed/interrupted request stream), so the spec state machine deserves a
 hard look for any remaining "assumes the master streams back-to-back"
 assumption — the master is not obligated to.
 
-Not currently triggered: the live design never gaps mid-fill (the L2 holds
-`re` and advances the address word-to-word). But it blocks registering the
-L2 <-> bus boundary, which is the lever for pushing the gen2 memory system
-past its ~36 MHz floor toward 50. The *correct* register there is a
-pipelined multi-outstanding L2 bus master (one that keeps the back-to-back
-stream so the prefetch still fires), not the throwaway single-outstanding
-slice that surfaced this. File: `hw/rtl/io/sdram/sdram_bus_adapter.sv`.
+Not currently triggered: neither the gen2 L2 nor the gen3 bus master gaps
+mid-fill -- both hold `re` and advance the address word-to-word. The gen3
+CPU<->bus decouple (`penumbra3_bus_master`) is exactly the pipelined master
+that keeps the back-to-back stream, and its Phase-0 probe P0.4
+(`penumbra3_bus_master_test`) confirms registering the boundary that way
+does not hit the deadlock -- so this does not block gen3.
+
+The bug itself still stands and should be fixed. The bus contract does not
+oblige a master to stream back-to-back, so a gapped read stream is a valid
+sequence the adapter must serve rather than hang on. The fix lives in the
+adapter's speculative-prefetch FSM: it must abandon an orphaned spec on a
+gap exactly as it already does on an address mispredict. File:
+`hw/rtl/io/sdram/sdram_bus_adapter.sv`.
 
 ## Kernel: block-device reads still go single-block
 
