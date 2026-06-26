@@ -75,6 +75,13 @@ gotchas) for working inside a subtree:
 - `import penumbra_pkg::*;` *inside* the module declaration, not at
   file scope (Verilator warns about `$unit`-scope wildcard imports).
 - Shared constants live in `hw/rtl/common/penumbra_pkg.sv`.
+- Registered signals end in `_q`, their combinational next-state in `_d`
+  (`x_q <= x_d`); plain names are combinational — registered-vs-combinational
+  must be visible at every use site.
+- Name signals by semantic meaning (`i_first_cycle`, not `i_fresh`).
+- Comments explain *why*, never restate *what*, and are non-temporal (no
+  "changed from…"/history — git holds that).
+- Module instances: one parameter and one port per line (minimizes diff churn).
 - Full RTL style guide: `doc/internals/coding-standards.md`.
 
 ### Naming: hardware vs software terminology

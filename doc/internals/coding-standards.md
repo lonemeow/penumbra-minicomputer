@@ -9,7 +9,7 @@ This document defines the RTL coding standards for the Penumbra project. All har
 - **Language:** SystemVerilog 2012.
 - **Keywords:** Use `logic` instead of `reg` or `wire` for all signals except where `tri` or similar net types are strictly required (e.g., bi-directional buses).
 - **Indentation:** 4 spaces. No tabs.
-- **Module Instances:** Use named port connections: `.port_name(signal_name)`. Never use positional connections.
+- **Module Instances:** Use named port connections: `.port_name(signal_name)`. Never use positional connections. Place each parameter override and each port connection on its **own line**, even when short. A new port or parameter is then a one-line addition instead of a reflowed block, which keeps git diffs minimal and reviewable.
 - **Module Declarations:** One module per file. Filename must match the module name (e.g., `alu.sv` contains `module alu`).
 
 ## 2. Naming Conventions
@@ -28,6 +28,18 @@ Prefix all module ports to distinguish them from internal signals:
 - Use `snake_case` for all signals, ports, and modules.
 - Parameters and localparams should be `SCREAMING_SNAKE_CASE`.
 - Active-low signals (if used) should end in `_n` (e.g., `o_irq_n`).
+- **Registered vs combinational must be visible in the name.** A signal that
+  holds registered state (assigned in an `always_ff`) ends in `_q`; the
+  combinational next-state value that feeds it ends in `_d`
+  (`count_q <= count_d`). A purely combinational signal that doesn't back a
+  specific flop takes a plain descriptive name. This makes "is this a flop
+  output or a wire?" answerable at every use site, without tracing the
+  assignment. Ports keep their `i_`/`o_` role; a registered output is driven
+  from a `_q` signal.
+- **Name by semantic meaning, not mechanism or incidental use.** Prefer the
+  name that states what a signal *means*: `i_first_cycle` over `i_fresh`,
+  `o_line_valid` over `o_v`. A longer, explicit name that conveys intent is
+  worth the characters.
 
 ## 3. Combinational and Sequential Logic
 
@@ -66,7 +78,18 @@ Prefix all module ports to distinguish them from internal signals:
 
 - Use `//` for single-line comments.
 - Use `/* ... */` for block comments.
-- Every module should have a header comment explaining its purpose, inputs, outputs, and any specific timing or protocol requirements.
+- **Comment the *why*, not the *what*.** The code already states what it
+  does; a comment restating it is noise. Reserve comments for intent,
+  rationale, and non-obvious consequences — what the code cannot say itself.
+  A genuinely non-trivial mechanism deserves explanation; a plain assignment
+  does not.
+- **Comments are non-temporal.** Describe the code as it is, not how it got
+  there — no "changed from…", "now…", or what a signal "used to" do. That
+  history lives in git and does not help a later reader.
+- Every module has a header comment stating its purpose and any non-obvious
+  timing or protocol contract. Don't enumerate every port — the port list
+  and good names already cover that; call out only the ports with a subtle
+  contract.
 - Large blocks of code should be separated by decorative headers:
   ```systemverilog
   // ── Sub-section Title ───────────────────────────────────────
