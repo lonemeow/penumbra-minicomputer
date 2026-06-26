@@ -291,6 +291,7 @@ MODULE_TESTS = \
     spi_test:tb_spi \
     sdram_adapter_test:tb_sdram_adapter \
     sdram_sim:tb_sdram_sim \
+    penumbra3_bus_master_test:tb_penumbra3_bus_master \
     video_pattern_test
 
 # Variant-fork unit tests: a fork (penumbra2_5/) shares its base module's name,
