@@ -51,7 +51,7 @@ module machine_penumbra2
     parameter int          ICACHE_BYTES = 4096,
     parameter int          DCACHE_BYTES = 4096,
     parameter int          LINE_BYTES   = 16,
-    parameter int          NUM_WAYS     = 4,
+    parameter int          NUM_WAYS     = 2,
 
     // Machine identity (SYSDEV_MACH) — board-supplied. The wrapper / board top
     // sets these; the defaults describe an unnamed machine at unknown clock.
