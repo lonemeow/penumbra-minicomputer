@@ -298,9 +298,11 @@ with margin.
 1. **This document** — overview + build plan (you are here).
 2. [`timing-outline.md`](./timing-outline.md) — the structural
    rules (Rule Zero, per-subsystem design points) this plan rests on.
-3. Per-area gen3 specs — *to be written as each subsystem is designed*
-   (design-decisions, pipeline-stages, hazard-model, memory-interface,
-   following the gen2 doc layout under `penumbra2/`).
+3. [`mem-stage.md`](./mem-stage.md) — the MEM1/MEM2 memory stage and the
+   duplicated BRAM TLB (the first per-area spec).
+4. Further per-area gen3 specs — *to be written as each subsystem is
+   designed* (design-decisions, pipeline-stages, hazard-model,
+   memory-interface), following the gen2 doc layout under `penumbra2/`.
 
 For the system the gen3 core attaches to but does not change — ISA, ABI,
 exception model, bus protocol, autoconfig, peripherals — the
