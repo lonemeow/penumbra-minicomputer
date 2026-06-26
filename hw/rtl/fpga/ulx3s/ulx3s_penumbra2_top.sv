@@ -76,7 +76,7 @@ module ulx3s_penumbra2_top (
     // the EHXPLLL dividers and CLK_FREQ together off the same struct, so they
     // cannot drift. The SDRAM stays at 100 MHz — the W9825_100 preset and the
     // CLKOS2 phase table below assume CLKOS_DIV==6, asserted after the PLL.
-    localparam longint CPU_HZ   = 25_000_000;
+    localparam longint CPU_HZ   = 37_500_000;
     localparam longint SDRAM_HZ = 100_000_000;
     localparam ecp5_pll_cfg_t PLL = ecp5_pll_compute(25_000_000, CPU_HZ, SDRAM_HZ);
     localparam int CLK_FREQ = int'(PLL.clk_hz);   // derived from the PLL config
