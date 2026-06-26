@@ -234,8 +234,8 @@ module penumbra2_ex_stage
     end
 
     // The forwarded operands EX uses everywhere it would have used the
-    // registered i_op_a / i_op_b / i_store_data (ALU, divmul, JMP target, the
-    // RAS target check, and the stored datum).
+    // registered i_op_a / i_op_b / i_store_data (ALU, divmul, JMP target, and
+    // the stored datum).
     logic [31:0] op_a, op_b, store_data;
     assign op_a       = fwd_op_a;
     assign op_b       = is_store ? i_op_b   : fwd_srcb;   // a store's op_b stays the immediate
@@ -356,7 +356,7 @@ module penumbra2_ex_stage
     // — and on ~i_fault_pending so an inert/faulting slot never trains. The
     // target is alu_result (= PC + imm) and the direction is cond_taken, both
     // already resolved above as branch_target / branch_redirect. Indirect jumps
-    // (OPC_JMP, including returns) are out of BTB scope — the RAS owns returns —
+    // (OPC_JMP, including returns) are out of BTB scope — they resolve in EX —
     // so they never train it, which keeps a tagged hit's target guaranteed
     // equal to PC+imm (the basis for EX's target-compare-free branch check).
     assign o_btb_update        = advance & (i_op_class == OPC_BRANCH) & ~i_fault_pending;

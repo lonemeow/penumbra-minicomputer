@@ -1,34 +1,35 @@
 // penumbra2_btb — Penumbra/2.5 branch target buffer.
 //
-// A gen2.5-only leaf (like penumbra2_predict / penumbra2_ras): it lives in
-// hw/rtl/penumbra2_5/ and is instantiated by the gen2.5 core fork. gen2 has no
-// BTB — this file is simply not part of gen2's fileset.
+// A gen2.5-only leaf: it lives in hw/rtl/penumbra2_5/ and is instantiated by the
+// gen2.5 core fork. gen2 has no BTB — this file is simply not part of gen2's
+// fileset.
 //
-// BTFN and the RAS predict at ID, which structurally costs two front-end
-// bubbles on a correct prediction: the redirect cannot fire until the branch is
-// decoded. The BTB predicts at *fetch* instead. Indexed by the fetch PC, it
+// The BTB predicts taken direct branches at *fetch*. Indexed by the fetch PC, it
 // reads a small tagged target RAM in parallel with the icache and, on a hit,
-// steers fetch to the cached target — turning a correctly-predicted taken
-// direct branch's two bubbles into one. The lookup is a pure RAM read in the
-// IF1 launch cycle; the tag-compare runs in IF2, alongside the icache's own
-// VIPT tag-compare, so the BTB adds nothing to the fmax-critical fetch cone.
+// steers fetch to the cached target — turning a correctly-predicted taken direct
+// branch's front-end flush to zero bubbles. The lookup is a pure RAM read in the
+// IF1 launch cycle; the tag-compare runs in IF2, alongside the icache's own VIPT
+// tag-compare, so the BTB adds nothing to the fmax-critical fetch cone. The
+// training write (a direct branch resolving in EX) is registered, off the EX/MEM
+// stall cone.
 //
 // Scope: direct taken branches (B / Bcc / BL). A tagged hit guarantees the
 // cached target equals this branch's PC+imm (the entry was trained from this
-// exact PC), so EX's existing direction-only mispredict check stays sound with
-// no target compare on the branch path. Function returns stay with the RAS;
-// other indirect jumps stay EX-resolved. EX remains the branch authority — a
-// stale or aliased prediction costs at most an extra flush, never a wrong
-// result — so the BTB is trained from resolved branches and needs no
-// checkpoint/restore: a precise fault leaves a bounded, self-healing entry set
-// because every misprediction is corrected downstream.
+// exact PC), so EX's direction-only mispredict check stays sound with no target
+// compare on the branch path. Function returns and other indirect jumps are not
+// predicted here — they resolve in EX. EX remains the branch authority — a stale
+// or aliased prediction costs at most an extra flush, never a wrong result — so
+// the BTB is trained from resolved branches and needs no checkpoint/restore: a
+// precise fault leaves a bounded, self-healing entry set because every
+// misprediction is corrected downstream.
 //
 // See doc/internals/penumbra2/overview.md.
 
 module penumbra2_btb #(
     // Number of tracked branch sites. A working set larger than ENTRIES
     // thrashes (aliasing branches evict each other) but never misbehaves —
-    // a miss falls back to ID-stage BTFN, a false hit is corrected by EX.
+    // a miss just leaves the branch to resolve in EX, a false hit is
+    // corrected by EX.
     // Must be a power of two: the index is a slice of the PC. Kept small —
     // a few dozen entries cover the hot-branch working set, and a larger
     // table spends more RAM for diminishing hit-rate.

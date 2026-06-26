@@ -98,7 +98,8 @@ shared L2.
 - `penumbra2_pkg.sv` — gen2-internal constants (scoreboard indices, op_class,
   alu_op, mem_op).
 - `cache_bram_vipt.sv` — BRAM-backed VIPT L1 (launch/resolve front,
-  4-way tree-PLRU, WT/WnA, atomic line fill, S_PT pass-through hold).
+  set-associative tree-PLRU — `NUM_WAYS` 2 or 4, the gen2 machine
+  selects 2 — WT/WnA, atomic line fill, S_PT pass-through hold).
 - `txn_arbiter.sv` — transaction-granular I/D arbiter (D-priority,
   single-outstanding, type-dependent completion).
 - `fill_sequencer.sv` — atomic full-line fill walker between the
@@ -158,8 +159,9 @@ exposed external bus.
 - `cache.sv` — original PIPT cache, retained for the L2-style use
   case (`doc/internals/l2-cache.md`). Not currently instantiated.
 - `l2_cache.sv` — L2 phase 1: 64 KiB, 4-way, 16 B lines, tree-PLRU,
-  2-cycle hit pipeline. Write-invalidate-on-hit (write-back is a
-  planned phase). Disabled at reset; software enables via
+  `HIT_LATENCY`-cycle hit pipeline (2 by default; the gen2 machine
+  sets 3 to register the read verdict off the L1-fill cone).
+  Write-invalidate-on-hit (write-back is a planned phase). Disabled at reset; software enables via
   `WRSYS SYSDEV_L2_CACHE CTRL=1`.
 - `busctl.sv` — SYSDEV_BUS sysreg device: RST (sticky) + CFG_EN for
   autoconfig.

@@ -1,5 +1,12 @@
 # Penumbra/2.5 — composition over gen2
 
+> **⚠️ ABANDONED — superseded by gen3.** gen2/2.5 topped out at 37.5 MHz with
+> no headroom for the remaining features (store buffer, wider L1↔L2, return
+> prediction); the in-order pure-stall memory-hit cone is a fundamental
+> floor. gen3 is a fresh redo of the same in-order pipeline to clear it. This
+> tree and doc are retained as the historical record. See
+> [`doc/internals/penumbra2/overview.md`](../../../doc/internals/penumbra2/overview.md).
+
 gen2.5 is the gen2 pipelined core with the textbook performance features
 added (branch prediction first, then operand forwarding + regfile
 write-through, then a store buffer). It is built by **composition**, not by
