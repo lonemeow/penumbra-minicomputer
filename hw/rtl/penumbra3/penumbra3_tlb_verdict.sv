@@ -71,16 +71,15 @@ module penumbra3_tlb_verdict
                                      : {20'b0, i_page_off};
 
     // ── Protection verdict ───────────────────────────────────────
-    // A hit must permit *this* access; deny raises a protection fault (a
-    // miss is not a fault here -- the consumer handles ~o_hit as a TLB miss).
-    // TODO(human): drive prot_denied from the selected entry's permission
-    // bits and the query. sel_pte's flags: TLB_R/TLB_W/TLB_X are the per-mode
-    // permissions, TLB_U marks user-accessible. i_access_type is one-hot
-    // {X,W,R} (ACC_READ/WRITE/EXEC); i_user_mode is set for user accesses
-    // (supervisor is exempt from the U check). Compare against gen2's
-    // penumbra2_tlb_perm for the established policy.
+    // A hit must permit *this* access; a denial raises a protection fault.
+    // A miss is not a fault here -- the consumer treats ~o_hit as a TLB
+    // miss. The selected entry's flags carry the policy: TLB_R/TLB_W/TLB_X
+    // are the per-access-type permissions and TLB_U marks the page
+    // user-accessible. Deny when the one-hot i_access_type's permission bit
+    // is clear, or when a user-mode access lands on a non-user (U=0) entry
+    // (supervisor is exempt).
     logic [2:0] matched_rwx;
-    logic       matched_u; 
+    logic       matched_u;
     assign matched_rwx = {sel_pte[TLB_X], sel_pte[TLB_W], sel_pte[TLB_R]};
     assign matched_u   = sel_pte[TLB_U];
 
