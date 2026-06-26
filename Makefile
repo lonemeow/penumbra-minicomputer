@@ -36,7 +36,7 @@ OPT_BUILD ?= -O2
 VERILATOR_FLAGS = --cc --exe --build -Wall --assert \
                   $(if $(VCD),--trace) \
                   -CFLAGS "-std=c++17 $(OPT_BUILD)" \
-                  $(if $(CORE_SUB),-Ihw/rtl/$(CORE) )-Ihw/rtl/common -Ihw/rtl/penumbra1 -Ihw/rtl/penumbra2 -Ihw/rtl/machine -Ihw/rtl/bus -Ihw/rtl/io -Ihw/rtl/io/sdram -Ihw/rtl/io/video -Ihw/rtl/soc -Ihw/rtl/sim
+                  $(if $(CORE_SUB),-Ihw/rtl/$(CORE) )-Ihw/rtl/common -Ihw/rtl/penumbra1 -Ihw/rtl/penumbra2 -Ihw/rtl/penumbra3 -Ihw/rtl/machine -Ihw/rtl/bus -Ihw/rtl/io -Ihw/rtl/io/sdram -Ihw/rtl/io/video -Ihw/rtl/soc -Ihw/rtl/sim
 
 BUILD_DIR   = build
 WAVE_DIR    = waves
@@ -704,6 +704,14 @@ SRC_FABRIC = hw/rtl/io/sdram/sdram_pkg.sv \
 SRC_CORE_penumbra1 = $(wildcard hw/rtl/penumbra1/*.sv)
 SRC_CORE_penumbra2 = hw/rtl/penumbra2/penumbra2_pkg.sv \
                      $(filter-out %/penumbra2_pkg.sv, $(wildcard hw/rtl/penumbra2/*.sv))
+
+# gen3 (penumbra3): a full generation fork -- its own core AND its own
+# on-chip memory hierarchy down to a registered bus master (see
+# doc/internals/penumbra3/overview.md). Not a composition sub-variant of
+# gen2: it shares only common/, the bus devices, and the board shell. pkg
+# first, then the rest of the directory, mirroring gen2.
+SRC_CORE_penumbra3 = hw/rtl/penumbra3/penumbra3_pkg.sv \
+                     $(filter-out %/penumbra3_pkg.sv, $(wildcard hw/rtl/penumbra3/*.sv))
 
 # gen2.5 (penumbra2_5): composition over gen2 — share gen2's leaf cells and
 # fork only the integration chain into penumbra2_5/. PENUMBRA2_FORKED is the
