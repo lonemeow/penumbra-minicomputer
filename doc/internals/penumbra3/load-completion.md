@@ -64,9 +64,13 @@ graph LR
   entry). MEM1 is not replayed.
 - **`load_pending_q`** (a flop) is the pipeline gate. The pipe holds via
   back-pressure off *that flop*, not off the live `busy` — this is the only
-  change vs gen2's load path. **Default is hold-the-pipe** (Wally): simplest,
-  timing-trivial; non-blocking issue past a miss is a later IPC lever, not
-  the baseline.
+  change vs gen2's load path. **Hold-the-pipe is the design point, not a
+  placeholder.** Issuing independent work past a miss (non-blocking loads)
+  needs multi-outstanding tracking and a completion-driven wakeup of waiting
+  dependents — a match/CAM landing squarely on the issue cone this design
+  works to keep shallow. It trades the fmax gen3 exists to protect for IPC
+  only on miss-heavy code, and going multi-outstanding would also cost the
+  precise-fault property below. It is out of scope by design, not deferred.
 - **The fill is launched once** as a registered line transaction through the
   [bus master](./overview.md#fork-boundary) (validated in P0.4); the fill
   FSM holds the request.
