@@ -109,26 +109,31 @@ skeleton stage-by-stage: each module is forked or written, given a
 `make sim MOD=<name>_test TB=tb_<name> PROG=` (a packed-struct port needs a
 `_test.sv` unpacking wrapper; flat-port modules use the bare name).
 
-**Done** (front end + issue + execute, all unit-tested):
+**Done** (front end through memory access, all unit-tested):
 
-- `penumbra3_pkg` control bundle + enums (`7a964ee`)
+- `penumbra3_pkg` control bundle + enums (`7a964ee`); `dpath_payload_t`
+  pipeline-register payload (`d8c2d5d`)
 - `penumbra3_decode` -- word->bundle, parallel-then-select, mode-independent (`4e60d01`)
 - `penumbra3_fetch_buffer` -- IF2->ID elastic FIFO (`00051be`)
 - `penumbra3_if1_stage` (`67eeb41`), `penumbra3_if2_stage` decode-on-enqueue (`27166b0`)
 - `penumbra3_id_stage` -- regmap + scoreboard + issue + priv/fault finalize (`10e088b`)
 - `penumbra3_ex_stage` -- operand forwarding + ALU + flags + branch + divmul +
   drain-commit, with `penumbra3_alu` / `penumbra3_flag_bypass` leaves (`25d7b28`)
+- `penumbra3_mem1_stage` / `penumbra3_mem2_stage` -- split launch/resolve: TLB
+  verdict + cache hit, sub-word extract, fault merge, the `load_complete` hold
+  buffer; `load_complete` parks the full descriptor and `dtranslate`/`tlb_store`
+  gained an `i_hold` read clock-enable for the freeze; composed
+  mem1->dtranslate->mem2 test (`96da15b`)
 
-**Next, in order:** MEM1/MEM2 (wire the proven `dtranslate`/`tlb_*` +
-`load_complete`; drive the MEM2->EX / WB->EX forward-source buses EX already
-exposes) -> WB + regfile/SPR/scratch files -> `spine` (stall/flush
-distribution + stage instances + the operand-forward source wiring + the
-issue-release broadcasts ID matches) -> `core` (front end + spine + `vecfetch`
-+ `irq`) -> fork the memory hierarchy (L1, MMU/TLB storage, arbiter +
-`bus_master`, fill, L2) -> `machine_penumbra3` + `ulx3s_penumbra3_top`.
-Phase-1's first gating checkpoint is then the **full-top composition timing
-read** (bare skeleton, no BTB) -- calibrates the probe->full margin before any
-feature work.
+**Next, in order:** WB + regfile/SPR/scratch files -> `spine` (stall/flush +
+the `i_hold` freeze distribution, stage instances, the operand-forward source
+wiring, the issue-release broadcasts ID matches, and the
+`dtranslate`/cache/`load_complete` instances the MEM stages launch into) ->
+`core` (front end + spine + `vecfetch` + `irq`) -> fork the memory hierarchy
+(L1, MMU/TLB storage, arbiter + `bus_master`, fill, L2) -> `machine_penumbra3`
++ `ulx3s_penumbra3_top`. Phase-1's first gating checkpoint is then the
+**full-top composition timing read** (bare skeleton, no BTB) -- calibrates the
+probe->full margin before any feature work.
 
 **Locked hazard-model decisions** (context for resuming):
 
@@ -146,16 +151,25 @@ feature work.
 - The fetch FIFO *is* the IF2/ID register (decode folds into enqueue, no extra
   stage); the IF2 skid is retained for the drop-equals-valid I-cache
   completion when the FIFO is momentarily full.
+- The resolved datapath rides a packed `dpath_payload_t` (value, dest routing,
+  flags, PC, fault verdict) carried as a unit across the EX->MEM->WB registers
+  alongside `ctrl_bundle_t`; `store_data` rides its own EX->MEM1 wire (consumed
+  in MEM2, never reaches WB).
+- The back-end stall is spine-distributed: MEM2's `load_complete` produces the
+  registered `load_pending`, and the spine fans it back as a single `i_hold`
+  that clock-enables the stage registers *and* the launch-side leaves
+  (`dtranslate`/`tlb_store`/cache). A frozen MEM2 slot therefore keeps its own
+  verdict, and no combinational cache/TLB verdict ever reaches issue.
 
 **Deferred (resolve at the named task):**
 
-- *Issue-release broadcasts* -- the operand-value forward network is settled in
-  EX (three sources EX/MEM1, MEM1/MEM2, MEM2/WB; youngest-wins; write-first
-  regfile for the four-deep distance; the MEM1 leg excludes loads/sysreg
-  reads). What remains is which back-end stage drives ID's `i_fwd*` to release a
-  scoreboard-pending load / sysreg read, and what "value ready" means there --
-  co-designed with MEM2 + the spine. ID owns only the match today, and EX
-  already exposes the MEM2/WB source buses for the spine to wire.
+- *Issue-release broadcasts* -- the operand-value forward network is settled
+  (EX sources EX/MEM1, MEM1/MEM2, MEM2/WB; youngest-wins; write-first regfile
+  for the four-deep distance; the MEM1 leg excludes loads/sysreg reads; MEM2
+  exposes `o_fwd_*` for the load-use leg). What remains is a pure spine task:
+  drive ID's `i_fwd*` to release a scoreboard-pending load / sysreg read at the
+  cycle its value becomes forwardable -- gated on the registered `load_pending`,
+  never a live verdict. ID owns only the match today.
 - *divmul aux-destination scoreboard bit* -- EX latches the aux result and
   destination; the second (Rdh) scoreboard set path lands with the ID/spine
   divmul integration (the scoreboard has one set port today).
