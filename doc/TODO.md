@@ -109,23 +109,26 @@ skeleton stage-by-stage: each module is forked or written, given a
 `make sim MOD=<name>_test TB=tb_<name> PROG=` (a packed-struct port needs a
 `_test.sv` unpacking wrapper; flat-port modules use the bare name).
 
-**Done** (front end + issue, all unit-tested):
+**Done** (front end + issue + execute, all unit-tested):
 
 - `penumbra3_pkg` control bundle + enums (`7a964ee`)
 - `penumbra3_decode` -- word->bundle, parallel-then-select, mode-independent (`4e60d01`)
 - `penumbra3_fetch_buffer` -- IF2->ID elastic FIFO (`00051be`)
 - `penumbra3_if1_stage` (`67eeb41`), `penumbra3_if2_stage` decode-on-enqueue (`27166b0`)
 - `penumbra3_id_stage` -- regmap + scoreboard + issue + priv/fault finalize (`10e088b`)
+- `penumbra3_ex_stage` -- operand forwarding + ALU + flags + branch + divmul +
+  drain-commit, with `penumbra3_alu` / `penumbra3_flag_bypass` leaves (`25d7b28`)
 
-**Next, in order:** EX (`alu`, `flag_bypass`, branch resolve, `divmul` launch,
-the operand forward muxes + forward-broadcast generation, NZCV forwarding) ->
-MEM1/MEM2 (wire the proven `dtranslate`/`tlb_*` + `load_complete`) -> WB +
-regfile/SPR/scratch files -> `spine` (stall/flush distribution + stage
-instances) -> `core` (front end + spine + `vecfetch` + `irq`) -> fork the
-memory hierarchy (L1, MMU/TLB storage, arbiter + `bus_master`, fill, L2) ->
-`machine_penumbra3` + `ulx3s_penumbra3_top`. Phase-1's first gating
-checkpoint is then the **full-top composition timing read** (bare skeleton,
-no BTB) -- calibrates the probe->full margin before any feature work.
+**Next, in order:** MEM1/MEM2 (wire the proven `dtranslate`/`tlb_*` +
+`load_complete`; drive the MEM2->EX / WB->EX forward-source buses EX already
+exposes) -> WB + regfile/SPR/scratch files -> `spine` (stall/flush
+distribution + stage instances + the operand-forward source wiring + the
+issue-release broadcasts ID matches) -> `core` (front end + spine + `vecfetch`
++ `irq`) -> fork the memory hierarchy (L1, MMU/TLB storage, arbiter +
+`bus_master`, fill, L2) -> `machine_penumbra3` + `ulx3s_penumbra3_top`.
+Phase-1's first gating checkpoint is then the **full-top composition timing
+read** (bare skeleton, no BTB) -- calibrates the probe->full margin before any
+feature work.
 
 **Locked hazard-model decisions** (context for resuming):
 
@@ -146,11 +149,16 @@ no BTB) -- calibrates the probe->full margin before any feature work.
 
 **Deferred (resolve at the named task):**
 
-- *Forward-broadcast sourcing* -- which stages (EX/MEM2/WB) drive ID's
-  `i_fwd*` and what "value ready" means -- is co-designed with EX. ID owns
-  only the match today.
-- *divmul aux-destination scoreboard bit* -- the scoreboard has one set port;
-  the second (Rdh) set path lands with the EX divmul sequencing.
+- *Issue-release broadcasts* -- the operand-value forward network is settled in
+  EX (three sources EX/MEM1, MEM1/MEM2, MEM2/WB; youngest-wins; write-first
+  regfile for the four-deep distance; the MEM1 leg excludes loads/sysreg
+  reads). What remains is which back-end stage drives ID's `i_fwd*` to release a
+  scoreboard-pending load / sysreg read, and what "value ready" means there --
+  co-designed with MEM2 + the spine. ID owns only the match today, and EX
+  already exposes the MEM2/WB source buses for the spine to wire.
+- *divmul aux-destination scoreboard bit* -- EX latches the aux result and
+  destination; the second (Rdh) scoreboard set path lands with the ID/spine
+  divmul integration (the scoreboard has one set port today).
 - *Vector-fetch cacheability* -- `penumbra3_vecfetch` will keep the vector
   read uncached for now. It is the CPU's only fetch-by-PA (not VA), so
   threading a PA index into the VIPT caches is awkward; MMU-bypass is required,
