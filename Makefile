@@ -51,7 +51,7 @@ TB   ?= tb_$(MOD)
 # Shared packages — always included. --top-module tells Verilator which
 # module is the DUT (otherwise it picks the first file = a package).
 # Add new packages here as the design grows.
-PKG_SV = hw/rtl/common/penumbra_pkg.sv hw/rtl/penumbra2/penumbra2_pkg.sv hw/rtl/io/sdram/sdram_pkg.sv hw/rtl/io/video/video_pkg.sv hw/rtl/fpga/ecp5_pll_pkg.sv
+PKG_SV = hw/rtl/common/penumbra_pkg.sv hw/rtl/penumbra2/penumbra2_pkg.sv hw/rtl/penumbra3/penumbra3_pkg.sv hw/rtl/io/sdram/sdram_pkg.sv hw/rtl/io/video/video_pkg.sv hw/rtl/fpga/ecp5_pll_pkg.sv
 
 # Resolving a module by name (module sims, test-modules) must not pick up a
 # variant fork, which redefines a base module under the same name in its own
@@ -292,6 +292,7 @@ MODULE_TESTS = \
     sdram_adapter_test:tb_sdram_adapter \
     sdram_sim:tb_sdram_sim \
     penumbra3_bus_master_test:tb_penumbra3_bus_master \
+    penumbra3_decode_test:tb_penumbra3_decode \
     video_pattern_test
 
 # Variant-fork unit tests: a fork (penumbra2_5/) shares its base module's name,

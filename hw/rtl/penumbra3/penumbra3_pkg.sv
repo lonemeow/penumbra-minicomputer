@@ -169,11 +169,13 @@ package penumbra3_pkg;
     logic [3:0]  sys_reg;
     logic [3:0]  spr_sel;
 
-    // Decode-time exceptions
+    // Decode-time exceptions. Mode-independent: priv_op marks a supervisor-
+    // only op, but ID raises the actual privilege fault against live mode and
+    // composes the fault vector -- neither the fault nor the vector is a
+    // stored bundle field.
     logic        is_trap;        // SYSCALL/BREAK
-    logic        illegal;
-    logic        priv_fault;
-    logic [3:0]  fault_vec;
+    logic        illegal;        // undefined opcode/operand form
+    logic        priv_op;        // supervisor-only op (ID checks live mode)
   } ctrl_bundle_t;
 
 endpackage
