@@ -754,7 +754,7 @@ LPF_ulx3s       = hw/constraints/ulx3s_v20.lpf
 # silently empty source list.
 FPGA_TOPS = ulx3s_penumbra1_top ulx3s_penumbra2_probe_top ulx3s_penumbra2_top \
             ulx3s_penumbra2_5_top ulx3s_penumbra3_probe_memtlb_top \
-            ulx3s_penumbra3_probe_issue_top
+            ulx3s_penumbra3_probe_issue_top ulx3s_penumbra3_probe_decode_top
 
 FPGA_SRC_ulx3s_penumbra1_top = $(SRC_COMMON) $(SRC_CORE_penumbra1) \
                                $(SRC_FABRIC) $(SRC_BOARD_ulx3s) \
@@ -790,6 +790,12 @@ FPGA_SRC_ulx3s_penumbra3_probe_memtlb_top = $(SRC_COMMON) $(SRC_CORE_penumbra3) 
 # (make timing BOARD=ulx3s CORE=penumbra3 VARIANT=probe_issue).
 FPGA_SRC_ulx3s_penumbra3_probe_issue_top = $(SRC_COMMON) $(SRC_CORE_penumbra3) \
                                $(FPGA_RTL)/ulx3s/ulx3s_penumbra3_probe_issue_top.sv
+
+# gen3 Phase-0 probe P0.2: the decode->issue cone (registered bundle ->
+# regmap -> scoreboard -> issue) in front of nextpnr
+# (make timing BOARD=ulx3s CORE=penumbra3 VARIANT=probe_decode).
+FPGA_SRC_ulx3s_penumbra3_probe_decode_top = $(SRC_COMMON) $(SRC_CORE_penumbra3) \
+                               $(FPGA_RTL)/ulx3s/ulx3s_penumbra3_probe_decode_top.sv
 
 # Tops that embed the boot ROM and/or microcode: their hex images are
 # generated before synthesis and inlined by inline_hex.py.
