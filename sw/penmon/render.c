@@ -226,19 +226,93 @@ human_bytes(uint64_t b, char *buf, size_t bufsz)
 		snprintf(buf, bufsz, "%lluB", (unsigned long long)b);
 }
 
+/*
+ * Responsive column layout.  Every gauge row is a three-zone grid: a
+ * fixed left zone (label + inline value) up to BAR_X, a stretchable bar
+ * zone that grows with the terminal, and a fixed-width right "info" zone
+ * (trailing readouts; for cache rows, miss/s + the history sparkline).
+ * One layout drives every row so the bars line up as a single column.
+ */
+#define BAR_X      13	/* left edge shared by the CPU/CPI/cache/MEM bars */
+#define INFO_W     48	/* min cols reserved for readouts (MEM is widest) */
+#define BAR_GAP     2	/* blank columns between a bar and the info zone  */
+#define MIN_BAR_W  12	/* floor so a narrow terminal never collapses it  */
+#define MISS_W      9	/* "%7.0f/s" — the cache miss-rate field width    */
+#define SPARK_GAP   1	/* blank column between miss/s and the sparkline  */
+
+struct layout {
+	int bar_x;	/* left edge of every stretchable bar */
+	int bar_w;	/* their (terminal-dependent) width   */
+	int info_x;	/* first column of the right info zone */
+	int spark_x;	/* first column of the cache sparkline */
+	int spark_w;	/* sparkline width                     */
+};
+
+/*
+ * Derive the per-frame column geometry from the current terminal width.
+ * bar_x and INFO_W are fixed; everything else stretches with `cols`.
+ */
+static void
+compute_layout(int cols, struct layout *L)
+{
+	int avail, bar_max;
+
+	memset(L, 0, sizeof(*L));
+	L->bar_x = BAR_X;
+
+	/*
+	 * The bar zone and the cache history sparkline are the two parts that
+	 * stretch; the label/value, miss/s field, and gaps are fixed.  Split
+	 * the stretchable span 2:1 in the bars' favour — the gauge is the
+	 * story, the history is context.
+	 */
+	avail = cols - BAR_X - BAR_GAP - MISS_W - SPARK_GAP;
+	L->bar_w = avail * 2 / 3;
+
+	/*
+	 * Never let the bar grow so wide that the widest trailing readout (the
+	 * MEM line, INFO_W cols) loses room: on a narrow terminal the bar
+	 * gives ground rather than truncating the numbers.  MIN_BAR_W keeps it
+	 * from vanishing entirely below ~70 cols.
+	 */
+	bar_max = cols - BAR_X - BAR_GAP - INFO_W;
+	if (L->bar_w > bar_max)
+		L->bar_w = bar_max;
+	if (L->bar_w < MIN_BAR_W)
+		L->bar_w = MIN_BAR_W;
+
+	L->info_x  = BAR_X + L->bar_w + BAR_GAP;
+	L->spark_x = L->info_x + MISS_W + SPARK_GAP;
+
+	/*
+	 * Hold the 2:1 ratio from the history side too: the sparkline fills
+	 * what's left of the line but is never wider than half the bar, so on
+	 * a narrow terminal it shrinks (leaving right-margin blank) instead of
+	 * dwarfing a bar that the MEM readout has already squeezed.
+	 */
+	L->spark_w = cols - L->spark_x;
+	if (L->spark_w > L->bar_w / 2)
+		L->spark_w = L->bar_w / 2;
+	if (L->spark_w > HIST_LEN)
+		L->spark_w = HIST_LEN;
+	if (L->spark_w < 1)
+		L->spark_w = 1;
+}
+
 /* One cache row: label, hit%, hit bar, miss/s, sparkline. */
 static void
 cache_row(int y, const char *label, const struct cache_rate *cr,
-    const float *ring, int count, int head, int spark_w)
+    const float *ring, int count, int head, const struct layout *L)
 {
 	int c = metric_color(cr->hit_pct, 90.0, 70.0, 1);
 
 	scr_printf(y, 1, A_NORM, "%-4s", label);
 	scr_printf(y, 6, pair_attr(c), "%5.1f%%", cr->hit_pct);
-	draw_bar(y, 13, 20, cr->hit_pct / 100.0, c);
-	scr_printf(y, 35, A_NORM, "%7.0f/s", cr->miss_per_sec);
+	draw_bar(y, L->bar_x, L->bar_w, cr->hit_pct / 100.0, c);
+	scr_printf(y, L->info_x, A_NORM, "%7.0f/s", cr->miss_per_sec);
 	/* hit% sparkline: scale 0..100, good>=90 warn>=70 */
-	draw_spark(y, 47, spark_w, ring, count, head, 100.0, 90.0, 70.0, 1);
+	draw_spark(y, L->spark_x, L->spark_w, ring, count, head,
+	    100.0, 90.0, 70.0, 1);
 }
 
 void
@@ -247,16 +321,15 @@ render_frame(const struct rates *r, const struct history *h,
     const struct procinfo *procs, int nproc, double interval,
     const char *cpu_model)
 {
-	int y, i, cpi_c, spark_w, cols, lines;
+	int y, i, cpi_c, cols, lines;
 	char lbuf[16], rbuf[16];
 	long up = uptime_sec;
+	struct layout lay;
 
 	scr_clear();
 	cols = scr_cols();
 	lines = scr_rows();
-	spark_w = cols - 48;
-	if (spark_w < 8) spark_w = 8;
-	if (spark_w > HIST_LEN) spark_w = HIST_LEN;
+	compute_layout(cols, &lay);
 
 	/* ── Title bar ─────────────────────────────────────────── */
 	scr_fill(0, 0, cols, ' ', pair_attr(PAIR_HDR));
@@ -269,8 +342,8 @@ render_frame(const struct rates *r, const struct history *h,
 	/* ── CPU + CPI ─────────────────────────────────────────── */
 	y = 2;
 	scr_printf(y, 1, A_NORM, "CPU");
-	draw_cpu_bar(y, 6, 28, r->cpu_pct);
-	scr_printf(y, 36, A_NORM, "us%4.0f%% sy%4.0f%% in%4.0f%% id%4.0f%%",
+	draw_cpu_bar(y, lay.bar_x, lay.bar_w, r->cpu_pct);
+	scr_printf(y, lay.info_x, A_NORM, "us%4.0f%% sy%4.0f%% in%4.0f%% id%4.0f%%",
 	    r->cpu_pct[CP_USER] + r->cpu_pct[CP_NICE], r->cpu_pct[CP_SYS],
 	    r->cpu_pct[CP_INTR], r->cpu_pct[CP_IDLE]);
 
@@ -282,9 +355,9 @@ render_frame(const struct rates *r, const struct history *h,
 		cpi_quality(r->cpi, &cpi_frac, &cpi_c);
 		scr_printf(y, 1, A_NORM, "CPI");
 		scr_printf(y, 6, pair_attr(cpi_c), "%5.2f", r->cpi);
-		draw_bar(y, 13, 20, cpi_frac, cpi_c);
+		draw_bar(y, lay.bar_x, lay.bar_w, cpi_frac, cpi_c);
 	}
-	scr_printf(y, 36, A_NORM, "MIPS %6.2f", r->mips);
+	scr_printf(y, lay.info_x, A_NORM, "MIPS %6.2f", r->mips);
 
 	y = 4;
 	scr_printf(y, 1, A_NORM, "STALL");
@@ -297,11 +370,14 @@ render_frame(const struct rates *r, const struct history *h,
 	scr_fill(5, 0, cols, GLYPH_HLINE, A_NORM);
 
 	/* ── Cache panel ───────────────────────────────────────── */
-	scr_printf(6, 1, A_NORM,
-	    "CACHE      hit%%        (hit bar)      miss/s  history");
-	cache_row(7, "L1I", &r->l1i, h->l1i, h->count, h->head, spark_w);
-	cache_row(8, "L1D", &r->l1d, h->l1d, h->count, h->head, spark_w);
-	cache_row(9, "L2",  &r->l2,  h->l2,  h->count, h->head, spark_w);
+	scr_printf(6, 1, A_NORM, "CACHE");
+	scr_printf(6, 6, A_NORM, " hit%%");
+	scr_printf(6, lay.bar_x, A_NORM, "(hit rate)");
+	scr_printf(6, lay.info_x, A_NORM, "miss/s");
+	scr_printf(6, lay.spark_x, A_NORM, "history");
+	cache_row(7, "L1I", &r->l1i, h->l1i, h->count, h->head, &lay);
+	cache_row(8, "L1D", &r->l1d, h->l1d, h->count, h->head, &lay);
+	cache_row(9, "L2",  &r->l2,  h->l2,  h->count, h->head, &lay);
 
 	scr_fill(10, 0, cols, GLYPH_HLINE, A_NORM);
 
@@ -317,8 +393,8 @@ render_frame(const struct rates *r, const struct history *h,
 		human_bytes(mem->total_bytes, rbuf, sizeof(rbuf));
 		human_bytes(mem->free_bytes, fbuf, sizeof(fbuf));
 		scr_printf(11, 1, A_NORM, "MEM");
-		draw_bar(11, 6, 28, used_frac, mc);
-		scr_printf(11, 36, A_NORM, "%s / %s used  (%s free)   flt %.0f/s",
+		draw_bar(11, lay.bar_x, lay.bar_w, used_frac, mc);
+		scr_printf(11, lay.info_x, A_NORM, "%s / %s used  (%s free)   flt %.0f/s",
 		    lbuf, rbuf, fbuf, r->faults_per_sec);
 	}
 
