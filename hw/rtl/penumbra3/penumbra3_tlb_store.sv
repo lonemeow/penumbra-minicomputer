@@ -22,6 +22,7 @@ module penumbra3_tlb_store #(
 
     // MEM1: launch the set read
     input  logic [$clog2(SETS)-1:0] i_rd_set,
+    input  logic                    i_hold,   // freeze the registered read (pipe stall = read CE low)
 
     // MEM2: registered set contents, per way
     output logic [WAYS-1:0]         o_rd_valid,
@@ -46,10 +47,15 @@ module penumbra3_tlb_store #(
     logic [WAYS-1:0][SETS-1:0] valid_q;
 
     always_ff @(posedge i_clk) begin
-        for (int w = 0; w < WAYS; w++) begin
-            o_rd_vpn_word[w] <= vpn_mem[w][i_rd_set];
-            o_rd_pte_word[w] <= pte_mem[w][i_rd_set];
-            o_rd_valid[w]    <= valid_q[w][i_rd_set];
+        // Registered read output, held on a pipe stall so a frozen MEM2 slot
+        // keeps its own set (the read clock-enable; the write port is never
+        // gated, so an install in flight is not dropped).
+        if (!i_hold) begin
+            for (int w = 0; w < WAYS; w++) begin
+                o_rd_vpn_word[w] <= vpn_mem[w][i_rd_set];
+                o_rd_pte_word[w] <= pte_mem[w][i_rd_set];
+                o_rd_valid[w]    <= valid_q[w][i_rd_set];
+            end
         end
 
         if (i_wr_en) begin

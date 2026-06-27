@@ -21,6 +21,7 @@ module penumbra3_dtranslate
     input  logic [2:0]              i_access_type,
     input  logic                    i_user_mode,
     input  logic [7:0]              i_asid,
+    input  logic                    i_hold,   // freeze MEM1->MEM2 query + the TLB read (pipe stall)
 
     // Pinned-TLB result for this access (async, presented at MEM2)
     input  logic                    i_pinned_hit,
@@ -63,7 +64,7 @@ module penumbra3_dtranslate
             user_mode_q <= 1'b0;
             asid_q      <= '0;
             page_off_q  <= '0;
-        end else begin
+        end else if (!i_hold) begin
             lookup_en_q <= i_lookup_en;
             vpn_q       <= i_vaddr[31:12];
             acc_type_q  <= i_access_type;
@@ -84,6 +85,7 @@ module penumbra3_dtranslate
         .i_clk         (i_clk),
         .i_rst         (i_rst),
         .i_rd_set      (rd_set),
+        .i_hold        (i_hold),
         .o_rd_valid    (rd_valid),
         .o_rd_vpn_word (rd_vpn_word),
         .o_rd_pte_word (rd_pte_word),
