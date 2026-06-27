@@ -300,6 +300,7 @@ MODULE_TESTS = \
     penumbra3_ex_stage_test:tb_penumbra3_ex_stage \
     penumbra3_mem1_stage_test:tb_penumbra3_mem1_stage \
     penumbra3_mem2_stage_test:tb_penumbra3_mem2_stage \
+    penumbra3_wb_stage_test:tb_penumbra3_wb_stage \
     video_pattern_test
 
 # Variant-fork unit tests: a fork (penumbra2_5/) shares its base module's name,
