@@ -156,10 +156,18 @@ probe->full margin before any feature work.
   alongside `ctrl_bundle_t`; `store_data` rides its own EX->MEM1 wire (consumed
   in MEM2, never reaches WB).
 - The back-end stall is spine-distributed: MEM2's `load_complete` produces the
-  registered `load_pending`, and the spine fans it back as a single `i_hold`
-  that clock-enables the stage registers *and* the launch-side leaves
-  (`dtranslate`/`tlb_store`/cache). A frozen MEM2 slot therefore keeps its own
-  verdict, and no combinational cache/TLB verdict ever reaches issue.
+  registered `load_pending`, and the spine fans it back to freeze the *launch
+  side* -- MEM1, the MEM1/MEM2 register, `dtranslate`/`tlb_store`/cache, and
+  issue -- so the missing load and everything younger hold. It must NOT freeze
+  the MEM2/WB output register: that drains older work to commit (the held load
+  retires via the completion path, not MEM2/WB), and folding `load_pending` into
+  its freeze re-presents an already-committed multi-cycle writeback (the divmul
+  dual-register retire) and retires it twice. The MEM2/WB register's only
+  back-pressure is the WB dual-write hold. Contract:
+  [load-completion freeze scope](internals/penumbra3/load-completion.md#what-the-pipe-gate-freezes).
+  A frozen MEM2 slot keeps its own verdict, and no combinational cache/TLB
+  verdict ever reaches issue. Candidate spine assertion: `load_pending` never
+  gates the MEM2/WB register.
 
 **Deferred (resolve at the named task):**
 
@@ -3009,82 +3017,71 @@ materialisations**. Findings:
 disassembly miners (not committed); the durable artifacts are the
 numbers and conclusions here.
 
-## Compiler: PIC/GOT global access — userspace's dominant addressing cost
+## Compiler: PIC/GOT global access — non-preemptible direct addressing — RESOLVED
 
-Userspace spends most of its cycles inside the shared libraries, and the
-shared libraries pay a GOT indirection on nearly every global access that
-does not need one. This is plausibly the highest-leverage addressing fix
-in the whole toolchain, because it speeds up code every process runs.
+The high-leverage lever — PC-relative-direct addressing for
+non-preemptible PIC globals — landed in `8c8c28df7f51`.
+`PenumbraInstructionSelector::selectGlobalValue` now gates on
+`!GV->hasExternalWeakLinkage() && GV->isDSOLocal()`: a non-preemptible
+symbol materialises its address with `%pcrel` + a single deref, skipping
+the GOT slot, the GOT load (which sat on the critical path — the deref
+could not issue until it returned), and the startup `R_PENUMBRA_RELATIVE`
+reloc. A non-zero offset folds straight into `%pcrel_lo16(sym+off)`,
+which the GOT path could not do (a GOT entry holds the base symbol only).
+Undefined `extern_weak` stays GOT-indirect even when hidden — it may
+resolve to 0, which a `%pcrel` anchor cannot encode. Shape coverage:
+`pic-dso-local.ll`; execution coverage: `pcrel-dso-local.c` in the
+`make test-compiler-pic` suite.
 
-**The addressing workloads split by ELF type (measured 2026-06-19):**
+**Measured on a fresh NetBSD `libc.so.12.220.1` (reloc histogram +
+`.got`-range bucketing via `llvm-readobj --dyn-relocations`), against the
+pre-fix 2026-06-19 baseline:**
 
-- **Executables are `ET_EXEC` (position-dependent).** `bin/cat` reaches
-  its own globals with ~100 absolute `lli+lui` and only ~30 GOT anchors;
-  `bin/sh` likewise. So an executable's *own* code is the same
-  absolute-addressing problem as the kernel (base-sharing applies),
-  *not* a GOT problem — calls into libc go through the PLT
-  (`JUMP_SLOT`), imported data uses `COPY` relocs.
-- **The GOT cost lives in the `ET_DYN` shared libraries.** libc.so has
-  **~10,135** GOT-indirect code sites of the shape `lli; lui; add
-  rX,r15(PC); ldw(GOT); ldw(deref)` = **5 instructions to read one
-  global** (the PC anchor makes each site's immediates unique, which
-  also defeats CSE across sites — PC-relative addressing is anti-CSE by
-  construction).
+| Metric | Pre-fix | Now |
+|--------|---------|-----|
+| GOT slots bound by `RELATIVE` (non-preemptible) | ~5,028 | **56** |
+| GOT slots bound by `GLOB_DAT` (preemptible) | 237 | **237** |
+| Total `.got` data entries | ~5,265 | **299** |
 
-**The decisive omission:** the selector's PIC path
-(`PenumbraInstructionSelector::selectGlobalValue`) checks only
-`RelocationModel == PIC_` and sends **every** global through the GOT —
-there is no `shouldAssumeDSOLocal`/preemptibility check. An `llc` test
-confirms `external`, `internal`, `hidden`, and `dso_local` globals all
-emit `%got_pcrel`. But libc.so's dynamic relocations are **5,028
-`R_PENUMBRA_RELATIVE` vs 237 `GLOB_DAT`** (~20:1) — RELATIVE means the
-GOT slot was bound to a *locally-defined* symbol, i.e. the large
-majority of GOT-bound symbols are non-preemptible and never needed a GOT
-slot at all.
+The non-preemptible GOT population collapsed ~99%. `GLOB_DAT` is
+unchanged to the symbol — proof the change is preemptibility-safe: it
+removed only the slots it was entitled to. Of the 2,291 `RELATIVE`
+relocs left in the binary, only 56 land in `.got`; the rest are ordinary
+`.data`/`.data.rel.ro` pointer relocs, never a GOT-codegen concern.
 
-**Levers, by leverage:**
+**Why this was the dominant cost (kept for context):** the GOT cost lived
+in the `ET_DYN` shared libraries, where each global read was a
+5-instruction GOT-indirect sequence (`lli; lui; add rX,pc; ldw(GOT);
+ldw(deref)`) and the PC-anchored immediates made every site unique,
+defeating CSE. Dynamic relocs ran ~20:1 `RELATIVE`:`GLOB_DAT`, i.e. the
+large majority of GOT-bound symbols were non-preemptible and never needed
+a slot. Executables (`ET_EXEC`) are a *separate* problem — their own
+globals use absolute `lli+lui` (base-sharing applies), not the GOT; calls
+into libc go through the PLT (`JUMP_SLOT`).
 
-1. **PC-relative-direct addressing for non-preemptible symbols — the big
-   one.** For a `shouldAssumeDSOLocal` symbol (local/hidden/`dso_local`,
-   or defined-and-non-preemptible in this DSO), emit `%pcrel` materialise
-   + a single deref instead of the GOT path:
-   ```
-   lli  tmp, %pcrel_lo16(sym-.LPC)
-   lui  tmp, %pcrel_hi16(sym-.LPC)
-   .LPC: add addr, pc            ; addr = &sym directly — no GOT slot
-   ldw  val, [addr + 0]
-   ```
-   Per access this removes one instruction, **one dependent memory load**
-   (the GOT load is on the critical path — the deref can't issue until it
-   returns; the latency win exceeds the count win on an in-order core),
-   one GOT entry, and one startup `RELATIVE` reloc. At the ~9.5 K
-   non-preemptible sites that is roughly −38 KB of libc `.text`, a much
-   smaller GOT, and faster process startup — which also chips at the
-   fork+exec cost tracked under "fork() is unreasonably slow". **Low
-   risk: the machinery already exists** — `selectBlockAddress` already
-   does PC-relative-direct via `PICMOVPC`/`PICADDi %pcrel`, and the GOT
-   path's `PICLLI/PICLUI/PICADDPC` pseudos just need `%pcrel_lo16`/
-   `%pcrel_hi16` specifiers mirroring the existing `%got_pcrel_lo16/hi16`
-   (the linker math `S+A-P` is *simpler* than the GOT case, no slot).
-2. **PC-anchor sharing — the PIC twin of absolute base-sharing.** Even
-   after lever 1, the `lli;lui;add pc` triple is anchored to each site's
-   own PC, so repeats don't CSE. Sharing one PC-derived anchor per region
-   (`mov anchor,pc` once, then `anchor + (sym-.Lanchor)` offsets)
-   collapses them — the *same* transform as the static base-sharing,
-   differing only in base kind (PC-derived vs absolute). One
-   parameterised pass could serve both axes. Same register-pressure
-   tradeoff.
-3. **A GOT/GP base register** for the genuine-preemptible remainder (the
-   237 `GLOB_DAT`). Given how few remain after lever 1, probably not
-   worth the reserved register — and the 2-operand ISA makes a pinned GP
-   costly in register pressure.
+**Residual, deliberately not pursued** (the GOT cost is now too small to
+justify more work — do not reopen without a fresh measurement showing the
+remainder is worth it):
 
-**Priority across the whole addressing investigation, by leverage:**
-(1) PIC PC-relative-direct for non-preemptible symbols (broadest reach,
-lowest risk, helps startup); (2) absolute base-sharing for the
-kernel + executables' own globals (layout-neutral label-difference
-offsets, ~41% of kernel materialisations); (3) `LUIC` and PC-anchor
-sharing as secondary folds that compose with 1–2.
+- The **56** non-preemptible GOT slots that remain are symbols the
+  compiler could not prove `dso_local` at compile time but the linker
+  bound locally (default-visibility data globals, function-address
+  takes). Below the bar for a dedicated pass.
+- **PC-anchor sharing** (CSE the per-site PC anchors across a region) is
+  the *same* transform as absolute base-sharing, which measured
+  net-negative on Dhrystone hardware (relocating data hurt the 1 KB
+  cache more than the saved materialisations helped — see "Global base
+  sharing"). Its win shrank with the GOT population.
+- A **GOT/GP base register** for the preemptible remainder would target
+  only ~293 slots, and the 2-operand ISA makes a pinned GP costly in
+  register pressure.
+
+**Priority across the remaining addressing investigation, by leverage:**
+(1) absolute base-sharing for the kernel + executables' own globals
+(layout-neutral label-difference offsets, ~41% of kernel
+materialisations) — now the live lever; (2) `LUIC` and PC-anchor sharing
+as secondary folds that compose with it, gated on the base-sharing
+cache-footprint result above.
 
 ## Compiler: no branch-cost model — branch-avoidance may be over-eager
 
