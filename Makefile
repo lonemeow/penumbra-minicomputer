@@ -295,6 +295,7 @@ MODULE_TESTS = \
     penumbra3_decode_test:tb_penumbra3_decode \
     penumbra3_fetch_buffer \
     penumbra3_if1_stage \
+    penumbra3_if2_stage_test:tb_penumbra3_if2_stage \
     video_pattern_test
 
 # Variant-fork unit tests: a fork (penumbra2_5/) shares its base module's name,
