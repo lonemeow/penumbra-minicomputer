@@ -178,5 +178,29 @@ package penumbra3_pkg;
     logic        priv_op;        // supervisor-only op (ID checks live mode)
   } ctrl_bundle_t;
 
+  // ── Datapath payload ─────────────────────────────────────────────
+  // The resolved datapath state carried, as one packed value, across the
+  // EX -> MEM -> WB pipeline registers alongside the ctrl_bundle_t. Copying it
+  // as a unit (q <= d) is what keeps a register from silently dropping a field
+  // the way a hand-rolled per-field copy can. `value` holds the stage's result
+  // (EX: ALU / link / divmul-lo; MEM2: load data / sysreg read); the
+  // destination routing, flags, PC, and fault verdict travel unchanged toward
+  // the commit point. `store_data` is not here -- it is consumed in MEM2 and
+  // never reaches WB, so it rides its own EX->MEM1 wire.
+  typedef struct packed {
+    logic [31:0]         value;          // primary result (ALU / link / load data / sysreg / ...)
+    logic [31:0]         value_aux;      // second result of a dual-destination op
+    logic [3:0]          flags;          // NZCV, packed as SR[3:0]
+    logic [SB_IDX_W-1:0] phys_dst;
+    logic                phys_dst_we;
+    logic [SB_IDX_W-1:0] phys_dst_aux;
+    logic                phys_dst_aux_we;
+    logic [31:0]         pc;
+    logic                fault_pending;
+    logic [3:0]          fault_vec;
+    logic [31:0]         fault_vaddr;    // faulting address: PC (EX-born) or EA (MEM-born)
+    logic [31:0]         fault_status;
+  } dpath_payload_t;
+
 endpackage
 /* verilator lint_on UNUSEDPARAM */

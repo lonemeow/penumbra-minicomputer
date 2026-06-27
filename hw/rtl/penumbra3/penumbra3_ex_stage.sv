@@ -113,23 +113,14 @@ module penumbra3_ex_stage
     output logic [31:0]           o_branch_target,
 
     // -- EX/MEM1 register (to MEM1) -------------------------------
-    // The control bundle is carried unchanged; MEM1/MEM2/WB derive their
-    // control from it (gpr/spr/flag write, mem op, sysreg select).
+    // The control bundle is carried unchanged; the resolved datapath travels in
+    // the payload struct. store_data rides its own wire -- MEM2 consumes it, so
+    // it never reaches WB and is not part of the through-payload.
     output ctrl_bundle_t          o_mem1_bundle,
-    output logic [31:0]           o_mem1_result,
-    output logic [31:0]           o_mem1_result_aux, // a dual write's second half; don't-care otherwise
+    output dpath_payload_t        o_mem1_payload,
     output logic [31:0]           o_mem1_store_data,
-    output logic [3:0]            o_mem1_flag_value, // NZCV, packed as SR[3:0]
-    output logic [SB_IDX_W-1:0]   o_mem1_phys_dst,
-    output logic                  o_mem1_phys_dst_we,
-    output logic [SB_IDX_W-1:0]   o_mem1_phys_dst_aux,
-    output logic                  o_mem1_phys_dst_aux_we,
-    output logic [31:0]           o_mem1_pc,
     output logic                  o_mem1_valid,
-    output bcause_e               o_mem1_bcause,
-    output logic                  o_mem1_fault_pending,
-    output logic [3:0]            o_mem1_fault_vec,
-    output logic [31:0]           o_mem1_fault_status
+    output bcause_e               o_mem1_bcause
 );
 
     // ================================================================
@@ -154,10 +145,10 @@ module penumbra3_ex_stage
     logic mem1_result_ready;
     assign mem1_result_ready = (o_mem1_bundle.op_class != OPC_LOAD)
                              & (o_mem1_bundle.op_class != OPC_RDSYS);
-    assign fwd_dst[0]   = o_mem1_phys_dst;
-    assign fwd_valid[0] = o_mem1_valid & o_mem1_phys_dst_we
-                        & ~o_mem1_fault_pending & mem1_result_ready;
-    assign fwd_data[0]  = o_mem1_result;
+    assign fwd_dst[0]   = o_mem1_payload.phys_dst;
+    assign fwd_valid[0] = o_mem1_valid & o_mem1_payload.phys_dst_we
+                        & ~o_mem1_payload.fault_pending & mem1_result_ready;
+    assign fwd_data[0]  = o_mem1_payload.value;
 
     // [1] MEM1/MEM2 and [2] MEM2/WB: resolved back-end results from the spine.
     assign fwd_dst[1]   = i_mem2_phys_dst;
@@ -218,11 +209,11 @@ module penumbra3_ex_stage
     // condition below.
     logic [3:0] fwd_flags;
     logic       mem1_writes_flags;
-    assign mem1_writes_flags = o_mem1_valid & o_mem1_bundle.flags_updater & ~o_mem1_fault_pending;
+    assign mem1_writes_flags = o_mem1_valid & o_mem1_bundle.flags_updater & ~o_mem1_payload.fault_pending;
 
     penumbra3_flag_bypass u_flag_bypass (
         .i_sr_flags          (i_sr_flags),
-        .i_mem1_flags        (o_mem1_flag_value),
+        .i_mem1_flags        (o_mem1_payload.flags),
         .i_mem1_writes_flags (mem1_writes_flags),
         .i_mem2_flags        (i_mem2_flags),
         .i_mem2_writes_flags (i_mem2_writes_flags),
@@ -492,6 +483,32 @@ module penumbra3_ex_stage
     // ================================================================
     // EX/MEM1 register
     // ================================================================
+    // Assemble the datapath payload, latched as a unit on advance. divmul drives
+    // both writeback halves and N/Z (C=V=0); every other op uses the ALU result
+    // and flags -- and a divmul only advances once its results are valid. EX
+    // raises a DIV0 (VEC_ARITH) and a software trap (SYSCALL/BREAK), and is where
+    // an eligible interrupt is injected as a synthetic fault; the slot's own
+    // exception outranks the interrupt.
+    dpath_payload_t mem1_payload_d;
+    always_comb begin
+        mem1_payload_d.value           = is_divmul ? dm_lo : result_value;
+        mem1_payload_d.value_aux       = is_divmul ? dm_hi : 32'b0;
+        mem1_payload_d.flags           = is_divmul ? {2'b00, dm_z, dm_n} : alu_flags;
+        mem1_payload_d.phys_dst        = i_phys_dst;
+        mem1_payload_d.phys_dst_we     = i_phys_dst_we;
+        mem1_payload_d.phys_dst_aux    = i_phys_dst_aux;
+        mem1_payload_d.phys_dst_aux_we = i_phys_dst_aux_we;
+        mem1_payload_d.pc              = i_pc;
+        mem1_payload_d.fault_pending   = i_fault_pending | (is_divmul & dm_fault)
+                                       | i_bundle.is_trap | i_irq_inject;
+        mem1_payload_d.fault_vec       = (is_divmul & dm_fault)               ? VEC_ARITH
+                                       : (i_fault_pending | i_bundle.is_trap) ? i_fault_vec
+                                       : i_irq_inject                         ? i_irq_vec
+                                       :                                        i_fault_vec;
+        mem1_payload_d.fault_vaddr     = i_pc;   // EX-born faults report the PC; MEM overwrites for EA faults
+        mem1_payload_d.fault_status    = i_fault_status;
+    end
+
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
             o_mem1_valid  <= 1'b0;
@@ -500,30 +517,9 @@ module penumbra3_ex_stage
             o_mem1_valid  <= next_valid;
             o_mem1_bcause <= next_bcause;
             if (advance) begin
-                o_mem1_bundle          <= i_bundle;
-                // divmul drives both writeback halves and N/Z (C=V=0); every
-                // other op uses the ALU result + flags. A divmul only ever
-                // advances once its results are valid.
-                o_mem1_result          <= is_divmul ? dm_lo : result_value;
-                o_mem1_result_aux      <= is_divmul ? dm_hi : 32'b0;
-                o_mem1_store_data      <= store_data;
-                o_mem1_flag_value      <= is_divmul ? {2'b00, dm_z, dm_n} : alu_flags;
-                o_mem1_phys_dst        <= i_phys_dst;
-                o_mem1_phys_dst_we     <= i_phys_dst_we;
-                o_mem1_phys_dst_aux    <= i_phys_dst_aux;
-                o_mem1_phys_dst_aux_we <= i_phys_dst_aux_we;
-                o_mem1_pc              <= i_pc;
-                // EX raises two synchronous exceptions -- a DIV0 (VEC_ARITH) and
-                // a software trap (SYSCALL/BREAK, vector from decode) -- and is
-                // where an eligible interrupt is injected as a synthetic fault.
-                // The slot's own exception outranks the interrupt.
-                o_mem1_fault_pending   <= i_fault_pending | (is_divmul & dm_fault)
-                                        | i_bundle.is_trap | i_irq_inject;
-                o_mem1_fault_vec       <= (is_divmul & dm_fault)            ? VEC_ARITH
-                                        : (i_fault_pending | i_bundle.is_trap) ? i_fault_vec
-                                        : i_irq_inject                      ? i_irq_vec
-                                        :                                     i_fault_vec;
-                o_mem1_fault_status    <= i_fault_status;
+                o_mem1_bundle     <= i_bundle;
+                o_mem1_payload    <= mem1_payload_d;
+                o_mem1_store_data <= store_data;
             end
         end
     end
@@ -547,7 +543,7 @@ module penumbra3_ex_stage
         (i_stall_in && !i_bubble) |=> $stable(o_mem1_valid))
         else $error("penumbra3_ex_stage: back-pressure changed o_mem1_valid");
     assert property (@(posedge i_clk) disable iff (i_rst)
-        (i_stall_in && !i_bubble && o_mem1_valid) |=> $stable(o_mem1_phys_dst))
+        (i_stall_in && !i_bubble && o_mem1_valid) |=> $stable(o_mem1_payload.phys_dst))
         else $error("penumbra3_ex_stage: back-pressure swapped the held EX/MEM1 slot");
 
     // EX steers the front end only for an actual control-transfer instruction.

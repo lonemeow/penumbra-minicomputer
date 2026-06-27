@@ -89,8 +89,9 @@ module penumbra3_ex_stage_test
     // EX's flat ports, so its other fields are intentionally unread here. The
     // bcause output is likewise not under test.
     /* verilator lint_off UNUSEDSIGNAL */
-    ctrl_bundle_t mem1_bundle;
-    bcause_e      mem1_bcause;
+    ctrl_bundle_t   mem1_bundle;
+    bcause_e        mem1_bcause;
+    dpath_payload_t mem1_payload;   // fault_vaddr is not fanned out (no test port)
     /* verilator lint_on UNUSEDSIGNAL */
 
     penumbra3_decode u_decode (
@@ -145,22 +146,24 @@ module penumbra3_ex_stage_test
         .o_branch_taken         (o_branch_taken),
         .o_branch_target        (o_branch_target),
         .o_mem1_bundle          (mem1_bundle),
-        .o_mem1_result          (o_mem1_result),
-        .o_mem1_result_aux      (o_mem1_result_aux),
+        .o_mem1_payload         (mem1_payload),
         .o_mem1_store_data      (o_mem1_store_data),
-        .o_mem1_flag_value      (o_mem1_flag_value),
-        .o_mem1_phys_dst        (o_mem1_phys_dst),
-        .o_mem1_phys_dst_we     (o_mem1_phys_dst_we),
-        .o_mem1_phys_dst_aux    (o_mem1_phys_dst_aux),
-        .o_mem1_phys_dst_aux_we (o_mem1_phys_dst_aux_we),
-        .o_mem1_pc              (o_mem1_pc),
         .o_mem1_valid           (o_mem1_valid),
-        .o_mem1_bcause          (mem1_bcause),
-        .o_mem1_fault_pending   (o_mem1_fault_pending),
-        .o_mem1_fault_vec       (o_mem1_fault_vec),
-        .o_mem1_fault_status    (o_mem1_fault_status)
+        .o_mem1_bcause          (mem1_bcause)
     );
 
-    assign o_mem1_op_class = mem1_bundle.op_class;
+    // Fan the bundle + payload struct out to the flat ports the testbench reads.
+    assign o_mem1_op_class        = mem1_bundle.op_class;
+    assign o_mem1_result          = mem1_payload.value;
+    assign o_mem1_result_aux      = mem1_payload.value_aux;
+    assign o_mem1_flag_value      = mem1_payload.flags;
+    assign o_mem1_phys_dst        = mem1_payload.phys_dst;
+    assign o_mem1_phys_dst_we     = mem1_payload.phys_dst_we;
+    assign o_mem1_phys_dst_aux    = mem1_payload.phys_dst_aux;
+    assign o_mem1_phys_dst_aux_we = mem1_payload.phys_dst_aux_we;
+    assign o_mem1_pc              = mem1_payload.pc;
+    assign o_mem1_fault_pending   = mem1_payload.fault_pending;
+    assign o_mem1_fault_vec       = mem1_payload.fault_vec;
+    assign o_mem1_fault_status    = mem1_payload.fault_status;
 
 endmodule
