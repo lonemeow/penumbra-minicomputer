@@ -124,8 +124,12 @@ skeleton stage-by-stage: each module is forked or written, given a
   buffer; `load_complete` parks the full descriptor and `dtranslate`/`tlb_store`
   gained an `i_hold` read clock-enable for the freeze; composed
   mem1->dtranslate->mem2 test (`96da15b`)
+- `penumbra3_wb_stage` -- the commit point: physical-index write routing
+  (regfile vs SPR-file/scratch, USP-to-regfile), the NZCV flag strobe, divmul
+  dual-write sequencing through the single regfile port, and precise
+  fault-commit gating; flat-driven unit test (`79ef076`)
 
-**Next, in order:** WB + regfile/SPR/scratch files -> `spine` (stall/flush +
+**Next, in order:** regfile/SPR/scratch files -> `spine` (stall/flush +
 the `i_hold` freeze distribution, stage instances, the operand-forward source
 wiring, the issue-release broadcasts ID matches, and the
 `dtranslate`/cache/`load_complete` instances the MEM stages launch into) ->

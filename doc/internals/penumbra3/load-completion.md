@@ -77,6 +77,29 @@ graph LR
 - **Completion is a registered event** delivering `{data}` or `{fault}` to
   the held load, which then advances to WB and clears `load_pending_q`.
 
+## What the pipe gate freezes
+
+`load_pending` is back-pressure with a boundary, not a global freeze: it holds
+the launch side and lets the commit side drain.
+
+- **Held while a load is pending:** MEM1, the MEM1/MEM2 register, the
+  [address-translation launch](./mem-stage.md), and issue (a dependent stalls
+  on the scoreboard, see [the issue gate](#the-issue-gate)). The missing load
+  and every younger instruction hold in place.
+- **Not held:** the MEM2/WB register. It carries instructions *older* than the
+  held load to the commit point, and an older instruction must retire while the
+  load waits. A pending load drives that register to bubbles — its MEM2 verdict
+  does not commit — and the held load itself reaches a register through the
+  completion path above, never through MEM2/WB, so draining the register is
+  always correct.
+
+The MEM2/WB register's only back-pressure is a genuine downstream stall: the
+commit stage holding for a multi-cycle writeback (the divmul dual-register
+retire, which writes its two destinations through the single regfile port over
+two cycles). Folding `load_pending` into the MEM2/WB freeze re-presents that
+already-committed writeback as a fresh slot and retires it twice — the two
+freeze sources stay separate.
+
 ## Precise faults for free
 
 The held load is, by the in-order single-outstanding invariant, **always the
