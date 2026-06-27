@@ -100,6 +100,63 @@ adapter's speculative-prefetch FSM: it must abandon an orphaned spec on a
 gap exactly as it already does on an address mispredict. File:
 `hw/rtl/io/sdram/sdram_bus_adapter.sv`.
 
+## Hardware: gen3 (Penumbra/3) Phase-1 build status
+
+Phase 0 (the four structural probes) passed; see
+`doc/internals/penumbra3/phase0-probes.md`. Phase 1 builds the 7-stage
+skeleton stage-by-stage: each module is forked or written, given a
+`MODULE_TESTS` unit test, and committed to `main`. Run one test with
+`make sim MOD=<name>_test TB=tb_<name> PROG=` (a packed-struct port needs a
+`_test.sv` unpacking wrapper; flat-port modules use the bare name).
+
+**Done** (front end + issue, all unit-tested):
+
+- `penumbra3_pkg` control bundle + enums (`7a964ee`)
+- `penumbra3_decode` -- word->bundle, parallel-then-select, mode-independent (`4e60d01`)
+- `penumbra3_fetch_buffer` -- IF2->ID elastic FIFO (`00051be`)
+- `penumbra3_if1_stage` (`67eeb41`), `penumbra3_if2_stage` decode-on-enqueue (`27166b0`)
+- `penumbra3_id_stage` -- regmap + scoreboard + issue + priv/fault finalize (`10e088b`)
+
+**Next, in order:** EX (`alu`, `flag_bypass`, branch resolve, `divmul` launch,
+the operand forward muxes + forward-broadcast generation, NZCV forwarding) ->
+MEM1/MEM2 (wire the proven `dtranslate`/`tlb_*` + `load_complete`) -> WB +
+regfile/SPR/scratch files -> `spine` (stall/flush distribution + stage
+instances) -> `core` (front end + spine + `vecfetch` + `irq`) -> fork the
+memory hierarchy (L1, MMU/TLB storage, arbiter + `bus_master`, fill, L2) ->
+`machine_penumbra3` + `ulx3s_penumbra3_top`. Phase-1's first gating
+checkpoint is then the **full-top composition timing read** (bare skeleton,
+no BTB) -- calibrates the probe->full margin before any feature work.
+
+**Locked hazard-model decisions** (context for resuming):
+
+- Decode runs on the FIFO *enqueue* path and is a pure function of the
+  instruction word -- everything mode-dependent (regmap, the privilege fault,
+  the fault vector's `VEC_PRIV` arm) stays in ID against live `SR.S`.
+- The bundle carries a single positive-sense `dst_we` (routed GPR/SPR by
+  `dst_is_spr`): a forwarding machine's destination-valid bit must mean
+  "actually writes", so a CMP must advertise no destination.
+- The scoreboard tracks only the non-forwardable producers (LOAD / DIVMUL /
+  RDSYS); ALU results never set a bit -- EX forwards them. The issue gate
+  blocks a source only on `used & pending & ~forwardable`.
+- Forward broadcasts to ID are producer *stages* (not source lanes), so every
+  source matches every broadcast slot.
+- The fetch FIFO *is* the IF2/ID register (decode folds into enqueue, no extra
+  stage); the IF2 skid is retained for the drop-equals-valid I-cache
+  completion when the FIFO is momentarily full.
+
+**Deferred (resolve at the named task):**
+
+- *Forward-broadcast sourcing* -- which stages (EX/MEM2/WB) drive ID's
+  `i_fwd*` and what "value ready" means -- is co-designed with EX. ID owns
+  only the match today.
+- *divmul aux-destination scoreboard bit* -- the scoreboard has one set port;
+  the second (Rdh) set path lands with the EX divmul sequencing.
+- *Vector-fetch cacheability* -- `penumbra3_vecfetch` will keep the vector
+  read uncached for now. It is the CPU's only fetch-by-PA (not VA), so
+  threading a PA index into the VIPT caches is awkward; MMU-bypass is required,
+  cache-bypass is not, so making it L2-cacheable is a worthwhile later win
+  (kills a full-SDRAM round-trip per trap). Revisit after the skeleton boots.
+
 ## Kernel: block-device reads still go single-block
 
 `pmci` handles CMD18/CMD25 multi-block natively (a per-block
