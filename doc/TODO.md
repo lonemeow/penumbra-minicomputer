@@ -3063,29 +3063,41 @@ a slot. Executables (`ET_EXEC`) are a *separate* problem — their own
 globals use absolute `lli+lui` (base-sharing applies), not the GOT; calls
 into libc go through the PLT (`JUMP_SLOT`).
 
-**Residual, deliberately not pursued** (the GOT cost is now too small to
-justify more work — do not reopen without a fresh measurement showing the
-remainder is worth it):
+**Residual GOT slots, not worth pursuing** (the GOT cost itself is now
+too small to justify more work):
 
 - The **56** non-preemptible GOT slots that remain are symbols the
   compiler could not prove `dso_local` at compile time but the linker
   bound locally (default-visibility data globals, function-address
   takes). Below the bar for a dedicated pass.
-- **PC-anchor sharing** (CSE the per-site PC anchors across a region) is
-  the *same* transform as absolute base-sharing, which measured
-  net-negative on Dhrystone hardware (relocating data hurt the 1 KB
-  cache more than the saved materialisations helped — see "Global base
-  sharing"). Its win shrank with the GOT population.
 - A **GOT/GP base register** for the preemptible remainder would target
   only ~293 slots, and the 2-operand ISA makes a pinned GP costly in
   register pressure.
 
+**The follow-on lever is NOT closed by this fix — it grew.** Each of the
+~5,000 now-direct accesses still carries its *own* per-site
+`lli; lui; add pc` triple anchored to its own PC, so repeats do not CSE.
+**PC-anchor sharing** (regional base-CSE: materialise one PC-derived
+anchor per region, then `anchor + (sym - .Lanchor)` per access) collapses
+those triples. It is **layout-neutral — it does not relocate data**, so
+it is the *opposite* transform from GlobalMerge: the net-negative
+Dhrystone result belongs to GlobalMerge (which packed hot scalars beside
+a cold 10 KB array and thrashed the **gen1 1 KB direct-mapped** D-cache),
+*not* to base-CSE, whose only cost is register pressure. That gen1 cache
+number does not transfer to gen2 (4 KB 2-way) / gen3, which is where
+userland runs. This is the same pass as absolute base-sharing for the
+kernel + executables' own globals, differing only in base kind
+(PC-derived vs absolute) — tracked under "G_GLOBAL_VALUE materialization
+defeats CSE and rematerialization". Realized win is global-density
+dependent (real code is far less global-dense than Dhrystone), so measure
+on gen2/gen3 hardware before productionising.
+
 **Priority across the remaining addressing investigation, by leverage:**
-(1) absolute base-sharing for the kernel + executables' own globals
-(layout-neutral label-difference offsets, ~41% of kernel
-materialisations) — now the live lever; (2) `LUIC` and PC-anchor sharing
-as secondary folds that compose with it, gated on the base-sharing
-cache-footprint result above.
+(1) regional base-CSE — one parameterised pass serving both PC-anchor
+sharing (the ~5,000 direct PIC accesses above) and absolute base-sharing
+for the kernel + executables' own globals (~41% of kernel
+materialisations); layout-neutral, register-pressure-gated, measured on
+gen2/gen3; (2) `LUIC` and other secondary folds that compose with it.
 
 ## Compiler: no branch-cost model — branch-avoidance may be over-eager
 
