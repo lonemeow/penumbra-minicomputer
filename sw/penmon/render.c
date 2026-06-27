@@ -244,7 +244,8 @@ cache_row(int y, const char *label, const struct cache_rate *cr,
 void
 render_frame(const struct rates *r, const struct history *h,
     const struct meminfo *mem, double load1, long uptime_sec,
-    const struct procinfo *procs, int nproc, double interval)
+    const struct procinfo *procs, int nproc, double interval,
+    const char *cpu_model)
 {
 	int y, i, cpi_c, spark_w, cols, lines;
 	char lbuf[16], rbuf[16];
@@ -259,10 +260,11 @@ render_frame(const struct rates *r, const struct history *h,
 
 	/* ── Title bar ─────────────────────────────────────────── */
 	scr_fill(0, 0, cols, ' ', pair_attr(PAIR_HDR));
-	scr_printf(0, 1, pair_attr(PAIR_HDR), "PENUMBRA penmon");
-	scr_printf(0, cols - 38, pair_attr(PAIR_HDR),
-	    "up %ld:%02ld:%02ld  load %.2f  %.1f MHz",
-	    up / 3600, (up % 3600) / 60, up % 60, load1, r->clk_mhz);
+	scr_printf(0, 1, pair_attr(PAIR_HDR), "%s @ %.1f MHz",
+		cpu_model, r->clk_mhz);
+	scr_printf(0, cols - 27, pair_attr(PAIR_HDR),
+	    "up %02ld:%02ld:%02ld  load avg %.2f",
+	    up / 3600, (up % 3600) / 60, up % 60, load1);
 
 	/* ── CPU + CPI ─────────────────────────────────────────── */
 	y = 2;

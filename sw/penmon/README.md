@@ -5,7 +5,7 @@ metrics (CPU busy %, memory, load, per-process CPU) with Penumbra's
 **hardware performance counters** — CPI, MIPS, and L1I/L1D/L2 cache hit
 rates — read straight from the sysctl tree.
 ```
- PENUMBRA penmon                         up 0:03:42  load 0.42  25.0 MHz
+ Penumbra/2 @ 25.0 MHz                       up 00:03:42  load avg 0.42
  CPU ████████░░░░░░░░░░░░░░░░░░░░  us  38% sy  12% in   2% id  48%
  CPI  4.12 ███████░░░░░░░░░░░░░░   MIPS   6.07   insn/s 6071000
  ───────────────────────────────────────────────────────────────────

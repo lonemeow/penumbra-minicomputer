@@ -17,6 +17,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -48,6 +49,7 @@ main(int argc, char **argv)
 	struct meminfo mem;
 	struct procinfo procs[PENMON_MAXPROC];
 	uint64_t clk_hz = 0;
+	char cpu_model[PENMON_MODELLEN] = "";
 	double interval = 1.0;
 	int ch, nproc;
 	double load[3];
@@ -71,6 +73,8 @@ main(int argc, char **argv)
 	signal(SIGTERM, on_signal);
 
 	(void)read_cpu_freq(&clk_hz);
+	if (!read_cpu_model(cpu_model, sizeof(cpu_model)))
+		strlcpy(cpu_model, "Unknown CPU", sizeof(cpu_model));
 	history_init(&hist);
 
 	/* Prime with a short first interval so the screen isn't blank. */
@@ -94,7 +98,7 @@ main(int argc, char **argv)
 			load[0] = 0.0;
 
 		render_frame(&r, &hist, &mem, load[0], read_uptime(),
-		    procs, nproc, interval);
+		    procs, nproc, interval, cpu_model);
 
 		prev = cur;
 

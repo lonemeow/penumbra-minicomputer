@@ -85,6 +85,14 @@ enum { CP_USER, CP_NICE, CP_SYS, CP_INTR, CP_IDLE };
  * Returns 0 and leaves *hz untouched on failure. */
 int  read_cpu_freq(uint64_t *hz);
 
+/* CPU model-name buffer size — matches the kernel's cpu_model_name[17]
+ * (16 chars + NUL), the SYSDEV_CPU identity string. */
+#define PENMON_MODELLEN 17
+
+/* Read the static CPU model name (machdep.cpu.model) once at startup into
+ * buf.  Returns 0 and writes an empty string on failure (un-patched kernel). */
+int  read_cpu_model(char *buf, size_t bufsz);
+
 /* Take a full snapshot of all counters + timestamp.  Missing sysctls are
  * left zero so the tool degrades gracefully on an un-patched kernel. */
 void read_snapshot(struct snapshot *s);
@@ -150,6 +158,7 @@ void history_push(struct history *h, const struct rates *r);
 /* Draw one full frame into the screen layer (screen.h) and flush it. */
 void render_frame(const struct rates *r, const struct history *h,
                   const struct meminfo *mem, double load1, long uptime_sec,
-                  const struct procinfo *procs, int nproc, double interval);
+                  const struct procinfo *procs, int nproc, double interval,
+                  const char *cpu_model);
 
 #endif /* PENMON_H */

@@ -63,6 +63,21 @@ read_cpu_freq(uint64_t *hz)
 	return 1;
 }
 
+int
+read_cpu_model(char *buf, size_t bufsz)
+{
+	size_t len = bufsz;
+
+	if (buf == NULL || bufsz == 0)
+		return 0;
+	if (sysctlbyname("machdep.cpu.model", buf, &len, NULL, 0) != 0) {
+		buf[0] = '\0';		/* un-patched kernel: leave it blank */
+		return 0;
+	}
+	buf[bufsz - 1] = '\0';		/* never trust the source to terminate */
+	return 1;
+}
+
 void
 read_snapshot(struct snapshot *s)
 {
