@@ -128,8 +128,12 @@ skeleton stage-by-stage: each module is forked or written, given a
   (regfile vs SPR-file/scratch, USP-to-regfile), the NZCV flag strobe, divmul
   dual-write sequencing through the single regfile port, and precise
   fault-commit gating; flat-driven unit test (`79ef076`)
+- `penumbra3_regfile` / `penumbra3_spr_file` / `penumbra3_scratch_file` -- the
+  storage tier WB commits into: GPRs + banked USP/SSP (R0 forced 0), SR/EPC/ESR
+  (SR moves only via entry/ERET/EI/DI + flag commit -- no WRSPR SR leg), and
+  SCR0..3; each flat-port unit-tested (`3e40ce4`)
 
-**Next, in order:** regfile/SPR/scratch files -> `spine` (stall/flush +
+**Next, in order:** `spine` (stall/flush +
 the `i_hold` freeze distribution, stage instances, the operand-forward source
 wiring, the issue-release broadcasts ID matches, and the
 `dtranslate`/cache/`load_complete` instances the MEM stages launch into) ->
