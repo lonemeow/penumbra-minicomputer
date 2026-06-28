@@ -3634,7 +3634,7 @@ Implementation work, by layer:
   after six consecutive 1s (`o_valid` drops on it) and flags a bit-stuff
   error (a 1 where the 0 was due → seam `o_rx_error`) in the same decision.
   Round-trip + error-injection unit test (`65dfccd`).
-- Remaining SIE (48 MHz): SYNC/EOP framing, oversampling serdes.
+- Remaining SIE (60 MHz): SYNC/EOP framing, oversampling serdes.
 - MAC: transaction FSM, 1 ms frame timer, port/line detect + reset.
 - US2 wiring: RX diff on `usb_fpga_dp/dn`, TX on `usb_fpga_bd_dp/dn`,
   pulls on `usb_fpga_pu_*`; dual-clock-BRAM + handshake CDC.
