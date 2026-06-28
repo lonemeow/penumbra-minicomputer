@@ -104,10 +104,15 @@ module penumbra3_spine
     output logic [31:0]           o_mmu_fault_status,
 
     // ── Interrupt unit ──
+    // o_ex_valid / o_ex_stall expose the EX frontier the interrupt unit gates
+    // on: an interrupt is injected only when EX holds a real instruction and is
+    // not back-pressured, so EPC and the saved SR land on a clean boundary.
     output logic                  o_sr_s,
     output logic                  o_sr_i,
     output logic                  o_ei_commit,
     output logic                  o_dc_commit,
+    output logic                  o_ex_valid,
+    output logic                  o_ex_stall,
     input  logic                  i_irq_inject,
     input  logic [3:0]            i_irq_vec,
 
@@ -205,11 +210,9 @@ module penumbra3_spine
     logic id_stall_in;    // EX cannot accept (-> ID register hold)
     logic id_pipe_hold;   // registered back-end hold (-> ID issue gate)
 
-    // TODO(human): the freeze distribution.
-    //
-    // Drive the five signals above from {load_pending, wb_local_stall,
-    // ex_local_stall}, per the load-completion freeze contract and the stall
-    // audit:
+    // The freeze distribution: the five signals above are driven from
+    // {load_pending, wb_local_stall, ex_local_stall}, per the load-completion
+    // freeze contract and the stall audit:
     //   - launch_hold: the launch side (MEM1 register, dtranslate, cache) holds
     //     when a load is pending OR the MEM2/WB register is back-pressured.
     //   - mem2_reg_hold: the MEM2/WB register holds ONLY on WB back-pressure --
@@ -234,6 +237,10 @@ module penumbra3_spine
     // back-pressured behind a load) is not discarded before it resolves.
     logic ex_stall;
     assign ex_stall = ex_local_stall | ex_stall_in;
+
+    // EX-frontier observability for the interrupt unit (the clean-boundary gate).
+    assign o_ex_valid = idex_valid;
+    assign o_ex_stall = ex_stall;
 
     // ════════════════════════════════════════════════════════════
     // Redirect / flush distribution

@@ -83,6 +83,8 @@ module penumbra3_spine_test
     output logic        o_sr_i,
     output logic        o_ei_commit,
     output logic        o_dc_commit,
+    output logic        o_ex_valid,
+    output logic        o_ex_stall,
     input  logic        i_irq_inject,
     input  logic [3:0]  i_irq_vec,
 
@@ -132,6 +134,7 @@ module penumbra3_spine_test
         .o_mmu_fault_commit(o_mmu_fault_commit), .o_mmu_fault_vaddr(o_mmu_fault_vaddr),
         .o_mmu_fault_status(o_mmu_fault_status),
         .o_sr_s(o_sr_s), .o_sr_i(o_sr_i), .o_ei_commit(o_ei_commit), .o_dc_commit(o_dc_commit),
+        .o_ex_valid(o_ex_valid), .o_ex_stall(o_ex_stall),
         .i_irq_inject(i_irq_inject), .i_irq_vec(i_irq_vec),
         .o_insn_committed(o_insn_committed), .o_bcause(bcause_out),
         .o_retire_valid(o_retire_valid), .o_retire_pc(o_retire_pc),
