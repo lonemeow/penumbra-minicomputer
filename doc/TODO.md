@@ -3624,8 +3624,12 @@ Implementation work, by layer:
   modules emit the remainder; the MAC adds the on-wire complement +
   bit-reverse. Reference-checked unit tests + a `sw/tools/usb_crc.py`
   model (`6251a87`, `b74a5ef`).
-- 48 MHz SIE (NRZI, bit-stuffing, SYNC/EOP), transaction FSM,
-  1 ms frame timer, port/line detect + reset.
+- `usb_bit_stuff_tx` — SIE transmit bit-stuffer: inserts a 0 after six
+  consecutive 1s, with a consume-handshake (`o_stuff`) that back-pressures
+  the serializer. Reference-checked unit test (`ca1b502`).
+- Remaining SIE (48 MHz): NRZI encode/decode, SYNC/EOP framing, RX
+  bit-unstuff (+ stuff-error → seam `o_rx_error`), oversampling serdes.
+- MAC: transaction FSM, 1 ms frame timer, port/line detect + reset.
 - US2 wiring: RX diff on `usb_fpga_dp/dn`, TX on `usb_fpga_bd_dp/dn`,
   pulls on `usb_fpga_pu_*`; dual-clock-BRAM + handshake CDC.
 - `autoconfig_dev` wrapper (`CLASS_USBHC`).
