@@ -26,6 +26,7 @@ enum {
 	PAIR_RED,
 	PAIR_CYAN,
 	PAIR_BLUE,
+	PAIR_MAGENTA,
 	PAIR_HDR,	/* title / table header: white on blue */
 	PAIR_DIM,	/* bar track / empty cells: grey        */
 };
@@ -39,9 +40,10 @@ pair_attr(int pair)
 	case PAIR_GREEN:  return ATTR(C_GREEN,  C_DEFAULT, 1);
 	case PAIR_YELLOW: return ATTR(C_YELLOW, C_DEFAULT, 1);
 	case PAIR_RED:    return ATTR(C_RED,    C_DEFAULT, 1);
-	case PAIR_CYAN:   return ATTR(C_CYAN,   C_DEFAULT, 1);
-	case PAIR_BLUE:   return ATTR(C_BLUE,   C_DEFAULT, 1);
-	case PAIR_HDR:    return ATTR(C_WHITE,  C_BLUE,    1);
+	case PAIR_CYAN:   return ATTR(C_CYAN,    C_DEFAULT, 1);
+	case PAIR_BLUE:   return ATTR(C_BLUE,    C_DEFAULT, 1);
+	case PAIR_MAGENTA:return ATTR(C_MAGENTA, C_DEFAULT, 1);
+	case PAIR_HDR:    return ATTR(C_WHITE,   C_BLUE,    1);
 	case PAIR_DIM:    return ATTR(C_BLACK,  C_DEFAULT, 1);	/* grey */
 	default:          return A_NORM;
 	}
@@ -153,25 +155,65 @@ draw_bar(int y, int x, int w, double frac, int pair)
 	}
 }
 
-/* Stacked CPU bar: user|sys|intr fill, idle is the track. */
+/*
+ * Draw a stacked proportional bar: segment i is sized to pct[i] percent of
+ * the bar width and drawn in colour pairs[i]; the unfilled remainder is the
+ * dim track.  Segments are clipped to the bar, so percentages that sum past
+ * 100 just fill it rather than overrun.
+ */
+static void
+draw_stack_bar(int y, int x, int w, const double *pct, const int *pairs, int n)
+{
+	int used = 0, i, j;
+
+	for (i = 0; i < n; i++) {
+		int seg = (int)(pct[i] / 100.0 * w + 0.5);
+
+		for (j = 0; j < seg && used < w; j++, used++)
+			scr_putc(y, x + used, GLYPH_BLOCK, pair_attr(pairs[i]));
+	}
+	for (; used < w; used++)
+		scr_putc(y, x + used, GLYPH_TRACK, pair_attr(PAIR_DIM));
+}
+
+/* Stacked CPU bar: user+nice | sys | intr fill, idle is the track. */
 static void
 draw_cpu_bar(int y, int x, int w, const double pct[5])
 {
-	int wu, ws, wi, used, i;
+	const double seg[] = {
+		pct[CP_USER] + pct[CP_NICE], pct[CP_SYS], pct[CP_INTR]
+	};
+	static const int pairs[] = { PAIR_GREEN, PAIR_CYAN, PAIR_RED };
 
-	wu = (int)((pct[CP_USER] + pct[CP_NICE]) / 100.0 * w + 0.5);
-	ws = (int)(pct[CP_SYS]  / 100.0 * w + 0.5);
-	wi = (int)(pct[CP_INTR] / 100.0 * w + 0.5);
-	used = 0;
+	draw_stack_bar(y, x, w, seg, pairs, (int)(sizeof(seg) / sizeof(seg[0])));
+}
 
-	for (i = 0; i < wu && used < w; i++, used++)
-		scr_putc(y, x + used, GLYPH_BLOCK, pair_attr(PAIR_GREEN));
-	for (i = 0; i < ws && used < w; i++, used++)
-		scr_putc(y, x + used, GLYPH_BLOCK, pair_attr(PAIR_CYAN));
-	for (i = 0; i < wi && used < w; i++, used++)
-		scr_putc(y, x + used, GLYPH_BLOCK, pair_attr(PAIR_RED));
-	for (; used < w; used++)
-		scr_putc(y, x + used, GLYPH_TRACK, pair_attr(PAIR_DIM));
+/*
+ * Stacked STALL bar: the six per-cause stall percentages fill the bar in
+ * the same left-to-right order as the STALL readout above; the productive
+ * (non-stalled) remainder is the track, so the filled length reads as the
+ * total stall burden and the colours break it down by cause.
+ */
+static void
+draw_stall_bar(int y, int x, int w, const struct rates *r)
+{
+	const double seg[] = {
+		r->stall_funit_pct, r->stall_ifetch_pct, r->stall_load_pct,
+		r->stall_store_pct, r->stall_hazard_pct, r->stall_flush_pct
+	};
+	/*
+	 * Colours reuse the dashboard's good/warn/bad reading for the causes
+	 * that carry one: funit (multi-cycle execution the core genuinely has
+	 * to do) is green, ifetch (the caches failing to feed the front end)
+	 * is red, flush (branch mispredict / redirect) is yellow.  load, store,
+	 * and hazard have no inherent good-or-bad sense, so they take neutral
+	 * hues (cyan, magenta, blue) picked only to keep the segments distinct.
+	 */
+	static const int pairs[] = {
+		PAIR_GREEN, PAIR_RED, PAIR_CYAN, PAIR_MAGENTA, PAIR_BLUE, PAIR_YELLOW
+	};
+
+	draw_stack_bar(y, x, w, seg, pairs, (int)(sizeof(seg) / sizeof(seg[0])));
 }
 
 /*
@@ -366,20 +408,21 @@ render_frame(const struct rates *r, const struct history *h,
 	    r->stall_funit_pct, r->stall_ifetch_pct,
 	    r->stall_load_pct, r->stall_store_pct,
 	    r->stall_hazard_pct, r->stall_flush_pct);
+	draw_stall_bar(5, lay.bar_x, cols - lay.bar_x - 1, r);
 
-	scr_fill(5, 0, cols, GLYPH_HLINE, A_NORM);
+	scr_fill(6, 0, cols, GLYPH_HLINE, A_NORM);
 
 	/* ── Cache panel ───────────────────────────────────────── */
-	scr_printf(6, 1, A_NORM, "CACHE");
-	scr_printf(6, 6, A_NORM, " hit%%");
-	scr_printf(6, lay.bar_x, A_NORM, "(hit rate)");
-	scr_printf(6, lay.info_x, A_NORM, "miss/s");
-	scr_printf(6, lay.spark_x, A_NORM, "history");
-	cache_row(7, "L1I", &r->l1i, h->l1i, h->count, h->head, &lay);
-	cache_row(8, "L1D", &r->l1d, h->l1d, h->count, h->head, &lay);
-	cache_row(9, "L2",  &r->l2,  h->l2,  h->count, h->head, &lay);
+	scr_printf(7, 1, A_NORM, "CACHE");
+	scr_printf(7, 6, A_NORM, " hit%%");
+	scr_printf(7, lay.bar_x, A_NORM, "(hit rate)");
+	scr_printf(7, lay.info_x, A_NORM, "miss/s");
+	scr_printf(7, lay.spark_x, A_NORM, "history");
+	cache_row(8, "L1I", &r->l1i, h->l1i, h->count, h->head, &lay);
+	cache_row(9, "L1D", &r->l1d, h->l1d, h->count, h->head, &lay);
+	cache_row(10, "L2",  &r->l2,  h->l2,  h->count, h->head, &lay);
 
-	scr_fill(10, 0, cols, GLYPH_HLINE, A_NORM);
+	scr_fill(11, 0, cols, GLYPH_HLINE, A_NORM);
 
 	/* ── Memory ────────────────────────────────────────────── */
 	{
@@ -392,33 +435,33 @@ render_frame(const struct rates *r, const struct history *h,
 		human_bytes(mem->total_bytes - mem->free_bytes, lbuf, sizeof(lbuf));
 		human_bytes(mem->total_bytes, rbuf, sizeof(rbuf));
 		human_bytes(mem->free_bytes, fbuf, sizeof(fbuf));
-		scr_printf(11, 1, A_NORM, "MEM");
-		draw_bar(11, lay.bar_x, lay.bar_w, used_frac, mc);
-		scr_printf(11, lay.info_x, A_NORM, "%s / %s used  (%s free)   flt %.0f/s",
+		scr_printf(12, 1, A_NORM, "MEM");
+		draw_bar(12, lay.bar_x, lay.bar_w, used_frac, mc);
+		scr_printf(12, lay.info_x, A_NORM, "%s / %s used  (%s free)   flt %.0f/s",
 		    lbuf, rbuf, fbuf, r->faults_per_sec);
 	}
 
 	/* ── Activity (vmstat-style rates from uvmexp2) ────────── */
-	scr_printf(12, 1, A_NORM,
+	scr_printf(13, 1, A_NORM,
 	    "ACT  intr %5.0f/s  syscall %6.0f/s  csw %5.0f/s  fork %4.0f/s",
 	    r->intr_per_sec, r->syscall_per_sec, r->csw_per_sec,
 	    r->fork_per_sec);
 
-	scr_fill(13, 0, cols, GLYPH_HLINE, A_NORM);
+	scr_fill(14, 0, cols, GLYPH_HLINE, A_NORM);
 
 	/* ── Process table ─────────────────────────────────────── */
-	scr_fill(14, 0, cols, ' ', pair_attr(PAIR_HDR));
-	scr_printf(14, 1, pair_attr(PAIR_HDR), "%6s %-10s %5s %8s %2s %s",
+	scr_fill(15, 0, cols, ' ', pair_attr(PAIR_HDR));
+	scr_printf(15, 1, pair_attr(PAIR_HDR), "%6s %-10s %5s %8s %2s %s",
 	    "PID", "USER", "%CPU", "RSS", "ST", "COMMAND");
 
-	for (i = 0; i < nproc && (15 + i) < lines - 1; i++) {
+	for (i = 0; i < nproc && (16 + i) < lines - 1; i++) {
 		const struct procinfo *p = &procs[i];
 		int pc = metric_color(p->pctcpu, 1.0, 20.0, 1);
 
 		human_bytes(p->rss_bytes, rbuf, sizeof(rbuf));
-		scr_printf(15 + i, 1, A_NORM, "%6d %-10.10s ", p->pid, p->user);
-		scr_printf(15 + i, 19, pair_attr(pc), "%5.1f", p->pctcpu);
-		scr_printf(15 + i, 25, A_NORM, " %8s %c  %-.*s",
+		scr_printf(16 + i, 1, A_NORM, "%6d %-10.10s ", p->pid, p->user);
+		scr_printf(16 + i, 19, pair_attr(pc), "%5.1f", p->pctcpu);
+		scr_printf(16 + i, 25, A_NORM, " %8s %c  %-.*s",
 		    rbuf, p->state, cols - 40, p->comm);
 	}
 
