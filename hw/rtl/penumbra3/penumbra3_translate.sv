@@ -1,12 +1,17 @@
-// penumbra3_dtranslate -- gen3 data-side address translation (MEM1/MEM2).
+// penumbra3_translate -- gen3 address translation for one port (launch/resolve).
 //
-// MEM1: derive the set index from the effective address and launch the main
-// TLB (D-copy) read. MEM2: the registered set feeds the verdict cone, which
-// combines with the pinned-TLB result to produce the translation. The query
-// (vaddr, access type, mode, ASID) is registered MEM1->MEM2 to align with
-// the BRAM read latency. The pinned-TLB lookup is async and supplied at MEM2
-// (pinned-hit-wins).
-module penumbra3_dtranslate
+// One translation port: the gen3 MMU instantiates it twice -- an instruction
+// (I) copy and a data (D) copy -- over a shared install/refill write stream, so
+// the two copies stay hardware-coherent. Nothing here is side-specific; the
+// access type and privilege are inputs.
+//
+// Launch cycle: derive the set index from the effective address and launch the
+// main TLB copy read. Resolve cycle: the registered set feeds the verdict cone,
+// which combines with the pinned-TLB result to produce the translation. The
+// query (vaddr, access type, mode, ASID) is registered launch->resolve to align
+// with the BRAM read latency. The pinned-TLB lookup is async and supplied at the
+// resolve cycle (pinned-hit-wins).
+module penumbra3_translate
     import penumbra_pkg::*;
 #(
     parameter int SETS = 32,

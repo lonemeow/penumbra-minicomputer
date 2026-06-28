@@ -140,7 +140,7 @@ module penumbra3_mem2_stage_test
     // -- Address translation (MEM1 launch / MEM2 verdict) ---------
     logic [31:0] tr_paddr;
     logic        tr_cacheable, tr_hit, tr_miss_fault, tr_prot_fault;
-    penumbra3_dtranslate u_dtranslate (
+    penumbra3_translate u_dtranslate (
         .i_clk             (i_clk),
         .i_rst             (i_rst),
         .i_lookup_en       (tr_en),

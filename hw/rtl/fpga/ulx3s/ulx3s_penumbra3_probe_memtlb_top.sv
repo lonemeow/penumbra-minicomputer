@@ -1,7 +1,7 @@
 // ULX3S board top (Penumbra/3 probe P0.3) -- MEM1/MEM2 + BRAM-TLB timing.
 //
 // A synthesis instrument, not a usable machine. It puts the gen3 data-side
-// translate cone in front of nextpnr: penumbra3_dtranslate (the D-copy BRAM
+// translate cone in front of nextpnr: penumbra3_translate (the D-copy BRAM
 // TLB read launched in MEM1, the verdict resolved in MEM2) plus a second
 // store standing in for the I-copy, so the duplicated BRAM usage and the
 // shared write fan-out are realistic. The path under measurement is the
@@ -98,7 +98,7 @@ module ulx3s_penumbra3_probe_memtlb_top (
     // ── DUT: the gen3 data-side translate cone (D-copy inside) ───
     logic [31:0] paddr;
     logic        cacheable, hit, miss_fault, prot_fault;
-    penumbra3_dtranslate #(
+    penumbra3_translate #(
         .SETS (SETS),
         .WAYS (WAYS)
     ) u_dtranslate (
