@@ -3627,8 +3627,11 @@ Implementation work, by layer:
 - `usb_bit_stuff_tx` — SIE transmit bit-stuffer: inserts a 0 after six
   consecutive 1s, with a consume-handshake (`o_stuff`) that back-pressures
   the serializer. Reference-checked unit test (`ca1b502`).
-- Remaining SIE (48 MHz): NRZI encode/decode, SYNC/EOP framing, RX
-  bit-unstuff (+ stuff-error → seam `o_rx_error`), oversampling serdes.
+- `usb_nrzi_encode` / `usb_nrzi_decode` — SIE line coding: a 0 toggles the
+  line level and a 1 holds it (the decoder is the exact inverse). Each
+  reference-checked; the decoder round-trips the encoder (`d2b915d`).
+- Remaining SIE (48 MHz): SYNC/EOP framing, RX bit-unstuff (+ stuff-error
+  → seam `o_rx_error`), oversampling serdes.
 - MAC: transaction FSM, 1 ms frame timer, port/line detect + reset.
 - US2 wiring: RX diff on `usb_fpga_dp/dn`, TX on `usb_fpga_bd_dp/dn`,
   pulls on `usb_fpga_pu_*`; dual-clock-BRAM + handshake CDC.
