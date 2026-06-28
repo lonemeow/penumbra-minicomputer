@@ -12,9 +12,13 @@ module penumbra3_scoreboard #(
     input  logic                     i_clk,
     input  logic                     i_rst,
 
-    // Set on issue (destination), clear on completion
+    // Set on issue (destination), clear on completion. Two set ports: a
+    // dual-destination op (divmul) sets both its primary (Rd) and aux (Rdh)
+    // bits in the same issue cycle.
     input  logic                     i_set_en,
     input  logic [$clog2(NREGS)-1:0] i_set_idx,
+    input  logic                     i_set2_en,
+    input  logic [$clog2(NREGS)-1:0] i_set2_idx,
     input  logic                     i_clr_en,
     input  logic [$clog2(NREGS)-1:0] i_clr_idx,
 
@@ -40,8 +44,9 @@ module penumbra3_scoreboard #(
         else begin
             // Clear before set: a register that both completes and is
             // re-issued the same cycle ends pending (the new producer wins).
-            if (i_clr_en) pending_q[i_clr_idx] <= 1'b0;
-            if (i_set_en) pending_q[i_set_idx] <= 1'b1;
+            if (i_clr_en)  pending_q[i_clr_idx]  <= 1'b0;
+            if (i_set_en)  pending_q[i_set_idx]  <= 1'b1;
+            if (i_set2_en) pending_q[i_set2_idx] <= 1'b1;
         end
     end
 

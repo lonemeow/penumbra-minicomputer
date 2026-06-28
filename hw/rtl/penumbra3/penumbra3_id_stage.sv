@@ -84,6 +84,12 @@ module penumbra3_id_stage
     output logic                  o_ex_phys_dst_we,    // dst occupies a scoreboard entry / regfile write
     output logic [SB_IDX_W-1:0]   o_ex_phys_dst_aux,
     output logic                  o_ex_phys_dst_aux_we,
+    // Operand-forward match qualifiers (EX matches these against the in-flight
+    // producers; fwdable = the final operand is a GPR regfile read).
+    output logic [SB_IDX_W-1:0]   o_ex_phys_src_a,
+    output logic                  o_ex_src_a_fwdable,
+    output logic [SB_IDX_W-1:0]   o_ex_phys_src_b,
+    output logic                  o_ex_src_b_fwdable,
     output logic [31:0]           o_ex_pc,
     output logic [31:0]           o_ex_next_pc,
     output logic                  o_ex_valid,
@@ -97,8 +103,8 @@ module penumbra3_id_stage
     // src_a is always a GPR; src_b and dst may name an SPR. GPRs go through
     // penumbra3_regmap (R14 banks on live supervisor); SPR refs map inline to
     // their scoreboard entry (SR is untracked -- it forwards / serializes).
-    logic [SB_IDX_W-1:0] gpr_src_a, gpr_src_b, gpr_dst;
-    logic                gpr_src_a_tr, gpr_src_b_tr, gpr_dst_tr;
+    logic [SB_IDX_W-1:0] gpr_src_a, gpr_src_b, gpr_dst, gpr_dst_aux;
+    logic                gpr_src_a_tr, gpr_src_b_tr, gpr_dst_tr, gpr_dst_aux_tr;
 
     penumbra3_regmap #(.IDX_BITS (SB_IDX_W)) u_rm_a (
         .i_areg       (i_bundle.src_a_sel),
@@ -117,6 +123,15 @@ module penumbra3_id_stage
         .i_supervisor (i_supervisor),
         .o_pidx       (gpr_dst),
         .o_tracked    (gpr_dst_tr)
+    );
+    // The aux (Rdh) destination is a GPR field distinct from the primary Rd, so
+    // it needs its own arch->phys map -- the divmul high half writes a different
+    // register than the low half.
+    penumbra3_regmap #(.IDX_BITS (SB_IDX_W)) u_rm_aux (
+        .i_areg       (i_bundle.dst_aux_sel),
+        .i_supervisor (i_supervisor),
+        .o_pidx       (gpr_dst_aux),
+        .o_tracked    (gpr_dst_aux_tr)
     );
 
     // SPR# -> scoreboard entry. SR has no entry (returns 0, untracked).
@@ -146,6 +161,15 @@ module penumbra3_id_stage
                              (i_bundle.src_b_is_spr ? (i_bundle.src_b_sel != SPR_SR) : gpr_src_b_tr);
     assign phys_dst_we     = i_bundle.dst_we &
                              (i_bundle.dst_is_spr   ? (i_bundle.dst_sel   != SPR_SR) : gpr_dst_tr);
+
+    // A source is forwardable when its final operand is a GPR regfile read --
+    // not the PC, an immediate, or an SPR-file value. (a_from_pc / src_*_is_pc
+    // imply the matching enable is low, so they are already excluded; b_from_imm
+    // is the store case where src_b is live but op_b carries the EA immediate.)
+    logic src_a_fwdable, src_b_fwdable;
+    assign src_a_fwdable = i_bundle.src_a_en & ~i_bundle.a_from_pc & gpr_src_a_tr;
+    assign src_b_fwdable = i_bundle.src_b_en & ~i_bundle.src_b_is_spr
+                         & ~i_bundle.src_b_is_pc & ~i_bundle.b_from_imm & gpr_src_b_tr;
 
     // ── Regfile + SPR-file read ──────────────────────────────────
     assign o_rd_idx_a   = phys_src_a;
@@ -211,11 +235,14 @@ module penumbra3_id_stage
     penumbra3_scoreboard #(.NREGS (SB_NUM_ENTRIES)) u_scoreboard (
         .i_clk          (i_clk),
         .i_rst          (i_rst),
-        // Set the destination bit when a pending-class op issues.
-        // NOTE: divmul's aux (Rdh) bit needs a second set path, wired when the
-        // EX divmul sequencing lands -- the scoreboard has one set port today.
+        // Set both destination bits a pending-class op occupies on issue: the
+        // primary (Rd) always, and the aux (Rdh) for the dual-destination
+        // divmul -- the aux is not EX-forwarded, so a dependent must stall on it
+        // until it writes back.
         .i_set_en       (issue & sb_eligible & is_pending_class & phys_dst_we),
         .i_set_idx      (phys_dst),
+        .i_set2_en      (issue & sb_eligible & i_bundle.dst_aux_we & gpr_dst_aux_tr),
+        .i_set2_idx     (gpr_dst_aux),
         .i_clr_en       (i_clr_en),
         .i_clr_idx      (i_clr_idx),
         .i_src0_idx     (phys_src_a),
@@ -300,8 +327,12 @@ module penumbra3_id_stage
                 o_ex_store_data      <= store_data_sel;
                 o_ex_phys_dst        <= phys_dst;
                 o_ex_phys_dst_we     <= phys_dst_we & ~insn_fault_pending;
-                o_ex_phys_dst_aux    <= gpr_dst;   // aux (divmul Rdh) is a GPR; finalized with EX divmul
+                o_ex_phys_dst_aux    <= gpr_dst_aux;   // aux (divmul Rdh): its own GPR, distinct from Rd
                 o_ex_phys_dst_aux_we <= i_bundle.dst_aux_we & ~insn_fault_pending;
+                o_ex_phys_src_a      <= phys_src_a;
+                o_ex_src_a_fwdable   <= src_a_fwdable;
+                o_ex_phys_src_b      <= phys_src_b;
+                o_ex_src_b_fwdable   <= src_b_fwdable;
                 o_ex_pc              <= i_pc;
                 o_ex_next_pc         <= i_next_pc;
                 o_ex_fault_pending   <= insn_fault_pending;

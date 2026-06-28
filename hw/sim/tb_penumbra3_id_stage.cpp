@@ -17,7 +17,7 @@
 #include "verilated.h"
 
 enum { OPC_ALU = 0, OPC_LOAD = 1, OPC_WRSYS = 9 };
-enum { ALU_ADD = 0 };
+enum { ALU_ADD = 0, OP_R_MUL = 16 };
 enum { VEC_PRIV = 4, VEC_ILLEGAL = 7 };
 
 static int errors = 0, tests = 0;
@@ -81,6 +81,11 @@ int main(int argc, char** argv) {
     check("alu_dst_we", dut->o_ex_phys_dst_we, 1);
     check("alu_pc",     dut->o_ex_pc, 0x1000);
     check("alu_nofault", dut->o_ex_fault_pending, 0);
+    // Forward-source export: both operands are GPR regfile reads (forwardable).
+    check("alu_src_a",     dut->o_ex_phys_src_a, 1);
+    check("alu_src_a_fwd", dut->o_ex_src_a_fwdable, 1);
+    check("alu_src_b",     dut->o_ex_phys_src_b, 2);
+    check("alu_src_b_fwd", dut->o_ex_src_b_fwdable, 1);
 
     // ── Scoreboard stall + forward unblock ───────────────────────
     // A LOAD into R3 (pending-class) sets the scoreboard bit at issue.
@@ -137,6 +142,23 @@ int main(int argc, char** argv) {
     dut->i_stall_in = 0; dut->i_bubble = 1; dut->eval();
     tick(dut); dut->eval();
     check("hs_flushed", dut->o_ex_valid, 0);       // bubble clears ID/EX
+
+    // ── divmul: aux (Rdh) maps to its own GPR and is scoreboarded ──
+    dut->i_rst = 1; tick(dut); dut->i_rst = 0;     // clear the scoreboard first
+    clear(dut);
+    dut->i_ir = enc_r(OP_R_MUL, 1, 2, 0) | (3 << 12);  // MUL R1,R2 -> R1 (lo), R3 (hi)
+    dut->i_valid = 1; dut->eval();
+    check("mul_deq", dut->o_deq_ready, 1);
+    tick(dut); dut->eval();
+    check("mul_dst",    dut->o_ex_phys_dst, 1);          // Rd = R1 (lo half)
+    check("mul_aux",    dut->o_ex_phys_dst_aux, 3);       // Rdh = R3 (hi half), its own reg
+    check("mul_aux_we", dut->o_ex_phys_dst_aux_we, 1);
+    // The aux (R3) is scoreboard-pending and not EX-forwarded, so a dependent
+    // reading R3 must block at issue.
+    clear(dut);
+    dut->i_ir = enc_r(ALU_ADD, 4, 3, 0);   // ADD R4, R3 (R3 = srcB = the divmul Rdh)
+    dut->i_valid = 1; dut->eval();
+    check("aux_dep_blocked", dut->o_deq_ready, 0);
 
     printf("%s: %d/%d checks passed\n",
            errors ? "FAIL" : "PASS", tests - errors, tests);
