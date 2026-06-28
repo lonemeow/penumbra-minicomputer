@@ -163,10 +163,24 @@ the *load_pending-freeze / memory-path test* (the load path is wired but the
 skeleton test drives no translate/cache/fill verdicts yet, so the load-miss
 freeze is unexercised).
 
-**Next, in order:** fork the memory hierarchy (L1, MMU/TLB storage, arbiter +
-`bus_master`, fill, L2) -> `machine_penumbra3` + `ulx3s_penumbra3_top`. Phase-1's
-first gating checkpoint is then the **full-top composition timing read** (bare
-skeleton, no BTB) -- calibrates the probe->full margin before any feature work.
+**Memory hierarchy** (the fork in progress):
+
+- `penumbra3_translate` -- the side-neutral translate path (renamed from
+  `dtranslate`; the MMU uses it twice), now exposing its registered set for
+  sysreg read-back (`9fd2928`, `460f6d4`)
+- `penumbra3_mmu` -- I+D translation unify: `translate` x2 over a shared
+  coherent write stream + dual-port `tlb_pinned`, per-port bypass>pinned>main
+  verdict, the device-0 sysreg interface (MMUCR / FADDR / FSTAT / TLB
+  install+read-back), commit-time fault registers (`02f57e3`)
+
+**Next, in order:** L1 caches (passive: index->tag/data + fill-install, no
+embedded FSM -- miss orchestration is in `load_complete`) -> L2 (write-through)
+-> fill sequencer -> arbiter (-> `bus_master`) -> `machine_penumbra3` +
+`ulx3s_penumbra3_top`. **Open decision at the L1 step:** the store write-through
+path is unbuilt -- `mem2_stage` writes the L1 copy (`o_dcache_we`) but issues no
+write-through to L2/memory and does not block (stores retire via `mem2_commits`).
+Phase-1's gating checkpoint is then the **full-top composition timing read**
+(bare skeleton, no BTB) -- calibrates the probe->full margin before feature work.
 
 **Locked hazard-model decisions** (context for resuming):
 
