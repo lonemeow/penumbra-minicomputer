@@ -132,12 +132,23 @@ skeleton stage-by-stage: each module is forked or written, given a
   storage tier WB commits into: GPRs + banked USP/SSP (R0 forced 0), SR/EPC/ESR
   (SR moves only via entry/ERET/EI/DI + flag commit -- no WRSPR SR leg), and
   SCR0..3; each flat-port unit-tested (`3e40ce4`)
+- `penumbra3_spine` -- ID/EX/MEM1/MEM2/WB integration around the
+  regfile/SPR/scratch files: bundle+payload handoffs, operand/flag forward
+  sources into EX, the scoreboard clear, the regfile write-port mux (commit vs
+  load completion), drain-commit (ERET/EI/DI, WRSYS) + fault commit/flush, and
+  the freeze distribution (registered `load_pending` freezes the launch side +
+  issue; the MEM2/WB register is held only by WB back-pressure -- the carve-out).
+  Fetch-stream unit test: ALU forwarding, divmul dual-write, precise fault
+  (`297b12d`)
 
-**Next, in order:** `spine` (stall/flush +
-the `i_hold` freeze distribution, stage instances, the operand-forward source
-wiring, the issue-release broadcasts ID matches, and the
-`dtranslate`/cache/`load_complete` instances the MEM stages launch into) ->
-`core` (front end + spine + `vecfetch` + `irq`) -> fork the memory hierarchy
+**Spine follow-ons** (do not block `core`): the *forwarding-release* increment
+(early scoreboard clear + the `i_fwd` broadcasts -- correctness-first leaves
+them tied off today, so a load/divmul-use waits for the registered clear) and
+the *load_pending-freeze / memory-path test* (the load path is wired but the
+skeleton test drives no translate/cache/fill verdicts yet, so the load-miss
+freeze is unexercised).
+
+**Next, in order:** `core` (front end + spine + `vecfetch` + `irq`) -> fork the memory hierarchy
 (L1, MMU/TLB storage, arbiter + `bus_master`, fill, L2) -> `machine_penumbra3`
 + `ulx3s_penumbra3_top`. Phase-1's first gating checkpoint is then the
 **full-top composition timing read** (bare skeleton, no BTB) -- calibrates the
