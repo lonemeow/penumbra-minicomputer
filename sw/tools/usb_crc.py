@@ -37,6 +37,34 @@ def crc5_remainder(bits):
     return crc
 
 
+CRC16_POLY = 0x8005       # x^16 + x^15 + x^2 + 1 tap mask (x^16 shifted out)
+CRC16_SEED = 0xFFFF       # USB seeds the remainder to all-ones
+CRC16_WIDTH = 16
+
+
+def crc16_remainder(data):
+    """Left-shift LFSR remainder over the bytes in ``data``, each fed LSB first.
+
+    Identical to usb_crc16.sv: the same Galois step as the token CRC5, folded
+    over all eight bits of every byte.
+    """
+    crc = CRC16_SEED
+    top = 1 << (CRC16_WIDTH - 1)
+    mask = (1 << CRC16_WIDTH) - 1
+    for byte in data:
+        for i in range(8):
+            feedback = ((crc & top) != 0) ^ ((byte >> i) & 1)
+            crc = (crc << 1) & mask
+            if feedback:
+                crc ^= CRC16_POLY
+    return crc
+
+
+def data_crc16(data):
+    """Full on-wire CRC16 for a data payload: remainder, then invert and reverse."""
+    return reflect(crc16_remainder(data) ^ ((1 << CRC16_WIDTH) - 1), CRC16_WIDTH)
+
+
 def reflect(value, width):
     """Reverse the low ``width`` bits of ``value`` (LSB <-> MSB)."""
     result = 0
@@ -85,6 +113,18 @@ def _main():
     print("# token (addr, endp) -> on-wire CRC5")
     for addr, endp in [(0x00, 0x0), (0x15, 0xE), (0x3A, 0xA), (0x7F, 0xF)]:
         print(f"({addr:#04x}, {endp:#04x}) -> 0x{token_crc5(addr, endp):02x}")
+
+    print()
+    print("# data payload -> remainder / on-wire CRC16")
+    payloads = [
+        [],
+        [0x00],
+        [0xDE, 0xAD, 0xBE, 0xEF],
+        list(range(64)),
+    ]
+    for p in payloads:
+        label = f"[{len(p)} bytes]"
+        print(f"{label:<12} 0x{crc16_remainder(p):04x} / 0x{data_crc16(p):04x}")
 
 
 if __name__ == "__main__":
