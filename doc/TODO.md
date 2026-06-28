@@ -211,7 +211,7 @@ Phase-1's gating checkpoint is then the **full-top composition timing read**
   its freeze re-presents an already-committed multi-cycle writeback (the divmul
   dual-register retire) and retires it twice. The MEM2/WB register's only
   back-pressure is the WB dual-write hold. Contract:
-  [load-completion freeze scope](internals/penumbra3/load-completion.md#what-the-pipe-gate-freezes).
+  [load-completion freeze scope](internals/penumbra3/memory-completion.md#what-the-pipe-gate-freezes).
   A frozen MEM2 slot keeps its own verdict, and no combinational cache/TLB
   verdict ever reaches issue. Candidate spine assertion: `load_pending` never
   gates the MEM2/WB register.

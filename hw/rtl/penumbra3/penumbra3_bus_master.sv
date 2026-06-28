@@ -6,10 +6,12 @@
 //
 //   • Line burst  (i_req_line=1): a whole cacheable line -- a read fill
 //     or a write-back eviction. LINE_WORDS beats, full words.
-//   • Single beat (i_req_line=0): one uncached or sub-word access. One
-//     beat, carrying i_req_byte_en so a sub-word store writes only its
-//     lanes. (Sub-word reads need nothing special: the bus returns the
-//     full word and the core extracts the byte.)
+//   • Single beat (i_req_line=0): one uncached access, or a cacheable
+//     store write-through. One beat, carrying i_req_byte_en so a sub-word
+//     store writes only its lanes. A cacheable load never arrives here --
+//     sub-word included -- since a hit is served from the cache and a miss
+//     takes the line path above; every read pulls a full word and the core
+//     extracts the byte locally.
 //
 // Cacheability is decided upstream; the master only sees the mechanical
 // shape of the transfer, so a single beat is just a length-1 burst.

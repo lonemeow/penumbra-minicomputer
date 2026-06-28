@@ -301,8 +301,8 @@ with margin.
 3. Per-area gen3 specs written so far:
    - [`mem-stage.md`](./mem-stage.md) — the MEM1/MEM2 memory stage and the
      duplicated BRAM TLB.
-   - [`load-completion.md`](./load-completion.md) — the registered back-end
-     stall / load-completion contract.
+   - [`memory-completion.md`](./memory-completion.md) — the registered
+     back-end stall and the load/store completion + fault-precision contract.
 4. Further per-area gen3 specs — *to be written as each subsystem is
    designed* (design-decisions, pipeline-stages, hazard-model,
    memory-interface), following the gen2 doc layout under `penumbra2/`.
