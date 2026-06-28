@@ -311,7 +311,8 @@ MODULE_TESTS = \
     penumbra3_mmu \
     video_pattern_test \
     usb_crc5 \
-    usb_crc16
+    usb_crc16 \
+    usb_bit_stuff_tx
 
 # Variant-fork unit tests: a fork (penumbra2_5/) shares its base module's name,
 # so the name-based search in test-modules resolves to the base. Name the source
