@@ -201,6 +201,55 @@ Two invariants hold by construction and are asserted (Verilator `--assert`):
 A faulting line fill installs nothing (the line stays invalid); the fault
 rides the completion, transient, not cached.
 
+## Write policy is a swappable knob
+
+Write-through / write-no-allocate is the **default** L1-D policy, not a fixed
+property of this contract. Everything above — the
+[fault-precision carve-out](#fault-precision), single-outstanding
+hold-and-complete, and the verdict-in / completion-out core seam — is
+**policy-independent**, so write-back and write-allocate drop in without a core
+change. The point is to let the cost vs complexity/fmax trade-offs between them
+be *measured* by swapping the memory-hierarchy side alone.
+
+What makes that hold is the [deferral principle](./overview.md#build-plan) made
+structural: **write policy lives entirely on the bus side of the MEM2 verdict**
+— L1 storage, the fill/completion sequencer, and the bus master — never in the
+core's verdict / freeze / issue cones. The core sees only a registered hit/miss
+verdict in and a registered completion out; it never learns which policy
+produced them, so experimenting with policy cannot perturb the fmax the
+[structural probes](./phase0-probes.md) prove.
+
+The policy is two orthogonal knobs, each defaulting to the cheap leg:
+
+| Knob | Default | Alternative | What the alternative adds — all bus-side |
+|---|---|---|---|
+| **Store-miss allocate** | no-allocate — write the datum through to memory only | write-allocate — line fill + merge the store lanes + install | reuses the load-miss line-fill path plus a write-merge step |
+| **Store-hit write** | write-through — update L1 *and* memory | write-back — update L1 and mark dirty; memory is written at eviction | per-line dirty bits + an eviction-then-fill sequence in the sequencer (L1 stays passive storage); the bus master's line-write eviction path (already present, P0.4-validated) |
+
+Two invariants every policy must preserve — they are what keep the doors open:
+
+- **Cacheable-store bus faults stay asynchronous.** A deferring cache
+  (write-back, or a store buffer) may push the write arbitrarily far past the
+  instruction, so the contract is written to that weakest guarantee.
+  Write-through *could* deliver these precisely, but does not — a stable
+  contract across policies is worth more than precision no policy is allowed to
+  rely on.
+- **Single-outstanding holds.** An eviction and an allocate-fill are each one
+  transaction, so the precise-fault property for loads and uncached stores is
+  unchanged.
+
+Only one knob reaches beyond the bus side: **write-back changes DMA coherence.**
+Write-through keeps memory current, so DMA-from-memory needs no help; write-back
+leaves dirty lines off-memory, so the kernel must flush before a DMA read and
+invalidate before a DMA write — the per-line cache-maintenance and full-flush
+hooks the platform reserves for exactly this case. That cost is a property of
+the *policy*, not of this completion contract.
+
+The phased rollout that exercises these knobs — write-through first, write-back
+as the primary store-traffic win — is the
+[store-traffic strategy](./overview.md#store-traffic-strategy--write-back-l2-first-store-buffer-only-if-it-earns-it);
+this section specifies the seam it plugs into.
+
 ## Single-beat transactions — the same completion path
 
 A transaction that is not a cacheable line read is a single beat on the bus
