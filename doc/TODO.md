@@ -3574,11 +3574,13 @@ change.
 
 ## Hardware + kernel: local console (HDMI text-video + USB keyboard)
 
-Design complete and committed as docs; implementation not started. The
-goal is a standalone local console — character-cell video out over
-GPDI/HDMI and a USB keyboard in — so the machine needs no host terminal.
-NetBSD is the first consumer (boot may stay on UART initially); a
-boot-ROM local console is a later, well-defined follow-on.
+Design complete and committed as docs; implementation underway — the USB
+host MAC's CRC generators are the first RTL to land, with the rest of USB
+and all of text-video still to start. The goal is a standalone local
+console — character-cell video out over GPDI/HDMI and a USB keyboard in —
+so the machine needs no host terminal. NetBSD is the first consumer (boot
+may stay on UART initially); a boot-ROM local console is a later,
+well-defined follow-on.
 
 Two new autoconfig device classes plus one reserved
 ([`system/bus.md`](system/bus.md)):
@@ -3616,7 +3618,13 @@ Implementation work, by layer:
 - Goal (later): PLL dynamic-reconfig FSM + mode 1 (800×600 / 100×37).
 
 ### USB host RTL — low + full speed
-- 48 MHz SIE (NRZI, bit-stuffing, CRC5/16, SYNC/EOP), transaction FSM,
+- `usb_crc5` / `usb_crc16` — token and data CRC generators, the
+  board-neutral MAC's first leaf cells (Galois LFSRs; CRC5 bit-serial,
+  CRC16 byte-parallel for the one-byte-per-cycle datapath). The bare
+  modules emit the remainder; the MAC adds the on-wire complement +
+  bit-reverse. Reference-checked unit tests + a `sw/tools/usb_crc.py`
+  model (`6251a87`, `b74a5ef`).
+- 48 MHz SIE (NRZI, bit-stuffing, SYNC/EOP), transaction FSM,
   1 ms frame timer, port/line detect + reset.
 - US2 wiring: RX diff on `usb_fpga_dp/dn`, TX on `usb_fpga_bd_dp/dn`,
   pulls on `usb_fpga_pu_*`; dual-clock-BRAM + handshake CDC.
