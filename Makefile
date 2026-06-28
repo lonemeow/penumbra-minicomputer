@@ -308,6 +308,7 @@ MODULE_TESTS = \
     penumbra3_vecfetch \
     penumbra3_irq \
     penumbra3_core \
+    penumbra3_mmu \
     video_pattern_test \
     usb_crc5 \
     usb_crc16
