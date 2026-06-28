@@ -306,6 +306,7 @@ MODULE_TESTS = \
     penumbra3_scratch_file \
     penumbra3_spine_test:tb_penumbra3_spine \
     penumbra3_vecfetch \
+    penumbra3_irq \
     video_pattern_test \
     usb_crc5
 
