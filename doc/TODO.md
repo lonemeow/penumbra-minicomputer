@@ -186,9 +186,31 @@ probe->full margin before any feature work.
   drive ID's `i_fwd*` to release a scoreboard-pending load / sysreg read at the
   cycle its value becomes forwardable -- gated on the registered `load_pending`,
   never a live verdict. ID owns only the match today.
-- *divmul aux-destination scoreboard bit* -- EX latches the aux result and
-  destination; the second (Rdh) scoreboard set path lands with the ID/spine
-  divmul integration (the scoreboard has one set port today).
+- *divmul aux-destination scoreboard bit* -- set path done (`4fa078b`): the
+  scoreboard has a second set port, ID regmaps the aux (Rdh) and sets its bit at
+  issue; the spine drives the matching clear at the aux writeback.
+- *divmul writeback back-pressure reach* (`wb_local_stall`: the WB dual-write
+  ripple WB->MEM2->MEM1->EX->ID). The divmul's two-cycle WB writeback makes WB
+  occupy two cycles, and that hold ripples up the pure-stall chain. It is 1-bit
+  and flop-shallow -- no cache/TLB verdict in it, so it is correct and within
+  the "1-bit ready crosses backward" allowance -- but it is the longest-*reach*
+  combinational stall and may bind at 50 MHz on routing distance alone.
+  Floorplanning is NOT the remedy (placement cannot be the fix for a structural
+  reach). Structural fix, deferrable because it is localized and does not touch
+  the core shape: retire the divmul writeback through the **load-completion
+  path** rather than the WB stage. divmul holds in EX until it is the oldest
+  in-flight -- `drained` = `~mem1_valid & ~mem2_valid & ~memwb_valid &
+  ~load_pending` (the drain-commit condition extended with `load_pending`) --
+  then writes Rd/Rdh over two cycles through the completion write-port mux. The
+  port is free **by the in-order single-outstanding invariant** (oldest => no
+  older writer; younger blocked behind the held divmul), NOT by any cycle count
+  -- so a slow uncached MMIO access ahead of the divmul simply makes it wait in
+  EX, never write early or out of order. WB then never sees a divmul: the
+  dual-write FSM and `wb_local_stall` both delete, and back-pressure reduces to
+  the `load_pending` fan-out plus the one-hop EX->ID stall. Land as its own
+  increment if HW timing shows the reach binds; until then the WB dual-write is
+  correct (WB is the oldest by pipeline position, so it is already drain-gated
+  -- only the reach is suboptimal).
 - *Vector-fetch cacheability* -- `penumbra3_vecfetch` will keep the vector
   read uncached for now. It is the CPU's only fetch-by-PA (not VA), so
   threading a PA index into the VIPT caches is awkward; MMU-bypass is required,
