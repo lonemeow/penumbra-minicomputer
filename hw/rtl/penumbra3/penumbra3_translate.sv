@@ -39,7 +39,14 @@ module penumbra3_translate
     output logic                    o_miss_fault,
     output logic                    o_prot_fault,
 
-    // Install / refill / invalidate (to the D-copy store)
+    // Registered set contents (both ways) -- the MMU taps these for sysreg TLB
+    // read-back, driving the read index to the addressed set when no access is
+    // translating; the registered output lands one cycle later, on the RDSYS
+    // response cycle.
+    output logic [WAYS-1:0][31:0]   o_rd_vpn_word,
+    output logic [WAYS-1:0][31:0]   o_rd_pte_word,
+
+    // Install / refill / invalidate (to the copy's store)
     input  logic                    i_wr_en,
     input  logic [$clog2(SETS)-1:0] i_wr_set,
     input  logic [$clog2(WAYS)-1:0] i_wr_way,
@@ -79,10 +86,12 @@ module penumbra3_translate
         end
     end
 
-    // ── Main-TLB D-copy: MEM1 launch / MEM2 registered output ────
+    // ── Main-TLB copy: launch / registered output ────────────────
     logic [WAYS-1:0]       rd_valid;
     logic [WAYS-1:0][31:0] rd_vpn_word;
     logic [WAYS-1:0][31:0] rd_pte_word;
+    assign o_rd_vpn_word = rd_vpn_word;   // sysreg read-back tap
+    assign o_rd_pte_word = rd_pte_word;
     penumbra3_tlb_store #(
         .SETS (SETS),
         .WAYS (WAYS)

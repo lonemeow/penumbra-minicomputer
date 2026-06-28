@@ -98,6 +98,7 @@ module ulx3s_penumbra3_probe_memtlb_top (
     // ── DUT: the gen3 data-side translate cone (D-copy inside) ───
     logic [31:0] paddr;
     logic        cacheable, hit, miss_fault, prot_fault;
+    /* verilator lint_off PINCONNECTEMPTY */
     penumbra3_translate #(
         .SETS (SETS),
         .WAYS (WAYS)
@@ -109,6 +110,7 @@ module ulx3s_penumbra3_probe_memtlb_top (
         .i_access_type     (acc_type),
         .i_user_mode       (lfsr_q[5]),
         .i_asid            (lfsr_q[23:16]),
+        .i_hold            (1'b0),
         .i_pinned_hit      (pinned_hit_q),
         .i_pinned_pte_word (pinned_pte_q),
         .o_paddr           (paddr),
@@ -116,6 +118,8 @@ module ulx3s_penumbra3_probe_memtlb_top (
         .o_hit             (hit),
         .o_miss_fault      (miss_fault),
         .o_prot_fault      (prot_fault),
+        .o_rd_vpn_word     (),
+        .o_rd_pte_word     (),
         .i_wr_en           (wr_en),
         .i_wr_set          (wr_set),
         .i_wr_way          (wr_way),
@@ -123,6 +127,7 @@ module ulx3s_penumbra3_probe_memtlb_top (
         .i_wr_vpn_word     (wr_vpn_word),
         .i_wr_pte_word     (wr_pte_word)
     );
+    /* verilator lint_on PINCONNECTEMPTY */
 
     // ── I-copy stand-in: real BRAM usage + shared write fan-out ──
     logic [WAYS-1:0]       icopy_valid;
@@ -135,6 +140,7 @@ module ulx3s_penumbra3_probe_memtlb_top (
         .i_clk         (clk_25mhz),
         .i_rst         (rst),
         .i_rd_set      (lfsr_q[SET_BITS+3:4]),
+        .i_hold        (1'b0),
         .o_rd_valid    (icopy_valid),
         .o_rd_vpn_word (icopy_vpn_word),
         .o_rd_pte_word (icopy_pte_word),

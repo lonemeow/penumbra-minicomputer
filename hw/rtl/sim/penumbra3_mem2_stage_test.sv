@@ -140,6 +140,7 @@ module penumbra3_mem2_stage_test
     // -- Address translation (MEM1 launch / MEM2 verdict) ---------
     logic [31:0] tr_paddr;
     logic        tr_cacheable, tr_hit, tr_miss_fault, tr_prot_fault;
+    /* verilator lint_off PINCONNECTEMPTY */
     penumbra3_translate u_dtranslate (
         .i_clk             (i_clk),
         .i_rst             (i_rst),
@@ -156,6 +157,8 @@ module penumbra3_mem2_stage_test
         .o_hit             (tr_hit),
         .o_miss_fault      (tr_miss_fault),
         .o_prot_fault      (tr_prot_fault),
+        .o_rd_vpn_word     (),               // read-back tap, unused here
+        .o_rd_pte_word     (),
         .i_wr_en           (i_tlb_wr_en),
         .i_wr_set          (i_tlb_wr_set),
         .i_wr_way          (i_tlb_wr_way),
@@ -163,6 +166,7 @@ module penumbra3_mem2_stage_test
         .i_wr_vpn_word     (i_tlb_wr_vpn_word),
         .i_wr_pte_word     (i_tlb_wr_pte_word)
     );
+    /* verilator lint_on PINCONNECTEMPTY */
 
     // -- MEM2 resolve ---------------------------------------------
     /* verilator lint_off UNUSEDSIGNAL */
