@@ -3630,8 +3630,11 @@ Implementation work, by layer:
 - `usb_nrzi_encode` / `usb_nrzi_decode` — SIE line coding: a 0 toggles the
   line level and a 1 holds it (the decoder is the exact inverse). Each
   reference-checked; the decoder round-trips the encoder (`d2b915d`).
-- Remaining SIE (48 MHz): SYNC/EOP framing, RX bit-unstuff (+ stuff-error
-  → seam `o_rx_error`), oversampling serdes.
+- `usb_bit_unstuff_rx` — SIE receive bit-unstuffer: removes the stuffed 0
+  after six consecutive 1s (`o_valid` drops on it) and flags a bit-stuff
+  error (a 1 where the 0 was due → seam `o_rx_error`) in the same decision.
+  Round-trip + error-injection unit test (`65dfccd`).
+- Remaining SIE (48 MHz): SYNC/EOP framing, oversampling serdes.
 - MAC: transaction FSM, 1 ms frame timer, port/line detect + reset.
 - US2 wiring: RX diff on `usb_fpga_dp/dn`, TX on `usb_fpga_bd_dp/dn`,
   pulls on `usb_fpga_pu_*`; dual-clock-BRAM + handshake CDC.
