@@ -140,19 +140,33 @@ skeleton stage-by-stage: each module is forked or written, given a
   issue; the MEM2/WB register is held only by WB back-pressure -- the carve-out).
   Fetch-stream unit test: ALU forwarding, divmul dual-write, precise fault
   (`297b12d`)
+- `penumbra3_vecfetch` -- exception vector-fetch FSM: borrows the fetch port on
+  a fault commit, reads `vector_table[vec<<2]` (MMU-bypassed), redirects IF1 to
+  the handler from a register (`19cb214`)
+- `penumbra3_irq` -- interrupt recognition + EX-frontier injection (synthetic
+  fault on the precise path; EI one-instruction shadow) (`e19a10a`). The spine
+  gained `o_ex_valid`/`o_ex_stall` -- the clean-boundary frontier the unit gates
+  on (`94d0b9a`)
+- `penumbra3_core` -- the front end (IF1/IF2 + fetch buffer) onto the spine plus
+  `vecfetch` + `irq`: the fetch-port mux (IF1 vs vecfetch), the redirect/flush
+  composition (branch / vector-fetch / ERET / WRSYS-resync steer; a fault
+  flushes but steers later), and the I-fetch + D-side port groups exposed for the
+  machine layer. Integration unit test (sync-read fetch ROM): streaming +
+  in-order commit, branch redirect, interrupt entry via the vector fetch
+  (`c281f88`)
 
-**Spine follow-ons** (do not block `core`): the *forwarding-release* increment
+**Spine follow-ons** (do not block the memory-hierarchy fork): the
+*forwarding-release* increment
 (early scoreboard clear + the `i_fwd` broadcasts -- correctness-first leaves
 them tied off today, so a load/divmul-use waits for the registered clear) and
 the *load_pending-freeze / memory-path test* (the load path is wired but the
 skeleton test drives no translate/cache/fill verdicts yet, so the load-miss
 freeze is unexercised).
 
-**Next, in order:** `core` (front end + spine + `vecfetch` + `irq`) -> fork the memory hierarchy
-(L1, MMU/TLB storage, arbiter + `bus_master`, fill, L2) -> `machine_penumbra3`
-+ `ulx3s_penumbra3_top`. Phase-1's first gating checkpoint is then the
-**full-top composition timing read** (bare skeleton, no BTB) -- calibrates the
-probe->full margin before any feature work.
+**Next, in order:** fork the memory hierarchy (L1, MMU/TLB storage, arbiter +
+`bus_master`, fill, L2) -> `machine_penumbra3` + `ulx3s_penumbra3_top`. Phase-1's
+first gating checkpoint is then the **full-top composition timing read** (bare
+skeleton, no BTB) -- calibrates the probe->full margin before any feature work.
 
 **Locked hazard-model decisions** (context for resuming):
 
