@@ -3634,7 +3634,14 @@ Implementation work, by layer:
   after six consecutive 1s (`o_valid` drops on it) and flags a bit-stuff
   error (a 1 where the 0 was due → seam `o_rx_error`) in the same decision.
   Round-trip + error-injection unit test (`65dfccd`).
-- Remaining SIE (60 MHz): SYNC/EOP framing, oversampling serdes.
+- `usb_serialize_tx` — SIE transmit serializer: shifts each byte out LSB
+  first across a byte handshake (`o_byte_ready`) above and the bit-time
+  tick below, folding the stuffer's back-pressure in as `i_hold` so an
+  inserted stuff bit holds the current bit instead of dropping it; goes
+  empty on the final bit to keep the line bubble-free between bytes.
+  Unit test across five pacings (gated tick + injected hold) (`dc8a57c`).
+- Remaining SIE (60 MHz): SYNC/EOP framing, oversampling serdes (RX
+  deserializer next, the serializer's mirror).
 - MAC: transaction FSM, 1 ms frame timer, port/line detect + reset.
 - US2 wiring: RX diff on `usb_fpga_dp/dn`, TX on `usb_fpga_bd_dp/dn`,
   pulls on `usb_fpga_pu_*`; dual-clock-BRAM + handshake CDC.
