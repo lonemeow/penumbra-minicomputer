@@ -3640,8 +3640,16 @@ Implementation work, by layer:
   inserted stuff bit holds the current bit instead of dropping it; goes
   empty on the final bit to keep the line bubble-free between bytes.
   Unit test across five pacings (gated tick + injected hold) (`dc8a57c`).
-- Remaining SIE (60 MHz): SYNC/EOP framing, oversampling serdes (RX
-  deserializer next, the serializer's mirror).
+- `usb_deserialize_rx` — SIE receive deserializer, the serializer's
+  mirror: shifts recovered bits in at the MSB so eight assemble into an
+  LSB-first byte; `i_valid` ignores removed stuff 0s and `i_init`
+  re-aligns byte boundaries per packet (a concurrent assertion guards
+  that `i_init` never rides a data bit). Mirror-checked against the
+  serializer's bit order + a cross-packet realignment case (`b9e9a8e`).
+- Remaining SIE (60 MHz): oversampling serdes (the RX clock-recovery
+  sampler) and SYNC/EOP framing. The byte↔bit layer is now complete on
+  both sides; what's left is the line-edge timing recovery below the
+  bit layer and the packet framing above it.
 - MAC: transaction FSM, 1 ms frame timer, port/line detect + reset.
 - US2 wiring: RX diff on `usb_fpga_dp/dn`, TX on `usb_fpga_bd_dp/dn`,
   pulls on `usb_fpga_pu_*`; dual-clock-BRAM + handshake CDC.
