@@ -36,7 +36,7 @@ OPT_BUILD ?= -O2
 VERILATOR_FLAGS = --cc --exe --build -Wall --assert \
                   $(if $(VCD),--trace) \
                   -CFLAGS "-std=c++17 $(OPT_BUILD)" \
-                  $(if $(CORE_SUB),-Ihw/rtl/$(CORE) )-Ihw/rtl/common -Ihw/rtl/penumbra1 -Ihw/rtl/penumbra2 -Ihw/rtl/penumbra3 -Ihw/rtl/machine -Ihw/rtl/bus -Ihw/rtl/io -Ihw/rtl/io/sdram -Ihw/rtl/io/video -Ihw/rtl/soc -Ihw/rtl/sim
+                  $(if $(CORE_SUB),-Ihw/rtl/$(CORE) )-Ihw/rtl/common -Ihw/rtl/penumbra1 -Ihw/rtl/penumbra2 -Ihw/rtl/penumbra3 -Ihw/rtl/machine -Ihw/rtl/bus -Ihw/rtl/io -Ihw/rtl/io/sdram -Ihw/rtl/io/video -Ihw/rtl/io/usb -Ihw/rtl/soc -Ihw/rtl/sim
 
 BUILD_DIR   = build
 WAVE_DIR    = waves
@@ -51,7 +51,7 @@ TB   ?= tb_$(MOD)
 # Shared packages — always included. --top-module tells Verilator which
 # module is the DUT (otherwise it picks the first file = a package).
 # Add new packages here as the design grows.
-PKG_SV = hw/rtl/common/penumbra_pkg.sv hw/rtl/penumbra2/penumbra2_pkg.sv hw/rtl/penumbra3/penumbra3_pkg.sv hw/rtl/io/sdram/sdram_pkg.sv hw/rtl/io/video/video_pkg.sv hw/rtl/fpga/ecp5_pll_pkg.sv
+PKG_SV = hw/rtl/common/penumbra_pkg.sv hw/rtl/penumbra2/penumbra2_pkg.sv hw/rtl/penumbra3/penumbra3_pkg.sv hw/rtl/io/sdram/sdram_pkg.sv hw/rtl/io/video/video_pkg.sv hw/rtl/io/usb/usb_pkg.sv hw/rtl/fpga/ecp5_pll_pkg.sv
 
 # Resolving a module by name (module sims, test-modules) must not pick up a
 # variant fork, which redefines a base module under the same name in its own
@@ -317,7 +317,8 @@ MODULE_TESTS = \
     usb_nrzi_decode \
     usb_bit_unstuff_rx \
     usb_serialize_tx \
-    usb_deserialize_rx
+    usb_deserialize_rx \
+    usb_oversample_rx
 
 # Variant-fork unit tests: a fork (penumbra2_5/) shares its base module's name,
 # so the name-based search in test-modules resolves to the base. Name the source
