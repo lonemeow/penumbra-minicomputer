@@ -318,7 +318,8 @@ MODULE_TESTS = \
     usb_bit_unstuff_rx \
     usb_serialize_tx \
     usb_deserialize_rx \
-    usb_oversample_rx
+    usb_oversample_rx \
+    usb_line_state
 
 # Variant-fork unit tests: a fork (penumbra2_5/) shares its base module's name,
 # so the name-based search in test-modules resolves to the base. Name the source

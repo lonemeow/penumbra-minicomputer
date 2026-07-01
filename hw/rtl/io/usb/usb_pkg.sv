@@ -8,9 +8,12 @@
 package usb_pkg;
     // Oversampling factors: the 60 MHz SIE clock per line bit. Full-speed
     // 12 Mbps -> 5x; low-speed 1.5 Mbps -> 40x. The receive sampler counts this
-    // many clocks per bit and samples at the midpoint.
+    // many clocks per bit and samples at the midpoint. Waived because line-layer
+    // cells that import the package use only the parts they need.
+/* verilator lint_off UNUSEDPARAM */
     localparam int USB_OS_FS = 5;
     localparam int USB_OS_LS = 40;
+/* verilator lint_on UNUSEDPARAM */
 
     // Speed select, encoded with room for reserved codes (an external HS PHY
     // would claim one) rather than a bare full-/low-speed wire.
