@@ -3654,9 +3654,15 @@ Implementation work, by layer:
   lock at the 5× full-speed margin. `usb_pkg.sv` lands here for the
   PHY-internal constants (divisors, speed, J/K/SE0). Waveform-recovery
   unit test at both speeds ± edge jitter (`cfb3f07`).
+- `usb_line_state` — SIE differential decode: resolves the D+/D- pair
+  into SE0 / J / K / SE1, with the speed-dependent J/K swap (J is D+ high
+  at full-speed, D- high at low-speed). Feeds the sampler its J/K symbol
+  and the framing layer its SE0. Exhaustive unit test (`b72f044`).
 - Remaining SIE (60 MHz): SYNC/EOP framing (packet delimiting above the
-  bit layer) and the differential-pair + SE0 line-state decode that feeds
-  the sampler its J/K level. The byte↔bit and bit-timing layers are done.
+  bit layer) — RX SYNC-detect → deserializer `i_init`, RX EOP-detect on
+  SE0, TX SYNC/EOP generation. The byte↔bit, bit-timing, and line-state
+  layers are done; framing is the last piece before the SIE composes into
+  a `usb_phy`.
 - MAC: transaction FSM, 1 ms frame timer, port/line detect + reset.
 - US2 wiring: RX diff on `usb_fpga_dp/dn`, TX on `usb_fpga_bd_dp/dn`,
   pulls on `usb_fpga_pu_*`; dual-clock-BRAM + handshake CDC.
