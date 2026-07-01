@@ -3646,10 +3646,17 @@ Implementation work, by layer:
   re-aligns byte boundaries per packet (a concurrent assertion guards
   that `i_init` never rides a data bit). Mirror-checked against the
   serializer's bit order + a cross-packet realignment case (`b9e9a8e`).
-- Remaining SIE (60 MHz): oversampling serdes (the RX clock-recovery
-  sampler) and SYNC/EOP framing. The byte↔bit layer is now complete on
-  both sides; what's left is the line-edge timing recovery below the
-  bit layer and the packet framing above it.
+- `usb_oversample_rx` — SIE receive clock recovery: oversamples the
+  resolved J/K line (5×/40× from `usb_pkg`) and locks a per-bit phase
+  counter to NRZI edges, strobing the sampled level at each bit midpoint
+  into `usb_nrzi_decode`. The edge lock re-centers to phase 1 and
+  suppresses a sample that coincides with an edge, which is what holds
+  lock at the 5× full-speed margin. `usb_pkg.sv` lands here for the
+  PHY-internal constants (divisors, speed, J/K/SE0). Waveform-recovery
+  unit test at both speeds ± edge jitter (`cfb3f07`).
+- Remaining SIE (60 MHz): SYNC/EOP framing (packet delimiting above the
+  bit layer) and the differential-pair + SE0 line-state decode that feeds
+  the sampler its J/K level. The byte↔bit and bit-timing layers are done.
 - MAC: transaction FSM, 1 ms frame timer, port/line detect + reset.
 - US2 wiring: RX diff on `usb_fpga_dp/dn`, TX on `usb_fpga_bd_dp/dn`,
   pulls on `usb_fpga_pu_*`; dual-clock-BRAM + handshake CDC.
