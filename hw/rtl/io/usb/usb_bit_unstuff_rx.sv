@@ -10,10 +10,17 @@
 // Because it deletes bits, not every input bit yields an output: o_valid marks
 // the cycles that carry real data. This mirrors the stuffer's o_stuff
 // back-pressure, but the gap flows downstream instead of up.
+//
+// The run count is per packet: i_init (the framing layer's SYNC-done strobe)
+// seeds it at each packet start, so a run left over from the previous packet's
+// tail can never leak into the next one. The seed is 1, not 0 — USB counts the
+// SYNC pattern's terminating 1 as the first bit of the stuff run, so the count
+// enters the payload with one 1 already seen.
 
 module usb_bit_unstuff_rx (
     input  logic i_clk,
     input  logic i_rst,
+    input  logic i_init,        // packet start: seed the run count with SYNC's ending 1
     input  logic i_en,          // a received line bit is presented this cycle
     input  logic i_line_bit,    // post-NRZI received bit
     output logic o_data_bit,    // recovered data bit (when o_valid)
@@ -26,15 +33,18 @@ module usb_bit_unstuff_rx (
     logic [2:0] ones_q;   // consecutive 1s passed up so far (0..6)
     logic [2:0] ones_d;
 
+    // o_valid and o_error are self-qualified by i_en: between bit strobes
+    // i_line_bit free-wheels with the line decoder, so an unqualified output
+    // would flag phantom errors (or data) on the gap cycles.
     always_comb begin
         if (ones_q == STUFF_AFTER) begin
             o_data_bit = 1'b1;
             o_valid    = 1'b0;
-            o_error    = i_line_bit;
+            o_error    = i_en && i_line_bit;
             ones_d     = 3'd0;
         end else begin
             o_data_bit = i_line_bit;
-            o_valid    = 1'b1;
+            o_valid    = i_en;
             o_error    = 1'b0;
             ones_d     = i_line_bit ? ones_q + 1 : 3'd0;
         end
@@ -43,7 +53,16 @@ module usb_bit_unstuff_rx (
     always_ff @(posedge i_clk) begin
         if (i_rst)
             ones_q <= '0;
+        else if (i_init)
+            ones_q <= 3'd1;
         else if (i_en)
             ones_q <= ones_d;
     end
+
+    // The SYNC-done strobe never coincides with a payload bit: SYNC's ending 1
+    // is the marker itself, not routed data, so a coincidence is a framing-layer
+    // wiring error.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (!(i_init && i_en)))
+        else $error("usb_bit_unstuff_rx: i_init coincided with a data bit");
 endmodule

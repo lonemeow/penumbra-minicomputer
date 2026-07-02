@@ -3,8 +3,12 @@
 // Two checks:
 //   * round-trip — stuff a random data stream (reference), unstuff it in RTL,
 //     and require the original data back with no error reported;
-//   * error detection — feed illegal streams (seven+ consecutive 1s) and
-//     require o_error to fire.
+//   * error detection — feed illegal streams (a 1 where the stuff 0 was due)
+//     and require o_error to fire.
+//
+// Each stream is one packet: i_init is pulsed first, seeding the run count
+// with SYNC's terminating 1 (the USB stuff count includes it), so at packet
+// start a stuff 0 is due after five payload 1s, and after six anywhere else.
 
 #include <cstdio>
 #include <cstdint>
@@ -14,11 +18,12 @@
 static void settle(Vusb_bit_unstuff_rx* dut) { dut->i_clk = 0; dut->eval(); }
 static void edge(Vusb_bit_unstuff_rx* dut)   { dut->i_clk = 1; dut->eval(); }
 
-// Reference stuffer (same rule as usb_bit_stuff_tx): insert a 0 after every six
-// consecutive 1s. Used to build legal input streams for the round-trip check.
+// Reference stuffer (same rule as usb_bit_stuff_tx will follow per packet):
+// insert a 0 after every six consecutive 1s, with the count seeded at 1 by
+// SYNC's terminating 1. Used to build legal input streams for the round-trip.
 static std::vector<int> ref_stuff(const std::vector<int>& data) {
     std::vector<int> out;
-    int ones = 0;
+    int ones = 1;   // SYNC's ending 1 is the first bit of the run
     for (int b : data) {
         out.push_back(b);
         if (b) { if (++ones == 6) { out.push_back(0); ones = 0; } }
@@ -29,13 +34,17 @@ static std::vector<int> ref_stuff(const std::vector<int>& data) {
 
 struct Result { std::vector<int> data; bool error; };
 
-// Feed a line-bit stream through the DUT, collecting the data bits it marks
-// valid and whether it ever flagged a stuff error.
+// Pulse i_init (packet start), then feed a line-bit stream through the DUT,
+// collecting the data bits it marks valid and whether it flagged a stuff error.
 static Result run_unstuff(Vusb_bit_unstuff_rx* dut, const std::vector<int>& line) {
-    dut->i_rst = 1; dut->i_en = 0; dut->i_line_bit = 0;
+    dut->i_rst = 1; dut->i_init = 0; dut->i_en = 0; dut->i_line_bit = 0;
     settle(dut); edge(dut);
     settle(dut); edge(dut);
     dut->i_rst = 0;
+
+    dut->i_init = 1;
+    settle(dut); edge(dut);
+    dut->i_init = 0;
 
     Result r;
     r.error = false;
@@ -55,8 +64,8 @@ static std::vector<std::vector<int>> roundtrip_data() {
     std::vector<std::vector<int>> v = {
         {},
         {0, 0, 0},
-        std::vector<int>(6, 1),                   // exactly six 1s -> one stuff
-        std::vector<int>(12, 1),                  // two stuffs
+        std::vector<int>(5, 1),                   // five 1s at packet start -> one stuff
+        std::vector<int>(11, 1),                  // two stuffs (5 then 6)
         {1, 0, 1, 1, 1, 1, 1, 1, 0, 1},
     };
     uint32_t lcg = 0x0c0ffee0u;
@@ -90,17 +99,22 @@ int main() {
         }
     }
 
-    // A legal stuffed run of six 1s + the inserted 0 must NOT error.
-    {
-        std::vector<int> legal = {1, 1, 1, 1, 1, 1, 0};
-        Result r = run_unstuff(dut, legal);
+    // Legal max-runs must NOT error: five 1s + stuff 0 at packet start, and a
+    // mid-stream six 1s + stuff 0 after the count restarted on a 0.
+    std::vector<std::vector<int>> legal = {
+        {1, 1, 1, 1, 1, 0},
+        {0, 1, 1, 1, 1, 1, 1, 0},
+    };
+    for (const auto& line : legal) {
+        Result r = run_unstuff(dut, line);
         if (!r.error) pass++;
         else { printf("FALSE ERROR on a legal stuffed stream\n"); fail++; }
     }
 
-    // Illegal streams: a seventh consecutive 1 where the stuff 0 was due.
+    // Illegal streams: a 1 where the stuff 0 was due — six 1s straight out of
+    // the seeded packet start, or seven after a mid-stream 0.
     std::vector<std::vector<int>> illegal = {
-        {1, 1, 1, 1, 1, 1, 1},
+        std::vector<int>(6, 1),
         {0, 1, 1, 1, 1, 1, 1, 1},
         std::vector<int>(9, 1),
     };
