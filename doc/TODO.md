@@ -3633,7 +3633,10 @@ Implementation work, by layer:
 - `usb_bit_unstuff_rx` — SIE receive bit-unstuffer: removes the stuffed 0
   after six consecutive 1s (`o_valid` drops on it) and flags a bit-stuff
   error (a 1 where the 0 was due → seam `o_rx_error`) in the same decision.
-  Round-trip + error-injection unit test (`65dfccd`).
+  Round-trip + error-injection unit test (`65dfccd`). Per-packet `i_init`
+  re-seeds the run count with SYNC's terminating 1 (USB counts it), and
+  `o_valid`/`o_error` are qualified by `i_en` for sparsely-paced
+  consumers (`9f12a7a`).
 - `usb_serialize_tx` — SIE transmit serializer: shifts each byte out LSB
   first across a byte handshake (`o_byte_ready`) above and the bit-time
   tick below, folding the stuffer's back-pressure in as `i_hold` so an
@@ -3658,11 +3661,23 @@ Implementation work, by layer:
   into SE0 / J / K / SE1, with the speed-dependent J/K swap (J is D+ high
   at full-speed, D- high at low-speed). Feeds the sampler its J/K symbol
   and the framing layer its SE0. Exhaustive unit test (`b72f044`).
-- Remaining SIE (60 MHz): SYNC/EOP framing (packet delimiting above the
-  bit layer) — RX SYNC-detect → deserializer `i_init`, RX EOP-detect on
-  SE0, TX SYNC/EOP generation. The byte↔bit, bit-timing, and line-state
-  layers are done; framing is the last piece before the SIE composes into
-  a `usb_phy`.
+- `usb_rx_framing` — SIE receive packet bracketing: SOP on the first K
+  out of idle, SYNC end on its terminating 1 (an end-marker, not a
+  full-pattern match, so hub-stripped SYNC still detects), payload
+  gating to the unstuffer, EOP on SE0. Unit test incl. stripped SYNC +
+  back-to-back packets (`6ac3503`).
+- `usb_rx_test` — receive-chain integration DUT (line state →
+  oversample → NRZI → framing → unstuff → deserialize), the shape of
+  `usb_phy_<target>`'s receive half. End-to-end test drives raw D+/D-
+  packet waveforms and requires the payload bytes back: both speeds,
+  edge jitter, hub-stripped SYNC, stuffing edge cases, back-to-back
+  packets (`6ac3503`).
+- Remaining SIE (60 MHz): TX framing — SYNC/EOP generation (SYNC bytes
+  ahead of the packet, EOP as a raw SE0 drive below NRZI) and the TX-side
+  packet sequencing that composes serializer + stuffer + NRZI toward the
+  pin-drive/oe interface. `usb_bit_stuff_tx` needs the symmetric
+  per-packet `i_init` (seed 1) the unstuffer got. Then the SIE composes
+  into `usb_phy_sim` / `usb_phy_ecp5`.
 - MAC: transaction FSM, 1 ms frame timer, port/line detect + reset.
 - US2 wiring: RX diff on `usb_fpga_dp/dn`, TX on `usb_fpga_bd_dp/dn`,
   pulls on `usb_fpga_pu_*`; dual-clock-BRAM + handshake CDC.
