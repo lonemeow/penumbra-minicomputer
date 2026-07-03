@@ -100,24 +100,13 @@ module usb_tx_framing (
             end
             S_PAYLOAD: begin
                 if (bit_en) begin
-                    // TODO(human): the payload pump and the end-of-packet cut.
-                    //
-                    // Each bit time here either transmits one more line bit or
-                    // begins the EOP. Three situations to cover, using
-                    // i_ser_active (serializer still holds data) and i_stuff
-                    // (the stuffer owes an inserted 0 this bit time):
-                    //   * data remains -- advance the datapath: o_payload_en
-                    //     and o_nrzi_en for this bit time. (The serializer's
-                    //     hold-during-stuff is wired outside; asserting both
-                    //     here is correct whether this bit is data or stuff.)
-                    //   * the serializer just emptied BUT the stuffer owes a
-                    //     stuff 0 (the payload ended in six 1s) -- that bit
-                    //     still belongs on the line before EOP.
-                    //   * nothing left -- cut to S_EOP and reset eop_cnt_d so
-                    //     the SE0/SE0/J tail plays from its first bit time.
-                    //
-                    // The placeholder below transmits nothing and never ends
-                    // the packet -- replace it.
+                    // Each bit time either transmits one more line bit or
+                    // begins the EOP. A stuff bit owed after the serializer
+                    // empties (a payload ending in six 1s) still belongs on
+                    // the line, so i_stuff extends the packet past
+                    // i_ser_active dropping. Asserting both enables is
+                    // correct whether the bit is data or stuff — the
+                    // serializer's hold-during-stuff is wired outside.
                     if (i_ser_active || i_stuff) begin
                         o_payload_en = 1'b1;
                         o_nrzi_en    = 1'b1;
