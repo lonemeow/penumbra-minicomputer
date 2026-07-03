@@ -1,13 +1,16 @@
 // Verilator testbench for the gen2 TLB unit (penumbra2_tlb_unit)
 //
-// Verifies the BRAM-main + flop-pinned combine and its registered timing:
-//   - registered translation on both ports (drive at T, verdict at T+1)
+// Verifies the async-LUTRAM-main + flop-pinned combine and its combinational
+// timing:
+//   - translation on both ports answers in the launch cycle (the lookup
+//     helpers sample after the edge with the query held — same verdict)
 //   - pinned-hit-wins over the main TLB
 //   - concurrent A+B translation
 //   - permission faults via main and via pinned
 //   - sysreg readback (main = registered, pinned/index = held-combinational)
-//   - ALIGNMENT: the registered pinned verdict stays bound to the launched
-//     query even after the live query advances (the I-side PC case)
+//   - the verdict is combinational off the live query: it moves when the
+//     query moves. The registered hold (capture on the strobe, stable for a
+//     stalled consumer) lives downstream in penumbra2_mmu, not here.
 
 #include <cstdio>
 #include <cstdint>
@@ -164,24 +167,24 @@ int main() {
     check("pinned readback vpn", readback(d, 0x40 | 3, MMU_TLB_VPN), mk_vpn(0x00021, 1));
     check("index readback", readback(d, 0x40 | 3, MMU_TLB_IDX), (uint32_t)(0x40 | 3));
 
-    // ── ALIGNMENT: the registered pinned verdict stays bound to the
-    //    launched query even after the live query advances. ──
-    printf("-- alignment (advancing query) --\n");
-    // Launch the pinned VPN at cycle T.
+    // ── Combinational verdict: the port answers the live query ──
+    // Both TLBs read combinationally (async LUTRAM main, flop pinned), so
+    // the verdict must track the query presented this cycle. A stale
+    // captured verdict here would break penumbra2_mmu's capture-on-strobe
+    // contract — the MMU owns the registered hold, this port must not.
+    printf("-- combinational verdict (live query) --\n");
     idle(d); d->i_asid = 1;
     d->i_a_vaddr = (0x00021u << 12); d->i_a_access_type = ACC_READ; d->i_a_user_mode = 0; d->i_a_lookup_en = 1;
-    tick(d);   // → T+1: verdict for 0x21 (pinned hit)
-    check_bool("align T+1 hit", (bool)d->o_a_hit, true);
-    check("align T+1 paddr", d->o_a_paddr, (0x000B0u << 12));
-    // Advance the LIVE query to a miss without ticking; the registered
-    // verdict must not move (proves the pinned verdict was captured, not
-    // read late off the now-changed live input).
+    d->eval();   // launch cycle: verdict for 0x21 (pinned hit), no edge needed
+    check_bool("live query hit", (bool)d->o_a_hit, true);
+    check("live query paddr", d->o_a_paddr, (0x000B0u << 12));
+    // Move the live query to a miss without a clock edge: the verdict follows.
     d->i_a_vaddr = (0x0001Eu << 12); d->eval();
-    check_bool("align held under live change: hit", (bool)d->o_a_hit, true);
-    check("align held under live change: paddr", d->o_a_paddr, (0x000B0u << 12));
-    // Now advance the pipeline; the next cycle reflects the new query (miss).
-    tick(d);
-    check_bool("align next-cycle is new query (miss)", (bool)d->o_a_hit, false);
+    check_bool("live change follows: miss", (bool)d->o_a_hit, false);
+    // And back: the pinned hit reappears, still without an edge.
+    d->i_a_vaddr = (0x00021u << 12); d->eval();
+    check_bool("live change follows: hit again", (bool)d->o_a_hit, true);
+    check("live change follows: paddr", d->o_a_paddr, (0x000B0u << 12));
     d->i_a_lookup_en = 0;
 
     printf("\n%s: %d/%d checks passed\n", errors ? "FAIL" : "PASS", tests - errors, tests);

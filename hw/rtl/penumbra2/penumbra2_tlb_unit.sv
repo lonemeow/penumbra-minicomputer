@@ -32,7 +32,7 @@ module penumbra2_tlb_unit
     input  logic        i_rst,
     input  logic [7:0]  i_asid,            // current ASID (from MMUCR)
 
-    // ── Port A: I-side translate (drive at T, verdict at T+1) ──
+    // ── Port A: I-side translate (combinational verdict in the launch cycle) ──
     input  logic [31:0] i_a_vaddr,
     input  logic [2:0]  i_a_access_type,
     input  logic        i_a_user_mode,
@@ -42,7 +42,7 @@ module penumbra2_tlb_unit
     output logic        o_a_hit,
     output logic        o_a_fault,
 
-    // ── Port B: D-side translate (same registered contract) ──
+    // ── Port B: D-side translate (same combinational contract) ──
     input  logic [31:0] i_b_vaddr,
     input  logic [2:0]  i_b_access_type,
     input  logic        i_b_user_mode,

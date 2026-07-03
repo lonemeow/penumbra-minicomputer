@@ -7,7 +7,7 @@
 //   - a normal GPR commit drives the regfile write port
 //   - an SPR / flag-only commit drives only its own strobe
 //   - a dual-destination write sequences primary-then-aux through the one
-//     write port over two cycles, asserting o_stall on the first
+//     write port over two cycles, asserting o_local_stall on the first
 //
 // The deferred-fault guard (no faulting instruction may retire here) is an
 // `always_comb assert`; a failed $error aborts the sim (exit 1). Run
@@ -50,7 +50,7 @@ int main(int argc, char** argv) {
     dut->i_rst = 1; tick(dut); dut->i_rst = 0;
     dut->eval();
     check("reset_wr_en",     dut->o_wr_en, 0);
-    check("reset_stall",     dut->o_stall, 0);
+    check("reset_stall",     dut->o_local_stall, 0);
 
     // ── Normal GPR commit: write port + dst exposure, no stall ───
     clear(dut);
@@ -64,11 +64,11 @@ int main(int argc, char** argv) {
     check("gpr_flag_we",   dut->o_flag_we, 1);
     check("gpr_flag_val",  dut->o_flag_value, 0x5);
     check("gpr_spr_we",    dut->o_spr_we, 0);
-    check("gpr_no_stall",  dut->o_stall, 0);
+    check("gpr_no_stall",  dut->o_local_stall, 0);
     // A single write must not arm a phantom second cycle.
     tick(dut); clear(dut); dut->eval();
     check("gpr_no_second_write", dut->o_wr_en, 0);
-    check("gpr_no_second_stall", dut->o_stall, 0);
+    check("gpr_no_second_stall", dut->o_local_stall, 0);
 
     // ── SPR commit: only the SPR strobe ──────────────────────────
     clear(dut);
@@ -97,7 +97,7 @@ int main(int argc, char** argv) {
     check("bubble_flag_we", dut->o_flag_we, 0);
 
     // ── Dual-destination write: primary→aux over two cycles ──────
-    // MEM is back-pressured by o_stall, so the MEM/WB register is held —
+    // MEM is back-pressured by o_local_stall, so the MEM/WB register is held —
     // emulate that by keeping the inputs stable across both cycles.
     clear(dut);
     dut->i_valid = 1; dut->i_gpr_we = 1;
@@ -110,17 +110,17 @@ int main(int argc, char** argv) {
     check("dual_lo_wr_en",   dut->o_wr_en, 1);
     check("dual_lo_wr_idx",  dut->o_wr_idx, 1);
     check("dual_lo_wr_data", dut->o_wr_data, 0x11112222);
-    check("dual_lo_stall",   dut->o_stall, 1);
+    check("dual_lo_stall",   dut->o_local_stall, 1);
     // Cycle 2 — aux write, release.
     tick(dut); dut->eval();
     check("dual_hi_wr_en",   dut->o_wr_en, 1);
     check("dual_hi_wr_idx",  dut->o_wr_idx, 2);
     check("dual_hi_wr_data", dut->o_wr_data, 0x33334444);
-    check("dual_hi_release", dut->o_stall, 0);
+    check("dual_hi_release", dut->o_local_stall, 0);
     // Cycle 3 — the dual write leaves WB.
     tick(dut); clear(dut); dut->eval();
     check("dual_done_wr_en", dut->o_wr_en, 0);
-    check("dual_done_stall", dut->o_stall, 0);
+    check("dual_done_stall", dut->o_local_stall, 0);
 
     // ── Deferred-fault guard demo (opt-in, aborts the sim) ───────
     if (run_guard) {

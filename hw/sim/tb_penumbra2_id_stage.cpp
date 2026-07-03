@@ -82,7 +82,7 @@ int main() {
     dut->eval();
     check("add_rdidx_a", dut->o_rd_idx_a, 1);
     check("add_rdidx_b", dut->o_rd_idx_b, 2);
-    check("add_no_stall", dut->o_stall, 0);
+    check("add_no_stall", dut->o_local_stall, 0);
     tick(dut); dut->eval();
     check("add_issued_valid", dut->o_valid, 1);
     check("add_op_class", dut->o_op_class, OPC_ALU);
@@ -100,7 +100,7 @@ int main() {
     dut->i_ir = enc_r(OP_R_ADD, 4, 1, 0);   // ADD R4, R1 → reads R1 (srcB)
     dut->i_valid = 1;
     dut->eval();
-    check("selffeedback_stall", dut->o_stall, 1);
+    check("selffeedback_stall", dut->o_local_stall, 1);
     tick(dut); dut->eval();
     check("selffeedback_bubble", dut->o_valid, 0);   // did not issue
 
@@ -146,7 +146,7 @@ int main() {
     dut->i_ir = enc_r(OP_R_ADD, 8, 7, 0);   // reads R7 (busy in MEM)
     dut->i_valid = 1;
     dut->eval();
-    check("memdst_raw_stall", dut->o_stall, 1);
+    check("memdst_raw_stall", dut->o_local_stall, 1);
     tick(dut); dut->eval();
     check("memdst_raw_bubble", dut->o_valid, 0);
     // Writer drains → issues next cycle.
@@ -154,13 +154,15 @@ int main() {
     dut->i_ir = enc_r(OP_R_ADD, 8, 7, 0);
     dut->i_valid = 1;
     dut->eval();
-    check("memdst_drained_no_stall", dut->o_stall, 0);
+    check("memdst_drained_no_stall", dut->o_local_stall, 0);
     tick(dut); dut->eval();
     check("memdst_drained_issues", dut->o_valid, 1);
 
     // ── Downstream stall holds ID/EX ─────────────────────────────
     // Issue an instruction, then assert i_stall_in and confirm ID/EX
-    // is held (valid stays, and a new input is back-pressured).
+    // is held. o_local_stall stays low: it reports only the scoreboard
+    // interlock — the spine ORs it with the downstream stalls to form
+    // the back-pressure to IF.
     clear(dut);
     dut->i_ir = enc_r(OP_R_ADD, 2, 3, 0);
     dut->i_valid = 1;
@@ -171,7 +173,7 @@ int main() {
     dut->i_stall_in = 1;
     dut->i_ir = enc_r(OP_R_ADD, 9, 10, 0);   // a different insn knocking
     dut->eval();
-    check("stall_in_backpressure", dut->o_stall, 1);
+    check("stall_in_no_local_stall", dut->o_local_stall, 0);
     tick(dut); dut->eval();
     check("stall_in_holds_valid", dut->o_valid, 1);
     check("stall_in_holds_dst", dut->o_phys_dst, held_dst);
@@ -194,7 +196,7 @@ int main() {
     dut->i_valid = 1;
     dut->i_fault_pending = 1; dut->i_fault_vec = 2;
     dut->eval();
-    check("fault_no_stall", dut->o_stall, 0);
+    check("fault_no_stall", dut->o_local_stall, 0);
     tick(dut); dut->eval();
     check("fault_issues", dut->o_valid, 1);
     check("fault_pending_set", dut->o_fault_pending, 1);

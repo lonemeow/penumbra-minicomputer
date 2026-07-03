@@ -71,7 +71,7 @@ static void flush_bubble(Vpenumbra2_ex_stage* dut) {
 
 // Run a divmul to completion: prime EX/MEM empty, drive the insn (inputs
 // persist across tick(), so set them once), tick until the unit finishes
-// (o_stall drops), then one more tick to latch the EX/MEM register.
+// (o_local_stall drops), then one more tick to latch the EX/MEM register.
 // Returns the iteration-cycle count, or -1 if it never completed.
 static int run_divmul(Vpenumbra2_ex_stage* dut, int op, uint32_t a, uint32_t b) {
     flush_bubble(dut);
@@ -82,8 +82,8 @@ static int run_divmul(Vpenumbra2_ex_stage* dut, int op, uint32_t a, uint32_t b) 
     dut->i_valid = 1;
     dut->eval();
     int guard = 0;
-    while (dut->o_stall && guard < 64) { tick(dut); guard++; }
-    if (dut->o_stall) return -1;        // never finished
+    while (dut->o_local_stall && guard < 64) { tick(dut); guard++; }
+    if (dut->o_local_stall) return -1;        // never finished
     tick(dut); dut->eval();             // latch results into EX/MEM
     return guard;
 }
@@ -103,7 +103,7 @@ int main() {
     dut->i_alu_op = ALU_ADD; dut->i_gpr_we = 1; dut->i_flag_we = 1;
     dut->i_phys_dst = 1; dut->i_pc = 0xFFFF0040; dut->i_valid = 1;
     dut->eval();
-    check("add_no_stall", dut->o_stall, 0);
+    check("add_no_stall", dut->o_local_stall, 0);
     tick(dut); dut->eval();
     check("add_valid",     dut->o_valid, 1);
     check("add_result",    dut->o_result, 0);
@@ -178,6 +178,9 @@ int main() {
     check("selffeed_adc_carry", dut->o_result, 0x31);
 
     // ── Downstream stall holds EX/MEM ────────────────────────────
+    // o_local_stall stays low: EX stalls locally only for its own causes
+    // (drain-commit, divmul); the spine ORs in i_stall_in for the
+    // back-pressure to ID.
     clear(dut);
     dut->i_op_a = 7; dut->i_op_b = 8; dut->i_alu_op = ALU_ADD;
     dut->i_gpr_we = 1; dut->i_phys_dst = 9; dut->i_valid = 1;
@@ -188,7 +191,7 @@ int main() {
     dut->i_op_a = 100; dut->i_op_b = 200;   // a different insn knocking
     dut->i_phys_dst = 10;
     dut->eval();
-    check("stall_in_backpressure", dut->o_stall, 1);
+    check("stall_in_no_local_stall", dut->o_local_stall, 0);
     tick(dut); dut->eval();
     check("stall_in_holds_valid",  dut->o_valid, 1);
     check("stall_in_holds_result", dut->o_result, held_result);
@@ -230,7 +233,7 @@ int main() {
     dut->i_phys_dst = 1; dut->i_phys_dst_aux = 2; dut->i_phys_dst_aux_en = 1;
     dut->i_valid = 1;
     dut->eval();
-    check("dmstall_backpressure", dut->o_stall, 1);
+    check("dmstall_divmul_stall", dut->o_local_stall, 1);  // the divmul busy is a local cause
     tick(dut); dut->eval();
     check("dmstall_holds_valid",  dut->o_valid, 1);       // held, NOT dropped
     check("dmstall_holds_result", dut->o_result, 33);
@@ -243,7 +246,7 @@ int main() {
     dut->i_stall_in = 0;
     dut->eval();
     int dmg = 0;
-    while (dut->o_stall && dmg < 64) { tick(dut); dmg++; }
+    while (dut->o_local_stall && dmg < 64) { tick(dut); dmg++; }
     check("dmstall_divmul_completed", (dmg < 64), 1);
     tick(dut); dut->i_valid = 0; dut->eval();             // latch divmul result
     check("dmstall_divmul_lo", dut->o_result, 42);        // 7 * 6 survived the hold
@@ -388,7 +391,7 @@ int main() {
     // o_valid (EX's own EX/MEM register) is MEM occupancy; i_wb_active
     // is driven directly to model the WB stage draining. A held
     // drain-commit insn is re-driven each cycle (the real pipeline would
-    // hold it in ID/EX via o_stall).
+    // hold it in ID/EX via the spine's OR of o_local_stall).
     // ════════════════════════════════════════════════════════════
 
     // Helper-free sequence: ERET (post_commit_wait=0) drains MEM then WB,
@@ -406,7 +409,7 @@ int main() {
     dut->i_op_class = OPC_ERET; dut->i_drain_commit = 1; dut->i_valid = 1;
     dut->i_wb_active = 1;
     dut->eval();
-    check("eret_draining_stall",    dut->o_stall, 1);
+    check("eret_draining_stall",    dut->o_local_stall, 1);
     check("eret_draining_no_commit", dut->o_dc_commit, 0);
     tick(dut); dut->eval();
     check("eret_mem_drained", dut->o_valid, 0);   // bubble pushed into EX/MEM
@@ -415,7 +418,7 @@ int main() {
     dut->i_op_class = OPC_ERET; dut->i_drain_commit = 1; dut->i_valid = 1;
     dut->i_wb_active = 1;
     dut->eval();
-    check("eret_wb_busy_stall",     dut->o_stall, 1);
+    check("eret_wb_busy_stall",     dut->o_local_stall, 1);
     check("eret_wb_busy_no_commit", dut->o_dc_commit, 0);
     tick(dut); dut->eval();
 
@@ -424,7 +427,7 @@ int main() {
     dut->i_wb_active = 0;
     dut->eval();
     check("eret_commit",  dut->o_dc_commit, 1);
-    check("eret_release", dut->o_stall, 0);
+    check("eret_release", dut->o_local_stall, 0);
 
     // WRSYS (post_commit_wait=1): on the drained cycle it commits but
     // holds upstream one extra cycle for the device latch.
@@ -434,13 +437,13 @@ int main() {
     dut->i_valid = 1; dut->i_wb_active = 0;          // already drained
     dut->eval();
     check("wrsys_commit",      dut->o_dc_commit, 1);
-    check("wrsys_commit_hold", dut->o_stall, 1);     // post-commit hold, not release
+    check("wrsys_commit_hold", dut->o_local_stall, 1);     // post-commit hold, not release
     tick(dut); dut->eval();
     // Post-commit hold cycle: release, and do not re-fire the commit.
     dut->i_op_class = OPC_WRSYS; dut->i_drain_commit = 1; dut->i_post_commit_wait = 1;
     dut->i_valid = 1; dut->i_wb_active = 0;
     dut->eval();
-    check("wrsys_postwait_release",    dut->o_stall, 0);
+    check("wrsys_postwait_release",    dut->o_local_stall, 0);
     check("wrsys_postwait_no_recommit", dut->o_dc_commit, 0);
 
     // Drained-on-arrival: a drain-commit insn meeting an empty MEM/WB
@@ -451,7 +454,7 @@ int main() {
     dut->i_wb_active = 0;
     dut->eval();
     check("dc_immediate_commit",  dut->o_dc_commit, 1);
-    check("dc_immediate_release", dut->o_stall, 0);
+    check("dc_immediate_release", dut->o_local_stall, 0);
 
     // A faulting drain-commit insn does NOT drain-commit: it flows through
     // inert and faults at WB (a privileged ERET in user mode).
@@ -461,7 +464,7 @@ int main() {
     dut->i_fault_pending = 1; dut->i_fault_vec = 4; dut->i_wb_active = 0;
     dut->eval();
     check("dc_fault_no_commit", dut->o_dc_commit, 0);
-    check("dc_fault_no_stall",  dut->o_stall, 0);
+    check("dc_fault_no_stall",  dut->o_local_stall, 0);
     tick(dut); dut->eval();
     check("dc_fault_advances",     dut->o_valid, 1);          // went to EX/MEM, inert
     check("dc_fault_pending_rides", dut->o_fault_pending, 1);
@@ -479,13 +482,13 @@ int main() {
     dut->i_phys_dst = 1; dut->i_phys_dst_aux = 2; dut->i_phys_dst_aux_en = 1;
     dut->i_valid = 1;
     dut->eval();
-    check("mul_iter_stall", dut->o_stall, 1);        // started + iterating
+    check("mul_iter_stall", dut->o_local_stall, 1);        // started + iterating
     check("mul_iter_funit", dut->o_funit_stall, 1);  // stall attributed to the unit
     tick(dut); dut->eval();
     check("mul_iter_no_exmem", dut->o_valid, 0);     // EX/MEM bubbled while iterating
-    check("mul_iter_still_busy", dut->o_stall, 1);
+    check("mul_iter_still_busy", dut->o_local_stall, 1);
     int guard = 1;
-    while (dut->o_stall && guard < 64) { tick(dut); guard++; }
+    while (dut->o_local_stall && guard < 64) { tick(dut); guard++; }
     check("mul_completed", (guard < 64), 1);
     tick(dut);                                         // advance edge: latch result into EX/MEM
     dut->i_valid = 0; dut->eval();                     // model the pipeline feeding EX its next slot:
@@ -516,7 +519,7 @@ int main() {
     dut->i_op_a = 10; dut->i_op_b = 0;
     dut->i_gpr_we = 1; dut->i_valid = 1;
     dut->eval();
-    check("div0_no_stall", dut->o_stall, 0);          // busy never rises
+    check("div0_no_stall", dut->o_local_stall, 0);          // busy never rises
     check("div0_no_funit", dut->o_funit_stall, 0);
     tick(dut); dut->eval();
     check("div0_valid",   dut->o_valid, 1);

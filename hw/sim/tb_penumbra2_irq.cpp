@@ -1,16 +1,19 @@
 // Verilator testbench for penumbra2_irq.
 //
-// Drives the IRQ lines, the enable/shadow inputs, and the drain state across
-// clock edges, checking the recognition + drain-and-take contract in
-// doc/internals/penumbra2/exception-flow.md:
-//   - eligible (line & SR.I & ~ei_shadow) stops fetch, drains, then takes
-//   - ei_shadow (set by EI, cleared by the next completion) masks recognition
-//   - timer outranks the external line
-//   - a fault during the drain preempts the entry
-//   - EPC is the boundary PC latched at recognition
+// Drives the IRQ lines, the pipeline-state inputs, and the EX-slot view,
+// checking recognition and the EX-frontier inject pulse against the contract
+// in doc/internals/penumbra2/exception-flow.md and the module header:
+//   - eligible (line & SR.I & ~ei_shadow) + a clean EX boundary → o_irq_inject
+//   - each boundary condition independently gates the pulse (empty slot,
+//     stalled slot, drain-commit, fault commit, vector fetch in progress)
+//   - timer outranks the external line on o_irq_vec
+//   - ei_shadow masks recognition for exactly the one instruction after EI:
+//     armed by i_ei_commit (set wins over the clear on EI's own commit
+//     cycle), held while nothing completes, cleared by the next retirement
+//     or drain-commit
 //
-// The unit's --assert invariants (entry only from a drained DRAIN; entry never
-// coincides with a fault) ride along.
+// The unit's --assert invariant (inject only on a clean, committable EX
+// boundary) rides along on every eval.
 
 #include <cstdio>
 #include <cstdint>
@@ -35,8 +38,15 @@ static void clear(Vpenumbra2_irq* dut) {
     dut->i_irq = 0; dut->i_timer_irq = 0;
     dut->i_sr_i = 0; dut->i_ei_commit = 0;
     dut->i_retire_valid = 0; dut->i_dc_commit = 0;
-    dut->i_pipe_busy = 0; dut->i_boundary_pc = 0;
+    dut->i_ex_valid = 0; dut->i_ex_stall = 0;
     dut->i_fault_commit = 0; dut->i_vecf_active = 0;
+}
+
+// Present an eligible interrupt at a clean EX boundary: external line up,
+// SR.I set, a real un-stalled EX slot, nothing else in the way.
+static void eligible_clean(Vpenumbra2_irq* dut) {
+    clear(dut);
+    dut->i_irq = 1; dut->i_sr_i = 1; dut->i_ex_valid = 1;
 }
 
 int main(int argc, char** argv) {
@@ -46,58 +56,90 @@ int main(int argc, char** argv) {
     clear(dut);
     dut->i_rst = 1; tick(dut); dut->i_rst = 0;
     dut->eval();
-    check("reset_no_stop",  dut->o_fetch_stop, 0);
-    check("reset_no_entry", dut->o_irq_entry, 0);
+    check("reset_no_inject", dut->o_irq_inject, 0);
 
-    // ── Basic entry: eligible → stop → drain → take ──────────────
-    clear(dut);
-    dut->i_sr_i = 1; dut->i_irq = 1; dut->i_boundary_pc = 0x1234; dut->i_pipe_busy = 1;
-    dut->eval();
-    check("elig_fetch_stop", dut->o_fetch_stop, 1);   // recognition stops fetch
-    check("elig_no_entry",   dut->o_irq_entry, 0);     // pipe still busy
-    tick(dut);                                          // → DRAIN (latch epc/vec)
-    dut->i_pipe_busy = 1; dut->eval();
-    check("drain_stop",   dut->o_fetch_stop, 1);
-    check("drain_noentry", dut->o_irq_entry, 0);
-    dut->i_pipe_busy = 0; dut->eval();                 // pipe empties
-    check("drain_entry", dut->o_irq_entry, 1);
-    check("drain_vec",   dut->o_irq_vec, VEC_EXT_IRQ);
-    check("drain_epc",   dut->o_irq_epc, 0x1234);
-    tick(dut); clear(dut); dut->eval();                // → IDLE
-    check("post_idle", dut->o_fetch_stop, 0);
+    // ── Basic inject: eligible + clean EX boundary, same cycle ───
+    eligible_clean(dut); dut->eval();
+    check("inject_fires", dut->o_irq_inject, 1);
+    check("inject_vec",   dut->o_irq_vec, VEC_EXT_IRQ);
 
-    // ── ei_shadow masks recognition until the next completion ────
-    clear(dut);
-    dut->i_ei_commit = 1; dut->eval(); tick(dut);      // ei_shadow <= 1
-    clear(dut);
-    dut->i_sr_i = 1; dut->i_irq = 1; dut->i_pipe_busy = 1; dut->eval();
-    check("shadow_masks", dut->o_fetch_stop, 0);        // SR.I=1 but shadowed
-    dut->i_retire_valid = 1; dut->eval(); tick(dut);    // shadow insn completes → clear
-    clear(dut);
-    dut->i_sr_i = 1; dut->i_irq = 1; dut->i_pipe_busy = 1; dut->eval();
-    check("shadow_cleared", dut->o_fetch_stop, 1);      // now eligible
+    // ── Gating matrix: each condition alone kills the pulse ──────
+    eligible_clean(dut); dut->i_sr_i = 0; dut->eval();
+    check("gate_sr_i", dut->o_irq_inject, 0);
+
+    eligible_clean(dut); dut->i_irq = 0; dut->eval();
+    check("gate_no_line", dut->o_irq_inject, 0);
+
+    eligible_clean(dut); dut->i_ex_valid = 0; dut->eval();
+    check("gate_empty_slot", dut->o_irq_inject, 0);
+
+    eligible_clean(dut); dut->i_ex_stall = 1; dut->eval();
+    check("gate_stalled_slot", dut->o_irq_inject, 0);
+
+    eligible_clean(dut); dut->i_dc_commit = 1; dut->eval();
+    check("gate_dc_commit", dut->o_irq_inject, 0);
+
+    eligible_clean(dut); dut->i_fault_commit = 1; dut->eval();
+    check("gate_fault_commit", dut->o_irq_inject, 0);
+
+    eligible_clean(dut); dut->i_vecf_active = 1; dut->eval();
+    check("gate_vecf_active", dut->o_irq_inject, 0);
 
     // ── Timer outranks the external line ─────────────────────────
-    clear(dut);
-    dut->i_sr_i = 1; dut->i_irq = 1; dut->i_timer_irq = 1; dut->i_pipe_busy = 0;
-    dut->eval(); tick(dut);                             // → DRAIN, vec latched
-    dut->i_pipe_busy = 0; dut->eval();
-    check("timer_priority", dut->o_irq_vec, VEC_TIMER);
-    tick(dut); clear(dut); dut->eval();
+    eligible_clean(dut); dut->i_timer_irq = 1; dut->eval();   // both lines
+    check("timer_priority_vec", dut->o_irq_vec, VEC_TIMER);
+    check("timer_priority_inject", dut->o_irq_inject, 1);
 
-    // ── A fault during the drain preempts the entry ──────────────
     clear(dut);
-    dut->i_sr_i = 1; dut->i_irq = 1; dut->i_pipe_busy = 1; dut->eval(); tick(dut);  // → DRAIN
-    dut->i_pipe_busy = 0; dut->i_fault_commit = 1; dut->eval();   // pipe empty but a fault commits
-    check("fault_preempts", dut->o_irq_entry, 0);       // entry suppressed
-    tick(dut); clear(dut); dut->eval();
-    check("preempt_to_idle", dut->o_fetch_stop, 0);     // FSM returned to IDLE
+    dut->i_timer_irq = 1; dut->i_sr_i = 1; dut->i_ex_valid = 1; dut->eval();
+    check("timer_alone_vec", dut->o_irq_vec, VEC_TIMER);
 
-    // ── A vector fetch in progress blocks recognition ────────────
+    // ── ei_shadow: exactly one instruction of masking after EI ───
+    // Both sequences arm the shadow with i_ei_commit coincident with a
+    // retirement, so they also prove the set wins over the clear on EI's
+    // own commit cycle. The shadow is observable only through its effect:
+    // an otherwise-injectable interrupt held at the input with the pulse
+    // suppressed.
+
     clear(dut);
-    dut->i_sr_i = 1; dut->i_irq = 1; dut->i_pipe_busy = 1; dut->i_vecf_active = 1;
+    // EI commit, timer IRQ active
+    dut->i_sr_i = 1;
+    dut->i_ei_commit = 1;
+    dut->i_ex_valid = 1;
+    dut->i_retire_valid = 1;
+    dut->i_timer_irq = 1;
     dut->eval();
-    check("vecf_blocks", dut->o_fetch_stop, 0);
+    tick(dut);
+    // EI shadow cycle, IRQ active but not taken
+    dut->i_ei_commit = 0;
+    dut->eval();
+    check("ei_shadow_irq_not_taken", dut->o_irq_inject, 0);
+    tick(dut);
+    // Cycle after EI shadow, IRQ active and taken
+    check("ei_shadow_irq_taken_after", dut->o_irq_inject, 1);
+
+    clear(dut);
+    // EI commit, timer IRQ active
+    dut->i_sr_i = 1;
+    dut->i_ei_commit = 1;
+    dut->i_ex_valid = 1;
+    dut->i_retire_valid = 1;
+    dut->i_timer_irq = 1;
+    dut->eval();
+    tick(dut);
+    // EI shadow cycles, no insn retired, IRQ active but not taken
+    dut->i_ei_commit = 0;
+    dut->i_retire_valid = 0;
+    dut->eval();
+    check("ei_shadow_irq_not_taken_noretire1", dut->o_irq_inject, 0);
+    tick(dut);
+    check("ei_shadow_irq_not_taken_noretire2", dut->o_irq_inject, 0);
+    tick(dut);
+    // EI shadow cycle, insn retired, IRQ active but not taken
+    dut->i_retire_valid = 1;
+    tick(dut);
+    // Cycle after EI shadow, insn retired, IRQ active and taken
+    check("ei_shadow_irq_taken_after_hold", dut->o_irq_inject, 1);
 
     printf("%s: %d/%d checks passed\n",
            errors ? "FAIL" : "PASS", tests - errors, tests);

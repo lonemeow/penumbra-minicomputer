@@ -14,8 +14,10 @@
 //   - a word completing while ID back-pressures parks in the skid: the
 //     request deasserts (completion consumed), the slot waits, and the
 //     skid word is delivered when ID accepts
-//   - a flush gates the request off (no wrong-path fill engages) and a
-//     flush landing mid-wait abandons the completion entirely
+//   - a flush leaves the request up (keeping i_flush off the fetch-request
+//     path cuts a back-edge into the PC redirect cone) — a wrong-path fill
+//     may engage, but the flushed slot is never delivered: the IF2/ID
+//     register bubbles, and a flush mid-wait abandons the completion
 //   - a misaligned PC faults without raising a request; a TLB-faulted
 //     fetch advances with the MMU's composed status, no request
 //
@@ -117,10 +119,14 @@ int main(int argc, char** argv) {
     check("skid_ir",    dut->o_ir, 0x55667788);      // the parked word, not the port
     check("skid_pc",    dut->o_pc, 0x3000);
 
-    // ── Flush gates the request: no wrong-path fill engages ──────
+    // ── Flush leaves the request up; the slot is never delivered ─
+    // The request is deliberately not gated on i_flush (that gate put the
+    // flush on the fetch-request path, a back-edge into the PC redirect
+    // cone). The wrong-path fetch may engage a fill; correctness lives at
+    // the IF2/ID register, which bubbles the flushed slot.
     clear(dut);
     slot(dut, 0x4000, 0); dut->i_flush = 1; dut->i_mem_busy = 0; dut->eval();
-    check("flush_re", dut->o_fetch_re, 0);
+    check("flush_re", dut->o_fetch_re, 1);
     tick(dut); dut->eval();
     check("flush_bub", dut->o_valid, 0);
 
@@ -130,7 +136,7 @@ int main(int argc, char** argv) {
     check("fmw_re", dut->o_fetch_re, 1);
     tick(dut); dut->eval();                          // fill in flight
     dut->i_flush = 1; dut->eval();
-    check("fmw_re_off", dut->o_fetch_re, 0);         // request dropped with the kill
+    check("fmw_re_held", dut->o_fetch_re, 1);        // request survives the kill (not flush-gated)
     check("fmw_stall",  dut->o_stall, 1);            // busy still holds IF1
     tick(dut);
     dut->i_flush = 0; dut->i_valid = 0; dut->eval(); // IF1 bubbled the slot

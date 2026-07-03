@@ -156,7 +156,7 @@ int main(int argc, char** argv) {
     dut->i_result = 0xCAFEBABE; dut->i_flag_value = 0x5;
     dut->i_phys_dst = 7; dut->i_pc = 0xFFFF0100; dut->i_valid = 1;
     dut->eval();
-    check("alu_no_stall",   dut->o_stall, 0);
+    check("alu_no_stall",   dut->o_local_stall, 0);
     tick(dut); dut->eval();
     check("alu_valid",      dut->o_valid, 1);
     check("alu_gpr_we",     dut->o_gpr_we, 1);
@@ -196,13 +196,13 @@ int main(int argc, char** argv) {
     dut->i_op_class = OPC_LOAD; dut->i_mem_op = MEM_LOAD; dut->i_mem_size = SZ_WORD;
     dut->i_gpr_we = 1; dut->i_result = 0x10; dut->i_phys_dst = 4; dut->i_valid = 1;
     dut->eval();
-    check("ldw_c1_stall",  dut->o_stall, 1);     // cycle 1 stalls EX
+    check("ldw_c1_stall",  dut->o_local_stall, 1);     // cycle 1 stalls EX
     check("ldw_c1_dmem_en", dut->o_dmem_en, 1);  // ...and launches the lookup
     check("ldw_c1_no_re",   dut->o_dmem_re, 0);  // request starts at data-ready
     tick(dut); dut->eval();
     check("ldw_c1_no_commit", dut->o_valid, 0);  // MEM/WB bubbled during access
     check("ldw_c2_re",        dut->o_dmem_re, 1); // read request presented level
-    check("ldw_c2_release",   dut->o_stall, 0);  // cycle 2 releases (busy low)
+    check("ldw_c2_release",   dut->o_local_stall, 0);  // cycle 2 releases (busy low)
     tick(dut); dut->eval();
     check("ldw_valid",     dut->o_valid, 1);
     check("ldw_value",     dut->o_wb_value, 0x8899AABB);
@@ -261,7 +261,7 @@ int main(int argc, char** argv) {
     dut->i_gpr_we = 1; dut->i_result = 0x12;  // word @ +2 → misaligned
     dut->i_phys_dst = 6; dut->i_valid = 1;
     dut->eval();
-    check("misalign_no_stall", dut->o_stall, 0);   // no access → single cycle
+    check("misalign_no_stall", dut->o_local_stall, 0);   // no access → single cycle
     check("misalign_no_en",    dut->o_dmem_en, 0);
     tick(dut); dut->eval();
     check("misalign_valid", dut->o_valid, 1);
@@ -287,16 +287,16 @@ int main(int argc, char** argv) {
     dut->i_op_class = OPC_LOAD; dut->i_mem_op = MEM_LOAD; dut->i_mem_size = SZ_WORD;
     dut->i_gpr_we = 1; dut->i_result = 0x30; dut->i_phys_dst = 8; dut->i_valid = 1;
     dut->eval();
-    check("ldbusy_c1_stall", dut->o_stall, 1);      // launch cycle
+    check("ldbusy_c1_stall", dut->o_local_stall, 1);      // launch cycle
     tick(dut); dut->eval();
     for (int w = 0; w < 3; w++) {                    // busy-wait cycles
         check("ldbusy_wait_busy",  dut->i_dmem_busy, 1);
-        check("ldbusy_wait_stall", dut->o_stall, 1);
+        check("ldbusy_wait_stall", dut->o_local_stall, 1);
         check("ldbusy_wait_re",    dut->o_dmem_re, 1);   // request held level
         check("ldbusy_wait_hold",  dut->o_valid, 0);     // still bubbling
         tick(dut); dut->eval();
     }
-    check("ldbusy_drop_stall", dut->o_stall, 0);    // completes on the drop cycle
+    check("ldbusy_drop_stall", dut->o_local_stall, 0);    // completes on the drop cycle
     tick(dut); dut->eval();
     check("ldbusy_value", dut->o_wb_value, 0x0BADF00D);
     check("ldbusy_valid", dut->o_valid, 1);
@@ -313,7 +313,7 @@ int main(int argc, char** argv) {
     for (int w = 0; w < 2; w++) {                    // busy-wait cycles
         check("stbusy_wait_we",   dut->o_dmem_we, 1);     // write held level
         check("stbusy_wait_mem",  dmem[0x50 >> 2], 0x01020304);  // not committed yet
-        check("stbusy_wait_stall", dut->o_stall, 1);
+        check("stbusy_wait_stall", dut->o_local_stall, 1);
         tick(dut); dut->eval();
     }
     check("stbusy_drop_we", dut->o_dmem_we, 1);      // still presented at completion
@@ -344,7 +344,7 @@ int main(int argc, char** argv) {
 
     // While i_stall_in is high the launch is deferred: EX is back-pressured,
     // no read is driven, and the prior ALU slot in MEM/WB is held intact.
-    check("deferlaunch_o_stall",    dut->o_stall, 1);
+    check("deferlaunch_o_local_stall", dut->o_local_stall, 1);  // want_launch is ungated intent
     check("deferlaunch_o_dmem_en",  dut->o_dmem_en, 0);
     check("deferlaunch_o_valid",    dut->o_valid, 1);
     check("deferlaunch_o_wb_value", dut->o_wb_value, 0xA5A5A5A5);

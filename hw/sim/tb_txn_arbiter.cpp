@@ -25,7 +25,8 @@
 //     would deadlock the next grant)
 //   - line transactions: fill strobes reach only the owner, word/wdata
 //     broadcast, the non-owner waits, and a mid-stream busy-drop does NOT
-//     release the grant — only fill_done does
+//     release the grant — only fill_done does; a line completion takes one
+//     bubble cycle before the next grant (beat completions stay zero-bubble)
 //   - full-shape forwarding (wdata/byte_en/cacheable verbatim)
 //
 // The module's SVA assertions (lock taken/released/stable, fill activity
@@ -281,7 +282,14 @@ int main(int argc, char** argv) {
     // The L1 leaves S_FILL at the fill_done edge, so its request is low
     // during the very next cycle — model that honestly, no extra edge.
     clear_i();
-    // Handover: D's held request owns the port the cycle after fill_done.
+    // Handover: a line completion frees the register in the fill_done cycle
+    // but does not re-grant on it (fill_done rides the L2 tag/hit cone, so a
+    // same-cycle launch would drag that cone onto the mq-load path). The
+    // cycle after fill_done is a bubble — no downstream request — and D's
+    // held request launches through it, owning the port the cycle after.
+    cycle_eval();
+    check("line_handover_bubble", dut->o_m_re, 0);
+    clock_edge();
     cycle_eval();
     check("line_handover_to_d", dut->o_m_addr, 0x3400);
     for (int i = 0; i < 10 && (cycle_eval(), dut->o_d_busy); i++) clock_edge();
