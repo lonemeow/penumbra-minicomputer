@@ -4,11 +4,12 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// Penumbra-specific TargetTransformInfo.  We subclass BasicTTIImplBase so
-// that target-aware cost-model queries (currently just LSR's
-// isLegalAddressingMode) are delegated to PenumbraTargetLowering instead
-// of being answered by the generic "RISCy r+r and r+i" defaults.  All
-// other queries fall through to the BasicTTIImpl defaults.
+// Penumbra-specific TargetTransformInfo.  This is where IR-level passes
+// (LSR, the vectorizers, DivRemPairs, inliner/unroller cost queries) get
+// their machine-capability and cost answers; Penumbra has no SelectionDAG
+// path, so generic defaults that infer capabilities from SDAG-era state
+// answer wrongly and are corrected here.  Queries without an override
+// fall through to the BasicTTIImpl defaults.
 //
 //===----------------------------------------------------------------------===//
 
@@ -73,6 +74,17 @@ public:
     default:
       return 0;
     }
+  }
+
+  // DivRemPairs asks whether the target computes quotient and remainder
+  // in one operation before deciding what to do with an `x/y; x%y` pair:
+  // true keeps the remainder instruction and hoists the pair adjacent —
+  // where the GISel pre-legalizer combiner fuses it into a single
+  // G_SDIVREM/G_UDIVREM selected to DIV_P/DIVU_P — while false decomposes
+  // the remainder into `x - (x/y)*y`.  The TTI base answers false
+  // unconditionally; it never consults the SelectionDAG action tables.
+  bool hasDivRemOp(Type *DataType, bool IsSigned) const override {
+    return DataType->isIntegerTy(32);
   }
 
   // Make instruction count the primary LSR sort key.  The default

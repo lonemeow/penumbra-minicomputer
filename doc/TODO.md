@@ -2606,6 +2606,18 @@ targets opt into are silently off.  Status per item:
   MachinePipeliner (needs deep sched model, ILP machine),
   `enableSubRegLiveness` (no subregisters), GISel LoadStoreOpt
   (no wider load/store ops to merge into).
+- **TTI capability/cost audit** (opened by the SDAG action-table
+  removal): with no SelectionDAG path, IR-level passes read machine
+  capabilities from `PenumbraTTIImpl`, and un-overridden defaults can
+  answer wrongly in both directions.  `hasDivRemOp` — **DONE**
+  (reports the fused DIV_P/DIVU_P; DivRemPairs keeps `x/y; x%y`
+  pairs for the GISel divrem fusion instead of decomposing the rem
+  into mul+sub — one ~33-cycle divmul op per pair instead of two).
+  Remaining candidate: `getArithmeticInstrCost`, which prices
+  MUL/DIV like single-cycle ALU ops for the inliner/unroller instead
+  of ~33-cycle divmul iterations — a cheap override, but cost-model
+  shifts move inlining decisions broadly, so it needs a kernel-bench
+  A/B before landing.
 
 ## Compiler: enable shrink-wrapping (spill-density lever, part 1)
 
