@@ -3695,13 +3695,42 @@ Implementation work, by layer:
   in come back out, both speeds, multi-packet (`1bba2b9`).
 - **The SIE is complete**: all bit-, timing-, framing-, and line-level
   cells built, unit-tested, and proven end-to-end in both directions.
-  Next: compose them into the `usb_phy_sim` / `usb_phy_ecp5` modules
-  behind the UTMI-shaped seam (per the microarchitecture doc), including
-  the US2 TX/RX pin split and pull drive.
-- MAC: transaction FSM, 1 ms frame timer, port/line detect + reset.
+- Seam verified against the UTMI+ spec rev 1.0 (saved locally as
+  `~/UTMI-PLUS-SPECIFICATION.pdf`) so a real ULPI/UTMI PHY satisfies it
+  unmodified: opmode = the UTMI+ operational modes; bus reset = the
+  HS-termination drive state (`xcvr_sel 00` + `term_sel 0`, SE0 by
+  electrical result — FS/LS-only PHYs drive SE0 directly, caps carve-out
+  documented); resume = opmode 10 + held `00h` data; LS keep-alive = the
+  transceiver-decoded one-byte `A5h`; `line_state` = raw {D-, D+} with
+  SE0 glitch filtering; `usb_speed_e` now carries the XcvrSelect
+  encoding end to end (`6959ad2`, `0cba7d2`). `XFER_STATUS` gained
+  `RXTOGGLE` — hardware ACKs CRC-good IN data and reports the received
+  toggle; retransmission detection stays in software (`6959ad2`).
+- **MAC — next up.** Decomposition agreed, leaf-cell style, all on the
+  60 MHz clock (the CDC crosses later), build order as listed:
+  `usbhc_pkt_tx` (token/SOF/DATAx/handshake transmit, owns the on-wire
+  CRC complement+reflect above the bare CRC cells — golden vectors from
+  `sw/tools/usb_crc.py`), `usbhc_pkt_rx` (PID classify + check-nibble,
+  payload → buffer, CRC16 residual, `{kind, toggle, len, ok}`),
+  `usbhc_txn` (token → [data] → handshake FSM, 16–18-bit-time turnaround
+  timeout, host-ACK, RESULT classification), `usbhc_frame` (1 ms timer,
+  FRAME counter, SOF/keep-alive request, never splits a transaction),
+  `usbhc_port` (connect/speed detect — FS-polarity trick: idle-J ⇒ FS,
+  idle-K ⇒ LS — debounce, reset/resume recipes, opmode/xcvr policy),
+  then the `usbhc_mac` composition. MAC-level test drives the seam with
+  a byte-level C++ device responder (the embryo of `UsbDeviceSim`; its
+  keyboard input must NOT take terminal stdin — the UART console owns
+  it — separate pty/socket, mechanism TBD).
+- `usb_phy_sim` / `usb_phy_ecp5`: compose the SIE cells behind the seam
+  (`usb_rx_test`/`usb_tx_test` are the two halves' shapes); `phy_sim`
+  replaces the line layer with a byte-level packet port + connect/speed
+  sideband exported through `machine_sim` like the SPI/SD model, pacing
+  bytes at real bit-time rates so MAC timing stays honest.
 - US2 wiring: RX diff on `usb_fpga_dp/dn`, TX on `usb_fpga_bd_dp/dn`,
-  pulls on `usb_fpga_pu_*`; dual-clock-BRAM + handshake CDC.
-- `autoconfig_dev` wrapper (`CLASS_USBHC`).
+  pulls on `usb_fpga_pu_*`; dual-clock-BRAM + handshake CDC
+  (`usbhc_regs` + `usbhc_cdc`).
+- `autoconfig_dev` wrapper (`CLASS_USBHC`); machine_sim integration test
+  (poll CONNECT → reset → GET_DESCRIPTOR → R1) under `make test`.
 
 ### Kernel
 - `CLASS_USBHC` host-controller driver (`usbd_bus_methods` /
