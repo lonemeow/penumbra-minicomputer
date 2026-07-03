@@ -3715,10 +3715,11 @@ Implementation work, by layer:
   (`0932a66`). Done: `usbhc_pkt_rx` — PID classify + check-nibble,
   packet body → buffer as received (CRC bytes included, per the DATA
   contract), CRC16-residual check, EOP-latched `{pid, len, ok, err,
-  overflow}` (`87c0a57`). Next: `usbhc_txn` (token → [data] → handshake
-  FSM, 16–18-bit-time turnaround timeout, host-ACK, RESULT
-  classification; gates rx→buffer stores to IN transactions — a stray
-  DATAx during an OUT must not scribble the TX payload), `usbhc_frame`
+  overflow}` (`87c0a57`). Done: `usbhc_txn` — token → [data] →
+  handshake FSM, speed-scaled turnaround timeout + drain-aware
+  inter-packet gaps, hardware host-ACK, trust-then-dispatch RESULT
+  classification, IN-only rx→buffer store grant; TOKEN.PID and RESULT
+  encodings in `penumbra_pkg` (`354e06f`). Next: `usbhc_frame`
   (1 ms timer,
   FRAME counter, SOF/keep-alive request, never splits a transaction),
   `usbhc_port` (connect/speed detect — FS-polarity trick: idle-J ⇒ FS,
