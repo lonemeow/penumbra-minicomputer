@@ -12,10 +12,17 @@
 // stuff bit, o_stuff is high and the presented data bit is NOT consumed —
 // upstream must hold it and present it again next cycle (consumed =
 // i_en && !o_stuff).
+//
+// The run count is per packet: i_init (the framing layer's SYNC strobe) seeds
+// it at each packet start, so a run left over from the previous packet's tail
+// can never leak into the next one. The seed is 1, not 0 — USB counts the SYNC
+// pattern's terminating 1 as the first bit of the stuff run, so the count
+// enters the payload with one 1 already seen. Mirrors usb_bit_unstuff_rx.
 
 module usb_bit_stuff_tx (
     input  logic i_clk,
     input  logic i_rst,
+    input  logic i_init,       // packet start: seed the run count with SYNC's ending 1
     input  logic i_en,         // emit one line bit this cycle
     input  logic i_data_bit,   // next unstuffed data bit (held while o_stuff)
     output logic o_line_bit,   // line bit to hand to the NRZI encoder
@@ -42,7 +49,15 @@ module usb_bit_stuff_tx (
     always_ff @(posedge i_clk) begin
         if (i_rst)
             ones_q <= '0;
+        else if (i_init)
+            ones_q <= 3'd1;
         else if (i_en)
             ones_q <= ones_d;
     end
+
+    // The SYNC strobe belongs to the SYNC field, before any payload bit-time,
+    // so a coincidence with i_en is a framing-layer wiring error.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (!(i_init && i_en)))
+        else $error("usb_bit_stuff_tx: i_init coincided with a payload bit-time");
 endmodule

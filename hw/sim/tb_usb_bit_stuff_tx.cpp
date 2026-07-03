@@ -4,6 +4,10 @@
 // stream against a C++ reference that inserts a 0 after every six consecutive
 // 1s. The driver honors the consume handshake: a stuffed cycle (o_stuff) holds
 // the input bit rather than advancing it.
+//
+// Each stream is one packet: i_init is pulsed first, seeding the run count
+// with SYNC's terminating 1 (the USB stuff count includes it), so a stuff 0
+// is due after five payload 1s at packet start, and after six anywhere else.
 
 #include <cstdio>
 #include <cstdint>
@@ -16,10 +20,11 @@ static void settle(Vusb_bit_stuff_tx* dut) { dut->i_clk = 0; dut->eval(); }
 static void edge(Vusb_bit_stuff_tx* dut)   { dut->i_clk = 1; dut->eval(); }
 
 // Reference — the "golden" stuffer: copy each data bit, and after the sixth
-// consecutive 1 emit an extra 0 and restart the run.
+// consecutive 1 emit an extra 0 and restart the run. The count is seeded at 1
+// by SYNC's terminating 1.
 static std::vector<int> ref_stuff(const std::vector<int>& data) {
     std::vector<int> out;
-    int ones = 0;
+    int ones = 1;   // SYNC's ending 1 is the first bit of the run
     for (int b : data) {
         out.push_back(b);
         if (b) {
@@ -35,10 +40,14 @@ static std::vector<int> ref_stuff(const std::vector<int>& data) {
 // A stuffed cycle does not consume the presented bit, so idx only advances
 // when o_stuff is low.
 static std::vector<int> run_stuff(Vusb_bit_stuff_tx* dut, const std::vector<int>& data) {
-    dut->i_rst = 1; dut->i_en = 0; dut->i_data_bit = 0;
+    dut->i_rst = 1; dut->i_init = 0; dut->i_en = 0; dut->i_data_bit = 0;
     settle(dut); edge(dut);
     settle(dut); edge(dut);
     dut->i_rst = 0;
+
+    dut->i_init = 1;
+    settle(dut); edge(dut);
+    dut->i_init = 0;
 
     std::vector<int> got;
     size_t idx = 0;
@@ -62,11 +71,11 @@ static std::vector<std::vector<int>> build_vectors() {
     std::vector<std::vector<int>> v = {
         {},
         {0, 0, 0},
-        {1, 1, 1, 1, 1},                          // five 1s — no stuff yet
-        {1, 1, 1, 1, 1, 1},                       // six 1s — trailing stuff
-        {1, 1, 1, 1, 1, 1, 1},                    // seven 1s — stuff then a 1
-        {1, 1, 1, 1, 1, 1, 0},                    // stuff lands before the 0
-        std::vector<int>(12, 1),                  // two stuffs back to back
+        {1, 1, 1, 1},                             // four 1s — seeded run not full yet
+        {1, 1, 1, 1, 1},                          // five 1s at start — trailing stuff
+        {1, 1, 1, 1, 1, 1},                       // six 1s — stuff then a 1
+        {1, 1, 1, 1, 1, 0},                       // stuff lands before the 0
+        std::vector<int>(11, 1),                  // two stuffs (5 then 6)
         {0, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1},
     };
 
