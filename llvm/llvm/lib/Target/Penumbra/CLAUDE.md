@@ -136,9 +136,9 @@ The pipeline is defined by group lists in `PenumbraCombine.td`:
   canonicalization/DCE set, matching AArch64/RISC-V. The
   `*_by_const` magic-multiply rules (in `intdiv_combines` /
   `intrem_combines`) are gated off by `isIntDivCheap()=true`
-  in `PenumbraISelLowering.cpp` — without that override
-  `udiv x, 3` rewrites into a 64-bit `__muldi3` libcall heavier
-  than the original `__udivsi3`. `sub_to_add` flips
+  in `PenumbraISelLowering.cpp` — the rewrite's high-half multiply
+  costs the same divmul-unit latency as the divide it replaces, so
+  it only adds shift/fixup instructions. `sub_to_add` flips
   (`G_SUB x, c` → `G_ADD x, -c`) are re-canonicalized after
   legalization by `penumbra_neg_imm_to_opposite` when `|-c|` fits
   uimm16.
@@ -172,9 +172,12 @@ shapes:
   `narrowScalarIf`. G_TRUNC legal. G_SEXT_INREG lowered.
 - MUL/DIV/REM: s32 strength-reduces power-of-2 constants
   (MUL by -1→SUB from zero, ×2ⁿ→SHL, ×(2ⁿ±1)→SHL+ADD/SUB with
-  shift<bit-width guard, ÷2ⁿ→LSHR, %2ⁿ→AND); otherwise libcall.
-  s64 always libcall. G_SDIVREM/G_UDIVREM lower to separate
-  div+rem then take the libcall path.
+  shift<bit-width guard, ÷2ⁿ→LSHR, %2ⁿ→AND); the variable case is
+  a legal s32 op selected to the divmul peer unit. G_SDIVREM /
+  G_UDIVREM legal at s32 (DIV_P/DIVU_P produce quotient and
+  remainder in one operation; the -O1+ combiner fuses adjacent
+  div/rem pairs into this form). s64 libcalls throughout, except a
+  32×32→64 widening multiply, which emits a G_MUL + G_S/UMULH pair.
 - Min/max/abs/popcount/ctlz/cttz/bswap/bitreverse: lowered to
   shift/logic. G_BSWAP at s64 narrows to two s32 first, then
   lowers — see `doc/llvm-lowerBswap-bug.md` for why we don't lower

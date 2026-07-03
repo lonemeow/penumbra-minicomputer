@@ -28,11 +28,10 @@ include "llvm/Target/GlobalISel/Combine.td"
 // generic MIR, matching AArch64 / RISC-V.  The `*_by_const` magic-multiply
 // rules in `intdiv_combines`/`intrem_combines` are gated by the target's
 // `isIntDivCheap()` hook — see PenumbraISelLowering.cpp, which returns
-// true so the combiner leaves the divide as a libcall (the magic-multiply
-// path goes through G_UMULH → 64-bit `__muldi3`, which is worse than
-// `__udivsi3` on a target with no hardware multiply).  Penumbra-specific
-// fixups for the zero-extending uimm16 form happen in the post-legalizer
-// combiner.
+// true so the divide stays a divide: the rewrite's high-half multiply
+// costs the same divmul-unit latency as the divide it replaces, so it
+// only adds shift/fixup instructions.  Penumbra-specific fixups for the
+// zero-extending uimm16 form happen in the post-legalizer combiner.
 def PenumbraPreLegalizerCombiner
     : GICombiner<"PenumbraPreLegalizerCombinerImpl", [all_combines]>;
 

@@ -1,4 +1,4 @@
-//===-- PenumbraISelLowering.cpp - Penumbra DAG Lowering -------------------===//
+//===-- PenumbraISelLowering.cpp - Penumbra TargetLowering hooks -----------===//
 //
 // Part of the Penumbra LLVM Backend
 //
@@ -30,31 +30,24 @@ PenumbraISelLowering::PenumbraISelLowering(const TargetMachine &TM,
   // SP register — needed by G_DYN_STACKALLOC lowering and G_STACKSAVE/RESTORE.
   setStackPointerRegisterToSaveRestore(Penumbra::R14);
 
-  // No hardware atomics — all atomic operations expand to __atomic_* libcalls
-  // via AtomicExpandPass.  The library handles synchronization (interrupt-
-  // disable CAS now, RAS or LL/SC in future).
-  setMaxAtomicSizeInBitsSupported(0);
-
-  // No multiply/divide hardware — expand to libcalls
-  setOperationAction(ISD::MUL,        MVT::i32, Expand);
-  setOperationAction(ISD::MULHS,      MVT::i32, Expand);
-  setOperationAction(ISD::MULHU,      MVT::i32, Expand);
-  setOperationAction(ISD::SMUL_LOHI,  MVT::i32, Expand);
-  setOperationAction(ISD::UMUL_LOHI,  MVT::i32, Expand);
-  setOperationAction(ISD::SDIV,       MVT::i32, Expand);
-  setOperationAction(ISD::UDIV,       MVT::i32, Expand);
-  setOperationAction(ISD::SREM,       MVT::i32, Expand);
-  setOperationAction(ISD::UREM,       MVT::i32, Expand);
-  setOperationAction(ISD::SDIVREM,    MVT::i32, Expand);
-  setOperationAction(ISD::UDIVREM,    MVT::i32, Expand);
-
-  // No bit-manipulation instructions
-  setOperationAction(ISD::BSWAP,   MVT::i32, Expand);
-  setOperationAction(ISD::ROTL,    MVT::i32, Expand);
-  setOperationAction(ISD::ROTR,    MVT::i32, Expand);
-  setOperationAction(ISD::CTLZ,    MVT::i32, Expand);
-  setOperationAction(ISD::CTTZ,    MVT::i32, Expand);
-  setOperationAction(ISD::CTPOP,   MVT::i32, Expand);
+  // The ISD operation-action tables are deliberately left at their
+  // defaults.  Penumbra selects exclusively through GlobalISel —
+  // instruction legality lives in PenumbraLegalizerInfo, and no
+  // SelectionDAG selector exists to consume the tables.  Their only
+  // remaining readers are IR-level heuristics (BasicTTI cost queries,
+  // CodeGenPrepare, DivRemPairs), which see the default answer "Legal":
+  // true for the i32 integer core including the divmul unit's fused
+  // divrem and high-half multiply, optimistic for the bit-manipulation
+  // ops GISel lowers to shift/logic sequences (BSWAP, ROTL/ROTR,
+  // CTLZ/CTTZ/CTPOP) — an error that can only skew cost heuristics,
+  // never correctness.  Capability or cost corrections for those passes
+  // belong in PenumbraTTIImpl, beside getNumberOfRegisters and
+  // isLSRCostLess.
+  //
+  // Atomics likewise ride the base default (MaxAtomicSizeInBitsSupported
+  // = 0): AtomicExpand rewrites every atomic to an __atomic_* libcall,
+  // and the library provides the synchronization (interrupt-disable CAS
+  // now, RAS or LL/SC in future).
 
   computeRegisterProperties(STI.getRegisterInfo());
 }
@@ -167,11 +160,13 @@ PenumbraISelLowering::getRegisterByName(const char *RegName, LLT /*Ty*/,
   return Reg;
 }
 
-// Penumbra has no hardware multiply, so the GISel `udiv_by_const` /
-// `sdiv_by_const` rewrite (magic constant + G_UMULH/G_SMULH) lowers to a
-// 64-bit `__muldi3` libcall, which is heavier than just calling
-// `__udivsi3`/`__sdivsi3` directly.  Returning true here makes the
-// combiner leave divide-by-constant as a divide.
+// Returning true makes the GISel combiner leave divide-by-constant as a
+// divide instead of applying the `udiv_by_const`/`sdiv_by_const`
+// magic-multiply rewrite.  On the divmul unit the rewrite's high-half
+// multiply (G_UMULH/G_SMULH) costs the same iteration latency as the DIV
+// it replaces, so the rewrite saves no time and adds shift/fixup
+// instructions — pure I-footprint loss on a machine whose hot loops are
+// footprint-bound.
 bool PenumbraISelLowering::isIntDivCheap(EVT VT, AttributeList Attr) const {
   return true;
 }

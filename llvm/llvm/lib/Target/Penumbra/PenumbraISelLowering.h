@@ -1,4 +1,4 @@
-//===-- PenumbraISelLowering.h - Penumbra DAG Lowering Interface --*- C++ -*-===//
+//===-- PenumbraISelLowering.h - Penumbra TargetLowering hooks ----*- C++ -*-===//
 //
 // Part of the Penumbra LLVM Backend
 //
