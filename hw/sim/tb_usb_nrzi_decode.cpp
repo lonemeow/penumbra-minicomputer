@@ -2,8 +2,8 @@
 //
 // Round-trip check: a C++ reference encodes random data bits into line levels
 // (0 toggles, 1 holds), the RTL decoder recovers them, and the recovered bits
-// must equal the originals. Because the decoder seeds its reference level to
-// the encoder's reset level, the very first bit decodes correctly too.
+// must equal the originals. Both sides start from the idle-J level (1) — the
+// level the undriven bus rests at — so the very first bit decodes correctly.
 
 #include <cstdio>
 #include <cstdint>
@@ -16,7 +16,7 @@ static void edge(Vusb_nrzi_decode* dut)   { dut->i_clk = 1; dut->eval(); }
 // Reference encoder, to produce the line levels the decoder consumes.
 static std::vector<int> ref_encode(const std::vector<int>& bits) {
     std::vector<int> line;
-    int level = 0;
+    int level = 1;   // idle J
     for (int b : bits) {
         level = b ? level : !level;
         line.push_back(level);

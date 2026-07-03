@@ -2,9 +2,11 @@
 //
 // The RX-side inverse of usb_nrzi_encode: it recovers each data bit from
 // whether the received line level changed. The reference level is seeded at
-// reset to match the encoder; in the full receiver the SYNC field
-// re-establishes it per packet. Downstream, usb_bit_unstuff_rx (later) removes
-// the stuffed 0s this layer hands up.
+// reset to idle J — the level the bus rests at — so the first sample after
+// reset (SYNC's opening K) decodes as a transition even when no idle sample
+// preceded it; a K-seeded reference would decode it as a phantom 1, which is
+// SYNC's end marker. The SYNC field re-establishes the reference per packet.
+// Downstream, usb_bit_unstuff_rx removes the stuffed 0s this layer hands up.
 
 module usb_nrzi_decode (
     input  logic i_clk,
@@ -21,7 +23,7 @@ module usb_nrzi_decode (
 
     always_ff @(posedge i_clk) begin
         if (i_rst)
-            prev_q <= 1'b0;          // seeded to the encoder's reset level
+            prev_q <= 1'b1;          // idle J: the level the undriven bus rests at
         else if (i_en)
             prev_q <= prev_d;
     end

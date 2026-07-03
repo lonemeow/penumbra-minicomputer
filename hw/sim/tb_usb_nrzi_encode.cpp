@@ -11,10 +11,10 @@
 static void settle(Vusb_nrzi_encode* dut) { dut->i_clk = 0; dut->eval(); }
 static void edge(Vusb_nrzi_encode* dut)   { dut->i_clk = 1; dut->eval(); }
 
-// Reference: a 0 flips the level, a 1 holds it; level starts at 0.
+// Reference: a 0 flips the level, a 1 holds it; level starts at idle J (1).
 static std::vector<int> ref_encode(const std::vector<int>& bits) {
     std::vector<int> line;
-    int level = 0;
+    int level = 1;
     for (int b : bits) {
         level = b ? level : !level;
         line.push_back(level);
@@ -23,7 +23,7 @@ static std::vector<int> ref_encode(const std::vector<int>& bits) {
 }
 
 static std::vector<int> run_encode(Vusb_nrzi_encode* dut, const std::vector<int>& bits) {
-    dut->i_rst = 1; dut->i_en = 0; dut->i_data_bit = 0;
+    dut->i_rst = 1; dut->i_init = 0; dut->i_en = 0; dut->i_data_bit = 0;
     settle(dut); edge(dut);
     settle(dut); edge(dut);
     dut->i_rst = 0;
@@ -32,9 +32,9 @@ static std::vector<int> run_encode(Vusb_nrzi_encode* dut, const std::vector<int>
     dut->i_en = 1;
     for (int b : bits) {
         dut->i_data_bit = b;
-        settle(dut);                   // o_line is combinational for this bit
-        line.push_back(dut->o_line);
+        settle(dut);
         edge(dut);                     // latch the level
+        line.push_back(dut->o_line);   // registered symbol, stable for the bit
     }
     dut->i_en = 0;
     return line;
@@ -62,6 +62,31 @@ static std::vector<std::vector<int>> build_vectors() {
     return v;
 }
 
+// Pulse i_init (packet start: reference reloads to idle J = 1), then encode.
+// The SYNC field must come out as the classic KJKJKJKK line pattern.
+static std::vector<int> run_encode_packet(Vusb_nrzi_encode* dut,
+                                          const std::vector<int>& bits) {
+    dut->i_rst = 1; dut->i_init = 0; dut->i_en = 0; dut->i_data_bit = 0;
+    settle(dut); edge(dut);
+    settle(dut); edge(dut);
+    dut->i_rst = 0;
+
+    dut->i_init = 1;
+    settle(dut); edge(dut);
+    dut->i_init = 0;
+
+    std::vector<int> line;
+    dut->i_en = 1;
+    for (int b : bits) {
+        dut->i_data_bit = b;
+        settle(dut);
+        edge(dut);                     // latch the level
+        line.push_back(dut->o_line);   // registered symbol, stable for the bit
+    }
+    dut->i_en = 0;
+    return line;
+}
+
 int main() {
     Vusb_nrzi_encode* dut = new Vusb_nrzi_encode;
     auto vectors = build_vectors();
@@ -70,6 +95,17 @@ int main() {
         if (run_encode(dut, bits) == ref_encode(bits)) pass++;
         else { printf("MISMATCH on a %zu-bit stream\n", bits.size()); fail++; }
     }
+
+    // Packet-start reference: SYNC data (seven 0s, one 1) from the idle-J
+    // reference must produce KJKJKJKK on the line (J = 1).
+    {
+        std::vector<int> sync_bits = {0, 0, 0, 0, 0, 0, 0, 1};
+        std::vector<int> want      = {0, 1, 0, 1, 0, 1, 0, 0};
+        std::vector<int> got = run_encode_packet(dut, sync_bits);
+        if (got == want) pass++;
+        else { printf("MISMATCH on the packet-start SYNC pattern\n"); fail++; }
+    }
+
     printf("usb_nrzi_encode: %d/%d tests passed\n", pass, pass + fail);
     if (fail > 0) printf("  *** %d FAILED ***\n", fail);
     delete dut;
