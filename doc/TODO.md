@@ -3712,10 +3712,14 @@ Implementation work, by layer:
   on-wire CRC complement+reflect above the bare CRC cells, the bare-PID
   keep-alive transmit; PID codes in `usb_pkg`; golden-vector testbench
   anchored to `sw/tools/usb_crc.py`, including byte-per-cycle pacing
-  (`0932a66`). Next: `usbhc_pkt_rx` (PID classify + check-nibble,
-  payload → buffer, CRC16 residual, `{kind, toggle, len, ok}`),
-  `usbhc_txn` (token → [data] → handshake FSM, 16–18-bit-time turnaround
-  timeout, host-ACK, RESULT classification), `usbhc_frame` (1 ms timer,
+  (`0932a66`). Done: `usbhc_pkt_rx` — PID classify + check-nibble,
+  packet body → buffer as received (CRC bytes included, per the DATA
+  contract), CRC16-residual check, EOP-latched `{pid, len, ok, err,
+  overflow}` (`87c0a57`). Next: `usbhc_txn` (token → [data] → handshake
+  FSM, 16–18-bit-time turnaround timeout, host-ACK, RESULT
+  classification; gates rx→buffer stores to IN transactions — a stray
+  DATAx during an OUT must not scribble the TX payload), `usbhc_frame`
+  (1 ms timer,
   FRAME counter, SOF/keep-alive request, never splits a transaction),
   `usbhc_port` (connect/speed detect — FS-polarity trick: idle-J ⇒ FS,
   idle-K ⇒ LS — debounce, reset/resume recipes, opmode/xcvr policy),
