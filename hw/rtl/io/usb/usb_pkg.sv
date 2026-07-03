@@ -15,11 +15,14 @@ package usb_pkg;
     localparam int USB_OS_LS = 40;
 /* verilator lint_on UNUSEDPARAM */
 
-    // Speed select, encoded with room for reserved codes (an external HS PHY
-    // would claim one) rather than a bare full-/low-speed wire.
+    // Speed / transceiver select, the UTMI+ XcvrSelect encoding — one coding
+    // from the seam down through the line-layer cells. HS is the ceiling code:
+    // unused by the FS/LS PHYs except as the bus-reset drive state (with
+    // TermSelect low, per the seam's signaling recipes).
     typedef enum logic [1:0] {
-        USB_SPEED_FS = 2'b00,
-        USB_SPEED_LS = 2'b01
+        USB_SPEED_HS = 2'b00,
+        USB_SPEED_FS = 2'b01,
+        USB_SPEED_LS = 2'b10
     } usb_speed_e;
 
     // Differential line states. J and K are the two NRZI symbols (their D+/D-

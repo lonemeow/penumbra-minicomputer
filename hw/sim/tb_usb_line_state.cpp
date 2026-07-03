@@ -10,7 +10,7 @@
 
 // Mirror usb_pkg::usb_line_e and usb_speed_e.
 enum { LINE_SE0 = 0, LINE_J = 1, LINE_K = 2, LINE_SE1 = 3 };
-enum { SPEED_FS = 0, SPEED_LS = 1 };
+enum { SPEED_FS = 1, SPEED_LS = 2 };   // usb_pkg usb_speed_e (UTMI+ XcvrSelect)
 
 // Reference decode: SE0/SE1 when single-ended; otherwise J/K by speed. At
 // full-speed J is D+ high; low-speed swaps so J is D- high.
@@ -24,7 +24,7 @@ int main() {
     Vusb_line_state* dut = new Vusb_line_state;
     int pass = 0, fail = 0;
 
-    for (int speed = 0; speed <= 1; speed++) {
+    for (int speed : {SPEED_FS, SPEED_LS}) {
         for (int dp = 0; dp <= 1; dp++) {
             for (int dn = 0; dn <= 1; dn++) {
                 dut->i_speed = speed;

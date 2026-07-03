@@ -12,8 +12,8 @@
 #include <vector>
 #include "Vusb_oversample_rx.h"
 
-// Speed codes mirror usb_pkg::usb_speed_e.
-static const int SPEED_FS = 0, SPEED_LS = 1;
+// Speed codes mirror usb_pkg::usb_speed_e (UTMI+ XcvrSelect encoding).
+static const int SPEED_FS = 1, SPEED_LS = 2;
 static const int DIV_FS = 5, DIV_LS = 40;
 
 static void settle(Vusb_oversample_rx* d) { d->i_clk = 0; d->eval(); }

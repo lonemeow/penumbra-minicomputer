@@ -15,7 +15,7 @@
 #include <vector>
 #include "Vusb_tx_test.h"
 
-enum { SPEED_FS = 0, SPEED_LS = 1 };
+enum { SPEED_FS = 1, SPEED_LS = 2 };   // usb_pkg usb_speed_e (UTMI+ XcvrSelect)
 static int div_of(int speed) { return speed == SPEED_LS ? 40 : 5; }
 
 enum { SYM_SE0 = 0, SYM_J = 1, SYM_K = 2, SYM_SE1 = 3 };
