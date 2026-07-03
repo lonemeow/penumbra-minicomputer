@@ -3706,11 +3706,13 @@ Implementation work, by layer:
   encoding end to end (`6959ad2`, `0cba7d2`). `XFER_STATUS` gained
   `RXTOGGLE` — hardware ACKs CRC-good IN data and reports the received
   toggle; retransmission detection stays in software (`6959ad2`).
-- **MAC — next up.** Decomposition agreed, leaf-cell style, all on the
-  60 MHz clock (the CDC crosses later), build order as listed:
-  `usbhc_pkt_tx` (token/SOF/DATAx/handshake transmit, owns the on-wire
-  CRC complement+reflect above the bare CRC cells — golden vectors from
-  `sw/tools/usb_crc.py`), `usbhc_pkt_rx` (PID classify + check-nibble,
+- **MAC — in progress.** Decomposition agreed, leaf-cell style, all on
+  the 60 MHz clock (the CDC crosses later), build order as listed.
+  Done: `usbhc_pkt_tx` — token/SOF/DATAx/handshake transmit, the
+  on-wire CRC complement+reflect above the bare CRC cells, the bare-PID
+  keep-alive transmit; PID codes in `usb_pkg`; golden-vector testbench
+  anchored to `sw/tools/usb_crc.py`, including byte-per-cycle pacing
+  (`0932a66`). Next: `usbhc_pkt_rx` (PID classify + check-nibble,
   payload → buffer, CRC16 residual, `{kind, toggle, len, ok}`),
   `usbhc_txn` (token → [data] → handshake FSM, 16–18-bit-time turnaround
   timeout, host-ACK, RESULT classification), `usbhc_frame` (1 ms timer,
@@ -3731,6 +3733,14 @@ Implementation work, by layer:
   (`usbhc_regs` + `usbhc_cdc`).
 - `autoconfig_dev` wrapper (`CLASS_USBHC`); machine_sim integration test
   (poll CONNECT → reset → GET_DESCRIPTOR → R1) under `make test`.
+- **ISS: model `CLASS_USBHC` at register level.** Driver bring-up (the
+  NetBSD HCD, the ROM keyboard reader) needs the fast simulator — the RTL
+  sim is far too slow for that iteration loop. Add the register contract
+  (autoconfig + TOKEN/XFER/PORT/FRAME/DATA) to `sw/sim/penumbra_iss.cpp`
+  with a behavioral device behind it; transaction-level only, no
+  SIE/timing model. The byte-level device responder from the MAC test
+  (`UsbDeviceSim`) should back both sims, including the
+  keyboard-input-not-on-stdin constraint.
 
 ### Kernel
 - `CLASS_USBHC` host-controller driver (`usbd_bus_methods` /
