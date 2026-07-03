@@ -289,6 +289,20 @@ package penumbra_pkg;
     localparam logic [4:0] UART_DLL = 5'h00;  // Divisor latch low (DLAB=1)
     localparam logic [4:0] UART_DLM = 5'h04;  // Divisor latch high (DLAB=1)
 
+    // ── USB host controller (CLASS_USBHC) transaction contract ───
+    // Programmer-visible field encodings shared by the MAC and the
+    // register tier. Full register map: doc/system/devices/usb-host.md.
+    localparam logic [1:0] USBHC_TOKEN_SETUP = 2'd0;  // TOKEN.PID
+    localparam logic [1:0] USBHC_TOKEN_OUT   = 2'd1;
+    localparam logic [1:0] USBHC_TOKEN_IN    = 2'd2;
+
+    localparam logic [2:0] USBHC_RESULT_ACK      = 3'd0;  // XFER_STATUS.RESULT
+    localparam logic [2:0] USBHC_RESULT_NAK      = 3'd1;
+    localparam logic [2:0] USBHC_RESULT_STALL    = 3'd2;
+    localparam logic [2:0] USBHC_RESULT_TIMEOUT  = 3'd3;
+    localparam logic [2:0] USBHC_RESULT_ERROR    = 3'd4;  // CRC / bit-stuff / malformed response
+    localparam logic [2:0] USBHC_RESULT_OVERFLOW = 3'd5;  // response past the buffer or LENGTH
+
     // ── Physical address map (bus base addresses) ──────────────
     // Fixed base addresses for memory-mapped devices.
     // UART_BASE already defined above (32'hFF00_0000).
