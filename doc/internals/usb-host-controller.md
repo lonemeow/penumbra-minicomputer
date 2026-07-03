@@ -135,19 +135,32 @@ inside the 60 MHz USB domain.
 | `o_rx_valid` | out | `rx_data` is a fresh byte this cycle (per-byte strobe) |
 | `o_rx_active` | out | Packet in progress (SYNC detected → EOP) |
 | `o_rx_error` | out | Bit-stuff or framing error occurred |
-| `i_opmode[1:0]` | in | Transceiver drive mode (normal / non-driving / raw SE0-drive for reset + EOP) |
-| `i_xcvr_sel[1:0]` | in | Transceiver speed select (LS / FS; HS reserved) |
-| `i_term_sel` | in | Termination select |
-| `i_port_power` | in | Port power enable; host pull-downs are active while powered |
-| `o_line_state[1:0]` | out | Raw line state (J / K / SE0) — FS/LS connect and disconnect are derived from this |
+| `i_opmode[1:0]` | in | Operational mode, UTMI+ encoding: `00` normal (PHY appends SYNC/EOP), `01` non-driving, `10` disable bit-stuffing + NRZI (raw bit drive — resume/chirp), `11` normal without SYNC/EOP generation (HS keep-alive; unused at FS/LS) |
+| `i_xcvr_sel[1:0]` | in | Transceiver select, UTMI+ encoding: `00` HS (also the bus-reset drive state — see recipes), `01` FS, `10` LS, `11` reserved (UTMI+ level 3 assigns it to PRE-prefixed LS-via-hub) |
+| `i_term_sel` | in | Termination select; with `i_xcvr_sel` forms the analog drive state (UTMI+ signaling-modes table) |
+| `i_port_power` | in | Port power enable (VBUS drive); host pull-downs are active while powered |
+| `o_line_state[1:0]` | out | Raw line levels, UTMI+ mapping: bit 0 = D+, bit 1 = D-, SE0-glitch-filtered (2 FS / 14 LS clocks). The J/K meaning by selected speed — and connect/speed detection — is the MAC's interpretation |
 | `o_caps[2:0]` | out | PHY capability ceiling `{hs, fs, ls}`, constant (folded into `CAP` by the bundling wrapper) |
 | `o_host_disconnect` | out | HS disconnect, sensed during EOP; FS/LS uses `line_state` instead |
 
 A packet's bytes are PID, then payload, then the CRC bytes the MAC
-computed; the PHY frames SYNC/EOP around `tx_valid`. A bus reset is *not*
-a byte — the MAC holds `opmode` in the SE0-drive state for the ≥10 ms
-hold. The seam is host-only (no OTG), so the pull-downs are static rather
-than the per-direction `DpPulldown`/`DmPulldown` of UTMI+ Level 3.
+computed; the PHY frames SYNC/EOP around `tx_valid` (`opmode 00`). The
+out-of-band bus states use the standard UTMI+ host recipes, so a real
+UTMI+/ULPI PHY satisfies them unmodified:
+
+| Bus state | `xcvr_sel` | `term_sel` | `opmode` | TX channel |
+|-----------|-----------|-----------|----------|------------|
+| FS traffic | `01` | 1 | `00` | packets |
+| LS traffic | `10` | 1 | `00` | packets |
+| Bus reset (SE0, software-timed ≥10 ms) | `00` | 0 | `10` | idle |
+| Resume (K, software-timed ≥20 ms) | port speed | 1 | `10` | `tx_valid` held with data `00h`; the PHY appends the LS EOP when it drops |
+| LS keep-alive | `10` | 1 | `00` | one byte `A5h` — the PHY decodes it and emits a bare EOP instead of transmitting it |
+
+The reset row is the UTMI+ HS-termination state, whose electrical result
+is SE0; a FS/LS-only PHY (like `usb_phy_ecp5`, which has no HS
+terminations) recognizes the state and drives SE0 directly. The seam is
+host-only (no OTG), so the pull-downs are static rather than the
+per-direction `DpPulldown`/`DmPulldown` of UTMI+ Level 3.
 
 
 ### USB 2.0 / High-Speed extensibility
@@ -183,7 +196,10 @@ PHY, not a board choice:
 - The MAC reads caps from the seam (no PHY-specific parameters) and
   asserts it never drives a transceiver mode beyond what the PHY reports,
   so a capability mismatch is a sim-time failure rather than silent bad
-  behaviour.
+  behaviour. One carve-out: the bus-reset drive state selects the HS
+  transceiver code (`xcvr_sel 00` + `term_sel 0`, per the recipes above)
+  regardless of `caps.hs` — every PHY must implement that state's SE0
+  result, because it is how a UTMI+ host resets a bus at any speed.
 
 What HS would add, by tier:
 

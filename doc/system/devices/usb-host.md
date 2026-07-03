@@ -85,7 +85,14 @@ Per-source mask, same bit positions as `IRQ_STATUS`.
 #### XFER_STATUS (0x20)
 - Bit [0]: `DONE` — transaction complete (mirrors `IRQ_STATUS.XFER_DONE`)
 - Bits [3:1]: `RESULT` — 0 ACK, 1 NAK, 2 STALL, 3 TIMEOUT, 4 ERROR (CRC / bit-stuff), 5 OVERFLOW
+- Bit [4]: `RXTOGGLE` — data toggle of the DATAx packet received on an `IN`
 - Bits [14:8]: `RXLEN` — bytes received into `DATA` on an `IN`
+
+The controller acknowledges any CRC-good `IN` data packet and reports the
+toggle it carried in `RXTOGGLE`; it applies no toggle policy of its own.
+Software compares `RXTOGGLE` against the toggle it expected: a mismatch
+is the device retransmitting a packet whose handshake it lost, and the
+data must be discarded — the acknowledge alone resynchronizes the device.
 
 #### DATA (0x40 …)
 The packet payload, accessed as little-endian words (four bytes per
