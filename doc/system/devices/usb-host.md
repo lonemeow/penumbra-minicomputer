@@ -99,7 +99,10 @@ The packet payload, accessed as little-endian words (four bytes per
 slot). `CAP` reports the size; it is large enough for the maximum packet
 of the supported speeds (8 bytes low-speed, 64 bytes full-speed). For an
 `OUT`/`SETUP` the software fills `DATA` before starting; for an `IN` it
-reads `RXLEN` bytes after `DONE`.
+reads `RXLEN` bytes after `DONE`. On an `IN` the controller stores the
+received packet body as it arrives, so the packet's two trailing CRC
+bytes may follow the payload in the buffer — `RXLEN` excludes them, and
+buffer content beyond `RXLEN` is not meaningful.
 
 ## Transaction Model
 
