@@ -3731,9 +3731,10 @@ Implementation work, by layer:
   handshake FSM, speed-scaled turnaround timeout + drain-aware
   inter-packet gaps, hardware host-ACK, trust-then-dispatch RESULT
   classification, IN-only rx→buffer store grant; TOKEN.PID and RESULT
-  encodings in `penumbra_pkg` (`354e06f`). Next: `usbhc_frame`
-  (1 ms timer,
-  FRAME counter, SOF/keep-alive request, never splits a transaction),
+  encodings in `penumbra_pkg` (`354e06f`). Done: `usbhc_frame` — 1 ms
+  timer, FRAME counter, SOF/keep-alive request under the MAC arbiter's
+  grant (never splits a transaction), missed markers coalesced to the
+  latest frame number (`101ab5b`). Next:
   `usbhc_port` (connect/speed detect — FS-polarity trick: idle-J ⇒ FS,
   idle-K ⇒ LS — debounce, reset/resume recipes, opmode/xcvr policy),
   then the `usbhc_mac` composition. MAC-level test drives the seam with
