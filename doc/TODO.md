@@ -3734,10 +3734,12 @@ Implementation work, by layer:
   encodings in `penumbra_pkg` (`354e06f`). Done: `usbhc_frame` — 1 ms
   timer, FRAME counter, SOF/keep-alive request under the MAC arbiter's
   grant (never splits a transaction), missed markers coalesced to the
-  latest frame number (`101ab5b`). Next:
-  `usbhc_port` (connect/speed detect — FS-polarity trick: idle-J ⇒ FS,
-  idle-K ⇒ LS — debounce, reset/resume recipes, opmode/xcvr policy),
-  then the `usbhc_mac` composition. MAC-level test drives the seam with
+  latest frame number (`101ab5b`). Done: `usbhc_port` — debounced
+  connect/speed detect from the raw line (D+ pull-up ⇒ FS, D- ⇒ LS,
+  SE1 = fault), detection paused while the host drives the bus,
+  reset/resume recipes, PORT_CHANGE events (`8635b75`). **All five
+  leaf cells are done.** Next:
+  the `usbhc_mac` composition. MAC-level test drives the seam with
   a byte-level C++ device responder (the embryo of `UsbDeviceSim`; its
   keyboard input must NOT take terminal stdin — the UART console owns
   it — separate pty/socket, mechanism TBD).
