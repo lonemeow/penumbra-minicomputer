@@ -3754,6 +3754,15 @@ Implementation work, by layer:
   replaces the line layer with a byte-level packet port + connect/speed
   sideband exported through `machine_sim` like the SPI/SD model, pacing
   bytes at real bit-time rates so MAC timing stays honest.
+  Done: `usb_phy_ecp5` — the SIE composition plus the PHY-tier glue:
+  drive-state decode for the signaling recipes (reset SE0, resume raw K
+  + appended LS EOP, non-driving release), the transceiver-decoded LS
+  keep-alive (lone A5h ⇒ bare EOP), receive squelch (own transmissions
+  never reach the MAC; the raw line-state sideband still sees them), the
+  SE0 transition-glitch filter. Pair testbench cross-wires two instances
+  over a resolved bus with cycle-counted recipe waveform checks
+  (`2e602f6`); the oversampler re-locks on live speed changes to survive
+  the port's transceiver-code swaps (`72c6a72`). `usb_phy_sim` remains.
 - US2 wiring: RX diff on `usb_fpga_dp/dn`, TX on `usb_fpga_bd_dp/dn`,
   pulls on `usb_fpga_pu_*`; dual-clock-BRAM + handshake CDC
   (`usbhc_regs` + `usbhc_cdc`).
