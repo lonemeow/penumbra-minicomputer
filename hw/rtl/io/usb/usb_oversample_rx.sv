@@ -36,6 +36,14 @@ module usb_oversample_rx (
     logic line_edge;
     assign line_edge = i_line ^ prev_line_q;
 
+    // The port speed is quasi-static but does change live — connect-time
+    // detection and the reset drive state's transceiver code both swap it
+    // between packets. A change re-locks the counter from scratch so a
+    // long low-speed phase can never run off a shrunken bit period.
+    logic [1:0] speed_q;
+    logic speed_change;
+    assign speed_change = (i_speed != speed_q);
+
     logic [5:0] phase_q, phase_d;   // oversample-clock counter within the bit
 
     // Single mid-bit sample: the recovered symbol is the line at the strobe
@@ -63,20 +71,27 @@ module usb_oversample_rx (
         // fall off the end of a squeezed bit.
         if (line_edge)
             phase_d = 6'd1;
+
+        if (speed_change)
+            phase_d = 6'd0;
     end
 
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
             prev_line_q <= 1'b0;
             phase_q     <= 6'd0;
+            speed_q     <= 2'd0;
         end else begin
             prev_line_q <= i_line;
             phase_q     <= phase_d;
+            speed_q     <= i_speed;
         end
     end
 
-    // The counter never runs past the current bit period.
+    // The counter never runs past the current bit period, except on the
+    // one cycle a live speed change shrinks the period under it — the
+    // re-lock above clears it on the next clock.
     assert property (@(posedge i_clk) disable iff (i_rst)
-        (phase_q < div))
+        (speed_change || phase_q < div))
         else $error("usb_oversample_rx: phase counter exceeded the bit period");
 endmodule

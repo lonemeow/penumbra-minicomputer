@@ -97,6 +97,45 @@ int main() {
         }
     }
 
+    // Live speed switch: the port swaps the transceiver code between
+    // packets (connect-time detect, the reset drive state) with no reset
+    // in between. A long low-speed phase must not run off the shrunken
+    // full-speed bit period — the sampler re-locks and the next packet
+    // recovers in full.
+    {
+        dut->i_rst = 1; dut->i_speed = SPEED_LS; dut->i_line = 1;
+        settle(dut); edge(dut); settle(dut); edge(dut);
+        dut->i_rst = 0;
+        // Idle J with no edges lets the phase counter run deep into the
+        // low-speed bit before the switch.
+        for (int t = 0; t < DIV_LS - 5; t++) {
+            dut->i_line = 1;
+            settle(dut); edge(dut);
+        }
+        dut->i_speed = SPEED_FS;
+        for (int t = 0; t < 2 * DIV_FS; t++) {
+            dut->i_line = 1;
+            settle(dut); edge(dut);
+        }
+        std::vector<int> levels(16);
+        for (int i = 0; i < 16; i++) levels[i] = (i >> 1) & 1;
+        std::vector<int> wave = build_wave(levels, DIV_FS, 0);
+        std::vector<int> recovered;
+        for (int t = 0; t < (int)wave.size(); t++) {
+            dut->i_line = wave[t];
+            settle(dut);
+            if (dut->o_bit_en) recovered.push_back(dut->o_line);
+            edge(dut);
+        }
+        if (recovered == levels) {
+            pass++;
+        } else {
+            printf("FAIL [LS->FS live switch]: recovered %zu of %zu\n",
+                   recovered.size(), levels.size());
+            fail++;
+        }
+    }
+
     printf("usb_oversample_rx: %d/%d tests passed\n", pass, pass + fail);
     if (fail > 0) printf("  *** %d FAILED ***\n", fail);
     delete dut;
