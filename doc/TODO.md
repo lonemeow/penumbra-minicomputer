@@ -3762,7 +3762,16 @@ Implementation work, by layer:
   SE0 transition-glitch filter. Pair testbench cross-wires two instances
   over a resolved bus with cycle-counted recipe waveform checks
   (`2e602f6`); the oversampler re-locks on live speed changes to survive
-  the port's transceiver-code swaps (`72c6a72`). `usb_phy_sim` remains.
+  the port's transceiver-code swaps (`72c6a72`). Done: `usb_phy_sim` —
+  the seam with the line layer replaced by a byte-level device port:
+  packet-byte pulses out (EOP/keep-alive/reset/resume as explicit
+  strobes and levels), a credit handshake in (the device model owns its
+  turnaround; the PHY owns bit-time pacing), connect/speed as the
+  pull-up sideband. The stack testbench mates `usbhc_mac` to
+  `usb_phy_sim` with `UsbDeviceSim` behind the device port — the seam
+  proven tier-to-tier ahead of machine integration; the machine_sim
+  export of the device port rides with the `usbhc_regs`/autoconfig step
+  (`6702220`). **The PHY tier is complete.**
 - US2 wiring: RX diff on `usb_fpga_dp/dn`, TX on `usb_fpga_bd_dp/dn`,
   pulls on `usb_fpga_pu_*`; dual-clock-BRAM + handshake CDC
   (`usbhc_regs` + `usbhc_cdc`).
