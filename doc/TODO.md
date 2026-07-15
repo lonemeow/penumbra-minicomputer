@@ -3737,12 +3737,18 @@ Implementation work, by layer:
   latest frame number (`101ab5b`). Done: `usbhc_port` — debounced
   connect/speed detect from the raw line (D+ pull-up ⇒ FS, D- ⇒ LS,
   SE1 = fault), detection paused while the host drives the bus,
-  reset/resume recipes, PORT_CHANGE events (`8635b75`). **All five
-  leaf cells are done.** Next:
-  the `usbhc_mac` composition. MAC-level test drives the seam with
-  a byte-level C++ device responder (the embryo of `UsbDeviceSim`; its
-  keyboard input must NOT take terminal stdin — the UART console owns
-  it — separate pty/socket, mechanism TBD).
+  reset/resume recipes, PORT_CHANGE events (`8635b75`). Done:
+  `usbhc_mac` — the five-cell composition: transmit arbiter (a start
+  beats a due marker, the grant follows the marker request down, and
+  launches wait out a disowned marker's drain), owner-routed
+  packet-transmitter mux and completion strobe, resume transmit
+  override, IN-grant gate on buffer stores. The MAC-level testbench
+  drives the seam at line-realistic pacing against
+  `hw/sim/usb_device_sim.h` — the `UsbDeviceSim` embryo both sims will
+  share (its future keyboard input must NOT take terminal stdin — the
+  UART console owns it — separate pty/socket, mechanism TBD)
+  (`63b0bf3`). **The MAC is complete.** Next: the swappable PHYs,
+  `usb_phy_sim` / `usb_phy_ecp5`.
 - `usb_phy_sim` / `usb_phy_ecp5`: compose the SIE cells behind the seam
   (`usb_rx_test`/`usb_tx_test` are the two halves' shapes); `phy_sim`
   replaces the line layer with a byte-level packet port + connect/speed
