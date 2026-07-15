@@ -270,6 +270,7 @@ package penumbra_pkg;
     localparam logic [31:0] ACFG_CLASS_UART     = 32'd2;  // NS16450-compatible UART register interface
     localparam logic [31:0] ACFG_CLASS_SPI      = 32'd3;  // Penumbra SPI master (DATA/STATUS/CONTROL/CLKDIV)
     localparam logic [31:0] ACFG_CLASS_SD       = 32'd4;  // SD/MMC card slot (SPI register interface, CS0 = card)
+    localparam logic [31:0] ACFG_CLASS_USBHC    = 32'd8;  // USB host controller (transaction-level minimum protocol)
 
     // ── UART register offsets (word-strided within 4 KB page) ────
     // Memory-mapped I/O at 0xFF00_0000. Each 8-bit register
@@ -302,6 +303,23 @@ package penumbra_pkg;
     localparam logic [2:0] USBHC_RESULT_TIMEOUT  = 3'd3;
     localparam logic [2:0] USBHC_RESULT_ERROR    = 3'd4;  // CRC / bit-stuff / malformed response
     localparam logic [2:0] USBHC_RESULT_OVERFLOW = 3'd5;  // response past the buffer or LENGTH
+
+    // Register offsets (word-strided within the device window)
+    localparam logic [6:0] USBHC_REG_CAP         = 7'h00;
+    localparam logic [6:0] USBHC_REG_IRQ_STATUS  = 7'h04;
+    localparam logic [6:0] USBHC_REG_IRQ_ENABLE  = 7'h08;
+    localparam logic [6:0] USBHC_REG_PORT_STATUS = 7'h0C;
+    localparam logic [6:0] USBHC_REG_PORT_CTRL   = 7'h10;
+    localparam logic [6:0] USBHC_REG_FRAME       = 7'h14;
+    localparam logic [6:0] USBHC_REG_TOKEN       = 7'h18;
+    localparam logic [6:0] USBHC_REG_XFER_CTRL   = 7'h1C;
+    localparam logic [6:0] USBHC_REG_XFER_STATUS = 7'h20;
+    localparam logic [6:0] USBHC_REG_DATA        = 7'h40;  // ..0x7C, the packet buffer
+
+    // IRQ_STATUS / IRQ_ENABLE bit positions
+    localparam int USBHC_IRQ_XFER_DONE   = 0;
+    localparam int USBHC_IRQ_PORT_CHANGE = 1;
+    localparam int USBHC_IRQ_SOF         = 2;
 
     // ── Physical address map (bus base addresses) ──────────────
     // Fixed base addresses for memory-mapped devices.
