@@ -154,15 +154,19 @@ module autoconfig_dev
     // ── Busy ───────────────────────────────────────────────
     // Config reads assert busy for 1 cycle so the registered
     // select in the bus OR-combine has time to propagate
-    // before the CPU samples mem_rdata.
+    // before the CPU samples mem_rdata. Config writes must NOT
+    // stall: the CFG_BASE write latches `configured` on its
+    // first edge, which deselects the config space — a stalled
+    // write's held strobe would then sit on the bus unclaimed
+    // and raise a spurious bus fault on its completion cycle.
     logic cfg_was_active;
     always_ff @(posedge i_clk) begin
         if (i_rst)
             cfg_was_active <= 1'b0;
         else
-            cfg_was_active <= cfg_active && (i_re || i_we);
+            cfg_was_active <= cfg_active && i_re;
     end
-    wire cfg_busy = cfg_active && (i_re || i_we) && !cfg_was_active;
+    wire cfg_busy = cfg_active && i_re && !cfg_was_active;
     assign o_busy = cfg_busy | (dev_sel ? i_dev_busy : 1'b0);
 
     // ── Selection (for bus fault detection) ─────────────────
