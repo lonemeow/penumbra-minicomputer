@@ -12,17 +12,27 @@ insert_final_newline = true
 # SystemVerilog / hardware
 [*.{sv,svh,v}]
 indent_style = space
-indent_size = 2
+indent_size = 4
+
+# C/C++ (testbenches, simulators, boot ROM)
+[*.{c,cpp,h,hpp}]
+indent_style = space
+indent_size = 4
 
 # Python tools
 [*.py]
 indent_style = space
 indent_size = 4
 
-# Assembly
-[*.{s,uasm}]
-indent_style = tab
-tab_width = 8
+# Assembly (4-space instruction indent)
+[*.s]
+indent_style = space
+indent_size = 4
+
+# Microcode (2-space continuation indent)
+[*.uasm]
+indent_style = space
+indent_size = 2
 
 # Makefile requires tabs
 [Makefile]

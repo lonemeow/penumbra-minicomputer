@@ -1,0 +1,6 @@
+# Penumbra project C/C++ style (testbenches, simulators, boot ROM).
+# The llvm/ subtree carries upstream's own .clang-format; NetBSD base
+# files keep KNF and are not reformatted.
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 80
