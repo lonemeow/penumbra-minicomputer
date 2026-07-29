@@ -53,6 +53,15 @@ struct Penumbra1Core : SimCore {
         cpu->i_spi_resp_valid = 0;
         cpu->i_spi_resp_data = 0xFF;
         cpu->i_dbg_reg_addr = 0;
+        // No USB device attached in the interactive console (its input
+        // channel is a separate concern from the UART-owned stdin); the
+        // domain clock still runs so the controller stays reachable.
+        cpu->i_usb_clk = 0;
+        cpu->i_usb_rx_valid = 0;
+        cpu->i_usb_rx_data = 0;
+        cpu->i_usb_rx_last = 0;
+        cpu->i_usb_dev_connect = 0;
+        cpu->i_usb_dev_speed = 1;
         tick();   // two reset cycles, both clocks running
         tick();
         cpu->i_rst = 0;
@@ -65,10 +74,16 @@ struct Penumbra1Core : SimCore {
         cpu->i_clk = 0;
         cpu->eval();
         rx_ack_latched = cpu->o_uart_rx_ack;
-        for (int s = 0; s < 4; s++) { cpu->i_sdram_clk = !cpu->i_sdram_clk; cpu->eval(); }
+        for (int s = 0; s < 4; s++) {
+            cpu->i_sdram_clk = !cpu->i_sdram_clk; cpu->eval();
+            if (s & 1) { cpu->i_usb_clk = !cpu->i_usb_clk; cpu->eval(); }
+        }
         cpu->i_clk = 1;
         cpu->eval();
-        for (int s = 0; s < 4; s++) { cpu->i_sdram_clk = !cpu->i_sdram_clk; cpu->eval(); }
+        for (int s = 0; s < 4; s++) {
+            cpu->i_sdram_clk = !cpu->i_sdram_clk; cpu->eval();
+            if (s & 1) { cpu->i_usb_clk = !cpu->i_usb_clk; cpu->eval(); }
+        }
     }
 
     void uart_rx(bool v, uint8_t d) override { cpu->i_uart_rx_valid = v; cpu->i_uart_rx_data = d; }

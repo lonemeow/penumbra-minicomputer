@@ -17,18 +17,80 @@
 
 #include <cstdio>
 #include <cstdint>
+#include <vector>
 #include "Vmachine_sim.h"
+#include "usb_device_sim.h"
 #if VM_TRACE
 #include "verilated_vcd_c.h"
 static VerilatedVcdC* tfp = nullptr;
 static uint64_t sim_time = 0;
 #endif
 
+// ── USB device behind machine_sim's device port ─────────────────────
+// An enumerable full-speed device on the credit handshake; the response
+// turnaround is the device's to time, per the usb_phy_sim contract.
+static UsbDeviceSim usb_dev;
+static std::vector<uint8_t> usb_host_pkt;
+static std::vector<uint8_t> usb_resp;
+static size_t usb_resp_idx = 0;
+static int usb_resp_wait = 0;
+static bool usb_presenting = false;
+static const int USB_RESP_DELAY = 40;   // USB clocks: 8 FS bit times
+
+// Applied at the start of a USB cycle (just after its rising edge).
+static void usb_bridge_apply(Vmachine_sim* d) {
+    if (usb_resp_wait > 0 && --usb_resp_wait == 0) {
+        usb_presenting = true;
+        usb_resp_idx = 0;
+    }
+    d->i_usb_rx_valid = usb_presenting;
+    if (usb_presenting) {
+        d->i_usb_rx_data = usb_resp[usb_resp_idx];
+        d->i_usb_rx_last = (usb_resp_idx == usb_resp.size() - 1);
+    }
+}
+
+// Sampled mid-cycle (after the falling edge): the cycle's pulses.
+static void usb_bridge_sample(Vmachine_sim* d) {
+    if (d->o_usb_pkt_valid)
+        usb_host_pkt.push_back(d->o_usb_pkt_data);
+    if (d->o_usb_pkt_end) {
+        usb_dev.host_packet(usb_host_pkt);
+        usb_host_pkt.clear();
+        if (usb_dev.has_response()) {
+            usb_resp = usb_dev.take_response();
+            usb_resp_wait = USB_RESP_DELAY;
+        }
+    }
+    if (d->o_usb_keepalive)
+        usb_dev.host_packet({0xa5});
+    if (d->o_usb_rx_ready) {
+        usb_resp_idx++;
+        if (usb_resp_idx >= usb_resp.size())
+            usb_presenting = false;
+    }
+}
+
+// One USB clock toggle with the bridge hooks on both edges.
+static void usb_toggle(Vmachine_sim* d) {
+    bool rising = !d->i_usb_clk;
+    d->i_usb_clk = !d->i_usb_clk;
+    d->eval();
+    if (rising) {
+        usb_bridge_apply(d);
+        d->eval();
+    } else {
+        usb_bridge_sample(d);
+    }
+}
+
 static void tick(Vmachine_sim* d) {
     // 4 SDRAM half-cycles per CPU half-cycle matches hardware's
     // 25 MHz CPU / 100 MHz SDRAM ratio.  Each SDRAM toggle gets
     // its own eval() so the SDRAM-domain RTL (controller, CDC's
-    // sd side, model) advances on its own clock.
+    // sd side, model) advances on its own clock.  The USB clock
+    // runs 2 toggles per half (2x the CPU clock; the CDC is
+    // ratio-agnostic and hardware runs 60/25).
     d->i_clk = 0; d->eval();
 #if VM_TRACE
     if (tfp) { tfp->dump(sim_time); sim_time++; }
@@ -36,6 +98,7 @@ static void tick(Vmachine_sim* d) {
     for (int s = 0; s < 4; s++) {
         d->i_sdram_clk = !d->i_sdram_clk;
         d->eval();
+        if (s & 1) usb_toggle(d);
 #if VM_TRACE
         if (tfp) { tfp->dump(sim_time); sim_time++; }
 #endif
@@ -47,6 +110,7 @@ static void tick(Vmachine_sim* d) {
     for (int s = 0; s < 4; s++) {
         d->i_sdram_clk = !d->i_sdram_clk;
         d->eval();
+        if (s & 1) usb_toggle(d);
 #if VM_TRACE
         if (tfp) { tfp->dump(sim_time); sim_time++; }
 #endif
@@ -86,6 +150,14 @@ static void reset(Vmachine_sim* cpu) {
     cpu->i_uart_rx_data = 0;
     cpu->i_dbg_reg_addr = 0;
     cpu->i_sdram_clk = 0;
+    cpu->i_usb_clk = 0;
+    cpu->i_usb_rx_valid = 0;
+    cpu->i_usb_rx_data = 0;
+    cpu->i_usb_rx_last = 0;
+    // An enumerable full-speed device sits attached from power-on.
+    usb_dev.enumerate = true;
+    cpu->i_usb_dev_connect = 1;
+    cpu->i_usb_dev_speed = 1;   // usb_speed_e full-speed
     tick(cpu);
     tick(cpu);
     cpu->i_rst = 0;

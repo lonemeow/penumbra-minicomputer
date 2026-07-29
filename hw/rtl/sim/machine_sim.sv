@@ -49,6 +49,24 @@ module machine_sim
     input  logic [7:0]  i_spi_resp_data,
     output logic        o_spi_cs0,
 
+    // ── USB host controller (device port for the TB's UsbDeviceSim) ──
+    // Separate USB clock, like the SDRAM clock: drive faster than i_clk
+    // to match hardware's 25 MHz CPU / 60 MHz USB ratio, or tie to
+    // i_clk for a same-rate setup.
+    input  logic        i_usb_clk,
+    output logic [7:0]  o_usb_pkt_data,
+    output logic        o_usb_pkt_valid,
+    output logic        o_usb_pkt_end,
+    output logic        o_usb_keepalive,
+    output logic        o_usb_bus_reset,
+    output logic        o_usb_resume,
+    output logic        o_usb_rx_ready,
+    input  logic        i_usb_rx_valid,
+    input  logic [7:0]  i_usb_rx_data,
+    input  logic        i_usb_rx_last,
+    input  logic        i_usb_dev_connect,
+    input  logic [1:0]  i_usb_dev_speed,
+
     // ── Debug / observation ports ────────────────────────────
     output logic [31:0] o_pc,
     output logic        o_halted,
@@ -94,7 +112,7 @@ module machine_sim
     logic uart_irq;
     logic spi_irq;
     logic combined_irq;
-    assign combined_irq = i_irq | uart_irq | spi_irq;
+    assign combined_irq = i_irq | uart_irq | spi_irq | usb_irq;
 
     // ── Timer tick prescaler (CLK_FREQ → ~1 MHz toggle) ─────
     // Tick freq = CLK_FREQ / (2 * PRESCALE_DIV).  The factor of two
@@ -371,19 +389,144 @@ module machine_sim
     );
     /* verilator lint_on PINCONNECTEMPTY */
 
+    // ── USB host controller (second in chain) ──────────────
+    logic [31:0] usb_dev_addr, usb_dev_wdata;
+    logic [3:0]  usb_dev_byte_en;
+    logic        usb_dev_we, usb_dev_re;
+    logic [31:0] usb_dev_rdata;
+    logic        usb_dev_busy;
+
+    logic [31:0] ac_usb_rdata;
+    logic        ac_usb_busy, ac_usb_sel;
+    logic        ac_usb_cfg_out;
+    logic        usb_irq;
+
+    autoconfig_dev #(
+        .DEV_CLASS (ACFG_CLASS_USBHC),
+        .DEV_SIZE  (32'd4096),
+        .DEV_ID    (32'd0),
+        // "USB\0" packed LE
+        .DEV_NAME0 (32'h00425355)
+    ) u_ac_usb (
+        .i_clk       (i_clk),
+        .i_rst       (i_rst),
+        .i_bus_rst   (busctl_bus_rst),
+        .i_cfg_en    (busctl_cfg_en),
+        .i_cfg_in    (ac_spi_cfg_out),
+        .o_cfg_out   (ac_usb_cfg_out),
+        .i_addr      (mem_addr),
+        .i_wdata     (mem_wdata),
+        .i_byte_en   (mem_byte_en),
+        .i_we        (mem_we),
+        .i_re        (mem_re),
+        .o_rdata     (ac_usb_rdata),
+        .o_busy      (ac_usb_busy),
+        .o_sel       (ac_usb_sel),
+        .o_dev_addr  (usb_dev_addr),
+        .o_dev_wdata (usb_dev_wdata),
+        .o_dev_byte_en(usb_dev_byte_en),
+        .o_dev_we    (usb_dev_we),
+        .o_dev_re    (usb_dev_re),
+        .i_dev_rdata (usb_dev_rdata),
+        .i_dev_busy  (usb_dev_busy)
+    );
+
+    // Word-strided device: byte enables carry no information here.
+    logic [3:0] unused_usb_byte_en;
+    assign unused_usb_byte_en = usb_dev_byte_en;
+
+    // The MAC-PHY seam between the controller and its sim PHY.
+    logic [7:0] usb_tx_data;
+    logic       usb_tx_valid, usb_tx_ready;
+    logic [7:0] usb_rx_data;
+    logic       usb_rx_valid, usb_rx_active, usb_rx_error;
+    logic [1:0] usb_opmode, usb_xcvr_sel;
+    logic       usb_term_sel, usb_port_power;
+    logic [1:0] usb_line_state;
+    logic [2:0] usb_caps;
+    logic       usb_phy_clk;
+    logic       unused_usb_phy_clk;
+    assign unused_usb_phy_clk = usb_phy_clk;
+
+    usbhc u_usbhc (
+        .i_clk        (i_clk),
+        .i_rst        (i_rst),
+        .i_addr       (usb_dev_addr),
+        .i_wdata      (usb_dev_wdata),
+        .i_we         (usb_dev_we),
+        .i_re         (usb_dev_re),
+        .o_rdata      (usb_dev_rdata),
+        .o_busy       (usb_dev_busy),
+        .o_irq        (usb_irq),
+        .i_usb_clk    (i_usb_clk),
+        .i_usb_rst    (i_rst),
+        .o_tx_data    (usb_tx_data),
+        .o_tx_valid   (usb_tx_valid),
+        .i_tx_ready   (usb_tx_ready),
+        .i_rx_data    (usb_rx_data),
+        .i_rx_valid   (usb_rx_valid),
+        .i_rx_active  (usb_rx_active),
+        .i_rx_error   (usb_rx_error),
+        .i_line_state (usb_line_state),
+        .i_caps       (usb_caps),
+        .o_xcvr_sel   (usb_xcvr_sel),
+        .o_term_sel   (usb_term_sel),
+        .o_opmode     (usb_opmode),
+        .o_port_power (usb_port_power)
+    );
+
+    usb_phy_sim u_usb_phy (
+        .i_clk          (i_usb_clk),
+        .i_rst          (i_rst),
+        .o_clk          (usb_phy_clk),
+        .i_tx_data      (usb_tx_data),
+        .i_tx_valid     (usb_tx_valid),
+        .o_tx_ready     (usb_tx_ready),
+        .o_rx_data      (usb_rx_data),
+        .o_rx_valid     (usb_rx_valid),
+        .o_rx_active    (usb_rx_active),
+        .o_rx_error     (usb_rx_error),
+        .i_opmode       (usb_opmode),
+        .i_xcvr_sel     (usb_xcvr_sel),
+        .i_term_sel     (usb_term_sel),
+        .i_port_power   (usb_port_power),
+        .o_line_state   (usb_line_state),
+        .o_caps         (usb_caps),
+        .o_pkt_data     (o_usb_pkt_data),
+        .o_pkt_valid    (o_usb_pkt_valid),
+        .o_pkt_end      (o_usb_pkt_end),
+        .o_keepalive    (o_usb_keepalive),
+        .o_bus_reset    (o_usb_bus_reset),
+        .o_resume       (o_usb_resume),
+        .o_rx_ready     (o_usb_rx_ready),
+        .i_rx_valid     (i_usb_rx_valid),
+        .i_rx_data      (i_usb_rx_data),
+        .i_rx_last      (i_usb_rx_last),
+        .i_dev_connect  (i_usb_dev_connect),
+        .i_dev_speed    (i_usb_dev_speed)
+    );
+
     // ── Autoconfig chain end (after last device) ────────────
-    // ac_spi_cfg_out passes through when SPI is configured.
-    // No more devices after SPI → bus fault terminates probe.
+    // ac_usb_cfg_out passes through when the USBHC is configured.
+    // No more devices after it → bus fault terminates probe.
+    logic unused_ac_usb_cfg_out;
+    assign unused_ac_usb_cfg_out = ac_usb_cfg_out;
 
     // Autoconfig device bus signals (OR'd into bus response)
     logic [31:0] acfg_rdata;
     logic        acfg_busy;
     logic        acfg_sel;
     logic        acfg_sel_r;
-    assign acfg_rdata = ac_spi_rdata;
-    assign acfg_busy  = ac_spi_busy;
-    assign acfg_sel   = ac_spi_sel;
-    always_ff @(posedge i_clk) acfg_sel_r <= acfg_sel;
+    logic        ac_spi_sel_r, ac_usb_sel_r;
+    assign acfg_rdata = (ac_spi_sel_r ? ac_spi_rdata : 32'b0) |
+                        (ac_usb_sel_r ? ac_usb_rdata : 32'b0);
+    assign acfg_busy  = ac_spi_busy | ac_usb_busy;
+    assign acfg_sel   = ac_spi_sel | ac_usb_sel;
+    always_ff @(posedge i_clk) begin
+        acfg_sel_r   <= acfg_sel;
+        ac_spi_sel_r <= ac_spi_sel;
+        ac_usb_sel_r <= ac_usb_sel;
+    end
 
     // ── Bus response OR-combine ─────────────────────────────
     // Read data: masked by registered select (one-cycle delay

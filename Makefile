@@ -156,7 +156,7 @@ RUNNER_TBS_penumbra1      = tb_cpu_prog
 # bits drive is a wrapper/board concern that no conformance test exercises:
 # gen1's machine_sim wires a chain; gen2's sim wrapper leaves busctl's
 # outputs open until the device-discovery / SD path consumes them.
-RUNNER_PROVIDES_penumbra1 = mmu mmu-d mmu-i cache l2 uart spi bus bus-fault machid perfctr timer irq wrspr
+RUNNER_PROVIDES_penumbra1 = mmu mmu-d mmu-i cache l2 uart spi bus bus-fault machid perfctr timer irq wrspr usbhc
 
 RUNNER_MOD_penumbra2      = machine_penumbra2_sim
 RUNNER_TBS_penumbra2      = tb_penumbra2_prog tb_penumbra2_intr
@@ -178,8 +178,9 @@ RUNNER_PROVIDES = $(filter-out $(RUNNER_DROPS_$(CORE)),$(RUNNER_PROVIDES_$(CORE_
 RUNNER_DROPS_penumbra2_5 = pinned-stalls
 
 # The ISS models the full machine: it provides every capability the
-# gen1 machine does.
-ISS_PROVIDES = $(RUNNER_PROVIDES_penumbra1)
+# gen1 machine does. usbhc is filtered until the ISS's register-level
+# model lands.
+ISS_PROVIDES = $(filter-out usbhc,$(RUNNER_PROVIDES_penumbra1))
 
 # ── Run the program suites on the RTL sim ──────────────────────
 # Usage: make test [CORE=penumbra2]
