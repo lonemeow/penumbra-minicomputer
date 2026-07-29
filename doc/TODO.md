@@ -3777,6 +3777,16 @@ Implementation work, by layer:
   (`usbhc_regs` + `usbhc_cdc`).
 - `autoconfig_dev` wrapper (`CLASS_USBHC`); machine_sim integration test
   (poll CONNECT → reset → GET_DESCRIPTOR → R1) under `make test`.
+  Done: `usbhc_regs` + `usbhc_cdc` + the `usbhc` composition, proven
+  from the bus at a 5:2 clock ratio by `tb_usbhc_dev` — the executable
+  spec for the ISS model (`ebc65e7`). Done: the gen1 machine attachment
+  and `test_usbhc_enum` — autoconfig discovery through a full
+  enumeration (descriptor read, SET_ADDRESS with the old address proven
+  dead, wLength-bounded re-read, STALL for an unknown request) with
+  self-identifying failures (`867aa7d`). Bringing the first bare-metal
+  software onto the autoconfig path exposed a pre-existing config-space
+  write-stall fault the ROM's probe handler had been swallowing
+  (`aa65aff`).
 - **ISS: model `CLASS_USBHC` at register level.** Driver bring-up (the
   NetBSD HCD, the ROM keyboard reader) needs the fast simulator — the RTL
   sim is far too slow for that iteration loop. Add the register contract
