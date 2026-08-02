@@ -860,8 +860,8 @@ FPGA_UCODE_TOPS = ulx3s_penumbra1_top
 # always wins; `NEXTPNR_SEED=` forces a random placement; a top with no
 # entry here behaves as before (no --seed passed). gen1 needs none — it
 # runs at a lower clock where fmax is not the binding constraint.
-DEFAULT_SEED_ulx3s_penumbra2_top   := 7
-DEFAULT_SEED_ulx3s_penumbra2_5_top := 2
+DEFAULT_SEED_ulx3s_penumbra2_top   := 9
+DEFAULT_SEED_ulx3s_penumbra2_5_top := 9
 
 
 # BOARD/CORE porcelain → TOP derivation (CORE defaults to penumbra2
@@ -983,16 +983,39 @@ $(BUILD_DIR)/$(TOP).json: $(FPGA_SRC) $(PHASE_STAMP) \
 	$(if $(filter $(TOP),$(FPGA_ROM_TOPS) $(FPGA_UCODE_TOPS)),python3 hw/tools/inline_hex.py $(BUILD_DIR)/$(TOP)_sv2v.v $(BUILD_DIR)/$(TOP)_sv2v.v)
 	$(FPGA_TOOLS)/yosys -p "read_verilog $(BUILD_DIR)/$(TOP)_sv2v.v; synth_ecp5 -top $(TOP_MODULE) -json $@"
 
-$(BUILD_DIR)/$(TOP).config: $(BUILD_DIR)/$(TOP).json $(LPF) $(LPF_DESIGN) $(PREPACK)
-	@echo "[fpga] PnR seed: $(if $(strip $(NEXTPNR_SEED)),$(NEXTPNR_SEED)$(if $(filter $(NEXTPNR_SEED),$(DEFAULT_SEED_$(TOP))), (pinned default for $(TOP))),random — no --seed)"
-	$(FPGA_TOOLS)/nextpnr-ecp5 --85k --package CABGA381 --speed 6 \
+# The nextpnr invocation shared by the normal PnR rule and the
+# seed-sweep pattern rule below (device, constraints, prepack).
+NEXTPNR_BASE = $(FPGA_TOOLS)/nextpnr-ecp5 --85k --package CABGA381 --speed 6 \
 		--timing-allow-fail --lpf $(LPF) \
 		$(if $(LPF_DESIGN),--lpf $(LPF_DESIGN)) \
-		$(if $(PREPACK),--pre-pack $(PREPACK)) \
+		$(if $(PREPACK),--pre-pack $(PREPACK))
+
+$(BUILD_DIR)/$(TOP).config: $(BUILD_DIR)/$(TOP).json $(LPF) $(LPF_DESIGN) $(PREPACK)
+	@echo "[fpga] PnR seed: $(if $(strip $(NEXTPNR_SEED)),$(NEXTPNR_SEED)$(if $(filter $(NEXTPNR_SEED),$(DEFAULT_SEED_$(TOP))), (pinned default for $(TOP))),random — no --seed)"
+	$(NEXTPNR_BASE) \
 		$(if $(NEXTPNR_SEED),--seed $(NEXTPNR_SEED)) \
 		--json $< --textcfg $@ \
 		--write $(BUILD_DIR)/$(TOP)_routed.json \
 		--report $(BUILD_DIR)/$(TOP)_timing.json --detailed-timing-report
+
+# ── Parallel seed sweeps ────────────────────────────────────────
+# Seed-tagged PnR artifacts: build/<top>.s<seed>.config places the
+# shared synthesis JSON with --seed <seed> and writes a seed-tagged
+# timing report alongside.  Disjoint outputs per seed let one
+# `make -jN` invocation run many seeds concurrently — this is what
+# hw/tools/seed-sweep.sh drives.  No routed JSON and no bitstream:
+# a sweep wants timing verdicts, and the winning seed is then pinned
+# as DEFAULT_SEED_<top> and rebuilt through the normal fpga target.
+$(BUILD_DIR)/$(TOP).s%.config: $(BUILD_DIR)/$(TOP).json $(LPF) $(LPF_DESIGN) $(PREPACK)
+	$(NEXTPNR_BASE) \
+		--seed $* \
+		--json $< --textcfg $@ \
+		--report $(BUILD_DIR)/$(TOP).s$*_timing.json --detailed-timing-report
+
+# Echo the resolved artifact TOP name (consumed by seed-sweep.sh).
+.PHONY: print-top
+print-top:
+	@echo $(TOP)
 
 $(BUILD_DIR)/$(TOP).bit: $(BUILD_DIR)/$(TOP).config
 	$(FPGA_TOOLS)/ecppack $< $@

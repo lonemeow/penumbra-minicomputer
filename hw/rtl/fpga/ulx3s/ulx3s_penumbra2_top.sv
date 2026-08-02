@@ -55,6 +55,18 @@ module ulx3s_penumbra2_top (
     output logic       sd_cmd,      // SPI MOSI
     inout  wire  [3:0] sd_d,        // [0]=MISO in, [3]=CS out, [2:1]=high
 
+    // ── USB host (US2 socket, D+/D- direct to FPGA) ────────
+    // The bd pair is the bidirectional single-ended view of D+/D-:
+    // sensed while the PHY listens (both levels are needed to tell
+    // SE0 from J/K) and driven while it owns the bus.  The pu pair
+    // works the board's pull network — driven low for the host's
+    // D+/D- pull-downs, released otherwise.  (The board's separate
+    // differential-input pair on the same copper stays unused.)
+    inout  wire        usb_fpga_bd_dp,
+    inout  wire        usb_fpga_bd_dn,
+    inout  wire        usb_fpga_pu_dp,
+    inout  wire        usb_fpga_pu_dn,
+
     // ── SDRAM ──────────────────────────────────────────────
     output logic        sdram_clk,
     output logic        sdram_cke,
@@ -113,9 +125,18 @@ module ulx3s_penumbra2_top (
         (CLKOS2_PHASE_DEG == 270) ? 4 :
         (CLKOS2_PHASE_DEG == 315) ? 6 : 0;
 
+    // ── USB clock (CLKOS3) ─────────────────────────────────────────
+    // The USB host tier runs at 60 MHz (usb_pkg's 5×/40× oversample
+    // base), served off the shared VCO like every other output —
+    // exact only: a CPU/SDRAM retarget that moves the VCO off a
+    // 60 MHz multiple must fail the build here, not detune USB.
+    localparam longint USB_HZ = 60_000_000;
+    localparam int CLKOS3_DIV_VAL = ecp5_pll_aux_div(PLL.vco_hz, USB_HZ);
+
     logic clk;            // CLKOP — CPU_HZ system clock
     logic clk_sdram;      // CLKOS — SDRAM_HZ fabric clock
     logic clk_sdram_pin;  // CLKOS2 — SDRAM_HZ, phase-shifted, to ODDR
+    logic clk_usb;        // CLKOS3 — 60 MHz USB host clock
     logic pll_lock;
 
     (* keep *) EHXPLLL #(
@@ -133,6 +154,10 @@ module ulx3s_penumbra2_top (
         .CLKOS2_ENABLE ("ENABLED"),
         .CLKOS2_CPHASE (CLKOS2_CPHASE_VAL),  // SDRAM_PHASE_DEG° phase
         .CLKOS2_FPHASE (CLKOS2_FPHASE_VAL),
+        .CLKOS3_DIV    (CLKOS3_DIV_VAL),
+        .CLKOS3_ENABLE ("ENABLED"),
+        .CLKOS3_CPHASE (CLKOS3_DIV_VAL - 1), // 0° phase
+        .CLKOS3_FPHASE (0),
         .FEEDBK_PATH   ("CLKOP")
     ) u_pll (
         .CLKI         (clk_25mhz),
@@ -140,7 +165,7 @@ module ulx3s_penumbra2_top (
         .CLKOP        (clk),
         .CLKOS        (clk_sdram),
         .CLKOS2       (clk_sdram_pin),
-        .CLKOS3       (),
+        .CLKOS3       (clk_usb),
         .LOCK         (pll_lock),
         .RST          (1'b0),
         .STDBY        (1'b0),
@@ -153,7 +178,7 @@ module ulx3s_penumbra2_top (
         .ENCLKOP      (1'b1),
         .ENCLKOS      (1'b1),
         .ENCLKOS2     (1'b1),
-        .ENCLKOS3     (1'b0)
+        .ENCLKOS3     (1'b1)
     );
 
     // The CLKOS2 phase table above is calibrated for CLKOS_DIV==6 (the SDRAM
@@ -166,6 +191,9 @@ module ulx3s_penumbra2_top (
         assert (PLL.clkos_div == 6)
             else $fatal(1, "ecp5_pll: CLKOS_DIV=%0d != 6; SDRAM phase table invalid",
                         PLL.clkos_div);
+        assert (CLKOS3_DIV_VAL != 0)
+            else $fatal(1, "ecp5_pll: VCO %0d cannot serve the 60 MHz USB clock",
+                        PLL.vco_hz);
     end
 
     // ── Reset: PLL lock + btn[1] (FIRE1) manual reset ──────────
@@ -213,6 +241,14 @@ module ulx3s_penumbra2_top (
     end
     wire rst_sd = rst_sd_sync2;
 
+    // ── USB-domain reset: the same 2-FF pattern into clk_usb. ──
+    logic rst_usb_sync1, rst_usb_sync2;
+    always_ff @(posedge clk_usb) begin
+        rst_usb_sync1 <= rst;
+        rst_usb_sync2 <= rst_usb_sync1;
+    end
+    wire rst_usb = rst_usb_sync2;
+
     // ── Heartbeat / debug LEDs ─────────────────────────────────
     logic [24:0] hb_cnt;
     always_ff @(posedge clk) begin
@@ -259,7 +295,7 @@ module ulx3s_penumbra2_top (
         .i_clk         (clk),
         .i_rst         (rst),
 
-        .i_irq         (uart_irq | spi_irq),
+        .i_irq         (uart_irq | spi_irq | usb_irq),
         .i_timer_irq   (1'b0),        // internal timer is the source
 
         .o_bus_addr    (mem_addr),
@@ -517,9 +553,8 @@ module ulx3s_penumbra2_top (
 
     logic [31:0] ac_spi_rdata;
     logic        ac_spi_busy, ac_spi_sel;
-    /* verilator lint_off UNUSEDSIGNAL */
+    // cfg_out is the daisy-chain to the next autoconfig device (USB).
     logic        ac_spi_cfg_out;
-    /* verilator lint_on UNUSEDSIGNAL */
 
     autoconfig_dev #(
         .DEV_CLASS (ACFG_CLASS_SD),
@@ -577,15 +612,150 @@ module ulx3s_penumbra2_top (
     assign sd_d[2] = 1'b1;        // Unused in SPI mode, pull high
     assign sd_d[1] = 1'b1;        // Unused in SPI mode, pull high
 
+    // ── USB host controller (second device in chain) ─────────
+    // Same block as machine_sim's, with usb_phy_ecp5 on the seam in
+    // place of the sim PHY — the swap the PHY tier split exists for.
+    logic [31:0] usb_dev_addr, usb_dev_wdata;
+    // Word-strided device: byte enables carry no information here.
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic [3:0]  usb_dev_byte_en;
+    /* verilator lint_on UNUSEDSIGNAL */
+    logic        usb_dev_we, usb_dev_re;
+    logic [31:0] usb_dev_rdata;
+    logic        usb_dev_busy;
+
+    logic [31:0] ac_usb_rdata;
+    logic        ac_usb_busy, ac_usb_sel;
+    // Last device in the chain: the dangling cfg_out is the
+    // "no more devices" end the ROM's autoconfig loop probes.
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic        ac_usb_cfg_out;
+    /* verilator lint_on UNUSEDSIGNAL */
+    logic        usb_irq;
+
+    autoconfig_dev #(
+        .DEV_CLASS (ACFG_CLASS_USBHC),
+        .DEV_SIZE  (32'd4096),
+        .DEV_ID    (32'd0),
+        .DEV_NAME0 (32'h00425355)     // "USB\0" packed LE
+    ) u_ac_usb (
+        .i_clk       (clk),
+        .i_rst       (rst),
+        .i_bus_rst   (busctl_bus_rst),
+        .i_cfg_en    (busctl_cfg_en),
+        .i_cfg_in    (ac_spi_cfg_out),
+        .o_cfg_out   (ac_usb_cfg_out),
+        .i_addr      (mem_addr),
+        .i_wdata     (mem_wdata),
+        .i_byte_en   (mem_byte_en),
+        .i_we        (mem_we),
+        .i_re        (mem_re),
+        .o_rdata     (ac_usb_rdata),
+        .o_busy      (ac_usb_busy),
+        .o_sel       (ac_usb_sel),
+        .o_dev_addr  (usb_dev_addr),
+        .o_dev_wdata (usb_dev_wdata),
+        .o_dev_byte_en(usb_dev_byte_en),
+        .o_dev_we    (usb_dev_we),
+        .o_dev_re    (usb_dev_re),
+        .i_dev_rdata (usb_dev_rdata),
+        .i_dev_busy  (usb_dev_busy)
+    );
+
+    // The MAC-PHY seam between the controller and the board PHY.
+    logic [7:0] usb_tx_data;
+    logic       usb_tx_valid, usb_tx_ready;
+    logic [7:0] usb_rx_data;
+    logic       usb_rx_valid, usb_rx_active, usb_rx_error;
+    logic [1:0] usb_opmode, usb_xcvr_sel;
+    logic       usb_term_sel, usb_port_power;
+    logic [1:0] usb_line_state;
+    logic [2:0] usb_caps;
+    logic       usb_tx_dp, usb_tx_dn, usb_tx_oe;
+    logic       usb_pull_dp, usb_pull_dn;
+    // The PHY forwards its clock for integrations that want it; this
+    // top clocks the controller from the PLL output directly.
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic       usb_phy_clk;
+    /* verilator lint_on UNUSEDSIGNAL */
+
+    usbhc u_usbhc (
+        .i_clk        (clk),
+        .i_rst        (rst),
+        .i_addr       (usb_dev_addr),
+        .i_wdata      (usb_dev_wdata),
+        .i_we         (usb_dev_we),
+        .i_re         (usb_dev_re),
+        .o_rdata      (usb_dev_rdata),
+        .o_busy       (usb_dev_busy),
+        .o_irq        (usb_irq),
+        .i_usb_clk    (clk_usb),
+        .i_usb_rst    (rst_usb),
+        .o_tx_data    (usb_tx_data),
+        .o_tx_valid   (usb_tx_valid),
+        .i_tx_ready   (usb_tx_ready),
+        .i_rx_data    (usb_rx_data),
+        .i_rx_valid   (usb_rx_valid),
+        .i_rx_active  (usb_rx_active),
+        .i_rx_error   (usb_rx_error),
+        .i_line_state (usb_line_state),
+        .i_caps       (usb_caps),
+        .o_xcvr_sel   (usb_xcvr_sel),
+        .o_term_sel   (usb_term_sel),
+        .o_opmode     (usb_opmode),
+        .o_port_power (usb_port_power)
+    );
+
+    usb_phy_ecp5 u_usb_phy (
+        .i_clk        (clk_usb),
+        .i_rst        (rst_usb),
+        .o_clk        (usb_phy_clk),
+        .i_tx_data    (usb_tx_data),
+        .i_tx_valid   (usb_tx_valid),
+        .o_tx_ready   (usb_tx_ready),
+        .o_rx_data    (usb_rx_data),
+        .o_rx_valid   (usb_rx_valid),
+        .o_rx_active  (usb_rx_active),
+        .o_rx_error   (usb_rx_error),
+        .i_opmode     (usb_opmode),
+        .i_xcvr_sel   (usb_xcvr_sel),
+        .i_term_sel   (usb_term_sel),
+        .i_port_power (usb_port_power),
+        .o_line_state (usb_line_state),
+        .o_caps       (usb_caps),
+        .i_dp         (usb_fpga_bd_dp),
+        .i_dn         (usb_fpga_bd_dn),
+        .o_tx_dp      (usb_tx_dp),
+        .o_tx_dn      (usb_tx_dn),
+        .o_tx_oe      (usb_tx_oe),
+        .o_pull_dp    (usb_pull_dp),
+        .o_pull_dn    (usb_pull_dn)
+    );
+
+    // Pin mapping: transmit drives the bidirectional pads only while
+    // the PHY owns the bus; the pull pads work the board's resistor
+    // network — driven low for the host's D+/D- pull-downs, released
+    // to high-Z otherwise.
+    assign usb_fpga_bd_dp = usb_tx_oe ? usb_tx_dp : 1'bz;
+    assign usb_fpga_bd_dn = usb_tx_oe ? usb_tx_dn : 1'bz;
+    assign usb_fpga_pu_dp = usb_pull_dp ? 1'b0 : 1'bz;
+    assign usb_fpga_pu_dn = usb_pull_dn ? 1'b0 : 1'bz;
+
     // Autoconfig combined bus signals
     logic [31:0] acfg_rdata;
     logic        acfg_busy;
     logic        acfg_sel;
     logic        acfg_sel_r;
-    assign acfg_rdata = ac_spi_rdata;
-    assign acfg_busy  = ac_spi_busy;
-    assign acfg_sel   = ac_spi_sel;
-    always_ff @(posedge clk) acfg_sel_r <= acfg_sel;
+    logic        ac_spi_sel_r, ac_usb_sel_r;
+    assign acfg_rdata = (ac_spi_sel_r ? ac_spi_rdata : 32'b0) |
+                        (ac_usb_sel_r ? ac_usb_rdata : 32'b0);
+    assign acfg_busy  = ac_spi_busy | ac_usb_busy;
+    assign acfg_sel   = ac_spi_sel | ac_usb_sel;
+    always_ff @(posedge clk) begin
+        ac_spi_sel_r <= ac_spi_sel;
+        ac_usb_sel_r <= ac_usb_sel;
+        acfg_sel_r   <= acfg_sel;
+    end
 
     // ── Bus response combine ────────────────────────────────
     // The read mux uses the registered selects, so it lands the cycle each

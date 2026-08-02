@@ -239,5 +239,18 @@ $(DEFAULT_SEED_$(TOP))`, so an explicit `NEXTPNR_SEED=<n>` on the command
 line or in the environment still wins, `NEXTPNR_SEED=` forces a random
 placement, and a top with no pinned default behaves as before (no `--seed`
 passed). Keying by `TOP` lets a microarch variant pin a seed distinct from
-its base. (Seed is still outside the build dependency graph — a sweep that
-changes only the seed needs `rm build/<top>.config` first.)
+its base. (Seed is still outside the build dependency graph — rebuilding
+the normal artifact under a different seed needs `rm build/<top>.config`
+first.)
+
+### Sweeping seeds in parallel
+
+`hw/tools/seed-sweep.sh BOARD=… CORE=… [SEEDS="0 1 …"] [JOBS=4]` builds
+the shared synthesis JSON once, then places it under every requested
+seed concurrently — the seed-sweep pattern rule gives each seed its own
+artifacts (`build/<top>.s<seed>.config` plus a seed-tagged timing
+report), so the fan-out runs under one `make -jN` — and prints each
+seed's achieved CPU-clock fmax. Finished seeds survive re-runs:
+widening a sweep places only the new ones. `JOBS` is bounded by memory
+rather than cores (each nextpnr holds the whole design). Pin the winner
+as `DEFAULT_SEED_<top>` and rebuild through the normal `fpga` target.
