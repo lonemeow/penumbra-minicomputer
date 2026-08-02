@@ -61,7 +61,8 @@ attach	pmci at pbbus
 file	arch/penumbra/penumbra/pmci.c			pmci
 
 # USB host controller (CLASS_USBHC transaction-level minimum)
-device	pusbhc
+include "dev/usb/files.usb"
+device	pusbhc: usbus, usbroothub
 attach	pusbhc at pbbus
 file	arch/penumbra/penumbra/pusbhc.c			pusbhc
 

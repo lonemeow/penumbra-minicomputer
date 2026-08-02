@@ -31,8 +31,10 @@ com0		at pbbus?
 pmci0		at pbbus?
 sdmmc*		at pmci?
 
-# USB host controller (attachment skeleton; MI USB stack to come)
+# USB host controller -> MI USB stack root
 pusbhc0		at pbbus?
+usb*		at pusbhc?
+uhub*		at usb?
 ld*		at sdmmc?
 
 # Console
