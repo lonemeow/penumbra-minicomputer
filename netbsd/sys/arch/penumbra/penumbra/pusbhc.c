@@ -38,6 +38,7 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/device.h>
+#include <sys/evcnt.h>
 #include <sys/kernel.h>
 #include <sys/kmem.h>
 #include <sys/mutex.h>
@@ -171,6 +172,16 @@ struct pusbhc_softc {
 	SIMPLEQ_HEAD(, pusbhc_pipe) sc_done;	/* completions to deliver */
 	struct pusbhc_pipe	*sc_active;	/* pipe owning the hardware */
 	bool			sc_orphan;	/* active txn lost its pipe */
+
+	/* Transaction-outcome statistics (vmstat -e), one counter per
+	 * XFER_STATUS.RESULT code plus the interrupt sources. */
+	struct evcnt		sc_ev_result[6];
+	struct evcnt		sc_ev_sof;
+	struct evcnt		sc_ev_port;
+	struct evcnt		sc_ev_rxlen_bad;   /* RXLEN over the ask */
+	struct evcnt		sc_ev_toggle_bad;  /* toggle desync */
+	struct evcnt		sc_ev_stray_done;  /* completion with no owner */
+	struct evcnt		sc_ev_abort;	   /* MI abort / timeout */
 };
 
 #define PUSBHC_BUS2SC(bus)	((bus)->ub_hcpriv)
@@ -331,6 +342,31 @@ pusbhc_attach(device_t parent, device_t self, void *aux)
 	sc->sc_active = NULL;
 	sc->sc_orphan = false;
 
+	{
+		static const char * const resnames[6] = {
+			"txn ack", "txn nak", "txn stall",
+			"txn timeout", "txn error", "txn overflow",
+		};
+		int i;
+
+		for (i = 0; i < 6; i++)
+			evcnt_attach_dynamic(&sc->sc_ev_result[i],
+			    EVCNT_TYPE_MISC, NULL, device_xname(self),
+			    resnames[i]);
+		evcnt_attach_dynamic(&sc->sc_ev_sof, EVCNT_TYPE_INTR, NULL,
+		    device_xname(self), "intr sof");
+		evcnt_attach_dynamic(&sc->sc_ev_port, EVCNT_TYPE_INTR, NULL,
+		    device_xname(self), "intr port change");
+		evcnt_attach_dynamic(&sc->sc_ev_rxlen_bad, EVCNT_TYPE_MISC,
+		    NULL, device_xname(self), "rx overlong");
+		evcnt_attach_dynamic(&sc->sc_ev_toggle_bad, EVCNT_TYPE_MISC,
+		    NULL, device_xname(self), "rx toggle desync");
+		evcnt_attach_dynamic(&sc->sc_ev_stray_done, EVCNT_TYPE_MISC,
+		    NULL, device_xname(self), "stray completion");
+		evcnt_attach_dynamic(&sc->sc_ev_abort, EVCNT_TYPE_MISC,
+		    NULL, device_xname(self), "xfer abort");
+	}
+
 	sc->sc_bus.ub_hcpriv = sc;
 	sc->sc_bus.ub_revision = USBREV_1_1;
 	sc->sc_bus.ub_methods = &pusbhc_bus_methods;
@@ -371,17 +407,28 @@ pusbhc_intr(void *arg)
 			pusbhc_kick(sc);
 		} else if (sc->sc_active != NULL) {
 			pusbhc_xfer_done(sc, xs);
+		} else {
+			/*
+			 * A completion belonging to nothing: the port is
+			 * idle but queued pipes would wait for a launch
+			 * that never comes, stalling their transfers
+			 * until the MI timeout.  Kick the queue.
+			 */
+			sc->sc_ev_stray_done.ev_count++;
+			pusbhc_kick(sc);
 		}
 		claimed = 1;
 	}
 
 	if (status & USBHC_IRQ_SOF) {
 		PUSBHC_WR4(sc, USBHC_IRQ_STATUS, USBHC_IRQ_SOF);
+		sc->sc_ev_sof.ev_count++;
 		pusbhc_sof(sc);
 		claimed = 1;
 	}
 
 	if (status & USBHC_IRQ_PORT_CHANGE) {
+		sc->sc_ev_port.ev_count++;
 		PUSBHC_WR4(sc, USBHC_IRQ_STATUS, USBHC_IRQ_PORT_CHANGE);
 
 		bool connect = (PUSBHC_RD4(sc, USBHC_PORT_STATUS) &
@@ -578,6 +625,7 @@ pusbhc_abortx(struct usbd_xfer *xfer)
 	KASSERT(mutex_owned(&sc->sc_lock));
 
 	mutex_enter(&sc->sc_intr_lock);
+	sc->sc_ev_abort.ev_count++;
 	KASSERT(pp->pp_xfer == xfer);
 	switch (pp->pp_state) {
 	case PUSBHC_PIPE_READY:
@@ -722,6 +770,10 @@ pusbhc_launch(struct pusbhc_softc *sc)
 		break;
 	case PUSBHC_STAGE_DATA:
 		toggle = pp->pp_toggle;
+		/* The walk never passes the buffer end — every receive
+		 * is bounded by the transaction's own ask — so the
+		 * remaining-length subtraction cannot wrap. */
+		KASSERT(pp->pp_offset <= xfer->ux_length);
 		len = uimin(UGETW(ed->wMaxPacketSize),
 		    xfer->ux_length - pp->pp_offset);
 		if (pusbhc_stage_isread(pp)) {
@@ -837,17 +889,44 @@ pusbhc_advance(struct pusbhc_softc *sc, struct pusbhc_pipe *pp, uint32_t xs)
 	case PUSBHC_STAGE_DATA:
 		if (isread) {
 			/*
-			 * A toggle mismatch is the device retransmitting
-			 * a packet whose ACK it lost: discard the data
-			 * and re-run the transaction — the repeated ACK
-			 * alone resynchronizes it.
+			 * A toggle mismatch is either the device
+			 * retransmitting a packet whose ACK was lost, or
+			 * the driver running one packet behind the device
+			 * after a misreported transaction result.  A
+			 * binary toggle cannot tell the two apart, and
+			 * assembling a stream around a possible hole
+			 * would hand corrupt data upstream with every
+			 * per-packet CRC intact — so discard the packet,
+			 * resynchronize the expectation to follow the
+			 * device, and fail the transfer.  The consumer
+			 * retries with a clean pipe.
 			 */
 			if (((xs & USBHC_XS_RXTOGGLE) != 0) !=
 			    pp->pp_toggle) {
-				pusbhc_launch(sc);
+				sc->sc_ev_toggle_bad.ev_count++;
+				pp->pp_toggle =
+				    (xs & USBHC_XS_RXTOGGLE) == 0;
+				pusbhc_complete(sc, pp, USBD_IOERROR);
 				break;
 			}
+			/*
+			 * RXLEN is reported by hardware from what the
+			 * device sent, so it is device-influenced: never
+			 * copy on its word alone.  A transaction asked
+			 * for pp_lastlen bytes and the buffer has
+			 * exactly that much room left, so anything
+			 * larger is a babbling device or a misreported
+			 * result — either way it would write past the
+			 * caller's buffer.  Hardware classifies this as
+			 * OVERFLOW; reaching here means it did not, so
+			 * fail the transfer and count it.
+			 */
 			rxlen = USBHC_XS_RXLEN(xs);
+			if (rxlen > pp->pp_lastlen) {
+				sc->sc_ev_rxlen_bad.ev_count++;
+				pusbhc_complete(sc, pp, USBD_IOERROR);
+				break;
+			}
 			pusbhc_read_data(sc,
 			    (uint8_t *)xfer->ux_buf + pp->pp_offset, rxlen);
 			pp->pp_offset += rxlen;
@@ -897,6 +976,9 @@ pusbhc_xfer_done(struct pusbhc_softc *sc, uint32_t xs)
 	struct pusbhc_pipe *pp = sc->sc_active;
 
 	KASSERT(mutex_owned(&sc->sc_intr_lock));
+
+	if (USBHC_XS_RESULT(xs) < 6)
+		sc->sc_ev_result[USBHC_XS_RESULT(xs)].ev_count++;
 
 	switch (USBHC_XS_RESULT(xs)) {
 	case USBHC_RESULT_ACK:

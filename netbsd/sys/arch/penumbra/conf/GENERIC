@@ -48,6 +48,10 @@ sd*		at scsibus? target ? lun ?
 # USB network
 ure*		at uhub? port ?	# Realtek RTL8152/RTL8153 based adapters
 
+# MII/PHY support (ethernet internal PHYs)
+rlphy*		at mii? phy ?	# Realtek 8139/8201 internal PHYs
+ukphy*		at mii? phy ?	# generic IEEE 802.3u PHYs
+
 # Console
 options		CONSDEV_OVERRIDE="\"uart\""
 
