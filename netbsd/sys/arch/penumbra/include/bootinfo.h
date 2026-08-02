@@ -144,6 +144,7 @@ struct bootinfo {
 #define ACFG_CLASS_UART		2
 #define ACFG_CLASS_SPI		3
 #define ACFG_CLASS_SD		4
+#define ACFG_CLASS_USBHC	8
 
 #ifdef _KERNEL
 void	*lookup_bootinfo(unsigned int);

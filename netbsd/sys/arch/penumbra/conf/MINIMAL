@@ -30,6 +30,9 @@ com0		at pbbus?
 # SD/MMC host (pmci) -> MI sdmmc -> ld block device.
 pmci0		at pbbus?
 sdmmc*		at pmci?
+
+# USB host controller (attachment skeleton; MI USB stack to come)
+pusbhc0		at pbbus?
 ld*		at sdmmc?
 
 # Console
