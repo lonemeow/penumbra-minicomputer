@@ -24,7 +24,7 @@ ifneq ($(TRACE),)
   ARGS += +trace=$(TRACE)
 endif
 
-$(TARGET): penumbra_iss.cpp
+$(TARGET): penumbra_iss.cpp ../../hw/sim/usb_device_sim.h
 	$(CXX) $(CXXFLAGS) -o $@ $<
 
 run: $(TARGET)

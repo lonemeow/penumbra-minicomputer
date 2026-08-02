@@ -178,9 +178,8 @@ RUNNER_PROVIDES = $(filter-out $(RUNNER_DROPS_$(CORE)),$(RUNNER_PROVIDES_$(CORE_
 RUNNER_DROPS_penumbra2_5 = pinned-stalls
 
 # The ISS models the full machine: it provides every capability the
-# gen1 machine does. usbhc is filtered until the ISS's register-level
-# model lands.
-ISS_PROVIDES = $(filter-out usbhc,$(RUNNER_PROVIDES_penumbra1))
+# gen1 machine does.
+ISS_PROVIDES = $(RUNNER_PROVIDES_penumbra1)
 
 # ── Run the program suites on the RTL sim ──────────────────────
 # Usage: make test [CORE=penumbra2]
@@ -507,7 +506,7 @@ simulate: $(ISS)
 	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX) CFLAGS=$(CFLAGS)
 	@$(ISS) program.hex $(if $(SDCARD),+sdcard=$(SDCARD)) $(if $(TRACE),+trace=$(TRACE)) $(if $(TRACE_WINDOW),+trace_window=$(TRACE_WINDOW)) $(if $(HALT_ON),'+halt_on=$(HALT_ON)') $(if $(RAW),+raw)
 
-$(ISS): sw/sim/penumbra_iss.cpp
+$(ISS): sw/sim/penumbra_iss.cpp hw/sim/usb_device_sim.h
 	@$(MAKE) -C sw/sim
 
 # ── RTL simulation (Verilator — cycle-accurate, slow) ─────────

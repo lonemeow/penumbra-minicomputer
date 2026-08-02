@@ -8,7 +8,8 @@
 //   0xFE000000 – 0xFE00001F  Autoconfig space (when cfg_en)
 //   0xFF000000 – 0xFF000FFF  UART (16450-compatible)
 //   0xFFFF0000 – 0xFFFFFFFF  Boot ROM (64 KB)
-//   SPI at dynamic base (assigned via autoconfig)
+//   SPI/SD then USBHC at dynamic bases (assigned via autoconfig,
+//   chained in the machine_sim order)
 //
 // Trace output format (compatible with RTL tb_interactive):
 //   PC=XXXXXXXX SR=XXXXXXXX [SVNZCV] R1=... R2=... ... R14=...
@@ -34,6 +35,10 @@
 #include <termios.h>
 #include <poll.h>
 #include <vector>
+
+// Byte-level USB device responder shared with the RTL testbenches —
+// the one device model both simulators enumerate against.
+#include "../../hw/sim/usb_device_sim.h"
 
 // ═══════════════════════════════════════════════════════════════
 // SD Card Emulator (inline — same protocol as hw/sim/sd_card_sim.h
@@ -675,20 +680,102 @@ static struct {
     bool cfg_en() const { return reg & 2; }
 } busctl;
 
-// --- Autoconfig device (SPI/SD) ---
-static struct {
+// --- Autoconfig device chain ---
+// The machine_sim chain order: SPI/SD first, then the USB host
+// controller. The config window shows the first unconfigured device;
+// once every device is configured, config-space reads fall through to
+// a bus fault — "no more devices" to the autoconfig loop.
+struct AcfgSlot {
+    uint32_t dev_class;     // ACFG_CLASS code
+    uint32_t size;          // window size (power of two)
+    uint32_t name0;         // ACFG_NAME0, packed LE (NAME1-3 read zero)
     bool     configured;
     uint32_t base_addr;
-    bool     cfg_seen_low;  // For chain propagation
 
-    void reset() { configured=false; base_addr=0; cfg_seen_low=false; }
-    bool cfg_active(bool cfg_en, uint32_t addr) const {
-        return cfg_en && !configured && (addr >> 5) == (ACFG_BASE >> 5);
-    }
     bool dev_sel(uint32_t addr) const {
-        return configured && ((addr & ~0xFFFu) == base_addr);
+        return configured && ((addr & ~(size - 1)) == base_addr);
+    }
+};
+
+enum { ACFG_SLOT_SPI = 0, ACFG_SLOT_USB = 1, ACFG_SLOT_COUNT = 2 };
+
+static struct {
+    AcfgSlot slot[ACFG_SLOT_COUNT] = {
+        { 4 /*CLASS_SD*/,    4096, 0x00004453 /*"SD\0\0"*/, false, 0 },
+        { 8 /*CLASS_USBHC*/, 4096, 0x00425355 /*"USB\0"*/,  false, 0 },
+    };
+
+    void reset() {
+        for (auto& s : slot) { s.configured = false; s.base_addr = 0; }
+    }
+    // The slot the config window currently shows, or null past chain end.
+    AcfgSlot* cfg_slot(bool cfg_en, uint32_t addr) {
+        if (!cfg_en || (addr >> 5) != (ACFG_BASE >> 5)) return nullptr;
+        for (auto& s : slot)
+            if (!s.configured) return &s;
+        return nullptr;
     }
 } acfg;
+
+// --- USB host controller (CLASS_USBHC, transaction-level) ---
+// Register contract: doc/system/devices/usb-host.md; the executable
+// spec is hw/sim/tb_usbhc_dev.cpp — behaviors pinned there hold here.
+// The ISS is transaction-level: a transaction launched by XFER_CTRL
+// completes within that store (no SIE or line timing), exchanging
+// complete packets with the shared UsbDeviceSim. The frame counter
+// ticks on an instruction prescale like the timer.
+static constexpr int USB_BUF_BYTES = 64;
+// 1 ms frame marker at the timer's instruction≈cycle approximation
+// (25 MHz clock: TIMER_PRESCALE × 1000).
+static constexpr int USB_FRAME_PRESCALE = 25000;
+
+// XFER_STATUS.RESULT codes (penumbra_pkg USBHC_RESULT_*)
+enum { USB_RES_ACK=0, USB_RES_NAK=1, USB_RES_STALL=2, USB_RES_TIMEOUT=3,
+       USB_RES_ERROR=4, USB_RES_OVERFLOW=5 };
+
+// IRQ_STATUS / IRQ_ENABLE bits
+enum { USB_IRQ_XFER=1, USB_IRQ_PORT=2, USB_IRQ_SOF=4 };
+
+static struct {
+    // Register state. XFER_STATUS.DONE is irq_status's XFER_DONE bit
+    // itself (the RTL mirrors the same sticky W1C flop), so the W1C
+    // clears both views at once.
+    uint32_t irq_status;    // [0] XFER_DONE [1] PORT_CHANGE [2] SOF (W1C)
+    uint32_t irq_enable;
+    uint32_t port_ctrl;     // [0] POWER [1] RESET [2] RUN [3] SUSPEND [4] RESUME
+    uint32_t token;         // [1:0] PID [10:4] DEVADDR [14:11] ENDPOINT [16] TOGGLE
+    uint32_t length;        // XFER_CTRL.LENGTH, held for the transaction
+    uint32_t result;        // XFER_STATUS.RESULT
+    uint32_t rxlen;         // XFER_STATUS.RXLEN — IN payload bytes, CRC excluded
+    bool     rxtoggle;      // XFER_STATUS.RXTOGGLE — toggle of the received DATAx
+    uint32_t frame;         // FRAME[10:0]
+    uint8_t  buf[USB_BUF_BYTES];   // the DATA window, byte-addressed
+
+    // Port view (PORT_STATUS). The ISS device is full-speed; SPEED
+    // reads the programmer encoding (0 none, 2 full), never the
+    // UTMI code the RTL seam carries.
+    bool connect;
+    bool enabled;
+
+    int frame_cnt;          // instruction prescaler toward the next frame
+
+    bool dev_attached;      // a device sits on the port (the ISS default)
+    UsbDeviceSim dev;
+
+    bool power() const { return port_ctrl & 1; }
+    bool reset_active() const { return (port_ctrl >> 1) & 1; }
+    bool run() const { return (port_ctrl >> 2) & 1; }
+    bool irq() const { return (irq_status & irq_enable) != 0; }
+
+    void reset() {
+        irq_status = irq_enable = 0;
+        port_ctrl = token = length = 0;
+        result = rxlen = 0; rxtoggle = false;
+        frame = 0; frame_cnt = 0;
+        memset(buf, 0, sizeof buf);
+        connect = enabled = false;
+    }
+} usb;
 
 // --- TLB (64 entries: 32 sets × 2 ways) ---
 static struct {
@@ -1048,18 +1135,199 @@ static void spi_write(int reg, uint32_t data) {
     }
 }
 
-// Autoconfig config space read
-static uint32_t acfg_config_read(uint32_t addr) {
+// Autoconfig config space read — the presented slot's identity
+static uint32_t acfg_config_read(const AcfgSlot& s, uint32_t addr) {
     int reg = (addr >> 2) & 7;
     switch (reg) {
-        case 0: return 4;       // CLASS_SD
-        case 1: return 4096;    // SIZE
-        case 2: return 0;       // ID
-        case 3: return 0x00004453; // "SD\0\0" LE
-        case 4: case 5: case 6: return 0;
-        case 7: return 0;       // BASE (write-only)
+        case 0: return s.dev_class;
+        case 1: return s.size;
+        case 2: return 0;        // ID
+        case 3: return s.name0;
+        case 4: case 5: case 6: return 0;  // NAME1-3
+        case 7: return 0;        // BASE (write-only)
     }
     return 0;
+}
+
+// ── USB host controller model ──────────────────────────────────
+
+// Complete wire image of a token packet: PID byte, then the 11-bit
+// field split low-byte-first with CRC5 in the top bits.
+static std::vector<uint8_t> usb_token_bytes(uint8_t pid, uint16_t field) {
+    return { UsbDeviceSim::pid_byte(pid),
+             (uint8_t)(field & 0xFF),
+             (uint8_t)((UsbDeviceSim::token_crc5(field) << 3) | (field >> 8)) };
+}
+
+// One transaction against the device model, synchronously: token,
+// the data stage where the direction has one, and the handshake —
+// classified into XFER_STATUS exactly as usbhc_txn does.
+static void usb_run_txn() {
+    int pid_sel = usb.token & 3;
+    uint32_t devaddr  = (usb.token >> 4) & 0x7F;
+    uint32_t endpoint = (usb.token >> 11) & 0xF;
+    bool     toggle   = (usb.token >> 16) & 1;
+    uint16_t field = (uint16_t)(devaddr | (endpoint << 7));
+
+    // TOKEN.PID 3 is undefined; the RTL's mux falls to IN.
+    uint8_t tokpid = pid_sel == 0 ? UsbDeviceSim::PID_SETUP
+                   : pid_sel == 1 ? UsbDeviceSim::PID_OUT
+                                  : UsbDeviceSim::PID_IN;
+    usb.dev.host_packet(usb_token_bytes(tokpid, field));
+
+    if (tokpid != UsbDeviceSim::PID_IN) {
+        // SETUP/OUT: the host always transmits the data stage from the
+        // buffer; the device answers with a handshake or stays silent.
+        uint32_t n = usb.length > USB_BUF_BYTES ? USB_BUF_BYTES : usb.length;
+        std::vector<uint8_t> payload(usb.buf, usb.buf + n);
+        usb.dev.host_packet(UsbDeviceSim::data_packet(
+            toggle ? UsbDeviceSim::PID_DATA1 : UsbDeviceSim::PID_DATA0,
+            payload));
+        if (!usb.dev.has_response()) {
+            usb.result = USB_RES_TIMEOUT;
+        } else {
+            uint8_t pid = usb.dev.take_response()[0] & 0xF;
+            usb.result = pid == UsbDeviceSim::PID_ACK   ? USB_RES_ACK
+                       : pid == UsbDeviceSim::PID_NAK   ? USB_RES_NAK
+                       : pid == UsbDeviceSim::PID_STALL ? USB_RES_STALL
+                       : USB_RES_ERROR;   // e.g. DATAx answering an OUT
+        }
+    } else {
+        // IN: the device answers with a data packet, a handshake, or
+        // silence.
+        if (!usb.dev.has_response()) {
+            usb.result = USB_RES_TIMEOUT;
+        } else {
+            // rsp is the device's complete response packet, as received
+            // off the wire. A handshake is the bare PID byte; a DATAx
+            // packet is {PID byte, payload bytes, CRC16 low, CRC16 high}.
+            std::vector<uint8_t> rsp = usb.dev.take_response();
+            uint8_t pid = rsp[0] & 0xF;
+            bool is_data = pid == UsbDeviceSim::PID_DATA0 ||
+                           pid == UsbDeviceSim::PID_DATA1;
+            if (is_data) {
+                // The packet body (CRC bytes included) is stored as it
+                // arrives; writes clamp at the buffer bound.
+                size_t body = std::min<size_t>(rsp.size() - 1, USB_BUF_BYTES);
+                std::copy(rsp.begin() + 1, rsp.begin() + 1 + body, usb.buf);
+                usb.rxlen = rsp.size() - 3;
+                usb.rxtoggle = pid == UsbDeviceSim::PID_DATA1;
+                if (usb.rxlen <= usb.length && usb.rxlen <= USB_BUF_BYTES) {
+                    usb.dev.host_packet({UsbDeviceSim::pid_byte(UsbDeviceSim::PID_ACK)});
+                    usb.result = USB_RES_ACK;
+                } else {
+                    usb.result = USB_RES_OVERFLOW;
+                }
+            } else {
+                switch (pid) {
+                    case UsbDeviceSim::PID_NAK:
+                        usb.result = USB_RES_NAK;
+                        break;
+                    case UsbDeviceSim::PID_STALL:
+                        usb.result = USB_RES_STALL;
+                        break;
+                    default:
+                        usb.result = USB_RES_ERROR;
+                        break;
+                }
+            }
+        }
+    }
+
+    // DONE is the sticky XFER_DONE source; XFER_STATUS mirrors it.
+    usb.irq_status |= USB_IRQ_XFER;
+}
+
+// PORT_CTRL write: recipes act on the port view immediately — the
+// debounce and reset holds are line timing the ISS does not model
+// (software times the ≥10 ms reset hold; completing it early is
+// invisible to a correct driver).
+static void usb_port_ctrl_write(uint32_t val) {
+    bool was_reset = usb.reset_active();
+    usb.port_ctrl = val & 0x1F;
+
+    // Power off: there is no port; losing the device is a view change.
+    if (!usb.power() && usb.connect) {
+        usb.connect = false;
+        usb.enabled = false;
+        usb.irq_status |= USB_IRQ_PORT;
+    }
+    // Power on with a device attached: the qualified connect.
+    if (usb.power() && usb.dev_attached && !usb.connect) {
+        usb.connect = true;
+        usb.irq_status |= USB_IRQ_PORT;
+    }
+    // Reset drive disables the port; the completed reset (drive
+    // released) enables a connected port and marks the change.
+    if (usb.reset_active())
+        usb.enabled = false;
+    if (was_reset && !usb.reset_active() && usb.connect) {
+        usb.enabled = true;
+        usb.irq_status |= USB_IRQ_PORT;
+    }
+}
+
+static uint32_t usb_read(uint32_t addr) {
+    if (addr & 0x40) {                    // DATA window 0x40..0x7C
+        return rd32(&usb.buf[addr & 0x3C]);
+    }
+    switch (addr & 0x3C) {
+        case 0x00:  // CAP: version 1, 64-byte buffer, LS+FS
+            return 1 | (USB_BUF_BYTES << 8) | (1u << 16) | (1u << 17);
+        case 0x04: return usb.irq_status;
+        case 0x08: return usb.irq_enable;
+        case 0x0C: {  // PORT_STATUS
+            // LINE is the raw {D-, D+} pair: SE0 while the host drives
+            // a reset or nothing is attached, full-speed idle J else.
+            uint32_t speed = usb.connect ? 2u : 0u;
+            uint32_t line = (usb.connect && !usb.reset_active()) ? 1u : 0u;
+            return (line << 8) | (speed << 4) |
+                   (((usb.port_ctrl >> 3) & 1) << 3) |     // SUSPENDED
+                   ((uint32_t)usb.reset_active() << 2) |
+                   ((uint32_t)usb.enabled << 1) |
+                   (uint32_t)usb.connect;
+        }
+        case 0x10: return usb.port_ctrl;
+        case 0x14: return usb.frame;
+        case 0x18: return usb.token;
+        case 0x20:  // XFER_STATUS — DONE mirrors the sticky IRQ bit
+            return (usb.rxlen << 8) | ((uint32_t)usb.rxtoggle << 4) |
+                   (usb.result << 1) | (usb.irq_status & 1);
+        default: return 0;   // XFER_CTRL and holes read zero
+    }
+}
+
+static void usb_write(uint32_t addr, uint32_t data) {
+    if (addr & 0x40) {                    // DATA window
+        wr32(&usb.buf[addr & 0x3C], data);
+        return;
+    }
+    switch (addr & 0x3C) {
+        case 0x04: usb.irq_status &= ~(data & 7); break;   // W1C
+        case 0x08: usb.irq_enable = data & 7; break;
+        case 0x10: usb_port_ctrl_write(data); break;
+        case 0x18: usb.token = data & 0x1FFFF; break;
+        case 0x1C:
+            usb.length = data & 0x7F;
+            if (data & (1u << 16))
+                usb_run_txn();
+            break;
+        // CAP, IRQ_STATUS reads, PORT_STATUS, FRAME, XFER_STATUS: read-only
+    }
+}
+
+// Called once per ISS instruction: the 1 ms frame marker under RUN.
+static void usb_step() {
+    if (!usb.run()) return;
+    if (++usb.frame_cnt < USB_FRAME_PRESCALE) return;
+    usb.frame_cnt = 0;
+    usb.frame = (usb.frame + 1) & 0x7FF;
+    usb.irq_status |= USB_IRQ_SOF;
+    // The marker on the wire: a full-speed SOF token (the ISS device
+    // is full-speed; low-speed would get the bare-PID keep-alive).
+    if (usb.connect)
+        usb.dev.host_packet(usb_token_bytes(UsbDeviceSim::PID_SOF,
+                                            (uint16_t)usb.frame));
 }
 
 // Physical memory read. Returns bus_fault=true if unmapped.
@@ -1073,13 +1341,13 @@ static uint32_t phys_read(uint32_t addr, int size, bool& bus_fault) {
         return rd32(&ram[addr & ~3u]);
     }
 
-    // Autoconfig space: 0xFE000000 (when cfg_en and !configured)
-    if (acfg.cfg_active(busctl.cfg_en(), addr)) {
-        return acfg_config_read(addr);
+    // Autoconfig space: 0xFE000000 (first unconfigured device answers)
+    if (const AcfgSlot* s = acfg.cfg_slot(busctl.cfg_en(), addr)) {
+        return acfg_config_read(*s, addr);
     }
 
     // SPI at dynamic base (when configured)
-    if (acfg.dev_sel(addr)) {
+    if (acfg.slot[ACFG_SLOT_SPI].dev_sel(addr)) {
         int reg = (addr >> 2) & 7;
         if (reg == 3) { // DATA — has pop side-effect
             if (spi.fifo_en())
@@ -1088,6 +1356,11 @@ static uint32_t phys_read(uint32_t addr, int size, bool& bus_fault) {
                 return spi.rx_data;
         }
         return spi.read_reg(reg);
+    }
+
+    // USB host controller at dynamic base
+    if (acfg.slot[ACFG_SLOT_USB].dev_sel(addr)) {
+        return usb_read(addr & 0x7F);
     }
 
     // UART: 0xFF000000 – 0xFF000FFF
@@ -1140,18 +1413,25 @@ static void phys_write(uint32_t addr, uint32_t data, int size, bool& bus_fault) 
         return;
     }
 
-    // Autoconfig: write to CFG_BASE assigns base address
-    if (acfg.cfg_active(busctl.cfg_en(), addr)) {
+    // Autoconfig: write to CFG_BASE configures the presented device
+    // and advances the chain to the next one
+    if (AcfgSlot* s = acfg.cfg_slot(busctl.cfg_en(), addr)) {
         if (((addr >> 2) & 7) == 7) { // CFG_BASE register
-            acfg.base_addr = data;
-            acfg.configured = true;
+            s->base_addr = data;
+            s->configured = true;
         }
         return;
     }
 
     // SPI at dynamic base
-    if (acfg.dev_sel(addr)) {
+    if (acfg.slot[ACFG_SLOT_SPI].dev_sel(addr)) {
         spi_write((addr >> 2) & 7, data);
+        return;
+    }
+
+    // USB host controller at dynamic base
+    if (acfg.slot[ACFG_SLOT_USB].dev_sel(addr)) {
+        usb_write(addr & 0x7F, data);
         return;
     }
 
@@ -1237,8 +1517,9 @@ static void sysreg_write(int dev, int reg, uint32_t val) {
     case SYSDEV_BUS:
         if (reg == 0) {
             busctl.reg = val;
+            // Bus RST unconfigures the chain and resets the SPI; the
+            // USBHC core sees only power-on reset (the machine wiring).
             if (busctl.rst()) { acfg.reset(); spi.reset(); }
-            if (!busctl.cfg_en()) acfg.cfg_seen_low = true;
         }
         break;
     case SYSDEV_TIMER:
@@ -1634,8 +1915,9 @@ static bool writes_r15_gpr_dst(uint32_t insn) {
 }
 
 static void execute_one() {
-    // Step timer (one instruction = one prescaler step)
+    // Step timer and USB frame clock (one instruction = one prescaler step)
     timer.step();
+    usb_step();
 
     // Check for pending interrupts before fetching.
     // Timer has priority over external (UART) IRQ.
@@ -1644,11 +1926,11 @@ static void execute_one() {
             exception_entry(VEC_TIMER);
             return;
         }
-        // External IRQ: shared wired-OR of UART + SPI
+        // External IRQ: shared wired-OR of UART + SPI + USBHC
         bool spi_irq = (spi.xfer_done && (spi.irq_enable & 1))
                      || (spi.rx_thresh() && (spi.irq_enable & 2))
                      || (spi.tx_thresh() && (spi.irq_enable & 4));
-        if (uart.irq() || spi_irq) {
+        if (uart.irq() || spi_irq || usb.irq()) {
             exception_entry(VEC_EXT_IRQ);
             return;
         }
@@ -2209,6 +2491,11 @@ static void cpu_reset() {
     timer.reset();
     busctl.reg = 0;
     acfg.reset();
+    usb.reset();
+    // An enumerable full-speed device sits attached from power-on,
+    // exactly as the RTL program runner presents it.
+    usb.dev_attached = true;
+    usb.dev.enumerate = true;
     memset(&mmu, 0, sizeof(mmu));
     memset(&tlb, 0, sizeof(tlb));
 }
