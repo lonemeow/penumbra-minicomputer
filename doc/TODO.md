@@ -3787,14 +3787,14 @@ Implementation work, by layer:
   software onto the autoconfig path exposed a pre-existing config-space
   write-stall fault the ROM's probe handler had been swallowing
   (`aa65aff`).
-- **ISS: model `CLASS_USBHC` at register level.** Driver bring-up (the
-  NetBSD HCD, the ROM keyboard reader) needs the fast simulator — the RTL
-  sim is far too slow for that iteration loop. Add the register contract
-  (autoconfig + TOKEN/XFER/PORT/FRAME/DATA) to `sw/sim/penumbra_iss.cpp`
-  with a behavioral device behind it; transaction-level only, no
-  SIE/timing model. The byte-level device responder from the MAC test
-  (`UsbDeviceSim`) should back both sims, including the
-  keyboard-input-not-on-stdin constraint.
+- Done: **ISS `CLASS_USBHC` at register level** — the register contract
+  (autoconfig + TOKEN/XFER/PORT/FRAME/DATA) in `sw/sim/penumbra_iss.cpp`
+  behind a two-slot autoconfig chain, transaction-level only (no
+  SIE/timing model), with the shared `UsbDeviceSim` enumerating behind
+  it; `test_usbhc_enum` runs under `make test-iss` (`140db78`). Driver
+  bring-up (the NetBSD HCD, a ROM keyboard reader) iterates on the fast
+  simulator now. The keyboard-input-not-on-stdin constraint applies when
+  the HID personality lands.
 
 ### Kernel
 - `CLASS_USBHC` host-controller driver (`usbd_bus_methods` /
