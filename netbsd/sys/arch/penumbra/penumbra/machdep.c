@@ -107,6 +107,14 @@ cpu_startup(void)
 	format_bytes(pbuf, sizeof(pbuf), ptoa(uvm_availmem(false)));
 	printf("avail memory = %s\n", pbuf);
 
+	/* The submap for physio's transient user-buffer mappings. */
+	{
+		vaddr_t minaddr = 0, maxaddr;
+
+		phys_map = uvm_km_suballoc(kernel_map, &minaddr, &maxaddr,
+		    VM_PHYS_SIZE, 0, false, NULL);
+	}
+
 #if NKSYMS || defined(DDB) || defined(MODULAR)
 	{
 		struct btinfo_symtab *bi_sym;
@@ -771,19 +779,64 @@ cpu_coredump(struct lwp *l, struct coredump_iostate *iocookie,
 }
 
 /*
- * Physio buffer mapping — stubs.
+ * Physio buffer mapping: double-map a raw-device transfer's user
+ * buffer into kernel VA (phys_map) so the driver reaches it from
+ * kernel context.  physio has wired the user pages (uvm_vslock)
+ * before this runs, so extraction cannot fail and the pages stay
+ * put for the I/O's lifetime.  Both cache generations index within
+ * the page, so the alias the second mapping creates is invisible
+ * to the cache and needs no color matching.
  */
 int
 vmapbuf(struct buf *bp, vsize_t len)
 {
-	/* TODO(stub) */ __asm volatile("break");
+	struct pmap *upmap;
+	vaddr_t uva, kva;
+	vsize_t off;
+	paddr_t pa;
+
+	if ((bp->b_flags & B_PHYS) == 0)
+		panic("vmapbuf");
+
+	uva = trunc_page((vaddr_t)bp->b_data);
+	off = (vaddr_t)bp->b_data - uva;
+	len = round_page(off + len);
+
+	kva = uvm_km_alloc(phys_map, len, 0,
+	    UVM_KMF_VAONLY | UVM_KMF_WAITVA);
+	bp->b_saveaddr = bp->b_data;
+	bp->b_data = (void *)(kva + off);
+
+	upmap = vm_map_pmap(&bp->b_proc->p_vmspace->vm_map);
+	do {
+		if (pmap_extract(upmap, uva, &pa) == false)
+			panic("vmapbuf: null page frame");
+		pmap_kenter_pa(kva, pa, VM_PROT_READ | VM_PROT_WRITE,
+		    PMAP_WIRED);
+		uva += PAGE_SIZE;
+		kva += PAGE_SIZE;
+		len -= PAGE_SIZE;
+	} while (len);
+	pmap_update(pmap_kernel());
+
 	return 0;
 }
 
 void
 vunmapbuf(struct buf *bp, vsize_t len)
 {
-	/* TODO(stub) */ __asm volatile("break");
+	vaddr_t kva;
+
+	if ((bp->b_flags & B_PHYS) == 0)
+		panic("vunmapbuf");
+
+	kva = trunc_page((vaddr_t)bp->b_data);
+	len = round_page((vaddr_t)bp->b_data - kva + len);
+	pmap_kremove(kva, len);
+	pmap_update(pmap_kernel());
+	uvm_km_free(phys_map, kva, len, UVM_KMF_VAONLY);
+	bp->b_data = bp->b_saveaddr;
+	bp->b_saveaddr = NULL;
 }
 
 /*

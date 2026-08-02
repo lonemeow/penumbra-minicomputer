@@ -60,6 +60,13 @@
 #define VM_MAX_KERNEL_ADDRESS	((vaddr_t) 0xFFFFA000)
 
 /*
+ * Kernel VA reserved for physio's transient user-buffer mappings
+ * (the phys_map submap backing vmapbuf).  Bounds how much KVA
+ * concurrent raw-device I/O can hold at once.
+ */
+#define VM_PHYS_SIZE		(1024 * 1024)
+
+/*
  * User stack starts at 64 MB — keeps text, heap, and stack
  * within a compact VA range for TLB efficiency.
  */

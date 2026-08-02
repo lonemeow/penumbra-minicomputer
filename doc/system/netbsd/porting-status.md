@@ -171,7 +171,6 @@ Kernel functions that will panic if reached (grep `TODO(stub)`):
 
 - `process_read_regs`, `process_write_regs`, `process_set_pc`
 - `cpu_coredump`
-- `vmapbuf` / `vunmapbuf`
 
 ## Userland
 
