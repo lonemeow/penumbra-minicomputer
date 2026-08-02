@@ -7,12 +7,14 @@
 // receive window — belongs to the harness that owns the seam; this class
 // is pure protocol.
 //
-// This is the seed of the shared USB device model: the MAC testbench
-// drives it against the RTL seam today, and the machine_sim PHY model and
-// the ISS's register-level USBHC are meant to reuse it, layering real
-// device classes (the HID boot keyboard) on the same packet interface.
-// Any interactive input it ever takes must not come from terminal stdin —
-// the UART console owns stdin; a keyboard front-end needs its own channel.
+// This is the shared USB device model: the MAC testbench drives it
+// against the RTL seam, and the machine_sim PHY model and the ISS's
+// register-level USBHC reuse it.  UsbDeviceSim is the wire layer only;
+// device-class behavior plugs in behind the UsbFunctionSim seam below
+// (usb_msc_sim.h is the mass-storage disk; the HID boot keyboard is
+// the next function).  Any interactive input a function ever takes
+// must not come from terminal stdin — the UART console owns stdin; a
+// keyboard front-end needs its own channel.
 //
 // Deliberately free of any Verilated or terminal dependency.
 
@@ -22,6 +24,50 @@
 #include <algorithm>
 #include <cstdint>
 #include <vector>
+
+// The seam between the USB wire layer (UsbDeviceSim) and a device
+// function — the class-specific personality behind the endpoints.
+// The wire layer owns packets, CRCs, the control-endpoint machine,
+// endpoint addressing, data toggles, transfer chunking, and endpoint
+// halt state; a function owns its configuration descriptor, its
+// class/vendor control requests, and transfer-level bulk behavior.
+// Parallel functions (a mass-storage disk, a HID keyboard) plug into
+// the same layer.
+class UsbFunctionSim {
+public:
+    virtual ~UsbFunctionSim() {}
+
+    // The configuration blob this function's device presents.
+    virtual const std::vector<uint8_t>& config_descriptor() const = 0;
+
+    // A class or vendor SETUP; req is the 8-byte setup packet.  Fill
+    // data_in for a device-to-host data stage (the layer bounds it by
+    // wLength); return false to STALL the request.
+    virtual bool control_request(const uint8_t* req,
+                                 std::vector<uint8_t>& data_in) = 0;
+
+    // One toggle-verified payload packet from the bulk-out endpoint.
+    virtual void bulk_out(const std::vector<uint8_t>& payload) = 0;
+
+    // The layer pulls the next bulk-in transfer when the endpoint is
+    // idle: IN_NONE has the host retry later (NAK), IN_HALT stalls
+    // the endpoint until the host clears the halt, IN_DATA opens the
+    // transfer walk.  short_end marks a transfer that must read short
+    // to the host; the layer supplies the zero-length terminator when
+    // such a transfer ends on a packet boundary.
+    enum InResult { IN_NONE, IN_DATA, IN_HALT };
+    struct InTransfer {
+        std::vector<uint8_t> data;
+        bool short_end = false;
+    };
+    virtual InResult bulk_in(InTransfer& xfer) = 0;
+
+    // The host took the last chunk of the open bulk-in transfer.
+    virtual void bulk_in_done() = 0;
+
+    // A configuration event: endpoints reset, transport state clears.
+    virtual void configured() {}
+};
 
 class UsbDeviceSim {
 public:
@@ -47,15 +93,20 @@ public:
     static const uint8_t RT_RECIP_MASK      = 0x1F;
     static const uint8_t RT_RECIP_DEVICE    = 0x00;
     static const uint8_t RT_RECIP_INTERFACE = 0x01;
+    static const uint8_t RT_RECIP_ENDPOINT  = 0x02;
 
     // Standard bRequest codes and descriptor types (the subset a boot
     // enumeration touches).
+    static const uint8_t REQ_CLEAR_FEATURE     = 1;
     static const uint8_t REQ_SET_ADDRESS       = 5;
     static const uint8_t REQ_GET_DESCRIPTOR    = 6;
     static const uint8_t REQ_SET_CONFIGURATION = 9;
+    static const uint8_t FEAT_ENDPOINT_HALT    = 0;
     static const uint8_t DESC_DEVICE           = 1;
     static const uint8_t DESC_CONFIGURATION    = 2;
     static const uint8_t DESC_STRING           = 3;
+    static const uint8_t DESC_INTERFACE        = 4;
+    static const uint8_t DESC_ENDPOINT         = 5;
 
     // Scripted response policy, set per test scenario. A real device
     // class would replace this with protocol state (this is where the
@@ -107,6 +158,7 @@ public:
         return d;
     }
 
+
     // String descriptors: index 0 is the LANGID table (en-US); 1 and 2
     // are the manufacturer/product indices the device descriptor
     // carries. The product string is deliberately 16 bytes — an exact
@@ -137,6 +189,20 @@ public:
     // control data stage is chunked and terminated against this size.
     static const size_t EP0_MAX_PKT = 8;
 
+    // ── Device function attachment ───────────────────────────────────
+    //
+    // A UsbFunctionSim behind the seam gives the device its
+    // class-specific behavior: the configuration descriptor, class
+    // control requests, and the bulk endpoints.  Without one the
+    // device is the bare enumerable vendor device.  The bulk endpoint
+    // numbers are a layer convention every function's descriptor must
+    // repeat.
+    static const uint8_t EP_BULK_IN   = 1;     // device-to-host, 0x81
+    static const uint8_t EP_BULK_OUT  = 2;     // host-to-device, 0x02
+    static const size_t  BULK_MAX_PKT = 64;
+
+    void set_function(UsbFunctionSim* f) { function_ = f; }
+
     // Wire log, checked by the harness.
     struct Token { uint8_t pid; uint8_t addr; uint8_t endp; };
     std::vector<Token>    tokens;        // non-SOF tokens seen
@@ -153,6 +219,37 @@ public:
 
     static uint8_t pid_byte(uint8_t pid) {
         return (uint8_t)(((~pid & 0xf) << 4) | (pid & 0xf));
+    }
+
+    // Byte-order accessors for parsing and building wire structures —
+    // USB control fields are little-endian, SCSI command fields are
+    // big-endian, and hand-rolled shifts at every use site invite
+    // off-by-one field offsets.
+    static uint16_t get_le16(const uint8_t* p) {
+        return (uint16_t)(p[0] | (p[1] << 8));
+    }
+    static uint32_t get_le32(const uint8_t* p) {
+        return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+               ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+    }
+    static uint16_t get_be16(const uint8_t* p) {
+        return (uint16_t)((p[0] << 8) | p[1]);
+    }
+    static uint32_t get_be32(const uint8_t* p) {
+        return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+               ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+    }
+    static void put_le32(uint8_t* p, uint32_t v) {
+        p[0] = (uint8_t)v;
+        p[1] = (uint8_t)(v >> 8);
+        p[2] = (uint8_t)(v >> 16);
+        p[3] = (uint8_t)(v >> 24);
+    }
+    static void put_be32(uint8_t* p, uint32_t v) {
+        p[0] = (uint8_t)(v >> 24);
+        p[1] = (uint8_t)(v >> 16);
+        p[2] = (uint8_t)(v >> 8);
+        p[3] = (uint8_t)v;
     }
 
     static uint32_t reflect(uint32_t value, int width) {
@@ -229,8 +326,14 @@ public:
             break;
         case PID_ACK:
             acks_seen++;
-            if (enumerate)
-                ctrl_handle_ack();
+            if (enumerate) {
+                // The ACK belongs to whichever endpoint's data packet
+                // the host just received.
+                if (last_in_ep_ == 0)
+                    ctrl_handle_ack();
+                else if (function_ && last_in_ep_ == EP_BULK_IN)
+                    bulk_handle_ack();
+            }
             break;
         default:
             break;
@@ -302,10 +405,18 @@ private:
             // else on the bus is not for it.
             if ((field & 0x7f) != addr_cur_)
                 return;
+            token_endp_ = (uint8_t)(field >> 7);
             data_stage_expected_ = (pid != PID_IN);
             setup_stage_ = (pid == PID_SETUP);
-            if (pid == PID_IN)
-                ctrl_handle_in();
+            if (pid == PID_IN) {
+                last_in_ep_ = token_endp_;
+                if (token_endp_ == 0)
+                    ctrl_handle_in();
+                else if (function_ && token_endp_ == EP_BULK_IN)
+                    bulk_handle_in();
+                else
+                    respond({ pid_byte(PID_STALL) });
+            }
             return;
         }
 
@@ -345,6 +456,10 @@ private:
         out_payload = payload;
 
         if (enumerate) {
+            if (function_ && token_endp_ == EP_BULK_OUT) {
+                bulk_handle_out(pid, payload);
+                return;
+            }
             if (setup_stage_) {
                 // A SETUP supersedes whatever transfer was open; the
                 // dispatch below decides the new transfer's shape.
@@ -470,8 +585,8 @@ private:
         uint8_t type = req[0] & RT_TYPE_MASK;
         uint8_t recipient = req[0] & RT_RECIP_MASK;
         uint8_t request = req[1];
-        uint16_t wValue = (uint16_t)(req[2] | (req[3] << 8));
-        uint16_t wLength = (uint16_t)(req[6] | (req[7] << 8));
+        uint16_t wValue = get_le16(&req[2]);
+        uint16_t wLength = get_le16(&req[6]);
 
         if (type == RT_TYPE_STANDARD && recipient == RT_RECIP_DEVICE) {
             if (dev_to_host) {
@@ -484,7 +599,10 @@ private:
                         return;
                     }
                     if (desc_type == DESC_CONFIGURATION && desc_index == 0) {
-                        ctrl_start_data_in(config_descriptor(), wLength);
+                        ctrl_start_data_in(function_
+                                               ? function_->config_descriptor()
+                                               : config_descriptor(),
+                                           wLength);
                         return;
                     }
                     if (desc_type == DESC_STRING) {
@@ -508,9 +626,17 @@ private:
                 }
                 case REQ_SET_CONFIGURATION: {
                     // Only configuration 1 exists; selecting it (or
-                    // deconfiguring with 0) is a pure action.
+                    // deconfiguring with 0) is a pure action.  Every
+                    // endpoint restarts at DATA0 and any open bulk
+                    // state is abandoned, per the configuration-event
+                    // semantics.
                     if ((wValue & 0xff) <= 1) {
                         configuration = uint8_t(wValue & 0xff);
+                        bulk_in_toggle_ = bulk_out_toggle_ = false;
+                        bulk_in_halted_ = false;
+                        in_open_ = false;
+                        if (function_)
+                            function_->configured();
                         ctrl_stage_ = CTRL_STATUS_IN;
                         return;
                     }
@@ -520,7 +646,127 @@ private:
             }
         }
 
+        if (type == RT_TYPE_STANDARD && recipient == RT_RECIP_ENDPOINT &&
+            !dev_to_host && request == REQ_CLEAR_FEATURE &&
+            wValue == FEAT_ENDPOINT_HALT) {
+            // Clearing a halt restarts the endpoint at DATA0 and
+            // releases the halt latch; a function whose transfer was
+            // pending behind the halt gets pulled again on the next
+            // IN token.
+            uint8_t ep = req[4] & 0xf;
+            if (ep == EP_BULK_IN) {
+                bulk_in_toggle_ = false;
+                bulk_in_halted_ = false;
+                in_open_ = false;
+            } else if (ep == EP_BULK_OUT) {
+                bulk_out_toggle_ = false;
+            }
+            ctrl_stage_ = CTRL_STATUS_IN;
+            return;
+        }
+
+        if (type != RT_TYPE_STANDARD && function_ != nullptr) {
+            // Class and vendor requests belong to the device function.
+            std::vector<uint8_t> data;
+            if (function_->control_request(req.data(), data)) {
+                if (dev_to_host)
+                    ctrl_start_data_in(data, wLength);
+                else
+                    ctrl_stage_ = CTRL_STATUS_IN;
+                return;
+            }
+        }
+
         ctrl_stage_ = CTRL_STALLED;
+    }
+
+    // ── Bulk endpoints (the device-function seam) ───────────────────
+
+    UsbFunctionSim* function_ = nullptr;
+    uint8_t token_endp_ = 0;        // endpoint of the last token
+    uint8_t last_in_ep_ = 0;        // endpoint whose data awaits ACK
+    bool bulk_in_toggle_ = false;   // next DATAx we send on bulk IN
+    bool bulk_out_toggle_ = false;  // next DATAx we expect on bulk OUT
+    bool bulk_in_halted_ = false;   // STALL every IN until clear-halt
+
+    // The open bulk-in walk: one function transfer, chunked at
+    // BULK_MAX_PKT with alternating toggles, advanced on the host's
+    // ACK exactly like the control data stage.
+    bool in_open_ = false;
+    std::vector<uint8_t> in_data_;
+    size_t in_pos_ = 0;
+    bool in_zlp_ = false;           // owes a zero-length terminator
+
+    // An IN token at the bulk-in endpoint: the next chunk of the open
+    // walk, a freshly pulled transfer, a halt handshake, or NAK when
+    // the function has nothing to send.
+    void bulk_handle_in() {
+        if (bulk_in_halted_) {
+            respond({ pid_byte(PID_STALL) });
+            return;
+        }
+        if (!in_open_) {
+            UsbFunctionSim::InTransfer xfer;
+            switch (function_->bulk_in(xfer)) {
+            case UsbFunctionSim::IN_NONE:
+                respond({ pid_byte(PID_NAK) });
+                return;
+            case UsbFunctionSim::IN_HALT:
+                bulk_in_halted_ = true;
+                respond({ pid_byte(PID_STALL) });
+                return;
+            case UsbFunctionSim::IN_DATA:
+                in_open_ = true;
+                in_data_ = std::move(xfer.data);
+                in_pos_ = 0;
+                // A transfer that must read short but ends on a
+                // packet boundary owes an explicit zero-length end.
+                in_zlp_ = xfer.short_end &&
+                          in_data_.size() % BULK_MAX_PKT == 0;
+                break;
+            }
+        }
+        size_t n = in_data_.size() - in_pos_;
+        if (n > BULK_MAX_PKT)
+            n = BULK_MAX_PKT;
+        std::vector<uint8_t> chunk(in_data_.begin() + (long)in_pos_,
+                                   in_data_.begin() + (long)(in_pos_ + n));
+        respond(data_packet(bulk_in_toggle_ ? PID_DATA1 : PID_DATA0,
+                            chunk));
+    }
+
+    // The host acknowledged our last bulk-in packet: commit the walk.
+    void bulk_handle_ack() {
+        if (!in_open_)
+            return;
+        bulk_in_toggle_ = !bulk_in_toggle_;
+        size_t n = in_data_.size() - in_pos_;
+        if (n > BULK_MAX_PKT)
+            n = BULK_MAX_PKT;
+        in_pos_ += n;
+        if (in_pos_ >= in_data_.size()) {
+            // A full final chunk with a zero-length end owed keeps the
+            // walk open for the empty packet; anything else (a short
+            // chunk, or the acked terminator itself) closes it.
+            if (in_zlp_ && n == BULK_MAX_PKT) {
+                in_zlp_ = false;
+            } else {
+                in_open_ = false;
+                function_->bulk_in_done();
+            }
+        }
+    }
+
+    // Host data at the bulk-out endpoint.  A toggle-mismatched packet
+    // is the host retransmitting after a lost ACK: acknowledge again
+    // and discard.
+    void bulk_handle_out(uint8_t pid, const std::vector<uint8_t>& payload) {
+        bool toggle = (pid == PID_DATA1);
+        if (toggle == bulk_out_toggle_) {
+            bulk_out_toggle_ = !bulk_out_toggle_;
+            function_->bulk_out(payload);
+        }
+        respond({ pid_byte(PID_ACK) });
     }
 };
 

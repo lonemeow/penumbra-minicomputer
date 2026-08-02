@@ -39,6 +39,7 @@
 // Byte-level USB device responder shared with the RTL testbenches —
 // the one device model both simulators enumerate against.
 #include "../../hw/sim/usb_device_sim.h"
+#include "../../hw/sim/usb_msc_sim.h"
 
 // ═══════════════════════════════════════════════════════════════
 // SD Card Emulator (inline — same protocol as hw/sim/sd_card_sim.h
@@ -2582,10 +2583,12 @@ static void print_branch_stats() {
 int main(int argc, char** argv) {
     const char* hex_path = nullptr;
     const char* sd_path = nullptr;
+    const char* usbdisk_path = nullptr;
     const char* trace_path = nullptr;
 
     for (int i = 1; i < argc; i++) {
         if (strncmp(argv[i], "+sdcard=", 8) == 0) sd_path = argv[i] + 8;
+        else if (strncmp(argv[i], "+usbdisk=", 9) == 0) usbdisk_path = argv[i] + 9;
         else if (strncmp(argv[i], "+trace=", 7) == 0) trace_path = argv[i] + 7;
         else if (strncmp(argv[i], "+max-insn=", 10) == 0) max_insns = strtoull(argv[i] + 10, nullptr, 0);
         else if (strcmp(argv[i], "+raw") == 0) full_raw = true;
@@ -2606,7 +2609,7 @@ int main(int argc, char** argv) {
     }
 
     if (!hex_path) {
-        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats]\n");
+        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+usbdisk=path] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats]\n");
         return 1;
     }
 
@@ -2625,6 +2628,12 @@ int main(int argc, char** argv) {
     SdCardSim sd(sd_path);
     sd_card = sd.is_present() ? &sd : nullptr;
     if (sd_card) fprintf(stderr, "[SD] card emulation active\n");
+
+    // The attached USB device becomes a mass-storage disk when an
+    // image backs it; without one it stays the bare enumerable device.
+    static UsbMassStorageSim usb_msc;
+    if (usbdisk_path && usb_msc.attach(usbdisk_path))
+        usb.dev.set_function(&usb_msc);
 
     if (trace_path) {
         trace_fp = fopen(trace_path, "w");
