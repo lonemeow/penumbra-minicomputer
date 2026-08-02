@@ -35,6 +35,11 @@ sdmmc*		at pmci?
 pusbhc0		at pbbus?
 usb*		at pusbhc?
 uhub*		at usb?
+
+# USB mass storage -> SCSI disk
+umass*		at uhub? port ?
+scsibus*	at scsi?
+sd*		at scsibus? target ? lun ?
 ld*		at sdmmc?
 
 # Console

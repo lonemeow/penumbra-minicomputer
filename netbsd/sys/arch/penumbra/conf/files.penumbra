@@ -60,6 +60,9 @@ device	pmci: sdmmcbus
 attach	pmci at pbbus
 file	arch/penumbra/penumbra/pmci.c			pmci
 
+# SCSI midlayer — reached over USB mass storage (umass -> scsibus -> sd)
+include "dev/scsipi/files.scsipi"
+
 # USB host controller (CLASS_USBHC transaction-level minimum)
 include "dev/usb/files.usb"
 device	pusbhc: usbus, usbroothub
