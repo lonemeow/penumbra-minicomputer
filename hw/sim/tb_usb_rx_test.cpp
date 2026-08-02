@@ -46,8 +46,18 @@ static std::vector<int> stuff(const std::vector<int>& bits) {
 // One packet as a per-clock pin waveform: idle J, then the NRZI-encoded
 // SYNC+payload symbols each held one bit period (interior boundaries jittered
 // +/-1 clock when seeded), then a two-bit-time SE0 EOP and a return to idle J.
+// ppm skews the transmitter's bit period relative to the receiver clock —
+// the sustained frequency offset a real device's crystal presents.  Edge
+// positions floor-quantize to the receiver clock grid (the physical
+// sampling effect); unlike the zero-mean jitter, the offset accumulates
+// across the packet and sweeps the edge-vs-sample alignment through every
+// phase.  phase0 sets the sub-clock starting alignment of that sweep.
+// squeeze_at (>= 0) additionally pulls one interior boundary so that one
+// symbol displays only two clocks — the directed worst case of drift
+// walking an edge into the synchronizer's uncertainty window.
 static std::vector<Pin> packet_wave(const std::vector<uint8_t>& payload,
-                                    int speed, int sync_zeros, uint32_t jitter) {
+                                    int speed, int sync_zeros, uint32_t jitter,
+                                    int ppm, double phase0, int squeeze_at) {
     const int div = div_of(speed);
     const Pin J   = (speed == SPEED_LS) ? Pin{0, 1} : Pin{1, 0};
     const Pin K   = (speed == SPEED_LS) ? Pin{1, 0} : Pin{0, 1};
@@ -65,15 +75,24 @@ static std::vector<Pin> packet_wave(const std::vector<uint8_t>& payload,
         symbols.push_back(level ? J : K);
     }
 
-    // Expand to clocks with jittered interior symbol boundaries.
+    // Expand to clocks with jittered interior symbol boundaries; the
+    // ppm skew scales every boundary position so the error compounds.
     int n = (int)symbols.size();
+    double bit_clks = (double)div * (1.0 + (double)ppm * 1e-6);
     std::vector<int> bnd(n + 1);
-    bnd[0] = 0; bnd[n] = n * div;
+    bnd[0] = 0; bnd[n] = (int)(n * bit_clks + phase0);
     uint32_t lcg = jitter;
     for (int i = 1; i < n; i++) {
         int j = 0;
         if (jitter) { lcg = lcg * 1664525u + 1013904223u; j = (int)((lcg >> 30) % 3) - 1; }
-        bnd[i] = i * div + j;
+        bnd[i] = (int)(i * bit_clks + phase0) + j;
+    }
+    // Squeeze by taking clocks from both neighbors, so they stretch to
+    // at most seven clocks — inside the receiver's envelope — while the
+    // squeezed symbol itself drops to two.
+    if (squeeze_at > 0 && squeeze_at < n - 1) {
+        bnd[squeeze_at]     += 2;
+        bnd[squeeze_at + 1] -= 1;
     }
     std::vector<Pin> wave(2 * div, J);  // idle preamble
     for (int i = 0; i < n; i++)
@@ -88,7 +107,8 @@ struct Res { std::vector<uint8_t> bytes; int eop = 0; bool error = false; };
 
 static Res run(Vusb_rx_test* dut, int speed,
                const std::vector<std::vector<uint8_t>>& packets,
-               int sync_zeros, uint32_t jitter) {
+               int sync_zeros, uint32_t jitter, int ppm, double phase0,
+               int squeeze_at) {
     dut->i_rst = 1; dut->i_speed = speed;
     // idle line levels while in reset
     dut->i_dp = (speed == SPEED_LS) ? 0 : 1;
@@ -98,7 +118,8 @@ static Res run(Vusb_rx_test* dut, int speed,
 
     Res r;
     for (const auto& payload : packets) {
-        for (const Pin& p : packet_wave(payload, speed, sync_zeros, jitter)) {
+        for (const Pin& p : packet_wave(payload, speed, sync_zeros, jitter,
+                                        ppm, phase0, squeeze_at)) {
             dut->i_dp = p.dp;
             dut->i_dn = p.dn;
             settle(dut);
@@ -121,6 +142,9 @@ int main() {
         int sync_zeros;
         uint32_t jitter;
         std::vector<std::vector<uint8_t>> packets;
+        int ppm = 0;
+        double phase0 = 0.0;
+        int squeeze_at = -1;
     };
     std::vector<Case> cases = {
         {"FS single byte",     SPEED_FS, 7, 0,          {{0xC3}}},
@@ -136,6 +160,57 @@ int main() {
         {"LS stuff-heavy",     SPEED_LS, 7, 0,          {{0xFF, 0x0F}}},
         {"LS jitter",          SPEED_LS, 7, 0xa11ce5u,  {{0x2D, 0x10}}},
     };
+
+    // Full-length DATA-shaped packets (PID + 64 payload + CRC16 = 67
+    // bytes, ~540 wire bits) under a sustained transmitter-clock
+    // frequency offset with floor-quantized edges.  ±2500 ppm is the
+    // USB full-speed data-rate tolerance; ±5000 probes the margin;
+    // phase0 sweeps the sub-clock alignment the drift walks through.
+    // The all-ones payload maximizes the edge-free run between stuff
+    // bits (7 bit times of phase free-run per re-lock).
+    //
+    // Offset is not combined with the dense per-boundary jitter: the
+    // two stack to ±3 clocks of relative edge displacement, where
+    // one-bit and two-bit gaps alias and no 5x receiver can decode —
+    // beyond both the USB jitter budget and this receiver's contract.
+    {
+        std::vector<uint8_t> data67;
+        uint32_t g = 0xdeadbeefu;
+        for (int i = 0; i < 67; i++) {
+            g = g * 1664525u + 1013904223u;
+            data67.push_back((uint8_t)(g >> 24));
+        }
+        std::vector<uint8_t> ones67(67, 0xFF);
+
+        for (int ppm : {0, 2500, -2500, 5000, -5000}) {
+            for (double p0 : {0.0, 0.4, 0.8}) {
+                char* nm;
+                asprintf(&nm, "FS 67B data %+d ppm p0=%.1f", ppm, p0);
+                cases.push_back({nm, SPEED_FS, 7, 0, {data67}, ppm, p0});
+            }
+        }
+        cases.push_back({"FS 67B ones +2500 ppm", SPEED_FS, 7, 0,
+                         {ones67}, 2500, 0.4});
+        cases.push_back({"FS 67B ones -2500 ppm", SPEED_FS, 7, 0,
+                         {ones67}, -2500, 0.4});
+
+        // Directed squeezed-bit cases: one symbol displayed in only two
+        // clocks, ending before the sample phase can fire — drift plus
+        // an edge displaced by the synchronizer's uncertainty.  The
+        // recover-at-edge strobe is what saves these.
+        cases.push_back({"FS 67B squeeze mid", SPEED_FS, 7, 0,
+                         {data67}, -2500, 0.4, 300});
+        cases.push_back({"FS 67B squeeze early", SPEED_FS, 7, 0,
+                         {data67}, 2500, 0.2, 40});
+        cases.push_back({"FS 67B squeeze in run", SPEED_FS, 7, 0,
+                         {ones67}, -2500, 0.6, 200});
+
+        // Low speed allows ±1.5% (host tolerance); LS packets max out
+        // at 8-byte payloads (11 bytes on the wire).
+        std::vector<uint8_t> ls11(data67.begin(), data67.begin() + 11);
+        cases.push_back({"LS 11B +15000 ppm", SPEED_LS, 7, 0, {ls11}, 15000});
+        cases.push_back({"LS 11B -15000 ppm", SPEED_LS, 7, 0, {ls11}, -15000});
+    }
 
     // Random multi-packet sweeps at full speed.
     uint32_t lcg = 0x5eed0001u;
@@ -163,7 +238,8 @@ int main() {
         for (const auto& p : c.packets)
             expected.insert(expected.end(), p.begin(), p.end());
 
-        Res r = run(dut, c.speed, c.packets, c.sync_zeros, c.jitter);
+        Res r = run(dut, c.speed, c.packets, c.sync_zeros, c.jitter, c.ppm,
+                    c.phase0, c.squeeze_at);
         if (r.bytes == expected && r.eop == (int)c.packets.size() && !r.error) {
             pass++;
         } else {

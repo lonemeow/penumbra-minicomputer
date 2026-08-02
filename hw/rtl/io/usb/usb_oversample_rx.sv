@@ -45,18 +45,25 @@ module usb_oversample_rx (
     assign speed_change = (i_speed != speed_q);
 
     logic [5:0] phase_q, phase_d;   // oversample-clock counter within the bit
+    logic sampled_q;                // a strobe has fired since the last edge
 
     // Single mid-bit sample: the recovered symbol is the line at the strobe
-    // cycle. (A majority-vote upgrade would register a vote here instead.)
-    assign o_line = i_line;
+    // cycle — except on the recover-at-edge strobe below, where the bit
+    // being sampled is the one the edge just ended, whose level is the
+    // pre-edge one. (A majority-vote upgrade would register a vote here.)
+    assign o_line = line_edge ? prev_line_q : i_line;
 
     always_comb begin
-        // Sample once at the bit midpoint. An edge landing on the midpoint means
-        // the loop is momentarily a half-bit out of phase, so the sample would
-        // read a transition and misalign everything after it -- suppress it and
-        // let the re-center below resync. In lock, edges sit at bit boundaries,
-        // never the midpoint, so this suppression never fires there.
-        o_bit_en = (phase_q == sample_phase) && !line_edge;
+        // Sample once at the bit midpoint. An edge landing on the midpoint
+        // is normally a stretched bit's already-sampled tail (the counter
+        // wrapped inside the bit and ran a phantom period), so the
+        // coincident strobe is suppressed. The exception: an edge arriving
+        // while the current bit has never been sampled — a bit squeezed
+        // below the sample phase by clock drift plus edge displacement.
+        // Its level is still on prev_line_q, and this is the last cycle it
+        // can be recovered, so emit it now instead of dropping it.
+        o_bit_en = ((phase_q == sample_phase) && !line_edge) ||
+                   (line_edge && !sampled_q);
 
         // Free-run: advance one oversample clock, wrapping at the end of the bit.
         if (phase_q == div - 6'd1)
@@ -81,10 +88,20 @@ module usb_oversample_rx (
             prev_line_q <= 1'b0;
             phase_q     <= 6'd0;
             speed_q     <= 2'd0;
+            // Start "sampled" so the first edge out of reset or idle
+            // never emits a recovery strobe for a bit that never was;
+            // idle-period strobes then keep it set until a packet runs.
+            sampled_q   <= 1'b1;
         end else begin
             prev_line_q <= i_line;
             phase_q     <= phase_d;
             speed_q     <= i_speed;
+            if (speed_change)
+                sampled_q <= 1'b1;   // re-lock: same idle-safe state as reset
+            else if (line_edge)
+                sampled_q <= 1'b0;
+            else if (o_bit_en)
+                sampled_q <= 1'b1;
         end
     end
 

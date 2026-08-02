@@ -19,9 +19,12 @@
 //     tap is held at idle J while we transmit. The o_line_state sideband
 //     stays on the raw pins — the port controller's debounce is built to
 //     ride through visible traffic.
-//   * Line-state filter — the sideband masks the false SE0 that D+/D-
-//     skew produces at symbol transitions: SE0 must persist before it is
-//     reported, any other state reports immediately.
+//   * Line-state filter — masks the false SE0 that D+/D- skew produces
+//     at symbol transitions: SE0 must persist before it is reported,
+//     any other state reports after one register delay.  Both the
+//     port-controller sideband and the packet receiver's line tap read
+//     the filtered line — an unfiltered receiver would take a skew
+//     glitch for an EOP mid-packet.
 //
 // CRC5/CRC16 are not here — the MAC computes them, because a real
 // ULPI/UTMI PHY does not. This module is FS/LS-only by physics (no HS
@@ -324,8 +327,15 @@ module usb_phy_ecp5 (
     logic squelch;
     logic rx_dp, rx_dn;
     assign squelch = drive_en || o_tx_oe || reset_drive;
-    assign rx_dp   = squelch ? idle_dp : i_dp;
-    assign rx_dn   = squelch ? idle_dn : i_dn;
+    // The receive tap reads the SE0-filtered line, not the raw pins:
+    // D+/D- skew at a symbol transition reads as a false SE0 for a
+    // sample or two, and an unfiltered receiver would take it for an
+    // EOP and truncate the packet.  The filter delays all states one
+    // clock uniformly (harmless to clock recovery) and SE0 by its
+    // persistence window, leaving most of a real EOP's two bit times
+    // still visible.
+    assign rx_dp   = squelch ? idle_dp : line_q[0];
+    assign rx_dn   = squelch ? idle_dn : line_q[1];
 
     logic [1:0] rx_line_state;
     logic       rx_j_level;

@@ -49,6 +49,14 @@ module usb_tx_framing (
     logic [2:0] sync_cnt_q, sync_cnt_d; // SYNC bit index (0..7)
     logic [1:0] eop_cnt_q, eop_cnt_d;   // EOP bit-time index (SE0, SE0, J)
 
+    // The port speed is quasi-static but does change live — the port
+    // controller swaps transceiver codes around connect and reset.  A
+    // change re-locks the pacer so a low-speed count can never run off
+    // a shrunken bit period.
+    logic [1:0] speed_q;
+    logic speed_change;
+    assign speed_change = (i_speed != speed_q);
+
     // Each bit time begins on its first clock; the datapath advances there so
     // the new symbol holds for the whole bit time.
     logic bit_en;
@@ -74,6 +82,8 @@ module usb_tx_framing (
         // The pacer runs while a packet is active.
         if (state_q != S_IDLE)
             phase_d = (phase_q == div - 6'd1) ? 6'd0 : phase_q + 6'd1;
+        if (speed_change)
+            phase_d = 6'd0;
 
         case (state_q)
             S_IDLE: begin
@@ -133,16 +143,21 @@ module usb_tx_framing (
             phase_q    <= 6'd0;
             sync_cnt_q <= 3'd0;
             eop_cnt_q  <= 2'd0;
+            speed_q    <= 2'd0;
         end else begin
             state_q    <= state_d;
             phase_q    <= phase_d;
             sync_cnt_q <= sync_cnt_d;
             eop_cnt_q  <= eop_cnt_d;
+            speed_q    <= i_speed;
         end
     end
 
-    // The pacer never runs past the current bit period.
+    // The pacer never runs past the current bit period, except on the
+    // one cycle a live speed change shrinks the period under it — the
+    // re-lock above clears it on the next clock.
     assert property (@(posedge i_clk) disable iff (i_rst)
-        (phase_q < div))
-        else $error("usb_tx_framing: phase counter exceeded the bit period");
+        (speed_change || phase_q < div))
+        else $error("usb_tx_framing: phase %0d exceeded bit period %0d (speed %0d, state %0d)",
+                    phase_q, div, i_speed, state_q);
 endmodule
