@@ -346,7 +346,10 @@ if [ -x "$MAKEDEV_SCRIPT" ]; then
     MACHINE=penumbra sh "$MAKEDEV_SCRIPT" -s std init 2>/dev/null | \
         grep -v '^[.] ' | sed 's,^\./,./dev/,' >> "$SPECFILE"
 else
-    log "Warning: MAKEDEV not found, no device nodes will be created"
+    # An image without /dev/console cannot boot (init exits 11);
+    # refuse to build one.
+    echo "ERROR: no executable MAKEDEV found ($MAKEDEV_SCRIPT)" >&2
+    exit 1
 fi
 
 # Fixup entries we added (sbin/init symlink, etc/rc, directories)
