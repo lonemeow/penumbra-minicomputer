@@ -73,8 +73,6 @@ copy_loop:
     ; ── The probe: unmap the page these instructions live on ─
     LA   R10, #expect_fault    ; the successor the handler must see fault
 
-    ; TODO(human): invalidate the ROM code page's TLB entry.
-
     WRSYS R12, #MMU, #TLB_INDEX
     WRSYS R5,  #MMU, #TLB_VPN
     WRSYS R0,  #MMU, #TLB_PTE
