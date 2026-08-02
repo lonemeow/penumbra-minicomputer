@@ -3855,9 +3855,16 @@ Work items, in order:
   `REQUEST SENSE`) backed by a host file image, the `+sdcard=`
   pattern. It exercises bulk in both directions with hard data
   integrity (mount a filesystem through it) and needs no host-side
-  network plumbing. The CDC-ECM NIC personality (bridged to a host
-  TAP device) follows once `umass` works — raw packet access is the
-  only part of the network path that is host-environment-dependent.
+  network plumbing. Done: the wire layer grew a device-function
+  seam — `UsbFunctionSim` carries the config descriptor, class
+  control requests, packet-level bulk-out, and pull-model bulk-in,
+  while `UsbDeviceSim` keeps toggles, chunking, ZLP termination,
+  and halt state — and `UsbMassStorageSim`
+  (`hw/sim/usb_msc_sim.h`) implements the transport + SCSI subset
+  over it, attached in the ISS via `+usbdisk=`/`USBDISK=`. The
+  CDC-ECM NIC personality (bridged to a host TAP device) follows —
+  raw packet access is the only part of the network path that is
+  host-environment-dependent.
 - **NetBSD HCD** — the `CLASS_USBHC` driver from the kernel section
   above, iterated on the ISS. Done: the bus-methods layer —
   `usbd_bus_methods`, software root hub under `usbroothub`, port
@@ -3877,8 +3884,11 @@ Work items, in order:
   stages through the controller's DATA buffer). `uhub0` now
   enumerates the sim device end to end — descriptors, SET_ADDRESS,
   strings — to a clean "not configured" report on the ISS.
-  Remaining: kernel config gains `umass`+`scsibus`+`sd` first,
-  `cdce` + `netinet` pieces after.
+  Done: the kernel config attaches `umass`+`scsibus`+`sd`
+  (`files.scsipi` include, `sd` device majors); an FFS filesystem
+  on the simulated USB disk mounts and round-trips file data on
+  the ISS — bulk verified in both directions with hard integrity.
+  Remaining: `cdce` + `netinet` pieces.
 - **Hardware: US2 wiring** (tracked in the console section above)
   moves up — it is now the path to the first real packet, ahead of
   any keyboard use. US2's micro-B socket takes an OTG-style adapter

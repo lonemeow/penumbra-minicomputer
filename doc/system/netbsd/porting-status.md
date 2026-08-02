@@ -114,8 +114,10 @@ bootinfo — `boot sd:0,0` reaches single-user with no prompts.
   `bInterval` via gated SOF interrupts, control/bulk retry
   round-robin.  `uhub0` explores the port and enumerates an
   attached device end to end (verified against the ISS device
-  model).  No class drivers in the config yet — `umass` +
-  `scsibus` + `sd` are next, then `cdce`.
+  model).  `umass` + `scsibus` + `sd` attach the simulated USB
+  mass-storage disk; an FFS filesystem mounts through it and
+  round-trips file data (ISS-verified).  `cdce` networking is
+  next.
 
 - **Exec / return-to-user:** `setregs()` initializes user
   trapframe.  `trap_return` handles SP banking (USP save/restore)
@@ -197,7 +199,8 @@ Kernel functions that will panic if reached (grep `TODO(stub)`):
 
 Built at `-O2` with DIAGNOSTIC (NetBSD's stock kernel default).  FFS + MSDOSFS file systems,
 minimal INET networking, com(4) UART, pmci + MI sdmmc (ld0),
-pusbhc + MI USB stack (usb/uhub), loop/pty/ksyms pseudo-devices.
+pusbhc + MI USB stack (usb/uhub/umass/scsibus/sd),
+loop/pty/ksyms pseudo-devices.
 
 ## SD Image + Boot
 
