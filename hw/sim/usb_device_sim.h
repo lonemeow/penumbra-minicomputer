@@ -203,6 +203,25 @@ public:
 
     void set_function(UsbFunctionSim* f) { function_ = f; }
 
+    // A bus reset — or a fresh plug-in — returns the device to its
+    // power-on protocol state: default address, deconfigured, control
+    // machine idle, endpoint state cleared, function transport reset.
+    void bus_reset() {
+        addr_cur_ = 0;
+        addr_pending_ = 0;
+        addr_apply_ = false;
+        configuration = 0;
+        ctrl_stage_ = CTRL_IDLE;
+        data_stage_expected_ = false;
+        setup_stage_ = false;
+        response_pending_ = false;
+        bulk_in_toggle_ = bulk_out_toggle_ = false;
+        bulk_in_halted_ = false;
+        in_open_ = false;
+        if (function_)
+            function_->configured();
+    }
+
     // Wire log, checked by the harness.
     struct Token { uint8_t pid; uint8_t addr; uint8_t endp; };
     std::vector<Token>    tokens;        // non-SOF tokens seen

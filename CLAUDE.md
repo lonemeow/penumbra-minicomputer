@@ -106,8 +106,10 @@ Examples: `llvm: fix PIC TLS GD materialization`,
 
 ### Simulation and tests
 - `make simulate` — boot ROM + ISS, interactive (fast, no Docker).
-  Options: `LLVM_PREFIX=`, `SDCARD=disk.img`, `USBDISK=disk.img`
-  (attach a USB mass-storage device), `TRACE=trace.log`,
+  Options: `LLVM_PREFIX=`, `SDCARD=disk.img`,
+  `USBDEV=<type>:<config>` (attach a simulated USB device, e.g.
+  `USBDEV=disk:disk.img`; hot-plug at runtime with `Ctrl-A U` under
+  `RAW=1`), `TRACE=trace.log`,
   `RAW=1` (passes Ctrl-C etc. to guest; Ctrl-A is escape prefix —
   `Ctrl-A X` exit, `Ctrl-A C` CPU state, `Ctrl-A H` help).
   ROM monitor accepts `break` (or `b`) to halt cleanly.
@@ -232,7 +234,7 @@ rom.ld ──────────────────┘
 - **ISS** (`sw/sim/penumbra_iss.cpp`) — fast instruction-level
   simulator, single C++ file. Covers full ISA + 8 exceptions +
   software-managed TLB + UART + SPI/SD + bus autoconfig. Run:
-  `sw/sim/penumbra-iss program.hex [+sdcard=img] [+usbdisk=img]
+  `sw/sim/penumbra-iss program.hex [+sdcard=img] [+usbdev=disk:img]
   [+trace=log] [+raw] [+trap-pc0]`. `+trap-pc0` aborts on PC=0 fetch (catches null-pointer
   jumps; off by default because some OS tests probe address 0).
 - **LLVM toolchain** (`build/llvm/bin/`) — clang, llvm-mc, ld.lld,

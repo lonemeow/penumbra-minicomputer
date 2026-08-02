@@ -3861,7 +3861,10 @@ Work items, in order:
   while `UsbDeviceSim` keeps toggles, chunking, ZLP termination,
   and halt state — and `UsbMassStorageSim`
   (`hw/sim/usb_msc_sim.h`) implements the transport + SCSI subset
-  over it, attached in the ISS via `+usbdisk=`/`USBDISK=`. The
+  over it, attached in the ISS via `+usbdev=disk:<img>`/`USBDEV=` — the
+  generic device-spec argument personalities share — and
+  hot-pluggable at runtime with `Ctrl-A U` (kernel detach and
+  re-enumeration verified). The
   CDC-ECM NIC personality (bridged to a host TAP device) follows —
   raw packet access is the only part of the network path that is
   host-environment-dependent.

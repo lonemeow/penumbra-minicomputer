@@ -23,6 +23,7 @@
 //   Ctrl-A X     — exit simulator
 //   Ctrl-A C     — dump CPU state
 //   Ctrl-A B     — send serial BREAK (triggers DDB if enabled)
+//   Ctrl-A U     — toggle USB device attach (hotplug)
 //   Ctrl-A H     — help
 //   Ctrl-A Ctrl-A — send literal Ctrl-A
 
@@ -1164,6 +1165,14 @@ static std::vector<uint8_t> usb_token_bytes(uint8_t pid, uint16_t field) {
 // the data stage where the direction has one, and the handshake —
 // classified into XFER_STATUS exactly as usbhc_txn does.
 static void usb_run_txn() {
+    // No device on the port: nothing answers, every transaction ends
+    // in the turnaround timeout.
+    if (!usb.dev_attached) {
+        usb.result = USB_RES_TIMEOUT;
+        usb.irq_status |= USB_IRQ_XFER;
+        return;
+    }
+
     int pid_sel = usb.token & 3;
     uint32_t devaddr  = (usb.token >> 4) & 0x7F;
     uint32_t endpoint = (usb.token >> 11) & 0xF;
@@ -1258,10 +1267,14 @@ static void usb_port_ctrl_write(uint32_t val) {
         usb.connect = true;
         usb.irq_status |= USB_IRQ_PORT;
     }
-    // Reset drive disables the port; the completed reset (drive
-    // released) enables a connected port and marks the change.
-    if (usb.reset_active())
+    // Reset drive disables the port and returns the device to its
+    // power-on protocol state; the completed reset (drive released)
+    // enables a connected port and marks the change.
+    if (usb.reset_active()) {
         usb.enabled = false;
+        if (!was_reset && usb.connect)
+            usb.dev.bus_reset();
+    }
     if (was_reset && !usb.reset_active() && usb.connect) {
         usb.enabled = true;
         usb.irq_status |= USB_IRQ_PORT;
@@ -2421,6 +2434,7 @@ static void print_cmd_help() {
     fprintf(stderr, "Ctrl-A X: Exit simulator\r\n");
     fprintf(stderr, "Ctrl-A C: Dump CPU state\r\n");
     fprintf(stderr, "Ctrl-A B: Send serial BREAK (triggers DDB)\r\n");
+    fprintf(stderr, "Ctrl-A U: Toggle USB device attach (hotplug)\r\n");
     fprintf(stderr, "\r\n");
 }
 
@@ -2451,6 +2465,28 @@ static bool handle_escape(char c) {
             uart.rbr = 0x00;
             uart.rx_ready = true;
             uart.rx_break = true;
+            break;
+        case 'u':
+        case 'U':
+            /*
+             * Toggle the USB device's plug state — hotplug.  Unplug
+             * drops CONNECT/ENABLED and raises PORT_CHANGE like a
+             * real cable pull; replug re-qualifies the connect on a
+             * powered port and the device re-enumerates from its
+             * power-on state.
+             */
+            usb.dev_attached = !usb.dev_attached;
+            if (!usb.dev_attached && usb.connect) {
+                usb.connect = false;
+                usb.enabled = false;
+                usb.irq_status |= USB_IRQ_PORT;
+            } else if (usb.dev_attached && usb.power()) {
+                usb.dev.bus_reset();   // a freshly plugged device
+                usb.connect = true;
+                usb.irq_status |= USB_IRQ_PORT;
+            }
+            fprintf(stderr, "\r\n[USB] device %s\r\n",
+                    usb.dev_attached ? "attached" : "detached");
             break;
     }
     return true;
@@ -2583,12 +2619,12 @@ static void print_branch_stats() {
 int main(int argc, char** argv) {
     const char* hex_path = nullptr;
     const char* sd_path = nullptr;
-    const char* usbdisk_path = nullptr;
+    const char* usbdev_spec = nullptr;
     const char* trace_path = nullptr;
 
     for (int i = 1; i < argc; i++) {
         if (strncmp(argv[i], "+sdcard=", 8) == 0) sd_path = argv[i] + 8;
-        else if (strncmp(argv[i], "+usbdisk=", 9) == 0) usbdisk_path = argv[i] + 9;
+        else if (strncmp(argv[i], "+usbdev=", 8) == 0) usbdev_spec = argv[i] + 8;
         else if (strncmp(argv[i], "+trace=", 7) == 0) trace_path = argv[i] + 7;
         else if (strncmp(argv[i], "+max-insn=", 10) == 0) max_insns = strtoull(argv[i] + 10, nullptr, 0);
         else if (strcmp(argv[i], "+raw") == 0) full_raw = true;
@@ -2609,7 +2645,7 @@ int main(int argc, char** argv) {
     }
 
     if (!hex_path) {
-        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+usbdisk=path] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats]\n");
+        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+usbdev=type:config] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats]\n");
         return 1;
     }
 
@@ -2629,11 +2665,21 @@ int main(int argc, char** argv) {
     sd_card = sd.is_present() ? &sd : nullptr;
     if (sd_card) fprintf(stderr, "[SD] card emulation active\n");
 
-    // The attached USB device becomes a mass-storage disk when an
-    // image backs it; without one it stays the bare enumerable device.
+    // The attached USB device's personality: "+usbdev=<type>:<config>"
+    // selects a device function; without one the port carries the bare
+    // enumerable device.  One port, one device.
     static UsbMassStorageSim usb_msc;
-    if (usbdisk_path && usb_msc.attach(usbdisk_path))
-        usb.dev.set_function(&usb_msc);
+    if (usbdev_spec) {
+        if (strncmp(usbdev_spec, "disk:", 5) == 0) {
+            if (!usb_msc.attach(usbdev_spec + 5)) return 1;
+            usb.dev.set_function(&usb_msc);
+        } else {
+            fprintf(stderr,
+                "unknown +usbdev type '%s' (available: disk:<image>)\n",
+                usbdev_spec);
+            return 1;
+        }
+    }
 
     if (trace_path) {
         trace_fp = fopen(trace_path, "w");

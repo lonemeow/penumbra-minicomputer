@@ -504,7 +504,7 @@ ISS = sw/sim/penumbra-iss
 .PHONY: simulate
 simulate: $(ISS)
 	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX) CFLAGS=$(CFLAGS)
-	@$(ISS) program.hex $(if $(SDCARD),+sdcard=$(SDCARD)) $(if $(USBDISK),+usbdisk=$(USBDISK)) $(if $(TRACE),+trace=$(TRACE)) $(if $(TRACE_WINDOW),+trace_window=$(TRACE_WINDOW)) $(if $(HALT_ON),'+halt_on=$(HALT_ON)') $(if $(RAW),+raw)
+	@$(ISS) program.hex $(if $(SDCARD),+sdcard=$(SDCARD)) $(if $(USBDEV),+usbdev=$(USBDEV)) $(if $(TRACE),+trace=$(TRACE)) $(if $(TRACE_WINDOW),+trace_window=$(TRACE_WINDOW)) $(if $(HALT_ON),'+halt_on=$(HALT_ON)') $(if $(RAW),+raw)
 
 $(ISS): sw/sim/penumbra_iss.cpp hw/sim/usb_device_sim.h hw/sim/usb_msc_sim.h
 	@$(MAKE) -C sw/sim
