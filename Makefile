@@ -739,9 +739,11 @@ SRC_COMMON = hw/rtl/common/penumbra_pkg.sv \
              $(filter-out %/penumbra_pkg.sv, $(wildcard hw/rtl/common/*.sv))
 
 SRC_FABRIC = hw/rtl/io/sdram/sdram_pkg.sv \
+             hw/rtl/io/usb/usb_pkg.sv \
              $(wildcard hw/rtl/soc/*.sv) \
              $(wildcard hw/rtl/io/*.sv) \
-             $(filter-out %/sdram_pkg.sv, $(wildcard hw/rtl/io/sdram/*.sv))
+             $(filter-out %/sdram_pkg.sv, $(wildcard hw/rtl/io/sdram/*.sv)) \
+             $(filter-out %/usb_pkg.sv, $(wildcard hw/rtl/io/usb/*.sv))
 
 SRC_CORE_penumbra1 = $(wildcard hw/rtl/penumbra1/*.sv)
 SRC_CORE_penumbra2 = hw/rtl/penumbra2/penumbra2_pkg.sv \

@@ -124,4 +124,16 @@ package ecp5_pll_pkg;
         return r;
     endfunction
 
+    // Divider for an auxiliary CLKOS3 output off the already-chosen
+    // VCO (e.g. the USB host's 60 MHz).  Exact-only, like every output
+    // this package computes: 0 means the VCO cannot serve the target,
+    // and the caller must treat that as a hard error rather than run
+    // the output detuned.
+    function automatic int ecp5_pll_aux_div(longint vco_hz, longint aux_hz);
+        if (aux_hz <= 0 || (vco_hz % aux_hz) != 0 ||
+            (vco_hz / aux_hz) > DIV_MAX)
+            return 0;
+        return int'(vco_hz / aux_hz);
+    endfunction
+
 endpackage
