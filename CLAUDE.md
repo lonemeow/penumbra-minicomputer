@@ -204,8 +204,12 @@ Regenerate CHECK lines with `update_llc_test_checks.py` (full command
 in the LLVM subtree CLAUDE.md).
 
 ### NetBSD kernel and SD images
-- Kernel build: `build.sh kernel=MINIMAL` from `netbsd/`; output lands
-  at `build/netbsd-obj/sys/arch/penumbra/compile/MINIMAL/netbsd`. Full
+- Kernel build: `build.sh kernel=GENERIC.DEBUG` from `netbsd/` (the
+  dev default — consistency checks on; `GENERIC` for demo/perf images,
+  `MINIMAL` for the smallest bootable config); output lands at
+  `build/netbsd-obj/sys/arch/penumbra/compile/<config>/netbsd`, and
+  the image targets pick the config via `KERNCONF=` (default
+  `GENERIC.DEBUG`). Full
   sequence in `DEVELOP.md` § 7.
 - SD images: `make sdimage` (boot only), `make sdimage-rootfs`
   (boot + full FFS distribution). Boot-only images need a kernel at

@@ -28,7 +28,7 @@ pages — same shape as MIPS o32 in little-endian mode, so
 ```
 sys/arch/penumbra/
 ├── include/           # <machine/*.h> headers (~51 files)
-├── conf/              # Kernel config: std, MINIMAL, Makefile, files, majors, ldscript
+├── conf/              # Kernel config: std, GENERIC(.DEBUG), MINIMAL, files, majors, ldscript
 ├── penumbra/          # MD kernel code: locore, machdep, pmap, trap, autoconf, ...
 └── stand/
     ├── boot/          # Bootloader (PENBOOT.ELF) — PIE, CRT self-relocator
@@ -57,11 +57,11 @@ cd netbsd
 MAKECONF=${PWD}/../minimal-mk.conf ./build.sh -j10 -U -m penumbra \
   -O ../build/netbsd-obj -T ../build/netbsd-tools -D ../build/netbsd-dest \
   -V EXTERNAL_TOOLCHAIN=$PWD/../build/llvm \
-  kernel=MINIMAL
+  kernel=GENERIC.DEBUG
 cd ..
 ```
 
-Kernel lands at `build/netbsd-obj/sys/arch/penumbra/compile/MINIMAL/netbsd`
+Kernel lands at `build/netbsd-obj/sys/arch/penumbra/compile/GENERIC.DEBUG/netbsd`
 (the path is structural — `build.sh` derives it from `KERNOBJDIR` and
 mirrors the `sys/arch/penumbra/compile/` source tree under `-O`).
 
@@ -136,7 +136,9 @@ Three categories of headers:
 | File | Purpose |
 |------|---------|
 | `std.penumbra` | Machine identity, standard options (EXEC_ELF32, DEFTEXTADDR) |
-| `MINIMAL` | Bare-minimum kernel config for build testing |
+| `GENERIC` | Full device set, consistency checks off (demo/perf) |
+| `GENERIC.DEBUG` | GENERIC + DIAGNOSTIC — the development default |
+| `MINIMAL` | Smallest bootable config; fast smoke builds, documents the floor |
 | `Makefile.penumbra` | MD build rules (compiler flags, link, genassym) |
 | `files.penumbra` | MD source files and device declarations |
 | `majors.penumbra` | Device major numbers |

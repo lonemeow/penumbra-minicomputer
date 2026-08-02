@@ -1,7 +1,9 @@
 #	$NetBSD$
 #
-# MINIMAL -- bare-minimum Penumbra kernel config for initial build testing.
-# Not expected to produce a bootable kernel yet.
+# MINIMAL -- the smallest bootable Penumbra kernel: serial console,
+# SD block device, FFS root.  Documents the port's true floor and
+# builds fast, which makes it the smoke-test config for MD changes.
+# For a usable machine, build GENERIC (or GENERIC.DEBUG).
 #
 
 include		"arch/penumbra/conf/std.penumbra"
@@ -14,11 +16,10 @@ options		DDB_HISTORY_SIZE=512
 options		DIAGNOSTIC		# enable KASSERT checks
 options		PMAP_STEAL_MEMORY	# early boot page allocation
 
-# File systems (minimal set)
+# File systems
 file-system	FFS			# Berkeley Fast File System
-file-system	MSDOSFS			# MS-DOS FAT file system
 
-# Networking (minimal)
+# Networking (loop requires it)
 options		INET			# IP
 
 # System bus
@@ -30,16 +31,6 @@ com0		at pbbus?
 # SD/MMC host (pmci) -> MI sdmmc -> ld block device.
 pmci0		at pbbus?
 sdmmc*		at pmci?
-
-# USB host controller -> MI USB stack root
-pusbhc0		at pbbus?
-usb*		at pusbhc?
-uhub*		at usb?
-
-# USB mass storage -> SCSI disk
-umass*		at uhub? port ?
-scsibus*	at scsi?
-sd*		at scsibus? target ? lun ?
 ld*		at sdmmc?
 
 # Console

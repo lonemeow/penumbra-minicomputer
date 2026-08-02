@@ -1,0 +1,12 @@
+#	$NetBSD$
+#
+# GENERIC.DEBUG -- GENERIC with kernel consistency checks enabled.
+# The development default: build and run this one unless measuring
+# performance or exhibiting the machine.
+#
+
+include		"arch/penumbra/conf/GENERIC"
+
+options		DIAGNOSTIC		# kernel consistency checks (KASSERT)
+#options 	DEBUG			# extra kernel debugging support
+#options 	LOCKDEBUG		# lock correctness checking

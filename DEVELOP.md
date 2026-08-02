@@ -254,11 +254,20 @@ cd netbsd
 MAKECONF=${PWD}/../minimal-mk.conf ./build.sh -j10 -U -m penumbra \
   -O ../build/netbsd-obj -T ../build/netbsd-tools -D ../build/netbsd-dest \
   -V EXTERNAL_TOOLCHAIN=$PWD/../build/llvm \
-  kernel=MINIMAL
+  kernel=GENERIC.DEBUG
 cd ..
 ```
 
-Output: `build/netbsd-obj/sys/arch/penumbra/compile/MINIMAL/netbsd`. `build.sh kernel=...` runs `nbconfig` + `make depend` + `make` itself; `-U` (MKUPDATE) keeps subsequent runs incremental.
+Output: `build/netbsd-obj/sys/arch/penumbra/compile/GENERIC.DEBUG/netbsd`. `build.sh kernel=...` runs `nbconfig` + `make depend` + `make` itself; `-U` (MKUPDATE) keeps subsequent runs incremental.
+
+Three configs exist, per NetBSD convention: **`GENERIC`** (full device
+set, consistency checks off — demo and performance images),
+**`GENERIC.DEBUG`** (GENERIC plus `DIAGNOSTIC` — the development
+default; asserts have caught enough to be worth their cost), and
+**`MINIMAL`** (the smallest bootable kernel — fast smoke builds for MD
+changes, and documentation of the port's true floor). The SD-image
+targets take `KERNCONF=<config>` (default `GENERIC.DEBUG`) to select
+which kernel they carry.
 
 ### Building the Bootloader
 

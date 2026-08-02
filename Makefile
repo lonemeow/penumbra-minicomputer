@@ -577,7 +577,11 @@ endif
 #   make sdimage-rootfs   — boot + full FFS root + benchmark ELFs on FAT32
 SDIMAGE    ?= $(BUILD_DIR)/boot.img
 BOOT_ELF   := $(BUILD_DIR)/netbsd-obj/sys/arch/penumbra/stand/boot/PENBOOT.ELF
-KERNEL     := $(BUILD_DIR)/netbsd-obj/sys/arch/penumbra/compile/MINIMAL/netbsd
+# Which kernel config the SD images carry.  GENERIC.DEBUG (consistency
+# checks on) is the development default; build with KERNCONF=GENERIC
+# for demo/performance images, KERNCONF=MINIMAL for the floor config.
+KERNCONF   ?= GENERIC.DEBUG
+KERNEL     := $(BUILD_DIR)/netbsd-obj/sys/arch/penumbra/compile/$(KERNCONF)/netbsd
 DESTDIR    := $(BUILD_DIR)/netbsd-dest
 ROOTFS_IMG := $(BUILD_DIR)/rootfs.img
 

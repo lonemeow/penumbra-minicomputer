@@ -1,0 +1,60 @@
+#	$NetBSD$
+#
+# GENERIC -- general-purpose Penumbra kernel: every supported device
+# and file system.  This is the configuration the SD images ship.
+#
+# Development work should build GENERIC.DEBUG instead, which layers
+# the kernel consistency checks (DIAGNOSTIC) on top of this file.
+#
+
+include		"arch/penumbra/conf/std.penumbra"
+
+maxusers	8
+
+# Kernel options
+options		DDB			# kernel debugger (serial BREAK entry)
+options		DDB_HISTORY_SIZE=512
+#options 	DIAGNOSTIC		# kernel consistency checks (GENERIC.DEBUG)
+options		PMAP_STEAL_MEMORY	# early boot page allocation
+
+# File systems
+file-system	FFS			# Berkeley Fast File System
+file-system	MSDOSFS			# MS-DOS FAT file system
+
+# Networking
+options		INET			# IP
+
+# System bus
+mainbus0	at root
+cpu0		at mainbus?
+pbbus0		at mainbus?
+com0		at pbbus?
+
+# SD/MMC host (pmci) -> MI sdmmc -> ld block device.
+pmci0		at pbbus?
+sdmmc*		at pmci?
+ld*		at sdmmc?
+
+# USB host controller -> MI USB stack root
+pusbhc0		at pbbus?
+usb*		at pusbhc?
+uhub*		at usb?
+
+# USB mass storage -> SCSI disk
+umass*		at uhub? port ?
+scsibus*	at scsi?
+sd*		at scsibus? target ? lun ?
+
+# USB network
+ure*		at uhub? port ?	# Realtek RTL8152/RTL8153 based adapters
+
+# Console
+options		CONSDEV_OVERRIDE="\"uart\""
+
+# Pseudo-devices
+pseudo-device	loop			# loopback interface
+pseudo-device	pty			# pseudo-terminals
+pseudo-device	ksyms			# /dev/ksyms
+pseudo-device	bpfilter		# packet capture
+
+config		netbsd root on ? type ?

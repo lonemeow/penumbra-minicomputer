@@ -194,12 +194,21 @@ Kernel functions that will panic if reached (grep `TODO(stub)`):
   libraries.  libatf-c available for the ATF test suite.
 - **Limitations:** libpthread is minimal stubs.
 
-## Kernel Config (MINIMAL)
+## Kernel Configs
 
-Built at `-O2` with DIAGNOSTIC (NetBSD's stock kernel default).  FFS + MSDOSFS file systems,
-minimal INET networking, com(4) UART, pmci + MI sdmmc (ld0),
-pusbhc + MI USB stack (usb/uhub/umass/scsibus/sd),
-loop/pty/ksyms pseudo-devices.
+Three configs, per NetBSD convention, all built at `-O2`:
+
+- **GENERIC** — the full device set: FFS + MSDOSFS, INET, com(4)
+  UART, pmci + MI sdmmc (ld), pusbhc + MI USB stack
+  (usb/uhub/umass/scsibus/sd, ure), loop/pty/ksyms/bpf
+  pseudo-devices.  Consistency checks off — the demo/performance
+  kernel.
+- **GENERIC.DEBUG** — GENERIC plus DIAGNOSTIC.  The development
+  default and what the SD images carry unless `KERNCONF=` says
+  otherwise.
+- **MINIMAL** — the smallest bootable kernel: com console, SD block
+  device, FFS root.  The smoke-test config and the documented
+  floor.
 
 ## SD Image + Boot
 

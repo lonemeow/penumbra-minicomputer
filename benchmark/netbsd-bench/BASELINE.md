@@ -3,6 +3,12 @@
 Captured `pbench` results across runs.  Add new snapshots at the **top**,
 so the most recent state is what someone reading from line 1 sees first.
 
+Note: snapshots up to 2026-08 were measured under the kernel config
+named `MINIMAL` (with DIAGNOSTIC).  The daily config is now
+`GENERIC.DEBUG` (same checks, fuller device set); `GENERIC` (checks
+off) is the performance configuration — record which one a snapshot
+used.
+
 ## Reading the table
 
 - **min** — fastest trial (lowest-noise observation, headline number)
