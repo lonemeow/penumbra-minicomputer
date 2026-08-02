@@ -105,6 +105,41 @@ __penumbra_bus_set_multi_1(bus_space_tag_t t __unused, bus_space_handle_t h,
 	__penumbra_bus_set_multi_1((t), (h), (o), (v), (c))
 
 /*
+ * write_region: copy a buffer into consecutive device words (a
+ * packet buffer, not a FIFO — the device offset advances with the
+ * source).  Same by-value-handle shape as the multi ops: the
+ * loop-invariant base is what keeps -fno-strict-aliasing from
+ * re-deriving the address after every volatile store.
+ */
+static inline void
+__penumbra_bus_write_region_4(bus_space_tag_t t __unused,
+    bus_space_handle_t h, bus_size_t o, const uint32_t *a, bus_size_t c)
+{
+	volatile uint32_t *p = (volatile uint32_t *)(h + o);
+
+	while (c-- > 0)
+		*p++ = *a++;
+}
+#define	bus_space_write_region_4(t, h, o, a, c)	\
+	__penumbra_bus_write_region_4((t), (h), (o), (a), (c))
+
+/*
+ * read_region: copy consecutive device words into a buffer,
+ * write_region_4's mirror.
+ */
+static inline void
+__penumbra_bus_read_region_4(bus_space_tag_t t __unused,
+    bus_space_handle_t h, bus_size_t o, uint32_t *a, bus_size_t c)
+{
+	volatile uint32_t *p = (volatile uint32_t *)(h + o);
+
+	while (c-- > 0)
+		*a++ = *p++;
+}
+#define	bus_space_read_region_4(t, h, o, a, c)	\
+	__penumbra_bus_read_region_4((t), (h), (o), (a), (c))
+
+/*
  * Barrier: no-op.  Single CPU, no write buffer between core and the
  * memory bus mux, MMIO pages are uncached, and `volatile` already
  * forbids the compiler from reordering across the access.  Cast args

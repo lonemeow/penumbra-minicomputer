@@ -627,10 +627,9 @@ pusbhc_get_lock(struct usbd_bus *bus, kmutex_t **lock)
  * kmem_alloc, whose smallest guaranteed alignment is 8 — and
  * intra-transfer offsets advance in max-packet multiples, so the
  * byte path runs only for sub-word tails and odd-sized interrupt
- * endpoints.  The copy is open-coded both ways: a memcpy of
- * variable sub-word length is a libcall per word.  The byte
- * assembly pins the register contract's little-endian lane order;
- * the word path is the same order for free on this machine.
+ * endpoints.  The word run goes through the region op; the byte
+ * tail is assembled explicitly in the register contract's
+ * little-endian lane order.
  */
 static void
 pusbhc_write_data(struct pusbhc_softc *sc, const uint8_t *buf, u_int len)
@@ -639,10 +638,9 @@ pusbhc_write_data(struct pusbhc_softc *sc, const uint8_t *buf, u_int len)
 	u_int off = 0;
 
 	if (((uintptr_t)buf & 3) == 0) {
-		const uint32_t *wbuf = (const uint32_t *)buf;
-
-		for (; off + 4 <= len; off += 4)
-			PUSBHC_WR4(sc, USBHC_DATA + off, *wbuf++);
+		bus_space_write_region_4(sc->sc_iot, sc->sc_ioh, USBHC_DATA,
+		    (const uint32_t *)buf, len / 4);
+		off = len & ~3u;
 	}
 	for (; off < len; off += 4) {
 		w = buf[off];
@@ -663,10 +661,9 @@ pusbhc_read_data(struct pusbhc_softc *sc, uint8_t *buf, u_int len)
 	u_int off = 0;
 
 	if (((uintptr_t)buf & 3) == 0) {
-		uint32_t *wbuf = (uint32_t *)buf;
-
-		for (; off + 4 <= len; off += 4)
-			*wbuf++ = PUSBHC_RD4(sc, USBHC_DATA + off);
+		bus_space_read_region_4(sc->sc_iot, sc->sc_ioh, USBHC_DATA,
+		    (uint32_t *)buf, len / 4);
+		off = len & ~3u;
 	}
 	for (; off < len; off += 4) {
 		w = PUSBHC_RD4(sc, USBHC_DATA + off);
