@@ -3828,8 +3828,9 @@ Facts the plan leans on:
 - Bulk transfers need no controller support beyond the minimum
   protocol: interrupt-vs-bulk is host scheduling policy, and the
   transaction primitives (token / data / handshake, 64-byte buffer)
-  are identical. `usb-host.md`'s scope wording should say so before
-  the HCD claims it (doc first).
+  are identical. Done: `usb-host.md`'s scope now says so — the three
+  handshaken transfer types are the minimum; isochronous / hubs /
+  DMA stay behind `CFG_ID`.
 - NetBSD's `slhci` (`dev/ic/sl811hs.c`) proves the whole MI stack —
   bulk endpoints included — over exactly this controller shape:
   FS/LS, one software-driven transaction at a time. It is the
@@ -3862,11 +3863,22 @@ Work items, in order:
   `usbd_bus_methods`, software root hub under `usbroothub`, port
   power/reset recipes, the connect-change latch, and the root-hub
   interrupt pipe; `uhub0` explores the port, resets, and walks up to
-  the (unimplemented, loudly failing) device transfer pipes
-  (`37cc42c`). Remaining: the transfer pipes — the transaction
-  engine driving TOKEN/XFER_CTRL/DATA for control, interrupt, and
-  bulk endpoints — then kernel config gains `umass`+`scsibus`+`sd`
-  first, `cdce` + `netinet` pieces after.
+  the device transfer pipes (`37cc42c`). Done: the transfer pipes —
+  a one-transaction-at-a-time engine over TOKEN/XFER_CTRL/DATA with
+  a per-pipe state machine (control SETUP→DATA→STATUS, chunked
+  data stages, software toggles with RXTOGGLE retransmission
+  discard, forced-ZLP OUT endings, three-strikes error retry) and a
+  ready-queue scheduler: interrupt endpoints NAK-pace at `bInterval`
+  on gated SOF interrupts, control/bulk NAKs retry round-robin
+  (degenerating to immediate relaunch when alone); completions
+  post from the hard interrupt to the soft interrupt under the MI
+  `usbd_xfer_trycomplete` discipline, and aborts detach at any
+  engine state, orphaning an in-flight transaction (safe: all data
+  stages through the controller's DATA buffer). `uhub0` now
+  enumerates the sim device end to end — descriptors, SET_ADDRESS,
+  strings — to a clean "not configured" report on the ISS.
+  Remaining: kernel config gains `umass`+`scsibus`+`sd` first,
+  `cdce` + `netinet` pieces after.
 - **Hardware: US2 wiring** (tracked in the console section above)
   moves up — it is now the path to the first real packet, ahead of
   any keyboard use. US2's micro-B socket takes an OTG-style adapter

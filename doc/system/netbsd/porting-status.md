@@ -106,6 +106,17 @@ bootinfo — `boot sd:0,0` reaches single-user with no prompts.
 - **SD card block device (ld0):** pmci driver + MI `sdmmc(4)` stack.
   MBR partition parsing.  Kernel mounts FFS root from `ld0f`.
 
+- **USB host controller (pusbhc):** full `CLASS_USBHC` HCD under
+  the MI USB stack, `dev/ic/sl811hs.c`-style.  Bus methods,
+  software root hub (`usbroothub`), and the transfer engine:
+  control, interrupt, and bulk pipes, one transaction at a time
+  through a ready queue; interrupt endpoints NAK-pace at
+  `bInterval` via gated SOF interrupts, control/bulk retry
+  round-robin.  `uhub0` explores the port and enumerates an
+  attached device end to end (verified against the ISS device
+  model).  No class drivers in the config yet — `umass` +
+  `scsibus` + `sd` are next, then `cdce`.
+
 - **Exec / return-to-user:** `setregs()` initializes user
   trapframe.  `trap_return` handles SP banking (USP save/restore)
   and pinned-scratch ESR/EPC stash before eret.
@@ -186,7 +197,7 @@ Kernel functions that will panic if reached (grep `TODO(stub)`):
 
 Built at `-O2` with DIAGNOSTIC (NetBSD's stock kernel default).  FFS + MSDOSFS file systems,
 minimal INET networking, com(4) UART, pmci + MI sdmmc (ld0),
-loop/pty/ksyms pseudo-devices.
+pusbhc + MI USB stack (usb/uhub), loop/pty/ksyms pseudo-devices.
 
 ## SD Image + Boot
 
