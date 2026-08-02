@@ -3808,3 +3808,53 @@ Implementation work, by layer:
 - Per-class console backends (text-cell writes; framebuffer software
   glyphs once that class lands) and a USB boot-keyboard reader, behind a
   putc/getc abstraction the monitor selects at autoconfig.
+
+## Kernel: networking — first NIC through the USB host controller
+
+Decision: the first network adapter is a **USB NIC on the CLASS_USBHC
+port**, not a dedicated NIC device. Rationale: the HCD is already owed
+for the local-console keyboard, and once it exists the whole MI USB
+stack plus every in-tree USB Ethernet driver (`axe`, `aue`, `cdce`, …)
+comes along — no new RTL, no device firmware, no from-scratch NIC
+driver. The alternatives stay viable later: the ESP32 SLIP bridge
+([`system/devices/esp32-nic.md`](system/devices/esp32-nic.md), needs
+RTL + ESP-IDF firmware, adds WiFi) and a Wiznet W5500 on the existing
+SPI class (driver-only, needs external hardware). Both have a lower
+throughput ceiling than software-driven full-speed bulk, so USB-first
+costs nothing on performance either.
+
+Facts the plan leans on:
+
+- Bulk transfers need no controller support beyond the minimum
+  protocol: interrupt-vs-bulk is host scheduling policy, and the
+  transaction primitives (token / data / handshake, 64-byte buffer)
+  are identical. `usb-host.md`'s scope wording should say so before
+  the HCD claims it (doc first).
+- NetBSD's `slhci` (`dev/ic/sl811hs.c`) proves the whole MI stack —
+  bulk endpoints included — over exactly this controller shape:
+  FS/LS, one software-driven transaction at a time. It is the
+  structural template.
+- The cost profile is per-transaction software round trips; bulk-IN
+  polling pays for NAKs. Usable, not fast — order 100–300 KB/s.
+- Device caveat: HS-only adapters may enumerate at FS but offer no
+  usable function; safe first targets are USB 1.1-era chips (`aue`,
+  `axe`, `url`, `kue`) or a CDC-ECM gadget (`cdce`), which is also
+  the cleanest personality to model in simulation.
+
+Work items, in order:
+
+- **ISS/device-model: complete enumeration.** `UsbDeviceSim`'s
+  enumerate personality serves only the device descriptor today; the
+  MI stack also needs configuration descriptors, `SET_CONFIGURATION`,
+  and status/interface plumbing. Grow it to a full config, then add
+  the CDC-ECM personality (control requests + bulk in/out) bridged to
+  a host TAP device so simulated NetBSD exchanges real packets.
+- **NetBSD HCD** — the `CLASS_USBHC` driver from the kernel section
+  above (`usbd_bus_methods` / `usbd_pipe_methods`, software root
+  hub, `slhci` as template), iterated on the ISS; kernel config
+  gains the MI USB stack + `cdce` + whatever `netinet` pieces
+  MINIMAL lacks.
+- **Hardware: US2 wiring** (tracked in the console section above)
+  moves up — it is now the path to the first real packet, ahead of
+  any keyboard use. US2's micro-B socket takes an OTG-style adapter
+  directly; check VBUS sourcing on the board schematic at bring-up.
