@@ -3772,9 +3772,15 @@ Implementation work, by layer:
   proven tier-to-tier ahead of machine integration; the machine_sim
   export of the device port rides with the `usbhc_regs`/autoconfig step
   (`6702220`). **The PHY tier is complete.**
-- US2 wiring: RX diff on `usb_fpga_dp/dn`, TX on `usb_fpga_bd_dp/dn`,
-  pulls on `usb_fpga_pu_*`; dual-clock-BRAM + handshake CDC
-  (`usbhc_regs` + `usbhc_cdc`).
+- Done: US2 wiring — the gen1 board top carries the machine_sim USB
+  block with `usb_phy_ecp5` on the seam; D+/D- sensed and driven
+  single-ended on the `usb_fpga_bd` pads (the differential-input
+  pair on the same copper stays unused, so the vendor LPF is
+  untouched), pulls on `usb_fpga_pu_*`, and the PLL's spare CLKOS3
+  serving the 60 MHz USB clock exactly (build-failure guard on VCO
+  retargets). Validated on hardware: a real full-speed device
+  enumerates end to end through the NetBSD stack — descriptors,
+  SET_ADDRESS, serial string — on the physical port.
 - `autoconfig_dev` wrapper (`CLASS_USBHC`); machine_sim integration test
   (poll CONNECT → reset → GET_DESCRIPTOR → R1) under `make test`.
   Done: `usbhc_regs` + `usbhc_cdc` + the `usbhc` composition, proven
@@ -3892,10 +3898,12 @@ Work items, in order:
   on the simulated USB disk mounts and round-trips file data on
   the ISS — bulk verified in both directions with hard integrity.
   Remaining: `cdce` + `netinet` pieces.
-- **Hardware: US2 wiring** (tracked in the console section above)
-  moves up — it is now the path to the first real packet, ahead of
-  any keyboard use. US2's micro-B socket takes an OTG-style adapter
-  directly; check VBUS sourcing on the board schematic at bring-up.
+- **Hardware: US2 wiring** — Done (tracked in the console section
+  above): VBUS sourcing confirmed on the board, and a commercial
+  USB NIC (Realtek RTL8152) enumerates on the physical port. Note
+  the RTL8152 came up at full speed with usable-looking descriptors
+  — `ure(4)` against it is a candidate first real packet, in
+  parallel with the `cdce` simulation path.
 
 ## Kernel: bus_space stream methods when a consumer driver arrives
 

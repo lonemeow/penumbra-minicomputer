@@ -235,7 +235,9 @@ the shared module.
 - `ulx3s/ulx3s_penumbra1_top.sv` — gen1 system on the ULX3S.
   12.5 MHz PLL (25 MHz crystal), 32 MB SDRAM (W9825G6KH or
   compatible), real UART (TX+RX), real SPI with SD card (autoconfig),
-  boot ROM, `btn[1]` reset.
+  USB host on the US2 socket (autoconfig; 60 MHz from CLKOS3,
+  single-ended D+/D- on the `usb_fpga_bd` pads), boot ROM,
+  `btn[1]` reset.
 - `ulx3s/ulx3s_penumbra2_probe_top.sv` — gen2 machine timing probe
   (`VARIANT=probe`): `machine_penumbra2` + a BRAM bus memory at
   25 MHz, terminal outputs folded onto the LEDs so synthesis keeps the
