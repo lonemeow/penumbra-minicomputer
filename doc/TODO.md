@@ -3883,3 +3883,21 @@ Work items, in order:
   moves up — it is now the path to the first real packet, ahead of
   any keyboard use. US2's micro-B socket takes an OTG-style adapter
   directly; check VBUS sourcing on the board schematic at bring-up.
+
+## Kernel: bus_space stream methods when a consumer driver arrives
+
+The MD bus_space layer implements exactly the operations the current
+driver set uses; unimplemented ops fail at link (orphan
+`bus_proto.h` prototypes), never silently. One conditional MI code
+path exists beyond that contract: drivers in the `wdc` family
+(`ata_wdc.c`, `atapi_wdc.c`, `wdc_pcmcia.c`, `siisata`) and several
+NICs test `__BUS_SPACE_HAS_STREAM_METHODS` and fall back to the
+non-stream `multi_N` ops when it is absent. On a little-endian-only
+machine the fallback is semantically identical, so today's absence
+is benign — but if such a driver ever enters the config, define the
+`*_stream_N` variants as trivial aliases of the non-stream ops plus
+`__BUS_SPACE_HAS_STREAM_METHODS 1` in `bus_funcs.h`, so the driver
+takes its intended path explicitly rather than by fallback. Same
+trigger discipline as the text-video `region_2`/`copy_region_2`/
+`set_region_2` additions: implement when the consumer exists to
+test against, not speculatively.
