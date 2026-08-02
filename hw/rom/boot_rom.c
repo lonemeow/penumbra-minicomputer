@@ -136,6 +136,7 @@ static const char *class_name(uint32_t cls) {
     case ACFG_CLASS_UART:   return "UART";
     case ACFG_CLASS_SPI:    return "SPI";
     case ACFG_CLASS_SD:     return "SD";
+    case ACFG_CLASS_USBHC:  return "USBHC";
     default:                return "Unknown";
     }
 }
