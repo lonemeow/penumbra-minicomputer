@@ -124,6 +124,11 @@ no notion of them:
 - **Interrupt-IN poll** — one `IN` transaction at the endpoint's interval.
   `NAK` means no new data (e.g., an idle keyboard); `ACK` returns `RXLEN`
   bytes (e.g., an 8-byte HID boot report).
+- **Bulk transfer** — a sequence of `IN` or `OUT` transactions at the
+  endpoint's maximum packet size, alternating the toggle, until the
+  requested length — or, for `IN`, a short packet — ends the transfer.
+  `NAK` means the device has no data or buffer space yet; the host
+  retries at a pace of its own choosing.
 
 ## Port and Frame Timing
 
@@ -138,11 +143,15 @@ pace periodic polling.
 ## Scope of the Minimum
 
 The minimum protocol covers **low- and full-speed, a single
-directly-attached device** (no downstream hub, so no split/PRE handling),
-and **control and interrupt transfers** — sufficient to enumerate and
-poll a boot-protocol HID keyboard. Bulk and isochronous transfers,
-downstream-hub support, and DMA descriptor engines, where present, are
-richer features behind `CFG_ID`.
+directly-attached device** (no downstream hub, so no split/PRE handling)
+and the three handshaken transfer types — **control, interrupt, and
+bulk**. Interrupt-versus-bulk is host scheduling policy, not a
+controller capability: both compose from the same token / data /
+handshake transactions, so bulk endpoints (storage, network adapters)
+need nothing beyond this interface. Isochronous transfers — which are
+unhandshaken and must launch synchronized to the frame — downstream-hub
+support, and DMA descriptor engines, where present, are richer features
+behind `CFG_ID`.
 
 ## Relationship to Host Software
 
