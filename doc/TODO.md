@@ -3843,17 +3843,30 @@ Facts the plan leans on:
 
 Work items, in order:
 
-- **ISS/device-model: complete enumeration.** `UsbDeviceSim`'s
-  enumerate personality serves only the device descriptor today; the
-  MI stack also needs configuration descriptors, `SET_CONFIGURATION`,
-  and status/interface plumbing. Grow it to a full config, then add
-  the CDC-ECM personality (control requests + bulk in/out) bridged to
-  a host TAP device so simulated NetBSD exchanges real packets.
+- **ISS/device-model: complete enumeration.** Done: `UsbDeviceSim`
+  serves configuration and string descriptors, latches
+  `SET_CONFIGURATION`, and terminates exact-multiple control reads
+  with the required ZLP; pinned by the grown `test_usbhc_enum` on
+  both simulators (`bd53ce1`).
+- **Device personalities, in order:** first **mass storage** —
+  Bulk-Only Transport plus the small SCSI subset (`INQUIRY`,
+  `READ CAPACITY`, `READ(10)`, `WRITE(10)`, `TEST UNIT READY`,
+  `REQUEST SENSE`) backed by a host file image, the `+sdcard=`
+  pattern. It exercises bulk in both directions with hard data
+  integrity (mount a filesystem through it) and needs no host-side
+  network plumbing. The CDC-ECM NIC personality (bridged to a host
+  TAP device) follows once `umass` works — raw packet access is the
+  only part of the network path that is host-environment-dependent.
 - **NetBSD HCD** — the `CLASS_USBHC` driver from the kernel section
-  above (`usbd_bus_methods` / `usbd_pipe_methods`, software root
-  hub, `slhci` as template), iterated on the ISS; kernel config
-  gains the MI USB stack + `cdce` + whatever `netinet` pieces
-  MINIMAL lacks.
+  above, iterated on the ISS. Done: the bus-methods layer —
+  `usbd_bus_methods`, software root hub under `usbroothub`, port
+  power/reset recipes, the connect-change latch, and the root-hub
+  interrupt pipe; `uhub0` explores the port, resets, and walks up to
+  the (unimplemented, loudly failing) device transfer pipes
+  (`37cc42c`). Remaining: the transfer pipes — the transaction
+  engine driving TOKEN/XFER_CTRL/DATA for control, interrupt, and
+  bulk endpoints — then kernel config gains `umass`+`scsibus`+`sd`
+  first, `cdce` + `netinet` pieces after.
 - **Hardware: US2 wiring** (tracked in the console section above)
   moves up — it is now the path to the first real packet, ahead of
   any keyboard use. US2's micro-B socket takes an OTG-style adapter
