@@ -50,10 +50,12 @@ public:
 
     // Standard bRequest codes and descriptor types (the subset a boot
     // enumeration touches).
-    static const uint8_t REQ_SET_ADDRESS    = 5;
-    static const uint8_t REQ_GET_DESCRIPTOR = 6;
-    static const uint8_t DESC_DEVICE        = 1;
-    static const uint8_t DESC_CONFIGURATION = 2;
+    static const uint8_t REQ_SET_ADDRESS       = 5;
+    static const uint8_t REQ_GET_DESCRIPTOR    = 6;
+    static const uint8_t REQ_SET_CONFIGURATION = 9;
+    static const uint8_t DESC_DEVICE           = 1;
+    static const uint8_t DESC_CONFIGURATION    = 2;
+    static const uint8_t DESC_STRING           = 3;
 
     // Scripted response policy, set per test scenario. A real device
     // class would replace this with protocol state (this is where the
@@ -90,6 +92,50 @@ public:
         };
         return d;
     }
+
+    // The configuration blob (config + interface descriptors in one
+    // read, per the USB layout): one bus-powered configuration
+    // (value 1) holding a single vendor-class interface with no
+    // endpoints beyond control — the minimal shape a host stack will
+    // enumerate and configure. A device-class personality (the
+    // CDC-ECM NIC) replaces this blob wholesale.
+    static const std::vector<uint8_t>& config_descriptor() {
+        static const std::vector<uint8_t> d{
+            0x09, 0x02, 0x12, 0x00, 0x01, 0x01, 0x00, 0x80, 0x32,
+            0x09, 0x04, 0x00, 0x00, 0x00, 0xff, 0x00, 0x00, 0x00,
+        };
+        return d;
+    }
+
+    // String descriptors: index 0 is the LANGID table (en-US); 1 and 2
+    // are the manufacturer/product indices the device descriptor
+    // carries. The product string is deliberately 16 bytes — an exact
+    // multiple of bMaxPacketSize0 — so an over-long read exercises the
+    // ZLP transfer termination. Null for an index the device lacks.
+    static const std::vector<uint8_t>* string_descriptor(uint8_t index) {
+        static const std::vector<uint8_t> lang{ 0x04, 0x03, 0x09, 0x04 };
+        static const std::vector<uint8_t> mfg{
+            0x12, 0x03, 'P', 0, 'e', 0, 'n', 0, 'u', 0,
+            'm', 0, 'b', 0, 'r', 0, 'a', 0,
+        };
+        static const std::vector<uint8_t> prod{
+            0x10, 0x03, 'S', 0, 'i', 0, 'm', 0, ' ', 0,
+            'D', 0, 'e', 0, 'v', 0,
+        };
+        switch (index) {
+        case 0: return &lang;
+        case 1: return &mfg;
+        case 2: return &prod;
+        default: return nullptr;
+        }
+    }
+
+    // SET_CONFIGURATION latch (0 = unconfigured), harness-checkable.
+    uint8_t configuration = 0;
+
+    // bMaxPacketSize0 — must match byte 7 of device_descriptor(); the
+    // control data stage is chunked and terminated against this size.
+    static const size_t EP0_MAX_PKT = 8;
 
     // Wire log, checked by the harness.
     struct Token { uint8_t pid; uint8_t addr; uint8_t endp; };
@@ -216,6 +262,7 @@ private:
     std::vector<uint8_t> ctrl_data_;   // data-stage bytes still to send
     size_t ctrl_pos_ = 0;
     bool ctrl_toggle_ = true;          // data stage starts at DATA1
+    bool ctrl_zlp_ = false;            // transfer owes a terminating ZLP
     uint8_t addr_cur_ = 0;             // device address on the bus
     uint8_t addr_pending_ = 0;         // latched by SET_ADDRESS, applied
     bool addr_apply_ = false;          //   after its status stage
@@ -305,6 +352,7 @@ private:
                 ctrl_pos_     = 0;
                 ctrl_toggle_  = true;   // the data stage starts at DATA1
                 ctrl_data_.clear();
+                ctrl_zlp_     = false;
                 addr_apply_   = false;
                 ctrl_dispatch_setup(payload);
                 respond({ pid_byte(PID_ACK) });   // setup stage always ACKs
@@ -338,9 +386,12 @@ private:
     void ctrl_handle_in() {
         switch (ctrl_stage_) {
         case CTRL_DATA_IN: {
+            // The chunk at the walk position; an exhausted walk still
+            // in this stage owes the terminating ZLP, which the empty
+            // chunk produces naturally.
             size_t n = ctrl_data_.size() - ctrl_pos_;
-            if (n > 8)
-                n = 8;
+            if (n > EP0_MAX_PKT)
+                n = EP0_MAX_PKT;
             std::vector<uint8_t> chunk(ctrl_data_.begin() + (long)ctrl_pos_,
                                        ctrl_data_.begin() +
                                            (long)(ctrl_pos_ + n));
@@ -361,12 +412,20 @@ private:
     void ctrl_handle_ack() {
         if (ctrl_stage_ == CTRL_DATA_IN) {
             size_t n = ctrl_data_.size() - ctrl_pos_;
-            if (n > 8)
-                n = 8;
+            if (n > EP0_MAX_PKT)
+                n = EP0_MAX_PKT;
             ctrl_pos_ += n;
             ctrl_toggle_ = !ctrl_toggle_;
-            if (ctrl_pos_ >= ctrl_data_.size())
-                ctrl_stage_ = CTRL_STATUS_OUT;
+            if (ctrl_pos_ >= ctrl_data_.size()) {
+                // A full final chunk with a ZLP owed keeps the stage
+                // open for the empty terminating packet; anything else
+                // (a short chunk, or the acked ZLP itself) ends the
+                // data stage.
+                if (ctrl_zlp_ && n == EP0_MAX_PKT)
+                    ctrl_zlp_ = false;
+                else
+                    ctrl_stage_ = CTRL_STATUS_OUT;
+            }
         } else if (ctrl_stage_ == CTRL_STATUS_IN) {
             if (addr_apply_) {
                 addr_cur_ = addr_pending_;
@@ -376,6 +435,21 @@ private:
         }
     }
 
+    // Open a device-to-host data stage: offer `data` bounded by the
+    // request's wLength, walked in bMaxPacketSize0 chunks by
+    // ctrl_handle_in. The transfer's end is implicit: it runs to
+    // wLength exactly, or ends early on the first short packet —
+    // and a bounded length that is an exact multiple of the packet
+    // size has no short packet of its own, so the early end must be
+    // an explicit zero-length packet.
+    void ctrl_start_data_in(const std::vector<uint8_t>& data,
+                            uint16_t wLength) {
+        size_t count = std::min<size_t>(wLength, data.size());
+        ctrl_data_.assign(data.begin(), data.begin() + (long)count);
+        ctrl_stage_ = CTRL_DATA_IN;
+        ctrl_zlp_ = count != wLength && count % EP0_MAX_PKT == 0;
+    }
+
     // Dispatch one parsed SETUP request — the 8 setup-stage bytes:
     //   req[0] bmRequestType (bit 7: 1 = device-to-host data stage)
     //   req[1] bRequest
@@ -383,8 +457,8 @@ private:
     //   req[4] wIndex low    req[5] wIndex high
     //   req[6] wLength low   req[7] wLength high
     // Decides the transfer's shape by setting the control state:
-    //   * device-to-host data stage — fill ctrl_data_ with at most
-    //     wLength bytes and set ctrl_stage_ = CTRL_DATA_IN
+    //   * device-to-host data stage — ctrl_start_data_in with the
+    //     descriptor and the request's wLength
     //   * no data stage (a pure action) — latch the action and set
     //     ctrl_stage_ = CTRL_STATUS_IN (SET_ADDRESS must latch into
     //     addr_pending_/addr_apply_, never addr_cur_ directly: the
@@ -404,14 +478,24 @@ private:
                 switch (request) {
                 case REQ_GET_DESCRIPTOR: {
                     uint8_t desc_type = uint8_t(wValue >> 8);
-                    if (desc_type == DESC_DEVICE) {
-                        auto desc = device_descriptor();
-                        size_t count = std::min<size_t>(wLength, desc.size());
-                        ctrl_data_.insert(ctrl_data_.end(), desc.begin(),
-                                          desc.begin() + count);
-                        ctrl_stage_ = CTRL_DATA_IN;
+                    uint8_t desc_index = uint8_t(wValue & 0xff);
+                    if (desc_type == DESC_DEVICE && desc_index == 0) {
+                        ctrl_start_data_in(device_descriptor(), wLength);
                         return;
                     }
+                    if (desc_type == DESC_CONFIGURATION && desc_index == 0) {
+                        ctrl_start_data_in(config_descriptor(), wLength);
+                        return;
+                    }
+                    if (desc_type == DESC_STRING) {
+                        const std::vector<uint8_t>* s =
+                            string_descriptor(desc_index);
+                        if (s != nullptr) {
+                            ctrl_start_data_in(*s, wLength);
+                            return;
+                        }
+                    }
+                    break;
                 }
                 }
             } else {
@@ -421,6 +505,16 @@ private:
                     addr_apply_ = true;
                     ctrl_stage_ = CTRL_STATUS_IN;
                     return;
+                }
+                case REQ_SET_CONFIGURATION: {
+                    // Only configuration 1 exists; selecting it (or
+                    // deconfiguring with 0) is a pure action.
+                    if ((wValue & 0xff) <= 1) {
+                        configuration = uint8_t(wValue & 0xff);
+                        ctrl_stage_ = CTRL_STATUS_IN;
+                        return;
+                    }
+                    break;
                 }
                 }
             }

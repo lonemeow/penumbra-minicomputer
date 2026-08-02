@@ -14,7 +14,9 @@
 ;   R10   — stage marker: 1 CAP, 2 connect/speed, 3 reset/enable,
 ;           4 SETUP, 5/6 IN1 status/data, 7/8 IN2, 9/10 IN3,
 ;           11 status stage, 12 SET_ADDRESS, 13 old address silent,
-;           14 bounded re-read at the new address, 15 unknown request
+;           14 bounded re-read at the new address, 15 unknown request,
+;           16 config-descriptor probe, 17 full config read,
+;           18 SET_CONFIGURATION, 19 string read ending in a ZLP
 ;   R6    — the masked XFER_STATUS a transaction check compared
 ;   R2/R3 — the got/want pair of the failing compare
 ;   R8/R9 — trap vector marker / faulting PC, if a trap fired
@@ -280,6 +282,174 @@ wait_enabled:
     LLI  R3, #0x0E
     AND  R6, R3
     CMP  R6, #0x04            ; STALL
+    BNE  fail
+
+    ; ── Config-descriptor probe: header only, wLength = 9 ────
+    LLI  R10, #16             ; stage: config probe
+    LI   R2, #0x02000680      ; 80 06 00 02 (GET_DESCRIPTOR config)
+    STW  R2, [R12 + #DATA_W0]
+    LI   R2, #0x00090000      ; wLength = 9
+    STW  R2, [R12 + #DATA_W1]
+    LLI  R2, #0x50            ; TOKEN: SETUP, addr 5
+    LI   R3, #0x00010008
+    BL   do_xfer
+    LLI  R3, #0x0E
+    AND  R6, R3
+    CMP  R6, #0               ; ACK
+    BNE  fail
+    LI   R2, #0x00010052      ; IN, addr 5, toggle 1
+    LI   R3, #0x00010008
+    BL   do_xfer
+    LI   R3, #0x7F1E
+    AND  R6, R3
+    LI   R3, #0x0810          ; ACK, toggle 1, 8 bytes
+    CMP  R6, R3
+    BNE  fail
+    LDW  R2, [R12 + #DATA_W0]
+    LI   R3, #0x00120209      ; 09 02 12 00 — wTotalLength = 18
+    CMP  R2, R3
+    BNE  fail
+    LI   R2, #0x00000052      ; IN, addr 5, toggle 0
+    LI   R3, #0x00010008
+    BL   do_xfer
+    LI   R3, #0x7F1E
+    AND  R6, R3
+    LI   R3, #0x0100          ; ACK, toggle 0, 1 byte
+    CMP  R6, R3
+    BNE  fail
+    LI   R2, #0x00010051      ; status: OUT, addr 5, toggle 1
+    LI   R3, #0x00010000
+    BL   do_xfer
+    LLI  R3, #0x0E
+    AND  R6, R3
+    CMP  R6, #0               ; ACK
+    BNE  fail
+
+    ; ── Full config read: 8+8+2 through EP0, both descriptors ─
+    LLI  R10, #17             ; stage: full config read
+    LI   R2, #0x02000680      ; GET_DESCRIPTOR(config)...
+    STW  R2, [R12 + #DATA_W0]
+    LI   R2, #0x00120000      ; ...wLength = wTotalLength = 18
+    STW  R2, [R12 + #DATA_W1]
+    LLI  R2, #0x50            ; TOKEN: SETUP, addr 5
+    LI   R3, #0x00010008
+    BL   do_xfer
+    LLI  R3, #0x0E
+    AND  R6, R3
+    CMP  R6, #0               ; ACK
+    BNE  fail
+    LI   R2, #0x00010052      ; IN, addr 5, toggle 1
+    LI   R3, #0x00010008
+    BL   do_xfer
+    LI   R3, #0x7F1E
+    AND  R6, R3
+    LI   R3, #0x0810          ; ACK, toggle 1, 8 bytes
+    CMP  R6, R3
+    BNE  fail
+    LDW  R2, [R12 + #DATA_W1]
+    LI   R3, #0x80000101      ; 01 01 00 80 — one interface, bus-powered
+    CMP  R2, R3
+    BNE  fail
+    LI   R2, #0x00000052      ; IN, addr 5, toggle 0
+    LI   R3, #0x00010008
+    BL   do_xfer
+    LI   R3, #0x7F1E
+    AND  R6, R3
+    LI   R3, #0x0800          ; ACK, toggle 0, 8 bytes
+    CMP  R6, R3
+    BNE  fail
+    LDW  R2, [R12 + #DATA_W0]
+    LI   R3, #0x00040932      ; 32 09 04 00 — interface descriptor head
+    CMP  R2, R3
+    BNE  fail
+    LI   R2, #0x00010052      ; IN, addr 5, toggle 1
+    LI   R3, #0x00010008
+    BL   do_xfer
+    LI   R3, #0x7F1E
+    AND  R6, R3
+    LI   R3, #0x0210          ; ACK, toggle 1, 2 bytes
+    CMP  R6, R3
+    BNE  fail
+    LI   R2, #0x00010051      ; status: OUT, addr 5, toggle 1
+    LI   R3, #0x00010000
+    BL   do_xfer
+    LLI  R3, #0x0E
+    AND  R6, R3
+    CMP  R6, #0               ; ACK
+    BNE  fail
+
+    ; ── SET_CONFIGURATION(1): no-data, status stage is IN ────
+    LLI  R10, #18             ; stage: SET_CONFIGURATION
+    LI   R2, #0x00010900      ; 00 09 01 00 (little-endian word)
+    STW  R2, [R12 + #DATA_W0]
+    LLI  R2, #0
+    STW  R2, [R12 + #DATA_W1]
+    LLI  R2, #0x50            ; TOKEN: SETUP, addr 5
+    LI   R3, #0x00010008
+    BL   do_xfer
+    LLI  R3, #0x0E
+    AND  R6, R3
+    CMP  R6, #0               ; ACK
+    BNE  fail
+    LI   R2, #0x00010052      ; status: IN, addr 5, toggle 1
+    LI   R3, #0x00010000
+    BL   do_xfer
+    LI   R3, #0x7F1E
+    AND  R6, R3
+    LI   R3, #0x0010          ; ACK, ZLP with toggle 1
+    CMP  R6, R3
+    BNE  fail
+
+    ; ── String read over-long: exact-multiple data ends in ZLP ─
+    ; The 16-byte product string against wLength 255: chunks 8+8
+    ; leave no short packet, so the transfer must terminate with a
+    ; zero-length DATA1.
+    LLI  R10, #19             ; stage: string ZLP read
+    LI   R2, #0x03020680      ; 80 06 02 03 (GET_DESCRIPTOR string 2)
+    STW  R2, [R12 + #DATA_W0]
+    LI   R2, #0x00FF0000      ; wLength = 255
+    STW  R2, [R12 + #DATA_W1]
+    LLI  R2, #0x50            ; TOKEN: SETUP, addr 5
+    LI   R3, #0x00010008
+    BL   do_xfer
+    LLI  R3, #0x0E
+    AND  R6, R3
+    CMP  R6, #0               ; ACK
+    BNE  fail
+    LI   R2, #0x00010052      ; IN, addr 5, toggle 1
+    LI   R3, #0x00010008
+    BL   do_xfer
+    LI   R3, #0x7F1E
+    AND  R6, R3
+    LI   R3, #0x0810          ; ACK, toggle 1, 8 bytes
+    CMP  R6, R3
+    BNE  fail
+    LDW  R2, [R12 + #DATA_W0]
+    LI   R3, #0x00530310      ; 10 03 'S' 00 — string header + text
+    CMP  R2, R3
+    BNE  fail
+    LI   R2, #0x00000052      ; IN, addr 5, toggle 0
+    LI   R3, #0x00010008
+    BL   do_xfer
+    LI   R3, #0x7F1E
+    AND  R6, R3
+    LI   R3, #0x0800          ; ACK, toggle 0, 8 bytes
+    CMP  R6, R3
+    BNE  fail
+    LI   R2, #0x00010052      ; IN, addr 5, toggle 1
+    LI   R3, #0x00010008
+    BL   do_xfer
+    LI   R3, #0x7F1E
+    AND  R6, R3
+    LI   R3, #0x0010          ; ACK, toggle 1, zero bytes — the ZLP
+    CMP  R6, R3
+    BNE  fail
+    LI   R2, #0x00010051      ; status: OUT, addr 5, toggle 1
+    LI   R3, #0x00010000
+    BL   do_xfer
+    LLI  R3, #0x0E
+    AND  R6, R3
+    CMP  R6, #0               ; ACK
     BNE  fail
 
     LLI  R1, #1
