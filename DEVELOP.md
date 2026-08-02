@@ -84,6 +84,7 @@ ISS-only:
 | Variable          | Effect                                                                          |
 |-------------------|---------------------------------------------------------------------------------|
 | `RAW=1`           | Raw-TTY mode (job control passes through; Ctrl-A is the escape — Ctrl-A H for help). |
+| `USBDEV=type:cfg` | Attach a simulated USB device to the USBHC port, e.g. `USBDEV=disk:disk.img` (see § 8). |
 
 RTL-only:
 
@@ -305,6 +306,35 @@ make simulate SDCARD=build/boot.img
 ```
 
 Image creation requires the NetBSD cross-tools (`nbfdisk`, `nbmakefs`) — i.e. the host-tools step from § 7 must have run.
+
+### Simulated USB devices
+
+The ISS models the `CLASS_USBHC` port with a pluggable simulated device
+behind it. `USBDEV=<type>:<config>` selects the device's personality;
+`disk:<image>` is a USB mass-storage disk backed by a raw image file:
+
+```sh
+cp build/boot.img build/usbdisk.img     # any raw image works
+make simulate SDCARD=build/boot.img USBDEV=disk:build/usbdisk.img RAW=1
+```
+
+NetBSD enumerates it through the full stack — `umass0` → `scsibus0` →
+`sd0` — and the disk behaves like any other: `usbdevs -v` shows the
+bus, `disklabel sd0` reads the label, and partitions mount normally
+(`mount /dev/sd0f /mnt` for an image with an FFS partition).
+
+**Hot-plugging:** under `RAW=1`, `Ctrl-A U` toggles the device's plug
+state at runtime. Unplugging tears the device tree down (`sd0` …
+`umass0` detach, in-flight transfers abort); replugging re-enumerates
+the device from scratch. This is the way to exercise the host stack's
+disconnect and recovery paths.
+
+Without `USBDEV=` the port carries a bare enumerable vendor-class
+device (what the enumeration test drives). The ISS rejects unknown
+device types and lists the available ones. New personalities plug into
+the device-function seam in `hw/sim/usb_device_sim.h` — the wire layer
+stays shared; a personality supplies descriptors, control requests,
+and bulk-transfer behavior (`hw/sim/usb_msc_sim.h` is the model).
 
 ### Overlaying custom userland utilities
 
