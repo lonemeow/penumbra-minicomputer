@@ -9,6 +9,12 @@
 // on red/green the control bits are tied 0. A control period also
 // recenters the running disparity.
 //
+// The disparity accumulator counts in halved units — one count per
+// excess *pair* of 1s — which keeps every constant and comparison one
+// bit narrower than spec bit-units. Units are an encoder-internal
+// choice: the receiver never sees the accumulator, only the words,
+// and those are bit-exact with the DVI 1.0 algorithm.
+//
 // One pixel-clock of latency: stage 1, stage 2, and the control-code
 // select are combinational; the 10-bit word and the disparity
 // accumulator are registered. PHY-independent — the ODDR serializer
@@ -43,44 +49,64 @@ module video_tmds_encoder (
     assign use_xnor = (data_ones > 4'd4) ||
                       (data_ones == 4'd4 && i_data[0] == 1'b0);
 
-    logic [8:0] q_m;
-    always_comb begin
-        q_m[0] = i_data[0];
-        for (int i = 1; i < 8; i++)
-            q_m[i] = use_xnor ? (q_m[i-1] ~^ i_data[i])
-                              : (q_m[i-1]  ^ i_data[i]);
-        q_m[8] = ~use_xnor;
-    end
+    // Only the XOR prefix chain is computed: the XNOR chain equals it
+    // with every odd-indexed bit inverted (each stage's ~(x ^ 1) = x
+    // cancels the previous inversion), so choosing between the chains
+    // is a constant-mask XOR on the finished parities, not a mux inside
+    // the chain. Written as independent prefix parities — no bit
+    // depends on another, and synthesis builds each as its own tree.
+    logic [7:0] parity;
+    assign parity = { ^i_data[7:0], ^i_data[6:0], ^i_data[5:0], ^i_data[4:0],
+                      ^i_data[3:0], ^i_data[2:0], ^i_data[1:0], i_data[0] };
 
-    // 1s / 0s among the eight data bits of q_m (q_m[8] is the flag bit,
-    // not counted). Stage 2 steers the line using their difference.
-    logic [3:0] qm_ones, qm_zeros;
+    logic [8:0] q_m;
+    assign q_m = {~use_xnor, parity ^ (use_xnor ? 8'hAA : 8'h00)};
+
+    // Excess 1s among the eight data bits of q_m (q_m[8] is the flag
+    // bit, not counted), in halved units: +4 for all 1s, -4 for all 0s,
+    // 0 for a balanced byte. Stage 2 steers the line with this.
+    logic [3:0] qm_ones;
     assign qm_ones = {3'b0, q_m[0]} + {3'b0, q_m[1]}
                    + {3'b0, q_m[2]} + {3'b0, q_m[3]}
                    + {3'b0, q_m[4]} + {3'b0, q_m[5]}
                    + {3'b0, q_m[6]} + {3'b0, q_m[7]};
-    assign qm_zeros = 4'd8 - qm_ones;
+
+    logic signed [4:0] qm_excess;
+    assign qm_excess = $signed({1'b0, qm_ones}) - 5'sd4;
 
     // ── Stage 2: DC balancing ──────────────────────────────────
-    // Running disparity (signed): positive => more 1s than 0s have been
-    // transmitted so far. From q_m, the 1/0 counts above, and this
-    // accumulator, stage 2 picks the final 10-bit word (optionally
-    // inverting the low 8 bits, marked by data_word[9]) and the
-    // disparity it leaves behind. Registered below, so the value read
-    // here is "disparity before this pixel".
-    logic signed [5:0] disp;
+    // Running disparity (halved units, signed): positive => more 1s
+    // than 0s have left the line so far. From q_m, qm_excess, and this
+    // accumulator, stage 2 picks the final 10-bit word — data_word[9]
+    // set marks the low 8 bits inverted, data_word[8] carries q_m[8]
+    // through for the receiver — and the disparity the word leaves
+    // behind. Registered below, so disp_q reads as "disparity before
+    // this pixel".
+    //
+    // Invariant: whatever word goes out, disp_d must absorb its actual
+    // excess — disp_d == disp_q + (ones(data_word) - 5). The
+    // track_word assertion below holds every branch to that.
+    logic signed [4:0] disp_q;
 
     logic [9:0]        data_word;   // active-video word for this pixel
-    logic signed [5:0] disp_next;   // running disparity after data_word
+    logic signed [4:0] disp_d;      // running disparity after data_word
 
     always_comb begin
-        if (disp == 0 || qm_ones == qm_zeros) begin
-            data_word = 
+        if (disp_q == 0 || qm_excess == 0) begin
+            // Line centered, or a balanced symbol that cannot steer it:
+            // emit q_m plain under XOR (q_m[8] set), fully inverted
+            // under XNOR, so bit 9 still marks the inversion.
+            data_word = {~q_m[8], q_m[8], q_m[8] ? q_m[7:0] : ~q_m[7:0]};
+            disp_d    = q_m[8] ? disp_q + qm_excess : disp_q - qm_excess;
+        end else begin
+            if (qm_excess[4] == disp_q[4]) begin
+                data_word = {1'b1, q_m[8], ~q_m[7:0]};
+                disp_d    = disp_q - qm_excess + (q_m[8] ? 1 : 0);
+            end else begin
+                data_word = {1'b0, q_m[8], q_m[7:0]};
+                disp_d    = disp_q + qm_excess - (q_m[8] ? 0 : 1);
+            end
         end
-        // TODO(human): DVI 1.0 stage-2 DC balancing — drive data_word
-        // and disp_next from q_m, qm_ones/qm_zeros, and disp.
-        data_word = 10'b0;
-        disp_next = disp;
     end
 
     // ── Control-period codes ────────────────────────────────────
@@ -103,22 +129,35 @@ module video_tmds_encoder (
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
             o_tmds <= 10'b1101010100;   // {vsync,hsync}=0 control code
-            disp   <= '0;
+            disp_q <= '0;
         end else if (i_de) begin
             o_tmds <= data_word;
-            disp   <= disp_next;
+            disp_q <= disp_d;
         end else begin
             o_tmds <= ctrl_word;
-            disp   <= '0;               // control periods recenter disparity
+            disp_q <= '0;               // control periods recenter disparity
         end
     end
 
 `ifdef VERILATOR
-    // The DVI running disparity is provably small; a larger magnitude
-    // means the stage-2 update arithmetic is wrong.
+    // The disparity register mirrors the line's true running excess:
+    // every emitted word must be absorbed exactly, or the encoder's
+    // idea of the line drifts from the line itself.
+    logic signed [4:0] word_excess;
+    always_comb begin
+        word_excess = -5'sd5;
+        for (int i = 0; i < 10; i++)
+            if (data_word[i]) word_excess = word_excess + 5'sd1;
+    end
+    track_word: assert property (@(posedge i_clk) disable iff (i_rst)
+        (!i_de || disp_d == disp_q + word_excess))
+        else $error("stage-2 disparity update does not absorb the emitted word");
+
+    // The DVI steering keeps the running disparity provably small; a
+    // larger magnitude means the stage-2 decision or update is wrong.
     disp_bound: assert property (@(posedge i_clk) disable iff (i_rst)
-        (disp >= -6'sd16 && disp <= 6'sd16))
-        else $error("TMDS disparity out of bounds: %0d", disp);
+        (disp_q >= -5'sd8 && disp_q <= 5'sd8))
+        else $error("TMDS disparity out of bounds: %0d", disp_q);
 `endif
 
 endmodule

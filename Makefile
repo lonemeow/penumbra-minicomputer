@@ -310,6 +310,7 @@ MODULE_TESTS = \
     penumbra3_core \
     penumbra3_mmu \
     video_pattern_test \
+    video_tmds_encoder \
     usb_crc5 \
     usb_crc16 \
     usb_bit_stuff_tx \
