@@ -312,6 +312,7 @@ MODULE_TESTS = \
     video_pattern_test \
     video_tmds_encoder \
     video_serializer \
+    video_chain_test \
     usb_crc5 \
     usb_crc16 \
     usb_bit_stuff_tx \
