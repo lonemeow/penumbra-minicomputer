@@ -1290,25 +1290,19 @@ GOT-loaded global / jump-table target).  Still open: a true dynamic
 PIE leg (with `__tls_get_addr` and runtime relocation) would also cover
 TLS-GD, which the static-link approach cannot reach.
 
-## Userland: ssh dies with SIGBUS
+## Userland: ssh dies with SIGBUS — RESOLVED (lld PLT reach)
 
-`ssh` crashes with a Bus error on launch/connect.  On this port a
-Bus error is the alignment-fault path, so the suspects are a
-misaligned access reaching the wire — crypto code type-punning a
-buffer, or codegen folding a `memcpy` into a direct load on an
-alignment assumption it did not have — and the known open DTV issue
-in dynamic binaries; ssh is likely the largest TLS-using dynamic
-binary the machine has exec'd, exactly the profile that would trip
-either first.  Triage order: read the fault PC/VA from the kernel's
-trap state (teach the SIGBUS delivery path to log them for userland
-faults if it does not), `ktrace` to see how far startup gets before
-the fault (rtld/TLS init versus key exchange), and cross-check with
-a statically linked ssh build — static-works/dynamic-dies convicts
-the rtld/DTV side, both-die convicts a miscompile in the crypto
-path.  On the miscompile branch, check the confirmed compare-elim
-carry-splice bug first (the entry above): crypto bignum code is
-carry-chain-dense, and a corrupted i64 that becomes a pointer or
-offset presents exactly as SIGBUS.
+Root-caused from the first core dump the port ever wrote: PC held
+instruction-encoding garbage loaded through a libcrypto PLT stub.
+The stub's PC-plus-two-16-bit-immediates addressing reached at most
+~98 KB and lld's split helper silently truncated beyond that;
+libcrypto's .plt-to-.got.plt span is ~232 KB, so its every stub
+loaded neighboring PLT code bytes as a function pointer.  Fixed in
+lld (full 32-bit LLI/LUI displacement; regression
+`lld/test/ELF/penumbra-plt-far.s`).  A linker change is invisible to
+nbmake's dependency tracking: the fix reaches installed binaries
+only through a clean userland rebuild, and any library that large
+built before the fix is suspect until relinked.
 
 `vmapbuf` and `vunmapbuf` in `penumbra/machdep.c` are still
 `TODO(stub)` — calls trap into DDB with `.long 0x6f400000` rather
