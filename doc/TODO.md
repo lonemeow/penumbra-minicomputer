@@ -3586,13 +3586,12 @@ change.
 
 ## Hardware + kernel: local console (HDMI text-video + USB keyboard)
 
-Design complete and committed as docs; implementation underway — the USB
-host MAC's CRC generators are the first RTL to land, with the rest of USB
-and all of text-video still to start. The goal is a standalone local
-console — character-cell video out over GPDI/HDMI and a USB keyboard in —
-so the machine needs no host terminal. NetBSD is the first consumer (boot
-may stay on UART initially); a boot-ROM local console is a later,
-well-defined follow-on.
+Design complete and committed as docs; implementation underway on both
+halves — per-layer status in the subsections below. The goal is a
+standalone local console — character-cell video out over GPDI/HDMI and a
+USB keyboard in — so the machine needs no host terminal. NetBSD is the
+first consumer (boot may stay on UART initially); a boot-ROM local
+console is a later, well-defined follow-on.
 
 Two new autoconfig device classes plus one reserved
 ([`system/bus.md`](system/bus.md)):
@@ -3620,14 +3619,53 @@ Decisions already settled (rationale lives in the docs, not here):
 Implementation work, by layer:
 
 ### Text-video RTL — first cut: mode 0 only
-- Pixel generator: dual-clock char/attr BRAM, 8×16 font ROM
-  (`$readmemh`), scan-out pipeline, mandatory hardware cursor →
-  parallel RGB.
-- Output PHY: TMDS encode ×3 + ODDR 10:1 serialize, dedicated video PLL
-  (fixed 25.175 MHz pixel / ~126 MHz serial).
-- `autoconfig_dev` wrapper (`CLASS_TEXTVIDEO`); `ulx3s_penumbra1_top` wiring to the
-  GPDI pins.
-- Goal (later): PLL dynamic-reconfig FSM + mode 1 (800×600 / 100×37).
+
+Bring-up order: prove the output path on glass with the test-pattern
+generator before any machine-side integration. Everything up to the
+GPDI connector is CPU-independent, so the physical layer's real risks
+(PLL config, serializer word alignment, lane order) are isolated from
+bus/autoconfig work and verified with nothing but a monitor. Machine
+integration then lands against a display path that is already known
+good.
+
+1. Pixel-domain chain — done: timing generator (`video_timing`),
+   test-pattern generator (`video_pattern_gen`), TMDS encoder
+   (`video_tmds_encoder`), each unit-tested against an independent
+   oracle in `make test-modules`.
+2. 10:1 DDR serializer (`video_serializer`): 5x serial clock from the
+   same PLL, two bits per serial cycle into an `ODDRX1F` owned by the
+   board top (pure-logic module — the sdram_ctrl / sdram_phy_ecp5
+   split, one level down). The DVI clock lane is a fourth instance fed
+   the constant word `10'b0000011111`, so clock and data share one
+   launch path by construction.
+3. Closed-loop chain testbench: timing → pattern → three encoders +
+   clock lane → serializers, with the testbench playing the monitor:
+   sample both DDR phases, character-align on the blanking control
+   codes, TMDS-decode, and compare a full frame against the pattern
+   oracle. After this passes, only the PLL primitive and the pads are
+   unproven.
+4. Bring-up top `ulx3s_video_test_top` via the `TOP=` escape hatch (a
+   probe, not a registered machine): dedicated video EHXPLLL at 25 MHz
+   pixel / 125 MHz serial (integer PLL ratios cannot make VESA's
+   25.175 MHz from the 25 MHz crystal; the resulting ~59 Hz refresh is
+   within monitor tolerance and the norm on this board), driving
+   `gpdi_dp[3:0]` (LVCMOS33D pairs, already in the LPF). Verify: a
+   stable test pattern on a monitor. Triage from there: no signal →
+   PLL or clock lane; rolling/tearing → serializer word alignment;
+   stable but wrong colors → lane order.
+5. Pixel generator (dual-clock char/attr BRAM, 8×16 font ROM via
+   `$readmemh`, scan-out pipeline, mandatory hardware cursor →
+   parallel RGB) — still CPU-free: a preloaded splash screen on the
+   bring-up top validates it on glass before any bus attachment.
+6. Machine side last: `autoconfig_dev` wrapper (`CLASS_TEXTVIDEO`) and
+   `ulx3s_penumbra1_top` wiring to the GPDI pins.
+
+Goal (later): PLL dynamic-reconfig FSM + mode 1 (800×600 / 100×37).
+Also worth exploring once the path is proven: a `CLASS_FRAMEBUFFER`
+device (the class is already reserved) — 320×240 @ 8bpp pixel-doubled
+to the mode-0 raster is 75 KB ≈ 34 of the ECP5-85F's 208 BRAM blocks
+plus one for a 256-entry palette, and it reuses the entire output
+path; more expressive than text for demos, not a requirement.
 
 ### USB host RTL — low + full speed
 - `usb_crc5` / `usb_crc16` — token and data CRC generators, the
@@ -3922,3 +3960,131 @@ takes its intended path explicitly rather than by fallback. Same
 trigger discipline as the text-video `region_2`/`copy_region_2`/
 `set_region_2` additions: implement when the consumer exists to
 test against, not speculatively.
+
+## Hardware: USBHC v2 — multi-transaction transfers, hardware NAK pacing
+
+Two planned upgrades to the transaction engine, targeting the two
+dominant software costs of the one-transaction-at-a-time design:
+every 64-byte transaction costs one interrupt plus a PIO drain or
+refill of the DATA window, and a NAKing endpoint costs an interrupt
+per poll.  Full-speed bulk fits ~19 packets per frame (~1.2 MB/s);
+per-transaction interrupt handling caps a 25 MHz CPU well below
+that, and the interrupt tax is felt system-wide (binary IPL, single
+wire-OR'd line).  Both features remove interrupts rather than add
+wire bandwidth.
+
+- **Multi-transaction transfers.**  Grow the DATA buffer (one 18 Kb
+  BRAM covers 2 KB; the CAP register already advertises the size and
+  the driver honors it) and let the engine chain max-packet
+  transactions within one transfer: keep issuing tokens while ACKs
+  continue and buffer remains; stop on buffer-full, short packet,
+  NAK, or error.  One completion interrupt per transfer chunk — a
+  512-byte disk block or a ure RX aggregate completes as one event
+  instead of 8–32.  Toggle tracking for the chained run moves into
+  hardware (software seeds it per transfer); XFER_STATUS grows a
+  byte count, short-packet flag, and terminating result; the frame
+  timer must gate chain segments that cannot finish before EOF.
+
+- **Hardware-assisted NAK retry.**  On NAK, re-arm the latched
+  transaction at the next frame tick (optionally a per-transaction
+  interval field for interrupt endpoints) instead of raising
+  XFER_DONE; interrupt only on a non-NAK outcome or a software
+  cancel.  An idle interrupt endpoint or a not-ready bulk device
+  then costs zero interrupts.  Open design points: the cancel
+  handshake (cancel-versus-completion race), and port sharing — a
+  parked retrying transaction occupies the single engine, so either
+  software preempts it around other traffic or the engine grows a
+  second periodic-only slot (the ISP1362 INTL/ATL shape, scaled
+  down).
+
+Both must ride the device contract compatibly: new capability bits
+and control fields that old kernels never set, with the existing
+single-transaction register behavior as the default.
+
+## NetBSD: ure(4) RX latency quantized at ~100 ms on RTL8152B
+
+A lone received packet (LAN ping reply) is delivered ~100 ms after
+it reaches the adapter; sustained traffic is unaffected.  The
+suspected mechanism is the chip's RX aggregation flush policy: a
+bulk-IN transfer only completes on a short packet, and the device
+holds a partial aggregation buffer until an internal flush
+threshold.  The driver programs `URE_USB_RX_BUF_TH` with
+`URE_RX_THR_HIGH` and never touches the flush timing.  An
+experiment writing `URE_RX_THR_SUPER` coincided with a no-RX
+session, but sessions also come up with RX dead nondeterministically
+under stock settings — a freshly replugged, cleanly enumerated
+adapter sometimes NAKs the bulk-IN pipe forever while control
+traffic (enumeration, MII polls) works throughout — so the
+experiment is inconclusive.  The suspected common cause for both
+the dead sessions and the sporadic data-transaction errors is
+transaction-level corruption occasionally landing on an init-time
+control write (e.g. the device's receive-enable), leaving the
+adapter configured blind.  Progress needs the RTL8152B register
+documentation for the threshold field, and line-level observability
+for the corruption (see the USB line-capture instrument).  Any
+resulting driver fix belongs upstream in the MI driver, not carried
+as a local patch.
+
+## Hardware: gen1 top needs a USB-subsystem floorplan pass
+
+The USB debug and correctness campaign (line capture, input
+synchronizers, arbiter drain and fairness, SOF-delivery counter)
+consumed the gen1 top's historical timing slack: seed sweeps that
+used to reach 28–30 MHz now plateau at ~25–27, with the CPU's
+single-cycle cone still the critical path — the USB logic pressures
+its placement rather than appearing in it.  Per the
+floorplan-after-features policy, give the USB subsystem the
+deliberate treatment: keep_hierarchy over the usbhc/PHY cluster
+(the capture module already has it) and, if needed, a REGION
+constraint pinning the USB complex away from the CPU cone, then
+re-sweep for a pin at or above the 27 MHz floor.
+
+## Build system: guard flashing against marginal timing
+
+`make flash` packs and flashes whatever nextpnr produced, including a
+build that missed its frequency constraint (`--timing-allow-fail`) or
+one that passed with near-zero margin — and a pinned placement seed
+goes stale the moment the netlist changes, so a routine RTL edit can
+silently produce a 25.07-MHz-on-25 bitstream whose register-tier
+flakiness then masquerades as logic bugs.  Add a guard: after PnR,
+compare the achieved CPU-clock fmax against the constraint plus the
+project's safety floor; refuse to pack/flash below it unless
+explicitly overridden, and print the figure either way.  Pair it with
+the working rule that any RTL change re-runs the seed sweep before
+the pin is trusted.
+
+## Board workflow: flashing, reset, and persistence annoyances
+
+Four friction points in the daily flash-and-test loop, roughly in
+order of pain:
+
+- **Persistent default bitstream.**  Every power cycle currently
+  loses the FPGA configuration and needs a fresh `make flash` (an
+  SRAM load).  The ULX3S SPI configuration flash can hold a
+  bitstream the ECP5 loads at power-on; teach the flow to program it
+  (fujprog writes flash with the right flag) — likely as a separate
+  `make flash-persistent` target so the fast SRAM load stays the
+  development default.
+
+- **SD card wedged by reset.**  A board reset or reflash that lands
+  mid-SPI-transaction parks the SD card in a state the ROM's init
+  cannot recover — only a power cycle clears it.  Debug the recovery
+  path: the SD-SPI init sequence should be able to rescue a card
+  abandoned mid-transaction (dummy clocks with CS deasserted, CMD0
+  retry discipline, and if need be a longer pre-init clocking burst)
+  instead of forcing the Vcc cycle.
+
+- **Multiple bitstreams in flash, selectable at boot.**  The ECP5
+  supports multiboot configurations in SPI flash (golden/update
+  images with jump records selecting which loads).  Investigate what
+  the open toolchain (ecppack/ecpmulti) supports and whether a
+  button-selected boot image is achievable on the ULX3S — would let
+  a known-good image and an experimental image coexist.
+
+- **Reset-button press needed after flash.**  After an SRAM-load
+  flash the design comes up needing a manual `btn[1]` press before
+  it runs correctly.  Investigate why the post-configuration state
+  differs from the post-reset state — likely something in the top's
+  reset generation (PLL lock vs. release timing, or state the reset
+  clears that configuration does not) — and make configuration
+  come up clean.
