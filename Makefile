@@ -862,8 +862,8 @@ FPGA_UCODE_TOPS = ulx3s_penumbra1_top
 # distinct from its base. Resolution (NEXTPNR_SEED ?= …, below the TOP
 # derivation): an explicit NEXTPNR_SEED on the command line or environment
 # always wins; `NEXTPNR_SEED=` forces a random placement; a top with no
-# entry here behaves as before (no --seed passed). gen1 needs none — it
-# runs at a lower clock where fmax is not the binding constraint.
+# entry here behaves as before (no --seed passed).
+DEFAULT_SEED_ulx3s_penumbra1_top   := 8
 DEFAULT_SEED_ulx3s_penumbra2_top   := 9
 DEFAULT_SEED_ulx3s_penumbra2_5_top := 9
 
