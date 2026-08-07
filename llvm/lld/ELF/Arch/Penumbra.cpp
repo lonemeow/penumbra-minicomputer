@@ -50,31 +50,15 @@ public:
 // Instruction encodings (little-endian):
 //   LLI R11, imm16:          0x42C00000 | (imm16 & 0xFFFF)
 //   LUI R11, imm16:          0x4AC00000 | (imm16 & 0xFFFF)
-//   MOV R11, PC (R15):       0x117E0000
-//   ADDi R11, imm16:         0x4EC00000 | (imm16 & 0xFFFF)
+//   ADD R11, PC (R15):       0x017E0000
 //   LDW R11, [R11 + off16]:  0xB2EC0000 | (off16 & 0xFFFF)
 //   JMP R11:                 0x6EC00000
 // R11 is the ABI scratch register — not callee-saved, safe to clobber.
 static constexpr uint32_t LLI_R11 = 0x42C00000;
 static constexpr uint32_t LUI_R11 = 0x4AC00000;
-static constexpr uint32_t MOV_R11_PC = 0x117E0000;
-static constexpr uint32_t ADDi_R11 = 0x4EC00000;
+static constexpr uint32_t ADD_R11_PC = 0x017E0000;
 static constexpr uint32_t LDW_R11_R11 = 0xB2EC0000;
 static constexpr uint32_t JMP_R11 = 0x6EC00000;
-
-// Split a PC-relative offset into an ADDi unsigned-16 part and an
-// LDW signed-16 displacement.  The PLT stub computes:
-//   R11 = PLT_addr + hi + lo = GOT_entry_addr
-static void splitPcRelOffset(int64_t offset, uint16_t &hi, int16_t &lo) {
-  int32_t rem = static_cast<int32_t>(offset);
-  if (rem <= 32767) {
-    hi = 0;
-    lo = static_cast<int16_t>(rem);
-  } else {
-    lo = 32767;
-    hi = static_cast<uint16_t>(rem - 32767);
-  }
-}
 
 Penumbra::Penumbra(Ctx &ctx) : TargetInfo(ctx) {
   // BREAK instruction = 0x2A000000
@@ -85,9 +69,9 @@ Penumbra::Penumbra(Ctx &ctx) : TargetInfo(ctx) {
   // GOT/PLT
   gotRel = R_PENUMBRA_GLOB_DAT;
   pltRel = R_PENUMBRA_JUMP_SLOT;
-  pltHeaderSize = 16; // 4 instructions
-  pltEntrySize = 16;
-  ipltEntrySize = 16;
+  pltHeaderSize = 20; // 5 instructions
+  pltEntrySize = 20;
+  ipltEntrySize = 20;
 
   needsThunks = true;
   copyRel = R_PENUMBRA_COPY;
@@ -176,35 +160,33 @@ static uint32_t encodeLdwOffset(int16_t byteOffset) {
   return ((static_cast<uint32_t>(byteOffset) & 0xFFFF) << 2) & 0x3FFFC;
 }
 
-// PLT header: resolver stub — loads GOT[2] (resolver address) and jumps.
-// PC-relative: MOV R11,PC + ADDi + LDW [R11+disp] + JMP R11
-void Penumbra::writePltHeader(uint8_t *buf) const {
-  uint64_t got2 = ctx.in.gotPlt->getVA() + 8; // GOT[2]
-  uint64_t pltAddr = ctx.in.plt->getVA();      // PLT header address
-  uint16_t hi;
-  int16_t lo;
-  splitPcRelOffset(got2 - pltAddr, hi, lo);
-  write32le(buf + 0, MOV_R11_PC);
-  write32le(buf + 4, ADDi_R11 | (hi & 0xFFFF));
-  write32le(buf + 8, LDW_R11_R11 | encodeLdwOffset(lo));
-  write32le(buf + 12, JMP_R11);
+// PLT stub: position-independent GOT-slot load with full 32-bit
+// reach.  LLI/LUI build the displacement from the ADD's own address
+// (which is what ADD Rd, PC reads) to the slot, in two's complement,
+// so any distance between .plt and .got.plt links correctly:
+//   LLI  R11, lo16(disp)
+//   LUI  R11, hi16(disp)
+//   ADD  R11, PC               ; R11 = slot address
+//   LDW  R11, [R11 + 0]        ; load the resolved function address
+//   JMP  R11
+static void writePltStub(uint8_t *buf, uint64_t slotAddr,
+                         uint64_t stubAddr) {
+  uint32_t disp = static_cast<uint32_t>(slotAddr - (stubAddr + 8));
+  write32le(buf + 0, LLI_R11 | (disp & 0xFFFF));
+  write32le(buf + 4, LUI_R11 | (disp >> 16));
+  write32le(buf + 8, ADD_R11_PC);
+  write32le(buf + 12, LDW_R11_R11 | encodeLdwOffset(0));
+  write32le(buf + 16, JMP_R11);
 }
 
-// PLT entry: PC-relative GOT access — position-independent.
-//   MOV  R11, PC               ; R11 = address of this instruction
-//   ADDi R11, hi_offset        ; add unsigned 16-bit high portion
-//   LDW  R11, [R11 + lo_disp]  ; load function addr from GOT entry
-//   JMP  R11                   ; tail-call to resolved function
+// PLT header: resolver stub — loads GOT[2] (resolver address) and jumps.
+void Penumbra::writePltHeader(uint8_t *buf) const {
+  writePltStub(buf, ctx.in.gotPlt->getVA() + 8, ctx.in.plt->getVA());
+}
+
 void Penumbra::writePlt(uint8_t *buf, const Symbol &sym,
                         uint64_t pltEntryAddr) const {
-  uint64_t gotAddr = sym.getGotPltVA(ctx);
-  uint16_t hi;
-  int16_t lo;
-  splitPcRelOffset(gotAddr - pltEntryAddr, hi, lo);
-  write32le(buf + 0, MOV_R11_PC);
-  write32le(buf + 4, ADDi_R11 | (hi & 0xFFFF));
-  write32le(buf + 8, LDW_R11_R11 | encodeLdwOffset(lo));
-  write32le(buf + 12, JMP_R11);
+  writePltStub(buf, sym.getGotPltVA(ctx), pltEntryAddr);
 }
 
 RelExpr Penumbra::adjustTlsExpr(RelType type, RelExpr expr) const {
