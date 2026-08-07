@@ -69,9 +69,12 @@ Penumbra::Penumbra(Ctx &ctx) : TargetInfo(ctx) {
   // GOT/PLT
   gotRel = R_PENUMBRA_GLOB_DAT;
   pltRel = R_PENUMBRA_JUMP_SLOT;
-  pltHeaderSize = 20; // 5 instructions
-  pltEntrySize = 20;
-  ipltEntrySize = 20;
+  // Position-independent output needs the PC-relative stub's extra
+  // instruction; fixed-address output uses the absolute four-instruction
+  // form.
+  pltHeaderSize = ctx.arg.isPic ? 20 : 16;
+  pltEntrySize = pltHeaderSize;
+  ipltEntrySize = pltHeaderSize;
 
   needsThunks = true;
   copyRel = R_PENUMBRA_COPY;
@@ -160,33 +163,52 @@ static uint32_t encodeLdwOffset(int16_t byteOffset) {
   return ((static_cast<uint32_t>(byteOffset) & 0xFFFF) << 2) & 0x3FFFC;
 }
 
-// PLT stub: position-independent GOT-slot load with full 32-bit
-// reach.  LLI/LUI build the displacement from the ADD's own address
-// (which is what ADD Rd, PC reads) to the slot, in two's complement,
-// so any distance between .plt and .got.plt links correctly:
+// PLT stub: load the resolved function address from the .got.plt slot
+// and tail-jump through R11, with full 32-bit reach to a slot at any
+// distance.  Two forms, chosen per link:
+//
+// Fixed-address output addresses the slot absolutely — four
+// instructions, the minimum this ISA's immediates allow:
+//   LLI  R11, lo16(slot)
+//   LUI  R11, hi16(slot)       ; LUI keeps the low half
+//   LDW  R11, [R11 + 0]
+//   JMP  R11
+//
+// Position-independent output cannot know the slot address, so the
+// stub builds the displacement from the ADD's own address (which is
+// what ADD Rd, PC reads), one instruction longer — the cost of the
+// ISA having no add-upper-to-PC form:
 //   LLI  R11, lo16(disp)
 //   LUI  R11, hi16(disp)
 //   ADD  R11, PC               ; R11 = slot address
-//   LDW  R11, [R11 + 0]        ; load the resolved function address
+//   LDW  R11, [R11 + 0]
 //   JMP  R11
-static void writePltStub(uint8_t *buf, uint64_t slotAddr,
+static void writePltStub(Ctx &ctx, uint8_t *buf, uint64_t slotAddr,
                          uint64_t stubAddr) {
-  uint32_t disp = static_cast<uint32_t>(slotAddr - (stubAddr + 8));
-  write32le(buf + 0, LLI_R11 | (disp & 0xFFFF));
-  write32le(buf + 4, LUI_R11 | (disp >> 16));
-  write32le(buf + 8, ADD_R11_PC);
-  write32le(buf + 12, LDW_R11_R11 | encodeLdwOffset(0));
-  write32le(buf + 16, JMP_R11);
+  if (ctx.arg.isPic) {
+    uint32_t disp = static_cast<uint32_t>(slotAddr - (stubAddr + 8));
+    write32le(buf + 0, LLI_R11 | (disp & 0xFFFF));
+    write32le(buf + 4, LUI_R11 | (disp >> 16));
+    write32le(buf + 8, ADD_R11_PC);
+    write32le(buf + 12, LDW_R11_R11 | encodeLdwOffset(0));
+    write32le(buf + 16, JMP_R11);
+  } else {
+    uint32_t addr = static_cast<uint32_t>(slotAddr);
+    write32le(buf + 0, LLI_R11 | (addr & 0xFFFF));
+    write32le(buf + 4, LUI_R11 | (addr >> 16));
+    write32le(buf + 8, LDW_R11_R11 | encodeLdwOffset(0));
+    write32le(buf + 12, JMP_R11);
+  }
 }
 
 // PLT header: resolver stub — loads GOT[2] (resolver address) and jumps.
 void Penumbra::writePltHeader(uint8_t *buf) const {
-  writePltStub(buf, ctx.in.gotPlt->getVA() + 8, ctx.in.plt->getVA());
+  writePltStub(ctx, buf, ctx.in.gotPlt->getVA() + 8, ctx.in.plt->getVA());
 }
 
 void Penumbra::writePlt(uint8_t *buf, const Symbol &sym,
                         uint64_t pltEntryAddr) const {
-  writePltStub(buf, sym.getGotPltVA(ctx), pltEntryAddr);
+  writePltStub(ctx, buf, sym.getGotPltVA(ctx), pltEntryAddr);
 }
 
 RelExpr Penumbra::adjustTlsExpr(RelType type, RelExpr expr) const {
