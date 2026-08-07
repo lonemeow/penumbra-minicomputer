@@ -13,9 +13,13 @@ namespace llvm {
 
 class PenumbraFrameLowering : public TargetFrameLowering {
 public:
+  // TransientStackAlignment must match StackAlign: the ABI requires SP
+  // to be 4-byte aligned at all times, not only at call sites, and PEI
+  // rounds leaf-function frames only to the transient alignment.
   PenumbraFrameLowering()
       : TargetFrameLowering(StackGrowsDown, /*StackAlign=*/Align(4),
-                            /*LocalAreaOffset=*/0) {}
+                            /*LocalAreaOffset=*/0,
+                            /*TransientStackAlign=*/Align(4)) {}
 
   void emitPrologue(MachineFunction &MF,
                     MachineBasicBlock &MBB) const override;
