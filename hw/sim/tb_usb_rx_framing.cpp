@@ -105,6 +105,65 @@ int main() {
         (check("b2b second", rb, pb) ? pass : fail)++;
     }
 
+    // Spurious SOP: a line-state excursion reads K for one cycle with no
+    // packet behind it (a speed switch over an idle line, or noise). Back
+    // at idle J, the free-running strobes decode 1 (J against the J-seeded
+    // NRZI reference). A 1 with no SYNC zero before it must not be taken
+    // for the SYNC end -- the FSM returns to idle instead of wedging in
+    // payload and swallowing the next real packet's SYNC.
+    {
+        reset(dut);
+        std::vector<Step> phantom = {
+            {LINE_J, 0, 0}, {LINE_J, 0, 0},
+            {LINE_K, 0, 0},                  // one-cycle K excursion
+            {LINE_J, 0, 0},
+            {LINE_J, 1, 1},                  // idle strobe decodes 1
+            {LINE_J, 0, 0}, {LINE_J, 1, 1},  // and keeps decoding 1
+            {LINE_J, 0, 0},
+        };
+        Res rp = run(dut, phantom);
+        bool quiet = (rp.sync_done == 0) && rp.payload.empty() && !rp.eop;
+        if (!quiet) {
+            printf("FAIL [phantom SOP quiet]: sync_done=%d payload=%zu eop=%d\n",
+                   rp.sync_done, rp.payload.size(), rp.eop);
+            fail++;
+        } else {
+            pass++;
+        }
+        // The FSM must have re-armed: the next real packet frames cleanly.
+        std::vector<int> pl = {1, 0, 1, 1, 0, 0, 1, 0};
+        Res rr = run(dut, packet_script(7, pl));
+        (check("packet after phantom SOP", rr, pl) ? pass : fail)++;
+    }
+
+    // A corrupted first SYNC sample (decodes 1 while the line still reads
+    // K) aborts the window, but S_IDLE re-enters SYNC at once on the K
+    // level, so the packet still frames off the remaining SYNC bits.
+    {
+        reset(dut);
+        std::vector<Step> s;
+        for (int i = 0; i < 3; i++) s.push_back({LINE_J, 0, 0});
+        s.push_back({LINE_K, 0, 0});         // SOP
+        s.push_back({LINE_K, 1, 1});         // corrupted sample: 1, no zero yet
+        s.push_back({LINE_K, 0, 0});
+        for (int i = 0; i < 4; i++) {        // remaining SYNC zeros
+            s.push_back({LINE_K, 1, 0});
+            s.push_back({LINE_K, 0, 0});
+        }
+        s.push_back({LINE_K, 1, 1});         // SYNC terminating 1
+        s.push_back({LINE_K, 0, 0});
+        std::vector<int> pl = {0, 1, 1, 0};
+        for (int b : pl) {
+            s.push_back({LINE_K, 1, b});
+            s.push_back({LINE_K, 0, 0});
+        }
+        s.push_back({LINE_SE0, 0, 0});
+        s.push_back({LINE_SE0, 0, 0});
+        s.push_back({LINE_J, 0, 0});
+        Res r = run(dut, s);
+        (check("corrupt first sample re-arms", r, pl) ? pass : fail)++;
+    }
+
     printf("usb_rx_framing: %d/%d tests passed\n", pass, pass + fail);
     if (fail > 0) printf("  *** %d FAILED ***\n", fail);
     delete dut;

@@ -3922,18 +3922,3 @@ takes its intended path explicitly rather than by fallback. Same
 trigger discipline as the text-video `region_2`/`copy_region_2`/
 `set_region_2` additions: implement when the consumer exists to
 test against, not speculatively.
-
-## Hardware: USB receive framing misaligns on a displaced SYNC-end edge
-
-Reproduce: enable `run_glitch_cases` in `tb_usb_phy_pair` — one
-inserted bit plus a bit-stuff error in the received packet (9 bytes
-from an 8-byte payload, SYNC zeros leaking into the byte stream).
-Which glitch offsets hit the defect shifts with scenario history, so
-the corruption is alignment-dependent, not offset-specific.  Bisected
-independent of both the SE0-filter receive-tap fix and the
-oversampler's recover-at-edge strobe: a third latent defect, most
-likely in `usb_rx_framing`'s sync-done / deserializer-init alignment
-window when the terminating-1's edge is displaced by one clock.
-Needs waveform-level tracing through framing and the deserializer
-init; the disabled tb offset documents the reproduction and should be
-re-enabled with the fix.

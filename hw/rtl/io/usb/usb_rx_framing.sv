@@ -11,6 +11,14 @@
 //     not a full SYNC-pattern match, so a hub that strips leading SYNC bits does
 //     not defeat detection. The strobe aligns the deserializer (o_sync_done ->
 //     its i_init) so the next payload bit lands as byte bit 0.
+//     The end-marker is believed only after at least one decoded 0 in the
+//     window: an idle line decodes 1 continuously (J against the J-seeded
+//     NRZI reference), so a 1 with no zero before it means the SOP was a
+//     line-state excursion, not a packet -- a speed switch over an idle
+//     line reads the stale filtered polarity as K for a cycle -- and the
+//     window is abandoned back to idle instead of wedging in payload.
+//     A real packet always shows the zero: the SOP K itself decodes 0
+//     against the idle-J reference, even with every SYNC bit hub-stripped.
 //   * End of packet -- SE0 -- returns to idle.
 //
 // During the payload it routes each decoded bit to the bit-unstuffer through
@@ -39,25 +47,37 @@ module usb_rx_framing (
     assign sop = (i_line_state == USB_LINE_K);
     assign eop = (i_line_state == USB_LINE_SE0);
 
+    // A SYNC zero has been decoded in the current window: the evidence that
+    // a real packet is behind the SOP, armed clear at window entry.
+    logic sync_zero_q, sync_zero_d;
+
     assign o_active = (state_q != S_IDLE);
 
     always_comb begin
         state_d      = state_q;
+        sync_zero_d  = sync_zero_q;
         o_sync_done  = 1'b0;
         o_payload_en = 1'b0;
         o_eop        = 1'b0;
 
         case (state_q)
             S_IDLE: begin
-                if (sop) state_d = S_SYNC;
+                if (sop) begin
+                    state_d     = S_SYNC;
+                    sync_zero_d = 1'b0;
+                end
             end
             S_SYNC: begin
                 if (eop) begin
                     o_eop   = 1'b1;
                     state_d = S_IDLE;
-                end else if (i_bit_en && i_data_bit) begin
+                end else if (i_bit_en && !i_data_bit) begin
+                    sync_zero_d = 1'b1;   // a SYNC zero: the window is real
+                end else if (i_bit_en && sync_zero_q) begin
                     o_sync_done = 1'b1;
                     state_d     = S_PAYLOAD;
+                end else if (i_bit_en) begin
+                    state_d = S_IDLE;     // a 1 with no zero: spurious SOP
                 end
             end
             S_PAYLOAD: begin
@@ -73,12 +93,22 @@ module usb_rx_framing (
     end
 
     always_ff @(posedge i_clk) begin
-        if (i_rst) state_q <= S_IDLE;
-        else       state_q <= state_d;
+        if (i_rst) begin
+            state_q     <= S_IDLE;
+            sync_zero_q <= 1'b0;
+        end else begin
+            state_q     <= state_d;
+            sync_zero_q <= sync_zero_d;
+        end
     end
 
     // SYNC-end and payload-route belong to different states; never both at once.
     assert property (@(posedge i_clk) disable iff (i_rst)
         (!(o_sync_done && o_payload_en)))
         else $error("usb_rx_framing: sync-done and payload-en asserted together");
+
+    // The SYNC end-marker is only ever believed with a SYNC zero behind it.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (o_sync_done |-> sync_zero_q))
+        else $error("usb_rx_framing: sync-done without a preceding SYNC zero");
 endmodule
