@@ -1088,18 +1088,24 @@ too, which is not what we want here.
 Tracked tests: `testcase-InstCombine-1.c`, `pr57344-3.c`,
 `pr57344-4.c` (excluded in `test/compiler/excludes.txt`).
 
-## Compiler: compare-elim splice can move a carry producer past ADC/SBC
+## Compiler: compare-elim splice past ADC/SBC — RESOLVED; frame-index hazard open
 
-The compare-elimination peephole's backward walk skips instructions
-that read SR, so its splice can move a carry-producing `ADD`/`SUB`
-past the `ADC`/`SBC` that consumes its carry, breaking i64
-arithmetic — a confirmed live miscompile on the current build.
-Repro, analysis, and the one-line fix are in
-[`doc/llvm-flag-reuse-notes.md`](llvm-flag-reuse-notes.md), along
-with a second, latent hazard in `eliminateFrameIndex` (post-RA `ADD`
-clobbers SR for frames over 32 KiB).  Multi-word carry chains are
-the bread and butter of crypto bignum code, so this is also the
-prime suspect for the ssh SIGBUS entry below.
+The compare-elimination peephole's backward walk skipped SR readers,
+so its splice could move a carry-producing `ADD`/`SUB` past the
+`ADC`/`SBC` consuming its carry, breaking i64 arithmetic.  Fixed:
+the walk bails on any gap SR reader; the repro is a negative case in
+`test/CodeGen/Penumbra/compare-elim.ll`.  Binaries built between the
+peephole extension and the fix are suspect until rebuilt — that
+window covers every installed userland, so the fix reaches the
+board only with a distribution rebuild.
+
+Still open from the same audit
+([`doc/llvm-flag-reuse-notes.md`](llvm-flag-reuse-notes.md)): the
+`eliminateFrameIndex` large-offset path emits a post-RA `ADD` that
+clobbers SR inside a live-flags window for frames over 32 KiB.
+Flags cannot be saved in software (`WRSPR SR` traps), so the fix is
+relocation — check SR liveness at the insertion point and emit the
+materialisation above the nearest earlier SR def.
 
 ## Compiler: GISel poison-flag hygiene is an LLVM rebase gate
 
