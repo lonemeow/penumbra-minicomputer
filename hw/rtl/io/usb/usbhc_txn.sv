@@ -62,19 +62,23 @@ module usbhc_txn (
     import usb_pkg::*;
 
     // Turnaround deadline, counted from the transmitter's last-byte consume:
-    // the PHY still drains the final byte plus EOP (~11 bit times), the
-    // device may answer up to 18 bit times after EOP, and the receiver only
-    // opens its window once the 8-bit SYNC is detected; the rest is slop.
-    localparam logic [5:0] TURNAROUND_BT = 6'd40;
+    // the PHY still drains the final byte plus EOP (~11 bit times), then the
+    // spec allows the device 18 bit times to answer — but real single-chip
+    // devices run far past that while their firmware is busy, and hosts
+    // that work with them in the field wait on the order of 128 bit times
+    // after EOP before declaring silence.  The budget carries that patience
+    // plus the drain; the receiver only has to open its window (SYNC
+    // detected) inside it.
+    localparam logic [7:0] TURNAROUND_BT = 8'd140;
     // Gap between two host packets of one transaction (token -> data): the
     // PHY drain (~11 bit times) plus the minimum idle the spec requires
     // between packets, so the gap exists on the wire and not just at the
     // seam.
-    localparam logic [5:0] TX_GAP_BT = 6'd16;
+    localparam logic [7:0] TX_GAP_BT = 8'd16;
     // Gap before the host ACK answers a received EOP: a couple of idle bit
     // times, comfortably inside the 16-bit-time budget the device allows.
     // The receive window closes at the line EOP, so no drain applies.
-    localparam logic [5:0] ACK_GAP_BT = 6'd4;
+    localparam logic [7:0] ACK_GAP_BT = 8'd4;
 
     typedef enum logic [2:0] {
         S_IDLE, S_TOKEN, S_GAP_DATA, S_TXDATA, S_WAIT_HS,
@@ -94,7 +98,7 @@ module usbhc_txn (
     logic [5:0] os;
     assign os = (i_speed == USB_SPEED_LS) ? 6'(USB_OS_LS) : 6'(USB_OS_FS);
     logic [5:0] phase_q, phase_d;
-    logic [5:0] bt_q, bt_d;
+    logic [7:0] bt_q, bt_d;
 
     logic rx_started_q, rx_started_d;   // the response's window opened
 
@@ -169,8 +173,8 @@ module usbhc_txn (
         // Free-running bit-time pacing; every state change restarts it.
         phase_d = (phase_q >= os - 6'd1) ? 6'd0 : phase_q + 6'd1;
         bt_d    = bt_q;
-        if (phase_q >= os - 6'd1 && bt_q != 6'h3F)
-            bt_d = bt_q + 6'd1;
+        if (phase_q >= os - 6'd1 && bt_q != 8'hFF)
+            bt_d = bt_q + 8'd1;
 
         case (state_q)
             S_IDLE: begin
@@ -279,7 +283,7 @@ module usbhc_txn (
             state_d = S_IDLE;
         if (state_d != state_q) begin
             phase_d = 6'd0;
-            bt_d    = 6'd0;
+            bt_d    = 8'd0;
         end
     end
 
@@ -292,7 +296,7 @@ module usbhc_txn (
             toggle_q       <= 1'b0;
             length_q       <= 7'd0;
             phase_q        <= 6'd0;
-            bt_q           <= 6'd0;
+            bt_q           <= 8'd0;
             rx_started_q   <= 1'b0;
             rxlen_q        <= 7'd0;
             rxtoggle_q     <= 1'b0;
