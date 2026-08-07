@@ -409,6 +409,17 @@ module usb_phy_ecp5 (
 
     // ── Line-state sideband, from the raw pins ───────────────────────
     //
+    // D+/D- are asynchronous to this clock domain; two flops per pin
+    // resolve metastability before any logic reads them.  The pins are
+    // sensed single-ended, so a transition can still be captured one
+    // clock apart between the pair — that residual skew is exactly
+    // what the SE0 filter below absorbs.
+    logic [1:0] dp_sync_q, dn_sync_q;
+    always_ff @(posedge i_clk) begin
+        dp_sync_q <= {dp_sync_q[0], i_dp};
+        dn_sync_q <= {dn_sync_q[0], i_dn};
+    end
+
     // A symbol transition can read as SE0 for a moment when D+/D- skew:
     // SE0 must hold for the filter window before it is believed, while
     // any driven state reports immediately. The window scales with the
@@ -422,7 +433,7 @@ module usb_phy_ecp5 (
     logic [1:0] raw_line;
     assign se0_window = (i_xcvr_sel == USB_SPEED_LS) ? 4'(SE0_FILT_LS)
                                                      : 4'(SE0_FILT_FS);
-    assign raw_line   = {i_dn, i_dp};
+    assign raw_line   = {dn_sync_q[1], dp_sync_q[1]};
 
     always_comb begin
         line_d    = line_q;
