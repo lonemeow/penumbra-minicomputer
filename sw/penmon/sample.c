@@ -7,6 +7,8 @@
 
 #include <sys/sysctl.h>
 #include <uvm/uvm_extern.h>
+#include <sys/evcnt.h>
+#include <stdlib.h>
 #include <machine/sysreg.h>	/* CPU_PERF_* / CPU_NPERFCTR bulk-read layout */
 #include <stdio.h>
 #include <string.h>
@@ -50,6 +52,61 @@ read_cache(const char *prefix, struct cache_ctr *c)
 	c->write_hits = read_quad(nm);
 	snprintf(nm, sizeof(nm), "%s.write_misses", prefix);
 	c->write_misses = read_quad(nm);
+}
+
+/*
+ * Per-source interrupt counters from kern.evcnt — the interrupt-typed
+ * event counters, which is what vmstat -i reports.  The reply is a
+ * packed sequence of variable-length records: a fixed header followed
+ * by the group and name strings, with ev_len giving the record's size
+ * in 8-byte units.  Sources are named "group name", matching vmstat's
+ * presentation, and only nonzero counters are requested — a device
+ * that has never interrupted earns no panel row.
+ */
+static void
+read_intr_counters(struct snapshot *s)
+{
+	const int mib[4] = { CTL_KERN, KERN_EVCNT, EVCNT_TYPE_INTR,
+	    KERN_EVCNT_COUNT_NONZERO };
+	const struct evcnt_sysctl *ev;
+	const char *end;
+	static char *buf;
+	static size_t bufcap;
+	size_t len = 0;
+
+	s->nirq = 0;
+
+	if (sysctl(mib, __arraycount(mib), NULL, &len, NULL, 0) != 0 ||
+	    len == 0)
+		return;
+	if (len > bufcap) {
+		char *nb = realloc(buf, len);
+
+		if (nb == NULL)
+			return;
+		buf = nb;
+		bufcap = len;
+	}
+	if (sysctl(mib, __arraycount(mib), buf, &len, NULL, 0) != 0)
+		return;
+
+	end = buf + len;
+	ev = (const struct evcnt_sysctl *)(const void *)buf;
+	while ((const char *)ev + sizeof(*ev) <= end &&
+	    s->nirq < PENMON_IRQ_MAX) {
+		size_t reclen = (size_t)ev->ev_len * 8;
+		const char *group = ev->ev_strings;
+		const char *name = group + ev->ev_grouplen + 1;
+
+		if (reclen < sizeof(*ev) || (const char *)ev + reclen > end)
+			break;
+		snprintf(s->irq[s->nirq].name, PENMON_IRQ_NAME, "%s %s",
+		    group, name);
+		s->irq[s->nirq].count = ev->ev_count;
+		s->nirq++;
+		ev = (const struct evcnt_sysctl *)(const void *)
+		    ((const char *)ev + reclen);
+	}
 }
 
 int
@@ -138,6 +195,8 @@ read_snapshot(struct snapshot *s)
 			s->forks    = (uint64_t)u.forks;
 		}
 	}
+
+	read_intr_counters(s);
 
 	/* kern.cp_time is a fixed 5-entry uint64 array of clock ticks. */
 	mib[0] = CTL_KERN;
@@ -254,4 +313,37 @@ compute_rates(const struct snapshot *prev, const struct snapshot *cur,
 	out->syscall_per_sec = (double)(cur->syscalls - prev->syscalls) / dt;
 	out->csw_per_sec     = (double)(cur->swtch    - prev->swtch)    / dt;
 	out->fork_per_sec    = (double)(cur->forks    - prev->forks)    / dt;
+
+	/* Per-source interrupt rates, matched by name across the two
+	 * snapshots: the set changes as devices attach and detach, so
+	 * index position carries no meaning between samples. */
+	out->nirq = 0;
+	for (int k = 0; k < cur->nirq; k++) {
+		int j;
+
+		for (j = 0; j < prev->nirq; j++) {
+			if (strcmp(cur->irq[k].name, prev->irq[j].name) != 0)
+				continue;
+			strlcpy(out->irq[out->nirq].name, cur->irq[k].name,
+			    PENMON_IRQ_NAME);
+			out->irq[out->nirq].per_sec =
+			    (double)(cur->irq[k].count - prev->irq[j].count) /
+			    dt;
+			out->nirq++;
+			break;
+		}
+	}
+
+	/* Busiest first — a fixed-height panel shows the top few. */
+	for (int k = 1; k < out->nirq; k++) {
+		int j = k;
+
+		while (j > 0 && out->irq[j].per_sec > out->irq[j - 1].per_sec) {
+			typeof(out->irq[0]) tmp = out->irq[j];
+
+			out->irq[j] = out->irq[j - 1];
+			out->irq[j - 1] = tmp;
+			j--;
+		}
+	}
 }

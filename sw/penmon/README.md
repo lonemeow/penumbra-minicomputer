@@ -33,6 +33,12 @@ rates — read straight from the sysctl tree.
 - **Cache rows** — `machdep.cache.{l1i,l1d,l2}.*`: hit %, miss rate, and a
   rolling sparkline of recent hit rate.
 - **MEM** — `vm.uvmexp2` used/total.
+- **IRQ panel** — per-source interrupt rates from `kern.evcnt`
+  (interrupt-typed counters, the set `vmstat -i` reports), busiest
+  first. Sources are matched by name between samples, since devices
+  attach and detach; a source needs two samples before it shows a
+  rate. Shown only when the terminal has rows and columns to spare
+  beyond the process table, which a small screen keeps instead.
 - **Process table** — `KERN_PROC2`, sorted by %CPU.
 
 All hardware counters are free-running 32-bit and wrap in ~85–170 s at

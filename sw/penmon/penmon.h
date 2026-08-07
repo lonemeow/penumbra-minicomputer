@@ -29,6 +29,17 @@ struct cache_ctr {
 	uint64_t write_misses;
 };
 
+/* Per-source interrupt counters (kern.evcnt, EVCNT_TYPE_INTR — the
+ * same set vmstat -i reports).  Sources come and go as devices attach,
+ * so a snapshot carries its own list and rates are matched by name. */
+#define PENMON_IRQ_MAX   16
+#define PENMON_IRQ_NAME  28
+
+struct irqsrc {
+	char     name[PENMON_IRQ_NAME];	/* "group name", as vmstat -i prints */
+	uint64_t count;			/* cumulative */
+};
+
 /* A complete reading of every counter at one instant. */
 struct snapshot {
 	struct timespec t;		/* CLOCK_MONOTONIC at sample time */
@@ -47,6 +58,8 @@ struct snapshot {
 	uint64_t syscalls;		/* vm.uvmexp2.syscalls */
 	uint64_t swtch;			/* vm.uvmexp2.swtch — context switches */
 	uint64_t forks;			/* vm.uvmexp2.forks — process creations */
+	struct irqsrc irq[PENMON_IRQ_MAX];
+	int      nirq;			/* sources present in this snapshot */
 };
 
 /* Per-cache derived rates for display. */
@@ -74,6 +87,12 @@ struct rates {
 	double csw_per_sec;		/* context switches / s */
 	double fork_per_sec;		/* process creations / s */
 	struct cache_rate l1i, l1d, l2;
+	/* Per-source interrupt rates, highest first.  A source absent
+	 * from the previous snapshot (a device that just attached)
+	 * contributes no rate until it has been seen twice. */
+	struct { char name[PENMON_IRQ_NAME]; double per_sec; }
+		 irq[PENMON_IRQ_MAX];
+	int      nirq;
 };
 
 /* kern.cp_time index names. */

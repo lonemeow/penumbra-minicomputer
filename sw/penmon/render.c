@@ -277,6 +277,14 @@ human_bytes(uint64_t b, char *buf, size_t bufsz)
  */
 #define BAR_X      13	/* left edge shared by the CPU/CPI/cache/MEM bars */
 #define INFO_W     48	/* min cols reserved for readouts (MEM is widest) */
+
+/* Per-source interrupt panel: shown only when the terminal has room to
+ * spare beyond the fixed panels, the process header, and a few process
+ * rows worth keeping. */
+#define IRQ_MIN_LINES  26	/* fixed panels + header + rows worth keeping */
+#define IRQ_MIN_COLS   72	/* two sources per line, side by side */
+#define IRQ_MAX_SHOWN  8
+#define IRQ_LABEL_W    22
 #define BAR_GAP     2	/* blank columns between a bar and the info zone  */
 #define MIN_BAR_W  12	/* floor so a narrow terminal never collapses it  */
 #define MISS_W      9	/* "%7.0f/s" — the cache miss-rate field width    */
@@ -448,26 +456,49 @@ render_frame(const struct rates *r, const struct history *h,
 	    r->fork_per_sec);
 
 	scr_fill(14, 0, cols, GLYPH_HLINE, A_NORM);
+	y = 15;
+
+	/* ── Per-source interrupts ─────────────────────────────────
+	 * Only on a terminal with rows to spare: the process table is
+	 * the panel a small screen must keep, so this one appears when
+	 * both fit.  Two sources per line, busiest first. */
+	if (r->nirq > 0 && cols >= IRQ_MIN_COLS &&
+	    lines >= IRQ_MIN_LINES + (r->nirq + 1) / 2) {
+		int n = r->nirq > IRQ_MAX_SHOWN ? IRQ_MAX_SHOWN : r->nirq;
+
+		scr_printf(y, 1, pair_attr(PAIR_HDR), "IRQ");
+		for (i = 0; i < n; i++) {
+			int col = (i & 1) ? cols / 2 : 6;
+
+			scr_printf(y + i / 2, col, A_NORM, "%-*.*s %7.0f/s",
+			    IRQ_LABEL_W, IRQ_LABEL_W, r->irq[i].name,
+			    r->irq[i].per_sec);
+		}
+		y += (n + 1) / 2;
+		scr_fill(y, 0, cols, GLYPH_HLINE, A_NORM);
+		y++;
+	}
 
 	/* ── Process table ─────────────────────────────────────── */
-	scr_fill(15, 0, cols, ' ', pair_attr(PAIR_HDR));
-	scr_printf(15, 1, pair_attr(PAIR_HDR), "%6s %-10s %5s %8s %2s %s",
+	scr_fill(y, 0, cols, ' ', pair_attr(PAIR_HDR));
+	scr_printf(y, 1, pair_attr(PAIR_HDR), "%6s %-10s %5s %8s %2s %s",
 	    "PID", "USER", "%CPU", "RSS", "ST", "COMMAND");
+	y++;
 
-	for (i = 0; i < nproc && (16 + i) < lines - 1; i++) {
+	for (i = 0; i < nproc && (y + i) < lines - 1; i++) {
 		const struct procinfo *p = &procs[i];
 		int pc = metric_color(p->pctcpu, 1.0, 20.0, 1);
 
 		human_bytes(p->rss_bytes, rbuf, sizeof(rbuf));
-		scr_printf(16 + i, 1, A_NORM, "%6d %-10.10s ", p->pid, p->user);
-		scr_printf(16 + i, 19, pair_attr(pc), "%5.1f", p->pctcpu);
-		scr_printf(16 + i, 25, A_NORM, " %8s %c  %-.*s",
+		scr_printf(y + i, 1, A_NORM, "%6d %-10.10s ", p->pid, p->user);
+		scr_printf(y + i, 19, pair_attr(pc), "%5.1f", p->pctcpu);
+		scr_printf(y + i, 25, A_NORM, " %8s %c  %-.*s",
 		    rbuf, p->state, cols - 40, p->comm);
 	}
 
 	/* ── Help line ─────────────────────────────────────────── */
 	scr_printf(lines - 1, 1, pair_attr(PAIR_DIM),
-	    "q quit   space refresh   +/- interval (%.1fs)", interval);
+	    "q quit   space refresh   l redraw   +/- interval (%.1fs)", interval);
 
 	scr_flush();
 }
