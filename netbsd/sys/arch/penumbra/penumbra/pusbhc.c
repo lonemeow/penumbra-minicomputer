@@ -25,9 +25,10 @@
  * pipe executes at most one transfer at a time, a transfer advances
  * one hardware transaction at a time, and the single port serves one
  * pipe's transaction at a time from a ready queue.  The hard
- * interrupt handler advances the engine (XFER_DONE) and paces
- * interrupt-endpoint polling (SOF); finished transfers are posted to
- * the soft interrupt, which delivers completions under the bus lock.
+ * interrupt handler advances the engine (XFER_DONE) and paces NAK
+ * retries and interrupt-endpoint polling (SOF); finished transfers
+ * are posted to the soft interrupt, which delivers completions under
+ * the bus lock.
  * All packet data stages through the controller's DATA buffer, so
  * nothing outside the completion path touches a caller's memory.
  */
@@ -42,6 +43,7 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <sys/kernel.h>
 #include <sys/kmem.h>
 #include <sys/mutex.h>
+#include <sys/sysctl.h>
 #include <sys/intr.h>
 #include <sys/bus.h>
 
@@ -70,6 +72,25 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #define USBHC_CAP_BUFSZ(c)	(((c) >> 8) & 0xff)
 #define USBHC_CAP_LS		0x00010000
 #define USBHC_CAP_FS		0x00020000
+#define USBHC_CAP_CAPTURE	0x00040000
+
+#define USBHC_CAP_CTRL		0x24
+#define USBHC_CAP_STATUS	0x28
+#define USBHC_CAP_ADDR		0x2C
+#define USBHC_CAP_DATA		0x30
+
+#define USBHC_CC_ARM		0x001
+#define USBHC_CC_TRIG_ERR	0x002
+#define USBHC_CC_TRIG_TIMEOUT	0x004
+#define USBHC_CC_TRIG_STUFF	0x008
+#define USBHC_CC_FORCE		0x100
+
+#define USBHC_SOF_TX		0x34
+
+#define USBHC_CS_ARMED		0x001
+#define USBHC_CS_FROZEN		0x002
+#define USBHC_CS_DEPTH_LOG2(s)	(((s) >> 8) & 0xff)
+#define USBHC_CS_TRIG_ADDR(s)	(((s) >> 16) & 0xffff)
 
 #define USBHC_IRQ_XFER_DONE	0x00000001
 #define USBHC_IRQ_PORT_CHANGE	0x00000002
@@ -106,6 +127,13 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #define USBHC_RESULT_OVERFLOW	5
 #define USBHC_XS_RXTOGGLE	0x00000010
 #define USBHC_XS_RXLEN(xs)	(((xs) >> 8) & 0x7f)
+
+/*
+ * Frames waited before the Nth retry of an errored transaction; the
+ * table length is the retry budget.  The spread covers a device
+ * firmware busy window of a few tens of milliseconds.
+ */
+static const uint8_t pusbhc_retry_frames[] = { 1, 8, 32 };
 
 /*
  * A device pipe executes at most one transfer at a time (the MI stack
@@ -165,6 +193,8 @@ struct pusbhc_softc {
 	uint16_t		sc_port_change;	/* accumulated UPS_C_* */
 	bool			sc_connect_view; /* last reported CONNECT */
 	bool			sc_dying;
+	bool			sc_has_capture;	/* CAP advertises the instrument */
+	bool			sc_capfrozen_said; /* frozen-notice printed */
 
 	/* Transfer engine, under sc_intr_lock. */
 	SIMPLEQ_HEAD(, pusbhc_pipe) sc_ready;	/* pipes wanting the port */
@@ -177,12 +207,17 @@ struct pusbhc_softc {
 	 * XFER_STATUS.RESULT code plus the interrupt sources. */
 	struct evcnt		sc_ev_result[6];
 	struct evcnt		sc_ev_sof;
+	struct evcnt		sc_ev_sof_wire;	   /* markers on the wire */
+	uint16_t		sc_sof_tx_last;
 	struct evcnt		sc_ev_port;
 	struct evcnt		sc_ev_rxlen_bad;   /* RXLEN over the ask */
 	struct evcnt		sc_ev_toggle_bad;  /* toggle desync */
 	struct evcnt		sc_ev_stray_done;  /* completion with no owner */
 	struct evcnt		sc_ev_abort;	   /* MI abort / timeout */
 };
+
+/* Single controller instance, for the debug sysctl view. */
+static struct pusbhc_softc *pusbhc_sysctl_sc;
 
 #define PUSBHC_BUS2SC(bus)	((bus)->ub_hcpriv)
 #define PUSBHC_PIPE2SC(pipe)	PUSBHC_BUS2SC((pipe)->up_dev->ud_bus)
@@ -223,12 +258,13 @@ static void	pusbhc_write_data(struct pusbhc_softc *, const uint8_t *,
 static void	pusbhc_read_data(struct pusbhc_softc *, uint8_t *, u_int);
 static bool	pusbhc_stage_isread(struct pusbhc_pipe *);
 static void	pusbhc_update_irqmask(struct pusbhc_softc *);
+static void	pusbhc_capture_dump(struct pusbhc_softc *);
 static void	pusbhc_launch(struct pusbhc_softc *);
 static void	pusbhc_kick(struct pusbhc_softc *);
 static void	pusbhc_pipe_ready(struct pusbhc_softc *,
 		    struct pusbhc_pipe *);
 static void	pusbhc_pipe_wait(struct pusbhc_softc *,
-		    struct pusbhc_pipe *);
+		    struct pusbhc_pipe *, u_int);
 static void	pusbhc_complete(struct pusbhc_softc *, struct pusbhc_pipe *,
 		    usbd_status);
 static void	pusbhc_advance(struct pusbhc_softc *, struct pusbhc_pipe *,
@@ -307,6 +343,7 @@ pusbhc_attach(device_t parent, device_t self, void *aux)
 
 	cap = PUSBHC_RD4(sc, USBHC_CAP);
 	sc->sc_bufsz = USBHC_CAP_BUFSZ(cap);
+	sc->sc_has_capture = (cap & USBHC_CAP_CAPTURE) != 0;
 
 	aprint_normal(": Penumbra USB host controller (v%u, buf %u%s%s)\n",
 	    USBHC_CAP_VERSION(cap), sc->sc_bufsz,
@@ -355,6 +392,8 @@ pusbhc_attach(device_t parent, device_t self, void *aux)
 			    resnames[i]);
 		evcnt_attach_dynamic(&sc->sc_ev_sof, EVCNT_TYPE_INTR, NULL,
 		    device_xname(self), "intr sof");
+		evcnt_attach_dynamic(&sc->sc_ev_sof_wire, EVCNT_TYPE_MISC,
+		    NULL, device_xname(self), "sof wire");
 		evcnt_attach_dynamic(&sc->sc_ev_port, EVCNT_TYPE_INTR, NULL,
 		    device_xname(self), "intr port change");
 		evcnt_attach_dynamic(&sc->sc_ev_rxlen_bad, EVCNT_TYPE_MISC,
@@ -375,8 +414,134 @@ pusbhc_attach(device_t parent, device_t self, void *aux)
 
 	pusbhc_update_irqmask(sc);
 
+	/*
+	 * Arm the line-capture instrument on error and timeout: the
+	 * first failing transaction of the boot freezes a line trace,
+	 * which the soft interrupt dumps to the console once.
+	 */
+	if (sc->sc_has_capture)
+		PUSBHC_WR4(sc, USBHC_CAP_CTRL, USBHC_CC_ARM |
+		    USBHC_CC_TRIG_ERR | USBHC_CC_TRIG_TIMEOUT);
+
 	sc->sc_child = config_found(self, &sc->sc_bus, usbctlprint,
 	    CFARGS_NONE);
+
+	pusbhc_sysctl_sc = sc;
+}
+
+/*
+ * machdep.pusbhc.port — the port's live view {PORT_STATUS, PORT_CTRL,
+ * change latch, IRQ_STATUS, IRQ_ENABLE}, for post-mortem reads when
+ * the port behaves deafly: it distinguishes a wedged detector
+ * (CONNECT stale), a broken event path (CONNECT moved, no change
+ * latched), a silently powered-off port, and an event latched in
+ * hardware but never delivered (IRQ_STATUS set, latch empty) at one
+ * glance.  Reading IRQ_STATUS has no side effect — acknowledge is an
+ * explicit write-one-to-clear.
+ */
+static int
+pusbhc_sysctl_port(SYSCTLFN_ARGS)
+{
+	struct sysctlnode node;
+	struct pusbhc_softc *sc = pusbhc_sysctl_sc;
+	uint32_t v[5];
+
+	if (sc == NULL)
+		return ENXIO;
+	mutex_enter(&sc->sc_intr_lock);
+	v[0] = PUSBHC_RD4(sc, USBHC_PORT_STATUS);
+	v[1] = PUSBHC_RD4(sc, USBHC_PORT_CTRL);
+	v[2] = sc->sc_port_change;
+	v[3] = PUSBHC_RD4(sc, USBHC_IRQ_STATUS);
+	v[4] = PUSBHC_RD4(sc, USBHC_IRQ_ENABLE);
+	mutex_exit(&sc->sc_intr_lock);
+	node = *rnode;
+	node.sysctl_data = v;
+	node.sysctl_size = sizeof(v);
+	return sysctl_lookup(SYSCTLFN_CALL(&node));
+}
+
+/*
+ * machdep.pusbhc.capdump — write 1 to dump a frozen line capture to
+ * the console and re-arm the trigger; write 2 to discard it and
+ * re-arm.  Runs from process context, so the multi-second console
+ * write does not sit inside USB servicing.
+ */
+static int
+pusbhc_sysctl_capdump(SYSCTLFN_ARGS)
+{
+	struct sysctlnode node;
+	struct pusbhc_softc *sc = pusbhc_sysctl_sc;
+	int v = 0, error;
+
+	if (sc == NULL || !sc->sc_has_capture)
+		return ENXIO;
+	node = *rnode;
+	node.sysctl_data = &v;
+	error = sysctl_lookup(SYSCTLFN_CALL(&node));
+	if (error || newp == NULL)
+		return error;
+	if (v == 0)
+		return 0;
+	if ((PUSBHC_RD4(sc, USBHC_CAP_STATUS) & USBHC_CS_FROZEN) == 0)
+		return EBUSY;
+	/* 1 dumps the frozen trace and re-arms; 2 discards it and
+	 * re-arms, keeping the instrument live past an uninteresting
+	 * freeze without the multi-second console write. */
+	if (v == 1)
+		pusbhc_capture_dump(sc);
+	sc->sc_capfrozen_said = false;
+	PUSBHC_WR4(sc, USBHC_CAP_CTRL, USBHC_CC_ARM |
+	    USBHC_CC_TRIG_ERR | USBHC_CC_TRIG_TIMEOUT);
+	return 0;
+}
+
+SYSCTL_SETUP(sysctl_pusbhc_setup, "machdep.pusbhc — USB port debug view")
+{
+	const struct sysctlnode *n = NULL;
+
+	sysctl_createv(clog, 0, NULL, &n,
+	    CTLFLAG_PERMANENT,
+	    CTLTYPE_NODE, "pusbhc",
+	    SYSCTL_DESCR("USB host controller debug view"),
+	    NULL, 0, NULL, 0,
+	    CTL_MACHDEP, CTL_CREATE, CTL_EOL);
+	sysctl_createv(clog, 0, &n, NULL,
+	    CTLFLAG_PERMANENT,
+	    CTLTYPE_STRUCT, "port",
+	    SYSCTL_DESCR("Live {PORT_STATUS, PORT_CTRL, change latch, "
+		"IRQ_STATUS, IRQ_ENABLE}"),
+	    pusbhc_sysctl_port, 0, NULL, 0,
+	    CTL_CREATE, CTL_EOL);
+	sysctl_createv(clog, 0, &n, NULL,
+	    CTLFLAG_PERMANENT | CTLFLAG_READWRITE,
+	    CTLTYPE_INT, "capdump",
+	    SYSCTL_DESCR("Write 1: dump the frozen line capture, re-arm; "
+		"2: discard, re-arm"),
+	    pusbhc_sysctl_capdump, 0, NULL, 0,
+	    CTL_CREATE, CTL_EOL);
+}
+
+/*
+ * Dump a frozen line capture to the console, once per boot: header
+ * with the trigger index, then the raw samples for offline decoding.
+ * Debug instrumentation — the multi-second console write is accepted.
+ */
+static void
+pusbhc_capture_dump(struct pusbhc_softc *sc)
+{
+	uint32_t st = PUSBHC_RD4(sc, USBHC_CAP_STATUS);
+	u_int depth = 1u << USBHC_CS_DEPTH_LOG2(st);
+	u_int i;
+
+	printf("%s: line capture frozen, trig=%u depth=%u\n",
+	    device_xname(sc->sc_dev), USBHC_CS_TRIG_ADDR(st), depth);
+	PUSBHC_WR4(sc, USBHC_CAP_ADDR, 0);
+	for (i = 0; i < depth; i++) {
+		printf("%04x%s", PUSBHC_RD4(sc, USBHC_CAP_DATA) & 0xffff,
+		    ((i & 15) == 15) ? "\n" : " ");
+	}
+	printf("%s: capture end\n", device_xname(sc->sc_dev));
 }
 
 /*
@@ -396,6 +561,20 @@ pusbhc_intr(void *arg)
 	mutex_enter(&sc->sc_intr_lock);
 	status = PUSBHC_RD4(sc, USBHC_IRQ_STATUS) &
 	    PUSBHC_RD4(sc, USBHC_IRQ_ENABLE);
+
+	/*
+	 * Transmitted-marker accounting rides every interrupt entry: the
+	 * SOF interrupt is masked whenever no pipe is pacing, so hanging
+	 * the update off that branch alone freezes the counter on a
+	 * quiet port and fakes marker loss.
+	 */
+	if (sc->sc_has_capture) {
+		uint16_t tx = PUSBHC_RD4(sc, USBHC_SOF_TX) & 0xffff;
+
+		sc->sc_ev_sof_wire.ev_count +=
+		    (uint16_t)(tx - sc->sc_sof_tx_last);
+		sc->sc_sof_tx_last = tx;
+	}
 
 	if (status & USBHC_IRQ_XFER_DONE) {
 		uint32_t xs = PUSBHC_RD4(sc, USBHC_XFER_STATUS);
@@ -493,6 +672,22 @@ pusbhc_softintr(void *arg)
 
 	mutex_enter(&sc->sc_lock);
 	pusbhc_drain_done(sc);
+
+	/*
+	 * A failing transaction froze a line trace.  Announce once and
+	 * leave it frozen: the dump is 20 KB of console output — run
+	 * from interrupt-adjacent context it blocks USB servicing long
+	 * enough to manufacture failures of its own.  Software reads it
+	 * on request (machdep.pusbhc.capdump) from process context.
+	 */
+	if (sc->sc_has_capture && !sc->sc_capfrozen_said &&
+	    (PUSBHC_RD4(sc, USBHC_CAP_STATUS) & USBHC_CS_FROZEN) != 0) {
+		sc->sc_capfrozen_said = true;
+		printf("%s: line capture frozen; "
+		    "sysctl machdep.pusbhc.capdump=1 to dump\n",
+		    device_xname(sc->sc_dev));
+	}
+
 	xfer = sc->sc_intr_xfer;
 
 	mutex_enter(&sc->sc_intr_lock);
@@ -833,15 +1028,17 @@ pusbhc_pipe_ready(struct pusbhc_softc *sc, struct pusbhc_pipe *pp)
 	pusbhc_kick(sc);
 }
 
-/* Sit out pp_interval frames; the SOF tick re-readies the pipe. */
+/* Sit out the given frames; the SOF tick re-readies the pipe. */
 static void
-pusbhc_pipe_wait(struct pusbhc_softc *sc, struct pusbhc_pipe *pp)
+pusbhc_pipe_wait(struct pusbhc_softc *sc, struct pusbhc_pipe *pp,
+    u_int frames)
 {
 	KASSERT(mutex_owned(&sc->sc_intr_lock));
 	KASSERT(sc->sc_active != pp);
+	KASSERT(frames > 0);
 
 	pp->pp_state = PUSBHC_PIPE_WAITFRAME;
-	pp->pp_countdown = pp->pp_interval;
+	pp->pp_countdown = frames;
 	SIMPLEQ_INSERT_TAIL(&sc->sc_wait, pp, pp_q);
 	pusbhc_update_irqmask(sc);
 	pusbhc_kick(sc);
@@ -988,19 +1185,29 @@ pusbhc_xfer_done(struct pusbhc_softc *sc, uint32_t xs)
 
 	case USBHC_RESULT_NAK:
 		/*
+		 * A NAK is a successfully completed transaction, so it
+		 * resets the consecutive-error count like an ACK does.
+		 * Without this, a NAK-polling pipe (bulk-IN at ~1 kHz)
+		 * accumulates sporadic line errors across minutes of
+		 * clean NAKs until three unrelated events kill the
+		 * transfer.
+		 *
 		 * A NAK never advances the transfer; the same
-		 * transaction runs again.  Interrupt endpoints poll at
-		 * their declared interval — an idle HID device NAKs
-		 * forever, so pacing is their steady state.  Control
-		 * and bulk retry through the ready queue: alone on the
-		 * bus that re-grants the port immediately, under
-		 * contention it round-robins.
+		 * transaction runs again — but never back-to-back.
+		 * Every completed transaction interrupts, IPL is
+		 * binary, and the CPU shares one wire-OR'd line, so an
+		 * immediate relaunch turns a NAKing endpoint (a bulk
+		 * disk digesting a command as much as an idle HID
+		 * device) into a full-rate interrupt loop that starves
+		 * the rest of the machine.  All pipe types therefore
+		 * pace their retry through the frame wait: interrupt
+		 * endpoints at their declared interval, control and
+		 * bulk at the next frame — the cadence a hardware
+		 * scheduler would retry them at anyway.
 		 */
+		pp->pp_errors = 0;
 		sc->sc_active = NULL;
-		if (pp->pp_type == UE_INTERRUPT)
-			pusbhc_pipe_wait(sc, pp);
-		else
-			pusbhc_pipe_ready(sc, pp);
+		pusbhc_pipe_wait(sc, pp, pp->pp_interval);
 		break;
 
 	case USBHC_RESULT_STALL:
@@ -1011,10 +1218,25 @@ pusbhc_xfer_done(struct pusbhc_softc *sc, uint32_t xs)
 	case USBHC_RESULT_ERROR:
 	case USBHC_RESULT_OVERFLOW:
 	default:
-		/* Three consecutive failures kill the transfer, per
-		 * the USB error-recovery rule. */
-		if (++pp->pp_errors < 3) {
-			pusbhc_launch(sc);
+		/* Consecutive failures retry with an exponential
+		 * frame backoff before the transfer is killed.  The
+		 * pacing serves two masters: an errored transaction
+		 * is short (a timeout is ~20 us of bus time), so
+		 * back-to-back retries against a wedged device — with
+		 * the consumer resubmitting each killed transfer —
+		 * are an even hotter interrupt loop than NAK spin;
+		 * and single-microcontroller devices go deaf for
+		 * milliseconds when a control request sends their
+		 * firmware off to work (address change, configuration
+		 * apply), so a retry burst inside one such window
+		 * condemns a device that a later try would reach.
+		 * The spread lets at least one retry land tens of
+		 * frames out — the patience field-proven hosts give.
+		 */
+		if (pp->pp_errors < __arraycount(pusbhc_retry_frames)) {
+			sc->sc_active = NULL;
+			pusbhc_pipe_wait(sc, pp,
+			    pusbhc_retry_frames[pp->pp_errors++]);
 			break;
 		}
 		pusbhc_complete(sc, pp,
@@ -1275,6 +1497,13 @@ pusbhc_roothub_ctrl(struct usbd_bus *bus, usb_device_request_t *req,
 			mutex_enter(&sc->sc_intr_lock);
 			PUSBHC_WR4(sc, USBHC_PORT_CTRL, 0);
 			mutex_exit(&sc->sc_intr_lock);
+			/*
+			 * Everything stops with the port power: frame
+			 * markers, connect detection, the lot.  Say so —
+			 * a silently dark port reads as a wedge.
+			 */
+			aprint_normal_dev(sc->sc_dev,
+			    "port power off; connect detection stops\n");
 			break;
 		case UHF_C_PORT_CONNECTION:
 			mutex_enter(&sc->sc_intr_lock);
