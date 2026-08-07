@@ -39,11 +39,16 @@ ld*		at sdmmc?
 pusbhc0		at pbbus?
 usb*		at pusbhc?
 uhub*		at usb?
+uhub*		at uhub? port ?	# cascaded hubs (FS devices only: no PRE)
 
 # USB mass storage -> SCSI disk
 umass*		at uhub? port ?
 scsibus*	at scsi?
 sd*		at scsibus? target ? lun ?
+
+# USB human interface devices
+uhidev*		at uhub? port ? configuration ? interface ?
+uhid*		at uhidev? reportid ?	# generic HID (/dev/uhid*)
 
 # USB network
 ure*		at uhub? port ?	# Realtek RTL8152/RTL8153 based adapters
