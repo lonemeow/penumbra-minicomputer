@@ -314,6 +314,11 @@ package penumbra_pkg;
     localparam logic [6:0] USBHC_REG_TOKEN       = 7'h18;
     localparam logic [6:0] USBHC_REG_XFER_CTRL   = 7'h1C;
     localparam logic [6:0] USBHC_REG_XFER_STATUS = 7'h20;
+    localparam logic [6:0] USBHC_REG_CAP_CTRL    = 7'h24;
+    localparam logic [6:0] USBHC_REG_CAP_STATUS  = 7'h28;
+    localparam logic [6:0] USBHC_REG_CAP_ADDR    = 7'h2C;
+    localparam logic [6:0] USBHC_REG_CAP_DATA    = 7'h30;
+    localparam logic [6:0] USBHC_REG_SOF_TX      = 7'h34;
     localparam logic [6:0] USBHC_REG_DATA        = 7'h40;  // ..0x7C, the packet buffer
 
     // IRQ_STATUS / IRQ_ENABLE bit positions

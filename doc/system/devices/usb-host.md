@@ -36,6 +36,11 @@ protocol's [Access Width](../../hardware/bus-protocol.md#access-width).
 | `0x18`      | `TOKEN`       | R/W   | Transaction token                    |
 | `0x1C`      | `XFER_CTRL`   | W     | Transaction length + start           |
 | `0x20`      | `XFER_STATUS` | R     | Transaction result + received length |
+| `0x24`      | `CAP_CTRL`    | R/W   | Line capture: arm + trigger select   |
+| `0x28`      | `CAP_STATUS`  | R     | Line capture: state + trigger index  |
+| `0x2C`      | `CAP_ADDR`    | R/W   | Line capture: read index             |
+| `0x30`      | `CAP_DATA`    | R     | Line capture: sample at `CAP_ADDR`   |
+| `0x34`      | `SOF_TX`      | R     | Frame markers actually transmitted   |
 | `0x40…0x7C` | `DATA`        | R/W   | Packet data buffer                   |
 
 ### Register Details
@@ -45,6 +50,7 @@ protocol's [Access Width](../../hardware/bus-protocol.md#access-width).
 - Bits [15:8]: `DATA` buffer size in bytes
 - Bit [16]: `LS` — low-speed (1.5 Mbps) supported
 - Bit [17]: `FS` — full-speed (12 Mbps) supported
+- Bit [18]: `CAPTURE` — the line-capture instrument is present
 
 #### IRQ_STATUS (0x04) — write-1-to-clear
 - Bit [0]: `XFER_DONE` — a transaction completed
@@ -93,6 +99,62 @@ toggle it carried in `RXTOGGLE`; it applies no toggle policy of its own.
 Software compares `RXTOGGLE` against the toggle it expected: a mismatch
 is the device retransmitting a packet whose handshake it lost, and the
 data must be discarded — the acknowledge alone resynchronizes the device.
+
+#### CAP_CTRL (0x24)
+- Bit [0]: `ARM` — writing 1 clears `FROZEN`, starts recording, and arms
+  the selected triggers; writing 0 disarms and stops recording
+- Bit [1]: `TRIG_ERR` — trigger when a transaction completes with
+  `RESULT` = ERROR
+- Bit [2]: `TRIG_TIMEOUT` — trigger on `RESULT` = TIMEOUT
+- Bit [3]: `TRIG_STUFF` — trigger on a bit-stuff violation strobe
+- Bit [8]: `FORCE` — software trigger (write 1; reads as 0)
+
+#### CAP_STATUS (0x28)
+- Bit [0]: `ARMED` — recording, trigger not yet fired
+- Bit [1]: `FROZEN` — the post-trigger tail has been recorded and the
+  buffer is stable for readout
+- Bits [15:8]: `DEPTH_LOG2` — buffer depth as a power of two
+- Bits [31:16]: `TRIG_ADDR` — buffer index of the sample recorded when
+  the trigger fired
+
+#### CAP_ADDR (0x2C)
+- Bits [15:0]: sample index into the raw ring buffer for `CAP_DATA`
+  reads (software unrolls the ring using `TRIG_ADDR`)
+
+#### CAP_DATA (0x30)
+Reading returns the sample at `CAP_ADDR` and increments `CAP_ADDR`, so
+a full dump is one address write followed by depth sequential reads.
+One sample is recorded per controller clock while armed:
+
+- Bit [0]: `DP` — D+ as captured (post-synchronizer, pre-filter)
+- Bit [1]: `DN` — D−
+- Bits [3:2]: `LINE` — filtered line state (0 SE0, 1 J, 2 K, 3 SE1)
+- Bit [4]: `BIT_EN` — recovered-bit strobe
+- Bit [5]: `BIT` — line level at the sample point
+- Bit [6]: `DATA_BIT` — NRZI-decoded bit
+- Bit [7]: `ACTIVE` — packet window (SOP to EOP)
+- Bit [8]: `SYNC_DONE` — SYNC end-marker strobe
+- Bit [9]: `PAYLOAD_EN` — decoded bit routed to the unstuffer
+- Bit [10]: `UNSTUFF_VALID` — real data bit out of the unstuffer
+- Bit [11]: `STUFF_ERR` — bit-stuff violation
+- Bit [12]: `BYTE_VALID` — deserializer completed a byte
+- Bit [13]: `TX_OE` — the controller is driving the bus (marks
+  turnarounds)
+- Bit [14]: `SQUELCH` — the receive tap is held at idle
+
+The capture is a debug instrument: `ARM` and the trigger selects reset
+to zero, but `FROZEN`, `TRIG_ADDR`, and the buffer contents survive a
+controller reset, so a capture taken by an operating system remains
+readable from the boot monitor after a warm reboot. The trigger
+records a post-trigger tail of one eighth of the buffer, leaving the
+rest as pre-trigger context.
+
+#### SOF_TX (0x34)
+- Bits [15:0]: free-running count of frame markers whose transmission
+  completed on the wire.  The `FRAME` register counts elapsed frame
+  boundaries whether or not their marker was sent; the difference in
+  rates between the two exposes marker starvation, which a device on
+  the bus experiences as a missing-SOF gap and answers with suspend.
 
 #### DATA (0x40 …)
 The packet payload, accessed as little-endian words (four bytes per

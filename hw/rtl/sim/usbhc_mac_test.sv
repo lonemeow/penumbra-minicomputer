@@ -82,6 +82,9 @@ module usbhc_mac_test (
         .o_port_change  (o_port_change),
         .o_sof_irq      (o_sof_irq),
         .o_frame        (o_frame),
+        /* verilator lint_off PINCONNECTEMPTY */
+        .o_sof_tx_cnt   (),
+        /* verilator lint_on PINCONNECTEMPTY */
         .o_buf_raddr    (o_buf_raddr),
         .i_buf_rdata    (i_buf_rdata),
         .o_buf_waddr    (o_buf_waddr),

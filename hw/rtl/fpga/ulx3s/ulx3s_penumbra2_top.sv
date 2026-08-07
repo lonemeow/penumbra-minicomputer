@@ -673,6 +673,7 @@ module ulx3s_penumbra2_top (
     logic [2:0] usb_caps;
     logic       usb_tx_dp, usb_tx_dn, usb_tx_oe;
     logic       usb_pull_dp, usb_pull_dn;
+    logic [15:0] usb_phy_dbg;
     // The PHY forwards its clock for integrations that want it; this
     // top clocks the controller from the PLL output directly.
     /* verilator lint_off UNUSEDSIGNAL */
@@ -703,7 +704,8 @@ module ulx3s_penumbra2_top (
         .o_xcvr_sel   (usb_xcvr_sel),
         .o_term_sel   (usb_term_sel),
         .o_opmode     (usb_opmode),
-        .o_port_power (usb_port_power)
+        .o_port_power (usb_port_power),
+        .i_dbg        (usb_phy_dbg)
     );
 
     usb_phy_ecp5 u_usb_phy (
@@ -729,7 +731,8 @@ module ulx3s_penumbra2_top (
         .o_tx_dn      (usb_tx_dn),
         .o_tx_oe      (usb_tx_oe),
         .o_pull_dp    (usb_pull_dp),
-        .o_pull_dn    (usb_pull_dn)
+        .o_pull_dn    (usb_pull_dn),
+        .o_dbg        (usb_phy_dbg)
     );
 
     // Pin mapping: transmit drives the bidirectional pads only while

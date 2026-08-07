@@ -16,7 +16,12 @@ module usbhc #(
     // Passed to the MAC; overridable so testbenches can run short frames
     // and fast connect detection.
     parameter int unsigned CLKS_PER_MS   = 60_000,
-    parameter int unsigned DEBOUNCE_CLKS = 600
+    parameter int unsigned DEBOUNCE_CLKS = 600,
+    // Line-capture buffer depth (samples, as a power of two).  2048
+    // samples is ~34 us at 60 MHz — a full max-length packet with its
+    // turnaround context — at half the BRAM and routing footprint of
+    // the deeper setting.
+    parameter int unsigned CAP_DEPTH_LOG2 = 11
 ) (
     // ── CPU clock domain ─────────────────────────────────────────────
     input  logic        i_clk,
@@ -45,8 +50,11 @@ module usbhc #(
     output logic [1:0]  o_xcvr_sel,
     output logic        o_term_sel,
     output logic [1:0]  o_opmode,
-    output logic        o_port_power
+    output logic        o_port_power,
+    // PHY receive-chain debug tap for the line-capture instrument
+    input  logic [15:0] i_dbg
 );
+    import penumbra_pkg::*;
 
     // Register tier <-> CDC, CPU domain
     logic [6:0]  cbuf_addr;
@@ -95,7 +103,8 @@ module usbhc #(
     assign unused_u_busy = u_busy;
 
     usbhc_regs #(
-        .BUF_BYTES      (BUF_BYTES)
+        .BUF_BYTES      (BUF_BYTES),
+        .CAP_DEPTH_LOG2 (CAP_DEPTH_LOG2)
     ) u_regs (
         .i_clk          (i_clk),
         .i_rst          (i_rst),
@@ -134,7 +143,89 @@ module usbhc #(
         .o_devaddr      (devaddr),
         .o_endpoint     (endpoint),
         .o_toggle       (toggle),
-        .o_length       (length)
+        .o_length       (length),
+        .o_cap_arm_toggle    (cap_arm_toggle),
+        .o_cap_disarm_toggle (cap_disarm_toggle),
+        .o_cap_force         (cap_force),
+        .o_cap_trig_sel      (cap_trig_sel),
+        .i_cap_armed         (cap_armed_sync_q[1]),
+        .i_cap_frozen        (cap_frozen_sync_q[1]),
+        .i_cap_trig_addr     (cap_trig_addr_q),
+        .o_cap_rd_addr       (cap_rd_addr),
+        .i_cap_rd_data       (cap_rd_data_q),
+        .i_sof_tx            (sof_tx_bin)
+    );
+
+    // ── SOF_TX crossing ──────────────────────────────────────────────
+    //
+    // The transmitted-marker count crosses as gray code: at most one
+    // bit changes per increment, so a read torn across the domains is
+    // off by at most one.
+    logic [15:0] u_sof_tx_cnt;
+    logic [15:0] sof_gray_q;
+    always_ff @(posedge i_usb_clk)
+        sof_gray_q <= u_sof_tx_cnt ^ (u_sof_tx_cnt >> 1);
+
+    logic [15:0] sof_gray_s1_q, sof_gray_s2_q;
+    always_ff @(posedge i_clk) begin
+        sof_gray_s1_q <= sof_gray_q;
+        sof_gray_s2_q <= sof_gray_s1_q;
+    end
+
+    logic [15:0] sof_tx_bin;
+    always_comb
+        for (int i = 0; i < 16; i++)
+            sof_tx_bin[i] = ^(sof_gray_s2_q >> i);
+
+    // ── Line-capture instrument ──────────────────────────────────────
+    //
+    // Trigger events are USB-domain: the MAC's completion strobe
+    // qualified by result, and the PHY's stuff-error strobe.  Status
+    // levels cross back to the register tier through two flops; the
+    // trigger index and buffer are read only under FROZEN, when they
+    // are stable.
+    logic        cap_arm_toggle, cap_disarm_toggle, cap_force;
+    logic [2:0]  cap_trig_sel;
+    logic        cap_armed_u, cap_frozen_u;
+    logic [15:0] cap_trig_addr;
+    logic [15:0] cap_rd_addr, cap_rd_data;
+
+    logic cap_evt_err, cap_evt_timeout;
+    assign cap_evt_err     = u_done && (u_result == USBHC_RESULT_ERROR);
+    assign cap_evt_timeout = u_done && (u_result == USBHC_RESULT_TIMEOUT);
+
+    logic [1:0] cap_armed_sync_q, cap_frozen_sync_q;
+    // TRIG_ADDR and the buffer output cross long routes from the
+    // capture cluster; a local CPU-domain flop stage keeps them out of
+    // the register tier's read-mux timing.  Both are quasi-static when
+    // read (FROZEN gates them).
+    logic [15:0] cap_trig_addr_q, cap_rd_data_q;
+    always_ff @(posedge i_clk) begin
+        cap_armed_sync_q  <= {cap_armed_sync_q[0], cap_armed_u};
+        cap_frozen_sync_q <= {cap_frozen_sync_q[0], cap_frozen_u};
+        cap_trig_addr_q   <= cap_trig_addr;
+        cap_rd_data_q     <= cap_rd_data;
+    end
+
+    usbhc_capture #(
+        .DEPTH_LOG2      (CAP_DEPTH_LOG2)
+    ) u_capture (
+        .i_usb_clk       (i_usb_clk),
+        .i_usb_rst       (i_usb_rst),
+        .i_sample        (i_dbg),
+        .i_evt_err       (cap_evt_err),
+        .i_evt_timeout   (cap_evt_timeout),
+        .i_evt_stuff     (i_rx_error),
+        .i_arm_toggle    (cap_arm_toggle),
+        .i_disarm_toggle (cap_disarm_toggle),
+        .i_force         (cap_force),
+        .i_trig_sel      (cap_trig_sel),
+        .o_armed         (cap_armed_u),
+        .o_frozen        (cap_frozen_u),
+        .o_trig_addr     (cap_trig_addr),
+        .i_clk           (i_clk),
+        .i_rd_addr       (cap_rd_addr),
+        .o_rd_data       (cap_rd_data)
     );
 
     usbhc_cdc #(
@@ -234,6 +325,7 @@ module usbhc #(
         .o_port_change  (u_port_change),
         .o_sof_irq      (u_sof),
         .o_frame        (u_frame),
+        .o_sof_tx_cnt   (u_sof_tx_cnt),
         .o_buf_raddr    (mac_raddr),
         .i_buf_rdata    (ubuf_rdata),
         .o_buf_waddr    (mac_waddr),

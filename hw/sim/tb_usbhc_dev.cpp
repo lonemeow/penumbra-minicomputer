@@ -311,6 +311,57 @@ int main() {
     expect("no wire corruption", dev.crc_failures == 0 &&
            dev.pid_failures == 0);
 
+    // ── Line-capture instrument (CAP_* registers) ────────────────────
+    {
+        const uint32_t R_CAP_CTRL = 0x24, R_CAP_STATUS = 0x28,
+                       R_CAP_ADDR = 0x2C, R_CAP_DATA = 0x30;
+        const uint32_t CC_ARM = 1, CC_TRIG_TIMEOUT = 4, CC_FORCE = 0x100;
+
+        expect("cap present", (bus_read(R_CAP) & (1u << 18)) != 0);
+        expect("cap depth",
+               ((bus_read(R_CAP_STATUS) >> 8) & 0xff) == 11);
+
+        bus_write(R_CAP_CTRL, CC_ARM);
+        cpu_cycles(8);   // command out and status back across the CDC
+        expect("cap arms", (bus_read(R_CAP_STATUS) & 3) == 1);
+
+        // The software trigger freezes after the post-trigger tail
+        // (DEPTH/8 = 512 USB clocks at the default depth).
+        bus_write(R_CAP_CTRL, CC_ARM | CC_FORCE);
+        cpu_cycles(400);
+        expect("cap force freezes", (bus_read(R_CAP_STATUS) & 3) == 2);
+
+        // CAP_DATA reads walk the index.
+        bus_write(R_CAP_ADDR, 0);
+        (void)bus_read(R_CAP_DATA);
+        (void)bus_read(R_CAP_DATA);
+        (void)bus_read(R_CAP_DATA);
+        expect("cap readout walks",
+               (bus_read(R_CAP_ADDR) & 0xffff) == 3);
+
+        bus_write(R_CAP_CTRL, CC_ARM | CC_TRIG_TIMEOUT);
+        cpu_cycles(8);
+        expect("cap re-arms", (bus_read(R_CAP_STATUS) & 3) == 1);
+
+        // A real trigger: an armed capture freezes on a transaction
+        // that completes with RESULT = TIMEOUT.
+        bus_write(R_PORT_CTRL, PC_POWER | PC_RUN);
+        dev.in_response = UsbDeviceSim::RSP_SILENT;
+        expect_result("cap timeout txn",
+                      run_txn(TOK_IN, 0, 0, 0, 8, 8000), RES_TIMEOUT);
+        dev.in_response = UsbDeviceSim::RSP_ACK;
+        cpu_cycles(400);
+        expect("cap timeout freezes",
+               (bus_read(R_CAP_STATUS) & 3) == 2);
+
+        // Disarming abandons recording but never the frozen evidence.
+        bus_write(R_CAP_CTRL, 0);
+        cpu_cycles(8);
+        expect("cap frozen survives disarm",
+               (bus_read(R_CAP_STATUS) & 3) == 2);
+        bus_write(R_PORT_CTRL, PC_POWER);
+    }
+
     printf("usbhc_dev: %d/%d tests passed\n", g_pass, g_pass + g_fail);
     if (g_fail > 0)
         printf("  *** %d FAILED ***\n", g_fail);

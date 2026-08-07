@@ -58,7 +58,10 @@ module usb_phy_ecp5 (
     output logic       o_tx_dn,
     output logic       o_tx_oe,
     output logic       o_pull_dp,    // host 15k pull-down enables; the board
-    output logic       o_pull_dn     // top maps them onto the pull pads
+    output logic       o_pull_dn,    // top maps them onto the pull pads
+    // Receive-chain debug tap for the line-capture instrument — the
+    // CAP_DATA sample layout (doc/system/devices/usb-host.md)
+    output logic [15:0] o_dbg
 );
     import usb_pkg::*;
 
@@ -406,6 +409,25 @@ module usb_phy_ecp5 (
     // The window edge is implicit in o_rx_active at the seam.
     logic unused_rx_eop;
     assign unused_rx_eop = rx_eop;
+
+    // The capture instrument's per-clock sample of the receive chain
+    // (CAP_DATA layout).  LINE is the post-squelch usb_line_e verdict
+    // the chain acts on; DP/DN are the synchronized pins before it.
+    assign o_dbg = {1'b0,
+                    squelch,            // [14]
+                    o_tx_oe,            // [13]
+                    o_rx_valid,         // [12] BYTE_VALID
+                    o_rx_error,         // [11] STUFF_ERR
+                    rx_unstuff_valid,   // [10]
+                    rx_payload_en,      // [9]
+                    rx_sync_done,       // [8]
+                    o_rx_active,        // [7]
+                    rx_data_bit,        // [6]
+                    rx_sampled_line,    // [5] BIT
+                    rx_bit_en,          // [4]
+                    rx_line_state,      // [3:2] LINE
+                    dn_sync_q[1],       // [1]
+                    dp_sync_q[1]};      // [0]
 
     // ── Line-state sideband, from the raw pins ───────────────────────
     //

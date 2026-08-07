@@ -22,7 +22,8 @@
 module usbhc_regs
     import penumbra_pkg::*;
 #(
-    parameter int BUF_BYTES = 64
+    parameter int BUF_BYTES = 64,
+    parameter int unsigned CAP_DEPTH_LOG2 = 12
 ) (
     input  logic        i_clk,
     input  logic        i_rst,
@@ -75,7 +76,20 @@ module usbhc_regs
     output logic [6:0]  o_devaddr,
     output logic [3:0]  o_endpoint,
     output logic        o_toggle,
-    output logic [6:0]  o_length
+    output logic [6:0]  o_length,
+    // Line-capture instrument: commands out (toggles + levels), state
+    // in (levels synchronized upstream; TRIG_ADDR stable under FROZEN)
+    output logic        o_cap_arm_toggle,
+    output logic        o_cap_disarm_toggle,
+    output logic        o_cap_force,
+    output logic [2:0]  o_cap_trig_sel,
+    input  logic        i_cap_armed,
+    input  logic        i_cap_frozen,
+    input  logic [15:0] i_cap_trig_addr,
+    output logic [15:0] o_cap_rd_addr,
+    input  logic [15:0] i_cap_rd_data,
+    // Transmitted-marker count (gray-crossed upstream)
+    input  logic [15:0] i_sof_tx
 );
 
     logic [6:0] reg_off;
@@ -90,6 +104,21 @@ module usbhc_regs
     logic [4:0]  port_ctrl_q;     // {RESUME, SUSPEND, RUN, RESET, POWER}
     logic [16:0] token_q;         // packed as the TOKEN register lays out
     logic [6:0]  length_q;
+
+    // Line-capture control: the commanded arm state (readback), the
+    // trigger selects, the command toggles toward the recorder, the
+    // force level, and the readout index.
+    logic        cap_arm_q;
+    logic [2:0]  cap_trig_sel_q;
+    logic        cap_arm_tgl_q, cap_disarm_tgl_q;
+    logic        cap_force_q;
+    logic [15:0] cap_addr_q;
+
+    assign o_cap_arm_toggle    = cap_arm_tgl_q;
+    assign o_cap_disarm_toggle = cap_disarm_tgl_q;
+    assign o_cap_force         = cap_force_q;
+    assign o_cap_trig_sel      = cap_trig_sel_q;
+    assign o_cap_rd_addr       = cap_addr_q;
 
     assign {o_resume, o_suspend, o_run, o_reset_port, o_power} = port_ctrl_q;
     assign o_pid_sel  = token_q[1:0];
@@ -142,8 +171,17 @@ module usbhc_regs
     logic [31:0] reg_rdata;
     always_comb begin
         case (reg_off)
-            USBHC_REG_CAP:         reg_rdata = {14'd0, i_caps[1], i_caps[0],
+            USBHC_REG_CAP:         reg_rdata = {13'd0, 1'b1, i_caps[1],
+                                                i_caps[0],
                                                 8'(BUF_BYTES), 8'd1};
+            USBHC_REG_CAP_CTRL:    reg_rdata = {28'd0, cap_trig_sel_q,
+                                                cap_arm_q};
+            USBHC_REG_CAP_STATUS:  reg_rdata = {i_cap_trig_addr,
+                                                8'(CAP_DEPTH_LOG2), 6'd0,
+                                                i_cap_frozen, i_cap_armed};
+            USBHC_REG_CAP_ADDR:    reg_rdata = {16'd0, cap_addr_q};
+            USBHC_REG_CAP_DATA:    reg_rdata = {16'd0, i_cap_rd_data};
+            USBHC_REG_SOF_TX:      reg_rdata = {16'd0, i_sof_tx};
             USBHC_REG_IRQ_STATUS:  reg_rdata = {29'd0, irq_status_q};
             USBHC_REG_IRQ_ENABLE:  reg_rdata = {29'd0, irq_enable_q};
             USBHC_REG_PORT_STATUS: reg_rdata = {22'd0, i_line, 2'b00,
@@ -241,15 +279,35 @@ module usbhc_regs
     assign irq_clr = (reg_write && reg_off == USBHC_REG_IRQ_STATUS)
                    ? i_wdata[2:0] : 3'd0;
 
+    // CAP_DATA reads walk the buffer: the accept samples the data for
+    // the current index, then the index advances for the next read.
+    logic cap_data_read;
+    assign cap_data_read = access_start && i_re && !is_data &&
+                           (reg_off == USBHC_REG_CAP_DATA);
+
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
-            irq_status_q <= 3'd0;
-            irq_enable_q <= 3'd0;
-            port_ctrl_q  <= 5'd0;
-            token_q      <= 17'd0;
-            length_q     <= 7'd0;
+            irq_status_q     <= 3'd0;
+            irq_enable_q     <= 3'd0;
+            port_ctrl_q      <= 5'd0;
+            token_q          <= 17'd0;
+            length_q         <= 7'd0;
+            cap_arm_q        <= 1'b0;
+            cap_trig_sel_q   <= 3'd0;
+            cap_arm_tgl_q    <= 1'b0;
+            cap_disarm_tgl_q <= 1'b0;
+            cap_force_q      <= 1'b0;
+            cap_addr_q       <= 16'd0;
         end else begin
             irq_status_q <= (irq_status_q & ~irq_clr) | irq_set;
+
+            // A stale force must not re-trigger the next capture; the
+            // completed capture it forced clears it.
+            if (i_cap_frozen)
+                cap_force_q <= 1'b0;
+
+            if (cap_data_read)
+                cap_addr_q <= cap_addr_q + 16'd1;
 
             if (reg_write) begin
                 case (reg_off)
@@ -261,6 +319,17 @@ module usbhc_regs
                         token_q <= i_wdata[16:0];
                     USBHC_REG_XFER_CTRL:
                         length_q <= i_wdata[6:0];
+                    USBHC_REG_CAP_CTRL: begin
+                        cap_arm_q      <= i_wdata[0];
+                        cap_trig_sel_q <= i_wdata[3:1];
+                        cap_force_q    <= i_wdata[8];
+                        if (i_wdata[0])
+                            cap_arm_tgl_q <= ~cap_arm_tgl_q;
+                        else
+                            cap_disarm_tgl_q <= ~cap_disarm_tgl_q;
+                    end
+                    USBHC_REG_CAP_ADDR:
+                        cap_addr_q <= i_wdata[15:0];
                     default: ;
                 endcase
             end

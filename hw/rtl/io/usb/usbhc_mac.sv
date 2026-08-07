@@ -61,6 +61,7 @@ module usbhc_mac #(
     // FRAME view
     output logic        o_sof_irq,     // one-cycle -> IRQ_STATUS.SOF
     output logic [10:0] o_frame,
+    output logic [15:0] o_sof_tx_cnt,  // markers actually transmitted
     // Data-buffer ports (the register tier's dual-clock BRAM)
     output logic [6:0]  o_buf_raddr,   // transmit payload, synchronous read
     input  logic [7:0]  i_buf_rdata,
@@ -234,6 +235,18 @@ module usbhc_mac #(
     // timer that no longer expects one.
     assign frm_tx_done   = ptx_done && marker_owns_q && frm_req;
     assign txn_tx_done   = ptx_done && !marker_owns_q;
+
+    // Markers that really went out, for the SOF_TX debug register — a
+    // device experiences marker starvation as a missing-SOF gap and
+    // answers it with suspend, which the FRAME count cannot reveal.
+    logic [15:0] sof_tx_cnt_q;
+    always_ff @(posedge i_clk) begin
+        if (i_rst)
+            sof_tx_cnt_q <= 16'd0;
+        else if (frm_tx_done)
+            sof_tx_cnt_q <= sof_tx_cnt_q + 16'd1;
+    end
+    assign o_sof_tx_cnt = sof_tx_cnt_q;
 
     // ── Seam transmit mux ────────────────────────────────────────────
     // The resume recipe holds the transmit channel at 00h (raw opmode:
