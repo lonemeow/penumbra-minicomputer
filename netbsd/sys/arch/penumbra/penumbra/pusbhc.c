@@ -1305,7 +1305,17 @@ pusbhc_device_start(struct usbd_xfer *xfer)
 		    xfer->ux_length % mps == 0));
 	}
 	xfer->ux_status = USBD_IN_PROGRESS;
-	pusbhc_pipe_ready(sc, pp);
+	/* An interrupt endpoint is a polling contract, not a stream:
+	 * every launch — the first and each completion's resubmit —
+	 * honors the declared interval.  An immediate resubmit against
+	 * a source with standing data (a hub holding an un-cleared
+	 * status change) otherwise polls at full bus rate, and the
+	 * interrupt-per-completion load starves the very thread that
+	 * would consume the data and quiet the source. */
+	if (pp->pp_type == UE_INTERRUPT)
+		pusbhc_pipe_wait(sc, pp, pp->pp_interval);
+	else
+		pusbhc_pipe_ready(sc, pp);
 	mutex_exit(&sc->sc_intr_lock);
 
 	usbd_xfer_schedule_timeout(xfer);
