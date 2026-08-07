@@ -6,7 +6,8 @@
  *
  * Each tick: snapshot all counters, derive per-interval rates, sample the
  * process table + memory, and repaint.  Keys: q quit, space force-refresh,
- * +/- change the interval.
+ * l or Ctrl-L redraw everything (the console is shared with kernel
+ * messages, which land on top of the display), +/- change the interval.
  *
  * The display is driven by the screen layer (screen.h): a virtual-screen
  * damage diff that emits one write(2) per frame — no curses.
@@ -110,6 +111,11 @@ main(int argc, char **argv)
 		case 'Q':
 			goto done;
 		case ' ':			/* force an immediate refresh */
+			break;
+		case '\f':			/* Ctrl-L: repair a damaged screen */
+		case 'l':
+		case 'L':
+			scr_repaint();
 			break;
 		case '+':
 		case '=':

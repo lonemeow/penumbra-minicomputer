@@ -91,7 +91,9 @@ penmon          # 1 s refresh
 penmon -d 0.5   # faster
 ```
 
-Keys: `q` quit · `space` force refresh · `+`/`-` change interval.
+Keys: `q` quit · `space` force refresh · `l` or `Ctrl-L` redraw the whole
+screen (kernel messages share the console and land on top of the
+display) · `+`/`-` change interval.
 
 ## Display notes
 

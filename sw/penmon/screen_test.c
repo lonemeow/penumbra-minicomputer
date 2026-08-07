@@ -70,6 +70,17 @@ main(void)
 	check(len > 0 && len < 64, "single-cell change is a short update");
 	check(contains(out, len, 'P'), "single-cell change emits the new glyph");
 
+	/* Frame 4: unchanged content after scr_repaint() — the diff must
+	 * redraw everything, since the terminal's contents are no longer
+	 * what the front buffer claims (a kernel message overwrote them). */
+	scr_repaint();
+	scr_clear();
+	scr_puts(0, 0, A, "HELLP");
+	scr_flush();
+	out = scr_last_output(&len);
+	check(len > 0, "repaint forces output for unchanged content");
+	check(contains(out, len, 'P'), "repaint re-emits the text");
+
 	printf(failures ? "\n%d FAILED\n" : "\nALL PASSED\n", failures);
 	return failures ? 1 : 0;
 }

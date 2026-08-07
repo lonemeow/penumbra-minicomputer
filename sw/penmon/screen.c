@@ -314,14 +314,21 @@ scr_init(void)
 		tcsetattr(STDIN_FILENO, TCSANOW, &t);
 		tio_saved = 1;
 	}
-	term_write("\x1b[?1049h\x1b[?25l\x1b[2J");	/* alt screen, hide, clear */
+	/* Alt screen where it exists, then an explicit clear and home:
+	 * terminals without the alternate buffer ignore the first
+	 * sequence, and the display must start from a blank screen and a
+	 * known cursor position either way. */
+	term_write("\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H");
 	return 0;
 }
 
 void
 scr_shutdown(void)
 {
-	term_write("\x1b[0m\x1b[?25h\x1b[?1049l");	/* reset, show, leave alt */
+	/* Leaving the alt screen restores what was there before; without
+	 * one, clear and home so the shell prompt returns to a clean
+	 * screen instead of the last frame. */
+	term_write("\x1b[0m\x1b[?25h\x1b[?1049l\x1b[2J\x1b[H");
 	if (tio_saved) {
 		tcsetattr(STDIN_FILENO, TCSANOW, &saved_tio);
 		tio_saved = 0;
@@ -333,6 +340,18 @@ scr_shutdown(void)
 	outbuf = NULL;
 	rows = cols = 0;
 	outcap = outlen = 0;
+}
+
+void
+scr_repaint(void)
+{
+	int i, n = rows * cols;
+
+	for (i = 0; i < n; i++) {
+		front[i].ch = 0xffffu;		/* impossible: every cell */
+		front[i].attr = 0xffff;		/* differs from the back  */
+	}
+	term_write("\x1b[2J\x1b[H");
 }
 
 int

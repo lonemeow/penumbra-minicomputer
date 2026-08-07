@@ -75,6 +75,11 @@ void scr_flush(void);
  * full repaint on the next flush.  Returns 1 if the size changed. */
 int  scr_resize(void);
 
+/* Discard what the terminal is believed to show, so the next flush
+ * redraws every cell.  The console is shared — kernel messages land on
+ * top of the display — and the diff cannot see that damage. */
+void scr_repaint(void);
+
 /* ---- input ------------------------------------------------------------ */
 
 /* Blocking single-byte read with a millisecond timeout.  Returns the
