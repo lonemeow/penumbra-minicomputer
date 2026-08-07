@@ -1257,7 +1257,22 @@ GOT-loaded global / jump-table target).  Still open: a true dynamic
 PIE leg (with `__tls_get_addr` and runtime relocation) would also cover
 TLS-GD, which the static-link approach cannot reach.
 
-## Kernel: vmapbuf / vunmapbuf for raw device access
+## Userland: ssh dies with SIGBUS
+
+`ssh` crashes with a Bus error on launch/connect.  On this port a
+Bus error is the alignment-fault path, so the suspects are a
+misaligned access reaching the wire — crypto code type-punning a
+buffer, or codegen folding a `memcpy` into a direct load on an
+alignment assumption it did not have — and the known open DTV issue
+in dynamic binaries; ssh is likely the largest TLS-using dynamic
+binary the machine has exec'd, exactly the profile that would trip
+either first.  Triage order: read the fault PC/VA from the kernel's
+trap state (teach the SIGBUS delivery path to log them for userland
+faults if it does not), `ktrace` to see how far startup gets before
+the fault (rtld/TLS init versus key exchange), and cross-check with
+a statically linked ssh build — static-works/dynamic-dies convicts
+the rtld/DTV side, both-die convicts an alignment miscompile in the
+crypto path.
 
 `vmapbuf` and `vunmapbuf` in `penumbra/machdep.c` are still
 `TODO(stub)` — calls trap into DDB with `.long 0x6f400000` rather
