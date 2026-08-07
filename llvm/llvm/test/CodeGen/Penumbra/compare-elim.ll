@@ -100,3 +100,42 @@ loop:
 exit:
   ret i32 0
 }
+
+;; Negative: the gap between the producer and the CMPi contains an SR
+;; reader — the ADC consuming the carry of the `sub lo, 1`.  Sinking the
+;; producer past its own carry consumer would hand the ADC stale flags,
+;; so the peephole must bail and the CMPi must remain.
+define void @no_elide_carry_read_in_gap(i64 %x, ptr %p, ptr %q) {
+; CHECK-LABEL: no_elide_carry_read_in_gap:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  // %bb.0: // %entry
+; CHECK-NEXT:    sub sp, 4
+; CHECK-NEXT:    stw r5, [sp + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    llis r11, -1
+; CHECK-NEXT:    llis r5, -1
+; CHECK-NEXT:    add r1, r11
+; CHECK-NEXT:    adc r2, r5
+; CHECK-NEXT:    stw r2, [r3 + 0]
+; CHECK-NEXT:    cmp r1, 0
+; CHECK-NEXT:    bne .LBB3_2
+; CHECK-NEXT:  // %bb.1: // %a
+; CHECK-NEXT:    lli r1, 1
+; CHECK-NEXT:    stw r1, [r4 + 0]
+; CHECK-NEXT:  .LBB3_2: // %b
+; CHECK-NEXT:    ldw r5, [sp + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    add sp, 4
+; CHECK-NEXT:    jmp lr
+entry:
+  %dec = sub i64 %x, 1
+  %hi64 = lshr i64 %dec, 32
+  %hi = trunc i64 %hi64 to i32
+  store i32 %hi, ptr %p
+  %lo = trunc i64 %dec to i32
+  %cmp = icmp eq i32 %lo, 0
+  br i1 %cmp, label %a, label %b
+a:
+  store i32 1, ptr %q
+  br label %b
+b:
+  ret void
+}

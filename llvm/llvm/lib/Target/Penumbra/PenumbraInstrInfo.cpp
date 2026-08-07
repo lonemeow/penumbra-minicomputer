@@ -447,6 +447,12 @@ bool PenumbraInstrInfo::optimizeCompareInstr(
     if (It->readsRegister(SrcReg, &TRI))
       return false;
 
+    // The splice moves the producer's implicit SR def downward; any gap
+    // instruction reading SR (an ADC/SBC consuming the producer's carry)
+    // would then observe stale flags.
+    if (It->readsRegister(Penumbra::SR, &TRI))
+      return false;
+
     if (It->modifiesRegister(SrcReg, &TRI)) {
       if (definesFlagsFromResult(It->getOpcode()) &&
           It->getOperand(0).isReg() && It->getOperand(0).isDef() &&
