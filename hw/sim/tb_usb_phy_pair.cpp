@@ -204,7 +204,6 @@ int main() {
     dut->i_a_opmode = OPMODE_NORMAL;
     dut->i_a_xcvr_sel = SPEED_FS;
     dut->i_a_term_sel = 1;
-    dut->i_a_port_power = 1;
     dut->i_b_tx_data = 0;
     dut->i_b_tx_valid = 0;
     tick();
@@ -214,11 +213,7 @@ int main() {
 
     // ── Constants and pull enables ───────────────────────────────────
     expect("caps fs+ls", dut->o_a_caps == 0x3);
-    expect("pulls follow power", dut->o_a_pull_dp && dut->o_a_pull_dn);
-    dut->i_a_port_power = 0;
-    tick();
-    expect("pulls release", !dut->o_a_pull_dp && !dut->o_a_pull_dn);
-    dut->i_a_port_power = 1;
+    expect("host pull-downs resident", dut->o_a_pull_dp && dut->o_a_pull_dn);
 
     // ── Packet transport, both speeds, both directions ───────────────
     packet_roundtrip("fs token-shaped", SPEED_FS, {0x2d, 0x00, 0x10});
@@ -404,16 +399,11 @@ int main() {
     // a skew glitch must arrive intact instead of truncating at a
     // false EOP.
     //
-    // KNOWN OPEN DEFECT (doc/TODO.md): beyond the truncation the filter
-    // fixes, a displaced edge at certain internal alignments still
-    // corrupts framing — an inserted bit plus a stuff error — and which
-    // offsets hit it shifts with scenario history.  Bisected
-    // independent of the SE0 filter and the oversampler recovery.
-    // These cases stay skipped (loudly) until the framing fix lands.
-    const bool run_glitch_cases = false;
-    if (!run_glitch_cases)
-        printf("skew-glitch cases SKIPPED: known framing defect (doc/TODO.md)\n");
-    else
+    // The first iteration also crosses a speed switch: set_speed flips
+    // LS -> FS over an idle-J line, which reads the stale filtered
+    // polarity as K for one cycle — a spurious SOP with no packet behind
+    // it. The framing must shrug it off (its no-SYNC-zero abort) or the
+    // first packet arrives with its SYNC routed into the byte stream.
     for (int off_bits : {12, 25, 48}) {
         set_speed(SPEED_FS);
         run(100);
@@ -439,6 +429,110 @@ int main() {
             printf("\n");
         }
         expect(tag, ok);
+    }
+
+    // ── Wire-impairment injection: per-edge SE0 slivers, dribble ─────
+    // Hand-built packet waveforms driven onto the bus through the force
+    // override while both PHYs idle; B receives through its SE0 filter.
+    // Models what a real line does that the PHY-to-PHY path cannot:
+    // D+/D- skew reading as a one-clock SE0 at every symbol transition,
+    // and a dribble bit — up to one extra bit time the transmitter may
+    // append before EOP, which a receiver must tolerate (a stuff
+    // violation manufactured by dribble on a legal five-ones tail must
+    // not reject the packet).
+    {
+        struct Pin { int dp, dn; };
+        const Pin J{1, 0}, K{0, 1}, SE0{0, 0};
+        const int div = clocks_per_bit(SPEED_FS);
+
+        // SYNC + stuffed payload as NRZI symbols (FS polarity).
+        auto symbols_of = [&](const std::vector<uint8_t>& payload) {
+            std::vector<int> bits(7, 0);
+            bits.push_back(1);
+            int ones = 1;
+            for (uint8_t b : payload)
+                for (int i = 0; i < 8; i++) {
+                    int bit = (b >> i) & 1;
+                    bits.push_back(bit);
+                    if (bit) { if (++ones == 6) { bits.push_back(0); ones = 0; } }
+                    else ones = 0;
+                }
+            std::vector<Pin> sym;
+            int level = 1;                  // idle J
+            for (int b : bits) {
+                if (!b) level ^= 1;
+                sym.push_back(level ? J : K);
+            }
+            return sym;
+        };
+
+        // Expand symbols to clocks. skew: replace the first clock of
+        // every symbol that changes the pin pair with SE0 (persistent
+        // worst-case transition skew). dribble: hold the final level
+        // one extra bit time before EOP.
+        auto wave_of = [&](const std::vector<Pin>& sym, bool skew,
+                           bool dribble) {
+            std::vector<Pin> w(2 * div, J);
+            Pin prev = J;
+            for (const Pin& s : sym) {
+                for (int t = 0; t < div; t++) {
+                    bool edge0 = (t == 0) &&
+                                 (s.dp != prev.dp || s.dn != prev.dn);
+                    w.push_back((skew && edge0) ? SE0 : s);
+                }
+                prev = s;
+            }
+            if (dribble)
+                for (int t = 0; t < div; t++) w.push_back(prev);
+            for (int t = 0; t < 2 * div; t++) w.push_back(SE0);
+            for (int t = 0; t < 4 * div; t++) w.push_back(J);
+            return w;
+        };
+
+        auto inject = [&](const char* tag, const std::vector<uint8_t>& pl,
+                          bool skew, bool dribble) {
+            set_speed(SPEED_FS);
+            run(40);
+            col_b.reset();
+            for (const Pin& p : wave_of(symbols_of(pl), skew, dribble)) {
+                dut->i_force_en = 1;
+                dut->i_force_dp = p.dp;
+                dut->i_force_dn = p.dn;
+                tick();
+            }
+            dut->i_force_en = 0;
+            run(40);
+            bool ok = col_b.complete && col_b.bytes == pl && !col_b.error;
+            if (!ok)
+                printf("  dbg[%s]: complete=%d bytes=%zu/%zu err=%d\n",
+                       tag, (int)col_b.complete, col_b.bytes.size(),
+                       pl.size(), (int)col_b.error);
+            expect(tag, ok);
+        };
+
+        // Long pseudo-random payload — many transitions for the skew
+        // cases, data-packet length scale.
+        std::vector<uint8_t> data64;
+        uint32_t g = 0x1234abcdu;
+        for (int i = 0; i < 64; i++) {
+            g = g * 1664525u + 1013904223u;
+            data64.push_back((uint8_t)(g >> 24));
+        }
+        // 0xF8 ends the stuffed stream with a five-ones run (LSB-first:
+        // 000 then five 1s) — the legal tail that phantom trailing 1s
+        // (dribble, EOP-filter delay) would push over the stuff limit.
+        std::vector<uint8_t> tail_ones{0x0F, 0xF8};
+
+        inject("skew clean short", {0xC3, 0x5A}, true, false);
+        inject("skew clean long", data64, true, false);
+        inject("skew stuff-heavy", {0xFF, 0xFF, 0xFF, 0x7E}, true, false);
+        inject("dribble short", {0xC3, 0x5A}, false, true);
+        inject("dribble long", data64, false, true);
+        inject("dribble five-ones tail", tail_ones, false, true);
+        inject("skew+dribble long", data64, true, true);
+        inject("skew+dribble five-ones tail", tail_ones, true, true);
+        // No impairment: the injection path itself must be sound.
+        inject("inject baseline", data64, false, false);
     }
 
     printf("usb_phy_pair: %d/%d tests passed\n", g_pass, g_pass + g_fail);

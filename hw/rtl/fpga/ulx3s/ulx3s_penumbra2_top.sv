@@ -668,17 +668,18 @@ module ulx3s_penumbra2_top (
     logic [7:0] usb_rx_data;
     logic       usb_rx_valid, usb_rx_active, usb_rx_error;
     logic [1:0] usb_opmode, usb_xcvr_sel;
-    logic       usb_term_sel, usb_port_power;
+    logic       usb_term_sel;
     logic [1:0] usb_line_state;
     logic [2:0] usb_caps;
     logic       usb_tx_dp, usb_tx_dn, usb_tx_oe;
     logic       usb_pull_dp, usb_pull_dn;
-    logic [15:0] usb_phy_dbg;
     // The PHY forwards its clock for integrations that want it; this
     // top clocks the controller from the PLL output directly.
     /* verilator lint_off UNUSEDSIGNAL */
     logic       usb_phy_clk;
     /* verilator lint_on UNUSEDSIGNAL */
+
+    logic [15:0] usb_phy_dbg;
 
     usbhc u_usbhc (
         .i_clk        (clk),
@@ -704,7 +705,9 @@ module ulx3s_penumbra2_top (
         .o_xcvr_sel   (usb_xcvr_sel),
         .o_term_sel   (usb_term_sel),
         .o_opmode     (usb_opmode),
-        .o_port_power (usb_port_power),
+        /* verilator lint_off PINCONNECTEMPTY */
+        .o_port_power (),
+        /* verilator lint_on PINCONNECTEMPTY */
         .i_dbg        (usb_phy_dbg)
     );
 
@@ -722,7 +725,6 @@ module ulx3s_penumbra2_top (
         .i_opmode     (usb_opmode),
         .i_xcvr_sel   (usb_xcvr_sel),
         .i_term_sel   (usb_term_sel),
-        .i_port_power (usb_port_power),
         .o_line_state (usb_line_state),
         .o_caps       (usb_caps),
         .i_dp         (usb_fpga_bd_dp),

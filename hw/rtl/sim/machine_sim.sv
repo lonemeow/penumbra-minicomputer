@@ -441,12 +441,14 @@ module machine_sim
     logic [7:0] usb_rx_data;
     logic       usb_rx_valid, usb_rx_active, usb_rx_error;
     logic [1:0] usb_opmode, usb_xcvr_sel;
-    logic       usb_term_sel, usb_port_power;
+    logic       usb_term_sel;
     logic [1:0] usb_line_state;
     logic [2:0] usb_caps;
     logic       usb_phy_clk;
     logic       unused_usb_phy_clk;
     assign unused_usb_phy_clk = usb_phy_clk;
+
+    logic [15:0] usb_phy_dbg;
 
     usbhc u_usbhc (
         .i_clk        (i_clk),
@@ -472,7 +474,10 @@ module machine_sim
         .o_xcvr_sel   (usb_xcvr_sel),
         .o_term_sel   (usb_term_sel),
         .o_opmode     (usb_opmode),
-        .o_port_power (usb_port_power)
+        /* verilator lint_off PINCONNECTEMPTY */
+        .o_port_power (),
+        /* verilator lint_on PINCONNECTEMPTY */
+        .i_dbg        (usb_phy_dbg)
     );
 
     usb_phy_sim u_usb_phy (
@@ -489,7 +494,6 @@ module machine_sim
         .i_opmode       (usb_opmode),
         .i_xcvr_sel     (usb_xcvr_sel),
         .i_term_sel     (usb_term_sel),
-        .i_port_power   (usb_port_power),
         .o_line_state   (usb_line_state),
         .o_caps         (usb_caps),
         .o_pkt_data     (o_usb_pkt_data),
@@ -503,7 +507,8 @@ module machine_sim
         .i_rx_data      (i_usb_rx_data),
         .i_rx_last      (i_usb_rx_last),
         .i_dev_connect  (i_usb_dev_connect),
-        .i_dev_speed    (i_usb_dev_speed)
+        .i_dev_speed    (i_usb_dev_speed),
+        .o_dbg          (usb_phy_dbg)
     );
 
     // ── Autoconfig chain end (after last device) ────────────

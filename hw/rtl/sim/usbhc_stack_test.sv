@@ -61,7 +61,7 @@ module usbhc_stack_test (
     logic [7:0] rx_data;
     logic       rx_valid, rx_active, rx_error;
     logic [1:0] opmode, xcvr_sel;
-    logic       term_sel, port_power;
+    logic       term_sel;
     logic [1:0] line_state;
     logic [2:0] caps;
     logic       phy_clk;
@@ -100,6 +100,9 @@ module usbhc_stack_test (
         .o_port_change  (o_port_change),
         .o_sof_irq      (o_sof_irq),
         .o_frame        (o_frame),
+        /* verilator lint_off PINCONNECTEMPTY */
+        .o_sof_tx_cnt   (),
+        /* verilator lint_on PINCONNECTEMPTY */
         .o_buf_raddr    (o_buf_raddr),
         .i_buf_rdata    (i_buf_rdata),
         .o_buf_waddr    (o_buf_waddr),
@@ -117,7 +120,9 @@ module usbhc_stack_test (
         .o_xcvr_sel     (xcvr_sel),
         .o_term_sel     (term_sel),
         .o_opmode       (opmode),
-        .o_port_power   (port_power)
+        /* verilator lint_off PINCONNECTEMPTY */
+        .o_port_power   ()
+        /* verilator lint_on PINCONNECTEMPTY */
     );
 
     usb_phy_sim u_phy (
@@ -134,7 +139,6 @@ module usbhc_stack_test (
         .i_opmode       (opmode),
         .i_xcvr_sel     (xcvr_sel),
         .i_term_sel     (term_sel),
-        .i_port_power   (port_power),
         .o_line_state   (line_state),
         .o_caps         (caps),
         .o_pkt_data     (o_pkt_data),
@@ -148,6 +152,9 @@ module usbhc_stack_test (
         .i_rx_data      (i_rx_data),
         .i_rx_last      (i_rx_last),
         .i_dev_connect  (i_dev_connect),
-        .i_dev_speed    (i_dev_speed)
+        .i_dev_speed    (i_dev_speed),
+        /* verilator lint_off PINCONNECTEMPTY */
+        .o_dbg          ()
+        /* verilator lint_on PINCONNECTEMPTY */
     );
 endmodule

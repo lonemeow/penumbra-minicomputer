@@ -48,7 +48,6 @@ module usb_phy_ecp5 (
     input  logic [1:0] i_opmode,     // UTMI+ operational mode
     input  logic [1:0] i_xcvr_sel,   // usb_speed_e / UTMI+ XcvrSelect
     input  logic       i_term_sel,
-    input  logic       i_port_power,
     output logic [1:0] o_line_state, // raw {D-, D+}, SE0-glitch-filtered
     output logic [2:0] o_caps,       // capability ceiling {hs, fs, ls}
     // US2 pins: the receive pair, the transmit pair, the pull enables
@@ -74,9 +73,14 @@ module usb_phy_ecp5 (
     assign o_clk  = i_clk;
     assign o_caps = 3'b011;   // {hs = never, fs, ls}
 
-    // Host pull-downs are a level: present while the port is powered.
-    assign o_pull_dp = i_port_power;
-    assign o_pull_dn = i_port_power;
+    // Host pull-downs are a property of being a host port, not of port
+    // power: a real host transceiver's 15k resistors sit on the lines
+    // whether the port is powered or not, and an attached device may be
+    // externally powered (the board's VBUS is hardwired), sampling its
+    // line environment while our port is logically off.  Present them
+    // unconditionally so the device never sees floating host lines.
+    assign o_pull_dp = 1'b1;
+    assign o_pull_dn = 1'b1;
 
     // The two out-of-band drive states, told apart by the transceiver
     // fields: bus reset is the HS-termination state; resume is the raw

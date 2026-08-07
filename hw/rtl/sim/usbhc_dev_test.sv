@@ -39,13 +39,15 @@ module usbhc_dev_test (
     logic [7:0] rx_data;
     logic       rx_valid, rx_active, rx_error;
     logic [1:0] opmode, xcvr_sel;
-    logic       term_sel, port_power;
+    logic       term_sel;
     logic [1:0] line_state;
     logic [2:0] caps;
     logic       phy_clk;
 
     logic unused_phy_clk;
     assign unused_phy_clk = phy_clk;
+
+    logic [15:0] phy_dbg;
 
     usbhc #(
         .CLKS_PER_MS   (4000),
@@ -74,7 +76,10 @@ module usbhc_dev_test (
         .o_xcvr_sel   (xcvr_sel),
         .o_term_sel   (term_sel),
         .o_opmode     (opmode),
-        .o_port_power (port_power)
+        /* verilator lint_off PINCONNECTEMPTY */
+        .o_port_power (),
+        /* verilator lint_on PINCONNECTEMPTY */
+        .i_dbg        (phy_dbg)
     );
 
     usb_phy_sim u_phy (
@@ -91,7 +96,6 @@ module usbhc_dev_test (
         .i_opmode       (opmode),
         .i_xcvr_sel     (xcvr_sel),
         .i_term_sel     (term_sel),
-        .i_port_power   (port_power),
         .o_line_state   (line_state),
         .o_caps         (caps),
         .o_pkt_data     (o_pkt_data),
@@ -105,6 +109,7 @@ module usbhc_dev_test (
         .i_rx_data      (i_rx_data),
         .i_rx_last      (i_rx_last),
         .i_dev_connect  (i_dev_connect),
-        .i_dev_speed    (i_dev_speed)
+        .i_dev_speed    (i_dev_speed),
+        .o_dbg          (phy_dbg)
     );
 endmodule

@@ -27,7 +27,6 @@ module usb_phy_pair_test (
     input  logic [1:0] i_a_opmode,
     input  logic [1:0] i_a_xcvr_sel,
     input  logic       i_a_term_sel,
-    input  logic       i_a_port_power,
     output logic [1:0] o_a_line_state,
     output logic [2:0] o_a_caps,
     output logic       o_a_pull_dp,
@@ -98,7 +97,6 @@ module usb_phy_pair_test (
         .i_opmode       (i_a_opmode),
         .i_xcvr_sel     (i_a_xcvr_sel),
         .i_term_sel     (i_a_term_sel),
-        .i_port_power   (i_a_port_power),
         .o_line_state   (o_a_line_state),
         .o_caps         (o_a_caps),
         .i_dp           (bus_dp),
@@ -107,7 +105,10 @@ module usb_phy_pair_test (
         .o_tx_dn        (a_dn),
         .o_tx_oe        (a_oe),
         .o_pull_dp      (o_a_pull_dp),
-        .o_pull_dn      (o_a_pull_dn)
+        .o_pull_dn      (o_a_pull_dn),
+        /* verilator lint_off PINCONNECTEMPTY */
+        .o_dbg          ()
+        /* verilator lint_on PINCONNECTEMPTY */
     );
 
     usb_phy_ecp5 u_b (
@@ -124,7 +125,6 @@ module usb_phy_pair_test (
         .i_opmode       (2'b00),
         .i_xcvr_sel     (i_speed),
         .i_term_sel     (1'b1),
-        .i_port_power   (1'b1),
         .o_line_state   (unused_b_line_state),
         .o_caps         (unused_b_caps),
         .i_dp           (bus_dp),
@@ -133,6 +133,9 @@ module usb_phy_pair_test (
         .o_tx_dn        (b_dn),
         .o_tx_oe        (b_oe),
         .o_pull_dp      (unused_b_pull_dp),
-        .o_pull_dn      (unused_b_pull_dn)
+        .o_pull_dn      (unused_b_pull_dn),
+        /* verilator lint_off PINCONNECTEMPTY */
+        .o_dbg          ()
+        /* verilator lint_on PINCONNECTEMPTY */
     );
 endmodule

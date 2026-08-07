@@ -44,7 +44,6 @@ module usb_phy_sim (
     input  logic [1:0] i_opmode,     // UTMI+ operational mode
     input  logic [1:0] i_xcvr_sel,   // usb_speed_e / UTMI+ XcvrSelect
     input  logic       i_term_sel,
-    input  logic       i_port_power,
     output logic [1:0] o_line_state, // raw {D-, D+}
     output logic [2:0] o_caps,       // capability ceiling {hs, fs, ls}
     // Device port (machine-integration export, testbench-driven)
@@ -59,7 +58,9 @@ module usb_phy_sim (
     input  logic [7:0] i_rx_data,
     input  logic       i_rx_last,    // this byte ends the response packet
     input  logic       i_dev_connect,// a device's pull-up is on the line
-    input  logic [1:0] i_dev_speed   // usb_speed_e of that pull-up
+    input  logic [1:0] i_dev_speed,  // usb_speed_e of that pull-up
+    // Receive-chain debug tap: a byte-level model has no line to sample
+    output logic [15:0] o_dbg
 );
     import usb_pkg::*;
 
@@ -72,6 +73,7 @@ module usb_phy_sim (
     assign o_clk      = i_clk;
     assign o_caps     = 3'b011;   // {hs = never, fs, ls}
     assign o_rx_error = 1'b0;
+    assign o_dbg      = 16'd0;
 
     // The out-of-band drive states, decoded as usb_phy_ecp5 does.
     logic reset_drive;
@@ -251,7 +253,7 @@ module usb_phy_sim (
             line_d = 2'b00;
         else if (resume_drive)
             line_d = xcvr_fs_pol ? 2'b10 : 2'b01;   // K
-        else if (i_port_power && i_dev_connect)
+        else if (i_dev_connect)
             line_d = dev_fs_pol ? 2'b01 : 2'b10;    // idle J
         else
             line_d = 2'b00;
