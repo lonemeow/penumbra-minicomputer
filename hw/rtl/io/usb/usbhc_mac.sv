@@ -85,6 +85,7 @@ module usbhc_mac #(
     output logic [1:0]  o_opmode,
     output logic        o_port_power
 );
+    import usb_pkg::*;
 
     // ── Leaf-cell interconnect ───────────────────────────────────────
 
@@ -174,21 +175,55 @@ module usbhc_mac #(
     logic start_req;
     assign start_req = i_start || start_pending_q;
 
+    // The seam's busy ends when the PHY consumes the last byte, but the
+    // wire still carries the rest of the packet.  A handoff inside that
+    // drain feeds the next packet's bytes to the PHY as a continuation:
+    // the two packets fuse into one, with no separating EOP and no SYNC
+    // for the second.  The countdown holds the transmitter until the
+    // wire is truly quiet.  The bound is set by the shortest packet: a
+    // one-byte handshake's only byte is consumed while the SYNC is
+    // still serializing, so the wire owes up to the SYNC remainder (7)
+    // plus the byte (8) plus the EOP (3) after the consume.
+    localparam int unsigned DRAIN_BT = 20;   // SYNC tail (7) + byte (8) + EOP (3) + margin
+
+    logic [9:0] drain_q, drain_d;
+    always_comb begin
+        if (ptx_done)
+            drain_d = (prt_speed == USB_SPEED_LS)
+                    ? 10'(DRAIN_BT * USB_OS_LS)
+                    : 10'(DRAIN_BT * USB_OS_FS);
+        else if (drain_q != 10'd0)
+            drain_d = drain_q - 10'd1;
+        else
+            drain_d = 10'd0;
+    end
+
     // The transmitter is free to take a new owner: nothing in flight or
     // launching on either side, no recipe driving the bus, no disowned
-    // packet still draining.
+    // packet still draining — on the seam or on the wire.
     logic tx_free;
-    assign tx_free = !txn_busy && !marker_owns_q && !bus_driven && !ptx_busy;
+    assign tx_free = !txn_busy && !marker_owns_q && !bus_driven &&
+                     !ptx_busy && (drain_q == 10'd0);
 
     // A start beats a due marker: transactions are latency-sensitive,
     // while a marker tolerates losing the tie by design (the frame timer
-    // sends only the latest), so its delay stays bounded by the
-    // transaction it waits out.
-    assign txn_start = tx_free && start_req;
+    // sends only the latest).  The loss must not repeat, though — under
+    // saturated back-to-back traffic the winner's drain outlives the
+    // software's next start, and an unconditional start priority would
+    // starve markers (and with them the frame keeping devices need).
+    // A marker that lost a handoff therefore goes first on the next
+    // one, bounding each side's wait by one grant of the other's.
+    logic marker_starved_q;
+    logic marker_first;
+    assign marker_first = marker_starved_q && frm_req;
 
-    // The grant rises when the free transmitter has no start to serve,
-    // and follows frm_req down while held.
-    assign marker_owns_d = (marker_owns_q || (tx_free && !start_req)) &&
+    assign txn_start = tx_free && start_req && !marker_first;
+
+    // The grant rises when the free transmitter has no start to serve —
+    // or owes a starved marker its turn — and follows frm_req down
+    // while held.
+    assign marker_owns_d = (marker_owns_q ||
+                            (tx_free && (!start_req || marker_first))) &&
                            frm_req;
 
     // The start ledger, orthogonal to who owns the transmitter: a launch
@@ -207,9 +242,16 @@ module usbhc_mac #(
         if (i_rst) begin
             marker_owns_q   <= 1'b0;
             start_pending_q <= 1'b0;
+            drain_q         <= 10'd0;
+            marker_starved_q <= 1'b0;
         end else begin
             marker_owns_q   <= marker_owns_d;
             start_pending_q <= start_pending_d;
+            drain_q         <= drain_d;
+            if (txn_start && frm_req)
+                marker_starved_q <= 1'b1;
+            else if (marker_owns_q)
+                marker_starved_q <= 1'b0;
         end
     end
 
@@ -234,7 +276,6 @@ module usbhc_mac #(
     // releases, and the drain's completion strobe must not reach a frame
     // timer that no longer expects one.
     assign frm_tx_done   = ptx_done && marker_owns_q && frm_req;
-    assign txn_tx_done   = ptx_done && !marker_owns_q;
 
     // Markers that really went out, for the SOF_TX debug register — a
     // device experiences marker starvation as a missing-SOF gap and
@@ -247,6 +288,7 @@ module usbhc_mac #(
             sof_tx_cnt_q <= sof_tx_cnt_q + 16'd1;
     end
     assign o_sof_tx_cnt = sof_tx_cnt_q;
+    assign txn_tx_done   = ptx_done && !marker_owns_q;
 
     // ── Seam transmit mux ────────────────────────────────────────────
     // The resume recipe holds the transmit channel at 00h (raw opmode:
