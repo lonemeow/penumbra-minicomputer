@@ -338,12 +338,17 @@ fi
 # The 'std' target covers console/mem/random/etc; 'init' adds the
 # target-specific boot devices (ld0/ld1) and standard pseudo-devices.
 # Without the boot device (ld0), /dev/ld0f doesn't exist and
-# `mount -u /` cannot resolve the root device.
+# `mount -u /` cannot resolve the root device.  The USB control and
+# HID nodes are listed individually: the generated MAKEDEV emits spec
+# entries with foreign majors (and the odd corrupt line) for group
+# members outside the port's majors table, so wholesale groups like
+# 'usbs' produce a spec nbmakefs rejects.
+USB_DEVS="usb usb0 uhid0 uhid1 uhid2 uhid3"
 if [ -x "$MAKEDEV_SCRIPT" ]; then
-    log "Generating device nodes via MAKEDEV -s std init"
+    log "Generating device nodes via MAKEDEV -s std init $USB_DEVS"
     # MAKEDEV -s outputs mtree specs relative to /dev.
     # Prefix paths with ./dev/ and skip the "." root dir line.
-    MACHINE=penumbra sh "$MAKEDEV_SCRIPT" -s std init 2>/dev/null | \
+    MACHINE=penumbra sh "$MAKEDEV_SCRIPT" -s std init $USB_DEVS 2>/dev/null | \
         grep -v '^[.] ' | sed 's,^\./,./dev/,' >> "$SPECFILE"
 else
     # An image without /dev/console cannot boot (init exits 11);
