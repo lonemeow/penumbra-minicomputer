@@ -862,6 +862,51 @@ _trap_common:
 	mov	r4, r1
 
 	/*
+	 * Double-fault detection: if the faulting context was
+	 * supervisor mode (ESR.S set) AND EPC is in the pinned
+	 * page region (0xFFFFxxxx — vector page, scratch, L2
+	 * window, L1), we faulted inside an exception handler.
+	 * The kernel cannot recover — building a trapframe would
+	 * just fault again.
+	 *
+	 * The check runs BEFORE the snapshot stores below, so on
+	 * the double-fault path the _trap_save_hw_* slots still
+	 * hold the previous trap through this code — for a fault
+	 * in the trapframe build that is the victim whose entry
+	 * faulted.  This fault's own state is still live in the
+	 * SPRs and MMU fault sysregs; _dfault_print reads it from
+	 * hardware.
+	 *
+	 * Both checks are needed: a user program dereferencing
+	 * 0xFFFFxxxx triggers a legitimate TLB miss that should
+	 * be dispatched normally (and will result in SIGSEGV).
+	 *
+	 * R1-R3 are freely clobberable (saved to scratch).
+	 */
+	rdspr	r1, esr
+	li	r3, PSL_S
+	and	r1, r3
+	cmp	r1, r0
+	beq	.Lnot_double_fault	/* user mode — not a double fault */
+	rdspr	r1, epc
+	lui	r3, #0xFFFF		/* R3 = 0xFFFF0000 */
+	and	r1, r3			/* R1 = EPC & 0xFFFF0000 */
+	cmp	r1, r3			/* EPC in 0xFFFFxxxx range? */
+	bne	.Lnot_double_fault
+	/*
+	 * Double fault confirmed.  On gen2 BREAK is a trapping
+	 * exception, not a halt: a BREAK here re-enters _trap_common,
+	 * re-trips this same test (its own EPC is supervisor and on the
+	 * vector page), and storms forever.  Branch instead to
+	 * _dfault_print, which prints this fault's live hardware state
+	 * and the victim's still-intact snapshot out the hardwired
+	 * console UART and then spins.  No faultable memory is touched,
+	 * so the evidence survives.
+	 */
+	b	_dfault_print
+.Lnot_double_fault:
+
+	/*
 	 * Snapshot volatile hardware state into pinned scratch.
 	 *
 	 * Must happen BEFORE any faultable memory access.  The
@@ -882,44 +927,7 @@ _trap_common:
 	stw	r3, [pc + _trap_save_hw_badvaddr - .]
 	rdsys	r3, #SYSDEV_MMU, #MMU_FAULT_STATUS
 	stw	r3, [pc + _trap_save_hw_fstat - .]
-
-	/*
-	 * Double-fault detection: if the faulting context was
-	 * supervisor mode (ESR.S set) AND EPC is in the pinned
-	 * page region (0xFFFFxxxx — vector page, scratch, L2
-	 * window, L1), we faulted inside an exception handler.
-	 * The kernel cannot recover — building a trapframe would
-	 * just fault again.  BREAK to halt with full register
-	 * state for post-mortem debugging.
-	 *
-	 * Both checks are needed: a user program dereferencing
-	 * 0xFFFFxxxx triggers a legitimate TLB miss that should
-	 * be dispatched normally (and will result in SIGSEGV).
-	 *
-	 * R1=ESR, R2=EPC still in registers from above.
-	 * R1-R3 are freely clobberable (saved to scratch).
-	 */
-	li	r3, PSL_S
-	and	r1, r3
-	cmp	r1, r0
-	beq	.Lnot_double_fault	/* user mode — not a double fault */
-	mov	r1, r2			/* R1 = EPC */
-	lui	r3, #0xFFFF		/* R3 = 0xFFFF0000 */
-	and	r1, r3			/* R1 = EPC & 0xFFFF0000 */
-	cmp	r1, r3			/* EPC in 0xFFFFxxxx range? */
-	bne	.Lnot_double_fault
-	/*
-	 * Double fault confirmed.  On gen2 BREAK is a trapping
-	 * exception, not a halt: a BREAK here re-enters _trap_common,
-	 * re-trips this same test (its own EPC is supervisor and on the
-	 * vector page), and storms forever — overwriting the saved fault
-	 * snapshot on every pass.  Branch instead to _dfault_print, which
-	 * prints the still-intact ESR/EPC/fault state out the hardwired
-	 * console UART and then spins.  No faultable memory is touched,
-	 * so the evidence survives.
-	 */
-	b	_dfault_print
-.Lnot_double_fault:
+	stw	r4, [pc + _trap_save_hw_cause - .]
 
 	/* Allocate trapframe on kernel stack */
 	sub	r14, #TF_SIZE
@@ -1114,6 +1122,8 @@ _trap_save_hw_badvaddr:
 	.long	0
 _trap_save_hw_fstat:
 	.long	0
+_trap_save_hw_cause:
+	.long	0
 
 /* ═══════════════════════════════════════════════════════════════
  * _dfault_print — last-gasp fault dump for the double-fault path
@@ -1123,11 +1133,15 @@ _trap_save_hw_fstat:
  * so every branch and scratch reference is PC-relative and no
  * faultable memory is touched — it cannot itself fault.
  *
- * Prints the saved hardware fault state (ESR / EPC / fault address /
- * fault status) out the console UART, then spins.  Those words were
- * snapshotted into PC-relative scratch by _trap_common *before* the
- * double-fault test, so they describe the ORIGINAL fault, not this
- * dump.
+ * Prints two fault records out the console UART, then spins.  The
+ * unprefixed lines describe THIS fault — the one that tripped the
+ * guard — read live from the SPRs and MMU fault sysregs (nothing has
+ * faulted since, so they still hold its state), plus the supervisor
+ * SP.  The P-prefixed lines are the _trap_save_hw_* snapshot: the
+ * previous trap through _trap_common, which the guard deliberately
+ * did not overwrite.  For a fault in the trapframe build that is the
+ * victim whose handler entry faulted; for a fault inside the TLB
+ * miss fastpath it is merely the last full trap taken.
  *
  * The UART is the architecturally fixed console at 0xFF000000 — the
  * only hardwired I/O address (doc/system/bus.md).  We reach it
@@ -1161,7 +1175,79 @@ _dfault_print:
 	lli	r2, #13;	bl _df_putc
 	lli	r2, #10;	bl _df_putc
 
-	/* ESR=<hex> */
+	/* VEC=<hex>  (this fault's vector — live in R4 from the stub;
+	 * the banner putc calls clobber only R1/R3) */
+	lli	r2, #'V';	bl _df_putc
+	lli	r2, #'E';	bl _df_putc
+	lli	r2, #'C';	bl _df_putc
+	lli	r2, #'=';	bl _df_putc
+	bl	_df_puthex
+	lli	r2, #13;	bl _df_putc
+	lli	r2, #10;	bl _df_putc
+
+	/* ESR=<hex>  (this fault's ESR, live from the SPR) */
+	lli	r2, #'E';	bl _df_putc
+	lli	r2, #'S';	bl _df_putc
+	lli	r2, #'R';	bl _df_putc
+	lli	r2, #'=';	bl _df_putc
+	rdspr	r4, esr
+	bl	_df_puthex
+	lli	r2, #13;	bl _df_putc
+	lli	r2, #10;	bl _df_putc
+
+	/* EPC=<hex>  (this fault's PC, live from the SPR) */
+	lli	r2, #'E';	bl _df_putc
+	lli	r2, #'P';	bl _df_putc
+	lli	r2, #'C';	bl _df_putc
+	lli	r2, #'=';	bl _df_putc
+	rdspr	r4, epc
+	bl	_df_puthex
+	lli	r2, #13;	bl _df_putc
+	lli	r2, #10;	bl _df_putc
+
+	/* VA=<hex>   (this fault's virtual address, live) */
+	lli	r2, #'V';	bl _df_putc
+	lli	r2, #'A';	bl _df_putc
+	lli	r2, #'=';	bl _df_putc
+	rdsys	r4, #SYSDEV_MMU, #MMU_FAULT_ADDR
+	bl	_df_puthex
+	lli	r2, #13;	bl _df_putc
+	lli	r2, #10;	bl _df_putc
+
+	/* FST=<hex>  (this fault's status, live) */
+	lli	r2, #'F';	bl _df_putc
+	lli	r2, #'S';	bl _df_putc
+	lli	r2, #'T';	bl _df_putc
+	lli	r2, #'=';	bl _df_putc
+	rdsys	r4, #SYSDEV_MMU, #MMU_FAULT_STATUS
+	bl	_df_puthex
+	lli	r2, #13;	bl _df_putc
+	lli	r2, #10;	bl _df_putc
+
+	/* SP=<hex>   (supervisor SP — untouched by the print helpers) */
+	lli	r2, #'S';	bl _df_putc
+	lli	r2, #'P';	bl _df_putc
+	lli	r2, #'=';	bl _df_putc
+	mov	r4, r14
+	bl	_df_puthex
+	lli	r2, #13;	bl _df_putc
+	lli	r2, #10;	bl _df_putc
+
+	/* P-block: the previous trap's snapshot (see header comment). */
+
+	/* PVEC=<hex> */
+	lli	r2, #'P';	bl _df_putc
+	lli	r2, #'V';	bl _df_putc
+	lli	r2, #'E';	bl _df_putc
+	lli	r2, #'C';	bl _df_putc
+	lli	r2, #'=';	bl _df_putc
+	ldw	r4, [pc + _trap_save_hw_cause - .]
+	bl	_df_puthex
+	lli	r2, #13;	bl _df_putc
+	lli	r2, #10;	bl _df_putc
+
+	/* PESR=<hex> */
+	lli	r2, #'P';	bl _df_putc
 	lli	r2, #'E';	bl _df_putc
 	lli	r2, #'S';	bl _df_putc
 	lli	r2, #'R';	bl _df_putc
@@ -1171,7 +1257,8 @@ _dfault_print:
 	lli	r2, #13;	bl _df_putc
 	lli	r2, #10;	bl _df_putc
 
-	/* EPC=<hex>  (faulting PC) */
+	/* PEPC=<hex> */
+	lli	r2, #'P';	bl _df_putc
 	lli	r2, #'E';	bl _df_putc
 	lli	r2, #'P';	bl _df_putc
 	lli	r2, #'C';	bl _df_putc
@@ -1181,7 +1268,8 @@ _dfault_print:
 	lli	r2, #13;	bl _df_putc
 	lli	r2, #10;	bl _df_putc
 
-	/* VA=<hex>   (faulting virtual address) */
+	/* PVA=<hex> */
+	lli	r2, #'P';	bl _df_putc
 	lli	r2, #'V';	bl _df_putc
 	lli	r2, #'A';	bl _df_putc
 	lli	r2, #'=';	bl _df_putc
@@ -1190,7 +1278,8 @@ _dfault_print:
 	lli	r2, #13;	bl _df_putc
 	lli	r2, #10;	bl _df_putc
 
-	/* FST=<hex>  (fault status) */
+	/* PFST=<hex> */
+	lli	r2, #'P';	bl _df_putc
 	lli	r2, #'F';	bl _df_putc
 	lli	r2, #'S';	bl _df_putc
 	lli	r2, #'T';	bl _df_putc
