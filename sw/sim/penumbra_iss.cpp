@@ -2673,6 +2673,7 @@ int main(int argc, char** argv) {
         if (strncmp(usbdev_spec, "disk:", 5) == 0) {
             if (!usb_msc.attach(usbdev_spec + 5)) return 1;
             usb.dev.set_function(&usb_msc);
+            usb.dev.die_at_config = usb_msc.die_config_;
         } else {
             fprintf(stderr,
                 "unknown +usbdev type '%s' (available: disk:<image>)\n",

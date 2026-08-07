@@ -15,6 +15,8 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <vector>
 
 #include "usb_device_sim.h"
@@ -63,17 +65,35 @@ public:
 
     static const uint32_t DISK_BLOCK = 512;
 
-    bool attach(const char* image_path) {
-        img_ = fopen(image_path, "r+b");
+    // Config: "<image>[:naks=N]".  naks models media latency — a real
+    // flash device NAKs bulk-in polls while it stages data, so N > 0
+    // makes every data and CSW stage cost N NAKed polls first.
+    bool attach(const char* spec) {
+        char path[512];
+        snprintf(path, sizeof path, "%s", spec);
+        char* opt = strstr(path, ":naks=");
+        if (opt) {
+            nak_polls_ = atoi(opt + 6);
+            *opt = '\0';
+        }
+        opt = strstr(path, ":dieconfig");
+        if (opt) {
+            die_config_ = true;
+            *opt = '\0';
+        }
+        img_ = fopen(path, "r+b");
         if (!img_) {
-            fprintf(stderr, "[USBDISK] cannot open '%s'\n", image_path);
+            fprintf(stderr, "[USBDISK] cannot open '%s'\n", path);
             return false;
         }
         fseek(img_, 0, SEEK_END);
         long sz = ftell(img_);
         capacity_ = (sz > 0) ? (uint32_t)(sz / DISK_BLOCK) : 0;
         fprintf(stderr, "[USBDISK] '%s': %u blocks of %u bytes\n",
-                image_path, capacity_, DISK_BLOCK);
+                path, capacity_, DISK_BLOCK);
+        if (nak_polls_ > 0)
+            fprintf(stderr, "[USBDISK] media latency: %d NAKed polls "
+                    "per stage\n", nak_polls_);
         return true;
     }
 
@@ -152,6 +172,7 @@ public:
                 disk_write(rw_lba_, data_);
                 moved_ = (uint32_t)data_.size();
                 stage_ = BOT_CSW;
+                nak_left_ = nak_polls_;
             }
             break;
         default:
@@ -160,6 +181,14 @@ public:
     }
 
     InResult bulk_in(InTransfer& xfer) override {
+        // Media latency: the staged data or CSW is withheld for the
+        // configured number of polls, as a flash device fetching from
+        // its media NAKs the host meanwhile.
+        if ((stage_ == BOT_DATA_IN || stage_ == BOT_CSW) &&
+            nak_left_ > 0) {
+            nak_left_--;
+            return IN_NONE;
+        }
         switch (stage_) {
         case BOT_DATA_IN:
             xfer.data = data_;
@@ -183,9 +212,10 @@ public:
     }
 
     void bulk_in_done() override {
-        if (stage_ == BOT_DATA_IN_BUSY)
+        if (stage_ == BOT_DATA_IN_BUSY) {
             stage_ = BOT_CSW;
-        else if (stage_ == BOT_CSW_BUSY)
+            nak_left_ = nak_polls_;
+        } else if (stage_ == BOT_CSW_BUSY)
             stage_ = BOT_CBW;
     }
 
@@ -208,6 +238,12 @@ private:
 
     FILE* img_ = nullptr;
     uint32_t capacity_ = 0;         // disk size in DISK_BLOCK units
+
+    int nak_polls_ = 0;             // media latency, in NAKed polls per stage
+public:
+    bool die_config_ = false;       // request device death at SET_CONFIGURATION
+private:
+    int nak_left_ = 0;              // remaining NAKs before the stage yields
 
     std::vector<uint8_t> data_;     // data-in payload / data-out sink
     bool short_end_ = false;        // data-in reads short of the ask
@@ -267,6 +303,7 @@ private:
         status_ = CSW_PASS;
         scsi_execute(&cbw[15]);
 
+        nak_left_ = nak_polls_;   // fresh command: media latency anew
         if (status_ == CSW_PASS && !dev_to_host && rw_blocks_ != 0) {
             stage_ = BOT_DATA_OUT;
         } else if (dev_to_host && dlen_ > 0 && !data_.empty()) {

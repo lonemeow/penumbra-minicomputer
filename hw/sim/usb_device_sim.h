@@ -322,7 +322,16 @@ public:
 
     // A complete host packet, as received off the wire. Any response it
     // provokes is left in the response queue for the harness to pace.
+    // Failure-injection knob: on SET_CONFIGURATION the device dies —
+    // no handshake for that status stage, silence for everything after.
+    // Reproduces a real device going mute mid-request, and the host
+    // driver's behavior in the retry/abort cascade that follows.
+    bool die_at_config = false;
+    bool dead_ = false;
+
     void host_packet(const std::vector<uint8_t>& bytes) {
+        if (dead_)
+            return;
         if (bytes.empty())
             return;
 
@@ -644,6 +653,10 @@ private:
                     return;
                 }
                 case REQ_SET_CONFIGURATION: {
+                    if (die_at_config) {
+                        dead_ = true;   // mute from the status stage on
+                        return;
+                    }
                     // Only configuration 1 exists; selecting it (or
                     // deconfiguring with 0) is a pure action.  Every
                     // endpoint restarts at DATA0 and any open bulk

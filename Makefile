@@ -336,7 +336,8 @@ MODULE_TESTS = \
     usbhc_mac_test:tb_usbhc_mac \
     usb_phy_pair_test:tb_usb_phy_pair \
     usbhc_stack_test:tb_usbhc_stack \
-    usbhc_dev_test:tb_usbhc_dev
+    usbhc_dev_test:tb_usbhc_dev \
+    usbhc_wire_test:tb_usbhc_wire
 
 # Variant-fork unit tests: a fork (penumbra2_5/) shares its base module's name,
 # so the name-based search in test-modules resolves to the base. Name the source
