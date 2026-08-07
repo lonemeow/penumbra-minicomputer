@@ -4025,7 +4025,21 @@ for the corruption (see the USB line-capture instrument).  Any
 resulting driver fix belongs upstream in the MI driver, not carried
 as a local patch.
 
-## Hardware: gen1 top needs a USB-subsystem floorplan pass
+## NetBSD: outbound ping sees ~3x the latency of inbound replies
+
+Pinging the board from another host gets replies in ~25 ms; pinging
+out from the board reports ~80 ms round trips on the same link.  The
+inbound reply is generated entirely in the kernel (softint echoes
+the ICMP request), while the outbound measurement runs through
+ping(8): a userland send, a process sleep, and a wakeup plus
+copyout on the reply.  The delta therefore bounds the
+kernel-to-userland round trip, and it is in the same league as the
+measured cv_wait round-trip cost, pointing at scheduling/wakeup
+latency rather than the network path.  Worth separating the two
+suspects — wakeup latency versus receive-path copy cost — with the
+syscall microbenchmarks before touching anything; a cheap
+discriminator is timing a local UDP echo against localhost, which
+keeps the USB adapter out of the loop entirely.
 
 The USB debug and correctness campaign (line capture, input
 synchronizers, arbiter drain and fairness, SOF-delivery counter)
