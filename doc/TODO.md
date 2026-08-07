@@ -1088,6 +1088,33 @@ too, which is not what we want here.
 Tracked tests: `testcase-InstCombine-1.c`, `pr57344-3.c`,
 `pr57344-4.c` (excluded in `test/compiler/excludes.txt`).
 
+## Compiler: compare-elim splice can move a carry producer past ADC/SBC
+
+The compare-elimination peephole's backward walk skips instructions
+that read SR, so its splice can move a carry-producing `ADD`/`SUB`
+past the `ADC`/`SBC` that consumes its carry, breaking i64
+arithmetic — a confirmed live miscompile on the current build.
+Repro, analysis, and the one-line fix are in
+[`doc/llvm-flag-reuse-notes.md`](llvm-flag-reuse-notes.md), along
+with a second, latent hazard in `eliminateFrameIndex` (post-RA `ADD`
+clobbers SR for frames over 32 KiB).  Multi-word carry chains are
+the bread and butter of crypto bignum code, so this is also the
+prime suspect for the ssh SIGBUS entry below.
+
+## Compiler: GISel poison-flag hygiene is an LLVM rebase gate
+
+The known upstream GlobalISel wrap-flag miscompile families are
+audited in
+[`doc/llvm-gisel-upstream-miscompile-exposure.md`](llvm-gisel-upstream-miscompile-exposure.md):
+both flag-corruption mechanisms actively deposit false `nuw` flags
+in our pipeline today and are harmless only because this LLVM's
+known-bits code never reads them.  A rebase (or local flag-aware
+known-bits work) converts them to live miscompiles with no fallback
+to hide behind.  Before any LLVM upgrade, confirm the combiner
+poison-flag drop is in the tree or carry it; backport the lowerBswap
+mask fix opportunistically; re-run the audit's probes after any
+rebase.
+
 ## Compiler: share the hi-word compare in i64 three-way compares
 
 The `G_SCMP`/`G_UCMP` lowering (`.lower()` →
@@ -1271,8 +1298,11 @@ trap state (teach the SIGBUS delivery path to log them for userland
 faults if it does not), `ktrace` to see how far startup gets before
 the fault (rtld/TLS init versus key exchange), and cross-check with
 a statically linked ssh build — static-works/dynamic-dies convicts
-the rtld/DTV side, both-die convicts an alignment miscompile in the
-crypto path.
+the rtld/DTV side, both-die convicts a miscompile in the crypto
+path.  On the miscompile branch, check the confirmed compare-elim
+carry-splice bug first (the entry above): crypto bignum code is
+carry-chain-dense, and a corrupted i64 that becomes a pointer or
+offset presents exactly as SIGBUS.
 
 `vmapbuf` and `vunmapbuf` in `penumbra/machdep.c` are still
 `TODO(stub)` — calls trap into DDB with `.long 0x6f400000` rather
