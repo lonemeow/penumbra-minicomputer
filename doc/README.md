@@ -27,7 +27,8 @@ architecture and its standard peripherals.
 ### Device Drivers
 *   **[UART](./system/devices/uart.md)** — Word-strided NS16550A console.
 *   **[SPI / SD Card](./system/devices/spi.md)** — Register map and driver flow for storage.
-*   **[ESP32 WiFi NIC](./system/devices/esp32-nic.md)** — Ethernet-over-SLIP network adapter interface.
+*   **[USB host controller](./system/devices/usb-host.md)** — register interface and transaction contract; carries storage, HID, hubs, and the `ure(4)` Ethernet adapter that gives the machine its network.
+*   **[ESP32 WiFi NIC](./system/devices/esp32-nic.md)** — Ethernet-over-SLIP network adapter interface (an alternative path, not the one in use).
 *   **[Text-Video Console](./system/devices/text-video.md)** — Character-cell local console (`CLASS_TEXTVIDEO`).
 *   **[USB Host Controller](./system/devices/usb-host.md)** — Transaction-level USB host (`CLASS_USBHC`).
 

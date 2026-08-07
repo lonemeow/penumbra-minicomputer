@@ -204,16 +204,27 @@ pace periodic polling.
 
 ## Scope of the Minimum
 
-The minimum protocol covers **low- and full-speed, a single
-directly-attached device** (no downstream hub, so no split/PRE handling)
-and the three handshaken transfer types — **control, interrupt, and
-bulk**. Interrupt-versus-bulk is host scheduling policy, not a
-controller capability: both compose from the same token / data /
-handshake transactions, so bulk endpoints (storage, network adapters)
-need nothing beyond this interface. Isochronous transfers — which are
-unhandshaken and must launch synchronized to the frame — downstream-hub
-support, and DMA descriptor engines, where present, are richer features
-behind `CFG_ID`.
+The minimum protocol covers **low- and full-speed** and the three
+handshaken transfer types — **control, interrupt, and bulk**.
+Interrupt-versus-bulk is host scheduling policy, not a controller
+capability: both compose from the same token / data / handshake
+transactions, so bulk endpoints (storage, network adapters) need
+nothing beyond this interface.
+
+A downstream hub needs nothing either, at full speed. A hub is a
+repeater, not a store-and-forward switch: the host's transmission
+reaches every enabled downstream port, and addressing is the
+devices' concern, so a device behind a hub is transactionally
+indistinguishable from one on the port. The exception is **low
+speed behind a hub**, which requires the host to prefix each
+transaction with a PRE packet at full speed and then signal the
+transaction itself at low speed — a mid-transaction bit-rate
+switch. A controller without PRE reaches low-speed devices only
+when they are directly attached.
+
+Isochronous transfers — which are unhandshaken and must launch
+synchronized to the frame — PRE handling, and DMA descriptor
+engines, where present, are richer features behind `CFG_ID`.
 
 ## Relationship to Host Software
 
@@ -223,6 +234,8 @@ of the ROM reading a [UART](uart.md) for console input. Under NetBSD, a
 single host-controller driver binds to `CLASS_USBHC` and implements the
 machine-independent USB stack's bus interface; that layer performs
 enumeration, descriptor parsing, and HID handling above it, exactly as it
-does for any other controller. A `ukbd` keyboard discovered this way
-drives `wskbd`, which together with a [text-video](text-video.md) or
-framebuffer console forms a `wscons` local console.
+does for any other controller. Keyboards reach userland today through
+`uhidev`/`uhid` as `/dev/uhid*`; binding them to `ukbd` and `wskbd`
+instead, which together with a [text-video](text-video.md) or
+framebuffer console forms a `wscons` local console, is the remaining
+step toward a standalone console.

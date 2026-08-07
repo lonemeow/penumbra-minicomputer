@@ -372,14 +372,27 @@ interface instead; USB host is intentionally an FPGA-and-beyond device.
 
 ## Implementation Status
 
-- **First build** — low- and full-speed, control and interrupt transfers,
-  a single directly-attached device: the `CLASS_USBHC` minimum, enough to
-  enumerate and poll a boot-protocol HID keyboard through the NetBSD MI
-  USB stack.
-- **Extensions** — bulk and isochronous transfers, downstream-hub support
-  (PRE/split), and a DMA transfer-descriptor engine are all `CFG_ID`
-  features per the contract.
-- Not yet implemented.
+The controller is built and runs on the ULX3S US2 port, carrying
+low- and full-speed control, interrupt, and bulk transfers through
+the NetBSD MI USB stack: mass storage (`umass`/`sd`, mounting real
+filesystems), HID (`uhidev`/`uhid`), USB Ethernet (`ure`), and
+full-speed devices behind a cascaded hub.  Bulk needed no controller
+feature beyond the `CLASS_USBHC` minimum, and neither does a hub at
+full speed — the host repeats packets to every enabled downstream
+port, so the hub is transparent to the transaction engine.
+
+Genuinely absent, and reachable as `CFG_ID` features:
+
+- **PRE packets** — a full-speed hub only forwards to a low-speed
+  port when the host prefixes the transaction with PRE and then
+  drops to low-speed signaling, which the transmitter cannot do
+  mid-transaction.  Low-speed devices therefore work directly
+  attached but not behind a hub.
+- **Multi-transaction transfers and hardware NAK pacing** — one
+  interrupt per transaction is the current cost model; see the
+  USBHC v2 entry in `doc/TODO.md`.
+- **Isochronous transfers** and a **DMA transfer-descriptor
+  engine**.
 
 ## See Also
 

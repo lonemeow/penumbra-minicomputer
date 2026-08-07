@@ -31,7 +31,8 @@ hw/
 │   ├── penumbra2/ # gen2 6-stage pipelined core + its MMU / L1 / arbiter / fill modules
 │   ├── machine/   # machine integrations (machine_<generation>.sv)
 │   ├── soc/       # Bus controller, autoconfig, caches (L1 VIPT, L1 PIPT, L2), boot ROM, cpuid/machid
-│   ├── io/        # Real UART, real SPI, SDRAM v2 controller/adapter/PHY/CDC
+│   ├── io/        # Real UART, real SPI, SDRAM v2 controller/adapter/PHY/CDC,
+│   │              #   usb/ (SIE cells + MAC + host controller), video/
 │   ├── sim/       # machine_sim + machine_penumbra2_sim, sim devices, memory models
 │   └── fpga/      # FPGA helpers (fpga_ram, lint stubs); board tops under <board>/
 ├── microcode/   # microcode.uasm (single source — assemble via uasm.py)

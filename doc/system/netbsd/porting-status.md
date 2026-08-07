@@ -110,14 +110,35 @@ bootinfo — `boot sd:0,0` reaches single-user with no prompts.
   the MI USB stack, `dev/ic/sl811hs.c`-style.  Bus methods,
   software root hub (`usbroothub`), and the transfer engine:
   control, interrupt, and bulk pipes, one transaction at a time
-  through a ready queue; interrupt endpoints NAK-pace at
-  `bInterval` via gated SOF interrupts, control/bulk retry
-  round-robin.  `uhub0` explores the port and enumerates an
-  attached device end to end (verified against the ISS device
-  model).  `umass` + `scsibus` + `sd` attach the simulated USB
-  mass-storage disk; an FFS filesystem mounts through it and
-  round-trips file data (ISS-verified).  `cdce` networking is
-  next.
+  through a ready queue.  Interrupt endpoints launch at their
+  declared `bInterval` through a gated-SOF frame wait — every
+  launch, not only NAK retries, since an immediate resubmit against
+  an endpoint with standing data polls at full bus rate and starves
+  the thread that would quiet it.  Errored transactions retry on an
+  exponential frame backoff; NAKs reset the error count.
+  Enumeration, hot-plug attach and detach, and reboot with a device
+  attached all work against commercial hardware on the ULX3S US2
+  port.  `umass` + `scsibus` + `sd` mount a real flash drive and
+  read files from it; `uhidev`/`uhid` deliver HID reports to
+  `/dev/uhid*`; `ure(4)` carries TCP/IP (see below).  Full-speed
+  devices work behind a cascaded hub; low-speed ones do not, for
+  want of PRE packets.
+
+- **Networking:** `ure(4)` drives an RTL8152 USB Ethernet adapter
+  with `rlphy` media handling; `ifconfig` configures the interface
+  and the INET stack carries traffic — sustained ping runs for
+  thousands of packets without loss, and `ssh` connects out.
+  Known rough edges: outbound round-trip latency runs about triple
+  the inbound figure (kernel-to-userland wakeup cost), lone
+  received packets are delivered on a ~100 ms quantum (the
+  adapter's RX aggregation flush), and the adapter fails behind an
+  unpowered hub, most likely a power budget rather than a protocol
+  problem.
+
+- **Core dumps:** the process register accessors and ELF core
+  writer work; a crashing program leaves a core whose register
+  note and load map symbolize against the unstripped binaries in
+  the build tree.  Two compiler defects were root-caused this way.
 
 - **Exec / return-to-user:** `setregs()` initializes user
   trapframe.  `trap_return` handles SP banking (USP save/restore)
@@ -167,10 +188,9 @@ bootinfo — `boot sd:0,0` reaches single-user with no prompts.
 
 ### Remaining Stubs
 
-Kernel functions that will panic if reached (grep `TODO(stub)`):
-
-- `process_read_regs`, `process_write_regs`, `process_set_pc`
-- `cpu_coredump`
+Kernel functions that will panic if reached (grep `TODO(stub)`).
+The process register accessors and `cpu_coredump` are no longer
+among them — core dumps work.
 
 ## Userland
 

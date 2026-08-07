@@ -1304,29 +1304,6 @@ nbmake's dependency tracking: the fix reaches installed binaries
 only through a clean userland rebuild, and any library that large
 built before the fix is suspect until relinked.
 
-`vmapbuf` and `vunmapbuf` in `penumbra/machdep.c` are still
-`TODO(stub)` — calls trap into DDB with `.long 0x6f400000` rather
-than executing.  This blocks every code path that goes through
-`physio()`: the raw character devices (`/dev/rld0`, `/dev/rsd0`,
-etc.), and anything that opens them — `dd if=/dev/rld0`,
-`disklabel`, `fsck` on an unmounted partition, `dump`/`restore`,
-and similar.  Filesystem-mediated I/O is unaffected because it
-goes through the buffer cache without needing user-VA → kernel-VA
-mapping.
-
-`vmapbuf` walks the calling process's pmap to find the physical
-pages backing the user buffer, then maps them into kernel VA so
-the driver can treat `bp->b_data` as a kernel address.
-`vunmapbuf` undoes that mapping after I/O completes.  Both are
-already implemented in every other 32-bit NetBSD port — see e.g.
-`netbsd/sys/arch/mips/mips/vm_machdep.c:vmapbuf()` for the
-canonical pattern: `uvm_km_alloc(kernel_map, len, …)` for a fresh
-kernel VA range, then loop `pmap_extract(curproc's pmap, user va)`
-→ `pmap_kenter_pa(kernel va, paddr, prot)` to populate it.
-
-Surfaced as a wall when validating CMD18 multi-block reads via
-`dd if=/dev/rld0`.  Block-device path (`/dev/ld0`) still works
-because it goes through the buffer cache, not physio.
 
 ## Kernel: guard page for kernel stack overflow
 
@@ -3886,9 +3863,10 @@ path; more expressive than text for demos, not a requirement.
   the HID personality lands.
 
 ### Kernel
-- `CLASS_USBHC` host-controller driver (`usbd_bus_methods` /
-  `usbd_pipe_methods`, software root hub) modeled on `dev/ic/sl811hs.c`;
-  enable the MI USB stack + `uhidev` / `ukbd` in the kernel config.
+- `ukbd` + `wskbd` binding for HID keyboards.  The host-controller
+  driver, the MI USB stack, and `uhidev`/`uhid` are done — keystrokes
+  reach userland through `/dev/uhid*` — but a `wscons` console needs
+  the keyboard bound as a `wskbd` input instead.
 - `wsdisplay` back-end for `CLASS_TEXTVIDEO` (`pcdisplay`-style character
   memory) + `wskbd`; bring up `wscons` as a local console alongside (or
   in place of) the `com` console.
@@ -3967,8 +3945,9 @@ Work items, in order:
   a per-pipe state machine (control SETUP→DATA→STATUS, chunked
   data stages, software toggles with RXTOGGLE retransmission
   discard, forced-ZLP OUT endings, three-strikes error retry) and a
-  ready-queue scheduler: interrupt endpoints NAK-pace at `bInterval`
-  on gated SOF interrupts, control/bulk NAKs retry round-robin
+  ready-queue scheduler: interrupt endpoints launch at `bInterval`
+  on gated SOF interrupts — every launch, not only NAK retries —
+  control/bulk NAKs retry round-robin
   (degenerating to immediate relaunch when alone); completions
   post from the hard interrupt to the soft interrupt under the MI
   `usbd_xfer_trycomplete` discipline, and aborts detach at any
@@ -3980,13 +3959,13 @@ Work items, in order:
   (`files.scsipi` include, `sd` device majors); an FFS filesystem
   on the simulated USB disk mounts and round-trips file data on
   the ISS — bulk verified in both directions with hard integrity.
-  Remaining: `cdce` + `netinet` pieces.
+  Networking landed through `ure(4)` on a real RTL8152 rather than
+  the `cdce` simulation path: `ifconfig` plus the INET stack carry
+  sustained traffic without loss.  HID landed as `uhidev`/`uhid`.
 - **Hardware: US2 wiring** — Done (tracked in the console section
-  above): VBUS sourcing confirmed on the board, and a commercial
-  USB NIC (Realtek RTL8152) enumerates on the physical port. Note
-  the RTL8152 came up at full speed with usable-looking descriptors
-  — `ure(4)` against it is a candidate first real packet, in
-  parallel with the `cdce` simulation path.
+  above): VBUS sourcing confirmed on the board, and commercial
+  devices — mass storage, HID keyboards, a Realtek RTL8152 NIC,
+  and a cascaded hub — all work on the physical port.
 
 ## Kernel: bus_space stream methods when a consumer driver arrives
 
@@ -4006,9 +3985,10 @@ trigger discipline as the text-video `region_2`/`copy_region_2`/
 `set_region_2` additions: implement when the consumer exists to
 test against, not speculatively.
 
-## Hardware: USBHC v2 — multi-transaction transfers, hardware NAK pacing
+## Hardware: USBHC v2 — multi-transaction transfers, NAK pacing, PRE
 
-Two planned upgrades to the transaction engine, targeting the two
+Three planned upgrades to the transaction engine.  The first two target
+the two
 dominant software costs of the one-transaction-at-a-time design:
 every 64-byte transaction costs one interrupt plus a PIO drain or
 refill of the DATA window, and a NAKing endpoint costs an interrupt
@@ -4042,6 +4022,17 @@ wire bandwidth.
   second periodic-only slot (the ISP1362 INTL/ATL shape, scaled
   down).
 
+- **PRE packets — low-speed devices behind a hub.**  The one known
+  functional gap rather than a performance one.  A full-speed hub
+  forwards to a low-speed port only when the host prefixes the
+  transaction with a PRE packet sent at full speed and then signals
+  the transaction itself at low speed, so the transmitter must
+  switch bit rates mid-transaction and the receiver must expect a
+  low-speed reply on a full-speed segment.  Direct-attached
+  low-speed devices already work; today an older keyboard that
+  works on the port goes silent behind a hub.  Wanted for the
+  exhibit topology, where everything hangs off one powered hub.
+
 Both must ride the device contract compatibly: new capability bits
 and control fields that old kernels never set, with the existing
 single-transaction register behavior as the default.
@@ -4055,18 +4046,13 @@ bulk-IN transfer only completes on a short packet, and the device
 holds a partial aggregation buffer until an internal flush
 threshold.  The driver programs `URE_USB_RX_BUF_TH` with
 `URE_RX_THR_HIGH` and never touches the flush timing.  An
-experiment writing `URE_RX_THR_SUPER` coincided with a no-RX
-session, but sessions also come up with RX dead nondeterministically
-under stock settings — a freshly replugged, cleanly enumerated
-adapter sometimes NAKs the bulk-IN pipe forever while control
-traffic (enumeration, MII polls) works throughout — so the
-experiment is inconclusive.  The suspected common cause for both
-the dead sessions and the sporadic data-transaction errors is
-transaction-level corruption occasionally landing on an init-time
-control write (e.g. the device's receive-enable), leaving the
-adapter configured blind.  Progress needs the RTL8152B register
-documentation for the threshold field, and line-level observability
-for the corruption (see the USB line-capture instrument).  Any
+experiment writing `URE_RX_THR_SUPER` was inconclusive because the
+transport was unreliable at the time.  It no longer is: the
+receive-framing, packet-fusion, response-timeout, and pull-down
+defects that produced dead sessions and sporadic transaction errors
+are fixed, and the link now runs thousands of packets without loss,
+so the latency quantum is a clean target.  Progress needs the
+RTL8152B register documentation for the threshold field.  Any
 resulting driver fix belongs upstream in the MI driver, not carried
 as a local patch.
 
