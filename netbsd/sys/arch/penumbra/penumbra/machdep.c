@@ -752,21 +752,33 @@ sendsig_siginfo(const ksiginfo_t *ksi, const sigset_t *mask)
 int
 process_read_regs(struct lwp *l, struct reg *regs)
 {
-	/* TODO(stub) */ __asm volatile("break");
+	const struct trapframe *tf = l->l_md.md_utf;
+
+	memcpy(regs->r_regs, tf->tf_regs, sizeof(regs->r_regs));
+	regs->r_sr = tf->tf_sr;
+	regs->r_pc = tf->tf_epc;
 	return 0;
 }
 
 int
 process_write_regs(struct lwp *l, const struct reg *regs)
 {
-	/* TODO(stub) */ __asm volatile("break");
+	struct trapframe *tf = l->l_md.md_utf;
+
+	memcpy(tf->tf_regs, regs->r_regs, sizeof(tf->tf_regs));
+	/* Only the condition flags are the debugger's to set; the
+	 * privilege and interrupt bits keep their live values. */
+	tf->tf_sr = (tf->tf_sr & ~PSL_FLAGS) | (regs->r_sr & PSL_FLAGS);
+	tf->tf_epc = regs->r_pc;
 	return 0;
 }
 
 int
 process_set_pc(struct lwp *l, void *addr)
 {
-	/* TODO(stub) */ __asm volatile("break");
+	struct trapframe *tf = l->l_md.md_utf;
+
+	tf->tf_epc = (uint32_t)(uintptr_t)addr;
 	return 0;
 }
 
@@ -774,8 +786,10 @@ int
 cpu_coredump(struct lwp *l, struct coredump_iostate *iocookie,
     struct core *chdr)
 {
-	/* TODO(stub) */ __asm volatile("break");
-	return 0;
+	/* Cores are written in ELF format (coredump_elf32); this
+	 * entry point serves only the a.out core format, which the
+	 * port does not support. */
+	return ENOSYS;
 }
 
 /*
