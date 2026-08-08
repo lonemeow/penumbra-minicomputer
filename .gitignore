@@ -16,6 +16,7 @@ waves/
 /program.hex
 /microcode.hex
 /font8x16.hex
+/splash_cells.hex
 hw/sim/programs/**/*.hex
 hw/microcode/*.hex
 *.vcd

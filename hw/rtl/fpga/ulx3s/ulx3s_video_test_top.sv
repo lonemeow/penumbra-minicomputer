@@ -1,17 +1,22 @@
 // ULX3S text-video bring-up probe — the display output path on glass,
 // no CPU.
 //
-// Synthesizes the sim-verified output chain (video_chain_test: timing
-// generator, test pattern, TMDS encoders, DDR serializers) plus exactly
-// the pieces simulation could not prove — the dedicated video PLL, the
-// ODDRX1F output cells, and the GPDI pads. Built via the TOP= escape
-// hatch (make fpga TOP=ulx3s_video_test_top); a probe, not a registered
-// machine — there is no CPU, bus, or autoconfig here.
+// Synthesizes the sim-verified text output chain (video_text_chain:
+// timing generator, character generator with a preloaded splash
+// screen, TMDS encoders, DDR serializers) plus exactly the pieces
+// simulation could not prove — the dedicated video PLL, the ODDRX1F
+// output cells, and the GPDI pads. Built via the TOP= escape hatch
+// (make fpga TOP=ulx3s_video_test_top); a probe, not a registered
+// machine — there is no CPU, bus, or autoconfig here, so the cell
+// port is tied off and the screen is the $readmemh preload
+// (splash_cells.hex, generated from hw/video/splash.txt).
 //
-// Verify: a stable test card on a DVI/HDMI monitor. Triage:
+// Verify: the splash text with a blinking cursor on a DVI/HDMI
+// monitor. Triage:
 //   no signal          → PLL or clock lane (read led[2:0] first);
 //   rolling / tearing  → serializer word alignment;
-//   stable, wrong hues → data-lane order at the GPDI pads.
+//   stable, wrong hues → data-lane order at the GPDI pads;
+//   garbage glyphs     → stale hex images at the repo root.
 //
 // Clocking: VESA mode 0 wants a 25.175 MHz pixel clock, but integer
 // EHXPLLL ratios cannot make that from the 25 MHz crystal; 25 MHz even
@@ -118,17 +123,24 @@ module ulx3s_video_test_top (
         rst <= !pll_lock || btn1_sync2;
     end
 
-    // ── The sim-verified output chain ──────────────────────────
-    // Exactly the module the frame-compare testbench passed; this top
-    // adds only the clocks, the DDR output cells, and the pads.
+    // ── The sim-verified text output chain ─────────────────────
+    // Exactly the module the monitor-decode testbench passed; this
+    // top adds only the clocks, the DDR output cells, and the pads.
+    // No bus master exists here, so the CPU-side cell port is tied
+    // off and the screen comes from the splash preload.
     logic [3:0] lane_d0, lane_d1;
 
-    video_chain_test u_chain (
-        .i_pclk (clk_pixel),
-        .i_sclk (clk_serial),
-        .i_rst  (rst),
-        .o_d0   (lane_d0),
-        .o_d1   (lane_d1)
+    video_text_chain u_chain (
+        .i_clk        (clk_pixel),
+        .i_cell_we    (1'b0),
+        .i_cell_addr  ('0),
+        .i_cell_wdata ('0),
+        .o_cell_rdata (),
+        .i_pclk       (clk_pixel),
+        .i_sclk       (clk_serial),
+        .i_rst        (rst),
+        .o_d0         (lane_d0),
+        .o_d1         (lane_d1)
     );
 
     // ── GPDI pads: one ODDRX1F per lane ────────────────────────

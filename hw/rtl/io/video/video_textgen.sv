@@ -29,7 +29,9 @@ module video_textgen #(
     parameter int COLUMNS    = 80,
     parameter int ROWS       = 30,
     parameter bit HSYNC_POL  = video_pkg::H_SYNC_POL,
-    parameter bit VSYNC_POL  = video_pkg::V_SYNC_POL
+    parameter bit VSYNC_POL  = video_pkg::V_SYNC_POL,
+    // Passed through to the cell RAM's optional $readmemh preload.
+    parameter     CELLS_HEX  = ""
 ) (
     // ── CPU/bus domain: CELLS aperture ──────────────────────────
     input  logic        i_clk,
@@ -107,7 +109,8 @@ module video_textgen #(
     logic [15:0] cell_data;   // {attr, glyph}, valid one cycle after S0
 
     video_cell_ram #(
-        .DEPTH       (4096)
+        .DEPTH       (4096),
+        .INIT_HEX    (CELLS_HEX)
     ) u_cells (
         .i_clk       (i_clk),
         .i_we        (i_cell_we),

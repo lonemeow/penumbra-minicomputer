@@ -316,6 +316,7 @@ MODULE_TESTS = \
     video_font_rom \
     video_cell_ram \
     video_textgen \
+    video_text_chain \
     usb_crc5 \
     usb_crc16 \
     usb_bit_stuff_tx \
@@ -356,8 +357,13 @@ VARIANT_MODULE_TESTS = \
 font8x16.hex: netbsd/sys/dev/wsfont/bold8x16.h hw/tools/wsfont2hex.py
 	python3 hw/tools/wsfont2hex.py $< $@
 
+# Splash-screen cell image for the CPU-free display bring-up, read by
+# video_cell_ram via $readmemh when preloaded (video_text_chain).
+splash_cells.hex: hw/video/splash.txt hw/tools/text2cells.py
+	python3 hw/tools/text2cells.py $< $@
+
 .PHONY: test-modules test-modules-variant
-test-modules: test-modules-variant font8x16.hex
+test-modules: test-modules-variant font8x16.hex splash_cells.hex
 	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
 	@pass=0; fail=0; failed=""; \
 	for entry in $(MODULE_TESTS); do \
@@ -872,6 +878,9 @@ FPGA_SRC_ulx3s_video_test_top = hw/rtl/io/video/video_pkg.sv \
 # gen2 embeds the boot ROM (no microcode — the gen2 core is hardwired).
 FPGA_ROM_TOPS   = ulx3s_penumbra1_top ulx3s_penumbra2_top ulx3s_penumbra2_5_top
 FPGA_UCODE_TOPS = ulx3s_penumbra1_top
+# Tops that embed display hex images (font, splash cells): the images
+# must exist at the repo root before yosys resolves their $readmemh.
+FPGA_VIDEO_TOPS = ulx3s_video_test_top
 
 # Per-top default nextpnr placement seed. Some board/core[/variant]
 # combinations only close timing on a particular seed; pin it here so a
@@ -1001,7 +1010,8 @@ UCODE_SRC = hw/microcode/microcode.uasm
 ROM_SRCS  = $(wildcard hw/rom/*.c hw/rom/*.h hw/rom/*.s hw/rom/*.ld hw/rom/Makefile)
 $(BUILD_DIR)/$(TOP).json: $(FPGA_SRC) $(PHASE_STAMP) \
     $(if $(filter $(TOP),$(FPGA_UCODE_TOPS)),$(UCODE_SRC)) \
-    $(if $(filter $(TOP),$(FPGA_ROM_TOPS)),$(ROM_SRCS))
+    $(if $(filter $(TOP),$(FPGA_ROM_TOPS)),$(ROM_SRCS)) \
+    $(if $(filter $(TOP),$(FPGA_VIDEO_TOPS)),font8x16.hex splash_cells.hex)
 	@mkdir -p $(BUILD_DIR)
 	$(if $(filter $(TOP),$(FPGA_UCODE_TOPS)),$(UASM) hw/microcode/microcode.uasm -o microcode.hex)
 	$(if $(filter $(TOP),$(FPGA_ROM_TOPS)),$(MAKE) -C hw/rom)

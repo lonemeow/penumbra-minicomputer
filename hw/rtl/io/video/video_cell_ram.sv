@@ -15,7 +15,11 @@
 // undefined at power-up; the consumer initializes the grid.
 
 module video_cell_ram #(
-    parameter int DEPTH = 4096
+    parameter int DEPTH    = 4096,
+    // Optional $readmemh preload — the CPU-free bring-up path (a
+    // splash screen before any bus master exists). Empty: contents
+    // are undefined at power-up, the device contract's default.
+    parameter     INIT_HEX = ""
 ) (
     // ── Port A: CPU/bus domain (CELLS aperture) ─────────────────
     input  logic                     i_clk,
@@ -31,6 +35,10 @@ module video_cell_ram #(
 );
 
     logic [15:0] mem [0:DEPTH-1];
+
+    if (INIT_HEX != "") begin : g_preload
+        initial $readmemh(INIT_HEX, mem);
+    end
 
     logic [15:0] rdata_q;
     logic [15:0] scan_data_q;
