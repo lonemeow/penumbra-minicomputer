@@ -19,6 +19,12 @@
 // Unimplemented register slots (modes, framebuffer) read 0 and
 // ignore writes.
 
+// keep_hierarchy: hold the display subsystem together through
+// synth_ecp5 so its cells stay a cohesive island. A standalone
+// peripheral whose only CPU-clock logic is the small register tier
+// must not scatter into — or let the optimizer blend it with — the
+// main clock domain's critical regions.
+(* keep_hierarchy = "yes" *)
 module video_display #(
     // Cell-RAM preload, passed to the chain: a board that wants the
     // splash visible from power-on names its image; empty leaves

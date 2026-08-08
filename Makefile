@@ -765,10 +765,12 @@ SRC_COMMON = hw/rtl/common/penumbra_pkg.sv \
 
 SRC_FABRIC = hw/rtl/io/sdram/sdram_pkg.sv \
              hw/rtl/io/usb/usb_pkg.sv \
+             hw/rtl/io/video/video_pkg.sv \
              $(wildcard hw/rtl/soc/*.sv) \
              $(wildcard hw/rtl/io/*.sv) \
              $(filter-out %/sdram_pkg.sv, $(wildcard hw/rtl/io/sdram/*.sv)) \
-             $(filter-out %/usb_pkg.sv, $(wildcard hw/rtl/io/usb/*.sv))
+             $(filter-out %/usb_pkg.sv, $(wildcard hw/rtl/io/usb/*.sv)) \
+             $(filter-out %/video_pkg.sv, $(wildcard hw/rtl/io/video/*.sv))
 
 SRC_CORE_penumbra1 = $(wildcard hw/rtl/penumbra1/*.sv)
 SRC_CORE_penumbra2 = hw/rtl/penumbra2/penumbra2_pkg.sv \
@@ -881,7 +883,7 @@ FPGA_ROM_TOPS   = ulx3s_penumbra1_top ulx3s_penumbra2_top ulx3s_penumbra2_5_top
 FPGA_UCODE_TOPS = ulx3s_penumbra1_top
 # Tops that embed display hex images (font, splash cells): the images
 # must exist at the repo root before yosys resolves their $readmemh.
-FPGA_VIDEO_TOPS = ulx3s_video_test_top
+FPGA_VIDEO_TOPS = ulx3s_video_test_top ulx3s_penumbra1_top
 
 # Per-top default nextpnr placement seed. Some board/core[/variant]
 # combinations only close timing on a particular seed; pin it here so a

@@ -234,11 +234,12 @@ has no file of its own: it reuses its base board top synthesized with
 one core parameter set, so `TOP` names the artifact and `TOP_MODULE`
 the shared module.
 - `ulx3s/ulx3s_penumbra1_top.sv` — gen1 system on the ULX3S.
-  12.5 MHz PLL (25 MHz crystal), 32 MB SDRAM (W9825G6KH or
+  System PLL from the 25 MHz crystal, 32 MB SDRAM (W9825G6KH or
   compatible), real UART (TX+RX), real SPI with SD card (autoconfig),
   USB host on the US2 socket (autoconfig; 60 MHz from CLKOS3,
-  single-ended D+/D- on the `usb_fpga_bd` pads), boot ROM,
-  `btn[1]` reset.
+  single-ended D+/D- on the `usb_fpga_bd` pads), display adapter on
+  the GPDI connector (autoconfig; dedicated video PLL, splash preload),
+  boot ROM, `btn[1]` reset.
 - `ulx3s/ulx3s_penumbra2_probe_top.sv` — gen2 machine timing probe
   (`VARIANT=probe`): `machine_penumbra2` + a BRAM bus memory at
   25 MHz, terminal outputs folded onto the LEDs so synthesis keeps the
@@ -275,6 +276,7 @@ data section; all state lives in boot data or on the stack.
 **Monitor commands:** `boot sd:<dev>,<cs>[/file]` (mount FAT32, load
 named file or `PENBOOT.ELF` by default as PIE, allocate RAM, copy
 PT_LOAD, jump), `x <addr> [len]` (hex dump),
+`w <addr> <val> [<val>…]` (store words),
 `load sd:<dev>,<cs>[:<part>] <addr> <lba> <count>`,
 `part sd:<dev>,<cs>` (MBR table), `go <addr>` / `g <addr>` (jump
 with R1=boot data), `break` / `b` (halt). SD naming uses per-class
