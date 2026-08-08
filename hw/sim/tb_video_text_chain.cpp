@@ -144,6 +144,10 @@ int main() {
 
     dut = new Vvideo_text_chain;
     dut->i_cell_we = 0;
+    dut->i_enable = 1;
+    dut->i_cursor_en = 1;
+    dut->i_cursor_col = CURSOR_COL;
+    dut->i_cursor_row = CURSOR_ROW;
 
     // Synchronous reset, held two pixel periods (testbench convention).
     dut->i_rst = 1; dut->i_pclk = 0; dut->i_sclk = 0; dut->i_clk = 0;

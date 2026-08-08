@@ -139,6 +139,10 @@ module ulx3s_video_test_top (
         .i_pclk       (clk_pixel),
         .i_sclk       (clk_serial),
         .i_rst        (rst),
+        .i_enable     (1'b1),
+        .i_cursor_en  (1'b1),
+        .i_cursor_col (8'd0),
+        .i_cursor_row (6'd29),
         .o_d0         (lane_d0),
         .o_d1         (lane_d1)
     );

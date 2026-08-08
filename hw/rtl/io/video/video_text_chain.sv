@@ -14,10 +14,7 @@
 // master; a preload-only user ties it off.
 
 module video_text_chain #(
-    parameter              CELLS_HEX  = "splash_cells.hex",
-    parameter bit          CURSOR_EN  = 1'b1,
-    parameter logic [7:0]  CURSOR_COL = 8'd0,
-    parameter logic [5:0]  CURSOR_ROW = 6'd29
+    parameter CELLS_HEX = "splash_cells.hex"
 ) (
     // ── CPU/bus domain: cell access (tie off when preload-only) ──
     input  logic        i_clk,
@@ -30,6 +27,12 @@ module video_text_chain #(
     input  logic       i_pclk,   // pixel clock
     input  logic       i_sclk,   // serial clock — 5x pixel, same PLL
     input  logic       i_rst,
+    // Control, quasi-static in the pixel domain (synchronized by the
+    // consumer)
+    input  logic       i_enable,
+    input  logic       i_cursor_en,
+    input  logic [7:0] i_cursor_col,
+    input  logic [5:0] i_cursor_row,
     output logic [3:0] o_d0,     // DDR high-half bits: [0]=B [1]=G [2]=R [3]=clock
     output logic [3:0] o_d1      // DDR low-half bits, same lane order
 );
@@ -67,9 +70,10 @@ module video_text_chain #(
         .i_de         (de),
         .i_hsync      (hsync),
         .i_vsync      (vsync),
-        .i_cursor_en  (CURSOR_EN),
-        .i_cursor_col (CURSOR_COL),
-        .i_cursor_row (CURSOR_ROW),
+        .i_enable     (i_enable),
+        .i_cursor_en  (i_cursor_en),
+        .i_cursor_col (i_cursor_col),
+        .i_cursor_row (i_cursor_row),
         .o_r          (r),
         .o_g          (g),
         .o_b          (b),

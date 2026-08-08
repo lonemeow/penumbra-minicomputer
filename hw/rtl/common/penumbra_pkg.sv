@@ -270,6 +270,7 @@ package penumbra_pkg;
     localparam logic [31:0] ACFG_CLASS_UART     = 32'd2;  // NS16450-compatible UART register interface
     localparam logic [31:0] ACFG_CLASS_SPI      = 32'd3;  // Penumbra SPI master (DATA/STATUS/CONTROL/CLKDIV)
     localparam logic [31:0] ACFG_CLASS_SD       = 32'd4;  // SD/MMC card slot (SPI register interface, CS0 = card)
+    localparam logic [31:0] ACFG_CLASS_DISPLAY  = 32'd6;  // Display adapter (character-cell console minimum protocol)
     localparam logic [31:0] ACFG_CLASS_USBHC    = 32'd8;  // USB host controller (transaction-level minimum protocol)
 
     // ── UART register offsets (word-strided within 4 KB page) ────

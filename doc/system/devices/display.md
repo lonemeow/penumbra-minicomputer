@@ -92,8 +92,10 @@ one console back-end drives any display device — and any mode —
 without hardcoding a grid size.
 
 #### CTRL (0x008)
-- Bit [0]: `ENABLE` — video output active
-- Bit [1]: `CURSOR_EN` — show the cursor at `CURSOR`
+- Bit [0]: `ENABLE` — picture output active. Resets to `1`. While
+  clear the device drives black active video with sync timing still
+  running, so the monitor stays locked and re-enabling is instant.
+- Bit [1]: `CURSOR_EN` — show the cursor at `CURSOR`. Resets to `0`.
 - Bit [2]: `PAL_SEL` — palette source: `0` = built-in default palette,
   `1` = the custom palette in the [`PALETTE`](#palette-0x040) aperture.
   Present only when `CAP.PALETTE = 1`; reads `0` and is ignored

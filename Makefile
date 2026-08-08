@@ -317,6 +317,7 @@ MODULE_TESTS = \
     video_cell_ram \
     video_textgen \
     video_text_chain \
+    video_display \
     usb_crc5 \
     usb_crc16 \
     usb_bit_stuff_tx \

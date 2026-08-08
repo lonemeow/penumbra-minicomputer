@@ -49,7 +49,9 @@ module video_textgen #(
     input  logic        i_de,
     input  logic        i_hsync,
     input  logic        i_vsync,
-    // Cursor control (quasi-static)
+    // Control, quasi-static in the pixel domain (synchronized by the
+    // consumer)
+    input  logic        i_enable,      // clear: black active video, timing runs
     input  logic        i_cursor_en,
     input  logic [7:0]  i_cursor_col,
     input  logic [5:0]  i_cursor_row,
@@ -225,7 +227,8 @@ module video_textgen #(
             s4_hsync_q <= ~HSYNC_POL;
             s4_vsync_q <= ~VSYNC_POL;
         end else begin
-            s4_rgb_q   <= s3_de_q ? CGA_PALETTE[s3_idx_q] : 24'h000000;
+            // ENABLE blanks the picture only — de/syncs keep running.
+            s4_rgb_q   <= (s3_de_q && i_enable) ? CGA_PALETTE[s3_idx_q] : 24'h000000;
             s4_de_q    <= s3_de_q;
             s4_hsync_q <= s3_hsync_q;
             s4_vsync_q <= s3_vsync_q;

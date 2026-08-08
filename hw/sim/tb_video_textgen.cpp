@@ -158,6 +158,7 @@ int main() {
               "cell readback %d: got %04x, want %04x", a, d->o_cell_rdata, cells[a]);
     }
 
+    d->i_enable = 1;
     d->i_cursor_en = 1;
     d->i_cursor_col = CURSOR_COL;
     d->i_cursor_row = CURSOR_ROW;
@@ -171,6 +172,17 @@ int main() {
             for (int h = 0; h < H_TOTAL; h++)
                 step(d, h, v, check);
     }
+
+    // ENABLE blanking: with i_enable low the picture is black while
+    // de keeps its cadence — the monitor stays locked.
+    d->i_enable = 0;
+    for (int h = 0; h < 200; h++) {
+        step(d, h, 100, false);
+        if (h >= 8 && d->o_de)
+            CHECK(d->o_r == 0 && d->o_g == 0 && d->o_b == 0,
+                  "enable low but pixel near x=%d not black", h);
+    }
+    CHECK(d->o_de, "enable low must not suppress de");
 
     printf("video_textgen: %d checks, %d errors\n", checks, errors);
     return errors != 0;
