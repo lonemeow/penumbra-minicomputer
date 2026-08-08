@@ -3692,10 +3692,14 @@ good.
    the even-25 MHz timing. The triage ladder (no signal → PLL/clock
    lane; rolling → word alignment; wrong colors → lane order) lives in
    the top's header comment.
-5. Pixel generator (dual-clock char/attr BRAM, 8×16 font ROM via
-   `$readmemh`, scan-out pipeline, mandatory hardware cursor →
-   parallel RGB) — still CPU-free: a preloaded splash screen on the
-   bring-up top validates it on glass before any bus attachment.
+5. Pixel generator — done: font ROM (`video_font_rom`, generated from
+   NetBSD's public-domain bold8x16 via `wsfont2hex.py`), dual-clock
+   cell RAM (`video_cell_ram`), and the 4-stage scan-out pipeline
+   with the blinking hardware cursor (`video_textgen`), each
+   unit-tested against an independent oracle; `video_text_chain`
+   closes the loop through the TMDS link, and the bring-up top shows
+   the preloaded splash (`hw/video/splash.txt` → `text2cells.py`,
+   UTF-8 → CP437) on glass.
 6. Machine side last: `autoconfig_dev` wrapper (`CLASS_DISPLAY`) and
    `ulx3s_penumbra1_top` wiring to the GPDI pins.
 
