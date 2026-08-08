@@ -3654,27 +3654,29 @@ good.
    test-pattern generator (`video_pattern_gen`), TMDS encoder
    (`video_tmds_encoder`), each unit-tested against an independent
    oracle in `make test-modules`.
-2. 10:1 DDR serializer (`video_serializer`): 5x serial clock from the
-   same PLL, two bits per serial cycle into an `ODDRX1F` owned by the
-   board top (pure-logic module — the sdram_ctrl / sdram_phy_ecp5
-   split, one level down). The DVI clock lane is a fourth instance fed
-   the constant word `10'b0000011111`, so clock and data share one
-   launch path by construction.
-3. Closed-loop chain testbench: timing → pattern → three encoders +
-   clock lane → serializers, with the testbench playing the monitor:
-   sample both DDR phases, character-align on the blanking control
-   codes, TMDS-decode, and compare a full frame against the pattern
-   oracle. After this passes, only the PLL primitive and the pads are
-   unproven.
-4. Bring-up top `ulx3s_video_test_top` via the `TOP=` escape hatch (a
-   probe, not a registered machine): dedicated video EHXPLLL at 25 MHz
-   pixel / 125 MHz serial (integer PLL ratios cannot make VESA's
-   25.175 MHz from the 25 MHz crystal; the resulting ~59 Hz refresh is
-   within monitor tolerance and the norm on this board), driving
-   `gpdi_dp[3:0]` (LVCMOS33D pairs, already in the LPF). Verify: a
-   stable test pattern on a monitor. Triage from there: no signal →
-   PLL or clock lane; rolling/tearing → serializer word alignment;
-   stable but wrong colors → lane order.
+2. 10:1 DDR serializer — done: `video_serializer`, 5x serial clock
+   from the same PLL, two bits per serial cycle into an `ODDRX1F`
+   owned by the board top (pure-logic module — the sdram_ctrl /
+   sdram_phy_ecp5 split, one level down). The DVI clock lane is a
+   fourth instance fed the constant word `10'b0000011111`, so clock
+   and data share one launch path by construction.
+3. Closed-loop chain testbench — done: timing → pattern → three
+   encoders + clock lane → serializers, with the testbench playing the
+   monitor: sample both DDR phases, character-align on the blanking
+   control codes, TMDS-decode, and compare a full frame against the
+   pattern oracle. With this passing, only the PLL primitive and the
+   pads remained unproven.
+4. Bring-up top — done: `ulx3s_video_test_top` (via the `TOP=` escape
+   hatch — a probe, not a registered machine) instantiates the
+   chain-test module in front of the pieces simulation could not
+   prove: a dedicated video EHXPLLL at 25 MHz pixel / 125 MHz serial
+   (integer PLL ratios cannot make VESA's 25.175 MHz from the 25 MHz
+   crystal; the resulting ~59 Hz refresh is within monitor tolerance
+   and the norm on this board) and the `ODDRX1F`-driven `gpdi_dp[3:0]`
+   pads. Validated on glass: a stable test pattern, monitor syncs at
+   the even-25 MHz timing. The triage ladder (no signal → PLL/clock
+   lane; rolling → word alignment; wrong colors → lane order) lives in
+   the top's header comment.
 5. Pixel generator (dual-clock char/attr BRAM, 8×16 font ROM via
    `$readmemh`, scan-out pipeline, mandatory hardware cursor →
    parallel RGB) — still CPU-free: a preloaded splash screen on the
