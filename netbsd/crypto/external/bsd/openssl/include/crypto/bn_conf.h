@@ -29,7 +29,8 @@
 #else
 #define THIRTY_TWO_BIT
 #endif
-#ifdef __sparc64__
+/* penumbra: pure-C bignum; BN_LLONG maps to the hardware widening multiply */
+#if defined(__sparc64__) || defined(__penumbra__)
 #define BN_LLONG
 #endif
 
