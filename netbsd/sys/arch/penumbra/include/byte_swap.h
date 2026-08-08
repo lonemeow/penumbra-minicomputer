@@ -4,14 +4,15 @@
 #define _PENUMBRA_BYTE_SWAP_H_
 
 #ifdef __GNUC__
-#include <sys/types.h>
+#include <sys/cdefs.h>
+#include <sys/stdint.h>
 __BEGIN_DECLS
 
 #define	__BYTE_SWAP_U16_VARIABLE __byte_swap_u16_variable
 static __inline uint16_t
 __byte_swap_u16_variable(uint16_t v)
 {
-	return (v >> 8) | (v << 8);
+	return (uint16_t)((v >> 8) | (v << 8));
 }
 
 #define	__BYTE_SWAP_U32_VARIABLE __byte_swap_u32_variable
