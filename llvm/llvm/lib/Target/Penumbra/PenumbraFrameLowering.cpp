@@ -202,12 +202,34 @@ bool PenumbraFrameLowering::restoreCalleeSavedRegisters(
   return true;
 }
 
-// ADJCALLSTACKDOWN/UP are absorbed into the prologue/epilogue stack
-// allocation — just erase them here.
+// When the call frame is not reserved (dynamic alloca), PEI reserves
+// no outgoing-argument area in the fixed frame — each call must open
+// its own by moving SP.
 MachineBasicBlock::iterator
 PenumbraFrameLowering::eliminateCallFramePseudoInstr(
     MachineFunction &MF, MachineBasicBlock &MBB,
     MachineBasicBlock::iterator MI) const {
+  if (!hasReservedCallFrame(MF)) {
+    // Operand 1 (the callee-pop amount) is always zero on Penumbra.
+    uint64_t Amount = alignTo(MI->getOperand(0).getImm(), getStackAlign());
+    if (Amount != 0) {
+      // No register is guaranteed dead mid-function, so unlike adjustSP
+      // there is no R11 fallback for amounts beyond the immediate form.
+      if (!isUInt<16>(Amount))
+        report_fatal_error("outgoing call frame larger than 64 KiB in "
+                           "function with dynamic stack allocation");
+
+      const auto &TII = *static_cast<const PenumbraInstrInfo *>(
+          MF.getSubtarget().getInstrInfo());
+      unsigned Opc = MI->getOpcode() == Penumbra::ADJCALLSTACKDOWN
+                         ? Penumbra::SUBi
+                         : Penumbra::ADDi;
+      BuildMI(MBB, MI, MI->getDebugLoc(), TII.get(Opc), Penumbra::R14)
+          .addReg(Penumbra::R14)
+          .addImm(Amount);
+    }
+  }
+
   return MBB.erase(MI);
 }
 
