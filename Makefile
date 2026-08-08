@@ -314,6 +314,8 @@ MODULE_TESTS = \
     video_serializer \
     video_chain_test \
     video_font_rom \
+    video_cell_ram \
+    video_textgen \
     usb_crc5 \
     usb_crc16 \
     usb_bit_stuff_tx \
