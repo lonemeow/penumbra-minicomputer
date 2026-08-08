@@ -236,6 +236,6 @@ machine-independent USB stack's bus interface; that layer performs
 enumeration, descriptor parsing, and HID handling above it, exactly as it
 does for any other controller. Keyboards reach userland today through
 `uhidev`/`uhid` as `/dev/uhid*`; binding them to `ukbd` and `wskbd`
-instead, which together with a [text-video](text-video.md) or
+instead, which together with a [display](display.md) or
 framebuffer console forms a `wscons` local console, is the remaining
 step toward a standalone console.

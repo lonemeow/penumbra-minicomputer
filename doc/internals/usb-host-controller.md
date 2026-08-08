@@ -358,7 +358,7 @@ controller — as the structural template:
 Enumeration, descriptor parsing, and HID handling stay entirely in the MI
 layer above; the controller only moves packets. A `ukbd` keyboard
 discovered this way drives `wskbd`, pairing with a
-[text-video](text-video.md) console to form a `wscons` local console.
+[display](display.md) console to form a `wscons` local console.
 
 ## Discrete-Logic Note
 
@@ -398,5 +398,5 @@ Genuinely absent, and reachable as `CFG_ID` features:
 
 - [usb-host.md](../system/devices/usb-host.md) — programmer contract
 - [bus.md](../system/bus.md) — autoconfig and the `CLASS_USBHC` class
-- [text-video.md](text-video.md) — the `wsdisplay` half of a `wscons`
+- [display.md](display.md) — the `wsdisplay` half of a `wscons`
   local console

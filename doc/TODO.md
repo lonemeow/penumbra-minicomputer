@@ -3620,7 +3620,7 @@ of their millisecond-scale cost, and their swings track 1 KB
 direct-mapped I-cache layout (the kernel is 8 KB smaller), not this
 change.
 
-## Hardware + kernel: local console (HDMI text-video + USB keyboard)
+## Hardware + kernel: local console (HDMI display + USB keyboard)
 
 Design complete and committed as docs; implementation underway on both
 halves — per-layer status in the subsections below. The goal is a
@@ -3629,17 +3629,18 @@ USB keyboard in — so the machine needs no host terminal. NetBSD is the
 first consumer (boot may stay on UART initially); a boot-ROM local
 console is a later, well-defined follow-on.
 
-Two new autoconfig device classes plus one reserved
+Two new autoconfig device classes
 ([`system/bus.md`](system/bus.md)):
 
-- `CLASS_TEXTVIDEO` (6) — character-cell console. Contract
-  [`system/devices/text-video.md`](system/devices/text-video.md),
-  microarchitecture [`internals/text-video.md`](internals/text-video.md).
+- `CLASS_DISPLAY` (6) — display adapter: a character-cell console as
+  the mandatory core, plus an optional framebuffer capability
+  (`CAP.FRAMEBUFFER`, geometry/format discoverable). Contract
+  [`system/devices/display.md`](system/devices/display.md),
+  microarchitecture [`internals/display.md`](internals/display.md).
 - `CLASS_USBHC` (8) — transaction-level USB host. Contract
   [`system/devices/usb-host.md`](system/devices/usb-host.md),
   microarchitecture
   [`internals/usb-host-controller.md`](internals/usb-host-controller.md).
-- `CLASS_FRAMEBUFFER` (7) — reserved; protocol fixed once a device exists.
 
 Decisions already settled (rationale lives in the docs, not here):
 
@@ -3654,7 +3655,7 @@ Decisions already settled (rationale lives in the docs, not here):
 
 Implementation work, by layer:
 
-### Text-video RTL — first cut: mode 0 only
+### Display RTL, text path — first cut: mode 0 only
 
 Bring-up order: prove the output path on glass with the test-pattern
 generator before any machine-side integration. Everything up to the
@@ -3695,15 +3696,20 @@ good.
    `$readmemh`, scan-out pipeline, mandatory hardware cursor →
    parallel RGB) — still CPU-free: a preloaded splash screen on the
    bring-up top validates it on glass before any bus attachment.
-6. Machine side last: `autoconfig_dev` wrapper (`CLASS_TEXTVIDEO`) and
+6. Machine side last: `autoconfig_dev` wrapper (`CLASS_DISPLAY`) and
    `ulx3s_penumbra1_top` wiring to the GPDI pins.
 
-Goal (later): PLL dynamic-reconfig FSM + mode 1 (800×600 / 100×37).
-Also worth exploring once the path is proven: a `CLASS_FRAMEBUFFER`
-device (the class is already reserved) — 320×240 @ 8bpp pixel-doubled
-to the mode-0 raster is 75 KB ≈ 34 of the ECP5-85F's 208 BRAM blocks
-plus one for a 256-entry palette, and it reuses the entire output
-path; more expressive than text for demos, not a requirement.
+Goal (later): PLL dynamic-reconfig FSM + mode 1 (800×600 / 100×37);
+EDID/DDC readout when the mode list gives it a consumer (contract
+space — CAP bit, `EDID_CTRL`, the `EDID` aperture — is reserved, and
+the ULX3S already routes the GPDI DDC pair to FPGA pins).
+Also worth exploring once the path is proven: the framebuffer
+capability
+([`system/devices/display.md`](system/devices/display.md#framebuffer))
+— 320×240 @ 8bpp pixel-doubled to the mode-0 raster is 75 KB ≈ 34 of
+the ECP5-85F's 208 BRAM blocks plus one for the 256-entry palette, and
+it reuses the entire output path; more expressive than text for demos,
+not a requirement.
 
 ### USB host RTL — low + full speed
 - `usb_crc5` / `usb_crc16` — token and data CRC generators, the
@@ -3883,7 +3889,7 @@ path; more expressive than text for demos, not a requirement.
   driver, the MI USB stack, and `uhidev`/`uhid` are done — keystrokes
   reach userland through `/dev/uhid*` — but a `wscons` console needs
   the keyboard bound as a `wskbd` input instead.
-- `wsdisplay` back-end for `CLASS_TEXTVIDEO` (`pcdisplay`-style character
+- `wsdisplay` back-end for `CLASS_DISPLAY` (`pcdisplay`-style character
   memory) + `wskbd`; bring up `wscons` as a local console alongside (or
   in place of) the `com` console.
 
@@ -3997,7 +4003,7 @@ is benign — but if such a driver ever enters the config, define the
 `*_stream_N` variants as trivial aliases of the non-stream ops plus
 `__BUS_SPACE_HAS_STREAM_METHODS 1` in `bus_funcs.h`, so the driver
 takes its intended path explicitly rather than by fallback. Same
-trigger discipline as the text-video `region_2`/`copy_region_2`/
+trigger discipline as the display console's `region_2`/`copy_region_2`/
 `set_region_2` additions: implement when the consumer exists to
 test against, not speculatively.
 

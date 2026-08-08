@@ -1,10 +1,10 @@
-# Penumbra Text-Video Console — FPGA Microarchitecture
+# Penumbra Display Adapter — FPGA Microarchitecture
 
 > **Applies to:** the FPGA (ECP5 / GPDI) implementation of
-> `CLASS_TEXTVIDEO`. Generation-independent — the console attaches to the
+> `CLASS_DISPLAY`. Generation-independent — the console attaches to the
 > system bus like any autoconfig device, so both cores drive it
 > identically. The programmer-visible contract is
-> [text-video.md](../system/devices/text-video.md); this document
+> [display.md](../system/devices/display.md); this document
 > describes one hardware realization of it.
 
 ## Overview
@@ -30,6 +30,8 @@ flowchart LR
     BUS --> REGS["CTRL / CURSOR /\nMODE / INFO / CAP"]
     BUS --> SFW["soft-font RAM\nwrite port (opt)"]
     BUS --> PALW["custom palette RAM\nwrite port (opt)"]
+    BUS --> FBW["framebuffer RAM\nwrite port (opt)"]
+    BUS --> FBPW["fb palette RAM\nwrite port (opt)"]
   end
   VCLK["video clock unit\nPLL (+ reconfig)"]
   subgraph PIX["Pixel clock domain"]
@@ -38,7 +40,12 @@ flowchart LR
     FONT["font ROM 8×16"] --> FETCH
     CURS["cursor compare\n+ blink"] --> FETCH
     FETCH --> PAL["palette LUT\n→ 24-bit RGB"]
-    PAL --> RGB(["RGB + hsync\n+ vsync + de"])
+    TIMING --> FBSCAN["fb scan-out\n(pixel-double, opt)"]
+    FBR["framebuffer RAM\nread port"] --> FBSCAN
+    FBSCAN --> FBPAL["fb palette LUT\n→ 24-bit RGB"]
+    PAL --> SMUX["source mux\n(FB_SEL)"]
+    FBPAL --> SMUX
+    SMUX --> RGB(["RGB + hsync\n+ vsync + de"])
   end
   subgraph PHYBOX["Output PHY"]
     RGB --> TMDS["TMDS encode ×3"]
@@ -49,6 +56,8 @@ flowchart LR
   CRAMW -. "dual-clock BRAM" .-> CRAMR
   SFW -. "dual-clock BRAM" .-> FETCH
   PALW -. "dual-clock BRAM" .-> PAL
+  FBW -. "dual-clock BRAM" .-> FBR
+  FBPW -. "dual-clock BRAM" .-> FBPAL
   VCLK --> PIX
   VCLK --> SER
 ```
@@ -105,6 +114,32 @@ reads. The built-in palette is never written, so clearing `PAL_SEL`
 restores it with no reload. A device with the custom palette sets
 `CAP.PALETTE`.
 
+## Framebuffer
+
+`CAP.FRAMEBUFFER` adds the pixel source behind `CTRL.FB_SEL`
+([contract](../system/devices/display.md#framebuffer)): a 320×240
+8 bpp array — 75 KB ≈ 34 of the ECP5-85F's 208 EBR blocks — plus one
+EBR for its 256 × 24-bit palette. Both are dual-clock BRAMs of the
+same shape as the cell RAM: CPU-side ports behind the `FB` /
+`FB_PALETTE` apertures, pixel-side read ports in the scan-out. The
+pixel aperture is the one with sub-word writes — the bus byte enables
+wire through to per-byte BRAM write enables (the `fpga_ram` bank
+structure), which is what lets the OS map it straight into a rendering
+process. With BRAM backing, storage independent of the cell RAM is the
+natural structure — sharing would be contrived — so on this device
+both sources retain their contents across `FB_SEL`, which the
+`CFG_ID`-matched driver may exploit; the contract deliberately does
+not promise it.
+
+Scan-out pixel-doubles onto the mode-0 raster: raster pixel (x, y)
+shows framebuffer byte (x >> 1, y >> 1), so one byte read serves two
+pixel clocks and each framebuffer line is replayed over two raster
+lines (the line-start address rewinds after even raster lines). The
+addressing is a running counter — no multiplier — and riding the
+mode-0 raster means `FB_SEL` never touches the PLL: the contract
+permits a re-time across the switch, and this implementation does not
+need one.
+
 ## Scan-out Pipeline
 
 The timing generator is a pair of free-running counters (horizontal,
@@ -146,9 +181,10 @@ Three clocks:
 - **pixel clock** — timing, fetch, char-RAM read port, palette.
 - **TMDS serial clock** = 5× pixel — the `ODDR` serializers.
 
-The char/attr RAM bridges CPU↔pixel as a dual-clock BRAM. The few control
+The char/attr RAM — like every optional store (soft font, both
+palettes, framebuffer) — bridges CPU↔pixel as a dual-clock BRAM. The few control
 values the pixel domain consumes (`ENABLE`, cursor position, active
-geometry) change rarely and cross via 2-FF synchronizers, treated as
+geometry, source select) change rarely and cross via 2-FF synchronizers, treated as
 quasi-static — at worst a torn cursor update misplaces the cursor for one
 frame. The video clocks come from a dedicated PLL, separate from the
 system/SDRAM PLL; the ECP5-85F has spare PLLs for it.
@@ -171,13 +207,27 @@ target mode, waits for relock, and restarts the timing generator. Cell
 contents are undefined across the switch (the aperture stride changes with
 `COLUMNS`), so the driver re-initializes — matching the contract.
 
+## EDID
+
+The contract [reserves space](../system/devices/display.md#edid-reserved)
+for querying the attached display's EDID block. The board wiring is
+already in place: the ULX3S routes the GPDI connector's DDC pair to
+FPGA pins (`gpdi_sda` / `gpdi_scl`, shared with the RTC I2C). The
+implementation choice — a small I2C engine that snapshots the block
+into a readable buffer, or raw SDA/SCL register bits the driver
+bit-bangs — is made by the first revision that implements the
+capability, alongside the mode-list work that gives the data a
+consumer.
+
 ## Discrete-Logic Boundary
 
 The parallel-RGB stream (`R, G, B, hsync, vsync, de` at the pixel clock)
 is the seam. Everything upstream — counters, cell/font fetch, palette,
 cursor — is the lineage of the discrete character-display card and is
 reproducible in 74xx logic: counters, a character RAM, a font ROM, a
-shift register for the glyph row, and a small mux. Everything downstream
+shift register for the glyph row, and a small mux. The framebuffer
+source sits on the same side of the seam — a RAM, an address counter,
+and a palette DAC are classic bitmap-card structure. Everything downstream
 — TMDS encode and 10× serialization — cannot be done in 74xx (it is a
 multi-hundred-Mbit/s serial line code) and is intentionally FPGA-only. A
 future discrete build replaces only the PHY: the parallel RGB drives a
@@ -189,7 +239,7 @@ discrete-feasible while a peripheral's high-speed PHY need not be.
 
 - **First build (target A)** — a single fixed mode 0 (640×480 / 80×30),
   fixed video PLL, no reconfiguration, `CAP.MODESWITCH = 0`: a conformant
-  single-mode `CLASS_TEXTVIDEO` device and the fastest path to a picture
+  single-mode `CLASS_DISPLAY` device and the fastest path to a picture
   on a monitor.
 - **Goal (C)** — add the PLL reconfiguration FSM and mode 1 (800×600 /
   100×37) so the OS can switch to the larger console after boot, with
@@ -201,11 +251,16 @@ discrete-feasible while a peripheral's high-speed PHY need not be.
   pixel-generator features: each is one dual-clock RAM plus a select mux,
   all upstream of the TMDS PHY and fully exercisable in simulation. They
   are independent of the mode/PLL work and can land alongside target A.
+- **Framebuffer (`CAP.FRAMEBUFFER`)** — the pixel source behind
+  `FB_SEL`: framebuffer + palette BRAMs and the pixel-doubling
+  scan-out, muxed at the parallel-RGB seam. Independent of the
+  mode/PLL work (it rides the mode-0 raster), so it can also land
+  alongside target A.
 - Not yet implemented.
 
 ## See Also
 
-- [text-video.md](../system/devices/text-video.md) — programmer contract
-- [bus.md](../system/bus.md) — autoconfig and the `CLASS_TEXTVIDEO` class
+- [display.md](../system/devices/display.md) — programmer contract
+- [bus.md](../system/bus.md) — autoconfig and the `CLASS_DISPLAY` class
 - [usb-host.md](../system/devices/usb-host.md) — the `wskbd` half of a
   `wscons` local console

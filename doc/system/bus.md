@@ -176,8 +176,8 @@ protocol it understands, with no device-specific driver needed.
 | 3     | `CLASS_SPI`      | Penumbra SPI master            | Generic SPI controller            |
 | 4     | `CLASS_SD`       | Penumbra SPI master, SD wired  | SD card attached via SPI          |
 | 5     | `CLASS_NIC`      | Penumbra NIC protocol          | ESP32 / Wiznet network adapter    |
-| 6     | `CLASS_TEXTVIDEO`   | Penumbra text-video registers  | Character-cell local console   |
-| 7     | `CLASS_FRAMEBUFFER` | Linear pixel framebuffer       | Reserved — protocol defined when a device exists |
+| 6     | `CLASS_DISPLAY`     | Penumbra display registers     | Character-cell console + optional framebuffer |
+| 7     | —                   | —                              | Unassigned                        |
 | 8     | `CLASS_USBHC`       | Penumbra USB host-controller   | Local USB host (low / full speed) |
 | 9–255 | —                   | —                              | Reserved for future protocols     |
 
@@ -199,9 +199,9 @@ extra capabilities are opt-in behind `CFG_ID` (as with `CLASS_SPI` /
 (e.g., network adapters) share no subset worth standardizing, and the OS
 matches a specific driver through `CFG_ID`; the class still serves as the
 family identifier. `CLASS_UNKNOWN` is for a device that fits no family at
-all, and a reserved class (e.g., `CLASS_FRAMEBUFFER`) names a future
-family whose minimum protocol, if any, is fixed once a device implements
-it.
+all; a genuinely new family gets a fresh class number — its minimum
+protocol, if any, fixed by its first device — rather than stretching an
+existing class's contract.
 
 ### CFG_EN Toggle Protocol
 

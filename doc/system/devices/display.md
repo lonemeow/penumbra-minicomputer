@@ -1,21 +1,24 @@
-# Text-Video Console — Programmer's Reference
+# Display Adapter — Programmer's Reference
 
-A character-cell display for the Penumbra bus (`CLASS_TEXTVIDEO`). The
-device holds a grid of character cells plus a built-in font; writing a
-cell makes the device draw that glyph. It is the local-console analog of
+A display adapter for the Penumbra bus (`CLASS_DISPLAY`). The device
+holds a grid of character cells plus a built-in font; writing a cell
+makes the device draw that glyph. It is the local-console analog of
 the [UART](uart.md) — generic firmware or the OS can use any conformant
 device as a console with no device-specific driver.
 
-This document defines the **`CLASS_TEXTVIDEO` minimum protocol**: the
+This document defines the **`CLASS_DISPLAY` minimum protocol**: the
 registers every device of the class implements, and the mode it powers up
 in, after reset. The mandatory core is deliberately small — a cell grid
 that renders the printable 7-bit ASCII glyphs (see
 [Character Set](#character-set)). Everything else — color, a
 programmable palette, the extended glyph range, a reloadable soft font,
-additional display modes, hardware scroll — is an optional feature
-advertised through a capability flag or `CFG_ID`. A device may add any
-of them, but must always present this interface — and power up in
-[mode 0](#display-modes) — after reset.
+additional display modes, hardware scroll, a pixel
+[framebuffer](#framebuffer) — is an optional feature advertised through
+a capability flag or `CFG_ID`. A device may add any of them, but must
+always present this interface — and power up in
+[mode 0](#display-modes), showing the character cells — after reset.
+The character console is the class's identity: a device that renders
+pixels but no cells is not a `CLASS_DISPLAY` device.
 
 ## Register Interface
 
@@ -26,21 +29,29 @@ address assigned by autoconfig.
 loads and stores only (`LDW`/`STW`); the device implements no byte-lane
 enables. Every register and cell is *word-strided* — it occupies a
 32-bit slot even where its value is narrower — the same convention the
-[UART](uart.md) and [SPI](spi.md) controllers use. See the bus protocol's
+[UART](uart.md) and [SPI](spi.md) controllers use; the framebuffer
+pixel aperture is the one exception, packed and byte-accessible (see
+[`FB`](#fb-0x20000)). See the bus protocol's
 [Access Width](../../hardware/bus-protocol.md#access-width).
 
 | Offset    | Name         | R/W | Description                              |
 |-----------|--------------|-----|------------------------------------------|
 | `0x000`   | `CAP`        | R   | Version, capabilities, mode count        |
 | `0x004`   | `INFO`       | R   | Active-mode geometry: columns and rows   |
-| `0x008`   | `CTRL`       | R/W | Output/cursor enable, palette/font select|
+| `0x008`   | `CTRL`       | R/W | Output/cursor enable, source/palette/font select|
 | `0x00C`   | `CURSOR`     | R/W | Cursor cell position                     |
 | `0x010`   | `MODE_SEL`   | R/W | Active display mode (optional)           |
 | `0x014`   | `MODE_QUERY` | W   | Mode index to query (optional)           |
 | `0x018`   | `MODE_GEOM`  | R   | Geometry of the queried mode (optional)  |
+| `0x01C`   | `FB_GEOM`    | R   | Framebuffer geometry (optional)          |
+| `0x020`   | `FB_FORMAT`  | R   | Framebuffer pixel format (optional)      |
+| `0x024`   | `EDID_CTRL`  | —   | Reserved for display identification (see [EDID](#edid-reserved)) |
 | `0x040…`  | `PALETTE`    | R/W | Custom-palette aperture, 16 slots (optional) |
+| `0x400…`  | `EDID`       | —   | Reserved for the display-identification block (see [EDID](#edid-reserved)) |
 | `0x1000…` | `CELLS`      | R/W | Character-cell aperture (one slot / cell)|
 | `0x8000…` | `FONT`       | R/W | Soft-font aperture (optional)            |
+| `0x10000…`| `FB_PALETTE` | R/W | Framebuffer palette aperture, 256 slots (optional) |
+| `0x20000…`| `FB`         | R/W | Framebuffer pixel aperture, packed (optional) |
 
 ### Register Details
 
@@ -58,6 +69,14 @@ enables. Every register and cell is *word-strided* — it occupies a
   `CTRL.PAL_SEL`; only meaningful when `COLOR = 1`
 - Bit [12]: `SOFTFONT` — device has a reloadable soft font, loaded via
   the [`FONT`](#font-0x8000) aperture and selected by `CTRL.FONT_SEL`
+- Bit [13]: `FRAMEBUFFER` — device has a pixel
+  [framebuffer](#framebuffer) alongside the character console, scanned
+  out from the [`FB`](#fb-0x20000) aperture while `CTRL.FB_SEL` is set;
+  geometry in [`FB_GEOM`](#fb_geom-0x01c), format in
+  [`FB_FORMAT`](#fb_format-0x020)
+- Bit [14]: reserved for `EDID` — a future revision defines querying
+  the attached display for its identification data (see
+  [EDID](#edid-reserved))
 - Bits [23:16]: `MODE_COUNT` — number of display modes (≥ 1; mode 0 is
   the mandated default)
 
@@ -69,7 +88,7 @@ through `CFG_ID`.
 - Bits [31:16]: `ROWS`
 
 Reports the geometry of the **active** mode. Geometry is discoverable so
-one console back-end drives any text-video device — and any mode —
+one console back-end drives any display device — and any mode —
 without hardcoding a grid size.
 
 #### CTRL (0x008)
@@ -86,6 +105,12 @@ without hardcoding a grid size.
   `CAP.SOFTFONT = 1`; reads `0` and is ignored otherwise. Resets to `0`.
   The selection is global (the whole screen uses one font); the soft
   font keeps its contents while deselected, like `PAL_SEL`.
+- Bit [4]: `FB_SEL` — scan-out source: `0` = the character cells, `1` =
+  the [framebuffer](#framebuffer). Present only when
+  `CAP.FRAMEBUFFER = 1`; reads `0` and is ignored otherwise. Resets to
+  `0`, so every device powers up showing the character console. Whether
+  a deselected source's contents survive is implementation-defined —
+  see [Framebuffer](#framebuffer).
 
 #### CURSOR (0x00C)
 - Bits [15:0]: `COL`
@@ -100,6 +125,28 @@ scan-out path.
 #### MODE_SEL / MODE_QUERY / MODE_GEOM (0x010–0x018)
 Present when `CAP.MODESWITCH = 1`; see [Display Modes](#display-modes). On
 a single-mode device these slots read 0.
+
+#### FB_GEOM (0x01C)
+- Bits [15:0]: `WIDTH` — framebuffer width in pixels
+- Bits [31:16]: `HEIGHT` — framebuffer height in lines
+
+Present when `CAP.FRAMEBUFFER = 1`; reads 0 otherwise. The geometry is
+a property of the device, discovered here — nothing in the class pins
+any particular size. How the device presents it on the display —
+scaling, borders, raster timing — is not visible through this
+interface, exactly as a text mode's underlying pixel resolution is not.
+
+#### FB_FORMAT (0x020)
+- Bits [7:0]: `BPP` — bits per pixel
+
+Present when `CAP.FRAMEBUFFER = 1`; reads 0 otherwise. Declares the
+pixel format of the [`FB`](#fb-0x20000) aperture. This revision of the
+class defines only `BPP = 8`, indexed through
+[`FB_PALETTE`](#fb_palette-0x10000); every other value — and the
+remaining bits, which read 0 — is reserved for future formats (deeper
+indexed, direct color). A consumer that reads a format it does not
+recognize leaves the framebuffer alone; the character console is
+unaffected either way.
 
 #### PALETTE (0x040)
 Present when `CAP.PALETTE = 1`; otherwise the slots read 0. Sixteen
@@ -118,7 +165,8 @@ accessed with `LDW`/`STW`, using the active mode's `COLUMNS`. The device's
 `CFG_SIZE` window covers the register block, every implemented aperture,
 and the cell array for the largest mode (`0x1000 + COLUMNS * ROWS * 4`);
 on a device with the soft font it extends to the end of the
-[`FONT`](#font-0x8000) aperture.
+[`FONT`](#font-0x8000) aperture, and on a device with the framebuffer
+to the end of the [`FB`](#fb-0x20000) aperture.
 
 A cell is **16 bits**, occupying the low half of its 32-bit slot; bits
 [31:16] read 0 and are ignored on write. The cell value:
@@ -218,6 +266,86 @@ switches to a larger mode once it attaches. The same mechanism carries
 forward across hardware — a device on a faster part simply lists higher
 modes, with mode 0 unchanged and the driver unmodified.
 
+## Framebuffer
+
+When `CAP.FRAMEBUFFER = 1` the device carries a pixel framebuffer
+alongside the character console: a `WIDTH × HEIGHT` pixel array in the
+format [`FB_FORMAT`](#fb_format-0x020) declares. This revision defines
+one format — 8-bit indexed, each pixel an index into the 256-entry
+framebuffer palette — with the rest of the format space reserved for
+richer devices; geometry and format are always read from the device,
+never assumed. The
+framebuffer is a second scan-out **source**, not a display mode:
+`CTRL.FB_SEL` selects which source drives the output, and the
+registers of both stay live throughout.
+
+How the two sources are **backed** is implementation-defined. A device
+may give each its own storage — the text screen then survives a
+framebuffer session untouched — or share one RAM between them, the
+classic VGA arrangement, where each source's contents are undefined
+while it is deselected. A portable consumer therefore selects the
+framebuffer *before* drawing into it, and redraws the text screen
+after a framebuffer session (cheap at `COLUMNS × ROWS` cells); a
+driver matched to a specific device through `CFG_ID` may know its
+storage is independent and skip both precautions. The cursor, the
+fonts, and both palettes are dedicated state, never aliased with cell
+or pixel storage.
+
+**Timing across the switch.** Writing `FB_SEL` may re-time the video
+output (the framebuffer's presentation raster need not match the active
+text mode's), so the display may resync — the same visible effect a
+`MODE_SEL` switch is allowed. `INFO` and `MODE_SEL` describe the
+character console throughout; `FB_GEOM` describes the framebuffer.
+
+#### FB (0x20000)
+The pixel aperture, present when `CAP.FRAMEBUFFER = 1`; reads 0
+otherwise. Pixels are **packed** with no row padding — in the 8-bit
+indexed format, four per word: the pixel at (`x`, `y`) is byte
+`y * WIDTH + x` of the aperture, and bytes map little-endian within
+each word (byte `a` occupies bits `[8*(a mod 4) + 7 : 8*(a mod 4)]` of
+the word at `a & ~3`).
+
+Unlike the register apertures, `FB` follows the bus's **default**
+access contract (see
+[Access Width](../../hardware/bus-protocol.md#access-width)): reads
+return the stored bytes and writes commit exactly the enabled byte
+lanes, at every width the CPU can issue. Both departures from the
+word-strided convention exist for the same reason — the aperture is
+mapped directly into rendering processes, whose compiler-generated
+stores arrive at every width, and packing makes a row `WIDTH`
+contiguous bytes and a full frame one linear copy. In short: the
+aperture behaves as plain memory. Contents are undefined at power-up —
+and, on a shared-storage device, undefined whenever the framebuffer is
+deselected (see [Framebuffer](#framebuffer)).
+
+#### FB_PALETTE (0x10000)
+Present when `CAP.FRAMEBUFFER = 1`; otherwise the slots read 0. 256
+word-strided slots, one `0x00RRGGBB` color per slot — the same slot
+format as [`PALETTE`](#palette-0x040) — where `FB_PALETTE[i]` is the
+color rendered for pixel value `i`. Backing storage only: writes take
+effect on the next scan-out read, whether the framebuffer is deselected
+(staging) or live (palette animation is a legitimate technique).
+Contents are undefined at power-up; load all 256 slots before first
+setting `CTRL.FB_SEL`.
+
+## EDID (reserved)
+
+Monitors describe themselves — supported timings, physical size,
+identity — as an EDID/DisplayID block readable over the connector's
+DDC pins. This class reserves the space to surface that through the
+device, so adding it later collides with nothing: **CAP bit [14]**,
+the **`EDID_CTRL`** slot at `0x024`, and the **`EDID`** aperture at
+`0x400`–`0x7FF` (128 word-strided slots — one 256-byte E-EDID block at
+the device's usual one-byte-per-slot stride). The access mechanism — a
+block the device snapshots itself versus a raw DDC master the driver
+drives — is fixed by the first revision that implements it; until
+then the bit and the slots read 0 like every unimplemented option.
+
+No new userland interface rides on this: the kernel driver surfaces
+the block through the standard wsdisplay path
+(`WSDISPLAYIO_GET_EDID`), and the in-tree `dev/videomode` EDID parser
+consumes it from there.
+
 ## Scrolling
 
 The minimum protocol has **no hardware scroll**: when output passes the
@@ -263,4 +391,25 @@ redraw-heavy output that the emulator's escape-sequence parsing would
 otherwise bound. Emulation mode stays the path for ordinary console
 text. The control registers and `PALETTE` share the first page, separate
 from `CELLS`, so a mapped client gets cell access with no reach to the
+control registers.
+
+The framebuffer maps onto wsdisplay's dumb-framebuffer path — the
+standard interface X's `wsfb` driver and SDL's wscons backend already
+speak, so a game or demo needs no awareness of this device:
+`WSDISPLAYIO_MODE_DUMBFB` sets `CTRL.FB_SEL` and exposes the packed
+[`FB`](#fb-0x20000) aperture through `WSDISPLAYIO_GINFO` (geometry from
+`FB_GEOM`, depth from `FB_FORMAT`, `linebytes` derived from both) and
+`mmap`; `WSDISPLAYIO_PUTCMAP`
+programs `FB_PALETTE`. The mapping is the device pages themselves —
+the kernel keeps no system-RAM shadow of pixel contents, which is why
+the aperture must behave as plain memory — and a client returning to
+the screen after a wscons screen switch repaints its frame from its
+own state (standard `wsfb` behavior), so graphics contents never need
+to survive deselection. Reverting to `WSDISPLAYIO_MODE_EMUL` — which the
+tty close path does even when the client crashes — clears `FB_SEL` and
+redraws the console from the kernel's screen state, the ordinary
+wsdisplay flow; a driver that knows through `CFG_ID` that the device
+backs its sources independently may skip the redraw, since the cell
+RAM was never disturbed. Like `CELLS`, the `FB` aperture begins on its
+own page, so a mapped client gets pixel access with no reach to the
 control registers.

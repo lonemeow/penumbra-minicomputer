@@ -29,7 +29,7 @@ architecture and its standard peripherals.
 *   **[SPI / SD Card](./system/devices/spi.md)** — Register map and driver flow for storage.
 *   **[USB host controller](./system/devices/usb-host.md)** — register interface and transaction contract; carries storage, HID, hubs, and the `ure(4)` Ethernet adapter that gives the machine its network.
 *   **[ESP32 WiFi NIC](./system/devices/esp32-nic.md)** — Ethernet-over-SLIP network adapter interface (an alternative path, not the one in use).
-*   **[Text-Video Console](./system/devices/text-video.md)** — Character-cell local console (`CLASS_TEXTVIDEO`).
+*   **[Display Adapter](./system/devices/display.md)** — Character-cell console + optional framebuffer (`CLASS_DISPLAY`).
 *   **[USB Host Controller](./system/devices/usb-host.md)** — Transaction-level USB host (`CLASS_USBHC`).
 
 ### Operating System
@@ -70,7 +70,7 @@ subdirectory owns its realization.
 *   **[L2 Cache](./internals/l2-cache.md)** — Design plan and phase status for the optional unified L2 cache (currently write-invalidate-on-hit; write-back is a planned phase) between `cpu_core.o_mem_*` and the system bus.
 *   **[SDRAM Controller v2](./internals/sdram-controller.md)** — Design plan for the rewrite (composable, dual-domain, 100 MHz CL2).
 *   **[SDRAM Optimization](./internals/sdram-optimization.md)** — Controller strategies for bandwidth improvement.
-*   **[Text-Video Console](./internals/text-video.md)** — FPGA microarchitecture of the `CLASS_TEXTVIDEO` console: pixel generator + TMDS output PHY.
+*   **[Display Adapter](./internals/display.md)** — FPGA microarchitecture of the `CLASS_DISPLAY` adapter: pixel generator + TMDS output PHY.
 *   **[USB Host Controller](./internals/usb-host-controller.md)** — FPGA microarchitecture of the `CLASS_USBHC` controller: SIE, transaction FSM, and the NetBSD HCD mapping.
 *   **[Coding Standards](./internals/coding-standards.md)** — RTL naming and style conventions for hardware.
 *   **[Build & Test Structure](./internals/build-system.md)** — The BOARD×CORE build matrix, the machine integration layer, and the `isa/` conformance split for test programs.

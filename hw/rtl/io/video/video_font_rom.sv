@@ -12,7 +12,7 @@
 // hw/tools/wsfont2hex.py from the NetBSD console font bold8x16
 // (netbsd/sys/dev/wsfont/bold8x16.h): public-domain glyph data in the
 // IBM/CP437 encoding the device contract pins
-// (doc/system/devices/text-video.md). Glyphs the source font omits
+// (doc/system/devices/display.md). Glyphs the source font omits
 // (0 and 255 — blank in CP437) are zero-filled by the tool.
 
 module video_font_rom (
