@@ -3700,8 +3700,14 @@ good.
    closes the loop through the TMDS link, and the bring-up top shows
    the preloaded splash (`hw/video/splash.txt` → `text2cells.py`,
    UTF-8 → CP437) on glass.
-6. Machine side last: `autoconfig_dev` wrapper (`CLASS_DISPLAY`) and
-   `ulx3s_penumbra1_top` wiring to the GPDI pins.
+6. Machine side — done: `video_display` (register block + CELLS
+   aperture + 2-FF control crossings around the text chain) behind an
+   `autoconfig_dev` wrapper (`CLASS_DISPLAY`, 16 KiB), wired into
+   `ulx3s_penumbra1_top` with a dedicated video PLL and validated
+   from the ROM monitor — autoconfig discovery, register dumps, and
+   cells written over the bus rendering on the monitor. The display
+   hardware ladder is complete; what remains of the local console is
+   software (`wsdisplay` back-end below) and the USB keyboard half.
 
 Goal (later): PLL dynamic-reconfig FSM + mode 1 (800×600 / 100×37);
 EDID/DDC readout when the mode list gives it a consumer (contract
