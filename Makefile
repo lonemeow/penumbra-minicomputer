@@ -313,6 +313,7 @@ MODULE_TESTS = \
     video_tmds_encoder \
     video_serializer \
     video_chain_test \
+    video_font_rom \
     usb_crc5 \
     usb_crc16 \
     usb_bit_stuff_tx \
@@ -346,8 +347,15 @@ VARIANT_MODULE_TESTS = \
     penumbra2_ex_stage:tb_penumbra2_5_ex_stage:hw/rtl/penumbra2_5/penumbra2_ex_stage.sv \
     penumbra2_btb:tb_penumbra2_5_btb:hw/rtl/penumbra2_5/penumbra2_btb.sv
 
+# Built-in text-video font ROM image, read by video_font_rom via
+# $readmemh: generated from the NetBSD console font bold8x16
+# (public-domain glyph data, IBM/CP437 encoding). The root-level name
+# follows the program.hex / microcode.hex convention.
+font8x16.hex: netbsd/sys/dev/wsfont/bold8x16.h hw/tools/wsfont2hex.py
+	python3 hw/tools/wsfont2hex.py $< $@
+
 .PHONY: test-modules test-modules-variant
-test-modules: test-modules-variant
+test-modules: test-modules-variant font8x16.hex
 	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
 	@pass=0; fail=0; failed=""; \
 	for entry in $(MODULE_TESTS); do \
