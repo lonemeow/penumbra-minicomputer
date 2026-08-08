@@ -344,11 +344,13 @@ fi
 # members outside the port's majors table, so wholesale groups like
 # 'usbs' produce a spec nbmakefs rejects.
 USB_DEVS="usb usb0 uhid0 uhid1 uhid2 uhid3"
+# The wscons display console (pdisplay -> wsdisplay).
+WSCONS_DEVS="ttyE0"
 if [ -x "$MAKEDEV_SCRIPT" ]; then
-    log "Generating device nodes via MAKEDEV -s std init $USB_DEVS"
+    log "Generating device nodes via MAKEDEV -s std init $USB_DEVS $WSCONS_DEVS"
     # MAKEDEV -s outputs mtree specs relative to /dev.
     # Prefix paths with ./dev/ and skip the "." root dir line.
-    MACHINE=penumbra sh "$MAKEDEV_SCRIPT" -s std init $USB_DEVS 2>/dev/null | \
+    MACHINE=penumbra sh "$MAKEDEV_SCRIPT" -s std init $USB_DEVS $WSCONS_DEVS 2>/dev/null | \
         grep -v '^[.] ' | sed 's,^\./,./dev/,' >> "$SPECFILE"
 else
     # An image without /dev/console cannot boot (init exits 11);

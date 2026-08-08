@@ -8,8 +8,8 @@
 //   0xFE000000 – 0xFE00001F  Autoconfig space (when cfg_en)
 //   0xFF000000 – 0xFF000FFF  UART (16450-compatible)
 //   0xFFFF0000 – 0xFFFFFFFF  Boot ROM (64 KB)
-//   SPI/SD then USBHC at dynamic bases (assigned via autoconfig,
-//   chained in the machine_sim order)
+//   SPI/SD, USBHC, then the display adapter at dynamic bases
+//   (assigned via autoconfig, chained in the hardware order)
 //
 // Trace output format (compatible with RTL tb_interactive):
 //   PC=XXXXXXXX SR=XXXXXXXX [SVNZCV] R1=... R2=... ... R14=...
@@ -24,6 +24,7 @@
 //   Ctrl-A C     — dump CPU state
 //   Ctrl-A B     — send serial BREAK (triggers DDB if enabled)
 //   Ctrl-A U     — toggle USB device attach (hotplug)
+//   Ctrl-A D     — dump the display screen as text
 //   Ctrl-A H     — help
 //   Ctrl-A Ctrl-A — send literal Ctrl-A
 
@@ -690,7 +691,8 @@ static struct {
 struct AcfgSlot {
     uint32_t dev_class;     // ACFG_CLASS code
     uint32_t size;          // window size (power of two)
-    uint32_t name0;         // ACFG_NAME0, packed LE (NAME1-3 read zero)
+    uint32_t name0;         // ACFG_NAME0, packed LE
+    uint32_t name1;         // ACFG_NAME1, packed LE (NAME2-3 read zero)
     bool     configured;
     uint32_t base_addr;
 
@@ -699,12 +701,15 @@ struct AcfgSlot {
     }
 };
 
-enum { ACFG_SLOT_SPI = 0, ACFG_SLOT_USB = 1, ACFG_SLOT_COUNT = 2 };
+enum { ACFG_SLOT_SPI = 0, ACFG_SLOT_USB = 1, ACFG_SLOT_DISPLAY = 2,
+       ACFG_SLOT_COUNT = 3 };
 
 static struct {
     AcfgSlot slot[ACFG_SLOT_COUNT] = {
-        { 4 /*CLASS_SD*/,    4096, 0x00004453 /*"SD\0\0"*/, false, 0 },
-        { 8 /*CLASS_USBHC*/, 4096, 0x00425355 /*"USB\0"*/,  false, 0 },
+        { 4 /*CLASS_SD*/,      4096, 0x00004453 /*"SD\0\0"*/, 0, false, 0 },
+        { 8 /*CLASS_USBHC*/,   4096, 0x00425355 /*"USB\0"*/,  0, false, 0 },
+        { 6 /*CLASS_DISPLAY*/, 16384,
+          0x50534944 /*"DISP"*/, 0x0059414C /*"LAY\0"*/, false, 0 },
     };
 
     void reset() {
@@ -778,6 +783,46 @@ static struct {
         connect = enabled = false;
     }
 } usb;
+
+// --- Display adapter (CLASS_DISPLAY, character console) ---
+// Register contract: doc/system/devices/display.md; the executable
+// spec is hw/sim/tb_video_display.cpp — behaviors pinned there hold
+// here. Storage-level model: registers and the cell array, no
+// rendering; Ctrl-A D dumps the screen as text.
+static constexpr uint32_t DISPLAY_CAP  = (1u << 16) | (1u << 10) | (1u << 8) | 1u;
+static constexpr uint32_t DISPLAY_INFO = (30u << 16) | 80u;
+
+static struct {
+    uint32_t ctrl;          // [0] ENABLE (resets 1), [1] CURSOR_EN
+    uint32_t cursor;        // full written word, faithful readback
+    uint16_t cells[4096];
+
+    void reset() { ctrl = 1; cursor = 0; memset(cells, 0, sizeof cells); }
+
+    uint32_t read(uint32_t off) const {
+        if (off & 0x3000)
+            return cells[((off & 0x3FFF) >> 2) - 1024];
+        switch ((off >> 2) & 0xF) {
+            case 0: return DISPLAY_CAP;
+            case 1: return DISPLAY_INFO;
+            case 2: return ctrl;
+            case 3: return cursor;
+            default: return 0;   // modes / framebuffer absent
+        }
+    }
+
+    void write(uint32_t off, uint32_t data) {
+        if (off & 0x3000) {
+            cells[((off & 0x3FFF) >> 2) - 1024] = (uint16_t)data;
+            return;
+        }
+        switch ((off >> 2) & 0xF) {
+            case 2: ctrl = data & 3; break;
+            case 3: cursor = data; break;
+            default: break;      // read-only and absent slots
+        }
+    }
+} display;
 
 // --- TLB (64 entries: 32 sets × 2 ways) ---
 static struct {
@@ -1145,7 +1190,8 @@ static uint32_t acfg_config_read(const AcfgSlot& s, uint32_t addr) {
         case 1: return s.size;
         case 2: return 0;        // ID
         case 3: return s.name0;
-        case 4: case 5: case 6: return 0;  // NAME1-3
+        case 4: return s.name1;
+        case 5: case 6: return 0;  // NAME2-3
         case 7: return 0;        // BASE (write-only)
     }
     return 0;
@@ -1377,6 +1423,11 @@ static uint32_t phys_read(uint32_t addr, int size, bool& bus_fault) {
         return usb_read(addr & 0x7F);
     }
 
+    // Display adapter at dynamic base
+    if (acfg.slot[ACFG_SLOT_DISPLAY].dev_sel(addr)) {
+        return display.read(addr & 0x3FFF);
+    }
+
     // UART: 0xFF000000 – 0xFF000FFF
     if ((addr >> 12) == (UART_BASE >> 12)) {
         return uart_read(addr);
@@ -1446,6 +1497,12 @@ static void phys_write(uint32_t addr, uint32_t data, int size, bool& bus_fault) 
     // USB host controller at dynamic base
     if (acfg.slot[ACFG_SLOT_USB].dev_sel(addr)) {
         usb_write(addr & 0x7F, data);
+        return;
+    }
+
+    // Display adapter at dynamic base
+    if (acfg.slot[ACFG_SLOT_DISPLAY].dev_sel(addr)) {
+        display.write(addr & 0x3FFF, data);
         return;
     }
 
@@ -1533,7 +1590,7 @@ static void sysreg_write(int dev, int reg, uint32_t val) {
             busctl.reg = val;
             // Bus RST unconfigures the chain and resets the SPI; the
             // USBHC core sees only power-on reset (the machine wiring).
-            if (busctl.rst()) { acfg.reset(); spi.reset(); }
+            if (busctl.rst()) { acfg.reset(); spi.reset(); display.reset(); }
         }
         break;
     case SYSDEV_TIMER:
@@ -2435,7 +2492,37 @@ static void print_cmd_help() {
     fprintf(stderr, "Ctrl-A C: Dump CPU state\r\n");
     fprintf(stderr, "Ctrl-A B: Send serial BREAK (triggers DDB)\r\n");
     fprintf(stderr, "Ctrl-A U: Toggle USB device attach (hotplug)\r\n");
+    fprintf(stderr, "Ctrl-A D: Dump the display screen as text\r\n");
     fprintf(stderr, "\r\n");
+}
+
+// Render the display device's character screen as text: printable
+// glyphs pass through, glyph 0 and other non-ASCII draw as ' ' / '.',
+// and attributes are not rendered. The cursor cell is marked by
+// overlaying '_' when enabled and blank.
+static void dump_display() {
+    unsigned ccol = display.cursor & 0xFFFF;
+    unsigned crow = (display.cursor >> 16) & 0xFFFF;
+    fprintf(stderr, "\r\n[DISPLAY] CTRL=0x%x cursor=(%u,%u)%s\r\n",
+            display.ctrl, ccol, crow,
+            (display.ctrl & 1) ? "" : "  ** blanked (ENABLE=0) **");
+    fprintf(stderr, "+%.*s+\r\n", 80,
+            "----------------------------------------"
+            "----------------------------------------");
+    for (unsigned r = 0; r < 30; r++) {
+        char line[81];
+        for (unsigned c = 0; c < 80; c++) {
+            uint8_t g = display.cells[r * 80 + c] & 0xFF;
+            line[c] = (g >= 0x20 && g < 0x7F) ? (char)g : (g ? '.' : ' ');
+        }
+        if ((display.ctrl & 2) && crow == r && ccol < 80 && line[ccol] == ' ')
+            line[ccol] = '_';
+        line[80] = '\0';
+        fprintf(stderr, "|%s|\r\n", line);
+    }
+    fprintf(stderr, "+%.*s+\r\n", 80,
+            "----------------------------------------"
+            "----------------------------------------");
 }
 
 static bool handle_escape(char c) {
@@ -2465,6 +2552,10 @@ static bool handle_escape(char c) {
             uart.rbr = 0x00;
             uart.rx_ready = true;
             uart.rx_break = true;
+            break;
+        case 'd':
+        case 'D':
+            dump_display();
             break;
         case 'u':
         case 'U':
@@ -2529,6 +2620,7 @@ static void cpu_reset() {
     busctl.reg = 0;
     acfg.reset();
     usb.reset();
+    display.reset();
     // An enumerable full-speed device sits attached from power-on,
     // exactly as the RTL program runner presents it.
     usb.dev_attached = true;

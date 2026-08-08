@@ -21,3 +21,4 @@ device-major	md		char 28  block 6	md
 device-major	rnd		char 39			rnd
 device-major	clockctl	char 69			clockctl
 device-major	ksyms		char 76			ksyms
+device-major	wsdisplay	char 25			wsdisplay

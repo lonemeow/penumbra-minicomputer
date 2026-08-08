@@ -69,6 +69,11 @@ device	pusbhc: usbus, usbroothub
 attach	pusbhc at pbbus
 file	arch/penumbra/penumbra/pusbhc.c			pusbhc
 
+# Display adapter (CLASS_DISPLAY character console) -> wscons
+device	pdisplay: wsemuldisplaydev
+attach	pdisplay at pbbus
+file	arch/penumbra/penumbra/pdisplay.c		pdisplay
+
 # bus_space implementation
 file	arch/penumbra/penumbra/bus_space.c
 
