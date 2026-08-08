@@ -4,9 +4,10 @@
 // clock lane) — wired as one module so a Verilator testbench can play
 // the monitor: deserialize both DDR phases, character-align on the
 // blanking control codes, TMDS-decode, and compare a recovered frame
-// against the pattern oracle. Not a product module — the board top
-// replicates exactly this wiring plus the PLL, the ODDRX1F output
-// cells, and the pads.
+// against the pattern oracle. Not a product module, but also the DUT
+// the bring-up board top (ulx3s_video_test_top) synthesizes: the top
+// adds only the PLL, the ODDRX1F output cells, and the pads around
+// this module, so exactly the sim-verified wiring reaches the glass.
 
 module video_chain_test (
     input  logic       i_pclk,   // pixel clock

@@ -848,6 +848,15 @@ FPGA_SRC_ulx3s_penumbra3_probe_issue_top = $(SRC_COMMON) $(SRC_CORE_penumbra3) \
 FPGA_SRC_ulx3s_penumbra3_probe_decode_top = $(SRC_COMMON) $(SRC_CORE_penumbra3) \
                                $(FPGA_RTL)/ulx3s/ulx3s_penumbra3_probe_decode_top.sv
 
+# Text-video bring-up probe: the sim-verified output chain in front of
+# the video PLL, ODDRX1F cells, and GPDI pads — no CPU or bus, so it is
+# built via the TOP= escape hatch (make fpga TOP=ulx3s_video_test_top)
+# rather than registered as a BOARD/CORE machine.
+FPGA_SRC_ulx3s_video_test_top = hw/rtl/io/video/video_pkg.sv \
+                                $(filter-out %/video_pkg.sv, $(wildcard hw/rtl/io/video/*.sv)) \
+                                $(FPGA_RTL)/ecp5_pll_pkg.sv \
+                                $(FPGA_RTL)/ulx3s/ulx3s_video_test_top.sv
+
 # Tops that embed the boot ROM and/or microcode: their hex images are
 # generated before synthesis and inlined by inline_hex.py.
 # gen2 embeds the boot ROM (no microcode — the gen2 core is hardwired).
@@ -930,9 +939,9 @@ FPGA_LINT_STUBS = $(FPGA_RTL)/ecp5_prim.sv
 
 .PHONY: fpga flash fpga-lint
 
-# Lint covers every registered top regardless of TOP.
-# Use Verilator --lint-only with ECP5 primitive stubs.
-fpga-lint: $(FPGA_SRC_ulx3s_penumbra1_top) $(FPGA_SRC_ulx3s_penumbra2_probe_top) $(FPGA_SRC_ulx3s_penumbra2_top) $(FPGA_LINT_STUBS)
+# Lint covers every registered top (plus the video bring-up probe)
+# regardless of TOP. Use Verilator --lint-only with ECP5 primitive stubs.
+fpga-lint: $(FPGA_SRC_ulx3s_penumbra1_top) $(FPGA_SRC_ulx3s_penumbra2_probe_top) $(FPGA_SRC_ulx3s_penumbra2_top) $(FPGA_SRC_ulx3s_video_test_top) $(FPGA_LINT_STUBS)
 	$(DOCKER_RUN) $(DOCKER_IMAGE) --lint-only -Wall -Wno-fatal \
 		-Wno-PINMISSING -Wno-PINCONNECTEMPTY \
 		$(FPGA_SRC_ulx3s_penumbra1_top) $(FPGA_LINT_STUBS) --top ulx3s_penumbra1_top
@@ -942,6 +951,9 @@ fpga-lint: $(FPGA_SRC_ulx3s_penumbra1_top) $(FPGA_SRC_ulx3s_penumbra2_probe_top)
 	$(DOCKER_RUN) $(DOCKER_IMAGE) --lint-only -Wall -Wno-fatal \
 		-Wno-PINMISSING -Wno-PINCONNECTEMPTY \
 		$(FPGA_SRC_ulx3s_penumbra2_top) $(FPGA_LINT_STUBS) --top ulx3s_penumbra2_top
+	$(DOCKER_RUN) $(DOCKER_IMAGE) --lint-only -Wall -Wno-fatal \
+		-Wno-PINMISSING -Wno-PINCONNECTEMPTY \
+		$(FPGA_SRC_ulx3s_video_test_top) $(FPGA_LINT_STUBS) --top ulx3s_video_test_top
 
 fpga: $(BUILD_DIR)/$(TOP).bit
 	@echo "Bitstream: $(BUILD_DIR)/$(TOP).bit (PHASE_DEG=$(PHASE_DEG))"
