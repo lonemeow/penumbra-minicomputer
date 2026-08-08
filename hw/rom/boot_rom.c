@@ -136,6 +136,7 @@ static const char *class_name(uint32_t cls) {
     case ACFG_CLASS_UART:   return "UART";
     case ACFG_CLASS_SPI:    return "SPI";
     case ACFG_CLASS_SD:     return "SD";
+    case ACFG_CLASS_DISPLAY: return "Display";
     case ACFG_CLASS_USBHC:  return "USBHC";
     default:                return "Unknown";
     }
@@ -267,6 +268,34 @@ static void cmd_examine(const char *args) {
             hexbuffer[16] = '\0';
             console_printf(" | %s\r\n", hexbuffer);
         }
+    }
+}
+
+/*
+ * cmd_store — write 32-bit words to memory.
+ *
+ * Usage: w <addr> <val> [<val> ...]
+ * Stores each hex value as a word (STW) at consecutive word
+ * addresses. Word access works on every device aperture (the bus
+ * register convention), which byte stores would not.
+ */
+static void cmd_store(const char *args) {
+    const char *p = args;
+    unsigned long addr = strtoul(p, &p, 16);
+    volatile unsigned long *mem_ptr = (unsigned long *)addr;
+    int n = 0;
+
+    for (;;) {
+        const char *q = p;
+        unsigned long val = strtoul(p, &p, 16);
+        if (p == q) {
+            break;
+        }
+        *mem_ptr++ = val;
+        n++;
+    }
+    if (n == 0) {
+        console_puts("w <addr> <val> [<val> ...]\r\n");
     }
 }
 
@@ -1035,6 +1064,9 @@ int main(void) {
                 cmd_examine(cmdbuffer + 1);
             } else if (strncmp(cmdbuffer, "examine ", 8) == 0) {
                 cmd_examine(cmdbuffer + 8);
+            } else if (cmdbuffer[0] == 'w' &&
+                       (cmdbuffer[1] == ' ' || cmdbuffer[1] == '\0')) {
+                cmd_store(cmdbuffer + 1);
             } else if (strncmp(cmdbuffer, "load ", 5) == 0) {
                 cmd_load(cmdbuffer + 5);
             } else if (strncmp(cmdbuffer, "part ", 5) == 0) {
