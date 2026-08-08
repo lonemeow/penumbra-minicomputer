@@ -3439,6 +3439,20 @@ the ~1.47× on a demo.  Correctness surface if revisited: the same
 signed/unsigned/i64 widening + `smul`/`umul` overflow execution tests used
 for `ba7ef55`.
 
+**2026-08: the deferral gate has flipped.**  Enabling `BN_LLONG` in the
+OpenSSL build (`f0942b3981a9`) made `bn_mul_add_words` — one widening
+multiply per limb product — the RSA/DH critical path, and it now runs
+the unfused `MUL`+`MULU` pair (~66 divmul cycles where 33 suffice) on
+real workloads: RSA sign, DH kex, ssh.  Worse, the compiled loop shows a
+**third** multiply per limb: an unfolded multiply-by-known-zero cross
+term from the 64×64 narrowing (`mul r11, lr` with `lr` holding a
+loop-carried zero, plus a dead `add r7, 0`) that the minimal
+`acc + (u64)a*b` repro does *not* reproduce — the zero flows through the
+unrolled loop's phis and escapes the constant folds.  Fixing fusion
+alone roughly halves divmul time in all bignum inner loops; chasing the
+zero-term as well brings ~3× on the multiply component.  Estimated
+~1.5–2× on RSA sign end-to-end, on top of the BN_LLONG 1.5–1.8×.
+
 ## Compiler: 16-bit jump-table entries when offsets fit
 
 `PenumbraAsmPrinter::emitJumpTableEntry` always emits
@@ -4135,3 +4149,59 @@ order of pain:
   reset generation (PLL lock vs. release timing, or state the reset
   clears that configuration does not) — and make configuration
   come up clean.
+
+## NetBSD: MD inline bswap existed but was never wired in — RESOLVED
+
+`SHA256_Transform` (libc `sha2.c`, which NetBSD's libcrypto also links
+as `libc-sha256`) called out-of-line `__bswap32` once per message word
+— a call plus spill traffic where an inline shift/or expansion is
+straight-line ALU; `htonl`/`ntohl` across the network stack (kernel
+and userland) paid the same call.  Root cause was a wiring omission,
+not a missing implementation: `penumbra/byte_swap.h` has had correct
+`__BYTE_SWAP_U16/U32_VARIABLE` inlines since port bring-up, but
+`penumbra/bswap.h` never included it, so `sys/bswap.h` fell back to
+the libc functions.  Fixed by including it as
+`<machine/byte_swap.h>`, `_LOCORE`-guarded — the i386/vax single-arch
+convention, not riscv's `<riscv/...>` arch-name form: only kernel and
+userland builds provide the arch-name include alias, while stand
+(bootloader) builds alias `machine/` alone, so the arch-name form
+breaks `stand/boot`.  `byte_swap.h` also switched
+from `sys/types.h` to `sys/cdefs.h`+`sys/stdint.h` — the heavyweight
+include recursed through `sys/endian.h`, whose inline codecs need
+`bswap32` before `sys/bswap.h`'s declarations exist when the bswap
+header is the entry point.  Probe-verified both include orders inline
+to ~13 instructions with constants folding; remaining validation is a
+world rebuild confirming `sha2.o` loses the `bl __bswap32`.
+
+## NetBSD/OpenSSL: hash message ingestion byte-gathers even when aligned
+
+Word loads must be 4-aligned (`VEC_ALIGN`), so the portable
+byte-assembly in OpenSSL's `HOST_c2l` (MD5: 4×`ldb`+3×`shl`+3×`or` =
+10 instructions per word, 160 per block ≈ 14% of the block cost) and
+in libc sha2's `be32dec` path is semantically forced for arbitrary
+`unsigned char *` input — the compiler cannot legally merge it.  A
+source-level aligned fast path (word loads when `(p & 3) == 0`, which
+is the overwhelmingly common case for hash input buffers) is the same
+dispatch a hand-written implementation would use.  Decide per-library
+whether the reachover/MD configuration offers a clean hook before
+touching dist code.
+
+## Compiler: Ch()-style bit-select not folded to the masked-merge form
+
+In compiled `SHA256_Transform`, `Ch(e,f,g) = (e&f) ^ (~e&g)` emits the
+naive `not`+2×`and`+`or` sequence (5 ops plus copies) while MD5's
+equivalent `F(b,c,d)` correctly gets the masked-merge form
+`d^(b&(c^d))` (3 ops plus one copy).  Both should canonicalize to the
+xor form (InstCombine's bit-select fold); find where the SHA shape
+escapes it — likely the `^` vs `|` variant or a disjoint-or rewrite
+upstream of the fold.  Worth ~4 instructions × 64 rounds per block.
+
+## ISA (data point): no rotate instruction costs SHA-256 ~30% of its ALU work
+
+Every `ROTL(x,n)` lowers to the optimal-but-long `mov`+`shl`+`shr`+`or`
+(4 ops; hand asm needs the same on a 2-address ISA).  SHA-256 executes
+~480 rotates per 64-byte block (6 per round + 2 per schedule word) ≈
+1900 instructions; MD5 64, SHA-1 ~160.  A Format-L `ROT Rd, #imm5`
+through the existing barrel shifter would cut hash cores by roughly a
+quarter to a third.  Recorded as a measurement, not a proposal — an ISA
+change has its own bar (doc-first, conformance suite, all cores).
