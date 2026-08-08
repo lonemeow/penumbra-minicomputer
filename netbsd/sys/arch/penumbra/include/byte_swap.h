@@ -25,6 +25,14 @@ __byte_swap_u32_variable(uint32_t v)
 	       ((v << 24) & 0xff000000);
 }
 
+#define	__BYTE_SWAP_U64_VARIABLE __byte_swap_u64_variable
+static __inline uint64_t
+__byte_swap_u64_variable(uint64_t v)
+{
+	return ((uint64_t)__byte_swap_u32_variable((uint32_t)v) << 32) |
+	       __byte_swap_u32_variable((uint32_t)(v >> 32));
+}
+
 __END_DECLS
 #endif
 
