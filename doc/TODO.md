@@ -3120,6 +3120,15 @@ materialisations**. Findings:
 disassembly miners (not committed); the durable artifacts are the
 numbers and conclusions here.
 
+**Hot-loop evidence (2026-08, kiosk-demo audit):** plasma's innermost
+pixel loop carries the `sin_lut` `LLI`/`LUI` pair *inside* a depth-3
+loop — two instructions per sample re-deriving a loop-invariant base.
+The two-instruction chain is exactly why nothing lifted it: MachineLICM
+would have to hoist a dependent pair under register pressure that is
+already spilling, and the allocator cannot rematerialize a two-def
+chain either.  The Layer-1 single-def pseudo makes it trivially
+hoistable/rematable.
+
 ## Compiler: PIC/GOT global access — non-preemptible direct addressing — RESOLVED
 
 The high-leverage lever — PC-relative-direct addressing for
