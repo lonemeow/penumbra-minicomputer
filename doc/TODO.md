@@ -3398,7 +3398,7 @@ ULX3S, not the ISS).
   size, still open in the gen2 design.
 - Whether to expose a user-facing `-mtune` story or keep it `-mcpu`-only.
 
-## Compiler: fuse a widening multiply into a single MUL_P
+## Compiler: fuse a widening multiply into a single MUL_P — RESOLVED
 
 A 32×32→64 widening multiply currently selects to **two** hardware
 multiplies (commit `ba7ef55`): the custom legalization of `G_MUL s64`
@@ -3461,6 +3461,29 @@ unrolled loop's phis and escapes the constant folds.  Fixing fusion
 alone roughly halves divmul time in all bignum inner loops; chasing the
 zero-term as well brings ~3× on the multiply component.  Estimated
 ~1.5–2× on RSA sign end-to-end, on top of the BN_LLONG 1.5–1.8×.
+
+**Fixed via a third route the survey above missed: a target *generic*
+opcode.**  Neither selection-time pairing nor pre-RegBankSelect target
+instructions were needed — GISel lets a target define its own `G_*`
+opcodes (AArch64's `G_ADD_LOW` etc.), which is exactly the missing
+"two-result multiply" the generic opcode set lacks.
+`PenumbraInstrGISel.td` defines `G_UMUL_LOHI`/`G_SMUL_LOHI`; the
+post-legalizer rule `penumbra_mul_to_mul_lohi` fuses a same-operand
+`G_MUL` + `G_[SU]MULH` pair (either operand order) into one, and the
+selector emits `MUL_P`/`MULU_P`.  Everything stays on the normal
+pipeline, so the fiddly selection-order problem never arises.
+
+Gotcha for the next target generic opcode: `isPreISelGenericOpcode()`
+covers only the shared `G_*` range, so the selector's entry guard has to
+use `MachineInstr::isPreISelOpcode()` — otherwise target generic opcodes
+are taken for already-selected instructions and reach the register
+allocator unselected (crash in the coalescer, not a clean verifier
+error).
+
+Measured statically: 64×64 multiply 4 multiplies → 3; widening 32×32→64
+2 → 1; the fractal demos' Q4.28 inner loop 6 → 3.  Divide/remainder was
+never affected — `G_SDIVREM`/`G_UDIVREM` already exist generically and
+the legalizer's `div_rem_to_divrem` fuses those upstream.
 
 ## Compiler: 16-bit jump-table entries when offsets fit
 
