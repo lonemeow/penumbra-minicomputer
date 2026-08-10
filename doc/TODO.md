@@ -3899,9 +3899,21 @@ not a requirement.
   driver, the MI USB stack, and `uhidev`/`uhid` are done — keystrokes
   reach userland through `/dev/uhid*` — but a `wscons` console needs
   the keyboard bound as a `wskbd` input instead.
-- `wsdisplay` back-end for `CLASS_DISPLAY` (`pcdisplay`-style character
-  memory) + `wskbd`; bring up `wscons` as a local console alongside (or
-  in place of) the `com` console.
+- Done: `wsdisplay` back-end for `CLASS_DISPLAY` (`pdisplay`, emulops
+  over the `CELLS` aperture with a RAM shadow for the copy ops) plus
+  the keyboard half — `ukbd` → `wskbd` → the display's kbdmux. Proven
+  on hardware: keystrokes reach `ttyE0` and echo on the monitor, so
+  the local console is a working terminal. `wsconsctl` state, the
+  `MODE_MAPPED` mmap path, and the `EXTGLYPHS` range beyond ASCII
+  remain unexercised.
+- Local console, remaining: a session on `ttyE0` at boot needs
+  multi-user (`init` reading `/etc/ttys`, whose entry is in place) —
+  today a getty must be started by hand from the single-user shell.
+  Making the display the *kernel* console (boot messages on glass, DDB
+  on the local keyboard) additionally needs `wsdisplay_cnattach` plus
+  a polled console keyboard: `ukbd_cnattach` requires interrupt-pipe
+  polling in `pusbhc`, without which the console would have output but
+  no input between attach and USB enumeration.
 
 ### Boot ROM — later
 - Per-class console backends (text-cell writes; framebuffer software

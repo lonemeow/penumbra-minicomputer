@@ -344,8 +344,9 @@ fi
 # members outside the port's majors table, so wholesale groups like
 # 'usbs' produce a spec nbmakefs rejects.
 USB_DEVS="usb usb0 uhid0 uhid1 uhid2 uhid3"
-# The wscons display console (pdisplay -> wsdisplay).
-WSCONS_DEVS="ttyE0"
+# The wscons local console: display screens (pdisplay -> wsdisplay),
+# the keyboard nodes, and the multiplexor keystrokes reach it through.
+WSCONS_DEVS="ttyE0 ttyE1 ttyEcfg ttyEstat wskbd0 wskbd wsmux0"
 if [ -x "$MAKEDEV_SCRIPT" ]; then
     log "Generating device nodes via MAKEDEV -s std init $USB_DEVS $WSCONS_DEVS"
     # MAKEDEV -s outputs mtree specs relative to /dev.

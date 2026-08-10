@@ -9,3 +9,7 @@ constty	"/usr/libexec/getty default"	vt100	on secure
 
 # Penumbra 16450 UART serial port
 tty00	"/usr/libexec/getty default"	vt100	on secure
+
+# wscons screens on the display adapter (keyboard via ukbd -> wskbd)
+ttyE0	"/usr/libexec/getty default"	wsvt25	on secure
+ttyE1	"/usr/libexec/getty default"	wsvt25	off secure

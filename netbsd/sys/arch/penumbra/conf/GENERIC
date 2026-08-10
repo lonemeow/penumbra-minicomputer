@@ -49,6 +49,8 @@ sd*		at scsibus? target ? lun ?
 # USB human interface devices
 uhidev*		at uhub? port ? configuration ? interface ?
 uhid*		at uhidev? reportid ?	# generic HID (/dev/uhid*)
+ukbd*		at uhidev? reportid ?	# USB keyboard
+wskbd*		at ukbd? console ?	# -> wscons (mux 1, the display's)
 
 # USB network
 ure*		at uhub? port ?	# Realtek RTL8152/RTL8153 based adapters
@@ -71,5 +73,6 @@ pseudo-device	loop			# loopback interface
 pseudo-device	pty			# pseudo-terminals
 pseudo-device	ksyms			# /dev/ksyms
 pseudo-device	bpfilter		# packet capture
+pseudo-device	wsmux			# keyboard/mouse multiplexor
 
 config		netbsd root on ? type ?
