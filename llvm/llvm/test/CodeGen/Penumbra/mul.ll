@@ -33,17 +33,15 @@ define i64 @mul_i64(i64 %a, i64 %b) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 4
-; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r5, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r11, r1
-; CHECK-NEXT:    mul r11, r3
+; CHECK-NEXT:    mulu r11, r3, r5
 ; CHECK-NEXT:    mul r2, r3
-; CHECK-NEXT:    mov lr, r1
-; CHECK-NEXT:    mul lr, r4
-; CHECK-NEXT:    mulu r1, r3, r3
-; CHECK-NEXT:    add r2, lr
-; CHECK-NEXT:    add r2, r3
+; CHECK-NEXT:    mul r1, r4
+; CHECK-NEXT:    add r2, r1
+; CHECK-NEXT:    add r2, r5
 ; CHECK-NEXT:    mov r1, r11
-; CHECK-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r5, [sp + 0] // 4-byte Folded Reload
 ; CHECK-NEXT:    add sp, 4
 ; CHECK-NEXT:    jmp lr
   %r = mul i64 %a, %b
@@ -56,10 +54,7 @@ define i64 @smul_widen(i32 %a, i32 %b) {
 ; CHECK-LABEL: smul_widen:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    mov r3, r1
-; CHECK-NEXT:    mul r3, r2
 ; CHECK-NEXT:    mul r1, r2, r2
-; CHECK-NEXT:    mov r1, r3
 ; CHECK-NEXT:    jmp lr
   %sa = sext i32 %a to i64
   %sb = sext i32 %b to i64
@@ -73,10 +68,7 @@ define i64 @umul_widen(i32 %a, i32 %b) {
 ; CHECK-LABEL: umul_widen:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    mov r3, r1
-; CHECK-NEXT:    mul r3, r2
 ; CHECK-NEXT:    mulu r1, r2, r2
-; CHECK-NEXT:    mov r1, r3
 ; CHECK-NEXT:    jmp lr
   %za = zext i32 %a to i64
   %zb = zext i32 %b to i64
@@ -91,13 +83,11 @@ define i32 @smulo_i32(i32 %a, i32 %b, ptr %ov) {
 ; CHECK-LABEL: smulo_i32:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
+; CHECK-NEXT:    mul r1, r2, r2
 ; CHECK-NEXT:    mov r4, r1
-; CHECK-NEXT:    mul r4, r2, r11
-; CHECK-NEXT:    mul r1, r2
-; CHECK-NEXT:    mov r2, r1
-; CHECK-NEXT:    sar r2, 31
-; CHECK-NEXT:    sub r11, r2
-; CHECK-NEXT:    cmp zero, r11
+; CHECK-NEXT:    sar r4, 31
+; CHECK-NEXT:    sub r2, r4
+; CHECK-NEXT:    cmp zero, r2
 ; CHECK-NEXT:    mov r2, zero
 ; CHECK-NEXT:    sbc r2, zero
 ; CHECK-NEXT:    and r2, 1

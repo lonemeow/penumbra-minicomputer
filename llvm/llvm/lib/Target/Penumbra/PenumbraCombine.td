@@ -103,6 +103,21 @@ def penumbra_sink_ptr_add_past_use : GICombineRule<
          [{ return matchSinkPtrAddPastUse(*${root}, MRI); }]),
   (apply [{ applySinkPtrAddPastUse(*${root}, MRI, B); }])>;
 
+// Target-specific: fuse a same-operand G_MUL + G_[SU]MULH pair into the
+// two-result G_UMUL_LOHI / G_SMUL_LOHI (PenumbraInstrGISel.td), which
+// selects to a single MUL_P / MULU_P.  One multiply yields the full 64-bit
+// product either way, so the separate low-half MUL the unfused pair selects
+// to is a second divmul operation recomputing a half MUL_P already produced.
+// The pair is born adjacent from the legalizer's s64-multiply lowering; the
+// rule roots at the (rarer) MULH and searches its operands' uses for the
+// sibling.
+def penumbra_mul_lohi_matchdata : GIDefMatchData<"MachineInstr *">;
+def penumbra_mul_to_mul_lohi : GICombineRule<
+  (defs root:$root, penumbra_mul_lohi_matchdata:$matchinfo),
+  (match (wip_match_opcode G_UMULH, G_SMULH):$root,
+         [{ return matchMulToMulLoHi(*${root}, MRI, ${matchinfo}); }]),
+  (apply [{ applyMulToMulLoHi(*${root}, MRI, B, ${matchinfo}); }])>;
+
 // Post-legalizer: optimizations on legalized MIR.  Must preserve instruction
 // legality.
 //
@@ -130,5 +145,6 @@ def PenumbraPostLegalizerCombiner
       penumbra_zextload_promote,
       known_bits_simplifications,
       penumbra_neg_imm_to_opposite,
-      penumbra_sink_ptr_add_past_use
+      penumbra_sink_ptr_add_past_use,
+      penumbra_mul_to_mul_lohi
     ]>;

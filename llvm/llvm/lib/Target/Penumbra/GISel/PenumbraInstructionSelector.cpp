@@ -176,8 +176,9 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
   // instruction selection — it just gets its opcode changed to the target PHI
   // and its def constrained to a register class.  COPY similarly needs its
   // dest constrained from a register bank to a concrete register class.
-  if (!isPreISelGenericOpcode(I.getOpcode()) ||
-      I.getOpcode() == TargetOpcode::G_PHI) {
+  // isPreISelOpcode() also covers the target generic opcodes defined in
+  // PenumbraInstrGISel.td, which are numbered outside the shared G_* range.
+  if (!I.isPreISelOpcode() || I.getOpcode() == TargetOpcode::G_PHI) {
     if (I.getOpcode() == TargetOpcode::G_PHI) {
       I.setDesc(TII.get(TargetOpcode::PHI));
       return RBI.constrainGenericRegister(
@@ -337,6 +338,8 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
   case G_UREM:
   case G_SDIVREM:
   case G_UDIVREM:
+  case Penumbra::G_SMUL_LOHI:
+  case Penumbra::G_UMUL_LOHI:
     return selectDivMul(I, MBB, MRI);
 
   // ── Compare / Select ────────────────────────────────────────────────────────
@@ -1143,6 +1146,19 @@ bool PenumbraInstructionSelector::selectDivMul(MachineInstr &I,
                .addReg(I.getOperand(2).getReg())   // dividend
                .addReg(I.getOperand(3).getReg());  // divisor
     break;
+
+  case Penumbra::G_SMUL_LOHI:
+  case Penumbra::G_UMUL_LOHI: {
+    // One multiply yields both product halves.
+    unsigned Opc = I.getOpcode() == Penumbra::G_SMUL_LOHI ? Penumbra::MUL_P
+                                                          : Penumbra::MULU_P;
+    NewI = BuildMI(MBB, I, DL, TII.get(Opc))
+               .addDef(I.getOperand(0).getReg())   // low half
+               .addDef(I.getOperand(1).getReg())   // high half
+               .addReg(I.getOperand(2).getReg())   // multiplicand
+               .addReg(I.getOperand(3).getReg());  // multiplier
+    break;
+  }
 
   default:
     return false;

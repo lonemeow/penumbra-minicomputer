@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "PenumbraTargetMachine.h"
+#include "MCTargetDesc/PenumbraMCTargetDesc.h"
 #include "llvm/CodeGen/GlobalISel/CSEInfo.h"
 #include "llvm/CodeGen/GlobalISel/Combiner.h"
 #include "llvm/CodeGen/GlobalISel/CombinerHelper.h"
@@ -193,6 +194,61 @@ void applySinkPtrAddPastUse(MachineInstr &MI, MachineRegisterInfo &MRI,
   B.setDebugLoc(MI.getDebugLoc());
   B.buildPtrAdd(Dst, Src, Off);
 
+  MI.eraseFromParent();
+}
+
+// Match a G_[SU]MULH whose operand pair is also multiplied by a G_MUL in
+// the same basic block; MatchInfo receives that sibling G_MUL.  The low
+// half of a product is signedness-agnostic, so one G_MUL can pair with
+// either MULH flavor.
+bool matchMulToMulLoHi(MachineInstr &MI, MachineRegisterInfo &MRI,
+                       MachineInstr *&MatchInfo) {
+  Register Multiplicand = MI.getOperand(1).getReg();
+  Register Multiplier = MI.getOperand(2).getReg();
+  for (MachineInstr &Potential : MRI.use_nodbg_instructions(Multiplicand)) {
+    if (Potential.getOpcode() != TargetOpcode::G_MUL ||
+        Potential.getParent() != MI.getParent())
+      continue;
+    // Multiplication commutes, so either operand order computes the same
+    // low half.
+    Register Lhs = Potential.getOperand(1).getReg();
+    Register Rhs = Potential.getOperand(2).getReg();
+    if ((Lhs == Multiplicand && Rhs == Multiplier) ||
+        (Lhs == Multiplier && Rhs == Multiplicand)) {
+      MatchInfo = &Potential;
+      return true;
+    }
+  }
+
+  return false;
+}
+
+// Fuse the pair into one two-result G_[SU]MUL_LOHI (selects to MUL_P /
+// MULU_P), inserted at whichever of the two comes first in the block so
+// both results dominate all existing uses.
+void applyMulToMulLoHi(MachineInstr &MI, MachineRegisterInfo &MRI,
+                       MachineIRBuilder &B, MachineInstr *&MulMI) {
+  unsigned Opc = MI.getOpcode() == TargetOpcode::G_SMULH
+                     ? Penumbra::G_SMUL_LOHI
+                     : Penumbra::G_UMUL_LOHI;
+
+  MachineInstr *First = MulMI;
+  for (MachineInstr &Cur : *MI.getParent()) {
+    if (&Cur == &MI) {
+      First = &MI;
+      break;
+    }
+    if (&Cur == MulMI)
+      break;
+  }
+
+  B.setInsertPt(*First->getParent(), First->getIterator());
+  B.setDebugLoc(First->getDebugLoc());
+  B.buildInstr(Opc,
+               {MulMI->getOperand(0).getReg(), MI.getOperand(0).getReg()},
+               {MI.getOperand(1).getReg(), MI.getOperand(2).getReg()});
+
+  MulMI->eraseFromParent();
   MI.eraseFromParent();
 }
 

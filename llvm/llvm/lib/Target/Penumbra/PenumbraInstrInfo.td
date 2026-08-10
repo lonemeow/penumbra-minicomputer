@@ -635,3 +635,5 @@ let isPseudo = 1 in {
                                      "# PseudoMOVADDR $Rd, $sym">;
   }
 }
+
+include "PenumbraInstrGISel.td"
