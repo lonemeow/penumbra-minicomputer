@@ -894,7 +894,10 @@ FPGA_VIDEO_TOPS = ulx3s_video_test_top ulx3s_penumbra1_top
 # derivation): an explicit NEXTPNR_SEED on the command line or environment
 # always wins; `NEXTPNR_SEED=` forces a random placement; a top with no
 # entry here behaves as before (no --seed passed).
-DEFAULT_SEED_ulx3s_penumbra1_top   := 8
+# Swept after the display adapter landed: fmax across seeds 0-9 spans
+# 23.99-27.5 MHz, only half of them clearing 25. Seed 5 is the best and
+# the only one with real margin over the 27 MHz safety floor.
+DEFAULT_SEED_ulx3s_penumbra1_top   := 5
 DEFAULT_SEED_ulx3s_penumbra2_top   := 9
 DEFAULT_SEED_ulx3s_penumbra2_5_top := 9
 

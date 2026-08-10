@@ -3709,6 +3709,18 @@ good.
    hardware ladder is complete; what remains of the local console is
    software (`wsdisplay` back-end below) and the USB keyboard half.
 
+**Timing after the display landed.** The gen1 board top now sits on
+the 25 MHz constraint rather than above it: a seed sweep spans
+23.99–27.5 MHz with only half the seeds passing, so placement luck —
+not logic depth — decides each build. The critical path is unchanged
+by the display (the datapath → `status_reg` ESR cone, ~41.6 ns
+either side of the change, with identical LUT/FF/EBR counts), and the
+display's own domains have enormous margin (pixel 85 MHz against 25,
+serial 339 against 125). `keep_hierarchy` on `video_display` and the
+pinned seed hold it for now; the durable fix, when the margin is
+wanted back, is a floorplan for this top (`LPF_DESIGN` + `PREPACK`,
+as `ulx3s_penumbra2_top` already carries) or shaving the ESR cone.
+
 Goal (later): PLL dynamic-reconfig FSM + mode 1 (800×600 / 100×37);
 EDID/DDC readout when the mode list gives it a consumer (contract
 space — CAP bit, `EDID_CTRL`, the `EDID` aperture — is reserved, and
