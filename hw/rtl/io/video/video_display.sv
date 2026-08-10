@@ -26,9 +26,10 @@
 // main clock domain's critical regions.
 (* keep_hierarchy = "yes" *)
 module video_display #(
-    // Cell-RAM preload, passed to the chain: a board that wants the
-    // splash visible from power-on names its image; empty leaves
-    // power-up contents undefined, the contract default.
+    // Cell-RAM preload, passed to the chain. Empty is the contract's
+    // behavior — power-up contents undefined, screen content owned by
+    // software. A CPU-free bring-up probe names an image instead, so
+    // it has something to show without a bus master.
     parameter CELLS_HEX = ""
 ) (
     // ── Bus (behind autoconfig_dev), CPU clock domain ───────────
@@ -83,7 +84,7 @@ module video_display #(
 
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
-            ctrl_enable_q    <= 1'b1;   // picture on from power-up
+            ctrl_enable_q    <= 1'b0;   // black until software draws
             ctrl_cursor_en_q <= 1'b0;
             cursor_q         <= '0;
         end else if (i_we && !cells_sel) begin

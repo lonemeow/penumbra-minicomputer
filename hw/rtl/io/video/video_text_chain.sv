@@ -7,11 +7,11 @@
 // pipeline, so the encoders see RGB and syncs aligned by
 // construction.
 //
-// The bring-up board top synthesizes this with the cell RAM preloaded
-// from CELLS_HEX (a splash screen — no CPU exists yet); the
-// closed-loop testbench plays the monitor against the same preload.
-// The CPU-domain cell port is exposed for consumers that have a bus
-// master; a preload-only user ties it off.
+// CELLS_HEX preloads the cell RAM, which the CPU-free users need —
+// the bring-up board top and the closed-loop testbench, neither of
+// which has a bus master to draw a screen for them. A machine leaves
+// it empty and drives the cell port instead: screen content is
+// software's, and undefined cell memory must never reach the glass.
 
 module video_text_chain #(
     parameter CELLS_HEX = "splash_cells.hex"

@@ -793,11 +793,13 @@ static constexpr uint32_t DISPLAY_CAP  = (1u << 16) | (1u << 10) | (1u << 8) | 1
 static constexpr uint32_t DISPLAY_INFO = (30u << 16) | 80u;
 
 static struct {
-    uint32_t ctrl;          // [0] ENABLE (resets 1), [1] CURSOR_EN
+    uint32_t ctrl;          // [0] ENABLE (resets 0), [1] CURSOR_EN
     uint32_t cursor;        // full written word, faithful readback
     uint16_t cells[4096];
 
-    void reset() { ctrl = 1; cursor = 0; memset(cells, 0, sizeof cells); }
+    // Cells are not cleared: the contract leaves their power-up
+    // contents undefined, and software owns screen content.
+    void reset() { ctrl = 0; cursor = 0; }
 
     uint32_t read(uint32_t off) const {
         if (off & 0x3000)

@@ -931,9 +931,9 @@ module ulx3s_penumbra1_top (
     // ══════════════════════════════════════════════════════════
     // The character console on the GPDI connector: video_display
     // behind the autoconfig wrapper, running its output chain on the
-    // dedicated video PLL. The cell RAM preloads the splash screen,
-    // so the monitor shows it from power-on (CTRL.ENABLE resets 1)
-    // until software takes over.
+    // dedicated video PLL. No cell preload and CTRL.ENABLE resets
+    // clear, so the screen stays black until the boot ROM draws it —
+    // a reset never shows stale cell memory.
     logic [31:0] disp_dev_addr, disp_dev_wdata;
     logic        disp_dev_we, disp_dev_re;
     logic [31:0] disp_dev_rdata;
@@ -978,9 +978,7 @@ module ulx3s_penumbra1_top (
 
     logic [3:0] gpdi_lane_d0, gpdi_lane_d1;
 
-    video_display #(
-        .CELLS_HEX ("splash_cells.hex")
-    ) u_display (
+    video_display u_display (
         .i_clk   (clk),
         .i_rst   (rst),
         .i_addr  (disp_dev_addr),

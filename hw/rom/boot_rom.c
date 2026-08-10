@@ -15,6 +15,8 @@
 #include "bootdata.h"
 #include "libc.h"
 #include "penumbra.h"
+#include "display.h"
+#include "splash_art.h"    /* generated from hw/video/splash.txt */
 
 typedef void (*trap_handler)(void);
 
@@ -1046,6 +1048,30 @@ int main(void) {
 
     /* ── Finalize boot data ────────────────────────────────────── */
     bd_finalize(&bd_cursor);
+
+    /*
+     * Local display: draw the splash if one was found.  The device
+     * powers up blanked with undefined cell contents, so clear and
+     * draw before enabling — otherwise a reset flashes stale cells.
+     * Runs after bd_finalize: the device list is only walkable once
+     * its BTAG_END terminator exists.
+     */
+    struct btag_device *disp_dev =
+        bd_find_device_by_class(ACFG_CLASS_DISPLAY, 0);
+    if (disp_dev) {
+        struct display disp;
+        display_attach(&disp, disp_dev->base);
+        display_clear(&disp, SPLASH_ATTR);
+
+        /* Centre the art vertically; taller art simply starts at 0. */
+        int top = (disp.rows - SPLASH_ROWS) / 2;
+        if (top < 0)
+            top = 0;
+        for (int i = 0; i < SPLASH_ROWS; i++)
+            display_puts_at(&disp, top + i, 0, SPLASH_ATTR, splash_art[i]);
+
+        display_enable(&disp, 1);
+    }
     console_printf("Boot data: %d bytes at 0x%x\r\n\r\n",
                     (int)(bd_cursor - BOOTDATA_BASE),
                     BOOTDATA_BASE);

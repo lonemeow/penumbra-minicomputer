@@ -25,6 +25,15 @@ OBJCOPY  = $(LLVM_PREFIX)/bin/llvm-objcopy
 BIN2HEX  = python3 $(ROOT)/sw/tools/bin2hex.py
 
 CFLAGS   ?= -O0 -MMD -MP
+# Generated headers (splash art) live in the build directory.
+CFLAGS   += -I$(BUILD)
+
+# ── Generated sources ─────────────────────────────────────────
+# The splash screen is authored as text and transcoded to CP437 rows;
+# the ROM draws it into a display device's cells when it finds one.
+SPLASH_TXT := $(ROOT)/hw/video/splash.txt
+SPLASH_H   := $(BUILD)/splash_art.h
+GEN_HDRS   := $(SPLASH_H)
 
 # ── Source discovery ──────────────────────────────────────────
 C_SRCS   := $(wildcard *.c)
@@ -56,8 +65,11 @@ $(BUILD)/boot_rom.bin: $(BUILD)/boot_rom.elf
 $(BUILD)/boot_rom.elf: $(OBJS) rom.ld
 	$(LD) -T rom.ld $(BUILD)/crt0.o $(filter-out $(BUILD)/crt0.o,$(ASM_OBJS)) $(C_OBJS) -o $@
 
+$(SPLASH_H): $(SPLASH_TXT) $(ROOT)/hw/tools/text2cells.py | $(BUILD)
+	python3 $(ROOT)/hw/tools/text2cells.py --format c $< $@
+
 # Pattern rule: C → object
-$(BUILD)/%.o: %.c | $(BUILD)
+$(BUILD)/%.o: %.c $(GEN_HDRS) | $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 # Pattern rule: assembly → object

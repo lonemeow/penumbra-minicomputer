@@ -881,9 +881,12 @@ FPGA_SRC_ulx3s_video_test_top = hw/rtl/io/video/video_pkg.sv \
 # gen2 embeds the boot ROM (no microcode — the gen2 core is hardwired).
 FPGA_ROM_TOPS   = ulx3s_penumbra1_top ulx3s_penumbra2_top ulx3s_penumbra2_5_top
 FPGA_UCODE_TOPS = ulx3s_penumbra1_top
-# Tops that embed display hex images (font, splash cells): the images
-# must exist at the repo root before yosys resolves their $readmemh.
+# Tops that embed the display font image: it must exist at the repo
+# root before yosys resolves its $readmemh.
 FPGA_VIDEO_TOPS = ulx3s_video_test_top ulx3s_penumbra1_top
+# Tops that also embed a preloaded cell image — the CPU-free bring-up
+# probe only. A machine draws its own screen from software.
+FPGA_SPLASH_TOPS = ulx3s_video_test_top
 
 # Per-top default nextpnr placement seed. Some board/core[/variant]
 # combinations only close timing on a particular seed; pin it here so a
@@ -1017,7 +1020,8 @@ ROM_SRCS  = $(wildcard hw/rom/*.c hw/rom/*.h hw/rom/*.s hw/rom/*.ld hw/rom/Makef
 $(BUILD_DIR)/$(TOP).json: $(FPGA_SRC) $(PHASE_STAMP) \
     $(if $(filter $(TOP),$(FPGA_UCODE_TOPS)),$(UCODE_SRC)) \
     $(if $(filter $(TOP),$(FPGA_ROM_TOPS)),$(ROM_SRCS)) \
-    $(if $(filter $(TOP),$(FPGA_VIDEO_TOPS)),font8x16.hex splash_cells.hex)
+    $(if $(filter $(TOP),$(FPGA_VIDEO_TOPS)),font8x16.hex) \
+    $(if $(filter $(TOP),$(FPGA_SPLASH_TOPS)),splash_cells.hex)
 	@mkdir -p $(BUILD_DIR)
 	$(if $(filter $(TOP),$(FPGA_UCODE_TOPS)),$(UASM) hw/microcode/microcode.uasm -o microcode.hex)
 	$(if $(filter $(TOP),$(FPGA_ROM_TOPS)),$(MAKE) -C hw/rom)

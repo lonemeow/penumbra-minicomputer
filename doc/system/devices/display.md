@@ -92,9 +92,12 @@ one console back-end drives any display device — and any mode —
 without hardcoding a grid size.
 
 #### CTRL (0x008)
-- Bit [0]: `ENABLE` — picture output active. Resets to `1`. While
-  clear the device drives black active video with sync timing still
-  running, so the monitor stays locked and re-enabling is instant.
+- Bit [0]: `ENABLE` — picture output active. Resets to `0`, so a
+  device powers up showing black rather than whatever its cell memory
+  happens to hold; the consumer initializes the screen and then
+  enables it. While clear the device drives black active video with
+  sync timing still running, so the monitor stays locked and enabling
+  is instant.
 - Bit [1]: `CURSOR_EN` — show the cursor at `CURSOR`. Resets to `0`.
 - Bit [2]: `PAL_SEL` — palette source: `0` = built-in default palette,
   `1` = the custom palette in the [`PALETTE`](#palette-0x040) aperture.
@@ -169,6 +172,12 @@ and the cell array for the largest mode (`0x1000 + COLUMNS * ROWS * 4`);
 on a device with the soft font it extends to the end of the
 [`FONT`](#font-0x8000) aperture, and on a device with the framebuffer
 to the end of the [`FB`](#fb-0x20000) aperture.
+
+Cell contents are **undefined at power-up and across reset** — the
+device never initializes them, and reset does not clear them. Screen
+content belongs to software: firmware or the OS clears the grid and
+draws before setting [`CTRL.ENABLE`](#ctrl-0x008), which is why the
+picture starts disabled.
 
 A cell is **16 bits**, occupying the low half of its 32-bit slot; bits
 [31:16] read 0 and are ignored on write. The cell value:

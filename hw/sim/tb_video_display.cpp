@@ -209,7 +209,8 @@ int main() {
           bus_read(REG_CAP), CAP_EXPECT);
     CHECK(bus_read(REG_INFO) == INFO_EXPECT, "INFO: got %08x, want %08x",
           bus_read(REG_INFO), INFO_EXPECT);
-    CHECK(bus_read(REG_CTRL) == 0x1, "CTRL reset: got %08x, want 1 (ENABLE)",
+    CHECK(bus_read(REG_CTRL) == 0x0,
+          "CTRL reset: got %08x, want 0 (blanked until software draws)",
           bus_read(REG_CTRL));
     CHECK(bus_read(0x010) == 0 && bus_read(0x01C) == 0 && bus_read(0x020) == 0,
           "absent option slots must read 0");
@@ -220,7 +221,7 @@ int main() {
 
     bus_write(REG_CTRL, 0xFFFFFFFF);
     CHECK(bus_read(REG_CTRL) == 0x3, "CTRL: unimplemented bits must read 0");
-    bus_write(REG_CTRL, 0x1);   // back to reset state
+    bus_write(REG_CTRL, 0x1);   // enable the picture for the glass tests
 
     // Cells: write/readback through the aperture, zero upper half.
     bus_write(CELLS + 0 * 4, 0x00070741);          // 'A', grey on black
