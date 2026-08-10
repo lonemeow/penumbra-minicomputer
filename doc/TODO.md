@@ -3120,14 +3120,30 @@ materialisations**. Findings:
 disassembly miners (not committed); the durable artifacts are the
 numbers and conclusions here.
 
-**Hot-loop evidence (2026-08, kiosk-demo audit):** plasma's innermost
-pixel loop carries the `sin_lut` `LLI`/`LUI` pair *inside* a depth-3
-loop — two instructions per sample re-deriving a loop-invariant base.
-The two-instruction chain is exactly why nothing lifted it: MachineLICM
-would have to hoist a dependent pair under register pressure that is
-already spilling, and the allocator cannot rematerialize a two-def
-chain either.  The Layer-1 single-def pseudo makes it trivially
-hoistable/rematable.
+**In-loop address pairs in the demos are remat, not a missed hoist.**
+Plasma's depth-3 pixel loop shows an `LLI`/`LUI` pair per iteration
+re-materializing a table base.  Post-regalloc MIR holds a single
+`PseudoMOVADDR`; the pair appears only after `expandPostRAPseudo`, so
+Layer 1 is doing its job and LICM is not the lever.
+
+What drives the remat is the destructive two-operand `ADD` forming
+`base + index`: it consumes the base, so each address computation needs
+either a private copy of a live base or a fresh materialization.  The
+same loop shows both choices — `COPY` + `ADD` for a use with the base
+still live, a bare `ADD` killing it at the last use, then
+`PseudoMOVADDR` at the next block that needs it.  Rebuilding costs two
+instructions where copying a live base costs one, so remat runs one
+instruction per materialization *more* than pinning the base; the
+allocator takes that trade because the loop is at near-total pressure
+(~10 of 11 allocatable GPRs live across it) and a spill/reload would
+cost more.
+
+Nothing cheaper is available: an arbitrary global's address is
+inherently a two-instruction materialization, so the +1 is structural
+and the only alternative is spending a register to keep the base live.
+That makes this a register-pressure trade for the allocator, not a
+missing optimization.  Recorded so the shape isn't re-diagnosed as a
+missed hoist.
 
 ## Compiler: PIC/GOT global access — non-preemptible direct addressing — RESOLVED
 
