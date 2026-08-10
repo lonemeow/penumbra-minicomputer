@@ -1036,13 +1036,32 @@ NEXTPNR_BASE = $(FPGA_TOOLS)/nextpnr-ecp5 --85k --package CABGA381 --speed 6 \
 		$(if $(LPF_DESIGN),--lpf $(LPF_DESIGN)) \
 		$(if $(PREPACK),--pre-pack $(PREPACK))
 
-$(BUILD_DIR)/$(TOP).config: $(BUILD_DIR)/$(TOP).json $(LPF) $(LPF_DESIGN) $(PREPACK)
+# Seed and VIS change the nextpnr command line but no input file, so
+# they ride a stamp filename to stay in the dep graph (as PHASE_STAMP).
+PNR_STAMP = $(BUILD_DIR)/.pnr-$(if $(strip $(NEXTPNR_SEED)),s$(NEXTPNR_SEED),rand)-vis$(if $(filter 1,$(VIS)),1,0)
+$(PNR_STAMP):
+	@mkdir -p $(BUILD_DIR)
+	@rm -f $(BUILD_DIR)/.pnr-*
+	@touch $@
+
+$(BUILD_DIR)/$(TOP).config: $(BUILD_DIR)/$(TOP).json $(LPF) $(LPF_DESIGN) $(PREPACK) $(PNR_STAMP)
 	@echo "[fpga] PnR seed: $(if $(strip $(NEXTPNR_SEED)),$(NEXTPNR_SEED)$(if $(filter $(NEXTPNR_SEED),$(DEFAULT_SEED_$(TOP))), (pinned default for $(TOP))),random — no --seed)"
 	$(NEXTPNR_BASE) \
 		$(if $(NEXTPNR_SEED),--seed $(NEXTPNR_SEED)) \
 		--json $< --textcfg $@ \
 		--write $(BUILD_DIR)/$(TOP)_routed.json \
-		--report $(BUILD_DIR)/$(TOP)_timing.json --detailed-timing-report
+		--report $(BUILD_DIR)/$(TOP)_timing.json --detailed-timing-report \
+		$(NEXTPNR_VIS)
+
+# ── Headless place/route visualization ──────────────────────────
+# VIS=1 makes the PnR step also render the placement to
+# <top>_placed.svg — file output, so it works over ssh and opens in
+# any browser.  nextpnr can also emit --routed-svg (~700 MB on this
+# design) and --router2-heatmap congestion grids; the latter needs
+# --router router2, which this design is not routed with.
+ifeq ($(VIS),1)
+NEXTPNR_VIS = --placed-svg $(BUILD_DIR)/$(TOP)_placed.svg
+endif
 
 # ── Parallel seed sweeps ────────────────────────────────────────
 # Seed-tagged PnR artifacts: build/<top>.s<seed>.config places the
