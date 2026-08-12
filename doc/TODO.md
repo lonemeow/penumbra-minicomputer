@@ -4293,3 +4293,68 @@ Every `ROTL(x,n)` lowers to the optimal-but-long `mov`+`shl`+`shr`+`or`
 through the existing barrel shifter would cut hash cores by roughly a
 quarter to a third.  Recorded as a measurement, not a proposal — an ISA
 change has its own bar (doc-first, conformance suite, all cores).
+
+## Compiler: the pipeline prices MUL/DIV as if they cost one cycle
+
+The divmul unit runs a fixed 32-iteration shift-add — no early-out, so
+every `MUL`/`DIV` is a full multi-cycle stall regardless of operand
+values.  Nothing in the compiler knows this.  `PenumbraTTIImpl` does not
+override `getArithmeticInstrCost`, so `BasicTTIImplBase` reports the
+same cost as an `ADD` for any legal operation, and the scheduling model
+(`CompleteModel = 0`, no `WriteRes` entries) models the same.  Every
+cost-driven decision — unrolling, LSR, SimplifyCFG speculation,
+inlining, if-conversion — is therefore made believing a divmul is free.
+
+Overriding `getArithmeticInstrCost` for s32 MUL/DIV/REM is the small,
+broad fix.  Report the real cost for `TCK_Latency` and
+`TCK_RecipThroughput` but leave `TCK_CodeSize` at 1: a `MUL` genuinely
+*is* one instruction, and inflating its code-size cost would push the
+unroller and inliner the wrong way on a core that already spends ~34%
+of fractal-demo cycles stalled on instruction fetch.
+
+`isIntDivCheap()` — the one hook that *is* set — remains correct, and
+should not be flipped when the cost model lands.  Magic-multiply
+division needs only the high half, so it is one `MULU_P`: the same
+divmul latency as the `DIVU` it would replace, plus fixup shifts.
+Modulo is worse, needing the divide plus a multiply-back and subtract.
+The divide side is a genuine wash because our multiply is exactly as
+slow as our divide; the asymmetry is entirely on the multiply side.
+
+## Compiler: constant multiplies below the 2^n +/- 1 cases hit the divmul unit
+
+Custom strength reduction in `PenumbraLegalizerInfo` covers `2^n` and
+`2^n +/- 1` (so `x*3`, `x*5` become shift+add) and falls through to a
+hardware `MUL` for everything else.  That cap is the right one for a
+target whose multiply costs a few cycles — which is what the rule was
+calibrated against, before the divmul unit existed — but here the
+budget for replacing a constant multiply is the unit's full latency:
+roughly 11 instructions even in a fetch-bound loop, more when fetch is
+warm.  We spend at most two.
+
+Missed cases are ordinary: `x*6`, `x*10`, `x*12`, `x*30`, `x*100` all
+emit `MUL` where three to five shift/add/sub instructions suffice.
+`x*320` is the one to note — a framebuffer row stride, so any
+`fb[y*320+x]` that LSR does not convert into an induction variable
+(`putpixel`, random-access blits) pays a full divmul stall per call.
+
+A greedy shift/add decomposition over the constant (canonical signed
+digit form handles the `-` cases like `30 = 32-2`) bounded at a few
+instructions would cover essentially every small constant in real code.
+Two traps for whoever picks this up: `TargetLowering::
+decomposeMulByConstant` looks like the intended hook and is implemented
+by RISC-V, X86, M68k, PowerPC, LoongArch, CSKY and Xtensa, but it is
+called only from `DAGCombiner` and is dead under GlobalISel; and GISel's
+own upstream coverage is just `mul_to_shl` (power-of-2), so there is no
+rule to enable.  The work belongs in the existing custom MUL
+legalization next to the `2^n +/- 1` cases, or in a post-legalizer
+combine.
+
+## Demos: mandelbrot's palette length forces a divide per cell
+
+`pixel_color()` indexes `palette[iter % PALETTE_LEN]` with
+`PALETTE_LEN` 30, so each cell pays two `DIVU` operations (foreground
+and background).  Padding the table to 32 entries turns the index into
+`and r1, 31`.  Negligible in the terminal renderer — the escape loop
+dwarfs it — but the cost scales with pixels rather than iterations, so
+it grows in relative terms on a framebuffer, where shallow escape
+counts are common.
