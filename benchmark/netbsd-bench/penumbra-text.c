@@ -42,6 +42,9 @@
 #include <termios.h>
 
 #include "perfctr.h"
+#include "dterm.h"
+
+static int g_stop;
 
 /* ── Heated-metal palette ───────────────────────────────────────────
  *
@@ -116,37 +119,8 @@ static void init_plasma_lut(void) {
 
 /* ── Precomputed ASCII decimals for 0..255 ──────────────────────────── */
 
-struct dec_str {
-    char    bytes[3];
-    uint8_t len;
-};
-static struct dec_str dec[256];
 
-static void init_dec(void) {
-    for (int v = 0; v < 256; v++) {
-        if (v >= 100) {
-            dec[v].bytes[0] = (char)('0' + v / 100);
-            dec[v].bytes[1] = (char)('0' + (v / 10) % 10);
-            dec[v].bytes[2] = (char)('0' + v % 10);
-            dec[v].len = 3;
-        } else if (v >= 10) {
-            dec[v].bytes[0] = (char)('0' + v / 10);
-            dec[v].bytes[1] = (char)('0' + v % 10);
-            dec[v].len = 2;
-        } else {
-            dec[v].bytes[0] = (char)('0' + v);
-            dec[v].len = 1;
-        }
-    }
-}
 
-static inline char *emit_dec(char *out, int n) {
-    const struct dec_str *d = &dec[n];
-    *out++ = d->bytes[0];
-    if (d->len >= 2) *out++ = d->bytes[1];
-    if (d->len >= 3) *out++ = d->bytes[2];
-    return out;
-}
 
 /* ── Measurement instrumentation ────────────────────────────────────── */
 
@@ -206,23 +180,9 @@ static void emit_cell_blocks(int col, int cell_row) {
     char buf[48];
     char *out = buf;
 
-    *out++ = '\033'; *out++ = '[';
-    out = emit_dec(out, cell_row + 1);
-    *out++ = ';';
-    out = emit_dec(out, col + 1);
-    *out++ = 'H';
+    out = dterm_at(out, cell_row + 1, col + 1);
 
-    *out++ = '\033'; *out++ = '[';
-    *out++ = '3'; *out++ = '8'; *out++ = ';';
-    *out++ = '5'; *out++ = ';';
-    out = emit_dec(out, fg);
-    *out++ = ';';
-    *out++ = '4'; *out++ = '8'; *out++ = ';';
-    *out++ = '5'; *out++ = ';';
-    out = emit_dec(out, bg);
-    *out++ = 'm';
-
-    *out++ = '\xe2'; *out++ = '\x96'; *out++ = '\x80';
+    out = dterm_pair(out, fg, bg);
 
     emit_bytes(buf, (size_t)(out - buf));
 }
@@ -255,11 +215,7 @@ static void emit_plasma_line(int t, int mode_is_blocks) {
     char *out = buf;
 
     /* Position cursor at the row's first column. */
-    *out++ = '\033'; *out++ = '[';
-    out = emit_dec(out, plasma_cell_row + 1);
-    *out++ = ';';
-    out = emit_dec(out, plasma_x0 + 1);
-    *out++ = 'H';
+    out = dterm_at(out, plasma_cell_row + 1, plasma_x0 + 1);
 
     if (mode_is_blocks) {
         int last_color = -1;
@@ -268,11 +224,7 @@ static void emit_plasma_line(int t, int mode_is_blocks) {
                   + sin_lut[(uint8_t)(x * 5 + t * 3)];
             int color = plasma_color_lut[v + 254];
             if (color != last_color) {
-                *out++ = '\033'; *out++ = '[';
-                *out++ = '4'; *out++ = '8'; *out++ = ';';
-                *out++ = '5'; *out++ = ';';
-                out = emit_dec(out, color);
-                *out++ = 'm';
+                out = dterm_bg(out, color);
                 last_color = color;
             }
             *out++ = ' ';   /* bg color shows through the space cell */
@@ -302,11 +254,7 @@ static void emit_cell_mono(int col, int cell_row) {
 
     char buf[16];
     char *out = buf;
-    *out++ = '\033'; *out++ = '[';
-    out = emit_dec(out, cell_row + 1);
-    *out++ = ';';
-    out = emit_dec(out, col + 1);
-    *out++ = 'H';
+    out = dterm_at(out, cell_row + 1, col + 1);
     *out++ = ramp[idx];
     emit_bytes(buf, (size_t)(out - buf));
 }
@@ -472,23 +420,11 @@ enum render_mode {
     MODE_BLOCKS,
 };
 
-static volatile sig_atomic_t stop_flag = 0;
 
-static void sigint_handler(int sig) {
-    (void)sig;
-    stop_flag = 1;
-}
 
-static void cursor_hide(void)   { fputs("\033[?25l", stdout); }
-static void cursor_show(void)   { fputs("\033[?25h", stdout); }
 /* Reset SGR before clear so erase doesn't fill with a stale bright bg
  * (see reset_screen() for the full explanation). */
-static void clear_screen(void)  { fputs("\033[0m\033[2J\033[H", stdout); }
-static void reset_sgr(void)     { fputs("\033[0m", stdout); }
 
-static int looks_like_int(const char *s) {
-    return s && s[0] >= '0' && s[0] <= '9';
-}
 
 static uint64_t now_ns(void) {
     struct timespec ts;
@@ -505,7 +441,14 @@ int main(int argc, char **argv) {
     int width    = 78;
     int height   = 39;
     int frames   = 0;
-    enum render_mode mode = isatty(fileno(stdout)) ? MODE_BLOCKS : MODE_MONO;
+    enum render_mode mode;
+
+    /* The picture is redrawn in place, so only the banner and its hint
+     * are kept back; the summary at exit may scroll. */
+    dterm_init(&width, &height, 2, 0);
+
+    /* Colour when something is watching, ASCII when piped. */
+    mode = isatty(fileno(stdout)) ? MODE_BLOCKS : MODE_MONO;
 
     int argi = 1;
     while (argi < argc) {
@@ -524,7 +467,7 @@ int main(int argc, char **argv) {
             break;
         }
     }
-    if (argi < argc && !looks_like_int(argv[argi])) {
+    if (argi < argc && !dterm_looks_like_int(argv[argi])) {
         fprintf(stderr, "%s: unexpected arg '%s'\n", argv[0], argv[argi]);
         return 2;
     }
@@ -539,8 +482,6 @@ int main(int argc, char **argv) {
                 argv[0]);
         return 2;
     }
-
-    init_dec();
     init_sin_lut();
     init_plasma_lut();
 
@@ -556,8 +497,7 @@ int main(int argc, char **argv) {
 
     build_text_pixels(width, g_pixel_rows);
 
-    struct sigaction sa = { .sa_handler = sigint_handler };
-    sigaction(SIGINT, &sa, NULL);
+    dterm_catch_interrupt();
 
     int kbd_active = isatty(STDIN_FILENO);
     struct termios orig_tio;
@@ -575,7 +515,7 @@ int main(int argc, char **argv) {
 
     printf("Penumbra Text Screensaver: %dx%d cells (%dx%d samples), %s%s\n",
            width, height, width, g_pixel_rows,
-           mode == MODE_BLOCKS ? "half-block + 256-color" : "mono ASCII",
+           dterm_mode_name(mode == MODE_BLOCKS),
            g_do_write ? "" : ", NODRAW");
     if (kbd_active) {
         printf("  (press any key or Ctrl-C to stop)\n");
@@ -583,8 +523,8 @@ int main(int argc, char **argv) {
     fflush(stdout);
 
     if (g_do_write) {
-        cursor_hide();
-        clear_screen();
+        dterm_cursor(0);
+        dterm_clear();
         fflush(stdout);
     }
 
@@ -596,7 +536,7 @@ int main(int argc, char **argv) {
     uint64_t t_start = now_ns();
     perf_demo_track();          /* snapshot perfctrs; dump breakdown at exit */
     uint64_t rendered = 0;
-    while (!stop_flag && (frames == 0 || (int)rendered < frames)) {
+    while (!g_stop && (frames == 0 || (int)rendered < frames)) {
         /* Reset dirty tracking for this frame. */
         for (int i = 0; i < dirty_count; i++) {
             int cell_idx = dirty[i].col * g_cell_rows + dirty[i].row;
@@ -624,14 +564,14 @@ int main(int argc, char **argv) {
 
         if (kbd_active) {
             char c;
-            if (read(STDIN_FILENO, &c, 1) > 0) stop_flag = 1;
+            if (read(STDIN_FILENO, &c, 1) > 0) g_stop = 1;
         }
     }
     uint64_t t_end = now_ns();
 
     if (g_do_write) {
-        reset_sgr();
-        cursor_show();
+        dterm_end();
+        dterm_cursor(1);
         fflush(stdout);
     }
     if (kbd_active) {

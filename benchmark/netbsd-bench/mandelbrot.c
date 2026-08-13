@@ -52,6 +52,7 @@
 #include <unistd.h>     /* isatty() for color auto-detect */
 
 #include "perfctr.h"
+#include "dterm.h"
 
 /* ── Q4.28 fixed-point helpers ───────────────────────────────────────── */
 
@@ -277,9 +278,7 @@ static void render_blocks(const struct preset *p, int width, int height,
     const int pixel_rows = 2 * height;
     const struct viewport v = make_viewport(p, width, height, pixel_rows);
 
-    /* Each cell worst case: `\033[38;5;NNN;48;5;MMMm` (22 B) + U+2580
-     * in UTF-8 (3 B) = 25 B.  Plus reset + newline.  width*32+16 is
-     * comfortable. */
+    /* Worst case per cell: two SGR sequences plus U+2580 in UTF-8. */
     char *line = malloc((size_t)width * 32 + 16);
     if (!line) { perror("malloc"); exit(1); }
 
@@ -299,13 +298,11 @@ static void render_blocks(const struct preset *p, int width, int height,
             /* RLE on the fg/bg pair: flat regions of the same iter
              * band cost one combined escape, not one per cell. */
             if (fg != last_fg || bg != last_bg) {
-                out += sprintf(out, "\033[38;5;%u;48;5;%um",
-                               (unsigned)fg, (unsigned)bg);
+                out = dterm_pair_color(out, fg, bg);
                 last_fg = fg;
                 last_bg = bg;
             }
-            /* U+2580 UPPER HALF BLOCK, UTF-8: E2 96 80 */
-            *out++ = '\xe2'; *out++ = '\x96'; *out++ = '\x80';
+            out = dterm_pair_glyph(out);
         }
         /* Reset attributes — so the next row doesn't inherit, and
          * the prompt after the picture starts uncolored. */
@@ -340,18 +337,20 @@ static uint64_t now_ns(void) {
 /* Detect whether argv[1] is a preset name vs a positional integer.
  * Width is always a positive integer, so any non-digit first character
  * means "this is a preset name". */
-static int looks_like_int(const char *s) {
-    return s && s[0] >= '0' && s[0] <= '9';
-}
 
 int main(int argc, char **argv) {
     const char *preset_name = "full";
     int width    = 78;
     int height   = 39;     /* odd: middle row lands on y=cy (clean spike) */
     int max_iter = -1;     /* -1 => use the preset's own default */
-    /* Default: rich (blocks + color) when stdout is a terminal,
-     * pure ASCII when piped — standard Unix isatty convention. */
-    enum render_mode mode = isatty(fileno(stdout)) ? MODE_BLOCKS : MODE_MONO;
+    enum render_mode mode;
+
+    /* Seven rows go to the header, the blanks around the picture, the
+     * timing line and the three-line counter report at exit. */
+    dterm_init(&width, &height, 2, 5);
+
+    /* Colour when something is watching, ASCII when piped. */
+    mode = isatty(fileno(stdout)) ? MODE_BLOCKS : MODE_MONO;
 
     int argi = 1;
     /* Optional render-mode flags anywhere in the leading args.
@@ -376,7 +375,7 @@ int main(int argc, char **argv) {
         list_presets();
         return 0;
     }
-    if (argi < argc && !looks_like_int(argv[argi])) {
+    if (argi < argc && !dterm_looks_like_int(argv[argi])) {
         preset_name = argv[argi++];
     }
     if (argi < argc) width    = atoi(argv[argi++]);
@@ -404,13 +403,10 @@ int main(int argc, char **argv) {
     /* In blocks mode each cell holds two stacked pixels, so the
      * sample count (= mandel_iter calls) is W*2H, not W*H. */
     const int pixel_rows  = (mode == MODE_BLOCKS) ? 2 * height : height;
-    const char *mode_desc = (mode == MODE_BLOCKS)
-                          ? "half-block + 256-color"
-                          : "monochrome ASCII";
+    const char *mode_desc = dterm_mode_name(mode == MODE_BLOCKS);
 
-    printf("Penumbra Mandelbrot: %s (%s)\n", p->name, p->desc);
-    printf("  %dx%d cells (%dx%d samples), max_iter=%d, Q4.28, %s\n\n",
-           width, height, width, pixel_rows, max_iter, mode_desc);
+    printf("Mandelbrot %s  %dx%d cells (%dx%d samples)  iter=%d  Q4.28  %s\n\n",
+           p->name, width, height, width, pixel_rows, max_iter, mode_desc);
     fflush(stdout);
 
     uint64_t t0 = now_ns();

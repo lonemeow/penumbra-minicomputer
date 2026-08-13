@@ -39,6 +39,8 @@ CFLAGS      := --target=$(TARGET) --sysroot=$(DESTDIR) $(COPT) \
                -I$(dir $(lastword $(MAKEFILE_LIST)))
 
 LDFLAGS_DYN := --target=$(TARGET) --sysroot=$(DESTDIR)
+# dterm.c asks terminfo what the terminal can do.
+DEMO_LIBS   := -lterminfo
 LDFLAGS_STA := --target=$(TARGET) --sysroot=$(DESTDIR) -static
 
 BUILDDIR    := $(PROJROOT)/build/netbsd-bench
@@ -62,22 +64,22 @@ PBENCH_OBJS := $(PBENCH_SRCS:%.c=$(OBJDIR)/%.o)
 # part of pbench's registry) — they print fixed-point fractals to
 # stdout, doubling as ALU benchmarks and as visual demos.
 MANDEL_SRCS := mandelbrot.c
-MANDEL_OBJS := $(MANDEL_SRCS:%.c=$(OBJDIR)/%.o) $(OBJDIR)/perfctr.o
+MANDEL_OBJS := $(MANDEL_SRCS:%.c=$(OBJDIR)/%.o) $(OBJDIR)/perfctr.o $(OBJDIR)/dterm.o
 
 JULIA_SRCS  := julia.c
-JULIA_OBJS  := $(JULIA_SRCS:%.c=$(OBJDIR)/%.o) $(OBJDIR)/perfctr.o
+JULIA_OBJS  := $(JULIA_SRCS:%.c=$(OBJDIR)/%.o) $(OBJDIR)/perfctr.o $(OBJDIR)/dterm.o
 
 PLASMA_SRCS := plasma.c
-PLASMA_OBJS := $(PLASMA_SRCS:%.c=$(OBJDIR)/%.o) $(OBJDIR)/perfctr.o
+PLASMA_OBJS := $(PLASMA_SRCS:%.c=$(OBJDIR)/%.o) $(OBJDIR)/perfctr.o $(OBJDIR)/dterm.o
 
 LORENZ_SRCS := lorenz.c
-LORENZ_OBJS := $(LORENZ_SRCS:%.c=$(OBJDIR)/%.o) $(OBJDIR)/perfctr.o
+LORENZ_OBJS := $(LORENZ_SRCS:%.c=$(OBJDIR)/%.o) $(OBJDIR)/perfctr.o $(OBJDIR)/dterm.o
 
 SHADEBOBS_SRCS := shadebobs.c
-SHADEBOBS_OBJS := $(SHADEBOBS_SRCS:%.c=$(OBJDIR)/%.o) $(OBJDIR)/perfctr.o
+SHADEBOBS_OBJS := $(SHADEBOBS_SRCS:%.c=$(OBJDIR)/%.o) $(OBJDIR)/perfctr.o $(OBJDIR)/dterm.o
 
 PTEXT_SRCS := penumbra-text.c
-PTEXT_OBJS := $(PTEXT_SRCS:%.c=$(OBJDIR)/%.o) $(OBJDIR)/perfctr.o
+PTEXT_OBJS := $(PTEXT_SRCS:%.c=$(OBJDIR)/%.o) $(OBJDIR)/perfctr.o $(OBJDIR)/dterm.o
 
 # ── Targets ───────────────────────────────────────────────────
 
@@ -111,44 +113,44 @@ $(BUILDDIR)/pbench-static: $(PBENCH_OBJS) | $(BUILDDIR)
 	$(CC) $(LDFLAGS_STA) $(PBENCH_OBJS) -o $@
 
 $(BUILDDIR)/mandelbrot: $(MANDEL_OBJS) | $(BUILDDIR)
-	$(CC) $(LDFLAGS_DYN) $(MANDEL_OBJS) -o $@
+	$(CC) $(LDFLAGS_DYN) $(MANDEL_OBJS) $(DEMO_LIBS) -o $@
 
 $(BUILDDIR)/mandelbrot-static: $(MANDEL_OBJS) | $(BUILDDIR)
-	$(CC) $(LDFLAGS_STA) $(MANDEL_OBJS) -o $@
+	$(CC) $(LDFLAGS_STA) $(MANDEL_OBJS) $(DEMO_LIBS) -o $@
 
 $(BUILDDIR)/julia: $(JULIA_OBJS) | $(BUILDDIR)
-	$(CC) $(LDFLAGS_DYN) $(JULIA_OBJS) -o $@
+	$(CC) $(LDFLAGS_DYN) $(JULIA_OBJS) $(DEMO_LIBS) -o $@
 
 $(BUILDDIR)/julia-static: $(JULIA_OBJS) | $(BUILDDIR)
-	$(CC) $(LDFLAGS_STA) $(JULIA_OBJS) -o $@
+	$(CC) $(LDFLAGS_STA) $(JULIA_OBJS) $(DEMO_LIBS) -o $@
 
 # plasma needs libm (sin() at startup to build the lookup table).
 $(BUILDDIR)/plasma: $(PLASMA_OBJS) | $(BUILDDIR)
-	$(CC) $(LDFLAGS_DYN) $(PLASMA_OBJS) -lm -o $@
+	$(CC) $(LDFLAGS_DYN) $(PLASMA_OBJS) -lm $(DEMO_LIBS) -o $@
 
 $(BUILDDIR)/plasma-static: $(PLASMA_OBJS) | $(BUILDDIR)
-	$(CC) $(LDFLAGS_STA) $(PLASMA_OBJS) -lm -o $@
+	$(CC) $(LDFLAGS_STA) $(PLASMA_OBJS) -lm $(DEMO_LIBS) -o $@
 
 $(BUILDDIR)/lorenz: $(LORENZ_OBJS) | $(BUILDDIR)
-	$(CC) $(LDFLAGS_DYN) $(LORENZ_OBJS) -o $@
+	$(CC) $(LDFLAGS_DYN) $(LORENZ_OBJS) $(DEMO_LIBS) -o $@
 
 $(BUILDDIR)/lorenz-static: $(LORENZ_OBJS) | $(BUILDDIR)
-	$(CC) $(LDFLAGS_STA) $(LORENZ_OBJS) -o $@
+	$(CC) $(LDFLAGS_STA) $(LORENZ_OBJS) $(DEMO_LIBS) -o $@
 
 # shadebobs needs libm (sin() at startup to build the lookup table).
 $(BUILDDIR)/shadebobs: $(SHADEBOBS_OBJS) | $(BUILDDIR)
-	$(CC) $(LDFLAGS_DYN) $(SHADEBOBS_OBJS) -lm -o $@
+	$(CC) $(LDFLAGS_DYN) $(SHADEBOBS_OBJS) -lm $(DEMO_LIBS) -o $@
 
 $(BUILDDIR)/shadebobs-static: $(SHADEBOBS_OBJS) | $(BUILDDIR)
-	$(CC) $(LDFLAGS_STA) $(SHADEBOBS_OBJS) -lm -o $@
+	$(CC) $(LDFLAGS_STA) $(SHADEBOBS_OBJS) -lm $(DEMO_LIBS) -o $@
 
 # penumbra-text needs libm (sin() at startup to build the lookup table
 # used by the 1D plasma underline).
 $(BUILDDIR)/penumbra-text: $(PTEXT_OBJS) | $(BUILDDIR)
-	$(CC) $(LDFLAGS_DYN) $(PTEXT_OBJS) -lm -o $@
+	$(CC) $(LDFLAGS_DYN) $(PTEXT_OBJS) -lm $(DEMO_LIBS) -o $@
 
 $(BUILDDIR)/penumbra-text-static: $(PTEXT_OBJS) | $(BUILDDIR)
-	$(CC) $(LDFLAGS_STA) $(PTEXT_OBJS) -lm -o $@
+	$(CC) $(LDFLAGS_STA) $(PTEXT_OBJS) -lm $(DEMO_LIBS) -o $@
 
 clean:
 	rm -rf $(BUILDDIR)

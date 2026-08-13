@@ -33,6 +33,7 @@
 #include <unistd.h>
 
 #include "perfctr.h"
+#include "dterm.h"
 
 /* ── Q4.28 fixed-point helpers (mirrored from mandelbrot.c) ─────────── */
 
@@ -220,12 +221,11 @@ static void render_blocks(const struct preset *p, int width, int height,
             int bg = pixel_color(it_bot, max_iter);
 
             if (fg != last_fg || bg != last_bg) {
-                out += sprintf(out, "\033[38;5;%u;48;5;%um",
-                               (unsigned)fg, (unsigned)bg);
+                out = dterm_pair_color(out, fg, bg);
                 last_fg = fg;
                 last_bg = bg;
             }
-            *out++ = '\xe2'; *out++ = '\x96'; *out++ = '\x80';
+            out = dterm_pair_glyph(out);
         }
         *out++ = '\033'; *out++ = '['; *out++ = '0'; *out++ = 'm';
         *out++ = '\n';
@@ -252,16 +252,20 @@ static uint64_t now_ns(void) {
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
-static int looks_like_int(const char *s) {
-    return s && s[0] >= '0' && s[0] <= '9';
-}
 
 int main(int argc, char **argv) {
     const char *preset_name = "rabbit";    /* most iconic default */
     int width    = 78;
     int height   = 39;
     int max_iter = -1;
-    enum render_mode mode = isatty(fileno(stdout)) ? MODE_BLOCKS : MODE_MONO;
+    enum render_mode mode;
+
+    /* Seven rows go to the header, the blanks around the picture, the
+     * timing line and the three-line counter report at exit. */
+    dterm_init(&width, &height, 2, 5);
+
+    /* Colour when something is watching, ASCII when piped. */
+    mode = isatty(fileno(stdout)) ? MODE_BLOCKS : MODE_MONO;
 
     int argi = 1;
     while (argi < argc) {
@@ -281,7 +285,7 @@ int main(int argc, char **argv) {
         list_presets();
         return 0;
     }
-    if (argi < argc && !looks_like_int(argv[argi])) {
+    if (argi < argc && !dterm_looks_like_int(argv[argi])) {
         preset_name = argv[argi++];
     }
     if (argi < argc) width    = atoi(argv[argi++]);
@@ -307,13 +311,10 @@ int main(int argc, char **argv) {
     }
 
     const int pixel_rows  = (mode == MODE_BLOCKS) ? 2 * height : height;
-    const char *mode_desc = (mode == MODE_BLOCKS)
-                          ? "half-block + 256-color"
-                          : "monochrome ASCII";
+    const char *mode_desc = dterm_mode_name(mode == MODE_BLOCKS);
 
-    printf("Penumbra Julia: %s (%s)\n", p->name, p->desc);
-    printf("  %dx%d cells (%dx%d samples), max_iter=%d, Q4.28, %s\n\n",
-           width, height, width, pixel_rows, max_iter, mode_desc);
+    printf("Julia %s  %dx%d cells (%dx%d samples)  iter=%d  Q4.28  %s\n\n",
+           p->name, width, height, width, pixel_rows, max_iter, mode_desc);
     fflush(stdout);
 
     uint64_t t0 = now_ns();

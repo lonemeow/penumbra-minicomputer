@@ -45,6 +45,8 @@
 #include <termios.h>     /* non-canonical stdin for exit-on-keypress */
 
 #include "perfctr.h"
+#include "dterm.h"
+
 
 /* ── Sin lookup table ────────────────────────────────────────────────
  *
@@ -159,6 +161,7 @@ static int plasma_field(int x, int y, int t) {
  * exactly as normal, but skip the final fputs() that pushes bytes to
  * stdio (and hence to the kernel and the UART).  This isolates pure
  * compute time from the full write path. */
+static int g_stop;
 static int g_do_write = 1;
 
 /* Running total of bytes the renderers *would have* written.  Counted
@@ -171,65 +174,6 @@ static uint64_t g_bytes_rendered = 0;
 
 static const char ramp[] = " .:-=+*#%@";
 #define RAMP_LEN  (sizeof(ramp) - 1)
-
-/* Precomputed ASCII decimal of each xterm 256-color index, so the
- * hot path can emit `\033[38;5;NNN;48;5;NNNm` without going through
- * sprintf (and its hidden __divsi3 calls per %u conversion).  Built
- * once at startup. */
-struct color_dec {
-    char    bytes[3];
-    uint8_t len;
-};
-static struct color_dec color_dec[256];
-
-static void init_color_dec(void) {
-    for (int c = 0; c < 256; c++) {
-        if (c >= 100) {
-            color_dec[c].bytes[0] = (char)('0' + c / 100);
-            color_dec[c].bytes[1] = (char)('0' + (c / 10) % 10);
-            color_dec[c].bytes[2] = (char)('0' + c % 10);
-            color_dec[c].len = 3;
-        } else if (c >= 10) {
-            color_dec[c].bytes[0] = (char)('0' + c / 10);
-            color_dec[c].bytes[1] = (char)('0' + c % 10);
-            color_dec[c].len = 2;
-        } else {
-            color_dec[c].bytes[0] = (char)('0' + c);
-            color_dec[c].len = 1;
-        }
-    }
-}
-
-/* Hand-rolled `\033[38;5;FFF;48;5;BBBm` emitter.  Byte-stores only;
- * decimals come from the precomputed table.  Returns the advanced
- * write pointer. */
-static inline char *emit_fg_bg(char *out, int fg, int bg) {
-    const struct color_dec *fd = &color_dec[fg];
-    const struct color_dec *bd = &color_dec[bg];
-
-    /* "\033[38;5;" — 7 bytes */
-    *out++ = '\033'; *out++ = '[';
-    *out++ = '3';    *out++ = '8'; *out++ = ';';
-    *out++ = '5';    *out++ = ';';
-
-    /* fg decimal: always at least 1 byte, up to 3 */
-    *out++ = fd->bytes[0];
-    if (fd->len >= 2) *out++ = fd->bytes[1];
-    if (fd->len >= 3) *out++ = fd->bytes[2];
-
-    /* ";48;5;" — 6 bytes */
-    *out++ = ';';
-    *out++ = '4'; *out++ = '8'; *out++ = ';';
-    *out++ = '5'; *out++ = ';';
-
-    /* bg decimal */
-    *out++ = bd->bytes[0];
-    if (bd->len >= 2) *out++ = bd->bytes[1];
-    if (bd->len >= 3) *out++ = bd->bytes[2];
-
-    *out++ = 'm';
-    return out;
-}
 
 /* Map a plasma field value to a palette index by mod-wrap.  Negative
  * values are handled by adding a big multiple of len before mod, so
@@ -276,11 +220,11 @@ static void render_blocks(int width, int height, int t,
             int fg = pal->table[field_to_idx(v_top, pal->len)];
             int bg = pal->table[field_to_idx(v_bot, pal->len)];
             if (fg != last_fg || bg != last_bg) {
-                out = emit_fg_bg(out, fg, bg);
+                out = dterm_pair_color(out, fg, bg);
                 last_fg = fg;
                 last_bg = bg;
             }
-            *out++ = '\xe2'; *out++ = '\x96'; *out++ = '\x80';
+            out = dterm_pair_glyph(out);
         }
         *out++ = '\033'; *out++ = '['; *out++ = '0'; *out++ = 'm';
         *out++ = '\n';
@@ -293,22 +237,9 @@ static void render_blocks(int width, int height, int t,
 
 /* ── Terminal control + frame loop ──────────────────────────────────── */
 
-static volatile sig_atomic_t stop_flag = 0;
 
-static void sigint_handler(int sig) {
-    (void)sig;
-    stop_flag = 1;
-}
 
-static void cursor_hide(void)   { fputs("\033[?25l", stdout); }
-static void cursor_show(void)   { fputs("\033[?25h", stdout); }
-static void clear_screen(void)  { fputs("\033[2J",   stdout); }
-static void cursor_home(void)   { fputs("\033[H",    stdout); }
-static void reset_sgr(void)     { fputs("\033[0m",   stdout); }
 
-static int looks_like_int(const char *s) {
-    return s && s[0] >= '0' && s[0] <= '9';
-}
 
 static uint64_t now_ns(void) {
     struct timespec ts;
@@ -324,7 +255,14 @@ int main(int argc, char **argv) {
     int width    = 78;
     int height   = 39;
     int frames   = 0;        /* 0 = run forever until SIGINT */
-    enum render_mode mode = isatty(fileno(stdout)) ? MODE_BLOCKS : MODE_MONO;
+    enum render_mode mode;
+
+    /* The picture is redrawn in place, so only the banner and its hint
+     * are kept back; the summary at exit may scroll. */
+    dterm_init(&width, &height, 2, 0);
+
+    /* Colour when something is watching, ASCII when piped. */
+    mode = isatty(fileno(stdout)) ? MODE_BLOCKS : MODE_MONO;
 
     int argi = 1;
     while (argi < argc) {
@@ -347,7 +285,7 @@ int main(int argc, char **argv) {
         list_palettes();
         return 0;
     }
-    if (argi < argc && !looks_like_int(argv[argi])) {
+    if (argi < argc && !dterm_looks_like_int(argv[argi])) {
         palette_name = argv[argi++];
     }
     if (argi < argc) frames = atoi(argv[argi++]);
@@ -370,15 +308,10 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    /* Build the sin table and per-color ASCII decimals; both are
-     * one-time costs amortized across the whole run. */
+    /* One-time cost, amortized across the whole run. */
     init_sin_lut();
-    init_color_dec();
 
-    /* Trap SIGINT so Ctrl-C exits cleanly with the cursor and colors
-     * restored, rather than leaving the terminal in a weird state. */
-    struct sigaction sa = { .sa_handler = sigint_handler };
-    sigaction(SIGINT, &sa, NULL);
+    dterm_catch_interrupt();
 
     /* Put stdin into non-canonical, no-echo mode with VMIN=VTIME=0 so
      * a per-frame read() returns immediately with whatever's queued
@@ -403,7 +336,7 @@ int main(int argc, char **argv) {
      * which is the right behavior: a clean canvas. */
     printf("Penumbra Plasma: palette=%s, %dx%d, mode=%s, frames=%s%s\n",
            pal->name, width, height,
-           mode == MODE_BLOCKS ? "half-block + 256-color" : "mono ASCII",
+           dterm_mode_name(mode == MODE_BLOCKS),
            frames == 0 ? "infinite" : "limited",
            g_do_write ? "" : ", NODRAW (compute only)");
     if (kbd_active) {
@@ -412,16 +345,16 @@ int main(int argc, char **argv) {
     fflush(stdout);
 
     if (g_do_write) {
-        cursor_hide();
-        clear_screen();
+        dterm_cursor(0);
+        dterm_clear();
     }
 
     uint64_t t_start = now_ns();
     perf_demo_track();          /* snapshot perfctrs; dump breakdown at exit */
     int t = 0;
     uint64_t rendered = 0;
-    while (!stop_flag && (frames == 0 || (int)rendered < frames)) {
-        if (g_do_write) cursor_home();
+    while (!g_stop && !dterm_interrupted() && (frames == 0 || (int)rendered < frames)) {
+        if (g_do_write) dterm_home();
         if (mode == MODE_BLOCKS) render_blocks(width, height, t, pal);
         else                     render_mono(width, height, t);
         if (g_do_write) fflush(stdout);
@@ -433,7 +366,7 @@ int main(int argc, char **argv) {
          * "nothing to read" and we just keep rendering. */
         if (kbd_active) {
             char c;
-            if (read(STDIN_FILENO, &c, 1) > 0) stop_flag = 1;
+            if (read(STDIN_FILENO, &c, 1) > 0) g_stop = 1;
         }
     }
     uint64_t t_end = now_ns();
@@ -443,8 +376,8 @@ int main(int argc, char **argv) {
      * in, which would be the middle of the picture.  In nodraw mode
      * we never touched the screen, so no restore is needed there. */
     if (g_do_write) {
-        reset_sgr();
-        cursor_show();
+        dterm_end();
+        dterm_cursor(1);
         fflush(stdout);
     }
     if (kbd_active) {
