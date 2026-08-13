@@ -315,6 +315,9 @@ MODULE_TESTS = \
     video_chain_test \
     video_font_rom \
     video_cell_ram \
+    video_fb_ram \
+    video_fb_palette \
+    video_fbgen \
     video_textgen \
     video_text_chain \
     video_display \
