@@ -935,6 +935,9 @@ module ulx3s_penumbra1_top (
     // clear, so the screen stays black until the boot ROM draws it —
     // a reset never shows stale cell memory.
     logic [31:0] disp_dev_addr, disp_dev_wdata;
+    // The pixel aperture commits individual lanes, so the display is
+    // the one autoconfig device here that consumes byte enables.
+    logic [3:0]  disp_dev_byte_en;
     logic        disp_dev_we, disp_dev_re;
     logic [31:0] disp_dev_rdata;
     logic        disp_dev_busy;
@@ -948,7 +951,7 @@ module ulx3s_penumbra1_top (
 
     autoconfig_dev #(
         .DEV_CLASS (ACFG_CLASS_DISPLAY),
-        .DEV_SIZE  (32'd16384),
+        .DEV_SIZE  (32'd262144),
         .DEV_ID    (32'd0),
         .DEV_NAME0 (32'h50534944),    // "DISP" packed LE
         .DEV_NAME1 (32'h0059414C)     // "LAY\0"
@@ -969,7 +972,7 @@ module ulx3s_penumbra1_top (
         .o_sel       (ac_disp_sel),
         .o_dev_addr  (disp_dev_addr),
         .o_dev_wdata (disp_dev_wdata),
-        .o_dev_byte_en (),
+        .o_dev_byte_en (disp_dev_byte_en),
         .o_dev_we    (disp_dev_we),
         .o_dev_re    (disp_dev_re),
         .i_dev_rdata (disp_dev_rdata),
@@ -979,19 +982,20 @@ module ulx3s_penumbra1_top (
     logic [3:0] gpdi_lane_d0, gpdi_lane_d1;
 
     video_display u_display (
-        .i_clk   (clk),
-        .i_rst   (rst),
-        .i_addr  (disp_dev_addr),
-        .i_wdata (disp_dev_wdata),
-        .i_we    (disp_dev_we),
-        .i_re    (disp_dev_re),
-        .o_rdata (disp_dev_rdata),
-        .o_busy  (disp_dev_busy),
-        .i_pclk  (clk_video_pixel),
-        .i_sclk  (clk_video_serial),
-        .i_vrst  (rst_video_q),
-        .o_d0    (gpdi_lane_d0),
-        .o_d1    (gpdi_lane_d1)
+        .i_clk     (clk),
+        .i_rst     (rst),
+        .i_addr    (disp_dev_addr),
+        .i_wdata   (disp_dev_wdata),
+        .i_byte_en (disp_dev_byte_en),
+        .i_we      (disp_dev_we),
+        .i_re      (disp_dev_re),
+        .o_rdata   (disp_dev_rdata),
+        .o_busy    (disp_dev_busy),
+        .i_pclk    (clk_video_pixel),
+        .i_sclk    (clk_video_serial),
+        .i_vrst    (rst_video_q),
+        .o_d0      (gpdi_lane_d0),
+        .o_d1      (gpdi_lane_d1)
     );
 
     // GPDI pads: one ODDRX1F per lane, the toggling register in the

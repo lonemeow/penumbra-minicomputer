@@ -36,9 +36,15 @@ static int errors = 0, checks = 0;
 // ── Contract constants ─────────────────────────────────────────────
 static constexpr uint32_t REG_CAP = 0x000, REG_INFO = 0x004;
 static constexpr uint32_t REG_CTRL = 0x008, REG_CURSOR = 0x00C;
+static constexpr uint32_t REG_FB_GEOM = 0x01C, REG_FB_FORMAT = 0x020;
 static constexpr uint32_t CELLS = 0x1000;
-static constexpr uint32_t CAP_EXPECT  = (1u << 16) | (1u << 10) | (1u << 8) | 1u;
+static constexpr uint32_t FB_PALETTE = 0x10000, FB = 0x20000;
+static constexpr uint32_t CAP_EXPECT  =
+    (1u << 16) | (1u << 13) | (1u << 10) | (1u << 8) | 1u;
 static constexpr uint32_t INFO_EXPECT = (30u << 16) | 80u;
+static constexpr uint32_t FB_GEOM_EXPECT = (240u << 16) | 320u;
+static constexpr uint32_t FB_FORMAT_EXPECT = 8u;
+static constexpr int FB_W = 320;
 
 static constexpr int H_ACTIVE = 640, H_FRONT = 16, H_SYNC = 96;
 static constexpr int V_ACTIVE = 480, V_FRONT = 10, V_SYNC = 2, V_BACK = 33;
@@ -72,11 +78,13 @@ static uint32_t bus_read(uint32_t off) {
     return v;
 }
 
-static void bus_write(uint32_t off, uint32_t val) {
-    dut->i_addr = off; dut->i_wdata = val; dut->i_we = 1; dut->eval();
+static void bus_write(uint32_t off, uint32_t val, int byte_en = 0xF) {
+    dut->i_addr = off; dut->i_wdata = val;
+    dut->i_byte_en = byte_en; dut->i_we = 1; dut->eval();
     CHECK(!dut->o_busy, "write 0x%03x: writes must not stall", off);
     tick_cpu();
     dut->i_we = 0;
+    dut->i_byte_en = 0xF;
     tick_cpu();
 }
 
@@ -195,7 +203,7 @@ int main() {
     // Reset both domains (two cycles each, testbench convention).
     dut->i_rst = 1; dut->i_vrst = 1;
     dut->i_clk = 0; dut->i_pclk = 0; dut->i_sclk = 0;
-    dut->i_we = 0; dut->i_re = 0; dut->eval();
+    dut->i_we = 0; dut->i_re = 0; dut->i_byte_en = 0xF; dut->eval();
     tick_cpu(); tick_cpu();
     for (int c = 0; c < 12; c++) {
         int ph = c % 5;
@@ -212,15 +220,40 @@ int main() {
     CHECK(bus_read(REG_CTRL) == 0x0,
           "CTRL reset: got %08x, want 0 (blanked until software draws)",
           bus_read(REG_CTRL));
-    CHECK(bus_read(0x010) == 0 && bus_read(0x01C) == 0 && bus_read(0x020) == 0,
-          "absent option slots must read 0");
+    CHECK(bus_read(0x010) == 0, "absent MODE_SEL must read 0");
+    CHECK(bus_read(REG_FB_GEOM) == FB_GEOM_EXPECT, "FB_GEOM: got %08x, want %08x",
+          bus_read(REG_FB_GEOM), FB_GEOM_EXPECT);
+    CHECK(bus_read(REG_FB_FORMAT) == FB_FORMAT_EXPECT,
+          "FB_FORMAT: got %08x, want %08x",
+          bus_read(REG_FB_FORMAT), FB_FORMAT_EXPECT);
 
     bus_write(REG_CURSOR, 0xDEADBEEF);
     CHECK(bus_read(REG_CURSOR) == 0xDEADBEEF, "CURSOR readback unfaithful");
     bus_write(REG_CURSOR, 0);
 
     bus_write(REG_CTRL, 0xFFFFFFFF);
-    CHECK(bus_read(REG_CTRL) == 0x3, "CTRL: unimplemented bits must read 0");
+    CHECK(bus_read(REG_CTRL) == 0x13,
+          "CTRL: implemented bits are ENABLE/CURSOR_EN/FB_SEL, got %08x",
+          bus_read(REG_CTRL));
+    bus_write(REG_CTRL, 0x0);
+
+    // ── Framebuffer apertures, bus side ─────────────────────────
+    // The palette is word-strided and keeps a 24-bit color; the pixel
+    // aperture is plain memory and honors byte lanes.
+    bus_write(FB_PALETTE + 5 * 4, 0xFF123456);
+    CHECK(bus_read(FB_PALETTE + 5 * 4) == 0x123456,
+          "FB_PALETTE slot 5: got %08x, want 00123456",
+          bus_read(FB_PALETTE + 5 * 4));
+
+    bus_write(FB + 64, 0xDDCCBBAA);
+    CHECK(bus_read(FB + 64) == 0xDDCCBBAA, "FB word readback: got %08x",
+          bus_read(FB + 64));
+    bus_write(FB + 64, 0x11223344, 0x2);        // lane 1 only
+    CHECK(bus_read(FB + 64) == 0xDDCC33AA,
+          "FB byte lane: got %08x, want ddcc33aa", bus_read(FB + 64));
+    bus_write(FB + 64, 0xFFFFFFFF, 0x0);        // no lanes: nothing moves
+    CHECK(bus_read(FB + 64) == 0xDDCC33AA,
+          "FB empty byte_en: got %08x, want ddcc33aa", bus_read(FB + 64));
     bus_write(REG_CTRL, 0x1);   // enable the picture for the glass tests
 
     // Cells: write/readback through the aperture, zero upper half.
@@ -271,6 +304,43 @@ int main() {
         // The 'A' cell is not the cursor cell and renders normally.
         uint8_t row = font[0x41 * 16 + 8];
         check_pixel(d3, 0, 8, ((row >> 7) & 1) ? CGA[7] : CGA[0]);
+    }
+
+    // ── Glass side 4: FB_SEL puts the framebuffer on screen ─────
+    // Four pixels in the first word and one on the next framebuffer
+    // line, so the check covers both axes of the doubling.
+    static const uint32_t FBPAL[5] = {
+        0x000000, 0xFF0000, 0x00FF00, 0x0000FF, 0xFFFFFF
+    };
+    for (int i = 0; i < 5; i++) bus_write(FB_PALETTE + i * 4, FBPAL[i]);
+    bus_write(FB + 0, 0x04030201);              // line 0, pixels 0..3
+    bus_write(FB + FB_W, 0x01010101);           // line 1, pixels 0..3
+
+    bus_write(REG_CTRL, 0x11);                  // ENABLE | FB_SEL
+    Decoded d4;
+    decode_frame(d4);
+    if (d4.frame0 >= 0) {
+        // Each framebuffer pixel covers two raster columns and two
+        // raster lines.
+        for (int p = 0; p < 4; p++) {
+            check_pixel(d4, p * 2,     0, FBPAL[p + 1]);
+            check_pixel(d4, p * 2 + 1, 0, FBPAL[p + 1]);
+            check_pixel(d4, p * 2,     1, FBPAL[p + 1]);
+        }
+        // Framebuffer line 1 lands on raster lines 2 and 3.
+        check_pixel(d4, 0, 2, FBPAL[1]);
+        check_pixel(d4, 0, 3, FBPAL[1]);
+    }
+
+    // ── Glass side 5: the character screen survives the visit ───
+    // Storage is independent on this device, so clearing FB_SEL shows
+    // the cells exactly as they were left.
+    bus_write(REG_CTRL, 0x1);                   // ENABLE, cells again
+    Decoded d5;
+    decode_frame(d5);
+    if (d5.frame0 >= 0) {
+        uint8_t row = font[0x41 * 16 + 8];
+        check_pixel(d5, 0, 8, ((row >> 7) & 1) ? CGA[7] : CGA[0]);
     }
 
     printf("video_display: %d checks, %d errors\n", checks, errors);
