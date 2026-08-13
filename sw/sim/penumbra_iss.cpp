@@ -708,7 +708,7 @@ static struct {
     AcfgSlot slot[ACFG_SLOT_COUNT] = {
         { 4 /*CLASS_SD*/,      4096, 0x00004453 /*"SD\0\0"*/, 0, false, 0 },
         { 8 /*CLASS_USBHC*/,   4096, 0x00425355 /*"USB\0"*/,  0, false, 0 },
-        { 6 /*CLASS_DISPLAY*/, 16384,
+        { 6 /*CLASS_DISPLAY*/, 262144,
           0x50534944 /*"DISP"*/, 0x0059414C /*"LAY\0"*/, false, 0 },
     };
 
@@ -789,39 +789,82 @@ static struct {
 // spec is hw/sim/tb_video_display.cpp — behaviors pinned there hold
 // here. Storage-level model: registers and the cell array, no
 // rendering; Ctrl-A D dumps the screen as text.
-static constexpr uint32_t DISPLAY_CAP  = (1u << 16) | (1u << 10) | (1u << 8) | 1u;
+static constexpr uint32_t DISPLAY_FB_W = 320, DISPLAY_FB_H = 240;
+static constexpr uint32_t DISPLAY_CAP  =
+    (1u << 16) | (1u << 13) | (1u << 10) | (1u << 8) | 1u;
 static constexpr uint32_t DISPLAY_INFO = (30u << 16) | 80u;
+static constexpr uint32_t DISPLAY_FB_GEOM =
+    (DISPLAY_FB_H << 16) | DISPLAY_FB_W;
+static constexpr uint32_t DISPLAY_FB_FORMAT = 8;   // 8bpp, palette-indexed
 
 static struct {
-    uint32_t ctrl;          // [0] ENABLE (resets 0), [1] CURSOR_EN
+    uint32_t ctrl;          // [0] ENABLE (resets 0), [1] CURSOR_EN, [4] FB_SEL
     uint32_t cursor;        // full written word, faithful readback
     uint16_t cells[4096];
+    uint8_t  fb[DISPLAY_FB_W * DISPLAY_FB_H];
+    uint32_t fbpal[256];
 
-    // Cells are not cleared: the contract leaves their power-up
-    // contents undefined, and software owns screen content.
+    // Cells and pixels are not cleared: the contract leaves their
+    // power-up contents undefined, and software owns screen content.
     void reset() { ctrl = 0; cursor = 0; }
 
-    uint32_t read(uint32_t off) const {
-        if (off & 0x3000)
-            return cells[((off & 0x3FFF) >> 2) - 1024];
+    // Region split, matching the device: registers and the cell
+    // aperture below 0x10000, the framebuffer palette at 0x10000, the
+    // pixel aperture from 0x20000. The pixel aperture is the one that
+    // behaves as plain memory, so it is also the only one that takes
+    // sub-word access; everything else is word-strided.
+    bool fb_region(uint32_t off)  const { return (off & 0x20000) != 0; }
+    bool pal_region(uint32_t off) const { return (off & 0x30000) == 0x10000; }
+
+    uint32_t read(uint32_t off, int size) const {
+        off &= 0x3FFFF;
+        if (fb_region(off)) {
+            uint32_t p = off & 0x1FFFF;
+            if (size == 0) return p < sizeof fb ? fb[p] : 0;
+            p &= (size == 1) ? ~1u : ~3u;
+            uint32_t n = 1u << size, v = 0;
+            for (uint32_t i = 0; i < n; i++)
+                if (p + i < sizeof fb) v |= (uint32_t)fb[p + i] << (8 * i);
+            return v;
+        }
+        if (pal_region(off))
+            return fbpal[(off >> 2) & 0xFF];
+        if (off & 0xF000)
+            return cells[((off >> 2) - 1024) & 0xFFF];
         switch ((off >> 2) & 0xF) {
             case 0: return DISPLAY_CAP;
             case 1: return DISPLAY_INFO;
             case 2: return ctrl;
             case 3: return cursor;
-            default: return 0;   // modes / framebuffer absent
+            case 7: return DISPLAY_FB_GEOM;
+            case 8: return DISPLAY_FB_FORMAT;
+            default: return 0;   // modes absent
         }
     }
 
-    void write(uint32_t off, uint32_t data) {
-        if (off & 0x3000) {
-            cells[((off & 0x3FFF) >> 2) - 1024] = (uint16_t)data;
+    void write(uint32_t off, uint32_t data, int size) {
+        off &= 0x3FFFF;
+        if (fb_region(off)) {
+            uint32_t p = off & 0x1FFFF;
+            if (size == 0) { if (p < sizeof fb) fb[p] = (uint8_t)data; return; }
+            p &= (size == 1) ? ~1u : ~3u;
+            uint32_t n = 1u << size;
+            for (uint32_t i = 0; i < n; i++)
+                if (p + i < sizeof fb) fb[p + i] = (uint8_t)(data >> (8 * i));
+            return;
+        }
+        if (pal_region(off)) {
+            fbpal[(off >> 2) & 0xFF] = data & 0x00FFFFFF;
+            return;
+        }
+        if (off & 0xF000) {
+            cells[((off >> 2) - 1024) & 0xFFF] = (uint16_t)data;
             return;
         }
         switch ((off >> 2) & 0xF) {
-            case 2: ctrl = data & 3; break;
+            case 2: ctrl = data & 0x13; break;
             case 3: cursor = data; break;
-            default: break;      // read-only and absent slots
+            default: break;      // read-only and absent slots ignore writes
         }
     }
 } display;
@@ -1427,7 +1470,7 @@ static uint32_t phys_read(uint32_t addr, int size, bool& bus_fault) {
 
     // Display adapter at dynamic base
     if (acfg.slot[ACFG_SLOT_DISPLAY].dev_sel(addr)) {
-        return display.read(addr & 0x3FFF);
+        return display.read(addr, size);
     }
 
     // UART: 0xFF000000 – 0xFF000FFF
@@ -1504,7 +1547,7 @@ static void phys_write(uint32_t addr, uint32_t data, int size, bool& bus_fault) 
 
     // Display adapter at dynamic base
     if (acfg.slot[ACFG_SLOT_DISPLAY].dev_sel(addr)) {
-        display.write(addr & 0x3FFF, data);
+        display.write(addr, data, size);
         return;
     }
 
@@ -2505,9 +2548,11 @@ static void print_cmd_help() {
 static void dump_display() {
     unsigned ccol = display.cursor & 0xFFFF;
     unsigned crow = (display.cursor >> 16) & 0xFFFF;
-    fprintf(stderr, "\r\n[DISPLAY] CTRL=0x%x cursor=(%u,%u)%s\r\n",
+    fprintf(stderr, "\r\n[DISPLAY] CTRL=0x%x cursor=(%u,%u)%s%s\r\n",
             display.ctrl, ccol, crow,
-            (display.ctrl & 1) ? "" : "  ** blanked (ENABLE=0) **");
+            (display.ctrl & 1) ? "" : "  ** blanked (ENABLE=0) **",
+            (display.ctrl & 0x10)
+                ? "  ** framebuffer on screen; cells shown below **" : "");
     fprintf(stderr, "+%.*s+\r\n", 80,
             "----------------------------------------"
             "----------------------------------------");
