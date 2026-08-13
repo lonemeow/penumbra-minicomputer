@@ -3,9 +3,11 @@
 #
 # name	getty				type	status		comments
 
-# Console pseudo-device
+# Console pseudo-devices.  Both stay off: /dev/constty follows whichever
+# tty is the kernel console, which is already given a getty by name
+# below, and two gettys on one UART fight over its input.
 console	"/usr/libexec/getty default"	vt100	off secure
-constty	"/usr/libexec/getty default"	vt100	on secure
+constty	"/usr/libexec/getty default"	vt100	off secure
 
 # Penumbra 16450 UART serial port
 tty00	"/usr/libexec/getty default"	vt100	on secure
