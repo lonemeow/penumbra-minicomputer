@@ -36,9 +36,12 @@ BUILDDIR := $(PROJROOT)/build/benchmark
 
 # ── Targets ────────────────────────────────────────────────────
 
-.PHONY: all dhrystone memtest membench strtest clean
+.PHONY: all dhrystone memtest membench strtest fbtest clean
 
-all: dhrystone memtest membench
+# fbtest ships with the others so it is on the SD image ready to run
+# on hardware; it stays out of BENCH_ELFS in the root Makefile, which
+# is the list the automated ISS/RTL benchmark loop runs.
+all: dhrystone memtest membench fbtest
 
 # ── Common harness objects ─────────────────────────────────────
 
@@ -235,6 +238,27 @@ strtest: $(BUILDDIR)/STRTEST.ELF
 
 $(BUILDDIR)/STRTEST.ELF: $(CRT0_OBJ) $(STRTEST_OBJ) $(COMMON_OBJ) $(PENSTRING_LIB) common/bench.ld
 	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(STRTEST_OBJ) $(COMMON_OBJ) $(PENSTRING_LIB) -o $@
+
+# ── fbtest ───────────────────────────────────────────────────
+#
+# Hardware exercise (not a benchmark) for the display framebuffer:
+# aperture readback at word/halfword/byte width — the byte-enable path
+# no other device on this bus uses — plus a test pattern for the
+# monitor and the uncached fill rate.  Needs a real display device, so
+# it is run on hardware rather than under `make test`.
+#
+# Not in `all` / BENCH_ELFS — run on its own:
+#   make fbtest && boot sd:0,0/FBTEST.ELF
+
+FBTEST_OBJ := $(BUILDDIR)/fbtest_entry.o
+
+$(BUILDDIR)/fbtest_entry.o: fbtest/entry.c common/bench.h | $(BUILDDIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+fbtest: $(BUILDDIR)/FBTEST.ELF
+
+$(BUILDDIR)/FBTEST.ELF: $(CRT0_OBJ) $(FBTEST_OBJ) $(COMMON_OBJ) $(PENSTRING_LIB) common/bench.ld
+	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(FBTEST_OBJ) $(COMMON_OBJ) $(PENSTRING_LIB) -o $@
 
 # ── Cleanup ────────────────────────────────────────────────────
 
