@@ -1028,6 +1028,45 @@ stopped — not as planned work; gen2/2.5 is abandoned:
 
 **The design is a failure and abandoned.** None of the above will be pursued.
 
+## Hardware: evaluate yosys-slang as the SystemVerilog frontend
+
+Synthesis reads SystemVerilog through `sv2v`, which rewrites the whole
+fileset to Verilog-2005 before Yosys sees it. The seam works, but every
+line the design writes is translated first, and two of the workarounds
+the flow carries exist only because of that translation — they describe
+nothing about the hardware.
+
+`hw/tools/inline_hex.py` is one. sv2v emits a zero-fill loop ahead of
+each `$readmemh`, and Yosys lets the loop win, so every preloaded memory
+— boot ROM, microcode, font, splash — would synthesize to zeros. The
+script strips the loops back out of the generated Verilog.
+
+The character generator's palette is the other. An unpacked array
+indexed by a plain signal is the idiomatic way to write a lookup table;
+sv2v flattens it to a packed vector whose part-select offset is the
+index times the entry width, arithmetic the source never had. Yosys maps
+that multiply onto a DSP block, so a 16-entry color table costs a
+MULT18X18D. The workaround selects the entry by comparison instead.
+
+`yosys-slang` reads SystemVerilog directly into RTLIL, removing the
+translation step and, with it, the cause of both. Worth measuring rather
+than assuming: the acceptance test is whether `inline_hex.py` can be
+deleted and the palette can go back to a plain array index, with cell
+counts on a full board top no worse than the current flow's.
+
+One calibration so the evaluation stays honest — not every DSP surprise
+is sv2v's. The cell address multiplies the character row by a constant
+column count, and Yosys folds only power-of-two constant multiplies, so
+80 reaches DSP inference whatever the frontend. Spelling that product as
+the shifts its constant implies stays necessary either way, and a slang
+trial that appears to remove it means something else changed.
+
+The toolchain image is the prerequisite: the pinned OSS CAD Suite build
+has no slang plugin (`read_slang` is not a command), so this needs the
+container the wrapper scripts drive rebuilt or updated. The build-time
+defines the flow passes at the sv2v step (`SDRAM_PHASE_DEG`,
+`PENUMBRA_CPU_VARIANT`) need an equivalent on the new frontend.
+
 ## Compiler: graceful-fail on unsupported inline asm and vector IR
 
 Today the GlobalISel IRTranslator crashes (`fatal error: unable to
