@@ -17,9 +17,8 @@
  * the power-up splash; the emulation screen begins with a full clear,
  * which brings the two in sync before the first copy ever runs.
  *
- * The glyph range relies on CAP.EXTGLYPHS (CP437) only through
- * mapchar's ASCII subset for now; the cursor is the device's own
- * (CURSOR register + CTRL.CURSOR_EN), so the driver never draws one.
+ * The cursor is the device's own (CURSOR register + CTRL.CURSOR_EN),
+ * so the driver never draws one.
  */
 
 #include <sys/cdefs.h>
@@ -37,6 +36,7 @@ __KERNEL_RCSID(0, "$NetBSD$");
 
 #include <dev/wscons/wsconsio.h>
 #include <dev/wscons/wsdisplayvar.h>
+#include <dev/wsfont/wsfont.h>
 
 /* Register offsets (doc/system/devices/display.md). */
 #define	PD_CAP		0x000
@@ -194,13 +194,24 @@ pdisplay_attach(device_t parent, device_t self, void *aux)
 
 /* ── Emulops ──────────────────────────────────────────────────── */
 
+/*
+ * wsfont_map_unichar() reads nothing but the encoding.  The mapping
+ * belongs here rather than in putchar: the emulation resolves each
+ * character set once through mapchar and passes glyph indices after.
+ */
+static struct wsdisplay_font pdisplay_fontdesc = {
+	.encoding = WSDISPLAY_FONTENC_IBM,
+};
+
 static int
 pdisplay_mapchar(void *cookie, int uni, u_int *index)
 {
+	int glyph;
 
-	/* The baseline character set: printable 7-bit ASCII. */
-	if (uni >= 0x20 && uni <= 0x7E) {
-		*index = uni;
+	/* Glyph 0 is the table's "no equivalent" answer. */
+	glyph = wsfont_map_unichar(&pdisplay_fontdesc, uni);
+	if (glyph > 0 && glyph <= 0xFF) {
+		*index = (u_int)glyph;
 		return 5;
 	}
 	*index = '?';
