@@ -657,6 +657,38 @@ sdimage-rootfs: rootfs bench-elfs
 		-e $(BENCH_SD_DIR) -v
 	@echo "SD image: $(SDIMAGE) (with FFS root + benchmark ELFs)"
 
+# ── NetBSD SD image via the in-tree mkimage machinery ─────────────
+# distrib/utils/embedded/mkimage builds the entire card — MBR, FAT32
+# boot partition, FFS root and disklabel — from the distribution in
+# DESTDIR, driven by distrib/utils/embedded/conf/penumbra.conf.  The
+# cross-tools it shells out to are passed through the TOOL_* variables
+# it resolves them with, so nothing depends on host packages.
+MKIMAGE   := netbsd/distrib/utils/embedded/mkimage
+NBTOOLBIN := $(abspath $(BUILD_DIR)/netbsd-tools/bin)
+PENIMAGE  ?= $(BUILD_DIR)/penumbra.img
+
+# The makefs spec comes from the set lists under DESTDIR/etc/mtree, which
+# the distribution build regenerates as its last step; makefs refuses to
+# read a file whose size disagrees with its spec entry.  Installing into
+# DESTDIR without a full distribution build leaves the lists describing
+# the previous one, and that surfaces here as a size mismatch on whichever
+# binaries changed (DEVELOP.md covers repairing it).
+.PHONY: image
+image: netbsd-overlay bench-elfs
+	@HOST_SH=/bin/sh MACHINE=penumbra MACHINE_ARCH=penumbra \
+	    TOOL_MAKEFS=$(NBTOOLBIN)/nbmakefs \
+	    TOOL_MTREE=$(NBTOOLBIN)/nbmtree \
+	    TOOL_DISKLABEL=$(NBTOOLBIN)/nbdisklabel \
+	    TOOL_GPT=$(NBTOOLBIN)/nbgpt \
+	    TOOL_FDISK=$(NBTOOLBIN)/penumbra-unknown-netbsd-fdisk \
+	    penboot=$(abspath $(BOOT_ELF)) \
+	    kernel=$(abspath $(KERNEL)) \
+	    rootoverlay=$(abspath $(OVERLAY_ROOT)) \
+	    bootextras=$(abspath $(BENCH_SD_DIR)) \
+	    sh $(MKIMAGE) -h penumbra -B le \
+		-D $(abspath $(DESTDIR)) $(abspath $(PENIMAGE))
+	@echo "SD image: $(PENIMAGE)"
+
 # Cross-built NetBSD-hosted benchmark suite (pbench + graphical demos).
 # Builds dynamic and static binaries against the NetBSD sysroot.
 # `make sdimage-rootfs` already overlays the dynamic binaries into
