@@ -665,7 +665,14 @@ sdimage-rootfs: rootfs bench-elfs
 # it resolves them with, so nothing depends on host packages.
 MKIMAGE   := netbsd/distrib/utils/embedded/mkimage
 NBTOOLBIN := $(abspath $(BUILD_DIR)/netbsd-tools/bin)
-PENIMAGE  ?= $(BUILD_DIR)/penumbra.img
+# FLAVOR selects a conf under distrib/utils/embedded/conf/.  They all
+# carry a penumbra_ prefix, which the flavor name leaves off; an empty
+# FLAVOR is the base image the others are derived from:
+#   make image                   — boots to a single-user shell
+#   make image FLAVOR=multiuser  — runs /etc/rc, getty per tty
+FLAVOR     ?=
+IMAGE_CONF := penumbra$(if $(FLAVOR),_$(FLAVOR))
+PENIMAGE   ?= $(BUILD_DIR)/$(IMAGE_CONF).img
 
 # The makefs spec comes from the set lists under DESTDIR/etc/mtree, which
 # the distribution build regenerates as its last step; makefs refuses to
@@ -685,7 +692,7 @@ image: netbsd-overlay bench-elfs
 	    kernel=$(abspath $(KERNEL)) \
 	    rootoverlay=$(abspath $(OVERLAY_ROOT)) \
 	    bootextras=$(abspath $(BENCH_SD_DIR)) \
-	    sh $(MKIMAGE) -h penumbra -B le \
+	    sh $(MKIMAGE) -h $(IMAGE_CONF) -B le \
 		-D $(abspath $(DESTDIR)) $(abspath $(PENIMAGE))
 	@echo "SD image: $(PENIMAGE)"
 
