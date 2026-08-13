@@ -20,6 +20,7 @@ options		PMAP_STEAL_MEMORY	# early boot page allocation
 # File systems
 file-system	FFS			# Berkeley Fast File System
 file-system	MSDOSFS			# MS-DOS FAT file system
+file-system	PTYFS			# /dev/pts, the pty interface userland expects
 
 # Networking
 options		INET			# IP
