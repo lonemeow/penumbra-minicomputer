@@ -38,6 +38,11 @@ struct config {
 	int		 nattract;
 };
 
+/* tty.c */
+int	tty_claim(const char *dev);
+void	tty_probe_size(int fd, int *rows, int *cols);
+void	tty_export_term(const char *name);
+
 /* config.c */
 int	config_load(const char *path, struct config *cfg);
 

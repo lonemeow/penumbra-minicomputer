@@ -27,7 +27,7 @@ BUILDDIR    := $(PROJROOT)/build/exhibit-launcher
 OBJDIR      := $(BUILDDIR)/obj
 
 PROG        := exhibit-launcher
-SRCS        := main.c config.c monitor.c
+SRCS        := main.c config.c monitor.c tty.c
 OBJS        := $(addprefix $(OBJDIR)/,$(SRCS:.c=.o))
 
 .PHONY: all dynamic static overlay clean

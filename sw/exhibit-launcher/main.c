@@ -4,11 +4,9 @@
  * ever exits.  It owns both screens: a menu on the terminal it was
  * started on, and a status monitor on a second terminal (monitor.c).
  *
- * Idling is part of the launcher rather than a separate attract daemon:
- * the menu and the attract loop are the same state machine, and the
- * demos already exit on a keypress, so a visitor pressing anything
- * during an attract program lands back on the menu with no further
- * plumbing.
+ * The menu and the attract loop are one state machine: the demos exit
+ * on a keypress themselves, so an attract program is its own interrupt
+ * handler.
  */
 
 #include <sys/select.h>
@@ -148,11 +146,9 @@ read_key(int secs)
 	}
 }
 
-/* Put the display back into a state the menu can be drawn on.  A
- * program is expected to restore whatever it changed, including any
- * display mode the launcher knows nothing about; this only covers the
- * terminal-level state, so that one which died before cleaning up
- * cannot leave the menu invisible or inside out. */
+/* Programs are expected to restore any display mode they set; this
+ * covers only terminal state, so one that died first cannot leave the
+ * menu unreadable. */
 static void
 term_reset_display(void)
 {
@@ -163,16 +159,19 @@ term_reset_display(void)
  * line under it.  Rows are 1-based, as the terminal counts them. */
 #define MENU_ROW0	3
 
-/* Repaint one entry in place.  Moving the selection changes exactly two
- * rows, and on a 115200 line a full repaint of the menu is visible as a
- * flicker, so only those two are sent.  ESC [ K clears the rest of the
- * line, which is what removes the highlight's padding. */
+/* Black on white rather than reverse video, which the display adapter
+ * does not implement. */
+#define SEL_ON		"\033[30;47m"
+#define SEL_OFF		"\033[0m"
+
+/* Only the two changed rows are sent; a full repaint clears the screen
+ * and flickers.  ESC [ K removes the old highlight's padding. */
 static void
 draw_entry(const struct config *cfg, int i, int sel)
 {
 	printf("\033[%d;1H", MENU_ROW0 + i);
 	if (i == sel)
-		printf("  \033[7m %s \033[0m\033[K", cfg->entries[i].label);
+		printf("  " SEL_ON " %s " SEL_OFF "\033[K", cfg->entries[i].label);
 	else
 		printf("   %s\033[K", cfg->entries[i].label);
 	fflush(stdout);
@@ -188,7 +187,7 @@ draw_menu(const struct config *cfg, int sel)
 	printf("=== Penumbra ===\r\n\r\n");
 	for (i = 0; i < cfg->nentries; i++) {
 		if (i == sel)
-			printf("  \033[7m %s \033[0m\r\n",
+			printf("  " SEL_ON " %s " SEL_OFF "\r\n",
 			    cfg->entries[i].label);
 		else
 			printf("   %s\r\n", cfg->entries[i].label);
@@ -239,9 +238,8 @@ run_command(const struct config *cfg, const struct command *cmd, int exclusive)
 	term_raw();
 }
 
-/* Hold a finished picture on screen.  The wait honours the idle timer
- * so a visitor who walks away leaves the machine returning to the
- * attract loop rather than parked on a dead render. */
+/* Honours the idle timer, so a visitor who walks away leaves the
+ * machine returning to the attract loop rather than a dead render. */
 static void
 hold_result(const struct config *cfg)
 {
@@ -261,9 +259,36 @@ launch_entry(const struct config *cfg, const struct entry *e)
 int
 main(int argc, char **argv)
 {
-	const char *path = (argc > 1) ? argv[1] : CONFIG_PATH;
+	const char *path = CONFIG_PATH;
 	struct config cfg;
-	int attract_next = 0, sel = 0;
+	int attract_next = 0, sel = 0, c;
+
+	/* init appends the terminal name, as it does for getty, so the
+	 * positional argument is not ours to interpret. */
+	while ((c = getopt(argc, argv, "f:")) != -1) {
+		switch (c) {
+		case 'f':
+			path = optarg;
+			break;
+		default:
+			fprintf(stderr, "usage: %s [-f config] [tty]\n",
+			    argv[0]);
+			return 1;
+		}
+	}
+
+	/* init leaves opening the terminal to the program, as getty does.
+	 * Claimed before anything is printed, so errors land on it too. */
+	if (optind < argc) {
+		char dev[64];
+
+		(void)snprintf(dev, sizeof(dev), "/dev/%s", argv[optind]);
+		if (tty_claim(dev) == -1) {
+			fprintf(stderr, "%s: cannot claim terminal\n", dev);
+			return 1;
+		}
+		tty_export_term(argv[optind]);
+	}
 
 	if (config_load(path, &cfg) != 0)
 		return 1;

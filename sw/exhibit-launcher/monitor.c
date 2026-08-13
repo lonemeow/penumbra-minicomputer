@@ -42,60 +42,6 @@ monitor_running(void)
 	return mon_pid != -1;
 }
 
-/*
- * Ask the terminal how big it is.  A serial line carries no window size
- * for TIOCGWINSZ to report, so the terminal is asked directly: park the
- * cursor far past the bottom right, where it clamps to the last cell,
- * then request a cursor position report and read back ESC [ rows ; cols R.
- * Terminals that do not answer leave the conventional 80x24.
- */
-static void
-probe_size(int fd, int *rows, int *cols)
-{
-	struct termios saved, raw;
-	struct timeval tv;
-	char buf[32];
-	fd_set rfds;
-	size_t n = 0;
-	int r, c;
-
-	*rows = 24;
-	*cols = 80;
-	memset(buf, 0, sizeof(buf));
-
-	if (tcgetattr(fd, &saved) == -1)
-		return;
-	raw = saved;
-	raw.c_lflag &= ~(ICANON | ECHO);
-	raw.c_cc[VMIN] = 0;
-	raw.c_cc[VTIME] = 0;
-	if (tcsetattr(fd, TCSANOW, &raw) == -1)
-		return;
-
-	(void)write(fd, "\033[999;999H\033[6n", 14);
-
-	while (n < sizeof(buf) - 1) {
-		FD_ZERO(&rfds);
-		FD_SET(fd, &rfds);
-		tv.tv_sec = 1;
-		tv.tv_usec = 0;
-		if (select(fd + 1, &rfds, NULL, NULL, &tv) <= 0)
-			break;
-		if (read(fd, &buf[n], 1) != 1)
-			break;
-		if (buf[n++] == 'R')
-			break;
-	}
-	buf[n] = '\0';
-
-	(void)tcsetattr(fd, TCSANOW, &saved);
-
-	if (sscanf(buf, "\033[%d;%dR", &r, &c) == 2 && r > 0 && c > 0) {
-		*rows = r;
-		*cols = c;
-	}
-}
-
 /* Run cmd with the given terminal as its stdin/stdout/stderr.  The
  * monitor sizes itself from LINES/COLUMNS, which is why the terminal is
  * measured here rather than configured. */
@@ -104,31 +50,28 @@ spawn_on_tty(const struct config *cfg, const struct command *cmd)
 {
 	char rows[16], cols[16];
 	pid_t pid;
-	int fd, r, c;
+	int r, c;
 
 	if (cmd->argv[0] == NULL)
 		return -1;
 	if ((pid = fork()) != 0)
 		return pid;			/* parent, or -1 on failure */
 
-	if (setsid() == -1)
+	if (tty_claim(cfg->monitor_tty) == -1)
 		_exit(127);
-	if ((fd = open(cfg->monitor_tty, O_RDWR)) == -1)
-		_exit(127);
-	if (ioctl(fd, TIOCSCTTY, NULL) == -1)
-		_exit(127);
-	if (dup2(fd, STDIN_FILENO) == -1 || dup2(fd, STDOUT_FILENO) == -1 ||
-	    dup2(fd, STDERR_FILENO) == -1)
-		_exit(127);
-	if (fd > STDERR_FILENO)
-		(void)close(fd);
 
-	probe_size(STDOUT_FILENO, &r, &c);
+	tty_probe_size(STDOUT_FILENO, &r, &c);
+
+	/* The probe parks the cursor, and the previous program need not have
+	 * tidied up; start the next one from a known terminal. */
+	(void)write(STDOUT_FILENO, "\033[0m\033[?25h\033[r\033[2J\033[H", 20);
+
 	(void)snprintf(rows, sizeof(rows), "%d", r);
 	(void)snprintf(cols, sizeof(cols), "%d", c);
 	(void)setenv("LINES", rows, 1);
 	(void)setenv("COLUMNS", cols, 1);
-	(void)setenv("TERM", "vt100", 1);
+	tty_export_term(cfg->monitor_tty +
+	    (strncmp(cfg->monitor_tty, "/dev/", 5) == 0 ? 5 : 0));
 
 	execv(cmd->argv[0], cmd->argv);
 	_exit(127);
@@ -158,17 +101,13 @@ monitor_stop(void)
 }
 
 /*
- * Called when the process on the secondary terminal has been reaped.
+ * What replaces the reaped process depends on why it left, not on what
+ * it was.  Only a clean exit counts as a request, which is what stops a
+ * monitor that dies on startup from handing out a shell:
  *
- * What replaces it depends on why it left, not merely on what it was:
- *
- *   monitor, exited cleanly    the operator quit it to ask for a shell
- *   monitor, crashed or killed  not a request for anything; try again
+ *   monitor, exited cleanly     the operator asked for a shell
+ *   monitor, crashed or killed  not a request; try again
  *   shell, however it ended     the operator is done; restore the monitor
- *
- * Only a clean exit is read as a request, so a monitor that dies on
- * startup can never hand out a shell, and a shell that exits at once
- * returns to a monitor rather than bouncing back to another shell.
  */
 void
 monitor_reaped(const struct config *cfg, pid_t pid, int status)
