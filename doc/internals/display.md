@@ -118,27 +118,40 @@ restores it with no reload. A device with the custom palette sets
 
 `CAP.FRAMEBUFFER` adds the pixel source behind `CTRL.FB_SEL`
 ([contract](../system/devices/display.md#framebuffer)): a 320×240
-8 bpp array — 75 KB ≈ 34 of the ECP5-85F's 208 EBR blocks — plus one
-EBR for its 256 × 24-bit palette. Both are dual-clock BRAMs of the
-same shape as the cell RAM: CPU-side ports behind the `FB` /
-`FB_PALETTE` apertures, pixel-side read ports in the scan-out. The
-pixel aperture is the one with sub-word writes — the bus byte enables
-wire through to per-byte BRAM write enables (the `fpga_ram` bank
-structure), which is what lets the OS map it straight into a rendering
-process. With BRAM backing, storage independent of the cell RAM is the
+8 bpp array — 75 KB, which lands in 40 of the ECP5-85F's 208 EBR
+blocks because byte-wide banks leave the ninth bit of each block
+unused and round its depth up — plus two EBRs for the 256 × 24-bit
+palette, whose entries are wider than a block's widest port. Both are
+dual-clock BRAMs of the same shape as the cell RAM: CPU-side ports
+behind the `FB` / `FB_PALETTE` apertures, pixel-side read ports in the
+scan-out. The pixel aperture is the one with sub-word writes — the bus
+byte enables wire through to per-byte BRAM write enables (the
+`fpga_ram` bank structure), which is what lets the OS map it straight
+into a rendering process. With BRAM backing, storage independent of
+the cell RAM is the
 natural structure — sharing would be contrived — so on this device
 both sources retain their contents across `FB_SEL`, which the
 `CFG_ID`-matched driver may exploit; the contract deliberately does
 not promise it.
 
 Scan-out pixel-doubles onto the mode-0 raster: raster pixel (x, y)
-shows framebuffer byte (x >> 1, y >> 1), so one byte read serves two
-pixel clocks and each framebuffer line is replayed over two raster
-lines (the line-start address rewinds after even raster lines). The
-addressing is a running counter — no multiplier — and riding the
-mode-0 raster means `FB_SEL` never touches the PLL: the contract
-permits a re-time across the switch, and this implementation does not
-need one.
+shows framebuffer byte (x >> 1, y >> 1). Four pixels share a word and
+each pixel spans two raster columns, so one read serves eight pixel
+clocks, and each framebuffer line is replayed over two raster lines.
+
+The addressing is a counter — no adder, so no stride constant and no
+multiplier. Framebuffer lines are contiguous, so walking one leaves
+the counter standing on the next line's first word: advancing costs
+nothing, and repeating a line reloads the start that walk began from.
+The counter wraps at the end of the array, which is exactly where the
+last visible line leaves it, so the frame rewind is the same mechanism
+and the address is structurally unable to leave the array. The rewind
+happens during horizontal blanking, where the walk is already finished
+and the next line's first address must be standing by.
+
+Riding the mode-0 raster means `FB_SEL` never touches the PLL: the
+contract permits a re-time across the switch, and this implementation
+does not need one.
 
 ## Scan-out Pipeline
 
@@ -256,7 +269,6 @@ discrete-feasible while a peripheral's high-speed PHY need not be.
   scan-out, muxed at the parallel-RGB seam. Independent of the
   mode/PLL work (it rides the mode-0 raster), so it can also land
   alongside target A.
-- Not yet implemented.
 
 ## See Also
 

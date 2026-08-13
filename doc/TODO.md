@@ -3812,13 +3812,37 @@ Goal (later): PLL dynamic-reconfig FSM + mode 1 (800×600 / 100×37);
 EDID/DDC readout when the mode list gives it a consumer (contract
 space — CAP bit, `EDID_CTRL`, the `EDID` aperture — is reserved, and
 the ULX3S already routes the GPDI DDC pair to FPGA pins).
-Also worth exploring once the path is proven: the framebuffer
-capability
-([`system/devices/display.md`](system/devices/display.md#framebuffer))
-— 320×240 @ 8bpp pixel-doubled to the mode-0 raster is 75 KB ≈ 34 of
-the ECP5-85F's 208 BRAM blocks plus one for the 256-entry palette, and
-it reuses the entire output path; more expressive than text for demos,
-not a requirement.
+
+### Display RTL, framebuffer capability — done
+
+`CAP.FRAMEBUFFER` is implemented and validated on glass from the ROM
+monitor: a 320×240 8bpp picture pixel-doubled onto the mode-0 raster,
+its 256-entry palette, and the source select at the parallel-RGB seam.
+Selecting it never re-times the output, so it needed nothing from the
+mode/PLL work.
+
+- Storage is `video_fb_ram` (per-byte write enables, since the aperture
+  is mapped into a rendering process) and `video_fb_palette`; scan-out
+  is `video_fbgen`. The output chain carries both sources and is named
+  `video_pixel_chain` for it.
+- Scan-out addressing is a counter, not an offset computation:
+  framebuffer lines are contiguous, so a line's walk ends on the next
+  line's first word, repeating a line reloads the start it began from,
+  and the wrap at the end of the array is the frame rewind. No adder,
+  no stride constant, and an address that cannot leave the array.
+- Cost measured on `ulx3s_penumbra1_top`: 42 EBR (40 pixels + 2
+  palette), bringing the top to 128/208. The estimate of ~34 in the
+  microarchitecture notes assumed ideal bit packing; byte-wide banks
+  waste the ninth bit of each block and round depth up.
+- The device window grows to 256 KiB, and the display becomes the first
+  autoconfig device here to consume byte enables.
+- Timing after it landed: gen1 closes on 9 of 10 placement seeds, the
+  pinned seed 5 at 28.31 MHz against the 25 MHz constraint.
+
+Remaining is software: the `wsdisplay` dumb-framebuffer path in
+`pdisplay` (`GINFO` / `GET_FBINFO` / `LINEBYTES`, `PUTCMAP` onto
+`FB_PALETTE`, `SMODE` driving `FB_SEL`, and an `mmap` bounded to the
+pixel aperture so a mapped client cannot reach the control registers).
 
 ### USB host RTL — low + full speed
 - `usb_crc5` / `usb_crc16` — token and data CRC generators, the
