@@ -258,7 +258,12 @@ MAKECONF=${PWD}/../minimal-mk.conf ./build.sh -j10 -U -m penumbra \
 cd ..
 ```
 
-Output: `build/netbsd-obj/sys/arch/penumbra/compile/GENERIC.DEBUG/netbsd`. `build.sh kernel=...` runs `nbconfig` + `make depend` + `make` itself; `-U` (MKUPDATE) keeps subsequent runs incremental.
+Output: `build/netbsd-obj/sys/arch/penumbra/compile/GENERIC.DEBUG/netbsd`. `build.sh kernel=...` runs `nbconfig` + `make depend` + `make` itself.
+
+`-U` sets `MKUNPRIVED`, which `build.sh` requires of any build not run as
+root; it is unrelated to incrementality. The flag that makes a run
+incremental is `-u` (`MKUPDATE`), which skips the initial `make cleandir`.
+Leaving `-u` off gives the clean rebuild these commands intend.
 
 Three configs exist, per NetBSD convention: **`GENERIC`** (full device
 set, consistency checks off — demo and performance images),
@@ -285,14 +290,73 @@ The full distribution (libraries + programs + `etc.penumbra`) builds with stock 
 
 ```sh
 cd netbsd
-./build.sh -u -j4 -m penumbra -a penumbra \
+./build.sh -U -j4 -m penumbra -a penumbra \
   -V EXTERNAL_TOOLCHAIN=$PWD/../build/llvm \
   -O ../build/netbsd-obj -T ../build/netbsd-tools -D ../build/netbsd-dest \
   distribution
 cd ..
 ```
 
-`-u` makes the build incremental — only the first run is slow.
+Add `-u` if you want an incremental run; without it the build starts from
+`make cleandir`, which is what you want when the toolchain changed.
+
+#### Clean rebuilds
+
+`-u` controls object directories; it has no bearing on DESTDIR. Leaving
+it off rebuilds all the code but leaves DESTDIR exactly as the previous
+build left it, `METALOG` included. Pick the depth you actually want:
+
+| Goal | Before `distribution` |
+|------|------------------------|
+| Rebuild the code, keep DESTDIR, honest `METALOG` | `rm -f build/netbsd-dest/METALOG*` |
+| Pristine DESTDIR, keep the host tools | `rm -rf build/netbsd-dest` |
+| Rebuild the host tools too | use `build.sh -r` instead |
+
+The middle row is the usual one: it drops files whose sources no longer
+exist, which the first row leaves orphaned, while keeping the expensive
+`build/netbsd-tools`. `distribution` repopulates an empty DESTDIR on its
+own. `-r` removes TOOLDIR *and* DESTDIR and rebuilds `nbmake` first, so
+it still needs no separate `tools` run — it is just far slower.
+
+The last thing `distribution` does is regenerate the set lists under
+`build/netbsd-dest/etc/mtree/`. Those lists are the file inventory every
+image build reads, they are derived from `DESTDIR/METALOG`, and `makefs`
+refuses any file whose size disagrees with its entry.
+
+`METALOG` is append-only: a reinstalled binary is recorded as an
+*additional* entry beside the original, so it accumulates across builds.
+Nothing in a clean build removes it. `cleandir` only wipes object
+directories, and the tree's own `clean_METALOG` target delegates to the
+step that would delete it only `.if ${MKUPDATE} != "no"` — that is, only
+under `-u`. A clean build therefore inherits every previous build's
+entries, and `MKUPDATE=no` also disables the pass that keeps the newest
+entry per path. Which duplicate survives is then decided by the `sort`
+that feeds `mtree -M`, and `mtree` keeps the last line it reads: for
+entries differing only in `size=` and `sha256=`, that is whichever string
+compares greatest. The winner bears no relation to which build installed
+the file.
+
+The same thing happens, with or without `-u`, when something installs
+into DESTDIR outside a full build — a targeted
+`nbmake-penumbra -C some/dir install`, or an interrupted run.
+
+To repair a DESTDIR already in that state without rebuilding it,
+regenerate just the lists:
+
+```sh
+rm -f build/netbsd-dest/METALOG.sanitised
+MAKECONF=$PWD/minimal-mk.conf build/netbsd-tools/bin/nbmake-penumbra \
+  -C netbsd/distrib/sets makesetfiles \
+  DESTDIR=$PWD/build/netbsd-dest \
+  RELEASEDIR=$PWD/build/netbsd-release \
+  MKUNPRIVED=yes MKUPDATE=yes
+```
+
+`MKUPDATE=yes` there selects the newest entry per path rather than the
+oldest; it is a property of that one command, not a request for an
+incremental build. Deleting `METALOG.sanitised` first is required because
+it is rebuilt from a plain mtime dependency on `METALOG`, and a build
+routinely writes both within the same second.
 
 ---
 

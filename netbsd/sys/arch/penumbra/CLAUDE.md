@@ -50,7 +50,9 @@ cd netbsd
 ### Kernel build
 
 Driven by stock `build.sh kernel=...`; runs `nbconfig` + `depend` +
-`all` itself. `-U` keeps subsequent runs incremental.
+`all` itself. `-U` sets MKUNPRIVED, which build.sh requires of a
+non-root build; add `-u` (MKUPDATE) only when an incremental run is
+wanted, since it skips the initial `cleandir`.
 
 ```sh
 cd netbsd
