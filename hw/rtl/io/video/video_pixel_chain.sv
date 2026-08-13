@@ -1,0 +1,203 @@
+// Penumbra display output chain — timing generator, both pixel
+// sources, the source select, the three TMDS lane encoders, and the
+// four DDR serializers, wired as one module. The machine-side sibling
+// of video_chain_test: same lane structure and clocking contract, with
+// the test-pattern source replaced by the real ones.
+//
+// Both sources run from the same raster and stay live regardless of
+// which is on screen, so selecting either is a mux at the parallel-RGB
+// seam and never disturbs the timing. Each carries its own
+// delay-matched syncs, and the select takes RGB and syncs from the same
+// source, so the picture stays aligned to its own blanking whichever is
+// chosen — the two pipelines need not be the same depth.
+//
+// CELLS_HEX preloads the cell RAM, which the CPU-free users need — the
+// bring-up board top and the closed-loop testbench, neither of which
+// has a bus master to draw a screen for them. A machine leaves it empty
+// and drives the cell port instead: screen content is software's, and
+// undefined cell memory must never reach the glass. The framebuffer has
+// no equivalent preload; it is written through its aperture or not at
+// all.
+
+module video_pixel_chain #(
+    parameter CELLS_HEX = "splash_cells.hex"
+) (
+    // ── CPU/bus domain: cell, pixel, and palette access ─────────
+    // Tie the write ports off when preloading instead.
+    input  logic        i_clk,
+    input  logic        i_cell_we,
+    input  logic [11:0] i_cell_addr,
+    input  logic [15:0] i_cell_wdata,
+    output logic [15:0] o_cell_rdata,
+    input  logic        i_fb_we,
+    input  logic [3:0]  i_fb_byte_en,
+    input  logic [14:0] i_fb_addr,
+    input  logic [31:0] i_fb_wdata,
+    output logic [31:0] o_fb_rdata,
+    input  logic        i_pal_we,
+    input  logic [7:0]  i_pal_addr,
+    input  logic [23:0] i_pal_wdata,
+    output logic [23:0] o_pal_rdata,
+
+    // ── Pixel/serial domains ────────────────────────────────────
+    input  logic       i_pclk,   // pixel clock
+    input  logic       i_sclk,   // serial clock — 5x pixel, same PLL
+    input  logic       i_rst,
+    // Control, quasi-static in the pixel domain (synchronized by the
+    // consumer)
+    input  logic       i_enable,
+    input  logic       i_fb_sel,     // 0 = character cells, 1 = framebuffer
+    input  logic       i_cursor_en,
+    input  logic [7:0] i_cursor_col,
+    input  logic [5:0] i_cursor_row,
+    output logic [3:0] o_d0,     // DDR high-half bits: [0]=B [1]=G [2]=R [3]=clock
+    output logic [3:0] o_d1      // DDR low-half bits, same lane order
+);
+
+    // ── Pixel-domain front end ──────────────────────────────────
+    logic [11:0] x, y;
+    logic        de, hsync, vsync;
+
+    video_timing u_timing (
+        .i_clk   (i_pclk),
+        .i_rst   (i_rst),
+        .o_x     (x),
+        .o_y     (y),
+        .o_de    (de),
+        .o_hsync (hsync),
+        .o_vsync (vsync)
+    );
+
+    // Character generator: RGB + syncs emerge delay-matched.
+    logic [7:0] text_r, text_g, text_b;
+    logic       text_de, text_hsync, text_vsync;
+
+    video_textgen #(
+        .CELLS_HEX    (CELLS_HEX)
+    ) u_textgen (
+        .i_clk        (i_clk),
+        .i_cell_we    (i_cell_we),
+        .i_cell_addr  (i_cell_addr),
+        .i_cell_wdata (i_cell_wdata),
+        .o_cell_rdata (o_cell_rdata),
+        .i_pclk       (i_pclk),
+        .i_rst        (i_rst),
+        .i_x          (x),
+        .i_y          (y),
+        .i_de         (de),
+        .i_hsync      (hsync),
+        .i_vsync      (vsync),
+        .i_enable     (i_enable),
+        .i_cursor_en  (i_cursor_en),
+        .i_cursor_col (i_cursor_col),
+        .i_cursor_row (i_cursor_row),
+        .o_r          (text_r),
+        .o_g          (text_g),
+        .o_b          (text_b),
+        .o_de         (text_de),
+        .o_hsync      (text_hsync),
+        .o_vsync      (text_vsync)
+    );
+
+    // Framebuffer generator: same raster in, delay-matched RGB out.
+    logic [7:0] fb_r, fb_g, fb_b;
+    logic       fb_de, fb_hsync, fb_vsync;
+
+    video_fbgen u_fbgen (
+        .i_clk        (i_clk),
+        .i_fb_we      (i_fb_we),
+        .i_fb_byte_en (i_fb_byte_en),
+        .i_fb_addr    (i_fb_addr),
+        .i_fb_wdata   (i_fb_wdata),
+        .o_fb_rdata   (o_fb_rdata),
+        .i_pal_we     (i_pal_we),
+        .i_pal_addr   (i_pal_addr),
+        .i_pal_wdata  (i_pal_wdata),
+        .o_pal_rdata  (o_pal_rdata),
+        .i_pclk       (i_pclk),
+        .i_rst        (i_rst),
+        .i_raster_x   (x),
+        .i_raster_y   (y),
+        .i_de         (de),
+        .i_hsync      (hsync),
+        .i_vsync      (vsync),
+        .i_enable     (i_enable),
+        .o_r          (fb_r),
+        .o_g          (fb_g),
+        .o_b          (fb_b),
+        .o_de         (fb_de),
+        .o_hsync      (fb_hsync),
+        .o_vsync      (fb_vsync)
+    );
+
+    // ── Source select at the parallel-RGB seam ──────────────────
+    // Syncs travel with the pixels they describe, so a source's own
+    // blanking reaches the encoders whenever it is the one on screen.
+    logic [7:0] r, g, b;
+    logic       sel_de, sel_hsync, sel_vsync;
+
+    assign r         = i_fb_sel ? fb_r     : text_r;
+    assign g         = i_fb_sel ? fb_g     : text_g;
+    assign b         = i_fb_sel ? fb_b     : text_b;
+    assign sel_de    = i_fb_sel ? fb_de    : text_de;
+    assign sel_hsync = i_fb_sel ? fb_hsync : text_hsync;
+    assign sel_vsync = i_fb_sel ? fb_vsync : text_vsync;
+
+    // ── TMDS lane encoders ──────────────────────────────────────
+    // DVI lane roles: blue carries the sync levels in its control
+    // bits; green and red tie theirs low.
+    logic [9:0] tmds_b, tmds_g, tmds_r;
+
+    video_tmds_encoder u_enc_b (
+        .i_clk  (i_pclk),
+        .i_rst  (i_rst),
+        .i_data (b),
+        .i_c0   (sel_hsync),
+        .i_c1   (sel_vsync),
+        .i_de   (sel_de),
+        .o_tmds (tmds_b)
+    );
+
+    video_tmds_encoder u_enc_g (
+        .i_clk  (i_pclk),
+        .i_rst  (i_rst),
+        .i_data (g),
+        .i_c0   (1'b0),
+        .i_c1   (1'b0),
+        .i_de   (sel_de),
+        .o_tmds (tmds_g)
+    );
+
+    video_tmds_encoder u_enc_r (
+        .i_clk  (i_pclk),
+        .i_rst  (i_rst),
+        .i_data (r),
+        .i_c0   (1'b0),
+        .i_c1   (1'b0),
+        .i_de   (sel_de),
+        .o_tmds (tmds_r)
+    );
+
+    // ── Lane serializers ────────────────────────────────────────
+    // The clock lane is the same serializer fed a constant word: five
+    // 1s then five 0s, LSB-first, is the pixel clock on the wire.
+    localparam logic [9:0] CLOCK_LANE_WORD = 10'b0000011111;
+
+    logic [9:0] lane_word [4];
+    assign lane_word[0] = tmds_b;
+    assign lane_word[1] = tmds_g;
+    assign lane_word[2] = tmds_r;
+    assign lane_word[3] = CLOCK_LANE_WORD;
+
+    for (genvar i = 0; i < 4; i++) begin : g_lane
+        video_serializer u_ser (
+            .i_pclk (i_pclk),
+            .i_sclk (i_sclk),
+            .i_rst  (i_rst),
+            .i_word (lane_word[i]),
+            .o_d0   (o_d0[i]),
+            .o_d1   (o_d1[i])
+        );
+    end
+
+endmodule

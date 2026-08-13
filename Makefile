@@ -319,7 +319,7 @@ MODULE_TESTS = \
     video_fb_palette \
     video_fbgen \
     video_textgen \
-    video_text_chain \
+    video_pixel_chain \
     video_display \
     usb_crc5 \
     usb_crc16 \
@@ -362,7 +362,7 @@ font8x16.hex: netbsd/sys/dev/wsfont/bold8x16.h hw/tools/wsfont2hex.py
 	python3 hw/tools/wsfont2hex.py $< $@
 
 # Splash-screen cell image for the CPU-free display bring-up, read by
-# video_cell_ram via $readmemh when preloaded (video_text_chain).
+# video_cell_ram via $readmemh when preloaded (video_pixel_chain).
 splash_cells.hex: hw/video/splash.txt hw/tools/text2cells.py
 	python3 hw/tools/text2cells.py $< $@
 

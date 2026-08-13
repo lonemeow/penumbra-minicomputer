@@ -148,8 +148,11 @@ module video_display #(
         row_s2_q <= row_s1_q;
     end
 
-    // ── The text output chain ───────────────────────────────────
-    video_text_chain #(
+    // ── The output chain ────────────────────────────────────────
+    // CAP does not advertise FRAMEBUFFER, so this device offers no
+    // pixel or palette aperture and the chain's select stays on the
+    // character cells.
+    video_pixel_chain #(
         .CELLS_HEX    (CELLS_HEX)
     ) u_chain (
         .i_clk        (i_clk),
@@ -157,10 +160,24 @@ module video_display #(
         .i_cell_addr  (cell_idx),
         .i_cell_wdata (i_wdata[15:0]),
         .o_cell_rdata (cell_rdata),
+        .i_fb_we      (1'b0),
+        .i_fb_byte_en ('0),
+        .i_fb_addr    ('0),
+        .i_fb_wdata   ('0),
+        /* verilator lint_off PINCONNECTEMPTY */
+        .o_fb_rdata   (),
+        /* verilator lint_on PINCONNECTEMPTY */
+        .i_pal_we     (1'b0),
+        .i_pal_addr   ('0),
+        .i_pal_wdata  ('0),
+        /* verilator lint_off PINCONNECTEMPTY */
+        .o_pal_rdata  (),
+        /* verilator lint_on PINCONNECTEMPTY */
         .i_pclk       (i_pclk),
         .i_sclk       (i_sclk),
         .i_rst        (i_vrst),
         .i_enable     (en_s2_q),
+        .i_fb_sel     (1'b0),
         .i_cursor_en  (cen_s2_q),
         .i_cursor_col (col_s2_q),
         .i_cursor_row (row_s2_q),
