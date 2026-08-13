@@ -102,7 +102,19 @@ module video_textgen #(
     assign char_row  = i_y[11:4];
     assign glyph_col = i_x[2:0];
     assign glyph_row = i_y[3:0];
-    assign cell_addr = 12'((32'(char_row) * COLUMNS) + 32'(char_col));
+    // The row's base offset is char_row * COLUMNS. COLUMNS is a
+    // compile-time constant, so the product is spelled as the sum of
+    // shifts its set bits imply: synthesis maps a `*` by a
+    // non-power-of-two constant onto the DSP blocks, spending a
+    // MULT18X18D on what is a pair of adders.
+    function automatic logic [11:0] row_offset(logic [7:0] row);
+        row_offset = '0;
+        for (int b = 0; b < 12; b++)
+            if (COLUMNS[b])
+                row_offset += 12'(row) << b;
+    endfunction
+
+    assign cell_addr = row_offset(char_row) + 12'(char_col);
     assign cursor_hit = i_cursor_en && blink_show &&
                         (char_col == 9'(i_cursor_col)) &&
                         (char_row == 8'(i_cursor_row));
@@ -217,6 +229,19 @@ module video_textgen #(
         24'hFF5555, 24'hFF55FF, 24'hFFFF55, 24'hFFFFFF
     };
 
+    // Selecting the entry by comparison rather than indexing
+    // CGA_PALETTE directly: an unpacked-array index survives
+    // translation to Verilog as a packed part-select whose offset is
+    // the index times the 24-bit entry width, and that multiply lands
+    // on a DSP block. The comparison chain is a plain one-hot mux and
+    // keeps the palette literal above as the single definition.
+    function automatic logic [23:0] palette_entry(logic [3:0] idx);
+        palette_entry = 24'h000000;
+        for (int e = 0; e < 16; e++)
+            if (idx == 4'(e))
+                palette_entry = CGA_PALETTE[e];
+    endfunction
+
     logic [23:0] s4_rgb_q;
     logic        s4_de_q, s4_hsync_q, s4_vsync_q;
 
@@ -228,7 +253,7 @@ module video_textgen #(
             s4_vsync_q <= ~VSYNC_POL;
         end else begin
             // ENABLE blanks the picture only — de/syncs keep running.
-            s4_rgb_q   <= (s3_de_q && i_enable) ? CGA_PALETTE[s3_idx_q] : 24'h000000;
+            s4_rgb_q   <= (s3_de_q && i_enable) ? palette_entry(s3_idx_q) : 24'h000000;
             s4_de_q    <= s3_de_q;
             s4_hsync_q <= s3_hsync_q;
             s4_vsync_q <= s3_vsync_q;
