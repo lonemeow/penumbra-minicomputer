@@ -621,9 +621,10 @@ NETBSD_BENCH_DIR := $(BUILD_DIR)/netbsd-bench
 # image.  Add a utility by giving it an `overlay' target and adding it
 # to NETBSD_OVERLAYS.
 OVERLAY_ROOT    := $(BUILD_DIR)/netbsd-overlay
-NETBSD_OVERLAYS := benchmark-overlay penmon-overlay
+NETBSD_OVERLAYS := benchmark-overlay penmon-overlay exhibit-launcher-overlay
 
 .PHONY: netbsd-overlay benchmark-overlay penmon-overlay penmon
+.PHONY: exhibit-launcher-overlay exhibit-launcher
 netbsd-overlay:
 	rm -rf $(OVERLAY_ROOT)
 	@$(MAKE) $(NETBSD_OVERLAYS)
@@ -636,8 +637,15 @@ penmon-overlay:
 	@$(MAKE) -C sw/penmon LLVM_PREFIX=$(LLVM_PREFIX) \
 		DESTDIR=$(abspath $(DESTDIR)) OVERLAY_ROOT=$(abspath $(OVERLAY_ROOT)) overlay
 
+exhibit-launcher-overlay:
+	@$(MAKE) -C sw/exhibit-launcher LLVM_PREFIX=$(LLVM_PREFIX) \
+		DESTDIR=$(abspath $(DESTDIR)) OVERLAY_ROOT=$(abspath $(OVERLAY_ROOT)) overlay
+
 penmon:
 	@$(MAKE) -C sw/penmon LLVM_PREFIX=$(LLVM_PREFIX) DESTDIR=$(abspath $(DESTDIR))
+
+exhibit-launcher:
+	@$(MAKE) -C sw/exhibit-launcher LLVM_PREFIX=$(LLVM_PREFIX) DESTDIR=$(abspath $(DESTDIR))
 
 .PHONY: rootfs
 rootfs: netbsd-overlay
