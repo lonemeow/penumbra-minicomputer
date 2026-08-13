@@ -3,8 +3,9 @@
 // Wires machine_penumbra2 (core + MMU + split VIPT L1s + I/D arbiter +
 // fill sequencer + L2 + sysreg complex) to the board: 32 MB SDRAM via the
 // v2 controller stack, a 64 KB boot ROM, a real NS16450 UART on the FTDI
-// serial port, and an SPI/SD card behind the autoconfig daisy chain. The
-// CPU runs at 25 MHz; the SDRAM runs decoupled at 100 MHz across the CDC.
+// serial port, and an SPI/SD card, a USB host port and a GPDI display
+// adapter behind the autoconfig daisy chain. The CPU runs at 25 MHz; the
+// SDRAM runs decoupled at 100 MHz across the CDC.
 //
 // The machine owns the programmable timer and the bus controller
 // internally, so the board attaches only the memory/peripheral devices on
@@ -77,7 +78,13 @@ module ulx3s_penumbra2_top (
     output logic [12:0] sdram_a,
     output logic [1:0]  sdram_ba,
     inout  wire  [15:0] sdram_d,
-    output logic [1:0]  sdram_dqm
+    output logic [1:0]  sdram_dqm,
+
+    // ── GPDI display output ────────────────────────────────
+    // Four TMDS lanes (blue, green, red, clock) as LVCMOS33D
+    // pseudo-differential pairs; the board LPF names only the
+    // positive pin of each pair, the complement is implied.
+    output logic [3:0]  gpdi_dp
 );
     import penumbra_pkg::*;
     import sdram_pkg::*;
@@ -248,6 +255,72 @@ module ulx3s_penumbra2_top (
         rst_usb_sync2 <= rst_usb_sync1;
     end
     wire rst_usb = rst_usb_sync2;
+
+    // ── Video PLL: second EHXPLLL, 25 MHz crystal → TMDS clocks ──
+    // The display's serial/pixel clocks come from a dedicated PLL —
+    // the system PLL's four outputs are all taken, and the video
+    // rates are unrelated to the CPU/SDRAM ones. CLKOP (feedback)
+    // carries the 125 MHz TMDS serial clock, CLKOS the 25 MHz pixel
+    // clock; exact-only, resolving to {CLKI 1, CLKFB 5, CLKOP 5,
+    // CLKOS 25} on a 625 MHz VCO.
+    localparam longint VIDEO_SERIAL_HZ = 125_000_000;
+    localparam longint VIDEO_PIXEL_HZ  =  25_000_000;
+    localparam ecp5_pll_cfg_t VPLL =
+        ecp5_pll_compute(25_000_000, VIDEO_SERIAL_HZ, VIDEO_PIXEL_HZ);
+
+    logic clk_video_serial;
+    logic clk_video_pixel;
+    logic video_pll_lock;
+
+    (* keep *) EHXPLLL #(
+        .CLKI_DIV      (VPLL.clki_div),
+        .CLKFB_DIV     (VPLL.clkfb_div),
+        .CLKOP_DIV     (VPLL.clkop_div),
+        .CLKOP_ENABLE  ("ENABLED"),
+        .CLKOP_CPHASE  (VPLL.clkop_cphase),   // 0° phase
+        .CLKOP_FPHASE  (0),
+        .CLKOS_DIV     (VPLL.clkos_div),
+        .CLKOS_ENABLE  ("ENABLED"),
+        .CLKOS_CPHASE  (VPLL.clkos_cphase),   // 0° phase
+        .CLKOS_FPHASE  (0),
+        .FEEDBK_PATH   ("CLKOP")
+    ) u_video_pll (
+        .CLKI         (clk_25mhz),
+        .CLKFB        (clk_video_serial),
+        .CLKOP        (clk_video_serial),
+        .CLKOS        (clk_video_pixel),
+        .CLKOS2       (),
+        .CLKOS3       (),
+        .LOCK         (video_pll_lock),
+        .RST          (1'b0),
+        .STDBY        (1'b0),
+        .PHASESEL0    (1'b0),
+        .PHASESEL1    (1'b0),
+        .PHASEDIR     (1'b0),
+        .PHASESTEP    (1'b0),
+        .PHASELOADREG (1'b0),
+        .PLLWAKESYNC  (1'b0),
+        .ENCLKOP      (1'b1),
+        .ENCLKOS      (1'b1),
+        .ENCLKOS2     (1'b0),
+        .ENCLKOS3     (1'b0)
+    );
+
+    initial begin
+        assert (VPLL.valid)
+            else $fatal(1, "ecp5_pll: no legal video PLL config");
+        assert (VPLL.clkos_div == 5 * VPLL.clkop_div)
+            else $fatal(1, "ecp5_pll: video serial:pixel ratio is not 5x");
+    end
+
+    // ── Video-domain reset: main reset OR video-PLL unlock ─────
+    // Clocked on the crystal, which runs regardless of either PLL's
+    // state, so the reset authority never depends on the clocks it
+    // gates. The display chain absorbs release-order skew across its
+    // domains by design (see video_serializer).
+    logic rst_video_q;
+    always_ff @(posedge clk_25mhz)
+        rst_video_q <= rst || !video_pll_lock;
 
     // ── Heartbeat / debug LEDs ─────────────────────────────────
     logic [24:0] hb_cnt;
@@ -626,11 +699,8 @@ module ulx3s_penumbra2_top (
 
     logic [31:0] ac_usb_rdata;
     logic        ac_usb_busy, ac_usb_sel;
-    // Last device in the chain: the dangling cfg_out is the
-    // "no more devices" end the ROM's autoconfig loop probes.
-    /* verilator lint_off UNUSEDSIGNAL */
+    // cfg_out is the daisy-chain to the next autoconfig device (display).
     logic        ac_usb_cfg_out;
-    /* verilator lint_on UNUSEDSIGNAL */
     logic        usb_irq;
 
     autoconfig_dev #(
@@ -746,21 +816,132 @@ module ulx3s_penumbra2_top (
     assign usb_fpga_pu_dp = usb_pull_dp ? 1'b0 : 1'bz;
     assign usb_fpga_pu_dn = usb_pull_dn ? 1'b0 : 1'bz;
 
+    // ══════════════════════════════════════════════════════════
+    // Display adapter (autoconfig device, CLASS_DISPLAY)
+    // ══════════════════════════════════════════════════════════
+    // The character console on the GPDI connector: video_display
+    // behind the autoconfig wrapper, running its output chain on the
+    // dedicated video PLL. No cell preload and CTRL.ENABLE resets
+    // clear, so the screen stays black until the boot ROM draws it —
+    // a reset never shows stale cell memory.
+    logic [31:0] disp_dev_addr, disp_dev_wdata;
+    // Word-strided device: byte enables carry no information here.
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic [3:0]  disp_dev_byte_en;
+    /* verilator lint_on UNUSEDSIGNAL */
+    logic        disp_dev_we, disp_dev_re;
+    logic [31:0] disp_dev_rdata;
+    logic        disp_dev_busy;
+
+    logic [31:0] ac_disp_rdata;
+    logic        ac_disp_busy, ac_disp_sel;
+    // Last device in the chain: the dangling cfg_out is the
+    // "no more devices" end the ROM's autoconfig loop probes.
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic        ac_disp_cfg_out;
+    /* verilator lint_on UNUSEDSIGNAL */
+
+    autoconfig_dev #(
+        .DEV_CLASS (ACFG_CLASS_DISPLAY),
+        .DEV_SIZE  (32'd16384),
+        .DEV_ID    (32'd0),
+        .DEV_NAME0 (32'h50534944),    // "DISP" packed LE
+        .DEV_NAME1 (32'h0059414C)     // "LAY\0"
+    ) u_ac_disp (
+        .i_clk       (clk),
+        .i_rst       (rst),
+        .i_bus_rst   (busctl_bus_rst),
+        .i_cfg_en    (busctl_cfg_en),
+        .i_cfg_in    (ac_usb_cfg_out),
+        .o_cfg_out   (ac_disp_cfg_out),
+        .i_addr      (mem_addr),
+        .i_wdata     (mem_wdata),
+        .i_byte_en   (mem_byte_en),
+        .i_we        (mem_we),
+        .i_re        (mem_re),
+        .o_rdata     (ac_disp_rdata),
+        .o_busy      (ac_disp_busy),
+        .o_sel       (ac_disp_sel),
+        .o_dev_addr  (disp_dev_addr),
+        .o_dev_wdata (disp_dev_wdata),
+        .o_dev_byte_en(disp_dev_byte_en),
+        .o_dev_we    (disp_dev_we),
+        .o_dev_re    (disp_dev_re),
+        .i_dev_rdata (disp_dev_rdata),
+        .i_dev_busy  (disp_dev_busy)
+    );
+
+    logic [3:0] gpdi_lane_d0, gpdi_lane_d1;
+
+    video_display u_display (
+        .i_clk   (clk),
+        .i_rst   (rst),
+        .i_addr  (disp_dev_addr),
+        .i_wdata (disp_dev_wdata),
+        .i_we    (disp_dev_we),
+        .i_re    (disp_dev_re),
+        .o_rdata (disp_dev_rdata),
+        .o_busy  (disp_dev_busy),
+        .i_pclk  (clk_video_pixel),
+        .i_sclk  (clk_video_serial),
+        .i_vrst  (rst_video_q),
+        .o_d0    (gpdi_lane_d0),
+        .o_d1    (gpdi_lane_d1)
+    );
+
+    // GPDI pads: one ODDRX1F per lane, the toggling register in the
+    // I/O cell — deterministic pad delay, no fabric routing on the
+    // bit stream.
+    for (genvar gi = 0; gi < 4; gi++) begin : g_gpdi
+        (* keep *) ODDRX1F u_gpdi_oddr (
+            .D0   (gpdi_lane_d0[gi]),
+            .D1   (gpdi_lane_d1[gi]),
+            .SCLK (clk_video_serial),
+            .RST  (1'b0),
+            .Q    (gpdi_dp[gi])
+        );
+    end
+
     // Autoconfig combined bus signals
+    //
+    // The cluster presents one slave to the bus combine below: an
+    // OR fabric over the per-device responses, read data selected by
+    // the registered select (landing with each device's registered
+    // read) and busy/sel by the combinational one (stalling in the
+    // request cycle). Three devices now share it — SPI/SD, USB, and
+    // the display.
     logic [31:0] acfg_rdata;
     logic        acfg_busy;
     logic        acfg_sel;
     logic        acfg_sel_r;
-    logic        ac_spi_sel_r, ac_usb_sel_r;
-    assign acfg_rdata = (ac_spi_sel_r ? ac_spi_rdata : 32'b0) |
-                        (ac_usb_sel_r ? ac_usb_rdata : 32'b0);
-    assign acfg_busy  = ac_spi_busy | ac_usb_busy;
-    assign acfg_sel   = ac_spi_sel | ac_usb_sel;
+    logic        ac_spi_sel_r, ac_usb_sel_r, ac_disp_sel_r;
+
+    assign acfg_rdata = (ac_spi_sel_r  ? ac_spi_rdata  : 32'b0) |
+                        (ac_usb_sel_r  ? ac_usb_rdata  : 32'b0) |
+                        (ac_disp_sel_r ? ac_disp_rdata : 32'b0);
+    assign acfg_busy  = ac_spi_busy | ac_usb_busy | ac_disp_busy;
+    assign acfg_sel   = ac_spi_sel | ac_usb_sel | ac_disp_sel;
     always_ff @(posedge clk) begin
-        ac_spi_sel_r <= ac_spi_sel;
-        ac_usb_sel_r <= ac_usb_sel;
-        acfg_sel_r   <= acfg_sel;
+        ac_spi_sel_r  <= ac_spi_sel;
+        ac_usb_sel_r  <= ac_usb_sel;
+        ac_disp_sel_r <= ac_disp_sel;
+        acfg_sel_r    <= acfg_sel;
     end
+
+    // Autoconfig bases are assigned at run time from each device's declared
+    // DEV_SIZE, so disjoint windows are a software-held property, not a
+    // structural one — a mis-sized window aliases two devices onto one
+    // address and this OR fabric merges their read data silently.
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic [2:0] ac_sel_onehot;
+    assign ac_sel_onehot = {ac_spi_sel, ac_usb_sel, ac_disp_sel};
+    /* verilator lint_on UNUSEDSIGNAL */
+    // synthesis translate_off
+    always_ff @(posedge clk)
+        if (!rst && (mem_re || mem_we))
+            assert ($onehot0(ac_sel_onehot))
+                else $error("ulx3s_penumbra2_top: overlapping autoconfig device decode");
+    // synthesis translate_on
 
     // ── Bus response combine ────────────────────────────────
     // The read mux uses the registered selects, so it lands the cycle each
