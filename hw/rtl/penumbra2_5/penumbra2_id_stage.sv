@@ -251,11 +251,7 @@ module penumbra2_id_stage
 
     // Whether that EX writer is a load/RDSYS — the producer kind whose value is
     // not yet at EX/MEM, so a consumer of it takes the 1-cycle load-use stall.
-    // Consumed by the relaxed predicate (the TODO(human) below); the placeholder
-    // does not read it yet.
-    /* verilator lint_off UNUSEDSIGNAL */
     logic ex_loadlike;
-    /* verilator lint_on UNUSEDSIGNAL */
     assign ex_loadlike = (o_op_class == OPC_LOAD) | (o_op_class == OPC_RDSYS);
 
     penumbra2_scoreboard u_scoreboard (

@@ -173,21 +173,10 @@ module machine_penumbra2_sim
 
     assign irq_combined = i_irq | uart_irq | spi_irq;
 
-    // TODO(human): OR-combine the slave responses onto the external bus.
-    // Drive three signals from the per-slave outputs declared/wired above:
-    //   bus_rdata — read-data mux. Each slave masks its rdata by its select so
-    //               exactly one drives; use the *registered* selects
-    //               (ram_sel_r / rom_sel_r / uart_sel_r / acfg_sel_r) so the
-    //               mux lands on the cycle the slave's registered read is valid.
-    //               Slaves: ram_rdata, rom_rdata, uart_rdata, acfg_rdata.
-    //   bus_busy  — OR of each selected slave's busy, using the *combinational*
-    //               selects (ram_sel / rom_sel / uart_sel / ac_spi_sel) so the
-    //               core stalls the same cycle the slave needs time. Slaves:
-    //               ram_busy, rom_busy, uart_busy, ac_spi_busy.
-    //   bus_fault — an active access (bus_re | bus_we) that no slave claims.
-    // See machine_sim.sv's "Bus response OR-combine" for the gen1 form this
-    // mirrors (acfg_busy there is just ac_spi_busy, as it is here).
-
+    // Bus response OR-combine.  The read-data mux uses the registered
+    // selects so it lands on the cycle the slave's registered read is valid,
+    // while busy uses the combinational ones so the core stalls the same
+    // cycle the slave needs time.
     always_comb begin
         if (ram_sel_r)       bus_rdata = ram_rdata;
         else if (rom_sel_r)  bus_rdata = rom_rdata;
