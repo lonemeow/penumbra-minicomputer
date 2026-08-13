@@ -238,14 +238,13 @@ run_command(const struct config *cfg, const struct command *cmd, int exclusive)
 	term_raw();
 }
 
-/* Honours the idle timer, so a visitor who walks away leaves the
- * machine returning to the attract loop rather than a dead render. */
+/* Leave a finished picture up briefly.  Nothing is printed over it: the
+ * demos size themselves to the screen, so a prompt would scroll the top
+ * of the picture away to say something a keypress already implies. */
 static void
 hold_result(const struct config *cfg)
 {
-	printf("\r\n  Press any key.");
-	fflush(stdout);
-	(void)read_key(cfg->idle_seconds);
+	(void)read_key(cfg->hold_seconds);
 }
 
 static void

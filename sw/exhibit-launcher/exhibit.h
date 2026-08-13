@@ -31,6 +31,7 @@ struct config {
 	struct command	 shell;		/* replaces the monitor when it exits */
 
 	int		 idle_seconds;	/* 0 disables the attract loop */
+	int		 hold_seconds;	/* how long a finished picture stays */
 
 	struct entry	 entries[EX_MAX_ENTRIES];
 	int		 nentries;

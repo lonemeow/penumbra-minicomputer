@@ -9,6 +9,7 @@
  *   monitor    <device> <command...>
  *   shell      <command...>
  *   idle       <seconds>              0 disables the attract loop
+ *   hold       <seconds>              how long a finished picture stays
  *   attract    <command...>           cycled while idle, in order
  *   entry      <flags> "<label>" <command...>
  *
@@ -17,7 +18,7 @@
  *   x   needs the machine to itself; the monitor is stopped while it
  *       runs and started again afterwards
  *   p   draws once and exits, so the result is held on screen until a
- *       visitor presses a key or the idle timer fires
+ *       visitor presses a key or `hold' seconds pass
  */
 
 #include <ctype.h>
@@ -111,6 +112,10 @@ config_load(const char *path, struct config *cfg)
 		} else if (strcmp(kw, "shell") == 0) {
 			if (parse_command(&s, &cfg->shell, path, lineno) != 0)
 				bad = 1;
+		} else if (strcmp(kw, "hold") == 0) {
+			if ((w = next_word(&s)) == NULL)
+				goto syntax;
+			cfg->hold_seconds = atoi(w);
 		} else if (strcmp(kw, "idle") == 0) {
 			if ((w = next_word(&s)) == NULL)
 				goto syntax;
@@ -174,6 +179,9 @@ config_load(const char *path, struct config *cfg)
 		bad = 1;
 	}
 	fclose(fp);
+
+	if (cfg->hold_seconds == 0)
+		cfg->hold_seconds = 15;
 
 	if (cfg->nentries == 0) {
 		fprintf(stderr, "%s: no menu entries\n", path);
