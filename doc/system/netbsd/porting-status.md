@@ -233,8 +233,8 @@ Three configs, per NetBSD convention, all built at `-O2`:
 ## SD Image + Boot
 
 ```sh
-make sdimage                # boot partition only (FAT32)
-make sdimage-rootfs         # boot + full FFS root + benchmark ELFs on FAT32
+make image                  # boot + full FFS root + benchmark ELFs on FAT32
+make image FLAVOR=multiuser # the same, configured to reach multiuser
 
 make simulate SDCARD=build/boot.img
 # At ROM prompt: boot sd:0,0

@@ -10,7 +10,7 @@
 #   build/netbsd-bench/shadebobs{,-static}  - shadebobs demo (links -lm)
 #   build/netbsd-bench/penumbra-text{,-static} - Penumbra logo screensaver (links -lm)
 #
-# All run on a Penumbra NetBSD rootfs; mkrootfs.sh -i can overlay them
+# All run on a Penumbra NetBSD rootfs; the overlay step below stages them
 # into /usr/local/bin/.
 #
 # Usage:
@@ -88,7 +88,7 @@ PTEXT_OBJS := $(PTEXT_SRCS:%.c=$(OBJDIR)/%.o) $(OBJDIR)/perfctr.o $(OBJDIR)/dter
 all: dynamic static
 
 # Install the dynamic binaries into the shared overlay fake-root so the
-# rootfs image (mkrootfs -O) absorbs them.  libc.so is present on-target.
+# rootfs image absorbs them.  libc.so is present on-target.
 OVERLAY_PROGS := pbench mandelbrot julia plasma lorenz shadebobs penumbra-text
 overlay: dynamic
 	install -d $(OVERLAY_ROOT)/usr/local/bin

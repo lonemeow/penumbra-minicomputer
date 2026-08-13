@@ -8,7 +8,7 @@
 #   make sim MOD=<name>      — build & run testbench for a module
 #   make smoke               — toolchain smoke test
 #   make wave MOD=<name>     — open waveform in GTKWave
-#   make sdimage             — build SD image with bootloader, kernel, rootfs
+#   make image               — build the NetBSD SD image (FLAVOR= selects one)
 #   make fpga-lint           — Verilator lint check on the FPGA system
 #   make fpga BOARD=<b> CORE=<gen> — synthesize + PnR + bitstream
 #                              (TOP=<module> is the low-level escape hatch)
@@ -588,15 +588,10 @@ ifneq ($(CORE_BASE),penumbra2)
 endif
 	@$(DOCKER_RUN_IT) --entrypoint ./$(BUILD_DIR)/$(SIMRTL_OUT) $(DOCKER_IMAGE) $(if $(SDCARD),+sdcard=$(SDCARD)) $(if $(TRACE),+trace=$(TRACE)) $(if $(TRACE_WINDOW),+trace_window=$(TRACE_WINDOW)) $(if $(HALT_ON),'+halt_on=$(HALT_ON)') $(if $(STDIN_FILE),+stdin_file=$(STDIN_FILE)) $(if $(PIPE_LO),+pipe_lo=$(PIPE_LO)) $(if $(PIPE_HI),+pipe_hi=$(PIPE_HI))
 
-# ── SD card image ──────────────────────────────────────────────
-# Builds SD image with bootloader, kernel, and optionally a root filesystem.
-# Prerequisites: kernel and bootloader already built (see CLAUDE.md).
-# For rootfs: run `build.sh distribution` first.
-#
-# Usage:
-#   make sdimage          — boot partition only (FAT32)
-#   make sdimage-rootfs   — boot + full FFS root + benchmark ELFs on FAT32
-SDIMAGE    ?= $(BUILD_DIR)/boot.img
+# ── Artifacts the SD images are built from ─────────────────────
+# Prerequisites: kernel and bootloader already built (see CLAUDE.md),
+# and `build.sh distribution` run for anything carrying a root
+# filesystem.
 BOOT_ELF   := $(BUILD_DIR)/netbsd-obj/sys/arch/penumbra/stand/boot/PENBOOT.ELF
 # Which kernel config the SD images carry.  GENERIC.DEBUG (consistency
 # checks on) is the development default; build with KERNCONF=GENERIC
@@ -604,12 +599,6 @@ BOOT_ELF   := $(BUILD_DIR)/netbsd-obj/sys/arch/penumbra/stand/boot/PENBOOT.ELF
 KERNCONF   ?= GENERIC.DEBUG
 KERNEL     := $(BUILD_DIR)/netbsd-obj/sys/arch/penumbra/compile/$(KERNCONF)/netbsd
 DESTDIR    := $(BUILD_DIR)/netbsd-dest
-ROOTFS_IMG := $(BUILD_DIR)/rootfs.img
-
-.PHONY: sdimage
-sdimage:
-	@sw/tools/mksdimage.sh -o $(SDIMAGE) -2 $(BOOT_ELF) -k $(KERNEL) -v
-	@echo "SD image: $(SDIMAGE)"
 
 # Location of the cross-built NetBSD-hosted benchmark binaries (pbench +
 # graphical demos).  Staged into the rootfs via the overlay step below.
@@ -617,7 +606,7 @@ NETBSD_BENCH_DIR := $(BUILD_DIR)/netbsd-bench
 
 # ── Custom NetBSD userland overlays ───────────────────────────────
 # Each custom utility installs into a shared overlay fake-root via its
-# own `overlay' target; mkrootfs.sh -O copies the whole tree into the
+# own `overlay' target; the image build copies the whole tree into the
 # image.  Add a utility by giving it an `overlay' target and adding it
 # to NETBSD_OVERLAYS.
 OVERLAY_ROOT    := $(BUILD_DIR)/netbsd-overlay
@@ -646,24 +635,6 @@ penmon:
 
 exhibit-launcher:
 	@$(MAKE) -C sw/exhibit-launcher LLVM_PREFIX=$(LLVM_PREFIX) DESTDIR=$(abspath $(DESTDIR))
-
-.PHONY: rootfs
-rootfs: netbsd-overlay
-	@sw/tools/mkrootfs.sh -d $(DESTDIR) -o $(ROOTFS_IMG) \
-		-k $(KERNEL) \
-		-O $(OVERLAY_ROOT) -v
-
-.PHONY: sdimage-rootfs
-# Boot + full FFS root, with the bare-metal benchmark ELFs overlaid onto the
-# FAT32 boot partition (-e) alongside PENBOOT.ELF — `boot sd:0,0` loads the
-# bootloader by default, `boot sd:0,0/DHRYSTON.ELF` runs a benchmark.
-sdimage-rootfs: rootfs bench-elfs
-	@sw/tools/mksdimage.sh -o $(SDIMAGE) \
-		-2 $(BOOT_ELF) \
-		-k $(KERNEL) \
-		-r $(ROOTFS_IMG) \
-		-e $(BENCH_SD_DIR) -v
-	@echo "SD image: $(SDIMAGE) (with FFS root + benchmark ELFs)"
 
 # ── NetBSD SD image via the in-tree mkimage machinery ─────────────
 # distrib/utils/embedded/mkimage builds the entire card — MBR, FAT32
@@ -706,7 +677,7 @@ image: netbsd-overlay bench-elfs
 
 # Cross-built NetBSD-hosted benchmark suite (pbench + graphical demos).
 # Builds dynamic and static binaries against the NetBSD sysroot.
-# `make sdimage-rootfs` already overlays the dynamic binaries into
+# `make image` already overlays the dynamic binaries into
 # /usr/local/bin via the netbsd-overlay step; run this target on its own
 # only to build/measure the binaries standalone.
 #
@@ -739,7 +710,7 @@ BENCH_SD_DIR := $(BUILD_DIR)/bench_sd
 
 # Build the bare-metal benchmark ELFs and stage them in BENCH_SD_DIR, ready
 # to drop onto a FAT32 root — either the standalone bench image
-# (sdimage-bench) or the NetBSD image's boot partition (sdimage-rootfs).
+# (sdimage-bench) or the NetBSD image's boot partition (image).
 # Always rebuilds: the sources are small, compile quickly, and `make` can't
 # see when the compiler itself has changed under it.
 .PHONY: bench-elfs

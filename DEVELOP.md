@@ -219,11 +219,11 @@ make benchmark COPT="-Os"      # Override benchmark optimization level
 
 ```sh
 make benchmark-netbsd                              # Build pbench{,-static} for NetBSD
-make sdimage-rootfs                                # Stage all custom utilities into the rootfs (§ 8)
+make image                                         # Stage all custom utilities into the rootfs
 make simulate SDCARD=build/boot.img                # Boot, log in, run pbench
 ```
 
-`make sdimage-rootfs` automatically builds and overlays the whole benchmark
+`make image` automatically builds and overlays the whole benchmark
 suite into `/usr/local/bin/` (see § 8). Inside the running NetBSD: `pbench list`, `pbench libc memcpy`, etc. Use `pbench -o FILE` to dump machine-readable `RESULT key=value` lines. Baseline numbers in `benchmark/netbsd-bench/BASELINE.md`.
 
 ---
@@ -362,20 +362,23 @@ routinely writes both within the same second.
 
 ## 8. SD Card Images and Booting NetBSD
 
-The Penumbra ROM boots from FAT32 on an SD card; the NetBSD kernel mounts an FFS root from a second partition. Image creation is wrapped:
+The Penumbra ROM boots from FAT32 on an SD card; the NetBSD kernel mounts an FFS root from a second partition. Images are built by NetBSD's own `distrib/utils/embedded/mkimage`, driven by a board conf per flavor:
 
 ```sh
-make sdimage                          # Boot partition only (FAT32: bootloader + kernel)
-make sdimage-rootfs                   # Boot + full FFS root from build/netbsd-dest/
+make image                            # single-user shell
+make image FLAVOR=multiuser           # /etc/rc, getty on every tty marked on
+make image FLAVOR=kiosk               # the exhibit launcher on the display
 ```
 
-Output: `build/boot.img` (two MBR partitions). The rootfs image pre-writes a `boot.cfg` that selects `root=ld0f`, so `boot sd:0,0` reaches single-user shell with no further interaction. `sdimage-rootfs` also copies the bare-metal benchmark ELFs (`DHRYSTON.ELF`, `MEMTEST.ELF`, `MEMBENCH.ELF`) onto the FAT32 boot partition, so `boot sd:0,0/DHRYSTON.ELF` runs a benchmark straight from ROM on the same card.
+`FLAVOR` names a conf under `netbsd/distrib/utils/embedded/conf/`, which all carry a `penumbra_` prefix the flavor name leaves off; adding a flavor means adding a conf and nothing else. Output is `build/penumbra[_FLAVOR].img`.
+
+Each image carries a `boot.cfg` selecting `root=ld0f`, so `boot sd:0,0` needs no further interaction, plus the bare-metal benchmark ELFs (`DHRYSTON.ELF`, `MEMTEST.ELF`, `MEMBENCH.ELF`) on the FAT32 partition — `boot sd:0,0/DHRYSTON.ELF` runs one straight from ROM on the same card.
 
 End-to-end recipe (assumes kernel + bootloader + userland already built):
 
 ```sh
-make sdimage-rootfs
-make simulate SDCARD=build/boot.img
+make image
+make simulate SDCARD=build/penumbra.img
 ```
 
 Image creation requires the NetBSD cross-tools (`nbfdisk`, `nbmakefs`) — i.e. the host-tools step from § 7 must have run.
@@ -411,15 +414,15 @@ and bulk-transfer behavior (`hw/sim/usb_msc_sim.h` is the model).
 
 ### Overlaying custom userland utilities
 
-`make sdimage-rootfs` automatically stages every custom NetBSD-hosted
+`make image` automatically stages every custom NetBSD-hosted
 utility into the image. Each utility's Makefile exposes an `overlay` target
 that installs its files into a shared fake-root (`build/netbsd-overlay`,
-`$(OVERLAY_ROOT)`); `mkrootfs.sh -O` then copies the whole tree into the
+`$(OVERLAY_ROOT)`); the image build then copies the whole tree into the
 rootfs, preserving on-target paths and per-file modes (so non-binary data
 like `terminfo.cdb` lands at the right place with the right mode).
 
 ```sh
-make netbsd-overlay                    # build + stage all utilities (run automatically by sdimage-rootfs)
+make netbsd-overlay                    # build + stage all utilities (run automatically by image)
 find build/netbsd-overlay -type f      # inspect exactly what will be installed
 ```
 
@@ -438,7 +441,7 @@ to avoid colliding with the distribution's own copy.
 2. In the top-level `Makefile`, add a `foo-overlay` passthrough target that
    invokes it, and append `foo-overlay` to `NETBSD_OVERLAYS`.
 
-No changes to `mkrootfs.sh` or the image step are needed — the image build
+No changes to the image step are needed — the image build
 absorbs whatever the overlay tree contains.
 
 ---

@@ -67,16 +67,16 @@ panels still work and only CPI/MIPS show 0.
 
 ## Deploy to a rootfs image
 
-penmon is wired into the build. `make sdimage-rootfs` runs `make netbsd-overlay`,
+penmon is wired into the build. `make image` runs `make netbsd-overlay`,
 which builds every custom utility and stages it into a shared overlay
-fake-root (`build/netbsd-overlay`); `mkrootfs.sh -O` then copies the whole
+fake-root (`build/netbsd-overlay`); the image build then copies the whole
 tree into the image. penmon's `overlay` target installs just the static
 binary at `/usr/local/bin/penmon`. The renderer emits ANSI directly (no
 libcurses, no terminfo database), so the binary is self-contained — it needs
 no base-system files beyond what every rootfs already carries.
 
 ```sh
-make sdimage-rootfs                 # boot + rootfs, with penmon + demos
+make image                          # boot + rootfs, with penmon + demos
 
 make netbsd-overlay                 # just stage the tree (to inspect it)
 find build/netbsd-overlay -type f

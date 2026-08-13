@@ -211,18 +211,21 @@ in the LLVM subtree CLAUDE.md).
   the image targets pick the config via `KERNCONF=` (default
   `GENERIC.DEBUG`). Full
   sequence in `DEVELOP.md` § 7.
-- SD images: `make sdimage` (boot only), `make sdimage-rootfs`
-  (boot + full FFS distribution). Boot-only images need a kernel at
-  `PENBOOT.ELF`; rootfs images include `boot.cfg` with `root=ld0f` so
-  `boot sd:0,0` reaches single-user with no prompts. `sdimage-rootfs`
-  also drops the bare-metal benchmark ELFs onto the FAT32 boot
-  partition, so `boot sd:0,0/DHRYSTON.ELF` runs a benchmark from the
-  same card. Requires NetBSD cross-tools (`nbfdisk`, `nbmakefs`) built
-  once via `build.sh tools`. `sdimage-rootfs` auto-overlays the custom
-  userland utilities (benchmark suite + `penmon`) into `/usr/local/bin`
-  via each tool's `overlay` make target staged into
-  `build/netbsd-overlay`, copied in with `mkrootfs.sh -O`; see
-  DEVELOP.md § 8 for the convention and how to add a utility.
+- SD images: `make image [FLAVOR=multiuser|kiosk]`, built by NetBSD's
+  own `distrib/utils/embedded/mkimage` from a board conf per flavor
+  under `netbsd/distrib/utils/embedded/conf/`. Adding a flavor means
+  adding a conf. Images carry `boot.cfg` with `root=ld0f` so
+  `boot sd:0,0` needs no prompts, plus the bare-metal benchmark ELFs
+  on the FAT32 partition (`boot sd:0,0/DHRYSTON.ELF`). Requires NetBSD
+  cross-tools built once via `build.sh tools`. Custom userland
+  utilities (benchmark suite, `penmon`, `exhibit-launcher`) reach
+  `/usr/local/bin` via each tool's `overlay` make target staged into
+  `build/netbsd-overlay`; see DEVELOP.md for the convention and how to
+  add a utility.
+- The set lists under `build/netbsd-dest/etc/mtree/` are the image's
+  file inventory and go stale if anything installs into DESTDIR
+  outside a full `distribution` build; `makefs` then refuses the files
+  that changed. DEVELOP.md covers repairing it.
 
 ### Boot ROM build
 The ROM has its own `hw/rom/Makefile` (auto source discovery + header
@@ -281,8 +284,8 @@ Bare-metal benchmarks (Dhrystone 2.1, memtest, membench) under
 
 - `make benchmark` — ISS run. `make benchmark-rtl` — Verilator
   (cycle-accurate, slower). `make benchmark-netbsd` — builds `pbench`
-  which `make sdimage-rootfs` auto-overlays (along with `penmon`) into
-  the rootfs `/usr/local/bin`.
+  which `make image` auto-overlays (along with `penmon` and
+  `exhibit-launcher`) into the rootfs `/usr/local/bin`.
 - Override `BENCH_ITERS=`, `COPT="-Os"`, etc.
 - Latest baseline numbers per snapshot (with HEAD SHA) live in
   `benchmark/netbsd-bench/BASELINE.md` — do not quote DMIPS/CPI/fmax

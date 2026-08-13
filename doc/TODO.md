@@ -3578,7 +3578,7 @@ to stay clean of trademark misuse.
 3. Drive EEMBC's Makefile from a new top-level
    `make benchmark-coremark-pro` target, output into
    `build/coremark-pro/`.
-4. Extend `mkrootfs.sh` (or wherever the pbench bundling lives) to
+4. Extend the image overlay (or wherever the pbench bundling lives) to
    copy the 9 workload binaries plus their input data files (cjpeg,
    parser, zip) into `/usr/local/bin/coremark-pro/`.
 5. Capture baseline in `benchmark/coremark-pro/BASELINE.md`, dated
