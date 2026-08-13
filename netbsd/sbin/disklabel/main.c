@@ -280,6 +280,7 @@ static const struct disklabel_params {
 	{ "arc",	1, 1, 16, 3,  0,  0, LITTLE_ENDIAN },	/* mips */
 	{ "cobalt",	1, 1, 16, 3,  0,  0, LITTLE_ENDIAN },	/* mips */
 	{ "landisk",	1, 1, 16, 3,  0,  0, LITTLE_ENDIAN },	/* sh3 */
+	{ "penumbra",	1, 1, 16, 2,  0,  0, LITTLE_ENDIAN },	/* penumbra */
 
 	{ "epoc32",	1, 1, 16, 3,  8,  0, LITTLE_ENDIAN },	/* arm */
 	{ "hpcarm",	1, 1, 16, 3,  8,  0, LITTLE_ENDIAN },	/* arm */
@@ -314,6 +315,7 @@ static const struct arch_endian {
 	{ LITTLE_ENDIAN, "ia64" },
 	{ LITTLE_ENDIAN, "mipsel" },
 	{ LITTLE_ENDIAN, "mips64el" },
+	{ LITTLE_ENDIAN, "penumbra" },
 	{ LITTLE_ENDIAN, "riscv32" },
 	{ LITTLE_ENDIAN, "riscv64" },
 	{ LITTLE_ENDIAN, "sh3el" },
