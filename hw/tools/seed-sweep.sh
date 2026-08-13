@@ -11,6 +11,11 @@
 # alone on a re-run: adding seeds to a finished sweep only builds the
 # new ones.
 #
+# Each seed's nextpnr output lands in its own build/<top>.s<seed>.log
+# rather than the shared stdout, so a parallel sweep prints only the
+# summary and every run's detail — utilisation, congestion, critical
+# path — survives for inspection afterwards.
+#
 # Usage:
 #   hw/tools/seed-sweep.sh BOARD=ulx3s CORE=penumbra2 \
 #       [SEEDS="0 1 2 ..."] [JOBS=4]
@@ -43,6 +48,19 @@ for s in $SEEDS; do
     targets="$targets build/$TOP.s$s.config"
 done
 make -j"$JOBS" $ARGS $targets
+
+# Cell counts come out of packing, which runs before placement, so
+# every seed reports the same utilisation — print it once, from
+# whichever seed log is available.
+for s in $SEEDS; do
+    log="build/$TOP.s${s}.log"
+    if [ -f "$log" ] && grep -q 'Device utilisation:' "$log"; then
+        echo "── device utilisation ($TOP) ──"
+        sed -n '/Device utilisation:/,/^Info: Placed/p' "$log" |
+            grep -E 'TRELLIS_COMB|TRELLIS_FF|TRELLIS_IO|DP16KD|EHXPLLL' || true
+        break
+    fi
+done
 
 echo "── fmax per seed ($TOP) ──"
 for s in $SEEDS; do

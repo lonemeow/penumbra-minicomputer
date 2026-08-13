@@ -1089,11 +1089,21 @@ endif
 # hw/tools/seed-sweep.sh drives.  No routed JSON and no bitstream:
 # a sweep wants timing verdicts, and the winning seed is then pinned
 # as DEFAULT_SEED_<top> and rebuilt through the normal fpga target.
+#
+# Each seed's nextpnr output goes to its own build/<top>.s<seed>.log:
+# concurrent runs share one stdout, and nextpnr's progress lines are
+# long-running and unlabelled, so interleaved they cannot be attributed
+# back to a seed. A failing seed prints its tail so the redirect never
+# swallows the reason.
 $(BUILD_DIR)/$(TOP).s%.config: $(BUILD_DIR)/$(TOP).json $(LPF) $(LPF_DESIGN) $(PREPACK)
-	$(NEXTPNR_BASE) \
+	@echo "[sweep] seed $* → $(BUILD_DIR)/$(TOP).s$*.log"
+	@$(NEXTPNR_BASE) \
 		--seed $* \
 		--json $< --textcfg $@ \
-		--report $(BUILD_DIR)/$(TOP).s$*_timing.json --detailed-timing-report
+		--report $(BUILD_DIR)/$(TOP).s$*_timing.json --detailed-timing-report \
+		> $(BUILD_DIR)/$(TOP).s$*.log 2>&1 \
+	|| { echo "[sweep] seed $* FAILED — tail of $(BUILD_DIR)/$(TOP).s$*.log:"; \
+	     tail -20 $(BUILD_DIR)/$(TOP).s$*.log; exit 1; }
 
 # Echo the resolved artifact TOP name (consumed by seed-sweep.sh).
 .PHONY: print-top
