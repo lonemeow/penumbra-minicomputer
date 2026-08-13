@@ -60,7 +60,7 @@ void perf_report(const struct perf_snapshot *before,
                  const struct perf_snapshot *after, uint64_t iters)
 {
     if (!before->ok || !after->ok) {
-        printf("      perfctr: unavailable (kernel lacks machdep.cpu/cache.* leaves)\n");
+        printf("perfctr unavailable (no machdep.cpu/cache.* leaves)\n");
         return;
     }
 
@@ -68,26 +68,26 @@ void perf_report(const struct perf_snapshot *before,
     uint64_t ins = cdelta(before->cpu[CPU_PERF_INSNS],  after->cpu[CPU_PERF_INSNS]);
 
     if (iters)
-        printf("      perfctr: CPI %.2f, %llu cyc/op  (%llu cyc / %llu insn)\n",
+        printf("perfctr CPI %.2f, %llu cyc/op  (%llu cyc / %llu insn)\n",
                ins ? (double)cyc / (double)ins : 0.0,
                (unsigned long long)(cyc / iters),
                (unsigned long long)cyc, (unsigned long long)ins);
     else
-        printf("      perfctr: CPI %.2f  (%llu cyc / %llu insn)\n",
+        printf("perfctr CPI %.2f  (%llu cyc / %llu insn)\n",
                ins ? (double)cyc / (double)ins : 0.0,
                (unsigned long long)cyc, (unsigned long long)ins);
 
-    /* Two lines so six buckets fit 80 columns: memory/exec, then pipeline. */
-    printf("      stalls   funit %4.1f%% ifetch %4.1f%% load %4.1f%% store %4.1f%%\n",
+    /* Unindented, all six buckets fit one 80-column line. */
+    printf("stalls  funit %4.1f%% ifetch %4.1f%% load %4.1f%% store %4.1f%%"
+           " hazard %4.1f%% flush %4.1f%%\n",
            stall_pct(before, after, CPU_PERF_STALL_FUNIT,  cyc),
            stall_pct(before, after, CPU_PERF_STALL_IFETCH, cyc),
            stall_pct(before, after, CPU_PERF_STALL_LOAD,   cyc),
-           stall_pct(before, after, CPU_PERF_STALL_STORE,  cyc));
-    printf("               hazard %4.1f%% flush %4.1f%%\n",
+           stall_pct(before, after, CPU_PERF_STALL_STORE,  cyc),
            stall_pct(before, after, CPU_PERF_STALL_HAZARD, cyc),
            stall_pct(before, after, CPU_PERF_STALL_FLUSH,  cyc));
 
-    printf("      cache    ");
+    printf("cache   ");
     cache_hit("L1I", before->l1i, after->l1i);
     cache_hit("L1D", before->l1d, after->l1d);
     cache_hit("L2",  before->l2,  after->l2);
@@ -107,7 +107,6 @@ perf_demo_atexit(void)
 {
     struct perf_snapshot s1;
     perf_snapshot_take(&s1);
-    putchar('\n');
     perf_report(&perf_demo_s0, &s1, 0);
 }
 
