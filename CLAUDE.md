@@ -281,11 +281,14 @@ Bare-metal benchmarks (Dhrystone 2.1, memtest, membench) under
 `benchmark/`; built as PIE ELFs loaded from FAT32 via
 `boot sd:0,0/DHRYSTON.ELF` etc. NetBSD-hosted microbenchmark suite
 (`pbench`, syscalls + libc hot paths) under `benchmark/netbsd-bench/`.
+Graphics demos live in `sw/demos/` — they share `perfctr.c` with pbench
+but are exhibit material rather than measurements.
 
 - `make benchmark` — ISS run. `make benchmark-rtl` — Verilator
-  (cycle-accurate, slower). `make benchmark-netbsd` — builds `pbench`
-  which `make image` auto-overlays (along with `penmon` and
-  `exhibit-launcher`) into the rootfs `/usr/local/bin`.
+  (cycle-accurate, slower). `make benchmark-netbsd` — builds `pbench`;
+  `make demos` builds the graphics demos. `make image` auto-overlays
+  both (along with `penmon` and `exhibit-launcher`) into the rootfs
+  `/usr/local/bin`.
 - Override `BENCH_ITERS=`, `COPT="-Os"`, etc.
 - Latest baseline numbers per snapshot (with HEAD SHA) live in
   `benchmark/netbsd-bench/BASELINE.md` — do not quote DMIPS/CPI/fmax

@@ -603,9 +603,11 @@ KERNCONF   ?= GENERIC.DEBUG
 KERNEL     := $(BUILD_DIR)/netbsd-obj/sys/arch/penumbra/compile/$(KERNCONF)/netbsd
 DESTDIR    := $(BUILD_DIR)/netbsd-dest
 
-# Location of the cross-built NetBSD-hosted benchmark binaries (pbench +
-# graphical demos).  Staged into the rootfs via the overlay step below.
+# Location of the cross-built NetBSD-hosted binaries, staged into the
+# rootfs via the overlay step below: pbench here, the graphics demos
+# under their own directory.
 NETBSD_BENCH_DIR := $(BUILD_DIR)/netbsd-bench
+DEMOS_DIR        := $(BUILD_DIR)/demos
 
 # ── Custom NetBSD userland overlays ───────────────────────────────
 # Each custom utility installs into a shared overlay fake-root via its
@@ -613,9 +615,11 @@ NETBSD_BENCH_DIR := $(BUILD_DIR)/netbsd-bench
 # image.  Add a utility by giving it an `overlay' target and adding it
 # to NETBSD_OVERLAYS.
 OVERLAY_ROOT    := $(BUILD_DIR)/netbsd-overlay
-NETBSD_OVERLAYS := benchmark-overlay penmon-overlay exhibit-launcher-overlay
+NETBSD_OVERLAYS := benchmark-overlay demos-overlay penmon-overlay \
+                   exhibit-launcher-overlay
 
-.PHONY: netbsd-overlay benchmark-overlay penmon-overlay penmon
+.PHONY: netbsd-overlay benchmark-overlay demos-overlay penmon-overlay penmon
+.PHONY: demos
 .PHONY: exhibit-launcher-overlay exhibit-launcher
 netbsd-overlay:
 	rm -rf $(OVERLAY_ROOT)
@@ -625,6 +629,10 @@ benchmark-overlay:
 	@$(MAKE) -C benchmark/netbsd-bench LLVM_PREFIX=$(LLVM_PREFIX) \
 		DESTDIR=$(abspath $(DESTDIR)) OVERLAY_ROOT=$(abspath $(OVERLAY_ROOT)) overlay
 
+demos-overlay:
+	@$(MAKE) -C sw/demos LLVM_PREFIX=$(LLVM_PREFIX) \
+		DESTDIR=$(abspath $(DESTDIR)) OVERLAY_ROOT=$(abspath $(OVERLAY_ROOT)) overlay
+
 penmon-overlay:
 	@$(MAKE) -C sw/penmon LLVM_PREFIX=$(LLVM_PREFIX) \
 		DESTDIR=$(abspath $(DESTDIR)) OVERLAY_ROOT=$(abspath $(OVERLAY_ROOT)) overlay
@@ -632,6 +640,10 @@ penmon-overlay:
 exhibit-launcher-overlay:
 	@$(MAKE) -C sw/exhibit-launcher LLVM_PREFIX=$(LLVM_PREFIX) \
 		DESTDIR=$(abspath $(DESTDIR)) OVERLAY_ROOT=$(abspath $(OVERLAY_ROOT)) overlay
+
+demos:
+	@$(MAKE) -C sw/demos LLVM_PREFIX=$(LLVM_PREFIX) DESTDIR=$(abspath $(DESTDIR))
+	@echo "demo binaries: $(DEMOS_DIR)/<name>{,-static}"
 
 penmon:
 	@$(MAKE) -C sw/penmon LLVM_PREFIX=$(LLVM_PREFIX) DESTDIR=$(abspath $(DESTDIR))
@@ -678,7 +690,7 @@ image: netbsd-overlay bench-elfs
 		-D $(abspath $(DESTDIR)) $(abspath $(PENIMAGE))
 	@echo "SD image: $(PENIMAGE)"
 
-# Cross-built NetBSD-hosted benchmark suite (pbench + graphical demos).
+# Cross-built NetBSD-hosted benchmark suite (pbench).
 # Builds dynamic and static binaries against the NetBSD sysroot.
 # `make image` already overlays the dynamic binaries into
 # /usr/local/bin via the netbsd-overlay step; run this target on its own
@@ -689,13 +701,7 @@ image: netbsd-overlay bench-elfs
 benchmark-netbsd:
 	@$(MAKE) -C benchmark/netbsd-bench LLVM_PREFIX=$(LLVM_PREFIX) \
 		DESTDIR=$(abspath $(DESTDIR))
-	@echo "pbench binaries:     $(NETBSD_BENCH_DIR)/pbench{,-static}"
-	@echo "mandelbrot binaries: $(NETBSD_BENCH_DIR)/mandelbrot{,-static}"
-	@echo "julia binaries:      $(NETBSD_BENCH_DIR)/julia{,-static}"
-	@echo "plasma binaries:     $(NETBSD_BENCH_DIR)/plasma{,-static}"
-	@echo "lorenz binaries:     $(NETBSD_BENCH_DIR)/lorenz{,-static}"
-	@echo "shadebobs binaries:  $(NETBSD_BENCH_DIR)/shadebobs{,-static}"
-	@echo "penumbra-text bins:  $(NETBSD_BENCH_DIR)/penumbra-text{,-static}"
+	@echo "pbench binaries: $(NETBSD_BENCH_DIR)/pbench{,-static}"
 
 # ── Benchmark SD image and runners ───────────────────────────
 # Builds benchmark ELFs and creates an SD image containing them.

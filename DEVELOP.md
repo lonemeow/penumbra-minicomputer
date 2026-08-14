@@ -223,8 +223,12 @@ make image                                         # Stage all custom utilities 
 make simulate SDCARD=build/boot.img                # Boot, log in, run pbench
 ```
 
-`make image` automatically builds and overlays the whole benchmark
-suite into `/usr/local/bin/` (see § 8). Inside the running NetBSD: `pbench list`, `pbench libc memcpy`, etc. Use `pbench -o FILE` to dump machine-readable `RESULT key=value` lines. Baseline numbers in `benchmark/netbsd-bench/BASELINE.md`.
+`make image` automatically builds and overlays the benchmark suite and
+the graphics demos into `/usr/local/bin/` (see § 8). Inside the running
+NetBSD: `pbench list`, `pbench libc memcpy`, etc. Use `pbench -o FILE`
+to dump machine-readable `RESULT key=value` lines. Baseline numbers in
+`benchmark/netbsd-bench/BASELINE.md`. The demos are under `sw/demos/`
+and build with `make demos`.
 
 ---
 
