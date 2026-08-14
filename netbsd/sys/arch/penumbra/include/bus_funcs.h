@@ -32,6 +32,15 @@ int	bus_space_map(bus_space_tag_t, bus_addr_t, bus_size_t,
 void	bus_space_unmap(bus_space_tag_t, bus_space_handle_t, bus_size_t);
 
 /*
+ * Device-memory mmap: turns a bus address plus offset into what a
+ * driver's d_mmap returns — a page frame, which the caller hands to
+ * pmap_phys_address.  Callers are responsible for bounding the offset
+ * to the region they intend to expose; this does no clamping, because
+ * only the driver knows where its mappable window ends.
+ */
+paddr_t	bus_space_mmap(bus_space_tag_t, bus_addr_t, off_t, int, int);
+
+/*
  * Read/write single values — volatile pointer dereferences.
  *
  * Each macro argument is referenced exactly once in its expansion so

@@ -46,6 +46,19 @@ bus_space_map(bus_space_tag_t t, bus_addr_t bpa, bus_size_t size,
 	return 0;
 }
 
+paddr_t
+bus_space_mmap(bus_space_tag_t t, bus_addr_t addr, off_t off, int prot,
+    int flags)
+{
+
+	/*
+	 * The I/O region is uncached by the address map, so the mapping
+	 * needs no cache attribute of its own.  The return value is a
+	 * page frame; pmap_phys_address turns it back into an address.
+	 */
+	return atop(addr + off);
+}
+
 void
 bus_space_unmap(bus_space_tag_t t, bus_space_handle_t bsh, bus_size_t size)
 {
