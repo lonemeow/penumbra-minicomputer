@@ -19,11 +19,19 @@
  * characters mean "escaped early" (outside the set) and '@' means
  * "still bounded after MAX_ITER iterations" (inside, or close to it).
  *
- * Usage: mandelbrot [-m|--mono | -b|--blocks] [PRESET]
+ * Usage: mandelbrot [-m|--mono | -b|--blocks | -f|--fb [DEV]]
+ *                   [-H|--hold SECONDS] [PRESET]
  *                   [WIDTH] [HEIGHT] [MAX_ITER]
  *        mandelbrot list
  *   defaults: full preset, 78 x 39, per-preset max_iter,
  *             blocks mode on TTY / mono mode when piped
+ *
+ * --hold applies to fb mode, where the picture would otherwise vanish
+ * the instant the render finished: it is how long a finished picture
+ * stays up before the console returns.  A keypress always ends it; the
+ * default of 0 means only a keypress does, which is what someone at a
+ * prompt wants.  An unattended exhibit passes a number of seconds
+ * instead, so the display moves on by itself.
  *
  * Render modes:
  *   mono    pure ASCII brightness ramp, no escape codes; works on any
@@ -31,6 +39,12 @@
  *   blocks  Unicode U+2580 upper-half-block + ANSI 256-color fg/bg per
  *           cell, doubles effective vertical resolution.  Needs an
  *           xterm-level terminal (most modern emulators qualify).
+ *   fb      one sample per pixel into a wsdisplay framebuffer, mapped
+ *           straight into the process.  Geometry comes from the device
+ *           rather than the WIDTH/HEIGHT arguments.  It renders on
+ *           whatever stdout is attached to, so this needs to be run on
+ *           a display advertising the capability; DEV names another
+ *           one when the picture should go somewhere else.
  *
  * Height defaults to odd so the middle row samples y=cy exactly —
  * that puts the negative-real spike of the full set on a single
@@ -50,6 +64,13 @@
 #include <errno.h>
 #include <string.h>
 #include <unistd.h>     /* isatty() for color auto-detect */
+#include <fcntl.h>
+#include <termios.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <sys/select.h>
+
+#include <dev/wscons/wsconsio.h>
 
 #include "perfctr.h"
 #include "dterm.h"
@@ -129,7 +150,77 @@ static uint8_t pixel_color(int iter, int max_iter) {
 enum render_mode {
     MODE_MONO = 0,
     MODE_BLOCKS,
+    MODE_FB,
 };
+
+/* ── Framebuffer output ──────────────────────────────────────────────── */
+/*
+ * The wsdisplay dumb-framebuffer path: ask the device its geometry,
+ * install a colormap, switch the screen to the pixel source, and map
+ * the pixels straight into this process.  There is no shadow and no
+ * blit call — a store to the mapping is a store to the device.
+ *
+ * The mapping covers the pixel aperture alone; the driver refuses any
+ * offset outside it, so a stray write cannot reach the control
+ * registers that share the device.
+ *
+ * The target is stdout — the picture goes where the program's output
+ * was already going, so running this from the serial console renders
+ * on the serial console's terms and does not reach across to seize a
+ * screen nobody asked about.  A device path is the way to say
+ * otherwise, and then it is a deliberate act rather than a default.
+ */
+
+struct fbdev {
+    int      fd;
+    int      own_fd;        /* opened here; stdout's is only borrowed */
+    uint8_t *pix;
+    size_t   size;
+    u_int    width;
+    u_int    height;
+    u_int    stride;
+    u_int    cmsize;
+    int      mode_set;      /* screen switched, must be put back */
+};
+
+static uint8_t *iter_to_cmap_idx;
+
+static void fb_build_cmap(uint8_t *r, uint8_t *g, uint8_t *b, u_int cmsize,
+                          int max_iter)
+{
+    iter_to_cmap_idx = malloc((max_iter + 1) * sizeof(uint8_t));
+
+    for (u_int i = 0; i < cmsize; i++) {
+        r[i] = 0x00;
+        g[i] = 0x00;
+        b[i] = 0x00;
+    }
+
+    for (int i = 0; i < max_iter; i++) {
+        int cm_idx = (int)(((u_int)i * (cmsize - 1)) / (u_int)max_iter);
+        iter_to_cmap_idx[i] = cm_idx;
+
+        double t = (double)cm_idx / 255.0;
+        double rv = 9.0  * (1.0 - t) * t * t * t;
+        double gv = 15.0 * (1.0 - t) * (1.0 - t) * t * t;
+        double bv = 8.5  * (1.0 - t) * (1.0 - t) * (1.0 - t) * t;
+
+        r[cm_idx] = (uint8_t)(rv * 255.0);
+        g[cm_idx] = (uint8_t)(gv * 255.0);
+        b[cm_idx] = (uint8_t)(bv * 255.0);
+    }
+
+    // Non-escaping
+    iter_to_cmap_idx[max_iter] = cmsize - 1;
+    r[cmsize - 1] = 0x00;
+    g[cmsize - 1] = 0x00;
+    b[cmsize - 1] = 0x00;
+}
+
+static uint8_t fb_palette_index(int iter, int max_iter)
+{
+    return iter_to_cmap_idx[iter];
+}
 
 /* ── Viewport presets ────────────────────────────────────────────────── */
 
@@ -314,6 +405,179 @@ static void render_blocks(const struct preset *p, int width, int height,
     free(line);
 }
 
+/* ── Framebuffer plumbing ────────────────────────────────────────────── */
+
+static int fb_open(struct fbdev *fb, const char *path, int max_iter) {
+    struct wsdisplayio_fbinfo fbi;
+    struct wsdisplay_cmap cm;
+    uint8_t r[256], g[256], b[256];
+    const char *what = path ? path : "stdout";
+    u_int mode;
+
+    memset(fb, 0, sizeof(*fb));
+    if (path == NULL) {
+        fb->fd = fileno(stdout);
+    } else {
+        /* O_NOCTTY: this is a display device here, not a terminal to
+         * talk on.  Run from a shell the process already has a
+         * controlling tty and nothing would happen, but run without
+         * one — from a script, or at boot — opening a tty would
+         * otherwise acquire it, and the screen about to be taken for
+         * pixels would become the process's terminal. */
+        fb->fd = open(path, O_RDWR | O_NOCTTY);
+        if (fb->fd < 0) {
+            fprintf(stderr, "mandelbrot: %s: %s\n", path, strerror(errno));
+            return -1;
+        }
+        fb->own_fd = 1;
+    }
+
+    if (ioctl(fb->fd, WSDISPLAYIO_GET_FBINFO, &fbi) != 0) {
+        fprintf(stderr, "mandelbrot: %s has no framebuffer: %s\n",
+                what, strerror(errno));
+        if (fb->own_fd) close(fb->fd);
+        return -1;
+    }
+    if (fbi.fbi_bitsperpixel != 8 || fbi.fbi_pixeltype != WSFB_CI) {
+        fprintf(stderr, "mandelbrot: unsupported format "
+                "(%u bpp, pixeltype %u)\n",
+                fbi.fbi_bitsperpixel, fbi.fbi_pixeltype);
+        if (fb->own_fd) close(fb->fd);
+        return -1;
+    }
+
+    fb->width = fbi.fbi_width;
+    fb->height = fbi.fbi_height;
+    fb->stride = fbi.fbi_stride;
+    fb->size = (size_t)fbi.fbi_fbsize;
+    fb->cmsize = fbi.fbi_subtype.fbi_cmapinfo.cmap_entries;
+    if (fb->cmsize > 256)
+        fb->cmsize = 256;
+
+    fb_build_cmap(r, g, b, fb->cmsize, max_iter);
+    cm.index = 0;
+    cm.count = fb->cmsize;
+    cm.red = r;
+    cm.green = g;
+    cm.blue = b;
+    if (ioctl(fb->fd, WSDISPLAYIO_PUTCMAP, &cm) != 0) {
+        fprintf(stderr, "mandelbrot: PUTCMAP: %s\n", strerror(errno));
+        if (fb->own_fd) close(fb->fd);
+        return -1;
+    }
+
+    /* Switch the screen before mapping: the aperture is live either
+     * way, but drawing into a picture nobody is looking at would show
+     * the render as a jump rather than as it happens. */
+    mode = WSDISPLAYIO_MODE_DUMBFB;
+    if (ioctl(fb->fd, WSDISPLAYIO_SMODE, &mode) != 0) {
+        fprintf(stderr, "mandelbrot: SMODE: %s\n", strerror(errno));
+        if (fb->own_fd) close(fb->fd);
+        return -1;
+    }
+    fb->mode_set = 1;
+
+    fb->pix = mmap(NULL, fb->size, PROT_READ | PROT_WRITE, MAP_SHARED,
+                   fb->fd, 0);
+    if (fb->pix == MAP_FAILED) {
+        fprintf(stderr, "mandelbrot: mmap: %s\n", strerror(errno));
+        mode = WSDISPLAYIO_MODE_EMUL;
+        ioctl(fb->fd, WSDISPLAYIO_SMODE, &mode);
+        if (fb->own_fd) close(fb->fd);
+        return -1;
+    }
+
+    /* Pixel contents are undefined until something writes them, and
+     * the screen is already showing this source.  A render takes long
+     * enough that without a clear the viewer watches the picture eat
+     * its way through whatever was in the memory — on a cold boot,
+     * noise.  Entry 0 is the first gradient stop, which is black. */
+    memset(fb->pix, 0, fb->size);
+    return 0;
+}
+
+/*
+ * Hold the finished picture.  Graphics mode ends when this returns, so
+ * without it the render would appear and vanish in the same instant —
+ * the console comes back the moment the program is done.
+ *
+ * A keypress always dismisses.  hold_seconds > 0 also gives up after
+ * that long, which is what an unattended exhibit wants; 0 waits for
+ * someone, which is what a person at a prompt wants.
+ */
+static void fb_hold(int hold_seconds) {
+    struct termios saved, raw;
+    struct timeval tv, *tvp = NULL;
+    fd_set rfds;
+    unsigned char c;
+    int have_tty;
+
+    /* Single keypress, not a line: the reader is a person looking at a
+     * picture, not a shell waiting for a command. */
+    have_tty = (tcgetattr(STDIN_FILENO, &saved) == 0);
+    if (have_tty) {
+        raw = saved;
+        raw.c_lflag &= ~((tcflag_t)(ICANON | ECHO));
+        raw.c_cc[VMIN] = 1;
+        raw.c_cc[VTIME] = 0;
+        tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+    }
+
+    FD_ZERO(&rfds);
+    FD_SET(STDIN_FILENO, &rfds);
+    if (hold_seconds > 0) {
+        tv.tv_sec = hold_seconds;
+        tv.tv_usec = 0;
+        tvp = &tv;
+    }
+    if (select(STDIN_FILENO + 1, &rfds, NULL, NULL, tvp) > 0)
+        (void)read(STDIN_FILENO, &c, 1);
+
+    if (have_tty)
+        tcsetattr(STDIN_FILENO, TCSANOW, &saved);
+}
+
+/* Put the character console back.  wsdisplay also does this when the
+ * last close happens, so a crash recovers too; doing it here is what
+ * makes a normal exit land on a readable screen rather than the last
+ * frame. */
+static void fb_close(struct fbdev *fb) {
+    u_int mode = WSDISPLAYIO_MODE_EMUL;
+
+    if (fb->pix != NULL && fb->pix != MAP_FAILED)
+        munmap(fb->pix, fb->size);
+    if (fb->mode_set)
+        ioctl(fb->fd, WSDISPLAYIO_SMODE, &mode);
+    if (fb->own_fd)
+        close(fb->fd);
+}
+
+/*
+ * One sample per pixel, written straight into the mapping.
+ *
+ * The viewport helper takes cell height and sample rows separately
+ * because the terminal's cells are twice as tall as they are wide.
+ * Framebuffer pixels are square — the device doubles both axes
+ * equally — so passing half the row count as the cell height cancels
+ * the helper's 2x and keeps circles round.
+ */
+static void render_fb(const struct preset *p, struct fbdev *fb,
+                      int max_iter) {
+    const int w = (int)fb->width, h = (int)fb->height;
+    const struct viewport v = make_viewport(p, w, h / 2, h);
+
+    for (int py = 0; py < h; py++) {
+        q_t ci = v.y_min + (q_t)((int64_t)py * v.dy);
+        uint8_t *row = fb->pix + (size_t)py * fb->stride;
+
+        for (int px = 0; px < w; px++) {
+            q_t cr = v.x_min + (q_t)((int64_t)px * v.dx);
+            row[px] = fb_palette_index(mandel_iter(cr, ci, max_iter),
+                                       max_iter);
+        }
+    }
+}
+
 static void render(const struct preset *p, int width, int height,
                    int max_iter, enum render_mode mode) {
     if (mode == MODE_BLOCKS) {
@@ -343,7 +607,10 @@ int main(int argc, char **argv) {
     int width    = 78;
     int height   = 39;     /* odd: middle row lands on y=cy (clean spike) */
     int max_iter = -1;     /* -1 => use the preset's own default */
+    const char *fb_path = NULL;   /* NULL => stdout's device */
+    int hold_seconds = 0;         /* 0 => hold until a keypress */
     enum render_mode mode;
+    struct fbdev fb;
 
     /* Seven rows go to the header, the blanks around the picture, the
      * timing line and the three-line counter report at exit. */
@@ -367,6 +634,19 @@ int main(int argc, char **argv) {
                    strcmp(argv[argi], "-c")       == 0) {
             mode = MODE_BLOCKS;
             argi++;
+        } else if ((strcmp(argv[argi], "--hold") == 0 ||
+                    strcmp(argv[argi], "-H")     == 0) &&
+                   argi + 1 < argc) {
+            hold_seconds = atoi(argv[argi + 1]);
+            argi += 2;
+        } else if (strcmp(argv[argi], "--fb") == 0 ||
+                   strcmp(argv[argi], "-f")   == 0) {
+            mode = MODE_FB;
+            argi++;
+            /* An optional device path sends the picture somewhere
+             * other than where the program's output already goes. */
+            if (argi < argc && argv[argi][0] == '/')
+                fb_path = argv[argi++];
         } else {
             break;
         }
@@ -393,29 +673,46 @@ int main(int argc, char **argv) {
 
     if (width < 8 || height < 4 || max_iter < 4) {
         fprintf(stderr,
-                "usage: %s [-b|--blocks | -m|--mono] [PRESET] "
-                       "[WIDTH>=8] [HEIGHT>=4] [MAX_ITER>=4]\n"
+                "usage: %s [-b|--blocks | -m|--mono | -f|--fb [DEV]] "
+                       "[-H|--hold SECONDS] "
+                       "[PRESET] [WIDTH>=8] [HEIGHT>=4] [MAX_ITER>=4]\n"
                 "       %s list\n",
                 argv[0], argv[0]);
         return 2;
     }
 
-    /* In blocks mode each cell holds two stacked pixels, so the
-     * sample count (= mandel_iter calls) is W*2H, not W*H. */
-    const int pixel_rows  = (mode == MODE_BLOCKS) ? 2 * height : height;
-    const char *mode_desc = dterm_mode_name(mode == MODE_BLOCKS);
+    /* The framebuffer's geometry comes from the device, so WIDTH and
+     * HEIGHT do not apply; in blocks mode each cell holds two stacked
+     * pixels, so the sample count is W*2H rather than W*H. */
+    if (mode == MODE_FB && fb_open(&fb, fb_path, max_iter) != 0)
+        return 1;
 
-    printf("Mandelbrot %s  %dx%d cells (%dx%d samples)  iter=%d  Q4.28  %s\n\n",
-           p->name, width, height, width, pixel_rows, max_iter, mode_desc);
+    const int pixel_rows = (mode == MODE_FB)     ? (int)fb.height :
+                           (mode == MODE_BLOCKS) ? 2 * height : height;
+    const int pixel_cols = (mode == MODE_FB) ? (int)fb.width : width;
+
+    if (mode == MODE_FB) {
+        printf("Mandelbrot %s  %ux%u pixels on %s  iter=%d  Q4.28\n\n",
+               p->name, fb.width, fb.height,
+               fb_path ? fb_path : "this terminal", max_iter);
+    } else {
+        printf("Mandelbrot %s  %dx%d cells (%dx%d samples)  iter=%d  "
+               "Q4.28  %s\n\n",
+               p->name, width, height, width, pixel_rows, max_iter,
+               dterm_mode_name(mode == MODE_BLOCKS));
+    }
     fflush(stdout);
 
     uint64_t t0 = now_ns();
     perf_demo_track();          /* snapshot perfctrs; dump breakdown at exit */
-    render(p, width, height, max_iter, mode);
+    if (mode == MODE_FB)
+        render_fb(p, &fb, max_iter);
+    else
+        render(p, width, height, max_iter, mode);
     uint64_t t1 = now_ns();
 
     uint64_t elapsed_ns  = t1 - t0;
-    uint64_t samples     = (uint64_t)width * (uint64_t)pixel_rows;
+    uint64_t samples     = (uint64_t)pixel_cols * (uint64_t)pixel_rows;
     /* us/sample = ns/sample / 1000.  At 25 MHz with ~3 software
      * multiplies per iter, expect tens-to-hundreds of microseconds
      * per sample today; hardware MUL should knock this down sharply. */
@@ -426,5 +723,15 @@ int main(int argc, char **argv) {
            (unsigned long long)((elapsed_ns % 1000000000ull) / 1000000ull),
            (unsigned long long)us_per_samp,
            (unsigned long long)samples);
+
+    /* Hold the picture, then put the console back.  The timing above
+     * has already been written; if stdout is the display it was
+     * written to cells the graphics mode is covering, so it appears
+     * once the console returns. */
+    if (mode == MODE_FB) {
+        fflush(stdout);
+        fb_hold(hold_seconds);
+        fb_close(&fb);
+    }
     return 0;
 }
