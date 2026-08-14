@@ -54,7 +54,8 @@ OBJDIR      := $(BUILDDIR)/obj
 DEMOS       := mandelbrot julia plasma lorenz shadebobs penumbra-text
 MATH_DEMOS  := plasma shadebobs penumbra-text
 
-SHARED_OBJS := $(OBJDIR)/dterm.o $(OBJDIR)/perfctr.o
+SHARED_OBJS := $(OBJDIR)/demo.o $(OBJDIR)/dterm.o $(OBJDIR)/fractal.o \
+               $(OBJDIR)/perfctr.o
 
 .PHONY: all dynamic static overlay clean
 all: dynamic static

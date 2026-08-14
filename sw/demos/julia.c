@@ -32,50 +32,9 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "perfctr.h"
+#include "demo.h"
 #include "dterm.h"
-
-/* ── Q4.28 fixed-point helpers (mirrored from mandelbrot.c) ─────────── */
-
-typedef int32_t q_t;
-
-#define Q_FRAC_BITS  28
-#define Q_ONE        ((q_t)1 << Q_FRAC_BITS)
-#define Q_INT(n)     ((q_t)((n) * (int64_t)Q_ONE))
-
-static inline q_t qmul(q_t a, q_t b) {
-    return (q_t)(((int64_t)a * (int64_t)b) >> Q_FRAC_BITS);
-}
-
-#define Q_ESCAPE     Q_INT(4)
-#define Q_FROM_FRAC(num, den) \
-    ((q_t)(((int64_t)(num) * (int64_t)Q_ONE) / (den)))
-
-/* ── ANSI 256-color palette ─────────────────────────────────────────── */
-
-/* Same 30-step hue cycle as mandelbrot.c.  See that file for the
- * derivation and swap-out options (fire/ocean/gray). */
-static const uint8_t palette[] = {
-    196, 202, 208, 214, 220, 226,
-    190, 154, 118,  82,  46,
-     47,  48,  49,  50,  51,
-     45,  39,  33,  27,  21,
-     57,  93, 129, 165, 201,
-    200, 199, 198, 197,
-};
-#define PALETTE_LEN  (sizeof(palette) / sizeof(palette[0]))
-
-#define COLOR_INSET   16   /* near-black for "inside the filled Julia set" */
-
-static uint8_t pixel_color(int iter, int max_iter) {
-    if (iter >= max_iter) return COLOR_INSET;
-    return palette[iter % PALETTE_LEN];
-}
-
-enum render_mode {
-    MODE_MONO = 0,
-    MODE_BLOCKS,
-};
+#include "fractal.h"
 
 /* ── Julia presets ──────────────────────────────────────────────────── */
 
@@ -156,70 +115,102 @@ static int julia_iter(q_t zr, q_t zi, q_t cr, q_t ci, int max_iter) {
 }
 
 /* ── Rendering ──────────────────────────────────────────────────────── */
+/*
+ * The same three renderers mandelbrot has, differing only in which of z
+ * and c the pixel supplies: here the pixel is z_0 and c is fixed by the
+ * preset, which is what turns one kernel into a family of shapes.
+ */
 
-static const char ramp[] = " .:-=+*#%@";
-#define RAMP_LEN  (sizeof(ramp) - 1)
-
-struct viewport {
-    q_t x_min, y_min, dx, dy;
+struct julia {
+    const struct preset *preset;
+    int                  max_iter;
 };
 
-static struct viewport make_viewport(const struct preset *p,
-                                     int width, int cell_height,
-                                     int pixel_rows) {
-    const q_t half_w = p->view_hw;
-    const q_t half_h = (q_t)(((int64_t)half_w * 2 * cell_height) / width);
-    struct viewport v = {
-        .x_min = p->view_cx - half_w,
-        .y_min = p->view_cy - half_h,
-        .dx    = (q_t)(((int64_t)(2 * half_w)) / (width      - 1)),
-        .dy    = (q_t)(((int64_t)(2 * half_h)) / (pixel_rows - 1)),
-    };
-    return v;
+static struct julia state = { NULL, -1 };
+
+static int parse_args(int argc, char **argv, void *vs) {
+    struct julia *j = vs;
+    int i = 0;
+
+    if (i < argc && strcmp(argv[i], "list") == 0) {
+        list_presets();
+        exit(0);
+    }
+    if (i < argc && !dterm_looks_like_int(argv[i])) {
+        j->preset = find_preset(argv[i]);
+        if (j->preset == NULL) {
+            fprintf(stderr, "unknown preset '%s' (try `list')\n", argv[i]);
+            return -1;
+        }
+        i++;
+    } else {
+        j->preset = &presets[0];
+    }
+    if (i < argc)
+        j->max_iter = atoi(argv[i++]);
+    if (j->max_iter < 0)
+        j->max_iter = j->preset->def_max_iter;
+    if (j->max_iter < 4 || j->max_iter > FRACTAL_MAX_ITER) {
+        fprintf(stderr, "max_iter must be between 4 and %d\n",
+            FRACTAL_MAX_ITER);
+        return -1;
+    }
+    return 0;
 }
 
-static void render_mono(const struct preset *p, int width, int height,
-                        int max_iter) {
-    const struct viewport v = make_viewport(p, width, height, height);
-    char *line = malloc((size_t)width + 2);
-    if (!line) { perror("malloc"); exit(1); }
+static void render_mono(const struct demo_surface *s, void *vs) {
+    const struct julia *j = vs;
+    const struct demo_viewport v = demo_viewport(s, j->preset->view_cx,
+        j->preset->view_cy, j->preset->view_hw, s->height);
+    char *line = malloc((size_t)s->width + 2);
 
-    for (int py = 0; py < height; py++) {
-        q_t zi0 = v.y_min + (q_t)((int64_t)py * v.dy);
-        for (int px = 0; px < width; px++) {
-            q_t zr0 = v.x_min + (q_t)((int64_t)px * v.dx);
-            int it = julia_iter(zr0, zi0, p->cr, p->ci, max_iter);
-            int idx = (it >= max_iter) ? (int)(RAMP_LEN - 1)
-                                       : (it * (int)(RAMP_LEN - 1)) / max_iter;
-            line[px] = ramp[idx];
+    if (!line) { perror("malloc"); exit(1); }
+    for (unsigned py = 0; py < s->height; py++) {
+        q_t zi = v.y_min + (q_t)((int64_t)py * v.dy);
+        for (unsigned px = 0; px < s->width; px++) {
+            q_t zr = v.x_min + (q_t)((int64_t)px * v.dx);
+            int it = julia_iter(zr, zi, j->preset->cr, j->preset->ci,
+                j->max_iter);
+            int idx = (it >= j->max_iter)
+                ? FRACTAL_RAMP_LEN - 1
+                : (it * (FRACTAL_RAMP_LEN - 1)) / j->max_iter;
+            line[px] = fractal_ramp[idx];
         }
-        line[width]     = '\n';
-        line[width + 1] = '\0';
+        line[s->width]     = '\n';
+        line[s->width + 1] = '\0';
         fputs(line, stdout);
     }
     free(line);
 }
 
-static void render_blocks(const struct preset *p, int width, int height,
-                          int max_iter) {
-    const int pixel_rows = 2 * height;
-    const struct viewport v = make_viewport(p, width, height, pixel_rows);
-    char *line = malloc((size_t)width * 32 + 16);
-    if (!line) { perror("malloc"); exit(1); }
+static void render_blocks(const struct demo_surface *s, void *vs) {
+    const struct julia *j = vs;
+    /* Two vertical samples per cell: emit the upper-half-block glyph
+     * with fg = top sample, bg = bottom. */
+    const unsigned rows = s->height * 2;
+    const struct demo_viewport v = demo_viewport(s, j->preset->view_cx,
+        j->preset->view_cy, j->preset->view_hw, rows);
+    /* Worst case per cell: two SGR sequences plus U+2580 in UTF-8. */
+    char *line = malloc((size_t)s->width * 32 + 16);
 
-    for (int cy = 0; cy < height; cy++) {
+    if (!line) { perror("malloc"); exit(1); }
+    for (unsigned cy = 0; cy < s->height; cy++) {
         q_t zi_top = v.y_min + (q_t)((int64_t)(cy * 2)     * v.dy);
         q_t zi_bot = v.y_min + (q_t)((int64_t)(cy * 2 + 1) * v.dy);
         char *out  = line;
-        int last_fg = -2, last_bg = -2;
+        int last_fg = -2, last_bg = -2;   /* force the first emit */
 
-        for (int px = 0; px < width; px++) {
-            q_t zr0 = v.x_min + (q_t)((int64_t)px * v.dx);
-            int it_top = julia_iter(zr0, zi_top, p->cr, p->ci, max_iter);
-            int it_bot = julia_iter(zr0, zi_bot, p->cr, p->ci, max_iter);
-            int fg = pixel_color(it_top, max_iter);
-            int bg = pixel_color(it_bot, max_iter);
+        for (unsigned px = 0; px < s->width; px++) {
+            q_t zr = v.x_min + (q_t)((int64_t)px * v.dx);
+            int fg = fractal_cell_color(julia_iter(zr, zi_top,
+                j->preset->cr, j->preset->ci, j->max_iter), j->max_iter);
+            int bg = fractal_cell_color(julia_iter(zr, zi_bot,
+                j->preset->cr, j->preset->ci, j->max_iter), j->max_iter);
 
+            /* Run-length the fg/bg pair: a flat band of the same
+             * colours costs one escape, not one per cell.  On a
+             * 115200-baud console that is the difference between a
+             * frame fitting and not. */
             if (fg != last_fg || bg != last_bg) {
                 out = dterm_pair_color(out, fg, bg);
                 last_fg = fg;
@@ -227,6 +218,8 @@ static void render_blocks(const struct preset *p, int width, int height,
             }
             out = dterm_pair_glyph(out);
         }
+        /* Reset, so the next row does not inherit and the prompt after
+         * the picture starts uncoloured. */
         *out++ = '\033'; *out++ = '['; *out++ = '0'; *out++ = 'm';
         *out++ = '\n';
         *out   = '\0';
@@ -235,101 +228,43 @@ static void render_blocks(const struct preset *p, int width, int height,
     free(line);
 }
 
-static void render(const struct preset *p, int width, int height,
-                   int max_iter, enum render_mode mode) {
-    if (mode == MODE_BLOCKS) render_blocks(p, width, height, max_iter);
-    else                     render_mono(p, width, height, max_iter);
-}
+static void render_pixels(const struct demo_surface *s, void *vs) {
+    const struct julia *j = vs;
+    const struct demo_viewport v = demo_viewport(s, j->preset->view_cx,
+        j->preset->view_cy, j->preset->view_hw, s->height);
+    uint8_t r[256], g[256], b[256];
 
-/* ── Main ───────────────────────────────────────────────────────────── */
+    fractal_build_cmap(r, g, b, s->cmap_entries, j->max_iter);
+    demo_set_cmap(s, r, g, b);
 
-static uint64_t now_ns(void) {
-    struct timespec ts;
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
-        perror("clock_gettime");
-        exit(1);
-    }
-    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
-}
+    for (unsigned py = 0; py < s->height; py++) {
+        q_t zi = v.y_min + (q_t)((int64_t)py * v.dy);
+        uint8_t *row = s->pix + (size_t)py * s->stride;
 
-
-int main(int argc, char **argv) {
-    const char *preset_name = "rabbit";    /* most iconic default */
-    int width    = 78;
-    int height   = 39;
-    int max_iter = -1;
-    enum render_mode mode;
-
-    /* Seven rows go to the header, the blanks around the picture, the
-     * timing line and the three-line counter report at exit. */
-    dterm_init(&width, &height, 2, 5);
-
-    /* Colour when something is watching, ASCII when piped. */
-    mode = isatty(fileno(stdout)) ? MODE_BLOCKS : MODE_MONO;
-
-    int argi = 1;
-    while (argi < argc) {
-        if (strcmp(argv[argi], "--mono") == 0 ||
-            strcmp(argv[argi], "-m")     == 0) {
-            mode = MODE_MONO; argi++;
-        } else if (strcmp(argv[argi], "--blocks") == 0 ||
-                   strcmp(argv[argi], "-b")       == 0 ||
-                   strcmp(argv[argi], "--color")  == 0 ||
-                   strcmp(argv[argi], "-c")       == 0) {
-            mode = MODE_BLOCKS; argi++;
-        } else {
-            break;
+        for (unsigned px = 0; px < s->width; px++) {
+            q_t zr = v.x_min + (q_t)((int64_t)px * v.dx);
+            row[px] = fractal_pixel_index(julia_iter(zr, zi, j->preset->cr,
+                j->preset->ci, j->max_iter));
         }
     }
-    if (argi < argc && strcmp(argv[argi], "list") == 0) {
-        list_presets();
-        return 0;
-    }
-    if (argi < argc && !dterm_looks_like_int(argv[argi])) {
-        preset_name = argv[argi++];
-    }
-    if (argi < argc) width    = atoi(argv[argi++]);
-    if (argi < argc) height   = atoi(argv[argi++]);
-    if (argi < argc) max_iter = atoi(argv[argi++]);
+}
 
-    const struct preset *p = find_preset(preset_name);
-    if (!p) {
-        fprintf(stderr, "%s: unknown preset '%s' "
-                        "(try '%s list')\n",
-                argv[0], preset_name, argv[0]);
-        return 2;
-    }
-    if (max_iter < 0) max_iter = p->def_max_iter;
+static void render_cells(const struct demo_surface *s, void *vs) {
+    if (s->blocks)
+        render_blocks(s, vs);
+    else
+        render_mono(s, vs);
+}
 
-    if (width < 8 || height < 4 || max_iter < 4) {
-        fprintf(stderr,
-                "usage: %s [-b|--blocks | -m|--mono] [PRESET] "
-                       "[WIDTH>=8] [HEIGHT>=4] [MAX_ITER>=4]\n"
-                "       %s list\n",
-                argv[0], argv[0]);
-        return 2;
-    }
+int main(int argc, char **argv) {
+    static const struct demo d = {
+        .name         = "julia",
+        .render_cell  = render_cells,
+        .render_pixel = render_pixels,
+        .parse        = parse_args,
+        .usage_tail   = "[PRESET] [MAX_ITER]\n       julia list",
+        .state        = &state,
+    };
 
-    const int pixel_rows  = (mode == MODE_BLOCKS) ? 2 * height : height;
-    const char *mode_desc = dterm_mode_name(mode == MODE_BLOCKS);
-
-    printf("Julia %s  %dx%d cells (%dx%d samples)  iter=%d  Q4.28  %s\n\n",
-           p->name, width, height, width, pixel_rows, max_iter, mode_desc);
-    fflush(stdout);
-
-    uint64_t t0 = now_ns();
-    perf_demo_track();          /* snapshot perfctrs; dump breakdown at exit */
-    render(p, width, height, max_iter, mode);
-    uint64_t t1 = now_ns();
-
-    uint64_t elapsed_ns  = t1 - t0;
-    uint64_t samples     = (uint64_t)width * (uint64_t)pixel_rows;
-    uint64_t us_per_samp = (elapsed_ns / 1000ull) / (samples ? samples : 1);
-
-    printf("\nelapsed: %llu.%03llu s  (%llu us/sample, %llu samples)\n",
-           (unsigned long long)(elapsed_ns / 1000000000ull),
-           (unsigned long long)((elapsed_ns % 1000000000ull) / 1000000ull),
-           (unsigned long long)us_per_samp,
-           (unsigned long long)samples);
-    return 0;
+    return demo_main(argc, argv, &d);
 }
