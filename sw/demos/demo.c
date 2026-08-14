@@ -117,6 +117,7 @@ pixel_open(struct demo_surface *s, const char *path, int quiet)
 {
 	struct wsdisplayio_fbinfo fbi;
 	const char *what = path ? path : "stdout";
+	uint8_t black[256];
 	u_int mode;
 
 	if (path == NULL) {
@@ -173,10 +174,15 @@ pixel_open(struct demo_surface *s, const char *path, int quiet)
 		s->cmap_entries = 256;
 	s->aspect_w = s->aspect_h = 1;	/* the device doubles both axes */
 
-	/* Contents are undefined until written, and the screen is already
-	 * showing this source.  A render takes long enough that without a
-	 * clear the viewer watches the picture eat its way through
-	 * whatever was there — on a cold boot, noise. */
+	/*
+	 * Clearing the pixels is only half of it: entry 0 has to *be*
+	 * black, and the palette is as undefined at power-up as the pixel
+	 * array.  Without this the cleared screen shows whatever colour
+	 * the device happened to hold, for however long the demo spends
+	 * preparing itself before installing a colormap of its own.
+	 */
+	memset(black, 0, sizeof(black));
+	demo_set_cmap(s, black, black, black);
 	memset(s->pix, 0, pixel_size);
 	return 0;
 
