@@ -41,10 +41,8 @@
 #include <errno.h>
 #include <termios.h>
 
-#include "perfctr.h"
+#include "demo.h"
 #include "dterm.h"
-
-static int g_stop;
 
 /* ── Q12.20 fixed-point helpers ─────────────────────────────────────── */
 
@@ -114,12 +112,8 @@ static const uint8_t palette[] = {
 
 /* ── Measurement instrumentation (same convention as plasma) ────────── */
 
-static int g_do_write = 1;
-static uint64_t g_bytes_rendered = 0;
-
 static inline void emit_bytes(const char *buf, size_t n) {
-    g_bytes_rendered += n;
-    if (g_do_write) (void)write(STDOUT_FILENO, buf, n);
+    (void)write(STDOUT_FILENO, buf, n);
 }
 
 /* ── Screen state + plotting ────────────────────────────────────────── */
@@ -302,214 +296,183 @@ static inline int project_z(q_t z, int pixel_rows) {
     return (pixel_rows - 1) - proj;
 }
 
-/* ── Terminal control + signal handling ─────────────────────────────── */
+/* ── Framework glue ─────────────────────────────────────────────────── */
 
-enum render_mode {
-    MODE_MONO = 0,
-    MODE_BLOCKS,
+/*
+ * Integration steps per second of wall clock.  The attractor is drawn
+ * by its own trajectory, so this sets how fast the curve is traced
+ * rather than how much happens per frame — the shape appears at the
+ * same rate whether a frame costs a screenful of escapes or a few
+ * hundred stores.
+ */
+#define STEPS_PER_SEC  600
+
+struct lorenz_demo {
+    struct lorenz_state s;
+    uint64_t elapsed_us;
+    uint64_t stepped;       /* integration steps taken so far */
+    int prev_sx, prev_sy;
+    int prev_valid;
+    int ready;
 };
 
+static struct lorenz_demo state = {
+    { Q_INT(1), Q_INT(1), Q_INT(1) },   /* far from the attractor, so the
+                                         * spiral-in transient is visible */
+    0, 0, 0, 0, 0, 0
+};
 
-
-
-
-static uint64_t now_ns(void) {
-    struct timespec ts;
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
-        perror("clock_gettime");
-        exit(1);
-    }
-    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+static int setup(const struct demo_surface *s) {
+    screen_width = (int)s->width;
+    screen_pixel_rows = (s->kind == DEMO_PIXEL) ? (int)s->height
+                                                : (int)s->height * 2;
+    screen_alloc(screen_width, screen_pixel_rows);
+    state.ready = 1;
+    return 0;
 }
 
-/* ── Main ───────────────────────────────────────────────────────────── */
+/* Colour by altitude rather than step number: revisiting a region
+ * paints it the same colour, so the picture builds coherent z-bands
+ * instead of cycling noise over itself. */
+static int color_for(q_t z) {
+    int idx = (int)(((int64_t)(z - VIEW_Z_LO) * (int64_t)PALETTE_LEN)
+        / (VIEW_Z_HI - VIEW_Z_LO));
+
+    if (idx < 0)
+        idx = 0;
+    if (idx >= (int)PALETTE_LEN)
+        idx = (int)PALETTE_LEN - 1;
+    return idx;
+}
+
+/* Advance the trajectory to where elapsed time says it should be.
+ * `plot` receives each new screen point and its palette index. */
+static void step_to_now(struct lorenz_demo *d,
+                        void (*plot)(int, int, int, int, int))
+{
+    uint64_t want = (d->elapsed_us * STEPS_PER_SEC) / 1000000ull;
+
+    while (d->stepped < want) {
+        int sx, sy, idx;
+
+        lorenz_step(&d->s);
+        d->stepped++;
+
+        sx = project_x(d->s.x, screen_width);
+        sy = project_z(d->s.z, screen_pixel_rows);
+        idx = color_for(d->s.z);
+
+        if (!d->prev_valid) {
+            d->prev_sx = sx;
+            d->prev_sy = sy;
+        }
+        plot(d->prev_sx, d->prev_sy, sx, sy, idx);
+        d->prev_sx = sx;
+        d->prev_sy = sy;
+        d->prev_valid = 1;
+    }
+}
+
+/* ── Cell surface ───────────────────────────────────────────────────── */
+
+static int cell_blocks;   /* the surface's half-block capability */
+
+static int cell_first = 1;
+
+static void plot_cells(int x0, int y0, int x1, int y1, int idx) {
+    if (cell_blocks) {
+        trail_advance(x0, y0, x1, y1, palette[idx]);
+    } else if (cell_first) {
+        /* Nothing to join the first point to. */
+        plot_mono(x1, y1);
+        cell_first = 0;
+    } else {
+        /* The trajectory can cross several cells between steps, so
+         * the segment is drawn rather than its endpoint plotted. */
+        plot_line_mono(x0, y0, x1, y1);
+    }
+}
+
+static void frame_cells(const struct demo_surface *s, uint32_t dt_us,
+                        uint64_t frame, void *vs) {
+    struct lorenz_demo *d = vs;
+
+    if (frame == 0) {
+        if (setup(s) != 0)
+            exit(1);
+        cell_blocks = s->blocks;
+    }
+    d->elapsed_us += dt_us;
+    step_to_now(d, plot_cells);
+}
+
+/* ── Pixel surface ──────────────────────────────────────────────────── */
+
+static uint8_t *fb_pix;
+static unsigned fb_stride;
+static unsigned fb_w, fb_h;
+
+/* Bresenham between successive trajectory points: at this step rate the
+ * curve moves more than a pixel per step in the fast parts of the
+ * orbit, and plotting only the endpoints would leave it dashed. */
+static void plot_pixels(int x0, int y0, int x1, int y1, int idx) {
+    int dx = x1 > x0 ? x1 - x0 : x0 - x1;
+    int dy = y1 > y0 ? y1 - y0 : y0 - y1;
+    int sx = x0 < x1 ? 1 : -1;
+    int sy = y0 < y1 ? 1 : -1;
+    int err = dx - dy;
+
+    for (;;) {
+        if (x0 >= 0 && (unsigned)x0 < fb_w &&
+            y0 >= 0 && (unsigned)y0 < fb_h)
+            fb_pix[(size_t)y0 * fb_stride + x0] = (uint8_t)(idx + 1);
+        if (x0 == x1 && y0 == y1)
+            break;
+        int e2 = err * 2;
+        if (e2 > -dy) { err -= dy; x0 += sx; }
+        if (e2 <  dx) { err += dx; y0 += sy; }
+    }
+}
+
+/* The palette's colours, one per entry, with 0 kept as the canvas.
+ * A terminal leaves untouched cells alone; every pixel here has a
+ * colour, so the background has to be one. */
+static void build_cmap(const struct demo_surface *s) {
+    uint8_t r[256], g[256], b[256];
+    unsigned n = s->cmap_entries < 256 ? s->cmap_entries : 256;
+
+    memset(r, 0, sizeof(r));
+    memset(g, 0, sizeof(g));
+    memset(b, 0, sizeof(b));
+    for (unsigned i = 0; i < PALETTE_LEN && i + 1 < n; i++)
+        demo_xterm_rgb(palette[i], &r[i + 1], &g[i + 1], &b[i + 1]);
+    demo_set_cmap(s, r, g, b);
+}
+
+static void frame_pixels(const struct demo_surface *s, uint32_t dt_us,
+                         uint64_t frame, void *vs) {
+    struct lorenz_demo *d = vs;
+
+    if (frame == 0) {
+        if (setup(s) != 0)
+            exit(1);
+        build_cmap(s);
+        fb_pix = s->pix;
+        fb_stride = s->stride;
+        fb_w = s->width;
+        fb_h = s->height;
+    }
+    d->elapsed_us += dt_us;
+    step_to_now(d, plot_pixels);
+}
 
 int main(int argc, char **argv) {
-    int width    = 78;
-    int height   = 39;
-    int max_steps = 0;        /* 0 = infinite until SIGINT/keypress */
-    enum render_mode mode;
+    static const struct demo d = {
+        .name        = "lorenz",
+        .frame_cell  = frame_cells,
+        .frame_pixel = frame_pixels,
+        .state       = &state,
+    };
 
-    /* The picture is redrawn in place, so only the banner and its hint
-     * are kept back; the summary at exit may scroll. */
-    dterm_init(&width, &height, 2, 0);
-
-    /* Colour when something is watching, ASCII when piped. */
-    mode = isatty(fileno(stdout)) ? MODE_BLOCKS : MODE_MONO;
-
-    int argi = 1;
-    while (argi < argc) {
-        if (strcmp(argv[argi], "--mono") == 0 ||
-            strcmp(argv[argi], "-m")     == 0) {
-            mode = MODE_MONO; argi++;
-        } else if (strcmp(argv[argi], "--blocks") == 0 ||
-                   strcmp(argv[argi], "-b")       == 0 ||
-                   strcmp(argv[argi], "--color")  == 0 ||
-                   strcmp(argv[argi], "-c")       == 0) {
-            mode = MODE_BLOCKS; argi++;
-        } else if (strcmp(argv[argi], "--nodraw") == 0 ||
-                   strcmp(argv[argi], "-n")       == 0) {
-            g_do_write = 0; argi++;
-        } else {
-            break;
-        }
-    }
-    if (argi < argc && !dterm_looks_like_int(argv[argi])) {
-        /* Reserved for future preset arg; for now reject unknown. */
-        fprintf(stderr, "%s: unexpected arg '%s'\n", argv[0], argv[argi]);
-        return 2;
-    }
-    if (argi < argc) max_steps = atoi(argv[argi++]);
-    if (argi < argc) width     = atoi(argv[argi++]);
-    if (argi < argc) height    = atoi(argv[argi++]);
-
-    if (width < 8 || height < 4 || max_steps < 0) {
-        fprintf(stderr,
-                "usage: %s [-b|--blocks | -m|--mono] [-n|--nodraw] "
-                       "[MAX_STEPS] [WIDTH>=8] [HEIGHT>=4]\n",
-                argv[0]);
-        return 2;
-    }
-
-    int pixel_rows = (mode == MODE_BLOCKS) ? 2 * height : height;
-    screen_alloc(width, pixel_rows);
-
-    /* Trap SIGINT for clean exit. */
-    dterm_catch_interrupt();
-
-    /* Non-canonical stdin for "press any key to stop." */
-    int kbd_active = isatty(STDIN_FILENO);
-    struct termios orig_tio;
-    if (kbd_active) {
-        if (tcgetattr(STDIN_FILENO, &orig_tio) == 0) {
-            struct termios raw = orig_tio;
-            raw.c_lflag &= ~(ICANON | ECHO);
-            raw.c_cc[VMIN]  = 0;
-            raw.c_cc[VTIME] = 0;
-            tcsetattr(STDIN_FILENO, TCSANOW, &raw);
-        } else {
-            kbd_active = 0;
-        }
-    }
-
-    /* Banner. */
-    printf("Lorenz  %dx%d cells (%dx%d samples)  Q12.20  %s  steps=%s%s\n",
-           width, height, width, pixel_rows,
-           dterm_mode_name(mode == MODE_BLOCKS),
-           max_steps == 0 ? "infinite" : "limited",
-           g_do_write ? "" : ", NODRAW");
-    if (kbd_active) {
-        printf("  (press any key or Ctrl-C to stop)\n");
-    }
-    fflush(stdout);
-
-    if (g_do_write) {
-        dterm_cursor(0);
-        dterm_clear();
-        fflush(stdout);
-    }
-
-    /* Initial conditions (1, 1, 1) — far from the attractor, so the
-     * first few hundred steps trace the spiral-in transient before
-     * settling onto the butterfly shape.  That itself is fun to
-     * watch as a demo. */
-    struct lorenz_state s = { Q_INT(1), Q_INT(1), Q_INT(1) };
-
-    uint64_t t_start = now_ns();
-    perf_demo_track();          /* snapshot perfctrs; dump breakdown at exit */
-    uint64_t step = 0;
-    /* Previous-point state for line drawing.  prev_valid stays 0 on
-     * the very first iteration (no line to draw yet) and stays 0
-     * across off-screen excursions where we can't anchor a segment. */
-    int prev_sx = 0, prev_sy = 0, prev_valid = 0;
-    while (!g_stop && (max_steps == 0 || (int)step < max_steps)) {
-        lorenz_step(&s);
-
-        int sx = project_x(s.x, width);
-        int sy = project_z(s.z, pixel_rows);
-
-        /* Color by altitude (z value) instead of step number — paints
-         * coherent z-bands across the picture, so revisiting the same
-         * region paints it the same color rather than overwriting
-         * with cycled rainbow noise.  One integer mul + one DIV per
-         * step (the DIV is software today; cheap enough for one-per
-         * -step granularity). */
-        int color_idx = (int)(((int64_t)(s.z - VIEW_Z_LO)
-                              * (int64_t)PALETTE_LEN)
-                              / (VIEW_Z_HI - VIEW_Z_LO));
-        if (color_idx < 0) color_idx = 0;
-        if (color_idx >= (int)PALETTE_LEN) color_idx = (int)PALETTE_LEN - 1;
-        int color = palette[color_idx];
-
-        if (mode == MODE_BLOCKS) {
-            /* For the very first step, prev_* aren't set — treat it
-             * as a zero-length segment (Bresenham emits one pixel).
-             * The trail will track this as a one-pixel "segment"
-             * which rolls off normally. */
-            if (!prev_valid) { prev_sx = sx; prev_sy = sy; }
-            trail_advance(prev_sx, prev_sy, sx, sy, color);
-        } else {
-            if (prev_valid) plot_line_mono(prev_sx, prev_sy, sx, sy);
-            else            plot_mono(sx, sy);
-        }
-        prev_sx = sx;
-        prev_sy = sy;
-        prev_valid = 1;
-
-        step++;
-
-        /* Drain stdout periodically so points appear as they're
-         * plotted rather than buffered up.  Every 16 steps is a
-         * compromise: too frequent and stdio overhead bites; too
-         * rare and the animation feels chunky. */
-        if (g_do_write && (step & 15) == 0) fflush(stdout);
-
-        if (kbd_active) {
-            char c;
-            if (read(STDIN_FILENO, &c, 1) > 0) g_stop = 1;
-        }
-    }
-    uint64_t t_end = now_ns();
-
-    /* Restore terminal. */
-    if (g_do_write) {
-        dterm_end();
-        dterm_cursor(1);
-        fflush(stdout);
-    }
-    if (kbd_active) {
-        tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_tio);
-    }
-    putchar('\n');
-
-    uint64_t elapsed_ns      = t_end - t_start;
-    uint64_t elapsed_ms      = elapsed_ns / 1000000ull;
-    uint64_t pts_x100_per_s  = (elapsed_ms > 0)
-                             ? (step * 100000ull) / elapsed_ms
-                             : 0;
-    uint64_t us_per_step     = (step > 0)
-                             ? (elapsed_ns / 1000ull) / step
-                             : 0;
-    uint64_t bytes_per_step  = (step > 0)
-                             ? g_bytes_rendered / step
-                             : 0;
-    uint64_t uart_us_per_step = (bytes_per_step * 10ull * 1000000ull) / 115200ull;
-
-    printf("lorenz: %llu steps in %llu.%03llu s%s\n",
-           (unsigned long long)step,
-           (unsigned long long)(elapsed_ns / 1000000000ull),
-           (unsigned long long)((elapsed_ns % 1000000000ull) / 1000000ull),
-           g_do_write ? "" : " (NODRAW)");
-    printf("  %llu.%02llu points/s, %llu us/step\n",
-           (unsigned long long)(pts_x100_per_s / 100),
-           (unsigned long long)(pts_x100_per_s % 100),
-           (unsigned long long)us_per_step);
-    printf("  output: %llu bytes/step, %llu total bytes "
-           "(%llu us/step at 115200 baud)\n",
-           (unsigned long long)bytes_per_step,
-           (unsigned long long)g_bytes_rendered,
-           (unsigned long long)uart_us_per_step);
-
-    free(screen);
-    return 0;
+    return demo_main(argc, argv, &d);
 }
