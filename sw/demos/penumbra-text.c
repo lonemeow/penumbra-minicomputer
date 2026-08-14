@@ -41,10 +41,8 @@
 #include <errno.h>
 #include <termios.h>
 
-#include "perfctr.h"
+#include "demo.h"
 #include "dterm.h"
-
-static int g_stop;
 
 /* ── Heated-metal palette ───────────────────────────────────────────
  *
@@ -124,12 +122,8 @@ static void init_plasma_lut(void) {
 
 /* ── Measurement instrumentation ────────────────────────────────────── */
 
-static int g_do_write = 1;
-static uint64_t g_bytes_rendered = 0;
-
 static inline void emit_bytes(const char *buf, size_t n) {
-    g_bytes_rendered += n;
-    if (g_do_write) (void)write(STDOUT_FILENO, buf, n);
+    (void)write(STDOUT_FILENO, buf, n);
 }
 
 /* ── Intensity buffer + cell emit ───────────────────────────────────── */
@@ -137,6 +131,12 @@ static inline void emit_bytes(const char *buf, size_t n) {
 static uint8_t *intensity;
 static int g_width;
 static int g_pixel_rows;
+
+/* Set on a pixel surface: the intensity byte indexes the colormap
+ * directly, scaled into the glow's share of it. */
+static uint8_t *fb_pix;
+static unsigned fb_stride;
+static unsigned fb_glow_last;
 static int g_cell_rows;     /* = g_pixel_rows in mono, / 2 in blocks */
 
 /* Dirty-cell list with flag bitmap for dedup. */
@@ -168,7 +168,11 @@ static inline void splat_pixel(int col, int row, int weight) {
     int v = intensity[idx] + weight;
     if (v > 255) v = 255;
     intensity[idx] = (uint8_t)v;
-    mark_dirty(col, row);
+    if (fb_pix != NULL)
+        fb_pix[(size_t)row * fb_stride + col] =
+            (uint8_t)((v * fb_glow_last) >> 8);
+    else
+        mark_dirty(col, row);
 }
 
 static void emit_cell_blocks(int col, int cell_row) {
@@ -201,6 +205,7 @@ static const char ramp[] = " .:-=+*#%@";
 #define PLASMA_PAD_COLS    2   /* extra columns on each side of text */
 
 static int plasma_cell_row;    /* cell row containing the plasma band   */
+static int plasma_row_px;      /* the same band as a pixel row          */
 static int plasma_x0;          /* leftmost plasma column (screen coord) */
 static int plasma_width;       /* number of columns covered             */
 static int plasma_active;      /* 1 if plasma fits on screen, 0 if not  */
@@ -288,17 +293,37 @@ static int text_pixel_count;
 static int text_x0;
 static int text_width_px;
 
-static void build_text_pixels(int screen_w, int screen_h) {
-    text_width_px = NUM_LETTERS * LETTER_W + (NUM_LETTERS - 1) * LETTER_GAP;
+/*
+ * The glyphs are a 6x11 bitmap, which fills a character grid and is a
+ * postage stamp on a framebuffer four times the extent in each axis.
+ *
+ * Scaling multiplies the path rather than spacing it out: each glyph
+ * pixel becomes a scale x scale block of points the bob walks through.
+ * Leaving the points scale apart instead would ask the splat to bridge
+ * the gaps, and a kernel wide enough to do that deposits its energy
+ * over so much area that the picture washes out before the strokes
+ * join — the text reads as a row of dots with a haze around it.
+ * Walking every pixel keeps the splat local, exactly as it is on a
+ * character grid.
+ */
+static int text_scale = 1;
+
+static void build_text_pixels(int screen_w, int screen_h, int scale) {
+    int lw = LETTER_W * scale, lh = LETTER_H * scale;
+    int lgap = LETTER_GAP * scale;
+
+    text_scale = scale;
+    text_width_px = NUM_LETTERS * lw + (NUM_LETTERS - 1) * lgap;
     text_x0    = (screen_w - text_width_px) / 2;
-    int text_y0 = (screen_h - LETTER_H) / 2;
+    int text_y0 = (screen_h - lh) / 2;
     if (text_x0  < 0) text_x0  = 0;
     if (text_y0  < 0) text_y0  = 0;
 
-    /* Plasma underline geometry.  Sits a few pixel rows below the
-     * text bottom, slightly wider, on a single cell row.  Only used
-     * if there's room on screen — otherwise we silently skip it. */
-    int plasma_pixel_y = text_y0 + LETTER_H + PLASMA_GAP_PIXELS;
+    /* Plasma underline geometry.  Sits below the text, slightly wider.
+     * Kept in both spaces: the cell renderer addresses a cell row, the
+     * pixel renderer a pixel row, and one is not the other. */
+    int plasma_pixel_y = text_y0 + lh + PLASMA_GAP_PIXELS * scale;
+    plasma_row_px = plasma_pixel_y;
     plasma_cell_row = plasma_pixel_y >> 1;
     plasma_x0 = text_x0 - PLASMA_PAD_COLS;
     plasma_width = text_width_px + 2 * PLASMA_PAD_COLS;
@@ -311,19 +336,28 @@ static void build_text_pixels(int screen_w, int screen_h) {
     }
     plasma_active = (plasma_pixel_y + 1 < screen_h) && (plasma_width > 0);
 
-    int cap = NUM_LETTERS * LETTER_W * LETTER_H;
+    plasma_active = plasma_active && (plasma_pixel_y + scale < screen_h);
+
+    int cap = NUM_LETTERS * LETTER_W * LETTER_H * scale * scale;
     text_pixels = malloc(sizeof(*text_pixels) * (size_t)cap);
     if (!text_pixels) { perror("malloc"); exit(1); }
     text_pixel_count = 0;
     for (int letter = 0; letter < NUM_LETTERS; letter++) {
-        int lx = text_x0 + letter * (LETTER_W + LETTER_GAP);
+        int lx = text_x0 + letter * (lw + lgap);
         for (int row = 0; row < LETTER_H; row++) {
             uint8_t bits = glyphs[letter][row];
             for (int col = 0; col < LETTER_W; col++) {
                 if (bits & (uint8_t)(1u << (LETTER_W - 1 - col))) {
-                    text_pixels[text_pixel_count].x = (int16_t)(lx + col);
-                    text_pixels[text_pixel_count].y = (int16_t)(text_y0 + row);
-                    text_pixel_count++;
+                    /* The whole block, so the stroke is a stroke. */
+                    for (int sy = 0; sy < scale; sy++) {
+                        for (int sx = 0; sx < scale; sx++) {
+                            text_pixels[text_pixel_count].x =
+                                (int16_t)(lx + col * scale + sx);
+                            text_pixels[text_pixel_count].y =
+                                (int16_t)(text_y0 + row * scale + sy);
+                            text_pixel_count++;
+                        }
+                    }
                 }
             }
         }
@@ -336,16 +370,47 @@ static void build_text_pixels(int screen_w, int screen_h) {
  * intensity per visit, edges get less, corners least.  Repeated visits
  * accumulate (via splat_pixel's saturating add) so the text pixels
  * progress toward full brightness while the halo cells stay dimmer. */
-static const int splat_weights[3][3] = {
+/* Heavier than the shadebobs kernel: the text saturates in a handful
+ * of passes rather than accumulating slowly.  Two sizes, since a stroke
+ * should cover the same share of the picture on a surface four times
+ * the extent in each axis. */
+#define SPLAT_MAX_R  3
+
+static const int splat_small[3][3] = {
     { 4,  8,  4 },
     { 8, 64,  8 },
     { 4,  8,  4 },
 };
 
+/*
+ * Wider than the 3x3 so the halo spreads in proportion to the larger
+ * picture, and much lower — with the path walking every pixel, a
+ * stroke pixel collects the whole kernel over a pass, so the sum is
+ * what decides how many passes saturate it.  Roughly 60 gives the
+ * four passes MAX_PASSES assumes; the peak alone would have saturated
+ * a stroke in the first one.
+ */
+static const int splat_large[7][7] = {
+    { 0,  1,  1,  1,  1,  1,  0 },
+    { 1,  1,  1,  2,  1,  1,  1 },
+    { 1,  1,  2,  4,  2,  1,  1 },
+    { 1,  2,  4,  6,  4,  2,  1 },
+    { 1,  1,  2,  4,  2,  1,  1 },
+    { 1,  1,  1,  2,  1,  1,  1 },
+    { 0,  1,  1,  1,  1,  1,  0 },
+};
+
+static int splat_r = 1;   /* set from the surface at setup */
+
 static void splat(int x, int y) {
-    for (int dy = -1; dy <= 1; dy++) {
-        for (int dx = -1; dx <= 1; dx++) {
-            splat_pixel(x + dx, y + dy, splat_weights[dy + 1][dx + 1]);
+    for (int dy = -splat_r; dy <= splat_r; dy++) {
+        for (int dx = -splat_r; dx <= splat_r; dx++) {
+            int w = (splat_r == 1)
+                ? splat_small[dy + 1][dx + 1]
+                : splat_large[dy + splat_r][dx + splat_r];
+
+            if (w != 0)
+                splat_pixel(x + dx, y + dy, w);
         }
     }
 }
@@ -357,259 +422,274 @@ enum phase {
     PHASE_HOLD,     /* text saturated, holding the bright picture   */
 };
 static int phase;
-static int phase_frame;
 static int path_idx;    /* index into text_pixels[]              */
 static int pass_num;    /* completed full-traversal passes       */
 
-#define BOB_SPEED      2     /* text pixels visited per frame */
-#define MAX_PASSES     4     /* enough passes to saturate (4*64 ≥ 255) */
-#define HOLD_FRAMES  120     /* ~4 seconds at 30 FPS UART */
+/*
+ * Rates in wall-clock terms rather than per frame.  The two surfaces
+ * differ by more than an order of magnitude in how long a frame takes,
+ * so a trace measured in pixels-per-frame would crawl on one and blur
+ * past on the other.
+ */
+/* How long one full traversal takes, rather than a rate per point:
+ * scaling the glyphs multiplies the path, and the logo should still
+ * draw itself in the same few seconds. */
+#define PASS_US          3600000ull
+#define MAX_PASSES             4
+#define HOLD_US          4000000ull /* how long the finished logo stays */
 
-/* Reset the screen and start a fresh trace cycle.  Uses \033[2J full
- * clear so we don't have to dirty every text cell — single 11-byte
- * escape vs hundreds of per-cell escapes.
- *
- * Critical: \033[0m goes *before* \033[2J.  Erase escapes (2J, J, K)
- * fill with the current background color, and after a trace frame
- * our SGR state has whatever bg the last cell set — often a bright
- * one for cells whose text pixel was in the bottom half.  Without
- * the reset, the screen flips to that bright bg color and stays
- * there for the next cycle. */
-static void reset_screen(void) {
-    memset(intensity, 0, (size_t)g_width * (size_t)g_pixel_rows);
-    static const char clear_esc[] = "\033[0m\033[2J\033[H";
-    emit_bytes(clear_esc, sizeof(clear_esc) - 1);
-    phase = PHASE_TRACE;
-    phase_frame = 0;
-    path_idx = 0;
-    pass_num = 0;
-}
+/* Plasma band phase, in the same lookup units the LUT is indexed by. */
+#define PLASMA_TICKS_PER_SEC  20
 
-static void step_animation(void) {
-    if (phase == PHASE_HOLD) {
-        phase_frame++;
-        if (phase_frame >= HOLD_FRAMES) {
-            reset_screen();
-        }
-        return;
-    }
-
-    /* PHASE_TRACE: bob visits BOB_SPEED text pixels this frame,
-     * splatting at each.  When the path completes we start a fresh
-     * pass; after MAX_PASSES passes the centers have saturated and
-     * we transition to HOLD. */
-    for (int i = 0; i < BOB_SPEED; i++) {
-        if (path_idx >= text_pixel_count) {
-            pass_num++;
-            if (pass_num >= MAX_PASSES) {
-                phase = PHASE_HOLD;
-                phase_frame = 0;
-                return;
-            }
-            path_idx = 0;
-        }
-        splat(text_pixels[path_idx].x, text_pixels[path_idx].y);
-        path_idx++;
-    }
-}
-
-/* ── Terminal control + signal handling ─────────────────────────────── */
-
-enum render_mode {
-    MODE_MONO = 0,
-    MODE_BLOCKS,
+struct ptext {
+    uint64_t elapsed_us;
+    uint64_t phase_started_us;  /* when the current phase began */
+    uint64_t traced_us;         /* time spent tracing this cycle */
+    uint64_t visited;           /* path points walked this cycle */
 };
 
+static struct ptext state;
 
+/* Reset the screen and start a fresh trace cycle.
+ *
+ * \033[0m goes *before* \033[2J: erase escapes fill with the current
+ * background colour, and after a trace frame that is whatever the last
+ * cell set — often a bright one.  Without the reset the screen flips to
+ * that colour and stays there. */
+static void reset_cells(struct ptext *p) {
+    static const char clear_esc[] = "\033[0m\033[2J\033[H";
 
-/* Reset SGR before clear so erase doesn't fill with a stale bright bg
- * (see reset_screen() for the full explanation). */
-
-
-static uint64_t now_ns(void) {
-    struct timespec ts;
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
-        perror("clock_gettime");
-        exit(1);
-    }
-    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
-}
-
-/* ── Main ───────────────────────────────────────────────────────────── */
-
-int main(int argc, char **argv) {
-    int width    = 78;
-    int height   = 39;
-    int frames   = 0;
-    enum render_mode mode;
-
-    /* The picture is redrawn in place, so only the banner and its hint
-     * are kept back; the summary at exit may scroll. */
-    dterm_init(&width, &height, 2, 0);
-
-    /* Colour when something is watching, ASCII when piped. */
-    mode = isatty(fileno(stdout)) ? MODE_BLOCKS : MODE_MONO;
-
-    int argi = 1;
-    while (argi < argc) {
-        if (strcmp(argv[argi], "--mono") == 0 ||
-            strcmp(argv[argi], "-m")     == 0) {
-            mode = MODE_MONO; argi++;
-        } else if (strcmp(argv[argi], "--blocks") == 0 ||
-                   strcmp(argv[argi], "-b")       == 0 ||
-                   strcmp(argv[argi], "--color")  == 0 ||
-                   strcmp(argv[argi], "-c")       == 0) {
-            mode = MODE_BLOCKS; argi++;
-        } else if (strcmp(argv[argi], "--nodraw") == 0 ||
-                   strcmp(argv[argi], "-n")       == 0) {
-            g_do_write = 0; argi++;
-        } else {
-            break;
-        }
-    }
-    if (argi < argc && !dterm_looks_like_int(argv[argi])) {
-        fprintf(stderr, "%s: unexpected arg '%s'\n", argv[0], argv[argi]);
-        return 2;
-    }
-    if (argi < argc) frames = atoi(argv[argi++]);
-    if (argi < argc) width  = atoi(argv[argi++]);
-    if (argi < argc) height = atoi(argv[argi++]);
-
-    if (width < 8 || height < 4 || frames < 0) {
-        fprintf(stderr,
-                "usage: %s [-b|--blocks | -m|--mono] [-n|--nodraw] "
-                       "[FRAMES] [WIDTH>=8] [HEIGHT>=4]\n",
-                argv[0]);
-        return 2;
-    }
-    init_sin_lut();
-    init_plasma_lut();
-
-    g_width      = width;
-    g_cell_rows  = height;
-    g_pixel_rows = (mode == MODE_BLOCKS) ? 2 * height : height;
-
-    intensity = calloc((size_t)g_width * (size_t)g_pixel_rows, 1);
-    dirty_capacity = NUM_LETTERS * LETTER_H + 16;
-    dirty = malloc(sizeof(*dirty) * (size_t)dirty_capacity);
-    dirty_flag = calloc((size_t)g_width * (size_t)g_cell_rows, 1);
-    if (!intensity || !dirty || !dirty_flag) { perror("malloc"); return 1; }
-
-    build_text_pixels(width, g_pixel_rows);
-
-    dterm_catch_interrupt();
-
-    int kbd_active = isatty(STDIN_FILENO);
-    struct termios orig_tio;
-    if (kbd_active) {
-        if (tcgetattr(STDIN_FILENO, &orig_tio) == 0) {
-            struct termios raw = orig_tio;
-            raw.c_lflag &= ~(ICANON | ECHO);
-            raw.c_cc[VMIN]  = 0;
-            raw.c_cc[VTIME] = 0;
-            tcsetattr(STDIN_FILENO, TCSANOW, &raw);
-        } else {
-            kbd_active = 0;
-        }
-    }
-
-    printf("Penumbra Text Screensaver: %dx%d cells (%dx%d samples), %s%s\n",
-           width, height, width, g_pixel_rows,
-           dterm_mode_name(mode == MODE_BLOCKS),
-           g_do_write ? "" : ", NODRAW");
-    if (kbd_active) {
-        printf("  (press any key or Ctrl-C to stop)\n");
-    }
-    fflush(stdout);
-
-    if (g_do_write) {
-        dterm_cursor(0);
-        dterm_clear();
-        fflush(stdout);
-    }
-
+    memset(intensity, 0, (size_t)g_width * (size_t)g_pixel_rows);
+    emit_bytes(clear_esc, sizeof(clear_esc) - 1);
     phase = PHASE_TRACE;
-    phase_frame = 0;
     path_idx = 0;
     pass_num = 0;
+    p->phase_started_us = p->elapsed_us;
+    p->traced_us = 0;
+    p->visited = 0;
+}
 
-    uint64_t t_start = now_ns();
-    perf_demo_track();          /* snapshot perfctrs; dump breakdown at exit */
-    uint64_t rendered = 0;
-    while (!g_stop && (frames == 0 || (int)rendered < frames)) {
-        /* Reset dirty tracking for this frame. */
-        for (int i = 0; i < dirty_count; i++) {
-            int cell_idx = dirty[i].col * g_cell_rows + dirty[i].row;
-            dirty_flag[cell_idx] = 0;
-        }
-        dirty_count = 0;
+static void reset_pixels(struct ptext *p, const struct demo_surface *s) {
+    memset(intensity, 0, (size_t)g_width * (size_t)g_pixel_rows);
+    memset(s->pix, 0, (size_t)s->stride * s->height);
+    phase = PHASE_TRACE;
+    path_idx = 0;
+    pass_num = 0;
+    p->phase_started_us = p->elapsed_us;
+    p->traced_us = 0;
+    p->visited = 0;
+}
 
-        step_animation();
+/*
+ * Walk the bob to where elapsed time says it should be.  Splatting is
+ * cumulative, so this advances to the target index rather than moving
+ * by a per-frame step: a slow frame covers more ground, and the logo
+ * takes the same few seconds to draw itself either way.
+ */
+static void step_trace(struct ptext *p) {
+    uint64_t want;
 
-        /* Re-emit just the dirty cells. */
-        for (int i = 0; i < dirty_count; i++) {
-            int col = dirty[i].col;
-            int row = dirty[i].row;
-            if (mode == MODE_BLOCKS) emit_cell_blocks(col, row);
-            else                     emit_cell_mono(col, row);
-        }
+    if (phase == PHASE_HOLD)
+        return;
 
-        /* Plasma underline animates every frame, including during
-         * HOLD — keeps motion in the picture so the screensaver
-         * never feels frozen. */
-        emit_plasma_line((int)rendered, mode == MODE_BLOCKS);
+    /*
+     * Counted as one continuous walk rather than a position within the
+     * current pass.  Tracking a within-pass target skips the tail of
+     * every pass: the frame that crosses a boundary sees the target
+     * wrap back near zero, and the pixels between where the walk had
+     * got to and the end of the path are never visited — the last
+     * letter never gets drawn.
+     */
+    p->traced_us = p->elapsed_us - p->phase_started_us;
+    want = (p->traced_us * (uint64_t)text_pixel_count) / PASS_US;
+    if (want > (uint64_t)MAX_PASSES * text_pixel_count)
+        want = (uint64_t)MAX_PASSES * text_pixel_count;
 
-        if (g_do_write) fflush(stdout);
-        rendered++;
+    while (p->visited < want) {
+        int i = (int)(p->visited % (uint64_t)text_pixel_count);
 
-        if (kbd_active) {
-            char c;
-            if (read(STDIN_FILENO, &c, 1) > 0) g_stop = 1;
-        }
+        splat(text_pixels[i].x, text_pixels[i].y);
+        p->visited++;
     }
-    uint64_t t_end = now_ns();
+    pass_num = (int)(p->visited / (uint64_t)text_pixel_count);
 
-    if (g_do_write) {
-        dterm_end();
-        dterm_cursor(1);
-        fflush(stdout);
+    if (pass_num >= MAX_PASSES) {
+        phase = PHASE_HOLD;
+        p->phase_started_us = p->elapsed_us;
     }
-    if (kbd_active) {
-        tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_tio);
+}
+
+/* ── Setup ──────────────────────────────────────────────────────────── */
+
+static int setup(const struct demo_surface *s) {
+    int cells, scale;
+
+    g_width = (int)s->width;
+    g_pixel_rows = (s->kind == DEMO_PIXEL) ? (int)s->height
+                                           : (int)s->height * 2;
+    g_cell_rows = (s->kind == DEMO_PIXEL) ? (int)s->height : (int)s->height;
+    cells = g_width * ((s->kind == DEMO_PIXEL) ? 1 : (int)s->height);
+
+    intensity = calloc((size_t)g_width * g_pixel_rows, 1);
+    dirty_capacity = g_width * g_cell_rows;
+    dirty = calloc((size_t)dirty_capacity, sizeof(*dirty));
+    dirty_flag = calloc((size_t)cells, 1);
+    if (intensity == NULL || dirty == NULL || dirty_flag == NULL) {
+        perror("calloc");
+        return -1;
     }
-    putchar('\n');
 
-    uint64_t elapsed_ns      = t_end - t_start;
-    uint64_t elapsed_ms      = elapsed_ns / 1000000ull;
-    uint64_t fps_x100        = (elapsed_ms > 0)
-                             ? (rendered * 100000ull) / elapsed_ms
-                             : 0;
-    uint64_t us_per_frame    = (rendered > 0)
-                             ? (elapsed_ns / 1000ull) / rendered
-                             : 0;
-    uint64_t bytes_per_frame = (rendered > 0)
-                             ? g_bytes_rendered / rendered
-                             : 0;
-    uint64_t uart_us_per_frame = (bytes_per_frame * 10ull * 1000000ull) / 115200ull;
+    /* Scale the glyphs to the surface, and take a splat radius that
+     * covers the gap the scaling opens between strokes. */
+    scale = g_pixel_rows / 60;
+    if (scale < 1)
+        scale = 1;
+    if (scale > 4)
+        scale = 4;
+    splat_r = (scale > 1) ? SPLAT_MAX_R : 1;
 
-    printf("penumbra-text: %llu frames in %llu.%03llu s%s\n",
-           (unsigned long long)rendered,
-           (unsigned long long)(elapsed_ns / 1000000000ull),
-           (unsigned long long)((elapsed_ns % 1000000000ull) / 1000000ull),
-           g_do_write ? "" : " (NODRAW)");
-    printf("  %llu.%02llu FPS, %llu us/frame\n",
-           (unsigned long long)(fps_x100 / 100),
-           (unsigned long long)(fps_x100 % 100),
-           (unsigned long long)us_per_frame);
-    printf("  output: %llu bytes/frame, %llu total bytes "
-           "(%llu us/frame at 115200 baud)\n",
-           (unsigned long long)bytes_per_frame,
-           (unsigned long long)g_bytes_rendered,
-           (unsigned long long)uart_us_per_frame);
-
-    free(intensity);
-    free(dirty);
-    free(dirty_flag);
-    free(text_pixels);
+    init_sin_lut();
+    init_plasma_lut();
+    build_text_pixels(g_width, g_pixel_rows, scale);
     return 0;
+}
+
+/*
+ * The colormap carries two ramps that have nothing to do with each
+ * other: the glow's intensity and the plasma band's rainbow.  A
+ * terminal keeps them apart for free by naming a colour per cell; here
+ * there is one table, so it is split — the low entries are the glow,
+ * the high ones the band, and each side scales into its own range.
+ */
+#define PIX_GLOW_LAST     191
+#define PIX_PLASMA_FIRST  192
+
+static void build_cmap(const struct demo_surface *s) {
+    uint8_t r[256], g[256], b[256];
+    unsigned n = s->cmap_entries < 256 ? s->cmap_entries : 256;
+
+    memset(r, 0, sizeof(r));
+    memset(g, 0, sizeof(g));
+    memset(b, 0, sizeof(b));
+
+    /* Glow: interpolated between the palette's stops, so the ramp
+     * gradates rather than stepping between 30 fixed colours. */
+    for (unsigned i = 1; i <= PIX_GLOW_LAST && i < n; i++) {
+        unsigned pos = (i - 1) * (PALETTE_LEN - 1) * 256 / PIX_GLOW_LAST;
+        unsigned stop = pos >> 8, frac = pos & 0xFF;
+        uint8_t r0, g0, b0, r1, g1, b1;
+
+        demo_xterm_rgb(palette[stop], &r0, &g0, &b0);
+        demo_xterm_rgb(palette[stop + 1 < PALETTE_LEN ? stop + 1 : stop],
+            &r1, &g1, &b1);
+        r[i] = (uint8_t)((r0 * (256 - frac) + r1 * frac) >> 8);
+        g[i] = (uint8_t)((g0 * (256 - frac) + g1 * frac) >> 8);
+        b[i] = (uint8_t)((b0 * (256 - frac) + b1 * frac) >> 8);
+    }
+
+    /* Band: the rainbow, spread over what is left. */
+    for (unsigned i = PIX_PLASMA_FIRST; i < n; i++) {
+        unsigned k = (i - PIX_PLASMA_FIRST) * RAINBOW_LEN
+            / (n - PIX_PLASMA_FIRST);
+
+        demo_xterm_rgb(rainbow[k < RAINBOW_LEN ? k : RAINBOW_LEN - 1],
+            &r[i], &g[i], &b[i]);
+    }
+    demo_set_cmap(s, r, g, b);
+}
+
+/* ── Cell surface ───────────────────────────────────────────────────── */
+
+static void frame_cells(const struct demo_surface *s, uint32_t dt_us,
+                        uint64_t frame, void *vs) {
+    struct ptext *p = vs;
+
+    if (frame == 0) {
+        if (setup(s) != 0)
+            exit(1);
+        reset_cells(p);
+    }
+    p->elapsed_us += dt_us;
+
+    for (int i = 0; i < dirty_count; i++) {
+        int cell_idx = dirty[i].col * g_cell_rows + dirty[i].row;
+        dirty_flag[cell_idx] = 0;
+    }
+    dirty_count = 0;
+
+    step_trace(p);
+
+    for (int i = 0; i < dirty_count; i++) {
+        if (s->blocks)
+            emit_cell_blocks(dirty[i].col, dirty[i].row);
+        else
+            emit_cell_mono(dirty[i].col, dirty[i].row);
+    }
+
+    /* The band animates throughout, including while the logo holds —
+     * it is what says the picture is alive rather than frozen. */
+    if (plasma_active)
+        emit_plasma_line((int)((p->elapsed_us * PLASMA_TICKS_PER_SEC)
+            / 1000000ull), s->blocks);
+
+    if (phase == PHASE_HOLD && p->elapsed_us - p->phase_started_us >= HOLD_US)
+        reset_cells(p);
+}
+
+/* ── Pixel surface ──────────────────────────────────────────────────── */
+
+/* The band as a row of pixels rather than a row of cells: same LUT,
+ * same phase, written through the colormap's upper range. */
+static void draw_plasma_pixels(const struct demo_surface *s, int t) {
+    unsigned band_h = (unsigned)text_scale;
+    unsigned y0 = (unsigned)plasma_row_px;
+
+    if (!plasma_active || band_h == 0)
+        return;
+    for (unsigned y = y0; y < y0 + band_h && y < s->height; y++) {
+        uint8_t *row = s->pix + (size_t)y * s->stride;
+
+        for (int i = 0; i < plasma_width; i++) {
+            int x = plasma_x0 + i;
+            uint8_t v = plasma_color_lut[(uint8_t)(x * 3 + t)];
+
+            if (x >= 0 && (unsigned)x < s->width)
+                row[x] = (uint8_t)(PIX_PLASMA_FIRST
+                    + (v % (256 - PIX_PLASMA_FIRST)));
+        }
+    }
+}
+
+static void frame_pixels(const struct demo_surface *s, uint32_t dt_us,
+                         uint64_t frame, void *vs) {
+    struct ptext *p = vs;
+
+    if (frame == 0) {
+        if (setup(s) != 0)
+            exit(1);
+        build_cmap(s);
+        fb_pix = s->pix;
+        fb_stride = s->stride;
+        fb_glow_last = PIX_GLOW_LAST;
+        reset_pixels(p, s);
+    }
+    p->elapsed_us += dt_us;
+
+    step_trace(p);
+    draw_plasma_pixels(s, (int)((p->elapsed_us * PLASMA_TICKS_PER_SEC)
+        / 1000000ull));
+
+    if (phase == PHASE_HOLD && p->elapsed_us - p->phase_started_us >= HOLD_US)
+        reset_pixels(p, s);
+}
+
+int main(int argc, char **argv) {
+    static const struct demo d = {
+        .name        = "penumbra-text",
+        .frame_cell  = frame_cells,
+        .frame_pixel = frame_pixels,
+        .state       = &state,
+    };
+
+    return demo_main(argc, argv, &d);
 }
