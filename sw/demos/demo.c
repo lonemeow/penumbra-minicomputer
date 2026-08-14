@@ -224,6 +224,29 @@ demo_set_cmap(const struct demo_surface *s, const uint8_t *r,
 		fprintf(stderr, "PUTCMAP: %s\n", strerror(errno));
 }
 
+void
+demo_xterm_rgb(uint8_t idx, uint8_t *r, uint8_t *g, uint8_t *b)
+{
+	/* xterm's 256: 16 system colours, a 6x6x6 cube, then a grey ramp.
+	 * The cube's levels are not evenly spaced — the first step is 95,
+	 * not 51 — which is why this is a table rather than arithmetic. */
+	static const uint8_t level[6] = { 0, 95, 135, 175, 215, 255 };
+
+	if (idx >= 232) {
+		*r = *g = *b = (uint8_t)(8 + 10 * (idx - 232));
+	} else if (idx >= 16) {
+		uint8_t n = (uint8_t)(idx - 16);
+
+		*r = level[(n / 36) % 6];
+		*g = level[(n / 6) % 6];
+		*b = level[n % 6];
+	} else {
+		/* The 16 system colours are the terminal's to define; the
+		 * demos only ever ask for 16, the cube's black corner. */
+		*r = *g = *b = 0;
+	}
+}
+
 /* ── Geometry ─────────────────────────────────────────────────────── */
 
 struct demo_viewport
@@ -480,6 +503,15 @@ demo_main(int argc, char **argv, const struct demo *d)
 			hold(o.hold_seconds);
 	} else {
 		uint64_t started = now_us(), prev = 0, frame = 0, elapsed;
+
+		/* A looped demo draws with absolute positioning, so the
+		 * screen is its canvas: clear it and take the cursor out of
+		 * the picture.  Meaningless on a pixel surface, which has
+		 * neither. */
+		if (s.kind == DEMO_CELL) {
+			dterm_cursor(0);
+			dterm_clear();
+		}
 		demo_frame_fn fn = (s.kind == DEMO_PIXEL) ? d->frame_pixel
 							  : d->frame_cell;
 
@@ -524,6 +556,7 @@ demo_main(int argc, char **argv, const struct demo *d)
 		 * moves the cursor for no reason and scrolls when the picture
 		 * reached the bottom. */
 		dterm_end();
+		dterm_cursor(1);
 	}
 	return status;
 }

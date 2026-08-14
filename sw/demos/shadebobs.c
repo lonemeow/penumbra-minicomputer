@@ -35,10 +35,8 @@
 #include <errno.h>
 #include <termios.h>
 
-#include "perfctr.h"
+#include "demo.h"
 #include "dterm.h"
-
-static int g_stop;
 
 /* ── Sin lookup table (built from libm at startup) ──────────────────── */
 
@@ -83,12 +81,8 @@ static uint8_t intensity_to_color(int intensity) {
 
 /* ── Measurement instrumentation ────────────────────────────────────── */
 
-static int g_do_write = 1;
-static uint64_t g_bytes_rendered = 0;
-
 static inline void emit_bytes(const char *buf, size_t n) {
-    g_bytes_rendered += n;
-    if (g_do_write) (void)write(STDOUT_FILENO, buf, n);
+    (void)write(STDOUT_FILENO, buf, n);
 }
 
 /* ── Intensity buffer + cell emit ───────────────────────────────────── */
@@ -98,6 +92,12 @@ static inline void emit_bytes(const char *buf, size_t n) {
 static uint8_t *intensity;
 static int g_width;
 static int g_pixel_rows;
+
+/* Set on a pixel surface: the intensity byte is the palette index, so
+ * an accumulating splat can store its new value straight to the
+ * mapping instead of anything re-reading the buffer later. */
+static uint8_t *fb_pix;
+static unsigned fb_stride;
 
 /* Bookkeeping for which cells need re-emission this frame.  Allocated
  * once with max possible touched cells (bobs * splat_cells_per_bob);
@@ -135,22 +135,48 @@ static inline void splat_pixel(int col, int row, int weight) {
     int v = intensity[idx] + weight;
     if (v > 255) v = 255;
     intensity[idx] = (uint8_t)v;
-    mark_dirty(col, row);
+    if (fb_pix != NULL)
+        fb_pix[(size_t)row * fb_stride + col] = (uint8_t)v;
+    else
+        mark_dirty(col, row);
 }
 
-/* 3x3 splat with center-heavy weights.  Tuned so a single visit adds
- * a soft Gaussian-ish bump; many visits accumulate into a saturated
- * core surrounded by a softer halo. */
-static const int splat_weights[3][3] = {
+/* Center-heavy splat weights: a single visit adds a soft bump, many
+ * visits accumulate into a saturated core inside a softer halo.
+ *
+ * Two sizes, because a bob's apparent size is a fraction of the
+ * picture and the two surfaces differ by four times in each axis.  The
+ * 3x3 that reads as a soft blob on a character grid is a speck on
+ * 320x240; the 7x7 keeps roughly the same share of the screen. */
+#define SPLAT_MAX_R  3
+
+static const int splat_small[3][3] = {
     {2,  3, 2},
     {3, 12, 3},
     {2,  3, 2},
 };
 
+static const int splat_large[7][7] = {
+    {0, 1, 1, 2, 1, 1, 0},
+    {1, 1, 2, 3, 2, 1, 1},
+    {1, 2, 4, 6, 4, 2, 1},
+    {2, 3, 6, 12, 6, 3, 2},
+    {1, 2, 4, 6, 4, 2, 1},
+    {1, 1, 2, 3, 2, 1, 1},
+    {0, 1, 1, 2, 1, 1, 0},
+};
+
+static int splat_r = 1;   /* set from the surface at setup */
+
 static void splat(int x, int y) {
-    for (int dy = -1; dy <= 1; dy++) {
-        for (int dx = -1; dx <= 1; dx++) {
-            splat_pixel(x + dx, y + dy, splat_weights[dy + 1][dx + 1]);
+    for (int dy = -splat_r; dy <= splat_r; dy++) {
+        for (int dx = -splat_r; dx <= splat_r; dx++) {
+            int w = (splat_r == 1)
+                ? splat_small[dy + 1][dx + 1]
+                : splat_large[dy + splat_r][dx + splat_r];
+
+            if (w != 0)
+                splat_pixel(x + dx, y + dy, w);
         }
     }
 }
@@ -200,7 +226,7 @@ static void emit_cell_mono(int col, int cell_row) {
 struct bob {
     int amp_x, amp_y;          /* path amplitude in pixels        */
     int cx, cy;                /* path center in pixels           */
-    uint8_t fx, fy;            /* frequency multipliers on time   */
+    uint16_t fx, fy;           /* phase step per tick, in 1/256ths */
     uint8_t phx, phy;          /* phase offsets                   */
 };
 
@@ -226,220 +252,203 @@ static void init_bobs(int width, int pixel_rows) {
     int ox  = ax / 3;           /* off-center offset for quadrant bobs */
     int oy  = ay / 3;
 
-    /* Co-prime freq ratios keep the bobs from ever synchronizing.
-     * Phases spread around the circle so bobs don't start bunched. */
-    bobs[0] = (struct bob){ sax, say, cx - ox, cy - oy,  1, 2,   0,   0 };
-    bobs[1] = (struct bob){ sax, say, cx + ox, cy - oy,  3, 2,  50,  30 };
-    bobs[2] = (struct bob){ sax, say, cx - ox, cy + oy,  3, 5, 100,  70 };
-    bobs[3] = (struct bob){ sax, say, cx + ox, cy + oy,  5, 3, 150, 110 };
-    bobs[4] = (struct bob){ sax, say, cx,      cy,       1, 4, 200, 150 };
+    /* Frequencies in 1/256 lookup steps per tick, chosen co-prime and
+     * not near a simple ratio of one another, so no two bobs
+     * synchronize and no single path closes quickly.  Phases spread
+     * around the circle so they do not start bunched. */
+    bobs[0] = (struct bob){ sax, say, cx - ox, cy - oy,  97, 149,   0,   0 };
+    bobs[1] = (struct bob){ sax, say, cx + ox, cy - oy, 131, 103,  50,  30 };
+    bobs[2] = (struct bob){ sax, say, cx - ox, cy + oy, 113, 181, 100,  70 };
+    bobs[3] = (struct bob){ sax, say, cx + ox, cy + oy, 167, 127, 150, 110 };
+    bobs[4] = (struct bob){ sax, say, cx,      cy,       89, 157, 200, 150 };
 }
 
-static inline void bob_position(const struct bob *b, int t,
+static inline void bob_position(const struct bob *b, uint32_t t,
                                 int *out_x, int *out_y) {
-    /* sin_lut values in [-127, 127]; (amp * sin) >> 7 keeps the
-     * result in [-amp, amp] without needing a divide.  Phase + freq*t
-     * is naturally masked to 8 bits by the array indexing. */
-    int sx = sin_lut[(uint8_t)(b->phx + b->fx * t)];
-    int sy = sin_lut[(uint8_t)(b->phy + b->fy * t)];
+    /* Phase is carried at 1/256 of a lookup step, so a frequency need
+     * not be a whole number of steps per tick.  With small integer
+     * ratios the lissajous figure closes in a couple of hundred ticks
+     * and the repeat is obvious once the picture is large enough to
+     * see it; at this resolution the curve takes minutes to come back
+     * to where it started. */
+    uint32_t px = (uint32_t)b->phx * 256u + (uint32_t)b->fx * t;
+    uint32_t py = (uint32_t)b->phy * 256u + (uint32_t)b->fy * t;
+    int sx = sin_lut[(px >> 8) & 0xFF];
+    int sy = sin_lut[(py >> 8) & 0xFF];
+
+    /* sin_lut is [-127, 127]; (amp * sin) >> 7 lands in [-amp, amp]
+     * without a divide. */
     *out_x = b->cx + ((b->amp_x * sx) >> 7);
     *out_y = b->cy + ((b->amp_y * sy) >> 7);
 }
 
-/* ── Terminal control + signal handling ─────────────────────────────── */
+/* ── Time base ──────────────────────────────────────────────────────── */
+/*
+ * The bobs move along their paths at a fixed rate in wall-clock time
+ * rather than one step per frame.  A frame costs wildly different
+ * amounts on the two surfaces — a terminal frame is bounded by what
+ * fits down the wire, a framebuffer frame by a few hundred stores — so
+ * stepping per frame would make the same demo crawl on one and race on
+ * the other.
+ */
+/* Ticks per second of wall clock.  The phase step is a fraction of a
+ * lookup entry, so this sets how fast a bob travels its path rather
+ * than how far it jumps per frame. */
+#define BOB_TICKS_PER_SEC  700
 
-enum render_mode {
-    MODE_MONO = 0,
-    MODE_BLOCKS,
+struct shadebobs {
+    uint64_t elapsed_us;    /* since the first frame */
+    int      ready;         /* buffers sized to the surface */
 };
 
+static struct shadebobs state;
 
+/*
+ * Sizing waits for the first frame because that is when the surface is
+ * known: the runtime picks one after arguments are parsed, and dt == 0
+ * marks the frame where nothing has happened yet.
+ */
+static int setup(const struct demo_surface *s) {
+    int cells;
 
+    g_width = (int)s->width;
+    g_pixel_rows = (s->kind == DEMO_PIXEL) ? (int)s->height
+                                           : (int)s->height * 2;
+    cells = g_width * (g_pixel_rows >> 1);
 
+    /* A bob should cover a similar share of the picture on either
+     * surface, and the pixel one is four times the extent in each
+     * axis. */
+    splat_r = (s->kind == DEMO_PIXEL) ? SPLAT_MAX_R : 1;
 
-static uint64_t now_ns(void) {
-    struct timespec ts;
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
-        perror("clock_gettime");
-        exit(1);
-    }
-    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
-}
-
-/* ── Main ───────────────────────────────────────────────────────────── */
-
-int main(int argc, char **argv) {
-    int width    = 78;
-    int height   = 39;
-    int frames   = 0;
-    enum render_mode mode;
-
-    /* The picture is redrawn in place, so only the banner and its hint
-     * are kept back; the summary at exit may scroll. */
-    dterm_init(&width, &height, 2, 0);
-
-    /* Colour when something is watching, ASCII when piped. */
-    mode = isatty(fileno(stdout)) ? MODE_BLOCKS : MODE_MONO;
-
-    int argi = 1;
-    while (argi < argc) {
-        if (strcmp(argv[argi], "--mono") == 0 ||
-            strcmp(argv[argi], "-m")     == 0) {
-            mode = MODE_MONO; argi++;
-        } else if (strcmp(argv[argi], "--blocks") == 0 ||
-                   strcmp(argv[argi], "-b")       == 0 ||
-                   strcmp(argv[argi], "--color")  == 0 ||
-                   strcmp(argv[argi], "-c")       == 0) {
-            mode = MODE_BLOCKS; argi++;
-        } else if (strcmp(argv[argi], "--nodraw") == 0 ||
-                   strcmp(argv[argi], "-n")       == 0) {
-            g_do_write = 0; argi++;
-        } else {
-            break;
-        }
-    }
-    if (argi < argc && !dterm_looks_like_int(argv[argi])) {
-        fprintf(stderr, "%s: unexpected arg '%s'\n", argv[0], argv[argi]);
-        return 2;
-    }
-    if (argi < argc) frames = atoi(argv[argi++]);
-    if (argi < argc) width  = atoi(argv[argi++]);
-    if (argi < argc) height = atoi(argv[argi++]);
-
-    if (width < 8 || height < 4 || frames < 0) {
-        fprintf(stderr,
-                "usage: %s [-b|--blocks | -m|--mono] [-n|--nodraw] "
-                       "[FRAMES] [WIDTH>=8] [HEIGHT>=4]\n",
-                argv[0]);
-        return 2;
+    intensity = calloc((size_t)g_width * g_pixel_rows, 1);
+    /* Worst case: every splatted half-pixel lands in its own cell. */
+    dirty_capacity = NUM_BOBS * 9;
+    dirty = calloc((size_t)dirty_capacity, sizeof(*dirty));
+    dirty_flag = calloc((size_t)cells, 1);
+    if (intensity == NULL || dirty == NULL || dirty_flag == NULL) {
+        perror("calloc");
+        return -1;
     }
 
     init_sin_lut();
-
-    g_width      = width;
-    g_pixel_rows = (mode == MODE_BLOCKS) ? 2 * height : height;
-
-    /* Intensity buffer: one byte per half-pixel (or per cell in mono). */
-    intensity = calloc((size_t)g_width * (size_t)g_pixel_rows, 1);
-    /* Dirty-cell list: bounded by bobs * splat-cells-per-bob with a
-     * generous margin for overlap (each splat is 3x3 pixels which is
-     * at most 3 cols x 3 cell rows = 9 cells in the worst case). */
-    dirty_capacity = NUM_BOBS * 12;
-    dirty = malloc(sizeof(*dirty) * (size_t)dirty_capacity);
-    dirty_flag = calloc((size_t)g_width * (size_t)height, 1);
-    if (!intensity || !dirty || !dirty_flag) { perror("malloc"); return 1; }
-
-    init_bobs(width, g_pixel_rows);
-
-    dterm_catch_interrupt();
-
-    int kbd_active = isatty(STDIN_FILENO);
-    struct termios orig_tio;
-    if (kbd_active) {
-        if (tcgetattr(STDIN_FILENO, &orig_tio) == 0) {
-            struct termios raw = orig_tio;
-            raw.c_lflag &= ~(ICANON | ECHO);
-            raw.c_cc[VMIN]  = 0;
-            raw.c_cc[VTIME] = 0;
-            tcsetattr(STDIN_FILENO, TCSANOW, &raw);
-        } else {
-            kbd_active = 0;
-        }
-    }
-
-    printf("Penumbra Shadebobs: %d bobs, %dx%d cells (%dx%d samples), %s%s\n",
-           NUM_BOBS, width, height, width, g_pixel_rows,
-           dterm_mode_name(mode == MODE_BLOCKS),
-           g_do_write ? "" : ", NODRAW");
-    if (kbd_active) {
-        printf("  (press any key or Ctrl-C to stop)\n");
-    }
-    fflush(stdout);
-
-    if (g_do_write) {
-        dterm_cursor(0);
-        dterm_clear();
-        fflush(stdout);
-    }
-
-    uint64_t t_start = now_ns();
-    perf_demo_track();          /* snapshot perfctrs; dump breakdown at exit */
-    int t = 0;
-    uint64_t rendered = 0;
-    while (!g_stop && (frames == 0 || (int)rendered < frames)) {
-        /* Reset dirty tracking for this frame. */
-        for (int i = 0; i < dirty_count; i++) {
-            int cell_idx = dirty[i].col * height + dirty[i].row;
-            dirty_flag[cell_idx] = 0;
-        }
-        dirty_count = 0;
-
-        /* Move and splat each bob. */
-        for (int i = 0; i < NUM_BOBS; i++) {
-            int bx, by;
-            bob_position(&bobs[i], t, &bx, &by);
-            splat(bx, by);
-        }
-
-        /* Re-emit only the dirty cells. */
-        for (int i = 0; i < dirty_count; i++) {
-            int col = dirty[i].col;
-            int row = dirty[i].row;
-            if (mode == MODE_BLOCKS) emit_cell_blocks(col, row);
-            else                     emit_cell_mono(col, row);
-        }
-
-        if (g_do_write) fflush(stdout);
-        t++;
-        rendered++;
-
-        if (kbd_active) {
-            char c;
-            if (read(STDIN_FILENO, &c, 1) > 0) g_stop = 1;
-        }
-    }
-    uint64_t t_end = now_ns();
-
-    if (g_do_write) {
-        dterm_end();
-        dterm_cursor(1);
-        fflush(stdout);
-    }
-    if (kbd_active) {
-        tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_tio);
-    }
-    putchar('\n');
-
-    uint64_t elapsed_ns      = t_end - t_start;
-    uint64_t elapsed_ms      = elapsed_ns / 1000000ull;
-    uint64_t fps_x100        = (elapsed_ms > 0)
-                             ? (rendered * 100000ull) / elapsed_ms
-                             : 0;
-    uint64_t us_per_frame    = (rendered > 0)
-                             ? (elapsed_ns / 1000ull) / rendered
-                             : 0;
-    uint64_t bytes_per_frame = (rendered > 0)
-                             ? g_bytes_rendered / rendered
-                             : 0;
-    uint64_t uart_us_per_frame = (bytes_per_frame * 10ull * 1000000ull) / 115200ull;
-
-    printf("shadebobs: %llu frames in %llu.%03llu s%s\n",
-           (unsigned long long)rendered,
-           (unsigned long long)(elapsed_ns / 1000000000ull),
-           (unsigned long long)((elapsed_ns % 1000000000ull) / 1000000ull),
-           g_do_write ? "" : " (NODRAW)");
-    printf("  %llu.%02llu FPS, %llu us/frame\n",
-           (unsigned long long)(fps_x100 / 100),
-           (unsigned long long)(fps_x100 % 100),
-           (unsigned long long)us_per_frame);
-    printf("  output: %llu bytes/frame, %llu total bytes "
-           "(%llu us/frame at 115200 baud)\n",
-           (unsigned long long)bytes_per_frame,
-           (unsigned long long)g_bytes_rendered,
-           (unsigned long long)uart_us_per_frame);
-
-    free(intensity);
-    free(dirty);
-    free(dirty_flag);
+    init_bobs(g_width, g_pixel_rows);
+    state.ready = 1;
     return 0;
+}
+
+/* Advance every bob to where wall-clock time says it should be, and
+ * splat there.  Returns nothing: the marks land in the intensity
+ * buffer, and on a pixel surface in the framebuffer too. */
+static void step_bobs(uint64_t elapsed_us) {
+    uint32_t t = (uint32_t)((elapsed_us * BOB_TICKS_PER_SEC) / 1000000ull);
+
+    for (int i = 0; i < NUM_BOBS; i++) {
+        int bx, by;
+
+        bob_position(&bobs[i], t, &bx, &by);
+        splat(bx, by);
+    }
+}
+
+/* ── Cell surface ───────────────────────────────────────────────────── */
+
+static void frame_cells(const struct demo_surface *s, uint32_t dt_us,
+                        uint64_t frame, void *vs) {
+    struct shadebobs *sb = vs;
+
+    if (frame == 0) {
+        if (setup(s) != 0)
+            exit(1);
+    }
+    sb->elapsed_us += dt_us;
+
+    /* Only cells touched this frame are re-emitted, which is what keeps
+     * a frame inside the serial console's budget: a handful of cells
+     * per bob rather than a full screen. */
+    for (int i = 0; i < dirty_count; i++) {
+        int cell_idx = dirty[i].col * (g_pixel_rows >> 1) + dirty[i].row;
+        dirty_flag[cell_idx] = 0;
+    }
+    dirty_count = 0;
+
+    step_bobs(sb->elapsed_us);
+
+    for (int i = 0; i < dirty_count; i++) {
+        if (s->blocks)
+            emit_cell_blocks(dirty[i].col, dirty[i].row);
+        else
+            emit_cell_mono(dirty[i].col, dirty[i].row);
+    }
+}
+
+/* ── Pixel surface ──────────────────────────────────────────────────── */
+
+/*
+ * The intensity byte is the palette index, so there is no conversion
+ * step at all: splat writes the new value straight through to the
+ * mapping as it accumulates.  Nothing scans the picture per frame, and
+ * the dirty list the cell path needs has nothing to do here.
+ */
+static void build_cmap(const struct demo_surface *s) {
+    uint8_t r[256], g[256], b[256];
+
+    unsigned n = s->cmap_entries < 256 ? s->cmap_entries : 256;
+
+    /* Intensity 0 is untouched ground and must be black.  On a terminal
+     * that happens by omission — an untouched cell is simply never
+     * emitted — but every pixel here has a colour, so the background
+     * has to be one. */
+    r[0] = g[0] = b[0] = 0;
+
+    /*
+     * Interpolate between the palette's stops rather than quantising
+     * onto them.  The terminal has 30 colours to spend and the steps
+     * between them are the best it can do; here there are 256 entries,
+     * and stepping straight from one stop to the next wastes them —
+     * the eye reads the result as bands with a jump at each boundary
+     * instead of a gradient.  Blending across the gap spreads each
+     * transition over the entries between the stops.
+     */
+    for (unsigned i = 1; i < n; i++) {
+        /* Where this entry falls along the ramp, and how far between
+         * the two stops that surround it. */
+        unsigned pos = (i - 1) * (PALETTE_LEN - 1) * 256 / (n - 1);
+        unsigned stop = pos >> 8, frac = pos & 0xFF;
+        uint8_t r0, g0, b0, r1, g1, b1;
+
+        demo_xterm_rgb(palette[stop], &r0, &g0, &b0);
+        demo_xterm_rgb(palette[stop + 1 < PALETTE_LEN ? stop + 1 : stop],
+            &r1, &g1, &b1);
+        r[i] = (uint8_t)((r0 * (256 - frac) + r1 * frac) >> 8);
+        g[i] = (uint8_t)((g0 * (256 - frac) + g1 * frac) >> 8);
+        b[i] = (uint8_t)((b0 * (256 - frac) + b1 * frac) >> 8);
+    }
+    demo_set_cmap(s, r, g, b);
+}
+
+static void frame_pixels(const struct demo_surface *s, uint32_t dt_us,
+                         uint64_t frame, void *vs) {
+    struct shadebobs *sb = vs;
+
+    if (frame == 0) {
+        if (setup(s) != 0)
+            exit(1);
+        build_cmap(s);
+        fb_pix = s->pix;
+        fb_stride = s->stride;
+    }
+    sb->elapsed_us += dt_us;
+    step_bobs(sb->elapsed_us);
+}
+
+int main(int argc, char **argv) {
+    static const struct demo d = {
+        .name        = "shadebobs",
+        .frame_cell  = frame_cells,
+        .frame_pixel = frame_pixels,
+        .state       = &state,
+    };
+
+    return demo_main(argc, argv, &d);
 }

@@ -65,6 +65,14 @@ struct demo_surface {
 void	demo_set_cmap(const struct demo_surface *s,
 	    const uint8_t *r, const uint8_t *g, const uint8_t *b);
 
+/*
+ * An xterm-256 palette index as 24-bit RGB.  A demo that picks its
+ * colours from the terminal's fixed palette needs them as actual
+ * values to fill a pixel surface's colormap, and the point is that
+ * both surfaces then show the same thing.
+ */
+void	demo_xterm_rgb(uint8_t idx, uint8_t *r, uint8_t *g, uint8_t *b);
+
 /* ── The demo ─────────────────────────────────────────────────────── */
 
 struct demo;
