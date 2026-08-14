@@ -162,8 +162,8 @@ Three categories of headers:
 | `pcom.c` | Legacy console UART (unused — replaced by `com_pbbus.c`) |
 | `pmci.c` | SD/MMC host controller driver — implements MI `sdmmc_chip_functions` over SPI v2. Polled byte-at-a-time. Bounded timeouts: `SD_RESP_RETRIES=8` (Ncr), `SD_DATA_TOKEN_RETRIES=100000` (~130 ms Nac at FAST), `SD_BUSY_RETRIES=500000` (~650 ms Nbr). CMD9/CMD10 wire-byte reverse + CRC-slot shift. Attaches `sdmmc → ld_sdmmc → ld` |
 | `pusbhc.c` | USB host-controller driver for `CLASS_USBHC` — MI `usbd_bus_methods`/`usbd_pipe_methods` over the transaction engine, software root hub, one transaction at a time through a ready queue. Interrupt endpoints launch at `bInterval` through a gated-SOF frame wait (every launch, not only NAK retries); errored transactions retry on an exponential frame backoff. Line-capture and port-state debug views under `machdep.pusbhc.*` |
-| `pdisplay.c` | `wsdisplay` driver for `CLASS_DISPLAY` — emulops write 16-bit {attr, glyph} cells through the CELLS aperture, with a RAM shadow backing the copy ops (device reads are uncached MMIO). Cursor is the device's own; `mapchar` resolves Unicode to the ROM's CP437 glyphs via `wsfont_map_unichar()` |
-| `bus_space.c` | bus_space: map/unmap via UVM + `pmap_kenter_pa`. Single-value read/write/barrier ops live as macros in `include/bus_funcs.h` so each call inlines a volatile pointer deref. `bus_dma_*` panic stubs (no DMA engine) |
+| `pdisplay.c` | `wsdisplay` driver for `CLASS_DISPLAY` — emulops write 16-bit {attr, glyph} cells through the CELLS aperture, with a RAM shadow backing the copy ops (device reads are uncached MMIO). Cursor is the device's own; `mapchar` resolves Unicode to the ROM's CP437 glyphs via `wsfont_map_unichar()`. On a device advertising `CAP.FRAMEBUFFER`, also the dumb-framebuffer path: geometry and format read from the device, `SMODE` driving `CTRL.FB_SEL` with a repaint of the cells from the shadow on the way back, colormap straight onto `FB_PALETTE` (the aperture reads back, so no shadow), and an `mmap` bounded to the pixel aperture |
+| `bus_space.c` | bus_space: map/unmap via UVM + `pmap_kenter_pa`, plus `bus_space_mmap` returning a page frame for a device-memory mapping. Single-value read/write/barrier ops live as macros in `include/bus_funcs.h` so each call inlines a volatile pointer deref. `bus_dma_*` panic stubs (no DMA engine) |
 | `trap.c` | Exception dispatch (all 9 vectors), TLB fault → `uvm_fault()` demand paging, `pcb_onfault` recovery, hardware-based SPL (SR.I derived). EXC_EXT_IRQ → `intr_dispatch()` |
 | `intr.c` | Shared-IRQ dispatch — `intr_establish_xname`/`_disestablish`/`_dispatch`, per-handler `LIST_HEAD` registry with `struct evcnt` under group `"shared irq"`, spurious counter |
 | `syscall.c` | Syscall dispatch: `syscall_intern` + `syscall()`. R11=nr (scratch, set by SYSTRAP), R1–R4=args, stack overflow via copyin. Carry-flag error convention (C=0 success, C=1 error). Indirect syscalls rejected with ENOSYS |
@@ -224,8 +224,10 @@ captures the *why* for choices that would otherwise look odd.
   `ttyE0` reaches ASCII, the ~50 Latin-1 characters CP437 shares, and 12
   DEC graphics (box drawing plus one shade, `ESC(0 'd'`). The block and
   shade glyphs are present in the ROM font but no escape sequence names
-  them; reaching the full 256 needs the mmap'd CELLS aperture, which
-  `pdisplay_mmap` does not implement.
+  them; reaching the full 256 needs the CELLS aperture mapped into the
+  process, which `pdisplay_mmap` does not expose — it admits the pixel
+  aperture only, so a program wanting every glyph still has no path
+  while one wanting pixels does.
 - **`bus_dma_*` are panic stubs.** Penumbra has no DMA engine;
   `SMC_CAPS_DMA` is never set, so `pmci`/`sdmmc` always take the
   PIO path. If you see a `bus_dma_*` panic, a driver is requesting

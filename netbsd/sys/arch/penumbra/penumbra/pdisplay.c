@@ -43,24 +43,47 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #define	PD_INFO		0x004
 #define	PD_CTRL		0x008
 #define	PD_CURSOR	0x00C
+#define	PD_FB_GEOM	0x01C
+#define	PD_FB_FORMAT	0x020
 #define	PD_CELLS	0x1000
+#define	PD_FB_PALETTE	0x10000
+#define	PD_FB		0x20000
 
 #define	PD_CAP_VERSION(c)	((c) & 0xFF)
 #define	PD_CAP_COLOR		__BIT(8)
 #define	PD_CAP_EXTGLYPHS	__BIT(10)
+#define	PD_CAP_FRAMEBUFFER	__BIT(13)
 #define	PD_CTRL_ENABLE		__BIT(0)
 #define	PD_CTRL_CURSOR_EN	__BIT(1)
+#define	PD_CTRL_FB_SEL		__BIT(4)
+
+#define	PD_FB_GEOM_WIDTH(g)	((g) & 0xFFFF)
+#define	PD_FB_GEOM_HEIGHT(g)	(((g) >> 16) & 0xFFFF)
+#define	PD_FB_FORMAT_BPP(f)	((f) & 0xFF)
+
+/* The only pixel format this revision of the class defines. */
+#define	PD_FB_BPP_INDEXED8	8
+#define	PD_FB_CMAP_ENTRIES	256
 
 struct pdisplay_softc {
 	device_t		sc_dev;
 	bus_space_tag_t		sc_iot;
 	bus_space_handle_t	sc_ioh;
+	bus_addr_t		sc_addr;	/* MMIO base, for mmap */
 	int			sc_cols;
 	int			sc_rows;
 	uint32_t		sc_ctrl;	/* CTRL shadow (MMIO reads cost) */
 	uint16_t		*sc_shadow;	/* cell grid shadow */
 	int			sc_nscreens;
 	struct wsscreen_descr	sc_screen;
+
+	/* Framebuffer capability, absent on a device without CAP bit 13. */
+	bool			sc_has_fb;
+	u_int			sc_fbwidth;
+	u_int			sc_fbheight;
+	u_int			sc_fbdepth;
+	bus_size_t		sc_fbsize;	/* bytes of pixel aperture */
+	u_int			sc_mode;	/* WSDISPLAYIO_MODE_* */
 };
 
 #define	PD_RD(sc, reg)		bus_space_read_4((sc)->sc_iot, (sc)->sc_ioh, (reg))
@@ -135,6 +158,7 @@ pdisplay_attach(device_t parent, device_t self, void *aux)
 
 	sc->sc_dev = self;
 	sc->sc_iot = pa->pb_iot;
+	sc->sc_addr = pa->pb_addr;
 
 	error = bus_space_map(sc->sc_iot, pa->pb_addr, pa->pb_size,
 	    0, &sc->sc_ioh);
@@ -147,6 +171,27 @@ pdisplay_attach(device_t parent, device_t self, void *aux)
 	info = PD_RD(sc, PD_INFO);
 	sc->sc_cols = info & 0xFFFF;
 	sc->sc_rows = (info >> 16) & 0xFFFF;
+	sc->sc_mode = WSDISPLAYIO_MODE_EMUL;
+
+	/*
+	 * The framebuffer is optional and its geometry is a property of
+	 * the device, so both are read rather than assumed.  A format
+	 * this driver does not recognize leaves the capability unused;
+	 * the character console is unaffected either way.
+	 */
+	if (cap & PD_CAP_FRAMEBUFFER) {
+		uint32_t geom = PD_RD(sc, PD_FB_GEOM);
+		uint32_t fmt = PD_RD(sc, PD_FB_FORMAT);
+
+		if (PD_FB_FORMAT_BPP(fmt) == PD_FB_BPP_INDEXED8) {
+			sc->sc_fbwidth = PD_FB_GEOM_WIDTH(geom);
+			sc->sc_fbheight = PD_FB_GEOM_HEIGHT(geom);
+			sc->sc_fbdepth = PD_FB_BPP_INDEXED8;
+			sc->sc_fbsize = (bus_size_t)sc->sc_fbwidth *
+			    sc->sc_fbheight;
+			sc->sc_has_fb = sc->sc_fbsize != 0;
+		}
+	}
 	sc->sc_shadow = kmem_zalloc(sc->sc_cols * sc->sc_rows *
 	    sizeof(uint16_t), KM_SLEEP);
 
@@ -163,6 +208,9 @@ pdisplay_attach(device_t parent, device_t self, void *aux)
 	    PD_CAP_VERSION(cap), sc->sc_cols, sc->sc_rows,
 	    (cap & PD_CAP_COLOR) ? ", color" : "",
 	    (cap & PD_CAP_EXTGLYPHS) ? ", cp437" : "");
+	if (sc->sc_has_fb)
+		aprint_normal_dev(self, "framebuffer %ux%u %ubpp indexed\n",
+		    sc->sc_fbwidth, sc->sc_fbheight, sc->sc_fbdepth);
 
 	/*
 	 * A monochrome device (CAP.COLOR clear) would advertise
@@ -316,25 +364,184 @@ pdisplay_allocattr(void *cookie, int fg, int bg, int flags, long *attrp)
 
 /* ── Accessops ────────────────────────────────────────────────── */
 
+/*
+ * Repaint the character grid from the shadow.  The device keeps cell
+ * and pixel storage apart, so the text screen survives a graphics
+ * session untouched — but the class does not promise that, and a
+ * driver that matched only the class would find the cells undefined,
+ * so the emulation state is restored from the copy the driver owns.
+ */
+static void
+pdisplay_restore_text(struct pdisplay_softc *sc)
+{
+	int n = sc->sc_cols * sc->sc_rows;
+
+	for (int i = 0; i < n; i++)
+		PD_CELL_WR(sc, i, sc->sc_shadow[i]);
+}
+
+static void
+pdisplay_set_mode(struct pdisplay_softc *sc, u_int mode)
+{
+
+	if (mode == sc->sc_mode)
+		return;
+	sc->sc_mode = mode;
+
+	if (mode == WSDISPLAYIO_MODE_EMUL) {
+		sc->sc_ctrl &= ~PD_CTRL_FB_SEL;
+		PD_WR(sc, PD_CTRL, sc->sc_ctrl);
+		pdisplay_restore_text(sc);
+	} else {
+		sc->sc_ctrl |= PD_CTRL_FB_SEL;
+		PD_WR(sc, PD_CTRL, sc->sc_ctrl);
+	}
+}
+
+/*
+ * Colormap entries are one word per slot in the aperture, so a range
+ * update is a loop rather than a block copy.  Writes reach scan-out on
+ * the next read whether the framebuffer is on screen or not, which is
+ * what makes palette animation under a still picture work.
+ */
+static int
+pdisplay_putcmap(struct pdisplay_softc *sc, struct wsdisplay_cmap *cm)
+{
+	u_char r[PD_FB_CMAP_ENTRIES], g[PD_FB_CMAP_ENTRIES];
+	u_char b[PD_FB_CMAP_ENTRIES];
+	u_int index = cm->index, count = cm->count;
+	int error;
+
+	if (index >= PD_FB_CMAP_ENTRIES ||
+	    count > PD_FB_CMAP_ENTRIES - index)
+		return EINVAL;
+
+	if ((error = copyin(cm->red, r, count)) != 0)
+		return error;
+	if ((error = copyin(cm->green, g, count)) != 0)
+		return error;
+	if ((error = copyin(cm->blue, b, count)) != 0)
+		return error;
+
+	for (u_int i = 0; i < count; i++)
+		bus_space_write_4(sc->sc_iot, sc->sc_ioh,
+		    PD_FB_PALETTE + (index + i) * 4,
+		    ((uint32_t)r[i] << 16) | ((uint32_t)g[i] << 8) | b[i]);
+
+	return 0;
+}
+
+static int
+pdisplay_getcmap(struct pdisplay_softc *sc, struct wsdisplay_cmap *cm)
+{
+	u_char r[PD_FB_CMAP_ENTRIES], g[PD_FB_CMAP_ENTRIES];
+	u_char b[PD_FB_CMAP_ENTRIES];
+	u_int index = cm->index, count = cm->count;
+	int error;
+
+	if (index >= PD_FB_CMAP_ENTRIES ||
+	    count > PD_FB_CMAP_ENTRIES - index)
+		return EINVAL;
+
+	/* The aperture is readable, so the device holds the colormap and
+	 * the driver keeps no copy of it. */
+	for (u_int i = 0; i < count; i++) {
+		uint32_t c = bus_space_read_4(sc->sc_iot, sc->sc_ioh,
+		    PD_FB_PALETTE + (index + i) * 4);
+		r[i] = (c >> 16) & 0xFF;
+		g[i] = (c >> 8) & 0xFF;
+		b[i] = c & 0xFF;
+	}
+
+	if ((error = copyout(r, cm->red, count)) != 0)
+		return error;
+	if ((error = copyout(g, cm->green, count)) != 0)
+		return error;
+	return copyout(b, cm->blue, count);
+}
+
 static int
 pdisplay_ioctl(void *v, void *vs, u_long cmd, void *data, int flag,
     struct lwp *l)
 {
+	struct pdisplay_softc *sc = v;
 
 	switch (cmd) {
 	case WSDISPLAYIO_GTYPE:
 		*(u_int *)data = WSDISPLAY_TYPE_UNKNOWN;
 		return 0;
+
+	case WSDISPLAYIO_SMODE: {
+		u_int mode = *(u_int *)data;
+
+		if (mode != WSDISPLAYIO_MODE_EMUL && !sc->sc_has_fb)
+			return EINVAL;
+		pdisplay_set_mode(sc, mode);
+		return 0;
 	}
+	}
+
+	/* Everything below describes or touches the framebuffer. */
+	if (!sc->sc_has_fb)
+		return EPASSTHROUGH;
+
+	switch (cmd) {
+	case WSDISPLAYIO_GINFO: {
+		struct wsdisplay_fbinfo *fbi = data;
+
+		fbi->width = sc->sc_fbwidth;
+		fbi->height = sc->sc_fbheight;
+		fbi->depth = sc->sc_fbdepth;
+		fbi->cmsize = PD_FB_CMAP_ENTRIES;
+		return 0;
+	}
+
+	case WSDISPLAYIO_GET_FBINFO: {
+		struct wsdisplayio_fbinfo *fbi = data;
+
+		memset(fbi, 0, sizeof(*fbi));
+		fbi->fbi_fbsize = sc->sc_fbsize;
+		fbi->fbi_fboffset = 0;
+		fbi->fbi_width = sc->sc_fbwidth;
+		fbi->fbi_height = sc->sc_fbheight;
+		fbi->fbi_stride = sc->sc_fbwidth;	/* packed, no padding */
+		fbi->fbi_bitsperpixel = sc->sc_fbdepth;
+		fbi->fbi_pixeltype = WSFB_CI;
+		fbi->fbi_subtype.fbi_cmapinfo.cmap_entries =
+		    PD_FB_CMAP_ENTRIES;
+		/* The pixels are device memory a client maps directly, so
+		 * there is nothing for wsfb to shadow. */
+		fbi->fbi_flags = WSFB_VRAM_IS_RAM;
+		return 0;
+	}
+
+	case WSDISPLAYIO_LINEBYTES:
+		*(u_int *)data = sc->sc_fbwidth;
+		return 0;
+
+	case WSDISPLAYIO_PUTCMAP:
+		return pdisplay_putcmap(sc, data);
+
+	case WSDISPLAYIO_GETCMAP:
+		return pdisplay_getcmap(sc, data);
+	}
+
 	return EPASSTHROUGH;
 }
 
 static paddr_t
 pdisplay_mmap(void *v, void *vs, off_t off, int prot)
 {
+	struct pdisplay_softc *sc = v;
 
-	/* WSDISPLAYIO_MODE_MAPPED cell access: a later refinement. */
-	return -1;
+	if (!sc->sc_has_fb)
+		return -1;
+
+	if (off < 0 || off >= sc->sc_fbsize)
+		return -1;
+
+	return bus_space_mmap(sc->sc_iot, sc->sc_addr + PD_FB, off, prot,
+	    BUS_SPACE_MAP_LINEAR);
 }
 
 static int
