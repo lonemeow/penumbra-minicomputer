@@ -105,4 +105,8 @@ const char *scr_last_output(size_t *len);
  * Returns the number of characters written. */
 int         scr_row_text(int y, char *buf, size_t bufsz);
 
+/* The attribute of one cell of the freshly drawn screen, so a test can
+ * assert on colour and not just on text.  Off-screen reads give 0. */
+scr_attr    scr_cell_attr(int y, int x);
+
 #endif /* PENMON_SCREEN_H */

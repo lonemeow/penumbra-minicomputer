@@ -53,6 +53,44 @@ check_row(int y, const char *want, const char *msg)
 enum { ROW_TITLE = 0, ROW_CPU = 2, ROW_CPI = 3, ROW_STALL = 4,
        ROW_L1I = 8, ROW_MEM = 12, ROW_ACT = 13, ROW_PROC0 = 16 };
 
+/*
+ * The STALL readout carries the colour keying each cause to its segment
+ * in the bar below it, so every cause must render in a colour, and in
+ * one no other cause shares.  Each label is located by its text rather
+ * than by column, since where the fields sit is layout and what colour
+ * they carry is the contract.
+ */
+static void
+check_stall_colours(void)
+{
+	static const char *const label[] = { "funit", "ifetch", "load",
+	    "store", "hazard", "flush" };
+	const int n = (int)(sizeof(label) / sizeof(label[0]));
+	scr_attr attr[sizeof(label) / sizeof(label[0])];
+	char row[TEST_COLS + 1];
+	int i, j, distinct = 1, coloured = 1;
+
+	scr_row_text(ROW_STALL, row, sizeof(row));
+	for (i = 0; i < n; i++) {
+		const char *at = strstr(row, label[i]);
+
+		if (at == NULL) {
+			printf("FAIL stall readout is missing \"%s\"\n",
+			    label[i]);
+			failures++;
+			return;
+		}
+		attr[i] = scr_cell_attr(ROW_STALL, (int)(at - row));
+		if (attr[i] == ATTR(C_DEFAULT, C_DEFAULT, 0))
+			coloured = 0;
+		for (j = 0; j < i; j++)
+			if (attr[i] == attr[j])
+				distinct = 0;
+	}
+	check(coloured, "every stall cause is coloured");
+	check(distinct, "each stall cause takes a colour of its own");
+}
+
 int
 main(void)
 {
@@ -116,7 +154,9 @@ main(void)
 	check_row(ROW_CPU, "id  83%", "idle percentage rounds to whole");
 	check_row(ROW_CPI, " 3.72", "CPI keeps two decimals");
 	check_row(ROW_CPI, "MIPS  16.80", "MIPS keeps two decimals");
-	check_row(ROW_STALL, "ifetch 40.5%", "stall percentage keeps one decimal");
+	check_row(ROW_STALL, "funit  0.0% ifetch 40.5% load  0.0%",
+	    "stall readout keeps one decimal and its field spacing");
+	check_stall_colours();
 	check_row(ROW_L1I, " 99.8%", "hit rate keeps one decimal");
 	check_row(ROW_L1I, "   1234/s", "miss rate is a whole count");
 	check_row(ROW_MEM, "24.0M / 32.0M used", "byte counts scale to MiB");

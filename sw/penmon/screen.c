@@ -420,6 +420,14 @@ scr_row_text(int y, char *buf, size_t bufsz)
 	return n;
 }
 
+scr_attr
+scr_cell_attr(int y, int x)
+{
+	if (y < 0 || y >= rows || x < 0 || x >= cols)
+		return 0;
+	return back[y * cols + x].attr;
+}
+
 const char *
 scr_last_output(size_t *len)
 {

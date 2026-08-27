@@ -210,32 +210,63 @@ draw_cpu_bar(int y, int x, int w, const uint32_t pct[5])
 	draw_stack_bar(y, x, w, seg, pairs, (int)(sizeof(seg) / sizeof(seg[0])));
 }
 
+/* One stall cause: the label its readout carries, its share of the
+ * interval's cycles, and the colour that keys that readout to the
+ * segment accounting for it in the bar below. */
+struct stall_cause {
+	const char *label;
+	uint32_t    pct;
+	int         pair;
+};
+
 /*
- * Stacked STALL bar: the six per-cause stall percentages fill the bar in
- * the same left-to-right order as the STALL readout above; the productive
- * (non-stalled) remainder is the track, so the filled length reads as the
- * total stall burden and the colours break it down by cause.
+ * The STALL panel: a per-cause readout, and beneath it the same causes
+ * stacked into a single bar whose unfilled remainder is the productive
+ * (non-stalled) share.  The filled length reads as the total stall
+ * burden and the colours break it down by cause.
+ *
+ * Both halves are drawn from one table, so a cause's colour is a key
+ * the eye can follow from a number to the segment it accounts for —
+ * the bar carries no labels of its own, and its segments are sized by
+ * value rather than aligned under the readout.
+ *
+ * Colours reuse the dashboard's good/warn/bad reading for the causes
+ * that carry one: funit (multi-cycle execution the core genuinely has
+ * to do) is green, ifetch (the caches failing to feed the front end)
+ * is red, flush (branch mispredict / redirect) is yellow.  load, store,
+ * and hazard have no inherent good-or-bad sense, so they take neutral
+ * hues (cyan, magenta, blue) picked only to keep the segments distinct.
  */
 static void
-draw_stall_bar(int y, int x, int w, const struct rates *r)
+draw_stall_panel(const struct rates *r, int text_y, int text_x,
+    int bar_y, int bar_x, int bar_w)
 {
-	const uint32_t seg[] = {
-		r->stall_funit_pct, r->stall_ifetch_pct, r->stall_load_pct,
-		r->stall_store_pct, r->stall_hazard_pct, r->stall_flush_pct
+	const struct stall_cause cause[] = {
+		{ "funit",  r->stall_funit_pct,  PAIR_GREEN   },
+		{ "ifetch", r->stall_ifetch_pct, PAIR_RED     },
+		{ "load",   r->stall_load_pct,   PAIR_CYAN    },
+		{ "store",  r->stall_store_pct,  PAIR_MAGENTA },
+		{ "hazard", r->stall_hazard_pct, PAIR_BLUE    },
+		{ "flush",  r->stall_flush_pct,  PAIR_YELLOW  },
 	};
-	/*
-	 * Colours reuse the dashboard's good/warn/bad reading for the causes
-	 * that carry one: funit (multi-cycle execution the core genuinely has
-	 * to do) is green, ifetch (the caches failing to feed the front end)
-	 * is red, flush (branch mispredict / redirect) is yellow.  load, store,
-	 * and hazard have no inherent good-or-bad sense, so they take neutral
-	 * hues (cyan, magenta, blue) picked only to keep the segments distinct.
-	 */
-	static const int pairs[] = {
-		PAIR_GREEN, PAIR_RED, PAIR_CYAN, PAIR_MAGENTA, PAIR_BLUE, PAIR_YELLOW
-	};
+	const int n = (int)(sizeof(cause) / sizeof(cause[0]));
+	uint32_t pct[sizeof(cause) / sizeof(cause[0])];
+	int pairs[sizeof(cause) / sizeof(cause[0])];
+	int i, x = text_x;
 
-	draw_stack_bar(y, x, w, seg, pairs, (int)(sizeof(seg) / sizeof(seg[0])));
+	for (i = 0; i < n; i++) {
+		char field[24];
+
+		snprintf(field, sizeof(field), "%s%3u.%1u%%", cause[i].label,
+		    PCT_INT(cause[i].pct), PCT_FRAC(cause[i].pct));
+		scr_puts(text_y, x, pair_attr(cause[i].pair), field);
+		x += (int)strlen(field) + 1;	/* one blank between fields */
+
+		pct[i] = cause[i].pct;
+		pairs[i] = cause[i].pair;
+	}
+
+	draw_stack_bar(bar_y, bar_x, bar_w, pct, pairs, n);
 }
 
 /*
@@ -445,16 +476,7 @@ render_frame(const struct rates *r, const struct history *h,
 
 	y = 4;
 	scr_printf(y, 1, A_NORM, "STALL");
-	scr_printf(y, 7, A_NORM,
-	    "funit%3u.%1u%% ifetch%3u.%1u%% load%3u.%1u%% store%3u.%1u%% "
-	    "hazard%3u.%1u%% flush%3u.%1u%%",
-	    PCT_INT(r->stall_funit_pct),  PCT_FRAC(r->stall_funit_pct),
-	    PCT_INT(r->stall_ifetch_pct), PCT_FRAC(r->stall_ifetch_pct),
-	    PCT_INT(r->stall_load_pct),   PCT_FRAC(r->stall_load_pct),
-	    PCT_INT(r->stall_store_pct),  PCT_FRAC(r->stall_store_pct),
-	    PCT_INT(r->stall_hazard_pct), PCT_FRAC(r->stall_hazard_pct),
-	    PCT_INT(r->stall_flush_pct),  PCT_FRAC(r->stall_flush_pct));
-	draw_stall_bar(5, lay.bar_x, cols - lay.bar_x - 1, r);
+	draw_stall_panel(r, y, 7, 5, lay.bar_x, cols - lay.bar_x - 1);
 
 	scr_fill(6, 0, cols, GLYPH_HLINE, A_NORM);
 
