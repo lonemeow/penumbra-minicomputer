@@ -11,6 +11,7 @@
 #include <sys/time.h>
 #include <uvm/uvm_extern.h>	/* struct uvmexp_sysctl */
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -46,40 +47,79 @@ by_cpu_desc(const void *a, const void *b)
 	return 0;
 }
 
-int
-read_procs(struct procinfo *out, int max)
+/*
+ * Entries the process-table buffer starts at.  A typical system fits
+ * without a retry; beyond that the buffer grows itself and stays grown,
+ * so the cost is paid once rather than per refresh.
+ */
+#define PROC_CAP_INIT 64
+
+/*
+ * Read the whole process table into a buffer that outlives the call.
+ *
+ * KERN_PROC2 reports a buffer it could not fill as ENOMEM, which is
+ * enough to size the buffer by retrying: hold it across refreshes and a
+ * steady process count costs one syscall.  Asking the kernel for the
+ * size first would cost a second every refresh, and that pass is not a
+ * cheap count — it walks the whole process list and runs the same
+ * per-process permission check as the pass that fills the buffer.
+ *
+ * Returns the number of entries read and points *entries at them, or -1
+ * if the table could not be read.
+ */
+static int
+fetch_kproc2(struct kinfo_proc2 **entries)
 {
+	static struct kinfo_proc2 *buf;
+	static size_t cap;		/* entries buf holds; grows, never shrinks */
 	int mib[6];
-	size_t len = 0, pgsz;
-	struct kinfo_proc2 *kp;
-	unsigned int i, n;
-	int count = 0;
+	size_t want = cap != 0 ? cap : PROC_CAP_INIT;
 
 	mib[0] = CTL_KERN;
 	mib[1] = KERN_PROC2;
 	mib[2] = KERN_PROC_ALL;
 	mib[3] = 0;
-	mib[4] = (int)sizeof(struct kinfo_proc2);
-	mib[5] = 0;
+	mib[4] = (int)sizeof(**entries);
 
-	/* Sizing pass.  mib[5]=0 asks "how many bytes?". */
-	if (sysctl(mib, 6, NULL, &len, NULL, 0) != 0 || len == 0)
-		return 0;
+	for (;;) {
+		size_t len;
 
-	/* Slack for procs forked between the two calls. */
-	len += sizeof(struct kinfo_proc2) * 8;
-	kp = malloc(len);
-	if (kp == NULL)
-		return 0;
+		if (want > cap) {
+			struct kinfo_proc2 *nb =
+			    realloc(buf, want * sizeof(*nb));
 
-	mib[5] = (int)(len / sizeof(struct kinfo_proc2));
-	if (sysctl(mib, 6, kp, &len, NULL, 0) != 0) {
-		free(kp);
-		return 0;
+			if (nb == NULL)
+				return -1;
+			buf = nb;
+			cap = want;
+		}
+
+		len = cap * sizeof(*buf);
+		mib[5] = (int)cap;
+		if (sysctl(mib, 6, buf, &len, NULL, 0) == 0) {
+			*entries = buf;
+			return (int)(len / sizeof(*buf));
+		}
+		if (errno != ENOMEM)
+			return -1;
+
+		/* The kernel does not report how much it needed, so close
+		 * on it by doubling; the process count bounds the loop. */
+		want = cap * 2;
 	}
-	n = len / sizeof(struct kinfo_proc2);
+}
 
-	pgsz = (size_t)sysconf(_SC_PAGESIZE);
+int
+read_procs(struct procinfo *out, int max)
+{
+	static size_t pgsz;		/* invariant for the life of the process */
+	struct kinfo_proc2 *kp;
+	int i, n, count = 0;
+
+	if ((n = fetch_kproc2(&kp)) < 0)
+		return 0;
+	if (pgsz == 0)
+		pgsz = (size_t)sysconf(_SC_PAGESIZE);
 
 	for (i = 0; i < n && count < max; i++) {
 		struct procinfo *p = &out[count];
@@ -104,7 +144,6 @@ read_procs(struct procinfo *out, int max)
 		count++;
 	}
 
-	free(kp);
 	qsort(out, count, sizeof(*out), by_cpu_desc);
 	return count;
 }
