@@ -200,6 +200,34 @@ int main() {
     r = lookup_a(d, (0x00003u << 12), ACC_READ, false, 1);
     check_bool("invalidated nohit", r.hit, false);
 
+    // ── A disabled lookup presents no verdict ──
+    // The enable qualifies the outputs rather than gating the match cone, so
+    // an idle port must stay silent even while a matching entry sits under
+    // the address it happens to be presenting. Every other check here samples
+    // with the enable high, so this is the only one that pins that.
+    printf("-- disabled lookup is silent --\n");
+    write_entry(d, 15, 0, 0x0000F, 0x000EF, 1, TLB_V | TLB_R | TLB_C);
+    idle(d);
+    d->i_asid = 1;
+    d->i_idx_set = 15;                 // port B's read address when idle
+    d->i_a_vaddr = (0x0000Fu << 12); d->i_a_access_type = ACC_READ; d->i_a_user_mode = 0;
+    d->i_b_vaddr = (0x0000Fu << 12); d->i_b_access_type = ACC_READ; d->i_b_user_mode = 0;
+    d->eval();
+    check_bool("idle A nohit",       d->o_a_hit,       false);
+    check_bool("idle A nofault",     d->o_a_fault,     false);
+    check_bool("idle A nocacheable", d->o_a_cacheable, false);
+    check_bool("idle B nohit",       d->o_b_hit,       false);
+    check_bool("idle B nofault",     d->o_b_fault,     false);
+    check_bool("idle B nocacheable", d->o_b_cacheable, false);
+
+    // Same, on the permission-fault leg: a write to that read-only entry
+    // would fault if the verdict were live.
+    d->i_a_access_type = ACC_WRITE;
+    d->i_b_access_type = ACC_WRITE;
+    d->eval();
+    check_bool("idle A no perm fault", d->o_a_fault, false);
+    check_bool("idle B no perm fault", d->o_b_fault, false);
+
     // ── Readback returns the written words ──
     printf("-- readback --\n");
     write_entry(d, 13, 1, 0x0000D, 0x000CD, 7, TLB_V | TLB_R | TLB_W);
