@@ -924,12 +924,23 @@ FPGA_SPLASH_TOPS = ulx3s_video_test_top
 # derivation): an explicit NEXTPNR_SEED on the command line or environment
 # always wins; `NEXTPNR_SEED=` forces a random placement; a top with no
 # entry here behaves as before (no --seed passed).
-# Swept after the display adapter landed: fmax across seeds 0-9 spans
-# 23.99-27.5 MHz, only half of them clearing 25. Seed 5 is the best and
-# the only one with real margin over the 27 MHz safety floor.
+# A sweep is only valid for the CPU_HZ it ran at: the target reweights
+# nextpnr's per-domain criticality, and CLK_FREQ retunes every derived
+# divider, so seed rankings do not survive a retarget. Re-sweep after
+# moving CPU_HZ, not just after an RTL change.
+#
+# gen1, swept after the display adapter landed: fmax across seeds 0-9
+# spans 23.99-27.5 MHz, only half of them clearing 25. Seed 5 is the best
+# and the only one with real margin over the 27 MHz safety floor.
+#
+# The gen2 pair at their 37.5 MHz CPU_HZ: gen2 spans 33.2-39.63 MHz and
+# clears the target on 4 seeds of 10, gen2.5 spans 35.12-38.85 and clears
+# on 3. Each pin below is its sweep's best. Both run closer to the edge
+# than gen1 does — 5.7% margin for gen2, 3.6% for gen2.5 — so a placement
+# regression here costs a working bitstream, not just headroom.
 DEFAULT_SEED_ulx3s_penumbra1_top   := 5
-DEFAULT_SEED_ulx3s_penumbra2_top   := 9
-DEFAULT_SEED_ulx3s_penumbra2_5_top := 9
+DEFAULT_SEED_ulx3s_penumbra2_top   := 2
+DEFAULT_SEED_ulx3s_penumbra2_5_top := 6
 
 
 # BOARD/CORE porcelain → TOP derivation (CORE defaults to penumbra2
