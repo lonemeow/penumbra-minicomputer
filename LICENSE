@@ -54,7 +54,7 @@ their own respective licenses.
    own BSD 2-Clause header (permitted, as BSD 2-Clause is GPL-compatible).
    Combining this GPL code with the LLVM runtime is covered by the LLVM
    Exceptions in llvm/LICENSE.TXT, which explicitly address GPLv2.
-   See sw/doom/COPYING for the full license text.
+   See sw/doom/chocolate-doom/COPYING.md for the full license text.
 
 5. Doom game data (WAD files)
    No WAD file is distributed with this project; see sw/doom/wads/README.md
