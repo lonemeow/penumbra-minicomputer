@@ -44,3 +44,15 @@ __pycache__/
 *.pyo
 .venv/
 netbsd/sys/machine
+
+# Game data
+# WAD files are never committed: the retail Doom WADs are proprietary, and
+# Freedoom — though BSD-licensed and freely redistributable — is tens of
+# megabytes of binary data that does not belong in the tree. Drop them in
+# sw/doom/wads/ instead (see the README there).
+# The directory contents are excluded rather than the directory itself, so
+# that git still descends into it and tracks the README.
+sw/doom/wads/*
+!sw/doom/wads/README.md
+*.wad
+*.WAD

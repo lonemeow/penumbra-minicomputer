@@ -44,3 +44,21 @@ their own respective licenses.
    The original Dhrystone source code (dhry.h, dhry_1.c, dhry_2.c) is widely
    considered to be in the public domain.
    See benchmark/dhrystone/LICENSE for details.
+
+4. Chocolate Doom (sw/doom/)
+   Copyright (C) 1993-1996 Id Software, Inc. and Copyright (C) 2005-2014
+   Simon Howard and contributors. Licensed under the GNU General Public
+   License, version 2 or (at your option) any later version.
+   Penumbra-specific modifications and additions under sw/doom/ are
+   likewise GPL-2.0-or-later, except for standalone files that carry their
+   own BSD 2-Clause header (permitted, as BSD 2-Clause is GPL-compatible).
+   Combining this GPL code with the LLVM runtime is covered by the LLVM
+   Exceptions in llvm/LICENSE.TXT, which explicitly address GPLv2.
+   See sw/doom/COPYING for the full license text.
+
+5. Doom game data (WAD files)
+   No WAD file is distributed with this project; see sw/doom/wads/README.md
+   for how to obtain one. Freedoom (https://freedoom.github.io/) is BSD
+   3-Clause licensed and is the recommended, freely redistributable data
+   set. The Doom shareware and retail WADs published by Id Software remain
+   under their own, non-BSD terms and are not redistributable here.
