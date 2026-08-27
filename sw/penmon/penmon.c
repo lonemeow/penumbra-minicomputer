@@ -22,6 +22,12 @@
 #include <time.h>
 #include <unistd.h>
 
+/* Refresh-interval bounds, in milliseconds: fast enough to look live,
+ * slow enough that the display costs less than what it measures. */
+#define INTERVAL_MIN_MS   200
+#define INTERVAL_MAX_MS  10000
+#define INTERVAL_STEP_MS   200
+
 static volatile sig_atomic_t want_quit;
 
 static void
@@ -51,17 +57,18 @@ main(int argc, char **argv)
 	struct procinfo procs[PENMON_MAXPROC];
 	uint64_t clk_hz = 0;
 	char cpu_model[PENMON_MODELLEN] = "";
-	double interval = 1.0;
+	int interval_ms = 1000;
 	int ch, nproc;
-	double load[3];
 
 	int c;
 	while ((c = getopt(argc, argv, "d:h")) != -1) {
 		switch (c) {
 		case 'd':
-			interval = atof(optarg);
-			if (interval < 0.2) interval = 0.2;
-			if (interval > 10.0) interval = 10.0;
+			interval_ms = (int)(atof(optarg) * 1000.0);
+			if (interval_ms < INTERVAL_MIN_MS)
+				interval_ms = INTERVAL_MIN_MS;
+			if (interval_ms > INTERVAL_MAX_MS)
+				interval_ms = INTERVAL_MAX_MS;
 			break;
 		case 'h':
 		default:
@@ -95,15 +102,13 @@ main(int argc, char **argv)
 		history_push(&hist, &r);
 		read_meminfo(&mem);
 		nproc = read_procs(procs, PENMON_MAXPROC);
-		if (getloadavg(load, 3) < 1)
-			load[0] = 0.0;
 
-		render_frame(&r, &hist, &mem, load[0], read_uptime(),
-		    procs, nproc, interval, cpu_model);
+		render_frame(&r, &hist, &mem, read_loadavg(), read_uptime(),
+		    procs, nproc, interval_ms, cpu_model);
 
 		prev = cur;
 
-		ch = scr_getkey((int)(interval * 1000));	/* blocks up to interval */
+		ch = scr_getkey(interval_ms);	/* blocks up to the interval */
 		if (want_quit)
 			break;
 		switch (ch) {
@@ -119,11 +124,13 @@ main(int argc, char **argv)
 			break;
 		case '+':
 		case '=':
-			if (interval > 0.4) interval -= 0.2;
+			if (interval_ms - INTERVAL_STEP_MS >= INTERVAL_MIN_MS)
+				interval_ms -= INTERVAL_STEP_MS;
 			break;
 		case '-':
 		case '_':
-			if (interval < 10.0) interval += 0.2;
+			if (interval_ms + INTERVAL_STEP_MS <= INTERVAL_MAX_MS)
+				interval_ms += INTERVAL_STEP_MS;
 			break;
 		default:
 			break;			/* -1 (timeout) included */

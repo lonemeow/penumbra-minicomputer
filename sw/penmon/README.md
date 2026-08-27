@@ -113,3 +113,15 @@ glyphs (`█ ░ ─`) and sparklines a block-height ramp (`▁▂▃▄▅▆�
 raw UTF-8 — so the look depends only on a UTF-8 *host* terminal, not on the
 target's locale. Each sparkline takes a single colour (from its most recent
 sample) so the strip costs one colour run on the wire.
+
+The same frugality applies to the arithmetic. Penumbra has no FPU, so a
+dashboard built on `double` pays twice per frame: once for the soft-float
+runtime, and again — more heavily — for printf's exact decimal converter,
+which every `%f` conversion invokes and which allocates as it goes. penmon
+therefore carries each derived value as a scaled integer (`PCT_FULL`,
+`CPI_SCALE`, `MIPS_SCALE` in `penmon.h`) all the way to `snprintf`, and
+splits it into an `N.M` readout at print time. A percentage in these units
+also *is* a bar-fill fraction, so the gauges need no conversion either. The
+tool references no floating-point routine at all — worth preserving, since
+a single stray `%f` puts the whole decimal-conversion path back in the
+per-frame cost.

@@ -20,6 +20,31 @@
 #include <stdint.h>
 #include <time.h>
 
+/*
+ * Fixed-point scales for every derived value.
+ *
+ * Penumbra has no FPU, so floating point costs twice over: the soft-float
+ * runtime for the arithmetic, and printf's exact decimal converter for the
+ * output.  Both dwarf the sampling that produces the numbers, and a
+ * dashboard that shows one or two decimal places never needed the range.
+ * Rates are therefore carried as scaled integers all the way to snprintf.
+ *
+ * PCT_FULL is the value of "100%", so a percentage in these units doubles
+ * as a bar-fill fraction without a second unit or a conversion.
+ */
+#define PCT_FULL   1000		/* percentages in tenths of a percent */
+#define CPI_SCALE  100		/* cycles per instruction, in hundredths */
+#define MIPS_SCALE 100		/* retired MIPS, in hundredths */
+#define LOAD_SCALE 100		/* load average, in hundredths */
+
+/* a/b rounded to nearest, 0 when b is 0 — the division every derived rate
+ * below is built from. */
+static inline uint64_t
+divround(uint64_t a, uint64_t b)
+{
+	return b ? (a + b / 2) / b : 0;
+}
+
 /* One cache device's four free-running event counters (zero-extended
  * to 64 bits by the kernel, but the live value still wraps at 2^32). */
 struct cache_ctr {
@@ -64,33 +89,35 @@ struct snapshot {
 
 /* Per-cache derived rates for display. */
 struct cache_rate {
-	double hit_pct;			/* (hits / total accesses) * 100 */
-	double miss_per_sec;		/* misses per wall-clock second */
+	uint32_t hit_pct;		/* (hits / total accesses), PCT_FULL scale */
+	uint32_t miss_per_sec;		/* misses per wall-clock second */
 };
 
 /* Everything the renderer needs, derived from two snapshots. */
 struct rates {
-	double dt;			/* interval length in seconds */
-	double cpi;			/* cycles / instructions over interval */
-	double mips;			/* million instructions retired / second */
-	double stall_funit_pct;		/* % of interval cycles stalled, by cause */
-	double stall_ifetch_pct;
-	double stall_load_pct;
-	double stall_store_pct;
-	double stall_hazard_pct;
-	double stall_flush_pct;
-	double clk_mhz;			/* CPU clock (static, machdep.cpu.freq) */
-	double cpu_pct[5];		/* % of interval in usr,nice,sys,intr,idle */
-	double faults_per_sec;		/* page faults per wall-clock second */
-	double intr_per_sec;		/* hardware interrupts / s */
-	double syscall_per_sec;		/* system calls / s */
-	double csw_per_sec;		/* context switches / s */
-	double fork_per_sec;		/* process creations / s */
+	uint64_t dt_us;			/* interval length in microseconds */
+	uint32_t cpi;			/* cycles / instructions, CPI_SCALE */
+	uint32_t mips;			/* instructions retired / s, MIPS_SCALE */
+	uint32_t stall_funit_pct;	/* interval cycles stalled by cause,
+					 * PCT_FULL scale */
+	uint32_t stall_ifetch_pct;
+	uint32_t stall_load_pct;
+	uint32_t stall_store_pct;
+	uint32_t stall_hazard_pct;
+	uint32_t stall_flush_pct;
+	uint32_t clk_khz;		/* CPU clock (static, machdep.cpu.freq) */
+	uint32_t cpu_pct[5];		/* interval in usr,nice,sys,intr,idle,
+					 * PCT_FULL scale */
+	uint32_t faults_per_sec;	/* page faults per wall-clock second */
+	uint32_t intr_per_sec;		/* hardware interrupts / s */
+	uint32_t syscall_per_sec;	/* system calls / s */
+	uint32_t csw_per_sec;		/* context switches / s */
+	uint32_t fork_per_sec;		/* process creations / s */
 	struct cache_rate l1i, l1d, l2;
 	/* Per-source interrupt rates, highest first.  A source absent
 	 * from the previous snapshot (a device that just attached)
 	 * contributes no rate until it has been seen twice. */
-	struct { char name[PENMON_IRQ_NAME]; double per_sec; }
+	struct { char name[PENMON_IRQ_NAME]; uint32_t per_sec; }
 		 irq[PENMON_IRQ_MAX];
 	int      nirq;
 };
@@ -138,6 +165,11 @@ void read_meminfo(struct meminfo *m);
 /* Read system uptime in seconds from kern.boottime; 0 on failure. */
 long read_uptime(void);
 
+/* Read the 1-minute load average (vm.loadavg) at LOAD_SCALE; 0 on failure.
+ * The sysctl carries the kernel's own fixed-point value, so no conversion
+ * through a floating-point getloadavg() is needed. */
+uint32_t read_loadavg(void);
+
 /* ---- proc.c ---------------------------------------------------------- */
 
 #define PENMON_MAXPROC 128
@@ -146,7 +178,7 @@ long read_uptime(void);
 
 struct procinfo {
 	int32_t  pid;
-	double   pctcpu;		/* 0..100, decayed average from the kernel */
+	uint32_t pctcpu;		/* decayed kernel average, PCT_FULL scale */
 	uint64_t rss_bytes;		/* resident set size */
 	char     state;			/* R/S/T/Z/I/... */
 	char     comm[PENMON_COMMLEN];
@@ -163,12 +195,12 @@ int read_procs(struct procinfo *out, int max);
  * index of the most-recent sample, count caps at HIST_LEN. */
 #define HIST_LEN 64
 struct history {
-	float cpi[HIST_LEN];
-	float l1i[HIST_LEN];
-	float l1d[HIST_LEN];
-	float l2[HIST_LEN];
-	int   head;
-	int   count;
+	uint32_t cpi[HIST_LEN];		/* CPI_SCALE */
+	uint32_t l1i[HIST_LEN];		/* hit rates, PCT_FULL scale */
+	uint32_t l1d[HIST_LEN];
+	uint32_t l2[HIST_LEN];
+	int      head;
+	int      count;
 };
 
 void history_init(struct history *h);
@@ -176,8 +208,8 @@ void history_push(struct history *h, const struct rates *r);
 
 /* Draw one full frame into the screen layer (screen.h) and flush it. */
 void render_frame(const struct rates *r, const struct history *h,
-                  const struct meminfo *mem, double load1, long uptime_sec,
-                  const struct procinfo *procs, int nproc, double interval,
+                  const struct meminfo *mem, uint32_t load1, long uptime_sec,
+                  const struct procinfo *procs, int nproc, int interval_ms,
                   const char *cpu_model);
 
 #endif /* PENMON_H */

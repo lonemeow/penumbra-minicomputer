@@ -231,66 +231,71 @@ counter_delta(uint64_t prev, uint64_t cur)
 	}
 }
 
-/* hits/(hits+misses) as a percentage, 0 when the cache was idle. */
-static double
-hit_pct(uint64_t hits, uint64_t misses)
+/*
+ * Events observed over the interval expressed as a rate per second.
+ *
+ * A counter delta is at most 2^33 (two 32-bit counters summed), so scaling
+ * by a microsecond in the numerator stays well inside 64 bits and the
+ * division still rounds on the full-precision value.
+ */
+static uint32_t
+per_sec(uint64_t events, uint64_t dt_us)
 {
-	uint64_t total = hits + misses;
-
-	return total ? (100.0 * (double)hits) / (double)total : 0.0;
+	return (uint32_t)divround(events * 1000000, dt_us);
 }
 
 static void
 cache_rate(const struct cache_ctr *a, const struct cache_ctr *b,
-    double dt, struct cache_rate *out)
+    uint64_t dt_us, struct cache_rate *out)
 {
 	uint64_t rh = counter_delta(a->read_hits,    b->read_hits);
 	uint64_t rm = counter_delta(a->read_misses,  b->read_misses);
 	uint64_t wh = counter_delta(a->write_hits,   b->write_hits);
 	uint64_t wm = counter_delta(a->write_misses, b->write_misses);
+	uint64_t hits = rh + wh, total = rh + wh + rm + wm;
 
-	out->hit_pct = hit_pct(rh + wh, rm + wm);
-	out->miss_per_sec = dt > 0 ? (double)(rm + wm) / dt : 0.0;
+	out->hit_pct = (uint32_t)divround(hits * PCT_FULL, total);
+	out->miss_per_sec = per_sec(rm + wm, dt_us);
 }
 
 void
 compute_rates(const struct snapshot *prev, const struct snapshot *cur,
     uint64_t clk_hz, struct rates *out)
 {
-	uint64_t dcyc, dins, busy, total, i;
-	double dt;
+	uint64_t dcyc, dins, busy, total, i, dt_us;
 
 	memset(out, 0, sizeof(*out));
 
-	dt = (double)(cur->t.tv_sec - prev->t.tv_sec) +
-	     (double)(cur->t.tv_nsec - prev->t.tv_nsec) / 1e9;
-	if (dt <= 0)
-		dt = 1e-9;
-	out->dt = dt;
-	out->clk_mhz = (double)clk_hz / 1e6;
+	dt_us = (uint64_t)(cur->t.tv_sec - prev->t.tv_sec) * 1000000 +
+	    (uint64_t)((cur->t.tv_nsec - prev->t.tv_nsec) / 1000);
+	if (dt_us == 0)
+		dt_us = 1;		/* the divisor below, never the display */
+	out->dt_us = dt_us;
+	out->clk_khz = (uint32_t)divround(clk_hz, 1000);
 
 	dcyc = counter_delta(prev->cycles, cur->cycles);
 	dins = counter_delta(prev->insns,  cur->insns);
-	out->cpi  = dins ? (double)dcyc / (double)dins : 0.0;
-	out->mips = (double)dins / 1e6 / dt;
+	out->cpi  = (uint32_t)divround(dcyc * CPI_SCALE, dins);
+	/* Instructions per microsecond *is* MIPS, so the interval in
+	 * microseconds is already the right divisor. */
+	out->mips = (uint32_t)divround(dins * MIPS_SCALE, dt_us);
 
-	/* Each stall bucket as a percentage of the interval's cycles.
+	/* Each stall bucket as a fraction of the interval's cycles.
 	 * out is memset to 0 above, so an idle interval (dcyc == 0) leaves
-	 * all four at 0. */
+	 * all six at 0. */
 	if (dcyc) {
-		double dc = (double)dcyc;
-		out->stall_funit_pct  =
-		    100.0 * counter_delta(prev->stall_funit,  cur->stall_funit)  / dc;
-		out->stall_ifetch_pct =
-		    100.0 * counter_delta(prev->stall_ifetch, cur->stall_ifetch) / dc;
-		out->stall_load_pct   =
-		    100.0 * counter_delta(prev->stall_load,   cur->stall_load)   / dc;
-		out->stall_store_pct  =
-		    100.0 * counter_delta(prev->stall_store,  cur->stall_store)  / dc;
-		out->stall_hazard_pct =
-		    100.0 * counter_delta(prev->stall_hazard, cur->stall_hazard) / dc;
-		out->stall_flush_pct  =
-		    100.0 * counter_delta(prev->stall_flush,  cur->stall_flush)  / dc;
+		out->stall_funit_pct  = (uint32_t)divround(
+		    counter_delta(prev->stall_funit,  cur->stall_funit)  * PCT_FULL, dcyc);
+		out->stall_ifetch_pct = (uint32_t)divround(
+		    counter_delta(prev->stall_ifetch, cur->stall_ifetch) * PCT_FULL, dcyc);
+		out->stall_load_pct   = (uint32_t)divround(
+		    counter_delta(prev->stall_load,   cur->stall_load)   * PCT_FULL, dcyc);
+		out->stall_store_pct  = (uint32_t)divround(
+		    counter_delta(prev->stall_store,  cur->stall_store)  * PCT_FULL, dcyc);
+		out->stall_hazard_pct = (uint32_t)divround(
+		    counter_delta(prev->stall_hazard, cur->stall_hazard) * PCT_FULL, dcyc);
+		out->stall_flush_pct  = (uint32_t)divround(
+		    counter_delta(prev->stall_flush,  cur->stall_flush)  * PCT_FULL, dcyc);
 	}
 
 	/* CPU time: cp_time is true 64-bit monotonic ticks (no wrap). */
@@ -299,20 +304,19 @@ compute_rates(const struct snapshot *prev, const struct snapshot *cur,
 		total += cur->cp_time[i] - prev->cp_time[i];
 	busy = total ? total : 1;
 	for (i = 0; i < 5; i++)
-		out->cpu_pct[i] =
-		    100.0 * (double)(cur->cp_time[i] - prev->cp_time[i]) /
-		    (double)busy;
+		out->cpu_pct[i] = (uint32_t)divround(
+		    (cur->cp_time[i] - prev->cp_time[i]) * PCT_FULL, busy);
 
-	cache_rate(&prev->l1i, &cur->l1i, dt, &out->l1i);
-	cache_rate(&prev->l1d, &cur->l1d, dt, &out->l1d);
-	cache_rate(&prev->l2,  &cur->l2,  dt, &out->l2);
+	cache_rate(&prev->l1i, &cur->l1i, dt_us, &out->l1i);
+	cache_rate(&prev->l1d, &cur->l1d, dt_us, &out->l1d);
+	cache_rate(&prev->l2,  &cur->l2,  dt_us, &out->l2);
 
 	/* uvmexp2 activity counters: cumulative 64-bit, no wrap — plain diff. */
-	out->faults_per_sec  = (double)(cur->faults   - prev->faults)   / dt;
-	out->intr_per_sec    = (double)(cur->intrs    - prev->intrs)    / dt;
-	out->syscall_per_sec = (double)(cur->syscalls - prev->syscalls) / dt;
-	out->csw_per_sec     = (double)(cur->swtch    - prev->swtch)    / dt;
-	out->fork_per_sec    = (double)(cur->forks    - prev->forks)    / dt;
+	out->faults_per_sec  = per_sec(cur->faults   - prev->faults,   dt_us);
+	out->intr_per_sec    = per_sec(cur->intrs    - prev->intrs,    dt_us);
+	out->syscall_per_sec = per_sec(cur->syscalls - prev->syscalls, dt_us);
+	out->csw_per_sec     = per_sec(cur->swtch    - prev->swtch,    dt_us);
+	out->fork_per_sec    = per_sec(cur->forks    - prev->forks,    dt_us);
 
 	/* Per-source interrupt rates, matched by name across the two
 	 * snapshots: the set changes as devices attach and detach, so
@@ -326,9 +330,8 @@ compute_rates(const struct snapshot *prev, const struct snapshot *cur,
 				continue;
 			strlcpy(out->irq[out->nirq].name, cur->irq[k].name,
 			    PENMON_IRQ_NAME);
-			out->irq[out->nirq].per_sec =
-			    (double)(cur->irq[k].count - prev->irq[j].count) /
-			    dt;
+			out->irq[out->nirq].per_sec = per_sec(
+			    cur->irq[k].count - prev->irq[j].count, dt_us);
 			out->nirq++;
 			break;
 		}

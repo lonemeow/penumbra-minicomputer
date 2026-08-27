@@ -99,4 +99,10 @@ void        scr_set_outfd(int fd);
 /* Bytes emitted by the most recent scr_flush(). */
 const char *scr_last_output(size_t *len);
 
+/* Copy row y of the freshly drawn screen into buf as NUL-terminated
+ * ASCII, standing in non-ASCII glyphs (bars, box drawing) with '?'.
+ * Lets a test assert on a laid-out row without parsing the ANSI stream.
+ * Returns the number of characters written. */
+int         scr_row_text(int y, char *buf, size_t bufsz);
+
 #endif /* PENMON_SCREEN_H */

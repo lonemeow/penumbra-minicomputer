@@ -401,6 +401,25 @@ scr_set_outfd(int fd)
 	out_fd = fd;
 }
 
+int
+scr_row_text(int y, char *buf, size_t bufsz)
+{
+	int x, n = 0;
+
+	if (buf == NULL || bufsz == 0)
+		return 0;
+	buf[0] = '\0';
+	if (y < 0 || y >= rows)
+		return 0;
+	for (x = 0; x < cols && (size_t)n + 1 < bufsz; x++) {
+		uint32_t ch = back[y * cols + x].ch;
+
+		buf[n++] = (ch >= ' ' && ch < 0x7f) ? (char)ch : '?';
+	}
+	buf[n] = '\0';
+	return n;
+}
+
 const char *
 scr_last_output(size_t *len)
 {

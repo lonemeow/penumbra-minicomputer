@@ -6,6 +6,7 @@
 #include "penmon.h"
 
 #include <sys/param.h>		/* FSCALE */
+#include <sys/resource.h>	/* struct loadavg */
 #include <sys/sysctl.h>
 #include <sys/time.h>
 #include <uvm/uvm_extern.h>	/* struct uvmexp_sysctl */
@@ -84,7 +85,8 @@ read_procs(struct procinfo *out, int max)
 		struct procinfo *p = &out[count];
 
 		p->pid = kp[i].p_pid;
-		p->pctcpu = 100.0 * (double)kp[i].p_pctcpu / (double)FSCALE;
+		p->pctcpu = (uint32_t)divround(
+		    (uint64_t)kp[i].p_pctcpu * PCT_FULL, FSCALE);
 		p->rss_bytes = (uint64_t)kp[i].p_vm_rssize * pgsz;
 		p->state = state_letter(kp[i].p_stat);
 
@@ -126,6 +128,21 @@ read_meminfo(struct meminfo *m)
 	m->free_bytes   = (uint64_t)u.free   * ps;
 	m->active_bytes = (uint64_t)u.active * ps;
 	m->wired_bytes  = (uint64_t)u.wired  * ps;
+}
+
+uint32_t
+read_loadavg(void)
+{
+	struct loadavg la;
+	int mib[2];
+	size_t len = sizeof(la);
+
+	mib[0] = CTL_VM;
+	mib[1] = VM_LOADAVG;
+	if (sysctl(mib, 2, &la, &len, NULL, 0) != 0 || la.fscale <= 0)
+		return 0;
+	return (uint32_t)divround((uint64_t)la.ldavg[0] * LOAD_SCALE,
+	    (uint64_t)la.fscale);
 }
 
 long

@@ -46,9 +46,12 @@ overlay: static
 	install -m 0755 $(BUILDDIR)/penmon-static \
 	    $(OVERLAY_ROOT)/usr/local/bin/penmon
 
-# Build and run the screen diff test on the host.
-test: $(BUILDDIR)/screen_test
+# Build and run the host unit tests: the screen damage-diff, and the
+# renderer's fixed-point readouts.
+test: $(BUILDDIR)/screen_test $(BUILDDIR)/render_test
 	$(BUILDDIR)/screen_test
+	@echo
+	$(BUILDDIR)/render_test
 
 $(BUILDDIR)/penmon: $(OBJS) | $(BUILDDIR)
 	$(CC) $(LDFLAGS_DYN) $(OBJS) $(LDLIBS) -o $@
@@ -58,6 +61,11 @@ $(BUILDDIR)/penmon-static: $(OBJS) | $(BUILDDIR)
 
 $(BUILDDIR)/screen_test: screen_test.c screen.c screen.h | $(BUILDDIR)
 	$(HOSTCC) -Wall -Wextra -I. screen_test.c screen.c -o $@
+
+$(BUILDDIR)/render_test: render_test.c render.c screen.c penmon.h screen.h \
+    | $(BUILDDIR)
+	$(HOSTCC) -Wall -Wextra -Wno-unused-parameter -I. \
+	    render_test.c render.c screen.c -o $@
 
 $(OBJDIR)/%.o: %.c penmon.h screen.h | $(OBJDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
