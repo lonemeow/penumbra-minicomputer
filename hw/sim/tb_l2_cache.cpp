@@ -935,6 +935,64 @@ static void test_back_to_back_read_throughput(Vl2_cache* d) {
            valid_tick[0], valid_tick[1], valid_tick[2], valid_tick[3]);
 }
 
+// Drive one cached read to completion and report how many downstream
+// memory words it consumed: 0 for a hit, LINE_WORDS for a miss + fill.
+// That count is the only hit/miss evidence visible at this interface.
+static uint32_t cached_read_cost(Vl2_cache* d, MemMock& mem,
+                                 uint32_t addr) {
+    uint32_t before = mem.served_count;
+    d->i_addr      = addr;
+    d->i_cacheable = 1;
+    d->i_re        = 1;
+    d->eval();
+    int safety = 0;
+    while (d->o_busy && safety++ < 100)
+        tick_with_mem(d, mem, 2, rdata_addr_complement);
+    d->i_re = 0;
+    tick_with_mem(d, mem, 0, rdata_addr_complement);
+    return mem.served_count - before;
+}
+
+static void test_plru_replacement_order(Vl2_cache* d) {
+    printf("── Tree-PLRU evicts the least-recently-used way ──\n");
+    reset(d);
+    wrsys(d, 1, 1);   // CTRL.enable = 1
+    MemMock mem;
+
+    // Five distinct tags that all index set 0x10 (addr[13:4]), so the
+    // fifth miss must evict one of the first four.
+    const uint32_t LINE_A = 0x0000'0100u;
+    const uint32_t LINE_B = 0x0000'4100u;
+    const uint32_t LINE_C = 0x0000'8100u;
+    const uint32_t LINE_D = 0x0000'C100u;
+    const uint32_t LINE_E = 0x0001'0100u;
+    const uint32_t FILL   = 4u;   // LINE_WORDS
+
+    // Walk the tree from the all-zero reset state.  Each install's PLRU
+    // touch steers the next victim, so the way sequence is forced:
+    //   p=000 → way0 (A), p=011 → way2 (B), p=110 → way1 (C),
+    //   p=101 → way3 (D), and back to p=000.
+    // Getting a different order here means an install's touch was lost
+    // or landed too late to steer the miss that follows it.
+    check("plru.miss_a", cached_read_cost(d, mem, LINE_A), FILL);
+    check("plru.miss_b", cached_read_cost(d, mem, LINE_B), FILL);
+    check("plru.miss_c", cached_read_cost(d, mem, LINE_C), FILL);
+    check("plru.miss_d", cached_read_cost(d, mem, LINE_D), FILL);
+
+    // The set is now full and the tree is back at 000, which points at
+    // way0 — holding A, the oldest.  E takes that way.
+    check("plru.miss_e", cached_read_cost(d, mem, LINE_E), FILL);
+
+    // B, C and D survive: E displaced exactly one line.  Probe them
+    // before A, since A's refill would evict one of them in turn.
+    check("plru.b_survived", cached_read_cost(d, mem, LINE_B), 0u);
+    check("plru.c_survived", cached_read_cost(d, mem, LINE_C), 0u);
+    check("plru.d_survived", cached_read_cost(d, mem, LINE_D), 0u);
+
+    // A was the victim.
+    check("plru.a_evicted", cached_read_cost(d, mem, LINE_A), FILL);
+}
+
 // ══════════════════════════════════════════════════════════════
 
 int main() {
@@ -955,6 +1013,7 @@ int main() {
     test_perfctrs_inval_all(d);
     test_perfctrs_during_post_reset_walk(d);
     test_back_to_back_read_throughput(d);
+    test_plru_replacement_order(d);
 
     printf("\nl2_cache: %d/%d tests passed\n", tests - errors, tests);
     if (errors > 0)

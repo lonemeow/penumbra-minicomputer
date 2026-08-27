@@ -249,8 +249,7 @@ module l2_cache
             always_ff @(posedge i_clk) begin
                 data_out[gw] <= mem[data_idx(addr_set(i_addr),
                                              addr_word(i_addr))];
-                if (state == S_FILL && fill_in_flight && !i_mem_busy
-                    && fill_way == WAY_BITS'(gw)) begin
+                if (fill_beat && fill_way == WAY_BITS'(gw)) begin
                     mem[data_idx(fill_set,
                                  fill_word_idx[WORD_BITS-1:0])]
                         <= i_mem_rdata;
@@ -305,9 +304,7 @@ module l2_cache
 
                 if (state == S_INVAL_ALL) begin
                     mem[inval_walk_idx] <= 1'b0;
-                end else if (state == S_FILL && fill_in_flight && !i_mem_busy
-                             && fill_word_idx == (WORD_BITS+1)'(LINE_WORDS - 1)
-                             && fill_way == WAY_BITS'(gw)) begin
+                end else if (fill_install && fill_way == WAY_BITS'(gw)) begin
                     mem[fill_set] <= 1'b1;
                 end else if (state == S_IDLE && s1_valid && s1_re && !hit
                              && plru_victim(plru[addr_set(s1_addr)])
@@ -463,15 +460,38 @@ module l2_cache
     logic [TAG_BITS-1:0]    fill_tag;
     logic [SET_BITS-1:0]    fill_set;
     logic [WAY_BITS-1:0]    fill_way;
+    // Carries a guard bit above the WORD_BITS an in-line index needs, so a
+    // walk that overruns the line lands out of range instead of wrapping
+    // silently back to word 0 — the overrun assertion below reads it.
     logic [WORD_BITS:0]     fill_word_idx;
-    // Deferred read-hit PLRU touch: a read hit captures its set + way here and
-    // the plru read-modify-write applies one cycle later, off the combinational
+    logic                   fill_in_flight;
+
+    // The line's final word index, typed to match the counter it is
+    // compared against.
+    localparam logic [WORD_BITS:0] LAST_FILL_WORD =
+        (WORD_BITS+1)'(LINE_WORDS - 1);
+
+    // A fill response word landing: the downstream bus has answered the
+    // address presented for the word currently in flight, so this cycle
+    // captures it.  fill_install narrows that to the line's last word —
+    // the cycle that commits the tag and the valid bit.
+    logic                   fill_beat;
+    logic                   fill_install;
+    assign fill_beat    = (state == S_FILL) && fill_in_flight && !i_mem_busy;
+    assign fill_install = fill_beat && (fill_word_idx == LAST_FILL_WORD);
+
+    // Deferred PLRU touch: a read hit captures its set + way here and the
+    // plru read-modify-write applies one cycle later, off the combinational
     // hit / hit_way path. A read hit never changes state, so the apply always
     // lands back in S_IDLE.
-    logic                   rdhit_touch;
-    logic [SET_BITS-1:0]    rdhit_set;
-    logic [WAY_BITS-1:0]    rdhit_way;
-    logic                   fill_in_flight;
+    //
+    // Read hits are the only producer, which is what keeps the plru array's
+    // per-set clock-enable a decode of registered signals — no combinational
+    // hit verdict and no downstream i_mem_busy reaches it. A freshly filled
+    // line gets its touch from the re-serve hit that follows the install.
+    logic                   plru_touch;
+    logic [SET_BITS-1:0]    plru_touch_set;
+    logic [WAY_BITS-1:0]    plru_touch_way;
 
     // INVAL_ALL walker
     logic [SET_BITS-1:0]    inval_walk_idx;
@@ -710,7 +730,7 @@ module l2_cache
             fill_way        <= '0;
             fill_word_idx   <= '0;
             fill_in_flight  <= 1'b0;
-            rdhit_touch     <= 1'b0;
+            plru_touch      <= 1'b0;
             inval_walk_idx  <= '0;
             inval_walk_wrap <= 1'b0;
             // valid BRAMs come up undefined on real HW.  Enter
@@ -725,14 +745,16 @@ module l2_cache
         end else begin
             case (state)
                 S_IDLE: begin
-                    // Apply a read-hit PLRU touch captured last cycle. A read
-                    // hit never changes state, so its deferred touch always
-                    // lands back here; this is a one-cycle pulse. Keeping the
-                    // read-modify-write off the combinational hit path is the
-                    // cut that closes the L2's read-hit timing.
-                    rdhit_touch <= 1'b0;
-                    if (rdhit_touch)
-                        plru[rdhit_set] <= plru_update(plru[rdhit_set], rdhit_way);
+                    // Apply a PLRU touch captured last cycle; a one-cycle
+                    // pulse. Every plru write lands here, so the array's
+                    // clock-enable is a set decode of registered signals —
+                    // neither the combinational hit path nor the downstream
+                    // bus's i_mem_busy reaches it. That is the cut which keeps
+                    // the NUM_SETS-wide flop array off both critical paths.
+                    plru_touch <= 1'b0;
+                    if (plru_touch)
+                        plru[plru_touch_set] <=
+                            plru_update(plru[plru_touch_set], plru_touch_way);
 
                     // ── Stage 0: latch a new cached request ──
                     // Only if not already holding stage 1, and the
@@ -763,10 +785,12 @@ module l2_cache
                             // Read hit: capture the PLRU touch (set + way) and
                             // apply it next cycle (above), off the combinational
                             // hit / hit_way path. busy/rdata already driven
-                            // combinationally above.
-                            rdhit_touch <= 1'b1;
-                            rdhit_set   <= addr_set(s1_addr);
-                            rdhit_way   <= hit_way;
+                            // combinationally above. This also carries the
+                            // touch for a line installed by the fill that
+                            // this access is being re-served from.
+                            plru_touch     <= 1'b1;
+                            plru_touch_set <= addr_set(s1_addr);
+                            plru_touch_way <= hit_way;
                         end else if (s1_re && !hit) begin
                             // Read miss → start fill.  Pick victim
                             // via PLRU.  fill_* takes over from s1;
@@ -813,25 +837,29 @@ module l2_cache
                     //     arrived.  Capture into BRAM, advance
                     //     word_idx (or install on last word).
                     if (!fill_in_flight
-                        && fill_word_idx < (WORD_BITS+1)'(LINE_WORDS)) begin
+                        && fill_word_idx <= LAST_FILL_WORD) begin
                         fill_in_flight <= 1'b1;
-                    end else if (fill_in_flight && !i_mem_busy) begin
+                    end else if (fill_beat) begin
                         // Data BRAM write happens in the per-way
                         // generate block above (g_data[gw].mem
                         // always_ff) — keyed on fill_way == gw.
                         fill_in_flight <= 1'b0;
-                        if (fill_word_idx ==
-                            (WORD_BITS+1)'(LINE_WORDS - 1)) begin
-                            // Last word — install tag, update PLRU,
-                            // return to S_IDLE.  fill_way's valid
-                            // bit is set by the g_valid generate
-                            // block on the same edge.  The CPU's
-                            // request is still pending; the pipeline
-                            // will re-serve it as a hit in the next
-                            // 2 cycles.
+                        if (fill_word_idx == LAST_FILL_WORD) begin
+                            // Last word — install tag and return to
+                            // S_IDLE.  fill_way's valid bit is set by
+                            // the g_valid generate block on the same
+                            // edge.  The CPU's request is still
+                            // pending; the pipeline will re-serve it
+                            // as a hit in the next 2 cycles.
+                            //
+                            // Nothing touches plru here.  That re-serve
+                            // hits on the way just installed, so it
+                            // carries the touch for this line — and it
+                            // carries it off i_mem_busy, which gates
+                            // this branch and would otherwise put the
+                            // whole downstream device decode in front
+                            // of the plru array's per-set clock-enable.
                             tags [fill_way][fill_set] <= fill_tag;
-                            plru[fill_set] <=
-                                plru_update(plru[fill_set], fill_way);
                             state <= S_IDLE;
                         end else begin
                             fill_word_idx <= fill_word_idx + 1'b1;
@@ -879,8 +907,19 @@ module l2_cache
     // we'd attempt to increment past the line size.
     assert property (@(posedge i_clk) disable iff (i_rst)
         (state == S_FILL) |->
-            (fill_word_idx <= (WORD_BITS+1)'(LINE_WORDS - 1)))
+            (fill_word_idx <= LAST_FILL_WORD))
         else $error("l2_cache: fill_word_idx overran LINE_WORDS");
+
+    // An install writes no PLRU state of its own: it relies on the re-serve
+    // that follows to hit the just-installed way and touch it.  Should that
+    // re-serve ever stop happening, the line would sit at the head of its own
+    // victim order and thrash — silently.  Pin it here instead.
+    // fill_reserve_pending marks exactly that window, so its re-serve cycle
+    // is the one that must capture the touch.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (fill_reserve_pending && state == S_IDLE && s1_valid && s1_re)
+            |=> plru_touch)
+        else $error("l2_cache: fill install not followed by a re-serve PLRU touch");
 
     // Deferred: a bus fault during L2's own line fill (cacheable miss while
     // L2 is enabled) is not yet aborted/propagated — it would install a
@@ -937,8 +976,7 @@ module l2_cache
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
             fill_reserve_pending <= 1'b0;
-        end else if (state == S_FILL && fill_in_flight && !i_mem_busy
-                     && fill_word_idx == (WORD_BITS+1)'(LINE_WORDS - 1)) begin
+        end else if (fill_install) begin
             fill_reserve_pending <= 1'b1;
         end else if (state == S_INVAL_ALL) begin
             fill_reserve_pending <= 1'b0;
