@@ -42,10 +42,12 @@ COMMON_EXCL  += i_sdlsound.c i_sdlmusic.c i_musicpack.c i_pcsound.c \
                 i_flmusic.c i_cdmus.c
 #   SDL hi-res startup screen, used by Strife rather than Doom
 COMMON_EXCL  += i_videohr.c
+#   need the opl and textscreen libraries, which are SDL back-ends
+COMMON_EXCL  += i_oplmusic.c net_gui.c i_endoom.c
 #   Windows-only
 COMMON_EXCL  += i_winmusic.c w_file_win32.c
-#   the dedicated server's own main()
-COMMON_EXCL  += d_dedicated.c
+#   the dedicated server's own main() and its alternative zone allocator
+COMMON_EXCL  += d_dedicated.c z_native.c
 
 COMMON_SRCS  := $(filter-out $(addprefix $(CD)/src/,$(COMMON_EXCL)), \
                              $(wildcard $(CD)/src/*.c))
@@ -56,6 +58,8 @@ PORT_SRCS    := $(HERE)i_video_netbsd.c \
                 $(HERE)i_input_netbsd.c \
                 $(HERE)i_timer_netbsd.c \
                 $(HERE)i_joystick_null.c \
+                $(HERE)i_sound_null.c \
+                $(HERE)net_launch_headless.c \
                 $(HERE)i_main_netbsd.c
 
 SRCS         := $(DOOM_SRCS) $(COMMON_SRCS) $(PORT_SRCS)
