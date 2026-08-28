@@ -19,17 +19,20 @@ you use decides what you are allowed to hand out.
 
 **Freedoom is the default.** It is the only option that can legally ride
 along on a distributed image, so it is what the exhibit build expects.
-Download `freedoom-<version>.zip` from
-<https://freedoom.github.io/downloads.html>, unzip, and copy
-`freedoom1.wad` here:
+`sw/doom/fetch-freedoom.sh` downloads it, checks it against the release's
+signed SHA256, and unpacks it here:
 
 ```sh
-cp /path/to/freedoom1.wad sw/doom/wads/
+sw/doom/fetch-freedoom.sh          # freedoom1.wad, what DEFAULT_WAD names
+sw/doom/fetch-freedoom.sh both     # freedoom1.wad and freedoom2.wad
+sw/doom/fetch-freedoom.sh freedm   # freedm.wad, smallest download
 ```
 
+It needs `curl` and `unzip`, and skips anything already downloaded.
+
 The shareware and retail WADs work too — the engine does not care — but
-they are for your own machine, not for an image you pass on. Copy them
-here the same way.
+they are for your own machine, not for an image you pass on. Copy those
+in by hand.
 
 ## Where it ends up
 
