@@ -62,6 +62,16 @@ PORT_SRCS    := $(HERE)i_video_netbsd.c \
                 $(HERE)net_launch_headless.c \
                 $(HERE)i_main_netbsd.c
 
+# PERFCTR=1 links the hardware counter reader shared with pbench and dumps
+# the stall and cache breakdown at exit.  Off by default: it is a
+# profiling aid, not part of the game.
+ifeq ($(PERFCTR),1)
+BENCHDIR     := $(PROJROOT)/benchmark/netbsd-bench
+PORT_SRCS    += $(BENCHDIR)/perfctr.c
+PERFCTR_INC  := -I$(BENCHDIR)
+PERFCTR_DEF  := -DPENUMBRA_PERFCTR=1
+endif
+
 SRCS         := $(DOOM_SRCS) $(COMMON_SRCS) $(PORT_SRCS)
 OBJS         := $(patsubst %.c,$(OBJDIR)/%.o,$(notdir $(SRCS)))
 
@@ -70,11 +80,13 @@ OBJS         := $(patsubst %.c,$(OBJDIR)/%.o,$(notdir $(SRCS)))
 # config.h and sdl_compat.h come from here; sdl-compat/ answers
 # upstream's `#include "SDL*.h"' lines.
 INCLUDES     := -I$(HERE) -I$(HERE)sdl-compat -I$(CD)/src -I$(CD)/src/doom \
-                -I$(CD)/textscreen -I$(CD)/opl -I$(CD)/pcsound
+                -I$(CD)/textscreen -I$(CD)/opl -I$(CD)/pcsound \
+                $(PERFCTR_INC)
 
 # net_sdl.c still defines net_sdl_module under DISABLE_SDL2NET, so the
 # multiplayer code links — d_loop.c reaches the net layer single-player.
-DEFINES      := -DDISABLE_SDL2MIXER=1 -DDISABLE_SDL2NET=1
+DEFINES      := -DDISABLE_SDL2MIXER=1 -DDISABLE_SDL2NET=1 $(PERFCTR_DEF)
+
 
 CFLAGS       := --target=$(TARGET) --sysroot=$(DESTDIR) $(COPT) \
                 -std=c99 -Wall -Wdeclaration-after-statement \
@@ -89,7 +101,7 @@ $(BUILDDIR)/doom: $(OBJS) | $(BUILDDIR)
 	$(CC) $(LDFLAGS) $(OBJS) $(LDLIBS) -o $@
 
 # No basename collisions across the three source directories.
-vpath %.c $(CD)/src $(CD)/src/doom $(HERE)
+vpath %.c $(CD)/src $(CD)/src/doom $(HERE) $(BENCHDIR)
 
 $(OBJDIR)/%.o: %.c | $(OBJDIR)
 	$(CC) $(CFLAGS) -c $< -o $@

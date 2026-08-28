@@ -21,7 +21,11 @@
 #include "i_input_netbsd.h"
 #include "i_system.h"
 #include "i_video.h"
+#include "m_argv.h"
 #include "m_config.h"
+#ifdef PENUMBRA_PERFCTR
+#include "perfctr.h"
+#endif
 #include "tables.h"
 #include "v_video.h"
 #include "z_zone.h"
@@ -50,6 +54,7 @@ char *window_position = "";
 
 static int fb_fd = -1;
 static int fb_own_fd = 0;
+static int noblit = 0;
 static int fb_mode_set = 0;
 static uint8_t *fb_pixels = NULL;
 static size_t fb_size = 0;
@@ -153,6 +158,21 @@ I_InitGraphics(void)
 
     I_InputInit(fb_fd);
 
+    //!
+    // @category video
+    //
+    // Render frames but do not present them, to separate the cost of
+    // drawing from the cost of the copy to the display.  -nodraw skips
+    // both; this skips only the copy.
+    //
+    noblit = M_CheckParm("-noblit") > 0;
+
+#ifdef PENUMBRA_PERFCTR
+    // Counters start here so setup and WAD loading stay out of the sample.
+    perf_demo_track();
+#endif
+
+
     // Nothing else restores the console: without this the display stays
     // in DUMBFB and the keyboard in raw mode after the game exits.
     I_AtExit(I_ShutdownGraphics, true);
@@ -230,7 +250,7 @@ I_GetPaletteIndex(int r, int g, int b)
 void
 I_FinishUpdate(void)
 {
-    if (fb_pixels == NULL)
+    if (fb_pixels == NULL || noblit)
     {
         return;
     }
