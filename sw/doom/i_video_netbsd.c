@@ -153,6 +153,10 @@ I_InitGraphics(void)
 
     I_InputInit(fb_fd);
 
+    // Nothing else restores the console: without this the display stays
+    // in DUMBFB and the keyboard in raw mode after the game exits.
+    I_AtExit(I_ShutdownGraphics, true);
+
     screenvisible = true;
 }
 

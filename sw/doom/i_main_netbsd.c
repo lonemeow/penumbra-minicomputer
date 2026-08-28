@@ -5,15 +5,41 @@
 // be a heap copy, and M_SetExeDir is the only thing that ever assigns
 // exedir, which m_config.c compares against unconditionally.
 
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #include "config.h"
 #include "doomtype.h"
+#include "i_system.h"
 #include "m_argv.h"
 #include "m_misc.h"
 
 void D_DoomMain(void);
+
+// Upstream leaves signals to SDL, which this port does not have.  Running
+// the exit chain rather than dying outright restores the console, saves
+// the config, and reports an interrupted -timedemo's tally so far.
+//
+// I_Quit is not async-signal-safe; the guard keeps a second signal from
+// re-entering it, and makes an interrupt during a long startup phase land
+// on _exit instead of appearing to hang.
+static volatile sig_atomic_t quitting;
+
+static void
+on_terminate(int sig)
+{
+    (void) sig;
+
+    if (quitting)
+    {
+        _exit(1);
+    }
+    quitting = 1;
+
+    I_Quit();
+}
 
 int
 main(int argc, char **argv)
@@ -41,6 +67,9 @@ main(int argc, char **argv)
 
     M_FindResponseFile();
     M_SetExeDir();
+
+    signal(SIGINT, on_terminate);
+    signal(SIGTERM, on_terminate);
 
     D_DoomMain();
 
