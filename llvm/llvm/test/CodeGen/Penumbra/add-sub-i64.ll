@@ -44,11 +44,11 @@ define void @add_i128(ptr %p, i128 %a, i128 %b) {
 ; CHECK-NEXT:    ldw r6, [sp + 24]
 ; CHECK-NEXT:    ldw r7, [sp + 28]
 ; CHECK-NEXT:    ldw r8, [sp + 32]
-; CHECK-NEXT:    add r2, r5
+; CHECK-NEXT:    add r5, r2
 ; CHECK-NEXT:    adc r3, r6
 ; CHECK-NEXT:    adc r4, r7
 ; CHECK-NEXT:    adc r11, r8
-; CHECK-NEXT:    stw r2, [r1 + 0]
+; CHECK-NEXT:    stw r5, [r1 + 0]
 ; CHECK-NEXT:    stw r3, [r1 + 4]
 ; CHECK-NEXT:    stw r4, [r1 + 8]
 ; CHECK-NEXT:    stw r11, [r1 + 12]

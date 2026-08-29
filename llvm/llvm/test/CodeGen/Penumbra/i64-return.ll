@@ -72,10 +72,10 @@ define i1 @cmp_i64_eq(i64 %a, i64 %b) {
 ; CHECK-LABEL: cmp_i64_eq:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    xor r1, r3
-; CHECK-NEXT:    xor r2, r4
-; CHECK-NEXT:    or r1, r2
-; CHECK-NEXT:    cmp zero, r1
+; CHECK-NEXT:    xor r3, r1
+; CHECK-NEXT:    xor r4, r2
+; CHECK-NEXT:    or r4, r3
+; CHECK-NEXT:    cmp zero, r4
 ; CHECK-NEXT:    mov r1, zero
 ; CHECK-NEXT:    adc r1, zero
 ; CHECK-NEXT:    jmp lr

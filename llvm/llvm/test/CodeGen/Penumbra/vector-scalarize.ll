@@ -24,14 +24,14 @@ define void @vector_add(ptr %dst, ptr %a, ptr %b) {
 ; CHECK-NEXT:    ldw r7, [r3 + 4]
 ; CHECK-NEXT:    ldw r8, [r3 + 8]
 ; CHECK-NEXT:    ldw r3, [r3 + 12]
-; CHECK-NEXT:    add r4, r6
-; CHECK-NEXT:    add r11, r7
-; CHECK-NEXT:    add r5, r8
-; CHECK-NEXT:    add r2, r3
-; CHECK-NEXT:    stw r4, [r1 + 0]
-; CHECK-NEXT:    stw r11, [r1 + 4]
-; CHECK-NEXT:    stw r5, [r1 + 8]
-; CHECK-NEXT:    stw r2, [r1 + 12]
+; CHECK-NEXT:    add r6, r4
+; CHECK-NEXT:    add r7, r11
+; CHECK-NEXT:    add r8, r5
+; CHECK-NEXT:    add r3, r2
+; CHECK-NEXT:    stw r6, [r1 + 0]
+; CHECK-NEXT:    stw r7, [r1 + 4]
+; CHECK-NEXT:    stw r8, [r1 + 8]
+; CHECK-NEXT:    stw r3, [r1 + 12]
 ; CHECK-NEXT:    ldw r8, [sp + 0] // 4-byte Folded Reload
 ; CHECK-NEXT:    ldw r7, [sp + 4] // 4-byte Folded Reload
 ; CHECK-NEXT:    ldw r6, [sp + 8] // 4-byte Folded Reload

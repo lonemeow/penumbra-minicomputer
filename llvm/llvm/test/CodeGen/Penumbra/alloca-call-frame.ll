@@ -23,9 +23,9 @@ define i32 @dyn_alloca_stack_args(i32 %n) {
 ; CHECK-NEXT:    mov r10, sp
 ; CHECK-NEXT:    add r1, 3
 ; CHECK-NEXT:    llis r2, -4
-; CHECK-NEXT:    and r1, r2
+; CHECK-NEXT:    and r2, r1
 ; CHECK-NEXT:    mov r5, sp
-; CHECK-NEXT:    sub r5, r1
+; CHECK-NEXT:    sub r5, r2
 ; CHECK-NEXT:    mov sp, r5
 ; CHECK-NEXT:    sub sp, 4
 ; CHECK-NEXT:    mov r1, sp
@@ -67,9 +67,9 @@ define i32 @dyn_alloca_reg_args(i32 %n) {
 ; CHECK-NEXT:    mov r10, sp
 ; CHECK-NEXT:    add r1, 3
 ; CHECK-NEXT:    llis r2, -4
-; CHECK-NEXT:    and r1, r2
+; CHECK-NEXT:    and r2, r1
 ; CHECK-NEXT:    mov r5, sp
-; CHECK-NEXT:    sub r5, r1
+; CHECK-NEXT:    sub r5, r2
 ; CHECK-NEXT:    mov sp, r5
 ; CHECK-NEXT:    lli r1, 1
 ; CHECK-NEXT:    lli r2, 2

@@ -20,56 +20,56 @@ define i64 @umulh64(i64 %a, i64 %b) {
 ; CHECK-NEXT:    stw r9, [sp + 8] // 4-byte Folded Spill
 ; CHECK-NEXT:    stw r10, [sp + 4] // 4-byte Folded Spill
 ; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
-; CHECK-NEXT:    mov r11, r1
+; CHECK-NEXT:    mov lr, r1
+; CHECK-NEXT:    mov r11, r2
 ; CHECK-NEXT:    mov r5, zero
 ; CHECK-NEXT:    mov r1, r3
 ; CHECK-NEXT:    mulu r1, r5, r6
-; CHECK-NEXT:    mov lr, r3
-; CHECK-NEXT:    mul lr, r5
-; CHECK-NEXT:    mov r7, r4
+; CHECK-NEXT:    mov r7, r3
 ; CHECK-NEXT:    mul r7, r5
-; CHECK-NEXT:    add lr, r7
-; CHECK-NEXT:    add lr, r6
-; CHECK-NEXT:    mov r6, r11
+; CHECK-NEXT:    mov r2, r4
+; CHECK-NEXT:    mul r2, r5
+; CHECK-NEXT:    add r2, r7
+; CHECK-NEXT:    add r2, r6
+; CHECK-NEXT:    mov r6, lr
 ; CHECK-NEXT:    mulu r6, r5, r7
 ; CHECK-NEXT:    mov r6, r5
 ; CHECK-NEXT:    add r6, 0
 ; CHECK-NEXT:    add r6, r7
-; CHECK-NEXT:    mov r8, r2
-; CHECK-NEXT:    mulu r8, r3, r9
-; CHECK-NEXT:    mov r10, r11
-; CHECK-NEXT:    mulu r10, r4, r7
-; CHECK-NEXT:    mulu r11, r3, r3
-; CHECK-NEXT:    add r8, r10
-; CHECK-NEXT:    mov r11, r5
-; CHECK-NEXT:    adc r11, zero
-; CHECK-NEXT:    and r11, 1
-; CHECK-NEXT:    add r8, r3
+; CHECK-NEXT:    mov r9, r11
+; CHECK-NEXT:    mulu r9, r3, r7
+; CHECK-NEXT:    mov r10, lr
+; CHECK-NEXT:    mulu r10, r4, r8
+; CHECK-NEXT:    mulu lr, r3, r3
+; CHECK-NEXT:    add r10, r9
+; CHECK-NEXT:    mov lr, r5
+; CHECK-NEXT:    adc lr, zero
+; CHECK-NEXT:    and lr, 1
+; CHECK-NEXT:    add r10, r3
 ; CHECK-NEXT:    mov r3, r5
 ; CHECK-NEXT:    adc r3, zero
 ; CHECK-NEXT:    and r3, 1
-; CHECK-NEXT:    add r11, r3
-; CHECK-NEXT:    mulu r2, r4, r3
-; CHECK-NEXT:    add r2, r9
-; CHECK-NEXT:    mov r4, r5
-; CHECK-NEXT:    adc r4, zero
-; CHECK-NEXT:    and r4, 1
-; CHECK-NEXT:    add r2, r7
-; CHECK-NEXT:    mov r7, r5
-; CHECK-NEXT:    adc r7, zero
-; CHECK-NEXT:    and r7, 1
-; CHECK-NEXT:    add r4, r7
-; CHECK-NEXT:    add r2, r11
+; CHECK-NEXT:    add r3, lr
+; CHECK-NEXT:    mulu r11, r4, r4
+; CHECK-NEXT:    add r7, r11
 ; CHECK-NEXT:    mov r11, r5
 ; CHECK-NEXT:    adc r11, zero
 ; CHECK-NEXT:    and r11, 1
-; CHECK-NEXT:    add r4, r11
+; CHECK-NEXT:    add r7, r8
+; CHECK-NEXT:    mov lr, r5
+; CHECK-NEXT:    adc lr, zero
+; CHECK-NEXT:    and lr, 1
+; CHECK-NEXT:    add lr, r11
+; CHECK-NEXT:    add r7, r3
+; CHECK-NEXT:    mov r3, r5
+; CHECK-NEXT:    adc r3, zero
+; CHECK-NEXT:    and r3, 1
+; CHECK-NEXT:    add r3, lr
 ; CHECK-NEXT:    add r3, r4
 ; CHECK-NEXT:    add r1, r5
-; CHECK-NEXT:    adc lr, r6
-; CHECK-NEXT:    add r1, r2
-; CHECK-NEXT:    adc lr, r3
-; CHECK-NEXT:    mov r2, lr
+; CHECK-NEXT:    adc r2, r6
+; CHECK-NEXT:    add r1, r7
+; CHECK-NEXT:    adc r2, r3
 ; CHECK-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
 ; CHECK-NEXT:    ldw r10, [sp + 4] // 4-byte Folded Reload
 ; CHECK-NEXT:    ldw r9, [sp + 8] // 4-byte Folded Reload
@@ -99,63 +99,62 @@ define i64 @smulh64(i64 %a, i64 %b) {
 ; CHECK-NEXT:    stw r9, [sp + 12] // 4-byte Folded Spill
 ; CHECK-NEXT:    stw r10, [sp + 8] // 4-byte Folded Spill
 ; CHECK-NEXT:    stw lr, [sp + 4] // 4-byte Folded Spill
-; CHECK-NEXT:    mov r11, r1
-; CHECK-NEXT:    mov r5, r2
-; CHECK-NEXT:    sar r5, 31
+; CHECK-NEXT:    mov lr, r1
+; CHECK-NEXT:    mov r11, r2
+; CHECK-NEXT:    sar r2, 31
 ; CHECK-NEXT:    mov r7, r4
 ; CHECK-NEXT:    sar r7, 31
-; CHECK-NEXT:    mov r1, r5
-; CHECK-NEXT:    mulu r1, r3, r6
-; CHECK-NEXT:    mov lr, r5
-; CHECK-NEXT:    mul lr, r3
-; CHECK-NEXT:    mul r5, r4
-; CHECK-NEXT:    add lr, r5
-; CHECK-NEXT:    add lr, r6
-; CHECK-NEXT:    mov r5, r11
-; CHECK-NEXT:    mulu r5, r7, r8
+; CHECK-NEXT:    mov r5, r2
+; CHECK-NEXT:    mulu r5, r3, r1
 ; CHECK-NEXT:    stw r5, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r6, r2
-; CHECK-NEXT:    mul r6, r7
+; CHECK-NEXT:    mul r6, r3
+; CHECK-NEXT:    mul r2, r4
+; CHECK-NEXT:    add r2, r6
+; CHECK-NEXT:    add r2, r1
+; CHECK-NEXT:    mov r1, lr
+; CHECK-NEXT:    mulu r1, r7, r8
 ; CHECK-NEXT:    mov r9, r11
 ; CHECK-NEXT:    mul r9, r7
+; CHECK-NEXT:    mov r6, lr
+; CHECK-NEXT:    mul r6, r7
 ; CHECK-NEXT:    add r6, r9
 ; CHECK-NEXT:    add r6, r8
-; CHECK-NEXT:    mov r8, r2
-; CHECK-NEXT:    mulu r8, r3, r9
-; CHECK-NEXT:    mov r10, r11
-; CHECK-NEXT:    mulu r10, r4, r7
-; CHECK-NEXT:    mulu r11, r3, r5
-; CHECK-NEXT:    add r8, r10
+; CHECK-NEXT:    mov r9, r11
+; CHECK-NEXT:    mulu r9, r3, r7
+; CHECK-NEXT:    mov r10, lr
+; CHECK-NEXT:    mulu r10, r4, r8
+; CHECK-NEXT:    mulu lr, r3, r5
+; CHECK-NEXT:    add r10, r9
 ; CHECK-NEXT:    mov r3, zero
+; CHECK-NEXT:    mov lr, r3
+; CHECK-NEXT:    adc lr, zero
+; CHECK-NEXT:    and lr, 1
+; CHECK-NEXT:    add r10, r5
+; CHECK-NEXT:    mov r5, r3
+; CHECK-NEXT:    adc r5, zero
+; CHECK-NEXT:    and r5, 1
+; CHECK-NEXT:    add r5, lr
+; CHECK-NEXT:    mulu r11, r4, r4
+; CHECK-NEXT:    add r7, r11
 ; CHECK-NEXT:    mov r11, r3
 ; CHECK-NEXT:    adc r11, zero
 ; CHECK-NEXT:    and r11, 1
-; CHECK-NEXT:    add r8, r5
-; CHECK-NEXT:    mov r5, r3
-; CHECK-NEXT:    adc r5, zero
-; CHECK-NEXT:    and r5, 1
-; CHECK-NEXT:    add r11, r5
-; CHECK-NEXT:    mulu r2, r4, r4
-; CHECK-NEXT:    add r2, r9
-; CHECK-NEXT:    mov r5, r3
-; CHECK-NEXT:    adc r5, zero
-; CHECK-NEXT:    and r5, 1
-; CHECK-NEXT:    add r2, r7
-; CHECK-NEXT:    mov r7, r3
-; CHECK-NEXT:    adc r7, zero
-; CHECK-NEXT:    and r7, 1
-; CHECK-NEXT:    add r5, r7
-; CHECK-NEXT:    add r2, r11
+; CHECK-NEXT:    add r7, r8
+; CHECK-NEXT:    mov lr, r3
+; CHECK-NEXT:    adc lr, zero
+; CHECK-NEXT:    and lr, 1
+; CHECK-NEXT:    add lr, r11
+; CHECK-NEXT:    add r7, r5
 ; CHECK-NEXT:    adc r3, zero
 ; CHECK-NEXT:    and r3, 1
-; CHECK-NEXT:    add r5, r3
-; CHECK-NEXT:    add r4, r5
-; CHECK-NEXT:    ldw r3, [sp + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    add r1, r3
-; CHECK-NEXT:    adc lr, r6
-; CHECK-NEXT:    add r1, r2
-; CHECK-NEXT:    adc lr, r4
-; CHECK-NEXT:    mov r2, lr
+; CHECK-NEXT:    add r3, lr
+; CHECK-NEXT:    add r3, r4
+; CHECK-NEXT:    ldw r4, [sp + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    add r1, r4
+; CHECK-NEXT:    adc r2, r6
+; CHECK-NEXT:    add r1, r7
+; CHECK-NEXT:    adc r2, r3
 ; CHECK-NEXT:    ldw lr, [sp + 4] // 4-byte Folded Reload
 ; CHECK-NEXT:    ldw r10, [sp + 8] // 4-byte Folded Reload
 ; CHECK-NEXT:    ldw r9, [sp + 12] // 4-byte Folded Reload
@@ -179,23 +178,24 @@ define i64 @umulh64_load(ptr %p, i64 %b) {
 ; CHECK-LABEL: umulh64_load:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub sp, 32
-; CHECK-NEXT:    stw r5, [sp + 28] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r6, [sp + 24] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r7, [sp + 20] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r8, [sp + 16] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r9, [sp + 12] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r10, [sp + 8] // 4-byte Folded Spill
-; CHECK-NEXT:    stw lr, [sp + 4] // 4-byte Folded Spill
+; CHECK-NEXT:    sub sp, 28
+; CHECK-NEXT:    stw r5, [sp + 24] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r6, [sp + 20] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r7, [sp + 16] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r8, [sp + 12] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r9, [sp + 8] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r10, [sp + 4] // 4-byte Folded Spill
+; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r4, r2
 ; CHECK-NEXT:    ldw r7, [r1 + 0]
 ; CHECK-NEXT:    ldw r11, [r1 + 4]
 ; CHECK-NEXT:    mov lr, zero
 ; CHECK-NEXT:    mov r1, r4
 ; CHECK-NEXT:    mulu r1, lr, r5
-; CHECK-NEXT:    mul r2, lr
-; CHECK-NEXT:    mov r6, r3
+; CHECK-NEXT:    mov r6, r4
 ; CHECK-NEXT:    mul r6, lr
+; CHECK-NEXT:    mov r2, r3
+; CHECK-NEXT:    mul r2, lr
 ; CHECK-NEXT:    add r2, r6
 ; CHECK-NEXT:    add r2, r5
 ; CHECK-NEXT:    mov r5, r7
@@ -207,46 +207,44 @@ define i64 @umulh64_load(ptr %p, i64 %b) {
 ; CHECK-NEXT:    mulu r8, r4, r9
 ; CHECK-NEXT:    mov r10, r7
 ; CHECK-NEXT:    mulu r10, r3, r6
-; CHECK-NEXT:    stw r6, [sp + 0] // 4-byte Folded Spill
-; CHECK-NEXT:    mulu r7, r4, r6
-; CHECK-NEXT:    add r8, r10
-; CHECK-NEXT:    mov r4, lr
-; CHECK-NEXT:    adc r4, zero
-; CHECK-NEXT:    and r4, 1
-; CHECK-NEXT:    add r8, r6
-; CHECK-NEXT:    mov r6, lr
-; CHECK-NEXT:    adc r6, zero
-; CHECK-NEXT:    and r6, 1
-; CHECK-NEXT:    add r4, r6
-; CHECK-NEXT:    mulu r11, r3, r3
-; CHECK-NEXT:    add r11, r9
-; CHECK-NEXT:    mov r6, lr
-; CHECK-NEXT:    adc r6, zero
-; CHECK-NEXT:    and r6, 1
-; CHECK-NEXT:    ldw r7, [sp + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    add r11, r7
+; CHECK-NEXT:    mulu r7, r4, r4
+; CHECK-NEXT:    add r10, r8
 ; CHECK-NEXT:    mov r7, lr
 ; CHECK-NEXT:    adc r7, zero
 ; CHECK-NEXT:    and r7, 1
+; CHECK-NEXT:    add r10, r4
+; CHECK-NEXT:    mov r4, lr
+; CHECK-NEXT:    adc r4, zero
+; CHECK-NEXT:    and r4, 1
+; CHECK-NEXT:    add r4, r7
+; CHECK-NEXT:    mulu r11, r3, r3
+; CHECK-NEXT:    add r11, r9
+; CHECK-NEXT:    mov r7, lr
+; CHECK-NEXT:    adc r7, zero
+; CHECK-NEXT:    and r7, 1
+; CHECK-NEXT:    add r11, r6
+; CHECK-NEXT:    mov r6, lr
+; CHECK-NEXT:    adc r6, zero
+; CHECK-NEXT:    and r6, 1
 ; CHECK-NEXT:    add r6, r7
 ; CHECK-NEXT:    add r11, r4
 ; CHECK-NEXT:    mov r4, lr
 ; CHECK-NEXT:    adc r4, zero
 ; CHECK-NEXT:    and r4, 1
-; CHECK-NEXT:    add r6, r4
-; CHECK-NEXT:    add r3, r6
+; CHECK-NEXT:    add r4, r6
+; CHECK-NEXT:    add r4, r3
 ; CHECK-NEXT:    add r1, lr
 ; CHECK-NEXT:    adc r2, r5
 ; CHECK-NEXT:    add r1, r11
-; CHECK-NEXT:    adc r2, r3
-; CHECK-NEXT:    ldw lr, [sp + 4] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r10, [sp + 8] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r9, [sp + 12] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r8, [sp + 16] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r7, [sp + 20] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r6, [sp + 24] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r5, [sp + 28] // 4-byte Folded Reload
-; CHECK-NEXT:    add sp, 32
+; CHECK-NEXT:    adc r2, r4
+; CHECK-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r10, [sp + 4] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r9, [sp + 8] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r8, [sp + 12] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r7, [sp + 16] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r6, [sp + 20] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r5, [sp + 24] // 4-byte Folded Reload
+; CHECK-NEXT:    add sp, 28
 ; CHECK-NEXT:    jmp lr
   %a = load i64, ptr %p, align 8
   %xe = zext i64 %a to i128
@@ -263,7 +261,7 @@ define i64 @add128_carry(i64 %a, i64 %b) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    mov r11, zero
-; CHECK-NEXT:    add r1, r3
+; CHECK-NEXT:    add r3, r1
 ; CHECK-NEXT:    mov r1, r11
 ; CHECK-NEXT:    adc r1, zero
 ; CHECK-NEXT:    cmp r1, 1

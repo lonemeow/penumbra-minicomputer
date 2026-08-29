@@ -231,16 +231,22 @@ let Defs = [SR], Constraints = "$Rd = $Rd_in" in {
   // class including R0, R12, R14, R15); the register allocator honours
   // R0's `isConstant`/reserved status and won't pick it for writable
   // vregs, while MachineCopyPropagation can forward R0 into $Rs uses.
-  def ADD  : FormatR<0b00000, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
-                     "add\t$Rd, $Rs">;
+  // Commutable so TwoAddressInstructionPass may swap the operands rather
+  // than copy: with a destructive destination, tying the operand that is
+  // still live past the instruction forces a MOV that swapping avoids.
+  let isCommutable = 1 in {
+    def ADD  : FormatR<0b00000, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
+                       "add\t$Rd, $Rs">;
+    def AND  : FormatR<0b00010, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
+                       "and\t$Rd, $Rs">;
+    def OR   : FormatR<0b00011, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
+                       "or\t$Rd, $Rs">;
+    def XOR  : FormatR<0b00100, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
+                       "xor\t$Rd, $Rs">;
+  }
+
   def SUB  : FormatR<0b00001, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
                      "sub\t$Rd, $Rs">;
-  def AND  : FormatR<0b00010, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
-                     "and\t$Rd, $Rs">;
-  def OR   : FormatR<0b00011, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
-                     "or\t$Rd, $Rs">;
-  def XOR  : FormatR<0b00100, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
-                     "xor\t$Rd, $Rs">;
   def SHL  : FormatR<0b00101, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
                      "shl\t$Rd, $Rs">;
   def SHR  : FormatR<0b00110, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),

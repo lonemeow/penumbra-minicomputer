@@ -15,7 +15,7 @@ define i32 @uaddo_dead_sum(i64 %a, i64 %b) {
 ; CHECK-LABEL: uaddo_dead_sum:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    add r1, r3
+; CHECK-NEXT:    add r3, r1
 ; CHECK-NEXT:    mov r1, zero
 ; CHECK-NEXT:    adc r1, zero
 ; CHECK-NEXT:    cmp r1, 1
@@ -35,15 +35,14 @@ define i32 @uaddo_dead_sum_chain(i32 %x, i32 %y, i32 %z) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    mov r4, zero
-; CHECK-NEXT:    add r1, r2
-; CHECK-NEXT:    mov r2, r4
-; CHECK-NEXT:    adc r2, r2
-; CHECK-NEXT:    add r1, r3
+; CHECK-NEXT:    add r2, r1
 ; CHECK-NEXT:    mov r1, r4
-; CHECK-NEXT:    adc r1, zero
-; CHECK-NEXT:    cmp r1, 1
-; CHECK-NEXT:    adc r2, r4
-; CHECK-NEXT:    mov r1, r2
+; CHECK-NEXT:    adc r1, r1
+; CHECK-NEXT:    add r2, r3
+; CHECK-NEXT:    mov r2, r4
+; CHECK-NEXT:    adc r2, zero
+; CHECK-NEXT:    cmp r2, 1
+; CHECK-NEXT:    adc r1, r4
 ; CHECK-NEXT:    jmp lr
   %xe = zext i32 %x to i64
   %ye = zext i32 %y to i64

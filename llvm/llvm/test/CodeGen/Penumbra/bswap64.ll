@@ -17,26 +17,26 @@ define i64 @bswap_i64(i64 %x) {
 ; CHECK-LABEL: bswap_i64:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    mov r4, r2
-; CHECK-NEXT:    shl r4, 24
 ; CHECK-NEXT:    mov r3, r2
-; CHECK-NEXT:    shr r3, 24
-; CHECK-NEXT:    or r3, r4
+; CHECK-NEXT:    shl r3, 24
 ; CHECK-NEXT:    mov r4, r2
-; CHECK-NEXT:    and r4, 65280
-; CHECK-NEXT:    shl r4, 8
+; CHECK-NEXT:    shr r4, 24
+; CHECK-NEXT:    or r4, r3
+; CHECK-NEXT:    mov r3, r2
+; CHECK-NEXT:    and r3, 65280
+; CHECK-NEXT:    shl r3, 8
 ; CHECK-NEXT:    or r3, r4
 ; CHECK-NEXT:    shr r2, 8
 ; CHECK-NEXT:    and r2, 65280
 ; CHECK-NEXT:    or r3, r2
-; CHECK-NEXT:    mov r4, r1
-; CHECK-NEXT:    shl r4, 24
 ; CHECK-NEXT:    mov r2, r1
-; CHECK-NEXT:    shr r2, 24
-; CHECK-NEXT:    or r2, r4
+; CHECK-NEXT:    shl r2, 24
 ; CHECK-NEXT:    mov r4, r1
-; CHECK-NEXT:    and r4, 65280
-; CHECK-NEXT:    shl r4, 8
+; CHECK-NEXT:    shr r4, 24
+; CHECK-NEXT:    or r4, r2
+; CHECK-NEXT:    mov r2, r1
+; CHECK-NEXT:    and r2, 65280
+; CHECK-NEXT:    shl r2, 8
 ; CHECK-NEXT:    or r2, r4
 ; CHECK-NEXT:    shr r1, 8
 ; CHECK-NEXT:    and r1, 65280
