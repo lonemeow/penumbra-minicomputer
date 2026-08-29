@@ -1160,6 +1160,104 @@ poison-flag drop is in the tree or carry it; backport the lowerBswap
 mask fix opportunistically; re-run the audit's probes after any
 rebase.
 
+## Compiler: s1 booleans lose their comparison through logic ops
+
+Combining or inverting two comparison results forces the value through
+`G_AND`/`G_OR`/`G_XOR`, which are `legalFor({s32})` while `G_ICMP`
+produces s1 and `G_BRCOND` consumes s1.  The legalizer therefore wraps
+every such operation in an ext/trunc pair, and the selector patterns --
+written against a *direct* `G_ICMP` -- stop matching.  Each predicate
+selects well alone; combining them does not.
+
+Two forms, both measured.
+
+**Inverted branch condition.**  A branch whose polarity must flip for
+block layout arrives as
+
+```
+%c:s1   = G_ICMP pred, %a, %b
+%w:s32  = G_ANYEXT %c
+%n:s32  = G_XOR %w, 1
+%i:s1   = G_TRUNC %n
+G_BRCOND %i, %bb
+```
+
+`selectBrCond` (`GISel/PenumbraInstructionSelector.cpp`) folds
+`G_ICMP` + `G_BRCOND` into `CMP` + `Bcc` only when `CondDef` is
+`G_ICMP`; here it is `G_TRUNC`, so the fallback materialises the s1 into
+a GPR through the carry flag before testing bit 0:
+
+```
+lli r6, 1 / add r2, r6 / mov lr, r3 / adc lr, zero
+lli r7, 1 / xor lr, r7 / test lr, 1 / bne
+```
+
+against `sub lr, 1 / bne` when the fold fires.  Reproducer: the same
+loop body with the trip count as a parameter selects cleanly (14
+instructions); with it loaded from globals it does not (20).  The
+difference is register pressure deciding whether indvars rotates the IV
+-- pre- and post-decrement forms both select well in isolation.
+
+**Boolean OR of two predicates.**  Worse, because it regresses code that
+had no branch to begin with:
+
+| expression | instructions | branches |
+|------------|-------------:|---------:|
+| `0 - (r >> 31)`               |  2 | 0 |
+| `0 - (r >= d)`                |  6 | 0 |
+| `(r >> 31) \| (r >= d)`       | 12 | 1 |
+| `d & (0 - ((r>>31)\|(r>=d)))` | 15 | 2 |
+
+Alone, `r >> 31` is one `shr`.  Under `|` it becomes
+`lli 1 / lli 0 / cmp / blt / mov` -- once the value must live as s1 for
+the `G_OR`, the shift is re-derived as a comparison and a branch.
+
+The branch is data-dependent, so it is unpredictable by construction.
+`FixedDiv`'s shift-subtract loop (`sw/doom/m_fixed_penumbra.c`) needs
+exactly `carry | (rem >= den)` per iteration; at two such branches per
+iteration over sixteen iterations, the mispredicts cost more than the
+`__divdi3` call the routine exists to replace.
+
+**Why peer targets do not hit this.**  AArch64 and RISC-V keep booleans
+at register width -- `G_ICMP` produces and `G_BRCOND` consumes the full
+scalar -- so no ext/trunc pair ever separates producer from consumer,
+and upstream's `not_cmp_fold` (`Combine.td`) can match `G_XOR` directly
+over a tree of comparisons.  Ours cannot: `matchNotCmp` requires the XOR
+operand to be `G_ICMP`/`G_AND`/`G_OR`, and after legalization it is
+`G_ANYEXT`.  Penumbra keeps s1 deliberately, since `G_UADDO`/`G_UADDE`
+use `{s32, s1}` so the carry threads through `SR.C` and an i64 add stays
+`add; adc`.  AArch64 reaches that another way, with flag-setting
+`ADCS`/`SBCS` its selector matches back from s32 carries, so adopting
+the uniform-s32 model wholesale would regress our carry chain.
+
+**Implementation.**  Canonicalise after legalization so the widen/narrow
+pair around an s1 boolean collapses, restoring the shape the selector
+and `not_cmp_fold` expect.  A narrower fix -- looking through
+`G_TRUNC(G_XOR(G_ANYEXT(G_ICMP), 1))` inside `selectBrCond`, ~20 lines
+-- handles the branch case only, and the OR case above shows that is
+the smaller half of the problem.  `selectSelect` carries the same
+direct-`G_ICMP` assumption and would benefit from the general fix too.
+
+**Test coverage.**  The 40 functions across `compare-elim.ll`,
+`branch-opts.ll`, `control-flow.ll`, `icmp-to-value.ll` and
+`select-imm.ll` all select well today: each is small enough to stay
+under whatever pressure flips the branch case, and `memcpy_decr_loop`
+already covers the exit-first polarity and produces `sub; bne`.  A
+minimal `.ll` reduction of the failing branch case passes both before
+and after and guards nothing.  Use a `.mir` test against
+`run-pass=instruction-select` writing the
+`G_TRUNC`/`G_XOR`/`G_ANYEXT`/`G_BRCOND` chain directly, as
+`GlobalISel/select-select-imm.mir` does for its case -- minimal *and*
+pressure-independent.  The OR form needs no such care: a two-line C
+function reproduces it at any optimisation level.  The 46 `adc`/`sbc`
+expectations across `add-sub-i64.ll`, `sat-i64.ll`, `i128-mulhi.ll` and
+`minmax-i64.ll` guard the carry path.
+
+**Worth.**  Six of twenty instructions in a loop latch for the branch
+form.  For the OR form, the difference between branchless arithmetic and
+an unpredictable branch in an inner loop, which is unbounded -- it
+decides whether a software divide routine is viable in C at all.
+
 ## Compiler: share the hi-word compare in i64 three-way compares
 
 The `G_SCMP`/`G_UCMP` lowering (`.lower()` →
