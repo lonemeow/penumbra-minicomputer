@@ -86,6 +86,26 @@ def : Pat<(i32 (sra GPR:$src, uimm5:$amt)), (SARi GPR:$src, uimm5:$amt)>;
 def : Pat<(i32 (not GPR:$src)), (NOT GPR:$src)>;
 
 //===----------------------------------------------------------------------===//
+// Sign tests
+//===----------------------------------------------------------------------===//
+//
+// A comparison against zero on the sign bit alone.  selectICmpToValue resolves
+// unsigned predicates through the carry, but has no flag that answers a signed
+// one, so without these the result is a SELECT_CC diamond -- six instructions
+// and a data-dependent branch -- for what is a shift.
+//
+// These need the comparison to be selectable by pattern, which is why they can
+// only exist now that G_ICMP produces a register-width result: an s1 has no
+// register class to write `GPR:$src` against.
+//
+// `x >> 31` written in C reaches here as a comparison rather than a shift:
+// InstCombine canonicalises it to `icmp slt` whenever the value feeds an i1
+// operator.
+
+def : Pat<(i32 (setlt GPR:$src, 0)),  (SHRi GPR:$src, 31)>;
+def : Pat<(i32 (setgt GPR:$src, -1)), (SHRi (NOT GPR:$src), 31)>;
+
+//===----------------------------------------------------------------------===//
 // Constants
 //===----------------------------------------------------------------------===//
 //

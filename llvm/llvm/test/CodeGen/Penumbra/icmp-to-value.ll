@@ -6,7 +6,8 @@
 ; branchlessly: a CMP sets SR.C, then ADC/SBC of zeros reads the flag into a 0/1
 ; GPR.  Unsigned predicates read the carry directly (operand swap folds the
 ; "greater" forms onto the "less" forms); eq/ne test the difference against zero;
-; signed predicates fall back to the SELECT_CC branch form.
+; signed predicates fall back to the SELECT_CC branch form, except a test of
+; the sign bit alone, which is a shift.
 
 define i32 @ult(i32 %a, i32 %b) {
 ; CHECK-LABEL: ult:
@@ -237,6 +238,54 @@ define i32 @slt(i32 %a, i32 %b) {
 ; CHECK-NEXT:  .LBB15_2:
 ; CHECK-NEXT:    jmp lr
   %c = icmp slt i32 %a, %b
+  %z = zext i1 %c to i32
+  ret i32 %z
+}
+
+;; A signed compare against zero is a sign-bit test, so it is one shift rather
+;; than the diamond above.  `x >> 31` in C arrives here in this form:
+;; InstCombine rewrites the shift to a comparison whenever it feeds an i1.
+define i32 @sltz(i32 %a) {
+; CHECK-LABEL: sltz:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  // %bb.0:
+; CHECK-NEXT:    shr r1, 31
+; CHECK-NEXT:    jmp lr
+  %c = icmp slt i32 %a, 0
+  %z = zext i1 %c to i32
+  ret i32 %z
+}
+
+;; The complement, canonicalised by InstCombine to `sgt -1`.  NOT is
+;; non-destructive, so this needs no copy to preserve the operand.
+define i32 @sgez(i32 %a) {
+; CHECK-LABEL: sgez:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  // %bb.0:
+; CHECK-NEXT:    not r1, r1
+; CHECK-NEXT:    shr r1, 31
+; CHECK-NEXT:    jmp lr
+  %c = icmp sgt i32 %a, -1
+  %z = zext i1 %c to i32
+  ret i32 %z
+}
+
+;; Against a non-zero constant there is no sign bit to test, so the diamond
+;; stays -- guards the patterns against over-matching.
+define i32 @slt_const(i32 %a) {
+; CHECK-LABEL: slt_const:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  // %bb.0:
+; CHECK-NEXT:    mov r2, r1
+; CHECK-NEXT:    lli r1, 1
+; CHECK-NEXT:    lli r3, 0
+; CHECK-NEXT:    cmp r2, 7
+; CHECK-NEXT:    blt .LBB18_2
+; CHECK-NEXT:  // %bb.1:
+; CHECK-NEXT:    mov r1, r3
+; CHECK-NEXT:  .LBB18_2:
+; CHECK-NEXT:    jmp lr
+  %c = icmp slt i32 %a, 7
   %z = zext i1 %c to i32
   ret i32 %z
 }

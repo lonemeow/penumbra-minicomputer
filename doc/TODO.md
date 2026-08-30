@@ -1239,72 +1239,41 @@ Rather than wait for it, the compare-elimination peephole erases the
 ## Compiler: signed comparisons have no branchless materialisation
 
 `selectICmpToValue` resolves unsigned and eq/ne predicates to one
-compare plus a carry read (`cmp` / `mov r,zero` / `adc r,zero`).  Every
-signed predicate falls through to the `SELECT_CC` diamond instead —
-`lli 1` / `lli 0` / `cmp` / `Bcc` / `mov`, six instructions and a
-branch that is data-dependent by construction.  `emitSelectCC` shares
-the diamond, so `G_SELECT` on a signed predicate pays the same.
+compare plus a carry read.  Signed predicates have no flag that answers
+them, so they fall through to the `SELECT_CC` diamond — `lli 1` /
+`lli 0` / `cmp` / `Bcc` / `mov`, six instructions and a data-dependent
+branch.  `emitSelectCC` shares the diamond, so `G_SELECT` on a signed
+predicate pays the same.
 
-117 sites in a 120-file Doom build, all signed, 51 of them against a
-constant zero:
+The sign-bit tests are done: `slt x, 0` is `SHR #31` and `sge x, 0` is
+`NOT` then `SHR #31`, as two patterns in `PenumbraGISel.td`.  They
+matter beyond their site count because InstCombine rewrites `x >> 31`
+into `icmp slt x, 0` whenever the value feeds an `i1` operator, so
+source written as a shift still arrives as a comparison.
 
-| predicate | vs 0 | vs other |
-|-----------|-----:|---------:|
-| `sgt`     |   38 |       25 |
-| `bge`     |    — |       20 |
-| `slt`     |    7 |       12 |
-| `sle`     |    6 |        9 |
+What is left has no cheap closed form:
 
-The compare-against-zero cases have cheap closed forms and the general
-ones do not:
+- `sgt x, 0` and `sle x, 0` compare against zero but test more than the
+  sign bit.  `((0 - x) & ~x) >> 31` is five instructions — branchless,
+  but no smaller than the diamond.  Worth it only where the branch is
+  hot enough to pay for itself.
+- Two variable operands have nothing.  Biasing to unsigned
+  (`(a ^ 0x80000000) <u (b ^ 0x80000000)`) costs more than the diamond
+  once the constant is materialised.
 
-- `slt x, 0` is `SHR Rd, #31` — one instruction.  This is the case
-  that matters beyond its site count: InstCombine rewrites `x >> 31`
-  into `icmp slt x, 0` whenever the value feeds an `i1` operator, so
-  source written as a shift still arrives as a comparison.
-- `sge x, 0` is `NOT Rd, Rs` then `SHR Rd, #31`.  `NOT` is the one
-  non-destructive unary, so no copy is needed.  It also avoids the
-  `llis -1` the canonical `sgt x, -1` form materialises today, since
-  −1 does not fit the uimm16 compare immediate.
-- `sgt x, 0` is the largest bucket and has no cheap form:
-  `((0 - x) & ~x) >> 31` is five instructions — branchless, but not
-  smaller than the diamond.  Only worth it where the branch is hot.
-- Two variable operands have no closed form at all.  Biasing to
-  unsigned (`(a ^ 0x80000000) <u (b ^ 0x80000000)`) costs more than
-  the diamond once the constant is materialised.  Leave those.
+Remaining sites, counted on binaries built before the sign-bit
+patterns landed:
 
-RISC-V writes its equivalent as a selection pattern —
-`Pat<(i32 (setlt GPR:$rs1, 0)), (SRLI GPR:$rs1, 31)>` in
-`RISCVInstrInfo.td` — which is now open to us as well: with `G_ICMP`
-producing a register-width result there is a register class for the
-comparison, so these can be TableGen patterns rather than C++ in
-`selectICmpToValue`.
+| binary | diamonds | of which sign-bit tests |
+|--------|---------:|------------------------:|
+| NetBSD `GENERIC.DEBUG` | 565 | 139 |
+| `libc.a`               | 408 |  83 |
+| Doom, 120 files        | 117 |  11 |
 
-Worth: `FixedDiv`'s shift-subtract loop
-(`sw/doom/m_fixed_penumbra.c`) needs `carry | (rem >= den)` per
-iteration, and the `rem >> 31` half is exactly the `slt x, 0` case.
-
-The rewrite's cost is visible by removing it.  `0 - (r >> 31)` on its
-own selects to a single `SAR Rd, #31` — the shift survives because
-nothing forces it to `i1`.  Feed it to a boolean operator and the same
-subexpression becomes six instructions and a branch:
-
-| expression | instructions | branches |
-|------------|-------------:|---------:|
-| `0 - (r >> 31)`         |  2 | 0 |
-| `0 - (r >= d)`          |  6 | 0 |
-| `(r >> 31) \| (r >= d)` | 11 | 1 |
-
-so the pair costs more than either half and the sign test is the half
-that regressed.
-
-`FixedDiv`'s shift-subtract loop (`sw/doom/m_fixed_penumbra.c`) works
-around this: it widens each predicate to a full mask and ORs the masks
-in s32, rather than the natural `carry | (rem >= den)`, because the
-latter routes the sign test through the diamond and puts an
-unpredictable branch in a sixteen-iteration loop.  Revert that to the
-natural form once `slt x, 0` has its closed form — the comment there
-points back here.
+The kernel's are scattered across calendar arithmetic and filesystem
+block mapping (`clock_secs_to_ymdhms`, `ufs_bmaparray`, `ffs_balloc`),
+not in syscall entry, trap handling or `copyin`/`copyout` — so expect
+code size rather than a benchmark to move.
 
 ## Compiler: share the hi-word compare in i64 three-way compares
 
