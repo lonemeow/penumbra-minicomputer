@@ -28,6 +28,12 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   const LLT s64 = LLT::scalar(64);
   const LLT p0  = LLT::pointer(0, 32);
 
+  // Boolean width.  Comparisons and the conditions of G_BRCOND/G_SELECT are
+  // register-width s32 holding 0 or 1 — the contract PenumbraISelLowering
+  // declares with setBooleanContents(ZeroOrOne).  Matching the width of the
+  // s32-only G_AND/G_OR/G_XOR below is what lets a comparison reach its
+  // consumer with no ext/trunc pair between them.  The carry linking G_UADDO
+  // to G_UADDE is the exception; see the carry rule below.
   getActionDefinitionsBuilder({G_ADD, G_SUB, G_AND, G_OR, G_XOR})
       .legalFor({s32})
       .widenScalarToNextPow2(0, 32)
@@ -56,6 +62,10 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   // uses the ARM carry convention (C = NOT borrow on subtract), so the sub chain
   // threads through SR.C with no fixup, exactly like the add chain.
   // Selection lives in selectAddSubCarry (PenumbraInstructionSelector.cpp).
+  //
+  // The carry stays s1 where general booleans are s32 because
+  // narrowScalarAddSub creates the intermediate carries as s1 unconditionally;
+  // any other width is widened straight back apart inside the chain.
   getActionDefinitionsBuilder({G_UADDO, G_USUBO, G_UADDE, G_USUBE})
       .legalFor({{s32, s1}})
       .minScalar(0, s32)
@@ -67,8 +77,9 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   // the unsigned carry ops above) — only the signed *.with.overflow intrinsics
   // do.
   getActionDefinitionsBuilder({G_SADDO, G_SSUBO, G_SADDE, G_SSUBE})
-      .lowerFor({{s32, s1}})
+      .lowerFor({{s32, s32}})
       .minScalar(0, s32)
+      .clampScalar(1, s32, s32)
       .narrowScalarIf(typeIs(0, s64), changeTo(0, s32))
       .lower();
 
@@ -97,13 +108,15 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   // libcall — mulodi4.c is already linked into NetBSD's libc and our
   // bare-metal compiler-rt builtins, so the symbol is always available.
   getActionDefinitionsBuilder(G_UMULO)
-      .lowerFor({{s32, s1}, {s64, s1}})
+      .lowerFor({{s32, s32}, {s64, s32}})
       .minScalar(0, s32)
+      .clampScalar(1, s32, s32)
       .lower();
 
   getActionDefinitionsBuilder(G_SMULO)
-      .lowerFor({{s32, s1}})
-      .minScalar(0, s32);
+      .lowerFor({{s32, s32}})
+      .minScalar(0, s32)
+      .clampScalar(1, s32, s32);
 
   // Saturating add/subtract: no hardware support, lower to the generic
   // add+compare+select expansion (LegalizerHelper picks between the
@@ -228,11 +241,13 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
       .minScalar(0, s32)
       .maxScalar(0, s32);
 
-  // Comparisons: G_ICMP produces s1 result, compares s32 operands.
+  // Comparisons: G_ICMP produces a register-width boolean, compares s32
+  // operands.
   getActionDefinitionsBuilder(G_ICMP)
-      .legalFor({{s1, s32}, {s1, p0}})
+      .legalFor({{s32, s32}, {s32, p0}})
       .widenScalarToNextPow2(1, 32)
-      .clampScalar(1, s32, s32);
+      .clampScalar(1, s32, s32)
+      .clampScalar(0, s32, s32);
 
   // Undefined value: used by the optimizer for uninitialized variables.
   getActionDefinitionsBuilder(G_IMPLICIT_DEF)
@@ -254,7 +269,8 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
 
   // Branches.
   getActionDefinitionsBuilder(G_BRCOND)
-      .legalFor({s1});
+      .legalFor({s32})
+      .clampScalar(0, s32, s32);
 
   // Indirect branch: G_BRINDIRECT jumps through a pointer (computed goto).
   getActionDefinitionsBuilder(G_BRINDIRECT).legalFor({p0});
@@ -263,10 +279,11 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   getActionDefinitionsBuilder(G_JUMP_TABLE).legalFor({p0});
   getActionDefinitionsBuilder(G_BRJT).alwaysLegal();
 
-  // Select (ternary): result s32/p0, condition s1.
+  // Select (ternary): result s32/p0, condition a register-width boolean.
   getActionDefinitionsBuilder(G_SELECT)
-      .legalFor({{s32, s1}, {p0, s1}})
+      .legalFor({{s32, s32}, {p0, s32}})
       .clampScalar(0, s32, s32)
+      .clampScalar(1, s32, s32)
       .scalarize(0);
 
   // Merge/unmerge: used by i64 narrowing (two s32 ↔ one s64) and by the
@@ -443,7 +460,8 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   getActionDefinitionsBuilder({G_FNEG, G_FABS, G_FCOPYSIGN})
       .lowerFor({s32, s64});
   getActionDefinitionsBuilder(G_IS_FPCLASS)
-      .lowerFor({{s1, s32}, {s1, s64}});
+      .lowerFor({{s32, s32}, {s32, s64}})
+      .clampScalar(0, s32, s32);
 
   getActionDefinitionsBuilder({G_FADD, G_FSUB, G_FMUL, G_FDIV, G_FREM,
                                G_FSQRT,
@@ -502,7 +520,8 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
       .libcallFor({{s64, s32}, {s64, s64}});
 
   getActionDefinitionsBuilder(G_FCMP)
-      .libcallFor({{s1, s32}, {s1, s64}});
+      .libcallFor({{s32, s32}, {s32, s64}})
+      .clampScalar(0, s32, s32);
 
   getActionDefinitionsBuilder(G_FCONSTANT)
       .customFor({s32, s64});

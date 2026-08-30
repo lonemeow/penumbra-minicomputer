@@ -121,7 +121,7 @@ define void @vector_select(ptr %dst, ptr %a, ptr %b, i1 %c) {
 ; CHECK-NEXT:    ldw r8, [r3 + 4]
 ; CHECK-NEXT:    ldw r7, [r3 + 8]
 ; CHECK-NEXT:    ldw r3, [r3 + 12]
-; CHECK-NEXT:    test r4, 1
+; CHECK-NEXT:    and r4, 1
 ; CHECK-NEXT:    beq .LBB3_1
 ; CHECK-NEXT:  // %bb.2:
 ; CHECK-NEXT:    test r4, 1

@@ -80,7 +80,6 @@ define i64 @ssub_sat_i64(i64 %a, i64 %b) {
 ; CHECK-NEXT:    mov r3, lr
 ; CHECK-NEXT:    sbc r3, zero
 ; CHECK-NEXT:    and r3, 1
-; CHECK-NEXT:    and r3, 1
 ; CHECK-NEXT:    add r3, r4
 ; CHECK-NEXT:    mov r11, r2
 ; CHECK-NEXT:    sub r11, r3
@@ -129,7 +128,6 @@ define i64 @sadd_sat_i64(i64 %a, i64 %b) {
 ; CHECK-NEXT:    adc r11, zero
 ; CHECK-NEXT:    mov r1, r2
 ; CHECK-NEXT:    add r1, r4
-; CHECK-NEXT:    and r11, 1
 ; CHECK-NEXT:    add r11, r1
 ; CHECK-NEXT:    xor r2, r11
 ; CHECK-NEXT:    mov lr, r11

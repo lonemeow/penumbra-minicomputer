@@ -36,34 +36,29 @@ define i64 @umulh64(i64 %a, i64 %b) {
 ; CHECK-NEXT:    mov r6, r5
 ; CHECK-NEXT:    add r6, 0
 ; CHECK-NEXT:    add r6, r7
-; CHECK-NEXT:    mov r9, r11
-; CHECK-NEXT:    mulu r9, r3, r7
-; CHECK-NEXT:    mov r10, lr
-; CHECK-NEXT:    mulu r10, r4, r8
+; CHECK-NEXT:    mov r8, r11
+; CHECK-NEXT:    mulu r8, r3, r7
+; CHECK-NEXT:    mov r9, lr
+; CHECK-NEXT:    mulu r9, r4, r10
 ; CHECK-NEXT:    mulu lr, r3, r3
-; CHECK-NEXT:    add r10, r9
+; CHECK-NEXT:    add r9, r8
 ; CHECK-NEXT:    mov lr, r5
 ; CHECK-NEXT:    adc lr, zero
-; CHECK-NEXT:    and lr, 1
-; CHECK-NEXT:    add r10, r3
+; CHECK-NEXT:    add r9, r3
 ; CHECK-NEXT:    mov r3, r5
 ; CHECK-NEXT:    adc r3, zero
-; CHECK-NEXT:    and r3, 1
 ; CHECK-NEXT:    add r3, lr
 ; CHECK-NEXT:    mulu r11, r4, r4
 ; CHECK-NEXT:    add r7, r11
 ; CHECK-NEXT:    mov r11, r5
 ; CHECK-NEXT:    adc r11, zero
-; CHECK-NEXT:    and r11, 1
-; CHECK-NEXT:    add r7, r8
+; CHECK-NEXT:    add r7, r10
 ; CHECK-NEXT:    mov lr, r5
 ; CHECK-NEXT:    adc lr, zero
-; CHECK-NEXT:    and lr, 1
 ; CHECK-NEXT:    add lr, r11
 ; CHECK-NEXT:    add r7, r3
 ; CHECK-NEXT:    mov r3, r5
 ; CHECK-NEXT:    adc r3, zero
-; CHECK-NEXT:    and r3, 1
 ; CHECK-NEXT:    add r3, lr
 ; CHECK-NEXT:    add r3, r4
 ; CHECK-NEXT:    add r1, r5
@@ -104,9 +99,8 @@ define i64 @smulh64(i64 %a, i64 %b) {
 ; CHECK-NEXT:    sar r2, 31
 ; CHECK-NEXT:    mov r7, r4
 ; CHECK-NEXT:    sar r7, 31
-; CHECK-NEXT:    mov r5, r2
-; CHECK-NEXT:    mulu r5, r3, r1
-; CHECK-NEXT:    stw r5, [sp + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    mov r10, r2
+; CHECK-NEXT:    mulu r10, r3, r1
 ; CHECK-NEXT:    mov r6, r2
 ; CHECK-NEXT:    mul r6, r3
 ; CHECK-NEXT:    mul r2, r4
@@ -120,38 +114,34 @@ define i64 @smulh64(i64 %a, i64 %b) {
 ; CHECK-NEXT:    mul r6, r7
 ; CHECK-NEXT:    add r6, r9
 ; CHECK-NEXT:    add r6, r8
-; CHECK-NEXT:    mov r9, r11
-; CHECK-NEXT:    mulu r9, r3, r7
-; CHECK-NEXT:    mov r10, lr
-; CHECK-NEXT:    mulu r10, r4, r8
+; CHECK-NEXT:    mov r8, r11
+; CHECK-NEXT:    mulu r8, r3, r7
+; CHECK-NEXT:    mov r9, lr
+; CHECK-NEXT:    mulu r9, r4, r5
+; CHECK-NEXT:    stw r5, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mulu lr, r3, r5
-; CHECK-NEXT:    add r10, r9
+; CHECK-NEXT:    add r9, r8
 ; CHECK-NEXT:    mov r3, zero
 ; CHECK-NEXT:    mov lr, r3
 ; CHECK-NEXT:    adc lr, zero
-; CHECK-NEXT:    and lr, 1
-; CHECK-NEXT:    add r10, r5
+; CHECK-NEXT:    add r9, r5
 ; CHECK-NEXT:    mov r5, r3
 ; CHECK-NEXT:    adc r5, zero
-; CHECK-NEXT:    and r5, 1
 ; CHECK-NEXT:    add r5, lr
 ; CHECK-NEXT:    mulu r11, r4, r4
 ; CHECK-NEXT:    add r7, r11
 ; CHECK-NEXT:    mov r11, r3
 ; CHECK-NEXT:    adc r11, zero
-; CHECK-NEXT:    and r11, 1
+; CHECK-NEXT:    ldw r8, [sp + 0] // 4-byte Folded Reload
 ; CHECK-NEXT:    add r7, r8
 ; CHECK-NEXT:    mov lr, r3
 ; CHECK-NEXT:    adc lr, zero
-; CHECK-NEXT:    and lr, 1
 ; CHECK-NEXT:    add lr, r11
 ; CHECK-NEXT:    add r7, r5
 ; CHECK-NEXT:    adc r3, zero
-; CHECK-NEXT:    and r3, 1
 ; CHECK-NEXT:    add r3, lr
 ; CHECK-NEXT:    add r3, r4
-; CHECK-NEXT:    ldw r4, [sp + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    add r1, r4
+; CHECK-NEXT:    add r1, r10
 ; CHECK-NEXT:    adc r2, r6
 ; CHECK-NEXT:    add r1, r7
 ; CHECK-NEXT:    adc r2, r3
@@ -187,51 +177,46 @@ define i64 @umulh64_load(ptr %p, i64 %b) {
 ; CHECK-NEXT:    stw r10, [sp + 4] // 4-byte Folded Spill
 ; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r4, r2
-; CHECK-NEXT:    ldw r7, [r1 + 0]
+; CHECK-NEXT:    ldw r6, [r1 + 0]
 ; CHECK-NEXT:    ldw r11, [r1 + 4]
 ; CHECK-NEXT:    mov lr, zero
 ; CHECK-NEXT:    mov r1, r4
 ; CHECK-NEXT:    mulu r1, lr, r5
-; CHECK-NEXT:    mov r6, r4
-; CHECK-NEXT:    mul r6, lr
+; CHECK-NEXT:    mov r7, r4
+; CHECK-NEXT:    mul r7, lr
 ; CHECK-NEXT:    mov r2, r3
 ; CHECK-NEXT:    mul r2, lr
-; CHECK-NEXT:    add r2, r6
+; CHECK-NEXT:    add r2, r7
 ; CHECK-NEXT:    add r2, r5
-; CHECK-NEXT:    mov r5, r7
-; CHECK-NEXT:    mulu r5, lr, r6
+; CHECK-NEXT:    mov r5, r6
+; CHECK-NEXT:    mulu r5, lr, r7
 ; CHECK-NEXT:    mov r5, lr
 ; CHECK-NEXT:    add r5, 0
-; CHECK-NEXT:    add r5, r6
-; CHECK-NEXT:    mov r8, r11
-; CHECK-NEXT:    mulu r8, r4, r9
-; CHECK-NEXT:    mov r10, r7
-; CHECK-NEXT:    mulu r10, r3, r6
-; CHECK-NEXT:    mulu r7, r4, r4
-; CHECK-NEXT:    add r10, r8
-; CHECK-NEXT:    mov r7, lr
-; CHECK-NEXT:    adc r7, zero
-; CHECK-NEXT:    and r7, 1
-; CHECK-NEXT:    add r10, r4
-; CHECK-NEXT:    mov r4, lr
-; CHECK-NEXT:    adc r4, zero
-; CHECK-NEXT:    and r4, 1
-; CHECK-NEXT:    add r4, r7
-; CHECK-NEXT:    mulu r11, r3, r3
-; CHECK-NEXT:    add r11, r9
-; CHECK-NEXT:    mov r7, lr
-; CHECK-NEXT:    adc r7, zero
-; CHECK-NEXT:    and r7, 1
-; CHECK-NEXT:    add r11, r6
+; CHECK-NEXT:    add r5, r7
+; CHECK-NEXT:    mov r7, r11
+; CHECK-NEXT:    mulu r7, r4, r8
+; CHECK-NEXT:    mov r9, r6
+; CHECK-NEXT:    mulu r9, r3, r10
+; CHECK-NEXT:    mulu r6, r4, r4
+; CHECK-NEXT:    add r9, r7
 ; CHECK-NEXT:    mov r6, lr
 ; CHECK-NEXT:    adc r6, zero
-; CHECK-NEXT:    and r6, 1
-; CHECK-NEXT:    add r6, r7
+; CHECK-NEXT:    add r9, r4
+; CHECK-NEXT:    mov r4, lr
+; CHECK-NEXT:    adc r4, zero
+; CHECK-NEXT:    add r4, r6
+; CHECK-NEXT:    mulu r11, r3, r3
+; CHECK-NEXT:    add r11, r8
+; CHECK-NEXT:    mov r6, lr
+; CHECK-NEXT:    adc r6, zero
+; CHECK-NEXT:    add r11, r10
+; CHECK-NEXT:    mov r7, lr
+; CHECK-NEXT:    adc r7, zero
+; CHECK-NEXT:    add r7, r6
 ; CHECK-NEXT:    add r11, r4
 ; CHECK-NEXT:    mov r4, lr
 ; CHECK-NEXT:    adc r4, zero
-; CHECK-NEXT:    and r4, 1
-; CHECK-NEXT:    add r4, r6
+; CHECK-NEXT:    add r4, r7
 ; CHECK-NEXT:    add r4, r3
 ; CHECK-NEXT:    add r1, lr
 ; CHECK-NEXT:    adc r2, r5

@@ -26,6 +26,12 @@ public:
   EmitInstrWithCustomInserter(MachineInstr &MI,
                               MachineBasicBlock *MBB) const override;
 
+  // Hold G_SCMP/G_UCMP on LegalizerHelper's select-chain expansion.  Declaring
+  // ZeroOrOneBooleanContent otherwise switches it to `zext(gt) - zext(lt)`,
+  // which measures worse here: the select chain folds each comparison into a
+  // SELECT_CC diamond instead of materialising both booleans into GPRs.
+  bool preferSelectsOverBooleanArithmetic(EVT VT) const override;
+
   // Jump table encoding: always use label differences.
   // This avoids relocations, works at any load address (PIC/PIE/static),
   // and enables future optimization to 16-bit entries.

@@ -405,6 +405,28 @@ bool definesFlagsFromResult(unsigned Opcode) {
   }
 }
 
+// True when `Producer` already left SR holding the Z and N that a compare
+// masking its result with `CmpMask` would set — so the compare is redundant.
+// `CmpMask` is all-ones for `CMPi Rx, 0`, the immediate for `TESTi Rx, mask`.
+// The producer's mask names the bits its result may leave set; masking again
+// changes nothing exactly when those bits are a subset of `CmpMask`.
+//
+// One answer covers Z and N: `ANDi`/`TESTi` take a zero-extended uimm16, so
+// bit 31 is always clear and N is 0 after either.  A register-form
+// `TEST Rx, Ry` would keep bit 31 and need N judged separately.
+bool producesNZFlagsForMask(const MachineInstr &Producer, int64_t CmpMask) {
+  int64_t ProducerMask;
+  switch (Producer.getOpcode()) {
+  case Penumbra::ANDi:
+    ProducerMask = Producer.getOperand(2).getImm();
+    break;
+  default:
+    ProducerMask = ~static_cast<int64_t>(0);
+    break;
+  }
+  return (ProducerMask & CmpMask) == ProducerMask;
+}
+
 } // namespace
 
 bool PenumbraInstrInfo::analyzeCompare(const MachineInstr &MI, Register &SrcReg,
@@ -417,7 +439,15 @@ bool PenumbraInstrInfo::analyzeCompare(const MachineInstr &MI, Register &SrcReg,
     CmpMask = ~0;
     CmpValue = MI.getOperand(1).getImm();
     return true;
-  // TODO: CMP, TESTi, TEST when their elision patterns are added below.
+  // TESTi is the masked form: SR comes from `SrcReg & CmpMask` rather than a
+  // subtraction, so the immediate is the mask and CmpValue is 0.
+  case Penumbra::TESTi:
+    SrcReg = MI.getOperand(0).getReg();
+    SrcReg2 = Register();
+    CmpMask = MI.getOperand(1).getImm();
+    CmpValue = 0;
+    return true;
+  // TODO: CMP, TEST when their elision patterns are added below.
   default:
     return false;
   }
@@ -425,10 +455,14 @@ bool PenumbraInstrInfo::analyzeCompare(const MachineInstr &MI, Register &SrcReg,
 
 bool PenumbraInstrInfo::optimizeCompareInstr(
     MachineInstr &CmpInstr, Register SrcReg, Register /*SrcReg2*/,
-    int64_t /*CmpMask*/, int64_t CmpValue,
+    int64_t CmpMask, int64_t CmpValue,
     const MachineRegisterInfo * /*MRI*/) const {
-  // Currently we only know how to elide `CMPi Rx, 0`.
-  if (CmpInstr.getOpcode() != Penumbra::CMPi || CmpValue != 0)
+  // Both elidable forms compare against zero: `CMPi Rx, 0` over the whole
+  // word, `TESTi Rx, mask` over the masked bits.
+  if (CmpValue != 0)
+    return false;
+  if (CmpInstr.getOpcode() != Penumbra::CMPi &&
+      CmpInstr.getOpcode() != Penumbra::TESTi)
     return false;
 
   MachineBasicBlock *MBB = CmpInstr.getParent();
@@ -462,6 +496,8 @@ bool PenumbraInstrInfo::optimizeCompareInstr(
     }
   }
   if (!Producer)
+    return false;
+  if (!producesNZFlagsForMask(*Producer, CmpMask))
     return false;
 
   // Walk forward from the CMP and verify every SR reader consumes only Z

@@ -30,9 +30,9 @@ body: |
     ; CHECK-NEXT: [[ADD:%[0-9]+]]:gpr = ADD [[COPY]], [[COPY1]], implicit-def $sr
     ; CHECK-NEXT: [[COPY2:%[0-9]+]]:gpr_allocatable = COPY $r0
     ; CHECK-NEXT: [[ADC:%[0-9]+]]:gpr = ADC [[COPY2]], $r0, implicit-def $sr, implicit $sr
-    ; CHECK-NEXT: [[ANDi:%[0-9]+]]:gpr = ANDi [[ADC]], 1, implicit-def $sr
+    ; CHECK-NEXT: [[COPY3:%[0-9]+]]:gpr_allocatable = COPY [[ADC]]
     ; CHECK-NEXT: $r1 = COPY [[ADD]]
-    ; CHECK-NEXT: $r2 = COPY [[ANDi]]
+    ; CHECK-NEXT: $r2 = COPY [[COPY3]]
     ; CHECK-NEXT: RET implicit $r1, implicit $r2
     %0:gprbank(s32) = COPY $r1
     %1:gprbank(s32) = COPY $r2

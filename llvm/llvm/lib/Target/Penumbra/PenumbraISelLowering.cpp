@@ -30,6 +30,12 @@ PenumbraISelLowering::PenumbraISelLowering(const TargetMachine &TM,
   // SP register — needed by G_DYN_STACKALLOC lowering and G_STACKSAVE/RESTORE.
   setStackPointerRegisterToSaveRestore(Penumbra::R14);
 
+  // Comparisons produce a word that is exactly 0 or 1.  GISelValueTracking
+  // only marks bits 31:1 of a comparison known-zero when this is declared,
+  // and it is gated on the result being wider than one bit — so it is inert
+  // unless the legalizer also gives G_ICMP a register-width result.
+  setBooleanContents(ZeroOrOneBooleanContent);
+
   // The ISD operation-action tables are deliberately left at their
   // defaults.  Penumbra selects exclusively through GlobalISel —
   // instruction legality lives in PenumbraLegalizerInfo, and no
@@ -50,6 +56,10 @@ PenumbraISelLowering::PenumbraISelLowering(const TargetMachine &TM,
   // now, RAS or LL/SC in future).
 
   computeRegisterProperties(STI.getRegisterInfo());
+}
+
+bool PenumbraISelLowering::preferSelectsOverBooleanArithmetic(EVT) const {
+  return true;
 }
 
 unsigned PenumbraISelLowering::getJumpTableEncoding() const {
@@ -238,14 +248,11 @@ PenumbraISelLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
     unsigned BrOpc = MI.getOperand(5).getImm();
     BuildMI(MBB, DL, TII.get(BrOpc)).addMBB(TailMBB);
   } else {
-    // SELECT_GPR: operands are dst, trueval, falseval, cond.  The cond is
-    // an s1 boolean; only bit 0 is meaningful (upper bits of a same-bank
-    // GPR copy are unspecified for `G_TRUNC s32→s1` etc.), so test bit 0
-    // explicitly with TESTi 1 rather than the whole word.  The legalizer's
-    // `G_SELECT legalFor({{s32, s1}, {p0, s1}})` rule guarantees s1 here.
+    // SELECT_GPR: operands are dst, trueval, falseval, cond.  Only bit 0 of
+    // cond is meaningful — a boolean reaching here through `G_ANYEXT` of a
+    // `G_TRUNC s32→s1` leaves the upper bits of a same-bank GPR copy
+    // unspecified — so test bit 0 rather than the whole word.
     auto CondReg = MI.getOperand(3).getReg();
-    assert(MF->getRegInfo().getType(CondReg) == LLT::scalar(1) &&
-           "Penumbra SELECT_GPR condition must be legalized to s1");
     BuildMI(MBB, DL, TII.get(Penumbra::TESTi))
         .addReg(CondReg)
         .addImm(1);

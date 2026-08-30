@@ -1,0 +1,152 @@
+# RUN: llc -mtriple=penumbra -run-pass=peephole-opt -verify-machineinstrs -o - %s | FileCheck %s
+
+# Compare-elimination for the masked form: a `TESTi Rx, C` whose Z/N are
+# already in SR from an earlier flag-setting op that defines Rx is deleted.
+# The producer's flags come from the value it wrote, so the test is redundant
+# exactly when masking that value with C cannot change it — i.e. when the bits
+# the producer may leave set are a subset of C.  See producesNZFlagsForMask in
+# PenumbraInstrInfo.cpp.
+#
+# Written as MIR rather than IR because the interesting negative case needs two
+# different masks in a row, which InstCombine folds into one before it can
+# reach the backend.
+
+--- |
+  define void @mask_equal() { ret void }
+  define void @mask_wider_test() { ret void }
+  define void @mask_narrower_test() { ret void }
+  define void @unmasked_producer() { ret void }
+  define void @cmpi_after_andi() { ret void }
+...
+---
+# The mask the producer applied and the mask the test applies are the same, so
+# the test recomputes flags SR already holds.
+name:            mask_equal
+tracksRegLiveness: true
+body:             |
+  ; CHECK-LABEL: name: mask_equal
+  ; CHECK:       ANDi
+  ; CHECK-NOT:   TESTi
+  ; CHECK:       BNE
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $r1
+
+    %0:gpr_allocatable = COPY $r1
+    %1:gpr = ANDi %0, 1, implicit-def dead $sr
+    TESTi %1, 1, implicit-def $sr
+    BNE %bb.2, implicit $sr
+    B %bb.1
+
+  bb.1:
+    RET
+
+  bb.2:
+    RET
+...
+---
+# The test's mask is wider than the producer's, so it clears no bit the
+# producer left set and the flags agree.  An exact-match rule would miss this.
+name:            mask_wider_test
+tracksRegLiveness: true
+body:             |
+  ; CHECK-LABEL: name: mask_wider_test
+  ; CHECK:       ANDi
+  ; CHECK-NOT:   TESTi
+  ; CHECK:       BNE
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $r1
+
+    %0:gpr_allocatable = COPY $r1
+    %1:gpr = ANDi %0, 15, implicit-def dead $sr
+    TESTi %1, 255, implicit-def $sr
+    BNE %bb.2, implicit $sr
+    B %bb.1
+
+  bb.1:
+    RET
+
+  bb.2:
+    RET
+...
+---
+# The test's mask is narrower, so it can clear a bit the producer left set:
+# for $r1 = 0x10 the ANDi leaves Z clear and the TESTi would set it.  The test
+# must survive.
+name:            mask_narrower_test
+tracksRegLiveness: true
+body:             |
+  ; CHECK-LABEL: name: mask_narrower_test
+  ; CHECK:       ANDi
+  ; CHECK:       TESTi
+  ; CHECK:       BNE
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $r1
+
+    %0:gpr_allocatable = COPY $r1
+    %1:gpr = ANDi %0, 255, implicit-def dead $sr
+    TESTi %1, 15, implicit-def $sr
+    BNE %bb.2, implicit $sr
+    B %bb.1
+
+  bb.1:
+    RET
+
+  bb.2:
+    RET
+...
+---
+# Nothing is known about which bits an OR leaves set, so any mask narrower than
+# the whole word may change the flags and the test must survive.
+name:            unmasked_producer
+tracksRegLiveness: true
+body:             |
+  ; CHECK-LABEL: name: unmasked_producer
+  ; CHECK:       OR
+  ; CHECK:       TESTi
+  ; CHECK:       BNE
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $r1, $r2
+
+    %0:gpr_allocatable = COPY $r1
+    %1:gpr_allocatable = COPY $r2
+    %2:gpr = OR %0, %1, implicit-def dead $sr
+    TESTi %2, 1, implicit-def $sr
+    BNE %bb.2, implicit $sr
+    B %bb.1
+
+  bb.1:
+    RET
+
+  bb.2:
+    RET
+...
+---
+# `CMPi Rx, 0` masks nothing, so it is redundant after any flag-setting
+# producer -- including an ANDi, whose mask is a subset of the whole word.
+name:            cmpi_after_andi
+tracksRegLiveness: true
+body:             |
+  ; CHECK-LABEL: name: cmpi_after_andi
+  ; CHECK:       ANDi
+  ; CHECK-NOT:   CMPi
+  ; CHECK:       BNE
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $r1
+
+    %0:gpr_allocatable = COPY $r1
+    %1:gpr = ANDi %0, 1, implicit-def dead $sr
+    CMPi %1, 0, implicit-def $sr
+    BNE %bb.2, implicit $sr
+    B %bb.1
+
+  bb.1:
+    RET
+
+  bb.2:
+    RET
+...

@@ -1146,6 +1146,43 @@ Flags cannot be saved in software (`WRSPR SR` traps), so the fix is
 relocation — check SR liveness at the insertion point and emit the
 materialisation above the nearest earlier SR def.
 
+## Compiler: compare-elim does not look through COPY
+
+`optimizeCompareInstr`'s backward walk takes the first instruction that
+defines the compared register as the flag producer, and gives up unless
+it is flag-setting.  A `COPY` in between stops it —
+`definesFlagsFromResult(COPY)` is false — even though a `COPY` neither
+touches SR nor changes the value.
+
+The shape reaching it today comes from `selectZExt`, which emits a
+`COPY` rather than a mask when zero-extending a carry-out that
+`emitCarryToValue` already made 0/1:
+
+```
+%10:gpr = ANDi %27, 1, implicit-def $sr   ; sets Z from the result
+%19:gpr_allocatable = COPY %10
+TESTi %19, 1, implicit-def $sr             ; recomputes the same Z
+```
+
+Three sites in a 120-file Doom build, more in i64-heavy code.  The
+`SUB`-then-`COPY`-then-`CMP` form named in the peephole's own header
+comment is the same gap.
+
+Following the `COPY` means retargeting the walk to its source, and that
+collides with the splice: the `COPY` then *reads* the producer's def,
+so splicing the producer down past it would leave the `COPY` reading an
+undefined register.  The way out is that the splice is keyed on
+adjacency when what it exists for is making the producer the most
+recent SR write.  Keyed instead on "some instruction in the gap
+modifies SR", the two compose — a `COPY`-only gap needs no splice and
+its reads are harmless, while a gap that does clobber SR still splices
+and the existing "gap must not read the compared register" check still
+rejects the unsafe case.
+
+Treat as delicate: this is the walk that produced the ADC/SBC splice
+miscompile above.  The negative cases belong in
+`test/CodeGen/Penumbra/compare-elim-mask.mir` beside the mask ones.
+
 ## Compiler: GISel poison-flag hygiene is an LLVM rebase gate
 
 The known upstream GlobalISel wrap-flag miscompile families are
@@ -1160,103 +1197,114 @@ poison-flag drop is in the tree or carry it; backport the lowerBswap
 mask fix opportunistically; re-run the audit's probes after any
 rebase.
 
-## Compiler: s1 booleans lose their comparison through logic ops
+## Compiler: s1 booleans lose their comparison through logic ops — RESOLVED
 
-Combining or inverting two comparison results forces the value through
-`G_AND`/`G_OR`/`G_XOR`, which are `legalFor({s32})` while `G_ICMP`
-produces s1 and `G_BRCOND` consumes s1.  The legalizer therefore wraps
-every such operation in an ext/trunc pair, and the selector patterns --
-written against a *direct* `G_ICMP` -- stop matching.  Each predicate
-selects well alone; combining them does not.
+Booleans are register-width now: `G_ICMP`/`G_FCMP` produce s32 and
+`G_BRCOND`/`G_SELECT` consume it, matching AArch64 and RISC-V, with
+`setBooleanContents(ZeroOrOneBooleanContent)` declaring the 0/1
+guarantee.  The carry linking `G_UADDO` to `G_UADDE` stays s1: it is
+the SR.C bit rather than a value, and `narrowScalarAddSub` creates
+those carries as s1 unconditionally, so any other width would only be
+widened straight back apart.  −1.17% on a 120-file Doom build.
 
-Two forms, both measured.
+The original diagnosis here was wrong and is worth recording, because
+it sent the first attempt at the wrong target.  The ext/trunc pair
+around a logic op costs nothing — `G_ANYEXT`/`G_TRUNC` select to
+`COPY` and coalesce away, and `(a>=b)|(c>=d)` always selected to
+`cmp`/`adc` pairs plus an `or`.  Two other things were doing the
+damage:
 
-**Inverted branch condition.**  A branch whose polarity must flip for
-block layout arrives as
+- **Signed compare-to-value.**  InstCombine rewrites `x >> 31` into
+  `icmp slt x, 0` whenever it feeds an `i1` operator, and
+  `selectICmpToValue` bails on every signed predicate.  Independent of
+  boolean width; still open, see the entry below.
+- **`BitWidth > 1` in `GISelValueTracking`.**  The known-bits rule for
+  a comparison result is gated on the result being wider than one bit,
+  so `ZeroOrOneBooleanContent` was inert while `G_ICMP` produced s1.
+  That is why the earlier `setBooleanContents` experiment measured no
+  benefit — the two changes only work together.
 
-```
-%c:s1   = G_ICMP pred, %a, %b
-%w:s32  = G_ANYEXT %c
-%n:s32  = G_XOR %w, 1
-%i:s1   = G_TRUNC %n
-G_BRCOND %i, %bb
-```
+`lowerThreewayCompare` picks the arithmetic form over the select chain
+once boolean contents is declared, which regressed `scmp_i32`; the
+`preferSelectsOverBooleanArithmetic` hook holds it on the select
+chain.
 
-`selectBrCond` (`GISel/PenumbraInstructionSelector.cpp`) folds
-`G_ICMP` + `G_BRCOND` into `CMP` + `Bcc` only when `CondDef` is
-`G_ICMP`; here it is `G_TRUNC`, so the fallback materialises the s1 into
-a GPR through the carry flag before testing bit 0:
+Widening leaves `G_AND %bool, 1` behind, which `redundant_and` cannot
+drop because a `G_FREEZE` blocks known-bits — an upstream hole written
+up in
+[`doc/llvm-gisel-freeze-known-bits.md`](llvm-gisel-freeze-known-bits.md).
+Rather than wait for it, the compare-elimination peephole erases the
+`TESTi` those masks feed, since the mask already set the same Z.
 
-```
-lli r6, 1 / add r2, r6 / mov lr, r3 / adc lr, zero
-lli r7, 1 / xor lr, r7 / test lr, 1 / bne
-```
+## Compiler: signed comparisons have no branchless materialisation
 
-against `sub lr, 1 / bne` when the fold fires.  Reproducer: the same
-loop body with the trip count as a parameter selects cleanly (14
-instructions); with it loaded from globals it does not (20).  The
-difference is register pressure deciding whether indvars rotates the IV
--- pre- and post-decrement forms both select well in isolation.
+`selectICmpToValue` resolves unsigned and eq/ne predicates to one
+compare plus a carry read (`cmp` / `mov r,zero` / `adc r,zero`).  Every
+signed predicate falls through to the `SELECT_CC` diamond instead —
+`lli 1` / `lli 0` / `cmp` / `Bcc` / `mov`, six instructions and a
+branch that is data-dependent by construction.  `emitSelectCC` shares
+the diamond, so `G_SELECT` on a signed predicate pays the same.
 
-**Boolean OR of two predicates.**  Worse, because it regresses code that
-had no branch to begin with:
+117 sites in a 120-file Doom build, all signed, 51 of them against a
+constant zero:
+
+| predicate | vs 0 | vs other |
+|-----------|-----:|---------:|
+| `sgt`     |   38 |       25 |
+| `bge`     |    — |       20 |
+| `slt`     |    7 |       12 |
+| `sle`     |    6 |        9 |
+
+The compare-against-zero cases have cheap closed forms and the general
+ones do not:
+
+- `slt x, 0` is `SHR Rd, #31` — one instruction.  This is the case
+  that matters beyond its site count: InstCombine rewrites `x >> 31`
+  into `icmp slt x, 0` whenever the value feeds an `i1` operator, so
+  source written as a shift still arrives as a comparison.
+- `sge x, 0` is `NOT Rd, Rs` then `SHR Rd, #31`.  `NOT` is the one
+  non-destructive unary, so no copy is needed.  It also avoids the
+  `llis -1` the canonical `sgt x, -1` form materialises today, since
+  −1 does not fit the uimm16 compare immediate.
+- `sgt x, 0` is the largest bucket and has no cheap form:
+  `((0 - x) & ~x) >> 31` is five instructions — branchless, but not
+  smaller than the diamond.  Only worth it where the branch is hot.
+- Two variable operands have no closed form at all.  Biasing to
+  unsigned (`(a ^ 0x80000000) <u (b ^ 0x80000000)`) costs more than
+  the diamond once the constant is materialised.  Leave those.
+
+RISC-V writes its equivalent as a selection pattern —
+`Pat<(i32 (setlt GPR:$rs1, 0)), (SRLI GPR:$rs1, 31)>` in
+`RISCVInstrInfo.td` — which is now open to us as well: with `G_ICMP`
+producing a register-width result there is a register class for the
+comparison, so these can be TableGen patterns rather than C++ in
+`selectICmpToValue`.
+
+Worth: `FixedDiv`'s shift-subtract loop
+(`sw/doom/m_fixed_penumbra.c`) needs `carry | (rem >= den)` per
+iteration, and the `rem >> 31` half is exactly the `slt x, 0` case.
+
+The rewrite's cost is visible by removing it.  `0 - (r >> 31)` on its
+own selects to a single `SAR Rd, #31` — the shift survives because
+nothing forces it to `i1`.  Feed it to a boolean operator and the same
+subexpression becomes six instructions and a branch:
 
 | expression | instructions | branches |
 |------------|-------------:|---------:|
-| `0 - (r >> 31)`               |  2 | 0 |
-| `0 - (r >= d)`                |  6 | 0 |
-| `(r >> 31) \| (r >= d)`       | 12 | 1 |
-| `d & (0 - ((r>>31)\|(r>=d)))` | 15 | 2 |
+| `0 - (r >> 31)`         |  2 | 0 |
+| `0 - (r >= d)`          |  6 | 0 |
+| `(r >> 31) \| (r >= d)` | 11 | 1 |
 
-Alone, `r >> 31` is one `shr`.  Under `|` it becomes
-`lli 1 / lli 0 / cmp / blt / mov` -- once the value must live as s1 for
-the `G_OR`, the shift is re-derived as a comparison and a branch.
+so the pair costs more than either half and the sign test is the half
+that regressed.
 
-The branch is data-dependent, so it is unpredictable by construction.
-`FixedDiv`'s shift-subtract loop (`sw/doom/m_fixed_penumbra.c`) needs
-exactly `carry | (rem >= den)` per iteration; at two such branches per
-iteration over sixteen iterations, the mispredicts cost more than the
-`__divdi3` call the routine exists to replace.
-
-**Why peer targets do not hit this.**  AArch64 and RISC-V keep booleans
-at register width -- `G_ICMP` produces and `G_BRCOND` consumes the full
-scalar -- so no ext/trunc pair ever separates producer from consumer,
-and upstream's `not_cmp_fold` (`Combine.td`) can match `G_XOR` directly
-over a tree of comparisons.  Ours cannot: `matchNotCmp` requires the XOR
-operand to be `G_ICMP`/`G_AND`/`G_OR`, and after legalization it is
-`G_ANYEXT`.  Penumbra keeps s1 deliberately, since `G_UADDO`/`G_UADDE`
-use `{s32, s1}` so the carry threads through `SR.C` and an i64 add stays
-`add; adc`.  AArch64 reaches that another way, with flag-setting
-`ADCS`/`SBCS` its selector matches back from s32 carries, so adopting
-the uniform-s32 model wholesale would regress our carry chain.
-
-**Implementation.**  Canonicalise after legalization so the widen/narrow
-pair around an s1 boolean collapses, restoring the shape the selector
-and `not_cmp_fold` expect.  A narrower fix -- looking through
-`G_TRUNC(G_XOR(G_ANYEXT(G_ICMP), 1))` inside `selectBrCond`, ~20 lines
--- handles the branch case only, and the OR case above shows that is
-the smaller half of the problem.  `selectSelect` carries the same
-direct-`G_ICMP` assumption and would benefit from the general fix too.
-
-**Test coverage.**  The 40 functions across `compare-elim.ll`,
-`branch-opts.ll`, `control-flow.ll`, `icmp-to-value.ll` and
-`select-imm.ll` all select well today: each is small enough to stay
-under whatever pressure flips the branch case, and `memcpy_decr_loop`
-already covers the exit-first polarity and produces `sub; bne`.  A
-minimal `.ll` reduction of the failing branch case passes both before
-and after and guards nothing.  Use a `.mir` test against
-`run-pass=instruction-select` writing the
-`G_TRUNC`/`G_XOR`/`G_ANYEXT`/`G_BRCOND` chain directly, as
-`GlobalISel/select-select-imm.mir` does for its case -- minimal *and*
-pressure-independent.  The OR form needs no such care: a two-line C
-function reproduces it at any optimisation level.  The 46 `adc`/`sbc`
-expectations across `add-sub-i64.ll`, `sat-i64.ll`, `i128-mulhi.ll` and
-`minmax-i64.ll` guard the carry path.
-
-**Worth.**  Six of twenty instructions in a loop latch for the branch
-form.  For the OR form, the difference between branchless arithmetic and
-an unpredictable branch in an inner loop, which is unbounded -- it
-decides whether a software divide routine is viable in C at all.
+`FixedDiv`'s shift-subtract loop (`sw/doom/m_fixed_penumbra.c`) works
+around this: it widens each predicate to a full mask and ORs the masks
+in s32, rather than the natural `carry | (rem >= den)`, because the
+latter routes the sign test through the diamond and puts an
+unpredictable branch in a sixteen-iteration loop.  Revert that to the
+natural form once `slt x, 0` has its closed form — the comment there
+points back here.
 
 ## Compiler: share the hi-word compare in i64 three-way compares
 

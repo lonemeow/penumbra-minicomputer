@@ -506,10 +506,9 @@ bool PenumbraInstructionSelector::selectBranch(MachineInstr &I,
 
 // ── G_BRCOND (conditional branch) ────────────────────────────────────────────
 // Folds with the G_ICMP that defines the condition:
-//   G_ICMP s1 %cond = pred, %lhs, %rhs   →   CMP %lhs, %rhs
+//   G_ICMP %cond = pred, %lhs, %rhs      →   CMP %lhs, %rhs
 //   G_BRCOND %cond, %target               →   Bcc %target
-// If the condition is not from G_ICMP, falls back to TESTi 1 + BNE — only
-// bit 0 of the s1 boolean is meaningful (see assertion + comment below).
+// If the condition is not from G_ICMP, falls back to TESTi 1 + BNE.
 bool PenumbraInstructionSelector::selectBrCond(MachineInstr &I,
                                                 MachineBasicBlock &MBB,
                                                 MachineRegisterInfo &MRI) const {
@@ -549,15 +548,9 @@ bool PenumbraInstructionSelector::selectBrCond(MachineInstr &I,
     return true;
   }
 
-  // Fallback: condition is a generic s1 value — only bit 0 is meaningful,
-  // so test bit 0 explicitly with TESTi 1 + BNE.  `TEST reg, reg` would be
-  // wrong for any s1 produced by a non-canonical source (e.g. `G_TRUNC
-  // s32→s1` for `(x & 1)`-style patterns synthesized by
-  // `known_bits_simplifications`): the upper bits of a same-bank GPR copy
-  // are unspecified, so testing the whole word checks the wrong thing.
-  // The legalizer's `G_BRCOND legalFor({s1})` rule guarantees s1 here.
-  assert(MRI.getType(CondReg) == LLT::scalar(1) &&
-         "Penumbra G_BRCOND condition must be legalized to s1");
+  // Fallback: only bit 0 of a boolean that is not a comparison is
+  // meaningful.  `TEST reg, reg` would be wrong for one reaching here through
+  // `G_ANYEXT` of a `G_TRUNC s32→s1`, whose upper bits are unspecified.
   auto TestMI = BuildMI(MBB, I, DL, TII.get(Penumbra::TESTi))
                     .addReg(CondReg)
                     .addImm(1);
@@ -996,6 +989,21 @@ bool PenumbraInstructionSelector::emitSetCarryFromValue(
   return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
 }
 
+// True when R is the carry-out of an add/sub-with-carry, which
+// selectAddSubCarry materialises as a clean 0/1 via emitCarryToValue.  Only
+// the carry def carries that guarantee; the sum in operand 0 is any word.
+static bool definesZeroOrOneCarry(const MachineInstr &Def, Register R) {
+  switch (Def.getOpcode()) {
+  case TargetOpcode::G_UADDO:
+  case TargetOpcode::G_UADDE:
+  case TargetOpcode::G_USUBO:
+  case TargetOpcode::G_USUBE:
+    return Def.getOperand(1).getReg() == R;
+  default:
+    return false;
+  }
+}
+
 // ── G_ZEXT (zero-extend) ─────────────────────────────────────────────────────
 // s1→s32: AND #1, s8→s32: AND #0xFF, s16→s32: AND #0xFFFF
 bool PenumbraInstructionSelector::selectZExt(MachineInstr &I,
@@ -1006,14 +1014,12 @@ bool PenumbraInstructionSelector::selectZExt(MachineInstr &I,
   unsigned SrcBits = MRI.getType(SrcReg).getSizeInBits();
   const DebugLoc &DL = I.getDebugLoc();
 
-  // A comparison already materialises a clean 0/1 in a full GPR (the carry read
-  // in selectICmpToValue, or the select diamond's `lli 1`/`lli 0`), so
-  // zero-extending its s1 result is a no-op — copy instead of masking with
-  // ANDi #1.  Selection runs bottom-up, so the producer is still a generic
-  // G_ICMP here; it fills SrcReg with the 0/1 when it is selected, and the
-  // register coalescer folds this copy away.
+  // A source already holding a clean 0/1 needs no mask; the coalescer folds
+  // the copy away.  Comparisons need no check here — G_ICMP is register-width,
+  // so it cannot define the 1-bit value a G_ZEXT extends.  Selection runs
+  // bottom-up, so the producer is still a generic op at this point.
   if (MachineInstr *Src = MRI.getVRegDef(SrcReg);
-      Src && Src->getOpcode() == TargetOpcode::G_ICMP) {
+      Src && definesZeroOrOneCarry(*Src, SrcReg)) {
     BuildMI(MBB, I, DL, TII.get(TargetOpcode::COPY)).addDef(DstReg).addReg(SrcReg);
     I.eraseFromParent();
     return RBI.constrainGenericRegister(DstReg, Penumbra::GPR_AllocatableRegClass,
