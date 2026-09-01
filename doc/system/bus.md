@@ -177,7 +177,7 @@ protocol it understands, with no device-specific driver needed.
 | 4     | `CLASS_SD`       | Penumbra SPI master, SD wired  | SD card attached via SPI          |
 | 5     | `CLASS_NIC`      | Penumbra NIC protocol          | ESP32 / Wiznet network adapter    |
 | 6     | `CLASS_DISPLAY`     | Penumbra display registers     | Character-cell console + optional framebuffer |
-| 7     | —                   | —                              | Unassigned                        |
+| 7     | `CLASS_AUDIO`       | Penumbra audio registers       | PCM output; optional extra mixing channels |
 | 8     | `CLASS_USBHC`       | Penumbra USB host-controller   | Local USB host (low / full speed) |
 | 9–255 | —                   | —                              | Reserved for future protocols     |
 

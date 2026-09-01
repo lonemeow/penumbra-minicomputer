@@ -382,6 +382,200 @@ list (`Driver.cpp:getIsRela`).  Self-relocating PIE code needs
 - Functional: ld.elf_so loads, self-relocates, resolves symbols,
   and runs dynamically-linked binaries end-to-end.
 
+## Audio Driver: Multi-Channel ioctl Interface
+
+The audio device ([devices/audio.md](../devices/audio.md)) presents one
+pushed-PCM channel that `audio(4)` drives directly, plus optionally more
+channels that mix in hardware. `audio(4)` models one PCM stream per open
+and has no representation for the extra channels, so they are reached
+through the framework's `dev_ioctl` hook — the sanctioned path for
+device-specific control, requiring no change to MI code.
+
+### Single-stream binding
+
+`audio(4)` drives channel 0 directly. `trigger_output` supplies a ring
+and a block size and asks to be called once per block: the block size
+becomes the channel's watermark, and the per-block callback is driven
+from its watermark flag. The channel's FIFO depth bounds the block size
+reported from `round_blocksize`.
+
+A block size close to the scheduler tick leaves no slack when a refill
+path is woken by a timer rather than run from the interrupt handler, so
+this port sets `__AUDIO_BLK_MS` in `<machine/param.h>` to several ticks
+rather than inheriting the framework default of 10 ms.
+
+### Group letter
+
+The ioctl group letter is `'Y'`. NetBSD's registry of group letters is
+the tagged list in `ioctl(9)`, and `'Y'` appears neither there nor in any
+header in the tree.
+
+The letters an audio device would otherwise reach for are all taken by
+things that can be issued against an audio descriptor: `'A'` is
+registered to `audio(4)`, `'M'` to the OSS mixer, `'H'` to `hdaudio`,
+and `'P'` is registered to *"compat/ossaudio and soundcard.h"* — the
+sound group itself. A collision in any of those would be reached by
+ordinary code talking to the wrong descriptor, not only in principle.
+
+Duplicate entries in the registry are normal — `'A'` is listed four
+times and `'P'` six, disambiguated by arch or subsystem — because the
+namespace is per descriptor rather than global. The constraint that
+actually binds is the one `ioctl(9)` states: only one number per group,
+among groups that can reach one descriptor.
+
+The registry lags the tree, so absence from it is not on its own
+evidence a letter is free: `'T'`, `'K'`, `'L'`, `'D'`, `'N'` and `'X'`
+are all in use without an entry, `'T'` in fourteen headers. A candidate
+has to be checked against both.
+
+This reservation is recorded here rather than added to `ioctl(9)`.
+A port-local driver's entry would never be upstreamed, so it would be a
+permanent local diff against base for no benefit. The exposure is
+bounded and one-directional: were `'Y'` claimed upstream later, only a
+Penumbra kernel would ever have both groups present, and a number
+collision within the group would be needed on top of that.
+
+`midisyn` is the other framework that allocates hardware voices, and it
+is not an alternative: it is expressed in MIDI note numbers and centibel
+attenuations, has no path for loading arbitrary sample data, and its
+`repitchv`/`relevelv` methods — continuous pitch and level change on a
+sounding voice — are unimplemented. Sample playback and instrument
+synthesis are different models rather than two spellings of one.
+
+### Interface
+
+```c
+#define PENAUDIO_MAXCHAN        32
+
+/* pai_caps */
+#define PENAUDIO_CAP_PITCH      0x0001
+#define PENAUDIO_CAP_VOLUME     0x0002
+#define PENAUDIO_CAP_FMT8       0x0004
+#define PENAUDIO_CAP_MONO       0x0008
+#define PENAUDIO_CAP_INTERP     0x0010
+
+struct penaudio_info {
+        uint32_t pai_rate;      /* output sample rate, Hz */
+        uint16_t pai_nchan;     /* channels the device has */
+        uint16_t pai_navail;    /* channels not currently claimed */
+        uint32_t pai_caps;      /* PENAUDIO_CAP_* */
+};
+
+struct penaudio_alloc {
+        uint16_t pa_nchan;      /* in: wanted; out: granted */
+};
+
+/* pc_flags */
+#define PENAUDIO_CF_FMT8        0x0001
+#define PENAUDIO_CF_MONO        0x0002
+#define PENAUDIO_CF_INTERP      0x0004
+
+struct penaudio_chan {
+        uint16_t pc_chan;       /* index within the allocation */
+        uint16_t pc_flags;      /* PENAUDIO_CF_* */
+        uint32_t pc_inc;        /* 16.16 frames consumed per output frame */
+        uint16_t pc_vol_l;
+        uint16_t pc_vol_r;
+        uint32_t pc_wm;         /* free-space watermark, frames */
+};
+
+/* ps_flags */
+#define PENAUDIO_SF_UNDERRUN    0x0001  /* sticky; cleared by this read */
+
+struct penaudio_status {
+        uint16_t ps_chan;       /* in */
+        uint16_t ps_flags;      /* out */
+        uint32_t ps_depth;      /* out: FIFO capacity, frames */
+        uint32_t ps_level;      /* out: free space, frames */
+};
+
+struct penaudio_push {
+        uint16_t pp_chan;
+        uint32_t pp_nframes;    /* in: offered; out: accepted */
+        void    *pp_data;
+};
+
+struct penaudio_mask {
+        uint32_t pm_mask;       /* bit n = channel n of the allocation */
+};
+
+#define PENAUDIO_GETINFO    _IOR('Y', 0, struct penaudio_info)
+#define PENAUDIO_ALLOC      _IOWR('Y', 1, struct penaudio_alloc)
+#define PENAUDIO_FREE       _IO('Y', 2)
+#define PENAUDIO_SETCHAN    _IOW('Y', 3, struct penaudio_chan)
+#define PENAUDIO_GETSTATUS  _IOWR('Y', 4, struct penaudio_status)
+#define PENAUDIO_PUSH       _IOWR('Y', 5, struct penaudio_push)
+#define PENAUDIO_START      _IOW('Y', 6, struct penaudio_mask)
+#define PENAUDIO_STOP       _IOW('Y', 7, struct penaudio_mask)
+#define PENAUDIO_FLUSH      _IOW('Y', 8, struct penaudio_mask)
+```
+
+`poll(2)` reports `POLLOUT` while any channel in the allocation has free
+space at or above its watermark; `PENAUDIO_GETSTATUS` then identifies
+which. A consumer therefore sleeps and wakes through the standard
+mechanisms and needs no device-specific wait.
+
+### Why the interface has this shape
+
+**The vocabulary mirrors the registers, not a file format.** `SETCHAN`
+carries an increment and a gain rather than a note and a velocity. An
+ioctl set shaped like tracker events would place one format's model in
+the kernel, where the next format would have to relitigate it; a
+sample-playback vocabulary serves a tracker, a sound-effect mixer and a
+software synthesizer without preferring any of them.
+
+**Channel indices are allocation-relative.** A consumer granted four
+channels addresses them 0-3 whatever hardware channels it received, so
+the driver stays free to pack allocations around whatever `audio(4)`
+holds, and a consumer needs no policy for a fragmented device.
+
+**`START`, `STOP` and `FLUSH` take masks** because the hardware starts
+channels through a single register write, and a chord whose notes are
+started by separate calls would have its onsets staggered by the
+duration of those calls. Preserving the mask through the ioctl layer is
+what keeps simultaneity a property of the device rather than of how
+promptly the consumer is scheduled.
+
+**Pushing is an ioctl rather than `write(2)`** because `write(2)` on this
+device is already `audio(4)`'s PCM path. Overloading it would put two
+different models on one descriptor, distinguished only by which ioctls
+had been issued earlier.
+
+The push path carries the device's whole data bandwidth — four channels
+at the maximum Amiga sample rate is ~132 KB/s — and copies it twice,
+once into the kernel and once into the data port. At a few hundred calls
+per second the syscall overhead is immaterial, and the second copy is
+the only real cost; mapping the data port into the consumer would remove
+it, at the price of exposing device registers to userland. That trade is
+worth making only if measurement shows the copy matters.
+
+**Allocation is arbitrated against `audio(4)`.** Channels claimed by
+`PENAUDIO_ALLOC` are unavailable to a subsequent `audio(4)` open and the
+reverse, so a stream and a multi-channel consumer can never interleave
+frames on one channel. An allocation is released by `PENAUDIO_FREE` or
+by closing the descriptor, so a consumer that exits unexpectedly does not
+strand the device.
+
+### Refilling
+
+A consumer refills reactively rather than predicting drain: read
+`ps_depth - ps_level` for frames outstanding and top up to a target.
+This needs no arithmetic relating pitch to time and self-corrects
+against scheduling jitter.
+
+Two ordering constraints matter and are invisible from the interface
+alone. Effects are applied to `pc_inc` *before* status is read, so the
+top-up already reflects the new drain rate. And the target must cover
+the largest single-step pitch increase a consumer can make — a tracker
+arpeggio raises pitch by up to fifteen semitones, 2.38×, on the
+following tick — so a target of one tick's data underflows where roughly
+1500 frames does not, at any rate the device supports.
+
+A change of *source material* requires `PENAUDIO_FLUSH`; a change of
+pitch or volume does not. Stream position is the integral of `pc_inc`
+over elapsed time, so queued frames play exactly where an unqueued
+implementation would put them.
+
 ## Userland Build Integration
 
 Uses stock `toolchains::NetBSD` in clang with Penumbra

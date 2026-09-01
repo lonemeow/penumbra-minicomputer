@@ -30,6 +30,7 @@ architecture and its standard peripherals.
 *   **[USB host controller](./system/devices/usb-host.md)** — register interface and transaction contract; carries storage, HID, hubs, and the `ure(4)` Ethernet adapter that gives the machine its network.
 *   **[ESP32 WiFi NIC](./system/devices/esp32-nic.md)** — Ethernet-over-SLIP network adapter interface (an alternative path, not the one in use).
 *   **[Display Adapter](./system/devices/display.md)** — Character-cell console + optional framebuffer (`CLASS_DISPLAY`).
+*   **[Audio Device](./system/devices/audio.md)** — Pushed-PCM output with optional mixing channels (`CLASS_AUDIO`).
 *   **[USB Host Controller](./system/devices/usb-host.md)** — Transaction-level USB host (`CLASS_USBHC`).
 
 ### Operating System

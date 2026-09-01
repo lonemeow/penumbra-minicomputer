@@ -4536,3 +4536,161 @@ and background).  Padding the table to 32 entries turns the index into
 dwarfs it — but the cost scales with pixels rather than iterations, so
 it grows in relative terms on a framebuffer, where shallow escape
 counts are common.
+
+## Hardware: audio device (`CLASS_AUDIO`)
+
+The ULX3S has a 3.5 mm jack driven by a 4-bit resistor ladder per
+channel, and nothing in the design uses it. Register interface and
+driver model are specified in
+[devices/audio.md](system/devices/audio.md); `CLASS_AUDIO` is registered
+as class 7. This entry records the measurements behind the shape of that
+spec and the decisions that still need hardware to settle.
+
+### Why the device has no addressable sample memory
+
+The bus expresses exactly one master. Every control signal in
+[bus-protocol.md](hardware/bus-protocol.md) is marked master-to-slave and
+there is no request/grant pair, so a device cannot fetch its own sample
+data; anything it plays, the CPU must push. That leaves two shapes: a
+CPU-filled BRAM the channels address (Paula/GUS), or per-channel FIFOs.
+
+Sample-header survey of 50 four-channel modules across ten composers
+(4-Mat, Captain, Dizzy, Heatbeat, Jester, Jogeir Liljedahl, Lizardking,
+Mantronix, Moby, Romeo Knight), total sample bytes per module:
+
+```
+median=90K  mean=113K  max=382K
+  fits in  32K: 14/50 (28%)     Jester/elysium        102K
+  fits in  64K: 19/50 (38%)     4-Mat/crocketts theme  88K
+  fits in 128K: 34/50 (68%)     Heatbeat/bicykl0pedia 382K
+  fits in 384K: 50/50 (100%)
+```
+
+Addressable sample memory is therefore not worth its area: 64 KB (32
+EBR) plays 38% of real modules, and 128 KB reaches only 68% while taking
+EBR occupancy to ~95%. Per-channel FIFOs play all of them, at ~16 EBR
+and roughly 1% of the CPU — four channels at the maximum Amiga rate
+(period 108, ~33 kHz) is 132 KB/s, pushed as words holding four 8-bit
+samples each.
+
+The cost is that FIFO contents belong to one source stream at one rate,
+so a change of source material needs `FLUSH` rather than a queued
+handoff. A change of *pitch* needs nothing: stream position is the
+integral of `INC` over elapsed time, so a queued channel and an
+unqueued one behave identically under vibrato or portamento.
+
+### DAC ladder linearity bounds the analog output
+
+Ladder values from the board schematic, per channel: 130 Ω (MSB), 270 Ω,
+549 Ω, 1.1 kΩ, paralleling to ~71 Ω and matching the board's stated
+75 Ω output impedance. Normalised to the MSB the weights are 8.000,
+3.852, 1.894, 0.945 against an ideal 8/4/2/1 — every lower bit is light,
+by construction rather than by tolerance. The midscale carry
+(`0111`→`1000`) steps 1.385 LSB instead of 1.0, so **DNL ≈ +0.39 LSB,
+about 2.5% of full scale**, at the code a modulator idles around.
+
+Noise shaping does not fix this and makes its consequences worse: in a
+digital sigma-delta DAC the ladder's static nonlinearity acts on the
+output code stream unshaped, intermodulating the out-of-band shaped
+noise back into the audio band. Quantization itself is a non-issue —
+second-order shaping at OSR 512 puts it ~148 dB down.
+
+Open, and only settleable by listening on hardware: **how many ladder
+bits to drive.** Fewer bits trade mismatch distortion (unfixable) for
+out-of-band energy (filterable). One bit is perfectly linear by
+construction — two levels define a straight line — at the cost of
+full-swing switching into 16 Ω, needing a real reconstruction filter.
+Level check for the 1-bit case: 130 Ω into 16 Ω divides 3.3 V to
+~0.36 V p-p, comfortably loud with no amplifier.
+
+### Clock source must not follow CPU_HZ
+
+Sample rate cannot derive from the CPU/system clock, which is retuned
+per timing closure. The USB tier already solves this shape —
+`ecp5_pll_aux_div` returns 0 unless the VCO is an exact multiple, so an
+inexact retarget fails elaboration instead of detuning the peripheral.
+
+Both instantiated PLLs are constrained, and their VCO factorisations
+decide what is reachable:
+
+| clock             | factorisation  | exact 48 kHz? |
+|-------------------|----------------|---------------|
+| system VCO / USB 60 MHz | 2⁸ × 3 × 5⁷ | yes (÷1250) |
+| video VCO 625 MHz | 2⁶ × 5¹⁰       | no            |
+| *48000*           | *2⁷ × 3 × 5³*  | —             |
+
+The video PLL has two free outputs (`ENCLKOS2`/`ENCLKOS3` tied off) and
+is crystal-fed, so it looks like the obvious home — but 625 MHz has no
+factor of 3 and only 2⁶, so it cannot produce 16/32/44.1/48 kHz by any
+downstream divider. It reaches 8 kHz exactly, and otherwise only
+oddities like 25/40/50 kHz.
+
+Preferred: share the existing 60 MHz USB clock, which adds no new VCO
+constraint because USB already imposes it, and divides exactly across
+the whole 48 kHz family (8/16/24/32/48/96 kHz). Portable fallback for a
+top without a USB tier: a third EHXPLLL (2 of 4 used), crystal-fed at a
+600 MHz VCO — 2⁹ × 3 × 5⁸, reachable from 25 MHz as CLKI 1 / CLKFB 24,
+and exact at ÷12500. 44.1 kHz factors as 2² × 3² × 5² × 7² and is
+unreachable from any of these; design around the 48 kHz family.
+
+### Sizing, and what needs re-measuring
+
+Last full synthesis showed `DP16KD 134/208` — 74 EBR (~148 KB) free,
+`MULT18X18D 0/156`, `EHXPLLL 2/4`. Eight channels of 4 KB is 16 EBR,
+taking occupancy to ~72%. Audio RAM is read at the output rate, touches
+no critical path, and can place loosely, unlike the floorplanned SDRAM
+and D-side cones.
+
+- The EBR figure predates in-flight L2 geometry changes and should be
+  re-measured before it is planned against.
+- A 4 KB FIFO holds 124 ms for a channel draining at 33 KB/s but only
+  21 ms for a 48 kHz stereo stream at 192 KB/s. Either give channel 0 a
+  deeper FIFO — `DEPTH` is per channel precisely so this is legal and
+  discoverable — or set `__AUDIO_BLK_MS` low enough that two blocks fit.
+- The mixer's multiply-accumulate can be time-multiplexed across all
+  channels: 1250 clocks per output frame at 60 MHz against roughly four
+  clocks per channel. Channel count is bounded by register-file size,
+  not by mixing throughput, so `INTERP` (one extra MAC per channel) is
+  affordable rather than a luxury.
+
+### Driver-side notes
+
+A tracker refills reactively — `used = DEPTH - LEVEL`, top up to a
+target — which needs no rate arithmetic and self-corrects against tick
+jitter. Ordering inside the tick handler is load-bearing: apply effects
+to `INC` *first*, then read `LEVEL`, so the top-up already reflects the
+new drain rate. Arpeggio can raise pitch 15 semitones (2.38×) on the
+next tick, so a target of one tick's data underflows; ~1500 frames is
+over two ticks even at the maximum rate and needs no per-channel
+computation.
+
+Multi-channel control has no representation in `audio(4)` and reaches
+userland through the framework's `dev_ioctl` hook. `midisyn` is not an
+alternative: it speaks MIDI note numbers and centibel attenuations, has
+no path for loading arbitrary samples, and its `repitchv`/`relevelv`
+methods — continuous pitch and level change, i.e. most of a tracker's
+effect vocabulary — are unimplemented.
+
+### Bring-up order
+
+The two halves are independently testable, so neither blocks the other
+for long:
+
+1. Output stage alone — a fixed tone into the modulator and ladder,
+   `CTRL.ENABLE` only. This settles the [ladder bit-depth
+   question](#dac-ladder-linearity-bounds-the-analog-output) by
+   listening, and needs no FIFO, no channels, and no driver.
+2. One channel with a FIFO, plus the `audio(4)` binding. That is the
+   whole `CLASS_AUDIO` minimum protocol and gives a working
+   `/dev/audio`.
+3. Remaining channels, `INC`, `VOL` and the mixer — the point at which
+   `CAP.CHANNELS` becomes greater than one and the
+   [ioctl interface](system/netbsd/design-notes.md#audio-driver-multi-channel-ioctl-interface)
+   becomes reachable.
+4. A tracker replayer in userland, with its mixer removed and channel
+   registers driven in its place.
+
+Step 1 is worth doing before any of the register interface exists: the
+analog result decides how many ladder bits the output stage drives, and
+that is the one decision in this entry that cannot be made from a
+datasheet.
