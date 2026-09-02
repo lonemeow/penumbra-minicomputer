@@ -938,18 +938,19 @@ FPGA_SPLASH_TOPS = ulx3s_video_test_top
 # divider, so seed rankings do not survive a retarget. Re-sweep after
 # moving CPU_HZ, not just after an RTL change.
 #
-# gen1, swept after the display adapter landed: fmax across seeds 0-9
-# spans 23.99-27.5 MHz, only half of them clearing 25. Seed 5 is the best
-# and the only one with real margin over the 27 MHz safety floor.
+# gen1: fmax across seeds 0-9 spans 24.03-26.90 MHz, clearing 25 on five
+# of the nine that produced a result. Seed 8 yields none — nextpnr's
+# router loops on it for this netlist instead of terminating, where every
+# other seed routes in under 90 seconds. Seed 0 is the best of the rest.
 #
-# The gen2 pair at their 37.5 MHz CPU_HZ: gen2 spans 33.2-39.63 MHz and
-# clears the target on 4 seeds of 10, gen2.5 spans 33.9-39.19 and clears
-# on 4. Each pin below is its sweep's best. Both run closer to the edge
-# than gen1 does — 5.7% margin for gen2, 4.5% for gen2.5 — so a placement
-# regression here costs a working bitstream, not just headroom.
-DEFAULT_SEED_ulx3s_penumbra1_top   := 5
-DEFAULT_SEED_ulx3s_penumbra2_top   := 2
-DEFAULT_SEED_ulx3s_penumbra2_5_top := 5
+# The gen2 pair at their 37.5 MHz CPU_HZ: gen2 spans 33.38-41.25 MHz and
+# clears the target on 8 seeds of 10, gen2.5 spans 36.30-39.56 and clears
+# on 7. Each pin below is its sweep's best. gen2.5 runs closest to the
+# edge — 10.0% margin for gen2, 5.5% for gen2.5, 7.6% for gen1 — so a
+# placement regression there costs a working bitstream, not just headroom.
+DEFAULT_SEED_ulx3s_penumbra1_top   := 0
+DEFAULT_SEED_ulx3s_penumbra2_top   := 5
+DEFAULT_SEED_ulx3s_penumbra2_5_top := 8
 
 
 # BOARD/CORE porcelain → TOP derivation (CORE defaults to penumbra2

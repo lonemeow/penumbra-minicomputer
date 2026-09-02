@@ -1,4 +1,4 @@
-// Penumbra MUL/DIV peer unit (divmul) — sequential 32-cycle multiply/divide
+// Penumbra MUL/DIV peer unit (divmul) — sequential multiply/divide
 //
 // A *peer* to the ALU (see doc/internals/divmul.md), not part of it: it shares
 // the register-bus fabric but has its own start/done handshake, so the ALU
@@ -48,7 +48,14 @@
 
 module divmul
     import penumbra_pkg::*;
-(
+#(
+    // Multiplier bits retired per iteration step; must divide 32. The divide
+    // is unaffected — restoring division retires one quotient bit regardless.
+    //
+    // Each extra bit costs a gated row and a carry-save level: cheap in LUTs,
+    // expensive in chips. One is what discrete logic affords; FPGA cores raise it.
+    parameter int MUL_BITS_PER_STEP = 1
+) (
     input  logic        i_clk,
     input  logic        i_rst,
 
@@ -69,6 +76,12 @@ module divmul
     output logic        o_flag_z,   // low half / quotient == 0
     output logic        o_flag_n    // low half / quotient [31]
 );
+
+    localparam int MUL_STEPS = 32 / MUL_BITS_PER_STEP;
+
+    if (32 % MUL_BITS_PER_STEP != 0) begin : g_step_divides_32
+        $error("divmul: MUL_BITS_PER_STEP must divide 32");
+    end
 
     // ── ALU op-field encodings (gen1 core-internal contract) ─────
     // Mirror alu.sv's local OP_* params and uasm.py's alu map.  This is
@@ -135,16 +148,35 @@ module divmul
     // ── Iteration step candidates (combinational) ───────────────
     // Both are computed every cycle; op_is_div selects which feeds accum.
 
-    // Multiply: conditional add of the multiplicand into the high half, then
-    // shift {carry, hi, lo} right by one (LSB-first partial-product walk). The
-    // 33-bit sum keeps the carry so it lands in the product MSB after the shift.
-    logic [31:0] mul_addend;
-    logic [32:0] mul_sum;
+    // Multiply: LSB-first partial-product walk, MUL_BITS_PER_STEP rows per step.
+    //
+    // The high half plus every row is bounded by (2**32-1)*2**MUL_BITS_PER_STEP,
+    // so mul_next's concatenation *is* the right shift — nothing to truncate.
+    //
+    // Rows reduce in carry-save and resolve through one adder per step. A
+    // carry-propagate add per row instead costs an adder delay per bit retired,
+    // spending what the extra bits buy. A `*` on the multiplier slice would let
+    // the synthesiser build the tree, but it infers DSP blocks — which the
+    // discrete build has no counterpart for.
+    logic [31+MUL_BITS_PER_STEP:0] mul_ps, mul_pc;    // carry-save partial product
+    logic [31+MUL_BITS_PER_STEP:0] mul_sum;
     logic [63:0] mul_next;
     always_comb begin
-        mul_addend = accum[0] ? op_b : 32'd0;
-        mul_sum    = {1'b0, accum[63:32]} + {1'b0, mul_addend};
-        mul_next   = {mul_sum, accum[31:1]};   // {carry,hi}(33) ++ lo[31:1](31), == >>1
+        // The high half and row 0 are just two addends, so seeding the pair with
+        // them costs no reduction level — and one bit per step none at all.
+        mul_ps = {{MUL_BITS_PER_STEP{1'b0}}, accum[63:32]};
+        mul_pc = accum[0] ? {{MUL_BITS_PER_STEP{1'b0}}, op_b} : '0;
+        for (int j = 1; j < MUL_BITS_PER_STEP; j++) begin
+            logic [31+MUL_BITS_PER_STEP:0] row, csa_sum, csa_carry;
+            row       = accum[j] ? ({{MUL_BITS_PER_STEP{1'b0}}, op_b} << j) : '0;
+            csa_sum   = mul_ps ^ mul_pc ^ row;
+            csa_carry = ((mul_ps & mul_pc) | (mul_pc & row)
+                                           | (mul_ps & row)) << 1;
+            mul_ps    = csa_sum;
+            mul_pc    = csa_carry;
+        end
+        mul_sum  = mul_ps + mul_pc;
+        mul_next = {mul_sum, accum[31:MUL_BITS_PER_STEP]};
     end
 
     // Divide (restoring): shift {hi, lo} left by one to form the next partial
@@ -208,7 +240,7 @@ module divmul
                         accum     <= {32'd0, a_mag};
                         neg_xor   <= a_neg ^ b_neg;    // product / quotient sign
                         neg_a     <= a_neg;            // remainder sign
-                        iter      <= 6'd32;
+                        iter      <= is_div ? 6'd32 : 6'(MUL_STEPS);
                         state     <= S_ITER;
                     end
                 end

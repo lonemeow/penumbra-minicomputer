@@ -490,6 +490,9 @@ int main() {
     int guard = 1;
     while (dut->o_local_stall && guard < 64) { tick(dut); guard++; }
     check("mul_completed", (guard < 64), 1);
+    // Launch cycle plus one per step: pins this core's MUL_BITS_PER_STEP and
+    // EX's own launch-cycle hold together.
+    check("mul_hold_cycles", guard, 1 + 32 / 4);
     tick(dut);                                         // advance edge: latch result into EX/MEM
     dut->i_valid = 0; dut->eval();                     // model the pipeline feeding EX its next slot:
                                                        //   a real divmul never persists in EX past

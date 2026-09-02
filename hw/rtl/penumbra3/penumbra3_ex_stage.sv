@@ -391,7 +391,8 @@ module penumbra3_ex_stage
         else if (dm_start) dm_started <= 1'b1;   // launched this divmul
     end
 
-    divmul u_divmul (
+    // FPGA-only core: no discrete chip budget to respect.
+    divmul #(.MUL_BITS_PER_STEP(4)) u_divmul (
         .i_clk       (i_clk),
         .i_rst       (i_rst),
         .i_a         (op_a),

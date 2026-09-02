@@ -217,14 +217,15 @@ static void check_div_fault(Vdivmul* d, const char* name, uint8_t op,
 
 // The completion contract itself, independent of the arithmetic.
 //
-// EXPECT_INFLIGHT_CYCLES pins the run length for the shift-add engine this unit
-// carries (one cycle per bit of the multiplier/dividend). An engine consuming
-// more than one bit per cycle changes it, which should be a deliberate edit
-// here rather than a silent shift in what consumers stall for.
-static const int EXPECT_INFLIGHT_CYCLES = 32;
+// Pinned so a step-count change is a deliberate edit, not a silent shift in
+// what consumers stall for. This elaborates divmul's default; the four-bit step
+// the FPGA cores use is pinned in tb_penumbra2_ex_stage, which elaborates it.
+static const int EXPECT_MUL_CYCLES = 32 / 1;
+static const int EXPECT_DIV_CYCLES = 32;
 
 static void check_completion_timing(Vdivmul* d, const char* name, uint8_t op,
-                                    uint32_t a, uint32_t b, uint64_t expected) {
+                                    uint32_t a, uint32_t b, uint64_t expected,
+                                    int expect_inflight) {
     tests++;
     int fail = 0;
 
@@ -243,9 +244,9 @@ static void check_completion_timing(Vdivmul* d, const char* name, uint8_t op,
     int inflight = 0, guard = 0;
     while (!d->o_done && guard++ < 200) { inflight++; tick(d); }
 
-    if (inflight != EXPECT_INFLIGHT_CYCLES) {
+    if (inflight != expect_inflight) {
         printf("  FAIL [%s] o_done low for %d cycles, expected %d\n",
-               name, inflight, EXPECT_INFLIGHT_CYCLES);
+               name, inflight, expect_inflight);
         fail = 1;
     }
 
@@ -324,10 +325,10 @@ int main() {
 
     // ── Completion handshake timing ─────────────────────────────
     check_completion_timing(d, "timing_mulu", OP_MULU, 0xDEADBEEF, 0x12345678,
-                            umul(0xDEADBEEF, 0x12345678));
+                            umul(0xDEADBEEF, 0x12345678), EXPECT_MUL_CYCLES);
     check_completion_timing(d, "timing_divu", OP_DIVU, 0xDEADBEEF, 0x1234,
                             ((uint64_t)(0xDEADBEEFu % 0x1234u) << 32)
-                            | (0xDEADBEEFu / 0x1234u));
+                            | (0xDEADBEEFu / 0x1234u), EXPECT_DIV_CYCLES);
 
     // ── Divide-by-zero traps ────────────────────────────────────
     check_div_fault(d, "divu_div0",    OP_DIVU, 42, 0);

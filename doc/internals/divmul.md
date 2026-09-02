@@ -11,10 +11,15 @@
 The divmul unit implements hardware multiply and divide for the
 Penumbra ISA:
 
-| Instruction | Operation                                                                | Cycles (target) |
-|-------------|--------------------------------------------------------------------------|:---------------:|
-| MUL, MULU   | `Rdh:Rd = Rd × Rs` (signed/unsigned 32×32→64; `Rdh=R0` → low half only)  | ~34             |
-| DIV, DIVU   | `Rd, Rdh = Rd / Rs, Rd % Rs` (32/32, signed/unsigned; `Rdh=R0` → quotient only) | ~34     |
+| Instruction | Operation                                                                | Cycles |
+|-------------|--------------------------------------------------------------------------|:------:|
+| MUL, MULU   | `Rdh:Rd = Rd × Rs` (signed/unsigned 32×32→64; `Rdh=R0` → low half only)  | 2 + 32/`MUL_BITS_PER_STEP` |
+| DIV, DIVU   | `Rd, Rdh = Rd / Rs, Rd % Rs` (32/32, signed/unsigned; `Rdh=R0` → quotient only) | 34 |
+
+The multiply retires `MUL_BITS_PER_STEP` multiplier bits per step, a
+unit parameter each core picks: one bit per step is what discrete logic
+affords, and an FPGA core buys fewer steps with a wider partial-product
+reduction. The divide retires one quotient bit per step regardless.
 
 The third operand `Rdh` is always **write-only** — for `MUL`/`MULU` it
 receives the high half of the product, and for `DIV`/`DIVU` it receives
@@ -140,8 +145,8 @@ the handler.
                                        or right by 1 each iteration)
 
       ┌──────────┐
-      │ iter_cnt │   6-bit down-counter, init = 32; its terminal
-      └──────────┘   step registers o_done
+      │ iter_cnt │   6-bit down-counter, init = the operation's step
+      └──────────┘   count; its terminal step registers o_done
 
       ┌──────────────────────────────────────────┐
       │  Fault detect (evaluated at start,       │
@@ -166,8 +171,8 @@ bits).
 
 | Op    | accum_lo ←             | accum_hi ← | op_b ← (mcand / divisor) | iter ← |
 |-------|------------------------|------------|--------------------------|--------|
-| MUL   | \|A\| (multiplier mag) | 0          | \|B\| (multiplicand mag) | 32     |
-| MULU  | A                      | 0          | B                        | 32     |
+| MUL   | \|A\| (multiplier mag) | 0          | \|B\| (multiplicand mag) | 32/`K` |
+| MULU  | A                      | 0          | B                        | 32/`K` |
 | DIV   | \|A\| (dividend mag)   | 0          | \|B\| (divisor mag)      | 32     |
 | DIVU  | A (dividend)           | 0          | B (divisor)              | 32     |
 
@@ -178,20 +183,27 @@ the registers are initialized.
 
 ## Multiplication — shift-add (unsigned)
 
+Writing `K` for `MUL_BITS_PER_STEP`:
+
 ```
-for iter in 32:
-    if accum_lo[0] == 1:
-        accum_hi ← accum_hi + divisor    ; ("divisor" holds multiplicand)
-    {accum_hi, accum_lo} ← {accum_hi, accum_lo} >> 1
+for iter in 32/K:
+    accum_hi ← accum_hi + Σ(j = 0..K-1) accum_lo[j] ? (divisor << j) : 0
+    {accum_hi, accum_lo} ← {accum_hi, accum_lo} >> K   ; ("divisor" holds multiplicand)
 ```
 
-After 32 iterations `accum_hi:accum_lo` holds the full 64-bit product.
+After `32/K` iterations `accum_hi:accum_lo` holds the full 64-bit
+product. Widths are exact: the high half plus every row is bounded by
+`(2^32 - 1) * 2^K`, so the shifted concatenation loses nothing.
 
-For **signed** MUL: simplest correct implementation is sign-magnitude
-— negate both operands at the start if negative, multiply, negate the
-product if signs differed. Two extra cycles. (Booth's algorithm
-eliminates the negate cycles but adds gates; skip it for the first
-implementation.)
+`K = 1` is the single conditional add of the classic shift-add walk.
+Above that the rows want reducing in **carry-save**, resolving through
+one adder at the end of the step — chaining a carry-propagate add per
+row instead costs a full adder delay per bit retired, which is most of
+what retiring more bits per step was meant to buy.
+
+For **signed** MUL: sign-magnitude — negate both operands at the start
+if negative, multiply, negate the product if signs differed. (Booth's
+algorithm eliminates the negate cycles but adds gates.)
 
 ## Division — restoring with borrow select (unsigned)
 
@@ -332,6 +344,11 @@ trick) outweighs the benefit on the narrowing branch alone.
 
 ## Discrete Chip-Count Estimate
 
+At one multiplier bit per step. Each extra bit costs a gated row and a
+carry-save level — a row of AND gates plus a rank of full adders per
+32-bit slice — which is why the discrete build stays at one and the
+count below does not track the FPGA cores.
+
 | Block                               | Implementation                         | Chips |
 |-------------------------------------|----------------------------------------|:-----:|
 | `accum_lo` 32-bit shift register    | 4× 74HC299 (8-bit universal shift)     | 4     |
@@ -359,7 +376,8 @@ worth it for the first build.
 - **ISA spec:** finalized (this document + `instruction-encoding.md` +
   `instruction-set.md`).
 - **RTL (unit):** implemented (`hw/rtl/common/divmul.sv`) — the
-  algorithm, handshake, and datapath described above. Promoted to
+  algorithm, handshake, and datapath described above, with the
+  multiply step count set per instantiation by `MUL_BITS_PER_STEP`. Promoted to
   `hw/rtl/common/` once Penumbra/2 instantiates it.
 - **Penumbra/1 driving:** microcode implemented. Dispatch slots 0x40
   (MUL), 0x42 (MULU), 0x44 (DIV), 0x46 (DIVU) hold the 3-µop routines
