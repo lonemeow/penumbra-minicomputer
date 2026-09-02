@@ -18,10 +18,11 @@
 #
 # Usage:
 #   hw/tools/seed-sweep.sh BOARD=ulx3s CORE=penumbra2 \
-#       [SEEDS="0 1 2 ..."] [JOBS=4]
+#       [SEEDS="0 1 2 ..."] [JOBS=4] [PNR_TIMEOUT=900]
 #
 # Every other argument passes through to make.  JOBS is bounded by
 # memory, not cores — each nextpnr run holds the whole design.
+# PNR_TIMEOUT bounds one seed (see the pattern rule in the Makefile).
 set -eu
 
 SEEDS=""
@@ -47,7 +48,12 @@ targets=""
 for s in $SEEDS; do
     targets="$targets build/$TOP.s$s.config"
 done
-make -j"$JOBS" $ARGS $targets
+
+# -k: the seeds are independent placements, so one that fails or trips
+# PNR_TIMEOUT must not stop the rest — a dead seed is a result the summary
+# reports, not an error worth abandoning the sweep for.  The sweep's own exit
+# status follows make's, so a failed seed still surfaces to the caller.
+make -k -j"$JOBS" $ARGS $targets || sweep_status=$?
 
 # Cell counts come out of packing, which runs before placement, so
 # every seed reports the same utilisation — print it once, from
@@ -65,11 +71,16 @@ done
 echo "── fmax per seed ($TOP) ──"
 for s in $SEEDS; do
     rpt="build/$TOP.s${s}_timing.json"
+    log="build/$TOP.s${s}.log"
     if [ -f "$rpt" ]; then
         line=$(hw/tools/timing-report.sh "$rpt" 0 2>/dev/null |
                grep -F '$glbnet$clk:' | head -1 || true)
         echo "seed $s:${line:-  no fmax line in $rpt}"
+    elif [ -f "$log" ] && grep -q 'TIMED OUT' "$log"; then
+        echo "seed $s:  timed out — placement unusable for this netlist"
     else
         echo "seed $s:  no report ($rpt missing)"
     fi
 done
+
+exit "${sweep_status:-0}"

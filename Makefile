@@ -1125,15 +1125,32 @@ endif
 # long-running and unlabelled, so interleaved they cannot be attributed
 # back to a seed. A failing seed prints its tail so the redirect never
 # swallows the reason.
+#
+# PNR_TIMEOUT bounds each run. nextpnr's router can fail to terminate on a
+# particular (netlist, seed) pair — and since placement is deterministic that
+# seed stays poisoned for that netlist, so waiting never pays. Without a bound
+# one such seed blocks a whole sweep. A run that trips it deletes its outputs:
+# they would otherwise be a previous sweep's, and the summary reads them back
+# as this one's result.
+PNR_TIMEOUT ?= 900
 $(BUILD_DIR)/$(TOP).s%.config: $(BUILD_DIR)/$(TOP).json $(LPF) $(LPF_DESIGN) $(PREPACK)
 	@echo "[sweep] seed $* → $(BUILD_DIR)/$(TOP).s$*.log"
-	@$(NEXTPNR_BASE) \
+	@timeout $(PNR_TIMEOUT) $(NEXTPNR_BASE) \
 		--seed $* \
 		--json $< --textcfg $@ \
 		--report $(BUILD_DIR)/$(TOP).s$*_timing.json --detailed-timing-report \
-		> $(BUILD_DIR)/$(TOP).s$*.log 2>&1 \
-	|| { echo "[sweep] seed $* FAILED — tail of $(BUILD_DIR)/$(TOP).s$*.log:"; \
-	     tail -20 $(BUILD_DIR)/$(TOP).s$*.log; exit 1; }
+		> $(BUILD_DIR)/$(TOP).s$*.log 2>&1; \
+	st=$$?; \
+	if [ $$st -ne 0 ]; then \
+	     rm -f $@ $(BUILD_DIR)/$(TOP).s$*_timing.json; \
+	fi; \
+	if [ $$st -eq 124 ]; then \
+	     echo "[sweep] seed $* TIMED OUT after $(PNR_TIMEOUT)s" \
+	        | tee -a $(BUILD_DIR)/$(TOP).s$*.log; exit 1; \
+	elif [ $$st -ne 0 ]; then \
+	     echo "[sweep] seed $* FAILED — tail of $(BUILD_DIR)/$(TOP).s$*.log:"; \
+	     tail -20 $(BUILD_DIR)/$(TOP).s$*.log; exit 1; \
+	fi
 
 # Echo the resolved artifact TOP name (consumed by seed-sweep.sh).
 .PHONY: print-top
