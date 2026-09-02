@@ -943,13 +943,13 @@ FPGA_SPLASH_TOPS = ulx3s_video_test_top
 # and the only one with real margin over the 27 MHz safety floor.
 #
 # The gen2 pair at their 37.5 MHz CPU_HZ: gen2 spans 33.2-39.63 MHz and
-# clears the target on 4 seeds of 10, gen2.5 spans 35.12-38.85 and clears
-# on 3. Each pin below is its sweep's best. Both run closer to the edge
-# than gen1 does — 5.7% margin for gen2, 3.6% for gen2.5 — so a placement
+# clears the target on 4 seeds of 10, gen2.5 spans 33.9-39.19 and clears
+# on 4. Each pin below is its sweep's best. Both run closer to the edge
+# than gen1 does — 5.7% margin for gen2, 4.5% for gen2.5 — so a placement
 # regression here costs a working bitstream, not just headroom.
 DEFAULT_SEED_ulx3s_penumbra1_top   := 5
 DEFAULT_SEED_ulx3s_penumbra2_top   := 2
-DEFAULT_SEED_ulx3s_penumbra2_5_top := 6
+DEFAULT_SEED_ulx3s_penumbra2_5_top := 5
 
 
 # BOARD/CORE porcelain → TOP derivation (CORE defaults to penumbra2

@@ -24,7 +24,7 @@ module sequencer
     output logic        o_fetch_go,       // Request new instruction fetch
 
     // ── Datapath status inputs ───────────────────────────────
-    input  logic        i_divmul_busy,       // divmul iteration in progress
+    input  logic        i_divmul_done,       // divmul completed (result bundle valid)
     input  logic        i_mem_busy,       // Memory/cache busy
     input  logic        i_mem_fault,      // MMU fault (TLB miss / protection)
     input  logic        i_arith_fault,    // divmul DIV0 → VEC_ARITH
@@ -59,6 +59,7 @@ module sequencer
     output logic [2:0]  o_pc_src,
     output logic [1:0]  o_sys_op,        // 00=NONE, 01=SPR_WRITE, 10=SYS_READ, 11=SYS_WRITE
     output logic        o_divmul_start,
+    output logic        o_divmul_complete,  // the divmul micro-op's unit has completed
     output logic        o_pc_load,
 
     // ── State output ────────────────────────────────────────────
@@ -153,8 +154,29 @@ module sequencer
     localparam logic [2:0] BR_ILLEGAL = 3'd7;
 
     // ── Unified busy signal ──────────────────────────────────
+    // i_divmul_done still describes the previous operation on the cycle a
+    // divmul starts, so the sequencer covers that cycle itself. The micro-
+    // routine holds o_divmul_start high across the whole STALL, making the
+    // field's rising edge the routine's first cycle.
+    logic divmul_launch, divmul_launched_q;
+    assign divmul_launch = o_divmul_start & ~divmul_launched_q;
+
+    always_ff @(posedge i_clk) begin
+        if (i_rst)                divmul_launched_q <= 1'b0;
+        else if (!o_divmul_start) divmul_launched_q <= 1'b0;
+        else if (divmul_launch)   divmul_launched_q <= 1'b1;
+    end
+
     logic busy;
-    assign busy = i_divmul_busy | i_mem_busy;
+    assign busy = divmul_launch | ~i_divmul_done | i_mem_busy;
+
+    // o_fault is held, not pulsed, so the DIV0 indication is actionable only
+    // at completion and only while the divmul micro-op is executing. Testing
+    // it raw aborts every later STALL for as long as the flag stands -- the
+    // exception entry's own vector load included.
+    logic arith_fault_now;
+    assign o_divmul_complete = o_divmul_start & ~divmul_launch & i_divmul_done;
+    assign arith_fault_now   = i_arith_fault & o_divmul_complete;
 
     // ── Branch condition decode ──────────────────────────────
     // Determines: should we go to fetch? should we advance micro-PC?
@@ -169,7 +191,7 @@ module sequencer
             BR_SEQ:   advance = 1'b1;
             BR_FETCH: go_fetch = 1'b1;
             BR_STALL: begin
-                if (i_mem_fault || i_arith_fault)
+                if (i_mem_fault || arith_fault_now)
                     go_fetch = 1'b1;  // Abort on MMU or arithmetic (divmul) fault
                 else if (!busy)
                     advance = 1'b1;
@@ -312,25 +334,26 @@ module sequencer
     //     becoming ready) — every waiting cycle is an instruction-fetch
     //     stall.
     //   • In S_EXEC a `BR_STALL` micro-op holds the micro-PC while `busy`
-    //     (`i_divmul_busy | i_mem_busy`) is asserted and no fault aborts
-    //     it.  The held micro-op's own decoded fields say which unit it is
-    //     waiting on:
+    //     (`divmul_launch | ~i_divmul_done | i_mem_busy`) is asserted and no
+    //     fault aborts it.  The held micro-op's own decoded fields say which
+    //     unit it is waiting on:
     //         load   → uw_mem_read     (a data read)
     //         store  → uw_mem_write    (a data write)
-    //         divmul → i_divmul_busy   (a multi-cycle execution unit)
-    // A fault (`i_mem_fault` / `i_arith_fault`) aborts the stall to fetch
+    //         divmul → divmul_launch | ~i_divmul_done (a multi-cycle
+    //                  execution unit, including its launch cycle)
+    // A fault (`i_mem_fault` / `arith_fault_now`) aborts the stall to fetch
     // rather than holding, so a faulting cycle is not a stall.  Helper
     // signals already in scope: `state`, `i_ir_valid`, `executing`,
-    // `uw_branch`, `busy`, `uw_mem_read`, `uw_mem_write`, `i_divmul_busy`.
+    // `uw_branch`, `busy`, `uw_mem_read`, `uw_mem_write`, `i_divmul_done`.
 
     logic exec_stalled;
     assign exec_stalled = executing && (uw_branch == BR_STALL) && busy
-                          && !(i_arith_fault || i_mem_fault);
+                          && !(arith_fault_now || i_mem_fault);
 
     assign o_stall_ifetch = (state == S_FETCH) && !i_ir_valid;
     assign o_stall_load   = exec_stalled && uw_mem_read;
     assign o_stall_store  = exec_stalled && uw_mem_write;
-    assign o_stall_funit  = exec_stalled && i_divmul_busy;
+    assign o_stall_funit  = exec_stalled && (divmul_launch || !i_divmul_done);
 
     // Invariant: at most one stall cause is asserted in any cycle.
     assert property (@(posedge i_clk) disable iff (i_rst)

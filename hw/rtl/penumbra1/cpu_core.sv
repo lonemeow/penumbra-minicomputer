@@ -184,7 +184,7 @@ module cpu_core
     logic [7:0]  dispatch_addr;
 
     // Datapath status
-    logic        divmul_busy, cond_result, sr_s, sr_i, ei_shadow;
+    logic        divmul_done, divmul_complete, cond_result, sr_s, sr_i, ei_shadow;
     logic        divmul_fault;   // divmul DIV0 → VEC_ARITH
     logic [31:0] pc;
 
@@ -223,7 +223,7 @@ module cpu_core
         .i_ir_valid      (ir_valid),
         .i_dispatch_addr (effective_dispatch),
         .o_fetch_go      (fetch_go),
-        .i_divmul_busy   (divmul_busy),
+        .i_divmul_done   (divmul_done),
         .i_mem_busy      (cache_busy),
         .i_mem_fault     (data_fault),
         .i_arith_fault   (divmul_fault),
@@ -252,6 +252,7 @@ module cpu_core
         .o_pc_src        (ctl_pc_src),
         .o_sys_op        (ctl_sys_op),
         .o_divmul_start     (ctl_divmul_start),
+        .o_divmul_complete  (divmul_complete),
         .o_pc_load       (ctl_pc_load),
         .o_fetch_active  (fetch_active),
         .o_stall_ifetch  (stall_ifetch),
@@ -442,7 +443,10 @@ module cpu_core
     logic        arith_except;
     logic        arith_pending;
 
-    assign arith_except = divmul_fault && !arith_pending;
+    // o_fault is held, not pulsed. Unqualified it would raise VEC_ARITH on the
+    // launch cycle from a previous divide's flag, and again the moment
+    // arith_pending clears inside the handler.
+    assign arith_except = divmul_fault && divmul_complete && !arith_pending;
 
     always_ff @(posedge i_clk) begin
         if (i_rst)
@@ -819,7 +823,7 @@ module cpu_core
         .o_mem_wdata    (dp_mem_wdata),
 
         // Status outputs
-        .o_divmul_busy  (divmul_busy),
+        .o_divmul_done  (divmul_done),
         .o_divmul_fault (divmul_fault),
         .o_sr_s         (sr_s),
         .o_sr_i         (sr_i),

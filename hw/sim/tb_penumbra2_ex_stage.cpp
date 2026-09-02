@@ -213,8 +213,8 @@ int main() {
     // Regression for the EX divmul-busy stall vs. MEM back-pressure race: an
     // older op holds EX/MEM while MEM back-pressures EX (i_stall_in — e.g. a WB
     // dual-write hold propagating up), and a divmul arrives at EX's input. The
-    // divmul asserts o_busy combinationally on its first cycle, so EX takes its
-    // divmul-busy stall branch — which must still honour the back-pressure and
+    // divmul holds EX from its own launch decision on the first cycle, so EX
+    // takes its divmul stall branch — which must still honour the back-pressure and
     // HOLD the EX/MEM slot, exactly like the plain i_stall_in branch above. The
     // pipeline interlocks make this adjacency rare (only a cache-state-dependent
     // timing reaches it), so it is forced directly here.
@@ -513,15 +513,20 @@ int main() {
     check("div_quot", dut->o_result, 3);
     check("div_rem",  dut->o_result_aux, 2);
 
-    // DIV0: 10 / 0 → VEC_ARITH, no iteration (advances in one cycle).
+    // DIV0: 10 / 0 → VEC_ARITH. The unit iterates zero times, but o_done still
+    // describes the previous operation on the launch cycle, so EX holds that one
+    // itself and advances with the fault the cycle after.
     flush_bubble(dut);
     dut->i_op_class = OPC_DIVMUL; dut->i_divmul_op = DM_DIV;
     dut->i_op_a = 10; dut->i_op_b = 0;
     dut->i_gpr_we = 1; dut->i_valid = 1;
     dut->eval();
-    check("div0_no_stall", dut->o_local_stall, 0);          // busy never rises
-    check("div0_no_funit", dut->o_funit_stall, 0);
+    check("div0_launch_stall", dut->o_local_stall, 1);   // launch cycle held locally
+    check("div0_launch_funit", dut->o_funit_stall, 1);
     tick(dut); dut->eval();
+    check("div0_completed",     dut->o_local_stall, 0);  // no iteration to wait out
+    check("div0_funit_cleared", dut->o_funit_stall, 0);
+    tick(dut); dut->i_valid = 0; dut->eval();            // advance edge latches the fault
     check("div0_valid",   dut->o_valid, 1);
     check("div0_fault",   dut->o_fault_pending, 1);
     check("div0_vec",     dut->o_fault_vec, VEC_ARITH);

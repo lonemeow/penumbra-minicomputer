@@ -25,13 +25,13 @@ the remainder. Writes to `R0` are silently dropped, which is how the
 
 The unit is a **peer to the ALU**, not part of it: a separate block on
 the register-bus fabric with its own operand latches and FSM, driven
-by a 1-cycle `start` pulse and reporting a `busy` level (the ALU
-itself is single-cycle and never asserts busy). The CPU's control
-logic latches operands, pulses `start`, then holds until `busy` falls
-— looking, from the control side, like any other busy-asserting
-multi-cycle operation that joins the unified busy/STALL gate
-(`cache_busy | divmul_busy | …`). How each generation expresses that
-driving differs — see [Driving the Unit](#driving-the-unit-per-generation).
+by a `start` pulse and reporting completion through a **registered**
+`o_done` level (the ALU is single-cycle and always looks done). That
+completion joins the unified busy/STALL gate (`cache_busy | … `) the
+way any other multi-cycle operation does. Cycle semantics are in
+[Completion Signalling](#completion-signalling); how each generation
+expresses the driving differs — see
+[Driving the Unit](#driving-the-unit-per-generation).
 
 ## External Interface
 
@@ -41,8 +41,8 @@ driving differs — see [Driving the Unit](#driving-the-unit-per-generation).
 | `i_b[31:0]`         | CPU → divmul   | Second operand: multiplicand / divisor                    |
 | `i_op[4:0]`         | CPU → divmul   | Operation select, in the core-internal ALU-field encoding: MUL `01101`, MULU `01110`, DIV `01111`, DIVU `10000` |
 | `i_start`           | CPU → divmul   | 1-cycle pulse — latch operands, begin iteration           |
-| `o_busy`            | divmul → CPU   | Held high during iteration; falling edge = done           |
-| `o_fault`           | divmul → CPU   | DIV0 detected; raises `VEC_ARITH`                         |
+| `o_done`            | divmul → CPU   | Registered. Low while an operation is in flight, high from the cycle it completes until the next start |
+| `o_fault`           | divmul → CPU   | Registered. Valid with `o_done`: the completed operation was a divide by zero; raises `VEC_ARITH` |
 | `o_result_lo[31:0]` | divmul → W-bus | Low half  (quotient / product low)                        |
 | `o_result_hi[31:0]` | divmul → W-bus | High half (remainder / product high)                      |
 | `o_flag_n`, `o_flag_z` | divmul → SR | Flag outputs (latched on `flag_w_en` in writeback)        |
@@ -58,6 +58,53 @@ third operand `Rdh` names only the *destination* for the high half and
 is consumed by the writeback µ-op, not as a hardware input. Results
 reach the register file through the W-bus mux (`wb_src`), alongside the
 ALU and load-data sources.
+
+## Completion Signalling
+
+The unit presents a **result bundle** — `o_done`, `o_fault`,
+`o_result_lo`, `o_result_hi`, `o_flag_z`, `o_flag_n` — describing the
+most recent operation. Every member takes its value on the cycle that
+operation completes and holds it until the next accepted start. None
+is a pulse, so none has to be caught on a particular cycle: a consumer
+back-pressured by something downstream can commit late.
+
+`o_done` is the member that says the rest are meaningful. It and
+`o_fault` are **registered**, so on the cycle a start is issued the
+bundle still describes the *previous* operation. The consumer holds
+that cycle from its own launch decision — it is the party asserting
+`i_start` — and consults `o_done` only from the next cycle on.
+
+The unit spends one cycle latching operands, one cycle per iteration
+step, and completes on the cycle after the final step. Writing that
+cycle as `N`:
+
+| Cycle | `i_start` | `o_done` | `o_fault` | Result outputs | Consumer |
+|:-----:|:---------:|:--------:|:---------:|----------------|----------|
+| `0`         | 1 | *prev* | *prev* | *prev* | Holds — from its own launch decision, not from `o_done` |
+| `1`…`N-1`   | 0 | 0 | 0 | stale | Holds while `!o_done` |
+| `N` onward  | 0 | **1** | 0 | **valid** | Commits both halves and the flags; advances |
+
+A divide by zero is not a separate path — it is an operation with
+nothing to compute, so it completes on the first cycle it can, with
+`o_fault` set instead of results:
+
+| Cycle | `i_start` | `o_done` | `o_fault` | Result outputs | Consumer |
+|:-----:|:---------:|:--------:|:---------:|----------------|----------|
+| `0`         | 1 | *prev* | *prev* | *prev* | Holds — from its own launch decision |
+| `1` onward  | 0 | **1** | **1** | unchanged | Commits nothing; raises `VEC_ARITH` |
+
+One consumer rule covers both: *hold the launch cycle
+unconditionally, then hold while `!o_done`; on the first cycle
+`o_done` is high, commit the results or take the fault according to
+`o_fault`.* A consumer never needs to know the iteration count, and
+the unit never needs to know how the consumer stalls.
+
+Because the bundle is held rather than pulsed, a consumer must qualify
+`o_fault` with which instruction it is completing — the same
+qualification it applies to the result halves before committing them.
+An unqualified test raises `VEC_ARITH` on the launch cycle from the
+previous divide's flag, and again once the pending flag clears inside
+the handler.
 
 ## Internal Datapath
 
@@ -93,12 +140,13 @@ ALU and load-data sources.
                                        or right by 1 each iteration)
 
       ┌──────────┐
-      │ iter_cnt │   6-bit down-counter, init = 32, drives o_busy
-      └──────────┘
+      │ iter_cnt │   6-bit down-counter, init = 32; its terminal
+      └──────────┘   step registers o_done
 
       ┌──────────────────────────────────────────┐
-      │  Fault detect (combinational at start):  │
-      │    o_fault ← (op ∈ DIV/DIVU) && (B == 0) │
+      │  Fault detect (evaluated at start,       │
+      │  registered into the result bundle):      │
+      │    fault ← (op ∈ DIV/DIVU) && (B == 0)   │
       └──────────────────────────────────────────┘
 
 `accum_hi` starts at 0 unconditionally (multiply has no dividend high
@@ -179,8 +227,10 @@ sign rules leave unnegated) and does not fault.
 
 ## Driving the Unit (per generation)
 
-How a core sequences `start`, the busy-wait, and the two-result commit
-is generation-specific and lives in that core's docs:
+How a core sequences `start`, the launch-cycle hold, the wait for
+`o_done` and the two-result commit is generation-specific and lives in
+that core's docs. What every generation shares is the rule in
+[Completion Signalling](#completion-signalling):
 
 - **Penumbra/1** — a 3-µop microcode routine per opcode (dispatch slots
   `0x40`–`0x46` with a shared high-half writeback tail). See the
@@ -191,22 +241,26 @@ is generation-specific and lives in that core's docs:
   [`penumbra2/regfile.md`](./penumbra2/regfile.md).
 
 The unit itself is unchanged between them: it presents `o_result_lo`
-and `o_result_hi` combinationally once `busy` falls, and the consumer
-commits them per its own writeback policy. Writing the high half to
+and `o_result_hi` from the cycle `o_done` rises until the next accepted
+start, and the consumer commits them per its own writeback policy. Writing the high half to
 `R0` (the 2-operand form) is dropped by the register file with no
 special-casing in either core.
 
 ## Arithmetic Faults — `VEC_ARITH`
 
-`o_fault` is a **single-cycle pulse on the start cycle**: the
-divisor-zero test is combinational, so a faulting divide never
-asserts `o_busy` and never iterates. The contract to the CPU is
-generation-neutral: a start that pulses `o_fault` commits nothing and
-raises `VEC_ARITH`; a start without it proceeds normally — hold while
-`busy`, commit the result when `busy` falls. The fault indication
-must be a pulse, not a held level: the CPU latches it at start, and a
-persisting `o_fault` would re-trigger the trap after the pending
-latch clears.
+`o_fault` is a **held member of the result bundle**, valid with
+`o_done` and cleared only by the next accepted start. The
+divisor-zero test is evaluated combinationally at start but reaches
+the output through a flop. A faulting divide is not a separate path:
+it is an operation with nothing to compute, so it iterates zero times
+and completes on the first cycle it can, which is where the consumer
+is already looking for results or a fault. The contract to the CPU is
+generation-neutral and identical to the non-faulting one: hold the
+launch cycle, then hold while `!o_done`; on the first cycle `o_done`
+is high, `o_fault` says whether to commit the results or raise
+`VEC_ARITH`. Because it is held rather than pulsed, the consumer must
+qualify it with which instruction it is completing — otherwise it
+would re-raise the trap once the pending flag clears in the handler.
 
 EPC points at the trapping `DIV` instruction. The kernel handler
 delivers `SIGFPE` and leaves EPC alone, so a userland `SIGFPE` handler
@@ -311,10 +365,10 @@ worth it for the first build.
   (MUL), 0x42 (MULU), 0x44 (DIV), 0x46 (DIVU) hold the 3-µop routines
   with a shared high-half writeback tail at 0x49; the sequencer drives
   `divmul_start`, stalls on
-  `i_divmul_busy`, aborts on `o_fault → VEC_ARITH`, and routes results
+  `i_divmul_done`, aborts on `o_fault → VEC_ARITH`, and routes results
   through the `wb_src` mux (`DML_LO`/`DML_HI`).
 - **Penumbra/2 driving:** EX hosts the unit behind the same
-  start/busy handshake, decoding the 2-bit ISA sub-opcode selector
+  start/done handshake, decoding the 2-bit ISA sub-opcode selector
   into the 5-bit op codes; the two result halves sequence through the
   single regfile write port at WB.
 - **ISS:** implements MUL/MULU/DIV/DIVU end-to-end with both halves and

@@ -73,7 +73,7 @@ module datapath
     // ══════════════════════════════════════════════════════════════
     // Status outputs (to micro-sequencer / fetch unit)
     // ══════════════════════════════════════════════════════════════
-    output logic        o_divmul_busy,     // divmul iteration in progress
+    output logic        o_divmul_done,     // divmul completed (result bundle valid)
     output logic        o_divmul_fault, // divmul DIV0 fault → VEC_ARITH
     output logic        o_sr_s,         // Supervisor bit
     output logic        o_sr_i,         // Interrupt enable bit
@@ -526,11 +526,11 @@ module datapath
 
     // ── divmul peer unit (hardware MUL/DIV) ───────────────────
     // A peer on the same A/B buses. It decodes MUL/MULU/DIV/DIVU from i_alu_op
-    // and shares the ALU's start/busy handshake. Its results are *writeback
-    // sources*: they reach the register file through the W-bus mux (wb_src),
-    // alongside the ALU result and load data. divmul does NOT drive the R-bus,
-    // which stays purely the ALU's result bus.
-    logic        divmul_busy;
+    // and reports completion through its registered start/done handshake. Its
+    // results are *writeback sources*: they reach the register file through the
+    // W-bus mux (wb_src), alongside the ALU result and load data. divmul does
+    // NOT drive the R-bus, which stays purely the ALU's result bus.
+    logic        divmul_done;
     logic [31:0] divmul_lo;       // product low / quotient
     logic [31:0] divmul_hi;       // product high / remainder
     logic        divmul_flag_z, divmul_flag_n;
@@ -542,7 +542,7 @@ module datapath
         .i_b         (b_bus),
         .i_op        (i_alu_op),
         .i_start     (i_divmul_start),
-        .o_busy      (divmul_busy),
+        .o_done      (divmul_done),
         .o_fault     (o_divmul_fault),
         .o_result_lo (divmul_lo),
         .o_result_hi (divmul_hi),
@@ -555,7 +555,7 @@ module datapath
     assign r_bus = alu_result;
 
     // The ALU is purely combinational; only divmul stalls the pipeline.
-    assign o_divmul_busy = divmul_busy;
+    assign o_divmul_done = divmul_done;
 
     // Flags follow the writeback source: a divmul writeback (wb_src[1]=1, i.e.
     // DML_LO / DML_HI) latches the divmul's Z/N with C/V cleared; otherwise the

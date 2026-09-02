@@ -344,10 +344,10 @@ module penumbra3_ex_stage
     // ================================================================
     // MUL/MULU/DIV/DIVU run on the shared multi-cycle divmul unit. EX holds
     // i_start high while the divmul is the EX insn -- the unit edge-detects it,
-    // so it triggers once -- and stalls while o_busy. The cycle o_busy falls,
+    // so it triggers once -- and stalls until o_done. The cycle o_done rises,
     // both halves are valid to latch (low -> result, high -> result_aux). A
-    // DIV0 never iterates: o_fault pulses on the start cycle with o_busy low,
-    // completing in one cycle carrying VEC_ARITH.
+    // DIV0 iterates zero times and so completes at once, carrying VEC_ARITH in
+    // o_fault instead of results.
     //
     // The unit's 5-bit op is the encoding divmul.sv decodes, kept local here
     // (as it is there) rather than in the shared ISA package. divmul_op
@@ -360,7 +360,7 @@ module penumbra3_ex_stage
     logic        divmul_in_ex;   // a valid divmul occupies EX (the level)
     logic        dm_started;     // the divmul in EX has already been launched
     logic [4:0]  dm_op;
-    logic        dm_start, dm_busy, dm_fault, dm_z, dm_n;
+    logic        dm_start, dm_done, dm_fault, dm_z, dm_n;
     logic [31:0] dm_lo, dm_hi;
 
     // Declared here because the divmul launch FF references `advance`; both are
@@ -398,7 +398,7 @@ module penumbra3_ex_stage
         .i_b         (op_b),
         .i_op        (dm_op),
         .i_start     (dm_start),
-        .o_busy      (dm_busy),
+        .o_done      (dm_done),
         .o_fault     (dm_fault),
         .o_result_lo (dm_lo),
         .o_result_hi (dm_hi),
@@ -406,11 +406,10 @@ module penumbra3_ex_stage
         .o_flag_n    (dm_n)
     );
 
-    // While the unit is busy EX holds the insn; it advances the cycle busy
-    // clears (with results, or a DIV0 fault). The hold tracks the level
-    // (divmul-in-EX), not the launch pulse.
+    // o_done still describes the previous operation on the launch cycle, so EX
+    // covers that cycle from dm_start, the launch decision it already owns.
     logic dm_stall;
-    assign dm_stall      = divmul_in_ex & dm_busy;
+    assign dm_stall      = divmul_in_ex & (dm_start | ~dm_done);
     assign o_funit_stall = dm_stall;
 
     // ================================================================
@@ -499,9 +498,9 @@ module penumbra3_ex_stage
         mem1_payload_d.phys_dst_aux    = i_phys_dst_aux;
         mem1_payload_d.phys_dst_aux_we = i_phys_dst_aux_we;
         mem1_payload_d.pc              = i_pc;
-        mem1_payload_d.fault_pending   = i_fault_pending | (is_divmul & dm_fault)
+        mem1_payload_d.fault_pending   = i_fault_pending | (divmul_in_ex & dm_fault)
                                        | i_bundle.is_trap | i_irq_inject;
-        mem1_payload_d.fault_vec       = (is_divmul & dm_fault)               ? VEC_ARITH
+        mem1_payload_d.fault_vec       = (divmul_in_ex & dm_fault)               ? VEC_ARITH
                                        : (i_fault_pending | i_bundle.is_trap) ? i_fault_vec
                                        : i_irq_inject                         ? i_irq_vec
                                        :                                        i_fault_vec;

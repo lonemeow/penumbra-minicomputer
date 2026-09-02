@@ -1,20 +1,19 @@
 // Penumbra MUL/DIV peer unit (divmul) — sequential 32-cycle multiply/divide
 //
 // A *peer* to the ALU (see doc/internals/divmul.md), not part of it: it shares
-// the register-bus fabric but has its own start/busy handshake, so the ALU
+// the register-bus fabric but has its own start/done handshake, so the ALU
 // stays single-cycle and off this unit's multi-cycle critical path.
 //
-// Protocol (the sequencer drives the unit via the divmul_start micro-word
-// field and stalls on i_divmul_busy):
-//   - Pulse i_start for one cycle with i_op and operands valid. The unit
-//     latches them and begins iterating; o_busy asserts the next cycle.
-//   - o_busy holds high while iterating; its falling edge means the results
-//     are valid. The sequencer STALLs on o_busy.
-//   - o_fault asserts on a divide fault (DIV0). The unit does not iterate;
-//     the sequencer raises VEC_ARITH instead of writing back.
+// o_done, o_fault and the result/flag outputs form one bundle describing the
+// most recent operation, valid from its completion cycle until the next
+// accepted start. o_done and o_fault are registered so that nothing the
+// consumer drives reaches its stall gate combinationally through this unit;
+// the consequence is that the bundle still describes the *previous* operation
+// on the cycle a start is issued, and the consumer covers that cycle itself.
+// Cycle tables: doc/internals/divmul.md, "Completion Signalling".
 //
-// Both result halves are exposed continuously once o_busy falls; the datapath
-// muxes which one onto the R-bus during each of the two writeback cycles.
+// The datapath muxes the two result halves onto the R-bus during each of the
+// two writeback cycles.
 //
 // Operand roles (per divmul.md):
 //   i_a = multiplier   (MUL) / dividend (DIV)
@@ -60,8 +59,9 @@ module divmul
     input  logic        i_start,    // 1-cycle pulse: latch operands, begin
 
     // ── Status ───────────────────────────────────────────────────
-    output logic        o_busy,     // high while iterating
-    output logic        o_fault,    // DIV0 → VEC_ARITH
+    output logic        o_done,     // low while iterating; high from completion
+                                    // until the next start (result bundle valid)
+    output logic        o_fault,    // valid with o_done: DIV0 → VEC_ARITH
 
     // ── Results (both halves valid once o_busy falls) ────────────
     output logic [31:0] o_result_lo,// Rd  : product low  / quotient
@@ -112,6 +112,10 @@ module divmul
     logic        op_is_div;   // latched: selects the iteration step + output mode
     logic        neg_xor;     // latched: sign(a)^sign(b) — product / quotient sign
     logic        neg_a;       // latched: sign(a)         — remainder sign
+    logic        done_q;      // drives o_done: low while an operation is in
+                              // flight, high from the cycle it completes
+    logic        fault_q;     // drives o_fault: set with done_q when the
+                              // completed operation was a divide by zero
 
     // Start on the *rising edge* of i_start. The integrated micro-routine holds
     // i_start high across the whole STALL (it can't pulse for one cycle inside a
@@ -120,6 +124,13 @@ module divmul
     logic        i_start_q;
     logic        start_pulse;
     assign start_pulse = i_start & ~i_start_q;
+
+    // final_step is the cycle the last iteration step writes accum, so the
+    // results are valid on the cycle *after* it.
+    logic        start_accepted, start_faulting, final_step;
+    assign start_accepted = start_pulse && (is_mul || is_div) && !div_fault;
+    assign start_faulting = start_pulse && div_fault;
+    assign final_step     = (state == S_ITER) && (iter == 6'd1);
 
     // ── Iteration step candidates (combinational) ───────────────
     // Both are computed every cycle; op_is_div selects which feeds accum.
@@ -168,14 +179,28 @@ module divmul
             op_is_div <= 1'b0;
             neg_xor   <= 1'b0;
             neg_a     <= 1'b0;
+            done_q    <= 1'b1;   // nothing in flight
+            fault_q   <= 1'b0;
             i_start_q <= 1'b0;
         end else begin
             i_start_q <= i_start;
+
+            // A faulting divide takes the same shape as any other operation,
+            // differing only in completing at once.
+            if (start_accepted) begin
+                done_q  <= 1'b0;     // in flight
+                fault_q <= 1'b0;
+            end else if (start_faulting) begin
+                done_q  <= 1'b1;     // nothing to compute — complete at once
+                fault_q <= 1'b1;
+            end else if (final_step) begin
+                done_q  <= 1'b1;
+            end
+
             case (state)
                 S_IDLE: begin
-                    // A faulting divide does not iterate (stays IDLE); o_fault
-                    // pulses combinationally so the sequencer aborts to VEC_ARITH.
-                    if (start_pulse && (is_mul || is_div) && !(is_div && div_fault)) begin
+                    // A faulting divide loads nothing and stays IDLE.
+                    if (start_accepted) begin
                         op_is_div <= is_div;
                         op_b      <= b_mag;            // == i_b when unsigned
                         // accum_lo holds the multiplier/dividend magnitude; hi
@@ -190,7 +215,7 @@ module divmul
                 S_ITER: begin
                     accum <= accum_next;
                     iter  <= iter - 6'd1;
-                    if (iter == 6'd1)
+                    if (final_step)
                         state <= S_IDLE;   // 32nd step completes this cycle
                 end
                 default: state <= S_IDLE;
@@ -199,13 +224,7 @@ module divmul
     end
 
     // ── Outputs ──────────────────────────────────────────────────
-    // Busy is combinational on the start cycle (like the cache asserting busy
-    // the moment mem_read goes high), so a combined start+STALL micro-op holds
-    // the very first cycle — before state registers into S_ITER. It falls the
-    // cycle after the final step writes accum. A faulting divide never iterates,
-    // so it stays not-busy and signals via o_fault instead.
-    assign o_busy = (state != S_IDLE)
-                 || (start_pulse && (is_mul || is_div) && !(is_div && div_fault));
+    assign o_done = done_q;
 
     // Multiply negates the whole 64-bit product (borrow propagates lo→hi).
     // Signed divide negates quotient and remainder *independently* — they are
@@ -221,10 +240,19 @@ module divmul
     assign o_flag_z    = (o_result_lo == 32'd0);
     assign o_flag_n    = o_result_lo[31];
 
-    // One-cycle pulse on the start cycle of a faulting divide. The sequencer's
-    // STALL aborts to VEC_ARITH the same cycle and cpu_core latches it, so the
-    // fault must NOT persist — a held level would re-trigger once the pending
-    // latch clears inside the handler.
-    assign o_fault = start_pulse && is_div && div_fault;
+    // Held, not pulsed, so a consumer must qualify it with which instruction it
+    // is completing — exactly as it does the result halves.
+    assign o_fault = fault_q;
+
+    // A completed operation stays completed, so a back-pressured consumer can
+    // commit later than the completion cycle.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (done_q && !start_accepted && !start_faulting) |=> done_q)
+        else $error("divmul: o_done fell without a start");
+
+    // The fault flag belongs to the operation that set it.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        start_accepted |=> !fault_q)
+        else $error("divmul: o_fault survived a non-faulting start");
 
 endmodule

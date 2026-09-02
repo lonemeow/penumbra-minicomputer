@@ -88,7 +88,7 @@ int main() {
     check("reset_pc", d->o_pc, 0xFFFF0000);
     check1("reset_sr_s", d->o_sr_s, 1);     // Supervisor mode
     check1("reset_sr_i", d->o_sr_i, 0);     // Interrupts disabled
-    check1("reset_busy", d->o_divmul_busy, 0);
+    check1("reset_divmul_done", d->o_divmul_done, 1);   // idle: nothing in flight
 
     // ── Load IR with a Format R ADD R3, R4 instruction ─────────
     // Format R: [00 | op=00000 | Rd=0011 | Rs=0100 | F=0 | spare...]

@@ -264,11 +264,11 @@ module penumbra2_ex_stage
     // ── divmul peer unit ─────────────────────────────────────────
     // MUL/MULU/DIV/DIVU run on the multi-cycle divmul unit (a peer to
     // the ALU). EX holds i_start high while the divmul is the EX insn —
-    // the unit edge-detects it, so it triggers once — and stalls while
-    // o_busy. The cycle o_busy falls, both result halves are valid to
-    // latch (low → result, high → result_aux). A DIV0 never iterates:
-    // o_fault pulses on the start cycle with o_busy staying low, so it
-    // completes in one cycle carrying VEC_ARITH.
+    // the unit edge-detects it, so it triggers once — and stalls until
+    // o_done. The cycle o_done rises, both result halves are valid to
+    // latch (low → result, high → result_aux). A DIV0 iterates zero
+    // times and so completes at once, carrying VEC_ARITH in o_fault
+    // instead of results.
     //
     // The unit's 5-bit op is the gen1 core-internal ALU-field encoding,
     // kept local here (as in divmul.sv / alu.sv) rather than in the
@@ -282,7 +282,7 @@ module penumbra2_ex_stage
     logic        divmul_in_ex;   // a valid divmul occupies EX (the level)
     logic        dm_started;     // the divmul in EX has already been launched
     logic [4:0]  dm_op;
-    logic        dm_start, dm_busy, dm_fault, dm_z, dm_n;
+    logic        dm_start, dm_done, dm_fault, dm_z, dm_n;
     logic [31:0] dm_lo, dm_hi;
 
     // Issue/back-pressure control outputs, declared here because the divmul
@@ -322,17 +322,15 @@ module penumbra2_ex_stage
         .i_clk(i_clk), .i_rst(i_rst),
         .i_a(i_op_a), .i_b(i_op_b),
         .i_op(dm_op), .i_start(dm_start),
-        .o_busy(dm_busy), .o_fault(dm_fault),
+        .o_done(dm_done), .o_fault(dm_fault),
         .o_result_lo(dm_lo), .o_result_hi(dm_hi),
         .o_flag_z(dm_z), .o_flag_n(dm_n)
     );
 
-    // While the unit is busy EX holds the insn; it advances the cycle the unit
-    // is no longer busy (with results, or with a DIV0 fault). The hold tracks
-    // the level (divmul-in-EX), not the launch pulse — the pulse is high only
-    // on the first cycle, but the hold must persist for the whole iteration.
+    // o_done still describes the previous operation on the launch cycle, so EX
+    // covers that cycle from dm_start, the launch decision it already owns.
     logic dm_stall;
-    assign dm_stall  = divmul_in_ex & dm_busy;
+    assign dm_stall  = divmul_in_ex & (dm_start | ~dm_done);
     assign o_funit_stall = dm_stall;
 
     // ── Issue / back-pressure control ────────────────────────────
@@ -448,8 +446,8 @@ module penumbra2_ex_stage
                 // vector, so the IRQ stays pending and retakes after that
                 // handler. The interrupt's vector applies only on an otherwise
                 // clean slot.
-                o_fault_pending   <= i_fault_pending | (is_divmul & dm_fault) | i_is_trap | i_irq_inject;
-                o_fault_vec       <= (is_divmul & dm_fault)         ? VEC_ARITH
+                o_fault_pending   <= i_fault_pending | (divmul_in_ex & dm_fault) | i_is_trap | i_irq_inject;
+                o_fault_vec       <= (divmul_in_ex & dm_fault)         ? VEC_ARITH
                                    : (i_fault_pending | i_is_trap)  ? i_fault_vec
                                    : i_irq_inject                   ? i_irq_vec
                                    :                                  i_fault_vec;

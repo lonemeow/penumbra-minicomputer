@@ -1,11 +1,10 @@
 // Verilator testbench for the Penumbra MUL/DIV peer unit (divmul).
 //
-// Increment 1 covers MULTIPLY only (signed ALU_MUL and unsigned ALU_MULU):
-//   - drives the i_start / o_busy handshake,
-//   - waits out the 32-cycle iteration,
-//   - checks both result halves and the Z/N flags against a C reference.
+// Covers signed and unsigned multiply and divide: both result halves, the Z/N
+// flags, the DIV0 fault, and the cycle-by-cycle completion contract in
+// doc/internals/divmul.md, "Completion Signalling".
 //
-// Expected products are computed in C with the correct signedness so the
+// Expected results are computed in C with the correct signedness so the
 // testbench validates the RTL, not hand-arithmetic.
 
 #include <cstdio>
@@ -26,7 +25,7 @@ static void run_mul(Vdivmul* d, uint8_t op, uint32_t a, uint32_t b,
     tick(d);                 // posedge latches operands, state → ITER
     d->i_start = 0;
     int guard = 0;
-    while (d->o_busy && guard++ < 100) tick(d);
+    while (!d->o_done && guard++ < 100) tick(d);
     *lo = d->o_result_lo;
     *hi = d->o_result_hi;
 }
@@ -47,8 +46,8 @@ static void check_mul(Vdivmul* d, const char* name, uint8_t op,
                name, (unsigned long long)got, (unsigned long long)expected);
         fail = 1;
     }
-    if (d->o_busy != 0) {
-        printf("  FAIL [%s] o_busy still high after completion\n", name);
+    if (d->o_done != 1) {
+        printf("  FAIL [%s] o_done not high after completion\n", name);
         fail = 1;
     }
     if (d->o_flag_z != exp_z) {
@@ -76,7 +75,7 @@ static void run_div(Vdivmul* d, uint8_t op, uint32_t a, uint32_t b,
     tick(d);                 // posedge latches operands, state → ITER
     d->i_start = 0;
     int guard = 0;
-    while (d->o_busy && guard++ < 100) tick(d);
+    while (!d->o_done && guard++ < 100) tick(d);
     *lo = d->o_result_lo;
     *hi = d->o_result_hi;
 }
@@ -177,27 +176,96 @@ static void check_sdiv_exp(Vdivmul* d, const char* name, uint32_t a, uint32_t b,
     if (fail) errors++;
 }
 
-// Check that a faulting divide asserts o_fault and never iterates (o_busy low).
+// A divide by zero iterates zero times and so completes on the first cycle it
+// can, with o_fault set instead of results. o_fault is held, so it must still
+// be set several cycles later -- that is what lets a back-pressured consumer
+// commit the fault late.
 static void check_div_fault(Vdivmul* d, const char* name, uint8_t op,
                             uint32_t a, uint32_t b) {
     tests++;
-    d->i_a = a; d->i_b = b; d->i_op = op; d->i_start = 1;
-    d->eval();               // o_fault is a combinational pulse on the start edge
-
     int fail = 0;
-    if (d->o_fault != 1) {
-        printf("  FAIL [%s] o_fault not pulsed on faulting start\n", name);
-        fail = 1;
-    }
-    if (d->o_busy != 0) {
-        printf("  FAIL [%s] o_busy asserted — faulting divide must not iterate\n", name);
-        fail = 1;
-    }
-    tick(d);                 // start posedge: faulting divide does not iterate
+
+    d->i_a = a; d->i_b = b; d->i_op = op; d->i_start = 1;
+    tick(d);                 // start posedge: completes at once
     d->i_start = 0;
-    tick(d);                 // confirm it stays idle (no spurious iteration)
-    if (d->o_busy != 0) {
-        printf("  FAIL [%s] o_busy asserted later\n", name);
+    d->eval();
+    if (d->o_done != 1) {
+        printf("  FAIL [%s] o_done not high — a faulting divide completes at once\n", name);
+        fail = 1;
+    }
+    if (d->o_fault != 1) {
+        printf("  FAIL [%s] o_fault not set on completion of a faulting divide\n", name);
+        fail = 1;
+    }
+
+    for (int i = 0; i < 3; i++) tick(d);   // the bundle holds until the next start
+    if (d->o_fault != 1 || d->o_done != 1) {
+        printf("  FAIL [%s] fault status did not hold after completion\n", name);
+        fail = 1;
+    }
+
+    // o_fault belongs to the operation that set it: a later good divide must
+    // not inherit the trap.
+    uint32_t lo, hi;
+    run_mul(d, OP_DIVU, 100, 10, &lo, &hi);
+    if (d->o_fault != 0) {
+        printf("  FAIL [%s] o_fault survived a following non-faulting op\n", name);
+        fail = 1;
+    }
+    if (fail) errors++;
+}
+
+// The completion contract itself, independent of the arithmetic.
+//
+// EXPECT_INFLIGHT_CYCLES pins the run length for the shift-add engine this unit
+// carries (one cycle per bit of the multiplier/dividend). An engine consuming
+// more than one bit per cycle changes it, which should be a deliberate edit
+// here rather than a silent shift in what consumers stall for.
+static const int EXPECT_INFLIGHT_CYCLES = 32;
+
+static void check_completion_timing(Vdivmul* d, const char* name, uint8_t op,
+                                    uint32_t a, uint32_t b, uint64_t expected) {
+    tests++;
+    int fail = 0;
+
+    d->i_a = a; d->i_b = b; d->i_op = op; d->i_start = 1;
+    d->eval();
+    if (d->o_done != 1) {
+        printf("  FAIL [%s] o_done low on the launch cycle — it must still "
+               "describe the previous operation\n", name);
+        fail = 1;
+    }
+
+    tick(d);                 // start posedge
+    d->i_start = 0;
+    d->eval();
+
+    int inflight = 0, guard = 0;
+    while (!d->o_done && guard++ < 200) { inflight++; tick(d); }
+
+    if (inflight != EXPECT_INFLIGHT_CYCLES) {
+        printf("  FAIL [%s] o_done low for %d cycles, expected %d\n",
+               name, inflight, EXPECT_INFLIGHT_CYCLES);
+        fail = 1;
+    }
+
+    uint64_t got = ((uint64_t)d->o_result_hi << 32) | d->o_result_lo;
+    if (got != expected) {
+        printf("  FAIL [%s] results not valid on the cycle o_done rises: "
+               "got 0x%016llX, expected 0x%016llX\n",
+               name, (unsigned long long)got, (unsigned long long)expected);
+        fail = 1;
+    }
+    if (d->o_fault != 0) {
+        printf("  FAIL [%s] o_fault asserted on a valid operation\n", name);
+        fail = 1;
+    }
+
+    // Results hold past the completion cycle, so a consumer can commit late.
+    for (int i = 0; i < 3; i++) tick(d);
+    uint64_t held = ((uint64_t)d->o_result_hi << 32) | d->o_result_lo;
+    if (held != expected || d->o_done != 1) {
+        printf("  FAIL [%s] results did not hold after completion\n", name);
         fail = 1;
     }
     if (fail) errors++;
@@ -253,6 +321,13 @@ int main() {
 
     // INT_MIN / -1 overflow: UB in C; hardware returns INT_MIN, no trap.
     check_sdiv_exp(d, "sdiv_intmin_m1", 0x80000000, (uint32_t)-1, 0x80000000, 0);
+
+    // ── Completion handshake timing ─────────────────────────────
+    check_completion_timing(d, "timing_mulu", OP_MULU, 0xDEADBEEF, 0x12345678,
+                            umul(0xDEADBEEF, 0x12345678));
+    check_completion_timing(d, "timing_divu", OP_DIVU, 0xDEADBEEF, 0x1234,
+                            ((uint64_t)(0xDEADBEEFu % 0x1234u) << 32)
+                            | (0xDEADBEEFu / 0x1234u));
 
     // ── Divide-by-zero traps ────────────────────────────────────
     check_div_fault(d, "divu_div0",    OP_DIVU, 42, 0);
