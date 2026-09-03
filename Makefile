@@ -282,6 +282,7 @@ MODULE_TESTS = \
     spi_fifo \
     video_timing \
     audio_sigma_delta_test \
+    audio_test:tb_audio \
     timer \
     sdram_test \
     sdram_cdc \
@@ -927,7 +928,12 @@ FPGA_SRC_ulx3s_video_test_top = hw/rtl/io/video/video_pkg.sv \
 # board's resistor ladder and the audio PLL chain — no CPU or bus, so it
 # is built via the TOP= escape hatch (make fpga TOP=ulx3s_audio_test_top)
 # rather than registered as a BOARD/CORE machine.
-FPGA_SRC_ulx3s_audio_test_top = $(wildcard hw/rtl/io/audio/*.sv) \
+# Named rather than wildcarded: the probe wants the output stage and the
+# stimulus, not the bus device that sits in the same directory.
+FPGA_SRC_ulx3s_audio_test_top = hw/rtl/io/audio/audio_sigma_delta.sv \
+                                hw/rtl/io/audio/audio_sine_rom.sv \
+                                hw/rtl/io/audio/audio_tone_gen.sv \
+                                hw/rtl/io/audio/audio_sample_rom.sv \
                                 $(FPGA_RTL)/ecp5_pll_pkg.sv \
                                 $(FPGA_RTL)/ulx3s/ulx3s_audio_test_top.sv
 
