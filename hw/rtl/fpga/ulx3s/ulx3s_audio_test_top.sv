@@ -55,10 +55,11 @@ module ulx3s_audio_test_top (
     // chain. ecp5_pll_aux_div is exact-only: an inexact retarget fails
     // elaboration rather than detuning the rate.
     localparam ecp5_pll_cfg_t PLL = ecp5_pll_compute(25_000_000, 100_000_000, 100_000_000);
-    // 30 MHz, not the 60 the USB tier uses: the modulator's loop does
-    // not close 60 MHz here, and a converter violating setup measures
-    // its own timing failure rather than the ladder. Oversampling is
-    // still 625 and 30 MHz divides exactly to 48 kHz.
+    // 30 MHz, not the 60 the USB tier uses: the sample ROM's output mux
+    // does not close 60 MHz at this depth, and a probe whose converter
+    // violates setup measures its own timing failure rather than the
+    // ladder. Oversampling is still 625 and 30 MHz divides exactly to
+    // 48 kHz. A device carries no such ROM and runs at 60.
     localparam longint AUDIO_HZ   = 30_000_000;
     localparam int     AUDIO_DIV  = ecp5_pll_aux_div(PLL.vco_hz, AUDIO_HZ);
     localparam int     SAMPLE_DIV = int'(AUDIO_HZ) / 48_000;
@@ -268,8 +269,17 @@ module ulx3s_audio_test_top (
         endcase
     end
 
-    assign audio_l = pins;
-    assign audio_r = pins;
+    // Registered at the pads so nextpnr can pack these into the IO
+    // cells. The four legs must switch together: skew between them
+    // presents the ladder a code that was never commanded, and that
+    // glitch energy is code-correlated, which is indistinguishable from
+    // nonlinearity. A cycle of latency here is 17 ns.
+    logic [3:0] pins_q;
+
+    always_ff @(posedge clk_audio) pins_q <= pins;
+
+    assign audio_l = pins_q;
+    assign audio_r = pins_q;
 
     // ── Status ─────────────────────────────────────────────────
     // A dark heartbeat with lock lit means the aux output failed, not

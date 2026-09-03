@@ -4621,21 +4621,44 @@ case, and predicted the wrong winner. It has no term for switching
 current, which hardware showed dominates both the distortion and the
 noise. Treat it as a ranking tool, not a predictor.
 
-### The modulator does not close 60 MHz
+### Shortening the modulator loop to close 60 MHz
 
-Its loop is two serial 20-bit adds plus two saturations and the
-quantizer: 105 hops, 18.95 ns against a 16.67 ns period, 52.8 MHz
-achieved. The Makefile passes `--timing-allow-fail`, so a bitstream is
-produced regardless — it did not corrupt the measurements, which read
-identically either side of the constraint, but that was luck.
+The loop was two serial 20-bit adds plus two saturations and the
+quantizer: 18.95 ns against a 16.67 ns period, 52.8 MHz achieved. Four
+changes took it to 12.88 ns and 77.6 MHz, none of them altering the
+transfer function or moving the measured figures by 0.4 dB:
 
-The probe drops to 30 MHz, which still divides exactly to 48 kHz and
-leaves oversampling at 625. A device cannot: the sample rate comes off
-the 60 MHz USB clock precisely so it does not follow a retuned system
-clock, so the loop needs shortening instead. The obvious lever is the
-serial dependency — v1 feeds v2 in the same cycle — but the
-fully-delayed form puts the NTF's poles on the unit circle, so it
-needs coefficients rather than just a register.
+- the DAC reconstruction is a sixteen-entry table rather than a shift
+  and a subtract, the code being at most four bits;
+- the quantizer's offset lives in v2's reset value, since a constant
+  added to both sides of an integrator's recurrence cancels;
+- the input scale is registered, being feedforward rather than part of
+  the loop;
+- v2 subtracts the feedback from its own registered state in parallel
+  with v1's sum, rather than behind it.
+
+Latency is what made three of those free: at these rates a sample can
+be delayed by a hundred clocks and remain invisible, so anything not
+inside the feedback path can be registered at will. Only the loop
+itself — v1 and v2 through the quantizer and back — has to stay
+combinational, and that is what the four changes shortened.
+
+This matters because the sample rate comes off the 60 MHz USB clock
+precisely so it does not follow a retuned system clock.
+
+### Ladder pins are registered at the pads, and it changes nothing
+
+The four legs must switch together: skew between them would present
+the ladder a code that was never commanded, and that glitch energy is
+code-correlated, which a measurement cannot tell from nonlinearity.
+Registering at the pads packs the registers into the IO cells and took
+the worst output path from 6.37 ns over eight hops to 2.5 ns over two.
+
+It moves no measured figure — the four-bit configuration reads −40.6 dB
+third-order either way, to the decimal place, with the same noise
+floor. Skew is therefore not a contributor, which is the third
+mechanism excluded by measurement rather than argument. The registers
+stay for the output timing they give, not as a fix.
 
 ### Measured on hardware: two bits on 549/1.1k
 

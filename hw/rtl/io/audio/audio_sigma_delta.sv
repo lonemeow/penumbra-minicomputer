@@ -60,27 +60,48 @@ module audio_sigma_delta #(
     // short of the input's range; 1 - 2^-OUT_W closes that gap exactly.
     // Skipping it costs 0.6 dB at OUT_W = 4 and half the positive swing
     // at OUT_W = 1.
-    logic signed [SAMPLE_W-1:0] scaled;
-    assign scaled = i_sample - (i_sample >>> OUT_W);
+    //
+    // Registered because it feeds the loop forward rather than closing
+    // it: a cycle of delay here shifts the signal, not the feedback.
+    logic signed [SAMPLE_W-1:0] scaled_q;
 
-    // The loop's y[n-1], read off the output register rather than kept
-    // a second time.
+    always_ff @(posedge i_clk) begin
+        if (i_rst) scaled_q <= '0;
+        else       scaled_q <= i_sample - (i_sample >>> OUT_W);
+    end
+
+    // The loop's y[n-1], as a table rather than a shift and subtract.
+    // There are at most sixteen codes, so this is one level of logic
+    // where the arithmetic would be a full-width adder inside the loop.
+    logic signed [SUM_W-1:0] dac_tab [0:CODE_MAX];
+    for (genvar c = 0; c <= CODE_MAX; c++) begin : g_dac
+        assign dac_tab[c] = SUM_W'(c * (1 << STEP_SHIFT) - HALF_FS);
+    end
+
     logic signed [SUM_W-1:0] dac;
-    assign dac = signed'(SUM_W'(o_code) << STEP_SHIFT) - HALF_FS_S;
+    assign dac = dac_tab[o_code];
 
     logic signed [ACC_W-1:0] v1_q, v2_q;
     logic signed [SUM_W-1:0] v1_sum, v2_sum;
     logic signed [ACC_W-1:0] v1_d, v2_d;
 
-    assign v1_sum = SUM_W'(v1_q) + SUM_W'(scaled) - dac;
-    assign v1_d   = sat_acc(v1_sum);
-    assign v2_sum = SUM_W'(v2_q) + SUM_W'(v1_d) - dac;
-    assign v2_d   = sat_acc(v2_sum);
+    // v2's own terms are both registered, so subtracting the feedback
+    // there happens alongside v1's sum rather than behind it, leaving
+    // one add between v1_d and v2_sum instead of two.
+    logic signed [SUM_W-1:0] v2_base;
 
-    // The offset returns the loop's signed units to the DAC's offset
-    // binary, which puts both saturation bounds on bit boundaries.
+    assign v1_sum  = SUM_W'(v1_q) + SUM_W'(scaled_q) - dac;
+    assign v1_d    = sat_acc(v1_sum);
+    assign v2_base = SUM_W'(v2_q) - dac;
+    assign v2_sum  = v2_base + SUM_W'(v1_d);
+    assign v2_d    = sat_acc(v2_sum);
+
+    // v2 carries the quantizer's offset in its state rather than having
+    // it added here: the offset cancels between v2[n] and v2[n-1], so
+    // biasing the reset value alone puts the loop in the DAC's offset
+    // binary and takes a full-width adder out of the path.
     logic signed [QUOT_W-1:0] quot;
-    assign quot = QUOT_W'((SUM_W'(v2_d) + HALF_FS_S) >>> STEP_SHIFT);
+    assign quot = QUOT_W'(v2_d >>> STEP_SHIFT);
 
     logic [OUT_W-1:0] code;
     always_comb begin
@@ -92,7 +113,7 @@ module audio_sigma_delta #(
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
             v1_q   <= '0;
-            v2_q   <= '0;
+            v2_q   <= ACC_W'(HALF_FS_S);
             // The rest level, exact for every width but OUT_W = 1, where
             // the two codes are the rails and the loop dithers instead.
             o_code <= {1'b1, {(OUT_W-1){1'b0}}};
