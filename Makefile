@@ -36,7 +36,7 @@ OPT_BUILD ?= -O2
 VERILATOR_FLAGS = --cc --exe --build -Wall --assert \
                   $(if $(VCD),--trace) \
                   -CFLAGS "-std=c++17 $(OPT_BUILD)" \
-                  $(if $(CORE_SUB),-Ihw/rtl/$(CORE) )-Ihw/rtl/common -Ihw/rtl/penumbra1 -Ihw/rtl/penumbra2 -Ihw/rtl/penumbra3 -Ihw/rtl/machine -Ihw/rtl/bus -Ihw/rtl/io -Ihw/rtl/io/sdram -Ihw/rtl/io/video -Ihw/rtl/io/usb -Ihw/rtl/soc -Ihw/rtl/sim
+                  $(if $(CORE_SUB),-Ihw/rtl/$(CORE) )-Ihw/rtl/common -Ihw/rtl/penumbra1 -Ihw/rtl/penumbra2 -Ihw/rtl/penumbra3 -Ihw/rtl/machine -Ihw/rtl/bus -Ihw/rtl/io -Ihw/rtl/io/audio -Ihw/rtl/io/sdram -Ihw/rtl/io/video -Ihw/rtl/io/usb -Ihw/rtl/soc -Ihw/rtl/sim
 
 BUILD_DIR   = build
 WAVE_DIR    = waves
@@ -281,6 +281,7 @@ MODULE_TESTS = \
     slip_tx \
     spi_fifo \
     video_timing \
+    audio_sigma_delta_test \
     timer \
     sdram_test \
     sdram_cdc \
@@ -360,6 +361,16 @@ VARIANT_MODULE_TESTS = \
 # follows the program.hex / microcode.hex convention.
 font8x16.hex: netbsd/sys/dev/wsfont/bold8x16.h hw/tools/wsfont2hex.py
 	python3 hw/tools/wsfont2hex.py $< $@
+
+# Looping PCM clip for the audio bring-up probe, read by
+# audio_sample_rom via $readmemh. AUDIO_WAV names source material;
+# with none the tool synthesizes an arpeggio, so the probe builds
+# without anyone having to supply a file. AUDIO_SAMPLES is the ROM
+# depth and must stay a power of two — at 48 kHz the default is 2.7 s.
+AUDIO_SAMPLES ?= 131072
+AUDIO_WAV     ?=
+audio_sample.hex: hw/tools/wav2hex.py $(AUDIO_WAV)
+	python3 hw/tools/wav2hex.py $(AUDIO_WAV) -o $@ -n $(AUDIO_SAMPLES)
 
 # Splash-screen cell image for the CPU-free display bring-up, read by
 # video_cell_ram via $readmemh when preloaded (video_pixel_chain).
@@ -912,6 +923,14 @@ FPGA_SRC_ulx3s_video_test_top = hw/rtl/io/video/video_pkg.sv \
                                 $(FPGA_RTL)/ecp5_pll_pkg.sv \
                                 $(FPGA_RTL)/ulx3s/ulx3s_video_test_top.sv
 
+# Audio bring-up probe: the modulator and tone source in front of the
+# board's resistor ladder and the audio PLL chain — no CPU or bus, so it
+# is built via the TOP= escape hatch (make fpga TOP=ulx3s_audio_test_top)
+# rather than registered as a BOARD/CORE machine.
+FPGA_SRC_ulx3s_audio_test_top = $(wildcard hw/rtl/io/audio/*.sv) \
+                                $(FPGA_RTL)/ecp5_pll_pkg.sv \
+                                $(FPGA_RTL)/ulx3s/ulx3s_audio_test_top.sv
+
 # Tops that embed the boot ROM and/or microcode: their hex images are
 # generated before synthesis and inlined by inline_hex.py.
 # gen2 embeds the boot ROM (no microcode — the gen2 core is hardwired).
@@ -923,6 +942,8 @@ FPGA_VIDEO_TOPS = ulx3s_video_test_top ulx3s_penumbra1_top
 # Tops that also embed a preloaded cell image — the CPU-free bring-up
 # probe only. A machine draws its own screen from software.
 FPGA_SPLASH_TOPS = ulx3s_video_test_top
+# Tops embedding the audio probe's PCM clip.
+FPGA_AUDIO_TOPS = ulx3s_audio_test_top
 
 # Per-top default nextpnr placement seed. Some board/core[/variant]
 # combinations only close timing on a particular seed; pin it here so a
@@ -1013,11 +1034,27 @@ PREPACK = $(if $(PREPACK_$(TOP)),$(PREPACK_$(TOP)),$(PREPACK_$(TOP_MODULE)))
 # ECP5 primitive stubs — for Verilator lint only, not synthesis.
 FPGA_LINT_STUBS = $(FPGA_RTL)/ecp5_prim.sv
 
+# Ladder linearity sweep — drives the modulator against a swept model
+# of the board's resistor ladder and reports in-band distortion per
+# configuration. An investigation tool, not a regression test: it prints
+# numbers rather than passing or failing, and its conclusions live in
+# doc/TODO.md under the audio device entry.
+.PHONY: audio-sweep
+audio-sweep:
+	@mkdir -p $(BUILD_DIR)
+	$(DOCKER_RUN) $(DOCKER_IMAGE) --cc --exe --build -Wall \
+		-CFLAGS "-std=c++17 $(OPT_BUILD)" -Ihw/rtl/io/audio \
+		--top-module audio_sigma_delta_test \
+		--Mdir $(BUILD_DIR)/audio_ladder_sweep.verilator \
+		-o ../Vaudio_ladder_sweep \
+		hw/rtl/sim/audio_sigma_delta_test.sv hw/sim/audio_ladder_sweep.cpp
+	@$(DOCKER_RUN) --entrypoint ./$(BUILD_DIR)/Vaudio_ladder_sweep $(DOCKER_IMAGE)
+
 .PHONY: fpga flash fpga-lint
 
 # Lint covers every registered top (plus the video bring-up probe)
 # regardless of TOP. Use Verilator --lint-only with ECP5 primitive stubs.
-fpga-lint: $(FPGA_SRC_ulx3s_penumbra1_top) $(FPGA_SRC_ulx3s_penumbra2_probe_top) $(FPGA_SRC_ulx3s_penumbra2_top) $(FPGA_SRC_ulx3s_video_test_top) $(FPGA_LINT_STUBS)
+fpga-lint: $(FPGA_SRC_ulx3s_penumbra1_top) $(FPGA_SRC_ulx3s_penumbra2_probe_top) $(FPGA_SRC_ulx3s_penumbra2_top) $(FPGA_SRC_ulx3s_video_test_top) $(FPGA_SRC_ulx3s_audio_test_top) $(FPGA_LINT_STUBS)
 	$(DOCKER_RUN) $(DOCKER_IMAGE) --lint-only -Wall -Wno-fatal \
 		-Wno-PINMISSING -Wno-PINCONNECTEMPTY \
 		$(FPGA_SRC_ulx3s_penumbra1_top) $(FPGA_LINT_STUBS) --top ulx3s_penumbra1_top
@@ -1030,6 +1067,9 @@ fpga-lint: $(FPGA_SRC_ulx3s_penumbra1_top) $(FPGA_SRC_ulx3s_penumbra2_probe_top)
 	$(DOCKER_RUN) $(DOCKER_IMAGE) --lint-only -Wall -Wno-fatal \
 		-Wno-PINMISSING -Wno-PINCONNECTEMPTY \
 		$(FPGA_SRC_ulx3s_video_test_top) $(FPGA_LINT_STUBS) --top ulx3s_video_test_top
+	$(DOCKER_RUN) $(DOCKER_IMAGE) --lint-only -Wall -Wno-fatal \
+		-Wno-PINMISSING -Wno-PINCONNECTEMPTY \
+		$(FPGA_SRC_ulx3s_audio_test_top) $(FPGA_LINT_STUBS) --top ulx3s_audio_test_top
 
 fpga: $(BUILD_DIR)/$(TOP).bit
 	@echo "Bitstream: $(BUILD_DIR)/$(TOP).bit (PHASE_DEG=$(PHASE_DEG))"
@@ -1069,12 +1109,13 @@ $(BUILD_DIR)/$(TOP).json: $(FPGA_SRC) $(PHASE_STAMP) \
     $(if $(filter $(TOP),$(FPGA_UCODE_TOPS)),$(UCODE_SRC)) \
     $(if $(filter $(TOP),$(FPGA_ROM_TOPS)),$(ROM_SRCS)) \
     $(if $(filter $(TOP),$(FPGA_VIDEO_TOPS)),font8x16.hex) \
-    $(if $(filter $(TOP),$(FPGA_SPLASH_TOPS)),splash_cells.hex)
+    $(if $(filter $(TOP),$(FPGA_SPLASH_TOPS)),splash_cells.hex) \
+    $(if $(filter $(TOP),$(FPGA_AUDIO_TOPS)),audio_sample.hex)
 	@mkdir -p $(BUILD_DIR)
 	$(if $(filter $(TOP),$(FPGA_UCODE_TOPS)),$(UASM) hw/microcode/microcode.uasm -o microcode.hex)
 	$(if $(filter $(TOP),$(FPGA_ROM_TOPS)),$(MAKE) -C hw/rom)
-	$(FPGA_TOOLS)/sv2v -D SDRAM_PHASE_DEG=$(PHASE_DEG) -D PENUMBRA_CPU_VARIANT=$(CPU_VARIANT) $(FPGA_SRC) -w $(BUILD_DIR)/$(TOP)_sv2v.v
-	$(if $(filter $(TOP),$(FPGA_ROM_TOPS) $(FPGA_UCODE_TOPS)),python3 hw/tools/inline_hex.py $(BUILD_DIR)/$(TOP)_sv2v.v $(BUILD_DIR)/$(TOP)_sv2v.v)
+	$(FPGA_TOOLS)/sv2v -D SDRAM_PHASE_DEG=$(PHASE_DEG) -D PENUMBRA_CPU_VARIANT=$(CPU_VARIANT) -D AUDIO_SAMPLES=$(AUDIO_SAMPLES) $(FPGA_SRC) -w $(BUILD_DIR)/$(TOP)_sv2v.v
+	$(if $(filter $(TOP),$(FPGA_ROM_TOPS) $(FPGA_UCODE_TOPS) $(FPGA_AUDIO_TOPS)),python3 hw/tools/inline_hex.py $(BUILD_DIR)/$(TOP)_sv2v.v $(BUILD_DIR)/$(TOP)_sv2v.v)
 	$(FPGA_TOOLS)/yosys -p "read_verilog $(BUILD_DIR)/$(TOP)_sv2v.v; synth_ecp5 -top $(TOP_MODULE) -json $@"
 
 # The nextpnr invocation shared by the normal PnR rule and the
