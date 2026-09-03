@@ -4579,29 +4579,142 @@ handoff. A change of *pitch* needs nothing: stream position is the
 integral of `INC` over elapsed time, so a queued channel and an
 unqueued one behave identically under vibrato or portamento.
 
-### DAC ladder linearity bounds the analog output
+### The DAC ladder compensates for the FPGA pin's own resistance
 
-Ladder values from the board schematic, per channel: 130 Ω (MSB), 270 Ω,
-549 Ω, 1.1 kΩ, paralleling to ~71 Ω and matching the board's stated
-75 Ω output impedance. Normalised to the MSB the weights are 8.000,
-3.852, 1.894, 0.945 against an ideal 8/4/2/1 — every lower bit is light,
-by construction rather than by tolerance. The midscale carry
-(`0111`→`1000`) steps 1.385 LSB instead of 1.0, so **DNL ≈ +0.39 LSB,
-about 2.5% of full scale**, at the code a modulator idles around.
+Ladder values from the board schematic (R14-R17 per channel): 130 Ω
+(MSB), 270 Ω, 549 Ω, 1.1 kΩ. The same sheet states the pin's own
+output resistance as 10 Ω and derives the board's 75 Ω figure from it.
+That 10 Ω is part of the design: including it the legs are
+140/280/559/1110 against an ideal binary 140/280/560/1120, for a
+worst-case DNL of ±0.013 LSB. The odd-looking 549 and 1.1 k exist so
+the sum lands on the binary sequence; computing weights from the bare
+resistor values instead yields +0.34 LSB and a ladder that only looks
+mismatched.
 
-Noise shaping does not fix this and makes its consequences worse: in a
-digital sigma-delta DAC the ladder's static nonlinearity acts on the
-output code stream unshaped, intermodulating the out-of-band shaped
-noise back into the audio band. Quantization itself is a non-issue —
+The compensation is exact at one pin resistance — worst-case DNL runs
++0.336 at 0 Ω, ±0.013 at 10 Ω, −0.332 at 20 Ω — and the ECP5's drive
+impedance moves with process, voltage and temperature. Worse, it
+differs between sourcing and sinking, which makes each leg's weight
+depend on that leg's own state. No resistor value trims that out.
+
+Noise shaping does not fix ladder nonlinearity: the static error acts
+on the code stream unshaped, intermodulating out-of-band shaped noise
+back into the audio band. Quantization itself is a non-issue —
 second-order shaping at OSR 512 puts it ~148 dB down.
 
-Open, and only settleable by listening on hardware: **how many ladder
-bits to drive.** Fewer bits trade mismatch distortion (unfixable) for
-out-of-band energy (filterable). One bit is perfectly linear by
-construction — two levels define a straight line — at the cost of
-full-swing switching into 16 Ω, needing a real reconstruction filter.
-Level check for the 1-bit case: 130 Ω into 16 Ω divides 3.3 V to
-~0.36 V p-p, comfortably loud with no amplifier.
+### Simulated: leg choice matters more than code width
+
+`make audio-sweep` drives the modulator against a model of the ladder
+with the pin's source and sink resistance swept. The code stream does
+not depend on what the ladder does with it, so one capture feeds every
+parameter point. Stimulus is a two-tone pair into 10 kΩ; the
+difference product exists only through nonlinearity.
+
+Two results survived contact with hardware: a one-bit code is exactly
+invariant under any asymmetry (two levels define a straight line), and
+which legs a code drives matters more than how many, because the pin
+resistance perturbs each leg in proportion to its conductance — ±2 Ω
+is 1.4% of the 140 Ω leg and 0.18% of the 1110 Ω one.
+
+The magnitudes did not: the model was 12 dB optimistic on the four-bit
+case, and predicted the wrong winner. It has no term for switching
+current, which hardware showed dominates both the distortion and the
+noise. Treat it as a ranking tool, not a predictor.
+
+### The modulator does not close 60 MHz
+
+Its loop is two serial 20-bit adds plus two saturations and the
+quantizer: 105 hops, 18.95 ns against a 16.67 ns period, 52.8 MHz
+achieved. The Makefile passes `--timing-allow-fail`, so a bitstream is
+produced regardless — it did not corrupt the measurements, which read
+identically either side of the constraint, but that was luck.
+
+The probe drops to 30 MHz, which still divides exactly to 48 kHz and
+leaves oversampling at 625. A device cannot: the sample rate comes off
+the 60 MHz USB clock precisely so it does not follow a retuned system
+clock, so the loop needs shortening instead. The obvious lever is the
+serial dependency — v1 feeds v2 in the same cycle — but the
+fully-delayed form puts the NTF's poles on the unit circle, so it
+needs coefficients rather than just a register.
+
+### Measured on hardware: two bits on 549/1.1k
+
+Seven configurations recorded through the jack into a line input,
+two-tone stimulus (9000 + 10125 Hz), 25 s captures at 0.084 Hz
+resolution, sorted by the figure that decided it. "Noise" is absolute
+in-band; "matched SNR" is what a listener hears once the
+configurations are level-matched.
+
+| config | peak leg mA | 3rd-order | noise | matched SNR |
+|--------|-------------|-----------|-------|-------------|
+| 2b {549,1.1k}     |  5.9 | −87.4 | −128.8 | **108.8** |
+| 1b {1.1k}         |  3.0 | −83.4 | −134.5 | 105.2 |
+| 2b {270,549}      | 11.8 | −89.1 | −123.3 | 103.3 |
+| 3b {270,549,1.1k} | 11.8 | −53.7 | −123.1 | 103.1 |
+| 1b {130}          | 23.6 | −79.4 | −120.8 | 100.8 |
+| 4b {all}          | 23.6 | −40.6 | −120.6 | 100.6 |
+| 3b {130,270,549}  | 23.6 | −50.4 | −119.8 |  99.8 |
+
+Distortion is measured on the **third-order** pair (2f1−f2, 2f2−f1).
+Ladder mismatch is odd-order; the recording chain's own distortion is
+even-order and lands on f2−f1 and f1+f2, so the converter can be
+measured through a chain far dirtier than itself. Reading the
+difference tone as the converter's condemns every configuration alike
+at about −45 dB. The one-bit rows are the floor — their static
+transfer function cannot bend — and both two-bit configurations
+measure below them.
+
+**Two bits is the ceiling.** The third bit costs 35 dB, a cliff rather
+than a gradient, and far more than any weight-ratio error produces.
+Two candidate mechanisms are excluded by measurement: the same
+configuration reads identically at 30 MHz and 60 MHz, which rules out
+settling and edge asymmetry; and a two-bit converter on the 270 Ω leg
+is among the cleanest, which rules out one bad leg.
+
+**Noise decides it, not distortion.** Absolute in-band noise rises
+about 5.7 dB per doubling of the largest driven leg's current,
+monotonically across all seven. It is not quantization noise — three
+configurations share a 0.22 V step and span 14 dB of noise, and at
+this oversampling even one bit has ~135 dB of in-band SQNR. Through
+amplified speakers the two configurations that avoid the 130 Ω and
+270 Ω legs are audibly clean and the rest hiss; no configuration
+sounds *bad*, so the choice is between margins.
+
+Two measurement notes that inverted conclusions. Noise relative to the
+tones ranks the configurations backwards, because each was captured at
+its own span; only absolute figures are monotonic. And level-matching
+is what exposes the noise at all, since digital attenuation scales the
+signal and not the analog floor — so the probe scales the sample clip
+per configuration and deliberately leaves the measurement tones alone.
+
+Design consequence: **two bits on 549/1.1k**, driving neither
+high-current leg. 0.66 V p-p (234 mV RMS) is line level unaided. Two
+bits on 270/549 measures 1.7 dB better on distortion and is the wrong
+choice: its 270 Ω leg costs 5.5 dB of noise.
+
+### The jack is DC coupled, and the intended load is line level
+
+There is no series capacitor between ladder and jack — the schematic
+shows only R14-R17 in the path, and the board manual describes the
+output as "3-channel 4-bit DAC with 75 ohm output impedance and 0-3.3V
+DC swing".
+
+The intended load is not headphones. Exhibit use drives amplified
+speakers or the line input of a capture card, both high-impedance and
+AC-coupled at the receiver. Three consequences:
+
+- **DC is a non-issue.** Into 10 kΩ the midscale rest level draws
+  0.16 mA and the receiver blocks it. Into 16 Ω earphones the same
+  rest level would put ~18 mA and ~5 mW of DC through the transducer,
+  which is why `CTRL.ENABLE = 0` driving the pins low rather than
+  parking at midscale is worth keeping as an option.
+- **Full scale is hot.** 3.3 V p-p is 1.17 V RMS, about 13 dB above
+  the −10 dBV consumer nominal, so a sensible operating level sits
+  well below digital full scale. The headroom is free: the modulator
+  measures 96 dB SNR at four bits.
+- **Out-of-band energy matters more**, not less. A transducer filters
+  it; a line input does not, and the board has no reconstruction
+  filter. This is the second argument against narrow codes.
 
 ### Clock source must not follow CPU_HZ
 
@@ -4676,10 +4789,13 @@ effect vocabulary — are unimplemented.
 The two halves are independently testable, so neither blocks the other
 for long:
 
-1. Output stage alone — a fixed tone into the modulator and ladder,
-   `CTRL.ENABLE` only. This settles the [ladder bit-depth
-   question](#dac-ladder-linearity-bounds-the-analog-output) by
-   listening, and needs no FIFO, no channels, and no driver.
+1. Output stage alone — a synthesized signal into the modulator and
+   ladder, `CTRL.ENABLE` only, needing no FIFO, no channels and no
+   driver. What it confirms is the [asymmetry
+   tolerance](#the-dac-ladder-compensates-for-the-fpga-pins-own-resistance):
+   a two-tone stimulus, because a difference tone appears only through
+   nonlinearity and is unmistakable where harmonic distortion on a
+   single tone is not, and silence, for the noise floor.
 2. One channel with a FIFO, plus the `audio(4)` binding. That is the
    whole `CLASS_AUDIO` minimum protocol and gives a working
    `/dev/audio`.
@@ -4690,7 +4806,8 @@ for long:
 4. A tracker replayer in userland, with its mixer removed and channel
    registers driven in its place.
 
-Step 1 is worth doing before any of the register interface exists: the
-analog result decides how many ladder bits the output stage drives, and
-that is the one decision in this entry that cannot be made from a
-datasheet.
+Step 1 is worth doing before any of the register interface exists, but
+most of it is a simulation rather than a listening test: the modulator's
+code stream does not depend on the ladder, so one captured stream feeds
+a swept model of the analog mapping. Hardware is needed only for what
+the model cannot supply — the ECP5's actual source/sink impedance.
