@@ -980,14 +980,22 @@ FPGA_AUDIO_TOPS = ulx3s_audio_test_top
 # router loops on it for this netlist instead of terminating, where every
 # other seed routes in under 90 seconds. Seed 0 is the best of the rest.
 #
-# The gen2 pair at their 37.5 MHz CPU_HZ: gen2 spans 33.38-41.25 MHz and
-# clears the target on 8 seeds of 10, gen2.5 spans 36.30-39.56 and clears
-# on 7. Each pin below is its sweep's best. gen2.5 runs closest to the
-# edge — 10.0% margin for gen2, 5.5% for gen2.5, 7.6% for gen1 — so a
-# placement regression there costs a working bitstream, not just headroom.
+# Both gen2 tops are pinned on the worst margin across every domain, not
+# on the CPU clock. gen2.5 clears all five on 2 seeds of 10 and is the
+# tighter of the pair: seed 1 holds 2.7% on the CPU clock and 6.8% on
+# USB, while the seed with the most USB headroom clears the CPU clock by
+# 0.1 MHz, which is a pass on paper rather than in practice.
+#
+# gen2's previous pin showed why that matters: it held the sweep's
+# highest CPU fmax and its lowest USB fmax, which lasted until a netlist
+# change nudged USB past its constraint. Seed 9 carries 9% CPU margin
+# and 16% USB, where the best-on-CPU seed carries -1% USB. Read every
+# domain when
+# re-sweeping — hw/tools/seed-sweep.sh prints them all — since a seed
+# clearing one constraint says nothing about the rest.
 DEFAULT_SEED_ulx3s_penumbra1_top   := 0
-DEFAULT_SEED_ulx3s_penumbra2_top   := 5
-DEFAULT_SEED_ulx3s_penumbra2_5_top := 8
+DEFAULT_SEED_ulx3s_penumbra2_top   := 9
+DEFAULT_SEED_ulx3s_penumbra2_5_top := 1
 
 
 # BOARD/CORE porcelain → TOP derivation (CORE defaults to penumbra2

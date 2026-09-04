@@ -1,8 +1,14 @@
 #!/bin/sh
 # Parallel nextpnr placement-seed sweep for one FPGA top: place the
 # same synthesis result under every seed and report each seed's
-# achieved CPU-clock fmax, so a stale pinned DEFAULT_SEED_<top> can be
-# re-picked after a design change.
+# achieved fmax on every clock domain, so a stale pinned
+# DEFAULT_SEED_<top> can be re-picked after a design change.
+#
+# Every domain, because a seed is only usable if all of them close. A
+# machine top carries several — CPU, SDRAM, USB, video — and the one
+# that fails after a change is not necessarily the one the change
+# touched: placement pressure moves whichever domain was closest to its
+# constraint, not the one whose logic grew.
 #
 # The synthesis JSON is built once up front; the seeds then fan out as
 # independent make targets (build/<top>.s<seed>.config — see the
@@ -73,9 +79,23 @@ for s in $SEEDS; do
     rpt="build/$TOP.s${s}_timing.json"
     log="build/$TOP.s${s}.log"
     if [ -f "$rpt" ]; then
-        line=$(hw/tools/timing-report.sh "$rpt" 0 2>/dev/null |
-               grep -F '$glbnet$clk:' | head -1 || true)
-        echo "seed $s:${line:-  no fmax line in $rpt}"
+        # One line per seed: every domain, and a verdict that is FAIL if
+        # any single one misses. Picking a seed on the CPU clock alone
+        # can select a placement that breaks a peripheral.
+        hw/tools/timing-report.sh "$rpt" 0 2>/dev/null |
+        awk -v seed="$s" '
+            /achieved \(constraint/ {
+                name = $1; sub(/^\$glbnet\$/, "", name); sub(/:$/, "", name)
+                got = $2 + 0
+                for (i = 1; i <= NF; i++) if ($i == "(constraint") want = $(i+1) + 0
+                if (got + 0 < want + 0) { bad = bad " " name; nfail++ }
+                out = out sprintf("  %s %.1f/%g", name, got, want)
+            }
+            END {
+                printf "seed %s: %s   %s%s\n", seed,
+                       (nfail ? "FAIL" : "pass"), out,
+                       (nfail ? "   [short:" bad " ]" : "")
+            }'
     elif [ -f "$log" ] && grep -q 'TIMED OUT' "$log"; then
         echo "seed $s:  timed out — placement unusable for this netlist"
     else
