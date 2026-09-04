@@ -811,7 +811,17 @@ FPGA_RTL   = hw/rtl/fpga
 SRC_COMMON = hw/rtl/common/penumbra_pkg.sv \
              $(filter-out %/penumbra_pkg.sv, $(wildcard hw/rtl/common/*.sv))
 
+# The audio device and the board-side stage that converts its frames.
+# The probe's tone and clip sources are deliberately absent: they belong
+# to the bring-up top, and audio_sample_rom would want a hex image no
+# machine build produces.
+SRC_AUDIO = hw/rtl/io/audio/audio.sv \
+            hw/rtl/io/audio/audio_frame_cdc.sv \
+            hw/rtl/io/audio/audio_sigma_delta.sv \
+            hw/rtl/io/audio/audio_ladder_out.sv
+
 SRC_FABRIC = hw/rtl/io/sdram/sdram_pkg.sv \
+             $(SRC_AUDIO) \
              hw/rtl/io/usb/usb_pkg.sv \
              hw/rtl/io/video/video_pkg.sv \
              $(wildcard hw/rtl/soc/*.sv) \
