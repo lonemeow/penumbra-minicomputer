@@ -702,7 +702,7 @@ struct AcfgSlot {
 };
 
 enum { ACFG_SLOT_SPI = 0, ACFG_SLOT_USB = 1, ACFG_SLOT_DISPLAY = 2,
-       ACFG_SLOT_COUNT = 3 };
+       ACFG_SLOT_AUDIO = 3, ACFG_SLOT_COUNT = 4 };
 
 static struct {
     AcfgSlot slot[ACFG_SLOT_COUNT] = {
@@ -710,6 +710,7 @@ static struct {
         { 8 /*CLASS_USBHC*/,   4096, 0x00425355 /*"USB\0"*/,  0, false, 0 },
         { 6 /*CLASS_DISPLAY*/, 262144,
           0x50534944 /*"DISP"*/, 0x0059414C /*"LAY\0"*/, false, 0 },
+        { 7 /*CLASS_AUDIO*/,   4096, 0x4F445541 /*"AUDO"*/, 0, false, 0 },
     };
 
     void reset() {
@@ -783,6 +784,87 @@ static struct {
         connect = enabled = false;
     }
 } usb;
+
+// --- Audio output (CLASS_AUDIO, one channel) ---
+// Register contract: doc/system/devices/audio.md; the executable spec
+// is hw/sim/tb_audio.cpp. The ISS has no timing model, so frames are
+// consumed the instant they are written: LEVEL always reports the queue
+// empty, and a consumer therefore never blocks and never underruns.
+// That is the benign direction to be wrong in — a driver that works
+// here may still stall on hardware, but one that stalls here is broken.
+// +audiofile=path captures the frames as raw 16-bit stereo, which makes
+// a driver's output audible rather than inferred.
+static constexpr uint32_t AUDIO_DEPTH = 1024;
+static constexpr uint32_t AUDIO_CAP   = 0x00010001;   // version 1, 1 channel
+static constexpr uint32_t AUDIO_RATE  = 48000;
+
+static struct {
+    uint32_t ctrl;          // [0] ENABLE, resets 0
+    uint32_t chan_en;
+    uint32_t irq_enable;
+    uint32_t irq_status;
+    uint32_t underrun;
+    uint32_t wm;
+    FILE*    capture = nullptr;
+
+    void reset() { ctrl = chan_en = irq_enable = irq_status = underrun = wm = 0; }
+
+    uint32_t read(uint32_t addr) {
+        uint32_t r = (addr >> 2) & 7;
+        if (!(addr & 0x100)) {
+            switch (r) {
+                case 0: return AUDIO_CAP;
+                case 1: return AUDIO_RATE;
+                case 2: return ctrl;
+                case 3: return chan_en;
+                case 4: return irq_status;
+                case 5: return irq_enable;
+                case 6: return underrun;
+                default: return 0xFFFFFFFFu;            // MASTER_VOL, unity
+            }
+        }
+        switch (r) {
+            case 1:  return 0x00010000u;                // INC, unity
+            case 2:  return 0xFFFFFFFFu;                // VOL, unity
+            case 3:  return AUDIO_DEPTH;
+            case 4:  return AUDIO_DEPTH;                // LEVEL: always free
+            case 5:  return wm;
+            default: return 0;
+        }
+    }
+
+    void write(uint32_t addr, uint32_t data) {
+        uint32_t r = (addr >> 2) & 7;
+        if (!(addr & 0x100)) {
+            switch (r) {
+                case 2: ctrl = data & 1; break;
+                case 3: chan_en = data & 1; break;
+                case 4: irq_status &= ~data; break;
+                case 5: irq_enable = data & 1; break;
+                case 6: underrun &= ~data; break;
+                default: break;
+            }
+            return;
+        }
+        switch (r) {
+            case 5: wm = data; break;
+            case 6:
+                // A frame; captured only while the channel would play it.
+                if (capture && (ctrl & 1) && (chan_en & 1)) {
+                    uint8_t b[4] = { uint8_t(data), uint8_t(data >> 8),
+                                     uint8_t(data >> 16), uint8_t(data >> 24) };
+                    fwrite(b, 1, 4, capture);
+                }
+                break;
+            default: break;
+        }
+        // The queue is always empty here, so the watermark is met
+        // whenever one is armed at all.
+        if (wm != 0) irq_status |= 1;
+    }
+
+    bool irq() const { return (irq_status & irq_enable & 1) != 0; }
+} audio;
 
 // --- Display adapter (CLASS_DISPLAY, character console) ---
 // Register contract: doc/system/devices/display.md; the executable
@@ -1473,6 +1555,11 @@ static uint32_t phys_read(uint32_t addr, int size, bool& bus_fault) {
         return display.read(addr, size);
     }
 
+    // Audio output at dynamic base
+    if (acfg.slot[ACFG_SLOT_AUDIO].dev_sel(addr)) {
+        return audio.read(addr);
+    }
+
     // UART: 0xFF000000 – 0xFF000FFF
     if ((addr >> 12) == (UART_BASE >> 12)) {
         return uart_read(addr);
@@ -1548,6 +1635,12 @@ static void phys_write(uint32_t addr, uint32_t data, int size, bool& bus_fault) 
     // Display adapter at dynamic base
     if (acfg.slot[ACFG_SLOT_DISPLAY].dev_sel(addr)) {
         display.write(addr, data, size);
+        return;
+    }
+
+    // Audio output at dynamic base
+    if (acfg.slot[ACFG_SLOT_AUDIO].dev_sel(addr)) {
+        audio.write(addr, data);
         return;
     }
 
@@ -1635,7 +1728,8 @@ static void sysreg_write(int dev, int reg, uint32_t val) {
             busctl.reg = val;
             // Bus RST unconfigures the chain and resets the SPI; the
             // USBHC core sees only power-on reset (the machine wiring).
-            if (busctl.rst()) { acfg.reset(); spi.reset(); display.reset(); }
+            if (busctl.rst()) { acfg.reset(); spi.reset(); display.reset();
+    audio.reset(); }
         }
         break;
     case SYSDEV_TIMER:
@@ -2668,6 +2762,7 @@ static void cpu_reset() {
     acfg.reset();
     usb.reset();
     display.reset();
+    audio.reset();
     // An enumerable full-speed device sits attached from power-on,
     // exactly as the RTL program runner presents it.
     usb.dev_attached = true;
@@ -2760,11 +2855,13 @@ int main(int argc, char** argv) {
     const char* sd_path = nullptr;
     const char* usbdev_spec = nullptr;
     const char* trace_path = nullptr;
+    const char* audio_path = nullptr;
 
     for (int i = 1; i < argc; i++) {
         if (strncmp(argv[i], "+sdcard=", 8) == 0) sd_path = argv[i] + 8;
         else if (strncmp(argv[i], "+usbdev=", 8) == 0) usbdev_spec = argv[i] + 8;
         else if (strncmp(argv[i], "+trace=", 7) == 0) trace_path = argv[i] + 7;
+        else if (strncmp(argv[i], "+audiofile=", 11) == 0) audio_path = argv[i] + 11;
         else if (strncmp(argv[i], "+max-insn=", 10) == 0) max_insns = strtoull(argv[i] + 10, nullptr, 0);
         else if (strcmp(argv[i], "+raw") == 0) full_raw = true;
         else if (strcmp(argv[i], "+hosted") == 0) hosted_mode = true;
@@ -2784,7 +2881,7 @@ int main(int argc, char** argv) {
     }
 
     if (!hex_path) {
-        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+usbdev=type:config] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats]\n");
+        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+usbdev=type:config] [+audiofile=path] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats]\n");
         return 1;
     }
 
@@ -2819,6 +2916,12 @@ int main(int argc, char** argv) {
                 usbdev_spec);
             return 1;
         }
+    }
+
+    if (audio_path) {
+        audio.capture = fopen(audio_path, "wb");
+        if (audio.capture) fprintf(stderr, "[AUDIO] capturing frames to '%s'\n", audio_path);
+        else fprintf(stderr, "[AUDIO] cannot open '%s'\n", audio_path);
     }
 
     if (trace_path) {
