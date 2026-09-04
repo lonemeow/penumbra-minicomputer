@@ -89,7 +89,7 @@ for s in $SEEDS; do
                 got = $2 + 0
                 for (i = 1; i <= NF; i++) if ($i == "(constraint") want = $(i+1) + 0
                 if (got + 0 < want + 0) { bad = bad " " name; nfail++ }
-                out = out sprintf("  %s %.1f/%g", name, got, want)
+                out = out sprintf("  %s %.2f/%g", name, got, want)
             }
             END {
                 printf "seed %s: %s   %s%s\n", seed,

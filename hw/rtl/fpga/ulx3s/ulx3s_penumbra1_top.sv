@@ -43,6 +43,10 @@ module ulx3s_penumbra1_top (
     // ── GPDI display output ────────────────────────────────
     // Pseudo-differential pairs: LVCMOS33D on each _dp pin drives its
     // _dn mate in complement. [0]=blue [1]=green [2]=red [3]=clock.
+    // ── Audio: 4-bit resistor ladder per channel to the jack ──
+    output logic [3:0]  audio_l,
+    output logic [3:0]  audio_r,
+
     output logic [3:0] gpdi_dp,
 
     // ── SD card (SPI mode) ─────────────────────────────────
@@ -445,7 +449,7 @@ module ulx3s_penumbra1_top (
         .i_sys_rdata    (sys_rdata),
 
         .i_timer_irq    (timer_irq),
-        .i_irq          (uart_irq | spi_irq | usb_irq),
+        .i_irq          (uart_irq | spi_irq | usb_irq | audio_irq),
 
         .o_pc           (),
         .o_halted       (),
@@ -943,11 +947,8 @@ module ulx3s_penumbra1_top (
     logic        disp_dev_busy;
     logic [31:0] ac_disp_rdata;
     logic        ac_disp_busy, ac_disp_sel;
-    // Last device in the chain: the dangling cfg_out is the
-    // "no more devices" end the ROM's autoconfig loop probes.
-    /* verilator lint_off UNUSEDSIGNAL */
+    // cfg_out is the daisy-chain to the next autoconfig device (audio).
     logic        ac_disp_cfg_out;
-    /* verilator lint_on UNUSEDSIGNAL */
 
     autoconfig_dev #(
         .DEV_CLASS (ACFG_CLASS_DISPLAY),
@@ -1013,20 +1014,109 @@ module ulx3s_penumbra1_top (
 
     // Autoconfig combined bus signals
     logic [31:0] acfg_rdata;
+    // ── Audio ───────────────────────────────────────────────
+    // Clocked from the USB tier's 60 MHz on the output side: the sample
+    // rate must not follow a system clock that is retuned per timing
+    // closure, and that output already carries an exactly-divisible
+    // chain this device needs no second PLL to reach.
+    logic [31:0] audio_dev_addr, audio_dev_wdata, audio_dev_rdata;
+    logic        audio_dev_we, audio_dev_re, audio_dev_busy;
+    logic [31:0] ac_audio_rdata;
+    logic        ac_audio_busy, ac_audio_sel;
+    // Last device in the chain: the dangling cfg_out is the
+    // "no more devices" end the ROM's autoconfig loop probes.
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic        ac_audio_cfg_out;
+    /* verilator lint_on UNUSEDSIGNAL */
+    logic        audio_irq;
+
+    autoconfig_dev #(
+        .DEV_CLASS (ACFG_CLASS_AUDIO),
+        .DEV_SIZE  (32'd4096),
+        .DEV_ID    (32'd0),
+        .DEV_NAME0 (32'h4F445541)     // "AUDO" packed LE
+    ) u_ac_audio (
+        .i_clk       (clk),
+        .i_rst       (rst),
+        .i_bus_rst   (busctl_bus_rst),
+        .i_cfg_en    (busctl_cfg_en),
+        .i_cfg_in    (ac_disp_cfg_out),
+        .o_cfg_out   (ac_audio_cfg_out),
+        .i_addr      (mem_addr),
+        .i_wdata     (mem_wdata),
+        .i_byte_en   (mem_byte_en),
+        .i_we        (mem_we),
+        .i_re        (mem_re),
+        .o_rdata     (ac_audio_rdata),
+        .o_busy      (ac_audio_busy),
+        .o_sel       (ac_audio_sel),
+        .o_dev_addr  (audio_dev_addr),
+        .o_dev_wdata (audio_dev_wdata),
+        .o_dev_byte_en(),
+        .o_dev_we    (audio_dev_we),
+        .o_dev_re    (audio_dev_re),
+        .i_dev_rdata (audio_dev_rdata),
+        .i_dev_busy  (audio_dev_busy)
+    );
+
+    logic signed [15:0] audio_frame_l, audio_frame_r;
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic               audio_frame_en;
+    /* verilator lint_on UNUSEDSIGNAL */
+
+    audio #(
+        .DEPTH     (1024),
+        .SAMPLE_HZ (48_000),
+        .AUDIO_HZ  (int'(USB_HZ))
+    ) u_audio (
+        .i_clk      (clk),
+        .i_rst      (rst),
+        .i_addr     (audio_dev_addr),
+        .i_wdata    (audio_dev_wdata),
+        .i_we       (audio_dev_we),
+        .i_re       (audio_dev_re),
+        .o_rdata    (audio_dev_rdata),
+        .o_busy     (audio_dev_busy),
+        .o_irq      (audio_irq),
+        .i_aclk     (clk_usb),
+        .i_arst     (rst_usb),
+        .o_frame_l  (audio_frame_l),
+        .o_frame_r  (audio_frame_r),
+        .o_frame_en (audio_frame_en)
+    );
+
+    // Two bits on the 549 and 1.1k legs: measured some 47 dB cleaner
+    // than driving all four, because in-band noise tracks the current
+    // the driven legs switch (doc/TODO.md).
+    audio_ladder_out #(
+        .LEGS    (4),
+        .OUT_W   (2),
+        .LEG_LSB (0)
+    ) u_audio_out (
+        .i_clk     (clk_usb),
+        .i_rst     (rst_usb),
+        .i_frame_l (audio_frame_l),
+        .i_frame_r (audio_frame_r),
+        .o_left    (audio_l),
+        .o_right   (audio_r)
+    );
+
     logic        acfg_busy;
     logic        acfg_sel;
     logic        acfg_sel_r;
-    logic        ac_spi_sel_r, ac_usb_sel_r, ac_disp_sel_r;
-    assign acfg_rdata = (ac_spi_sel_r  ? ac_spi_rdata  : 32'b0) |
-                        (ac_usb_sel_r  ? ac_usb_rdata  : 32'b0) |
-                        (ac_disp_sel_r ? ac_disp_rdata : 32'b0);
-    assign acfg_busy  = ac_spi_busy | ac_usb_busy | ac_disp_busy;
-    assign acfg_sel   = ac_spi_sel | ac_usb_sel | ac_disp_sel;
+    logic        ac_spi_sel_r, ac_usb_sel_r, ac_disp_sel_r, ac_audio_sel_r;
+    assign acfg_rdata = (ac_spi_sel_r   ? ac_spi_rdata   : 32'b0) |
+                        (ac_usb_sel_r   ? ac_usb_rdata   : 32'b0) |
+                        (ac_disp_sel_r  ? ac_disp_rdata  : 32'b0) |
+                        (ac_audio_sel_r ? ac_audio_rdata : 32'b0);
+    assign acfg_busy  = ac_spi_busy | ac_usb_busy | ac_disp_busy | ac_audio_busy;
+    assign acfg_sel   = ac_spi_sel | ac_usb_sel | ac_disp_sel | ac_audio_sel;
     always_ff @(posedge clk) begin
         ac_spi_sel_r  <= ac_spi_sel;
         ac_usb_sel_r  <= ac_usb_sel;
-        ac_disp_sel_r <= ac_disp_sel;
-        acfg_sel_r    <= acfg_sel;
+        ac_disp_sel_r  <= ac_disp_sel;
+        ac_audio_sel_r <= ac_audio_sel;
+        acfg_sel_r     <= acfg_sel;
     end
 
     // ── Bus response OR-combine ─────────────────────────────

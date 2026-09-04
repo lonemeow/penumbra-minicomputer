@@ -975,10 +975,12 @@ FPGA_AUDIO_TOPS = ulx3s_audio_test_top
 # divider, so seed rankings do not survive a retarget. Re-sweep after
 # moving CPU_HZ, not just after an RTL change.
 #
-# gen1: fmax across seeds 0-9 spans 24.03-26.90 MHz, clearing 25 on five
-# of the nine that produced a result. Seed 8 yields none — nextpnr's
-# router loops on it for this netlist instead of terminating, where every
-# other seed routes in under 90 seconds. Seed 0 is the best of the rest.
+# gen1 clears all five domains on 4 seeds of 10; seed 6 holds 2.4% on
+# the CPU clock and 14% on USB, where the previously pinned seed cleared
+# the CPU clock by 0.02 MHz. A seed that once failed to route here now
+# does — nextpnr's router looping is a property of the netlist and the
+# seed together, so it does not survive a design change any better than
+# an fmax figure does.
 #
 # Both gen2 tops are pinned on the worst margin across every domain, not
 # on the CPU clock. gen2.5 clears all five on 2 seeds of 10 and is the
@@ -993,7 +995,7 @@ FPGA_AUDIO_TOPS = ulx3s_audio_test_top
 # domain when
 # re-sweeping — hw/tools/seed-sweep.sh prints them all — since a seed
 # clearing one constraint says nothing about the rest.
-DEFAULT_SEED_ulx3s_penumbra1_top   := 0
+DEFAULT_SEED_ulx3s_penumbra1_top   := 6
 DEFAULT_SEED_ulx3s_penumbra2_top   := 9
 DEFAULT_SEED_ulx3s_penumbra2_5_top := 1
 
