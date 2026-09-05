@@ -975,29 +975,31 @@ FPGA_AUDIO_TOPS = ulx3s_audio_test_top
 # divider, so seed rankings do not survive a retarget. Re-sweep after
 # moving CPU_HZ, not just after an RTL change.
 #
-# gen1 clears all five domains on 4 seeds of 10; seed 6 holds 2.4% on
-# the CPU clock and 14% on USB, where the previously pinned seed cleared
-# the CPU clock by 0.02 MHz. A seed that once failed to route here now
-# does — nextpnr's router looping is a property of the netlist and the
-# seed together, so it does not survive a design change any better than
-# an fmax figure does.
+# Every pin below is chosen on the *worst* margin across all five
+# domains, not on the CPU clock: a seed clearing one constraint says
+# nothing about the rest, and hw/tools/seed-sweep.sh prints them all.
 #
-# Both gen2 tops are pinned on the worst margin across every domain, not
-# on the CPU clock. gen2.5 clears all five on 2 seeds of 10 and is the
-# tighter of the pair: seed 1 holds 2.7% on the CPU clock and 6.8% on
-# USB, while the seed with the most USB headroom clears the CPU clock by
-# 0.1 MHz, which is a pass on paper rather than in practice.
+# gen1 clears all five on 8 seeds of 10. Seed 9 holds 12.6% on the CPU
+# clock, 19% on SDRAM and 26% on USB — the most balanced in the sweep.
+# The seed pinned before it had decayed to 0.2% on the CPU clock as the
+# netlist moved under it, which is a pass on paper rather than in
+# practice. A seed that once failed to route here now does: router
+# looping is a property of the netlist and the seed together, so it
+# survives a design change no better than an fmax figure does.
 #
-# gen2's previous pin showed why that matters: it held the sweep's
-# highest CPU fmax and its lowest USB fmax, which lasted until a netlist
-# change nudged USB past its constraint. Seed 9 carries 9% CPU margin
-# and 16% USB, where the best-on-CPU seed carries -1% USB. Read every
-# domain when
-# re-sweeping — hw/tools/seed-sweep.sh prints them all — since a seed
-# clearing one constraint says nothing about the rest.
-DEFAULT_SEED_ulx3s_penumbra1_top   := 6
-DEFAULT_SEED_ulx3s_penumbra2_top   := 9
-DEFAULT_SEED_ulx3s_penumbra2_5_top := 1
+# gen2.5 clears all five on 4 seeds of 10. Seed 8 is the strongest at
+# 3.7% on the CPU clock with 26% SDRAM and 9% USB, and its weakest
+# domain beats what this top held before the audio device existed —
+# narrowing the device's watermark compare and holding its hierarchy
+# gave back more than the device had cost.
+#
+# gen2 clears all five on only 3 seeds and is now the fragile one of the
+# pair. Seed 3 has the best CPU margin at 4.5% but only 1.4% on SDRAM,
+# which is what its worst-margin ranking reflects; re-sweep it before
+# trusting a build rather than assuming this pin still holds.
+DEFAULT_SEED_ulx3s_penumbra1_top   := 9
+DEFAULT_SEED_ulx3s_penumbra2_top   := 3
+DEFAULT_SEED_ulx3s_penumbra2_5_top := 8
 
 
 # BOARD/CORE porcelain → TOP derivation (CORE defaults to penumbra2
