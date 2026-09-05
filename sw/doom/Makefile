@@ -67,7 +67,7 @@ PORT_SRCS    := $(HERE)i_video_netbsd.c \
 # profiling aid, not part of the game.
 ifeq ($(PERFCTR),1)
 BENCHDIR     := $(PROJROOT)/benchmark/netbsd-bench
-PORT_SRCS    += $(BENCHDIR)/perfctr.c
+PORT_SRCS    += $(BENCHDIR)/perfctr.c $(HERE)r_phase.c
 PERFCTR_INC  := -I$(BENCHDIR)
 PERFCTR_DEF  := -DPENUMBRA_PERFCTR=1
 endif

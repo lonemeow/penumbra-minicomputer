@@ -24,6 +24,7 @@
 #include "i_system.h"
 
 #include "m_fixed.h"
+#include "r_phase.h"
 
 
 
@@ -35,6 +36,7 @@ FixedMul
 ( fixed_t	a,
   fixed_t	b )
 {
+    R_COUNT_FIXEDMUL();
     return ((int64_t) a * (int64_t) b) >> FRACBITS;
 }
 
@@ -46,6 +48,7 @@ FixedMul
 
 fixed_t FixedDiv(fixed_t a, fixed_t b)
 {
+    R_COUNT_FIXEDDIV();
     if ((abs(a) >> 14) >= abs(b))
     {
 	return (a^b) < 0 ? INT_MIN : INT_MAX;

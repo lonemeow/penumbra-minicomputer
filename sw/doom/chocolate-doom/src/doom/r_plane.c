@@ -30,6 +30,7 @@
 #include "doomstat.h"
 
 #include "r_local.h"
+#include "r_phase.h"
 #include "r_sky.h"
 
 
@@ -120,6 +121,8 @@ R_MapPlane
     fixed_t	distance;
     fixed_t	length;
     unsigned	index;
+
+    R_COUNT(R_CNT_MAPPLANE);
 	
 #ifdef RANGECHECK
     if (x2 < x1
@@ -214,6 +217,7 @@ R_FindPlane
   int		lightlevel )
 {
     visplane_t*	check;
+    R_COUNT(R_CNT_FINDPLANE);
 	
     if (picnum == skyflatnum)
     {
@@ -331,6 +335,7 @@ R_MakeSpans
   int		t2,
   int		b2 )
 {
+    R_COUNT(R_CNT_MAKESPANS);
     while (t1 < t2 && t1<=b1)
     {
 	R_MapPlane (t1,spanstart[t1],x-1);
@@ -369,6 +374,8 @@ void R_DrawPlanes (void)
     int			angle;
     int                 lumpnum;
 				
+    R_COUNT_N(R_CNT_VISPLANES, lastvisplane - visplanes);
+
 #ifdef RANGECHECK
     if (ds_p - drawsegs > MAXDRAWSEGS)
 	I_Error ("R_DrawPlanes: drawsegs overflow (%td)",

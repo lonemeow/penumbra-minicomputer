@@ -29,6 +29,7 @@
 #include "w_wad.h"
 
 #include "r_local.h"
+#include "r_phase.h"
 
 // Needs access to LFB (guess what).
 #include "v_video.h"
@@ -111,6 +112,8 @@ void R_DrawColumn (void)
     // Zero length, column does not exceed a pixel.
     if (count < 0) 
 	return; 
+
+    R_COUNT_COLUMN(count + 1);
 				 
 #ifdef RANGECHECK 
     if ((unsigned)dc_x >= SCREENWIDTH
@@ -219,6 +222,8 @@ void R_DrawColumnLow (void)
     // Zero length.
     if (count < 0) 
 	return; 
+
+    R_COUNT_COLUMN(count + 1);
 				 
 #ifdef RANGECHECK 
     if ((unsigned)dc_x >= SCREENWIDTH
@@ -299,6 +304,8 @@ void R_DrawFuzzColumn (void)
     if (count < 0) 
 	return; 
 
+    R_COUNT_COLUMN(count + 1);
+
 #ifdef RANGECHECK 
     if ((unsigned)dc_x >= SCREENWIDTH
 	|| dc_yl < 0 || dc_yh >= SCREENHEIGHT)
@@ -351,6 +358,8 @@ void R_DrawFuzzColumnLow (void)
     // Zero length.
     if (count < 0) 
 	return; 
+
+    R_COUNT_COLUMN(count + 1);
 
     // low detail mode, need to multiply by 2
     
@@ -415,6 +424,8 @@ void R_DrawTranslatedColumn (void)
     count = dc_yh - dc_yl; 
     if (count < 0) 
 	return; 
+
+    R_COUNT_COLUMN(count + 1);
 				 
 #ifdef RANGECHECK 
     if ((unsigned)dc_x >= SCREENWIDTH
@@ -461,6 +472,8 @@ void R_DrawTranslatedColumnLow (void)
     count = dc_yh - dc_yl; 
     if (count < 0) 
 	return; 
+
+    R_COUNT_COLUMN(count + 1);
 
     // low detail, need to scale by 2
     x = dc_x << 1;
@@ -606,6 +619,8 @@ void R_DrawSpan (void)
     // We do not check for zero spans here?
     count = ds_x2 - ds_x1;
 
+    R_COUNT_SPAN(count + 1);
+
     do
     {
 	// Calculate current texture index in u,v.
@@ -726,6 +741,8 @@ void R_DrawSpanLow (void)
          | ((ds_ystep >> 6)  & 0x0000ffff);
 
     count = (ds_x2 - ds_x1);
+
+    R_COUNT_SPAN(count + 1);
 
     // Blocky mode, need to multiply by 2.
     ds_x1 <<= 1;

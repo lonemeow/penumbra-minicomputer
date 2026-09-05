@@ -30,6 +30,7 @@
 #include "doomstat.h"
 
 #include "r_local.h"
+#include "r_phase.h"
 #include "r_sky.h"
 
 
@@ -209,6 +210,7 @@ void R_RenderSegLoop (void)
 
     for ( ; rw_x < rw_stopx ; rw_x++)
     {
+	R_COUNT(R_CNT_SEGLOOP_ITER);
 	// mark floor / ceiling areas
 	yl = (topfrac+HEIGHTUNIT-1)>>HEIGHTBITS;
 
@@ -378,10 +380,29 @@ R_StoreWallRange
     angle_t		distangle, offsetangle;
     fixed_t		vtop;
     int			lightnum;
+#ifdef PENUMBRA_PERFCTR
+    int			sampled;
+#else
+    const int		sampled = 0;
+#endif
+
+    R_COUNT(R_CNT_STOREWALL);
+#ifdef PENUMBRA_PERFCTR
+    sampled = (r_wall_seen++ % R_WALL_SAMPLE) == 0;
+    if (sampled)
+    {
+	r_wall_sampled++;
+	R_PhaseMark(R_PHASE_WALL);
+    }
+#endif
 
     // don't overflow and crash
     if (ds_p == &drawsegs[MAXDRAWSEGS])
-	return;		
+    {
+	if (sampled)
+	    R_PhaseMark(R_PHASE_BSP);
+	return;
+    }
 		
 #ifdef RANGECHECK
     if (start >=viewwidth || start > stop)
@@ -739,5 +760,6 @@ R_StoreWallRange
 	ds_p->bsilheight = INT_MAX;
     }
     ds_p++;
+    if (sampled) R_PhaseMark(R_PHASE_BSP);
 }
 
