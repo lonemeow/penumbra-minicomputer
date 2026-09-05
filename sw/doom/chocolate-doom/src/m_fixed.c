@@ -43,23 +43,8 @@ FixedMul
 
 
 //
-// FixedDiv, C version.
+// FixedDiv lives in m_fixed_penumbra.c: this machine divides 32/32
+// only, so the 64-bit division upstream writes here becomes a libcall
+// on the renderer's hottest path.
 //
-
-fixed_t FixedDiv(fixed_t a, fixed_t b)
-{
-    R_COUNT_FIXEDDIV();
-    if ((abs(a) >> 14) >= abs(b))
-    {
-	return (a^b) < 0 ? INT_MIN : INT_MAX;
-    }
-    else
-    {
-	int64_t result;
-
-	result = ((int64_t) a << FRACBITS) / b;
-
-	return (fixed_t) result;
-    }
-}
 

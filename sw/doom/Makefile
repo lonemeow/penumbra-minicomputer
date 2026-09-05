@@ -54,7 +54,8 @@ COMMON_SRCS  := $(filter-out $(addprefix $(CD)/src/,$(COMMON_EXCL)), \
 
 # Named for the interface each targets: the framebuffer and keyboard
 # paths are plain wscons, nothing Penumbra-specific.
-PORT_SRCS    := $(HERE)i_video_netbsd.c \
+PORT_SRCS    := $(HERE)m_fixed_penumbra.c \
+                $(HERE)i_video_netbsd.c \
                 $(HERE)i_input_netbsd.c \
                 $(HERE)i_timer_netbsd.c \
                 $(HERE)i_joystick_null.c \
@@ -94,7 +95,7 @@ CFLAGS       := --target=$(TARGET) --sysroot=$(DESTDIR) $(COPT) \
 LDFLAGS      := --target=$(TARGET) --sysroot=$(DESTDIR)
 LDLIBS       := -lm
 
-.PHONY: all clean overlay
+.PHONY: all clean overlay test
 all: $(BUILDDIR)/doom
 
 $(BUILDDIR)/doom: $(OBJS) | $(BUILDDIR)
@@ -138,6 +139,12 @@ overlay: all
 	        install -m 0644 $(WADDIR)/$$w $(OVERLAY_ROOT)$(WADDEST)/$$w; \
 	    done; \
 	fi
+
+# Host test: the fixed-point helpers are target-independent C, so they can
+# be checked against their int64_t reference without booting anything.
+test: | $(BUILDDIR)
+	@cc -O2 -Wall -I$(HERE) -o $(BUILDDIR)/m_fixed_test $(HERE)m_fixed_test.c
+	@$(BUILDDIR)/m_fixed_test
 
 clean:
 	rm -rf $(BUILDDIR)
