@@ -36,12 +36,13 @@ BUILDDIR := $(PROJROOT)/build/benchmark
 
 # ── Targets ────────────────────────────────────────────────────
 
-.PHONY: all dhrystone memtest membench strtest fbtest clean
+.PHONY: all dhrystone memtest membench strtest fbtest audiotest clean
 
-# fbtest ships with the others so it is on the SD image ready to run
-# on hardware; it stays out of BENCH_ELFS in the root Makefile, which
-# is the list the automated ISS/RTL benchmark loop runs.
-all: dhrystone memtest membench fbtest
+# fbtest and audiotest ship with the others so they are on the SD image
+# ready to run on hardware; both stay out of BENCH_ELFS in the root
+# Makefile, which is the list the automated ISS/RTL benchmark loop
+# runs, because both need a real device and a human to judge them.
+all: dhrystone memtest membench fbtest audiotest
 
 # ── Common harness objects ─────────────────────────────────────
 
@@ -259,6 +260,89 @@ fbtest: $(BUILDDIR)/FBTEST.ELF
 
 $(BUILDDIR)/FBTEST.ELF: $(CRT0_OBJ) $(FBTEST_OBJ) $(COMMON_OBJ) $(PENSTRING_LIB) common/bench.ld
 	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(FBTEST_OBJ) $(COMMON_OBJ) $(PENSTRING_LIB) -o $@
+
+# ── audiotest ────────────────────────────────────────────────
+#
+# Hardware exercise (not a benchmark) for the CLASS_AUDIO device: the
+# register protocol first, then real material to listen to.  The output
+# stage was characterised on the bring-up probe, but nothing has driven
+# the device from the CPU, so the FIFO port and the frame handoff to
+# the output clock are only as proven as the first hardware run makes
+# them.  Needs a real device and a pair of ears, so it is run on
+# hardware rather than under `make test`.
+#
+# Ships in `all` so it reaches the SD image; stays out of BENCH_ELFS,
+# which is the automated ISS/RTL loop:
+#   boot sd:0,0/AUDIOTES.ELF
+#
+# The listening half needs material, and material is the user's own
+# file rather than this tree's — nothing audio is ever committed here.
+# So the default build links no clip at all and the program falls back
+# to a test tone, which still proves the whole path end to end.  Point
+# AUDIO_WAV at anything to hear it instead:
+#
+#   make audiotest AUDIO_WAV=~/music/whatever.wav
+#
+# Any format `wave` reads works; it is folded to stereo and resampled
+# to the device rate.  AUDIOTEST_FRAMES caps the length — 4 bytes a
+# frame, riding inside the ELF, so the default is ~2 MB / 10.9 s at
+# 48 kHz.
+AUDIOTEST_FRAMES ?= 524288
+AUDIO_WAV        ?=
+
+AUDIOTEST_OBJ := $(BUILDDIR)/audiotest_entry.o $(BUILDDIR)/audiotest_sample.o
+
+# With no source material there is no blob and sample.S assembles to an
+# empty span, which entry.c reads as "generate a tone instead".
+ifeq ($(strip $(AUDIO_WAV)),)
+AUDIOTEST_CLIP    :=
+AUDIOTEST_WAV     :=
+AUDIOTEST_ASFLAGS := $(ASFLAGS)
+else
+# A relative AUDIO_WAV is nearly always relative to where make was
+# invoked — the project root — while this makefile runs in benchmark/.
+# Accept either, and fail with the paths tried rather than as a missing
+# make target.
+AUDIOTEST_WAV := $(firstword $(wildcard $(abspath $(AUDIO_WAV)) \
+                                        $(PROJROOT)/$(AUDIO_WAV)))
+ifeq ($(AUDIOTEST_WAV),)
+$(error AUDIO_WAV=$(AUDIO_WAV): no such file — tried $(abspath $(AUDIO_WAV)) \
+and $(PROJROOT)/$(AUDIO_WAV))
+endif
+AUDIOTEST_CLIP    := $(BUILDDIR)/audio_sample.bin
+AUDIOTEST_ASFLAGS := $(ASFLAGS) -DAUDIO_CLIP
+endif
+
+# Neither the length nor the source file is a prerequisite make can see
+# (one is a variable, the other may be empty), so stamp both and depend
+# on the stamp.  Same reason as $(DHRY_STAMP).
+AUDIOTEST_STAMP := $(BUILDDIR)/.audiotest_clip
+$(AUDIOTEST_STAMP): FORCE | $(BUILDDIR)
+	@if [ ! -f $@ ] || [ "$$(cat $@)" != "$(AUDIOTEST_FRAMES) $(AUDIOTEST_WAV)" ]; then \
+		echo "$(AUDIOTEST_FRAMES) $(AUDIOTEST_WAV)" > $@; \
+	fi
+
+$(BUILDDIR)/audio_sample.bin: ../hw/tools/wav2sample.py $(AUDIOTEST_STAMP) \
+                              $(AUDIOTEST_WAV) | $(BUILDDIR)
+	python3 ../hw/tools/wav2sample.py $(AUDIOTEST_WAV) -o $@ \
+		-f bin -c 2 -n $(AUDIOTEST_FRAMES)
+
+$(BUILDDIR)/audiotest_entry.o: audiotest/entry.c audiotest/audio.h \
+                               common/bench.h | $(BUILDDIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# .incbin resolves against the assembler's include path, so the source
+# names the blob and -I says where the build put it.  The stamp is a
+# prerequisite because toggling AUDIO_WAV changes -DAUDIO_CLIP without
+# changing sample.S.
+$(BUILDDIR)/audiotest_sample.o: audiotest/sample.S $(AUDIOTEST_CLIP) \
+                                $(AUDIOTEST_STAMP) | $(BUILDDIR)
+	$(CC) $(AUDIOTEST_ASFLAGS) -x assembler-with-cpp -I $(BUILDDIR) $< -o $@
+
+audiotest: $(BUILDDIR)/AUDIOTES.ELF
+
+$(BUILDDIR)/AUDIOTES.ELF: $(CRT0_OBJ) $(AUDIOTEST_OBJ) $(COMMON_OBJ) $(PENSTRING_LIB) common/bench.ld
+	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(AUDIOTEST_OBJ) $(COMMON_OBJ) $(PENSTRING_LIB) -o $@
 
 # ── Cleanup ────────────────────────────────────────────────────
 

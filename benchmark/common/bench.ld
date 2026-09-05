@@ -43,6 +43,16 @@ SECTIONS
         *(.rel.dyn)
     }
 
+    /* Bulk payloads a program links in — an audio clip is megabytes.
+     * Kept past .data because crt0 reaches its PIE address slots with
+     * a 16-bit PC-relative displacement, and anything large sitting
+     * between .text and .data puts them out of range.  C code reaches
+     * its own globals through the GOT, so .bss is free to move. */
+    . = ALIGN(4096);
+    .payload : {
+        *(.payload .payload.*)
+    }
+
     . = ALIGN(4096);
     .bss : {
         *(.bss .bss.*)

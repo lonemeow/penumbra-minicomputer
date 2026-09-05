@@ -370,8 +370,8 @@ font8x16.hex: netbsd/sys/dev/wsfont/bold8x16.h hw/tools/wsfont2hex.py
 # depth and must stay a power of two — at 48 kHz the default is 2.7 s.
 AUDIO_SAMPLES ?= 131072
 AUDIO_WAV     ?=
-audio_sample.hex: hw/tools/wav2hex.py $(AUDIO_WAV)
-	python3 hw/tools/wav2hex.py $(AUDIO_WAV) -o $@ -n $(AUDIO_SAMPLES)
+audio_sample.hex: hw/tools/wav2sample.py $(AUDIO_WAV)
+	python3 hw/tools/wav2sample.py $(AUDIO_WAV) -o $@ -n $(AUDIO_SAMPLES)
 
 # Splash-screen cell image for the CPU-free display bring-up, read by
 # video_cell_ram via $readmemh when preloaded (video_pixel_chain).
