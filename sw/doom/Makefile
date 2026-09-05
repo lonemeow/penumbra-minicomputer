@@ -95,20 +95,41 @@ CFLAGS       := --target=$(TARGET) --sysroot=$(DESTDIR) $(COPT) \
 LDFLAGS      := --target=$(TARGET) --sysroot=$(DESTDIR)
 LDLIBS       := -lm
 
+# An object carries no record of how it was built, so a timestamp answers
+# "is the source newer?" when the question is "was this built the way I am
+# building now?".  Two things close that gap: the compiler reports the
+# headers it actually read, and the flags are stamped into a file every
+# object depends on.  Without the stamp, changing PERFCTR reuses objects
+# from the other setting and links two configurations into one binary.
+DEPFLAGS     := -MMD -MP
+CONFIG_STAMP := $(OBJDIR)/build-config
+
 .PHONY: all clean overlay test
 all: $(BUILDDIR)/doom
 
-$(BUILDDIR)/doom: $(OBJS) | $(BUILDDIR)
+$(BUILDDIR)/doom: $(OBJS) $(CONFIG_STAMP) | $(BUILDDIR)
 	$(CC) $(LDFLAGS) $(OBJS) $(LDLIBS) -o $@
 
 # No basename collisions across the three source directories.
 vpath %.c $(CD)/src $(CD)/src/doom $(HERE) $(BENCHDIR)
 
-$(OBJDIR)/%.o: %.c | $(OBJDIR)
-	$(CC) $(CFLAGS) -c $< -o $@
+$(OBJDIR)/%.o: %.c $(CONFIG_STAMP) | $(OBJDIR)
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
+
+# Rewritten only when the flags differ, so a build with nothing to do
+# stays a no-op instead of recompiling on every invocation.
+.PHONY: FORCE
+FORCE:
+$(CONFIG_STAMP): FORCE | $(OBJDIR)
+	@printf '%s\n' '$(CFLAGS) $(LDFLAGS) $(LDLIBS)' | cmp -s - $@ || \
+	    printf '%s\n' '$(CFLAGS) $(LDFLAGS) $(LDLIBS)' > $@
 
 $(BUILDDIR) $(OBJDIR):
 	@mkdir -p $@
+
+# Header edits reach the objects that read the header, including the
+# generated config.h and the port's own headers.
+-include $(OBJS:.o=.d)
 
 
 # ── Game data ────────────────────────────────────────────────────
