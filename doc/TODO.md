@@ -4834,3 +4834,66 @@ most of it is a simulation rather than a listening test: the modulator's
 code stream does not depend on the ladder, so one captured stream feeds
 a swept model of the analog mapping. Hardware is needed only for what
 the model cannot supply — the ECP5's actual source/sink impedance.
+
+## Hardware: the USB receive path is a placement lottery
+
+`clk_usb`'s critical path is an unregistered chain running the length of
+the receive stack — nine module boundaries in one clock:
+
+```
+usb_phy.rstate_q → ka_q → drive_en → squelch
+  → oversample.i_line → rx_framing.i_bit_en → unstuff.i_en
+  → deserialize.i_valid → pkt_rx.byte_arrives → payload_byte
+  → active_q → usbhc.mac_we → usbhc_cdc.buf_mem address
+```
+
+31 hops, 16.84 ns against a 16.67 ns budget on the seed that exposed
+it. About 3.4 ns of that is logic (14 LUTs at 0.24 ns) and 13.4 ns is
+routing, and the final two hops into the CDC buffer's address port are
+4.20 ns on their own — a quarter of the budget in one wire.
+
+The delay is therefore *distance*, not contention: die utilisation is
+27% of LUTs, so nothing is congested. Each hop lands wherever its
+module was placed, which makes the path's length a property of
+placement rather than of logic, and placement is what a seed
+randomises. Measured spread across ten seeds on gen2 without the audio
+device: 64.8 to 76.9 MHz, mean 72.0.
+
+That spread is the real problem. A domain whose fmax varies 19% with
+the seed passes on luck, and the luck runs out on the next change:
+adding the audio output stage — some 250 LUTs in that domain, 3.7% more
+logic overall — moved the mean down 7.6% on gen2 and 6.8% on gen2.5,
+taking gen2 from ten seeds clearing 60 MHz to nine and gen2.5 to seven.
+
+Worth fixing rather than re-pinning around, for two reasons. The chain
+is enable and valid signals threaded through the receive pipeline, so
+registering it is a local change to signals that already have a natural
+cycle boundary, not a protocol change. And `usbhc` is a bus device: a
+new core generation reuses it verbatim, so the fragility travels with
+it rather than being retired alongside the core it was measured on.
+
+### Method note: attribute against a swept baseline
+
+The failure first looked like the audio device breaking USB timing. It
+was not diagnosable either way until the pre-change design was swept
+across the same ten seeds, because the pinned seed showed one sample of
+a wide distribution. The baseline is what turned "a seed failed" into
+"the mean moved 5.5 MHz and the passing-seed count went from ten to
+nine". Sweep before attributing.
+
+### gen2.5's own ceiling is elsewhere
+
+The same campaign measured why gen2.5 fell from seven usable seeds to
+two, and it is not the audio device: its `clk` critical path runs
+EX → MEM → MMU → TLB → permission check → fault status, 51 hops and
+26.0 ns against a 26.67 ns budget, with the permission check alone
+8.85 ns over 18 hops. Audio appears nowhere on it. gen2.5's baseline
+`clk` mean is 38.2 MHz against a 37.5 constraint — 1.8% of margin on
+seven seeds of ten — so the variant was already at its ceiling and the
+audio device consumed what was left.
+
+The chain is unregistered because a fault must be known in the same
+cycle as the access, to squash and trap. That is an architectural
+choice rather than an oversight, and a design resolving faults a cycle
+later would not have this shape — worth deciding deliberately in a
+future core rather than inheriting by default.
