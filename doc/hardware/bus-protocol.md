@@ -343,6 +343,18 @@ shows up as intermittent stale-data bugs that depend on whether
 the master is currently bursting or single-stepping.  An early
 `sim_spi.sv` bug had exactly this shape.
 
+**The combinational exemption stops at `autoconfig_dev`.**  An
+autoconfigured device reaches the CPU through a top-level read
+combine that gates each device's `rdata` with a *registered*
+select, so data driven on the same cycle as `re` is sampled a
+cycle after it is gone no matter what the device does with `busy`.
+Every device behind the wrapper therefore registers its read
+output and stalls for the cycle, whether or not its own read path
+needs the pipeline stage.  The failure looks like a device that
+answers correctly only when a read immediately follows another
+read to the same device — back-to-back accesses find the select
+already asserted from the previous one.
+
 ### Sync burst
 
 ```

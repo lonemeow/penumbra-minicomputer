@@ -17,6 +17,11 @@
 // a time crosses to the output domain. LEVEL and UNDERRUN are therefore
 // exact counts rather than values inferred across a boundary.
 
+// keep_hierarchy: hold this boundary through synth_ecp5. The device's
+// busy feeds the bus stall combine, and letting the placer scatter its
+// logic across the die stretched the route out of that combine into the
+// arbiter — on a core with no timing margin to spare.
+(* keep_hierarchy = "yes" *)
 module audio
     import penumbra_pkg::*;
 #(
@@ -53,8 +58,6 @@ module audio
     localparam logic [31:0] UNITY_VOL = 32'hFFFF_FFFF;
     localparam logic [31:0] UNITY_INC = 32'h0001_0000;
 
-    assign o_busy = 1'b0;
-
     logic       sel_chan;
     logic [2:0] reg_sel;
     assign sel_chan = i_addr[8];
@@ -73,8 +76,19 @@ module audio
     logic [ADDR_W-1:0] wr_q, rd_q;
     logic [ADDR_W:0]   count_q;      // frames held, 0..DEPTH
 
-    logic [31:0] level;              // free space, in frames
-    assign level = 32'(DEPTH) - 32'(count_q);
+    // Free space needs only as many bits as DEPTH. Carrying it at 32
+    // put a full-width subtract and a full-width compare against WM on
+    // the CPU clock every cycle, for a queue that never exceeds 2^ADDR_W.
+    localparam int LVL_W = ADDR_W + 1;
+
+    logic [LVL_W-1:0] level;         // free space, in frames
+    assign level = LVL_W'(DEPTH) - LVL_W'(count_q);
+
+    // A watermark past the queue's capacity can never be reached. Saying
+    // so with a reduction over the high bits keeps WM readable at its
+    // written width without widening the comparison.
+    logic wm_unreachable;
+    assign wm_unreachable = |wm_q[31:LVL_W];
 
     // ── Output domain: rate tick ─────────────────────────────
     logic run_a1, run_a2;            // enable, into the output domain
@@ -184,7 +198,8 @@ module audio
             // Sticky while the free space has reached the watermark. A
             // zero watermark disables the flag rather than asserting it
             // permanently.
-            if ((wm_q != 32'd0) && (level >= wm_q)) irq_status_q <= 1'b1;
+            if ((wm_q != 32'd0) && !wm_unreachable &&
+                (level >= wm_q[LVL_W-1:0])) irq_status_q <= 1'b1;
 
             if (i_we && !sel_chan) begin
                 case (reg_sel)
@@ -206,32 +221,50 @@ module audio
     // Absent optional features read their unity values, so a consumer
     // that never inspects CAP still plays at the native rate and full
     // volume rather than at a wrong pitch or in silence.
+    logic [31:0] rdata_next;
+
     always_comb begin
-        o_rdata = 32'd0;
-        if (i_re) begin
-            if (!sel_chan) begin
-                case (reg_sel)
-                    3'd0:    o_rdata = CAP_VALUE;
-                    3'd1:    o_rdata = 32'(SAMPLE_HZ);
-                    3'd2:    o_rdata = {31'd0, enable_q};
-                    3'd3:    o_rdata = {31'd0, chan_en_q};
-                    3'd4:    o_rdata = {31'd0, irq_status_q};
-                    3'd5:    o_rdata = {31'd0, irq_enable_q};
-                    3'd6:    o_rdata = {31'd0, underrun_q};
-                    default: o_rdata = UNITY_VOL;      // MASTER_VOL
-                endcase
-            end else begin
-                case (reg_sel)
-                    3'd0:    o_rdata = 32'd0;          // CHAN CTRL
-                    3'd1:    o_rdata = UNITY_INC;
-                    3'd2:    o_rdata = UNITY_VOL;
-                    3'd3:    o_rdata = 32'(DEPTH);
-                    3'd4:    o_rdata = level;
-                    3'd5:    o_rdata = wm_q;
-                    default: o_rdata = 32'd0;          // FIFO reads 0
-                endcase
-            end
+        if (!sel_chan) begin
+            case (reg_sel)
+                3'd0:    rdata_next = CAP_VALUE;
+                3'd1:    rdata_next = 32'(SAMPLE_HZ);
+                3'd2:    rdata_next = {31'd0, enable_q};
+                3'd3:    rdata_next = {31'd0, chan_en_q};
+                3'd4:    rdata_next = {31'd0, irq_status_q};
+                3'd5:    rdata_next = {31'd0, irq_enable_q};
+                3'd6:    rdata_next = {31'd0, underrun_q};
+                default: rdata_next = UNITY_VOL;      // MASTER_VOL
+            endcase
+        end else begin
+            case (reg_sel)
+                3'd0:    rdata_next = 32'd0;          // CHAN CTRL
+                3'd1:    rdata_next = UNITY_INC;
+                3'd2:    rdata_next = UNITY_VOL;
+                3'd3:    rdata_next = 32'(DEPTH);
+                3'd4:    rdata_next = 32'(level);
+                3'd5:    rdata_next = wm_q;
+                default: rdata_next = 32'd0;          // FIFO reads 0
+            endcase
         end
     end
+
+    // A read answers from a register one cycle after it is presented,
+    // and holds the bus for that cycle. The device-select feeding the
+    // top-level read combine is registered to match, so combinational
+    // data would be sampled a cycle after it had already gone. Writes
+    // are not stalled: filling the FIFO is the one hot path here.
+    logic read_pending_q;
+
+    always_ff @(posedge i_clk) begin
+        if (i_rst) begin
+            o_rdata        <= 32'd0;
+            read_pending_q <= 1'b0;
+        end else begin
+            o_rdata        <= i_re ? rdata_next : 32'd0;
+            read_pending_q <= i_re & ~read_pending_q;
+        end
+    end
+
+    assign o_busy = i_re & ~read_pending_q;
 
 endmodule

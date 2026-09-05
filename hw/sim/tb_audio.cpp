@@ -64,8 +64,14 @@ void wr(uint32_t addr, uint32_t data) {
 }
 
 uint32_t rd(uint32_t addr) {
+    // A read answers from a register a cycle after it is presented, so
+    // hold the strobe until the device drops busy and sample then —
+    // what the bus master does, and what sampling combinationally in
+    // the presentation cycle hid.
     dut->i_addr = addr; dut->i_re = 1;
-    steps(2);
+    do {
+        steps(2);
+    } while (dut->o_busy);
     uint32_t v = dut->o_rdata;
     dut->i_re = 0;
     steps(2);
@@ -157,7 +163,27 @@ int main() {
     check((rd(IRQ_STATUS) & 1) == 0, "IRQ_STATUS did not clear with the queue full");
     check(dut->o_irq == 0, "IRQ still asserted with the queue full");
 
+    // A watermark the queue can never reach must never raise the flag.
+    // The comparison is narrowed to the queue's width; the register is
+    // not, so what was written still reads back.
+    reset();
+    wr(IRQ_ENABLE, 1);
+    wr(C_WM, DEPTH);
+    check(dut->o_irq == 1, "IRQ not asserted with WM exactly at DEPTH");
+
+    reset();
+    wr(IRQ_ENABLE, 1);
+    wr(C_WM, DEPTH + 1);
+    check(dut->o_irq == 0, "IRQ asserted for a watermark one past DEPTH");
+
+    wr(C_WM, 0xDEADBEEFu);
+    check(dut->o_irq == 0, "IRQ asserted for a far out-of-range watermark");
+    check(rd(C_WM) == 0xDEADBEEFu, "WM read back %08X, expected DEADBEEF",
+          rd(C_WM));
+
     // ── Flush ────────────────────────────────────────────────
+    reset();
+    for (int i = 0; i < DEPTH; i++) wr(C_FIFO, i);
     check(rd(C_LEVEL) == 0, "LEVEL before flush: %u, expected 0", rd(C_LEVEL));
     wr(C_CTRL, 1u << 8);
     check(rd(C_LEVEL) == DEPTH, "flush left %u free, expected %d", rd(C_LEVEL), DEPTH);
