@@ -29,6 +29,7 @@
 /* ── FAT32 constants ────────────────────────────────────────────────── */
 
 #define FAT32_EOC       0x0FFFFFF8  /* end-of-chain marker (>= this) */
+#define INVALID_LBA     0           /* LBA 0 is the MBR, never a FAT sector */
 #define DIR_ENTRY_SIZE  32
 #define ENTRIES_PER_SECTOR (512 / DIR_ENTRY_SIZE)
 
@@ -52,22 +53,21 @@ static uint32_t cluster_to_lba(const struct fat32 *fs, uint32_t cluster)
  * Read the next cluster number from the FAT.
  * Returns the next cluster, or 0 on read error.
  */
-static uint32_t fat_next_cluster(const struct fat32 *fs, uint32_t cluster)
+static uint32_t fat_next_cluster(struct fat32 *fs, uint32_t cluster)
 {
-    /*
-     * Each FAT32 entry is 4 bytes.  128 entries per 512-byte sector.
-     * FAT sector = fat_lba + (cluster * 4) / 512
-     * Offset within sector = (cluster * 4) % 512
-     */
-    uint32_t fat_offset = cluster * 4;
-    uint32_t fat_sector = fs->fat_lba + (fat_offset / 512);
-    uint32_t fat_index  = fat_offset % 512;
+    uint32_t fat_offset    = cluster * 4;
+    uint32_t fat_entry_lba = fs->fat_lba + (fat_offset / 512);
+    uint32_t fat_index     = fat_offset % 512;
 
-    unsigned char buf[512];
-    if (fs->read(fat_sector, buf, fs->read_ctx) != 0)
-        return 0;
-
-    return read_le32(buf + fat_index) & 0x0FFFFFFF;
+    if (fat_entry_lba != fs->fat_cache_lba) {
+        fs->fat_cache_lba = INVALID_LBA;
+        int r = fs->read(fat_entry_lba, fs->fat_cache, fs->read_ctx);
+        if (r != 0) {
+            return 0;
+        }
+        fs->fat_cache_lba = fat_entry_lba;
+    }
+    return read_le32(fs->fat_cache + fat_index) & 0x0FFFFFFF;
 }
 
 /*
@@ -117,6 +117,7 @@ fat32_mount(struct fat32 *fs, blk_read_fn read, void *ctx, uint32_t part_lba)
     fs->read = read;
     fs->read_ctx = ctx;
     fs->part_lba = part_lba;
+    fs->fat_cache_lba = INVALID_LBA;
 
     if (read(part_lba, bpb, ctx) != 0) {
         return -1;

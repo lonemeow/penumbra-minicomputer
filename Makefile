@@ -422,7 +422,16 @@ test-modules-variant:
 # ── Aggregate: program tests + module tests ───────────────────
 # Usage: make test-all
 .PHONY: test-all
-test-all: test test-modules
+test-all: test test-modules test-rom
+
+
+# ── Boot ROM host unit tests (fast, no Docker, no toolchain) ──
+# The ROM's device-independent layers (FAT32) build natively against
+# synthesized images.  See hw/rom/tests/.
+# Usage: make test-rom
+.PHONY: test-rom
+test-rom:
+	@$(MAKE) -C hw/rom test
 
 
 # ── Run the conformance suite on the ISS (fast, no Docker) ────

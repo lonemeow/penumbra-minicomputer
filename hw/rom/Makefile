@@ -43,7 +43,7 @@ ASM_OBJS := $(ASM_SRCS:%.s=$(BUILD)/%.o)
 OBJS     := $(ASM_OBJS) $(C_OBJS)
 
 # ── Targets ───────────────────────────────────────────────────
-.PHONY: all clean FORCE
+.PHONY: all clean test FORCE
 
 all: $(OUT_HEX)
 
@@ -78,6 +78,20 @@ $(BUILD)/%.o: %.s | $(BUILD)
 
 $(BUILD):
 	@mkdir -p $@
+
+# ── Host unit tests ───────────────────────────────────────────
+# fat32.c reaches the disk only through its blk_read_fn callback, so
+# it builds and runs natively against a synthesized image — no
+# simulator, no cross toolchain, no SD card.
+HOST_CC  ?= cc
+TEST_BIN := $(BUILD)/fat32_test
+
+test: $(TEST_BIN)
+	$(TEST_BIN)
+
+$(TEST_BIN): tests/fat32_test.c fat32.c util.c fat32.h util.h penumbra.h | $(BUILD)
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -O1 -g -o $@ \
+	    tests/fat32_test.c fat32.c util.c
 
 clean:
 	rm -rf $(BUILD) $(OUT_HEX)

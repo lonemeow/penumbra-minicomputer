@@ -33,6 +33,17 @@ struct fat32 {
     uint32_t     data_lba;      /* first data sector (absolute) */
     uint32_t     root_cluster;  /* root directory first cluster */
     unsigned     spc;           /* sectors per cluster */
+
+    /*
+     * Single-sector FAT cache.  Chain walks consult the FAT once per
+     * cluster, but one 512-byte sector holds 128 consecutive cluster
+     * entries, so a whole small file's chain usually lives in one
+     * sector.  Caching it turns those repeat lookups into no I/O at
+     * all.  fat_cache_lba is INVALID_LBA when the cache holds nothing:
+     * LBA 0 is the MBR, so it can never be a legitimate FAT sector.
+     */
+    uint32_t     fat_cache_lba;
+    unsigned char fat_cache[512];
 };
 
 /*
