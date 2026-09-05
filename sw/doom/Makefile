@@ -122,6 +122,10 @@ AVAILABLE_WADS := $(sort $(notdir $(wildcard $(WADDIR)/*.wad $(WADDIR)/*.WAD)))
 #
 # Tradeoff: an image built from a tree holding a non-redistributable WAD
 # will carry it. Check wads/ before building one to hand out.
+# Fixed-length demos cut by make-timedemo.py, staged alongside the IWADs
+# so a benchmark run needs no arguments beyond the file.
+BENCH_DEMOS  := $(notdir $(wildcard $(WADDIR)/*.lmp))
+
 STAGED_WADS  := $(AVAILABLE_WADS)
 DEFAULT_WAD  := freedoom1.wad
 
@@ -139,6 +143,11 @@ overlay: all
 	        install -m 0644 $(WADDIR)/$$w $(OVERLAY_ROOT)$(WADDEST)/$$w; \
 	    done; \
 	fi
+	@for d in $(BENCH_DEMOS); do \
+	    install -d $(OVERLAY_ROOT)$(WADDEST); \
+	    echo "  doom: overlay $$d"; \
+	    install -m 0644 $(WADDIR)/$$d $(OVERLAY_ROOT)$(WADDEST)/$$d; \
+	done
 
 # Host test: the fixed-point helpers are target-independent C, so they can
 # be checked against their int64_t reference without booting anything.
