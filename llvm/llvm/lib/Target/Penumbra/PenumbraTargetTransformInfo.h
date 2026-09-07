@@ -87,6 +87,56 @@ public:
     return DataType->isIntegerTy(32);
   }
 
+  // MUL and DIV execute on the sequential divmul peer unit, not in the
+  // ALU: the multiply retires MUL_BITS_PER_STEP multiplier bits per
+  // step (four on the FPGA cores, so 32/4 steps plus the start/busy
+  // handshake), and the divide is restoring at one quotient bit per
+  // step on every core.  Left at the BasicTTIImpl default both price
+  // as 1 — the same as an ADD — which makes the middle end prefer
+  // multiply-shaped canonical forms.  InstCombine will, for instance,
+  // rewrite a provably-disjoint `x | x<<8 | x<<16 | x<<24` into
+  // `x * 0x01010101`, trading four ALU ops for a ten-cycle operation.
+  //
+  // There are no subtarget features to select between cores, so these
+  // are the FPGA cores' figures.  penumbra1 builds its multiplier one
+  // bit per step and is understated here; that costs it decompositions
+  // it would also benefit from, but never prices a multiply as cheap.
+  static constexpr unsigned MulCycles = 10;
+  static constexpr unsigned DivCycles = 34;
+
+  InstructionCost getArithmeticInstrCost(
+      unsigned Opcode, Type *Ty, TTI::TargetCostKind CostKind,
+      TTI::OperandValueInfo Op1Info = {TTI::OK_AnyValue, TTI::OP_None},
+      TTI::OperandValueInfo Op2Info = {TTI::OK_AnyValue, TTI::OP_None},
+      ArrayRef<const Value *> Args = {},
+      const Instruction *CxtI = nullptr) const override {
+    // Code size is untouched: these are one instruction each however
+    // long they run, and answering otherwise would distort inlining
+    // and unrolling decisions that have nothing to do with speed.
+    if (CostKind != TTI::TCK_CodeSize && Ty->isIntOrIntVectorTy()) {
+      unsigned Cycles = 0;
+      switch (Opcode) {
+      case Instruction::Mul:
+        Cycles = MulCycles;
+        break;
+      case Instruction::SDiv:
+      case Instruction::UDiv:
+      case Instruction::SRem:
+      case Instruction::URem:
+        Cycles = DivCycles;
+        break;
+      default:
+        break;
+      }
+      // Scale by the legalization factor, so a type split into several
+      // native operations is charged for each of them.
+      if (Cycles)
+        return getTypeLegalizationCost(Ty).first * Cycles;
+    }
+    return BaseT::getArithmeticInstrCost(Opcode, Ty, CostKind, Op1Info,
+                                        Op2Info, Args, CxtI);
+  }
+
   // Make instruction count the primary LSR sort key.  The default
   // `isLSRCostLess` tuple-compares with `NumRegs` first — a register-
   // pressure prior that fits 1990s x86 (8 GPRs, free `[base+index*scale]`
