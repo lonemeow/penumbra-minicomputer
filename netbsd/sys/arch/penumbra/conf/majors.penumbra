@@ -24,3 +24,4 @@ device-major	ksyms		char 76			ksyms
 device-major	wsdisplay	char 25			wsdisplay
 device-major	wskbd		char 29			wskbd
 device-major	wsmux		char 56			wsmux
+device-major	audio		char 42			audio

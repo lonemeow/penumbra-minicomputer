@@ -114,6 +114,24 @@ __penumbra_bus_set_multi_1(bus_space_tag_t t __unused, bus_space_handle_t h,
 	__penumbra_bus_set_multi_1((t), (h), (o), (v), (c))
 
 /*
+ * write_multi_4: push many words from a buffer into a single (FIFO)
+ * register — write_multi_1's word-wide form, for a device whose data
+ * port is 32 bits.  Only the write side exists because the ports that
+ * want it are write-only; add the mirror when something reads one.
+ */
+static inline void
+__penumbra_bus_write_multi_4(bus_space_tag_t t __unused, bus_space_handle_t h,
+    bus_size_t o, const uint32_t *a, bus_size_t c)
+{
+	volatile uint32_t *p = (volatile uint32_t *)(h + o);
+
+	while (c-- > 0)
+		*p = *a++;
+}
+#define	bus_space_write_multi_4(t, h, o, a, c)	\
+	__penumbra_bus_write_multi_4((t), (h), (o), (a), (c))
+
+/*
  * write_region: copy a buffer into consecutive device words (a
  * packet buffer, not a FIFO — the device offset advances with the
  * source).  Same by-value-handle shape as the multi ops: the

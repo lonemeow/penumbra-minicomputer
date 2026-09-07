@@ -59,6 +59,10 @@ ure*		at uhub? port ?	# Realtek RTL8152/RTL8153 based adapters
 # Display adapter -> wscons console
 pdisplay0	at pbbus?
 wsdisplay*	at pdisplay? console ?
+
+# Audio device -> MI audio(4)
+paudio0		at pbbus?
+audio*		at audiobus?
 options 	WSEMUL_VT100
 options 	WSDISPLAY_DEFAULTSCREENS=1
 

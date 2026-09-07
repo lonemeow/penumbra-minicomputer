@@ -74,6 +74,16 @@ void	delay(unsigned int);
 #endif /* _KERNEL && !_LOCORE */
 
 /*
+ * audio(4) block size.  The framework's 10 ms default is a single
+ * scheduler tick, which leaves no slack when a refill is woken by the
+ * clock rather than run from the device's own interrupt.  Two ticks is
+ * still under the audio device's FIFO depth at its native rate, which
+ * is what bounds a block; a channel with a shallower queue clamps
+ * further in round_blocksize.
+ */
+#define	__AUDIO_BLK_MS	20
+
+/*
  * Minimum and maximum sizes of the kernel malloc arena in PAGE_SIZE-sized
  * logical pages.
  */

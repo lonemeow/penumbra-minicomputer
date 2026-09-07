@@ -396,13 +396,37 @@ device-specific control, requiring no change to MI code.
 `audio(4)` drives channel 0 directly. `trigger_output` supplies a ring
 and a block size and asks to be called once per block: the block size
 becomes the channel's watermark, and the per-block callback is driven
-from its watermark flag. The channel's FIFO depth bounds the block size
-reported from `round_blocksize`.
+from its watermark flag.
 
-A block size close to the scheduler tick leaves no slack when a refill
-path is woken by a timer rather than run from the interrupt handler, so
-this port sets `__AUDIO_BLK_MS` in `<machine/param.h>` to several ticks
-rather than inheriting the framework default of 10 ms.
+Because the block *is* the watermark, it is bounded by **half** the
+channel's FIFO depth rather than by the whole of it. The watermark says
+how much free space raises the interrupt, so what stays queued at that
+moment — the depth less the block — is the deadline for servicing it. A
+block near the full depth leaves almost nothing, and the driver clamps
+in `round_blocksize` to keep the servicing margin and the block the same
+size. `__AUDIO_BLK_MS` in `<machine/param.h>` is a request that this
+clamp overrides on a device whose queue is shallow relative to it.
+
+The frames a driver copies out of the ring have left it, whether or not
+they have reached the converter yet, so the per-block callback owes the
+framework one call per block *copied* — including any the driver primes
+the queue with before starting the channel. A prime whose count is not
+accounted for desynchronises the framework from the read cursor
+permanently: it refills blocks the driver has already passed while the
+driver reads blocks it has not yet refilled. Priming at most one block
+keeps that accounting inside the block the stream starts on, without
+calling back into the framework from within its own start path.
+
+**One block per interrupt is also the ceiling, not just the floor.**
+The framework produces a single block per callback and holds no deeper
+lookahead — the ring's capacity sets how much space exists, never how
+much of it is valid. A driver whose queue has room for several blocks
+will happily read all of them, and everything past what the framework
+has written is stale ring content: audible as corruption, invisible to
+the device's own underrun flag, because the queue never actually ran
+dry. Sizing the queue's read to the block, rather than to the free
+space, is what keeps the driver behind the producer. This is also why
+enlarging the ring through `round_buffersize` buys nothing here.
 
 ### Group letter
 
