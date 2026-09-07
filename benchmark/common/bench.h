@@ -66,6 +66,22 @@ void bench_caches_enable(void);
 void bench_caches_disable(void);
 
 /*
+ * Map [base, limit) cached even where it falls in the MMIO range the
+ * TLB miss handler otherwise maps uncached.  For a device aperture
+ * that behaves as plain memory — a framebuffer whose only writer is
+ * the CPU — where a cached copy cannot go stale; never for registers
+ * the device itself updates.
+ *
+ * Flushes the main TLB, since entries installed under the previous
+ * range still carry its cacheability.  Pass (0, 0) to restore the
+ * default, under which every device is uncached.
+ *
+ * Lives in tlbrange.c, which depends on the handler crt0.S installs —
+ * link that object to use this.
+ */
+void bench_map_cached(uint32_t base, uint32_t limit);
+
+/*
  * CPU performance counter snapshot.
  * Free-running 32-bit counters from SYSDEV_CPU.  Wraps every
  * ~5.7 minutes at 12.5 MHz; benchmarks take seconds, so deltas are safe.

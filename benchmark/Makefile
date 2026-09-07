@@ -244,22 +244,34 @@ $(BUILDDIR)/STRTEST.ELF: $(CRT0_OBJ) $(STRTEST_OBJ) $(COMMON_OBJ) $(PENSTRING_LI
 #
 # Hardware exercise (not a benchmark) for the display framebuffer:
 # aperture readback at word/halfword/byte width — the byte-enable path
-# no other device on this bus uses — plus a test pattern for the
-# monitor and the uncached fill rate.  Needs a real display device, so
-# it is run on hardware rather than under `make test`.
+# no other device on this bus uses — a test pattern for the monitor,
+# and a characterization of what reaching the aperture costs at each
+# access width and under both cache mappings.  Needs a real display
+# device, and the cost figures need real bus and cache timing, so it is
+# run on hardware rather than under `make test`.
 #
 # Not in `all` / BENCH_ELFS — run on its own:
 #   make fbtest && boot sd:0,0/FBTEST.ELF
 
-FBTEST_OBJ := $(BUILDDIR)/fbtest_entry.o
+# bandwidth.c reads the cache register map from the ROM's penumbra.h
+# rather than restating it, so CACHE_INFO decoding lives in one place.
+FBTEST_CFLAGS := $(CFLAGS) -I ../hw/rom
+FBTEST_DEPS   := fbtest/display.h fbtest/bandwidth.h common/bench.h
+FBTEST_OBJ    := $(BUILDDIR)/fbtest_entry.o $(BUILDDIR)/fbtest_bandwidth.o
 
-$(BUILDDIR)/fbtest_entry.o: fbtest/entry.c common/bench.h | $(BUILDDIR)
-	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILDDIR)/fbtest_entry.o: fbtest/entry.c $(FBTEST_DEPS) | $(BUILDDIR)
+	$(CC) $(FBTEST_CFLAGS) -c $< -o $@
+
+$(BUILDDIR)/fbtest_bandwidth.o: fbtest/bandwidth.c $(FBTEST_DEPS) | $(BUILDDIR)
+	$(CC) $(FBTEST_CFLAGS) -c $< -o $@
 
 fbtest: $(BUILDDIR)/FBTEST.ELF
 
-$(BUILDDIR)/FBTEST.ELF: $(CRT0_OBJ) $(FBTEST_OBJ) $(COMMON_OBJ) $(PENSTRING_LIB) common/bench.ld
-	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(FBTEST_OBJ) $(COMMON_OBJ) $(PENSTRING_LIB) -o $@
+$(BUILDDIR)/fbtest_tlbrange.o: common/tlbrange.c common/bench.h | $(BUILDDIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILDDIR)/FBTEST.ELF: $(CRT0_OBJ) $(FBTEST_OBJ) $(BUILDDIR)/fbtest_tlbrange.o $(COMMON_OBJ) $(PENSTRING_LIB) common/bench.ld
+	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(FBTEST_OBJ) $(BUILDDIR)/fbtest_tlbrange.o $(COMMON_OBJ) $(PENSTRING_LIB) -o $@
 
 # ── audiotest ────────────────────────────────────────────────
 #

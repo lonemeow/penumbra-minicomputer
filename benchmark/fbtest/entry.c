@@ -19,6 +19,8 @@
 
 #include <stdint.h>
 #include "bench.h"
+#include "bandwidth.h"
+#include "display.h"
 
 /* ── Bootdata layout (mirror of hw/rom/bootdata.h) ────────────── */
 #define BOOTDATA_BASE       0x00000040
@@ -39,19 +41,6 @@ struct btag_device {
     uint32_t id;
     char     name[16];
 };
-
-/* ── Device registers (doc/system/devices/display.md) ─────────── */
-#define PD_CAP          0x000
-#define PD_INFO         0x004
-#define PD_CTRL         0x008
-#define PD_FB_GEOM      0x01C
-#define PD_FB_FORMAT    0x020
-#define PD_FB_PALETTE   0x10000
-#define PD_FB           0x20000
-
-#define PD_CAP_FRAMEBUFFER  (1u << 13)
-#define PD_CTRL_ENABLE      (1u << 0)
-#define PD_CTRL_FB_SEL      (1u << 4)
 
 static uint32_t disp_base;
 static uint32_t fb_width, fb_height;
@@ -349,37 +338,6 @@ static void draw_test_pattern(void)
     }
 }
 
-/* ── Throughput ───────────────────────────────────────────────── */
-/*
- * Full-frame fill rate through the uncached aperture — the ceiling on
- * anything that redraws the whole picture, and the number that decides
- * whether a demo can animate at all.
- */
-static void measure_fill_rate(void)
-{
-    const int frames = 8;
-    uint32_t bytes = fb_width * fb_height;
-
-    bench_timer_start();
-    for (int i = 0; i < frames; i++)
-        fb_fill((uint8_t)(IDX_RAMP_FIRST + i));
-    uint32_t us = bench_timer_elapsed_us();
-
-    /* Scale to KB before the rate so the arithmetic stays 32-bit —
-     * bytes-per-second across a frame overflows, and a 64-bit divide
-     * would pull in a libcall this runtime does not carry. */
-    uint32_t kb_moved = bytes / 1024u * (uint32_t)frames;
-
-    bench_puts("  full-frame fill: ");
-    bench_print_uint(bytes);
-    bench_puts(" bytes in ");
-    bench_print_uint(us / (uint32_t)frames);
-    bench_puts(" us/frame (");
-    if (us > 0)
-        bench_print_uint(kb_moved * 1000000u / us);
-    bench_puts(" KB/s)\r\n");
-}
-
 /* ── Palette animation ────────────────────────────────────────── */
 /*
  * Rotating the ramp under a still picture: writes reach scan-out on
@@ -454,7 +412,7 @@ void bench_main(uint32_t bootdata)
     bench_puts("\r\n");
 
     check_apertures();
-    measure_fill_rate();
+    fb_bandwidth_report(disp_base, fb_width, fb_height);
 
     load_palette();
     draw_test_pattern();

@@ -348,6 +348,12 @@ _handler_start:
  * Cached (PTE_KERNEL) for addresses below 0xFF000000.
  * Uncached (PTE_KERNEL_NC) for addresses >= 0xFF000000 (MMIO).
  * Uses alternating way counter for TLB replacement.
+ *
+ * The MMIO default is overridable through the [_rmh_cached_base,
+ * _rmh_cached_limit) range, for a device aperture that behaves as
+ * plain memory rather than as registers — a framebuffer the CPU is
+ * the only writer of can be cached, where a status register cannot.
+ * The range is empty at reset, so a consumer opts in explicitly.
  * ────────────────────────────────────────────────────────────── */
         .globl  _bench_tlb_miss
 _bench_tlb_miss:
@@ -375,7 +381,12 @@ _bench_tlb_miss:
         wrsys   r3, #SYSDEV_MMU, #MMU_TLB_VPN
 
         /* TLB_PTE: choose cached vs uncached by address range.
-         * VPN >> 12 gives fault_addr[31:24].  If >= 0xFF, uncached. */
+         * VPN >> 12 gives fault_addr[31:24].  If >= 0xFF, uncached.
+         *
+         * Attribute bits are added rather than or'd because OR carries
+         * no immediate form, and the PPN shift below leaves the low
+         * twelve bits clear — on those bits the two are the same
+         * operation, and ADD saves materialising the constant. */
         mov     r3, r2
         shl     r3, #12                /* PPN << 12 (= PA page base) */
         mov     r1, r2
@@ -384,7 +395,28 @@ _bench_tlb_miss:
         bhs     .Luncached
         add     r3, #PTE_KERNEL
         b       .Lcommit
+
+        /* R3 holds the page base and R1 is dead from here, so the
+         * range test has both a value to compare and a register to
+         * load bounds into.  Page granularity is enough: the bounds
+         * only ever select whole pages. */
 .Luncached:
+        /* An explicit range overrides the MMIO default, tested
+         * half-open as [base, limit).  Unsigned throughout — these are
+         * addresses, and every one reaching here has bit 31 set, which
+         * the signed conditions would read as negative.  At reset the
+         * range is empty, and the limit test rejects every address
+         * against a zero bound, so a device stays uncached until a
+         * consumer opts in. */
+        ldw     r1, [pc + _rmh_cached_base - .]
+        cmp     r3, r1
+        blo     .Lnocache
+        ldw     r1, [pc + _rmh_cached_limit - .]
+        cmp     r3, r1
+        bhs     .Lnocache
+        add     r3, #PTE_KERNEL
+        b       .Lcommit
+.Lnocache:
         add     r3, #PTE_KERNEL_NC
 .Lcommit:
         wrsys   r3, #SYSDEV_MMU, #MMU_TLB_PTE
@@ -437,5 +469,14 @@ _rmh_save_r2:   .long 0
 _rmh_save_r3:   .long 0
 _rmh_way_ctr:   .long 0
 _irq_save_r1:   .long 0
+
+/* Cacheable-range override, adjacent so a consumer writes the pair as
+ * two words from one base.  Empty (base = limit = 0) leaves every
+ * device uncached, which no address satisfies whichever way the bounds
+ * are compared. */
+        .globl  _rmh_cached_base
+        .globl  _rmh_cached_limit
+_rmh_cached_base:  .long 0
+_rmh_cached_limit: .long 0
 
 _handler_end:
