@@ -1001,27 +1001,26 @@ FPGA_AUDIO_TOPS = ulx3s_audio_test_top
 # domains, not on the CPU clock: a seed clearing one constraint says
 # nothing about the rest, and hw/tools/seed-sweep.sh prints them all.
 #
-# gen1 clears all five on 8 seeds of 10. Seed 9 holds 12.6% on the CPU
-# clock, 19% on SDRAM and 26% on USB — the most balanced in the sweep.
-# The seed pinned before it had decayed to 0.2% on the CPU clock as the
-# netlist moved under it, which is a pass on paper rather than in
-# practice. A seed that once failed to route here now does: router
-# looping is a property of the netlist and the seed together, so it
-# survives a design change no better than an fmax figure does.
+# These were swept at AUDIO_CHANNELS=4.  A seed is a property of the
+# netlist, and the channel count changes the netlist, so a pin is only
+# valid for the configuration it was measured in — re-sweep after
+# moving AUDIO_CHANNELS just as after any other design change.
 #
-# gen2.5 clears all five on 4 seeds of 10. Seed 8 is the strongest at
-# 3.7% on the CPU clock with 26% SDRAM and 9% USB, and its weakest
-# domain beats what this top held before the audio device existed —
-# narrowing the device's watermark compare and holding its hierarchy
-# gave back more than the device had cost.
+# gen1 clears all five on 7 seeds of 10.  Seed 7 holds 5.8% on the CPU
+# clock and 24% on the 60 MHz domain, the most balanced in the sweep.
 #
-# gen2 clears all five on only 3 seeds and is now the fragile one of the
-# pair. Seed 3 has the best CPU margin at 4.5% but only 1.4% on SDRAM,
-# which is what its worst-margin ranking reflects; re-sweep it before
-# trusting a build rather than assuming this pin still holds.
-DEFAULT_SEED_ulx3s_penumbra1_top   := 9
-DEFAULT_SEED_ulx3s_penumbra2_top   := 3
-DEFAULT_SEED_ulx3s_penumbra2_5_top := 8
+# gen2 clears on 4.  Seed 8 holds 4.5% / 18% / 6.9%, and is the only
+# one of the three tops with real room.
+#
+# gen2.5 clears on only 2 and is the tight one: seed 5 holds 1.9% on
+# the CPU clock, seed 8 just 1.2%.  Its mean CPU fmax matches gen2's
+# almost exactly (35.86 against 35.90) — what it lacks is spread, so
+# fewer seeds land above the line and pinning buys less here than
+# elsewhere.  What binds is the EX-to-MMU fault path, which carries no
+# audio cell on any seed (doc/TODO.md).
+DEFAULT_SEED_ulx3s_penumbra1_top   := 7
+DEFAULT_SEED_ulx3s_penumbra2_top   := 8
+DEFAULT_SEED_ulx3s_penumbra2_5_top := 5
 
 
 # BOARD/CORE porcelain → TOP derivation (CORE defaults to penumbra2

@@ -4835,6 +4835,65 @@ code stream does not depend on the ladder, so one captured stream feeds
 a swept model of the analog mapping. Hardware is needed only for what
 the model cannot supply — the ECP5's actual source/sink impedance.
 
+## Hardware: what limits each top, measured with four audio channels
+
+Sweeping all three board tops with the audio device at four channels,
+per-channel rate and gain:
+
+```
+            clk                       60 MHz domain        all domains
+gen1     mean 26.24  8/10  (25)    mean 64.21  8/10       7/10
+gen2     mean 35.90  4/10  (37.5)  mean 63.43  8/10       5/10
+gen2.5   mean 35.86  2/10  (37.5)  mean 65.93 10/10       2/10
+```
+
+**No critical path on any top, in any domain, on any seed, contains an
+audio cell.** The device costs margin by occupying the die — some 1900
+LUTs and six block RAMs — and the placer spends that cost on whichever
+path was already closest to its constraint. What binds is structural
+and predates the device:
+
+- gen1's 60 MHz domain is the USB receive chain on all ten seeds,
+  every one ending at the host controller's CDC buffer
+  ([above](#hardware-the-usb-receive-path-is-a-placement-lottery)).
+- gen1's CPU clock is the microcode ROM cone — ROM to ROM, or address
+  to ROM, on six of ten.
+- gen2.5's CPU clock is `EX.o_op_class` to `MMU.o_b_fault_status` on
+  five of ten, at 49–55 hops. The three seeds that clear run a
+  different and shorter family instead — D-cache tag to the ID stage,
+  35–37 hops — which lands at 26.2–26.4 ns against a 26.67 ns budget.
+  Even the winners hold about 1%.
+
+Every one of these is routing, not logic: 3.8–6.1 ns of logic against
+21–24 ns of routing, so 80–85% wire. That is the same signature as the
+USB chain, and it says the same thing — these cones span module
+boundaries and the placer cannot keep them local. Adding pipeline
+stages inside a stage would not obviously help; what would is making
+the cone shorter in *distance*, which means either fewer boundaries
+crossed or a registered boundary at one of the crossings.
+
+### Sequencing bounds cycles, not depth
+
+The mixing datapath is walked one channel at a time because a frame
+period is some 1250 output clocks and the walk is 34. The first
+version spent that budget on the walk and then did the whole of one
+channel's work in a single cycle: channel mux, gain multiply,
+accumulate, master multiply and saturation. That measured 30.14 ns on
+a 16.67 ns budget — 117 hops, two cascaded DSP multiplies — and put
+the audio domain at half its required frequency on every seed.
+
+Splitting it into five stages, with the sample and gain registered
+ahead of each multiply so the DSPs see registers on both sides, took
+the domain from 29.95–34.48 MHz to 62.91–72.54 and moved the critical
+path back to the USB chain. Utilisation did not move: the pipeline
+registers replaced combinational logic rather than adding to it.
+
+The lesson generalises to anything sequenced over a slow tick. A large
+cycle budget is an argument about *how many* cycles are available and
+none at all about how deep one may be; a shared datapath with that
+much slack should be pipelined as far as it will go, because the
+registers are free.
+
 ## Hardware: the USB receive path is a placement lottery
 
 `clk_usb`'s critical path is an unregistered chain running the length of
