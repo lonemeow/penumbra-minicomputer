@@ -1,31 +1,32 @@
-// CLASS_AUDIO device — the minimum protocol, one channel.
+// CLASS_AUDIO device.
 //
 // Register interface and semantics are specified in
-// doc/system/devices/audio.md. This implements the mandatory core: one
-// channel accepting 16-bit signed stereo frames at the device's native
-// rate, with a watermark interrupt and underrun reporting. Pitch,
-// volume, narrower sample formats and additional channels are the
-// optional features the spec gates behind capability bits, and their
-// registers read the unity values that make a consumer ignoring the
-// bits behave correctly.
+// doc/system/devices/audio.md. CHANNELS channels, each accepting 16-bit
+// signed stereo frames, with per-channel rate and gain, a watermark
+// interrupt and underrun reporting.
 //
 // The device emits PCM frames rather than driving pins: what converts
 // them is the board's business, whether that is a resistor ladder or a
 // codec behind a serial link.
 //
-// The queue lives entirely in the register domain, and only a frame at
-// a time crosses to the output domain. LEVEL and UNDERRUN are therefore
-// exact counts rather than values inferred across a boundary.
+// Two clock domains meet here. Registers and queue writes are on i_clk;
+// the rate divider, the mixer and the queue reads are on i_aclk. Only
+// pointers and a few slow-changing control values cross, so the mixer
+// never waits on the register side and the register side never waits on
+// a frame.
+//
+// Rate and gain values cross without a handshake. They are written at
+// tick rate at most and read once per frame, so a write landing on the
+// sampling edge costs at most one frame at a stale value — a single
+// sample of phase error or gain, against a 1-in-a-frame-period chance
+// of happening at all. A handshake per value per channel would cost far
+// more than it buys.
 
-// keep_hierarchy: hold this boundary through synth_ecp5. The device's
-// busy feeds the bus stall combine, and letting the placer scatter its
-// logic across the die stretched the route out of that combine into the
-// arbiter — on a core with no timing margin to spare.
-(* keep_hierarchy = "yes" *)
 module audio
     import penumbra_pkg::*;
 #(
-    parameter int DEPTH     = 1024,        // channel FIFO, in frames
+    parameter int CHANNELS  = 1,
+    parameter int DEPTH     = 1024,        // per channel, in frames
     parameter int SAMPLE_HZ = 48_000,
     parameter int AUDIO_HZ  = 60_000_000
 )(
@@ -33,7 +34,7 @@ module audio
     input  logic        i_clk,
     input  logic        i_rst,
     /* verilator lint_off UNUSEDSIGNAL */
-    input  logic [31:0] i_addr,   /* bits [8:2] select a register */
+    input  logic [31:0] i_addr,   /* bits [10:2] select a register */
     /* verilator lint_on UNUSEDSIGNAL */
     input  logic [31:0] i_wdata,
     input  logic        i_we,
@@ -50,177 +51,214 @@ module audio
     output logic               o_frame_en   // one i_aclk pulse per frame
 );
 
-    localparam int ADDR_W  = $clog2(DEPTH);
+    localparam int CH_W    = (CHANNELS > 1) ? $clog2(CHANNELS) : 1;
+    localparam int LVL_W   = $clog2(DEPTH) + 1;
     localparam int TICK_DIV = AUDIO_HZ / SAMPLE_HZ;
 
-    // Version 1, one channel, no optional features.
-    localparam logic [31:0] CAP_VALUE = 32'h0001_0001;
+    // Version 1, rate and gain implemented.
+    localparam logic [31:0] CAP_VALUE =
+        32'd1 | 32'h0000_0100 | 32'h0000_0200 | (32'(CHANNELS) << 16);
+
     localparam logic [31:0] UNITY_VOL = 32'hFFFF_FFFF;
     localparam logic [31:0] UNITY_INC = 32'h0001_0000;
 
-    logic       sel_chan;
-    logic [2:0] reg_sel;
-    assign sel_chan = i_addr[8];
+    // ── Address decode ───────────────────────────────────────
+    // Global registers sit in the first 32-byte block; channel n in
+    // block 8 + n, which is what 0x100 + n * 0x20 means.
+    logic [5:0]      blk;
+    logic [2:0]      reg_sel;
+    logic            sel_chan;
+    logic [CH_W-1:0] chan_idx;
+
+    assign blk      = i_addr[10:5];
     assign reg_sel  = i_addr[4:2];
+    assign sel_chan = (blk >= 6'd8) && (blk < 6'(8 + CHANNELS));
+    assign chan_idx = CH_W'(blk - 6'd8);
 
     // ── Register state ───────────────────────────────────────
-    logic        enable_q;      // CTRL.ENABLE
-    logic        chan_en_q;     // CHAN_EN bit 0
-    logic        irq_status_q;  // watermark reached, sticky
-    logic        irq_enable_q;
-    logic        underrun_q;    // sticky
-    logic [31:0] wm_q;
+    logic                enable_q;
+    logic [CHANNELS-1:0] chan_en_q;
+    logic [CHANNELS-1:0] irq_status_q;
+    logic [CHANNELS-1:0] irq_enable_q;
+    logic [CHANNELS-1:0] underrun_q;
+    logic [31:0]         wm_q  [CHANNELS];
+    logic [31:0]         inc_q [CHANNELS];
+    logic [31:0]         vol_q [CHANNELS];
+    logic [31:0]         master_vol_q;
 
-    // ── Channel FIFO ─────────────────────────────────────────
-    logic [31:0]     fifo [0:DEPTH-1];
-    logic [ADDR_W-1:0] wr_q, rd_q;
-    logic [ADDR_W:0]   count_q;      // frames held, 0..DEPTH
+    logic [LVL_W-1:0]    level    [CHANNELS];
+    logic [CHANNELS-1:0] push;
+    logic [CHANNELS-1:0] flush;
 
-    // Free space needs only as many bits as DEPTH. Carrying it at 32
-    // put a full-width subtract and a full-width compare against WM on
-    // the CPU clock every cycle, for a queue that never exceeds 2^ADDR_W.
-    localparam int LVL_W = ADDR_W + 1;
-
-    logic [LVL_W-1:0] level;         // free space, in frames
-    assign level = LVL_W'(DEPTH) - LVL_W'(count_q);
-
-    // A watermark past the queue's capacity can never be reached. Saying
-    // so with a reduction over the high bits keeps WM readable at its
-    // written width without widening the comparison.
-    logic wm_unreachable;
-    assign wm_unreachable = |wm_q[31:LVL_W];
-
-    // ── Output domain: rate tick ─────────────────────────────
-    logic run_a1, run_a2;            // enable, into the output domain
+    // ── Output domain: rate tick and enable ──────────────────
+    logic run_a1, run_a2;
     logic [$clog2(TICK_DIV)-1:0] tick_q;
-    logic tick;
+    logic tick, frame;
 
-    assign tick = (tick_q == ($clog2(TICK_DIV))'(TICK_DIV - 1));
+    assign tick  = (tick_q == ($clog2(TICK_DIV))'(TICK_DIV - 1));
+    assign frame = tick & run_a2;
 
     always_ff @(posedge i_aclk) begin
         if (i_arst) begin
-            {run_a1, run_a2} <= 2'b00;
-            run_a3           <= 1'b0;
+            {run_a2, run_a1} <= 2'b00;
             tick_q           <= '0;
         end else begin
-            {run_a2, run_a1} <= {run_a1, enable_q & chan_en_q};
-            run_a3           <= run_a2;
+            {run_a2, run_a1} <= {run_a1, enable_q};
             tick_q           <= tick ? '0 : tick_q + 1'b1;
         end
     end
 
-    // A disabled device consumes nothing and emits silence; the spec
-    // requires that its FIFO not drain while CTRL.ENABLE is clear.
-    // Starting the channel primes the prefetch, so the first output
-    // frame is the first queued one and not the empty value it held.
-    logic take, prime, run_a3;
-    assign take  = tick & run_a2;
-    assign prime = run_a2 & ~run_a3;
-
-    logic [31:0] frame;
-    logic        pop;      // CDC asks for a frame
-
-    audio_frame_cdc #(
-        .W (32)
-    ) u_cdc (
-        .i_clk  (i_clk),
-        .i_rst  (i_rst),
-        .o_req  (pop),
-        .i_data (fifo[rd_q]),
-        .i_aclk (i_aclk),
-        .i_arst (i_arst),
-        .i_take  (take),
-        .i_prime (prime),
-        .o_data  (frame)
-    );
-
-    // The handoff's output already changes on i_take and holds until the
-    // next one, so the frame follows it rather than being registered
-    // again — a second register here would present the previous frame,
-    // both updating on the same edge. o_frame_en marks the cycle after
-    // the change, by which point the value has settled.
-    //
-    // Earlier frames occupy lower bit lanes, so a consumer copying
-    // little-endian sample data needs no reordering.
-    assign o_frame_l = run_a2 ? signed'(frame[15:0])  : 16'sd0;
-    assign o_frame_r = run_a2 ? signed'(frame[31:16]) : 16'sd0;
+    // ── Control values into the output domain ────────────────
+    logic [CHANNELS-1:0] chan_en_a1, chan_en_a2;
+    logic [31:0]         inc_a1 [CHANNELS], inc_a2 [CHANNELS];
+    logic [31:0]         vol_a1 [CHANNELS], vol_a2 [CHANNELS];
+    logic [31:0]         mvol_a1, mvol_a2;
 
     always_ff @(posedge i_aclk) begin
-        if (i_arst) o_frame_en <= 1'b0;
-        else        o_frame_en <= take;
+        chan_en_a1 <= chan_en_q;
+        chan_en_a2 <= chan_en_a1;
+        mvol_a1    <= master_vol_q;
+        mvol_a2    <= mvol_a1;
+        for (int c = 0; c < CHANNELS; c++) begin
+            inc_a1[c] <= inc_q[c];
+            inc_a2[c] <= inc_a1[c];
+            vol_a1[c] <= vol_q[c];
+            vol_a2[c] <= vol_a1[c];
+        end
     end
 
-    // ── Register domain: queue and status ────────────────────
-    logic push;                      // consumer writes one
-    logic flush;
-    logic drain;                     // a frame actually left the queue
+    // ── Queues ───────────────────────────────────────────────
+    logic [CH_W-1:0]     mix_ch;
+    logic                mix_advance;
+    logic signed [15:0]  q_left  [CHANNELS];
+    logic signed [15:0]  q_right [CHANNELS];
+    logic [CHANNELS-1:0] q_empty;
 
-    assign push  = i_we && sel_chan && (reg_sel == 3'd6) && (count_q != (ADDR_W+1)'(DEPTH));
-    assign flush = i_we && sel_chan && (reg_sel == 3'd0) && i_wdata[8];
-    assign drain = pop && (count_q != '0);
+    for (genvar c = 0; c < CHANNELS; c++) begin : g_chan
+        audio_chan_fifo #(
+            .DEPTH    (DEPTH),
+            .SAMPLE_W (16)
+        ) u_fifo (
+            .i_clk    (i_clk),
+            .i_rst    (i_rst),
+            .i_push   (push[c]),
+            .i_wdata  (i_wdata),
+            .i_flush  (flush[c]),
+            .o_level  (level[c]),
+            .i_aclk   (i_aclk),
+            .i_arst   (i_arst),
+            .i_pop    (mix_advance && (mix_ch == CH_W'(c))),
+            .o_left   (q_left[c]),
+            .o_right  (q_right[c]),
+            .o_empty  (q_empty[c])
+        );
+    end
+
+    // ── Mixer ────────────────────────────────────────────────
+    logic [CHANNELS-1:0] underrun_a;
+
+    audio_mixer #(
+        .CHANNELS (CHANNELS),
+        .SAMPLE_W (16)
+    ) u_mix (
+        .i_clk        (i_aclk),
+        .i_rst        (i_arst),
+        .i_frame      (frame),
+        .i_chan_en    (chan_en_a2),
+        .i_inc        (inc_a2),
+        .i_vol        (vol_a2),
+        .i_master_vol (mvol_a2),
+        .o_ch         (mix_ch),
+        .o_advance    (mix_advance),
+        .i_left       (q_left[mix_ch]),
+        .i_right      (q_right[mix_ch]),
+        .i_empty      (q_empty[mix_ch]),
+        .o_underrun   (underrun_a),
+        .o_left       (o_frame_l),
+        .o_right      (o_frame_r),
+        .o_valid      (o_frame_en)
+    );
+
+    // Underrun is held for a frame on the output side, which is far
+    // wider than this clock's period, so two stages are enough.
+    // Edge, not level: the output side holds the signal for the whole
+    // frame, so a consumer clearing the flag inside that frame would
+    // watch it set again immediately.
+    logic [CHANNELS-1:0] underrun_r1, underrun_r2, underrun_r3;
+    logic [CHANNELS-1:0] underrun_edge;
+
+    always_ff @(posedge i_clk) begin
+        underrun_r1 <= underrun_a;
+        underrun_r2 <= underrun_r1;
+        underrun_r3 <= underrun_r2;
+    end
+
+    assign underrun_edge = underrun_r2 & ~underrun_r3;
+
+    // ── Register writes ──────────────────────────────────────
+    always_comb begin
+        push  = '0;
+        flush = '0;
+        if (sel_chan && i_we) begin
+            if (reg_sel == 3'd6) push[chan_idx]  = 1'b1;   // FIFO
+            if (reg_sel == 3'd0 && i_wdata[8])
+                flush[chan_idx] = 1'b1;                    // CTRL.FLUSH
+        end
+    end
 
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
-            wr_q         <= '0;
-            rd_q         <= '0;
-            count_q      <= '0;
             enable_q     <= 1'b0;
-            chan_en_q    <= 1'b0;
-            irq_status_q <= 1'b0;
-            irq_enable_q <= 1'b0;
-            underrun_q   <= 1'b0;
-            wm_q         <= '0;
-        end else begin
-            // FLUSH takes effect between two output frames: the output
-            // stage holds a prefetched frame, so emptying the queue here
-            // never truncates one already being emitted.
-            if (flush) begin
-                wr_q    <= '0;
-                rd_q    <= '0;
-                count_q <= '0;
-            end else begin
-                if (push) begin
-                    fifo[wr_q] <= i_wdata;
-                    wr_q       <= wr_q + 1'b1;
-                end
-                if (drain) rd_q <= rd_q + 1'b1;
-
-                case ({push, drain})
-                    2'b10:   count_q <= count_q + 1'b1;
-                    2'b01:   count_q <= count_q - 1'b1;
-                    default: ;
-                endcase
+            chan_en_q    <= '0;
+            irq_status_q <= '0;
+            irq_enable_q <= '0;
+            underrun_q   <= '0;
+            master_vol_q <= UNITY_VOL;
+            for (int c = 0; c < CHANNELS; c++) begin
+                wm_q[c]  <= '0;
+                inc_q[c] <= UNITY_INC;
+                vol_q[c] <= UNITY_VOL;
             end
+        end else begin
+            for (int c = 0; c < CHANNELS; c++) begin
+                // Sticky while free space has reached the watermark. A
+                // zero watermark disables the flag rather than raising
+                // it permanently.
+                if (wm_q[c] != 32'd0 && |wm_q[c][31:LVL_W] == 1'b0 &&
+                    level[c] >= wm_q[c][LVL_W-1:0])
+                    irq_status_q[c] <= 1'b1;
 
-            // An enabled channel asked for a frame and had none.
-            if (pop && (count_q == '0)) underrun_q <= 1'b1;
-
-            // Sticky while the free space has reached the watermark. A
-            // zero watermark disables the flag rather than asserting it
-            // permanently.
-            if ((wm_q != 32'd0) && !wm_unreachable &&
-                (level >= wm_q[LVL_W-1:0])) irq_status_q <= 1'b1;
+                if (underrun_edge[c])
+                    underrun_q[c] <= 1'b1;
+            end
 
             if (i_we && !sel_chan) begin
                 case (reg_sel)
                     3'd2: enable_q     <= i_wdata[0];
-                    3'd3: chan_en_q    <= i_wdata[0];
-                    3'd4: if (i_wdata[0]) irq_status_q <= 1'b0;
-                    3'd5: irq_enable_q <= i_wdata[0];
-                    3'd6: if (i_wdata[0]) underrun_q   <= 1'b0;
+                    3'd3: chan_en_q    <= i_wdata[CHANNELS-1:0];
+                    3'd4: irq_status_q <= irq_status_q &
+                                          ~i_wdata[CHANNELS-1:0];
+                    3'd5: irq_enable_q <= i_wdata[CHANNELS-1:0];
+                    3'd6: underrun_q   <= underrun_q &
+                                          ~i_wdata[CHANNELS-1:0];
+                    3'd7: master_vol_q <= i_wdata;
                     default: ;
                 endcase
             end
-            if (i_we && sel_chan && (reg_sel == 3'd5)) wm_q <= i_wdata;
+            if (i_we && sel_chan) begin
+                case (reg_sel)
+                    3'd1: inc_q[chan_idx] <= i_wdata;
+                    3'd2: vol_q[chan_idx] <= i_wdata;
+                    3'd5: wm_q[chan_idx]  <= i_wdata;
+                    default: ;
+                endcase
+            end
         end
     end
 
-    assign o_irq = irq_status_q & irq_enable_q;
+    assign o_irq = |(irq_status_q & irq_enable_q);
 
     // ── Register reads ───────────────────────────────────────
-    // Absent optional features read their unity values, so a consumer
-    // that never inspects CAP still plays at the native rate and full
-    // volume rather than at a wrong pitch or in silence.
     logic [31:0] rdata_next;
 
     always_comb begin
@@ -229,21 +267,21 @@ module audio
                 3'd0:    rdata_next = CAP_VALUE;
                 3'd1:    rdata_next = 32'(SAMPLE_HZ);
                 3'd2:    rdata_next = {31'd0, enable_q};
-                3'd3:    rdata_next = {31'd0, chan_en_q};
-                3'd4:    rdata_next = {31'd0, irq_status_q};
-                3'd5:    rdata_next = {31'd0, irq_enable_q};
-                3'd6:    rdata_next = {31'd0, underrun_q};
-                default: rdata_next = UNITY_VOL;      // MASTER_VOL
+                3'd3:    rdata_next = 32'(chan_en_q);
+                3'd4:    rdata_next = 32'(irq_status_q);
+                3'd5:    rdata_next = 32'(irq_enable_q);
+                3'd6:    rdata_next = 32'(underrun_q);
+                default: rdata_next = master_vol_q;
             endcase
         end else begin
             case (reg_sel)
-                3'd0:    rdata_next = 32'd0;          // CHAN CTRL
-                3'd1:    rdata_next = UNITY_INC;
-                3'd2:    rdata_next = UNITY_VOL;
+                3'd0:    rdata_next = 32'd0;              // CHAN CTRL
+                3'd1:    rdata_next = inc_q[chan_idx];
+                3'd2:    rdata_next = vol_q[chan_idx];
                 3'd3:    rdata_next = 32'(DEPTH);
-                3'd4:    rdata_next = 32'(level);
-                3'd5:    rdata_next = wm_q;
-                default: rdata_next = 32'd0;          // FIFO reads 0
+                3'd4:    rdata_next = 32'(level[chan_idx]);
+                3'd5:    rdata_next = wm_q[chan_idx];
+                default: rdata_next = 32'd0;              // FIFO reads 0
             endcase
         end
     end
@@ -252,7 +290,7 @@ module audio
     // and holds the bus for that cycle. The device-select feeding the
     // top-level read combine is registered to match, so combinational
     // data would be sampled a cycle after it had already gone. Writes
-    // are not stalled: filling the FIFO is the one hot path here.
+    // are not stalled: filling a queue is the one hot path here.
     logic read_pending_q;
 
     always_ff @(posedge i_clk) begin

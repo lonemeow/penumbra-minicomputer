@@ -95,7 +95,7 @@ int main() {
 
     // ── Discovery ────────────────────────────────────────────
     // A consumer reads these before touching anything else.
-    check(rd(CAP) == 0x00010001, "CAP: %08X, expected version 1, 1 channel", rd(CAP));
+    check(rd(CAP) == 0x00010301, "CAP: %08X, expected version 1, pitch, volume, 1 channel", rd(CAP));
     check(rd(RATE) == 48000, "RATE: %u, expected 48000", rd(RATE));
     check(rd(C_DEPTH) == DEPTH, "DEPTH: %u, expected %d", rd(C_DEPTH), DEPTH);
     check(rd(C_LEVEL) == DEPTH, "LEVEL at reset: %u, expected %d", rd(C_LEVEL), DEPTH);

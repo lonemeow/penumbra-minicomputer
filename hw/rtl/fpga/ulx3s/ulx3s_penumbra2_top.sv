@@ -37,6 +37,14 @@
 `define PENUMBRA_CPU_VARIANT 0
 `endif
 
+// Channels the audio device is built with. A build-time knob because
+// the cost that matters is in the register domain and only shows up
+// against the rest of the machine: sweep the same top at one and at
+// four to see it (doc/TODO.md).
+`ifndef AUDIO_CHANNELS
+`define AUDIO_CHANNELS 1
+`endif
+
 module ulx3s_penumbra2_top (
     input  logic       clk_25mhz,
     output logic [7:0] led,
@@ -926,6 +934,7 @@ module ulx3s_penumbra2_top (
     /* verilator lint_on UNUSEDSIGNAL */
 
     audio #(
+        .CHANNELS  (`AUDIO_CHANNELS),
         .DEPTH     (1024),
         .SAMPLE_HZ (48_000),
         .AUDIO_HZ  (int'(CLK60_HZ))

@@ -369,6 +369,14 @@ font8x16.hex: netbsd/sys/dev/wsfont/bold8x16.h hw/tools/wsfont2hex.py
 # without anyone having to supply a file. AUDIO_SAMPLES is the ROM
 # depth and must stay a power of two — at 48 kHz the default is 2.7 s.
 AUDIO_SAMPLES ?= 131072
+
+# Channels the audio device is built with. Four is what a tracker
+# replayer needs and so what the machine is built for; the cost against
+# one channel is about 3% of mean CPU fmax and six block RAMs, and it
+# lands entirely in placement pressure rather than on any audio path
+# (doc/TODO.md). Changing this changes the netlist, so the pinned
+# placement seeds below only hold for the value set here.
+AUDIO_CHANNELS ?= 4
 AUDIO_WAV     ?=
 audio_sample.hex: hw/tools/wav2sample.py $(AUDIO_WAV)
 	python3 hw/tools/wav2sample.py $(AUDIO_WAV) -o $@ -n $(AUDIO_SAMPLES)
@@ -825,7 +833,8 @@ SRC_COMMON = hw/rtl/common/penumbra_pkg.sv \
 # to the bring-up top, and audio_sample_rom would want a hex image no
 # machine build produces.
 SRC_AUDIO = hw/rtl/io/audio/audio.sv \
-            hw/rtl/io/audio/audio_frame_cdc.sv \
+            hw/rtl/io/audio/audio_chan_fifo.sv \
+            hw/rtl/io/audio/audio_mixer.sv \
             hw/rtl/io/audio/audio_sigma_delta.sv \
             hw/rtl/io/audio/audio_ladder_out.sv
 
@@ -1151,7 +1160,7 @@ $(BUILD_DIR)/$(TOP).json: $(FPGA_SRC) $(PHASE_STAMP) \
 	@mkdir -p $(BUILD_DIR)
 	$(if $(filter $(TOP),$(FPGA_UCODE_TOPS)),$(UASM) hw/microcode/microcode.uasm -o microcode.hex)
 	$(if $(filter $(TOP),$(FPGA_ROM_TOPS)),$(MAKE) -C hw/rom)
-	$(FPGA_TOOLS)/sv2v -D SDRAM_PHASE_DEG=$(PHASE_DEG) -D PENUMBRA_CPU_VARIANT=$(CPU_VARIANT) -D AUDIO_SAMPLES=$(AUDIO_SAMPLES) $(FPGA_SRC) -w $(BUILD_DIR)/$(TOP)_sv2v.v
+	$(FPGA_TOOLS)/sv2v -D SDRAM_PHASE_DEG=$(PHASE_DEG) -D PENUMBRA_CPU_VARIANT=$(CPU_VARIANT) -D AUDIO_SAMPLES=$(AUDIO_SAMPLES) -D AUDIO_CHANNELS=$(AUDIO_CHANNELS) $(FPGA_SRC) -w $(BUILD_DIR)/$(TOP)_sv2v.v
 	$(if $(filter $(TOP),$(FPGA_ROM_TOPS) $(FPGA_UCODE_TOPS) $(FPGA_AUDIO_TOPS)),python3 hw/tools/inline_hex.py $(BUILD_DIR)/$(TOP)_sv2v.v $(BUILD_DIR)/$(TOP)_sv2v.v)
 	$(FPGA_TOOLS)/yosys -p "read_verilog $(BUILD_DIR)/$(TOP)_sv2v.v; synth_ecp5 -top $(TOP_MODULE) -json $@"
 
