@@ -794,9 +794,12 @@ static struct {
 // here may still stall on hardware, but one that stalls here is broken.
 // +audiofile=path captures the frames as raw 16-bit stereo, which makes
 // a driver's output audible rather than inferred.
-static constexpr uint32_t AUDIO_DEPTH = 1024;
-static constexpr uint32_t AUDIO_CAP   = 0x00010001;   // version 1, 1 channel
-static constexpr uint32_t AUDIO_RATE  = 48000;
+static constexpr uint32_t AUDIO_DEPTH     = 1024;
+static constexpr uint32_t AUDIO_CHANNELS = 4;
+static constexpr uint32_t AUDIO_RATE     = 48000;
+// Version 1, PITCH and VOLUME implemented, AUDIO_CHANNELS channels.
+static constexpr uint32_t AUDIO_CAP =
+    1u | (1u << 8) | (1u << 9) | (AUDIO_CHANNELS << 16);
 
 static struct {
     uint32_t ctrl;          // [0] ENABLE, resets 0
@@ -804,14 +807,35 @@ static struct {
     uint32_t irq_enable;
     uint32_t irq_status;
     uint32_t underrun;
-    uint32_t wm;
+    uint32_t master_vol;
+    uint32_t wm[AUDIO_CHANNELS];
+    uint32_t inc[AUDIO_CHANNELS];
+    uint32_t vol[AUDIO_CHANNELS];
     FILE*    capture = nullptr;
 
-    void reset() { ctrl = chan_en = irq_enable = irq_status = underrun = wm = 0; }
+    void reset() {
+        ctrl = chan_en = irq_enable = irq_status = underrun = 0;
+        master_vol = 0xFFFFFFFFu;
+        for (uint32_t c = 0; c < AUDIO_CHANNELS; c++) {
+            wm[c]  = 0;
+            inc[c] = 0x00010000u;
+            vol[c] = 0xFFFFFFFFu;
+        }
+    }
+
+    // Global registers occupy the first 32-byte block, channel n the
+    // block at 8 + n — which is what 0x100 + n * 0x20 means.  Returns
+    // AUDIO_CHANNELS for an address outside any channel.
+    static uint32_t chan_of(uint32_t addr) {
+        uint32_t blk = (addr >> 5) & 0x3F;
+        return (blk >= 8 && blk < 8 + AUDIO_CHANNELS) ? blk - 8
+                                                      : AUDIO_CHANNELS;
+    }
 
     uint32_t read(uint32_t addr) {
         uint32_t r = (addr >> 2) & 7;
-        if (!(addr & 0x100)) {
+        uint32_t c = chan_of(addr);
+        if (c == AUDIO_CHANNELS) {
             switch (r) {
                 case 0: return AUDIO_CAP;
                 case 1: return AUDIO_RATE;
@@ -820,37 +844,46 @@ static struct {
                 case 4: return irq_status;
                 case 5: return irq_enable;
                 case 6: return underrun;
-                default: return 0xFFFFFFFFu;            // MASTER_VOL, unity
+                default: return master_vol;
             }
         }
         switch (r) {
-            case 1:  return 0x00010000u;                // INC, unity
-            case 2:  return 0xFFFFFFFFu;                // VOL, unity
+            case 1:  return inc[c];
+            case 2:  return vol[c];
             case 3:  return AUDIO_DEPTH;
             case 4:  return AUDIO_DEPTH;                // LEVEL: always free
-            case 5:  return wm;
+            case 5:  return wm[c];
             default: return 0;
         }
     }
 
     void write(uint32_t addr, uint32_t data) {
         uint32_t r = (addr >> 2) & 7;
-        if (!(addr & 0x100)) {
+        uint32_t c = chan_of(addr);
+        uint32_t mask = (AUDIO_CHANNELS >= 32) ? ~0u
+                                               : ((1u << AUDIO_CHANNELS) - 1);
+        if (c == AUDIO_CHANNELS) {
             switch (r) {
                 case 2: ctrl = data & 1; break;
-                case 3: chan_en = data & 1; break;
+                case 3: chan_en = data & mask; break;
                 case 4: irq_status &= ~data; break;
-                case 5: irq_enable = data & 1; break;
+                case 5: irq_enable = data & mask; break;
                 case 6: underrun &= ~data; break;
+                case 7: master_vol = data; break;
                 default: break;
             }
             return;
         }
         switch (r) {
-            case 5: wm = data; break;
+            case 1: inc[c] = data; break;
+            case 2: vol[c] = data; break;
+            case 5: wm[c]  = data; break;
             case 6:
-                // A frame; captured only while the channel would play it.
-                if (capture && (ctrl & 1) && (chan_en & 1)) {
+                // A frame.  Only channel 0 is captured: this models the
+                // registers rather than the mix, so there is nothing to
+                // combine the others into, and channel 0 is what a
+                // single-stream consumer drives.
+                if (capture && c == 0 && (ctrl & 1) && (chan_en & 1)) {
                     uint8_t b[4] = { uint8_t(data), uint8_t(data >> 8),
                                      uint8_t(data >> 16), uint8_t(data >> 24) };
                     fwrite(b, 1, 4, capture);
@@ -858,12 +891,13 @@ static struct {
                 break;
             default: break;
         }
-        // The queue is always empty here, so the watermark is met
-        // whenever one is armed at all.
-        if (wm != 0) irq_status |= 1;
+        // The queue is always empty here, so a channel's watermark is
+        // met whenever one is armed at all.
+        for (uint32_t i = 0; i < AUDIO_CHANNELS; i++)
+            if (wm[i] != 0) irq_status |= (1u << i);
     }
 
-    bool irq() const { return (irq_status & irq_enable & 1) != 0; }
+    bool irq() const { return (irq_status & irq_enable) != 0; }
 } audio;
 
 // --- Display adapter (CLASS_DISPLAY, character console) ---
