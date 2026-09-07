@@ -137,17 +137,21 @@ module ulx3s_penumbra2_top (
         (CLKOS2_PHASE_DEG == 315) ? 6 : 0;
 
     // ── USB clock (CLKOS3) ─────────────────────────────────────────
-    // The USB host tier runs at 60 MHz (usb_pkg's 5×/40× oversample
-    // base), served off the shared VCO like every other output —
-    // exact only: a CPU/SDRAM retarget that moves the VCO off a
-    // 60 MHz multiple must fail the build here, not detune USB.
-    localparam longint USB_HZ = 60_000_000;
-    localparam int CLKOS3_DIV_VAL = ecp5_pll_aux_div(PLL.vco_hz, USB_HZ);
+    // 60 MHz is what the USB host tier needs (usb_pkg's 5×/40×
+    // oversample base); the audio output stage runs on the same net
+    // because a clock at that rate happens to exist, not because the
+    // two are related.  The name is the rate for that reason — a
+    // consumer joining it is agreeing to 60 MHz and nothing else.
+    // Served off the shared VCO like every other output, exact only:
+    // a CPU/SDRAM retarget that moves the VCO off a 60 MHz multiple
+    // must fail the build here rather than detune USB.
+    localparam longint CLK60_HZ = 60_000_000;
+    localparam int CLKOS3_DIV_VAL = ecp5_pll_aux_div(PLL.vco_hz, CLK60_HZ);
 
     logic clk;            // CLKOP — CPU_HZ system clock
     logic clk_sdram;      // CLKOS — SDRAM_HZ fabric clock
     logic clk_sdram_pin;  // CLKOS2 — SDRAM_HZ, phase-shifted, to ODDR
-    logic clk_usb;        // CLKOS3 — 60 MHz USB host clock
+    logic clk_60mhz;        // CLKOS3 — 60 MHz, USB host + audio
     logic pll_lock;
 
     (* keep *) EHXPLLL #(
@@ -176,7 +180,7 @@ module ulx3s_penumbra2_top (
         .CLKOP        (clk),
         .CLKOS        (clk_sdram),
         .CLKOS2       (clk_sdram_pin),
-        .CLKOS3       (clk_usb),
+        .CLKOS3       (clk_60mhz),
         .LOCK         (pll_lock),
         .RST          (1'b0),
         .STDBY        (1'b0),
@@ -252,13 +256,13 @@ module ulx3s_penumbra2_top (
     end
     wire rst_sd = rst_sd_sync2;
 
-    // ── USB-domain reset: the same 2-FF pattern into clk_usb. ──
-    logic rst_usb_sync1, rst_usb_sync2;
-    always_ff @(posedge clk_usb) begin
-        rst_usb_sync1 <= rst;
-        rst_usb_sync2 <= rst_usb_sync1;
+    // ── 60 MHz domain reset: the same 2-FF pattern. ──
+    logic rst_60mhz_sync1, rst_60mhz_sync2;
+    always_ff @(posedge clk_60mhz) begin
+        rst_60mhz_sync1 <= rst;
+        rst_60mhz_sync2 <= rst_60mhz_sync1;
     end
-    wire rst_usb = rst_usb_sync2;
+    wire rst_60mhz = rst_60mhz_sync2;
 
     // ── Video PLL: second EHXPLLL, 25 MHz crystal → TMDS clocks ──
     // The display's serial/pixel clocks come from a dedicated PLL —
@@ -765,8 +769,8 @@ module ulx3s_penumbra2_top (
         .o_rdata      (usb_dev_rdata),
         .o_busy       (usb_dev_busy),
         .o_irq        (usb_irq),
-        .i_usb_clk    (clk_usb),
-        .i_usb_rst    (rst_usb),
+        .i_usb_clk    (clk_60mhz),
+        .i_usb_rst    (rst_60mhz),
         .o_tx_data    (usb_tx_data),
         .o_tx_valid   (usb_tx_valid),
         .i_tx_ready   (usb_tx_ready),
@@ -786,8 +790,8 @@ module ulx3s_penumbra2_top (
     );
 
     usb_phy_ecp5 u_usb_phy (
-        .i_clk        (clk_usb),
-        .i_rst        (rst_usb),
+        .i_clk        (clk_60mhz),
+        .i_rst        (rst_60mhz),
         .o_clk        (usb_phy_clk),
         .i_tx_data    (usb_tx_data),
         .i_tx_valid   (usb_tx_valid),
@@ -924,7 +928,7 @@ module ulx3s_penumbra2_top (
     audio #(
         .DEPTH     (1024),
         .SAMPLE_HZ (48_000),
-        .AUDIO_HZ  (int'(USB_HZ))
+        .AUDIO_HZ  (int'(CLK60_HZ))
     ) u_audio (
         .i_clk      (clk),
         .i_rst      (rst),
@@ -935,8 +939,8 @@ module ulx3s_penumbra2_top (
         .o_rdata    (audio_dev_rdata),
         .o_busy     (audio_dev_busy),
         .o_irq      (audio_irq),
-        .i_aclk     (clk_usb),
-        .i_arst     (rst_usb),
+        .i_aclk     (clk_60mhz),
+        .i_arst     (rst_60mhz),
         .o_frame_l  (audio_frame_l),
         .o_frame_r  (audio_frame_r),
         .o_frame_en (audio_frame_en)
@@ -950,8 +954,8 @@ module ulx3s_penumbra2_top (
         .OUT_W   (2),
         .LEG_LSB (0)
     ) u_audio_out (
-        .i_clk     (clk_usb),
-        .i_rst     (rst_usb),
+        .i_clk     (clk_60mhz),
+        .i_rst     (rst_60mhz),
         .i_frame_l (audio_frame_l),
         .i_frame_r (audio_frame_r),
         .o_left    (audio_l),
