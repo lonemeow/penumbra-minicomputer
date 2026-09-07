@@ -2698,6 +2698,105 @@ instructions) while only shrinking the rarely-used i64 three-way compares
 alongside a custom `G_SCMP`/`G_UCMP` lowering that keeps the i32
 SELECT-chain.
 
+## Compiler: constant strength reduction is incomplete, and misplaced
+
+`MUL` and `DIV` execute on the sequential `divmul` peer unit — ten
+cycles for a multiply on the FPGA cores (four multiplier bits per
+step), about thirty-four for a divide (restoring, one quotient bit per
+step) on every core.  Constant operands should therefore decompose
+aggressively, and today they mostly do not.
+
+### What exists
+
+`PenumbraLegalizerInfo.cpp` custom-lowers `G_MUL` for `{s32, s64}` and
+handles constant `G_UDIV` / `G_UREM` alongside.  For an s32 multiply
+it recognises `0`, `1`, `-1`, `2^n`, `2^n + 1` and `2^n - 1`;
+everything else calls `LeaveForHardware()` and selects to a real `MUL`.
+Constant `G_UDIV` handles powers of two only.
+
+### The coverage gap
+
+The check is against three *named shapes* rather than the general
+property, so constants that are equally cheap to decompose are missed:
+
+| constant | decomposition | emitted |
+|---|---|---|
+| `x * 3`, `x * 9` | `2^n ± 1` | `shl` + `add` |
+| `x * 10` | `8 + 2` | `MUL` |
+| `x * 80` | `64 + 16` | `MUL` |
+| `x * 320` | `256 + 64` | `MUL` |
+| `x * 100` | `64 + 32 + 4` | `MUL` |
+
+Any popcount-2 constant that is not `2^n ± 1` falls through, which
+includes **320 and 80 — the byte and word row strides of the 320x240
+framebuffer**.  An address computed as `fb + y * 320` rather than
+reached by induction pays an `LLI` plus ten cycles where
+`(y << 8) + (y << 6)` is three ALU operations.
+
+A related case arrives from the middle end rather than from source:
+InstCombine canonicalises a provably-disjoint `x | x<<8 | x<<16 |
+x<<24` into `x * 0x01010101`.  That is a legitimate canonicalisation —
+the mask proves the shifted copies do not overlap, so the `or` is an
+`add` — and it is the backend's job to undo it.  Nothing does.
+
+### Divide by a constant has no reciprocal path
+
+Only powers of two reduce, to `LSHR`.  `x / 5` emits a real `DIVU`:
+roughly thirty-four cycles where a magic-number `mulhi` plus shift is
+about twelve.  This is the larger of the two wins and applies to
+ordinary code, not just to graphics.
+
+### Why the placement is wrong
+
+An s32 `G_MUL` is **legal** — it selects directly to `MUL`.  The
+legalizer is custom-lowering it purely to strength-reduce, which uses
+a legality pass as an optimisation pass, with three consequences:
+
+- It runs once and deliberately cannot iterate.  `LeaveForHardware()`
+  returns `true` without reporting a change, precisely so the legalizer
+  does not revisit the instruction — so a `G_MUL` whose operand becomes
+  constant later is never reduced.
+- The passes that would expose such a constant run afterwards.
+  `known_bits_simplifications` and `commute_constant_to_rhs` are both in
+  the *post*-legalizer set, after the only consumer of their result.
+- It has no access to the cost model, which a general decomposition
+  needs in order to decide when a shift/add tree stops beating a
+  ten-cycle multiply.
+
+### Proposed shape
+
+Split by what is actually legalization:
+
+- **Keep in the legalizer** the s64 path — recognising a 32x32->64
+  widening multiply as one hardware multiply, and narrowing the rest.
+  That is genuine legalization.
+- **Move to `PenumbraPostLegalizerCombiner`** the s32 constant
+  handling, generalised from named shapes to a popcount-driven
+  shift/add tree with a cost cutoff, where it composes with the
+  combines already there and reaches a fixed point.
+- **Add there** the magic-number reciprocal for constant `G_UDIV` /
+  `G_SDIV` / `G_UREM` / `G_SREM`.
+
+Doing the move first keeps the other two from being written in the
+legalizer and relocated afterwards; the existing lit tests pin the
+three shapes, so the refactor is behaviourally a no-op.
+
+### Cost model — landed
+
+`PenumbraTTIImpl::getArithmeticInstrCost` now prices `Mul` at 10 and
+`SDiv`/`UDiv`/`SRem`/`URem` at 34 for throughput and latency, scaled by
+the legalization factor, while leaving code size to the base model —
+one instruction is emitted however long it runs, and answering
+otherwise would distort inlining and unrolling.  Covered by
+`test/Analysis/CostModel/Penumbra/arith.ll`.
+
+Worth recording that this alone changed no generated code.  The three
+cases above are not cost-driven: InstCombine canonicalises without
+consulting TTI, and the two missing decompositions do not exist to be
+chosen between.  The cost model is a prerequisite for the cutoff in the
+proposed combiner, and it corrects what LSR and the unroller see, but
+it is not itself the fix.
+
 ## Compiler: pr23135.c fails at -O0 (pre-existing, found in opt-level sweep) — RESOLVED
 
 The 2026-06-09 full-suite sweep across opt levels (-O0/-O1/-O2 — the
