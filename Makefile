@@ -971,8 +971,12 @@ FPGA_SRC_ulx3s_audio_test_top = hw/rtl/io/audio/audio_sigma_delta.sv \
 FPGA_ROM_TOPS   = ulx3s_penumbra1_top ulx3s_penumbra2_top ulx3s_penumbra2_5_top
 FPGA_UCODE_TOPS = ulx3s_penumbra1_top
 # Tops that embed the display font image: it must exist at the repo
-# root before yosys resolves its $readmemh.
-FPGA_VIDEO_TOPS = ulx3s_video_test_top ulx3s_penumbra1_top
+# root before yosys resolves its $readmemh.  Every top carrying a
+# display belongs here — one left off builds only while some other
+# top's run happens to have left the file behind, and fails on a clean
+# tree.
+FPGA_VIDEO_TOPS = ulx3s_video_test_top ulx3s_penumbra1_top \
+                  ulx3s_penumbra2_top ulx3s_penumbra2_5_top
 # Tops that also embed a preloaded cell image — the CPU-free bring-up
 # probe only. A machine draws its own screen from software.
 FPGA_SPLASH_TOPS = ulx3s_video_test_top
