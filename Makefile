@@ -1183,7 +1183,21 @@ $(PNR_STAMP):
 	@rm -f $(BUILD_DIR)/.pnr-*
 	@touch $@
 
-$(BUILD_DIR)/$(TOP).config: $(BUILD_DIR)/$(TOP).json $(LPF) $(LPF_DESIGN) $(PREPACK) $(PNR_STAMP)
+# Which floorplan applies is the same kind of input: naming a different
+# script, or none, changes placement without changing any file the rule
+# already depends on, and the file dependency alone cannot see it — the
+# script is unchanged, or drops out of the graph entirely.  Comparing a
+# floorplan against no floorplan is the reason to reach for that, so it
+# rides a stamp of its own.  Separate from PNR_STAMP so the seed and the
+# floorplan can vary independently, and named after the script so two
+# floorplans are distinguishable and not merely present-or-absent.
+FP_STAMP = $(BUILD_DIR)/.fp-$(if $(strip $(PREPACK)),$(basename $(notdir $(PREPACK))),none)
+$(FP_STAMP):
+	@mkdir -p $(BUILD_DIR)
+	@rm -f $(BUILD_DIR)/.fp-*
+	@touch $@
+
+$(BUILD_DIR)/$(TOP).config: $(BUILD_DIR)/$(TOP).json $(LPF) $(LPF_DESIGN) $(PREPACK) $(PNR_STAMP) $(FP_STAMP)
 	@echo "[fpga] PnR seed: $(if $(strip $(NEXTPNR_SEED)),$(NEXTPNR_SEED)$(if $(filter $(NEXTPNR_SEED),$(DEFAULT_SEED_$(TOP))), (pinned default for $(TOP))),random — no --seed)"
 	$(NEXTPNR_BASE) \
 		$(if $(NEXTPNR_SEED),--seed $(NEXTPNR_SEED)) \
@@ -1224,7 +1238,7 @@ endif
 # they would otherwise be a previous sweep's, and the summary reads them back
 # as this one's result.
 PNR_TIMEOUT ?= 900
-$(BUILD_DIR)/$(TOP).s%.config: $(BUILD_DIR)/$(TOP).json $(LPF) $(LPF_DESIGN) $(PREPACK)
+$(BUILD_DIR)/$(TOP).s%.config: $(BUILD_DIR)/$(TOP).json $(LPF) $(LPF_DESIGN) $(PREPACK) $(FP_STAMP)
 	@echo "[sweep] seed $* → $(BUILD_DIR)/$(TOP).s$*.log"
 	@timeout $(PNR_TIMEOUT) $(NEXTPNR_BASE) \
 		--seed $* \
