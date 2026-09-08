@@ -25,6 +25,46 @@
 # express even by accident. Bounds are measured, not sacred: if a routed build
 # still shows a tall ctrl bbox, tighten Y; if it turns unroutable, widen it.
 
+# ── Audio device: out of the CPU cone's placement region ────────────
+#
+# Why this exists: the CPU clock's critical path is not deep, it is long.
+# Measured over ten seeds, its hops average 14.2 tiles against 4.6 for the
+# 60 MHz domain and 1.5 for the SDRAM one, at a *better* ns-per-tile than
+# either — so consecutive cells in the cone are simply placed far apart,
+# not routed badly. They are far apart because the band they occupy is
+# full: in columns X75..X89 the core has some 3000 cells, the L1s 1500,
+# and the audio device 1800 — a device with 12-18% margin on its own
+# domains taking a third of the sites in the region that has none.
+#
+# The placer cannot know that. It minimizes total wirelength, and every
+# module reaches every other through the bus, so it clumps everything into
+# the same band and leaves X2..X47 empty — 46 columns of fabric that a
+# small design does use (the audio bring-up top places 2080 of its 2272
+# logic cells there). A region is the only way to say which module can
+# afford the distance.
+#
+# What moves is the whole output-clock side: the mixer, the queues, and
+# the synchronizer stages that feed them. Keeping that group together
+# matters more than keeping it near the bus, because its internal paths
+# are the ones with a 16.7 ns budget. What stays behind is the register
+# tier — decode, the rate/gain register file, the read mux, the level and
+# interrupt logic — which the bus reaches on a 26.7 ns budget and which
+# would be the wrong thing to send away.
+#
+# The link between the two halves is the one path built to absorb it: a
+# channel's rate and gain cross through two synchronizer stages with the
+# walk's remaining cycles to settle, so distance there costs nothing.
+#
+# Bounds are measured, not sacred. The span covers ten EBR columns for the
+# queues' eight block RAMs; if a routed build shows the group straining to
+# reach the register tier, slide it right toward X50.
+AUDIO_REGION = "audio_dsp"
+AX0, AY0, AX1, AY1 = 24, 18, 50, 72
+AUDIO_PREFIXES = ("u_audio.u_mix", "u_audio.g_chan",
+                  "u_audio.inc_a", "u_audio.vol_a",
+                  "u_audio.mvol_a", "u_audio.chan_en_a")
+
+# ── SDRAM control: dense placement in the pad corridor ──────────────
 REGION = "sdram_ctl"
 
 # Corridor between the core's right edge (X113) and the pad edge (X126),
@@ -37,12 +77,19 @@ X0, Y0, X1, Y1 = 114, 46, 126, 66
 PREFIXES = ("u_sdram_ctrl", "u_sdram_cdc")
 
 ctx.createRectangularRegion(REGION, X0, Y0, X1, Y1)
+ctx.createRectangularRegion(AUDIO_REGION, AX0, AY0, AX1, AY1)
 
 n = 0
+na = 0
 for cell_name, cell in ctx.cells:
     if cell_name.startswith(PREFIXES):
         ctx.constrainCellToRegion(cell_name, REGION)
         n += 1
+    elif cell_name.startswith(AUDIO_PREFIXES):
+        ctx.constrainCellToRegion(cell_name, AUDIO_REGION)
+        na += 1
 
 print("floorplan: constrained %d cells to region %s (X%dY%d..X%dY%d)"
       % (n, REGION, X0, Y0, X1, Y1))
+print("floorplan: constrained %d cells to region %s (X%dY%d..X%dY%d)"
+      % (na, AUDIO_REGION, AX0, AY0, AX1, AY1))

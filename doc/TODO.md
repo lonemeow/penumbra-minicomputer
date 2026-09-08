@@ -4937,20 +4937,35 @@ the model cannot supply — the ECP5's actual source/sink impedance.
 ## Hardware: what limits each top, measured with four audio channels
 
 Sweeping all three board tops with the audio device at four channels,
-per-channel rate and gain:
+per-channel rate and gain, before the device was given a floorplan
+region:
 
 ```
             clk                       60 MHz domain        all domains
-gen1     mean 26.24  8/10  (25)    mean 64.21  8/10       7/10
-gen2     mean 35.90  4/10  (37.5)  mean 63.43  8/10       5/10
-gen2.5   mean 35.86  2/10  (37.5)  mean 65.93 10/10       2/10
+gen1     mean 25.57  7/10  (25)    mean 68.98 10/10       9/10
+gen2     mean 35.08  1/10  (37.5)  mean 67.95 10/10       1/10
+gen2.5   mean 35.32  0/10  (37.5)  mean 65.47 10/10       0/10
 ```
 
-**No critical path on any top, in any domain, on any seed, contains an
-audio cell.** The device costs margin by occupying the die — some 1900
-LUTs and six block RAMs — and the placer spends that cost on whichever
-path was already closest to its constraint. What binds is structural
-and predates the device:
+Seed-to-seed spread swamps any single change at this margin: one seed
+moved 3.2 MHz on the CPU clock after an edit that removed 1% of the
+design's cells and touched nothing on its path. A ten-seed sweep here
+resolves nothing below a few MHz, so what it answers is "is there a
+usable seed, and is it the pinned one" rather than "did this change
+help".
+
+**No critical path on any top contains an audio cell on the CPU
+clock**, which is the domain that binds. The 60 MHz domain is a
+different matter — on some seeds its critical path runs
+`u_audio.chan_en_a2` through the mixer's phase adder — but that domain
+clears with 12-18% in hand, so it is not what costs the design margin.
+
+What the device costs is die. It is roughly 1600 LUT4 and 1600
+flip-flops with eight block RAMs and four multipliers for the register
+and mixing tiers, plus the ladder output stage on top; measured as
+placed cells that is some 4175 of the design's 38371, near 11%. The
+placer spends that occupancy on whichever path was already closest to
+its constraint. What binds is structural and predates the device:
 
 - gen1's 60 MHz domain is the USB receive chain on all ten seeds,
   every one ending at the host controller's CDC buffer
@@ -4970,6 +4985,70 @@ boundaries and the placer cannot keep them local. Adding pipeline
 stages inside a stage would not obviously help; what would is making
 the cone shorter in *distance*, which means either fewer boundaries
 crossed or a registered boundary at one of the crossings.
+
+### The CPU clock's cone is long, not deep — and the fix is a region
+
+Measured per hop on the critical path, across ten seeds on gen2.5:
+
+```
+  domain            hops   ns/hop   tiles/hop   ns/tile
+  clk                544     1.22      14.23      0.272
+  clk_60mhz          144     0.76       4.60      0.287
+  clk_sdram           80     0.68       1.50      0.440
+  clk_video_pixel    178     0.64       1.35      0.534
+```
+
+The CPU clock's hops travel three times further than the next domain
+and ten times further than the SDRAM one, at the *best* nanoseconds per
+tile of the four — long hops win faster routing resources. So the cone
+is not detouring inefficiently; consecutive cells in it are simply
+placed far apart, because the band they occupy is full. In columns
+X75-X89 the core had some 3000 cells, the L1s 1500, and the audio
+device 1800: a third of the sites in that band went to a device with
+12-18% of margin on its own domains, sitting among cones that had none.
+
+The placer cannot know that. It minimises total wirelength, every
+module reaches every other through the bus, so it clumps everything
+into one band and leaves X2-X47 empty — 46 columns of fabric a small
+design does use, the audio bring-up top placing 2080 of its 2272 logic
+cells there. A region constraint is the only way to state which module
+can afford the distance.
+
+Constraining the audio device's output-clock side — mixer, queues, and
+the synchroniser stages feeding them — to X24-X50 moves every one of
+its cells out of X72-X95 and drops the densest band from 4633 cells to
+3490. Against the same netlist and the same ten seeds, with gen1 as an
+unintentional control because the floorplan is not wired to that top
+and its numbers did not move at all:
+
+```
+            clk                       60 MHz domain        all domains
+gen1     mean 25.57  7/10  (25)    mean 68.98 10/10       9/10   (unchanged)
+gen2     mean 36.91  5/10  (37.5)  mean 67.14  8/10       3/10
+gen2.5   mean 35.99  4/10  (37.5)  mean 69.13 10/10       4/10
+```
+
+gen2.5 goes from no usable seed to four. Note what moved: its mean rose
+only 0.67 MHz, well inside the noise, while its spread doubled — and
+because the constraint sits above the mean, a wider distribution is what
+puts seeds over the line. gen2's mean rose 1.83 MHz, about two standard
+errors. The device's own domain gains too, its hops falling from 12.0
+tiles to 5.4 once its cells are clustered.
+
+What does *not* follow is a clean causal account. The winning placement
+reaches the same `EX.o_op_class` to `MMU.o_b_fault_status` endpoints
+through fewer hops rather than shorter ones, so the eviction changes
+which path the placer finds rather than compressing the one it had.
+
+### The SDRAM region's rationale is stale; its effect is not
+
+The floorplan script describes a corridor between the core's right edge
+at X113 and the SDRAM pads, which no longer exists — the core reaches
+X110 and L2 cells now run to X124. A stale rationale is not evidence of
+a stale constraint, though, and the two separate cleanly under a
+control: placing without any floorplan puts `clk_sdram` at 104 MHz
+against its 100 MHz constraint, where the region holds it at 123. It
+is worth some 18 MHz and stays. Rewrite the reasoning, not the bounds.
 
 ### Sequencing bounds cycles, not depth
 

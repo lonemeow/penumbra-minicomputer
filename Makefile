@@ -1007,21 +1007,24 @@ FPGA_AUDIO_TOPS = ulx3s_audio_test_top
 # valid for the configuration it was measured in — re-sweep after
 # moving AUDIO_CHANNELS just as after any other design change.
 #
-# gen1 clears all five on 7 seeds of 10.  Seed 7 holds 5.8% on the CPU
-# clock and 24% on the 60 MHz domain, the most balanced in the sweep.
+# gen1 clears all five on 7 seeds of 10.  Seed 7 holds 4.4% on the CPU
+# clock and 30% on the 60 MHz domain, the most balanced in the sweep.
+# The audio floorplan does not reach this top, so its numbers move only
+# when the design does.
 #
-# gen2 clears on 4.  Seed 8 holds 4.5% / 18% / 6.9%, and is the only
-# one of the three tops with real room.
+# gen2 clears every domain on 3.  Seed 1 holds 0.8% / 22% / 25%; two
+# further seeds clear the CPU clock but miss the 60 MHz one, which is
+# the USB receive chain rather than anything the floorplan touches.
 #
-# gen2.5 clears on only 2 and is the tight one: seed 5 holds 1.9% on
-# the CPU clock, seed 8 just 1.2%.  Its mean CPU fmax matches gen2's
-# almost exactly (35.86 against 35.90) — what it lacks is spread, so
-# fewer seeds land above the line and pinning buys less here than
-# elsewhere.  What binds is the EX-to-MMU fault path, which carries no
-# audio cell on any seed (doc/TODO.md).
+# gen2.5 clears on 4, all of them on the CPU clock's own margin: seed 3
+# holds 4.7%, then 7 at 2.9% and 5 at 2.0%.  What binds is still the
+# EX-to-MMU fault path, which carries no audio cell on any seed — the
+# margin comes from the audio device being floorplanned out of the
+# columns that path is placed in, which widened the seed distribution
+# far more than it moved its mean (doc/TODO.md).
 DEFAULT_SEED_ulx3s_penumbra1_top   := 7
-DEFAULT_SEED_ulx3s_penumbra2_top   := 8
-DEFAULT_SEED_ulx3s_penumbra2_5_top := 5
+DEFAULT_SEED_ulx3s_penumbra2_top   := 1
+DEFAULT_SEED_ulx3s_penumbra2_5_top := 3
 
 
 # BOARD/CORE porcelain → TOP derivation (CORE defaults to penumbra2
