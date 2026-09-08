@@ -283,6 +283,7 @@ MODULE_TESTS = \
     video_timing \
     audio_sigma_delta_test \
     audio_test:tb_audio \
+    audio_multi_test:tb_audio_multi \
     timer \
     sdram_test \
     sdram_cdc \
