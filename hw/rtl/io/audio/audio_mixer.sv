@@ -43,6 +43,15 @@
 // Queues deal in words and sample formats; what reaches here is always
 // a signed pair, so format costs nothing per channel either.
 //
+// Rate and gain arrive one channel at a time, named by o_ctrl_ch, for
+// the same reason the datapath is shared: a channel's pair is consumed
+// once per frame, in a single cycle, so holding every channel's pair
+// synchronised at the output rate is registers spent on values nothing
+// reads. The select moves to the next channel as the current one's pair
+// is consumed, which leaves the crossing the rest of that channel's
+// walk to settle in — three cycles at the shortest, against the two a
+// two-stage synchroniser needs.
+//
 // A discarded queue takes its channel's phase with it. The fraction is
 // where in a source frame the output currently sits, which is a fact
 // about material that no longer exists once the queue is flushed;
@@ -68,11 +77,18 @@ module audio_mixer #(
     input  logic [CHANNELS-1:0] i_flush,
 
     // Written in the register domain, changing at tick rate at most, so
-    // these cross as plain synchronised values.
+    // they cross as plain synchronised values. The per-channel pair
+    // crosses the same way but one channel at a time, named by
+    // o_ctrl_ch.
     input  logic [CHANNELS-1:0] i_chan_en,
-    input  logic [31:0]         i_inc [CHANNELS],   // 16.16
-    input  logic [31:0]         i_vol [CHANNELS],   // {right, left}
+    input  logic [31:0]         i_inc,          // 16.16, channel o_ctrl_ch
+    input  logic [31:0]         i_vol,          // {right, left}, same
     input  logic [31:0]         i_master_vol,
+
+    // The channel whose rate and gain the walk wants next. Held from
+    // the cycle the previous channel's pair is consumed, so the value
+    // has settled by the time it is read.
+    output logic [((CHANNELS > 1) ? $clog2(CHANNELS) : 1)-1:0] o_ctrl_ch,
 
     // Queue read port. i_left/i_right are the head of channel o_ch;
     // o_advance consumes it, and the next head is ready the cycle after.
@@ -135,8 +151,8 @@ module audio_mixer #(
     logic [16:0]      inc_whole;
     logic [ADV_W-1:0] advance_n;
 
-    assign frac_sum  = {1'b0, frac_q[ch_q]} + {1'b0, i_inc[ch_q][15:0]};
-    assign inc_whole = {1'b0, i_inc[ch_q][31:16]} + {16'd0, frac_sum[16]};
+    assign frac_sum  = {1'b0, frac_q[ch_q]} + {1'b0, i_inc[15:0]};
+    assign inc_whole = {1'b0, i_inc[31:16]} + {16'd0, frac_sum[16]};
     assign advance_n = (inc_whole > 17'(MAX_ADVANCE)) ? ADV_W'(MAX_ADVANCE)
                                                       : ADV_W'(inc_whole);
 
@@ -178,6 +194,7 @@ module audio_mixer #(
         if (i_rst) begin
             state_q    <= S_IDLE;
             ch_q       <= '0;
+            o_ctrl_ch  <= '0;
             to_pop_q   <= '0;
             acc_l_q    <= '0;
             acc_r_q    <= '0;
@@ -208,6 +225,7 @@ module audio_mixer #(
             case (state_q)
                 S_IDLE: if (i_frame) begin
                     ch_q       <= '0;
+                    o_ctrl_ch  <= '0;
                     acc_l_q    <= '0;
                     acc_r_q    <= '0;
                     o_underrun <= '0;
@@ -219,6 +237,17 @@ module audio_mixer #(
                 S_PREP: begin
                     frac_q[ch_q] <= frac_sum[15:0];
                     to_pop_q     <= advance_n;
+
+                    // Gain is registered here rather than at S_SEL so
+                    // both halves of the pair are read in one cycle;
+                    // the register it lands in is the same one either
+                    // way, and the multiply still sees it at S_VOL.
+                    vgain_l_q <= gain(i_vol[15:0]);
+                    vgain_r_q <= gain(i_vol[31:16]);
+
+                    o_ctrl_ch <= (ch_q == CH_W'(CHANNELS - 1))
+                               ? '0 : ch_q + 1'b1;
+
                     // A disabled channel still keeps its phase, so
                     // re-enabling resumes where it left off.
                     state_q <= (i_chan_en[ch_q] && advance_n != '0)
@@ -249,8 +278,6 @@ module audio_mixer #(
                 S_SEL: begin
                     samp_l_q  <= i_chan_en[ch_q] ? held_l_q[ch_q] : '0;
                     samp_r_q  <= i_chan_en[ch_q] ? held_r_q[ch_q] : '0;
-                    vgain_l_q <= gain(i_vol[ch_q][15:0]);
-                    vgain_r_q <= gain(i_vol[ch_q][31:16]);
                     state_q   <= S_VOL;
                 end
 
@@ -300,10 +327,26 @@ module audio_mixer #(
     end
 
     // synthesis translate_off
-    always_ff @(posedge i_clk)
+    logic [CH_W-1:0] ctrl_ch_prev;
+    logic [2:0]      ctrl_ch_held;
+
+    always_ff @(posedge i_clk) begin
+        ctrl_ch_prev <= o_ctrl_ch;
+        if (o_ctrl_ch != ctrl_ch_prev) ctrl_ch_held <= 3'd0;
+        else if (ctrl_ch_held != 3'd7) ctrl_ch_held <= ctrl_ch_held + 3'd1;
+
         if (!i_rst && i_frame)
             assert (state_q == S_IDLE)
                 else $error("audio_mixer: rate tick arrived before the walk finished");
+
+        // The pair is read combinationally out of a two-stage
+        // synchroniser, so the select must predate the read by both
+        // stages. The walk gives it three cycles; this is what says so
+        // rather than leaving it to be rediscovered.
+        if (!i_rst && state_q == S_PREP)
+            assert (ctrl_ch_held >= 3'd2)
+                else $error("audio_mixer: control select moved too close to its use");
+    end
     // synthesis translate_on
 
 endmodule

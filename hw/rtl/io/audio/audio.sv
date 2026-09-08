@@ -21,6 +21,14 @@
 // sample of phase error or gain, against a 1-in-a-frame-period chance
 // of happening at all. A handshake per value per channel would cost far
 // more than it buys.
+//
+// One channel's pair crosses at a time, selected by the mixer. The
+// datapath is shared, so it reads one channel's rate and gain per
+// frame and never two at once; synchronising every channel's pair
+// continuously would be four times the registers to serve the same one
+// read. The mixer names the channel it wants far enough ahead for both
+// synchroniser stages, which is what makes the select safe to mux in
+// front of them.
 
 module audio
     import penumbra_pkg::*;
@@ -109,9 +117,10 @@ module audio
     end
 
     // ── Control values into the output domain ────────────────
+    logic [CH_W-1:0]     mix_ctrl_ch;   // channel the mixer wants next
     logic [CHANNELS-1:0] chan_en_a1, chan_en_a2;
-    logic [31:0]         inc_a1 [CHANNELS], inc_a2 [CHANNELS];
-    logic [31:0]         vol_a1 [CHANNELS], vol_a2 [CHANNELS];
+    logic [31:0]         inc_a1, inc_a2;
+    logic [31:0]         vol_a1, vol_a2;
     logic [31:0]         mvol_a1, mvol_a2;
 
     always_ff @(posedge i_aclk) begin
@@ -119,12 +128,10 @@ module audio
         chan_en_a2 <= chan_en_a1;
         mvol_a1    <= master_vol_q;
         mvol_a2    <= mvol_a1;
-        for (int c = 0; c < CHANNELS; c++) begin
-            inc_a1[c] <= inc_q[c];
-            inc_a2[c] <= inc_a1[c];
-            vol_a1[c] <= vol_q[c];
-            vol_a2[c] <= vol_a1[c];
-        end
+        inc_a1     <= inc_q[mix_ctrl_ch];
+        inc_a2     <= inc_a1;
+        vol_a1     <= vol_q[mix_ctrl_ch];
+        vol_a2     <= vol_a1;
     end
 
     // ── Queues ───────────────────────────────────────────────
@@ -171,6 +178,7 @@ module audio
         .i_inc        (inc_a2),
         .i_vol        (vol_a2),
         .i_master_vol (mvol_a2),
+        .o_ctrl_ch    (mix_ctrl_ch),
         .o_ch         (mix_ch),
         .o_advance    (mix_advance),
         .i_left       (q_left[mix_ch]),
