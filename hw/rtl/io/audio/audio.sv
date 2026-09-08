@@ -133,6 +133,7 @@ module audio
     logic signed [15:0]  q_left  [CHANNELS];
     logic signed [15:0]  q_right [CHANNELS];
     logic [CHANNELS-1:0] q_empty;
+    logic [CHANNELS-1:0] q_flushed;
 
     for (genvar c = 0; c < CHANNELS; c++) begin : g_chan
         audio_chan_fifo #(
@@ -150,7 +151,8 @@ module audio
             .i_pop    (mix_advance && (mix_ch == CH_W'(c))),
             .o_left   (q_left[c]),
             .o_right  (q_right[c]),
-            .o_empty  (q_empty[c])
+            .o_empty  (q_empty[c]),
+            .o_flushed(q_flushed[c])
         );
     end
 
@@ -164,6 +166,7 @@ module audio
         .i_clk        (i_aclk),
         .i_rst        (i_arst),
         .i_frame      (frame),
+        .i_flush      (q_flushed),
         .i_chan_en    (chan_en_a2),
         .i_inc        (inc_a2),
         .i_vol        (vol_a2),

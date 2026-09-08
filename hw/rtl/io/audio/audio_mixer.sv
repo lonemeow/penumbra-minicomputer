@@ -42,6 +42,12 @@
 //
 // Queues deal in words and sample formats; what reaches here is always
 // a signed pair, so format costs nothing per channel either.
+//
+// A discarded queue takes its channel's phase with it. The fraction is
+// where in a source frame the output currently sits, which is a fact
+// about material that no longer exists once the queue is flushed;
+// keeping it would offset the first frame of the replacement by part of
+// a sample.
 
 module audio_mixer #(
     parameter int CHANNELS    = 4,
@@ -55,6 +61,11 @@ module audio_mixer #(
     input  logic i_rst,
 
     input  logic i_frame,                       // rate-divider tick
+
+    // One pulse per channel whose queue was discarded, raised in this
+    // domain by the queue itself so the phase clears on the same cycle
+    // as the frames it belonged to.
+    input  logic [CHANNELS-1:0] i_flush,
 
     // Written in the register domain, changing at tick rate at most, so
     // these cross as plain synchronised values.
@@ -276,6 +287,15 @@ module audio_mixer #(
 
                 default: state_q <= S_IDLE;
             endcase
+
+            // After the walk's own update, so a flush landing on the
+            // step that advances this channel still wins: the fraction
+            // it clears belongs to material the consumer has discarded,
+            // and carrying it forward would offset the first frame of
+            // whatever replaces it.
+            for (int c = 0; c < CHANNELS; c++)
+                if (i_flush[c])
+                    frac_q[c] <= '0;
         end
     end
 

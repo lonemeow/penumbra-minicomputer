@@ -170,6 +170,12 @@ observes a partially flushed FIFO. A device that cleared its FIFO over
 several cycles could emit a fragment of the discarded stream at the
 newly programmed rate.
 
+The discard covers exactly what was queued when `FLUSH` was written, so
+frames written after it belong to the new stream and are kept. A
+consumer changing source material can therefore flush and push the
+replacement back to back, which is what makes the sequence a change of
+stream rather than a stop and a restart.
+
 Format bits are meaningful only while the FIFO is empty. Changing one
 with frames queued leaves the interpretation of those frames undefined;
 a consumer changing format flushes first.

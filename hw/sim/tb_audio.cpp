@@ -188,6 +188,72 @@ int main() {
     wr(C_CTRL, 1u << 8);
     check(rd(C_LEVEL) == DEPTH, "flush left %u free, expected %d", rd(C_LEVEL), DEPTH);
 
+    // A flush separates two streams rather than emptying the device:
+    // frames written after it are the new stream and must survive.
+    reset();
+    for (int i = 0; i < DEPTH; i++) wr(C_FIFO, 0xDEAD0000u + i);
+    wr(C_CTRL, 1u << 8);
+    for (int i = 0; i < 4; i++) wr(C_FIFO, 0x600D0000u + i);
+    check(rd(C_LEVEL) == uint32_t(DEPTH - 4),
+          "LEVEL after a flush and 4 frames: %u, expected %d",
+          rd(C_LEVEL), DEPTH - 4);
+    wr(CHAN_EN, 1);
+    wr(CTRL, 1);
+    steps(64 * 8);
+    bool kept = emitted.size() >= 4;
+    for (size_t i = 0; kept && i < 4; i++)
+        if (emitted[i] != 0x600D0000u + i) kept = false;
+    check(kept, "discarded stream played instead of what followed it: first %08X",
+          emitted.empty() ? 0 : emitted[0]);
+
+    // Flushing a running device is what a consumer changing source
+    // material does, and it is the case where the queue's two sides are
+    // both live rather than one being idle.
+    reset();
+    for (int i = 0; i < 8; i++) wr(C_FIFO, 0x11110000u + i);
+    wr(CHAN_EN, 1);
+    wr(CTRL, 1);
+    steps(64 * 2);
+    wr(C_CTRL, 1u << 8);
+    steps(64 * 2);
+    check(rd(C_LEVEL) == DEPTH, "flush while running left %u free, expected %d",
+          rd(C_LEVEL), DEPTH);
+    for (int i = 0; i < 4; i++) wr(C_FIFO, 0x22220000u + i);
+    steps(64 * 8);
+    check(emitted.back() == 0x22220003u,
+          "stream after a mid-run flush ended at %08X, expected 22220003",
+          emitted.back());
+
+    // ── Flush resets the phase ───────────────────────────────
+    // A channel's phase is where between two source frames the output
+    // currently sits, which is a fact about material the flush has just
+    // discarded; carried over, it shortens the first frame of whatever
+    // replaces it. Measured at 1/256x so the error is frames rather
+    // than part of one: a source frame then lasts 256 output frames,
+    // and a phase left at half scale makes the first arrive at 128.
+    reset();
+    wr(C_INC, 0x00000100u);
+    for (int i = 0; i < 4; i++) wr(C_FIFO, 0x0AAA0000u + i);
+    wr(CHAN_EN, 1);
+    wr(CTRL, 1);
+
+    size_t mark = emitted.size() + 128;
+    while (emitted.size() < mark) step();
+    check(emitted.back() == 0, "output moved before its first source frame was due");
+
+    wr(C_CTRL, 1u << 8);
+    wr(C_FIFO, 0x0BBB0000u);
+    mark = emitted.size() + 200;
+    while (emitted.size() < mark) step();
+    check(emitted.back() == 0,
+          "frame after a flush arrived early — phase carried over: %08X",
+          emitted.back());
+
+    mark = emitted.size() + 100;
+    while (emitted.size() < mark) step();
+    check(emitted.back() == 0x0BBB0000u,
+          "frame after a flush never arrived: %08X", emitted.back());
+
     printf("\naudio: %d/%d tests passed\n", pass, pass + fail);
     delete dut;
     return fail ? EXIT_FAILURE : EXIT_SUCCESS;
