@@ -6,9 +6,33 @@
 
 #include "Penumbra.h"
 #include "clang/Basic/MacroBuilder.h"
+#include "llvm/ADT/STLExtras.h"
 
 using namespace clang;
 using namespace clang::targets;
+
+// Tuning targets, mirroring the ProcessorModel definitions in
+// llvm/lib/Target/Penumbra/Penumbra.td (clang cannot read the backend's
+// tables).  All of them accept the same binaries, so any name is valid for
+// both -mcpu and -mtune.
+static constexpr llvm::StringLiteral ValidCPUNames[] = {"generic", "penumbra1",
+                                                        "penumbra2"};
+
+bool PenumbraTargetInfo::isValidCPUName(StringRef Name) const {
+  return llvm::is_contained(ValidCPUNames, Name);
+}
+
+void PenumbraTargetInfo::fillValidCPUList(
+    SmallVectorImpl<StringRef> &Values) const {
+  Values.append(std::begin(ValidCPUNames), std::end(ValidCPUNames));
+}
+
+bool PenumbraTargetInfo::setCPU(const std::string &Name) {
+  if (!isValidCPUName(Name))
+    return false;
+  CPU = Name;
+  return true;
+}
 
 const char *const PenumbraTargetInfo::GCCRegNames[] = {
     "r0",  "r1",  "r2",  "r3",  "r4",  "r5",  "r6",  "r7",

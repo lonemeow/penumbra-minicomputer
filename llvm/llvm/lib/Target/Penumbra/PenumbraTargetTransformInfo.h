@@ -52,7 +52,7 @@ public:
   // Route every type to GPR — Penumbra is integer-only, no FP unit, no
   // vector unit; floats and doubles live in GPR pairs (soft-float ABI).
   unsigned getRegisterClassForType(bool Vector,
-                                   Type *Ty = nullptr) const {
+                                   Type *Ty = nullptr) const override {
     if (Vector)
       return VRRC;
     return GPRRC;

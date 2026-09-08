@@ -1562,6 +1562,10 @@ void Clang::RenderTargetOptions(const llvm::Triple &EffectiveTriple,
     AddPPCTargetArgs(Args, CmdArgs);
     break;
 
+  case llvm::Triple::penumbra:
+    AddPenumbraTargetArgs(Args, CmdArgs);
+    break;
+
   case llvm::Triple::riscv32:
   case llvm::Triple::riscv64:
     AddRISCVTargetArgs(Args, CmdArgs);
@@ -2003,6 +2007,17 @@ void Clang::AddPPCTargetArgs(const ArgList &Args,
   if (ABIName) {
     CmdArgs.push_back("-target-abi");
     CmdArgs.push_back(ABIName);
+  }
+}
+
+// Every Penumbra generation implements the same ISA and accepts the same
+// binaries, so -mcpu selects nothing but a tuning default (it reaches cc1 as
+// -target-cpu through getCPUName) and -mtune overrides that default alone.
+void Clang::AddPenumbraTargetArgs(const ArgList &Args,
+                                  ArgStringList &CmdArgs) const {
+  if (const Arg *A = Args.getLastArg(options::OPT_mtune_EQ)) {
+    CmdArgs.push_back("-tune-cpu");
+    CmdArgs.push_back(A->getValue());
   }
 }
 

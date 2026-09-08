@@ -238,13 +238,45 @@ PenumbraTargetMachine::PenumbraTargetMachine(
     const TargetOptions &Options, std::optional<Reloc::Model> RM,
     std::optional<CodeModel::Model> CM, CodeGenOptLevel OL, bool JIT)
     : CodeGenTargetMachineImpl(T, PenumbraDataLayout, TT,
-                               CPU.empty() ? "penumbra1" : CPU, FS, Options,
+                               PenumbraSubtarget::resolveCPU(CPU), FS, Options,
                                RM.value_or(Reloc::Static),
                                CM.value_or(CodeModel::Small), OL),
-      TLOF(std::make_unique<PenumbraTargetObjectFile>()),
-      Subtarget(TT, CPU.empty() ? "penumbra1" : CPU, FS, *this) {
+      TLOF(std::make_unique<PenumbraTargetObjectFile>()) {
   initAsmInfo();
   setGlobalISel(true);
+}
+
+// Every generation runs the same instructions, so -mcpu and -mtune both only
+// choose how to tune.  Clang delivers that choice per function — "target-cpu",
+// "tune-cpu" and "target-features" attributes on each emitted function — and
+// -mtune has no other route into the backend at all, so the answer has to be
+// computed here rather than once for the module.
+//
+// Subtargets are cached because they are not cheap: each one owns the
+// instruction selector, legalizer and register-bank info, and the pass manager
+// asks for the subtarget of every function it compiles.
+const PenumbraSubtarget *
+PenumbraTargetMachine::getSubtargetImpl(const Function &F) const {
+  Attribute CPUAttr = F.getFnAttribute("target-cpu");
+  Attribute TuneAttr = F.getFnAttribute("tune-cpu");
+  Attribute FSAttr = F.getFnAttribute("target-features");
+
+  StringRef CPU = CPUAttr.isValid() ? CPUAttr.getValueAsString() : TargetCPU;
+  StringRef TuneCPU = TuneAttr.isValid() ? TuneAttr.getValueAsString() : CPU;
+  StringRef FS = FSAttr.isValid() ? FSAttr.getValueAsString() : TargetFS;
+
+  SmallString<128> Key;
+  raw_svector_ostream(Key) << CPU << TuneCPU << FS;
+
+  auto &I = SubtargetMap[Key];
+  if (!I) {
+    // Any codegen flag the function carries has to be folded into
+    // TargetOptions before the subtarget reads them.
+    resetTargetOptions(F);
+    I = std::make_unique<PenumbraSubtarget>(TargetTriple, CPU, TuneCPU, FS,
+                                            *this);
+  }
+  return I.get();
 }
 
 extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void

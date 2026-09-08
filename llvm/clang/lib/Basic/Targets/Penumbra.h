@@ -17,6 +17,11 @@ namespace targets {
 class LLVM_LIBRARY_VISIBILITY PenumbraTargetInfo : public TargetInfo {
   static const char *const GCCRegNames[];
 
+  // The processor this translation unit is tuned for.  Every generation
+  // implements the same ISA, so this never changes what clang accepts or
+  // predefines; it only travels to the backend as the tuning choice.
+  std::string CPU = "generic";
+
 public:
   PenumbraTargetInfo(const llvm::Triple &Triple, const TargetOptions &)
       : TargetInfo(Triple) {
@@ -59,6 +64,13 @@ public:
                              TargetInfo::ConstraintInfo &Info) const override {
     return false;
   }
+
+  // The tune-CPU forms (isValidTuneCPUName / fillValidTuneCPUList) inherit
+  // these, which is what we want: every processor is a valid tuning target
+  // and none of them restricts what may be built.
+  bool isValidCPUName(StringRef Name) const override;
+  void fillValidCPUList(SmallVectorImpl<StringRef> &Values) const override;
+  bool setCPU(const std::string &Name) override;
 
   std::string_view getClobbers() const override { return ""; }
 

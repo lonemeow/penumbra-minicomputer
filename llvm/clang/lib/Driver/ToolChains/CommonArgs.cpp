@@ -783,6 +783,11 @@ std::string tools::getCPUName(const Driver &D, const ArgList &Args,
       return A->getValue();
     else
       return "ck810";
+  case llvm::Triple::penumbra:
+    if (const Arg *A = Args.getLastArg(options::OPT_mcpu_EQ))
+      return A->getValue();
+    return "";
+
   case llvm::Triple::riscv32:
   case llvm::Triple::riscv64:
     return riscv::getRISCVTargetCPU(Args, T);

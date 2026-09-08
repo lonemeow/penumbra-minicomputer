@@ -9,6 +9,7 @@
 
 #include "PenumbraMachineFunctionInfo.h"
 #include "PenumbraSubtarget.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/CodeGen/CodeGenTargetMachineImpl.h"
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
@@ -17,7 +18,12 @@ namespace llvm {
 
 class PenumbraTargetMachine : public CodeGenTargetMachineImpl {
   std::unique_ptr<TargetLoweringObjectFile> TLOF;
-  PenumbraSubtarget Subtarget;
+
+  // One subtarget per distinct (cpu, tune, features) combination appearing in
+  // the module.  Tuning is a per-function property — clang records -mtune on
+  // each function it emits — so a single module-wide subtarget could not
+  // answer for all of them.
+  mutable StringMap<std::unique_ptr<PenumbraSubtarget>> SubtargetMap;
 
 public:
   PenumbraTargetMachine(const Target &T, const Triple &TT, StringRef CPU,
@@ -26,9 +32,7 @@ public:
                         std::optional<CodeModel::Model> CM,
                         CodeGenOptLevel OL, bool JIT);
 
-  const PenumbraSubtarget *getSubtargetImpl(const Function &) const override {
-    return &Subtarget;
-  }
+  const PenumbraSubtarget *getSubtargetImpl(const Function &F) const override;
 
   TargetPassConfig *createPassConfig(PassManagerBase &PM) override;
 

@@ -17,16 +17,32 @@ createPenumbraInstructionSelector(const PenumbraTargetMachine &TM,
                                   const PenumbraRegisterBankInfo &RBI);
 } // namespace llvm
 
+// TARGET_DESC carries the ParseSubtargetFeatures definition, CTOR the
+// generated base constructor.
+#define GET_SUBTARGETINFO_TARGET_DESC
 #define GET_SUBTARGETINFO_CTOR
 #include "PenumbraGenSubtargetInfo.inc"
 
 using namespace llvm;
 
+PenumbraSubtarget &
+PenumbraSubtarget::initializeSubtargetDependencies(StringRef CPU,
+                                                   StringRef TuneCPU,
+                                                   StringRef FS) {
+  ParseSubtargetFeatures(resolveCPU(CPU), resolveTuneCPU(CPU, TuneCPU), FS);
+  return *this;
+}
+
 PenumbraSubtarget::PenumbraSubtarget(const Triple &TT, StringRef CPU,
-                                      StringRef FS, const TargetMachine &TM)
-    : PenumbraGenSubtargetInfo(TT, CPU, /*TuneCPU=*/CPU, FS),
+                                      StringRef TuneCPU, StringRef FS,
+                                      const TargetMachine &TM)
+    : PenumbraGenSubtargetInfo(TT, resolveCPU(CPU),
+                               resolveTuneCPU(CPU, TuneCPU), FS),
       RegInfo(),
-      InstrInfo(*this, RegInfo),
+      // The feature fields have to be set before anything that can read one is
+      // built.  Threading the call through the first member that takes an
+      // argument is what orders it ahead of the rest.
+      InstrInfo(initializeSubtargetDependencies(CPU, TuneCPU, FS), RegInfo),
       FrameLowering(),
       TLInfo(TM, *this),
       Legalizer(*this),
