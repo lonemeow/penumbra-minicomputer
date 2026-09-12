@@ -15,8 +15,8 @@ using namespace clang::targets;
 // llvm/lib/Target/Penumbra/Penumbra.td (clang cannot read the backend's
 // tables).  All of them accept the same binaries, so any name is valid for
 // both -mcpu and -mtune.
-static constexpr llvm::StringLiteral ValidCPUNames[] = {"generic", "penumbra1",
-                                                        "penumbra2"};
+static constexpr llvm::StringLiteral ValidCPUNames[] = {
+    "generic", "penumbra1", "penumbra2", "penumbra2_5"};
 
 bool PenumbraTargetInfo::isValidCPUName(StringRef Name) const {
   return llvm::is_contained(ValidCPUNames, Name);

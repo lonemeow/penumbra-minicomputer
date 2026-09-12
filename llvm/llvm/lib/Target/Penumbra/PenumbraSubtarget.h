@@ -46,9 +46,9 @@ class PenumbraSubtarget : public PenumbraGenSubtargetInfo {
   std::unique_ptr<InstructionSelector> InstSelector;
 
 public:
-  // The tuning target chosen when neither -mcpu nor -mtune names one: the
-  // answer that runs acceptably on every generation, since a module that
-  // says nothing about its target may be linked into anything.
+  // The tuning target chosen when neither -mcpu nor -mtune names one.
+  // Penumbra.td defines "generic" as the most-used variant's tuning, so which
+  // generation the default tunes for is decided there, not here.
   static constexpr StringLiteral DefaultCPU = "generic";
 
   // Resolve a possibly-empty -mcpu / -mtune name to a real processor.  Both

@@ -3581,13 +3581,18 @@ claim it changes what a binary may contain.
 
 ### Infrastructure — landed
 
-`Penumbra.td` defines `generic`, `penumbra1` and `penumbra2` as
-processors over one shared architecture, all on `PenumbraGenericModel`
-and all with empty feature lists.  `PenumbraSubtarget` holds the
-generated tune-feature fields and defines what an unspecified name
-resolves to (`resolveCPU` / `resolveTuneCPU`); `generic` is the
-default, because a module that names no target may be linked into
-anything.  `PenumbraTargetMachine::getSubtargetImpl(const Function &)`
+`Penumbra.td` defines `penumbra1`, `penumbra2` and `penumbra2_5` as
+processors over one shared architecture.  Each carries a
+`PenumbraTuning` record pairing its tune features with its scheduling
+model; all currently use `PenumbraGenericModel` with empty feature
+lists.  `generic` is not a tuning of its own: it is defined from the
+**most-used variant's** `PenumbraTuning`, so it tunes exactly like
+that core rather than averaging across generations, and moving the
+default is a one-reference change in `Penumbra.td`.
+`PenumbraSubtarget` holds the generated tune-feature fields and
+defines what an unspecified name resolves to (`resolveCPU` /
+`resolveTuneCPU`), which is `generic`.
+`PenumbraTargetMachine::getSubtargetImpl(const Function &)`
 builds a subtarget per distinct (cpu, tune, features) combination.
 
 That last piece is a prerequisite, not a refinement: `-mtune` reaches
@@ -3602,9 +3607,9 @@ an unknown name against the list in `clang/lib/Basic/Targets/
 Penumbra.cpp`, which mirrors the `ProcessorModel` definitions.
 
 No generation currently declares a feature or a model of its own, so
-every name produces identical code.  The processor list grows when a
-generation has a measured difference to attach — a name that silently
-returns another generation's answers is worse than no name.
+every name produces identical code.  A core earns a name when builds
+target it explicitly or when `generic` follows it; its tuning then
+fills in as properties with consumers land.
 
 ### The largest divergence: dependence distance
 
@@ -3634,11 +3639,10 @@ that requires it.
 `PenumbraGenericModel` is `CompleteModel = 0` with no `WriteRes` or
 `ReadAdvance` entries, so the scheduler has no latency data for any
 instruction today.  Writing a real model is the work here; the
-`ProcessorModel` line is the trivial part.  Note that `generic` has to
-pick a side once a second model exists: conservative scheduling is
-correct but wasteful on a forwarding core (register pressure for no
-cycles saved), while forwarding-shaped scheduling leaves an
-interlocked core stalling.
+`ProcessorModel` line is the trivial part.  `generic` takes the
+most-used variant's side once a second model exists, so a generic
+build schedules for a forwarding core; an interlocked or single-issue
+core that wants its own schedule is built with its explicit name.
 
 ### Other consumers waiting on a feature
 
@@ -3673,11 +3677,9 @@ on the ULX3S, not the ISS.
 
 - Feature granularity: start from the properties that have concrete
   consumers and grow on demand.
-- Whether `generic` follows the shipping bitstream or the newest
-  design once the two diverge.
-- The default currently lives in `PenumbraSubtarget::DefaultCPU`.
-  Treat that as the single source of truth for default-generation
-  policy.
+- Default-generation policy lives in `generic`'s definition in
+  `Penumbra.td` (it follows the most-used variant);
+  `PenumbraSubtarget::DefaultCPU` only names `generic`.
 
 ## Compiler: fuse a widening multiply into a single MUL_P — RESOLVED
 

@@ -72,19 +72,35 @@ def PenumbraGenericModel : SchedMachineModel {
 }
 
 // The architecture list is empty for every processor — one ISA, one set of
-// legal instructions — so these definitions differ only in their tune list
-// and scheduling model.  Each name is accepted by both -mcpu and -mtune.
+// legal instructions — so processors differ only in their tune list and
+// scheduling model.  A PenumbraTuning carries that pair as one record, so a
+// name that borrows another core's tuning borrows both halves together and
+// cannot pair one core's features with another's schedule.
+class PenumbraTuning<SchedMachineModel m, list<SubtargetFeature> tunef> {
+  SchedMachineModel Model = m;
+  list<SubtargetFeature> TuneFeatures = tunef;
+}
 
-// Tuned to run acceptably on any generation, and chosen when nothing names a
-// specific one.  Code that ships to more than one core wants this, which is
-// why it is the default rather than the newest part.
-def : ProcessorModel<"generic", PenumbraGenericModel, []>;
+// Each name is accepted by both -mcpu and -mtune.
+class PenumbraProcessor<string n, PenumbraTuning t>
+    : ProcessorModel<n, t.Model, [], t.TuneFeatures>;
 
 // The original minicomputer: single-issue, microcoded, no branch prediction.
-def : ProcessorModel<"penumbra1", PenumbraGenericModel, []>;
+def Penumbra1Tuning : PenumbraTuning<PenumbraGenericModel, []>;
+def : PenumbraProcessor<"penumbra1", Penumbra1Tuning>;
 
-// The pipelined core.
-def : ProcessorModel<"penumbra2", PenumbraGenericModel, []>;
+// The pipelined core, without GPR forwarding.
+def Penumbra2Tuning : PenumbraTuning<PenumbraGenericModel, []>;
+def : PenumbraProcessor<"penumbra2", Penumbra2Tuning>;
+
+// The pipelined core with GPR forwarding.
+def Penumbra2_5Tuning : PenumbraTuning<PenumbraGenericModel, []>;
+def : PenumbraProcessor<"penumbra2_5", Penumbra2_5Tuning>;
+
+// The name a build uses when it names no core.  It is the most-used variant's
+// tuning under a stable name — never a blend across generations — so moving
+// the default to another variant is exactly a change of this reference.
+def : PenumbraProcessor<"generic", Penumbra2_5Tuning>;
 
 //===----------------------------------------------------------------------===//
 // Assembly printer

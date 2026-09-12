@@ -80,7 +80,7 @@ not behavior.
 
 | File | Purpose |
 |------|---------|
-| `Penumbra.td` | Top-level TableGen: includes, `PenumbraGenericModel` SchedMachineModel (IssueWidth=1, MicroOpBufferSize=0, LoadLatency=1) shared by the `generic`/`penumbra1`/`penumbra2` ProcessorModels, AsmWriter, Target, pointer remap. One ISA: processors differ only in their *tune* feature list, never the architecture list |
+| `Penumbra.td` | Top-level TableGen: includes, `PenumbraGenericModel` SchedMachineModel (IssueWidth=1, MicroOpBufferSize=0, LoadLatency=1) shared by the `penumbra1`/`penumbra2`/`penumbra2_5` processors, AsmWriter, Target, pointer remap. One ISA: processors differ only in their `PenumbraTuning` (tune features + model), never the architecture list. `generic` borrows the most-used variant's tuning |
 | `PenumbraRegisterInfo.td` | 16 GPRs (R0=zero, R12=TP, R13=LR, R14=SP, R15=PC), GPR/GPR_Allocatable/CCR classes, HWEncoding |
 | `PenumbraInstrInfo.td` | All 4 formats (R/L/M/B) with bit-accurate encoding. Tied-operand constraints for 2-addr ops. ADC/SBC `Uses=[SR]`. All operand slots use full `GPR` (allocator honors R0's reserved+`isConstant`). Pseudos: RET, LEAfi, SELECT_GPR, SELECT_CC_GPR, ADJCALLSTACK. |
 | `PenumbraGISel.td` | TableGen `Pat<>` rules (simple 1:1 selections). Includes `PenumbraCombine.td`. ImmLeaf predicates: uimm16, simm16, simm16neg, uimm5 |
