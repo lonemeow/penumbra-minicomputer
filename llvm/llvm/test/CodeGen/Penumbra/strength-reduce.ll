@@ -246,9 +246,10 @@ define i32 @udiv_by_3(i32 %a) {
 }
 
 ; --- Signed divide/remainder by power-of-2 ---
-; The backend adds no custom signed pow2 lowering, so at -O0 these select the
-; hardware DIV / DIV_P.  At -O1+ the generic combiner strength-reduces the
-; signed divide to a shift sequence; the remainder stays on the hardware divide.
+; The -O0 combiner has no divide rules, so there these select the hardware
+; DIV / DIV_P.  At -O1+ the generic combiner strength-reduces the signed divide
+; to a shift sequence, and the target combiner rewrites the remainder in
+; terms of that divide (edge cases in srem-pow2.ll).
 define i32 @sdiv_by_4(i32 %a) {
 ; O0-LABEL: sdiv_by_4:
 ; O0:         .cfi_startproc
@@ -282,9 +283,13 @@ define i32 @srem_by_4(i32 %a) {
 ; O1-LABEL: srem_by_4:
 ; O1:         .cfi_startproc
 ; O1-NEXT:  // %bb.0:
-; O1-NEXT:    lli r2, 4
-; O1-NEXT:    div r1, r2, r2
-; O1-NEXT:    mov r1, r2
+; O1-NEXT:    mov r2, r1
+; O1-NEXT:    sar r2, 31
+; O1-NEXT:    shr r2, 30
+; O1-NEXT:    add r2, r1
+; O1-NEXT:    sar r2, 2
+; O1-NEXT:    shl r2, 2
+; O1-NEXT:    sub r1, r2
 ; O1-NEXT:    jmp lr
   %r = srem i32 %a, 4
   ret i32 %r

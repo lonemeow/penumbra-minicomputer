@@ -24,6 +24,22 @@
 
 include "llvm/Target/GlobalISel/Combine.td"
 
+// Target-specific: rewrite a signed remainder by a power of two as
+// `X - ((X sdiv 2^k) << k)`.  Upstream has no multiply-free rule for this
+// shape — `srem_by_const` sends every constant through the magic-number
+// builder, or leaves a hardware divide when `isIntDivCheap()` is true — while
+// `sdiv_by_pow2` already expands the divide without one.  Matching G_SDIVREM
+// as well makes the rewrite independent of whether `div_rem_to_divrem` fused
+// a `x / 2^k` + `x % 2^k` pair first: the pair's quotient output becomes the
+// same G_SDIV, so both results share it.  Listed ahead of `all_combines` so a
+// power of two never reaches `srem_by_const`.
+def penumbra_srem_pow2_matchdata : GIDefMatchData<"unsigned">;
+def penumbra_srem_pow2 : GICombineRule<
+  (defs root:$root, penumbra_srem_pow2_matchdata:$matchinfo),
+  (match (wip_match_opcode G_SREM, G_SDIVREM):$root,
+         [{ return matchSRemByPow2(*${root}, MRI, ${matchinfo}); }]),
+  (apply [{ applySRemByPow2(*${root}, MRI, B, ${matchinfo}); }])>;
+
 // Pre-legalizer: full upstream canonicalization / DCE on pre-legalized
 // generic MIR, matching AArch64 / RISC-V.  The `*_by_const` magic-multiply
 // rules in `intdiv_combines`/`intrem_combines` are gated by the target's
@@ -33,7 +49,10 @@ include "llvm/Target/GlobalISel/Combine.td"
 // only adds shift/fixup instructions.  Penumbra-specific fixups for the
 // zero-extending uimm16 form happen in the post-legalizer combiner.
 def PenumbraPreLegalizerCombiner
-    : GICombiner<"PenumbraPreLegalizerCombinerImpl", [all_combines]>;
+    : GICombiner<"PenumbraPreLegalizerCombinerImpl", [
+      penumbra_srem_pow2,
+      all_combines
+    ]>;
 
 // At -O0, run a small, hand-picked rule set that cleans up the most
 // obvious IRTranslator artefacts (DCE, ptr_add chaining, extload folding,
