@@ -42,66 +42,225 @@ namespace {
 #include "PenumbraGenPostLegalizeGICombiner.inc"
 #undef GET_GICOMBINER_TYPES
 
-// One term of a multiply by a constant rewritten as a sum of shifted copies of
-// the multiplicand: +(x << Shift) or -(x << Shift).
-struct MulTerm {
+// How a register comes to hold Value times the multiplicand x, for an odd
+// Value, as the last operation of the cheapest sequence found.  Instrs counts
+// the whole sequence on the two-address machine.  Every operation writes a
+// register nothing else still reads, so a step costs exactly its own
+// instructions, with one copy where the step starts from a register that
+// stays live.
+struct MulStep {
+  enum KindTy : uint8_t {
+    // Value is 1: x copied into a register of its own.
+    Multiplicand,
+    // Value is -1: 0 - x.
+    NegatedMultiplicand,
+    // (Child * x << Shift) + x or - x: Horner's rule, one term at a time.
+    AddMultiplicand,
+    SubMultiplicand,
+    // t = Child * x, then (t << Shift) + t or - t: a factor of 2^Shift +/- 1.
+    AddFactor,
+    SubFactor,
+  };
+  KindTy Kind;
   unsigned Shift;
-  bool Negative;
+  int64_t Child;
+  unsigned Instrs;
 };
 
-// C as a sum of +/-2^Shift terms, taken modulo 2^32 — the arithmetic the
-// multiply computes — so a negative constant needs no special case and a term
-// that would land at 2^32 vanishes.  The non-adjacent form (no two terms at
-// adjacent shifts) has the fewest terms of any signed-digit representation,
-// but its subtracts cost more than adds on a two-address machine: an add
-// commutes into whichever operand is free, a subtract does not.  So the plain
-// binary expansion wins unless the non-adjacent form is strictly shorter —
-// 7 is 8 - 1, but 6 stays 4 + 2.
-SmallVector<MulTerm, 16> getMulTerms(uint32_t C) {
-  SmallVector<MulTerm, 16> NonAdjacent;
-  // One bit wider than the constant, so rounding the top digit up can carry.
-  uint64_t Rest = C;
-  for (unsigned Shift = 0; Shift < 32 && Rest != 0; ++Shift, Rest >>= 1) {
-    if (!(Rest & 1))
-      continue;
-    // Choose the digit that leaves the next bit clear.
-    bool Negative = (Rest & 3) == 3;
-    NonAdjacent.push_back({Shift, Negative});
-    Rest = Negative ? Rest + 1 : Rest - 1;
-  }
-  if (NonAdjacent.size() < unsigned(llvm::popcount(C)))
-    return NonAdjacent;
+// The cheapest sequence found for a multiply by a constant: Odd * x, or x less
+// (1 - Odd) * x in the multiplicand's own register when the multiply is its
+// last use, shifted left by Shift.
+struct MulPlan {
+  int64_t Odd;
+  unsigned Shift;
+  bool SubtractFromMultiplicand;
+  unsigned Instrs;
+};
 
-  SmallVector<MulTerm, 16> Binary;
-  for (unsigned Shift = 0; Shift < 32; ++Shift)
-    if (C >> Shift & 1)
-      Binary.push_back({Shift, false});
-  return Binary;
+// Searches for the shortest shift/add/subtract sequence computing a constant
+// times x, in the style of Bernstein's multiplication by constants.  Odd
+// values are planned exactly in 64 bits: a Horner step removes the trailing
+// zeros of Value -/+ 1 and a factor step divides by at least 3, so every child
+// is smaller in magnitude and the memoized recursion stays small.
+class MulDecomposer {
+public:
+  MulPlan plan(uint32_t C, bool MultiplicandDies);
+  // Emits Plan's operations on X; returns the register holding the product.
+  Register build(const MulPlan &Plan, Register X, MachineIRBuilder &B);
+
+private:
+  MulStep planOdd(int64_t Value);
+  Register buildOdd(int64_t Value, Register X, MachineIRBuilder &B);
+
+  DenseMap<int64_t, MulStep> Steps;
+};
+
+MulStep MulDecomposer::planOdd(int64_t Value) {
+  assert(Value & 1 && "only odd values are planned");
+  if (auto It = Steps.find(Value); It != Steps.end())
+    return It->second;
+
+  MulStep Best;
+  if (Value == 1) {
+    Best = {MulStep::Multiplicand, 0, 0, 1};
+  } else if (Value == -1) {
+    Best = {MulStep::NegatedMultiplicand, 0, 0, 2};
+  } else {
+    Best.Instrs = ~0u;
+    // Ties keep the earlier candidate: an add before a subtract, and a Horner
+    // step before a factor.
+    auto Consider = [&](MulStep::KindTy Kind, unsigned Shift, int64_t Child,
+                        unsigned StepInstrs) {
+      unsigned Instrs = planOdd(Child).Instrs + StepInstrs;
+      if (Instrs < Best.Instrs)
+        Best = {Kind, Shift, Child, Instrs};
+    };
+
+    // A shift and an add or subtract of x.
+    for (int64_t Next : {Value - 1, Value + 1}) {
+      unsigned Shift = llvm::countr_zero(uint64_t(Next));
+      Consider(Next < Value ? MulStep::AddMultiplicand
+                            : MulStep::SubMultiplicand,
+               Shift, Next >> Shift, 2);
+    }
+
+    // A copy, a shift and an add or subtract.  A factor over x itself is the
+    // Horner step above.
+    for (unsigned Shift = 1; Shift < 32; ++Shift) {
+      for (bool Subtract : {false, true}) {
+        int64_t Factor = (int64_t(1) << Shift) + (Subtract ? -1 : 1);
+        if (Factor <= 1 || Value % Factor != 0 || Value / Factor == 1)
+          continue;
+        Consider(Subtract ? MulStep::SubFactor : MulStep::AddFactor, Shift,
+                 Value / Factor, 3);
+      }
+    }
+  }
+
+  Steps[Value] = Best;
+  return Best;
 }
 
-bool isMulDecompositionCheaper(unsigned Shifts, unsigned AddSubs,
+MulPlan MulDecomposer::plan(uint32_t C, bool MultiplicandDies) {
+  if (C == 0)
+    return {0, 0, false, 0};
+
+  // Only C modulo 2^32 matters, so after Shift trailing zeros the odd part is
+  // fixed only modulo 2^(32 - Shift): try the value on either side of zero.
+  // 0xC0000000 is -1 << 30 and 0x80000000 is 1 << 31.
+  unsigned Shift = llvm::countr_zero(C);
+  int64_t Odd = SignExtend64<32>(C) >> Shift;
+  SmallVector<int64_t, 2> Odds = {Odd};
+  if (Shift != 0)
+    Odds.push_back(Odd < 0 ? Odd + (int64_t(1) << (32 - Shift))
+                           : Odd - (int64_t(1) << (32 - Shift)));
+
+  MulPlan Best = {0, 0, false, ~0u};
+  for (int64_t Candidate : Odds) {
+    unsigned ShiftInstrs = Shift != 0;
+    // x alone: shifted in place when nothing else reads it.
+    unsigned Instrs = Candidate == 1
+                          ? (ShiftInstrs ? 1 + !MultiplicandDies : 0)
+                          : planOdd(Candidate).Instrs + ShiftInstrs;
+    if (Instrs < Best.Instrs)
+      Best = {Candidate, Shift, false, Instrs};
+
+    // Subtracting into x's own register costs no copy once x is dead, so
+    // x - (x << 2) is three instructions where -x << 2 plus x is four.
+    if (!MultiplicandDies || Candidate == 1)
+      continue;
+    int64_t Rest = 1 - Candidate;
+    unsigned RestShift = llvm::countr_zero(uint64_t(Rest));
+    Instrs = planOdd(Rest >> RestShift).Instrs + 2 + ShiftInstrs;
+    if (Instrs < Best.Instrs)
+      Best = {Candidate, Shift, true, Instrs};
+  }
+  return Best;
+}
+
+Register MulDecomposer::buildOdd(int64_t Value, Register X,
+                                 MachineIRBuilder &B) {
+  LLT Ty = B.getMRI()->getType(X);
+  MulStep Step = planOdd(Value);
+  auto BuildShl = [&](Register Src, unsigned Shift) {
+    return B.buildShl(Ty, Src, B.buildConstant(Ty, Shift)).getReg(0);
+  };
+
+  switch (Step.Kind) {
+  case MulStep::Multiplicand:
+    return X;
+  case MulStep::NegatedMultiplicand:
+    return B.buildSub(Ty, B.buildConstant(Ty, 0), X).getReg(0);
+  case MulStep::AddMultiplicand:
+  case MulStep::SubMultiplicand: {
+    Register Acc = BuildShl(buildOdd(Step.Child, X, B), Step.Shift);
+    unsigned Opc = Step.Kind == MulStep::AddMultiplicand ? TargetOpcode::G_ADD
+                                                         : TargetOpcode::G_SUB;
+    return B.buildInstr(Opc, {Ty}, {Acc, X}).getReg(0);
+  }
+  case MulStep::AddFactor:
+  case MulStep::SubFactor: {
+    Register Base = buildOdd(Step.Child, X, B);
+    Register Acc = BuildShl(Base, Step.Shift);
+    unsigned Opc = Step.Kind == MulStep::AddFactor ? TargetOpcode::G_ADD
+                                                   : TargetOpcode::G_SUB;
+    return B.buildInstr(Opc, {Ty}, {Acc, Base}).getReg(0);
+  }
+  }
+  llvm_unreachable("unknown multiply step");
+}
+
+Register MulDecomposer::build(const MulPlan &Plan, Register X,
+                              MachineIRBuilder &B) {
+  assert(Plan.Odd != 0 && "a zero product is a constant, not a sequence");
+  LLT Ty = B.getMRI()->getType(X);
+  Register Product;
+  if (Plan.SubtractFromMultiplicand) {
+    int64_t Rest = 1 - Plan.Odd;
+    unsigned RestShift = llvm::countr_zero(uint64_t(Rest));
+    Register Scaled = B.buildShl(Ty, buildOdd(Rest >> RestShift, X, B),
+                                 B.buildConstant(Ty, RestShift))
+                          .getReg(0);
+    Product = B.buildSub(Ty, X, Scaled).getReg(0);
+  } else {
+    Product = buildOdd(Plan.Odd, X, B);
+  }
+  if (Plan.Shift != 0)
+    Product =
+        B.buildShl(Ty, Product, B.buildConstant(Ty, Plan.Shift)).getReg(0);
+  return Product;
+}
+
+// Whether a sequence of Instrs ALU operations computing C * x beats loading C
+// and multiplying on the tuned core.
+bool isMulDecompositionCheaper(unsigned DecomposedInstrs, uint32_t C,
                                const PenumbraSubtarget &STI, bool OptForSize) {
-  // A single shift or negate is never larger than loading the constant and
-  // multiplying; anything longer is.
+  // LLI/LLIS + MUL
+  unsigned MulByConstInstrs = 2;
+  unsigned MulByConstCost = STI.getALUCycles() + STI.getMulCycles();
+  // LUI if the constant doesn't fit in lower half
+  if (int32_t(C) < -32768 || int32_t(C) > 65535) {
+    MulByConstInstrs += 1;
+    MulByConstCost += STI.getALUCycles();
+  }
+
+  // When optimizing for size, just choose whichever is shorter no matter the
+  // costs, prefer the decomposition if the lengths are equal
   if (OptForSize)
-    return Shifts + AddSubs <= 1;
+    return DecomposedInstrs <= MulByConstInstrs;
 
-  // LLI+LUI+MUL
-  int MulCycles = STI.getMulCycles() + STI.getALUCycles() * 2;
-  // Each shift also requires a MOV
-  int DecompCycles = (Shifts * 2 + AddSubs) * STI.getALUCycles();
-
-  double DecompCostRatio = (double)DecompCycles / MulCycles;
-
-  // The decomposition adds I-cache pressure, so it can't be just marginally
-  // cheaper to be a win
-  return DecompCostRatio < 0.8;
+  // Cycles each added instruction must save to pay for its I-cache footprint.
+  const double MinCyclesSavedPerAddedInstr = 1.5;
+  int CyclesSaved =
+      int(MulByConstCost) - int(DecomposedInstrs * STI.getALUCycles());
+  int AddedInstrs = int(DecomposedInstrs) - int(MulByConstInstrs);
+  return CyclesSaved >= MinCyclesSavedPerAddedInstr * AddedInstrs;
 }
 
 // Match an s32 G_MUL by a constant whose shift/add decomposition is cheaper
-// than the hardware multiply; MatchInfo receives the constant.
+// than the hardware multiply; MatchInfo receives the decomposition.
 bool matchMulByConst(MachineInstr &MI, MachineRegisterInfo &MRI,
-                     const PenumbraSubtarget &STI, uint32_t &MatchInfo) {
+                     const PenumbraSubtarget &STI, MulPlan &MatchInfo) {
   Register X = MI.getOperand(1).getReg();
   Register Rhs = MI.getOperand(2).getReg();
   if (MRI.getType(MI.getOperand(0).getReg()) != LLT::scalar(32))
@@ -124,55 +283,24 @@ bool matchMulByConst(MachineInstr &MI, MachineRegisterInfo &MRI,
   }
 
   uint32_t Value = C->Value.getZExtValue();
-  SmallVector<MulTerm, 16> Terms = getMulTerms(Value);
-  unsigned Shifts = count_if(Terms, [](const MulTerm &T) { return T.Shift; });
-  bool AnyPositive =
-      any_of(Terms, [](const MulTerm &T) { return !T.Negative; });
-  // One fewer add or subtract than terms, plus a negation when every term is
-  // subtracted.
-  unsigned AddSubs = Terms.empty() ? 0 : Terms.size() - 1 + !AnyPositive;
-  if (!isMulDecompositionCheaper(Shifts, AddSubs, STI,
+  MulPlan Plan = MulDecomposer().plan(Value, MRI.hasOneNonDBGUse(X));
+  if (!isMulDecompositionCheaper(Plan.Instrs, Value, STI,
                                  MI.getMF()->getFunction().hasMinSize()))
     return false;
 
-  MatchInfo = Value;
+  MatchInfo = Plan;
   return true;
 }
 
-// Emit the constant's terms as shifts of the multiplicand combined by adds and
-// subtracts, starting from a positive term where there is one so the sum needs
-// no negation.
 void applyMulByConst(MachineInstr &MI, MachineRegisterInfo &MRI,
-                     MachineIRBuilder &B, uint32_t &Value) {
-  Register Dst = MI.getOperand(0).getReg();
-  Register X = MI.getOperand(1).getReg();
-  LLT Ty = MRI.getType(Dst);
+                     MachineIRBuilder &B, MulPlan &Plan) {
   B.setInstrAndDebugLoc(MI);
-
-  SmallVector<MulTerm, 16> Terms = getMulTerms(Value);
-  if (Terms.empty()) {
+  Register Dst = MI.getOperand(0).getReg();
+  // Defined in place, a zero stays visible to immediate-operand selection.
+  if (Plan.Odd == 0)
     B.buildConstant(Dst, 0);
-    MI.eraseFromParent();
-    return;
-  }
-
-  auto Shifted = [&](const MulTerm &T) -> Register {
-    if (T.Shift == 0)
-      return X;
-    return B.buildShl(Ty, X, B.buildConstant(Ty, T.Shift)).getReg(0);
-  };
-
-  auto *First = find_if(Terms, [](const MulTerm &T) { return !T.Negative; });
-  Register Sum = First != Terms.end() ? Shifted(*First)
-                                      : B.buildConstant(Ty, 0).getReg(0);
-  for (const MulTerm &T : Terms) {
-    if (&T == First)
-      continue;
-    unsigned Opc = T.Negative ? TargetOpcode::G_SUB : TargetOpcode::G_ADD;
-    Sum = B.buildInstr(Opc, {Ty}, {Sum, Shifted(T)}).getReg(0);
-  }
-  B.buildCopy(Dst, Sum);
-
+  else
+    B.buildCopy(Dst, MulDecomposer().build(Plan, MI.getOperand(1).getReg(), B));
   MI.eraseFromParent();
 }
 

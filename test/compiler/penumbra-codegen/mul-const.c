@@ -6,8 +6,10 @@
  * constants whose partial products the legalizer splits into 32-bit
  * multiplies, against the same product with a multiplier known only at run
  * time, over inputs at both ends of the range and from a fixed pseudo-random
- * sequence.  mul-const-penumbra1.c runs the same checks tuned for a core that
- * accepts longer decompositions.
+ * sequence.  Each 32-bit constant is checked twice: once as the multiplicand's
+ * last use, which lets the sequence overwrite the multiplicand's register, and
+ * once with the multiplicand still read afterwards.  mul-const-penumbra1.c runs
+ * the same checks tuned for a core that accepts longer decompositions.
  */
 
 extern void abort(void);
@@ -15,12 +17,15 @@ extern void abort(void);
 #define CONSTANTS_32(X)                                                       \
   X(0, 0u) X(1, 1u) X(2, 2u) X(3, 3u) X(5, 5u) X(6, 6u) X(7, 7u) X(9, 9u)     \
   X(10, 10u) X(12, 12u) X(15, 15u) X(24, 24u) X(80, 80u) X(100, 100u)         \
-  X(320, 320u) X(641, 641u) X(1000, 1000u) X(1365, 1365u)                     \
-  X(splat, 0x01010101u) X(nibble_splat, 0x0f0f0f0fu) X(int_max, 0x7fffffffu)  \
+  X(225, 225u) X(320, 320u) X(641, 641u) X(1000, 1000u) X(1365, 1365u)        \
+  X(million, 1000000u) X(splat, 0x01010101u) X(nibble_splat, 0x0f0f0f0fu)     \
+  X(nibble_repeat, 0x11111111u) X(int_max, 0x7fffffffu)                       \
   X(int_min, 0x80000000u) X(int_min_plus_1, 0x80000001u)                      \
-  X(minus_1, 0xffffffffu) X(minus_3, 0xfffffffdu) X(minus_7, 0xfffffff9u)     \
+  X(minus_2_30, 0xc0000000u) X(minus_1, 0xffffffffu) X(minus_2, 0xfffffffeu)  \
+  X(minus_3, 0xfffffffdu) X(minus_7, 0xfffffff9u) X(minus_80, 0xffffffb0u)    \
   X(minus_100, 0xffffff9cu) X(alternating, 0x55555555u)                       \
-  X(alternating_high, 0xaaaaaaabu) X(mixed, 0x12345678u)
+  X(alternating_high, 0xaaaaaaabu) X(div10_magic, 0xcccccccdu)                \
+  X(mixed, 0x12345678u)
 
 #define CONSTANTS_64(X)                                                       \
   X(10, 10ull) X(1000, 1000ull) X(two_32_plus_8, 0x100000008ull)              \
@@ -30,6 +35,9 @@ extern void abort(void);
 #define DEF_32(name, c)                                                       \
   __attribute__((noinline)) static unsigned mul32_##name(unsigned x) {        \
     return x * (c);                                                           \
+  }                                                                           \
+  __attribute__((noinline)) static unsigned mul32_live_##name(unsigned x) {   \
+    return x * (c) ^ x;                                                       \
   }
 #define DEF_64(name, c)                                                       \
   __attribute__((noinline)) static unsigned long long mul64_##name(           \
@@ -40,12 +48,13 @@ extern void abort(void);
 CONSTANTS_32(DEF_32)
 CONSTANTS_64(DEF_64)
 
-#define ENTRY_32(name, c) { c, mul32_##name },
+#define ENTRY_32(name, c) { c, mul32_##name, mul32_live_##name },
 #define ENTRY_64(name, c) { c, mul64_##name },
 
 static const struct {
   unsigned c;
   unsigned (*mul)(unsigned);
+  unsigned (*mul_live)(unsigned);
 } ops32[] = { CONSTANTS_32(ENTRY_32) };
 
 static const struct {
@@ -69,12 +78,15 @@ int main(void) {
   for (k = 0; k < sizeof(ops32) / sizeof(ops32[0]); k++) {
     multiplier32 = ops32[k].c;
     for (i = 0; i < sizeof(edges32) / sizeof(edges32[0]); i++)
-      if (ops32[k].mul(edges32[i]) != edges32[i] * multiplier32)
+      if (ops32[k].mul(edges32[i]) != edges32[i] * multiplier32 ||
+          ops32[k].mul_live(edges32[i]) !=
+              (edges32[i] * multiplier32 ^ edges32[i]))
         abort();
     seed = 0x12345678u;
     for (i = 0; i < NUM_RANDOM; i++) {
       seed = seed * 1664525u + 1013904223u;
-      if (ops32[k].mul(seed) != seed * multiplier32)
+      if (ops32[k].mul(seed) != seed * multiplier32 ||
+          ops32[k].mul_live(seed) != (seed * multiplier32 ^ seed))
         abort();
     }
   }

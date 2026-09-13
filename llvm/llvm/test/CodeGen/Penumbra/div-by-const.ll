@@ -70,10 +70,10 @@ define i32 @urem_10(i32 %x) {
 ; FASTMUL-NEXT:    mulu r3, r2, r2
 ; FASTMUL-NEXT:    shr r2, 3
 ; FASTMUL-NEXT:    mov r3, r2
+; FASTMUL-NEXT:    shl r3, 2
+; FASTMUL-NEXT:    add r3, r2
 ; FASTMUL-NEXT:    shl r3, 1
-; FASTMUL-NEXT:    shl r2, 3
-; FASTMUL-NEXT:    add r2, r3
-; FASTMUL-NEXT:    sub r1, r2
+; FASTMUL-NEXT:    sub r1, r3
 ; FASTMUL-NEXT:    jmp lr
 ;
 ; SLOWMUL-LABEL: urem_10:
@@ -101,10 +101,10 @@ define i32 @srem_10(i32 %x) {
 ; FASTMUL-NEXT:    shr r3, 31
 ; FASTMUL-NEXT:    add r3, r2
 ; FASTMUL-NEXT:    mov r2, r3
+; FASTMUL-NEXT:    shl r2, 2
+; FASTMUL-NEXT:    add r2, r3
 ; FASTMUL-NEXT:    shl r2, 1
-; FASTMUL-NEXT:    shl r3, 3
-; FASTMUL-NEXT:    add r3, r2
-; FASTMUL-NEXT:    sub r1, r3
+; FASTMUL-NEXT:    sub r1, r2
 ; FASTMUL-NEXT:    jmp lr
 ;
 ; SLOWMUL-LABEL: srem_10:
@@ -181,17 +181,11 @@ define i8 @sdiv_i8_minus_3(i8 %x) {
 ; FASTMUL-LABEL: sdiv_i8_minus_3:
 ; FASTMUL:         .cfi_startproc
 ; FASTMUL-NEXT:  // %bb.0:
+; FASTMUL-NEXT:    lli r3, 85
 ; FASTMUL-NEXT:    mov r2, r1
 ; FASTMUL-NEXT:    shl r2, 24
 ; FASTMUL-NEXT:    sar r2, 24
-; FASTMUL-NEXT:    mov r3, r2
-; FASTMUL-NEXT:    shl r3, 2
-; FASTMUL-NEXT:    add r3, r2
-; FASTMUL-NEXT:    mov r4, r2
-; FASTMUL-NEXT:    shl r4, 4
-; FASTMUL-NEXT:    add r4, r3
-; FASTMUL-NEXT:    shl r2, 6
-; FASTMUL-NEXT:    add r2, r4
+; FASTMUL-NEXT:    mul r2, r3
 ; FASTMUL-NEXT:    shl r2, 16
 ; FASTMUL-NEXT:    sar r2, 16
 ; FASTMUL-NEXT:    sar r2, 8
@@ -224,21 +218,21 @@ define i8 @urem_i8_7(i8 %x) {
 ; FASTMUL-NEXT:    mov r2, r1
 ; FASTMUL-NEXT:    and r2, 255
 ; FASTMUL-NEXT:    mov r3, r2
+; FASTMUL-NEXT:    shl r3, 3
+; FASTMUL-NEXT:    add r3, r2
 ; FASTMUL-NEXT:    shl r3, 2
 ; FASTMUL-NEXT:    add r3, r2
-; FASTMUL-NEXT:    shl r2, 5
-; FASTMUL-NEXT:    add r2, r3
-; FASTMUL-NEXT:    shr r2, 8
-; FASTMUL-NEXT:    mov r3, r1
-; FASTMUL-NEXT:    sub r3, r2
-; FASTMUL-NEXT:    and r3, 255
-; FASTMUL-NEXT:    shr r3, 1
-; FASTMUL-NEXT:    add r3, r2
-; FASTMUL-NEXT:    shr r3, 2
-; FASTMUL-NEXT:    mov r2, r3
-; FASTMUL-NEXT:    shl r2, 3
+; FASTMUL-NEXT:    shr r3, 8
+; FASTMUL-NEXT:    mov r2, r1
 ; FASTMUL-NEXT:    sub r2, r3
-; FASTMUL-NEXT:    sub r1, r2
+; FASTMUL-NEXT:    and r2, 255
+; FASTMUL-NEXT:    shr r2, 1
+; FASTMUL-NEXT:    add r2, r3
+; FASTMUL-NEXT:    shr r2, 2
+; FASTMUL-NEXT:    mov r3, r2
+; FASTMUL-NEXT:    shl r3, 3
+; FASTMUL-NEXT:    sub r3, r2
+; FASTMUL-NEXT:    sub r1, r3
 ; FASTMUL-NEXT:    jmp lr
 ;
 ; SLOWMUL-LABEL: urem_i8_7:

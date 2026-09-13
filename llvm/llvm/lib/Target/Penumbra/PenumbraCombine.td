@@ -137,13 +137,13 @@ def penumbra_mul_to_mul_lohi : GICombineRule<
          [{ return matchMulToMulLoHi(*${root}, MRI, ${matchinfo}); }]),
   (apply [{ applyMulToMulLoHi(*${root}, MRI, B, ${matchinfo}); }])>;
 
-// Target-specific: rewrite an s32 multiply by a constant as a sum of shifted
-// copies of the multiplicand when that is cheaper than the hardware multiply
-// on the tuned core.  GlobalISel has no counterpart to SelectionDAG's
+// Target-specific: rewrite an s32 multiply by a constant as shifts, adds and
+// subtracts of the multiplicand when that is cheaper than the hardware
+// multiply on the tuned core.  GlobalISel has no counterpart to SelectionDAG's
 // decomposeMulByConstant, and the s32 G_MUL is legal, so this is where the
 // strength reduction lives.  Post-legalization so it also sees the s32
 // multiplies the legalizer produces.
-def penumbra_mul_by_const_matchdata : GIDefMatchData<"uint32_t">;
+def penumbra_mul_by_const_matchdata : GIDefMatchData<"MulPlan">;
 def penumbra_mul_by_const : GICombineRule<
   (defs root:$root, penumbra_mul_by_const_matchdata:$matchinfo),
   (match (wip_match_opcode G_MUL):$root,

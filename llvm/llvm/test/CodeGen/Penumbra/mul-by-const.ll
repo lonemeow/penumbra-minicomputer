@@ -4,10 +4,11 @@
 ; RUN: llc -mtriple=penumbra-unknown-none -O2 -mcpu=penumbra1 < %s \
 ; RUN:   | FileCheck %s --check-prefix=SLOWMUL
 
-; A multiply by a constant becomes shifted copies of the multiplicand combined
-; by adds and subtracts when that beats a hardware MUL on the tuned core, as
-; the scheduling model prices them.  The terms are the constant's binary
-; expansion, or its non-adjacent form when that is strictly shorter.
+; A multiply by a constant becomes shifts, adds and subtracts of the
+; multiplicand when every instruction that adds over loading the constant and
+; multiplying saves enough cycles on the tuned core, as its scheduling model
+; prices them.  The sequence is the shortest found by accumulating terms one at
+; a time (Horner's rule) and by factoring out 2^n +/- 1.
 
 ; The byte and word strides of a 320-pixel framebuffer row.
 define i32 @mul_320(i32 %x) {
@@ -15,18 +16,18 @@ define i32 @mul_320(i32 %x) {
 ; FASTMUL:         .cfi_startproc
 ; FASTMUL-NEXT:  // %bb.0:
 ; FASTMUL-NEXT:    mov r2, r1
-; FASTMUL-NEXT:    shl r2, 6
-; FASTMUL-NEXT:    shl r1, 8
+; FASTMUL-NEXT:    shl r2, 2
 ; FASTMUL-NEXT:    add r1, r2
+; FASTMUL-NEXT:    shl r1, 6
 ; FASTMUL-NEXT:    jmp lr
 ;
 ; SLOWMUL-LABEL: mul_320:
 ; SLOWMUL:         .cfi_startproc
 ; SLOWMUL-NEXT:  // %bb.0:
 ; SLOWMUL-NEXT:    mov r2, r1
-; SLOWMUL-NEXT:    shl r2, 6
-; SLOWMUL-NEXT:    shl r1, 8
+; SLOWMUL-NEXT:    shl r2, 2
 ; SLOWMUL-NEXT:    add r1, r2
+; SLOWMUL-NEXT:    shl r1, 6
 ; SLOWMUL-NEXT:    jmp lr
   %r = mul i32 %x, 320
   ret i32 %r
@@ -37,84 +38,104 @@ define i32 @mul_80(i32 %x) {
 ; FASTMUL:         .cfi_startproc
 ; FASTMUL-NEXT:  // %bb.0:
 ; FASTMUL-NEXT:    mov r2, r1
-; FASTMUL-NEXT:    shl r2, 4
-; FASTMUL-NEXT:    shl r1, 6
+; FASTMUL-NEXT:    shl r2, 2
 ; FASTMUL-NEXT:    add r1, r2
+; FASTMUL-NEXT:    shl r1, 4
 ; FASTMUL-NEXT:    jmp lr
 ;
 ; SLOWMUL-LABEL: mul_80:
 ; SLOWMUL:         .cfi_startproc
 ; SLOWMUL-NEXT:  // %bb.0:
 ; SLOWMUL-NEXT:    mov r2, r1
-; SLOWMUL-NEXT:    shl r2, 4
-; SLOWMUL-NEXT:    shl r1, 6
+; SLOWMUL-NEXT:    shl r2, 2
 ; SLOWMUL-NEXT:    add r1, r2
+; SLOWMUL-NEXT:    shl r1, 4
 ; SLOWMUL-NEXT:    jmp lr
   %r = mul i32 %x, 80
   ret i32 %r
 }
 
-; 100 = 64 + 32 + 4.
+; 100 = ((3x << 3) + x) << 2: six instructions, enough to decompose on penumbra1
+; but not against penumbra2_5's faster multiply.
 define i32 @mul_100(i32 %x) {
 ; FASTMUL-LABEL: mul_100:
 ; FASTMUL:         .cfi_startproc
 ; FASTMUL-NEXT:  // %bb.0:
-; FASTMUL-NEXT:    mov r2, r1
-; FASTMUL-NEXT:    shl r2, 2
-; FASTMUL-NEXT:    mov r3, r1
-; FASTMUL-NEXT:    shl r3, 5
-; FASTMUL-NEXT:    add r3, r2
-; FASTMUL-NEXT:    shl r1, 6
-; FASTMUL-NEXT:    add r1, r3
+; FASTMUL-NEXT:    lli r2, 100
+; FASTMUL-NEXT:    mul r1, r2
 ; FASTMUL-NEXT:    jmp lr
 ;
 ; SLOWMUL-LABEL: mul_100:
 ; SLOWMUL:         .cfi_startproc
 ; SLOWMUL-NEXT:  // %bb.0:
 ; SLOWMUL-NEXT:    mov r2, r1
-; SLOWMUL-NEXT:    shl r2, 2
-; SLOWMUL-NEXT:    mov r3, r1
-; SLOWMUL-NEXT:    shl r3, 5
-; SLOWMUL-NEXT:    add r3, r2
-; SLOWMUL-NEXT:    shl r1, 6
-; SLOWMUL-NEXT:    add r1, r3
+; SLOWMUL-NEXT:    shl r2, 1
+; SLOWMUL-NEXT:    add r2, r1
+; SLOWMUL-NEXT:    shl r2, 3
+; SLOWMUL-NEXT:    add r1, r2
+; SLOWMUL-NEXT:    shl r1, 2
 ; SLOWMUL-NEXT:    jmp lr
   %r = mul i32 %x, 100
   ret i32 %r
 }
 
-; InstCombine canonicalizes a disjoint byte splat to this multiply.
+; InstCombine canonicalizes a disjoint byte splat to this multiply:
+; 257 * 65537, two factors of three instructions each.
 define i32 @mul_splat(i32 %x) {
 ; FASTMUL-LABEL: mul_splat:
 ; FASTMUL:         .cfi_startproc
 ; FASTMUL-NEXT:  // %bb.0:
 ; FASTMUL-NEXT:    mov r2, r1
+; FASTMUL-NEXT:    shl r2, 16
+; FASTMUL-NEXT:    add r1, r2
+; FASTMUL-NEXT:    mov r2, r1
 ; FASTMUL-NEXT:    shl r2, 8
-; FASTMUL-NEXT:    add r2, r1
-; FASTMUL-NEXT:    mov r3, r1
-; FASTMUL-NEXT:    shl r3, 16
-; FASTMUL-NEXT:    add r3, r2
-; FASTMUL-NEXT:    shl r1, 24
-; FASTMUL-NEXT:    add r1, r3
+; FASTMUL-NEXT:    add r1, r2
 ; FASTMUL-NEXT:    jmp lr
 ;
 ; SLOWMUL-LABEL: mul_splat:
 ; SLOWMUL:         .cfi_startproc
 ; SLOWMUL-NEXT:  // %bb.0:
 ; SLOWMUL-NEXT:    mov r2, r1
+; SLOWMUL-NEXT:    shl r2, 16
+; SLOWMUL-NEXT:    add r1, r2
+; SLOWMUL-NEXT:    mov r2, r1
 ; SLOWMUL-NEXT:    shl r2, 8
-; SLOWMUL-NEXT:    add r2, r1
-; SLOWMUL-NEXT:    mov r3, r1
-; SLOWMUL-NEXT:    shl r3, 16
-; SLOWMUL-NEXT:    add r3, r2
-; SLOWMUL-NEXT:    shl r1, 24
-; SLOWMUL-NEXT:    add r1, r3
+; SLOWMUL-NEXT:    add r1, r2
 ; SLOWMUL-NEXT:    jmp lr
   %r = mul i32 %x, 16843009
   ret i32 %r
 }
 
-; 2^31 - 1 takes the non-adjacent form: (x << 31) - x.
+; 255 * 65537 subtracts inside one factor and adds in the other: six
+; instructions, where accumulating the terms takes seven.
+define i32 @mul_0x00ff00ff(i32 %x) {
+; FASTMUL-LABEL: mul_0x00ff00ff:
+; FASTMUL:         .cfi_startproc
+; FASTMUL-NEXT:  // %bb.0:
+; FASTMUL-NEXT:    mov r2, r1
+; FASTMUL-NEXT:    shl r2, 16
+; FASTMUL-NEXT:    add r2, r1
+; FASTMUL-NEXT:    mov r1, r2
+; FASTMUL-NEXT:    shl r1, 8
+; FASTMUL-NEXT:    sub r1, r2
+; FASTMUL-NEXT:    jmp lr
+;
+; SLOWMUL-LABEL: mul_0x00ff00ff:
+; SLOWMUL:         .cfi_startproc
+; SLOWMUL-NEXT:  // %bb.0:
+; SLOWMUL-NEXT:    mov r2, r1
+; SLOWMUL-NEXT:    shl r2, 16
+; SLOWMUL-NEXT:    add r2, r1
+; SLOWMUL-NEXT:    mov r1, r2
+; SLOWMUL-NEXT:    shl r1, 8
+; SLOWMUL-NEXT:    sub r1, r2
+; SLOWMUL-NEXT:    jmp lr
+  %r = mul i32 %x, 16711935
+  ret i32 %r
+}
+
+; 2^31 - 1 is (x << 31) - x.
 define i32 @mul_int_max(i32 %x) {
 ; FASTMUL-LABEL: mul_int_max:
 ; FASTMUL:         .cfi_startproc
@@ -137,7 +158,8 @@ define i32 @mul_int_max(i32 %x) {
   ret i32 %r
 }
 
-; -3 modulo 2^32 is -(x << 2) + x.
+; -3 subtracts 4x from x in the multiplicand's own register, which costs no
+; copy once the multiply is the multiplicand's last use.
 define i32 @mul_minus_3(i32 %x) {
 ; FASTMUL-LABEL: mul_minus_3:
 ; FASTMUL:         .cfi_startproc
@@ -158,8 +180,85 @@ define i32 @mul_minus_3(i32 %x) {
   ret i32 %r
 }
 
-; Six terms: decomposes where an ALU operation is a small fraction of a
-; multiply's cost (penumbra1 prices them 2 : 37) but not where it is 1 : 10.
+; With the multiplicand still read afterwards, -3 builds on -x instead:
+; (-x << 2) + x.
+define i32 @mul_minus_3_live(i32 %x) {
+; FASTMUL-LABEL: mul_minus_3_live:
+; FASTMUL:         .cfi_startproc
+; FASTMUL-NEXT:  // %bb.0:
+; FASTMUL-NEXT:    mov r2, zero
+; FASTMUL-NEXT:    sub r2, r1
+; FASTMUL-NEXT:    shl r2, 2
+; FASTMUL-NEXT:    add r2, r1
+; FASTMUL-NEXT:    xor r1, r2
+; FASTMUL-NEXT:    jmp lr
+;
+; SLOWMUL-LABEL: mul_minus_3_live:
+; SLOWMUL:         .cfi_startproc
+; SLOWMUL-NEXT:  // %bb.0:
+; SLOWMUL-NEXT:    mov r2, zero
+; SLOWMUL-NEXT:    sub r2, r1
+; SLOWMUL-NEXT:    shl r2, 2
+; SLOWMUL-NEXT:    add r2, r1
+; SLOWMUL-NEXT:    xor r1, r2
+; SLOWMUL-NEXT:    jmp lr
+  %m = mul i32 %x, -3
+  %r = xor i32 %m, %x
+  ret i32 %r
+}
+
+; -80 is ((-x << 2) - x) << 4.
+define i32 @mul_minus_80(i32 %x) {
+; FASTMUL-LABEL: mul_minus_80:
+; FASTMUL:         .cfi_startproc
+; FASTMUL-NEXT:  // %bb.0:
+; FASTMUL-NEXT:    mov r2, zero
+; FASTMUL-NEXT:    sub r2, r1
+; FASTMUL-NEXT:    shl r2, 2
+; FASTMUL-NEXT:    sub r2, r1
+; FASTMUL-NEXT:    shl r2, 4
+; FASTMUL-NEXT:    mov r1, r2
+; FASTMUL-NEXT:    jmp lr
+;
+; SLOWMUL-LABEL: mul_minus_80:
+; SLOWMUL:         .cfi_startproc
+; SLOWMUL-NEXT:  // %bb.0:
+; SLOWMUL-NEXT:    mov r2, zero
+; SLOWMUL-NEXT:    sub r2, r1
+; SLOWMUL-NEXT:    shl r2, 2
+; SLOWMUL-NEXT:    sub r2, r1
+; SLOWMUL-NEXT:    shl r2, 4
+; SLOWMUL-NEXT:    mov r1, r2
+; SLOWMUL-NEXT:    jmp lr
+  %r = mul i32 %x, -80
+  ret i32 %r
+}
+
+; 0xC0000000's odd part is -1 as easily as 3: -x << 30.
+define i32 @mul_minus_2_30(i32 %x) {
+; FASTMUL-LABEL: mul_minus_2_30:
+; FASTMUL:         .cfi_startproc
+; FASTMUL-NEXT:  // %bb.0:
+; FASTMUL-NEXT:    mov r2, zero
+; FASTMUL-NEXT:    sub r2, r1
+; FASTMUL-NEXT:    shl r2, 30
+; FASTMUL-NEXT:    mov r1, r2
+; FASTMUL-NEXT:    jmp lr
+;
+; SLOWMUL-LABEL: mul_minus_2_30:
+; SLOWMUL:         .cfi_startproc
+; SLOWMUL-NEXT:  // %bb.0:
+; SLOWMUL-NEXT:    mov r2, zero
+; SLOWMUL-NEXT:    sub r2, r1
+; SLOWMUL-NEXT:    shl r2, 30
+; SLOWMUL-NEXT:    mov r1, r2
+; SLOWMUL-NEXT:    jmp lr
+  %r = mul i32 %x, -1073741824
+  ret i32 %r
+}
+
+; 5 * 273, eight instructions: decomposes only where an ALU operation is a
+; small fraction of a multiply's cost (penumbra1 prices them 2 : 37).
 define i32 @mul_1365(i32 %x) {
 ; FASTMUL-LABEL: mul_1365:
 ; FASTMUL:         .cfi_startproc
@@ -172,25 +271,20 @@ define i32 @mul_1365(i32 %x) {
 ; SLOWMUL:         .cfi_startproc
 ; SLOWMUL-NEXT:  // %bb.0:
 ; SLOWMUL-NEXT:    mov r2, r1
-; SLOWMUL-NEXT:    shl r2, 2
+; SLOWMUL-NEXT:    shl r2, 4
 ; SLOWMUL-NEXT:    add r2, r1
-; SLOWMUL-NEXT:    mov r3, r1
-; SLOWMUL-NEXT:    shl r3, 4
-; SLOWMUL-NEXT:    add r3, r2
+; SLOWMUL-NEXT:    shl r2, 4
+; SLOWMUL-NEXT:    add r1, r2
 ; SLOWMUL-NEXT:    mov r2, r1
-; SLOWMUL-NEXT:    shl r2, 6
-; SLOWMUL-NEXT:    add r2, r3
-; SLOWMUL-NEXT:    mov r3, r1
-; SLOWMUL-NEXT:    shl r3, 8
-; SLOWMUL-NEXT:    add r3, r2
-; SLOWMUL-NEXT:    shl r1, 10
-; SLOWMUL-NEXT:    add r1, r3
+; SLOWMUL-NEXT:    shl r2, 2
+; SLOWMUL-NEXT:    add r1, r2
 ; SLOWMUL-NEXT:    jmp lr
   %r = mul i32 %x, 1365
   ret i32 %r
 }
 
-; Sixteen terms: a MUL on every core.
+; 5 * 17 * 257 * 65537, twelve instructions: the longest penumbra1 accepts for
+; a constant that needs LUI.
 define i32 @mul_0x55555555(i32 %x) {
 ; FASTMUL-LABEL: mul_0x55555555:
 ; FASTMUL:         .cfi_startproc
@@ -203,15 +297,25 @@ define i32 @mul_0x55555555(i32 %x) {
 ; SLOWMUL-LABEL: mul_0x55555555:
 ; SLOWMUL:         .cfi_startproc
 ; SLOWMUL-NEXT:  // %bb.0:
-; SLOWMUL-NEXT:    lli r2, 21845
-; SLOWMUL-NEXT:    lui r2, 21845
-; SLOWMUL-NEXT:    mul r1, r2
+; SLOWMUL-NEXT:    mov r2, r1
+; SLOWMUL-NEXT:    shl r2, 16
+; SLOWMUL-NEXT:    add r1, r2
+; SLOWMUL-NEXT:    mov r2, r1
+; SLOWMUL-NEXT:    shl r2, 8
+; SLOWMUL-NEXT:    add r1, r2
+; SLOWMUL-NEXT:    mov r2, r1
+; SLOWMUL-NEXT:    shl r2, 4
+; SLOWMUL-NEXT:    add r1, r2
+; SLOWMUL-NEXT:    mov r2, r1
+; SLOWMUL-NEXT:    shl r2, 2
+; SLOWMUL-NEXT:    add r1, r2
 ; SLOWMUL-NEXT:    jmp lr
   %r = mul i32 %x, 1431655765
   ret i32 %r
 }
 
-; At minsize a sequence longer than one operation is larger than the MUL.
+; At minsize a sequence longer than loading the constant and multiplying stays
+; a MUL.
 define i32 @mul_6_minsize(i32 %x) minsize {
 ; FASTMUL-LABEL: mul_6_minsize:
 ; FASTMUL:         .cfi_startproc
@@ -227,6 +331,28 @@ define i32 @mul_6_minsize(i32 %x) minsize {
 ; SLOWMUL-NEXT:    mul r1, r2
 ; SLOWMUL-NEXT:    jmp lr
   %r = mul i32 %x, 6
+  ret i32 %r
+}
+
+; A sequence as short as LLI, LUI and MUL is taken at minsize: the same size
+; and faster.
+define i32 @mul_0x80000001_minsize(i32 %x) minsize {
+; FASTMUL-LABEL: mul_0x80000001_minsize:
+; FASTMUL:         .cfi_startproc
+; FASTMUL-NEXT:  // %bb.0:
+; FASTMUL-NEXT:    mov r2, r1
+; FASTMUL-NEXT:    shl r2, 31
+; FASTMUL-NEXT:    sub r1, r2
+; FASTMUL-NEXT:    jmp lr
+;
+; SLOWMUL-LABEL: mul_0x80000001_minsize:
+; SLOWMUL:         .cfi_startproc
+; SLOWMUL-NEXT:  // %bb.0:
+; SLOWMUL-NEXT:    mov r2, r1
+; SLOWMUL-NEXT:    shl r2, 31
+; SLOWMUL-NEXT:    sub r1, r2
+; SLOWMUL-NEXT:    jmp lr
+  %r = mul i32 %x, -2147483647
   ret i32 %r
 }
 
@@ -267,9 +393,10 @@ define i64 @widening_mul_1000(i32 %x) {
 ; FASTMUL-LABEL: widening_mul_1000:
 ; FASTMUL:         .cfi_startproc
 ; FASTMUL-NEXT:  // %bb.0:
-; FASTMUL-NEXT:    lli r2, 1000
-; FASTMUL-NEXT:    mulu r1, r2, r2
 ; FASTMUL-NEXT:    mov r3, zero
+; FASTMUL-NEXT:    lli r4, 1000
+; FASTMUL-NEXT:    mulu r1, r4, r2
+; FASTMUL-NEXT:    mul r3, r4
 ; FASTMUL-NEXT:    add r3, 0
 ; FASTMUL-NEXT:    add r2, r3
 ; FASTMUL-NEXT:    jmp lr

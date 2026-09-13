@@ -154,8 +154,8 @@ define i32 @mul_by_6(i32 %a) {
 ; O1-NEXT:  // %bb.0:
 ; O1-NEXT:    mov r2, r1
 ; O1-NEXT:    shl r2, 1
-; O1-NEXT:    shl r1, 2
 ; O1-NEXT:    add r1, r2
+; O1-NEXT:    shl r1, 1
 ; O1-NEXT:    jmp lr
   %r = mul i32 %a, 6
   ret i32 %r

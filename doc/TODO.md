@@ -2709,15 +2709,19 @@ operations wherever that is cheaper on the tuned core.
 ### What exists
 
 - **Multiply.**  `penumbra_mul_by_const` in the post-legalizer combiner
-  rewrites an s32 multiply by a constant as shifted copies of the
-  multiplicand combined by adds and subtracts: the constant's binary
-  expansion, or its non-adjacent form when that is strictly shorter
-  (a subtract does not commute, so it costs a copy on a two-address
-  machine).  `isMulDecompositionCheaper` compares the sequence against
-  the constant load plus `MUL` in the model's ALU and multiply cycles,
-  and at minsize accepts only a single shift or negate.  A multiply
-  whose operands also feed a `G_[SU]MULH` is left to fuse into one
-  `MUL_P`/`MULU_P`.  The legalizer keeps only the s64 path (a 32x32->64
+  rewrites an s32 multiply by a constant as shifts, adds and subtracts
+  of the multiplicand.  `MulDecomposer` searches for the shortest
+  sequence on the two-address machine, copies included: terms
+  accumulated one at a time (Horner's rule, so the running sum is always
+  the operand overwritten and a subtract costs no more than an add),
+  factors of `2^n +/- 1` (`x * 0x01010101` is `257 * 65537`, 6
+  instructions), a negative product built on `0 - x`, and a final
+  `x - t` in the multiplicand's own register when the multiply is its
+  last use.  `isMulDecompositionCheaper` takes the sequence where every
+  instruction it adds over the constant load and `MUL` saves at least
+  1.5 of the model's cycles, and at minsize where it is no longer.  A
+  multiply whose operands also feed a `G_[SU]MULH` is left to fuse into
+  one `MUL_P`/`MULU_P`.  The legalizer keeps only the s64 path (a 32x32->64
   widening multiply as one hardware multiply); s32 `G_MUL` is legal.
   Upstream's `mul_to_shl` / `mul_by_neg_one` cover powers of two and -1
   before legalization, at every optimization level.
@@ -2742,13 +2746,18 @@ execution tests (`mul-const*.c`, `div-rem-const*.c`,
 
 None of these produce wrong code.
 
-- **The multiply cutoff is untuned.**  It trades cycles against
-  instruction count with a fixed margin, and nothing has measured where
-  I-cache pressure outweighs the cycles saved.  It matters most on
-  penumbra1, whose 2-cycle ALU operations against a 37-cycle multiply
-  let it replace a 3-instruction `LLI`/`LUI`/`MUL` with up to 15
-  instructions (`x * 1365`) on a 1 KB direct-mapped I-cache.  Tune on
-  the ULX3S, not the ISS.
+- **The multiply cutoff's exchange rate is untuned.**  1.5 cycles per
+  added instruction stands for the I-cache footprint: a miss costs a
+  core the same cycles however fast its ALU operations are, so the price
+  is absolute rather than a fraction of the multiply, but how often an
+  added instruction misses depends on the workload's working set, which
+  no single multiply sees.  At 1.5 penumbra1 accepts up to 12
+  instructions (13 for a constant needing `LUI`; `x * 0x55555555` is
+  12) and penumbra2_5 up to 5 (6).  Random 16-bit constants mostly need
+  9-12 and random 32-bit ones 17-20, so the rate mostly decides small
+  and structured constants.  Tune on the ULX3S, not the ISS; if the
+  cores' measured I-cache miss penalties differ widely, the rate belongs
+  to the subtarget.
 - **-O0 keeps most constant multiplies.**  No post-legalizer combiner
   runs at -O0, so beyond upstream's power-of-two and -1 rules a constant
   multiply — `x * 3`, even `x * 0` — is a hardware `MUL` there.
@@ -2797,27 +2806,14 @@ None of these produce wrong code.
   itself, and never mid-function with the scratch register dead.
   That does not justify a new pass; revisit if more placement-level
   waste turns up.
-- **Terms are summed as independent copies, and products of short
-  factors are not factored.**  Each shifted term is built from its own
-  copy of the multiplicand, so every term but the last costs a `mov`.
-  Accumulating instead — shifting the running sum by the gap to the
-  next term and adding or subtracting the multiplicand, Horner's rule —
-  copies the multiplicand once for any term list: `x * 100` is 7
-  instructions emitted and 6 as `t = (x << 1) + x; t = (t << 3) + x;
-  t << 2`.  A
-  constant that is a product of short factors does better still:
-  `x * 0x01010101` is 8 emitted, 7 by accumulation, and 6 as
-  `257 * 65537` — `t = x + (x << 8); t + (t << 16)`.  That constant is
-  the common one in 8bpp code — a four-pixel word from one colour
-  index — so a loop that cannot hoist the product pays two instructions
-  per word.  It is also the final multiply of the popcount lowering
-  that count-leading-zeros lowering builds on, so the soft-float and
-  64-bit division runtime routines (`__adddf3`, `__muldf3`,
-  `__divdf3`, `__udivdi3`, …) pay it on every call once compiler-rt is
-  rebuilt with the decomposition.  This is the most valuable of these
-  gaps.  The fix is local to `applyMulByConst` and its cost count —
-  the rule's cost per shifted term (a copy and a shift) describes the
-  independent-copy shape and has to follow whichever shape is emitted.
+- **A zero partial product stays a multiply.**  The legalizer's s64
+  multiply splits into s32 partial products, and one whose operand is
+  the zero high word of an extension — `G_MUL 0, 1000` in
+  `widening_mul_1000` — reaches selection because the post-legalizer
+  combiner runs no constant folding (AArch64's lists
+  `constant_fold_binops` and `identity_combines`).  Where the constant
+  decomposes it becomes shifts and adds of zero; where it does not, a
+  hardware `MUL` of zero on penumbra2_5.
 - **The signed power-of-two remainder clears bits the long way.**
   `penumbra_srem_pow2` rounds the biased dividend down with `SAR` then
   `SHL`, because `-2^k` does not fit the uimm16 `ANDi` takes: 7
@@ -2837,11 +2833,10 @@ None of these produce wrong code.
   InstCombine delivers `0 - x` regardless, so the fix is one selection
   pattern, `(sub 0, x)` → `ADDi (NOT x), 1`.  On its own it saves an
   instruction only where the result is copied back, which the compiled
-  test suite shows about 10 times before returns.  It pays with a
-  decomposition that has no positive term: `x * -80` is built as
-  `0 - (x << 4) - (x << 6)` in 7 instructions, where summing `80x`
-  and negating in place is 6 — a change to `applyMulByConst` that
-  wants the cheap negation first.
+  test suite shows about 10 times before returns.  Negative constant
+  multiplies do not need it: the decomposition accumulates from `0 - x`
+  while the multiplicand is still live, so an in-place negation would
+  not shorten `x * -80`.
 
 ### Cost model
 
