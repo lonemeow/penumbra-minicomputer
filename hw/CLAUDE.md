@@ -19,6 +19,8 @@ project-wide conventions and pointers to architectural specs.
 - ISA-visible behavior (exception priorities, vector numbers, SR bits):
   `doc/system/architecture.md`
 - Sysreg device map: `doc/system/sysregs.md`
+- Per-core instruction cycle counts (measured, with derivations and the
+  measurement method): `doc/internals/instruction-timing.md`
 - RTL coding standards: `doc/internals/coding-standards.md`
 
 ## Directory layout
@@ -299,6 +301,20 @@ trace ports yet, so `+trace=` is ignored). Both are built by
 `+stdin_file=path`.
 
 ## Implementation gotchas
+
+### Instruction cycle counts feed the compiler
+`doc/internals/instruction-timing.md` records how many cycles each
+instruction holds each core, and the LLVM scheduling models
+(`llvm/llvm/lib/Target/Penumbra/Penumbra.td`, `WriteRes` latencies)
+state the same figures; the compiler's cost decisions — constant
+multiply/divide strength reduction, the TTI cost model — read them.
+**Any RTL change that can move a steady-state cycle count** must update
+both in the same change: µop counts in a microcode routine, the fetch
+path or a cache's hit latency, the divmul unit's steps or handshake,
+pipeline stall, forwarding or writeback sequencing. Re-measure with the
+method in that doc's "Measuring" section rather than re-deriving from
+the RTL; if a change can't be measured yet, mark the figure as inferred
+there.
 
 ### Device `o_busy` contract (registered-read devices)
 The CPU's STALL sequencer exits and latches `mem_rdata` on the cycle
