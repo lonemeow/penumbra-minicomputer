@@ -3512,7 +3512,18 @@ branch cost: penumbra1 (shallow, no mispredict penalty) likely favors
 the branch; penumbra2 (no predictor, resolves in EX) makes taken
 branches costly and narrows the gap.
 
-This is a measure-on-hardware question, not a guess.  Action: benchmark
+The per-instruction costs are now measured
+([Branch costs](#branch-costs)) and point the same way on both cores.
+On gen1 a `Bcc` costs 2 cycles like an ALU operation, so the branch
+form (~4 instructions, ~8 cycles) beats the branchless one (~8
+instructions, ~16 cycles) by half.  On gen2.5 the branch form is 3–4
+cycles plus 4 cycles times the misprediction rate against ~8 for the
+branchless form, so the branch wins unless the condition is nearly
+random.  The select-of-constants combine therefore looks like a loss on
+every core.
+
+This is still a measure-on-hardware question, because the cycle figures
+leave out I-cache effects of the size difference.  Action: benchmark
 representative code (Dhrystone, kernel hot paths) with the select-of-
 constants combine on vs off, then set the cost knobs (and/or gate the
 combine) to match the measured branch cost.  Note this is orthogonal to
@@ -3654,28 +3665,93 @@ generation whose dependence behaviour differs needs its own processor
 entry — that is the argument for splitting a name, and the only one
 that requires it.
 
-The models are `CompleteModel = 0`, state `WriteRes` latencies only
-for MUL and DIV, and carry no `ReadAdvance` entries, so the scheduler
-has no dependence data.  Writing a real model is the work here; the
-`ProcessorModel` line is the trivial part.  `generic` takes the
-most-used variant's side once a second model exists, so a generic
-build schedules for a forwarding core; an interlocked or single-issue
-core that wants its own schedule is built with its explicit name.
+The models are `CompleteModel = 0`, state `WriteRes` latencies for ALU
+operations, MUL and DIV, and carry no `ReadAdvance` entries.  Nothing
+schedules against them yet: MachineScheduler runs only for a subtarget
+that returns true from `enableMachineScheduler()`, which defaults to
+false and Penumbra does not override, so the model's `IssueWidth`,
+`MicroOpBufferSize` and `LoadLatency` have never influenced code
+generation.  What does read the model today is Penumbra's own cost
+code (`PenumbraSubtarget::getALUCycles` and friends, feeding
+`getArithmeticInstrCost`, `isIntDivCheap()` and the constant-multiply
+combine); upstream, `SelectOptimize` reads `MispredictPenalty` (see
+[Branch costs](#branch-costs)).  The other consumers of scheduling data
+— MachineCombiner, EarlyIfConversion, MachineLICM's high-latency
+hoisting — need target patterns, a target that adds the pass, or a
+hook override, and none apply.  Writing a real dependence model
+therefore means enabling MachineScheduler as well, annotating every
+instruction's reads, and measuring what the pass costs in compile time
+and register pressure.  `generic` takes the most-used variant's side
+once a second model exists, so a generic build schedules for a
+forwarding core; an interlocked or single-issue core that wants its own
+schedule is built with its explicit name.
 
 **gen2's dependency cost is not modelled.**  gen2 and gen2.5 share one
 scheduling model that states only instruction latencies, so cost
 decisions price gen2 as if it forwarded.  On gen2 a consumer waits for
 its producer to leave WB: 3 stall cycles at distance 1, fewer further
 back ([hazard-model.md](internals/penumbra2/hazard-model.md), Example
-A).  A shift/add chain is the worst case, since every op reads the one
-before it.  LLVM's scheduling vocabulary has pipeline-oriented pieces —
-a negative `ReadAdvance` for a consumer that reads late, a producer
-list on `ReadAdvance` for bypass paths, `MicroOpBufferSize`, the
-`PostRAScheduler` — but a `ReadAdvance` cannot see producer distance,
-so it would charge every dependent read the distance-1 stall.  Work
-out how LLVM expects an interlocked pipeline to be described, and
-whether any consumer (the scheduler, `MachineCombiner`, a target cost
-query) would act on it, before giving gen2 a model of its own.
+A; a chain of eight dependent `ADD`s measures 29 cycles against 8 on
+gen2.5).  A shift/add chain is the worst case, since every op reads
+the one before it.
+
+LLVM can describe this.  A `ReadAdvance<Read, N, [producers]>` says
+when a consumer's operand becomes usable relative to its producer; a
+negative `N` is a consumer that must wait (TargetSchedule.td names
+this use), and the producer list scopes it — e.g. to loads.
+MachineScheduler builds a dependency DAG whose edges carry
+`computeOperandLatency` (producer latency minus the consumer's
+`ReadAdvance`) and places instructions on a cycle timeline under
+`IssueWidth` and in-order issue.  On that timeline a constant `-3` *is*
+distance-dependent: a consumer is not ready until three cycles after
+its producer, so independent instructions scheduled between them absorb
+the stall, which is exactly gen2's behaviour.  Only per-instruction
+queries that see one edge at a time — MachineTraceMetrics' critical-path
+depth, which also assumes an out-of-order core by taking the longest
+path rather than summing — cannot see distance.
+`TargetSubtargetInfo::adjustSchedDependency` allows per-edge tweaks if
+the constant proves too coarse.  So a gen2 model is
+`ReadAdvance<ReadGPR, -3>` on every GPR read plus MachineScheduler
+enabled for that tuning; gen2.5 would add only
+`ReadAdvance<ReadGPR, -1, [WriteLoad]>` for its load-use interlock,
+which is little to gain for the cost of enabling the pass.
+
+### Branch costs
+
+Measured on the RTL testbenches
+([instruction-timing.md](internals/instruction-timing.md)):
+
+| Control transfer | gen1 | gen2.5 |
+|---|---:|---:|
+| `Bcc` not taken | 2 | 1 |
+| `Bcc` taken / `B`, BTB-predicted on gen2.5 | 2 | 2 |
+| mispredicted, or indirect `JMP` / return | 2 | 5 |
+| `BL` | 3 | — |
+
+gen1 has no prediction: every control transfer is one µop like an ALU
+operation.  gen2.5's `MispredictPenalty` is therefore **4**; gen2 has
+no BTB, so every taken branch flushes there and it is unmeasured —
+branch behaviour is a second reason gen2 and gen2.5 cannot share a
+model.  A branch alternating taken / not-taken mispredicts on every
+execution.
+
+**The BTB costs a cycle even when right.**  A correctly predicted
+taken direct branch measures +1 cycle over the branch instruction
+(backward `BNE`, forward `B`, and the loop latch alike), where
+[penumbra2/overview.md](internals/penumbra2/overview.md) describes the
+BTB as cutting that flush "from 3 bubbles to 0".  Work out whether the
+fmax-closure round moved the BTB redirect a cycle later, or the design
+never reached 0, and correct whichever is wrong.
+
+No scheduling-model field expresses "a predicted taken branch still
+costs a cycle", and setting `MispredictPenalty` would change almost
+nothing for Penumbra: `SelectOptimize` uses it to choose between a
+`select` and a branch, but Penumbra has no conditional-move instruction,
+so a `select` becomes a branch diamond either way; SimplifyCFG adds
+`TTI::getBranchMispredictPenalty()` (default 0, overridden only by X86)
+to its speculation budget, and only for branches marked unpredictable.
+The decisions these costs should drive are the branch-versus-branchless
+combines — see the "no branch-cost model" entry.
 
 ### Other consumers waiting on a feature
 

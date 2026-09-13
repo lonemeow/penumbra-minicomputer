@@ -35,9 +35,16 @@ and cache misses, branch flushes and dependency stalls come on top.
 | `STW`, write-through | 8 | — | 5 |
 | `MUL` / `MULU` | 37 | — | 10 |
 | `DIV` / `DIVU` | 37 | 35¹ | 34 |
+| `Bcc` not taken | 2 | — | 1 |
+| `Bcc` taken / `B` | 2 | — | 2 predicted, 5 mispredicted² |
+| `JMP Rn` (indirect, including returns) | 2 | — | 5 |
+| `BL` | 3 | — | — |
 
 ¹ Measured inside a loop whose divides read one another's results, so
 it includes a small Penumbra/2 dependency stall.
+
+² See [Control transfers](#control-transfers-on-penumbra25) for what
+the BTB predicts.
 
 "—" marks a figure not measured.
 
@@ -61,6 +68,12 @@ fetch cycle plus one cycle per µop.
   half to Rd and latches the flags; a shared tail µop writes the high
   half to Rdh. The tail runs even for the two-operand form, whose
   Rdh = R0 write the regfile drops. 1 + 34 + 1 + 1 = **37**.
+- **Branches and jumps** are a single µop: `Bcc` uses `branch=BRT`, on
+  which the sequencer starts the next fetch whether or not the
+  condition holds and only the PC source differs, so taken and not
+  taken cost the same **2**, as does `JMP`. `BL` writes the link
+  register in a µop of its own before loading the PC: **3**. There is
+  no prediction, so the figures do not depend on history.
 
 ### Penumbra/2 and Penumbra/2.5
 
@@ -73,6 +86,22 @@ measured end to end, a divide costs **34** cycles, the unit's own
 launch + 32 steps + done count. The multiply retires four bits per
 step, so its 8 steps give **10** — the same whether the high half is
 written to a register or discarded to R0.
+
+### Control transfers on Penumbra/2.5
+
+Branches resolve in EX. A not-taken conditional branch follows the
+static fall-through prediction: **1**. Direct branches (`B`, `Bcc`,
+`BL`) are also looked up in a fetch-time branch target buffer; a taken
+branch the BTB predicts costs **2**, one cycle more than the branch
+itself. Anything EX has to correct costs **5**, the branch plus a
+4-cycle redirect: a mispredicted direction, a branch the BTB does not
+know, and every indirect jump and return, which the BTB never
+predicts. A branch that alternates direction mispredicts on every
+execution.
+
+[penumbra2/overview.md](penumbra2/overview.md) describes a correctly
+predicted taken branch as flushing 0 bubbles; the measured cost is
+one cycle.
 
 ## Dependency costs
 
@@ -102,7 +131,9 @@ weigh operations by them.
 
 Penumbra/2 and Penumbra/2.5 share one model. It states instruction
 latencies only, so no model expresses Penumbra/2's dependency stall;
-cost decisions price Penumbra/2 as if it forwarded.
+cost decisions price Penumbra/2 as if it forwarded. Nor does any model
+state branch costs: the misprediction penalty and the cost of a
+predicted taken branch above are not read by the compiler.
 
 ## Measuring
 
@@ -117,6 +148,14 @@ with `pasm.py --org 0xFFFF0000`. Each program:
 2. enables the MMU, the I-cache, and for load/store bodies the D-cache;
 3. runs `ITERS` iterations of the body under test, followed by
    `SUB R6, #1` / `BNE loop`.
+
+A never-taken branch is `CMP R7, R7` followed by `BNE` to the next
+instruction; an always-taken one is `B` to the next instruction.
+`pasm.py` has no expressions, so an indirect jump's RAM target is
+computed at run time from `LA` of the label, less `LA` of the copied
+routine's start, plus the RAM base. A `BL` body overwrites LR, which
+the copied routine returns through, so save LR before the loop and
+restore it before `RET`.
 
 Running each program at two iteration counts and dividing the
 difference in cycles by the difference in iterations cancels setup,
