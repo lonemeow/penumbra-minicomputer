@@ -1,7 +1,6 @@
 /*
  * Signed division and remainder by a constant power of two lower to
- * shifts, adds and subtracts rather than a divide
- * (doc/llvm-gisel-signed-pow2-remainder.md).  Every such divisor --
+ * shifts, adds and subtracts rather than a divide.  Every such divisor --
  * 2^0 through 2^31 (INT_MIN) at 32 bits, 2^0 through 2^63 at 64 bits --
  * is checked on its own and as a quotient + remainder pair, against the
  * same operation on a divisor known only at run time, over inputs that

@@ -58,8 +58,7 @@ class PenumbraGPR<bits<4> num, string n, list<string> altNames = []>
 // Caveat: MCP still won't actually forward through `$rN = COPY $r0` in
 // practice because virtregrewriter doesn't mark the destination as
 // renamable when the source is a reserved physreg, and MCP gates
-// forwarding on the renamable flag.  See doc/llvm-mcp-zero-reg-forwarding.md
-// for the full investigation and the resume-here notes.
+// forwarding on the renamable flag.
 let isConstant = true in
 def R0  : PenumbraGPR<0,  "r0", ["zero"]>;
 
