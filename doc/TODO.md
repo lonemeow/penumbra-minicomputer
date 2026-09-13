@@ -2806,14 +2806,6 @@ None of these produce wrong code.
   itself, and never mid-function with the scratch register dead.
   That does not justify a new pass; revisit if more placement-level
   waste turns up.
-- **A zero partial product stays a multiply.**  The legalizer's s64
-  multiply splits into s32 partial products, and one whose operand is
-  the zero high word of an extension — `G_MUL 0, 1000` in
-  `widening_mul_1000` — reaches selection because the post-legalizer
-  combiner runs no constant folding (AArch64's lists
-  `constant_fold_binops` and `identity_combines`).  Where the constant
-  decomposes it becomes shifts and adds of zero; where it does not, a
-  hardware `MUL` of zero on penumbra2_5.
 - **The signed power-of-two remainder clears bits the long way.**
   `penumbra_srem_pow2` rounds the biased dividend down with `SAR` then
   `SHL`, because `-2^k` does not fit the uimm16 `ANDi` takes: 7

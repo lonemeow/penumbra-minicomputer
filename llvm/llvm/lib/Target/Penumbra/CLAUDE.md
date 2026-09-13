@@ -149,7 +149,8 @@ The pipeline is defined by group lists in `PenumbraCombine.td`:
   Cleans IRTranslator artefacts without paying full canonicalization
   cost. Lives in `PenumbraO0PreLegalizerCombiner`.
 - **Post-legalizer at -O1+:** `[commute_constant_to_rhs,
-  penumbra_mul_by_const, ptr_add_immed_chain, combines_for_extload,
+  constant_fold_binops, identity_combines, penumbra_mul_by_const,
+  ptr_add_immed_chain, combines_for_extload,
   penumbra_zextload_promote, known_bits_simplifications,
   penumbra_neg_imm_to_opposite, penumbra_sink_ptr_add_past_use,
   penumbra_mul_to_mul_lohi]`.

@@ -393,12 +393,8 @@ define i64 @widening_mul_1000(i32 %x) {
 ; FASTMUL-LABEL: widening_mul_1000:
 ; FASTMUL:         .cfi_startproc
 ; FASTMUL-NEXT:  // %bb.0:
-; FASTMUL-NEXT:    mov r3, zero
-; FASTMUL-NEXT:    lli r4, 1000
-; FASTMUL-NEXT:    mulu r1, r4, r2
-; FASTMUL-NEXT:    mul r3, r4
-; FASTMUL-NEXT:    add r3, 0
-; FASTMUL-NEXT:    add r2, r3
+; FASTMUL-NEXT:    lli r2, 1000
+; FASTMUL-NEXT:    mulu r1, r2, r2
 ; FASTMUL-NEXT:    jmp lr
 ;
 ; SLOWMUL-LABEL: widening_mul_1000:
@@ -406,9 +402,6 @@ define i64 @widening_mul_1000(i32 %x) {
 ; SLOWMUL-NEXT:  // %bb.0:
 ; SLOWMUL-NEXT:    lli r2, 1000
 ; SLOWMUL-NEXT:    mulu r1, r2, r2
-; SLOWMUL-NEXT:    mov r3, zero
-; SLOWMUL-NEXT:    add r3, 0
-; SLOWMUL-NEXT:    add r2, r3
 ; SLOWMUL-NEXT:    jmp lr
   %w = zext i32 %x to i64
   %r = mul i64 %w, 1000

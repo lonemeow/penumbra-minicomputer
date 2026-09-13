@@ -21,18 +21,18 @@ define i64 @umul_overflow_i64_clamp(i64 %a, i64 %b) {
 ; CHECK-NEXT:    stw r8, [sp + 8] // 4-byte Folded Spill
 ; CHECK-NEXT:    stw r9, [sp + 4] // 4-byte Folded Spill
 ; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
-; CHECK-NEXT:    mov lr, r2
-; CHECK-NEXT:    mul lr, r3
+; CHECK-NEXT:    mov r11, r2
+; CHECK-NEXT:    mul r11, r3
 ; CHECK-NEXT:    mov r6, r1
 ; CHECK-NEXT:    mul r6, r4
-; CHECK-NEXT:    mov r11, r1
-; CHECK-NEXT:    mulu r11, r3, r5
-; CHECK-NEXT:    add r6, lr
-; CHECK-NEXT:    mov lr, zero
-; CHECK-NEXT:    mov r7, lr
+; CHECK-NEXT:    mov lr, r1
+; CHECK-NEXT:    mulu lr, r3, r5
+; CHECK-NEXT:    add r6, r11
+; CHECK-NEXT:    mov r11, zero
+; CHECK-NEXT:    mov r7, r11
 ; CHECK-NEXT:    adc r7, zero
 ; CHECK-NEXT:    add r6, r5
-; CHECK-NEXT:    mov r8, lr
+; CHECK-NEXT:    mov r8, r11
 ; CHECK-NEXT:    adc r8, zero
 ; CHECK-NEXT:    add r8, r7
 ; CHECK-NEXT:    mov r9, r2
@@ -40,29 +40,26 @@ define i64 @umul_overflow_i64_clamp(i64 %a, i64 %b) {
 ; CHECK-NEXT:    mulu r2, r3, r6
 ; CHECK-NEXT:    mulu r1, r4, r3
 ; CHECK-NEXT:    add r6, r9
-; CHECK-NEXT:    mov r4, lr
+; CHECK-NEXT:    mov r4, r11
 ; CHECK-NEXT:    adc r4, zero
 ; CHECK-NEXT:    add r6, r3
-; CHECK-NEXT:    mov r3, lr
+; CHECK-NEXT:    mov r3, r11
 ; CHECK-NEXT:    adc r3, zero
 ; CHECK-NEXT:    add r3, r4
 ; CHECK-NEXT:    add r6, r8
-; CHECK-NEXT:    mov r4, lr
-; CHECK-NEXT:    adc r4, zero
-; CHECK-NEXT:    add r4, r3
-; CHECK-NEXT:    add r4, r7
+; CHECK-NEXT:    adc r11, zero
+; CHECK-NEXT:    add r11, r3
+; CHECK-NEXT:    add r11, r7
 ; CHECK-NEXT:    add r1, r2
 ; CHECK-NEXT:    add r1, r5
-; CHECK-NEXT:    xor r6, lr
-; CHECK-NEXT:    xor r4, lr
 ; CHECK-NEXT:    llis r3, -1
 ; CHECK-NEXT:    llis r2, -1
-; CHECK-NEXT:    or r4, r6
+; CHECK-NEXT:    or r11, r6
 ; CHECK-NEXT:    bne .LBB0_2
 ; CHECK-NEXT:  // %bb.1:
-; CHECK-NEXT:    mov r3, r11
+; CHECK-NEXT:    mov r3, lr
 ; CHECK-NEXT:  .LBB0_2:
-; CHECK-NEXT:    cmp r4, 0
+; CHECK-NEXT:    cmp r11, 0
 ; CHECK-NEXT:    bne .LBB0_4
 ; CHECK-NEXT:  // %bb.3:
 ; CHECK-NEXT:    mov r2, r1
@@ -117,8 +114,6 @@ define i1 @umul_overflow_i64_flag(i64 %a, i64 %b) {
 ; CHECK-NEXT:    adc r3, zero
 ; CHECK-NEXT:    add r3, lr
 ; CHECK-NEXT:    add r3, r4
-; CHECK-NEXT:    xor r2, r1
-; CHECK-NEXT:    xor r3, r1
 ; CHECK-NEXT:    or r3, r2
 ; CHECK-NEXT:    cmp zero, r3
 ; CHECK-NEXT:    sbc r1, zero

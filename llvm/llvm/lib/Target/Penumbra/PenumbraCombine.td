@@ -156,6 +156,11 @@ def penumbra_mul_by_const : GICombineRule<
 //   commute_constant_to_rhs — puts constants on the RHS so (add GPR, uimm16)
 //     / (and GPR, uimm16) patterns fire when the source had the const on LHS,
 //     and so penumbra_mul_by_const finds a multiply's constant.
+//   constant_fold_binops, identity_combines — narrowing an s64 operation
+//     leaves s32 halves whose operands turn out constant, such as the zero
+//     high word of an extension or of a small constant: `0 * C`, `x ^ 0`,
+//     `x + 0`.  Ahead of penumbra_mul_by_const, so a zero product is folded
+//     rather than priced.
 //   penumbra_mul_by_const   — target-specific; see rule definition above.
 //   ptr_add_immed_chain     — merges (G_PTR_ADD (G_PTR_ADD p, c1), c2) into
 //     G_PTR_ADD p, (c1+c2).  Prerequisite for the AddrRegImm ComplexPattern
@@ -174,6 +179,8 @@ def penumbra_mul_by_const : GICombineRule<
 def PenumbraPostLegalizerCombiner
     : GICombiner<"PenumbraPostLegalizerCombinerImpl", [
       commute_constant_to_rhs,
+      constant_fold_binops,
+      identity_combines,
       penumbra_mul_by_const,
       ptr_add_immed_chain,
       combines_for_extload,

@@ -39,3 +39,7 @@ Regression/C/gcc-c-torture/execute/960521-1.c     -DSTACK_SIZE=16384
 # Re-runs mul-const.c tuned for a core that decomposes longer constant
 # multiplies than the default tuning does.
 penumbra-codegen/mul-const-penumbra1.c   -mtune=penumbra1
+
+# Checks a 128-bit multiply high, which a 32-bit target only accepts with
+# __int128 enabled.
+penumbra-codegen/narrowed-constant-halves.c   -fforce-enable-int128
