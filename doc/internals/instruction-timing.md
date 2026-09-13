@@ -100,7 +100,8 @@ Each core's scheduling model in `Penumbra.td` states write latencies
 for three instruction classes: `WriteALU` (ALU operations and the
 immediate forms), `WriteMul` and `WriteDiv`. `PenumbraSubtarget` reads
 them back (`getALUCycles`, `getMulCycles`, `getDivCycles`), and
-`PenumbraTTIImpl` and `isIntDivCheap()` weigh operations by them.
+`PenumbraTTIImpl`, `isIntDivCheap()` and the constant-multiply combine
+weigh operations by them.
 
 Penumbra/2 and Penumbra/2.5 share one model. It states instruction
 latencies only, so no model expresses Penumbra/2's dependency stall;

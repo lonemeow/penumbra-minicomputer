@@ -5,6 +5,10 @@
 ; RUN:   | FileCheck %s -check-prefix=O1
 
 ; Strength reduction of constant multiply/divide/remainder.
+;
+; A multiply by a constant decomposes into shifts and adds in the
+; post-legalizer combiner, which runs at -O1 and above; at -O0 only the
+; generic power-of-two and negate rules apply and other constants stay a MUL.
 
 ; --- Multiply by power-of-2 ---
 define i32 @mul_by_8(i32 %a) {
@@ -28,10 +32,8 @@ define i32 @mul_by_5(i32 %a) {
 ; O0-LABEL: mul_by_5:
 ; O0:         .cfi_startproc
 ; O0-NEXT:  // %bb.1:
-; O0-NEXT:    mov r2, r1
-; O0-NEXT:    mov r1, r2
-; O0-NEXT:    shl r1, 2
-; O0-NEXT:    add r1, r2
+; O0-NEXT:    lli r2, 5
+; O0-NEXT:    mul r1, r2
 ; O0-NEXT:    jmp lr
 ;
 ; O1-LABEL: mul_by_5:
@@ -49,10 +51,8 @@ define i32 @mul_by_3(i32 %a) {
 ; O0-LABEL: mul_by_3:
 ; O0:         .cfi_startproc
 ; O0-NEXT:  // %bb.1:
-; O0-NEXT:    mov r2, r1
-; O0-NEXT:    mov r1, r2
-; O0-NEXT:    shl r1, 1
-; O0-NEXT:    add r1, r2
+; O0-NEXT:    lli r2, 3
+; O0-NEXT:    mul r1, r2
 ; O0-NEXT:    jmp lr
 ;
 ; O1-LABEL: mul_by_3:
@@ -71,10 +71,8 @@ define i32 @mul_by_7(i32 %a) {
 ; O0-LABEL: mul_by_7:
 ; O0:         .cfi_startproc
 ; O0-NEXT:  // %bb.1:
-; O0-NEXT:    mov r2, r1
-; O0-NEXT:    mov r1, r2
-; O0-NEXT:    shl r1, 3
-; O0-NEXT:    sub r1, r2
+; O0-NEXT:    lli r2, 7
+; O0-NEXT:    mul r1, r2
 ; O0-NEXT:    jmp lr
 ;
 ; O1-LABEL: mul_by_7:
@@ -93,10 +91,8 @@ define i32 @mul_by_15(i32 %a) {
 ; O0-LABEL: mul_by_15:
 ; O0:         .cfi_startproc
 ; O0-NEXT:  // %bb.1:
-; O0-NEXT:    mov r2, r1
-; O0-NEXT:    mov r1, r2
-; O0-NEXT:    shl r1, 4
-; O0-NEXT:    sub r1, r2
+; O0-NEXT:    lli r2, 15
+; O0-NEXT:    mul r1, r2
 ; O0-NEXT:    jmp lr
 ;
 ; O1-LABEL: mul_by_15:
@@ -116,7 +112,8 @@ define i32 @mul_by_0(i32 %a) {
 ; O0-LABEL: mul_by_0:
 ; O0:         .cfi_startproc
 ; O0-NEXT:  // %bb.1:
-; O0-NEXT:    mov r1, zero
+; O0-NEXT:    mov r2, zero
+; O0-NEXT:    mul r1, r2
 ; O0-NEXT:    jmp lr
 ;
 ; O1-LABEL: mul_by_0:
@@ -143,7 +140,7 @@ define i32 @mul_by_1(i32 %a) {
   ret i32 %r
 }
 
-; --- Multiply non-reducible (should still libcall) ---
+; --- Multiply by a two-term constant that is not 2^n +/- 1 ---
 define i32 @mul_by_6(i32 %a) {
 ; O0-LABEL: mul_by_6:
 ; O0:         .cfi_startproc
@@ -155,8 +152,10 @@ define i32 @mul_by_6(i32 %a) {
 ; O1-LABEL: mul_by_6:
 ; O1:         .cfi_startproc
 ; O1-NEXT:  // %bb.0:
-; O1-NEXT:    lli r2, 6
-; O1-NEXT:    mul r1, r2
+; O1-NEXT:    mov r2, r1
+; O1-NEXT:    shl r2, 1
+; O1-NEXT:    shl r1, 2
+; O1-NEXT:    add r1, r2
 ; O1-NEXT:    jmp lr
   %r = mul i32 %a, 6
   ret i32 %r

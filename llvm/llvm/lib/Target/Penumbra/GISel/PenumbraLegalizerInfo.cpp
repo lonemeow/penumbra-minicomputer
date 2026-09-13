@@ -345,16 +345,18 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
       .clampScalar(0, s32, s64)
       .lower();
 
-  // Multiplication, custom-lowered at both widths:
-  // - s32: strength-reduce power-of-2 and power-of-2 ± 1 constants to shifts
-  //   (+ add/sub); the variable case stays a legal s32 op selected to MUL.
-  // - s64: a 32x32->64 widening multiply (both operands extended from s32) is
-  //   a single hardware multiply, emitted as a low/high pair (G_MUL +
+  // Multiplication:
+  // - s32 is legal and selects to MUL.  A constant operand is strength-reduced
+  //   by penumbra_mul_by_const in the post-legalizer combiner, against the
+  //   tuned core's multiply latency.
+  // - s64, custom: a 32x32->64 widening multiply (both operands extended from
+  //   s32) is a single hardware multiply, emitted as a low/high pair (G_MUL +
   //   G_S/UMULH); any other i64 multiply narrows to the generic schoolbook.
   // Non-power-of-2 widths (e.g. i33 from SCEV's closed-form sum-of-arithmetic-
   // progression rewrite at -O2) widen to next pow2 first, landing on s64.
   getActionDefinitionsBuilder(G_MUL)
-      .customFor({s32, s64})
+      .legalFor({s32})
+      .customFor({s64})
       .widenScalarToNextPow2(0, 32)
       .clampScalar(0, s32, s64)
       .scalarize(0);
@@ -599,12 +601,13 @@ bool PenumbraLegalizerInfo::legalizeCustom(
     Register Dst = MI.getOperand(0).getReg();
     LLT Ty = MRI.getType(Dst);
 
-    // s64: turn a 32x32->64 widening multiply into one hardware multiply.  When
-    // both operands are the same kind of extension from s32, the full 64-bit
+    // Turn a 32x32->64 widening multiply into one hardware multiply.  When both
+    // operands are the same kind of extension from s32, the full 64-bit
     // product is {G_MUL(a,b) : G_S/UMULH(a,b)} on the s32 sources (the selector
     // maps the high half to MUL_P/MULU_P).  Other i64 multiplies fall through to
     // the generic partial-product schoolbook.
-    if (Ty.getSizeInBits() == 64) {
+    assert(Ty.getSizeInBits() == 64 && "only s64 G_MUL is custom-lowered");
+    {
       const LLT S32 = LLT::scalar(32);
       auto ExtSrc = [&](Register R, unsigned ExtOpc) -> Register {
         MachineInstr *Def = getDefIgnoringCopies(R, MRI);
@@ -632,42 +635,6 @@ bool PenumbraLegalizerInfo::legalizeCustom(
       }
       return Helper.narrowScalar(MI, 0, S32) == LegalizerHelper::Legalized;
     }
-
-    Register Src = MI.getOperand(1).getReg();
-    auto MaybeVal = GetConstant(MI.getOperand(2).getReg());
-    if (!MaybeVal)
-      return LeaveForHardware();
-
-    uint64_t C = MaybeVal->Value.getZExtValue();
-    unsigned BitWidth = Ty.getSizeInBits();
-
-    if (C == 0) {
-      MIRBuilder.buildConstant(Dst, 0);
-    } else if (C == 1) {
-      MIRBuilder.buildCopy(Dst, Src);
-    } else if (C == maskTrailingOnes<uint64_t>(BitWidth)) {
-      // x * -1 = 0 - x (negate)
-      auto Zero = MIRBuilder.buildConstant(Ty, 0);
-      MIRBuilder.buildSub(Dst, Zero, Src);
-    } else if (isPowerOf2_64(C) && Log2_64(C) < BitWidth) {
-      auto ShiftAmt = MIRBuilder.buildConstant(Ty, Log2_64(C));
-      MIRBuilder.buildShl(Dst, Src, ShiftAmt);
-    } else if (isPowerOf2_64(C - 1) && Log2_64(C - 1) < BitWidth) {
-      // x * (2^n + 1) = (x << n) + x
-      auto ShiftAmt = MIRBuilder.buildConstant(Ty, Log2_64(C - 1));
-      auto Shifted = MIRBuilder.buildShl(Ty, Src, ShiftAmt);
-      MIRBuilder.buildAdd(Dst, Shifted, Src);
-    } else if (isPowerOf2_64(C + 1) && Log2_64(C + 1) < BitWidth) {
-      // x * (2^n - 1) = (x << n) - x
-      auto ShiftAmt = MIRBuilder.buildConstant(Ty, Log2_64(C + 1));
-      auto Shifted = MIRBuilder.buildShl(Ty, Src, ShiftAmt);
-      MIRBuilder.buildSub(Dst, Shifted, Src);
-    } else {
-      return LeaveForHardware();
-    }
-
-    MI.eraseFromParent();
-    return true;
   }
 
   case TargetOpcode::G_UDIV: {

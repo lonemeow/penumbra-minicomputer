@@ -1,9 +1,12 @@
 ; RUN: llc -mtriple=penumbra-unknown-none -O0 < %s | FileCheck %s
-; RUN: llc -mtriple=penumbra-unknown-none -O1 < %s | FileCheck %s
+; RUN: llc -mtriple=penumbra-unknown-none -O1 < %s \
+; RUN:   | FileCheck %s --check-prefixes=CHECK,O1
 ;
 ; Penumbra SHL masks shift count to 5 bits (Rs[4:0]), so SHL by 32
 ; is a no-op (32 & 31 = 0).  MUL by -1 must not use the
-; (x << 32) - x pattern — use SUB from zero instead.
+; (x << 32) - x pattern — use SUB from zero instead.  The constant
+; multiply decomposition runs at -O1 and above; at -O0 the 2^31 +/- 1
+; multiplies stay a MUL, and no shift by 32 may appear either way.
 
 define i32 @negate_mul(i32 %x) {
 ; CHECK-LABEL: negate_mul:
@@ -33,7 +36,8 @@ define i32 @negate_expr(i32 %x) {
 ; MUL by 2^31 + 1: should still strength-reduce (SHL 31 is valid)
 define i32 @mul_pow2_31_plus1(i32 %x) {
 ; CHECK-LABEL: mul_pow2_31_plus1:
-; CHECK:       shl{{.*}}, 31
+; CHECK-NOT:   lli{{.*}}, 32
+; O1:          shl{{.*}}, 31
 ; CHECK:       jmp lr
   %r = mul i32 %x, -2147483647  ; 2^31 + 1 (unsigned 0x80000001)
   ret i32 %r
@@ -42,8 +46,8 @@ define i32 @mul_pow2_31_plus1(i32 %x) {
 ; MUL by 2^31 - 1: boundary case, SHL 31 is the max valid shift
 define i32 @mul_pow2_31_minus1(i32 %x) {
 ; CHECK-LABEL: mul_pow2_31_minus1:
-; CHECK:       shl{{.*}}, 31
 ; CHECK-NOT:   lli{{.*}}, 32
+; O1:          shl{{.*}}, 31
 ; CHECK:       jmp lr
   %r = mul i32 %x, 2147483647  ; 2^31 - 1 (0x7FFFFFFF)
   ret i32 %r

@@ -137,11 +137,26 @@ def penumbra_mul_to_mul_lohi : GICombineRule<
          [{ return matchMulToMulLoHi(*${root}, MRI, ${matchinfo}); }]),
   (apply [{ applyMulToMulLoHi(*${root}, MRI, B, ${matchinfo}); }])>;
 
+// Target-specific: rewrite an s32 multiply by a constant as a sum of shifted
+// copies of the multiplicand when that is cheaper than the hardware multiply
+// on the tuned core.  GlobalISel has no counterpart to SelectionDAG's
+// decomposeMulByConstant, and the s32 G_MUL is legal, so this is where the
+// strength reduction lives.  Post-legalization so it also sees the s32
+// multiplies the legalizer produces.
+def penumbra_mul_by_const_matchdata : GIDefMatchData<"uint32_t">;
+def penumbra_mul_by_const : GICombineRule<
+  (defs root:$root, penumbra_mul_by_const_matchdata:$matchinfo),
+  (match (wip_match_opcode G_MUL):$root,
+         [{ return matchMulByConst(*${root}, MRI, STI, ${matchinfo}); }]),
+  (apply [{ applyMulByConst(*${root}, MRI, B, ${matchinfo}); }])>;
+
 // Post-legalizer: optimizations on legalized MIR.  Must preserve instruction
 // legality.
 //
 //   commute_constant_to_rhs — puts constants on the RHS so (add GPR, uimm16)
-//     / (and GPR, uimm16) patterns fire when the source had the const on LHS.
+//     / (and GPR, uimm16) patterns fire when the source had the const on LHS,
+//     and so penumbra_mul_by_const finds a multiply's constant.
+//   penumbra_mul_by_const   — target-specific; see rule definition above.
 //   ptr_add_immed_chain     — merges (G_PTR_ADD (G_PTR_ADD p, c1), c2) into
 //     G_PTR_ADD p, (c1+c2).  Prerequisite for the AddrRegImm ComplexPattern
 //     that will fold constant offsets into LDW/STW.
@@ -159,6 +174,7 @@ def penumbra_mul_to_mul_lohi : GICombineRule<
 def PenumbraPostLegalizerCombiner
     : GICombiner<"PenumbraPostLegalizerCombinerImpl", [
       commute_constant_to_rhs,
+      penumbra_mul_by_const,
       ptr_add_immed_chain,
       combines_for_extload,
       penumbra_zextload_promote,

@@ -101,7 +101,7 @@ not behavior.
 | `GISel/PenumbraInstructionSelector.cpp` | Hybrid: `selectImpl()` for TableGen patterns, manual C++ for complex cases (LLI+LUI pairs, GOT-PCREL globals, frame-index folding, jump tables, ICMP+BRCOND fold, varargs, return-address capture, …) |
 | `GISel/PenumbraPreLegalizerCombiner.cpp` | Pre-legalizer combiner (-O1+). Boilerplate wrapper around `selectImpl` for rules in `PenumbraCombine.td` |
 | `GISel/PenumbraO0PreLegalizerCombiner.cpp` | Same shape with the smaller `optnone_combines` rule set (-O0 only) |
-| `GISel/PenumbraPostLegalizerCombiner.cpp` | Post-legalizer combiner (-O1+). C++ match/apply for target-specific rules (currently `matchNegImmToOpposite`/`applyNegImmToOpposite`) |
+| `GISel/PenumbraPostLegalizerCombiner.cpp` | Post-legalizer combiner (-O1+). C++ match/apply for the target-specific rules in `PenumbraCombine.td`, including constant-multiply strength reduction (`matchMulByConst`, costed by `isMulDecompositionCheaper` against the scheduling model) |
 | `Disassembler/PenumbraDisassembler.{h,cpp}` | Binary → MCInst. Custom decoders for branch targets (symbolic lookup), signed immediates (LLIS), signed mem offsets |
 | `MCTargetDesc/PenumbraMCTargetDesc.{h,cpp}` | Registers all MC components. `PenumbraMCInstrAnalysis`: branch-target evaluation + GPR state tracking for LLI/LUI address annotations |
 | `MCTargetDesc/PenumbraInstPrinter.{h,cpp}` | MCInst → assembly text. Prints the semantic aliases (zero/tp/lr/sp/pc) by default via the `SemanticRegName` alt-name index; `-penumbra-numeric-reg-names` (llc/llvm-mc) or `llvm-objdump -M numeric` forces physical r<N> names |
@@ -149,14 +149,16 @@ The pipeline is defined by group lists in `PenumbraCombine.td`:
   Cleans IRTranslator artefacts without paying full canonicalization
   cost. Lives in `PenumbraO0PreLegalizerCombiner`.
 - **Post-legalizer at -O1+:** `[commute_constant_to_rhs,
-  ptr_add_immed_chain, combines_for_extload, penumbra_zextload_promote,
-  known_bits_simplifications, penumbra_neg_imm_to_opposite,
-  penumbra_sink_ptr_add_past_use]`.
+  penumbra_mul_by_const, ptr_add_immed_chain, combines_for_extload,
+  penumbra_zextload_promote, known_bits_simplifications,
+  penumbra_neg_imm_to_opposite, penumbra_sink_ptr_add_past_use,
+  penumbra_mul_to_mul_lohi]`.
 
-The three target-specific custom rules
-(`penumbra_zextload_promote`, `penumbra_neg_imm_to_opposite`,
-`penumbra_sink_ptr_add_past_use`) each have rationale comments in
-`PenumbraPostLegalizerCombiner.cpp` and a regression test under
+The target-specific rules (`penumbra_srem_pow2` before legalization;
+`penumbra_mul_by_const`, `penumbra_zextload_promote`,
+`penumbra_neg_imm_to_opposite`, `penumbra_sink_ptr_add_past_use` and
+`penumbra_mul_to_mul_lohi` after) each have rationale comments in
+`PenumbraCombine.td` or the combiner `.cpp` and a regression test under
 `test/CodeGen/Penumbra/`. MIR-level unit tests use
 `-run-pass=penumbra-postlegalizer-combiner` to isolate individual
 rules (regenerate via `update_mir_test_checks.py`).
@@ -170,10 +172,10 @@ shapes:
   loads/stores, ICMP, SELECT, PHI, BRCOND, FREEZE, …).
 - Extensions: G_ZEXT/G_SEXT/G_ANYEXT sub-word→s32 legal; s32→s64 via
   `narrowScalarIf`. G_TRUNC legal. G_SEXT_INREG lowered.
-- MUL/DIV/REM: s32 strength-reduces power-of-2 constants
-  (MUL by -1→SUB from zero, ×2ⁿ→SHL, ×(2ⁿ±1)→SHL+ADD/SUB with
-  shift<bit-width guard, ÷2ⁿ→LSHR, %2ⁿ→AND); the variable case is
-  a legal s32 op selected to the divmul peer unit. G_SDIVREM /
+- MUL/DIV/REM: s32 G_MUL is legal (constant multiplies are
+  strength-reduced by the post-legalizer combiner, not here);
+  unsigned ÷2ⁿ→LSHR and %2ⁿ→AND are custom-lowered at s32; the
+  variable case selects to the divmul peer unit. G_SDIVREM /
   G_UDIVREM legal at s32 (DIV_P/DIVU_P produce quotient and
   remainder in one operation; the -O1+ combiner fuses adjacent
   div/rem pairs into this form). s64 libcalls throughout, except a
@@ -196,7 +198,7 @@ shapes:
   instruction).
 - G_DYN_STACKALLOC lowered by framework. G_STACKSAVE/RESTORE
   selected to MOV SP. G_BRINDIRECT legal for p0 (computed goto).
-- Custom: G_VASTART, G_MUL/UDIV/UREM, G_PREFETCH, G_GET_ROUNDING
+- Custom: G_VASTART, G_MUL (s64 only), G_UDIV/UREM, G_PREFETCH, G_GET_ROUNDING
   (returns constant 1).
 
 ## Key implementation notes (gotchas for editors of this code)

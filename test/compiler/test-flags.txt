@@ -35,3 +35,7 @@ Regression/C/gcc-c-torture/execute/950704-1.c     -fwrapv
 # the ISS until +max-insn.  16384 is the conventional small-target
 # value; BLOCK_SIZE becomes 2048, fits comfortably.
 Regression/C/gcc-c-torture/execute/960521-1.c     -DSTACK_SIZE=16384
+
+# Re-runs mul-const.c tuned for a core that decomposes longer constant
+# multiplies than the default tuning does.
+penumbra-codegen/mul-const-penumbra1.c   -mtune=penumbra1

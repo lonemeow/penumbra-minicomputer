@@ -2698,148 +2698,95 @@ instructions) while only shrinking the rarely-used i64 three-way compares
 alongside a custom `G_SCMP`/`G_UCMP` lowering that keeps the i32
 SELECT-chain.
 
-## Compiler: constant strength reduction is incomplete, and misplaced
+## Compiler: constant multiply, divide and remainder strength reduction
 
-`MUL` and `DIV` execute on the sequential `divmul` peer unit.  Each
-core's scheduling model states how long they hold it: a multiply takes
-about ten cycles on the pipelined cores and about thirty-four on
-penumbra1, and a divide about thirty-four everywhere.  Constant
-operands should therefore decompose aggressively.
+`MUL` and `DIV` execute on the sequential `divmul` peer unit and hold
+the core many times longer than an ALU operation — the per-core figures
+are in [instruction-timing.md](internals/instruction-timing.md) and in
+each core's scheduling model — so constant operands decompose into ALU
+operations wherever that is cheaper on the tuned core.
 
 ### What exists
 
-`PenumbraLegalizerInfo.cpp` custom-lowers `G_MUL` for `{s32, s64}` and
-handles constant `G_UDIV` / `G_UREM` alongside.  For an s32 multiply
-it recognises `0`, `1`, `-1`, `2^n`, `2^n + 1` and `2^n - 1`;
-everything else calls `LeaveForHardware()` and selects to a real `MUL`.
-Constant `G_UDIV` / `G_UREM` there handle powers of two only.
+- **Multiply.**  `penumbra_mul_by_const` in the post-legalizer combiner
+  rewrites an s32 multiply by a constant as shifted copies of the
+  multiplicand combined by adds and subtracts: the constant's binary
+  expansion, or its non-adjacent form when that is strictly shorter
+  (a subtract does not commute, so it costs a copy on a two-address
+  machine).  `isMulDecompositionCheaper` compares the sequence against
+  the constant load plus `MUL` in the model's ALU and multiply cycles,
+  and at minsize accepts only a single shift or negate.  A multiply
+  whose operands also feed a `G_[SU]MULH` is left to fuse into one
+  `MUL_P`/`MULU_P`.  The legalizer keeps only the s64 path (a 32x32->64
+  widening multiply as one hardware multiply); s32 `G_MUL` is legal.
+  Upstream's `mul_to_shl` / `mul_by_neg_one` cover powers of two and -1
+  before legalization, at every optimization level.
+- **Divide or remainder by a power of two.**  The legalizer lowers
+  unsigned `G_UDIV` / `G_UREM` (so these reduce even at -O0); upstream's
+  `sdiv_by_pow2` covers the signed divide, and `penumbra_srem_pow2` the
+  signed remainder (see
+  [the upstream-candidate write-up](llvm-gisel-signed-pow2-remainder.md)).
+- **Divide or remainder by any other constant.**  Upstream's
+  `*_by_const` magic-number rules, gated by `isIntDivCheap()`, which
+  keeps the divide under minsize, above 32 bits, and where the tuned
+  core's divide does not cost more than two multiplies plus a few ALU
+  operations.  Narrow high-half multiplies from i8/i16 divides lower
+  through a multiply at twice the width.
 
-A signed remainder by a power of two is lowered by the target
-`penumbra_srem_pow2` rule in the pre-legalizer combiner (see
-[the upstream-candidate write-up](llvm-gisel-signed-pow2-remainder.md)),
-and upstream's `sdiv_by_pow2` covers the signed divide.
+Covered by `mul-by-const.ll`, `div-by-const.ll`, `srem-pow2.ll`,
+`strength-reduce.ll`, `mtune.ll` and the `penumbra-codegen/`
+execution tests (`mul-const*.c`, `div-rem-const*.c`,
+`sdiv-srem-pow2.c`).
 
-### The coverage gap
+### Known gaps
 
-The check is against three *named shapes* rather than the general
-property, so constants that are equally cheap to decompose are missed:
+None of these produce wrong code.
 
-| constant | decomposition | emitted |
-|---|---|---|
-| `x * 3`, `x * 9` | `2^n ± 1` | `shl` + `add` |
-| `x * 10` | `8 + 2` | `MUL` |
-| `x * 80` | `64 + 16` | `MUL` |
-| `x * 320` | `256 + 64` | `MUL` |
-| `x * 100` | `64 + 32 + 4` | `MUL` |
-
-Any popcount-2 constant that is not `2^n ± 1` falls through, which
-includes **320 and 80 — the byte and word row strides of the 320x240
-framebuffer**.  An address computed as `fb + y * 320` rather than
-reached by induction pays an `LLI` plus ten cycles where
-`(y << 8) + (y << 6)` is three ALU operations.
-
-A related case arrives from the middle end rather than from source:
-InstCombine canonicalises a provably-disjoint `x | x<<8 | x<<16 |
-x<<24` into `x * 0x01010101`.  That is a legitimate canonicalisation —
-the mask proves the shifted copies do not overlap, so the `or` is an
-`add` — and it is the backend's job to undo it.  Nothing does.
-
-### Divide by a non-power-of-two constant — landed, with gaps
-
-Upstream's magic-number rules (`udiv_by_const`, `sdiv_by_const`,
-`urem_by_const`, `srem_by_const`) do the rewrite; Penumbra only
-decides when, through `isIntDivCheap()`.  It keeps the divide under
-`minsize`, above 32 bits, and when the tuned core's divide latency
-does not exceed two multiplies plus a few ALU ops.  On the default
-tuning `x / 10` is a `MULU_P` and a shift; penumbra1 keeps the `DIVU`.
-Narrow high-half multiplies from i8/i16 divides are lowered through a
-multiply at twice the width.  Covered by `div-by-const.ll`,
-`mtune.ll`, and the `penumbra-codegen/div-rem-const*.c` execution
-tests.
-
-Known gaps, none of them wrong code:
-
-- **One answer per type.**  The hook sees neither the opcode, the
-  signedness nor the constant, so it prices every divide and remainder
-  as the costlier remainder shape.  With today's two cost points
-  (34 vs 34, 10 vs 34) that decides identically to an exact answer.
-  An exact per-instruction decision is a target rule that computes
-  the sequence length from `UnsignedDivisionByConstantInfo` /
-  `SignedDivisionByConstantInfo`, compares it against the model's
-  latencies, and calls `CombinerHelper::applyUDivOrURemByConst` /
-  `applySDivOrSRemByConst` — the hook then stays true.
+- **The multiply cutoff is untuned.**  It trades cycles against
+  instruction count with a fixed margin, and nothing has measured where
+  I-cache pressure outweighs the cycles saved.  It matters most on
+  penumbra1, whose 2-cycle ALU operations against a 37-cycle multiply
+  let it replace a 3-instruction `LLI`/`LUI`/`MUL` with up to 15
+  instructions (`x * 1365`) on a 1 KB direct-mapped I-cache.  Tune on
+  the ULX3S, not the ISS.
+- **-O0 keeps most constant multiplies.**  No post-legalizer combiner
+  runs at -O0, so beyond upstream's power-of-two and -1 rules a constant
+  multiply — `x * 3`, even `x * 0` — is a hardware `MUL` there.
+- **One divide answer per type.**  `isIntDivCheap()` sees neither the
+  opcode, the signedness nor the constant, so it prices every divide and
+  remainder as the costlier remainder shape.  With today's cost points
+  that decides identically to an exact answer.  An exact decision is a
+  target rule that computes the sequence length from
+  `UnsignedDivisionByConstantInfo` / `SignedDivisionByConstantInfo`,
+  compares it against the model's latencies, and calls
+  `CombinerHelper::applyUDivOrURemByConst` / `applySDivOrSRemByConst` —
+  the hook then stays true.
 - **64-bit divides keep their libcall.**  `G_SMULH` s64 does not
   legalize, and the hook cannot tell signed from unsigned.  `G_UMULH`
-  s64 does (s32 partial products), so a per-instruction rule could
-  already take unsigned 64-bit divides away from `__udivdi3`;
-  legalizing `G_SMULH` s64 unlocks the signed case.
-- **A quotient and remainder of the same non-power-of-two divisor
-  stay one `DIV_P`.**  `div_rem_to_divrem` fuses the pair and the
-  magic rules match only the separate opcodes.  A rule shaped like
+  s64 does (s32 partial products), so a per-instruction rule could take
+  unsigned 64-bit divides away from `__udivdi3`; legalizing `G_SMULH`
+  s64 unlocks the signed case.
+- **A quotient and remainder of the same non-power-of-two divisor stay
+  one `DIV_P`.**  `div_rem_to_divrem` fuses the pair and the magic rules
+  match only the separate opcodes.  A rule shaped like
   `penumbra_srem_pow2` — quotient through the rewrite, remainder as
   `x - q * C` — would take it.
-- **A signed i16 divide keeps the `DIV`.**  `matchSDivOrSRemByConst`
-  wants a legal s16 `G_SMULH` or a legal/widenable s32 `G_MUL`, and
-  s32 `G_MUL` is `Custom` for the legalizer's strength reduction.
-  Moving that reduction out (below) makes s32 `G_MUL` legal.
-- **Narrow signed sequences carry redundant sign-extension pairs.**
-  `sdiv i8 %x, -3` is one multiply and fifteen ALU ops (about 25
-  cycles against the divide's 34): the widened product is
-  sign-extended from 16 bits although it already fits.
-- **The remainder's multiply-back** is a hardware `MUL` for any
-  constant the multiply strength reduction misses (`x % 10` pays two
-  multiplies).
+- **Narrow signed divide sequences carry redundant sign extensions.**
+  The widened high-half product is sign-extended from its doubled width
+  although it already fits, e.g. in `sdiv i8 %x, -3`.
 
-### Why the placement is wrong
-
-An s32 `G_MUL` is **legal** — it selects directly to `MUL`.  The
-legalizer is custom-lowering it purely to strength-reduce, which uses
-a legality pass as an optimisation pass, with three consequences:
-
-- It runs once and deliberately cannot iterate.  `LeaveForHardware()`
-  returns `true` without reporting a change, precisely so the legalizer
-  does not revisit the instruction — so a `G_MUL` whose operand becomes
-  constant later is never reduced.
-- The passes that would expose such a constant run afterwards.
-  `known_bits_simplifications` and `commute_constant_to_rhs` are both in
-  the *post*-legalizer set, after the only consumer of their result.
-- It has no access to the cost model, which a general decomposition
-  needs in order to decide when a shift/add tree stops beating a
-  ten-cycle multiply.
-
-### Proposed shape
-
-Split by what is actually legalization:
-
-- **Keep in the legalizer** the s64 path — recognising a 32x32->64
-  widening multiply as one hardware multiply, and narrowing the rest.
-  That is genuine legalization.
-- **Move to `PenumbraPostLegalizerCombiner`** the s32 constant
-  handling, generalised from named shapes to a popcount-driven
-  shift/add tree with a cost cutoff, where it composes with the
-  combines already there and reaches a fixed point.
-
-Doing the move first keeps the generalisation from being written in the
-legalizer and relocated afterwards; the existing lit tests pin the
-three shapes, so the refactor is behaviourally a no-op.
-
-### Cost model — landed
+### Cost model
 
 `PenumbraTTIImpl::getArithmeticInstrCost` prices `Mul` and
-`SDiv`/`UDiv`/`SRem`/`URem` at the tuned core's scheduling-model
-latencies (`PenumbraSubtarget::getMulCycles` / `getDivCycles`) for
-throughput and latency, scaled by the legalization factor, while
-leaving code size to the base model —
-one instruction is emitted however long it runs, and answering
-otherwise would distort inlining and unrolling.  Covered by
-`test/Analysis/CostModel/Penumbra/arith.ll`.
-
-Worth recording that this alone changed no generated code.  The three
-cases above are not cost-driven: InstCombine canonicalises without
-consulting TTI, and the two missing decompositions do not exist to be
-chosen between.  The cost model is a prerequisite for the cutoff in the
-proposed combiner, and it corrects what LSR and the unroller see, but
-it is not itself the fix.
+`SDiv`/`UDiv`/`SRem`/`URem` in ALU operations — the tuned core's
+multiply or divide cycles over its ALU cycles, rounded up — for
+throughput and latency, scaled by the legalization factor, and leaves
+code size to the base model: one instruction is emitted however long
+it runs, and answering otherwise would distort inlining and unrolling.
+Covered by `test/Analysis/CostModel/Penumbra/arith.ll`.  The cost model
+corrects what LSR and the unroller see, but InstCombine canonicalises
+without consulting it, which is why the multiply rewrite has to live in
+the backend.
 
 ## Compiler: pr23135.c fails at -O0 (pre-existing, found in opt-level sweep) — RESOLVED
 
@@ -3714,7 +3661,7 @@ query) would act on it, before giving gen2 a model of its own.
   model states MUL and DIV latencies; `PenumbraSubtarget::getMulCycles`
   / `getDivCycles` read them, and `getArithmeticInstrCost` and
   `isIntDivCheap()` consume them.  See
-  [the constant strength-reduction entry](#compiler-constant-strength-reduction-is-incomplete-and-misplaced).
+  [the constant strength-reduction entry](#compiler-constant-multiply-divide-and-remainder-strength-reduction).
 - **Branch-vs-branchless** — the "no branch-cost model" entry above.
   Wire `getCFInstrCost` / `predictableSelectIsExpensive` /
   `getCmpSelInstrCost` to the branch behaviour of the tuned
@@ -4652,7 +4599,7 @@ change has its own bar (doc-first, conformance suite, all cores).
 `PenumbraTTIImpl::getArithmeticInstrCost` prices them at the tuned
 core's scheduling-model latencies, and `isIntDivCheap()` weighs the
 same figures (see
-[the constant strength-reduction entry](#compiler-constant-strength-reduction-is-incomplete-and-misplaced)).
+[the constant strength-reduction entry](#compiler-constant-multiply-divide-and-remainder-strength-reduction)).
 The analysis below predates both.  Its closing claim that
 `isIntDivCheap()` should stay true held only while every core's
 multiply was as slow as its divide.
@@ -4681,7 +4628,12 @@ Modulo is worse, needing the divide plus a multiply-back and subtract.
 The divide side is a genuine wash because our multiply is exactly as
 slow as our divide; the asymmetry is entirely on the multiply side.
 
-## Compiler: constant multiplies below the 2^n +/- 1 cases hit the divmul unit
+## Compiler: constant multiplies below the 2^n +/- 1 cases hit the divmul unit — RESOLVED
+
+The post-legalizer `penumbra_mul_by_const` rule decomposes constant
+multiplies against the tuned core's costs; see
+[the constant strength-reduction entry](#compiler-constant-multiply-divide-and-remainder-strength-reduction).
+The analysis below predates it.
 
 Custom strength reduction in `PenumbraLegalizerInfo` covers `2^n` and
 `2^n +/- 1` (so `x*3`, `x*5` become shift+add) and falls through to a
@@ -4713,9 +4665,11 @@ combine.
 ## Demos: mandelbrot's palette length forces a divide per cell
 
 `pixel_color()` indexes `palette[iter % PALETTE_LEN]` with
-`PALETTE_LEN` 30, so each cell pays two `DIVU` operations (foreground
-and background).  Padding the table to 32 entries turns the index into
-`and r1, 31`.  Negligible in the terminal renderer — the escape loop
+`PALETTE_LEN` 30, so each cell pays two constant remainders
+(foreground and background): two `DIVU` operations on penumbra1, and
+on the default tuning a high-half multiply plus a shift/subtract
+sequence each. Padding the table to 32 entries turns the index into
+`and r1, 31`. Negligible in the terminal renderer — the escape loop
 dwarfs it — but the cost scales with pixels rather than iterations, so
 it grows in relative terms on a framebuffer, where shallow escape
 counts are common.

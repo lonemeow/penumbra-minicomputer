@@ -117,8 +117,10 @@ define i32 @srem_6(i32 %x) {
 ; CHECK-NEXT:    mov r3, r2
 ; CHECK-NEXT:    shr r3, 31
 ; CHECK-NEXT:    add r3, r2
-; CHECK-NEXT:    lli r2, 6
-; CHECK-NEXT:    mul r3, r2
+; CHECK-NEXT:    mov r2, r3
+; CHECK-NEXT:    shl r2, 1
+; CHECK-NEXT:    shl r3, 2
+; CHECK-NEXT:    add r3, r2
 ; CHECK-NEXT:    sub r1, r3
 ; CHECK-NEXT:    jmp lr
   %r = srem i32 %x, 6

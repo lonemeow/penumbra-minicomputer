@@ -42,6 +42,140 @@ namespace {
 #include "PenumbraGenPostLegalizeGICombiner.inc"
 #undef GET_GICOMBINER_TYPES
 
+// One term of a multiply by a constant rewritten as a sum of shifted copies of
+// the multiplicand: +(x << Shift) or -(x << Shift).
+struct MulTerm {
+  unsigned Shift;
+  bool Negative;
+};
+
+// C as a sum of +/-2^Shift terms, taken modulo 2^32 — the arithmetic the
+// multiply computes — so a negative constant needs no special case and a term
+// that would land at 2^32 vanishes.  The non-adjacent form (no two terms at
+// adjacent shifts) has the fewest terms of any signed-digit representation,
+// but its subtracts cost more than adds on a two-address machine: an add
+// commutes into whichever operand is free, a subtract does not.  So the plain
+// binary expansion wins unless the non-adjacent form is strictly shorter —
+// 7 is 8 - 1, but 6 stays 4 + 2.
+SmallVector<MulTerm, 16> getMulTerms(uint32_t C) {
+  SmallVector<MulTerm, 16> NonAdjacent;
+  // One bit wider than the constant, so rounding the top digit up can carry.
+  uint64_t Rest = C;
+  for (unsigned Shift = 0; Shift < 32 && Rest != 0; ++Shift, Rest >>= 1) {
+    if (!(Rest & 1))
+      continue;
+    // Choose the digit that leaves the next bit clear.
+    bool Negative = (Rest & 3) == 3;
+    NonAdjacent.push_back({Shift, Negative});
+    Rest = Negative ? Rest + 1 : Rest - 1;
+  }
+  if (NonAdjacent.size() < unsigned(llvm::popcount(C)))
+    return NonAdjacent;
+
+  SmallVector<MulTerm, 16> Binary;
+  for (unsigned Shift = 0; Shift < 32; ++Shift)
+    if (C >> Shift & 1)
+      Binary.push_back({Shift, false});
+  return Binary;
+}
+
+bool isMulDecompositionCheaper(unsigned Shifts, unsigned AddSubs,
+                               const PenumbraSubtarget &STI, bool OptForSize) {
+  // A single shift or negate is never larger than loading the constant and
+  // multiplying; anything longer is.
+  if (OptForSize)
+    return Shifts + AddSubs <= 1;
+
+  // LLI+LUI+MUL
+  int MulCycles = STI.getMulCycles() + STI.getALUCycles() * 2;
+  // Each shift also requires a MOV
+  int DecompCycles = (Shifts * 2 + AddSubs) * STI.getALUCycles();
+
+  double DecompCostRatio = (double)DecompCycles / MulCycles;
+
+  // The decomposition adds I-cache pressure, so it can't be just marginally
+  // cheaper to be a win
+  return DecompCostRatio < 0.8;
+}
+
+// Match an s32 G_MUL by a constant whose shift/add decomposition is cheaper
+// than the hardware multiply; MatchInfo receives the constant.
+bool matchMulByConst(MachineInstr &MI, MachineRegisterInfo &MRI,
+                     const PenumbraSubtarget &STI, uint32_t &MatchInfo) {
+  Register X = MI.getOperand(1).getReg();
+  Register Rhs = MI.getOperand(2).getReg();
+  if (MRI.getType(MI.getOperand(0).getReg()) != LLT::scalar(32))
+    return false;
+  auto C = getIConstantVRegValWithLookThrough(Rhs, MRI);
+  if (!C)
+    return false;
+
+  // A G_[SU]MULH on the same operands fuses with this multiply into one
+  // MUL_P / MULU_P, whose low half comes for free.
+  for (MachineInstr &Use : MRI.use_nodbg_instructions(X)) {
+    unsigned Opc = Use.getOpcode();
+    if ((Opc != TargetOpcode::G_UMULH && Opc != TargetOpcode::G_SMULH) ||
+        Use.getParent() != MI.getParent())
+      continue;
+    Register UseLhs = Use.getOperand(1).getReg();
+    Register UseRhs = Use.getOperand(2).getReg();
+    if ((UseLhs == X && UseRhs == Rhs) || (UseLhs == Rhs && UseRhs == X))
+      return false;
+  }
+
+  uint32_t Value = C->Value.getZExtValue();
+  SmallVector<MulTerm, 16> Terms = getMulTerms(Value);
+  unsigned Shifts = count_if(Terms, [](const MulTerm &T) { return T.Shift; });
+  bool AnyPositive =
+      any_of(Terms, [](const MulTerm &T) { return !T.Negative; });
+  // One fewer add or subtract than terms, plus a negation when every term is
+  // subtracted.
+  unsigned AddSubs = Terms.empty() ? 0 : Terms.size() - 1 + !AnyPositive;
+  if (!isMulDecompositionCheaper(Shifts, AddSubs, STI,
+                                 MI.getMF()->getFunction().hasMinSize()))
+    return false;
+
+  MatchInfo = Value;
+  return true;
+}
+
+// Emit the constant's terms as shifts of the multiplicand combined by adds and
+// subtracts, starting from a positive term where there is one so the sum needs
+// no negation.
+void applyMulByConst(MachineInstr &MI, MachineRegisterInfo &MRI,
+                     MachineIRBuilder &B, uint32_t &Value) {
+  Register Dst = MI.getOperand(0).getReg();
+  Register X = MI.getOperand(1).getReg();
+  LLT Ty = MRI.getType(Dst);
+  B.setInstrAndDebugLoc(MI);
+
+  SmallVector<MulTerm, 16> Terms = getMulTerms(Value);
+  if (Terms.empty()) {
+    B.buildConstant(Dst, 0);
+    MI.eraseFromParent();
+    return;
+  }
+
+  auto Shifted = [&](const MulTerm &T) -> Register {
+    if (T.Shift == 0)
+      return X;
+    return B.buildShl(Ty, X, B.buildConstant(Ty, T.Shift)).getReg(0);
+  };
+
+  auto *First = find_if(Terms, [](const MulTerm &T) { return !T.Negative; });
+  Register Sum = First != Terms.end() ? Shifted(*First)
+                                      : B.buildConstant(Ty, 0).getReg(0);
+  for (const MulTerm &T : Terms) {
+    if (&T == First)
+      continue;
+    unsigned Opc = T.Negative ? TargetOpcode::G_SUB : TargetOpcode::G_ADD;
+    Sum = B.buildInstr(Opc, {Ty}, {Sum, Shifted(T)}).getReg(0);
+  }
+  B.buildCopy(Dst, Sum);
+
+  MI.eraseFromParent();
+}
+
 // Match G_ADD / G_SUB whose RHS is a negative G_CONSTANT fitting
 // [-65535, -1].  On success, MatchInfo holds the positive magnitude that
 // the opposite opcode should use.
