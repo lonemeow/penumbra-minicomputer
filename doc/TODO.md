@@ -3741,15 +3741,18 @@ gen2.5's `MispredictPenalty` is therefore **4**.  gen2 has no BTB, so
 every taken branch there costs the redirect; branch behaviour is a
 second reason gen2 and gen2.5 cannot share a model.
 
-**Three descriptions of these costs are wrong.**
-`hw/rtl/penumbra2_5/penumbra2_btb.sv`'s header and
-[penumbra2/overview.md](internals/penumbra2/overview.md) say a correct
-taken prediction cuts the flush "to zero bubbles", but the core's
-steering discards the IF1 sequential fetch by construction (its own
-comment says so); reaching zero would take launching the target fetch
-in the same cycle as the branch.  `penumbra2_if2_stage.sv` and the
-overview's "3-bubble flush" count three wrong-path slots, which predates
-the fetch buffer's extra one.  Correct them.
+**The design docs still count three flushed slots.**  A redirect from
+EX discards four on both gen2 and gen2.5, since the fetch buffer that
+decouples fetch from the back-end stall is a wrong-path slot of its
+own.  [overview.md](internals/penumbra2/overview.md) and the RTL
+comments say so; [pipeline-stages.md](internals/penumbra2/pipeline-stages.md)
+(the flush table and its worked example),
+[hazard-model.md](internals/penumbra2/hazard-model.md) and the branch
+decisions in [design-decisions.md](internals/penumbra2/design-decisions.md)
+still describe a 3-bubble flush.  Reaching the zero-slot correct
+prediction the BTB was designed for would take launching the target
+fetch in the same cycle as the branch, rather than steering IF1 as the
+branch enters IF2.
 
 No scheduling-model field expresses "a predicted taken branch still
 costs a cycle", and setting `MispredictPenalty` would change almost

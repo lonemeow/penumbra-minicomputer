@@ -37,8 +37,9 @@
 // delivered when ID accepts; the request deasserts once the skid is full, so
 // the front port sees the completion consumed either way.
 //
-// A taken branch resolved in EX flushes the front end: IF2 is one of the three
-// wrong-path slots (it holds the branch-shadow fetch). i_flush discards it by
+// A taken branch resolved in EX flushes the front end: IF2 is one of the four
+// wrong-path slots — with IF1, the fetch buffer and ID — and holds the
+// branch-shadow fetch. i_flush discards it by
 // forcing the IF2/ID register to a bubble, and wins over back-pressure — the
 // instruction is being thrown away, so holding it makes no sense.
 

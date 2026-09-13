@@ -186,8 +186,9 @@ addressing handles the R14 ↔ USP/SSP banking aliasing correctly. NZCV is
 (Bcc, ADC/SBC) never stall
 ([Decision 12](./design-decisions.md#12-nzcv-flag-forwarding)).
 
-**Branches: static-not-taken, resolved in EX.** 3-bubble flush
-penalty on taken branches.
+**Branches: static-not-taken, resolved in EX.** A taken branch
+discards the four wrong-path slots behind it — IF1, IF2, the fetch
+buffer and ID.
 
 **Two architectural special mechanisms:**
 
@@ -229,7 +230,7 @@ abandoned (see the banner at the top).*
 | CPI on tight loops, cache hit | ~2.0 | ~2.5-3.0 (no forwarding) | ~1.2-1.5 | gen1 is 1.0 at lower clock |
 | CPI on CMP+Bcc heavy code | — | ~1.2 (flags forwarded; taken-branch flush remains) | ~1.0-1.1 (+prediction) | — |
 | I-cache size | 4 KB | 4 KB | 8-16 KB | gen1 is 1 KB |
-| Branch flush bubbles | 3 | 3 | 0-1 (with prediction) | — |
+| Branch flush bubbles | 3 | 4 (the fetch buffer adds a slot) | 0-1 target; as built 1 when predicted, 4 otherwise | — |
 | Load-use stall | 4 | 4 (no forwarding) | 1 (with forwarding) | — |
 
 Wall-clock performance comparison vs gen1 depends entirely on the
@@ -266,8 +267,9 @@ proven correct, add the textbook performance features:
   WRSPR and immediately-following RDSPR).
 - **A fetch-time branch target buffer (BTB)** for direct branches
   (B/Bcc/BL): a PC-indexed tagged target RAM, read in parallel with
-  the I-cache, steers fetch to the cached target — cutting a
-  correctly-predicted taken direct branch's flush from 3 bubbles to 0.
+  the I-cache, steers fetch to the cached target as the branch enters
+  IF2 — cutting a correctly-predicted taken direct branch's flush from
+  four slots to one, the sequential fetch IF1 launched alongside it.
   Indirect jumps and returns are not BTB-predicted; they resolve in
   EX, which remains the branch authority (a stale or aliased
   prediction costs at most an extra flush, never a wrong result). (An

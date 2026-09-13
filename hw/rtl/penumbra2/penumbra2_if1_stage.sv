@@ -10,8 +10,9 @@
 // The full stage also runs the TLB lookup for exception entry; the MMU does
 // not exist yet. Two redirect-class actors do: the taken-branch PC redirect
 // from EX, and exception entry. When EX resolves a branch taken it drives
-// i_redirect with the target on i_redirect_pc; IF1 is the deepest of the three
-// wrong-path slots a taken branch flushes, so the redirect both (a) steers PC
+// i_redirect with the target on i_redirect_pc; IF1 is the deepest of the four
+// wrong-path slots a taken branch flushes (IF1, IF2, the fetch buffer and ID),
+// so the redirect both (a) steers PC
 // to the target and (b) bubbles the IF1/IF2 register to discard the in-flight
 // fetch. The PC steer overrides back-pressure — the target is captured even
 // if IF2 is holding us — while its launch follows the normal hold gate: the

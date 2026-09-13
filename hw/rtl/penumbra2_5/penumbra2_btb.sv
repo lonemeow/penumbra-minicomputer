@@ -6,12 +6,14 @@
 //
 // The BTB predicts taken direct branches at *fetch*. Indexed by the fetch PC, it
 // reads a small tagged target RAM in parallel with the icache and, on a hit,
-// steers fetch to the cached target — turning a correctly-predicted taken direct
-// branch's front-end flush to zero bubbles. The lookup is a pure RAM read in the
-// IF1 launch cycle; the tag-compare runs in IF2, alongside the icache's own VIPT
-// tag-compare, so the BTB adds nothing to the fmax-critical fetch cone. The
-// training write (a direct branch resolving in EX) is registered, off the EX/MEM
-// stall cone.
+// steers fetch to the cached target as the branch enters IF2. The sequential
+// fetch IF1 launched in that cycle is discarded, so a correctly-predicted taken
+// direct branch costs one wrong-path slot rather than the four a redirect from
+// EX discards (IF1, IF2, the fetch buffer and ID). The lookup is a pure RAM
+// read in the IF1 launch cycle; the tag-compare runs in IF2, alongside the
+// icache's own VIPT tag-compare, so the BTB adds nothing to the fmax-critical
+// fetch cone. The training write (a direct branch resolving in EX) is
+// registered, off the EX/MEM stall cone.
 //
 // Scope: direct taken branches (B / Bcc / BL). A tagged hit guarantees the
 // cached target equals this branch's PC+imm (the entry was trained from this

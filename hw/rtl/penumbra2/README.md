@@ -44,14 +44,14 @@ are reported as skipped (see `doc/internals/build-system.md`).
 
 When EX resolves a branch taken it drives `o_branch_taken` /
 `o_branch_target`; the core steers the PC to the target via
-`if1.i_redirect` and bubbles the three wrong-path slots (IF1/IF2 via
-`i_redirect`/`i_flush`, ID via the spine's `ex_branch_taken` bubble) —
-the 3-bubble flush. A redirect whose target lands while the I-side is
-mid-transaction steers the PC immediately but holds the launch until
-the busy drop. Loads/stores run through the MEM data path against the
-D-L1; RDSYS reads the machine's sysreg device complex (MMU, both L1s,
-L2, cpuid) through the MEM sideband, and WRSYS writes it at the EX
-drain-commit.
+`if1.i_redirect` and bubbles the four wrong-path slots (IF1/IF2 via
+`i_redirect`/`i_flush`, the fetch buffer via the same front-end flush,
+ID via the spine's `ex_branch_taken` bubble) — the 4-slot flush. A
+redirect whose target lands while the I-side is mid-transaction steers
+the PC immediately but holds the launch until the busy drop.
+Loads/stores run through the MEM data path against the D-L1; RDSYS
+reads the machine's sysreg device complex (MMU, both L1s, L2, cpuid)
+through the MEM sideband, and WRSYS writes it at the EX drain-commit.
 
 Core-internal microarchitectural constants (scoreboard indices,
 `op_class` / `alu_op` / `mem_op` encodings) live in
