@@ -65,9 +65,22 @@ typedef unsigned int uint32_t;
 #define CPU_NAME1         2
 #define CPU_NAME2         3
 #define CPU_NAME3         4
-/* CPU performance counters (free-running, 32-bit) */
+/* CPU performance counters (free-running, 32-bit).
+ *
+ * The stall buckets are mutually exclusive and a retiring cycle is
+ * charged to none, so CYCLES == INSNS_RETIRED + sum(STALL_*) exactly.
+ *
+ * A register number missing from this header is not a compile error:
+ * the macro is stringified into the asm template, so an undefined name
+ * becomes an undefined *symbol* and only surfaces at link time. */
 #define CPU_CYCLES        5
 #define CPU_INSNS_RETIRED 6
+#define CPU_STALL_FUNIT   7
+#define CPU_STALL_IFETCH  8
+#define CPU_STALL_LOAD    9
+#define CPU_STALL_STORE   10
+#define CPU_STALL_HAZARD  11
+#define CPU_STALL_FLUSH   12
 
 /* Machine identity registers (device 8, read-only) */
 #define MACH_FEAT      0
