@@ -8,6 +8,7 @@
 #include "PenumbraInstrInfo.h"
 #include "PenumbraRegisterInfo.h"
 #include "MCTargetDesc/PenumbraMCTargetDesc.h"
+#include "llvm/CodeGen/LiveRegUnits.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -95,8 +96,8 @@ void PenumbraFrameLowering::emitPrologue(MachineFunction &MF,
 }
 
 // Emit the function epilogue: release the stack frame by adding StackSize
-// back to SP before the return.  When FP is used, SP was already restored
-// from FP by restoreCalleeSavedRegisters.
+// back to SP.  When FP is used, SP was already restored from FP by
+// restoreCalleeSavedRegisters.
 void PenumbraFrameLowering::emitEpilogue(MachineFunction &MF,
                                           MachineBasicBlock &MBB) const {
   MachineFrameInfo &MFI = MF.getFrameInfo();
@@ -104,14 +105,70 @@ void PenumbraFrameLowering::emitEpilogue(MachineFunction &MF,
   if (StackSize == 0)
     return;
 
-  // Insert before the terminator (RET/JMP).
-  MachineBasicBlock::iterator MBBI = MBB.getLastNonDebugInstr();
-  DebugLoc DL = MBBI->getDebugLoc();
+  // Release the frame after the callee-saved reloads, which PEI places before
+  // the first terminator.  A shrink-wrapped restore point need not end in a
+  // return: it may branch, or fall through with no terminator at all.
+  MachineBasicBlock::iterator MBBI = MBB.getFirstTerminator();
+  DebugLoc DL;
+  MachineBasicBlock::iterator LastMI = MBB.getLastNonDebugInstr();
+  if (LastMI != MBB.end())
+    DL = LastMI->getDebugLoc();
   const auto &TII =
       *static_cast<const PenumbraInstrInfo *>(MF.getSubtarget().getInstrInfo());
 
   adjustSP(MBB, MBBI, DL, TII, StackSize,
            /*ImmOpc=*/Penumbra::ADDi, /*RegOpc=*/Penumbra::ADD);
+}
+
+// Whether Reg holds a value that is still read after I.  Liveness out of the
+// block comes from the successors' live-in lists.  Flags are consumed in the
+// block that sets them — the select expansion keeps its compare and branch
+// together — so code that splits a block between a flag producer and its
+// reader must add SR to the new block's live-ins.
+static bool isRegLiveBefore(const MachineBasicBlock &MBB,
+                            MachineBasicBlock::const_iterator I,
+                            MCRegister Reg) {
+  LiveRegUnits LRU(*MBB.getParent()->getSubtarget().getRegisterInfo());
+  LRU.addLiveOuts(MBB);
+  for (auto It = MBB.end(); It != I;)
+    LRU.stepBackward(*--It);
+  return !LRU.available(Reg);
+}
+
+// Frames at least this large may be adjusted through R11 (see adjustSP).  The
+// estimate leaves out the callee-saved slots PEI has yet to create, which the
+// margin to the 16-bit immediate covers.
+static bool mayAdjustSPThroughScratch(const MachineFunction &MF) {
+  return !isInt<15>(MF.getFrameInfo().estimateStackSize(MF));
+}
+
+// The SP adjustment sets NZCV and, in a large frame, overwrites R11.  In the
+// entry and return blocks neither holds anything, but a shrink-wrapped save or
+// restore point can sit between a compare and the branch that tests it, or
+// where R11 holds a live value.
+static bool canAdjustSPAt(const MachineBasicBlock &MBB,
+                          MachineBasicBlock::const_iterator I) {
+  if (isRegLiveBefore(MBB, I, Penumbra::SR))
+    return false;
+  return !mayAdjustSPThroughScratch(*MBB.getParent()) ||
+         !isRegLiveBefore(MBB, I, Penumbra::R11);
+}
+
+bool PenumbraFrameLowering::enableShrinkWrapping(
+    const MachineFunction &MF) const {
+  return true;
+}
+
+// emitPrologue adjusts SP at the top of the block.
+bool PenumbraFrameLowering::canUseAsPrologue(
+    const MachineBasicBlock &MBB) const {
+  return canAdjustSPAt(MBB, MBB.begin());
+}
+
+// emitEpilogue adjusts SP before the first terminator.
+bool PenumbraFrameLowering::canUseAsEpilogue(
+    const MachineBasicBlock &MBB) const {
+  return canAdjustSPAt(MBB, MBB.getFirstTerminator());
 }
 
 // Spill CSRs at the prologue insertion point.  Mirrors AArch64's

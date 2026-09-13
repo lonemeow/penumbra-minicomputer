@@ -27,6 +27,12 @@ public:
                     MachineBasicBlock &MBB) const override;
   bool hasFPImpl(const MachineFunction &MF) const override;
 
+  // Shrink-wrapping moves the prologue and epilogue into the blocks that need
+  // the frame; the hooks refuse blocks where adjusting SP would clobber state.
+  bool enableShrinkWrapping(const MachineFunction &MF) const override;
+  bool canUseAsPrologue(const MachineBasicBlock &MBB) const override;
+  bool canUseAsEpilogue(const MachineBasicBlock &MBB) const override;
+
   // Called before PEI finalizes frame offsets.  Creates an emergency
   // spill slot so that RegScavenger can always satisfy a
   // scavengeRegisterBackwards request in eliminateFrameIndex — even in

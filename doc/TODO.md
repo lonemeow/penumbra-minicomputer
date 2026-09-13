@@ -3042,6 +3042,8 @@ targets opt into are silently off.  Status per item:
 - **IRTranslator opt level — DONE.**  The translator was built at
   `CodeGenOptLevel::None`, so no branch probabilities reached block
   placement.  See "IRTranslator runs without branch probabilities".
+- **Shrink-wrapping — DONE.**  `enableShrinkWrapping` defaulted to
+  false.  See "shrink-wrapping (spill-density lever, part 1)".
 - **Pre-RA MachineScheduler** (`enableMachineScheduler`, default
   false): with GlobalISel there is *no* scheduling at all without it —
   instruction order is IR order.  GenericScheduler in in-order mode
@@ -3105,77 +3107,105 @@ targets opt into are silently off.  Status per item:
   shifts move inlining decisions broadly, so it needs a kernel-bench
   A/B before landing.
 
-## Compiler: enable shrink-wrapping (spill-density lever, part 1)
+## Compiler: shrink-wrapping (spill-density lever, part 1) — ENABLED
 
 LLVM's ShrinkWrap pass (runs post-RA, just before PrologEpilogInserter)
 computes a save point / restore point pair in `MachineFrameInfo` so PEI
 places the *whole* prologue (CSR saves + stack adjust) at the earliest
 block dominating all frame uses instead of the entry block — early-exit
 paths then run zero frame code.  It is gated per-target on
-`TargetFrameLowering::enableShrinkWrapping` (default false); Penumbra
-does not override it, so the pass currently no-ops.  Every major target
-(AArch64, ARM, LoongArch, Mips, PowerPC, RISC-V, X86) opts in.
+`TargetFrameLowering::enableShrinkWrapping`; every major target
+(AArch64, ARM, LoongArch, Mips, PowerPC, RISC-V, X86) opts in, and
+`PenumbraFrameLowering` now does.
 
-Measured 2026-06-09 with the global force flag
-(`-mllvm -enable-shrink-wrap=true`):
+Two correctness problems had to go first.  The force-flag trials
+(`-enable-shrink-wrap=true`, 1607/1607 on the compiler suite in June)
+never reached either shape:
 
-- **Mechanically works on Penumbra**: for an `if (!p) return -1;` +
-  calls function whose CSR-live values are born after the branch, the
-  prologue sinks below the early exit as expected.
-- **Correct end-to-end**: `make test-compiler
-  OPT="-O2 -mllvm -enable-shrink-wrap=true"` passes 1607/1607 on ISS.
-- **Dhrystone is unaffected** (zero diff) — its hot functions have no
-  early-exit shape; the payoff target is kernel code (error paths,
-  lock fast paths).  Measure with pbench syscall benches, not DMIPS.
+- **Epilogue placement.**  `emitEpilogue` released SP before the
+  block's *last* instruction, and PEI places the callee-saved reloads
+  before its *first terminator*.  In a return block those coincide.  A
+  restore point ending in `bge; b` released SP on the fall-through path
+  only, and one falling through with no terminator released it before
+  the last reload, which then read the wrong slot.  Two kernel files
+  also failed to assemble.  The release now goes before the first
+  terminator, after the reloads.
+- **Clobbered state.**  `canUseAsPrologue`/`canUseAsEpilogue` refuse a
+  block where the SP adjustment overwrites a value still read: SR
+  between a compare and its branch — every ALU op sets NZCV and the
+  ISA has no flag-preserving add, so X86's `LEA` escape does not exist
+  — or R11 when the frame may need the register form of `adjustSP`.
+  Liveness comes from `LiveRegUnits` over the successors' live-in
+  lists.  SR is block-local by construction today; code that ever
+  splits a block while flags are live must add the SR live-in itself,
+  as X86's select lowering does for EFLAGS.  A refused restore point
+  that is the only candidate leaves the frame in the entry block.
 
-Enablement plan:
-1. Override `enableShrinkWrapping` → true in `PenumbraFrameLowering`,
-   **gated on the frame fitting the SUBi immediate form**: `adjustSP`'s
-   large-frame path clobbers scratch R11 on the documented assumption
-   that R11 is dead at function entry/exit
-   (`PenumbraFrameLowering.cpp`), which a mid-function save point
-   violates.  Either keep large frames un-shrink-wrapped (they are
-   rare) or teach `adjustSP` to scavenge.
-2. Lit test asserting the early-exit prologue sink.
-3. Known reach limit — **regalloc pins the save point for argument
-   values**: an argument live across calls gets its `COPY` into a
-   callee-saved register placed in the *entry* block, which ShrinkWrap
-   counts as a frame use, so such functions never shrink-wrap.  The
-   standard counter is `TargetRegisterInfo::getCSRFirstUseCost`
-   (AArch64 returns 5), which makes greedy RA pre-split cold CSR
-   first-uses — but forcing `-regalloc-csr-first-time-cost` did *not*
-   split the argument shape on Penumbra (the region-split candidate
-   search found nothing under CSRCost).  Needs its own investigation;
-   without it, shrink-wrapping only catches functions whose CSR
-   pressure starts after the early exit.
-4. **Correctness blocker — flags live across the epilogue.**  Penumbra
-   implements neither `canUseAsPrologue` nor `canUseAsEpilogue`, so
-   the restore point can be a block that branches on flags set before
-   the epilogue.  `ADD sp, N` sets NZCV, and the branch then tests the
-   stack adjustment:
+Shape coverage: `shrink-wrap.ll`.
 
-   ```
-   cmp   r6, r2
-   ldw   lr, [sp + 0]      ; ... callee-saved reloads
-   add   sp, 16            ; overwrites the compare's flags
-   bge   .LBB0_5
-   ```
+Measured statically on the IR corpus of the hot-path review
+(2026-09-13), the same `llc` with and without
+`-enable-shrink-wrap=false`:
 
-   Produced by the force flag on a function with two early returns of
-   a comparison result; the 1607/1607 suite run above never reached
-   the shape.  X86 guards EFLAGS the same way
-   (`flagsNeedToBePreservedBeforeTheTerminators` in both hooks).
-   Penumbra needs the SR-liveness equivalent on both sides — `SUB sp,
-   N` sets flags too — before step 1.
+| | framed functions | shrink-wrapped | `.text` |
+|---|---:|---:|---:|
+| Doom | 928 | 67 (7.2%) | −12 B |
+| kernel `GENERIC.DEBUG` | 5,881 | 230 (3.9%) | +188 B |
+| SQLite (PIC) | 1,642 | 101 (6.2%) | +184 B |
 
-Where it pays, from the kernel/SQLite/Doom review: SQLite's
-`getCellInfo` cached path is 14 instructions and would be 4; Doom's
-BSP leaf visits (see the tail-call entry).  Doom's `R_PointOnSide`
-still saves 4 registers on its axis-aligned early exits under the
-force flag, which riscv32 shrink-wraps with 2 — 52 cycles per exit on
-penumbra1, 26 on penumbra2_5.  Not root-caused; the six returns
-sharing one return block, or `r5` used as scratch before the first
-early exit, are the suspects.
+The hooks refuse little: the pre-fix compiler with the force flag
+shrink-wraps two more Doom functions and the same number elsewhere.
+SQLite's `getCellInfo` (cached path 14 instructions → 4) is among the
+shrink-wrapped.  Dhrystone's hot functions have no early-exit shape;
+kernel error paths and lock fast paths are where it can show.
+
+Open:
+
+1. **Reach limit — regalloc pins the save point for argument values.**
+   An argument live across calls gets its `COPY` into a callee-saved
+   register placed in the *entry* block, which ShrinkWrap counts as a
+   frame use, so such functions never shrink-wrap.  The standard
+   counter is `TargetRegisterInfo::getCSRFirstUseCost` (AArch64 returns
+   5), which makes greedy RA pre-split cold CSR first-uses — but
+   forcing `-regalloc-csr-first-time-cost` did *not* split the argument
+   shape on Penumbra (the region-split candidate search found nothing
+   under CSRCost).  Needs its own investigation; it is the likely cause
+   of the low kernel count above.
+2. **`R_PointOnSide`** still saves 4 registers on its axis-aligned
+   early exits, which riscv32 shrink-wraps with 2 — 52 cycles per exit
+   on penumbra1, 26 on penumbra2_5.  Not root-caused; the six returns
+   sharing one return block, or `r5` used as scratch before the first
+   early exit, are the suspects.  Doom's BSP leaf visits also need the
+   tail-call entry.
+3. **Known regression, accepted — DDB backtraces.**  The kernel
+   unwinder (`db_trace.c`) finds a frame by scanning the first 16
+   instructions of the function for `SUB r14,#imm` and the `STW r13`
+   save, stopping at the first instruction outside that pattern.  A
+   shrink-wrapped function starts with its early-exit test, so the
+   scan finds no frame and treats the function as a leaf: the walk
+   stops at the first shrink-wrapped caller, and a trapping
+   shrink-wrapped frame past its prologue unwinds with a stale LR and
+   the wrong SP.
+
+   Other ports: x86 and AArch64 build the kernel with frame pointers
+   and walk the chain, which shrink-wrapping cannot break above the
+   trapping frame.  MIPS and SH-3 scan forward from the symbol like
+   Penumbra and break the same way; MIPS stops at the first branch and
+   says so ("return breaks stackframe-size heuristics with gcc -O2").
+   Alpha's `decode_prologue` is the one written for moved code: it
+   scans every instruction from the symbol to the PC, adds up the stack
+   allocations wherever they sit and ignores stack releases, since an
+   epilogue can be laid out before a PC still inside the frame.
+
+   The fix, when backtraces matter enough: scan Alpha-style.  Caller
+   frames are then always right — a return address lies inside the
+   saved region, because a call needs LR saved.  The trapping frame
+   stays a guess (the trap may sit before the saves or past the
+   restores); check that the LR slot holds a kernel text address
+   following a `BL`/`JALR`, and otherwise fall back to the live LR and
+   the unadjusted SP.  A frame pointer in R10 would cost a save and an
+   allocatable register in every framed function, the cost
+   shrink-wrapping exists to remove.
 
 ## Compiler: tail-call optimization — measured opportunity
 
@@ -3380,8 +3410,8 @@ Compiler causes, widest reach first, each with its own entry:
 | A store between producer and compare | `KPREEMPT_ENABLE` on every `userret` | "compare-elim does not look through COPY" |
 
 Most of the frame cost belongs to the shrink-wrapping and tail-call
-entries.  Enabling shrink-wrapping has a correctness blocker, recorded
-as item 4 of its entry.
+entries.  Shrink-wrapping is enabled, but its reach is limited — see
+item 1 of its open list.
 
 ### Tree walks
 
@@ -3691,8 +3721,8 @@ hoists `@viewx`/`@viewy` out of its far-child loop (3 calls).  With
 saves from 7 to 5 — 24 cycles per call on penumbra1, 12 on
 penumbra2_5.  riscv32 does the same, but its stores are not
 write-through.  The allocator takes the trade because a callee-saved
-register's first use costs it nothing (see item 3 of "enable
-shrink-wrapping").  Localizing constant-offset addresses does not
+register's first use costs it nothing (see item 1 of the
+shrink-wrapping entry's open list).  Localizing constant-offset addresses does not
 change this function.
 
 ## Compiler: pointer-minus-constant and integer MMIO addresses miss their folds

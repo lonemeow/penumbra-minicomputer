@@ -78,18 +78,16 @@ define i32 @assert_shape(ptr %p) {
 ; CHECK-LABEL: assert_shape:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0: // %entry
-; CHECK-NEXT:    sub sp, 4
-; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    ldw r2, [r1 + 0]
 ; CHECK-NEXT:    cmp r2, 0
 ; CHECK-NEXT:    blt .LBB2_2
 ; CHECK-NEXT:  // %bb.1: // %ok
 ; CHECK-NEXT:    add r2, 1
 ; CHECK-NEXT:    mov r1, r2
-; CHECK-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    add sp, 4
 ; CHECK-NEXT:    jmp lr
 ; CHECK-NEXT:  .LBB2_2: // %failed
+; CHECK-NEXT:    sub sp, 4
+; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    bl fail
 entry:
   %v = load i32, ptr %p
