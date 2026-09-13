@@ -3476,6 +3476,43 @@ code-generation problem.
   cell: 10 instructions per cell where 6 do.  Hoisting them into
   locals, as `b82fb4b0df29` did for Doom's column drawer, fixes it.
 
+## Kernel: pack the hottest syscall-path text onto shared pages
+
+Low priority — syscall performance is already good; this is a future
+refinement, not a fix.
+
+Kernel text is mapped through the main TLB: 32 sets of 2 ways, set =
+the low 5 bits of the VPN, victim way chosen from a `CPU_CYCLES` bit.
+A miss runs the software handler (about 59 instructions to `eret`)
+and counts as benchmark instructions.  The trap entry already lives on
+the pinned vector page, but everything after it is wherever the link
+order put it.  `clock_gettime(CLOCK_MONOTONIC)` alone touches seven
+text pages spread across the image — `trap` and `timer_get_timecount`
+near `0x80014000`, `syscall` and `copyout` in
+`0x80015000`–`0x80017000`, `nanouptime`/`binuptime` and
+`sys___clock_gettime50` in `0x801a6000`–`0x801ac000`,
+`clock_gettime1` at `0x801e3000`, `memcpy` at `0x802d0000` — plus
+data pages (`cpu_info_store`, `sysent`,
+`emul_netbsd`, `timehands`).  Any set holding three per-call pages
+misses on every call, and which sets fill up moves with unrelated
+layout changes.  The IRTranslator probability change showed this:
+`clock_gettime` retired more instructions per call on hardware while
+every function on its path came out the same length or shorter,
+consistent with a TLB set filling up differently.
+
+The idea: place the common syscall path (`trap`, `syscall`, `userret`,
+`copyin`/`copyout`, `memcpy`) and the hottest handlers
+(`clock_gettime`, `getpid`, `read`/`write`, the timecounter read)
+contiguously, so the per-call path fits in one or two pages; likewise
+their hot data.  The kernel builds without `-ffunction-sections` and
+links with `kern.ldscript`, so this needs per-function sections plus
+an ordering — a symbol ordering file for lld, or a `.text.hot` input
+section the script places first.
+
+Measuring it needs a TLB miss count, which nothing exposes today (no
+hardware counter, no count in the miss handler), and a before/after
+on the pbench syscall rows.
+
 ## Doom: renderer source-level costs
 
 Found in the hot-path code review (2026-09-13).
@@ -3526,7 +3563,8 @@ PIC `libsqlite3`):
 — most of the kernel's growth.  Hot functions stay within a few
 instructions of their old size.  On hardware the pbench kernel rows
 all improved except `clock_gettime`, which retired slightly more
-instructions per call although nothing on its path grew.
+instructions per call although nothing on its path grew — see "pack
+the hottest syscall-path text onto shared pages".
 
 Turning it on exposed a latent PIC bug: `lowerAnchoredOperand` read an
 offset from jump-table-index operands, which have none, and emitted
