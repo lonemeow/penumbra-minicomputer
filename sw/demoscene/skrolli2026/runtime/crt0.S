@@ -32,6 +32,10 @@
 #define SYSDEV_TIMER        7
 #define TM_STATUS           4
 
+/* ── CPU sysregs (device 1) ───────────────────────────────────── */
+#define SYSDEV_CPU          1
+#define CPU_CYCLES          5
+
 /* ── Cache sysregs (DCACHE/ICACHE/L2, identical layout) ─────────
  *
  * Every cache device exposes the same register map.  INFO=0 means
@@ -332,7 +336,7 @@ _start:
  * Layout after copy:
  *   +0x000  TLB miss handler (identity map, VA = PA)
  *           IRQ handler (timer overflow counter)
- *           Scratch data (register save, way counter)
+ *           Scratch data (IRQ register save)
  * ═════════════════════════════════════════════════════════════════ */
 
         .section .handlers,"ax",@progbits
@@ -344,29 +348,30 @@ _handler_start:
 
 /* ── TLB miss handler ──────────────────────────────────────────
  *
- * Identity-maps the faulting address: VA = PA.
- * Cached (PTE_KERNEL) for addresses below 0xFF000000.
- * Uncached (PTE_KERNEL_NC) for addresses >= 0xFF000000 (MMIO).
- * Uses alternating way counter for TLB replacement.
-
+ * Identity-maps the faulting address: VA = PA, cached below
+ * 0xFF000000 and uncached (MMIO) above.
+ *
+ * Touches no memory: registers park in the scratch SPRs, so a miss can
+ * be taken anywhere.  SCR0-SCR2 belong to this handler.
  * ────────────────────────────────────────────────────────────── */
         .globl  _rt_tlb_miss
 _rt_tlb_miss:
-        stw     r1, [pc + _rmh_save_r1 - .]
-        stw     r2, [pc + _rmh_save_r2 - .]
-        stw     r3, [pc + _rmh_save_r3 - .]
+        wrspr   scr0, r1
+        wrspr   scr1, r2
+        wrspr   scr2, r3
 
-        /* Read faulting virtual address */
         rdsys   r1, #SYSDEV_MMU, #MMU_FAULT_ADDR
-
-        /* VPN = fault_addr >> 12 */
         mov     r2, r1
-        shr     r2, #12
+        shr     r2, #12                 /* VPN */
 
-        /* TLB_INDEX = set (VPN[4:0]) | way_counter */
+        /* TLB_INDEX = {way, set}.  The way comes from the cycle counter,
+         * mixed with the set so adjacent-set misses in a periodic loop
+         * still spread across both ways. */
         mov     r3, r2
         and     r3, #0x1F
-        ldw     r1, [pc + _rmh_way_ctr - .]
+        rdsys   r1, #SYSDEV_CPU, #CPU_CYCLES
+        xor     r1, r3
+        and     r1, #0x20
         or      r3, r1
         wrsys   r3, #SYSDEV_MMU, #MMU_TLB_INDEX
 
@@ -375,36 +380,24 @@ _rt_tlb_miss:
         shl     r3, #8
         wrsys   r3, #SYSDEV_MMU, #MMU_TLB_VPN
 
-        /* TLB_PTE: choose cached vs uncached by address range.
-         * VPN >> 12 gives fault_addr[31:24].  If >= 0xFF, uncached.
-         *
-         * Attribute bits are added rather than or'd because OR carries
-         * no immediate form, and the PPN shift below leaves the low
-         * twelve bits clear — on those bits the two are the same
-         * operation, and ADD saves materialising the constant. */
+        /* TLB_PTE: fault_addr[31:24] of 0xFF is MMIO, uncached.
+         * Attribute bits are added: OR has no immediate form, and the
+         * PPN shift leaves the low twelve bits clear. */
         mov     r3, r2
-        shl     r3, #12                /* PPN << 12 (= PA page base) */
-        mov     r1, r2
-        shr     r1, #12                /* fault_addr[31:24] */
-        cmp     r1, #0xFF
+        shl     r3, #12
+        shr     r2, #12
+        cmp     r2, #0xFF
         bhs     .Luncached
         add     r3, #PTE_KERNEL
         b       .Lcommit
-
 .Luncached:
         add     r3, #PTE_KERNEL_NC
 .Lcommit:
         wrsys   r3, #SYSDEV_MMU, #MMU_TLB_PTE
 
-        /* Toggle way counter (0 ↔ 0x20 = bit 5) */
-        lli     r1, #0x20
-        ldw     r2, [pc + _rmh_way_ctr - .]
-        xor     r2, r1
-        stw     r2, [pc + _rmh_way_ctr - .]
-
-        ldw     r1, [pc + _rmh_save_r1 - .]
-        ldw     r2, [pc + _rmh_save_r2 - .]
-        ldw     r3, [pc + _rmh_save_r3 - .]
+        rdspr   r3, scr2
+        rdspr   r2, scr1
+        rdspr   r1, scr0
         eret
 
 
@@ -439,10 +432,6 @@ _rt_irq:
 
 /* ── Scratch data (contiguous with code for PC-relative access) ─ */
         .balign 4
-_rmh_save_r1:   .long 0
-_rmh_save_r2:   .long 0
-_rmh_save_r3:   .long 0
-_rmh_way_ctr:   .long 0
 _irq_save_r1:   .long 0
 
 _handler_end:
