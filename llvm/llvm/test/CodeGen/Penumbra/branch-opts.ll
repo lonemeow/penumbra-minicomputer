@@ -81,7 +81,7 @@ exit:
   ret i32 %newsum
 }
 
-; Branch reversal — condition inverted so true block is fallthrough.
+; Branch reversal — condition inverted so the likely true block is fallthrough.
 define i32 @branch_reversal(i32 %a) {
 ; CHECK-LABEL: branch_reversal:
 ; CHECK:         .cfi_startproc
@@ -95,7 +95,7 @@ define i32 @branch_reversal(i32 %a) {
 ; CHECK-NEXT:    add r1, 1
 ; CHECK-NEXT:    jmp lr
   %cmp = icmp eq i32 %a, 0
-  br i1 %cmp, label %is_zero, label %not_zero
+  br i1 %cmp, label %is_zero, label %not_zero, !prof !0
 not_zero:
   %inc = add i32 %a, 1
   ret i32 %inc
@@ -155,3 +155,5 @@ high:
 low:
   ret i32 0
 }
+
+!0 = !{!"branch_weights", i32 2000, i32 1}

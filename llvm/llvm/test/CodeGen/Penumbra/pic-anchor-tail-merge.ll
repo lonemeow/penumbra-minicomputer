@@ -32,6 +32,33 @@ define void @setup(ptr %aux) {
 ; CHECK-NEXT:  // %bb.0: // %entry
 ; CHECK-NEXT:    add r1, 4
 ; CHECK-NEXT:    b .LBB0_1
+; CHECK-NEXT:  .LBB0_7: // %at_phdr
+; CHECK-NEXT:    // in Loop: Header=BB0_1 Depth=1
+; CHECK-NEXT:    ldw r2, [r1 + 0]
+; CHECK-NEXT:    lli r3, %got_pcrel_lo16(dlpi_phdr-.LPC0_1)
+; CHECK-NEXT:    lui r3, %got_pcrel_hi16(dlpi_phdr-.LPC0_1)
+; CHECK-NEXT:  .LPC0_1:
+; CHECK-NEXT:    add r3, pc
+; CHECK-NEXT:  .LBB0_4: // %latch
+; CHECK-NEXT:    // in Loop: Header=BB0_1 Depth=1
+; CHECK-NEXT:    ldw r3, [r3 + 0]
+; CHECK-NEXT:    stw r2, [r3 + 0]
+; CHECK-NEXT:    add r1, 8
+; CHECK-NEXT:  .LBB0_1: // %loop
+; CHECK-NEXT:    // =>This Inner Loop Header: Depth=1
+; CHECK-NEXT:    ldw r2, [r1 + -4]
+; CHECK-NEXT:    cmp r2, 7
+; CHECK-NEXT:    bhi .LBB0_2
+; CHECK-NEXT:  // %bb.5: // %loop
+; CHECK-NEXT:    // in Loop: Header=BB0_1 Depth=1
+; CHECK-NEXT:  .LPC0_4:
+; CHECK-NEXT:    mov r3, pc
+; CHECK-NEXT:    add r3, %pcrel(.LJTI0_0-.LPC0_4)
+; CHECK-NEXT:    shl r2, 2
+; CHECK-NEXT:    add r2, r3
+; CHECK-NEXT:    ldw r2, [r2 + 0]
+; CHECK-NEXT:    add r2, r3
+; CHECK-NEXT:    jmp r2
 ; CHECK-NEXT:  .LBB0_8: // %at_phnum
 ; CHECK-NEXT:    // in Loop: Header=BB0_1 Depth=1
 ; CHECK-NEXT:    ldw r2, [r1 + 0]
@@ -41,15 +68,8 @@ define void @setup(ptr %aux) {
 ; CHECK-NEXT:    add r3, pc
 ; CHECK-NEXT:    ldw r3, [r3 + 0]
 ; CHECK-NEXT:    sth r2, [r3 + 0]
-; CHECK-NEXT:  .LBB0_9: // %latch
-; CHECK-NEXT:    // in Loop: Header=BB0_1 Depth=1
-; CHECK-NEXT:    add r1, 8
-; CHECK-NEXT:  .LBB0_1: // %loop
-; CHECK-NEXT:    // =>This Inner Loop Header: Depth=1
-; CHECK-NEXT:    ldw r2, [r1 + -4]
-; CHECK-NEXT:    cmp r2, 7
-; CHECK-NEXT:    bls .LBB0_5
-; CHECK-NEXT:  // %bb.2: // %loop
+; CHECK-NEXT:    b .LBB0_9
+; CHECK-NEXT:  .LBB0_2: // %loop
 ; CHECK-NEXT:    // in Loop: Header=BB0_1 Depth=1
 ; CHECK-NEXT:    cmp r2, 2014
 ; CHECK-NEXT:    bne .LBB0_9
@@ -61,24 +81,10 @@ define void @setup(ptr %aux) {
 ; CHECK-NEXT:  .LPC0_0:
 ; CHECK-NEXT:    add r3, pc
 ; CHECK-NEXT:    b .LBB0_4
-; CHECK-NEXT:  .LBB0_5: // %loop
+; CHECK-NEXT:  .LBB0_9: // %latch
 ; CHECK-NEXT:    // in Loop: Header=BB0_1 Depth=1
-; CHECK-NEXT:  .LPC0_4:
-; CHECK-NEXT:    mov r3, pc
-; CHECK-NEXT:    add r3, %pcrel(.LJTI0_0-.LPC0_4)
-; CHECK-NEXT:    shl r2, 2
-; CHECK-NEXT:    add r2, r3
-; CHECK-NEXT:    ldw r2, [r2 + 0]
-; CHECK-NEXT:    add r2, r3
-; CHECK-NEXT:    jmp r2
-; CHECK-NEXT:  .LBB0_7: // %at_phdr
-; CHECK-NEXT:    // in Loop: Header=BB0_1 Depth=1
-; CHECK-NEXT:    ldw r2, [r1 + 0]
-; CHECK-NEXT:    lli r3, %got_pcrel_lo16(dlpi_phdr-.LPC0_1)
-; CHECK-NEXT:    lui r3, %got_pcrel_hi16(dlpi_phdr-.LPC0_1)
-; CHECK-NEXT:  .LPC0_1:
-; CHECK-NEXT:    add r3, pc
-; CHECK-NEXT:    b .LBB0_4
+; CHECK-NEXT:    add r1, 8
+; CHECK-NEXT:    b .LBB0_1
 ; CHECK-NEXT:  .LBB0_6: // %at_base
 ; CHECK-NEXT:    // in Loop: Header=BB0_1 Depth=1
 ; CHECK-NEXT:    ldw r2, [r1 + 0]
@@ -86,12 +92,7 @@ define void @setup(ptr %aux) {
 ; CHECK-NEXT:    lui r3, %got_pcrel_hi16(dlpi_addr-.LPC0_3)
 ; CHECK-NEXT:  .LPC0_3:
 ; CHECK-NEXT:    add r3, pc
-; CHECK-NEXT:  .LBB0_4: // %latch
-; CHECK-NEXT:    // in Loop: Header=BB0_1 Depth=1
-; CHECK-NEXT:    ldw r3, [r3 + 0]
-; CHECK-NEXT:    stw r2, [r3 + 0]
-; CHECK-NEXT:    add r1, 8
-; CHECK-NEXT:    b .LBB0_1
+; CHECK-NEXT:    b .LBB0_4
 ; CHECK-NEXT:  .LBB0_10: // %done
 ; CHECK-NEXT:    jmp lr
 entry:
@@ -149,32 +150,32 @@ define ptr @peek(i32 %i) {
 ; CHECK-LABEL: peek:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0: // %entry
-; CHECK-NEXT:    cmp r1, 0
-; CHECK-NEXT:    bne .LBB1_1
-; CHECK-NEXT:  // %bb.4: // %ret_name
-; CHECK-NEXT:    lli r1, %got_pcrel_lo16(dlpi_name-.LPC1_0)
-; CHECK-NEXT:    lui r1, %got_pcrel_hi16(dlpi_name-.LPC1_0)
-; CHECK-NEXT:  .LPC1_0:
-; CHECK-NEXT:    add r1, pc
-; CHECK-NEXT:    b .LBB1_5
-; CHECK-NEXT:  .LBB1_1: // %entry
+; CHECK-NEXT:    cmp r1, 2
+; CHECK-NEXT:    beq .LBB1_6
+; CHECK-NEXT:  // %bb.1: // %entry
 ; CHECK-NEXT:    cmp r1, 1
-; CHECK-NEXT:    bne .LBB1_2
-; CHECK-NEXT:  // %bb.6: // %ret_addr
+; CHECK-NEXT:    beq .LBB1_5
+; CHECK-NEXT:  // %bb.2: // %entry
+; CHECK-NEXT:    cmp r1, 0
+; CHECK-NEXT:    bne .LBB1_7
+; CHECK-NEXT:  // %bb.3: // %ret_name
+; CHECK-NEXT:    lli r1, %got_pcrel_lo16(dlpi_name-.LPC1_2)
+; CHECK-NEXT:    lui r1, %got_pcrel_hi16(dlpi_name-.LPC1_2)
+; CHECK-NEXT:  .LPC1_2:
+; CHECK-NEXT:    add r1, pc
+; CHECK-NEXT:    b .LBB1_4
+; CHECK-NEXT:  .LBB1_5: // %ret_addr
 ; CHECK-NEXT:    lli r1, %got_pcrel_lo16(dlpi_addr-.LPC1_1)
 ; CHECK-NEXT:    lui r1, %got_pcrel_hi16(dlpi_addr-.LPC1_1)
 ; CHECK-NEXT:  .LPC1_1:
 ; CHECK-NEXT:    add r1, pc
-; CHECK-NEXT:    b .LBB1_5
-; CHECK-NEXT:  .LBB1_2: // %entry
-; CHECK-NEXT:    cmp r1, 2
-; CHECK-NEXT:    bne .LBB1_7
-; CHECK-NEXT:  // %bb.3: // %ret_phdr
-; CHECK-NEXT:    lli r1, %got_pcrel_lo16(dlpi_phdr-.LPC1_2)
-; CHECK-NEXT:    lui r1, %got_pcrel_hi16(dlpi_phdr-.LPC1_2)
-; CHECK-NEXT:  .LPC1_2:
+; CHECK-NEXT:    b .LBB1_4
+; CHECK-NEXT:  .LBB1_6: // %ret_phdr
+; CHECK-NEXT:    lli r1, %got_pcrel_lo16(dlpi_phdr-.LPC1_0)
+; CHECK-NEXT:    lui r1, %got_pcrel_hi16(dlpi_phdr-.LPC1_0)
+; CHECK-NEXT:  .LPC1_0:
 ; CHECK-NEXT:    add r1, pc
-; CHECK-NEXT:  .LBB1_5: // %ret_name
+; CHECK-NEXT:  .LBB1_4: // %ret_name
 ; CHECK-NEXT:    ldw r1, [r1 + 0]
 ; CHECK-NEXT:    ldw r1, [r1 + 0]
 ; CHECK-NEXT:    jmp lr

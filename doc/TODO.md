@@ -3039,8 +3039,8 @@ targets opt into are silently off.  Status per item:
   13.6% and store 12.4% are the top terms — the store half is the
   write-through cost (L2 write-back / write-buffer hardware items),
   not compiler-addressable.
-- **IRTranslator opt level — not passed.**  The translator is built
-  at `CodeGenOptLevel::None`, so no branch probabilities reach block
+- **IRTranslator opt level — DONE.**  The translator was built at
+  `CodeGenOptLevel::None`, so no branch probabilities reached block
   placement.  See "IRTranslator runs without branch probabilities".
 - **Pre-RA MachineScheduler** (`enableMachineScheduler`, default
   false): with GlobalISel there is *no* scheduling at all without it —
@@ -3500,41 +3500,39 @@ Found in the hot-path code review (2026-09-13).
   Testing the flag in the parent before recursing removes a frame per
   leaf, whatever the shrink-wrapping and tail-call work delivers.
 
-## Compiler: IRTranslator runs without branch probabilities
+## Compiler: IRTranslator runs without branch probabilities — RESOLVED
 
-`PenumbraPassConfig::addIRTranslator` constructs `new IRTranslator()`,
-whose opt level defaults to `CodeGenOptLevel::None`; RISC-V and
-AArch64 pass `getOptLevel()`.  At `None` the translator never requests
-`BranchProbabilityInfo`, so every conditional edge is recorded 50/50,
-and block placement has nothing to work with.  `__predict_false`,
-`__builtin_expect`, cold calls and loop-exit heuristics are all
-ignored.  The same probabilities order switch clusters and weight the
-`&&`/`||` branch splitting.
+`PenumbraPassConfig::addIRTranslator` built the translator at its
+default `CodeGenOptLevel::None`, so it never requested
+`BranchProbabilityInfo`.  Every conditional edge was recorded 50/50,
+and block placement ignored `__predict_false`, `__builtin_expect`,
+cold calls and loop-exit heuristics; the same probabilities order
+switch clusters.  It now passes `getOptLevel()`, as RISC-V and AArch64
+do.  Shape coverage: `branch-probability-layout.ll`.
 
-```c
-if (__builtin_expect(x == 7, 0))
-  cold(x);
-return hot(y) + x;
-```
+Measured statically on the same IR (kernel `GENERIC.DEBUG`, Doom,
+PIC `libsqlite3`):
 
-compiles with the call to `cold` on the fall-through path and a taken
-`bne` around it.
+| | kernel | Doom | SQLite |
+|---|---:|---:|---:|
+| `.text` | +1.5% | +0.19% | −0.77% |
 
-- **Kernel:** 5,339 `kern_assert` blocks — about 64K instructions, 9%
-  of text — sit on fall-through paths.  `trap()`'s `userret` tail is
-  about 115 instructions with 6 taken forward branches; with riscv32's
-  probabilities patched into the same MIR it lays out as 55 straight
-  instructions with one taken branch.
-- **SQLite:** VDBE handlers reach the dispatch through 2–5
-  unconditional branches, and slow paths fall through into the join —
-  `OP_Integer` is 23 instructions with 3 `b`.
-- **Doom:** the BSP walk's near/far child order and early exits.
+| `kern_assert` call reached by | before | after |
+|---|---:|---:|
+| fall-through | 6,730 | 732 |
+| taken branch | 139 | 6,133 |
 
-The fix is one line — `new IRTranslator(getOptLevel())` — but it moves
-blocks in every function.  Land it with a static size comparison and
-the full compiler suite, and measure on hardware: layout also moves
-I-cache placement, which the 1 KB direct-mapped gen1 cache can turn
-either way.
+`kern_assert` returns, so each block moved out of line pays a `b` back
+— most of the kernel's growth.  Hot functions stay within a few
+instructions of their old size.  On hardware the pbench kernel rows
+all improved except `clock_gettime`, which retired slightly more
+instructions per call although nothing on its path grew.
+
+Turning it on exposed a latent PIC bug: `lowerAnchoredOperand` read an
+offset from jump-table-index operands, which have none, and emitted
+whatever the operand storage held.  It had always held zero before —
+all 1,895 PIC jump-table bases in the installed shared libraries check
+out.
 
 ## Compiler: countdown loop exits pay for an overflow flag
 

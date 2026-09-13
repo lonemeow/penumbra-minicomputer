@@ -185,7 +185,7 @@ public:
   // RegBankSelect, InstructionSelect) bracket optional combiner passes
   // that run before legalization and before reg-bank selection.
   bool addIRTranslator() override {
-    addPass(new IRTranslator());
+    addPass(new IRTranslator(getOptLevel()));
     return false;
   }
   void addPreLegalizeMachineIR() override {

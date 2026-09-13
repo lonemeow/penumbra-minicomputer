@@ -84,29 +84,29 @@ define ptr @addr_sel(i32 %sel) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    cmp r1, 1
-; CHECK-NEXT:    bne .LBB1_1
-; CHECK-NEXT:  // %bb.4: // %rb
-; CHECK-NEXT:    lli r1, %pcrel_lo16(b-.LPC1_0)
-; CHECK-NEXT:    lui r1, %pcrel_hi16(b-.LPC1_0)
-; CHECK-NEXT:  .LPC1_0:
-; CHECK-NEXT:    add r1, pc
-; CHECK-NEXT:    jmp lr
-; CHECK-NEXT:  .LBB1_1:
+; CHECK-NEXT:    beq .LBB1_4
+; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    cmp r1, 2
-; CHECK-NEXT:    bne .LBB1_2
-; CHECK-NEXT:  // %bb.5: // %rc
-; CHECK-NEXT:    lli r1, %pcrel_lo16(c-.LPC1_1)
-; CHECK-NEXT:    lui r1, %pcrel_hi16(c-.LPC1_1)
-; CHECK-NEXT:  .LPC1_1:
-; CHECK-NEXT:    add r1, pc
-; CHECK-NEXT:    jmp lr
-; CHECK-NEXT:  .LBB1_2:
+; CHECK-NEXT:    beq .LBB1_5
+; CHECK-NEXT:  // %bb.2:
 ; CHECK-NEXT:    cmp r1, 3
 ; CHECK-NEXT:    bne .LBB1_3
 ; CHECK-NEXT:  // %bb.6: // %rd
 ; CHECK-NEXT:    lli r1, %pcrel_lo16(d-.LPC1_2)
 ; CHECK-NEXT:    lui r1, %pcrel_hi16(d-.LPC1_2)
 ; CHECK-NEXT:  .LPC1_2:
+; CHECK-NEXT:    add r1, pc
+; CHECK-NEXT:    jmp lr
+; CHECK-NEXT:  .LBB1_5: // %rc
+; CHECK-NEXT:    lli r1, %pcrel_lo16(c-.LPC1_1)
+; CHECK-NEXT:    lui r1, %pcrel_hi16(c-.LPC1_1)
+; CHECK-NEXT:  .LPC1_1:
+; CHECK-NEXT:    add r1, pc
+; CHECK-NEXT:    jmp lr
+; CHECK-NEXT:  .LBB1_4: // %rb
+; CHECK-NEXT:    lli r1, %pcrel_lo16(b-.LPC1_0)
+; CHECK-NEXT:    lui r1, %pcrel_hi16(b-.LPC1_0)
+; CHECK-NEXT:  .LPC1_0:
 ; CHECK-NEXT:    add r1, pc
 ; CHECK-NEXT:    jmp lr
 ; CHECK-NEXT:  .LBB1_3: // %ra
