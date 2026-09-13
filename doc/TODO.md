@@ -3654,8 +3654,9 @@ rather than two:
 
 The gen2 figures are in
 [penumbra2/overview.md](internals/penumbra2/overview.md): load-use
-stall 4 vs. 1, branch flush 3 vs. 0-1, CPI on tight cache-hit loops
-~2.5-3.0 vs. ~1.2-1.5.  That CPI gap is this property.
+stall 4 vs. 1 and CPI on tight cache-hit loops ~2.5-3.0 vs. ~1.2-1.5
+(branch costs are under [Branch costs](#branch-costs)).  That CPI gap
+is this property.
 
 Expressing it is **not** a feature bit.  Dependence distance is
 operand latency plus `ReadAdvance` bypass entries in a
@@ -3728,20 +3729,27 @@ Measured on the RTL testbenches
 | mispredicted, or indirect `JMP` / return | 2 | 5 |
 | `BL` | 3 | — |
 
-gen1 has no prediction: every control transfer is one µop like an ALU
-operation.  gen2.5's `MispredictPenalty` is therefore **4**; gen2 has
-no BTB, so every taken branch flushes there and it is unmeasured —
-branch behaviour is a second reason gen2 and gen2.5 cannot share a
-model.  A branch alternating taken / not-taken mispredicts on every
-execution.
+gen1 has no prediction: a control transfer is one µop like an ALU
+operation.  On gen2.5 the fetch-time BTB (32-entry direct-mapped,
+trained by EX: taken allocates, not-taken clears) predicts each direct
+branch site's last resolved direction; a correct taken prediction
+discards the sequential fetch launched in IF1 as the branch enters
+IF2, and a misprediction, indirect jump or return discards the four
+slots behind the branch in IF1, IF2, the fetch buffer and ID
+([instruction-timing.md](internals/instruction-timing.md#control-transfers-on-penumbra25)).
+gen2.5's `MispredictPenalty` is therefore **4**.  gen2 has no BTB, so
+every taken branch there costs the redirect; branch behaviour is a
+second reason gen2 and gen2.5 cannot share a model.
 
-**The BTB costs a cycle even when right.**  A correctly predicted
-taken direct branch measures +1 cycle over the branch instruction
-(backward `BNE`, forward `B`, and the loop latch alike), where
-[penumbra2/overview.md](internals/penumbra2/overview.md) describes the
-BTB as cutting that flush "from 3 bubbles to 0".  Work out whether the
-fmax-closure round moved the BTB redirect a cycle later, or the design
-never reached 0, and correct whichever is wrong.
+**Three descriptions of these costs are wrong.**
+`hw/rtl/penumbra2_5/penumbra2_btb.sv`'s header and
+[penumbra2/overview.md](internals/penumbra2/overview.md) say a correct
+taken prediction cuts the flush "to zero bubbles", but the core's
+steering discards the IF1 sequential fetch by construction (its own
+comment says so); reaching zero would take launching the target fetch
+in the same cycle as the branch.  `penumbra2_if2_stage.sv` and the
+overview's "3-bubble flush" count three wrong-path slots, which predates
+the fetch buffer's extra one.  Correct them.
 
 No scheduling-model field expresses "a predicted taken branch still
 costs a cycle", and setting `MispredictPenalty` would change almost

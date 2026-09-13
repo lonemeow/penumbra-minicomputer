@@ -89,19 +89,32 @@ written to a register or discarded to R0.
 
 ### Control transfers on Penumbra/2.5
 
-Branches resolve in EX. A not-taken conditional branch follows the
-static fall-through prediction: **1**. Direct branches (`B`, `Bcc`,
-`BL`) are also looked up in a fetch-time branch target buffer; a taken
-branch the BTB predicts costs **2**, one cycle more than the branch
-itself. Anything EX has to correct costs **5**, the branch plus a
-4-cycle redirect: a mispredicted direction, a branch the BTB does not
-know, and every indirect jump and return, which the BTB never
-predicts. A branch that alternates direction mispredicts on every
-execution.
+The front end runs IF1 (PC, fetch launch) → IF2 (I-cache tag compare)
+→ a two-entry fetch buffer, which adds one IF2→ID cycle → ID → EX, and
+EX resolves every branch (`hw/rtl/penumbra2_5/penumbra2_core.sv`).
+Fetch continues sequentially unless something steers it, so a
+not-taken conditional branch costs **1**.
 
-[penumbra2/overview.md](penumbra2/overview.md) describes a correctly
-predicted taken branch as flushing 0 bubbles; the measured cost is
-one cycle.
+The branch target buffer (`penumbra2_btb.sv`) is a 32-entry
+direct-mapped table indexed by `PC[6:2]` and tagged with the rest of
+`PC[31:2]`, holding the target of a direct branch (`B`, `Bcc`, `BL`).
+Its read launches with the fetch in IF1 and is compared in IF2. On a
+hit, as the branch moves into IF2, IF1 is steered to the cached target
+and the sequential fetch IF1 launched that cycle is discarded: a
+correctly predicted taken branch costs **2**, the branch plus that one
+discarded fetch.
+
+EX trains the table from every resolved direct branch, through a
+register: a taken branch allocates or refreshes its entry, a not-taken
+one clears its entry if the tag matches. An entry's presence is the
+prediction, so each branch site predicts the direction it last
+resolved.
+
+EX redirects the front end in the cycle a branch resolves against its
+prediction — a taken branch with no entry, a predicted branch that
+falls through, and every indirect jump and return, which the BTB never
+holds. The instructions fetched behind it in IF1, IF2, the fetch
+buffer and ID are discarded: **5**, the branch plus four slots.
 
 ## Dependency costs
 
