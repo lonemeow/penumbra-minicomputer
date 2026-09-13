@@ -14,6 +14,7 @@ void rt_main(uint32_t bootdata)
 {
     rt_puts("\r\n=== penumbra demo ===\r\n");
 
+    rt_mem_init(bootdata);
     rt_timer_init();
     rt_display_init(bootdata);
 

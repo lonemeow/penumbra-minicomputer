@@ -26,7 +26,8 @@ BUILDDIR := $(PROJROOT)/build/skrolli2026
 # 8.3: the ROM's FAT32 reader has no long names.
 ELF      := $(BUILDDIR)/SKR2026.ELF
 
-RT_SRCS := runtime/console.c runtime/display.c runtime/timer.c \
+RT_SRCS := runtime/console.c runtime/bootdata.c runtime/memory.c \
+           runtime/display.c runtime/timer.c \
            runtime/perf.c runtime/telemetry.c runtime/director.c \
            runtime/part_testcard.c
 SRCS    := main.c $(RT_SRCS)

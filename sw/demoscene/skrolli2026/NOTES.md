@@ -393,6 +393,18 @@ Output is from the 48 kHz family; 44.1 kHz is unreachable from the
 available PLL configurations. Amiga periods resample exactly through
 the hardware `INC`, so no retuning is needed.
 
+## Load size
+
+The ROM reads the ELF into a scratch buffer at 0x2000 and loads the
+image directly above it, so the image ends near twice the file size.
+`crt0.S` starts the stack at 1 MB growing down, so an ELF approaching
+500 KB — less the stack's depth — runs its image into the stack;
+`rt_mem_init()` panics when it does. Music and assets ride in the ELF,
+so this is the budget they share until the stack moves.
+
+Everything above the stack is `rt_alloc()`'s, to the end of base RAM.
+Anything derived at startup belongs there rather than in the ELF.
+
 ## Interrupt context
 
 Ideas not yet acted on.

@@ -17,6 +17,12 @@ void rt_putchar(int c);
 void rt_puts(const char *s);
 void rt_print_uint(uint32_t v);
 
+/* ── Memory ─────────────────────────────────────────────────── */
+/* RAM above the stack, never freed; exhaustion panics.  Also panics if
+ * the loaded image has grown into the stack. */
+void  rt_mem_init(uint32_t bootdata);
+void *rt_alloc(uint32_t bytes);
+
 /* ── Timing ───────────────────────────────────────────────────── */
 void     rt_timer_init(void);
 uint32_t rt_ticks(void);            /* free-running, wraps; use deltas */
