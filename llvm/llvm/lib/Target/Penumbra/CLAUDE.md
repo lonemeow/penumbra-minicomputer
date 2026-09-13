@@ -153,12 +153,12 @@ The pipeline is defined by group lists in `PenumbraCombine.td`:
   ptr_add_immed_chain, combines_for_extload,
   penumbra_zextload_promote, known_bits_simplifications,
   penumbra_neg_imm_to_opposite, penumbra_sink_ptr_add_past_use,
-  penumbra_mul_to_mul_lohi]`.
+  penumbra_ptr_add_neg_to_sub, penumbra_mul_to_mul_lohi]`.
 
 The target-specific rules (`penumbra_srem_pow2` before legalization;
 `penumbra_mul_by_const`, `penumbra_zextload_promote`,
-`penumbra_neg_imm_to_opposite`, `penumbra_sink_ptr_add_past_use` and
-`penumbra_mul_to_mul_lohi` after) each have rationale comments in
+`penumbra_neg_imm_to_opposite`, `penumbra_sink_ptr_add_past_use`,
+`penumbra_ptr_add_neg_to_sub` and `penumbra_mul_to_mul_lohi` after) each have rationale comments in
 `PenumbraCombine.td` or the combiner `.cpp` and a regression test under
 `test/CodeGen/Penumbra/`. MIR-level unit tests use
 `-run-pass=penumbra-postlegalizer-combiner` to isolate individual

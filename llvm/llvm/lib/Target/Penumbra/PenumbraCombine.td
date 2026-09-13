@@ -122,6 +122,19 @@ def penumbra_sink_ptr_add_past_use : GICombineRule<
          [{ return matchSinkPtrAddPastUse(*${root}, MRI); }]),
   (apply [{ applySinkPtrAddPastUse(*${root}, MRI, B); }])>;
 
+// Target-specific: rewrite a pointer plus a negated integer, `p + (0 - n)`,
+// optionally scaled by a shift or multiply, as a subtract.  GlobalISel has no
+// pointer subtract, so `p - n` reaches it in that form, and upstream's
+// `simplify_add_to_sub` matches only G_ADD.  Listed after
+// penumbra_sink_ptr_add_past_use so a pointer bump moves before it stops
+// being a G_PTR_ADD.
+def penumbra_ptr_add_neg_matchdata : GIDefMatchData<"PtrNegOffset">;
+def penumbra_ptr_add_neg_to_sub : GICombineRule<
+  (defs root:$root, penumbra_ptr_add_neg_matchdata:$matchinfo),
+  (match (wip_match_opcode G_PTR_ADD):$root,
+         [{ return matchPtrAddNegToSub(*${root}, MRI, ${matchinfo}); }]),
+  (apply [{ applyPtrAddNegToSub(*${root}, MRI, B, ${matchinfo}); }])>;
+
 // Target-specific: fuse a same-operand G_MUL + G_[SU]MULH pair into the
 // two-result G_UMUL_LOHI / G_SMUL_LOHI (PenumbraInstrGISel.td), which
 // selects to a single MUL_P / MULU_P.  One multiply yields the full 64-bit
@@ -188,5 +201,6 @@ def PenumbraPostLegalizerCombiner
       known_bits_simplifications,
       penumbra_neg_imm_to_opposite,
       penumbra_sink_ptr_add_past_use,
+      penumbra_ptr_add_neg_to_sub,
       penumbra_mul_to_mul_lohi
     ]>;

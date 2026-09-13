@@ -18,6 +18,7 @@
 #include "llvm/CodeGen/GlobalISel/CombinerInfo.h"
 #include "llvm/CodeGen/GlobalISel/GIMatchTableExecutorImpl.h"
 #include "llvm/CodeGen/GlobalISel/GISelValueTracking.h"
+#include "llvm/CodeGen/GlobalISel/MIPatternMatch.h"
 #include "llvm/CodeGen/GlobalISel/MachineIRBuilder.h"
 #include "llvm/CodeGen/GlobalISel/Utils.h"
 #include "llvm/CodeGen/MachineDominators.h"
@@ -261,6 +262,7 @@ bool isMulDecompositionCheaper(unsigned DecomposedInstrs, uint32_t C,
 // than the hardware multiply; MatchInfo receives the decomposition.
 bool matchMulByConst(MachineInstr &MI, MachineRegisterInfo &MRI,
                      const PenumbraSubtarget &STI, MulPlan &MatchInfo) {
+  using namespace MIPatternMatch;
   Register X = MI.getOperand(1).getReg();
   Register Rhs = MI.getOperand(2).getReg();
   if (MRI.getType(MI.getOperand(0).getReg()) != LLT::scalar(32))
@@ -279,6 +281,19 @@ bool matchMulByConst(MachineInstr &MI, MachineRegisterInfo &MRI,
     Register UseLhs = Use.getOperand(1).getReg();
     Register UseRhs = Use.getOperand(2).getReg();
     if ((UseLhs == X && UseRhs == Rhs) || (UseLhs == Rhs && UseRhs == X))
+      return false;
+  }
+
+  // A negated multiplicand scaling a pointer offset — GEP scaling of `p - n` —
+  // is left to penumbra_ptr_add_neg_to_sub, which subtracts the positive
+  // product.  The combiner visits the multiply first.
+  Register Product = MI.getOperand(0).getReg();
+  if (MRI.hasOneNonDBGUse(Product) &&
+      mi_match(X, MRI, m_OneNonDBGUse(m_Neg(m_Reg())))) {
+    MachineInstr &Use = *MRI.use_instr_nodbg_begin(Product);
+    if (Use.getOpcode() == TargetOpcode::G_PTR_ADD &&
+        Use.getOperand(2).getReg() == Product &&
+        Use.getParent() == MI.getParent())
       return false;
   }
 
@@ -456,6 +471,70 @@ void applySinkPtrAddPastUse(MachineInstr &MI, MachineRegisterInfo &MRI,
   B.setDebugLoc(MI.getDebugLoc());
   B.buildPtrAdd(Dst, Src, Off);
 
+  MI.eraseFromParent();
+}
+
+// A pointer offset that negates an integer, optionally scaled by a shift or
+// multiply: `0 - n`, `(0 - n) << k` or `(0 - n) * k`.
+struct PtrNegOffset {
+  Register Negated;
+  // G_SHL or G_MUL, and its other operand; no opcode when unscaled.
+  unsigned ScaleOpc;
+  Register Scale;
+};
+
+// Match `G_PTR_ADD %p, %off` whose offset negates an integer.  GlobalISel has
+// no pointer subtract, so `p - n` arrives as `p + (0 - n)`, and upstream's
+// `simplify_add_to_sub` matches only G_ADD.
+bool matchPtrAddNegToSub(MachineInstr &MI, MachineRegisterInfo &MRI,
+                         PtrNegOffset &MatchInfo) {
+  using namespace MIPatternMatch;
+  Register Off = MI.getOperand(2).getReg();
+
+  // A negation that other instructions still read costs nothing more than
+  // this add did.
+  Register Negated;
+  if (mi_match(Off, MRI, m_Neg(m_Reg(Negated)))) {
+    MatchInfo = {Negated, 0, Register()};
+    return true;
+  }
+
+  // Scaled, both the scaling and the negation must die here, or the scaling
+  // would be computed twice, and the scaling must share the add's block: it is
+  // rebuilt at the add, which would otherwise pull a loop-invariant stride
+  // into the loop.
+  MachineInstr *ScaleMI = MRI.getVRegDef(Off);
+  unsigned Opc = ScaleMI ? ScaleMI->getOpcode() : 0;
+  if ((Opc != TargetOpcode::G_SHL && Opc != TargetOpcode::G_MUL) ||
+      !MRI.hasOneNonDBGUse(Off) || ScaleMI->getParent() != MI.getParent())
+    return false;
+  // (0 - n) << k and (0 - n) * k are both 0 - (n op k) modulo 2^32; a
+  // multiply may carry its negation on either side.
+  for (unsigned NegIdx : {1u, 2u}) {
+    if (NegIdx == 2 && Opc == TargetOpcode::G_SHL)
+      break;
+    if (mi_match(ScaleMI->getOperand(NegIdx).getReg(), MRI,
+                 m_OneNonDBGUse(m_Neg(m_Reg(Negated))))) {
+      MatchInfo = {Negated, Opc, ScaleMI->getOperand(3 - NegIdx).getReg()};
+      return true;
+    }
+  }
+  return false;
+}
+
+// Rewrite as `p - n`, or `p - (n op k)`, through the pointer casts, which
+// select to copies.
+void applyPtrAddNegToSub(MachineInstr &MI, MachineRegisterInfo &MRI,
+                         MachineIRBuilder &B, PtrNegOffset &MatchInfo) {
+  B.setInstrAndDebugLoc(MI);
+  LLT IntTy = MRI.getType(MatchInfo.Negated);
+  Register Amount = MatchInfo.Negated;
+  if (MatchInfo.ScaleOpc)
+    Amount = B.buildInstr(MatchInfo.ScaleOpc, {IntTy},
+                          {Amount, MatchInfo.Scale})
+                 .getReg(0);
+  auto Base = B.buildPtrToInt(IntTy, MI.getOperand(1).getReg());
+  B.buildIntToPtr(MI.getOperand(0).getReg(), B.buildSub(IntTy, Base, Amount));
   MI.eraseFromParent();
 }
 

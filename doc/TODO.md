@@ -2819,16 +2819,27 @@ None of these produce wrong code.
 - **Negation can take three instructions where two do.**  `0 - x`
   selects to `SUB` from a copy of R0, so when the result must land in
   the operand's register it is `mov r2, zero; sub r2, r1; mov r1, r2`,
-  where `not r1, r1; add r1, 1` is two.  The pair sets identical NZCV:
-  SUB's carry is NOT borrow, so both set C only for zero and V only for
-  `INT_MIN`.  No GlobalISel combine canonicalises integer negation, and
-  InstCombine delivers `0 - x` regardless, so the fix is one selection
-  pattern, `(sub 0, x)` → `ADDi (NOT x), 1`.  On its own it saves an
-  instruction only where the result is copied back, which the compiled
-  test suite shows about 10 times before returns.  Negative constant
-  multiplies do not need it: the decomposition accumulates from `0 - x`
-  while the multiplicand is still live, so an in-place negation would
-  not shorten `x * -80`.
+  where `not r1, r1; add r1, 1` is two — and `NOT` takes a separate
+  source, so the pair is two wherever the result lands.  The pair sets
+  identical NZCV: SUB's carry is NOT borrow, so both set C only for
+  zero and V only for `INT_MIN`.  The fix would be one selection
+  pattern, `(sub 0, x)` → `ADDi (NOT x), 1`, but it is worth little.
+  A survey of the rebuilt kernel, libc and 18 userland binaries (2.2M
+  instructions) finds 687 negations, 0.03% of instructions, and the
+  copy-back in only about 36 of them.  By first consumer, the
+  negations are stored, copied, compared, passed to calls or unused
+  nearby (386), masked as `x & -m` roundups with no cheaper form (79),
+  or feed an add, directly or shifted (204).  Integer `a + -b` already
+  folds in the IR, so the adds are C's `p - n`, which reaches the
+  backend as `p + (0 - n)` and cost a zero copy, a subtract and an add,
+  plus any scaling, where a subtract does.  The post-legalizer rule
+  `penumbra_ptr_add_neg_to_sub` now rewrites it (see
+  [the upstream-candidate write-up](llvm-gisel-pointer-minus-integer.md));
+  the sites are per-packet mbuf adjustments in protocol input and output
+  and driver ring pointers.  Negative constant multiplies do not need
+  the pattern either: the decomposition accumulates from `0 - x` while
+  the multiplicand is still live, so an in-place negation would not
+  shorten `x * -80`.
 
 ### Cost model
 
