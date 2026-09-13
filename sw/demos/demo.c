@@ -261,8 +261,8 @@ demo_viewport(const struct demo_surface *s, int32_t cx, int32_t cy,
 {
 	/* half_h = half_w * (height * aspect_h) / (width * aspect_w) keeps
 	 * the picture's proportions on a surface whose units are not
-	 * square.  Done in 64-bit because half_w is already a fixed-point
-	 * value using most of its range. */
+	 * square.  Done in 64-bit because a fixed-point half_w times a
+	 * surface extent does not fit in 32 bits. */
 	int64_t units_h = (int64_t)s->height * s->aspect_h;
 	int64_t units_w = (int64_t)s->width * s->aspect_w;
 	struct demo_viewport v;

@@ -5,10 +5,16 @@
  * format, the escape test, and how an iteration count becomes a colour
  * on either surface — is the same, and lives here rather than in each.
  *
- * Q4.28 fixed-point:
+ * Q8.24 fixed-point:
  *   bit 31      sign
- *   bits 30..28 integer part (effective range +-8)
- *   bits 27..0  28 fractional bits (~3.7e-9 resolution)
+ *   bits 30..24 integer part (effective range +-128)
+ *   bits 23..0  24 fractional bits (~6e-8 resolution)
+ *
+ * The integer part is sized by the escape test, not by the escape
+ * radius.  The test sees z one iteration after |z|^2 was last at most 4,
+ * so |z| can have reached 4 + |c| — about 6 for the Mandelbrot set — and
+ * its squares about 37 by the time they are compared.  A format that
+ * wraps those squares lets escaped points keep iterating on garbage.
  *
  * Penumbra has no FP hardware, so the whole kernel is integer: a 64-bit
  * intermediate for the multiply, shifted back down.  That is also what
@@ -20,11 +26,11 @@
 
 #include <stdint.h>
 
-/* ── Q4.28 fixed point ────────────────────────────────────────────── */
+/* ── Q8.24 fixed point ────────────────────────────────────────────── */
 
 typedef int32_t q_t;
 
-#define Q_FRAC_BITS  28
+#define Q_FRAC_BITS  24
 #define Q_ONE        ((q_t)1 << Q_FRAC_BITS)
 
 /* Convert a small integer literal at compile time. */
@@ -33,17 +39,23 @@ typedef int32_t q_t;
 /* Escape threshold: |z|^2 > 4. */
 #define Q_ESCAPE     Q_INT(4)
 
-/* Q4.28 from a rational num/den, for viewport coordinates that are not
+/* Q8.24 from a rational num/den, for viewport coordinates that are not
  * integer multiples of Q_ONE.  Multiplies rather than shifts, since
  * shifting a negative signed value is implementation-defined. */
 #define Q_FROM_FRAC(num, den) \
     ((q_t)(((int64_t)(num) * (int64_t)Q_ONE) / (den)))
 
-/* Multiply two Q4.28 values.  The 64-bit intermediate is essential:
- * squaring a value near 2.0 produces a 60+ bit product before the
+/* Multiply two Q8.24 values.  The 64-bit intermediate is essential: the
+ * full product of two values in range needs up to 62 bits before the
  * shift. */
 static inline q_t qmul(q_t a, q_t b) {
     return (q_t)(((int64_t)a * (int64_t)b) >> Q_FRAC_BITS);
+}
+
+/* Twice the product of two Q8.24 values, 2ab.  Doubling inside the shift
+ * keeps the bit qmul would drop and costs no instruction of its own. */
+static inline q_t qmul2(q_t a, q_t b) {
+    return (q_t)(((int64_t)a * (int64_t)b) >> (Q_FRAC_BITS - 1));
 }
 
 /* ── Cell-surface colour ──────────────────────────────────────────── */

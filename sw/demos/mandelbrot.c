@@ -1,18 +1,18 @@
 /* mandelbrot.c - fixed-point Mandelbrot set renderer + ALU benchmark.
  *
- * Renders the Mandelbrot set into an ASCII grid using Q4.28 fixed-point
+ * Renders the Mandelbrot set into an ASCII grid using Q8.24 fixed-point
  * arithmetic.  Penumbra has no FP hardware (FP is software-emulated),
  * so doing this in integer math both runs in reasonable time and acts
  * as a clean stress test for the 32x32 -> 64-bit multiply path and the
  * surrounding ALU.
  *
- * Q4.28 format:
+ * Q8.24 format (see fractal.h for why the integer part is this wide):
  *   bit 31    : sign
- *   bits 30..28 : integer part (effective range +-8)
- *   bits 27..0  : 28 fractional bits (~3.7e-9 resolution)
+ *   bits 30..24 : integer part (effective range +-128)
+ *   bits 23..0  : 24 fractional bits (~6e-8 resolution)
  *
- * Multiplication: (int64_t)a * (int64_t)b yields a Q8.56 result; shift
- * right by 28 to renormalize back to Q4.28.  Addition/subtraction are
+ * Multiplication: (int64_t)a * (int64_t)b yields a Q16.48 result; shift
+ * right by 24 to renormalize back to Q8.24.  Addition/subtraction are
  * straight 32-bit signed ops.
  *
  * Output: WIDTH x HEIGHT ASCII grid with a density ramp where lighter
@@ -88,9 +88,9 @@ static const struct preset presets[] = {
       Q_FROM_FRAC(85, 100),        128,
       "Upper hemisphere; cardioid, period-2 bulb, antenna filaments" },
     { "seahorse",
-      Q_FROM_FRAC(-745, 1000),     Q_FROM_FRAC(105, 1000),
-      Q_FROM_FRAC(40, 1000),       192,
-      "Seahorse Valley, between main cardioid and period-2 bulb" },
+      Q_FROM_FRAC(-745, 1000),     Q_FROM_FRAC(150, 1000),
+      Q_FROM_FRAC(5, 1000),        192,
+      "Seahorse Valley close-up; a spiral eye and seahorse tails" },
     { "mini",
       Q_FROM_FRAC(-1750, 1000),    Q_FROM_FRAC(0, 1),
       Q_FROM_FRAC(40, 1000),       192,
@@ -127,7 +127,7 @@ static void list_presets(void) {
  *
  * This is the inner ALU loop of the whole program — every pixel calls
  * it once.  Keep it tight: each iteration is roughly
- *   3 qmul + a few adds + a compare + branch.
+ *   2 qmul + 1 qmul2 + a few adds + a compare + branch.
  * On a WIDTH*HEIGHT grid with depth D, the worst case is WIDTH*HEIGHT*D
  * multiplies, which for 78*40*96 = ~300 K multiplies per frame. */
 static int mandel_iter(q_t cr, q_t ci, int max_iter) {
@@ -137,9 +137,8 @@ static int mandel_iter(q_t cr, q_t ci, int max_iter) {
     {
         q_t zr_squared = qmul(zr, zr);
         q_t zi_squared = qmul(zi, zi);
-        q_t zr_times_zi = qmul(zr, zi);
         q_t zr_new = zr_squared - zi_squared + cr;
-        q_t zi_new = zr_times_zi * 2 + ci;
+        q_t zi_new = qmul2(zr, zi) + ci;
 
         if (zr_squared + zi_squared > Q_ESCAPE)
             return i;

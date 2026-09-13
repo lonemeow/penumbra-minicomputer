@@ -8,11 +8,11 @@
  * value gives a wildly different connected/disconnected/dendrite
  * structure.
  *
- * Q4.28 fixed-point throughout, same as mandelbrot.c; see that file
- * for the format and qmul rationale.  The numerics for Julia are
- * actually a touch friendlier than Mandelbrot because z_0 is bounded
- * by the viewport (|z_0| <= half_w) rather than starting from zero
- * and being driven only by c.
+ * Q8.24 fixed-point throughout, same as mandelbrot.c; see fractal.h
+ * for the format and why its integer part is as wide as it is.  A
+ * viewport-bounded z_0 does not make Julia's numerics any easier: the
+ * escape test still sees z one iteration late, so z has the same room
+ * to grow past the escape radius before it is caught.
  *
  * Usage: julia [-m|--mono | -b|--blocks] [PRESET]
  *              [WIDTH] [HEIGHT] [MAX_ITER]
@@ -100,16 +100,16 @@ static void list_presets(void) {
 /* Iterate z_{n+1} = z_n^2 + c starting from z_0 = (zr, zi), with
  * c = (cr, ci) fixed for the whole frame.  Count iterations until
  * |z|^2 > 4 or max_iter is reached.  Same structure and same three
- * qmul per iter as mandel_iter; the only difference is *what
+ * multiplies per iter as mandel_iter; the only difference is *what
  * varies across pixels* — here it's z_0, not c. */
 static int julia_iter(q_t zr, q_t zi, q_t cr, q_t ci, int max_iter) {
     for (int i = 0; i < max_iter; i++) {
         q_t zr2 = qmul(zr, zr);
         q_t zi2 = qmul(zi, zi);
         if (zr2 + zi2 > Q_ESCAPE) return i;
-        q_t zrzi = qmul(zr, zi);
+        /* zi first: its update reads the old zr. */
+        zi = qmul2(zr, zi) + ci;
         zr = zr2 - zi2 + cr;
-        zi = (zrzi << 1) + ci;
     }
     return max_iter;
 }
