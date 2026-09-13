@@ -715,7 +715,7 @@ PENIMAGE   ?= $(BUILD_DIR)/$(IMAGE_CONF).img
 # the previous one, and that surfaces here as a size mismatch on whichever
 # binaries changed (DEVELOP.md covers repairing it).
 .PHONY: image
-image: netbsd-overlay bench-elfs
+image: netbsd-overlay bench-elfs demoscene-elfs
 	@HOST_SH=/bin/sh MACHINE=penumbra MACHINE_ARCH=penumbra \
 	    TOOL_MAKEFS=$(NBTOOLBIN)/nbmakefs \
 	    TOOL_MTREE=$(NBTOOLBIN)/nbmtree \
@@ -725,7 +725,7 @@ image: netbsd-overlay bench-elfs
 	    penboot=$(abspath $(BOOT_ELF)) \
 	    kernel=$(abspath $(KERNEL)) \
 	    rootoverlay=$(abspath $(OVERLAY_ROOT)) \
-	    bootextras=$(abspath $(BENCH_SD_DIR)) \
+	    bootextras=$(abspath $(BOOTEXTRAS_DIR)) \
 	    sh $(MKIMAGE) -h $(IMAGE_CONF) -B le \
 		-D $(abspath $(DESTDIR)) $(abspath $(PENIMAGE))
 	@echo "SD image: $(PENIMAGE)"
@@ -754,24 +754,40 @@ benchmark-netbsd:
 # BENCH_ITERS is an opt-in passthrough.  The actual default lives in
 # benchmark/Makefile (DHRYSTONE_ITERATIONS) so there's a single source
 # of truth — top-level only forwards when the user supplies a value.
-BENCH_IMG    := $(BUILD_DIR)/bench.img
-BENCH_SD_DIR := $(BUILD_DIR)/bench_sd
+BENCH_IMG      := $(BUILD_DIR)/bench.img
 
-# Build the bare-metal benchmark ELFs and stage them in BENCH_SD_DIR, ready
-# to drop onto a FAT32 root — either the standalone bench image
-# (sdimage-bench) or the NetBSD image's boot partition (image).
+# Bare-metal ELFs for an SD card's FAT32 root, beside PENBOOT.ELF: both the
+# standalone bench image (sdimage-bench) and the NetBSD image's boot
+# partition (image) are built from it, so both depend on every target
+# that stages into it.
+BOOTEXTRAS_DIR := $(BUILD_DIR)/bootextras
+
+# Build the bare-metal benchmark ELFs and stage them in BOOTEXTRAS_DIR.
 # Always rebuilds: the sources are small, compile quickly, and `make` can't
 # see when the compiler itself has changed under it.
 .PHONY: bench-elfs
 bench-elfs:
 	@$(MAKE) -C benchmark clean
 	@$(MAKE) -C benchmark $(if $(BENCH_ITERS),DHRYSTONE_ITERATIONS=$(BENCH_ITERS)) LLVM_PREFIX=$(LLVM_PREFIX)
-	@mkdir -p $(BENCH_SD_DIR)
-	@cp $(BUILD_DIR)/benchmark/*.ELF $(BENCH_SD_DIR)/ 2>/dev/null || true
+	@mkdir -p $(BOOTEXTRAS_DIR)
+	@cp $(BUILD_DIR)/benchmark/*.ELF $(BOOTEXTRAS_DIR)/ 2>/dev/null || true
+
+# Bare-metal demoscene productions, each self-contained under sw/demoscene/
+# with its own `stage' target.  Add one by listing it in DEMOSCENE.
+# Always rebuilds, for the same reason as bench-elfs.
+DEMOSCENE := sw/demoscene/skrolli2026
+
+.PHONY: demoscene-elfs
+demoscene-elfs:
+	@for d in $(DEMOSCENE); do \
+	    $(MAKE) -C $$d clean && \
+	    $(MAKE) -C $$d LLVM_PREFIX=$(LLVM_PREFIX) \
+	        STAGE_DIR=$(abspath $(BOOTEXTRAS_DIR)) stage || exit 1; \
+	done
 
 .PHONY: sdimage-bench
-sdimage-bench: bench-elfs
-	@sw/tools/mksdimage.sh -o $(BENCH_IMG) -e $(BENCH_SD_DIR) -v
+sdimage-bench: bench-elfs demoscene-elfs
+	@sw/tools/mksdimage.sh -o $(BENCH_IMG) -e $(BOOTEXTRAS_DIR) -v
 	@echo "Benchmark SD image: $(BENCH_IMG)"
 
 # List of benchmark ELF names (FAT32 8.3 format, no path).
