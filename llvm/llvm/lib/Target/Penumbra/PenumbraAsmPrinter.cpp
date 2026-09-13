@@ -130,10 +130,14 @@ static bool lowerOperand(const MachineOperand &MO, MCOperand &MCOp,
 static MCOperand lowerAnchoredOperand(const MachineOperand &MO,
                                       MCSymbol *PICLabel, AsmPrinter &AP) {
   const MCExpr *Expr;
+  // A jump-table index has no offset field; reading one returns whatever
+  // the operand's storage happens to hold.
+  int64_t Offset = 0;
   switch (MO.getType()) {
   case MachineOperand::MO_GlobalAddress:
     Expr = MCSymbolRefExpr::create(AP.getSymbol(MO.getGlobal()),
                                    AP.OutContext);
+    Offset = MO.getOffset();
     break;
   case MachineOperand::MO_JumpTableIndex:
     Expr = MCSymbolRefExpr::create(AP.GetJTISymbol(MO.getIndex()),
@@ -142,14 +146,14 @@ static MCOperand lowerAnchoredOperand(const MachineOperand &MO,
   case MachineOperand::MO_BlockAddress:
     Expr = MCSymbolRefExpr::create(
         AP.GetBlockAddressSymbol(MO.getBlockAddress()), AP.OutContext);
+    Offset = MO.getOffset();
     break;
   default:
     llvm_unreachable("unexpected symbol operand on PC-anchored pseudo");
   }
-  if (MO.getOffset())
+  if (Offset)
     Expr = MCBinaryExpr::createAdd(
-        Expr, MCConstantExpr::create(MO.getOffset(), AP.OutContext),
-        AP.OutContext);
+        Expr, MCConstantExpr::create(Offset, AP.OutContext), AP.OutContext);
   Expr = MCBinaryExpr::createSub(
       Expr, MCSymbolRefExpr::create(PICLabel, AP.OutContext), AP.OutContext);
   Expr = MCSpecifierExpr::create(Expr, MO.getTargetFlags(), AP.OutContext);
