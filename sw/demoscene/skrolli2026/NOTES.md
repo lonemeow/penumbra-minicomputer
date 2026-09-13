@@ -393,6 +393,27 @@ Output is from the 48 kHz family; 44.1 kHz is unreachable from the
 available PLL configurations. Amiga periods resample exactly through
 the hardware `INC`, so no retuning is needed.
 
+## Interrupt context
+
+Ideas not yet acted on.
+
+**R12 is free real estate.** The ABI reserves R12 as the thread
+pointer and the compiler never allocates it, bare metal included
+(`doc/system/abi.md`). Either make it allocatable for this build — one
+more register for every function — or give it a job: compiled code
+never writes it, so a value the runtime loads at startup survives
+everywhere, including at whatever instruction an interrupt lands on.
+An interrupt handler could reach its state as `[r12 + off]`, with no
+PC-relative scratch and no address materialization.
+
+**Pin what interrupt handlers touch.** Exceptions do not nest: entry
+overwrites `EPC`/`ESR`, so a TLB miss taken inside an interrupt handler
+destroys the interrupted context unless the handler saved both first.
+Beyond correctness, a pinned handler costs the effect it interrupts no
+TLB misses. The pinned TLB has 8 slots; `crt0.S` uses two (the handler
+page and page 0). Ideally the handler code is fully pinned, plus one
+data page holding its hottest state.
+
 ## Precalc
 
 Parts differ enormously in setup cost, so the director runs two
