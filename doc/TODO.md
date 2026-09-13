@@ -1183,6 +1183,19 @@ Treat as delicate: this is the walk that produced the ADC/SBC splice
 miscompile above.  The negative cases belong in
 `test/CodeGen/Penumbra/compare-elim-mask.mir` beside the mask ones.
 
+The same re-keying covers a gap that is not a `COPY`:
+`sub r, x; stw r, [...]; cmp r, 0`, where the store reads the compared
+register without touching SR.  106 kernel sites, including
+`KPREEMPT_ENABLE` on every `userret`.
+
+Separate and not covered by the walk: 164 kernel sites repeat an
+identical compare at the head of a fall-through block whose
+predecessor already set the same flags.  That redundancy crosses a
+block boundary, where a backward walk cannot see it.  SQLite's
+repeats (161 same-block, 407 across labels) come mostly from the i64
+compare expansion in "64-bit relational compares expand to select
+diamonds".
+
 ## Compiler: GISel poison-flag hygiene is an LLVM rebase gate
 
 The known upstream GlobalISel wrap-flag miscompile families are
@@ -1275,6 +1288,46 @@ block mapping (`clock_secs_to_ymdhms`, `ufs_bmaparray`, `ffs_balloc`),
 not in syscall entry, trap handling or `copyin`/`copyout` — so expect
 code size rather than a benchmark to move.
 
+## Compiler: compare and branch selection misses immediate and TEST forms
+
+`emitCompare` folds an immediate only when the constant fits uimm16 as
+given, and `selectBrCond` either consumes a compare or tests a
+materialized boolean.  Four shapes pay for that (static counts,
+2026-09-13):
+
+| Source | Emitted | Wanted | Sites |
+|---|---|---|---|
+| `x >= 0` (`icmp sgt x, -1`) | `llis t,-1; cmp x,t; ble` | `cmp x,0; blt` | kernel 274, SQLite 612, Doom 86 |
+| `(x & C) != 0` | `mov t,x; and t,C; beq` | `test x,C; beq` | Doom 140 |
+| branch on a non-compare `i1` whose true edge falls through | `lli t,1; xor t,b; test t,1; bne` | `test b,1; beq` | kernel 848 |
+| `x == -1` | `llis t,-1; cmp x,t; beq` | `not t,x; beq` | Doom 53 |
+
+- **Immediate adjustment.**  `sgt x, -1` is `sge x, 0`.  AArch64's
+  `getAArch64Cmp` moves the predicate and the constant by one whenever
+  that brings the constant into range (`sgt C` ↔ `sge C+1`,
+  `slt C` ↔ `sle C−1`, and the unsigned pairs).  About 215 of SQLite's
+  612 are plain i32 values; most of the rest are the byte and
+  halfword sign tests in "signed sub-word loads in relational compares
+  miss LDBS/LDHS".
+- **Branch on N for sign tests.**  After `cmp x, 0` V is clear, so
+  `bmi`/`bpl` are exact for `x < 0`/`x >= 0`.  Reading N alone also
+  lets compare elimination drop the compare after a producer whose V
+  means something else — the `XOR` in Doom's `R_PointOnSide`, the
+  `SUB` in `R_AddLine` and `R_CheckBBox`.
+- **TEST fold.**  The `mov` exists because `AND` is destructive and
+  `x` stays live.  `G_ICMP ne (G_AND x, C), 0` feeding a branch
+  should select `TESTi` directly; the `R_RenderBSPNode` entry test is
+  one of the sites.
+- **Inverted boolean.**  The IRTranslator swaps successors with
+  `G_XOR %v, 1` when the true edge is the layout successor.  A
+  compare absorbs it into the predicate; any other `i1` — a call
+  result, a `bool` load, a phi — reaches `selectBrCond` with the XOR
+  still in place, and selection materializes and tests it.  Looking
+  through `XOR c, 1` and inverting the branch condition fixes it.
+  Kernel sites include `comintr`, `intr_dispatch`,
+  `mutex_vector_enter` and `paudio_intr`.  RISC-V's GlobalISel output
+  has the same `xori`, so this is upstream-worthy.
+
 ## Compiler: share the hi-word compare in i64 three-way compares
 
 The `G_SCMP`/`G_UCMP` lowering (`.lower()` →
@@ -1282,7 +1335,67 @@ The `G_SCMP`/`G_UCMP` lowering (`.lower()` →
 verbosely: 16 BBs — two s64 ICMPs each become a three-block hi/lo/eq
 diamond, materialized as four `mov` selects.  A peephole that shares
 the hi-word compare across the two ICMPs would shrink it.  Not on any
-hot path (qsort's comparator is the i32 case); low priority.
+hot path (qsort's comparator is the i32 case); low priority.  The
+two-way relational compares have the same problem and are hot — see
+the next entry.
+
+## Compiler: 64-bit relational compares expand to select diamonds
+
+`LegalizerHelper::narrowScalar` splits an s64 `G_ICMP` into
+`select(hi == hi', ult(lo, lo'), pred(hi, hi'))`.  Selection builds
+the signed half with a branch diamond (`selectICmpToValue` has no
+signed path), the `G_SELECT` with a second one, and emits the
+high-word compare twice.  A branch on signed `a < b` takes 12
+instructions on its path:
+
+```
+cmp r1,r3; mov r1,zero; adc r1,zero; lli r3,1; lli r11,0
+cmp r2,r4; blt ...; cmp r2,r4; bne ...; test r1,1; bne ...
+```
+
+A borrow chain does it in four: `cmp alo,blo; mov t,ahi; sbc t,bhi;
+blt` (`blo` unsigned).  `MOV` leaves the flags alone, so the copy can
+go anywhere before the `SBC`.  Only `lt`/`ge` come out of the chain
+directly — Z reflects just the high word — so `gt`/`le` swap operands.
+
+| Source | Now | riscv32 SelectionDAG | Borrow chain |
+|---|---:|---:|---:|
+| branch on signed `<` | 11–13 | 3–5 | 3 |
+| branch on unsigned `<` | 10 | 3–5 | 3 |
+| value of signed `<` | 16 | — | 5 |
+| value of unsigned `<` | 12 | — | 5 |
+| branch on `v < 0` | 11 | 1 | 2 |
+| `(v & 0xffffffff) != v` | 16 | 3 | 3 |
+
+The borrow-chain branch counts assume a flag-only `SBC`; add one for
+the `MOV`.  Constants need no chain at all: `v < 0` is
+`cmp hi,0; blt`, and a right-hand side with a zero low half reduces
+to a high-word compare.
+
+Reach (static, 2026-09-13): `libsqlite3` has 470 on variable
+operands and about 130 against constants.  That includes two per
+`sqlite3BtreeMovetoUnpacked` bisection step (rowid against cell key),
+`vdbeRecordCompareInt`, and 42 in `sqlite3VdbeExec`.  The chain saves
+about 20 cycles per compare on penumbra1 and 9 on penumbra2_5.  The
+kernel's `off_t`, `time_t` and 64-bit counter code has the same shape;
+not counted.
+
+SelectionDAG's `IntegerExpandSetCCOperands` (`LegalizeIntegerTypes.cpp`)
+uses `SETCCCARRY` where the target provides it — ARM does — and
+special-cases constant halves.  GlobalISel has no counterpart, so this
+wants a `doc/llvm-*.md` write-up.
+
+Fix direction: a custom s64 `G_ICMP` legalization or pre-legalizer
+combine into a low-half `G_USUBO` feeding a high-half borrow
+subtraction, selected as `CMP`/`SBC` with the branch or value read
+from its flags, and constant right-hand sides folded to a high-word
+compare.
+
+**ISA documentation decision first.**  The encoding defines the F
+(flag-only) bit for every Format R operation, so a flag-only `SBC` is
+expressible, but `instruction-set.md` names only `CMP` and `TEST`.
+Using it needs a named mnemonic in the doc and an `isa/` conformance
+test run on every core; without it the chain keeps the `MOV`.
 
 ## Compiler: aggregate-ABI rework — small structs in registers — RESOLVED
 
@@ -2635,6 +2748,36 @@ priority" tag. Not a hot-path lever; pick it up only if the relational
 diagnosis turns out cheap, or if a kernel bench surfaces one of these in
 a hot loop.
 
+**Re-ranked 2026-09-13: the reach is in sign-bit tests, and it is
+hot.**  The count above only matched a load immediately followed by
+`shl; sar`.  Testing the sign bit of a byte or halfword (`b & 0x80`,
+`(int8_t)b < 0`) emits the widened comparison against a materialized
+−1, with other instructions in between:
+
+```
+ldb r3,[r1+1]; llis r4,-1; mov r11,r3; shl r11,24; sar r11,24; cmp r11,r4; ble
+```
+
+`ldb; test r3,128; bne` (or `ldbs; cmp r3,0; blt`) does the same in
+three, often with one fewer callee-saved register.
+
+- **SQLite:** 428 sites in `libsqlite3` (377 byte, 51 halfword) — one
+  per varint and record-header byte, in `sqlite3GetVarint*`,
+  `btreeParseCellPtr`, `sqlite3VdbeRecordCompare*` and
+  `sqlite3VdbeExec`.
+- **Doom:** the BSP walk tests `bspnum & NF_SUBSECTOR` on an i16
+  child index as `llis; mov; shl 16; sar 16; cmp; bgt` where
+  `test r1,#0x8000; beq` does it — once per node.
+- **Kernel:** the `sy_narg` compare (`ldh; mov; shl 16; sar 16`) runs
+  on every syscall.
+
+A post-legalizer rule rewriting a sign test of `G_SEXT_INREG` into a
+test of the sign bit covers the sign-bit cases.  The −1 is a separate
+gap, in "compare and branch selection misses immediate and TEST
+forms".  A related narrowing: `ldw r; sar r,16` with only the high
+half used is `ldhs [+2]` — SelectionDAG narrows the load, GlobalISel
+does not; 15 Doom sites, including `R_PointOnSide`.
+
 ## Compiler: selectAddSubCarry misses the immediate fold
 
 `selectAddSubCarry` hand-emits the register `ADD`/`SUB` for the i64
@@ -2643,6 +2786,14 @@ with an LLI instead of `ADDi`/`SUBi`.  Routing those through an
 `emitFoldableALU`-style helper (sharing the uimm16 fold logic with
 `emitCompare`, the way `emitSelectCC` does for select immediates)
 would close it.
+
+The zero half has the same gap: an i64 increment's upper word is
+`ADC hi, 0`, and selection materializes the zero with `mov rz, zero`
+instead of passing `R0` as the operand.  Every 64-bit counter bump
+therefore carries an `lli 1` and a `mov rz, zero` — 484 and 493
+kernel sites (2026-09-13), including `cpu_nsyscall` on every syscall,
+`cpu_nintr` and the `evcnt` counters on every interrupt, and the
+TCP/IP statistics; 25 more in `libsqlite3`.
 
 ## Compiler: redundant extension of comparison results
 
@@ -2888,6 +3039,9 @@ targets opt into are silently off.  Status per item:
   13.6% and store 12.4% are the top terms — the store half is the
   write-through cost (L2 write-back / write-buffer hardware items),
   not compiler-addressable.
+- **IRTranslator opt level — not passed.**  The translator is built
+  at `CodeGenOptLevel::None`, so no branch probabilities reach block
+  placement.  See "IRTranslator runs without branch probabilities".
 - **Pre-RA MachineScheduler** (`enableMachineScheduler`, default
   false): with GlobalISel there is *no* scheduling at all without it —
   instruction order is IR order.  GenericScheduler in in-order mode
@@ -2994,6 +3148,34 @@ Enablement plan:
    search found nothing under CSRCost).  Needs its own investigation;
    without it, shrink-wrapping only catches functions whose CSR
    pressure starts after the early exit.
+4. **Correctness blocker — flags live across the epilogue.**  Penumbra
+   implements neither `canUseAsPrologue` nor `canUseAsEpilogue`, so
+   the restore point can be a block that branches on flags set before
+   the epilogue.  `ADD sp, N` sets NZCV, and the branch then tests the
+   stack adjustment:
+
+   ```
+   cmp   r6, r2
+   ldw   lr, [sp + 0]      ; ... callee-saved reloads
+   add   sp, 16            ; overwrites the compare's flags
+   bge   .LBB0_5
+   ```
+
+   Produced by the force flag on a function with two early returns of
+   a comparison result; the 1607/1607 suite run above never reached
+   the shape.  X86 guards EFLAGS the same way
+   (`flagsNeedToBePreservedBeforeTheTerminators` in both hooks).
+   Penumbra needs the SR-liveness equivalent on both sides — `SUB sp,
+   N` sets flags too — before step 1.
+
+Where it pays, from the kernel/SQLite/Doom review: SQLite's
+`getCellInfo` cached path is 14 instructions and would be 4; Doom's
+BSP leaf visits (see the tail-call entry).  Doom's `R_PointOnSide`
+still saves 4 registers on its axis-aligned early exits under the
+force flag, which riscv32 shrink-wraps with 2 — 52 cycles per exit on
+penumbra1, 26 on penumbra2_5.  Not root-caused; the six returns
+sharing one return block, or `r5` used as scratch before the first
+early exit, are the suspects.
 
 ## Compiler: tail-call optimization — measured opportunity
 
@@ -3051,6 +3233,13 @@ Workload-shaped, unlike the broad spill win the Localizer captured:
   is unreasonably slow" entry).  Estimate: low single-digit % on
   call-overhead-bound benches (pbench syscall rows), not a
   Localizer-sized number.
+- **Recursive tree walks.**  Doom's `R_RenderBSPNode` pays its full
+  7-register frame on every leaf visit, which only masks the child
+  index and calls `R_Subsector`.  With tail calls and shrink-wrapping
+  a leaf is `test; bne; mask; b R_Subsector` — about 90 cycles less
+  per subsector on penumbra1, 50 on penumbra2_5.  SQLite's
+  `sqlite3BtreeNext` keeps a frame only to save `lr` around a
+  tail-position `bl`.
 - **Code size: ~−2K kernel instructions at the −1/site floor,
   ~−15–18 KB once free-wrapper frame removal counts** — helps the 1 KB
   direct-mapped gen1 I$ only where the wrapper text is hot.
@@ -3164,6 +3353,335 @@ loops).  The other ~40% sweeps the ~70-line Proc/loop text.
    text between hot functions.  Harmless to the cache (never fetched)
    but skews naive footprint reading; `--gc-sections` +
    `-ffunction-sections` would drop them.
+
+## Compiler: hot-path code review — kernel, SQLite and Doom
+
+Reviewed 2026-09-13: the `GENERIC.DEBUG` kernel, `libsqlite3` (PIC) and
+a Doom rebuild, all from the same compiler at the default tuning.
+Doom's hot functions came out the same under `-mcpu=penumbra1` apart
+from constant multiplies.  All counts are static disassembly scans by
+throwaway scripts.  Nothing is weighted by execution frequency yet;
+for Doom, the renderer counters of a `PERFCTR=1` run supply the
+weights.
+
+Compiler causes, widest reach first, each with its own entry:
+
+| Cause | Shows up in | Entry |
+|---|---|---|
+| No branch probabilities reach block placement | every `__predict_false`, KASSERT and cold path | "IRTranslator runs without branch probabilities" |
+| Countdown loop exits test a materialized overflow flag | Doom column and span drawers: 6 of 18 instructions per pixel | "countdown loop exits pay for an overflow flag" |
+| s64 relational compares | SQLite b-tree bisection and record compare | "64-bit relational compares expand to select diamonds" |
+| Compare immediates, TEST, inverted booleans | 848 / 612 / 274 / 140 sites | "compare and branch selection misses immediate and TEST forms" |
+| Byte and halfword sign-bit tests | SQLite varint bytes, BSP child index, `sy_narg` | "signed sub-word loads in relational compares miss LDBS/LDHS" |
+| Constants never rematerialized | 220 kernel loops; ~1,250 SQLite constant reloads | "constants are not rematerializable" |
+| `&global + C` built in the entry block; addresses hoisted into callee-saved registers | 1,282 SQLite sites; Doom BSP walk frame | "constant-offset global addresses stay in the entry block" |
+| `p - K` and integer MMIO addresses miss the offset fold | memmove backward loops; 187 driver sites | "pointer-minus-constant and integer MMIO addresses miss their folds" |
+| 64-bit counter increments | every syscall and interrupt | "selectAddSubCarry misses the immediate fold" |
+| A store between producer and compare | `KPREEMPT_ENABLE` on every `userret` | "compare-elim does not look through COPY" |
+
+Most of the frame cost belongs to the shrink-wrapping and tail-call
+entries.  Enabling shrink-wrapping has a correctness blocker, recorded
+as item 4 of its entry.
+
+### Tree walks
+
+Doom's BSP walk is the first tree-walking code studied here.  Its data
+access is already close to minimal — the node loads and `nodes[]`
+indexing leave nothing to take.  The cost per node is the call:
+
+- The recursion saves 7 callee-saved registers per level, leaves
+  included (tail-call and shrink-wrapping entries).
+- Early MachineLICM moves the `viewx`/`viewy` address loads into
+  callee-saved registers: two more saves per call (entry-block address
+  entry).
+- The `NF_SUBSECTOR` test on the i16 child index is 6 instructions for
+  a 2-instruction bit test (sub-word entry).
+- The near/far child order and early exits are laid out without
+  probabilities.
+- `R_PointOnSide` keeps its frame on its early exits, and `FixedMul`
+  and `R_PointToAngle` are calls into other files ("Doom: renderer
+  source-level costs").
+
+A tree walk needs cheaper calls more than better expression code: fewer
+saved registers, and recomputation preferred over a callee-saved
+register for anything one or two instructions long.
+
+### Smaller findings
+
+- **Pointer copy in scan loops.**  The `solidsegs` scans in
+  `R_CheckBBox`, `R_ClipSolidWallSegment` and `R_ClipPassWallSegment`
+  use the pointer after the loop, so the tied `ADD` needs a copy every
+  iteration: `mov; ldw; add; cmp; blt`, one instruction more than
+  necessary.  43 small loops in Doom.
+- **MachineCSE leaves same-block duplicates.**  `R_MapPlane`
+  recomputes `y << 2` for each parallel array.  On a MIR repro,
+  `-run-pass=machine-cse` merges duplicate address pseudos but not
+  `SHLi`, `NOT` or `LLIS`, even with `-aggressive-machine-cse`.  The
+  rejecting check is not identified yet (needs an assertions build).
+  17 Doom sites.
+- **Cancelling adds.**  `sqlite3VdbeExec`'s `jump_to_p2` does
+  `llis r7,-20; add` on the way in and `add r7,20` at the shared tail
+  (34 branches in); riscv32 does the same.  98 cancelling or mergeable
+  pairs in `libsqlite3` — a post-RA constant add merge would catch
+  them.
+- **Copy churn.**  75 `mov a,b; mov b,a` pairs at join points and 30
+  duplicate `LLI`s (`sqlite3VdbeSerialGet`: `lli r1,4; sth; lli r1,4`)
+  in `libsqlite3`.
+
+Checked and not levers:
+- SQLite's big-endian `get4byte` decode and its ×40 `aMem[]` scaling
+  are already minimal.
+- `pcache1` divides by a run-time `nHash`.
+- Doom's `(frac >> 16) & 127` column index is already minimal.
+- SQLite's VDBE dispatch — 13 instructions per opcode, including an
+  `STW` of `nVmStep` for lack of registers — is PIC jump-table cost
+  plus register pressure.  The bounds check could only go by padding
+  the table to 256 entries.
+
+Source-level findings from the same review are in "Kernel: source-level
+costs on the trap, syscall and driver paths" and "Doom: renderer
+source-level costs".
+
+## Kernel: source-level costs on the trap, syscall and driver paths
+
+Found in the hot-path code review (2026-09-13); none of these is a
+code-generation problem.
+
+- **`copyin`/`copyout` reload curlwp.**  `GET_PCB` in `copy.S` loads
+  `cpu_info_store.ci_curlwp` (`la` plus `ldw`, 3 instructions),
+  although R12 holds curlwp whenever kernel code runs;
+  `ldw reg, [r12 + L_PCB]` is one.  Both routines also save `r6` only
+  to hold `VM_MAXUSER_ADDR` for one compare, where the unused
+  caller-saved `r4` would do.
+- **`trap()` builds a 168-byte, 7-register frame on every trap.**  The
+  signal-delivery and fault-handling cases share the frame with the
+  common return path.  Moving them into `noinline` helpers leaves the
+  hot path a small frame.
+- **Trap entry saves registers twice.**  The vector stubs and
+  `_trap_common` park R1–R4 in PC-relative scratch memory, then copy
+  them into the trapframe — roughly 10 extra memory operations per
+  trap.  Whether the general path can save straight into the trapframe
+  or use the scratch SPRs, as the TLB-miss handler does, is the
+  question to answer first.
+- **No mutex stubs.**  `mutex.h` defines `__HAVE_SIMPLE_MUTEXES` but
+  not `__HAVE_MUTEX_STUBS`, so every `mutex_enter`/`mutex_exit` is a
+  call into MI `kern_mutex.c`.  A stub needs an atomic compare-and-swap
+  of its own, so measure the call's share before designing one.
+- **com(4) register access is an indirect call.**  MI `com.c` routes
+  every register read and write through the `cr_read`/`cr_write`
+  pointers `com_init_regs` installs.  That is the MI design; avoiding it
+  means a different UART driver, not an MD change.
+- **`pdisplay` scrolling reloads bases per cell.**  The row and column
+  copy and erase paths reload their base pointers for every character
+  cell: 10 instructions per cell where 6 do.  Hoisting them into
+  locals, as `b82fb4b0df29` did for Doom's column drawer, fixes it.
+
+## Doom: renderer source-level costs
+
+Found in the hot-path code review (2026-09-13).
+
+- **Span and low-detail drawers reload their globals per pixel.**
+  `R_DrawSpan`, `R_DrawSpanLow` and `R_DrawColumnLow` read their
+  colormap and source pointers through globals the byte store may
+  alias, so both are reloaded every pixel — 8 cycles on penumbra1, 2
+  on penumbra2_5.  `b82fb4b0df29` hoisted them into locals in
+  `R_DrawColumn` only.  With the countdown-exit fix as well, the span
+  loop goes from 23 instructions to 15.
+- **`RANGECHECK` is defined** (`doomdef.h`), adding 4–5
+  compare-and-branch pairs to every drawer call.
+- **Hot helpers are out of line in other files.**  `FixedMul`
+  (`m_fixed_penumbra.c`) is 5 instructions but always called: about 9
+  cycles of call overhead on penumbra2_5, as much as its `MUL`.
+  `SlopeDiv` and `R_PointToAngle` likewise.  `static inline`
+  definitions in a header remove it.
+- **BSP leaves recurse to learn that they are leaves.**
+  `R_RenderBSPNode` is entered for a subsector child only to test
+  `NF_SUBSECTOR` and call `R_Subsector`, paying the full frame.
+  Testing the flag in the parent before recursing removes a frame per
+  leaf, whatever the shrink-wrapping and tail-call work delivers.
+
+## Compiler: IRTranslator runs without branch probabilities
+
+`PenumbraPassConfig::addIRTranslator` constructs `new IRTranslator()`,
+whose opt level defaults to `CodeGenOptLevel::None`; RISC-V and
+AArch64 pass `getOptLevel()`.  At `None` the translator never requests
+`BranchProbabilityInfo`, so every conditional edge is recorded 50/50,
+and block placement has nothing to work with.  `__predict_false`,
+`__builtin_expect`, cold calls and loop-exit heuristics are all
+ignored.  The same probabilities order switch clusters and weight the
+`&&`/`||` branch splitting.
+
+```c
+if (__builtin_expect(x == 7, 0))
+  cold(x);
+return hot(y) + x;
+```
+
+compiles with the call to `cold` on the fall-through path and a taken
+`bne` around it.
+
+- **Kernel:** 5,339 `kern_assert` blocks — about 64K instructions, 9%
+  of text — sit on fall-through paths.  `trap()`'s `userret` tail is
+  about 115 instructions with 6 taken forward branches; with riscv32's
+  probabilities patched into the same MIR it lays out as 55 straight
+  instructions with one taken branch.
+- **SQLite:** VDBE handlers reach the dispatch through 2–5
+  unconditional branches, and slow paths fall through into the join —
+  `OP_Integer` is 23 instructions with 3 `b`.
+- **Doom:** the BSP walk's near/far child order and early exits.
+
+The fix is one line — `new IRTranslator(getOptLevel())` — but it moves
+blocks in every function.  Land it with a static size comparison and
+the full compiler suite, and measure on hardware: layout also moves
+I-cache placement, which the 1 KB direct-mapped gen1 cache can turn
+either way.
+
+## Compiler: countdown loop exits pay for an overflow flag
+
+`do { ... } while (count--)` loops — all eight Doom column and span
+drawers — end in eight instructions where two do:
+
+```
+lli r6,1; add r1,r6; mov r6,lr; adc r6,zero; lli r7,1; xor r6,r7; and r6,1; bne loop
+add r1,1; bne loop
+```
+
+`lr` holds a zero for the whole loop, and `r7` is an extra
+callee-saved register spent on the sequence.
+
+LSR turns the down-counter into an up-counter whose exit test is
+`iv + 1 == 0`.  CodeGenPrepare rewrites that test as
+`uadd.with.overflow`: Penumbra does not override
+`TargetLowering::shouldFormOverflowOp`, and the default accepts.
+Selection then materializes the carry as a value, inverts it through
+the `G_XOR` the IRTranslator emits for a fall-through true edge (see
+"compare and branch selection misses immediate and TEST forms"),
+masks it and tests it.  `llc -disable-cgp` gives `add r1,1; bne` and
+frees the callee-saved register.
+
+Cost: `R_DrawColumn`'s loop goes from 18 instructions per pixel to 12
+— 12 cycles on penumbra1, 6 on penumbra2_5.  The narrowest scan finds
+the same tail about 15 times in the kernel and 9 in `libsqlite3`.
+
+Fix, either or both:
+1. Override `shouldFormOverflowOp` to refuse `UADDO`.  The hook sees
+   only the opcode and type, so genuine overflow checks lose the form
+   too and select as an add plus an unsigned compare.
+2. Let `selectBrCond` branch directly on a `G_UADDO` carry in the same
+   block (`bcs`/`bcc`) instead of materializing it.  That also serves
+   genuine overflow checks.
+
+## Compiler: constants are not rematerializable
+
+`LLI` and `LLIS` (`PenumbraInstrInfo.td`) are not marked
+`isReMaterializable`, and a zero is selected as a generic `COPY $r0`,
+which the allocator cannot rematerialize either.  A constant live
+across a call or a loop gets a callee-saved register or a stack slot,
+never a recompute.
+
+- **Loop constants stay in loops.**  The Localizer sinks a constant to
+  its use block, and EarlyMachineLICM hoists a cheap instruction only
+  if it is rematerializable, so the constant is rebuilt every
+  iteration; riscv32 hoists the same constants.  220 kernel loops,
+  including `pmci_burst`'s idle fill: 2 of its 14 cycles per byte on
+  penumbra1 (about 3% of an SD block; see "SD read throughput is
+  bottlenecked by pmci_burst byte-PIO").
+- **Constants in stack slots.**  `sqlite3VdbeExec` keeps `rc = 0` in a
+  slot reloaded 218 times and `1` in one reloaded 61 times.
+  `libsqlite3` has at least 1,250 constant reloads (939 of them zero)
+  and 609 spill stores.  The Localizer adds to it: a constant feeding
+  more than two phi edges is not localized (`PhiThreshold = 2`,
+  upstream "FIXME: Tune this more"), so the VDBE's zero becomes one
+  function-wide value.
+- **Constants and cheap derived values in callee-saved registers.**
+  In Doom's `R_RenderBSPNode`, `side ^ 1` and `bsp + 48` each hold a
+  callee-saved register; `solidsegs + 4` and `+ 256` do the same in
+  `R_CheckBBox`, `R_AddLine` and `R_Subsector`, because an `ADDi` on
+  the address pseudo is not trivially rematerializable.  The address
+  case belongs to layer 3 of "G_GLOBAL_VALUE materialization defeats
+  CSE and rematerialization".
+
+Fix:
+1. Mark `LLI`/`LLIS` rematerializable.
+2. Select zero into a form the allocator can rematerialize — a
+   `MOV rd, R0` that `isReMaterializableImpl` accepts, the way RISC-V
+   accepts `ADDI rd, x0, imm`.
+3. Full 32-bit constants: `LUI` reads its destination, so `LLI; LUI`
+   is a two-instruction chain that remat cannot copy.  It needs a
+   single-def `PseudoLI` expanded after register allocation, like
+   `PseudoMOVADDR`.
+
+How aggressively the allocator uses remat is per-core policy — see
+"Remat aggressiveness is per-microarchitecture, not a pseudo flag".
+
+## Compiler: constant-offset global addresses stay in the entry block
+
+For `&global + C` the IRTranslator emits `G_GLOBAL_VALUE` and a
+constant `G_PTR_ADD` in the entry block.  The Localizer moves an
+instruction to its use block only if `shouldLocalize` accepts it;
+Penumbra does not override the hook, the default rejects `G_PTR_ADD`,
+and a global whose only use is that add stays behind with it.  The
+address is then computed on every call, held in a callee-saved
+register or a stack slot, and it blocks shrink-wrapping.  AArch64
+overrides `shouldLocalize` to accept `G_PTR_ADD` for exactly this
+("Need to localize G_PTR_ADD so that G_GLOBAL_VALUE can be localized
+too").
+
+Reach in `libsqlite3` (2026-09-13): 1,282 entry-block address
+materializations in 696 functions.
+- The worst are error-path strings: the corruption-logging string
+  (`.L.str + 20`) is built in the entry block of 76 functions,
+  including `btreeNext`, `moveToRoot`, `getPageNormal`,
+  `accessPayload`, `sqlite3BtreeMovetoUnpacked` and
+  `sqlite3VdbeRecordCompare*`.
+- `btreeNext` spends 10 instructions and three callee-saved save and
+  restore pairs on three addresses.
+- `sqlite3VdbeExec` stores four to the stack on every call and reloads
+  them 42 times.
+
+On a reduced repro the fast path is 21 instructions now, 12 with the
+add moved to its use block, and 4 on riscv32.
+
+A second route to the same result: **early MachineLICM hoists global
+addresses** out of a loop containing calls, and the allocator keeps
+them in callee-saved registers instead of recomputing them after each
+call.  Doom's `R_RenderBSPNode` hoists `@viewx`/`@viewy` out of its
+far-child loop (3 calls).  With `-disable-machine-licm` the frame
+shrinks from 28 to 20 bytes and the saves from 7 to 5 — 24 cycles per
+call on penumbra1, 12 on penumbra2_5.  riscv32 does the same, but its
+stores are not write-through.  The allocator takes the trade because a
+callee-saved register's first use costs it nothing (see item 3 of
+"enable shrink-wrapping").
+
+## Compiler: pointer-minus-constant and integer MMIO addresses miss their folds
+
+- **`p - K`.**  `G_PTR_ADD p, -K` selects as `LLIS t,-K; ADD p,t`, often
+  with a `MOV`.  `ADDi`/`SUBi` take a zero-extended immediate, and
+  `penumbra_neg_imm_to_opposite` rewrites only `G_ADD`/`G_SUB`.  322
+  kernel sites (2026-09-13).  The hot ones are the backward loops of
+  the C `memmove` from `lib/kern`.  A reduced copy of its byte loop is
+  10 instructions per iteration where 6 do:
+
+  ```
+  mov r4,r1; mov r11,r2; ldb r2,[r11+0]; llis r1,-1; add r1,r4
+  stb r2,[r4+-1]; llis r2,-1; add r2,r11; sub r3,1; bne
+  ```
+
+  The fix is the pointer analogue of the existing rule: select a
+  `G_PTR_ADD` by a negative constant whose negation fits uimm16 as
+  `SUBi`, or rewrite it through the integer subtract that
+  `penumbra_ptr_add_neg_to_sub` already builds.
+- **MMIO addresses built as integers.**  `bus_space_read_*` and
+  `bus_space_write_*` (`bus_funcs.h`) add the handle and offset as
+  integers and cast the sum, so the load sees
+  `G_INTTOPTR(G_ADD h, C)`.  `selectAddrRegImm` looks only through
+  `G_PTR_ADD` and frame indices, giving `ADDi; LDW [r+0]` — plus a
+  `MOV` when `h` stays live — where `LDW [h+C]` does it.  187 kernel
+  sites, 76 of them with the `MOV`, mostly in `pmci`, `pdisplay`,
+  `pusbhc` and `paudio`.  Either look through
+  `G_INTTOPTR(G_ADD x, C)` at selection, or do the macros' arithmetic
+  on a `char *` — `bus_funcs.h` is MD code.  RISC-V's GlobalISel has
+  the same selection gap.
 
 ## Compiler: G_GLOBAL_VALUE materialization defeats CSE and rematerialization
 
