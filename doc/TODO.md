@@ -2774,6 +2774,31 @@ None of these produce wrong code.
 - **Narrow signed divide sequences carry redundant sign extensions.**
   The widened high-half product is sign-extended from its doubled width
   although it already fits, e.g. in `sdiv i8 %x, -3`.
+- **A subtracting decomposition pays two copies, not one.**  The rule
+  charges a subtract one copy, but the emitted sequence copies the
+  multiplicand to a scratch, builds the shifted term there, subtracts,
+  and copies the result back: `x * 7` is `mov r2, r1; shl r2, 3;
+  sub r2, r1; mov r1, r2`.  Shifting in place instead — `mov r2, r1;
+  shl r1, 3; sub r1, r2` — is three instructions, the same as the
+  adding form `x * 5`.  Every `2^n - 1` shape and negative constant
+  carries the extra copy (`* 7`, `* 240`, `* 255`, `* -80`).  Whether
+  it belongs to the rule's operand order or to the two-address tie
+  choice is not established.
+- **Products of short factors are not factored.**  The rule considers
+  the constant's binary expansion and its non-adjacent form, never a
+  product of smaller decompositions.  `x * 0x01010101` is emitted as
+  three shifted copies summed onto the multiplicand, 8 instructions;
+  as `257 * 65537` it is `t = x + (x << 8); t + (t << 16)`, 6.  That
+  constant is the common one in 8bpp code — a four-pixel word from one
+  colour index — so a loop that cannot hoist the product pays two
+  instructions per word.
+- **The signed power-of-two remainder clears bits the long way.**
+  `penumbra_srem_pow2` rounds the biased dividend down with `SAR` then
+  `SHL`, because `-2^k` does not fit the uimm16 `ANDi` takes: 7
+  instructions for `x % 8`.  Masking the remainder out instead keeps
+  the bias live and needs `2^k - 1`, which fits for `k <= 16` —
+  `((x + bias) & (2^k - 1)) - bias`, 6 instructions, and identical to C
+  truncation for every `s32` including `INT_MIN`.
 
 ### Cost model
 
