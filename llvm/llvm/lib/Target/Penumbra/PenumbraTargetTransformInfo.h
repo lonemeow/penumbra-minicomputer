@@ -94,6 +94,10 @@ public:
   // prefer multiply-shaped canonical forms.  InstCombine will, for
   // instance, rewrite a provably-disjoint `x | x<<8 | x<<16 | x<<24` into
   // `x * 0x01010101`, trading four ALU ops for a multi-cycle operation.
+  //
+  // The base model's unit is one basic instruction, which on Penumbra is an
+  // ALU operation, so a multiply or divide is priced in ALU operations: its
+  // cycles over an ALU operation's, rounded up.
   InstructionCost getArithmeticInstrCost(
       unsigned Opcode, Type *Ty, TTI::TargetCostKind CostKind,
       TTI::OperandValueInfo Op1Info = {TTI::OK_AnyValue, TTI::OP_None},
@@ -107,13 +111,13 @@ public:
       unsigned Cycles = 0;
       switch (Opcode) {
       case Instruction::Mul:
-        Cycles = ST->getMulCycles();
+        Cycles = divideCeil(ST->getMulCycles(), ST->getALUCycles());
         break;
       case Instruction::SDiv:
       case Instruction::UDiv:
       case Instruction::SRem:
       case Instruction::URem:
-        Cycles = ST->getDivCycles();
+        Cycles = divideCeil(ST->getDivCycles(), ST->getALUCycles());
         break;
       default:
         break;

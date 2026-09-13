@@ -223,9 +223,21 @@ def memoffset16 : Operand<i32> {
 def AddrRegImm : ComplexPattern<iPTR, 2, "SelectAddrRegImm">;
 
 //===----------------------------------------------------------------------===//
+// Scheduling classes
+//===----------------------------------------------------------------------===//
+
+// Each core's scheduling model (Penumbra.td) states a latency for these: the
+// cycles an instruction of the class holds that core.  The figures and their
+// derivation are in doc/internals/instruction-timing.md.
+def WriteALU : SchedWrite;
+def WriteMul : SchedWrite;
+def WriteDiv : SchedWrite;
+
+//===----------------------------------------------------------------------===//
 // ALU instructions (Format R, prefix=00, op 0-11)
 //===----------------------------------------------------------------------===//
 
+let SchedRW = [WriteALU] in {
 let Defs = [SR], Constraints = "$Rd = $Rd_in" in {
   // 2-operand destructive: Rd = Rd op Rs.  All operands use GPR (full
   // class including R0, R12, R14, R15); the register allocator honours
@@ -282,6 +294,7 @@ let F = 1, isCompare = 1 in {
                        "test\t$Rd, $Rs">;
   }
 }
+} // SchedRW = [WriteALU]
 
 //===----------------------------------------------------------------------===//
 // Multiply / divide (Format R, op 16-19) — the multi-cycle peer unit
@@ -293,13 +306,7 @@ let F = 1, isCompare = 1 in {
 // result form with Rdh fixed to R0 (high half / remainder discarded by the
 // hardware), and a "_P" pair form with an explicit Rdh.  The assembler tells
 // them apart by operand count; the disassembler by Inst[15:12] == 0.
-//
-// WriteMul and WriteDiv name the operations each core's scheduling model
-// states a latency for (Penumbra.td).
 //===----------------------------------------------------------------------===//
-
-def WriteMul : SchedWrite;
-def WriteDiv : SchedWrite;
 
 let Defs = [SR], hasSideEffects = 0 in {
   // Single-result forms: Rdh fixed to R0, low half / quotient only.
@@ -351,6 +358,7 @@ let Defs = [SR], hasSideEffects = 0 in {
 // Immediate instructions (Format L, prefix=01)
 //===----------------------------------------------------------------------===//
 
+let SchedRW = [WriteALU] in {
 def LLI  : FormatL<0b0000, (outs GPR:$Rd), (ins imm16op:$imm16),
                    "lli\t$Rd, $imm16">;
 def LLIS : FormatL<0b0001, (outs GPR:$Rd), (ins simm16op:$imm16),
@@ -386,6 +394,7 @@ let Defs = [SR] in {
                        "sar\t$Rd, $imm16">;
   }
 }
+} // SchedRW = [WriteALU]
 
 //===----------------------------------------------------------------------===//
 // Memory instructions (Format M, prefix=10)

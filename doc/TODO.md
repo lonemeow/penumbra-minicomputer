@@ -3690,6 +3690,21 @@ most-used variant's side once a second model exists, so a generic
 build schedules for a forwarding core; an interlocked or single-issue
 core that wants its own schedule is built with its explicit name.
 
+**gen2's dependency cost is not modelled.**  gen2 and gen2.5 share one
+scheduling model that states only instruction latencies, so cost
+decisions price gen2 as if it forwarded.  On gen2 a consumer waits for
+its producer to leave WB: 3 stall cycles at distance 1, fewer further
+back ([hazard-model.md](internals/penumbra2/hazard-model.md), Example
+A).  A shift/add chain is the worst case, since every op reads the one
+before it.  LLVM's scheduling vocabulary has pipeline-oriented pieces —
+a negative `ReadAdvance` for a consumer that reads late, a producer
+list on `ReadAdvance` for bypass paths, `MicroOpBufferSize`, the
+`PostRAScheduler` — but a `ReadAdvance` cannot see producer distance,
+so it would charge every dependent read the distance-1 stall.  Work
+out how LLVM expects an interlocked pipeline to be described, and
+whether any consumer (the scheduler, `MachineCombiner`, a target cost
+query) would act on it, before giving gen2 a model of its own.
+
 ### Other consumers waiting on a feature
 
 - **Multiply cost — landed, as model latencies rather than a

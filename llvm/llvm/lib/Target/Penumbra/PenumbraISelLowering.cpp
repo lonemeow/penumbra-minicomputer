@@ -184,7 +184,8 @@ bool PenumbraISelLowering::isIntDivCheap(EVT VT, AttributeList Attr) const {
     return true;
 
   // The worst-case rewrite is two multiplies and a few ALU ops.
-  unsigned RewriteCycles = Subtarget.getMulCycles() * 2 + 5;
+  unsigned RewriteCycles =
+      Subtarget.getMulCycles() * 2 + Subtarget.getALUCycles() * 5;
   return Subtarget.getDivCycles() <= RewriteCycles;
 }
 

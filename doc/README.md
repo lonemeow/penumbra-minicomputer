@@ -68,6 +68,7 @@ subdirectory owns its realization.
 *   **[CPU-Internal Bus](./internals/cpu-bus.md)** — Contracts inside `cpu_core` (core ↔ MMU ↔ caches ↔ private sysreg devices) that both cores satisfy.
 *   **[MMU Internals](./internals/mmu-internals.md)** — TLB hardware structure, discrete-logic mapping, and the VIPT L1 alias-free invariant.
 *   **[MUL/DIV Unit (divmul)](./internals/divmul.md)** — The shared multiply/divide peer unit: algorithm, handshake, datapath, and discrete chip-count.
+*   **[Instruction Timing by Core](./internals/instruction-timing.md)** — Measured cycles per instruction on each core, where they go, dependency stalls, and how the compiler's scheduling models use them.
 *   **[L2 Cache](./internals/l2-cache.md)** — Design plan and phase status for the optional unified L2 cache (currently write-invalidate-on-hit; write-back is a planned phase) between `cpu_core.o_mem_*` and the system bus.
 *   **[SDRAM Controller v2](./internals/sdram-controller.md)** — Design plan for the rewrite (composable, dual-domain, 100 MHz CL2).
 *   **[SDRAM Optimization](./internals/sdram-optimization.md)** — Controller strategies for bandwidth improvement.

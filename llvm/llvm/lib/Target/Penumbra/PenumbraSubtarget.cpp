@@ -54,16 +54,20 @@ PenumbraSubtarget::PenumbraSubtarget(const Triple &TT, StringRef CPU,
       static_cast<const PenumbraTargetMachine &>(TM), *this, RegBankInfo));
 }
 
-// Every Penumbra scheduling model states MUL and DIV latencies, and the models
-// are otherwise incomplete, so a missing entry reads back as zero cycles —
-// a free multiply.  Fail instead of pricing it that way.
+// Every Penumbra scheduling model states ALU, MUL and DIV latencies, and the
+// models are otherwise incomplete, so a missing entry reads back as zero
+// cycles — a free operation.  Fail instead of pricing it that way.
 static unsigned getModelCycles(const PenumbraSubtarget &STI, unsigned Opcode) {
   unsigned SchedClass = STI.getInstrInfo()->get(Opcode).getSchedClass();
   int Cycles = STI.getSchedModel().computeInstrLatency(STI, SchedClass);
   if (Cycles <= 0)
     reportFatalInternalError("Penumbra scheduling model states no latency for "
-                             "a divmul instruction");
+                             "a costed instruction class");
   return Cycles;
+}
+
+unsigned PenumbraSubtarget::getALUCycles() const {
+  return getModelCycles(*this, Penumbra::ADD);
 }
 
 unsigned PenumbraSubtarget::getMulCycles() const {

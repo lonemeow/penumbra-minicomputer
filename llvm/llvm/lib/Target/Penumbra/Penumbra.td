@@ -76,17 +76,22 @@ class PenumbraSchedModel : SchedMachineModel {
   let CompleteModel = 0;         // Don't require itineraries for every opcode
 }
 
-// MUL and DIV run on the sequential divmul unit and hold the core for these
-// cycle counts.  PenumbraSubtarget reads them back for cost decisions, so
-// every model must state both.
+// Each model states the whole-instruction cycles an ALU operation, a multiply
+// and a divide hold its core, as measured on the RTL
+// (doc/internals/instruction-timing.md).  PenumbraSubtarget reads them back
+// for cost decisions, so every model must state all three.
 def Penumbra1Model : PenumbraSchedModel;
 let SchedModel = Penumbra1Model in {
-  def : WriteRes<WriteMul, []> { let Latency = 34; }
-  def : WriteRes<WriteDiv, []> { let Latency = 34; }
+  def : WriteRes<WriteALU, []> { let Latency = 2; }
+  def : WriteRes<WriteMul, []> { let Latency = 37; }
+  def : WriteRes<WriteDiv, []> { let Latency = 37; }
 }
 
+// Penumbra/2 and Penumbra/2.5 differ in how long a consumer waits for its
+// producer, which no model here states; their instruction latencies match.
 def Penumbra2Model : PenumbraSchedModel;
 let SchedModel = Penumbra2Model in {
+  def : WriteRes<WriteALU, []> { let Latency = 1; }
   def : WriteRes<WriteMul, []> { let Latency = 10; }
   def : WriteRes<WriteDiv, []> { let Latency = 34; }
 }

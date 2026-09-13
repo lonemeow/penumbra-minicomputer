@@ -81,8 +81,10 @@ public:
   bool GETTER() const { return ATTRIBUTE; }
 #include "PenumbraGenSubtargetInfo.inc"
 
-  // Cycles a MUL or DIV holds the core, as the tuned core's scheduling model
-  // states them.  Cost decisions weigh a multiply or divide by these.
+  // Whole-instruction cycles an ALU operation, a MUL and a DIV hold the core,
+  // as the tuned core's scheduling model states them.  Cost decisions weigh
+  // operations by these.
+  unsigned getALUCycles() const;
   unsigned getMulCycles() const;
   unsigned getDivCycles() const;
 
