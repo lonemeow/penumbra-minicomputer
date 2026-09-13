@@ -3755,6 +3755,33 @@ change this function.
   on a `char *` — `bus_funcs.h` is MD code.  RISC-V's GlobalISel has
   the same selection gap.
 
+## Compiler: InstCombine's shift-and-mask form costs a constant
+
+InstCombine canonicalizes `(x >> C1) << C2` with `C1 > C2` into one
+shift and a mask, `(x >> (C1 - C2)) & -(1 << C2)`.  On x86 and AArch64
+the mask is a single instruction.  Penumbra's `ANDi` takes a
+zero-extended 16-bit immediate, so a mask of high ones becomes
+`llis t, -(1 << C2); and t, x`: two instructions and a scratch
+register where a second shift is one.
+
+Found in the fractal demos (2026-09-13).  `qmul(zr, zi) * 2` —
+`trunc((a * b) >> 28) << 1` — came out as `lshr i64 %p, 27`, `trunc`,
+`and i32 %t, -2`: five instructions per iteration after i64 narrowing,
+where `shr lo, 28; shl hi, 4; or; add x, x` is four, in a loop with no
+free register for the constant.  The demos now write 2ab as one shift
+(`qmul2`) and no longer show it.
+
+Fix: a Penumbra combine rewriting `G_AND (G_LSHR y, c), -(1 << k)`,
+also through a `G_TRUNC`, into `G_SHL (G_LSHR y, c + k), k` when the
+mask does not fit the immediate.
+
+The mask on its own is far more common and a different trade.  A
+static scan (2026-09-13) finds `llis -2^k; and` 325 times in the kernel,
+128 in `libsqlite3` and 11 in Doom, almost none right after a shift —
+round-down alignment masks.  `shr x, k; shl x, k` matches their
+instruction count and frees the scratch register, but overwrites `x`,
+so it only wins where `x` is dead afterwards.
+
 ## Compiler: G_GLOBAL_VALUE materialization defeats CSE and rematerialization
 
 `PenumbraInstructionSelector` lowers `G_GLOBAL_VALUE` (and the
