@@ -292,7 +292,8 @@ bound regardless.
 **Consequences.**
 
 - Branch flush penalty is **3 bubbles** (IF1, IF2, ID after a taken
-  branch — see [Decision 5](#5-branch-resolution-policy)).
+  branch — see [Decision 5](#5-branch-resolution-policy); four as
+  built, per the note there).
 - Load-use distance is **4 cycles** (load completes WB 1 cycle later
   than ALU due to MEM-STALL; dependent ALU op stalls 4 cycles in ID
   under pure-stall, see [Decision 4](#4-hazard-handling-strategy)).
@@ -487,6 +488,19 @@ binding CPI factor for gen2.
   that path would have fired it the same cycle EX already resolves the
   branch, saving zero cycles. The gen2.5 landing history and
   per-feature measurements live in [doc/TODO.md](../../TODO.md).)
+
+> **Note — the flush as built.** The two-entry fetch buffer later placed
+> between IF2 and ID, to keep a back-end stall off the fetch enable,
+> holds a wrong-path instruction of its own. On both gen2 and gen2.5
+> every redirect from EX — a taken or mispredicted branch, `JMP`, a
+> return, ERET — therefore discards four slots: IF1, IF2, the fetch
+> buffer and ID. The gen2.5 BTB steers IF1 as a predicted branch enters
+> IF2, so a correct prediction still discards the sequential fetch IF1
+> launched alongside it: one slot, not zero. The figures in this
+> decision record the pipeline as decided;
+> [pipeline-stages.md](./pipeline-stages.md#flush-sources) and
+> [instruction-timing.md](../instruction-timing.md#control-transfers-on-penumbra25)
+> describe it as built.
 
 **Alternatives considered.** B-format early-resolve in ID (rejected
 for gen2: requires a 1-bit flag-forwarding path from EX, which violates
@@ -1149,7 +1163,8 @@ cost where it matters:
 - **Pipeline is 6 stages** (IF1/IF2/ID/EX/MEM/WB) — see
   [Decision 3](#3-pipeline-stage-count-and-shape).
 - **Branch flush penalty: 3 bubbles** (IF1/IF2/ID) — see
-  [Decision 5](#5-branch-resolution-policy).
+  [Decision 5](#5-branch-resolution-policy); four as built, per the
+  note there.
 - **Load-use distance: 4 cycles** under pure-stall (load completes
   WB 1 cycle later than ALU due to MEM-STALL; dependent ALU stalls
   4 cycles in ID) — see [Decision 4](#4-hazard-handling-strategy).

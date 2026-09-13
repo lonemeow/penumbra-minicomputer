@@ -90,6 +90,7 @@ flowchart LR
   IF1IF2[/IF1/IF2 register/]
   IF2[IF2<br/>BRAM + TLB outputs available<br/>Tag compare + permission<br/>Fault detection]
   IF2ID[/IF2/ID register/]
+  FBUF[/Fetch buffer<br/>2-entry FIFO, +1 cycle/]
   ID[ID<br/>Decoder + scoreboard<br/>Regfile read]
   IDEX[/ID/EX register/]
   EX[EX<br/>ALU + flag compute<br/>Branch resolve<br/>Drain-commit FSM<br/>divmul start/busy]
@@ -98,11 +99,12 @@ flowchart LR
   MEMWB[/MEM/WB register/]
   WB[WB<br/>Regfile write 2 ports<br/>SR/SPR write<br/>Scoreboard clear]
 
-  PCREG --> IF1 --> IF1IF2 --> IF2 --> IF2ID --> ID --> IDEX --> EX --> EXMEM --> MEM --> MEMWB --> WB
+  PCREG --> IF1 --> IF1IF2 --> IF2 --> IF2ID --> FBUF --> ID --> IDEX --> EX --> EXMEM --> MEM --> MEMWB --> WB
   EX -. taken-branch redirect .-> PCREG
-  EX -. flush IF1/IF2/ID .-> IF1
-  EX -. flush IF1/IF2/ID .-> IF2
-  EX -. flush IF1/IF2/ID .-> ID
+  EX -. flush IF1/IF2/FB/ID .-> IF1
+  EX -. flush IF1/IF2/FB/ID .-> IF2
+  EX -. flush IF1/IF2/FB/ID .-> FBUF
+  EX -. flush IF1/IF2/FB/ID .-> ID
   WB -. PC redirect on save-state .-> PCREG
 ```
 
@@ -201,6 +203,15 @@ start of the next. The IF1/IF2 register is new — its purpose is to
 carry PC and next_PC from IF1 to IF2 so the cache and TLB accesses
 (both registered at the IF1→IF2 edge) can resolve and be combined
 in IF2.
+
+ID reads the IF2/ID register through a two-entry **fetch buffer**
+(`penumbra2_fetch_buffer`), an elastic FIFO with registered storage: a
+slot IF2 writes is presented to ID the following cycle, so every
+instruction spends one cycle in the buffer between IF2 and ID. IF2
+back-pressures on the buffer's registered ready rather than on ID's
+stall, which keeps a back-end stall off the fetch enable. The buffer
+holds a wrong-path instruction like any front-end stage, so every
+front-end flush empties it along with IF1 and IF2.
 
 ### ID — Instruction Decode
 
@@ -478,9 +489,9 @@ instructions that haven't yet committed.
 
 | Source | Stage origin | Stages flushed | Reference |
 |--------|--------------|-----------------|-----------|
-| Taken branch | EX | IF1, IF2, ID (**3-bubble flush**) | [Decision 5](./design-decisions.md#5-branch-resolution-policy) |
-| ERET drain-commit | EX | IF1, IF2, ID (also commits SR/PC; MEM/WB drained before commit) | [Decision 9](./design-decisions.md#9-drain-commit-primitive) |
-| Fault commit at WB | WB | IF1, IF2, ID, EX, MEM (whatever is still in flight younger than the faulting insn) | [exception-flow.md](./exception-flow.md) |
+| Taken branch | EX | IF1, IF2, fetch buffer, ID (**4-slot flush**) | [Decision 5](./design-decisions.md#5-branch-resolution-policy) |
+| ERET drain-commit | EX | IF1, IF2, fetch buffer, ID (also commits SR/PC; MEM/WB drained before commit) | [Decision 9](./design-decisions.md#9-drain-commit-primitive) |
+| Fault commit at WB | WB | IF1, IF2, fetch buffer, ID, EX, MEM (whatever is still in flight younger than the faulting insn) | [exception-flow.md](./exception-flow.md) |
 | Vector-fetch redirect | IF1 | (no flush — the FSM redirects PC, downstream stages are already empty from the drain) | [exception-flow.md](./exception-flow.md) |
 
 ## Stall propagation policy
@@ -551,7 +562,10 @@ being flushed, the output register is set to bubble (`valid = 0`).
 Notation: each table column is one clock cycle. Each row shows the
 contents of one pipeline stage at the start of that cycle (i.e.,
 the instruction that just arrived from the preceding pipeline
-register). Stall and flush effects are annotated.
+register). Stall and flush effects are annotated. Only Example 3 shows
+the fetch buffer: it delays every instruction's arrival in ID by the
+same one cycle, so it changes no stall or drain behaviour from ID
+onward, only how many slots a front-end flush discards.
 
 ### Example 1: scoreboard RAW stall on independent ALU pair
 
@@ -589,34 +603,38 @@ BEQ does **not** stall: NZCV is forwarded, not scoreboarded
 ([Decision 12](./design-decisions.md#12-nzcv-flag-forwarding)). BEQ
 issues the cycle after CMP; when BEQ reaches EX the CMP is in MEM, and
 the MEM→EX flag bypass feeds CMP's flags to BEQ's condition check — the
-flag dependency costs 0 cycles. If BEQ resolves taken, the **3-bubble
-flush** (IF1/IF2/ID) still applies; that is the branch *control*
-hazard ([Decision 5](./design-decisions.md#5-branch-resolution-policy)),
+flag dependency costs 0 cycles. If BEQ resolves taken, the **4-slot
+flush** (IF1/IF2/fetch buffer/ID) still applies; that is the branch
+*control* hazard
+([Decision 5](./design-decisions.md#5-branch-resolution-policy)),
 independent of the now-eliminated flag data hazard.
 
 ### Example 3: taken branch with flush
 
 ```
 B  label         ; unconditional branch
-addX             ; never executed (no delay-slot ISA)
+addW             ; never executed (no delay-slot ISA)
+addX             ; never executed
 addY             ; never executed
 addZ             ; never executed
 label: ...
 ```
 
-| Cycle | IF1 | IF2 | ID | EX | MEM | WB | Notes |
-|-------|-----|-----|----|------|------|------|-------|
-| 1 | B | — | — | — | — | — | |
-| 2 | addX | B | — | — | — | — | |
-| 3 | addY | addX | B | — | — | — | |
-| 4 | addZ | addY | addX | B | — | — | B in EX; computes target, asserts taken + flush to IF1/IF2/ID |
-| 5 | label[0] | bubble | bubble | bubble | B | — | IF1 redirected; IF2, ID, EX bubbled |
-| 6 | label[1] | label[0] | bubble | bubble | bubble | B | |
-| 7 | label[2] | label[1] | label[0] | bubble | bubble | bubble | |
+| Cycle | IF1 | IF2 | FB | ID | EX | MEM | WB | Notes |
+|-------|-----|-----|----|----|------|------|------|-------|
+| 1 | B | — | — | — | — | — | — | |
+| 2 | addW | B | — | — | — | — | — | |
+| 3 | addX | addW | B | — | — | — | — | |
+| 4 | addY | addX | addW | B | — | — | — | |
+| 5 | addZ | addY | addX | addW | B | — | — | B in EX; computes target, asserts taken + flush to IF1/IF2/FB/ID |
+| 6 | label[0] | bubble | bubble | bubble | bubble | B | — | IF1 redirected; IF2, FB, ID, EX bubbled |
+| 7 | label[1] | label[0] | bubble | bubble | bubble | bubble | B | |
+| 8 | label[2] | label[1] | label[0] | bubble | bubble | bubble | bubble | |
+| 9 | label[3] | label[2] | label[1] | label[0] | bubble | bubble | bubble | |
 
-Taken branch penalty: **3 bubble cycles** (addX, addY, addZ
-flushed in IF2, ID, EX positions). Grew from 2 in the
-originally-planned 5-stage pipeline due to the IF split (Decision 3).
+Taken branch penalty: **4 bubble cycles** (addW, addX, addY, addZ
+flushed in the ID, FB, IF2 and IF1 positions). A 5-stage pipeline would
+pay 2; the IF split (Decision 3) and the fetch buffer add one each.
 
 ### Example 4: load with cache-hit STALL, then ALU pass-through
 
@@ -703,11 +721,12 @@ ERET             ; return
 | 4 | next2 | next | ERET | WRSPR | — | — | ERET issued (decoded as drain-commit) |
 | 5 | (stall) | (stall) | (stall) | ERET (drain) | WRSPR (pass-through) | — | ERET in EX, asserts drain-commit; upstream stalled |
 | 6 | (stall) | (stall) | (stall) | ERET (drain) | bubble | WRSPR | WRSPR commits EPC; scoreboard[EPC] set |
-| 7 | (flush) | (flush) | (flush) | ERET commits | bubble | bubble | MEM/WB drained; ERET commits: SR ← ESR, PC ← EPC, flush IF1/IF2/ID |
+| 7 | (flush) | (flush) | (flush) | ERET commits | bubble | bubble | MEM/WB drained; ERET commits: SR ← ESR, PC ← EPC, flush IF1/IF2/fetch buffer/ID |
 | 8 | EPC[0] | bubble | bubble | bubble | bubble | bubble | New fetch at EPC |
 
-Total ERET cost: ~3 cycles in EX (drain + commit), 3 flushed
-upstream. Per syscall-return / IRQ-return; not hot path.
+Total ERET cost: ~3 cycles in EX (drain + commit), 4 flushed
+upstream (IF1, IF2, the fetch buffer, ID). Per syscall-return /
+IRQ-return; not hot path.
 
 ## Cross-references
 

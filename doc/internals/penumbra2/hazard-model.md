@@ -676,7 +676,7 @@ BEQ target       ; (2) reads NZCV
 | 4 | — | — | BEQ | CMP | — | — | BEQ issues with **no stall** |
 | 5 | — | — | — | BEQ | CMP | — | BEQ in EX, CMP in MEM → MEM→EX bypass feeds CMP's flags to BEQ |
 
-BEQ resolves in EX against the forwarded flags. (If taken, the 3-bubble
+BEQ resolves in EX against the forwarded flags. (If taken, the 4-slot
 flush still applies — that is the branch *control* hazard
 ([Decision 5](./design-decisions.md#5-branch-resolution-policy)), not
 the flag *data* hazard, which forwarding has eliminated.)
@@ -747,7 +747,7 @@ When the precise-exception machinery commits a fault at WB
 (see [exception-flow.md](./exception-flow.md)), it triggers:
 
 1. A **fault-commit flush** of every younger in-flight insn
-   (IF1, IF2, ID, EX, MEM).
+   (IF1, IF2, the fetch buffer, ID, EX, MEM).
 2. A **one-cycle save-state pulse**: direct flop writes of
    `EPC ← faulting_PC`, `ESR ← SR`, with `SR.S ← 1` and
    `SR.I ← 0`. R14 banks to SSP.
