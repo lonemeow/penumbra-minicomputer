@@ -17,10 +17,14 @@ void rt_main(uint32_t bootdata)
     rt_mem_init(bootdata);
     rt_timer_init();
     rt_display_init(bootdata);
+    rt_audio_init(bootdata);
 
     rt_puts("  timer ");
     rt_print_uint(rt_tick_hz());
-    rt_puts(" Hz\r\n  running\r\n");
+    rt_puts(" Hz\r\n");
+
+    rt_puts(rt_music_start() ? "  music playing\r\n"
+                             : "  no song linked (build with MOD=<file>)\r\n");
 
     rt_run(parts, (int)(sizeof(parts) / sizeof(parts[0])));
 

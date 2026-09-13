@@ -62,6 +62,14 @@ volatile uint32_t *rt_cells(void);         /* RT_TEXT_W * RT_TEXT_H */
 #define RT_CELL(glyph, fg, bg) \
     ((uint32_t)(glyph) | ((uint32_t)((bg) << 4 | (fg)) << 8))
 
+/* ── Music ────────────────────────────────────────────────────── */
+/* Panics unless the device has 4 channels with rate and gain at 48 kHz. */
+void rt_audio_init(uint32_t bootdata);
+/* Plays from the next timer tick; returns 0 if the build linked no song. */
+int  rt_music_start(void);
+/* The row being heard, as order << 8 | row. */
+uint32_t rt_music_position(void);
+
 /* ── Performance counters ─────────────────────────────────────── */
 typedef struct {
     uint32_t cycles;

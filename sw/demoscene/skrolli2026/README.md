@@ -22,10 +22,9 @@ tools/       asset converters, run on the host at build time.
 capture/     recording and encode scripts.
 ```
 
-The MOD replayer lives outside this tree, at `sw/modplay/` — it drives
-the `CLASS_AUDIO` registers directly and is wanted by the NetBSD
-userland tracker work as well, so it has two consumers rather than
-one.
+The MOD replayer is `runtime/modplay.c`, a ProTracker subset driving
+one `CLASS_AUDIO` channel per track. `tools/mod2song.py` converts the
+module at build time and lists what the subset drops.
 
 ## Documents
 
@@ -43,6 +42,7 @@ benchmarks. `make image` and `make sdimage-bench` both put it there.
 
 ```sh
 make -C sw/demoscene/skrolli2026   # build on its own
+make -C sw/demoscene/skrolli2026 MOD=path/to/song.mod   # with music
 # on the target's ROM monitor:
 boot sd:0,0/SKR2026.ELF
 ```

@@ -28,10 +28,6 @@
 #define MMU_TLB_INDEX       5
 #define MMUCR_M             1
 
-/* ── Timer sysregs (device 7) ─────────────────────────────────── */
-#define SYSDEV_TIMER        7
-#define TM_STATUS           4
-
 /* ── CPU sysregs (device 1) ───────────────────────────────────── */
 #define SYSDEV_CPU          1
 #define CPU_CYCLES          5
@@ -59,7 +55,6 @@
 
 /* ── Fixed addresses ──────────────────────────────────────────── */
 #define HANDLER_PAGE        0x1000
-#define TIMER_BASE_ADDR    0x38    /* accumulated ticks, page 0 */
 #define STACK_TOP           0x00100000  /* 1 MB */
 
 
@@ -157,9 +152,6 @@ _start:
  * technique the bootloader uses for _DYNAMIC.
  * ═════════════════════════════════════════════════════════════════ */
 
-        /* Clear overflow counter */
-        stw     r0, [r0 + TIMER_BASE_ADDR]
-
         /* Load runtime addresses of handler block bounds.
          * .Laddr_* slots in .data were patched by the relocator. */
 
@@ -216,11 +208,24 @@ _start:
         add     r1, #HANDLER_PAGE
         stw     r1, [r0 + 4]            /* vector[1] at phys 0x04 */
 
+        /* The IRQ trampoline's C entry, in its copy's scratch slot */
+        mov     r2, pc
+        add     r2, #8
+        add     r2, #%pcrel(.Laddr_irq_c_entry)
+        ldw     r2, [r2]
+        sub     r2, r6
+        add     r2, #HANDLER_PAGE
+        mov     r1, pc
+        add     r1, #8
+        add     r1, #%pcrel(.Laddr_rt_timer_irq)
+        ldw     r1, [r1]
+        stw     r1, [r2]
+
 /* ═════════════════════════════════════════════════════════════════
  * Phase 3: Pin TLB slots
  *
  * Slot 0: handler page (0x1000) — TLB miss + IRQ code
- * Slot 1: page 0 (0x0000) — vectors, bootdata, overflow counter
+ * Slot 1: page 0 (0x0000) — vectors, bootdata
  *
  * Both identity-mapped (VA = PA) so handlers can run without
  * nested TLB misses.
@@ -324,6 +329,10 @@ _start:
         .long   _rt_tlb_miss
 .Laddr_rt_irq:
         .long   _rt_irq
+.Laddr_irq_c_entry:
+        .long   _irq_c_entry
+.Laddr_rt_timer_irq:
+        .long   rt_timer_irq
 
 
 /* ═════════════════════════════════════════════════════════════════
@@ -335,8 +344,8 @@ _start:
  *
  * Layout after copy:
  *   +0x000  TLB miss handler (identity map, VA = PA)
- *           IRQ handler (timer overflow counter)
- *           Scratch data (IRQ register save)
+ *           IRQ trampoline into C
+ *           Scratch data (saved EPC/ESR, C entry address)
  * ═════════════════════════════════════════════════════════════════ */
 
         .section .handlers,"ax",@progbits
@@ -352,7 +361,8 @@ _handler_start:
  * 0xFF000000 and uncached (MMIO) above.
  *
  * Touches no memory: registers park in the scratch SPRs, so a miss can
- * be taken anywhere.  SCR0-SCR2 belong to this handler.
+ * be taken anywhere, including inside the IRQ trampoline's stack
+ * saves.  SCR0-SCR2 belong to this handler, SCR3 to the trampoline.
  * ────────────────────────────────────────────────────────────── */
         .globl  _rt_tlb_miss
 _rt_tlb_miss:
@@ -401,37 +411,59 @@ _rt_tlb_miss:
         eret
 
 
-/* ── IRQ handler: timer tick accumulation ──────────────────────
+/* ── IRQ trampoline ───────────────────────────────────────────
  *
- * On timer underflow, clears the UDF flag and adds one full
- * period (0xFFFF = 65535 ticks, matching TMRELOAD=0xFFFE) to
- * the base tick counter at TIMER_BASE_ADDR (0x38) on page 0.
- *
- * Accumulating ticks directly avoids an expensive software
- * multiply in the readback function (no hardware MUL).
- * Only R1 is saved (to PC-relative scratch on handler page).
- * SR/flags restored automatically by ERET from ESR.
+ * Calls the C handler with the caller-saved registers on the
+ * interrupted stack.  Exceptions do not nest, so a TLB miss taken on
+ * that stack or in the C code overwrites EPC and ESR: both are copied
+ * to this pinned page before anything that can miss, and written back
+ * only after the last load that can.  Flags ride in ESR.
  * ────────────────────────────────────────────────────────────── */
         .balign 4
         .globl  _rt_irq
 _rt_irq:
-        stw     r1, [pc + _irq_save_r1 - .]
+        wrspr   scr3, r1
+        rdspr   r1, epc
+        stw     r1, [pc + _irq_save_epc - .]
+        rdspr   r1, esr
+        stw     r1, [pc + _irq_save_esr - .]
+        rdspr   r1, scr3
 
-        /* Clear timer UDF (write-1-to-clear) */
-        lli     r1, #1
-        wrsys   r1, #SYSDEV_TIMER, #TM_STATUS
+        sub     sp, #24
+        stw     r1,  [sp + 0]
+        stw     r2,  [sp + 4]
+        stw     r3,  [sp + 8]
+        stw     r4,  [sp + 12]
+        stw     r11, [sp + 16]
+        stw     r13, [sp + 20]
 
-        /* Accumulate one period of ticks (0xFFFF = reload + 1) */
-        ldw     r1, [r0 + TIMER_BASE_ADDR]
-        add     r1, #0xFFFF
-        stw     r1, [r0 + TIMER_BASE_ADDR]
+        /* Absolute: this copy is not where the C code was linked against. */
+        ldw     r11, [pc + _irq_c_entry - .]
+        jalr    r11
 
-        ldw     r1, [pc + _irq_save_r1 - .]
+        ldw     r13, [sp + 20]
+        ldw     r11, [sp + 16]
+        ldw     r4,  [sp + 12]
+        ldw     r3,  [sp + 8]
+        ldw     r2,  [sp + 4]
+        ldw     r1,  [sp + 0]
+        add     sp, #24
+
+        /* Pinned from here on: nothing can overwrite the SPRs. */
+        wrspr   scr3, r1
+        ldw     r1, [pc + _irq_save_epc - .]
+        wrspr   epc, r1
+        ldw     r1, [pc + _irq_save_esr - .]
+        wrspr   esr, r1
+        rdspr   r1, scr3
         eret
 
 
 /* ── Scratch data (contiguous with code for PC-relative access) ─ */
         .balign 4
-_irq_save_r1:   .long 0
+_irq_save_epc:  .long 0
+_irq_save_esr:  .long 0
+        .globl  _irq_c_entry
+_irq_c_entry:   .long 0
 
 _handler_end:

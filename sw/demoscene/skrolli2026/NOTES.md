@@ -374,20 +374,28 @@ resident, and reads at 8.15. Nearly 2x on that part's inner loop.
 
 ## Audio timing
 
-The replayer runs *ahead* of what is audible: it produces frames into
-the FIFOs, and the DAC consumes them `(DEPTH - LEVEL)` frames later.
-Driving visuals from the replayer's song position therefore flashes
-early, by up to a FIFO's worth — far past the ~20-40 ms at which
-audio-visual misalignment becomes visible.
+Each track is one device channel. `INC`, `VOL` and `FLUSH` take effect
+on the next output frame and only sample data queues, so the replayer
+cannot run ahead: every tick runs from the timer interrupt when it is
+due, and the replayer's song position *is* the heard position. Sync
+needs no FIFO-lead compensation — only the analog path and capture
+chain remain, a constant to measure once in post.
 
-The framework keeps two clocks: a **production** clock for the
-replayer and a **presentation** clock for the director, separated by a
-tunable offset. The offset is a near-constant pipeline delay rather
-than jitter, so one measured value dials it out.
+The timer period is one ProTracker tick at 125 BPM, 20 ms, and every
+tick tops each queue up to full. 1024 frames last 32.6 ms at period
+113, ProTracker's highest pitch, so a tick never drains a queue.
+`tools/mod2song.py` rejects other tempos rather than play them wrong.
 
-Ordering inside the tick handler is load-bearing: apply effects to
-`INC` first, then read `LEVEL`, so a top-up reflects the new drain
-rate. Arpeggio can raise pitch 2.38x on the next tick.
+A refill is a word copy, 5 instructions per frame: samples are
+expanded to device frames at startup, since widening per frame cost 4
+more. The price is 4 bytes of cache per frame instead of 1 — a tick's
+refill at typical pitches is ~5 KB, the whole L1-D, on every tick. The
+telemetry bar is what says whether that trade holds up.
+
+The mixer holds each source frame (no `INTERP`), which is Paula's
+behaviour rather than a desktop player's default: compare against one
+with interpolation off. Output is mono by construction — both lanes of
+every frame carry the same sample, at equal gain.
 
 Output is from the 48 kHz family; 44.1 kHz is unreachable from the
 available PLL configurations. Amiga periods resample exactly through
@@ -403,7 +411,9 @@ image directly above it, so the image ends near twice the file size.
 so this is the budget they share until the stack moves.
 
 Everything above the stack is `rt_alloc()`'s, to the end of base RAM.
-Anything derived at startup belongs there rather than in the ELF.
+Anything derived at startup belongs there rather than in the ELF —
+the replayer's samples, expanded from 8-bit bytes to device frames,
+are 4x their size in the module.
 
 ## Interrupt context
 

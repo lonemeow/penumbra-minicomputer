@@ -1,6 +1,7 @@
 # Skrolli Party 2026 entry: a bare-metal PIE ELF the ROM loads from FAT32.
 #
 #   make | make clean        LLVM_PREFIX=, COPT= override the defaults
+#   make MOD=<file.mod>      link a song; without one the demo runs silent
 #   boot sd:0,0/SKR2026.ELF  on the target
 
 PROJROOT    := $(realpath $(dir $(lastword $(MAKEFILE_LIST)))/../../..)
@@ -27,12 +28,29 @@ BUILDDIR := $(PROJROOT)/build/skrolli2026
 ELF      := $(BUILDDIR)/SKR2026.ELF
 
 RT_SRCS := runtime/console.c runtime/bootdata.c runtime/memory.c \
-           runtime/display.c runtime/timer.c \
-           runtime/perf.c runtime/telemetry.c runtime/director.c \
+           runtime/display.c \
+           runtime/timer.c runtime/perf.c runtime/telemetry.c \
+           runtime/director.c runtime/audio.c runtime/modplay.c \
            runtime/part_testcard.c
 SRCS    := main.c $(RT_SRCS)
-OBJS    := $(addprefix $(BUILDDIR)/,$(notdir $(SRCS:.c=.o)))
+OBJS    := $(addprefix $(BUILDDIR)/,$(notdir $(SRCS:.c=.o))) $(BUILDDIR)/song.o
 CRT0    := $(BUILDDIR)/crt0.o
+
+# The module is not part of this tree, so it is named at build time.  A
+# relative path is taken against where make was invoked or the project
+# root, whichever exists.
+MOD     ?=
+ifeq ($(strip $(MOD)),)
+SONG_BIN     :=
+SONG_ASFLAGS :=
+else
+MOD_FILE := $(firstword $(wildcard $(abspath $(MOD)) $(PROJROOT)/$(MOD)))
+ifeq ($(MOD_FILE),)
+$(error MOD=$(MOD): no such file)
+endif
+SONG_BIN     := $(BUILDDIR)/song.bin
+SONG_ASFLAGS := -DSONG
+endif
 
 .PHONY: all clean stage
 all: $(ELF)
@@ -50,6 +68,23 @@ $(BUILDDIR)/%.o: %.c | $(BUILDDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 -include $(OBJS:.o=.d)
+
+# MOD is a variable, not a file make can see change, so stamp it.
+SONG_STAMP := $(BUILDDIR)/.song
+$(SONG_STAMP): FORCE | $(BUILDDIR)
+	@if [ ! -f $@ ] || [ "$$(cat $@)" != "$(MOD_FILE)" ]; then \
+		echo "$(MOD_FILE)" > $@; \
+	fi
+
+$(BUILDDIR)/song.bin: tools/mod2song.py $(SONG_STAMP) $(MOD_FILE) | $(BUILDDIR)
+	python3 tools/mod2song.py $(MOD_FILE) -o $@
+
+# .incbin resolves against the include path.
+$(BUILDDIR)/song.o: runtime/song.S $(SONG_BIN) $(SONG_STAMP) | $(BUILDDIR)
+	$(CC) --target=$(TARGET) -c $(SONG_ASFLAGS) -I $(BUILDDIR) $< -o $@
+
+.PHONY: FORCE
+FORCE:
 
 $(ELF): $(CRT0) $(OBJS) runtime/demo.ld
 	$(LD) $(LDFLAGS) $(CRT0) $(OBJS) -o $@
