@@ -33,14 +33,10 @@ and cache misses, branch flushes and dependency stalls come on top.
 | ALU, register or immediate operand (`ADD`, `ADDi`, `SHLi`, `LLI`, …) | 2 | 1 | 1 |
 | `LDW`, D-cache hit | 4 | — | 1 |
 | `STW`, write-through | 8 | — | 5 |
-| `MUL` / `MULU` | 37 | — | 10¹ |
-| `DIV` / `DIVU` | 37 | 35² | 34 |
+| `MUL` / `MULU` | 37 | — | 10 |
+| `DIV` / `DIVU` | 37 | 35¹ | 34 |
 
-¹ Inferred rather than measured: the multiply follows the divide's
-handshake with 8 iteration steps instead of 32
-([divmul.md](divmul.md)).
-
-² Measured inside a loop whose divides read one another's results, so
+¹ Measured inside a loop whose divides read one another's results, so
 it includes a small Penumbra/2 dependency stall.
 
 "—" marks a figure not measured.
@@ -75,7 +71,8 @@ consecutive WB cycles
 ([hazard-model.md](penumbra2/hazard-model.md#interaction-with-divmul));
 measured end to end, a divide costs **34** cycles, the unit's own
 launch + 32 steps + done count. The multiply retires four bits per
-step, so its 8 steps give **10**.
+step, so its 8 steps give **10** — the same whether the high half is
+written to a register or discarded to R0.
 
 ## Dependency costs
 
