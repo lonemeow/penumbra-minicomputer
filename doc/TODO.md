@@ -2774,31 +2774,74 @@ None of these produce wrong code.
 - **Narrow signed divide sequences carry redundant sign extensions.**
   The widened high-half product is sign-extended from its doubled width
   although it already fits, e.g. in `sdiv i8 %x, -3`.
-- **A subtracting decomposition pays two copies, not one.**  The rule
-  charges a subtract one copy, but the emitted sequence copies the
-  multiplicand to a scratch, builds the shifted term there, subtracts,
-  and copies the result back: `x * 7` is `mov r2, r1; shl r2, 3;
-  sub r2, r1; mov r1, r2`.  Shifting in place instead — `mov r2, r1;
-  shl r1, 3; sub r1, r2` — is three instructions, the same as the
-  adding form `x * 5`.  Every `2^n - 1` shape and negative constant
-  carries the extra copy (`* 7`, `* 240`, `* 255`, `* -80`).  Whether
-  it belongs to the rule's operand order or to the two-address tie
-  choice is not established.
-- **Products of short factors are not factored.**  The rule considers
-  the constant's binary expansion and its non-adjacent form, never a
-  product of smaller decompositions.  `x * 0x01010101` is emitted as
-  three shifted copies summed onto the multiplicand, 8 instructions;
-  as `257 * 65537` it is `t = x + (x << 8); t + (t << 16)`, 6.  That
-  constant is the common one in 8bpp code — a four-pixel word from one
-  colour index — so a loop that cannot hoist the product pays two
-  instructions per word.
+- **A subtracting decomposition can cost an extra copy.**  A subtract
+  does not commute, so its result stays in the register holding the
+  shifted term, and that register cannot be the multiplicand's own
+  while the multiplicand is live across the shift.  When the product
+  is consumed elsewhere this costs nothing — `x * 7` stored to memory
+  is `mov r3, r1; shl r3, 3; sub r3, r1` — but when it must land in
+  the multiplicand's register (a return, or an operation tied there)
+  a fourth instruction copies it back: returned, `x * 7` is
+  `mov r2, r1; shl r2, 3; sub r2, r1; mov r1, r2`, where
+  `mov r2, r1; shl r1, 3; sub r1, r2` is three.  The rule cannot fix
+  this by emitting the copy itself: an explicit copy of the
+  multiplicand ahead of the shift is coalesced straight back to the
+  same four instructions.  It belongs to two-address lowering, which
+  copies the shift's source rather than the subtract's other operand,
+  or to the coalescer; a post-register-allocation peephole with a
+  dead-register check would also catch it.  Every `2^n - 1` shape and
+  subtracting constant is exposed (`* 7`, `* 240`, `* 255`), but the
+  copy is rare in practice: across the compiled `make test-compiler`
+  suite (~42M instructions) it appears only immediately before a
+  return, 16 times, 12 of them in `penumbra-codegen/mul-const.c`
+  itself, and never mid-function with the scratch register dead.
+  That does not justify a new pass; revisit if more placement-level
+  waste turns up.
+- **Terms are summed as independent copies, and products of short
+  factors are not factored.**  Each shifted term is built from its own
+  copy of the multiplicand, so every term but the last costs a `mov`.
+  Accumulating instead — shifting the running sum by the gap to the
+  next term and adding or subtracting the multiplicand, Horner's rule —
+  copies the multiplicand once for any term list: `x * 100` is 7
+  instructions emitted and 6 as `t = (x << 1) + x; t = (t << 3) + x;
+  t << 2`.  A
+  constant that is a product of short factors does better still:
+  `x * 0x01010101` is 8 emitted, 7 by accumulation, and 6 as
+  `257 * 65537` — `t = x + (x << 8); t + (t << 16)`.  That constant is
+  the common one in 8bpp code — a four-pixel word from one colour
+  index — so a loop that cannot hoist the product pays two instructions
+  per word.  It is also the final multiply of the popcount lowering
+  that count-leading-zeros lowering builds on, so the soft-float and
+  64-bit division runtime routines (`__adddf3`, `__muldf3`,
+  `__divdf3`, `__udivdi3`, …) pay it on every call once compiler-rt is
+  rebuilt with the decomposition.  This is the most valuable of these
+  gaps.  The fix is local to `applyMulByConst` and its cost count —
+  the rule's cost per shifted term (a copy and a shift) describes the
+  independent-copy shape and has to follow whichever shape is emitted.
 - **The signed power-of-two remainder clears bits the long way.**
   `penumbra_srem_pow2` rounds the biased dividend down with `SAR` then
   `SHL`, because `-2^k` does not fit the uimm16 `ANDi` takes: 7
   instructions for `x % 8`.  Masking the remainder out instead keeps
   the bias live and needs `2^k - 1`, which fits for `k <= 16` —
   `((x + bias) & (2^k - 1)) - bias`, 6 instructions, and identical to C
-  truncation for every `s32` including `INT_MIN`.
+  truncation for every `s32` including `INT_MIN` (checked for every `k`
+  up to 16).  Above 16 the mask needs loading and the shift form stays
+  shorter.  A fused quotient and remainder could share the bias.  The
+  fix is local to `applySRemByPow2`.
+- **Negation can take three instructions where two do.**  `0 - x`
+  selects to `SUB` from a copy of R0, so when the result must land in
+  the operand's register it is `mov r2, zero; sub r2, r1; mov r1, r2`,
+  where `not r1, r1; add r1, 1` is two.  The pair sets identical NZCV:
+  SUB's carry is NOT borrow, so both set C only for zero and V only for
+  `INT_MIN`.  No GlobalISel combine canonicalises integer negation, and
+  InstCombine delivers `0 - x` regardless, so the fix is one selection
+  pattern, `(sub 0, x)` → `ADDi (NOT x), 1`.  On its own it saves an
+  instruction only where the result is copied back, which the compiled
+  test suite shows about 10 times before returns.  It pays with a
+  decomposition that has no positive term: `x * -80` is built as
+  `0 - (x << 4) - (x << 6)` in 7 instructions, where summing `80x`
+  and negating in place is 6 — a change to `applyMulByConst` that
+  wants the cheap negation first.
 
 ### Cost model
 
