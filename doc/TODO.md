@@ -3525,46 +3525,80 @@ gen2/gen3; (2) `LUIC` and other secondary folds that compose with it.
 ## Compiler: no branch-cost model — branch-avoidance may be over-eager
 
 Penumbra sets none of the branch/select cost knobs
-(`predictableSelectIsExpensive`, TTI `getCFInstrCost`, etc.), so the
-generic GISel combiners assume branchless code is always cheaper and
-fire unconditionally.  The clearest case: `select(cmp, c1, c2)` with
-small constants is rewritten (by `select_constant_cmp`/`match_selects`
-in `all_combines`) into `sext(cmp) + c2`-style arithmetic, even though
-Penumbra's own `selectSelect` would otherwise emit a CMP+Bcc branch.
+(`convertSelectOfConstantsToMath`, `predictableSelectIsExpensive`, TTI
+`getCFInstrCost`, …), and GlobalISel would not ask the one that matters.
+Upstream's `match_selects` (in `select_combines`, part of
+`all_combines`) rewrites `select(cmp, C1, C2)` into arithmetic on the
+compare result — `tryFoldSelectOfConstants` covers `C` against `C ± 1`,
+a power of two or all-ones against zero, and all-ones against anything
+— with no cost check.  SelectionDAG gates the same fold on
+`TLI.convertSelectOfConstantsToMath(VT)`, which defaults to false and
+which RISC-V, X86 and LoongArch opt into; GlobalISel never consults it.
+That is a GlobalISel-vs-SelectionDAG gap worth a `doc/llvm-*.md`
+write-up.  Penumbra's own branchless icmp-to-value path through the
+carry flag is a separate, clear win over the old `SELECT_CC` form and is
+not in question.
 
-The branchless form is not obviously a win here: it must materialize the
-comparison into a 0/1 GPR and then extend it, whereas a branch lets the
-CMP feed Bcc directly and never builds the value.  For Dhrystone's
-`Proc_6`, `*ref = (x==2) ? Ident_3 : Ident_4` becomes ~8 instructions
-(`sub; cmp; mov; adc; shl; sar; add` + the seed mov) versus ~4 for a
-`lli; cmp; bne; lli` branch.  Whether that is faster depends on the
-branch cost: penumbra1 (shallow, no mispredict penalty) likely favors
-the branch; penumbra2 (no predictor, resolves in EX) makes taken
-branches costly and narrows the gap.
+What the fold and the branch diamond produce, identical under every
+tuning:
 
-The per-instruction costs are now measured
-([Branch costs](#branch-costs)) and point the same way on both cores.
-On gen1 a `Bcc` costs 2 cycles like an ALU operation, so the branch
-form (~4 instructions, ~8 cycles) beats the branchless one (~8
-instructions, ~16 cycles) by half.  On gen2.5 the branch form is 3–4
-cycles plus 4 cycles times the misprediction rate against ~8 for the
-branchless form, so the branch wins unless the condition is nearly
-random.  The select-of-constants combine therefore looks like a loss on
-every core.
+| Source | Emitted |
+|---|---|
+| `x == 2 ? 3 : 4` | `sub; cmp; mov; adc; shl; sar; add` — 7, branchless |
+| `x < 5 ? 8 : 0` | `mov; lli 1; lli 0; cmp; blt; mov` to build the 0/1, then `shl 3` — 7, a branch and the arithmetic |
+| `x == 7 ? 100 : 37` (not folded) | `mov; lli; lli; cmp; beq; mov` — 6 |
 
-This is still a measure-on-hardware question, because the cycle figures
-leave out I-cache effects of the size difference.  Action: benchmark
-representative code (Dhrystone, kernel hot paths) with the select-of-
-constants combine on vs off, then set the cost knobs (and/or gate the
-combine) to match the measured branch cost.  Note this is orthogonal to
-the branchless `icmp`-to-*value* path, which is a clear win over the old
-`SELECT_CC` form regardless (fewer instructions, no branch, no BB
-split); only the select-of-constants rewrite is in question.
+Beyond the fold's cost-blindness:
 
-Reach check 2026-06-09: the Proc_6 chain is the *only* such site in
-Dhrystone's hot path (see the Dhrystone hot-path entry above), so
-Dhrystone cannot resolve this question either way — measure on kernel
-hot paths instead.
+- **Signed conditions pay both costs.**  A signed compare cannot come
+  out of the carry flag, so selection builds its 0/1 with a branch
+  diamond and the fold's shift or sign extension runs on top.  That is
+  a loss on every core, whatever the tuning.
+- **The branch form is longer than it needs to be.**  The select
+  diamond loads both constants before the compare and then copies
+  conditionally.  `LLI` and `MOV` leave the flags alone, so
+  `cmp; lli C1; beq; lli C2` is 4 instructions.
+
+Against that 4-instruction form the measured costs
+([Branch costs](#branch-costs)) favour the branch on both cores for
+`x == 2 ? 3 : 4`:
+
+| Core | Branch form | Branchless (7 instructions) |
+|---|---|---|
+| penumbra1 | 6–8 cycles, deterministic | 14 cycles |
+| penumbra2_5 | 4 cycles, +4 when mispredicted | 7 cycles |
+
+On penumbra2_5 the branch loses only above a 75% misprediction rate, and
+the BTB predicts each site's last outcome, so even random data sits near
+50%.  The branch form is also the shorter code, so the I-cache effects
+the cycle figures leave out point the same way, and the decision does
+not wait on a hardware A/B.
+
+In order:
+
+1. Make `tryFoldSelectOfConstants` consult
+   `convertSelectOfConstantsToMath`, and write the upstream doc.
+   Penumbra's override weighs the tuned core's costs the way
+   `isIntDivCheap()` does: penumbra1 decides on instruction counts
+   alone, since a `Bcc` costs as much as an ALU operation; penumbra2_5
+   adds the misprediction penalty at one named, assumed misprediction
+   rate.  That needs branch costs in the scheduling models, which
+   [instruction-timing.md](internals/instruction-timing.md) already
+   records.  With today's costs the override answers false on both
+   cores, which also removes the branch-plus-arithmetic shapes; the cost
+   check pays once a core (gen3) moves the numbers.
+2. Select a select of two constants as `cmp; lli; bcc; lli`, so the
+   check compares against the branch form actually emitted.
+3. Separately, InstCombine already delivers `sext(icmp)` for
+   `x > y ? -1 : 0`, outside the fold's reach; selection builds a 0/1
+   diamond and then `shl 31; sar 31`, where loading -1 directly saves
+   two instructions.
+
+Dhrystone's `Proc_6`, `*ref = (x==2) ? Ident_3 : Ident_4`, is the
+`C`-against-`C + 1` shape.  Reach check 2026-06-09: that chain is the
+*only* such site in Dhrystone's hot path (see the Dhrystone hot-path
+entry above), so Dhrystone cannot show the difference either way;
+confirm on kernel hot paths.
 
 ## Compiler: inline small constant-size memcpy/memset/memmove
 
@@ -3799,9 +3833,10 @@ combines — see the "no branch-cost model" entry.
   `isIntDivCheap()` consume them.  See
   [the constant strength-reduction entry](#compiler-constant-multiply-divide-and-remainder-strength-reduction).
 - **Branch-vs-branchless** — the "no branch-cost model" entry above.
-  Wire `getCFInstrCost` / `predictableSelectIsExpensive` /
-  `getCmpSelInstrCost` to the branch behaviour of the tuned
-  generation, and/or gate the `select_constant_cmp` combine on it.
+  Gate the select-of-constants fold on
+  `convertSelectOfConstantsToMath`, answered from the branch costs of
+  the tuned generation; `getCFInstrCost` / `getCmpSelInstrCost` can
+  read the same costs.
 - **Code density** — the "inline small constant-size memcpy" entry.
   Gate the inline-expansion thresholds (`MaxStoresPerMem*`) on I-cache
   pressure, so a small-cache generation keeps the compact `bl memcpy`
