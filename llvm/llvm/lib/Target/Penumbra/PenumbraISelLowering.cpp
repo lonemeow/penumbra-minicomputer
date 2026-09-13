@@ -12,6 +12,8 @@
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
+#include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/TargetOpcodes.h"
 #include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/Support/ErrorHandling.h"
 
@@ -187,6 +189,20 @@ bool PenumbraISelLowering::isIntDivCheap(EVT VT, AttributeList Attr) const {
   unsigned RewriteCycles =
       Subtarget.getMulCycles() * 2 + Subtarget.getALUCycles() * 5;
   return Subtarget.getDivCycles() <= RewriteCycles;
+}
+
+// The default refuses G_PTR_ADD, and a global or frame address whose only
+// user is such an add is then pinned in the entry block beside it: computed on
+// every path and held live to its uses in a register or stack slot.
+bool PenumbraISelLowering::shouldLocalize(
+    const MachineInstr &MI, const TargetTransformInfo *TTI) const {
+  if (MI.getOpcode() == TargetOpcode::G_PTR_ADD) {
+    const MachineRegisterInfo &MRI = MI.getMF()->getRegInfo();
+    auto BaseDef = MRI.getVRegDef(MI.getOperand(1).getReg());
+    auto OffsetDef = MRI.getVRegDef(MI.getOperand(2).getReg());
+    return shouldLocalize(*BaseDef, TTI) && shouldLocalize(*OffsetDef, TTI);
+  }
+  return TargetLowering::shouldLocalize(MI, TTI);
 }
 
 // Expand SELECT_GPR / SELECT_CC_GPR pseudo into a conditional-branch diamond.

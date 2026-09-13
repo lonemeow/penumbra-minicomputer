@@ -3374,7 +3374,7 @@ Compiler causes, widest reach first, each with its own entry:
 | Compare immediates, TEST, inverted booleans | 848 / 612 / 274 / 140 sites | "compare and branch selection misses immediate and TEST forms" |
 | Byte and halfword sign-bit tests | SQLite varint bytes, BSP child index, `sy_narg` | "signed sub-word loads in relational compares miss LDBS/LDHS" |
 | Constants never rematerialized | 220 kernel loops; ~1,250 SQLite constant reloads | "constants are not rematerializable" |
-| `&global + C` built in the entry block; addresses hoisted into callee-saved registers | 1,282 SQLite sites; Doom BSP walk frame | "constant-offset global addresses stay in the entry block" |
+| `&global + C` built in the entry block; addresses hoisted into callee-saved registers | 1,282 SQLite sites; Doom BSP walk frame | "constant-offset global addresses stay in the entry block", "early MachineLICM hoists global addresses into callee-saved registers" |
 | `p - K` and integer MMIO addresses miss the offset fold | memmove backward loops; 187 driver sites | "pointer-minus-constant and integer MMIO addresses miss their folds" |
 | 64-bit counter increments | every syscall and interrupt | "selectAddSubCarry misses the immediate fold" |
 | A store between producer and compare | `KPREEMPT_ENABLE` on every `userret` | "compare-elim does not look through COPY" |
@@ -3392,7 +3392,7 @@ indexing leave nothing to take.  The cost per node is the call:
 - The recursion saves 7 callee-saved registers per level, leaves
   included (tail-call and shrink-wrapping entries).
 - Early MachineLICM moves the `viewx`/`viewy` address loads into
-  callee-saved registers: two more saves per call (entry-block address
+  callee-saved registers: two more saves per call (early MachineLICM
   entry).
 - The `NF_SUBSECTOR` test on the i16 child index is 6 instructions for
   a 2-instruction bit test (sub-word entry).
@@ -3650,44 +3650,50 @@ Fix:
 How aggressively the allocator uses remat is per-core policy — see
 "Remat aggressiveness is per-microarchitecture, not a pseudo flag".
 
-## Compiler: constant-offset global addresses stay in the entry block
+## Compiler: constant-offset global addresses stay in the entry block — RESOLVED
 
-For `&global + C` the IRTranslator emits `G_GLOBAL_VALUE` and a
-constant `G_PTR_ADD` in the entry block.  The Localizer moves an
-instruction to its use block only if `shouldLocalize` accepts it;
-Penumbra does not override the hook, the default rejects `G_PTR_ADD`,
-and a global whose only use is that add stays behind with it.  The
-address is then computed on every call, held in a callee-saved
-register or a stack slot, and it blocks shrink-wrapping.  AArch64
-overrides `shouldLocalize` to accept `G_PTR_ADD` for exactly this
-("Need to localize G_PTR_ADD so that G_GLOBAL_VALUE can be localized
-too").
+For `&global + C` (and `&local + C`) the IRTranslator emits the address
+and a constant `G_PTR_ADD` in the entry block.  The Localizer moves an
+instruction to its use blocks only if `shouldLocalize` accepts it, and
+the default refused `G_PTR_ADD`, pinning the address beside it: built
+on every call, held in a callee-saved register or a stack slot, and in
+the way of shrink-wrapping.  `PenumbraISelLowering::shouldLocalize`
+now accepts a pointer add whose operands the Localizer would itself
+move — globals, frame indices, constants — and leaves an add of a real
+pointer alone, where cloning would only keep that pointer live longer.
+AArch64 accepts every `G_PTR_ADD`; on the same corpus that bought 0.4%
+fewer kernel stack-slot operations for more text, so the narrower rule
+stays.  Shape coverage: `localize-ptr-add.ll`.
 
-Reach in `libsqlite3` (2026-09-13): 1,282 entry-block address
-materializations in 696 functions.
-- The worst are error-path strings: the corruption-logging string
-  (`.L.str + 20`) is built in the entry block of 76 functions,
-  including `btreeNext`, `moveToRoot`, `getPageNormal`,
-  `accessPayload`, `sqlite3BtreeMovetoUnpacked` and
-  `sqlite3VdbeRecordCompare*`.
-- `btreeNext` spends 10 instructions and three callee-saved save and
-  restore pairs on three addresses.
-- `sqlite3VdbeExec` stores four to the stack on every call and reloads
-  them 42 times.
+Entry-block sites before the change (post-Localizer MIR): kernel 1,292
+in 514 functions, Doom 1,037 in 188, SQLite 2,787 in 655.  Measured
+statically on the same IR:
 
-On a reduced repro the fast path is 21 instructions now, 12 with the
-add moved to its use block, and 4 on riscv32.
+| | `.text` | `[sp]` memory ops | callee-saved saves |
+|---|---:|---:|---:|
+| kernel `GENERIC.DEBUG` | −0.19% | −1.2% | −1.1% |
+| Doom | −0.63% | −9.3% | −5.3% |
+| SQLite (PIC) | +1.37% | −8.1% | −5.9% |
 
-A second route to the same result: **early MachineLICM hoists global
-addresses** out of a loop containing calls, and the allocator keeps
-them in callee-saved registers instead of recomputing them after each
-call.  Doom's `R_RenderBSPNode` hoists `@viewx`/`@viewy` out of its
-far-child loop (3 calls).  With `-disable-machine-licm` the frame
-shrinks from 28 to 20 bytes and the saves from 7 to 5 — 24 cycles per
-call on penumbra1, 12 on penumbra2_5.  riscv32 does the same, but its
-stores are not write-through.  The allocator takes the trade because a
-callee-saved register's first use costs it nothing (see item 3 of
-"enable shrink-wrapping").
+SQLite's growth is PIC address builds (`lli; lui; add pc`) duplicated
+into the cold blocks that use them — setup, teardown and FTS code; the
+hot b-tree and VDBE functions move by tens of bytes.  `btreeNext` now
+saves 5 registers instead of 7 and reaches its first load 12
+instructions sooner.
+
+## Compiler: early MachineLICM hoists global addresses into callee-saved registers
+
+Early MachineLICM hoists global address builds out of a loop containing
+calls, and the allocator then keeps them in callee-saved registers
+instead of recomputing them after each call.  Doom's `R_RenderBSPNode`
+hoists `@viewx`/`@viewy` out of its far-child loop (3 calls).  With
+`-disable-machine-licm` the frame shrinks from 28 to 20 bytes and the
+saves from 7 to 5 — 24 cycles per call on penumbra1, 12 on
+penumbra2_5.  riscv32 does the same, but its stores are not
+write-through.  The allocator takes the trade because a callee-saved
+register's first use costs it nothing (see item 3 of "enable
+shrink-wrapping").  Localizing constant-offset addresses does not
+change this function.
 
 ## Compiler: pointer-minus-constant and integer MMIO addresses miss their folds
 

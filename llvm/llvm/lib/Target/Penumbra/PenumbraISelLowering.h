@@ -57,6 +57,11 @@ public:
 
   bool isIntDivCheap(EVT VT, AttributeList Attr) const override;
 
+  // Which entry-block instructions the Localizer re-emits in the blocks that
+  // use them.
+  bool shouldLocalize(const MachineInstr &MI,
+                      const TargetTransformInfo *TTI) const override;
+
   // LSR / CodeGenPrepare addressing-mode cost: report what addressing
   // shapes the load/store M-format encoding can express in a single
   // instruction.  The default in TargetLoweringBase claims a "RISCy r+r
