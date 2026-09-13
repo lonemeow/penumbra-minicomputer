@@ -67,6 +67,9 @@ public:
   bool isLegalAddressingMode(const DataLayout &DL, const AddrMode &AM,
                              Type *Ty, unsigned AS,
                              Instruction *I) const override;
+
+private:
+  const PenumbraSubtarget &Subtarget;
 };
 
 } // namespace llvm

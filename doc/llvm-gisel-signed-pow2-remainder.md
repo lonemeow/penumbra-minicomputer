@@ -179,15 +179,15 @@ decompositions, noted in the previous section.
 
 ## Status in this tree
 
-Penumbra's `isIntDivCheap()` returns true unconditionally.  `MUL`
-and `DIV` iterate on one sequential `divmul` unit, and the answer is
-a speed answer the contract allows; it is correct where the
-multiplier retires one bit per step, so a high-half multiply costs
-as much as a divide, and wrong where the multiplier retires four.
+Penumbra's `isIntDivCheap()` gives a speed answer, as the contract
+allows: `MUL` and `DIV` share one sequential `divmul` unit, and the
+hook compares the tuned core's divide latency against two multiplies
+plus fixups, so it is true on a core that multiplies as slowly as it
+divides and false where the multiply is much faster.
 
-Penumbra's own legalizer lowers unsigned `G_UDIV` and `G_UREM` by a
-power of two, so the unsigned cases survive even at `-O0`, where no
-combiner runs.  Nothing covers the signed remainder: with the hook
-true, `x % 4` on a signed `int` is a hardware divide at every
-optimization level.  The surrounding work is tracked in
+Penumbra carries the item 1 rule locally as `penumbra_srem_pow2` in
+its pre-legalizer combiner, so a signed `x % 2^k` lowers without a
+divide at `-O1` and above on every core.  The `-O0` combiner has no
+divide rules; there only the unsigned power-of-two cases reduce,
+through Penumbra's own legalizer.  The surrounding work is tracked in
 [the constant strength-reduction entry](./TODO.md#compiler-constant-strength-reduction-is-incomplete-and-misplaced).

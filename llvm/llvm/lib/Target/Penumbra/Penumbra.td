@@ -47,12 +47,17 @@ include "GISel/PenumbraRegisterBanks.td"
 // Penumbra processors — tuning targets for one shared ISA
 //===----------------------------------------------------------------------===//
 
-// Scheduling model.  MCSubtargetInfo reads the model from the *tune* name
+// Scheduling models.  MCSubtargetInfo reads the model from the *tune* name
 // rather than the architecture name, so a processor's model is part of its
-// tuning answer.  These figures are calibrated against the microcoded
-// single-issue core and are shared until a generation has measured numbers of
-// its own: the scheduler acts on a speculative model just as confidently as
-// on a measured one.
+// tuning answer.  A model states what the compiler can observe of a core —
+// how many cycles an instruction holds it — and nothing about how the
+// hardware arrives there: two implementations with the same counts are the
+// same core to the compiler.
+//
+// The parameters every model shares are calibrated against the microcoded
+// single-issue core and stay shared until a generation has measured numbers
+// of its own: the scheduler acts on a speculative model just as confidently
+// as on a measured one.
 //
 // LoadLatency = 1 (not the real ~4 cache-hit cycles) because our execution
 // is microcoded and single-issue — each multi-cycle op stalls the pipeline,
@@ -62,13 +67,28 @@ include "GISel/PenumbraRegisterBanks.td"
 // nothing useful but does extend live ranges and inflate register pressure.
 // HighLatency = 8 still flags multi-cycle ops (MUL/DIV libcalls) for the
 // "expensive" heuristics used by the allocator.
-def PenumbraGenericModel : SchedMachineModel {
+class PenumbraSchedModel : SchedMachineModel {
   let IssueWidth = 1;            // Single-issue, microcoded
   let MicroOpBufferSize = 0;     // In-order: no reorder buffer
   let LoadLatency = 1;           // Microcoded: no benefit from hiding load latency
   let HighLatency = 8;           // Threshold for "expensive" ops
   let MispredictPenalty = 0;     // No branch predictor
   let CompleteModel = 0;         // Don't require itineraries for every opcode
+}
+
+// MUL and DIV run on the sequential divmul unit and hold the core for these
+// cycle counts.  PenumbraSubtarget reads them back for cost decisions, so
+// every model must state both.
+def Penumbra1Model : PenumbraSchedModel;
+let SchedModel = Penumbra1Model in {
+  def : WriteRes<WriteMul, []> { let Latency = 34; }
+  def : WriteRes<WriteDiv, []> { let Latency = 34; }
+}
+
+def Penumbra2Model : PenumbraSchedModel;
+let SchedModel = Penumbra2Model in {
+  def : WriteRes<WriteMul, []> { let Latency = 10; }
+  def : WriteRes<WriteDiv, []> { let Latency = 34; }
 }
 
 // The architecture list is empty for every processor — one ISA, one set of
@@ -86,15 +106,15 @@ class PenumbraProcessor<string n, PenumbraTuning t>
     : ProcessorModel<n, t.Model, [], t.TuneFeatures>;
 
 // The original minicomputer: single-issue, microcoded, no branch prediction.
-def Penumbra1Tuning : PenumbraTuning<PenumbraGenericModel, []>;
+def Penumbra1Tuning : PenumbraTuning<Penumbra1Model, []>;
 def : PenumbraProcessor<"penumbra1", Penumbra1Tuning>;
 
 // The pipelined core, without GPR forwarding.
-def Penumbra2Tuning : PenumbraTuning<PenumbraGenericModel, []>;
+def Penumbra2Tuning : PenumbraTuning<Penumbra2Model, []>;
 def : PenumbraProcessor<"penumbra2", Penumbra2Tuning>;
 
 // The pipelined core with GPR forwarding.
-def Penumbra2_5Tuning : PenumbraTuning<PenumbraGenericModel, []>;
+def Penumbra2_5Tuning : PenumbraTuning<Penumbra2Model, []>;
 def : PenumbraProcessor<"penumbra2_5", Penumbra2_5Tuning>;
 
 // The name a build uses when it names no core.  It is the most-used variant's

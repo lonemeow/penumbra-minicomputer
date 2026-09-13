@@ -24,7 +24,7 @@ using namespace llvm;
 
 PenumbraISelLowering::PenumbraISelLowering(const TargetMachine &TM,
                                             const PenumbraSubtarget &STI)
-    : TargetLowering(TM, STI) {
+    : TargetLowering(TM, STI), Subtarget(STI) {
   addRegisterClass(MVT::i32, &Penumbra::GPR_AllocatableRegClass);
 
   // SP register — needed by G_DYN_STACKALLOC lowering and G_STACKSAVE/RESTORE.
@@ -159,9 +159,8 @@ PenumbraISelLowering::getRegisterByName(const char *RegName, LLT /*Ty*/,
 
   // A named global register must land on a register the allocator never
   // touches; otherwise codegen would reuse it and silently clobber the pinned
-  // value.  (This class keeps no Subtarget member — reach the register info
-  // through the MachineFunction.)
-  const TargetRegisterInfo *TRI = MF.getSubtarget().getRegisterInfo();
+  // value.
+  const TargetRegisterInfo *TRI = Subtarget.getRegisterInfo();
   if (!TRI->getReservedRegs(MF).test(Reg))
     reportFatalUsageError(Twine("named global register \"") + RegName +
                           "\" is allocatable; only reserved registers may be "
@@ -170,15 +169,23 @@ PenumbraISelLowering::getRegisterByName(const char *RegName, LLT /*Ty*/,
   return Reg;
 }
 
-// Returning true makes the GISel combiner leave divide-by-constant as a
-// divide instead of applying the `udiv_by_const`/`sdiv_by_const`
-// magic-multiply rewrite.  On the divmul unit the rewrite's high-half
-// multiply (G_UMULH/G_SMULH) costs the same iteration latency as the DIV
-// it replaces, so the rewrite saves no time and adds shift/fixup
-// instructions — pure I-footprint loss on a machine whose hot loops are
-// footprint-bound.
+// Returning true makes the GISel combiner leave a divide or remainder by a
+// constant as a DIV instead of applying the `*_by_const` magic-number
+// rewrite, whose sequence is a high-half multiply (G_UMULH/G_SMULH), a
+// multiply back for a remainder, and shift/add fixups.
 bool PenumbraISelLowering::isIntDivCheap(EVT VT, AttributeList Attr) const {
-  return true;
+  if (Attr.hasFnAttr(Attribute::MinSize))
+    return true;
+
+  // A signed high-half multiply wider than the divmul unit's operands has no
+  // legalization, and nothing here says which signedness is being asked about,
+  // so wider divides keep their libcall.
+  if (VT.bitsGT(MVT::i32))
+    return true;
+
+  // The worst-case rewrite is two multiplies and a few ALU ops.
+  unsigned RewriteCycles = Subtarget.getMulCycles() * 2 + 5;
+  return Subtarget.getDivCycles() <= RewriteCycles;
 }
 
 // Expand SELECT_GPR / SELECT_CC_GPR pseudo into a conditional-branch diamond.

@@ -2700,11 +2700,11 @@ SELECT-chain.
 
 ## Compiler: constant strength reduction is incomplete, and misplaced
 
-`MUL` and `DIV` execute on the sequential `divmul` peer unit — ten
-cycles for a multiply on the FPGA cores (four multiplier bits per
-step), about thirty-four for a divide (restoring, one quotient bit per
-step) on every core.  Constant operands should therefore decompose
-aggressively, and today they mostly do not.
+`MUL` and `DIV` execute on the sequential `divmul` peer unit.  Each
+core's scheduling model states how long they hold it: a multiply takes
+about ten cycles on the pipelined cores and about thirty-four on
+penumbra1, and a divide about thirty-four everywhere.  Constant
+operands should therefore decompose aggressively.
 
 ### What exists
 
@@ -2712,7 +2712,12 @@ aggressively, and today they mostly do not.
 handles constant `G_UDIV` / `G_UREM` alongside.  For an s32 multiply
 it recognises `0`, `1`, `-1`, `2^n`, `2^n + 1` and `2^n - 1`;
 everything else calls `LeaveForHardware()` and selects to a real `MUL`.
-Constant `G_UDIV` handles powers of two only.
+Constant `G_UDIV` / `G_UREM` there handle powers of two only.
+
+A signed remainder by a power of two is lowered by the target
+`penumbra_srem_pow2` rule in the pre-legalizer combiner (see
+[the upstream-candidate write-up](llvm-gisel-signed-pow2-remainder.md)),
+and upstream's `sdiv_by_pow2` covers the signed divide.
 
 ### The coverage gap
 
@@ -2739,12 +2744,51 @@ x<<24` into `x * 0x01010101`.  That is a legitimate canonicalisation —
 the mask proves the shifted copies do not overlap, so the `or` is an
 `add` — and it is the backend's job to undo it.  Nothing does.
 
-### Divide by a constant has no reciprocal path
+### Divide by a non-power-of-two constant — landed, with gaps
 
-Only powers of two reduce, to `LSHR`.  `x / 5` emits a real `DIVU`:
-roughly thirty-four cycles where a magic-number `mulhi` plus shift is
-about twelve.  This is the larger of the two wins and applies to
-ordinary code, not just to graphics.
+Upstream's magic-number rules (`udiv_by_const`, `sdiv_by_const`,
+`urem_by_const`, `srem_by_const`) do the rewrite; Penumbra only
+decides when, through `isIntDivCheap()`.  It keeps the divide under
+`minsize`, above 32 bits, and when the tuned core's divide latency
+does not exceed two multiplies plus a few ALU ops.  On the default
+tuning `x / 10` is a `MULU_P` and a shift; penumbra1 keeps the `DIVU`.
+Narrow high-half multiplies from i8/i16 divides are lowered through a
+multiply at twice the width.  Covered by `div-by-const.ll`,
+`mtune.ll`, and the `penumbra-codegen/div-rem-const*.c` execution
+tests.
+
+Known gaps, none of them wrong code:
+
+- **One answer per type.**  The hook sees neither the opcode, the
+  signedness nor the constant, so it prices every divide and remainder
+  as the costlier remainder shape.  With today's two cost points
+  (34 vs 34, 10 vs 34) that decides identically to an exact answer.
+  An exact per-instruction decision is a target rule that computes
+  the sequence length from `UnsignedDivisionByConstantInfo` /
+  `SignedDivisionByConstantInfo`, compares it against the model's
+  latencies, and calls `CombinerHelper::applyUDivOrURemByConst` /
+  `applySDivOrSRemByConst` — the hook then stays true.
+- **64-bit divides keep their libcall.**  `G_SMULH` s64 does not
+  legalize, and the hook cannot tell signed from unsigned.  `G_UMULH`
+  s64 does (s32 partial products), so a per-instruction rule could
+  already take unsigned 64-bit divides away from `__udivdi3`;
+  legalizing `G_SMULH` s64 unlocks the signed case.
+- **A quotient and remainder of the same non-power-of-two divisor
+  stay one `DIV_P`.**  `div_rem_to_divrem` fuses the pair and the
+  magic rules match only the separate opcodes.  A rule shaped like
+  `penumbra_srem_pow2` — quotient through the rewrite, remainder as
+  `x - q * C` — would take it.
+- **A signed i16 divide keeps the `DIV`.**  `matchSDivOrSRemByConst`
+  wants a legal s16 `G_SMULH` or a legal/widenable s32 `G_MUL`, and
+  s32 `G_MUL` is `Custom` for the legalizer's strength reduction.
+  Moving that reduction out (below) makes s32 `G_MUL` legal.
+- **Narrow signed sequences carry redundant sign-extension pairs.**
+  `sdiv i8 %x, -3` is one multiply and fifteen ALU ops (about 25
+  cycles against the divide's 34): the widened product is
+  sign-extended from 16 bits although it already fits.
+- **The remainder's multiply-back** is a hardware `MUL` for any
+  constant the multiply strength reduction misses (`x % 10` pays two
+  multiplies).
 
 ### Why the placement is wrong
 
@@ -2774,18 +2818,18 @@ Split by what is actually legalization:
   handling, generalised from named shapes to a popcount-driven
   shift/add tree with a cost cutoff, where it composes with the
   combines already there and reaches a fixed point.
-- **Add there** the magic-number reciprocal for constant `G_UDIV` /
-  `G_SDIV` / `G_UREM` / `G_SREM`.
 
-Doing the move first keeps the other two from being written in the
+Doing the move first keeps the generalisation from being written in the
 legalizer and relocated afterwards; the existing lit tests pin the
 three shapes, so the refactor is behaviourally a no-op.
 
 ### Cost model — landed
 
-`PenumbraTTIImpl::getArithmeticInstrCost` now prices `Mul` at 10 and
-`SDiv`/`UDiv`/`SRem`/`URem` at 34 for throughput and latency, scaled by
-the legalization factor, while leaving code size to the base model —
+`PenumbraTTIImpl::getArithmeticInstrCost` prices `Mul` and
+`SDiv`/`UDiv`/`SRem`/`URem` at the tuned core's scheduling-model
+latencies (`PenumbraSubtarget::getMulCycles` / `getDivCycles`) for
+throughput and latency, scaled by the legalization factor, while
+leaving code size to the base model —
 one instruction is emitted however long it runs, and answering
 otherwise would distort inlining and unrolling.  Covered by
 `test/Analysis/CostModel/Penumbra/arith.ll`.
@@ -2870,7 +2914,7 @@ targets opt into are silently off.  Status per item:
   outlined call costs BL+JMP at runtime.  Bigger project; consider
   RISC-V's `-msave-restore` shape (dedicated prologue/epilogue
   routines) rather than the general outliner first.
-- **PostRA scheduler** (`PenumbraGenericModel` doesn't set
+- **PostRA scheduler** (no Penumbra scheduling model sets
   `PostRAScheduler`): pointless for gen1 (single-cycle, no pipeline);
   belongs in a pipelined generation's own scheduling model (hide
   load-use and divmul latency).
@@ -3584,8 +3628,9 @@ claim it changes what a binary may contain.
 `Penumbra.td` defines `penumbra1`, `penumbra2` and `penumbra2_5` as
 processors over one shared architecture.  Each carries a
 `PenumbraTuning` record pairing its tune features with its scheduling
-model; all currently use `PenumbraGenericModel` with empty feature
-lists.  `generic` is not a tuning of its own: it is defined from the
+model: penumbra1 uses `Penumbra1Model`, penumbra2 and penumbra2_5
+share `Penumbra2Model`, and all feature lists are empty.  `generic` is
+not a tuning of its own: it is defined from the
 **most-used variant's** `PenumbraTuning`, so it tunes exactly like
 that core rather than averaging across generations, and moving the
 default is a one-reference change in `Penumbra.td`.
@@ -3606,8 +3651,9 @@ Clang accepts both flags for the Penumbra triple (`getCPUName` in
 an unknown name against the list in `clang/lib/Basic/Targets/
 Penumbra.cpp`, which mirrors the `ProcessorModel` definitions.
 
-No generation currently declares a feature or a model of its own, so
-every name produces identical code.  A core earns a name when builds
+The models differ only in the MUL and DIV latencies they state, so a
+constant divide is the one place the names produce different code so
+far.  A core earns a name when builds
 target it explicitly or when `generic` follows it; its tuning then
 fills in as properties with consumers land.
 
@@ -3636,9 +3682,9 @@ generation whose dependence behaviour differs needs its own processor
 entry — that is the argument for splitting a name, and the only one
 that requires it.
 
-`PenumbraGenericModel` is `CompleteModel = 0` with no `WriteRes` or
-`ReadAdvance` entries, so the scheduler has no latency data for any
-instruction today.  Writing a real model is the work here; the
+The models are `CompleteModel = 0`, state `WriteRes` latencies only
+for MUL and DIV, and carry no `ReadAdvance` entries, so the scheduler
+has no dependence data.  Writing a real model is the work here; the
 `ProcessorModel` line is the trivial part.  `generic` takes the
 most-used variant's side once a second model exists, so a generic
 build schedules for a forwarding core; an interlocked or single-issue
@@ -3646,13 +3692,13 @@ core that wants its own schedule is built with its explicit name.
 
 ### Other consumers waiting on a feature
 
-- **Multiply cost.** `hw/rtl/common/divmul.sv` takes
-  `MUL_BITS_PER_STEP`; gen1 instantiates the default 1 while
-  gen2/2.5/3 pass 4, so a multiply is ~34 cycles on one and ~10 on the
-  others against a ~34-cycle divide throughout.  A feature naming that
-  property is what lets `PenumbraTTIImpl::getArithmeticInstrCost`
-  price a multiply per generation and lets `isIntDivCheap()` stop
-  suppressing the magic-multiply rewrite where it now wins.  See
+- **Multiply cost — landed, as model latencies rather than a
+  feature.**  A cycle count is a number, which a feature bit cannot
+  carry, and the compiler should know only how long an operation
+  holds the core, not how the hardware gets there.  Each scheduling
+  model states MUL and DIV latencies; `PenumbraSubtarget::getMulCycles`
+  / `getDivCycles` read them, and `getArithmeticInstrCost` and
+  `isIntDivCheap()` consume them.  See
   [the constant strength-reduction entry](#compiler-constant-strength-reduction-is-incomplete-and-misplaced).
 - **Branch-vs-branchless** — the "no branch-cost model" entry above.
   Wire `getCFInstrCost` / `predictableSelectIsExpensive` /
@@ -3668,9 +3714,10 @@ core that wants its own schedule is built with its explicit name.
 
 Lock each knob with lit tests that run one `.ll` under both tune
 targets and CHECK the divergence.  The infrastructure test
-(`mtune.ll`) currently pins the opposite — that every name emits
-identical code — and is expected to split when the first feature
-lands.  Cost *numbers* are a measure-on-hardware follow-up: benchmark
+(`mtune.ll`) pins both the code every name emits identically and a
+constant divide that splits by multiply cost, including that `generic`
+decides as penumbra2_5.  Cost *numbers* are a measure-on-hardware
+follow-up: benchmark
 on the ULX3S, not the ISS.
 
 ### Open decisions
@@ -4585,7 +4632,15 @@ through the existing barrel shifter would cut hash cores by roughly a
 quarter to a third.  Recorded as a measurement, not a proposal — an ISA
 change has its own bar (doc-first, conformance suite, all cores).
 
-## Compiler: the pipeline prices MUL/DIV as if they cost one cycle
+## Compiler: the pipeline prices MUL/DIV as if they cost one cycle — RESOLVED
+
+`PenumbraTTIImpl::getArithmeticInstrCost` prices them at the tuned
+core's scheduling-model latencies, and `isIntDivCheap()` weighs the
+same figures (see
+[the constant strength-reduction entry](#compiler-constant-strength-reduction-is-incomplete-and-misplaced)).
+The analysis below predates both.  Its closing claim that
+`isIntDivCheap()` should stay true held only while every core's
+multiply was as slow as its divide.
 
 The divmul unit runs a fixed 32-iteration shift-add — no early-out, so
 every `MUL`/`DIV` is a full multi-cycle stall regardless of operand

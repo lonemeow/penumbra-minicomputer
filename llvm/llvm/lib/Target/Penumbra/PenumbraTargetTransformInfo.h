@@ -88,22 +88,12 @@ public:
   }
 
   // MUL and DIV execute on the sequential divmul peer unit, not in the
-  // ALU: the multiply retires MUL_BITS_PER_STEP multiplier bits per
-  // step (four on the FPGA cores, so 32/4 steps plus the start/busy
-  // handshake), and the divide is restoring at one quotient bit per
-  // step on every core.  Left at the BasicTTIImpl default both price
-  // as 1 — the same as an ADD — which makes the middle end prefer
-  // multiply-shaped canonical forms.  InstCombine will, for instance,
-  // rewrite a provably-disjoint `x | x<<8 | x<<16 | x<<24` into
-  // `x * 0x01010101`, trading four ALU ops for a ten-cycle operation.
-  //
-  // There are no subtarget features to select between cores, so these
-  // are the FPGA cores' figures.  penumbra1 builds its multiplier one
-  // bit per step and is understated here; that costs it decompositions
-  // it would also benefit from, but never prices a multiply as cheap.
-  static constexpr unsigned MulCycles = 10;
-  static constexpr unsigned DivCycles = 34;
-
+  // ALU, and hold the core for the tuned generation's cycle counts (see
+  // PenumbraSubtarget::getMulCycles).  Left at the BasicTTIImpl default
+  // both price as 1 — the same as an ADD — which makes the middle end
+  // prefer multiply-shaped canonical forms.  InstCombine will, for
+  // instance, rewrite a provably-disjoint `x | x<<8 | x<<16 | x<<24` into
+  // `x * 0x01010101`, trading four ALU ops for a multi-cycle operation.
   InstructionCost getArithmeticInstrCost(
       unsigned Opcode, Type *Ty, TTI::TargetCostKind CostKind,
       TTI::OperandValueInfo Op1Info = {TTI::OK_AnyValue, TTI::OP_None},
@@ -117,13 +107,13 @@ public:
       unsigned Cycles = 0;
       switch (Opcode) {
       case Instruction::Mul:
-        Cycles = MulCycles;
+        Cycles = ST->getMulCycles();
         break;
       case Instruction::SDiv:
       case Instruction::UDiv:
       case Instruction::SRem:
       case Instruction::URem:
-        Cycles = DivCycles;
+        Cycles = ST->getDivCycles();
         break;
       default:
         break;

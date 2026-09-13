@@ -226,7 +226,10 @@ define i32 @urem_by_1(i32 %a) {
   ret i32 %r
 }
 
-; --- Non-power-of-2 divide (should still libcall) ---
+; --- Non-power-of-2 divide ---
+; At -O1+ a core whose multiply is sufficiently cheaper than its divide takes
+; the magic-number rewrite, and the default tuning is such a core; the -O0
+; combiner has no divide rules, so there the DIV stays.
 define i32 @udiv_by_3(i32 %a) {
 ; O0-LABEL: udiv_by_3:
 ; O0:         .cfi_startproc
@@ -238,8 +241,11 @@ define i32 @udiv_by_3(i32 %a) {
 ; O1-LABEL: udiv_by_3:
 ; O1:         .cfi_startproc
 ; O1-NEXT:  // %bb.0:
-; O1-NEXT:    lli r2, 3
-; O1-NEXT:    divu r1, r2
+; O1-NEXT:    lli r2, 43691
+; O1-NEXT:    lui r2, 43690
+; O1-NEXT:    mulu r1, r2, r2
+; O1-NEXT:    shr r2, 1
+; O1-NEXT:    mov r1, r2
 ; O1-NEXT:    jmp lr
   %r = udiv i32 %a, 3
   ret i32 %r

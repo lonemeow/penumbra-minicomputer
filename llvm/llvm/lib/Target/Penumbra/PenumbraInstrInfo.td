@@ -293,31 +293,57 @@ let F = 1, isCompare = 1 in {
 // result form with Rdh fixed to R0 (high half / remainder discarded by the
 // hardware), and a "_P" pair form with an explicit Rdh.  The assembler tells
 // them apart by operand count; the disassembler by Inst[15:12] == 0.
+//
+// WriteMul and WriteDiv name the operations each core's scheduling model
+// states a latency for (Penumbra.td).
 //===----------------------------------------------------------------------===//
+
+def WriteMul : SchedWrite;
+def WriteDiv : SchedWrite;
 
 let Defs = [SR], hasSideEffects = 0 in {
   // Single-result forms: Rdh fixed to R0, low half / quotient only.
   let Constraints = "$Rd = $Rd_in" in {
     def MUL  : FormatR_DivMul<0b10000, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
-                              "mul\t$Rd, $Rs">  { let Rdh = 0; }
+                              "mul\t$Rd, $Rs"> {
+      let Rdh = 0;
+      let SchedRW = [WriteMul];
+    }
     def MULU : FormatR_DivMul<0b10001, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
-                              "mulu\t$Rd, $Rs"> { let Rdh = 0; }
+                              "mulu\t$Rd, $Rs"> {
+      let Rdh = 0;
+      let SchedRW = [WriteMul];
+    }
     def DIV  : FormatR_DivMul<0b10010, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
-                              "div\t$Rd, $Rs">  { let Rdh = 0; }
+                              "div\t$Rd, $Rs"> {
+      let Rdh = 0;
+      let SchedRW = [WriteDiv];
+    }
     def DIVU : FormatR_DivMul<0b10011, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
-                              "divu\t$Rd, $Rs"> { let Rdh = 0; }
+                              "divu\t$Rd, $Rs"> {
+      let Rdh = 0;
+      let SchedRW = [WriteDiv];
+    }
   }
 
   // Pair forms: an explicit write-only Rdh captures the high half / remainder.
   let Constraints = "$Rd = $Rd_in" in {
     def MUL_P  : FormatR_DivMul<0b10000, (outs GPR:$Rd, GPR:$Rdh),
-                                (ins GPR:$Rd_in, GPR:$Rs), "mul\t$Rd, $Rs, $Rdh">;
+                                (ins GPR:$Rd_in, GPR:$Rs), "mul\t$Rd, $Rs, $Rdh"> {
+      let SchedRW = [WriteMul];
+    }
     def MULU_P : FormatR_DivMul<0b10001, (outs GPR:$Rd, GPR:$Rdh),
-                                (ins GPR:$Rd_in, GPR:$Rs), "mulu\t$Rd, $Rs, $Rdh">;
+                                (ins GPR:$Rd_in, GPR:$Rs), "mulu\t$Rd, $Rs, $Rdh"> {
+      let SchedRW = [WriteMul];
+    }
     def DIV_P  : FormatR_DivMul<0b10010, (outs GPR:$Rd, GPR:$Rdh),
-                                (ins GPR:$Rd_in, GPR:$Rs), "div\t$Rd, $Rs, $Rdh">;
+                                (ins GPR:$Rd_in, GPR:$Rs), "div\t$Rd, $Rs, $Rdh"> {
+      let SchedRW = [WriteDiv];
+    }
     def DIVU_P : FormatR_DivMul<0b10011, (outs GPR:$Rd, GPR:$Rdh),
-                                (ins GPR:$Rd_in, GPR:$Rs), "divu\t$Rd, $Rs, $Rdh">;
+                                (ins GPR:$Rd_in, GPR:$Rs), "divu\t$Rd, $Rs, $Rdh"> {
+      let SchedRW = [WriteDiv];
+    }
   }
 }
 

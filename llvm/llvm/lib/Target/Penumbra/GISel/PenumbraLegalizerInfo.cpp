@@ -138,14 +138,19 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   // - G_UMULH s64: narrowScalarMul splits into s32 partial products, now legal
   //   hardware multiplies.  Reached by the G_UMULO s64 .lower() path.
   // - G_SMULH s64: not reachable today (G_SMULO s64 is unhandled).
+  // - Narrower than s32, as a divide by a constant at i8/i16 produces through
+  //   the magic-number rewrite: .lower() extends both operands to twice the
+  //   width, multiplies and shifts the high half down, which costs one s32
+  //   hardware multiply.  widenScalar has no high-half-multiply case, so a
+  //   widening action cannot legalize these.
   getActionDefinitionsBuilder(G_UMULH)
       .legalFor({s32})
-      .minScalar(0, s32)
+      .lowerIf(scalarNarrowerThan(0, 32))
       .narrowScalarIf(typeIs(0, s64), changeTo(0, s32));
 
   getActionDefinitionsBuilder(G_SMULH)
       .legalFor({s32})
-      .minScalar(0, s32);
+      .lowerIf(scalarNarrowerThan(0, 32));
 
   getActionDefinitionsBuilder(G_CONSTANT)
       .legalFor({s32, p0})

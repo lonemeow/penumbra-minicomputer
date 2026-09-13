@@ -80,7 +80,7 @@ not behavior.
 
 | File | Purpose |
 |------|---------|
-| `Penumbra.td` | Top-level TableGen: includes, `PenumbraGenericModel` SchedMachineModel (IssueWidth=1, MicroOpBufferSize=0, LoadLatency=1) shared by the `penumbra1`/`penumbra2`/`penumbra2_5` processors, AsmWriter, Target, pointer remap. One ISA: processors differ only in their `PenumbraTuning` (tune features + model), never the architecture list. `generic` borrows the most-used variant's tuning |
+| `Penumbra.td` | Top-level TableGen: includes, per-core SchedMachineModels (`PenumbraSchedModel` shared parameters: IssueWidth=1, MicroOpBufferSize=0, LoadLatency=1; each model states MUL/DIV latencies), the `penumbra1`/`penumbra2`/`penumbra2_5` processors, AsmWriter, Target, pointer remap. One ISA: processors differ only in their `PenumbraTuning` (tune features + model), never the architecture list. `generic` borrows the most-used variant's tuning |
 | `PenumbraRegisterInfo.td` | 16 GPRs (R0=zero, R12=TP, R13=LR, R14=SP, R15=PC), GPR/GPR_Allocatable/CCR classes, HWEncoding |
 | `PenumbraInstrInfo.td` | All 4 formats (R/L/M/B) with bit-accurate encoding. Tied-operand constraints for 2-addr ops. ADC/SBC `Uses=[SR]`. All operand slots use full `GPR` (allocator honors R0's reserved+`isConstant`). Pseudos: RET, LEAfi, SELECT_GPR, SELECT_CC_GPR, ADJCALLSTACK. |
 | `PenumbraGISel.td` | TableGen `Pat<>` rules (simple 1:1 selections). Includes `PenumbraCombine.td`. ImmLeaf predicates: uimm16, simm16, simm16neg, uimm5 |
@@ -88,7 +88,7 @@ not behavior.
 | `PenumbraCallingConv.td` | CC_Penumbra (R1–R4 args, stack overflow), RetCC_Penumbra (R1, R2 for i64), CSR_Penumbra (R5–R10, R13) |
 | `PenumbraRegisterInfo.{h,cpp}` | Reserved regs (R0/R12/R14/R15), callee-saved list, `getFrameRegister(R14)`. `eliminateFrameIndex` folds small offsets directly; large offsets expand to LLI+LUI+ADD via a fresh virtual register (RegScavenger picks the physical reg) |
 | `PenumbraFrameLowering.{h,cpp}` | StackGrowsDown, Align(4), `hasFPImpl()=true` when alloca present. `adjustSP` helper used by both prologue and epilogue (small frames use 16-bit imm, large frames materialize size in R11). `processFunctionBeforeFrameFinalized` adds an emergency spill slot for RegScavenger only when frame > 15-bit signed |
-| `PenumbraISelLowering.{h,cpp}` | TargetLowering: JT encoding (EK_LabelDifference32), SELECT diamond expansion, inline-asm constraint mapping, `setStackPointerRegisterToSaveRestore(R14)`, `isIntDivCheap()=true`, `isLegalAddressingMode` override |
+| `PenumbraISelLowering.{h,cpp}` | TargetLowering: JT encoding (EK_LabelDifference32), SELECT diamond expansion, inline-asm constraint mapping, `setStackPointerRegisterToSaveRestore(R14)`, `isIntDivCheap()` (weighs the model's MUL/DIV latencies), `isLegalAddressingMode` override |
 | `PenumbraTargetTransformInfo.h` | Header-only `PenumbraTTIImpl`. Routes LSR/cost-model queries to our `TargetLowering`. `getNumberOfRegisters` returns 12 for GPRRC, 0 for FPR/VR (disables vectorizers). `isLSRCostLess` makes `Insns` the primary sort key (PowerPC pattern) — without this, LSR rewrites `*d++ = *s++` loops into base+index form |
 | `PenumbraSubtarget.{h,cpp}` | Owns InstrInfo, FrameLowering, TLInfo, all GlobalISel objects. Holds the tune-feature fields; `resolveCPU`/`resolveTuneCPU` define what an unspecified `-mcpu`/`-mtune` means |
 | `PenumbraTargetMachine.{h,cpp}` | Data layout `e-m:e-p:32:32-i32:32-i64:64-n32-S32`, GlobalISel pipeline, `setGlobalISel(true)`. `PenumbraTargetObjectFile` (local class): always inlines jump tables in `.text`. `PenumbraLowerTLS` IR pass: lowers `@llvm.threadlocal.address` (GD → `__tls_get_addr`; LE/IE → inline TP+offset) |
@@ -132,13 +132,13 @@ The `penumbra` triple's data layout is set in
 
 The pipeline is defined by group lists in `PenumbraCombine.td`:
 
-- **Pre-legalizer at -O1+:** `[all_combines]` — the full upstream
-  canonicalization/DCE set, matching AArch64/RISC-V. The
+- **Pre-legalizer at -O1+:** `[penumbra_srem_pow2, all_combines]` — the
+  full upstream canonicalization/DCE set, matching AArch64/RISC-V, behind a
+  target rule that lowers a signed remainder by a power of two. The
   `*_by_const` magic-multiply rules (in `intdiv_combines` /
-  `intrem_combines`) are gated off by `isIntDivCheap()=true`
-  in `PenumbraISelLowering.cpp` — the rewrite's high-half multiply
-  costs the same divmul-unit latency as the divide it replaces, so
-  it only adds shift/fixup instructions. `sub_to_add` flips
+  `intrem_combines`) are gated by `isIntDivCheap()` in
+  `PenumbraISelLowering.cpp`, which weighs the tuned core's MUL and DIV
+  latencies from its scheduling model. `sub_to_add` flips
   (`G_SUB x, c` → `G_ADD x, -c`) are re-canonicalized after
   legalization by `penumbra_neg_imm_to_opposite` when `|-c|` fits
   uimm16.

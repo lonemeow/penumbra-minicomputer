@@ -110,9 +110,16 @@ define i32 @srem_6(i32 %x) {
 ; CHECK-LABEL: srem_6:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
+; CHECK-NEXT:    lli r2, 43691
+; CHECK-NEXT:    lui r2, 10922
+; CHECK-NEXT:    mov r3, r1
+; CHECK-NEXT:    mul r3, r2, r2
+; CHECK-NEXT:    mov r3, r2
+; CHECK-NEXT:    shr r3, 31
+; CHECK-NEXT:    add r3, r2
 ; CHECK-NEXT:    lli r2, 6
-; CHECK-NEXT:    div r1, r2, r2
-; CHECK-NEXT:    mov r1, r2
+; CHECK-NEXT:    mul r3, r2
+; CHECK-NEXT:    sub r1, r3
 ; CHECK-NEXT:    jmp lr
   %r = srem i32 %x, 6
   ret i32 %r

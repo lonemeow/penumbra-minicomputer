@@ -81,6 +81,11 @@ public:
   bool GETTER() const { return ATTRIBUTE; }
 #include "PenumbraGenSubtargetInfo.inc"
 
+  // Cycles a MUL or DIV holds the core, as the tuned core's scheduling model
+  // states them.  Cost decisions weigh a multiply or divide by these.
+  unsigned getMulCycles() const;
+  unsigned getDivCycles() const;
+
   const PenumbraInstrInfo *getInstrInfo() const override { return &InstrInfo; }
   const PenumbraFrameLowering *getFrameLowering() const override {
     return &FrameLowering;

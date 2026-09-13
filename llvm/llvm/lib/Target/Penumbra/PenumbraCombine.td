@@ -43,10 +43,10 @@ def penumbra_srem_pow2 : GICombineRule<
 // Pre-legalizer: full upstream canonicalization / DCE on pre-legalized
 // generic MIR, matching AArch64 / RISC-V.  The `*_by_const` magic-multiply
 // rules in `intdiv_combines`/`intrem_combines` are gated by the target's
-// `isIntDivCheap()` hook — see PenumbraISelLowering.cpp, which returns
-// true so the divide stays a divide: the rewrite's high-half multiply
-// costs the same divmul-unit latency as the divide it replaces, so it
-// only adds shift/fixup instructions.  Penumbra-specific fixups for the
+// `isIntDivCheap()` hook, which weighs the tuned core's multiply and divide
+// latencies (PenumbraISelLowering.cpp): a core that multiplies sufficiently
+// faster than it divides takes the rewrite, and one that multiplies as slowly
+// as it divides keeps the divide.  Penumbra-specific fixups for the
 // zero-extending uimm16 form happen in the post-legalizer combiner.
 def PenumbraPreLegalizerCombiner
     : GICombiner<"PenumbraPreLegalizerCombinerImpl", [
