@@ -79,11 +79,11 @@ private:
                          MachineRegisterInfo &MRI) const;
   // uimm16 value of R if it is a constant small enough to fold as an immediate.
   std::optional<int64_t> uimm16Of(Register R, MachineRegisterInfo &MRI) const;
-  // Canonicalize a constant compare operand to the RHS, swapping the
-  // predicate's operand order to preserve meaning.
-  void canonicalizeCompareOperands(CmpInst::Predicate &Pred, Register &LHS,
-                                   Register &RHS,
-                                   MachineRegisterInfo &MRI) const;
+  // Move a constant compare operand to the RHS and pick the uimm16 immediate
+  // it folds to, adjusting the predicate when only an adjacent constant fits.
+  void canonicalizeCompare(CmpInst::Predicate &Pred, Register &LHS,
+                           Register &RHS, std::optional<int64_t> &Imm,
+                           MachineRegisterInfo &MRI) const;
   // Build the SELECT_CC pseudo for a select on `Pred(LHS, RHS)`, folding a
   // uimm16 compare operand into the immediate form (SELECT_CCi_GPR).
   bool emitSelectCC(Register Dst, Register TrueReg, Register FalseReg,
@@ -548,19 +548,36 @@ bool PenumbraInstructionSelector::selectBrCond(MachineInstr &I,
       Pred = CmpInst::getInversePredicate(Pred);
     Register LHS = CondDef->getOperand(2).getReg();
     Register RHS = CondDef->getOperand(3).getReg();
+    std::optional<int64_t> Imm;
 
-    canonicalizeCompareOperands(Pred, LHS, RHS, MRI);
+    canonicalizeCompare(Pred, LHS, RHS, Imm, MRI);
 
     unsigned BrOpc = icmpPredToBranchOpc(Pred);
     if (!BrOpc)
       return false;
 
-    // emitCompare folds a uimm16-constant RHS into CMPi — saves an LLI and a
-    // live register.  Covers the common cases: `x == 0`, `n < 100`, loop
-    // termination checks, etc.  An orphaned G_CONSTANT is erased by the
-    // selector's trivially-dead sweep.
-    if (!emitCompare(LHS, RHS, std::nullopt, I, MBB, MRI))
+    // A bit test, `(x & m) == 0` or `!= 0`, sets the flags of the AND without
+    // writing its result, so x needs no copy when it stays live.  The AND must
+    // have no other user, or its value is built anyway.
+    MachineInstr *And = MRI.getVRegDef(LHS);
+    if ((Pred == CmpInst::ICMP_EQ || Pred == CmpInst::ICMP_NE) && Imm == 0 &&
+        And && And->getOpcode() == TargetOpcode::G_AND &&
+        MRI.hasOneNonDBGUse(LHS)) {
+      Register X = And->getOperand(1).getReg();
+      Register M = And->getOperand(2).getReg();
+      std::optional<int64_t> MaskImm = uimm16Of(M, MRI);
+      MachineInstr *Test =
+          MaskImm ? BuildMI(MBB, I, DL, TII.get(Penumbra::TESTi))
+                        .addReg(X)
+                        .addImm(*MaskImm)
+                  : BuildMI(MBB, I, DL, TII.get(Penumbra::TEST))
+                        .addReg(X)
+                        .addReg(M);
+      if (!constrainSelectedInstRegOperands(*Test, TII, TRI, RBI))
+        return false;
+    } else if (!emitCompare(LHS, RHS, Imm, I, MBB, MRI)) {
       return false;
+    }
 
     BuildMI(MBB, I, DL, TII.get(BrOpc)).addMBB(TargetMBB);
 
@@ -586,17 +603,52 @@ bool PenumbraInstructionSelector::selectBrCond(MachineInstr &I,
   return true;
 }
 
-// Canonicalize a constant compare operand to the RHS: `Pred(C, x)` becomes
-// `swapped(Pred)(x, C)` so downstream immediate dispatch can fold the
-// constant.  Belt-and-braces with the upstream commute_constant_to_rhs
-// combine, which only runs at -O1+.  A both-constant compare is left as-is.
-void PenumbraInstructionSelector::canonicalizeCompareOperands(
+// The comparison against C+1 or C-1 that means the same as `Pred C` for every
+// operand, when that constant fits a compare's uimm16 immediate and C does
+// not: `x > -1` is `x >= 0`, and `x < 65536` is `x <= 65535`.
+static std::optional<std::pair<CmpInst::Predicate, int64_t>>
+adjacentCompareImmediate(CmpInst::Predicate Pred, const APInt &C) {
+  if (!ICmpInst::isRelational(Pred))
+    return std::nullopt;
+
+  // `x > C` is `x >= C+1` and `x <= C` is `x < C+1`; `<` and `>=` step down.
+  // A step past the end of the predicate's range would wrap, turning a compare
+  // that is always false into one that is always true, or the reverse.
+  bool Signed = ICmpInst::isSigned(Pred);
+  bool StepUp = ICmpInst::isGT(Pred) || ICmpInst::isLE(Pred);
+  bool AdjacentWraps;
+  if (StepUp)
+    AdjacentWraps = Signed ? C.isMaxSignedValue() : C.isMaxValue();
+  else
+    AdjacentWraps = Signed ? C.isMinSignedValue() : C.isMinValue();
+  if (AdjacentWraps)
+    return std::nullopt;
+
+  APInt Adjacent = StepUp ? C + 1 : C - 1;
+  if (Adjacent.getActiveBits() > 16)
+    return std::nullopt;
+  return std::pair(CmpInst::getFlippedStrictnessPredicate(Pred),
+                   Adjacent.getZExtValue());
+}
+
+// Put a compare in the form the immediate dispatch folds.  A constant
+// operand moves to the RHS: `Pred(C, x)` becomes `swapped(Pred)(x, C)`, as
+// the upstream commute_constant_to_rhs combine does at -O1+.  Imm is then the
+// RHS as a uimm16 immediate, moving the predicate to an adjacent constant when
+// only that one fits.  A both-constant compare is left as-is.
+void PenumbraInstructionSelector::canonicalizeCompare(
     CmpInst::Predicate &Pred, Register &LHS, Register &RHS,
-    MachineRegisterInfo &MRI) const {
+    std::optional<int64_t> &Imm, MachineRegisterInfo &MRI) const {
   if (getIConstantVRegVal(LHS, MRI) && !getIConstantVRegVal(RHS, MRI)) {
     std::swap(LHS, RHS);
     Pred = CmpInst::getSwappedPredicate(Pred);
   }
+  Imm = uimm16Of(RHS, MRI);
+  if (Imm)
+    return;
+  if (std::optional<APInt> C = getIConstantVRegVal(RHS, MRI))
+    if (auto Adjacent = adjacentCompareImmediate(Pred, *C))
+      std::tie(Pred, Imm) = *Adjacent;
 }
 
 // Build the SELECT_CC diamond pseudo for `Dst = Pred(LHS, RHS) ? TrueReg :
@@ -609,14 +661,14 @@ bool PenumbraInstructionSelector::emitSelectCC(
     Register LHS, Register RHS, MachineInstr &I, MachineBasicBlock &MBB,
     MachineRegisterInfo &MRI) const {
   const DebugLoc &DL = I.getDebugLoc();
+  std::optional<int64_t> Imm;
 
-  canonicalizeCompareOperands(Pred, LHS, RHS, MRI);
+  canonicalizeCompare(Pred, LHS, RHS, Imm, MRI);
 
   unsigned BrOpc = icmpPredToBranchOpc(Pred);
   if (!BrOpc)
     return false;
 
-  std::optional<int64_t> Imm = uimm16Of(RHS, MRI);
   MachineInstr *NewI =
       Imm ? BuildMI(MBB, I, DL, TII.get(Penumbra::SELECT_CCi_GPR))
                 .addDef(Dst)

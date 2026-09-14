@@ -1297,27 +1297,39 @@ materialized boolean.  Four shapes pay for that (static counts,
 
 | Source | Emitted | Wanted | Sites |
 |---|---|---|---|
-| `x >= 0` (`icmp sgt x, -1`) | `llis t,-1; cmp x,t; ble` | `cmp x,0; blt` | kernel 274, SQLite 612, Doom 86 |
-| `(x & C) != 0` | `mov t,x; and t,C; beq` | `test x,C; beq` | Doom 140 |
+| `x >= 0` (`icmp sgt x, -1`) — DONE | `llis t,-1; cmp x,t; ble` | `cmp x,0; blt` | kernel 274, SQLite 612, Doom 86 |
+| `(x & C) != 0` — DONE | `mov t,x; and t,C; beq` | `test x,C; beq` | Doom 140 |
 | branch on a non-compare `i1` whose true edge falls through — DONE | `lli t,1; xor t,b; test t,1; bne` | `test b,1; beq` | kernel 848 |
 | `x == -1` | `llis t,-1; cmp x,t; beq` | `not t,x; beq` | Doom 53 |
 
-- **Immediate adjustment.**  `sgt x, -1` is `sge x, 0`.  AArch64's
-  `getAArch64Cmp` moves the predicate and the constant by one whenever
-  that brings the constant into range (`sgt C` ↔ `sge C+1`,
-  `slt C` ↔ `sle C−1`, and the unsigned pairs).  About 215 of SQLite's
-  612 are plain i32 values; most of the rest are the byte and
-  halfword sign tests in "signed sub-word loads in relational compares
-  miss LDBS/LDHS".
+- **Immediate adjustment — DONE.**  `sgt x, -1` is `sge x, 0`.
+  `canonicalizeCompare` moves the predicate and the constant by one
+  when only the adjacent constant fits the immediate (`sgt C` ↔
+  `sge C+1`, `slt C` ↔ `sle C−1`, and the unsigned pairs), for
+  branches and selects alike, and refuses a step that would wrap in
+  the predicate's signedness.  Shape coverage: `compare-imm-test.ll`,
+  `GlobalISel/select-compare-immediate.mir`.  The `llis -1; cmp` pairs
+  left (kernel 356, `libsqlite3` 25, Doom 51) are `x == -1` and the
+  byte and halfword sign tests in "signed sub-word loads in relational
+  compares miss LDBS/LDHS".
 - **Branch on N for sign tests.**  After `cmp x, 0` V is clear, so
   `bmi`/`bpl` are exact for `x < 0`/`x >= 0`.  Reading N alone also
   lets compare elimination drop the compare after a producer whose V
   means something else — the `XOR` in Doom's `R_PointOnSide`, the
   `SUB` in `R_AddLine` and `R_CheckBBox`.
-- **TEST fold.**  The `mov` exists because `AND` is destructive and
-  `x` stays live.  `G_ICMP ne (G_AND x, C), 0` feeding a branch
-  should select `TESTi` directly; the `R_RenderBSPNode` entry test is
-  one of the sites.
+- **TEST fold — DONE.**  The `mov` existed because `AND` is
+  destructive and `x` stays live.  A branch on `(x & m) == 0` or
+  `!= 0` whose AND has no other user now selects `TESTi x, m`, or
+  `TEST x, m` for a wider mask.  Selects keep the AND.  Copy-and-mask
+  tests went from 1,243 to 164 in the kernel, 706 to 35 in
+  `libsqlite3` and 130 to 15 in Doom.
+
+  Together with the immediate adjustment, measured statically on the
+  hot-path review corpus (2026-09-13): kernel −1,877 instructions
+  (`.text` −7,508 B, 18 fewer callee-saved saves), `libsqlite3`
+  −1,461, Doom −253.  `trap` is 12 instructions shorter.  31 kernel
+  functions grew, the largest `do_sys_mount` by 20 of 556, all in
+  spills and reloads.
 - **Inverted boolean — DONE.**  The branch-inversion combine wraps
   the condition in `G_XOR %v, 1` when the true edge is the layout
   successor.  A compare absorbed it into the predicate, but any other
