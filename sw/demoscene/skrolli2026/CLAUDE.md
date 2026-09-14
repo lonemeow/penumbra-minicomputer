@@ -52,7 +52,8 @@ but only under explicit per-section direction — mood, energy,
 instrumentation, structure, what changes where — with every iteration
 judged by Ilpo listening to a render. Claude cannot hear; it supplies
 candidates, Ilpo decides. Samples come from freeware packs with
-recorded licenses, never generated.
+recorded licenses, or Ilpo makes them himself with a synth or sample
+editor. Claude never generates sample data.
 
 **Effect implementation from specification.** Implementing an effect
 whose algorithm, tables, palette and motion Ilpo has specified. The

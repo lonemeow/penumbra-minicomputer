@@ -31,7 +31,8 @@ how it moves; *implemented* is whoever wrote the code.
 | — | | | |
 
 Samples are freeware-pack material, each recorded with its pack and
-terms. Pattern data is authored under directed exception — see
+terms, or made by Ilpo with a synth or sample editor, recorded with
+the tool used. Pattern data is authored under directed exception — see
 [CLAUDE.md](CLAUDE.md).
 
 ## Assets
