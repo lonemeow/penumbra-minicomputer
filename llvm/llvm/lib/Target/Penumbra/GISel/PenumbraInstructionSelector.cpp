@@ -505,10 +505,20 @@ bool PenumbraInstructionSelector::selectBranch(MachineInstr &I,
 }
 
 // ── G_BRCOND (conditional branch) ────────────────────────────────────────────
-// Folds with the G_ICMP that defines the condition:
-//   G_ICMP %cond = pred, %lhs, %rhs      →   CMP %lhs, %rhs
-//   G_BRCOND %cond, %target               →   Bcc %target
-// If the condition is not from G_ICMP, falls back to TESTi 1 + BNE.
+// A branch reads bit 0 of its condition, so wrappers that keep or invert that
+// bit are looked through: the `AND 1` legalization masks a boolean with, and
+// the `XOR 1` the branch-inversion combine adds when the true edge is the
+// layout successor.  What remains selects to one of:
+//   G_ICMP          →   CMP %lhs, %rhs ; Bcc    (predicate inverted by an XOR)
+//   anything else   →   TESTi %cond, 1 ; BNE    (BEQ when inverted)
+
+// The G_CONSTANT operand of Def at OpIdx is 1.
+static bool isConstantOne(const MachineInstr &Def, unsigned OpIdx,
+                          const MachineRegisterInfo &MRI) {
+  auto C = getIConstantVRegVal(Def.getOperand(OpIdx).getReg(), MRI);
+  return C && C->isOne();
+}
+
 bool PenumbraInstructionSelector::selectBrCond(MachineInstr &I,
                                                 MachineBasicBlock &MBB,
                                                 MachineRegisterInfo &MRI) const {
@@ -516,12 +526,26 @@ bool PenumbraInstructionSelector::selectBrCond(MachineInstr &I,
   MachineBasicBlock *TargetMBB = I.getOperand(1).getMBB();
   const DebugLoc &DL = I.getDebugLoc();
 
+  // A wrapper with another user stays, since that user still needs its value;
+  // looking through it would only add a use of the value underneath.
+  bool Invert = false;
   MachineInstr *CondDef = MRI.getVRegDef(CondReg);
+  while (CondDef && MRI.hasOneNonDBGUse(CondReg)) {
+    unsigned Opc = CondDef->getOpcode();
+    if (Opc == TargetOpcode::G_XOR && isConstantOne(*CondDef, 2, MRI))
+      Invert = !Invert;
+    else if (Opc != TargetOpcode::G_AND || !isConstantOne(*CondDef, 2, MRI))
+      break;
+    CondReg = CondDef->getOperand(1).getReg();
+    CondDef = MRI.getVRegDef(CondReg);
+  }
 
   if (CondDef && CondDef->getOpcode() == TargetOpcode::G_ICMP) {
     // Fold G_ICMP + G_BRCOND into CMP + Bcc.
     auto Pred = static_cast<CmpInst::Predicate>(
         CondDef->getOperand(1).getPredicate());
+    if (Invert)
+      Pred = CmpInst::getInversePredicate(Pred);
     Register LHS = CondDef->getOperand(2).getReg();
     Register RHS = CondDef->getOperand(3).getReg();
 
@@ -556,7 +580,8 @@ bool PenumbraInstructionSelector::selectBrCond(MachineInstr &I,
                     .addImm(1);
   constrainSelectedInstRegOperands(*TestMI, TII, TRI, RBI);
 
-  BuildMI(MBB, I, DL, TII.get(Penumbra::BNE)).addMBB(TargetMBB);
+  BuildMI(MBB, I, DL, TII.get(Invert ? Penumbra::BEQ : Penumbra::BNE))
+      .addMBB(TargetMBB);
   I.eraseFromParent();
   return true;
 }
