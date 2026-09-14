@@ -57,6 +57,20 @@ public:
 
   bool isIntDivCheap(EVT VT, AttributeList Attr) const override;
 
+  // Whether CodeGenPrepare rewrites an add and its wrap check into an overflow
+  // intrinsic.  At register width it must not: selection has no branch on an
+  // overflow op's carry, so the carry would be materialised and tested, while
+  // the compare the check started as selects next to its branch, where
+  // compare elimination can reuse the add's flags.  A wider add narrows onto
+  // the ADD/ADC carry chain, whose final carry is the wrap, and that beats the
+  // multi-word compare the check would otherwise expand to.
+  bool shouldFormOverflowOp(unsigned Opcode, EVT VT,
+                            bool MathUsed) const override {
+    if (VT.isScalarInteger() && VT.getSizeInBits() <= 32)
+      return false;
+    return TargetLowering::shouldFormOverflowOp(Opcode, VT, MathUsed);
+  }
+
   // Which entry-block instructions the Localizer re-emits in the blocks that
   // use them.
   bool shouldLocalize(const MachineInstr &MI,
