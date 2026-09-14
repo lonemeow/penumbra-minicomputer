@@ -921,10 +921,41 @@ bool PenumbraInstructionSelector::selectAddSubCarry(
   // SR operands come from the instruction's Defs/Uses in PenumbraInstrInfo.td.
   unsigned HwOpc = HasCarryIn ? (IsSub ? Penumbra::SBC : Penumbra::ADC)
                               : (IsSub ? Penumbra::SUB : Penumbra::ADD);
+  MachineOperand Second = MachineOperand::CreateReg(RHS, /*isDef=*/false);
+
+  // A constant second operand needs no register of its own.  Each form below
+  // leaves the same result and the same Z, N, C and V as the register form, so
+  // the rest of the chain and any flag reader see no difference.
+  if (std::optional<APInt> C = getIConstantVRegVal(RHS, MRI)) {
+    if (!HasCarryIn) {
+      // x + K is ADDi K.  x + (-K) is SUBi K: the add's carry, x >= K, is the
+      // subtract's NOT borrow.  The sub family mirrors both.  K = 0 takes the
+      // first form, since SUBi 0 would set C where ADD 0 clears it.
+      if (C->getActiveBits() <= 16) {
+        HwOpc = IsSub ? Penumbra::SUBi : Penumbra::ADDi;
+        Second = MachineOperand::CreateImm(C->getZExtValue());
+      } else if ((-*C).getActiveBits() <= 16) {
+        HwOpc = IsSub ? Penumbra::ADDi : Penumbra::SUBi;
+        Second = MachineOperand::CreateImm((-*C).getZExtValue());
+      }
+    } else {
+      // ADC and SBC have no immediate form, but R0 supplies a zero.  An
+      // all-ones word is R0 under the other opcode: x + ~0 + C and x - 0 -
+      // NOT C are the same sum with the same carry-out.
+      if (C->isZero()) {
+        HwOpc = IsSub ? Penumbra::SBC : Penumbra::ADC;
+        Second = MachineOperand::CreateReg(Penumbra::R0, /*isDef=*/false);
+      } else if (C->isAllOnes()) {
+        HwOpc = IsSub ? Penumbra::ADC : Penumbra::SBC;
+        Second = MachineOperand::CreateReg(Penumbra::R0, /*isDef=*/false);
+      }
+    }
+  }
+
   MachineInstr *Arith = BuildMI(MBB, I, DL, TII.get(HwOpc))
                             .addDef(DstReg)
                             .addReg(LHS)   // tied to Dst ($Rd = $Rd_in)
-                            .addReg(RHS);
+                            .add(Second);
   if (!constrainSelectedInstRegOperands(*Arith, TII, TRI, RBI))
     return false;
 

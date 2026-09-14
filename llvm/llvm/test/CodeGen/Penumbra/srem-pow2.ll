@@ -72,22 +72,21 @@ define i64 @srem64_16(i64 %x) {
 ; CHECK-NEXT:    mov r3, r2
 ; CHECK-NEXT:    sar r3, 31
 ; CHECK-NEXT:    shr r3, 28
-; CHECK-NEXT:    mov r4, zero
 ; CHECK-NEXT:    add r3, r1
-; CHECK-NEXT:    mov r11, r2
-; CHECK-NEXT:    adc r11, r4
+; CHECK-NEXT:    mov r4, r2
+; CHECK-NEXT:    adc r4, zero
 ; CHECK-NEXT:    shr r3, 4
-; CHECK-NEXT:    mov r4, r11
-; CHECK-NEXT:    shl r4, 28
-; CHECK-NEXT:    or r4, r3
-; CHECK-NEXT:    sar r11, 4
-; CHECK-NEXT:    mov r3, r4
+; CHECK-NEXT:    mov r11, r4
+; CHECK-NEXT:    shl r11, 28
+; CHECK-NEXT:    or r11, r3
+; CHECK-NEXT:    sar r4, 4
+; CHECK-NEXT:    mov r3, r11
 ; CHECK-NEXT:    shl r3, 4
-; CHECK-NEXT:    shl r11, 4
-; CHECK-NEXT:    shr r4, 28
-; CHECK-NEXT:    or r4, r11
+; CHECK-NEXT:    shl r4, 4
+; CHECK-NEXT:    shr r11, 28
+; CHECK-NEXT:    or r11, r4
 ; CHECK-NEXT:    sub r1, r3
-; CHECK-NEXT:    sbc r2, r4
+; CHECK-NEXT:    sbc r2, r11
 ; CHECK-NEXT:    jmp lr
   %r = srem i64 %x, 16
   ret i64 %r

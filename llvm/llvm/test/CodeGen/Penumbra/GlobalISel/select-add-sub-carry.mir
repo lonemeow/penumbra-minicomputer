@@ -10,6 +10,13 @@
   define void @uadde_fast() { ret void }
   define void @uadde_slow() { ret void }
   define void @usube_slow() { ret void }
+  define void @add_chain_imm() { ret void }
+  define void @add_chain_neg_imm() { ret void }
+  define void @sub_chain_imm() { ret void }
+  define void @sub_chain_neg_imm() { ret void }
+  define void @uaddo_zero_imm() { ret void }
+  define void @uadde_other_const() { ret void }
+  define void @uaddo_wide_const() { ret void }
 ...
 
 # G_UADDO with a *used* carry-out: ADD sets SR.C, then the carry bit is read
@@ -134,4 +141,220 @@ body: |
     %4:gprbank(s32), %5:gprbank(s1) = G_USUBE %0, %1, %3
     $r1 = COPY %4(s32)
     RET implicit $r1
+...
+
+# A constant second operand needs no register: the low word's add takes it as
+# an immediate, and a zero upper word is R0.
+---
+name:            add_chain_imm
+legalized:       true
+regBankSelected: true
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r1, $r2
+    ; CHECK-LABEL: name: add_chain_imm
+    ; CHECK: liveins: $r1, $r2
+    ; CHECK-NEXT: {{  $}}
+    ; CHECK-NEXT: [[COPY:%[0-9]+]]:gpr_allocatable = COPY $r1
+    ; CHECK-NEXT: [[COPY1:%[0-9]+]]:gpr_allocatable = COPY $r2
+    ; CHECK-NEXT: [[ADDi:%[0-9]+]]:gpr = ADDi [[COPY]], 1, implicit-def $sr
+    ; CHECK-NEXT: [[ADC:%[0-9]+]]:gpr = ADC [[COPY1]], $r0, implicit-def $sr, implicit $sr
+    ; CHECK-NEXT: $r1 = COPY [[ADDi]]
+    ; CHECK-NEXT: $r2 = COPY [[ADC]]
+    ; CHECK-NEXT: RET implicit $r1, implicit $r2
+    %0:gprbank(s32) = COPY $r1
+    %1:gprbank(s32) = COPY $r2
+    %2:gprbank(s32) = G_CONSTANT i32 1
+    %3:gprbank(s32) = G_CONSTANT i32 0
+    %4:gprbank(s32), %5:gprbank(s1) = G_UADDO %0, %2
+    %6:gprbank(s32), %7:gprbank(s1) = G_UADDE %1, %3, %5
+    $r1 = COPY %4(s32)
+    $r2 = COPY %6(s32)
+    RET implicit $r1, implicit $r2
+...
+
+# Adding a small negative constant is the opposite family's immediate, and an
+# all-ones upper word is R0 under the opposite opcode: the same sums and flags.
+---
+name:            add_chain_neg_imm
+legalized:       true
+regBankSelected: true
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r1, $r2
+    ; CHECK-LABEL: name: add_chain_neg_imm
+    ; CHECK: liveins: $r1, $r2
+    ; CHECK-NEXT: {{  $}}
+    ; CHECK-NEXT: [[COPY:%[0-9]+]]:gpr_allocatable = COPY $r1
+    ; CHECK-NEXT: [[COPY1:%[0-9]+]]:gpr_allocatable = COPY $r2
+    ; CHECK-NEXT: [[SUBi:%[0-9]+]]:gpr = SUBi [[COPY]], 1000, implicit-def $sr
+    ; CHECK-NEXT: [[SBC:%[0-9]+]]:gpr = SBC [[COPY1]], $r0, implicit-def $sr, implicit $sr
+    ; CHECK-NEXT: $r1 = COPY [[SUBi]]
+    ; CHECK-NEXT: $r2 = COPY [[SBC]]
+    ; CHECK-NEXT: RET implicit $r1, implicit $r2
+    %0:gprbank(s32) = COPY $r1
+    %1:gprbank(s32) = COPY $r2
+    %2:gprbank(s32) = G_CONSTANT i32 -1000
+    %3:gprbank(s32) = G_CONSTANT i32 -1
+    %4:gprbank(s32), %5:gprbank(s1) = G_UADDO %0, %2
+    %6:gprbank(s32), %7:gprbank(s1) = G_UADDE %1, %3, %5
+    $r1 = COPY %4(s32)
+    $r2 = COPY %6(s32)
+    RET implicit $r1, implicit $r2
+...
+
+# The sub family mirrors the add family.
+---
+name:            sub_chain_imm
+legalized:       true
+regBankSelected: true
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r1, $r2
+    ; CHECK-LABEL: name: sub_chain_imm
+    ; CHECK: liveins: $r1, $r2
+    ; CHECK-NEXT: {{  $}}
+    ; CHECK-NEXT: [[COPY:%[0-9]+]]:gpr_allocatable = COPY $r1
+    ; CHECK-NEXT: [[COPY1:%[0-9]+]]:gpr_allocatable = COPY $r2
+    ; CHECK-NEXT: [[SUBi:%[0-9]+]]:gpr = SUBi [[COPY]], 1000, implicit-def $sr
+    ; CHECK-NEXT: [[SBC:%[0-9]+]]:gpr = SBC [[COPY1]], $r0, implicit-def $sr, implicit $sr
+    ; CHECK-NEXT: $r1 = COPY [[SUBi]]
+    ; CHECK-NEXT: $r2 = COPY [[SBC]]
+    ; CHECK-NEXT: RET implicit $r1, implicit $r2
+    %0:gprbank(s32) = COPY $r1
+    %1:gprbank(s32) = COPY $r2
+    %2:gprbank(s32) = G_CONSTANT i32 1000
+    %3:gprbank(s32) = G_CONSTANT i32 0
+    %4:gprbank(s32), %5:gprbank(s1) = G_USUBO %0, %2
+    %6:gprbank(s32), %7:gprbank(s1) = G_USUBE %1, %3, %5
+    $r1 = COPY %4(s32)
+    $r2 = COPY %6(s32)
+    RET implicit $r1, implicit $r2
+...
+
+# Subtracting a small negative constant is an add.
+---
+name:            sub_chain_neg_imm
+legalized:       true
+regBankSelected: true
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r1, $r2
+    ; CHECK-LABEL: name: sub_chain_neg_imm
+    ; CHECK: liveins: $r1, $r2
+    ; CHECK-NEXT: {{  $}}
+    ; CHECK-NEXT: [[COPY:%[0-9]+]]:gpr_allocatable = COPY $r1
+    ; CHECK-NEXT: [[COPY1:%[0-9]+]]:gpr_allocatable = COPY $r2
+    ; CHECK-NEXT: [[ADDi:%[0-9]+]]:gpr = ADDi [[COPY]], 1, implicit-def $sr
+    ; CHECK-NEXT: [[ADC:%[0-9]+]]:gpr = ADC [[COPY1]], $r0, implicit-def $sr, implicit $sr
+    ; CHECK-NEXT: $r1 = COPY [[ADDi]]
+    ; CHECK-NEXT: $r2 = COPY [[ADC]]
+    ; CHECK-NEXT: RET implicit $r1, implicit $r2
+    %0:gprbank(s32) = COPY $r1
+    %1:gprbank(s32) = COPY $r2
+    %2:gprbank(s32) = G_CONSTANT i32 -1
+    %3:gprbank(s32) = G_CONSTANT i32 -1
+    %4:gprbank(s32), %5:gprbank(s1) = G_USUBO %0, %2
+    %6:gprbank(s32), %7:gprbank(s1) = G_USUBE %1, %3, %5
+    $r1 = COPY %4(s32)
+    $r2 = COPY %6(s32)
+    RET implicit $r1, implicit $r2
+...
+
+# Adding zero stays an add: a subtract of zero would set the carry the add
+# clears, and the carry-out here is read.
+---
+name:            uaddo_zero_imm
+legalized:       true
+regBankSelected: true
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r1
+    ; CHECK-LABEL: name: uaddo_zero_imm
+    ; CHECK: liveins: $r1
+    ; CHECK-NEXT: {{  $}}
+    ; CHECK-NEXT: [[COPY:%[0-9]+]]:gpr_allocatable = COPY $r1
+    ; CHECK-NEXT: [[ADDi:%[0-9]+]]:gpr = ADDi [[COPY]], 0, implicit-def $sr
+    ; CHECK-NEXT: [[COPY1:%[0-9]+]]:gpr_allocatable = COPY $r0
+    ; CHECK-NEXT: [[ADC:%[0-9]+]]:gpr = ADC [[COPY1]], $r0, implicit-def $sr, implicit $sr
+    ; CHECK-NEXT: [[COPY2:%[0-9]+]]:gpr_allocatable = COPY [[ADC]]
+    ; CHECK-NEXT: $r1 = COPY [[ADDi]]
+    ; CHECK-NEXT: $r2 = COPY [[COPY2]]
+    ; CHECK-NEXT: RET implicit $r1, implicit $r2
+    %0:gprbank(s32) = COPY $r1
+    %1:gprbank(s32) = G_CONSTANT i32 0
+    %2:gprbank(s32), %3:gprbank(s1) = G_UADDO %0, %1
+    %4:gprbank(s32) = G_ZEXT %3
+    $r1 = COPY %2(s32)
+    $r2 = COPY %4(s32)
+    RET implicit $r1, implicit $r2
+...
+
+# ADC and SBC have no immediate form: a carry-in op with any constant other
+# than zero or all-ones keeps it in a register.
+---
+name:            uadde_other_const
+legalized:       true
+regBankSelected: true
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r1, $r2, $r3
+    ; CHECK-LABEL: name: uadde_other_const
+    ; CHECK: liveins: $r1, $r2, $r3
+    ; CHECK-NEXT: {{  $}}
+    ; CHECK-NEXT: [[COPY:%[0-9]+]]:gpr_allocatable = COPY $r1
+    ; CHECK-NEXT: [[COPY1:%[0-9]+]]:gpr_allocatable = COPY $r2
+    ; CHECK-NEXT: [[COPY2:%[0-9]+]]:gpr_allocatable = COPY $r3
+    ; CHECK-NEXT: [[LLI:%[0-9]+]]:gpr = LLI 5
+    ; CHECK-NEXT: [[ADD:%[0-9]+]]:gpr = ADD [[COPY]], [[COPY1]], implicit-def $sr
+    ; CHECK-NEXT: [[ADC:%[0-9]+]]:gpr = ADC [[COPY2]], [[LLI]], implicit-def $sr, implicit $sr
+    ; CHECK-NEXT: $r1 = COPY [[ADD]]
+    ; CHECK-NEXT: $r2 = COPY [[ADC]]
+    ; CHECK-NEXT: RET implicit $r1, implicit $r2
+    %0:gprbank(s32) = COPY $r1
+    %1:gprbank(s32) = COPY $r2
+    %2:gprbank(s32) = COPY $r3
+    %3:gprbank(s32) = G_CONSTANT i32 5
+    %4:gprbank(s32), %5:gprbank(s1) = G_UADDO %0, %1
+    %6:gprbank(s32), %7:gprbank(s1) = G_UADDE %2, %3, %5
+    $r1 = COPY %4(s32)
+    $r2 = COPY %6(s32)
+    RET implicit $r1, implicit $r2
+...
+
+# A constant that fits neither as given nor negated stays a register operand.
+---
+name:            uaddo_wide_const
+legalized:       true
+regBankSelected: true
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r1
+    ; CHECK-LABEL: name: uaddo_wide_const
+    ; CHECK: liveins: $r1
+    ; CHECK-NEXT: {{  $}}
+    ; CHECK-NEXT: [[COPY:%[0-9]+]]:gpr_allocatable = COPY $r1
+    ; CHECK-NEXT: [[LLI:%[0-9]+]]:gpr_allocatable = LLI 9029
+    ; CHECK-NEXT: [[LUI:%[0-9]+]]:gpr = LUI [[LLI]], 1
+    ; CHECK-NEXT: [[ADD:%[0-9]+]]:gpr = ADD [[COPY]], [[LUI]], implicit-def $sr
+    ; CHECK-NEXT: [[COPY1:%[0-9]+]]:gpr_allocatable = COPY $r0
+    ; CHECK-NEXT: [[ADC:%[0-9]+]]:gpr = ADC [[COPY1]], $r0, implicit-def $sr, implicit $sr
+    ; CHECK-NEXT: [[COPY2:%[0-9]+]]:gpr_allocatable = COPY [[ADC]]
+    ; CHECK-NEXT: $r1 = COPY [[ADD]]
+    ; CHECK-NEXT: $r2 = COPY [[COPY2]]
+    ; CHECK-NEXT: RET implicit $r1, implicit $r2
+    %0:gprbank(s32) = COPY $r1
+    %1:gprbank(s32) = G_CONSTANT i32 74565
+    %2:gprbank(s32), %3:gprbank(s1) = G_UADDO %0, %1
+    %4:gprbank(s32) = G_ZEXT %3
+    $r1 = COPY %2(s32)
+    $r2 = COPY %4(s32)
+    RET implicit $r1, implicit $r2
 ...

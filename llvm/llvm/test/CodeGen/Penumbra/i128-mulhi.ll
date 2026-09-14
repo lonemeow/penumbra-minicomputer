@@ -51,7 +51,7 @@ define i64 @umulh64(i64 %a, i64 %b) {
 ; CHECK-NEXT:    adc r3, zero
 ; CHECK-NEXT:    add r3, lr
 ; CHECK-NEXT:    add r3, r4
-; CHECK-NEXT:    add r5, r5
+; CHECK-NEXT:    add r5, 0
 ; CHECK-NEXT:    adc r2, r6
 ; CHECK-NEXT:    add r1, r5
 ; CHECK-NEXT:    adc r2, r3
@@ -197,7 +197,7 @@ define i64 @umulh64_load(ptr %p, i64 %b) {
 ; CHECK-NEXT:    adc r4, zero
 ; CHECK-NEXT:    add r4, r6
 ; CHECK-NEXT:    add r4, r3
-; CHECK-NEXT:    add r11, r11
+; CHECK-NEXT:    add r11, 0
 ; CHECK-NEXT:    adc r2, r5
 ; CHECK-NEXT:    add r1, r11
 ; CHECK-NEXT:    adc r2, r4
@@ -233,8 +233,8 @@ define i64 @add128_carry(i64 %a, i64 %b) {
 ; CHECK-NEXT:    adc r1, zero
 ; CHECK-NEXT:    cmp r1, 1
 ; CHECK-NEXT:    mov r1, r11
-; CHECK-NEXT:    adc r1, r1
-; CHECK-NEXT:    adc r11, r11
+; CHECK-NEXT:    adc r1, zero
+; CHECK-NEXT:    adc r11, zero
 ; CHECK-NEXT:    mov r2, r11
 ; CHECK-NEXT:    jmp lr
   %xe = zext i64 %a to i128

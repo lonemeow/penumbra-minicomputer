@@ -91,11 +91,9 @@ define void @wide_wrap_carry(ptr %bt, i64 %x) {
 ; CHECK-NEXT:  // %bb.1: // %bump
 ; CHECK-NEXT:    ldw r2, [r1 + 8]
 ; CHECK-NEXT:    ldw r3, [r1 + 12]
-; CHECK-NEXT:    lli r4, 1
-; CHECK-NEXT:    mov r11, zero
-; CHECK-NEXT:    add r4, r2
-; CHECK-NEXT:    adc r3, r11
-; CHECK-NEXT:    stw r4, [r1 + 8]
+; CHECK-NEXT:    add r2, 1
+; CHECK-NEXT:    adc r3, zero
+; CHECK-NEXT:    stw r2, [r1 + 8]
 ; CHECK-NEXT:    stw r3, [r1 + 12]
 ; CHECK-NEXT:  .LBB2_2: // %done
 ; CHECK-NEXT:    jmp lr

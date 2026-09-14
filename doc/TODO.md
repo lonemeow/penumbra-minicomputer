@@ -2780,22 +2780,35 @@ forms".  A related narrowing: `ldw r; sar r,16` with only the high
 half used is `ldhs [+2]` — SelectionDAG narrows the load, GlobalISel
 does not; 15 Doom sites, including `R_PointOnSide`.
 
-## Compiler: selectAddSubCarry misses the immediate fold
+## Compiler: selectAddSubCarry misses the immediate fold — RESOLVED
 
-`selectAddSubCarry` hand-emits the register `ADD`/`SUB` for the i64
-carry chain, so an i64 add/sub by a small constant materializes it
-with an LLI instead of `ADDi`/`SUBi`.  Routing those through an
-`emitFoldableALU`-style helper (sharing the uimm16 fold logic with
-`emitCompare`, the way `emitSelectCC` does for select immediates)
-would close it.
+`selectAddSubCarry` emitted the register `ADD`/`ADC`/`SUB`/`SBC` for
+the i64 carry chain whatever the second operand was.  Every 64-bit
+counter bump — `cpu_nsyscall` on every syscall, `cpu_nintr` and the
+`evcnt` counters on every interrupt, the TCP/IP statistics — carried
+an `lli 1` for the low word and a `mov rz, zero` for the high one:
 
-The zero half has the same gap: an i64 increment's upper word is
-`ADC hi, 0`, and selection materializes the zero with `mov rz, zero`
-instead of passing `R0` as the operand.  Every 64-bit counter bump
-therefore carries an `lli 1` and a `mov rz, zero` — 484 and 493
-kernel sites (2026-09-13), including `cpu_nsyscall` on every syscall,
-`cpu_nintr` and the `evcnt` counters on every interrupt, and the
-TCP/IP statistics; 25 more in `libsqlite3`.
+```
+lli r4,1; mov r11,zero; add r4,r2; adc r3,r11
+add r2,1; adc r3,zero
+```
+
+A small i64 subtraction was worse: `sub_to_add` turns `x - 1000` into
+`x + -1000` before narrowing, giving `llis -1000; llis -1; add; adc`.
+
+The constant now goes into the instruction when a form exists that
+leaves the same result and flags: `ADDi`/`SUBi` for a uimm16 constant,
+the opposite family's immediate for a negated one, `R0` for a zero
+carry-in operand, and `R0` under the opposite opcode for an all-ones
+one.  Shape coverage: `GlobalISel/select-add-sub-carry.mir`.
+
+Measured statically on the hot-path review corpus (2026-09-13): kernel
+−1,302 instructions (`.text` −5,208 B, 37 fewer callee-saved saves),
+`libsqlite3` −450, Doom unchanged.  `syscall` −2, `intr_dispatch` −5,
+`statclock` −14, `binuptime` −2.  The copied zeros feeding an `ADC`
+went from 577 to 7 in the kernel.  Thirteen kernel functions grew, the
+largest `ip_output` by 28 of 1,578 instructions, from the allocator
+choosing differently once the constants' registers were gone.
 
 ## Compiler: redundant extension of comparison results
 
@@ -3408,7 +3421,7 @@ Compiler causes, widest reach first, each with its own entry:
 | Constants never rematerialized | 220 kernel loops; ~1,250 SQLite constant reloads | "constants are not rematerializable" |
 | `&global + C` built in the entry block; addresses hoisted into callee-saved registers | 1,282 SQLite sites; Doom BSP walk frame | "constant-offset global addresses stay in the entry block", "early MachineLICM hoists global addresses into callee-saved registers" |
 | `p - K` and integer MMIO addresses miss the offset fold | memmove backward loops; 187 driver sites | "pointer-minus-constant and integer MMIO addresses miss their folds" |
-| 64-bit counter increments | every syscall and interrupt | "selectAddSubCarry misses the immediate fold" |
+| 64-bit counter increments — RESOLVED | every syscall and interrupt | "selectAddSubCarry misses the immediate fold" |
 | A store between producer and compare | `KPREEMPT_ENABLE` on every `userret` | "compare-elim does not look through COPY" |
 
 Most of the frame cost belongs to the shrink-wrapping and tail-call
