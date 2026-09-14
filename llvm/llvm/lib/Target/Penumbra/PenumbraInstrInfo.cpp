@@ -332,6 +332,11 @@ bool PenumbraInstrInfo::reverseBranchCondition(
 // differ between `SUBi Rx, k` and `CMP Rx, 0` whenever k != 0, so any
 // reader of C or V must keep the explicit CMP.
 //
+// Second pattern: a wrap check, `CMP %sum, %a` after `%sum = ADD %a, %b`
+// (or `CMPi` against an `ADDi`'s own immediate).  Here only C carries
+// over, inverted, so every reader must consume C alone and has its
+// condition swapped.
+//
 // Future extensions (left as TODOs):
 //   - `CMP Rx, Ry` after `SUB Rx_dst, Ry`.
 //   - `TESTi Rx, mask` after `ANDi Rx, mask`.
@@ -427,6 +432,26 @@ bool producesNZFlagsForMask(const MachineInstr &Producer, int64_t CmpMask) {
   return (ProducerMask & CmpMask) == ProducerMask;
 }
 
+// True when Cmp tests whether Add wrapped: it compares Add's sum against one
+// of Add's addends, which the sum is below exactly when the add wrapped.
+// `CMP %sum, %a` or `CMP %sum, %b` after `%sum = ADD %a, %b`, and
+// `CMPi %sum, C` after `%sum = ADDi %a, C`.
+bool isWrapCheck(const MachineInstr &Add, const MachineInstr &Cmp) {
+  bool IsReg =
+      Add.getOpcode() == Penumbra::ADD && Cmp.getOpcode() == Penumbra::CMP;
+  bool IsImm =
+      Add.getOpcode() == Penumbra::ADDi && Cmp.getOpcode() == Penumbra::CMPi;
+  if (!IsReg && !IsImm)
+    return false;
+  if (Cmp.getOperand(0).getReg() != Add.getOperand(0).getReg())
+    return false;
+  if (IsImm)
+    return Cmp.getOperand(1).getImm() == Add.getOperand(2).getImm();
+  Register CmpReg = Cmp.getOperand(1).getReg();
+  return CmpReg == Add.getOperand(1).getReg() ||
+         CmpReg == Add.getOperand(2).getReg();
+}
+
 } // namespace
 
 bool PenumbraInstrInfo::analyzeCompare(const MachineInstr &MI, Register &SrcReg,
@@ -447,18 +472,66 @@ bool PenumbraInstrInfo::analyzeCompare(const MachineInstr &MI, Register &SrcReg,
     CmpMask = MI.getOperand(1).getImm();
     CmpValue = 0;
     return true;
-  // TODO: CMP, TEST when their elision patterns are added below.
+  case Penumbra::CMP:
+    SrcReg = MI.getOperand(0).getReg();
+    SrcReg2 = MI.getOperand(1).getReg();
+    CmpMask = ~0;
+    CmpValue = 0;
+    return true;
+  // TODO: TEST when its elision pattern is added below.
   default:
     return false;
   }
 }
 
+// A wrap check on an add leaves C = NOT wrapped where the add left
+// C = wrapped.  Readers of C alone take the add's flags with their condition
+// swapped.  Z and N differ between the two, so any other reader keeps the
+// compare.
+bool PenumbraInstrInfo::optimizeWrapCheck(
+    MachineInstr &CmpInstr, Register SumReg,
+    const MachineRegisterInfo &MRI) const {
+  MachineInstr *Add = MRI.getUniqueVRegDef(SumReg);
+  MachineBasicBlock *MBB = CmpInstr.getParent();
+  if (!Add || Add->getParent() != MBB || !isWrapCheck(*Add, CmpInstr))
+    return false;
+
+  // SSA puts the add before its compare; its flags must still be in SR there.
+  const TargetRegisterInfo &TRI = getRegisterInfo();
+  for (auto It = std::next(Add->getIterator()); It != CmpInstr.getIterator();
+       ++It)
+    if (It->modifiesRegister(Penumbra::SR, &TRI))
+      return false;
+
+  SmallVector<MachineInstr *, 2> Readers;
+  for (auto It = std::next(CmpInstr.getIterator()); It != MBB->end(); ++It) {
+    if (It->readsRegister(Penumbra::SR, &TRI)) {
+      if (getBranchFlagsRead(It->getOpcode()) != FC)
+        return false;
+      Readers.push_back(&*It);
+    }
+    if (It->modifiesRegister(Penumbra::SR, &TRI))
+      break;
+  }
+  if (Readers.empty())
+    return false;
+
+  for (MachineInstr *Reader : Readers)
+    Reader->setDesc(get(getOppositeBranchOpcode(Reader->getOpcode())));
+  Add->clearRegisterDeads(Penumbra::SR);
+  CmpInstr.eraseFromParent();
+  return true;
+}
+
 bool PenumbraInstrInfo::optimizeCompareInstr(
     MachineInstr &CmpInstr, Register SrcReg, Register /*SrcReg2*/,
     int64_t CmpMask, int64_t CmpValue,
-    const MachineRegisterInfo * /*MRI*/) const {
-  // Both elidable forms compare against zero: `CMPi Rx, 0` over the whole
-  // word, `TESTi Rx, mask` over the masked bits.
+    const MachineRegisterInfo *MRI) const {
+  if (optimizeWrapCheck(CmpInstr, SrcReg, *MRI))
+    return true;
+
+  // The remaining elidable forms compare against zero: `CMPi Rx, 0` over the
+  // whole word, `TESTi Rx, mask` over the masked bits.
   if (CmpValue != 0)
     return false;
   if (CmpInstr.getOpcode() != Penumbra::CMPi &&

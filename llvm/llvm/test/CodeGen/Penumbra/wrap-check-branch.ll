@@ -45,18 +45,19 @@ exit:
   ret void
 }
 
-; A general wrap check compares the sum against an addend.
+; A general wrap check compares the sum against an addend; compare elimination
+; branches on the add's carry instead.
 define i32 @wrap_check(i32 %a, i32 %b) {
 ; CHECK-LABEL: wrap_check:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0: // %entry
-; CHECK-NEXT:    add r1, r2
-; CHECK-NEXT:    cmp r1, r2
-; CHECK-NEXT:    bcs .LBB1_1
+; CHECK-NEXT:    add r2, r1
+; CHECK-NEXT:    bcc .LBB1_1
 ; CHECK-NEXT:  // %bb.2: // %overflow
 ; CHECK-NEXT:    llis r1, -1
 ; CHECK-NEXT:    jmp lr
 ; CHECK-NEXT:  .LBB1_1: // %ok
+; CHECK-NEXT:    mov r1, r2
 ; CHECK-NEXT:    jmp lr
 entry:
   %sum = add i32 %a, %b

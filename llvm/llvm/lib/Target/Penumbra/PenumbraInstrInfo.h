@@ -60,7 +60,8 @@ public:
 
   // Compare-elimination peephole hooks (driven by PeepholeOptimizer).  Together
   // they recognize `CMPi Rx, 0` whose Z/N flags are already produced by an
-  // immediately-preceding flag-setting ALU instruction, and erase the CMP.
+  // immediately-preceding flag-setting ALU instruction, and a wrap check
+  // comparing an add's sum against an addend, and erase the CMP.
   bool analyzeCompare(const MachineInstr &MI, Register &SrcReg,
                       Register &SrcReg2, int64_t &CmpMask,
                       int64_t &CmpValue) const override;
@@ -72,6 +73,11 @@ public:
 
 private:
   static unsigned getOppositeBranchOpcode(unsigned Opc);
+
+  // Erase a compare of an add's sum against one of its addends, taking the
+  // add's carry instead.
+  bool optimizeWrapCheck(MachineInstr &CmpInstr, Register SumReg,
+                         const MachineRegisterInfo &MRI) const;
 };
 
 } // namespace llvm

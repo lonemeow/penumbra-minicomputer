@@ -139,3 +139,122 @@ a:
 b:
   ret void
 }
+
+;; Wrap check on an add: the sum compared against an addend.  The branch takes
+;; the add's carry with its condition swapped.
+define i32 @wrap_check_branch(i32 %a, i32 %b) {
+; CHECK-LABEL: wrap_check_branch:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  // %bb.0: // %entry
+; CHECK-NEXT:    add r2, r1
+; CHECK-NEXT:    bcc .LBB4_1
+; CHECK-NEXT:  // %bb.2: // %overflow
+; CHECK-NEXT:    llis r1, -1
+; CHECK-NEXT:    jmp lr
+; CHECK-NEXT:  .LBB4_1: // %ok
+; CHECK-NEXT:    mov r1, r2
+; CHECK-NEXT:    jmp lr
+entry:
+  %sum = add i32 %a, %b
+  %wrapped = icmp ult i32 %sum, %a
+  br i1 %wrapped, label %overflow, label %ok
+ok:
+  ret i32 %sum
+overflow:
+  ret i32 -1
+}
+
+;; The immediate form, against the add's own constant.
+define i32 @wrap_check_imm(i32 %a) {
+; CHECK-LABEL: wrap_check_imm:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  // %bb.0: // %entry
+; CHECK-NEXT:    add r1, 1000
+; CHECK-NEXT:    bcc .LBB5_1
+; CHECK-NEXT:  // %bb.2: // %overflow
+; CHECK-NEXT:    llis r1, -1
+; CHECK-NEXT:    jmp lr
+; CHECK-NEXT:  .LBB5_1: // %ok
+; CHECK-NEXT:    jmp lr
+entry:
+  %sum = add i32 %a, 1000
+  %wrapped = icmp ult i32 %sum, 1000
+  br i1 %wrapped, label %overflow, label %ok
+ok:
+  ret i32 %sum
+overflow:
+  ret i32 -1
+}
+
+;; Negative: the sum compared against a value that is not an addend asks
+;; something other than whether the add wrapped, so the compare stays.
+define i32 @no_elide_compare_not_addend(i32 %a, i32 %b, i32 %c) {
+; CHECK-LABEL: no_elide_compare_not_addend:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  // %bb.0: // %entry
+; CHECK-NEXT:    add r2, r1
+; CHECK-NEXT:    cmp r2, r3
+; CHECK-NEXT:    bcs .LBB6_1
+; CHECK-NEXT:  // %bb.2: // %less
+; CHECK-NEXT:    llis r1, -1
+; CHECK-NEXT:    jmp lr
+; CHECK-NEXT:  .LBB6_1: // %ok
+; CHECK-NEXT:    mov r1, r2
+; CHECK-NEXT:    jmp lr
+entry:
+  %sum = add i32 %a, %b
+  %lt = icmp ult i32 %sum, %c
+  br i1 %lt, label %less, label %ok
+ok:
+  ret i32 %sum
+less:
+  ret i32 -1
+}
+
+;; Negative: a different immediate is not a wrap check.
+define i32 @no_elide_imm_mismatch(i32 %a) {
+; CHECK-LABEL: no_elide_imm_mismatch:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  // %bb.0: // %entry
+; CHECK-NEXT:    add r1, 1000
+; CHECK-NEXT:    cmp r1, 999
+; CHECK-NEXT:    bcs .LBB7_1
+; CHECK-NEXT:  // %bb.2: // %less
+; CHECK-NEXT:    llis r1, -1
+; CHECK-NEXT:    jmp lr
+; CHECK-NEXT:  .LBB7_1: // %ok
+; CHECK-NEXT:    jmp lr
+entry:
+  %sum = add i32 %a, 1000
+  %lt = icmp ult i32 %sum, 999
+  br i1 %lt, label %less, label %ok
+ok:
+  ret i32 %sum
+less:
+  ret i32 -1
+}
+
+;; Negative: a reader of Z as well as C keeps the compare, since the add's Z
+;; answers `sum == 0`, not `sum == a`.
+define i32 @no_elide_wrap_check_reads_z(i32 %a, i32 %b) {
+; CHECK-LABEL: no_elide_wrap_check_reads_z:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  // %bb.0: // %entry
+; CHECK-NEXT:    add r2, r1
+; CHECK-NEXT:    cmp r2, r1
+; CHECK-NEXT:    bhi .LBB8_1
+; CHECK-NEXT:  // %bb.2: // %overflow
+; CHECK-NEXT:    llis r1, -1
+; CHECK-NEXT:    jmp lr
+; CHECK-NEXT:  .LBB8_1: // %ok
+; CHECK-NEXT:    mov r1, r2
+; CHECK-NEXT:    jmp lr
+entry:
+  %sum = add i32 %a, %b
+  %le = icmp ule i32 %sum, %a
+  br i1 %le, label %overflow, label %ok
+ok:
+  ret i32 %sum
+overflow:
+  ret i32 -1
+}

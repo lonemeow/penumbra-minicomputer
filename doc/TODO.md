@@ -1299,7 +1299,7 @@ materialized boolean.  Four shapes pay for that (static counts,
 |---|---|---|---|
 | `x >= 0` (`icmp sgt x, -1`) | `llis t,-1; cmp x,t; ble` | `cmp x,0; blt` | kernel 274, SQLite 612, Doom 86 |
 | `(x & C) != 0` | `mov t,x; and t,C; beq` | `test x,C; beq` | Doom 140 |
-| branch on a non-compare `i1` whose true edge falls through | `lli t,1; xor t,b; test t,1; bne` | `test b,1; beq` | kernel 848 |
+| branch on a non-compare `i1` whose true edge falls through — DONE | `lli t,1; xor t,b; test t,1; bne` | `test b,1; beq` | kernel 848 |
 | `x == -1` | `llis t,-1; cmp x,t; beq` | `not t,x; beq` | Doom 53 |
 
 - **Immediate adjustment.**  `sgt x, -1` is `sge x, 0`.  AArch64's
@@ -1318,15 +1318,17 @@ materialized boolean.  Four shapes pay for that (static counts,
   `x` stays live.  `G_ICMP ne (G_AND x, C), 0` feeding a branch
   should select `TESTi` directly; the `R_RenderBSPNode` entry test is
   one of the sites.
-- **Inverted boolean.**  The IRTranslator swaps successors with
-  `G_XOR %v, 1` when the true edge is the layout successor.  A
-  compare absorbs it into the predicate; any other `i1` — a call
-  result, a `bool` load, a phi — reaches `selectBrCond` with the XOR
-  still in place, and selection materializes and tests it.  Looking
-  through `XOR c, 1` and inverting the branch condition fixes it.
-  Kernel sites include `comintr`, `intr_dispatch`,
-  `mutex_vector_enter` and `paudio_intr`.  RISC-V's GlobalISel output
-  has the same `xori`, so this is upstream-worthy.
+- **Inverted boolean — DONE.**  The branch-inversion combine wraps
+  the condition in `G_XOR %v, 1` when the true edge is the layout
+  successor.  A compare absorbed it into the predicate, but any other
+  `i1` — a call result, a `bool` load, a phi — reached `selectBrCond`
+  with the XOR still in place, and selection materialized and tested
+  it.  `selectBrCond` now looks through single-use `XOR c, 1` and
+  `AND c, 1` wrappers and flips the branch sense.  The corpus's
+  `lli 1; xor` pairs dropped from 1,071 to 32 in the kernel, 199 to
+  42 in `libsqlite3` and 88 to 18 in Doom; those left feed values,
+  not branches.  Shape coverage: `brcond-inverted-bool.ll`.  RISC-V's
+  GlobalISel output has the same `xori`, so this is upstream-worthy.
 
 ## Compiler: share the hi-word compare in i64 three-way compares
 
@@ -3399,7 +3401,7 @@ Compiler causes, widest reach first, each with its own entry:
 | Cause | Shows up in | Entry |
 |---|---|---|
 | No branch probabilities reach block placement | every `__predict_false`, KASSERT and cold path | "IRTranslator runs without branch probabilities" |
-| Countdown loop exits test a materialized overflow flag | Doom column and span drawers: 6 of 18 instructions per pixel | "countdown loop exits pay for an overflow flag" |
+| Countdown loop exits test a materialized overflow flag — RESOLVED | Doom column and span drawers: 6 of 18 instructions per pixel | "countdown loop exits pay for an overflow flag" |
 | s64 relational compares | SQLite b-tree bisection and record compare | "64-bit relational compares expand to select diamonds" |
 | Compare immediates, TEST, inverted booleans | 848 / 612 / 274 / 140 sites | "compare and branch selection misses immediate and TEST forms" |
 | Byte and halfword sign-bit tests | SQLite varint bytes, BSP child index, `sy_narg` | "signed sub-word loads in relational compares miss LDBS/LDHS" |
@@ -3602,40 +3604,63 @@ whatever the operand storage held.  It had always held zero before —
 all 1,895 PIC jump-table bases in the installed shared libraries check
 out.
 
-## Compiler: countdown loop exits pay for an overflow flag
+## Compiler: countdown loop exits pay for an overflow flag — RESOLVED
 
 `do { ... } while (count--)` loops — all eight Doom column and span
-drawers — end in eight instructions where two do:
+drawers — ended in eight instructions where two do:
 
 ```
 lli r6,1; add r1,r6; mov r6,lr; adc r6,zero; lli r7,1; xor r6,r7; and r6,1; bne loop
 add r1,1; bne loop
 ```
 
-`lr` holds a zero for the whole loop, and `r7` is an extra
+`lr` held a zero for the whole loop, and `r7` was an extra
 callee-saved register spent on the sequence.
 
 LSR turns the down-counter into an up-counter whose exit test is
-`iv + 1 == 0`.  CodeGenPrepare rewrites that test as
-`uadd.with.overflow`: Penumbra does not override
-`TargetLowering::shouldFormOverflowOp`, and the default accepts.
-Selection then materializes the carry as a value, inverts it through
-the `G_XOR` the IRTranslator emits for a fall-through true edge (see
-"compare and branch selection misses immediate and TEST forms"),
-masks it and tests it.  `llc -disable-cgp` gives `add r1,1; bne` and
-frees the callee-saved register.
+`iv + 1 == 0`, and CodeGenPrepare rewrote that test as
+`uadd.with.overflow`.  Selection has no branch on an overflow op's
+carry, so it materialized the carry, inverted it through the
+branch-inversion `G_XOR`, masked it and tested it.
 
-Cost: `R_DrawColumn`'s loop goes from 18 instructions per pixel to 12
-— 12 cycles on penumbra1, 6 on penumbra2_5.  The narrowest scan finds
-the same tail about 15 times in the kernel and 9 in `libsqlite3`.
+`PenumbraISelLowering` now refuses the rewrite in
+`shouldFormOverflowOp` for register-width types.  The compare selects
+next to its branch, and compare elimination reuses the add's flags.
+Wider adds keep the overflow form: it narrows onto the `ADD`/`ADC`
+chain, whose last carry is the wrap, while the compare would expand
+as in "64-bit relational compares expand to select diamonds".
+Refusing both widths cost `bintime_addx` — inlined into `binuptime`,
+`nanouptime` and `microuptime` on every `clock_gettime` — 7 to 10
+instructions and extra branches.  Branching on the carry
+from inside the selector was rejected: the instructions between the
+add and the branch are still generic there, so whether SR survives
+would have to be guessed from how they will select.  Selection
+places flag producers beside their consumers; flag reuse belongs to
+the peephole pass, which sees each instruction's real SR defs.
+Shape coverage: `wrap-check-branch.ll`.
 
-Fix, either or both:
-1. Override `shouldFormOverflowOp` to refuse `UADDO`.  The hook sees
-   only the opcode and type, so genuine overflow checks lose the form
-   too and select as an add plus an unsigned compare.
-2. Let `selectBrCond` branch directly on a `G_UADDO` carry in the same
-   block (`bcs`/`bcc`) instead of materializing it.  That also serves
-   genuine overflow checks.
+`R_DrawColumn`'s loop is 12 instructions per pixel instead of 18, and
+the function saves 3 registers instead of 4.  Together with the
+inverted-boolean fix in "compare and branch selection misses
+immediate and TEST forms", measured statically on the hot-path review
+corpus (2026-09-13):
+
+| | `.text` | callee-saved saves | carry reads (`adc x, zero`) |
+|---|---:|---:|---:|
+| Doom | −844 B | 4,664 → 4,656 | 145 → 134 |
+| kernel `GENERIC.DEBUG` | −10,144 B | 35,947 → 35,937 | 1,199 → 1,146 |
+| SQLite (PIC) | −1,544 B | 14,077 → 14,075 | 806 → 794 |
+
+A general wrap check, `a + b < a`, selects as `add; cmp sum, a; bcc`,
+and compare elimination then drops the compare: the sum is below an
+addend exactly when the add wrapped, so the add's C is the compare's
+inverted, and readers of C alone swap `BCC`/`BCS`.  On the corpus it
+fires only in the kernel, in 4 functions.  Shape coverage:
+`compare-elim.ll`.
+
+Open: a wrap check used as a value still selects as
+`cmp; mov; sbc zero; and 1` after the add, where `mov; adc zero` does.
+One site in Doom.
 
 ## Compiler: constants are not rematerializable
 
