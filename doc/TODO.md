@@ -2345,6 +2345,47 @@ from 25 → 30 MHz (≈ 14 % margin under the ~34 MHz floor, room for the
 forwarding/BP logic to eat into). That PLL change + a flash-and-run on the
 board is the remaining step.
 
+### Dead LUT-RAM in the main TLB's port-A copies (open; a gen3 lesson)
+
+`penumbra2_tlb` keeps each entry's 64-bit `{PTE, VPN}` word in four
+LUT-RAM copies, one per way for each translate port, and every write
+updates all four. Port B's copies also serve sysreg readback, but port
+A's feed only `penumbra2_tlb_perm`, which reads VPN, ASID, PPN and the
+G U X W R C flags. The rest of port A's word is written on every fill
+and never read:
+
+| Stored bits | What | Why it is never read |
+|---|---|---|
+| VPN word [31:28] | pad | the match ignores it |
+| PTE [11:8] | SW bits | readback comes from port B |
+| PTE [1] | reserved flag | unused |
+| PTE [0] | V | validity lives in the `way*_v_vec` flop vector |
+
+V is dead in all four copies: readback substitutes the flop vector too.
+
+Synthesis would normally trim unread memory bits, but port A's read
+word leaves `penumbra2_tlb` through `u_perm_a`'s word-shaped ports, and
+`penumbra2_tlb_perm` is `keep_hierarchy`: the TLB sees the bits as
+used, the permission module drops them, and neither side sees the
+other's half. Measured on the gen2 and gen2.5 synthesis netlists
+(identical; the MMU is shared): 8 LUT-RAM cells, the pad and SW columns
+of both ways, plus about two dozen LUTs, mostly their read muxes. Tiny
+as area, but it sits in the translate cone: the dead cells add 12.5 %
+to the read-address load of port A's LUT-RAM (the I-side set index,
+`i_a_vaddr[16:12]`) and are placed in the congested MMU region.
+`make fanout` lists their inputs under `(no register)`.
+
+Not fixed, since gen2/gen2.5 take no further core work. The fix, if
+ever wanted: give `penumbra2_tlb_perm` field-shaped ports (VPN, ASID,
+PPN, flags) so unused bits never cross the boundary, and drop V from
+the RAM.
+
+gen3 lesson: `penumbra3_tlb_store` and `penumbra3_tlb_verdict` pass the
+same word-shaped `vpn_word` / `pte_word`. Neither carries
+`keep_hierarchy`, so synthesis still trims across them; if the verdict
+gets a kept boundary for timing, switch its ports to fields in the same
+change.
+
 ## Hardware: L2 phase 2 — write-back / write-allocate
 
 The headline remaining cache optimization, and the highest-impact
