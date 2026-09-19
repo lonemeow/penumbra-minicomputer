@@ -648,13 +648,14 @@ DEMOS_DIR        := $(BUILD_DIR)/demos
 OVERLAY_ROOT    := $(BUILD_DIR)/netbsd-overlay
 NETBSD_OVERLAYS := benchmark-overlay demos-overlay penmon-overlay \
                    exhibit-launcher-overlay doom-overlay pmusic-test-overlay \
-                   local-overlay
+                   modplay-overlay local-overlay
 
 .PHONY: netbsd-overlay benchmark-overlay demos-overlay penmon-overlay penmon
 .PHONY: demos
 .PHONY: exhibit-launcher-overlay exhibit-launcher
 .PHONY: doom-overlay doom
 .PHONY: pmusic-test-overlay pmusic-test local-overlay
+.PHONY: modplay-overlay modplay modplay-dump
 netbsd-overlay:
 	rm -rf $(OVERLAY_ROOT)
 	@$(MAKE) $(NETBSD_OVERLAYS)
@@ -681,6 +682,10 @@ doom-overlay:
 
 pmusic-test-overlay:
 	@$(MAKE) -C sw/pmusic-test LLVM_PREFIX=$(LLVM_PREFIX) \
+		DESTDIR=$(abspath $(DESTDIR)) OVERLAY_ROOT=$(abspath $(OVERLAY_ROOT)) overlay
+
+modplay-overlay:
+	@$(MAKE) -C sw/modplay LLVM_PREFIX=$(LLVM_PREFIX) \
 		DESTDIR=$(abspath $(DESTDIR)) OVERLAY_ROOT=$(abspath $(OVERLAY_ROOT)) overlay
 
 # Files for the image that stay out of the repository: whatever sits
@@ -711,6 +716,16 @@ doom:
 pmusic-test:
 	@$(MAKE) -C sw/pmusic-test LLVM_PREFIX=$(LLVM_PREFIX) DESTDIR=$(abspath $(DESTDIR))
 	@echo "pmusic-test binary: $(BUILD_DIR)/pmusic-test/pmusic-test"
+
+modplay:
+	@$(MAKE) -C sw/modplay LLVM_PREFIX=$(LLVM_PREFIX) DESTDIR=$(abspath $(DESTDIR))
+	@echo "modplay binary: $(BUILD_DIR)/modplay/modplay"
+
+# The same parser and replayer on the build host, walking a song
+# without playing it: `make modplay-dump', then
+# build/modplay/modplay-dump [-r] file.mod
+modplay-dump:
+	@$(MAKE) -C sw/modplay dump
 
 penmon:
 	@$(MAKE) -C sw/penmon LLVM_PREFIX=$(LLVM_PREFIX) DESTDIR=$(abspath $(DESTDIR))
