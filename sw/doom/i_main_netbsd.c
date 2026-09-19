@@ -46,6 +46,10 @@ main(int argc, char **argv)
 {
     int i;
 
+    // Startup reports progress as dots with no newline (R_Init, for one),
+    // which a line-buffered terminal holds back until the phase is over.
+    setvbuf(stdout, NULL, _IONBF, 0);
+
     myargc = argc;
     myargv = malloc(argc * sizeof(char *));
     if (myargv == NULL)
