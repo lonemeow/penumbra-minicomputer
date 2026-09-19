@@ -5547,6 +5547,95 @@ deliberate treatment: keep_hierarchy over the usbhc/PHY cluster
 constraint pinning the USB complex away from the CPU cone, then
 re-sweep for a pin at or above the 27 MHz floor.
 
+## Kernel: soft interrupts take the scheduler path
+
+The port does not define `__HAVE_FAST_SOFTINTS`, so every soft
+interrupt goes through the generic implementation in
+`sys/kern/kern_softint.c`.  There `softint_trigger` only flags a
+reschedule; the handler runs in its own thread when the scheduler
+next switches, and each dispatch costs two full switches
+(`mi_switch` plus `cpu_switchto`), into the softint thread and back
+out.  When that happens depends on what the CPU was doing:
+
+- **Idle:** promptly, after those two switches.
+- **Running a user process:** at its next return to user mode,
+  where the pending reschedule preempts it onto the run queue.
+- **Running kernel code:** not until that code sleeps, reaches a
+  preemption point, or returns to user mode.  There is no kernel
+  preemption, and `kern_softint.c` refuses `__HAVE_PREEMPTION`
+  without fast softints.
+
+With fast softints the handler runs as the interrupt exits, on a
+context borrowed from the interrupted LWP: one stack switch and a
+callee-saved register save, with a full switch only if the handler
+blocks.  That removes two switches per soft interrupt, and bounds
+the dispatch delay by how long interrupts stay disabled rather than
+by how long a syscall runs.
+
+The cost lands system-wide rather than on one subsystem:
+
+- every `callout(9)`, which is every userland timer, sleep timeout
+  and TCP timer;
+- every USB transfer completion — `pusbhc` posts each one to a
+  softint, so `ure(4)` networking and `umass` storage pay it;
+- network input.  The inbound half of
+  [the ping asymmetry](#netbsd-outbound-ping-sees-3x-the-latency-of-inbound-replies)
+  runs on this path.
+
+None of it is measured.  On the board, `vmstat -e | grep softint`
+gives dispatches per level and `vmstat 1` the switch rate; two
+switches per softint at the measured switch cost is the saving.  A
+consumer that needs periodic timing, such as a tracker tick driven
+from `callout(9)`, also wants the delay from the clock interrupt to
+the callout, measured under load.
+
+### Why the port does not have it
+
+The fast path is opt-in: the generic one needs no machine-dependent
+code, bring-up used it, and nothing has needed more.  Two properties
+of the port make the fast path more than a copy of the reference
+port's:
+
+- **No software interrupt line.**  MIPS raises pending softints
+  through CP0's software interrupt bits, which the hardware delivers
+  once the interrupt mask allows them, so its dispatch needs no
+  software check.  Penumbra has one interrupt-enable bit, so pending
+  softints have to be checked wherever interrupts come back on: at
+  the end of `trap()` when the interrupted context had them enabled,
+  and in `splx(IPL_NONE)` and `spl0()`.  RISC-V dispatches this way
+  (`cpu_dosoftints()`, `riscv/riscv/softint_machdep.c`) and is the
+  closer template.
+- **Binary IPL.**  Every level above `IPL_NONE` is `DI`, and the
+  current level is read from `SR.I` rather than kept in a variable,
+  because exception entry would desynchronize a variable from the
+  hardware.  The dispatcher has to know which soft level is running,
+  so that the next interrupt exit neither re-enters a softclock
+  handler nor preempts it with a lower level.  That takes a
+  variable, but only for the soft level: the dispatcher alone writes
+  it and the hardware never changes it, so the desync cannot arise.
+
+### What it takes
+
+All machine-dependent, with no MI changes:
+
+- `__HAVE_FAST_SOFTINTS` in `types.h`; per-CPU softint LWPs, a
+  pending mask and the current soft level in `cpu_info`.
+- `softint_init_md` and `softint_trigger`, a few lines each.
+- A dispatch loop in C, shaped like RISC-V's `softint_deliver`.
+- An assembly switch (MIPS's `softint_fast_dispatch` is about 110
+  lines): save the pinned LWP's callee-saved registers into its PCB
+  with the return address at a cleanup trampoline, move `SP` to the
+  softint LWP's stack, set `curlwp` in both `cpu_info` and `R12`,
+  call `softint_dispatch(pinned, s)`, and switch back.
+- The trampoline: if a handler blocks, `cpu_switchto` later resumes
+  the pinned LWP there, and it finishes the interrupt exit as if the
+  dispatch had returned.
+- A pending check in every `splx` that re-enables interrupts.
+
+At run time that check is the whole cost; the real cost is risk.  The
+dispatch sits on the trap-exit path, under the vector-page epilogue
+rules, and mistakes there show up as hangs rather than panics.
+
 ## Build system: guard flashing against marginal timing
 
 `make flash` packs and flashes whatever nextpnr produced, including a
