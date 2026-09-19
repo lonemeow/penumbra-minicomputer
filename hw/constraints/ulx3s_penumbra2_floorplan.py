@@ -6,13 +6,13 @@
 # logical. The penumbra2 core fills fabric columns X75..113, leaving the SDRAM
 # stack only the ~13-column corridor between the core's right edge and the
 # right-edge SDRAM pads at X126. With nowhere to spread horizontally, the
-# placer stacked u_sdram_ctrl into a 4-wide x 37-tall sliver (X120..124,
+# placer stacked the controller into a 4-wide x 37-tall sliver (X120..124,
 # Y39..76); the cdc -> ctrl -> phy_a control path then routes vertically across
 # that sliver, which is where the 0.9-1.4 ns route hops come from. gen1's small
 # core never crowds this corridor, so the same logic packs compactly there.
 #
-# Fix: confine the SDRAM control logic (the FSM in u_sdram_ctrl plus the
-# u_sdram_cdc that feeds its critical path) to a compact rectangle in that
+# Fix: confine the SDRAM control logic (the controller FSM plus the CDC
+# that feeds its critical path) to a compact rectangle in that
 # corridor, centred on the pad bank (pads span Y14..92). Bounding the box caps
 # the vertical spread and forces dense placement, shortening the routes.
 #
@@ -71,10 +71,11 @@ REGION = "sdram_ctl"
 # height centred on the middle of the SDRAM pad bank.
 X0, Y0, X1, Y1 = 114, 46, 126, 66
 
-# The stretched FSM and the CDC stage that starts its critical path. Names are
-# instance-prefixed and survive synthesis because these modules carry
-# keep_hierarchy — that boundary is what makes the cells addressable here.
-PREFIXES = ("u_sdram_ctrl", "u_sdram_cdc")
+# The stretched FSM and the CDC stage that starts its critical path, inside
+# the top's sdram_stack instance. Names are instance-prefixed and survive
+# synthesis because these modules carry keep_hierarchy — that boundary is
+# what makes the cells addressable here.
+PREFIXES = ("u_sdram.u_ctrl", "u_sdram.u_cdc")
 
 ctx.createRectangularRegion(REGION, X0, Y0, X1, Y1)
 ctx.createRectangularRegion(AUDIO_REGION, AX0, AY0, AX1, AY1)

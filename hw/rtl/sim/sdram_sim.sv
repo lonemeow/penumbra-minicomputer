@@ -1,4 +1,4 @@
-// Sim-only SDRAM subsystem: adapter + CDC + controller + sim PHY + chip.
+// Sim-only SDRAM subsystem: sdram_stack + sim PHY + chip model.
 //
 // Bus interface mirrors simple_mem / fpga_ram so machine_sim can swap
 // in this stack at the RAM region without other plumbing changes.
@@ -34,77 +34,11 @@ module sdram_sim
     output logic        o_busy
 );
 
-    // Chip preset.  Sim sites override only T_POWERUP at the
-    // controller instantiation so unit tests don't wait the full
-    // 200 µs JEDEC power-up sequence.
+    // Chip preset.  Sim sites override only T_POWERUP at the stack
+    // so unit tests don't wait the full 200 µs JEDEC power-up sequence.
     localparam sdram_params_t SDP = W9825_100;
 
-    // ── Adapter ↔ CDC (sys side) ───────────────────────────
-    logic        sys_req_valid, sys_req_we, sys_req_ready;
-    logic [31:0] sys_req_addr, sys_req_wdata;
-    logic [3:0]  sys_req_byte_en;
-    logic        sys_rsp_valid, sys_rsp_ready, sys_done;
-    logic [31:0] sys_rsp_data;
-
-    sdram_bus_adapter u_adp (
-        .i_clk         (i_clk),
-        .i_rst         (i_rst),
-        .i_addr        (i_addr),
-        .i_wdata       (i_wdata),
-        .i_byte_en     (i_byte_en),
-        .i_we          (i_we),
-        .i_re          (i_re),
-        .o_rdata       (o_rdata),
-        .o_busy        (o_busy),
-        .o_req_valid   (sys_req_valid),
-        .o_req_we      (sys_req_we),
-        .o_req_addr    (sys_req_addr),
-        .o_req_wdata   (sys_req_wdata),
-        .o_req_byte_en (sys_req_byte_en),
-        .i_req_ready   (sys_req_ready),
-        .i_rsp_valid   (sys_rsp_valid),
-        .i_rsp_data    (sys_rsp_data),
-        .o_rsp_ready   (sys_rsp_ready),
-        .i_done        (sys_done)
-    );
-
-    // ── CDC ↔ controller (sdram side) ───────────────────────
-    logic        req_valid, req_we, req_ready;
-    logic [31:0] req_addr, req_wdata;
-    logic [3:0]  req_byte_en;
-    logic        rsp_valid, rsp_ready, done;
-    logic [31:0] rsp_data;
-
-    sdram_cdc u_cdc (
-        // Sys side (single-clock for sim — same i_clk on both ports)
-        .i_sys_clk         (i_clk),
-        .i_sys_rst         (i_rst),
-        .i_sys_req_valid   (sys_req_valid),
-        .i_sys_req_we      (sys_req_we),
-        .i_sys_req_addr    (sys_req_addr),
-        .i_sys_req_wdata   (sys_req_wdata),
-        .i_sys_req_byte_en (sys_req_byte_en),
-        .o_sys_req_ready   (sys_req_ready),
-        .o_sys_rsp_valid   (sys_rsp_valid),
-        .o_sys_rsp_data    (sys_rsp_data),
-        .i_sys_rsp_ready   (sys_rsp_ready),
-        .o_sys_done        (sys_done),
-        // Sdram side — runs on the (faster) SDRAM clock
-        .i_sd_clk          (i_sdram_clk),
-        .i_sd_rst          (i_rst),
-        .o_sd_req_valid    (req_valid),
-        .o_sd_req_we       (req_we),
-        .o_sd_req_addr     (req_addr),
-        .o_sd_req_wdata    (req_wdata),
-        .o_sd_req_byte_en  (req_byte_en),
-        .i_sd_req_ready    (req_ready),
-        .i_sd_rsp_valid    (rsp_valid),
-        .i_sd_rsp_data     (rsp_data),
-        .o_sd_rsp_ready    (rsp_ready),
-        .i_sd_done         (done)
-    );
-
-    // ── Controller ↔ PHY ───────────────────────────────────
+    // ── Stack ↔ PHY ────────────────────────────────────────
     logic [3:0]                  ctrl_cmd;
     logic                        ctrl_cke;
     logic [SDP.ROW_BITS-1:0]     ctrl_a;
@@ -115,32 +49,23 @@ module sdram_sim
     logic [SDP.DQ_BITS-1:0]      ctrl_dq_in;
     logic                        init_done_unused;
 
-    sdram_ctrl #(
-        .ROW_BITS    (SDP.ROW_BITS),
-        .COL_BITS    (SDP.COL_BITS),
-        .BA_BITS     (SDP.BA_BITS),
-        .DQ_BITS     (SDP.DQ_BITS),
-        .T_RCD       (SDP.T_RCD),
-        .T_RP        (SDP.T_RP),
-        .T_RFC       (SDP.T_RFC),
-        .T_WR        (SDP.T_WR),
-        .T_MRD       (SDP.T_MRD),
-        .T_REFI      (SDP.T_REFI),
-        .T_POWERUP   (W9825_SIM_T_POWERUP),    // sim override
-        .CAS_LATENCY (SDP.CAS_LATENCY)
-    ) u_ctrl (
-        .i_clk           (i_sdram_clk),
-        .i_rst           (i_rst),
-        .i_req_valid     (req_valid),
-        .i_req_we        (req_we),
-        .i_req_addr      (req_addr),
-        .i_req_wdata     (req_wdata),
-        .i_req_byte_en   (req_byte_en),
-        .o_req_ready     (req_ready),
-        .o_rsp_valid     (rsp_valid),
-        .o_rsp_data      (rsp_data),
-        .i_rsp_ready     (rsp_ready),
-        .o_done          (done),
+    // The sim PHY is combinational, so the stack keeps its zero
+    // PHY-latency defaults.
+    sdram_stack #(
+        .SDP             (SDP),
+        .T_POWERUP       (W9825_SIM_T_POWERUP)
+    ) u_stack (
+        .i_sys_clk       (i_clk),
+        .i_sys_rst       (i_rst),
+        .i_sd_clk        (i_sdram_clk),
+        .i_sd_rst        (i_rst),
+        .i_addr          (i_addr),
+        .i_wdata         (i_wdata),
+        .i_byte_en       (i_byte_en),
+        .i_we            (i_we),
+        .i_re            (i_re),
+        .o_rdata         (o_rdata),
+        .o_busy          (o_busy),
         .o_phy_cmd       (ctrl_cmd),
         .o_phy_cke       (ctrl_cke),
         .o_phy_a         (ctrl_a),

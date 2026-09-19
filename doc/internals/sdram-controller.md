@@ -97,11 +97,12 @@ hw/rtl/io/sdram/
 ├── sdram_phy_ecp5.sv         ECP5 PHY: IOB flops, ODDRX1F clock fwd, tristate DQ
 ├── sdram_phy_sim.sv          Plain-SystemVerilog PHY for Verilator
 ├── sdram_cdc.sv              Async req/ack CDC bridge (added in step 4)
-└── sdram_bus_adapter.sv      Sync bus i_re/i_we/o_busy ↔ controller req/ack
+├── sdram_bus_adapter.sv      Sync bus i_re/i_we/o_busy ↔ controller req/ack
+└── sdram_stack.sv            Adapter → CDC → controller as one unit; integrations add the PHY
 
 hw/rtl/sim/
 ├── sdram_model.sv            Behavioral SDR DRAM chip model (for tests)
-├── sdram_sim.sv              Wraps adapter + ctrl + phy_sim + model into a simple_mem-shaped device for machine_sim
+├── sdram_sim.sv              Wraps sdram_stack + phy_sim + model into a simple_mem-shaped device for machine_sim
 ├── sdram_test.sv             DUT wrapper exposing controller req/rsp for tb_sdram_test
 └── sdram_adapter_test.sv     DUT wrapper for the bus adapter's speculative-prefetch path (tb_sdram_adapter_test)
 ```

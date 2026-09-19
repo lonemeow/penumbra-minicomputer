@@ -197,6 +197,9 @@ exposed external bus.
   pipelined cache fills + speculative `addr+4` prefetch on accepted
   reads (depth-2 CDC carries real + spec; 1-bit tag FIFO routes
   responses).
+- `sdram/sdram_stack.sv` — adapter → CDC → controller as one unit,
+  bus port to PHY command interface; board tops and `sdram_sim`
+  instantiate it and supply their own PHY.
 - `sdram/sdram_cdc.sv` — depth-2 async FIFO bridge across the
   CPU↔SDRAM clock domains. Up to 2 outstanding, order-preserving;
   Gray pointers via 2-FF synchronizers; data-before-valid CDC.
@@ -217,7 +220,7 @@ exposed external bus.
   via `bus_devsel`, UART IRQ wired.
 - `sim_uart.sv` — NS16450-compatible UART for sim (no FIFO).
 - `sim_spi.sv` — SPI master + SD card emulator (via `+sdcard=`).
-- `sdram_sim.sv` — wraps adapter + ctrl + `phy_sim` + chip model
+- `sdram_sim.sv` — wraps `sdram_stack` + `phy_sim` + chip model
   into a `simple_mem`-shaped device.
 - `sdram_test.sv` — DUT wrapper exposing controller req/rsp for
   `tb_sdram_test`.

@@ -2174,8 +2174,9 @@ where the identical RTL reaches ~140 MHz on gen1. The cause was
 geometric, not logical: the denser gen2 core fills the central fabric and
 crowds the controller into a thin 4-column sliver against the right-edge
 SDRAM pads, so its internal routes stretch. A nextpnr `--pre-pack` region
-floorplan (`ulx3s_penumbra2_floorplan.py`) corrals `u_sdram_ctrl` +
-`u_sdram_cdc` into a compact block by the pads → ~117–127 MHz.
+floorplan (`ulx3s_penumbra2_floorplan.py`) corrals the controller and
+CDC (`u_sdram.u_ctrl` + `u_sdram.u_cdc`) into a compact block by the
+pads → ~117–127 MHz.
 
 Two non-results, recorded so they are not re-tried:
 - **Over-constraining** `clk_sdram` via `FREQUENCY NET` did nothing.

@@ -1024,24 +1024,22 @@ FPGA_AUDIO_TOPS = ulx3s_audio_test_top
 # valid for the configuration it was measured in — re-sweep after
 # moving AUDIO_CHANNELS just as after any other design change.
 #
-# gen1 clears all five on 7 seeds of 10.  Seed 7 holds 4.4% on the CPU
-# clock and 30% on the 60 MHz domain, the most balanced in the sweep.
-# The audio floorplan does not reach this top, so its numbers move only
-# when the design does.
+# gen1 clears all five on 8 seeds of 10.  Seed 5 holds 10.1% on the CPU
+# clock, 33% on the 60 MHz domain and 26% on the SDRAM one, the most
+# balanced in the sweep.  The audio floorplan does not reach this top,
+# so its numbers move only when the design does.
 #
-# gen2 clears every domain on 3.  Seed 1 holds 0.8% / 22% / 25%; two
-# further seeds clear the CPU clock but miss the 60 MHz one, which is
-# the USB receive chain rather than anything the floorplan touches.
+# gen2 clears every domain on 3, all of them binding on the CPU clock:
+# seed 0 holds 3.6% / 19% / 44% (CPU / 60 MHz / SDRAM), then 3 at 2.6%
+# and 2 at 1.3% on the CPU clock.
 #
-# gen2.5 clears on 4, all of them on the CPU clock's own margin: seed 3
-# holds 4.7%, then 7 at 2.9% and 5 at 2.0%.  What binds is still the
-# EX-to-MMU fault path, which carries no audio cell on any seed — the
-# margin comes from the audio device being floorplanned out of the
-# columns that path is placed in, which widened the seed distribution
-# far more than it moved its mean (doc/TODO.md).
-DEFAULT_SEED_ulx3s_penumbra1_top   := 7
-DEFAULT_SEED_ulx3s_penumbra2_top   := 1
-DEFAULT_SEED_ulx3s_penumbra2_5_top := 3
+# gen2.5 clears on 2, both on the CPU clock's own margin: seed 1 holds
+# 4.4%, seed 8 2.4%.  The audio device is floorplanned out of the CPU
+# cone's columns, which widened the seed distribution far more than it
+# moved its mean (doc/TODO.md).
+DEFAULT_SEED_ulx3s_penumbra1_top   := 5
+DEFAULT_SEED_ulx3s_penumbra2_top   := 0
+DEFAULT_SEED_ulx3s_penumbra2_5_top := 1
 
 
 # BOARD/CORE porcelain → TOP derivation (CORE defaults to penumbra2
