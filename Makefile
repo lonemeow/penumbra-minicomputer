@@ -1024,21 +1024,21 @@ FPGA_AUDIO_TOPS = ulx3s_audio_test_top
 # valid for the configuration it was measured in — re-sweep after
 # moving AUDIO_CHANNELS just as after any other design change.
 #
-# gen1 clears all five on 8 seeds of 10.  Seed 5 holds 10.1% on the CPU
-# clock, 33% on the 60 MHz domain and 26% on the SDRAM one, the most
+# gen1 clears all five on 8 seeds of 10.  Seed 0 holds 7.4% on the CPU
+# clock, 16% on the 60 MHz domain and 23% on the SDRAM one, the most
 # balanced in the sweep.  The audio floorplan does not reach this top,
 # so its numbers move only when the design does.
 #
-# gen2 clears every domain on 3, all of them binding on the CPU clock:
-# seed 0 holds 3.6% / 19% / 44% (CPU / 60 MHz / SDRAM), then 3 at 2.6%
-# and 2 at 1.3% on the CPU clock.
+# gen2 clears every domain on 3: seed 5 holds 4.5% / 14% / 25% (CPU /
+# 60 MHz / SDRAM), then 9 at 2.7% on the CPU clock and 7 at 0.5% on the
+# 60 MHz one.
 #
-# gen2.5 clears on 2, both on the CPU clock's own margin: seed 1 holds
-# 4.4%, seed 8 2.4%.  The audio device is floorplanned out of the CPU
-# cone's columns, which widened the seed distribution far more than it
-# moved its mean (doc/TODO.md).
-DEFAULT_SEED_ulx3s_penumbra1_top   := 5
-DEFAULT_SEED_ulx3s_penumbra2_top   := 0
+# gen2.5 clears on 5: seed 1 holds 6.2% on the CPU clock, then 8 at
+# 5.0%; the other three clear by 1.2% or less.  The audio device is
+# floorplanned out of the CPU cone's columns, which widened the seed
+# distribution far more than it moved its mean (doc/TODO.md).
+DEFAULT_SEED_ulx3s_penumbra1_top   := 0
+DEFAULT_SEED_ulx3s_penumbra2_top   := 5
 DEFAULT_SEED_ulx3s_penumbra2_5_top := 1
 
 

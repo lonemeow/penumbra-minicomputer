@@ -273,8 +273,8 @@ module ulx3s_penumbra1_top (
     // Promote rst onto a global net via DCCA. With ~5700-way fanout
     // through general fabric, rst was the dominant routing-congestion
     // source on this design — verified via hw/tools/list_fanout.py
-    // before this change. ECP5 has 16 global nets; only 3 are in use
-    // (PLL clock outputs), so headroom is ample. CE=1 keeps the buffer
+    // before this change. ECP5 has 16 global nets and the clocks leave
+    // most of them free, so headroom is ample. CE=1 keeps the buffer
     // always-on; CLKO is combinationally equal to CLKI. (* keep *)
     // prevents yosys from optimizing the buffer away on the grounds
     // that CLKO == CLKI functionally — we *want* the DCCA so PnR
@@ -298,13 +298,24 @@ module ulx3s_penumbra1_top (
     end
     wire rst_sd = rst_sd_sync2;
 
-    // ── 60 MHz domain reset: the same 2-FF pattern. ──
+    // ── 60 MHz domain reset: the same 2-FF pattern, then onto a global
+    // net like rst.  Almost all of its sinks are flip-flop reset pins,
+    // spread across the USB logic by its pins and the audio mixer, so on
+    // general routing it is a wide, high-fanout net competing for fabric
+    // the design is congested on — while the global network reaches reset
+    // pins directly.  (* keep *) as for rst_dcca.
     logic rst_60mhz_sync1, rst_60mhz_sync2;
+    logic rst_60mhz;
     always_ff @(posedge clk_60mhz) begin
         rst_60mhz_sync1 <= rst;
         rst_60mhz_sync2 <= rst_60mhz_sync1;
     end
-    wire rst_60mhz = rst_60mhz_sync2;
+
+    (* keep *) DCCA rst_60mhz_dcca (
+        .CLKI (rst_60mhz_sync2),
+        .CE   (1'b1),
+        .CLKO (rst_60mhz)
+    );
 
     // ── Video PLL: second EHXPLLL, 25 MHz crystal → TMDS clocks ──
     // The display's serial/pixel clocks come from a dedicated PLL —
