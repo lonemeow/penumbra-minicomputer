@@ -6,6 +6,7 @@
 #define PD_CAP          0x000
 #define PD_INFO         0x004
 #define PD_CTRL         0x008
+#define PD_CURSOR       0x00C
 #define PD_FB_GEOM      0x01C
 #define PD_FB_FORMAT    0x020
 #define PD_CELLS        0x1000
@@ -14,6 +15,7 @@
 
 #define PD_CAP_FRAMEBUFFER  (1u << 13)
 #define PD_CTRL_ENABLE      (1u << 0)
+#define PD_CTRL_CURSOR_EN   (1u << 1)
 #define PD_CTRL_FB_SEL      (1u << 4)
 
 static uint32_t   disp_base;
@@ -67,6 +69,21 @@ void rt_display_enable(int on)
         ctrl_shadow |= PD_CTRL_ENABLE;
     else
         ctrl_shadow &= ~PD_CTRL_ENABLE;
+    REG(PD_CTRL) = ctrl_shadow;
+}
+
+void rt_display_cursor(uint32_t col, uint32_t row)
+{
+    REG(PD_CURSOR) = row << 16 | col;
+    if (!(ctrl_shadow & PD_CTRL_CURSOR_EN)) {
+        ctrl_shadow |= PD_CTRL_CURSOR_EN;
+        REG(PD_CTRL) = ctrl_shadow;
+    }
+}
+
+void rt_display_cursor_hide(void)
+{
+    ctrl_shadow &= ~PD_CTRL_CURSOR_EN;
     REG(PD_CTRL) = ctrl_shadow;
 }
 

@@ -66,7 +66,10 @@ static uint32_t running;
 static uint32_t speed, tick;
 static uint32_t order, row;
 static uint32_t jump;           /* order + 1 of a pending Bxx, or 0 */
-static uint32_t position;
+
+/* What the current tick is playing: order * ROWS + row, the tick within
+ * it, and the row's speed.  heard_speed is 0 until the first tick. */
+static uint32_t heard_row, heard_tick, heard_speed;
 
 static void set_period(uint32_t ch, struct track *t, uint32_t period)
 {
@@ -203,11 +206,14 @@ void rt_music_irq(void)
         return;
 
     if (tick == 0) {
-        position = order << 8 | row;
+        heard_row = order * ROWS + row;
         play_row();
     } else {
         play_effects();
     }
+    /* After play_row(), which applies the row's own Fxx. */
+    heard_tick = tick;
+    heard_speed = speed;
 
     for (uint32_t ch = 0; ch < AUDIO_TRACKS; ch++)
         push(ch, &tracks[ch], AU_CH(ch, PA_C_LEVEL));
@@ -218,10 +224,10 @@ void rt_music_irq(void)
     }
 }
 
-int rt_music_start(void)
+void rt_music_start(void)
 {
     if ((const uint8_t *)&song_start == song_end)
-        return 0;
+        rt_panic("no song linked (build with MOD=<file>)");
 
     song = &song_start;
     if (song->magic != SONG_MAGIC)
@@ -247,10 +253,33 @@ int rt_music_start(void)
     AU_REG(PA_CTRL)       = PA_CTRL_ENABLE;
 
     running = 1;
-    return 1;
 }
 
-uint32_t rt_music_position(void)
+void rt_music_stop(void)
 {
-    return position;
+    disable_interrupts();
+    running = 0;
+    enable_interrupts();
+    AU_REG(PA_CTRL) = 0;
+}
+
+fix16_t rt_music_now(void)
+{
+    uint32_t row, tick_in_row, spd;
+    fix16_t sub;
+
+    disable_interrupts();
+    row = heard_row;
+    tick_in_row = heard_tick;
+    spd = heard_speed;
+    sub = rt_timer_subtick();
+    enable_interrupts();
+
+    if (spd == 0)
+        return 0;
+
+    /* Ticks into the row stay under 32, so the sum is a small 16.16
+     * value and the divide by spd is a plain one. */
+    fix16_t row_frac = (fix16_from_int(tick_in_row) + sub) / spd;
+    return fix16_from_int(row) + row_frac;
 }

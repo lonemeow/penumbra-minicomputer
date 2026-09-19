@@ -1,42 +1,58 @@
 /*
- * director.c — runs the parts.  Frames are paced off the timer, since
- * the display has no vblank; leftover frame time goes to the next
- * part's precalc.  Counters bracket the part's frame only, so the bar
- * never reports its own drawing.
+ * director.c — runs the cue table against song time.  Frames run free,
+ * capped at the display's refresh since a faster one is never seen; the
+ * rest of the refresh goes to the next part's precalc.  Counters bracket
+ * the part's frame only, so the bar never reports its own drawing.
  */
 
-#include "rt.h"
+#include "rt_internal.h"
 
-#define TARGET_FPS  30
+/* The display has no vblank to pace against, only its fixed rate. */
+#define DISPLAY_HZ  60
 
-static uint32_t frame_ticks;
+static uint32_t refresh_ticks;
 
-/* Frame time held back from precalc, to absorb a step's overrun. */
-#define PRECALC_MARGIN_DIV  16
+static void blocking_precalc(const rt_part_t *p)
+{
+    while (!p->precalc_step(rt_ticks() + rt_tick_hz()))
+        ;
+}
 
-static void run_part(const rt_part_t *p, const rt_part_t *next,
+static void report(const char *name, const char *what, fix16_t late)
+{
+    rt_puts("  ");
+    rt_puts(name);
+    rt_puts(what);
+    rt_print_uint((uint32_t)fix16_to_int(late));
+    rt_puts(" rows\r\n");
+}
+
+static void run_part(const rt_cue_t *cue, const rt_part_t *next,
                      int *next_ready)
 {
-    uint32_t start = rt_ticks();
-    uint32_t end   = start + p->duration_frames * frame_ticks;
+    const rt_part_t *p = cue->part;
+    fix16_t start = cue->pos, end = cue[1].pos;
     int shown = 0;
 
+    rt_display_cursor_hide();
     if (p->enter)
         p->enter();
 
     /* After enter(), so the reserved slots win over the part's palette. */
     rt_palette_reserved();
+    rt_telemetry_restart();
 
-    uint32_t next_frame = rt_ticks();
-
-    while ((int32_t)(rt_ticks() - end) < 0) {
+    for (;;) {
+        uint32_t refresh_end = rt_ticks() + refresh_ticks;
+        fix16_t now = rt_music_now();
         rt_perf_t a, b;
 
-        next_frame += frame_ticks;
+        if (now >= end)
+            break;
 
         rt_perf_sample(&a);
         if (p->frame)
-            p->frame(rt_ticks() - start);
+            p->frame(now, start, end);
         rt_perf_sample(&b);
 
         rt_telemetry_draw(&a, &b, p->mode);
@@ -50,49 +66,59 @@ static void run_part(const rt_part_t *p, const rt_part_t *next,
         }
 
         if (next && !*next_ready && next->precalc_step) {
-            uint32_t margin = frame_ticks / PRECALC_MARGIN_DIV;
-            uint32_t deadline = next_frame - margin;
-            while ((int32_t)(rt_ticks() - deadline) < 0) {
-                if (next->precalc_step(deadline)) {
+            while ((int32_t)(rt_ticks() - refresh_end) < 0) {
+                if (next->precalc_step(refresh_end)) {
                     *next_ready = 1;
                     break;
                 }
             }
         }
 
-        while ((int32_t)(rt_ticks() - next_frame) < 0)
+        while ((int32_t)(rt_ticks() - refresh_end) < 0)
             ;
     }
+
+    if (!shown)
+        report(p->name, " drew no frame, arriving late by ",
+               rt_music_now() - start);
 
     if (p->leave)
         p->leave();
 }
 
-void rt_run(const rt_part_t *const *parts, int count)
+void rt_run(const rt_cue_t *cues)
 {
-    frame_ticks = rt_tick_hz() / TARGET_FPS;
-    if (frame_ticks == 0)
-        rt_panic("timer too slow to pace frames");
+    refresh_ticks = rt_tick_hz() / DISPLAY_HZ;
 
-    for (int i = 0; i < count; i++) {
-        const rt_part_t *p = parts[i];
-        const rt_part_t *next = (i + 1 < count) ? parts[i + 1] : 0;
+    if (!cues[0].part)
+        rt_panic("empty cue table");
+
+    /* Nothing runs ahead of the first part, so its precalc blocks, and
+     * the song waits for it. */
+    if (cues[0].part->precalc_init)
+        cues[0].part->precalc_init();
+    if (cues[0].part->precalc_step)
+        blocking_precalc(cues[0].part);
+
+    rt_music_start();
+
+    for (const rt_cue_t *c = cues; c->part; c++) {
+        const rt_part_t *next = c[1].part;
         int next_ready = 0;
 
-        /* Nothing runs ahead of the first part, so its precalc blocks. */
-        if (i == 0 && p->precalc_init) {
-            p->precalc_init();
-            while (p->precalc_step && !p->precalc_step(rt_ticks() + rt_tick_hz()))
-                ;
-        }
         if (next && next->precalc_init)
             next->precalc_init();
 
-        run_part(p, next, &next_ready);
+        run_part(c, next, &next_ready);
 
-        /* Finish what the previous part's frames left undone. */
-        if (next && !next_ready && next->precalc_step)
-            while (!next->precalc_step(rt_ticks() + rt_tick_hz()))
-                ;
+        /* The song does not wait, so finishing here costs the next part
+         * its opening. */
+        if (next && !next_ready && next->precalc_step) {
+            blocking_precalc(next);
+            report(next->name, " precalc overran its cue by ",
+                   rt_music_now() - c[1].pos);
+        }
     }
+
+    rt_music_stop();
 }

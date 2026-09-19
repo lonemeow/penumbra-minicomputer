@@ -1,0 +1,46 @@
+{speed 4}
+          Hello there!
+{pause 4}
+This is the first ever demo for the Penumbra
+architecture.
+{pause 4}
+What is Penumbra, you ask?
+{pause 4}
+It is my silly project to design a 32bit RISC
+architecture from ground up and implement it
+in FPGA (hopefully in discrete logic one day!)
+{speed 0.2}...
+{speed 4}
+Penumbra is 2-operand, load-store, 16 register
+architecture, with software-managed TLB.
+
+{pause 10}
+This demo is written for Penumbra 2.5 variant,
+running on a Lattice ECP5 FPGA, with a CPU
+core clock of 37.5MHz{speed 0.2}...
+{speed 4}
+This results in performance roughly similar to
+an Intel 386DX at 33MHz.
+{pause 20}
+{clear}
+During the entire demo, you can how the CPU is
+performing at the bottom of the screen{speed 0.2}...
+
+{speed 4}The number at the bottom left corner
+shows the CPI (cycles per instruction) - when
+everything is ideal, this CPU can reach 1 CPI{speed 0.2}...
+{speed 4}
+The colors indicate what is causing the CPU to
+stall for some cycles reducing performance:
+
+ {black}{on blue}Load from memory{pause 1}
+ {on cyan}Store to memory{pause 1}
+ {on red}Instruction fetch{pause 1}
+ {on yellow}Complex instructions (div/mul){pause 1}
+ {on ltred}Pipeline interlock or flush{pause 1}
+{on black}{grey}{pause 8}
+
+
+
+Now let's stop with this boring nerd stuff,
+and do something {speed 0.5}{cyan}F {magenta}U {yellow}N {white}!{pause 100}

@@ -15,9 +15,9 @@ runtime/     this production's framework — startup, MMU and cache
              scheduler.  Deliberately not shared: a later production
              may target different hardware and want different
              assumptions.
-parts/       one file per effect.
+parts/       one file per effect, and its typed text as <name>.txt.
 music/       song source and its samples.
-assets/      converted images, fonts and palettes.
+assets/      images as indexed PNGs, converted at build time.
 tools/       asset converters, run on the host at build time.
 capture/     recording and encode scripts.
 ```
@@ -38,11 +38,12 @@ module at build time and lists what the subset drops.
 ## Building and running
 
 A PIE ELF loaded from the card's FAT32 root, like the bare-metal
-benchmarks. `make image` and `make sdimage-bench` both put it there.
+benchmarks. `make image` and `make sdimage-bench` both put it there,
+passing `MOD=` through. Parts are cued to the song, so a build without
+one links but panics at start.
 
 ```sh
-make -C sw/demoscene/skrolli2026   # build on its own
-make -C sw/demoscene/skrolli2026 MOD=path/to/song.mod   # with music
+make -C sw/demoscene/skrolli2026 MOD=path/to/song.mod
 # on the target's ROM monitor:
 boot sd:0,0/SKR2026.ELF
 ```

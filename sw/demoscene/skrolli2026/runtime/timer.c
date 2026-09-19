@@ -28,6 +28,10 @@ static uint32_t tick_hz;
 static uint32_t period;
 static uint32_t base_ticks;
 
+/* 2^31 / period: elapsed * subtick_recip stays under 2^31, and >> 15
+ * leaves elapsed / period in 16.16. */
+static uint32_t subtick_recip;
+
 void rt_timer_init(void)
 {
     tick_hz = penumbra_read_sysreg(SYSDEV_TIMER, TM_FREQ);
@@ -36,13 +40,14 @@ void rt_timer_init(void)
         rt_panic("timer rate cannot pace a 50 Hz interrupt");
 
     base_ticks = 0;
+    subtick_recip = 0x80000000u / period;
     penumbra_write_sysreg(SYSDEV_TIMER, TM_RELOAD, period - 1);
     penumbra_write_sysreg(SYSDEV_TIMER, TM_COUNT,  period - 1);
     penumbra_write_sysreg(SYSDEV_TIMER, TM_STATUS, TMST_UDF);
     penumbra_write_sysreg(SYSDEV_TIMER, TM_CR,
                           TMCR_TICK_EN | TMCR_IRQ_EN | TMCR_AUTOLOAD);
 
-    __asm__ __volatile__("ei" ::: "memory");
+    enable_interrupts();
 }
 
 void rt_timer_irq(void)
@@ -57,7 +62,7 @@ uint32_t rt_ticks(void)
 {
     uint32_t count, base;
 
-    __asm__ __volatile__("di" ::: "memory");
+    disable_interrupts();
     count = penumbra_read_sysreg(SYSDEV_TIMER, TM_COUNT);
     base = base_ticks;
     if (penumbra_read_sysreg(SYSDEV_TIMER, TM_STATUS) & TMST_UDF) {
@@ -65,9 +70,20 @@ uint32_t rt_ticks(void)
         base += period;
         count = penumbra_read_sysreg(SYSDEV_TIMER, TM_COUNT);
     }
-    __asm__ __volatile__("ei" ::: "memory");
+    enable_interrupts();
 
     return base + (period - 1 - count);
+}
+
+fix16_t rt_timer_subtick(void)
+{
+    /* COUNT before STATUS: an underflow between the two reads then shows
+     * as pending, never as a reloaded count that steps time backwards. */
+    uint32_t count = penumbra_read_sysreg(SYSDEV_TIMER, TM_COUNT);
+
+    if (penumbra_read_sysreg(SYSDEV_TIMER, TM_STATUS) & TMST_UDF)
+        return FIX16_ONE - 1;
+    return ((period - 1 - count) * subtick_recip) >> 15;
 }
 
 uint32_t rt_tick_hz(void)

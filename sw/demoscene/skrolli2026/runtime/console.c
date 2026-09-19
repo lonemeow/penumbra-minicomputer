@@ -1,7 +1,6 @@
 /* console.c — polled UART output. */
 
-#include "rt.h"
-#include "penumbra.h"
+#include "rt_internal.h"
 
 #define UART_BASE  0xFF000000
 #define UART_THR   (*(volatile uint32_t *)(UART_BASE + 0x00))
@@ -44,5 +43,5 @@ void rt_panic(const char *msg)
     rt_puts(msg);
     rt_puts("\r\n");
     for (;;)
-        __asm__ __volatile__("break");
+        rt_break();
 }

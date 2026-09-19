@@ -87,7 +87,8 @@ Costs, per frame:
 
 | | |
 |---|---|
-| One reciprocal + 7 multiplies | ~104 cycles |
+| Summing 8 counter deltas into the window | 16 ALU ops |
+| Recompute, 10 times a second: 7 divides and the CPI | ~400 cycles |
 | Bar row, graphics (320 px, 80 segments) | 80 word stores |
 | Bar row, text (80 cells) | 80 word stores |
 | 8-pixel-tall graphics bar | 640 stores, 0.25% of a 30 fps frame |
@@ -116,6 +117,14 @@ Two requirements:
   outside that window, or the telemetry measures its own drawing.
 - **Never fake or smooth it.** The audience this is aimed at will
   read the numbers against what is on screen.
+
+A part fast enough to draw many frames a second makes a per-frame bar
+flicker too fast to read, so counts are summed over a tenth-of-a-second
+window and the bar recomputed once per window. That is not smoothing:
+a sum of partitions is a partition, so the bar is exact for the
+window. It is still redrawn every frame, since the part may have drawn
+over those rows, and each part starts its own window so its first
+frame shows its own cycles.
 
 **Cache ratios are not cycle shares.** Hit rates are fractions of
 accesses and do not sum with the stall partition; putting them in the
@@ -350,6 +359,39 @@ keeps constant divides as `DIV` because its multiply is no cheaper —
 so the figures above hold only for the tuning the demo actually builds
 with.
 
+Fixed point is 16.16 through `runtime/fix16.h`. A multiply keeps the
+middle of the full product, which `MUL` returns in one operation; a
+divide has no 64/32 form to use, so its fraction comes from further
+32/32 divides of the remainder, as many bits per `DIVU` as the divisor
+leaves room for. Instructions on the path, and cycles before branch
+penalties:
+
+| Expression | instructions | cycles |
+|---|---|---|
+| `fix16_mul(a, b)` | 4 | 13 |
+| `fix16_div(a, b)`, \|b\| < 1.0 | 38 | ~105 |
+| `fix16_div(a, b)`, \|b\| < 256.0 | 51 | ~150 |
+| `fix16_div(a, b)`, \|b\| < 4096.0 | 71 | ~235 |
+
+Random numbers are `runtime/rand.h`, xorshift32 with a word of state
+per part. There is no rotate instruction, so the rotate-based
+generators cost three operations where this one costs one.
+
+| Expression | instructions | cycles |
+|---|---|---|
+| `rt_rand(&r)` | 9 | 9 |
+| `rt_rand_below(&r, n)` | 10 | 19 |
+| `rt_rand_frac(&r)` | 10 | 10 |
+
+Each part seeds its own stream, so draws in one part cannot shift
+another's, and a seed replays exactly — what the capture shows is what
+the machine does.
+
+One `fix16_mul` per pixel is most of a 30 fps budget; a divide is per
+span or per vertex. A part's progress through its cues divides by its
+span, a whole number of rows, so it costs the 256.0 figure once a
+frame for any part shorter than four patterns.
+
 ## Viewport size
 
 The framebuffer is uncached, so its size does not interact with L2 at
@@ -401,6 +443,27 @@ Output is from the 48 kHz family; 44.1 kHz is unreachable from the
 available PLL configurations. Amiga periods resample exactly through
 the hardware `INC`, so no retuning is needed.
 
+## Sync
+
+Song time is the one clock parts see: rows since the song began, in
+16.16, read as the heard row plus the elapsed share of it. Its
+fraction comes from the timer's count within the current tick, so it
+advances smoothly between ticks at any frame rate, and it is anchored
+to the music rather than to when a frame happened to run. The three
+uses need nothing more:
+
+- **Ending a part on the music** — the cue table; a part runs from its
+  cue's position to the next cue's.
+- **Effect progress** — `(now - start) / (end - start)` against the
+  part's cues.
+- **On-beat events** — `now` masked to the beat's length in rows.
+
+A cut lands at the first frame boundary after its cue, so it is late
+by at most one frame of the outgoing part; with the framebuffer drawn
+in place, nothing lands closer than that anyway. Time is
+`order * 64 + row`, which is monotonic only while the song plays
+straight through: the song is known, so cues are placed where it does.
+
 ## Load size
 
 The ROM reads the ELF into a scratch buffer at 0x2000 and loads the
@@ -410,10 +473,19 @@ image directly above it, so the image ends near twice the file size.
 `rt_mem_init()` panics when it does. Music and assets ride in the ELF,
 so this is the budget they share until the stack moves.
 
-Everything above the stack is `rt_alloc()`'s, to the end of base RAM.
+Everything above the stack is the heap's, to the end of base RAM.
 Anything derived at startup belongs there rather than in the ELF —
 the replayer's samples, expanded from 8-bit bytes to device frames,
 are 4x their size in the module.
+
+The heap is a free list in address order, first fit, merging
+neighbours as they come back. Parts take a few large buffers rather
+than many small ones, so the list stays short and fragmentation comes
+from the order parts hand blocks back, not from block sizes. That
+order is never LIFO: a part frees from `leave()`, by which time the
+next part's precalc has already allocated. Blocks start on an L2 line,
+and a part that forgets to free surfaces as an out-of-memory panic
+rather than as slow decay.
 
 ## Interrupt context
 
@@ -436,10 +508,31 @@ TLB misses. The pinned TLB has 8 slots; `crt0.S` uses two (the handler
 page and page 0). Ideally the handler code is fully pinned, plus one
 data page holding its hottest state.
 
+## Pinned data
+
+`RT_PINNED` and `RT_PINNED_CONST` put a global in `.pinned`, whose
+pages `crt0.S` maps through the pinned TLB slots left after the
+handler page and page 0 — six, a limit `demo.ld` enforces at link
+time. The main TLB is 64 entries in 2 ways, and a full-screen part
+walks the framebuffer's 19 pages plus its own sources every frame, so
+a hot table's entry is otherwise liable to be evicted and refilled
+through the miss handler, a trap and 29 instructions. Pinning removes
+that; it does nothing for the L1-D, where a 4 KB table would fill the
+whole cache, so hot tables still want to be small.
+
+The slots are written before the MMU is enabled, the one point where no
+miss handler or interrupt can land between an entry's three `WRSYS`
+writes. Pinning the interrupt handlers' C code would draw on the same
+six slots.
+
 ## Precalc
 
-Parts differ enormously in setup cost, so the director runs two
-precalc lanes against whatever time is left after a frame:
+Frames run free rather than at a target rate, but no faster than the
+display refreshes, since a frame drawn inside one refresh of the last
+is never seen. What a frame leaves of its refresh is precalc time, so
+a part slower than the refresh donates none — the parts in front of
+heavy precalc have to be cheap ones. Parts differ enormously in setup
+cost, so the director runs two precalc lanes against that time:
 
 - **next** — must complete before the upcoming transition.
 - **background** — long-running, must complete by its own part.

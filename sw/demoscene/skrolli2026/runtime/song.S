@@ -1,7 +1,7 @@
 /*
  * song.S — the song blob from tools/mod2song.py.  The build defines
  * SONG only when given a module; without one the span is empty and
- * rt_music_start() reports that.
+ * rt_music_start() panics.
  */
 
         .section .payload,"a",@progbits

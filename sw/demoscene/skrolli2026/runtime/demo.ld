@@ -43,11 +43,25 @@ SECTIONS
         *(.rel.dyn)
     }
 
+    /* RT_PINNED data: crt0.S gives each page a pinned TLB slot, so it
+     * never misses.  Slots 0 and 1 hold the handler page and page 0. */
+    . = ALIGN(4096);
+    _pinned_start = .;
+    .pinned : {
+        *(.pinned.rodata)
+        *(.pinned.data)
+    }
+    . = ALIGN(4096);
+    _pinned_end = .;
+    ASSERT(_pinned_end - _pinned_start <= 6 * 4096,
+           "RT_PINNED data needs more than the 6 pinned TLB slots left")
+
     /* Bulk payloads a program links in — an audio clip is megabytes.
      * Kept past .data because crt0 reaches its PIE address slots with
      * a 16-bit PC-relative displacement, and anything large sitting
      * between .text and .data puts them out of range.  C code reaches
-     * its own globals through the GOT, so .bss is free to move. */
+     * globals with a full 32-bit PC-relative offset, so it is not
+     * affected, and .bss is free to move. */
     . = ALIGN(4096);
     .payload : {
         *(.payload .payload.*)

@@ -226,9 +226,10 @@ _start:
  *
  * Slot 0: handler page (0x1000) — TLB miss + IRQ code
  * Slot 1: page 0 (0x0000) — vectors, bootdata
+ * Slot 2 on: the RT_PINNED pages, as many as demo.ld lets there be
  *
- * Both identity-mapped (VA = PA) so handlers can run without
- * nested TLB misses.
+ * All identity-mapped (VA = PA), and written with the MMU still off,
+ * so no miss handler can run between the three writes of an entry.
  * ═════════════════════════════════════════════════════════════════ */
 
         /* Slot 0: handler page at PA 0x1000 */
@@ -250,6 +251,31 @@ _start:
 
         lli     r1, #PTE_KERNEL         /* TLB_PTE = PA 0 | PTE_KERNEL */
         wrsys   r1, #SYSDEV_MMU, #MMU_TLB_PTE
+
+        /* Slots 2 on: the RT_PINNED pages */
+        mov     r1, pc
+        add     r1, #8
+        add     r1, #%pcrel(.Laddr_pinned_start)
+        ldw     r1, [r1]                /* page-aligned */
+        mov     r2, pc
+        add     r2, #8
+        add     r2, #%pcrel(.Laddr_pinned_end)
+        ldw     r2, [r2]
+        lli     r3, #(TLB_PINNED | 2)
+.Lpin_page:
+        cmp     r1, r2
+        bhs     .Lpin_done
+        wrsys   r3, #SYSDEV_MMU, #MMU_TLB_INDEX
+        mov     r4, r1                  /* TLB_VPN = (VA >> 12) << 8 */
+        shr     r4, #4
+        wrsys   r4, #SYSDEV_MMU, #MMU_TLB_VPN
+        lli     r4, #PTE_KERNEL         /* TLB_PTE = PA | PTE_KERNEL */
+        or      r4, r1
+        wrsys   r4, #SYSDEV_MMU, #MMU_TLB_PTE
+        add     r1, #4096
+        add     r3, #1
+        b       .Lpin_page
+.Lpin_done:
 
 /* ═════════════════════════════════════════════════════════════════
  * Phase 4: Identity-map current code page + enable MMU
@@ -333,6 +359,10 @@ _start:
         .long   _irq_c_entry
 .Laddr_rt_timer_irq:
         .long   rt_timer_irq
+.Laddr_pinned_start:
+        .long   _pinned_start
+.Laddr_pinned_end:
+        .long   _pinned_end
 
 
 /* ═════════════════════════════════════════════════════════════════
