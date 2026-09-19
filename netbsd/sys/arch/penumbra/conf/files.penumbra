@@ -74,12 +74,13 @@ device	pdisplay: wsemuldisplaydev
 attach	pdisplay at pbbus
 file	arch/penumbra/penumbra/pdisplay.c		pdisplay
 
-# Audio device (CLASS_AUDIO pushed-PCM channel) -> MI audio(4).
-# dev/files.audio comes in through sys/conf/files, so only the
-# attachment belongs here.
+# Audio device (CLASS_AUDIO pushed-PCM channel) -> MI audio(4), and
+# its channels as voices through /dev/pmusic.  dev/files.audio comes in
+# through sys/conf/files, so only the attachment belongs here.
 device	paudio: audiobus
 attach	paudio at pbbus
 file	arch/penumbra/penumbra/paudio.c			paudio
+file	arch/penumbra/penumbra/pmusic.c			paudio
 
 # bus_space implementation
 file	arch/penumbra/penumbra/bus_space.c

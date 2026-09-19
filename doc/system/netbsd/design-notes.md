@@ -439,11 +439,13 @@ track closes, which a descriptor that only issued ioctls never has. A
 voice consumer needs all three per open — an allocation of its own, a
 wakeup, and release when it exits.
 
-So `paudio` also attaches a cloning character device, `/dev/pmusic`,
-named after `sequencer(4)`'s `/dev/music`. Each open is a *session*
-holding voices, a sample memory, a tick clock and an event queue, and
-closing it silences its voices and releases all of it. No MI code
-changes.
+So `paudio` also provides a character device, `/dev/pmusic`, named
+after `sequencer(4)`'s `/dev/music`. It opens exclusively, and the open
+is a *session* holding voices, a sample memory, a tick clock and an
+event queue; closing it silences its voices and releases all of it. A
+second open fails with `EBUSY`. One MOD already wants every channel a
+four-channel device has, so concurrent sessions would contend for
+voices rather than share them. No MI code changes.
 
 A session carries three kinds of traffic, each on the mechanism made
 for it:
@@ -464,13 +466,12 @@ namespace of sample handles to allocate and free. A MOD file stores its
 samples back to back, so one `pwrite` loads all of them and each
 sample's offset is its position in that block.
 
-Positioned I/O works on a cloned descriptor because `pread`, `pwrite`
-and `lseek` dispatch through the file's `fo_seek` operation rather than
-through a vnode.
+The offset reaches the driver as the transfer's `uio_offset`, as it
+does for `/dev/mem`: specfs accepts any non-negative offset and leaves
+the bounds to the driver. `lseek` with `SEEK_SET` or `SEEK_CUR` works;
+`SEEK_END` measures from the device node's size rather than the
+memory's.
 
-- `SETMEM` requires an allocation, and releasing the allocation
-  releases the memory, so what all sessions hold together is bounded
-  by the number of voices times the cap.
 - The cap defaults to 1/64 of physical memory rounded up to a power of
   two — 512 KB on a 32 MB machine — and is tunable as
   `machdep.paudio.maxmem`. ProTracker's own ceiling, 31 samples of
@@ -481,13 +482,15 @@ through a vnode.
 - A write that runs past the end is short; one that starts past it
   fails with `ENOSPC`.
 - Memory may be rewritten while it plays. A tracker effect that edits
-  sample data, such as ProTracker's `EFx`, is a `pwrite`.
+  sample data, such as ProTracker's `EFx`, is a `pwrite`. The edit is
+  heard once the frames already in the channel's FIFO have played.
 
-`mmap` would spare the one copy made at load time, and `fo_mmap` can
+`mmap` would spare the one copy made at load time, and `d_mmap` can
 map the same offset space without changing anything above it. It is
-not free: the memory must outlive the descriptor while it is mapped,
-and must stay wired and mapped into the kernel, because the refill
-reads it from interrupt context.
+not free: a device mapping holds no reference on the memory, which must
+therefore outlive the descriptor while it is mapped, and the memory
+must stay wired and mapped into the kernel, because the refill reads
+it from interrupt context.
 
 ### Voices
 
@@ -563,10 +566,14 @@ queue has room and either the clock is stopped or fewer than
 #define PENAUDIO_FMT_S16	2	/* signed 16-bit LE mono */
 #define PENAUDIO_FMT_S16_STEREO	3	/* signed 16-bit LE, left then right */
 
+/* The shortest tick period, so one clock pass applies a bounded number
+ * of ticks. */
+#define PENAUDIO_PERIOD_MIN_US	1000
+
 struct penaudio_info {
 	uint32_t pi_rate;		/* output frames per second */
 	uint16_t pi_nvoices;		/* voices the device has */
-	uint16_t pi_navail;		/* voices not currently claimed */
+	uint16_t pi_navail;		/* voices PENAUDIO_ALLOC can grant now */
 	uint32_t pi_maxmem;		/* largest sample memory, bytes */
 	uint32_t pi_maxevents;		/* event queue capacity */
 	uint32_t pi_tick_grain_us;	/* ticks land on multiples of this */
@@ -633,14 +640,19 @@ struct penaudio_clock {
 `PENAUDIO_ALLOC` grants at most the number asked for; a consumer that
 needs more mixes the remainder itself or gives up. Changing the
 allocation fails with `EBUSY` while events are queued or a voice is
-sounding.
+sounding. `PENAUDIO_SETMEM` fails with `EINVAL` above `pi_maxmem`, and
+`PENAUDIO_START` with `EINVAL` below `PENAUDIO_PERIOD_MIN_US` and with
+`EBUSY` on a clock already started.
 
-`PENAUDIO_SUBMIT` fails with `EINVAL` on an event that:
+`PENAUDIO_SUBMIT` takes the longest prefix of the offered events that
+fits the queue and is acceptable, and reports its length in
+`ps_nevents`. An event is refused when it:
 
 - sets an unknown `SET_*` bit, or combines `SET_STOP` with `SET_PLAY`
   or `SET_LOOP`;
-- sets `SET_PERIOD` together with a voice field, or with a voice other
-  than `PENAUDIO_VOICE_NONE`;
+- sets `SET_PERIOD` together with a voice field, with a voice other
+  than `PENAUDIO_VOICE_NONE`, or with a period below
+  `PENAUDIO_PERIOD_MIN_US`;
 - names a voice outside the allocation;
 - names a region outside sample memory, or one not aligned to its
   format's frame size;
@@ -649,8 +661,19 @@ sounding.
 - precedes an event already queued, unless its tick has already been
   applied.
 
-`ps_nevents` then returns how many were accepted before it, and none
-after it is. `ps_eventsize` must equal `sizeof(struct penaudio_event)`:
+If the first event offered is refused, the call fails with `EINVAL`
+and changes nothing. Otherwise it succeeds even when it stops short,
+because `ioctl(2)` copies the argument back only on success, and an
+error could not report the count. A consumer resubmits from where the
+count ends: behind a full queue it waits for room, and behind a bad
+event the resubmission fails on that event alone, so `EINVAL` always
+names the first event of the batch.
+
+When the call stops short, the horizon moves only to the tick before
+the first event not taken, since that tick is not yet wholly
+submitted.
+
+`ps_eventsize` must equal `sizeof(struct penaudio_event)`:
 the command number encodes the size of `struct penaudio_submit` but not
 of the records it points to, so without the field a consumer built
 against a different record layout would be misread rather than

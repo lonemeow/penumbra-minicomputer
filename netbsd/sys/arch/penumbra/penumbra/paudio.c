@@ -18,6 +18,11 @@
  * driver will agree to in round_blocksize.
  *
  * Only playback exists.  The class has no capture side.
+ *
+ * audio(4) plays through the mandated channel, channel 0.  The
+ * device's channels are also voices for /dev/pmusic (pmusic.c), and
+ * the two share the device: channel 0 goes to whichever claims it
+ * first, and the global registers are updated a channel at a time.
  */
 
 #include <sys/cdefs.h>
@@ -39,95 +44,85 @@ __KERNEL_RCSID(0, "$NetBSD$");
 
 #include <dev/audio/audio_if.h>
 
-/* Register offsets (doc/system/devices/audio.md). */
-#define	PA_CAP			0x000
-#define	PA_RATE			0x004
-#define	PA_CTRL			0x008
-#define	PA_CHAN_EN		0x00C
-#define	PA_IRQ_STATUS		0x010
-#define	PA_IRQ_ENABLE		0x014
-#define	PA_UNDERRUN		0x018
-#define	PA_CHAN(n)		(0x100 + (n) * 0x20)
-#define	PA_C_CTRL		0x00
-#define	PA_C_DEPTH		0x0C
-#define	PA_C_LEVEL		0x10
-#define	PA_C_WM			0x14
-#define	PA_C_FIFO		0x18
-
-#define	PA_CAP_VERSION(c)	((c) & 0xFF)
-#define	PA_CAP_CHANNELS(c)	(((c) >> 16) & 0xFF)
-#define	PA_CTRL_ENABLE		__BIT(0)
-#define	PA_C_CTRL_FLUSH		__BIT(8)
-
-/* This driver drives the mandated channel; the rest are the ioctl's. */
-#define	PA_CHAN0		0
-
-/* 16-bit signed stereo: one frame per FIFO word, left in the low half. */
-#define	PA_FRAME_SIZE		4
-
-
-struct paudio_softc {
-	device_t		sc_dev;
-	bus_space_tag_t		sc_iot;
-	bus_space_handle_t	sc_ioh;
-	void			*sc_ih;
-
-	kmutex_t		sc_lock;	/* audio(4) thread lock */
-	kmutex_t		sc_intr_lock;	/* audio(4) interrupt lock */
-
-	u_int			sc_rate;	/* device output rate */
-	u_int			sc_depth;	/* channel FIFO, in frames */
-
-
-	/* Ring handed over by trigger_output, and where we are in it. */
-	uint8_t			*sc_start;
-	uint8_t			*sc_end;
-	uint8_t			*sc_cur;
-	int			sc_blksize;	/* bytes per block */
-	int			sc_resid;	/* bytes left in this block */
-	void			(*sc_intr)(void *);
-	void			*sc_intrarg;
-	bool			sc_running;
-
-	/*
-	 * A skip in the output is either the device running dry or the
-	 * driver mishandling the ring, and those want opposite fixes.
-	 * UNDERRUN is the device's own answer to which one it was.
-	 */
-	struct evcnt		sc_ev_intr;
-	struct evcnt		sc_ev_underrun;
-	struct evcnt		sc_ev_block;
-	struct evcnt		sc_ev_silent;
-
-	/*
-	 * Diagnostic: replace the ring's contents with a tone the driver
-	 * generates, keeping the block accounting identical.  What comes
-	 * out then depends only on the interrupt path, the FIFO writes
-	 * and the converter — so a clean tone puts a fault above this
-	 * driver and a dirty one puts it below.
-	 */
-	int			sc_testtone;
-	uint32_t		sc_tonephase;
-};
+#include <arch/penumbra/penumbra/paudiovar.h>
 
 #define	PA_TONE_HZ		440
 
-
-#define	PA_RD(sc, r)	bus_space_read_4((sc)->sc_iot, (sc)->sc_ioh, (r))
-#define	PA_WR(sc, r, v)	bus_space_write_4((sc)->sc_iot, (sc)->sc_ioh, (r), (v))
-#define	PA_CRD(sc, r)	PA_RD(sc, PA_CHAN(PA_CHAN0) + (r))
-#define	PA_CWR(sc, r, v) PA_WR(sc, PA_CHAN(PA_CHAN0) + (r), (v))
+#define	PA_CRD(sc, r)	PA_CHRD(sc, PA_CHAN0, r)
+#define	PA_CWR(sc, r, v) PA_CHWR(sc, PA_CHAN0, r, v)
 
 static int	paudio_match(device_t, cfdata_t, void *);
 static void	paudio_attach(device_t, device_t, void *);
 static int	paudio_intr(void *);
-static void	paudio_sysctl_attach(struct paudio_softc *);
+static const struct sysctlnode *paudio_sysctl_attach(struct paudio_softc *);
 static void	paudio_selftest(struct paudio_softc *);
 
 CFATTACH_DECL_NEW(paudio, sizeof(struct paudio_softc),
     paudio_match, paudio_attach, NULL, NULL);
 
+/* ── Shared registers ─────────────────────────────────────────── */
+
+/*
+ * Set or clear channels' bits in a per-channel global register
+ * (CHAN_EN, IRQ_ENABLE), leaving every other channel's alone: the
+ * stream and the voices own different bits of the same words.
+ * Called with sc_intr_lock held.
+ */
+void
+paudio_chan_update(struct paudio_softc *sc, bus_size_t reg, uint32_t mask,
+    bool on)
+{
+	uint32_t v = PA_RD(sc, reg);
+
+	KASSERT(mutex_owned(&sc->sc_intr_lock));
+
+	PA_WR(sc, reg, on ? (v | mask) : (v & ~mask));
+}
+
+/*
+ * The output stage runs while anything holds a channel, rather than
+ * while any channel is enabled: voices start and stop far more often
+ * than a session opens, and every start would otherwise switch the
+ * whole output on again.  Called with sc_intr_lock held.
+ */
+void
+paudio_output_update(struct paudio_softc *sc)
+{
+	bool on = sc->sc_running || sc->sc_pm_chans != 0;
+
+	KASSERT(mutex_owned(&sc->sc_intr_lock));
+
+	PA_WR(sc, PA_CTRL, on ? PA_CTRL_ENABLE : 0);
+}
+
 /* ── audio(4) interface ───────────────────────────────────────── */
+
+/*
+ * Channel 0 is a stream's only channel and may also be a voice, so it
+ * belongs to whichever claims it first; /dev/pmusic takes it last.
+ */
+static int
+paudio_open(void *hdl, int flags)
+{
+	struct paudio_softc *sc = hdl;
+
+	KASSERT(mutex_owned(&sc->sc_intr_lock));
+
+	if (sc->sc_pm_chans & __BIT(PA_CHAN0))
+		return EBUSY;
+	sc->sc_audio_open = true;
+	return 0;
+}
+
+static void
+paudio_close(void *hdl)
+{
+	struct paudio_softc *sc = hdl;
+
+	KASSERT(mutex_owned(&sc->sc_intr_lock));
+
+	sc->sc_audio_open = false;
+}
 
 static int
 paudio_query_format(void *hdl, audio_format_query_t *afp)
@@ -350,7 +345,7 @@ paudio_trigger_output(void *hdl, void *start, void *end, int blksize,
 	/* Start from a known-empty queue: a leftover frame from a
 	 * previous stream would play before the first of this one. */
 	PA_CWR(sc, PA_C_CTRL, PA_C_CTRL_FLUSH);
-	PA_WR(sc, PA_UNDERRUN, ~0U);
+	PA_WR(sc, PA_UNDERRUN, __BIT(PA_CHAN0));
 
 	/*
 	 * Fill before enabling: a channel enabled dry underruns on its
@@ -364,11 +359,11 @@ paudio_trigger_output(void *hdl, void *start, void *end, int blksize,
 	/* The watermark is one block of free space, so the interrupt
 	 * arrives exactly when a whole block will fit. */
 	PA_CWR(sc, PA_C_WM, blksize / PA_FRAME_SIZE);
-	PA_WR(sc, PA_IRQ_STATUS, ~0U);
-	PA_WR(sc, PA_IRQ_ENABLE, __BIT(PA_CHAN0));
+	PA_WR(sc, PA_IRQ_STATUS, __BIT(PA_CHAN0));
+	paudio_chan_update(sc, PA_IRQ_ENABLE, __BIT(PA_CHAN0), true);
 
-	PA_WR(sc, PA_CHAN_EN, __BIT(PA_CHAN0));
-	PA_WR(sc, PA_CTRL, PA_CTRL_ENABLE);
+	paudio_chan_update(sc, PA_CHAN_EN, __BIT(PA_CHAN0), true);
+	paudio_output_update(sc);
 	return 0;
 }
 
@@ -379,19 +374,21 @@ paudio_halt_output(void *hdl)
 
 	KASSERT(mutex_owned(&sc->sc_intr_lock));
 
-	PA_WR(sc, PA_IRQ_ENABLE, 0);
-	PA_WR(sc, PA_CHAN_EN, 0);
-	PA_WR(sc, PA_CTRL, 0);
+	paudio_chan_update(sc, PA_IRQ_ENABLE, __BIT(PA_CHAN0), false);
+	paudio_chan_update(sc, PA_CHAN_EN, __BIT(PA_CHAN0), false);
 	PA_CWR(sc, PA_C_CTRL, PA_C_CTRL_FLUSH);
 	PA_CWR(sc, PA_C_WM, 0);
-	PA_WR(sc, PA_IRQ_STATUS, ~0U);
+	PA_WR(sc, PA_IRQ_STATUS, __BIT(PA_CHAN0));
 
 	sc->sc_running = false;
 	sc->sc_intr = NULL;
+	paudio_output_update(sc);
 	return 0;
 }
 
 static const struct audio_hw_if paudio_hw_if = {
+	.open		= paudio_open,
+	.close		= paudio_close,
 	.query_format	= paudio_query_format,
 	.set_format	= paudio_set_format,
 	.round_blocksize = paudio_round_blocksize,
@@ -407,20 +404,11 @@ static const struct audio_hw_if paudio_hw_if = {
 
 /* ── Interrupt ────────────────────────────────────────────────── */
 
-static int
-paudio_intr(void *arg)
+static void
+paudio_intr_stream(struct paudio_softc *sc)
 {
-	struct paudio_softc *sc = arg;
-	uint32_t status;
 	int wrote;
 
-	mutex_enter(&sc->sc_intr_lock);
-
-	status = PA_RD(sc, PA_IRQ_STATUS);
-	if ((status & __BIT(PA_CHAN0)) == 0 || !sc->sc_running) {
-		mutex_exit(&sc->sc_intr_lock);
-		return 0;
-	}
 	sc->sc_ev_intr.ev_count++;
 
 	/* Sticky since the last look, so this counts servicings that
@@ -458,9 +446,26 @@ paudio_intr(void *arg)
 	 * device would interrupt without new work.
 	 */
 	PA_WR(sc, PA_IRQ_STATUS, __BIT(PA_CHAN0));
+}
+
+static int
+paudio_intr(void *arg)
+{
+	struct paudio_softc *sc = arg;
+	uint32_t status;
+	int handled = 0;
+
+	mutex_enter(&sc->sc_intr_lock);
+
+	status = PA_RD(sc, PA_IRQ_STATUS);
+	if ((status & __BIT(PA_CHAN0)) != 0 && sc->sc_running) {
+		paudio_intr_stream(sc);
+		handled = 1;
+	}
+	handled |= pmusic_intr(sc, status);
 
 	mutex_exit(&sc->sc_intr_lock);
-	return 1;
+	return handled;
 }
 
 /* ── Diagnostics ──────────────────────────────────────────────── */
@@ -500,7 +505,7 @@ paudio_selftest(struct paudio_softc *sc)
 		    n, before - after);
 }
 
-static void
+static const struct sysctlnode *
 paudio_sysctl_attach(struct paudio_softc *sc)
 {
 	const struct sysctlnode *node = NULL;
@@ -513,7 +518,7 @@ paudio_sysctl_attach(struct paudio_softc *sc)
 	    CTL_MACHDEP, CTL_CREATE, CTL_EOL);
 
 	if (node == NULL)
-		return;
+		return NULL;
 
 	sysctl_createv(NULL, 0, &node, NULL,
 	    CTLFLAG_PERMANENT | CTLFLAG_READWRITE,
@@ -522,6 +527,8 @@ paudio_sysctl_attach(struct paudio_softc *sc)
 		"to tell a fault above this driver from one below it"),
 	    NULL, 0, &sc->sc_testtone, 0,
 	    CTL_CREATE, CTL_EOL);
+
+	return node;
 }
 
 /* ── Autoconfiguration ────────────────────────────────────────── */
@@ -569,6 +576,7 @@ paudio_attach(device_t parent, device_t self, void *aux)
 		aprint_error_dev(self, "device reports no rate or no queue\n");
 		return;
 	}
+	sc->sc_nchan = MIN(PA_CAP_CHANNELS(cap), PA_MAXCHAN);
 
 	mutex_init(&sc->sc_lock, MUTEX_DEFAULT, IPL_NONE);
 	mutex_init(&sc->sc_intr_lock, MUTEX_DEFAULT, IPL_SCHED);
@@ -592,7 +600,7 @@ paudio_attach(device_t parent, device_t self, void *aux)
 	    device_xname(self), "silent blocks");
 
 	paudio_selftest(sc);
-	paudio_sysctl_attach(sc);
+	pmusic_attach(sc, paudio_sysctl_attach(sc));
 
 	sc->sc_ih = intr_establish_xname(0, IPL_SCHED, paudio_intr, sc,
 	    device_xname(self));

@@ -15,7 +15,7 @@ INCS=	ansi.h aout_machdep.h asm.h \
 	limits.h loadfile_machdep.h lock.h \
 	math.h \
 	mcontext.h mutex.h \
-	param.h pbbus.h pcb.h pmap.h \
+	param.h pbbus.h pcb.h penaudio.h pmap.h \
 	proc.h profile.h psl.h ptrace.h \
 	reg.h rwlock.h \
 	setjmp.h signal.h sysreg.h \

@@ -25,3 +25,4 @@ device-major	wsdisplay	char 25			wsdisplay
 device-major	wskbd		char 29			wskbd
 device-major	wsmux		char 56			wsmux
 device-major	audio		char 42			audio
+device-major	pmusic		char 43			paudio
