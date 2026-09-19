@@ -449,6 +449,13 @@ it is not overlaid, to avoid colliding with the distribution's own copy.
 No changes to the image step are needed — the image build
 absorbs whatever the overlay tree contains.
 
+**Local files** — data you want on the card but not in the repository,
+such as music for `/dev/pmusic` — go under `local-overlay/`, and each
+lands at the same path in the image's root: `local-overlay/mods/foo.mod`
+becomes `/mods/foo.mod`. Only the directory's `.gitignore` is tracked.
+A name containing whitespace stops the build, since the image's file
+list would split it.
+
 ---
 
 ## 9. FPGA Synthesis (ULX3S)

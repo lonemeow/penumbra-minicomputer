@@ -647,13 +647,14 @@ DEMOS_DIR        := $(BUILD_DIR)/demos
 # to NETBSD_OVERLAYS.
 OVERLAY_ROOT    := $(BUILD_DIR)/netbsd-overlay
 NETBSD_OVERLAYS := benchmark-overlay demos-overlay penmon-overlay \
-                   exhibit-launcher-overlay doom-overlay pmusic-test-overlay
+                   exhibit-launcher-overlay doom-overlay pmusic-test-overlay \
+                   local-overlay
 
 .PHONY: netbsd-overlay benchmark-overlay demos-overlay penmon-overlay penmon
 .PHONY: demos
 .PHONY: exhibit-launcher-overlay exhibit-launcher
 .PHONY: doom-overlay doom
-.PHONY: pmusic-test-overlay pmusic-test
+.PHONY: pmusic-test-overlay pmusic-test local-overlay
 netbsd-overlay:
 	rm -rf $(OVERLAY_ROOT)
 	@$(MAKE) $(NETBSD_OVERLAYS)
@@ -681,6 +682,23 @@ doom-overlay:
 pmusic-test-overlay:
 	@$(MAKE) -C sw/pmusic-test LLVM_PREFIX=$(LLVM_PREFIX) \
 		DESTDIR=$(abspath $(DESTDIR)) OVERLAY_ROOT=$(abspath $(OVERLAY_ROOT)) overlay
+
+# Files for the image that stay out of the repository: whatever sits
+# under local-overlay/ lands at the same path in the root filesystem.
+# The image's file list takes one path per word, so a name with
+# whitespace is refused here rather than split there.
+LOCAL_OVERLAY := local-overlay
+local-overlay:
+	@spaced=$$(find $(LOCAL_OVERLAY) -name '*[[:space:]]*'); \
+	if [ -n "$$spaced" ]; then \
+		echo "local-overlay: rename these, the image can't take" \
+		    "whitespace in a name:" >&2; \
+		echo "$$spaced" >&2; \
+		exit 1; \
+	fi
+	@install -d $(OVERLAY_ROOT)
+	@tar -C $(LOCAL_OVERLAY) --exclude=./.gitignore -cf - . | \
+		tar -C $(OVERLAY_ROOT) -xf -
 
 demos:
 	@$(MAKE) -C sw/demos LLVM_PREFIX=$(LLVM_PREFIX) DESTDIR=$(abspath $(DESTDIR))

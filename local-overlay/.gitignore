@@ -1,0 +1,6 @@
+# Files wanted on the SD image but kept out of the repository.  Each
+# lands at the same path in the image's root filesystem, so
+# local-overlay/mods/foo.mod becomes /mods/foo.mod.  This file is the
+# only one tracked, and it keeps the directory in the tree.
+*
+!.gitignore
