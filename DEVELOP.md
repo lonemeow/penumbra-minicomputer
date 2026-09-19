@@ -432,10 +432,11 @@ find build/netbsd-overlay -type f      # inspect exactly what will be installed
 
 Staged into the tree: the demo/benchmark suite (`pbench`,
 `mandelbrot`, `julia`, `plasma`, `lorenz`, `shadebobs`, `penumbra-text`) at
-`/usr/local/bin/`, and **`penmon`** — the hardware-counter system monitor
-(see `sw/penmon/README.md`). curses additionally needs the base-system
-`terminfo.cdb`, which the full rootfs already includes; it is not overlaid,
-to avoid colliding with the distribution's own copy.
+`/usr/local/bin/`, **`penmon`** — the hardware-counter system monitor
+(see `sw/penmon/README.md`) — and **`pmusic-test`**, which exercises the
+audio device's voice interface, `/dev/pmusic`. curses additionally needs
+the base-system `terminfo.cdb`, which the full rootfs already includes;
+it is not overlaid, to avoid colliding with the distribution's own copy.
 
 **To add a new utility:**
 

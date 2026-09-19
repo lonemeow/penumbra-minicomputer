@@ -647,12 +647,13 @@ DEMOS_DIR        := $(BUILD_DIR)/demos
 # to NETBSD_OVERLAYS.
 OVERLAY_ROOT    := $(BUILD_DIR)/netbsd-overlay
 NETBSD_OVERLAYS := benchmark-overlay demos-overlay penmon-overlay \
-                   exhibit-launcher-overlay doom-overlay
+                   exhibit-launcher-overlay doom-overlay pmusic-test-overlay
 
 .PHONY: netbsd-overlay benchmark-overlay demos-overlay penmon-overlay penmon
 .PHONY: demos
 .PHONY: exhibit-launcher-overlay exhibit-launcher
 .PHONY: doom-overlay doom
+.PHONY: pmusic-test-overlay pmusic-test
 netbsd-overlay:
 	rm -rf $(OVERLAY_ROOT)
 	@$(MAKE) $(NETBSD_OVERLAYS)
@@ -677,6 +678,10 @@ doom-overlay:
 	@$(MAKE) -C sw/doom LLVM_PREFIX=$(LLVM_PREFIX) \
 		DESTDIR=$(abspath $(DESTDIR)) OVERLAY_ROOT=$(abspath $(OVERLAY_ROOT)) overlay
 
+pmusic-test-overlay:
+	@$(MAKE) -C sw/pmusic-test LLVM_PREFIX=$(LLVM_PREFIX) \
+		DESTDIR=$(abspath $(DESTDIR)) OVERLAY_ROOT=$(abspath $(OVERLAY_ROOT)) overlay
+
 demos:
 	@$(MAKE) -C sw/demos LLVM_PREFIX=$(LLVM_PREFIX) DESTDIR=$(abspath $(DESTDIR))
 	@echo "demo binaries: $(DEMOS_DIR)/<name>{,-static}"
@@ -684,6 +689,10 @@ demos:
 doom:
 	@$(MAKE) -C sw/doom LLVM_PREFIX=$(LLVM_PREFIX) DESTDIR=$(abspath $(DESTDIR))
 	@echo "doom binary: $(BUILD_DIR)/doom/doom"
+
+pmusic-test:
+	@$(MAKE) -C sw/pmusic-test LLVM_PREFIX=$(LLVM_PREFIX) DESTDIR=$(abspath $(DESTDIR))
+	@echo "pmusic-test binary: $(BUILD_DIR)/pmusic-test/pmusic-test"
 
 penmon:
 	@$(MAKE) -C sw/penmon LLVM_PREFIX=$(LLVM_PREFIX) DESTDIR=$(abspath $(DESTDIR))
