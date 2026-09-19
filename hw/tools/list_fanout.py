@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Print high-fanout nets from a yosys synth_ecp5 JSON output.
+"""Print high-fanout nets from a yosys synth_ecp5 JSON output, per clock domain.
 
 Useful for diagnosing nextpnr-ecp5 routing congestion. Nets with very
 high fanout (hundreds to thousands of sinks) routed through general
@@ -10,82 +10,300 @@ broadcasts, hand-rolled clock-divider outputs.
 Usage:
     list_fanout.py build/ulx3s_penumbra1_top.json
     list_fanout.py build/ulx3s_penumbra1_top.json -n 30 -m 10
+    list_fanout.py build/ulx3s_penumbra2_top.json --domain clk_sdram
 
 Notes:
-    * Only the design top module is analyzed by default (others are
-      cell-library definitions that yosys emits for round-trip).
-    * "Fanout" here means sink-port count: how many cell input ports
-      drink from this net. Driver count (should be 1) is excluded.
+    * The design is analyzed as nextpnr places it: flattened through
+      every keep_hierarchy instance, which synthesis leaves as separate
+      module definitions in the JSON. Net names inside such an instance
+      carry its instance path (u_sdram.u_ctrl.state, ...).
+    * "Fanout" means sink-port count on leaf cells: how many primitive
+      input ports drink from the net. Driver count (should be 1) is
+      excluded, and hierarchy boundaries are transparent.
+    * Each sink is attributed to the clock domain of the registers it
+      feeds: a register's own inputs to its clock, a combinational
+      cell's inputs to the domains of every register its outputs reach.
+      Domains are named after their clock net. Sinks that reach no
+      register are listed as (no register): pins, PLL inputs, and logic
+      feeding only bits a keep_hierarchy module ignores, which synthesis
+      cannot trim across the boundary.
     * For multi-bit busses, both per-bit and per-bus totals are shown
       so you can see whether an entire bus is wide-fanout or just one
       bit (e.g. bit 0 of a status flag often dominates).
 """
 import json
+import re
 import sys
 import argparse
 from collections import defaultdict
 
+NO_REGISTER = '(no register)'
 
-def _name_score(name):
+# Leaf clock pins, per primitive. A cell with none of these connected to
+# a real net is combinational (e.g. a MULT18X18D with every register
+# bypassed).
+CLOCK_PINS = {'CLK', 'CLKA', 'CLKB', 'CLK0', 'CLK1', 'CLK2', 'CLK3', 'WCK', 'SCLK'}
+
+# Clock generation and buffering: their inputs are the clock tree's own
+# roots, not logic in any domain, so they end domain traversal.
+CLOCK_TREE_TYPES = {'EHXPLLL', 'DCCA'}
+
+# Distributed RAM: the write side is clocked by WCK, the read address is
+# combinational through to DO.
+DPR_TYPE = 'TRELLIS_DPR16X4'
+DPR_WRITE_PORTS = {'WAD', 'DI', 'WRE'}
+
+
+def _name_score(local_name, full_name, hidden):
     """Lower is better. Used to pick the most readable net name when
     yosys aliases multiple netnames to the same bit (common — e.g.
     `rst` and `ac_spi_sel_LUT4_Z_D_..._D_Z` may be the *same* bit
     because the LUT's input is rst). We want `rst`, not the LUT-named
-    alias.
+    alias. A flattened bit also carries a name at every hierarchy level
+    it crosses; the shortest full path is the outermost, most familiar
+    one (`clk_sdram`, not `u_sdram.u_ctrl.i_clk`).
 
-    Heuristic: $-prefixed names (synth temporaries) are worst, then
-    names containing underscored synth artifacts (`_LUT4`, `_TRELLIS_`,
-    `_CCU2C`, `_PFUMX`), then ordinary names — broken by length.
+    Heuristic: hidden / $-prefixed names (synth temporaries) are worst,
+    then names containing underscored synth artifacts (`_LUT4`,
+    `_TRELLIS_`, `_CCU2C`, `_PFUMX`), then ordinary names — broken by
+    full-path length.
     """
-    if not name:
-        return (9, 9999, '')
-    is_temp = 1 if name.startswith('$') or name.startswith('\\$') else 0
-    has_synth_marker = 1 if any(s in name for s in
+    is_temp = 1 if hidden or local_name.startswith('$') else 0
+    has_synth_marker = 1 if any(s in local_name for s in
         ('_LUT4', '_TRELLIS_', '_CCU2C', '_PFUMX', '_DI_', '_LSR_')) else 0
-    return (is_temp, has_synth_marker, len(name), name)
+    return (is_temp, has_synth_marker, len(full_name), full_name)
 
 
-def analyze_module(mod_name, mod):
-    # Map: bit index -> best wire name (yosys often aliases multiple
-    # netnames to the same bit, especially user-RTL names alongside
-    # synth-internal LUT-cascade names. Pick the most readable.)
-    bit_to_net = {}
-    net_width = {}
-    for wname, w in mod.get('netnames', {}).items():
-        bits = w.get('bits', [])
-        net_width[wname] = sum(1 for b in bits if isinstance(b, int))
-        for b in bits:
-            if isinstance(b, int):
-                prev = bit_to_net.get(b)
-                if prev is None or _name_score(wname) < _name_score(prev):
-                    bit_to_net[b] = wname
+def sections_for(domains):
+    """Domain sections one sink counts under, given the set of clock
+    domains its cell feeds.
 
-    # Count sinks per bit by walking cells and using port_directions
-    bit_sinks = defaultdict(int)
-    for cname, c in mod.get('cells', {}).items():
-        pdir = c.get('port_directions', {})
-        for port, conns in c.get('connections', {}).items():
+    `domains` is a frozenset of domain names — clock net names such as
+    'clk' or 'clk_sdram'. Each returned name is a report section whose
+    per-net totals this one sink is added to, once per section; a name
+    no clock uses (like NO_REGISTER) becomes a section of its own.
+    """
+    if not domains:
+        return [NO_REGISTER]
+    if len(domains) == 1:
+        return list(domains)
+    return sorted(domains) + ['(cross-domain)']
+
+
+class Design:
+    """The synthesized netlist flattened through keep_hierarchy
+    instances: leaf cells with globally numbered bits, plus every
+    net name seen for each bit."""
+
+    def __init__(self, d):
+        self.mods = d['modules']
+        self.library = {n for n, m in self.mods.items()
+                        if {'blackbox', 'cell_library', 'whitebox'}
+                        & set(m.get('attributes', {}))}
+        tops = [n for n, m in self.mods.items()
+                if 'top' in m.get('attributes', {})]
+        if len(tops) != 1:
+            sys.exit('expected one module marked top, found %d' % len(tops))
+        self.top = tops[0]
+        self.cells = []          # (path, type, {port: [bit]}, {port: dir})
+        self.names = defaultdict(list)   # bit -> [(local, full, hidden, width)]
+        self.instances = 0
+        self._name_cache = {}
+        self._next_bit = 1 + max(
+            (b for m in self.mods.values()
+               for w in m.get('netnames', {}).values()
+               for b in w.get('bits', []) if isinstance(b, int)),
+            default=0)
+        self._parent = {}
+        self._flatten(self.top, '', None)
+        self._canonicalize()
+
+    # A module that passes an input straight through to an output (an
+    # MMU forwarding page-offset bits, say) uses one internal bit for
+    # both ports, so the two parent nets it connects are one electrical
+    # net.  Union-find merges them; every bit is then replaced by its
+    # representative once flattening is done.
+    def _find(self, b):
+        root = b
+        while self._parent.get(root, root) != root:
+            root = self._parent[root]
+        while b != root:
+            self._parent[b], b = root, self._parent.get(b, b)
+        return root
+
+    def _union(self, a, b):
+        ra, rb = self._find(a), self._find(b)
+        if ra != rb:
+            self._parent[rb] = ra
+
+    def _canonicalize(self):
+        def c(b):
+            return self._find(b) if isinstance(b, int) else b
+        self.cells = [(path, ctype, {p: [c(b) for b in bits]
+                                     for p, bits in conns.items()}, pdir)
+                      for path, ctype, conns, pdir in self.cells]
+        merged = defaultdict(list)
+        for b, cands in self.names.items():
+            merged[c(b)].extend(cands)
+        self.names = merged
+
+    def _hierarchical(self, cell_type):
+        return cell_type in self.mods and cell_type not in self.library
+
+    def _flatten(self, mod_name, prefix, port_map):
+        mod = self.mods[mod_name]
+        local_to_global = {}
+
+        def g(b):
+            if not isinstance(b, int):
+                return b        # constant '0' / '1' / 'x' / 'z'
+            if port_map is None:
+                return b        # the top keeps yosys' numbering
+            if b in port_map:
+                return port_map[b]
+            if b not in local_to_global:
+                local_to_global[b] = self._next_bit
+                self._next_bit += 1
+            return local_to_global[b]
+
+        for wname, w in mod.get('netnames', {}).items():
+            bits = w.get('bits', [])
+            width = sum(1 for b in bits if isinstance(b, int))
+            hidden = bool(w.get('hide_name'))
+            for b in bits:
+                if isinstance(b, int):
+                    self.names[g(b)].append((wname, prefix + wname, hidden, width))
+
+        for cname, c in mod.get('cells', {}).items():
+            ctype = c['type']
+            conns = {p: [g(b) for b in bits]
+                     for p, bits in c.get('connections', {}).items()}
+            if self._hierarchical(ctype):
+                sub = self.mods[ctype]
+                sub_map = {}
+                for pname, p in sub.get('ports', {}).items():
+                    for sb, pb in zip(p.get('bits', []), conns.get(pname, [])):
+                        if not isinstance(sb, int):
+                            continue
+                        prev = sub_map.setdefault(sb, pb)
+                        if prev != pb and isinstance(prev, int) and isinstance(pb, int):
+                            self._union(prev, pb)
+                self.instances += 1
+                self._flatten(ctype, prefix + cname + '.', sub_map)
+            elif conns:
+                self.cells.append((prefix + cname, ctype, conns,
+                                   c.get('port_directions', {})))
+
+    def net_name(self, bit):
+        if bit in self._name_cache:
+            return self._name_cache[bit]
+        cands = self.names.get(bit)
+        if not cands:
+            result = (None, 1)
+        else:
+            local, full, hidden, width = min(
+                cands, key=lambda n: _name_score(n[0], n[1], n[2]))
+            result = (full, width)
+        self._name_cache[bit] = result
+        return result
+
+
+def _real_bits(bits):
+    return [b for b in bits if isinstance(b, int)]
+
+
+def analyze(design):
+    cells = design.cells
+
+    # Sinks per bit: (cell index, port).
+    sinks = defaultdict(list)
+    for ci, (_, _, conns, pdir) in enumerate(cells):
+        for port, bits in conns.items():
             if pdir.get(port) == 'input':
-                for b in conns:
-                    if isinstance(b, int):
-                        bit_sinks[b] += 1
+                for b in _real_bits(bits):
+                    sinks[b].append((ci, port))
 
-    # Aggregate sink counts to net level
-    net_sinks = defaultdict(int)
-    for b, s in bit_sinks.items():
-        n = bit_to_net.get(b)
-        if n is not None:
-            net_sinks[n] += s
+    def clock_label(bit):
+        name, _ = design.net_name(bit)
+        return name or ('$bit%d' % bit)
 
-    # Also produce per-bit max for each net (so we see if it's
-    # uniform fanout or one-bit-dominates)
-    net_max_bit = defaultdict(int)
-    for b, s in bit_sinks.items():
-        n = bit_to_net.get(b)
-        if n is not None:
-            net_max_bit[n] = max(net_max_bit[n], s)
+    def clocks_of(conns, pins):
+        return {clock_label(b) for p in pins
+                for b in _real_bits(conns.get(p, []))}
 
-    return net_sinks, net_max_bit, net_width
+    # How each cell's input ports resolve to domains: either a fixed set
+    # (register inputs, clock-tree roots) or "through" the cell's
+    # combinational outputs.
+    def port_role(ci, port):
+        _, ctype, conns, _ = cells[ci]
+        if ctype in CLOCK_TREE_TYPES:
+            return ('fixed', frozenset())
+        if port in CLOCK_PINS:
+            return ('fixed', frozenset(clocks_of(conns, [port])))
+        if ctype == DPR_TYPE:
+            if port in DPR_WRITE_PORTS:
+                return ('fixed', frozenset(clocks_of(conns, ['WCK'])))
+            return ('through', None)
+        if ctype == 'DP16KD':
+            side = re.sub(r'\d+$', '', port)[-1]
+            return ('fixed', frozenset(clocks_of(conns, ['CLK' + side])))
+        cell_clocks = clocks_of(conns, sorted(CLOCK_PINS & set(conns)))
+        if cell_clocks:
+            return ('fixed', frozenset(cell_clocks))
+        return ('through', None)
+
+    # Domains reached from a combinational cell's outputs, memoized.
+    # Iterative post-order so long carry / LUT chains can't hit the
+    # recursion limit; a combinational loop contributes nothing.
+    memo = {}
+
+    def through_outputs(ci):
+        _, ctype, conns, pdir = cells[ci]
+        outs = ['DO'] if ctype == DPR_TYPE else \
+               [p for p, d in pdir.items() if d == 'output']
+        return [b for p in outs for b in _real_bits(conns.get(p, []))]
+
+    def reached(ci0):
+        if ci0 in memo:
+            return memo[ci0]
+        stack = [(ci0, False)]
+        on_path = set()
+        while stack:
+            ci, expanded = stack.pop()
+            if ci in memo:
+                continue
+            succ = []
+            fixed = set()
+            for b in through_outputs(ci):
+                for sci, sport in sinks.get(b, []):
+                    kind, doms = port_role(sci, sport)
+                    if kind == 'fixed':
+                        fixed |= doms
+                    else:
+                        succ.append(sci)
+            if not expanded:
+                on_path.add(ci)
+                stack.append((ci, True))
+                for s in succ:
+                    if s not in memo and s not in on_path:
+                        stack.append((s, False))
+            else:
+                on_path.discard(ci)
+                for s in succ:
+                    fixed |= memo.get(s, frozenset())
+                memo[ci] = frozenset(fixed)
+        return memo[ci0]
+
+    # Per domain: sink count per bit.
+    per_domain = defaultdict(lambda: defaultdict(int))
+    for b, blist in sinks.items():
+        for ci, port in blist:
+            kind, doms = port_role(ci, port)
+            if kind == 'through':
+                doms = reached(ci)
+            for sec in sections_for(doms):
+                per_domain[sec][b] += 1
+    return per_domain
 
 
 def main():
@@ -93,57 +311,52 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('json', help='yosys JSON (e.g. build/ulx3s_penumbra1_top.json)')
     ap.add_argument('-n', '--top', type=int, default=25,
-                    help='show top N nets (default 25)')
+                    help='show top N nets per domain (default 25)')
     ap.add_argument('-m', '--min-fanout', type=int, default=50,
                     help='only show nets with fanout >= this (default 50)')
-    ap.add_argument('-M', '--module', default=None,
-                    help='module to analyze (default: top, taken from '
-                         'design last-module which is yosys convention)')
-    ap.add_argument('--all-modules', action='store_true',
-                    help='analyze every user module, not just top')
+    ap.add_argument('-d', '--domain', action='append', default=[],
+                    help='only this clock domain (repeatable); names as '
+                         'printed in the section headers')
     args = ap.parse_args()
 
-    d = json.load(open(args.json))
+    design = Design(json.load(open(args.json)))
+    per_domain = analyze(design)
 
-    # Yosys puts cell-library "blackbox" modules first and the user's
-    # top last. Filter to user modules: those without 'blackbox'/'cell_library'
-    # attributes, and skip the $abc/$paramod/$__-prefix synth helpers.
-    mods = []
-    for name, mod in d['modules'].items():
-        if name.startswith('$') or name.startswith('\\$'):
-            continue
-        attrs = mod.get('attributes', {})
-        if 'blackbox' in attrs or 'cell_library' in attrs:
-            continue
-        mods.append((name, mod))
+    order = sorted(per_domain, key=lambda k: -sum(per_domain[k].values()))
+    if args.domain:
+        missing = [x for x in args.domain if x not in per_domain]
+        if missing:
+            sys.exit('no domain %s; domains: %s'
+                     % (', '.join(missing), ', '.join(order)))
+        order = [k for k in order if k in args.domain]
 
-    if args.module:
-        mods = [(n, m) for (n, m) in mods if n == args.module]
-        if not mods:
-            print(f'No module named {args.module!r}', file=sys.stderr)
-            sys.exit(1)
-    elif not args.all_modules:
-        # Convention: yosys emits user top last in the modules list
-        mods = mods[-1:]
+    print(f'=== {design.top}: {len(design.cells)} leaf cells, flattened through '
+          f'{design.instances} kept-hierarchy instances ===')
+    print(f'    domains: {", ".join(order)}')
+    print()
 
-    for mod_name, mod in mods:
-        net_sinks, net_max_bit, net_width = analyze_module(mod_name, mod)
+    for dom in order:
+        bit_sinks = per_domain[dom]
+        net_sinks = defaultdict(int)
+        net_max_bit = defaultdict(int)
+        net_width = {}
+        for b, s in bit_sinks.items():
+            name, width = design.net_name(b)
+            name = name or ('$bit%d' % b)
+            net_sinks[name] += s
+            net_max_bit[name] = max(net_max_bit[name], s)
+            net_width[name] = width
         ranked = sorted(net_sinks.items(), key=lambda x: -x[1])
 
-        print(f'=== {mod_name} (top {args.top}, min fanout {args.min_fanout}) ===')
-        print(f'    {len(mod.get("cells", {}))} cells, {len(mod.get("netnames", {}))} named nets')
-        print()
+        print(f'── {dom}: {sum(bit_sinks.values())} sinks '
+              f'(top {args.top}, min fanout {args.min_fanout}) ──')
         print(f'  {"total":>7s}  {"width":>5s}  {"max_bit":>7s}  net')
         print(f'  {"-"*7}  {"-"*5}  {"-"*7}  {"-"*40}')
         shown = 0
         for n, s in ranked:
-            if s < args.min_fanout:
+            if s < args.min_fanout or shown >= args.top:
                 break
-            if shown >= args.top:
-                break
-            w = net_width.get(n, 1)
-            mx = net_max_bit.get(n, s)
-            print(f'  {s:>7d}  {w:>5d}  {mx:>7d}  {n}')
+            print(f'  {s:>7d}  {net_width[n]:>5d}  {net_max_bit[n]:>7d}  {n}')
             shown += 1
         if shown == 0:
             print(f'  (no nets with fanout >= {args.min_fanout})')

@@ -1298,17 +1298,20 @@ DETAIL ?= none
 timing:
 	@hw/tools/timing-report.sh --detail=$(DETAIL) $(BUILD_DIR)/$(TOP)_timing.json $(TOP_N)
 
-# Pretty-print high-fanout nets from the yosys synth JSON.  Useful for
-# diagnosing nextpnr routing-congestion failures: signals with hundreds
-# to thousands of sinks routed through general fabric (rather than
-# ECP5's dedicated global routing) saturate the router.  Like `timing`,
-# operates on whatever the last FPGA build left behind — no rebuild.
-# Override entry count via FANOUT_N=30, threshold via FANOUT_MIN=20.
+# Pretty-print high-fanout nets from the yosys synth JSON, one section
+# per clock domain.  Useful for diagnosing nextpnr routing-congestion
+# failures: signals with hundreds to thousands of sinks routed through
+# general fabric (rather than ECP5's dedicated global routing) saturate
+# the router.  Like `timing`, operates on whatever the last FPGA build
+# left behind — no rebuild.  Override entries per domain via
+# FANOUT_N=30, threshold via FANOUT_MIN=20; FANOUT_DOMAIN=clk_sdram
+# restricts the report to one domain (names as in the section headers).
 .PHONY: fanout
-FANOUT_N   ?= 25
-FANOUT_MIN ?= 50
+FANOUT_N      ?= 25
+FANOUT_MIN    ?= 50
+FANOUT_DOMAIN ?=
 fanout:
-	@python3 hw/tools/list_fanout.py $(BUILD_DIR)/$(TOP).json -n $(FANOUT_N) -m $(FANOUT_MIN)
+	@python3 hw/tools/list_fanout.py $(BUILD_DIR)/$(TOP).json -n $(FANOUT_N) -m $(FANOUT_MIN) $(foreach d,$(FANOUT_DOMAIN),--domain $(d))
 
 # ── Cleanup ────────────────────────────────────────────────────
 .PHONY: clean
