@@ -36,7 +36,7 @@ SONG_SRCS   := mod.c replay.c
 SONG_HDRS   := mod.h replay.h
 SRCS        := modplay.c display.c $(SONG_SRCS)
 
-.PHONY: all dump overlay clean
+.PHONY: all dump overlay test clean
 all: $(BUILDDIR)/modplay
 dump: $(BUILDDIR)/modplay-dump
 
@@ -51,6 +51,14 @@ $(BUILDDIR)/modplay: $(SRCS) $(SONG_HDRS) display.h \
 $(BUILDDIR)/modplay-dump: dump.c $(SONG_SRCS) $(SONG_HDRS)
 	install -d $(BUILDDIR)
 	$(HOSTCC) -O2 $(WARN) dump.c $(SONG_SRCS) -lm -o $@
+
+# Build and run the host unit test for the parser and replayer.
+test: $(BUILDDIR)/replay_test
+	$(BUILDDIR)/replay_test
+
+$(BUILDDIR)/replay_test: replay_test.c $(SONG_SRCS) $(SONG_HDRS)
+	install -d $(BUILDDIR)
+	$(HOSTCC) -O2 $(WARN) replay_test.c $(SONG_SRCS) -lm -o $@
 
 $(INCDIR)/machine/penaudio.h: $(PENAUDIO_H)
 	install -d $(dir $@)

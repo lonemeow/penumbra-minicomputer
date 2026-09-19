@@ -60,7 +60,7 @@ dump(const char *path, bool rows)
 	if ((unsupported = replay_unsupported(&m)) != NULL)
 		printf("  ignored: %s\n", unsupported);
 
-	replay_init(&r, &m, false);
+	replay_init(&r, &m, 0, false);
 	while (replay_next(&r, &t)) {
 		if (rows && t.tick == 0) {
 			printf("%02d %02d %02d  %2d %3d |", t.order, t.pattern,
@@ -73,7 +73,7 @@ dump(const char *path, bool rows)
 			}
 			putchar('\n');
 		}
-		us += 2500000 / t.bpm;
+		us += REPLAY_TICK_US((uint64_t)t.bpm);
 	}
 	printf("  plays %u:%02u.%03u\n", (unsigned)(us / 60000000),
 	    (unsigned)(us / 1000000 % 60), (unsigned)(us / 1000 % 1000));

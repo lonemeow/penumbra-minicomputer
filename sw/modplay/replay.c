@@ -191,12 +191,18 @@ row_effect(struct replay *r, struct replay_chan *c)
 			r->break_row = 0;
 		break;
 	case 0xE:
-		if (x == 0xA)
+		switch (x) {
+		case 0xA:
 			c->volume = clamp(c->volume + y, 0, 64);
-		else if (x == 0xB)
+			break;
+		case 0xB:
 			c->volume = clamp(c->volume - y, 0, 64);
-		else if (x == 0xE && r->row_delay == 0)
-			r->row_delay = y;
+			break;
+		case 0xE:
+			if (r->row_delay == 0)
+				r->row_delay = y;
+			break;
+		}
 		break;
 	case 0xF:
 		if (c->param == 0)
@@ -216,6 +222,8 @@ row_effect(struct replay *r, struct replay_chan *c)
 static void
 tick_effect(struct replay *r, struct replay_chan *c, struct replay_voice *v)
 {
+	int x = c->param >> 4, y = c->param & 0xF;
+
 	c->out_period = c->period;
 	c->out_volume = c->volume;
 	if (c->period == 0)
@@ -227,9 +235,9 @@ tick_effect(struct replay *r, struct replay_chan *c, struct replay_voice *v)
 			int semitones = 0;
 
 			if (r->tick % 3 == 1)
-				semitones = c->param >> 4;
+				semitones = x;
 			else if (r->tick % 3 == 2)
-				semitones = c->param & 0xF;
+				semitones = y;
 			c->out_period = arpeggio(c, semitones);
 		}
 		break;
@@ -266,9 +274,19 @@ tick_effect(struct replay *r, struct replay_chan *c, struct replay_voice *v)
 		volume_slide(c);
 		break;
 	case 0xE:
-		if (c->delay != 0 && c->delay == r->tick) {
-			v->trigger = true;
-			c->delay = 0;
+		switch (x) {
+		case 0x9:
+			/* The sample restarts on every tick the count
+			 * divides, so a count of 0 restarts nothing. */
+			if (y != 0 && r->tick % y == 0)
+				v->trigger = true;
+			break;
+		case 0xD:
+			if (c->delay != 0 && c->delay == r->tick) {
+				v->trigger = true;
+				c->delay = 0;
+			}
+			break;
 		}
 		break;
 	}
@@ -289,6 +307,8 @@ row_start(struct replay *r, struct replay_tick *t)
 		const struct mod_note *n = mod_note(m, pattern, r->row, ch);
 		struct replay_chan *c = &r->chan[ch];
 		struct replay_voice *v = &t->voice[ch];
+		bool retrigger = n->effect == 0xE &&
+		    (n->param >> 4) == 0x9 && (n->param & 0xF) != 0;
 
 		c->effect = n->effect;
 		c->param = n->param;
@@ -308,8 +328,8 @@ row_start(struct replay *r, struct replay_tick *t)
 
 			if (n->effect == 0x3 || n->effect == 0x5) {
 				c->porta_target = period;
-			} else if (n->effect == 0xE && n->param >> 4 == 0xD &&
-			    (n->param & 0xF) != 0) {
+			} else if (n->effect == 0xE &&
+			    (n->param >> 4) == 0xD && (n->param & 0xF) != 0) {
 				/*
 				 * A delayed note: ProTracker sets its period
 				 * now, so what is playing bends to it, and
@@ -330,6 +350,16 @@ row_start(struct replay *r, struct replay_tick *t)
 				}
 			}
 		}
+
+		/*
+		 * A retrigger on a row that starts no note restarts what
+		 * the channel already plays, this tick included.  Where
+		 * the row does start one, that start is the tick's
+		 * retrigger.
+		 */
+		if (retrigger && !v->trigger &&
+		    c->period != 0 && c->sample != 0)
+			v->trigger = true;
 
 		/*
 		 * A sample number that starts nothing still changes the
@@ -380,21 +410,25 @@ advance(struct replay *r)
 	}
 
 	/* A row played before means the song has come round. */
-	if (!r->loop && played(r, r->order, r->row))
+	if (!r->loop && played(r, r->order, r->row)) {
+		r->loop_order = r->order;
 		r->ended = true;
+	}
 }
 
 void
-replay_init(struct replay *r, const struct mod *m, bool loop)
+replay_init(struct replay *r, const struct mod *m, int start, bool loop)
 {
 	tables_init();
 	memset(r, 0, sizeof(*r));
 	r->mod = m;
 	r->loop = loop;
+	r->order = start;
 	r->speed = 6;
 	r->bpm = 125;
 	r->jump_order = -1;
 	r->break_row = -1;
+	r->loop_order = -1;
 }
 
 bool
@@ -434,13 +468,73 @@ replay_next(struct replay *r, struct replay_tick *t)
 	return true;
 }
 
+/* ── Cues ────────────────────────────────────────────────────── */
+
+/*
+ * The order playback first moves on to from this one.  Returns -1 when
+ * it moves on to none: the order comes round on itself, or the song
+ * stops inside it.
+ */
+static int
+order_exit(const struct mod *m, int order)
+{
+	struct replay r;
+	struct replay_tick t;
+
+	replay_init(&r, m, order, false);
+	while (replay_next(&r, &t))
+		if (t.order != order)
+			return t.order;
+	return -1;
+}
+
+/* Play a cue from its first order to where it comes round, for how far
+ * it reaches and how long one pass lasts. */
+static void
+cue_walk(const struct mod *m, struct replay_cue *cue)
+{
+	uint8_t visited[MOD_ORDERS / 8];
+	struct replay r;
+	struct replay_tick t;
+
+	memset(visited, 0, sizeof(visited));
+	replay_init(&r, m, cue->start, false);
+	cue->orders = 0;
+	cue->us = 0;
+	while (replay_next(&r, &t)) {
+		if ((visited[t.order / 8] & 1 << (t.order % 8)) == 0) {
+			visited[t.order / 8] |= 1 << (t.order % 8);
+			cue->orders++;
+		}
+		cue->us += REPLAY_TICK_US((uint64_t)t.bpm);
+	}
+	cue->loop = r.loop_order;
+}
+
+int
+replay_scan(const struct mod *m, struct replay_cue *cue, int max)
+{
+	int order, n = 0;
+
+	for (order = 0; order < m->length && n < max; order++) {
+		/* An order the one before it plays on into belongs to that
+		 * cue rather than starting one. */
+		if (order > 0 && order_exit(m, order - 1) == order)
+			continue;
+		cue[n].start = order;
+		cue_walk(m, &cue[n]);
+		n++;
+	}
+	return n;
+}
+
 const char *
 replay_unsupported(const struct mod *m)
 {
 	static const char *const extended[16] = {
 		NULL, "E1 fine porta up", "E2 fine porta down",
 		"E3 glissando", "E4 vibrato waveform", "E5 finetune",
-		"E6 pattern loop", "E7 tremolo waveform", "E8", "E9 retrigger",
+		"E6 pattern loop", "E7 tremolo waveform", "E8", NULL,
 		NULL, NULL, "EC note cut", NULL, NULL, "EF invert loop",
 	};
 	static char list[512];

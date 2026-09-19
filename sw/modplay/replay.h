@@ -15,6 +15,10 @@
 
 #include "mod.h"
 
+/* A tick lasts 2.5 s divided by the tempo, as ProTracker's CIA timer
+ * runs it. */
+#define	REPLAY_TICK_US(bpm)	(2500000 / (bpm))
+
 struct replay_voice {
 	bool		trigger;	/* the sample restarts this tick */
 	uint32_t	offset;		/*  ... this many bytes in */
@@ -65,11 +69,35 @@ struct replay {
 	/* Rows already played, to find where the song comes round. */
 	uint8_t		played[MOD_ORDERS][MOD_ROWS / 8];
 
+	/* The order the song came round to, once it has; -1 while it
+	 * plays on, and where it stops without repeating. */
+	int		loop_order;
+
 	struct replay_chan chan[MOD_CHANNELS];
 };
 
-void		 replay_init(struct replay *, const struct mod *, bool loop);
+/* Start is the order to begin at, which the caller keeps within the
+ * song's length. */
+void		 replay_init(struct replay *, const struct mod *, int start,
+		     bool loop);
 bool		 replay_next(struct replay *, struct replay_tick *);
+
+/*
+ * A cue: a run of orders entered as a unit, ending where it comes
+ * round to an order it has already played.  A module holding a game's
+ * music keeps many — one per tune, and one per jingle the game plays
+ * over it — so the order a listener wants is rarely the first.
+ */
+struct replay_cue {
+	int		start;		/* the order it is entered at */
+	int		loop;		/* where it comes round; -1 = it stops */
+	int		orders;		/* orders it visits */
+	uint64_t	us;		/* one pass, up to where it comes round */
+};
+
+/* The cues a module holds, in order; returns how many there are, at
+ * most max. */
+int		 replay_scan(const struct mod *, struct replay_cue *, int max);
 
 /* The effects the module uses that the replayer ignores, as a list of
  * their names, or NULL. */

@@ -9,7 +9,7 @@
  * the file stores them, so a sample's offset there is its offset in
  * the file's sample data.
  *
- * usage: modplay [-il] [-c crossfeed] file ...
+ * usage: modplay [-Lil] [-c crossfeed] [-p order] file ...
  */
 
 #include <sys/types.h>
@@ -38,9 +38,6 @@
 /* A PAL Amiga's Paula plays a sample at this rate divided by the
  * period. */
 #define	PAULA_HZ	3546895
-
-/* A tick lasts 2.5 s divided by the tempo, as the CIA timer runs it. */
-#define	TICK_US(bpm)	(2500000 / (bpm))
 
 #define	LOOKAHEAD	50	/* ticks generated ahead of the clock */
 #define	LOWAT		25	/* wake when fewer ticks than this remain */
@@ -256,7 +253,7 @@ gen_tick(struct player *p, struct penaudio_event *ev)
 		ev[n].pe_tick = tick;
 		ev[n].pe_voice = PENAUDIO_VOICE_NONE;
 		ev[n].pe_set = PENAUDIO_SET_PERIOD;
-		ev[n++].pe_period_us = TICK_US(t.bpm);
+		ev[n++].pe_period_us = REPLAY_TICK_US(t.bpm);
 		p->bpm = t.bpm;
 	}
 	for (ch = 0; ch < MOD_CHANNELS; ch++) {
@@ -270,7 +267,7 @@ gen_tick(struct player *p, struct penaudio_event *ev)
 
 	p->timeline[tick % TIMELINE].tick = t;
 	p->timeline[tick % TIMELINE].us = p->us;
-	p->us += TICK_US(t.bpm);
+	p->us += REPLAY_TICK_US(t.bpm);
 	return n;
 }
 
@@ -341,9 +338,53 @@ slurp(const char *path, size_t *lenp)
 	return buf;
 }
 
+/*
+ * Print where a module's cues start, as the -p values that play them.
+ * Needs no device: a module holding a game's music keeps its tunes
+ * behind its jingles, and the order each starts at is not in the file
+ * to read off.
+ */
+static bool
+list(const char *path)
+{
+	static struct replay_cue cue[MOD_ORDERS];
+	struct mod m;
+	const char *error;
+	uint8_t *buf;
+	size_t len;
+	int n, i;
+
+	if ((buf = slurp(path, &len)) == NULL)
+		return false;
+	if ((error = mod_parse(&m, buf, len)) != NULL) {
+		warnx("%s: %s", path, error);
+		free(buf);
+		return false;
+	}
+
+	printf("%s: \"%s\" %s, %d orders\n", path, m.title, m.signature,
+	    m.length);
+	n = replay_scan(&m, cue, MOD_ORDERS);
+	for (i = 0; i < n; i++) {
+		unsigned s = (unsigned)(cue[i].us / 1000000);
+
+		printf("  -p %-3d %2d %-6s  %u:%02u.%u  ", cue[i].start,
+		    cue[i].orders, cue[i].orders == 1 ? "order" : "orders",
+		    s / 60, s % 60, (unsigned)(cue[i].us / 100000 % 10));
+		if (cue[i].loop >= 0)
+			printf("loops to order %d\n", cue[i].loop);
+		else
+			printf("ends\n");
+	}
+
+	mod_free(&m);
+	free(buf);
+	return true;
+}
+
 /* Returns false if the file could not be played. */
 static bool
-play(int fd, const char *path, bool ignore, bool loop)
+play(int fd, const char *path, bool ignore, bool loop, int start)
 {
 	static struct player p;
 	struct penaudio_clock pc;
@@ -361,6 +402,12 @@ play(int fd, const char *path, bool ignore, bool loop)
 		warnx("%s: %s", path, error);
 		free(buf);
 		return false;
+	}
+
+	if (start >= m.length) {
+		warnx("%s: has %d orders, so -p %d starts past its end", path,
+		    m.length, start);
+		goto fail;
 	}
 
 	unsupported = replay_unsupported(&m);
@@ -393,7 +440,7 @@ play(int fd, const char *path, bool ignore, bool loop)
 	p.fd = fd;
 	p.mod = &m;
 	p.bpm = 125;		/* ProTracker's; the song may change it */
-	replay_init(&p.replay, &m, loop);
+	replay_init(&p.replay, &m, start, loop);
 
 	/*
 	 * The clock starts at the first tick's tempo, which is known once
@@ -402,7 +449,7 @@ play(int fd, const char *path, bool ignore, bool loop)
 	 */
 	more = feed(&p);
 	if (!(p.done && p.last == 0)) {
-		pc.pc_period_us = TICK_US(p.timeline[0].tick.bpm);
+		pc.pc_period_us = REPLAY_TICK_US(p.timeline[0].tick.bpm);
 		pc.pc_lowat = LOWAT;
 		if (ioctl(fd, PENAUDIO_START, &pc) == -1)
 			err(1, "START");
@@ -445,12 +492,15 @@ fail:
 static void
 usage(void)
 {
-	fprintf(stderr, "usage: modplay [-il] [-c crossfeed] file ...\n"
+	fprintf(stderr,
+	    "usage: modplay [-Lil] [-c crossfeed] [-p order] file ...\n"
 	    "  -c  percent of each channel's own side that the other side "
 	    "gets:\n"
 	    "      0 pans hard, as the Amiga does, 100 is mono; default %d\n"
 	    "  -i  play a module even if it uses effects modplay ignores\n"
-	    "  -l  loop each song rather than stopping at its end\n",
+	    "  -L  list where each file's cues start instead of playing\n"
+	    "  -l  loop each song rather than stopping at its end\n"
+	    "  -p  start at this order rather than the first\n",
 	    CROSSFEED);
 	exit(2);
 }
@@ -461,11 +511,11 @@ main(int argc, char **argv)
 	struct sigaction sa;
 	uint64_t inc;
 	uint32_t voices;
-	bool ignore = false, loop = false, ok = true;
+	bool ignore = false, loop = false, listing = false, ok = true;
 	char *end;
-	int ch, fd, crossfeed = CROSSFEED;
+	int ch, fd, crossfeed = CROSSFEED, start = 0;
 
-	while ((ch = getopt(argc, argv, "c:il")) != -1) {
+	while ((ch = getopt(argc, argv, "c:iLlp:")) != -1) {
 		switch (ch) {
 		case 'c':
 			crossfeed = (int)strtol(optarg, &end, 10);
@@ -476,8 +526,17 @@ main(int argc, char **argv)
 		case 'i':
 			ignore = true;
 			break;
+		case 'L':
+			listing = true;
+			break;
 		case 'l':
 			loop = true;
+			break;
+		case 'p':
+			start = (int)strtol(optarg, &end, 10);
+			if (*optarg == '\0' || *end != '\0' ||
+			    start < 0 || start >= MOD_ORDERS)
+				usage();
 			break;
 		default:
 			usage();
@@ -485,6 +544,13 @@ main(int argc, char **argv)
 	}
 	if (optind == argc)
 		usage();
+
+	if (listing) {
+		for (; optind < argc; optind++)
+			if (!list(argv[optind]))
+				ok = false;
+		return ok ? 0 : 1;
+	}
 
 	/* No SA_RESTART: a signal has to end the wait in poll(). */
 	memset(&sa, 0, sizeof(sa));
@@ -512,7 +578,7 @@ main(int argc, char **argv)
 		    voices, MOD_CHANNELS);
 
 	for (; optind < argc && !quit; optind++)
-		if (!play(fd, argv[optind], ignore, loop))
+		if (!play(fd, argv[optind], ignore, loop, start))
 			ok = false;
 
 	close(fd);
