@@ -570,6 +570,10 @@ queue has room and either the clock is stopped or fewer than
  * of ticks. */
 #define PENAUDIO_PERIOD_MIN_US	1000
 
+/* pe_inc: the range every CLASS_AUDIO device supports, 1/256x to 4x. */
+#define PENAUDIO_INC_MIN	0x00000100
+#define PENAUDIO_INC_MAX	0x00040000
+
 struct penaudio_info {
 	uint32_t pi_rate;		/* output frames per second */
 	uint16_t pi_nvoices;		/* voices the device has */
@@ -657,7 +661,7 @@ fits the queue and is acceptable, and reports its length in
 - names a region outside sample memory, or one not aligned to its
   format's frame size;
 - sets an increment outside the range every `CLASS_AUDIO` device
-  supports, `0x00000100` through `0x00040000`;
+  supports, `PENAUDIO_INC_MIN` through `PENAUDIO_INC_MAX`;
 - precedes an event already queued, unless its tick has already been
   applied.
 

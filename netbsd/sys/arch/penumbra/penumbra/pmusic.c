@@ -52,10 +52,6 @@ __KERNEL_RCSID(0, "$NetBSD$");
 				 PENAUDIO_SET_STOP)
 #define	PM_SET_ALL		(PENAUDIO_SET_PERIOD | PM_SET_VOICE)
 
-/* The increment range every CLASS_AUDIO device supports. */
-#define	PM_INC_MIN		0x00000100
-#define	PM_INC_MAX		0x00040000
-
 /* The default sample memory cap is this fraction of physical memory,
  * rounded up to a power of two. */
 #define	PM_MAXMEM_SHARE		64
@@ -441,7 +437,7 @@ pmusic_event_ok(const struct paudio_softc *sc,
 	    (set & (PENAUDIO_SET_PLAY | PENAUDIO_SET_LOOP)))
 		return false;
 	if ((set & PENAUDIO_SET_INC) &&
-	    (pe->pe_inc < PM_INC_MIN || pe->pe_inc > PM_INC_MAX))
+	    (pe->pe_inc < PENAUDIO_INC_MIN || pe->pe_inc > PENAUDIO_INC_MAX))
 		return false;
 	if (set & (PENAUDIO_SET_PLAY | PENAUDIO_SET_LOOP)) {
 		shift = pmusic_frame_shift(pe->pe_format);

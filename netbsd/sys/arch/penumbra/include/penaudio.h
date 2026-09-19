@@ -24,6 +24,10 @@
  * of ticks. */
 #define PENAUDIO_PERIOD_MIN_US	1000
 
+/* pe_inc: the range every CLASS_AUDIO device supports, 1/256x to 4x. */
+#define PENAUDIO_INC_MIN	0x00000100
+#define PENAUDIO_INC_MAX	0x00040000
+
 struct penaudio_info {
 	uint32_t pi_rate;		/* output frames per second */
 	uint16_t pi_nvoices;		/* voices the device has */
