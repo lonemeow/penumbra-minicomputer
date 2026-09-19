@@ -11,6 +11,7 @@ Usage:
     list_fanout.py build/ulx3s_penumbra1_top.json
     list_fanout.py build/ulx3s_penumbra1_top.json -n 30 -m 10
     list_fanout.py build/ulx3s_penumbra2_top.json --domain clk_sdram
+    list_fanout.py build/ulx3s_penumbra2_top.json --pnr-log build/ulx3s_penumbra2_top_pnr.log
 
 Notes:
     * The design is analyzed as nextpnr places it: flattened through
@@ -27,11 +28,19 @@ Notes:
       register are listed as (no register): pins, PLL inputs, and logic
       feeding only bits a keep_hierarchy module ignores, which synthesis
       cannot trim across the boundary.
+    * Nets nextpnr routes on the global clock network are marked
+      `global`: their fanout costs no general routing, so they are not
+      congestion suspects. Which nets get a global is nextpnr's call,
+      made while packing — seed-independent — so any nextpnr log of the
+      same synthesized netlist says; --pnr-log names candidates and the
+      newest one no older than the JSON is used. Without one the column
+      reads `?`.
     * For multi-bit busses, both per-bit and per-bus totals are shown
       so you can see whether an entire bus is wide-fanout or just one
       bit (e.g. bit 0 of a status flag often dominates).
 """
 import json
+import os
 import re
 import sys
 import argparse
@@ -90,6 +99,30 @@ def sections_for(domains):
     return sorted(domains) + ['(cross-domain)']
 
 
+def read_globals(json_path, logs):
+    """Nets nextpnr promoted to the global network, from the newest log
+    in `logs` that is not older than the synthesized JSON and has got
+    as far as promotion — a run still starting up must not read as
+    "nothing is global".  Returns ({net name: global index, or None
+    until routing assigns one}, log path), or (None, None)."""
+    json_mtime = os.path.getmtime(json_path)
+    fresh = sorted((l for l in logs
+                    if os.path.exists(l) and os.path.getmtime(l) >= json_mtime),
+                   key=os.path.getmtime, reverse=True)
+    for log in fresh:
+        promoted = {}
+        for line in open(log, errors='replace'):
+            m = re.search(r'promoting clock net (\S+) to global network', line)
+            if m:
+                promoted.setdefault(m.group(1), None)
+            m = re.search(r'routing clock net (?:\$glbnet\$)?(\S+) using global (\d+)', line)
+            if m:
+                promoted[m.group(1)] = int(m.group(2))
+        if promoted:
+            return promoted, log
+    return None, None
+
+
 class Design:
     """The synthesized netlist flattened through keep_hierarchy
     instances: leaf cells with globally numbered bits, plus every
@@ -107,6 +140,7 @@ class Design:
         self.top = tops[0]
         self.cells = []          # (path, type, {port: [bit]}, {port: dir})
         self.names = defaultdict(list)   # bit -> [(local, full, hidden, width)]
+        self.netbits = {}        # full name -> ([bit], offset, upto)
         self.instances = 0
         self._name_cache = {}
         self._next_bit = 1 + max(
@@ -146,6 +180,8 @@ class Design:
         for b, cands in self.names.items():
             merged[c(b)].extend(cands)
         self.names = merged
+        self.netbits = {n: ([c(b) for b in bits], off, upto)
+                        for n, (bits, off, upto) in self.netbits.items()}
 
     def _hierarchical(self, cell_type):
         return cell_type in self.mods and cell_type not in self.library
@@ -173,6 +209,8 @@ class Design:
             for b in bits:
                 if isinstance(b, int):
                     self.names[g(b)].append((wname, prefix + wname, hidden, width))
+            self.netbits[prefix + wname] = ([g(b) for b in bits],
+                                            w.get('offset', 0), bool(w.get('upto')))
 
         for cname, c in mod.get('cells', {}).items():
             ctype = c['type']
@@ -193,6 +231,25 @@ class Design:
             elif conns:
                 self.cells.append((prefix + cname, ctype, conns,
                                    c.get('port_directions', {})))
+
+    def bits_named(self, names):
+        """Bits nextpnr refers to by `names`: a whole net's full name, or
+        one bit of a bus in nextpnr's `name[i]` form, where i counts in
+        the bus's declared numbering (yosys `offset` / `upto`)."""
+        out = set()
+        for n in names:
+            if n in self.netbits:
+                out.update(b for b in self.netbits[n][0] if isinstance(b, int))
+                continue
+            m = re.match(r'(.*)\[(\d+)\]$', n)
+            if m and m.group(1) in self.netbits:
+                bits, off, upto = self.netbits[m.group(1)]
+                pos = int(m.group(2)) - off
+                if upto:
+                    pos = len(bits) - 1 - pos
+                if 0 <= pos < len(bits) and isinstance(bits[pos], int):
+                    out.add(bits[pos])
+        return out
 
     def net_name(self, bit):
         if bit in self._name_cache:
@@ -317,10 +374,15 @@ def main():
     ap.add_argument('-d', '--domain', action='append', default=[],
                     help='only this clock domain (repeatable); names as '
                          'printed in the section headers')
+    ap.add_argument('--pnr-log', action='append', default=[],
+                    help='candidate nextpnr log for the global-net column '
+                         '(repeatable); the newest not older than the JSON wins')
     args = ap.parse_args()
 
     design = Design(json.load(open(args.json)))
     per_domain = analyze(design)
+    promoted, log = read_globals(args.json, args.pnr_log)
+    global_bits = design.bits_named(promoted) if promoted else set()
 
     order = sorted(per_domain, key=lambda k: -sum(per_domain[k].values()))
     if args.domain:
@@ -333,6 +395,18 @@ def main():
     print(f'=== {design.top}: {len(design.cells)} leaf cells, flattened through '
           f'{design.instances} kept-hierarchy instances ===')
     print(f'    domains: {", ".join(order)}')
+    if promoted is None:
+        print('    globals: unknown — no nextpnr log newer than the JSON '
+              '(route column reads ?)')
+    else:
+        def readable(n):
+            # nextpnr may name a net by any of its aliases; show ours.
+            bits = design.bits_named([n])
+            return design.net_name(min(bits))[0] if len(bits) == 1 else n
+        glist = ', '.join(readable(n) if i is None else f'{readable(n)}→{i}'
+                          for n, i in sorted(promoted.items(),
+                                             key=lambda x: (x[1] is None, x[1] or 0)))
+        print(f'    globals ({log}): {glist}')
     print()
 
     for dom in order:
@@ -340,23 +414,27 @@ def main():
         net_sinks = defaultdict(int)
         net_max_bit = defaultdict(int)
         net_width = {}
+        net_global = set()
         for b, s in bit_sinks.items():
             name, width = design.net_name(b)
             name = name or ('$bit%d' % b)
             net_sinks[name] += s
             net_max_bit[name] = max(net_max_bit[name], s)
             net_width[name] = width
+            if b in global_bits:
+                net_global.add(name)
         ranked = sorted(net_sinks.items(), key=lambda x: -x[1])
 
         print(f'── {dom}: {sum(bit_sinks.values())} sinks '
               f'(top {args.top}, min fanout {args.min_fanout}) ──')
-        print(f'  {"total":>7s}  {"width":>5s}  {"max_bit":>7s}  net')
-        print(f'  {"-"*7}  {"-"*5}  {"-"*7}  {"-"*40}')
+        print(f'  {"total":>7s}  {"width":>5s}  {"max_bit":>7s}  {"route":6s}  net')
+        print(f'  {"-"*7}  {"-"*5}  {"-"*7}  {"-"*6}  {"-"*40}')
         shown = 0
         for n, s in ranked:
             if s < args.min_fanout or shown >= args.top:
                 break
-            print(f'  {s:>7d}  {net_width[n]:>5d}  {net_max_bit[n]:>7d}  {n}')
+            route = '?' if promoted is None else ('global' if n in net_global else '')
+            print(f'  {s:>7d}  {net_width[n]:>5d}  {net_max_bit[n]:>7d}  {route:6s}  {n}')
             shown += 1
         if shown == 0:
             print(f'  (no nets with fanout >= {args.min_fanout})')

@@ -1222,6 +1222,7 @@ $(BUILD_DIR)/$(TOP).config: $(BUILD_DIR)/$(TOP).json $(LPF) $(LPF_DESIGN) $(PREP
 		--json $< --textcfg $@ \
 		--write $(BUILD_DIR)/$(TOP)_routed.json \
 		--report $(BUILD_DIR)/$(TOP)_timing.json --detailed-timing-report \
+		--log $(BUILD_DIR)/$(TOP)_pnr.log \
 		$(NEXTPNR_VIS)
 
 # ── Headless place/route visualization ──────────────────────────
@@ -1306,12 +1307,15 @@ timing:
 # left behind — no rebuild.  Override entries per domain via
 # FANOUT_N=30, threshold via FANOUT_MIN=20; FANOUT_DOMAIN=clk_sdram
 # restricts the report to one domain (names as in the section headers).
+# Nets on the global network are marked from nextpnr's own log — the
+# fpga build's <top>_pnr.log or any seed-sweep log of the same netlist.
 .PHONY: fanout
 FANOUT_N      ?= 25
 FANOUT_MIN    ?= 50
 FANOUT_DOMAIN ?=
 fanout:
-	@python3 hw/tools/list_fanout.py $(BUILD_DIR)/$(TOP).json -n $(FANOUT_N) -m $(FANOUT_MIN) $(foreach d,$(FANOUT_DOMAIN),--domain $(d))
+	@python3 hw/tools/list_fanout.py $(BUILD_DIR)/$(TOP).json -n $(FANOUT_N) -m $(FANOUT_MIN) $(foreach d,$(FANOUT_DOMAIN),--domain $(d)) \
+		$(foreach l,$(wildcard $(BUILD_DIR)/$(TOP)_pnr.log $(BUILD_DIR)/$(TOP).s*.log),--pnr-log $(l))
 
 # ── Cleanup ────────────────────────────────────────────────────
 .PHONY: clean
