@@ -6103,6 +6103,26 @@ code stream does not depend on the ladder, so one captured stream feeds
 a swept model of the analog mapping. Hardware is needed only for what
 the model cannot supply — the ECP5's actual source/sink impedance.
 
+### Mono channels (`CAP.MONO`)
+
+The device implements `PITCH` and `VOLUME` but not `MONO`: `CAP_VALUE`
+leaves bit 11 clear, the channel `CTRL` decode handles only `FLUSH`,
+and each FIFO entry is one stereo frame. Every voice a tracker plays is
+mono and placed by `VOL`, so `/dev/pmusic` writes each sample into both
+halves of a word.
+
+`MONO` packs two frames per word, which halves the stores to a channel's
+data port — the refill's per-frame cost — and doubles the frames a
+channel holds, so its watermark comes due half as often. It needs:
+
+- the channel FIFO to unpack two frames per word, with `LEVEL` and
+  `DEPTH` counted in frames of the selected format, as the spec
+  already requires;
+- the ISS model to match;
+- `pmusic_push()` to pack frame pairs when `CAP.MONO` is set — pairing
+  across a pass boundary, and padding a sound that ends on an odd
+  frame.
+
 ## Hardware: what limits each top, measured with four audio channels
 
 Sweeping all three board tops with the audio device at four channels,
