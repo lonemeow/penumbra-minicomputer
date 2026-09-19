@@ -135,6 +135,16 @@ bootinfo — `boot sd:0,0` reaches single-user with no prompts.
   unpowered hub, most likely a power budget rather than a protocol
   problem.
 
+- **Audio (paudio):** `CLASS_AUDIO` driver on the four-channel
+  device.  Channel 0 plays a PCM stream under MI `audio(4)`
+  (`/dev/audio`); every channel is also a voice through
+  `/dev/pmusic` — samples in a per-session memory, played by
+  events timed on a tick clock the kernel keeps, with the
+  refill in the watermark interrupt.  The two share channel 0,
+  first claim wins.  `pmusic-test` passes its contract checks
+  and plays its listening checks correctly on the board.
+  Design: [design-notes.md, Audio Driver](design-notes.md#audio-driver).
+
 - **Core dumps:** the process register accessors and ELF core
   writer work; a crashing program leaves a core whose register
   note and load map symbolize against the unstripped binaries in
