@@ -2316,6 +2316,11 @@ per run, each ~20-30 cycles, ~25-37M cycles of write traffic on a
 45M-cycle run.  Phase 2 absorbs writes into L2 entirely until
 eviction.
 
+The per-store figure predates `doc/internals/instruction-timing.md`,
+which measures a write-through `STW` at 8 cycles on penumbra1 and 5
+on penumbra2_5 in steady state; re-measure before sizing the win on
+it.
+
 Upper-bound win (from current measurements): the 841K Dhrystone
 write hits become zero-bus-traffic dirty marks (~25M cycles saved
 on Dhrystone alone, before counting kernel workload gains).  WA
@@ -3489,7 +3494,9 @@ Checked and not levers:
 - SQLite's big-endian `get4byte` decode and its ×40 `aMem[]` scaling
   are already minimal.
 - `pcache1` divides by a run-time `nHash`.
-- Doom's `(frac >> 16) & 127` column index is already minimal.
+- Doom's `(frac >> 16) & 127` column index is already minimal as
+  compiled.  Keeping the fraction pre-shifted in the source removes
+  the `AND` — see "Doom: FastDoom techniques that transfer".
 - SQLite's VDBE dispatch — 13 instructions per opcode, including an
   `STW` of `nVmStep` for lack of registers — is PIC jump-table cost
   plus register pressure.  The bounds check could only go by padding
@@ -3566,9 +3573,94 @@ links with `kern.ldscript`, so this needs per-function sections plus
 an ordering — a symbol ordering file for lld, or a `.text.hot` input
 section the script places first.
 
-Measuring it needs a TLB miss count, which nothing exposes today (no
-hardware counter, no count in the miss handler), and a before/after
-on the pbench syscall rows.
+Measuring it needs a TLB miss count, which nothing exposes today (see
+"Kernel: count TLB refills"), and a before/after on the pbench
+syscall rows.
+
+## Kernel: count TLB refills
+
+Nothing counts refills.  `_real_miss_handler` resolves them without
+entering `trap()`, so neither `vmstat -s` nor an evcnt sees them, and
+the CPU perfctrs count the handler's ~59 instructions as instructions
+of whatever was running.  The TLB's shape, and why its misses move
+with layout, are in "Kernel: pack the hottest syscall-path text onto
+shared pages".
+
+Doom makes the case.  Moving its lumps out of the zone removed ~1M
+instructions a frame, a fifth of the total, with the game's own work
+unchanged, and an unrelated change had already moved ~0.3M ("Doom:
+where a frame goes").  Refills are the one per-access kernel cost
+that fits.  Reference-bit emulation is ruled out:
+`pmap_clear_reference` only clears the software flag.
+
+A counter word in pinned scratch, bumped on the fast path and exported
+through sysctl beside the perfctrs, settles it.  Splitting it by the
+faulting VA's region (text, heap, mapped file, stack) would say which
+data to move.
+
+## Doom: where a frame goes
+
+Measured 2026-09-18 on hardware at 37.5 MHz: a `PERFCTR=1` build
+playing the 150-tic `BENCH.lmp` timedemo of Freedoom's E1M1.  By feel
+a 386DX/40 runs Doom 4–5× faster.
+
+| | lumps read into a 16 MB zone | WAD mapped, 4 MB zone |
+|---|---:|---:|
+| fps | 2.52 | 3.03 |
+| instructions / frame | 5.02M | 4.03M |
+| cycles / frame | 14.8M | 12.3M |
+| CPI | 2.95 | 3.05 |
+
+The mapped run's stalls: load 21%, store 14%, ifetch 14%, flush 11%,
+hazard 4%, funit 3%; hit rates L1I 97.2%, L1D 82.4%, L2 86.8%.
+
+- **The instruction set is not the gap.**  Host gcc 11 at `-m32
+  -march=i386 -O2` (compile-only, with an empty `gnu/stubs-32.h` and a
+  `sys/endian.h` shim) against our clang `-O2` over the eight renderer
+  files: 6,151 instructions against 9,026, the usual CISC/RISC ratio.
+  The pixel loops are within 1.2× — `R_DrawColumn` 10 against 12 per
+  pixel, `R_DrawSpan` 15 against 17, the difference being x86's
+  base+index addressing — and with every access hitting, the timing
+  tables put Penumbra ahead per clock: ~19 cycles a column pixel on
+  penumbra2_5 against ~35 for the i386 C loop.  Outliers:
+  `R_RenderSegLoop` 201 against 405, 139 of them `lli`/`lui` pairs for
+  globals (`LUI` ORs, so there is no `%hi`/`%lo` fold into the load);
+  `R_DrawVisSprite` 84 against 242, not yet examined.
+- **The pixel loops are ~16% of the instructions.**  46.5k pixels a
+  frame at 12 and 17 instructions come to 0.65M of 4.0M.  A column
+  call draws 7.2 pixels on average (29,058 in 4,014 calls), so
+  per-call setup outweighs the pixels — see "Doom: renderer
+  source-level costs".
+- **The BSP walk is not a lever.**  LLVM already turns the back-side
+  recursion into a loop, and the front-side descent's 7-register frame
+  is at most ~3.8k memory operations a frame, ~0.1%.  The traversal
+  proper — `R_AddLine`, `R_CheckBBox`, `R_FindPlane`'s linear scan of
+  the visplanes, the node visits — is an estimated ~0.2M instructions.
+  The `bsp` phase is big because every wall runs inside it: only one
+  `R_StoreWallRange` call in 16 is bracketed as `wall`.
+- **Part of the frame is not Doom's.**  The per-frame work counts are
+  identical in every run, yet instructions fell from 5,025k to 4,719k
+  after a change that touched no frame code (unbuffered stdout), and
+  to 4,029k once the lumps left the zone.  That second drop sits in
+  the sprite (−570k) and plane (−171k) phases, whose data moved; a
+  time-uniform cost would have come mostly out of `bsp`.  Skipping
+  `Z_ChangeTag2` accounts for ~60k.  TLB refills are the suspect — see
+  "Kernel: count TLB refills".  Until that is understood, one layout's
+  runs vary by ~6%: judge small changes over several runs.
+
+`r_phase` gaps:
+
+- Every mark is a `sysctl` call.  A sampled wall call carries two, and
+  the scaled `wall` estimate (7.8M cycles) exceeds the whole bsp+wall
+  bucket (6.9M), so a mark pair costs at least ~15k cycles.  Calibrate
+  it with a back-to-back pair and subtract before trusting the
+  bsp/wall split.
+- Only cycles and instructions are kept per phase, although `read_cpu`
+  fetches all eight counters.  Per-phase stall buckets would say which
+  phases are load- or store-bound.
+- The whole-run `perf_report` line subtracts a single snapshot pair of
+  32-bit counters, so it is meaningless past 2^32 cycles (~115 s at
+  37.5 MHz).  `BENCH.lmp` runs ~60 s.
 
 ## Doom: renderer source-level costs
 
@@ -3593,6 +3685,87 @@ Found in the hot-path code review (2026-09-13).
   `NF_SUBSECTOR` and call `R_Subsector`, paying the full frame.
   Testing the flag in the parent before recursing removes a frame per
   leaf, whatever the shrink-wrapping and tail-call work delivers.
+- **Every wall column piece pays a three-call lump lookup.**
+  `R_GetColumn` → `W_CacheLumpNum` → `Z_ChangeTag2` runs ~100
+  instructions with three call/return pairs and 12 stores, 11 of them
+  register saves: `W_CacheLumpNum` saves six registers on its hit path
+  for the sake of its miss path (`Z_Malloc`, `W_Read`).  A mapped lump
+  skips `Z_ChangeTag2`, and its address never changes, so a column
+  pointer table built alongside each texture's lookup would make
+  `R_GetColumn` two or three loads.  Lumps read into the zone
+  (misaligned ones) can be purged and still need the lookup.
+- **Each wall column divides and calls.**  `R_RenderSegLoop` computes
+  `dc_iscale` with a `DIV` (34 cycles on penumbra2_5) and the texture
+  column with a `FixedMul` call, per column; masked columns divide
+  too.
+
+## Doom: R_Init reads every texture patch and sprite
+
+The long silent pause after R_Init's first 16 dots is
+`R_GenerateLookup` running over all 963 Freedoom textures.  It
+`W_CacheLumpNum`s every patch they use — 1,045 lumps, 10.1 MB — for
+each patch's width and `columnofs` table, ~350 KB in all.  The 14 slow
+dots after it are `R_InitSpriteLumps` reading all 853 sprite lumps
+(2.5 MB) for three header fields each.  At SD speed ("Hardware: SD
+read throughput is bottlenecked by pmci_burst byte-PIO") that is over
+a minute; id's far smaller IWADs made vanilla's same eager scan cheap.
+
+Reading only headers, or mapping the WAD as the port now does, leaves
+the SD traffic as it is: the root filesystem's blocks are 64 KB and
+patches average ~10 KB, so every block is read anyway.  Mapping did
+remove the copies' memory pressure — faults waiting for memory went
+from 53 to none and pagedaemon wakeups from 124 to none.
+
+E1M1 uses 114 textures, 163 patches, 1.1 MB.  Ways to read only those
+without stalling play:
+
+- Build a level's lookups during level load, where `R_PrecacheLevel`
+  already reads its patches.  Switch and animation frames missing from
+  the sidedefs would still load on first sight.
+- Cache the computed lookups and sprite dimensions in a file keyed to
+  the WAD, so only the first start pays.
+
+Deferring to first use is out: play would stall whenever something
+new came into view.
+
+The mapped default reads misaligned lumps into the zone instead
+(`LumpIsMapped` in `w_wad.c`); that path has not yet run with an
+unpadded WAD such as id's.
+
+## Doom: FastDoom techniques that transfer
+
+Studied 2026-09-18 from FastDoom (github.com/viti95/FastDoom), a DOS
+fork tuned for 386 and 486; paths are under its `FASTDOOM/`, and much
+of its asm is id's original.  x86-only tricks do not transfer: `lea`
+chains, immediates patched by self-modifying code, `shld` span
+extraction, Pentium and MMX variants, planar VGA.  Those that cut work
+per pixel or per store do, in rough order of payoff here:
+
+1. **Low and potato detail with wide stores** (`linearl.asm`,
+   `linearp.asm`): each texel written once as an `STH` or `STW`.
+   Halves or quarters the pixels, the stores and the per-column setup.
+   Chocolate Doom has low detail; potato would be new.
+2. **Column drawer.**  A fraction kept pre-shifted to 7.25 wraps with
+   `>> 25` and no `& 127` — the disabled unrolled `R_DrawColumn` in
+   `r_draw.c` already does this.  Unroll ×8 with constant-offset
+   `STB [dest + k*320]` and enter through a computed jump; FastDoom's
+   full 200-way unroll (`linearh.asm`) is 6.4 KB, past the I-cache.
+3. **Spans storing four pixels per `STW`** — `planar2.asm` pairs two
+   per 16-bit store.  One write-through store in place of four.
+4. **Direct drawers** for columns drawn 1:1 — sky, player weapon
+   (`linearh5.asm`) — with no fraction arithmetic.
+5. **Flat-shaded visplanes** (`r_plane.c` `R_DrawPlanesFlatter*`,
+   colour from `R_GetFlatColor`): FastDoom's largest measured gain,
+   but a visual trade-off, so an option at most.
+6. **Status bar copied only when it changes**: vanilla's
+   `updatestate`, which Chocolate Doom dropped.
+
+Its iterative BSP walk (after GBADoom) buys little here, since the
+recursion is ~0.1% of a frame ("Doom: where a frame goes").  Drawing
+straight into the uncached framebuffer would save the 64 KB copy each
+frame — under write-through every store reaches the bus anyway — but
+tears without page flipping and makes fuzz read uncached memory;
+unmeasured.
 
 ## Compiler: IRTranslator runs without branch probabilities — RESOLVED
 
