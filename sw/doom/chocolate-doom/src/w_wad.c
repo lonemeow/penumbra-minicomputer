@@ -381,6 +381,14 @@ void W_ReadLump(lumpindex_t lump, void *dest)
 // when no longer needed (do not use Z_ChangeTag).
 //
 
+// A lump in a mapped file is used in place only when it is word-aligned
+// there: lump formats hold 32-bit fields, and Penumbra traps misaligned
+// loads.  The rest are read into the zone as from an unmapped file.
+static boolean LumpIsMapped(const lumpinfo_t *lump)
+{
+    return lump->wad_file->mapped != NULL && (lump->position & 3) == 0;
+}
+
 void *W_CacheLumpNum(lumpindex_t lumpnum, int tag)
 {
     byte *result;
@@ -398,7 +406,7 @@ void *W_CacheLumpNum(lumpindex_t lumpnum, int tag)
     // region.  If the lump is in an ordinary file, we may already
     // have it cached; otherwise, load it into memory.
 
-    if (lump->wad_file->mapped != NULL)
+    if (LumpIsMapped(lump))
     {
         // Memory mapped file, return from the mmapped region.
 
@@ -454,7 +462,7 @@ void W_ReleaseLumpNum(lumpindex_t lumpnum)
 
     lump = lumpinfo[lumpnum];
 
-    if (lump->wad_file->mapped != NULL)
+    if (LumpIsMapped(lump))
     {
         // Memory-mapped file, so nothing needs to be done here.
     }

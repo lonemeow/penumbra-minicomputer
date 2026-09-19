@@ -21,7 +21,6 @@
 #include "config.h"
 
 #include "doomtype.h"
-#include "m_argv.h"
 
 #include "w_file.h"
 
@@ -42,19 +41,10 @@ wad_file_t *W_OpenFile(const char *path)
     wad_file_t *result;
     int i;
 
-    //!
-    // @category obscure
-    //
-    // Use the OS's virtual memory subsystem to map WAD files
-    // directly into memory.
-    //
-
-    if (!M_CheckParm("-mmap"))
-    {
-        return stdc_wad_file.OpenFile(path);
-    }
-
-    // Try all classes in order until we find one that works
+    // Try all classes in order until we find one that works.  A mapping
+    // class comes first wherever one is built: its lumps are views of the
+    // page cache, which the kernel can reclaim, where lumps read into the
+    // zone stay resident on a machine without swap.
 
     result = NULL;
 

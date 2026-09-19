@@ -13,6 +13,5 @@
 #define HAVE_DECL_STRCASECMP 1
 #define HAVE_DECL_STRNCASECMP 1
 
-// Makes -mmap available: lumps become views of the page cache, whose clean
-// pages the kernel can reclaim, rather than copies pinned in the zone.
+// Builds the WAD backend that maps the file, which W_OpenFile then prefers.
 #define HAVE_MMAP

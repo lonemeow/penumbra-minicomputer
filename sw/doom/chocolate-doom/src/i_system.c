@@ -49,7 +49,11 @@
 #include "w_wad.h"
 #include "z_zone.h"
 
-#define DEFAULT_RAM 16 /* MiB */
+// With the WAD mapped (w_file.c) the zone holds level data and composite
+// textures, not lumps.  It is kept small because Z_Malloc's rover moves
+// through untouched memory before reusing freed blocks, and without swap
+// every page it has passed stays resident.
+#define DEFAULT_RAM 4  /* MiB */
 #define MIN_RAM     4  /* MiB */
 
 
@@ -147,7 +151,7 @@ byte *I_ZoneBase (int *size)
     else
     {
         // Because of the 8-byte pointer size in a 64-bit build, the default
-        // heap size (16 MiB) is insufficient compared to a 32-bit build. For
+        // heap size is insufficient compared to a 32-bit build. For
         // example, the Alien Vendetta avm62402.lmp demo completes successfully
         // on a 32-bit build, but terminates with an out of memory error on a
         // 64-bit build. Therefore, to maintain consistency with a 32-bit
