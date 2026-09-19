@@ -93,3 +93,11 @@ print("floorplan: constrained %d cells to region %s (X%dY%d..X%dY%d)"
       % (n, REGION, X0, Y0, X1, Y1))
 print("floorplan: constrained %d cells to region %s (X%dY%d..X%dY%d)"
       % (na, AUDIO_REGION, AX0, AY0, AX1, AY1))
+
+# A prefix left behind by an instance rename matches nothing, which would
+# drop its region silently and hand the placer back the layout this file
+# exists to prevent — so an empty region stops the build instead.
+if n == 0 or na == 0:
+    raise RuntimeError("floorplan: a region matched no cells (%s: %d, %s: %d)"
+                       " — do its instance-name prefixes still exist?"
+                       % (REGION, n, AUDIO_REGION, na))
