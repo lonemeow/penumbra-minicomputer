@@ -12,9 +12,13 @@
 // Pointer scheme (standard async FIFO):
 //   • 2-bit binary read/write pointers (mod 4).  Slot index = ptr[0].
 //   • Pointers cross between domains as Gray code; 2-bit Gray decode
-//     is bin[1]=g[1], bin[0]=g[1]^g[0].
+//     is bin[1]=g[1], bin[0]=g[1]^g[0].  The Gray value is held in a
+//     register of the sending domain, so only flip-flops drive a
+//     synchronizer: a combinational encode glitches while two binary
+//     bits switch on the same edge, and a synchronizer edge landing in
+//     the glitch captures a value the pointer never held.
 //   • Empty: rptr_bin == wptr_bin_synced (SD side check).
-//   • Full:  (wptr_bin - rptr_bin_synced) == 2 (sys side check).
+//   • Full:  (wptr_bin - sys-local rptr_bin) == 2 (sys side check).
 //   • Retire: sys's local rptr lags behind the synchronized SD rptr,
 //     each step of lag = one slot to deliver.
 //
@@ -138,10 +142,33 @@ module sdram_cdc (
     logic [31:0] rsp_data [0:1];
 
     // ─────────────────────────────────────────────────────────
-    // Gray encode/decode (combinational)
+    // Gray pointers — registered in the sending domain
     // ─────────────────────────────────────────────────────────
-    wire [1:0] sys_wptr_gray = sys_wptr_bin ^ (sys_wptr_bin >> 1);
-    wire [1:0] sd_rptr_gray  = sd_rptr_bin  ^ (sd_rptr_bin  >> 1);
+    function automatic logic [1:0] gray(input logic [1:0] bin);
+        return bin ^ (bin >> 1);
+    endfunction
+
+    // The events that advance each binary pointer.
+    wire sys_push  = o_sys_req_ready && i_sys_req_valid;
+    wire sd_retire = (sd_state == SD_WAIT_DONE) && i_sd_done;
+
+    // What each synchronizer samples: a flop output, never logic.
+    logic [1:0] sys_wptr_gray_q;    // sys domain → SD synchronizer
+    logic [1:0] sd_rptr_gray_q;     // SD domain  → sys synchronizer
+
+    always_ff @(posedge i_sys_clk) begin
+        if (i_sys_rst)
+            sys_wptr_gray_q <= '0;
+        else if (sys_push)
+            sys_wptr_gray_q <= gray(sys_wptr_bin + 2'd1);
+    end
+
+    always_ff @(posedge i_sd_clk) begin
+        if (i_sd_rst)
+            sd_rptr_gray_q <= '0;
+        else if (sd_retire)
+            sd_rptr_gray_q <= gray(sd_rptr_bin + 2'd1);
+    end
 
     // 2-bit Gray decode: bin[1]=g[1]; bin[0]=g[1]^g[0]
     wire [1:0] sd_rptr_bin_synced = {
@@ -192,7 +219,7 @@ module sdram_cdc (
             o_sys_rsp_data   <= '0;
         end else begin
             // 2-FF sync of SD rptr_gray
-            sd_rptr_gray_s1 <= sd_rptr_gray;
+            sd_rptr_gray_s1 <= sd_rptr_gray_q;
             sd_rptr_gray_s2 <= sd_rptr_gray_s1;
 
             // Defaults: clear one-cycle pulses
@@ -222,7 +249,7 @@ module sdram_cdc (
             // accepted-this-cycle bookkeeping always names the request
             // actually stored here.  The master drops/advances its
             // request the next cycle, so a free slot is not re-latched.
-            if (o_sys_req_ready && i_sys_req_valid) begin
+            if (sys_push) begin
                 slot_we     [sys_wptr_bin[0]] <= i_sys_req_we;
                 slot_addr   [sys_wptr_bin[0]] <= i_sys_req_addr;
                 slot_wdata  [sys_wptr_bin[0]] <= i_sys_req_wdata;
@@ -250,7 +277,7 @@ module sdram_cdc (
             o_sd_req_byte_en  <= '0;
         end else begin
             // 2-FF sync of sys wptr_gray
-            sys_wptr_gray_s1 <= sys_wptr_gray;
+            sys_wptr_gray_s1 <= sys_wptr_gray_q;
             sys_wptr_gray_s2 <= sys_wptr_gray_s1;
 
             case (sd_state)
@@ -302,5 +329,16 @@ module sdram_cdc (
     assert property (@(posedge i_sys_clk) disable iff (i_sys_rst)
         (outstanding_sys <= 2'd2))
         else $error("sdram_cdc: outstanding_sys > 2 — slot FIFO overflow");
+
+    // Each registered Gray pointer is its binary pointer's Gray code on
+    // every cycle: both load from the same next value on the same edge,
+    // so the crossing announces a step exactly when the local pointer
+    // takes it.
+    assert property (@(posedge i_sys_clk) disable iff (i_sys_rst)
+        (sys_wptr_gray_q == gray(sys_wptr_bin)))
+        else $error("sdram_cdc: sys_wptr_gray_q out of step with sys_wptr_bin");
+    assert property (@(posedge i_sd_clk) disable iff (i_sd_rst)
+        (sd_rptr_gray_q == gray(sd_rptr_bin)))
+        else $error("sdram_cdc: sd_rptr_gray_q out of step with sd_rptr_bin");
 
 endmodule

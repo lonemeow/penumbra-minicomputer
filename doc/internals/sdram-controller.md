@@ -247,8 +247,13 @@ and skips this step.
 ## CDC bridge (`sdram_cdc`)
 
 Depth-2 async FIFO with 2-bit Gray-coded read/write pointers crossing
-between domains via 2-FF synchronizers. Up to 2 outstanding requests at
-any time; order-preserving so responses arrive in issue order. Per-slot
+between domains via 2-FF synchronizers. Each Gray pointer is a register
+of its sending domain, loaded from the pointer's next value on the edge
+that advances it, so only flip-flops drive a synchronizer; a
+combinational binary-to-Gray encode glitches while two binary bits
+switch on the same edge, and a capture during the glitch is a value
+the pointer never held. Up to 2 outstanding requests at any time;
+order-preserving so responses arrive in issue order. Per-slot
 wide payloads (we/addr/wdata/byte_en sys→sd, rsp_data sd→sys) are
 written *before* the pointer advance, so the receiving side reads
 already-stable data — the standard data-before-valid discipline, just
