@@ -382,14 +382,14 @@ list (`Driver.cpp:getIsRela`).  Self-relocating PIE code needs
 - Functional: ld.elf_so loads, self-relocates, resolves symbols,
   and runs dynamically-linked binaries end-to-end.
 
-## Audio Driver: Multi-Channel ioctl Interface
+## Audio Driver
 
 The audio device ([devices/audio.md](../devices/audio.md)) presents one
-pushed-PCM channel that `audio(4)` drives directly, plus optionally more
-channels that mix in hardware. `audio(4)` models one PCM stream per open
-and has no representation for the extra channels, so they are reached
-through the framework's `dev_ioctl` hook — the sanctioned path for
-device-specific control, requiring no change to MI code.
+pushed-PCM channel, plus optionally more channels that mix in hardware.
+`audio(4)` drives channel 0 as a PCM stream. The remaining channels are
+exposed as *voices* through a separate character device, `/dev/pmusic`,
+for consumers that play sample data at pitches and gains of their own —
+a tracker, a sound-effect mixer, a sampler.
 
 ### Single-stream binding
 
@@ -428,24 +428,305 @@ dry. Sizing the queue's read to the block, rather than to the free
 space, is what keeps the driver behind the producer. This is also why
 enlarging the ring through `round_buffersize` buys nothing here.
 
+### Multi-voice binding
+
+`audio(4)` models one PCM stream per open and has no representation for
+the extra channels, and its `dev_ioctl` hook is not enough to add one.
+The hook receives the device rather than the open file, so it cannot
+tell which descriptor issued a call; `audio_poll` consults only the
+descriptor's PCM tracks; and `hw_if->close` runs when the last PCM
+track closes, which a descriptor that only issued ioctls never has. A
+voice consumer needs all three per open — an allocation of its own, a
+wakeup, and release when it exits.
+
+So `paudio` also attaches a cloning character device, `/dev/pmusic`,
+named after `sequencer(4)`'s `/dev/music`. Each open is a *session*
+holding voices, a sample memory, a tick clock and an event queue, and
+closing it silences its voices and releases all of it. No MI code
+changes.
+
+A session carries three kinds of traffic, each on the mechanism made
+for it:
+
+| Traffic | Mechanism |
+|---------|-----------|
+| Sample bytes | `pwrite`/`pread`/`lseek` on the session's sample memory |
+| Structured control | `ioctl` |
+| Wakeup for more events | `poll`/kqueue (`POLLOUT`, `EVFILT_WRITE`) |
+
+### Sample memory
+
+A session's sample memory is a flat byte space, sized by
+`PENAUDIO_SETMEM` and written at offsets with `pwrite(2)`. Events name
+what to play by offset and length, as Amiga software named chip RAM
+through Paula's location and length registers, so there is no
+namespace of sample handles to allocate and free. A MOD file stores its
+samples back to back, so one `pwrite` loads all of them and each
+sample's offset is its position in that block.
+
+Positioned I/O works on a cloned descriptor because `pread`, `pwrite`
+and `lseek` dispatch through the file's `fo_seek` operation rather than
+through a vnode.
+
+- `SETMEM` requires an allocation, and releasing the allocation
+  releases the memory, so what all sessions hold together is bounded
+  by the number of voices times the cap.
+- The cap defaults to 1/64 of physical memory rounded up to a power of
+  two — 512 KB on a 32 MB machine — and is tunable as
+  `machdep.paudio.maxmem`. ProTracker's own ceiling, 31 samples of
+  128 KB each, is what the knob is for.
+- New memory is zeroed. `SETMEM` fails with `EBUSY` while a voice is
+  sounding or events are queued, because queued events were validated
+  against the old size.
+- A write that runs past the end is short; one that starts past it
+  fails with `ENOSPC`.
+- Memory may be rewritten while it plays. A tracker effect that edits
+  sample data, such as ProTracker's `EFx`, is a `pwrite`.
+
+`mmap` would spare the one copy made at load time, and `fo_mmap` can
+map the same offset space without changing anything above it. It is
+not free: the memory must outlive the descriptor while it is mapped,
+and must stay wired and mapped into the kernel, because the refill
+reads it from interrupt context.
+
+### Voices
+
+A voice is one hardware channel, addressed by its index within the
+session's allocation. It starts silent, at unity rate and gain.
+
+- `SET_PLAY` discards what the channel has queued, resets its phase
+  and plays `pe_play`; when that ends it continues with `pe_loop`,
+  which repeats until changed. A `pe_loop` of length 0 makes the sound
+  one-shot: the voice falls silent at the end of `pe_play`.
+- `SET_LOOP` alone replaces what follows the current pass, and takes
+  effect when that pass ends — ProTracker's instrument number without
+  a note, and Paula's latched location and length.
+- `SET_STOP` discards what is queued and silences the voice.
+- `SET_INC` and `SET_VOL` apply on the next output frame and leave
+  queued data alone, as the device's own `INC` and `VOL` do.
+
+The driver refills each sounding voice's channel from sample memory in
+the device's watermark interrupt, following `pe_play` into `pe_loop`
+and converting the region's format into the channel's frame words.
+Where the device advertises `CAP.MONO` or `CAP.FMT8`, the driver may
+pack several frames per word; the interface does not change.
+
+### Tick clock
+
+Events are timed in *ticks*. A session's clock counts them from 0 once
+`PENAUDIO_START` sets it running, at the period `pc_period_us` gives
+until a `SET_PERIOD` event changes it. Ticks are the unit a tracker
+already thinks in, and a tempo change is an event like any other.
+
+The clock runs on `callout(9)`. Due times are kept in microseconds,
+and a tick applies on the first clock interrupt at or after its due
+time, so ticks land on multiples of `pi_tick_grain_us` — never early,
+less than one grain late, and without cumulative drift. A period
+shorter than the grain applies more than one tick in some passes.
+
+All of one tick's events apply together in a single pass, in the order
+they were submitted. Within one event the fields apply in the order of
+the `SET_*` bits, so a note starts at its own pitch and gain.
+
+**The horizon.** `ps_through` declares that every event up to that
+tick has been submitted; without it, a tick that has no events is
+indistinguishable from a consumer that has fallen behind. The clock
+does not apply a tick past the horizon. It waits, counting each clock
+interrupt spent waiting in `pst_stalls`, and resumes when the tick is
+declared, with the rest of the timeline shifted later by the wait.
+Voices keep sounding meanwhile; only control stops. A late consumer
+therefore costs a hiccup, rather than several ticks' effects
+collapsing into one instant.
+
+**Immediate events.** An event whose tick has already been applied
+applies during the `SUBMIT` call itself. A session that never starts
+its clock stays at tick 0, so every event it submits applies at once —
+all a sound-effect consumer needs.
+
+`PENAUDIO_PAUSE` freezes the clock and the session's channels
+together, so resuming continues exactly where it stopped.
+`PENAUDIO_RESET` drops the queue, silences the voices and stops the
+clock at tick 0, keeping the memory and the allocation; it is how a
+consumer seeks.
+
+`poll(2)` reports `POLLOUT`, and kqueue `EVFILT_WRITE`, while the
+queue has room and either the clock is stopped or fewer than
+`pc_lowat` ticks separate `pst_tick` from `pst_through`.
+
+### Interface
+
+```c
+#define PENAUDIO_VOICE_NONE	0xFFFF
+
+/* pe_format */
+#define PENAUDIO_FMT_S8		1	/* signed 8-bit mono */
+#define PENAUDIO_FMT_S16	2	/* signed 16-bit LE mono */
+#define PENAUDIO_FMT_S16_STEREO	3	/* signed 16-bit LE, left then right */
+
+struct penaudio_info {
+	uint32_t pi_rate;		/* output frames per second */
+	uint16_t pi_nvoices;		/* voices the device has */
+	uint16_t pi_navail;		/* voices not currently claimed */
+	uint32_t pi_maxmem;		/* largest sample memory, bytes */
+	uint32_t pi_maxevents;		/* event queue capacity */
+	uint32_t pi_tick_grain_us;	/* ticks land on multiples of this */
+};
+
+struct penaudio_region {
+	uint32_t pr_offset;		/* bytes into sample memory */
+	uint32_t pr_length;		/* bytes; 0 = nothing */
+};
+
+/* pe_set: which fields apply, in this order within one event */
+#define PENAUDIO_SET_PERIOD	0x0001	/* tick period; voice NONE */
+#define PENAUDIO_SET_INC	0x0002
+#define PENAUDIO_SET_VOL	0x0004
+#define PENAUDIO_SET_PLAY	0x0008	/* discard queued, play pe_play, then pe_loop */
+#define PENAUDIO_SET_LOOP	0x0010	/* pe_loop follows the current pass */
+#define PENAUDIO_SET_STOP	0x0020	/* discard queued, fall silent */
+
+struct penaudio_event {
+	uint32_t pe_tick;		/* tick this applies on */
+	uint16_t pe_voice;		/* voice within the allocation */
+	uint16_t pe_set;		/* PENAUDIO_SET_* */
+	uint32_t pe_inc;		/* 16.16 source frames per output frame */
+	uint16_t pe_vol_l;		/* 0x0000 silent .. 0xFFFF unity */
+	uint16_t pe_vol_r;
+	uint32_t pe_format;		/* for pe_play and pe_loop */
+	struct penaudio_region pe_play;
+	struct penaudio_region pe_loop;	/* repeats until changed; 0 = one-shot */
+	uint32_t pe_period_us;		/* SET_PERIOD */
+};
+
+struct penaudio_status {
+	uint32_t pst_tick;		/* tick now in effect */
+	uint32_t pst_through;		/* horizon as last declared */
+	uint32_t pst_room;		/* events the queue can take now */
+	uint32_t pst_stalls;		/* clock interrupts spent at the horizon */
+	uint32_t pst_underruns;		/* channels found empty mid-sound */
+	uint32_t pst_sounding;		/* bit n: voice n has data to play */
+};
+
+struct penaudio_submit {
+	const struct penaudio_event *ps_events;
+	uint32_t ps_eventsize;		/* sizeof(struct penaudio_event) */
+	uint32_t ps_nevents;		/* in: offered; out: accepted */
+	uint32_t ps_through;		/* in: every event up to this tick is submitted */
+	struct penaudio_status ps_status;	/* out */
+};
+
+struct penaudio_clock {
+	uint32_t pc_period_us;		/* until a SET_PERIOD event */
+	uint32_t pc_lowat;		/* POLLOUT once fewer ticks than this are queued */
+};
+
+#define PENAUDIO_GETINFO	_IOR('Y', 0, struct penaudio_info)
+#define PENAUDIO_ALLOC		_IOWR('Y', 1, uint32_t)	/* voices wanted/granted; 0 releases */
+#define PENAUDIO_SETMEM		_IOW('Y', 2, uint32_t)	/* sample memory size, bytes */
+#define PENAUDIO_SUBMIT		_IOWR('Y', 3, struct penaudio_submit)
+#define PENAUDIO_GETSTATUS	_IOR('Y', 4, struct penaudio_status)
+#define PENAUDIO_START		_IOW('Y', 5, struct penaudio_clock)
+#define PENAUDIO_PAUSE		_IOW('Y', 6, int)	/* 1 freezes clock and voices, 0 resumes */
+#define PENAUDIO_RESET		_IO('Y', 7)		/* drop queue, silence voices, clock to 0 */
+```
+
+`PENAUDIO_ALLOC` grants at most the number asked for; a consumer that
+needs more mixes the remainder itself or gives up. Changing the
+allocation fails with `EBUSY` while events are queued or a voice is
+sounding.
+
+`PENAUDIO_SUBMIT` fails with `EINVAL` on an event that:
+
+- sets an unknown `SET_*` bit, or combines `SET_STOP` with `SET_PLAY`
+  or `SET_LOOP`;
+- sets `SET_PERIOD` together with a voice field, or with a voice other
+  than `PENAUDIO_VOICE_NONE`;
+- names a voice outside the allocation;
+- names a region outside sample memory, or one not aligned to its
+  format's frame size;
+- sets an increment outside the range every `CLASS_AUDIO` device
+  supports, `0x00000100` through `0x00040000`;
+- precedes an event already queued, unless its tick has already been
+  applied.
+
+`ps_nevents` then returns how many were accepted before it, and none
+after it is. `ps_eventsize` must equal `sizeof(struct penaudio_event)`:
+the command number encodes the size of `struct penaudio_submit` but not
+of the records it points to, so without the field a consumer built
+against a different record layout would be misread rather than
+refused.
+
+`pst_underruns` counts channels found empty while their voice still had
+data to play; a one-shot sound running out is not an underrun.
+
+### Why the interface has this shape
+
+**The vocabulary is sample playback, not a file format.** Events carry
+regions, an increment and a gain rather than notes, effects or
+patterns. An interface shaped like tracker events would place one
+format's model in the kernel, where the next format would have to
+relitigate it; sample playback serves a tracker, a sound-effect mixer
+and a software synthesizer without preferring any of them.
+
+**Voices are allocation-relative.** A consumer granted four voices
+addresses them 0-3 whatever hardware channels it received, so the
+driver stays free to pack allocations around whatever `audio(4)`
+holds, and a consumer needs no policy for a fragmented device.
+
+**Simultaneity comes from ticks.** The hardware starts channels through
+a single register write so that onsets are not staggered by how fast
+the consumer runs. A tick's events are applied in one pass for the same
+reason, and without depending on when the consumer is scheduled.
+
+**The consumer runs ahead; the kernel keeps time.** A tracker's next
+tick depends only on the song, so it can be computed before it is due.
+Submitting ahead lets a consumer wake a few times a second instead of
+on every tick, and keeps its scheduling latency out of the result: the
+timing a listener hears is the clock's, not the consumer's.
+
+**Bytes and records travel differently.** Sample data is bulk and
+unstructured, which is what `write(2)` is for. Events are structured,
+which is what `ioctl(2)` is for — including the refusal when a
+structure's size changes.
+
+**Data crosses once.** Sample data enters the kernel at load; after
+that, the per-frame cost is the refill — one store to a channel's data
+port per frame word, from the watermark interrupt. Four voices at
+ProTracker's highest note, period 113, consume about 125,000 words a
+second.
+
+**Allocation is arbitrated against `audio(4)`.** Voices claimed by
+`PENAUDIO_ALLOC` are unavailable to a subsequent `audio(4)` open and
+the reverse, so a stream and a voice can never interleave frames on
+one channel. Closing the descriptor releases the allocation, so a
+consumer that exits unexpectedly does not strand the device.
+
+**The frameworks that already allocate voices are a different model.**
+`midisyn` is expressed in MIDI note numbers and centibel attenuations,
+has no path for loading arbitrary sample data, and its
+`repitchv`/`relevelv` methods — continuous pitch and level change on a
+sounding voice — are unimplemented. `sequencer(4)`, behind
+`/dev/music`, sequences MIDI events onto such devices and inherits the
+same model. Sample playback and instrument synthesis are different
+models rather than two spellings of one.
+
 ### Group letter
 
 The ioctl group letter is `'Y'`. NetBSD's registry of group letters is
 the tagged list in `ioctl(9)`, and `'Y'` appears neither there nor in any
 header in the tree.
 
-The letters an audio device would otherwise reach for are all taken by
-things that can be issued against an audio descriptor: `'A'` is
-registered to `audio(4)`, `'M'` to the OSS mixer, `'H'` to `hdaudio`,
-and `'P'` is registered to *"compat/ossaudio and soundcard.h"* — the
-sound group itself. A collision in any of those would be reached by
-ordinary code talking to the wrong descriptor, not only in principle.
-
+The constraint that binds is the one `ioctl(9)` states: only one
+number per group, among groups that can reach one descriptor.
 Duplicate entries in the registry are normal — `'A'` is listed four
 times and `'P'` six, disambiguated by arch or subsystem — because the
-namespace is per descriptor rather than global. The constraint that
-actually binds is the one `ioctl(9)` states: only one number per group,
-among groups that can reach one descriptor.
+namespace is per descriptor rather than global. A `/dev/pmusic`
+descriptor is reached only by this group and the generic file ioctls.
+The letters a sound interface would otherwise reach for are taken —
+`'A'` by `audio(4)`, `'M'` by the OSS mixer, `'H'` by `hdaudio`, and
+`'P'` by *"compat/ossaudio and soundcard.h"* — and a letter no sound
+interface uses makes a call issued against the wrong node fail rather
+than land on a command that happens to share its number.
 
 The registry lags the tree, so absence from it is not on its own
 evidence a letter is free: `'T'`, `'K'`, `'L'`, `'D'`, `'N'` and `'X'`
@@ -458,147 +739,6 @@ permanent local diff against base for no benefit. The exposure is
 bounded and one-directional: were `'Y'` claimed upstream later, only a
 Penumbra kernel would ever have both groups present, and a number
 collision within the group would be needed on top of that.
-
-`midisyn` is the other framework that allocates hardware voices, and it
-is not an alternative: it is expressed in MIDI note numbers and centibel
-attenuations, has no path for loading arbitrary sample data, and its
-`repitchv`/`relevelv` methods — continuous pitch and level change on a
-sounding voice — are unimplemented. Sample playback and instrument
-synthesis are different models rather than two spellings of one.
-
-### Interface
-
-```c
-#define PENAUDIO_MAXCHAN        32
-
-/* pai_caps */
-#define PENAUDIO_CAP_PITCH      0x0001
-#define PENAUDIO_CAP_VOLUME     0x0002
-#define PENAUDIO_CAP_FMT8       0x0004
-#define PENAUDIO_CAP_MONO       0x0008
-#define PENAUDIO_CAP_INTERP     0x0010
-
-struct penaudio_info {
-        uint32_t pai_rate;      /* output sample rate, Hz */
-        uint16_t pai_nchan;     /* channels the device has */
-        uint16_t pai_navail;    /* channels not currently claimed */
-        uint32_t pai_caps;      /* PENAUDIO_CAP_* */
-};
-
-struct penaudio_alloc {
-        uint16_t pa_nchan;      /* in: wanted; out: granted */
-};
-
-/* pc_flags */
-#define PENAUDIO_CF_FMT8        0x0001
-#define PENAUDIO_CF_MONO        0x0002
-#define PENAUDIO_CF_INTERP      0x0004
-
-struct penaudio_chan {
-        uint16_t pc_chan;       /* index within the allocation */
-        uint16_t pc_flags;      /* PENAUDIO_CF_* */
-        uint32_t pc_inc;        /* 16.16 frames consumed per output frame */
-        uint16_t pc_vol_l;
-        uint16_t pc_vol_r;
-        uint32_t pc_wm;         /* free-space watermark, frames */
-};
-
-/* ps_flags */
-#define PENAUDIO_SF_UNDERRUN    0x0001  /* sticky; cleared by this read */
-
-struct penaudio_status {
-        uint16_t ps_chan;       /* in */
-        uint16_t ps_flags;      /* out */
-        uint32_t ps_depth;      /* out: FIFO capacity, frames */
-        uint32_t ps_level;      /* out: free space, frames */
-};
-
-struct penaudio_push {
-        uint16_t pp_chan;
-        uint32_t pp_nframes;    /* in: offered; out: accepted */
-        void    *pp_data;
-};
-
-struct penaudio_mask {
-        uint32_t pm_mask;       /* bit n = channel n of the allocation */
-};
-
-#define PENAUDIO_GETINFO    _IOR('Y', 0, struct penaudio_info)
-#define PENAUDIO_ALLOC      _IOWR('Y', 1, struct penaudio_alloc)
-#define PENAUDIO_FREE       _IO('Y', 2)
-#define PENAUDIO_SETCHAN    _IOW('Y', 3, struct penaudio_chan)
-#define PENAUDIO_GETSTATUS  _IOWR('Y', 4, struct penaudio_status)
-#define PENAUDIO_PUSH       _IOWR('Y', 5, struct penaudio_push)
-#define PENAUDIO_START      _IOW('Y', 6, struct penaudio_mask)
-#define PENAUDIO_STOP       _IOW('Y', 7, struct penaudio_mask)
-#define PENAUDIO_FLUSH      _IOW('Y', 8, struct penaudio_mask)
-```
-
-`poll(2)` reports `POLLOUT` while any channel in the allocation has free
-space at or above its watermark; `PENAUDIO_GETSTATUS` then identifies
-which. A consumer therefore sleeps and wakes through the standard
-mechanisms and needs no device-specific wait.
-
-### Why the interface has this shape
-
-**The vocabulary mirrors the registers, not a file format.** `SETCHAN`
-carries an increment and a gain rather than a note and a velocity. An
-ioctl set shaped like tracker events would place one format's model in
-the kernel, where the next format would have to relitigate it; a
-sample-playback vocabulary serves a tracker, a sound-effect mixer and a
-software synthesizer without preferring any of them.
-
-**Channel indices are allocation-relative.** A consumer granted four
-channels addresses them 0-3 whatever hardware channels it received, so
-the driver stays free to pack allocations around whatever `audio(4)`
-holds, and a consumer needs no policy for a fragmented device.
-
-**`START`, `STOP` and `FLUSH` take masks** because the hardware starts
-channels through a single register write, and a chord whose notes are
-started by separate calls would have its onsets staggered by the
-duration of those calls. Preserving the mask through the ioctl layer is
-what keeps simultaneity a property of the device rather than of how
-promptly the consumer is scheduled.
-
-**Pushing is an ioctl rather than `write(2)`** because `write(2)` on this
-device is already `audio(4)`'s PCM path. Overloading it would put two
-different models on one descriptor, distinguished only by which ioctls
-had been issued earlier.
-
-The push path carries the device's whole data bandwidth — four channels
-at the maximum Amiga sample rate is ~132 KB/s — and copies it twice,
-once into the kernel and once into the data port. At a few hundred calls
-per second the syscall overhead is immaterial, and the second copy is
-the only real cost; mapping the data port into the consumer would remove
-it, at the price of exposing device registers to userland. That trade is
-worth making only if measurement shows the copy matters.
-
-**Allocation is arbitrated against `audio(4)`.** Channels claimed by
-`PENAUDIO_ALLOC` are unavailable to a subsequent `audio(4)` open and the
-reverse, so a stream and a multi-channel consumer can never interleave
-frames on one channel. An allocation is released by `PENAUDIO_FREE` or
-by closing the descriptor, so a consumer that exits unexpectedly does not
-strand the device.
-
-### Refilling
-
-A consumer refills reactively rather than predicting drain: read
-`ps_depth - ps_level` for frames outstanding and top up to a target.
-This needs no arithmetic relating pitch to time and self-corrects
-against scheduling jitter.
-
-Two ordering constraints matter and are invisible from the interface
-alone. Effects are applied to `pc_inc` *before* status is read, so the
-top-up already reflects the new drain rate. And the target must cover
-the largest single-step pitch increase a consumer can make — a tracker
-arpeggio raises pitch by up to fifteen semitones, 2.38×, on the
-following tick — so a target of one tick's data underflows where roughly
-1500 frames does not, at any rate the device supports.
-
-A change of *source material* requires `PENAUDIO_FLUSH`; a change of
-pitch or volume does not. Stream position is the integral of `pc_inc`
-over elapsed time, so queued frames play exactly where an unqueued
-implementation would put them.
 
 ## Userland Build Integration
 

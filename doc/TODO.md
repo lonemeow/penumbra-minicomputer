@@ -6074,24 +6074,6 @@ and D-side cones.
   not by mixing throughput, so `INTERP` (one extra MAC per channel) is
   affordable rather than a luxury.
 
-### Driver-side notes
-
-A tracker refills reactively — `used = DEPTH - LEVEL`, top up to a
-target — which needs no rate arithmetic and self-corrects against tick
-jitter. Ordering inside the tick handler is load-bearing: apply effects
-to `INC` *first*, then read `LEVEL`, so the top-up already reflects the
-new drain rate. Arpeggio can raise pitch 15 semitones (2.38×) on the
-next tick, so a target of one tick's data underflows; ~1500 frames is
-over two ticks even at the maximum rate and needs no per-channel
-computation.
-
-Multi-channel control has no representation in `audio(4)` and reaches
-userland through the framework's `dev_ioctl` hook. `midisyn` is not an
-alternative: it speaks MIDI note numbers and centibel attenuations, has
-no path for loading arbitrary samples, and its `repitchv`/`relevelv`
-methods — continuous pitch and level change, i.e. most of a tracker's
-effect vocabulary — are unimplemented.
-
 ### Bring-up order
 
 The two halves are independently testable, so neither blocks the other
@@ -6109,10 +6091,10 @@ for long:
    `/dev/audio`.
 3. Remaining channels, `INC`, `VOL` and the mixer — the point at which
    `CAP.CHANNELS` becomes greater than one and the
-   [ioctl interface](system/netbsd/design-notes.md#audio-driver-multi-channel-ioctl-interface)
+   [voice interface](system/netbsd/design-notes.md#multi-voice-binding)
    becomes reachable.
-4. A tracker replayer in userland, with its mixer removed and channel
-   registers driven in its place.
+4. A tracker replayer in userland, with its mixer removed and its
+   per-tick channel state submitted to `/dev/pmusic` in its place.
 
 Step 1 is worth doing before any of the register interface exists, but
 most of it is a simulation rather than a listening test: the modulator's
