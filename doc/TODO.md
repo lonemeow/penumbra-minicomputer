@@ -1411,6 +1411,43 @@ expressible, but `instruction-set.md` names only `CMP` and `TEST`.
 Using it needs a named mnemonic in the doc and an `isa/` conformance
 test run on every core; without it the chain keeps the `MOV`.
 
+## Compiler: PIC global addresses are recomputed inside loops
+
+Under PIC, a loop that indexes a global array recomputes the array's
+address on every iteration: the `LLI`/`LUI`/`ADD Rd, PC` triple sits in
+the loop body even when the source hoists the pointer into a local.
+Found in skrolli2026's sine lookup (`-fPIE -O2`, penumbra2_5): a
+320-pixel row of table lookups is 15 instructions per pixel where 12
+do the work, so a fifth of the loop is address arithmetic.  Any
+per-pixel loop over a table pays the same three instructions.
+
+Two passes combine to cause it, found with `-print-after-all`:
+
+1. The GlobalISel Localizer clones the `G_GLOBAL_VALUE` into its using
+   block, which is the loop body; the preheader copy is then dead.
+2. Nothing hoists it back.  The direct PC-relative path selects the
+   `PICLLI`/`PICLUI`/`PICADDPC` triple ("PC-Anchored Relocation Pairs"
+   in `doc/system/abi.md`), and none of the three has a pattern or an
+   explicit `hasSideEffects`, so TableGen infers
+   `UnmodeledSideEffects` for all of them and MachineLICM leaves them
+   where they are.  The static-mode `PseudoMOVADDR` does not have the
+   problem: it is `Rematerializable` with no side effects.
+
+Moving the triple is safe since the anchors became label-relative;
+only duplicating `PICADDPC` is not (it would redefine its label).  So
+the first thing to try is an explicit `hasSideEffects = 0` on the
+three pseudos, and checking that MachineLICM then hoists them.  The
+fuller fix is a single rematerialisable pseudo for the direct path,
+expanded after register allocation into the anchored triple, the way
+`PseudoMOVADDR` works for static code.  Keeping the Localizer from
+sinking a global into a deeper loop would also remove the symptom, but
+MachineLICM should be able to undo it either way.
+
+Test shape: a loop storing `table[f(i)]` from a hidden global table,
+checking that no `ADD ..., PC` remains in the loop block.  An empty
+`asm("" : "+r"(p))` on the pointer before the loop reaches the
+12-instruction body, which is the measure for the fix.
+
 ## Compiler: aggregate-ABI rework — small structs in registers — RESOLVED
 
 `doc/system/abi.md` ("Argument Passing" / "Return Values") specifies
