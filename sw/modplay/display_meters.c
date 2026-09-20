@@ -95,7 +95,8 @@ draw(const struct display_tick *dt)
 	for (ch = 0; ch < MOD_CHANNELS; ch++) {
 		const struct replay_voice *v = &t->voice[ch];
 		int row = ROW_CHAN + ch;
-		scr_attr bar = ATTR(channel_color(ch), C_DEFAULT, 0);
+		scr_attr bar = ATTR_SOLID(channel_color(ch));
+		scr_attr track = ATTR(C_BLUE, C_DEFAULT, 0);
 
 		scr_printf(row, 0, ATTR(C_DEFAULT, C_DEFAULT, 0), "%2d", ch + 1);
 		scr_printf(row, COL_NAME, ATTR(C_YELLOW, C_DEFAULT, 0),
@@ -106,8 +107,8 @@ draw(const struct display_tick *dt)
 		    METER_MAX));
 		for (i = 0; i < width; i++)
 			scr_putc(row, COL_BAR + i,
-			    i < filled ? GLYPH_BLOCK : GLYPH_TRACK,
-			    i < filled ? bar : ATTR(C_BLUE, C_DEFAULT, 0));
+			    i < filled ? ' ' : GLYPH_SHADE,
+			    i < filled ? bar : track);
 	}
 
 	scr_fill(ROW_STATUS - 1, 0, scr_cols(), GLYPH_HLINE,

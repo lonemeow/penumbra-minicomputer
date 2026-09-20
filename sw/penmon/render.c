@@ -33,27 +33,49 @@ enum {
 
 #define A_NORM ATTR(C_DEFAULT, C_DEFAULT, 0)
 
-static scr_attr
-pair_attr(int pair)
+/*
+ * The hue a pair paints with.  Solid cells carry their colour in the
+ * background rather than the foreground, so the two need the colour on
+ * its own; PAIR_HDR and PAIR_DIM choose a whole attribute instead and
+ * have no hue to give.
+ */
+static int
+pair_color(int pair)
 {
 	switch (pair) {
-	case PAIR_GREEN:  return ATTR(C_GREEN,  C_DEFAULT, 1);
-	case PAIR_YELLOW: return ATTR(C_YELLOW, C_DEFAULT, 1);
-	case PAIR_RED:    return ATTR(C_RED,    C_DEFAULT, 1);
-	case PAIR_CYAN:   return ATTR(C_CYAN,    C_DEFAULT, 1);
-	case PAIR_BLUE:   return ATTR(C_BLUE,    C_DEFAULT, 1);
-	case PAIR_MAGENTA:return ATTR(C_MAGENTA, C_DEFAULT, 1);
-	case PAIR_HDR:    return ATTR(C_WHITE,   C_BLUE,    1);
-	case PAIR_DIM:    return ATTR(C_BLACK,  C_DEFAULT, 1);	/* grey */
-	default:          return A_NORM;
+	case PAIR_GREEN:   return C_GREEN;
+	case PAIR_YELLOW:  return C_YELLOW;
+	case PAIR_RED:     return C_RED;
+	case PAIR_CYAN:    return C_CYAN;
+	case PAIR_BLUE:    return C_BLUE;
+	case PAIR_MAGENTA: return C_MAGENTA;
+	default:           return C_DEFAULT;
 	}
 }
 
-/* 8-level block-height ramp for sparklines, low -> high (U+2581..U+2588). */
-static const uint32_t ramp[] = {
-	0x2581, 0x2582, 0x2583, 0x2584, 0x2585, 0x2586, 0x2587, 0x2588
-};
-#define RAMP_LEVELS ((int)(sizeof(ramp) / sizeof(ramp[0])))
+static scr_attr
+pair_attr(int pair)
+{
+	int hue;
+
+	switch (pair) {
+	case PAIR_HDR: return ATTR(C_WHITE, C_BLUE,    1);
+	case PAIR_DIM: return ATTR(C_BLACK, C_DEFAULT, 1);	/* grey */
+	default:       break;
+	}
+	hue = pair_color(pair);
+	return hue == C_DEFAULT ? A_NORM : ATTR(hue, C_DEFAULT, 1);
+}
+
+/*
+ * Sparkline band.  The character set carries no height ramp, so a cell
+ * has two lit levels — half and solid — and the threshold colour does
+ * the rest.  Two levels spent on the full 0-100% scale would resolve
+ * nothing, because the rates these strips carry never leave the top of
+ * it; they are spent on the band below instead, and anything under its
+ * floor simply reads as the bottom level in the colour that says so.
+ */
+#define SPARK_FLOOR PCT(75)
 
 /*
  * Splitting a scaled integer into the two halves of a "N.M" readout.
@@ -170,9 +192,9 @@ draw_bar(int y, int x, int w, uint32_t frac, int pair)
 
 	for (i = 0; i < w; i++) {
 		if (i < fill)
-			scr_putc(y, x + i, GLYPH_BLOCK, pair_attr(pair));
+			scr_putc(y, x + i, ' ', ATTR_SOLID(pair_color(pair)));
 		else
-			scr_putc(y, x + i, GLYPH_TRACK, pair_attr(PAIR_DIM));
+			scr_putc(y, x + i, GLYPH_SHADE, pair_attr(PAIR_DIM));
 	}
 }
 
@@ -191,11 +213,13 @@ draw_stack_bar(int y, int x, int w, const uint32_t *pct, const int *pairs,
 	for (i = 0; i < n; i++) {
 		int seg = (int)divround((uint64_t)pct[i] * w, PCT_FULL);
 
+		scr_attr solid = ATTR_SOLID(pair_color(pairs[i]));
+
 		for (j = 0; j < seg && used < w; j++, used++)
-			scr_putc(y, x + used, GLYPH_BLOCK, pair_attr(pairs[i]));
+			scr_putc(y, x + used, ' ', solid);
 	}
 	for (; used < w; used++)
-		scr_putc(y, x + used, GLYPH_TRACK, pair_attr(PAIR_DIM));
+		scr_putc(y, x + used, GLYPH_SHADE, pair_attr(PAIR_DIM));
 }
 
 /* Stacked CPU bar: user+nice | sys | intr fill, idle is the track. */
@@ -270,24 +294,41 @@ draw_stall_panel(const struct rates *r, int text_y, int text_x,
 }
 
 /*
- * Sparkline of the last `w` samples from a history ring.  The whole strip
- * takes a single colour — chosen from the most recent sample — so it costs
- * one SGR run on the wire instead of one per cell; the glyph heights still
- * carry the history, the colour reads as "current state".
+ * One sample's cell: the glyph carries where the sample sits inside the
+ * band, the attribute carries the colour of `pair`.  A blank cell means
+ * "no sample", so both levels have to put something on the screen.
+ */
+#define SPARK_HALF ((PCT_FULL + SPARK_FLOOR) / 2)
+static void
+spark_cell(uint32_t v, int pair, uint32_t *ch, scr_attr *a)
+{
+	if (v > SPARK_HALF) {
+		*ch = ' ';
+		*a = ATTR_SOLID(pair_color(pair));
+	} else {
+		*ch = GLYPH_SHADE;
+		*a = pair_attr(pair);
+	}
+}
+
+/*
+ * Sparkline of the last `w` samples from a history ring.  Each cell
+ * takes the colour of its own sample, so the strip reads as a trace of
+ * where the metric has been rather than only where it is now; a stable
+ * metric still costs about one SGR, because the screen layer emits an
+ * attribute only where it changes.
  */
 static void
 draw_spark(int y, int x, int w, const uint32_t *ring, int count, int head,
-    uint32_t vmax, uint32_t good, uint32_t warn, int higher_is_better)
+    uint32_t good, uint32_t warn, int higher_is_better)
 {
-	scr_attr a;
 	int i;
-
-	a = pair_attr(metric_color(count > 0 ? ring[head] : 0,
-	    good, warn, higher_is_better));
 
 	for (i = 0; i < w; i++) {
 		int age = w - 1 - i;		/* 0 = newest at right edge */
-		int idx, lvl;
+		int idx;
+		uint32_t ch;
+		scr_attr a;
 
 		if (age >= count) {		/* no sample yet */
 			scr_putc(y, x + i, ' ', A_NORM);
@@ -297,11 +338,10 @@ draw_spark(int y, int x, int w, const uint32_t *ring, int count, int head,
 		if (idx < 0)
 			idx += HIST_LEN;
 
-		lvl = (int)divround((uint64_t)ring[idx] * (RAMP_LEVELS - 1),
-		    vmax);
-		if (lvl >= RAMP_LEVELS) lvl = RAMP_LEVELS - 1;
-
-		scr_putc(y, x + i, ramp[lvl], a);
+		spark_cell(ring[idx],
+		    metric_color(ring[idx], good, warn, higher_is_better),
+		    &ch, &a);
+		scr_putc(y, x + i, ch, a);
 	}
 }
 
@@ -421,9 +461,9 @@ cache_row(int y, const char *label, const struct cache_rate *cr,
 	    PCT_INT(cr->hit_pct), PCT_FRAC(cr->hit_pct));
 	draw_bar(y, L->bar_x, L->bar_w, cr->hit_pct, c);
 	scr_printf(y, L->info_x, A_NORM, "%7u/s", cr->miss_per_sec);
-	/* hit% sparkline: full scale is 100%, good>=90 warn>=70 */
+	/* hit% sparkline: good>=90 warn>=70, resolved over SPARK_FLOOR..100 */
 	draw_spark(y, L->spark_x, L->spark_w, ring, count, head,
-	    PCT_FULL, PCT(90), PCT(70), 1);
+	    PCT(90), PCT(70), 1);
 }
 
 void

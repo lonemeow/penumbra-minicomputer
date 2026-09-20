@@ -63,25 +63,35 @@ row_with(const char *want)
 }
 
 /*
- * A bar's track is the run of cells scr_row_text() stands in for a
- * glyph; a cell of it is filled when it is not in the track's own
- * colour.  Returns the track's width, and the filled count through
- * *filled.
+ * True when the cell at (row,x) belongs to a bar.  A filled cell takes
+ * its colour in the background, the character set having no solid
+ * glyph to take it in the foreground; an empty one carries `track`.
+ */
+static int
+in_bar(int row, int x, scr_attr track)
+{
+	scr_attr a = scr_cell_attr(row, x);
+
+	return a == track || ((a >> 4) & 0xf) != C_DEFAULT;
+}
+
+/*
+ * A bar is the row's run of bar cells.  Returns its width, and the
+ * count of filled cells through *filled.
  */
 static int
 bar_width(int row, int *filled)
 {
 	const scr_attr track = ATTR(C_BLUE, C_DEFAULT, 0);
-	char buf[TEXT_MAX];
 	int x, start, n = 0;
 
 	*filled = 0;
 	if (row < 0)
 		return -1;
-	scr_row_text(row, buf, sizeof(buf));
-	for (start = 0; buf[start] != '\0' && buf[start] != '?'; start++)
+	for (start = 0; start < scr_cols() && !in_bar(row, start, track);
+	    start++)
 		;
-	for (x = start; buf[x] == '?'; x++, n++)
+	for (x = start; x < scr_cols() && in_bar(row, x, track); x++, n++)
 		if (scr_cell_attr(row, x) != track)
 			(*filled)++;
 	return n;

@@ -12,9 +12,10 @@
  * per character, which is why penmon repainted so slowly over the
  * 115200 serial console.  One frame here is one syscall.
  *
- * Glyphs are emitted as raw UTF-8 bytes, so the result does not depend
- * on the *target's* locale (unlike curses' wide-char path) — only on
- * the host terminal being UTF-8, which modern emulators are.
+ * Glyphs outside ASCII are emitted from DEC Special Graphics rather
+ * than as UTF-8, so the byte stream does not depend on a locale at
+ * either end — only on the terminal being VT100-family, which the
+ * NetBSD console and every serial terminal emulator both are.
  */
 #ifndef PENMON_SCREEN_H
 #define PENMON_SCREEN_H
@@ -39,10 +40,31 @@ ATTR(int fg, int bg, int bold)
 	return (scr_attr)((fg & 0xf) | ((bg & 0xf) << 4) | ((bold & 1) << 8));
 }
 
-/* Box-drawing / shading glyphs (Unicode code points), emitted as UTF-8. */
-#define GLYPH_BLOCK 0x2588u	/* █ full block      — bar fill        */
-#define GLYPH_TRACK 0x2591u	/* ░ light shade     — empty bar track */
-#define GLYPH_HLINE 0x2500u	/* ─ horizontal line — panel rules     */
+/*
+ * Glyphs past ASCII come from DEC Special Graphics: the line-drawing
+ * set is designated into G1 once at init and reached by shifting, which
+ * costs one byte per run and draws correctly on a serial terminal and
+ * on the console alike.  UTF-8 would draw on neither reliably — the
+ * console's emulator is byte-oriented and never decodes it.
+ *
+ * ACS() names any character of the set (`x` is a vertical line, `lqk`
+ * and `mqj` the box corners); the two drawn with here have names of
+ * their own.  The set has no full block, so a solid run is a space
+ * carrying ATTR_SOLID() rather than a glyph.
+ */
+#define SCR_ACS     0x100u	/* low byte is a DEC Special Graphics char */
+#define ACS(c)      (SCR_ACS | (unsigned char)(c))
+
+#define GLYPH_HLINE ACS('q')	/* ─ horizontal line — panel rules       */
+#define GLYPH_SHADE ACS('a')	/* ▒ checkerboard    — half-lit bar cell */
+
+/* A cell rendering as a solid block of `color`, for the bar fill the
+ * character set cannot supply. */
+static inline scr_attr
+ATTR_SOLID(int color)
+{
+	return ATTR(C_DEFAULT, color, 0);
+}
 
 /* ---- lifecycle -------------------------------------------------------- */
 

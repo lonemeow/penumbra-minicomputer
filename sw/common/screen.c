@@ -30,6 +30,7 @@ static struct cell *back, *front;
 static char  *outbuf;		/* assembled frame, flushed in one write(2) */
 static size_t outcap, outlen;
 static scr_attr cur_attr;	/* SGR currently asserted while flushing */
+static int cur_acs;		/* G1 (line drawing) shifted in, not G0 */
 
 static int out_fd = -1;		/* terminal drawn on; -1 suppresses write(2) */
 static int in_fd = STDIN_FILENO;	/* terminal keys are read from */
@@ -72,20 +73,14 @@ out_byte(unsigned char b)
 		outbuf[outlen++] = (char)b;
 }
 
-/* Append a code point as UTF-8 (penmon's glyphs reach U+2588). */
+/* Shift the wanted character set in, when it is not already. */
 static void
-emit_utf8(uint32_t cp)
+emit_charset(int acs)
 {
-	if (cp < 0x80) {
-		out_byte((unsigned char)cp);
-	} else if (cp < 0x800) {
-		out_byte(0xc0 | (cp >> 6));
-		out_byte(0x80 | (cp & 0x3f));
-	} else {
-		out_byte(0xe0 | (cp >> 12));
-		out_byte(0x80 | ((cp >> 6) & 0x3f));
-		out_byte(0x80 | (cp & 0x3f));
-	}
+	if (acs == cur_acs)
+		return;
+	out_byte(acs ? 0x0e : 0x0f);	/* SO selects G1, SI returns to G0 */
+	cur_acs = acs;
 }
 
 /* Append an SGR sequence only when the attribute actually changes. */
@@ -120,12 +115,14 @@ emit_move(int y, int x)
 	out_raw(t, (size_t)n);
 }
 
-/* Append one cell: its attribute (if changed) then its glyph. */
+/* Append one cell: its attribute and character set (each only when
+ * they change), then its glyph. */
 static void
 emit_cell(const struct cell *c)
 {
 	emit_attr(c->attr);
-	emit_utf8(c->ch);
+	emit_charset((c->ch & SCR_ACS) != 0);
+	out_byte((unsigned char)(c->ch & 0xff));
 }
 
 /* True when two cells would render identically. */
@@ -176,8 +173,10 @@ scr_flush(void)
 
 	outlen = 0;
 	cur_attr = 0xffff;	/* unknown: first emit_attr() re-asserts SGR */
+	cur_acs = 0;		/* known: every frame below leaves G0 shifted */
 	for (y = 0; y < rows; y++)
 		flush_row(y);
+	emit_charset(0);
 	if (outlen > 0 && out_fd >= 0)
 		(void)write(out_fd, outbuf, outlen);
 	if (rows > 0 && cols > 0)
@@ -327,11 +326,13 @@ scr_init_on(int outfd)
 		tcsetattr(in_fd, TCSANOW, &t);
 		tio_saved = 1;
 	}
-	/* Alt screen where it exists, then an explicit clear and home:
-	 * terminals without the alternate buffer ignore the first
-	 * sequence, and the display must start from a blank screen and a
-	 * known cursor position either way. */
-	term_write("\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H");
+	/* Alt screen where it exists, then the character sets, then an
+	 * explicit clear and home: terminals without the alternate buffer
+	 * ignore the first sequence, and the display must start from a
+	 * blank screen and a known cursor position either way.  ASCII into
+	 * G0 and line drawing into G1 is a one-time designation; the SI
+	 * after it makes the shift state known rather than inherited. */
+	term_write("\x1b[?1049h\x1b[?25l\x1b(B\x1b)0\x0f\x1b[2J\x1b[H");
 	return 0;
 }
 
@@ -340,8 +341,10 @@ scr_shutdown(void)
 {
 	/* Leaving the alt screen restores what was there before; without
 	 * one, clear and home so the shell prompt returns to a clean
-	 * screen instead of the last frame. */
-	term_write("\x1b[0m\x1b[?25h\x1b[?1049l\x1b[2J\x1b[H");
+	 * screen instead of the last frame.  The leading SI matters in
+	 * that second case: a shell inheriting G1 would draw its own
+	 * output as line art. */
+	term_write("\x0f\x1b[0m\x1b[?25h\x1b[?1049l\x1b[2J\x1b[H");
 	if (tio_saved) {
 		tcsetattr(in_fd, TCSANOW, &saved_tio);
 		tio_saved = 0;
