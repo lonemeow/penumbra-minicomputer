@@ -1055,6 +1055,20 @@ static uint64_t max_insns = 0;    // +max-insn=N: halt after N instructions
 static bool trap_user_pc_zero = false;  // +trap-pc0: abort on user-mode PC=0
 static FILE* trace_fp = nullptr;
 
+// +irq_at_pc=ADDR[,PERIOD] — raise the external IRQ line when the CPU is
+// about to execute ADDR.  Real interrupts arrive only from modelled
+// devices, which cannot be aimed at an instruction, so this is how a
+// short instruction window gets interrupted deterministically rather
+// than once in millions of ticks.
+//
+// PERIOD fires on every Nth deliverable arrival.  A restartable sequence
+// needs at least 2: rewinding to its start brings the CPU back to ADDR,
+// so firing on every arrival livelocks it.
+static uint32_t irq_at_pc_addr = 0;
+static uint64_t irq_at_pc_period = 1;
+static uint64_t irq_at_pc_arrivals = 0;
+static uint64_t irq_at_pc_injected = 0;
+
 // +halt_on=STR — stop the sim the moment STR appears in the UART output
 // stream.  Mirrors the RTL console's +halt_on so the same marker (e.g. a
 // panic banner) halts both simulators identically.
@@ -2166,6 +2180,15 @@ static void execute_one() {
     // Check for pending interrupts before fetching.
     // Timer has priority over external (UART) IRQ.
     if ((cpu.sr & SR_I) && !cpu.ei_shadow) {
+        // Ahead of the device sources: an injected interrupt aimed at one
+        // instruction must not be displaced by a tick that happens to be
+        // due on the same cycle.
+        if (irq_at_pc_addr != 0 && cpu.pc == irq_at_pc_addr &&
+            ++irq_at_pc_arrivals % irq_at_pc_period == 0) {
+            irq_at_pc_injected++;
+            exception_entry(VEC_EXT_IRQ);
+            return;
+        }
         if (timer.irq()) {
             exception_entry(VEC_TIMER);
             return;
@@ -2909,13 +2932,20 @@ int main(int argc, char** argv) {
             halt_on_len = strlen(halt_on_str);
             if (halt_on_len > sizeof(halt_on_buf)) halt_on_len = sizeof(halt_on_buf);
         }
+        else if (strncmp(argv[i], "+irq_at_pc=", 11) == 0) {
+            char *rest = nullptr;
+            irq_at_pc_addr = (uint32_t)strtoull(argv[i] + 11, &rest, 0);
+            if (rest && *rest == ',')
+                irq_at_pc_period = strtoull(rest + 1, nullptr, 0);
+            if (irq_at_pc_period == 0) irq_at_pc_period = 1;
+        }
         else if (strncmp(argv[i], "+trace_window=", 14) == 0)
             trace_window = (size_t)strtoull(argv[i] + 14, nullptr, 0);
         else hex_path = argv[i];
     }
 
     if (!hex_path) {
-        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+usbdev=type:config] [+audiofile=path] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats]\n");
+        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+usbdev=type:config] [+audiofile=path] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats] [+irq_at_pc=addr[,period]]\n");
         return 1;
     }
 
@@ -3018,6 +3048,10 @@ int main(int argc, char** argv) {
     restore_term();
 
     print_branch_stats();  // no-op unless +branchstats
+    if (irq_at_pc_addr != 0)
+        fprintf(stderr, "[IRQ_AT_PC] 0x%08X reached %llu times, injected %llu\n",
+                irq_at_pc_addr, (unsigned long long)irq_at_pc_arrivals,
+                (unsigned long long)irq_at_pc_injected);
     print_opstats();       // no-op unless +opstats
 
     if (!quiet_mode) {
