@@ -9,7 +9,8 @@
  * the file stores them, so a sample's offset there is its offset in
  * the file's sample data.
  *
- * usage: modplay [-Lil] [-c crossfeed] [-p order] file ...
+ * usage: modplay [-Lil] [-c crossfeed] [-d display] [-o tty] [-p order]
+ *                 file ...
  */
 
 #include <sys/types.h>
@@ -76,6 +77,14 @@ struct player {
 	 */
 	struct display_tick timeline[TIMELINE];
 	uint64_t	us;		/* song time generated */
+};
+
+/* What the command line asked for, beyond which files to play. */
+struct options {
+	bool		ignore;		/* play despite effects modplay skips */
+	bool		loop;
+	int		start;		/* the order to begin at */
+	int		outfd;		/* the terminal the display draws on */
 };
 
 static struct penaudio_info info;
@@ -384,12 +393,13 @@ list(const char *path)
 
 /* Returns false if the file could not be played. */
 static bool
-play(int fd, const char *path, bool ignore, bool loop, int start)
+play(int fd, const char *path, const struct options *opt)
 {
 	static struct player p;
 	struct penaudio_clock pc;
 	struct pollfd pfd;
 	struct penaudio_status st;
+	int64_t shown = -1;		/* the last tick the display has seen */
 	struct mod m;
 	const char *error, *unsupported;
 	uint8_t *buf;
@@ -404,14 +414,14 @@ play(int fd, const char *path, bool ignore, bool loop, int start)
 		return false;
 	}
 
-	if (start >= m.length) {
+	if (opt->start >= m.length) {
 		warnx("%s: has %d orders, so -p %d starts past its end", path,
-		    m.length, start);
+		    m.length, opt->start);
 		goto fail;
 	}
 
 	unsupported = replay_unsupported(&m);
-	if (unsupported != NULL && !ignore) {
+	if (unsupported != NULL && !opt->ignore) {
 		warnx("%s: uses %s, which modplay does not play; "
 		    "-i plays it without", path, unsupported);
 		goto fail;
@@ -423,7 +433,8 @@ play(int fd, const char *path, bool ignore, bool loop, int start)
 		goto fail;
 	}
 
-	display_start(&m, path);
+	if (!display_start(&m, path, opt->outfd))
+		goto fail;
 	if (unsupported != NULL)
 		printf("  playing without %s\n", unsupported);
 
@@ -440,7 +451,7 @@ play(int fd, const char *path, bool ignore, bool loop, int start)
 	p.fd = fd;
 	p.mod = &m;
 	p.bpm = 125;		/* ProTracker's; the song may change it */
-	replay_init(&p.replay, &m, start, loop);
+	replay_init(&p.replay, &m, opt->start, opt->loop);
 
 	/*
 	 * The clock starts at the first tick's tempo, which is known once
@@ -472,7 +483,24 @@ play(int fd, const char *path, bool ignore, bool loop, int start)
 			err(1, "GETSTATUS");
 		if (!more && st.pst_tick >= p.last)
 			break;
-		display_update(&p.timeline[st.pst_tick % TIMELINE]);
+
+		/*
+		 * Every tick reaches the display, not only the one the
+		 * clock stands on: a note starts for a single tick, and
+		 * the wait above spans several of them.
+		 */
+		if ((int64_t)st.pst_tick > shown) {
+			int64_t tick = shown + 1;
+			int64_t oldest = (int64_t)st.pst_tick - (TIMELINE - 1);
+
+			if (tick < oldest)	/* the ring has come round */
+				tick = oldest;
+			if (tick < 0)
+				tick = 0;
+			for (; tick <= (int64_t)st.pst_tick; tick++)
+				display_update(&p.timeline[tick % TIMELINE]);
+			shown = st.pst_tick;
+		}
 	}
 	display_end();
 
@@ -492,16 +520,25 @@ fail:
 static void
 usage(void)
 {
+	int i;
+
 	fprintf(stderr,
-	    "usage: modplay [-Lil] [-c crossfeed] [-p order] file ...\n"
+	    "usage: modplay [-Lil] [-c crossfeed] [-d display] [-o tty] "
+	    "[-p order] file ...\n"
 	    "  -c  percent of each channel's own side that the other side "
 	    "gets:\n"
 	    "      0 pans hard, as the Amiga does, 100 is mono; default %d\n"
+	    "  -d  how to show the song while it plays:\n", CROSSFEED);
+	for (i = 0; display_backends[i] != NULL; i++)
+		fprintf(stderr, "        %-8s%s%s\n",
+		    display_backends[i]->name, display_backends[i]->summary,
+		    i == 0 ? " (default)" : "");
+	fprintf(stderr,
 	    "  -i  play a module even if it uses effects modplay ignores\n"
 	    "  -L  list where each file's cues start instead of playing\n"
 	    "  -l  loop each song rather than stopping at its end\n"
-	    "  -p  start at this order rather than the first\n",
-	    CROSSFEED);
+	    "  -o  draw the display on this terminal, not the current one\n"
+	    "  -p  start at this order rather than the first\n");
 	exit(2);
 }
 
@@ -509,13 +546,18 @@ int
 main(int argc, char **argv)
 {
 	struct sigaction sa;
+	struct options opt;
+	const char *outtty = NULL;
 	uint64_t inc;
 	uint32_t voices;
-	bool ignore = false, loop = false, listing = false, ok = true;
+	bool listing = false, ok = true;
 	char *end;
-	int ch, fd, crossfeed = CROSSFEED, start = 0;
+	int ch, fd, crossfeed = CROSSFEED;
 
-	while ((ch = getopt(argc, argv, "c:iLlp:")) != -1) {
+	memset(&opt, 0, sizeof(opt));
+	opt.outfd = STDOUT_FILENO;
+
+	while ((ch = getopt(argc, argv, "c:d:iLlo:p:")) != -1) {
 		switch (ch) {
 		case 'c':
 			crossfeed = (int)strtol(optarg, &end, 10);
@@ -523,19 +565,26 @@ main(int argc, char **argv)
 			    crossfeed < 0 || crossfeed > 100)
 				usage();
 			break;
+		case 'd':
+			if (!display_select(optarg))
+				usage();
+			break;
 		case 'i':
-			ignore = true;
+			opt.ignore = true;
 			break;
 		case 'L':
 			listing = true;
 			break;
 		case 'l':
-			loop = true;
+			opt.loop = true;
+			break;
+		case 'o':
+			outtty = optarg;
 			break;
 		case 'p':
-			start = (int)strtol(optarg, &end, 10);
+			opt.start = (int)strtol(optarg, &end, 10);
 			if (*optarg == '\0' || *end != '\0' ||
-			    start < 0 || start >= MOD_ORDERS)
+			    opt.start < 0 || opt.start >= MOD_ORDERS)
 				usage();
 			break;
 		default:
@@ -551,6 +600,12 @@ main(int argc, char **argv)
 				ok = false;
 		return ok ? 0 : 1;
 	}
+
+	/* O_NOCTTY: naming a console here must not make it this
+	 * session's controlling terminal. */
+	if (outtty != NULL &&
+	    (opt.outfd = open(outtty, O_RDWR | O_NOCTTY)) == -1)
+		err(1, "%s", outtty);
 
 	/* No SA_RESTART: a signal has to end the wait in poll(). */
 	memset(&sa, 0, sizeof(sa));
@@ -578,7 +633,7 @@ main(int argc, char **argv)
 		    voices, MOD_CHANNELS);
 
 	for (; optind < argc && !quit; optind++)
-		if (!play(fd, argv[optind], ignore, loop, start))
+		if (!play(fd, argv[optind], &opt))
 			ok = false;
 
 	close(fd);

@@ -11,6 +11,7 @@ PROJROOT    := $(realpath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 LLVM_PREFIX ?= $(PROJROOT)/build/llvm
 DESTDIR     ?= $(PROJROOT)/build/netbsd-dest
 OVERLAY_ROOT ?= $(PROJROOT)/build/netbsd-overlay
+COMMON      := $(PROJROOT)/sw/common
 
 CC          := $(LLVM_PREFIX)/bin/clang
 TARGET      := penumbra-unknown-netbsd
@@ -28,13 +29,14 @@ PENAUDIO_H  := $(PROJROOT)/netbsd/sys/arch/penumbra/include/penaudio.h
 
 WARN        := -Wall -Wextra -Wno-unused-parameter
 CFLAGS      := --target=$(TARGET) --sysroot=$(DESTDIR) $(COPT) $(WARN) \
-               -I$(INCDIR)
+               -I$(INCDIR) -I$(COMMON)
 LDFLAGS     := --target=$(TARGET) --sysroot=$(DESTDIR) -static
 LDLIBS      := -lm
 
 SONG_SRCS   := mod.c replay.c
 SONG_HDRS   := mod.h replay.h
-SRCS        := modplay.c display.c $(SONG_SRCS)
+DISPLAY_SRCS := display.c display_line.c display_meters.c $(COMMON)/screen.c
+SRCS        := modplay.c $(DISPLAY_SRCS) $(SONG_SRCS)
 
 .PHONY: all dump overlay test clean
 all: $(BUILDDIR)/modplay
@@ -44,7 +46,7 @@ overlay: all
 	install -d $(OVERLAY_ROOT)/usr/local/bin
 	install -m 0755 $(BUILDDIR)/modplay $(OVERLAY_ROOT)/usr/local/bin/modplay
 
-$(BUILDDIR)/modplay: $(SRCS) $(SONG_HDRS) display.h \
+$(BUILDDIR)/modplay: $(SRCS) $(SONG_HDRS) display.h $(COMMON)/screen.h \
     $(INCDIR)/machine/penaudio.h
 	$(CC) $(CFLAGS) $(LDFLAGS) $(SRCS) $(LDLIBS) -o $@
 
@@ -52,13 +54,22 @@ $(BUILDDIR)/modplay-dump: dump.c $(SONG_SRCS) $(SONG_HDRS)
 	install -d $(BUILDDIR)
 	$(HOSTCC) -O2 $(WARN) dump.c $(SONG_SRCS) -lm -o $@
 
-# Build and run the host unit test for the parser and replayer.
-test: $(BUILDDIR)/replay_test
+# Build and run the host unit tests: the parser and replayer, and the
+# displays drawn off-screen.
+test: $(BUILDDIR)/replay_test $(BUILDDIR)/display_test
 	$(BUILDDIR)/replay_test
+	@echo
+	$(BUILDDIR)/display_test
 
 $(BUILDDIR)/replay_test: replay_test.c $(SONG_SRCS) $(SONG_HDRS)
 	install -d $(BUILDDIR)
 	$(HOSTCC) -O2 $(WARN) replay_test.c $(SONG_SRCS) -lm -o $@
+
+$(BUILDDIR)/display_test: display_test.c $(DISPLAY_SRCS) display.h \
+    $(SONG_HDRS) $(COMMON)/screen.h
+	install -d $(BUILDDIR)
+	$(HOSTCC) -O2 $(WARN) -I. -I$(COMMON) display_test.c $(DISPLAY_SRCS) \
+	    -o $@
 
 $(INCDIR)/machine/penaudio.h: $(PENAUDIO_H)
 	install -d $(dir $@)
