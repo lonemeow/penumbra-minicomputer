@@ -34,6 +34,7 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <machine/bus_funcs.h>
 #include <machine/pbbus.h>
 
+#include <dev/ic/pcdisplay.h>
 #include <dev/wscons/wsconsio.h>
 #include <dev/wscons/wsdisplayvar.h>
 #include <dev/wsfont/wsfont.h>
@@ -344,6 +345,18 @@ pdisplay_eraserows(void *cookie, int row, int nrows, long attr)
 	}
 }
 
+static const uint8_t pdisplay_ansitocga[] = {
+	FG_BLACK, FG_RED,     FG_GREEN, FG_BROWN,
+	FG_BLUE,  FG_MAGENTA, FG_CYAN,  FG_LIGHTGREY
+};
+
+static int
+pdisplay_wscol_to_cga(int wscol)
+{
+	/* Bit [3] is intensity in both orders, so only the hue permutes. */
+	return pdisplay_ansitocga[wscol & 0x7] | (wscol & 0x8);
+}
+
 static int
 pdisplay_allocattr(void *cookie, int fg, int bg, int flags, long *attrp)
 {
@@ -355,6 +368,8 @@ pdisplay_allocattr(void *cookie, int fg, int bg, int flags, long *attrp)
 		fg = WSCOL_WHITE;
 		bg = WSCOL_BLACK;
 	}
+	fg = pdisplay_wscol_to_cga(fg);
+	bg = pdisplay_wscol_to_cga(bg);
 	if (flags & WSATTR_HILIT)
 		fg += 8;
 
