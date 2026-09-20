@@ -260,7 +260,7 @@ epilogue rules do not reach it.
 
 ARM-style pattern: `penumbra_init()` runs on a 4 KB boot stack
 (allocated in BSS by locore.S) and returns the new SP (lwp0's
-12 KB USPACE kernel stack).  locore.S switches SP before calling
+16 KB USPACE kernel stack).  locore.S switches SP before calling
 `penumbra_main()` --> `main()`.  The 4 KB boot stack overflows
 at `-O0` + DIAGNOSTIC if used for `main()`.
 

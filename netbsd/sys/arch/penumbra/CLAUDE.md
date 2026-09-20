@@ -210,7 +210,7 @@ captures the *why* for choices that would otherwise look odd.
   pinned page region (0xFFFFxxxx), `_trap_common` BREAKs instead of
   infinite-looping.
 - **Two-phase startup.** `penumbra_init()` runs on a 4 KB boot
-  stack, returns the new SP (top of lwp0's 12 KB USPACE) in R1, and
+  stack, returns the new SP (top of lwp0's 16 KB USPACE) in R1, and
   `locore.S` does `mov sp, r1; bl penumbra_main`. ARM-style. The
   4 KB boot stack overflows at `-O0 + DIAGNOSTIC` if we tried to
   stay on it.

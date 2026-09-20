@@ -39,7 +39,7 @@ bootinfo — `boot sd:0,0` reaches single-user with no prompts.
   in physical mode.  Kernel page table (L1+L2 in BSS), real
   TLB miss handler pinned before MMU enable.  Two-phase startup:
   `penumbra_init()` on 4 KB boot stack returns new SP, locore
-  switches to lwp0's 12 KB USPACE before `main()`.
+  switches to lwp0's 16 KB USPACE before `main()`.
 
 - **pmap / TLB:** Software-managed 2-level page table (L1-->L2).
   Full pmap interface: `pmap_enter` (demand paging), `pmap_create`/
