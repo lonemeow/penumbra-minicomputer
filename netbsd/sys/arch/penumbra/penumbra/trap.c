@@ -14,6 +14,7 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <sys/signal.h>
 #include <sys/signalvar.h>
 #include <sys/syscall.h>
+#include <sys/evcnt.h>
 
 #include <machine/cpu.h>
 #include <machine/frame.h>
@@ -46,6 +47,7 @@ __KERNEL_RCSID(0, "$NetBSD$");
 /* Forward declarations */
 void	trap(struct trapframe *);
 void	timer_tc_tick(void);	/* machdep.c — advance timecounter base */
+extern struct evcnt timer_evcnt;	/* machdep.c — tick count */
 
 #define FSTAT_TO_VM_PROT(s)                                \
 	((((s) & (1 << FSTAT_R)) ? VM_PROT_READ    : 0)   \
@@ -109,6 +111,9 @@ trap(struct trapframe *tf)
 		/* Advance timecounter base before hardclock reads it */
 		timer_tc_tick();
 
+		timer_evcnt.ev_count++;
+		CPU_COUNT(CPU_COUNT_NINTR, 1);
+
 		struct clockframe cf;
 		cf.cf_pc = tf->tf_epc;
 		cf.cf_sr = tf->tf_sr;
@@ -125,6 +130,7 @@ trap(struct trapframe *tf)
 		 * intr_dispatch() walks every registered handler and
 		 * each device identifies itself via its status register.
 		 */
+		CPU_COUNT(CPU_COUNT_NINTR, 1);
 		curcpu()->ci_idepth++;
 		intr_dispatch();
 		curcpu()->ci_idepth--;

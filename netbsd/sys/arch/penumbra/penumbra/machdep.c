@@ -28,6 +28,7 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <sys/signalvar.h>
 #include <sys/ptrace.h>
 #include <sys/timetc.h>
+#include <sys/evcnt.h>
 #include <sys/endian.h>
 
 #include <uvm/uvm_extern.h>
@@ -252,6 +253,13 @@ static struct timecounter timer_timecounter = {
 };
 
 /*
+ * The timer has its own exception vector rather than a handler on the
+ * shared IRQ line, so nothing in intr.c counts it.  trap() bumps this
+ * to put the tick alongside the device sources in `vmstat -i'.
+ */
+struct evcnt timer_evcnt;
+
+/*
  * Clock initialization — program the hardware timer for periodic
  * interrupts at hz (default 100) ticks per second, and register
  * the timecounter for sub-tick timestamp resolution.
@@ -295,6 +303,9 @@ cpu_initclocks(void)
 	timer_reload_val = reload;
 	timer_timecounter.tc_frequency = freq;
 	tc_init(&timer_timecounter);
+
+	evcnt_attach_dynamic(&timer_evcnt, EVCNT_TYPE_INTR, NULL,
+	    "timer", "tick");
 }
 
 void
