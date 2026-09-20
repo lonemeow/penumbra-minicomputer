@@ -1609,6 +1609,80 @@ lwp_trampoline:
 	.long	VECTOR_VA + 0x80 + (trap_return - _real_miss_handler)
 
 /*
+ * softint_fast_dispatch(softlwp, s)
+ *
+ * Run soft interrupt LWP softlwp (R1) on its own stack, borrowing the
+ * context of curlwp, the pinned LWP: switch curlwp, call
+ * softint_dispatch(pinned, s), switch back.  Called and returns with
+ * interrupts disabled.
+ *
+ * The pinned LWP's context goes into its pcb_context as if it had called
+ * cpu_switchto, resuming at .Lsoftint_cleanup: a handler that blocks
+ * sends mi_switch straight back to the pinned LWP (l_switchto), and the
+ * softint LWP finishes later as an ordinary thread.
+ *
+ * The softint LWP's stack starts where cpu_lwp_fork started it, below its
+ * unused trapframe; nothing on it is live between dispatches.
+ */
+	.globl	softint_fast_dispatch
+	.type	softint_fast_dispatch, @function
+softint_fast_dispatch:
+	sub	r14, #4
+	stw	r13, [r14 + 0]			/* our return address */
+
+	ldw	r11, [r12 + L_PCB]		/* R11 = pinned PCB = &pcb_context */
+	stw	r5,  [r11 + 0]
+	stw	r6,  [r11 + 4]
+	stw	r7,  [r11 + 8]
+	stw	r8,  [r11 + 12]
+	stw	r9,  [r11 + 16]
+	stw	r10, [r11 + 20]
+	stw	r12, [r11 + 24]
+	la	r3, .Lsoftint_cleanup
+	stw	r3,  [r11 + 28]
+	stw	r14, [r11 + 32]
+
+	mov	r5, r12				/* R5 = pinned */
+	mov	r6, r14				/* R6 = pinned SP */
+
+	/* curlwp = softlwp, both copies */
+	mov	r12, r1
+	la	r11, cpu_info_store
+	stw	r12, [r11 + CI_CURLWP]
+	ldw	r14, [r12 + L_MD_UTF]
+
+	mov	r1, r5				/* R1 = pinned, R2 = s */
+	bl	softint_dispatch
+
+	/* Handlers ran to completion: switch back to the pinned LWP */
+	mov	r14, r6
+	mov	r12, r5
+	la	r11, cpu_info_store
+	stw	r12, [r11 + CI_CURLWP]
+	ldw	r11, [r12 + L_PCB]
+	ldw	r5, [r11 + 0]			/* the callee-saved regs used above */
+	ldw	r6, [r11 + 4]
+	b	.Lsoftint_return
+
+.Lsoftint_cleanup:
+	/*
+	 * A handler blocked: cpu_switchto resumed the pinned LWP here, with
+	 * its registers back from pcb_context and interrupts still disabled.
+	 * mi_switch keeps the spin-mutex count one below its locks across
+	 * the switch for its own tail to normalize; that tail belongs to the
+	 * softint LWP now, so balance the count here.
+	 */
+	la	r11, cpu_info_store
+	ldw	r2, [r11 + CI_MTX_COUNT]
+	add	r2, #1
+	stw	r2, [r11 + CI_MTX_COUNT]
+
+.Lsoftint_return:
+	ldw	r13, [r14 + 0]
+	add	r14, #4
+	ret
+
+/*
  * setjmp / longjmp for kernel use (label_t).
  * Save/restore callee-saved registers.
  */

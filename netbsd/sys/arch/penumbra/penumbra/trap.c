@@ -286,6 +286,19 @@ trap(struct trapframe *tf)
 	}
 
 	/*
+	 * Soft interrupts run only when returning to an IPL_NONE context;
+	 * anywhere else they would preempt an splhigh section or a hard
+	 * interrupt handler.  Before userret() so a handler's wakeup or
+	 * signal is acted on during this same return.
+	 */
+	if ((tf->tf_sr & PSL_I) != 0 && curcpu()->ci_softints != 0) {
+		int s = splhigh();
+
+		softint_deliver();
+		splx(s);
+	}
+
+	/*
 	 * On return to userland: check for ASTs, pending signals,
 	 * and RAS (Restartable Atomic Sequence) restart.
 	 */
@@ -322,7 +335,9 @@ trap(struct trapframe *tf)
  *
  * For our binary model: SR.I=1 → IPL_NONE, SR.I=0 → IPL_HIGH.
  * NetBSD's multi-level IPL distinctions (SOFTCLOCK, VM, SCHED, …)
- * collapse into this single bit.
+ * collapse into this single bit, splsoft*() included.  A running soft
+ * interrupt handler is the one finer level: its LWP masks its own soft
+ * level and the ones below (softint_machdep.c).
  */
 
 static inline int
@@ -348,17 +363,30 @@ void
 splx(int ipl)
 {
 
-	if (ipl == IPL_NONE)
-		__asm __volatile("EI");
-	else
-		__asm __volatile("DI");
+	if (ipl != IPL_NONE) {
+		__asm __volatile("DI" ::: "memory");
+		return;
+	}
+	/*
+	 * Returning to IPL_NONE is where pending soft interrupts run.  A
+	 * check made with interrupts on races only against interrupts,
+	 * whose own exit delivers what they trigger.  The common case keeps
+	 * its own exit so it needs no stack frame.
+	 */
+	if (__predict_true(curcpu()->ci_softints == 0)) {
+		__asm __volatile("EI" ::: "memory");
+		return;
+	}
+	__asm __volatile("DI" ::: "memory");
+	softint_deliver();
+	__asm __volatile("EI" ::: "memory");
 }
 
 void
 spl0(void)
 {
 
-	__asm __volatile("EI");
+	splx(IPL_NONE);
 }
 
 int splhigh(void)	{ return splraise(IPL_HIGH); }

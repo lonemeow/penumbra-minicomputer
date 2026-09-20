@@ -12,6 +12,7 @@ struct mdlwp {
 	vaddr_t		md_ss_addr;	/* single-step breakpoint addr */
 	int		md_ss_instr;	/* saved instruction at ss addr */
 	volatile int	md_astpending;	/* AST pending flag */
+	u_int		md_softint_mask; /* softint levels this LWP masks */
 };
 
 struct mdproc {

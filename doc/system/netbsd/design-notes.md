@@ -185,6 +185,77 @@ into the pinned vector page's scratch area before any faultable
 stack access.  The C `trap()` function reads from scratch, not
 the hardware registers.
 
+## Soft Interrupts
+
+The port defines `__HAVE_FAST_SOFTINTS`: a soft interrupt runs on
+its own LWP's stack, borrowing the context of the LWP it
+interrupts, rather than taking the generic path's two context
+switches through the scheduler.
+
+### Delivery without a software interrupt line
+
+A port with a hardware software-interrupt request — VAX's SIRR,
+MIPS's CP0 soft bits — needs no dispatch check, since lowering the
+priority level lets the hardware deliver.  Penumbra has one
+interrupt-enable bit, so `softint_trigger` only sets a bit in
+`ci_softints`, and the kernel looks for pending work wherever it
+returns to IPL_NONE:
+
+- `splx(IPL_NONE)` and `spl0()`, covering triggers from thread
+  context and from inside a running handler;
+- the end of `trap()`, when the interrupted context had interrupts
+  enabled (`PSL_I` in the saved SR) — the path that delivers what
+  a hardware interrupt schedules.
+
+The `trap()` check precedes `userret()` so a wakeup or signal
+raised by a handler is acted on during the same return; alpha,
+aarch64, arm32 and x86 all order it that way.  Nothing re-checks
+afterwards, so a soft interrupt triggered during AST processing on
+the interrupt path waits for the next delivery point — a gap those
+ports accept too.
+
+### The soft level lives on the LWP
+
+`SR.I` is one bit and cannot express IPL_SOFTCLOCK through
+IPL_SOFTSERIAL.  Rather than shadow the level in a per-CPU
+variable (the usual `ci_cpl`), each softint LWP carries the set of
+levels it masks — its own and every lower one — in
+`l_md.md_softint_mask`, which is zero for every other LWP.
+Delivery skips what `curlwp` masks, so a running handler is
+preempted only by a higher level.
+
+Being per-LWP, the level cannot desync from exception entry, and
+it follows a handler that blocks and resumes as an ordinary
+thread.  `ci_softints` and `ci_softlwps[]` are indexed by priority
+rank — a level's IPL above `IPL_SOFTCLOCK` — because the MI
+`SOFTINT_*` constants are not in priority order.
+
+`splsoft*()` still disables interrupts, like every level above
+IPL_NONE; the LWP mask is the only finer distinction the port
+makes.
+
+### Dispatch and the blocking path
+
+`softint_fast_dispatch` (locore.S) saves the interrupted LWP's
+callee-saved registers into its PCB exactly as `cpu_switchto`
+would, but with the resume address pointing at a cleanup
+trampoline.  It then moves SP to the softint LWP's stack, sets
+`curlwp` in both `cpu_info` and R12, and calls
+`softint_dispatch()`.
+
+If a handler blocks, `mi_switch()` sees `l_switchto` and switches
+straight back to the interrupted LWP, which resumes at the
+trampoline and finishes the interrupt exit as though the dispatch
+had returned; the softint LWP completes later as an ordinary
+thread.  The trampoline's one fixup is `ci_mtx_count`, which
+`mi_switch()` leaves one below its locks for a tail the
+interrupted LWP never runs — the same fixup alpha's
+`alpha_softint_return` and VAX's `softint_cleanup` make.
+
+The dispatch is ordinary kernel text, not vector-page code: it is
+called from C before `trap()`'s final `DI`, so the vector-page
+epilogue rules do not reach it.
+
 ## Boot Stack Switch
 
 ARM-style pattern: `penumbra_init()` runs on a 4 KB boot stack
@@ -256,8 +327,9 @@ trap-frame special case.
 
 The unwinder stops with a `<...>` marker when it enters
 hand-written assembly whose prologue this scanner can't
-interpret: `cpu_switchto`, `lwp_trampoline`, `_trap_common`,
-`trap_return`, `setjmp`, `longjmp`, or any PC in the pinned
+interpret: `cpu_switchto`, `lwp_trampoline`,
+`softint_fast_dispatch`, `_trap_common`, `trap_return`,
+`setjmp`, `longjmp`, or any PC in the pinned
 vector page region (`0xFFFFxxxx`).  Also stops on bad SP,
 implausible frame size (<4 or >4096 bytes), or after 64
 frames as a safety cap.

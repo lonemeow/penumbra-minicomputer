@@ -5678,6 +5678,76 @@ At run time that check is the whole cost; the real cost is risk.  The
 dispatch sits on the trap-exit path, under the vector-page epilogue
 rules, and mistakes there show up as hangs rather than panics.
 
+## Kernel: per-CPU data layout and cache-line tuning
+
+`cpu_info_store` is the hottest data structure in the kernel: every
+exception entry reads `ci_curlwp` to establish curlwp, every exception
+exit reads `ci_softints` to look for soft interrupts, every hardware
+interrupt touches `ci_idepth`, and every spin-mutex acquire and release
+touches `ci_mtx_count`.  Its layout has never been designed, only
+accreted, and the MI half of it is padded for a machine we are not.
+
+### Cache-line constants describe someone else's machine
+
+`COHERENCY_UNIT` and `CACHE_LINE_SIZE` are still at the `sys/param.h`
+default of 64 bytes, while the L1 line is 16.  `__cacheline_aligned`
+expands to `__aligned(COHERENCY_UNIT)` plus a `.data.cacheline_aligned`
+section (`sys/cdefs_elf.h`), and 67 files under `kern/`, `uvm/`, `net/`
+and `sys/` use it — all to keep unrelated fields off one another's
+lines, which is false sharing between CPUs that a uniprocessor cannot
+have.  Overriding both to 16 in `machine/param.h` shrinks that padding
+kernel-wide, which is footprint on a 4 KB L1 rather than an alignment
+correctness question.
+
+The one knock-on found so far is `MIN_LWP_ALIGNMENT`, which falls from
+64 to 32, and `sys/param.h` states 32 as the actual requirement (it
+counts when packing a lock byte alongside an LWP pointer).  Measure the
+`.data.cacheline_aligned` section size and the total BSS before and
+after; a syscall loop's L1d miss count from `machdep.cache.*` is the
+behavioural half.
+
+### The port's own fields fit in padding that already exists
+
+`struct cpu_info` is 896 bytes, of which 768 are the MI `struct
+cpu_data` and 72 are padding.  `ci_data` is 64-byte aligned because of
+`lwp_t *cpu_idlelwp __aligned(64)` inside it, so offsets 4-63 are a
+hole — and that hole is larger than everything the port declares:
+
+| Bytes | Fields |
+|---|---|
+| 8 | `ci_curlwp`, `ci_softints` |
+| 16 | `ci_onproc`, `ci_cpuid`, `ci_dev`, `ci_want_resched` |
+| 16 | `ci_idepth`, `ci_cpl`, `ci_mtx_count`, `ci_mtx_oldspl` |
+| 16 | `ci_softlwps[4]` |
+
+56 bytes total.  Moving all of them ahead of `ci_data` puts the entire
+machine-dependent half in the first four lines, costs nothing, and
+drops `cpu_info` to 832 bytes.  `ci_softints` was moved there when the
+fast softint path landed, for the trap-exit read; the rest still sits
+past the 768-byte MI structure, where nothing groups it.
+
+Worth doing in the same pass: `ci_cpl` is declared and never read or
+written.  The SPL model derives the level from `SR.I` and the soft
+level from the LWP, so the field is four dead bytes and an invitation
+to assume a software `cpl` exists.
+
+### Pinning the hot page
+
+Kernel data is mapped by ordinary 4 KB PTEs through the 64-slot,
+2-way main TLB, so `cpu_info_store`'s page competes for one of 32 sets
+against everything else the kernel touches.  Three of the eight pinned
+slots are free (`sysreg.h` assigns 0-4).  A pinned page holding the
+per-CPU structure — and whatever else the trap path dereferences on
+every exception — would take that competition off the table entirely,
+the way the vector page already does for the miss handler.
+
+Open questions before it is worth building: whether the page actually
+misses often enough to matter, which needs a measurement rather than
+an argument; what else deserves to share it, since 4 KB for an 832-byte
+structure wastes most of a page and a pinned slot is scarce; and the
+mechanics, which are a linker section plus a pin at boot in
+`pmap_bootstrap`, alongside the existing pinned-slot assignments.
+
 ## Build system: guard flashing against marginal timing
 
 `make flash` packs and flashes whatever nextpnr produced, including a

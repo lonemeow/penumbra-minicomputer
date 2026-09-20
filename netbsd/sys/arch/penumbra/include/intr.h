@@ -68,6 +68,8 @@ int	splvm(void);
 int	splsched(void);
 int	splddb(void);
 
+void	softint_deliver(void);
+
 void	intr_init(void);
 void	intr_dispatch(void);
 void   *intr_establish(int irq, int ipl, int (*handler)(void *), void *arg);

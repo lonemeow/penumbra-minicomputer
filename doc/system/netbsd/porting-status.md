@@ -70,8 +70,7 @@ bootinfo — `boot sd:0,0` reaches single-user with no prompts.
 
 - **Context switching:** `cpu_switchto` (locore.S) saves/restores
   callee-saved registers.  `cpu_lwp_fork` sets up new LWP stacks.
-  `lwp_trampoline` --> `lwp_startup` --> `func(arg)`.  Softint
-  threads run.
+  `lwp_trampoline` --> `lwp_startup` --> `func(arg)`.
 
 - **Trap handling:** Per-vector entry stubs on the vector page,
   common trapframe save/restore, C dispatch in `trap()`.
@@ -172,7 +171,14 @@ bootinfo — `boot sd:0,0` reaches single-user with no prompts.
   inc/dec/add/and/or, no-op membars (uniprocessor).
 
 - **SPL:** Hardware-based, reads SR.I directly (no global
-  variable that desyncs on exception entry).
+  variable that desyncs on exception entry).  The soft levels,
+  which one bit cannot express, are carried by the LWP instead.
+
+- **Soft interrupts:** Fast (`__HAVE_FAST_SOFTINTS`).  Handlers run
+  on their own LWP's stack from the interrupt exit, borrowing the
+  interrupted LWP's context; a handler that blocks resumes as an
+  ordinary thread.  Delivery points are `splx(IPL_NONE)`, `spl0()`
+  and the end of `trap()`.
 
 - **DDB (minimal-useful subset):** On-demand entry via serial
   BREAK (the MI `cn_check_magic` default magic — Ctrl-A B in

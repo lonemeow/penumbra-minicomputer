@@ -16,8 +16,8 @@
  *
  * Termination: we stop on bad SP, unknown symbol, implausible frame
  * size, or when we enter hand-written asm (vector page, cpu_switchto,
- * lwp_trampoline, _trap_common, trap_return) whose prologues this
- * scanner cannot interpret.
+ * lwp_trampoline, softint_fast_dispatch, _trap_common, trap_return)
+ * whose prologues this scanner cannot interpret.
  */
 
 #include <sys/cdefs.h>
@@ -179,6 +179,7 @@ asm_boundary_name(db_addr_t pc)
 
 	if (strcmp(name, "cpu_switchto") == 0 ||
 	    strcmp(name, "lwp_trampoline") == 0 ||
+	    strcmp(name, "softint_fast_dispatch") == 0 ||
 	    strcmp(name, "_trap_common") == 0 ||
 	    strcmp(name, "trap_return") == 0 ||
 	    strcmp(name, "setjmp") == 0 ||

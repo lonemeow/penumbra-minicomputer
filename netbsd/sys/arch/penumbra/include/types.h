@@ -58,6 +58,7 @@ typedef struct label_t {
 #define __HAVE___LWP_GETTCB_FAST
 #define __HAVE_COMMON___TLS_GET_ADDR
 #define __HAVE_CPU_LWP_SETPRIVATE
+#define __HAVE_FAST_SOFTINTS
 #define __HAVE_RAS
 #define __HAVE_SYSCALL_INTERN
 #define __HAVE_TLS_VARIANT_I

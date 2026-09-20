@@ -25,6 +25,7 @@ struct clockframe {
 
 struct cpu_info {
 	struct lwp	*ci_curlwp;		/* current LWP (must be first) */
+	volatile u_int	ci_softints;		/* pending softints by rank; shares curlwp's line */
 	struct cpu_data ci_data;		/* MI per-CPU data (must not be at offset 0) */
 	struct lwp	*ci_onproc;		/* current user LWP / kthread */
 	cpuid_t		ci_cpuid;
@@ -34,6 +35,7 @@ struct cpu_info {
 	int		ci_cpl;			/* current priority level */
 	volatile int	ci_mtx_count;
 	volatile int	ci_mtx_oldspl;
+	struct lwp	*ci_softlwps[SOFTINT_COUNT];	/* softint LWPs by rank */
 };
 
 extern struct cpu_info cpu_info_store;

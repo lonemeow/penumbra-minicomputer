@@ -46,6 +46,7 @@ define	L_MD_UTF		offsetof(struct lwp, l_md.md_utf)
 # cpu_info fields
 define	CI_CURLWP		offsetof(struct cpu_info, ci_curlwp)
 define	CI_IDEPTH		offsetof(struct cpu_info, ci_idepth)
+define	CI_MTX_COUNT		offsetof(struct cpu_info, ci_mtx_count)
 
 # VM constants
 define	VM_MIN_KERNEL_ADDRESS	VM_MIN_KERNEL_ADDRESS
