@@ -4,7 +4,7 @@
 #
 
 # maxpartitions must be the first item in files.${ARCH}
-maxpartitions 8
+maxpartitions 16
 
 maxusers 2 8 64
 

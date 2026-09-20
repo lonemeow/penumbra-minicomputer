@@ -24,6 +24,21 @@
 #define NBPG		(1 << PGSHIFT)
 #define PGOFSET		(NBPG - 1)
 
+/* Uniprocessor.  Sizes the MAXCPUS-indexed arrays, pool_cache above all. */
+#define	MAXCPUS		1
+
+/*
+ * Every L1 and the L2 use 16-byte lines.  COHERENCY_UNIT pads structures
+ * apart to avoid false sharing, which a uniprocessor cannot have, so it
+ * takes the true line size and the 64-byte generic default only costs
+ * cache this machine has little of.  CACHE_LINE_SIZE is also a layout
+ * granularity for MI code that supports 32, 64 and 128 alone — tcp_vtw
+ * packs a fat pointer's tags into one line — so it takes the smallest of
+ * those, which still never splits a real line.
+ */
+#define	COHERENCY_UNIT		16
+#define	CACHE_LINE_SIZE		32
+
 #ifdef _KERNEL_OPT
 #include "opt_param.h"
 #endif

@@ -5678,6 +5678,119 @@ At run time that check is the whole cost; the real cost is risk.  The
 dispatch sits on the trap-exit path, under the vector-page epilogue
 rules, and mistakes there show up as hangs rather than panics.
 
+## Kernel: interlocked atomics are not atomic against interrupts
+
+`common/lib/libc/arch/penumbra/atomic/atomic_cas.S` is a plain
+load-compare-store with no interrupt protection, and every interlocked
+name is `.set` to that same body alongside the `_ni` ones —
+`atomic_cas_32`, `atomic_cas_uint`, `atomic_cas_ulong`,
+`atomic_cas_ptr`.  The file has no `_KERNEL` split, and
+`Makefile.inc` links it for `LIB == "kern"`.  So an interrupt landing
+between the `ldw` and the `stw` makes the store clobber whatever the
+handler wrote.
+
+RAS covers userland: `atomic_ras_init.c` registers the range through
+`rasctl(2)` and `userret()` restarts an interrupted sequence.  Nothing
+covers the kernel's own use.  `machine/lock.h` claims "in kernel
+context the CAS uses DI/EI", which was never true of the linked code
+and should go when this is fixed.
+
+atomic_ops(9) promises the interlocked forms are atomic against
+interrupt handlers on the same CPU; the `_ni` forms are the documented
+opt-out.  Everything built on the CAS inherits the flaw, since
+`atomic_inc_32_cas.c` and its siblings loop on the *interlocked*
+`atomic_cas_32`.
+
+Exposure is narrow but the contract is broken.  Spin mutexes are safe
+(the IPL rises before the CAS) and adaptive mutexes are taken only in
+thread context.  What is left is MI code doing an interlocked RMW on a
+word a hard interrupt handler also writes — `ci_want_resched` and
+`l_dopreempt` first — where a lost update costs a dropped reschedule
+rather than corruption.  Fast soft interrupts widen the window, since
+network and USB completion work now runs at interrupt exit and can
+itself be interrupted.
+
+### Two fixes
+
+**Bracket the CAS with `DI`/`EI`.**  Simple and obviously correct, and
+expensive: `EI`/`DI` are drain-commit on gen2, stalling in EX until the
+pipeline drains, so every atomic pays two drains on a path taken by
+every adaptive `mutex_enter`/`mutex_exit` and every refcount.
+
+**Restart the sequence from the kernel's trap path.**  On a trap taken
+from supervisor mode whose `EPC` lies inside the region, rewind `EPC`
+to the start.  Nothing is added to the atomic itself; a kernel-mode
+trap pays a two-bound compare.  The markers already exist
+(`_atomic_cas_32_ras_start`, `_atomic_cas_32_ras_end`) and the store is
+the last instruction inside the region, which is the property that
+makes a restart correct: interrupted at the `stw` the sequence redoes,
+interrupted after it `EPC` equals the end marker and nothing is redone.
+
+The second one also composes with [inline lock fast
+paths](#kernel-inline-lock-fast-paths), which need the same guarantee
+for the same reason, where DI/EI would tax each one separately.
+
+### Testing a kernel restart
+
+The region is four instructions, so there are five interruption points
+and coverage is a loop rather than a soak.  At 100 Hz a random
+interrupt lands inside a four-instruction window about once in 10^5
+ticks, so only forced interruption tests anything.
+
+- Make the decision a pure function of `EPC` and `SR`, and walk it on
+  the host across every offset from before the region to past the end
+  marker, for both privilege states.  The end boundary is where an
+  off-by-one corrupts data.
+- Drive the five points deterministically.  The ISS has no injection
+  hook — interrupts arrive only from modelled devices — so this wants
+  an option that raises the IRQ line when PC reaches a given address.
+- Check an invariant that catches both directions.  A CAS loop
+  incrementing a word N times against a handler incrementing it M
+  times must end at exactly `N + M`: rewinding too late applies an
+  increment twice and reads high, not rewinding at all loses updates
+  and reads low.  An inequality check would miss one of them.
+- Keep a negative control.  The same test with the restart compiled
+  out has to fail, or it is not landing in the window and proves
+  nothing.
+- Count the restarts in an `evcnt` and assert under DIAGNOSTIC that the
+  rewritten PC is the region start.  A restart path that never fires in
+  a normal boot is not being exercised.
+
+## Kernel: inline lock fast paths
+
+`kern_mutex.c:274-283` aliases `mutex_enter`, `mutex_exit`,
+`mutex_spin_enter` and `mutex_spin_exit` straight to the C vector
+routines, because the port defines neither `__HAVE_MUTEX_STUBS` nor
+`__HAVE_SPIN_MUTEX_STUBS`.  Every comparable port defines them (mips,
+riscv, vax and alpha among others, alpha with the spin variant
+commented out — a hint that it is the fiddlier half), supplying
+assembly that handles the uncontended case inline and tail-calls the
+vector routine otherwise.  These are on nearly every kernel path, so
+this is the largest throughput item on the opt-in list.
+
+Two things make it cheaper here than the line count suggests.
+`MUTEX_SPIN_SPLRAISE` plus the port's `splraiseipl()` already reduce to
+`RDSPR` and `DI`, so an uncontended `mutex_spin_enter` is a handful of
+instructions with no call frame.  And `kern_mutex.c:269-272` undefines
+both macros under `LOCKDEBUG`, so a debug kernel keeps the C path —
+a safe way to stage the work.
+
+The coupling to record: an inline fast path is another non-atomic
+read-modify-write sequence, with exactly the problem [the CAS
+has](#kernel-interlocked-atomics-are-not-atomic-against-interrupts).
+Whatever restart mechanism that gets, the fast paths want the same one,
+and each new region adds a handful of enumerable interruption points to
+the same test.
+
+Inlining is also why `__HAVE_ATOMIC_AS_MEMBAR` was declined.  The flag
+asserts that the port's atomics carry barrier semantics, which holds
+today only because they are out-of-line calls and therefore compiler
+barriers — the hardware fences are already no-ops
+(`membar_ops_nop.c`), so the flag would remove nothing but that.  Inline
+fast paths remove the compiler barrier, and a DMA engine would remove
+the uniprocessor argument for no-op fences altogether.  Measured worth
+at the time: 35 membar calls down to 7 across eight hot files.
+
 ## Kernel: per-CPU data layout and cache-line tuning
 
 `cpu_info_store` is the hottest data structure in the kernel: every
@@ -5687,24 +5800,24 @@ interrupt touches `ci_idepth`, and every spin-mutex acquire and release
 touches `ci_mtx_count`.  Its layout has never been designed, only
 accreted, and the MI half of it is padded for a machine we are not.
 
-### Cache-line constants describe someone else's machine
+### Cache-line constants: measure what the smaller padding bought
 
-`COHERENCY_UNIT` and `CACHE_LINE_SIZE` are still at the `sys/param.h`
-default of 64 bytes, while the L1 line is 16.  `__cacheline_aligned`
-expands to `__aligned(COHERENCY_UNIT)` plus a `.data.cacheline_aligned`
-section (`sys/cdefs_elf.h`), and 67 files under `kern/`, `uvm/`, `net/`
-and `sys/` use it — all to keep unrelated fields off one another's
-lines, which is false sharing between CPUs that a uniprocessor cannot
-have.  Overriding both to 16 in `machine/param.h` shrinks that padding
-kernel-wide, which is footprint on a 4 KB L1 rather than an alignment
-correctness question.
+`COHERENCY_UNIT` is 16, the true line size, and `CACHE_LINE_SIZE` is 32,
+the smallest value MI code supports (`netinet/tcp_vtw.c` packs a fat
+pointer's tags into one line and asserts 32, 64 or 128).  Both were at
+the generic 64, padding structures apart against false sharing a
+uniprocessor cannot have.
 
-The one knock-on found so far is `MIN_LWP_ALIGNMENT`, which falls from
-64 to 32, and `sys/param.h` states 32 as the actual requirement (it
-counts when packing a lock byte alongside an LWP pointer).  Measure the
-`.data.cacheline_aligned` section size and the total BSS before and
-after; a syscall loop's L1d miss count from `machdep.cache.*` is the
-behavioural half.
+Per-structure effect, measured by compiling a probe: `struct filedesc`
+652 → 460 bytes, `struct proc` 640 → 560, `struct kauth_cred` 164 → 116,
+`FDFILE_SIZE` 64 → 32 (per open descriptor), `struct pool_cache` 448 →
+416.  `MIN_LWP_ALIGNMENT` follows `COHERENCY_UNIT` down from 64 to 32,
+which `sys/param.h` gives as the real requirement.
+
+What is not measured is the whole-kernel effect: compare the
+`.data.cacheline_aligned` section size and total BSS against a kernel
+built with the generic values, and take a syscall loop's L1d miss count
+from `machdep.cache.*` for the behavioural half.
 
 ### The port's own fields fit in padding that already exists
 
