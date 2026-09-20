@@ -31,7 +31,8 @@ static char  *outbuf;		/* assembled frame, flushed in one write(2) */
 static size_t outcap, outlen;
 static scr_attr cur_attr;	/* SGR currently asserted while flushing */
 
-static int out_fd = -1;		/* terminal fd; -1 suppresses write(2) */
+static int out_fd = -1;		/* terminal drawn on; -1 suppresses write(2) */
+static int in_fd = STDIN_FILENO;	/* terminal keys are read from */
 static struct termios saved_tio;
 static int tio_saved;
 
@@ -271,7 +272,7 @@ query_size(int *r, int *c)
 	struct winsize ws;
 	const char *e;
 
-	if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 &&
+	if (ioctl(out_fd, TIOCGWINSZ, &ws) == 0 &&
 	    ws.ws_row > 0 && ws.ws_col > 0) {
 		*r = ws.ws_row;
 		*c = ws.ws_col;
@@ -299,19 +300,31 @@ int  scr_cols(void) { return cols; }
 int
 scr_init(void)
 {
+	return scr_init_on(STDOUT_FILENO);
+}
+
+int
+scr_init_on(int outfd)
+{
 	struct termios t;
 	int r, c;
 
-	out_fd = STDOUT_FILENO;
+	out_fd = outfd;
 	query_size(&r, &c);
 	if (alloc_buffers(r, c) < 0)
 		return -1;
-	if (tcgetattr(STDIN_FILENO, &saved_tio) == 0) {
+	/*
+	 * Raw mode goes on the terminal keys arrive from, which is not
+	 * the one drawn on when the display was pointed elsewhere: the
+	 * session stays where it started while the picture sits on the
+	 * console.
+	 */
+	if (tcgetattr(in_fd, &saved_tio) == 0) {
 		t = saved_tio;
 		t.c_lflag &= ~(ICANON | ECHO);	/* keep ISIG: Ctrl-C quits */
 		t.c_cc[VMIN] = 0;
 		t.c_cc[VTIME] = 0;
-		tcsetattr(STDIN_FILENO, TCSANOW, &t);
+		tcsetattr(in_fd, TCSANOW, &t);
 		tio_saved = 1;
 	}
 	/* Alt screen where it exists, then an explicit clear and home:
@@ -330,7 +343,7 @@ scr_shutdown(void)
 	 * screen instead of the last frame. */
 	term_write("\x1b[0m\x1b[?25h\x1b[?1049l\x1b[2J\x1b[H");
 	if (tio_saved) {
-		tcsetattr(STDIN_FILENO, TCSANOW, &saved_tio);
+		tcsetattr(in_fd, TCSANOW, &saved_tio);
 		tio_saved = 0;
 	}
 	free(back);
@@ -376,12 +389,12 @@ scr_getkey(int timeout_ms)
 	struct pollfd p;
 	unsigned char ch;
 
-	p.fd = STDIN_FILENO;
+	p.fd = in_fd;
 	p.events = POLLIN;
 	p.revents = 0;
 	if (poll(&p, 1, timeout_ms) <= 0)
 		return -1;
-	if (read(STDIN_FILENO, &ch, 1) != 1)
+	if (read(in_fd, &ch, 1) != 1)
 		return -1;
 	return (int)ch;
 }

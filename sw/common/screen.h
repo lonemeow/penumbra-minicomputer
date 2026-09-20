@@ -50,6 +50,11 @@ ATTR(int fg, int bg, int bold)
  * Returns 0 on success, -1 on failure (terminal left untouched). */
 int  scr_init(void);
 
+/* The same, drawing on an already-open terminal rather than stdout and
+ * sizing itself from that one.  Keys still come from stdin, so a
+ * display can be put on the console from a session elsewhere. */
+int  scr_init_on(int outfd);
+
 /* Restore the cursor, leave the alternate screen, restore termios. */
 void scr_shutdown(void);
 

@@ -2,8 +2,8 @@
 #
 # Cross-compiles with the in-tree LLVM toolchain against the NetBSD
 # sysroot from build.sh distribution.  No libcurses/libterminfo: the
-# renderer (screen.c) emits ANSI directly, so the static binary has no
-# terminfo-database dependency on the target.
+# screen layer under sw/common emits ANSI directly, so the static
+# binary has no terminfo-database dependency on the target.
 #
 # Output: build/penmon/penmon (dynamic), build/penmon/penmon-static
 
@@ -11,6 +11,7 @@ PROJROOT    := $(realpath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 LLVM_PREFIX ?= $(PROJROOT)/build/llvm
 DESTDIR     ?= $(PROJROOT)/build/netbsd-dest
 OVERLAY_ROOT ?= $(PROJROOT)/build/netbsd-overlay
+COMMON      := $(PROJROOT)/sw/common
 
 CC          := $(LLVM_PREFIX)/bin/clang
 TARGET      := penumbra-unknown-netbsd
@@ -18,7 +19,7 @@ COPT        ?= -O2
 
 CFLAGS      := --target=$(TARGET) --sysroot=$(DESTDIR) $(COPT) \
                -Wall -Wextra -Wno-unused-parameter \
-               -I$(dir $(lastword $(MAKEFILE_LIST)))
+               -I$(dir $(lastword $(MAKEFILE_LIST))) -I$(COMMON)
 
 LDLIBS      :=
 LDFLAGS_DYN := --target=$(TARGET) --sysroot=$(DESTDIR)
@@ -27,10 +28,11 @@ LDFLAGS_STA := --target=$(TARGET) --sysroot=$(DESTDIR) -static
 BUILDDIR    := $(PROJROOT)/build/penmon
 OBJDIR      := $(BUILDDIR)/obj
 
-SRCS        := penmon.c sample.c render.c proc.c screen.c
-OBJS        := $(addprefix $(OBJDIR)/,$(SRCS:.c=.o))
+SRCS        := penmon.c sample.c render.c proc.c
+COMMON_SRCS := screen.c
+OBJS        := $(addprefix $(OBJDIR)/,$(SRCS:.c=.o) $(COMMON_SRCS:.c=.o))
 
-# Host unit test for the screen damage-diff (no cross-toolchain needed).
+# Host unit test for the renderer's readouts (no cross-toolchain needed).
 HOSTCC      ?= cc
 
 .PHONY: all dynamic static overlay test clean
@@ -46,11 +48,10 @@ overlay: static
 	install -m 0755 $(BUILDDIR)/penmon-static \
 	    $(OVERLAY_ROOT)/usr/local/bin/penmon
 
-# Build and run the host unit tests: the screen damage-diff, and the
-# renderer's fixed-point readouts.
-test: $(BUILDDIR)/screen_test $(BUILDDIR)/render_test
-	$(BUILDDIR)/screen_test
-	@echo
+# Build and run the host unit test for the renderer's fixed-point
+# readouts.  The screen layer it draws through carries its own test,
+# run by make -C sw/common test.
+test: $(BUILDDIR)/render_test
 	$(BUILDDIR)/render_test
 
 $(BUILDDIR)/penmon: $(OBJS) | $(BUILDDIR)
@@ -59,15 +60,15 @@ $(BUILDDIR)/penmon: $(OBJS) | $(BUILDDIR)
 $(BUILDDIR)/penmon-static: $(OBJS) | $(BUILDDIR)
 	$(CC) $(LDFLAGS_STA) $(OBJS) $(LDLIBS) -o $@
 
-$(BUILDDIR)/screen_test: screen_test.c screen.c screen.h | $(BUILDDIR)
-	$(HOSTCC) -Wall -Wextra -I. screen_test.c screen.c -o $@
+$(BUILDDIR)/render_test: render_test.c render.c $(COMMON)/screen.c penmon.h \
+    $(COMMON)/screen.h | $(BUILDDIR)
+	$(HOSTCC) -Wall -Wextra -Wno-unused-parameter -I. -I$(COMMON) \
+	    render_test.c render.c $(COMMON)/screen.c -o $@
 
-$(BUILDDIR)/render_test: render_test.c render.c screen.c penmon.h screen.h \
-    | $(BUILDDIR)
-	$(HOSTCC) -Wall -Wextra -Wno-unused-parameter -I. \
-	    render_test.c render.c screen.c -o $@
+$(OBJDIR)/%.o: %.c penmon.h $(COMMON)/screen.h | $(OBJDIR)
+	$(CC) $(CFLAGS) -c $< -o $@
 
-$(OBJDIR)/%.o: %.c penmon.h screen.h | $(OBJDIR)
+$(OBJDIR)/%.o: $(COMMON)/%.c $(COMMON)/screen.h | $(OBJDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILDDIR) $(OBJDIR):
