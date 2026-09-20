@@ -191,11 +191,32 @@ cell, which is what makes the larger grids affordable.
 
 ##### Attributes
 `ATTR` is `FG` (bits [3:0]) and `BG` (bits [7:4]) — indices into the
-active 16-color palette. The built-in default palette is CGA/ANSI order
-(`0` black … `7` light grey … `15` white); a device with `CAP.PALETTE`
-can substitute a custom palette through the [`PALETTE`](#palette-0x040)
-aperture and `CTRL.PAL_SEL`. The mandated default is `FG=7, BG=0`
-(`ATTR = 0x07`) — light grey on black in the built-in palette.
+active 16-color palette. The built-in default palette is **CGA order**,
+with bit [3] as the intensity bit:
+
+| Index | Color | Index | Color |
+|-------|-------|-------|-------|
+| `0`   | black | `8`   | dark grey |
+| `1`   | blue  | `9`   | bright blue |
+| `2`   | green | `10`  | bright green |
+| `3`   | cyan  | `11`  | bright cyan |
+| `4`   | red   | `12`  | bright red |
+| `5`   | magenta | `13` | bright magenta |
+| `6`   | brown | `14`  | yellow |
+| `7`   | light grey | `15` | white |
+
+CGA order is **not** ANSI/ECMA-48 order: the two disagree in bit [0] and
+bit [2], so indices `1`/`4` (blue, red) and `3`/`6` (cyan, brown) name
+opposite colors under the two conventions, while `0`, `2`, `5` and `7`
+agree. A consumer that carries ANSI color numbers — anything driving the
+device from SGR escape sequences — must permute those two bits before
+writing `ATTR`.
+
+A device with `CAP.PALETTE` can substitute a custom palette through the
+[`PALETTE`](#palette-0x040) aperture and `CTRL.PAL_SEL`; this changes
+what each index renders as, never what an index means in `ATTR`. The
+mandated default is `FG=7, BG=0` (`ATTR = 0x07`) — light grey on black
+in the built-in palette.
 
 The encoding is uniform across all devices so generic firmware writes one
 value everywhere, but **color rendering is not required**. A monochrome
