@@ -20,7 +20,7 @@
 #include <unistd.h>
 
 struct cell {
-	uint16_t ch;		/* Unicode code point; penmon's glyphs are <= U+2591 */
+	uint16_t ch;		/* an ASCII byte, or SCR_ACS | a DEC graphics one */
 	scr_attr attr;		/* packed fg/bg/bold — 4-byte cell, no padding */
 };
 

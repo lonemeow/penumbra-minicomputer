@@ -2,7 +2,7 @@
 /*
  * Host unit test for the screen damage-diff (screen.c).
  *
- *   make test            (from sw/penmon)
+ *   make test            (from sw/common)
  *   # or: cc -I. screen_test.c screen.c -o screen_test && ./screen_test
  *
  * Uses scr_init_mem() so it never touches a real terminal: scr_flush()

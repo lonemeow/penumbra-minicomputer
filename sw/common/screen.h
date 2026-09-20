@@ -2,23 +2,23 @@
 /*
  * screen — a tiny virtual-screen / damage-diff terminal layer.
  *
- * Replaces libcurses for penmon.  The renderer draws into an off-screen
- * cell grid (the "back" buffer); scr_flush() diffs it against what is
- * already on the terminal (the "front" buffer) and emits only the
- * changed cells as one ANSI byte stream written with a single write(2).
+ * A caller draws into an off-screen cell grid (the "back" buffer);
+ * scr_flush() diffs it against what is already on the terminal (the
+ * "front" buffer) and emits only the changed cells as one ANSI byte
+ * stream written with a single write(2).
  *
  * This keeps curses' cheap half — the virtual-screen diff — and drops
- * its expensive half: NetBSD libcurses flushes (hence write(2)s) once
- * per character, which is why penmon repainted so slowly over the
- * 115200 serial console.  One frame here is one syscall.
+ * its expensive half: NetBSD libcurses writes once per character, at a
+ * cost a full-screen redraw cannot carry over a 115200 serial line.
+ * One frame here is one syscall.
  *
  * Glyphs outside ASCII are emitted from DEC Special Graphics rather
  * than as UTF-8, so the byte stream does not depend on a locale at
  * either end — only on the terminal being VT100-family, which the
  * NetBSD console and every serial terminal emulator both are.
  */
-#ifndef PENMON_SCREEN_H
-#define PENMON_SCREEN_H
+#ifndef PENUMBRA_SCREEN_H
+#define PENUMBRA_SCREEN_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -136,4 +136,4 @@ int         scr_row_text(int y, char *buf, size_t bufsz);
  * assert on colour and not just on text.  Off-screen reads give 0. */
 scr_attr    scr_cell_attr(int y, int x);
 
-#endif /* PENMON_SCREEN_H */
+#endif /* PENUMBRA_SCREEN_H */
