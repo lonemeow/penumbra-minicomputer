@@ -345,7 +345,7 @@ def assemble_line(mnemonic, operands, addr, labels, line_num, constants=None):
 
     # ── Pseudo-instructions ──
     if mn == "NOP":
-        return encode_format_r(0, 0, 0, 0)  # ADD R0, R0
+        return encode_format_r(8, 0, 0, 0)  # MOV R0, R0: writes no flags
     if mn == "RET":
         return encode_format_l(11, 13, 0)  # JMP R13 (Format L, op=11)
 
