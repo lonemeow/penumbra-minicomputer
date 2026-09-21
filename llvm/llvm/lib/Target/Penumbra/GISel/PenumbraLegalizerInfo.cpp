@@ -95,10 +95,10 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   // to __mulodi4 when available).
   //
   // G_UMULO at s32/s64: .lower() expands to G_MUL + G_UMULH + ICMP_NE at the
-  // original width.  At s32 the G_UMULH lowers via widening to s64 (so the
-  // wide G_MUL libcalls __muldi3 once).  At s64 the G_UMULH narrows to s32
-  // partial products via the G_UMULH rule below.  The trailing .lower() is a
-  // safety net for any width that didn't match lowerFor after widening.
+  // original width.  At s32 the G_UMULH is legal, the high half of one
+  // hardware multiply.  At s64 the G_UMULH narrows to s32 partial products
+  // via the G_UMULH rule below.  The trailing .lower() is a safety net for
+  // any width that didn't match lowerFor after widening.
   //
   // G_SMULO at s32: same .lower() expansion via G_SMULH at s32.
   // G_SMULO at s64: deliberately unhandled — will hard-error if it ever

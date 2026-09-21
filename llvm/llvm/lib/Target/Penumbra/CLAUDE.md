@@ -183,8 +183,10 @@ shapes:
   variable case selects to the divmul peer unit. G_SDIVREM /
   G_UDIVREM legal at s32 (DIV_P/DIVU_P produce quotient and
   remainder in one operation; the -O1+ combiner fuses adjacent
-  div/rem pairs into this form). s64 libcalls throughout, except a
-  32×32→64 widening multiply, which emits a G_MUL + G_S/UMULH pair.
+  div/rem pairs into this form). s64 divide and remainder are
+  libcalls. Wider multiplies stay inline: a 32×32→64 widening
+  multiply is one G_MUL + G_S/UMULH pair, and any other s64 or s128
+  multiply splits into s32 partial products.
 - Min/max/abs/popcount/ctlz/cttz/bswap/bitreverse: lowered to
   shift/logic. G_BSWAP at s64 narrows to two s32 first, then
   lowers — see `doc/llvm-lowerBswap-bug.md` for why we don't lower
