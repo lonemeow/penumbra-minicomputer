@@ -141,10 +141,6 @@ intr_dispatch(void)
 	struct intrhand *ih;
 	int claimed = 0;
 
-	/* The MI interrupt count, exported as vm.uvmexp2.intrs — one
-	 * per hardware interrupt taken, not per handler that claims it. */
-	curcpu()->ci_data.cpu_nintr++;
-
 	LIST_FOREACH(ih, &intr_handlers, ih_link) {
 		int res = ih->ih_fun(ih->ih_arg);
 		if (res) {

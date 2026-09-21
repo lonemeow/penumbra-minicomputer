@@ -112,7 +112,7 @@ trap(struct trapframe *tf)
 		timer_tc_tick();
 
 		timer_evcnt.ev_count++;
-		CPU_COUNT(CPU_COUNT_NINTR, 1);
+		CPU_COUNT(CPU_COUNT_NINTR, 1);	/* see EXC_EXT_IRQ */
 
 		struct clockframe cf;
 		cf.cf_pc = tf->tf_epc;
@@ -129,6 +129,11 @@ trap(struct trapframe *tf)
 		 * Shared IRQ line: no interrupt controller.
 		 * intr_dispatch() walks every registered handler and
 		 * each device identifies itself via its status register.
+		 *
+		 * Both interrupt sources are counted here rather than
+		 * further in, so vm.uvmexp2.intrs is one per hardware
+		 * interrupt taken — not per handler that claims it, and
+		 * not missing the timer, which never reaches intr.c.
 		 */
 		CPU_COUNT(CPU_COUNT_NINTR, 1);
 		curcpu()->ci_idepth++;
