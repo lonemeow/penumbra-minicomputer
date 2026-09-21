@@ -323,6 +323,30 @@ tick_effect(struct replay *r, struct replay_chan *c, struct replay_voice *v)
 	}
 }
 
+/*
+ * Where a sample plays from: ProTracker plays a looping sample through
+ * to the end of its loop first, or to the end of the sample when the
+ * loop starts at 0, and then repeats the loop.  What follows the pass
+ * is known whatever starts it; the first pass only matters to a start,
+ * and an offset past it leaves nothing to play before the loop.
+ */
+static void
+sample_regions(const struct mod_sample *smp, uint32_t offset, bool start,
+    struct replay_voice *v)
+{
+	uint32_t first = smp->length;
+
+	if (smp->loop_length != 0 && smp->loop_start != 0)
+		first = smp->loop_start + smp->loop_length;
+
+	v->loop.offset = smp->offset + smp->loop_start;
+	v->loop.length = smp->loop_length;
+	if (start && offset < first) {
+		v->play.offset = smp->offset + offset;
+		v->play.length = first - offset;
+	}
+}
+
 /* ── Rows ────────────────────────────────────────────────────── */
 
 static void
@@ -377,7 +401,7 @@ row_start(struct replay *r, struct replay_tick *t)
 				if (n->effect == 0x9) {
 					if (n->param != 0)
 						c->offset = (uint32_t)n->param << 8;
-					v->offset = c->offset;
+					c->trigger_offset = c->offset;
 				}
 			}
 		}
@@ -398,7 +422,7 @@ row_start(struct replay *r, struct replay_tick *t)
 		 * registers, so it takes over when the current pass ends.
 		 */
 		if (n->sample != 0 && !v->trigger)
-			v->swap = true;
+			v->relatch = true;
 
 		row_effect(r, c);
 		c->out_period = c->period;
@@ -478,6 +502,9 @@ replay_next(struct replay *r, struct replay_tick *t)
 		return false;
 
 	memset(t, 0, sizeof(*t));
+	/* Only a row's own 9xx starts anywhere but the sample's start. */
+	for (ch = 0; ch < MOD_CHANNELS; ch++)
+		r->chan[ch].trigger_offset = 0;
 	if (r->tick == 0 && !r->repeating) {
 		row_start(r, t);
 		if (r->ended)		/* F00 stops the song on its row */
@@ -497,9 +524,12 @@ replay_next(struct replay *r, struct replay_tick *t)
 		const struct replay_chan *c = &r->chan[ch];
 		struct replay_voice *v = &t->voice[ch];
 
-		v->sample = c->sample;
+		v->instrument = c->sample;
 		v->period = c->out_period;
 		v->volume = c->out_volume;
+		if (c->sample != 0 && (v->trigger || v->relatch))
+			sample_regions(&r->mod->sample[c->sample],
+			    c->trigger_offset, v->trigger, v);
 	}
 
 	advance(r);

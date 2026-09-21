@@ -64,7 +64,8 @@ struct player {
 
 	/* What each voice was last told, so only changes are sent. */
 	struct {
-		int		sample;		/* 0 = silent */
+		bool		sounding;	/* started, and not since stopped */
+		struct replay_region loop;	/* what follows its pass */
 		uint32_t	inc;
 		uint16_t	vol_l, vol_r;
 	} voice[MOD_CHANNELS];
@@ -159,30 +160,10 @@ voice_gain(int ch, int volume, uint16_t *left, uint16_t *right)
 	}
 }
 
-/*
- * Where a sample starts: ProTracker plays a looping sample through to
- * the end of its loop first, or to the end of the sample when the loop
- * starts at 0, and then repeats the loop.  Returns false when there is
- * nothing to play — an empty sample, or an offset past the end of one
- * that does not loop.
- */
 static bool
-sample_start(const struct mod_sample *smp, uint32_t offset,
-    struct penaudio_event *e)
+region_eq(const struct replay_region *a, const struct replay_region *b)
 {
-	uint32_t first = smp->length;
-
-	if (smp->loop_length != 0 && smp->loop_start != 0)
-		first = smp->loop_start + smp->loop_length;
-
-	e->pe_format = PENAUDIO_FMT_S8;
-	e->pe_loop.pr_offset = smp->offset + smp->loop_start;
-	e->pe_loop.pr_length = smp->loop_length;
-	if (offset < first) {
-		e->pe_play.pr_offset = smp->offset + offset;
-		e->pe_play.pr_length = first - offset;
-	}
-	return e->pe_play.pr_length != 0 || e->pe_loop.pr_length != 0;
+	return a->offset == b->offset && a->length == b->length;
 }
 
 /* One voice's event for a tick: whatever changed since the last. */
@@ -190,31 +171,37 @@ static void
 voice_event(struct player *p, int ch, const struct replay_voice *v,
     struct penaudio_event *e)
 {
-	const struct mod_sample *smp = &p->mod->sample[v->sample];
 	uint16_t vol_l, vol_r;
 	uint32_t inc;
 	bool started = false;
 
-	if (v->sample == 0 || v->period == 0)
+	if (v->instrument == 0 || v->period == 0)
 		return;
 
 	if (v->trigger) {
-		if (sample_start(smp, v->offset, e)) {
-			e->pe_set |= PENAUDIO_SET_PLAY;
-			p->voice[ch].sample = v->sample;
-			started = true;
-		} else {
+		/* A start with nothing in either pass is a sound that
+		 * cannot begin, so what was playing falls silent. */
+		if (v->play.length == 0 && v->loop.length == 0) {
 			e->pe_set |= PENAUDIO_SET_STOP;
-			p->voice[ch].sample = 0;
+			p->voice[ch].sounding = false;
 			return;
 		}
-	} else if (v->swap && p->voice[ch].sample != 0 &&
-	    v->sample != p->voice[ch].sample) {
+		e->pe_set |= PENAUDIO_SET_PLAY;
+		e->pe_format = PENAUDIO_FMT_S8;
+		e->pe_play.pr_offset = v->play.offset;
+		e->pe_play.pr_length = v->play.length;
+		e->pe_loop.pr_offset = v->loop.offset;
+		e->pe_loop.pr_length = v->loop.length;
+		p->voice[ch].sounding = true;
+		p->voice[ch].loop = v->loop;
+		started = true;
+	} else if (v->relatch && p->voice[ch].sounding &&
+	    !region_eq(&v->loop, &p->voice[ch].loop)) {
 		e->pe_set |= PENAUDIO_SET_LOOP;
 		e->pe_format = PENAUDIO_FMT_S8;
-		e->pe_loop.pr_offset = smp->offset + smp->loop_start;
-		e->pe_loop.pr_length = smp->loop_length;
-		p->voice[ch].sample = v->sample;
+		e->pe_loop.pr_offset = v->loop.offset;
+		e->pe_loop.pr_length = v->loop.length;
+		p->voice[ch].loop = v->loop;
 	}
 
 	inc = period_inc(v->period);

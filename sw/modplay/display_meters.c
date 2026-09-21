@@ -101,7 +101,7 @@ draw(const struct display_tick *dt)
 		scr_printf(row, 0, ATTR(C_DEFAULT, C_DEFAULT, 0), "%2d", ch + 1);
 		scr_printf(row, COL_NAME, ATTR(C_YELLOW, C_DEFAULT, 0),
 		    "%-*.*s", NAME_W, NAME_W,
-		    v->sample != 0 ? mod->sample[v->sample].name : "");
+		    v->instrument != 0 ? mod->sample[v->instrument].name : "");
 
 		filled = fix16_to_int(fix16_scale(meter[ch], width,
 		    METER_MAX));

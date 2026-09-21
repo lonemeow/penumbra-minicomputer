@@ -2,9 +2,11 @@
  * A ProTracker replayer, as a sequence of ticks.
  *
  * Each call yields one tick: where it falls in the song, its tempo, and
- * what each channel plays during it, in the module's own terms — Amiga
- * periods, volumes of 0..64, and sample starts.  Turning that into
- * sound is the caller's business.
+ * what each channel plays during it — Amiga periods, volumes of 0..64,
+ * and the regions of sample memory each pass plays.  Which samples a
+ * module holds and where each one's loop begins are the replayer's
+ * business, so a tick describes sound rather than a sample table, and
+ * turning it into sound is the caller's.
  */
 
 #ifndef MODPLAY_REPLAY_H
@@ -19,11 +21,18 @@
  * runs it. */
 #define	REPLAY_TICK_US(bpm)	(2500000 / (bpm))
 
+/* A run of sample memory, in bytes; a length of 0 is nothing. */
+struct replay_region {
+	uint32_t	offset;
+	uint32_t	length;
+};
+
 struct replay_voice {
-	bool		trigger;	/* the sample restarts this tick */
-	uint32_t	offset;		/*  ... this many bytes in */
-	bool		swap;		/* a new sample follows the current pass */
-	int		sample;		/* 1..31; 0 = none yet */
+	bool		trigger;	/* play restarts from `play` this tick */
+	bool		relatch;	/* `loop` takes over after this pass */
+	struct replay_region play;	/* on a trigger: the first pass */
+	struct replay_region loop;	/* repeats after it; empty = one-shot */
+	int		instrument;	/* what a display names; 0 = none yet */
 	int		period;		/* Amiga period; 0 = nothing to play */
 	int		volume;		/* 0..64 */
 };
@@ -51,6 +60,7 @@ struct replay_chan {
 	int		loop_row;	/* row a pattern loop returns to */
 	int		loop_count;	/* passes left; 0 = none running */
 	uint32_t	offset;		/* sample offset, remembered */
+	uint32_t	trigger_offset;	/* where this tick's start plays from */
 };
 
 struct replay {

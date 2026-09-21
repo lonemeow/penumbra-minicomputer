@@ -108,7 +108,7 @@ tick_at(uint64_t us, int row, bool trigger, int volume)
 	dt.tick.row = row;
 	dt.tick.speed = 6;
 	dt.tick.bpm = 125;
-	dt.tick.voice[0].sample = 1;
+	dt.tick.voice[0].instrument = 1;
 	dt.tick.voice[0].period = 428;
 	dt.tick.voice[0].volume = volume;
 	dt.tick.voice[0].trigger = trigger;
