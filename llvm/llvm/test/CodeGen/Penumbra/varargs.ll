@@ -178,3 +178,54 @@ define i32 @many_named_i64(i32 %a, i32 %b, i32 %c, i32 %d, i64 %e, i32 %f, ...) 
   call void @llvm.va_end(ptr %vl)
   ret i32 %arg
 }
+
+; The named argument is spilled with the other register slots and still
+; read by the body.  The spill stores R1 itself rather than a copy of it:
+; machine copy propagation forwards R1 into the store and deletes the copy,
+; which it may do only because the target sets AllowRegisterRenaming.
+define i32 @sum_counted(i32 %n, ...) {
+; CHECK-LABEL: sum_counted:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  // %bb.0: // %entry
+; CHECK-NEXT:    sub sp, 20
+; CHECK-NEXT:    stw r1, [sp + 4]
+; CHECK-NEXT:    stw r2, [sp + 8]
+; CHECK-NEXT:    stw r3, [sp + 12]
+; CHECK-NEXT:    stw r4, [sp + 16]
+; CHECK-NEXT:    mov r2, sp
+; CHECK-NEXT:    add r2, 8
+; CHECK-NEXT:    stw r2, [sp + 0]
+; CHECK-NEXT:    mov r2, zero
+; CHECK-NEXT:    cmp r1, 0
+; CHECK-NEXT:    beq .LBB6_2
+; CHECK-NEXT:  .LBB6_1: // %loop
+; CHECK-NEXT:    // =>This Inner Loop Header: Depth=1
+; CHECK-NEXT:    ldw r3, [sp + 0]
+; CHECK-NEXT:    ldw r4, [r3 + 0]
+; CHECK-NEXT:    add r3, 4
+; CHECK-NEXT:    stw r3, [sp + 0]
+; CHECK-NEXT:    add r2, r4
+; CHECK-NEXT:    sub r1, 1
+; CHECK-NEXT:    bne .LBB6_1
+; CHECK-NEXT:  .LBB6_2: // %done
+; CHECK-NEXT:    mov r1, r2
+; CHECK-NEXT:    add sp, 20
+; CHECK-NEXT:    jmp lr
+entry:
+  %vl = alloca ptr, align 4
+  call void @llvm.va_start(ptr %vl)
+  %none = icmp eq i32 %n, 0
+  br i1 %none, label %done, label %loop
+loop:
+  %i = phi i32 [ %n, %entry ], [ %i.next, %loop ]
+  %s = phi i32 [ 0, %entry ], [ %s.next, %loop ]
+  %arg = va_arg ptr %vl, i32
+  %s.next = add i32 %s, %arg
+  %i.next = sub i32 %i, 1
+  %more = icmp ne i32 %i.next, 0
+  br i1 %more, label %loop, label %done
+done:
+  %r = phi i32 [ 0, %entry ], [ %s.next, %loop ]
+  call void @llvm.va_end(ptr %vl)
+  ret i32 %r
+}

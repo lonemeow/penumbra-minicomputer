@@ -1170,7 +1170,7 @@ diagnostic paths.
 | "outgoing stack arguments address SP through a copy" — resolved | `mov x, sp` whose every read until `x` is rewritten could read `sp` | 10,361 (1.45%) | 1,593 (0.39%) | 51 | 3,611 (0.93%) | 1,790 / 200 |
 | "64-bit relational compares expand to select diamonds" | `sbc r, zero; and r, 1` | 1,686 | 1,161 | 271 | 12,473 | 161 / 85 |
 | "flag definitions stay live after C++ selection" (PIC anchors) | `add x, pc` / `mov x, pc` | 1 | 12,486 | 30 | 0 | 0 / 772 |
-| `AllowRegisterRenaming` (codegen pass/gate audit) | `mov x, zero` forwardable into a store; other forwardable copies | 353 + 190 | 258 + 244 | 23 + 54 | 10 + 784 | 37 / 14 |
+| `AllowRegisterRenaming` (codegen pass/gate audit) — resolved | `mov x, zero` forwardable into a store; other forwardable copies | 353 + 190 | 258 + 244 | 23 + 54 | 10 + 784 | 37 / 14 |
 | "InstCombine's shift-and-mask form costs a constant" | `llis t, -2^k; and y, t` | 414 | 304 | 14 | 234 | 67 / 22 |
 | "pointer-minus-constant and integer MMIO addresses miss their folds": MMIO | `add x, imm; ld/st [x + 0]`, `x` dead | 71 | 8 | 3 | 0 | 9 / 1 |
 | same entry: `p - K` | `llis t, -K; add y, t`, `t` dead | 54 | 80 | 3 | 2 | 8 / 6 |
@@ -1184,8 +1184,9 @@ way at 0.02–0.06% (in the audio-mixing review), and the 64-bit select
 of zero only concerns the 32.32 mixer loop.  The `mov x, zero` sites
 in the `AllowRegisterRenaming` row turned out to be mostly R0 missing
 from the value register class ("a constant zero is held in a
-register", resolved); what is left of them for copy forwarding are
-zeros copied into a PHI's register.
+register", resolved), and most of the row's other copies have a reader
+in another block, out of copy forwarding's reach: setting the flag
+removed 46 instructions from the `test-compiler` corpus.
 
 What follows, by value for effort:
 1. **SP copy** — resolved.  The largest static item and a contained
@@ -1287,9 +1288,11 @@ mov  r1, r3
 jmp  lr
 ```
 
-Only copy forwarding after register allocation removes that pair (see
-`AllowRegisterRenaming` in "codegen pass/gate audit").  The selector
-keeps its store-zero patch because `-O0` runs no coalescer.
+The copy and its reader share a block only once block placement has
+duplicated the return into its predecessors, after machine copy
+propagation's last run, so the pair survives `AllowRegisterRenaming`
+too (see it in "codegen pass/gate audit").  The selector keeps its
+store-zero patch because `-O0` runs no coalescer.
 
 ## Compiler: graceful-fail on unsupported inline asm and vector IR
 
@@ -3426,15 +3429,29 @@ targets opt into are silently off.  Status per item:
   definitions stay live after C++ selection", "Compiler: large frame
   offsets write the flags unchecked" and "Compiler: constants are not
   rematerializable".
-- **`AllowRegisterRenaming`** (every GlobalISel target in the tree
-  sets it): unset, so every operand carries
-  `ExtraSrcRegAllocReq`/`ExtraDefRegAllocReq`, `isRenamable()` is
-  false everywhere, and MachineCopyPropagation forwards and
-  propagates no copy at all, so a zero copied into a PHI's register
-  and on into another (`mov r3, zero; mov r1, r3`) stays.  Setting it
-  promises that no instruction has register requirements its operand
-  classes do not show; check the PIC anchor pairs and the R0-as-zero
-  operands before flipping it, then measure the copies it removes.
+- **`AllowRegisterRenaming` — DONE.**  Unset, every operand carried
+  `ExtraSrcRegAllocReq`/`ExtraDefRegAllocReq` and `isRenamable()` was
+  false everywhere, so MachineCopyPropagation could neither forward a
+  copy's source into its readers nor rename a definition into a
+  copy's destination, and PostRA machine sinking moved no copy.
+  Setting it promises that no instruction needs a register its
+  operand classes and tied constraints do not state.  Checked first:
+  the PIC anchor sequence is a tied chain, which renaming never
+  touches; the single-result `MUL`/`DIV` forms fix Rdh in the
+  encoding, not as an operand; and no inline asm in the tree writes
+  an undeclared input or relies on a register it does not name — the
+  boot jumps that clobber R1/R2 are covered by copy propagation
+  refusing to forward a register the instruction early-clobbers.
+  The effect is small: the `test-compiler` corpus at `-O2` loses 46
+  instructions (47 functions smaller, 3 larger where a copy sunk past
+  an early exit leaves the exit its own copy), Doom's twelve hot files
+  one.  The visible case is a variadic function spilling R1 without a
+  copy (`varargs.ll`'s `sum_counted`).  A copy whose reader is in
+  another block stays, among them the zero copies of "a constant zero
+  is held in a register", which meet their reader only after block
+  placement; RISC-V and AArch64 add a copy-propagation run after block
+  placement (`createMachineCopyPropagationPass(true)` in their
+  pre-emit passes).
 - **`enableSpillageCopyElimination`** (MachineCopyPropagation
   extension, X86 enables): cheap flip + measure.
 - **MachineOutliner / RISC-V-style save-restore millicode**: nothing

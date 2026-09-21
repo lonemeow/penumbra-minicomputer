@@ -20,7 +20,7 @@ define i32 @strcmp_like(ptr %a, ptr %b) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0: // %entry
 ; CHECK-NEXT:    mov r3, r1
-; CHECK-NEXT:    ldb r1, [r3 + 0]
+; CHECK-NEXT:    ldb r1, [r1 + 0]
 ; CHECK-NEXT:    cmp r1, 0
 ; CHECK-NEXT:    beq .LBB0_4
 ; CHECK-NEXT:  // %bb.1: // %loop.preheader

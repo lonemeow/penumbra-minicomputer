@@ -183,7 +183,7 @@ define i64 @load_i64_align1(ptr %p) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    mov r2, r1
-; CHECK-NEXT:    ldb r1, [r2 + 0]
+; CHECK-NEXT:    ldb r1, [r1 + 0]
 ; CHECK-NEXT:    ldb r3, [r2 + 1]
 ; CHECK-NEXT:    shl r3, 8
 ; CHECK-NEXT:    or r3, r1

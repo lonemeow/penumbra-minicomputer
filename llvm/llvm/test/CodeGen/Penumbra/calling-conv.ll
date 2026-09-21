@@ -43,7 +43,7 @@ define i32 @callee_saved(i32 %a) {
 ; CHECK-NEXT:    stw r5, [sp + 4] // 4-byte Folded Spill
 ; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r5, r1
-; CHECK-NEXT:    mov r2, r5
+; CHECK-NEXT:    mov r2, r1
 ; CHECK-NEXT:    bl extern_func
 ; CHECK-NEXT:    mov r2, r5
 ; CHECK-NEXT:    bl extern_func

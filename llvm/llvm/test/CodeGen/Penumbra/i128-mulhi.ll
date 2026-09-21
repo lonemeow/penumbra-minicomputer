@@ -161,7 +161,7 @@ define i64 @umulh64_load(ptr %p, i64 %b) {
 ; CHECK-NEXT:    mov r4, r2
 ; CHECK-NEXT:    ldw lr, [r1 + 0]
 ; CHECK-NEXT:    ldw r1, [r1 + 4]
-; CHECK-NEXT:    mov r11, r4
+; CHECK-NEXT:    mov r11, r2
 ; CHECK-NEXT:    mulu r11, zero, r2
 ; CHECK-NEXT:    mov r5, lr
 ; CHECK-NEXT:    mulu r5, zero, r11

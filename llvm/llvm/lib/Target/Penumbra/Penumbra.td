@@ -172,6 +172,9 @@ def Penumbra : Target {
   let InstructionSet = PenumbraInstrInfo;
   let AssemblyWriters = [PenumbraInstPrinter];
   let AssemblyParsers = [PenumbraAsmParser];
+  // Lets post-RA passes change allocated registers: no instruction needs a
+  // register its operand classes and tied constraints do not state.
+  let AllowRegisterRenaming = 1;
 }
 
 // Map LLVM's built-in ptr_rc pseudo-operands to our GPR class.
