@@ -16,7 +16,13 @@
 //
 //===----------------------------------------------------------------------===//
 
-def PenumbraInstrInfo : InstrInfo;
+// No guessing: the instruction-info backend never sees the patterns in
+// PenumbraGISel.td, so every guess would be "has side effects".  The
+// properties follow "Instruction Properties" in
+// doc/system/instruction-set.md.
+def PenumbraInstrInfo : InstrInfo {
+  let guessInstructionProperties = 0;
+}
 
 //===----------------------------------------------------------------------===//
 // Instruction format base classes
@@ -237,7 +243,7 @@ def WriteDiv : SchedWrite;
 // ALU instructions (Format R, prefix=00, op 0-11)
 //===----------------------------------------------------------------------===//
 
-let SchedRW = [WriteALU] in {
+let SchedRW = [WriteALU], hasSideEffects = 0, mayLoad = 0, mayStore = 0 in {
 let Defs = [SR], Constraints = "$Rd = $Rd_in" in {
   // 2-operand destructive: Rd = Rd op Rs.  All operands use GPR (full
   // class including R0, R12, R14, R15); the register allocator honours
@@ -308,9 +314,10 @@ let F = 1, isCompare = 1 in {
 // them apart by operand count; the disassembler by Inst[15:12] == 0.
 //===----------------------------------------------------------------------===//
 
-let Defs = [SR], hasSideEffects = 0 in {
-  // Single-result forms: Rdh fixed to R0, low half / quotient only.
-  let Constraints = "$Rd = $Rd_in" in {
+let Defs = [SR], mayLoad = 0, mayStore = 0,
+    Constraints = "$Rd = $Rd_in" in {
+  let hasSideEffects = 0 in {
+    // Single-result forms: Rdh fixed to R0, low half only.
     def MUL  : FormatR_DivMul<0b10000, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
                               "mul\t$Rd, $Rs"> {
       let Rdh = 0;
@@ -321,6 +328,22 @@ let Defs = [SR], hasSideEffects = 0 in {
       let Rdh = 0;
       let SchedRW = [WriteMul];
     }
+
+    // Pair forms: an explicit write-only Rdh captures the high half.
+    def MUL_P  : FormatR_DivMul<0b10000, (outs GPR:$Rd, GPR:$Rdh),
+                                (ins GPR:$Rd_in, GPR:$Rs), "mul\t$Rd, $Rs, $Rdh"> {
+      let SchedRW = [WriteMul];
+    }
+    def MULU_P : FormatR_DivMul<0b10001, (outs GPR:$Rd, GPR:$Rdh),
+                                (ins GPR:$Rd_in, GPR:$Rs), "mulu\t$Rd, $Rs, $Rdh"> {
+      let SchedRW = [WriteMul];
+    }
+  }
+
+  // A zero divisor traps, so a guarded divide must not be hoisted above
+  // its guard.
+  let hasSideEffects = 1 in {
+    // Single-result forms: Rdh fixed to R0, quotient only.
     def DIV  : FormatR_DivMul<0b10010, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
                               "div\t$Rd, $Rs"> {
       let Rdh = 0;
@@ -331,18 +354,8 @@ let Defs = [SR], hasSideEffects = 0 in {
       let Rdh = 0;
       let SchedRW = [WriteDiv];
     }
-  }
 
-  // Pair forms: an explicit write-only Rdh captures the high half / remainder.
-  let Constraints = "$Rd = $Rd_in" in {
-    def MUL_P  : FormatR_DivMul<0b10000, (outs GPR:$Rd, GPR:$Rdh),
-                                (ins GPR:$Rd_in, GPR:$Rs), "mul\t$Rd, $Rs, $Rdh"> {
-      let SchedRW = [WriteMul];
-    }
-    def MULU_P : FormatR_DivMul<0b10001, (outs GPR:$Rd, GPR:$Rdh),
-                                (ins GPR:$Rd_in, GPR:$Rs), "mulu\t$Rd, $Rs, $Rdh"> {
-      let SchedRW = [WriteMul];
-    }
+    // Pair forms: an explicit write-only Rdh captures the remainder.
     def DIV_P  : FormatR_DivMul<0b10010, (outs GPR:$Rd, GPR:$Rdh),
                                 (ins GPR:$Rd_in, GPR:$Rs), "div\t$Rd, $Rs, $Rdh"> {
       let SchedRW = [WriteDiv];
@@ -358,7 +371,7 @@ let Defs = [SR], hasSideEffects = 0 in {
 // Immediate instructions (Format L, prefix=01)
 //===----------------------------------------------------------------------===//
 
-let SchedRW = [WriteALU] in {
+let SchedRW = [WriteALU], hasSideEffects = 0, mayLoad = 0, mayStore = 0 in {
 def LLI  : FormatL<0b0000, (outs GPR:$Rd), (ins imm16op:$imm16),
                    "lli\t$Rd, $imm16">;
 def LLIS : FormatL<0b0001, (outs GPR:$Rd), (ins simm16op:$imm16),
@@ -402,7 +415,7 @@ let Defs = [SR] in {
 
 // Loads: L=1
 // $Rb uses GPR: allows R0 as base (zero-base addressing for low memory).
-let mayLoad = 1 in {
+let hasSideEffects = 0, mayLoad = 1, mayStore = 0 in {
   def LDW  : FormatM<1, 0b10, 0, (outs GPR:$Rd), (ins GPR:$Rb, memoffset16:$offset),
                      "ldw\t$Rd, [$Rb + $offset]">;
   def LDH  : FormatM<1, 0b01, 0, (outs GPR:$Rd), (ins GPR:$Rb, memoffset16:$offset),
@@ -419,7 +432,7 @@ let mayLoad = 1 in {
 // Both $Rd (data) and $Rb (base) use GPR: R0 is valid in both slots —
 // store-zero via R0 value is enabled by MachineCopyPropagation forwarding
 // from the `COPY $r0` that the selector emits for G_CONSTANT 0.
-let mayStore = 1 in {
+let hasSideEffects = 0, mayLoad = 0, mayStore = 1 in {
   def STW  : FormatM<0, 0b10, 0, (outs), (ins GPR:$Rd, GPR:$Rb, memoffset16:$offset),
                      "stw\t$Rd, [$Rb + $offset]">;
   def STH  : FormatM<0, 0b01, 0, (outs), (ins GPR:$Rd, GPR:$Rb, memoffset16:$offset),
@@ -432,6 +445,7 @@ let mayStore = 1 in {
 // Branch instructions (Format B, prefix=11)
 //===----------------------------------------------------------------------===//
 
+let hasSideEffects = 0, mayLoad = 0, mayStore = 0 in {
 let isBranch = 1, isTerminator = 1 in {
   def B    : FormatB<0b0000, (outs), (ins brtarget22:$target), "b\t$target"> {
     let isBarrier = 1;
@@ -456,8 +470,10 @@ let isBranch = 1, isTerminator = 1 in {
   }
 }
 
+// SR: BL leaves the flags alone, but the callee may not.
 let isCall = 1, Defs = [R13, SR] in
 def BL   : FormatB<0b1111, (outs), (ins brtarget22:$target), "bl\t$target">;
+} // hasSideEffects = 0, mayLoad = 0, mayStore = 0
 
 // Branch mnemonic aliases (ARM-style unsigned comparison synonyms).
 def : MnemonicAlias<"bhs", "bcs">;  // unsigned higher or same = carry set
@@ -467,12 +483,14 @@ def : MnemonicAlias<"blo", "bcc">;  // unsigned lower = carry clear
 // Indirect jump/call (Format L, prefix=01, op 11-12)
 //===----------------------------------------------------------------------===//
 
+let hasSideEffects = 0, mayLoad = 0, mayStore = 0 in {
 // JMP Rd — PC = Rd. Register in Rd field of Format L.
 // Assembler alias: RET = JMP R13.
 let isReturn = 1, isTerminator = 1, isBarrier = 1 in
 def JMP  : FormatL_Reg<0b1011, (outs), (ins GPR:$Rd), "jmp\t$Rd">;
 
-// JALR Rd — R13 = PC+4, PC = Rd. Indirect call via register.
+// JALR Rd — R13 = PC+4, PC = Rd. Indirect call via register.  SR as
+// for BL.
 let isCall = 1, Defs = [R13, SR] in
 def JALR : FormatL_Reg<0b1100, (outs), (ins GPR:$Rd), "jalr\t$Rd">;
 
@@ -482,12 +500,17 @@ def JALR : FormatL_Reg<0b1100, (outs), (ins GPR:$Rd), "jalr\t$Rd">;
 let isBranch = 1, isTerminator = 1, isBarrier = 1, isIndirectBranch = 1,
     isCodeGenOnly = 1 in
 def BRIND : FormatL_Reg<0b1011, (outs), (ins GPR:$Rd), "jmp\t$Rd">;
+} // hasSideEffects = 0, mayLoad = 0, mayStore = 0
 
 //===----------------------------------------------------------------------===//
 // System instructions (Format R, prefix=00, op 23-31)
 //===----------------------------------------------------------------------===//
 
-let isReturn = 1, isTerminator = 1, isBarrier = 1 in
+// Privileged or trapping, and governing the loads and stores around them
+// (translation, caching, interrupt masking).
+let hasSideEffects = 1, mayLoad = 0, mayStore = 0 in {
+// ERET reloads all of SR, flags included, from ESR.
+let isReturn = 1, isTerminator = 1, isBarrier = 1, Defs = [SR] in
 def ERET : FormatR_NoReg<0b11011, (outs), (ins), "eret">;
 
 def EI   : FormatR_NoReg<0b11100, (outs), (ins), "ei">;
@@ -496,7 +519,6 @@ def DI   : FormatR_NoReg<0b11101, (outs), (ins), "di">;
 // WRSYS Rd, #dev, #reg — write Rd to system register.
 // Hardware reads source from Rd field (bits [24:21]).
 // Device ID in bits [15:12], register ID in bits [11:8].
-let hasSideEffects = 1 in
 def WRSYS : PenumbraInst<(outs), (ins GPR:$Rd, i32imm:$dev, i32imm:$reg),
                          "wrsys\t$Rd, $dev, $reg"> {
   bits<4> Rd;
@@ -514,7 +536,6 @@ def WRSYS : PenumbraInst<(outs), (ins GPR:$Rd, i32imm:$dev, i32imm:$reg),
 }
 
 // RDSYS Rd, #dev, #reg — read system register into Rd.
-let hasSideEffects = 1 in
 def RDSYS : PenumbraInst<(outs GPR:$Rd), (ins i32imm:$dev, i32imm:$reg),
                          "rdsys\t$Rd, $dev, $reg"> {
   bits<4> Rd;
@@ -532,8 +553,9 @@ def RDSYS : PenumbraInst<(outs GPR:$Rd), (ins i32imm:$dev, i32imm:$reg),
 }
 
 // RDSPR Rd, #spr — read special-purpose register into Rd.
-// SPR number in bits [15:12].  SPRs: ESR=0, EPC=1, USP=2.
-let hasSideEffects = 1 in
+// SPR number in bits [15:12].  SPRs: ESR=0, EPC=1, USP=2, SR=3.
+// Reading SR returns the live flags.
+let Uses = [SR] in
 def RDSPR : PenumbraInst<(outs GPR:$Rd), (ins i32imm:$spr),
                          "rdspr\t$Rd, $spr"> {
   bits<4> Rd;
@@ -550,7 +572,6 @@ def RDSPR : PenumbraInst<(outs GPR:$Rd), (ins i32imm:$spr),
 
 // WRSPR #spr, Rd — write Rd to special-purpose register.
 // Hardware reads source from Rd field (bits [24:21]), not Rs.
-let hasSideEffects = 1 in
 def WRSPR : PenumbraInst<(outs), (ins i32imm:$spr, GPR:$Rd),
                          "wrspr\t$spr, $Rd"> {
   bits<4> spr;
@@ -565,22 +586,29 @@ def WRSPR : PenumbraInst<(outs), (ins i32imm:$spr, GPR:$Rd),
   let Inst{11-0}  = 0;
 }
 
+// The flags afterwards are whatever the handler leaves in ESR.
+let Defs = [SR] in {
 def SYSCALL : FormatR_NoReg<0b11001, (outs), (ins), "syscall">;
 def BREAK   : FormatR_NoReg<0b11010, (outs), (ins), "break">;
+}
+} // hasSideEffects = 1, mayLoad = 0, mayStore = 0
 
 //===----------------------------------------------------------------------===//
 // Pseudo-instructions
 //===----------------------------------------------------------------------===//
 
-let isPseudo = 1 in {
+let isPseudo = 1, hasSideEffects = 0, mayLoad = 0, mayStore = 0 in {
   def NOP : PenumbraInst<(outs), (ins), "nop">;
 
   // Stack frame adjustment pseudo-instructions. Required by PenumbraGenInstrInfo.
-  // Converted to real SUBi/ADDi SP adjustments by PenumbraFrameLowering.
-  def ADJCALLSTACKDOWN : PenumbraInst<(outs), (ins i32imm:$amt1, i32imm:$amt2),
-                                      "# ADJCALLSTACKDOWN $amt1, $amt2">;
-  def ADJCALLSTACKUP   : PenumbraInst<(outs), (ins i32imm:$amt1, i32imm:$amt2),
-                                      "# ADJCALLSTACKUP $amt1, $amt2">;
+  // Converted to real SUBi/ADDi SP adjustments by PenumbraFrameLowering,
+  // which write the flags.  Defining SP makes each a scheduling boundary.
+  let hasSideEffects = 1, Defs = [R14, SR], Uses = [R14] in {
+    def ADJCALLSTACKDOWN : PenumbraInst<(outs), (ins i32imm:$amt1, i32imm:$amt2),
+                                        "# ADJCALLSTACKDOWN $amt1, $amt2">;
+    def ADJCALLSTACKUP   : PenumbraInst<(outs), (ins i32imm:$amt1, i32imm:$amt2),
+                                        "# ADJCALLSTACKUP $amt1, $amt2">;
+  }
 
   // RET pseudo: expands to JMP R13 (return via link register).
   let isReturn = 1, isTerminator = 1, isBarrier = 1 in
@@ -590,12 +618,14 @@ let isPseudo = 1 in {
   // Materialises SP + offset into a register.  The frame index is
   // embedded in operand 1; eliminateFrameIndex replaces it with R14
   // and fills in the real offset.  expandPostRAPseudo expands into
-  // MOV Rd, R14 + ADDi Rd, #offset.
+  // MOV Rd, R14 + ADDi Rd, #offset, and the ADDi writes the flags.
+  let Defs = [SR] in
   def LEAfi : PenumbraInst<(outs GPR:$Rd), (ins GPR:$base, i32imm:$offset),
                            "# LEAfi $Rd, $base, $offset">;
 
-  // SELECT_GPR: conditional select pseudo, expanded after regalloc by
-  // EmitInstrWithCustomInserter into a diamond of basic blocks + PHI.
+  // SELECT_GPR: conditional select pseudo, expanded straight after
+  // instruction selection (FinalizeISel) by EmitInstrWithCustomInserter
+  // into a diamond of basic blocks + PHI.
   // Uses TEST+BNE on the condition register.
   // Must declare Defs = [SR] because the expansion emits TEST/CMP
   // which clobbers flags.

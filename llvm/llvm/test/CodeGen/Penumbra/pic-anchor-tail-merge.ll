@@ -30,56 +30,66 @@ define void @setup(ptr %aux) {
 ; CHECK-LABEL: setup:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0: // %entry
+; CHECK-NEXT:    sub sp, 12
+; CHECK-NEXT:    stw r5, [sp + 8] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r6, [sp + 4] // 4-byte Folded Spill
+; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    add r1, 4
+; CHECK-NEXT:    lli r2, %got_pcrel_lo16(dlpi_name-.LPC0_0)
+; CHECK-NEXT:    lui r2, %got_pcrel_hi16(dlpi_name-.LPC0_0)
+; CHECK-NEXT:  .LPC0_4:
+; CHECK-NEXT:    mov r3, pc
+; CHECK-NEXT:    lli r4, %got_pcrel_lo16(dlpi_phdr-.LPC0_1)
+; CHECK-NEXT:    lui r4, %got_pcrel_hi16(dlpi_phdr-.LPC0_1)
+; CHECK-NEXT:    lli r11, %got_pcrel_lo16(dlpi_phnum-.LPC0_2)
+; CHECK-NEXT:    lui r11, %got_pcrel_hi16(dlpi_phnum-.LPC0_2)
+; CHECK-NEXT:    lli lr, %got_pcrel_lo16(dlpi_addr-.LPC0_3)
+; CHECK-NEXT:    lui lr, %got_pcrel_hi16(dlpi_addr-.LPC0_3)
 ; CHECK-NEXT:    b .LBB0_1
 ; CHECK-NEXT:  .LBB0_7: // %at_phdr
 ; CHECK-NEXT:    // in Loop: Header=BB0_1 Depth=1
-; CHECK-NEXT:    ldw r2, [r1 + 0]
-; CHECK-NEXT:    lli r3, %got_pcrel_lo16(dlpi_phdr-.LPC0_1)
-; CHECK-NEXT:    lui r3, %got_pcrel_hi16(dlpi_phdr-.LPC0_1)
+; CHECK-NEXT:    ldw r5, [r1 + 0]
+; CHECK-NEXT:    mov r6, r4
 ; CHECK-NEXT:  .LPC0_1:
-; CHECK-NEXT:    add r3, pc
+; CHECK-NEXT:    add r6, pc
 ; CHECK-NEXT:  .LBB0_4: // %latch
 ; CHECK-NEXT:    // in Loop: Header=BB0_1 Depth=1
-; CHECK-NEXT:    ldw r3, [r3 + 0]
-; CHECK-NEXT:    stw r2, [r3 + 0]
+; CHECK-NEXT:    ldw r6, [r6 + 0]
+; CHECK-NEXT:    stw r5, [r6 + 0]
 ; CHECK-NEXT:    add r1, 8
 ; CHECK-NEXT:  .LBB0_1: // %loop
 ; CHECK-NEXT:    // =>This Inner Loop Header: Depth=1
-; CHECK-NEXT:    ldw r2, [r1 + -4]
-; CHECK-NEXT:    cmp r2, 7
+; CHECK-NEXT:    ldw r5, [r1 + -4]
+; CHECK-NEXT:    cmp r5, 7
 ; CHECK-NEXT:    bhi .LBB0_2
 ; CHECK-NEXT:  // %bb.5: // %loop
 ; CHECK-NEXT:    // in Loop: Header=BB0_1 Depth=1
-; CHECK-NEXT:  .LPC0_4:
-; CHECK-NEXT:    mov r3, pc
-; CHECK-NEXT:    add r3, %pcrel(.LJTI0_0-.LPC0_4)
-; CHECK-NEXT:    shl r2, 2
-; CHECK-NEXT:    add r2, r3
-; CHECK-NEXT:    ldw r2, [r2 + 0]
-; CHECK-NEXT:    add r2, r3
-; CHECK-NEXT:    jmp r2
+; CHECK-NEXT:    mov r6, r3
+; CHECK-NEXT:    add r6, %pcrel(.LJTI0_0-.LPC0_4)
+; CHECK-NEXT:    shl r5, 2
+; CHECK-NEXT:    add r5, r6
+; CHECK-NEXT:    ldw r5, [r5 + 0]
+; CHECK-NEXT:    add r5, r6
+; CHECK-NEXT:    jmp r5
 ; CHECK-NEXT:  .LBB0_8: // %at_phnum
 ; CHECK-NEXT:    // in Loop: Header=BB0_1 Depth=1
-; CHECK-NEXT:    ldw r2, [r1 + 0]
-; CHECK-NEXT:    lli r3, %got_pcrel_lo16(dlpi_phnum-.LPC0_2)
-; CHECK-NEXT:    lui r3, %got_pcrel_hi16(dlpi_phnum-.LPC0_2)
+; CHECK-NEXT:    ldw r5, [r1 + 0]
+; CHECK-NEXT:    mov r6, r11
 ; CHECK-NEXT:  .LPC0_2:
-; CHECK-NEXT:    add r3, pc
-; CHECK-NEXT:    ldw r3, [r3 + 0]
-; CHECK-NEXT:    sth r2, [r3 + 0]
+; CHECK-NEXT:    add r6, pc
+; CHECK-NEXT:    ldw r6, [r6 + 0]
+; CHECK-NEXT:    sth r5, [r6 + 0]
 ; CHECK-NEXT:    b .LBB0_9
 ; CHECK-NEXT:  .LBB0_2: // %loop
 ; CHECK-NEXT:    // in Loop: Header=BB0_1 Depth=1
-; CHECK-NEXT:    cmp r2, 2014
+; CHECK-NEXT:    cmp r5, 2014
 ; CHECK-NEXT:    bne .LBB0_9
 ; CHECK-NEXT:  // %bb.3: // %at_execname
 ; CHECK-NEXT:    // in Loop: Header=BB0_1 Depth=1
-; CHECK-NEXT:    ldw r2, [r1 + 0]
-; CHECK-NEXT:    lli r3, %got_pcrel_lo16(dlpi_name-.LPC0_0)
-; CHECK-NEXT:    lui r3, %got_pcrel_hi16(dlpi_name-.LPC0_0)
+; CHECK-NEXT:    ldw r5, [r1 + 0]
+; CHECK-NEXT:    mov r6, r2
 ; CHECK-NEXT:  .LPC0_0:
-; CHECK-NEXT:    add r3, pc
+; CHECK-NEXT:    add r6, pc
 ; CHECK-NEXT:    b .LBB0_4
 ; CHECK-NEXT:  .LBB0_9: // %latch
 ; CHECK-NEXT:    // in Loop: Header=BB0_1 Depth=1
@@ -87,13 +97,16 @@ define void @setup(ptr %aux) {
 ; CHECK-NEXT:    b .LBB0_1
 ; CHECK-NEXT:  .LBB0_6: // %at_base
 ; CHECK-NEXT:    // in Loop: Header=BB0_1 Depth=1
-; CHECK-NEXT:    ldw r2, [r1 + 0]
-; CHECK-NEXT:    lli r3, %got_pcrel_lo16(dlpi_addr-.LPC0_3)
-; CHECK-NEXT:    lui r3, %got_pcrel_hi16(dlpi_addr-.LPC0_3)
+; CHECK-NEXT:    ldw r5, [r1 + 0]
+; CHECK-NEXT:    mov r6, lr
 ; CHECK-NEXT:  .LPC0_3:
-; CHECK-NEXT:    add r3, pc
+; CHECK-NEXT:    add r6, pc
 ; CHECK-NEXT:    b .LBB0_4
 ; CHECK-NEXT:  .LBB0_10: // %done
+; CHECK-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r6, [sp + 4] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r5, [sp + 8] // 4-byte Folded Reload
+; CHECK-NEXT:    add sp, 12
 ; CHECK-NEXT:    jmp lr
 entry:
   br label %loop

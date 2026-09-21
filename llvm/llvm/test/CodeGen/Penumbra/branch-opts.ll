@@ -114,7 +114,6 @@ define i32 @multi_cond(i32 %a, i32 %b) {
 ; CHECK-NEXT:    llis r1, -1
 ; CHECK-NEXT:    jmp lr
 ; CHECK-NEXT:  .LBB4_1: // %ge
-; CHECK-NEXT:    cmp r1, r2
 ; CHECK-NEXT:    bne .LBB4_2
 ; CHECK-NEXT:  // %bb.4: // %eq
 ; CHECK-NEXT:    mov r1, zero

@@ -19,7 +19,6 @@ define i64 @usub_sat_i64(i64 %a, i64 %b) {
 ; CHECK-NEXT:    mov r4, r1
 ; CHECK-NEXT:    sbc r4, zero
 ; CHECK-NEXT:    and r4, 1
-; CHECK-NEXT:    test r4, 1
 ; CHECK-NEXT:    bne .LBB0_2
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r1, r11
@@ -41,27 +40,25 @@ define i64 @uadd_sat_i64(i64 %a, i64 %b) {
 ; CHECK-LABEL: uadd_sat_i64:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    add r3, r1
+; CHECK-NEXT:    mov r11, r1
+; CHECK-NEXT:    mov r1, r3
+; CHECK-NEXT:    add r1, r11
 ; CHECK-NEXT:    adc r2, r4
-; CHECK-NEXT:    mov r11, zero
-; CHECK-NEXT:    adc r11, zero
-; CHECK-NEXT:    llis r1, -1
-; CHECK-NEXT:    llis r4, -1
-; CHECK-NEXT:    test r11, 1
-; CHECK-NEXT:    beq .LBB1_1
+; CHECK-NEXT:    mov r3, zero
+; CHECK-NEXT:    adc r3, zero
+; CHECK-NEXT:    test r3, 1
+; CHECK-NEXT:    bne .LBB1_1
 ; CHECK-NEXT:  // %bb.2:
-; CHECK-NEXT:    test r11, 1
-; CHECK-NEXT:    beq .LBB1_3
+; CHECK-NEXT:    test r3, 1
+; CHECK-NEXT:    bne .LBB1_3
 ; CHECK-NEXT:  .LBB1_4:
-; CHECK-NEXT:    mov r2, r4
 ; CHECK-NEXT:    jmp lr
 ; CHECK-NEXT:  .LBB1_1:
-; CHECK-NEXT:    mov r1, r3
-; CHECK-NEXT:    test r11, 1
-; CHECK-NEXT:    bne .LBB1_4
+; CHECK-NEXT:    llis r1, -1
+; CHECK-NEXT:    test r3, 1
+; CHECK-NEXT:    beq .LBB1_4
 ; CHECK-NEXT:  .LBB1_3:
-; CHECK-NEXT:    mov r4, r2
-; CHECK-NEXT:    mov r2, r4
+; CHECK-NEXT:    llis r2, -1
 ; CHECK-NEXT:    jmp lr
   %r = call i64 @llvm.uadd.sat.i64(i64 %a, i64 %b)
   ret i64 %r
@@ -82,28 +79,27 @@ define i64 @ssub_sat_i64(i64 %a, i64 %b) {
 ; CHECK-NEXT:    mov r11, r2
 ; CHECK-NEXT:    sub r11, r3
 ; CHECK-NEXT:    xor r4, r2
-; CHECK-NEXT:    mov lr, r11
-; CHECK-NEXT:    xor lr, r2
-; CHECK-NEXT:    and lr, r4
+; CHECK-NEXT:    xor r2, r11
+; CHECK-NEXT:    and r2, r4
 ; CHECK-NEXT:    mov r3, r11
 ; CHECK-NEXT:    sar r3, 31
-; CHECK-NEXT:    mov r2, r11
-; CHECK-NEXT:    sar r2, 31
-; CHECK-NEXT:    lli r4, 0
-; CHECK-NEXT:    lui r4, 32768
-; CHECK-NEXT:    add r3, 0
-; CHECK-NEXT:    adc r2, r4
-; CHECK-NEXT:    cmp lr, 0
+; CHECK-NEXT:    lli lr, 0
+; CHECK-NEXT:    lui lr, 32768
+; CHECK-NEXT:    mov r4, r3
+; CHECK-NEXT:    add r4, 0
+; CHECK-NEXT:    adc r3, lr
+; CHECK-NEXT:    cmp r2, 0
 ; CHECK-NEXT:    blt .LBB2_2
 ; CHECK-NEXT:  // %bb.1:
-; CHECK-NEXT:    mov r3, r1
+; CHECK-NEXT:    mov r4, r1
 ; CHECK-NEXT:  .LBB2_2:
-; CHECK-NEXT:    cmp lr, 0
+; CHECK-NEXT:    cmp r2, 0
 ; CHECK-NEXT:    blt .LBB2_4
 ; CHECK-NEXT:  // %bb.3:
-; CHECK-NEXT:    mov r2, r11
+; CHECK-NEXT:    mov r3, r11
 ; CHECK-NEXT:  .LBB2_4:
-; CHECK-NEXT:    mov r1, r3
+; CHECK-NEXT:    mov r1, r4
+; CHECK-NEXT:    mov r2, r3
 ; CHECK-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
 ; CHECK-NEXT:    add sp, 4
 ; CHECK-NEXT:    jmp lr
@@ -119,29 +115,27 @@ define i64 @sadd_sat_i64(i64 %a, i64 %b) {
 ; CHECK-NEXT:    sub sp, 4
 ; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    add r3, r1
-; CHECK-NEXT:    mov r11, zero
-; CHECK-NEXT:    adc r11, zero
-; CHECK-NEXT:    mov r1, r2
-; CHECK-NEXT:    add r1, r4
+; CHECK-NEXT:    mov r1, zero
+; CHECK-NEXT:    adc r1, zero
+; CHECK-NEXT:    mov r11, r2
+; CHECK-NEXT:    add r11, r4
 ; CHECK-NEXT:    add r11, r1
 ; CHECK-NEXT:    xor r2, r11
-; CHECK-NEXT:    mov lr, r11
-; CHECK-NEXT:    xor lr, r4
-; CHECK-NEXT:    and lr, r2
-; CHECK-NEXT:    mov r1, r11
-; CHECK-NEXT:    sar r1, 31
+; CHECK-NEXT:    xor r4, r11
+; CHECK-NEXT:    and r4, r2
 ; CHECK-NEXT:    mov r2, r11
 ; CHECK-NEXT:    sar r2, 31
-; CHECK-NEXT:    lli r4, 0
-; CHECK-NEXT:    lui r4, 32768
+; CHECK-NEXT:    lli lr, 0
+; CHECK-NEXT:    lui lr, 32768
+; CHECK-NEXT:    mov r1, r2
 ; CHECK-NEXT:    add r1, 0
-; CHECK-NEXT:    adc r2, r4
-; CHECK-NEXT:    cmp lr, 0
+; CHECK-NEXT:    adc r2, lr
+; CHECK-NEXT:    cmp r4, 0
 ; CHECK-NEXT:    blt .LBB3_2
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r1, r3
 ; CHECK-NEXT:  .LBB3_2:
-; CHECK-NEXT:    cmp lr, 0
+; CHECK-NEXT:    cmp r4, 0
 ; CHECK-NEXT:    blt .LBB3_4
 ; CHECK-NEXT:  // %bb.3:
 ; CHECK-NEXT:    mov r2, r11
@@ -163,7 +157,6 @@ define i32 @usub_sat_i32(i32 %a, i32 %b) {
 ; CHECK-NEXT:    mov r3, r2
 ; CHECK-NEXT:    sbc r3, zero
 ; CHECK-NEXT:    and r3, 1
-; CHECK-NEXT:    test r3, 1
 ; CHECK-NEXT:    bne .LBB4_2
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r2, r1

@@ -10,46 +10,42 @@ define i64 @smax_i64(i64 %a, i64 %b) {
 ; CHECK-LABEL: smax_i64:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    sub sp, 8
-; CHECK-NEXT:    stw r5, [sp + 4] // 4-byte Folded Spill
+; CHECK-NEXT:    sub sp, 4
 ; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    cmp r3, r1
 ; CHECK-NEXT:    mov r11, zero
 ; CHECK-NEXT:    sbc r11, zero
 ; CHECK-NEXT:    and r11, 1
-; CHECK-NEXT:    lli lr, 1
-; CHECK-NEXT:    lli r5, 0
 ; CHECK-NEXT:    cmp r2, r4
-; CHECK-NEXT:    ble .LBB0_1
+; CHECK-NEXT:    bgt .LBB0_1
 ; CHECK-NEXT:  // %bb.2:
+; CHECK-NEXT:    lli lr, 0
 ; CHECK-NEXT:    cmp r2, r4
-; CHECK-NEXT:    bne .LBB0_3
-; CHECK-NEXT:  .LBB0_4:
-; CHECK-NEXT:    test r11, 1
-; CHECK-NEXT:    beq .LBB0_5
-; CHECK-NEXT:  .LBB0_6:
-; CHECK-NEXT:    test r11, 1
-; CHECK-NEXT:    bne .LBB0_8
-; CHECK-NEXT:  .LBB0_7:
-; CHECK-NEXT:    mov r2, r4
-; CHECK-NEXT:  .LBB0_8:
-; CHECK-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r5, [sp + 4] // 4-byte Folded Reload
-; CHECK-NEXT:    add sp, 8
-; CHECK-NEXT:    jmp lr
+; CHECK-NEXT:    bne .LBB0_4
+; CHECK-NEXT:    b .LBB0_5
 ; CHECK-NEXT:  .LBB0_1:
-; CHECK-NEXT:    mov lr, r5
+; CHECK-NEXT:    lli lr, 1
 ; CHECK-NEXT:    cmp r2, r4
-; CHECK-NEXT:    beq .LBB0_4
-; CHECK-NEXT:  .LBB0_3:
+; CHECK-NEXT:    beq .LBB0_5
+; CHECK-NEXT:  .LBB0_4:
 ; CHECK-NEXT:    mov r11, lr
-; CHECK-NEXT:    test r11, 1
-; CHECK-NEXT:    bne .LBB0_6
 ; CHECK-NEXT:  .LBB0_5:
+; CHECK-NEXT:    test r11, 1
+; CHECK-NEXT:    beq .LBB0_6
+; CHECK-NEXT:  // %bb.7:
+; CHECK-NEXT:    test r11, 1
+; CHECK-NEXT:    bne .LBB0_9
+; CHECK-NEXT:  .LBB0_8:
+; CHECK-NEXT:    mov r2, r4
+; CHECK-NEXT:  .LBB0_9:
+; CHECK-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    add sp, 4
+; CHECK-NEXT:    jmp lr
+; CHECK-NEXT:  .LBB0_6:
 ; CHECK-NEXT:    mov r1, r3
 ; CHECK-NEXT:    test r11, 1
-; CHECK-NEXT:    beq .LBB0_7
-; CHECK-NEXT:    b .LBB0_8
+; CHECK-NEXT:    beq .LBB0_8
+; CHECK-NEXT:    b .LBB0_9
   %r = call i64 @llvm.smax.i64(i64 %a, i64 %b)
   ret i64 %r
 }

@@ -96,10 +96,9 @@ define void @store_i32_align1(ptr %p, i32 %v) {
 ; CHECK-NEXT:    shr r4, 8
 ; CHECK-NEXT:    stb r2, [r1 + 0]
 ; CHECK-NEXT:    stb r4, [r1 + 1]
-; CHECK-NEXT:    mov r2, r3
-; CHECK-NEXT:    shr r2, 8
 ; CHECK-NEXT:    stb r3, [r1 + 2]
-; CHECK-NEXT:    stb r2, [r1 + 3]
+; CHECK-NEXT:    shr r3, 8
+; CHECK-NEXT:    stb r3, [r1 + 3]
 ; CHECK-NEXT:    jmp lr
   store i32 %v, ptr %p, align 1
   ret void

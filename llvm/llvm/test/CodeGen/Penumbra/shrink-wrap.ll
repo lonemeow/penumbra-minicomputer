@@ -14,20 +14,19 @@ declare i32 @h()
 declare void @use(ptr)
 
 ; The restore point falls through into the shared return block, which has no
-; terminator of its own: SP is released after the reloads.
+; terminator of its own: SP is released after the reloads.  The early path
+; returns %a, already in place; a constant there would sink onto its own
+; edge and the lone return block would be tail-duplicated away.
 define i32 @fallthrough_restore(i32 %a) {
 ; CHECK-LABEL: fallthrough_restore:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    mov r2, r1
-; CHECK-NEXT:    llis r1, -1
-; CHECK-NEXT:    cmp r2, 0
+; CHECK-NEXT:    cmp r1, 0
 ; CHECK-NEXT:    beq .LBB0_2
 ; CHECK-NEXT:  // %bb.1: // %body
 ; CHECK-NEXT:    sub sp, 8
 ; CHECK-NEXT:    stw r5, [sp + 4] // 4-byte Folded Spill
 ; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
-; CHECK-NEXT:    mov r1, r2
 ; CHECK-NEXT:    bl g
 ; CHECK-NEXT:    mov r5, r1
 ; CHECK-NEXT:    bl h
@@ -45,7 +44,7 @@ body:
   %s = add i32 %r, %r2
   br label %join
 join:
-  %v = phi i32 [ -1, %0 ], [ %s, %body ]
+  %v = phi i32 [ %a, %0 ], [ %s, %body ]
   ret i32 %v
 }
 

@@ -118,41 +118,39 @@ define i32 @argument_offset(ptr %p, i32 %x) {
 ; STATIC-LABEL: argument_offset:
 ; STATIC:         .cfi_startproc
 ; STATIC-NEXT:  // %bb.0: // %entry
-; STATIC-NEXT:    mov r3, r1
-; STATIC-NEXT:    mov r1, r2
-; STATIC-NEXT:    add r3, 8
-; STATIC-NEXT:    cmp r1, 0
+; STATIC-NEXT:    cmp r2, 0
 ; STATIC-NEXT:    ble .LBB2_1
 ; STATIC-NEXT:  // %bb.2: // %done
+; STATIC-NEXT:    mov r1, r2
 ; STATIC-NEXT:    jmp lr
 ; STATIC-NEXT:  .LBB2_1: // %slow
 ; STATIC-NEXT:    sub sp, 4
 ; STATIC-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
-; STATIC-NEXT:    mov r1, r3
+; STATIC-NEXT:    add r1, 8
 ; STATIC-NEXT:    bl report
-; STATIC-NEXT:    mov r1, zero
+; STATIC-NEXT:    mov r2, zero
 ; STATIC-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
 ; STATIC-NEXT:    add sp, 4
+; STATIC-NEXT:    mov r1, r2
 ; STATIC-NEXT:    jmp lr
 ;
 ; PIC-LABEL: argument_offset:
 ; PIC:         .cfi_startproc
 ; PIC-NEXT:  // %bb.0: // %entry
-; PIC-NEXT:    mov r3, r1
-; PIC-NEXT:    mov r1, r2
-; PIC-NEXT:    add r3, 8
-; PIC-NEXT:    cmp r1, 0
+; PIC-NEXT:    cmp r2, 0
 ; PIC-NEXT:    ble .LBB2_1
 ; PIC-NEXT:  // %bb.2: // %done
+; PIC-NEXT:    mov r1, r2
 ; PIC-NEXT:    jmp lr
 ; PIC-NEXT:  .LBB2_1: // %slow
 ; PIC-NEXT:    sub sp, 4
 ; PIC-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
-; PIC-NEXT:    mov r1, r3
+; PIC-NEXT:    add r1, 8
 ; PIC-NEXT:    bl report
-; PIC-NEXT:    mov r1, zero
+; PIC-NEXT:    mov r2, zero
 ; PIC-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
 ; PIC-NEXT:    add sp, 4
+; PIC-NEXT:    mov r1, r2
 ; PIC-NEXT:    jmp lr
 entry:
   %q = getelementptr inbounds i8, ptr %p, i32 8

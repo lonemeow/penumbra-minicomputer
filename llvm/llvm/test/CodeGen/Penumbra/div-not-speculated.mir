@@ -1,0 +1,58 @@
+# RUN: llc -mtriple=penumbra -run-pass=early-machinelicm -verify-machineinstrs \
+# RUN:   %s -o - | FileCheck %s
+
+# A zero divisor traps to VEC_ARITH, so a divide the program guards must
+# stay behind its guard even when both operands are loop-invariant and
+# its flags are dead.  A multiply in the same place never traps, and is
+# hoisted to the preheader.
+
+# CHECK-LABEL: name: guarded
+# CHECK:       bb.0:
+# CHECK:         MUL
+# CHECK:       bb.1:
+# CHECK-NOT:     DIV
+# CHECK:       bb.2:
+# CHECK-NOT:     MUL
+# CHECK:         DIV
+---
+name:            guarded
+tracksRegLiveness: true
+body:             |
+  bb.0:
+    successors: %bb.1
+    liveins: $r1, $r2, $r3, $r4
+
+    %0:gpr_allocatable = COPY $r1
+    %1:gpr_allocatable = COPY $r2
+    %2:gpr_allocatable = COPY $r3
+    %3:gpr = COPY $r4
+    %4:gpr = LLI 16
+
+  bb.1:
+    successors: %bb.2, %bb.3
+
+    %5:gpr = PHI %4, %bb.0, %9, %bb.3
+    %6:gpr = LDW %3, 0 :: (volatile load (s32))
+    CMPi %6, 0, implicit-def $sr
+    BEQ %bb.3, implicit $sr
+    B %bb.2
+
+  bb.2:
+    successors: %bb.3
+
+    %7:gpr = DIV %1, %2, implicit-def dead $sr
+    %8:gpr = MUL %1, %2, implicit-def dead $sr
+    STW %7, %0, 0 :: (store (s32))
+    STW %8, %0, 4 :: (store (s32))
+
+  bb.3:
+    successors: %bb.4, %bb.1
+
+    %9:gpr = SUBi %5, 1, implicit-def dead $sr
+    CMPi %9, 0, implicit-def $sr
+    BNE %bb.1, implicit $sr
+    B %bb.4
+
+  bb.4:
+    RET
+...

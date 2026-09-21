@@ -1425,21 +1425,23 @@ Two passes combine to cause it, found with `-print-after-all`:
 
 1. The GlobalISel Localizer clones the `G_GLOBAL_VALUE` into its using
    block, which is the loop body; the preheader copy is then dead.
-2. Nothing hoists it back.  The direct PC-relative path selects the
-   `PICLLI`/`PICLUI`/`PICADDPC` triple ("PC-Anchored Relocation Pairs"
-   in `doc/system/abi.md`), and none of the three has a pattern or an
-   explicit `hasSideEffects`, so TableGen infers
-   `UnmodeledSideEffects` for all of them and MachineLICM leaves them
-   where they are.  The static-mode `PseudoMOVADDR` does not have the
-   problem: it is `Rematerializable` with no side effects.
+2. Nothing hoists all of it back.  The direct PC-relative path
+   selects the `PICLLI`/`PICLUI`/`PICADDPC` triple ("PC-Anchored
+   Relocation Pairs" in `doc/system/abi.md`).  With the pseudos now
+   free of side effects, MachineLICM lifts `PICLLI`/`PICLUI` into the
+   preheader, but `PICADDPC` is built by hand and keeps its `SR`
+   definition live, so it stays in the loop behind a copy of the
+   hoisted offset (see "flag definitions stay live after C++
+   selection"): 2 instructions per iteration instead of 3.  The
+   static-mode `PseudoMOVADDR` does not have the problem: it is
+   `Rematerializable` with no side effects.
 
 Moving the triple is safe since the anchors became label-relative;
-only duplicating `PICADDPC` is not (it would redefine its label).  So
-the first thing to try is an explicit `hasSideEffects = 0` on the
-three pseudos, and checking that MachineLICM then hoists them.  The
-fuller fix is a single rematerialisable pseudo for the direct path,
-expanded after register allocation into the anchored triple, the way
-`PseudoMOVADDR` works for static code.  Keeping the Localizer from
+only duplicating `PICADDPC` is not (it would redefine its label).
+Marking the anchor's `SR` definition dead should let MachineLICM take
+all three.  The fuller fix is a single rematerialisable pseudo for the
+direct path, expanded after register allocation into the anchored
+triple, the way `PseudoMOVADDR` works for static code.  Keeping the Localizer from
 sinking a global into a deeper loop would also remove the symptom, but
 MachineLICM should be able to undo it either way.
 
@@ -3185,6 +3187,30 @@ targets opt into are silently off.  Status per item:
   small first-cut plan are in the dedicated "Compiler: tail-call
   optimization" entry below — ~5% of static call sites, a footprint +
   call-overhead win (not a spill win), ≈0 on Dhrystone.
+- **Instruction properties — DONE.**  `guessInstructionProperties`
+  was left on, and the selection patterns sit in `PenumbraGISel.td`,
+  which the instruction-info backend never reads, so TableGen marked
+  every instruction without an explicit `hasSideEffects` as having
+  side effects: MachineSink, MachineLICM, MachineCSE and dead-code
+  elimination left the whole ALU, every constant load and every
+  load/store where selection put them, and each one was a scheduling
+  barrier.  Every instruction now states its properties, taken from
+  "Instruction Properties" in `doc/system/instruction-set.md`.
+  The audit found `DIV`/`DIVU` marked side-effect-free though a zero
+  divisor traps, so MachineLICM could lift a guarded divide above its
+  guard; they are side-effecting now.  Follow-ups: "Compiler: flag
+  definitions stay live after C++ selection", "Compiler: large frame
+  offsets write the flags unchecked" and "Compiler: constants are not
+  rematerializable".
+- **`AllowRegisterRenaming`** (every GlobalISel target in the tree
+  sets it): unset, so every operand carries
+  `ExtraSrcRegAllocReq`/`ExtraDefRegAllocReq`, `isRenamable()` is
+  false everywhere, and MachineCopyPropagation forwards and
+  propagates no copy at all — though the comment on the ALU group in
+  `PenumbraInstrInfo.td` says it forwards R0 into `$Rs`.  Setting it
+  promises that no instruction has register requirements its operand
+  classes do not show; check the PIC anchor pairs and the R0-as-zero
+  operands before flipping it, then measure the copies it removes.
 - **`enableSpillageCopyElimination`** (MachineCopyPropagation
   extension, X86 enables): cheap flip + measure.
 - **MachineOutliner / RISC-V-style save-restore millicode**: nothing
@@ -3217,6 +3243,47 @@ targets opt into are silently off.  Status per item:
   of ~33-cycle divmul iterations — a cheap override, but cost-model
   shifts move inlining decisions broadly, so it needs a kernel-bench
   A/B before landing.
+
+## Compiler: flag definitions stay live after C++ selection
+
+An instruction selected through a TableGen pattern gets its unused
+`SR` definition marked dead (`implicit-def dead $sr`); one built by
+hand in `PenumbraInstructionSelector.cpp` keeps it live
+(`implicit-def $sr`).  MachineLICM and MachineSink refuse to move an
+instruction whose physical-register definition is live, so every
+hand-built ALU operation stays where selection put it even though it
+has no side effects.
+
+- **PIC addresses in loops.**  In "PIC global addresses are
+  recomputed inside loops", the `PICLLI`/`PICLUI` carriers now leave
+  the loop but the `PICADDPC` anchor stays, behind a copy of the
+  hoisted offset: 2 instructions per iteration where hoisting the
+  anchor too needs none.
+- **Divides.**  `DIV`'s live `SR` definition was what kept
+  MachineLICM from lifting a guarded divide out of its guard, before
+  the divides were marked side-effecting.
+
+Fix: mark the `SR` definition dead on each hand-built instruction
+whose flags nothing reads.  If no selector path lets a flag value
+cross a block boundary before register allocation — compares feed
+their branch and carries the next half, in the same block; confirm
+that for the select diamonds — then "not read before the next `SR`
+definition or the end of the block" is the whole test.
+
+## Compiler: large frame offsets write the flags unchecked
+
+`PenumbraRegisterInfo::eliminateFrameIndex` handles an offset beyond
+the 16-bit field by building `LLI; LUI; ADD` into a scavenged
+register in front of the load or store.  The `ADD` writes the flags,
+and nothing checks that they are dead there: a spill reload with a
+large offset between a compare and its branch, or inside a
+64-bit `ADD`/`ADC` carry chain, would corrupt the flags.  It needs a
+frame over 32 KB, and no failure is known.  `LEAfi` had the same
+problem until it declared `Defs = [SR]`, which lets the allocator see
+it.  The fix is to check `SR` liveness at the insertion point.  User code
+cannot save the flags around the `ADD` (`RDSPR` is privileged and
+`WRSPR SR` is reserved), so where they are live the address has to be
+formed before the instruction that sets them.
 
 ## Compiler: shrink-wrapping (spill-density lever, part 1) — ENABLED
 
