@@ -157,11 +157,11 @@ define i32 @test_ctlz(i32 %a) {
 ; O1-NEXT:    lli r3, 13107
 ; O1-NEXT:    lui r3, 13107
 ; O1-NEXT:    and r1, r3
-; O1-NEXT:    and r3, r2
-; O1-NEXT:    add r3, r1
-; O1-NEXT:    mov r1, r3
+; O1-NEXT:    and r2, r3
+; O1-NEXT:    add r2, r1
+; O1-NEXT:    mov r1, r2
 ; O1-NEXT:    shr r1, 4
-; O1-NEXT:    add r1, r3
+; O1-NEXT:    add r1, r2
 ; O1-NEXT:    lli r2, 3855
 ; O1-NEXT:    lui r2, 3855
 ; O1-NEXT:    and r2, r1

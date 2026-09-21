@@ -341,9 +341,8 @@ body: |
     ; CHECK: liveins: $r1
     ; CHECK-NEXT: {{  $}}
     ; CHECK-NEXT: [[COPY:%[0-9]+]]:gpr_allocatable = COPY $r1
-    ; CHECK-NEXT: [[LLI:%[0-9]+]]:gpr_allocatable = LLI 9029
-    ; CHECK-NEXT: [[LUI:%[0-9]+]]:gpr = LUI [[LLI]], 1
-    ; CHECK-NEXT: [[ADD:%[0-9]+]]:gpr = ADD [[COPY]], [[LUI]], implicit-def $sr
+    ; CHECK-NEXT: [[PseudoLI:%[0-9]+]]:gpr = PseudoLI 74565
+    ; CHECK-NEXT: [[ADD:%[0-9]+]]:gpr = ADD [[COPY]], [[PseudoLI]], implicit-def $sr
     ; CHECK-NEXT: [[COPY1:%[0-9]+]]:gpr_allocatable = COPY $r0
     ; CHECK-NEXT: [[ADC:%[0-9]+]]:gpr = ADC [[COPY1]], $r0, implicit-def $sr, implicit $sr
     ; CHECK-NEXT: [[COPY2:%[0-9]+]]:gpr_allocatable = COPY [[ADC]]

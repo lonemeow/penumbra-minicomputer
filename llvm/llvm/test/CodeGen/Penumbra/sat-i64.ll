@@ -68,7 +68,7 @@ define i64 @ssub_sat_i64(i64 %a, i64 %b) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 4
-; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r5, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    sub r1, r3
 ; CHECK-NEXT:    mov r3, zero
 ; CHECK-NEXT:    sbc r3, zero
@@ -81,11 +81,11 @@ define i64 @ssub_sat_i64(i64 %a, i64 %b) {
 ; CHECK-NEXT:    and r2, r4
 ; CHECK-NEXT:    mov r3, r11
 ; CHECK-NEXT:    sar r3, 31
-; CHECK-NEXT:    lli lr, 0
-; CHECK-NEXT:    lui lr, 32768
+; CHECK-NEXT:    lli r5, 0
+; CHECK-NEXT:    lui r5, 32768
 ; CHECK-NEXT:    mov r4, r3
 ; CHECK-NEXT:    add r4, 0
-; CHECK-NEXT:    adc r3, lr
+; CHECK-NEXT:    adc r3, r5
 ; CHECK-NEXT:    cmp r2, 0
 ; CHECK-NEXT:    blt .LBB2_2
 ; CHECK-NEXT:  // %bb.1:
@@ -98,7 +98,7 @@ define i64 @ssub_sat_i64(i64 %a, i64 %b) {
 ; CHECK-NEXT:  .LBB2_4:
 ; CHECK-NEXT:    mov r1, r4
 ; CHECK-NEXT:    mov r2, r3
-; CHECK-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r5, [sp + 0] // 4-byte Folded Reload
 ; CHECK-NEXT:    add sp, 4
 ; CHECK-NEXT:    jmp lr
   %r = call i64 @llvm.ssub.sat.i64(i64 %a, i64 %b)
@@ -111,7 +111,7 @@ define i64 @sadd_sat_i64(i64 %a, i64 %b) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 4
-; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r5, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    add r3, r1
 ; CHECK-NEXT:    mov r1, zero
 ; CHECK-NEXT:    adc r1, zero
@@ -123,11 +123,11 @@ define i64 @sadd_sat_i64(i64 %a, i64 %b) {
 ; CHECK-NEXT:    and r4, r2
 ; CHECK-NEXT:    mov r2, r11
 ; CHECK-NEXT:    sar r2, 31
-; CHECK-NEXT:    lli lr, 0
-; CHECK-NEXT:    lui lr, 32768
+; CHECK-NEXT:    lli r5, 0
+; CHECK-NEXT:    lui r5, 32768
 ; CHECK-NEXT:    mov r1, r2
 ; CHECK-NEXT:    add r1, 0
-; CHECK-NEXT:    adc r2, lr
+; CHECK-NEXT:    adc r2, r5
 ; CHECK-NEXT:    cmp r4, 0
 ; CHECK-NEXT:    blt .LBB3_2
 ; CHECK-NEXT:  // %bb.1:
@@ -138,7 +138,7 @@ define i64 @sadd_sat_i64(i64 %a, i64 %b) {
 ; CHECK-NEXT:  // %bb.3:
 ; CHECK-NEXT:    mov r2, r11
 ; CHECK-NEXT:  .LBB3_4:
-; CHECK-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r5, [sp + 0] // 4-byte Folded Reload
 ; CHECK-NEXT:    add sp, 4
 ; CHECK-NEXT:    jmp lr
   %r = call i64 @llvm.sadd.sat.i64(i64 %a, i64 %b)

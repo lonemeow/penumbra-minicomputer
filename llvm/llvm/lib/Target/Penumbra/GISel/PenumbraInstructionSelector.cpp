@@ -121,13 +121,12 @@ private:
   bool selectIntrinsic(MachineInstr &I, MachineBasicBlock &MBB,
                        MachineRegisterInfo &MRI) const;
 
-  // Emit LLI+LUI pair to materialise a symbol address into DstReg.
-  // LoOp/HiOp are the lo16/hi16 operands (GlobalAddress, JumpTableIndex, etc.)
-  void emitLoadSymbolAddr(Register DstReg, const DebugLoc &DL,
-                          MachineBasicBlock &MBB,
-                          MachineBasicBlock::iterator InsertPt,
-                          const MachineOperand &LoOp,
-                          const MachineOperand &HiOp) const;
+  // Materialise a value too wide for LLI or LLIS as a PseudoLI: an
+  // immediate, or a symbol whose target flag names its relocation pair.
+  void emitLoadImm32(Register DstReg, const DebugLoc &DL,
+                     MachineBasicBlock &MBB,
+                     MachineBasicBlock::iterator InsertPt,
+                     const MachineOperand &Val) const;
 
   const PenumbraTargetMachine &TM;
   const PenumbraInstrInfo &TII;
@@ -419,26 +418,13 @@ PenumbraInstructionSelector::selectAddrRegImm(MachineOperand &Root) const {
 
 // ── G_CONSTANT (wide only) ───────────────────────────────────────────────────
 // selectImpl handles LLI (0–65535) and LLIS (-32768–-1) via TableGen patterns.
-// This manual path only handles values that need two instructions: LLI + LUI.
+// This manual path only handles values that need two instructions.
 bool PenumbraInstructionSelector::selectConstant(MachineInstr &I,
                                                    MachineBasicBlock &MBB,
                                                    MachineRegisterInfo &MRI) const {
-  Register DstReg = I.getOperand(0).getReg();
-  int64_t Val = I.getOperand(1).getCImm()->getSExtValue();
-  const DebugLoc &DL = I.getDebugLoc();
-
-  // Use a fresh vreg for LLI so each vreg has exactly one def (SSA).
-  Register TmpReg = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
-  auto MI1 = BuildMI(MBB, I, DL, TII.get(Penumbra::LLI))
-      .addDef(TmpReg)
-      .addImm(Val & 0xFFFF);
-  constrainSelectedInstRegOperands(*MI1, TII, TRI, RBI);
-  auto MI2 = BuildMI(MBB, I, DL, TII.get(Penumbra::LUI))
-      .addDef(DstReg)
-      .addReg(TmpReg)
-      .addImm((Val >> 16) & 0xFFFF);
-  constrainSelectedInstRegOperands(*MI2, TII, TRI, RBI);
-
+  emitLoadImm32(I.getOperand(0).getReg(), I.getDebugLoc(), MBB, I.getIterator(),
+                MachineOperand::CreateImm(
+                    I.getOperand(1).getCImm()->getSExtValue()));
   I.eraseFromParent();
   return true;
 }
@@ -1282,28 +1268,14 @@ bool PenumbraInstructionSelector::selectDivMul(MachineInstr &I,
   return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
 }
 
-// ── LLI+LUI symbol address helper ────────────────────────────────────────────
-// Shared by G_GLOBAL_VALUE, G_JUMP_TABLE, and future symbol materialisations.
-// Emits:  LLI Rd, :lo16:sym  /  LUI Rd, Rd, :hi16:sym
-// Caller provides the lo16/hi16 MachineOperands (GlobalAddress, JTI, etc.).
-void PenumbraInstructionSelector::emitLoadSymbolAddr(
+// ── 32-bit value helper ──────────────────────────────────────────────────────
+void PenumbraInstructionSelector::emitLoadImm32(
     Register DstReg, const DebugLoc &DL, MachineBasicBlock &MBB,
-    MachineBasicBlock::iterator InsertPt,
-    const MachineOperand &LoOp, const MachineOperand &HiOp) const {
-  // Use a fresh vreg for LLI to maintain SSA (one def per vreg).
-  MachineRegisterInfo &MRI = MBB.getParent()->getRegInfo();
-  Register TmpReg = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
-
-  auto LLIInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::LLI))
-      .addDef(TmpReg)
-      .add(LoOp);
-  constrainSelectedInstRegOperands(*LLIInst, TII, TRI, RBI);
-
-  auto LUIInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::LUI))
+    MachineBasicBlock::iterator InsertPt, const MachineOperand &Val) const {
+  auto LI = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::PseudoLI))
       .addDef(DstReg)
-      .addReg(TmpReg)
-      .add(HiOp);
-  constrainSelectedInstRegOperands(*LUIInst, TII, TRI, RBI);
+      .add(Val);
+  constrainSelectedInstRegOperands(*LI, TII, TRI, RBI);
 }
 
 // ── G_GLOBAL_VALUE ───────────────────────────────────────────────────────────
@@ -1366,10 +1338,9 @@ bool PenumbraInstructionSelector::selectGlobalValue(MachineInstr &I,
     } else {
       // Non-PIC TLS: absolute address with TLS GD relocs.
       // Used by LE path (PtrToInt) — linker resolves as R_TPREL.
-      emitLoadSymbolAddr(
+      emitLoadImm32(
           DstReg, I.getDebugLoc(), MBB, I.getIterator(),
-          MachineOperand::CreateGA(GV, Offset, Penumbra::S_TLSgd_Lo16),
-          MachineOperand::CreateGA(GV, Offset, Penumbra::S_TLSgd_Hi16));
+          MachineOperand::CreateGA(GV, Offset, Penumbra::S_TLSgd_Lo16));
     }
     I.eraseFromParent();
     return true;
@@ -1500,19 +1471,9 @@ bool PenumbraInstructionSelector::selectGlobalValue(MachineInstr &I,
       constrainSelectedInstRegOperands(*ADDiInst, TII, TRI, RBI);
     }
   } else {
-    // Static: absolute address materialised by a single rematerialisable
-    // pseudo.  Keeping it as one SSA def (instead of eagerly emitting the
-    // LLI+LUI pair here) lets MachineCSE share identical bases pre-RA and
-    // lets the allocator recompute the address across a call rather than
-    // spill it.  PenumbraInstrInfo::expandPostRAPseudo lowers it to the
-    // LLI :lo16: / LUI :hi16: pair after register allocation, so the pseudo
-    // carries a single GlobalAddress operand (residual offset baked in, no
-    // relocation specifier — the expander applies the lo16/hi16 split).
-    auto MovAddr = BuildMI(MBB, I.getIterator(), I.getDebugLoc(),
-                           TII.get(Penumbra::PseudoMOVADDR))
-        .addDef(DstReg)
-        .add(MachineOperand::CreateGA(GV, Offset, /*TargetFlags=*/0));
-    constrainSelectedInstRegOperands(*MovAddr, TII, TRI, RBI);
+    // Static: the absolute address, residual offset included.
+    emitLoadImm32(DstReg, I.getDebugLoc(), MBB, I.getIterator(),
+                  MachineOperand::CreateGA(GV, Offset));
   }
 
   I.eraseFromParent();
@@ -1521,7 +1482,7 @@ bool PenumbraInstructionSelector::selectGlobalValue(MachineInstr &I,
 
 // ── G_BLOCK_ADDR ─────────────────────────────────────────────────────────────
 // Materialise a basic block address (GCC computed goto: &&label).
-// Same as a global address — LLI+LUI (static) or MOV PC + ADDi (PIC).
+// Same as a global address — PseudoLI (static) or MOV PC + ADDi (PIC).
 bool PenumbraInstructionSelector::selectBlockAddress(MachineInstr &I,
                                                       MachineBasicBlock &MBB,
                                                       MachineRegisterInfo &MRI) const {
@@ -1550,10 +1511,8 @@ bool PenumbraInstructionSelector::selectBlockAddress(MachineInstr &I,
         .addImm(PCLabelId);
     constrainSelectedInstRegOperands(*ADDiInst, TII, TRI, RBI);
   } else {
-    emitLoadSymbolAddr(
-        DstReg, I.getDebugLoc(), MBB, I.getIterator(),
-        MachineOperand::CreateBA(BA, Offset, Penumbra::S_Lo16),
-        MachineOperand::CreateBA(BA, Offset, Penumbra::S_Hi16));
+    emitLoadImm32(DstReg, I.getDebugLoc(), MBB, I.getIterator(),
+                  MachineOperand::CreateBA(BA, Offset));
   }
 
   I.eraseFromParent();
@@ -1591,11 +1550,9 @@ bool PenumbraInstructionSelector::selectJumpTable(MachineInstr &I,
         .addImm(PCLabelId);
     constrainSelectedInstRegOperands(*ADDiInst, TII, TRI, RBI);
   } else {
-    // Static: absolute address via LLI+LUI.
-    emitLoadSymbolAddr(
-        DstReg, I.getDebugLoc(), MBB, I.getIterator(),
-        MachineOperand::CreateJTI(JTI, Penumbra::S_Lo16),
-        MachineOperand::CreateJTI(JTI, Penumbra::S_Hi16));
+    // Static: the table's absolute address.
+    emitLoadImm32(DstReg, I.getDebugLoc(), MBB, I.getIterator(),
+                  MachineOperand::CreateJTI(JTI));
   }
 
   I.eraseFromParent();

@@ -1516,7 +1516,7 @@ Two passes combine to cause it, found with `-print-after-all`:
    definition live, so it stays in the loop behind a copy of the
    hoisted offset (see "flag definitions stay live after C++
    selection"): 2 instructions per iteration instead of 3.  The
-   static-mode `PseudoMOVADDR` does not have the problem: it is
+   static-mode `PseudoLI` does not have the problem: it is
    `Rematerializable` with no side effects.
 
 Moving the triple is safe since the anchors became label-relative;
@@ -1524,7 +1524,7 @@ only duplicating `PICADDPC` is not (it would redefine its label).
 Marking the anchor's `SR` definition dead should let MachineLICM take
 all three.  The fuller fix is a single rematerialisable pseudo for the
 direct path, expanded after register allocation into the anchored
-triple, the way `PseudoMOVADDR` works for static code.  Keeping the Localizer from
+triple, the way `PseudoLI` works for static code.  Keeping the Localizer from
 sinking a global into a deeper loop would also remove the symptom, but
 MachineLICM should be able to undo it either way.
 
@@ -4125,21 +4125,16 @@ loop gets a callee-saved register or a stack slot, never a recompute.
   CSE and rematerialization".
 
 Fix:
-1. Mark `LLI`/`LLIS` rematerializable — DONE.  `LUI` carries the
-   same flags although it is never actually recomputed: its input,
-   the `LLI` half, is gone wherever the allocator would put the copy.
-   The flags make MachineLICM hoist it unconditionally beside the
-   `LLI` it completes; left to the register-pressure check, it stayed
-   in the loop behind a copy of the hoisted half.  Dropping `LUI` from
-   the flags costs those Doom files 21 instructions and 14 SP
-   accesses.
+1. Mark `LLI`/`LLIS` rematerializable — DONE.
 2. Select zero into a form the allocator can rematerialize — a
    `MOV rd, R0` that `isReMaterializableImpl` accepts, the way RISC-V
    accepts `ADDI rd, x0, imm`.
-3. Full 32-bit constants: `LUI` reads its destination, so `LLI; LUI`
-   is a two-instruction chain that remat cannot copy.  It needs a
-   single-def `PseudoLI` expanded after register allocation, like
-   `PseudoMOVADDR`.
+3. Full 32-bit constants — DONE.  `LUI` reads its destination, so
+   `LLI; LUI` is a two-instruction chain that remat cannot copy.  A
+   wide constant is now one `PseudoLI`, expanded after register
+   allocation; static addresses, jump-table bases, block addresses
+   and TLS offsets share it, so no `LLI; LUI` chain exists before
+   allocation.
 
 How aggressively the allocator uses remat is per-core policy — see
 "Remat aggressiveness is per-microarchitecture, not a pseudo flag".
@@ -4433,7 +4428,7 @@ count-*neutral* folds (the select-CMPi fold) measured flat because they
 don't change which cache lines are touched. Be precise about which layer
 of this fix is count-neutral and which actually removes instructions:
 
-- **Layer 1 is count-neutral by construction.** `PseudoMOVADDR` expands
+- **Layer 1 is count-neutral by construction.** `PseudoLI` expands
   back to the identical `LLI+LUI`, so the static instruction stream is
   unchanged unless CSE or remat fires. MachineCSE already deduped eager
   `LLI+LUI` pairs in straight-line code, so layer 1 adds little there;
@@ -4483,7 +4478,7 @@ shrink once hoped for here is infeasible (OR-`LUI`, above).
 
 1. **Rematerializable materialization pseudo.** Stop emitting `LLI+LUI`
    at selection; lower the static/absolute `G_GLOBAL_VALUE` to a single
-   `PseudoMOVADDR rd, @sym` (`isReMaterializable`, `isPseudo`,
+   `PseudoLI rd, @sym` (`isReMaterializable`, `isPseudo`,
    `Size = 8`), expanded to `LLI+LUI` in a *post-RA*
    `PenumbraExpandPseudoInsts`. Now it is one SSA def: MachineCSE shares
    identical bases pre-RA, and the allocator owns the cross-call
@@ -4641,7 +4636,7 @@ materialisations**. Findings:
   gen2's 4 KB 2-way L1 is untested and moot for this approach.)
   Cross-section clusters need a link-time relocation but stay
   layout-neutral.
-- **Implementation shape:** a target MIR pass over the `PseudoMOVADDR`
+- **Implementation shape:** a target MIR pass over the `PseudoLI`
   defs (Layer 1 already gives CSE-able single-def bases), modelled on
   `RISCVMergeBaseOffset` but extended from same-symbol to same-section
   cross-symbol. Open scope decision: same-section-local only
@@ -4657,7 +4652,7 @@ numbers and conclusions here.
 **In-loop address pairs in the demos are remat, not a missed hoist.**
 Plasma's depth-3 pixel loop shows an `LLI`/`LUI` pair per iteration
 re-materializing a table base.  Post-regalloc MIR holds a single
-`PseudoMOVADDR`; the pair appears only after `expandPostRAPseudo`, so
+`PseudoLI`; the pair appears only after `expandPostRAPseudo`, so
 Layer 1 is doing its job and LICM is not the lever.
 
 What drives the remat is the destructive two-operand `ADD` forming
@@ -4665,7 +4660,7 @@ What drives the remat is the destructive two-operand `ADD` forming
 either a private copy of a live base or a fresh materialization.  The
 same loop shows both choices — `COPY` + `ADD` for a use with the base
 still live, a bare `ADD` killing it at the last use, then
-`PseudoMOVADDR` at the next block that needs it.  Rebuilding costs two
+`PseudoLI` at the next block that needs it.  Rebuilding costs two
 instructions where copying a live base costs one, so remat runs one
 instruction per materialization *more* than pinning the base; the
 allocator takes that trade because the loop is at near-total pressure

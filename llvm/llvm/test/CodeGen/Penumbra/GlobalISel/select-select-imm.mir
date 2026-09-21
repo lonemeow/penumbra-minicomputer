@@ -94,9 +94,8 @@ body: |
     ; CHECK-NEXT: [[COPY:%[0-9]+]]:gpr_allocatable = COPY $r1
     ; CHECK-NEXT: [[COPY1:%[0-9]+]]:gpr_allocatable = COPY $r2
     ; CHECK-NEXT: [[COPY2:%[0-9]+]]:gpr_allocatable = COPY $r3
-    ; CHECK-NEXT: [[LLI:%[0-9]+]]:gpr_allocatable = LLI 4464
-    ; CHECK-NEXT: [[LUI:%[0-9]+]]:gpr = LUI [[LLI]], 1
-    ; CHECK-NEXT: [[SELECT_CC_GPR:%[0-9]+]]:gpr = SELECT_CC_GPR [[COPY1]], [[COPY2]], [[COPY]], [[LUI]], 353, implicit-def $sr
+    ; CHECK-NEXT: [[PseudoLI:%[0-9]+]]:gpr = PseudoLI 70000
+    ; CHECK-NEXT: [[SELECT_CC_GPR:%[0-9]+]]:gpr = SELECT_CC_GPR [[COPY1]], [[COPY2]], [[COPY]], [[PseudoLI]], 353, implicit-def $sr
     ; CHECK-NEXT: $r1 = COPY [[SELECT_CC_GPR]]
     ; CHECK-NEXT: RET implicit $r1
     %0:gprbank(s32) = COPY $r1

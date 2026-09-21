@@ -90,7 +90,7 @@ not behavior.
 | `PenumbraFrameLowering.{h,cpp}` | StackGrowsDown, Align(4), `hasFPImpl()=true` when alloca present. `adjustSP` helper used by both prologue and epilogue (small frames use 16-bit imm, large frames materialize size in R11). `processFunctionBeforeFrameFinalized` adds an emergency spill slot for RegScavenger only when frame > 15-bit signed. Shrink-wrapping on: the prologue/epilogue may land in any block, so `canUseAsPrologue`/`canUseAsEpilogue` refuse blocks where SR or R11 is live at the SP adjustment |
 | `PenumbraISelLowering.{h,cpp}` | TargetLowering: JT encoding (EK_LabelDifference32), SELECT diamond expansion, inline-asm constraint mapping, `setStackPointerRegisterToSaveRestore(R14)`, `isIntDivCheap()` (weighs the model's MUL/DIV latencies), `shouldLocalize()` (lets the Localizer move constant-offset address adds), `shouldFormOverflowOp()` (keeps wrap checks as compares for compare elimination), `isLegalAddressingMode` override |
 | `PenumbraTargetTransformInfo.h` | Header-only `PenumbraTTIImpl`. Routes LSR/cost-model queries to our `TargetLowering`. `getNumberOfRegisters` returns 12 for GPRRC, 0 for FPR/VR (disables vectorizers). `isLSRCostLess` makes `Insns` the primary sort key (PowerPC pattern) — without this, LSR rewrites `*d++ = *s++` loops into base+index form |
-| `PenumbraSubtarget.{h,cpp}` | Owns InstrInfo, FrameLowering, TLInfo, all GlobalISel objects. Holds the tune-feature fields; `resolveCPU`/`resolveTuneCPU` define what an unspecified `-mcpu`/`-mtune` means |
+| `PenumbraSubtarget.{h,cpp}` | Owns InstrInfo, FrameLowering, TLInfo, all GlobalISel objects. Holds the tune-feature fields; `resolveCPU`/`resolveTuneCPU` define what an unspecified `-mcpu`/`-mtune` means. |
 | `PenumbraTargetMachine.{h,cpp}` | Data layout `e-m:e-p:32:32-i32:32-i64:64-n32-S32`, GlobalISel pipeline, `setGlobalISel(true)`. `PenumbraTargetObjectFile` (local class): always inlines jump tables in `.text`. `PenumbraLowerTLS` IR pass: lowers `@llvm.threadlocal.address` (GD → `__tls_get_addr`; LE/IE → inline TP+offset) |
 | `PenumbraAsmPrinter.cpp` | MachineInstr → MCInst. Expands RET→JMP R13. Wraps globals/JTI with lo16/hi16/pcrel MCSpecifierExpr. `emitJumpTableEntry`: always label-difference. PrintAsmOperand for inline asm |
 | `PenumbraMachineFunctionInfo.h` | Per-function state (e.g. `VarArgsFrameIndex` for variadic R1–R4 save area) |
@@ -98,7 +98,7 @@ not behavior.
 | `GISel/PenumbraLegalizerInfo.{h,cpp}` | Type/op legality. See "Legalization at a glance" below |
 | `GISel/PenumbraRegisterBankInfo.{h,cpp}` | Single GPR bank covering all 16 registers |
 | `GISel/PenumbraRegisterBanks.td` | `GPRRegBank` definition |
-| `GISel/PenumbraInstructionSelector.cpp` | Hybrid: `selectImpl()` for TableGen patterns, manual C++ for complex cases (LLI+LUI pairs, GOT-PCREL globals, frame-index folding, jump tables, ICMP+BRCOND fold, varargs, return-address capture, …) |
+| `GISel/PenumbraInstructionSelector.cpp` | Hybrid: `selectImpl()` for TableGen patterns, manual C++ for complex cases (wide values as `PseudoLI`, GOT-PCREL globals, frame-index folding, jump tables, ICMP+BRCOND fold, varargs, return-address capture, …) |
 | `GISel/PenumbraPreLegalizerCombiner.cpp` | Pre-legalizer combiner (-O1+). Boilerplate wrapper around `selectImpl` for rules in `PenumbraCombine.td` |
 | `GISel/PenumbraO0PreLegalizerCombiner.cpp` | Same shape with the smaller `optnone_combines` rule set (-O0 only) |
 | `GISel/PenumbraPostLegalizerCombiner.cpp` | Post-legalizer combiner (-O1+). C++ match/apply for the target-specific rules in `PenumbraCombine.td`, including constant-multiply strength reduction (`matchMulByConst`, costed by `isMulDecompositionCheaper` against the scheduling model) |
@@ -220,9 +220,13 @@ shapes:
   symbol references silently resolve to zero.
 - **PC-relativity** is set on the `MCFixup` itself (`PCRel=true` in
   `MCFixup::create`), not in `MCFixupKindInfo`.
-- **LLI+LUI pairs** use an intermediate vreg
-  (`%tmp = LLI lo` → `%dst = LUI %tmp, hi`) for SSA correctness —
-  required for `-O1+` passes like `OptimizePHIs`.
+- **Wide values are `PseudoLI`.**  A constant too wide for one
+  `LLI`/`LLIS`, and every static symbol address (global, jump table,
+  block address, TLS offset), is selected as one `PseudoLI` so the
+  allocator can rematerialize it; `expandPostRAPseudo` splits it into
+  `LLI`+`LUI`.  Never emit a bare `LLI`+`LUI` pair before register
+  allocation: `LUI` reads its destination, so the pair is a chain the
+  allocator can only spill.
 - **GOT-indirect PIC** uses the ADD's own PC as anchor:
   `LLI Rd, %got_pcrel_lo16(sym-.LPC0_0)` +
   `LUI Rd, %got_pcrel_hi16(sym-.LPC0_0)` + `.LPC0_0: ADD Rd, PC` +

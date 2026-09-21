@@ -377,10 +377,10 @@ let isReMaterializable = 1, isAsCheapAsAMove = 1 in {
                      "lli\t$Rd, $imm16">;
   def LLIS : FormatL<0b0001, (outs GPR:$Rd), (ins simm16op:$imm16),
                      "llis\t$Rd, $imm16">;
-  let Constraints = "$Rd = $Rd_in" in
-  def LUI  : FormatL<0b0010, (outs GPR:$Rd), (ins GPR:$Rd_in, imm16op:$imm16),
-                     "lui\t$Rd, $imm16">;
 }
+let Constraints = "$Rd = $Rd_in" in
+def LUI  : FormatL<0b0010, (outs GPR:$Rd), (ins GPR:$Rd_in, imm16op:$imm16),
+                   "lui\t$Rd, $imm16">;
 
 let Defs = [SR] in {
   let Constraints = "$Rd = $Rd_in" in {
@@ -687,26 +687,17 @@ let isPseudo = 1, hasSideEffects = 0, mayLoad = 0, mayStore = 0 in {
                                 "# PICMOVPC $Rd, $pclabel">;
   }
 
-  // PseudoMOVADDR: static/absolute symbol-address materialisation, kept as a
-  // single SSA def through register allocation so MachineCSE can share
-  // identical bases pre-RA and the allocator can rematerialise the address
-  // across a call instead of spilling it.  The $sym slot carries a
-  // GlobalAddress operand (residual offset baked in); expandPostRAPseudo
-  // lowers it to LLI :lo16: + LUI :hi16: after RA, where SSA no longer applies
-  // so both halves target $Rd directly.
-  //
-  // The remat/cost attributes are a per-microarchitecture *policy* decision
-  // (gen1's 1 KB direct-mapped I$ vs gen2's 4 KB 4-way), not part of the
-  // structural definition — see doc/TODO.md "Remat aggressiveness is
-  // per-microarchitecture, not a pseudo flag".
-  let isReMaterializable = 1,
-      hasSideEffects = 0,
-      mayLoad = 0,
-      mayStore = 0,
-      Size = 8 in {
-    def PseudoMOVADDR : PenumbraInst<(outs GPR:$Rd), (ins i32imm:$sym),
-                                     "# PseudoMOVADDR $Rd, $sym">;
-  }
+  // PseudoLI: a 32-bit value too wide for one LLI or LLIS, a constant or a
+  // static symbol address.  As one definition with no register input the
+  // allocator can recompute it, where an LLI + LUI chain could only be
+  // spilled; expandPostRAPseudo turns it into that pair.  A symbol's target
+  // flag names its relocation pair: 0 for an absolute address,
+  // S_TLSgd_Lo16 for a TLS offset.  How eagerly the allocator recomputes it
+  // is per-core policy, not a flag here — see doc/TODO.md "Remat
+  // aggressiveness is per-microarchitecture, not a pseudo flag".
+  let isReMaterializable = 1, Size = 8 in
+  def PseudoLI : PenumbraInst<(outs GPR:$Rd), (ins i32imm:$val),
+                              "# PseudoLI $Rd, $val">;
 }
 
 include "PenumbraInstrGISel.td"

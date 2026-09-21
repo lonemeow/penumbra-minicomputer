@@ -58,23 +58,25 @@ bool PenumbraInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
     return true;
   }
 
-  case Penumbra::PseudoMOVADDR: {
-    // PseudoMOVADDR Rd, @sym+off  →  LLI Rd, :lo16:  ;  LUI Rd, Rd, :hi16:
-    // Runs after register allocation, so SSA no longer applies: LLI may write
-    // Rd directly and LUI's tied $Rd_in/$Rd reuse it — the fresh-temp vreg the
-    // selector needs (PenumbraInstructionSelector::emitLoadSymbolAddr) is
-    // unnecessary here.  The pseudo carries one GlobalAddress operand with the
-    // residual offset baked in; the lo16/hi16 relocation split is applied now.
-    const MachineOperand &Sym = MI.getOperand(1);
-    assert(Sym.isGlobal() &&
-           "PseudoMOVADDR expects a GlobalAddress symbol operand");
+  case Penumbra::PseudoLI: {
+    // PseudoLI Rd, val  →  LLI Rd, lo16(val)  ;  LUI Rd, Rd, hi16(val).
+    // After register allocation both halves write Rd directly.
     Register DstReg = MI.getOperand(0).getReg();
+    MachineOperand Lo = MI.getOperand(1);
+    MachineOperand Hi = MI.getOperand(1);
+    if (Lo.isImm()) {
+      Lo.setImm(Lo.getImm() & 0xFFFF);
+      Hi.setImm((Hi.getImm() >> 16) & 0xFFFF);
+    } else {
+      bool IsTLS = Lo.getTargetFlags() == Penumbra::S_TLSgd_Lo16;
+      assert((IsTLS || Lo.getTargetFlags() == 0) &&
+             "PseudoLI symbol with an unexpected relocation");
+      Lo.setTargetFlags(IsTLS ? Penumbra::S_TLSgd_Lo16 : Penumbra::S_Lo16);
+      Hi.setTargetFlags(IsTLS ? Penumbra::S_TLSgd_Hi16 : Penumbra::S_Hi16);
+    }
 
-    BuildMI(MBB, MI, DL, get(Penumbra::LLI), DstReg)
-        .addGlobalAddress(Sym.getGlobal(), Sym.getOffset(), Penumbra::S_Lo16);
-    BuildMI(MBB, MI, DL, get(Penumbra::LUI), DstReg)
-        .addReg(DstReg)
-        .addGlobalAddress(Sym.getGlobal(), Sym.getOffset(), Penumbra::S_Hi16);
+    BuildMI(MBB, MI, DL, get(Penumbra::LLI), DstReg).add(Lo);
+    BuildMI(MBB, MI, DL, get(Penumbra::LUI), DstReg).addReg(DstReg).add(Hi);
 
     MI.eraseFromParent();
     return true;

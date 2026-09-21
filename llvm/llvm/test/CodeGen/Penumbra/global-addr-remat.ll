@@ -1,7 +1,7 @@
 ; RUN: llc -mtriple=penumbra -global-isel -verify-machineinstrs < %s \
 ; RUN:   | FileCheck %s
 
-; PseudoMOVADDR keeps a static global address as a single rematerializable def.
+; PseudoLI keeps a static global address as a single rematerializable def.
 ; Here &g is live across a call (loaded before, stored after) while ten args are
 ; also live across it, exhausting the callee-saved registers.  Under that
 ; pressure the allocator splits &g's live range and recomputes it after the call
