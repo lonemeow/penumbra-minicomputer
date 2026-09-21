@@ -100,6 +100,53 @@ adapter's speculative-prefetch FSM: it must abandon an orphaned spec on a
 gap exactly as it already does on an address mispredict. File:
 `hw/rtl/io/sdram/sdram_bus_adapter.sv`.
 
+## Hardware: sync bus should signal completion with `ack`, not a busy-drop
+
+The Penumbra Bus's two forms signal completion with opposite defaults.
+The async form completes when the slave raises `ack`, so silence means
+*wait*. The sync form completes on the cycle `busy` is low, so silence
+means *done*: a zero-wait slave does nothing, and every slave that
+needs time must raise `busy` combinationally in the cycle the request
+appears. That default-done polarity is behind several documented
+hazards:
+
+- A registered-read device must follow the `access_pending` pattern
+  (`o_busy = i_re && !access_pending`). Getting it wrong returns stale
+  data only when accesses happen to line up, invisible to lint — the
+  early `sim_spi.sv` bug (`doc/hardware/bus-protocol.md`, "Slave-side
+  obligation").
+- The autoconfig read combine gates each device's `rdata` with a
+  registered select, so every device behind `autoconfig_dev` must stall
+  a cycle even when its own read is combinational. The failure mode is
+  again silent stale data.
+- A register slice or bridge in the fabric must drive `busy` in the
+  same cycle the request reaches it, so its upstream response can never
+  come purely from a flop.
+- The sync↔async bridge has to invert the handshake.
+
+Signalling completion with `ack` (1 = this beat completes now) instead:
+
+- A zero-wait device drives `ack = sel & (re | we)` — one gate.
+- A registered device raises `ack` the cycle its data is ready, from
+  the same flop `access_pending` uses.
+- A selected device that never answers hangs the access — visible at
+  once rather than as stale data — and a fabric watchdog like the async
+  form's no-device timeout turns the hang into a bus fault.
+- `bus_fault` rides the `ack`. For an unclaimed address the fabric
+  raises `ack` + `bus_fault` from the OR-complement of the selects, as
+  it raises `bus_fault` alone now.
+- Register slices and bridges answer from flops, and the sync form maps
+  onto the async one signal for signal.
+
+This is a robustness and registerability change, not a throughput one;
+it belongs in any sync-bus revision, or before the fabric needs a
+pipeline register. It is mechanical but system-wide: every sync-bus
+device, the response combine in each machine top, and the masters
+(`l2_cache`'s back side, `penumbra3_bus_master`, the SDRAM adapter's
+bus side). The bus devices are shared, so gen1 and gen2 move with it.
+The async form — the ISA-level contract — does not change. Update the
+Sync-Bus Mapping in `doc/hardware/bus-protocol.md` first.
+
 ## Hardware: gen3 (Penumbra/3) Phase-1 build status
 
 Phase 0 (the four structural probes) passed; see
@@ -307,6 +354,42 @@ on the current scheduler.  Revisit once one of:
   N × 660 µs of wire time on the FS-mediated path (16 KB FS blocks →
   32-sector CMD18), so re-measuring IRQ-driven completion against the
   new envelope is worth a fresh attempt
+
+## Kernel: `bus_space_mmap()` maps device memory cacheable
+
+`bus_space_mmap()` (`netbsd/sys/arch/penumbra/penumbra/bus_space.c`)
+returns a bare page frame, relying on "the I/O region is uncached by
+the address map". Nothing enforces that. The TLB's cacheable output is
+the PTE's `C` bit as stored, with no address-based override, and
+`PTE_MAKE` sets `PTE_C` unless the caller passes `PMAP_NOCACHE`. The
+device pager enters user mappings with `pmap_mmap_flags(cookie)`,
+which penumbra leaves at the MI default of 0. So every user mmap of
+device memory is cacheable, contrary to `doc/system/bus.md` ("Always
+uncached"). The kernel's own `bus_space_map()` passes `PMAP_NOCACHE`
+and is unaffected.
+
+The only mmap-able device is the display framebuffer
+(`pdisplay_mmap()`), and there the result happens to be coherent: the
+CPU is the framebuffer's only writer, and write-through with
+update-on-hit keeps every cached copy current. The visible effect is in
+the counters — framebuffer stores count as L1-D and L2 write misses
+(the plasma profile in `doc/internals/penumbra3/memory-performance.md`).
+A device with read side effects, or one that changes its own memory,
+would break when mapped this way: a cacheable load miss fills a whole
+16-byte line, reading the three neighbouring words too, and later loads
+hit stale copies.
+
+Fix: carry the cache attribute in the mmap cookie, as the x86 and ARM
+ports do — define `pmap_mmap_flags()` and `pmap_phys_address()` to
+pass flag bits in the cookie's high bits, and have `bus_space_mmap()`
+set `PMAP_NOCACHE` unless the caller asks for
+`BUS_SPACE_MAP_PREFETCHABLE`. Decide the framebuffer's attribute at the
+same time, because uncached costs it: every framebuffer store blocks,
+and under a gen3 cacheable-only store buffer each one would also drain
+the buffer. A framebuffer wants uncached-but-bufferable
+(write-combining) semantics, close to what the reserved PTE `S` bit is
+earmarked for — see the "PTE `S` (speculatable) bit" item under
+"Penumbra/2 SDRAM-backed sim + EX-frontier interrupts" below.
 
 ## Hardware: FPU
 
