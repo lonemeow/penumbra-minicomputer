@@ -239,11 +239,16 @@ def WriteALU : SchedWrite;
 def WriteMul : SchedWrite;
 def WriteDiv : SchedWrite;
 
+// An ALU instruction's read of a register operand.  A core that makes the
+// reader wait for its producer states the wait as a ReadAdvance on it.
+def ReadALU : SchedRead;
+
 //===----------------------------------------------------------------------===//
 // ALU instructions (Format R, prefix=00, op 0-11)
 //===----------------------------------------------------------------------===//
 
-let SchedRW = [WriteALU], hasSideEffects = 0, mayLoad = 0, mayStore = 0 in {
+let SchedRW = [WriteALU, ReadALU, ReadALU], hasSideEffects = 0, mayLoad = 0,
+    mayStore = 0 in {
 let Defs = [SR], Constraints = "$Rd = $Rd_in" in {
   // 2-operand destructive: Rd = Rd op Rs.  All operands use GPR (full
   // class including R0, R12, R14, R15); the register allocator honours
@@ -273,6 +278,7 @@ let Defs = [SR], Constraints = "$Rd = $Rd_in" in {
                      "sar\t$Rd, $Rs">;
 }
 
+let SchedRW = [WriteALU, ReadALU] in {
 // MOV doesn't set flags (per ISA doc)
 def MOV  : FormatR<0b01000, (outs GPR:$Rd), (ins GPR:$Rs),
                    "mov\t$Rd, $Rs">;
@@ -280,6 +286,7 @@ def MOV  : FormatR<0b01000, (outs GPR:$Rd), (ins GPR:$Rs),
 let Defs = [SR] in
 def NOT  : FormatR<0b01001, (outs GPR:$Rd), (ins GPR:$Rs),
                    "not\t$Rd, $Rs">;
+}
 
 // ADC/SBC: add/subtract with carry from SR.C
 let Defs = [SR], Uses = [SR], Constraints = "$Rd = $Rd_in" in {
@@ -292,7 +299,7 @@ let Defs = [SR], Uses = [SR], Constraints = "$Rd = $Rd_in" in {
 // Flag-only variants (F=1): CMP = SUB with F=1, TEST = AND with F=1.
 // `isCompare = 1` lets the generic PeepholeOptimizer dispatch these to
 // our `analyzeCompare` / `optimizeCompareInstr` hooks for elision.
-let F = 1, isCompare = 1 in {
+let F = 1, isCompare = 1, SchedRW = [ReadALU, ReadALU] in {
   let Defs = [SR] in {
     def CMP  : FormatR<0b00001, (outs), (ins GPR:$Rd, GPR:$Rs),
                        "cmp\t$Rd, $Rs">;
@@ -300,7 +307,7 @@ let F = 1, isCompare = 1 in {
                        "test\t$Rd, $Rs">;
   }
 }
-} // SchedRW = [WriteALU]
+} // SchedRW = [WriteALU, ReadALU, ReadALU]
 
 //===----------------------------------------------------------------------===//
 // Multiply / divide (Format R, op 16-19) — the multi-cycle peer unit
@@ -371,8 +378,9 @@ let Defs = [SR], mayLoad = 0, mayStore = 0,
 // Immediate instructions (Format L, prefix=01)
 //===----------------------------------------------------------------------===//
 
-let SchedRW = [WriteALU], hasSideEffects = 0, mayLoad = 0, mayStore = 0 in {
-let isReMaterializable = 1, isAsCheapAsAMove = 1 in {
+let SchedRW = [WriteALU, ReadALU], hasSideEffects = 0, mayLoad = 0,
+    mayStore = 0 in {
+let isReMaterializable = 1, isAsCheapAsAMove = 1, SchedRW = [WriteALU] in {
   def LLI  : FormatL<0b0000, (outs GPR:$Rd), (ins imm16op:$imm16),
                      "lli\t$Rd, $imm16">;
   def LLIS : FormatL<0b0001, (outs GPR:$Rd), (ins simm16op:$imm16),
@@ -389,13 +397,13 @@ let Defs = [SR] in {
     def SUBi : FormatL<0b0100, (outs GPR:$Rd), (ins GPR:$Rd_in, imm16op:$imm16),
                        "sub\t$Rd, $imm16">;
   }
-  let isCompare = 1 in
+  let isCompare = 1, SchedRW = [ReadALU] in
   def CMPi : FormatL<0b0101, (outs), (ins GPR:$Rd, imm16op:$imm16),
                      "cmp\t$Rd, $imm16">;
   let Constraints = "$Rd = $Rd_in" in
   def ANDi : FormatL<0b0110, (outs GPR:$Rd), (ins GPR:$Rd_in, imm16op:$imm16),
                      "and\t$Rd, $imm16">;
-  let isCompare = 1 in
+  let isCompare = 1, SchedRW = [ReadALU] in
   def TESTi : FormatL<0b0111, (outs), (ins GPR:$Rd, imm16op:$imm16),
                       "test\t$Rd, $imm16">;
 
@@ -409,7 +417,7 @@ let Defs = [SR] in {
                        "sar\t$Rd, $imm16">;
   }
 }
-} // SchedRW = [WriteALU]
+} // SchedRW = [WriteALU, ReadALU]
 
 //===----------------------------------------------------------------------===//
 // Memory instructions (Format M, prefix=10)

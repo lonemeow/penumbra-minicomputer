@@ -7,6 +7,7 @@
 #include "PenumbraInstrInfo.h"
 #include "MCTargetDesc/PenumbraFixupKinds.h"
 #include "MCTargetDesc/PenumbraMCTargetDesc.h"
+#include "PenumbraSubtarget.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
@@ -29,6 +30,17 @@ void PenumbraInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
                                      bool RenamableSrc) const {
   BuildMI(MBB, MI, DL, get(Penumbra::MOV), DestReg)
       .addReg(SrcReg, getKillRegState(KillSrc));
+}
+
+bool PenumbraInstrInfo::isAsCheapAsAMove(const MachineInstr &MI) const {
+  switch (MI.getOpcode()) {
+  default:
+    return MI.isAsCheapAsAMove();
+  case Penumbra::PseudoLI:
+    return MI.getMF()
+        ->getSubtarget<PenumbraSubtarget>()
+        .preferRecomputingWideConstants();
+  }
 }
 
 bool PenumbraInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {

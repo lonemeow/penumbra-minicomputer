@@ -88,6 +88,14 @@ public:
   unsigned getMulCycles() const;
   unsigned getDivCycles() const;
 
+  // Cycles a wide constant's LLI + LUI pair holds the core, including any
+  // wait LUI takes for the LLI result it reads.
+  unsigned getWideConstantCycles() const;
+
+  // Whether a wide constant is better recomputed where it is used than kept
+  // live, as the tuned core's timing answers it.
+  bool preferRecomputingWideConstants() const;
+
   const PenumbraInstrInfo *getInstrInfo() const override { return &InstrInfo; }
   const PenumbraFrameLowering *getFrameLowering() const override {
     return &FrameLowering;

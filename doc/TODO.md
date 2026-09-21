@@ -4528,24 +4528,28 @@ cross-call liveness in a MIR pass.
 
 ### Remat aggressiveness is per-microarchitecture, not a pseudo flag
 
-Split *capability* from *policy*. The pseudo's capability attributes
-(`isReMaterializable`, `Size = 8`, `hasSideEffects = 0`) are
-generation-neutral and stay unconditional in TableGen — every Penumbra
-core can recompute an absolute address. How *aggressively* the allocator
-should exploit that is microarch-specific: remat duplicates the 8-byte
-sequence, which is cheap to hide in gen2's 4 KB 2-way L1 but can evict a
-hot line in gen1's 1 KB direct-mapped I$. That tuning is policy, so it
-belongs in the per-subtarget scheduling/cost model (today a single
-`penumbra1` `ProcessorModel`; `-mcpu` already selects it, default
-`penumbra1`), gated behind a `SubtargetFeature` when a `penumbra2` model
-lands — never baked into the pseudo's static flags. For the first cut:
-enable remat, leave `isAsCheapAsAMove` *off* (it tells the sinker the
-sequence is free and invites per-use-site duplication), and tune
-conservatively for gen1; flip the policy via a feature bit when the
-genN subtargets split. The same per-subtarget seam will host any later
-cost-model divergence (branch cost, alignment padding, LSR weights), so
-when `penumbra2` is added, audit these together rather than one flag at
-a time.
+Split *capability* from *policy*.  `PseudoLI` states the capability
+(`isReMaterializable`, `Size = 8`) unconditionally: every core can
+recompute a wide value.  Whether a core should — rebuild the constant
+near each use rather than keep it live, which is what
+`isAsCheapAsAMove` decides for MachineCSE and the register coalescer —
+is `PenumbraSubtarget::preferRecomputingWideConstants`, answered from
+the tuned core's scheduling model rather than a feature bit or a CPU
+test: recomputing wins where the `LLI` + `LUI` pair costs no more than
+its two instructions.  Penumbra/1 (serial) and Penumbra/2.5
+(forwarding) qualify; Penumbra/2 does not, since `LUI` waits three
+cycles for the `LLI` result (`test/CodeGen/Penumbra/wide-constant-tuning.ll`).
+
+For `generic` (Penumbra/2.5) over twelve of Doom's renderer, collision
+and fixed-point files it costs 0.75% of text and 117 instructions, and
+saves 41 of 1335 SP-relative loads and stores and 71 copies.
+
+The models state cycles, not instruction-cache pressure, so a gen1
+core still recomputes whenever the cycles say so, even where its 1 KB
+direct-mapped I$ would favour the smaller sequence.  Cache-pressure
+controls for constructs that trade instructions for cycles are
+deferred until tuning for a gen1-style core matters — a discrete gen1
+machine.
 
 ### TLS and PIC are orthogonal
 
@@ -4905,8 +4909,8 @@ claim it changes what a binary may contain.
 `Penumbra.td` defines `penumbra1`, `penumbra2` and `penumbra2_5` as
 processors over one shared architecture.  Each carries a
 `PenumbraTuning` record pairing its tune features with its scheduling
-model: penumbra1 uses `Penumbra1Model`, penumbra2 and penumbra2_5
-share `Penumbra2Model`, and all feature lists are empty.  `generic` is
+model — `Penumbra1Model`, `Penumbra2Model` and `Penumbra2_5Model` —
+and all feature lists are empty.  `generic` is
 not a tuning of its own: it is defined from the
 **most-used variant's** `PenumbraTuning`, so it tunes exactly like
 that core rather than averaging across generations, and moving the
@@ -4928,9 +4932,9 @@ Clang accepts both flags for the Penumbra triple (`getCPUName` in
 an unknown name against the list in `clang/lib/Basic/Targets/
 Penumbra.cpp`, which mirrors the `ProcessorModel` definitions.
 
-The models differ only in the MUL and DIV latencies they state, so a
-constant divide is the one place the names produce different code so
-far.  A core earns a name when builds
+The models differ in the MUL and DIV latencies they state and in what
+an ALU read waits for, so a constant divide and a wide constant are
+the places the names produce different code so far.  A core earns a name when builds
 target it explicitly or when `generic` follows it; its tuning then
 fills in as properties with consumers land.
 
@@ -4981,9 +4985,12 @@ once a second model exists, so a generic build schedules for a
 forwarding core; an interlocked or single-issue core that wants its own
 schedule is built with its explicit name.
 
-**gen2's dependency cost is not modelled.**  gen2 and gen2.5 share one
-scheduling model that states only instruction latencies, so cost
-decisions price gen2 as if it forwarded.  On gen2 a consumer waits for
+**gen2's dependency cost is modelled for ALU reads only.**
+`Penumbra2Model` states the wait as `ReadAdvance<ReadALU, -3>` on
+every ALU instruction's register read, and the price of a wide constant
+reads it.  Loads, stores and branches carry no read annotation, and
+the other cost decisions — the constant-multiply combine's shift/add
+chains among them — still price gen2 as if it forwarded.  On gen2 a consumer waits for
 its producer to leave WB: 3 stall cycles at distance 1, fewer further
 back ([hazard-model.md](internals/penumbra2/hazard-model.md), Example
 A; a chain of eight dependent `ADD`s measures 29 cycles against 8 on

@@ -36,6 +36,10 @@ public:
 
   bool expandPostRAPseudo(MachineInstr &MI) const override;
 
+  // Whether a wide constant counts as cheap is the tuned core's answer
+  // (PenumbraSubtarget::preferRecomputingWideConstants).
+  bool isAsCheapAsAMove(const MachineInstr &MI) const override;
+
   void loadRegFromStackSlot(
       MachineBasicBlock &MBB, MachineBasicBlock::iterator MI, Register DestReg,
       int FrameIndex, const TargetRegisterClass *RC, Register VReg,

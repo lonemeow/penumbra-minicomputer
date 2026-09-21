@@ -77,3 +77,20 @@ unsigned PenumbraSubtarget::getMulCycles() const {
 unsigned PenumbraSubtarget::getDivCycles() const {
   return getModelCycles(*this, Penumbra::DIV);
 }
+
+unsigned PenumbraSubtarget::getWideConstantCycles() const {
+  const MCSchedModel &SM = getSchedModel();
+  const MCSchedClassDesc *LLI =
+      SM.getSchedClassDesc(getInstrInfo()->get(Penumbra::LLI).getSchedClass());
+  const MCSchedClassDesc *LUI =
+      SM.getSchedClassDesc(getInstrInfo()->get(Penumbra::LUI).getSchedClass());
+  // LUI's first register read is its own destination: the LLI result.
+  int Advance = getReadAdvanceCycles(
+      LUI, /*UseIdx=*/0, getWriteLatencyEntry(LLI, 0)->WriteResourceID);
+  return getModelCycles(*this, Penumbra::LLI) + std::max(-Advance, 0) +
+         getModelCycles(*this, Penumbra::LUI);
+}
+
+bool PenumbraSubtarget::preferRecomputingWideConstants() const {
+  return getWideConstantCycles() <= 2 * getALUCycles();
+}

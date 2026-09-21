@@ -142,10 +142,14 @@ them back (`getALUCycles`, `getMulCycles`, `getDivCycles`), and
 `PenumbraTTIImpl`, `isIntDivCheap()` and the constant-multiply combine
 weigh operations by them.
 
-Penumbra/2 and Penumbra/2.5 share one model. It states instruction
-latencies only, so no model expresses Penumbra/2's dependency stall;
-cost decisions price Penumbra/2 as if it forwarded. Nor does any model
-state branch costs: the misprediction penalty and the cost of a
+The models also state what an ALU instruction waits for a register it
+reads, as a `ReadAdvance` on `ReadALU`: nothing on Penumbra/1 and
+Penumbra/2.5, three cycles on Penumbra/2. The only reader so far is the
+price of a wide constant (`getWideConstantCycles`: `LLI`, the wait for
+its result, then `LUI`), which decides whether the constant is rebuilt
+where it is used or kept live. Loads, stores and branches carry no read
+annotation, so their dependency costs are not modelled, and no model
+states branch costs: the misprediction penalty and the cost of a
 predicted taken branch above are not read by the compiler.
 
 ## Measuring

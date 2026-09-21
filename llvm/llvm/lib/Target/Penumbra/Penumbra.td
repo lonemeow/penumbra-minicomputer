@@ -85,15 +85,31 @@ let SchedModel = Penumbra1Model in {
   def : WriteRes<WriteALU, []> { let Latency = 2; }
   def : WriteRes<WriteMul, []> { let Latency = 37; }
   def : WriteRes<WriteDiv, []> { let Latency = 37; }
+  def : ReadAdvance<ReadALU, 0>;   // serial: nothing waits on a producer
 }
 
-// Penumbra/2 and Penumbra/2.5 differ in how long a consumer waits for its
-// producer, which no model here states; their instruction latencies match.
-def Penumbra2Model : PenumbraSchedModel;
-let SchedModel = Penumbra2Model in {
+// Penumbra/2 and Penumbra/2.5 hold the core for the same cycles per
+// instruction.  They differ in how long a consumer waits for its producer:
+// Penumbra/2 has no forwarding, so an ALU instruction reads a register only
+// once the producer has left WB, three cycles later at distance one;
+// Penumbra/2.5 forwards it (doc/internals/instruction-timing.md,
+// "Dependency costs").
+multiclass Penumbra2InstrCycles {
   def : WriteRes<WriteALU, []> { let Latency = 1; }
   def : WriteRes<WriteMul, []> { let Latency = 10; }
   def : WriteRes<WriteDiv, []> { let Latency = 34; }
+}
+
+def Penumbra2Model : PenumbraSchedModel;
+let SchedModel = Penumbra2Model in {
+  defm : Penumbra2InstrCycles;
+  def : ReadAdvance<ReadALU, -3>;
+}
+
+def Penumbra2_5Model : PenumbraSchedModel;
+let SchedModel = Penumbra2_5Model in {
+  defm : Penumbra2InstrCycles;
+  def : ReadAdvance<ReadALU, 0>;
 }
 
 // The architecture list is empty for every processor — one ISA, one set of
@@ -119,7 +135,7 @@ def Penumbra2Tuning : PenumbraTuning<Penumbra2Model, []>;
 def : PenumbraProcessor<"penumbra2", Penumbra2Tuning>;
 
 // The pipelined core with GPR forwarding.
-def Penumbra2_5Tuning : PenumbraTuning<Penumbra2Model, []>;
+def Penumbra2_5Tuning : PenumbraTuning<Penumbra2_5Model, []>;
 def : PenumbraProcessor<"penumbra2_5", Penumbra2_5Tuning>;
 
 // The name a build uses when it names no core.  It is the most-used variant's
