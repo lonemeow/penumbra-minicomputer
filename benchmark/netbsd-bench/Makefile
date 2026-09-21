@@ -42,7 +42,7 @@ OBJDIR      := $(BUILDDIR)/obj
 OVERLAY_ROOT ?= $(PROJROOT)/build/netbsd-overlay
 
 # ── Sources ───────────────────────────────────────────────────
-# Each benchmark is one .c file under kernel/ or libc/.  Add a new
+# Each benchmark is one .c file under kernel/, libc/ or audio/.  Add a new
 # benchmark by dropping a .c file in the right directory and listing
 # its entry function in pbench.c's registry.
 
@@ -50,7 +50,8 @@ PBENCH_SRCS := pbench.c bench.c perfctr.c \
                kernel/getpid.c kernel/clock_gettime.c \
                kernel/pipe_pingpong.c kernel/fork_exit.c kernel/fork_exec.c \
                libc/memcpy_sweep.c libc/memset_sweep.c \
-               libc/strlen_sweep.c libc/qsort_int.c
+               libc/strlen_sweep.c libc/qsort_int.c \
+               audio/mix.c
 
 PBENCH_OBJS := $(PBENCH_SRCS:%.c=$(OBJDIR)/%.o)
 
@@ -69,17 +70,18 @@ overlay: dynamic
 dynamic: $(BUILDDIR)/pbench
 static:  $(BUILDDIR)/pbench-static
 
-$(BUILDDIR) $(OBJDIR) $(OBJDIR)/kernel $(OBJDIR)/libc:
+$(BUILDDIR) $(OBJDIR) $(OBJDIR)/kernel $(OBJDIR)/libc $(OBJDIR)/audio:
 	@mkdir -p $@
 
-$(OBJDIR)/%.o: %.c bench.h | $(OBJDIR) $(OBJDIR)/kernel $(OBJDIR)/libc
+$(OBJDIR)/%.o: %.c bench.h | $(OBJDIR) $(OBJDIR)/kernel $(OBJDIR)/libc \
+    $(OBJDIR)/audio
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILDDIR)/pbench: $(PBENCH_OBJS) | $(BUILDDIR)
-	$(CC) $(LDFLAGS_DYN) $(PBENCH_OBJS) -o $@
+	$(CC) $(LDFLAGS_DYN) $(PBENCH_OBJS) -lm -o $@
 
 $(BUILDDIR)/pbench-static: $(PBENCH_OBJS) | $(BUILDDIR)
-	$(CC) $(LDFLAGS_STA) $(PBENCH_OBJS) -o $@
+	$(CC) $(LDFLAGS_STA) $(PBENCH_OBJS) -lm -o $@
 
 clean:
 	rm -rf $(BUILDDIR)

@@ -4027,6 +4027,122 @@ register's first use costs it nothing (see item 1 of the
 shrink-wrapping entry's open list).  Localizing constant-offset addresses does not
 change this function.
 
+## Compiler: hot-loop code review — software audio mixing
+
+Reviewed 2026-09-21: the inner loops of `pbench`'s `audio/mix`
+(`benchmark/netbsd-bench/audio/mix.c`), which mix tracker voices in
+software.  Its two loop orders produce the same output and differ in
+how much of each voice-sample is bookkeeping.  `mix_by_frame` visits
+every voice for every output frame: about 25 instructions per
+voice-sample, most of them reloading voice state and a run-time
+indexed accumulator.  `mix_by_voice` holds a voice's state in
+registers across the block: 19, where the ISA allows about 14.
+
+Measured on hardware, a table lookup in place of the sample-by-volume
+multiply gains nothing.  The multiplier's `funit` stall (10–12% of
+cycles) is traded for a dependent load's, and load stalls rise from
+about 13% to about 20%.  The levers are the loop order and the causes
+below, not the multiply.
+
+| Cause | Per voice-sample | Entry |
+|---|---|---|
+| `MUL` copies a multiplicand that stays live | 1 in `mix_by_voice` | "MUL is not commutable, so a live multiplicand is copied" |
+| A conditional subtract pays for its zero arm | 2 in `mix_by_voice` | "a conditional add or subtract becomes a select of zero" |
+| A run-time indexed local rebuilds its frame address | 2 in `mix_by_frame` | "pointer-minus-constant and integer MMIO addresses miss their folds" |
+
+### Smaller findings
+
+- **A commutable `ADD` still copies into an argument register.**
+  `pos += inc`, with both in argument registers and the sum returned,
+  is `mov r11, r1; mov r1, r2; add r1, r11` where `add r1, r2` does
+  it.  `ADD` is commutable, so this is not the `MUL` gap: commuting
+  does not steer the tied operand to the one already in the result's
+  physical register.  It is the same family as the subtracting
+  decomposition's copy in "constant multiply, divide and remainder
+  strength reduction".
+- **The voice pointer is recomputed rather than stepped.**
+  `mix_by_voice` forms `&v[k]` as `k * 24` by shift and add for each
+  voice, spilling `k` to do it, where a pointer advanced by 24 needs
+  neither.  Once per voice, not per sample.
+
+Checked and not levers:
+- Negative constants in a `CMP` are loaded into a register because
+  `CMP Rd, #imm16` zero-extends its immediate and cannot hold them.
+- The wrap test `(pos >> 16) >= len` costs a `MOV` and a `SHR` per
+  sample.  Comparing `pos` with a precomputed `len << 16` removes
+  both, but only the source can make that change: it needs
+  `len < 65536`, which the compiler cannot know.
+
+## Compiler: MUL is not commutable, so a live multiplicand is copied
+
+`MUL` and `MULU` are destructive (`Rd = Rd × Rs`) and commutative,
+but unlike `ADD`, `AND`, `OR` and `XOR` they are not marked
+`isCommutable` in `PenumbraInstrInfo.td`.  They share the
+`$Rd = $Rd_in` block with `DIV` and `DIVU`, which must not commute.
+Two-address lowering therefore ties the result to the operand that
+comes first in the IR, and when that operand is still live it is
+copied first — the `MOV` the comment on the `ADD` group describes.
+
+Whether it bites depends on InstCombine's operand order.  `p[i] * k`
+in a loop is `ldw r11, [r1+0]; mul r11, r2`: the dead operand comes
+first and nothing is copied.  The audio mixer's product is ordered
+`vol * s`, so each voice-sample pays `mov r3, r7; mul r3, r9` to keep
+the loop-invariant volume.  Reduced:
+
+```c
+int f(int a, int b) { return a * b + a; }    /* a * (b + 1) */
+```
+
+is `add r2, 1; mul r2, r1; mov r1, r2`, where `add r2, 1;
+mul r1, r2` is enough.
+
+The fix is to mark `MUL`, `MULU` and the pair forms `MUL_P` and
+`MULU_P` commutable — swapping the sources changes neither half of
+the product — and to leave `DIV`, `DIVU` and their pair forms as
+they are.  The generic `G_UMUL_LOHI` and `G_SMUL_LOHI` are already
+commutable, so this carries a fact the combiner already has through
+to the selected instruction.
+
+## Compiler: a conditional add or subtract becomes a select of zero
+
+`if (c) x -= k` reaches the backend as `x - select(c, 0, k)`.  The
+middle end folds the branch into a select, which pays off on a
+target with a conditional move.  Penumbra has none, so the select is
+lowered back into a branch diamond while the subtract stays
+unconditional: the common path now runs a `MOV` of zero and a `SUB`
+of it, neither of which the original branch needed.
+
+```c
+unsigned w(unsigned pos, unsigned inc, unsigned lim, unsigned k) {
+    pos += inc;
+    if (pos >= lim)
+        pos -= k;
+    return pos;
+}
+```
+
+```llvm
+%7 = select i1 %6, i32 0, i32 %3
+%8 = sub i32 %5, %7
+```
+
+becomes `mov r2, zero; cmp r1, r3; bcc .L; mov r2, r4; .L: sub r1,
+r2`, where the source asked for `cmp r1, r3; bcc .L; sub r1, r4; .L:`.
+In the audio mixer it is 2 of the 19 instructions per voice-sample:
+the loop wrap of every voice.
+
+The fix belongs in the combiner rather than in switching the middle
+end's transform off.  `G_SUB x, (G_SELECT c, 0, k)` →
+`G_SELECT c, x, (G_SUB x, k)` moves the operation into the arm that
+is not its identity, so the other arm is `x` itself and lowers to
+nothing.  The same holds for an identity in either arm of any such
+operation — `ADD`, `SUB`, `OR`, `XOR` and the shifts with 0, `AND`
+with -1 — and every `if (c) x op= k` gains: loop wraps, saturation,
+conditional accumulation.  The compare-materialisation entries,
+"signed comparisons have no branchless materialisation" and "64-bit
+relational compares expand to select diamonds", are the same missing
+conditional move seen from the other side.
+
 ## Compiler: pointer-minus-constant and integer MMIO addresses miss their folds
 
 - **`p - K`.**  `G_PTR_ADD p, -K` selects as `LLIS t,-K; ADD p,t`, often
@@ -4056,6 +4172,33 @@ change this function.
   `G_INTTOPTR(G_ADD x, C)` at selection, or do the macros' arithmetic
   on a `char *` — `bus_funcs.h` is MD code.  RISC-V's GlobalISel has
   the same selection gap.
+- **A local array indexed at run time rebuilds its address.**  A
+  frame object that does not escape stays in memory once a run-time
+  index reaches it, and every access forms `SP + offset` afresh and
+  loads through `[r + 0]`.  Reduced, with two accumulators so that
+  one sits at a non-zero offset:
+
+  ```c
+  int g(const int *side, const int *val, int n) {
+      int a[2] = { 0, 0 }, b[2] = { 0, 0 };
+      for (int k = 0; k < n; k++) {
+          a[side[k] & 1] += val[k];
+          b[(side[k] >> 1) & 1] += val[k];
+      }
+      return a[0] - a[1] + b[0] - b[1];
+  }
+  ```
+
+  In the loop, `a` at `SP + 8` is `mov r6, sp; add r6, 8; add r6,
+  r5` and then `[r6 + 0]` for the load and the store, where
+  `add r5, sp` and `[r5 + 8]` need two fewer; `b` at offset 0 is
+  `mov r5, sp; add r5, r11`, where `add r11, sp` needs one fewer — 3
+  of the loop's 23 instructions.  It fits `selectAddrRegImm` folding a
+  frame index or a constant `G_PTR_ADD` but not a frame index under a
+  `G_PTR_ADD` by a register: the frame offset belongs in the
+  displacement, with the index added to `SP`.  In the frame-by-frame
+  audio mixer, whose accumulator is indexed by the voice's side, it
+  is 2 instructions per voice-sample.
 
 ## Compiler: InstCombine's shift-and-mask form costs a constant
 

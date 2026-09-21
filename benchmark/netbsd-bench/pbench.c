@@ -21,6 +21,7 @@
  * Categories:
  *   kernel    Syscall / context-switch / process-creation costs.
  *   libc      memcpy / memset / strlen / qsort etc., size-swept.
+ *   audio     Software mixing of tracker voices.
  */
 
 #include "bench.h"
@@ -67,6 +68,8 @@ extern void bench_libc_memset_sweep(void);
 extern void bench_libc_strlen_sweep(void);
 extern void bench_libc_qsort_int(void);
 
+extern void bench_audio_mix(void);
+
 /* --- Registry.  Add new benchmarks by appending an entry here. */
 
 static const struct bench_entry registry[] = {
@@ -83,6 +86,9 @@ static const struct bench_entry registry[] = {
     { "libc",   "memset",         bench_libc_memset_sweep },
     { "libc",   "strlen",         bench_libc_strlen_sweep },
     { "libc",   "qsort_int",      bench_libc_qsort_int },
+
+    /* Audio benchmarks: what playing music costs the CPU. */
+    { "audio",  "mix",            bench_audio_mix },
 };
 
 static const size_t registry_len = sizeof(registry) / sizeof(registry[0]);
@@ -93,7 +99,7 @@ static void print_help(const char *argv0) {
     fprintf(stderr,
         "usage: %s [-o FILE] [help|list|<category> [<name>]]\n"
         "  no args                  run every benchmark\n"
-        "  <category>               run all benchmarks in category (kernel|libc)\n"
+        "  <category>               run all benchmarks in category (kernel|libc|audio)\n"
         "  <category> <name>        run one benchmark\n"
         "  list                     list registered benchmarks\n"
         "  help                     show this help\n"
