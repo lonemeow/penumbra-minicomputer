@@ -403,10 +403,10 @@ bool PenumbraAsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
   if (Mnemonic.equals_insensitive("la"))
     return emitLoadAddress(IDLoc, Operands, Out);
   if (Mnemonic.equals_insensitive("nop")) {
-    // NOP → ADD R0, R0 (encoding 0x00000000)
+    // NOP → MOV R0, R0: MOV writes no flags, so a NOP leaves NZCV live
+    // across it.
     MCInst Inst;
-    Inst.setOpcode(Penumbra::ADD);
-    Inst.addOperand(MCOperand::createReg(Penumbra::R0));
+    Inst.setOpcode(Penumbra::MOV);
     Inst.addOperand(MCOperand::createReg(Penumbra::R0));
     Inst.addOperand(MCOperand::createReg(Penumbra::R0));
     Inst.setLoc(IDLoc);

@@ -329,9 +329,10 @@ PenumbraAsmBackend::createObjectTargetWriter() const {
 
 bool PenumbraAsmBackend::writeNopData(raw_ostream &OS, uint64_t Count,
                                       const MCSubtargetInfo *STI) const {
-  // NOP = ADD R0, R0 = 0x00000000
+  // NOP = MOV R0, R0 = 0x10000000, little-endian.  Padding can land
+  // inside a function (an aligned loop head), so it must not write flags.
   while (Count >= 4) {
-    OS.write("\0\0\0\0", 4);
+    OS.write("\x00\x00\x00\x10", 4);
     Count -= 4;
   }
   return Count == 0;

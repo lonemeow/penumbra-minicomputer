@@ -106,7 +106,7 @@ not behavior.
 | `MCTargetDesc/PenumbraMCTargetDesc.{h,cpp}` | Registers all MC components. `PenumbraMCInstrAnalysis`: branch-target evaluation + GPR state tracking for LLI/LUI address annotations |
 | `MCTargetDesc/PenumbraInstPrinter.{h,cpp}` | MCInst → assembly text. Prints the semantic aliases (zero/tp/lr/sp/pc) by default via the `SemanticRegName` alt-name index; `-penumbra-numeric-reg-names` (llc/llvm-mc) or `llvm-objdump -M numeric` forces physical r<N> names |
 | `MCTargetDesc/PenumbraMCCodeEmitter.cpp` | MCInst → binary. Custom `encodeBranchTarget`/`encodeImm16` create fixups |
-| `MCTargetDesc/PenumbraAsmBackend.cpp` | Fixup resolution (branch22, imm16, lo16, hi16). `maybeAddReloc` for ELF relocs. NOP = `0x00000000` (ADD R0,R0) |
+| `MCTargetDesc/PenumbraAsmBackend.cpp` | Fixup resolution (branch22, imm16, lo16, hi16). `maybeAddReloc` for ELF relocs. NOP = `0x10000000` (MOV R0,R0 — flag-preserving, since padding can land inside a function) |
 | `MCTargetDesc/PenumbraELFObjectWriter.cpp` | ELF reloc mapping. Uses `EM_PENUMBRA` from `llvm/BinaryFormat/ELF.h` |
 | `MCTargetDesc/PenumbraFixupKinds.h` | Fixup kinds + MCSpecifierExpr values (S_Lo16, S_Hi16, S_PCRel) |
 | `MCTargetDesc/PenumbraMCAsmInfo.{h,cpp}` | ELF, little-endian, `//` comments, `;` statement separator. `printSpecifierExpr` for `%lo16()`/`%hi16()`/`%pcrel()`/`%tlsgd_*()` |
