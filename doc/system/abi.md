@@ -87,6 +87,17 @@ Penumbra has 16 general-purpose 32-bit registers (R0–R15).
 
 The status register flags (N, Z, C, V) are **caller-saved** — they are not preserved across function calls. A callee may freely clobber flags.
 
+### Inline Assembly
+
+GCC-style `asm` operands use the usual constraint rules, with two
+points specific to Penumbra:
+
+- The flags are not assumed clobbered. An `asm` that changes N, Z, C
+  or V — as most ALU instructions do — must list `"cc"`.
+- An `r` input may share its register with other uses of the same
+  value, and may be `zero`, `sp` or `tp` when the value is R0, R14 or
+  R12. Never write to an input; make it an `"+r"` operand instead.
+
 ---
 
 ## 3. Function Calling Convention
