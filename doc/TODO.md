@@ -4254,6 +4254,48 @@ Checked and not levers:
   both, but only the source can make that change: it needs
   `len < 65536`, which the compiler cannot know.
 
+### 32.32 sample positions
+
+A module's sample can be longer than a 16.16 position reaches — a MOD
+sample runs to 131070 bytes, 65535 frames being the limit — so a
+replayer's mixer needs a 32.32 position: the frame in the high word,
+the fraction in the low.  `pos += inc` is then `ADD`/`ADC`, the sample
+index is the high word as it stands, and the wrap test compares the
+high word alone:
+
+```c
+int s = d[pos >> 32];                       /* uint64_t pos, inc */
+pos += inc;
+if ((uint32_t)(pos >> 32) >= end)
+    pos -= (uint64_t)looplen << 32;
+out[f] += s * vol;
+```
+
+At the ISA floor that is 14 instructions per voice-sample, one of them
+a copy of the high word for the load address (there is no
+register-plus-register addressing, and both the base and the position
+stay live).  It compiles to 17:
+
+- **A subtract with a zero low half keeps its low-half subtract.**
+  `pos -= (uint64_t)k << 32` narrows to `G_USUBO lo, 0` feeding
+  `G_USUBE hi, k`, and nothing folds the constant half, so every wrap
+  runs `sub r4, 0; sbc lr, r9` where `sub lr, r9` does it.  Upstream's
+  `match_subo_no_overflow` (a `G_USUBO` that cannot borrow becomes a
+  `G_SUB` and a zero carry) and `adde_to_addo` (a `G_USUBE` whose carry
+  is zero becomes a `G_USUBO`) cover it; neither is in
+  `PenumbraPostLegalizerCombiner`.  1 per voice-sample.
+- **The select of zero survives in the high half.**  The wrap is
+  `pos - select(c, 0, k << 32)` at s64, which
+  `penumbra_select_of_identity` leaves alone: it rewrites
+  register-width values only (see "a conditional add or subtract
+  becomes a select of zero").  Split by the legalizer, the low select
+  is a constant zero and folds, but the high one stays, so the common
+  path runs `mov r9, zero` and the `SBC` of it.  2 per voice-sample.
+  Running the rule after legalization would reach it, but also
+  reshapes the legalizer's own selects, which cost `fshl_i64` two
+  spills; the rule would need to recognise, before legalization, a
+  64-bit select whose arms differ only in the high word.
+
 ## Compiler: MUL is not commutable, so a live multiplicand is copied — RESOLVED
 
 `MUL` and `MULU` are destructive (`Rd = Rd × Rs`) and commutative,
