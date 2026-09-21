@@ -21,9 +21,8 @@ define void @bit_test_live(i32 %flags) {
 ; CHECK-NEXT:    test r1, 4
 ; CHECK-NEXT:    beq .LBB0_2
 ; CHECK-NEXT:  // %bb.1: // %t1
-; CHECK-NEXT:    lli r2, 1
 ; CHECK-NEXT:    mov r5, r1
-; CHECK-NEXT:    mov r1, r2
+; CHECK-NEXT:    lli r1, 1
 ; CHECK-NEXT:    bl f
 ; CHECK-NEXT:    mov r1, r5
 ; CHECK-NEXT:  .LBB0_2: // %n1

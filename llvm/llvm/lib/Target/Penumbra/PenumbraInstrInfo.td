@@ -372,13 +372,15 @@ let Defs = [SR], mayLoad = 0, mayStore = 0,
 //===----------------------------------------------------------------------===//
 
 let SchedRW = [WriteALU], hasSideEffects = 0, mayLoad = 0, mayStore = 0 in {
-def LLI  : FormatL<0b0000, (outs GPR:$Rd), (ins imm16op:$imm16),
-                   "lli\t$Rd, $imm16">;
-def LLIS : FormatL<0b0001, (outs GPR:$Rd), (ins simm16op:$imm16),
-                   "llis\t$Rd, $imm16">;
-let Constraints = "$Rd = $Rd_in" in
-def LUI  : FormatL<0b0010, (outs GPR:$Rd), (ins GPR:$Rd_in, imm16op:$imm16),
-                   "lui\t$Rd, $imm16">;
+let isReMaterializable = 1, isAsCheapAsAMove = 1 in {
+  def LLI  : FormatL<0b0000, (outs GPR:$Rd), (ins imm16op:$imm16),
+                     "lli\t$Rd, $imm16">;
+  def LLIS : FormatL<0b0001, (outs GPR:$Rd), (ins simm16op:$imm16),
+                     "llis\t$Rd, $imm16">;
+  let Constraints = "$Rd = $Rd_in" in
+  def LUI  : FormatL<0b0010, (outs GPR:$Rd), (ins GPR:$Rd_in, imm16op:$imm16),
+                     "lui\t$Rd, $imm16">;
+}
 
 let Defs = [SR] in {
   let Constraints = "$Rd = $Rd_in" in {

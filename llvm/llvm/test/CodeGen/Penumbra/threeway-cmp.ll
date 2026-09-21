@@ -14,21 +14,19 @@ define i32 @scmp_i32(i32 %a, i32 %b) {
 ; CHECK-LABEL: scmp_i32:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    mov r3, r1
-; CHECK-NEXT:    cmp r3, r2
-; CHECK-NEXT:    bgt .LBB0_1
-; CHECK-NEXT:  // %bb.2:
-; CHECK-NEXT:    mov r1, zero
-; CHECK-NEXT:    cmp r3, r2
+; CHECK-NEXT:    lli r4, 1
+; CHECK-NEXT:    cmp r1, r2
+; CHECK-NEXT:    bgt .LBB0_2
+; CHECK-NEXT:  // %bb.1:
+; CHECK-NEXT:    mov r4, zero
+; CHECK-NEXT:  .LBB0_2:
+; CHECK-NEXT:    llis r3, -1
+; CHECK-NEXT:    cmp r1, r2
 ; CHECK-NEXT:    blt .LBB0_4
-; CHECK-NEXT:    b .LBB0_5
-; CHECK-NEXT:  .LBB0_1:
-; CHECK-NEXT:    lli r1, 1
-; CHECK-NEXT:    cmp r3, r2
-; CHECK-NEXT:    bge .LBB0_5
+; CHECK-NEXT:  // %bb.3:
+; CHECK-NEXT:    mov r3, r4
 ; CHECK-NEXT:  .LBB0_4:
-; CHECK-NEXT:    llis r1, -1
-; CHECK-NEXT:  .LBB0_5:
+; CHECK-NEXT:    mov r1, r3
 ; CHECK-NEXT:    jmp lr
   %r = call i32 @llvm.scmp.i32.i32(i32 %a, i32 %b)
   ret i32 %r
@@ -38,21 +36,19 @@ define i32 @ucmp_i32(i32 %a, i32 %b) {
 ; CHECK-LABEL: ucmp_i32:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    mov r3, r1
-; CHECK-NEXT:    cmp r3, r2
-; CHECK-NEXT:    bhi .LBB1_1
-; CHECK-NEXT:  // %bb.2:
-; CHECK-NEXT:    mov r1, zero
-; CHECK-NEXT:    cmp r3, r2
+; CHECK-NEXT:    lli r4, 1
+; CHECK-NEXT:    cmp r1, r2
+; CHECK-NEXT:    bhi .LBB1_2
+; CHECK-NEXT:  // %bb.1:
+; CHECK-NEXT:    mov r4, zero
+; CHECK-NEXT:  .LBB1_2:
+; CHECK-NEXT:    llis r3, -1
+; CHECK-NEXT:    cmp r1, r2
 ; CHECK-NEXT:    bcc .LBB1_4
-; CHECK-NEXT:    b .LBB1_5
-; CHECK-NEXT:  .LBB1_1:
-; CHECK-NEXT:    lli r1, 1
-; CHECK-NEXT:    cmp r3, r2
-; CHECK-NEXT:    bcs .LBB1_5
+; CHECK-NEXT:  // %bb.3:
+; CHECK-NEXT:    mov r3, r4
 ; CHECK-NEXT:  .LBB1_4:
-; CHECK-NEXT:    llis r1, -1
-; CHECK-NEXT:  .LBB1_5:
+; CHECK-NEXT:    mov r1, r3
 ; CHECK-NEXT:    jmp lr
   %r = call i32 @llvm.ucmp.i32.i32(i32 %a, i32 %b)
   ret i32 %r
@@ -68,52 +64,44 @@ define i32 @scmp_i64(i64 %a, i64 %b) {
 ; CHECK-NEXT:    mov r11, zero
 ; CHECK-NEXT:    sbc r11, zero
 ; CHECK-NEXT:    and r11, 1
-; CHECK-NEXT:    cmp r2, r4
-; CHECK-NEXT:    bgt .LBB2_1
-; CHECK-NEXT:  // %bb.2:
-; CHECK-NEXT:    lli lr, 0
-; CHECK-NEXT:    cmp r2, r4
-; CHECK-NEXT:    bne .LBB2_4
-; CHECK-NEXT:    b .LBB2_5
-; CHECK-NEXT:  .LBB2_1:
 ; CHECK-NEXT:    lli lr, 1
 ; CHECK-NEXT:    cmp r2, r4
-; CHECK-NEXT:    beq .LBB2_5
-; CHECK-NEXT:  .LBB2_4:
+; CHECK-NEXT:    bgt .LBB2_2
+; CHECK-NEXT:  // %bb.1:
+; CHECK-NEXT:    lli lr, 0
+; CHECK-NEXT:  .LBB2_2:
+; CHECK-NEXT:    cmp r2, r4
+; CHECK-NEXT:    beq .LBB2_4
+; CHECK-NEXT:  // %bb.3:
 ; CHECK-NEXT:    mov r11, lr
-; CHECK-NEXT:  .LBB2_5:
+; CHECK-NEXT:  .LBB2_4:
 ; CHECK-NEXT:    cmp r1, r3
 ; CHECK-NEXT:    mov r3, zero
 ; CHECK-NEXT:    sbc r3, zero
 ; CHECK-NEXT:    and r3, 1
+; CHECK-NEXT:    lli r1, 1
 ; CHECK-NEXT:    cmp r2, r4
 ; CHECK-NEXT:    blt .LBB2_6
-; CHECK-NEXT:  // %bb.7:
+; CHECK-NEXT:  // %bb.5:
 ; CHECK-NEXT:    lli r1, 0
-; CHECK-NEXT:    cmp r2, r4
-; CHECK-NEXT:    bne .LBB2_9
-; CHECK-NEXT:    b .LBB2_10
 ; CHECK-NEXT:  .LBB2_6:
-; CHECK-NEXT:    lli r1, 1
 ; CHECK-NEXT:    cmp r2, r4
-; CHECK-NEXT:    beq .LBB2_10
-; CHECK-NEXT:  .LBB2_9:
+; CHECK-NEXT:    beq .LBB2_8
+; CHECK-NEXT:  // %bb.7:
 ; CHECK-NEXT:    mov r3, r1
-; CHECK-NEXT:  .LBB2_10:
+; CHECK-NEXT:  .LBB2_8:
+; CHECK-NEXT:    lli r2, 1
 ; CHECK-NEXT:    test r11, 1
-; CHECK-NEXT:    bne .LBB2_11
-; CHECK-NEXT:  // %bb.12:
-; CHECK-NEXT:    mov r1, zero
-; CHECK-NEXT:    test r3, 1
-; CHECK-NEXT:    bne .LBB2_14
-; CHECK-NEXT:    b .LBB2_15
-; CHECK-NEXT:  .LBB2_11:
-; CHECK-NEXT:    lli r1, 1
-; CHECK-NEXT:    test r3, 1
-; CHECK-NEXT:    beq .LBB2_15
-; CHECK-NEXT:  .LBB2_14:
+; CHECK-NEXT:    bne .LBB2_10
+; CHECK-NEXT:  // %bb.9:
+; CHECK-NEXT:    mov r2, zero
+; CHECK-NEXT:  .LBB2_10:
 ; CHECK-NEXT:    llis r1, -1
-; CHECK-NEXT:  .LBB2_15:
+; CHECK-NEXT:    test r3, 1
+; CHECK-NEXT:    bne .LBB2_12
+; CHECK-NEXT:  // %bb.11:
+; CHECK-NEXT:    mov r1, r2
+; CHECK-NEXT:  .LBB2_12:
 ; CHECK-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
 ; CHECK-NEXT:    add sp, 4
 ; CHECK-NEXT:    jmp lr
@@ -153,20 +141,18 @@ define i32 @ucmp_i64(i64 %a, i64 %b) {
 ; CHECK-NEXT:  // %bb.3:
 ; CHECK-NEXT:    mov r3, r1
 ; CHECK-NEXT:  .LBB3_4:
+; CHECK-NEXT:    lli r2, 1
 ; CHECK-NEXT:    test r11, 1
-; CHECK-NEXT:    bne .LBB3_5
-; CHECK-NEXT:  // %bb.6:
-; CHECK-NEXT:    mov r1, zero
+; CHECK-NEXT:    bne .LBB3_6
+; CHECK-NEXT:  // %bb.5:
+; CHECK-NEXT:    mov r2, zero
+; CHECK-NEXT:  .LBB3_6:
+; CHECK-NEXT:    llis r1, -1
 ; CHECK-NEXT:    test r3, 1
 ; CHECK-NEXT:    bne .LBB3_8
-; CHECK-NEXT:    b .LBB3_9
-; CHECK-NEXT:  .LBB3_5:
-; CHECK-NEXT:    lli r1, 1
-; CHECK-NEXT:    test r3, 1
-; CHECK-NEXT:    beq .LBB3_9
+; CHECK-NEXT:  // %bb.7:
+; CHECK-NEXT:    mov r1, r2
 ; CHECK-NEXT:  .LBB3_8:
-; CHECK-NEXT:    llis r1, -1
-; CHECK-NEXT:  .LBB3_9:
 ; CHECK-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
 ; CHECK-NEXT:    add sp, 4
 ; CHECK-NEXT:    jmp lr

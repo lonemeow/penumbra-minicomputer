@@ -254,8 +254,8 @@ define i64 @sdiv64_10(i64 %x) {
 ; FASTMUL-NEXT:  // %bb.0:
 ; FASTMUL-NEXT:    sub sp, 4
 ; FASTMUL-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
-; FASTMUL-NEXT:    lli r3, 10
 ; FASTMUL-NEXT:    mov r4, zero
+; FASTMUL-NEXT:    lli r3, 10
 ; FASTMUL-NEXT:    bl __divdi3
 ; FASTMUL-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
 ; FASTMUL-NEXT:    add sp, 4
@@ -266,8 +266,8 @@ define i64 @sdiv64_10(i64 %x) {
 ; SLOWMUL-NEXT:  // %bb.0:
 ; SLOWMUL-NEXT:    sub sp, 4
 ; SLOWMUL-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
-; SLOWMUL-NEXT:    lli r3, 10
 ; SLOWMUL-NEXT:    mov r4, zero
+; SLOWMUL-NEXT:    lli r3, 10
 ; SLOWMUL-NEXT:    bl __divdi3
 ; SLOWMUL-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
 ; SLOWMUL-NEXT:    add sp, 4
@@ -283,8 +283,8 @@ define i64 @udiv64_10(i64 %x) {
 ; FASTMUL-NEXT:  // %bb.0:
 ; FASTMUL-NEXT:    sub sp, 4
 ; FASTMUL-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
-; FASTMUL-NEXT:    lli r3, 10
 ; FASTMUL-NEXT:    mov r4, zero
+; FASTMUL-NEXT:    lli r3, 10
 ; FASTMUL-NEXT:    bl __udivdi3
 ; FASTMUL-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
 ; FASTMUL-NEXT:    add sp, 4
@@ -295,8 +295,8 @@ define i64 @udiv64_10(i64 %x) {
 ; SLOWMUL-NEXT:  // %bb.0:
 ; SLOWMUL-NEXT:    sub sp, 4
 ; SLOWMUL-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
-; SLOWMUL-NEXT:    lli r3, 10
 ; SLOWMUL-NEXT:    mov r4, zero
+; SLOWMUL-NEXT:    lli r3, 10
 ; SLOWMUL-NEXT:    bl __udivdi3
 ; SLOWMUL-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
 ; SLOWMUL-NEXT:    add sp, 4

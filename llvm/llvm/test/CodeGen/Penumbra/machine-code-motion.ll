@@ -28,27 +28,28 @@ define i32 @sink_into_arm(i32 %pos, i32 %inc, i32 %lim, i32 %k) {
   ret i32 %r
 }
 
-; -32768 needs an LLIS; it is loaded once, before the loop.
+; -32768 needs an LLIS.  The compare's copy is loaded once, before the loop;
+; the clamp arm recomputes it rather than copying it, at the same cost.
 define void @hoist_constant(ptr %p, i32 %n) {
 ; CHECK-LABEL: hoist_constant:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0: // %entry
-; CHECK-NEXT:    llis r3, -32768
+; CHECK-NEXT:    llis r4, -32768
 ; CHECK-NEXT:    b .LBB1_1
 ; CHECK-NEXT:  .LBB1_3: // %loop
 ; CHECK-NEXT:    // in Loop: Header=BB1_1 Depth=1
-; CHECK-NEXT:    stw r4, [r1 + 0]
+; CHECK-NEXT:    stw r3, [r1 + 0]
 ; CHECK-NEXT:    add r1, 4
 ; CHECK-NEXT:    sub r2, 1
 ; CHECK-NEXT:    beq .LBB1_4
 ; CHECK-NEXT:  .LBB1_1: // %loop
 ; CHECK-NEXT:    // =>This Inner Loop Header: Depth=1
-; CHECK-NEXT:    ldw r4, [r1 + 0]
-; CHECK-NEXT:    cmp r4, r3
+; CHECK-NEXT:    ldw r3, [r1 + 0]
+; CHECK-NEXT:    cmp r3, r4
 ; CHECK-NEXT:    bgt .LBB1_3
 ; CHECK-NEXT:  // %bb.2: // %loop
 ; CHECK-NEXT:    // in Loop: Header=BB1_1 Depth=1
-; CHECK-NEXT:    mov r4, r3
+; CHECK-NEXT:    llis r3, -32768
 ; CHECK-NEXT:    b .LBB1_3
 ; CHECK-NEXT:  .LBB1_4: // %exit
 ; CHECK-NEXT:    jmp lr

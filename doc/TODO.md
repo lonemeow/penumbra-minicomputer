@@ -4008,19 +4008,24 @@ One site in Doom.
 
 ## Compiler: constants are not rematerializable
 
-`LLI` and `LLIS` (`PenumbraInstrInfo.td`) are not marked
-`isReMaterializable`, and a zero is selected as a generic `COPY $r0`,
-which the allocator cannot rematerialize either.  A constant live
-across a call or a loop gets a callee-saved register or a stack slot,
-never a recompute.
+A zero is selected as a generic `COPY $r0`, which the allocator
+cannot rematerialize, and a full 32-bit constant is an `LLI; LUI`
+chain it cannot copy either.  Such a constant live across a call or a
+loop gets a callee-saved register or a stack slot, never a recompute.
 
-- **Loop constants stay in loops.**  The Localizer sinks a constant to
-  its use block, and EarlyMachineLICM hoists a cheap instruction only
-  if it is rematerializable, so the constant is rebuilt every
-  iteration; riscv32 hoists the same constants.  220 kernel loops,
-  including `pmci_burst`'s idle fill: 2 of its 14 cycles per byte on
-  penumbra1 (about 3% of an SD block; see "SD read throughput is
-  bottlenecked by pmci_burst byte-PIO").
+- **Loop constants stayed in loops — RESOLVED.**  The Localizer sinks
+  a constant to its use block, and nothing hoisted it back, because
+  every instruction was marked side-effecting (see "Instruction
+  properties" in the codegen pass/gate audit).  With that fixed,
+  MachineLICM hoists them; `LLI`/`LLIS` are now rematerializable and
+  as cheap as a move, so under register pressure the allocator
+  recomputes a hoisted constant instead of spilling it.  Over twelve
+  of Doom's renderer, collision and fixed-point files: 14592 → 14308
+  instructions and 1349 → 1335 SP-relative loads and stores, where
+  the side-effect fix alone gave 14436 and 1464.  `pmci_burst`'s idle
+  fill (2 of its 14 cycles per byte on penumbra1, see "SD read
+  throughput is bottlenecked by pmci_burst byte-PIO") is not yet
+  rechecked.
 - **Constants in stack slots.**  `sqlite3VdbeExec` keeps `rc = 0` in a
   slot reloaded 218 times and `1` in one reloaded 61 times.
   `libsqlite3` has at least 1,250 constant reloads (939 of them zero)
@@ -4037,7 +4042,14 @@ never a recompute.
   CSE and rematerialization".
 
 Fix:
-1. Mark `LLI`/`LLIS` rematerializable.
+1. Mark `LLI`/`LLIS` rematerializable — DONE.  `LUI` carries the
+   same flags although it is never actually recomputed: its input,
+   the `LLI` half, is gone wherever the allocator would put the copy.
+   The flags make MachineLICM hoist it unconditionally beside the
+   `LLI` it completes; left to the register-pressure check, it stayed
+   in the loop behind a copy of the hoisted half.  Dropping `LUI` from
+   the flags costs those Doom files 21 instructions and 14 SP
+   accesses.
 2. Select zero into a form the allocator can rematerialize — a
    `MOV rd, R0` that `isReMaterializableImpl` accepts, the way RISC-V
    accepts `ADDI rd, x0, imm`.

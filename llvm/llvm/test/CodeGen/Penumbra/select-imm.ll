@@ -125,13 +125,13 @@ define i32 @signed_icmp_value(i32 %a) {
 ; CHECK-LABEL: signed_icmp_value:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    cmp r1, 5
-; CHECK-NEXT:    blt .LBB6_1
-; CHECK-NEXT:  // %bb.2:
-; CHECK-NEXT:    lli r1, 0
-; CHECK-NEXT:    jmp lr
-; CHECK-NEXT:  .LBB6_1:
+; CHECK-NEXT:    mov r2, r1
 ; CHECK-NEXT:    lli r1, 1
+; CHECK-NEXT:    cmp r2, 5
+; CHECK-NEXT:    blt .LBB6_2
+; CHECK-NEXT:  // %bb.1:
+; CHECK-NEXT:    lli r1, 0
+; CHECK-NEXT:  .LBB6_2:
 ; CHECK-NEXT:    jmp lr
   %c = icmp slt i32 %a, 5
   %r = zext i1 %c to i32

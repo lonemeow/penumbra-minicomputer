@@ -40,25 +40,23 @@ define i64 @uadd_sat_i64(i64 %a, i64 %b) {
 ; CHECK-LABEL: uadd_sat_i64:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    mov r11, r1
-; CHECK-NEXT:    mov r1, r3
-; CHECK-NEXT:    add r1, r11
+; CHECK-NEXT:    add r3, r1
 ; CHECK-NEXT:    adc r2, r4
-; CHECK-NEXT:    mov r3, zero
-; CHECK-NEXT:    adc r3, zero
-; CHECK-NEXT:    test r3, 1
-; CHECK-NEXT:    bne .LBB1_1
-; CHECK-NEXT:  // %bb.2:
-; CHECK-NEXT:    test r3, 1
-; CHECK-NEXT:    bne .LBB1_3
-; CHECK-NEXT:  .LBB1_4:
-; CHECK-NEXT:    jmp lr
-; CHECK-NEXT:  .LBB1_1:
+; CHECK-NEXT:    mov r4, zero
+; CHECK-NEXT:    adc r4, zero
 ; CHECK-NEXT:    llis r1, -1
-; CHECK-NEXT:    test r3, 1
-; CHECK-NEXT:    beq .LBB1_4
-; CHECK-NEXT:  .LBB1_3:
-; CHECK-NEXT:    llis r2, -1
+; CHECK-NEXT:    test r4, 1
+; CHECK-NEXT:    bne .LBB1_2
+; CHECK-NEXT:  // %bb.1:
+; CHECK-NEXT:    mov r1, r3
+; CHECK-NEXT:  .LBB1_2:
+; CHECK-NEXT:    llis r3, -1
+; CHECK-NEXT:    test r4, 1
+; CHECK-NEXT:    bne .LBB1_4
+; CHECK-NEXT:  // %bb.3:
+; CHECK-NEXT:    mov r3, r2
+; CHECK-NEXT:  .LBB1_4:
+; CHECK-NEXT:    mov r2, r3
 ; CHECK-NEXT:    jmp lr
   %r = call i64 @llvm.uadd.sat.i64(i64 %a, i64 %b)
   ret i64 %r

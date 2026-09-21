@@ -228,13 +228,13 @@ define i32 @slt(i32 %a, i32 %b) {
 ; CHECK-LABEL: slt:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    cmp r1, r2
-; CHECK-NEXT:    blt .LBB15_1
-; CHECK-NEXT:  // %bb.2:
-; CHECK-NEXT:    lli r1, 0
-; CHECK-NEXT:    jmp lr
-; CHECK-NEXT:  .LBB15_1:
+; CHECK-NEXT:    mov r3, r1
 ; CHECK-NEXT:    lli r1, 1
+; CHECK-NEXT:    cmp r3, r2
+; CHECK-NEXT:    blt .LBB15_2
+; CHECK-NEXT:  // %bb.1:
+; CHECK-NEXT:    lli r1, 0
+; CHECK-NEXT:  .LBB15_2:
 ; CHECK-NEXT:    jmp lr
   %c = icmp slt i32 %a, %b
   %z = zext i1 %c to i32
@@ -275,13 +275,13 @@ define i32 @slt_const(i32 %a) {
 ; CHECK-LABEL: slt_const:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    cmp r1, 7
-; CHECK-NEXT:    blt .LBB18_1
-; CHECK-NEXT:  // %bb.2:
-; CHECK-NEXT:    lli r1, 0
-; CHECK-NEXT:    jmp lr
-; CHECK-NEXT:  .LBB18_1:
+; CHECK-NEXT:    mov r2, r1
 ; CHECK-NEXT:    lli r1, 1
+; CHECK-NEXT:    cmp r2, 7
+; CHECK-NEXT:    blt .LBB18_2
+; CHECK-NEXT:  // %bb.1:
+; CHECK-NEXT:    lli r1, 0
+; CHECK-NEXT:  .LBB18_2:
 ; CHECK-NEXT:    jmp lr
   %c = icmp slt i32 %a, 7
   %z = zext i1 %c to i32
