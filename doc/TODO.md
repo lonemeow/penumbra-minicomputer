@@ -5678,83 +5678,74 @@ At run time that check is the whole cost; the real cost is risk.  The
 dispatch sits on the trap-exit path, under the vector-page epilogue
 rules, and mistakes there show up as hangs rather than panics.
 
-## Kernel: interlocked atomics are not atomic against interrupts
+## Kernel: interlocked atomics are not atomic against interrupts (RESOLVED)
 
-`common/lib/libc/arch/penumbra/atomic/atomic_cas.S` is a plain
-load-compare-store with no interrupt protection, and every interlocked
-name is `.set` to that same body alongside the `_ni` ones —
-`atomic_cas_32`, `atomic_cas_uint`, `atomic_cas_ulong`,
-`atomic_cas_ptr`.  The file has no `_KERNEL` split, and
-`Makefile.inc` links it for `LIB == "kern"`.  So an interrupt landing
-between the `ldw` and the `stw` makes the store clobber whatever the
-handler wrote.
+`common/lib/libc/arch/penumbra/atomic/atomic_cas.S` is a bare
+load-compare-store, and every interlocked name resolves to it —
+`atomic_cas_32`, `_uint`, `_ulong` and `_ptr` alongside their `_ni`
+forms.  atomic_ops(9) promises the interlocked forms are atomic against
+a handler on the same CPU, and everything built on the CAS
+(`atomic_inc_32_cas.c` and its siblings) inherits what it gets.
+Userland restarted the sequence through `rasctl(2)` and `userret()`;
+the kernel links the same code and had nothing, so an interrupt between
+the `ldw` and the `stw` let the store clobber whatever the handler
+wrote.  Fast soft interrupts made that matter more, since completion
+work now runs at interrupt exit and can itself be interrupted.
 
-RAS covers userland: `atomic_ras_init.c` registers the range through
-`rasctl(2)` and `userret()` restarts an interrupted sequence.  Nothing
-covers the kernel's own use.  `machine/lock.h` claims "in kernel
-context the CAS uses DI/EI", which was never true of the linked code
-and should go when this is fixed.
+`trap()` now rewinds a supervisor-mode trap whose `EPC` lies inside the
+region, before anything else runs (`kernel_ras_restart()`).  The
+interval is the one `ras_lookup()` tests, open at both ends: an
+interrupted store restarts because it has not executed, and the end
+marker sits *past* the store, where the sequence has finished either
+way — the store retired, or the compare branched there.  The region's
+size is pinned at assembly time, since restart is sound only while the
+store stays last and no argument register is written inside it.
 
-atomic_ops(9) promises the interlocked forms are atomic against
-interrupt handlers on the same CPU; the `_ni` forms are the documented
-opt-out.  Everything built on the CAS inherits the flaw, since
-`atomic_inc_32_cas.c` and its siblings loop on the *interlocked*
-`atomic_cas_32`.
+Bracketing the CAS in `DI`/`EI` was the alternative, declined on cost:
+both are drain-commit on gen2, which would put two pipeline drains on
+every adaptive `mutex_enter`/`mutex_exit` and every refcount.  The
+restart adds nothing to the atomic.  On the trap it costs 2
+instructions for a user trap, whose compare reuses the `tf_sr` load
+`usermode` already needs, and 7 for a supervisor trap; the TLB refill
+fast path never reaches `trap()` at all.
 
-Exposure is narrow but the contract is broken.  Spin mutexes are safe
-(the IPL rises before the CAS) and adaptive mutexes are taken only in
-thread context.  What is left is MI code doing an interlocked RMW on a
-word a hard interrupt handler also writes — `ci_want_resched` and
-`l_dopreempt` first — where a lost update costs a dropped reschedule
-rather than corruption.  Fast soft interrupts widen the window, since
-network and USB completion work now runs at interrupt exit and can
-itself be interrupted.
+### Verification
 
-### Two fixes
+- **Suite test.**  `isa/test_ras_restart` runs a CAS-increment loop
+  against a timer handler writing the same word.  With the restart,
+  `W == N + M`; without it, `W == N + M - INSIDE` — an exact count, so
+  the control measures the race rather than smoke-testing it.
+  Coverage is asserted per landing point, and the timer period is
+  calibrated against `TM_COUNT`, since tick rate, prescaler and CPI are
+  all implementation-defined.  Passes on the ISS, gen1 and gen2;
+  removing the restart fails it, and so does treating the end marker as
+  inside.
+- **Kernel boundary.**  Injecting with the ISS's `+irq_at_pc` into the
+  booting kernel, every other arrival: at the compare, 37,031 restarts;
+  at the store, 37,073; at the end marker, none.  Every run booted to a
+  shell.
+- **Hardware.**  `vmstat -e` showed 22 restarts over 2h40m of mod
+  playback alongside framebuffer rendering, running stably.  An
+  uninjected boot to single-user took one.
 
-**Bracket the CAS with `DI`/`EI`.**  Simple and obviously correct, and
-expensive: `EI`/`DI` are drain-commit on gen2, stalling in EX until the
-pipeline drains, so every atomic pays two drains on a path taken by
-every adaptive `mutex_enter`/`mutex_exit` and every refcount.
+### What testing established
 
-**Restart the sequence from the kernel's trap path.**  On a trap taken
-from supervisor mode whose `EPC` lies inside the region, rewind `EPC`
-to the start.  Nothing is added to the atomic itself; a kernel-mode
-trap pays a two-bound compare.  The markers already exist
-(`_atomic_cas_32_ras_start`, `_atomic_cas_32_ras_end`) and the store is
-the last instruction inside the region, which is the property that
-makes a restart correct: interrupted at the `stw` the sequence redoes,
-interrupted after it `EPC` equals the end marker and nothing is redone.
+A spurious injected interrupt is not a negative control.  With the
+restart compiled out, 37,352 interrupts into the region still booted
+cleanly: `intr_dispatch()` with no claimer never writes the word the
+interrupted CAS targets, so resuming and restarting are
+indistinguishable.  Only a handler that writes the same word makes the
+difference observable, which is what the suite test supplies.
 
-The second one also composes with [inline lock fast
-paths](#kernel-inline-lock-fast-paths), which need the same guarantee
-for the same reason, where DI/EI would tax each one separately.
+The lower bound cannot be tested, and does not need to be.  An `EPC` at
+the region's start means nothing has run, so rewinding there and
+resuming are the same act, and treating it as inside passes every test
+— correctly.  Only the upper bound can corrupt, and it is the one the
+suite test's coverage and mutations are aimed at.
 
-### Testing a kernel restart
-
-The region is four instructions, so there are five interruption points
-and coverage is a loop rather than a soak.  At 100 Hz a random
-interrupt lands inside a four-instruction window about once in 10^5
-ticks, so only forced interruption tests anything.
-
-- Make the decision a pure function of `EPC` and `SR`, and walk it on
-  the host across every offset from before the region to past the end
-  marker, for both privilege states.  The end boundary is where an
-  off-by-one corrupts data.
-- Drive the five points deterministically.  The ISS has no injection
-  hook — interrupts arrive only from modelled devices — so this wants
-  an option that raises the IRQ line when PC reaches a given address.
-- Check an invariant that catches both directions.  A CAS loop
-  incrementing a word N times against a handler incrementing it M
-  times must end at exactly `N + M`: rewinding too late applies an
-  increment twice and reads high, not rewinding at all loses updates
-  and reads low.  An inequality check would miss one of them.
-- Keep a negative control.  The same test with the restart compiled
-  out has to fail, or it is not landing in the window and proves
-  nothing.
-- Count the restarts in an `evcnt` and assert under DIAGNOSTIC that the
-  rewritten PC is the region start.  A restart path that never fires in
-  a normal boot is not being exercised.
+The planned DIAGNOSTIC assertion that the rewritten PC equals the
+region start was dropped as tautological.  The evcnt is the check that
+can fail, by staying at zero.
 
 ## Kernel: inline lock fast paths
 
@@ -5776,11 +5767,15 @@ both macros under `LOCKDEBUG`, so a debug kernel keeps the C path —
 a safe way to stage the work.
 
 The coupling to record: an inline fast path is another non-atomic
-read-modify-write sequence, with exactly the problem [the CAS
-has](#kernel-interlocked-atomics-are-not-atomic-against-interrupts).
-Whatever restart mechanism that gets, the fast paths want the same one,
-and each new region adds a handful of enumerable interruption points to
-the same test.
+read-modify-write sequence, and needs the restart [the CAS
+got](#kernel-interlocked-atomics-are-not-atomic-against-interrupts-resolved).
+`kernel_ras_restart()` knows one region, so each fast path added
+naively is another pair of bounds on every supervisor trap.  Linking
+the regions contiguously keeps that flat: one range check rejects an
+ordinary PC before any per-region test runs.  Each region also wants
+its own assembly-time size guard, and the suite test's pattern — a
+handler writing the same word, an exact count, coverage asserted per
+landing point — carries over to each new sequence shape.
 
 Inlining is also why `__HAVE_ATOMIC_AS_MEMBAR` was declined.  The flag
 asserts that the port's atomics carry barrier semantics, which holds
