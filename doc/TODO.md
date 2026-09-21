@@ -1150,6 +1150,90 @@ container the wrapper scripts drive rebuilt or updated. The build-time
 defines the flow passes at the sv2v step (`SDRAM_PHASE_DEG`,
 `PENUMBRA_CPU_VARIANT`) need an equivalent on the new frontend.
 
+## Compiler: where the remaining codegen wins are — ranked 2026-09-21
+
+A static scan of built code sized the open codegen items against each
+other, so picking among them need not start with a new measurement.
+
+Corpora: the `GENERIC.DEBUG` kernel (712,161 instructions, built by
+`96ee36548d34`), `libc.so` (409,542, PIC, the same compiler), the full
+Doom binary (103,342, the pre-audit compiler `fb237ee8d98a`) and the
+`test-compiler` corpus at `-O2` (386,627, `676cb9fed5c1`; gcc torture
+tests, heavy in 64-bit arithmetic).  Each item is a code shape counted
+per site in `llvm-objdump -d` output; "in loops" counts the sites
+between a backward branch and its target, a rough proxy for hotness.
+The counts are static, not cycles, and the debug kernel inflates its
+diagnostic paths.
+
+| Item | Shape counted | Kernel | libc | Doom | Tests | In loops (kernel / libc) |
+|---|---|---:|---:|---:|---:|---|
+| "outgoing stack arguments address SP through a copy" | `mov x, sp` whose every read until `x` is rewritten could read `sp` | 10,361 (1.45%) | 1,593 (0.39%) | 51 | 3,611 (0.93%) | 1,790 / 200 |
+| "64-bit relational compares expand to select diamonds" | `sbc r, zero; and r, 1` | 1,686 | 1,161 | 271 | 12,473 | 161 / 85 |
+| "flag definitions stay live after C++ selection" (PIC anchors) | `add x, pc` / `mov x, pc` | 1 | 12,486 | 30 | 0 | 0 / 772 |
+| `AllowRegisterRenaming` (codegen pass/gate audit) | `mov x, zero` forwardable into a store; other forwardable copies | 353 + 190 | 258 + 244 | 23 + 54 | 10 + 784 | 37 / 14 |
+| "InstCombine's shift-and-mask form costs a constant" | `llis t, -2^k; and y, t` | 414 | 304 | 14 | 234 | 67 / 22 |
+| "pointer-minus-constant and integer MMIO addresses miss their folds": MMIO | `add x, imm; ld/st [x + 0]`, `x` dead | 71 | 8 | 3 | 0 | 9 / 1 |
+| same entry: `p - K` | `llis t, -K; add y, t`, `t` dead | 54 | 80 | 3 | 2 | 8 / 6 |
+| same entry: run-time indexed local | `mov x, sp; [add x, imm;] add x, y; ld/st [x + 0]` | 35 | 32 | 19 | 16 | 2 / 2 |
+| "hot-loop code review — software audio mixing": zero-low-half carry | `add/sub r, 0` feeding `adc`/`sbc` | 2 | 13 | 0 | 1,489 | 1 / 0 |
+
+Each row saves about one instruction per site, except the 64-bit
+compares, about 4–6 per compare, and a PIC anchor in a loop, 1–2 per
+iteration.  The two-address commute heuristics were measured the same
+way at 0.02–0.06% (in the audio-mixing review), and the 64-bit select
+of zero only concerns the 32.32 mixer loop.
+
+What follows, by value for effort:
+1. **SP copy** — the largest static item and a contained fix.  Most
+   sites sit on cold call paths, so the gain is mostly code size and
+   I-cache footprint.
+2. **64-bit compares** — the largest dynamic potential (`off_t`,
+   `time_t`, SQLite's rowid compares), about 1% of instructions in the
+   kernel, libc and Doom; waits on the ISA documentation decision in
+   its entry.
+3. **Dead flag definitions after C++ selection** — lets libc's 772
+   in-loop PIC anchors leave their loops, which every dynamically
+   linked program gains, and lets `MUL` join the select-of-identity
+   rule.
+4. **Zero-low-half carry and the 64-bit select of zero** — nothing
+   outside 64-bit-heavy code; take them with the 32.32 mixer.
+5. **The rest** — at most 0.1% each; pick up in passing.
+
+Copies are 14–17% of all instructions and the SP copy is about a
+tenth of the kernel's; copy forwarding would reach only a few hundred
+more per corpus.  The bulk presumably comes from argument and return
+marshalling and PHI copies, which no scan has classified yet.
+
+## Compiler: outgoing stack arguments address SP through a copy
+
+A call that passes arguments on the stack stores them through a copy
+of SP:
+
+```
+mov  r1, r14
+stw  r7, [r1 + 0]
+```
+
+where `stw r7, [r14 + 0]` needs no copy.  Call lowering forms each
+stack slot's address as `G_PTR_ADD (COPY $r14), off`, and the copy is
+selected into a `gpr_allocatable` register, a class without R14, so
+the register coalescer cannot merge it into SP even though every use —
+a store's base — accepts R14.  `PenumbraCallLowering::getStackAddress`
+shares one copy across a call's stack arguments, so it costs one
+instruction per call.
+
+Reach (see "where the remaining codegen wins are"): 10,361 copies in
+the `GENERIC.DEBUG` kernel, 1.45% of its instructions and about a tenth
+of its copies; 1,593 in `libc.so`; 3,611 in the `test-compiler` corpus.
+The sampled kernel sites are setup and diagnostic calls (`startlwp`,
+`penumbra_init`, `cpu_initclocks`); 1,790 sit inside loops.
+
+Fix: fold a copy of `$r14` into the base in `selectAddrRegImm`, or give
+the copy the full `GPR` class so the coalescer's reserved-register join
+removes it.  Either is safe within a call sequence: SP changes only at
+`ADJCALLSTACKDOWN`/`ADJCALLSTACKUP`, which define it and bound the
+scheduler.
+
 ## Compiler: graceful-fail on unsupported inline asm and vector IR
 
 Today the GlobalISel IRTranslator crashes (`fatal error: unable to
