@@ -6,6 +6,10 @@ with a clean load-store ISA. It boots NetBSD 10.1 to a full userland on real
 hardware; the longer-term goal is to rebuild the design from discrete 74xx
 logic chips.
 
+![penmon on the HDMI console](doc/images/penmon.png)
+
+*`penmon`, the machine's live system monitor, on the HDMI console.*
+
 ---
 
 ## 💡 Why Penumbra?
@@ -38,47 +42,74 @@ make simulate
 
 ---
 
-## 🏗️ Architecture Summary
+## 🏗️ Architecture
 
-Penumbra is a modern RISC implementation with a "classic" aesthetic. The same
-ISA is realized by two interchangeable CPU cores:
+One ISA, several cores.
 
-- **Penumbra/1** — a single-cycle microcoded core (3-bus datapath, 51-bit
-  horizontal microcode, 256-entry control ROM). Deliberately simple enough to
-  rebuild in 74xx discrete logic.
-- **Penumbra/2** — a 6-stage hardwired pipeline (IF1 / IF2 / ID / EX / MEM /
-  WB) with scoreboard-based hazard tracking, NZCV flag forwarding, and branch
-  resolution in EX. No microcode.
+- **ISA:** 32-bit load-store RISC, little-endian. 16 GPRs, 4
+  instruction formats.
+- **Arithmetic:** MUL/DIV in hardware. Floating point in software.
+- **MMU:** software-managed TLB with ASIDs. 64-entry 2-way main TLB
+  plus 4 pinned entries.
+- **Caches:** split VIPT L1, write-through. Shared 64 KB 4-way L2.
+- **Bus:** asynchronous 4-phase Penumbra Bus, Zorro-style
+  autoconfig.
+- **Memory:** 32 MB SDRAM on its own clock domain.
 
-Shared across both cores:
+Cores:
 
-- **Word size:** 32-bit, little-endian.
-- **ISA:** 4 instruction formats (R/L/M/B), 16 GPRs (R0=zero, R14=SP, R13=LR, R15=PC).
-- **MMU:** Software-managed 64-entry 2-way SA TLB + 4-entry FA pinned TLB.
-- **Caches:** VIPT split I/D L1, write-through, backed by a 64 KiB unified 4-way L2 with write-invalidate-on-hit. The L1 geometry is per-core — gen1 is 1 KiB direct-mapped, gen2 is 4 KiB 4-way (BRAM-backed).
-- **Memory:** 32 MB SDRAM on the ULX3S target, reached through an async CDC bridge from the CPU clock to the SDRAM clock.
-- **Bus:** Asynchronous Penumbra Bus with 4-phase handshake and Zorro-style autoconfig.
+- **Penumbra/1:** microcoded, 3-bus datapath, 25 MHz. The 74xx
+  discrete-logic reference. 1 KB direct-mapped L1s.
+- **Penumbra/2:** 6-stage hardwired pipeline, 37.5 MHz. 4 KB 2-way
+  L1s.
+- **Penumbra/2.5:** Penumbra/2 plus forwarding and a BTB, 37.5 MHz.
+  The default core, and the fastest.
+- **Penumbra/3:** in-order pipeline redo, aimed at 50 MHz. Under
+  construction.
 
-Detailed specifications are available in the **[Documentation Index](doc/README.md)**.
+Specs live in the **[Documentation Index](doc/README.md)**.
 
 ---
 
 ## 📈 Status
 
-The system runs on real hardware (Radiona ULX3S, Lattice ECP5-85F) as well as in cycle-accurate Verilator simulation and a fast instruction-level simulator.
+Runs on a Radiona ULX3S (Lattice ECP5-85F). Also runs in a fast
+instruction-level simulator and in cycle-accurate Verilator.
 
-- **CPU cores:** Two complete, interchangeable implementations of the ISA. Penumbra/2 (6-stage pipelined) is the default and passes the full ISA conformance suite (72/72); Penumbra/1 (microcoded) remains the discrete-logic reference. Both synthesize to the ULX3S, close timing at the 25 MHz CPU target on the ECP5-85F, and boot NetBSD to userland. Select the gen1 core with `CORE=penumbra1` on `make` targets.
-- **Hardware:** Full CPU + MMU + split L1 caches + unified L2 cache + async Penumbra Bus with autoconfig + UART + SPI/SD + SDRAM controller + a from-scratch USB 1.1 host controller (SIE, MAC, and PHY tiers), all running on the ULX3S board — the USB port drives real commercial devices: flash drives, keyboards, hubs, and Ethernet adapters.
-- **Toolchain:** Custom LLVM backend (clang/lld/llvm-mc) end-to-end; PIE/GOT/PLT, TLS, soft-float, C++ EH with DWARF unwinding.
-- **OS:** NetBSD 10.1 boots to userland on the ULX3S hardware (on either CPU core), mounting an FFS root from SD card (read + write). Dynamic linking, fork/exec, pipes, signals, and TLS all functional; the in-tree `pbench` microbenchmark suite exercises kernel syscalls and libc hot paths dynamically linked against `libc.so` on real hardware. The MI USB stack runs over the custom host controller: mass-storage disks attach as `sd(4)` and mount read/write, HID keyboards deliver reports through `uhid(4)`, full-speed devices work behind cascaded hubs, and hot-plug attach/detach is handled throughout. Networking runs over a USB Ethernet adapter (`ure(4)`): the machine holds an IP address, answers and issues pings, and connects out over `ssh`.
-- **Firmware:** C boot ROM with FAT32 support, PIE ELF loading, bus autoconfig, and an interactive monitor.
+**Hardware**, all built from scratch:
+
+- CPU, MMU, caches, SDRAM controller.
+- UART console.
+- SD card over SPI.
+- USB 1.1 host controller, down to the PHY. Drives real flash
+  drives, keyboards, hubs and Ethernet adapters.
+- HDMI display: text console plus a framebuffer.
+- 4-channel audio mixer on the 3.5 mm jack.
+- Performance counters: stalls, cache hits and misses.
+
+**Software:**
+
+- LLVM backend: clang, lld, llvm-mc. PIE, TLS, C++ exceptions.
+- Boot ROM in C: FAT32, ELF loader, monitor.
+- NetBSD 10.1 with its full userland, on Penumbra/1 and /2:
+  - Root filesystem on SD card.
+  - USB disks and keyboards, with hot-plug.
+  - Networking over USB Ethernet: ping, ssh.
+  - Local console on HDMI and a USB keyboard.
+  - Audio through `audio(4)` and a multi-voice `/dev/pmusic`.
+  - Dynamic linking, fork/exec, signals, core dumps.
+- Runs Doom, graphics demos and a ProTracker MOD player.
+- SD images: single-user, multiuser, and an unattended exhibit
+  kiosk.
 
 ---
 
 ## 📁 Repository Layout
 
 - `hw/` — RTL design (SystemVerilog), testbenches, microcode, and boot ROM.
-- `sw/` — Instruction set simulator (ISS) and assembler tools.
+- `sw/` — Instruction set simulator (ISS), assembler tools, and
+  programs for NetBSD: demos, Doom, the MOD player, the kiosk
+  launcher.
 - `llvm/` — Penumbra backend for the LLVM compiler infrastructure.
 - `doc/` — Comprehensive architecture and system documentation.
 - `netbsd/` — NetBSD kernel and userland source tree.
