@@ -3345,6 +3345,10 @@ has no side effects.
 - **Divides.**  `DIV`'s live `SR` definition was what kept
   MachineLICM from lifting a guarded divide out of its guard, before
   the divides were marked side-effecting.
+- **Multiplies in a select's arm.**  `penumbra_select_of_identity`
+  leaves `x * select(c, 1, k)` alone because `MUL` cannot sink into
+  its arm; once its flag definition is dead, `G_MUL` with 1 joins the
+  rule.
 
 Fix: mark the `SR` definition dead on each hand-built instruction
 whose flags nothing reads.  If no selector path lets a flag value
@@ -4193,7 +4197,7 @@ how much of each voice-sample is bookkeeping.  `mix_by_frame` visits
 every voice for every output frame: about 25 instructions per
 voice-sample, most of them reloading voice state and a run-time
 indexed accumulator.  `mix_by_voice` holds a voice's state in
-registers across the block: 19, where the ISA allows about 14.
+registers across the block: 17, where the ISA allows about 14.
 
 Measured on hardware, a table lookup in place of the sample-by-volume
 multiply gains nothing.  The multiplier's `funit` stall (10–12% of
@@ -4204,7 +4208,7 @@ below, not the multiply.
 | Cause | Per voice-sample | Entry |
 |---|---|---|
 | `MUL` copies a multiplicand that stays live | 1 in `mix_by_voice` | "MUL is not commutable, so a live multiplicand is copied" |
-| A conditional subtract pays for its zero arm | 2 in `mix_by_voice` | "a conditional add or subtract becomes a select of zero" |
+| A conditional subtract pays for its zero arm — resolved | 2 in `mix_by_voice` | "a conditional add or subtract becomes a select of zero" |
 | A run-time indexed local rebuilds its frame address | 2 in `mix_by_frame` | "pointer-minus-constant and integer MMIO addresses miss their folds" |
 
 ### Smaller findings
@@ -4260,7 +4264,7 @@ they are.  The generic `G_UMUL_LOHI` and `G_SMUL_LOHI` are already
 commutable, so this carries a fact the combiner already has through
 to the selected instruction.
 
-## Compiler: a conditional add or subtract becomes a select of zero
+## Compiler: a conditional add or subtract becomes a select of zero — RESOLVED
 
 `if (c) x -= k` reaches the backend as `x - select(c, 0, k)`.  The
 middle end folds the branch into a select, which pays off on a
@@ -4288,14 +4292,24 @@ r2`, where the source asked for `cmp r1, r3; bcc .L; sub r1, r4; .L:`.
 In the audio mixer it is 2 of the 19 instructions per voice-sample:
 the loop wrap of every voice.
 
-The fix belongs in the combiner rather than in switching the middle
-end's transform off.  `G_SUB x, (G_SELECT c, 0, k)` →
-`G_SELECT c, x, (G_SUB x, k)` moves the operation into the arm that
-is not its identity, so the other arm is `x` itself and lowers to
-nothing.  The same holds for an identity in either arm of any such
-operation — `ADD`, `SUB`, `OR`, `XOR` and the shifts with 0, `AND`
-with -1 — and every `if (c) x op= k` gains: loop wraps, saturation,
-conditional accumulation.  The compare-materialisation entries,
+Resolved by `penumbra_select_of_identity` in the pre-legalizer
+combiner, the GlobalISel counterpart of SelectionDAG's
+`foldSelectWithIdentityConstant`: `x op select(c, id, k)` →
+`select(c, x, x op k)` for `ADD`, `SUB`, `OR`, `XOR`, the shifts and a
+pointer offset with 0 and `AND` with -1, the select on either side of
+a commutative operation.  Machine sinking then moves `x op k` into its
+arm.  The mixer's loop wrap is `cmp; bcc; sub` with the subtract on
+the wrap path only, 17 instructions per voice-sample where it was 19
+(`test/CodeGen/Penumbra/select-of-identity.ll`).
+
+It runs before legalization on purpose.  Placed after it, it also
+reshaped the selects the legalizer expands a 64-bit shift into, and
+`fshl_i64` grew by two callee-saved spills.  `MUL` with 1 is left out:
+its selection keeps its flag definition live, so the multiply cannot
+sink into its arm and the rewrite only adds copies around it (see
+"flag definitions stay live after C++ selection").
+
+The compare-materialisation entries,
 "signed comparisons have no branchless materialisation" and "64-bit
 relational compares expand to select diamonds", are the same missing
 conditional move seen from the other side.

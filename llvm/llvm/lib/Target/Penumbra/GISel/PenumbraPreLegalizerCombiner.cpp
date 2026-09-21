@@ -17,6 +17,7 @@
 #include "llvm/CodeGen/GlobalISel/CombinerInfo.h"
 #include "llvm/CodeGen/GlobalISel/GIMatchTableExecutorImpl.h"
 #include "llvm/CodeGen/GlobalISel/GISelValueTracking.h"
+#include "llvm/CodeGen/GlobalISel/MIPatternMatch.h"
 #include "llvm/CodeGen/GlobalISel/MachineIRBuilder.h"
 #include "llvm/CodeGen/GlobalISel/Utils.h"
 #include "llvm/CodeGen/MachineDominators.h"
@@ -103,6 +104,91 @@ void applySRemByPow2(MachineInstr &MI, MachineRegisterInfo &MRI,
   auto Scaled = B.buildShl(Ty, Quot, ShiftAmt);
   B.buildSub(Rem, X, Scaled);
 
+  MI.eraseFromParent();
+}
+
+// An operation one of whose operands is a select with the operation's
+// identity in one arm.
+struct SelectOfIdentity {
+  unsigned SelectIdx;  // the operation's operand that holds the select
+  bool IdentityIsTrue; // the identity is the select's true value
+};
+
+// Whether Reg holds a right identity of Opc: a value id with `x op id == x`
+// for every x.
+static bool isRightIdentity(unsigned Opc, Register Reg,
+                            const MachineRegisterInfo &MRI) {
+  using namespace MIPatternMatch;
+  switch (Opc) {
+  case TargetOpcode::G_ADD:
+  case TargetOpcode::G_SUB:
+  case TargetOpcode::G_OR:
+  case TargetOpcode::G_XOR:
+  case TargetOpcode::G_SHL:
+  case TargetOpcode::G_LSHR:
+  case TargetOpcode::G_ASHR:
+  case TargetOpcode::G_PTR_ADD:
+    return mi_match(Reg, MRI, m_ZeroInt());
+  case TargetOpcode::G_AND:
+    return mi_match(Reg, MRI, m_AllOnesInt());
+  default:
+    return false;
+  }
+}
+
+// Match `x op select(c, id, k)`, or `select(c, id, k) op x` for a
+// commutative operation.
+bool matchSelectOfIdentity(MachineInstr &MI, MachineRegisterInfo &MRI,
+                           SelectOfIdentity &MatchInfo) {
+  // Register-width values only: the legalizer splits a wider operation into
+  // selects of its own, which this must not reshape.
+  if (MRI.getType(MI.getOperand(0).getReg()).getSizeInBits() != 32)
+    return false;
+  unsigned Opc = MI.getOpcode();
+  for (unsigned Idx : {2u, 1u}) {
+    if (Idx == 1 && !MI.isCommutable())
+      break;
+    Register Sel = MI.getOperand(Idx).getReg();
+    MachineInstr *SelMI = MRI.getVRegDef(Sel);
+    // The select must die here and be computed here: one from another
+    // block, hoisted out of a loop say, would come back as a branch inside
+    // it.
+    if (!SelMI || SelMI->getOpcode() != TargetOpcode::G_SELECT ||
+        !MRI.hasOneNonDBGUse(Sel) || SelMI->getParent() != MI.getParent())
+      continue;
+    for (bool IdentityIsTrue : {true, false}) {
+      if (isRightIdentity(Opc, SelMI->getOperand(IdentityIsTrue ? 2 : 3).getReg(),
+                          MRI)) {
+        MatchInfo = {Idx, IdentityIsTrue};
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Rewrite as `select(c, x, x op k)`, or with the arms swapped when the
+// identity is the false value.  x goes first even when the select stood
+// first, which only a commutative operation allows: the first operand is
+// the one a two-address instruction overwrites, so x's register ends up
+// holding the result on both paths.  The wrap flags are dropped: they held
+// for the selected value, not for k.
+void applySelectOfIdentity(MachineInstr &MI, MachineRegisterInfo &MRI,
+                           MachineIRBuilder &B,
+                           const SelectOfIdentity &MatchInfo) {
+  B.setInstrAndDebugLoc(MI);
+  MachineInstr &Sel =
+      *MRI.getVRegDef(MI.getOperand(MatchInfo.SelectIdx).getReg());
+  Register Dst = MI.getOperand(0).getReg();
+  Register X = MI.getOperand(3 - MatchInfo.SelectIdx).getReg();
+  Register K = Sel.getOperand(MatchInfo.IdentityIsTrue ? 3 : 2).getReg();
+  Register Op =
+      B.buildInstr(MI.getOpcode(), {MRI.getType(Dst)}, {X, K}).getReg(0);
+  Register Cond = Sel.getOperand(1).getReg();
+  if (MatchInfo.IdentityIsTrue)
+    B.buildSelect(Dst, Cond, X, Op);
+  else
+    B.buildSelect(Dst, Cond, Op, X);
   MI.eraseFromParent();
 }
 

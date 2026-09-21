@@ -132,9 +132,12 @@ The `penumbra` triple's data layout is set in
 
 The pipeline is defined by group lists in `PenumbraCombine.td`:
 
-- **Pre-legalizer at -O1+:** `[penumbra_srem_pow2, all_combines]` — the
-  full upstream canonicalization/DCE set, matching AArch64/RISC-V, behind a
-  target rule that lowers a signed remainder by a power of two. The
+- **Pre-legalizer at -O1+:** `[penumbra_srem_pow2,
+  penumbra_select_of_identity, all_combines]` — the full upstream
+  canonicalization/DCE set, matching AArch64/RISC-V, behind a target rule
+  that lowers a signed remainder by a power of two and one that moves an
+  operation into the non-identity arm of its select operand (Penumbra has
+  no conditional move). The
   `*_by_const` magic-multiply rules (in `intdiv_combines` /
   `intrem_combines`) are gated by `isIntDivCheap()` in
   `PenumbraISelLowering.cpp`, which weighs the tuned core's MUL and DIV
@@ -155,7 +158,8 @@ The pipeline is defined by group lists in `PenumbraCombine.td`:
   penumbra_neg_imm_to_opposite, penumbra_sink_ptr_add_past_use,
   penumbra_ptr_add_neg_to_sub, penumbra_mul_to_mul_lohi]`.
 
-The target-specific rules (`penumbra_srem_pow2` before legalization;
+The target-specific rules (`penumbra_srem_pow2` and
+`penumbra_select_of_identity` before legalization;
 `penumbra_mul_by_const`, `penumbra_zextload_promote`,
 `penumbra_neg_imm_to_opposite`, `penumbra_sink_ptr_add_past_use`,
 `penumbra_ptr_add_neg_to_sub` and `penumbra_mul_to_mul_lohi` after) each have rationale comments in

@@ -40,6 +40,23 @@ def penumbra_srem_pow2 : GICombineRule<
          [{ return matchSRemByPow2(*${root}, MRI, ${matchinfo}); }]),
   (apply [{ applySRemByPow2(*${root}, MRI, B, ${matchinfo}); }])>;
 
+// Target-specific: move an operation into the arm of a select that is not
+// its identity, `x op select(c, id, k)` → `select(c, x, x op k)`.  With no
+// conditional move a select is a branch diamond, so the identity's arm then
+// leaves x as it is and skips the operation.  The middle end forms these
+// selects from a conditional update, `if (c) x -= k`, which pays off on a
+// target with a conditional move and costs this one the operation on every
+// path; machine sinking moves `x op k` into its arm.  This undoes an IR
+// canonicalization, so it runs before legalization adds selects of its own:
+// reshaping the ones a 64-bit shift expands into costs spills.
+def penumbra_select_of_identity_matchdata : GIDefMatchData<"SelectOfIdentity">;
+def penumbra_select_of_identity : GICombineRule<
+  (defs root:$root, penumbra_select_of_identity_matchdata:$matchinfo),
+  (match (wip_match_opcode G_ADD, G_SUB, G_AND, G_OR, G_XOR, G_SHL, G_LSHR,
+                           G_ASHR, G_PTR_ADD):$root,
+         [{ return matchSelectOfIdentity(*${root}, MRI, ${matchinfo}); }]),
+  (apply [{ applySelectOfIdentity(*${root}, MRI, B, ${matchinfo}); }])>;
+
 // Pre-legalizer: full upstream canonicalization / DCE on pre-legalized
 // generic MIR, matching AArch64 / RISC-V.  The `*_by_const` magic-multiply
 // rules in `intdiv_combines`/`intrem_combines` are gated by the target's
@@ -51,6 +68,7 @@ def penumbra_srem_pow2 : GICombineRule<
 def PenumbraPreLegalizerCombiner
     : GICombiner<"PenumbraPreLegalizerCombinerImpl", [
       penumbra_srem_pow2,
+      penumbra_select_of_identity,
       all_combines
     ]>;
 
