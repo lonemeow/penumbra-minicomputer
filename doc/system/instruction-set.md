@@ -109,6 +109,11 @@ All ALU arithmetic is **2-operand destructive**: the first operand is
 both a source and the destination. Save values you still need before
 overwriting them.
 
+The add/subtract family sets `C` to the carry out of bit 31 — for
+subtraction that is NOT borrow, so `CMP a, b` sets `C` when `a ≥ b`
+unsigned — and `V` to signed overflow. `ADC`/`SBC` take their carry in
+from `C`. `MUL`/`DIV` set `N` and `Z` from `Rd` and clear `C` and `V`.
+
 The assembler automatically picks Format R (register-register) or
 Format L (register-immediate) based on the second operand.
 
@@ -189,6 +194,9 @@ FPE_INTDIV`. `EPC` points at the trapping instruction.
 
 `NOT` is the only unary ALU op. The source is `Rs`, not `Rd`.
 
+Logic operations set `N` and `Z` from the result and clear `C` and
+`V`.
+
 ### Shifts
 
 | Instruction | Syntax           | Operation                              | Flags |
@@ -202,6 +210,10 @@ FPE_INTDIV`. `EPC` points at the trapping instruction.
 
 Register shifts take the low 5 bits of `Rs` (0–31). Immediate shifts
 encode the count in the Format L imm5 field.
+
+Shifts set `N` and `Z` from the result, `C` to the last bit shifted
+out — bit `32 − n` of the source for `SHL`, bit `n − 1` for
+`SHR`/`SAR` — and clear `V`. A shift by 0 clears `C`.
 
 ### Comparison
 
@@ -349,6 +361,58 @@ traps to `VEC_ILLEGAL`.
 **WRSYS/RDSYS.** Access device-mapped system registers (MMU, TLB,
 CPU/machine identity, caches, bus controller, timer). See
 [sysregs.md](./sysregs.md).
+
+---
+
+## Instruction Properties
+
+What each instruction does besides writing its destination register:
+the flags it writes and reads, whether it touches memory, and what
+makes it trap. A compiler needs these to decide which instructions it
+may reorder, move out of a loop, or delete.
+
+| Instructions | Writes flags | Reads flags | Memory | Traps |
+|--------------|--------------|-------------|--------|-------|
+| `ADD`, `SUB`, `CMP` (register and `#imm`) | NZCV | — | — | — |
+| `ADC`, `SBC` | NZCV | C | — | — |
+| `AND`, `OR`, `XOR`, `NOT`, `TEST` (register and `#imm`) | NZ; C, V cleared | — | — | — |
+| `SHL`, `SHR`, `SAR` (register and `#imm`) | NZ; C = last bit out; V cleared | — | — | — |
+| `MUL`, `MULU` | NZ of `Rd`; C, V cleared | — | — | — |
+| `DIV`, `DIVU` | NZ of `Rd`; C, V cleared | — | — | `VEC_ARITH` if `Rs` = 0 |
+| `MOV`, `LLI`, `LLIS`, `LUI` | — | — | — | — |
+| `LDW`, `LDH`, `LDHS`, `LDB`, `LDBS` | — | — | read | TLB, alignment, bus fault |
+| `STW`, `STH`, `STB` | — | — | write | TLB, alignment, bus fault |
+| `B`, `BL`, `JMP`, `JALR` | — | — | — | — |
+| `Bcc` | — | per condition | — | — |
+| `RDSPR` | — | NZCV, when reading `SR` | — | `VEC_PRIV` in user mode |
+| `WRSPR`, `RDSYS`, `WRSYS`, `EI`, `DI` | — | — | — | `VEC_PRIV` in user mode |
+| `ERET` | all of `SR`, from `ESR` | — | — | `VEC_PRIV` in user mode |
+| `SYSCALL`, `BREAK` | as the handler leaves `ESR` | — | — | always |
+
+The table lists what an instruction raises by executing. Every
+instruction can also fault on its own fetch, so fetch faults set no
+instruction apart.
+
+- **Destination R0.** An operation whose destination is R0 still
+  writes the flags; only the register result is discarded. `CMP` and
+  `TEST` are the named forms of this.
+- **Divides trap, multiplies do not.** Because `DIV`/`DIVU` trap on a
+  zero divisor, a compiler must not execute a divide the program would
+  not have executed: hoisting a guarded divide out of its guard turns
+  a well-defined program into one that traps.
+- **Flags across calls and traps.** Flags are caller-saved (see
+  [abi.md](./abi.md#condition-flags)). Interrupts and faults are
+  invisible to the interrupted code: entry saves `SR` in `ESR` and
+  `ERET` restores it. After `SYSCALL` or `BREAK` the flags are
+  whatever the handler leaves in `ESR`, so a handler can return a
+  result in them.
+- **System instructions.** `WRSYS` is context-synchronizing (see
+  [sysregs.md](./sysregs.md)), and the state it and `EI`/`DI` change —
+  translation, caching, interrupt masking — governs the loads and
+  stores around them, so a compiler keeps them in order with every
+  memory access. Two `RDSYS` reads of the same register can differ
+  with nothing in between (counters, timers, fault registers), so
+  neither may stand in for the other.
 
 ---
 
