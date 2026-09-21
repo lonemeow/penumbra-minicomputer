@@ -46,8 +46,7 @@ define void @call_ll(i64 %v) {
 ; CHECK-NEXT:    stw lr, [sp + 8] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r3, sp
 ; CHECK-NEXT:    stw r1, [r3 + 0]
-; CHECK-NEXT:    mov r1, sp
-; CHECK-NEXT:    stw r2, [r1 + 4]
+; CHECK-NEXT:    stw r2, [r3 + 4]
 ; CHECK-NEXT:    lli r1, 1
 ; CHECK-NEXT:    lli r2, 2
 ; CHECK-NEXT:    lli r3, 3

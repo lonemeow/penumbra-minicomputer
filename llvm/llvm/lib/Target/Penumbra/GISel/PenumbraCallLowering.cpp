@@ -53,7 +53,11 @@ struct PenumbraOutgoingValueHandler : public CallLowering::OutgoingValueHandler 
                            ISD::ArgFlagsTy Flags) override {
     LLT p0 = LLT::pointer(0, 32);
     LLT s32 = LLT::scalar(32);
-    auto SPReg = MIRBuilder.buildCopy(p0, Register(Penumbra::R14));
+    // One SP copy serves every stack argument of the call.  It is taken at
+    // the first one, which is lowered after ADJCALLSTACKDOWN has opened the
+    // call frame.
+    if (!SPReg)
+      SPReg = MIRBuilder.buildCopy(p0, Register(Penumbra::R14)).getReg(0);
     auto OffsetReg = MIRBuilder.buildConstant(s32, Offset);
     auto AddrReg = MIRBuilder.buildPtrAdd(p0, SPReg, OffsetReg);
     MPO = MachinePointerInfo::getStack(MIRBuilder.getMF(), Offset);
@@ -61,6 +65,7 @@ struct PenumbraOutgoingValueHandler : public CallLowering::OutgoingValueHandler 
   }
 
   MachineInstrBuilder &MIB;
+  Register SPReg;
 };
 
 // Incoming handler for call return values: marks physical registers as
