@@ -222,9 +222,15 @@ handles this automatically in `PenumbraFrameLowering::adjustSP` and
 
 ### Variadic Functions
 
-- Named arguments follow normal register/stack rules.
-- Anonymous (variadic) arguments are passed on the **stack** — the compiler spills R1–R4 (the register arguments) to the stack in the callee prologue so that `va_arg` can walk a contiguous memory region.
-- `va_list` is a `char *` pointing to the next variadic argument on the stack.
+- Anonymous (variadic) arguments take slots exactly as named
+  arguments do (see [Argument Passing](#argument-passing)), so they
+  arrive in R1–R4 until the registers run out.
+- The callee's prologue spills R1–R4 into a 16-byte save area at the
+  top of its frame, directly below the incoming stack arguments, so
+  every argument slot lies in one contiguous array (example in
+  [Stack Argument Passing Order](#6-stack-argument-passing-order)).
+- `va_list` is a `char *` pointing to the next anonymous argument's
+  slot in that array.
 
 ---
 
@@ -385,7 +391,7 @@ my_variadic:
     stw  r3, [sp + #FRAME + 8]  ; from caller
     stw  r4, [sp + #FRAME + 12]
     stw  lr, [sp + #0]          ; save LR in local frame as usual
-    ; va_list starts at sp + FRAME + (named_args * 4)
+    ; va_list starts at sp + FRAME + (named_slots * 4)
 ```
 
 ---
