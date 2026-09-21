@@ -70,7 +70,8 @@ __lwp_gettcb_fast(void)
 		"mov %[__tcb], r12\n\t"
 		"sub %[__tcb], %[__offset]"
 	    :	[__tcb] "=&r" (__tcb)
-	    :	[__offset] "i" (TLS_TP_OFFSET + sizeof(struct tls_tcb)));
+	    :	[__offset] "i" (TLS_TP_OFFSET + sizeof(struct tls_tcb))
+	    :	"cc");
 	return __tcb;
 }
 
@@ -83,7 +84,7 @@ __lwp_settcb(void *__tcb)
 	    :
 	    :	[__tcb] "r" (__tcb),
 		[__offset] "i" (TLS_TP_OFFSET + sizeof(struct tls_tcb))
-	    :	"r12");
+	    :	"r12", "cc");
 }
 #endif /* _RTLD_SOURCE || _LIBC_SOURCE || __LIBPTHREAD_SOURCE__ */
 
