@@ -108,7 +108,7 @@
 # CHECK: ldb	r9, [r10 + 2]
 
 0x04 0x00 0xf0 0xa6
-# CHECK: ldbs	r11, [r12 + 1]
+# CHECK: ldbs	r11, [tp + 1]
 
 #--- Stores (L=0) ---
 
@@ -124,7 +124,7 @@
 #--- Negative offset ---
 
 0xf0 0xff 0x7b 0xb0
-# CHECK: ldw	r1, [r14 + -4]
+# CHECK: ldw	r1, [sp + -4]
 
 #=== Format B: Branches ======================================================
 
@@ -179,7 +179,7 @@
 #=== Format L: Indirect jump/call ============================================
 
 0x00 0x00 0x40 0x6f
-# CHECK: jmp	r13
+# CHECK: jmp	lr
 
 0x00 0x00 0x40 0x70
 # CHECK: jalr	r1
