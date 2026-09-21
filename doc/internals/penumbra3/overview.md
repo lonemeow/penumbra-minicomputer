@@ -127,7 +127,7 @@ copy and the board never learns gen3 exists.
 | **Reuse as-is (generation-neutral leaf)** | `common/penumbra_pkg.sv` (ISA/system contract), `common/divmul.sv` (MUL/DIV peer FU), `common/cond_eval.sv`, `common/byte_ext.sv`, `common/byte_rep.sv`. `common/tlb_pinned.sv` = reuse-candidate, revisit under the MMU rewrite. |
 | **Reuse as-is (bus devices + board)** | `soc/`: `boot_rom`, `busctl`, `cpuid`, `machid`, `timer`, `autoconfig_dev`, `bus_devsel`, `cache_perfctr`. All of `io/` (UART, SPI, **SDRAM controller stack**, video). The `fpga/ulx3s` PLL + shell. |
 | **Fork & rewrite → `penumbra3/` (pipeline)** | core, spine, IF1/IF2/fetch_buffer/ID/EX/MEM1/MEM2/WB, decode, regmap, alu, regfile, scoreboard, flag_bypass, spr_file, scratch_file, irq, vecfetch, perfctr, pkg |
-| **Fork & rewrite → `penumbra3/` (memory hierarchy — the boundaries Rule Zero registers)** | MMU + TLB storage (duplicated BRAM I/D, MEM1-launch/MEM2-verdict), L1 (write-through, hit→registered-replay), arbiter + CPU↔bus decouple (registered line-transaction), fill sequencer (burst), L2 (`soc/l2_cache.sv` → `penumbra3_l2.sv`; **initial write-through, write-back/write-allocate a later isolated upgrade — outside the core cones**) |
+| **Fork & rewrite → `penumbra3/` (memory hierarchy — the boundaries Rule Zero registers)** | MMU + TLB storage (duplicated BRAM I/D, MEM1-launch/MEM2-verdict), L1 (write-through, hit→registered-replay), arbiter + CPU↔bus decouple (registered line-transaction), fill sequencer (burst), L2 (`soc/l2_cache.sv` → `penumbra3_l2.sv`; **write-through; write-back/write-allocate a measure-driven option — outside the core cones**) |
 | **New thin wrappers** | `machine/machine_penumbra3.sv` (port list identical to gen2), `fpga/ulx3s/ulx3s_penumbra3_top.sv` (copy of gen2 top, swap the machine instance) |
 
 **Known sharp edge.** Registering the L2↔bus boundary in gen2 tripped a
@@ -149,60 +149,62 @@ right behind it.
 
 **Staged — additive, outside the core cones.** RAS (fetch-domain return
 prediction, small payoff) and the entire store-traffic optimization
-(write-back L2, plus a store buffer only if measurement justifies it)
+(a store buffer, plus write-back L2 only if measurement justifies it)
 reshape nothing in the core's critical cones, so they follow the booting
-skeleton. The store-traffic strategy is detailed below — it is deliberately
-*not* a reserved core seam, because the better answer (write-back L2) lives
-outside the core entirely.
+skeleton. The store-traffic strategy is detailed below — it needs no
+reserved seam in the core's cones, because the store buffer sits between
+the completion unit and the uncore and reaches the core only through a
+registered `full`.
 
-### Store-traffic strategy — write-back L2 first, store buffer only if it earns it
+### Store-traffic strategy — store buffer first, write-back L2 only if it earns it
 
-Store performance has two distinct costs, and they are not equally
-important:
+Store performance has two distinct costs:
 
-- **Write throughput** — the sustained rate stores can be absorbed. This is
-  what real software is bound by (a write-through-to-SDRAM path spends the
-  bulk of a store-heavy run just moving writes to memory).
-- **Write latency** — how long an individual store takes. In an in-order
-  machine a store produces no register result, so latency only stalls the
-  core when a buffer fills or a younger load / uncached-store waits on a
-  drain.
+- **Write latency** — how long the pipe waits on each store. In an
+  in-order machine a store produces no register result, so only a
+  blocking store path or a full buffer makes the core wait.
+- **Write throughput** — the sustained rate the memory side absorbs
+  stores. It binds only when stores arrive faster than they drain.
 
-A **store buffer** mostly hides *latency* (and helps throughput only if it
-coalesces); measured at 25 MHz its payoff was modest, because the binding
-cost was throughput, not latency. **Write-back / write-allocate L2** attacks
-*both*: stores are absorbed on-chip (dirty), only evictions reach SDRAM, so
-sustained throughput jumps and each store also completes at L2-hit latency.
-It is therefore the primary store-traffic optimization — and, critically, it
-lives **entirely outside the CPU core timing cones** (post-L1, on the bus
-side), so it can be added or swapped without perturbing core fmax. That
-makes it the rare optimization it is *safe to defer* (see the
-[deferral principle](#build-plan)).
+Measured on gen2.5 hardware, the binding cost is latency. Dhrystone
+spends 26 % of its cycles waiting on stores (5 cycles each), while
+draining the same stores in the background would keep the write path
+busy about a quarter of the time. Below the arbiter a store takes 3
+cycles whether it hits L2 or not: the SDRAM adapter releases a write as
+soon as its CDC accepts it, so the SDRAM leg is already posted. The
+measurements and the analysis are in
+[`memory-performance.md`](./memory-performance.md).
 
-So gen3 does **not** build a store buffer up front, and does not reserve a
-disambiguating-buffer seam in the core:
+That sets the order:
 
 - **Phase-1 store-completion model: blocking write-through, WnA.** A store
   writes through L1-D to L2 and the core waits for the ack. Correct and
-  simple; with a write-through L2 early it is slow-but-correct, and because
-  the cost is a *stall* (CPI), not a combinational path (fmax), it is safe
-  to leave until the L2 upgrade. No store buffer, so no load disambiguation:
-  a later load misses WnA L1-D and fills from L2, which already holds the
+  simple; slow-but-correct, and because the cost is a *stall* (CPI), not a
+  combinational path (fmax), it is safe to leave until the store buffer.
+  A later load misses WnA L1-D and fills from L2, which already holds the
   completed store.
-- **Write-back L2 (later phase) makes each blocking write-through cheap**
-  (L2-hit) and eliminates the SDRAM round-trips — the actual win.
-- **A store buffer is a measure-driven option, not a plan item.** Only if
-  profiling *after* write-back still shows the residual per-store L2-hit
-  stall binding under sustained stores would a minimal posted-write decouple
-  (not a full disambiguating buffer) be added. The 25 MHz data suggests it
-  will not be needed.
+- **A store buffer is the primary store-traffic fix.** Cacheable stores
+  retire into a small FIFO between the completion unit and the uncore
+  and drain in the background. It needs no load disambiguation: L1-D is
+  updated in place at commit on a hit, and every access that goes to L2
+  (a fill, an uncached load) and every uncached store waits for the
+  buffer to drain. It meets the core only through registered signals
+  (`full` into the freeze), so it lives outside the core timing cones and
+  is *safe to defer* (see the [deferral principle](#build-plan)).
+- **Write-back L2 is a measure-driven option, not a plan item.** A
+  write-back hit completes at the L2 tag verdict, about as late as the
+  posted write-through it replaces, so it does little for store latency.
+  It reduces SDRAM write traffic, which matters only if stores prove
+  throughput-bound, and it adds dirty/eviction logic in the L2 miss path
+  plus kernel flush/invalidate work around DMA.
 - **L1-D write-allocate stays off the table for now.** Its allocation logic
   is complex and sits in the most critical timing cones, so it is a real
   fmax risk; investigate only once the basic design closes. Keep WT-WnA.
 
 Whatever store path lands, the ordering contract is unchanged and rides
 existing ops: uncached stores are ordered (a DMA kickoff is an uncached MMIO
-store), so no new ISA barrier is introduced.
+store, and the store buffer drains ahead of it), so no new ISA barrier is
+introduced.
 
 ## Performance targets
 
@@ -261,7 +263,7 @@ single-outstanding hold-buffer loads, static-not-taken branches resolved in
 EX (no BTB yet), write-through L1 + **write-through L2** + burst read-fill +
 registered bus. **Store path: blocking write-through, WnA** — no buffer, no
 disambiguation; slow-but-correct, and a stall (CPI) outside the core cones,
-so safe to leave for the Phase-4 L2 upgrade. divmul reused from `common/`.
+so safe to leave for the Phase-4 store buffer. divmul reused from `common/`.
 **Exit:** `isa/` conformance passes on the gen3 RTL runner.
 
 ### Phase 2 — BTB (+ optional RAS)
@@ -276,15 +278,16 @@ Boot the kernel (same binary, CPUID-discriminated). Core is feature-complete
 (forwarding + BTB) and correctness-validated against a real OS before perf
 work begins.
 
-### Phase 4 — L2 write-back / write-allocate (store-traffic perf)
+### Phase 4 — store buffer (store-traffic perf)
 
-The primary store-traffic optimization, and the one that lives entirely
-outside the core timing cones — so it lands here, late, with no risk to the
-core fmax proven in Phase 0. Absorbs stores on-chip; only L2 evictions reach
-SDRAM. A store buffer is added *only* if profiling after this still shows the
-residual per-store L2-hit stall binding (the 25 MHz data suggests it will
-not). L1-D write-allocate is investigated here at the earliest, and only if
-it can be shown not to lengthen the critical cone.
+The primary store-traffic optimization: a cacheable-only store buffer
+between the completion unit and the uncore
+([design](./memory-performance.md#store-buffer-at-the-core-boundary)). It
+meets the core only through registered signals, so it lands here, late,
+with no risk to the core fmax proven in Phase 0. Write-back / write-allocate
+L2 follows *only* if profiling after this shows stores throughput-bound.
+L1-D write-allocate is investigated here at the earliest, and only if it
+can be shown not to lengthen the critical cone.
 
 ### Phase 5 — floorplan + clock
 
@@ -303,6 +306,10 @@ with margin.
      duplicated BRAM TLB.
    - [`memory-completion.md`](./memory-completion.md) — the registered
      back-end stall and the load/store completion + fault-precision contract.
+   - [`memory-performance.md`](./memory-performance.md) — measured
+     memory-path costs, gen2.5 workload profiles, and the uncore levers
+     they point to (store buffer, one uncore pipeline, whole-line SDRAM
+     fetch, stream prefetch).
 4. Further per-area gen3 specs — *to be written as each subsystem is
    designed* (design-decisions, pipeline-stages, hazard-model,
    memory-interface), following the gen2 doc layout under `penumbra2/`.

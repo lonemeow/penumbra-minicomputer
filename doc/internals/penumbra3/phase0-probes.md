@@ -207,7 +207,7 @@ read-fills **and** write-back eviction bursts.
 This is the probe that directly de-risks the one known sharp edge: in gen2,
 registering the L2↔bus boundary turned a line fill into gapped single reads
 and the adapter's speculative-prefetch FSM deadlocked (`test_l2_ifetch`
-hung). Write-back (Phase 4) adds *eviction* bursts on the same path, so both
+hung). A write-back L2 adds *eviction* bursts on the same path, so both
 directions are covered now — otherwise an eviction-burst deadlock surfaces
 late, a smaller replay of the same trap.
 

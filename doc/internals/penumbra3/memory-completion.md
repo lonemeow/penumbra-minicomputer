@@ -110,7 +110,7 @@ releases the freeze and resolves the fault (below).
 Decoupling the pipe from the store drain — a store/write buffer, or absorbing
 stores in a write-back L2 so only evictions reach memory — is an orthogonal
 throughput layer, described in the
-[store-traffic strategy](./overview.md#store-traffic-strategy--write-back-l2-first-store-buffer-only-if-it-earns-it).
+[store-traffic strategy](./overview.md#store-traffic-strategy--store-buffer-first-write-back-l2-only-if-it-earns-it).
 It does not change this completion contract.
 
 ## One completion unit, four access shapes
@@ -245,9 +245,9 @@ invalidate before a DMA write — the per-line cache-maintenance and full-flush
 hooks the platform reserves for exactly this case. That cost is a property of
 the *policy*, not of this completion contract.
 
-The phased rollout that exercises these knobs — write-through first, write-back
-as the primary store-traffic win — is the
-[store-traffic strategy](./overview.md#store-traffic-strategy--write-back-l2-first-store-buffer-only-if-it-earns-it);
+The phased rollout that exercises these knobs — write-through with a store
+buffer first, write-back only if measurement asks for it — is the
+[store-traffic strategy](./overview.md#store-traffic-strategy--store-buffer-first-write-back-l2-only-if-it-earns-it);
 this section specifies the seam it plugs into.
 
 ## Single-beat transactions — the same completion path

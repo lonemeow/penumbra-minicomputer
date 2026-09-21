@@ -225,9 +225,11 @@ cycles, never critical-path logic.**
   registered/deferred (gen2's L1 already does this — keep it).
 - **L1: write-through**, keep the timing-critical level simple; size up to **16 KB+**
   (gen2's 4 KB is half the field and most of the ~10 % miss rate).
-- **L2: write-back / write-allocate.** Absorbs store traffic on-chip; only L2
-  evictions hit SDRAM. Complexity (dirty + eviction-writeback FSM) lives in the L2
-  **miss path** — off the hit path and off critical routing.
+- **L2: write-through; write-back / write-allocate only if stores prove
+  throughput-bound.** Store latency, the measured binding cost, is a store-buffer
+  problem ([memory-performance](./memory-performance.md)). If write-back lands, its
+  complexity (dirty + eviction-writeback FSM) lives in the L2 **miss path** — off
+  the hit path and off critical routing.
 - **Do not** go direct-mapped for timing — it wrecks IPC (conflict misses) and
   barely shortens the path (the way-mux is ~1 LUT level).
 
