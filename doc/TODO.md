@@ -1294,6 +1294,35 @@ propagation's last run, so the pair survives `AllowRegisterRenaming`
 too (see it in "codegen pass/gate audit").  The selector keeps its
 store-zero patch because `-O0` runs no coalescer.
 
+## Compiler: a high-half multiply by zero is not folded
+
+The legalizer splits a multiply wider than 32 bits into 32-bit partial
+products.  Where an operand word is a constant zero — the top word of a
+zero-extended value, or a zero word of a constant — its products are
+zero, and the post-legalizer combiner folds the low halves
+(`G_MUL x, 0`, upstream's `binop_right_to_zero`).  Nothing folds a high
+half (`G_UMULH x, 0`), which selects to a real `MULU_P`: 37 cycles on
+gen1, 10 on gen2 and gen2.5.  SelectionDAG folds `mulhu x, 0`.
+
+Multiplies wasted per shape:
+- 64-bit `x * 0x3_0000_0000`, a constant with a zero low word: 1;
+- unsigned 64-bit `__builtin_mul_overflow` with one operand widened
+  from 32 bits: 2;
+- `(unsigned __int128)a * b` of 64-bit values, the full product or its
+  high half (`i128-mulhi.ll`'s `umulh64`): 2; the high half with `b`
+  32 bits wide: 3.
+
+A plain 64-bit multiply wastes none even with zero-extended operands
+(the zero words meet only in low halves), nor do signed forms (a
+sign-extended word is not a constant) or a 32x32->64 widening
+multiply.  Reach is next to nothing: Doom has none; the few sites in
+the kernel and libc binaries (`disk_set_info`, `diskerr`, `__divdf3`)
+came from an older compiler, and libc's SoftFloat and
+`disk_set_info`'s shape compile without one now; the `test-compiler`
+corpus has only the `mulhi64` test.  The fix is a rule folding
+`G_UMULH`/`G_SMULH` by zero — best upstream, extending
+`binop_right_to_zero`, where it serves every 32-bit GlobalISel target.
+
 ## Compiler: graceful-fail on unsupported inline asm and vector IR
 
 Today the GlobalISel IRTranslator crashes (`fatal error: unable to
