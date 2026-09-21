@@ -1167,7 +1167,7 @@ diagnostic paths.
 
 | Item | Shape counted | Kernel | libc | Doom | Tests | In loops (kernel / libc) |
 |---|---|---:|---:|---:|---:|---|
-| "outgoing stack arguments address SP through a copy" | `mov x, sp` whose every read until `x` is rewritten could read `sp` | 10,361 (1.45%) | 1,593 (0.39%) | 51 | 3,611 (0.93%) | 1,790 / 200 |
+| "outgoing stack arguments address SP through a copy" — resolved | `mov x, sp` whose every read until `x` is rewritten could read `sp` | 10,361 (1.45%) | 1,593 (0.39%) | 51 | 3,611 (0.93%) | 1,790 / 200 |
 | "64-bit relational compares expand to select diamonds" | `sbc r, zero; and r, 1` | 1,686 | 1,161 | 271 | 12,473 | 161 / 85 |
 | "flag definitions stay live after C++ selection" (PIC anchors) | `add x, pc` / `mov x, pc` | 1 | 12,486 | 30 | 0 | 0 / 772 |
 | `AllowRegisterRenaming` (codegen pass/gate audit) | `mov x, zero` forwardable into a store; other forwardable copies | 353 + 190 | 258 + 244 | 23 + 54 | 10 + 784 | 37 / 14 |
@@ -1184,9 +1184,9 @@ way at 0.02–0.06% (in the audio-mixing review), and the 64-bit select
 of zero only concerns the 32.32 mixer loop.
 
 What follows, by value for effort:
-1. **SP copy** — the largest static item and a contained fix.  Most
-   sites sit on cold call paths, so the gain is mostly code size and
-   I-cache footprint.
+1. **SP copy** — resolved.  The largest static item and a contained
+   fix.  Most sites sit on cold call paths, so the gain is mostly code
+   size and I-cache footprint.
 2. **64-bit compares** — the largest dynamic potential (`off_t`,
    `time_t`, SQLite's rowid compares), about 1% of instructions in the
    kernel, libc and Doom; waits on the ISA documentation decision in
@@ -1204,7 +1204,7 @@ tenth of the kernel's; copy forwarding would reach only a few hundred
 more per corpus.  The bulk presumably comes from argument and return
 marshalling and PHI copies, which no scan has classified yet.
 
-## Compiler: outgoing stack arguments address SP through a copy
+## Compiler: outgoing stack arguments address SP through a copy — RESOLVED
 
 A call that passes arguments on the stack stores them through a copy
 of SP:
@@ -1228,11 +1228,18 @@ of its copies; 1,593 in `libc.so`; 3,611 in the `test-compiler` corpus.
 The sampled kernel sites are setup and diagnostic calls (`startlwp`,
 `penumbra_init`, `cpu_initclocks`); 1,790 sit inside loops.
 
-Fix: fold a copy of `$r14` into the base in `selectAddrRegImm`, or give
-the copy the full `GPR` class so the coalescer's reserved-register join
-removes it.  Either is safe within a call sequence: SP changes only at
-`ADJCALLSTACKDOWN`/`ADJCALLSTACKUP`, which define it and bound the
-scheduler.
+Resolved by making R14 a reserved member of `GPR_Allocatable`, as R12
+already was.  The coalescer's reserved-register join then folds the
+copy into its uses, and it refuses wherever an `ADJCALLSTACKDOWN`,
+an `ADJCALLSTACKUP` or a call clobbering R14 falls inside the copy's
+live range, so the unreserved call frame of a function with a dynamic
+`alloca` stays correct (`alloca-call-frame.ll`).  In the
+`test-compiler` corpus at `-O2` the shape drops from 3,611 to 17 and
+the corpus from 386,627 instructions to 382,926: past the copies
+themselves, the freed register sometimes spares a callee-saved save
+and restore, as in Doom's `P_UseLines`.  The 17 left are `LEAfi`
+expansions, a frame address taken as a value, which form after
+register allocation.
 
 ## Compiler: graceful-fail on unsupported inline asm and vector IR
 

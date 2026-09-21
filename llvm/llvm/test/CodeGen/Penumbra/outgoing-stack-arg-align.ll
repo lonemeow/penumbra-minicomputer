@@ -9,6 +9,10 @@
 ; Align(1) memory operand) would expand each slot into the unaligned
 ; byte-store sequence (four stb + shifts per word); these checks catch
 ; that by pinning the stw form.
+;
+; The stores address SP itself: call lowering reads SP through a copy,
+; which the coalescer folds away only because R14 is a member of the i32
+; value register class (PenumbraRegisterInfo.td's GPR_Allocatable).
 
 declare void @take6(i32, i32, i32, i32, i32, i32)
 declare void @take_ll(i32, i32, i32, i32, i64)
@@ -20,11 +24,10 @@ define void @call6() {
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 12
 ; CHECK-NEXT:    stw lr, [sp + 8] // 4-byte Folded Spill
-; CHECK-NEXT:    mov r1, sp
-; CHECK-NEXT:    lli r2, 5
-; CHECK-NEXT:    stw r2, [r1 + 0]
-; CHECK-NEXT:    lli r2, 6
-; CHECK-NEXT:    stw r2, [r1 + 4]
+; CHECK-NEXT:    lli r1, 5
+; CHECK-NEXT:    stw r1, [sp + 0]
+; CHECK-NEXT:    lli r1, 6
+; CHECK-NEXT:    stw r1, [sp + 4]
 ; CHECK-NEXT:    lli r1, 1
 ; CHECK-NEXT:    lli r2, 2
 ; CHECK-NEXT:    lli r3, 3
@@ -44,9 +47,8 @@ define void @call_ll(i64 %v) {
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 12
 ; CHECK-NEXT:    stw lr, [sp + 8] // 4-byte Folded Spill
-; CHECK-NEXT:    mov r3, sp
-; CHECK-NEXT:    stw r1, [r3 + 0]
-; CHECK-NEXT:    stw r2, [r3 + 4]
+; CHECK-NEXT:    stw r1, [sp + 0]
+; CHECK-NEXT:    stw r2, [sp + 4]
 ; CHECK-NEXT:    lli r1, 1
 ; CHECK-NEXT:    lli r2, 2
 ; CHECK-NEXT:    lli r3, 3

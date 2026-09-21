@@ -28,9 +28,8 @@ define i32 @dyn_alloca_stack_args(i32 %n) {
 ; CHECK-NEXT:    sub r5, r2
 ; CHECK-NEXT:    mov sp, r5
 ; CHECK-NEXT:    sub sp, 4
-; CHECK-NEXT:    mov r1, sp
-; CHECK-NEXT:    lli r2, 77
-; CHECK-NEXT:    stw r2, [r1 + 0]
+; CHECK-NEXT:    lli r1, 77
+; CHECK-NEXT:    stw r1, [sp + 0]
 ; CHECK-NEXT:    lli r1, 1
 ; CHECK-NEXT:    lli r2, 2
 ; CHECK-NEXT:    lli r3, 3
@@ -100,9 +99,8 @@ define i32 @fixed_frame_stack_args() {
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 8
 ; CHECK-NEXT:    stw lr, [sp + 4] // 4-byte Folded Spill
-; CHECK-NEXT:    mov r1, sp
-; CHECK-NEXT:    lli r2, 77
-; CHECK-NEXT:    stw r2, [r1 + 0]
+; CHECK-NEXT:    lli r1, 77
+; CHECK-NEXT:    stw r1, [sp + 0]
 ; CHECK-NEXT:    lli r1, 1
 ; CHECK-NEXT:    lli r2, 2
 ; CHECK-NEXT:    lli r3, 3
