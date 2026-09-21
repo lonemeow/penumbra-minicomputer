@@ -213,12 +213,14 @@ bool PenumbraCallLowering::lowerFormalArguments(
 
     MachineFrameInfo &MFI = MF.getFrameInfo();
 
-    // Spill each argument register to its slot.
+    // Spill each argument register to its slot.  The slots are written
+    // here, so they are not immutable: a load from an immutable object
+    // counts as invariant and could be scheduled ahead of these stores.
     LLT s32 = LLT::scalar(32);
     LLT p0 = LLT::pointer(0, 32);
     for (unsigned i = 0; i < NumArgRegs; ++i) {
       int SlotFI = MFI.CreateFixedObject(4, SaveOffset + i * 4,
-                                         /*IsSpillSlot=*/true);
+                                         /*IsImmutable=*/false);
       auto FINReg = MIRBuilder.buildFrameIndex(p0, SlotFI);
       // If this register carries a named arg it was already live-in'd above.
       // For unused arg regs we need to add them as live-ins.
@@ -257,7 +259,7 @@ bool PenumbraCallLowering::lowerFormalArguments(
       VaOffset = (int64_t)ArgAssigner.StackSize;
     }
     int VaFI = MFI.CreateFixedObject(4, VaOffset,
-                                     /*IsSpillSlot=*/false);
+                                     /*IsImmutable=*/false);
     FuncInfo->setVarArgsFrameIndex(VaFI);
   }
 
