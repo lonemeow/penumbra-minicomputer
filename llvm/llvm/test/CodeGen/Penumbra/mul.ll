@@ -37,8 +37,8 @@ define i64 @mul_i64(i64 %a, i64 %b) {
 ; CHECK-NEXT:    mov r11, r1
 ; CHECK-NEXT:    mulu r11, r3, r5
 ; CHECK-NEXT:    mul r2, r3
-; CHECK-NEXT:    mul r1, r4
-; CHECK-NEXT:    add r2, r1
+; CHECK-NEXT:    mul r4, r1
+; CHECK-NEXT:    add r2, r4
 ; CHECK-NEXT:    add r2, r5
 ; CHECK-NEXT:    mov r1, r11
 ; CHECK-NEXT:    ldw r5, [sp + 0] // 4-byte Folded Reload
@@ -99,4 +99,19 @@ define i32 @smulo_i32(i32 %a, i32 %b, ptr %ov) {
   %oz = zext i1 %o to i8
   store i8 %oz, ptr %ov
   ret i32 %v
+}
+
+; MUL commutes, so the destination is whichever multiplicand dies there: a
+; is still needed by the add, b is not, and the product takes b's register
+; instead of a copy of a.
+define i32 @mul_live_operand(i32 %a, i32 %b) {
+; CHECK-LABEL: mul_live_operand:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  // %bb.0:
+; CHECK-NEXT:    mul r2, r1
+; CHECK-NEXT:    add r1, r2
+; CHECK-NEXT:    jmp lr
+  %m = mul i32 %a, %b
+  %r = add i32 %m, %a
+  ret i32 %r
 }

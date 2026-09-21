@@ -323,7 +323,9 @@ let F = 1, isCompare = 1, SchedRW = [ReadALU, ReadALU] in {
 
 let Defs = [SR], mayLoad = 0, mayStore = 0,
     Constraints = "$Rd = $Rd_in" in {
-  let hasSideEffects = 0 in {
+  // Commutable like ADD: swapping the sources changes neither half of the
+  // product, and lets the destructive destination be the source that dies.
+  let hasSideEffects = 0, isCommutable = 1 in {
     // Single-result forms: Rdh fixed to R0, low half only.
     def MUL  : FormatR_DivMul<0b10000, (outs GPR:$Rd), (ins GPR:$Rd_in, GPR:$Rs),
                               "mul\t$Rd, $Rs"> {

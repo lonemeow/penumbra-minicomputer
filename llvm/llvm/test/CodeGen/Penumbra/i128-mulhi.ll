@@ -86,37 +86,36 @@ define i64 @smulh64(i64 %a, i64 %b) {
 ; CHECK-NEXT:    mov lr, r1
 ; CHECK-NEXT:    mov r11, r2
 ; CHECK-NEXT:    sar r2, 31
-; CHECK-NEXT:    mov r7, r4
-; CHECK-NEXT:    sar r7, 31
+; CHECK-NEXT:    mov r5, r4
+; CHECK-NEXT:    sar r5, 31
 ; CHECK-NEXT:    mov r10, r2
 ; CHECK-NEXT:    mulu r10, r3, r1
-; CHECK-NEXT:    mov r6, r2
-; CHECK-NEXT:    mul r6, r3
+; CHECK-NEXT:    mov r7, r2
+; CHECK-NEXT:    mul r7, r3
 ; CHECK-NEXT:    mul r2, r4
-; CHECK-NEXT:    add r2, r6
+; CHECK-NEXT:    add r2, r7
 ; CHECK-NEXT:    add r2, r1
 ; CHECK-NEXT:    mov r1, lr
-; CHECK-NEXT:    mulu r1, r7, r8
-; CHECK-NEXT:    mov r9, r11
-; CHECK-NEXT:    mul r9, r7
-; CHECK-NEXT:    mov r6, lr
-; CHECK-NEXT:    mul r6, r7
-; CHECK-NEXT:    add r6, r9
-; CHECK-NEXT:    add r6, r8
+; CHECK-NEXT:    mulu r1, r5, r7
+; CHECK-NEXT:    mov r8, r11
+; CHECK-NEXT:    mul r8, r5
+; CHECK-NEXT:    mul r5, lr
+; CHECK-NEXT:    add r5, r8
+; CHECK-NEXT:    add r5, r7
 ; CHECK-NEXT:    mov r8, r11
 ; CHECK-NEXT:    mulu r8, r3, r7
 ; CHECK-NEXT:    mov r9, lr
-; CHECK-NEXT:    mulu r9, r4, r5
-; CHECK-NEXT:    stw r5, [sp + 0] // 4-byte Folded Spill
-; CHECK-NEXT:    mulu lr, r3, r5
+; CHECK-NEXT:    mulu r9, r4, r6
+; CHECK-NEXT:    stw r6, [sp + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    mulu lr, r3, r6
 ; CHECK-NEXT:    add r9, r8
 ; CHECK-NEXT:    mov r3, zero
 ; CHECK-NEXT:    mov lr, r3
 ; CHECK-NEXT:    adc lr, zero
-; CHECK-NEXT:    add r9, r5
-; CHECK-NEXT:    mov r5, r3
-; CHECK-NEXT:    adc r5, zero
-; CHECK-NEXT:    add r5, lr
+; CHECK-NEXT:    add r9, r6
+; CHECK-NEXT:    mov r6, r3
+; CHECK-NEXT:    adc r6, zero
+; CHECK-NEXT:    add r6, lr
 ; CHECK-NEXT:    mulu r11, r4, r4
 ; CHECK-NEXT:    add r7, r11
 ; CHECK-NEXT:    mov r11, r3
@@ -126,12 +125,12 @@ define i64 @smulh64(i64 %a, i64 %b) {
 ; CHECK-NEXT:    mov lr, r3
 ; CHECK-NEXT:    adc lr, zero
 ; CHECK-NEXT:    add lr, r11
-; CHECK-NEXT:    add r7, r5
+; CHECK-NEXT:    add r7, r6
 ; CHECK-NEXT:    adc r3, zero
 ; CHECK-NEXT:    add r3, lr
 ; CHECK-NEXT:    add r3, r4
 ; CHECK-NEXT:    add r1, r10
-; CHECK-NEXT:    adc r2, r6
+; CHECK-NEXT:    adc r2, r5
 ; CHECK-NEXT:    add r1, r7
 ; CHECK-NEXT:    adc r2, r3
 ; CHECK-NEXT:    ldw lr, [sp + 4] // 4-byte Folded Reload

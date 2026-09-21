@@ -43,9 +43,9 @@ define i32 @frac_to_nsec(i64 %frac) {
 ; CHECK-LABEL: frac_to_nsec:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    lli r1, 51712
-; CHECK-NEXT:    lui r1, 15258
-; CHECK-NEXT:    mulu r2, r1, r1
+; CHECK-NEXT:    lli r3, 51712
+; CHECK-NEXT:    lui r3, 15258
+; CHECK-NEXT:    mulu r3, r2, r1
 ; CHECK-NEXT:    jmp lr
   %hi = lshr i64 %frac, 32
   %hi32 = trunc i64 %hi to i32

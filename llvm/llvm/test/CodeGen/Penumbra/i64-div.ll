@@ -131,8 +131,8 @@ define i64 @mul64(i64 %a, i64 %b) {
 ; O1-NEXT:    mov r11, r1
 ; O1-NEXT:    mulu r11, r3, r5
 ; O1-NEXT:    mul r2, r3
-; O1-NEXT:    mul r1, r4
-; O1-NEXT:    add r2, r1
+; O1-NEXT:    mul r4, r1
+; O1-NEXT:    add r2, r4
 ; O1-NEXT:    add r2, r5
 ; O1-NEXT:    mov r1, r11
 ; O1-NEXT:    ldw r5, [sp + 0] // 4-byte Folded Reload

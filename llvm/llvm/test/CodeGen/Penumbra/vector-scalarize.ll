@@ -53,10 +53,10 @@ define void @vector_mul(ptr %dst, ptr %a, ptr %b) {
 ; CHECK-NEXT:    ldw r2, [r2 + 4]
 ; CHECK-NEXT:    ldw r11, [r3 + 0]
 ; CHECK-NEXT:    ldw r3, [r3 + 4]
-; CHECK-NEXT:    mul r4, r11
-; CHECK-NEXT:    mul r2, r3
-; CHECK-NEXT:    stw r4, [r1 + 0]
-; CHECK-NEXT:    stw r2, [r1 + 4]
+; CHECK-NEXT:    mul r11, r4
+; CHECK-NEXT:    mul r3, r2
+; CHECK-NEXT:    stw r11, [r1 + 0]
+; CHECK-NEXT:    stw r3, [r1 + 4]
 ; CHECK-NEXT:    jmp lr
   %va = load <2 x i32>, ptr %a
   %vb = load <2 x i32>, ptr %b

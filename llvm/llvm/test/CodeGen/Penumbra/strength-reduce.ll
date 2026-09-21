@@ -242,9 +242,8 @@ define i32 @udiv_by_3(i32 %a) {
 ; O1-NEXT:  // %bb.0:
 ; O1-NEXT:    lli r2, 43691
 ; O1-NEXT:    lui r2, 43690
-; O1-NEXT:    mulu r1, r2, r2
-; O1-NEXT:    shr r2, 1
-; O1-NEXT:    mov r1, r2
+; O1-NEXT:    mulu r2, r1, r1
+; O1-NEXT:    shr r1, 1
 ; O1-NEXT:    jmp lr
   %r = udiv i32 %a, 3
   ret i32 %r

@@ -56,8 +56,7 @@ define i32 @hi_half_only(i32 %a, i32 %b) {
 ; CHECK-LABEL: hi_half_only:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    mulu r1, r2, r2
-; CHECK-NEXT:    mov r1, r2
+; CHECK-NEXT:    mulu r2, r1, r1
 ; CHECK-NEXT:    jmp lr
   %za = zext i32 %a to i64
   %zb = zext i32 %b to i64

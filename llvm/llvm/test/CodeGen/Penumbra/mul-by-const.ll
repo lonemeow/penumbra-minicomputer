@@ -364,20 +364,22 @@ define i64 @mul64_minsize(i64 %x) minsize {
 ; FASTMUL:         .cfi_startproc
 ; FASTMUL-NEXT:  // %bb.0:
 ; FASTMUL-NEXT:    lli r3, 8
+; FASTMUL-NEXT:    mulu r3, r1, r4
 ; FASTMUL-NEXT:    shl r2, 3
 ; FASTMUL-NEXT:    add r2, r1
-; FASTMUL-NEXT:    mulu r1, r3, r3
-; FASTMUL-NEXT:    add r2, r3
+; FASTMUL-NEXT:    add r2, r4
+; FASTMUL-NEXT:    mov r1, r3
 ; FASTMUL-NEXT:    jmp lr
 ;
 ; SLOWMUL-LABEL: mul64_minsize:
 ; SLOWMUL:         .cfi_startproc
 ; SLOWMUL-NEXT:  // %bb.0:
 ; SLOWMUL-NEXT:    lli r3, 8
+; SLOWMUL-NEXT:    mulu r3, r1, r4
 ; SLOWMUL-NEXT:    shl r2, 3
 ; SLOWMUL-NEXT:    add r2, r1
-; SLOWMUL-NEXT:    mulu r1, r3, r3
-; SLOWMUL-NEXT:    add r2, r3
+; SLOWMUL-NEXT:    add r2, r4
+; SLOWMUL-NEXT:    mov r1, r3
 ; SLOWMUL-NEXT:    jmp lr
   %r = mul i64 %x, 4294967304
   ret i64 %r

@@ -17,13 +17,13 @@ define i32 @inst_check_f(i32 %m) {
 ; CHECK-NEXT:    sub r2, 1
 ; CHECK-NEXT:    mov r3, r1
 ; CHECK-NEXT:    sub r3, 2
-; CHECK-NEXT:    mulu r2, r3, r3
-; CHECK-NEXT:    and r3, 1
-; CHECK-NEXT:    shr r2, 1
-; CHECK-NEXT:    shl r3, 31
-; CHECK-NEXT:    or r3, r2
-; CHECK-NEXT:    add r3, r1
-; CHECK-NEXT:    mov r1, r3
+; CHECK-NEXT:    mulu r3, r2, r2
+; CHECK-NEXT:    and r2, 1
+; CHECK-NEXT:    shr r3, 1
+; CHECK-NEXT:    shl r2, 31
+; CHECK-NEXT:    or r2, r3
+; CHECK-NEXT:    add r2, r1
+; CHECK-NEXT:    mov r1, r2
 ; CHECK-NEXT:    sub r1, 1
 ; CHECK-NEXT:    jmp lr
 ; CHECK-NEXT:  .LBB0_1:

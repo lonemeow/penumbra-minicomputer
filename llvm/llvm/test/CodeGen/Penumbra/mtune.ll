@@ -94,7 +94,7 @@ define i32 @udiv10_tuned_for_penumbra1(i32 %a) #0 {
 
 define i32 @udiv10_tuned_for_penumbra2_5(i32 %a) #3 {
 ; CHECK-LABEL: udiv10_tuned_for_penumbra2_5:
-; CHECK:         mulu r1, r2, r2
+; CHECK:         mulu r2, r1, r1
 ; CHECK-NOT:     divu
 ; CHECK:         jmp lr
   %result = udiv i32 %a, 10
@@ -103,7 +103,7 @@ define i32 @udiv10_tuned_for_penumbra2_5(i32 %a) #3 {
 
 define i32 @udiv10_tuned_for_generic(i32 %a) #2 {
 ; CHECK-LABEL: udiv10_tuned_for_generic:
-; CHECK:         mulu r1, r2, r2
+; CHECK:         mulu r2, r1, r1
 ; CHECK-NOT:     divu
 ; CHECK:         jmp lr
   %result = udiv i32 %a, 10

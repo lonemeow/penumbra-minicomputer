@@ -4197,7 +4197,7 @@ how much of each voice-sample is bookkeeping.  `mix_by_frame` visits
 every voice for every output frame: about 25 instructions per
 voice-sample, most of them reloading voice state and a run-time
 indexed accumulator.  `mix_by_voice` holds a voice's state in
-registers across the block: 17, where the ISA allows about 14.
+registers across the block: 16, where the ISA allows about 14.
 
 Measured on hardware, a table lookup in place of the sample-by-volume
 multiply gains nothing.  The multiplier's `funit` stall (10–12% of
@@ -4207,7 +4207,7 @@ below, not the multiply.
 
 | Cause | Per voice-sample | Entry |
 |---|---|---|
-| `MUL` copies a multiplicand that stays live | 1 in `mix_by_voice` | "MUL is not commutable, so a live multiplicand is copied" |
+| `MUL` copies a multiplicand that stays live — resolved | 1 in `mix_by_voice` | "MUL is not commutable, so a live multiplicand is copied" |
 | A conditional subtract pays for its zero arm — resolved | 2 in `mix_by_voice` | "a conditional add or subtract becomes a select of zero" |
 | A run-time indexed local rebuilds its frame address | 2 in `mix_by_frame` | "pointer-minus-constant and integer MMIO addresses miss their folds" |
 
@@ -4234,7 +4234,7 @@ Checked and not levers:
   both, but only the source can make that change: it needs
   `len < 65536`, which the compiler cannot know.
 
-## Compiler: MUL is not commutable, so a live multiplicand is copied
+## Compiler: MUL is not commutable, so a live multiplicand is copied — RESOLVED
 
 `MUL` and `MULU` are destructive (`Rd = Rd × Rs`) and commutative,
 but unlike `ADD`, `AND`, `OR` and `XOR` they are not marked
@@ -4257,12 +4257,20 @@ int f(int a, int b) { return a * b + a; }    /* a * (b + 1) */
 is `add r2, 1; mul r2, r1; mov r1, r2`, where `add r2, 1;
 mul r1, r2` is enough.
 
-The fix is to mark `MUL`, `MULU` and the pair forms `MUL_P` and
+Resolved by marking `MUL`, `MULU` and the pair forms `MUL_P` and
 `MULU_P` commutable — swapping the sources changes neither half of
-the product — and to leave `DIV`, `DIVU` and their pair forms as
-they are.  The generic `G_UMUL_LOHI` and `G_SMUL_LOHI` are already
-commutable, so this carries a fact the combiner already has through
-to the selected instruction.
+the product — with `DIV`, `DIVU` and their pair forms left as they
+are.  The mixer's multiply is `mul r8, lr` with no copy, 16
+instructions per voice-sample where it was 17, and each
+divide-by-a-constant's magic multiply loses its copy
+(`test/CodeGen/Penumbra/mul.ll`, `div-by-const.ll`).
+
+One case got worse: in `mul-by-const.ll`'s `mul64_minsize`, two-address
+lowering now commutes rather than moving the multiply below the last
+use of its operand, so the product lands in the constant's register and
+needs a copy to the return register.  It is the same two-address
+heuristic as "a commutable `ADD` still copies into an argument
+register" in the audio-mixing review.
 
 ## Compiler: a conditional add or subtract becomes a select of zero — RESOLVED
 
