@@ -45,7 +45,7 @@ provides useful pseudo-instructions:
 
 | Pseudo-instruction | Actual encoding | Effect                         |
 |--------------------|-----------------|--------------------------------|
-| `NOP`              | `ADD R0, R0`    | No effect                      |
+| `NOP`              | `MOV R0, R0`    | No effect, flags included      |
 | `CMP Rs, #0`       | `CMP Rs, R0`    | Compare register to zero       |
 | Clear Rd           | `MOV Rd, R0`    | `Rd = 0`                       |
 

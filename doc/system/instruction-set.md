@@ -420,7 +420,7 @@ instruction apart.
 
 | Pseudo | Expansion         | Notes                                      |
 |--------|-------------------|--------------------------------------------|
-| `NOP`  | `ADD R0, R0`      | No effect (R0 write discarded)             |
+| `NOP`  | `MOV R0, R0`      | No effect: `MOV` writes no flags, R0 discards the result |
 | `RET`  | `JMP R13`         | Return from subroutine                     |
 | `LA Rd, label`  | `LLI Rd, #lo` + `LUI Rd, #hi` | Load 32-bit address |
 | `LI Rd, #imm32` | `LLI Rd, #lo` + `LUI Rd, #hi` | Load 32-bit constant |
