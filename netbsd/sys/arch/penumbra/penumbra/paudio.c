@@ -124,6 +124,29 @@ paudio_close(void *hdl)
 	sc->sc_audio_open = false;
 }
 
+/*
+ * The INC that plays a stream at `rate`: source frames per output
+ * frame in 16.16, so the device resamples the channel and nothing
+ * above this driver has to.  Returns 0 for a rate INC cannot reach.
+ *
+ * Rounded, so a rate need not divide the device's own; the residual
+ * pitch error is under 0.001%.
+ */
+static uint32_t
+paudio_rate_inc(const struct paudio_softc *sc, u_int rate)
+{
+	uint64_t inc;
+
+	if (rate == 0)
+		return 0;
+	if (!sc->sc_pitch)
+		return rate == sc->sc_rate ? PA_INC_UNITY : 0;
+	inc = (((uint64_t)rate << 16) + sc->sc_rate / 2) / sc->sc_rate;
+	if (inc < PENAUDIO_INC_MIN || inc > PENAUDIO_INC_MAX)
+		return 0;
+	return (uint32_t)inc;
+}
+
 static int
 paudio_query_format(void *hdl, audio_format_query_t *afp)
 {
@@ -135,16 +158,18 @@ paudio_query_format(void *hdl, audio_format_query_t *afp)
 		.precision	= 16,
 		.channels	= 2,
 		.channel_mask	= AUFMT_STEREO,
-		.frequency_type	= 1,
+		.frequency_type	= 0,	/* a range: frequency[0] to [1] */
 	};
 	struct audio_format f = fmt;
 
 	if (afp->index != 0)
 		return EINVAL;
 
-	/* The device presents one rate; a consumer needing another
-	 * resamples, which the framework does on its own. */
-	f.frequency[0] = sc->sc_rate;
+	/* Without CAP.PITCH the device plays its own rate and nothing
+	 * else, so the range collapses onto it. */
+	f.frequency[0] = sc->sc_pitch ? sc->sc_rate / 8 : sc->sc_rate;
+	f.frequency[1] = sc->sc_rate;
+
 	afp->fmt = f;
 	return 0;
 }
@@ -154,8 +179,16 @@ paudio_set_format(void *hdl, int setmode,
     const audio_params_t *play, const audio_params_t *rec,
     audio_filter_reg_t *pfil, audio_filter_reg_t *rfil)
 {
-	/* query_format offers exactly what the hardware does, so
-	 * whatever the framework selected needs no conversion. */
+	struct paudio_softc *sc = hdl;
+
+	if ((setmode & AUMODE_PLAY) == 0)
+		return 0;
+
+	/* Only the rate varies, and query_format offers none that INC
+	 * cannot reach, so the selected one needs no conversion. */
+	if (paudio_rate_inc(sc, play->sample_rate) == 0)
+		return EINVAL;
+	sc->sc_play_rate = play->sample_rate;
 	return 0;
 }
 
@@ -285,7 +318,7 @@ paudio_fill(struct paudio_softc *sc, u_int maxframes)
 		/* One call per contiguous run: the source has to be
 		 * contiguous, so a fill crossing the ring's end is two. */
 		if (__predict_false(sc->sc_testtone)) {
-			u_int inc = (PA_TONE_HZ * 65536u) / sc->sc_rate;
+			u_int inc = (PA_TONE_HZ * 65536u) / sc->sc_play_rate;
 			u_int i;
 
 			for (i = 0; i < nframes; i++) {
@@ -331,6 +364,7 @@ paudio_trigger_output(void *hdl, void *start, void *end, int blksize,
     void (*intr)(void *), void *intrarg, const audio_params_t *param)
 {
 	struct paudio_softc *sc = hdl;
+	uint32_t inc;
 
 	KASSERT(mutex_owned(&sc->sc_intr_lock));
 
@@ -346,6 +380,12 @@ paudio_trigger_output(void *hdl, void *start, void *end, int blksize,
 	 * previous stream would play before the first of this one. */
 	PA_CWR(sc, PA_C_CTRL, PA_C_CTRL_FLUSH);
 	PA_WR(sc, PA_UNDERRUN, __BIT(PA_CHAN0));
+
+	/* The rate is the channel's, not the output stage's, and a voice
+	 * that held this channel left its own INC behind. */
+	inc = paudio_rate_inc(sc, sc->sc_play_rate);
+	KASSERT(inc != 0);
+	PA_CWR(sc, PA_C_INC, inc);
 
 	/*
 	 * Fill before enabling: a channel enabled dry underruns on its
@@ -561,6 +601,7 @@ paudio_attach(device_t parent, device_t self, void *aux)
 
 	cap = PA_RD(sc, PA_CAP);
 	sc->sc_rate = PA_RD(sc, PA_RATE);
+	sc->sc_play_rate = sc->sc_rate;
 	sc->sc_depth = PA_CRD(sc, PA_C_DEPTH);
 
 	aprint_naive("\n");
@@ -577,6 +618,7 @@ paudio_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 	sc->sc_nchan = MIN(PA_CAP_CHANNELS(cap), PA_MAXCHAN);
+	sc->sc_pitch = (cap & PA_CAP_PITCH) != 0;
 
 	mutex_init(&sc->sc_lock, MUTEX_DEFAULT, IPL_NONE);
 	mutex_init(&sc->sc_intr_lock, MUTEX_DEFAULT, IPL_SCHED);

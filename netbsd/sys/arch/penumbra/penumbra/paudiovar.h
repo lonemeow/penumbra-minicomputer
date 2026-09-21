@@ -110,6 +110,8 @@ struct paudio_softc {
 	kmutex_t		sc_intr_lock;	/* device registers; interrupt */
 
 	u_int			sc_rate;	/* device output rate */
+	u_int			sc_play_rate;	/* rate the stream plays at */
+	bool			sc_pitch;	/* INC is writable (CAP.PITCH) */
 	u_int			sc_nchan;	/* channels the device has */
 	u_int			sc_depth;	/* channel 0 FIFO, in frames */
 
