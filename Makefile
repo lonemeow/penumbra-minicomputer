@@ -1365,4 +1365,3 @@ fanout:
 clean:
 	rm -rf $(BUILD_DIR) $(WAVE_DIR)
 	@$(MAKE) -C sw/sim clean 2>/dev/null || true
-	@$(MAKE) -C sw/init clean 2>/dev/null || true
