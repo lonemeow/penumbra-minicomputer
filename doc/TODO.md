@@ -4221,6 +4221,26 @@ below, not the multiply.
   physical register.  It is the same family as the subtracting
   decomposition's copy in "constant multiply, divide and remainder
   strength reduction".
+
+  Two heuristics in `TwoAddressInstructionPass` cause it.  When the
+  other operand dies at the instruction and the tied one does not, it
+  commutes without asking where the result has to go, and a successful
+  commute skips rescheduling the instruction below the tied operand's
+  last use — which is how `mul64_minsize` in `mul-by-const.ll` gained
+  a copy once `MUL` became commutable.  When both operands die,
+  `isProfitableToCommute` prefers the operand already in the result's
+  physical register, but it follows the result only through copies
+  and two-address instructions; past anything else, a select's PHI
+  included, it ties the operand defined more recently, which for
+  arguments is the later register.
+
+  Measured 2026-09-21 by a static scan of the kernel (`GENERIC.DEBUG`),
+  `libc.so`, Doom's hot files and the `test-compiler` corpus, 1.5
+  million instructions in all: `mov x, a; mov a, b; op a, x` with `x`
+  dead, and `op c, a` followed by `mov a, c` with `c` dead, together
+  cost at most 0.02–0.06% of instructions.  Not worth changing a pass
+  every target shares.  Copies are 14–17% of all instructions, so
+  they come from elsewhere.
 - **The voice pointer is recomputed rather than stepped.**
   `mix_by_voice` forms `&v[k]` as `k * 24` by shift and add for each
   voice, spilling `k` to do it, where a pointer advanced by 24 needs
