@@ -6,9 +6,10 @@
  * The module under test is assembled here rather than read from a
  * file, so each case states the pattern data it depends on: a cue that
  * comes round on itself, one that spans several orders and comes round
- * to the middle of itself, and the two ways a retrigger falls within a
- * row.  It goes through mod_parse() all the same, so the layout the
- * parser expects is part of what is checked.
+ * to the middle of itself, the two ways a retrigger falls within a row,
+ * and a pattern loop.  It goes through mod_parse() all the same, so the
+ * layout the parser expects is part of what is checked, and so are the
+ * signatures it takes.
  */
 
 #include <stdio.h>
@@ -137,6 +138,23 @@ row_plays(const struct mod *m, int order, int row)
 	return n;
 }
 
+/* What mod_parse() makes of the first module under another signature:
+ * NULL if it is taken, or why not. */
+static const char *
+parse_as(const char *sig)
+{
+	struct mod m;
+	const char *error;
+
+	if ((error = build(&m)) != NULL)
+		return error;
+	mod_free(&m);
+	memcpy(&image[OFF_SIGNATURE], sig, 4);
+	if ((error = mod_parse(&m, image, sizeof(image))) == NULL)
+		mod_free(&m);
+	return error;
+}
+
 /* The ticks within one row that channel 0 starts its sample on, as a
  * bitmap, playing the order the row belongs to. */
 static unsigned
@@ -231,6 +249,18 @@ main(void)
 	    "... and lasts its rows plus the section's repeats");
 
 	mod_free(&m);
+
+	check(parse_as("M.K.") == NULL, "a ProTracker signature is taken");
+	check(parse_as("FLT4") == NULL,
+	    "StarTrekker's FLT4 is the same format, and is taken");
+	check(parse_as("EXO4") != NULL && parse_as("EXO8") != NULL,
+	    "StarTrekker's synthesised modules are refused");
+	check(parse_as("FLT8") != NULL,
+	    "StarTrekker's eight-channel modules are refused");
+	check(parse_as("EXO4") != NULL &&
+	    strcmp(parse_as("EXO4"), "unsupported file format") == 0,
+	    "... as an unsupported file format");
+
 	printf("\n%s: %d failure(s)\n", failures ? "FAILED" : "PASSED",
 	    failures);
 	return failures != 0;

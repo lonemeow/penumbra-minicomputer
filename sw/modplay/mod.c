@@ -21,7 +21,17 @@
 #define	OFF_PATTERNS	1084
 #define	PATTERN_BYTES	(MOD_ROWS * MOD_CHANNELS * 4)
 
-/* The signatures of four-channel, 31-sample modules. */
+/*
+ * The signatures of the four-channel, 31-sample layout, whichever
+ * tracker wrote it: M.K. is ProTracker's, M!K! its mark for more than
+ * 64 patterns, 4CHN FastTracker's, and FLT4 StarTrekker's name for the
+ * same format rather than a variant of it.
+ *
+ * StarTrekker's other signatures are left out on purpose.  EXO4 and
+ * EXO8 mark instruments it synthesises, which modplay does not, and
+ * FLT8 pairs its patterns into eight channels, so read as four it would
+ * play half of every pattern as a pattern of its own.
+ */
 static const char *const signatures[] = { "M.K.", "M!K!", "FLT4", "4CHN" };
 
 static uint32_t
@@ -58,7 +68,7 @@ mod_parse(struct mod *m, const uint8_t *buf, size_t len)
 		if (memcmp(m->signature, signatures[i], 4) == 0)
 			break;
 	if (i == (int)(sizeof(signatures) / sizeof(signatures[0])))
-		return "not a four-channel, 31-sample module";
+		return "unsupported file format";
 
 	text(m->title, buf, 20);
 
