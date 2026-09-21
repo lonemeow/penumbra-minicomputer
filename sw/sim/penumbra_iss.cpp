@@ -792,11 +792,15 @@ static struct {
 // empty, and a consumer therefore never blocks and never underruns.
 // That is the benign direction to be wrong in — a driver that works
 // here may still stall on hardware, but one that stalls here is broken.
-// +audiofile=path captures the frames as raw 16-bit stereo, which makes
-// a driver's output audible rather than inferred.
+// +audiofile=path captures the output as raw 16-bit stereo at
+// AUDIO_RATE, which makes a driver's output audible rather than
+// inferred.  INC is applied on the way, so a consumer pushing a slower
+// rate is captured at the rate it will be heard at rather than at the
+// rate it wrote.
 static constexpr uint32_t AUDIO_DEPTH     = 1024;
 static constexpr uint32_t AUDIO_CHANNELS = 4;
 static constexpr uint32_t AUDIO_RATE     = 48000;
+static constexpr uint32_t AUDIO_INC_UNITY = 0x00010000u;
 // Version 1, PITCH and VOLUME implemented, AUDIO_CHANNELS channels.
 static constexpr uint32_t AUDIO_CAP =
     1u | (1u << 8) | (1u << 9) | (AUDIO_CHANNELS << 16);
@@ -811,15 +815,17 @@ static struct {
     uint32_t wm[AUDIO_CHANNELS];
     uint32_t inc[AUDIO_CHANNELS];
     uint32_t vol[AUDIO_CHANNELS];
+    uint32_t frac[AUDIO_CHANNELS];   // phase within the source frame, 16.16
     FILE*    capture = nullptr;
 
     void reset() {
         ctrl = chan_en = irq_enable = irq_status = underrun = 0;
         master_vol = 0xFFFFFFFFu;
         for (uint32_t c = 0; c < AUDIO_CHANNELS; c++) {
-            wm[c]  = 0;
-            inc[c] = 0x00010000u;
-            vol[c] = 0xFFFFFFFFu;
+            wm[c]   = 0;
+            inc[c]  = AUDIO_INC_UNITY;
+            vol[c]  = 0xFFFFFFFFu;
+            frac[c] = 0;
         }
     }
 
@@ -875,20 +881,39 @@ static struct {
             return;
         }
         switch (r) {
+            case 0:
+                // FLUSH discards the queue, and with it where the output
+                // sits inside a source frame.
+                if (data & (1u << 8)) frac[c] = 0;
+                break;
             case 1: inc[c] = data; break;
             case 2: vol[c] = data; break;
             case 5: wm[c]  = data; break;
-            case 6:
-                // A frame.  Only channel 0 is captured: this models the
-                // registers rather than the mix, so there is nothing to
-                // combine the others into, and channel 0 is what a
-                // single-stream consumer drives.
-                if (capture && c == 0 && (ctrl & 1) && (chan_en & 1)) {
-                    uint8_t b[4] = { uint8_t(data), uint8_t(data >> 8),
-                                     uint8_t(data >> 16), uint8_t(data >> 24) };
-                    fwrite(b, 1, 4, capture);
-                }
+            case 6: {
+                // A frame.  The device consumes INC source frames per
+                // output frame, so one source frame covers every output
+                // frame whose phase falls inside it, held across them as
+                // the device holds it.
+                //
+                // Only channel 0 is captured: this models the registers
+                // rather than the mix, so there is nothing to combine the
+                // others into, and channel 0 is what a single-stream
+                // consumer drives.
+                const uint8_t b[4] = { uint8_t(data), uint8_t(data >> 8),
+                                       uint8_t(data >> 16),
+                                       uint8_t(data >> 24) };
+                // A zero INC would advance the phase not at all; the class
+                // floor is 0x100, so one LSB keeps the walk finite without
+                // standing in for a rate anything asks for.
+                uint32_t step = inc[c] != 0 ? inc[c] : 1;
+                bool live = capture != nullptr && c == 0 && (ctrl & 1) &&
+                            (chan_en & 1);
+
+                for (; frac[c] < AUDIO_INC_UNITY; frac[c] += step)
+                    if (live) fwrite(b, 1, 4, capture);
+                frac[c] -= AUDIO_INC_UNITY;
                 break;
+            }
             default: break;
         }
         // The queue is always empty here, so a channel's watermark is
