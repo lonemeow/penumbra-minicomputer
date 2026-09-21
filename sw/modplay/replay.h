@@ -48,6 +48,8 @@ struct replay_chan {
 	int		porta_target, porta_speed;
 	int		vib_pos, vib_speed, vib_depth;
 	int		trem_pos, trem_speed, trem_depth;
+	int		loop_row;	/* row a pattern loop returns to */
+	int		loop_count;	/* passes left; 0 = none running */
 	uint32_t	offset;		/* sample offset, remembered */
 };
 
@@ -61,6 +63,7 @@ struct replay {
 	/* Where the row after this one comes from, when not the next. */
 	int		jump_order;	/* -1: the next order */
 	int		break_row;	/* -1: row 0 */
+	int		loop_to;	/* a row of this order; -1: none */
 
 	/* Times the current row repeats, without reading its notes again. */
 	int		row_delay;

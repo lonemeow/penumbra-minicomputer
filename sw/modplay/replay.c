@@ -87,6 +87,20 @@ played(const struct replay *r, int order, int row)
 	return (r->played[order][row / 8] & (1 << (row % 8))) != 0;
 }
 
+/*
+ * Forget that a span of rows played.  A pattern loop replays its
+ * section as part of one pass through the song, so rows left marked
+ * would make the pass after the jump read as the song coming round.
+ */
+static void
+unplay(struct replay *r, int order, int from, int to)
+{
+	int row;
+
+	for (row = from; row <= to; row++)
+		r->played[order][row / 8] &= ~(1 << (row % 8));
+}
+
 /* ── Effects ─────────────────────────────────────────────────── */
 
 /* Arpeggio's note: the first in the channel's table at or below its
@@ -197,6 +211,23 @@ row_effect(struct replay *r, struct replay_chan *c)
 			break;
 		case 0xB:
 			c->volume = clamp(c->volume - y, 0, 64);
+			break;
+		case 0x6:
+			/*
+			 * The count is a channel's own, so a module can
+			 * loop one channel's section while the others play
+			 * through; the jump it asks for is the song's.
+			 */
+			if (y == 0) {
+				c->loop_row = r->row;
+			} else {
+				if (c->loop_count == 0)
+					c->loop_count = y;
+				else
+					c->loop_count--;
+				if (c->loop_count != 0)
+					r->loop_to = c->loop_row;
+			}
 			break;
 		case 0xE:
 			if (r->row_delay == 0)
@@ -396,10 +427,16 @@ advance(struct replay *r)
 		r->row = r->break_row >= 0 ? r->break_row : 0;
 		r->jump_order = -1;
 		r->break_row = -1;
+	} else if (r->loop_to >= 0) {
+		/* A jump within the order, so the song's position is
+		 * where it was and only the row moves. */
+		unplay(r, r->order, r->loop_to, r->row);
+		r->row = r->loop_to;
 	} else if (++r->row == MOD_ROWS) {
 		r->row = 0;
 		r->order++;
 	}
+	r->loop_to = -1;
 
 	if (r->order >= m->length) {
 		if (!r->loop) {
@@ -428,6 +465,7 @@ replay_init(struct replay *r, const struct mod *m, int start, bool loop)
 	r->bpm = 125;
 	r->jump_order = -1;
 	r->break_row = -1;
+	r->loop_to = -1;
 	r->loop_order = -1;
 }
 
@@ -534,7 +572,7 @@ replay_unsupported(const struct mod *m)
 	static const char *const extended[16] = {
 		NULL, "E1 fine porta up", "E2 fine porta down",
 		"E3 glissando", "E4 vibrato waveform", "E5 finetune",
-		"E6 pattern loop", "E7 tremolo waveform", "E8", NULL,
+		NULL, "E7 tremolo waveform", "E8", NULL,
 		NULL, NULL, "EC note cut", NULL, NULL, "EF invert loop",
 	};
 	static char list[512];

@@ -92,6 +92,51 @@ build(struct mod *m)
 	return mod_parse(m, image, sizeof(image));
 }
 
+/*
+ * A second module, for the pattern loop: one order whose rows 1 to 3
+ * are a loop section played three times — E60 marks the return row and
+ * E62 asks for two further passes — after which the song plays out its
+ * remaining rows and stops.
+ */
+#define	LOOP_START_ROW	1
+#define	LOOP_END_ROW	3
+#define	LOOP_PASSES	3
+
+static const char *
+build_loop(struct mod *m)
+{
+	uint8_t *smp = &image[OFF_SAMPLES];
+
+	memset(image, 0, sizeof(image));
+	memcpy(image, "pattern loop", 12);
+	smp[23] = SAMPLE_BYTES / 2;
+	smp[25] = 64;
+
+	image[OFF_LENGTH] = 1;
+	image[OFF_ORDERS] = 0;
+	memcpy(&image[OFF_SIGNATURE], "M.K.", 4);
+
+	put_note(0, LOOP_START_ROW, 0, 0, 0, 0xE, 0x60);
+	put_note(0, LOOP_END_ROW, 0, 0, 0, 0xE, 0x62);
+
+	return mod_parse(m, image, sizeof(image));
+}
+
+/* Times a row is entered in one pass through the song. */
+static int
+row_plays(const struct mod *m, int order, int row)
+{
+	struct replay r;
+	struct replay_tick t;
+	int n = 0;
+
+	replay_init(&r, m, 0, false);
+	while (replay_next(&r, &t))
+		if (t.order == order && t.row == row && t.tick == 0)
+			n++;
+	return n;
+}
+
 /* The ticks within one row that channel 0 starts its sample on, as a
  * bitmap, playing the order the row belongs to. */
 static unsigned
@@ -155,6 +200,35 @@ main(void)
 		    (uint64_t)3 * MOD_ROWS * TEST_SPEED * TEST_TICK_US,
 		    "... and lasts all three orders' rows");
 	}
+
+	mod_free(&m);
+
+	if ((error = build_loop(&m)) != NULL) {
+		printf("FAIL the loop module does not parse: %s\n", error);
+		return 1;
+	}
+
+	check(replay_unsupported(&m) == NULL,
+	    "E6 is not reported as an effect the replayer ignores");
+	check(row_plays(&m, 0, LOOP_START_ROW) == LOOP_PASSES,
+	    "E62 plays its section three times");
+	check(row_plays(&m, 0, LOOP_START_ROW - 1) == 1,
+	    "the row before the section plays once");
+
+	/*
+	 * The rows of a loop section play more than once within a single
+	 * pass, so a replayer that took a replayed row as the song
+	 * coming round would stop at the first jump and never reach
+	 * this row at all.
+	 */
+	check(row_plays(&m, 0, LOOP_END_ROW + 1) == 1,
+	    "the song plays on past the section once the passes run out");
+
+	n = replay_scan(&m, cue, TEST_ORDERS);
+	check(n == 1 && cue[0].us == (uint64_t)(MOD_ROWS +
+	    (LOOP_PASSES - 1) * (LOOP_END_ROW - LOOP_START_ROW + 1)) *
+	    TEST_SPEED * TEST_TICK_US,
+	    "... and lasts its rows plus the section's repeats");
 
 	mod_free(&m);
 	printf("\n%s: %d failure(s)\n", failures ? "FAILED" : "PASSED",
