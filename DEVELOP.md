@@ -52,7 +52,7 @@ Penumbra has two simulators: a fast native C++ **ISS** (`sw/sim/penumbra_iss.cpp
 
 ```sh
 make test-iss        # hw/sim/programs/isa/ conformance suite on ISS — fast, no Docker
-make test            # isa/ + per-core suite on RTL via Docker (CORE=penumbra2 default)
+make test            # isa/ + per-core suite on RTL via Docker (CORE=penumbra2_5 default)
 make test CORE=penumbra1          # same, against the gen1 microcoded core
 make test-prog CORE=penumbra2 PROG=test_smoke   # one program
 make test-modules    # Run all module-level Verilator testbenches (alu, regfile, …)
@@ -478,18 +478,20 @@ export PATH="$PWD/hw/tools/oss-cad-suite/bin:$PATH"
 
 ```sh
 make fpga BOARD=ulx3s CORE=penumbra1   # Full flow: sv2v → yosys → nextpnr → ecppack
-make fpga BOARD=ulx3s CORE=penumbra2   # Same flow for the gen2 pipelined core
+make fpga BOARD=ulx3s CORE=penumbra2_5 # Same flow for the default gen2.5 core
 make flash BOARD=ulx3s CORE=penumbra1  # Build + flash to ULX3S over USB (fujprog)
 make fpga-lint                         # Verilator lint check on FPGA sources
 ```
 
-Both cores are complete and bootable: `CORE=penumbra2` builds the 6-stage
-pipelined core (the default), `CORE=penumbra1` the single-cycle microcoded
-core. Each synthesizes to the ULX3S, closes timing at the 25 MHz CPU target,
-and boots NetBSD to userland off the SD card. For a fast gen2 timing check during RTL
-iteration, add `VARIANT=probe` to build the bare-core probe top — but read the
-real fmax from the full `ulx3s_penumbra2_top` (the probe omits the cache/MMU/
-arbiter layers and reports an optimistic number).
+All three are complete and bootable: `CORE=penumbra2_5` builds the 6-stage
+pipelined core with forwarding and a BTB (the default, 37.5 MHz),
+`CORE=penumbra2` the same pipeline without them (37.5 MHz), and
+`CORE=penumbra1` the single-cycle microcoded core (25 MHz). Each
+synthesizes to the ULX3S and boots NetBSD to userland off the SD card.
+For a fast gen2 timing check during RTL iteration, add `VARIANT=probe`
+to build the bare-core probe top — but read the real fmax from the
+full `ulx3s_penumbra2_top` (the probe omits the cache/MMU/arbiter
+layers and reports an optimistic number).
 
 `BOARD`/`CORE` (plus optional `VARIANT`) expand to a registered top
 module, `<board>_<core>[_<variant>]_top`, whose file lives under

@@ -182,11 +182,11 @@ nextpnr-ecp5, ecppack, fujprog usable as normal commands:
   probe top — run after gen2 RTL changes to catch fmax movement early.
 
 Board top-levels under `hw/rtl/fpga/ulx3s/`: `ulx3s_penumbra2_top.sv`
-(the default core) and `ulx3s_penumbra1_top.sv`. Serial 115200 8N1 on
-`/dev/ttyUSB0`. SD slot autoconfigured as `CLASS_SD`; `boot sd:0,0`
-loads `PENBOOT.ELF` from FAT32. Toolchain mechanics (wrapper
-multi-call, sv2v + `$readmemh` workaround, USB passthrough) in
-`hw/CLAUDE.md`.
+(the default core, built as gen2.5) and `ulx3s_penumbra1_top.sv`.
+Serial 115200 8N1 on `/dev/ttyUSB0`. SD slot autoconfigured as
+`CLASS_SD`; `boot sd:0,0` loads `PENBOOT.ELF` from FAT32. Toolchain
+mechanics (wrapper multi-call, sv2v + `$readmemh` workaround, USB
+passthrough) in `hw/CLAUDE.md`.
 
 ### LLVM build
 Build dir: `build/llvm/` (override with `LLVM_PREFIX`). Initial cmake

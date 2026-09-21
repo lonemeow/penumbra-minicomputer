@@ -110,7 +110,7 @@ endif
 # <core>/ holds microarch-pinned regressions. Programs carry lit-style
 # "; RUNNER:" / "; REQUIRES:" header tags; hw/tools/run-prog-tests.py
 # scans them, skips unrunnable programs visibly, and reports.
-CORE ?= penumbra2
+CORE ?= penumbra2_5
 
 # A CORE may name a microarch variant of a base generation as
 # penumbra<n>_<sub> (e.g. penumbra2_5 = gen2.5): the same RTL fileset and
@@ -588,7 +588,7 @@ endif
 # sim_console.cpp frontend behind a per-core shim. gen1 uses machine_sim +
 # tb_penumbra1_interactive and needs microcode.hex; gen2 uses
 # machine_penumbra2_sim + tb_penumbra2_interactive and has no microcode (CORE
-# defaults to penumbra2, set above). Both wrappers load the boot ROM from
+# defaults to penumbra2_5, set above). Both wrappers load the boot ROM from
 # program.hex (their INIT_FILE default), built by hw/rom.
 ifeq ($(CORE_BASE),penumbra2)
 SIMRTL_TOP    := machine_penumbra2_sim
@@ -1085,7 +1085,7 @@ DEFAULT_SEED_ulx3s_penumbra2_top   := 1
 DEFAULT_SEED_ulx3s_penumbra2_5_top := 7
 
 
-# BOARD/CORE porcelain → TOP derivation (CORE defaults to penumbra2
+# BOARD/CORE porcelain → TOP derivation (CORE defaults to penumbra2_5
 # in the test-suite section above).
 ifneq ($(strip $(BOARD)),)
 TOP := $(BOARD)_$(CORE)$(if $(VARIANT),_$(VARIANT))_top
