@@ -57,16 +57,16 @@ define i32 @loop_sum(i32 %n) {
 ; CHECK-LABEL: loop_sum:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0: // %entry
-; CHECK-NEXT:    mov r2, r1
-; CHECK-NEXT:    mov r1, zero
-; CHECK-NEXT:    mov r3, r1
+; CHECK-NEXT:    mov r3, zero
+; CHECK-NEXT:    mov r2, zero
 ; CHECK-NEXT:  .LBB2_1: // %loop
 ; CHECK-NEXT:    // =>This Inner Loop Header: Depth=1
-; CHECK-NEXT:    add r1, r3
+; CHECK-NEXT:    add r2, r3
 ; CHECK-NEXT:    add r3, 1
-; CHECK-NEXT:    cmp r3, r2
+; CHECK-NEXT:    cmp r3, r1
 ; CHECK-NEXT:    blt .LBB2_1
 ; CHECK-NEXT:  // %bb.2: // %exit
+; CHECK-NEXT:    mov r1, r2
 ; CHECK-NEXT:    jmp lr
 entry:
   br label %loop

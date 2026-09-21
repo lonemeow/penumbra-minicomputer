@@ -1181,7 +1181,11 @@ Each row saves about one instruction per site, except the 64-bit
 compares, about 4–6 per compare, and a PIC anchor in a loop, 1–2 per
 iteration.  The two-address commute heuristics were measured the same
 way at 0.02–0.06% (in the audio-mixing review), and the 64-bit select
-of zero only concerns the 32.32 mixer loop.
+of zero only concerns the 32.32 mixer loop.  The `mov x, zero` sites
+in the `AllowRegisterRenaming` row turned out to be mostly R0 missing
+from the value register class ("a constant zero is held in a
+register", resolved); what is left of them for copy forwarding are
+zeros copied into a PHI's register.
 
 What follows, by value for effort:
 1. **SP copy** — resolved.  The largest static item and a contained
@@ -1240,6 +1244,52 @@ themselves, the freed register sometimes spares a callee-saved save
 and restore, as in Doom's `P_UseLines`.  The 17 left are `LEAfi`
 expansions, a frame address taken as a value, which form after
 register allocation.
+
+## Compiler: a constant zero is held in a register — RESOLVED
+
+The selector materializes constant zero as `COPY $r0`, and wherever
+its store-zero patch did not reach, the zero lived in an allocated
+register:
+
+```
+mov  r4, zero
+stw  r4, [sp + 100]     // spill of a loop's zero initial value
+...
+mov  r5, zero           // held in a callee-saved register
+mov  r1, r5             // across a call, saved and restored
+bl   exit
+mov  r1, r5
+```
+
+R0 was not a member of `GPR_Allocatable`, the class the copy is
+selected into, so neither the register coalescer (merging the copy
+into R0) nor the spiller (folding a spill of the copy into a store of
+R0) could use it — the same cause as "outgoing stack arguments address
+SP through a copy".  Resolved by making R0 a member too; its
+`isConstant` lets the coalescer skip the interference checks, since R0
+never changes.  The `test-compiler` corpus at `-O2` drops from 382,926
+instructions to 380,134 (−0.73%; 912 functions smaller, 19 larger),
+mostly the save, restore and copy around `exit (0)`.  Doom's twelve
+hot files drop from 14,399 to 14,376 (16 functions smaller, 8
+larger), and 64-bit arithmetic loses spills (`fshl_i64`, the `mulh64`
+family).
+
+The functions that grew are register-allocation shifts around a zero
+that enters a PHI: the PHI's register has several definitions, so it
+cannot become R0.  Each zero is now copied from R0 where it is used
+rather than shared from one register, and a returned zero can land
+outside R1 and take a second copy, as in `ptr-minus-int.c`'s
+`walk_back`:
+
+```
+mov  r3, zero
+mov  r1, r3
+jmp  lr
+```
+
+Only copy forwarding after register allocation removes that pair (see
+`AllowRegisterRenaming` in "codegen pass/gate audit").  The selector
+keeps its store-zero patch because `-O0` runs no coalescer.
 
 ## Compiler: graceful-fail on unsupported inline asm and vector IR
 
@@ -3380,8 +3430,8 @@ targets opt into are silently off.  Status per item:
   sets it): unset, so every operand carries
   `ExtraSrcRegAllocReq`/`ExtraDefRegAllocReq`, `isRenamable()` is
   false everywhere, and MachineCopyPropagation forwards and
-  propagates no copy at all — though the comment on the ALU group in
-  `PenumbraInstrInfo.td` says it forwards R0 into `$Rs`.  Setting it
+  propagates no copy at all, so a zero copied into a PHI's register
+  and on into another (`mov r3, zero; mov r1, r3`) stays.  Setting it
   promises that no instruction has register requirements its operand
   classes do not show; check the PIC anchor pairs and the R0-as-zero
   operands before flipping it, then measure the copies it removes.

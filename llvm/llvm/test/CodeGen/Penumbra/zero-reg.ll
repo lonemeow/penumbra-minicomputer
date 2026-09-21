@@ -44,3 +44,28 @@ define void @store_nonzero(ptr %p) {
   store i32 42, ptr %p, align 4
   ret void
 }
+
+; A zero passed on both sides of a call is read from R0 at each use rather
+; than held in a callee-saved register across the call, which would cost a
+; save, a restore and a copy.  This works only because R0 is a *member* of
+; the i32 value register class (PenumbraRegisterInfo.td's GPR_Allocatable),
+; so the coalescer can substitute it for the selected `COPY $r0`.
+declare void @use(i32)
+
+define void @zero_across_call() {
+; CHECK-LABEL: zero_across_call:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  // %bb.0:
+; CHECK-NEXT:    sub sp, 4
+; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    mov r1, zero
+; CHECK-NEXT:    bl use
+; CHECK-NEXT:    mov r1, zero
+; CHECK-NEXT:    bl use
+; CHECK-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    add sp, 4
+; CHECK-NEXT:    jmp lr
+  call void @use(i32 0)
+  call void @use(i32 0)
+  ret void
+}

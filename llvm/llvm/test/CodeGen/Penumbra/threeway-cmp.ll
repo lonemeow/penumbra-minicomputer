@@ -116,11 +116,11 @@ define i32 @ucmp_i64(i64 %a, i64 %b) {
 ; CHECK-NEXT:    sub sp, 4
 ; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    cmp r3, r1
-; CHECK-NEXT:    mov lr, zero
-; CHECK-NEXT:    mov r11, lr
+; CHECK-NEXT:    mov r11, zero
 ; CHECK-NEXT:    sbc r11, zero
 ; CHECK-NEXT:    and r11, 1
 ; CHECK-NEXT:    cmp r4, r2
+; CHECK-NEXT:    mov lr, zero
 ; CHECK-NEXT:    sbc lr, zero
 ; CHECK-NEXT:    and lr, 1
 ; CHECK-NEXT:    cmp r2, r4
@@ -129,11 +129,11 @@ define i32 @ucmp_i64(i64 %a, i64 %b) {
 ; CHECK-NEXT:    mov r11, lr
 ; CHECK-NEXT:  .LBB3_2:
 ; CHECK-NEXT:    cmp r1, r3
-; CHECK-NEXT:    mov r1, zero
-; CHECK-NEXT:    mov r3, r1
+; CHECK-NEXT:    mov r3, zero
 ; CHECK-NEXT:    sbc r3, zero
 ; CHECK-NEXT:    and r3, 1
 ; CHECK-NEXT:    cmp r2, r4
+; CHECK-NEXT:    mov r1, zero
 ; CHECK-NEXT:    sbc r1, zero
 ; CHECK-NEXT:    and r1, 1
 ; CHECK-NEXT:    cmp r2, r4

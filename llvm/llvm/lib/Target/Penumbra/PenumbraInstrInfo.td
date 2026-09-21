@@ -253,7 +253,7 @@ let Defs = [SR], Constraints = "$Rd = $Rd_in" in {
   // 2-operand destructive: Rd = Rd op Rs.  All operands use GPR (full
   // class including R0, R12, R14, R15); the register allocator honours
   // R0's `isConstant`/reserved status and won't pick it for writable
-  // vregs, while MachineCopyPropagation can forward R0 into $Rs uses.
+  // vregs, while the register coalescer can substitute R0 into $Rs uses.
   // Commutable so TwoAddressInstructionPass may swap the operands rather
   // than copy: with a destructive destination, tying the operand that is
   // still live past the instruction forces a MOV that swapping avoids.
@@ -441,9 +441,8 @@ let hasSideEffects = 0, mayLoad = 1, mayStore = 0 in {
 }
 
 // Stores: L=0
-// Both $Rd (data) and $Rb (base) use GPR: R0 is valid in both slots —
-// store-zero via R0 value is enabled by MachineCopyPropagation forwarding
-// from the `COPY $r0` that the selector emits for G_CONSTANT 0.
+// Both $Rd (data) and $Rb (base) use GPR: R0 is valid in both slots, so a
+// store of zero can store R0.
 let hasSideEffects = 0, mayLoad = 0, mayStore = 1 in {
   def STW  : FormatM<0, 0b10, 0, (outs), (ins GPR:$Rd, GPR:$Rb, memoffset16:$offset),
                      "stw\t$Rd, [$Rb + $offset]">;

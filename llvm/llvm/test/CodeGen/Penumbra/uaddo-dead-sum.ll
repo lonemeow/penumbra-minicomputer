@@ -34,13 +34,13 @@ define i32 @uaddo_dead_sum_chain(i32 %x, i32 %y, i32 %z) {
 ; CHECK-LABEL: uaddo_dead_sum_chain:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    mov r4, zero
 ; CHECK-NEXT:    add r2, r1
-; CHECK-NEXT:    mov r1, r4
+; CHECK-NEXT:    mov r1, zero
 ; CHECK-NEXT:    adc r1, zero
 ; CHECK-NEXT:    add r2, r3
-; CHECK-NEXT:    adc r4, zero
-; CHECK-NEXT:    cmp r4, 1
+; CHECK-NEXT:    mov r2, zero
+; CHECK-NEXT:    adc r2, zero
+; CHECK-NEXT:    cmp r2, 1
 ; CHECK-NEXT:    adc r1, zero
 ; CHECK-NEXT:    jmp lr
   %xe = zext i32 %x to i64

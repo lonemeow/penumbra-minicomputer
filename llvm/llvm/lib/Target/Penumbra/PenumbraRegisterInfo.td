@@ -90,21 +90,22 @@ def GPR : RegisterClass<"Penumbra", [i32], 32, (add
   (sequence "R%u", 0, 15))>;
 
 // Value/allocation class for i32.  The register allocator never assigns
-// R0/R12/R14/R15 (held out by getReservedRegs), but R12 and R14 are listed as
-// *members* so the register coalescer can substitute them for a virtual
-// register — e.g. fold `%v = COPY $r12` when curlwp is pinned in R12, or the
-// `%v = COPY $r14` that addresses outgoing stack arguments — the way RISC-V's
-// GPR class contains its reserved thread and stack pointers.  They are listed
-// last so the allocation order of the allocatable registers is unchanged.
-// (R0/R15 remain class non-members; add them here too if their reads ever
-// need the same coalescing.)
+// R0/R12/R14/R15 (held out by getReservedRegs), but R0, R12 and R14 are listed
+// as *members* so the register coalescer can substitute them for a virtual
+// register — fold the `%v = COPY $r0` selected for constant zero, the
+// `%v = COPY $r12` when curlwp is pinned in R12, or the `%v = COPY $r14` that
+// addresses outgoing stack arguments — the way RISC-V's GPR class contains its
+// zero register and reserved thread and stack pointers.  They are listed last
+// so the allocation order of the allocatable registers is unchanged.
+// (R15 remains a class non-member; add it here too if its reads ever need the
+// same coalescing.)
 def GPR_Allocatable : RegisterClass<"Penumbra", [i32], 32, (add
   // Caller-saved (args + scratch + LR)
   (sequence "R%u", 1, 4), R11, R13,
   // Callee-saved
   (sequence "R%u", 5, 10),
   // Reserved members (excluded from allocation by getReservedRegs)
-  R12, R14)> {
+  R0, R12, R14)> {
   let isAllocatable = 1;
 }
 

@@ -12,24 +12,24 @@ define i64 @usub_sat_i64(i64 %a, i64 %b) {
 ; CHECK-LABEL: usub_sat_i64:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    mov r11, r1
-; CHECK-NEXT:    sub r11, r3
+; CHECK-NEXT:    sub r1, r3
 ; CHECK-NEXT:    sbc r2, r4
-; CHECK-NEXT:    mov r1, zero
-; CHECK-NEXT:    mov r4, r1
+; CHECK-NEXT:    mov r4, zero
 ; CHECK-NEXT:    sbc r4, zero
 ; CHECK-NEXT:    and r4, 1
+; CHECK-NEXT:    mov r3, zero
 ; CHECK-NEXT:    bne .LBB0_2
 ; CHECK-NEXT:  // %bb.1:
-; CHECK-NEXT:    mov r1, r11
+; CHECK-NEXT:    mov r3, r1
 ; CHECK-NEXT:  .LBB0_2:
-; CHECK-NEXT:    mov r3, zero
 ; CHECK-NEXT:    test r4, 1
+; CHECK-NEXT:    mov r4, zero
 ; CHECK-NEXT:    bne .LBB0_4
 ; CHECK-NEXT:  // %bb.3:
-; CHECK-NEXT:    mov r3, r2
+; CHECK-NEXT:    mov r4, r2
 ; CHECK-NEXT:  .LBB0_4:
-; CHECK-NEXT:    mov r2, r3
+; CHECK-NEXT:    mov r1, r3
+; CHECK-NEXT:    mov r2, r4
 ; CHECK-NEXT:    jmp lr
   %r = call i64 @llvm.usub.sat.i64(i64 %a, i64 %b)
   ret i64 %r
@@ -152,9 +152,9 @@ define i32 @usub_sat_i32(i32 %a, i32 %b) {
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub r1, r2
 ; CHECK-NEXT:    mov r2, zero
-; CHECK-NEXT:    mov r3, r2
-; CHECK-NEXT:    sbc r3, zero
-; CHECK-NEXT:    and r3, 1
+; CHECK-NEXT:    sbc r2, zero
+; CHECK-NEXT:    and r2, 1
+; CHECK-NEXT:    mov r2, zero
 ; CHECK-NEXT:    bne .LBB4_2
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r2, r1
@@ -176,11 +176,11 @@ define i64 @bavail_i64(i64 %bfree, i64 %bresvd) {
 ; CHECK-NEXT:    sub sp, 4
 ; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    cmp r3, r1
-; CHECK-NEXT:    mov lr, zero
-; CHECK-NEXT:    mov r11, lr
+; CHECK-NEXT:    mov r11, zero
 ; CHECK-NEXT:    sbc r11, zero
 ; CHECK-NEXT:    and r11, 1
 ; CHECK-NEXT:    cmp r4, r2
+; CHECK-NEXT:    mov lr, zero
 ; CHECK-NEXT:    sbc lr, zero
 ; CHECK-NEXT:    and lr, 1
 ; CHECK-NEXT:    cmp r2, r4
