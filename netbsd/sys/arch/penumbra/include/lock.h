@@ -58,10 +58,11 @@ static __inline int
 __cpu_simple_lock_try(__cpu_simple_lock_t *lp)
 {
 	/*
-	 * Use atomic CAS so this is safe under preemptive scheduling.
-	 * In kernel context the CAS uses DI/EI; in userland it uses
-	 * the libc atomic_cas_32 (currently also DI/EI via syscall,
-	 * future: RAS).
+	 * The CAS this resolves to is a restartable sequence, not an
+	 * uninterruptible one: a trap taken inside it rewinds to the
+	 * start rather than resuming, from the kernel's trap path in
+	 * supervisor mode and from userret() against the ranges
+	 * rasctl(2) registered in userland.
 	 */
 	return __sync_bool_compare_and_swap(lp, __SIMPLELOCK_UNLOCKED,
 	    __SIMPLELOCK_LOCKED);

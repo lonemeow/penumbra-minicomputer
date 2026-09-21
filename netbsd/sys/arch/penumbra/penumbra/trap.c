@@ -54,6 +54,57 @@ extern struct evcnt timer_evcnt;	/* machdep.c — tick count */
 	| (((s) & (1 << FSTAT_W)) ? VM_PROT_WRITE   : 0)  \
 	| (((s) & (1 << FSTAT_X)) ? VM_PROT_EXECUTE : 0))
 
+/*
+ * Kernel restartable atomic sequence.
+ *
+ * The CAS in common/lib/libc/arch/penumbra/atomic/atomic_cas.S is a bare
+ * load-compare-store, atomic against interrupts only if an interrupted
+ * sequence is restarted rather than resumed.  Userland gets that from
+ * rasctl(2) and userret(); the kernel links the same code and gets it
+ * here, which is what makes the interlocked atomic_ops(9) forms live up
+ * to their name against a handler on this CPU.
+ *
+ * Restart is sound because the store is the last instruction in the
+ * region and nothing inside it clobbers an argument register, so redoing
+ * it from the top is indistinguishable from never having begun.
+ *
+ * Both markers are addresses, not instructions, and the end one names
+ * the instruction after the store rather than the store.  So the store
+ * is inside the window and an EPC pointing at it does restart — it has
+ * not executed yet.  Only an EPC equal to the end marker is excluded,
+ * where the sequence is already over: either the store retired, or the
+ * compare failed and branched past it, both landing on that same
+ * address.  This is the interval rasctl(2) registers and ras_lookup()
+ * tests, so the two restart paths agree by construction.
+ *
+ * Every trap that can run other code lands here: the TLB miss fast path
+ * refills and returns without entering C, and soft interrupts are
+ * delivered on the way out of any trap type, not just a hard interrupt.
+ */
+extern char _atomic_cas_32_ras_start[], _atomic_cas_32_ras_end[];
+
+static struct evcnt kernel_ras_evcnt = EVCNT_INITIALIZER(EVCNT_TYPE_MISC,
+    NULL, "kernel ras", "restart");
+EVCNT_ATTACH_STATIC(kernel_ras_evcnt);
+
+static void
+kernel_ras_restart(struct trapframe *tf)
+{
+	const vaddr_t start = (vaddr_t)_atomic_cas_32_ras_start;
+	const vaddr_t end = (vaddr_t)_atomic_cas_32_ras_end;
+
+	/*
+	 * Open at both ends, matching ras_lookup().  Test the low bound
+	 * first: the region links near the top of a .text almost all of
+	 * which is below it, so that is the compare that rejects an
+	 * ordinary kernel PC without materialising the second bound.
+	 */
+	if (__predict_false(tf->tf_epc > start && tf->tf_epc < end)) {
+		tf->tf_epc = start;
+		kernel_ras_evcnt.ev_count++;
+	}
+}
+
 static void
 user_trap_signal(int signo, int code, vaddr_t addr, int trap)
 {
@@ -76,6 +127,15 @@ trap(struct trapframe *tf)
 {
 	int type = tf->tf_cause;
 	int usermode = USERMODE(tf->tf_sr);
+
+	/*
+	 * Before anything else runs: a kernel atomic sequence caught
+	 * mid-flight has to be rewound while its trapframe is still
+	 * untouched.  Userland sequences are restarted from userret()
+	 * against the process's registered ranges instead.
+	 */
+	if (__predict_false(!usermode))
+		kernel_ras_restart(tf);
 
 	/*
 	 * Hardware masks interrupts on exception entry.  For long-running

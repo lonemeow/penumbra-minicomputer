@@ -1,16 +1,25 @@
 /*	$NetBSD$	*/
 
 /*
- * Penumbra atomic compare-and-swap using RAS (Restartable Atomic Sequences).
+ * Penumbra atomic compare-and-swap, as a restartable sequence.
  *
- * The critical load-compare-store sequence contains no privileged
- * instructions.  If a timer interrupt (or any exception) preempts
- * execution inside the RAS region, the kernel's userret() detects
- * this via ras_lookup() and resets PC to the start of the sequence,
- * retrying it from the beginning.
+ * The load-compare-store below is not atomic on its own.  A trap taken
+ * inside it rewinds PC to the start instead of resuming, so the sequence
+ * redoes rather than committing a value computed before the handler ran.
+ * Userland is restarted from userret() against the range rasctl(2)
+ * registers (atomic_ras_init.c); supervisor mode is restarted by the
+ * kernel's trap path, which reads the same two markers.
  *
- * The RAS region must be registered by userland via rasctl() before
- * first use — see atomic_ras_init.c for the constructor that does this.
+ * Restart is sound because of two properties of the region, both
+ * enforced below: the store is its last instruction, and nothing inside
+ * writes an argument register, so re-entering at the start is
+ * indistinguishable from never having begun.
+ *
+ * The end marker sits after the store, not on it — a trap with PC at
+ * the store restarts, because the store has not executed.  PC equal to
+ * the marker is the one excluded case, and means the sequence is over:
+ * the store retired, or the compare failed and branched here.  Both
+ * arrive at the same address, so one test covers them.
  *
  * uint32_t _atomic_cas_32(volatile uint32_t *ptr, uint32_t old, uint32_t new)
  *   R1 = ptr, R2 = old, R3 = new
@@ -22,7 +31,7 @@
 	.globl	_atomic_cas_32
 	.type	_atomic_cas_32, @function
 
-	/* RAS boundary labels — used by atomic_ras_init.c for registration */
+	/* Region markers — read by both restart paths */
 	.globl	_atomic_cas_32_ras_start
 	.globl	_atomic_cas_32_ras_end
 
@@ -32,10 +41,22 @@ _atomic_cas_32_ras_start:
 	cmp	r11, r2		/* compare with expected */
 	bne	1f
 	stw	r3, [r1]	/* *ptr = new (if matched) */
-_atomic_cas_32_ras_end:
+_atomic_cas_32_ras_end:		/* one past the store, not on it: an
+				   interrupted store restarts, arriving
+				   here means the sequence is done */
 1:
 	mov	r1, r11		/* return previous value */
 	ret
+
+	/*
+	 * Growing the region changes what a restart redoes, and both
+	 * restart paths depend on the store staying last — so that is a
+	 * decision to be made deliberately, not an edit to be made in
+	 * passing.
+	 */
+	.if (_atomic_cas_32_ras_end - _atomic_cas_32_ras_start) != 16
+	.error "atomic_cas_32 restartable region changed size"
+	.endif
 
 	.globl	atomic_cas_32
 	.set	atomic_cas_32, _atomic_cas_32
