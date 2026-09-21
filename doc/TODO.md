@@ -5725,8 +5725,10 @@ fast path never reaches `trap()` at all.
   at the store, 37,073; at the end marker, none.  Every run booted to a
   shell.
 - **Hardware.**  `vmstat -e` showed 22 restarts over 2h40m of mod
-  playback alongside framebuffer rendering, running stably.  An
-  uninjected boot to single-user took one.
+  playback alongside framebuffer rendering, with no audible glitch —
+  and audio is the most latency-sensitive thing on the machine, so that
+  bounds the trap-path cost as well.  An uninjected boot to single-user
+  took one.
 
 ### What testing established
 
