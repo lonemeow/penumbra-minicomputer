@@ -9,8 +9,7 @@
  * the file stores them, so a sample's offset there is its offset in
  * the file's sample data.
  *
- * usage: modplay [-Lil] [-c crossfeed] [-d display] [-o tty] [-p order]
- *                 file ...
+ * usage: modplay [-Lil] [-c crossfeed] [-p order] file ...
  */
 
 #include <sys/types.h>
@@ -30,7 +29,6 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "display.h"
 #include "mod.h"
 #include "replay.h"
 
@@ -44,8 +42,12 @@
 #define	LOWAT		25	/* wake when fewer ticks than this remain */
 #define	PEND_MAX	512
 #define	EVENTS_PER_TICK	(MOD_CHANNELS + 1)	/* a voice each, and tempo */
-#define	TIMELINE	256	/* ticks kept for the display; > LOOKAHEAD */
-#define	POLL_MS		40	/* how often the display looks */
+/*
+ * How often to look for the song's end once every tick is submitted:
+ * the device signals when it wants more, but nothing when the last
+ * tick has played, so that is found by asking.
+ */
+#define	POLL_MS		40
 
 /* Most modules sound harsh panned hard; this leaves each channel
  * clearly on its side. */
@@ -70,14 +72,7 @@ struct player {
 		uint16_t	vol_l, vol_r;
 	} voice[MOD_CHANNELS];
 	int		bpm;
-
-	/*
-	 * The ticks generated but not yet all heard, indexed by tick: the
-	 * display shows the one the clock is on, which is well behind the
-	 * one being generated.
-	 */
-	struct display_tick timeline[TIMELINE];
-	uint64_t	us;		/* song time generated */
+	int		start_bpm;	/* the first tick's, which starts the clock */
 };
 
 /* What the command line asked for, beyond which files to play. */
@@ -85,7 +80,6 @@ struct options {
 	bool		ignore;		/* play despite effects modplay skips */
 	bool		loop;
 	int		start;		/* the order to begin at */
-	int		outfd;		/* the terminal the display draws on */
 };
 
 static struct penaudio_info info;
@@ -261,9 +255,10 @@ gen_tick(struct player *p, struct penaudio_event *ev)
 			n++;
 	}
 
-	p->timeline[tick % TIMELINE].tick = t;
-	p->timeline[tick % TIMELINE].us = p->us;
-	p->us += REPLAY_TICK_US(t.bpm);
+	/* Kept rather than read back later: by the time the clock starts,
+	 * feed() has run well past this tick and bpm is that tick's. */
+	if (tick == 0)
+		p->start_bpm = t.bpm;
 	return n;
 }
 
@@ -386,7 +381,6 @@ play(int fd, const char *path, const struct options *opt)
 	struct penaudio_clock pc;
 	struct pollfd pfd;
 	struct penaudio_status st;
-	int64_t shown = -1;		/* the last tick the display has seen */
 	struct mod m;
 	const char *error, *unsupported;
 	uint8_t *buf;
@@ -420,8 +414,6 @@ play(int fd, const char *path, const struct options *opt)
 		goto fail;
 	}
 
-	if (!display_start(&m, path, opt->outfd))
-		goto fail;
 	if (unsupported != NULL)
 		printf("  playing without %s\n", unsupported);
 
@@ -447,7 +439,7 @@ play(int fd, const char *path, const struct options *opt)
 	 */
 	more = feed(&p);
 	if (!(p.done && p.last == 0)) {
-		pc.pc_period_us = REPLAY_TICK_US(p.timeline[0].tick.bpm);
+		pc.pc_period_us = REPLAY_TICK_US(p.start_bpm);
 		pc.pc_lowat = LOWAT;
 		if (ioctl(fd, PENAUDIO_START, &pc) == -1)
 			err(1, "START");
@@ -456,7 +448,7 @@ play(int fd, const char *path, const struct options *opt)
 	pfd.fd = fd;
 	pfd.events = POLLOUT;
 	while (!quit) {
-		/* Once everything is submitted, only the display wakes. */
+		/* Once everything is submitted, only the timeout wakes. */
 		if (!more)
 			pfd.events = 0;
 		if (poll(&pfd, 1, POLL_MS) == -1 && errno != EINTR)
@@ -470,26 +462,7 @@ play(int fd, const char *path, const struct options *opt)
 			err(1, "GETSTATUS");
 		if (!more && st.pst_tick >= p.last)
 			break;
-
-		/*
-		 * Every tick reaches the display, not only the one the
-		 * clock stands on: a note starts for a single tick, and
-		 * the wait above spans several of them.
-		 */
-		if ((int64_t)st.pst_tick > shown) {
-			int64_t tick = shown + 1;
-			int64_t oldest = (int64_t)st.pst_tick - (TIMELINE - 1);
-
-			if (tick < oldest)	/* the ring has come round */
-				tick = oldest;
-			if (tick < 0)
-				tick = 0;
-			for (; tick <= (int64_t)st.pst_tick; tick++)
-				display_update(&p.timeline[tick % TIMELINE]);
-			shown = st.pst_tick;
-		}
 	}
-	display_end();
 
 	/* Silence at once, rather than letting queued ticks play out. */
 	if (ioctl(fd, PENAUDIO_RESET) == -1)
@@ -507,25 +480,15 @@ fail:
 static void
 usage(void)
 {
-	int i;
-
 	fprintf(stderr,
-	    "usage: modplay [-Lil] [-c crossfeed] [-d display] [-o tty] "
-	    "[-p order] file ...\n"
+	    "usage: modplay [-Lil] [-c crossfeed] [-p order] file ...\n"
 	    "  -c  percent of each channel's own side that the other side "
 	    "gets:\n"
 	    "      0 pans hard, as the Amiga does, 100 is mono; default %d\n"
-	    "  -d  how to show the song while it plays:\n", CROSSFEED);
-	for (i = 0; display_backends[i] != NULL; i++)
-		fprintf(stderr, "        %-8s%s%s\n",
-		    display_backends[i]->name, display_backends[i]->summary,
-		    i == 0 ? " (default)" : "");
-	fprintf(stderr,
 	    "  -i  play a module even if it uses effects modplay ignores\n"
 	    "  -L  list where each file's cues start instead of playing\n"
 	    "  -l  loop each song rather than stopping at its end\n"
-	    "  -o  draw the display on this terminal, not the current one\n"
-	    "  -p  start at this order rather than the first\n");
+	    "  -p  start at this order rather than the first\n", CROSSFEED);
 	exit(2);
 }
 
@@ -534,7 +497,6 @@ main(int argc, char **argv)
 {
 	struct sigaction sa;
 	struct options opt;
-	const char *outtty = NULL;
 	uint64_t inc;
 	uint32_t voices;
 	bool listing = false, ok = true;
@@ -542,18 +504,13 @@ main(int argc, char **argv)
 	int ch, fd, crossfeed = CROSSFEED;
 
 	memset(&opt, 0, sizeof(opt));
-	opt.outfd = STDOUT_FILENO;
 
-	while ((ch = getopt(argc, argv, "c:d:iLlo:p:")) != -1) {
+	while ((ch = getopt(argc, argv, "c:iLlp:")) != -1) {
 		switch (ch) {
 		case 'c':
 			crossfeed = (int)strtol(optarg, &end, 10);
 			if (*optarg == '\0' || *end != '\0' ||
 			    crossfeed < 0 || crossfeed > 100)
-				usage();
-			break;
-		case 'd':
-			if (!display_select(optarg))
 				usage();
 			break;
 		case 'i':
@@ -564,9 +521,6 @@ main(int argc, char **argv)
 			break;
 		case 'l':
 			opt.loop = true;
-			break;
-		case 'o':
-			outtty = optarg;
 			break;
 		case 'p':
 			opt.start = (int)strtol(optarg, &end, 10);
@@ -587,12 +541,6 @@ main(int argc, char **argv)
 				ok = false;
 		return ok ? 0 : 1;
 	}
-
-	/* O_NOCTTY: naming a console here must not make it this
-	 * session's controlling terminal. */
-	if (outtty != NULL &&
-	    (opt.outfd = open(outtty, O_RDWR | O_NOCTTY)) == -1)
-		err(1, "%s", outtty);
 
 	/* No SA_RESTART: a signal has to end the wait in poll(). */
 	memset(&sa, 0, sizeof(sa));
