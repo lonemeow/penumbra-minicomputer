@@ -222,10 +222,19 @@ out — bit `32 − n` of the source for `SHL`, bit `n − 1` for
 | CMP         | `CMP Rd, Rs`        | `flags = Rd - Rs` (Rd unchanged)                    | NZCV  |
 | CMP         | `CMP Rd, #imm16`    | `flags = Rd - zero_extend(imm16)` (Rd unchanged)    | NZCV  |
 | TEST        | `TEST Rd, Rs`       | `flags = Rd & Rs` (Rd unchanged)                    | NZCV  |
+| CMPC        | `CMPC Rd, Rs`       | `flags = Rd - Rs - ~C` (Rd unchanged)               | NZCV  |
 
-`CMP` and `TEST` are `SUB`/`AND` with the F-bit set, which suppresses
-the register write. `CMP Rd, R0` is the idiomatic zero test since R0
-is always 0.
+`CMP`, `TEST` and `CMPC` are `SUB`, `AND` and `SBC` with the F-bit
+set, which suppresses the register write. `CMP Rd, R0` is the
+idiomatic zero test since R0 is always 0.
+
+`CMPC` (compare with carry) extends a compare to multi-word values
+as `SBC` extends a subtraction: `CMP` on the low words, then `CMPC`
+on each word above, leaves N, C and V as one subtraction of the
+whole values would. `Z` reflects only the last word, so after the
+chain `BHS`/`BLO` and `BGE`/`BLT` test the whole values, and the
+conditions that read `Z` do not; swap the operands to test `>` or
+`≤`.
 
 ### Memory Access
 
@@ -374,7 +383,7 @@ may reorder, move out of a loop, or delete.
 | Instructions | Writes flags | Reads flags | Memory | Traps |
 |--------------|--------------|-------------|--------|-------|
 | `ADD`, `SUB`, `CMP` (register and `#imm`) | NZCV | — | — | — |
-| `ADC`, `SBC` | NZCV | C | — | — |
+| `ADC`, `SBC`, `CMPC` | NZCV | C | — | — |
 | `AND`, `OR`, `XOR`, `NOT`, `TEST` (register and `#imm`) | NZ; C, V cleared | — | — | — |
 | `SHL`, `SHR`, `SAR` (register and `#imm`) | NZ; C = last bit out; V cleared | — | — | — |
 | `MUL`, `MULU` | NZ of `Rd`; C, V cleared | — | — | — |
@@ -394,8 +403,11 @@ instruction can also fault on its own fetch, so fetch faults set no
 instruction apart.
 
 - **Destination R0.** An operation whose destination is R0 still
-  writes the flags; only the register result is discarded. `CMP` and
-  `TEST` are the named forms of this.
+  writes the flags; only the register result is discarded. In a
+  two-operand operation R0 is then also the first source, so this
+  computes from zero rather than comparing a register; the F-bit forms
+  `CMP`, `TEST` and `CMPC` keep `Rd` as a source and drop only the
+  write.
 - **Divides trap, multiplies do not.** Because `DIV`/`DIVU` trap on a
   zero divisor, a compiler must not execute a divide the program would
   not have executed: hoisting a guarded divide out of its guard turns
@@ -432,6 +444,7 @@ instruction apart.
 | Clear register      | `MOV Rd, R0`                           |                                |
 | Negate              | `NOT Rd, Rs` then `ADD Rd, #1`         | Two's complement: `-x = ~x+1`  |
 | Test for zero       | `CMP Rd, R0` then `BZ target`          |                                |
+| 64-bit compare      | `CMP lo, lo'`, `CMPC hi, hi'`, then `BLT`/`BGE` or `BLO`/`BHS` | Swap operands for `>` and `≤` |
 | Countdown loop      | `SUB Rd, #1` then `BNZ loop`           | `SUB` sets Z flag              |
 | 32-bit constant     | `LLI Rd, #lo` then `LUI Rd, #hi`       | Or use `LI`/`LA` pseudo-op     |
 | Absolute jump       | `LLI Rd, #addr` (+`LUI`) then `JMP Rd` | For targets beyond branch range|

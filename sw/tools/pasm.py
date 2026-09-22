@@ -248,6 +248,7 @@ FORMAT_R_OPS = {
     "DIV":  (18, True,  0), "DIVU": (19, True,  0),
     # F=1 aliases (CMP Rd, Rs — register form; CMP Rd, #imm routed to Format L)
     "CMP":  (1,  True,  1), "TEST": (2,  True,  1),
+    "CMPC": (11, True,  1),
     # System ops (no Rs for most)
     "WRSYS":     (23, True,  0),  # WRSYS Rd, #dev, #reg (special 3-operand)
     "RDSYS":     (24, True,  0),  # RDSYS Rd, #dev, #reg (special 3-operand)

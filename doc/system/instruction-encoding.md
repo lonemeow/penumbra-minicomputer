@@ -36,9 +36,9 @@ All instructions are 32 bits. Bits `[31:30]` select one of four formats.
 | F      | 16    | Flag-only bit: 0 = write result + flags; 1 = flags only    |
 | spare  | 15:0  | Reserved. For `WRSYS`/`RDSYS`: `[15:12]` = device, `[11:8]` = register. For `WRSPR`/`RDSPR`: `[15:12]` = SPR number. |
 
-**`F` bit usage.** `CMP` is encoded as `SUB` with `F=1`; `TEST` is
-`AND` with `F=1`. The ALU computes normally, flags update, but the
-register write is suppressed.
+**`F` bit usage.** `CMP` is encoded as `SUB` with `F=1`, `TEST` as
+`AND` with `F=1`, and `CMPC` as `SBC` with `F=1`. The ALU computes
+normally, flags update, but the register write is suppressed.
 
 ### Format R opcodes
 
@@ -270,7 +270,7 @@ to the illegal-instruction handler (`VEC_ILLEGAL`).
 | ADC, SBC                          | Yes         | Multi-word arithmetic               |
 | MOV                               | Yes         | No flag update                      |
 | NOT                               | Yes         | Updates flags                       |
-| CMP, TEST                         | Yes         | SUB/AND with F-bit                  |
+| CMP, TEST, CMPC                   | Yes         | SUB/AND/SBC with F-bit              |
 | MUL, MULU                         | Yes         | Hardware `divmul` peer unit; 32×32→64, high half → optional `Rdh` |
 | DIV, DIVU                         | Yes         | Hardware `divmul` peer unit; 32/32, remainder → optional `Rdh`; DIV0 → `VEC_ARITH` |
 | LLI, LLIS, LUI                    | Yes         |                                     |
