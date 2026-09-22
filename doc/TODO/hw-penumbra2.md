@@ -26,204 +26,26 @@ faulting slot's `o_op_class` to `OPC_ALU` (the same reason `o_is_trap` is gated
 there), so an inert slot never reports a real op class at retire. The remaining
 `o_retire_valid` over-count is the perfctr-only item above.
 
-## Hardware: Penumbra/2 perfctr stall attribution is mis-timed — STALL_FLUSH over-counts (RESOLVED)
+## Hardware: Penumbra/2 spine testbench lacks cross-stage stall cases
 
-Resolved by the bubble-cause-tag scheme on both gen2 and gen2.5. Each pipeline
-bubble carries a `BCAUSE_*` tag set where it is injected and propagated ID→EX→MEM
-→WB; the perfctr charges a non-retiring cycle to the carried tag at the commit
-point instead of to the live per-stage stall signals, so a short stall (whose
-bubble outlives its signal) and a long stall's latency tail land in their true
-back-end bucket (LOAD/STORE/FUNIT/HAZARD) rather than the front-end residual. The
-front-end split was *not* deferred after all: the "larger fetch-path change" the
-diagnosis feared (threading tags through the elastic buffer) proved unnecessary —
-an empty fetch slot is classified at the starved cycle by `i_fetch_busy`
-(memory-bound → IFETCH, else FLUSH), which is correct by the counters' own
-definitions since the buffer absorbs fetch bubbles and the right question is the
-front end's live state, not a carried token. RDSYS (the read path for the
-counters themselves) is charged to the residual, never a precise back-end bucket,
-so the instrument cannot perturb what it measures. Verified by
-`test_cpu_stall_hit_load` (a cache-hit load burst now moves STALL_LOAD ≥ N and
-does not leak to FLUSH — the old code scored ~0) plus a per-cycle one-hot
-partition assertion that runs through the whole conformance suite on both cores.
-The original diagnosis is kept below for context.
+A taken `BL` pinned in EX by a stalling MEM lost its link write
+(fixed in `e3d8883eda93`).  Leaf testbenches drive their own stalls,
+but `tb_penumbra2_spine` drove `i_dmem_busy = 0` always, so a stall
+interacting across stage boundaries — the only place that bug shows —
+had no coverage.  The `run_mem`/`tick_mem` model (a configurable
+multi-cycle MEM latency) and Test 5 now cover the `BL` case.  Still
+worth adding on the same harness:
 
-The CPU stall-attribution counters charge a non-retiring cycle by the stall
-signals asserted *that same cycle* (head-of-line, evaluated at the retire
-point). But the bubble that blocks retirement at WB was injected upstream,
-roughly a pipeline-depth of cycles earlier, by a stall that may already have
-cleared. So the attribution is mis-timed: a stall shorter than the pipeline
-depth is *fully* mis-attributed (its bubbles reach WB after its signal
-deasserts), and a long stall loses its tail. The orphaned cycles fall into
-`STALL_FLUSH`, which is the residual catch-all — "non-retiring, and no stall
-signal asserted." So `STALL_FLUSH` is **not** a front-end / branch-flush
-counter; it is inflated by the latency tails of every short back-end stall.
+- drain-commit under a MEM stall;
+- a RAW consumer waiting on a producer stalled in MEM;
+- a fault committing while a younger branch is resolved under stall,
+  which checks that `wb_fault_commit` still kills regardless of
+  back-pressure (the opposite of the `BL` fix);
+- a divmul immediately followed by a branch.
 
-Measured with an RTL-sim probe (a temporary per-cycle classifier in the gen2.5
-core that buckets every non-retiring cycle by pipeline state, alongside a
-replica of the perfctr's residual logic), on the representative regime —
-cached-fetch + cached-data `memcpy` through the MMU, the same access pattern
-real `memcpy`/`pmap_copy_page` hits:
-
-- Of ~18.5k cycles the perfctr called `flush`, only ~5.2k were genuine
-  front-end fill (pipe empty: no instruction anywhere in EX/MEM/WB). The other
-  ~16k were back-end-stall latency tails — an instruction sitting in MEM with a
-  bubble passing through WB and no stall asserted that cycle.
-- Cross-checks pinning the cause: *no* flush cycle had a live data request
-  (`o_dmem_re`/`o_dmem_we` both low), so it is not a current memory access;
-  flush *persisted* with cached fetch, so it is not fetch-stall drain; and an
-  A/B with the `ldw`→`stw` dependency broken (identical memory traffic, no
-  load-use hazard) left the residual essentially unchanged, so it is **not**
-  load-use hazard (only ~256 cyc were — those correctly land in `STALL_HAZARD`).
-  It is memory-access latency tails surfacing late.
-- A memory-free, hazard-free, BTB-predicted loop showed pipe-empty ≈ 0, ruling
-  out any structural front-end-throughput bubble.
-
-Implication for the gen2.5 roadmap: the priority ordering ("flush is #1, ~2.5×
-the next lever") was read off a mislabeled bucket. The genuine,
-prediction-addressable front-end flush is small (~5k on `memcpy`), which is
-exactly why BTFN, the RAS, and the BTB each moved `STALL_FLUSH` only a little —
-the predictors work as designed; the counter misled. The dominant real-workload
-CPI lever is the **back end** — operand forwarding (which removes the load-use
-stall *and* its latency tail, the bulk of the bogus "flush") and the memory
-system — not further branch prediction.
-
-Fix: tag each pipeline bubble with the cause that injected it, carry the tag
-*with the bubble* to WB, and charge the non-retiring cycle to the carried cause
-— so attribution no longer depends on how far upstream, or how many cycles
-earlier, the stall was. Back-end causes (load / store / funit / hazard) ride
-bubble tokens that flow ID→EX→MEM→WB, so they tag cleanly; this is the dominant
-measured mis-attribution and the right first increment. Front-end causes
-(ifetch / flush) are decoupled by the elastic fetch buffer, which drops bubble
-tokens — an empty buffer *is* the front-end bubble, with no token to carry a
-cause — so attributing those correctly needs the buffer to carry tagged
-bubbles, a larger fetch-path change; defer it behind the back-end chain. The
-change is perfctr-observability-only (no pipeline-behaviour risk) and
-discrete-logic-friendly (a few flops + muxes per stage). The diagnosis and the
-encoding sketch (a `BCAUSE_*` field) were worked out but not landed; the BTB
-that prompted this investigation sits on the `gen2.5-btb` branch, separate from
-this fix.
-
-## Hardware: Penumbra/2 taken branch under a MEM stall lost its link write (RESOLVED)
-
-A `BL`/`JMP` resolving in EX while an older memory op stalled MEM was discarded
-instead of committing — its link write (`R13`) was lost. Surfaced as Dhrystone
-on the gen2 RTL "crashing": `bench_main`'s prologue (a run of write-through
-stores hitting cold lines) stalled MEM with `bl bench_init` right behind it; the
-BL took its branch (front end redirected to `bench_init`) but never retired, so
-`R13` kept `bench_main`'s caller link. `bench_init`'s closing `jmp r13` returned
-straight to `_start`'s program-end `break`, skipping the benchmark — Dhrystone
-printed nothing and BREAK'd at the *normal* end PC, which is why it read as a
-crash rather than a hang.
-
-Root cause: `penumbra2_id_stage`'s ID/EX register ranked `i_bubble` above
-`i_stall_in`. `ex_branch_taken` rides `i_bubble` to kill a taken branch's
-wrong-path *successor* — correct only once the branch advances out of EX. Under
-MEM back-pressure (`ex_stall`) the branch is pinned in EX, so the ID/EX register
-still holds the branch itself, and the bubble cleared it. Fix: gate that one
-term — `i_bubble = (ex_branch_taken & ~ex_stall) | wb_fault_commit | … ` — in
-`penumbra2_spine`. `wb_fault_commit` stays ungated (a fault must kill younger
-slots regardless of back-pressure); `eret_commit`/`wrsys_resync` fire only with
-the pipe drained, so they never coincide with a stall.
-
-Diagnosed with the gen2 RTL trace (now implemented in
-`tb_penumbra2_interactive`: retire stream, drain-commit lines, branch-resolve
-markers, and an opt-in per-cycle EX/MEM/WB occupancy window via
-`+pipe_lo=/+pipe_hi=`). The occupancy view was decisive — it showed the BL in EX
-with the older store still occupying MEM, then gone the next cycle without MEM
-advancing: a resolve-then-squash a retire-only trace cannot show.
-
-Coverage gap this exposed: leaf testbenches drive their own stalls
-(`tb_penumbra2_mem_stage` richly, `ex_stage`/`id_stage`/`if*` lightly), but the
-*integration* (`tb_penumbra2_spine`) drove `i_dmem_busy = 0` always — zero
-coverage of a stall *interacting across stage boundaries*, which is the only
-place this bug is visible. Closed by the `run_mem`/`tick_mem` model (a
-configurable multi-cycle MEM latency, borrowed from `tb_penumbra2_mem_stage`)
-and Test 5 (a BL pinned in EX by a stalling load). Still worth adding on the
-same harness: drain-commit under a MEM stall, a RAW consumer waiting on a
-producer stalled in MEM, a fault committing while a younger branch is resolved
-under stall (verifies the `wb_fault_commit` override — the opposite of this
-fix), and a divmul immediately followed by a branch.
-
-## Hardware: Penumbra/2 SPR access path — complete
-
-WRSYS drives a real sysreg write at the EX drain-commit
-(`make test-prog CORE=penumbra2 PROG=test_syswrite`). Wiring it surfaced a shared decode bug:
-WRSYS *and* WRSPR encode their value register in the Rd field (as the assembler
-emits and gen1 reads), but gen2 decode read it from Rs (i.e. R0). Both were
-corrected to read the Rd field.
-
-The SPR access path is fully wired, in backend-ordered pieces:
-
-- **1a (done):** RDSPR/WRSPR EPC/ESR + RDSPR SR. EPC/ESR are SPR-file-backed
-  (not regfile entries) and commit at WB like any register write — the value
-  rides ALU_PASS to wb_value and the WB SPR strobe (previously tied off in the
-  spine) drives the SPR-file write, gated to EPC/ESR. RDSPR reads them as
-  operand B; the scoreboard downstream-writer predicate now counts `spr_we`.
-  RDSPR SR composes {committed S/I, flag-bypassed NZCV} in EX. WRSPR is **not**
-  a drain-commit — value SPRs are plain stores, unlike WRSYS. Tests:
-  `isa/test_wrspr_epc`, `isa/test_rdspr_sr` (pass on ISS/gen1/gen2).
-- **1b (done):** WRSPR/RDSPR USP — routes to the regfile R14 bank (entry 14,
-  the `cross_bank` any-mode access the regmap already raises). RDSPR USP worked
-  after 1a (ordinary operand-B regfile read); 1b ORed the USP SPR strobe into
-  the regfile write enable. Test: `isa/test_wrspr_usp`.
-- **1c (done):** WRSPR/RDSPR SCRn — `penumbra2_scratch_file` (4×32, one WB
-  write port, one combinational ID read port) backs the four scratch SPRs,
-  which fall outside the 16-entry regfile so they need storage of their own.
-  The spine gates the write to the SCRn range and muxes the readback onto the
-  operand-B SPR path; the ID stage routes SCRn reads through that path (USP
-  stays on the regfile read). Test: `isa/test_scratch_sprs`.
-
-With all value-SPR writes wired, gen2 advertises the `wrspr` capability
-(`RUNNER_PROVIDES_penumbra2`), which pulled the previously-skipped `wrspr`-
-tagged conformance tests into the gen2 suite. Two then failed — `test_priv`
-(user-mode privilege trap) and `test_usp` (user-mode USP banking) — because
-`penumbra2_core` hardwired `core_supervisor = 1'b1`, a bring-up stub deferred
-"until the SR.S write path lands." With ESR/ERET restore real, that landed: the
-spine exports the committed `SR.S` (`o_sr_s`, mirroring `o_sr_i`) and the core
-sources its single `core_supervisor` site from it, so decode-time privilege
-checks, both MMU user bits, regfile USP/SSP banking, and the fetch-side user
-bit all see real privilege. Using the committed value is safe for every stage
-because privilege changes only via drain-commit ops (exception entry / ERET),
-which flush younger instructions. Full gen2 conformance suite green (72/72, 10
-skipped on absent peripherals: bus/irq/timer/machid/perfctr/uart).
-
-The privilege threading places the committed `SR.S` flop on the fetch/MMU path
-(the gen2 fmax-sensitive cone). First `make timing` of the full
-`machine_penumbra2` probe (`BOARD=ulx3s CORE=penumbra2 VARIANT=probe`) with the
-change in: **30.18 MHz, PASS at the 25 MHz target** on ECP5-85F sg6 — within
-the typical 29–30 MHz band, above the 27 MHz floor, so no fmax regression from
-the SR.S threading. This is also the establishing operating point for the full
-gen2 machine probe (the bare-core probe was ~55 MHz; the cache/MMU/arbiter
-layers are the limiter, not the compute cone).
-
-## Hardware: WRSPR-SR dropped ISA-wide (RESOLVED)
-
-WRSPR SR is reserved (illegal) on every generation: the kernel changes
-`SR.S`/`SR.I` via exception entry / ERET / EI / DI and NZCV via flag-writing
-ALU ops, never a direct SR write — and a direct `SR.S` write is the only SPR
-write that would need WRSYS-style context-synchronization (`SR.S` gates
-fetch-translation privilege). Dropping it removes that complexity entirely;
-the value SPRs need no context-sync. RDSPR SR stays (NetBSD spl/status reads
-it).
-
-gen2 made it illegal first (piece 1a); gen1 (`cpu_core` traps `WRSPR SR` to
-`VEC_ILLEGAL` at dispatch; `datapath` no longer asserts `spr_sr_load` for SPR
-3) and the ISS (`WRSPR SR` raises `VEC_ILLEGAL`) now match, and the ISA docs
-mark the encoding reserved. `isa/test_spr_sr` (its only purpose was `WRSPR
-SR`) is removed; `isa/test_rdspr_sr` covers `RDSPR SR` + EI/DI and
-`isa/test_wrspr_sr_illegal` checks the trap, both on every generation. The
-`wrspr` capability tag now means exactly "value-SPR writes work" everywhere —
-which is what lets piece 1c advertise `wrspr` on gen2 once the SCRn scratch
-file lands.
-
-The gen2 *rationale* docs (`penumbra2/{design-decisions,hazard-model,
-control-decode}.md`) were reframed to match: `WRSPR SR` is no longer listed as
-a live drain-commit / flag producer (ERET, EI/DI, WRSYS remain). The drain-
-commit and S/I-serialization analysis that `WRSPR SR` used to motivate is
-preserved as the *justification for reserving the encoding* — a direct `SR.S`
-write would feed the MMU and IF1 IRQ logic out of pipeline exactly as ERET's
-does, so it would need the same serialization and fetch re-sync, and reserving
-it removes that case rather than building it.
+The per-cycle EX/MEM/WB occupancy window in `tb_penumbra2_interactive`
+(`+pipe_lo=`/`+pipe_hi=`) is what exposed the bug: a retire-only trace
+cannot show a resolve-then-squash.
 
 ## Hardware: gen2.5 feature status and measurements
 
@@ -231,7 +53,7 @@ it removes that case rather than building it.
 
 The build order below is **data-driven from the gen2 stall profile**,
 re-measured on hardware after the perfctr stall-attribution fix (the
-carried-cause counters — see the RESOLVED finding above). The pre-fix profile
+carried-cause counters, `a52ab8c1d1f7`). The pre-fix profile
 that originally set this ranking was read off the mislabeled residual: it
 reported `flush` as the dominant stall (~30% on Dhrystone, ~35% on NetBSD) and
 put branch prediction first. That was an artifact — back-end latency tails
@@ -459,7 +281,7 @@ predicted.
 **The flush bucket is real front-end fill, but the corrected counters halve it
 and demote it.** This section originally read flush at 37-42% on libc size=1
 loops and called the BTB the dominant remaining lever. The carried-cause
-counters (see the RESOLVED finding above) put those same loops at ~17-26%
+counters (`a52ab8c1d1f7`) put those same loops at ~17-26%
 (memcpy/memset/strlen size=1) and kernel paths at 12-18%; the missing ~half was
 back-end latency tails, now correctly in load/store/hazard. What flush measures
 now is genuine — the 2-bubble front-end fill of every taken conditional branch,
