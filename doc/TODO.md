@@ -1294,17 +1294,36 @@ propagation's last run, so the pair survives `AllowRegisterRenaming`
 too (see it in "codegen pass/gate audit").  The selector keeps its
 store-zero patch because `-O0` runs no coalescer.
 
-## Compiler: a high-half multiply by zero is not folded
+## Compiler: zero words of split 64-bit values are not folded
 
-The legalizer splits a multiply wider than 32 bits into 32-bit partial
-products.  Where an operand word is a constant zero — the top word of a
-zero-extended value, or a zero word of a constant — its products are
-zero, and the post-legalizer combiner folds the low halves
-(`G_MUL x, 0`, upstream's `binop_right_to_zero`).  Nothing folds a high
-half (`G_UMULH x, 0`), which selects to a real `MULU_P`: 37 cycles on
-gen1, 10 on gen2 and gen2.5.  SelectionDAG folds `mulhu x, 0`.
+The legalizer splits 64-bit and wider values into 32-bit words.  A
+word that is zero should let its consumers fold, but two cases escape
+the combiner.
 
-Multiplies wasted per shape:
+**A zero behind a split PHI.**  When a 64-bit value is merged at a join
+and one of its words is the same constant on every edge, splitting the
+PHI leaves that word as `phi(0, 0)`.  The combiner's rules match
+`G_CONSTANT`, so none of them fires.  Two ways in:
+- `extend_through_phis` in the pre-legalizer combiner moves a
+  zero-extension above a join into each predecessor, turning the high
+  word into a PHI of zeros.  The kernel's `disk_set_info` loads its
+  geometry fields on two paths before
+  `(int64_t) dg_nsectors * dg_ntracks * dg_ncylinders`.
+- A 64-bit select or PHI whose arms share a zero word: SoftFloat's
+  `z = ... ? 0xFFFFFFFF00000000 : (a0 / b0) << 32` in `__divdf3`.
+
+What it costs depends on whether a constant zero would have folded.
+Against the same code with `extend_through_phis` disabled, on a value
+zero-extended through a join: a multiply keeps its zero partial
+products, three multiplies and an add where one `MULU_P` would do (37
+cycles a multiply on gen1, 10 on gen2 and gen2.5); an `and` computes
+`0 & y`; a shift shifts the zero word.  Add, subtract, compares, `or`
+and `xor` need the zero in a register either way and cost the same.
+
+**A high half by a constant zero.**  The post-legalizer combiner folds
+`G_MUL x, 0` (upstream's `binop_right_to_zero`), but nothing folds
+`G_UMULH x, 0`, which selects to a real `MULU_P`; SelectionDAG does
+fold `mulhu x, 0`.  Multiplies wasted per shape:
 - 64-bit `x * 0x3_0000_0000`, a constant with a zero low word: 1;
 - unsigned 64-bit `__builtin_mul_overflow` with one operand widened
   from 32 bits: 2;
@@ -1312,16 +1331,29 @@ Multiplies wasted per shape:
   high half (`i128-mulhi.ll`'s `umulh64`): 2; the high half with `b`
   32 bits wide: 3.
 
-A plain 64-bit multiply wastes none even with zero-extended operands
-(the zero words meet only in low halves), nor do signed forms (a
-sign-extended word is not a constant) or a 32x32->64 widening
-multiply.  Reach is next to nothing: Doom has none; the few sites in
-the kernel and libc binaries (`disk_set_info`, `diskerr`, `__divdf3`)
-came from an older compiler, and libc's SoftFloat and
-`disk_set_info`'s shape compile without one now; the `test-compiler`
-corpus has only the `mulhi64` test.  The fix is a rule folding
-`G_UMULH`/`G_SMULH` by zero — best upstream, extending
-`binop_right_to_zero`, where it serves every 32-bit GlobalISel target.
+A plain 64-bit multiply is unaffected even with zero-extended operands
+(the zero words meet only in low halves), as are signed forms (a
+sign-extended word is not a constant) and a 32x32->64 widening
+multiply.
+
+Fix, once and generically rather than per operation: a post-legalizer
+rule folding a `G_PHI` whose incoming values are all one constant into
+that `G_CONSTANT`, after which every existing constant rule fires —
+the multiply collapses to one `MULU_P` through `binop_right_to_zero`
+and the `G_MUL` + `G_UMULH` fusion, with no change to the widening
+detection; and `binop_right_to_zero` extended to `G_UMULH`/`G_SMULH`,
+which the PHI fold also needs where a high-half product meets the zero
+word (`__divdf3`).  Both belong upstream in `Combine.td`, where they
+serve every 32-bit GlobalISel target.  The PHI fold has to run after
+legalization: when the PHI is split, its incoming values are still
+64-bit loads, and the zero words appear only once those are narrowed.
+Keeping `extend_through_phis` from widening a PHI into an illegal type
+would close one way in but not the shared-word one.
+
+Reach, counting multiplies whose zero is visible in the same block (a
+lower bound): the `GENERIC.DEBUG` kernel 3 (`disk_set_info` 2,
+`diskerr` 1), `libc.so` 2 (`__divdf3`), Doom none, the
+`test-compiler` corpus 2 (the `mulhi64` test, the high-half case).
 
 ## Compiler: graceful-fail on unsupported inline asm and vector IR
 
