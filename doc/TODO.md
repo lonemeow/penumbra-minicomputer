@@ -4187,7 +4187,10 @@ built takes 1,404,402 misses over the 149 frames:
   the top set, or spreading the mmap base, costs nothing and stays
   inside the ABI — but it buys far less than the set skew suggests,
   because the working set does not fit 64 entries × 4 KB either way.
-  This is the only lever here that is certainly available.
+  This is the only lever here that is certainly available, and
+  relinking Doom's own objects at another base moved its refills 26%
+  with the instructions unchanged, so the layout a program happens to
+  get is worth about as much as the address space it is given.
 - **Associativity is where the misses are, and it is a timing
   question, not a plan.**  Four ways at the same 64 entries more than
   halves them.  The TLB sits on the address path of every access, so
@@ -4315,9 +4318,34 @@ where `pmci_burst` (32k a frame) and most of the idle time come from.
   Doom is not PIC.  Inlined small memory calls: Doom's copies are
   64 KB, not 32 bytes.
 
-The ISS has no PC histogram of its own; `+opstats` buckets by class
-but not by address.  A `+pcprof` alongside it would make this
-repeatable.
+The profiler is `+pcprof`, with `sw/tools/pcprof-report.py` for the
+symbols; how to drive a NetBSD workload under it is in the root
+CLAUDE.md.
+
+### Judging a change: Doom's own instructions, never the total
+
+Measured 2026-09-22.  Inlining `FixedMul` (`31b62fe`) grew `.text` by
+304 bytes and left every data access identical, yet the run's TLB
+refills went from 1.28M to 1.84M and the total instruction count rose
+5.5% — while the code that changed got *cheaper*, Doom's own
+instructions falling 1.3%.
+
+Relinking the same object files at a different base settles what that
+was: Doom's own work came out within 0.1%, refills fell 26% (1.84M →
+1.36M) and the total fell 5.3%.  Identical instructions, different
+addresses.  So a few hundred bytes of text movement swings the frame
+by more than any of the source or codegen changes measured here, and
+the present 3.7 fps is one arbitrary draw from that distribution.
+Two consequences:
+
+- Report a change as Doom's own instruction count *plus* the refill
+  count, never as one total.  A total compares two layouts as much as
+  two programs.
+- A deliberate layout — function ordering, or padding chosen against
+  the TLB's sets — is worth measuring in its own right, on the same
+  footing as the drawer work.  The kernel-side version of this is
+  "pack the hottest syscall-path text onto shared pages"; nothing
+  equivalent exists for userland.
 
 `r_phase` gaps:
 
@@ -4356,11 +4384,13 @@ Found in the hot-path code review (2026-09-13).
   remove the reloads, because the calls may alias the globals.
 - **`RANGECHECK` is defined** (`doomdef.h`), adding 4–5
   compare-and-branch pairs to every drawer call.
-- **Hot helpers are out of line in other files.**  `FixedMul`
-  (`m_fixed_penumbra.c`) is 5 instructions but always called: about 9
-  cycles of call overhead on penumbra2_5, as much as its `MUL`.
-  `SlopeDiv` and `R_PointToAngle` likewise.  `static inline`
-  definitions in a header remove it.
+- **Hot helpers are out of line in other files.**  `FixedMul` is now a
+  `static inline` in `m_fixed.h` (`31b62fe`), worth 1.3% of Doom's own
+  instructions — but only once the compiler fused a widening multiply
+  whose operand came from memory (`2dbdf66`); on the compiler before
+  it, the same change cost 0.7%, the call having hidden the gap.
+  `SlopeDiv` and `R_PointToAngle` are still called, 152k and 5.2M
+  instructions a run.
 - **BSP leaves recurse to learn that they are leaves.**
   `R_RenderBSPNode` is entered for a subsector child only to test
   `NF_SUBSECTOR` and call `R_Subsector`, paying the full frame.
@@ -5793,6 +5823,68 @@ Measured statically: 64×64 multiply 4 multiplies → 3; widening 32×32→64
 2 → 1; the fractal demos' Q4.28 inner loop 6 → 3.  Divide/remainder was
 never affected — `G_SDIVREM`/`G_UDIVREM` already exist generically and
 the legalizer's `div_rem_to_divrem` fuses those upstream.
+
+**An operand from memory missed it until 2026-09-22** (`2dbdf66`).  The
+custom lowering recognised the widening form by matching `G_SEXT` /
+`G_ZEXT` on both operands, which only holds for a value extended in a
+register: a value loaded from memory arrives as one extending load,
+because the combiner folds `G_SEXT (G_LOAD s32)` into `G_SEXTLOAD`
+first.  Those multiplies fell back to the schoolbook expansion — three
+hardware multiplies and the sign corrections between them.  The test is
+now whether an operand carries information above bit 31, asked of
+`GISelValueTracking`, so extending loads and values already narrowed to
+fixed point qualify without naming either shape.  Static sites carrying
+the expansion before the fix: kernel 63, `libc` 39, `libsqlite3` 26,
+and every inlined `FixedMul` in Doom.  What remains unfused is the
+chain head — see "a hoisted shift stops a chained fixed-point multiply
+fusing".
+
+## Compiler: a hoisted shift stops a chained fixed-point multiply fusing
+
+Found 2026-09-22 while inlining Doom's `FixedMul`.  Where one
+fixed-point multiply feeds another — `FixedMul(FixedMul(a,b),c)`, as
+`R_MapPlane` computes `distance` and then `ds_xstep`/`ds_ystep` —
+InstCombine removes the `sext(trunc(...))` round trip between them by
+hoisting the shift into the first multiply:
+
+```llvm
+%9  = shl nsw i64 %6, 16     ; sext(planeheight) << 16
+%10 = mul i64 %9, %7         ; x sext(yslope[y])  -- genuinely 48x32
+%11 = ashr i64 %10, 32       ; the fixed-point result, still i64
+%13 = mul nsw i64 %11, %12   ; this one fuses
+```
+
+The first multiply of a chain is then not a 32×32 widening multiply in
+any form the hardware has, so it takes the schoolbook expansion: two
+extra hardware multiplies and about seven instructions of sign
+correction.  Only the head of each chain is affected; the rest fuse,
+because `ashr` by 32 leaves a value `GISelValueTracking` can prove is
+32-bit.  The transform is right on a machine with a 64-bit multiplier,
+so this is a target gap, not an InstCombine bug.
+
+Scope, counted statically: Doom 8 sites (only `R_MapPlane` executes,
+207 times a frame), kernel 9, `libc` 3, `libsqlite3` 1.  At 2 extra
+multiplies and ~7 instructions each, Doom pays roughly 5k cycles a
+frame, about 0.05%.
+
+Three ways to close it, none of them earning their keep at that price:
+
+- **A combine that sinks the shift back out**, `(X << C) * Y >> D` →
+  `(X * Y) >> (D - C)`, is the general fix and would reach the kernel
+  and `libc` sites too.  The two forms agree only in the low 64 − C
+  bits, so it needs a demanded-bits argument; the `nsw` that would make
+  it unconditional is what InstCombine drops.
+- **Writing the extraction explicitly** in `m_fixed.h`,
+  `((uint32_t) p >> 16) | ((uint32_t) (p >> 32) << 16)` — keeps the
+  value in 32-bit terms, so nothing is hoisted: the three-multiply
+  chain measures 31 instructions and 3 multiplies against 37 and 5.  It
+  is a source workaround for a compiler canonicalization, and it leaves
+  a redundant `and` of `0xFFFF0000` behind.
+- Leave it, which is the current answer.
+
+What would change the calculus is a workload that is chained fixed
+point throughout: the 32.32 audio mixer is the candidate, so look for
+this shape when that path is next profiled.
 
 ## Compiler: 16-bit jump-table entries when offsets fit
 
