@@ -156,8 +156,9 @@ flag-setting load to a future ISA revision.**
 ## What could still be added (ranked)
 
 1. **Fix the splice bug** (above). Correctness, one line + test.
+   Done in `cbdd1d1b88c9`.
 2. **`eliminateFrameIndex` SR-liveness guard** (above). Correctness,
-   small, dormant until big frames appear.
+   small, dormant until big frames appear. Done in `dd38b2e5d3c9`.
 3. **Identical-compare dedup** — allow CMP/CMPi/TEST/TESTi themselves
    as producers. Flags are *identical*, so the Z/N forward gate does
    not apply: unlocks unsigned (BHI/BLS/BCS/BCC) and signed

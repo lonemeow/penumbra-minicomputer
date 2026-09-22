@@ -36,7 +36,7 @@ a scan that misread branch targets written in upper-case hex.
 
 | Item | Shape counted | Kernel | libc | Doom | Tests |
 |---|---|---:|---:|---:|---:|
-| "64-bit relational compares expand to select diamonds" — resolved | `sbc r, zero; and r, 1` | 1,686 | 1,154 | 271 | 12,475 |
+| 64-bit relational compares (`8c53d2bb4b84`) — resolved | `sbc r, zero; and r, 1` | 1,686 | 1,154 | 271 | 12,475 |
 | "flag definitions stay live after C++ selection" (PIC anchors) | `add x, pc` / `mov x, pc` | 1 | 12,486 | 30 | 0 |
 | "InstCombine's shift-and-mask form costs a constant" | `llis t, -2^k; and y, t` | 413 | 300 | 12 | 234 |
 | "inline small constant-size memcpy/memset/memmove" | `lli r3, N` before a call to one, N ≤ 32 (≤ 64) | 510 (654) | — | — | — |
@@ -44,7 +44,7 @@ a scan that misread branch targets written in upper-case hex.
 | same entry: `p - K` | `llis t, -K; add y, t`, `t` dead | 47 | 63 | 4 | 0 |
 | same entry: run-time indexed local | `mov x, sp; [add x, imm;] add x, y; ld/st [x + 0]` | 35 | 32 | 9 | 16 |
 | "hot-loop code review — software audio mixing": zero-low-half carry | `add/sub r, 0` feeding `adc`/`sbc` | 2 | 13 | 0 | 1,489 |
-| "large frame offsets write the flags unchecked" (correctness) — resolved | `lli; lui; add x, sp` | 0 | 43 | 0 | 105 |
+| large frame offsets writing live flags (`dd38b2e5d3c9`, correctness) — resolved | `lli; lui; add x, sp` | 0 | 43 | 0 | 105 |
 | resolved: the SP copy, the zero register and `AllowRegisterRenaming` | a copy all of whose readers could read its source: from `sp` (other) | 10 (3) | 21 (1) | 3 (0) | 16 (3) |
 
 The memory-call row counts the kernel only: libc and Doom call through

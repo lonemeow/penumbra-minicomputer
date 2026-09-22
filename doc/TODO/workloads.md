@@ -100,14 +100,14 @@ Compiler causes, widest reach first, each with its own entry:
 | Cause | Shows up in | Entry |
 |---|---|---|
 | No branch probabilities reach block placement | every `__predict_false`, KASSERT and cold path | "IRTranslator runs without branch probabilities" |
-| Countdown loop exits test a materialized overflow flag — RESOLVED | Doom column and span drawers: 6 of 18 instructions per pixel | "countdown loop exits pay for an overflow flag" |
-| s64 relational compares — RESOLVED | SQLite b-tree bisection and record compare | "64-bit relational compares expand to select diamonds" |
+| Countdown loop exits test a materialized overflow flag — RESOLVED | Doom column and span drawers: 6 of 18 instructions per pixel | `9a9bcc05c70a` |
+| s64 relational compares — RESOLVED | SQLite b-tree bisection and record compare | `8c53d2bb4b84` |
 | Compare immediates, TEST, inverted booleans | 848 / 612 / 274 / 140 sites | "compare and branch selection misses immediate and TEST forms" |
 | Byte and halfword sign-bit tests | SQLite varint bytes, BSP child index, `sy_narg` | "signed sub-word loads in relational compares miss LDBS/LDHS" |
 | Constants never rematerialized | 220 kernel loops; ~1,250 SQLite constant reloads | "constants are not rematerializable" |
 | `&global + C` built in the entry block; addresses hoisted into callee-saved registers | 1,282 SQLite sites; Doom BSP walk frame | "constant-offset global addresses stay in the entry block", "early MachineLICM hoists global addresses into callee-saved registers" |
 | `p - K` and integer MMIO addresses miss the offset fold | memmove backward loops; 187 driver sites | "pointer-minus-constant and integer MMIO addresses miss their folds" |
-| 64-bit counter increments — RESOLVED | every syscall and interrupt | "selectAddSubCarry misses the immediate fold" |
+| 64-bit counter increments — RESOLVED | every syscall and interrupt | `fb237ee8d98a` |
 | A store between producer and compare | `KPREEMPT_ENABLE` on every `userret` | "compare-elim does not look through COPY" |
 
 Most of the frame cost belongs to the shrink-wrapping and tail-call
@@ -463,7 +463,7 @@ below, not the multiply.
 | Cause | Per voice-sample | Entry |
 |---|---|---|
 | `MUL` copies a multiplicand that stays live — resolved | 1 in `mix_by_voice` | `676cb9fed5c1` |
-| A conditional subtract pays for its zero arm — resolved | 2 in `mix_by_voice` | "a conditional add or subtract becomes a select of zero" |
+| A conditional subtract pays for its zero arm — resolved | 2 in `mix_by_voice` | `c5e1dfadebc7` |
 | A run-time indexed local rebuilds its frame address | 2 in `mix_by_frame` | "pointer-minus-constant and integer MMIO addresses miss their folds" |
 
 ### Smaller findings
@@ -542,9 +542,9 @@ stay live).  It compiles to 17:
 - **The select of zero survives in the high half.**  The wrap is
   `pos - select(c, 0, k << 32)` at s64, which
   `penumbra_select_of_identity` leaves alone: it rewrites
-  register-width values only (see "a conditional add or subtract
-  becomes a select of zero").  Split by the legalizer, the low select
-  is a constant zero and folds, but the high one stays, so the common
+  register-width values only (`c5e1dfadebc7`).  Split by the
+  legalizer, the low select is a constant zero and folds, but the
+  high one stays, so the common
   path runs `mov r9, zero` and the `SBC` of it.  2 per voice-sample.
   Running the rule after legalization would reach it, but also
   reshapes the legalizer's own selects, which cost `fshl_i64` two

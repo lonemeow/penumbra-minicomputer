@@ -61,25 +61,6 @@ lower bound): the `GENERIC.DEBUG` kernel 3 (`disk_set_info` 2,
 `diskerr` 1), `libc.so` 2 (`__divdf3`), Doom none, the
 `test-compiler` corpus 2 (the `mulhi64` test, the high-half case).
 
-## Compiler: compare-elim splice past ADC/SBC — RESOLVED; frame-index hazard open
-
-The compare-elimination peephole's backward walk skipped SR readers,
-so its splice could move a carry-producing `ADD`/`SUB` past the
-`ADC`/`SBC` consuming its carry, breaking i64 arithmetic.  Fixed:
-the walk bails on any gap SR reader; the repro is a negative case in
-`test/CodeGen/Penumbra/compare-elim.ll`.  Binaries built between the
-peephole extension and the fix are suspect until rebuilt — that
-window covers every installed userland, so the fix reaches the
-board only with a distribution rebuild.
-
-Still open from the same audit
-([`doc/llvm/flag-reuse-notes.md`](../llvm/flag-reuse-notes.md)): the
-`eliminateFrameIndex` large-offset path emits a post-RA `ADD` that
-clobbers SR inside a live-flags window for frames over 32 KiB.
-Flags cannot be saved in software (`WRSPR SR` traps), so the fix is
-relocation — check SR liveness at the insertion point and emit the
-materialisation above the nearest earlier SR def.
-
 ## Compiler: compare-elim does not look through COPY
 
 `optimizeCompareInstr`'s backward walk takes the first instruction that
@@ -129,45 +110,6 @@ block boundary, where a backward walk cannot see it.  SQLite's
 repeats (161 same-block, 407 across labels) come mostly from the i64
 compare expansion in "64-bit relational compares expand to select
 diamonds", since resolved; recount before acting on them.
-
-## Compiler: s1 booleans lose their comparison through logic ops — RESOLVED
-
-Booleans are register-width now: `G_ICMP`/`G_FCMP` produce s32 and
-`G_BRCOND`/`G_SELECT` consume it, matching AArch64 and RISC-V, with
-`setBooleanContents(ZeroOrOneBooleanContent)` declaring the 0/1
-guarantee.  The carry linking `G_UADDO` to `G_UADDE` stays s1: it is
-the SR.C bit rather than a value, and `narrowScalarAddSub` creates
-those carries as s1 unconditionally, so any other width would only be
-widened straight back apart.  −1.17% on a 120-file Doom build.
-
-The original diagnosis here was wrong and is worth recording, because
-it sent the first attempt at the wrong target.  The ext/trunc pair
-around a logic op costs nothing — `G_ANYEXT`/`G_TRUNC` select to
-`COPY` and coalesce away, and `(a>=b)|(c>=d)` always selected to
-`cmp`/`adc` pairs plus an `or`.  Two other things were doing the
-damage:
-
-- **Signed compare-to-value.**  InstCombine rewrites `x >> 31` into
-  `icmp slt x, 0` whenever it feeds an `i1` operator, and
-  `selectICmpToValue` bails on every signed predicate.  Independent of
-  boolean width; still open, see the entry below.
-- **`BitWidth > 1` in `GISelValueTracking`.**  The known-bits rule for
-  a comparison result is gated on the result being wider than one bit,
-  so `ZeroOrOneBooleanContent` was inert while `G_ICMP` produced s1.
-  That is why the earlier `setBooleanContents` experiment measured no
-  benefit — the two changes only work together.
-
-`lowerThreewayCompare` picks the arithmetic form over the select chain
-once boolean contents is declared, which regressed `scmp_i32`; the
-`preferSelectsOverBooleanArithmetic` hook holds it on the select
-chain.
-
-Widening leaves `G_AND %bool, 1` behind, which `redundant_and` cannot
-drop because a `G_FREEZE` blocks known-bits — an upstream hole written
-up in
-[`doc/llvm/gisel-freeze-known-bits.md`](../llvm/gisel-freeze-known-bits.md).
-Rather than wait for it, the compare-elimination peephole erases the
-`TESTi` those masks feed, since the mask already set the same Z.
 
 ## Compiler: signed comparisons have no branchless materialisation
 
@@ -262,93 +204,21 @@ materialized boolean.  Four shapes pay for that (static counts,
   not branches.  Shape coverage: `brcond-inverted-bool.ll`.  RISC-V's
   GlobalISel output has the same `xori`, so this is upstream-worthy.
 
-## Compiler: share the hi-word compare in i64 three-way compares — RESOLVED
+## Compiler: what `G_ICMP_PAIR` left of the 64-bit compares
 
-The `G_SCMP`/`G_UCMP` lowering (`.lower()` →
-`LegalizerHelper::lowerThreewayCompare()`) expands the i64 case
-verbosely: 16 BBs — two s64 ICMPs each become a three-block hi/lo/eq
-diamond, materialized as four `mov` selects.  A peephole that shares
-the hi-word compare across the two ICMPs would shrink it.  Not on any
-hot path (qsort's comparator is the i32 case); low priority.  The
-two-way relational compares have the same problem and are hot — see
-the next entry.
+s64 relational compares select as `CMP` + `CMPC` since
+`8c53d2bb4b84`.  Left over from that work:
 
-Resolved with the next entry: each of the two s64 compares is now one
-`CMP` + `CMPC` chain, so no high-word compare repeats, and
-`scmp`/`ucmp` of i64 take 16 instructions where they took 35
-(`threeway-cmp.ll`).
-
-## Compiler: 64-bit relational compares expand to select diamonds — RESOLVED
-
-`LegalizerHelper::narrowScalar` splits an s64 `G_ICMP` into
-`select(hi == hi', ult(lo, lo'), pred(hi, hi'))`.  Selection builds
-the signed half with a branch diamond (`selectICmpToValue` has no
-signed path), the `G_SELECT` with a second one, and emits the
-high-word compare twice.  A branch on signed `a < b` takes 12
-instructions on its path:
-
-```
-cmp r1,r3; mov r1,zero; adc r1,zero; lli r3,1; lli r11,0
-cmp r2,r4; blt ...; cmp r2,r4; bne ...; test r1,1; bne ...
-```
-
-A borrow chain does it in four: `cmp alo,blo; mov t,ahi; sbc t,bhi;
-blt` (`blo` unsigned).  `MOV` leaves the flags alone, so the copy can
-go anywhere before the `SBC`.  Only `lt`/`ge` come out of the chain
-directly — Z reflects just the high word — so `gt`/`le` swap operands.
-
-| Source | Now | riscv32 SelectionDAG | Borrow chain |
-|---|---:|---:|---:|
-| branch on signed `<` | 11–13 | 3–5 | 3 |
-| branch on unsigned `<` | 10 | 3–5 | 3 |
-| value of signed `<` | 16 | — | 5 |
-| value of unsigned `<` | 12 | — | 5 |
-| branch on `v < 0` | 11 | 1 | 2 |
-| `(v & 0xffffffff) != v` | 16 | 3 | 3 |
-
-The borrow-chain branch counts assume a flag-only `SBC`; add one for
-the `MOV`.  Constants need no chain at all: `v < 0` is
-`cmp hi,0; blt`, and a right-hand side with a zero low half reduces
-to a high-word compare.
-
-Reach (static, 2026-09-13): `libsqlite3` has 470 on variable
-operands and about 130 against constants.  That includes two per
-`sqlite3BtreeMovetoUnpacked` bisection step (rowid against cell key),
-`vdbeRecordCompareInt`, and 42 in `sqlite3VdbeExec`.  The chain saves
-about 20 cycles per compare on penumbra1 and 9 on penumbra2_5.  The
-kernel's `off_t`, `time_t` and 64-bit counter code has the same shape;
-not counted.
-
-SelectionDAG's `IntegerExpandSetCCOperands` (`LegalizeIntegerTypes.cpp`)
-uses `SETCCCARRY` where the target provides it — ARM does — and
-special-cases constant halves.  GlobalISel has no counterpart, so this
-wants a `doc/llvm-*.md` write-up.
-
-Resolved by naming `SBC` with the flag-only bit `CMPC`
-(`instruction-set.md`, conformance test `isa/test_cmpc.s`) and
-legalizing an s64 relational `G_ICMP` into the target opcode
-`G_ICMP_PAIR`: `CMP` on the low words and `CMPC` on the high, read by
-a branch, a carry read or a `SELECT_FLAGS_GPR` diamond.  Greater-than
-and less-or-equal swap their operands or step a constant (`x > -1` is
-`x >= 0`), a constant with a zero low word leaves a compare of the high
-words, and equal high words drop the `CMPC`.  A branch on `<` is now 3
-instructions, signed or unsigned; the value of `<` 5; `v < 0` and the
-truncation check 2.  In the `test-compiler` corpus at `-O2` the
-instructions drop from 380,088 to 344,334, most of it in
-`UnitTests/Float/classify.c`, a soft-float classifier (208,331 to
-174,301); the rest of the corpus drops 1.0%.  The kernel, `libc.so`
-and Doom are not remeasured.  Coverage: `icmp-i64.ll`,
-`legalize-icmp-s64.mir`, `select-icmp-pair.mir` and the execution test
-`penumbra-codegen/icmp64.c`.
-
-Left:
 - A 64-bit select, `max` and `min` among them, picks each word in its
   own diamond and repeats the compare: 9 instructions where one
   diamond takes 5.
 - An all-ones constant high word is loaded with `LLIS`, since `CMPC`
   has no immediate form.
 - s128 compares keep the generic select chain.
-- The upstream write-up above.
+- GlobalISel has no counterpart to SelectionDAG's `SETCCCARRY`
+  (`IntegerExpandSetCCOperands` in `LegalizeIntegerTypes.cpp`), which
+  is why the target needs its own opcode; that wants a `doc/llvm/`
+  write-up for upstream.
 
 ## Compiler: signed sub-word loads in relational compares miss LDBS/LDHS
 
@@ -410,36 +280,6 @@ gap, in "compare and branch selection misses immediate and TEST
 forms".  A related narrowing: `ldw r; sar r,16` with only the high
 half used is `ldhs [+2]` — SelectionDAG narrows the load, GlobalISel
 does not; 15 Doom sites, including `R_PointOnSide`.
-
-## Compiler: selectAddSubCarry misses the immediate fold — RESOLVED
-
-`selectAddSubCarry` emitted the register `ADD`/`ADC`/`SUB`/`SBC` for
-the i64 carry chain whatever the second operand was.  Every 64-bit
-counter bump — `cpu_nsyscall` on every syscall, `cpu_nintr` and the
-`evcnt` counters on every interrupt, the TCP/IP statistics — carried
-an `lli 1` for the low word and a `mov rz, zero` for the high one:
-
-```
-lli r4,1; mov r11,zero; add r4,r2; adc r3,r11
-add r2,1; adc r3,zero
-```
-
-A small i64 subtraction was worse: `sub_to_add` turns `x - 1000` into
-`x + -1000` before narrowing, giving `llis -1000; llis -1; add; adc`.
-
-The constant now goes into the instruction when a form exists that
-leaves the same result and flags: `ADDi`/`SUBi` for a uimm16 constant,
-the opposite family's immediate for a negated one, `R0` for a zero
-carry-in operand, and `R0` under the opposite opcode for an all-ones
-one.  Shape coverage: `GlobalISel/select-add-sub-carry.mir`.
-
-Measured statically on the hot-path review corpus (2026-09-13): kernel
-−1,302 instructions (`.text` −5,208 B, 37 fewer callee-saved saves),
-`libsqlite3` −450, Doom unchanged.  `syscall` −2, `intr_dispatch` −5,
-`statclock` −14, `binuptime` −2.  The copied zeros feeding an `ADC`
-went from 577 to 7 in the kernel.  Thirteen kernel functions grew, the
-largest `ip_output` by 28 of 1,578 instructions, from the allocator
-choosing differently once the constants' registers were gone.
 
 ## Compiler: redundant extension of comparison results
 
@@ -526,143 +366,20 @@ its user, and a select diamond emits its own compare beside its
 branch — so "not read before the next `SR` definition or the end of
 the block" is the whole test.
 
-## Compiler: large frame offsets write the flags unchecked — RESOLVED
+## Compiler: a wrap check used as a value pays for its materialisation
 
-`PenumbraRegisterInfo::eliminateFrameIndex` handles an offset beyond
-the 16-bit field by building `LLI; LUI; ADD` into a scavenged
-register in front of the load or store.  The `ADD` writes the flags,
-and nothing checked that they were dead there: a spill reload with a
-large offset between a compare and its branch, or inside a
-64-bit `ADD`/`ADC` carry chain, would have corrupted the flags.  It
-needs a frame over 32 KB, and no failure was known.  User code cannot
-save the flags around the `ADD` (`RDSPR` is privileged and `WRSPR SR`
-is reserved).
+Register-width wrap checks stay compares (`9a9bcc05c70a`) and a branch
+on one reuses the add's carry (`ca1d5c8e4d27`).  Left over:
 
-Resolved by forming the address ahead of the instruction that starts
-the live flag value where the flags are live at the access
-(`frame-index-flags.mir`).  Selection keeps every flag value inside
-one block and the frame base register is not written while flags are
-live, so the two cases that would defeat that — flags live into the
-block, or the base written in between — end compilation with a fatal
-error rather than miscompile (`frame-index-flags-error.mir`).  No site
-in the kernel, libc, Doom or the `test-compiler` corpus had the flags
-live, and the corpus compiles to identical code.
-
-The 43 large-frame sites in `libc.so` are all callee-saved saves and
-restores, in three functions with big local buffers (`__put_page`,
-`cdbw_output`, `allocaddrinfo`): the save slots sit at the far end of
-a frame over 32 KB, so each save and restore costs `LLI; LUI; ADD`.
-Placing them next to SP would remove that; three functions do not make
-it worth doing yet.
-
-## Compiler: countdown loop exits pay for an overflow flag — RESOLVED
-
-`do { ... } while (count--)` loops — all eight Doom column and span
-drawers — ended in eight instructions where two do:
-
-```
-lli r6,1; add r1,r6; mov r6,lr; adc r6,zero; lli r7,1; xor r6,r7; and r6,1; bne loop
-add r1,1; bne loop
-```
-
-`lr` held a zero for the whole loop, and `r7` was an extra
-callee-saved register spent on the sequence.
-
-LSR turns the down-counter into an up-counter whose exit test is
-`iv + 1 == 0`, and CodeGenPrepare rewrote that test as
-`uadd.with.overflow`.  Selection has no branch on an overflow op's
-carry, so it materialized the carry, inverted it through the
-branch-inversion `G_XOR`, masked it and tested it.
-
-`PenumbraISelLowering` now refuses the rewrite in
-`shouldFormOverflowOp` for register-width types.  The compare selects
-next to its branch, and compare elimination reuses the add's flags.
-Wider adds keep the overflow form: it narrows onto the `ADD`/`ADC`
-chain, whose last carry is the wrap, while the compare would expand
-as in "64-bit relational compares expand to select diamonds".
-Refusing both widths cost `bintime_addx` — inlined into `binuptime`,
-`nanouptime` and `microuptime` on every `clock_gettime` — 7 to 10
-instructions and extra branches.  That compare is now `CMP` + `CMPC`
-and a branch, so refusing the wider form is worth measuring again.  Branching on the carry
-from inside the selector was rejected: the instructions between the
-add and the branch are still generic there, so whether SR survives
-would have to be guessed from how they will select.  Selection
-places flag producers beside their consumers; flag reuse belongs to
-the peephole pass, which sees each instruction's real SR defs.
-Shape coverage: `wrap-check-branch.ll`.
-
-`R_DrawColumn`'s loop is 12 instructions per pixel instead of 18, and
-the function saves 3 registers instead of 4.  Together with the
-inverted-boolean fix in "compare and branch selection misses
-immediate and TEST forms", measured statically on the hot-path review
-corpus (2026-09-13):
-
-| | `.text` | callee-saved saves | carry reads (`adc x, zero`) |
-|---|---:|---:|---:|
-| Doom | −844 B | 4,664 → 4,656 | 145 → 134 |
-| kernel `GENERIC.DEBUG` | −10,144 B | 35,947 → 35,937 | 1,199 → 1,146 |
-| SQLite (PIC) | −1,544 B | 14,077 → 14,075 | 806 → 794 |
-
-A general wrap check, `a + b < a`, selects as `add; cmp sum, a; bcc`,
-and compare elimination then drops the compare: the sum is below an
-addend exactly when the add wrapped, so the add's C is the compare's
-inverted, and readers of C alone swap `BCC`/`BCS`.  On the corpus it
-fires only in the kernel, in 4 functions.  Shape coverage:
-`compare-elim.ll`.
-
-Open: a wrap check used as a value still selects as
-`cmp; mov; sbc zero; and 1` after the add, where `mov; adc zero` does.
-One site in Doom.
-
-## Compiler: a conditional add or subtract becomes a select of zero — RESOLVED
-
-`if (c) x -= k` reaches the backend as `x - select(c, 0, k)`.  The
-middle end folds the branch into a select, which pays off on a
-target with a conditional move.  Penumbra has none, so the select is
-lowered back into a branch diamond while the subtract stays
-unconditional: the common path now runs a `MOV` of zero and a `SUB`
-of it, neither of which the original branch needed.
-
-```c
-unsigned w(unsigned pos, unsigned inc, unsigned lim, unsigned k) {
-    pos += inc;
-    if (pos >= lim)
-        pos -= k;
-    return pos;
-}
-```
-
-```llvm
-%7 = select i1 %6, i32 0, i32 %3
-%8 = sub i32 %5, %7
-```
-
-becomes `mov r2, zero; cmp r1, r3; bcc .L; mov r2, r4; .L: sub r1,
-r2`, where the source asked for `cmp r1, r3; bcc .L; sub r1, r4; .L:`.
-In the audio mixer it is 2 of the 19 instructions per voice-sample:
-the loop wrap of every voice.
-
-Resolved by `penumbra_select_of_identity` in the pre-legalizer
-combiner, the GlobalISel counterpart of SelectionDAG's
-`foldSelectWithIdentityConstant`: `x op select(c, id, k)` →
-`select(c, x, x op k)` for `ADD`, `SUB`, `OR`, `XOR`, the shifts and a
-pointer offset with 0 and `AND` with -1, the select on either side of
-a commutative operation.  Machine sinking then moves `x op k` into its
-arm.  The mixer's loop wrap is `cmp; bcc; sub` with the subtract on
-the wrap path only, 17 instructions per voice-sample where it was 19
-(`test/CodeGen/Penumbra/select-of-identity.ll`).
-
-It runs before legalization on purpose.  Placed after it, it also
-reshaped the selects the legalizer expands a 64-bit shift into, and
-`fshl_i64` grew by two callee-saved spills.  `MUL` with 1 is left out:
-its selection keeps its flag definition live, so the multiply cannot
-sink into its arm and the rewrite only adds copies around it (see
-"flag definitions stay live after C++ selection").
-
-The compare-materialisation entries,
-"signed comparisons have no branchless materialisation" and "64-bit
-relational compares expand to select diamonds", are the same missing
-conditional move seen from the other side.
+- A wrap check used as a value still selects as
+  `cmp; mov; sbc zero; and 1` after the add, where `mov; adc zero`
+  does.  One site in Doom.
+- Wider adds keep CodeGenPrepare's overflow form, because the
+  compare it replaces used to expand into select diamonds.  That
+  compare is now `CMP` + `CMPC` and a branch, so refusing the wider
+  form too is worth measuring again: `bintime_addx`, inlined into
+  `binuptime`, `nanouptime` and `microuptime` on every
+  `clock_gettime`, is the site that decided it.
 
 ## Compiler: InstCombine's shift-and-mask form costs a constant
 
@@ -700,3 +417,15 @@ equivalent `F(b,c,d)` correctly gets the masked-merge form
 xor form (InstCombine's bit-select fold); find where the SHA shape
 escapes it — likely the `^` vs `|` variant or a disjoint-or rewrite
 upstream of the fold.  Worth ~4 instructions × 64 rounds per block.
+
+## Ruled out
+
+- **Callee-saved slots next to SP in frames over 32 KiB.**  The save
+  slots sit at the far end of the frame, so each save and restore in
+  such a frame costs `LLI; LUI; ADD`.  In `libc.so` that is 43 sites
+  in three functions with big local buffers (`__put_page`,
+  `cdbw_output`, `allocaddrinfo`) — not worth a frame-layout change.
+- **`MUL` by 1 in `penumbra_select_of_identity`.**  Its selection
+  keeps the multiply's flag definition live, so the multiply cannot
+  sink into its arm and the rewrite only adds copies around it (see
+  "flag definitions stay live after C++ selection").
