@@ -54,6 +54,32 @@ clamp(int v, int lo, int hi)
 	return v < lo ? lo : v > hi ? hi : v;
 }
 
+/* A command's info byte is a pair of nibbles, which the format writes
+ * as xy and most commands read as two numbers. */
+static int
+info_x(int info)
+{
+	return info >> 4;
+}
+
+static int
+info_y(int info)
+{
+	return info & 0xF;
+}
+
+/* The row Cxx breaks to, which it writes in decimal; -1 where a nibble
+ * past 9 leaves the command meaning nothing. */
+static int
+decimal_row(int info)
+{
+	int row = info_x(info) * 10 + info_y(info);
+
+	if (info_x(info) > 9 || info_y(info) > 9 || row >= S3M_ROWS)
+		return -1;
+	return row;
+}
+
 /* The period a note plays at on a sample tuned to c2spd. */
 static int
 note_period_of(int note, uint32_t c2spd)
@@ -99,7 +125,7 @@ sample_regions(const struct s3m_sample *smp, uint32_t offset,
 static void
 volume_slide(struct st3_chan *c, int info, bool first, bool fast)
 {
-	int x = info >> 4, y = info & 0xF;
+	int x = info_x(info), y = info_y(info);
 
 	if (y == 0xF && x != 0) {
 		if (first)
@@ -127,10 +153,10 @@ porta(struct st3_chan *c, int info, bool first, bool down)
 	if (c->period == 0)
 		return;
 	if (first) {
-		if ((info >> 4) == 0xF)
-			by = (info & 0xF) * 4;
-		else if ((info >> 4) == 0xE)
-			by = info & 0xF;
+		if (info_x(info) == 0xF)
+			by = info_y(info) * 4;
+		else if (info_x(info) == 0xE)
+			by = info_y(info);
 		else
 			return;
 	} else {
@@ -140,6 +166,70 @@ porta(struct st3_chan *c, int info, bool first, bool down)
 	}
 	c->period = clamp(c->period + (down ? by : -by), 0, PERIOD_MAX);
 	c->out_period = c->period;
+}
+
+/* A note so many semitones above another, carrying into the octave. */
+static int
+note_above(int note, int semitones)
+{
+	int semitone = (note & 0xF) + semitones;
+
+	return ((note >> 4) + semitone / NOTES) << 4 | semitone % NOTES;
+}
+
+/* Gxx: four period units a tick toward the note beside it, stopping
+ * there. */
+static void
+tone_porta(struct st3_chan *c)
+{
+	int by = c->porta_speed * 4;
+
+	if (c->period == 0 || c->porta_target == 0)
+		return;
+	if (c->period < c->porta_target) {
+		c->period += by;
+		if (c->period > c->porta_target)
+			c->period = c->porta_target;
+	} else if (c->period > c->porta_target) {
+		c->period -= by;
+		if (c->period < c->porta_target)
+			c->period = c->porta_target;
+	}
+	c->out_period = c->period;
+}
+
+/*
+ * Jxy: the note, then x and y semitones above it, a tick each in turn.
+ * The channel's own period is left where it was, so only this tick's
+ * sounds arpeggiated.
+ */
+static void
+arpeggio(struct replay *r, struct st3_chan *c, int info)
+{
+	const struct s3m *m = &r->song->s3m;
+	int step = r->tick % 3, semitones;
+
+	if (c->sample == 0 || c->period == 0)
+		return;
+	semitones = step == 0 ? 0 : step == 1 ? info_x(info) : info_y(info);
+	c->out_period = note_period_of(note_above(c->note, semitones),
+	    m->sample[c->sample].c2spd);
+}
+
+/* Ixy: sounding for x + 1 ticks, silent for y + 1, counting on from
+ * where the row before left it. */
+static void
+tremor(struct st3_chan *c, int info)
+{
+	int ticks = c->tremor_off ? info_y(info) + 1 : info_x(info) + 1;
+
+	if (c->tremor_count >= ticks) {
+		c->tremor_off = !c->tremor_off;
+		c->tremor_count = 0;
+	}
+	c->tremor_count++;
+	if (c->tremor_off)
+		c->out_volume = 0;
 }
 
 /* Hxy: the waveform moves the period by depth 32nds of its own scale,
@@ -181,15 +271,98 @@ retrig_volume(int volume, int x)
 static void
 retrigger(struct st3_chan *c, struct replay_voice *v, int info)
 {
-	int y = info & 0xF;
+	int y = info_y(info);
 
 	if (y == 0 || ++c->retrig_count < y)
 		return;
 	c->retrig_count = 0;
-	c->volume = clamp(retrig_volume(c->volume, info >> 4), 0, 63);
+	c->volume = clamp(retrig_volume(c->volume, info_x(info)), 0, 63);
 	c->out_volume = c->volume;
 	c->trigger_offset = 0;
 	v->trigger = true;
+}
+
+/*
+ * SBx: the loop is the song's rather than a channel's, so one row and
+ * one count serve them all.  SB0 marks the row to come back to; SBx
+ * comes back x times, and once it has, the row after it begins the
+ * next loop.
+ */
+static void
+pattern_loop(struct replay *r, int times)
+{
+	struct st3_state *st = &r->st3;
+
+	if (times == 0) {
+		st->loop_row = r->row;
+		return;
+	}
+	if (st->loop_count == 0)
+		st->loop_count = times;
+	else
+		st->loop_count--;
+	if (st->loop_count != 0)
+		r->loop_to = st->loop_row;
+	else
+		st->loop_row = r->row + 1;
+}
+
+/*
+ * What a row's note, instrument and volume do to a channel, which a
+ * note held by Sxy with x of D does later rather than now.
+ *
+ * An instrument of its own starts nothing: it leaves its own volume and
+ * plays from the sample's start.  A note beside a portamento says where
+ * to slide to rather than starting there, unless there is nothing
+ * playing to slide.
+ */
+static void
+take_note(struct replay *r, struct st3_chan *c, struct replay_voice *v,
+    int note, int instrument, int volume)
+{
+	const struct s3m *m = &r->song->s3m;
+	bool porta = c->command == CMD('G') || c->command == CMD('L');
+	int period;
+
+	if (instrument != 0 && instrument <= m->nsamples) {
+		c->sample = instrument;
+		c->volume = clamp(m->sample[instrument].volume, 0, 63);
+		c->offset_memory = 0;
+	}
+	/* Oxx keeps a memory of its own, and the start it names belongs
+	 * to a note on its own row, whichever instrument that names. */
+	if (c->command == CMD('O') && c->info != 0)
+		c->offset_memory = c->info;
+	if (volume != S3M_VOLUME_NONE && c->sample != 0)
+		c->volume = clamp(volume, 0, 63);
+
+	if (note == S3M_NOTE_CUT) {
+		/* What was playing stops, and a note needs an instrument
+		 * named with it to sound again. */
+		c->cut = true;
+		c->volume = 0;
+		v->trigger = true;
+	} else if (note != S3M_NOTE_NONE && c->sample != 0 &&
+	    (!c->cut || instrument != 0)) {
+		c->note = note;
+		period = note_period_of(note, m->sample[c->sample].c2spd);
+		if (porta && !c->cut && c->period != 0) {
+			c->porta_target = period;
+		} else {
+			c->cut = false;
+			c->period = period;
+			c->porta_target = period;
+			c->vib_pos = 0;
+			c->trigger_offset =
+			    (uint32_t)c->offset_memory * 256;
+			v->trigger = true;
+		}
+	}
+
+	/* A note taken on a later tick, as a held one is, has to be this
+	 * tick's sound and not the one before it. */
+	c->out_period = c->period;
+	c->out_volume = c->volume;
 }
 
 /* The effects that act once, on a row's first tick. */
@@ -197,23 +370,26 @@ static void
 row_effect(struct replay *r, struct st3_chan *c, struct replay_voice *v)
 {
 	const struct s3m *m = &r->song->s3m;
+	/*
+	 * The commands that share a memory read it where their own info
+	 * is 00; the song's own — its speed, its tempo and where it goes
+	 * next — have no memory to read, so 00 is theirs to mean.
+	 */
 	int info = c->info != 0 ? c->info : c->memory;
-	int x = info >> 4, y = info & 0xF;
+	int x = info_x(info), y = info_y(info);
 
 	switch (c->command) {
 	case CMD('A'):
-		if (info != 0)
-			r->speed = info;
+		if (c->info != 0)
+			r->speed = c->info;
 		break;
 	case CMD('B'):
 		/* A jump names an order by its place in the file. */
-		r->jump_order = m->order_of[info];
+		r->jump_order = m->order_of[c->info];
 		break;
 	case CMD('C'):
-		/* The row is written in decimal, and a nibble past 9
-		 * leaves the command meaning nothing. */
-		if (x <= 9 && y <= 9 && x * 10 + y < S3M_ROWS)
-			r->break_row = x * 10 + y;
+		if (decimal_row(c->info) >= 0)
+			r->break_row = decimal_row(c->info);
 		break;
 	case CMD('D'):
 		volume_slide(c, info, true, s3m_fast_slides(m));
@@ -224,11 +400,24 @@ row_effect(struct replay *r, struct st3_chan *c, struct replay_voice *v)
 	case CMD('F'):
 		porta(c, info, true, false);
 		break;
+	case CMD('G'):
+		/* Gxx keeps a speed of its own, apart from the memory the
+		 * rest of the commands share; Lxx slides at that speed
+		 * while its own info slides the volume. */
+		if (c->info != 0)
+			c->porta_speed = c->info;
+		break;
 	case CMD('H'):
 		if (x != 0)
 			c->vib_speed = x;
 		if (y != 0)
 			c->vib_depth = y;
+		break;
+	case CMD('I'):
+		tremor(c, info);
+		break;
+	case CMD('J'):
+		arpeggio(r, c, info);
 		break;
 	case CMD('Q'):
 		retrigger(c, v, info);
@@ -236,11 +425,13 @@ row_effect(struct replay *r, struct st3_chan *c, struct replay_voice *v)
 	case CMD('S'):
 		if (x == 0x8)
 			c->place = y;
+		else if (x == 0xB)
+			pattern_loop(r, y);
 		break;
 	case CMD('T'):
 		/* Scream Tracker passes over a tempo it cannot run at. */
-		if (info > 0x20)
-			r->bpm = info;
+		if (c->info > 0x20)
+			r->bpm = c->info;
 		break;
 	}
 }
@@ -265,11 +456,40 @@ tick_effect(struct replay *r, struct st3_chan *c, struct replay_voice *v)
 	case CMD('F'):
 		porta(c, info, false, false);
 		break;
+	case CMD('G'):
+		tone_porta(c);
+		break;
 	case CMD('H'):
 		vibrato(c);
 		break;
+	case CMD('I'):
+		tremor(c, info);
+		break;
+	case CMD('J'):
+		arpeggio(r, c, info);
+		break;
+	case CMD('K'):
+		/* A vibrato at the speed and depth Hxy left, with the
+		 * info sliding the volume; neither moves on the row's
+		 * first tick. */
+		vibrato(c);
+		volume_slide(c, info, false, s3m_fast_slides(m));
+		break;
+	case CMD('L'):
+		tone_porta(c);
+		volume_slide(c, info, false, s3m_fast_slides(m));
+		break;
 	case CMD('Q'):
 		retrigger(c, v, info);
+		break;
+	case CMD('S'):
+		/* A note held by Sxy with x of D starts on tick y. */
+		if (info_x(info) == 0xD && c->delay != 0 &&
+		    r->tick == c->delay) {
+			take_note(r, c, v, c->hold_note, c->hold_instrument,
+			    c->hold_volume);
+			c->delay = 0;
+		}
 		break;
 	}
 }
@@ -282,6 +502,12 @@ row_start(struct replay *r, struct replay_tick *t)
 	const struct s3m *m = &r->song->s3m;
 	int pattern = r->song->order[r->order];
 	int ch;
+
+	/* A loop belongs to the order its rows are in. */
+	if (r->order != r->st3.last_order) {
+		r->st3.last_order = r->order;
+		r->st3.loop_row = 0;
+	}
 
 	for (ch = 0; ch < m->channels; ch++) {
 		const struct s3m_cell *cell = s3m_cell(m, pattern, r->row, ch);
@@ -298,40 +524,17 @@ row_start(struct replay *r, struct replay_tick *t)
 		 * nothing or slides the volume. */
 		if (cell->command == 0 || cell->command == CMD('D'))
 			c->retrig_count = 0;
-		if (cell->instrument != 0 && cell->instrument <= m->nsamples) {
-			const struct s3m_sample *smp =
-			    &m->sample[cell->instrument];
 
-			/* An instrument of its own starts nothing: it
-			 * leaves its volume, and plays from the start. */
-			c->sample = cell->instrument;
-			c->volume = clamp(smp->volume, 0, 63);
-			c->offset_memory = 0;
-		}
-		/* Oxx keeps a memory of its own, and the start it names
-		 * belongs to a note on its own row, whichever instrument
-		 * that note names. */
-		if (cell->command == CMD('O') && cell->info != 0)
-			c->offset_memory = cell->info;
-		if (cell->volume != S3M_VOLUME_NONE && c->sample != 0)
-			c->volume = clamp(cell->volume, 0, 63);
-
-		if (cell->note == S3M_NOTE_CUT) {
-			/* What was playing stops, and a note needs an
-			 * instrument named with it to sound again. */
-			c->cut = true;
-			c->volume = 0;
-			v->trigger = true;
-		} else if (cell->note != S3M_NOTE_NONE && c->sample != 0 &&
-		    (!c->cut || cell->instrument != 0)) {
-			c->cut = false;
-			c->note = cell->note;
-			c->period = note_period_of(cell->note,
-			    m->sample[c->sample].c2spd);
-			c->vib_pos = 0;
-			c->trigger_offset = (uint32_t)c->offset_memory * 256;
-			v->trigger = true;
-		}
+		if (cell->command == CMD('S') && info_x(cell->info) == 0xD) {
+			/* The row's note waits, and the instrument and
+			 * volume beside it wait with it. */
+			c->delay = info_y(cell->info);
+			c->hold_note = cell->note;
+			c->hold_instrument = cell->instrument;
+			c->hold_volume = cell->volume;
+		} else
+			take_note(r, c, v, cell->note, cell->instrument,
+			    cell->volume);
 
 		c->out_period = c->period;
 		c->out_volume = c->volume;
@@ -375,8 +578,11 @@ st3_play(struct replay *r, struct replay_tick *t, bool row)
 		v->instrument = c->sample;
 		v->period = c->out_period == 0 ? 0 :
 		    clamp(c->out_period, PERIOD_MIN, PERIOD_MAX);
-		/* The song's own volume scales every voice. */
-		v->volume = c->out_volume * r->st3.global_volume / 64;
+		/* The song's own volume and the file's master volume both
+		 * scale every voice, 0x40 being the level a song is
+		 * written for. */
+		v->volume = c->out_volume * r->st3.global_volume *
+		    m->master_volume / (64 * 64);
 		v->pan = s3m_pan(c->place);
 		/* A start while the channel is cut plays nothing, which
 		 * is how a voice falls silent. */
@@ -390,20 +596,19 @@ st3_play(struct replay *r, struct replay_tick *t, bool row)
 
 /* By command letter; the ones modplay plays are left out. */
 static const char *const command_name[27] = {
-	NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-	"G tone portamento", NULL, "I tremor", "J arpeggio",
-	"K vibrato with volume slide", "L portamento with volume slide",
-	NULL, NULL, NULL, "P panning slide", NULL, "R tremolo", NULL, NULL,
-	"U fine vibrato", "V global volume", "W channel volume",
-	"X panning", "Y panbrello", "Z macro",
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+	NULL, NULL, "M channel volume", "N channel volume slide", NULL,
+	"P panning slide", NULL, "R tremolo", NULL, NULL, "U fine vibrato",
+	"V global volume", "W global volume slide", "X panning",
+	"Y panbrello", "Z macro",
 };
 
 /* By the high nibble of an Sxy; S8 panning is played. */
 static const char *const special_name[16] = {
 	"S0 filter", "S1 glissando", "S2 finetune", "S3 vibrato waveform",
 	"S4 tremolo waveform", "S5", "S6", "S7", NULL, "S9",
-	"SA stereo control", "SB pattern loop", "SC note cut",
-	"SD note delay", "SE pattern delay", "SF funk repeat",
+	"SA stereo control", NULL, "SC note cut", NULL,
+	"SE pattern delay", "SF funk repeat",
 };
 
 const char *
@@ -433,7 +638,7 @@ st3_unsupported(const struct song *song)
 				if (cell->command > 26)
 					continue;
 				if (cell->command == CMD('S'))
-					specials |= 1U << (cell->info >> 4);
+					specials |= 1U << info_x(cell->info);
 				else if (command_name[cell->command] != NULL)
 					commands |= 1U << cell->command;
 			}

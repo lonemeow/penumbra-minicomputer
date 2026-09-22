@@ -223,7 +223,7 @@ static int nsnaps;
 /* A module of two orders, each row of the first putting one of Scream
  * Tracker's own ways to the replayer. */
 static const char *
-build_replay(struct song *song, bool fast_slides)
+build_replay(struct song *song, bool fast_slides, int master)
 {
 	static const struct cell rows[] = {
 	    /* A note of its own, at the instrument's volume. */
@@ -244,9 +244,24 @@ build_replay(struct song *song, bool fast_slides)
 	    { 8, 0, NONE, 0, NONE, 17, 0x42 },
 	    { 9, 0, NONE, 0, NONE, 19, 0x85 },	/* S8: pan */
 	    { 10, 0, NONE, 0, NONE, 20, 0x80 },	/* T: tempo 128 */
-	    /* A tempo too low to run, and a break to row 10 in decimal. */
-	    { 11, 1, NONE, 0, NONE, 20, 0x20 },
-	    { 11, 0, NONE, 0, NONE, 3, 0x10 },
+	    { 11, 1, NONE, 0, NONE, 20, 0x20 },	/* a tempo too low to run */
+	    /* A vibrato to set the speed and depth Kxy carries on with. */
+	    { 12, 0, NONE, 0, NONE, 8, 0x83 },
+	    /* An octave up, slid to rather than started, then carried on
+	     * at the speed Gxx remembers. */
+	    { 13, 0, 0x50, 1, NONE, 7, 0x04 },
+	    { 14, 0, NONE, 0, NONE, 7, 0x00 },
+	    { 15, 0, 0x40, 1, NONE, 10, 0x37 },	/* J: an arpeggio */
+	    { 16, 0, NONE, 0, NONE, 11, 0x05 },	/* K: vibrato and a slide */
+	    { 17, 0, 0x50, 1, NONE, 12, 0x02 },	/* L: portamento and a slide */
+	    { 18, 0, 0x40, 1, NONE, 19, 0xD3 },	/* SD: a note held to tick 3 */
+	    { 19, 0, 0x40, 1, NONE, 19, 0xD0 },	/* ... and one held for ever */
+	    { 20, 0, NONE, 0, NONE, 9, 0x31 },	/* I: sounding, then silent */
+	    /* A section played three times over. */
+	    { 22, 0, NONE, 0, NONE, 19, 0xB0 },
+	    { 24, 0, NONE, 0, NONE, 19, 0xB2 },
+	    /* A break to row 10 of the next order, written in decimal. */
+	    { 40, 0, NONE, 0, NONE, 3, 0x10 },
 	};
 	static const struct cell back[] = {
 	    { 10, 0, NONE, 0, NONE, 2, 0x00 },	/* B: back to the first order */
@@ -270,7 +285,7 @@ build_replay(struct song *song, bool fast_slides)
 	image[0x30] = 64;
 	image[0x31] = 6;
 	image[0x32] = 125;
-	image[0x33] = 0x80 | 64;
+	image[0x33] = (uint8_t)(0x80 | master);
 	memset(&image[0x40], 255, 32);
 	for (i = 0; i < sizeof(settings); i++)
 		image[0x40 + i] = settings[i];
@@ -329,9 +344,9 @@ replay_cases(void)
 {
 	struct song song;
 	const char *error;
-	int i;
+	int i, n;
 
-	if ((error = build_replay(&song, true)) != NULL) {
+	if ((error = build_replay(&song, true, 64)) != NULL) {
 		printf("FAIL the replay module does not parse: %s\n", error);
 		failures++;
 		return;
@@ -379,9 +394,51 @@ replay_cases(void)
 	check(at(0, 10, 0)->bpm == 128 && at(0, 11, 0)->bpm == 128,
 	    "Txx sets the tempo, and one too low to run is passed over");
 
+	check(!at(0, 13, 0)->voice.trigger &&
+	    at(0, 13, 0)->voice.period == 1712 &&
+	    at(0, 13, 5)->voice.period == 1712 - 5 * 4 * 4,
+	    "a note beside Gxx is slid to rather than started, four period "
+	    "units a tick");
+	check(at(0, 14, 5)->voice.period == 1712 - 10 * 4 * 4,
+	    "... and Gxx with no info of its own carries on at that speed");
+	check(at(0, 15, 0)->voice.period == 1712 &&
+	    at(0, 15, 1)->voice.period == 1440 &&
+	    at(0, 15, 2)->voice.period == 1140 &&
+	    at(0, 15, 3)->voice.period == 1712,
+	    "Jxy sounds the note and x and y semitones above it, in turn");
+	check(at(0, 16, 0)->voice.volume == 40 &&
+	    at(0, 16, 5)->voice.volume == 40 - 5 * 5 &&
+	    at(0, 16, 3)->voice.period != at(0, 16, 3)->voice.period % 1712,
+	    "Kxy slides the volume and carries the vibrato on, from the "
+	    "row's second tick");
+	/* The instrument beside the note leaves its own volume, even
+	 * where the note only says where to slide. */
+	check(at(0, 17, 5)->voice.period == 1712 - 5 * 4 * 4 &&
+	    at(0, 17, 5)->voice.volume == 40 - 5 * 2,
+	    "Lxy slides the volume while the portamento runs");
+	check(!at(0, 18, 0)->voice.trigger && !at(0, 18, 2)->voice.trigger &&
+	    at(0, 18, 3)->voice.trigger && at(0, 18, 3)->voice.volume == 40,
+	    "a note held by SDx starts on tick x, with what was beside it");
+	check(!at(0, 19, 0)->voice.trigger && !at(0, 19, 3)->voice.trigger &&
+	    !at(0, 19, 5)->voice.trigger,
+	    "... and SD0 holds it for ever");
+	check(at(0, 20, 0)->voice.volume != 0 &&
+	    at(0, 20, 3)->voice.volume != 0 &&
+	    at(0, 20, 4)->voice.volume == 0 &&
+	    at(0, 20, 5)->voice.volume == 0,
+	    "Ixy sounds for x + 1 ticks and falls silent for y + 1");
+
+	n = 0;
+	for (i = 0; i < nsnaps; i++)
+		if (snaps[i].order == 0 && snaps[i].row == 23 &&
+		    snaps[i].tick == 0)
+			n++;
+	check(n == 3, "SBx plays its section over, the song's loop rather "
+	    "than a channel's");
+
 	/* Cxx breaks to a row written in decimal, so 0x10 is row ten. */
 	for (i = 0; i < nsnaps - 1; i++)
-		if (snaps[i].order == 0 && snaps[i].row == 11 &&
+		if (snaps[i].order == 0 && snaps[i].row == 40 &&
 		    snaps[i].tick == 5)
 			break;
 	check(i < nsnaps - 1 && snaps[i + 1].order == 1 &&
@@ -393,7 +450,7 @@ replay_cases(void)
 
 	song_free(&song);
 
-	if ((error = build_replay(&song, false)) != NULL) {
+	if ((error = build_replay(&song, false, 64)) != NULL) {
 		printf("FAIL the replay module does not parse: %s\n", error);
 		failures++;
 		return;
@@ -402,6 +459,18 @@ replay_cases(void)
 	check(at(0, 1, 0)->voice.volume == 60 && at(0, 1, 5)->voice.volume == 50,
 	    "without the ST3.00 flag, a volume slide waits for the row's "
 	    "second tick");
+	song_free(&song);
+
+	/* A master volume below the 0x40 a song is written for turns the
+	 * whole mix down. */
+	if ((error = build_replay(&song, true, 48)) != NULL) {
+		printf("FAIL the replay module does not parse: %s\n", error);
+		failures++;
+		return;
+	}
+	run(&song);
+	check(at(0, 0, 0)->voice.volume == 40 * 48 / 64,
+	    "the file's master volume scales every voice");
 	song_free(&song);
 }
 

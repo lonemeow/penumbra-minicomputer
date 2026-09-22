@@ -415,7 +415,11 @@ s3m_parse(struct song *song, const uint8_t *buf, size_t len)
 	m->flags = (int)le16(buf + OFF_FLAGS);
 	m->cwt = (int)le16(buf + OFF_CWT);
 	m->global_volume = buf[OFF_GLOBAL_VOL] > 64 ? 64 : buf[OFF_GLOBAL_VOL];
+	/* Scream Tracker's own mixing takes a master volume below 16 as
+	 * 16, and 0x40 as the level a song is written for. */
 	m->master_volume = buf[OFF_MASTER_VOL] & 0x7F;
+	if (m->master_volume < 16)
+		m->master_volume = 16;
 	/* Scream Tracker's own fallbacks for a header that asks for
 	 * neither a speed nor a tempo it can run at. */
 	m->speed = buf[OFF_SPEED] == 0 || buf[OFF_SPEED] == 255 ? 6 :

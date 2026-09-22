@@ -108,8 +108,16 @@ struct st3_chan {
 	uint8_t		command, info;	/* this row's */
 	int		memory;		/* the info most commands share */
 	int		offset_memory;	/* Oxx keeps its own */
+	int		porta_target;	/* period Gxx slides toward */
+	int		porta_speed;	/* and how fast, which Gxx keeps */
 	int		vib_speed, vib_depth, vib_pos;
 	int		retrig_count;	/* ticks Qxy has counted */
+	int		tremor_count;	/* ticks Ixy has held this phase */
+	bool		tremor_off;	/* which phase that is */
+
+	/* A note Sxy with x of D holds until tick `delay`. */
+	int		delay;
+	uint8_t		hold_note, hold_instrument, hold_volume;
 	bool		cut;		/* ^^ stopped it: a note needs an
 					 * instrument named with it to sound */
 	uint32_t	trigger_offset;	/* where this tick's start plays from */
@@ -118,6 +126,12 @@ struct st3_chan {
 struct st3_state {
 	struct st3_chan	chan[S3M_CHANNELS];
 	int		global_volume;	/* 0..64, scaling every voice */
+
+	/* SBx loops the song's rows, not a channel's, so one row and one
+	 * count serve every channel. */
+	int		loop_row;
+	int		loop_count;
+	int		last_order;	/* to start a new one's loop at row 0 */
 };
 
 /* Where a pan of 0 to 15 leaves a voice, on the tick's scale. */
