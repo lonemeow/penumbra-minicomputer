@@ -7,7 +7,10 @@
  * is for: a step too small to show as a whole number still moves the
  * value, and forming that step cannot overflow on the way.  Both are
  * checked at the extremes a ProTracker module actually reaches, since
- * a tick is as short as 2.5 s / 255 bpm.
+ * a tick is as short as 2.5 s / 255 bpm.  32.32 is for counts past
+ * 16.16's whole part, such as a position in a long sample, so what is
+ * checked there is that such a count keeps its fraction and rounds as
+ * 16.16 does, and that its operations reach both ends of the range.
  */
 
 #include <stdbool.h>
@@ -102,6 +105,23 @@ main(void)
 	check(fix16_clamp(-1, 0, full) == 0 && fix16_clamp(full + 1, 0, full)
 	    == full && fix16_clamp(FIX16_ONE, 0, full) == FIX16_ONE,
 	    "clamping holds a value between its ends");
+
+	/* A ProTracker sample runs to 131070 bytes, past 16.16's reach. */
+	check(fix32_to_int(fix32_from_int(131070) + FIX32_ONE / 4) == 131070 &&
+	    fix32_frac(fix32_from_int(131070) + FIX32_ONE / 4) ==
+	    FIX32_ONE / 4,
+	    "32.32: a count past 16.16's whole part keeps its fraction");
+	check(fix32_to_int(-1) == -1 && fix32_frac(-1) == FIX32_ONE - 1 &&
+	    fix32_ratio(-1, 3) == -1431655766 &&
+	    fix32_div_int(fix32_from_int(-1), 3) == -1431655766,
+	    "32.32: a negative value rounds down, as 16.16's do");
+	check(fix32_div_int(fix32_ratio(3, 1), 4) == 3 * (FIX32_ONE / 4),
+	    "32.32: dividing keeps the scale");
+	check(fix32_ratio(INT32_MAX, 1) == fix32_from_int(INT32_MAX) &&
+	    fix32_ratio(INT32_MIN, 1) == fix32_from_int(INT32_MIN) &&
+	    fix32_ratio(1, UINT32_MAX) == 1,
+	    "32.32: a ratio forms without overflow at both ends of the "
+	    "range, and down to its finest step");
 
 	printf("\n%s: %d failure(s)\n", failures ? "FAILED" : "PASSED",
 	    failures);
