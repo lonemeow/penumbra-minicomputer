@@ -3326,6 +3326,59 @@ None of these produce wrong code.
 - **-O0 keeps most constant multiplies.**  No post-legalizer combiner
   runs at -O0, so beyond upstream's power-of-two and -1 rules a constant
   multiply — `x * 3`, even `x * 0` — is a hardware `MUL` there.
+- **A 64-bit multiply by a constant keeps a hardware multiply.**  The
+  legalizer splits an s64 `G_MUL` by a 32-bit constant `C` into
+  partial products: a `G_MUL` and a `G_UMULH` of the low word and `C`,
+  and a `G_MUL` of the high word (`C`'s zero high word folds its
+  terms).  `penumbra_mul_to_mul_lohi` fuses the low pair into one
+  `MULU_P`, and `matchMulByConst` leaves a multiply with a `G_UMULH`
+  sibling alone for that reason, so only the high word decomposes.
+  `x * 10` on a `uint64_t`, at every tuning:
+
+  ```
+  lli  r3, 10
+  mulu r1, r3, r3          ; low word, and its carry into the high word
+  mov  r4, r2
+  shl  r4, 2
+  add  r2, r4
+  shl  r2, 1               ; high word * 10
+  add  r2, r3
+  ```
+
+  penumbra1 pays its 37-cycle multiply where the 32-bit `x * 10` is
+  four ALU instructions.  Writing `x + (x << 1)` in the source does
+  not avoid it: InstCombine turns it back into `x * 3`.  Found in the
+  audio-mixing review; reach unmeasured.
+
+  The `G_UMULH` half has no 32-bit decomposition, since the carries
+  out of the low word's shifted terms are its input, so the product
+  has to decompose whole before the legalizer splits it: a
+  pre-legalizer rule, where the s64 `G_MUL` still exists, building s64
+  `G_SHL`/`G_ADD`/`G_SUB` for the legalizer to narrow.
+  `MulDecomposer` prices its steps in 32-bit instructions (2 for a
+  shift and add, 3 with a copy) and needs them per width.  At 64 bits
+  an add or subtract is 2 (`ADD`/`ADC`), a copy 2, a shift by one 2
+  (`ADD`/`ADC` of itself), by two 4, and by more 5
+  (`mov t, lo; shr t, 32−n; shl hi, n; or hi, t; shl lo, n`).  The
+  sequence competes with `LLI` (+`LUI`), the `MULU`, the high word's
+  own product (decomposed or `MUL`, as the 32-bit rule decides) and
+  an `ADD`, at `isMulDecompositionCheaper`'s rate:
+
+  | `uint64_t` product | Now | Decomposed | penumbra1 cycles | penumbra2_5 cycles |
+  |---|---:|---:|---:|---:|
+  | `x * 3` | 6, one `MULU` | 6 | 47 → 12 | 15 → 6 |
+  | `x * 10` | 7, one `MULU` | 10 | 49 → 20 | 16 → 10 |
+  | `(uint64_t)u * 10`, `u` 32-bit | 2, one `MULU` | 8 | 39 → 16 | 11 → 8 |
+
+  The last pays only on penumbra1: six added instructions save
+  penumbra2_5 three cycles.  Planning it needs the high word known
+  zero (a `G_ZEXT` operand), where a shifted term's high word is one
+  `SHR` of the low word and an add's is `ADC` of zero.
+
+  The shift-by-one step is a gap on its own: an s64 `x << 1` is six
+  instructions today (`mov; shl; shl; shr 31; or; mov`) where
+  `add lo, lo; adc hi, hi` does it, so the rule or a custom s64
+  `G_SHL` legalization should emit it as `G_UADDO`/`G_UADDE`.
 - **One divide answer per type.**  `isIntDivCheap()` sees neither the
   opcode, the signedness nor the constant, so it prices every divide and
   remainder as the costlier remainder shape.  With today's cost points
