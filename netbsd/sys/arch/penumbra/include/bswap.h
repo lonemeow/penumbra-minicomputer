@@ -3,6 +3,9 @@
 #ifndef _PENUMBRA_BSWAP_H_
 #define _PENUMBRA_BSWAP_H_
 
+/*
+ * <machine/...>, not <penumbra/...>: stand builds alias only machine/.
+ */
 #ifndef _LOCORE
 #include <machine/byte_swap.h>
 #endif

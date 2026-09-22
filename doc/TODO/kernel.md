@@ -276,24 +276,6 @@ signal machinery, wait reaping.  Without forking the upstream
 NetBSD tree, that's the floor we can't drop below.  Even an
 arbitrarily-good MD layer can only halve the 670 ms or so.
 
-## RESOLVED: "uncached MMIO STW 2.4× slower than LDW" was codegen, not hardware
-
-The hardware write path is symmetric — RTL-sim microbenches put a
-single uncached STW and LDW at the same ~4 cyc/op.  The observed 2.4×
-came from `-fno-strict-aliasing` (kernel-wide, `Makefile.kern.inc`):
-with TBAA off the compiler can't prove a volatile MMIO store doesn't
-alias the in-memory `bus_space_handle_t sc_ioh`, so it reloaded the
-handle before every write — 3 instructions per "STW" vs 1 per LDW,
-3:1 ≈ the observed 2.4×.  Do not re-investigate as a hardware
-write-path asymmetry.
-
-`pmci_burst` now uses the canonical `bus_space_{write,read,set}_multi_1`
-primitives (handle passed by value → base pinned in a register, immune
-to the reload; committed as `9ddfcf4aa941`).  Perf-neutral by design —
-per-byte cost is dominated by the MMIO store latency, and the idiomatic
-m68k flat-MMIO ports reach the same rolled-loop conclusion — the value
-is idiom and immunity to the reload.
-
 ## Kernel: source-level costs on the trap, syscall and driver paths
 
 Found in the hot-path code review (2026-09-13); none of these is a
@@ -447,69 +429,6 @@ built takes 1,404,402 misses over the 149 frames:
   is unreliable: it invalidates a whole 16 KB entry whenever the
   kernel invalidates any 4 KB page inside it, so what superpages would
   buy is still unknown.
-
-## Kernel/compiler: dedicate R12 (TP) to curlwp — DONE
-
-The ABI reserves R12 as the thread pointer, and the kernel uses no TLS,
-so R12 sits unused in kernel code.  Pinning `curlwp` there — the way the
-NetBSD RISC-V port pins it in `tp` via
-`register struct lwp *riscv_curlwp __asm("tp")` — turns every `curlwp`
-read from a load of `cpu_info_store.ci_curlwp` into a register read.  It
-costs no register pressure: R12 is already reserved, so the allocatable
-set does not change.
-
-### Compiler support — DONE
-
-Two pieces, both landed:
-
-- `register T x __asm("r12")` works end to end (`ff46f87450d8`):
-  `getRegisterByName` resolves the canonical name and the ABI aliases,
-  the GlobalISel legalizer lowers `G_READ_REGISTER` /
-  `G_WRITE_REGISTER` to a COPY to/from the physical register, and
-  naming an allocatable or unknown register is a fatal error.  clang
-  already lists `r12` in `GCCRegNames`.
-- The across-call spill problem is fixed (`32937b8bf9d7`): R12 is now a
-  *member* of `GPR_Allocatable` (listed last, still excluded from
-  allocation by `getReservedRegs` — the RISC-V `tp` idiom), so the
-  register coalescer substitutes R12 into cross-call `%v = COPY $r12`
-  values and each use gets a fresh `mov rX, r12` instead of a
-  callee-saved copy or stack spill.
-
-### Kernel wiring — DONE (`b625d49e43af`)
-
-curlwp is read from R12, scoped to `_KERNEL` in `cpu.h` (`_KMEMUSER`
-keeps the memory-load macro so libkvm consumers are unaffected).  Four
-boundaries keep R12 == curlwp whenever kernel C runs:
-
-1. `locore.S` sets R12 = `&lwp0` before the first C call at boot.
-2. `cpu_switchto` already saved/restored R12 via `pcb_context` (like
-   SP/LR), so it threads across voluntary switches unchanged; it also
-   already writes `ci_curlwp`.  No change was needed there — the
-   originally-planned "additionally set R12 = newlwp" is redundant.
-3. `cpu_lwp_fork` seeds the child's `pcb_context` R12 slot — the
-   `*pcb2 = *pcb1` copy would otherwise leave the parent lwp there.
-4. `_trap_common` reloads R12 from `cpu_info_store` after the trapframe
-   save, before running C.  A userland trap arrives with R12 holding the
-   user TLS pointer, which the trapframe save/restore preserves; the
-   reload is unconditional (correct from both entry modes, cheaper than
-   branching).
-
-`cpu_info_store.ci_curlwp` stays the canonical copy — the trap-entry
-reload and any cross-lwp reads still consult it.
-
-### Measured benefit
-
-A `curlwp->field` access drops from `lli`+`lui`+`ldw`+`ldw` (4) to a
-single `ldw [r12+off]` — the load takes R12 as its base directly, so it
-is 4→1, better than the 4→2 originally estimated — and survives calls
-for free (R12 reserved).  Same-session pbench A/B on the ULX3S (min;
-identical clang and rootfs, only the kernel source differing, libc rows
-flat to confirm isolation): `getpid` 122.49→118.53 µs (−3.2%),
-`clock_gettime` 227.33→197.90 µs (−12.9%, with much lower variance).
-fork/`pipe_pingpong` are within noise — curlwp is a negligible fraction
-of their millisecond-scale cost, and their swings track 1 KB
-direct-mapped I-cache layout (the kernel is 8 KB smaller), not this
-change.
 
 ## Kernel: networking — first NIC through the USB host controller
 
@@ -756,77 +675,6 @@ At run time that check is the whole cost; the real cost is risk.  The
 dispatch sits on the trap-exit path, under the vector-page epilogue
 rules, and mistakes there show up as hangs rather than panics.
 
-## Kernel: interlocked atomics are not atomic against interrupts (RESOLVED)
-
-`common/lib/libc/arch/penumbra/atomic/atomic_cas.S` is a bare
-load-compare-store, and every interlocked name resolves to it —
-`atomic_cas_32`, `_uint`, `_ulong` and `_ptr` alongside their `_ni`
-forms.  atomic_ops(9) promises the interlocked forms are atomic against
-a handler on the same CPU, and everything built on the CAS
-(`atomic_inc_32_cas.c` and its siblings) inherits what it gets.
-Userland restarted the sequence through `rasctl(2)` and `userret()`;
-the kernel links the same code and had nothing, so an interrupt between
-the `ldw` and the `stw` let the store clobber whatever the handler
-wrote.  Fast soft interrupts made that matter more, since completion
-work now runs at interrupt exit and can itself be interrupted.
-
-`trap()` now rewinds a supervisor-mode trap whose `EPC` lies inside the
-region, before anything else runs (`kernel_ras_restart()`).  The
-interval is the one `ras_lookup()` tests, open at both ends: an
-interrupted store restarts because it has not executed, and the end
-marker sits *past* the store, where the sequence has finished either
-way — the store retired, or the compare branched there.  The region's
-size is pinned at assembly time, since restart is sound only while the
-store stays last and no argument register is written inside it.
-
-Bracketing the CAS in `DI`/`EI` was the alternative, declined on cost:
-both are drain-commit on gen2, which would put two pipeline drains on
-every adaptive `mutex_enter`/`mutex_exit` and every refcount.  The
-restart adds nothing to the atomic.  On the trap it costs 2
-instructions for a user trap, whose compare reuses the `tf_sr` load
-`usermode` already needs, and 7 for a supervisor trap; the TLB refill
-fast path never reaches `trap()` at all.
-
-### Verification
-
-- **Suite test.**  `isa/test_ras_restart` runs a CAS-increment loop
-  against a timer handler writing the same word.  With the restart,
-  `W == N + M`; without it, `W == N + M - INSIDE` — an exact count, so
-  the control measures the race rather than smoke-testing it.
-  Coverage is asserted per landing point, and the timer period is
-  calibrated against `TM_COUNT`, since tick rate, prescaler and CPI are
-  all implementation-defined.  Passes on the ISS, gen1 and gen2;
-  removing the restart fails it, and so does treating the end marker as
-  inside.
-- **Kernel boundary.**  Injecting with the ISS's `+irq_at_pc` into the
-  booting kernel, every other arrival: at the compare, 37,031 restarts;
-  at the store, 37,073; at the end marker, none.  Every run booted to a
-  shell.
-- **Hardware.**  `vmstat -e` showed 22 restarts over 2h40m of mod
-  playback alongside framebuffer rendering, with no audible glitch —
-  and audio is the most latency-sensitive thing on the machine, so that
-  bounds the trap-path cost as well.  An uninjected boot to single-user
-  took one.
-
-### What testing established
-
-A spurious injected interrupt is not a negative control.  With the
-restart compiled out, 37,352 interrupts into the region still booted
-cleanly: `intr_dispatch()` with no claimer never writes the word the
-interrupted CAS targets, so resuming and restarting are
-indistinguishable.  Only a handler that writes the same word makes the
-difference observable, which is what the suite test supplies.
-
-The lower bound cannot be tested, and does not need to be.  An `EPC` at
-the region's start means nothing has run, so rewinding there and
-resuming are the same act, and treating it as inside passes every test
-— correctly.  Only the upper bound can corrupt, and it is the one the
-suite test's coverage and mutations are aimed at.
-
-The planned DIAGNOSTIC assertion that the rewritten PC equals the
-region start was dropped as tautological.  The evcnt is the check that
-can fail, by staying at zero.
-
 ## Kernel: inline lock fast paths
 
 `kern_mutex.c:274-283` aliases `mutex_enter`, `mutex_exit`,
@@ -936,25 +784,13 @@ structure wastes most of a page and a pinned slot is scarce; and the
 mechanics, which are a linker section plus a pin at boot in
 `pmap_bootstrap`, alongside the existing pinned-slot assignments.
 
-## NetBSD: MD inline bswap existed but was never wired in — RESOLVED
+## Ruled out
 
-`SHA256_Transform` (libc `sha2.c`, which NetBSD's libcrypto also links
-as `libc-sha256`) called out-of-line `__bswap32` once per message word
-— a call plus spill traffic where an inline shift/or expansion is
-straight-line ALU; `htonl`/`ntohl` across the network stack (kernel
-and userland) paid the same call.  Root cause was a wiring omission,
-not a missing implementation: `penumbra/byte_swap.h` has had correct
-`__BYTE_SWAP_U16/U32_VARIABLE` inlines since port bring-up, but
-`penumbra/bswap.h` never included it, so `sys/bswap.h` fell back to
-the libc functions.  Fixed by including it as
-`<machine/byte_swap.h>`, `_LOCORE`-guarded — the i386/vax single-arch
-convention, not riscv's `<riscv/...>` arch-name form: only kernel and
-userland builds provide the arch-name include alias, while stand
-(bootloader) builds alias `machine/` alone, so the arch-name form
-breaks `stand/boot`.  `byte_swap.h` also switched
-from `sys/types.h` to `sys/cdefs.h`+`sys/stdint.h` — the heavyweight
-include recursed through `sys/endian.h`, whose inline codecs need
-`bswap32` before `sys/bswap.h`'s declarations exist when the bswap
-header is the entry point.  Probe-verified both include orders inline
-to ~13 instructions with constants folding; remaining validation is a
-world rebuild confirming `sha2.o` loses the `bl __bswap32`.
+- **Uncached MMIO `STW` as a hardware write-path asymmetry.**  The
+  write path is symmetric: RTL-sim microbenches put an uncached `STW`
+  and `LDW` at the same ~4 cycles.  An observed 2.4× gap came from
+  the kernel's `-fno-strict-aliasing`: with TBAA off, the compiler
+  cannot prove a volatile MMIO store does not alias an in-memory
+  `bus_space_handle_t`, so it reloads the handle before every write.
+  Drivers avoid it with the `bus_space_*_multi` primitives, which take
+  the handle by value (`9ddfcf4aa941`).

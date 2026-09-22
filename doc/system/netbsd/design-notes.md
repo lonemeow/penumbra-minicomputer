@@ -408,6 +408,21 @@ distinguish error returns from valid negative values without
 ambiguity.  Two-value return (R1+R2) is needed by fork (child
 gets R1=0, R2=1) and pipe (two fds).
 
+## curlwp in R12
+
+The kernel has no TLS, so `curlwp` is pinned in R12, the ABI thread
+pointer (`cpu.h`); `cpu_info_store.ci_curlwp` stays the canonical
+copy.  Four boundaries keep R12 == curlwp whenever kernel C runs:
+
+1. `locore.S` sets R12 to `&lwp0` before the first C call at boot.
+2. `cpu_switchto` saves and restores R12 through `pcb_context`, like
+   SP and LR, and writes `ci_curlwp`.
+3. `cpu_lwp_fork` seeds the child's `pcb_context` R12 slot, which the
+   `*pcb2 = *pcb1` copy would otherwise leave pointing at the parent.
+4. `_trap_common` reloads R12 from `cpu_info_store` after saving the
+   trapframe, since a user trap arrives with R12 holding the user's
+   TLS pointer.
+
 ## Atomics
 
 - **Userland:** RAS (Restartable Atomic Sequences).
@@ -415,9 +430,24 @@ gets R1=0, R2=1) and pipe (two fds).
   labels; `.init_array` constructor registers the sequence via
   `rasctl()`.  `userret()` checks `ras_lookup()` on every
   return to user mode.
-- **Kernel:** interrupt-disable CAS (`RDSPR SR` to sample the prior
-  state / `DI` / op / `EI` to restore).  No `WRSPR SR` — it is reserved;
-  the `I` bit moves only via `EI`/`DI`.  Safe on uniprocessor.
+- **Kernel:** the same restartable sequence.  The kernel links the
+  same `atomic_cas.S`, and `trap()` rewinds a supervisor-mode trap
+  whose `EPC` lies inside the region before anything else runs
+  (`kernel_ras_restart()`).  The interval is the one `ras_lookup()`
+  tests, open at both ends: an interrupted store restarts because it
+  has not executed, and the end marker sits past the store, where the
+  sequence has finished either way.  Restart is sound only while the
+  store stays last and no argument register is written inside the
+  region, so its size is pinned at assembly time.  The cost is 2
+  instructions on a user trap and 7 on a supervisor trap; the TLB
+  refill fast path never reaches `trap()`.  Bracketing the CAS in
+  `DI`/`EI` instead would put two drain-commits on every adaptive
+  `mutex_enter`/`mutex_exit` and refcount on a pipelined core.
+
+  Testing it needs a handler that writes the word the interrupted
+  CAS targets (`isa/test_ras_restart`): an interrupt with no such
+  handler resumes and restarts indistinguishably, so it is not a
+  negative control.
 
 Generic CAS-based inc/dec/add/and/or built on top.  No-op
 memory barriers (uniprocessor, no store buffer reordering).
