@@ -249,6 +249,32 @@ mix_block(struct mixer *m, int16_t *out, uint32_t n)
 }
 
 uint32_t
+mixer_mix_ring(struct mixer *m, uint8_t *ring, uint32_t capacity, uint32_t at,
+    uint32_t max)
+{
+	uint32_t done = 0;
+
+	assert(at % MIXER_FRAME_BYTES == 0 && max % MIXER_FRAME_BYTES == 0);
+	assert(capacity % MIXER_FRAME_BYTES == 0 && at < capacity);
+	assert(max <= capacity);
+
+	while (done < max && m->pending > 0) {
+		uint32_t off = (at + done) % capacity;
+		uint32_t run = capacity - off;
+		uint32_t frames;
+
+		if (run > max - done)
+			run = max - done;
+		frames = mixer_mix(m, (int16_t *)(ring + off),
+		    run / MIXER_FRAME_BYTES);
+		if (frames == 0)
+			break;
+		done += frames * MIXER_FRAME_BYTES;
+	}
+	return done;
+}
+
+uint32_t
 mixer_mix(struct mixer *m, int16_t *out, uint32_t max)
 {
 	uint32_t done = 0;

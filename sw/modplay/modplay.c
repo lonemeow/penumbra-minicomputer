@@ -20,6 +20,7 @@
 #include <sys/types.h>
 #include <sys/audioio.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 
 #include <machine/penaudio.h>
 
@@ -33,6 +34,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "mixer.h"
@@ -84,6 +86,7 @@ struct options {
 	int		start;		/* the order to begin at */
 	int		crossfeed;	/* percent; -1: what suits the song */
 	bool		mix;		/* mix even a song the voices can hold */
+	bool		write_mix;	/* write the mix rather than map the buffer */
 	uint32_t	rate;		/* to mix at; 0: half the device's */
 };
 
@@ -519,15 +522,169 @@ write_frames(int fd, const int16_t *out, uint32_t frames)
 	return true;
 }
 
+/*
+ * The mix, written to the device a buffer at a time.
+ *
+ * Every write copies the mix into the kernel's ring while this process
+ * holds the track, and the kernel's mixer passes over a track a process
+ * holds, putting out a block of silence when it does.  That costs a
+ * dropout now and then, at the rate the copies take; it is what a
+ * device whose buffer cannot be mapped leaves.
+ */
+static bool
+mix_written(int fd, struct mixer *mx, struct replay *r)
+{
+	static int16_t out[OUT_FRAMES * 2];
+	struct replay_tick t;
+	uint32_t n = 0, got;
+	bool ok = true;
+
+	while (ok && !quit && replay_next(r, &t)) {
+		mixer_tick(mx, &t);
+		while (ok && (got = mixer_mix(mx, out + 2 * n,
+		    OUT_FRAMES - n)) > 0) {
+			n += got;
+			if (n == OUT_FRAMES) {
+				ok = write_frames(fd, out, n);
+				n = 0;
+			}
+		}
+	}
+	if (ok && !quit && n > 0)
+		ok = write_frames(fd, out, n);
+
+	/* Let the end of the song play out, unless a signal ended it. */
+	if (ok && !quit && ioctl(fd, AUDIO_DRAIN) == -1 && errno != EINTR)
+		warn("%s", AUDIO_DEVICE);
+	if (quit)
+		(void)ioctl(fd, AUDIO_FLUSH);
+	return ok;
+}
+
+/*
+ * The mix, straight into the device's own ring.
+ *
+ * Mapping the ring leaves nothing to copy and nothing held: the kernel's
+ * mixer takes the track's lock itself when it reads a block, so it never
+ * passes the track over.  What it does instead is read the ring whether
+ * or not anything has written it, so the mix has to stay ahead of it:
+ * AUDIO_GETOOFFS says how far it has read, and everything from there to
+ * where the mix has reached is what there is to fill.
+ *
+ * Returns false if the device's buffer cannot be mapped, for the caller
+ * to write the mix instead.
+ */
+static bool
+mix_mapped(int fd, struct mixer *mx, struct replay *r, uint32_t rate)
+{
+	struct replay_tick t;
+	struct audio_info ai;
+	audio_offset_t ao;
+	struct timespec nap;
+	uint8_t *ring;
+	size_t maplen;
+	long page = sysconf(_SC_PAGESIZE);
+	uint32_t capacity, block, written = 0, end = 0, late = 0;
+	bool playing = true;
+
+	if (ioctl(fd, AUDIO_GETBUFINFO, &ai) == -1) {
+		warn("GETBUFINFO");
+		return false;
+	}
+	capacity = ai.play.buffer_size - ai.play.buffer_size % MIXER_FRAME_BYTES;
+	block = ai.blocksize;
+	if (page <= 0 || capacity < 2 * block || block == 0)
+		return false;
+	maplen = ((size_t)capacity + (size_t)page - 1) / (size_t)page *
+	    (size_t)page;
+	ring = mmap(NULL, maplen, PROT_WRITE, MAP_SHARED, fd, 0);
+	if (ring == MAP_FAILED) {
+		warn("cannot map %s's buffer", AUDIO_DEVICE);
+		return false;
+	}
+
+	/* Half a block: short enough that the ring is filled well before
+	 * the device reads that far, and long enough to cost little.
+	 * Worked out in 64 bits, since a block's worth of nanoseconds
+	 * does not fit a long here. */
+	nap.tv_sec = 0;
+	nap.tv_nsec = (long)((uint64_t)(block / MIXER_FRAME_BYTES) *
+	    500000000u / rate);
+
+	while (!quit) {
+		int32_t unread;
+		uint32_t room;
+
+		if (ioctl(fd, AUDIO_GETOOFFS, &ao) == -1) {
+			warn("GETOOFFS");
+			break;
+		}
+		/*
+		 * What the mix has put in and the device has not read yet
+		 * has to stay; the rest is free.  The device starts
+		 * reading as soon as the ring is mapped, and reads on
+		 * whether or not the mix keeps up, so it can be past the
+		 * mix — at the start, and again if ever the mix falls
+		 * behind.  Then it has played what the ring held there,
+		 * and the mix takes up again where the device is.
+		 */
+		unread = (int32_t)(written - ao.samples);
+		if (unread < 0) {
+			written = ao.samples;
+			unread = 0;
+			late++;
+		}
+		room = capacity - (uint32_t)unread;
+		while (room >= MIXER_FRAME_BYTES) {
+			uint32_t at = written % capacity, n;
+
+			n = mixer_mix_ring(mx, ring, capacity, at, room);
+			if (n == 0) {
+				/* The tick is mixed: take the next, and
+				 * once the song is over, leave silence
+				 * behind it rather than the mix again. */
+				if (playing && replay_next(r, &t)) {
+					mixer_tick(mx, &t);
+					continue;
+				}
+				if (playing) {
+					playing = false;
+					end = written;
+				}
+				n = room < capacity - at ? room : capacity - at;
+				memset(ring + at, 0, n);
+			}
+			written += n;
+			room -= n;
+		}
+		/* The song is played once the device has read all of it,
+		 * which is a difference that has not run backwards. */
+		if (!playing && ao.samples - end < capacity)
+			break;
+		if (nanosleep(&nap, NULL) == -1 && errno != EINTR) {
+			warn("nanosleep");
+			break;
+		}
+	}
+
+	/* A signal stops the song at once: what the device has still to
+	 * read falls silent rather than playing out. */
+	if (quit)
+		memset(ring, 0, capacity);
+
+	munmap(ring, maplen);
+	if (late != 0)
+		warnx("the mix fell behind the device %u times", late);
+	return true;
+}
+
 static bool
 play_mixed(const struct song *s, const struct options *opt)
 {
 	static struct mixer mx;
 	static struct replay r;
-	static int16_t out[OUT_FRAMES * 2];
-	struct replay_tick t;
 	struct audio_info hw, ai;
-	uint32_t rate = opt->rate, n = 0, got;
+	uint32_t rate = opt->rate;
 	bool restore = false, ok = true;
 	int ctl, fd;
 
@@ -572,28 +729,12 @@ play_mixed(const struct song *s, const struct options *opt)
 	if (ioctl(fd, AUDIO_SETINFO, &ai) == -1)
 		err(1, "SETINFO");
 
-	printf("  mixing %d channels at %u Hz\n", s->channels, rate);
+	printf("  mixing %d channels at %u Hz%s\n", s->channels, rate,
+	    opt->write_mix ? ", written to the device" : "");
 	mixer_init(&mx, s, rate, crossfeed);
 	replay_init(&r, s, opt->start, opt->loop);
-	while (ok && !quit && replay_next(&r, &t)) {
-		mixer_tick(&mx, &t);
-		while (ok && (got = mixer_mix(&mx, out + 2 * n,
-		    OUT_FRAMES - n)) > 0) {
-			n += got;
-			if (n == OUT_FRAMES) {
-				ok = write_frames(fd, out, n);
-				n = 0;
-			}
-		}
-	}
-	if (ok && !quit && n > 0)
-		ok = write_frames(fd, out, n);
-
-	/* Let the end of the song play out, unless a signal ended it. */
-	if (ok && !quit && ioctl(fd, AUDIO_DRAIN) == -1 && errno != EINTR)
-		warn("%s", AUDIO_DEVICE);
-	if (quit)
-		(void)ioctl(fd, AUDIO_FLUSH);
+	if (opt->write_mix || !mix_mapped(fd, &mx, &r, rate))
+		ok = mix_written(fd, &mx, &r);
 	close(fd);
 
 done:
@@ -660,7 +801,7 @@ static void
 usage(void)
 {
 	fprintf(stderr,
-	    "usage: modplay [-Lils] [-c crossfeed] [-p order] [-r rate] "
+	    "usage: modplay [-Lilsw] [-c crossfeed] [-p order] [-r rate] "
 	    "file ...\n"
 	    "  -c  percent of each channel's own side that the other side "
 	    "gets:\n"
@@ -672,7 +813,9 @@ usage(void)
 	    "  -r  mix at this rate, where a song is mixed in software;\n"
 	    "      default half the device's own\n"
 	    "  -s  mix in software even a song the device's voices could "
-	    "play\n",
+	    "play\n"
+	    "  -w  write the mix to the device rather than mixing into its "
+	    "buffer\n",
 	    MOD_CROSSFEED);
 	exit(2);
 }
@@ -690,7 +833,7 @@ main(int argc, char **argv)
 	memset(&opt, 0, sizeof(opt));
 	opt.crossfeed = -1;
 
-	while ((ch = getopt(argc, argv, "c:iLlp:r:s")) != -1) {
+	while ((ch = getopt(argc, argv, "c:iLlp:r:sw")) != -1) {
 		switch (ch) {
 		case 'c':
 			opt.crossfeed = (int)strtol(optarg, &end, 10);
@@ -722,6 +865,9 @@ main(int argc, char **argv)
 			break;
 		case 's':
 			opt.mix = true;
+			break;
+		case 'w':
+			opt.write_mix = true;
 			break;
 		default:
 			usage();

@@ -3,6 +3,10 @@
  *
  *   make test            (from sw/modplay)
  *
+ * The ring the device's own buffer is mixed into has to carry the same
+ * stream as a flat buffer, wherever in the ring it starts and however
+ * much of it is free, and must not reach outside the ring at all.
+ *
  * The mixer's blocks skip the test for a pass's end wherever they can,
  * so it is checked against a mixer that takes every frame one at a time
  * and tests every one: over passes that end mid-block, loops shorter
@@ -242,6 +246,139 @@ agrees(uint32_t trial_seed, uint32_t piece, bool loud, int crossfeed)
 	return true;
 }
 
+/* ── The device's ring ───────────────────────────────────────── */
+
+#define	STREAM_BYTES	(200 * 512 * MIXER_FRAME_BYTES)
+#define	GUARD		64
+#define	GUARD_BYTE	0xA5
+
+static uint8_t flat[STREAM_BYTES];
+static uint8_t taken[STREAM_BYTES];
+static uint8_t ring[GUARD + 65536 + GUARD];
+
+/* Ticks for both runs come from the same seed, so the consumer draws
+ * from its own. */
+static uint32_t consumer_seed;
+
+static uint32_t
+consumer_rnd(uint32_t n)
+{
+	consumer_seed = consumer_seed * 1103515245u + 12345u;
+	return (consumer_seed >> 8) % n;
+}
+
+/* Mix a script into a flat buffer, for the ring to be held against. */
+static uint32_t
+flat_stream(const struct song *song, uint32_t trial_seed, int ticks)
+{
+	static struct mixer m;
+	struct replay_tick t;
+	uint32_t used = 0;
+	int tick;
+
+	mixer_init(&m, song, RATE, 0);
+	seed = trial_seed;
+	for (tick = 0; tick < ticks; tick++) {
+		uint32_t n;
+
+		script_tick(&t, tick, false);
+		mixer_tick(&m, &t);
+		while ((n = mixer_mix(&m, (int16_t *)(flat + used),
+		    (STREAM_BYTES - used) / MIXER_FRAME_BYTES)) > 0)
+			used += n * MIXER_FRAME_BYTES;
+	}
+	return used;
+}
+
+/*
+ * The same script through a ring of the given capacity, a consumer
+ * taking random runs out of it as a device would, into taken[].
+ */
+static uint32_t
+ring_stream(const struct song *song, uint32_t trial_seed, int ticks,
+    uint32_t capacity)
+{
+	static struct mixer m;
+	struct replay_tick t;
+	uint32_t written = 0, consumed = 0;
+	bool playing = true;
+	int tick = 0;
+
+	memset(ring, GUARD_BYTE, sizeof(ring));
+	mixer_init(&m, song, RATE, 0);
+	seed = trial_seed;
+	while (playing || written > consumed) {
+		uint32_t room = capacity - (written - consumed), take;
+
+		while (room >= MIXER_FRAME_BYTES && playing) {
+			uint32_t n = mixer_mix_ring(&m, ring + GUARD, capacity,
+			    written % capacity, room);
+
+			if (n == 0) {
+				if (tick == ticks) {
+					playing = false;
+					break;
+				}
+				script_tick(&t, tick++, false);
+				mixer_tick(&m, &t);
+				continue;
+			}
+			written += n;
+			room -= n;
+		}
+		/* Take a run out, as the device reads blocks. */
+		take = written - consumed;
+		if (take > MIXER_FRAME_BYTES)
+			take = MIXER_FRAME_BYTES *
+			    (1 + consumer_rnd(take / MIXER_FRAME_BYTES));
+		while (take > 0) {
+			uint32_t off = consumed % capacity;
+			uint32_t run = capacity - off;
+
+			if (run > take)
+				run = take;
+			if (consumed + run > STREAM_BYTES)
+				return consumed;
+			memcpy(taken + consumed, ring + GUARD + off, run);
+			consumed += run;
+			take -= run;
+		}
+	}
+	return consumed;
+}
+
+static void
+ring_cases(void)
+{
+	static const uint32_t caps[] = { 512, 1920, 4096, 65280 };
+	struct song song;
+	uint32_t want, got, cap;
+	size_t i;
+	bool same = true, guarded = true;
+
+	memset(&song, 0, sizeof(song));
+	song.channels = VOICES;
+	song.clock = 3546895;
+	song.sampledata = (const uint8_t *)mem;
+	song.sampledata_size = MEMSIZE;
+
+	want = flat_stream(&song, 0x21b6, 60);
+	for (i = 0; i < sizeof(caps) / sizeof(caps[0]); i++) {
+		cap = caps[i];
+		consumer_seed = 7 + (uint32_t)i;
+		got = ring_stream(&song, 0x21b6, 60, cap);
+		if (got != want || memcmp(flat, taken, want) != 0)
+			same = false;
+		for (uint32_t b = 0; b < GUARD; b++)
+			if (ring[b] != GUARD_BYTE ||
+			    ring[GUARD + cap + b] != GUARD_BYTE)
+				guarded = false;
+	}
+	check(same, "the device's ring carries the same stream as a flat "
+	    "buffer, at every capacity");
+	check(guarded, "... and nothing is written outside it");
+}
+
 int
 main(void)
 {
@@ -291,6 +428,8 @@ main(void)
 		frames += m.pending;
 		m.pending = 0;
 	}
+	ring_cases();
+
 	check(frames == (uint64_t)RATE * 1000 ||
 	    frames == (uint64_t)RATE * 1000 - 1,
 	    "a tick's part-frames carry over: 1000 s of ticks at 33 bpm "

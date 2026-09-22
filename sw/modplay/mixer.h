@@ -19,6 +19,7 @@
 #include "replay.h"
 
 #define	MIXER_BLOCK	128	/* frames mixed at a time */
+#define	MIXER_FRAME_BYTES 4	/* 16-bit stereo */
 
 struct mixer_voice {
 	bool		sounding;
@@ -61,5 +62,14 @@ void		 mixer_tick(struct mixer *, const struct replay_tick *);
 /* Mix up to max of the pending frames into out, interleaved left and
  * right; returns how many, 0 once the tick is mixed. */
 uint32_t	 mixer_mix(struct mixer *, int16_t *out, uint32_t max);
+
+/*
+ * The same into a ring of capacity bytes, starting at byte at and
+ * wrapping at its end, for a device whose own buffer the mix goes
+ * straight into; returns the bytes mixed.  Byte counts rather than
+ * frames, since that is what such a device counts in.
+ */
+uint32_t	 mixer_mix_ring(struct mixer *, uint8_t *ring, uint32_t capacity,
+		     uint32_t at, uint32_t max);
 
 #endif /* MODPLAY_MIXER_H */
