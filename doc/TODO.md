@@ -1178,14 +1178,13 @@ a scan that misread branch targets written in upper-case hex.
 | same entry: `p - K` | `llis t, -K; add y, t`, `t` dead | 47 | 63 | 4 | 0 |
 | same entry: run-time indexed local | `mov x, sp; [add x, imm;] add x, y; ld/st [x + 0]` | 35 | 32 | 9 | 16 |
 | "hot-loop code review — software audio mixing": zero-low-half carry | `add/sub r, 0` feeding `adc`/`sbc` | 2 | 13 | 0 | 1,489 |
-| "large frame offsets write the flags unchecked" (correctness) | `lli; lui; add x, sp` | 0 | 43 | 0 | 105 |
+| "large frame offsets write the flags unchecked" (correctness) — resolved | `lli; lui; add x, sp` | 0 | 43 | 0 | 105 |
 | resolved: the SP copy, the zero register and `AllowRegisterRenaming` | a copy all of whose readers could read its source: from `sp` (other) | 10 (3) | 21 (1) | 3 (0) | 16 (3) |
 
 The memory-call row counts the kernel only: libc and Doom call through
 the PLT, which the scan does not resolve.  The copies left in the last
 row are `LEAfi` expansions, a frame address used as a value.  None of
-the large-frame sites has the flags live, so nothing is miscompiled
-today.
+the large-frame sites had the flags live, so nothing was miscompiled.
 
 Each row saves about one instruction per site, except the 64-bit
 compares, 4–9 per compare, a PIC anchor in a loop, 1–2 per
@@ -1217,9 +1216,6 @@ What follows, by value:
    `memmove`'s backward byte loop is 10 instructions where 6 do.
 5. **The rest** — at most 0.1% each; the zero-low-half carry and the
    64-bit select of zero go with the 32.32 mixer.
-
-The large-frame flag clobber is a correctness gap, not a speed item:
-contained, and not worth waiting for a failure.
 
 Copies are 10.5–15% of all instructions (kernel 12.8%, libc 15.0%,
 Doom 10.5%).  With the SP and zero copies gone, what is left is
@@ -3587,26 +3583,41 @@ has no side effects.
   rule.
 
 Fix: mark the `SR` definition dead on each hand-built instruction
-whose flags nothing reads.  If no selector path lets a flag value
-cross a block boundary before register allocation — compares feed
-their branch and carries the next half, in the same block; confirm
-that for the select diamonds — then "not read before the next `SR`
-definition or the end of the block" is the whole test.
+whose flags nothing reads.  No selector path lets a flag value cross
+a block boundary before register allocation — a compare is emitted
+beside its branch, a carry fuses only with the instruction just before
+its user, and a select diamond emits its own compare beside its
+branch — so "not read before the next `SR` definition or the end of
+the block" is the whole test.
 
-## Compiler: large frame offsets write the flags unchecked
+## Compiler: large frame offsets write the flags unchecked — RESOLVED
 
 `PenumbraRegisterInfo::eliminateFrameIndex` handles an offset beyond
 the 16-bit field by building `LLI; LUI; ADD` into a scavenged
 register in front of the load or store.  The `ADD` writes the flags,
-and nothing checks that they are dead there: a spill reload with a
+and nothing checked that they were dead there: a spill reload with a
 large offset between a compare and its branch, or inside a
-64-bit `ADD`/`ADC` carry chain, would corrupt the flags.  It needs a
-frame over 32 KB, and no failure is known.  `LEAfi` had the same
-problem until it declared `Defs = [SR]`, which lets the allocator see
-it.  The fix is to check `SR` liveness at the insertion point.  User code
-cannot save the flags around the `ADD` (`RDSPR` is privileged and
-`WRSPR SR` is reserved), so where they are live the address has to be
-formed before the instruction that sets them.
+64-bit `ADD`/`ADC` carry chain, would have corrupted the flags.  It
+needs a frame over 32 KB, and no failure was known.  User code cannot
+save the flags around the `ADD` (`RDSPR` is privileged and `WRSPR SR`
+is reserved).
+
+Resolved by forming the address ahead of the instruction that starts
+the live flag value where the flags are live at the access
+(`frame-index-flags.mir`).  Selection keeps every flag value inside
+one block and the frame base register is not written while flags are
+live, so the two cases that would defeat that — flags live into the
+block, or the base written in between — end compilation with a fatal
+error rather than miscompile (`frame-index-flags-error.mir`).  No site
+in the kernel, libc, Doom or the `test-compiler` corpus had the flags
+live, and the corpus compiles to identical code.
+
+The 43 large-frame sites in `libc.so` are all callee-saved saves and
+restores, in three functions with big local buffers (`__put_page`,
+`cdbw_output`, `allocaddrinfo`): the save slots sit at the far end of
+a frame over 32 KB, so each save and restore costs `LLI; LUI; ADD`.
+Placing them next to SP would remove that; three functions do not make
+it worth doing yet.
 
 ## Compiler: shrink-wrapping (spill-density lever, part 1) — ENABLED
 

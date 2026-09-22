@@ -13,6 +13,7 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 
 #define GET_REGINFO_TARGET_DESC
@@ -51,6 +52,39 @@ PenumbraRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
     Reserved.set(Penumbra::R10); // Frame pointer
 
   return Reserved;
+}
+
+// Whether the flags hold a value some later instruction reads, just before MI.
+static bool flagsLiveBefore(MachineBasicBlock &MBB,
+                            MachineBasicBlock::iterator MI,
+                            const TargetRegisterInfo *TRI) {
+  for (MachineBasicBlock::iterator I = MI, E = MBB.end(); I != E; ++I) {
+    if (I->readsRegister(Penumbra::SR, TRI))
+      return true;
+    if (I->modifiesRegister(Penumbra::SR, TRI))
+      return false;
+  }
+  return llvm::any_of(MBB.successors(), [](const MachineBasicBlock *Succ) {
+    return Succ->isLiveIn(Penumbra::SR);
+  });
+}
+
+// Returns the instruction that starts the flag value live at MI; an ADC or SBC
+// continues the value it reads.  The errors guard invariants kept elsewhere:
+// selection keeps each flag value within one block, and nothing in the body
+// writes the frame base register.
+static MachineBasicBlock::iterator
+flagChainStart(MachineBasicBlock &MBB, MachineBasicBlock::iterator MI,
+               Register BaseReg, const TargetRegisterInfo *TRI) {
+  for (MachineBasicBlock::iterator I = MI; I != MBB.begin();) {
+    --I;
+    if (I->modifiesRegister(BaseReg, TRI))
+      report_fatal_error("frame base register written while flags are live");
+    if (I->modifiesRegister(Penumbra::SR, TRI) &&
+        !I->readsRegister(Penumbra::SR, TRI))
+      return I;
+  }
+  report_fatal_error("flags live into block with a large stack offset");
 }
 
 bool PenumbraRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator MI,
@@ -111,15 +145,24 @@ bool PenumbraRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator MI,
   // is the pattern LLVM targets like RISC-V use — the register scavenger
   // (enabled by `requiresFrameIndexScavenging`) promotes it to a
   // physical register (or a scavenged spill slot) in a later pass.
+  //
+  // The ADD writes the flags, which may be live here: a reload between a
+  // compare and its branch, or inside a 64-bit ADD/ADC chain.  Code cannot
+  // save the flags around it (RDSPR is privileged and WRSPR SR reserved), so
+  // where they are live the address is formed ahead of the instruction that
+  // set them.
+  MachineBasicBlock::iterator InsertPt = MI;
+  if (flagsLiveBefore(MBB, MI, this))
+    InsertPt = flagChainStart(MBB, MI, BaseReg, this);
   DebugLoc DL = Inst.getDebugLoc();
   MachineRegisterInfo &MRI = MF.getRegInfo();
   Register Scratch = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
-  BuildMI(MBB, MI, DL, TII.get(Penumbra::LLI), Scratch)
+  BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::LLI), Scratch)
       .addImm(Offset & 0xFFFF);
-  BuildMI(MBB, MI, DL, TII.get(Penumbra::LUI), Scratch)
+  BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::LUI), Scratch)
       .addReg(Scratch)
       .addImm((Offset >> 16) & 0xFFFF);
-  BuildMI(MBB, MI, DL, TII.get(Penumbra::ADD), Scratch)
+  BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::ADD), Scratch)
       .addReg(Scratch)
       .addReg(BaseReg);
   Inst.getOperand(FIOperandNum).ChangeToRegister(Scratch, /*isDef=*/false,

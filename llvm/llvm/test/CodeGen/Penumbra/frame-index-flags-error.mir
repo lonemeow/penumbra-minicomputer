@@ -1,0 +1,72 @@
+# RUN: split-file %s %t
+# RUN: not --crash llc -mtriple=penumbra -run-pass=prologepilog %t/live-in.mir \
+# RUN:   -o /dev/null 2>&1 | FileCheck %s --check-prefix=LIVE-IN
+# RUN: not --crash llc -mtriple=penumbra -run-pass=prologepilog %t/base-written.mir \
+# RUN:   -o /dev/null 2>&1 | FileCheck %s --check-prefix=BASE
+
+# A large stack offset where the flags are live is formed ahead of the
+# instruction that set them.  Selection and frame lowering keep that instruction
+# in the same block with the frame base register unchanged; where either fails,
+# frame lowering stops rather than clobber the flags or form a wrong address.
+
+# LIVE-IN: LLVM ERROR: flags live into block with a large stack offset
+# BASE: LLVM ERROR: frame base register written while flags are live
+
+#--- live-in.mir
+--- |
+  define void @live_in() { ret void }
+...
+---
+name:            live_in
+tracksRegLiveness: true
+stack:
+  - { id: 0, size: 40000, alignment: 4 }
+body:             |
+  bb.0:
+    successors: %bb.1
+    liveins: $r1, $r2
+
+    CMP $r1, $r2, implicit-def $sr
+    B %bb.1
+
+  bb.1:
+    successors: %bb.2, %bb.3
+    liveins: $sr
+
+    $r3 = LDW %stack.0, 36000 :: (load (s32))
+    BEQ %bb.3, implicit $sr
+    B %bb.2
+
+  bb.2:
+    RET
+
+  bb.3:
+    RET
+...
+
+#--- base-written.mir
+--- |
+  define void @base_written() { ret void }
+...
+---
+name:            base_written
+tracksRegLiveness: true
+stack:
+  - { id: 0, size: 40000, alignment: 4 }
+body:             |
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $r1, $r2, $r5
+
+    CMP $r1, $r2, implicit-def $sr
+    $r14 = COPY $r5
+    $r3 = LDW %stack.0, 36000 :: (load (s32))
+    BEQ %bb.2, implicit $sr
+    B %bb.1
+
+  bb.1:
+    RET
+
+  bb.2:
+    RET
+...

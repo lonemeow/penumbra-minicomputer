@@ -1,0 +1,97 @@
+# RUN: llc -mtriple=penumbra -run-pass=prologepilog -verify-machineinstrs %s -o - \
+# RUN:   | FileCheck %s
+
+# A frame offset beyond the 16-bit memory-offset field is formed as
+# LLI + LUI + ADD into a scratch register, and the ADD writes the flags.  Where
+# the flags are live at the access, the address is formed ahead of the
+# instruction that set them; a flag-reading ADC continues its chain back to the
+# ADD that started it.
+
+--- |
+  define void @flags_live() { ret void }
+  define void @flags_live_chain() { ret void }
+  define void @flags_dead() { ret void }
+...
+---
+name:            flags_live
+tracksRegLiveness: true
+stack:
+  - { id: 0, size: 40000, alignment: 4 }
+body:             |
+  ; CHECK-LABEL: name: flags_live
+  ; CHECK:       LLI
+  ; CHECK-NEXT:  LUI
+  ; CHECK-NEXT:  ADD {{.*}}$r14
+  ; CHECK-NEXT:  CMP $r1, $r2
+  ; CHECK-NEXT:  LDW
+  ; CHECK-NEXT:  BEQ
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $r1, $r2
+
+    CMP $r1, $r2, implicit-def $sr
+    $r3 = LDW %stack.0, 36000 :: (load (s32))
+    BEQ %bb.2, implicit $sr
+    B %bb.1
+
+  bb.1:
+    liveins: $r3
+
+    $r1 = COPY $r3
+    RET implicit $r1
+
+  bb.2:
+    RET
+...
+---
+name:            flags_live_chain
+tracksRegLiveness: true
+stack:
+  - { id: 0, size: 40000, alignment: 4 }
+body:             |
+  ; CHECK-LABEL: name: flags_live_chain
+  ; CHECK:       LLI
+  ; CHECK-NEXT:  LUI
+  ; CHECK-NEXT:  ADD {{.*}}$r14
+  ; CHECK-NEXT:  $r1 = ADD $r1
+  ; CHECK-NEXT:  $r2 = ADC $r2
+  ; CHECK-NEXT:  LDW
+  ; CHECK-NEXT:  ADC
+  bb.0:
+    liveins: $r1, $r2, $r3, $r4
+
+    $r1 = ADD $r1, $r3, implicit-def $sr
+    $r2 = ADC $r2, $r4, implicit-def $sr, implicit $sr
+    $r11 = LDW %stack.0, 36000 :: (load (s32))
+    $r3 = ADC $r3, $r11, implicit-def dead $sr, implicit $sr
+    RET implicit $r1, implicit $r2, implicit $r3
+...
+---
+name:            flags_dead
+tracksRegLiveness: true
+stack:
+  - { id: 0, size: 40000, alignment: 4 }
+body:             |
+  ; CHECK-LABEL: name: flags_dead
+  ; CHECK:       CMP $r1, $r2
+  ; CHECK-NEXT:  BEQ
+  ; CHECK:       LLI
+  ; CHECK-NEXT:  LUI
+  ; CHECK-NEXT:  ADD {{.*}}$r14
+  ; CHECK-NEXT:  LDW
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $r1, $r2
+
+    CMP $r1, $r2, implicit-def $sr
+    BEQ %bb.2, implicit $sr
+    B %bb.1
+
+  bb.1:
+    $r3 = LDW %stack.0, 36000 :: (load (s32))
+    $r1 = COPY $r3
+    RET implicit $r1
+
+  bb.2:
+    RET
+...
