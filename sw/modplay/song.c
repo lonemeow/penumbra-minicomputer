@@ -18,6 +18,7 @@ song_text(char *dst, const uint8_t *src, size_t n)
 
 static const struct song_format *const formats[] = {
 	&mod_format,
+	&s3m_format,
 };
 
 const char *

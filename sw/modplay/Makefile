@@ -35,7 +35,7 @@ HOSTFLAGS   := -O2 $(WARN) -I$(COMMON)
 LDFLAGS     := --target=$(TARGET) --sysroot=$(DESTDIR) -static
 LDLIBS      := -lm
 
-SONG_SRCS   := song.c mod.c pt.c s3m.c replay.c
+SONG_SRCS   := song.c mod.c pt.c s3m.c st3.c replay.c
 SONG_HDRS   := song.h mod.h s3m.h replay.h
 MIX_SRCS    := mixer.c
 MIX_HDRS    := mixer.h $(COMMON)/fixed.h

@@ -78,6 +78,7 @@ struct replay {
 	/* The format's own. */
 	union {
 		struct pt_state	pt;
+		struct st3_state st3;
 	};
 };
 

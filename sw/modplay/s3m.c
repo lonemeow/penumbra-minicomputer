@@ -93,8 +93,7 @@ le32(const uint8_t *p)
 	    (uint32_t)p[1] << 8 | p[0];
 }
 
-/* Where a pan of 0 to 15 leaves a voice, on the tick's scale. */
-static int
+int
 s3m_pan(int place)
 {
 	int num = REPLAY_PAN * (2 * place - PAN_STEPS);
@@ -153,7 +152,7 @@ channels(struct song *song, const uint8_t *buf, size_t len)
 			place = pan[i] & 0xF;
 
 		m->voice_of[i] = m->channels;
-		m->pan[m->channels++] = s3m_pan(place);
+		m->pan[m->channels++] = place;
 	}
 	song->channels = m->channels;
 }
@@ -447,4 +446,7 @@ const struct song_format s3m_format = {
 	.probe = s3m_probe,
 	.parse = s3m_parse,
 	.free = s3m_free,
+	.unsupported = st3_unsupported,
+	.start = st3_start,
+	.play = st3_play,
 };
