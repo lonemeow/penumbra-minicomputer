@@ -16,6 +16,7 @@
 #include <stdint.h>
 
 #include "mod.h"
+#include "s3m.h"
 
 #define	SONG_ORDERS	256
 #define	SONG_ROWS	64	/* in every pattern */
@@ -46,11 +47,12 @@ struct song_format {
 };
 
 extern const struct song_format mod_format;
+extern const struct song_format s3m_format;
 
 struct song {
 	const struct song_format *format;
 	char		title[29];
-	char		kind[5];	/* the file's signature */
+	char		kind[5];	/* what the file says it is */
 	int		channels;	/* voices it plays */
 	int		length;		/* orders the song plays */
 	int		npatterns;
@@ -68,8 +70,13 @@ struct song {
 
 	union {
 		struct mod	mod;
+		struct s3m	s3m;
 	};
 };
+
+/* Copy a fixed-width text field, stopping at its first NUL and keeping
+ * the result printable. */
+void		 song_text(char *dst, const uint8_t *src, size_t n);
 
 /* Parse a file in whichever format it is in.  Returns NULL, or what is
  * wrong with the file.  The buffer must outlive the song. */

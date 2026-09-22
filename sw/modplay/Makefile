@@ -35,8 +35,8 @@ HOSTFLAGS   := -O2 $(WARN) -I$(COMMON)
 LDFLAGS     := --target=$(TARGET) --sysroot=$(DESTDIR) -static
 LDLIBS      := -lm
 
-SONG_SRCS   := song.c mod.c pt.c replay.c
-SONG_HDRS   := song.h mod.h replay.h
+SONG_SRCS   := song.c mod.c pt.c s3m.c replay.c
+SONG_HDRS   := song.h mod.h s3m.h replay.h
 MIX_SRCS    := mixer.c
 MIX_HDRS    := mixer.h $(COMMON)/fixed.h
 SRCS        := modplay.c $(SONG_SRCS) $(MIX_SRCS)
@@ -59,13 +59,20 @@ $(BUILDDIR)/modplay-dump: dump.c $(SONG_SRCS) $(SONG_HDRS) $(MIX_SRCS) \
 	$(HOSTCC) $(HOSTFLAGS) dump.c $(SONG_SRCS) $(MIX_SRCS) -lm -o $@
 
 # Build and run the host unit tests for the parser, replayer and mixer.
-test: $(BUILDDIR)/replay_test $(BUILDDIR)/mixer_test
+test: $(BUILDDIR)/replay_test $(BUILDDIR)/s3m_test $(BUILDDIR)/mixer_test
 	$(BUILDDIR)/replay_test
+	@echo
+	$(BUILDDIR)/s3m_test
+	@echo
 	$(BUILDDIR)/mixer_test
 
 $(BUILDDIR)/replay_test: replay_test.c $(SONG_SRCS) $(SONG_HDRS)
 	install -d $(BUILDDIR)
 	$(HOSTCC) $(HOSTFLAGS) replay_test.c $(SONG_SRCS) -lm -o $@
+
+$(BUILDDIR)/s3m_test: s3m_test.c $(SONG_SRCS) $(SONG_HDRS)
+	install -d $(BUILDDIR)
+	$(HOSTCC) $(HOSTFLAGS) s3m_test.c $(SONG_SRCS) -lm -o $@
 
 $(BUILDDIR)/mixer_test: mixer_test.c $(SONG_SRCS) $(SONG_HDRS) $(MIX_SRCS) \
     $(MIX_HDRS)

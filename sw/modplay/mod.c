@@ -44,18 +44,6 @@ be16(const uint8_t *p)
 	return (uint32_t)p[0] << 8 | p[1];
 }
 
-/* Copy a fixed-width text field, stopping at its first NUL and keeping
- * the result printable. */
-static void
-text(char *dst, const uint8_t *src, size_t n)
-{
-	size_t i;
-
-	for (i = 0; i < n && src[i] != '\0'; i++)
-		dst[i] = (src[i] >= 0x20 && src[i] < 0x7F) ? (char)src[i] : '.';
-	dst[i] = '\0';
-}
-
 static bool
 mod_probe(const uint8_t *buf, size_t len)
 {
@@ -81,7 +69,7 @@ mod_parse(struct song *song, const uint8_t *buf, size_t len)
 		return "too short for a module";
 
 	memcpy(song->kind, buf + OFF_SIGNATURE, 4);
-	text(song->title, buf, 20);
+	song_text(song->title, buf, 20);
 	song->channels = MOD_CHANNELS;
 	song->clock = PAULA_HZ;
 	song->crossfeed = MOD_CROSSFEED;
@@ -90,7 +78,7 @@ mod_parse(struct song *song, const uint8_t *buf, size_t len)
 		const uint8_t *h = buf + OFF_SAMPLES + (s - 1) * SAMPLE_HEADER;
 		struct mod_sample *smp = &m->sample[s];
 
-		text(smp->name, h, 22);
+		song_text(smp->name, h, 22);
 		smp->length = be16(h + 22) * 2;
 		smp->finetune = ((h[24] & 0xF) ^ 8) - 8;
 		smp->volume = h[25] > 64 ? 64 : h[25];

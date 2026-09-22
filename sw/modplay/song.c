@@ -6,6 +6,16 @@
 
 #include "song.h"
 
+void
+song_text(char *dst, const uint8_t *src, size_t n)
+{
+	size_t i;
+
+	for (i = 0; i < n && src[i] != '\0'; i++)
+		dst[i] = (src[i] >= 0x20 && src[i] < 0x7F) ? (char)src[i] : '.';
+	dst[i] = '\0';
+}
+
 static const struct song_format *const formats[] = {
 	&mod_format,
 };
