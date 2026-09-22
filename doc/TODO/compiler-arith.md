@@ -29,7 +29,7 @@ same IR (verified against an in-tree RISCV llc build), via the
 sibling `// FIXME: Need to split the load.` hole in
 `narrowScalar`'s extload case.  Full upstream-facing analysis,
 reproducers, target survey, and proposed two-part patch:
-`doc/llvm-gisel-wide-extload-legalization.md`.
+`doc/llvm/gisel-wide-extload-legalization.md`.
 
 ## Compiler: constant multiply, divide and remainder strength reduction
 
@@ -62,7 +62,7 @@ operations wherever that is cheaper on the tuned core.
   unsigned `G_UDIV` / `G_UREM` (so these reduce even at -O0); upstream's
   `sdiv_by_pow2` covers the signed divide, and `penumbra_srem_pow2` the
   signed remainder (see
-  [the upstream-candidate write-up](../llvm-gisel-signed-pow2-remainder.md)).
+  [the upstream-candidate write-up](../llvm/gisel-signed-pow2-remainder.md)).
 - **Divide or remainder by any other constant.**  Upstream's
   `*_by_const` magic-number rules, gated by `isIntDivCheap()`, which
   keeps the divide under minsize, above 32 bits, and where the tuned
@@ -220,7 +220,7 @@ None of these produce wrong code.
   backend as `p + (0 - n)` and cost a zero copy, a subtract and an add,
   plus any scaling, where a subtract does.  The post-legalizer rule
   `penumbra_ptr_add_neg_to_sub` now rewrites it (see
-  [the upstream-candidate write-up](../llvm-gisel-pointer-minus-integer.md));
+  [the upstream-candidate write-up](../llvm/gisel-pointer-minus-integer.md));
   the sites are per-packet mbuf adjustments in protocol input and output
   and driver ring pointers.  Negative constant multiplies do not need
   the pattern either: the decomposition accumulates from `0 - x` while

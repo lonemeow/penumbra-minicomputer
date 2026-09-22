@@ -16,6 +16,7 @@ architecture and its standard peripherals.
 *   **[Instruction Encoding](./system/instruction-encoding.md)** — Bit-level reference for assembler / disassembler / binary-tool authors.
 *   **[ABI Specification](./system/abi.md)** — Data models, calling conventions, and ELF details.
 *   **[Toolchain Strategy](./system/toolchain.md)** — LLVM backend and compiler considerations.
+*   **[LLVM Backend Notes](./llvm/README.md)** — How the backend's lowerings work, and upstream GlobalISel gap write-ups.
 
 ### System Services
 *   **[MMU & TLB](./system/mmu.md)** — Software-managed translation, protection, and dirty tracking.

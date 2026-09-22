@@ -101,7 +101,7 @@ Tracked tests: `testcase-InstCombine-1.c`, `pr57344-3.c`,
 
 The known upstream GlobalISel wrap-flag miscompile families are
 audited in
-[`doc/llvm-gisel-upstream-miscompile-exposure.md`](../llvm-gisel-upstream-miscompile-exposure.md):
+[`doc/llvm/gisel-upstream-miscompile-exposure.md`](../llvm/gisel-upstream-miscompile-exposure.md):
 both flag-corruption mechanisms actively deposit false `nuw` flags
 in our pipeline today and are harmless only because this LLVM's
 known-bits code never reads them.  A rebase (or local flag-aware
@@ -176,7 +176,7 @@ register has no uses (the fallback materializes the carry through a
 GPR, keeping the producer alive).  Regression test
 `test/CodeGen/Penumbra/uaddo-dead-sum.ll` pins all three shapes
 (single carry, chained carries, borrow); full investigation notes in
-`doc/llvm-divdf3-rounding-bug.md`.
+`doc/llvm/divdf3-rounding-bug.md`.
 
 Found along the way, still open: the bare 64×64→128 mulhi idiom
 (`wideMultiply` reimplemented as a function returning only the high

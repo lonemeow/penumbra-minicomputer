@@ -73,7 +73,7 @@ window covers every installed userland, so the fix reaches the
 board only with a distribution rebuild.
 
 Still open from the same audit
-([`doc/llvm-flag-reuse-notes.md`](../llvm-flag-reuse-notes.md)): the
+([`doc/llvm/flag-reuse-notes.md`](../llvm/flag-reuse-notes.md)): the
 `eliminateFrameIndex` large-offset path emits a post-RA `ADD` that
 clobbers SR inside a live-flags window for frames over 32 KiB.
 Flags cannot be saved in software (`WRSPR SR` traps), so the fix is
@@ -165,7 +165,7 @@ chain.
 Widening leaves `G_AND %bool, 1` behind, which `redundant_and` cannot
 drop because a `G_FREEZE` blocks known-bits — an upstream hole written
 up in
-[`doc/llvm-gisel-freeze-known-bits.md`](../llvm-gisel-freeze-known-bits.md).
+[`doc/llvm/gisel-freeze-known-bits.md`](../llvm/gisel-freeze-known-bits.md).
 Rather than wait for it, the compare-elimination peephole erases the
 `TESTi` those masks feed, since the mask already set the same Z.
 

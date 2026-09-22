@@ -190,7 +190,7 @@ shapes:
   multiply splits into s32 partial products.
 - Min/max/abs/popcount/ctlz/cttz/bswap/bitreverse: lowered to
   shift/logic. G_BSWAP at s64 narrows to two s32 first, then
-  lowers — see `doc/llvm-lowerBswap-bug.md` for why we don't lower
+  lowers — see `doc/llvm/lowerBswap-bug.md` for why we don't lower
   directly at s64.
 - Compares: s64 G_ICMP is custom.  Equality narrows generically; a
   relational compare becomes the target opcode `G_ICMP_PAIR`

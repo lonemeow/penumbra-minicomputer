@@ -98,7 +98,7 @@ detonates on the same rebase.
   vendored `LegalizerHelper.cpp` still contains the buggy
   `0xFF << (i * 8)` construction — but we are immune because we narrow
   s64 G_BSWAP to two s32 halves before lowering, precisely to dodge
-  this (independently root-caused in `doc/llvm-lowerBswap-bug.md`;
+  this (independently root-caused in `doc/llvm/lowerBswap-bug.md`;
   upstream fixed it in #199387 with `APInt::getBitsSet`). Backport
   #199387 on the next tree touch so the narrowing order stops being
   load-bearing correctness.

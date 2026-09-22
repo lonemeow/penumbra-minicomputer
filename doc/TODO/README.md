@@ -31,7 +31,8 @@ move what stays useful to where it belongs:
 - what changed and what it measured → the commit message;
 - protection against a return → a regression test;
 - a lesson that generalizes beyond the fix → the subsystem's doc
-  under `doc/internals/` or `doc/system/`.
+  under `doc/internals/` (hardware), `doc/llvm/` (compiler) or
+  `doc/system/`.
 
 Partly done entries keep only the open remainder, with one line
 naming the commit that landed the rest.

@@ -17,6 +17,7 @@ and CLAUDE.md files intentionally do *not* duplicate them.
 |-------|------|
 | ISA, registers, encoding, instruction set | `doc/system/{architecture,instruction-set,instruction-encoding}.md` |
 | ABI, ELF relocations, calling convention | `doc/system/abi.md` |
+| LLVM backend design notes, upstream gap write-ups | `doc/llvm/` |
 | MMU, sysregs, bus address map, boot protocol | `doc/system/{mmu,sysregs,bus,boot-protocol}.md` |
 | Device register maps (SPI/SD, ESP32 NIC) | `doc/system/devices/` |
 | NetBSD port — current status, kernel design | `doc/system/netbsd/{porting-status,design-notes}.md` |
@@ -116,8 +117,8 @@ Open work lives in `doc/TODO/`, one file per area; the table in
   by file and heading, never "above"/"below".
 - **Findings** that motivate open work go in the entry. A finding
   that describes how the system behaves, with nothing left to do,
-  belongs in the subsystem's doc under `doc/internals/` or
-  `doc/system/`, not in TODO.
+  belongs in the subsystem's doc under `doc/internals/` (hardware),
+  `doc/llvm/` (compiler) or `doc/system/`, not in TODO.
 - **Completed:** delete the entry rather than marking it RESOLVED.
   Before deleting, move what stays useful: the reasoning to a comment
   at the fix, what changed and what it measured to the commit
