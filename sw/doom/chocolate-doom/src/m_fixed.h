@@ -20,7 +20,9 @@
 #ifndef __M_FIXED__
 #define __M_FIXED__
 
+#include <stdint.h>
 
+#include "r_phase.h"
 
 
 //
@@ -31,7 +33,20 @@
 
 typedef int fixed_t;
 
-fixed_t FixedMul	(fixed_t a, fixed_t b);
+//
+// A widening multiply and a shift, which is less work than calling it:
+// out of line both arguments are pinned in the argument registers, the
+// result travels back through another, and the caller spills whatever
+// it holds across the call.  Inline, the renderer's innermost loops
+// keep their values in registers and the multiply lands where the
+// allocator wants it.
+//
+static inline fixed_t FixedMul(fixed_t a, fixed_t b)
+{
+    R_COUNT_FIXEDMUL();
+    return (fixed_t) (((int64_t) a * (int64_t) b) >> FRACBITS);
+}
+
 fixed_t FixedDiv	(fixed_t a, fixed_t b);
 
 

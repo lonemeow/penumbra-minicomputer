@@ -48,6 +48,9 @@ COMMON_EXCL  += i_oplmusic.c net_gui.c i_endoom.c
 COMMON_EXCL  += i_winmusic.c w_file_win32.c
 #   the dedicated server's own main() and its alternative zone allocator
 COMMON_EXCL  += d_dedicated.c z_native.c
+#   nothing left in it: FixedMul is inline in m_fixed.h, FixedDiv is in
+#   m_fixed_penumbra.c
+COMMON_EXCL  += m_fixed.c
 
 COMMON_SRCS  := $(filter-out $(addprefix $(CD)/src/,$(COMMON_EXCL)), \
                              $(wildcard $(CD)/src/*.c))

@@ -29,22 +29,12 @@
 
 
 
-// Fixme. __USE_C_FIXED__ or something.
-
-fixed_t
-FixedMul
-( fixed_t	a,
-  fixed_t	b )
-{
-    R_COUNT_FIXEDMUL();
-    return ((int64_t) a * (int64_t) b) >> FRACBITS;
-}
-
-
-
 //
+// Neither routine is built from here.  FixedMul is a `static inline' in
+// m_fixed.h, where a caller can have the multiply without the call.
 // FixedDiv lives in m_fixed_penumbra.c: this machine divides 32/32
 // only, so the 64-bit division upstream writes here becomes a libcall
-// on the renderer's hottest path.
+// on the renderer's hottest path.  The file stays for the diff against
+// upstream; the build skips it (COMMON_EXCL in ../../Makefile).
 //
 
