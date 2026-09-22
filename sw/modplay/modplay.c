@@ -1,18 +1,24 @@
 /*
- * modplay: play ProTracker modules through /dev/pmusic.
+ * modplay: play tracker modules.
  *
- * The replayer turns a song into ticks; this file turns each tick into
- * /dev/pmusic events — a period into an increment, a volume and the
- * channel's place in the stereo field into a gain for each side — and
- * submits them a little ahead of the kernel's clock, which then keeps
- * the time.  The samples go into the device's sample memory once, as
- * the file stores them, so a sample's offset there is its offset in
- * the file's sample data.
+ * The replayer turns a song into ticks, and this file plays them one
+ * of two ways.  A song the audio device's voices can hold plays on
+ * them, through /dev/pmusic: each tick becomes events — a period into
+ * an increment, a volume and the voice's place in the stereo field into
+ * a gain for each side — submitted a little ahead of the kernel's
+ * clock, which then keeps the time.  The samples go into the device's
+ * sample memory once, as the file stores them, so a sample's offset
+ * there is its offset in the file's sample data.
  *
- * usage: modplay [-Lil] [-c crossfeed] [-p order] file ...
+ * A song with more channels than the device has voices, or more
+ * samples than its memory holds, is mixed in software (mixer.c)
+ * instead, and written to /dev/audio, which then keeps the time.
+ *
+ * usage: modplay [-Lils] [-c crossfeed] [-p order] [-r rate] file ...
  */
 
 #include <sys/types.h>
+#include <sys/audioio.h>
 #include <sys/ioctl.h>
 
 #include <machine/penaudio.h>
@@ -29,9 +35,12 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "mixer.h"
 #include "replay.h"
 
-#define	DEVICE		"/dev/pmusic"
+#define	VOICES_DEVICE	"/dev/pmusic"
+#define	AUDIO_DEVICE	"/dev/audio"
+#define	AUDIOCTL_DEVICE	"/dev/audioctl"
 
 #define	LOOKAHEAD	50	/* ticks generated ahead of the clock */
 #define	LOWAT		25	/* wake when fewer ticks than this remain */
@@ -43,6 +52,8 @@
  * tick has played, so that is found by asking.
  */
 #define	POLL_MS		40
+
+#define	OUT_FRAMES	1024	/* mixed frames written at a time */
 
 struct player {
 	int		fd;
@@ -72,6 +83,8 @@ struct options {
 	bool		loop;
 	int		start;		/* the order to begin at */
 	int		crossfeed;	/* percent; -1: what suits the song */
+	bool		mix;		/* mix even a song the voices can hold */
+	uint32_t	rate;		/* to mix at; 0: half the device's */
 };
 
 static struct penaudio_info info;
@@ -272,7 +285,7 @@ feed(struct player *p)
 	return !p->done || p->npend > 0;
 }
 
-/* ── Files ───────────────────────────────────────────────────── */
+/* ── Songs ───────────────────────────────────────────────────── */
 
 static uint8_t *
 slurp(const char *path, size_t *lenp)
@@ -350,76 +363,72 @@ list(const char *path)
 	return true;
 }
 
-/* Returns false if the file could not be played. */
+/* ── Playing on the device's voices ──────────────────────────── */
+
+/*
+ * Claim the device's voices for a song, if it fits them: a voice for
+ * each channel, and room for its samples.  Returns the device, or -1
+ * when the song has to be mixed in software instead.
+ */
+static int
+voices_open(const struct song *s)
+{
+	uint32_t voices = (uint32_t)s->channels;
+	int fd;
+
+	if ((fd = open(VOICES_DEVICE, O_RDWR)) == -1)
+		return -1;
+	if (ioctl(fd, PENAUDIO_GETINFO, &info) == -1)
+		err(1, "GETINFO");
+	if (info.pi_nvoices < voices || s->sampledata_size > info.pi_maxmem) {
+		close(fd);
+		return -1;
+	}
+	/* Fewer are granted while /dev/audio holds one of them. */
+	if (ioctl(fd, PENAUDIO_ALLOC, &voices) == -1)
+		err(1, "ALLOC");
+	if (voices < (uint32_t)s->channels) {
+		close(fd);
+		return -1;
+	}
+	return fd;
+}
+
 static bool
-play(int fd, const char *path, const struct options *opt)
+play_voices(int fd, const char *path, const struct song *s,
+    const struct options *opt)
 {
 	static struct player p;
 	struct penaudio_clock pc;
 	struct pollfd pfd;
 	struct penaudio_status st;
-	struct song song;
-	const char *error, *unsupported;
-	uint8_t *buf;
 	uint64_t inc;
-	size_t len;
 	bool more;
-
-	if ((buf = slurp(path, &len)) == NULL)
-		return false;
-	if ((error = song_parse(&song, buf, len)) != NULL) {
-		warnx("%s: %s", path, error);
-		free(buf);
-		return false;
-	}
-
-	if (opt->start >= song.length) {
-		warnx("%s: has %d orders, so -p %d starts past its end", path,
-		    song.length, opt->start);
-		goto fail;
-	}
-
-	unsupported = song_unsupported(&song);
-	if (unsupported != NULL && !opt->ignore) {
-		warnx("%s: uses %s, which modplay does not play; "
-		    "-i plays it without", path, unsupported);
-		goto fail;
-	}
-	if (song.sampledata_size > info.pi_maxmem) {
-		warnx("%s: needs %u bytes of sample memory, and "
-		    "machdep.paudio.maxmem allows %u", path,
-		    song.sampledata_size, info.pi_maxmem);
-		goto fail;
-	}
 
 	/* Worked out once, so a tick costs no floating point: the machine
 	 * has no FPU. */
-	inc = ((uint64_t)song.clock << 16) / info.pi_rate;
+	inc = ((uint64_t)s->clock << 16) / info.pi_rate;
 	if (inc > UINT32_MAX) {
 		warnx("%s: no increment fits its clock on a %u Hz device",
 		    path, info.pi_rate);
-		goto fail;
+		return false;
 	}
 	clock_inc = (uint32_t)inc;
-	crossfeed = opt->crossfeed >= 0 ? opt->crossfeed : song.crossfeed;
-
-	if (unsupported != NULL)
-		printf("  playing without %s\n", unsupported);
 
 	if (ioctl(fd, PENAUDIO_RESET) == -1)
 		err(1, "RESET");
-	if (ioctl(fd, PENAUDIO_SETMEM, &song.sampledata_size) == -1)
+	if (ioctl(fd, PENAUDIO_SETMEM, &s->sampledata_size) == -1)
 		err(1, "SETMEM");
-	if (song.sampledata_size != 0 &&
-	    pwrite(fd, song.sampledata, song.sampledata_size, 0) !=
-	    (ssize_t)song.sampledata_size)
+	if (s->sampledata_size != 0 &&
+	    pwrite(fd, s->sampledata, s->sampledata_size, 0) !=
+	    (ssize_t)s->sampledata_size)
 		err(1, "loading samples");
 
 	memset(&p, 0, sizeof(p));
 	p.fd = fd;
-	p.song = &song;
+	p.song = s;
 	p.bpm = 125;		/* ProTracker's; the song may change it */
-	replay_init(&p.replay, &song, opt->start, opt->loop);
+	replay_init(&p.replay, s, opt->start, opt->loop);
 
 	/*
 	 * The clock starts at the first tick's tempo, which is known once
@@ -456,28 +465,214 @@ play(int fd, const char *path, const struct options *opt)
 	/* Silence at once, rather than letting queued ticks play out. */
 	if (ioctl(fd, PENAUDIO_RESET) == -1)
 		err(1, "RESET");
-	song_free(&song);
-	free(buf);
 	return true;
+}
 
-fail:
+/* ── Mixing in software ──────────────────────────────────────── */
+
+/* The fastest rate the device offers, which its hardware runs at
+ * unless told otherwise; 0 if it offers none. */
+static uint32_t
+native_rate(int ctl)
+{
+	audio_format_query_t q;
+	uint32_t best = 0, i;
+
+	for (q.index = 0; ioctl(ctl, AUDIO_QUERYFORMAT, &q) == 0; q.index++) {
+		if (!(q.fmt.mode & AUMODE_PLAY))
+			continue;
+		/* A type of 0 is a range, lowest to highest; otherwise
+		 * the type counts the rates listed. */
+		if (q.fmt.frequency_type == 0) {
+			if (q.fmt.frequency[1] > best)
+				best = q.fmt.frequency[1];
+			continue;
+		}
+		for (i = 0; i < q.fmt.frequency_type &&
+		    i < AUFMT_MAX_FREQUENCIES; i++)
+			if (q.fmt.frequency[i] > best)
+				best = q.fmt.frequency[i];
+	}
+	return best;
+}
+
+/* Returns false if the mix could not be written, or a signal ended
+ * the song. */
+static bool
+write_frames(int fd, const int16_t *out, uint32_t frames)
+{
+	const char *p = (const char *)out;
+	size_t left = (size_t)frames * 2 * sizeof(out[0]);
+	ssize_t n;
+
+	while (left > 0) {
+		if ((n = write(fd, p, left)) == -1) {
+			if (errno == EINTR && !quit)
+				continue;
+			if (errno != EINTR)
+				warn("%s", AUDIO_DEVICE);
+			return false;
+		}
+		p += n;
+		left -= (size_t)n;
+	}
+	return true;
+}
+
+static bool
+play_mixed(const struct song *s, const struct options *opt)
+{
+	static struct mixer mx;
+	static struct replay r;
+	static int16_t out[OUT_FRAMES * 2];
+	struct replay_tick t;
+	struct audio_info hw, ai;
+	uint32_t rate = opt->rate, n = 0, got;
+	bool restore = false, ok = true;
+	int ctl, fd;
+
+	if ((ctl = open(AUDIOCTL_DEVICE, O_RDWR)) == -1) {
+		warn("%s", AUDIOCTL_DEVICE);
+		return false;
+	}
+	if (rate == 0 && (rate = native_rate(ctl) / 2) == 0) {
+		warnx("%s offers no rate to play at", AUDIOCTL_DEVICE);
+		close(ctl);
+		return false;
+	}
+
+	/*
+	 * Run the hardware at the mixing rate, so that its voice resamples
+	 * the mix for nothing, and put it back afterwards.  It cannot
+	 * change while anything has the device open, nor to a rate it
+	 * cannot run at; audio(4) then converts the mix itself.
+	 */
+	if (ioctl(ctl, AUDIO_GETFORMAT, &hw) == -1)
+		err(1, "GETFORMAT");
+	if (hw.play.sample_rate != rate) {
+		ai = hw;
+		ai.play.sample_rate = rate;
+		if (ioctl(ctl, AUDIO_SETFORMAT, &ai) == 0)
+			restore = true;
+		else
+			warn("the device stays at %u Hz, so the kernel converts "
+			    "the mix", hw.play.sample_rate);
+	}
+
+	if ((fd = open(AUDIO_DEVICE, O_WRONLY)) == -1) {
+		warn("%s", AUDIO_DEVICE);
+		ok = false;
+		goto done;
+	}
+	AUDIO_INITINFO(&ai);
+	ai.play.sample_rate = rate;
+	ai.play.channels = 2;
+	ai.play.precision = 16;
+	ai.play.encoding = AUDIO_ENCODING_SLINEAR_LE;
+	if (ioctl(fd, AUDIO_SETINFO, &ai) == -1)
+		err(1, "SETINFO");
+
+	printf("  mixing %d channels at %u Hz\n", s->channels, rate);
+	mixer_init(&mx, s, rate, crossfeed);
+	replay_init(&r, s, opt->start, opt->loop);
+	while (ok && !quit && replay_next(&r, &t)) {
+		mixer_tick(&mx, &t);
+		while (ok && (got = mixer_mix(&mx, out + 2 * n,
+		    OUT_FRAMES - n)) > 0) {
+			n += got;
+			if (n == OUT_FRAMES) {
+				ok = write_frames(fd, out, n);
+				n = 0;
+			}
+		}
+	}
+	if (ok && !quit && n > 0)
+		ok = write_frames(fd, out, n);
+
+	/* Let the end of the song play out, unless a signal ended it. */
+	if (ok && !quit && ioctl(fd, AUDIO_DRAIN) == -1 && errno != EINTR)
+		warn("%s", AUDIO_DEVICE);
+	if (quit)
+		(void)ioctl(fd, AUDIO_FLUSH);
+	close(fd);
+
+done:
+	if (restore && ioctl(ctl, AUDIO_SETFORMAT, &hw) == -1)
+		warn("could not put the device back to %u Hz",
+		    hw.play.sample_rate);
+	close(ctl);
+	return ok;
+}
+
+/* ── Files ───────────────────────────────────────────────────── */
+
+/* Returns false if the file could not be played. */
+static bool
+play(const char *path, const struct options *opt)
+{
+	struct song song;
+	const char *error, *unsupported;
+	uint8_t *buf;
+	size_t len;
+	bool ok;
+	int fd = -1;
+
+	if ((buf = slurp(path, &len)) == NULL)
+		return false;
+	if ((error = song_parse(&song, buf, len)) != NULL) {
+		warnx("%s: %s", path, error);
+		free(buf);
+		return false;
+	}
+
+	ok = false;
+	if (opt->start >= song.length) {
+		warnx("%s: has %d orders, so -p %d starts past its end", path,
+		    song.length, opt->start);
+		goto done;
+	}
+
+	unsupported = song_unsupported(&song);
+	if (unsupported != NULL && !opt->ignore) {
+		warnx("%s: uses %s, which modplay does not play; "
+		    "-i plays it without", path, unsupported);
+		goto done;
+	}
+	if (unsupported != NULL)
+		printf("  playing without %s\n", unsupported);
+
+	crossfeed = opt->crossfeed >= 0 ? opt->crossfeed : song.crossfeed;
+	if (!opt->mix)
+		fd = voices_open(&song);
+	if (fd != -1) {
+		ok = play_voices(fd, path, &song, opt);
+		close(fd);
+	} else
+		ok = play_mixed(&song, opt);
+
+done:
 	song_free(&song);
 	free(buf);
-	return false;
+	return ok;
 }
 
 static void
 usage(void)
 {
 	fprintf(stderr,
-	    "usage: modplay [-Lil] [-c crossfeed] [-p order] file ...\n"
+	    "usage: modplay [-Lils] [-c crossfeed] [-p order] [-r rate] "
+	    "file ...\n"
 	    "  -c  percent of each channel's own side that the other side "
 	    "gets:\n"
 	    "      0 pans hard, as the Amiga does, 100 is mono; default %d\n"
 	    "  -i  play a module even if it uses effects modplay ignores\n"
 	    "  -L  list where each file's cues start instead of playing\n"
 	    "  -l  loop each song rather than stopping at its end\n"
-	    "  -p  start at this order rather than the first\n",
+	    "  -p  start at this order rather than the first\n"
+	    "  -r  mix at this rate, where a song is mixed in software;\n"
+	    "      default half the device's own\n"
+	    "  -s  mix in software even a song the device's voices could "
+	    "play\n",
 	    MOD_CROSSFEED);
 	exit(2);
 }
@@ -487,15 +682,15 @@ main(int argc, char **argv)
 {
 	struct sigaction sa;
 	struct options opt;
-	uint32_t voices;
+	unsigned long rate;
 	bool listing = false, ok = true;
 	char *end;
-	int ch, fd;
+	int ch;
 
 	memset(&opt, 0, sizeof(opt));
 	opt.crossfeed = -1;
 
-	while ((ch = getopt(argc, argv, "c:iLlp:")) != -1) {
+	while ((ch = getopt(argc, argv, "c:iLlp:r:s")) != -1) {
 		switch (ch) {
 		case 'c':
 			opt.crossfeed = (int)strtol(optarg, &end, 10);
@@ -518,6 +713,16 @@ main(int argc, char **argv)
 			    opt.start < 0 || opt.start >= SONG_ORDERS)
 				usage();
 			break;
+		case 'r':
+			rate = strtoul(optarg, &end, 10);
+			if (*optarg == '\0' || *end != '\0' ||
+			    rate < 1000 || rate > 192000)
+				usage();
+			opt.rate = (uint32_t)rate;
+			break;
+		case 's':
+			opt.mix = true;
+			break;
 		default:
 			usage();
 		}
@@ -532,28 +737,15 @@ main(int argc, char **argv)
 		return ok ? 0 : 1;
 	}
 
-	/* No SA_RESTART: a signal has to end the wait in poll(). */
+	/* No SA_RESTART: a signal has to end the wait in poll() or
+	 * write(). */
 	memset(&sa, 0, sizeof(sa));
 	sa.sa_handler = on_signal;
 	sigaction(SIGINT, &sa, NULL);
 	sigaction(SIGTERM, &sa, NULL);
 
-	if ((fd = open(DEVICE, O_RDWR)) == -1)
-		err(1, "%s", DEVICE);
-	if (ioctl(fd, PENAUDIO_GETINFO, &info) == -1)
-		err(1, "GETINFO");
-
-	voices = MOD_CHANNELS;
-	if (ioctl(fd, PENAUDIO_ALLOC, &voices) == -1)
-		err(1, "ALLOC");
-	if (voices < MOD_CHANNELS)
-		errx(1, "%u of %d voices free; is /dev/audio in use?",
-		    voices, MOD_CHANNELS);
-
 	for (; optind < argc && !quit; optind++)
-		if (!play(fd, argv[optind], &opt))
+		if (!play(argv[optind], &opt))
 			ok = false;
-
-	close(fd);
 	return ok ? 0 : 1;
 }

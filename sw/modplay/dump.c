@@ -6,7 +6,10 @@
  * how long the song runs; with -r, also each row as it is played, one
  * column per channel: period, volume, and * where a note starts.
  *
- * usage: modplay-dump [-r] file ...
+ * With -w, it also mixes the song as modplay mixes one in software,
+ * into a WAV file, to be heard without the machine; -R sets the rate.
+ *
+ * usage: modplay-dump [-r] [-R rate] [-w file.wav] file ...
  */
 
 #include <err.h>
@@ -15,7 +18,11 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "mixer.h"
 #include "replay.h"
+
+#define	WAV_HEADER	44
+#define	WAV_FRAMES	1024
 
 static uint8_t *
 slurp(const char *path, size_t *lenp)
@@ -38,7 +45,72 @@ slurp(const char *path, size_t *lenp)
 }
 
 static void
-dump(const char *path, bool rows)
+put32(uint8_t *p, uint32_t v)
+{
+	p[0] = (uint8_t)v;
+	p[1] = (uint8_t)(v >> 8);
+	p[2] = (uint8_t)(v >> 16);
+	p[3] = (uint8_t)(v >> 24);
+}
+
+/* A 16-bit stereo PCM WAV header for so many bytes of samples. */
+static void
+wav_header(uint8_t *h, uint32_t rate, uint32_t bytes)
+{
+	memcpy(h, "RIFF", 4);
+	put32(h + 4, 36 + bytes);
+	memcpy(h + 8, "WAVEfmt ", 8);
+	put32(h + 16, 16);
+	put32(h + 20, 1 | 2 << 16);		/* PCM, two channels */
+	put32(h + 24, rate);
+	put32(h + 28, rate * 4);		/* bytes a second */
+	put32(h + 32, 4 | 16 << 16);		/* bytes a frame, bits */
+	memcpy(h + 36, "data", 4);
+	put32(h + 40, bytes);
+}
+
+/* Mix the song as modplay would through the software mixer, at its
+ * own crossfeed, into a WAV file. */
+static void
+render(const struct song *s, const char *wav, uint32_t rate)
+{
+	static struct mixer mx;
+	static int16_t out[WAV_FRAMES * 2];
+	static uint8_t bytes[WAV_FRAMES * 4];
+	uint8_t header[WAV_HEADER];
+	struct replay r;
+	struct replay_tick t;
+	uint32_t n, i, total = 0;
+	FILE *f;
+
+	if ((f = fopen(wav, "wb")) == NULL)
+		err(1, "%s", wav);
+	wav_header(header, rate, 0);
+	fwrite(header, 1, WAV_HEADER, f);
+
+	mixer_init(&mx, s, rate, s->crossfeed);
+	replay_init(&r, s, 0, false);
+	while (replay_next(&r, &t)) {
+		mixer_tick(&mx, &t);
+		while ((n = mixer_mix(&mx, out, WAV_FRAMES)) > 0) {
+			for (i = 0; i < 2 * n; i++) {
+				bytes[2 * i] = (uint8_t)out[i];
+				bytes[2 * i + 1] = (uint8_t)(out[i] >> 8);
+			}
+			fwrite(bytes, 4, n, f);
+			total += 4 * n;
+		}
+	}
+
+	wav_header(header, rate, total);
+	if (fseek(f, 0, SEEK_SET) != 0 ||
+	    fwrite(header, 1, WAV_HEADER, f) != WAV_HEADER || fclose(f) != 0)
+		err(1, "%s", wav);
+	printf("  mixed into %s at %u Hz\n", wav, rate);
+}
+
+static void
+dump(const char *path, bool rows, const char *wav, uint32_t rate)
 {
 	struct song song;
 	struct replay r;
@@ -76,32 +148,52 @@ dump(const char *path, bool rows)
 	}
 	printf("  plays %u:%02u.%03u\n", (unsigned)(us / 60000000),
 	    (unsigned)(us / 1000000 % 60), (unsigned)(us / 1000 % 1000));
+	if (wav != NULL)
+		render(&song, wav, rate);
 
 	song_free(&song);
 	free(buf);
 }
 
+static void
+usage(void)
+{
+	fprintf(stderr,
+	    "usage: modplay-dump [-r] [-R rate] [-w file.wav] file ...\n");
+	exit(2);
+}
+
 int
 main(int argc, char **argv)
 {
+	const char *wav = NULL;
+	unsigned long rate = 24000;
 	bool rows = false;
+	char *end;
 	int ch;
 
-	while ((ch = getopt(argc, argv, "r")) != -1) {
+	while ((ch = getopt(argc, argv, "rR:w:")) != -1) {
 		switch (ch) {
 		case 'r':
 			rows = true;
 			break;
+		case 'R':
+			rate = strtoul(optarg, &end, 10);
+			if (*optarg == '\0' || *end != '\0' ||
+			    rate < 1000 || rate > 192000)
+				usage();
+			break;
+		case 'w':
+			wav = optarg;
+			break;
 		default:
-			fprintf(stderr, "usage: modplay-dump [-r] file ...\n");
-			return 2;
+			usage();
 		}
 	}
-	if (optind == argc) {
-		fprintf(stderr, "usage: modplay-dump [-r] file ...\n");
-		return 2;
-	}
+	/* One file to a WAV. */
+	if (optind == argc || (wav != NULL && argc - optind != 1))
+		usage();
 	for (; optind < argc; optind++)
-		dump(argv[optind], rows);
+		dump(argv[optind], rows, wav, (uint32_t)rate);
 	return 0;
 }
