@@ -101,7 +101,7 @@ Tracked tests: `testcase-InstCombine-1.c`, `pr57344-3.c`,
 
 The known upstream GlobalISel wrap-flag miscompile families are
 audited in
-[`doc/llvm-gisel-upstream-miscompile-exposure.md`](llvm-gisel-upstream-miscompile-exposure.md):
+[`doc/llvm-gisel-upstream-miscompile-exposure.md`](../llvm-gisel-upstream-miscompile-exposure.md):
 both flag-corruption mechanisms actively deposit false `nuw` flags
 in our pipeline today and are harmless only because this LLVM's
 known-bits code never reads them.  A rebase (or local flag-aware
@@ -664,7 +664,7 @@ In order:
    alone, since a `Bcc` costs as much as an ALU operation; penumbra2_5
    adds the misprediction penalty at one named, assumed misprediction
    rate.  That needs branch costs in the scheduling models, which
-   [instruction-timing.md](internals/instruction-timing.md) already
+   [instruction-timing.md](../internals/instruction-timing.md) already
    records.  With today's costs the override answers false on both
    cores, which also removes the branch-plus-arithmetic shapes; the cost
    check pays once a core (gen3) moves the numbers.
@@ -798,7 +798,7 @@ rather than two:
 | Overlap, forwarded | gen2.5 | Only loads want distance, and only one slot |
 
 The gen2 figures are in
-[penumbra2/overview.md](internals/penumbra2/overview.md): load-use
+[penumbra2/overview.md](../internals/penumbra2/overview.md): load-use
 stall 4 vs. 1 and CPI on tight cache-hit loops ~2.5-3.0 vs. ~1.2-1.5
 (branch costs are under [Branch costs](#branch-costs)).  That CPI gap
 is this property.
@@ -839,7 +839,7 @@ reads it.  Loads, stores and branches carry no read annotation, and
 the other cost decisions — the constant-multiply combine's shift/add
 chains among them — still price gen2 as if it forwarded.  On gen2 a consumer waits for
 its producer to leave WB: 3 stall cycles at distance 1, fewer further
-back ([hazard-model.md](internals/penumbra2/hazard-model.md), Example
+back ([hazard-model.md](../internals/penumbra2/hazard-model.md), Example
 A; a chain of eight dependent `ADD`s measures 29 cycles against 8 on
 gen2.5).  A shift/add chain is the worst case, since every op reads
 the one before it.
@@ -868,7 +868,7 @@ which is little to gain for the cost of enabling the pass.
 ### Branch costs
 
 Measured on the RTL testbenches
-([instruction-timing.md](internals/instruction-timing.md)):
+([instruction-timing.md](../internals/instruction-timing.md)):
 
 | Control transfer | gen1 | gen2.5 |
 |---|---:|---:|
@@ -884,7 +884,7 @@ branch site's last resolved direction; a correct taken prediction
 discards the sequential fetch launched in IF1 as the branch enters
 IF2, and a misprediction, indirect jump or return discards the four
 slots behind the branch in IF1, IF2, the fetch buffer and ID
-([instruction-timing.md](internals/instruction-timing.md#control-transfers-on-penumbra25)).
+([instruction-timing.md](../internals/instruction-timing.md#control-transfers-on-penumbra25)).
 gen2.5's `MispredictPenalty` is therefore **4**.  gen2 has no BTB, so
 every taken branch there costs the redirect; branch behaviour is a
 second reason gen2 and gen2.5 cannot share a model.
@@ -915,7 +915,7 @@ combines — see the "no branch-cost model" entry.
   model states MUL and DIV latencies; `PenumbraSubtarget::getMulCycles`
   / `getDivCycles` read them, and `getArithmeticInstrCost` and
   `isIntDivCheap()` consume them.  See
-  [the constant strength-reduction entry](#compiler-constant-multiply-divide-and-remainder-strength-reduction).
+  [the constant strength-reduction entry](compiler-arith.md#compiler-constant-multiply-divide-and-remainder-strength-reduction).
 - **Branch-vs-branchless** — the "no branch-cost model" entry above.
   Gate the select-of-constants fold on
   `convertSelectOfConstantsToMath`, answered from the branch costs of

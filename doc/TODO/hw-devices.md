@@ -112,17 +112,17 @@ first consumer (boot may stay on UART initially); a boot-ROM local
 console is a later, well-defined follow-on.
 
 Two new autoconfig device classes
-([`system/bus.md`](system/bus.md)):
+([`system/bus.md`](../system/bus.md)):
 
 - `CLASS_DISPLAY` (6) — display adapter: a character-cell console as
   the mandatory core, plus an optional framebuffer capability
   (`CAP.FRAMEBUFFER`, geometry/format discoverable). Contract
-  [`system/devices/display.md`](system/devices/display.md),
-  microarchitecture [`internals/display.md`](internals/display.md).
+  [`system/devices/display.md`](../system/devices/display.md),
+  microarchitecture [`internals/display.md`](../internals/display.md).
 - `CLASS_USBHC` (8) — transaction-level USB host. Contract
-  [`system/devices/usb-host.md`](system/devices/usb-host.md),
+  [`system/devices/usb-host.md`](../system/devices/usb-host.md),
   microarchitecture
-  [`internals/usb-host-controller.md`](internals/usb-host-controller.md).
+  [`internals/usb-host-controller.md`](../internals/usb-host-controller.md).
 
 Decisions already settled (rationale lives in the docs, not here):
 
@@ -495,14 +495,14 @@ single-transaction register behavior as the default.
 The ULX3S has a 3.5 mm jack driven by a 4-bit resistor ladder per
 channel, and nothing in the design uses it. Register interface and
 driver model are specified in
-[devices/audio.md](system/devices/audio.md); `CLASS_AUDIO` is registered
+[devices/audio.md](../system/devices/audio.md); `CLASS_AUDIO` is registered
 as class 7. This entry records the measurements behind the shape of that
 spec and the decisions that still need hardware to settle.
 
 ### Why the device has no addressable sample memory
 
 The bus expresses exactly one master. Every control signal in
-[bus-protocol.md](hardware/bus-protocol.md) is marked master-to-slave and
+[bus-protocol.md](../hardware/bus-protocol.md) is marked master-to-slave and
 there is no request/grant pair, so a device cannot fetch its own sample
 data; anything it plays, the CPU must push. That leaves two shapes: a
 CPU-filled BRAM the channels address (Paula/GUS), or per-channel FIFOs.
@@ -759,7 +759,7 @@ for long:
    `/dev/audio`.
 3. Remaining channels, `INC`, `VOL` and the mixer — the point at which
    `CAP.CHANNELS` becomes greater than one and the
-   [voice interface](system/netbsd/design-notes.md#multi-voice-binding)
+   [voice interface](../system/netbsd/design-notes.md#multi-voice-binding)
    becomes reachable.
 4. A tracker replayer in userland, with its mixer removed and its
    per-tick channel state submitted to `/dev/pmusic` in its place.

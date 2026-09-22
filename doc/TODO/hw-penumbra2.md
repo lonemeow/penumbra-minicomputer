@@ -606,8 +606,8 @@ and shorten the cones.
   before it leaves the L2. Cost: +1 read-hit cycle and back-to-back L2
   reads serialise (fill-throughput hit on L1 misses, recoverable by the L2
   read-pipeline decouple). Detail in
-  [the L2 cache design](internals/l2-cache.md#pipeline-hit_latency3-the-gen2-machine)
-  and [the gen2 memory interface](internals/penumbra2/memory-interface.md#deferred-fill-speed-directions).
+  [the L2 cache design](../internals/l2-cache.md#pipeline-hit_latency3-the-gen2-machine)
+  and [the gen2 memory interface](../internals/penumbra2/memory-interface.md#deferred-fill-speed-directions).
 - **L2 read-hit PLRU touch deferred** one cycle (captured at the hit,
   applied against the live array next cycle), off the L2 tag-compare path.
   A read hit never changes state, so the deferred apply always lands back

@@ -519,7 +519,7 @@ for the local-console keyboard, and once it exists the whole MI USB
 stack plus every in-tree USB Ethernet driver (`axe`, `aue`, `cdce`, …)
 comes along — no new RTL, no device firmware, no from-scratch NIC
 driver. The alternatives stay viable later: the ESP32 SLIP bridge
-([`system/devices/esp32-nic.md`](system/devices/esp32-nic.md), needs
+([`system/devices/esp32-nic.md`](../system/devices/esp32-nic.md), needs
 RTL + ESP-IDF firmware, adds WiFi) and a Wiznet W5500 on the existing
 SPI class (driver-only, needs external hardware). Both have a lower
 throughput ceiling than software-driven full-speed bulk, so USB-first
