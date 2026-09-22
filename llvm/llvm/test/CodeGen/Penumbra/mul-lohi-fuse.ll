@@ -76,3 +76,88 @@ define i32 @lo_half_only(i32 %a, i32 %b) {
   %m = mul i32 %a, %b
   ret i32 %m
 }
+
+; An operand that comes from memory reaches the multiply as a single
+; extending load, the combiner having folded the extension into it.  The
+; widening form has to be recognised through that too, or every
+; fixed-point multiply of a loaded value pays three hardware multiplies
+; and the sign corrections between them.
+define i64 @smul_widen_load(ptr %p, i32 %b) {
+; CHECK-LABEL: smul_widen_load:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  // %bb.0:
+; CHECK-NEXT:    ldw r1, [r1 + 0]
+; CHECK-NEXT:    mul r1, r2, r2
+; CHECK-NEXT:    jmp lr
+  %a = load i32, ptr %p
+  %sa = sext i32 %a to i64
+  %sb = sext i32 %b to i64
+  %m = mul i64 %sa, %sb
+  ret i64 %m
+}
+
+define i64 @umul_widen_load(ptr %p, i32 %b) {
+; CHECK-LABEL: umul_widen_load:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  // %bb.0:
+; CHECK-NEXT:    ldw r1, [r1 + 0]
+; CHECK-NEXT:    mulu r1, r2, r2
+; CHECK-NEXT:    jmp lr
+  %a = load i32, ptr %p
+  %za = zext i32 %a to i64
+  %zb = zext i32 %b to i64
+  %m = mul i64 %za, %zb
+  ret i64 %m
+}
+
+define i64 @smul_widen_both_loads(ptr %p, ptr %q) {
+; CHECK-LABEL: smul_widen_both_loads:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  // %bb.0:
+; CHECK-NEXT:    ldw r3, [r1 + 0]
+; CHECK-NEXT:    ldw r1, [r2 + 0]
+; CHECK-NEXT:    mul r1, r3, r2
+; CHECK-NEXT:    jmp lr
+  %a = load i32, ptr %p
+  %b = load i32, ptr %q
+  %sa = sext i32 %a to i64
+  %sb = sext i32 %b to i64
+  %m = mul i64 %sa, %sb
+  ret i64 %m
+}
+
+; A load that extends from narrower than 32 bits carries the same s32
+; value in its low word, so it folds the same way.
+define i64 @smul_widen_load_i16(ptr %p, i32 %b) {
+; CHECK-LABEL: smul_widen_load_i16:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  // %bb.0:
+; CHECK-NEXT:    ldhs r1, [r1 + 0]
+; CHECK-NEXT:    mul r1, r2, r2
+; CHECK-NEXT:    jmp lr
+  %a = load i16, ptr %p
+  %sa = sext i16 %a to i64
+  %sb = sext i32 %b to i64
+  %m = mul i64 %sa, %sb
+  ret i64 %m
+}
+
+; Doom's FixedMul: a widening multiply whose middle 32 bits are kept.
+define i32 @fixed_mul_load(ptr %p, i32 %b) {
+; CHECK-LABEL: fixed_mul_load:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  // %bb.0:
+; CHECK-NEXT:    ldw r3, [r1 + 0]
+; CHECK-NEXT:    mul r3, r2, r1
+; CHECK-NEXT:    shr r3, 16
+; CHECK-NEXT:    shl r1, 16
+; CHECK-NEXT:    or r1, r3
+; CHECK-NEXT:    jmp lr
+  %a = load i32, ptr %p
+  %sa = sext i32 %a to i64
+  %sb = sext i32 %b to i64
+  %m = mul i64 %sa, %sb
+  %s = ashr i64 %m, 16
+  %t = trunc i64 %s to i32
+  ret i32 %t
+}

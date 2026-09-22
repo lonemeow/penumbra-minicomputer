@@ -630,23 +630,50 @@ bool PenumbraLegalizerInfo::legalizeCustom(
     assert(Ty.getSizeInBits() == 64 && "only s64 G_MUL is custom-lowered");
     {
       const LLT S32 = LLT::scalar(32);
-      auto ExtSrc = [&](Register R, unsigned ExtOpc) -> Register {
+
+      // Where the s32 behind a widened operand lives.  An operand extended
+      // in a register names its source outright.  Otherwise the question
+      // is whether the value carries any information above bit 31 —
+      // extending loads (the combiner folds `G_SEXT (G_LOAD s32)` into
+      // `G_SEXTLOAD` before this runs) and results already narrowed to
+      // fixed point, as chained multiplies produce, do not, and their low
+      // word is the operand.
+      struct WideSource {
+        Register Src;    // an s32 value
+        Register Wide;   // an s64 value that is an s32 widened
+        bool isValid() const { return Src.isValid() || Wide.isValid(); }
+      };
+      GISelValueTracking *VT = Helper.getValueTracking();
+      auto ExtSrc = [&](Register R, bool Signed) -> WideSource {
         MachineInstr *Def = getDefIgnoringCopies(R, MRI);
+        unsigned ExtOpc = Signed ? TargetOpcode::G_SEXT : TargetOpcode::G_ZEXT;
         if (Def && Def->getOpcode() == ExtOpc &&
             MRI.getType(Def->getOperand(1).getReg()) == S32)
-          return Def->getOperand(1).getReg();
-        return Register();
+          return {Def->getOperand(1).getReg(), Register()};
+        if (VT && (Signed ? VT->computeNumSignBits(R) > 32
+                          : VT->getKnownBits(R).countMinLeadingZeros() >= 32))
+          return {Register(), R};
+        return {};
       };
+      // Narrowing such a value is free: the legalizer splits it into its
+      // two words and the artifact combiner folds the truncate back to
+      // the low one.  Built only once the multiply is known to be the
+      // widening form, so an unmatched operand leaves nothing behind.
+      auto SourceReg = [&](const WideSource &W) {
+        return W.Src.isValid() ? W.Src
+                               : MIRBuilder.buildTrunc(S32, W.Wide).getReg(0);
+      };
+
       Register LHS = MI.getOperand(1).getReg();
       Register RHS = MI.getOperand(2).getReg();
-      Register SA = ExtSrc(LHS, TargetOpcode::G_SEXT);
-      Register SB = ExtSrc(RHS, TargetOpcode::G_SEXT);
-      Register ZA = ExtSrc(LHS, TargetOpcode::G_ZEXT);
-      Register ZB = ExtSrc(RHS, TargetOpcode::G_ZEXT);
+      WideSource SA = ExtSrc(LHS, /*Signed=*/true);
+      WideSource SB = ExtSrc(RHS, /*Signed=*/true);
+      WideSource ZA = ExtSrc(LHS, /*Signed=*/false);
+      WideSource ZB = ExtSrc(RHS, /*Signed=*/false);
       bool Signed = SA.isValid() && SB.isValid();
       if (Signed || (ZA.isValid() && ZB.isValid())) {
-        Register A = Signed ? SA : ZA;
-        Register B = Signed ? SB : ZB;
+        Register A = SourceReg(Signed ? SA : ZA);
+        Register B = SourceReg(Signed ? SB : ZB);
         auto Lo = MIRBuilder.buildMul(S32, A, B);
         auto Hi = Signed ? MIRBuilder.buildSMulH(S32, A, B)
                          : MIRBuilder.buildUMulH(S32, A, B);
