@@ -132,7 +132,13 @@ Examples: `llvm: fix PIC TLS GD materialization`,
   in the Makefile; integration testbenches (`tb_cpu_prog`,
   `tb_interactive`) are intentionally excluded. Add new entries when
   introducing modules with a `tb_<mod>.cpp` or `<mod>_test.sv` wrapper.
-- `make test-all` — `make test` then `make test-modules`.
+- `make test-gate` — gate-level event simulation of the synthesized
+  `sdram_cdc` with a routing delay on every cell input (Icarus, via the
+  FPGA container). Guards clock-domain crossings against combinational
+  glitch hazards, which a zero-delay simulator cannot represent at all.
+  Harness in `hw/sim/gate/`; `GATE_SEEDS`/`GATE_CYCLES` size the run.
+- `make test-all` — `make test` then `make test-modules`, `test-rom`
+  and `test-gate`.
 - `make test-compiler` — `llvm-test-suite` C tests on ISS in `+hosted`
   mode. Requires `compiler-rt` built per optimization level
   (`sw/tools/setup-compiler-rt.sh` builds `-O0` and `-O2` archives;

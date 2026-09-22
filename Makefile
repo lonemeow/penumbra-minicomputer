@@ -428,10 +428,48 @@ test-modules-variant:
 		$(DOCKER_RUN) --entrypoint ./$(BUILD_DIR)/V$$tb $(DOCKER_IMAGE) || exit 1; \
 	done
 
+# ── Gate-level CDC hazard test (Icarus, via the FPGA container) ──
+# Synthesizes sdram_cdc to ECP5 cells and event-simulates the mapped
+# netlist with a routing delay on every cell input.  A clock-domain
+# crossing whose failure mode is a combinational glitch is invisible to
+# a zero-delay simulator, which evaluates a multi-bit encode atomically;
+# reproducing one needs the netlist, per-pin delays and an event
+# simulator together.  Harness in hw/sim/gate/.
+#
+# Runs GATE_SEEDS routing-delay draws of GATE_CYCLES system cycles each,
+# plus a zero-delay control that must stay clean -- a violation there
+# means the harness is measuring itself rather than the design.  A deep
+# sweep is GATE_SEEDS=8 GATE_CYCLES=200000.
+GATE_DIR     = $(BUILD_DIR)/gate
+GATE_SEEDS  ?= 2
+GATE_CYCLES ?= 20000
+GATE_CELLS   = hw/sim/gate/ecp5_cell_delays.v
+GATE_TB      = hw/sim/gate/tb_sdram_cdc_gate.v
+
+$(GATE_DIR)/cdc_sv2v.v: hw/rtl/io/sdram/sdram_cdc.sv
+	@mkdir -p $(GATE_DIR)
+	$(FPGA_TOOLS)/sv2v $< -w $@
+
+$(GATE_DIR)/cdc_gate.v: $(GATE_DIR)/cdc_sv2v.v
+	$(FPGA_TOOLS)/yosys -p "read_verilog $<; synth_ecp5 -top sdram_cdc; write_verilog -noattr $@"
+
+$(GATE_DIR)/sim.vvp: $(GATE_DIR)/cdc_gate.v $(GATE_CELLS) $(GATE_TB)
+	$(FPGA_TOOLS)/iverilog -g2012 -s tb_sdram_cdc_gate -s ecp5_delay_cfg \
+		-o $@ $(GATE_CELLS) $(GATE_DIR)/cdc_gate.v $(GATE_TB)
+
+.PHONY: test-gate
+test-gate: $(GATE_DIR)/sim.vvp
+	@fail=0; \
+	for s in $$(seq 1 $(GATE_SEEDS)) zero; do \
+		if [ "$$s" = zero ]; then a="+zero"; else a="+seed=$$s"; fi; \
+		$(FPGA_TOOLS)/vvp $< $$a +cycles=$(GATE_CYCLES) || fail=1; \
+	done; \
+	if [ $$fail -ne 0 ]; then echo "  *** gate-level CDC test FAILED ***"; exit 1; fi
+
 # ── Aggregate: program tests + module tests ───────────────────
 # Usage: make test-all
 .PHONY: test-all
-test-all: test test-modules test-rom
+test-all: test test-modules test-rom test-gate
 
 
 # ── Boot ROM host unit tests (fast, no Docker, no toolchain) ──
