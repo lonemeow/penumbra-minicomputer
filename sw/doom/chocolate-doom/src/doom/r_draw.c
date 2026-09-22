@@ -37,6 +37,18 @@
 // State.
 #include "doomstat.h"
 
+#include <stdint.h>
+
+// Low detail draws each texel to two adjacent columns.  Written as one
+// halfword the pair costs a single store instead of two, which a
+// write-through cache pays for on every pixel.  The address is always
+// even: rows are 320 bytes apart and the view is a multiple of 32 wide,
+// so viewwindowx is even too.  may_alias keeps the store from being
+// reordered against the byte accesses around it.
+typedef unsigned short pixelpair_t __attribute__((__may_alias__));
+
+#define PIXEL_PAIR(v)  ((pixelpair_t) ((v) | ((v) << 8)))
+
 
 // ?
 #define MAXWIDTH			1120
@@ -217,7 +229,6 @@ void R_DrawColumnLow (void)
 { 
     int			count; 
     pixel_t*		dest;
-    pixel_t*		dest2;
     fixed_t		frac;
     fixed_t		fracstep;	 
     int                 x;
@@ -244,20 +255,29 @@ void R_DrawColumnLow (void)
     x = dc_x << 1;
     
     dest = ylookup[dc_yl] + columnofs[x];
-    dest2 = ylookup[dc_yl] + columnofs[x+1];
-    
+
+#ifdef RANGECHECK
+    if (((uintptr_t) dest & 1) != 0)
+	I_Error ("R_DrawColumnLow: column pair not aligned at %i", dc_x);
+#endif
+
     fracstep = dc_iscale; 
     frac = dc_texturemid + (dc_yl-centery)*fracstep;
     
+    {
+    const byte *source = dc_source;
+    const lighttable_t *colormap = dc_colormap;
+
     do 
     {
-	// Hack. Does not work corretly.
-	*dest2 = *dest = dc_colormap[dc_source[(frac>>FRACBITS)&127]];
+	unsigned int texel = colormap[source[(frac>>FRACBITS)&127]];
+
+	*(pixelpair_t *) dest = PIXEL_PAIR(texel);
 	dest += SCREENWIDTH;
-	dest2 += SCREENWIDTH;
 	frac += fracstep; 
 
     } while (count--);
+    }
 }
 
 
@@ -773,8 +793,12 @@ void R_DrawSpanLow (void)
 
 	// Lowres/blocky mode does it twice,
 	//  while scale is adjusted appropriately.
-	*dest++ = colormap[source[spot]];
-	*dest++ = colormap[source[spot]];
+	{
+	    unsigned int texel = colormap[source[spot]];
+
+	    *(pixelpair_t *) dest = PIXEL_PAIR(texel);
+	    dest += 2;
+	}
 
 	position += step;
 
