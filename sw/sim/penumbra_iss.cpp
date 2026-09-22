@@ -36,6 +36,7 @@
 #include <unistd.h>
 #include <termios.h>
 #include <poll.h>
+#include <map>
 #include <vector>
 
 // Byte-level USB device responder shared with the RTL testbenches —
@@ -1243,6 +1244,90 @@ static bool tlb_lookup(uint32_t vaddr, uint8_t asid, uint8_t access,
 // MMU Translation
 // ═══════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════
+// Execution profile (+pcprof)
+// ═══════════════════════════════════════════════════════════════
+//
+// Buckets executed instructions by PC, exceptions by vector and TLB
+// misses by faulting page, and writes all three to a file at exit.
+// Where +opstats says which *kinds* of instructions a run executes,
+// this says *where* they are, which is what turns a disassembly into a
+// weighted profile: `sw/tools/pcprof-report.py' symbolizes the result.
+//
+// The counts are architectural. The ISS models no cache or memory
+// latency, so a profile weights work by instructions executed and never
+// by cycles -- two rows of equal weight can cost very different time on
+// hardware.
+//
+// Buckets are keyed by virtual address, so kernel and user PCs separate
+// on their own but two processes sharing a virtual address do not:
+// profile one workload at a time.
+static const char* pcprof_path = nullptr;
+static uint32_t pcprof_start_pc = 0;   // +pcprof_start: defer until this PC
+static bool pcprof_on = false;
+
+// One block of counters per 4 KB page of address space, allocated when
+// the run first executes there, so an address space nothing runs in
+// costs a null pointer rather than a counter.
+static std::vector<uint64_t*> pcprof_pages;
+static std::map<uint32_t, uint64_t> pcprof_miss;   // TLB misses by faulting VPN
+static uint64_t pcprof_vector[16];                 // exceptions by vector
+static uint64_t pcprof_insns, pcprof_super_insns;
+
+static inline void pcprof_count_insn(uint32_t pc, bool supervisor) {
+    uint64_t*& page = pcprof_pages[pc >> 12];
+    if (!page) page = (uint64_t*)calloc(1024, sizeof(uint64_t));
+    page[(pc >> 2) & 1023]++;
+    pcprof_insns++;
+    if (supervisor) pcprof_super_insns++;
+}
+
+// Written at exit; one record per line, prefixed by its kind:
+//   V <vector> <count>   exceptions taken, by vector number
+//   M <vpn> <count>      TLB misses, by faulting page (hex VPN)
+//   P <pc> <count>       instructions executed, by PC (hex)
+static void pcprof_write() {
+    if (!pcprof_path || !pcprof_insns) return;
+
+    FILE* f = fopen(pcprof_path, "w");
+    if (!f) {
+        fprintf(stderr, "[PCPROF] cannot write '%s'\n", pcprof_path);
+        return;
+    }
+    fprintf(f, "# penumbra-iss execution profile\n");
+    fprintf(f, "# insns %llu super %llu\n",
+            (unsigned long long)pcprof_insns,
+            (unsigned long long)pcprof_super_insns);
+    for (int v = 0; v < 16; v++)
+        if (pcprof_vector[v])
+            fprintf(f, "V %d %llu\n", v, (unsigned long long)pcprof_vector[v]);
+    for (const auto& m : pcprof_miss)
+        fprintf(f, "M %08x %llu\n", m.first << 12,
+                (unsigned long long)m.second);
+    for (size_t p = 0; p < pcprof_pages.size(); p++) {
+        if (!pcprof_pages[p]) continue;
+        for (int i = 0; i < 1024; i++)
+            if (pcprof_pages[p][i])
+                fprintf(f, "P %08x %llu\n",
+                        (uint32_t)(p << 12) | (uint32_t)(i << 2),
+                        (unsigned long long)pcprof_pages[p][i]);
+    }
+    fclose(f);
+
+    uint64_t misses = 0, exceptions = 0;
+    for (const auto& m : pcprof_miss) misses += m.second;
+    for (int v = 0; v < 16; v++) exceptions += pcprof_vector[v];
+
+    fprintf(stderr, "\n── execution profile (+pcprof) ──\n");
+    fprintf(stderr, "  counted %llu instructions, %.1f%% in supervisor mode\n",
+            (unsigned long long)pcprof_insns,
+            100.0 * (double)pcprof_super_insns / (double)pcprof_insns);
+    fprintf(stderr, "  %llu exceptions, of them %llu TLB misses over %zu pages\n",
+            (unsigned long long)exceptions, (unsigned long long)misses,
+            pcprof_miss.size());
+    fprintf(stderr, "  written to '%s'\n", pcprof_path);
+}
+
 // Returns: 0=ok, VEC_TLB_MISS, VEC_TLB_PROT, VEC_ALIGN, VEC_BUS_FAULT
 static int mmu_translate(uint32_t vaddr, uint8_t access, int size,
                          bool force_bypass, uint32_t& paddr) {
@@ -1834,6 +1919,10 @@ static void sysreg_write(int dev, int reg, uint32_t val) {
 static bool pc_written;  // Set by exception entry, branches, jumps
 
 static void exception_entry(int vector) {
+    if (pcprof_on) {
+        pcprof_vector[vector & 15]++;
+        if (vector == VEC_TLB_MISS) pcprof_miss[mmu.fault_addr >> 12]++;
+    }
     if (hosted_mode) {
         fprintf(stderr, "\n[ERROR] Exception %d at PC=0x%08X in hosted mode. Aborting.\n", vector, cpu.pc);
         fprintf(stderr, "  FAULT_ADDR=0x%08X FAULT_STATUS=0x%08X\n", mmu.fault_addr, mmu.fault_status);
@@ -2264,6 +2353,17 @@ static void execute_one() {
     pc_written = false;
     int fmt = (insn >> 30) & 3;
     if (opstats_enabled) opstats_record(insn);
+    if (pcprof_path) {
+        // The trigger is a user-mode PC so a profile can start at the
+        // workload's own entry point -- a frame or iteration boundary --
+        // leaving boot and setup out of the counts.
+        if (!pcprof_on && cpu.pc == pcprof_start_pc && !(cpu.sr & SR_S)) {
+            pcprof_on = true;
+            fprintf(stderr, "\n[PCPROF] counting from PC=0x%08X after %llu instructions\n",
+                    cpu.pc, (unsigned long long)cpu.insn_count);
+        }
+        if (pcprof_on) pcprof_count_insn(cpu.pc, cpu.sr & SR_S);
+    }
 
     // R15/PC as a GPR destination is an invalid encoding → illegal instruction
     // (before any effects, and ahead of any privilege check, so illegal outranks
@@ -2952,6 +3052,9 @@ int main(int argc, char** argv) {
         else if (strcmp(argv[i], "+halt-on-break") == 0) halt_on_break = true;
         else if (strcmp(argv[i], "+branchstats") == 0) branchstats_enabled = true;
         else if (strcmp(argv[i], "+opstats") == 0) opstats_enabled = true;
+        else if (strncmp(argv[i], "+pcprof=", 8) == 0) pcprof_path = argv[i] + 8;
+        else if (strncmp(argv[i], "+pcprof_start=", 14) == 0)
+            pcprof_start_pc = (uint32_t)strtoull(argv[i] + 14, nullptr, 0);
         else if (strncmp(argv[i], "+halt_on=", 9) == 0) {
             halt_on_str = argv[i] + 9;
             halt_on_len = strlen(halt_on_str);
@@ -2970,8 +3073,15 @@ int main(int argc, char** argv) {
     }
 
     if (!hex_path) {
-        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+usbdev=type:config] [+audiofile=path] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats] [+irq_at_pc=addr[,period]]\n");
+        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+usbdev=type:config] [+audiofile=path] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats] [+pcprof=path [+pcprof_start=addr]] [+irq_at_pc=addr[,period]]\n");
         return 1;
+    }
+
+    if (pcprof_path) {
+        // One pointer per 4 KB of address space; blocks are allocated as
+        // the run reaches them.
+        pcprof_pages.assign(1u << 20, nullptr);
+        pcprof_on = (pcprof_start_pc == 0);
     }
 
     // Initialize
@@ -3078,6 +3188,7 @@ int main(int argc, char** argv) {
                 irq_at_pc_addr, (unsigned long long)irq_at_pc_arrivals,
                 (unsigned long long)irq_at_pc_injected);
     print_opstats();       // no-op unless +opstats
+    pcprof_write();        // no-op unless +pcprof
 
     if (!quiet_mode) {
         if (cpu.halted) {

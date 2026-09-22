@@ -244,6 +244,35 @@ rom.ld ──────────────────┘
   `sw/sim/penumbra-iss program.hex [+sdcard=img] [+usbdev=disk:img]
   [+trace=log] [+raw] [+trap-pc0]`. `+trap-pc0` aborts on PC=0 fetch (catches null-pointer
   jumps; off by default because some OS tests probe address 0).
+  Measurement options: `+opstats` (instruction-class histogram),
+  `+branchstats`, and `+pcprof` — see below.
+- **Execution profiles** (`+pcprof=file` plus
+  `sw/tools/pcprof-report.py`) — buckets executed instructions by PC,
+  exceptions by vector and TLB misses by faulting page.
+  `+pcprof_start=ADDR` holds off until that PC is first executed in
+  user mode, which is how a profile skips boot and level loading:
+  give it the address of the workload's own frame or iteration entry.
+  Pair it with `+halt_on=STR` to stop at the workload's report line.
+  **Counts are architectural** — the ISS models no cache or memory
+  latency, so rows weigh instructions executed, never cycles.
+
+  The report resolves PCs against the images that were running; a
+  shared library or code copied to a runtime address carries its load
+  base after an `@`:
+
+  ```sh
+  sw/tools/pcprof-report.py prof.txt build/doom/doom \
+      $KERN $KERN@$((0xffffb080 - <&_real_miss_handler>)) \
+      build/netbsd-dest/lib/libc.so.12@<base> --frames 149
+  ```
+
+  The second kernel mapping attributes the TLB refill handler, which
+  runs from the pinned vector page at `0xFFFFB080` rather than where it
+  was linked. Unattributed PCs are listed by page so the missing image
+  is identifiable; a library's base has to be supplied (nothing in the
+  profile records it). NetBSD workloads need prompt-responsive input to
+  reach a shell — feeding a fixed script into stdin drops characters,
+  since the modelled UART holds one byte.
 - **LLVM toolchain** (`build/llvm/bin/`) — clang, llvm-mc, ld.lld,
   llvm-objcopy. Details in
   `llvm/llvm/lib/Target/Penumbra/CLAUDE.md`.
