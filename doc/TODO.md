@@ -4146,7 +4146,66 @@ that fits.  Reference-bit emulation is ruled out:
 A counter word in pinned scratch, bumped on the fast path and exported
 through sysctl beside the perfctrs, settles it.  Splitting it by the
 faulting VA's region (text, heap, mapped file, stack) would say which
-data to move.
+data to move.  Simulation has now counted them (below), but nothing
+counts them on hardware, where the cost in *cycles* actually lives.
+
+### Counted in simulation (2026-09-22)
+
+A scratch ISS patch counted Doom's timedemo ("Doom: where a frame
+goes"): 9,425 refills a frame, 544k instructions in
+`_real_miss_handler` — 15.5% of every instruction executed, second
+only to `R_DrawColumn`.  Of the 8,624 user misses a frame, the mapped
+WAD and the shared libraries take 40%, Doom's text 26%, its data and
+bss 24%, the stack 5%.
+
+They are not spread evenly: 4 of the 32 sets take 51%.  Set 31 alone
+takes 17.4%, because `USRSTACK` is `0x04000000`, so every process's
+stack top is VPN `0x3fff` and lands there permanently, beside hot text
+pages `0x7f000`, `0x5f000` and `0x3f000`.  Set 11 takes 14.7% (text
+page `0xab000` against two mapped-WAD pages).  The quietest set sees
+2,250.
+
+### What the TLB's shape costs, and which parts are reachable
+
+The same access stream replayed through shadow TLB models, pinned
+pages excluded and kernel mappings treated as global.  The machine as
+built takes 1,404,402 misses over the 149 frames:
+
+| model, 4 KB pages | misses | vs. as built |
+|---|---:|---:|
+| 32×2, `CPU_CYCLES`-bit victim (as built) | 1,404,402 | — |
+| 32×2, LRU victim | 1,096,205 | −22% |
+| 32×2, LRU, hashed set index | 942,840 | −33% |
+| 16×4, LRU — the same 64 entries | 533,694 | −62% |
+| 64-entry fully associative, LRU | 356,261 | −75% |
+| 64×2, LRU (128 entries) | 263,977 | −81% |
+| 32×4, LRU (128 entries) | 178,766 | −87% |
+
+- **Address-space layout is worth at most a third.**  The hashed-index
+  row stands in for an ideally spread user address space: it scatters
+  the conflicting VPNs without adding capacity.  Moving `USRSTACK` off
+  the top set, or spreading the mmap base, costs nothing and stays
+  inside the ABI — but it buys far less than the set skew suggests,
+  because the working set does not fit 64 entries × 4 KB either way.
+  This is the only lever here that is certainly available.
+- **Associativity is where the misses are, and it is a timing
+  question, not a plan.**  Four ways at the same 64 entries more than
+  halves them.  The TLB sits on the address path of every access, so
+  the honest next step is to find out whether there is any room at
+  all: build the main TLB 16×4 and read fmax from the full board top,
+  not the bare-core probe.  If it costs clock, it is not a lever —
+  expect that answer.
+- **Changing the software-managed interface is out.**  A read-only
+  "suggested victim way", or a write mode that lets hardware place the
+  entry by VPN, would hide the geometry from software and buy the 22%
+  the pseudo-random victim gives away.  Both make victim selection and
+  placement hardware's job, which is a different TLB design, not a
+  patch to this one.  If the TLB is ever redesigned, that is the
+  conversation to have then.
+- **Page size is unmeasured.**  The 16 KB-page model in the same run
+  is unreliable: it invalidates a whole 16 KB entry whenever the
+  kernel invalidates any 4 KB page inside it, so what superpages would
+  buy is still unknown.
 
 ## Doom: where a frame goes
 
@@ -4198,6 +4257,68 @@ hazard 4%, funit 3%; hit rates L1I 97.2%, L1D 82.4%, L2 86.8%.
   "Kernel: count TLB refills".  Until that is understood, one layout's
   runs vary by ~6%: judge small changes over several runs.
 
+### Instruction profile (2026-09-22)
+
+Measured on the ISS with a scratch patch — a PC histogram, per-vector
+exception counts and a TLB-miss histogram by faulting page; none of it
+is in the tree — playing the same timedemo from the first
+`R_RenderPlayerView` to the report line: 149 frames, 522M
+instructions, 3.50M a frame.  The ISS models no cache or memory
+latency, so these are architectural instruction counts and not cycles;
+the drawer loops and the refill handler carry very different stall
+weights on hardware.  The suspected refill cost above is now counted,
+and it is the second-largest item in the frame.
+
+| per frame | insns | share |
+|---|---:|---:|
+| `R_DrawColumn` (4,016 calls, 29,059 pixels) | 595k | 17.0% |
+| TLB refill handler (9,425 refills) | 544k | 15.5% |
+| `R_RenderSegLoop` (2,289 column iterations) | 450k | 12.8% |
+| `R_DrawSpan` | 312k | 8.9% |
+| `R_DrawMaskedColumn` | 233k | 6.7% |
+| libc `memcpy` — the framebuffer blit | 175k | 5.0% |
+| `R_MakeSpans`, `FixedDiv`, `R_GetColumn` | 103k, 100k, 70k | 7.7% |
+| rest of the kernel (idle, SD paging, clock) | 207k | 5.9% |
+
+Doom 73%, kernel 21%, libc 5.6%; four functions are 45% of the whole.
+The run is cold — the mapped WAD pages in from SD during it, which is
+where `pmci_burst` (32k a frame) and most of the idle time come from.
+
+- **Reaching globals is 16% of everything executed.**  `lli`+`lui`
+  address pairs are 11.1% (98% of the executed `lui`s address
+  `.data`/`.bss`) and loads of globals another 4.7%.
+  `R_RenderSegLoop` is 34% address materialization and 11% global
+  loads; `R_DrawColumn` spends 61 instructions of setup, ten of them
+  address-plus-load triples, on an average 7.2-pixel column.  What
+  removes both halves is the source change — pass the drawer state
+  instead of storing it into `dc_*` before each call, the shape
+  `R_PointToAngle2` already has.  Globals over parameters was right on
+  a machine with eight registers; here a global costs three
+  instructions to address before the load, and the call inside the
+  column loop forces every one of them to be reloaded after it.
+- **The compiler's share of that is smaller than it looks.**  Of the
+  11.1%, 6.2 points are the *same* address recomputed again within one
+  call (`R_RenderSegLoop` 4.0, `R_DrawMaskedColumn` 1.5): layout-
+  neutral, and worth a live register against two instructions an
+  iteration — which still loses when the loop calls out and the base
+  has to be callee-saved.  The other 3.5 points need distinct globals
+  within ±32 KB of each other, a placement bet the split L1 can make
+  expensive, since instruction fetch never seeds L1D.  See
+  "G_GLOBAL_VALUE materialization defeats CSE and rematerialization".
+- **The blit is 5%.**  libc `memcpy`'s word loop is 7 instructions per
+  4 bytes and unrolled zero times: 112k instructions a frame for the
+  64 KB screen copy alone — see "Libc: cache-line-align the
+  memcpy/memset hot loops".
+- **The rest of the codegen ranking does not reach Doom.**  64-bit
+  compares: the renderer is 32-bit fixed point.  Tail calls: the BSP
+  walk is 0.3% of a frame.  Dead flag definitions: PIC anchors, and
+  Doom is not PIC.  Inlined small memory calls: Doom's copies are
+  64 KB, not 32 bytes.
+
+The ISS has no PC histogram of its own; `+opstats` buckets by class
+but not by address.  A `+pcprof` alongside it would make this
+repeatable.
+
 `r_phase` gaps:
 
 - Every mark is a `sysctl` call.  A sampled wall call carries two, and
@@ -4223,6 +4344,16 @@ Found in the hot-path code review (2026-09-13).
   on penumbra2_5.  `b82fb4b0df29` hoisted them into locals in
   `R_DrawColumn` only.  With the countdown-exit fix as well, the span
   loop goes from 23 instructions to 15.
+- **The drawers take their arguments through globals.**  Every
+  `R_DrawColumn` call reads ten `dc_*`/`ylookup`/`columnofs`/`centery`
+  globals, each an address pair plus a load, for an average 7.2-pixel
+  column: 61 instructions of setup against 12 per pixel, 7% of the
+  whole frame ("Doom: where a frame goes").  `R_RenderSegLoop` pays
+  the same tax per column and cannot keep anything in registers across
+  its `R_GetColumn` and `colfunc` calls.  Parameters — the shape
+  `R_PointToAngle2` already has, and what `R_PointToAngle` avoids —
+  remove both the addressing and the reloads; no compiler change can
+  remove the reloads, because the calls may alias the globals.
 - **`RANGECHECK` is defined** (`doomdef.h`), adding 4–5
   compare-and-branch pairs to every drawer call.
 - **Hot helpers are out of line in other files.**  `FixedMul`
@@ -4932,6 +5063,25 @@ the redundant `LLI+LUI`) or carries an offset that fits the load's
 simm16; Dhrystone's isolated near-use globals largely lack that shape,
 so even the full fix may stay flat there. The per-load `%lo`-into-load
 shrink once hoped for here is infeasible (OR-`LUI`, above).
+
+**Measured on Doom 2026-09-22 (ISS instruction profile, "Doom: where a
+frame goes"): 11.1% of every instruction executed is an `lli`+`lui`
+address pair, and it splits in two.** 6.2 points are the *same*
+address materialized again within one call — mostly inside loops
+(`R_RenderSegLoop` 4.0, `R_DrawMaskedColumn` 1.5) — which is a
+cost-model question, not base sharing: recomputing is priced as free
+pre-RA although it expands to two instructions, so the allocator
+prefers it over keeping the base live. Layout-neutral, but it can
+still lose, since a base kept across a call in those loops has to be
+callee-saved. The other 3.5 points are base sharing proper, and are
+**not** worth pursuing: they need distinct globals within ±32 KB of
+each other, which makes them a bet on data placement, and with a split
+L1 — where instruction fetch never seeds L1D — spreading or clustering
+globals to shorten their reach can cost more in D-cache misses than it
+saves in instructions. The same reasoning that retired GlobalMerge
+("Global base sharing", measured net-negative on hardware) applies
+here. Doom's real fix is its own source: drawer state passed as
+arguments rather than written to `dc_*` globals around every call.
 
 ### Fix — three layers (layer 1 enables; base-sharing + layer-3 offset-merge carry the footprint win; the RISC-V `%lo`-into-load fold is infeasible)
 
