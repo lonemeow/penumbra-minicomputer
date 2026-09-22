@@ -1,38 +1,12 @@
 # Compiler: addressing, PIC and constants
 
-## Compiler: a constant zero is held in a register — RESOLVED
+## Compiler: a zero that enters a PHI is copied rather than read from R0
 
-The selector materializes constant zero as `COPY $r0`, and wherever
-its store-zero patch did not reach, the zero lived in an allocated
-register:
-
-```
-mov  r4, zero
-stw  r4, [sp + 100]     // spill of a loop's zero initial value
-...
-mov  r5, zero           // held in a callee-saved register
-mov  r1, r5             // across a call, saved and restored
-bl   exit
-mov  r1, r5
-```
-
-R0 was not a member of `GPR_Allocatable`, the class the copy is
-selected into, so neither the register coalescer (merging the copy
-into R0) nor the spiller (folding a spill of the copy into a store of
-R0) could use it — the same cause as the SP copy fixed in
-`56c8b327d3af`.  Resolved by making R0 a member too; its
-`isConstant` lets the coalescer skip the interference checks, since R0
-never changes.  The `test-compiler` corpus at `-O2` drops from 382,926
-instructions to 380,134 (−0.73%; 912 functions smaller, 19 larger),
-mostly the save, restore and copy around `exit (0)`.  Doom's twelve
-hot files drop from 14,399 to 14,376 (16 functions smaller, 8
-larger), and 64-bit arithmetic loses spills (`fshl_i64`, the `mulh64`
-family).
-
-The functions that grew are register-allocation shifts around a zero
-that enters a PHI: the PHI's register has several definitions, so it
-cannot become R0.  Each zero is now copied from R0 where it is used
-rather than shared from one register, and a returned zero can land
+Constant zeros are read from R0 since `c6c5049b8f13`, but a zero
+that enters a PHI cannot be: the PHI's register has several
+definitions, so it cannot become R0.  Each zero is copied from R0
+where it is used rather than shared from one register, and a
+returned zero can land
 outside R1 and take a second copy, as in `ptr-minus-int.c`'s
 `walk_back`:
 
@@ -45,8 +19,7 @@ jmp  lr
 The copy and its reader share a block only once block placement has
 duplicated the return into its predecessors, after machine copy
 propagation's last run, so the pair survives `AllowRegisterRenaming`
-too (see it in "codegen pass/gate audit").  The selector keeps its
-store-zero patch because `-O0` runs no coalescer.
+too (see it in "codegen pass/gate audit").
 
 ## Compiler: PIC global addresses are recomputed inside loops
 
@@ -87,61 +60,14 @@ checking that no `ADD ..., PC` remains in the loop block.  An empty
 `asm("" : "+r"(p))` on the pointer before the loop reaches the
 12-instruction body, which is the measure for the fix.
 
-## Compiler: PIC GOT anchor was position-dependent under code motion — RESOLVED
+## Compiler: the PIC test suite has no dynamic PIE leg
 
-Dynamic NetBSD died at boot: init took a SIGBUS storm
-(`Process (pid 1) got sig 10`, no progress) the instant it started.
-Bisected to userland (old kernel + new userland reproduced; new
-kernel + old userland booted), then to libc's `dl_iterate_phdr`
-parsing the auxv — its switch cases stored auxv values through the
-wrong GOT slots.
-
-Root cause was the PIC GOT materialization
-`LLI %got_pcrel_lo16(sym-8); LUI %got_pcrel_hi16(sym-4); ADD Rd, PC`,
-where the `ADD`'s own PC is the relocation anchor and the **-8/-4
-addends hard-coded the assumption that the ADD sits 8 bytes after the
-LLI**.  Nothing enforced that adjacency.  The new GlobalISel
-Localizer pass (`4c016efc4222`) clones `G_GLOBAL_VALUE` into each
-using block, so switch cases storing through different globals ended
-in identical `ADD/LDW/STW` tails — which BranchFolder tail-merged,
-fusing the anchor `ADD`s of separate cases and leaving two of three
-`LLI/LUI` pairs measuring against a PC 8 bytes off.  Each computed a
-neighboring GOT slot; the dereferenced "address" was an unrelated
-rodata pointer, and the store faulted.  Pre-Localizer, GISel CSE
-materialized each global once, so duplicate triples never existed for
-tail-merging to find — the latent bug had no trigger.
-
-Fixed by making the sequence position-independent the way ARM32
-(`PICADD` + `.LPC` labels) and RISC-V (`%pcrel_lo(.Lpcrel_hi)`) do:
-the addend now names the anchor via label arithmetic
-(`%got_pcrel_lo16(sym - .LPC0_0)` with `.LPC0_0:` on the ADD) instead
-of a fixed constant.  Selection emits paired pseudos
-(`PICLLI`/`PICLUI`/`PICADDi` carriers + `PICADDPC`/`PICMOVPC` anchors,
-`isNotDuplicable`) sharing a per-function pclabel id; the AsmPrinter
-places the label and lowers the label-difference operand, which the
-assembler folds into the relocation addend (`A = P - Q`).  The linker
-formula `S + A - P` is unchanged — no lld or relocation-table change.
-Covers the GOT-global, TLS-GD, block-address, and jump-table PIC
-paths.  Spec: `doc/system/abi.md` "PC-Anchored Relocation Pairs".
-Tests: `test/CodeGen/Penumbra/pic-anchor-tail-merge.ll` (the
-switch/tail-merge shape) and `test/MC/Penumbra/got-pcrel-label-anchor.s`
-(addend folding across adjacent, branched, and same-section-local
-layouts).  Validated by booting dynamic NetBSD to the single-user
-shell (init/`/bin/sh`/`sysctl` all run, zero faults).
-
-**Test-coverage gap — addressed:** `make test-compiler` runs
-`penumbra-unknown-none` bare-metal, non-PIC, so it never exercised GOT
-materialization — which is why a PIC-only miscompile reached a libc
-this fundamental before anything caught it.  `make test-compiler-pic`
-now runs a curated `-fPIC` set (`test/compiler/penumbra-pic/`) through
-the same harness, linked static at a fixed address so lld resolves the
-GOT at link time (no runtime relocator needed for the flat ISS image)
-while the GOT-indirect codegen is still exercised.  The tests are
-self-checking and were confirmed to fail when the anchor pairing is
-deliberately broken (each catches a value landing in the wrong
-GOT-loaded global / jump-table target).  Still open: a true dynamic
-PIE leg (with `__tls_get_addr` and runtime relocation) would also cover
-TLS-GD, which the static-link approach cannot reach.
+`make test-compiler-pic` links its `-fPIC` set static at a fixed
+address, so lld resolves the GOT at link time and the flat ISS image
+needs no runtime relocator.  That exercises GOT-indirect codegen (it
+catches a broken anchor pairing, `d2d682ee1250`) but cannot reach
+TLS-GD, which needs `__tls_get_addr` and runtime relocation.  A true
+dynamic PIE leg would cover it.
 
 ## Compiler: support `[R0 + offset]` absolute addressing for low memory
 
@@ -221,37 +147,6 @@ Fix:
 
 How aggressively the allocator uses remat is per-core policy — see
 "Remat aggressiveness is per-microarchitecture, not a pseudo flag".
-
-## Compiler: constant-offset global addresses stay in the entry block — RESOLVED
-
-For `&global + C` (and `&local + C`) the IRTranslator emits the address
-and a constant `G_PTR_ADD` in the entry block.  The Localizer moves an
-instruction to its use blocks only if `shouldLocalize` accepts it, and
-the default refused `G_PTR_ADD`, pinning the address beside it: built
-on every call, held in a callee-saved register or a stack slot, and in
-the way of shrink-wrapping.  `PenumbraISelLowering::shouldLocalize`
-now accepts a pointer add whose operands the Localizer would itself
-move — globals, frame indices, constants — and leaves an add of a real
-pointer alone, where cloning would only keep that pointer live longer.
-AArch64 accepts every `G_PTR_ADD`; on the same corpus that bought 0.4%
-fewer kernel stack-slot operations for more text, so the narrower rule
-stays.  Shape coverage: `localize-ptr-add.ll`.
-
-Entry-block sites before the change (post-Localizer MIR): kernel 1,292
-in 514 functions, Doom 1,037 in 188, SQLite 2,787 in 655.  Measured
-statically on the same IR:
-
-| | `.text` | `[sp]` memory ops | callee-saved saves |
-|---|---:|---:|---:|
-| kernel `GENERIC.DEBUG` | −0.19% | −1.2% | −1.1% |
-| Doom | −0.63% | −9.3% | −5.3% |
-| SQLite (PIC) | +1.37% | −8.1% | −5.9% |
-
-SQLite's growth is PIC address builds (`lli; lui; add pc`) duplicated
-into the cold blocks that use them — setup, teardown and FTS code; the
-hot b-tree and VDBE functions move by tens of bytes.  `btreeNext` now
-saves 5 registers instead of 7 and reaches its first load 12
-instructions sooner.
 
 ## Compiler: early MachineLICM hoists global addresses into callee-saved registers
 
@@ -647,61 +542,11 @@ That makes this a register-pressure trade for the allocator, not a
 missing optimization.  Recorded so the shape isn't re-diagnosed as a
 missed hoist.
 
-## Compiler: PIC/GOT global access — non-preemptible direct addressing — RESOLVED
+### PC-anchor sharing for direct PIC accesses
 
-The high-leverage lever — PC-relative-direct addressing for
-non-preemptible PIC globals — landed in `8c8c28df7f51`.
-`PenumbraInstructionSelector::selectGlobalValue` now gates on
-`!GV->hasExternalWeakLinkage() && GV->isDSOLocal()`: a non-preemptible
-symbol materialises its address with `%pcrel` + a single deref, skipping
-the GOT slot, the GOT load (which sat on the critical path — the deref
-could not issue until it returned), and the startup `R_PENUMBRA_RELATIVE`
-reloc. A non-zero offset folds straight into `%pcrel_lo16(sym+off)`,
-which the GOT path could not do (a GOT entry holds the base symbol only).
-Undefined `extern_weak` stays GOT-indirect even when hidden — it may
-resolve to 0, which a `%pcrel` anchor cannot encode. Shape coverage:
-`pic-dso-local.ll`; execution coverage: `pcrel-dso-local.c` in the
-`make test-compiler-pic` suite.
-
-**Measured on a fresh NetBSD `libc.so.12.220.1` (reloc histogram +
-`.got`-range bucketing via `llvm-readobj --dyn-relocations`), against the
-pre-fix 2026-06-19 baseline:**
-
-| Metric | Pre-fix | Now |
-|--------|---------|-----|
-| GOT slots bound by `RELATIVE` (non-preemptible) | ~5,028 | **56** |
-| GOT slots bound by `GLOB_DAT` (preemptible) | 237 | **237** |
-| Total `.got` data entries | ~5,265 | **299** |
-
-The non-preemptible GOT population collapsed ~99%. `GLOB_DAT` is
-unchanged to the symbol — proof the change is preemptibility-safe: it
-removed only the slots it was entitled to. Of the 2,291 `RELATIVE`
-relocs left in the binary, only 56 land in `.got`; the rest are ordinary
-`.data`/`.data.rel.ro` pointer relocs, never a GOT-codegen concern.
-
-**Why this was the dominant cost (kept for context):** the GOT cost lived
-in the `ET_DYN` shared libraries, where each global read was a
-5-instruction GOT-indirect sequence (`lli; lui; add rX,pc; ldw(GOT);
-ldw(deref)`) and the PC-anchored immediates made every site unique,
-defeating CSE. Dynamic relocs ran ~20:1 `RELATIVE`:`GLOB_DAT`, i.e. the
-large majority of GOT-bound symbols were non-preemptible and never needed
-a slot. Executables (`ET_EXEC`) are a *separate* problem — their own
-globals use absolute `lli+lui` (base-sharing applies), not the GOT; calls
-into libc go through the PLT (`JUMP_SLOT`).
-
-**Residual GOT slots, not worth pursuing** (the GOT cost itself is now
-too small to justify more work):
-
-- The **56** non-preemptible GOT slots that remain are symbols the
-  compiler could not prove `dso_local` at compile time but the linker
-  bound locally (default-visibility data globals, function-address
-  takes). Below the bar for a dedicated pass.
-- A **GOT/GP base register** for the preemptible remainder would target
-  only ~293 slots, and the 2-operand ISA makes a pinned GP costly in
-  register pressure.
-
-**The follow-on lever is NOT closed by this fix — it grew.** Each of the
-~5,000 now-direct accesses still carries its *own* per-site
+Non-preemptible PIC globals are addressed PC-relative-direct since
+`8c8c28df7f51`, which left the GOT with 299 entries in `libc.so`.  Each
+of the ~5,000 now-direct accesses still carries its *own* per-site
 `lli; lui; add pc` triple anchored to its own PC, so repeats do not CSE.
 **PC-anchor sharing** (regional base-CSE: materialise one PC-derived
 anchor per region, then `anchor + (sym - .Lanchor)` per access) collapses
@@ -713,8 +558,7 @@ a cold 10 KB array and thrashed the **gen1 1 KB direct-mapped** D-cache),
 number does not transfer to gen2 (4 KB 2-way) / gen3, which is where
 userland runs. This is the same pass as absolute base-sharing for the
 kernel + executables' own globals, differing only in base kind
-(PC-derived vs absolute) — tracked under "G_GLOBAL_VALUE materialization
-defeats CSE and rematerialization". Realized win is global-density
+(PC-derived vs absolute). Realized win is global-density
 dependent (real code is far less global-dense than Dhrystone), so measure
 on gen2/gen3 hardware before productionising.
 
@@ -724,3 +568,12 @@ sharing (the ~5,000 direct PIC accesses above) and absolute base-sharing
 for the kernel + executables' own globals (~41% of kernel
 materialisations); layout-neutral, register-pressure-gated, measured on
 gen2/gen3; (2) `LUIC` and other secondary folds that compose with it.
+
+## Ruled out
+
+- **Removing the last GOT slots.**  After PC-relative-direct
+  addressing, `libc.so` keeps 56 non-preemptible GOT slots — symbols
+  not provably `dso_local` at compile time that the linker bound
+  locally — below the bar for a dedicated pass.  A GOT/GP base
+  register for the ~237 preemptible slots would cost a pinned
+  register on a 2-operand ISA for too few accesses.

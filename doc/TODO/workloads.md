@@ -105,7 +105,7 @@ Compiler causes, widest reach first, each with its own entry:
 | Compare immediates, TEST, inverted booleans | 848 / 612 / 274 / 140 sites | "compare and branch selection misses immediate and TEST forms" |
 | Byte and halfword sign-bit tests | SQLite varint bytes, BSP child index, `sy_narg` | "signed sub-word loads in relational compares miss LDBS/LDHS" |
 | Constants never rematerialized | 220 kernel loops; ~1,250 SQLite constant reloads | "constants are not rematerializable" |
-| `&global + C` built in the entry block; addresses hoisted into callee-saved registers | 1,282 SQLite sites; Doom BSP walk frame | "constant-offset global addresses stay in the entry block", "early MachineLICM hoists global addresses into callee-saved registers" |
+| `&global + C` built in the entry block; addresses hoisted into callee-saved registers | 1,282 SQLite sites; Doom BSP walk frame | `dc921849a615` (resolved), "early MachineLICM hoists global addresses into callee-saved registers" |
 | `p - K` and integer MMIO addresses miss the offset fold | memmove backward loops; 187 driver sites | "pointer-minus-constant and integer MMIO addresses miss their folds" |
 | 64-bit counter increments — RESOLVED | every syscall and interrupt | `fb237ee8d98a` |
 | A store between producer and compare | `KPREEMPT_ENABLE` on every `userret` | "compare-elim does not look through COPY" |
