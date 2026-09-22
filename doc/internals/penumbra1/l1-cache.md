@@ -44,3 +44,35 @@ reason `cache_vipt.sv` is **not** reused by Penumbra/2 — whose
 pipelined front end wants a registered (BRAM) hit instead. See
 Decision 11 in
 [`../penumbra2/design-decisions.md`](../penumbra2/design-decisions.md).
+
+## Line fill and the split-L1 arbiter
+
+The two caches' back sides share the
+[CPU memory port](../cpu-bus.md#cpu-memory-port) through
+`cpu_bus_arbiter` (`hw/rtl/penumbra1/cpu_bus_arbiter.sv`), which
+registers the winning request and drives it onto the port.  A cache
+cannot tell from `busy` alone when the arbiter has latched its
+request, so the arbiter tells it: a combinational `o_*_req_accepted`
+pulse fires for exactly one cycle, the cycle the arbiter latches that
+cache's request.  The cache advances its fill pointer on the next
+cycle without waiting for the completion, and the arbiter re-latches
+the next request on the completion cycle itself (`BUSY → BUSY`), so
+the port stays driven word after word with no dead cycle between
+completions.
+
+A 4-word fill from a port that completes every cycle:
+
+| Cycle | `re` | `addr` (cache drives) | port `busy` | `rdata` | `req_accepted` |
+|------:|:----:|:---------------------:|:-----------:|:-------:|:--------------:|
+| 0     | 1    | A+0                   | 0           | —       | pulse (A+0 latched) |
+| 1     | 1    | A+4                   | 0           | **D0**  | pulse (A+4 latched) |
+| 2     | 1    | A+8                   | 0           | **D4**  | pulse (A+8 latched) |
+| 3     | 1    | A+C                   | 0           | **D8**  | pulse (A+C latched) |
+| 4     | 0    | —                     | 0           | **DC**  | —              |
+
+A port that needs wait cycles raises `busy` between completions, but
+`busy` must be low on each word's completion cycle: the arbiter
+latches the next request only then, so a port holding `busy` across a
+whole fill would never deliver a word.  `cache_vipt.sv` uses
+`i_req_accepted` to advance its `req_idx`/`resp_idx` counters during
+line fills.

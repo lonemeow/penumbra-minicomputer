@@ -6,10 +6,10 @@ The Penumbra Bus is the protocol that connects the CPU to memory
 and I/O devices.  It is one protocol expressed in two equivalent
 forms:
 
-- **Sync form** — clock-aligned levels (`re`/`busy`/`rdata`).  Spoken
-  everywhere inside the FPGA — between the CPU memory port, the L2
-  cache (when present), the bus device-select layer, and every
-  memory-mapped device.
+- **Sync form** — clock-aligned levels (`re`/`we`/`ack`/`rdata`).
+  Spoken everywhere inside the FPGA — between the system-bus master
+  (the L2 cache's back side, or a core's own bus master), the bus
+  device-select layer, and every memory-mapped device.
 - **Async form** — self-timed 4-phase handshake (`req`/`ack`).  Spoken
   across the discrete-build pin boundary.  Currently exists only as
   a specification; the FPGA build never uses it.
@@ -34,8 +34,8 @@ RTL.  Other docs reference them by this canonical naming.
 | **Penumbra Bus** | The protocol — both forms. |
 | **Sync form** | Clock-aligned implementation; used everywhere inside the FPGA. |
 | **Async form** | Self-timed 4-phase implementation; future discrete-build form, no live instance today. |
-| **CPU memory port** | The `cpu_core` boundary (`o_mem_*` / `i_mem_*`).  The published interface between the CPU and whatever lives below it (L2, system bus).  Always sync form. |
-| **System bus** | The shared interconnect outside `cpu_core` — hosts L2 (when present), the bus device-select layer (`bus_devsel`), and all memory-mapped devices.  Always sync form. |
+| **CPU memory port** | The Penumbra/1 and Penumbra/2 port between the core's caches and the L2 (`cpu_core`'s `o_mem_*` / `i_mem_*`).  Not a Penumbra Bus port: it speaks the core-side stall handshake specified in [`cpu-bus.md`](../internals/cpu-bus.md#cpu-memory-port), and the L2 bridges it onto the system bus. |
+| **System bus** | The shared interconnect below the CPU's memory hierarchy — the bus master (L2 back side, or a core's own bus master), the bus device-select layer (`bus_devsel`), and all memory-mapped devices.  Always sync form. |
 | **External bus** | The portion of the system bus that crosses the FPGA pin boundary.  Currently doesn't physically exist; this is the future discrete-build target where the async form is used. |
 | **Cache front-side** | A cache's upstream (CPU-facing) port. |
 | **Cache back-side** | A cache's downstream (memory-facing) port. |
@@ -49,9 +49,8 @@ L2's back-side talks to the system bus.
 ## Bus Signals (async form)
 
 These are the signal names of the async / 4-phase form documented in
-this section.  The sync form uses different names for several of
-them (notably `req`/`ack` → `re`/`busy`, `bus_error` → `bus_fault`)
-plus an additional `req_accepted` handshake pulse; the
+this section.  The sync form renames two of them (`req` →
+`re`/`we`, `bus_error` → `bus_fault`) and keeps `ack`; the
 [Sync-Bus Mapping](#sync-bus-mapping) section below has the
 correspondence table.
 
@@ -165,32 +164,32 @@ complete normally.  It has two sources:
   device ranges), so no master- or fabric-side decoder can hold a
   static map of "what is where": the no-device fault is a bus-protocol
   property — a watchdog / no-acknowledge timeout in the async form.
-  Nothing drives `busy` (no slave responds), so the access completes
-  the cycle it is presented — `busy=0` with `bus_fault=1` alongside.
+  No slave acknowledges, so the bus completes the access itself: it
+  acknowledges on the slaves' behalf with `bus_fault=1` alongside.
   This is what makes RAM sizing and optional-device probing work:
   software touches an address and catches the fault when nothing
   answers.  In the sync form, "unclaimed" is the OR-complement of the
-  slaves' own selects — gen1 wires it as
-  `bus_fault = (re|we) & ~(OR of each slave's select)`; a slave's
-  select is its *own* decode (RAM sized to its DRAM, a device its
-  register window), never a separate map the master keeps.
+  slaves' own selects, answered by the fabric's
+  [no-device responder](#the-response-fabric); a slave's select is its
+  *own* decode (RAM sized to its DRAM, a device its register window),
+  never a separate map the master keeps.
 
 - **A slave rejecting an access it does claim** (optional, per the
   device restrictions above).  The responding slave asserts
-  `bus_fault` coincident with its own `busy` drop.  A nested bridge is
-  the structural instance of this form — see
+  `bus_fault` alongside its own `ack`.  A nested bridge is the
+  structural instance of this form — see
   [No-device faults and nested bridges](#no-device-faults-and-nested-bridges).
 
 Either way the rule is the same: `bus_fault` rides the access's
-**completion** — the busy-drop cycle, which for an unclaimed address
-is the presentation cycle itself.  On a faulting completion `rdata` is
-undefined and the master commits no architectural effect.
+**completion** — the cycle `ack` is asserted.  On a faulting
+completion `rdata` is undefined and the master commits no
+architectural effect.
 
 A master separated from the responder by intermediate layers (caches,
 an arbiter, a fill sequencer) cannot sample the fault as a sideband —
 the faulting cycle has passed by the time the master's own access
 completes — so each layer carries the fault inward as a companion to
-the completion it already forwards: the busy-drop of a single beat, or
+the completion it already forwards: the `ack` of a single beat, or
 the fill-done of a line transfer it was unrolling (a faulting beat
 mid-line aborts the line and forwards the fault on its done event).
 
@@ -236,32 +235,31 @@ coexist with software-assigned, topology-blind base addresses:
   outside the window that reaches it.
 
 The bridge resolves accesses to its window the way the top-level master
-resolves the async bus: it claims the address, holds `busy` across its
-secondary-bus round-trip, and on a no-acknowledge timeout drops `busy`
-with `bus_fault` asserted — surfacing an empty nested slot to its parent
-as the [claimed-slave-reject form](#access-faults-bus_fault).  The
+resolves the async bus: it claims the address, withholds `ack` across
+its secondary-bus round-trip, and acknowledges when the secondary bus
+answers — or, on a no-acknowledge timeout, acknowledges with
+`bus_fault` asserted, surfacing an empty nested slot to its parent as
+the [claimed-slave-reject form](#access-faults-bus_fault).  The
 watchdog deadline is the bridge's own parameter.
 
-```
-busy:    ___/‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾\___
-rdata:   -----------------------------------------[D]---   ← secondary-bus ack
-fault:   _________________________________________/‾‾\___   ← watchdog expired
-         |  present  |     secondary round-trip     | drop
-```
+| Phase | `re` | `ack` | `rdata` | `bus_fault` |
+|---|:-:|:-:|:-:|:-:|
+| Presentation | 1 | 0 | — | 0 |
+| Secondary round-trip | 1 | 0 | — | 0 |
+| Secondary bus answers | 1 | 1 | D | 0 |
+| *or* watchdog expires | 1 | 1 | undefined | 1 |
 
 The master is unaffected by the depth: its contract is unchanged —
-`bus_fault` rides the completion at the busy-drop — so a fault from two
+`bus_fault` rides the completion at the `ack` — so a fault from two
 buses down is sampled the same way a top-level watchdog fault is.
 
 Where a segment's *set* of devices is fixed — an on-chip sync fabric —
-the no-claim fault collapses from a watchdog to the combinational
-OR-complement of the slaves' selects, and any slave that can reject an
-access it claims (a nested bridge, a device guarding its registers) is
-OR'd in alongside it:
-
-```
-bus_fault = ((re|we) & ~(OR of selects)) | (OR of slaves' bus_fault)
-```
+the no-claim fault collapses from a watchdog to the OR-complement of the
+slaves' selects, answered by the fabric's own no-device responder; any
+slave that can reject an access it claims (a nested bridge, a device
+guarding its registers) raises `bus_fault` with its own `ack`.
+[The response fabric](#the-response-fabric) gives the sync form of
+both.
 
 Several bridges compose with no added machinery — each is just another
 autoconfig device with its own aperture.  The price is that discovering
@@ -272,148 +270,147 @@ automatic recursive enumeration.
 
 The sync form expresses the same protocol with clock-aligned levels
 instead of self-timed edges.  Causal semantics are identical to the
-async form above; the table below maps signals between the two
-forms.
+async form above: the master requests, the slave acknowledges when the
+access is done, and silence means *wait*.  The table below maps
+signals between the two forms.
 
 | Async signal | Sync signal | Direction | Notes |
 |--------------|-------------|-----------|-------|
-| `req` | `re` (read) / `we` (write) | master → slave | Held high while the transaction is in flight |
-| `ack` rising | `busy` falling | slave → master | Slave drops `busy` on the cycle `rdata` is valid |
+| `req` | `re` (read) / `we` (write) | master → slave | Held from presentation through the `ack` cycle |
+| `ack` rising | `ack` | slave → master | One-cycle pulse on the cycle the access completes |
+| `ack` falling | *(none)* | — | The pulse ends by itself; there is no release phase |
 | `addr`, `data`, `byte_en` | `addr`, `wdata` (master→slave), `rdata` (slave→master), `byte_en` | — | Driven while `re`/`we` is held; sync form's separate wdata/rdata ports remove the need for `data_dir` |
-| `bus_error` | `bus_fault` | responder → master | Same semantics; for an unclaimed address the bus fabric asserts it (no slave responds). See [Access faults](#access-faults-bus_fault). |
-| *(none)* | `req_accepted` | slave (arbiter) → master (cache) | Sync-form-only handshake pulse; see [Back-to-back bursts](#back-to-back-bursts-req_accepted) below |
+| `bus_error` | `bus_fault` | responder → master | Same semantics, valid only in the `ack` cycle. See [Access faults](#access-faults-bus_fault). |
 
-### Sync read handshake
+### Sync handshake
+
+| Cycle | `re` | `addr` | `ack` | `rdata` |
+|------:|:----:|:------:|:-----:|:-------:|
+| 0     | 1    | A      | 0     | —       |
+| 1     | 1    | A      | 1     | **D**   |
+| 2     | 0    | —      | 0     | —       |
+
+A write has the same shape with `we` and `wdata`.  The table shows
+the fastest access; a slave may take any number of cycles between
+presentation and `ack`.
+
+1. **Presentation.** The master raises `re` or `we` and drives `addr`
+   (with `wdata` and `byte_en` for a write).  Every slave sees the
+   request; the one whose select claims `addr` acts on it and every
+   other slave ignores it.  A select is the slave's own decode — a
+   board may compute it beside a device and hand the device a
+   pre-qualified strobe, but the decoder belongs to the slave, never
+   to the master.
+2. **Hold until `ack`.** The master holds the strobe and every request
+   field stable through the `ack` cycle inclusive, and may not abandon
+   an access: the slave may already have started it, and nothing on
+   the bus can recall it.
+3. **`ack` is a registered one-cycle pulse.** A slave raises `ack` for
+   exactly one cycle per access, from a flop, and never in the
+   presentation cycle.  Every access therefore takes at least one wait
+   cycle, and no path runs from a master's request to its own
+   completion within a cycle.
+4. **Completion.** In the `ack` cycle `rdata` carries the read data, a
+   write has taken effect, and `bus_fault` is valid.  None of the three
+   is defined in any other cycle.
+5. **Next access.** A strobe still held in the cycle after `ack` is a
+   new access.  A strobe in the `ack` cycle itself still belongs to
+   the access being completed — the master has not yet seen the `ack`.
+6. **Every claimed access is acknowledged,** including a write the
+   slave ignores (a read-only register, a ROM).  A slave that claims an
+   access and never acknowledges it hangs the master.
+
+As in the async form, a slave that does nothing holds the master
+rather than completing its access.  Stale read data takes an `ack`
+raised before the data is ready — an active mistake, never an
+omission.
+
+### Slave obligations
+
+The strobe is held for at least two cycles — presentation and `ack` —
+so a slave never keys a side effect on the bare strobe:
+
+- **Exactly-once side effects.** Each state change an access causes —
+  a register or memory write, a FIFO push or pop, a write-one-to-clear,
+  a start pulse — is keyed on an event that occurs once per access:
+  its first cycle (`strobe & ~pending`) or its `ack` cycle
+  (`strobe & ack`).  A read that consumes what it returns (a FIFO pop)
+  captures the data and consumes it on the same edge, at the end of
+  the first cycle.
+- **Claim stability.** A slave keeps claiming an access — its select
+  stays asserted — from presentation through its `ack` cycle.  A write
+  that moves the slave's own decode (autoconfig's `CFG_BASE`) takes
+  effect in the `ack` cycle, so the claim moves only once the access
+  has completed.
+
+The minimal slave, one wait cycle on every access, needs one flop:
+
+```systemverilog
+// Pulses the cycle after each access is presented; the strobe seen
+// in the ack cycle belongs to the access being completed.
+always_ff @(posedge i_clk)
+    if (i_rst) ack_q <= 1'b0;
+    else       ack_q <= (i_re | i_we) & ~ack_q;
+```
+
+`strobe & ~ack_q` is then the access's first cycle and `strobe & ack_q`
+its `ack` cycle.  A slave that needs more cycles replaces the flop with
+its own sequencer, under the same rules.
+
+### The response fabric
+
+The fabric merges the slaves' responses into the master's.  Three rules
+keep every response path starting at a flop:
+
+- **`ack` is the OR of the slaves' `ack`s**, never gated by the live
+  selects.  A slave's `ack` arises only from an access it claimed;
+  gating it again by the select would put the address decode back on
+  the response path.
+- **`rdata` is gated per slave by that slave's own `ack`**, then OR'd.
+  A slave's `rdata` need be valid only in its `ack` cycle, and nothing
+  selects read data by the live address.
+- **A no-device responder answers unclaimed accesses.** It is a slave
+  like any other, whose select is the OR-complement of every other
+  select — the one reason each slave's select is visible to the
+  fabric: it acknowledges with `bus_fault` one cycle after
+  presentation, from a flop.
 
 ```
-              cycle: 0   1   2   3   4
-re:                 ___/‾‾‾‾‾‾‾‾‾‾‾‾‾\___
-addr:               ---[A           ]----
-busy:               ___/‾‾‾‾‾‾‾\_________
-rdata:              ----------------[D]--
+ack       = ack_nodev | (OR of slaves' ack)
+bus_fault = ack_nodev | (OR of slaves' bus_fault)
+rdata     = OR over slaves of (ack_i ? rdata_i : 0)
 ```
 
-1. Master raises `re`, drives `addr` in cycle 0.
-2. Slave raises `busy` (combinational or registered) and processes.
-3. On the cycle `busy` drops, `rdata` is valid; master latches it.
-4. Master drops `re` on the next cycle (or holds it with a new `addr`
-   for a burst — see below).
-
-### Master-side obligation
-
-**The master must hold `re`/`we` (and `addr`/`data`/`byte_en`)
-stable until the busy-drop cycle.**  This is the sync analogue of
-"master holds `req` until `ack`" in the async form.  Slaves may
-have different internal latching strategies (latch-immediately
-like `simple_mem`, latch-after-pipeline like `sdram_bus_adapter`)
-and the contract is unified: hold `re` until completion, and any
-contract-compliant slave will work.
-
-A master that pulses `re` for one cycle and drops it has no way to
-know whether the slave accepted the access — strict slaves may
-discard the request when they observe `re=0` in their processing
-state, just as an async slave would discard a transaction where
-`req` falls before `ack` rises.
-
-### Slave-side obligation (registered-read devices)
-
-**A slave with registered read output must assert `busy` for at
-least one cycle on reads.**  The CPU's STALL sequencer latches
-`rdata` on the cycle `busy` drops; a slave that reports `busy=0`
-combinationally on the same cycle as `re` asserts will return
-stale or zero data because its registered read flop hasn't yet
-captured the requested word.
-
-Slaves with truly combinational read paths (single-cycle BRAM,
-constant ROM regions) can leave `busy=0` permanently — the data
-they drive on the same cycle as `re` is the correct response.
-Slaves with any registered stage on the read path (sysreg-style
-devices with a 1-cycle access pipeline, FIFO-backed peripherals,
-SDRAM controllers) must follow the `access_pending` pattern from
-`hw/rtl/sim/sim_uart.sv`:
-
-```
-o_busy = i_re && !access_pending;
-```
-
-— assert `busy` on the same cycle as `re`, then drop it on the
-cycle the registered read data is actually valid.  A device that
-gets this wrong is invisible in lint and most testbenches; it
-shows up as intermittent stale-data bugs that depend on whether
-the master is currently bursting or single-stepping.  An early
-`sim_spi.sv` bug had exactly this shape.
-
-**The combinational exemption stops at `autoconfig_dev`.**  An
-autoconfigured device reaches the CPU through a top-level read
-combine that gates each device's `rdata` with a *registered*
-select, so data driven on the same cycle as `re` is sampled a
-cycle after it is gone no matter what the device does with `busy`.
-Every device behind the wrapper therefore registers its read
-output and stalls for the cycle, whether or not its own read path
-needs the pipeline stage.  The failure looks like a device that
-answers correctly only when a read immediately follows another
-read to the same device — back-to-back accesses find the select
-already asserted from the previous one.
+`bus_fault` is sampled only together with `ack`.  A request crosses the
+fabric to a slave's flops in one cycle and the answer crosses back in
+another; no cycle carries both.  That is what keeps the distance
+between the masters and the slaves from doubling up on one clock
+period.
 
 ### Sync burst
 
-```
-              cycle: 0   1   2   3   4   5   6
-re:                 ___/‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾\__
-addr:               ---[A+0      ][A+4      ]---
-busy:               ___/‾‾\______/‾‾\___________
-rdata:              ------[D0]-------[D4]-------
-```
+| Cycle | `re` | `addr` | `ack` | `rdata` |
+|------:|:----:|:------:|:-----:|:-------:|
+| 0     | 1    | A+0    | 0     | —       |
+| 1     | 1    | A+0    | 1     | **D0**  |
+| 2     | 1    | A+4    | 0     | —       |
+| 3     | 1    | A+4    | 1     | **D4**  |
+| 4     | 0    | —      | 0     | —       |
 
-`re` held across word boundaries; `addr` advances on the cycle
-after each busy-drop.  Same shape as the async burst.
+`re` held across word boundaries; `addr` advances in the cycle after
+each `ack`.  Same shape as the async burst, and with a one-wait slave
+one word moves every two cycles.
 
-### Back-to-back bursts (`req_accepted`)
+The bus carries no burst length and no line shape: every transfer is
+one word.  A slave that gains from sequential access (SDRAM) infers it
+from the held strobe and the advancing address and optimises inside
+itself; every other slave sees independent accesses.
 
-The diagram above shows a gap of one or more cycles between the
-busy-drop of word *N* and the next `re`-driven request for word
-*N+1*.  That gap exists because a naive master can't tell *when*
-the slave latched its request — and on multi-master fabric (the
-CPU's split I/D L1 caches sharing a single external bus via the
-`cpu_bus_arbiter`) the master needs to know that to time the next
-address.
-
-The sync-form arbiter exposes a combinational `o_*_req_accepted`
-pulse to each master.  It fires for **exactly one cycle** —
-specifically the cycle the arbiter latches that master's
-in-flight request — and lets the master advance its burst pointer
-on the very next cycle without waiting for `busy` to fall.  With
-this handshake, the arbiter supports back-to-back `BUSY → BUSY`
-transitions: as one access completes, the next address is already
-queued, and the bus stays driven word-after-word with no dead
-cycle between successive completions.
-
-A 4-beat fill from a single-cycle slave, cycle by cycle:
-
-| Cycle | `re` | `addr` (master drives) | `busy` | `rdata` | `req_accepted` |
-|------:|:----:|:----------------------:|:------:|:-------:|:--------------:|
-| 0     | 1    | A+0                    | 0      | —       | pulse (A+0 latched) |
-| 1     | 1    | A+4                    | 0      | **D0**  | pulse (A+4 latched) |
-| 2     | 1    | A+8                    | 0      | **D4**  | pulse (A+8 latched) |
-| 3     | 1    | A+C                    | 0      | **D8**  | pulse (A+C latched) |
-| 4     | 0    | —                      | 0      | **DC**  | —              |
-
-A slave that needs wait states raises `busy` between completions,
-but **`busy` must be low on each word's response cycle** — the
-busy-drop *is* the data-valid signal (rule 3 above), and the
-arbiter latches the next in-flight request (the `req_accepted`
-pulse) only on a `busy`-low cycle. A slave holding `busy` high
-across an entire burst would never deliver a word the master can
-latch.
-
-Slaves on a single-master shared bus (i.e. without an arbiter in
-front) don't need to generate `req_accepted` — the contract reads
-as "the master may treat `busy` going low and a fresh `re`
-together as equivalent to the arbiter pulse."  Caches that drive
-the arbiter (`cache_vipt.sv`, by way of `cpu_bus_arbiter.sv`) use
-`i_req_accepted` to advance their `req_idx`/`resp_idx` counters
-during line fills.  See `hw/rtl/penumbra1/cpu_bus_arbiter.sv` for the
-RTL.
+The core-side interfaces above the system bus are not the Penumbra
+Bus: the CPU memory port is specified in
+[`cpu-bus.md`](../internals/cpu-bus.md#cpu-memory-port), and
+Penumbra/1's split-L1 `req_accepted` handshake in
+[`penumbra1/l1-cache.md`](../internals/penumbra1/l1-cache.md#line-fill-and-the-split-l1-arbiter).
 
 ## Reset Timing
 

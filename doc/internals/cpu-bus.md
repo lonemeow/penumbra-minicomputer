@@ -16,12 +16,14 @@ the documented effects of `RDSYS`/`WRSYS` and load/store instructions.
   load/store interface).
 - Core ↔ CPU-private sysreg devices (device IDs 0–3): MMU, CPU
   identity/perfctrs, D-cache control, I-cache control.
+- The **CPU memory port** (`cpu_core.sv`'s `o_mem_*` / `i_mem_*`):
+  the stall handshake the Penumbra/1 and Penumbra/2 memory
+  hierarchies present to the L2.
 
 **Out of scope** (with cross-references):
-- Anything past the **CPU memory port** (`cpu_core.sv`'s `o_mem_*`
-  / `i_mem_*`).  That's the **system bus**, governed by the
-  **Penumbra Bus** protocol specified in
-  [`doc/hardware/bus-protocol.md`](../hardware/bus-protocol.md).
+- The **system bus** below the L2, which bridges the CPU memory port
+  onto it.  It is governed by the **Penumbra Bus** protocol specified
+  in [`doc/hardware/bus-protocol.md`](../hardware/bus-protocol.md).
   Inside the FPGA the system bus speaks the **sync form**; the
   **async form** is the future discrete-build target.  Both are the
   same protocol — see
@@ -36,7 +38,8 @@ the documented effects of `RDSYS`/`WRSYS` and load/store instructions.
 
 The dividing line: if a module is instantiated *inside* `cpu_core.sv`,
 this document applies. If it sits at machine-level (in `machine_sim.sv`
-or `ulx3s_penumbra1_top.sv`), it does not.
+or `ulx3s_penumbra1_top.sv`), it does not — except the L2's front
+side, which serves the CPU memory port.
 
 ## Topology
 
@@ -57,7 +60,7 @@ generation-specific, that belongs in the generation's own docs
 │           ┌─────┐  paddr   ┌───────────┐  fetch    ┌──────────┐  │
 │           │ MMU ├─────────►│  I-cache  ├──────────►│          │  │
 │           │     │          └───────────┘           │  memory  │  │
-│           │     │  paddr   ┌───────────┐  data     │   port   │──┼──► (Penumbra Bus)
+│           │     │  paddr   ┌───────────┐  data     │   port   │──┼──► (CPU memory port → L2)
 │           │     ├─────────►│  D-cache  ├──────────►│   mux    │  │
 │           └─────┘          └───────────┘           └──────────┘  │
 │             ▲                                                    │
@@ -149,12 +152,9 @@ property.
 3. **Pass-through path** (uncacheable, cache disabled, or any write).
    The cache forwards `i_re`/`i_we` to its back-side port and presents
    `i_mem_busy`/`i_mem_rdata` to the core.  The core sees the same
-   contract from above; the device on the far side of the back-side
-   port honors the Penumbra Bus protocol in its
-   [sync form](../hardware/bus-protocol.md#sync-bus-mapping),
-   which is what makes `i_mem_busy=0` coincide with valid
-   `i_mem_rdata`.  This is enforced by the system bus, not by this
-   document.
+   contract from above; the back-side port is the
+   [CPU memory port](#cpu-memory-port), whose contract is what makes
+   `i_mem_busy=0` coincide with valid `i_mem_rdata`.
 4. **Faults.** A fault on the request (MMU access violation,
    alignment, past-cache `bus_fault`) is signaled out of band through
    the MMU/bus_fault path. The cache does not separately fault.
@@ -168,6 +168,50 @@ trusting that the data is presented combinationally on hits and
 that `cache_busy=1` is asserted promptly on misses. The STALL
 sequencer for D-side load/store relies on the same drop-equals-valid
 property.
+
+## CPU Memory Port
+
+> **Applies to:** Penumbra/1 and Penumbra/2.  Penumbra/3 forks its
+> memory hierarchy and defines its own interfaces between the core,
+> its caches and its bus master (see the
+> [fork boundary](penumbra3/overview.md#fork-boundary)); only the
+> system bus below is shared.
+
+The caches' back sides merge onto one port, the **CPU memory port**
+(`cpu_core`'s `o_mem_*` / `i_mem_*`), which the L2 serves on its
+front side.  It is a stall handshake, not a Penumbra Bus port: the L2
+bridges it onto the
+[system bus](../hardware/bus-protocol.md#sync-bus-mapping), and the
+two signal completion differently.  Penumbra/2 presents the same
+handshake to its L2 (see
+[`penumbra2/memory-interface.md`](penumbra2/memory-interface.md)).
+
+**Signals** (direction as seen from the core):
+
+| Direction | Signal | Description |
+|---|---|---|
+| → port | `o_mem_addr[31:0]`, `o_mem_wdata[31:0]`, `o_mem_byte_en[3:0]` | Request fields, held until completion |
+| → port | `o_mem_re`, `o_mem_we` | Read / write strobe |
+| → port | `o_mem_cacheable` | Selects the L2's cached path or its pass-through |
+| ← port | `i_mem_rdata[31:0]` | Read data |
+| ← port | `i_mem_busy` | Access not complete this cycle |
+
+**Contract:**
+
+1. **Completion is the busy-drop.** An access completes on the first
+   cycle its strobe is high and `busy` is low — which may be the cycle
+   it is presented.  `rdata` is valid on that cycle.
+2. **Hold until completion.** The core holds the strobe and every
+   request field stable through the completion cycle.
+3. **Faults ride the completion.** A bus fault on a forwarded access
+   arrives on its completion cycle.
+
+**Bridging to the system bus.** The L2 forwards an uncached or
+write-through access to the system bus unchanged and reports its
+completion as `busy = ~ack` while the access is forwarded; `rdata` and
+`bus_fault` pass through.  Its line fills are its own bus-master
+traffic.  A test bench that places a bus slave directly under this
+port applies the same mapping, `busy = (re | we) & ~ack`.
 
 ## Internal Sysreg Interface (devices 0–3)
 
@@ -278,8 +322,8 @@ contract translates directly to a multi-IC implementation. See
 ## See Also
 
 - [`doc/hardware/bus-protocol.md`](../hardware/bus-protocol.md) —
-  Penumbra Bus (system bus past the CPU memory port).  Covers both
-  sync and async forms; the FPGA build uses only the sync form.
+  Penumbra Bus (the system bus below the L2).  Covers both sync and
+  async forms; the FPGA build uses only the sync form.
 - [`doc/system/sysregs.md`](../system/sysregs.md) — Programmer's view
   of sysregs (device map, register layouts).
 - [`doc/system/mmu.md`](../system/mmu.md) — Programmer's view of the
