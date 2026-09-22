@@ -7,6 +7,11 @@ and ABI it targets are specified under [`doc/system/`](../system/).
 Open compiler work is tracked in
 [`doc/TODO/compiler.md`](../TODO/compiler.md).
 
+## Backend design
+
+- [strength-reduction.md](strength-reduction.md) — constant multiply,
+  divide and remainder lowerings, and the arithmetic cost model.
+
 ## Upstream GlobalISel gaps
 
 Generic LLVM issues found through Penumbra, written up for upstream.

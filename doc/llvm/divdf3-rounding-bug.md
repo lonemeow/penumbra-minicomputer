@@ -44,9 +44,9 @@ the dead expression (`hiWord(plolo)`) without a single
 recompile-bisect step.
 
 A separate bug found during the investigation (bare mulhi idiom →
-i128 → legalizer ICE) is tracked in `doc/TODO/compiler-arith.md`
-("Compiler: G_ZEXT
-s128 from the mulhi idiom fails to legalize").
+i128 → legalizer ICE) was fixed in `398e8949a751`; its generic half
+is written up in
+[llvm-gisel-wide-extload-legalization.md](gisel-wide-extload-legalization.md).
 
 ---
 

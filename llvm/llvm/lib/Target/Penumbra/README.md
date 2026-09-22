@@ -125,13 +125,15 @@ A good worked example of the legalizer philosophy. At `s32`:
   (`MUL`/`DIV`/`DIVU`/`DIV_P`/`DIVU_P`). A `divmul` operation produces
   quotient and remainder together, so `a/b; a%b` on the same operands
   costs one divide.
-- Constant power-of-2 (and 2ⁿ±1) operands are strength-reduced to shifts
-  and adds during custom lowering, because that beats a ~34-cycle
-  hardware divide.
+- Constant operands are strength-reduced to shifts, adds and magic-number
+  multiplies wherever that beats the tuned core's divmul latency; the
+  lowerings and the cost model behind them are in
+  `doc/llvm/strength-reduction.md`.
 
-At `s64` everything libcalls (`__muldi3`, `__udivdi3`, …) — except a
-genuine 32×32→64 widening multiply, which is a single hardware multiply
-emitted as a low/high pair (`G_MUL` + `G_S/UMULH`).
+At `s64` a genuine 32×32→64 widening multiply is one hardware multiply
+(`MUL_P`/`MULU_P`, fused from a `G_MUL` + `G_S/UMULH` pair); any other
+multiply narrows to `s32` partial products, and divides libcall
+(`__divdi3`, `__udivdi3`, …).
 
 ## Design Decisions
 

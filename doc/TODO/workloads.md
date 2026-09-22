@@ -462,7 +462,7 @@ below, not the multiply.
 
 | Cause | Per voice-sample | Entry |
 |---|---|---|
-| `MUL` copies a multiplicand that stays live — resolved | 1 in `mix_by_voice` | "MUL is not commutable, so a live multiplicand is copied" |
+| `MUL` copies a multiplicand that stays live — resolved | 1 in `mix_by_voice` | `676cb9fed5c1` |
 | A conditional subtract pays for its zero arm — resolved | 2 in `mix_by_voice` | "a conditional add or subtract becomes a select of zero" |
 | A run-time indexed local rebuilds its frame address | 2 in `mix_by_frame` | "pointer-minus-constant and integer MMIO addresses miss their folds" |
 

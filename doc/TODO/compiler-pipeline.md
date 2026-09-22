@@ -178,11 +178,10 @@ GPR, keeping the producer alive).  Regression test
 (single carry, chained carries, borrow); full investigation notes in
 `doc/llvm/divdf3-rounding-bug.md`.
 
-Found along the way, still open: the bare 64×64→128 mulhi idiom
+Found along the way: the bare 64×64→128 mulhi idiom
 (`wideMultiply` reimplemented as a function returning only the high
 half) is recognized by the IR optimizer into an i128 multiply that
-crashes the legalizer — see "Compiler: G_ZEXT s128 from the mulhi
-idiom fails to legalize" below.
+crashed the legalizer, fixed in `398e8949a751`.
 
 ## Compiler: align functions and hot loops in codegen
 
