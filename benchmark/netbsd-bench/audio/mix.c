@@ -12,6 +12,14 @@
  * back once.  Both do the same additions in a different order and so mix
  * the same output; what differs is how much of the loop is bookkeeping.
  *
+ * A 16.16 position reaches only 65535 frames into a sample, which a
+ * module's samples can outrun, so the wide methods mix voice by voice
+ * with a 32.32 position: the frame in the high word, the fraction in the
+ * low.  One tests for the loop end at every frame, as the 16.16 methods
+ * do.  The other asks once per voice whether its block can reach the loop
+ * end at all, and mixes the block with no test when it cannot, which for
+ * any sample much longer than a block is nearly every time.
+ *
  * One iteration mixes a millisecond of audio at MIX_HZ, so the ns an
  * iteration takes, divided by 10000, is the share of the CPU a mix
  * running continuously costs: 50000 ns per millisecond is 5%.
@@ -25,6 +33,7 @@
 #include "../bench.h"
 
 #include <math.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,8 +54,18 @@ struct voice {
     int side;                               /* 0 left, 1 right */
 };
 
+struct wide_voice {
+    const int8_t *data;
+    uint32_t len;                           /* frames, which are bytes */
+    uint64_t pos;                           /* 32.32 */
+    uint64_t inc;                           /* 32.32 source frames per frame */
+    int vol;                                /* 0..64 */
+    int side;                               /* 0 left, 1 right */
+};
+
 struct mix_ctx {
     struct voice v[MAX_VOICES];
+    struct wide_voice w[MAX_VOICES];        /* the same voices, 32.32 */
     int nvoices;
     int16_t out[OUT_FRAMES * 2];
     uint32_t at;                            /* next frame in out */
@@ -121,6 +140,84 @@ static void mix_by_voice(uint64_t iters, void *vctx) {
     bench_consume(c->out);
 }
 
+/* Mix one voice's block into a, testing for the loop end at every frame,
+ * and return the position the block ends at.  The voice's fields arrive
+ * as values, so a store to a cannot force them back to memory. */
+static inline uint64_t wide_block_checked(int32_t *a, const int8_t *data,
+                                          uint64_t pos, uint64_t inc,
+                                          uint32_t len, int vol) {
+    for (int f = 0; f < FRAMES; f++) {
+        int8_t s = data[pos >> 32];
+
+        pos += inc;
+        if ((uint32_t)(pos >> 32) >= len)
+            pos -= (uint64_t)len << 32;
+        a[f] += s * vol;
+    }
+    return pos;
+}
+
+/* The same for a block that cannot reach the loop end. */
+static inline uint64_t wide_block(int32_t *a, const int8_t *data,
+                                  uint64_t pos, uint64_t inc, int vol) {
+    for (int f = 0; f < FRAMES; f++) {
+        int8_t s = data[pos >> 32];
+
+        pos += inc;
+        a[f] += s * vol;
+    }
+    return pos;
+}
+
+/* Whether a voice at pos, stepping inc, stays short of its loop end at
+ * len for a whole block, so the block can skip the test.  Rounding the
+ * step up to whole frames errs towards the checked loop, by at most
+ * FRAMES frames; 32 bits hold it for any step below 2^32 / FRAMES. */
+static inline bool wide_block_clear(uint64_t pos, uint64_t inc,
+                                    uint32_t len) {
+    return len - (uint32_t)(pos >> 32) > FRAMES * ((uint32_t)(inc >> 32) + 1);
+}
+
+static void mix_wide(uint64_t iters, void *vctx) {
+    struct mix_ctx *c = vctx;
+    int32_t acc[2][FRAMES];
+
+    for (uint64_t i = 0; i < iters; i++) {
+        memset(acc, 0, sizeof(acc));
+        for (int k = 0; k < c->nvoices; k++) {
+            struct wide_voice *v = &c->w[k];
+
+            v->pos = wide_block_checked(acc[v->side], v->data, v->pos,
+                                        v->inc, v->len, v->vol);
+        }
+        for (int f = 0; f < FRAMES; f++)
+            emit(c, acc[0][f], acc[1][f]);
+    }
+    bench_consume(c->out);
+}
+
+static void mix_wide_hoisted(uint64_t iters, void *vctx) {
+    struct mix_ctx *c = vctx;
+    int32_t acc[2][FRAMES];
+
+    for (uint64_t i = 0; i < iters; i++) {
+        memset(acc, 0, sizeof(acc));
+        for (int k = 0; k < c->nvoices; k++) {
+            struct wide_voice *v = &c->w[k];
+
+            if (wide_block_clear(v->pos, v->inc, v->len))
+                v->pos = wide_block(acc[v->side], v->data, v->pos, v->inc,
+                                    v->vol);
+            else
+                v->pos = wide_block_checked(acc[v->side], v->data, v->pos,
+                                            v->inc, v->len, v->vol);
+        }
+        for (int f = 0; f < FRAMES; f++)
+            emit(c, acc[0][f], acc[1][f]);
+    }
+    bench_consume(c->out);
+}
+
 /* Put every voice back where it starts, so each measurement mixes the
  * same material from the same point. */
 static void voices_reset(struct mix_ctx *c, const int8_t *samples, int n) {
@@ -132,6 +229,7 @@ static void voices_reset(struct mix_ctx *c, const int8_t *samples, int n) {
     c->at = 0;
     for (int k = 0; k < n; k++) {
         struct voice *v = &c->v[k];
+        struct wide_voice *w = &c->w[k];
         double ratio = (double)TUNE_HZ / MIX_HZ * pow(2.0, semis[k] / 12.0);
 
         v->data = samples + (size_t)k * SAMPLE_BYTES;
@@ -140,6 +238,15 @@ static void voices_reset(struct mix_ctx *c, const int8_t *samples, int n) {
         v->inc = (uint32_t)lround(ratio * 65536.0);
         v->vol = vols[k];
         v->side = k & 1;
+
+        /* The 16.16 step widened, not a finer one, so that every method
+         * mixes the same output. */
+        w->data = v->data;
+        w->len = v->len;
+        w->pos = 0;
+        w->inc = (uint64_t)v->inc << 16;
+        w->vol = v->vol;
+        w->side = v->side;
     }
 }
 
@@ -151,6 +258,8 @@ void bench_audio_mix(void) {
     } methods[] = {
         { "mix_by_frame", mix_by_frame },
         { "mix_by_voice", mix_by_voice },
+        { "mix_wide", mix_wide },
+        { "mix_wide_hoisted", mix_wide_hoisted },
     };
     static struct mix_ctx ctx;
     int8_t *samples = malloc((size_t)MAX_VOICES * SAMPLE_BYTES);

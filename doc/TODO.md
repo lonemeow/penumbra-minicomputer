@@ -4543,6 +4543,53 @@ stay live).  It compiles to 17:
   spills; the rule would need to recognise, before legalization, a
   64-bit select whose arms differ only in the high word.
 
+### The 32.32 loops on hardware
+
+`audio/mix` carries the loop above as `mix_wide`, and as
+`mix_wide_hoisted`, which asks once per voice per block whether the
+block can reach the loop end — frames left against `FRAMES` steps
+rounded up to whole frames, in 32 bits — and when it cannot, mixes the
+block with no wrap test.  Medians on penumbra2_5 at 37.5 MHz, in µs per
+millisecond of 24 kHz audio, where 10 µs is 1% of the CPU:
+
+| Voices | `mix_by_frame` | `mix_by_voice` | `mix_wide` | `mix_wide_hoisted` |
+|---|---:|---:|---:|---:|
+| 4 | 210 | 147 | 148 | 136 |
+| 6 | 294 | 199 | 205 | 185 |
+| 8 | 378 | 250 | 254 | 229 |
+
+Per voice-sample, from the perfctr counts of the 8-voice runs less the
+4-voice ones, which cancels the clearing and clamping done once per
+block:
+
+| Cycles per voice-sample | `mix_by_voice` | `mix_wide` | `mix_wide_hoisted` |
+|---|---:|---:|---:|
+| Instructions | 18.4 | 19.2 | 14.6 |
+| `funit` stall | 10.0 | 10.0 | 10.0 |
+| Store stall | 6.0 | 6.3 | 6.3 |
+| Load stall | 4.4 | 4.3 | 4.5 |
+| Flush, ifetch and hazard | 5.9 | 4.7 | 4.8 |
+| Total | 44.7 | 44.5 | 40.2 |
+
+The 32.32 position costs about a cycle per voice-sample over 16.16, its
+extra instruction partly offset by fewer hazard stalls.  Hoisting the
+wrap test takes a quarter of the instructions but a tenth of the
+cycles: the multiply, store and load stalls, 21 of the remaining 40
+cycles, do not move, and none of them is the compiler's.
+
+- **The multiply holds EX for its whole iteration**, so no schedule
+  hides it, and the table lookup above trades it for load stalls.
+- **The accumulator is loaded and stored once per voice-sample**, and
+  the store is write-through.  The first voice on each side can store
+  its products rather than add them, which drops the `memset` and that
+  voice's loads, and the last can clamp its sums into the output,
+  which drops its stores.  Mixing two voices per pass halves the rest,
+  but needs about 14 registers against the 12 there are, even with the
+  position's high word kept as a pointer into the sample, which drops
+  the base register and the `MOV`/`ADD` that form the load address.
+  The spill reloads loop invariants, which hit L1, against saving a
+  write-through store, so only a measurement can say whether it pays.
+
 ## Compiler: MUL is not commutable, so a live multiplicand is copied — RESOLVED
 
 `MUL` and `MULU` are destructive (`Rd = Rd × Rs`) and commutative,
