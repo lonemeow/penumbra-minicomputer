@@ -373,8 +373,12 @@ trap(struct trapframe *tf)
 	 * On return to userland: check for ASTs, pending signals,
 	 * and RAS (Restartable Atomic Sequence) restart.
 	 */
-	if (usermode)
-		userret(curlwp, tf);
+	if (usermode) {
+		if (type == EXC_SYSCALL)
+			userret_syscall(curlwp);
+		else
+			userret(curlwp, tf);
+	}
 
 	/*
 	 * Mask interrupts before returning into the vector-page trap
