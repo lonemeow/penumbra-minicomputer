@@ -479,6 +479,29 @@ main(void)
 	check(s3m_cell(m, 1, 0, 0)->note == S3M_NOTE_NONE,
 	    "a pattern the file points nowhere for is empty");
 
+	song_free(&song);
+
+	/* A sample whose length runs past the end of the file, which is
+	 * the file's own 32 bits and so can reach past what holds it. */
+	if ((error = build(&song)) != NULL) {
+		printf("FAIL the test module does not parse: %s\n", error);
+		return 1;
+	}
+	song_free(&song);
+	put32(INS_AT + 0x10, 0xFFFFFFF0);
+	if ((error = song_parse(&song, image, sizeof(image))) != NULL) {
+		printf("FAIL the cut module does not parse: %s\n", error);
+		return 1;
+	}
+	check(m->sample[1].length <= sizeof(image) &&
+	    song.sampledata_size <= sizeof(image),
+	    "a sample reaching past the end of the file is cut to it");
+	song_free(&song);
+
+	if ((error = build(&song)) != NULL) {
+		printf("FAIL the test module does not parse: %s\n", error);
+		return 1;
+	}
 	check(song_unsupported(&song) != NULL &&
 	    strstr(song_unsupported(&song), "AdLib instruments") != NULL &&
 	    strstr(song_unsupported(&song), "16-bit samples") != NULL,

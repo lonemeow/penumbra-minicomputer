@@ -236,10 +236,13 @@ instruments(struct song *song, const uint8_t *buf, size_t len,
 		else
 			data_at[s] = (((uint32_t)h[INS_MEMSEG] << 16) |
 			    le16(h + INS_MEMSEG + 1)) * 16;
+		/* A length is the file's own 32 bits, so what it reaches
+		 * is worked out in 64: a cut file must shorten a sample
+		 * rather than wrap its end round. */
 		if (data_at[s] == 0 || data_at[s] >= len)
 			smp->length = 0;
-		else if (data_at[s] + smp->length > len)
-			smp->length = (uint32_t)len - data_at[s];
+		else if ((uint64_t)data_at[s] + smp->length > len)
+			smp->length = (uint32_t)(len - data_at[s]);
 
 		/* A loop is Scream Tracker's own once its ends are
 		 * within the sample and the far one is past the near. */
