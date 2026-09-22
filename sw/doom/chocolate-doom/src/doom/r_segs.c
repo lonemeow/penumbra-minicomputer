@@ -36,17 +36,25 @@
 
 // OPTIMIZE: closed two sided lines as single sided
 
+// The state below belongs to this file alone.  Kept file-local, a call to
+// R_GetColumn or through colfunc cannot be assumed to reach it, so
+// R_RenderSegLoop holds it in registers across the column it draws
+// instead of reloading each value -- and its address, which costs two
+// instructions of its own -- on every iteration.  The three angles the
+// projection needs (rw_normalangle, rw_angle1, rw_distance) stay shared
+// with r_main.c and r_bsp.c.
+
 // True if any of the segs textures might be visible.
-boolean		segtextured;	
+static boolean		segtextured;	
 
 // False if the back side is the same plane.
-boolean		markfloor;	
-boolean		markceiling;
+static boolean		markfloor;	
+static boolean		markceiling;
 
-boolean		maskedtexture;
-int		toptexture;
-int		bottomtexture;
-int		midtexture;
+static boolean		maskedtexture;
+static int		toptexture;
+static int		bottomtexture;
+static int		midtexture;
 
 
 angle_t		rw_normalangle;
@@ -56,37 +64,37 @@ int		rw_angle1;
 //
 // regular wall
 //
-int		rw_x;
-int		rw_stopx;
-angle_t		rw_centerangle;
-fixed_t		rw_offset;
+static int		rw_x;
+static int		rw_stopx;
+static angle_t		rw_centerangle;
+static fixed_t		rw_offset;
 fixed_t		rw_distance;
-fixed_t		rw_scale;
-fixed_t		rw_scalestep;
-fixed_t		rw_midtexturemid;
-fixed_t		rw_toptexturemid;
-fixed_t		rw_bottomtexturemid;
+static fixed_t		rw_scale;
+static fixed_t		rw_scalestep;
+static fixed_t		rw_midtexturemid;
+static fixed_t		rw_toptexturemid;
+static fixed_t		rw_bottomtexturemid;
 
-int		worldtop;
-int		worldbottom;
-int		worldhigh;
-int		worldlow;
+static int		worldtop;
+static int		worldbottom;
+static int		worldhigh;
+static int		worldlow;
 
-fixed_t		pixhigh;
-fixed_t		pixlow;
-fixed_t		pixhighstep;
-fixed_t		pixlowstep;
+static fixed_t		pixhigh;
+static fixed_t		pixlow;
+static fixed_t		pixhighstep;
+static fixed_t		pixlowstep;
 
-fixed_t		topfrac;
-fixed_t		topstep;
+static fixed_t		topfrac;
+static fixed_t		topstep;
 
-fixed_t		bottomfrac;
-fixed_t		bottomstep;
+static fixed_t		bottomfrac;
+static fixed_t		bottomstep;
 
 
 lighttable_t**	walllights;
 
-short*		maskedtexturecol;
+static short*		maskedtexturecol;
 
 
 
@@ -208,65 +216,95 @@ void R_RenderSegLoop (void)
     int			top;
     int			bottom;
 
-    for ( ; rw_x < rw_stopx ; rw_x++)
+    // The wall state this loop steps is file-local, so R_GetColumn and
+    // colfunc cannot reach it -- but they are calls into other files, and
+    // the compiler has to assume the worst and reload each value, and the
+    // two instructions that form its address, on every column.  Stepping
+    // locals and storing the result back once leaves the arithmetic in
+    // registers.
+    short *const	cclip = ceilingclip;
+    short *const	fclip = floorclip;
+    visplane_t *const	ceilpl = ceilingplane;
+    visplane_t *const	floorpl = floorplane;
+    lighttable_t **const lights = walllights;
+    const int		stopx = rw_stopx;
+    const fixed_t	scalestep = rw_scalestep;
+    const fixed_t	topstp = topstep;
+    const fixed_t	bottomstp = bottomstep;
+    const fixed_t	pixhighstp = pixhighstep;
+    const fixed_t	pixlowstp = pixlowstep;
+    const boolean	markceil = markceiling;
+    const boolean	markfl = markfloor;
+    const boolean	segtex = segtextured;
+    const int		midtex = midtexture;
+    const int		toptex = toptexture;
+    const int		bottomtex = bottomtexture;
+    int			x = rw_x;
+    fixed_t		scale = rw_scale;
+    fixed_t		topf = topfrac;
+    fixed_t		bottomf = bottomfrac;
+    fixed_t		pixhi = pixhigh;
+    fixed_t		pixlo = pixlow;
+
+    for ( ; x < stopx ; x++)
     {
 	R_COUNT(R_CNT_SEGLOOP_ITER);
 	// mark floor / ceiling areas
-	yl = (topfrac+HEIGHTUNIT-1)>>HEIGHTBITS;
+	yl = (topf+HEIGHTUNIT-1)>>HEIGHTBITS;
 
 	// no space above wall?
-	if (yl < ceilingclip[rw_x]+1)
-	    yl = ceilingclip[rw_x]+1;
+	if (yl < cclip[x]+1)
+	    yl = cclip[x]+1;
 	
-	if (markceiling)
+	if (markceil)
 	{
-	    top = ceilingclip[rw_x]+1;
+	    top = cclip[x]+1;
 	    bottom = yl-1;
 
-	    if (bottom >= floorclip[rw_x])
-		bottom = floorclip[rw_x]-1;
+	    if (bottom >= fclip[x])
+		bottom = fclip[x]-1;
 
 	    if (top <= bottom)
 	    {
-		ceilingplane->top[rw_x] = top;
-		ceilingplane->bottom[rw_x] = bottom;
+		ceilpl->top[x] = top;
+		ceilpl->bottom[x] = bottom;
 	    }
 	}
 		
-	yh = bottomfrac>>HEIGHTBITS;
+	yh = bottomf>>HEIGHTBITS;
 
-	if (yh >= floorclip[rw_x])
-	    yh = floorclip[rw_x]-1;
+	if (yh >= fclip[x])
+	    yh = fclip[x]-1;
 
-	if (markfloor)
+	if (markfl)
 	{
 	    top = yh+1;
-	    bottom = floorclip[rw_x]-1;
-	    if (top <= ceilingclip[rw_x])
-		top = ceilingclip[rw_x]+1;
+	    bottom = fclip[x]-1;
+	    if (top <= cclip[x])
+		top = cclip[x]+1;
 	    if (top <= bottom)
 	    {
-		floorplane->top[rw_x] = top;
-		floorplane->bottom[rw_x] = bottom;
+		floorpl->top[x] = top;
+		floorpl->bottom[x] = bottom;
 	    }
 	}
 	
 	// texturecolumn and lighting are independent of wall tiers
-	if (segtextured)
+	if (segtex)
 	{
 	    // calculate texture offset
-	    angle = (rw_centerangle + xtoviewangle[rw_x])>>ANGLETOFINESHIFT;
+	    angle = (rw_centerangle + xtoviewangle[x])>>ANGLETOFINESHIFT;
 	    texturecolumn = rw_offset-FixedMul(finetangent[angle],rw_distance);
 	    texturecolumn >>= FRACBITS;
 	    // calculate lighting
-	    index = rw_scale>>LIGHTSCALESHIFT;
+	    index = scale>>LIGHTSCALESHIFT;
 
 	    if (index >=  MAXLIGHTSCALE )
 		index = MAXLIGHTSCALE-1;
 
-	    dc_colormap = walllights[index];
-	    dc_x = rw_x;
-	    dc_iscale = 0xffffffffu / (unsigned)rw_scale;
+	    dc_colormap = lights[index];
+	    dc_x = x;
+	    dc_iscale = 0xffffffffu / (unsigned)scale;
 	}
         else
         {
@@ -276,90 +314,97 @@ void R_RenderSegLoop (void)
         }
 	
 	// draw the wall tiers
-	if (midtexture)
+	if (midtex)
 	{
 	    // single sided line
 	    dc_yl = yl;
 	    dc_yh = yh;
 	    dc_texturemid = rw_midtexturemid;
-	    dc_source = R_GetColumn(midtexture,texturecolumn);
+	    dc_source = R_GetColumn(midtex,texturecolumn);
 	    colfunc ();
-	    ceilingclip[rw_x] = viewheight;
-	    floorclip[rw_x] = -1;
+	    cclip[x] = viewheight;
+	    fclip[x] = -1;
 	}
 	else
 	{
 	    // two sided line
-	    if (toptexture)
+	    if (toptex)
 	    {
 		// top wall
-		mid = pixhigh>>HEIGHTBITS;
-		pixhigh += pixhighstep;
+		mid = pixhi>>HEIGHTBITS;
+		pixhi += pixhighstp;
 
-		if (mid >= floorclip[rw_x])
-		    mid = floorclip[rw_x]-1;
+		if (mid >= fclip[x])
+		    mid = fclip[x]-1;
 
 		if (mid >= yl)
 		{
 		    dc_yl = yl;
 		    dc_yh = mid;
 		    dc_texturemid = rw_toptexturemid;
-		    dc_source = R_GetColumn(toptexture,texturecolumn);
+		    dc_source = R_GetColumn(toptex,texturecolumn);
 		    colfunc ();
-		    ceilingclip[rw_x] = mid;
+		    cclip[x] = mid;
 		}
 		else
-		    ceilingclip[rw_x] = yl-1;
+		    cclip[x] = yl-1;
 	    }
 	    else
 	    {
 		// no top wall
-		if (markceiling)
-		    ceilingclip[rw_x] = yl-1;
+		if (markceil)
+		    cclip[x] = yl-1;
 	    }
 			
-	    if (bottomtexture)
+	    if (bottomtex)
 	    {
 		// bottom wall
-		mid = (pixlow+HEIGHTUNIT-1)>>HEIGHTBITS;
-		pixlow += pixlowstep;
+		mid = (pixlo+HEIGHTUNIT-1)>>HEIGHTBITS;
+		pixlo += pixlowstp;
 
 		// no space above wall?
-		if (mid <= ceilingclip[rw_x])
-		    mid = ceilingclip[rw_x]+1;
+		if (mid <= cclip[x])
+		    mid = cclip[x]+1;
 		
 		if (mid <= yh)
 		{
 		    dc_yl = mid;
 		    dc_yh = yh;
 		    dc_texturemid = rw_bottomtexturemid;
-		    dc_source = R_GetColumn(bottomtexture,
+		    dc_source = R_GetColumn(bottomtex,
 					    texturecolumn);
 		    colfunc ();
-		    floorclip[rw_x] = mid;
+		    fclip[x] = mid;
 		}
 		else
-		    floorclip[rw_x] = yh+1;
+		    fclip[x] = yh+1;
 	    }
 	    else
 	    {
 		// no bottom wall
-		if (markfloor)
-		    floorclip[rw_x] = yh+1;
+		if (markfl)
+		    fclip[x] = yh+1;
 	    }
 			
 	    if (maskedtexture)
 	    {
 		// save texturecol
 		//  for backdrawing of masked mid texture
-		maskedtexturecol[rw_x] = texturecolumn;
+		maskedtexturecol[x] = texturecolumn;
 	    }
 	}
 		
-	rw_scale += rw_scalestep;
-	topfrac += topstep;
-	bottomfrac += bottomstep;
+	scale += scalestep;
+	topf += topstp;
+	bottomf += bottomstp;
     }
+
+    rw_x = x;
+    rw_scale = scale;
+    topfrac = topf;
+    bottomfrac = bottomf;
+    pixhigh = pixhi;
+    pixlow = pixlo;
 }
 
 
