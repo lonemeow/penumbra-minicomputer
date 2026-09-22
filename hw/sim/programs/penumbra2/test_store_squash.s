@@ -5,7 +5,7 @@
 ; taken precisely there. A store that is *younger* than the faulting
 ; instruction is still in MEM (its launch cycle) when the fault flushes, and
 ; its write must be cancelled — the data memory must be untouched. This is the
-; "store commit vs. fault flush" requirement (doc/TODO.md): o_dmem_we is gated
+; "store commit vs. fault flush" requirement: o_dmem_we is gated
 ; on ~i_bubble, and the fault flush (i_bubble = wb_fault_commit) reaches MEM in
 ; the same cycle the older instruction faults at WB.
 ;

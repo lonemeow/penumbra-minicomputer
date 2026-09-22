@@ -6,7 +6,7 @@
  * Penumbra has a single shared IRQ line (wired-OR of every device's
  * open-drain /IRQ output) and no interrupt controller.  The kernel
  * identifies the source by polling each registered device's IRQ
- * status register.  See doc/TODO.md "Interrupt Model".
+ * status register.  See doc/system/bus.md "Interrupt Model".
  *
  * Drivers register a handler via intr_establish() during attach.
  * On EXC_EXT_IRQ, trap.c calls intr_dispatch(), which walks every

@@ -26,7 +26,7 @@ and CLAUDE.md files intentionally do *not* duplicate them.
 | Penumbra/2 (gen2) pipelined-core design | `doc/internals/penumbra2/` |
 | SDRAM controller / optimization | `doc/internals/sdram-{controller,optimization}.md` |
 | RTL coding standards | `doc/internals/coding-standards.md` |
-| Current TODO / roadmap | `doc/TODO.md` |
+| Current TODO / roadmap | `doc/TODO/` (index: `doc/TODO/README.md`) |
 
 **Subsystem CLAUDE.md files** add navigation hints (file maps, key
 gotchas) for working inside a subtree:
@@ -102,6 +102,35 @@ Examples: `llvm: fix PIC TLS GD materialization`,
 `netbsd: bump UPAGES from 3 to 4`. Do not use bracketed tags
 (`[LLVM]`) — that's a legacy style.
 
+### TODO entries
+Open work lives in `doc/TODO/`, one file per area; the table in
+`doc/TODO/README.md` says which area each file covers.
+- **Where:** the file of the subsystem that owns the fix. Core,
+  bus, cache, SDRAM and fmax work share `hw-core.md` because those
+  items gate each other. A workload profile whose levers span
+  subsystems goes in `workloads.md`, and the subsystem entries link
+  to it. Add a new file (and a README row) only for a genuinely new
+  area.
+- **Shape:** one `## <Area>: <problem>` entry per item, stating the
+  problem, the evidence, and what is still open. Link other entries
+  by file and heading, never "above"/"below".
+- **Findings** that motivate open work go in the entry. A finding
+  that describes how the system behaves, with nothing left to do,
+  belongs in the subsystem's doc under `doc/internals/` or
+  `doc/system/`, not in TODO.
+- **Completed:** delete the entry rather than marking it RESOLVED.
+  Before deleting, move what stays useful: the reasoning to a comment
+  at the fix, what changed and what it measured to the commit
+  message, protection to a regression test, and a lesson that
+  generalizes to the subsystem doc. A partly done entry keeps only
+  the open remainder plus one line naming the commit that landed the
+  rest. Fix every inbound reference in the same change
+  (`grep -rn 'doc/TODO/<file>'`).
+- **Ruled out:** an approach tried or analysed and declined stays as
+  a short entry (what, measured result, why declined, commit or doc
+  link) under `## Ruled out` at the end of the owning file, so it is
+  not re-proposed.
+
 ## Build System
 
 ### Simulation and tests
@@ -145,7 +174,7 @@ Examples: `llvm: fix PIC TLS GD materialization`,
   the suite links the one matching `OPT`). Override `OPT=` or
   `COMPILER_TESTS=path/to/test.c`. Report in
   `build/test-compiler-report.txt`. Excludes and deferred backend gaps
-  in `test/compiler/excludes.txt` and `doc/TODO.md`.
+  in `test/compiler/excludes.txt` and `doc/TODO/compiler*.md`.
 - `make sim MOD=<name>` — module's Verilator testbench.
   `make sim MOD=machine_sim TB=<tb> PROG=<prog>` — runs a specific
   testbench with a specific program (auto-assembles `.s`/`.uasm`).
@@ -339,5 +368,5 @@ Current kernel/userland status is tracked in
 `doc/system/netbsd/porting-status.md`. Hardware status (RTL,
 testbenches, caches, FPGA bring-up) is documented per subsystem under
 `doc/internals/` and `hw/CLAUDE.md`. Outstanding work and roadmap
-items are in `doc/TODO.md`. Do not duplicate status here — those
-documents are the source of truth.
+items are in `doc/TODO/` (see [TODO entries](#todo-entries)). Do not
+duplicate status here — those documents are the source of truth.

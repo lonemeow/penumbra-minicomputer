@@ -1,7 +1,8 @@
 # `__divdf3` rounds 1 ULP short — investigation notes
 
 **Status: RESOLVED 2026-06-11.** Surfaced by the first compiler-rt
-rebuild since the recent codegen campaign. Tracked in `doc/TODO.md`
+rebuild since the recent codegen campaign. Tracked in
+`doc/TODO/compiler-pipeline.md`
 ("Compiler: two scalar miscompiles surfaced by rebuilding
 compiler-rt").
 
@@ -43,7 +44,8 @@ the dead expression (`hiWord(plolo)`) without a single
 recompile-bisect step.
 
 A separate bug found during the investigation (bare mulhi idiom →
-i128 → legalizer ICE) is tracked in `doc/TODO.md` ("Compiler: G_ZEXT
+i128 → legalizer ICE) is tracked in `doc/TODO/compiler-arith.md`
+("Compiler: G_ZEXT
 s128 from the mulhi idiom fails to legalize").
 
 ---

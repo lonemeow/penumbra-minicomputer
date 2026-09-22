@@ -375,7 +375,7 @@ AUDIO_SAMPLES ?= 131072
 # replayer needs and so what the machine is built for; the cost against
 # one channel is about 3% of mean CPU fmax and six block RAMs, and it
 # lands entirely in placement pressure rather than on any audio path
-# (doc/TODO.md). Changing this changes the netlist, so the pinned
+# (doc/TODO/hw-core.md). Changing this changes the netlist, so the pinned
 # placement seeds below only hold for the value set here.
 AUDIO_CHANNELS ?= 4
 AUDIO_WAV     ?=
@@ -1117,7 +1117,7 @@ FPGA_AUDIO_TOPS = ulx3s_audio_test_top
 # 7.2%, then 0 and 5 at 3.0%; the other two clear by 1.7% or less.  The
 # audio device is floorplanned out of the CPU cone's columns, which
 # widened the seed distribution far more than it moved its mean
-# (doc/TODO.md).
+# (doc/TODO/hw-core.md).
 DEFAULT_SEED_ulx3s_penumbra1_top   := 1
 DEFAULT_SEED_ulx3s_penumbra2_top   := 1
 DEFAULT_SEED_ulx3s_penumbra2_5_top := 7
@@ -1187,7 +1187,7 @@ FPGA_LINT_STUBS = $(FPGA_RTL)/ecp5_prim.sv
 # of the board's resistor ladder and reports in-band distortion per
 # configuration. An investigation tool, not a regression test: it prints
 # numbers rather than passing or failing, and its conclusions live in
-# doc/TODO.md under the audio device entry.
+# doc/TODO/hw-devices.md under the audio device entry.
 .PHONY: audio-sweep
 audio-sweep:
 	@mkdir -p $(BUILD_DIR)

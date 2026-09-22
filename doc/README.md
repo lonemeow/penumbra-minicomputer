@@ -114,5 +114,5 @@ correctness over performance; gen2.5 added the early-1990s polish
 
 ---
 
-## 🚀 [Roadmap](./TODO.md)
-*   **[TODO & Roadmap](./TODO.md)** — Current tasks and long-term project goals.
+## 🚀 [Roadmap](./TODO/README.md)
+*   **[TODO & Roadmap](./TODO/README.md)** — Current tasks and long-term project goals.

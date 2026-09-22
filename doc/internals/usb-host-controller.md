@@ -390,7 +390,7 @@ Genuinely absent, and reachable as `CFG_ID` features:
   attached but not behind a hub.
 - **Multi-transaction transfers and hardware NAK pacing** — one
   interrupt per transaction is the current cost model; see the
-  USBHC v2 entry in `doc/TODO.md`.
+  USBHC v2 entry in `doc/TODO/hw-devices.md`.
 - **Isochronous transfers** and a **DMA transfer-descriptor
   engine**.
 

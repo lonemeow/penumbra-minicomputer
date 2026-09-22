@@ -5,7 +5,7 @@
 // property of the board rather than of the device: on the ULX3S the two
 // highest-value legs measure some 47 dB cleaner than all four, because
 // in-band noise there tracks the current the driven legs switch. The
-// measurements are in doc/TODO.md.
+// measurements are in doc/TODO/hw-devices.md.
 //
 // Legs outside the run are held low rather than floated: floating one
 // would make the ladder's Thevenin resistance depend on the code, which

@@ -264,7 +264,7 @@ kernel, which auto-selects the root device without prompting.
 
 ## What's Next
 
-See `doc/TODO.md` for detailed descriptions.
+See `doc/TODO/kernel.md` for detailed descriptions.
 
 1. **ATF regression tests** -- build rootfs with test suite, run
    `t_swapcontext` and other ATF tests on the ISS.

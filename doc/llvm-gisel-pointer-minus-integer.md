@@ -114,4 +114,4 @@ now `sub p, n`.  In a NetBSD kernel, libc and userland sample
 (2.2M instructions) about 200 such sites — per-packet mbuf adjustments
 in protocol input and output, driver ring pointers — lose one or two
 instructions each.  The survey is in
-[the strength-reduction entry](./TODO.md#compiler-constant-multiply-divide-and-remainder-strength-reduction).
+[the strength-reduction entry](./TODO/compiler-arith.md#compiler-constant-multiply-divide-and-remainder-strength-reduction).

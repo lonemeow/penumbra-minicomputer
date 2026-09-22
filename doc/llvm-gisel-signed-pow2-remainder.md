@@ -190,4 +190,4 @@ its pre-legalizer combiner, so a signed `x % 2^k` lowers without a
 divide at `-O1` and above on every core.  The `-O0` combiner has no
 divide rules; there only the unsigned power-of-two cases reduce,
 through Penumbra's own legalizer.  The surrounding work is tracked in
-[the constant strength-reduction entry](./TODO.md#compiler-constant-multiply-divide-and-remainder-strength-reduction).
+[the constant strength-reduction entry](./TODO/compiler-arith.md#compiler-constant-multiply-divide-and-remainder-strength-reduction).

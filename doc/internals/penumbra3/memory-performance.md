@@ -150,7 +150,8 @@ Solving for a zero field-line hit rate reproduces about 60 %.
 
 ### fork / exec / pipe — L2-hit fill bound
 
-`doc/TODO.md` records `ifetch` at 16–20 % of cycles on these paths,
+`doc/TODO/hw-penumbra2.md` records `ifetch` at 16–20 % of cycles on
+these paths,
 against about 0 on Dhrystone. Their larger code footprint misses L1-I
 but mostly hits L2, which makes the L2-hit fill (13 cycles in chain B)
 the cost to attack.
@@ -279,7 +280,7 @@ This is a change to a shared device (`io/sdram`), the Level-2 line
 buffer of [`sdram-optimization.md`](../sdram-optimization.md#level-2-bl8-line-buffer);
 gen1 and gen2 benefit too. The same rework is the place to fix the
 adapter's suspected deadlock on gapped read streams, recorded in
-`doc/TODO.md`.
+`doc/TODO/hw-core.md`.
 
 ### Next-line prefetch into stream buffers
 

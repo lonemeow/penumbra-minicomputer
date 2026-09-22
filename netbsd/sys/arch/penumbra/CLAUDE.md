@@ -14,7 +14,8 @@ conventions.
   handoff design.
 - `doc/system/{abi,mmu,sysregs,bus}.md` — ABI, MMU, sysreg, and bus
   specs that the MD layer implements.
-- `doc/TODO.md` — outstanding work and roadmap.
+- `doc/TODO/kernel.md` — outstanding kernel work (all areas indexed
+  in `doc/TODO/README.md`).
 
 The NetBSD source tree (`netbsd/`) is a squashed subtree from the
 `netbsd-10` branch of `https://github.com/NetBSD/src.git`. Penumbra

@@ -31,7 +31,7 @@
 // Channels the audio device is built with. A build-time knob because
 // the cost that matters is in the register domain and only shows up
 // against the rest of the machine: sweep the same top at one and at
-// four to see it (doc/TODO.md).
+// four to see it (doc/TODO/hw-core.md).
 `ifndef AUDIO_CHANNELS
 `define AUDIO_CHANNELS 1
 `endif
@@ -1029,7 +1029,7 @@ module ulx3s_penumbra1_top (
 
     // Two bits on the 549 and 1.1k legs: measured some 47 dB cleaner
     // than driving all four, because in-band noise tracks the current
-    // the driven legs switch (doc/TODO.md).
+    // the driven legs switch (doc/TODO/hw-devices.md).
     audio_ladder_out #(
         .LEGS    (4),
         .OUT_W   (2),

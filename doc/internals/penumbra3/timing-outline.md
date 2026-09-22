@@ -14,7 +14,7 @@ memory-interface) follow.
 
 The gen2 diagnosis these rules react to is recorded in the
 [gen2 abandonment banner](../penumbra2/overview.md) and the fmax-closure
-round in [the project TODO](../../TODO.md). The rules are grounded in a
+round in [the gen2.5 TODO entries](../../TODO/hw-penumbra2.md). The rules are grounded in a
 survey of open in-order / pipelined softcores — biriscv, cva6, cvw (Wally),
 mor1kx, vexriscv.
 

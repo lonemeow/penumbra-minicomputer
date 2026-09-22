@@ -80,9 +80,10 @@ FixedDiv(fixed_t a, fixed_t b)
             // Widen each predicate to a full mask before combining them.
             // Written as `carry | (rem >= den)`, InstCombine rewrites the
             // sign test into `icmp slt` and it lowers to a branch that is
-            // data-dependent -- see doc/TODO.md, "signed comparisons have
-            // no branchless materialisation".  Masking keeps the shift a
-            // shift: `0 - (x >> 31)` is a single SAR.
+            // data-dependent -- see doc/TODO/compiler-selection.md,
+            // "signed comparisons have no branchless materialisation".
+            // Masking keeps the shift a shift: `0 - (x >> 31)` is a
+            // single SAR.
             uint32_t mask_hi = (uint32_t) -(int32_t) (rem >> 31);
             uint32_t mask_ge;
 

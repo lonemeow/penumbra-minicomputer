@@ -242,8 +242,8 @@ lands and CPI drops toward 1.2.
 
 *Recorded as planned during development; gen2/2.5 is abandoned (see the
 banner at the top). What actually landed, and where it stopped, is in
-[doc/TODO.md](../../TODO.md) — the gen2.5 status entries and the
-fmax-closure round.*
+[doc/TODO/hw-penumbra2.md](../../TODO/hw-penumbra2.md) — the gen2.5
+feature status entry and its fmax-closure round.*
 
 **gen2 — correctness first.** Ship a working 6-stage pipelined
 Penumbra/2 that boots the same NetBSD kernel as Penumbra/1. No GPR/SPR

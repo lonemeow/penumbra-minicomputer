@@ -2,7 +2,7 @@
 //
 // An investigation tool, not a regression test: it reports numbers
 // rather than passing or failing. Results and the conclusions drawn
-// from them are recorded in doc/TODO.md under the audio device entry.
+// from them are recorded in doc/TODO/hw-devices.md under the audio device entry.
 //
 // The modulator's code stream does not depend on what the ladder does
 // with it, so one capture per stimulus level feeds every configuration

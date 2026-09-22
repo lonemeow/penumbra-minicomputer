@@ -70,7 +70,7 @@ assistance was used.
 ## Working here
 
 - Engineering findings specific to this production go in
-  [NOTES.md](NOTES.md), not the global `doc/TODO.md`.
+  [NOTES.md](NOTES.md), not the global `doc/TODO/`.
 - `runtime/` is this production's own framework. It is deliberately
   not shared with `benchmark/` or with a future production, which may
   target different hardware and want different assumptions.

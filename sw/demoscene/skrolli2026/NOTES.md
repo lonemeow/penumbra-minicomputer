@@ -1,7 +1,7 @@
 # Engineering notes
 
 Findings specific to this production. Anything of general interest to
-the machine belongs in `doc/TODO.md` instead.
+the machine belongs in `doc/TODO/` instead.
 
 ## Target
 
@@ -348,9 +348,9 @@ by a palette size.
 Three shapes come out an instruction or two longer than the ISA allows
 — subtracting decompositions such as `x * 255`, the unfactored
 broadcast constant (8 instructions where 6 would do), and the signed
-power-of-two remainder. They are recorded in `doc/TODO.md` under the
-constant strength-reduction entry; none of them is worth restructuring
-an effect around.
+power-of-two remainder. They are recorded in
+`doc/TODO/compiler-arith.md` under the constant strength-reduction
+entry; none of them is worth restructuring an effect around.
 
 The build pins `-mcpu=penumbra2_5` rather than relying on the
 compiler's default tuning, which follows whichever core is most used

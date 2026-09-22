@@ -213,7 +213,7 @@ kernel C or the SDRAM/storage path changed.
     the iteration-scaling part of the regression (~23% at size=1 rising
     to ~full at n=127) and makes the hot-loop placement deterministic
     across rebuilds.  The residual small-size floor is cross-routine set
-    conflict, which only associativity can fix.  See the doc/TODO.md
+    conflict, which only associativity can fix.  See the doc/TODO/userland.md
     entry on cache-line-aligning the libc memcpy/memset hot loops (and
     the matching backend `setPrefLoopAlignment` follow-up).
   - `fork_exec` has only 5 trials and a wide min↔mean spread
@@ -595,7 +595,7 @@ here because the per-syscall costs measured above don't capture
 Interpretation:
 - `/dev/ld0` (SD card via polled `pmci`): **61 KB/s read** — the
   end-to-end SD-MMC stack is the bottleneck, not the CPU.  Once
-  SPI FIFO + IRQ-driven `pmci` lands (Phase 3.5 in `doc/TODO.md`),
+  SPI FIFO + IRQ-driven `pmci` lands (`doc/TODO/kernel.md`),
   this should jump substantially.
 - `/dev/zero` → `/dev/null`: **1.4 MB/s** of pure read+write syscall
   bandwidth, no real I/O, no userland data touch.  This is the

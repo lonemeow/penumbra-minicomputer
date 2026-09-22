@@ -168,7 +168,7 @@ NetBSD uses its own build framework (`build.sh`) which supports cross-compilatio
 
 1. **Debug info.** DWARF support in the LLVM backend for source-level debugging. Lower priority but valuable.
 
-2. **Floating point.** Software-emulated via compiler soft-float today. Hardware FPU is a future project. (The integer multi-cycle ops MUL/MULU/DIV/DIVU, Format R opcodes 16–19, are implemented by the divmul peer unit — see `doc/internals/divmul.md`.) See `doc/TODO.md` § Phase 5 (FPU).
+2. **Floating point.** Software-emulated via compiler soft-float today. Hardware FPU is a future project. (The integer multi-cycle ops MUL/MULU/DIV/DIVU, Format R opcodes 16–19, are implemented by the divmul peer unit — see `doc/internals/divmul.md`.) See the FPU entry in `doc/TODO/hw-core.md`.
 
 ## Resolved Questions
 
