@@ -58,11 +58,10 @@ SRCS+=	atomic_sub_32_cas.c atomic_sub_16_cas.c atomic_sub_8_cas.c \
 
 .if defined(LIB) && (${LIB} == "c" || ${LIB} == "pthread")
 
-# CAS-based init (no-op on Penumbra — hardware CAS always available).
-SRCS+=	atomic_init_cas.c
-
-# RAS registration constructor — registers the CAS code range with the
-# kernel so interrupted sequences are restarted.
+# Penumbra has no CAS instruction: the sequence in atomic_cas.S is
+# restartable instead, and libc's atomic initialization hook registers
+# its range with the kernel.  atomic_init_cas.c, the no-op that ports
+# with a real CAS use, would collide with it.
 SRCS+=	atomic_ras_init.c
 
 .endif
