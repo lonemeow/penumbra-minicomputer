@@ -1,42 +1,5 @@
 # Compiler: passes, frames, calls and tuning
 
-## Compiler: outgoing stack arguments address SP through a copy — RESOLVED
-
-A call that passes arguments on the stack stores them through a copy
-of SP:
-
-```
-mov  r1, r14
-stw  r7, [r1 + 0]
-```
-
-where `stw r7, [r14 + 0]` needs no copy.  Call lowering forms each
-stack slot's address as `G_PTR_ADD (COPY $r14), off`, and the copy is
-selected into a `gpr_allocatable` register, a class without R14, so
-the register coalescer cannot merge it into SP even though every use —
-a store's base — accepts R14.  `PenumbraCallLowering::getStackAddress`
-shares one copy across a call's stack arguments, so it costs one
-instruction per call.
-
-Reach (see "where the remaining codegen wins are"): 10,361 copies in
-the `GENERIC.DEBUG` kernel, 1.45% of its instructions and about a tenth
-of its copies; 1,593 in `libc.so`; 3,611 in the `test-compiler` corpus.
-The sampled kernel sites are setup and diagnostic calls (`startlwp`,
-`penumbra_init`, `cpu_initclocks`); 1,790 sit inside loops.
-
-Resolved by making R14 a reserved member of `GPR_Allocatable`, as R12
-already was.  The coalescer's reserved-register join then folds the
-copy into its uses, and it refuses wherever an `ADJCALLSTACKDOWN`,
-an `ADJCALLSTACKUP` or a call clobbering R14 falls inside the copy's
-live range, so the unreserved call frame of a function with a dynamic
-`alloca` stays correct (`alloca-call-frame.ll`).  In the
-`test-compiler` corpus at `-O2` the shape drops from 3,611 to 17 and
-the corpus from 386,627 instructions to 382,926: past the copies
-themselves, the freed register sometimes spares a callee-saved save
-and restore, as in Doom's `P_UseLines`.  The 17 left are `LEAfi`
-expansions, a frame address taken as a value, which form after
-register allocation.
-
 ## Compiler: graceful-fail on unsupported inline asm and vector IR
 
 Today the GlobalISel IRTranslator crashes (`fatal error: unable to
@@ -111,78 +74,6 @@ poison-flag drop is in the tree or carry it; backport the lowerBswap
 mask fix opportunistically; re-run the audit's probes after any
 rebase.
 
-## Compiler: aggregate-ABI rework — small structs in registers — RESOLVED
-
-`doc/system/abi.md` ("Argument Passing" / "Return Values") specifies
-the slot-based aggregate convention: aggregates ≤ 4 bytes travel by
-value in one slot, 5–8 bytes in two slots (register/stack straddle
-allowed), > 8 bytes by reference to a caller-owned copy; returns
-≤ 8 bytes come back in R1/R1:R2, larger ones via hidden sret pointer
-with R1–R4 undefined at return.
-
-Implemented in clang as `PenumbraABIInfo`
-(clang/lib/CodeGen/Targets/Penumbra.cpp, commit `8fb7d7dc`), replacing
-the earlier `DefaultABIInfo` that made every aggregate indirect and
-every aggregate return sret.  The classes follow the RISC-V ILP32
-pattern: ≤ 4 bytes → Direct(i32), 5–8 → Direct([2 x i32]), > 8 →
-indirect **non-byval**, with the same classes for returns
-(`RetCC_Penumbra` assigns i32 to [R1, R2]).  Making the indirect class
-non-byval is the keystone: clang materializes the by-value copy in IR
-and the backend only ever sees a plain pointer, so the two byval-path
-defects below cannot arise from clang-emitted code (`normalizeVarArgByVal`
-and the framework byval handling are now dead for it).
-
-The three defects the `test/compiler/penumbra-abi/` tests pinned down:
-
-- **Missing byval copy for register-slot aggregates** (C pass-by-value
-  silently became pass-by-reference) — gone with the non-byval
-  classification; `abi-aggregate-{mutate,const,value}.c` pass.
-- **Stack-positioned byval corrupts trailing arguments** — same root
-  cause, gone; `abi-aggregate-boundary.c` (the stack straddle) passes.
-- **Outgoing stack stores expand byte-by-byte** — independent backend
-  bug: `PenumbraOutgoingValueHandler` tagged the slot with a bare
-  `MachinePointerInfo::getStack()`, so `inferAlignFromPtrInfo` returned
-  Align(1) and every stack argument (scalars included) lowered to the
-  byte-store expansion.  Fixed in `bbd64bffed05` by deriving the
-  alignment from the Align(4) SP and the 4-aligned slot offset
-  (`commonAlignment`).
-
-Coverage: execution tests `test/compiler/penumbra-abi/*.c`; shape
-tests `clang/test/CodeGen/Penumbra/aggregate-abi.c` (frontend
-coercion) and `test/CodeGen/Penumbra/{aggregate-args,outgoing-stack-arg-align}.ll`
-(backend register placement + stack-store width).  The `struct-ret-1.c`
-exclusion was re-triaged and removed — it passes at every opt level.
-
-## Compiler: two scalar miscompiles surfaced by rebuilding compiler-rt — RESOLVED
-
-Both symptoms (`__divdf3` quotients 1 ULP short at -O2/-O3;
-`__umodXi3` wrong remainders at -O0) plus the previously separate
-`pr23135.c` -O0 failure turned out to be **one bug**: the
-instruction selector's carry-in fusion deleted flag-producing
-ADD/SUBs whose 32-bit sum was dead but whose carry/borrow was live.
-`carryInAlreadyLive` let a `G_UADDE`/`G_USUBE` select to a bare
-ADC/SBC reading SR.C directly, dropping the use of the s1 carry
-vreg; bottom-up selection then reached the producer `G_UADDO`,
-found no remaining def uses, and erased it as trivially dead —
-along with its input cone.  In compiler-rt this hit `wideMultiply`
-whenever the low product half is unused (`fp_div_impl.inc`'s
-`dummy`): the `plolo` multiply and the `r1` carry adds vanished,
-making pre-round quotients 2 ULPs short where the error analysis
-allows at most ~1.5 (the rounding step itself — the original
-suspect — was correct all along, and clawed one ULP back).
-
-Fix: `carryInAlreadyLive` rejects fusion when the producer's sum
-register has no uses (the fallback materializes the carry through a
-GPR, keeping the producer alive).  Regression test
-`test/CodeGen/Penumbra/uaddo-dead-sum.ll` pins all three shapes
-(single carry, chained carries, borrow); full investigation notes in
-`doc/llvm/divdf3-rounding-bug.md`.
-
-Found along the way: the bare 64×64→128 mulhi idiom
-(`wideMultiply` reimplemented as a function returning only the high
-half) is recognized by the IR optimizer into an i128 multiply that
-crashed the legalizer, fixed in `398e8949a751`.
-
 ## Compiler: align functions and hot loops in codegen
 
 The Penumbra backend sets no `setMinFunctionAlignment`,
@@ -231,22 +122,6 @@ syscall benches (the hot-loop-bound rows).  As with the libc fix, this
 only addresses the intra-loop straddle; the cross-routine set-conflict
 residual needs associativity.
 
-## Compiler: pr23135.c fails at -O0 (pre-existing, found in opt-level sweep) — RESOLVED
-
-The 2026-06-09 full-suite sweep across opt levels (-O0/-O1/-O2 — the
-routine `make test-compiler` gate only runs -O2) found exactly one
-failure: `Regression/C/gcc-c-torture/execute/pr23135.c` (GCC
-generic-vector arithmetic, `vector_size` attribute) exits 127 on the
-ISS at **-O0 only**; -O1 and -O2 pass 1607/1607.  Bisected against the
-Localizer change by rebuilding with the pass disabled — fails
-identically, so it was pre-existing.  The earlier guess (vector
-scalarization gap in `optnone_combines`) was wrong: it was the
-dead-sum/live-carry selector bug — see "Compiler: two scalar
-miscompiles surfaced by rebuilding compiler-rt — RESOLVED" above.
-At -O0 nothing cleans up dead lo-half sums before selection, so the
-scalarized i64 arithmetic hit the fusion hazard constantly.  Passes
-with the fix.
-
 ## Compiler: codegen pass/gate audit — what we leave at the default
 
 Audited 2026-06-09 after the shrink-wrapping discovery: Penumbra
@@ -267,9 +142,9 @@ targets opt into are silently off.  Status per item:
   not compiler-addressable.
 - **IRTranslator opt level — DONE.**  The translator was built at
   `CodeGenOptLevel::None`, so no branch probabilities reached block
-  placement.  See "IRTranslator runs without branch probabilities".
+  placement.  Fixed in `40c15ff5805d`.
 - **Shrink-wrapping — DONE.**  `enableShrinkWrapping` defaulted to
-  false.  See "shrink-wrapping (spill-density lever, part 1)".
+  false.  See "shrink-wrapping — what still limits it".
 - **Pre-RA MachineScheduler** (`enableMachineScheduler`, default
   false): with GlobalISel there is *no* scheduling at all without it —
   instruction order is IR order.  GenericScheduler in in-order mode
@@ -371,7 +246,7 @@ targets opt into are silently off.  Status per item:
   shifts move inlining decisions broadly, so it needs a kernel-bench
   A/B before landing.
 
-## Compiler: shrink-wrapping (spill-density lever, part 1) — ENABLED
+## Compiler: shrink-wrapping — what still limits it
 
 LLVM's ShrinkWrap pass (runs post-RA, just before PrologEpilogInserter)
 computes a save point / restore point pair in `MachineFrameInfo` so PEI
@@ -380,30 +255,13 @@ block dominating all frame uses instead of the entry block — early-exit
 paths then run zero frame code.  It is gated per-target on
 `TargetFrameLowering::enableShrinkWrapping`; every major target
 (AArch64, ARM, LoongArch, Mips, PowerPC, RISC-V, X86) opts in, and
-`PenumbraFrameLowering` now does.
+`PenumbraFrameLowering` does (`830c55e13181`).
 
-Two correctness problems had to go first.  The force-flag trials
-(`-enable-shrink-wrap=true`, 1607/1607 on the compiler suite in June)
-never reached either shape:
-
-- **Epilogue placement.**  `emitEpilogue` released SP before the
-  block's *last* instruction, and PEI places the callee-saved reloads
-  before its *first terminator*.  In a return block those coincide.  A
-  restore point ending in `bge; b` released SP on the fall-through path
-  only, and one falling through with no terminator released it before
-  the last reload, which then read the wrong slot.  Two kernel files
-  also failed to assemble.  The release now goes before the first
-  terminator, after the reloads.
-- **Clobbered state.**  `canUseAsPrologue`/`canUseAsEpilogue` refuse a
-  block where the SP adjustment overwrites a value still read: SR
-  between a compare and its branch — every ALU op sets NZCV and the
-  ISA has no flag-preserving add, so X86's `LEA` escape does not exist
-  — or R11 when the frame may need the register form of `adjustSP`.
-  Liveness comes from `LiveRegUnits` over the successors' live-in
-  lists.  SR is block-local by construction today; code that ever
-  splits a block while flags are live must add the SR live-in itself,
-  as X86's select lowering does for EFLAGS.  A refused restore point
-  that is the only candidate leaves the frame in the entry block.
+The prologue and epilogue hooks refuse a block where the SP
+adjustment would overwrite a live SR or R11.  SR is block-local by
+construction today, which that liveness check relies on: code that
+ever splits a block while flags are live must add the SR live-in
+itself, as X86's select lowering does for EFLAGS.
 
 Shape coverage: `shrink-wrap.ll`.
 
@@ -566,41 +424,6 @@ version; a useful first cut is small:
 RISC-V's `lowerTailCall` + `PseudoTAIL`/indirect-tail pseudo is the
 matching template; AArch64's `isEligibleForTailCallOptimization` is the
 eligibility-check reference.
-
-## Compiler: IRTranslator runs without branch probabilities — RESOLVED
-
-`PenumbraPassConfig::addIRTranslator` built the translator at its
-default `CodeGenOptLevel::None`, so it never requested
-`BranchProbabilityInfo`.  Every conditional edge was recorded 50/50,
-and block placement ignored `__predict_false`, `__builtin_expect`,
-cold calls and loop-exit heuristics; the same probabilities order
-switch clusters.  It now passes `getOptLevel()`, as RISC-V and AArch64
-do.  Shape coverage: `branch-probability-layout.ll`.
-
-Measured statically on the same IR (kernel `GENERIC.DEBUG`, Doom,
-PIC `libsqlite3`):
-
-| | kernel | Doom | SQLite |
-|---|---:|---:|---:|
-| `.text` | +1.5% | +0.19% | −0.77% |
-
-| `kern_assert` call reached by | before | after |
-|---|---:|---:|
-| fall-through | 6,730 | 732 |
-| taken branch | 139 | 6,133 |
-
-`kern_assert` returns, so each block moved out of line pays a `b` back
-— most of the kernel's growth.  Hot functions stay within a few
-instructions of their old size.  On hardware the pbench kernel rows
-all improved except `clock_gettime`, which retired slightly more
-instructions per call although nothing on its path grew — see "pack
-the hottest syscall-path text onto shared pages".
-
-Turning it on exposed a latent PIC bug: `lowerAnchoredOperand` read an
-offset from jump-table-index operands, which have none, and emitted
-whatever the operand storage held.  It had always held zero before —
-all 1,895 PIC jump-table bases in the installed shared libraries check
-out.
 
 ## Compiler: no branch-cost model — branch-avoidance may be over-eager
 
@@ -960,20 +783,24 @@ back step (`LDH +SEXT offset,[entry_addr]` → `ADD offset, base`
 sensitive builds and large switches; for now we always pay the
 4 B/entry tax.
 
-## Compiler: named byval args overlap on stack — RESOLVED
+## Compiler: backend byval handling is only safe because clang avoids it
 
-When a fixed (non-variadic) function received byval struct args
-that spilled past R1-R4, adjacent stack slots overlapped: CC_Penumbra's
-`CCAssignToStack<4,4>` reserved only a pointer-sized slot while the
-framework's byval-mem path wrote `Flags.getByValSize()` bytes (8 for
-`_Complex float`, 16 for `_Complex double`) at that offset.
+Clang's `PenumbraABIInfo` passes a 5–8 byte aggregate as
+`Direct([2 x i32])` and a larger one indirect *non-byval*, with the copy
+made in IR, so clang-emitted code never reaches the backend's byval
+paths.  Those paths still carry the two defects the aggregate-ABI work
+found (`test/compiler/penumbra-abi/`), and IR from any other producer
+that uses `byval` hits them silently:
 
-Resolved by the aggregate-ABI rework above: the `PenumbraABIInfo`
-classes route these types so the byval-on-stack path is never taken —
-a 5–8 byte aggregate (`_Complex float`) goes Direct([2 x i32]) and a
-> 8 byte one (`_Complex double`) goes indirect non-byval with a
-clang-materialized copy.  The once-proposed `CCIfByVal<CCPassByVal<4,4>>`
-CC change is moot for clang-emitted code.  `complex-7.c` passes and its
-exclusion is removed.  The variadic-byval stack-overflow bug
-(920625-1.c) was a separate issue, fixed earlier by
-`normalizeVarArgByVal()` in `PenumbraCallLowering.cpp`.
+- a register-slot byval aggregate gets no copy, so pass-by-value
+  becomes pass-by-reference;
+- `CC_Penumbra`'s `CCAssignToStack<4,4>` reserves a pointer-sized slot
+  for a stack byval argument while the framework writes
+  `getByValSize()` bytes there, overlapping the arguments after it
+  (8 bytes for `_Complex float`, 16 for `_Complex double`).
+
+Variadic byval is separate and handled (`normalizeVarArgByVal()` in
+`PenumbraCallLowering.cpp`).  Either implement byval properly —
+`CCIfByVal<CCPassByVal<4,4>>` plus the register-slot copy — or reject
+`byval` with a fatal error, so the miscompile cannot happen quietly.
+Not re-verified since the rework.

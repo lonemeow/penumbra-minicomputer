@@ -19,8 +19,8 @@ mov  r1, r5
 R0 was not a member of `GPR_Allocatable`, the class the copy is
 selected into, so neither the register coalescer (merging the copy
 into R0) nor the spiller (folding a spill of the copy into a store of
-R0) could use it — the same cause as "outgoing stack arguments address
-SP through a copy".  Resolved by making R0 a member too; its
+R0) could use it — the same cause as the SP copy fixed in
+`56c8b327d3af`.  Resolved by making R0 a member too; its
 `isConstant` lets the coalescer skip the interference checks, since R0
 never changes.  The `test-compiler` corpus at `-O2` drops from 382,926
 instructions to 380,134 (−0.73%; 912 functions smaller, 19 larger),

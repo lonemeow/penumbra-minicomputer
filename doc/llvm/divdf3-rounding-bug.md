@@ -1,10 +1,8 @@
 # `__divdf3` rounds 1 ULP short — investigation notes
 
 **Status: RESOLVED 2026-06-11.** Surfaced by the first compiler-rt
-rebuild since the recent codegen campaign. Tracked in
-`doc/TODO/compiler-pipeline.md`
-("Compiler: two scalar miscompiles surfaced by rebuilding
-compiler-rt").
+rebuild since the recent codegen campaign. Fixed in
+`c628cbc427d5`.
 
 ## Resolution
 

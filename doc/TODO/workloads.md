@@ -99,7 +99,7 @@ Compiler causes, widest reach first, each with its own entry:
 
 | Cause | Shows up in | Entry |
 |---|---|---|
-| No branch probabilities reach block placement | every `__predict_false`, KASSERT and cold path | "IRTranslator runs without branch probabilities" |
+| No branch probabilities reach block placement | every `__predict_false`, KASSERT and cold path | `40c15ff5805d` |
 | Countdown loop exits test a materialized overflow flag — RESOLVED | Doom column and span drawers: 6 of 18 instructions per pixel | `9a9bcc05c70a` |
 | s64 relational compares — RESOLVED | SQLite b-tree bisection and record compare | `8c53d2bb4b84` |
 | Compare immediates, TEST, inverted booleans | 848 / 612 / 274 / 140 sites | "compare and branch selection misses immediate and TEST forms" |
