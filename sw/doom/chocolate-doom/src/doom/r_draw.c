@@ -626,6 +626,10 @@ void R_DrawSpan (void)
 
     R_COUNT_SPAN(count + 1);
 
+    {
+    const byte *source = ds_source;
+    const lighttable_t *colormap = ds_colormap;
+
     do
     {
 	// Calculate current texture index in u,v.
@@ -635,11 +639,12 @@ void R_DrawSpan (void)
 
 	// Lookup pixel from flat texture tile,
 	//  re-index using light/colormap.
-	*dest++ = ds_colormap[ds_source[spot]];
+	*dest++ = colormap[source[spot]];
 
         position += step;
 
     } while (count--);
+    }
 }
 
 
@@ -755,6 +760,10 @@ void R_DrawSpanLow (void)
 
     dest = ylookup[ds_y] + columnofs[ds_x1];
 
+    {
+    const byte *source = ds_source;
+    const lighttable_t *colormap = ds_colormap;
+
     do
     {
 	// Calculate current texture index in u,v.
@@ -764,12 +773,13 @@ void R_DrawSpanLow (void)
 
 	// Lowres/blocky mode does it twice,
 	//  while scale is adjusted appropriately.
-	*dest++ = ds_colormap[ds_source[spot]];
-	*dest++ = ds_colormap[ds_source[spot]];
+	*dest++ = colormap[source[spot]];
+	*dest++ = colormap[source[spot]];
 
 	position += step;
 
     } while (count--);
+    }
 }
 
 //

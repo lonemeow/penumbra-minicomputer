@@ -111,7 +111,10 @@ void R_InitPlanes (void)
 //
 // BASIC PRIMITIVE
 //
-void
+// Local so the whole plane path can be inlined: R_MakeSpans is called
+// once per visplane column and its loops usually do nothing, so the
+// call frame is most of what it costs.
+static void
 R_MapPlane
 ( int		y,
   int		x1,
@@ -327,7 +330,7 @@ R_CheckPlane
 //
 // R_MakeSpans
 //
-void
+static void
 R_MakeSpans
 ( int		x,
   int		t1,

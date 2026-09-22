@@ -348,21 +348,31 @@ void R_DrawMaskedColumn (column_t* column)
     fixed_t	basetexturemid;
 	
     basetexturemid = dc_texturemid;
-	
+
+    // The post loop's inputs do not change while it runs -- the column
+    // it draws is a fixed x, and no drawer writes them back -- but they
+    // are globals reached through calls, so each one is reloaded, with
+    // the two instructions that form its address, on every post.
+    {
+    const fixed_t	spritetop = sprtopscreen;
+    const fixed_t	scale = spryscale;
+    const int		floorclipy = mfloorclip[dc_x];
+    const int		ceilingclipy = mceilingclip[dc_x];
+
     for ( ; column->topdelta != 0xff ; ) 
     {
 	// calculate unclipped screen coordinates
 	//  for post
-	topscreen = sprtopscreen + spryscale*column->topdelta;
-	bottomscreen = topscreen + spryscale*column->length;
+	topscreen = spritetop + scale*column->topdelta;
+	bottomscreen = topscreen + scale*column->length;
 
 	dc_yl = (topscreen+FRACUNIT-1)>>FRACBITS;
 	dc_yh = (bottomscreen-1)>>FRACBITS;
 		
-	if (dc_yh >= mfloorclip[dc_x])
-	    dc_yh = mfloorclip[dc_x]-1;
-	if (dc_yl <= mceilingclip[dc_x])
-	    dc_yl = mceilingclip[dc_x]+1;
+	if (dc_yh >= floorclipy)
+	    dc_yh = floorclipy-1;
+	if (dc_yl <= ceilingclipy)
+	    dc_yl = ceilingclipy+1;
 
 	if (dc_yl <= dc_yh)
 	{
@@ -376,7 +386,8 @@ void R_DrawMaskedColumn (column_t* column)
 	}
 	column = (column_t *)(  (byte *)column + column->length + 4);
     }
-	
+    }
+
     dc_texturemid = basetexturemid;
 }
 

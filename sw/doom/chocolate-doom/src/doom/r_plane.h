@@ -43,19 +43,7 @@ extern fixed_t		distscale[SCREENWIDTH];
 void R_InitPlanes (void);
 void R_ClearPlanes (void);
 
-void
-R_MapPlane
-( int		y,
-  int		x1,
-  int		x2 );
-
-void
-R_MakeSpans
-( int		x,
-  int		t1,
-  int		b1,
-  int		t2,
-  int		b2 );
+// R_MapPlane and R_MakeSpans are local to r_plane.c.
 
 void R_DrawPlanes (void);
 
