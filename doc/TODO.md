@@ -1155,59 +1155,76 @@ defines the flow passes at the sv2v step (`SDRAM_PHASE_DEG`,
 A static scan of built code sized the open codegen items against each
 other, so picking among them need not start with a new measurement.
 
-Corpora: the `GENERIC.DEBUG` kernel (712,161 instructions, built by
-`96ee36548d34`), `libc.so` (409,542, PIC, the same compiler), the full
-Doom binary (103,342, the pre-audit compiler `fb237ee8d98a`) and the
-`test-compiler` corpus at `-O2` (386,627, `676cb9fed5c1`; gcc torture
-tests, heavy in 64-bit arithmetic).  Each item is a code shape counted
-per site in `llvm-objdump -d` output; "in loops" counts the sites
-between a backward branch and its target, a rough proxy for hotness.
-The counts are static, not cycles, and the debug kernel inflates its
-diagnostic paths.
+Corpora, all built by the compiler at `98f1233ac22f`: the
+`GENERIC.DEBUG` kernel (697,401 instructions), `libc.so` (404,735,
+PIC), the full Doom binary (103,302) and the `test-compiler` corpus at
+`-O2` (380,088; gcc torture tests, heavy in 64-bit arithmetic).  The
+changes since the first ranking took the kernel from 712,161
+instructions (−2.1%) and `libc.so` from 409,542 (−1.2%).  Each item is
+a code shape counted per site, within a block, in `llvm-objdump -d`
+output.  The counts are static, not cycles, and the debug kernel
+inflates its diagnostic paths.  There is no column for sites in loops:
+in placed code a backward branch is not a reliable loop marker, and
+the first ranking's "in loops" figures and larger copy counts came from
+a scan that misread branch targets written in upper-case hex.
 
-| Item | Shape counted | Kernel | libc | Doom | Tests | In loops (kernel / libc) |
-|---|---|---:|---:|---:|---:|---|
-| "outgoing stack arguments address SP through a copy" — resolved | `mov x, sp` whose every read until `x` is rewritten could read `sp` | 10,361 (1.45%) | 1,593 (0.39%) | 51 | 3,611 (0.93%) | 1,790 / 200 |
-| "64-bit relational compares expand to select diamonds" | `sbc r, zero; and r, 1` | 1,686 | 1,161 | 271 | 12,473 | 161 / 85 |
-| "flag definitions stay live after C++ selection" (PIC anchors) | `add x, pc` / `mov x, pc` | 1 | 12,486 | 30 | 0 | 0 / 772 |
-| `AllowRegisterRenaming` (codegen pass/gate audit) — resolved | `mov x, zero` forwardable into a store; other forwardable copies | 353 + 190 | 258 + 244 | 23 + 54 | 10 + 784 | 37 / 14 |
-| "InstCombine's shift-and-mask form costs a constant" | `llis t, -2^k; and y, t` | 414 | 304 | 14 | 234 | 67 / 22 |
-| "pointer-minus-constant and integer MMIO addresses miss their folds": MMIO | `add x, imm; ld/st [x + 0]`, `x` dead | 71 | 8 | 3 | 0 | 9 / 1 |
-| same entry: `p - K` | `llis t, -K; add y, t`, `t` dead | 54 | 80 | 3 | 2 | 8 / 6 |
-| same entry: run-time indexed local | `mov x, sp; [add x, imm;] add x, y; ld/st [x + 0]` | 35 | 32 | 19 | 16 | 2 / 2 |
-| "hot-loop code review — software audio mixing": zero-low-half carry | `add/sub r, 0` feeding `adc`/`sbc` | 2 | 13 | 0 | 1,489 | 1 / 0 |
+| Item | Shape counted | Kernel | libc | Doom | Tests |
+|---|---|---:|---:|---:|---:|
+| "64-bit relational compares expand to select diamonds" | `sbc r, zero; and r, 1` | 1,686 | 1,154 | 271 | 12,475 |
+| "flag definitions stay live after C++ selection" (PIC anchors) | `add x, pc` / `mov x, pc` | 1 | 12,486 | 30 | 0 |
+| "InstCombine's shift-and-mask form costs a constant" | `llis t, -2^k; and y, t` | 413 | 300 | 12 | 234 |
+| "inline small constant-size memcpy/memset/memmove" | `lli r3, N` before a call to one, N ≤ 32 (≤ 64) | 510 (654) | — | — | — |
+| "pointer-minus-constant and integer MMIO addresses miss their folds": MMIO | `add x, imm; ld/st [x + 0]`, `x` dead | 63 | 2 | 1 | 0 |
+| same entry: `p - K` | `llis t, -K; add y, t`, `t` dead | 47 | 63 | 4 | 0 |
+| same entry: run-time indexed local | `mov x, sp; [add x, imm;] add x, y; ld/st [x + 0]` | 35 | 32 | 9 | 16 |
+| "hot-loop code review — software audio mixing": zero-low-half carry | `add/sub r, 0` feeding `adc`/`sbc` | 2 | 13 | 0 | 1,489 |
+| "large frame offsets write the flags unchecked" (correctness) | `lli; lui; add x, sp` | 0 | 43 | 0 | 105 |
+| resolved: the SP copy, the zero register and `AllowRegisterRenaming` | a copy all of whose readers could read its source: from `sp` (other) | 10 (3) | 21 (1) | 3 (0) | 16 (3) |
+
+The memory-call row counts the kernel only: libc and Doom call through
+the PLT, which the scan does not resolve.  The copies left in the last
+row are `LEAfi` expansions, a frame address used as a value.  None of
+the large-frame sites has the flags live, so nothing is miscompiled
+today.
 
 Each row saves about one instruction per site, except the 64-bit
-compares, about 4–6 per compare, and a PIC anchor in a loop, 1–2 per
-iteration.  The two-address commute heuristics were measured the same
-way at 0.02–0.06% (in the audio-mixing review), and the 64-bit select
-of zero only concerns the 32.32 mixer loop.  The `mov x, zero` sites
-in the `AllowRegisterRenaming` row turned out to be mostly R0 missing
-from the value register class ("a constant zero is held in a
-register", resolved), and most of the row's other copies have a reader
-in another block, out of copy forwarding's reach: setting the flag
-removed 46 instructions from the `test-compiler` corpus.
+compares, 4–9 per compare, a PIC anchor in a loop, 1–2 per
+iteration, and an inlined memory call, which trades the call and the
+callee's loop for a few loads and stores.  The two-address commute
+heuristics were measured the same way at 0.02–0.06% (in the
+audio-mixing review), and the 64-bit select of zero only concerns the
+32.32 mixer loop.
 
-What follows, by value for effort:
-1. **SP copy** — resolved.  The largest static item and a contained
-   fix.  Most sites sit on cold call paths, so the gain is mostly code
-   size and I-cache footprint.
-2. **64-bit compares** — the largest dynamic potential (`off_t`,
-   `time_t`, SQLite's rowid compares), about 1% of instructions in the
-   kernel, libc and Doom; waits on the ISA documentation decision in
-   its entry.
-3. **Dead flag definitions after C++ selection** — lets libc's 772
-   in-loop PIC anchors leave their loops, which every dynamically
-   linked program gains, and lets `MUL` join the select-of-identity
-   rule.
-4. **Zero-low-half carry and the 64-bit select of zero** — nothing
-   outside 64-bit-heavy code; take them with the 32.32 mixer.
-5. **The rest** — at most 0.1% each; pick up in passing.
+What follows, by value:
+1. **64-bit compares** — about 1–1.5% of instructions in the kernel,
+   libc and Doom, hot in SQLite's b-tree bisection and in the kernel's
+   `off_t` and `time_t` compares on every read and write; about 20
+   cycles a compare on penumbra1 and 9 on penumbra2_5.  Not blocked:
+   the ISA documentation decision in its entry only decides whether the
+   borrow chain saves its `MOV`.
+2. **Tail calls** ("tail-call optimization — measured opportunity") —
+   4–5% of calls already sit in tail position.  About 90 cycles a
+   subsector in Doom's `R_RenderBSPNode` on penumbra1, the kernel's
+   syscall and `VOP_*` dispatch, libc's forwarders and SQLite's
+   `sqlite3BtreeNext`; 15–18 KB of kernel text once wrappers lose their
+   frames.  A first cut without outgoing stack arguments is small.
+3. **Dead flag definitions after C++ selection** — lets libc's PIC
+   anchors leave their loops, in every shared library and PIE program,
+   and `MUL` join the select-of-identity rule; the least work of the
+   three.
+4. **Inlined small memory calls and the `p - K` and MMIO folds** —
+   broad in the kernel but unmeasured at run time; the kernel
+   `memmove`'s backward byte loop is 10 instructions where 6 do.
+5. **The rest** — at most 0.1% each; the zero-low-half carry and the
+   64-bit select of zero go with the 32.32 mixer.
 
-Copies are 14–17% of all instructions and the SP copy is about a
-tenth of the kernel's; copy forwarding would reach only a few hundred
-more per corpus.  The bulk presumably comes from argument and return
-marshalling and PHI copies, which no scan has classified yet.
+The large-frame flag clobber is a correctness gap, not a speed item:
+contained, and not worth waiting for a failure.
+
+Copies are 10.5–15% of all instructions (kernel 12.8%, libc 15.0%,
+Doom 10.5%).  With the SP and zero copies gone, what is left is
+argument and return marshalling and PHI copies across blocks, which no
+scan has classified yet.
 
 ## Compiler: outgoing stack arguments address SP through a copy — RESOLVED
 
@@ -4687,24 +4704,34 @@ round-down alignment masks.  `shr x, k; shl x, k` matches their
 instruction count and frees the scratch register, but overwrites `x`,
 so it only wins where `x` is dead afterwards.
 
-## Compiler: G_GLOBAL_VALUE materialization defeats CSE and rematerialization
+## Compiler: G_GLOBAL_VALUE materialization defeats CSE and rematerialization — layer 1 DONE
 
-`PenumbraInstructionSelector` lowers `G_GLOBAL_VALUE` (and the
+Layer 1 below is done: a static address became one rematerializable
+pseudo in `f863f06db486`, and every wide value, constants included, is
+one `PseudoLI` since `5de5ff71902d`, expanded into `LLI`+`LUI` after
+register allocation.  An identical address now rematerializes and
+CSEs, and whether recomputing it counts as cheap is the tuned core's
+answer.  What stays open is sharing a base among *different* addresses
+(base sharing and the layer-3 offset merge, below).  The rest of this
+opening describes the code before layer 1.
+
+`PenumbraInstructionSelector` lowered `G_GLOBAL_VALUE` (and the
 `@sym + offset` form) unconditionally to a raw `LLI rd, %lo ; LUI rd,
 %hi` pair at selection time, in `emitLoadSymbolAddr` (the static/absolute
 path; PIC takes the GOT path below). That eager two-instruction
-expansion is a *double* defeat:
+expansion was a *double* defeat:
 
 - **CSE can't see a shared base.** Each pair materializes the full
   `sym+offset`, so two references to the same symbol at different
   offsets — or two globals the linker happens to place near each other —
   look like unrelated constants. MachineCSE has nothing to share.
-- **Rematerialization can't fire.** An address is the textbook remat
-  candidate (cheap to recompute, no inputs), but remat works on a single
-  def, not a two-instruction dependent chain. So when an address must
-  survive a call, the allocator's only options are spill/reload or
-  burning a callee-saved register — never "recompute it after the call,"
-  which is usually cheapest.
+- **Rematerialization couldn't fire** (resolved by layer 1). An
+  address is the textbook remat candidate (cheap to recompute, no
+  inputs), but remat works on a single def, not a two-instruction
+  dependent chain. So when an address had to survive a call, the
+  allocator's only options were spill/reload or burning a callee-saved
+  register — never "recompute it after the call," which is usually
+  cheapest.
 
 A representative kernel sequence (hot path) materializes four addresses
 that are all `copyright + constant` through four independent pairs — two
