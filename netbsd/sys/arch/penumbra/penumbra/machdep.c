@@ -17,6 +17,7 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/proc.h>
+#include <sys/ras.h>
 #include <sys/reboot.h>
 #include <sys/device.h>
 #include <sys/cpu.h>
@@ -624,11 +625,25 @@ void
 cpu_getmcontext(struct lwp *l, mcontext_t *mcp, unsigned int *flags)
 {
 	const struct trapframe *tf = l->l_md.md_utf;
+	uintptr_t ras_pc;
 
 	/* Copy R0–R15 and SR into the gregset */
 	memcpy(mcp->__gregs, tf->tf_regs, sizeof(tf->tf_regs));
 	mcp->__gregs[_REG_PC] = tf->tf_epc;	/* EPC is the real saved PC */
 	mcp->__gregs[_REG_SR] = tf->tf_sr;
+
+	/*
+	 * A context captured inside a restartable atomic sequence has to
+	 * name the start of the sequence, not the instruction reached:
+	 * whoever resumes from it -- sigreturn from the frame sendsig
+	 * builds here, or setcontext(2) -- would otherwise finish a
+	 * sequence whose loaded value is already stale.  The trapframe
+	 * keeps the true PC; only this copy is rewound.
+	 */
+	ras_pc = (uintptr_t)ras_lookup(l->l_proc,
+	    (void *)(uintptr_t)mcp->__gregs[_REG_PC]);
+	if (ras_pc != (uintptr_t)-1)
+		mcp->__gregs[_REG_PC] = (__greg_t)ras_pc;
 
 	*flags |= _UC_CPU | _UC_TLSBASE;
 }
