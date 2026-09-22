@@ -23,8 +23,15 @@
 #define	MEMSIZE		4096
 #define	RATE		24000
 #define	VOICES		8
+
+/* Run on the machine itself these take far longer, so that build asks
+ * for fewer; the cases are the same either way. */
+#ifndef TICKS
 #define	TICKS		200
+#endif
+#ifndef TRIALS
 #define	TRIALS		40
+#endif
 
 static int8_t mem[MEMSIZE];
 static int failures;
@@ -107,18 +114,22 @@ static void
 ref_frame(struct ref *r, int16_t *out)
 {
 	int32_t sum[2 * REPLAY_PAN + 1];
-	bool used[2 * REPLAY_PAN + 1];
+	int pans[VOICES];			/* those in use, once each */
 	int32_t left = 0, right = 0;
-	int k, p;
+	int npans = 0, k, i, p;
 
-	memset(sum, 0, sizeof(sum));
-	memset(used, 0, sizeof(used));
+	for (k = 0; k < VOICES; k++)
+		if (r->v[k].sounding)
+			sum[r->v[k].pan + REPLAY_PAN] = 0;
 	for (k = 0; k < VOICES; k++) {
 		struct ref_voice *v = &r->v[k];
 
 		if (!v->sounding)
 			continue;
-		used[v->pan + REPLAY_PAN] = true;
+		for (i = 0; i < npans && pans[i] != v->pan; i++)
+			;
+		if (i == npans)
+			pans[npans++] = v->pan;
 		sum[v->pan + REPLAY_PAN] += mem[fix32_to_int(v->pos)] * v->gain;
 		v->pos += v->inc;
 		if (fix32_to_int(v->pos) < v->end)
@@ -133,13 +144,12 @@ ref_frame(struct ref *r, int16_t *out)
 		while (fix32_to_int(v->pos) >= v->end)
 			v->pos -= fix32_from_int((int32_t)v->loop.length);
 	}
-	for (p = 0; p <= 2 * REPLAY_PAN; p++) {
+	for (i = 0; i < npans; i++) {
 		int32_t centre = REPLAY_PAN * (100 + r->crossfeed);
 		int32_t whole = 2 * centre;
-		int32_t spread = (p - REPLAY_PAN) * (100 - r->crossfeed);
+		int32_t spread = pans[i] * (100 - r->crossfeed);
 
-		if (!used[p])
-			continue;
+		p = pans[i] + REPLAY_PAN;
 		left += (sum[p] >> 5) *
 		    ((256 * (centre - spread) + whole / 2) / whole);
 		right += (sum[p] >> 5) *

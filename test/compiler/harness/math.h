@@ -12,5 +12,8 @@ double exp(double x);
 double pow(double x, double y);
 double floor(double x);
 double ceil(double x);
+long lrint(double x);
+
+#define	M_PI	3.14159265358979323846
 
 #endif
