@@ -11,7 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "mod.h"
+#include "song.h"
 
 #define	OFF_SAMPLES	20
 #define	SAMPLE_HEADER	30
@@ -20,6 +20,10 @@
 #define	OFF_SIGNATURE	1080
 #define	OFF_PATTERNS	1084
 #define	PATTERN_BYTES	(MOD_ROWS * MOD_CHANNELS * 4)
+
+/* A PAL Amiga's Paula plays a sample at this rate divided by the
+ * period. */
+#define	PAULA_HZ	3546895
 
 /*
  * The signatures of the four-channel, 31-sample layout, whichever
@@ -52,25 +56,35 @@ text(char *dst, const uint8_t *src, size_t n)
 	dst[i] = '\0';
 }
 
-const char *
-mod_parse(struct mod *m, const uint8_t *buf, size_t len)
+static bool
+mod_probe(const uint8_t *buf, size_t len)
 {
+	size_t i;
+
+	if (len < OFF_PATTERNS)
+		return false;
+	for (i = 0; i < sizeof(signatures) / sizeof(signatures[0]); i++)
+		if (memcmp(buf + OFF_SIGNATURE, signatures[i], 4) == 0)
+			return true;
+	return false;
+}
+
+static const char *
+mod_parse(struct song *song, const uint8_t *buf, size_t len)
+{
+	struct mod *m = &song->mod;
 	size_t data, avail;
 	uint32_t off;
 	int s, i, n;
 
-	memset(m, 0, sizeof(*m));
 	if (len < OFF_PATTERNS)
 		return "too short for a module";
 
-	memcpy(m->signature, buf + OFF_SIGNATURE, 4);
-	for (i = 0; i < (int)(sizeof(signatures) / sizeof(signatures[0])); i++)
-		if (memcmp(m->signature, signatures[i], 4) == 0)
-			break;
-	if (i == (int)(sizeof(signatures) / sizeof(signatures[0])))
-		return "unsupported file format";
-
-	text(m->title, buf, 20);
+	memcpy(song->kind, buf + OFF_SIGNATURE, 4);
+	text(song->title, buf, 20);
+	song->channels = MOD_CHANNELS;
+	song->clock = PAULA_HZ;
+	song->crossfeed = MOD_CROSSFEED;
 
 	for (s = 1; s <= MOD_SAMPLES; s++) {
 		const uint8_t *h = buf + OFF_SAMPLES + (s - 1) * SAMPLE_HEADER;
@@ -84,23 +98,23 @@ mod_parse(struct mod *m, const uint8_t *buf, size_t len)
 		smp->loop_length = be16(h + 28) * 2;
 	}
 
-	m->length = buf[OFF_LENGTH];
-	if (m->length < 1 || m->length > MOD_ORDERS)
+	song->length = buf[OFF_LENGTH];
+	if (song->length < 1 || song->length > MOD_ORDERS)
 		return "song length out of range";
-	memcpy(m->order, buf + OFF_ORDERS, MOD_ORDERS);
+	memcpy(song->order, buf + OFF_ORDERS, MOD_ORDERS);
 	for (i = 0; i < MOD_ORDERS; i++)
-		if (m->order[i] + 1 > m->npatterns)
-			m->npatterns = m->order[i] + 1;
+		if (song->order[i] + 1 > song->npatterns)
+			song->npatterns = song->order[i] + 1;
 
-	data = OFF_PATTERNS + (size_t)m->npatterns * PATTERN_BYTES;
+	data = OFF_PATTERNS + (size_t)song->npatterns * PATTERN_BYTES;
 	if (len < data)
 		return "patterns cut short";
 
-	m->pattern = calloc((size_t)m->npatterns * MOD_ROWS * MOD_CHANNELS,
+	m->pattern = calloc((size_t)song->npatterns * MOD_ROWS * MOD_CHANNELS,
 	    sizeof(*m->pattern));
 	if (m->pattern == NULL)
 		return "out of memory";
-	for (n = 0; n < m->npatterns * MOD_ROWS * MOD_CHANNELS; n++) {
+	for (n = 0; n < song->npatterns * MOD_ROWS * MOD_CHANNELS; n++) {
 		const uint8_t *c = buf + OFF_PATTERNS + n * 4;
 		struct mod_note *note = &m->pattern[n];
 
@@ -134,14 +148,23 @@ mod_parse(struct mod *m, const uint8_t *buf, size_t len)
 		if (smp->loop_length == 0)
 			smp->loop_start = 0;
 	}
-	m->sampledata = buf + data;
-	m->sampledata_size = off;
+	song->sampledata = buf + data;
+	song->sampledata_size = off;
 	return NULL;
 }
 
-void
-mod_free(struct mod *m)
+static void
+mod_free(struct song *song)
 {
-	free(m->pattern);
-	m->pattern = NULL;
+	free(song->mod.pattern);
+	song->mod.pattern = NULL;
 }
+
+const struct song_format mod_format = {
+	.probe = mod_probe,
+	.parse = mod_parse,
+	.free = mod_free,
+	.unsupported = pt_unsupported,
+	.start = pt_start,
+	.play = pt_play,
+};

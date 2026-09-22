@@ -29,19 +29,14 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "mod.h"
 #include "replay.h"
 
 #define	DEVICE		"/dev/pmusic"
 
-/* A PAL Amiga's Paula plays a sample at this rate divided by the
- * period. */
-#define	PAULA_HZ	3546895
-
 #define	LOOKAHEAD	50	/* ticks generated ahead of the clock */
 #define	LOWAT		25	/* wake when fewer ticks than this remain */
 #define	PEND_MAX	512
-#define	EVENTS_PER_TICK	(MOD_CHANNELS + 1)	/* a voice each, and tempo */
+#define	EVENTS_PER_TICK	(REPLAY_VOICES + 1)	/* a voice each, and tempo */
 /*
  * How often to look for the song's end once every tick is submitted:
  * the device signals when it wants more, but nothing when the last
@@ -49,13 +44,9 @@
  */
 #define	POLL_MS		40
 
-/* Most modules sound harsh panned hard; this leaves each channel
- * clearly on its side. */
-#define	CROSSFEED	75	/* percent */
-
 struct player {
 	int		fd;
-	const struct mod *mod;
+	const struct song *song;
 	struct replay	replay;
 
 	uint32_t	gen;		/* next tick to generate */
@@ -70,7 +61,7 @@ struct player {
 		struct replay_region loop;	/* what follows its pass */
 		uint32_t	inc;
 		uint16_t	vol_l, vol_r;
-	} voice[MOD_CHANNELS];
+	} voice[REPLAY_VOICES];
 	int		bpm;
 	int		start_bpm;	/* the first tick's, which starts the clock */
 };
@@ -80,13 +71,18 @@ struct options {
 	bool		ignore;		/* play despite effects modplay skips */
 	bool		loop;
 	int		start;		/* the order to begin at */
+	int		crossfeed;	/* percent; -1: what suits the song */
 };
 
 static struct penaudio_info info;
 static volatile sig_atomic_t quit;
 
-/* INC at a period of 1, for the device's rate: 16.16, like INC. */
-static uint32_t paula_inc;
+/* INC at a period of 1, for the device's rate and the song's clock:
+ * 16.16, like INC. */
+static uint32_t clock_inc;
+
+/* The song's, or what the command line asked for. */
+static int crossfeed;
 
 static void
 on_signal(int sig)
@@ -100,7 +96,7 @@ on_signal(int sig)
 static uint32_t
 period_inc(int period)
 {
-	uint32_t inc = (paula_inc + period / 2) / period;
+	uint32_t inc = (clock_inc + period / 2) / period;
 
 	if (inc < PENAUDIO_INC_MIN)
 		return PENAUDIO_INC_MIN;
@@ -110,48 +106,29 @@ period_inc(int period)
 }
 
 /*
- * Each side's gain for a channel, by its volume (0..64).  Paula puts
- * channels 0 and 3 on the left and 1 and 2 on the right; crossfeed
- * gives the opposite side a share of what the channel's own side gets.
+ * Each side's gain for a voice, by its volume (0..64) and pan.  The
+ * pan shares the gain out between the sides, and crossfeed narrows
+ * the field: a voice panned to one side alone gives the other side
+ * the crossfeed's share of what its own side gets.
  *
  * pmusic gains run from 0x0000, silent, to 0xFFFF, unity, and the
  * device saturates a side's sum once, after mixing.  Every voice
  * arrives at full 16-bit scale, since each 8-bit sample is shifted up,
- * so the gains alone decide whether a loud passage clips: a channel's
- * two sides always add up to half scale at volume 64, so four channels
- * at full volume sum to exactly full scale on either side, whatever
- * the crossfeed.
+ * so the gains alone decide whether a loud passage clips: a voice's
+ * two sides always add up to half scale at volume 64, so the Amiga's
+ * four channels, two to a side, sum to exactly full scale on either
+ * side at full volume, whatever the crossfeed.
  */
-static uint16_t gain_near[65], gain_far[65];
-
 static void
-gains_init(int crossfeed)
+voice_gain(int volume, int pan, uint16_t *left, uint16_t *right)
 {
-	int volume;
+	uint32_t gain = volume * 0xFFFF / 64 / 2;
+	uint32_t whole = 2 * REPLAY_PAN * (100 + crossfeed);
+	uint32_t centre = REPLAY_PAN * (100 + crossfeed);
+	int32_t spread = pan * (100 - crossfeed);
 
-	for (volume = 0; volume <= 64; volume++) {
-		uint32_t gain = volume * 0xFFFF / 64 / 2;
-
-		gain_near[volume] = gain * 100 / (100 + crossfeed);
-		gain_far[volume] = gain * crossfeed / (100 + crossfeed);
-	}
-}
-
-static void
-voice_gain(int ch, int volume, uint16_t *left, uint16_t *right)
-{
-	switch (ch) {
-	case 0:
-	case 3:
-		*left = gain_near[volume];
-		*right = gain_far[volume];
-		break;
-	case 1:
-	case 2:
-		*left = gain_far[volume];
-		*right = gain_near[volume];
-		break;
-	}
+	*left = gain * (centre - spread) / whole;
+	*right = gain * (centre + spread) / whole;
 }
 
 static bool
@@ -204,7 +181,7 @@ voice_event(struct player *p, int ch, const struct replay_voice *v,
 		e->pe_inc = inc;
 		p->voice[ch].inc = inc;
 	}
-	voice_gain(ch, v->volume, &vol_l, &vol_r);
+	voice_gain(v->volume, v->pan, &vol_l, &vol_r);
 	if (started || vol_l != p->voice[ch].vol_l ||
 	    vol_r != p->voice[ch].vol_r) {
 		e->pe_set |= PENAUDIO_SET_VOL;
@@ -227,7 +204,7 @@ gen_tick(struct player *p, struct penaudio_event *ev)
 	int ch;
 
 	if (!replay_next(&p->replay, &t)) {
-		for (ch = 0; ch < MOD_CHANNELS; ch++) {
+		for (ch = 0; ch < p->song->channels; ch++) {
 			memset(&ev[n], 0, sizeof(ev[n]));
 			ev[n].pe_tick = tick;
 			ev[n].pe_voice = ch;
@@ -246,7 +223,7 @@ gen_tick(struct player *p, struct penaudio_event *ev)
 		ev[n++].pe_period_us = REPLAY_TICK_US(t.bpm);
 		p->bpm = t.bpm;
 	}
-	for (ch = 0; ch < MOD_CHANNELS; ch++) {
+	for (ch = 0; ch < p->song->channels; ch++) {
 		memset(&ev[n], 0, sizeof(ev[n]));
 		ev[n].pe_tick = tick;
 		ev[n].pe_voice = ch;
@@ -338,8 +315,8 @@ slurp(const char *path, size_t *lenp)
 static bool
 list(const char *path)
 {
-	static struct replay_cue cue[MOD_ORDERS];
-	struct mod m;
+	static struct replay_cue cue[SONG_ORDERS];
+	struct song song;
 	const char *error;
 	uint8_t *buf;
 	size_t len;
@@ -347,15 +324,15 @@ list(const char *path)
 
 	if ((buf = slurp(path, &len)) == NULL)
 		return false;
-	if ((error = mod_parse(&m, buf, len)) != NULL) {
+	if ((error = song_parse(&song, buf, len)) != NULL) {
 		warnx("%s: %s", path, error);
 		free(buf);
 		return false;
 	}
 
-	printf("%s: \"%s\" %s, %d orders\n", path, m.title, m.signature,
-	    m.length);
-	n = replay_scan(&m, cue, MOD_ORDERS);
+	printf("%s: \"%s\" %s, %d orders\n", path, song.title, song.kind,
+	    song.length);
+	n = replay_scan(&song, cue, SONG_ORDERS);
 	for (i = 0; i < n; i++) {
 		unsigned s = (unsigned)(cue[i].us / 1000000);
 
@@ -368,7 +345,7 @@ list(const char *path)
 			printf("ends\n");
 	}
 
-	mod_free(&m);
+	song_free(&song);
 	free(buf);
 	return true;
 }
@@ -381,56 +358,68 @@ play(int fd, const char *path, const struct options *opt)
 	struct penaudio_clock pc;
 	struct pollfd pfd;
 	struct penaudio_status st;
-	struct mod m;
+	struct song song;
 	const char *error, *unsupported;
 	uint8_t *buf;
+	uint64_t inc;
 	size_t len;
 	bool more;
 
 	if ((buf = slurp(path, &len)) == NULL)
 		return false;
-	if ((error = mod_parse(&m, buf, len)) != NULL) {
+	if ((error = song_parse(&song, buf, len)) != NULL) {
 		warnx("%s: %s", path, error);
 		free(buf);
 		return false;
 	}
 
-	if (opt->start >= m.length) {
+	if (opt->start >= song.length) {
 		warnx("%s: has %d orders, so -p %d starts past its end", path,
-		    m.length, opt->start);
+		    song.length, opt->start);
 		goto fail;
 	}
 
-	unsupported = replay_unsupported(&m);
+	unsupported = song_unsupported(&song);
 	if (unsupported != NULL && !opt->ignore) {
 		warnx("%s: uses %s, which modplay does not play; "
 		    "-i plays it without", path, unsupported);
 		goto fail;
 	}
-	if (m.sampledata_size > info.pi_maxmem) {
+	if (song.sampledata_size > info.pi_maxmem) {
 		warnx("%s: needs %u bytes of sample memory, and "
 		    "machdep.paudio.maxmem allows %u", path,
-		    m.sampledata_size, info.pi_maxmem);
+		    song.sampledata_size, info.pi_maxmem);
 		goto fail;
 	}
+
+	/* Worked out once, so a tick costs no floating point: the machine
+	 * has no FPU. */
+	inc = ((uint64_t)song.clock << 16) / info.pi_rate;
+	if (inc > UINT32_MAX) {
+		warnx("%s: no increment fits its clock on a %u Hz device",
+		    path, info.pi_rate);
+		goto fail;
+	}
+	clock_inc = (uint32_t)inc;
+	crossfeed = opt->crossfeed >= 0 ? opt->crossfeed : song.crossfeed;
 
 	if (unsupported != NULL)
 		printf("  playing without %s\n", unsupported);
 
 	if (ioctl(fd, PENAUDIO_RESET) == -1)
 		err(1, "RESET");
-	if (ioctl(fd, PENAUDIO_SETMEM, &m.sampledata_size) == -1)
+	if (ioctl(fd, PENAUDIO_SETMEM, &song.sampledata_size) == -1)
 		err(1, "SETMEM");
-	if (m.sampledata_size != 0 &&
-	    pwrite(fd, m.sampledata, m.sampledata_size, 0) !=
-	    (ssize_t)m.sampledata_size)
+	if (song.sampledata_size != 0 &&
+	    pwrite(fd, song.sampledata, song.sampledata_size, 0) !=
+	    (ssize_t)song.sampledata_size)
 		err(1, "loading samples");
 
 	memset(&p, 0, sizeof(p));
 	p.fd = fd;
-	p.mod = &m;
+	p.song = &song;
 	p.bpm = 125;		/* ProTracker's; the song may change it */
-	replay_init(&p.replay, &m, opt->start, opt->loop);
+	replay_init(&p.replay, &song, opt->start, opt->loop);
 
 	/*
 	 * The clock starts at the first tick's tempo, which is known once
@@ -467,12 +456,12 @@ play(int fd, const char *path, const struct options *opt)
 	/* Silence at once, rather than letting queued ticks play out. */
 	if (ioctl(fd, PENAUDIO_RESET) == -1)
 		err(1, "RESET");
-	mod_free(&m);
+	song_free(&song);
 	free(buf);
 	return true;
 
 fail:
-	mod_free(&m);
+	song_free(&song);
 	free(buf);
 	return false;
 }
@@ -488,7 +477,8 @@ usage(void)
 	    "  -i  play a module even if it uses effects modplay ignores\n"
 	    "  -L  list where each file's cues start instead of playing\n"
 	    "  -l  loop each song rather than stopping at its end\n"
-	    "  -p  start at this order rather than the first\n", CROSSFEED);
+	    "  -p  start at this order rather than the first\n",
+	    MOD_CROSSFEED);
 	exit(2);
 }
 
@@ -497,20 +487,20 @@ main(int argc, char **argv)
 {
 	struct sigaction sa;
 	struct options opt;
-	uint64_t inc;
 	uint32_t voices;
 	bool listing = false, ok = true;
 	char *end;
-	int ch, fd, crossfeed = CROSSFEED;
+	int ch, fd;
 
 	memset(&opt, 0, sizeof(opt));
+	opt.crossfeed = -1;
 
 	while ((ch = getopt(argc, argv, "c:iLlp:")) != -1) {
 		switch (ch) {
 		case 'c':
-			crossfeed = (int)strtol(optarg, &end, 10);
+			opt.crossfeed = (int)strtol(optarg, &end, 10);
 			if (*optarg == '\0' || *end != '\0' ||
-			    crossfeed < 0 || crossfeed > 100)
+			    opt.crossfeed < 0 || opt.crossfeed > 100)
 				usage();
 			break;
 		case 'i':
@@ -525,7 +515,7 @@ main(int argc, char **argv)
 		case 'p':
 			opt.start = (int)strtol(optarg, &end, 10);
 			if (*optarg == '\0' || *end != '\0' ||
-			    opt.start < 0 || opt.start >= MOD_ORDERS)
+			    opt.start < 0 || opt.start >= SONG_ORDERS)
 				usage();
 			break;
 		default:
@@ -553,13 +543,6 @@ main(int argc, char **argv)
 	if (ioctl(fd, PENAUDIO_GETINFO, &info) == -1)
 		err(1, "GETINFO");
 
-	/* Both worked out once, so a tick costs no percentages and no
-	 * floating point: the machine has no FPU. */
-	inc = ((uint64_t)PAULA_HZ << 16) / info.pi_rate;
-	if (inc > UINT32_MAX)
-		errx(1, "no increment fits a %u Hz device", info.pi_rate);
-	paula_inc = (uint32_t)inc;
-	gains_init(crossfeed);
 	voices = MOD_CHANNELS;
 	if (ioctl(fd, PENAUDIO_ALLOC, &voices) == -1)
 		err(1, "ALLOC");

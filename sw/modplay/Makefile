@@ -32,8 +32,8 @@ CFLAGS      := --target=$(TARGET) --sysroot=$(DESTDIR) $(COPT) $(WARN) \
 LDFLAGS     := --target=$(TARGET) --sysroot=$(DESTDIR) -static
 LDLIBS      := -lm
 
-SONG_SRCS   := mod.c replay.c
-SONG_HDRS   := mod.h replay.h
+SONG_SRCS   := song.c mod.c pt.c replay.c
+SONG_HDRS   := song.h mod.h replay.h
 SRCS        := modplay.c $(SONG_SRCS)
 
 .PHONY: all dump overlay test clean

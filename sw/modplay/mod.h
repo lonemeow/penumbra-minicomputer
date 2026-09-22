@@ -1,11 +1,12 @@
 /*
  * ProTracker modules: the 31-sample, four-channel format under its
- * common signatures.
+ * common signatures, and what its replayer keeps for each channel.
  */
 
 #ifndef MODPLAY_MOD_H
 #define MODPLAY_MOD_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -13,6 +14,14 @@
 #define	MOD_SAMPLES	31
 #define	MOD_ROWS	64
 #define	MOD_ORDERS	128
+
+/* Most modules sound harsh panned hard, as the Amiga plays them; this
+ * leaves each channel clearly on its side. */
+#define	MOD_CROSSFEED	75	/* percent */
+
+struct replay;
+struct replay_tick;
+struct song;
 
 struct mod_sample {
 	char		name[23];
@@ -32,29 +41,43 @@ struct mod_note {
 };
 
 struct mod {
-	char		title[21];
-	char		signature[5];
 	struct mod_sample sample[MOD_SAMPLES + 1];	/* by number; [0] unused */
-	uint8_t		order[MOD_ORDERS];
-	int		length;		/* orders the song plays */
-	int		npatterns;
 	struct mod_note	*pattern;	/* [npatterns][MOD_ROWS][MOD_CHANNELS] */
-
-	/* The samples back to back, as the file stores them; points into
-	 * the buffer mod_parse() was given. */
-	const uint8_t	*sampledata;
-	uint32_t	sampledata_size;
 };
-
-/* Returns NULL, or what is wrong with the file.  The buffer must
- * outlive the module. */
-const char	*mod_parse(struct mod *, const uint8_t *, size_t);
-void		 mod_free(struct mod *);
 
 static inline const struct mod_note *
 mod_note(const struct mod *m, int pattern, int row, int ch)
 {
 	return &m->pattern[(pattern * MOD_ROWS + row) * MOD_CHANNELS + ch];
 }
+
+/* ── Replay (pt.c) ─────────────────────────────────────────── */
+
+struct pt_chan {
+	int		sample;
+	int		finetune;
+	int		period;		/* before vibrato and arpeggio */
+	int		volume;		/* before tremolo */
+	int		out_period;	/* this tick's, after them */
+	int		out_volume;
+
+	uint8_t		effect, param;	/* this row's */
+	int		delay;		/* tick a delayed note starts; 0 = none */
+	int		porta_target, porta_speed;
+	int		vib_pos, vib_speed, vib_depth;
+	int		trem_pos, trem_speed, trem_depth;
+	int		loop_row;	/* row a pattern loop returns to */
+	int		loop_count;	/* passes left; 0 = none running */
+	uint32_t	offset;		/* sample offset, remembered */
+	uint32_t	trigger_offset;	/* where this tick's start plays from */
+};
+
+struct pt_state {
+	struct pt_chan	chan[MOD_CHANNELS];
+};
+
+const char	*pt_unsupported(const struct song *);
+void		 pt_start(struct replay *);
+void		 pt_play(struct replay *, struct replay_tick *, bool row);
 
 #endif /* MODPLAY_MOD_H */

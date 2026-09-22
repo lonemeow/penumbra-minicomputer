@@ -7,7 +7,7 @@
  * file, so each case states the pattern data it depends on: a cue that
  * comes round on itself, one that spans several orders and comes round
  * to the middle of itself, the two ways a retrigger falls within a row,
- * and a pattern loop.  It goes through mod_parse() all the same, so the
+ * and a pattern loop.  It goes through song_parse() all the same, so the
  * layout the parser expects is part of what is checked, and so are the
  * signatures it takes.
  */
@@ -15,7 +15,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "mod.h"
 #include "replay.h"
 
 #define	TEST_PATTERNS	4
@@ -59,7 +58,7 @@ put_note(int pattern, int row, int ch, int period, int sample, int effect,
 }
 
 static const char *
-build(struct mod *m)
+build(struct song *m)
 {
 	uint8_t *smp = &image[OFF_SAMPLES];
 	int i;
@@ -90,7 +89,7 @@ build(struct mod *m)
 	/* The second: orders 1 to 3, coming round to order 2. */
 	put_note(3, MOD_ROWS - 1, 0, 0, 0, 0xB, 0x02);
 
-	return mod_parse(m, image, sizeof(image));
+	return song_parse(m, image, sizeof(image));
 }
 
 /*
@@ -104,7 +103,7 @@ build(struct mod *m)
 #define	LOOP_PASSES	3
 
 static const char *
-build_loop(struct mod *m)
+build_loop(struct song *m)
 {
 	uint8_t *smp = &image[OFF_SAMPLES];
 
@@ -120,12 +119,12 @@ build_loop(struct mod *m)
 	put_note(0, LOOP_START_ROW, 0, 0, 0, 0xE, 0x60);
 	put_note(0, LOOP_END_ROW, 0, 0, 0, 0xE, 0x62);
 
-	return mod_parse(m, image, sizeof(image));
+	return song_parse(m, image, sizeof(image));
 }
 
 /* Times a row is entered in one pass through the song. */
 static int
-row_plays(const struct mod *m, int order, int row)
+row_plays(const struct song *m, int order, int row)
 {
 	struct replay r;
 	struct replay_tick t;
@@ -138,27 +137,27 @@ row_plays(const struct mod *m, int order, int row)
 	return n;
 }
 
-/* What mod_parse() makes of the first module under another signature:
+/* What song_parse() makes of the first module under another signature:
  * NULL if it is taken, or why not. */
 static const char *
 parse_as(const char *sig)
 {
-	struct mod m;
+	struct song m;
 	const char *error;
 
 	if ((error = build(&m)) != NULL)
 		return error;
-	mod_free(&m);
+	song_free(&m);
 	memcpy(&image[OFF_SIGNATURE], sig, 4);
-	if ((error = mod_parse(&m, image, sizeof(image))) == NULL)
-		mod_free(&m);
+	if ((error = song_parse(&m, image, sizeof(image))) == NULL)
+		song_free(&m);
 	return error;
 }
 
 /* The ticks within one row that channel 0 starts its sample on, as a
  * bitmap, playing the order the row belongs to. */
 static unsigned
-triggers(const struct mod *m, int order, int row)
+triggers(const struct song *m, int order, int row)
 {
 	struct replay r;
 	struct replay_tick t;
@@ -180,7 +179,7 @@ main(void)
 	struct replay_cue cue[TEST_ORDERS];
 	struct replay_tick t;
 	struct replay r;
-	struct mod m;
+	struct song m;
 	const char *error;
 	int n;
 
@@ -189,7 +188,7 @@ main(void)
 		return 1;
 	}
 
-	check(replay_unsupported(&m) == NULL,
+	check(song_unsupported(&m) == NULL,
 	    "a module whose only extended effect is E9 has nothing ignored");
 
 	check(triggers(&m, 0, 0) == ((1U << 0) | (1U << 3)),
@@ -219,14 +218,14 @@ main(void)
 		    "... and lasts all three orders' rows");
 	}
 
-	mod_free(&m);
+	song_free(&m);
 
 	if ((error = build_loop(&m)) != NULL) {
 		printf("FAIL the loop module does not parse: %s\n", error);
 		return 1;
 	}
 
-	check(replay_unsupported(&m) == NULL,
+	check(song_unsupported(&m) == NULL,
 	    "E6 is not reported as an effect the replayer ignores");
 	check(row_plays(&m, 0, LOOP_START_ROW) == LOOP_PASSES,
 	    "E62 plays its section three times");
@@ -248,7 +247,7 @@ main(void)
 	    TEST_SPEED * TEST_TICK_US,
 	    "... and lasts its rows plus the section's repeats");
 
-	mod_free(&m);
+	song_free(&m);
 
 	check(parse_as("M.K.") == NULL, "a ProTracker signature is taken");
 	check(parse_as("FLT4") == NULL,

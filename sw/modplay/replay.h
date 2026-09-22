@@ -1,12 +1,13 @@
 /*
- * A ProTracker replayer, as a sequence of ticks.
+ * A replayer, as a sequence of ticks.
  *
  * Each call yields one tick: where it falls in the song, its tempo, and
- * what each channel plays during it — Amiga periods, volumes of 0..64,
- * and the regions of sample memory each pass plays.  Which samples a
- * module holds and where each one's loop begins are the replayer's
- * business, so a tick describes sound rather than a sample table, and
- * turning it into sound is the caller's.
+ * what each channel plays during it — periods of the song's clock,
+ * volumes of 0..64, a place in the stereo field, and the regions of
+ * sample memory each pass plays.  Which samples a song holds and where
+ * each one's loop begins are the replayer's business, so a tick
+ * describes sound rather than a sample table, and turning it into
+ * sound is the caller's.
  */
 
 #ifndef MODPLAY_REPLAY_H
@@ -15,11 +16,17 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "mod.h"
+#include "song.h"
 
 /* A tick lasts 2.5 s divided by the tempo, as ProTracker's CIA timer
  * runs it. */
 #define	REPLAY_TICK_US(bpm)	(2500000 / (bpm))
+
+#define	REPLAY_VOICES	32
+
+/* A voice's pan runs from -REPLAY_PAN, the left side alone, to
+ * REPLAY_PAN, the right. */
+#define	REPLAY_PAN	64
 
 /* A run of sample memory, in bytes; a length of 0 is nothing. */
 struct replay_region {
@@ -33,38 +40,20 @@ struct replay_voice {
 	struct replay_region play;	/* on a trigger: the first pass */
 	struct replay_region loop;	/* repeats after it; empty = one-shot */
 	int		instrument;	/* what a display names; 0 = none yet */
-	int		period;		/* Amiga period; 0 = nothing to play */
+	int		period;		/* of the song's clock; 0 = nothing */
 	int		volume;		/* 0..64 */
+	int		pan;
 };
 
 struct replay_tick {
 	int		order, pattern, row, tick;
 	int		speed;		/* ticks per row */
 	int		bpm;		/* tempo: a tick lasts 2.5 s / bpm */
-	struct replay_voice voice[MOD_CHANNELS];
-};
-
-struct replay_chan {
-	int		sample;
-	int		finetune;
-	int		period;		/* before vibrato and arpeggio */
-	int		volume;		/* before tremolo */
-	int		out_period;	/* this tick's, after them */
-	int		out_volume;
-
-	uint8_t		effect, param;	/* this row's */
-	int		delay;		/* tick a delayed note starts; 0 = none */
-	int		porta_target, porta_speed;
-	int		vib_pos, vib_speed, vib_depth;
-	int		trem_pos, trem_speed, trem_depth;
-	int		loop_row;	/* row a pattern loop returns to */
-	int		loop_count;	/* passes left; 0 = none running */
-	uint32_t	offset;		/* sample offset, remembered */
-	uint32_t	trigger_offset;	/* where this tick's start plays from */
+	struct replay_voice voice[REPLAY_VOICES];	/* the song's channels */
 };
 
 struct replay {
-	const struct mod *mod;
+	const struct song *song;
 	bool		loop;		/* play forever rather than stop */
 	bool		ended;
 	int		order, row, tick;
@@ -80,18 +69,21 @@ struct replay {
 	bool		repeating;
 
 	/* Rows already played, to find where the song comes round. */
-	uint8_t		played[MOD_ORDERS][MOD_ROWS / 8];
+	uint8_t		played[SONG_ORDERS][SONG_ROWS / 8];
 
 	/* The order the song came round to, once it has; -1 while it
 	 * plays on, and where it stops without repeating. */
 	int		loop_order;
 
-	struct replay_chan chan[MOD_CHANNELS];
+	/* The format's own. */
+	union {
+		struct pt_state	pt;
+	};
 };
 
 /* Start is the order to begin at, which the caller keeps within the
  * song's length. */
-void		 replay_init(struct replay *, const struct mod *, int start,
+void		 replay_init(struct replay *, const struct song *, int start,
 		     bool loop);
 bool		 replay_next(struct replay *, struct replay_tick *);
 
@@ -108,12 +100,8 @@ struct replay_cue {
 	uint64_t	us;		/* one pass, up to where it comes round */
 };
 
-/* The cues a module holds, in order; returns how many there are, at
+/* The cues a song holds, in order; returns how many there are, at
  * most max. */
-int		 replay_scan(const struct mod *, struct replay_cue *, int max);
-
-/* The effects the module uses that the replayer ignores, as a list of
- * their names, or NULL. */
-const char	*replay_unsupported(const struct mod *);
+int		 replay_scan(const struct song *, struct replay_cue *, int max);
 
 #endif /* MODPLAY_REPLAY_H */

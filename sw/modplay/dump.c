@@ -15,7 +15,6 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "mod.h"
 #include "replay.h"
 
 static uint8_t *
@@ -41,7 +40,7 @@ slurp(const char *path, size_t *lenp)
 static void
 dump(const char *path, bool rows)
 {
-	struct mod m;
+	struct song song;
 	struct replay r;
 	struct replay_tick t;
 	const char *error, *unsupported;
@@ -51,21 +50,21 @@ dump(const char *path, bool rows)
 	int ch;
 
 	buf = slurp(path, &len);
-	if ((error = mod_parse(&m, buf, len)) != NULL)
+	if ((error = song_parse(&song, buf, len)) != NULL)
 		errx(1, "%s: %s", path, error);
 
 	printf("%s: \"%s\" %s, %d orders, %d patterns, %u bytes of samples\n",
-	    path, m.title, m.signature, m.length, m.npatterns,
-	    m.sampledata_size);
-	if ((unsupported = replay_unsupported(&m)) != NULL)
+	    path, song.title, song.kind, song.length, song.npatterns,
+	    song.sampledata_size);
+	if ((unsupported = song_unsupported(&song)) != NULL)
 		printf("  ignored: %s\n", unsupported);
 
-	replay_init(&r, &m, 0, false);
+	replay_init(&r, &song, 0, false);
 	while (replay_next(&r, &t)) {
 		if (rows && t.tick == 0) {
 			printf("%02d %02d %02d  %2d %3d |", t.order, t.pattern,
 			    t.row, t.speed, t.bpm);
-			for (ch = 0; ch < MOD_CHANNELS; ch++) {
+			for (ch = 0; ch < song.channels; ch++) {
 				const struct replay_voice *v = &t.voice[ch];
 
 				printf(" %4d %2d%c", v->period, v->volume,
@@ -78,7 +77,7 @@ dump(const char *path, bool rows)
 	printf("  plays %u:%02u.%03u\n", (unsigned)(us / 60000000),
 	    (unsigned)(us / 1000000 % 60), (unsigned)(us / 1000 % 1000));
 
-	mod_free(&m);
+	song_free(&song);
 	free(buf);
 }
 
