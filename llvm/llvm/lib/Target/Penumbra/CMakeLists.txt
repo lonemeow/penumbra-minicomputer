@@ -25,6 +25,7 @@ add_public_tablegen_target(PenumbraCommonTableGen)
 
 add_llvm_target(PenumbraCodeGen
   GISel/PenumbraCallLowering.cpp
+  GISel/PenumbraGlobalISelUtils.cpp
   GISel/PenumbraInstructionSelector.cpp
   GISel/PenumbraO0PreLegalizerCombiner.cpp
   GISel/PenumbraPostLegalizerCombiner.cpp

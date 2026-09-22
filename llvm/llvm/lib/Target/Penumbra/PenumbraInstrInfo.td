@@ -296,7 +296,8 @@ let Defs = [SR], Uses = [SR], Constraints = "$Rd = $Rd_in" in {
                      "sbc\t$Rd, $Rs">;
 }
 
-// Flag-only variants (F=1): CMP = SUB with F=1, TEST = AND with F=1.
+// Flag-only variants (F=1): CMP = SUB with F=1, TEST = AND with F=1, and
+// CMPC = SBC with F=1, which continues a compare into the next word.
 // `isCompare = 1` lets the generic PeepholeOptimizer dispatch these to
 // our `analyzeCompare` / `optimizeCompareInstr` hooks for elision.
 let F = 1, isCompare = 1, SchedRW = [ReadALU, ReadALU] in {
@@ -306,6 +307,9 @@ let F = 1, isCompare = 1, SchedRW = [ReadALU, ReadALU] in {
     def TEST : FormatR<0b00010, (outs), (ins GPR:$Rd, GPR:$Rs),
                        "test\t$Rd, $Rs">;
   }
+  let Defs = [SR], Uses = [SR] in
+  def CMPC : FormatR<0b01011, (outs), (ins GPR:$Rd, GPR:$Rs),
+                     "cmpc\t$Rd, $Rs">;
 }
 } // SchedRW = [WriteALU, ReadALU, ReadALU]
 
@@ -664,6 +668,14 @@ let isPseudo = 1, hasSideEffects = 0, mayLoad = 0, mayStore = 0 in {
   def SELECT_CCi_GPR : PenumbraInst<(outs GPR:$dst),
       (ins GPR:$trueval, GPR:$falseval, GPR:$lhs, i32imm:$imm, i32imm:$cc),
       "# SELECT_CCi_GPR $dst, $trueval, $falseval, $lhs, $imm, $cc">;
+
+  // SELECT_FLAGS_GPR: branches on flags that instructions selected just ahead
+  // of it have set — a compare longer than one CMP, such as CMP + CMPC.  The
+  // expansion emits only the Bcc, so it reads SR and writes nothing.
+  let usesCustomInserter = 1, Uses = [SR] in
+  def SELECT_FLAGS_GPR : PenumbraInst<(outs GPR:$dst),
+      (ins GPR:$trueval, GPR:$falseval, i32imm:$cc),
+      "# SELECT_FLAGS_GPR $dst, $trueval, $falseval, $cc">;
 
   // PC-anchored PIC address sequences (see "PC-Anchored Relocation
   // Pairs" in doc/system/abi.md).  Each sequence pairs immediate-

@@ -59,50 +59,23 @@ define i32 @scmp_i64(i64 %a, i64 %b) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 4
-; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r5, [sp + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    lli r5, 1
 ; CHECK-NEXT:    cmp r3, r1
-; CHECK-NEXT:    mov r11, zero
-; CHECK-NEXT:    sbc r11, zero
-; CHECK-NEXT:    and r11, 1
-; CHECK-NEXT:    lli lr, 1
-; CHECK-NEXT:    cmp r2, r4
-; CHECK-NEXT:    bgt .LBB2_2
+; CHECK-NEXT:    cmpc r4, r2
+; CHECK-NEXT:    blt .LBB2_2
 ; CHECK-NEXT:  // %bb.1:
-; CHECK-NEXT:    lli lr, 0
+; CHECK-NEXT:    mov r5, zero
 ; CHECK-NEXT:  .LBB2_2:
-; CHECK-NEXT:    cmp r2, r4
-; CHECK-NEXT:    beq .LBB2_4
-; CHECK-NEXT:  // %bb.3:
-; CHECK-NEXT:    mov r11, lr
-; CHECK-NEXT:  .LBB2_4:
+; CHECK-NEXT:    llis r11, -1
 ; CHECK-NEXT:    cmp r1, r3
-; CHECK-NEXT:    mov r3, zero
-; CHECK-NEXT:    sbc r3, zero
-; CHECK-NEXT:    and r3, 1
-; CHECK-NEXT:    lli r1, 1
-; CHECK-NEXT:    cmp r2, r4
-; CHECK-NEXT:    blt .LBB2_6
-; CHECK-NEXT:  // %bb.5:
-; CHECK-NEXT:    lli r1, 0
-; CHECK-NEXT:  .LBB2_6:
-; CHECK-NEXT:    cmp r2, r4
-; CHECK-NEXT:    beq .LBB2_8
-; CHECK-NEXT:  // %bb.7:
-; CHECK-NEXT:    mov r3, r1
-; CHECK-NEXT:  .LBB2_8:
-; CHECK-NEXT:    lli r2, 1
-; CHECK-NEXT:    test r11, 1
-; CHECK-NEXT:    bne .LBB2_10
-; CHECK-NEXT:  // %bb.9:
-; CHECK-NEXT:    mov r2, zero
-; CHECK-NEXT:  .LBB2_10:
-; CHECK-NEXT:    llis r1, -1
-; CHECK-NEXT:    test r3, 1
-; CHECK-NEXT:    bne .LBB2_12
-; CHECK-NEXT:  // %bb.11:
-; CHECK-NEXT:    mov r1, r2
-; CHECK-NEXT:  .LBB2_12:
-; CHECK-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    cmpc r2, r4
+; CHECK-NEXT:    blt .LBB2_4
+; CHECK-NEXT:  // %bb.3:
+; CHECK-NEXT:    mov r11, r5
+; CHECK-NEXT:  .LBB2_4:
+; CHECK-NEXT:    mov r1, r11
+; CHECK-NEXT:    ldw r5, [sp + 0] // 4-byte Folded Reload
 ; CHECK-NEXT:    add sp, 4
 ; CHECK-NEXT:    jmp lr
   %r = call i32 @llvm.scmp.i32.i64(i64 %a, i64 %b)
@@ -114,46 +87,23 @@ define i32 @ucmp_i64(i64 %a, i64 %b) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 4
-; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    stw r5, [sp + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    lli r5, 1
 ; CHECK-NEXT:    cmp r3, r1
-; CHECK-NEXT:    mov r11, zero
-; CHECK-NEXT:    sbc r11, zero
-; CHECK-NEXT:    and r11, 1
-; CHECK-NEXT:    cmp r4, r2
-; CHECK-NEXT:    mov lr, zero
-; CHECK-NEXT:    sbc lr, zero
-; CHECK-NEXT:    and lr, 1
-; CHECK-NEXT:    cmp r2, r4
-; CHECK-NEXT:    beq .LBB3_2
+; CHECK-NEXT:    cmpc r4, r2
+; CHECK-NEXT:    bcc .LBB3_2
 ; CHECK-NEXT:  // %bb.1:
-; CHECK-NEXT:    mov r11, lr
+; CHECK-NEXT:    mov r5, zero
 ; CHECK-NEXT:  .LBB3_2:
+; CHECK-NEXT:    llis r11, -1
 ; CHECK-NEXT:    cmp r1, r3
-; CHECK-NEXT:    mov r3, zero
-; CHECK-NEXT:    sbc r3, zero
-; CHECK-NEXT:    and r3, 1
-; CHECK-NEXT:    cmp r2, r4
-; CHECK-NEXT:    mov r1, zero
-; CHECK-NEXT:    sbc r1, zero
-; CHECK-NEXT:    and r1, 1
-; CHECK-NEXT:    cmp r2, r4
-; CHECK-NEXT:    beq .LBB3_4
+; CHECK-NEXT:    cmpc r2, r4
+; CHECK-NEXT:    bcc .LBB3_4
 ; CHECK-NEXT:  // %bb.3:
-; CHECK-NEXT:    mov r3, r1
+; CHECK-NEXT:    mov r11, r5
 ; CHECK-NEXT:  .LBB3_4:
-; CHECK-NEXT:    lli r2, 1
-; CHECK-NEXT:    test r11, 1
-; CHECK-NEXT:    bne .LBB3_6
-; CHECK-NEXT:  // %bb.5:
-; CHECK-NEXT:    mov r2, zero
-; CHECK-NEXT:  .LBB3_6:
-; CHECK-NEXT:    llis r1, -1
-; CHECK-NEXT:    test r3, 1
-; CHECK-NEXT:    bne .LBB3_8
-; CHECK-NEXT:  // %bb.7:
-; CHECK-NEXT:    mov r1, r2
-; CHECK-NEXT:  .LBB3_8:
-; CHECK-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    mov r1, r11
+; CHECK-NEXT:    ldw r5, [sp + 0] // 4-byte Folded Reload
 ; CHECK-NEXT:    add sp, 4
 ; CHECK-NEXT:    jmp lr
   %r = call i32 @llvm.ucmp.i32.i64(i64 %a, i64 %b)

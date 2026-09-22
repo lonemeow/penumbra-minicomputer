@@ -5,7 +5,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "PenumbraLegalizerInfo.h"
+#include "PenumbraGlobalISelUtils.h"
 #include "PenumbraMachineFunctionInfo.h"
+#include "MCTargetDesc/PenumbraMCTargetDesc.h"
 #include "llvm/CodeGen/GlobalISel/LegalizerHelper.h"
 #include "llvm/CodeGen/GlobalISel/LegalizerInfo.h"
 #include "llvm/CodeGen/GlobalISel/MachineIRBuilder.h"
@@ -247,12 +249,14 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
       .maxScalar(0, s32);
 
   // Comparisons: G_ICMP produces a register-width boolean, compares s32
-  // operands.
+  // operands.  An s64 compare is custom (see legalizeCustom), once its
+  // boolean is register-width.
   getActionDefinitionsBuilder(G_ICMP)
       .legalFor({{s32, s32}, {s32, p0}})
+      .clampScalar(0, s32, s32)
+      .customFor({{s32, s64}})
       .widenScalarToNextPow2(1, 32)
-      .clampScalar(1, s32, s32)
-      .clampScalar(0, s32, s32);
+      .clampScalar(1, s32, s32);
 
   // Undefined value: used by the optimizer for uninitialized variables.
   getActionDefinitionsBuilder(G_IMPLICIT_DEF)
@@ -575,6 +579,23 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
   getLegacyLegalizerInfo().computeTables();
 }
 
+// The value of an s64 operand that is a constant, whole or already split into
+// two constant words by the legalizer.
+static std::optional<APInt> getConstant64(Register R,
+                                          const MachineRegisterInfo &MRI) {
+  if (auto C = getIConstantVRegValWithLookThrough(R, MRI))
+    return C->Value;
+  MachineInstr *Def = getDefIgnoringCopies(R, MRI);
+  if (!Def || Def->getOpcode() != TargetOpcode::G_MERGE_VALUES ||
+      Def->getNumOperands() != 3)
+    return std::nullopt;
+  auto Lo = getIConstantVRegVal(Def->getOperand(1).getReg(), MRI);
+  auto Hi = getIConstantVRegVal(Def->getOperand(2).getReg(), MRI);
+  if (!Lo || !Hi)
+    return std::nullopt;
+  return Hi->zext(64).shl(32) | Lo->zext(64);
+}
+
 bool PenumbraLegalizerInfo::legalizeCustom(
     LegalizerHelper &Helper, MachineInstr &MI,
     LostDebugLocObserver &LocObserver) const {
@@ -635,6 +656,67 @@ bool PenumbraLegalizerInfo::legalizeCustom(
       }
       return Helper.narrowScalar(MI, 0, S32) == LegalizerHelper::Legalized;
     }
+  }
+
+  case TargetOpcode::G_ICMP: {
+    // An s64 compare.  Equality narrows generically, to the OR of the words'
+    // XORs against zero.  A relational compare becomes one G_ICMP_PAIR, CMP
+    // on the low words and CMPC on the high, in place of the generic
+    // narrowing's compare of each word joined by a select.
+    const LLT S32 = LLT::scalar(32);
+    auto Pred =
+        static_cast<CmpInst::Predicate>(MI.getOperand(1).getPredicate());
+    if (ICmpInst::isEquality(Pred))
+      return Helper.narrowScalar(MI, 1, S32) == LegalizerHelper::Legalized;
+
+    Register Dst = MI.getOperand(0).getReg();
+    Register LHS = MI.getOperand(2).getReg();
+    Register RHS = MI.getOperand(3).getReg();
+    std::optional<APInt> LC = getConstant64(LHS, MRI);
+    std::optional<APInt> RC = getConstant64(RHS, MRI);
+    auto Swap = [&] {
+      std::swap(LHS, RHS);
+      std::swap(LC, RC);
+      Pred = CmpInst::getSwappedPredicate(Pred);
+    };
+
+    // A constant goes on the right, where CMPi can hold its low word, and a
+    // greater-than or less-or-equal steps to the adjacent constant to keep it
+    // there: `x > -1` is `x >= 0`.  With a zero low word, the low words cannot
+    // decide a less-than or greater-or-equal, so the high words alone are
+    // compared: `x < 0` and `x >= 1 << 32` are one CMP.
+    if (LC && !RC)
+      Swap();
+    if (RC && (ICmpInst::isGT(Pred) || ICmpInst::isLE(Pred)))
+      if (auto Adjacent = PenumbraGISelUtils::adjacentCompare(Pred, *RC))
+        std::tie(Pred, *RC) = *Adjacent;
+    if (RC && (ICmpInst::isLT(Pred) || ICmpInst::isGE(Pred)) &&
+        RC->extractBits(32, 0).isZero()) {
+      Register Hi = MIRBuilder.buildUnmerge(S32, LHS).getReg(1);
+      MIRBuilder.buildICmp(Pred, Dst, Hi,
+                           MIRBuilder.buildConstant(S32, RC->extractBits(32, 32)));
+      MI.eraseFromParent();
+      return true;
+    }
+    if (ICmpInst::isGT(Pred) || ICmpInst::isLE(Pred))
+      Swap();
+
+    // A constant operand's words are built directly: the stepped constant is
+    // no longer the one in the operand's register.
+    auto Words = [&](Register R, const std::optional<APInt> &C) {
+      if (C)
+        return std::pair(
+            MIRBuilder.buildConstant(S32, C->extractBits(32, 0)).getReg(0),
+            MIRBuilder.buildConstant(S32, C->extractBits(32, 32)).getReg(0));
+      auto Unmerge = MIRBuilder.buildUnmerge(S32, R);
+      return std::pair(Unmerge.getReg(0), Unmerge.getReg(1));
+    };
+    auto [LLo, LHi] = Words(LHS, LC);
+    auto [RLo, RHi] = Words(RHS, RC);
+    MIRBuilder.buildInstr(Penumbra::G_ICMP_PAIR, {Dst},
+                          {Pred, LLo, LHi, RLo, RHi});
+    MI.eraseFromParent();
+    return true;
   }
 
   case TargetOpcode::G_UDIV: {

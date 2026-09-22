@@ -1170,7 +1170,7 @@ a scan that misread branch targets written in upper-case hex.
 
 | Item | Shape counted | Kernel | libc | Doom | Tests |
 |---|---|---:|---:|---:|---:|
-| "64-bit relational compares expand to select diamonds" | `sbc r, zero; and r, 1` | 1,686 | 1,154 | 271 | 12,475 |
+| "64-bit relational compares expand to select diamonds" — resolved | `sbc r, zero; and r, 1` | 1,686 | 1,154 | 271 | 12,475 |
 | "flag definitions stay live after C++ selection" (PIC anchors) | `add x, pc` / `mov x, pc` | 1 | 12,486 | 30 | 0 |
 | "InstCombine's shift-and-mask form costs a constant" | `llis t, -2^k; and y, t` | 413 | 300 | 12 | 234 |
 | "inline small constant-size memcpy/memset/memmove" | `lli r3, N` before a call to one, N ≤ 32 (≤ 64) | 510 (654) | — | — | — |
@@ -1195,12 +1195,10 @@ audio-mixing review), and the 64-bit select of zero only concerns the
 32.32 mixer loop.
 
 What follows, by value:
-1. **64-bit compares** — about 1–1.5% of instructions in the kernel,
-   libc and Doom, hot in SQLite's b-tree bisection and in the kernel's
-   `off_t` and `time_t` compares on every read and write; about 20
-   cycles a compare on penumbra1 and 9 on penumbra2_5.  Not blocked:
-   the ISA documentation decision in its entry only decides whether the
-   borrow chain saves its `MOV`.
+1. **64-bit compares — resolved** — about 1–1.5% of instructions in
+   the kernel, libc and Doom, hot in SQLite's b-tree bisection and in
+   the kernel's `off_t` and `time_t` compares on every read and write;
+   about 20 cycles a compare on penumbra1 and 9 on penumbra2_5.
 2. **Tail calls** ("tail-call optimization — measured opportunity") —
    4–5% of calls already sit in tail position.  About 90 cycles a
    subsector in Doom's `R_RenderBSPNode` on penumbra1, the kernel's
@@ -1495,7 +1493,7 @@ predecessor already set the same flags.  That redundancy crosses a
 block boundary, where a backward walk cannot see it.  SQLite's
 repeats (161 same-block, 407 across labels) come mostly from the i64
 compare expansion in "64-bit relational compares expand to select
-diamonds".
+diamonds", since resolved; recount before acting on them.
 
 ## Compiler: GISel poison-flag hygiene is an LLVM rebase gate
 
@@ -1643,7 +1641,7 @@ materialized boolean.  Four shapes pay for that (static counts,
   not branches.  Shape coverage: `brcond-inverted-bool.ll`.  RISC-V's
   GlobalISel output has the same `xori`, so this is upstream-worthy.
 
-## Compiler: share the hi-word compare in i64 three-way compares
+## Compiler: share the hi-word compare in i64 three-way compares — RESOLVED
 
 The `G_SCMP`/`G_UCMP` lowering (`.lower()` →
 `LegalizerHelper::lowerThreewayCompare()`) expands the i64 case
@@ -1654,7 +1652,12 @@ hot path (qsort's comparator is the i32 case); low priority.  The
 two-way relational compares have the same problem and are hot — see
 the next entry.
 
-## Compiler: 64-bit relational compares expand to select diamonds
+Resolved with the next entry: each of the two s64 compares is now one
+`CMP` + `CMPC` chain, so no high-word compare repeats, and
+`scmp`/`ucmp` of i64 take 16 instructions where they took 35
+(`threeway-cmp.ll`).
+
+## Compiler: 64-bit relational compares expand to select diamonds — RESOLVED
 
 `LegalizerHelper::narrowScalar` splits an s64 `G_ICMP` into
 `select(hi == hi', ult(lo, lo'), pred(hi, hi'))`.  Selection builds
@@ -1700,17 +1703,31 @@ uses `SETCCCARRY` where the target provides it — ARM does — and
 special-cases constant halves.  GlobalISel has no counterpart, so this
 wants a `doc/llvm-*.md` write-up.
 
-Fix direction: a custom s64 `G_ICMP` legalization or pre-legalizer
-combine into a low-half `G_USUBO` feeding a high-half borrow
-subtraction, selected as `CMP`/`SBC` with the branch or value read
-from its flags, and constant right-hand sides folded to a high-word
-compare.
+Resolved by naming `SBC` with the flag-only bit `CMPC`
+(`instruction-set.md`, conformance test `isa/test_cmpc.s`) and
+legalizing an s64 relational `G_ICMP` into the target opcode
+`G_ICMP_PAIR`: `CMP` on the low words and `CMPC` on the high, read by
+a branch, a carry read or a `SELECT_FLAGS_GPR` diamond.  Greater-than
+and less-or-equal swap their operands or step a constant (`x > -1` is
+`x >= 0`), a constant with a zero low word leaves a compare of the high
+words, and equal high words drop the `CMPC`.  A branch on `<` is now 3
+instructions, signed or unsigned; the value of `<` 5; `v < 0` and the
+truncation check 2.  In the `test-compiler` corpus at `-O2` the
+instructions drop from 380,088 to 344,334, most of it in
+`UnitTests/Float/classify.c`, a soft-float classifier (208,331 to
+174,301); the rest of the corpus drops 1.0%.  The kernel, `libc.so`
+and Doom are not remeasured.  Coverage: `icmp-i64.ll`,
+`legalize-icmp-s64.mir`, `select-icmp-pair.mir` and the execution test
+`penumbra-codegen/icmp64.c`.
 
-**ISA documentation decision first.**  The encoding defines the F
-(flag-only) bit for every Format R operation, so a flag-only `SBC` is
-expressible, but `instruction-set.md` names only `CMP` and `TEST`.
-Using it needs a named mnemonic in the doc and an `isa/` conformance
-test run on every core; without it the chain keeps the `MOV`.
+Left:
+- A 64-bit select, `max` and `min` among them, picks each word in its
+  own diamond and repeats the compare: 9 instructions where one
+  diamond takes 5.
+- An all-ones constant high word is loaded with `LLIS`, since `CMPC`
+  has no immediate form.
+- s128 compares keep the generic select chain.
+- The upstream write-up above.
 
 ## Compiler: PIC global addresses are recomputed inside loops
 
@@ -3965,7 +3982,7 @@ Compiler causes, widest reach first, each with its own entry:
 |---|---|---|
 | No branch probabilities reach block placement | every `__predict_false`, KASSERT and cold path | "IRTranslator runs without branch probabilities" |
 | Countdown loop exits test a materialized overflow flag — RESOLVED | Doom column and span drawers: 6 of 18 instructions per pixel | "countdown loop exits pay for an overflow flag" |
-| s64 relational compares | SQLite b-tree bisection and record compare | "64-bit relational compares expand to select diamonds" |
+| s64 relational compares — RESOLVED | SQLite b-tree bisection and record compare | "64-bit relational compares expand to select diamonds" |
 | Compare immediates, TEST, inverted booleans | 848 / 612 / 274 / 140 sites | "compare and branch selection misses immediate and TEST forms" |
 | Byte and halfword sign-bit tests | SQLite varint bytes, BSP child index, `sy_narg` | "signed sub-word loads in relational compares miss LDBS/LDHS" |
 | Constants never rematerialized | 220 kernel loops; ~1,250 SQLite constant reloads | "constants are not rematerializable" |
@@ -4362,7 +4379,8 @@ chain, whose last carry is the wrap, while the compare would expand
 as in "64-bit relational compares expand to select diamonds".
 Refusing both widths cost `bintime_addx` — inlined into `binuptime`,
 `nanouptime` and `microuptime` on every `clock_gettime` — 7 to 10
-instructions and extra branches.  Branching on the carry
+instructions and extra branches.  That compare is now `CMP` + `CMPC`
+and a branch, so refusing the wider form is worth measuring again.  Branching on the carry
 from inside the selector was rejected: the instructions between the
 add and the branch are still generic there, so whether SR survives
 would have to be guessed from how they will select.  Selection

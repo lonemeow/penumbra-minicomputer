@@ -98,6 +98,7 @@ not behavior.
 | `GISel/PenumbraLegalizerInfo.{h,cpp}` | Type/op legality. See "Legalization at a glance" below |
 | `GISel/PenumbraRegisterBankInfo.{h,cpp}` | Single GPR bank covering all 16 registers |
 | `GISel/PenumbraRegisterBanks.td` | `GPRRegBank` definition |
+| `GISel/PenumbraGlobalISelUtils.{h,cpp}` | Helpers shared by the GISel passes (`adjacentCompare`, used by the legalizer and selector) |
 | `GISel/PenumbraInstructionSelector.cpp` | Hybrid: `selectImpl()` for TableGen patterns, manual C++ for complex cases (wide values as `PseudoLI`, GOT-PCREL globals, frame-index folding, jump tables, ICMP+BRCOND fold, varargs, return-address capture, …) |
 | `GISel/PenumbraPreLegalizerCombiner.cpp` | Pre-legalizer combiner (-O1+). Boilerplate wrapper around `selectImpl` for rules in `PenumbraCombine.td` |
 | `GISel/PenumbraO0PreLegalizerCombiner.cpp` | Same shape with the smaller `optnone_combines` rule set (-O0 only) |
@@ -191,6 +192,11 @@ shapes:
   shift/logic. G_BSWAP at s64 narrows to two s32 first, then
   lowers — see `doc/llvm-lowerBswap-bug.md` for why we don't lower
   directly at s64.
+- Compares: s64 G_ICMP is custom.  Equality narrows generically; a
+  relational compare becomes the target opcode `G_ICMP_PAIR`
+  (`PenumbraInstrGISel.td`), selected as CMP on the low words and
+  CMPC on the high, or a high-word compare when a constant's low
+  word is zero.
 - Add/sub-with-carry: G_UADDO/G_UADDE/G_USUBO/G_USUBE legal at
   {s32,s1}; s64 add/sub narrows into them and the selector
   (`selectAddSubCarry`) maps them onto the hardware ADD/ADC,

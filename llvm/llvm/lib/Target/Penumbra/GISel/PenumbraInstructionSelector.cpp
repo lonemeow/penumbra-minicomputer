@@ -6,6 +6,7 @@
 
 #include "MCTargetDesc/PenumbraFixupKinds.h"
 #include "MCTargetDesc/PenumbraMCTargetDesc.h"
+#include "PenumbraGlobalISelUtils.h"
 #include "PenumbraMachineFunctionInfo.h"
 #include "PenumbraRegisterBankInfo.h"
 #include "PenumbraSubtarget.h"
@@ -71,6 +72,13 @@ private:
                     MachineRegisterInfo &MRI) const;
   bool selectICmp(MachineInstr &I, MachineBasicBlock &MBB,
                   MachineRegisterInfo &MRI) const;
+  bool selectICmpPair(MachineInstr &I, MachineBasicBlock &MBB,
+                      MachineRegisterInfo &MRI) const;
+  // Emit CMP + CMPC for a G_ICMP_PAIR, or its inverse, before I; returns the
+  // predicate the flags then answer, or nullopt on failure.
+  std::optional<CmpInst::Predicate>
+  emitICmpPair(MachineInstr &Cmp, bool Invert, MachineInstr &I,
+               MachineBasicBlock &MBB, MachineRegisterInfo &MRI) const;
   // Branchless materialisation of an ICMP value via CMP + a carry read, for the
   // predicates that map to a single flag.  Returns false (caller falls back to
   // the SELECT_CC branch form) for predicates it doesn't handle.
@@ -343,6 +351,7 @@ bool PenumbraInstructionSelector::select(MachineInstr &I) {
 
   // ── Compare / Select ────────────────────────────────────────────────────────
   case G_ICMP:   return selectICmp(I, MBB, MRI);
+  case Penumbra::G_ICMP_PAIR: return selectICmpPair(I, MBB, MRI);
   case G_SELECT: return selectSelect(I, MBB, MRI);
 
   // ── Stack save/restore (alloca) ─────────────────────────────────────────────
@@ -496,6 +505,7 @@ bool PenumbraInstructionSelector::selectBranch(MachineInstr &I,
 // the `XOR 1` the branch-inversion combine adds when the true edge is the
 // layout successor.  What remains selects to one of:
 //   G_ICMP          →   CMP %lhs, %rhs ; Bcc    (predicate inverted by an XOR)
+//   G_ICMP_PAIR     →   CMP lo ; CMPC hi ; Bcc  (likewise)
 //   anything else   →   TESTi %cond, 1 ; BNE    (BEQ when inverted)
 
 // The G_CONSTANT operand of Def at OpIdx is 1.
@@ -524,6 +534,15 @@ bool PenumbraInstructionSelector::selectBrCond(MachineInstr &I,
       break;
     CondReg = CondDef->getOperand(1).getReg();
     CondDef = MRI.getVRegDef(CondReg);
+  }
+
+  if (CondDef && CondDef->getOpcode() == Penumbra::G_ICMP_PAIR) {
+    auto Pred = emitICmpPair(*CondDef, Invert, I, MBB, MRI);
+    if (!Pred)
+      return false;
+    BuildMI(MBB, I, DL, TII.get(icmpPredToBranchOpc(*Pred))).addMBB(TargetMBB);
+    I.eraseFromParent();
+    return true;
   }
 
   if (CondDef && CondDef->getOpcode() == TargetOpcode::G_ICMP) {
@@ -594,27 +613,10 @@ bool PenumbraInstructionSelector::selectBrCond(MachineInstr &I,
 // not: `x > -1` is `x >= 0`, and `x < 65536` is `x <= 65535`.
 static std::optional<std::pair<CmpInst::Predicate, int64_t>>
 adjacentCompareImmediate(CmpInst::Predicate Pred, const APInt &C) {
-  if (!ICmpInst::isRelational(Pred))
+  auto Adjacent = PenumbraGISelUtils::adjacentCompare(Pred, C);
+  if (!Adjacent || Adjacent->second.getActiveBits() > 16)
     return std::nullopt;
-
-  // `x > C` is `x >= C+1` and `x <= C` is `x < C+1`; `<` and `>=` step down.
-  // A step past the end of the predicate's range would wrap, turning a compare
-  // that is always false into one that is always true, or the reverse.
-  bool Signed = ICmpInst::isSigned(Pred);
-  bool StepUp = ICmpInst::isGT(Pred) || ICmpInst::isLE(Pred);
-  bool AdjacentWraps;
-  if (StepUp)
-    AdjacentWraps = Signed ? C.isMaxSignedValue() : C.isMaxValue();
-  else
-    AdjacentWraps = Signed ? C.isMinSignedValue() : C.isMinValue();
-  if (AdjacentWraps)
-    return std::nullopt;
-
-  APInt Adjacent = StepUp ? C + 1 : C - 1;
-  if (Adjacent.getActiveBits() > 16)
-    return std::nullopt;
-  return std::pair(CmpInst::getFlippedStrictnessPredicate(Pred),
-                   Adjacent.getZExtValue());
+  return std::pair(Adjacent->first, Adjacent->second.getZExtValue());
 }
 
 // Put a compare in the form the immediate dispatch folds.  A constant
@@ -675,7 +677,8 @@ bool PenumbraInstructionSelector::emitSelectCC(
 
 // ── G_SELECT (conditional select) ────────────────────────────────────────────
 // When the condition comes from G_ICMP, fold the comparison into SELECT_CC_GPR
-// (CMP+Bcc in the diamond).  Otherwise fall back to SELECT_GPR (TEST+BNE).
+// (CMP+Bcc in the diamond); from G_ICMP_PAIR, emit CMP + CMPC ahead of a
+// SELECT_FLAGS_GPR.  Otherwise fall back to SELECT_GPR (TEST+BNE).
 bool PenumbraInstructionSelector::selectSelect(MachineInstr &I,
                                                 MachineBasicBlock &MBB,
                                                 MachineRegisterInfo &MRI) const {
@@ -702,6 +705,20 @@ bool PenumbraInstructionSelector::selectSelect(MachineInstr &I,
     if (MRI.use_nodbg_empty(CondDef->getOperand(0).getReg()))
       CondDef->eraseFromParent();
     return true;
+  }
+
+  if (CondDef && CondDef->getOpcode() == Penumbra::G_ICMP_PAIR) {
+    auto Pred = emitICmpPair(*CondDef, /*Invert=*/false, I, MBB, MRI);
+    if (!Pred)
+      return false;
+    MachineInstr *NewI =
+        BuildMI(MBB, I, DL, TII.get(Penumbra::SELECT_FLAGS_GPR))
+            .addDef(DstReg)
+            .addReg(TrueReg)
+            .addReg(FalseReg)
+            .addImm(icmpPredToBranchOpc(*Pred));
+    I.eraseFromParent();
+    return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
   }
 
   // Generic condition: SELECT_GPR with TEST+BNE.
@@ -752,6 +769,78 @@ bool PenumbraInstructionSelector::selectICmp(MachineInstr &I,
 
   I.eraseFromParent();
   return true;
+}
+
+// ── G_ICMP_PAIR (two-word compare) ───────────────────────────────────────────
+// CMP on the low words leaves the borrow in SR.C, and CMPC on the high words
+// subtracts it, leaving N, C and V as one subtraction of the whole values
+// would.  The legalizer hands over less-than and greater-or-equal only, which
+// read those flags alone.
+std::optional<CmpInst::Predicate> PenumbraInstructionSelector::emitICmpPair(
+    MachineInstr &Cmp, bool Invert, MachineInstr &I, MachineBasicBlock &MBB,
+    MachineRegisterInfo &MRI) const {
+  auto Pred = static_cast<CmpInst::Predicate>(Cmp.getOperand(1).getPredicate());
+  if (Invert)
+    Pred = CmpInst::getInversePredicate(Pred);
+  assert((ICmpInst::isLT(Pred) || ICmpInst::isGE(Pred)) &&
+         "a CMPC chain's Z reflects the high words only");
+
+  if (!emitCompare(Cmp.getOperand(2).getReg(), Cmp.getOperand(4).getReg(),
+                   std::nullopt, I, MBB, MRI))
+    return std::nullopt;
+
+  // Equal high words leave the low words' borrow to decide, signed or not.
+  Register LHi = Cmp.getOperand(3).getReg();
+  Register RHi = Cmp.getOperand(5).getReg();
+  auto LC = getIConstantVRegVal(LHi, MRI);
+  auto RC = getIConstantVRegVal(RHi, MRI);
+  if (LHi == RHi || (LC && RC && *LC == *RC))
+    return ICmpInst::getUnsignedPredicate(Pred);
+
+  if (RC && RC->isZero())
+    RHi = Penumbra::R0;
+  MachineInstr *Cmpc = BuildMI(MBB, I, I.getDebugLoc(), TII.get(Penumbra::CMPC))
+                           .addReg(LHi)
+                           .addReg(RHi);
+  if (!constrainSelectedInstRegOperands(*Cmpc, TII, TRI, RBI))
+    return std::nullopt;
+  return Pred;
+}
+
+// A two-word compare's value.  Where the flags answer an unsigned predicate,
+// it is the carry, read as for a one-word compare; a signed one is N != V,
+// which no single flag holds, so a diamond picks 1 or 0.
+bool PenumbraInstructionSelector::selectICmpPair(
+    MachineInstr &I, MachineBasicBlock &MBB, MachineRegisterInfo &MRI) const {
+  Register DstReg = I.getOperand(0).getReg();
+  const DebugLoc &DL = I.getDebugLoc();
+
+  auto Pred = emitICmpPair(I, /*Invert=*/false, I, MBB, MRI);
+  if (!Pred)
+    return false;
+  if (ICmpInst::isUnsigned(*Pred)) {
+    if (!emitCarryToValue(DstReg, /*InvertCarry=*/ICmpInst::isLT(*Pred), I,
+                          MBB, MRI))
+      return false;
+    I.eraseFromParent();
+    return true;
+  }
+
+  // The 1 and 0 go after the compare, which leaves the flags alone, so a
+  // compared word that dies there can hold the result.
+  Register OneReg = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
+  Register ZeroReg = MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass);
+  BuildMI(MBB, I, DL, TII.get(Penumbra::LLI)).addDef(OneReg).addImm(1);
+  BuildMI(MBB, I, DL, TII.get(TargetOpcode::COPY))
+      .addDef(ZeroReg)
+      .addReg(Penumbra::R0);
+  MachineInstr *NewI = BuildMI(MBB, I, DL, TII.get(Penumbra::SELECT_FLAGS_GPR))
+                           .addDef(DstReg)
+                           .addReg(OneReg)
+                           .addReg(ZeroReg)
+                           .addImm(icmpPredToBranchOpc(*Pred));
+  I.eraseFromParent();
+  return constrainSelectedInstRegOperands(*NewI, TII, TRI, RBI);
 }
 
 // The value of R as a uimm16 immediate, if R is a constant that fits the

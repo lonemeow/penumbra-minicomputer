@@ -1,0 +1,194 @@
+# RUN: llc -mtriple=penumbra-unknown-none -run-pass=instruction-select -verify-machineinstrs %s -o - | FileCheck %s
+
+# Selection of G_ICMP_PAIR, the legalizer's two-word relational compare: CMP on
+# the low words and CMPC on the high ones, read by a branch, a carry read (an
+# unsigned value) or a SELECT_FLAGS_GPR diamond (a signed value or a select).
+# Equal high words need no CMPC: the low words' borrow decides, so the flags
+# answer the unsigned predicate.
+
+--- |
+  define void @br_slt() { ret void }
+  define void @br_inverted() { ret void }
+  define void @br_zero_rhs_hi() { ret void }
+  define void @br_equal_hi() { ret void }
+  define void @val_ult() { ret void }
+  define void @val_slt() { ret void }
+  define void @select_sge() { ret void }
+...
+
+---
+name:            br_slt
+legalized:       true
+regBankSelected: true
+tracksRegLiveness: true
+body: |
+  ; CHECK-LABEL: name: br_slt
+  ; CHECK:      CMP [[ALO:%[0-9]+]], [[BLO:%[0-9]+]], implicit-def $sr
+  ; CHECK-NEXT: CMPC [[AHI:%[0-9]+]], [[BHI:%[0-9]+]], implicit-def $sr, implicit $sr
+  ; CHECK-NEXT: BLT %bb.1, implicit $sr
+  bb.0:
+    liveins: $r1, $r2, $r3, $r4
+    %0:gprbank(s32) = COPY $r1
+    %1:gprbank(s32) = COPY $r2
+    %2:gprbank(s32) = COPY $r3
+    %3:gprbank(s32) = COPY $r4
+    %4:gprbank(s32) = G_ICMP_PAIR intpred(slt), %0(s32), %1(s32), %2(s32), %3(s32)
+    G_BRCOND %4(s32), %bb.1
+    G_BR %bb.2
+  bb.1:
+    RET
+  bb.2:
+    RET
+...
+
+# The branch-inversion combine's XOR 1 inverts less-than to greater-or-equal,
+# which the chain still answers.
+---
+name:            br_inverted
+legalized:       true
+regBankSelected: true
+tracksRegLiveness: true
+body: |
+  ; CHECK-LABEL: name: br_inverted
+  ; CHECK:      CMP
+  ; CHECK-NEXT: CMPC
+  ; CHECK-NEXT: BCS %bb.1, implicit $sr
+  bb.0:
+    liveins: $r1, $r2, $r3, $r4
+    %0:gprbank(s32) = COPY $r1
+    %1:gprbank(s32) = COPY $r2
+    %2:gprbank(s32) = COPY $r3
+    %3:gprbank(s32) = COPY $r4
+    %4:gprbank(s32) = G_ICMP_PAIR intpred(ult), %0(s32), %1(s32), %2(s32), %3(s32)
+    %5:gprbank(s32) = G_CONSTANT i32 1
+    %6:gprbank(s32) = G_XOR %4, %5
+    G_BRCOND %6(s32), %bb.1
+    G_BR %bb.2
+  bb.1:
+    RET
+  bb.2:
+    RET
+...
+
+# A constant low word folds into CMPi; a zero high word is R0.
+---
+name:            br_zero_rhs_hi
+legalized:       true
+regBankSelected: true
+tracksRegLiveness: true
+body: |
+  ; CHECK-LABEL: name: br_zero_rhs_hi
+  ; CHECK:      CMPi [[ALO:%[0-9]+]], 1000, implicit-def $sr
+  ; CHECK-NEXT: CMPC [[AHI:%[0-9]+]], $r0, implicit-def $sr, implicit $sr
+  ; CHECK-NEXT: BGE %bb.1, implicit $sr
+  bb.0:
+    liveins: $r1, $r2
+    %0:gprbank(s32) = COPY $r1
+    %1:gprbank(s32) = COPY $r2
+    %2:gprbank(s32) = G_CONSTANT i32 1000
+    %3:gprbank(s32) = G_CONSTANT i32 0
+    %4:gprbank(s32) = G_ICMP_PAIR intpred(sge), %0(s32), %1(s32), %2(s32), %3(s32)
+    G_BRCOND %4(s32), %bb.1
+    G_BR %bb.2
+  bb.1:
+    RET
+  bb.2:
+    RET
+...
+
+# Equal high words: no CMPC, and the signed predicate becomes unsigned.
+---
+name:            br_equal_hi
+legalized:       true
+regBankSelected: true
+tracksRegLiveness: true
+body: |
+  ; CHECK-LABEL: name: br_equal_hi
+  ; CHECK:      CMPi [[ALO:%[0-9]+]], 32, implicit-def $sr
+  ; CHECK-NEXT: BCC %bb.1, implicit $sr
+  ; CHECK-NOT:  CMPC
+  bb.0:
+    liveins: $r1
+    %0:gprbank(s32) = COPY $r1
+    %1:gprbank(s32) = G_CONSTANT i32 0
+    %2:gprbank(s32) = G_CONSTANT i32 32
+    %3:gprbank(s32) = G_CONSTANT i32 0
+    %4:gprbank(s32) = G_ICMP_PAIR intpred(slt), %0(s32), %1(s32), %2(s32), %3(s32)
+    G_BRCOND %4(s32), %bb.1
+    G_BR %bb.2
+  bb.1:
+    RET
+  bb.2:
+    RET
+...
+
+# An unsigned value reads the carry: NOT C for less-than.
+---
+name:            val_ult
+legalized:       true
+regBankSelected: true
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r1, $r2, $r3, $r4
+    ; CHECK-LABEL: name: val_ult
+    ; CHECK:      CMP
+    ; CHECK-NEXT: CMPC
+    ; CHECK-NEXT: [[ZERO:%[0-9]+]]:gpr_allocatable = COPY $r0
+    ; CHECK-NEXT: [[RAW:%[0-9]+]]:{{[a-z_]+}} = SBC [[ZERO]], $r0, implicit-def $sr, implicit $sr
+    ; CHECK-NEXT: ANDi [[RAW]], 1
+    %0:gprbank(s32) = COPY $r1
+    %1:gprbank(s32) = COPY $r2
+    %2:gprbank(s32) = COPY $r3
+    %3:gprbank(s32) = COPY $r4
+    %4:gprbank(s32) = G_ICMP_PAIR intpred(ult), %0(s32), %1(s32), %2(s32), %3(s32)
+    $r1 = COPY %4(s32)
+    RET implicit $r1
+...
+
+# A signed value is a diamond on the chain's flags, its 1 and 0 built after
+# the compare.
+---
+name:            val_slt
+legalized:       true
+regBankSelected: true
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r1, $r2, $r3, $r4
+    ; CHECK-LABEL: name: val_slt
+    ; CHECK:      CMP
+    ; CHECK-NEXT: CMPC
+    ; CHECK-NEXT: [[ONE:%[0-9]+]]:gpr_allocatable = LLI 1
+    ; CHECK-NEXT: [[ZERO:%[0-9]+]]:gpr_allocatable = COPY $r0
+    ; CHECK-NEXT: SELECT_FLAGS_GPR [[ONE]], [[ZERO]], {{[0-9]+}}, implicit $sr
+    %0:gprbank(s32) = COPY $r1
+    %1:gprbank(s32) = COPY $r2
+    %2:gprbank(s32) = COPY $r3
+    %3:gprbank(s32) = COPY $r4
+    %4:gprbank(s32) = G_ICMP_PAIR intpred(slt), %0(s32), %1(s32), %2(s32), %3(s32)
+    $r1 = COPY %4(s32)
+    RET implicit $r1
+...
+
+---
+name:            select_sge
+legalized:       true
+regBankSelected: true
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r1, $r2, $r3, $r4
+    ; CHECK-LABEL: name: select_sge
+    ; CHECK:      CMP
+    ; CHECK-NEXT: CMPC
+    ; CHECK-NEXT: SELECT_FLAGS_GPR [[A:%[0-9]+]], [[B:%[0-9]+]], {{[0-9]+}}, implicit $sr
+    %0:gprbank(s32) = COPY $r1
+    %1:gprbank(s32) = COPY $r2
+    %2:gprbank(s32) = COPY $r3
+    %3:gprbank(s32) = COPY $r4
+    %4:gprbank(s32) = G_ICMP_PAIR intpred(sge), %0(s32), %1(s32), %2(s32), %3(s32)
+    %5:gprbank(s32) = G_SELECT %4(s32), %0, %2
+    $r1 = COPY %5(s32)
+    RET implicit $r1
+...

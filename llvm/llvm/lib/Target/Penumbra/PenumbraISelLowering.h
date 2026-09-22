@@ -32,6 +32,13 @@ public:
   // SELECT_CC diamond instead of materialising both booleans into GPRs.
   bool preferSelectsOverBooleanArithmetic(EVT VT) const override;
 
+  // Known bits of the target generic opcodes: G_ICMP_PAIR is a 0/1 boolean.
+  void computeKnownBitsForTargetInstr(GISelValueTracking &Analysis, Register R,
+                                      KnownBits &Known,
+                                      const APInt &DemandedElts,
+                                      const MachineRegisterInfo &MRI,
+                                      unsigned Depth = 0) const override;
+
   // Jump table encoding: always use label differences.
   // This avoids relocations, works at any load address (PIC/PIE/static),
   // and enables future optimization to 16-bit entries.

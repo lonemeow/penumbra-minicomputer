@@ -16,6 +16,7 @@
 #include "llvm/CodeGen/TargetOpcodes.h"
 #include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/KnownBits.h"
 
 using namespace llvm;
 
@@ -62,6 +63,15 @@ PenumbraISelLowering::PenumbraISelLowering(const TargetMachine &TM,
 
 bool PenumbraISelLowering::preferSelectsOverBooleanArithmetic(EVT) const {
   return true;
+}
+
+void PenumbraISelLowering::computeKnownBitsForTargetInstr(
+    GISelValueTracking &Analysis, Register R, KnownBits &Known,
+    const APInt &DemandedElts, const MachineRegisterInfo &MRI,
+    unsigned Depth) const {
+  const MachineInstr *MI = MRI.getVRegDef(R);
+  if (MI && MI->getOpcode() == Penumbra::G_ICMP_PAIR)
+    Known.Zero.setBitsFrom(1);
 }
 
 unsigned PenumbraISelLowering::getJumpTableEncoding() const {
@@ -205,12 +215,12 @@ bool PenumbraISelLowering::shouldLocalize(
   return TargetLowering::shouldLocalize(MI, TTI);
 }
 
-// Expand SELECT_GPR / SELECT_CC_GPR pseudo into a conditional-branch diamond.
+// Expand a SELECT_* pseudo into a conditional-branch diamond.
 //
 // After expansion (three blocks):
 //   thisMBB:
 //     ... preceding instructions ...
-//     TEST/CMP (set flags)
+//     TEST/CMP (set flags; none for SELECT_FLAGS_GPR, whose are already set)
 //     Bcc tailMBB           ; condition true → trueval wins
 //   falseMBB:               ; fall-through (condition false)
 //     B tailMBB
@@ -222,7 +232,8 @@ PenumbraISelLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
                                                    MachineBasicBlock *MBB) const {
   unsigned Opc = MI.getOpcode();
   assert((Opc == Penumbra::SELECT_GPR || Opc == Penumbra::SELECT_CC_GPR ||
-          Opc == Penumbra::SELECT_CCi_GPR) &&
+          Opc == Penumbra::SELECT_CCi_GPR ||
+          Opc == Penumbra::SELECT_FLAGS_GPR) &&
          "Unexpected custom inserter instruction");
 
   MachineFunction *MF = MBB->getParent();
@@ -271,6 +282,10 @@ PenumbraISelLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
           .addImm(MI.getOperand(4).getImm());
     unsigned BrOpc = MI.getOperand(5).getImm();
     BuildMI(MBB, DL, TII.get(BrOpc)).addMBB(TailMBB);
+  } else if (Opc == Penumbra::SELECT_FLAGS_GPR) {
+    // SELECT_FLAGS_GPR: operands are dst, trueval, falseval, cc.  The flags
+    // were set by the instructions ahead of it, which stay in thisMBB.
+    BuildMI(MBB, DL, TII.get(MI.getOperand(3).getImm())).addMBB(TailMBB);
   } else {
     // SELECT_GPR: operands are dst, trueval, falseval, cond.  Only bit 0 of
     // cond is meaningful — a boolean reaching here through `G_ANYEXT` of a
