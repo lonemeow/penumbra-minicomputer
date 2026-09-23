@@ -119,8 +119,8 @@ SDRAM controller just needs to compare incoming row+bank against the
 currently open row before deciding whether to ACTIVATE.
 
 On the internal synchronous bus (FPGA fabric), the equivalent is:
-the cache keeps `i_re` asserted and increments the address after each
-`!o_busy` cycle.  The SDRAM controller sees the next request arrive
+the cache keeps `i_re` asserted and increments the address in the
+cycle after each `ack`.  The SDRAM controller sees the next request arrive
 immediately after the previous one completes.
 
 ## Recommended Path

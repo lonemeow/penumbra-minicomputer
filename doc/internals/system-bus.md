@@ -62,4 +62,7 @@ watchdog covers the external bus as well; the board sets
   strobe dropped before its ack.
 - **Variable-latency devices** decide their own ack from their own
   sequencer, under the same
-  [slave obligations](../hardware/bus-protocol.md#slave-obligations).
+  [slave obligations](../hardware/bus-protocol.md#slave-obligations):
+  the SDRAM adapter acks from the state that presents each word or
+  releases each write, and the USB host controller's register tier
+  from the end of its DATA byte sequence.

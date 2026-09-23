@@ -33,7 +33,7 @@ module sdram_adapter_test (
     input  logic        i_we,
     input  logic        i_re,
     output logic [31:0] o_rdata,
-    output logic        o_busy,
+    output logic        o_ack,
 
     // ── Mock-memory controls ──────────────────────────────────
     // Per-request response latency in cycles (clamped to ≥1).
@@ -92,7 +92,7 @@ module sdram_adapter_test (
         .i_we          (i_we),
         .i_re          (i_re),
         .o_rdata       (o_rdata),
-        .o_busy        (o_busy),
+        .o_ack         (o_ack),
         .o_req_valid   (req_valid),
         .o_req_we      (req_we),
         .o_req_addr    (req_addr),

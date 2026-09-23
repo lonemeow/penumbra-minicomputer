@@ -534,7 +534,7 @@ module ulx3s_penumbra1_top (
     // ── SDRAM (system RAM) ──────────────────────────────────
     logic        ram_sel;
     logic [31:0] ram_rdata_raw;
-    logic        ram_busy_raw;
+    logic        ram_ack;
 
     bus_devsel #(.BASE(RAM_BASE), .SIZE(SDRAM_BYTES))
         u_ram_sel (.i_addr(mem_addr), .o_sel(ram_sel));
@@ -568,7 +568,7 @@ module ulx3s_penumbra1_top (
         .i_we            (mem_we & ram_sel),
         .i_re            (mem_re & ram_sel),
         .o_rdata         (ram_rdata_raw),
-        .o_busy          (ram_busy_raw),
+        .o_ack           (ram_ack),
         .o_phy_cmd       (sdram_phy_cmd),
         .o_phy_cke       (sdram_phy_cke),
         .o_phy_a         (sdram_phy_a),
@@ -1041,8 +1041,7 @@ module ulx3s_penumbra1_top (
 
     // ── Bus response fabric ─────────────────────────────────
     // One slot per slave: its select (its own decode), its ack and
-    // its read data. RAM reports completion as a busy-drop, so its
-    // ack is its held strobe on a busy-low cycle.
+    // its read data.
     localparam int SLV_RAM   = 0;
     localparam int SLV_ROM   = 1;
     localparam int SLV_UART  = 2;
@@ -1052,15 +1051,12 @@ module ulx3s_penumbra1_top (
     localparam int SLV_AUDIO = 6;
     localparam int NUM_SLV   = 7;
 
-    logic                     mem_strobe;
     logic [NUM_SLV-1:0]       slv_sel;
     logic [NUM_SLV-1:0]       slv_ack;
     logic [NUM_SLV-1:0][31:0] slv_rdata;
 
-    assign mem_strobe = mem_re | mem_we;
-
     assign slv_sel[SLV_RAM]     = ram_sel;
-    assign slv_ack[SLV_RAM]     = mem_strobe & ram_sel & ~ram_busy_raw;
+    assign slv_ack[SLV_RAM]     = ram_ack;
     assign slv_rdata[SLV_RAM]   = ram_rdata_raw;
 
     assign slv_sel[SLV_ROM]     = rom_sel;

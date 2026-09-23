@@ -50,10 +50,11 @@ static bool do_write(Vsdram_sim* d, uint32_t addr, uint32_t wdata, uint8_t be) {
     d->i_addr = addr; d->i_wdata = wdata; d->i_byte_en = be;
     d->i_we = 1; d->i_re = 0; d->eval();
     int w = 0;
-    while (d->o_busy) {
+    do {
         tick(d);
         if (++w > 4000) { printf("  [FAIL] write @0x%08X stuck\n", addr); errors++; d->i_we = 0; return false; }
-    }
+    } while (!d->o_ack);
+    tick(d);                  // ack cycle, strobe held
     d->i_we = 0; tick(d);
     return true;
 }
@@ -69,21 +70,18 @@ static uint32_t rnd() { lcg = lcg * 1664525u + 1013904223u; return lcg; }
 // PRESENT->BEGIN fast path, exactly how fill_sequencer streams a line).
 // No data check: the point is to advance the FSM and leave a *fresh*,
 // full-latency prefetch for (start+len) in flight when i_re drops.
-// Sampling-proof advance: wait for o_busy high (started) then low
-// (done) per word.
+// Each word is held through its ack cycle and the next presented in
+// the cycle after, as a streaming master does.
 static void drive_run(Vsdram_sim* d, int start, int len) {
     int waited = 0;
     for (int k = 0; k < len; k++) {
         d->i_addr = (uint32_t)(start + k) * 4u;
         d->i_re = 1; d->i_we = 0;
-        d->eval();
-        bool seen = false;
-        for (;;) {
+        do {
             tick(d);
-            if (d->o_busy) seen = true;
-            else if (seen) break;
             if (++waited > 12000) { printf("  [FAIL] run stalled @word %d\n", start + k); errors++; d->i_re = 0; return; }
-        }
+        } while (!d->o_ack);
+        tick(d);              // ack cycle, request held
     }
     d->i_re = 0; tick(d);     // drop i_re: fresh spec for (start+len) now in flight
 }
@@ -94,11 +92,12 @@ static void drive_run(Vsdram_sim* d, int start, int len) {
 static void read_check(Vsdram_sim* d, int word) {
     d->i_addr = (uint32_t)word * 4u; d->i_re = 1; d->i_we = 0; d->eval();
     int w = 0;
-    while (d->o_busy) {
+    do {
         tick(d);
         if (++w > 12000) { printf("  [FAIL] read @word %d stuck\n", word); errors++; d->i_re = 0; return; }
-    }
+    } while (!d->o_ack);
     uint32_t got = d->o_rdata;
+    tick(d);                  // ack cycle, strobe held
     if (got != shadow[word]) {
         printf("  [FAIL] read @0x%08X got 0x%08X want 0x%08X\n",
                (unsigned)word * 4u, got, shadow[word]);

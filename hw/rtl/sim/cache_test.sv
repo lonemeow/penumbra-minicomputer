@@ -43,7 +43,7 @@ module cache_test
     input  logic [31:0] i_dbg_mem_wdata,
     input  logic        i_dbg_mem_we,
     output logic [31:0] o_dbg_mem_rdata,
-    output logic        o_dbg_mem_busy
+    output logic        o_dbg_mem_ack
 );
 
     // ── Cache ↔ memory bus ─────────────────────────────────
@@ -52,6 +52,7 @@ module cache_test
     logic        mem_we, mem_re;
     logic [31:0] mem_rdata;
     logic        mem_busy;
+    logic        mem_ack;
 
     cache #(
         .NUM_SETS   (NUM_SETS),
@@ -114,15 +115,19 @@ module cache_test
         .i_we      (mux_we),
         .i_re      (mux_re),
         .o_rdata   (mem_rdata),
-        .o_busy    (mem_busy)
+        .o_ack     (mem_ack)
     );
+
+    // The cache's back side is a stall port: busy until the ack
+    // (doc/internals/cpu-bus.md, "CPU Memory Port").
+    assign mem_busy = (mux_re | mux_we) & ~mem_ack;
 
     // Debug read: always available (simple_mem reads every cycle)
     assign o_dbg_mem_rdata = mem_rdata;
-    // Expose simple_mem's busy so the C++ helper can hold i_dbg_mem_we
-    // until the write commits (per the master-holds-strobes contract
-    // enforced by simple_mem's assertion).
-    assign o_dbg_mem_busy  = mem_busy;
+    // Expose simple_mem's ack so the C++ helper can hold i_dbg_mem_we
+    // through the write's ack cycle (per the master-holds-strobes
+    // contract enforced by simple_mem's assertion).
+    assign o_dbg_mem_ack   = mem_ack;
 
 endmodule
 

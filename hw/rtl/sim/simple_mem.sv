@@ -2,8 +2,8 @@
 //
 // Parameterizable size, word-addressed. Initialized to zero (matches
 // real hardware where RAM content is undefined at power-on).
-// Configurable read and write latency via parameters.
-// Provides busy signal for the STALL mechanism.
+// Configurable read and write latency via parameters; each access is
+// acknowledged once its latency has elapsed.
 //
 // Addresses wrap modulo MEM_WORDS so software can probe RAM size
 // by writing/reading at power-of-two boundaries.
@@ -12,8 +12,8 @@
 // Reads always return the full 32-bit word — byte extraction
 // is done by the CPU datapath.
 //
-// Read data is poisoned (0xDEAD_BEEF) while busy is asserted to
-// catch any logic that samples data before the access completes.
+// Read data is poisoned (0xDEAD_BEEF) outside the ack cycle to catch
+// any logic that samples data before the access completes.
 //
 // In the real SoC this gets replaced by the cache ↔ bus path.
 
@@ -34,8 +34,8 @@ module simple_mem
     input  logic [3:0]  i_byte_en,  // Per-byte write enables (active high)
     input  logic        i_we,       // Write enable (data access)
     input  logic        i_re,       // Read enable (data access)
-    output logic [31:0] o_rdata,    // Read data (always valid, 1-cycle latency)
-    output logic        o_busy      // Access in progress (for STALL)
+    output logic [31:0] o_rdata,    // Read data, valid in the ack cycle
+    output logic        o_ack
 );
 
     localparam ADDR_BITS = $clog2(MEM_WORDS);
@@ -61,9 +61,9 @@ module simple_mem
     logic [3:0]           latched_byte_en;
 
     // ── Synchronous write (per-byte enables) ────────────────
-    // Write commits on the cycle when busy deasserts (last cycle
-    // of the access), not on the first posedge. This models real
-    // SDRAM write latency and ensures the STALL path is exercised.
+    // Write commits in the ack cycle (the last cycle of the access),
+    // not on the first posedge. This models real SDRAM write latency
+    // and exercises the master's wait for the ack.
     logic write_commit;
 
     always_ff @(posedge i_clk) begin
@@ -77,31 +77,30 @@ module simple_mem
 
     // ── Synchronous read ──────────────────────────────────
     // The internal register always samples the addressed word.
-    // Output is poisoned while busy to catch logic that reads
-    // before the access completes (fetch path, sysreg mux, etc.).
+    // Output is poisoned outside the ack cycle to catch logic that
+    // reads before the access completes (fetch path, sysreg mux, etc.).
     logic [31:0] rdata_reg;
     always_ff @(posedge i_clk) begin
         rdata_reg <= mem[word_addr];
     end
-    assign o_rdata = o_busy ? 32'hDEAD_BEEF : rdata_reg;
+    assign o_rdata = o_ack ? rdata_reg : 32'hDEAD_BEEF;
 
-    // ── Busy counter ──────────────────────────────────────
-    // Counts up from 1 to target latency. Access completes when
-    // busy_count reaches target. busy is combinational — asserted
-    // on the very first cycle of a request (matching the original
-    // 1-cycle protocol the sequencer expects).
+    // ── Latency counter ───────────────────────────────────
+    // Counts up from 1 to target latency. The access completes — and is
+    // acknowledged — when busy_count reaches target, a decode of the
+    // counter's flops, so never in the presentation cycle.
     //
-    // Timing for READ_LATENCY=1 (original behavior):
-    //   Cycle 0: i_re, in_access=0 → busy=1 (combinational)
+    // Timing for READ_LATENCY=1:
+    //   Cycle 0: i_re, in_access=0 → no ack
     //            posedge: in_access=1, count=1, target=1
-    //   Cycle 1: count(1)>=target(1) → busy=0, rdata valid
+    //   Cycle 1: count(1)>=target(1) → ack, rdata valid
     //            posedge: in_access=0, count=0
     //
     // Timing for READ_LATENCY=4:
-    //   Cycle 0: i_re, in_access=0 → busy=1 (combinational)
+    //   Cycle 0: i_re, in_access=0 → no ack
     //            posedge: in_access=1, count=1, target=4
-    //   Cycle 1–3: count < target → busy=1, rdata poisoned
-    //   Cycle 4: count(4)>=target(4) → busy=0, rdata valid
+    //   Cycle 1–3: count < target → no ack, rdata poisoned
+    //   Cycle 4: count(4)>=target(4) → ack, rdata valid
     //            posedge: in_access=0, count=0
     localparam MAX_LATENCY = (READ_LATENCY > WRITE_LATENCY)
                            ? READ_LATENCY : WRITE_LATENCY;
@@ -137,16 +136,14 @@ module simple_mem
         end
     end
 
-    // Combinational busy: asserted on the first request cycle
-    // (in_access still 0) AND while counting hasn't reached target.
     logic access_complete;
     assign access_complete = in_access && (busy_count >= target);
-    assign o_busy          = (i_re || i_we) && !access_complete;
+    assign o_ack           = access_complete;
     assign write_commit    = access_complete && is_write;
 
     // ── Contract enforcement ──────────────────────────────
     // Per doc/hardware/bus-protocol.md "Sync-Bus Mapping":
-    // the master must hold re/we asserted until the busy-drop
+    // the master must hold re/we asserted through the ack
     // cycle.  simple_mem itself can latch on the first cycle and
     // run autonomously, but strict slaves (e.g. sdram_bus_adapter)
     // can't — so let simple_mem mirror the strict contract here.
@@ -154,9 +151,9 @@ module simple_mem
     // for one cycle pass simple_mem-backed unit tests but fail
     // against real slaves in integration.
     always_ff @(posedge i_clk) begin
-        if (!i_rst && in_access && !access_complete) begin
+        if (!i_rst && in_access) begin
             assert (is_write ? i_we : i_re)
-                else $error("simple_mem: master dropped %s mid-access at addr 0x%08x",
+                else $error("simple_mem: master dropped %s before the ack at addr 0x%08x",
                             is_write ? "we" : "re",
                             {latched_addr, 2'b00});
         end

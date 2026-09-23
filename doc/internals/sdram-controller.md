@@ -63,7 +63,7 @@ that drove the rewrite, not problems with the current controller.
                  ┌──────── system clock domain ────────┐  ┌──── SDRAM clock domain ────┐
                  │                                     │  │                            │
   CPU ─bus──► sdram_bus_adapter ──► sdram_cdc ─async──► sdram_ctrl ──phy── sdram_phy_*
-                 │   (sync re/we/busy ↔                │  │   (FSM,                    │
+                 │   (sync re/we/ack ↔                 │  │   (FSM,                    │
                  │    one-word req/ack)                │  │   timing, init, refresh)   │
                  └─────────────────────────────────────┘  └────────────────────────────┘
                                                                           │
@@ -97,7 +97,7 @@ hw/rtl/io/sdram/
 ├── sdram_phy_ecp5.sv         ECP5 PHY: IOB flops, ODDRX1F clock fwd, tristate DQ
 ├── sdram_phy_sim.sv          Plain-SystemVerilog PHY for Verilator
 ├── sdram_cdc.sv              Async req/ack CDC bridge (added in step 4)
-├── sdram_bus_adapter.sv      Sync bus i_re/i_we/o_busy ↔ controller req/ack
+├── sdram_bus_adapter.sv      Sync bus i_re/i_we/o_ack ↔ controller req/ack
 └── sdram_stack.sv            Adapter → CDC → controller as one unit; integrations add the PHY
 
 hw/rtl/sim/
@@ -301,7 +301,7 @@ etc., would need their own models).
 
 Maps the system bus (Penumbra Bus
 [sync form](../hardware/bus-protocol.md#sync-bus-mapping):
-`i_re`/`i_we`/`o_busy`) onto the controller's `req`/`rsp` interface.
+`i_re`/`i_we`/`o_ack`) onto the controller's `req`/`rsp` interface.
 Single-word transactions on the bus side, same back-side contract as
 `simple_mem`/`boot_rom` — drop-in replacement at the SDRAM
 region.
@@ -323,10 +323,10 @@ Internally pipelined for cache fills:
   serially in push order.
 - **Write-accept release.** Writes don't enter `WAIT_RSP`: once the
   CDC accepts a write, ordering is locked (FIFO + serial controller),
-  so the bus drops `o_busy` immediately rather than waiting for an
-  rsp that the controller doesn't generate for writes. The CDC also
-  gates `rsp_valid` pulses to reads, so write completion can't
-  spuriously feed the response handler.
+  so the adapter acks as soon as the CDC accepts it, rather than
+  waiting for an rsp that the controller doesn't generate for writes.
+  The CDC also gates `rsp_valid` pulses to reads, so write completion
+  can't spuriously feed the response handler.
 
 The adapter still presents a single-word contract upward, so the cache
 and other masters see no protocol change — burst-fill speedup comes

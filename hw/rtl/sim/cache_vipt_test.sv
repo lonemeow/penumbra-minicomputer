@@ -77,7 +77,7 @@ module cache_vipt_test
     input  logic [31:0] i_dbg_mem_wdata,
     input  logic        i_dbg_mem_we,
     output logic [31:0] o_dbg_mem_rdata,
-    output logic        o_dbg_mem_busy
+    output logic        o_dbg_mem_ack
 );
 
     // ── Cache → arbiter (D-port) ───────────────────────────
@@ -129,6 +129,7 @@ module cache_vipt_test
     logic        arb_mem_we, arb_mem_re;
     logic [31:0] arb_mem_rdata;
     logic        arb_mem_busy;
+    logic        mem_ack;
 
     // verilator lint_off PINCONNECTEMPTY
     /* verilator lint_off UNUSEDSIGNAL */
@@ -203,14 +204,18 @@ module cache_vipt_test
         .i_we      (mux_we),
         .i_re      (mux_re),
         .o_rdata   (arb_mem_rdata),
-        .o_busy    (arb_mem_busy)
+        .o_ack     (mem_ack)
     );
 
+    // The cache's back side is a stall port: busy until the ack
+    // (doc/internals/cpu-bus.md, "CPU Memory Port").
+    assign arb_mem_busy = (mux_re | mux_we) & ~mem_ack;
+
     assign o_dbg_mem_rdata = arb_mem_rdata;
-    // Expose simple_mem's busy so the C++ helper can hold i_dbg_mem_we
-    // until the write commits (per the master-holds-strobes contract
-    // enforced by simple_mem's assertion).
-    assign o_dbg_mem_busy  = arb_mem_busy;
+    // Expose simple_mem's ack so the C++ helper can hold i_dbg_mem_we
+    // through the write's ack cycle (per the master-holds-strobes
+    // contract enforced by simple_mem's assertion).
+    assign o_dbg_mem_ack   = mem_ack;
 
 endmodule
 

@@ -1,8 +1,8 @@
 // SDRAM bus adapter — speculative-prefetch version (Stage B).
 //
-// Translates the project's standard synchronous device-bus interface
-// (i_re/i_we/o_busy/o_rdata, used by simple_mem, boot_rom)
-// into the controller's req_valid/req_ready/rsp_valid handshake.
+// Translates the sync-form Penumbra Bus slave interface
+// (i_re/i_we/o_ack/o_rdata) into the controller's
+// req_valid/req_ready/rsp_valid handshake.
 // Drop-in replacement for `simple_mem` at the SDRAM region.
 //
 // On every accepted read request, the adapter speculatively pushes a
@@ -65,21 +65,22 @@
 //   That race manifested as the long-running userspace corruption bug
 //   documented in `doc/bus-arbiter-userspace-bug.md`.
 //
-// o_busy contract (per `hw/CLAUDE.md` § Memory Access):
-//   • o_busy is high while a request is being served.
-//   • o_busy drops on the *same* cycle that o_rdata is valid (reads)
-//     or that the write data has been committed (writes).
-//   • The cache stalls while o_busy is high; on the cycle it goes
-//     low, the cache latches o_rdata and de-asserts i_re/i_we.
+// o_ack contract (doc/hardware/bus-protocol.md, "Sync handshake"):
+//   • o_ack is high for the one cycle an access completes: o_rdata
+//     valid (reads), or the write accepted by the CDC (writes).
+//   • It decodes the FSM state alone (ADP_PRESENT), so no path runs
+//     from a request to its own completion within a cycle.
+//   • The master holds its request through that cycle; a strobe still
+//     held in the cycle after is its next access (PRESENT→BEGIN).
 //
 // State machine:
-//   ADP_IDLE       → no transaction in flight; o_busy = (i_re|i_we)
+//   ADP_IDLE       → no transaction in flight
 //   ADP_BEGIN      → cache request live; deciding whether to consume
 //                    spec buffer, wait for in-flight spec, or push real
 //   ADP_WAIT_RSP   → real READ request accepted, waiting for the
 //                    controller's read response (rsp_valid)
-//   ADP_PRESENT    → drop o_busy, present rdata for one cycle so the
-//                    cache can sample it
+//   ADP_PRESENT    → raise o_ack, present rdata for one cycle so the
+//                    master can sample it
 //
 // Writes never enter ADP_WAIT_RSP — once the CDC accepts a write into
 // its slot, ordering is locked (CDC FIFO + serial controller), so any
@@ -104,7 +105,7 @@ module sdram_bus_adapter (
     input  logic        i_we,
     input  logic        i_re,
     output logic [31:0] o_rdata,
-    output logic        o_busy,
+    output logic        o_ack,
 
     // ── Controller-facing handshake ──────────────────────────
     output logic        o_req_valid,
@@ -174,10 +175,9 @@ module sdram_bus_adapter (
     assign o_rsp_ready   = 1'b1;
     assign o_rdata       = rdata_latched;
 
-    // o_busy: high when a transaction is mid-flight or queued for push.
-    assign o_busy =
-        (state == ADP_BEGIN) || (state == ADP_WAIT_RSP) ||
-        ((state == ADP_IDLE) && (i_re || i_we));
+    // o_ack: an access completes in PRESENT, the one state that presents
+    // its read data or releases its write.
+    assign o_ack = (state == ADP_PRESENT);
 
     // ── Tag FIFO push/pop signals ──
     wire pop_event       = (i_rsp_valid || (i_done && !i_rsp_valid)) && (tag_count > 0);
@@ -292,7 +292,7 @@ module sdram_bus_adapter (
                         state             <= ADP_PRESENT;
                     end else if (spec_hit_in_flight) begin
                         // Spec is in flight for this exact address.  Stay
-                        // in BEGIN; o_busy stays high.  When the response
+                        // in BEGIN, not yet acking.  When the response
                         // arrives, the response handler buffers it; next
                         // cycle BEGIN takes the spec_hit_buffered branch.
                     end else if (push_real_event) begin

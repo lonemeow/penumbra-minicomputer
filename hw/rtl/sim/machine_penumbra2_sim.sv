@@ -92,7 +92,7 @@ module machine_penumbra2_sim
     // by the full v2 SDRAM stack (sdram_sim) and the ROM region by boot_rom, so
     // — unlike the old single compressed memory — each owns its own decode.
     logic [31:0] ram_rdata, rom_rdata, uart_rdata;
-    logic        ram_busy, rom_ack, uart_ack, uart_irq;
+    logic        ram_ack, rom_ack, uart_ack, uart_irq;
     logic        ram_sel, rom_sel, uart_sel;
     logic        irq_combined;
 
@@ -163,23 +163,19 @@ module machine_penumbra2_sim
 
     // ── Bus response fabric ─────────────────────────────────
     // One slot per slave: its select (its own decode), its ack and
-    // its read data. RAM reports completion as a busy-drop, so its
-    // ack is its held strobe on a busy-low cycle.
+    // its read data.
     localparam int SLV_RAM  = 0;
     localparam int SLV_ROM  = 1;
     localparam int SLV_UART = 2;
     localparam int SLV_SPI  = 3;
     localparam int NUM_SLV  = 4;
 
-    logic                     bus_strobe;
     logic [NUM_SLV-1:0]       slv_sel;
     logic [NUM_SLV-1:0]       slv_ack;
     logic [NUM_SLV-1:0][31:0] slv_rdata;
 
-    assign bus_strobe = bus_re | bus_we;
-
     assign slv_sel[SLV_RAM]    = ram_sel;
-    assign slv_ack[SLV_RAM]    = bus_strobe & ram_sel & ~ram_busy;
+    assign slv_ack[SLV_RAM]    = ram_ack;
     assign slv_rdata[SLV_RAM]  = ram_rdata;
 
     assign slv_sel[SLV_ROM]    = rom_sel;
@@ -215,7 +211,7 @@ module machine_penumbra2_sim
         .i_clk(i_clk), .i_sdram_clk(i_sdram_clk), .i_rst(i_rst),
         .i_addr(bus_addr), .i_wdata(bus_wdata), .i_byte_en(bus_byte_en),
         .i_we(bus_we & ram_sel), .i_re(bus_re & ram_sel),
-        .o_rdata(ram_rdata), .o_busy(ram_busy)
+        .o_rdata(ram_rdata), .o_ack(ram_ack)
     );
 
     // ── Boot ROM: holds the +rom_hex program at ROM_BASE (0xFFFF_0000).

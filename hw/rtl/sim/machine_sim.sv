@@ -246,7 +246,7 @@ module machine_sim
     // ── RAM ─────────────────────────────────────────────────
     logic        ram_sel;
     logic [31:0] ram_rdata_raw;
-    logic        ram_busy_raw;
+    logic        ram_ack;
 
     bus_devsel #(.BASE(RAM_BASE), .SIZE(32'(RAM_WORDS * 4)))
         u_ram_sel (.i_addr(mem_addr), .o_sel(ram_sel));
@@ -264,7 +264,7 @@ module machine_sim
         .i_we      (mem_we & ram_sel),
         .i_re      (mem_re & ram_sel),
         .o_rdata   (ram_rdata_raw),
-        .o_busy    (ram_busy_raw)
+        .o_ack     (ram_ack)
     );
 
     // ── Boot ROM ────────────────────────────────────────────
@@ -510,8 +510,7 @@ module machine_sim
 
     // ── Bus response fabric ─────────────────────────────────
     // One slot per slave: its select (its own decode), its ack and
-    // its read data. RAM reports completion as a busy-drop, so its
-    // ack is its held strobe on a busy-low cycle.
+    // its read data.
     localparam int SLV_RAM  = 0;
     localparam int SLV_ROM  = 1;
     localparam int SLV_UART = 2;
@@ -519,15 +518,12 @@ module machine_sim
     localparam int SLV_USB  = 4;
     localparam int NUM_SLV  = 5;
 
-    logic                     mem_strobe;
     logic [NUM_SLV-1:0]       slv_sel;
     logic [NUM_SLV-1:0]       slv_ack;
     logic [NUM_SLV-1:0][31:0] slv_rdata;
 
-    assign mem_strobe = mem_re | mem_we;
-
     assign slv_sel[SLV_RAM]    = ram_sel;
-    assign slv_ack[SLV_RAM]    = mem_strobe & ram_sel & ~ram_busy_raw;
+    assign slv_ack[SLV_RAM]    = ram_ack;
     assign slv_rdata[SLV_RAM]  = ram_rdata_raw;
 
     assign slv_sel[SLV_ROM]    = rom_sel;

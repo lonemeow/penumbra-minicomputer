@@ -38,7 +38,6 @@ module autoconfig_test
     logic [3:0]  dev0_byte_en;
     logic        dev0_we, dev0_re;
     logic [31:0] dev0_rdata;
-    logic        dev0_busy;
     logic        dev0_ack;
     logic [31:0] ac0_rdata;
     logic        ac0_ack, ac0_sel;
@@ -82,7 +81,7 @@ module autoconfig_test
         .i_we      (dev0_we),
         .i_re      (dev0_re),
         .o_rdata   (dev0_rdata),
-        .o_busy    (dev0_busy)
+        .o_ack     (dev0_ack)
     );
 
     // ── Device 1: "Exp. RAM" (CLASS_MEMORY, 64 bytes) ──────
@@ -90,7 +89,6 @@ module autoconfig_test
     logic [3:0]  dev1_byte_en;
     logic        dev1_we, dev1_re;
     logic [31:0] dev1_rdata;
-    logic        dev1_busy;
     logic        dev1_ack;
     logic [31:0] ac1_rdata;
     logic        ac1_ack, ac1_sel;
@@ -134,13 +132,8 @@ module autoconfig_test
         .i_we      (dev1_we),
         .i_re      (dev1_re),
         .o_rdata   (dev1_rdata),
-        .o_busy    (dev1_busy)
+        .o_ack     (dev1_ack)
     );
-
-    // simple_mem reports completion as a busy-drop; its ack is its held
-    // strobe on a busy-low cycle.
-    assign dev0_ack = (dev0_re | dev0_we) & ~dev0_busy;
-    assign dev1_ack = (dev1_re | dev1_we) & ~dev1_busy;
 
     // ── Merge the responses: read data gated by each wrapper's ack ──
     assign o_rdata = (ac0_ack ? ac0_rdata : 32'b0) |

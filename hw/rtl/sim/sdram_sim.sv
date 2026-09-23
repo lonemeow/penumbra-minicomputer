@@ -31,7 +31,7 @@ module sdram_sim
     input  logic        i_we,
     input  logic        i_re,
     output logic [31:0] o_rdata,
-    output logic        o_busy
+    output logic        o_ack
 );
 
     // Chip preset.  Sim sites override only T_POWERUP at the stack
@@ -65,7 +65,7 @@ module sdram_sim
         .i_we            (i_we),
         .i_re            (i_re),
         .o_rdata         (o_rdata),
-        .o_busy          (o_busy),
+        .o_ack           (o_ack),
         .o_phy_cmd       (ctrl_cmd),
         .o_phy_cke       (ctrl_cke),
         .o_phy_a         (ctrl_a),
@@ -145,21 +145,16 @@ module sdram_sim
     // Windowed to the low region (where vectors, handlers, kernel and
     // benchmark code/data/stack live) to keep the shadow light; the
     // per-byte written mask means never-written bytes are not compared.
-    // The transaction address is captured while o_busy is high so the
-    // adapter's PRESENT->BEGIN address change cannot misattribute a
-    // completion.
+    // The master holds its request through the ack cycle, so the access
+    // completing is the one on the bus — nothing needs capturing.
     // ══════════════════════════════════════════════════════════
     localparam int CHK_WORDS = 512*1024;             // low 2 MiB
 
     logic [31:0] chk_shadow [CHK_WORDS];
     logic [3:0]  chk_wmask  [CHK_WORDS];
-    logic [31:0] cap_addr, cap_wdata;
-    logic [3:0]  cap_byte_en;
-    logic        cap_we, cap_re, busy_q;
 
-    wire         cap_inrange = (cap_addr < (CHK_WORDS*4));
-    wire [18:0]  cap_word    = cap_addr[20:2];
-    wire         cap_done    = busy_q && !o_busy;     // busy 1->0 = this txn completed
+    wire         chk_inrange = (i_addr < (CHK_WORDS*4));
+    wire [18:0]  chk_word    = i_addr[20:2];
 
     // Free-running cycle counter — only to locate a violation in the log.
     logic [31:0] cyc_count;
@@ -172,28 +167,20 @@ module sdram_sim
 
     always_ff @(posedge i_clk) begin
         cyc_count <= cyc_count + 1;
-        busy_q    <= o_busy;
-        if (o_busy) begin
-            cap_addr    <= i_addr;
-            cap_wdata   <= i_wdata;
-            cap_byte_en <= i_byte_en;
-            cap_we      <= i_we;
-            cap_re      <= i_re;
-        end
 
-        if (!i_rst && cap_done && cap_inrange) begin
-            if (cap_we) begin
-                if (cap_byte_en[0]) chk_shadow[cap_word][ 7: 0] <= cap_wdata[ 7: 0];
-                if (cap_byte_en[1]) chk_shadow[cap_word][15: 8] <= cap_wdata[15: 8];
-                if (cap_byte_en[2]) chk_shadow[cap_word][23:16] <= cap_wdata[23:16];
-                if (cap_byte_en[3]) chk_shadow[cap_word][31:24] <= cap_wdata[31:24];
-                chk_wmask[cap_word] <= chk_wmask[cap_word] | cap_byte_en;
-            end else if (cap_re) begin
+        if (!i_rst && o_ack && chk_inrange) begin
+            if (i_we) begin
+                if (i_byte_en[0]) chk_shadow[chk_word][ 7: 0] <= i_wdata[ 7: 0];
+                if (i_byte_en[1]) chk_shadow[chk_word][15: 8] <= i_wdata[15: 8];
+                if (i_byte_en[2]) chk_shadow[chk_word][23:16] <= i_wdata[23:16];
+                if (i_byte_en[3]) chk_shadow[chk_word][31:24] <= i_wdata[31:24];
+                chk_wmask[chk_word] <= chk_wmask[chk_word] | i_byte_en;
+            end else if (i_re) begin
                 for (int b = 0; b < 4; b = b + 1)
-                    if (chk_wmask[cap_word][b] &&
-                        (o_rdata[b*8 +: 8] !== chk_shadow[cap_word][b*8 +: 8])) begin
+                    if (chk_wmask[chk_word][b] &&
+                        (o_rdata[b*8 +: 8] !== chk_shadow[chk_word][b*8 +: 8])) begin
                         $display("=== SDRAM STALE READ @0x%08x exp 0x%08x got 0x%08x (byte %0d, cyc %0d) ===",
-                                 cap_addr, chk_shadow[cap_word], o_rdata, b, cyc_count);
+                                 i_addr, chk_shadow[chk_word], o_rdata, b, cyc_count);
                         $fatal(1, "sdram_sim: stale read");
                     end
             end

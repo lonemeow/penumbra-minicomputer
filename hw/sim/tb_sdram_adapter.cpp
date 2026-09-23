@@ -51,9 +51,9 @@ static void reset(Vsdram_adapter_test* d) {
     tick(d);
 }
 
-// Issue a single read.  Holds i_re/i_addr until o_busy clears, samples
-// o_rdata on that cycle, then deasserts i_re for one cycle (so the
-// FSM drops out of PRESENT to IDLE).  Returns 0xFFFFFFFF on timeout.
+// Issue a single read.  Holds i_re/i_addr through the ack cycle,
+// samples o_rdata there, then deasserts i_re for one cycle so the FSM
+// returns to IDLE.  Returns 0xFFFFFFFF on timeout.
 //
 // `byte_en` defaults to 0xF (full word).  Override with a sub-word
 // mask to exercise the bus-protocol "byte_en is advisory on reads"
@@ -68,17 +68,18 @@ static uint32_t do_read(Vsdram_adapter_test* d, uint32_t addr,
     d->eval();
 
     int waited = 0;
-    while (d->o_busy) {
+    do {
         tick(d);
         if (++waited > timeout_cyc) {
-            printf("  [FAIL] %s addr=0x%08X — busy never cleared within %d cyc\n",
+            printf("  [FAIL] %s addr=0x%08X — no ack within %d cyc\n",
                    label, addr, timeout_cyc);
             errors++;
             d->i_re = 0;
             return 0xFFFFFFFFu;
         }
-    }
+    } while (!d->o_ack);
     uint32_t rd = d->o_rdata;
+    tick(d);  // ack cycle, strobe held
     // Release i_re so FSM returns to IDLE between transactions.
     d->i_re = 0;
     tick(d);
@@ -96,16 +97,17 @@ static bool do_write(Vsdram_adapter_test* d, uint32_t addr, uint32_t wdata,
     d->eval();
 
     int waited = 0;
-    while (d->o_busy) {
+    do {
         tick(d);
         if (++waited > timeout_cyc) {
-            printf("  [FAIL] %s addr=0x%08X — write busy never cleared within %d cyc\n",
+            printf("  [FAIL] %s addr=0x%08X — write not acked within %d cyc\n",
                    label, addr, timeout_cyc);
             errors++;
             d->i_we = 0;
             return false;
         }
-    }
+    } while (!d->o_ack);
+    tick(d);  // ack cycle, strobe held
     d->i_we = 0;
     tick(d);
     return true;
@@ -121,18 +123,11 @@ static void check_eq(uint32_t got, uint32_t want, const char* label) {
 }
 
 // Back-to-back burst — protocol per doc/hardware/bus-protocol.md
-// § Burst Transfers: master keeps req (i_re) asserted, changes addr
-// after each ack (o_busy↓), slave responds to each address
-// independently.  In the adapter this exercises PRESENT→BEGIN, the
-// fast path that lets the spec chain hide bus latency.
-//
-// Sampling timing is the trap: after observing o_busy=0 for word i,
-// updating i_addr to the next word, and re-evaluating, o_busy still
-// reads 0 (state is still PRESENT — the FSM hasn't seen the posedge
-// yet).  Sampling at that moment grabs stale o_rdata for word i-1.
-// The fix is to advance one clock between iterations so the FSM
-// commits PRESENT→BEGIN with the freshly-set address, then wait for
-// the new busy=0.
+// "Sync burst": the master keeps i_re asserted, holds each address
+// through its ack cycle and presents the next in the cycle after; the
+// slave responds to each address independently.  In the adapter this
+// exercises PRESENT→BEGIN, the fast path that lets the spec chain hide
+// bus latency.
 //
 // Returns false on timeout.
 static bool do_burst_read(Vsdram_adapter_test* d, const uint32_t* addrs,
@@ -144,11 +139,7 @@ static bool do_burst_read(Vsdram_adapter_test* d, const uint32_t* addrs,
         d->i_re = 1;
         d->i_we = 0;
         d->eval();
-        if (i > 0) {
-            // PRESENT→BEGIN: address already updated, advance cycle.
-            tick(d);
-        }
-        while (d->o_busy) {
+        do {
             tick(d);
             if (++waited > timeout_cyc) {
                 printf("  [FAIL] %s — burst stalled at word %d (addr=0x%08X)\n",
@@ -157,8 +148,9 @@ static bool do_burst_read(Vsdram_adapter_test* d, const uint32_t* addrs,
                 d->i_re = 0;
                 return false;
             }
-        }
+        } while (!d->o_ack);
         out_data[i] = d->o_rdata;
+        tick(d);  // ack cycle, request held; the next word follows
     }
     d->i_re = 0;
     tick(d);
@@ -182,7 +174,7 @@ static bool do_burst_read_gapped(Vsdram_adapter_test* d, const uint32_t* addrs,
         d->i_re = 1;
         d->i_we = 0;
         d->eval();
-        while (d->o_busy) {
+        do {
             tick(d);
             if (++waited > timeout_cyc) {
                 printf("  [FAIL] %s — gapped burst stalled at word %d (addr=0x%08X)\n",
@@ -191,8 +183,9 @@ static bool do_burst_read_gapped(Vsdram_adapter_test* d, const uint32_t* addrs,
                 d->i_re = 0;
                 return false;
             }
-        }
+        } while (!d->o_ack);
         out_data[i] = d->o_rdata;
+        tick(d);  // ack cycle, strobe held
         // Arbiter-style: release i_re for one cycle before next request.
         d->i_re = 0;
         tick(d);
@@ -340,7 +333,7 @@ static void test_e_bug_repro(Vsdram_adapter_test* d) {
     // correct data.  Without the fix, spec_in_flight stays asserted
     // forever (the spec response was misrouted to rdata_latched
     // instead of the buffer), so BEGIN spins on spec_hit_in_flight
-    // and o_busy never clears — do_read times out and FAILs here.
+    // and no ack ever comes — do_read times out and FAILs here.
     uint32_t r2 = do_read(d, 0x00050004, "RD 0x50004 (spec target)");
     check_eq(r2, expected_data(0x00050004), "(e) spec target");
 
@@ -571,14 +564,15 @@ static void test_l_latency_sweep(Vsdram_adapter_test* d) {
 // state the FSM happens to be in.  To exercise the coincident case
 // here, we exploit a different path: an LDW chain leaves a fresh
 // spec for A+8 in flight at the moment `do_read(A+4)` returns —
-// it was pushed on do_read's final tick.  With N=2 that spec's
+// it was pushed on do_read's ack-cycle tick, one tick before
+// do_read releases i_re and returns.  With N=3 that spec's
 // response is exactly one cycle from arriving, so we can time a
 // fresh request from IDLE to land state=BEGIN on the response
 // cycle and trigger the race deterministically.
 //
 // Cycle alignment (relative to mock_cycle right after do_read(A+4)
 // returns; call it K_push):
-//   • slot_q[0]={A+8, ready_at = K_push+N-1}.
+//   • slot_q[0]={A+8, ready_at = K_push+N-2}.
 //   • Cycle K_push: state=IDLE, mock_cycle=K_push, complete_now=0.
 //     We assert i_re=1, addr=B (B != A+8) and eval.
 //   • Tick #1 → edge K_push+1: FSM IDLE→BEGIN.  Post-edge:
@@ -599,11 +593,11 @@ static void test_m_resp_arrival_coincident_push(Vsdram_adapter_test* d) {
     printf("── (m) spec response coincident with push_real_event ──\n");
     reset(d);
 
-    // N=2 is the only latency where the alignment fits without
+    // N=3 is the only latency where the alignment fits without
     // padding ticks (response arrives exactly one cycle after
-    // do_read(A+4) returns).  Other latencies would need N-2 pad
+    // do_read(A+4) returns).  Other latencies would need N-3 pad
     // ticks between do_read and the i_re assertion.
-    const uint8_t N = 2;
+    const uint8_t N = 3;
     d->i_mock_latency = N;
     d->i_mock_stall = 0;
 
@@ -616,18 +610,18 @@ static void test_m_resp_arrival_coincident_push(Vsdram_adapter_test* d) {
 
     // Consume the buffer with LDW A+4.  This takes the
     // spec_hit_buffered branch, which queues a new spec for A+8.
-    // do_read's final tick (which drops i_re, transitioning
-    // PRESENT→IDLE) is also the cycle the queued spec push fires
-    // — so when this returns we have:
+    // The queued spec push fires on do_read's ack-cycle tick
+    // (PRESENT→BEGIN, i_re held); do_read then releases i_re and
+    // ticks once more (BEGIN→IDLE) — so when it returns we have:
     //   state=IDLE, spec_in_flight=1, spec_addr=A+8,
-    //   slot_q[0].ready_at = K_push + N - 1 = K_push + 1 (for N=2)
+    //   slot_q[0].ready_at = K_push + N - 2 = K_push + 1 (for N=3)
     // i.e. the spec response is exactly one tick away.
     uint32_t r2 = do_read(d, A + 4, "(m) LDW A+4 (consume buffer)");
     check_eq(r2, expected_data(A + 4), "(m) LDW A+4 hit buffered");
 
     // Sanity: spec must be in flight (not buffered, not idle) for
     // the alignment to work.  If it's not in flight, do_read's
-    // timing changed or N is not 2.
+    // timing changed or N is not 3.
     if (!d->o_dbg_spec_in_flight) {
         printf("  [FAIL] (m) spec not in flight after do_read(A+4) — "
                "test prerequisite not met\n");
@@ -685,16 +679,17 @@ static void test_m_resp_arrival_coincident_push(Vsdram_adapter_test* d) {
     // With B != A+8 the data check is a sanity check on the
     // post-race FSM, not the race itself.
     int waited = 0;
-    while (d->o_busy) {
+    while (!d->o_ack) {
         tick(d);
         if (++waited > 200) {
-            printf("  [FAIL] (m) busy never cleared after race cycle\n");
+            printf("  [FAIL] (m) no ack after race cycle\n");
             errors++;
             d->i_re = 0;
             return;
         }
     }
     uint32_t got_b = d->o_rdata;
+    tick(d);  // ack cycle, strobe held
     d->i_re = 0;
     tick(d);
     check_eq(got_b, expected_data(B), "(m) LDW B post-coincident-cycle");
