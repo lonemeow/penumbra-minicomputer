@@ -1103,38 +1103,21 @@ FPGA_AUDIO_TOPS = ulx3s_audio_test_top
 # distinct from its base. Resolution (NEXTPNR_SEED ?= …, below the TOP
 # derivation): an explicit NEXTPNR_SEED on the command line or environment
 # always wins; `NEXTPNR_SEED=` forces a random placement; a top with no
-# entry here behaves as before (no --seed passed).
-# A sweep is only valid for the CPU_HZ it ran at: the target reweights
-# nextpnr's per-domain criticality, and CLK_FREQ retunes every derived
-# divider, so seed rankings do not survive a retarget. Re-sweep after
-# moving CPU_HZ, not just after an RTL change.
+# entry here gets no --seed.
 #
-# Every pin below is chosen on the *worst* margin across all five
-# domains, not on the CPU clock: a seed clearing one constraint says
-# nothing about the rest, and hw/tools/seed-sweep.sh prints them all.
+# A pin is the seed with the widest *worst* margin across all five
+# domains in a hw/tools/seed-sweep.sh run, not the best CPU-clock one: a
+# seed clearing one constraint says nothing about the rest. The sweep
+# behind a pin belongs in the commit message that sets it.
 #
-# These were swept at AUDIO_CHANNELS=4.  A seed is a property of the
-# netlist, and the channel count changes the netlist, so a pin is only
-# valid for the configuration it was measured in — re-sweep after
-# moving AUDIO_CHANNELS just as after any other design change.
-#
-# gen1 clears all five on 7 seeds of 10.  Seed 1 holds 8.3% on the CPU
-# clock, 14% on the 60 MHz domain and 27% on the SDRAM one, the most
-# balanced in the sweep.  The audio floorplan does not reach this top,
-# so its numbers move only when the design does.
-#
-# gen2 clears every domain on 4: seed 1 holds 5.9% / 13% / 23% (CPU /
-# 60 MHz / SDRAM), then 6 at 4.6% and 9 at 2.6% on the CPU clock, and
-# 7 at 0.2% on the 60 MHz one.
-#
-# gen2.5 clears on 5, all on the CPU clock's own margin: seed 7 holds
-# 7.2%, then 0 and 5 at 3.0%; the other two clear by 1.7% or less.  The
-# audio device is floorplanned out of the CPU cone's columns, which
-# widened the seed distribution far more than it moved its mean
-# (doc/TODO/hw-core.md).
-DEFAULT_SEED_ulx3s_penumbra1_top   := 1
-DEFAULT_SEED_ulx3s_penumbra2_top   := 1
-DEFAULT_SEED_ulx3s_penumbra2_5_top := 7
+# A seed is a property of the netlist and its timing targets, so any
+# change to either invalidates every pin: an RTL change, a non-default
+# AUDIO_CHANNELS, or a new CPU_HZ, whose target reweights nextpnr's
+# per-domain criticality and whose CLK_FREQ retunes every derived
+# divider.
+DEFAULT_SEED_ulx3s_penumbra1_top   := 6
+DEFAULT_SEED_ulx3s_penumbra2_top   := 6
+DEFAULT_SEED_ulx3s_penumbra2_5_top := 12
 
 
 # BOARD/CORE porcelain → TOP derivation (CORE defaults to penumbra2_5
