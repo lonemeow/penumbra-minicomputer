@@ -789,3 +789,64 @@ channel holds, so its watermark comes due half as often. It needs:
 - `pmusic_push()` to pack frame pairs when `CAP.MONO` is set — pairing
   across a pass boundary, and padding a sound that ends on an odd
   frame.
+
+## Hardware + kernel: tracker voices click on a retrigger or a volume step
+
+A voice changes gain and source material instantly: `VOL` applies on
+the next output frame, and `SET_PLAY` flushes the channel and starts
+the new sound at its first frame. A note restarted while the one
+before it is mid-waveform therefore steps from wherever that waveform
+was to the new sample's first frame, which in a ProTracker sample is
+0. The software mixer (`sw/modplay/mixer.c`) plays voices the same
+way, so `modplay -s` steps identically.
+
+The reference case is the quiet opening of Moby's cortouchka, where
+channel 2 retriggers sample 14 — a clipped pulse bass with 19% of its
+frames at ±120 or beyond, played at volume 58 — with nothing to mask
+the steps. Measured 2026-09-23 over its first 30 s against
+`openmpt123` 0.6.1 renders at 48 kHz (`--dither 0`), the software
+mixer driven by a host harness as `modplay -s` drives it:
+
+- **Not DC offset.** At the largest steps the outgoing voice sat at
+  −128 or +91..+115 in sample units while its mean over the previous
+  10 ms was −1..+22, and the step's direction matches a fall from that
+  mean in only 41% of the 44 triggers that cut off a sounding note.
+  Samples with real DC (cortouchka's 4, 5, 6, 8 and 12 average
+  −14..−26) do step on a volume change, which turns a volume slide on
+  one of them into a tick-rate zipper.
+- **Not interpolation.** Energy above 6 kHz in the 2 ms after each of
+  the 72 triggers, p90 in dBFS: ours −36.9; OpenMPT nearest-neighbour
+  without ramping −37.2; sinc without ramping −37.6; nearest with
+  ramping −42.9; its default, sinc with ramping, −59.4.
+  Nearest-neighbour's own cost is a steady image floor, −46.4 against
+  sinc's −62.9 dBFS above 6 kHz, separate from the clicks.
+- **Authentic.** OpenMPT's A500 Paula emulation without ramping steps
+  exactly as ours does; a real Amiga differs only in its fixed output
+  filter blunting the step. Players that sound clean are declicking by
+  volume ramping on top of the replay.
+
+An ECx note cut and a volume slide step the same way, since both write
+`VOL`.
+
+What is open is where a ramp could live. The device buffers only
+sample data, so a ramp done by writing `VOL` needs the CPU every few
+milliseconds per voice:
+
+- **Device:** slew each channel's gain toward a newly written `VOL`
+  over a few milliseconds of output frames. That covers volume steps
+  and cuts with no CPU involvement, but it changes the `VOL` contract
+  in [devices/audio.md](../system/devices/audio.md) — likely as an
+  optional capability — and has to be specified there first.
+- **Driver, for a retrigger:** fade the outgoing note in the data
+  itself. `pmusic` tracks where the device is in each voice
+  (`struct pmusic_spot`), so a `SET_PLAY` over a sounding voice could
+  mix a pre-faded tail of the old note into the new note's first
+  frames — a burst of work per trigger rather than attention per tick.
+  The catch is that a channel has one `INC` and one `VOL`, so the tail
+  has to be resampled to the new note's rate and rescaled to its gain.
+- **Driver, with the device's slew:** a partner channel per voice, the
+  new note starting on one while the old fades out on the other — no
+  resampling, at twice the channels.
+- **Software mixer:** move the outgoing voice to a spare slot and fade
+  it over 1–5 ms, as OpenMPT does, and ramp gain changes across a
+  tick.
