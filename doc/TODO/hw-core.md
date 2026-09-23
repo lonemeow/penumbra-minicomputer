@@ -9,14 +9,17 @@ against the core generation and the logic budget timing leaves.
 
 Found while probing the gen2 path toward 50 MHz. A single-outstanding
 register slice inserted on the L2 <-> external-bus boundary (in
-`machine_penumbra2`, to cut the combinational `L2-addr -> bus-decode ->
-busy -> L2` round-trip that limits gen2.5) turns the L2 line fill into four
-*gapped* single reads — `re` drops between words, +2 cycles each. With that
+`machine_penumbra2`, to cut the busy-form bus's combinational `L2-addr ->
+bus-decode -> busy -> L2` round-trip — the registered `ack` removes that
+round-trip without a slice) turns the L2 line fill into four *gapped*
+single reads — `re` drops between words, +2 cycles each. With that
 slice in place execution ran ~174 instructions and then wedged:
 `test_l2_ifetch` hung at cycle 1448 ("no program end within 2000000
 cycles"). Single bypassed reads (boot, MMU off) and the normal
 back-to-back fill both work fine — only the gapped-mid-fill stream
-deadlocked.
+deadlocked. Behind the fabric watchdog the same wedge would end in a bus
+fault after `TIMEOUT_CYCLES` rather than a hang (inferred, not
+reproduced); inside an L2 fill that trips the L2's fill-fault assertion.
 
 Suspected cause in `sdram_bus_adapter.sv`'s speculative-prefetch FSM. Its
 own header says a mispredict (next read != the speculated `addr+4`) is
@@ -43,53 +46,6 @@ sequence the adapter must serve rather than hang on. The fix lives in the
 adapter's speculative-prefetch FSM: it must abandon an orphaned spec on a
 gap exactly as it already does on an address mispredict. File:
 `hw/rtl/io/sdram/sdram_bus_adapter.sv`.
-
-## Hardware: sync bus should signal completion with `ack`, not a busy-drop
-
-The Penumbra Bus's two forms signal completion with opposite defaults.
-The async form completes when the slave raises `ack`, so silence means
-*wait*. The sync form completes on the cycle `busy` is low, so silence
-means *done*: a zero-wait slave does nothing, and every slave that
-needs time must raise `busy` combinationally in the cycle the request
-appears. That default-done polarity is behind several documented
-hazards:
-
-- A registered-read device must follow the `access_pending` pattern
-  (`o_busy = i_re && !access_pending`). Getting it wrong returns stale
-  data only when accesses happen to line up, invisible to lint — the
-  early `sim_spi.sv` bug (`doc/hardware/bus-protocol.md`, "Slave-side
-  obligation").
-- The autoconfig read combine gates each device's `rdata` with a
-  registered select, so every device behind `autoconfig_dev` must stall
-  a cycle even when its own read is combinational. The failure mode is
-  again silent stale data.
-- A register slice or bridge in the fabric must drive `busy` in the
-  same cycle the request reaches it, so its upstream response can never
-  come purely from a flop.
-- The sync↔async bridge has to invert the handshake.
-
-Signalling completion with `ack` (1 = this beat completes now) instead:
-
-- A zero-wait device drives `ack = sel & (re | we)` — one gate.
-- A registered device raises `ack` the cycle its data is ready, from
-  the same flop `access_pending` uses.
-- A selected device that never answers hangs the access — visible at
-  once rather than as stale data — and a fabric watchdog like the async
-  form's no-device timeout turns the hang into a bus fault.
-- `bus_fault` rides the `ack`. For an unclaimed address the fabric
-  raises `ack` + `bus_fault` from the OR-complement of the selects, as
-  it raises `bus_fault` alone now.
-- Register slices and bridges answer from flops, and the sync form maps
-  onto the async one signal for signal.
-
-This is a robustness and registerability change, not a throughput one;
-it belongs in any sync-bus revision, or before the fabric needs a
-pipeline register. It is mechanical but system-wide: every sync-bus
-device, the response combine in each machine top, and the masters
-(`l2_cache`'s back side, `penumbra3_bus_master`, the SDRAM adapter's
-bus side). The bus devices are shared, so gen1 and gen2 move with it.
-The async form — the ISA-level contract — does not change. Update the
-Sync-Bus Mapping in `doc/hardware/bus-protocol.md` first.
 
 ## Hardware: gen3 (Penumbra/3) Phase-1 build status
 

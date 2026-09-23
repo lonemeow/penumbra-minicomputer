@@ -449,8 +449,7 @@ module l2_cache
     state_t state;
 
     // Fill state.  fill_word_idx is the line-word currently being
-    // fetched; fill_in_flight tracks whether a request has been
-    // driven to the downstream bus and is awaiting its response.
+    // fetched.
     logic [31:0]            fill_base_addr;
     logic [TAG_BITS-1:0]    fill_tag;
     logic [SET_BITS-1:0]    fill_set;
@@ -459,20 +458,20 @@ module l2_cache
     // walk that overruns the line lands out of range instead of wrapping
     // silently back to word 0 — the overrun assertion below reads it.
     logic [WORD_BITS:0]     fill_word_idx;
-    logic                   fill_in_flight;
 
     // The line's final word index, typed to match the counter it is
     // compared against.
     localparam logic [WORD_BITS:0] LAST_FILL_WORD =
         (WORD_BITS+1)'(LINE_WORDS - 1);
 
-    // A fill response word landing: the downstream bus has answered the
-    // address presented for the word currently in flight, so this cycle
-    // captures it.  fill_install narrows that to the line's last word —
-    // the cycle that commits the tag and the valid bit.
+    // A fill response word landing: the downstream bus has acknowledged
+    // the word currently presented, so this cycle captures it.  An ack
+    // never comes in a word's presentation cycle, so every ack in S_FILL
+    // belongs to the current word.  fill_install narrows that to the
+    // line's last word — the cycle that commits the tag and the valid bit.
     logic                   fill_beat;
     logic                   fill_install;
-    assign fill_beat    = (state == S_FILL) && fill_in_flight && i_mem_ack;
+    assign fill_beat    = (state == S_FILL) && i_mem_ack;
     assign fill_install = fill_beat && (fill_word_idx == LAST_FILL_WORD);
 
     // Deferred PLRU touch: a read hit captures its set + way here and the
@@ -731,7 +730,6 @@ module l2_cache
             fill_set        <= '0;
             fill_way        <= '0;
             fill_word_idx   <= '0;
-            fill_in_flight  <= 1'b0;
             plru_touch      <= 1'b0;
             inval_walk_idx  <= '0;
             inval_walk_wrap <= 1'b0;
@@ -802,7 +800,6 @@ module l2_cache
                             fill_set       <= addr_set(s1_addr);
                             fill_way       <= plru_victim(plru[addr_set(s1_addr)]);
                             fill_word_idx  <= '0;
-                            fill_in_flight <= 1'b0;
                             // Victim's valid bit is dropped by the
                             // g_valid generate block on the same
                             // edge (its miss-kickoff write port
@@ -827,23 +824,14 @@ module l2_cache
                 end
 
                 S_FILL: begin
-                    // Two phases per word:
-                    //   - !in_flight && word<LINE_WORDS: the bus
-                    //     side is driving re=1 with the current
-                    //     word's addr.  Slave captures this cycle
-                    //     (it sees re=1 while idle); set
-                    //     in_flight=1 to remember.
-                    //   - in_flight && i_mem_ack: response just
-                    //     arrived.  Capture into BRAM, advance
-                    //     word_idx (or install on last word).
-                    if (!fill_in_flight
-                        && fill_word_idx <= LAST_FILL_WORD) begin
-                        fill_in_flight <= 1'b1;
-                    end else if (fill_beat) begin
+                    // The bus side presents the current word's
+                    // address with re held; each ack captures that
+                    // word and advances to the next, and the last
+                    // installs the line.
+                    if (fill_beat) begin
                         // Data BRAM write happens in the per-way
                         // generate block above (g_data[gw].mem
                         // always_ff) — keyed on fill_way == gw.
-                        fill_in_flight <= 1'b0;
                         if (fill_word_idx == LAST_FILL_WORD) begin
                             // Last word — install tag and return to
                             // S_IDLE.  fill_way's valid bit is set by
@@ -857,8 +845,8 @@ module l2_cache
                             // carries the touch for this line — and it
                             // carries it off i_mem_ack, which gates
                             // this branch and would otherwise put the
-                            // whole downstream device decode in front
-                            // of the plru array's per-set clock-enable.
+                            // bus response path in front of the plru
+                            // array's per-set clock-enable.
                             tags [fill_way][fill_set] <= fill_tag;
                             state <= S_IDLE;
                         end else begin

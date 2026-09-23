@@ -145,7 +145,7 @@ exposed external bus.
 - `cpu_perfctr.sv` — cycles + insns_retired counters, exposed via
   `SYSDEV_CPU` regs 5+.
 - `cpu_bus_arbiter.sv` — serializes split I/D L1 traffic onto the
-  single external bus. 2-state FSM with back-to-back BUSY→BUSY
+  CPU memory port. 2-state FSM with back-to-back BUSY→BUSY
   re-latch; combinational `o_*_req_accepted` pulse for burst
   address advance.
 - `mmu.sv` — gen1 MMU: bypass/translate mux, `force_bypass` for vector
@@ -343,8 +343,9 @@ varies (the SDRAM adapter) raises its own ack under the same rules.
 - STALL-based load/store: same microcode regardless of memory
   latency. STALL also checks `i_mem_fault` alongside `i_mem_busy`;
   on fault, sequencer aborts to `S_FETCH`.
-- Split I/D L1 caches share the external bus via `cpu_bus_arbiter`
-  (D-priority on simultaneous pending).
+- Split I/D L1 caches share the CPU memory port via `cpu_bus_arbiter`
+  (D-priority on simultaneous pending); the L2 bridges that stall
+  handshake onto the ack-completing system bus.
 - See `doc/internals/cpu-bus.md` for the full cpu_core ↔ MMU ↔ cache
   contract (handshakes, priority, ordering).
 
