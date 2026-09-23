@@ -410,11 +410,12 @@ Two layered variants on the same idea:
    of which word in the line was requested.
 2. **Early restart.**  Serve the requested word the moment *it*
    arrives during `S_FILL` (not waiting for the rest of the line —
-   the remaining words finish into BRAM in background).  Combined
-   with critical-word-first burst ordering (already listed as
-   Level 3 in `doc/internals/sdram-optimization.md`), the CPU sees
-   just the bus round-trip latency rather than the full burst
-   length.
+   the remaining words finish into BRAM in background).  Burst
+   order does not help it: with the BL=8 line buffer (Level 2 in
+   `doc/internals/sdram-optimization.md`) every word lands at once,
+   so early restart would save the bus walk of words 1–3 and the L2
+   re-serve, whichever word was requested — see "partial-line
+   delivery for fills" under Ruled out.
 
 Per-cycle savings are modest against the ~30-cycle SDRAM round-trip
 on the single-issue microcoded CPU we run today.  For the planned
@@ -654,3 +655,20 @@ cycle as the access, to squash and trap. That is an architectural
 choice rather than an oversight, and a design resolving faults a cycle
 later would not have this shape — worth deciding deliberately in a
 future core rather than inheriting by default.
+
+## Ruled out
+
+- **Partial-line delivery for fills.**  Critical-word-first burst
+  order, and the BL=8 line crossing the CDC in halves or single
+  words, were analysed and declined.  Fills are atomic, so only the
+  last word counts, and the registered-ack bus paces words at two
+  cycles while the SDRAM produces one every 0.75 (37.5 MHz): an early
+  piece saves only as much as word 0 lands ahead of the whole line,
+  about 1.5 cycles per fill for halves and 2.25 for single words, of
+  a ~47-cycle gen2.5 L2 read miss.  Word order never shows.  A split
+  transfer also acks word 0 with the rest in flight, so an uncached
+  read then a write to the same line can buffer pre-write data —
+  the discard-on-arrival tracking behind the speculative adapter's
+  past races.  Analysis in
+  `doc/internals/penumbra3/memory-performance.md` ("SDRAM side:
+  whole-line fetch").

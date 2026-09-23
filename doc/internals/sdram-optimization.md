@@ -4,7 +4,8 @@
 
 The SDRAM controller (`hw/rtl/io/sdram/sdram_ctrl.sv`) advances through
 a sequence of optimisation levels.  Level 1 (open-row tracking, no
-auto-precharge) is live; Levels 2 and 3 are deferred design plans.
+auto-precharge) is live, Level 2 is a deferred design plan, and
+Level 3 is declined.
 This file is the catalog of those levels — what each one buys, what it
 costs, and how it composes with the others.
 
@@ -66,61 +67,76 @@ See `sdram-controller.md` § "Bus adapter" and § "CDC bridge".
 Change SDRAM burst length from 2 to 8.  Each SDRAM burst reads
 8 × 16-bit = 4 × 32-bit words — exactly one cache line.
 
-The SDRAM controller buffers the full 4-word line internally.
-First read triggers the burst; subsequent reads to the same line
-are served from the buffer with 1-cycle latency.
+The line crosses the CDC as one 128-bit transfer into a line buffer
+in the bus adapter.  The read that triggers the burst completes when
+the line lands; the line's other reads are served from the buffer at
+the bus's pace — two cycles each, the presentation and a registered
+`ack` ([sync burst](../hardware/bus-protocol.md#sync-burst)).
 
-**Cache line fill cost:** ~10 cycles
-- ACT(1) + READ+AP(1) + CL(2) + 8 beats(8) + tRP(1) = ~13 SDRAM cycles
-- But only 1 bus transaction visible to cache (buffer serves rest)
+**Cache line fill cost:**
+- SDRAM side, open row: READ + CL(2) + 8 beats = 10 SDRAM cycles,
+  six more than a BL=2 read; a row miss adds ACTIVATE + tRCD as
+  before.
+- One CDC crossing per line, where the speculative adapter makes a
+  round trip for word 0 and again for each of words 2 and 3.
+- Request to last word, in CPU cycles (estimated from the measured
+  chain A in
+  [`penumbra3/memory-performance.md`](penumbra3/memory-performance.md#sdram-side-whole-line-fetch)):
+  about 16 at a 4:1 clock ratio and 19 at 2:1, against 28 and 36
+  for the speculative adapter.  Six of those cycles are words 1–3
+  crossing the bus after the line lands, a floor no SDRAM-side
+  change moves.
 
-**Complexity:** Medium.  128-bit (4 × 32) line buffer + tag + valid.
-Need to match incoming addresses against buffer tag.
-Essentially a 1-entry read cache inside the SDRAM controller.
+**Complexity:** Medium.  128-bit (4 × 32) line buffer + tag + valid,
+matched against incoming addresses — essentially a 1-entry read cache
+in the adapter.  It replaces the speculative prefetch: with one master
+and blocking reads, no read is in flight that the master has not
+asked for, so any write simply invalidates the buffer and nothing
+needs abandon tracking.  Writes stay single-word: the mode register's
+write-burst bit (A9) makes writes single-location while reads burst,
+so a 32-bit write is two WRITE commands on consecutive clocks.
 
-**Bus interface options:**
-- (a) Keep word-at-a-time bus, buffer internally (simplest)
-- (b) Add burst signal from cache (cache says "fill 4 words")
-- (c) Widen internal bus to 128-bit for single-cycle line transfer
+**Bus interface:** unchanged.  The bus carries no burst length or
+line shape, so the line still crosses it as four word accesses; a
+burst signal from the cache or a 128-bit bus would change the bus
+contract.
 
-Option (a) is simplest: controller checks if request hits the line
-buffer before initiating a new SDRAM burst.
+### Level 3: Critical Word First — declined
 
-### Level 3: Open-Row + BL=8 + Critical Word First
-
-Combine open-row tracking with BL=8 bursts.  On a miss, start the
-burst from the requested word's column (critical word first), wrap
-around to fill the rest of the line.  Keep the row open for the
-next potential miss.
-
-**Cache line fill cost:** ~10 cycles total, ~5 cycles to first word
-
-**Complexity:** High.  Needs wrapping burst logic, row tracking,
-and critical-word-first reordering.  Probably not worth it until
-we're running at higher clock speeds where latency matters more.
+Starting the burst at the requested word and wrapping buys nothing
+here: every cache fills atomically and releases the CPU only when the
+whole line is in, so the order the words arrive in never shows (see
+[the gen2 fill path](penumbra2/memory-interface.md#the-fill-path)).
+Recorded with the other partial-line delivery ideas under Ruled out
+in `doc/TODO/hw-core.md`.
 
 ## Bus Protocol Support
 
 The Penumbra Bus already supports burst transfers (see
-`doc/hardware/bus-protocol.md` § Burst Transfers — Cache Line Fill).
-During a cache line fill, the master holds `req` asserted and drives
-sequential addresses:
+[Sync burst](../hardware/bus-protocol.md#sync-burst)).  During a
+cache line fill, the master holds `re` asserted and drives sequential
+addresses.  With a slave that has every word ready, the four words
+take eight cycles — the registered `ack` never comes in a word's
+presentation cycle:
 
-```
-req:       ___/‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾\___
-addr:      ---[A+0 ][A+4 ][A+8 ][A+C ]-------
-ack:       ______/‾‾\/‾‾‾\/‾‾‾\/‾‾‾\________
-data:      ------[W0 ][W1  ][W2  ][W3  ]-----
-```
+| Cycle | `re` | `addr` | `ack` | `rdata` |
+|------:|:----:|:------:|:-----:|:-------:|
+| 0 | 1 | A+0 | 0 | — |
+| 1 | 1 | A+0 | 1 | W0 |
+| 2 | 1 | A+4 | 0 | — |
+| 3 | 1 | A+4 | 1 | W1 |
+| 4 | 1 | A+8 | 0 | — |
+| 5 | 1 | A+8 | 1 | W2 |
+| 6 | 1 | A+C | 0 | — |
+| 7 | 1 | A+C | 1 | W3 |
 
 The bus spec explicitly notes that slave devices may detect sequential
 addresses and optimize internally.  No protocol changes needed — the
 SDRAM controller just needs to compare incoming row+bank against the
 currently open row before deciding whether to ACTIVATE.
 
-On the internal synchronous bus (FPGA fabric), the equivalent is:
-the cache keeps `i_re` asserted and increments the address in the
-cycle after each `ack`.  The SDRAM controller sees the next request arrive
+The cache keeps `re` asserted and advances the address in the cycle
+after each `ack`, so the SDRAM side sees the next request arrive
 immediately after the previous one completes.
 
 ## Recommended Path
@@ -131,11 +147,10 @@ immediately after the previous one completes.
 3. ✅ **Layer-pipelining** (depth-2 CDC + speculative-prefetch bus
    adapter) — orthogonal to the levels here, hides bus-traversal
    latency between cache and SDRAM
-4. **Level 2 (BL=8 line buffer)** — best bang-for-buck for the
-   remaining SDRAM-internal cost, matches cache line size exactly,
-   halves line fill time
-5. **Level 3** — only if profiling shows memory latency is still the
-   bottleneck after higher clock speeds
+4. **Level 2 (BL=8 line buffer)** — one CDC crossing per line instead
+   of three round trips, matches cache line size exactly, and roughly
+   halves the SDRAM side of a line fill (~28–36 → ~16–19 cycles)
+5. **Level 3** — declined; fills are atomic, so word order never shows
 
 ## SDRAM Burst Length and Cache Line Size Relationship
 
@@ -159,9 +174,9 @@ the in-SDRAM command overhead (per the layer-cost split: roughly
 85% adapter+CDC vs 15% controller-internal).  That is what motivates
 the already-shipped layer-pipelining work (speculative `addr+4` +
 depth-2 CDC, see § Recommended Path above) and what makes Level 2
-(BL=8 line buffer) the natural next optimisation: it shortens the
-SDRAM-side of the round-trip while the bus-side pipeline keeps the
-CPU from stalling between word completions.
+(BL=8 line buffer) the natural next optimisation: it replaces two of
+a line fill's three adapter-and-CDC round trips with six more beats
+of one burst.
 
 L2 (64 KiB unified, write-invalidate-on-hit today) further cuts the
 average miss cost by catching the working set entirely within the

@@ -11,8 +11,8 @@ been verified on hardware at 100 MHz CL2 (steps 1–4); v1 has been
 deleted.
 
 `doc/internals/sdram-optimization.md` remains relevant — it captures
-optimization *levels* (open-row, BL=8, critical-word-first) that apply
-to any controller. This document captures the *structure* we're
+optimization *levels* (open-row, BL=8 line buffer) that apply to any
+controller. This document captures the *structure* we're
 adopting so those optimizations can be added incrementally.
 
 ## Status
@@ -361,7 +361,7 @@ Three-level test pyramid:
 | 5 | Phase-shift sweep build target + bring-up doc | Documented working window | ⚙ in progress |
 | 6 | Open-row tracking + auto-precharge-off (Level 1 of `sdram-optimization.md`) | `tb_sdram_test` cold-vs-hit cycle counts; `_ram_check` + membench unchanged on hardware | ✅ landed |
 | 7 | Layer-pipelining: depth-2 CDC FIFO + speculative `addr+4` prefetch in bus adapter | `tb_sdram_cdc` + `make benchmark-rtl` membench miss-LDW improvement | ✅ landed |
-| 8 | (Later) BL=8 line buffer + critical-word-first (Levels 2–3 of `sdram-optimization.md`) | Re-run validation, measure Dhrystone | deferred |
+| 8 | (Later) BL=8 line buffer (Level 2 of `sdram-optimization.md`) | Re-run validation, measure Dhrystone | deferred |
 
 ### Step 4 wiring notes
 

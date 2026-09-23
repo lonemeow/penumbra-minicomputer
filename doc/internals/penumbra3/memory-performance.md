@@ -267,14 +267,31 @@ re-read, and needs no per-word valid bits.
 ### SDRAM side: whole-line fetch
 
 The adapter can fetch the whole aligned 16-byte line on a read — one
-BL=8 burst, or four pipelined BL=2 reads with enough CDC depth to keep
-them streaming — instead of guessing one word ahead. RAM reads have no
-side effects and the bus contract lets a slave infer sequential access,
-so this stays inside the word-at-a-time bus. It also stops interleaved
-streams from orphaning each other's speculation. Estimated: the SDRAM
-portion of an L2-miss fill drops from 28–37 cycles to about 13–15, and
-together with the uncore pipeline an L2-miss fill lands around 20–25
-cycles.
+BL=8 burst, crossing the CDC as a single transfer — instead of guessing
+one word ahead. RAM reads have no side effects and the bus contract lets
+a slave infer sequential access, so this stays inside the word-at-a-time
+bus. It also stops interleaved streams from orphaning each other's
+speculation, and retires the speculation itself: with one master and
+blocking reads, no read is ever in flight that the master has not asked
+for, so the line buffer needs only a tag, a valid bit and invalidation
+on any write.
+
+The burst runs six SDRAM clocks longer than a BL=2 read, so the line
+lands about 10 cycles after the request at 4:1 and 13 at 2:1 (chain A's
+first word, at 8 and 10, plus those clocks). Words 1–3 then come from
+the buffer at the bus's floor of two cycles a word — the presentation
+and a registered `ack` — adding six cycles however fast the SDRAM side
+gets. Estimated: the SDRAM portion of an L2-miss fill drops from 28–37
+cycles to about 16–19, and together with the uncore pipeline an L2-miss
+fill lands around 21–25 cycles. gen2.5 keeps its 14-cycle re-serve
+tail, so there the fetch saves about 13 of the ~60 cycles an L2 read
+miss costs; L2-hit fills and stores do not change.
+
+Delivering the line through the CDC in pieces does not pay: the bus,
+not the SDRAM, paces words 1–3, so an early piece saves only as much as
+word 0 lands ahead of the whole line — about 1.5 cycles for halves at
+37.5 MHz. See "partial-line delivery for fills" under Ruled out in
+`doc/TODO/hw-core.md`.
 
 This is a change to a shared device (`io/sdram`), the Level-2 line
 buffer of [`sdram-optimization.md`](../sdram-optimization.md#level-2-bl8-line-buffer);
@@ -344,7 +361,7 @@ per-transaction registration overhead.
 |---|---|---|
 | gen2.5 | 59 | 1.0× |
 | + store buffer | ~54 | 1.1× |
-| + L2-miss fill ~60 → ~30 (whole-line SDRAM fetch + fill-through) | ~39 | 1.5× |
+| + L2-miss fill ~60 → ~35 (whole-line SDRAM fetch + fill-through) | ~42 | 1.4× |
 | + two-stream prefetch | ~28–31 | ~2× |
 
 ## Design target: memory latency in CPU cycles
@@ -358,9 +375,11 @@ both ran it well. Penumbra's L2-miss fill is about 60 cycles, of which
 the SDRAM chip itself accounts for about 7–9; the rest is the stack of
 word-at-a-time hand-offs described above.
 
-That makes a 486-like L2-miss line in about 20 cycles the target for
+That makes a 486-like L2-miss line of about 20–25 cycles the target for
 gen3's uncore — reachable with the whole-line SDRAM fetch and the single
-uncore pipeline, and still within the word-at-a-time bus contract.
+uncore pipeline, within the word-at-a-time bus contract. The contract
+also sets the floor under it: two cycles a word on the bus, six of them
+after the line has landed.
 
 ## Open measurements
 
