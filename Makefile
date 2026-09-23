@@ -15,6 +15,7 @@
 #   make flash [same vars]   — fpga + flash to the board via USB
 #   make vivado-image        — build the local Vivado image (needs a token)
 #   make vivado-authenticate — refresh the AMD web installer's login token
+#   make openfpgaloader-image — build the Xilinx-board programmer image
 #   make clean               — remove build artifacts
 
 # ── Configuration ──────────────────────────────────────────────
@@ -1052,6 +1053,17 @@ vivado-image: $(VIVADO_DIR)/webinstaller/xsetup
 		--output type=image,name=$(VIVADO_IMAGE),compression=zstd \
 		$(VIVADO_TOOLS)
 
+# ── openFPGALoader image (Xilinx boards) ───────────────────────
+# Built from a pinned upstream commit rather than taken from the OSS
+# CAD Suite image, whose release cannot parse current Vivado
+# bitstreams. A separate image leaves the ULX3S toolchain untouched.
+OFL_TOOLS = hw/tools/openfpgaloader
+include $(OFL_TOOLS)/image.env
+
+.PHONY: openfpgaloader-image
+openfpgaloader-image:
+	docker build --build-arg OFL_COMMIT=$(OFL_COMMIT) -t $(OFL_IMAGE) $(OFL_TOOLS)
+
 # ── FPGA build matrix (doc/internals/build-system.md) ──────────
 # Porcelain: make fpga BOARD=<board> CORE=<generation> [VARIANT=<v>]
 # expands to TOP=<board>_<core>[_<variant>]_top, whose file lives at
@@ -1156,6 +1168,20 @@ SRC_MACHINE_penumbra2 = hw/rtl/machine/machine_penumbra2.sv \
 # EHXPLLL dividers from their clock targets).
 SRC_BOARD_ulx3s = $(FPGA_RTL)/ecp5_pll_pkg.sv
 LPF_ulx3s       = hw/constraints/ulx3s_v20.lpf
+
+# Each board's device family picks the flow that builds and programs
+# it: ecp5 (yosys, nextpnr-ecp5, ecppack, fujprog) or xc7 (Vivado,
+# openFPGALoader).
+FAMILY_ulx3s      = ecp5
+FAMILY_nexysvideo = xc7
+
+# The Vivado part, and the name openFPGALoader knows the board by.
+PART_nexysvideo      = xc7a200tsbg484-1
+OFL_BOARD_nexysvideo = nexysVideo
+
+# An xc7 board's constraints: the pin and bank facts the xc7 flow reads
+# (the counterpart of LPF_<board>).
+XDC = $(XDC_$(FPGA_BOARD))
 
 # The registry: every valid (board, core[, variant]) top, its composed
 # source set, and which hex images it embeds. Adding a combination
@@ -1298,6 +1324,12 @@ endif
 # Escape hatch (TOP=<module> directly): the artifact is its own module.
 TOP_MODULE := $(if $(strip $(TOP_MODULE)),$(TOP_MODULE),$(TOP))
 
+# The board a build is for: BOARD, or under the escape hatch the
+# <board>_ prefix of the top's name. A name with no known board prefix
+# is one of the bare fpga/*.sv tests, which are all ECP5.
+FPGA_BOARD  := $(or $(strip $(BOARD)),$(firstword $(subst _, ,$(TOP))))
+FPGA_FAMILY := $(or $(FAMILY_$(FPGA_BOARD)),ecp5)
+
 # Effective PnR seed: an explicit NEXTPNR_SEED (command line / environment)
 # wins via ?=; otherwise fall back to this top's pinned default, if any
 # (empty default ⇒ no --seed, the historical behavior).
@@ -1383,7 +1415,7 @@ fpga-lint: $(FPGA_SRC_ulx3s_penumbra1_top) $(FPGA_SRC_ulx3s_penumbra2_probe_top)
 		$(FPGA_SRC_ulx3s_audio_test_top) $(FPGA_LINT_STUBS) --top ulx3s_audio_test_top
 
 fpga: $(BUILD_DIR)/$(TOP).bit
-	@echo "Bitstream: $(BUILD_DIR)/$(TOP).bit (PHASE_DEG=$(PHASE_DEG))"
+	@echo "Bitstream: $(BUILD_DIR)/$(TOP).bit$(if $(filter ecp5,$(FPGA_FAMILY)), (PHASE_DEG=$(PHASE_DEG)))"
 
 # ── SDRAM phase sweep knob ──────────────────────────────────────
 # Used by the ULX3S board tops to set CLKOS2 phase shift (the
@@ -1413,30 +1445,56 @@ $(SDRAM_STAMP):
 	@rm -f $(BUILD_DIR)/.sdram-*
 	@touch $@
 
-# Build hex files and convert SV→V before synthesis.
-# sv2v converts full SystemVerilog (module-level imports, packages)
-# to Verilog-2005 that Yosys reads natively.  -D SDRAM_PHASE_DEG=N
-# overrides the `define inside the board top for the current build.
+# The synthesis step, one rule for every family. Its front half is
+# shared, so both flows read the same Verilog: build the hex images
+# and convert SV→V. sv2v converts full SystemVerilog (module-level
+# imports, packages) to Verilog-2005 that Yosys reads natively.
+# -D SDRAM_PHASE_DEG=N overrides the `define inside the board top for
+# the current build. The family's synthesizer runs last:
+#   ecp5  yosys, to the netlist JSON nextpnr places (.config, .bit below)
+#   xc7   one Vivado run from synthesis to bitstream
+#         (hw/tools/vivado/build.tcl, which also writes the reports)
 #
 # For tops listed in FPGA_ROM_TOPS / FPGA_UCODE_TOPS, the boot-ROM and
 # microcode hex images are inlined into the generated Verilog via
-# inline_hex.py, so the json target must rebuild whenever their
-# sources change.  Conditional prerequisites keep other TOPs from
-# being spuriously rebuilt by unrelated edits.
+# inline_hex.py, so synthesis must rerun whenever their sources
+# change.  Conditional prerequisites keep other TOPs from being
+# spuriously rebuilt by unrelated edits.
+#
+# _sv2v.v is deliberately not a target of its own: inline_hex.py
+# rewrites it in place, so as a target it could survive a failed
+# inline looking up to date, and the next build would synthesize a
+# boot ROM with no contents. Inside one rule, a failure anywhere fails
+# the whole step. Only the family's output and last command vary; the
+# shared lines stay literal in the recipe, where make recognizes the
+# recursive $(MAKE).
 UCODE_SRC = hw/microcode/microcode.uasm
 ROM_SRCS  = $(wildcard hw/rom/*.c hw/rom/*.h hw/rom/*.s hw/rom/*.ld hw/rom/Makefile)
-$(BUILD_DIR)/$(TOP).json: $(FPGA_SRC) $(PHASE_STAMP) $(SDRAM_STAMP) \
+
+FPGA_SYNTH_OUT_ecp5 = $(BUILD_DIR)/$(TOP).json
+FPGA_SYNTH_CMD_ecp5 = $(FPGA_TOOLS)/yosys -p "read_verilog $(BUILD_DIR)/$(TOP)_sv2v.v; synth_ecp5 -top $(TOP_MODULE) -json $@"
+
+FPGA_SYNTH_OUT_xc7  = $(BUILD_DIR)/$(TOP).bit
+FPGA_SYNTH_DEPS_xc7 = $(XDC) $(VIVADO_TOOLS)/build.tcl
+FPGA_SYNTH_CMD_xc7  = $(VIVADO_TOOLS)/bin/vivado -mode batch -nojournal \
+                      -log $(BUILD_DIR)/$(TOP)_vivado.log \
+                      -source $(VIVADO_TOOLS)/build.tcl \
+                      -tclargs $(TOP_MODULE) $(PART_$(FPGA_BOARD)) $(BUILD_DIR)/$(TOP) \
+                               $(BUILD_DIR)/$(TOP)_sv2v.v $(XDC)
+
+$(FPGA_SYNTH_OUT_$(FPGA_FAMILY)): $(FPGA_SRC) $(PHASE_STAMP) $(SDRAM_STAMP) \
     $(if $(filter $(TOP),$(FPGA_UCODE_TOPS)),$(UCODE_SRC)) \
     $(if $(filter $(TOP),$(FPGA_ROM_TOPS)),$(ROM_SRCS)) \
     $(if $(filter $(TOP),$(FPGA_VIDEO_TOPS)),font8x16.hex) \
     $(if $(filter $(TOP),$(FPGA_SPLASH_TOPS)),splash_cells.hex) \
-    $(if $(filter $(TOP),$(FPGA_AUDIO_TOPS)),audio_sample.hex)
+    $(if $(filter $(TOP),$(FPGA_AUDIO_TOPS)),audio_sample.hex) \
+    $(FPGA_SYNTH_DEPS_$(FPGA_FAMILY))
 	@mkdir -p $(BUILD_DIR)
 	$(if $(filter $(TOP),$(FPGA_UCODE_TOPS)),$(UASM) hw/microcode/microcode.uasm -o microcode.hex)
 	$(if $(filter $(TOP),$(FPGA_ROM_TOPS)),$(MAKE) -C hw/rom)
 	$(FPGA_TOOLS)/sv2v -D SDRAM_PHASE_DEG=$(PHASE_DEG) -D PENUMBRA_CPU_VARIANT=$(CPU_VARIANT) -D AUDIO_SAMPLES=$(AUDIO_SAMPLES) -D AUDIO_CHANNELS=$(AUDIO_CHANNELS) $(FPGA_SRC) -w $(BUILD_DIR)/$(TOP)_sv2v.v
 	$(if $(filter $(TOP),$(FPGA_ROM_TOPS) $(FPGA_UCODE_TOPS) $(FPGA_AUDIO_TOPS)),python3 hw/tools/inline_hex.py $(BUILD_DIR)/$(TOP)_sv2v.v $(BUILD_DIR)/$(TOP)_sv2v.v)
-	$(FPGA_TOOLS)/yosys -p "read_verilog $(BUILD_DIR)/$(TOP)_sv2v.v; synth_ecp5 -top $(TOP_MODULE) -json $@"
+	$(FPGA_SYNTH_CMD_$(FPGA_FAMILY))
 
 # The nextpnr invocation shared by the normal PnR rule and the
 # seed-sweep pattern rule below (device, constraints, prepack).
@@ -1533,6 +1591,24 @@ $(BUILD_DIR)/$(TOP).s%.config: $(BUILD_DIR)/$(TOP).json $(LPF) $(LPF_DESIGN) $(P
 print-top:
 	@echo $(TOP)
 
+# Packing, programming and the timing report are per family. An xc7
+# bitstream is the synthesis step's own output (Vivado runs through
+# bitgen), so only ecp5 has a packing rule here.
+ifeq ($(FPGA_FAMILY),xc7)
+
+# The bitstream goes to the FPGA's configuration RAM: it runs until
+# power-off, and the board's flash is left alone.
+flash: $(BUILD_DIR)/$(TOP).bit
+	$(OFL_TOOLS)/bin/openFPGALoader -b $(OFL_BOARD_$(FPGA_BOARD)) $<
+
+# Vivado's own timing summary: the design totals and the per-clock
+# tables. The worst paths are in full in the report itself.
+.PHONY: timing
+timing:
+	@sed -n '/^| Design Timing Summary/,/^| Inter Clock Table/p' $(BUILD_DIR)/$(TOP)_timing_summary.rpt | head -n -2
+
+else
+
 $(BUILD_DIR)/$(TOP).bit: $(BUILD_DIR)/$(TOP).config
 	$(FPGA_TOOLS)/ecppack $< $@
 
@@ -1550,6 +1626,8 @@ TOP_N ?= 5
 DETAIL ?= none
 timing:
 	@hw/tools/timing-report.sh --detail=$(DETAIL) $(BUILD_DIR)/$(TOP)_timing.json $(TOP_N)
+
+endif
 
 # Pretty-print high-fanout nets from the yosys synth JSON, one section
 # per clock domain.  Useful for diagnosing nextpnr routing-congestion

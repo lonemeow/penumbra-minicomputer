@@ -578,6 +578,32 @@ repository.
 the OSS CAD Suite wrappers do: as your UID, with the current directory
 mounted, no network, and a scratch HOME under `build/vivado-home`.
 
-Xilinx boards are programmed with `openFPGALoader`, which comes from
-the OSS CAD Suite image (`hw/tools/oss-cad-suite/bin/openFPGALoader`),
-not from Vivado.
+`make fpga`, `make flash` and `make timing` take the same variables
+for a Xilinx board as for the ULX3S; the board's device family picks
+the tools (`doc/internals/build-system.md`, "Device families"). The
+build leaves Vivado's reports beside the bitstream in `build/`
+(`<top>_timing_summary.rpt`, `_utilization.rpt`, `_drc.rpt`) and the
+routed checkpoint `<top>_routed.dcp`.
+
+Xilinx boards are programmed with `openFPGALoader`, not with Vivado.
+It is built from a pinned upstream commit into its own small image,
+because the release in the OSS CAD Suite image cannot parse current
+Vivado bitstreams:
+
+```sh
+make openfpgaloader-image
+```
+
+`make flash` runs it through `hw/tools/openfpgaloader/bin/openFPGALoader`
+as your UID, so the board's JTAG device needs a udev rule that lets
+you open it. For the Nexys Video's FT2232 (0403:6010), in
+`/etc/udev/rules.d/`:
+
+```
+SUBSYSTEM=="usb", ATTR{idVendor}=="0403", ATTR{idProduct}=="6010", MODE="0666", GROUP="plugdev"
+```
+
+Under WSL2, attach both of the board's USB ports (PROG and UART) with
+usbipd. The board powers its USB chips itself, so they disappear on
+every power cycle; `usbipd attach --wsl --busid <id> --auto-attach`
+re-attaches them.

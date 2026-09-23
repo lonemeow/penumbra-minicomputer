@@ -18,7 +18,7 @@ four-axis matrix:
 | **Core generation** | `penumbra1`, `penumbra2`, … | `hw/rtl/<generation>/` — the CPU core modules |
 | **Integration level** | core · machine | how much of the system surrounds the core |
 | **Execution platform** | ISS · Verilator · FPGA | how the design executes |
-| **Board** | `ulx3s`, … | constraints, pins, clocks, board-specific PHYs |
+| **Board** | `ulx3s`, `nexysvideo`, … | constraints, pins, clocks, board-specific PHYs, and its device family's flow |
 
 The axes are orthogonal by construction: adding a board must not touch
 core directories, and adding a core generation must not touch board
@@ -254,3 +254,31 @@ seed's achieved CPU-clock fmax. Finished seeds survive re-runs:
 widening a sweep places only the new ones. `JOBS` is bounded by memory
 rather than cores (each nextpnr holds the whole design). Pin the winner
 as `DEFAULT_SEED_<top>` and rebuild through the normal `fpga` target.
+
+## Device families
+
+Each board belongs to a device family (`FAMILY_<board>` in the
+Makefile), and the family picks the flow behind `make fpga`, `flash`
+and `timing`:
+
+| Family | Boards | Synthesis to bitstream | Programming | `make timing` reads |
+|--------|--------|------------------------|-------------|---------------------|
+| `ecp5` | `ulx3s` | yosys `synth_ecp5`, nextpnr-ecp5, ecppack | fujprog | nextpnr's JSON report (`hw/tools/timing-report.sh`) |
+| `xc7` | `nexysvideo` | one Vivado batch run (`hw/tools/vivado/build.tcl`) | openFPGALoader | Vivado's timing summary |
+
+Both flows synthesize the same Verilog. The synthesis step is one rule
+whose front half is shared (hex images, sv2v, `inline_hex.py`) and whose
+last command is the family's synthesizer, `FPGA_SYNTH_CMD_<family>`,
+writing `FPGA_SYNTH_OUT_<family>`: the netlist JSON nextpnr places, or
+for xc7 the bitstream itself. The sv2v output is not a target of its
+own, because `inline_hex.py` rewrites it in place: as a target, a failed
+inline could leave it looking up to date, and the next build would
+synthesize a boot ROM with no contents.
+
+The board is `BOARD`, or under the `TOP=` escape hatch the `<board>_`
+prefix of the top's name. A name with no known board prefix is one of
+the bare `fpga/*.sv` tests, which are all ECP5. Per-board facts sit
+beside the family: `LPF_<board>` for ecp5, and `XDC_<board>`,
+`PART_<board>` and `OFL_BOARD_<board>` (openFPGALoader's board name) for
+xc7. Seed pinning and seed sweeps are nextpnr features, so they apply to
+ecp5 boards only.
