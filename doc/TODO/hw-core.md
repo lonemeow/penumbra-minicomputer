@@ -656,6 +656,30 @@ choice rather than an oversight, and a design resolving faults a cycle
 later would not have this shape — worth deciding deliberately in a
 future core rather than inheriting by default.
 
+## Hardware: main TLB geometry -- associativity against fmax
+
+The main TLB is 32 sets of 2 ways with the victim chosen from a
+`CPU_CYCLES` bit.  Replaying a real access stream through shadow
+models says the shape, not the capacity, is where the misses are: 16
+sets of 4 ways at the *same* 64 entries takes 62% fewer, and an LRU
+victim at the existing shape takes 22% fewer.  The models and the full
+table are in [kernel.md](kernel.md), "Kernel: count TLB refills".
+
+By measured cost this is the largest item on the list.  The refill
+handler is 39% of every instruction executed on a shell and filesystem
+workload, and nothing on the software side reaches it: link-time
+placement of hot pages is bounded at low single digits ("What pinning
+can reach", same entry), and a third to a half of kernel refills fall
+on runtime allocations no arrangement can touch.
+
+What is unknown is whether the machine can afford it.  The TLB sits on
+the address path of every access, and the fetch/TLB path is already
+the limiter on more than one top, so the honest experiment is to build
+the main TLB 16x4 and read fmax from the full board top rather than
+the bare-core probe.  If it costs clock it is not a lever, and that is
+the expected answer.  A seed sweep is needed either way, since one
+seed says nothing about placement.
+
 ## Ruled out
 
 - **Partial-line delivery for fills.**  Critical-word-first burst

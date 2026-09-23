@@ -430,6 +430,33 @@ built takes 1,404,402 misses over the 149 frames:
   kernel invalidates any 4 KB page inside it, so what superpages would
   buy is still unknown.
 
+### What pinning can reach (2026-09-23)
+
+A four-workload sweep on `GENERIC` -- shell and filesystem work, the
+pbench syscall and libc rows, and Doom -- bounds the pinned-slot
+lever.  Kernel refills divide as text 46-59%, static data ~11%, heap
+and other runtime KVA 30-43%, varying by workload; user VA takes a
+further third of all refills.
+
+They are spread far too thin for a handful of slots to matter.  Kernel
+text spans 259 pages that take at least one refill and kernel data
+2,919.  The hottest single text page is 1.5% of all refills, the
+hottest data page 1.6%, and the top twenty text pages together reach
+16.5%.  Two slots are free after the structural ones, which bounds the
+whole exercise at low single digits -- before the partial-evacuation
+problem, which is that moving one routine off a page removes only the
+entries it accounted for while the page keeps faulting for whatever
+else lives there.
+
+Almost every hot data page sits past `_end`, where no link-time
+arrangement reaches it.
+
+This corroborates rather than adds: the shadow-TLB models in "What the
+TLB's shape costs, and which parts are reachable" already put
+associativity an order of magnitude ahead of placement.  Placement
+earns its keep because it is free and because a bad roll is expensive,
+not because it can close the gap.
+
 ## Kernel: networking — first NIC through the USB host controller
 
 Decision: the first network adapter is a **USB NIC on the CLASS_USBHC
